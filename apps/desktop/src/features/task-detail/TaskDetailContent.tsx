@@ -2,13 +2,7 @@ import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { z } from "zod";
 
-import {
-  errorMessage,
-  type AttentionItem,
-  type TaskDependencyDirection,
-  type TaskDetail,
-  type TaskSetupRecovery,
-} from "@/api";
+import { errorMessage, type TaskDependencyDirection, type TaskDetail } from "@/api";
 import type {
   SidebarPageNavigator,
   SidebarMode,
@@ -28,7 +22,7 @@ import { TaskDetailList } from "./TaskDetailList";
 import { taskDetailSidebarDestination } from "./taskDetailSidebarDestination";
 import type { TaskDetailDeleteDismissal } from "./taskDetailDismissal";
 import type { QuestionSelectionState } from "./TaskDetailQuestionState";
-import { TaskInitiatingActionProvider } from "./TaskResumeButton";
+import { TaskInitiatingActionProvider, type TaskResumeAuthority } from "./TaskResumeButton";
 import type { TaskDraft } from "./TaskDetailRows";
 import { useTaskMutations, useTaskDetailLiveRefresh } from "./useTaskDetailData";
 import type { useTaskActivity, useTaskAttention, useTaskComments } from "./useTaskDetailData";
@@ -154,7 +148,7 @@ export function TaskDetailContent({
   });
   const connection = useConnectionSnapshot();
   useTaskDetailLiveRefresh(detail, true);
-  const setupRecovery = canonicalSetupRecovery(attention.data?.items ?? []);
+  const resumeAuthority = taskResumeAuthority(attention);
 
   // Reconcile the draft with the latest server snapshot during render (the
   // React "adjust state on prop change" pattern). Switching tasks resets to the
@@ -184,6 +178,7 @@ export function TaskDetailContent({
 
   return (
     <TaskInitiatingActionProvider
+      authority={resumeAuthority}
       key={detail.id}
       onApplied={mutations.refresh}
       onViewDependencies={(taskID) => {
@@ -197,7 +192,6 @@ export function TaskDetailContent({
           taskID,
         });
       }}
-      setupRecovery={setupRecovery}
       taskID={detail.id}
     >
       <TaskDeleteProvider onDismiss={onDeleteDismiss} taskID={detail.id}>
@@ -257,6 +251,18 @@ export function TaskDetailContent({
       </TaskDeleteProvider>
     </TaskInitiatingActionProvider>
   );
+}
+
+function taskResumeAuthority(attention: ReturnType<typeof useTaskAttention>): TaskResumeAuthority {
+  if (!attention.isSuccess || attention.isFetching) {
+    return { kind: "unavailable" };
+  }
+  for (const item of attention.data.items) {
+    if (item.kind === "interrupted_current_node" && item.setupRecovery !== null) {
+      return { kind: "setup_recovery", recovery: item.setupRecovery };
+    }
+  }
+  return { kind: "ordinary" };
 }
 
 function taskDetailFocusPresentation({

@@ -645,6 +645,38 @@ func TestPrepareTaskExecutionRootReleasesReservationWhenSetupSettingsResolutionF
 	assertFailedTaskWorktreeCreationRolledBack(t, env, task)
 }
 
+func TestPrepareTaskExecutionRootSettingsFailureRetainsExistingProvisionalMaterialization(t *testing.T) {
+	env := newServiceTestEnv(t)
+	task, _ := createTaskWorktreeTestTask(t, env)
+	target := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
+	first, err := env.service.PrepareTaskExecutionRoot(env.ctx, TaskExecutionRootPreparationRequest{
+		TaskID:        task.ID,
+		ManagedTarget: &target,
+	})
+	if err != nil {
+		t.Fatalf("PrepareTaskExecutionRoot first: %v", err)
+	}
+	settingsErr := errors.New("injected setup settings failure")
+	env.service.resolveSetup = func(string) (config.WorktreeSettings, error) {
+		return config.WorktreeSettings{}, settingsErr
+	}
+
+	prepared, err := env.service.PrepareTaskExecutionRoot(env.ctx, TaskExecutionRootPreparationRequest{
+		TaskID:        task.ID,
+		ManagedTarget: &target,
+	})
+	if !errors.Is(err, settingsErr) {
+		t.Fatalf("PrepareTaskExecutionRoot error = %v, want %v", err, settingsErr)
+	}
+	if prepared.Materialization == nil ||
+		prepared.Root.Managed == nil ||
+		prepared.Root.Managed.WorktreeID != first.Root.Managed.WorktreeID ||
+		prepared.Root.Managed.Root != first.Root.Managed.Root {
+		t.Fatalf("settings failure preparation = %+v, want retained provisional root %+v", prepared, first.Root.Managed)
+	}
+	assertTaskManagedWorktree(t, env, task.ID, first.Root.Managed.WorktreeID)
+}
+
 func TestPrepareTaskExecutionRootAllocatorFailureLeavesNoProvisionalState(t *testing.T) {
 	env := newServiceTestEnv(t)
 	task, _ := createTaskWorktreeTestTask(t, env)
@@ -987,7 +1019,7 @@ func TestRestoreLockedTaskWorktreeReusesDetachedHeadWithoutRunningSetup(t *testi
 	}
 }
 
-func TestPrepareTaskExecutionRootRejectsDetachedExistingCandidate(t *testing.T) {
+func TestPrepareTaskExecutionRootRetriesDetachedExistingCandidateInPlace(t *testing.T) {
 	env := newServiceTestEnv(t)
 	task, _ := createTaskWorktreeTestTask(t, env)
 	resolved := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
@@ -996,12 +1028,31 @@ func TestPrepareTaskExecutionRootRejectsDetachedExistingCandidate(t *testing.T) 
 		t.Fatalf("PrepareTaskExecutionRoot first: %v", err)
 	}
 	worktreeID := taskWorktreeID(materialized.Worktree)
-	runGit(t, taskWorktreeRoot(materialized.Worktree), "checkout", "--detach")
+	worktreeRoot := taskWorktreeRoot(materialized.Worktree)
+	runGit(t, worktreeRoot, "checkout", "--detach")
+	setupMarker := filepath.Join(t.TempDir(), "setup-ran")
+	setupScript := filepath.Join(t.TempDir(), "setup.sh")
+	writeExecutableFile(t, setupScript, fmt.Sprintf(
+		"#!/bin/sh\ntest \"$2\" = %q || exit 8\ngit symbolic-ref -q HEAD >/dev/null && exit 9\ntouch %q\n",
+		task.ShortID,
+		setupMarker,
+	))
+	env.service.setupScript = setupScript
 
-	_, err = prepareManagedTaskExecutionRoot(env.ctx, env.service, task.ID, nil, resolved)
-	var identityErr *ManagedWorktreeIdentityError
-	if !errors.As(err, &identityErr) || identityErr.Kind != ManagedWorktreeIdentityErrorDetachedHead {
-		t.Fatalf("PrepareTaskExecutionRoot error = %v, want detached-head identity error", err)
+	retried, err := prepareManagedTaskExecutionRoot(env.ctx, env.service, task.ID, nil, resolved)
+	if err != nil {
+		t.Fatalf("PrepareTaskExecutionRoot retry: %v", err)
+	}
+	if taskWorktreeID(retried.Worktree) != worktreeID ||
+		taskWorktreeRoot(retried.Worktree) != worktreeRoot ||
+		retried.Worktree.Registered == nil ||
+		!retried.Worktree.Registered.Git.Detached ||
+		retried.SetupResult == nil ||
+		retried.SetupResult.Completed == nil {
+		t.Fatalf("retried worktree = %+v, want detached in-place setup completion", retried)
+	}
+	if _, err := os.Stat(setupMarker); err != nil {
+		t.Fatalf("detached setup retry marker: %v", err)
 	}
 	row, err := env.store.Queries().GetTask(env.ctx, string(task.ID))
 	if err != nil {
@@ -1009,6 +1060,19 @@ func TestPrepareTaskExecutionRootRejectsDetachedExistingCandidate(t *testing.T) 
 	}
 	if !row.ManagedWorktreeID.Valid || row.ManagedWorktreeID.String != worktreeID {
 		t.Fatalf("task managed worktree id = %+v, want unchanged %q", row.ManagedWorktreeID, worktreeID)
+	}
+	record, err := env.store.GetWorktreeRecordByID(env.ctx, worktreeID)
+	if err != nil {
+		t.Fatalf("GetWorktreeRecordByID: %v", err)
+	}
+	recordedCheckout, err := worktreeGitMetadataFromRecord(record)
+	if err != nil {
+		t.Fatalf("worktreeGitMetadataFromRecord: %v", err)
+	}
+	if recordedCheckout.Detached ||
+		recordedCheckout.Branch == nil ||
+		recordedCheckout.Branch.Name() != task.ShortID {
+		t.Fatalf("recorded checkout = %+v, want original named branch %q", recordedCheckout, task.ShortID)
 	}
 }
 

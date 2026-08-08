@@ -261,17 +261,24 @@ type boundManagedTaskWorktree struct {
 	setupPayload    setupScriptPayload
 }
 
-func (b boundManagedTaskWorktree) setupExecution(settings *config.WorktreeSettings) setupExecutionRequest {
-	return setupExecutionRequest{
-		SourceWorkspaceRoot:   b.workspace.RootPath,
-		ResolvedSettings:      settings,
-		BranchName:            b.branchName,
-		WorktreeRoot:          b.record.CanonicalRoot,
-		ScriptPayload:         b.setupPayload,
-		CreatedBranch:         b.materialization.CreatedBranch,
-		RetainedWorktree:      &b.materialization.Worktree,
-		CreationBaseCommitOID: b.record.CreationBaseCommitOID,
+func (b boundManagedTaskWorktree) setupExecution(settings *config.WorktreeSettings) (setupExecutionRequest, error) {
+	recordedCheckout, err := worktreeGitMetadataFromRecord(b.record)
+	if err != nil {
+		return setupExecutionRequest{}, err
 	}
+	return setupExecutionRequest{
+		SourceWorkspaceRoot: b.workspace.RootPath,
+		ResolvedSettings:    settings,
+		BranchName:          b.branchName,
+		WorktreeRoot:        b.record.CanonicalRoot,
+		ScriptPayload:       b.setupPayload,
+		CreatedBranch:       b.materialization.CreatedBranch,
+		RetainedWorktree:    &b.materialization.Worktree,
+		Recreation: &setupRecreationFacts{
+			RecordedCheckout:      recordedCheckout,
+			CreationBaseCommitOID: b.record.CreationBaseCommitOID,
+		},
+	}, nil
 }
 
 type TaskWorktreeBaseCommitMismatchError struct {
@@ -489,26 +496,11 @@ func (s *Service) prepareManagedTaskWorktree(
 			ExpectedWorktreeRoot: record.CanonicalRoot,
 		})
 		if identityErr == nil {
-			branchName, ok := identity.NamedBranch()
-			if !ok {
-				return TaskWorktreeMaterialization{}, &ManagedWorktreeIdentityError{Kind: ManagedWorktreeIdentityErrorDetachedHead}
-			}
-			reused, err := s.rebindHealthyManagedTaskWorktree(ctx, task, workspace, record, identity)
+			bound, err := s.reuseProvisionalManagedTaskWorktree(ctx, task, workspace, record, identity)
 			if err != nil {
 				return TaskWorktreeMaterialization{}, err
 			}
-			return s.runManagedTaskWorktreeSetupRecovery(ctx, boundManagedTaskWorktree{
-				materialization: reused,
-				record:          record,
-				workspace:       workspace,
-				task:            task,
-				branchName:      branchName,
-				setupPayload: setupScriptPayload{
-					ProjectID:   task.ProjectID,
-					WorkspaceID: workspace.WorkspaceID,
-					WorktreeID:  record.ID,
-				},
-			}, setupOperationID, true)
+			return s.runManagedTaskWorktreeSetupRecovery(ctx, bound, setupOperationID, true)
 		}
 		var typedIdentityErr *ManagedWorktreeIdentityError
 		if !errors.As(identityErr, &typedIdentityErr) || typedIdentityErr.Kind != ManagedWorktreeIdentityErrorRootMissing {
@@ -732,21 +724,33 @@ func (s *Service) restoreUnboundLockedTaskWorktree(task sqlitegen.TaskRecord, wo
 	return TaskWorktreeMaterialization{}, &LockedTaskWorktreeError{Cause: LockedTaskWorktreeCauseMissingBranch}
 }
 
-func (s *Service) rebindHealthyManagedTaskWorktree(ctx context.Context, task sqlitegen.TaskRecord, workspace taskSourceWorkspace, record metadata.WorktreeRecord, identity ManagedWorktreeIdentity) (TaskWorktreeMaterialization, error) {
+func (s *Service) inspectManagedTaskWorktree(
+	ctx context.Context,
+	workspace taskSourceWorkspace,
+	record metadata.WorktreeRecord,
+	identity ManagedWorktreeIdentity,
+) (metadata.WorktreeRecord, GitWorktree, error) {
 	validatedRoot, err := s.managedRoots.validatePersistedRoot(record.CanonicalRoot, workspace.RootPath)
 	if err != nil {
-		return TaskWorktreeMaterialization{}, &LockedTaskWorktreeError{Cause: LockedTaskWorktreeCauseInvalidRoot, Err: err}
+		return metadata.WorktreeRecord{}, GitWorktree{}, &LockedTaskWorktreeError{Cause: LockedTaskWorktreeCauseInvalidRoot, Err: err}
 	}
 	record.CanonicalRoot = validatedRoot
 	revision, err := s.git.ResolveHEAD(ctx, record.CanonicalRoot)
 	if err != nil {
-		return TaskWorktreeMaterialization{}, &LockedTaskWorktreeError{Cause: LockedTaskWorktreeCauseGitFailure, Err: err}
+		return metadata.WorktreeRecord{}, GitWorktree{}, &LockedTaskWorktreeError{Cause: LockedTaskWorktreeCauseGitFailure, Err: err}
 	}
-	gitMetadata := GitWorktree{
+	return record, GitWorktree{
 		Root:     record.CanonicalRoot,
 		HeadOID:  revision.CommitOID,
 		Branch:   identity.branch,
 		Detached: identity.branch == nil,
+	}, nil
+}
+
+func (s *Service) rebindHealthyManagedTaskWorktree(ctx context.Context, task sqlitegen.TaskRecord, workspace taskSourceWorkspace, record metadata.WorktreeRecord, identity ManagedWorktreeIdentity) (TaskWorktreeMaterialization, error) {
+	record, gitMetadata, err := s.inspectManagedTaskWorktree(ctx, workspace, record, identity)
+	if err != nil {
+		return TaskWorktreeMaterialization{}, err
 	}
 	record.GitMetadataJSON, err = marshalGitMetadata(gitMetadata)
 	if err != nil {
@@ -771,6 +775,41 @@ func (s *Service) rebindHealthyManagedTaskWorktree(ctx context.Context, task sql
 	}
 	return TaskWorktreeMaterialization{
 		Worktree: registeredTopologyEntry(syncedWorktree{record: record, git: gitMetadata}),
+	}, nil
+}
+
+func (s *Service) reuseProvisionalManagedTaskWorktree(
+	ctx context.Context,
+	task sqlitegen.TaskRecord,
+	workspace taskSourceWorkspace,
+	record metadata.WorktreeRecord,
+	identity ManagedWorktreeIdentity,
+) (boundManagedTaskWorktree, error) {
+	recordedCheckout, err := worktreeGitMetadataFromRecord(record)
+	if err != nil {
+		return boundManagedTaskWorktree{}, err
+	}
+	branchName, named := worktreeNamedBranch(recordedCheckout)
+	if !named {
+		return boundManagedTaskWorktree{}, errors.New("provisional worktree recorded checkout requires a named branch")
+	}
+	record, live, err := s.inspectManagedTaskWorktree(ctx, workspace, record, identity)
+	if err != nil {
+		return boundManagedTaskWorktree{}, err
+	}
+	return boundManagedTaskWorktree{
+		materialization: TaskWorktreeMaterialization{
+			Worktree: registeredTopologyEntry(syncedWorktree{record: record, git: live}),
+		},
+		record:     record,
+		workspace:  workspace,
+		task:       task,
+		branchName: branchName,
+		setupPayload: setupScriptPayload{
+			ProjectID:   task.ProjectID,
+			WorkspaceID: workspace.WorkspaceID,
+			WorktreeID:  record.ID,
+		},
 	}, nil
 }
 
@@ -995,7 +1034,7 @@ func (s *Service) runManagedTaskWorktreeSetupRecovery(
 ) (TaskWorktreeMaterialization, error) {
 	settings, err := s.worktreeSetupSettings(bound.workspace.RootPath)
 	if err != nil {
-		return TaskWorktreeMaterialization{}, err
+		return bound.materialization, err
 	}
 	return s.runManagedTaskWorktreeSetupRecoveryWithSettings(ctx, bound, setupOperationID, recreateBeforeFirstAttempt, settings)
 }
@@ -1011,8 +1050,12 @@ func (s *Service) runManagedTaskWorktreeSetupRecoveryWithSettings(
 	if err != nil {
 		return TaskWorktreeMaterialization{}, err
 	}
+	attempt, err := bound.setupExecution(&settings)
+	if err != nil {
+		return bound.materialization, err
+	}
 	result, err := s.runSetupRecovery(ctx, setupRecoveryRequest{
-		Attempt:                    bound.setupExecution(&settings),
+		Attempt:                    attempt,
 		Observer:                   observer,
 		RecreateBeforeFirstAttempt: recreateBeforeFirstAttempt,
 		Recreate: func(ctx context.Context) (setupExecutionRequest, error) {
@@ -1021,7 +1064,7 @@ func (s *Service) runManagedTaskWorktreeSetupRecoveryWithSettings(
 				return setupExecutionRequest{}, err
 			}
 			bound = recreated
-			return bound.setupExecution(&settings), nil
+			return bound.setupExecution(&settings)
 		},
 	})
 	if err != nil {
@@ -1839,13 +1882,18 @@ func (e *TaskBranchCollisionError) Error() string {
 }
 
 type setupExecutionRequest struct {
-	SourceWorkspaceRoot   string
-	ResolvedSettings      *config.WorktreeSettings
-	BranchName            string
-	WorktreeRoot          string
-	ScriptPayload         setupScriptPayload
-	CreatedBranch         bool
-	RetainedWorktree      *serverapi.WorktreeTopologyEntry
+	SourceWorkspaceRoot string
+	ResolvedSettings    *config.WorktreeSettings
+	BranchName          string
+	WorktreeRoot        string
+	ScriptPayload       setupScriptPayload
+	CreatedBranch       bool
+	RetainedWorktree    *serverapi.WorktreeTopologyEntry
+	Recreation          *setupRecreationFacts
+}
+
+type setupRecreationFacts struct {
+	RecordedCheckout      GitWorktree
 	CreationBaseCommitOID *string
 }
 
@@ -1872,13 +1920,12 @@ type setupRecoveryResult struct {
 }
 
 type preparedSetupAttempt struct {
-	started               serverapi.WorktreeSetupStarted
-	scriptPath            string
-	payload               setupScriptPayload
-	timeoutSeconds        int
-	retained              *serverapi.WorktreeTopologyEntry
-	creationBaseCommitOID *string
-	recordedCheckout      *GitWorktree
+	started        serverapi.WorktreeSetupStarted
+	scriptPath     string
+	payload        setupScriptPayload
+	timeoutSeconds int
+	retained       *serverapi.WorktreeTopologyEntry
+	recreation     *setupRecreationFacts
 }
 
 func (s *Service) taskSetupAttemptObserver(setupOperationID *serverapi.WorktreeSetupOperationID) (setupAttemptObserver, error) {
@@ -1965,15 +2012,15 @@ func (s *Service) recreateSetupAttemptIfClean(
 	if recreate == nil {
 		return attempt, nil
 	}
-	if attempt.recordedCheckout == nil {
+	if attempt.recreation == nil {
 		return nil, errors.New("setup recreation requires recorded checkout topology")
 	}
 	_, safelyRecreatable, err := s.inspectSafeWorktreeRecreation(
 		ctx,
 		attempt.payload.SourceWorkspaceRoot,
 		attempt.payload.WorktreeRoot,
-		attempt.creationBaseCommitOID,
-		*attempt.recordedCheckout,
+		attempt.recreation.CreationBaseCommitOID,
+		attempt.recreation.RecordedCheckout,
 	)
 	if err != nil {
 		return nil, err
@@ -2016,10 +2063,6 @@ func (s *Service) prepareSetupAttempt(req setupExecutionRequest) (*preparedSetup
 	if err != nil {
 		return nil, err
 	}
-	recordedCheckout, err := setupRecreationCheckout(req.RetainedWorktree)
-	if err != nil {
-		return nil, err
-	}
 	payload := setupScriptPayload{
 		SourceWorkspaceRoot: strings.TrimSpace(req.SourceWorkspaceRoot),
 		BranchName:          strings.TrimSpace(req.BranchName),
@@ -2036,27 +2079,12 @@ func (s *Service) prepareSetupAttempt(req setupExecutionRequest) (*preparedSetup
 			WorktreeRoot:        payload.WorktreeRoot,
 			ScriptPath:          scriptPath,
 		},
-		scriptPath:            scriptPath,
-		payload:               payload,
-		timeoutSeconds:        settings.SetupTimeoutSeconds,
-		retained:              req.RetainedWorktree,
-		creationBaseCommitOID: req.CreationBaseCommitOID,
-		recordedCheckout:      recordedCheckout,
+		scriptPath:     scriptPath,
+		payload:        payload,
+		timeoutSeconds: settings.SetupTimeoutSeconds,
+		retained:       req.RetainedWorktree,
+		recreation:     req.Recreation,
 	}, nil
-}
-
-func setupRecreationCheckout(retained *serverapi.WorktreeTopologyEntry) (*GitWorktree, error) {
-	if retained == nil {
-		return nil, nil
-	}
-	if retained.Variant != serverapi.WorktreeTopologyVariantRegistered || retained.Registered == nil {
-		return nil, errors.New("setup retained worktree must be registered")
-	}
-	checkout, err := gitWorktreeFromFacts(retained.Registered.Git)
-	if err != nil {
-		return nil, err
-	}
-	return &checkout, nil
 }
 
 func (s *Service) inspectSafeWorktreeRecreation(

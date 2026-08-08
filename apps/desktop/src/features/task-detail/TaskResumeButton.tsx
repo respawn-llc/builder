@@ -14,8 +14,13 @@ import {
 } from "@/shared/execution-target";
 import { Button } from "@/ui";
 
+export type TaskResumeAuthority =
+  | Readonly<{ kind: "unavailable" }>
+  | Readonly<{ kind: "ordinary" }>
+  | Readonly<{ kind: "setup_recovery"; recovery: TaskSetupRecovery }>;
+
 type TaskInitiatingActionController = Readonly<{
-  canonicalSetupOperationID: string | null;
+  authority: TaskResumeAuthority;
   resume(recovery?: TaskSetupRecovery): void;
   start(): void;
   running: boolean;
@@ -28,13 +33,13 @@ export function TaskInitiatingActionProvider({
   onApplied,
   onViewDependencies,
   taskID,
-  setupRecovery,
+  authority,
 }: Readonly<{
   children: ReactNode;
   onApplied(): void | Promise<void>;
   onViewDependencies(taskID: string): void;
   taskID: string;
-  setupRecovery: TaskSetupRecovery | null;
+  authority: TaskResumeAuthority;
 }>) {
   const { api } = useAppServices();
   const { push } = useStatusController();
@@ -89,7 +94,7 @@ export function TaskInitiatingActionProvider({
   return (
     <TaskInitiatingActionContext.Provider
       value={{
-        canonicalSetupOperationID: setupRecovery?.setupOperationID.toJSONValue() ?? null,
+        authority,
         resume,
         running: continuation.running,
         start,
@@ -119,18 +124,26 @@ export function TaskResumeButton({
   if (controller === null) {
     throw new Error("Task Resume button requires a Task initiating-action provider");
   }
+  if (controller.authority.kind === "unavailable") {
+    return null;
+  }
+  if (controller.authority.kind === "ordinary" && setupRecovery !== undefined) {
+    return null;
+  }
   if (
-    controller.canonicalSetupOperationID !== null &&
-    controller.canonicalSetupOperationID !== setupRecovery?.setupOperationID.toJSONValue()
+    controller.authority.kind === "setup_recovery" &&
+    controller.authority.recovery.setupOperationID.toJSONValue() !==
+      setupRecovery?.setupOperationID.toJSONValue()
   ) {
     return null;
   }
+  const recovery = controller.authority.kind === "setup_recovery" ? controller.authority.recovery : undefined;
   return (
     <Button
       data-testid="task-detail-resume"
       disabled={disabled || controller.running}
       onClick={() => {
-        controller.resume(setupRecovery);
+        controller.resume(recovery);
       }}
       variant="primary"
     >

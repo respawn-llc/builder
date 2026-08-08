@@ -1,4 +1,4 @@
-import { act, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 
@@ -9,6 +9,65 @@ import {
   taskDetailResponseWithInterruptedCurrentScript,
 } from "@/test-support/task-detail";
 import { parseSetupOperationID } from "@/api";
+import { createTestServices, TestAppProviders } from "@/test-support/app-services";
+import { TaskResumeButton, TaskResumeProvider } from "./TaskResumeButton";
+
+it("hides Resume when its authority is unavailable", () => {
+  const services = createTestServices([]);
+  render(
+    <TestAppProviders services={services}>
+      <TaskResumeProvider authority={{ kind: "unavailable" }} onApplied={() => undefined} taskID="task-1">
+        <TaskResumeButton disabled={false} />
+      </TaskResumeProvider>
+    </TestAppProviders>,
+  );
+
+  expect(screen.queryByTestId("task-detail-resume")).not.toBeInTheDocument();
+});
+
+it("withholds ordinary Resume until Task attention loads successfully", async () => {
+  let finishAttention: ((value: { items: never[]; generated_at_unix_ms: number }) => void) | undefined;
+  const attentionResponse = new Promise<{ items: never[]; generated_at_unix_ms: number }>((resolve) => {
+    finishAttention = resolve;
+  });
+  const services = mountTaskDetailSurface(taskDetailResponseWithInterruptedCurrentScript, {
+    initialFocus: { kind: "dependencies" },
+    routes: [
+      {
+        method: "workflow.task.attention.list",
+        handler: async () => attentionResponse,
+      },
+    ],
+  });
+
+  await waitFor(() => {
+    expect(getCallCount(services.transport.calls, "workflow.task.attention.list")).toBe(1);
+  });
+  expect(screen.queryByTestId("task-detail-resume")).not.toBeInTheDocument();
+
+  await act(async () => {
+    finishAttention?.({ items: [], generated_at_unix_ms: 3 });
+    await attentionResponse;
+  });
+  expect(await screen.findByTestId("task-detail-resume")).toBeInTheDocument();
+});
+
+it("withholds ordinary Resume when Task attention fails", async () => {
+  const services = mountTaskDetailSurface(taskDetailResponseWithInterruptedCurrentScript, {
+    initialFocus: { kind: "dependencies" },
+    routes: [
+      {
+        method: "workflow.task.attention.list",
+        error: new Error("attention unavailable"),
+      },
+    ],
+  });
+
+  await waitFor(() => {
+    expect(getCallCount(services.transport.calls, "workflow.task.attention.list")).toBe(1);
+  });
+  expect(screen.queryByTestId("task-detail-resume")).not.toBeInTheDocument();
+});
 
 it("reuses one Task Detail Resume continuation for target selection", async () => {
   let resumeCalls = 0;
