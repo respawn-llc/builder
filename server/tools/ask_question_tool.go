@@ -11,6 +11,7 @@ import (
 
 	"core/prompts"
 	"core/shared/clientui"
+	"core/shared/sessioncontract"
 	"core/shared/textutil"
 
 	"github.com/google/uuid"
@@ -61,16 +62,16 @@ var (
 	ErrAskQuestionApprovalRequiresResponse      = errors.New("approval questions require approval responses")
 	ErrAskQuestionApprovalForbidsOrdinaryAnswer = errors.New("approval questions must not return ordinary answer fields")
 	ErrAskQuestionNonApprovalForbidsApproval    = errors.New("non-approval questions must not return approval payloads")
-	ErrAskQuestionNonApprovalRequiresAnswer     = errors.New("non-approval questions require an answer")
+	ErrAskQuestionNonApprovalRequiresAnswer     = sessioncontract.ErrPromptQuestionAnswerRequired
 	ErrAskQuestionSelectedOptionRequiresSuggest = errors.New("selected option numbers require suggestions")
 )
 
-type AskQuestionApprovalDecision string
+type AskQuestionApprovalDecision = sessioncontract.PromptApprovalDecision
 
 const (
-	AskQuestionApprovalDecisionAllowOnce    AskQuestionApprovalDecision = "allow_once"
-	AskQuestionApprovalDecisionAllowSession AskQuestionApprovalDecision = "allow_session"
-	AskQuestionApprovalDecisionDeny         AskQuestionApprovalDecision = "deny"
+	AskQuestionApprovalDecisionAllowOnce    = sessioncontract.PromptApprovalDecisionAllowOnce
+	AskQuestionApprovalDecisionAllowSession = sessioncontract.PromptApprovalDecisionAllowSession
+	AskQuestionApprovalDecisionDeny         = sessioncontract.PromptApprovalDecisionDeny
 )
 
 type AskQuestionApprovalOption struct {
@@ -222,7 +223,7 @@ func validateRequest(req AskQuestionRequest) error {
 	}
 	seen := make(map[AskQuestionApprovalDecision]struct{}, len(req.ApprovalOptions))
 	for _, option := range req.ApprovalOptions {
-		if err := validateApprovalDecision(option.Decision); err != nil {
+		if err := sessioncontract.ValidatePromptApprovalDecision(option.Decision); err != nil {
 			return fmt.Errorf("invalid approval option: %w", err)
 		}
 		if option.Label == "" {
@@ -270,15 +271,6 @@ func selectedOptionToolOutputSummary(optionNumber int, freeform *string) string 
 		return base
 	}
 	return base + " They also said: " + *freeform
-}
-
-func validateApprovalDecision(decision AskQuestionApprovalDecision) error {
-	switch decision {
-	case AskQuestionApprovalDecisionAllowOnce, AskQuestionApprovalDecisionAllowSession, AskQuestionApprovalDecisionDeny:
-		return nil
-	default:
-		return fmt.Errorf("unsupported approval decision %q", decision)
-	}
 }
 
 func (b *AskQuestionBroker) Pending() []AskQuestionRequest {

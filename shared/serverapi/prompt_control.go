@@ -7,6 +7,7 @@ import (
 
 	"core/shared/clientui"
 	"core/shared/runtimeids"
+	"core/shared/sessioncontract"
 )
 
 type AskAnswerRequest struct {
@@ -120,30 +121,11 @@ func (e PromptAnswerBatchEntry) Validate() error {
 }
 
 func (a PromptQuestionAnswer) Validate() error {
-	if a.SelectedOptionNumber == nil && a.Freeform == nil {
-		return errors.New("question answer requires selected_option_number or freeform")
-	}
-	if a.SelectedOptionNumber != nil && *a.SelectedOptionNumber <= 0 {
-		return errors.New("selected_option_number must be positive when present")
-	}
-	if a.Freeform != nil && strings.TrimSpace(*a.Freeform) == "" {
-		return errors.New("freeform must be non-blank when present")
-	}
-	return nil
+	return sessioncontract.ValidatePromptQuestionAnswerShape(a.SelectedOptionNumber, a.Freeform)
 }
 
 func (a PromptApprovalAnswer) Validate() error {
-	switch a.Decision {
-	case clientui.ApprovalDecisionAllowOnce,
-		clientui.ApprovalDecisionAllowSession,
-		clientui.ApprovalDecisionDeny:
-	default:
-		return errors.New("approval decision is invalid")
-	}
-	if a.Commentary != nil && strings.TrimSpace(*a.Commentary) == "" {
-		return errors.New("commentary must be non-blank when present")
-	}
-	return nil
+	return sessioncontract.ValidatePromptApprovalAnswerShape(a.Decision, a.Commentary)
 }
 
 func (r PromptAnswerBatchResponse) Validate() error {

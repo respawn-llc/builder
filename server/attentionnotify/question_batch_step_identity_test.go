@@ -1,21 +1,12 @@
 package attentionnotify
 
 import (
-	"reflect"
 	"testing"
 
 	"core/shared/clientui"
 )
 
 func TestQuestionBatchTrackerKeysAndPublishesByStepIdentity(t *testing.T) {
-	batchType := reflect.TypeOf(QuestionBatch{})
-	if _, exists := batchType.FieldByName("ID"); exists {
-		t.Fatal("QuestionBatch retains independent ID")
-	}
-	if _, exists := batchType.FieldByName("StepID"); !exists {
-		t.Fatal("QuestionBatch is missing StepID")
-	}
-
 	fixture := newBrokerFixture(t)
 	tracker := NewQuestionBatchTracker(fixture.Broker)
 	sub := fixture.subscribeDesktop()

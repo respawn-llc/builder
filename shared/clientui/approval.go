@@ -1,13 +1,17 @@
 package clientui
 
-import "time"
+import (
+	"time"
 
-type ApprovalDecision string
+	"core/shared/sessioncontract"
+)
+
+type ApprovalDecision = sessioncontract.PromptApprovalDecision
 
 const (
-	ApprovalDecisionAllowOnce    ApprovalDecision = "allow_once"
-	ApprovalDecisionAllowSession ApprovalDecision = "allow_session"
-	ApprovalDecisionDeny         ApprovalDecision = "deny"
+	ApprovalDecisionAllowOnce    = sessioncontract.PromptApprovalDecisionAllowOnce
+	ApprovalDecisionAllowSession = sessioncontract.PromptApprovalDecisionAllowSession
+	ApprovalDecisionDeny         = sessioncontract.PromptApprovalDecisionDeny
 )
 
 type ApprovalOption struct {

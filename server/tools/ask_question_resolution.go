@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"core/shared/sessioncontract"
 )
 
 type AskQuestionResolution interface {
@@ -43,21 +45,15 @@ func (AskQuestionApproval) askQuestionResolution() {}
 func ValidateAskQuestionResolutionShape(resolution AskQuestionResolution) error {
 	switch answer := resolution.(type) {
 	case AskQuestionAnswer:
-		if answer.SelectedOptionNumber != nil && *answer.SelectedOptionNumber <= 0 {
-			return errors.New("selected option number must be positive when present")
-		}
-		if answer.Freeform != nil && strings.TrimSpace(*answer.Freeform) == "" {
-			return errors.New("freeform answer must be non-blank when present")
-		}
-		if answer.SelectedOptionNumber == nil && answer.Freeform == nil {
-			return ErrAskQuestionNonApprovalRequiresAnswer
-		}
-		return nil
+		return sessioncontract.ValidatePromptQuestionAnswerShape(
+			answer.SelectedOptionNumber,
+			answer.Freeform,
+		)
 	case AskQuestionApproval:
-		if answer.Commentary != nil && strings.TrimSpace(*answer.Commentary) == "" {
-			return errors.New("approval commentary must be non-blank when present")
-		}
-		return validateApprovalDecision(answer.Decision)
+		return sessioncontract.ValidatePromptApprovalAnswerShape(
+			answer.Decision,
+			answer.Commentary,
+		)
 	default:
 		return errors.New("Ask Question resolution variant is invalid")
 	}

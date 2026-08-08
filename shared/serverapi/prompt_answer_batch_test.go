@@ -108,6 +108,14 @@ func TestPromptAnswerBatchRequestRejectsMalformedEntriesBeforeDelegation(t *test
 			},
 		},
 		{
+			name: "padded prompt",
+			request: PromptAnswerBatchRequest{
+				SessionID: mustPromptBatchSessionID(t),
+				StepID:    mustPromptBatchStepID(t),
+				Entries:   []PromptAnswerBatchEntry{{PromptID: " question-1", Declined: &PromptDeclined{}}},
+			},
+		},
+		{
 			name: "missing union member",
 			request: PromptAnswerBatchRequest{
 				SessionID: mustPromptBatchSessionID(t),
