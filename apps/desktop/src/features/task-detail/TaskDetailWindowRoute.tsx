@@ -1,4 +1,6 @@
+import { useAppServices } from "@/app-facade";
 import { TaskDetailSurface } from "./TaskDetailSurface";
+import { useExactTaskDetailDeleteDismissal } from "./taskDetailDismissal";
 
 /**
  * Full-bleed native-window host for a popped-out task detail. Unlike the padded
@@ -8,6 +10,10 @@ import { TaskDetailSurface } from "./TaskDetailSurface";
  * macOS traffic lights off the content — exactly how the in-app sidebar hosts it.
  */
 export function TaskDetailWindowRoute({ taskID }: Readonly<{ taskID: string }>) {
+  const { nativeBridge } = useAppServices();
+  const onDeleteDismiss = useExactTaskDetailDeleteDismissal(taskID, async () => {
+    await nativeBridge.window.closeCurrent();
+  });
   return (
     <main className="window-glass-fill grid h-screen w-screen grid-rows-[minmax(0,1fr)] overflow-hidden pt-[var(--native-titlebar-height)]">
       <div
@@ -15,7 +21,7 @@ export function TaskDetailWindowRoute({ taskID }: Readonly<{ taskID: string }>) 
         data-tauri-drag-region
       />
       <div className="app-region-no-drag min-h-0 overflow-hidden">
-        <TaskDetailSurface enabled taskId={taskID} />
+        <TaskDetailSurface enabled onDeleteDismiss={onDeleteDismiss} taskId={taskID} />
       </div>
     </main>
   );

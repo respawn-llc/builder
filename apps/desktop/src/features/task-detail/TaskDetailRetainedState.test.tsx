@@ -71,19 +71,24 @@ describe("Task Detail retained sidebar state", () => {
     expect(screen.queryByDisplayValue("Old title")).not.toBeInTheDocument();
   });
 
-  it("preserves overlay composition while opening a dependency Task", async () => {
+  it("preserves overlay composition without carrying the current Task callback to a dependency", async () => {
     const pageNavigator = createTestSidebarNavigator();
     const onMutated = vi.fn();
     const blockedBy = taskDetailResponse.task.dependencies.directions[0];
     const blocks = taskDetailResponse.task.dependencies.directions[1];
     if (blockedBy === undefined || blocks === undefined) throw new Error("Expected dependency directions.");
     const item = {
-      task_id: "task-2", short_id: "T-2", title: "Prepare", workflow_id: "workflow-2",
+      task_id: "task-2",
+      short_id: "T-2",
+      title: "Prepare",
+      workflow_id: "workflow-2",
       status: { kind: "backlog", native_state: "active", node_ids: [], attention_types: [] },
       satisfaction: "unsatisfied",
     };
     const dependencies = {
-      blocker_count: 1, unsatisfied_blocker_count: 1, directly_blocked_task_count: 0,
+      blocker_count: 1,
+      unsatisfied_blocker_count: 1,
+      directly_blocked_task_count: 0,
       directions: [{ ...blockedBy, total_count: 1, unsatisfied_count: 1, items: [item] }, blocks],
     };
     mountTaskDetailSurface(
@@ -96,21 +101,29 @@ describe("Task Detail retained sidebar state", () => {
     expect(pageNavigator.push).toHaveBeenCalledWith({
       kind: "taskDetail",
       mode: "overlay",
-      onMutated,
       taskID: "task-2",
     });
   });
 
   it("ignores malformed retained state and preserves first-open focus", async () => {
     const navigator = createTestSidebarNavigator();
-    mountTaskDetailSurface(taskDetailResponse, { initialFocus: { kind: "dependencies" }, navigator, retainedState: { scrollOffsetPx: -1 } });
+    mountTaskDetailSurface(taskDetailResponse, {
+      initialFocus: { kind: "dependencies" },
+      navigator,
+      retainedState: { scrollOffsetPx: -1 },
+    });
     expect(await screen.findByDisplayValue("Resolve blocker")).toBeInTheDocument();
     await waitFor(() => {
       expect(navigator.registerCapture).toHaveBeenCalled();
     });
     const capture = vi.mocked(navigator.registerCapture).mock.lastCall?.[0];
     if (capture === undefined) throw new Error("Expected fallback-state capture.");
-    expect(capture()).toEqual(expect.objectContaining({ draft: { body: "Need operator input", title: "Resolve blocker" }, selectedTab: "comments" }));
+    expect(capture()).toEqual(
+      expect.objectContaining({
+        draft: { body: "Need operator input", title: "Resolve blocker" },
+        selectedTab: "comments",
+      }),
+    );
   });
 
   it("opens related creation through the standalone Task Detail root owner", async () => {

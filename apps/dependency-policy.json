@@ -35,6 +35,7 @@
         "react-dom",
         "react-hook-form",
         "react-i18next",
+        "remark-breaks",
         "remark-gfm",
         "remark-parse",
         "shiki",

@@ -1,4 +1,5 @@
 import type { AttentionItem } from "./attention";
+import type { TaskLiveSession } from "./taskDetailModels";
 
 import type { WorkflowExecutionTarget, WorkflowExecutionTargetPolicy } from "./workflowExecutionTarget";
 import type { WorkflowEdgeSelectionMode, WorkflowParameterPurpose, WorkflowSelectorApplicability } from "./workflowSelectionModels";
@@ -704,7 +705,7 @@ export type TaskDetail = Readonly<{
   executionTarget: WorkflowExecutionTarget | null;
   worktreePath: string | null;
   currentNodes: readonly TaskCurrentNode[];
-  liveSessionIDs: readonly string[];
+  liveSessions: readonly TaskLiveSession[];
   currentScripts: readonly Readonly<{ currentNode: TaskScriptCurrentNode; path: string }>[];
   retainedSessionCount: number;
   createdAt: number;

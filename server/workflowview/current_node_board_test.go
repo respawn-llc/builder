@@ -3,6 +3,10 @@ package workflowview
 import (
 	"testing"
 
+	"core/internal/testharness/testsetup"
+	"core/server/sessionruntime"
+	"core/server/workflow"
+	"core/server/workflowexecution"
 	"core/server/workflowstore"
 	"core/shared/serverapi"
 )
@@ -48,6 +52,75 @@ func TestBoardProjectsStartedCurrentNode(t *testing.T) {
 		card.Status.Kind != serverapi.WorkflowTaskStatusKindActive ||
 		card.Actions.CanStart {
 		t.Fatalf("board card = %+v, want started Current Node projection", card)
+	}
+}
+
+func TestBoardDoesNotResolveLiveSessionLabelsForMultipleCards(t *testing.T) {
+	fixture := newCurrentNodeViewFixture(t, false)
+	started := []startedCurrentNodeViewTask{
+		fixture.startTask(t, "Board live A"),
+		fixture.startTask(t, "Board live B"),
+	}
+	executions := make(map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot, len(started))
+	quiescence := make(map[workflow.TaskID]bool, len(started))
+	for _, task := range started {
+		sessionID := fixture.bindCurrentNodeSession(t, task)
+		if _, err := fixture.metadata.DB().ExecContext(
+			fixture.ctx,
+			`UPDATE sessions SET name = ? WHERE id = ?`,
+			" ",
+			sessionID.String(),
+		); err != nil {
+			t.Fatalf("invalidate Session name: %v", err)
+		}
+		executions[task.task.ID] = sessionruntime.TaskExecutionSnapshot{
+			Executions: []sessionruntime.TaskExecution{{
+				Ref: sessionruntime.WorkflowExecutionRef{
+					ProjectID:   fixture.binding.ProjectID,
+					WorkflowID:  fixture.workflowID,
+					CurrentNode: task.currentNode,
+				},
+				Agent: &sessionruntime.TaskAgentExecutionTarget{SessionID: sessionID},
+			}},
+		}
+		quiescence[task.task.ID] = false
+	}
+	projection, err := NewTaskStatusProjection(
+		fixture.metadata,
+		fixture.store,
+		NewTaskProjector(),
+		staticTaskStatusLiveObservationSource{
+			observation: workflowexecution.WorkflowTaskExecutionObservation{
+				Executions: executions,
+				Quiescence: quiescence,
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewTaskStatusProjection: %v", err)
+	}
+	board, err := NewBoard(
+		fixture.metadata,
+		mustDefinitionProjection(t, fixture.store),
+		testsetup.QuestionsEnabled("coder"),
+		projection,
+	)
+	if err != nil {
+		t.Fatalf("NewBoard: %v", err)
+	}
+
+	page, err := board.ListNodeCards(fixture.ctx, serverapi.WorkflowBoardNodeCardsListRequest{
+		ProjectID:   fixture.binding.ProjectID,
+		WorkflowID:  fixture.workflowID,
+		NodeID:      string(fixture.agentNodeID),
+		PageSize:    20,
+		LabelFilter: serverapi.WorkflowTaskLabelFilterNone(),
+	})
+	if err != nil {
+		t.Fatalf("Board.ListNodeCards: %v", err)
+	}
+	if len(page.Cards) != len(started) {
+		t.Fatalf("board cards = %d, want %d", len(page.Cards), len(started))
 	}
 }
 

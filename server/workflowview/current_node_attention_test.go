@@ -287,8 +287,11 @@ func TestAttentionAndDetailProjectLiveQuestionFromExactScope(t *testing.T) {
 	}
 	if projected.Status.Kind != serverapi.WorkflowTaskStatusKindWaitingQuestion ||
 		projected.AttentionCount != 1 ||
-		len(projected.LiveSessionIDs) != 1 ||
-		projected.LiveSessionIDs[0] != question.sessionID.String() {
+		len(projected.LiveSessions) != 1 ||
+		projected.LiveSessions[0].SessionID != question.sessionID.String() ||
+		projected.LiveSessions[0].SessionName == nil ||
+		*projected.LiveSessions[0].SessionName != "Current Node session" ||
+		projected.LiveSessions[0].NodeDisplayName != "Agent" {
 		t.Fatalf("question task detail = %+v", projected)
 	}
 	question.resolve(t, fixture.ctx)

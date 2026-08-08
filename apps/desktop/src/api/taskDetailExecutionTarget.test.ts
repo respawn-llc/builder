@@ -22,8 +22,29 @@ describe("task detail execution target contract", () => {
         sessionID: "session-1",
       },
     ]);
-    expect(detail.liveSessionIDs).toEqual(["session-1"]);
+    expect(detail.liveSessions).toEqual([
+      {
+        sessionID: "session-1",
+        sessionName: "Review chat",
+        nodeDisplayName: "Code Review",
+      },
+      {
+        sessionID: "session-2",
+        sessionName: null,
+        nodeDisplayName: "Implementation",
+      },
+    ]);
     expect(detail.currentScripts).toEqual([]);
+  });
+
+  it("rejects the removed ID-only live Session contract", () => {
+    const task = {
+      ...taskDetailResponse.task,
+      live_session_ids: ["session-1"],
+    };
+    Reflect.deleteProperty(task, "live_sessions");
+
+    expect(() => taskDetailSchema.parse({ task })).toThrow();
   });
 
   it("distinguishes unlocked and source-workspace targets", () => {
@@ -161,6 +182,17 @@ function withExecutionTarget(executionTarget: unknown) {
   return {
     task: {
       ...taskDetailResponse.task,
+      live_sessions: [
+        {
+          session_id: "session-1",
+          session_name: "Review chat",
+          node_display_name: "Code Review",
+        },
+        {
+          session_id: "session-2",
+          node_display_name: "Implementation",
+        },
+      ],
       execution_target: executionTarget,
     },
   };

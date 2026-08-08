@@ -1772,7 +1772,7 @@ type WorkflowTaskDetail struct {
 	ExecutionTarget      *WorkflowExecutionTarget    `json:"execution_target,omitempty"`
 	WorktreePath         *string                     `json:"worktree_path"`
 	CurrentNodes         []WorkflowTaskCurrentNode   `json:"current_nodes"`
-	LiveSessionIDs       []string                    `json:"live_session_ids"`
+	LiveSessions         []WorkflowTaskLiveSession   `json:"live_sessions"`
 	CurrentScripts       []WorkflowTaskCurrentScript `json:"current_scripts"`
 	RetainedSessionCount int                         `json:"retained_session_count"`
 	Status               WorkflowTaskStatus          `json:"status"`
@@ -1780,6 +1780,12 @@ type WorkflowTaskDetail struct {
 	LabelIDs             []string                    `json:"label_ids"`
 	AttentionCount       int                         `json:"attention_count"`
 	Dependencies         WorkflowTaskDependencies    `json:"dependencies"`
+}
+
+type WorkflowTaskLiveSession struct {
+	SessionID       string  `json:"session_id"`
+	SessionName     *string `json:"session_name,omitempty"`
+	NodeDisplayName string  `json:"node_display_name"`
 }
 
 type WorkflowTaskDependencyDirection string
@@ -2448,12 +2454,18 @@ func (r WorkflowTaskGetResponse) Validate() error {
 			return prefixWorkflowProjectionValidationField("task.current_nodes", index, err)
 		}
 	}
-	if r.Task.LiveSessionIDs == nil {
-		return workflowRequestError(WorkflowRequestErrorRequired, "task.live_session_ids", "live_session_ids is required")
+	if r.Task.LiveSessions == nil {
+		return workflowRequestError(WorkflowRequestErrorRequired, "task.live_sessions", "live_sessions is required")
 	}
-	for index, sessionID := range r.Task.LiveSessionIDs {
-		if strings.TrimSpace(sessionID) == "" || (index > 0 && r.Task.LiveSessionIDs[index-1] >= sessionID) {
-			return workflowRequestError(WorkflowRequestErrorInvalidValue, "task.live_session_ids", "live_session_ids must contain sorted unique non-blank IDs")
+	for index, session := range r.Task.LiveSessions {
+		if strings.TrimSpace(session.SessionID) == "" || (index > 0 && r.Task.LiveSessions[index-1].SessionID >= session.SessionID) {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "task.live_sessions", "live_sessions must contain sorted unique non-blank Session IDs")
+		}
+		if session.SessionName != nil && strings.TrimSpace(*session.SessionName) == "" {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "task.live_sessions", "live_sessions must contain non-blank Session names when present")
+		}
+		if strings.TrimSpace(session.NodeDisplayName) == "" {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "task.live_sessions", "live_sessions must contain non-blank Agent Node display names")
 		}
 	}
 	if r.Task.CurrentScripts == nil {

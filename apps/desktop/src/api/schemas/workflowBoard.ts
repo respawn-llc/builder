@@ -472,7 +472,15 @@ export const taskDetailSchema: z.ZodType<TaskDetail> = z
       execution_target: workflowExecutionTargetSchema.optional().transform((value) => value ?? null),
       worktree_path: nonBlankString.nullable(),
       current_nodes: z.array(currentNodeSchema),
-      live_session_ids: z.array(nonBlankString),
+      live_sessions: z.array(
+        z
+          .object({
+            session_id: nonBlankString,
+            session_name: nonBlankString.optional(),
+            node_display_name: nonBlankString,
+          })
+          .strict(),
+      ),
       current_scripts: z.array(
         z
           .object({
@@ -509,7 +517,11 @@ export const taskDetailSchema: z.ZodType<TaskDetail> = z
     executionTarget: value.task.execution_target,
     worktreePath: value.task.worktree_path,
     currentNodes: value.task.current_nodes,
-    liveSessionIDs: value.task.live_session_ids,
+    liveSessions: value.task.live_sessions.map((session) => ({
+      sessionID: session.session_id,
+      sessionName: session.session_name ?? null,
+      nodeDisplayName: session.node_display_name,
+    })),
     currentScripts: value.task.current_scripts.map((script) => ({
       currentNode: script.current_node,
       path: script.path,

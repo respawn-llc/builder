@@ -22,12 +22,12 @@ import {
   type TaskInitiatingActionDialogResult,
 } from "@/shared/execution-target";
 import { ProjectLabelsProvider, useProjectLabelFilter } from "@/shared/labels";
+import { TaskDeleteConfirmationDialog } from "@/shared/task-delete";
 import { WorkflowValidationIssues } from "@/shared/workflow-validation";
 import { ErrorState, FloatingNoticeIsland, LoadingState } from "@/ui";
 import { BoardHoverMenu } from "./BoardHoverMenu";
 import { BoardHorizontalScrollbar } from "./BoardHorizontalScrollbar";
 import { BoardRailMotionController } from "./BoardRailMotionController";
-import { TaskDeleteConfirmationFallbackDialog } from "./TaskDeleteConfirmation";
 import { taskDeleteWindowOptions, type TaskDeleteTarget } from "./taskDeleteConfirmationModel";
 import type { BoardColumnDropState } from "./BoardDragTypes";
 import { classifyBoardColumnDropState, useBoardDragLifecycle } from "./BoardDragState";
@@ -303,7 +303,7 @@ function BoardContent({
       await nativeBridge.dialogs.openWindow(taskDeleteWindowOptions(target, t("board.deleteTaskTitle")));
     },
     renderFallback: (target, close) => (
-      <TaskDeleteConfirmationFallbackDialog
+      <TaskDeleteConfirmationDialog
         disabled={actions.delete.isPending}
         onClose={close}
         onConfirm={() => {
