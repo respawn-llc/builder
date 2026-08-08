@@ -632,6 +632,7 @@ type executionPromptStore struct {
 	// mu is the sole synchronization for pending prompts. Prompt lifecycle
 	// mutations must not acquire Authority.mu because status snapshots hold it
 	// while reading live execution state.
+	resolutionMu          sync.Mutex
 	mu                    sync.RWMutex
 	scope                 ExecutionScope
 	feed                  ExecutionPromptFeed
@@ -693,6 +694,8 @@ func (s *executionPromptStore) Await(ctx context.Context, req tools.AskQuestionR
 	s.observePromptSuccessorLocked(requestID)
 	s.mu.Unlock()
 	defer func() {
+		s.resolutionMu.Lock()
+		defer s.resolutionMu.Unlock()
 		s.mu.Lock()
 		current := s.pending[requestID]
 		if current == entry {
@@ -752,6 +755,8 @@ func (s *executionPromptStore) submit(
 		)
 	}
 	<-entry.publicationDone
+	s.resolutionMu.Lock()
+	defer s.resolutionMu.Unlock()
 	s.mu.Lock()
 	if s.pending[requestID] != entry {
 		s.mu.Unlock()
@@ -768,11 +773,12 @@ func (s *executionPromptStore) submit(
 		}
 	}
 	successorIDs, preparationErr := preparedSuccessorPromptIDs(entry.snapshot.Request, submitErr)
+	s.mu.Unlock()
 	publicationErr := s.publishResolved(entry.snapshot)
 	if publicationErr != nil {
-		s.mu.Unlock()
 		return PromptResponseAcceptance{}, errors.Join(preparationErr, publicationErr)
 	}
+	s.mu.Lock()
 	acceptance := PromptResponseAcceptance{}
 	if preparationErr == nil && latchSuccessor {
 		observation := &promptSuccessorObservation{
@@ -863,6 +869,8 @@ func (s *executionPromptStore) Close(err error) error {
 	if s.authority == nil {
 		return nil
 	}
+	s.resolutionMu.Lock()
+	defer s.resolutionMu.Unlock()
 	s.mu.Lock()
 	closure := s.closeLocked(err)
 	s.mu.Unlock()

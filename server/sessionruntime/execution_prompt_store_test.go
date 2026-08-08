@@ -154,6 +154,36 @@ func TestExecutionPromptStoreClosePublishesLifecycleBeforeReleasingPrompt(t *tes
 	}
 }
 
+func TestExecutionPromptStoreResolutionDoesNotHoldPromptLock(t *testing.T) {
+	feed := newGatedPromptFeed()
+	store := newExecutionPromptStoreForTest(t, feed)
+	request := tools.AskQuestionRequest{ID: "ask-1", Question: "Proceed?"}
+	go store.Await(context.Background(), request)
+	<-feed.pendingStarted
+	close(feed.allowPending)
+	<-feed.pendingPublished
+
+	submitDone := make(chan error, 1)
+	go func() {
+		submitDone <- store.Submit(tools.AskQuestionResponse{RequestID: request.ID, Answer: "yes"}, nil)
+	}()
+	<-feed.resolutionStarted
+	pending := make(chan bool, 1)
+	go func() { pending <- store.hasPending() }()
+	select {
+	case isPending := <-pending:
+		if !isPending {
+			t.Fatal("prompt was removed before resolution publication completed")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("prompt resolution retained the prompt lock")
+	}
+	close(feed.allowResolution)
+	if err := <-submitDone; err != nil {
+		t.Fatalf("submit prompt response: %v", err)
+	}
+}
+
 type failingPromptFeed struct{ err error }
 
 func (f failingPromptFeed) PromptPendingScope(ExecutionScope, tools.AskQuestionRequest, time.Time) error {
