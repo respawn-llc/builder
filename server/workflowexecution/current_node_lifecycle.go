@@ -466,11 +466,9 @@ func (c *CurrentNodeController) ApplyPendingApproval(
 			c.mu.Unlock()
 			return workflowstore.PendingApprovalApplyResult{}, err
 		}
-		sourceRun, sourceLive := c.runs.get(sourceKey)
-		sourceLive = sourceLive && sourceRun.phase == currentNodeRunRunning && sourceRun.executionLease != nil
-		var sourceScopeID runtimeids.ExecutionScopeID
-		if sourceLive {
-			sourceScopeID = sourceRun.executionLease.ScopeID()
+		sourceRun, sourceExists := c.runs.get(sourceKey)
+		if sourceExists && sourceRun.phase == currentNodeRunRunning && sourceRun.executionLease != nil {
+			sourceScopeID := sourceRun.executionLease.ScopeID()
 			if _, completed := c.completed[sourceScopeID]; !completed {
 				c.mu.Unlock()
 				return workflowstore.PendingApprovalApplyResult{}, errors.New("pending approval source scope has not completed")
@@ -483,112 +481,61 @@ func (c *CurrentNodeController) ApplyPendingApproval(
 				c.mu.Unlock()
 				return workflowstore.PendingApprovalApplyResult{}, sessionruntime.ErrExecutionNoLongerLive
 			}
-			sourceLive = false
 		}
 		c.mu.Unlock()
 
-		if !sourceLive {
-			var starts []currentNodeQueuedStart
-			var pending []*pendingCurrentNodeAssignmentEnsure
-			var staged []stagedCurrentNodeRun
-			applied, err := c.publication.PublishPendingApproval(
-				ctx,
-				approvalID,
-				func(result workflowstore.PendingApprovalApplyResult) (
-					workflowstore.TaskLifecycleDelta,
-					func(error),
-					error,
-				) {
-					starts, err = c.currentNodeExplicitStarts(ctx, result.Mutation.Created)
-					if err != nil {
-						return workflowstore.TaskLifecycleDelta{}, nil, err
-					}
-					starts, pending = pendingCurrentNodeAssignmentStarts(starts)
-					staged, err = c.stageCurrentNodeRunCreations(starts)
-					if err != nil {
-						return workflowstore.TaskLifecycleDelta{}, nil, err
-					}
-					delta, err := currentNodeCompletionLifecycleDelta(
-						approval.Source,
-						workflowstore.LifecycleFieldAbsent,
-						starts,
-					)
-					if err != nil {
-						c.rollbackStagedRunCreations(staged, err)
-						return workflowstore.TaskLifecycleDelta{}, nil, err
-					}
-					return delta, func(cause error) {
-						c.rollbackStagedRunCreations(staged, cause)
-					}, nil
-				},
-			)
-			if err != nil {
-				return workflowstore.PendingApprovalApplyResult{}, err
-			}
-			resolveErr := c.resolvePendingCurrentNodeAssignmentEnsures(ctx, starts, pending)
-			outcome := waitCurrentNodeAssignmentEnsures(ctx, starts)
-			if len(outcome.pending) > 0 {
-				c.continuePublishedCurrentNodeAssignmentStarts(
-					stagedCurrentNodeRunsForStarts(staged, outcome.pending),
-					outcome.pending,
-				)
-			}
-			if err := errors.Join(
-				resolveErr,
-				c.completePublishedCurrentNodeAssignmentStarts(ctx, staged, outcome),
-			); err != nil {
-				return workflowstore.PendingApprovalApplyResult{}, err
-			}
-			return applied, nil
-		}
-		handle, live := c.authority.ExecutionByScope(sourceScopeID)
-		if !live {
-			return workflowstore.PendingApprovalApplyResult{}, sessionruntime.ErrExecutionNoLongerLive
-		}
-		var applied workflowstore.PendingApprovalApplyResult
 		var starts []currentNodeQueuedStart
 		var pending []*pendingCurrentNodeAssignmentEnsure
-		err = c.authority.WithExactExecutions([]sessionruntime.ExecutionHandle{handle}, func() error {
-			var applyErr error
-			applied, applyErr = c.publication.PublishPendingApproval(
-				ctx,
-				approvalID,
-				func(result workflowstore.PendingApprovalApplyResult) (
-					workflowstore.TaskLifecycleDelta,
-					func(error),
-					error,
-				) {
-					starts, applyErr = c.currentNodeExplicitStarts(ctx, result.Mutation.Created)
-					if applyErr != nil {
-						return workflowstore.TaskLifecycleDelta{}, nil, applyErr
-					}
-					starts, pending = pendingCurrentNodeAssignmentStarts(starts)
-					c.mu.Lock()
-					holdErr := c.registerHeldRunsLocked(sourceScopeID, starts)
-					c.mu.Unlock()
-					if holdErr != nil {
-						return workflowstore.TaskLifecycleDelta{}, nil, holdErr
-					}
-					delta, deltaErr := currentNodeCompletionLifecycleDelta(
-						approval.Source,
-						workflowstore.LifecycleFieldPresent,
-						starts,
-					)
-					if deltaErr != nil {
-						c.rollbackHeldRunCreations(sourceScopeID, deltaErr)
-						return workflowstore.TaskLifecycleDelta{}, nil, deltaErr
-					}
-					return delta, func(cause error) {
-						c.rollbackHeldRunCreations(sourceScopeID, cause)
-					}, nil
-				},
-			)
-			return applyErr
-		})
+		var staged []stagedCurrentNodeRun
+		applied, err := c.publication.PublishPendingApproval(
+			ctx,
+			approvalID,
+			func(result workflowstore.PendingApprovalApplyResult) (
+				workflowstore.TaskLifecycleDelta,
+				func(error),
+				error,
+			) {
+				starts, err = c.currentNodeExplicitStarts(ctx, result.Mutation.Created)
+				if err != nil {
+					return workflowstore.TaskLifecycleDelta{}, nil, err
+				}
+				starts, pending = pendingCurrentNodeAssignmentStarts(starts)
+				staged, err = c.stageCurrentNodeRunCreations(starts)
+				if err != nil {
+					return workflowstore.TaskLifecycleDelta{}, nil, err
+				}
+				delta, err := currentNodeCompletionLifecycleDelta(
+					approval.Source,
+					workflowstore.LifecycleFieldAbsent,
+					starts,
+				)
+				if err != nil {
+					c.rollbackStagedRunCreations(staged, err)
+					return workflowstore.TaskLifecycleDelta{}, nil, err
+				}
+				return delta, func(cause error) {
+					c.rollbackStagedRunCreations(staged, cause)
+				}, nil
+			},
+		)
 		if err != nil {
 			return workflowstore.PendingApprovalApplyResult{}, err
 		}
-		return applied, c.resolvePendingCurrentNodeAssignmentEnsures(ctx, starts, pending)
+		resolveErr := c.resolvePendingCurrentNodeAssignmentEnsures(ctx, starts, pending)
+		outcome := waitCurrentNodeAssignmentEnsures(ctx, starts)
+		if len(outcome.pending) > 0 {
+			c.continuePublishedCurrentNodeAssignmentStarts(
+				stagedCurrentNodeRunsForStarts(staged, outcome.pending),
+				outcome.pending,
+			)
+		}
+		if err := errors.Join(
+			resolveErr,
+			c.completePublishedCurrentNodeAssignmentStarts(ctx, staged, outcome),
+		); err != nil {
+			return workflowstore.PendingApprovalApplyResult{}, err
+		}
+		return applied, nil
 	})
 }
 

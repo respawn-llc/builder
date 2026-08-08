@@ -724,6 +724,9 @@ func (s *Service) interrupt(ctx context.Context, req runtimeInterruptMemoRequest
 				return serverapi.RuntimeInterruptResponse{}, err
 			}
 		}
+		if !workflowHandled && activityErr != nil {
+			return serverapi.RuntimeInterruptResponse{}, fmt.Errorf("resolve runtime activity for Interrupt: %w", activityErr)
+		}
 		if !workflowHandled && observedRuntime != nil && observedRun != nil {
 			err = s.authority.WithRuntime(ctx, *observedRuntime, func(_ context.Context, engine *runtime.Engine) error {
 				_, err := engine.InterruptObservedRun(observedRun.RunID, observedRun.StepID)

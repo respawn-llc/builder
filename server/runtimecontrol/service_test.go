@@ -97,6 +97,7 @@ type runtimeControlPromptHistoryStore struct {
 
 type runtimeControlEngineActivityResolver struct {
 	engine *runtime.Engine
+	err    error
 }
 
 func (r runtimeControlEngineActivityResolver) RuntimeReadModelSnapshot(
@@ -104,6 +105,9 @@ func (r runtimeControlEngineActivityResolver) RuntimeReadModelSnapshot(
 	sessionID string,
 	_ []clientui.RuntimeOperationRef,
 ) (runtimeactivity.ResponseSnapshot, error) {
+	if r.err != nil {
+		return runtimeactivity.ResponseSnapshot{}, r.err
+	}
 	activity, err := runtimeactivity.ResolveRuntimeActivity(runtimeactivity.ResolverSnapshot{
 		Registry: runtimeactivity.RegistrySnapshot{Registered: true, QueueAccepting: true},
 		Active:   runtimeactivity.ActiveStepFromProvider(r.engine),
@@ -1039,6 +1043,18 @@ func TestServiceInterruptReturnsCurrentActivitySnapshot(t *testing.T) {
 	}
 	if err := resp.Version.Validate(); err != nil {
 		t.Fatalf("invalid response version: %v", err)
+	}
+}
+
+func TestServiceOrdinaryInterruptReturnsActivityResolutionFailure(t *testing.T) {
+	store, _, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{})
+	activityErr := errors.New("activity snapshot failed")
+	service.WithRuntimeActivityResolver(runtimeControlEngineActivityResolver{err: activityErr})
+	if _, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
+		ClientRequestID: "interrupt-activity-failure",
+		SessionID:       store.Meta().SessionID,
+	}); !errors.Is(err, activityErr) {
+		t.Fatalf("Interrupt error = %v, want %v", err, activityErr)
 	}
 }
 
