@@ -807,7 +807,7 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 		if receipt.Committed {
 			err = errors.Join(err, e.publishCommittedFinalizedToolCompletion(
 				stepID,
-				stepID,
+				textutil.OptionalExactString(stepID),
 				completion,
 				provenance,
 				feedbackProvenance,

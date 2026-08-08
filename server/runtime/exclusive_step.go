@@ -258,7 +258,7 @@ func (s *defaultExclusiveStepLifecycle) finishRuntimeAbort(
 	finishedAt := time.Now().UTC()
 	status := RunStatusFailed
 	snapshot := s.snapshotWithFinishedAt(finishedAt, status)
-	_, publishLiveRunFinished := s.publishTerminalStep(
+	terminalErr, publishLiveRunFinished := s.publishTerminalStep(
 		stepID,
 		options,
 		snapshot,
@@ -271,7 +271,7 @@ func (s *defaultExclusiveStepLifecycle) finishRuntimeAbort(
 	}
 	s.engine.surfaceRunError(fatal)
 	s.engine.closeAdmissionAfterRuntimeAbort()
-	return fatal
+	return terminalErr
 }
 
 func (s *defaultExclusiveStepLifecycle) publishTerminalStep(

@@ -191,9 +191,9 @@ func (e *Engine) repairMissingToolOutputsByAppending(
 	var projectionErr error
 	for index, completion := range prepared {
 		nextRecordIndex := recordIndex + len(completion.records)
-		feedbackStepID := *dangling[index].stepID
+		feedbackStepID := dangling[index].stepID
 		if completion.feedback != nil {
-			feedbackStepID, _ = textutil.OptionalExact(repairStepID)
+			feedbackStepID = repairStepID
 		}
 		applied, err := e.applyPreparedFinalizedToolCompletion(
 			feedbackStepID,

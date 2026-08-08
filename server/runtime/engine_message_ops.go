@@ -74,7 +74,7 @@ func (e *Engine) prepareFinalizedToolCompletion(
 }
 
 func (e *Engine) applyPreparedFinalizedToolCompletion(
-	stepID string,
+	stepID *string,
 	prepared preparedFinalizedToolCompletion,
 	records []session.EventRecord,
 ) (appliedFinalizedToolCompletion, error) {
@@ -107,8 +107,9 @@ func (e *Engine) applyPreparedFinalizedToolCompletion(
 	if err != nil {
 		return appliedFinalizedToolCompletion{}, err
 	}
+	feedbackStepID, _ := textutil.OptionalExact(stepID)
 	e.transcriptRuntimeState().AppendLocalEntryRecord(
-		*localEntryChatEntryForStep(*prepared.feedback, stepID),
+		*localEntryChatEntryForStep(*prepared.feedback, feedbackStepID),
 		prepared.feedback.AfterToolCallID,
 		&feedbackProvenance,
 	)
@@ -118,11 +119,9 @@ func (e *Engine) applyPreparedFinalizedToolCompletion(
 }
 
 func (e *Engine) publishCommittedFinalizedToolCompletion(
-	completionStepID string,
-	feedbackStepID string,
+	completionStepID string, feedbackStepID *string,
 	completion finalizedToolCompletion,
-	completionProvenance *TranscriptCommittedRowProvenance,
-	feedbackProvenance *TranscriptCommittedRowProvenance,
+	completionProvenance, feedbackProvenance *TranscriptCommittedRowProvenance,
 ) error {
 	result := cloneToolResult(completion.Result)
 	e.transcriptRuntimeState().CompleteLiveTool(result.CallID)
@@ -130,8 +129,9 @@ func (e *Engine) publishCommittedFinalizedToolCompletion(
 	if completion.OperatorFeedback == nil {
 		return err
 	}
-	entry := localEntryChatEntryForStep(*completion.OperatorFeedback, feedbackStepID)
-	return errors.Join(err, e.emitRaw(Event{Kind: EventLocalEntryAdded, StepID: feedbackStepID, LocalEntry: entry, CommittedTranscriptChanged: true, CommittedProvenance: cloneTranscriptCommittedRowProvenance(feedbackProvenance)}))
+	resolvedFeedbackStepID, _ := textutil.OptionalExact(feedbackStepID)
+	entry := localEntryChatEntryForStep(*completion.OperatorFeedback, resolvedFeedbackStepID)
+	return errors.Join(err, e.emitRaw(Event{Kind: EventLocalEntryAdded, StepID: resolvedFeedbackStepID, LocalEntry: entry, CommittedTranscriptChanged: true, CommittedProvenance: cloneTranscriptCommittedRowProvenance(feedbackProvenance)}))
 }
 
 func (e *Engine) persistToolCompletionRaw(stepID string, result tools.Result) (session.CommitReceipt, *TranscriptCommittedRowProvenance, error) {
@@ -157,7 +157,7 @@ func (e *Engine) persistFinalizedToolCompletionRaw(
 	if !receipt.Committed {
 		return receipt, nil, nil, err
 	}
-	applied, applyErr := e.applyPreparedFinalizedToolCompletion(stepID, prepared, records)
+	applied, applyErr := e.applyPreparedFinalizedToolCompletion(textutil.OptionalExactString(stepID), prepared, records)
 	if applyErr != nil {
 		return receipt, nil, nil, errors.Join(err, applyErr)
 	}

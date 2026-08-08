@@ -615,7 +615,7 @@ func (e *Engine) applyResultGroupProjection(
 			return err
 		}
 		applied, err := e.applyPreparedFinalizedToolCompletion(
-			stepID,
+			textutil.OptionalExactString(stepID),
 			unit.completion,
 			records[unit.completionStart:unit.outputRecordIndex],
 		)

@@ -729,12 +729,19 @@ func TestExclusiveStepLifecycleCanEmitRunStateWithoutPersistingDurableRun(t *tes
 func TestExclusiveStepRuntimeAbortPreservesRecoveryAndSkipsIdleWork(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
+	lifecycleErr := errors.New("step-ended publication failed")
+	stepLifecycle := &callbackStepLifecycleSink{onTransition: func(transition StepLifecycleTransition) error {
+		if transition == StepLifecycleTransitionEnded {
+			return lifecycleErr
+		}
+		return nil
+	}}
 	eng := mustNewTestEngine(
 		t,
 		store,
 		&fakeClient{},
 		tools.NewRegistry(),
-		Config{Model: "gpt-5"},
+		Config{Model: "gpt-5", StepLifecycle: stepLifecycle},
 	)
 	var idleSchedules int
 	lifecycle := &defaultExclusiveStepLifecycle{
@@ -765,8 +772,8 @@ func TestExclusiveStepRuntimeAbortPreservesRecoveryAndSkipsIdleWork(t *testing.T
 			return fatal
 		},
 	)
-	if err != fatal {
-		t.Fatalf("runtime abort error = %v, want exact fatal %p", err, fatal)
+	if !errors.Is(err, fatal) || !errors.Is(err, lifecycleErr) {
+		t.Fatalf("runtime abort error = %v, want fatal and step-ended failure", err)
 	}
 	if marker := store.Meta().PendingModelRecovery; marker == nil {
 		t.Fatal("runtime abort cleared PendingModelRecovery")
