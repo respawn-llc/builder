@@ -63,6 +63,7 @@ type ExecutionPromptFeed interface {
 
 type execution struct {
 	authority *Authority
+	exactMu   sync.Mutex
 	resource  *agentResource
 	scope     ExecutionScope
 	script    *TaskScriptExecutionTarget
@@ -251,6 +252,8 @@ func (e *execution) drainQueuedWorkBeforeRetirement(runErr error, stopErr error)
 
 func (e *execution) retire() {
 	authority := e.authority
+	e.exactMu.Lock()
+	defer e.exactMu.Unlock()
 	authority.mu.Lock()
 	if authority.byScope[e.scope.ID()] == e {
 		delete(authority.byScope, e.scope.ID())

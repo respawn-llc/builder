@@ -156,6 +156,7 @@ type steeringResultGroupReport struct {
 type steeringResultGroupFlush struct {
 	collector *resultGroupCollector
 	reason    ResultGroupFlushReason
+	committed bool
 }
 
 type steeringResultGroupClose struct {
@@ -585,9 +586,33 @@ func (e *Engine) steerOrdered(stepID string, intents ...steeringIntent) error {
 			if err := e.applySteeringItem(stepID, item); err != nil {
 				return err
 			}
+			if item.historyReplace == nil {
+				e.compactionRuntimeState().ApplyWorkflowPostCompletionActivity(
+					workflowPostCompletionActivityForSteeringItem(item),
+				)
+			}
 		}
 	}
 	return nil
+}
+
+func workflowPostCompletionActivityForSteeringItem(item steeringItem) workflowPostCompletionActivity {
+	if item.message != nil {
+		return workflowPostCompletionMessageActivity(item.message.message)
+	}
+	if item.assistantCommit != nil ||
+		item.committedAssistant != nil ||
+		item.completedResponseResolution != nil ||
+		item.goalNoticeAndStatus != nil ||
+		item.reviewerFeedback != nil ||
+		item.reviewerError != nil ||
+		item.toolCompletion != nil ||
+		(item.resultGroupFlush != nil && item.resultGroupFlush.committed) ||
+		(item.missingToolOutputRepair != nil && item.missingToolOutputRepair.repaired > 0) ||
+		item.queuedFlush != nil {
+		return workflowPostCompletionDurableActivity
+	}
+	return workflowPostCompletionNoActivity
 }
 
 func (e *Engine) resolveCompletedResponseStream(stepID string, instruction completedResponseResolutionInstruction) (completedResponseResolutionOutcome, error) {
@@ -654,7 +679,13 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 	}
 	if item.resultGroupFlush != nil {
 		flush := item.resultGroupFlush
-		return e.flushResultGroup(stepID, flush.collector, flush.reason)
+		if flush.collector == nil {
+			return e.flushResultGroup(stepID, nil, flush.reason)
+		}
+		cursor := flush.collector.cursor
+		err := e.flushResultGroup(stepID, flush.collector, flush.reason)
+		flush.committed = err == nil && flush.collector.cursor > cursor
+		return err
 	}
 	if item.resultGroupClose != nil {
 		return e.closeResultGroup(stepID, item.resultGroupClose.collector)
@@ -1028,6 +1059,8 @@ func (e *Engine) replaceHistoryRaw(stepID string, replacement steeringHistoryRep
 		&projectedStart,
 		replacement.projectedEntries,
 	)
+	replacementMode := session.CompactionMode(replacement.payload.Mode)
+	modeErr := e.compactionRuntimeState().SetHistoryReplacementMode(&replacementMode)
 	e.compactionRuntimeState().SetSoonReminderIssued(false)
 	emitErr := e.emitProjectedHistoryReplacementEntriesRaw(
 		stepID,
@@ -1035,6 +1068,7 @@ func (e *Engine) replaceHistoryRaw(stepID string, replacement steeringHistoryRep
 		replacement.projectedEntries,
 	)
 	emitErr = errors.Join(
+		modeErr,
 		emitErr,
 		e.emitRaw(Event{Kind: EventConversationUpdated, StepID: stepID}),
 	)

@@ -2008,6 +2008,12 @@ JOIN workspaces w ON w.id = wt.workspace_id
 WHERE wt.workspace_id = sqlc.arg(workspace_id)
 ORDER BY wt.created_at_unix_ms ASC, wt.rowid ASC;
 
+-- name: ListManagedWorktreeRoots :many
+SELECT wt.canonical_root_path
+FROM worktrees wt
+WHERE wt.managed <> 0
+ORDER BY wt.created_at_unix_ms ASC, wt.rowid ASC;
+
 -- name: GetWorktreeByID :one
 SELECT
     wt.id,
@@ -2280,13 +2286,31 @@ SELECT
     w.canonical_root_path AS root_path,
     CASE WHEN w.id = p.primary_workspace_id THEN 1 ELSE 0 END AS is_primary,
     CAST(COALESCE(COUNT(s.id), 0) AS INTEGER) AS session_count,
-    COALESCE(MAX(s.updated_at_unix_ms), w.updated_at_unix_ms) AS latest_activity_unix_ms
+    COALESCE(MAX(s.updated_at_unix_ms), w.updated_at_unix_ms) AS latest_activity_unix_ms,
+    w.created_at_unix_ms AS attached_at_unix_ms,
+    w.id AS workspace_order_id
 FROM workspaces w
 JOIN projects p ON p.id = w.project_id
 LEFT JOIN sessions s ON s.workspace_id = w.id AND s.launch_visible <> 0
+JOIN (
+    SELECT recent.id
+    FROM workspaces recent
+    WHERE recent.project_id = sqlc.arg(project_id)
+    ORDER BY recent.created_at_unix_ms DESC, recent.rowid DESC
+    LIMIT sqlc.arg(workspace_collection_limit)
+) recent_workspaces ON recent_workspaces.id = w.id
 WHERE w.project_id = sqlc.arg(project_id)
-GROUP BY w.id, w.canonical_root_path, p.primary_workspace_id, w.updated_at_unix_ms
+GROUP BY w.id, w.canonical_root_path, p.primary_workspace_id, w.updated_at_unix_ms, w.created_at_unix_ms
 ORDER BY CASE WHEN w.id = p.primary_workspace_id THEN 1 ELSE 0 END DESC, latest_activity_unix_ms DESC, w.created_at_unix_ms ASC, w.rowid ASC;
+
+-- name: ListProjectWorkspaceBoundary :many
+SELECT
+    w.id,
+    w.canonical_root_path AS root_path
+FROM workspaces w
+WHERE w.project_id = sqlc.arg(project_id)
+ORDER BY w.created_at_unix_ms DESC, w.rowid DESC
+LIMIT sqlc.arg(workspace_collection_limit);
 
 -- name: ListProjectWorkspacesPage :many
 SELECT
@@ -2298,6 +2322,13 @@ SELECT
 FROM workspaces w
 JOIN projects p ON p.id = w.project_id
 LEFT JOIN sessions s ON s.workspace_id = w.id AND s.launch_visible <> 0
+JOIN (
+    SELECT recent.id
+    FROM workspaces recent
+    WHERE recent.project_id = sqlc.arg(project_id)
+    ORDER BY recent.created_at_unix_ms DESC, recent.rowid DESC
+    LIMIT sqlc.arg(workspace_collection_limit)
+) recent_workspaces ON recent_workspaces.id = w.id
 WHERE w.project_id = sqlc.arg(project_id)
 GROUP BY w.id, w.canonical_root_path, p.primary_workspace_id, w.updated_at_unix_ms
 ORDER BY CASE WHEN w.id = p.primary_workspace_id THEN 1 ELSE 0 END DESC, w.created_at_unix_ms DESC, w.rowid DESC
@@ -3644,6 +3675,7 @@ SELECT
     document.source_kind,
     document.task_id,
     document.comment_id,
+    content.short_id,
     content.title,
     content.body,
     content.comment
@@ -3668,12 +3700,16 @@ required_objects(object_kind, object_name, owner_name) AS (
     VALUES
         ('table', 'task_search_documents', 'task_search_documents'),
         ('table', 'task_search_fts', 'task_search_fts'),
+        ('table', 'task_search_short_id_fts', 'task_search_short_id_fts'),
         ('view', 'task_search_content', 'task_search_content'),
+        ('index', 'task_search_documents_task_short_id_unique', 'task_search_documents'),
         ('index', 'task_search_documents_task_title_unique', 'task_search_documents'),
         ('index', 'task_search_documents_task_body_unique', 'task_search_documents'),
         ('index', 'task_search_documents_comment_unique', 'task_search_documents'),
-        ('trigger', 'task_search_document_insert', 'task_search_documents'),
-        ('trigger', 'task_search_document_delete', 'task_search_documents'),
+        ('trigger', 'task_search_short_id_document_insert', 'task_search_documents'),
+        ('trigger', 'task_search_short_id_document_delete', 'task_search_documents'),
+        ('trigger', 'task_search_text_document_insert', 'task_search_documents'),
+        ('trigger', 'task_search_text_document_delete', 'task_search_documents'),
         ('trigger', 'task_search_task_insert', 'tasks'),
         ('trigger', 'task_search_comment_insert', 'task_comments'),
         ('trigger', 'task_search_task_title_before_update', 'tasks'),
@@ -3755,6 +3791,7 @@ mapping_foreign_key_contract_failures AS (
 ),
 expected_mapping_indexes(index_name, column_name) AS (
     VALUES
+        ('task_search_documents_task_short_id_unique', 'task_id'),
         ('task_search_documents_task_title_unique', 'task_id'),
         ('task_search_documents_task_body_unique', 'task_id'),
         ('task_search_documents_comment_unique', 'comment_id')
@@ -3771,7 +3808,7 @@ mapping_index_columns AS (
 ),
 mapping_index_contract_failures AS (
     SELECT 'mapping_indexes' AS failure
-    WHERE (SELECT COUNT(*) FROM mapping_indexes) != 3
+    WHERE (SELECT COUNT(*) FROM mapping_indexes) != 4
        OR EXISTS (
             SELECT 1
             FROM mapping_indexes
@@ -3823,6 +3860,35 @@ fts_virtual_table_contract_failures AS (
             SELECT position, column_name, hidden
             FROM expected_fts_columns
        )
+),
+expected_short_id_fts_columns(position, column_name, hidden) AS (
+    VALUES
+        (0, 'short_id', 0),
+        (1, 'task_search_short_id_fts', 1),
+        (2, 'rank', 1)
+),
+short_id_fts_columns AS (
+    SELECT cid AS position, name AS column_name, hidden
+    FROM pragma_table_xinfo('task_search_short_id_fts')
+),
+short_id_fts_virtual_table_contract_failures AS (
+    SELECT 'short_id_fts_table' AS failure
+    WHERE (SELECT type FROM pragma_table_list WHERE schema = 'main' AND name = 'task_search_short_id_fts') != 'virtual'
+       OR (SELECT COUNT(*) FROM short_id_fts_columns) != 3
+       OR EXISTS (
+            SELECT position, column_name, hidden
+            FROM expected_short_id_fts_columns
+            EXCEPT
+            SELECT position, column_name, hidden
+            FROM short_id_fts_columns
+       )
+       OR EXISTS (
+            SELECT position, column_name, hidden
+            FROM short_id_fts_columns
+            EXCEPT
+            SELECT position, column_name, hidden
+            FROM expected_short_id_fts_columns
+       )
 )
 SELECT failure FROM object_contract_failures
 UNION ALL
@@ -3833,6 +3899,8 @@ UNION ALL
 SELECT failure FROM mapping_index_contract_failures
 UNION ALL
 SELECT failure FROM fts_virtual_table_contract_failures
+UNION ALL
+SELECT failure FROM short_id_fts_virtual_table_contract_failures
 ORDER BY failure ASC;
 {{end}}
 
@@ -3850,10 +3918,76 @@ args AS (
         CAST(?8 AS INTEGER) AS context_clusters,
         CAST(?9 AS INTEGER) AS offset_rows,
         CAST(?10 AS INTEGER) AS limit_rows,
-        CAST(?11 AS TEXT) AS live_task_states_json
+        CAST(?11 AS TEXT) AS live_task_states_json,
+        CAST(?12 AS INTEGER) AS short_id_case_mode
+),
+literal_args AS (
+    SELECT *
+    FROM args
+    WHERE mode = 'literal'
 ),
 {{taskStatusProjection "" "(SELECT live_task_states_json FROM args)" ","}}
 matching_sources AS (
+    SELECT
+        task.id AS task_id,
+        task.project_id,
+        project.project_key,
+        task.short_id,
+        task.workflow_id,
+        task.title AS task_title,
+        status.is_done,
+        status.kind AS status_kind,
+        status.node_ids_json,
+        status.attention_types_json,
+        document.document_id,
+        document.source_kind,
+        document.comment_id,
+        NULL AS comment_created_at_unix_ms,
+        CAST(
+            CASE
+                WHEN task.short_id = args.literal_query COLLATE NOCASE
+                  OR CAST(task.task_seq AS TEXT) = args.literal_query
+                    THEN 0
+                ELSE 1
+            END
+            AS INTEGER
+        ) AS match_class,
+        CAST(0.0 AS REAL) AS weighted_rank,
+        CAST(1 AS INTEGER) AS source_hit_count,
+        NULL AS raw_snippet
+    FROM literal_args args
+    CROSS JOIN task_search_short_id_fts
+    JOIN task_search_documents document
+      ON document.document_id = task_search_short_id_fts.rowid
+    JOIN task_records task
+      ON task.id = document.task_id
+    JOIN projects project
+      ON project.id = task.project_id
+    JOIN task_search_content content
+      ON content.document_id = document.document_id
+    JOIN effective_status status
+      ON status.task_id = task.id
+    WHERE task_search_short_id_fts MATCH ?2
+      AND (
+          args.project_ids_json IS NULL
+          OR task.project_id IN (
+              SELECT CAST(value AS TEXT)
+              FROM json_each(args.project_ids_json)
+          )
+      )
+      AND (
+          args.status_kinds_json IS NULL
+          OR status.kind IN (
+              SELECT CAST(value AS TEXT)
+              FROM json_each(args.status_kinds_json)
+          )
+      )
+      AND kent_task_search_occurrence_count_v1(
+          content.short_id,
+          args.literal_query,
+          args.short_id_case_mode
+      ) > 0
+    UNION ALL
     SELECT
         task.id AS task_id,
         task.project_id,
@@ -3872,6 +4006,7 @@ matching_sources AS (
             WHEN 'comment' THEN comment.created_at_unix_ms
             ELSE NULL
         END AS comment_created_at_unix_ms,
+        CAST(2 AS INTEGER) AS match_class,
         CAST(
             -task_search_fts.rank * CASE document.source_kind
                 WHEN 'title' THEN 10.0
@@ -3947,6 +4082,9 @@ matching_sources AS (
 ranked_sources AS (
     SELECT
         matching_sources.*,
+        CAST(MIN(match_class) OVER (
+            PARTITION BY task_id
+        ) AS INTEGER) AS task_match_class,
         CAST(MAX(weighted_rank) OVER (
             PARTITION BY task_id
         ) AS REAL) AS task_weighted_rank,
@@ -3957,9 +4095,10 @@ ranked_sources AS (
             PARTITION BY task_id
             ORDER BY
                 CASE source_kind
-                    WHEN 'title' THEN 0
-                    WHEN 'body' THEN 1
-                    WHEN 'comment' THEN 2
+                    WHEN 'short_id' THEN 0
+                    WHEN 'title' THEN 1
+                    WHEN 'body' THEN 2
+                    WHEN 'comment' THEN 3
                 END ASC,
                 CASE source_kind
                     WHEN 'comment' THEN weighted_rank
@@ -4067,7 +4206,11 @@ JOIN ranked_sources
 CROSS JOIN args
 ORDER BY
     rounds.ordinal ASC,
-    ranked_sources.task_weighted_rank DESC,
+    ranked_sources.task_match_class ASC,
+    CASE ranked_sources.task_match_class
+        WHEN 2 THEN ranked_sources.task_weighted_rank
+        ELSE 0.0
+    END DESC,
     ranked_sources.task_id ASC
 LIMIT (SELECT limit_rows FROM args)
 OFFSET COALESCE((SELECT first_round_offset FROM page_window), 0);

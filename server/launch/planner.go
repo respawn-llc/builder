@@ -37,6 +37,14 @@ type SessionExecutionTargetResolver interface {
 	ResolveSessionExecutionTarget(ctx context.Context, sessionID string) (clientui.SessionExecutionTarget, error)
 }
 
+type SessionProjectWorkspaceBoundaryResolver interface {
+	ResolveSessionProjectWorkspaceBoundary(ctx context.Context, sessionID string) (metadata.ProjectWorkspaceBoundary, error)
+}
+
+type SessionManagedWorktreeRootsResolver interface {
+	ListManagedWorktreeRoots(ctx context.Context) ([]string, error)
+}
+
 // MetadataExecutionTargetStore is the metadata subset needed to copy a parent
 // session execution target into a newly created child session.
 type MetadataExecutionTargetStore interface {
@@ -50,13 +58,14 @@ type MetadataExecutionTargetStore interface {
 type MetadataExecutionTargetStoreOpener func(persistenceRoot string) (MetadataExecutionTargetStore, error)
 
 type Planner struct {
-	Config              config.App
-	ContainerDir        string
-	StoreOptions        []session.StoreOption
-	ReloadConfig        func() (config.App, error)
-	PersistedSessions   session.PersistedSessionResolver
-	ExecutionTargets    SessionExecutionTargetResolver
-	MetadataStoreOpener MetadataExecutionTargetStoreOpener
+	Config                   config.App
+	ContainerDir             string
+	StoreOptions             []session.StoreOption
+	ReloadConfig             func() (config.App, error)
+	PersistedSessions        session.PersistedSessionResolver
+	ExecutionTargets         SessionExecutionTargetResolver
+	ProjectWorkspaceBoundary SessionProjectWorkspaceBoundaryResolver
+	MetadataStoreOpener      MetadataExecutionTargetStoreOpener
 }
 
 type SessionRequest struct {
@@ -83,6 +92,8 @@ type SessionPlan struct {
 	SkipContinuationAgentRoleValidation bool
 	WorkspaceRoot                       string
 	ExecutionTarget                     clientui.SessionExecutionTarget
+	ProjectWorkspaceBoundary            metadata.ProjectWorkspaceBoundary
+	ManagedWorktreeRoots                []string
 	Source                              config.SourceReport
 	BaseSource                          config.SourceReport
 }
@@ -101,6 +112,7 @@ func sessionPlanWithSnapshot(plan SessionPlan, store *session.Store, containerDi
 		panic(fmt.Sprintf("session plan snapshot cannot scope session %q to %q: %v", meta.SessionID, containerDir, err))
 	}
 	plan.Descriptor = descriptor
+	plan.ManagedWorktreeRoots = append([]string(nil), plan.ManagedWorktreeRoots...)
 	plan.FirstPromptPreview = meta.FirstPromptPreview
 	plan.Goal = meta.Goal
 	plan.WorktreeReminder = meta.WorktreeReminder
@@ -441,6 +453,21 @@ func (p Planner) planSessionWithStore(ctx context.Context, req SessionRequest, s
 	if err != nil {
 		return SessionPlan{}, err
 	}
+	if p.ProjectWorkspaceBoundary == nil {
+		return SessionPlan{}, errors.New("project workspace boundary resolver is required")
+	}
+	projectWorkspaceBoundary, err := p.ProjectWorkspaceBoundary.ResolveSessionProjectWorkspaceBoundary(ctx, meta.SessionID)
+	if err != nil {
+		return SessionPlan{}, err
+	}
+	managedRootsResolver, ok := p.ProjectWorkspaceBoundary.(SessionManagedWorktreeRootsResolver)
+	if !ok {
+		return SessionPlan{}, errors.New("project managed worktree roots resolver is required")
+	}
+	managedWorktreeRoots, err := managedRootsResolver.ListManagedWorktreeRoots(ctx)
+	if err != nil {
+		return SessionPlan{}, err
+	}
 	return p.sessionPlanWithSnapshot(SessionPlan{
 		ActiveSettings:                      active,
 		BaseSettings:                        baseActive,
@@ -451,6 +478,8 @@ func (p Planner) planSessionWithStore(ctx context.Context, req SessionRequest, s
 		SkipContinuationAgentRoleValidation: req.SkipContinuationAgentRoleValidation,
 		WorkspaceRoot:                       p.Config.WorkspaceRoot,
 		ExecutionTarget:                     executionTarget,
+		ProjectWorkspaceBoundary:            projectWorkspaceBoundary.Clone(),
+		ManagedWorktreeRoots:                append([]string(nil), managedWorktreeRoots...),
 		Source:                              source,
 		BaseSource:                          baseSource,
 	}, store), nil

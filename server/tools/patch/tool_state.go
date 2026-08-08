@@ -61,6 +61,9 @@ func (s *applyState) lockDocumentPaths(doc patchformat.Document) (func(), error)
 		if err != nil {
 			return err
 		}
+		if err := s.tool.checkForeignManagedWorktreePath(resolved); err != nil {
+			return err
+		}
 		targets = append(targets, documentPath{raw: raw, resolved: resolved})
 		return nil
 	}
@@ -87,9 +90,9 @@ func (s *applyState) lockDocumentPaths(doc patchformat.Document) (func(), error)
 	}
 	for _, target := range targets {
 		match, denied, denyErr := s.tool.pathDenyPolicy.Check(tools.PathDenyCheck{
-			RequestedPath:     target.raw,
-			ResolvedPath:      target.resolved,
-			WorkspaceRootReal: s.tool.workspaceRootReal,
+			RequestedPath:        target.raw,
+			ResolvedPath:         target.resolved,
+			WorkingDirectoryReal: s.tool.fileAccessScope.WorkingDirectory.RealPath,
 		})
 		if denyErr != nil {
 			return nil, denyErr
@@ -102,6 +105,9 @@ func (s *applyState) lockDocumentPaths(doc patchformat.Document) (func(), error)
 	for _, target := range targets {
 		resolved, err := s.tool.guardResolvedPath(s.ctx, target.raw, target.resolved, s.approvedOutside)
 		if err != nil {
+			return nil, err
+		}
+		if err := s.tool.checkForeignManagedWorktreePath(resolved); err != nil {
 			return nil, err
 		}
 		paths = append(paths, resolved)
@@ -236,12 +242,17 @@ func (s *applyState) updateFile(op patchformat.UpdateFile) error {
 func (s *applyState) prepareCommitStates() ([]*patchFileState, error) {
 	states := sortedCommitStates(s.state)
 	for _, fileState := range states {
+		if err := revalidateCommitPath(s.tool, fileState.NewPath); err != nil {
+			cleanupStagedFiles(states)
+			return nil, err
+		}
 		text := strings.Join(fileState.Content, "\n")
 		if len(fileState.Content) > 0 && !strings.HasSuffix(text, "\n") {
 			text += "\n"
 		}
 		staged, err := createStagedFile(fileState.NewPath, []byte(text), fileState.Mode)
 		if err != nil {
+			cleanupStagedFiles(states)
 			return nil, internalFailure(fileState.NewPath, fmt.Sprintf("stage write failed: %v", err))
 		}
 		fileState.StagedPath = staged

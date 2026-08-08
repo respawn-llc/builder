@@ -285,9 +285,10 @@ type ReviewerErrorRecord struct {
 type CompactionMode string
 
 const (
-	CompactionModeAuto    CompactionMode = "auto"
-	CompactionModeHandoff CompactionMode = "handoff"
-	CompactionModeManual  CompactionMode = "manual"
+	CompactionModeAuto                   CompactionMode = "auto"
+	CompactionModeHandoff                CompactionMode = "handoff"
+	CompactionModeManual                 CompactionMode = "manual"
+	CompactionModeWorkflowPostCompletion CompactionMode = "workflow_post_completion"
 )
 
 type CacheScope string

@@ -90,7 +90,7 @@ func TestPatchOutsideWorkspaceApproverCachesSessionDecision(t *testing.T) {
 	})
 
 	approver := runtimewire.NewOutsideWorkspaceApprover(broker, "editing")
-	req := patchtool.OutsideWorkspaceRequest{RequestedPath: "../x.txt", ResolvedPath: "/tmp/x.txt", WorkspaceRoot: "/tmp/w"}
+	req := patchtool.OutsideWorkspaceRequest{RequestedPath: "../x.txt", ResolvedPath: "/tmp/x.txt", WorkingDirectory: "/tmp/w"}
 
 	first, err := approver.Approve(context.Background(), req)
 	if err != nil {
@@ -118,7 +118,7 @@ func TestPatchOutsideWorkspaceApproverPropagatesAskError(t *testing.T) {
 	})
 
 	approver := runtimewire.NewOutsideWorkspaceApprover(broker, "editing")
-	_, err := approver.Approve(context.Background(), patchtool.OutsideWorkspaceRequest{RequestedPath: "../x.txt", ResolvedPath: "/tmp/x.txt", WorkspaceRoot: "/tmp/w"})
+	_, err := approver.Approve(context.Background(), patchtool.OutsideWorkspaceRequest{RequestedPath: "../x.txt", ResolvedPath: "/tmp/x.txt", WorkingDirectory: "/tmp/w"})
 	if err == nil {
 		t.Fatal("expected ask error")
 	}
@@ -136,7 +136,7 @@ func TestOutsideWorkspaceApproverUsesReadPromptText(t *testing.T) {
 	})
 
 	approver := runtimewire.NewOutsideWorkspaceApprover(broker, "reading")
-	approval, err := approver.Approve(context.Background(), patchtool.OutsideWorkspaceRequest{RequestedPath: "../x.pdf", ResolvedPath: "/tmp/x.pdf", WorkspaceRoot: "/tmp/w"})
+	approval, err := approver.Approve(context.Background(), patchtool.OutsideWorkspaceRequest{RequestedPath: "../x.pdf", ResolvedPath: "/tmp/x.pdf", WorkingDirectory: "/tmp/w"})
 	if err != nil {
 		t.Fatalf("approve read call: %v", err)
 	}
@@ -151,7 +151,7 @@ func TestOutsideWorkspaceApproverUsesReadPromptText(t *testing.T) {
 func TestOutsideWorkspaceApproverQueuedApprovalBlocksUntilSubmitted(t *testing.T) {
 	broker := askquestion.NewAskQuestionBroker()
 	approver := runtimewire.NewOutsideWorkspaceApprover(broker, "editing")
-	req := patchtool.OutsideWorkspaceRequest{RequestedPath: "../x.txt", ResolvedPath: "/tmp/x.txt", WorkspaceRoot: "/tmp/w"}
+	req := patchtool.OutsideWorkspaceRequest{RequestedPath: "../x.txt", ResolvedPath: "/tmp/x.txt", WorkingDirectory: "/tmp/w"}
 	type out struct {
 		approval patchtool.OutsideWorkspaceApproval
 		err      error
@@ -219,7 +219,7 @@ func TestOutsideWorkspaceApproverQueuedApprovalBlocksUntilSubmitted(t *testing.T
 func TestOutsideWorkspaceApproverQueuedAllowSessionCachesWithoutSecondPrompt(t *testing.T) {
 	broker := askquestion.NewAskQuestionBroker()
 	approver := runtimewire.NewOutsideWorkspaceApprover(broker, "editing")
-	req := patchtool.OutsideWorkspaceRequest{RequestedPath: "../x.txt", ResolvedPath: "/tmp/x.txt", WorkspaceRoot: "/tmp/w"}
+	req := patchtool.OutsideWorkspaceRequest{RequestedPath: "../x.txt", ResolvedPath: "/tmp/x.txt", WorkingDirectory: "/tmp/w"}
 	type out struct {
 		approval patchtool.OutsideWorkspaceApproval
 		err      error

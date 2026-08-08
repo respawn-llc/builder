@@ -366,13 +366,18 @@ func (s *Starter) startCurrentNodeAgent(
 	if err != nil {
 		return prepared.cleanup(err)
 	}
-	pathContext, err := currentNodeManagedWorktreePathContext(prepared.plan, prepared.root)
+	projectWorkspaceBoundary := prepared.plan.ProjectWorkspaceBoundary.Clone()
+	filesystemContext, err := runtimewire.NewFilesystemContext(prepared.root.EffectiveRoot(), prepared.root.EffectiveRoot(), projectWorkspaceBoundary)
+	if err != nil {
+		return prepared.cleanup(err)
+	}
+	pathContext, err := s.currentNodeManagedWorktreePathContext(prepared.plan, prepared.root)
 	if err != nil {
 		return prepared.cleanup(err)
 	}
 	runtimePlan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
-		Settings: prepared.plan.ActiveSettings, EnabledTools: workflowRuntimeEnabledTools(prepared.plan.EnabledTools), Workdir: prepared.root.EffectiveRoot(),
-		ManagedWorktreePathContext: pathContext, Sources: prepared.plan.Source.Sources, Headless: true, Client: prepared.client,
+		Settings: prepared.plan.ActiveSettings, EnabledTools: workflowRuntimeEnabledTools(prepared.plan.EnabledTools),
+		FilesystemContext: askquestion.FilesystemContext{Access: filesystemContext.Access, ManagedWorktree: pathContext}, Sources: prepared.plan.Source.Sources, Headless: true, Client: prepared.client,
 		ReviewerClientFactory: s.runtimeClientFactory, CurrentNodeExecution: runtimeConfig,
 		StartLogLines: []string{fmt.Sprintf("workflow.runtime.start task_id=%s session_id=%s node_id=%s execution_root=%s model=%s", input.Task.ID, prepared.plan.Descriptor.SessionID(), input.Node.ID, prepared.root.EffectiveRoot(), prepared.plan.ActiveSettings.Model)},
 		AskQuestionBatchSkipped: func(batch askquestion.AskQuestionBatchMetadata) {
@@ -393,15 +398,39 @@ func (s *Starter) startCurrentNodeAgent(
 			return s.handleCurrentNodeAsk(askCtx, executionPromptAwaiter{authority: s.runtimeAuthority, scope: scope}, input, prepared.plan.Descriptor.SessionID().String(), askReq)
 		},
 		Runner: func(runCtx context.Context, scope sessionruntime.ExecutionScope, bridge sessionruntime.AgentRuntimeBridge) error {
+			var turnEngine *runtime.Engine
 			turnErr := bridge.WithEngine(runCtx, func(engineCtx context.Context, engine *runtime.Engine) error {
 				if input.ContextMode == workflow.ContextModeCompactAndContinueSession {
-					if err := engine.CompactContextForWorkflowContinuation(metadata.WithQueryFailureDiagnostics(engineCtx)); err != nil {
+					_, err := engine.SubmitWorkflowContinuationTurn(metadata.WithQueryFailureDiagnostics(engineCtx))
+					if err != nil {
 						return err
 					}
+				} else if _, err := engine.SubmitWorkflowTurn(metadata.WithQueryFailureDiagnostics(engineCtx)); err != nil {
+					return err
 				}
-				_, err := engine.SubmitWorkflowTurn(metadata.WithQueryFailureDiagnostics(engineCtx))
-				return err
+				turnEngine = engine
+				return nil
 			})
+			if turnErr == nil && turnEngine != nil {
+				if finalizer, ok := controller.(workflowruntime.PostTurnFinalizer); ok {
+					sessionID, err := runtimeids.ParseSessionID(turnEngine.SessionID())
+					if err != nil {
+						return err
+					}
+					preCompactionTokens, err := turnEngine.WorkflowPreCompactionTokenLimit()
+					if err != nil {
+						return err
+					}
+					turnErr = finalizer.FinalizeCurrentNodePostTurn(runCtx, scope.ID(), sessionID, workflowruntime.PostCompletionRuntime{
+						UsedTokens:          turnEngine.ContextUsage().UsedTokens,
+						PreCompactionTokens: preCompactionTokens,
+						CompactionMode:      turnEngine.CompactionMode(),
+						Compact: func(compactionCtx context.Context) workflowruntime.PostCompletionCompactionResult {
+							return turnEngine.CompactContextForWorkflowPostCompletion(compactionCtx)
+						},
+					})
+				}
+			}
 			if turnErr == nil {
 				return nil
 			}
@@ -478,7 +507,7 @@ func (s *Starter) planCurrentNodeSession(
 			return launch.SessionPlan{}, false, err
 		}
 	}
-	planner := launch.Planner{Config: cfg, ContainerDir: containerDir, StoreOptions: s.storeOptions, PersistedSessions: s.metadata, ExecutionTargets: s.metadata, MetadataStoreOpener: func(string) (launch.MetadataExecutionTargetStore, error) { return s.metadata, nil }}
+	planner := launch.Planner{Config: cfg, ContainerDir: containerDir, StoreOptions: s.storeOptions, PersistedSessions: s.metadata, ExecutionTargets: s.metadata, ProjectWorkspaceBoundary: s.metadata, MetadataStoreOpener: func(string) (launch.MetadataExecutionTargetStore, error) { return s.metadata, nil }}
 	plan, err := planner.PlanSession(ctx, launch.SessionRequest{
 		Mode:                                launch.ModeHeadless,
 		Intent:                              intent,
@@ -694,11 +723,15 @@ func (s *Starter) applyCurrentNodeSessionExecutionTarget(ctx context.Context, in
 	return s.mutationPermit.Run(ctx, func(ctx context.Context) error { return s.metadata.UpdateSessionExecutionTarget(ctx, update) })
 }
 
-func currentNodeManagedWorktreePathContext(plan launch.SessionPlan, root workflowstore.ExecutionRoot) (*askquestion.ManagedWorktreePathContext, error) {
-	if root.Managed == nil || strings.TrimSpace(plan.ActiveSettings.Worktrees.BaseDir) == "" {
+func (s *Starter) currentNodeManagedWorktreePathContext(plan launch.SessionPlan, root workflowstore.ExecutionRoot) (*askquestion.ManagedWorktreePathContext, error) {
+	if strings.TrimSpace(s.cfg.Settings.Worktrees.BaseDir) == "" {
 		return nil, nil
 	}
-	return askquestion.NewManagedWorktreePathContext(plan.ActiveSettings.Worktrees.BaseDir, &root.Managed.Root)
+	var currentRoot *string
+	if root.Managed != nil {
+		currentRoot = &root.Managed.Root
+	}
+	return askquestion.NewManagedWorktreePathContext(s.cfg.Settings.Worktrees.BaseDir, currentRoot, plan.ManagedWorktreeRoots)
 }
 
 func workflowSessionNameFromCurrentNode(input workflowstore.CurrentNodeStartContext) (string, error) {

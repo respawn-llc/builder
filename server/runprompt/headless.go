@@ -12,6 +12,7 @@ import (
 	"core/server/requestmemo"
 	"core/server/runlog"
 	"core/server/runtime"
+	"core/server/runtimewire"
 	"core/server/sessionlaunch"
 	"core/server/sessionruntime"
 	askquestion "core/server/tools"
@@ -41,6 +42,8 @@ type HeadlessBootstrap struct {
 	FastModeState    *runtime.FastModeState
 	PromptHistory    promptHistoryStore
 	RuntimeAuthority *sessionruntime.Authority
+	// ManagedWorktreeBaseDir is the server-owned managed Worktree namespace.
+	ManagedWorktreeBaseDir string
 }
 
 func NewInProcessRunPromptClient(boot HeadlessBootstrap) apicontract.RunPromptService {
@@ -166,18 +169,23 @@ func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch
 	if strings.TrimSpace(executionTarget.WorkspaceRoot) == "" {
 		return nil, fmt.Errorf("headless session %q execution target workspace root is required", sessionID)
 	}
+	executionRoot := executionTarget.WorkspaceRoot
 	var currentWorktreeRoot *string
 	if executionTarget.Worktree != nil && strings.TrimSpace(executionTarget.Worktree.Root) != "" {
 		root := executionTarget.Worktree.Root
 		currentWorktreeRoot = &root
+		executionRoot = root
+	}
+	filesystemContext, err := runtimewire.NewFilesystemContext(workdir, executionRoot, plan.ProjectWorkspaceBoundary)
+	if err != nil {
+		return nil, err
 	}
 	var managedWorktreePathContext *askquestion.ManagedWorktreePathContext
-	if strings.TrimSpace(plan.ActiveSettings.Worktrees.BaseDir) != "" {
-		context, contextErr := askquestion.NewManagedWorktreePathContext(plan.ActiveSettings.Worktrees.BaseDir, currentWorktreeRoot)
-		if contextErr != nil {
-			return nil, contextErr
+	if strings.TrimSpace(l.boot.ManagedWorktreeBaseDir) != "" {
+		managedWorktreePathContext, err = askquestion.NewManagedWorktreePathContext(l.boot.ManagedWorktreeBaseDir, currentWorktreeRoot, plan.ManagedWorktreeRoots)
+		if err != nil {
+			return nil, err
 		}
-		managedWorktreePathContext = context
 	}
 	startLogLines := []string{
 		fmt.Sprintf("app.run_prompt.start session_id=%s workspace=%s workdir=%s model=%s", sessionID, executionTarget.WorkspaceRoot, workdir, plan.ActiveSettings.Model),
@@ -187,14 +195,13 @@ func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch
 		startLogLines = append(startLogLines, "config.source "+line)
 	}
 	runtimePlan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
-		Settings:                   plan.ActiveSettings,
-		EnabledTools:               plan.EnabledTools,
-		Workdir:                    workdir,
-		ManagedWorktreePathContext: managedWorktreePathContext,
-		Sources:                    plan.Source.Sources,
-		Headless:                   true,
-		FastMode:                   l.boot.FastModeState,
-		StartLogLines:              startLogLines,
+		Settings:          plan.ActiveSettings,
+		EnabledTools:      plan.EnabledTools,
+		FilesystemContext: askquestion.FilesystemContext{Access: filesystemContext.Access, ManagedWorktree: managedWorktreePathContext},
+		Sources:           plan.Source.Sources,
+		Headless:          true,
+		FastMode:          l.boot.FastModeState,
+		StartLogLines:     startLogLines,
 		OnLoggingFailure: func(message string) {
 			if progress != nil {
 				progress.PublishRunPromptProgress(serverapi.RunPromptProgress{

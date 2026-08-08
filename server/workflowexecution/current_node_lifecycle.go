@@ -245,6 +245,10 @@ func (c *CurrentNodeController) ApplyPendingApproval(
 				c.mu.Unlock()
 				return workflowstore.PendingApprovalApplyResult{}, errors.New("pending approval source scope has not completed")
 			}
+			if _, finalizing := c.postTurnFinalization[sourceScopeID]; finalizing {
+				c.mu.Unlock()
+				return workflowstore.PendingApprovalApplyResult{}, ErrTaskExecutionNotQuiescent
+			}
 			if _, stopping := c.stopping[sourceScopeID]; stopping {
 				c.mu.Unlock()
 				return workflowstore.PendingApprovalApplyResult{}, sessionruntime.ErrExecutionNoLongerLive

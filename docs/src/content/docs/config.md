@@ -66,6 +66,7 @@ postprocessing_mode = "all" # shell output token optimizations by Kent: none | b
 completion_mode = "auto"
 concurrency = 5 # Agent Node scheduling capacity; Script Nodes do not use it
 max_invalid_completion_attempts = 5
+pre_compaction_tokens = 247380 # defaults to 70% of context_compaction_threshold_tokens
 use_required_tool_calls = true
 subagents = false # TOML-only; workflow agents cannot launch custom roles unless enabled
 
@@ -136,7 +137,7 @@ verbose_output = false # show supervisor suggestions in ongoing transcript
 | `provider_identifier` | string | `kent` | `KENT_PROVIDER_IDENTIFIER` |  | Sets the `originator` header and the `<provider_identifier>/<Kent version>` User-Agent on OpenAI, ChatGPT Codex, and OpenAI-compatible model-provider requests. The value must be a non-empty HTTP product token, such as `kent`, `my-agent`, or `acme_codex`. A restarted server applies the active value to resumed sessions. |
 | `openai_base_url` | string | `""` | `KENT_OPENAI_BASE_URL` | `kent run --openai-base-url` | OpenAI-compatible base URL. Must be used with `provider_override=openai` or with no explicit provider override. Cannot be changed mid-session. |
 | `store` | bool | `false` | `KENT_STORE` |  | Sets OpenAI Responses `store=true` for main model requests. |
-| `allow_non_cwd_edits` | bool | `false` | `KENT_ALLOW_NON_CWD_EDITS` |  | Lets first-class file edit tools edit files outside the workspace root. This is not sandboxing - model can still bypass this easily. |
+| `allow_non_cwd_edits` | bool | `false` | `KENT_ALLOW_NON_CWD_EDITS` |  | Lets first-class file edit tools edit files outside the Session's Execution Target Root and the bounded collection of up to 500 most recently attached Workspaces in its current Project. Older attached Workspaces still require ordinary approval. The native file tools already allow targets under operating-system temporary roots and their canonical platform aliases without approval; this setting does not override path-deny rules or the prohibition on directly editing another Kent-managed Worktree. This is not sandboxing - the model can still bypass this easily. |
 | `model_context_window` | int | `372000` | `KENT_MODEL_CONTEXT_WINDOW` |  | Explicit context-window size used for compaction and token accounting. Must be at least `40000`. |
 | `context_compaction_threshold_tokens` | int | `353400` | `KENT_CONTEXT_COMPACTION_THRESHOLD_TOKENS` |  | Auto-compaction threshold. Must be `> 0`, `< model_context_window`, and at least `50%` of `model_context_window`. The default is derived from the default context window. |
 | `pre_submit_compaction_lead_tokens` | int | `35000` | `KENT_PRE_SUBMIT_COMPACTION_LEAD_TOKENS` |  | Fixed pre-submit runway reserve before auto-compaction. Kent compacts before sending the next user prompt once (`context_compaction_threshold_tokens` - this threshold) is reached. |
@@ -158,6 +159,7 @@ verbose_output = false # show supervisor suggestions in ongoing transcript
 | `workflow.completion_mode` | string | `auto` | `KENT_WORKFLOW_COMPLETION_MODE` | Default completion mode for workflow agent nodes that inherit the global default. Allowed: `auto`, `structured_output`, `tool`, `shell_command`, `unstructured_output`. |
 | `workflow.concurrency` | int | `5` | `KENT_WORKFLOW_CONCURRENCY` | Agent Node scheduling capacity. Explicit workflow actions may exceed it. Script Nodes do not use it. Must be `> 0`. |
 | `workflow.max_invalid_completion_attempts` | int | `5` | `KENT_WORKFLOW_MAX_INVALID_COMPLETION_ATTEMPTS` | Number of invalid workflow completion attempts allowed before Kent interrupts the run. Must be `> 0`. |
+| `workflow.pre_compaction_tokens` | int | `70%` of `context_compaction_threshold_tokens`, rounded down |  | Workflow Session pre-compaction threshold. Must be positive and no greater than `context_compaction_threshold_tokens`. File-only; not available in subagent role settings. |
 | `workflow.use_required_tool_calls` | bool | `true` |  | Uses provider-required tool selection for `tool` and `shell_command` workflow completion modes. Set to `false` to use automatic tool selection while preserving Kent's workflow completion validation. |
 | `workflow.subagents` | bool | `false` |  | Allows workflow agents to launch eligible custom roles. |
 

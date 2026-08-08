@@ -68,9 +68,10 @@ func newMetadataOnlyAncestryPlanner(t *testing.T) (Planner, string, *sessiontest
 				MaxSubagentDepth: 2,
 			},
 		},
-		ContainerDir:      containerDir,
-		StoreOptions:      persistence.Options(),
-		PersistedSessions: persistence,
+		ContainerDir:             containerDir,
+		StoreOptions:             persistence.Options(),
+		PersistedSessions:        persistence,
+		ProjectWorkspaceBoundary: testProjectBoundaryResolver{},
 	}, containerDir, persistence
 }
 

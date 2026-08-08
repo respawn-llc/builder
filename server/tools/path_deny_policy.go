@@ -39,11 +39,11 @@ type PathDenyPolicy struct {
 
 // PathDenyCheck describes one structured tool target for deny-policy
 // evaluation. ResolvedPath is the symlink-resolved write target; RequestedPath
-// is also checked lexically relative to WorkspaceRootReal.
+// is also checked lexically relative to WorkingDirectoryReal.
 type PathDenyCheck struct {
-	RequestedPath     string
-	ResolvedPath      string
-	WorkspaceRootReal string
+	RequestedPath        string
+	ResolvedPath         string
+	WorkingDirectoryReal string
 }
 
 type compiledPathDenyRule struct {
@@ -110,7 +110,7 @@ func (p PathDenyPolicy) Check(request PathDenyCheck) (PathDenyMatch, bool, error
 	if denied {
 		return match, true, nil
 	}
-	lexicalPath, lexicalErr := LexicalPathForDenyPolicy(request.WorkspaceRootReal, request.RequestedPath)
+	lexicalPath, lexicalErr := LexicalPathForDenyPolicy(request.WorkingDirectoryReal, request.RequestedPath)
 	if lexicalErr != nil {
 		return PathDenyMatch{}, false, fmt.Errorf("path deny policy lexical check for %q: %w", request.RequestedPath, lexicalErr)
 	}

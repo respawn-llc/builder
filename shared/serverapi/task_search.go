@@ -33,6 +33,7 @@ const (
 type TaskSearchSourceKind string
 
 const (
+	TaskSearchSourceKindShortID TaskSearchSourceKind = "short_id"
 	TaskSearchSourceKindTitle   TaskSearchSourceKind = "title"
 	TaskSearchSourceKindBody    TaskSearchSourceKind = "body"
 	TaskSearchSourceKindComment TaskSearchSourceKind = "comment"
@@ -196,6 +197,13 @@ func (h TaskSearchHit) Validate(mode TaskSearchMode) error {
 		return errors.New("task search hit ordinal must be positive")
 	}
 	switch h.Source.Kind {
+	case TaskSearchSourceKindShortID:
+		if mode != TaskSearchModeLiteral {
+			return errors.New("task search Short ID source requires literal mode")
+		}
+		if h.Source.CommentID != nil {
+			return errors.New("task search Short ID source forbids comment id")
+		}
 	case TaskSearchSourceKindTitle, TaskSearchSourceKindBody:
 		if h.Source.CommentID != nil {
 			return errors.New("task search title/body source forbids comment id")

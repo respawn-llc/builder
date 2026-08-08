@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"core/internal/testharness/testsetup"
+	"core/server/metadata"
 	"core/server/workflow"
 	"core/shared/toolspec"
 )
@@ -67,5 +68,31 @@ func TestRepeatedStartAfterRoleToolDriftSkipsInitialExecutionPreflight(t *testin
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("repeated StartTask error = %v, want no active Start placement", err)
+	}
+}
+
+func TestTaskSourceResolutionRetainsPrimaryWorkspaceOutsideCollectionLimit(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	for index := 0; index < metadata.ProjectWorkspaceCollectionLimit; index++ {
+		if _, err := store.metadata.AttachWorkspaceToProject(ctx, binding.ProjectID, t.TempDir()); err != nil {
+			t.Fatalf("AttachWorkspaceToProject %d: %v", index, err)
+		}
+	}
+
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	if task.SourceWorkspaceID != binding.WorkspaceID {
+		t.Fatalf("created task source workspace = %q, want primary %q", task.SourceWorkspaceID, binding.WorkspaceID)
+	}
+
+	if _, err := store.db.ExecContext(ctx, "UPDATE tasks SET source_workspace_id = NULL WHERE id = ?", task.ID); err != nil {
+		t.Fatalf("clear task source workspace: %v", err)
+	}
+	target, err := store.GetTaskExecutionTargetContext(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetContext: %v", err)
+	}
+	if target.SourceWorkspaceID != binding.WorkspaceID {
+		t.Fatalf("execution target source workspace = %q, want primary %q", target.SourceWorkspaceID, binding.WorkspaceID)
 	}
 }

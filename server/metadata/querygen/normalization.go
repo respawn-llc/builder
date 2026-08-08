@@ -21,10 +21,10 @@ import (
 
 const (
 	expectedModulePath    = "modernc.org/sqlite"
-	expectedModuleVersion = "v1.53.0"
-	expectedModuleSum     = "h1:20WG8N9q4ji/dEqGk4uiI0c6OPjSeLTNYGFCc3+7c1M="
+	expectedModuleVersion = "v1.56.0"
+	expectedModuleSum     = "h1:/D8e2RfFqoy/Zc6PuC76U28zFwmI/sYx1Kjm4yEn9e0="
 
-	expectedSQLiteVersion        = "3.53.2"
+	expectedSQLiteVersion        = "3.53.3"
 	sqliteUnicodeSourceUnit      = "fts5_unicode2.c"
 	normalizationContractVersion = "kent-task-search-fts5-trigram-normalization-v1"
 

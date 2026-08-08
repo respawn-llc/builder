@@ -1,6 +1,7 @@
 package launch
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -27,10 +28,26 @@ var testSessionStores sync.Map
 
 func newTestPlanner(cfg config.App, containerDir string, storeOptions ...session.StoreOption) Planner {
 	return Planner{
-		Config:       cfg,
-		ContainerDir: containerDir,
-		StoreOptions: storeOptions,
+		Config:                   cfg,
+		ContainerDir:             containerDir,
+		StoreOptions:             storeOptions,
+		ProjectWorkspaceBoundary: testProjectBoundaryResolver{root: cfg.WorkspaceRoot},
 	}
+}
+
+type testProjectBoundaryResolver struct {
+	root string
+}
+
+func (r testProjectBoundaryResolver) ResolveSessionProjectWorkspaceBoundary(context.Context, string) (metadata.ProjectWorkspaceBoundary, error) {
+	return metadata.ProjectWorkspaceBoundary{
+		ProjectID:  testProjectID,
+		Workspaces: []metadata.ProjectWorkspace{{CanonicalRoot: r.root}},
+	}, nil
+}
+
+func (r testProjectBoundaryResolver) ListManagedWorktreeRoots(context.Context) ([]string, error) {
+	return nil, nil
 }
 
 func newPersistenceBackedTestPlanner(cfg config.App, containerDir string, persistence *sessiontest.Persistence) Planner {

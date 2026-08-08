@@ -567,25 +567,16 @@ func (e *Engine) applyResultGroupProjection(
 		if _, live := e.transcriptRuntimeState().liveToolLedger().Lookup(
 			unit.completion.completion.Result.CallID,
 		); !live {
-			return fmt.Errorf(
-				"project committed result group: live tool call %q is unavailable",
-				unit.completion.completion.Result.CallID,
-			)
+			return fmt.Errorf("project committed result group: live tool call %q is unavailable", unit.completion.completion.Result.CallID)
 		}
 	}
 	for _, unit := range plan.units {
 		unitStart := e.CommittedTranscriptEntryCount()
-		outputProvenance, err := transcriptProvenanceFromRecord(
-			records[unit.outputRecordIndex],
-		)
+		outputProvenance, err := transcriptProvenanceFromRecord(records[unit.outputRecordIndex])
 		if err != nil {
 			return err
 		}
-		applied, err := e.applyPreparedFinalizedToolCompletion(
-			textutil.OptionalExactString(stepID),
-			unit.completion,
-			records[unit.completionStart:unit.outputRecordIndex],
-		)
+		applied, err := e.applyPreparedFinalizedToolCompletion(textutil.OptionalExactString(stepID), unit.completion, records[unit.completionStart:unit.outputRecordIndex])
 		if err != nil {
 			return err
 		}

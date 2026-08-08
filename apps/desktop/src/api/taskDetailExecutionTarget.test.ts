@@ -117,6 +117,25 @@ describe("task detail execution target contract", () => {
     );
   });
 
+  it("normalizes an omitted Current Script Session ID to null", () => {
+    const detail = taskDetailSchema.parse({
+      task: {
+        ...taskDetailResponse.task,
+        current_scripts: [
+          {
+            current_node: {
+              node_id: "node-script",
+              transition_branch_key: null,
+            },
+            path: "scripts/run",
+          },
+        ],
+      },
+    });
+
+    expect(detail.currentScripts[0]?.currentNode.sessionID).toBeNull();
+  });
+
   it("rejects a Current Script with a Session", () => {
     expect(() =>
       taskDetailSchema.parse({

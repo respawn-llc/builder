@@ -38,7 +38,7 @@ func (w *RuntimeWiring) Close() error {
 }
 
 type RuntimeWiringOptions struct {
-	ManagedWorktreePathContext          *tools.ManagedWorktreePathContext
+	FilesystemContext                   tools.FilesystemContext
 	Context                             context.Context
 	OnEvent                             func(evt runtime.Event)
 	Headless                            bool
@@ -62,8 +62,8 @@ type RuntimeWiringOptions struct {
 	GlobalConfigDir string
 }
 
-func NewRuntimeWiring(store *session.Store, eventLog session.MaterializedEventLog, active config.Settings, enabledTools []toolspec.ID, workspaceRoot string, mgr *auth.Manager, logger Logger, opts RuntimeWiringOptions) (*RuntimeWiring, error) {
-	return NewRuntimeWiringWithBackground(store, eventLog, active, enabledTools, workspaceRoot, mgr, logger, nil, opts)
+func NewRuntimeWiring(store *session.Store, eventLog session.MaterializedEventLog, active config.Settings, enabledTools []toolspec.ID, mgr *auth.Manager, logger Logger, opts RuntimeWiringOptions) (*RuntimeWiring, error) {
+	return NewRuntimeWiringWithBackground(store, eventLog, active, enabledTools, mgr, logger, nil, opts)
 }
 
 func NewRuntimeWiringWithBackground(
@@ -71,7 +71,6 @@ func NewRuntimeWiringWithBackground(
 	eventLog session.MaterializedEventLog,
 	active config.Settings,
 	enabledTools []toolspec.ID,
-	workspaceRoot string,
 	mgr *auth.Manager,
 	logger Logger,
 	background *shelltool.Manager,
@@ -87,21 +86,25 @@ func NewRuntimeWiringWithBackground(
 	if err != nil {
 		return nil, fmt.Errorf("compile effective shell postprocessor: %w", err)
 	}
+	filesystemContext := opts.FilesystemContext.Clone()
+	if err := validateFilesystemContext(filesystemContext); err != nil {
+		return nil, err
+	}
+	workingDirectory := filesystemContext.Access.WorkingDirectory.LexicalPath
 	var eng *runtime.Engine
 	localTools, askBroker, background, err := NewLocalToolRegistryBinding(LocalToolRegistryOptions{
-		WorkspaceRoot:              workspaceRoot,
-		ManagedWorktreePathContext: opts.ManagedWorktreePathContext,
-		OwnerSessionID:             store.Meta().SessionID,
-		Enabled:                    enabledTools,
-		MinimumExecToBgTime:        time.Duration(active.MinimumExecToBgSeconds) * time.Second,
-		ShellOutputMaxChars:        active.ShellOutputMaxChars,
-		AllowNonCwdEdits:           active.AllowNonCwdEdits,
-		SupportsVision:             llm.LockedContractSupportsVisionInputs(store.Meta().Locked, active.Model),
-		Logger:                     logger,
-		Background:                 background,
-		ShellPostprocessor:         shellPostprocessor,
-		GlobalConfigDir:            opts.GlobalConfigDir,
-		TriggerHandoffController:   func() triggerhandofftool.TriggerHandoffController { return eng },
+		FilesystemContext:        filesystemContext,
+		OwnerSessionID:           store.Meta().SessionID,
+		Enabled:                  enabledTools,
+		MinimumExecToBgTime:      time.Duration(active.MinimumExecToBgSeconds) * time.Second,
+		ShellOutputMaxChars:      active.ShellOutputMaxChars,
+		AllowNonCwdEdits:         active.AllowNonCwdEdits,
+		SupportsVision:           llm.LockedContractSupportsVisionInputs(store.Meta().Locked, active.Model),
+		Logger:                   logger,
+		Background:               background,
+		ShellPostprocessor:       shellPostprocessor,
+		GlobalConfigDir:          opts.GlobalConfigDir,
+		TriggerHandoffController: func() triggerhandofftool.TriggerHandoffController { return eng },
 		QuestionsEnabledGetter: func() bool {
 			if eng == nil {
 				return true
@@ -126,7 +129,7 @@ func NewRuntimeWiringWithBackground(
 	if opts.Client != nil {
 		client = opts.Client
 	} else if opts.ClientFactory != nil {
-		client, err = newRuntimeClientFromFactory(factoryContext, opts.ClientFactory, RuntimeClientPurposeMain, store.Meta().SessionID, active, enabledTools, workspaceRoot, opts.Sources, mainProvider)
+		client, err = newRuntimeClientFromFactory(factoryContext, opts.ClientFactory, RuntimeClientPurposeMain, store.Meta().SessionID, active, enabledTools, filesystemContext.Access.WorkingDirectory.LexicalPath, opts.Sources, mainProvider)
 		if err != nil {
 			return nil, err
 		}
@@ -155,10 +158,10 @@ func NewRuntimeWiringWithBackground(
 	reviewerProvider := reviewerProviderRuntimeSettings(active)
 	newReviewerClient := func() (llm.Client, error) {
 		if opts.ClientFactory != nil {
-			return newRuntimeClientFromFactory(factoryContext, opts.ClientFactory, RuntimeClientPurposeReviewer, store.Meta().SessionID, active, enabledTools, workspaceRoot, opts.Sources, reviewerProvider)
+			return newRuntimeClientFromFactory(factoryContext, opts.ClientFactory, RuntimeClientPurposeReviewer, store.Meta().SessionID, active, enabledTools, workingDirectory, opts.Sources, reviewerProvider)
 		}
 		if opts.ReviewerClientFactory != nil {
-			return newRuntimeClientFromFactory(factoryContext, opts.ReviewerClientFactory, RuntimeClientPurposeReviewer, store.Meta().SessionID, active, enabledTools, workspaceRoot, opts.Sources, reviewerProvider)
+			return newRuntimeClientFromFactory(factoryContext, opts.ReviewerClientFactory, RuntimeClientPurposeReviewer, store.Meta().SessionID, active, enabledTools, workingDirectory, opts.Sources, reviewerProvider)
 		}
 		var reviewerAuth llm.AuthHeaderProvider
 		if mgr != nil && !strings.EqualFold(strings.TrimSpace(reviewerProvider.Auth), "none") {
@@ -198,7 +201,7 @@ func NewRuntimeWiringWithBackground(
 	if promptReloader == nil {
 		promptReloader = launchPromptFacingSnapshotReloader{
 			store:                               store,
-			workspaceRoot:                       workspaceRoot,
+			workspaceRoot:                       workingDirectory,
 			configRoot:                          opts.GlobalConfigDir,
 			skipContinuationAgentRoleValidation: opts.SkipContinuationAgentRoleValidation,
 		}
@@ -208,37 +211,38 @@ func NewRuntimeWiringWithBackground(
 		providerCapabilitiesOverride = opts.ProviderCapabilitiesOverride
 	}
 	eng, err = runtime.New(store, eventLog, client, toolRegistry, runtime.Config{
-		Model:                         active.Model,
-		Debug:                         active.Debug,
-		Temperature:                   1,
-		MaxTokens:                     0,
-		ThinkingLevel:                 active.ThinkingLevel,
-		ModelCapabilities:             llm.LockedModelCapabilitiesForConfig(active.Model, active.ModelCapabilities),
-		FastModeEnabled:               active.PriorityRequestMode,
-		FastModeState:                 opts.FastMode,
-		WebSearchMode:                 active.WebSearch,
-		PromptFacingSnapshotReloader:  promptReloader,
-		ProviderCapabilitiesOverride:  providerCapabilitiesOverride,
-		EnabledTools:                  enabledTools,
-		SkillPolicy:                   config.ResolveSkillPolicy(active),
-		SubagentCatalogSettings:       active,
-		SystemPromptFiles:             active.SystemPromptFiles,
-		AutoCompactTokenLimit:         active.ContextCompactionThresholdTokens,
-		PreSubmitCompactionLeadTokens: active.PreSubmitCompactionLeadTokens,
-		ContextWindowTokens:           active.ModelContextWindow,
-		EffectiveContextWindowPercent: 95,
-		LocalCompactionCarryoverLimit: 20_000,
-		CompactionMode:                string(active.CompactionMode),
-		CacheWarningMode:              active.CacheWarningMode,
-		AutoCompactionEnabled:         boolRef(true),
-		QuestionsEnabled:              boolRef(true),
-		HeadlessMode:                  opts.Headless,
-		ToolPreambles:                 active.ToolPreambles,
-		CurrentNodeExecution:          opts.CurrentNodeExecution,
-		WorkflowPrompt:                opts.WorkflowPrompt,
-		AskQuestionBatchSkipped:       opts.AskQuestionBatchSkipped,
-		TranscriptWorkingDir:          workspaceRoot,
-		GlobalConfigDir:               opts.GlobalConfigDir,
+		Model:                           active.Model,
+		Debug:                           active.Debug,
+		Temperature:                     1,
+		MaxTokens:                       0,
+		ThinkingLevel:                   active.ThinkingLevel,
+		ModelCapabilities:               llm.LockedModelCapabilitiesForConfig(active.Model, active.ModelCapabilities),
+		FastModeEnabled:                 active.PriorityRequestMode,
+		FastModeState:                   opts.FastMode,
+		WebSearchMode:                   active.WebSearch,
+		PromptFacingSnapshotReloader:    promptReloader,
+		ProviderCapabilitiesOverride:    providerCapabilitiesOverride,
+		EnabledTools:                    enabledTools,
+		SkillPolicy:                     config.ResolveSkillPolicy(active),
+		SubagentCatalogSettings:         active,
+		SystemPromptFiles:               active.SystemPromptFiles,
+		AutoCompactTokenLimit:           active.ContextCompactionThresholdTokens,
+		PreSubmitCompactionLeadTokens:   active.PreSubmitCompactionLeadTokens,
+		ContextWindowTokens:             active.ModelContextWindow,
+		EffectiveContextWindowPercent:   95,
+		LocalCompactionCarryoverLimit:   20_000,
+		CompactionMode:                  string(active.CompactionMode),
+		CacheWarningMode:                active.CacheWarningMode,
+		AutoCompactionEnabled:           boolRef(true),
+		QuestionsEnabled:                boolRef(true),
+		HeadlessMode:                    opts.Headless,
+		ToolPreambles:                   active.ToolPreambles,
+		CurrentNodeExecution:            opts.CurrentNodeExecution,
+		WorkflowPrompt:                  opts.WorkflowPrompt,
+		AskQuestionBatchSkipped:         opts.AskQuestionBatchSkipped,
+		TranscriptWorkingDir:            workingDirectory,
+		GlobalConfigDir:                 opts.GlobalConfigDir,
+		WorkflowPreCompactionTokenLimit: config.ResolveWorkflowPreCompactionTokens(active),
 		Reviewer: runtime.ReviewerConfig{
 			Frequency:         active.Reviewer.Frequency,
 			Model:             active.Reviewer.Model,

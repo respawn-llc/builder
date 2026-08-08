@@ -14,8 +14,10 @@ import (
 
 	"core/internal/testharness/runtimewirefixture"
 	"core/server/llm"
+	"core/server/metadata"
 	"core/server/runlog"
 	"core/server/runtime"
+	"core/server/runtimewire"
 	"core/server/session"
 	"core/server/tools"
 	shelltool "core/server/tools/shell"
@@ -91,6 +93,76 @@ func TestAuthorityCloseCancelsAndJoinsLifecycleTasks(t *testing.T) {
 	}
 	if authority.launchLifecycleTask(func(context.Context) {}) {
 		t.Fatal("closed authority accepted another lifecycle task")
+	}
+}
+
+func TestWithExactExecutionsDoesNotBlockTaskExecutionObservation(t *testing.T) {
+	sleepPath, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Skipf("sleep executable unavailable: %v", err)
+	}
+	authority := NewAuthority(AuthorityOptions{})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+	handle, err := authority.StartScriptExecution(context.Background(), ScriptExecutionRequest{
+		Command: ScriptCommand{Path: sleepPath, Args: []string{"30"}},
+	})
+	if err != nil {
+		t.Fatalf("start script execution: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = handle.Stop(context.Background())
+	})
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	operationDone := make(chan error, 1)
+	go func() {
+		operationDone <- authority.WithExactExecutions([]ExecutionHandle{handle}, func() error {
+			close(entered)
+			<-release
+			return nil
+		})
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("exact execution operation did not start")
+	}
+
+	observationDone := make(chan error, 1)
+	go func() {
+		observationDone <- authority.WithWorkflowTaskExecutionSnapshots(func(map[workflow.TaskID]TaskExecutionSnapshot) error {
+			return nil
+		})
+	}()
+	var observationBlocked bool
+	select {
+	case err := <-observationDone:
+		if err != nil {
+			t.Fatalf("observe workflow task executions: %v", err)
+		}
+	case <-time.After(time.Second):
+		observationBlocked = true
+	}
+
+	close(release)
+	if err := <-operationDone; err != nil {
+		t.Fatalf("exact execution operation: %v", err)
+	}
+	if observationBlocked {
+		select {
+		case err := <-observationDone:
+			if err != nil {
+				t.Fatalf("observe workflow task executions after release: %v", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("workflow task execution observation remained blocked after exact execution release")
+		}
+		t.Fatal("exact execution operation blocked workflow task execution observation")
 	}
 }
 
@@ -1660,10 +1732,10 @@ func TestAgentExecutionBindsAndClearsShellCorrelation(t *testing.T) {
 	settings.ShellOutputMaxChars = 16_000
 	settings.Reviewer.Frequency = "off"
 	plan, err := NewAgentRuntimePlan(AgentRuntimePlanOptions{
-		Settings:     settings,
-		EnabledTools: []toolspec.ID{toolspec.ToolExecCommand},
-		Workdir:      fixture.config.WorkspaceRoot,
-		Client:       client,
+		Settings:          settings,
+		EnabledTools:      []toolspec.ID{toolspec.ToolExecCommand},
+		FilesystemContext: runtimeTestFilesystemContext(t, fixture.config.WorkspaceRoot),
+		Client:            client,
 	})
 	if err != nil {
 		t.Fatalf("new runtime plan: %v", err)
@@ -2048,10 +2120,10 @@ func TestOwnerlessBackgroundContinuationPublishesQuestionFromExactExecution(t *t
 	settings.ModelContextWindow = 200000
 	settings.Reviewer.Frequency = "off"
 	plan, err := NewAgentRuntimePlan(AgentRuntimePlanOptions{
-		Settings:     settings,
-		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
-		Workdir:      fixture.config.WorkspaceRoot,
-		Client:       client,
+		Settings:          settings,
+		EnabledTools:      []toolspec.ID{toolspec.ToolAskQuestion},
+		FilesystemContext: runtimeTestFilesystemContext(t, fixture.config.WorkspaceRoot),
+		Client:            client,
 	})
 	if err != nil {
 		t.Fatalf("new runtime plan: %v", err)
@@ -3077,9 +3149,9 @@ func authorityTestRuntimePlan(t *testing.T, fixture sessionRuntimeFixture, clien
 	settings.ModelContextWindow = 200000
 	settings.Reviewer.Frequency = "off"
 	options := AgentRuntimePlanOptions{
-		Settings: settings,
-		Workdir:  fixture.config.WorkspaceRoot,
-		Client:   client,
+		Settings:          settings,
+		FilesystemContext: runtimeTestFilesystemContext(t, fixture.config.WorkspaceRoot),
+		Client:            client,
 	}
 	if len(onEvent) != 0 {
 		options.OnEvent = onEvent[0]
@@ -3089,6 +3161,15 @@ func authorityTestRuntimePlan(t *testing.T, fixture sessionRuntimeFixture, clien
 		t.Fatalf("new authority test runtime plan: %v", err)
 	}
 	return plan
+}
+
+func runtimeTestFilesystemContext(t *testing.T, root string) tools.FilesystemContext {
+	t.Helper()
+	context, err := runtimewire.NewFilesystemContext(root, root, metadata.ProjectWorkspaceBoundary{ProjectID: "test"})
+	if err != nil {
+		t.Fatalf("NewFilesystemContext: %v", err)
+	}
+	return context
 }
 
 func mustOpenSessionDescriptor(t *testing.T, sessionID runtimeids.SessionID) session.SessionDescriptor {

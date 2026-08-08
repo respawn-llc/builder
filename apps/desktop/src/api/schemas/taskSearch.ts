@@ -41,6 +41,11 @@ const titleOrBodySourceSchema = z
   .strict()
   .transform((value): TaskSearchSource => value);
 
+const shortIDSourceSchema = z
+  .object({ kind: z.literal("short_id") })
+  .strict()
+  .transform((value): TaskSearchSource => value);
+
 const commentSourceSchema = z
   .object({
     kind: z.literal("comment"),
@@ -52,12 +57,17 @@ const commentSourceSchema = z
     commentID: value.comment_id,
   }));
 
-const taskSearchSourceSchema = z.union([titleOrBodySourceSchema, commentSourceSchema]);
+const literalSourceSchema = z.union([
+  shortIDSourceSchema,
+  titleOrBodySourceSchema,
+  commentSourceSchema,
+]);
+const fts5SourceSchema = z.union([titleOrBodySourceSchema, commentSourceSchema]);
 
 const literalHitSchema: z.ZodType<TaskSearchLiteralHit> = z
   .object({
     ordinal: z.number().int().positive(),
-    source: taskSearchSourceSchema,
+    source: literalSourceSchema,
     literal: z
       .object({
         before: z.string(),
@@ -84,7 +94,7 @@ const literalHitSchema: z.ZodType<TaskSearchLiteralHit> = z
 const fts5HitSchema: z.ZodType<TaskSearchFTS5Hit> = z
   .object({
     ordinal: z.number().int().positive(),
-    source: taskSearchSourceSchema,
+    source: fts5SourceSchema,
     fts5: z.object({ snippet: z.string().min(1) }).strict(),
   })
   .strict();
