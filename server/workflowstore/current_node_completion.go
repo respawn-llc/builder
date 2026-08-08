@@ -31,10 +31,12 @@ type CurrentNodeAutomaticIntent struct {
 }
 
 type CurrentNodeCompletionResult struct {
-	Mutation         workflow.CurrentNodeMutationResult
-	Handoff          CompletionHandoff
-	AutomaticIntents []CurrentNodeAutomaticIntent
-	PendingApproval  *workflow.PendingApproval
+	Mutation               workflow.CurrentNodeMutationResult
+	Handoff                CompletionHandoff
+	AutomaticIntents       []CurrentNodeAutomaticIntent
+	PendingApproval        *workflow.PendingApproval
+	SessionReuse           *workflow.SessionReuseAnalysisInput
+	PostCompletionEligible bool
 }
 
 // ErrCurrentNodeCompletionSelectorAmbiguous means a completion selector
@@ -192,6 +194,8 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 		if err != nil {
 			return CurrentNodeCompletionResult{}, err
 		}
+		result.SessionReuse = newSessionReuseAnalysisInput(definition, currentSource, completionTargetEdges(targets))
+		result.PostCompletionEligible = source.Kind() == workflow.NodeKindAgent
 		if err := touchTaskUpdatedAt(ctx, q, string(prepared.Source.TaskID), now); err != nil {
 			return CurrentNodeCompletionResult{}, err
 		}
@@ -226,6 +230,8 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 		if err := tx.Commit(); err != nil {
 			return CurrentNodeCompletionResult{}, err
 		}
+		result.SessionReuse = newSessionReuseAnalysisInput(definition, currentSource, []workflow.Edge{target.Edge})
+		result.PostCompletionEligible = source.Kind() == workflow.NodeKindAgent
 		if len(result.Mutation.Removed) > 0 {
 			if err := s.publishCurrentNodeTaskEvent(ctx, prepared.Source.TaskID, serverapi.WorkflowProjectEventActionCompleted); err != nil {
 				return CurrentNodeCompletionResult{}, err
@@ -275,7 +281,11 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 		if err := tx.Commit(); err != nil {
 			return CurrentNodeCompletionResult{}, err
 		}
-		return CurrentNodeCompletionResult{PendingApproval: &approval}, nil
+		return CurrentNodeCompletionResult{
+			PendingApproval:        &approval,
+			SessionReuse:           newSessionReuseAnalysisInput(definition, currentSource, []workflow.Edge{target.Edge}),
+			PostCompletionEligible: source.Kind() == workflow.NodeKindAgent,
+		}, nil
 	}
 	handoff, err := currentNodeCompletionHandoff(source, target.Node)
 	if err != nil {
@@ -302,7 +312,9 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 			Removed: []workflow.CurrentNodeReference{prepared.Source},
 			Created: []workflow.CurrentNode{targetCurrentNode},
 		},
-		Handoff: handoff,
+		Handoff:                handoff,
+		SessionReuse:           newSessionReuseAnalysisInput(definition, currentSource, []workflow.Edge{target.Edge}),
+		PostCompletionEligible: source.Kind() == workflow.NodeKindAgent,
 	}
 	if executableNodeKind(target.Node.Kind()) {
 		intent, err := newCurrentNodeAutomaticIntent(targetCurrentNode.Reference, target.Node)
@@ -315,6 +327,26 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 		return CurrentNodeCompletionResult{}, err
 	}
 	return result, nil
+}
+
+func completionTargetEdges(targets []currentNodeCompletionTarget) []workflow.Edge {
+	edges := make([]workflow.Edge, 0, len(targets))
+	for _, target := range targets {
+		edges = append(edges, target.Edge)
+	}
+	return edges
+}
+
+func newSessionReuseAnalysisInput(
+	definition workflow.Definition,
+	currentSource workflow.CurrentNode,
+	acceptedBranches []workflow.Edge,
+) *workflow.SessionReuseAnalysisInput {
+	return &workflow.SessionReuseAnalysisInput{
+		Workflow:             definition,
+		AcceptedBranches:     append([]workflow.Edge(nil), acceptedBranches...),
+		CompletedCurrentNode: currentSource,
+	}
 }
 
 func prepareCurrentNodeCompletionRequest(req CurrentNodeCompletionRequest) (CurrentNodeCompletionRequest, error) {

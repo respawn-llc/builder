@@ -2,16 +2,521 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 
 	"core/server/llm"
+	"core/server/session"
+	"core/server/session/sessiontest"
+	"core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/shared/runtimeids"
 	"core/shared/textutil"
 	"core/shared/toolspec"
+	"core/shared/transcript"
 )
+
+func TestWorkflowPostCompletionCompactionKeepsCompletedOutputAndDormantMetaContext(t *testing.T) {
+	t.Parallel()
+	scopeID := runtimeids.NewExecutionScopeID()
+	currentNode := mustTestCurrentNodeReference(t, "task", "node", nil)
+	client := &fakeCompactionClient{
+		compactionResponses: []llm.CompactionResponse{
+			remoteCompactionReplacement(1_000, 100, 200_000),
+		},
+	}
+	engine := mustNewWorkflowTestEngine(
+		t,
+		mustCreateTestSession(t),
+		client,
+		&workflowruntime.CurrentNodeExecutionConfig{
+			ScopeID:        scopeID,
+			CompletionMode: workflowruntime.CompletionModeTool,
+			Controller:     &externallyCompletedWorkflowController{},
+			Instructions:   workflowruntime.TaskInstructions{CurrentNode: currentNode},
+		},
+		Config{Model: "gpt-5"},
+	)
+	workflowIdentity := workflowruntime.CurrentNodePromptIdentity(currentNode)
+	if err := engine.steer("assignment", steerMessagesWithPersistenceIntent(
+		steeringPriorityRuntimeContext,
+		steeringMessageEventDefault,
+		true,
+		[]llm.Message{{
+			Role:        llm.RoleDeveloper,
+			MessageType: textutil.Value(llm.MessageTypeWorkflowMode),
+			SourcePath:  textutil.Value(workflowIdentity),
+			Content:     textutil.Value("previous assignment"),
+		}},
+	)); err != nil {
+		t.Fatalf("persist previous workflow assignment: %v", err)
+	}
+	if err := engine.steer("terminal", steerMessagesWithPersistenceIntent(
+		steeringPriorityNormal,
+		steeringMessageEventDefault,
+		true,
+		[]llm.Message{{
+			Role:    llm.RoleAssistant,
+			Phase:   textutil.Value(llm.MessagePhaseFinal),
+			Content: textutil.Value("completed terminal output"),
+		}},
+	)); err != nil {
+		t.Fatalf("persist terminal output: %v", err)
+	}
+
+	_, receipt, err := engine.compactNow(
+		context.Background(),
+		"workflow-post-completion",
+		compactionModeWorkflowPostCompletion,
+		compactionInstructionsInput{},
+		false,
+	)
+	if err != nil || !receipt.Committed {
+		t.Fatalf("workflow post-completion compaction: receipt=%+v error=%v", receipt, err)
+	}
+	if len(client.compactionCalls) != 1 {
+		t.Fatalf("compaction calls = %d, want one", len(client.compactionCalls))
+	}
+	foundTerminalOutput := false
+	for _, item := range client.compactionCalls[0].InputItems {
+		if item.Type != llm.ResponseItemTypeMessage ||
+			item.Role == nil ||
+			*item.Role != llm.RoleAssistant ||
+			item.Phase == nil ||
+			*item.Phase != llm.MessagePhaseFinal {
+			continue
+		}
+		foundTerminalOutput = true
+	}
+	if !foundTerminalOutput {
+		t.Fatalf("compaction input omitted durable terminal assistant output: %+v", client.compactionCalls[0].InputItems)
+	}
+
+	workflowModes := 0
+	compactionReminders := 0
+	for _, item := range engine.transcriptRuntimeState().SnapshotItems() {
+		if item.Type != llm.ResponseItemTypeMessage || item.MessageType == nil {
+			continue
+		}
+		switch *item.MessageType {
+		case llm.MessageTypeWorkflowMode:
+			workflowModes++
+		case llm.MessageTypeCompactionSoonReminder:
+			compactionReminders++
+		}
+	}
+	if workflowModes != 0 || compactionReminders != 0 {
+		t.Fatalf("dormant replacement retained workflow assignment meta: workflow_modes=%d reminders=%d", workflowModes, compactionReminders)
+	}
+
+	window, err := mustMaterializeTestEventLog(t, engine.store).ReadRecentRecords(16)
+	if err != nil {
+		t.Fatalf("read replacement record: %v", err)
+	}
+	foundReplacement := false
+	for _, record := range window.Records {
+		replacement, ok := mustSessionEventPayload(record).(session.HistoryReplacementRecord)
+		if !ok {
+			continue
+		}
+		if replacement.Mode == session.CompactionModeWorkflowPostCompletion {
+			foundReplacement = true
+			break
+		}
+	}
+	if !foundReplacement {
+		t.Fatalf("workflow post-completion replacement mode was not persisted: %+v", window.Records)
+	}
+}
+
+func TestWorkflowPostCompletionCompactionRestoresBoundaryAndLazyContinuationConsumesIt(t *testing.T) {
+	t.Parallel()
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	fixture := newCommittedRemoteCompactionFixture(t, gate, nil)
+	fixture.client.compactionResponses = []llm.CompactionResponse{
+		remoteCompactionReplacement(1_000, 100, 200_000),
+	}
+
+	_, receipt, err := fixture.engine.compactNow(
+		context.Background(),
+		"workflow-post-completion",
+		compactionModeWorkflowPostCompletion,
+		compactionInstructionsInput{},
+		false,
+	)
+	if err != nil || !receipt.Committed {
+		t.Fatalf("workflow post-completion compaction: receipt=%+v error=%v", receipt, err)
+	}
+	if !fixture.engine.compactionRuntimeState().WorkflowPostCompletionBoundary() {
+		t.Fatal("committed post-completion replacement did not expose a boundary")
+	}
+
+	if err := fixture.engine.Close(); err != nil {
+		t.Fatalf("close source engine: %v", err)
+	}
+	reopenedStore := mustOpenTestSession(t, fixture.store.Dir())
+	reopened := mustNewTestEngine(t, reopenedStore, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	mode, present := reopened.compactionRuntimeState().HistoryReplacementMode()
+	if !present || mode == nil || *mode != session.CompactionModeWorkflowPostCompletion {
+		t.Fatalf(
+			"restored history replacement mode = %v, want %q",
+			mode,
+			compactionModeWorkflowPostCompletion,
+		)
+	}
+	if !reopened.compactionRuntimeState().WorkflowPostCompletionBoundary() {
+		t.Fatal("unconsumed post-completion boundary was not restored from active segment")
+	}
+	if !reopened.compactionRuntimeState().ApplyWorkflowPostCompletionActivity(workflowPostCompletionDurableActivity) ||
+		reopened.compactionRuntimeState().WorkflowPostCompletionBoundary() {
+		t.Fatal("restored boundary did not have one successful consumption")
+	}
+
+	receipt, err = newCompactionPersistence(reopened).replaceHistory(
+		"ordinary-replacement",
+		"local",
+		compactionModeManual,
+		llm.ItemsFromMessages([]llm.Message{{
+			Role:        llm.RoleDeveloper,
+			MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
+			Content:     textutil.Value("ordinary replacement"),
+		}}),
+	)
+	if err != nil || !receipt.Committed {
+		t.Fatalf("ordinary replacement after restored boundary: receipt=%+v error=%v", receipt, err)
+	}
+	if reopened.compactionRuntimeState().WorkflowPostCompletionBoundary() {
+		t.Fatal("ordinary replacement restored a stale post-completion boundary")
+	}
+	mode, present = reopened.compactionRuntimeState().HistoryReplacementMode()
+	if !present || mode == nil || *mode != session.CompactionModeManual {
+		t.Fatalf("latest replacement mode = %v, want %q", mode, compactionModeManual)
+	}
+}
+
+func TestWorkflowPostCompletionCompactionKeepsCommittedReceiptAfterFinalizationDiagnostic(t *testing.T) {
+	t.Parallel()
+	diagnostic := errors.New("workflow post-completion finalization diagnostic")
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	fixture := newCommittedRemoteCompactionFixture(t, gate, nil)
+	gate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
+		return snapshot.Meta.LastSequence >= 2 && snapshot.Meta.UsageState == nil
+	}, diagnostic)
+
+	workflowResult := fixture.engine.CompactContextForWorkflowPostCompletion(context.Background())
+	if !workflowResult.CommitReceipt.Committed || !errors.Is(workflowResult.Diagnostic, diagnostic) {
+		t.Fatalf(
+			"workflow post-completion result = receipt:%+v diagnostic:%v",
+			workflowResult.CommitReceipt,
+			workflowResult.Diagnostic,
+		)
+	}
+	if !fixture.engine.compactionRuntimeState().WorkflowPostCompletionBoundary() {
+		t.Fatal("committed replacement lost its post-completion boundary after diagnostic")
+	}
+	if len(fixture.client.compactionCalls) != 1 {
+		t.Fatalf("compaction calls = %d, want one", len(fixture.client.compactionCalls))
+	}
+}
+
+func TestWorkflowPostCompletionCompactionPreCommitFailureDoesNotCreateBoundary(t *testing.T) {
+	t.Parallel()
+	fixture := newCommittedRemoteCompactionFixture(t, runtimeTestSessionPersistence, nil)
+	blocker := mustBlockTestEventLogAppends(t, fixture.store)
+	t.Cleanup(func() {
+		if err := blocker.Restore(); err != nil {
+			t.Errorf("restore event-log appends: %v", err)
+		}
+	})
+
+	result := fixture.engine.CompactContextForWorkflowPostCompletion(context.Background())
+	if result.CommitReceipt.Committed || result.Diagnostic == nil {
+		t.Fatalf("pre-commit workflow post-completion result = %+v", result)
+	}
+	if fixture.engine.compactionRuntimeState().WorkflowPostCompletionBoundary() {
+		t.Fatal("failed workflow replacement created a post-completion boundary")
+	}
+}
+
+func TestWorkflowAssignmentSteeringPreservesPostCompletionBoundary(t *testing.T) {
+	t.Parallel()
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	mode := session.CompactionModeWorkflowPostCompletion
+	if err := engine.compactionRuntimeState().SetHistoryReplacementMode(&mode); err != nil {
+		t.Fatalf("set post-completion replacement mode: %v", err)
+	}
+	steer, err := engine.SteerWorkflowAssignment(workflowAssignmentForCommitReceiptTest())
+	if err != nil {
+		t.Fatalf("steer workflow assignment: %v", err)
+	}
+	receipt, err := steer.Wait(context.Background())
+	if err != nil || !receipt.Committed {
+		t.Fatalf("workflow assignment receipt: %+v error=%v", receipt, err)
+	}
+	if !engine.compactionRuntimeState().WorkflowPostCompletionBoundary() {
+		t.Fatal("workflow assignment steering consumed the post-completion boundary")
+	}
+}
+
+func TestWorkflowPostCompletionBoundarySurvivesFailedWorkflowRequest(t *testing.T) {
+	t.Parallel()
+	requestErr := errors.New("workflow request construction failed")
+	engine := mustNewWorkflowTestEngine(
+		t,
+		mustCreateTestSession(t),
+		&fakeClient{errors: []error{requestErr}},
+		&workflowruntime.CurrentNodeExecutionConfig{
+			ScopeID:        runtimeids.NewExecutionScopeID(),
+			CompletionMode: workflowruntime.CompletionModeTool,
+			Controller:     &externallyCompletedWorkflowController{},
+			Instructions: workflowruntime.TaskInstructions{
+				CurrentNode: mustTestCurrentNodeReference(t, "task", "node", nil),
+			},
+		},
+		Config{Model: "gpt-5"},
+	)
+	mode := session.CompactionModeWorkflowPostCompletion
+	if err := engine.compactionRuntimeState().SetHistoryReplacementMode(&mode); err != nil {
+		t.Fatalf("set post-completion replacement mode: %v", err)
+	}
+
+	if _, err := engine.SubmitWorkflowTurn(context.Background()); !errors.Is(err, requestErr) {
+		t.Fatalf("failed workflow request error = %v, want %v", err, requestErr)
+	}
+	if !engine.compactionRuntimeState().WorkflowPostCompletionBoundary() {
+		t.Fatal("failed workflow request consumed the post-completion boundary")
+	}
+}
+
+func TestWorkflowContinuationPreservesBoundaryAcrossFailedCACAttempt(t *testing.T) {
+	t.Parallel()
+	requestErr := &llm.ProviderAPIError{
+		Code: llm.UnifiedErrorCodeProviderContract,
+	}
+	client := &fakeClient{
+		errors: []error{requestErr},
+		responses: []llm.Response{
+			finalTextResponse(`{"commentary":"retry succeeded"}`),
+		},
+	}
+	engine := mustNewWorkflowTestEngine(
+		t,
+		mustCreateTestSession(t),
+		client,
+		&workflowruntime.CurrentNodeExecutionConfig{
+			ScopeID: runtimeids.NewExecutionScopeID(),
+			Contract: workflowruntime.CompletionContract{
+				Transitions: []workflowruntime.CompletionTransition{{ID: "done"}},
+			},
+			CompletionMode: workflowruntime.CompletionModeUnstructuredOutput,
+			Controller:     &externallyCompletedWorkflowController{},
+			Instructions: workflowruntime.TaskInstructions{
+				CurrentNode: mustTestCurrentNodeReference(t, "task", "node", nil),
+			},
+		},
+		Config{Model: "gpt-5"},
+	)
+	mode := session.CompactionModeWorkflowPostCompletion
+	if err := engine.compactionRuntimeState().SetHistoryReplacementMode(&mode); err != nil {
+		t.Fatalf("set post-completion replacement mode: %v", err)
+	}
+	headlessType := llm.MessageTypeHeadlessMode
+	if err := engine.steer("meta", steerMessagesWithPersistenceIntent(
+		steeringPriorityRuntimeContext,
+		steeringMessageEventDefault,
+		true,
+		[]llm.Message{{Role: llm.RoleDeveloper, MessageType: &headlessType}},
+	)); err != nil {
+		t.Fatalf("steer canonical meta context: %v", err)
+	}
+
+	if _, err := engine.SubmitWorkflowContinuationTurn(context.Background()); !errors.Is(err, requestErr) {
+		t.Fatalf("first CAC attempt error = %v, want %v", err, requestErr)
+	}
+	if !engine.compactionRuntimeState().WorkflowPostCompletionBoundary() {
+		t.Fatal("failed CAC attempt consumed the committed boundary")
+	}
+	if _, err := engine.SubmitWorkflowContinuationTurn(context.Background()); err != nil {
+		t.Fatalf("retry CAC attempt: %v", err)
+	}
+	if engine.compactionRuntimeState().WorkflowPostCompletionBoundary() {
+		t.Fatal("successful CAC retry did not consume the committed boundary")
+	}
+	if len(client.calls) != 2 {
+		t.Fatalf("CAC model calls = %d, want failed attempt plus retry", len(client.calls))
+	}
+}
+
+func TestWorkflowPostCompletionRestoreIgnoresCacheRequestObservation(t *testing.T) {
+	t.Parallel()
+	state := newCompactionRuntimeState()
+	mode := session.CompactionModeWorkflowPostCompletion
+	if err := state.SetHistoryReplacementMode(&mode); err != nil {
+		t.Fatalf("set post-completion replacement mode: %v", err)
+	}
+
+	activity := workflowPostCompletionActivityForSessionRecord(session.CacheRequestObservationRecord{})
+	if activity != workflowPostCompletionNoActivity {
+		t.Fatalf("cache request observation activity = %d, want no activity", activity)
+	}
+	if state.ApplyWorkflowPostCompletionActivity(activity) {
+		t.Fatal("cache request observation consumed the post-completion boundary")
+	}
+	if !state.WorkflowPostCompletionBoundary() {
+		t.Fatal("cache request observation removed the post-completion boundary")
+	}
+}
+
+func TestWorkflowPostCompletionBoundaryPreservesLocalDiagnosticSteering(t *testing.T) {
+	t.Parallel()
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	mode := session.CompactionModeWorkflowPostCompletion
+	if err := engine.compactionRuntimeState().SetHistoryReplacementMode(&mode); err != nil {
+		t.Fatalf("set post-completion replacement mode: %v", err)
+	}
+
+	if err := engine.steer("diagnostic", steerLocalEntryIntent(storedLocalEntry{
+		Role: string(transcript.EntryRoleDeveloperErrorFeedback),
+		Text: "internal compaction repair",
+	})); err != nil {
+		t.Fatalf("persist local diagnostic: %v", err)
+	}
+	if !engine.compactionRuntimeState().WorkflowPostCompletionBoundary() {
+		t.Fatal("local diagnostic steering consumed the post-completion boundary")
+	}
+}
+
+func TestHistoryReplacementModeRejectsEmptyPresentValue(t *testing.T) {
+	t.Parallel()
+	state := newCompactionRuntimeState()
+	empty := session.CompactionMode("")
+	if err := state.SetHistoryReplacementMode(&empty); err == nil {
+		t.Fatal("empty present history replacement mode was accepted")
+	}
+	if err := state.SetHistoryReplacementMode(nil); err != nil {
+		t.Fatalf("clear absent history replacement mode: %v", err)
+	}
+}
+
+func TestWorkflowPostCompletionActivityPolicyPreservesMetaAndConsumesActivity(t *testing.T) {
+	t.Parallel()
+	preservedMessageTypes := []llm.MessageType{
+		llm.MessageTypeAgentsMD,
+		llm.MessageTypeSkills,
+		llm.MessageTypeSubagents,
+		llm.MessageTypeEnvironment,
+		llm.MessageTypeHeadlessMode,
+		llm.MessageTypeHeadlessModeExit,
+		llm.MessageTypeActiveGoalContinuation,
+		llm.MessageTypeWorkflowMode,
+		llm.MessageTypeWorktreeMode,
+		llm.MessageTypeWorktreeModeExit,
+		llm.MessageTypeCompactionSoonReminder,
+	}
+	for _, messageType := range preservedMessageTypes {
+		t.Run(string(messageType), func(t *testing.T) {
+			state := newCompactionRuntimeState()
+			mode := session.CompactionModeWorkflowPostCompletion
+			if err := state.SetHistoryReplacementMode(&mode); err != nil {
+				t.Fatalf("set replacement mode: %v", err)
+			}
+			message := llm.Message{
+				Role:        llm.RoleDeveloper,
+				MessageType: &messageType,
+				SourcePath:  textutil.Value("workflow-test"),
+			}
+			if activity := workflowPostCompletionMessageActivity(message); activity != workflowPostCompletionNoActivity {
+				t.Fatalf("meta message activity = %d, want no activity", activity)
+			}
+			state.ApplyWorkflowPostCompletionActivity(workflowPostCompletionNoActivity)
+			if !state.WorkflowPostCompletionBoundary() {
+				t.Fatal("meta message consumed the boundary")
+			}
+		})
+	}
+
+	state := newCompactionRuntimeState()
+	mode := session.CompactionModeWorkflowPostCompletion
+	if err := state.SetHistoryReplacementMode(&mode); err != nil {
+		t.Fatalf("set replacement mode: %v", err)
+	}
+	if activity := workflowPostCompletionMessageActivity(llm.Message{Role: llm.RoleUser}); activity != workflowPostCompletionDurableActivity {
+		t.Fatalf("ordinary message activity = %d, want durable activity", activity)
+	}
+	if !state.ApplyWorkflowPostCompletionActivity(workflowPostCompletionDurableActivity) ||
+		state.WorkflowPostCompletionBoundary() {
+		t.Fatal("ordinary activity did not consume the boundary exactly once")
+	}
+	if activity := workflowPostCompletionActivityForSteeringItem(steeringItem{
+		queuedRestore: &steeringQueuedUserMessageRestore{},
+	}); activity != workflowPostCompletionNoActivity {
+		t.Fatalf("queued restore activity = %d, want no activity", activity)
+	}
+	if activity := workflowPostCompletionActivityForSteeringItem(steeringItem{
+		goalNoticeAndStatus: &steeringGoalNoticeAndStatus{},
+	}); activity != workflowPostCompletionDurableActivity {
+		t.Fatalf("goal notice activity = %d, want durable activity", activity)
+	}
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	if err := engine.compactionRuntimeState().SetHistoryReplacementMode(&mode); err != nil {
+		t.Fatalf("set engine replacement mode: %v", err)
+	}
+	if err := engine.steer("restore", steerQueuedUserMessageRestoreIntent(nil)); err != nil {
+		t.Fatalf("steer queued restore: %v", err)
+	}
+	if !engine.compactionRuntimeState().WorkflowPostCompletionBoundary() {
+		t.Fatal("queued restore consumed the boundary")
+	}
+}
+
+func TestWorkflowPostCompletionCompactionUsesLocalGenerateClient(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{
+		caps: llm.ProviderCapabilities{
+			ProviderID:               "local",
+			SupportsResponsesAPI:     true,
+			SupportsResponsesCompact: false,
+		},
+		responses: []llm.Response{{
+			Assistant: llm.Message{
+				Role:    llm.RoleAssistant,
+				Content: textutil.Value("local workflow summary"),
+			},
+		}},
+	}
+	engine := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		client,
+		tools.NewRegistry(),
+		Config{Model: "gpt-5", CompactionMode: "local"},
+	)
+	if err := engine.steer("terminal", steerMessagesWithPersistenceIntent(
+		steeringPriorityNormal,
+		steeringMessageEventDefault,
+		true,
+		[]llm.Message{{
+			Role:    llm.RoleAssistant,
+			Phase:   textutil.Value(llm.MessagePhaseFinal),
+			Content: textutil.Value("completed terminal output"),
+		}},
+	)); err != nil {
+		t.Fatalf("persist terminal output: %v", err)
+	}
+
+	result := engine.CompactContextForWorkflowPostCompletion(context.Background())
+	if !result.CommitReceipt.Committed || result.Diagnostic != nil {
+		t.Fatalf("local workflow post-completion result = %+v", result)
+	}
+	if len(client.calls) != 1 {
+		t.Fatalf("local Generate calls = %d, want one", len(client.calls))
+	}
+	if !engine.compactionRuntimeState().WorkflowPostCompletionBoundary() {
+		t.Fatal("local workflow compaction did not commit its post-completion boundary")
+	}
+}
 
 func TestRemoteCompactionRefreshesWorkflowTaskAwareness(t *testing.T) {
 	t.Parallel()

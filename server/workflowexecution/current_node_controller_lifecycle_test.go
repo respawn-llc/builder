@@ -33,6 +33,239 @@ func TestCurrentTaskQuiescenceIgnoresLatchedWorkerFailure(t *testing.T) {
 	}
 }
 
+func TestPostTurnCompactionReleasesMutationPermitWhileApprovalFenceIsActive(t *testing.T) {
+	source := currentNodeReferenceForControllerTest(t, "task-post-turn-fence", "node-source")
+	sessionID := runtimeids.NewSessionID()
+	scopeID := runtimeids.NewExecutionScopeID()
+	key, err := source.Key()
+	if err != nil {
+		t.Fatalf("source key: %v", err)
+	}
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	controller := &CurrentNodeController{
+		store: &currentNodeControllerStore{
+			pendingApproval: workflow.PendingApproval{Source: source},
+		},
+		permit:    NewMutationPermit(),
+		authority: sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}),
+		liveByNode: map[workflow.CurrentNodeReferenceKey]runtimeids.ExecutionScopeID{
+			key: scopeID,
+		},
+		live: map[runtimeids.ExecutionScopeID]currentNodeLiveScope{
+			scopeID: {reference: source},
+		},
+		completed: map[runtimeids.ExecutionScopeID]struct{}{scopeID: {}},
+		postTurnFinalization: map[runtimeids.ExecutionScopeID]currentNodePostTurnFinalization{
+			scopeID: {
+				sessionID:      &sessionID,
+				classification: workflow.SessionReuseGuaranteedCACReuse,
+				reference:      source,
+			},
+		},
+		heldStarts: make(map[runtimeids.ExecutionScopeID][]currentNodeQueuedStart),
+	}
+	t.Cleanup(func() { _ = controller.authority.Close(context.Background()) })
+
+	finalizationDone := make(chan error, 1)
+	go func() {
+		finalizationDone <- controller.FinalizeCurrentNodePostTurn(context.Background(), scopeID, sessionID, workflowruntime.PostCompletionRuntime{
+			CompactionMode: "local",
+			Compact: func(context.Context) workflowruntime.PostCompletionCompactionResult {
+				close(entered)
+				<-release
+				return workflowruntime.PostCompletionCompactionResult{}
+			},
+		})
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("post-turn compaction did not start")
+	}
+	_, err = controller.ApplyPendingApproval(context.Background(), "approval")
+	if !errors.Is(err, ErrTaskExecutionNotQuiescent) {
+		t.Fatalf("approval apply while post-turn compaction = %v, want %v", err, ErrTaskExecutionNotQuiescent)
+	}
+	close(release)
+	select {
+	case err := <-finalizationDone:
+		if err != nil {
+			t.Fatalf("post-turn finalization: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("post-turn finalization did not finish")
+	}
+}
+
+func TestPostTurnFinalizationCompactionEligibilityMatrix(t *testing.T) {
+	tests := []struct {
+		name            string
+		classification  workflow.SessionReuseClassification
+		usedTokens      int
+		preCompaction   int
+		compactionMode  string
+		wantCompactions int
+	}{
+		{
+			name:            "possible reuse below threshold",
+			classification:  workflow.SessionReuseThresholdPossibleReuse,
+			usedTokens:      99,
+			preCompaction:   100,
+			compactionMode:  "local",
+			wantCompactions: 0,
+		},
+		{
+			name:            "possible reuse at threshold",
+			classification:  workflow.SessionReuseThresholdPossibleReuse,
+			usedTokens:      100,
+			preCompaction:   100,
+			compactionMode:  "local",
+			wantCompactions: 1,
+		},
+		{
+			name:            "guaranteed CAC below threshold",
+			classification:  workflow.SessionReuseGuaranteedCACReuse,
+			usedTokens:      0,
+			preCompaction:   100,
+			compactionMode:  "local",
+			wantCompactions: 1,
+		},
+		{
+			name:            "none skips optimization",
+			classification:  workflow.SessionReuseGuaranteedCACReuse,
+			usedTokens:      0,
+			preCompaction:   0,
+			compactionMode:  "none",
+			wantCompactions: 0,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			controller, scopeID, sessionID := newPostTurnFinalizationControllerForTest(
+				t,
+				workflow.SessionReuseClassification(test.classification),
+			)
+			compactions := 0
+			err := controller.FinalizeCurrentNodePostTurn(context.Background(), scopeID, sessionID, workflowruntime.PostCompletionRuntime{
+				UsedTokens:          test.usedTokens,
+				PreCompactionTokens: test.preCompaction,
+				CompactionMode:      test.compactionMode,
+				Compact: func(context.Context) workflowruntime.PostCompletionCompactionResult {
+					compactions++
+					return workflowruntime.PostCompletionCompactionResult{
+						CommitReceipt: session.CommitReceipt{Committed: true},
+					}
+				},
+			})
+			if err != nil {
+				t.Fatalf("FinalizeCurrentNodePostTurn: %v", err)
+			}
+			if compactions != test.wantCompactions {
+				t.Fatalf("compactions = %d, want %d", compactions, test.wantCompactions)
+			}
+			controller.mu.Lock()
+			_, finalizing := controller.postTurnFinalization[scopeID]
+			controller.mu.Unlock()
+			if finalizing {
+				t.Fatal("post-turn finalization fence remained after finalization")
+			}
+		})
+	}
+}
+
+func TestPostTurnFinalizationSurfacesInvalidThresholdAndCancellation(t *testing.T) {
+	t.Run("invalid threshold", func(t *testing.T) {
+		controller, scopeID, sessionID := newPostTurnFinalizationControllerForTest(
+			t,
+			workflow.SessionReuseThresholdPossibleReuse,
+		)
+		err := controller.FinalizeCurrentNodePostTurn(context.Background(), scopeID, sessionID, workflowruntime.PostCompletionRuntime{
+			CompactionMode: "local",
+		})
+		if err == nil {
+			t.Fatal("invalid pre-compaction threshold returned nil")
+		}
+		controller.mu.Lock()
+		_, finalizing := controller.postTurnFinalization[scopeID]
+		controller.mu.Unlock()
+		if !finalizing {
+			t.Fatal("invalid threshold cleared the finalization fence")
+		}
+	})
+
+	t.Run("cancellation is fatal", func(t *testing.T) {
+		controller, scopeID, sessionID := newPostTurnFinalizationControllerForTest(
+			t,
+			workflow.SessionReuseGuaranteedCACReuse,
+		)
+		entered := make(chan struct{})
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		done := make(chan error, 1)
+		go func() {
+			done <- controller.FinalizeCurrentNodePostTurn(ctx, scopeID, sessionID, workflowruntime.PostCompletionRuntime{
+				CompactionMode: "local",
+				Compact: func(compactionCtx context.Context) workflowruntime.PostCompletionCompactionResult {
+					close(entered)
+					<-compactionCtx.Done()
+					return workflowruntime.PostCompletionCompactionResult{Diagnostic: context.Cause(compactionCtx)}
+				},
+			})
+		}()
+		select {
+		case <-entered:
+		case <-time.After(time.Second):
+			t.Fatal("post-turn compaction did not start")
+		}
+		cancel()
+		select {
+		case err := <-done:
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("canceled finalization error = %v, want context canceled", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("canceled post-turn finalization did not return")
+		}
+	})
+}
+
+func newPostTurnFinalizationControllerForTest(
+	t *testing.T,
+	classification workflow.SessionReuseClassification,
+) (*CurrentNodeController, runtimeids.ExecutionScopeID, runtimeids.SessionID) {
+	t.Helper()
+	source := currentNodeReferenceForControllerTest(t, "task-post-turn-matrix", "node-source")
+	sessionID := runtimeids.NewSessionID()
+	scopeID := runtimeids.NewExecutionScopeID()
+	key, err := source.Key()
+	if err != nil {
+		t.Fatalf("source key: %v", err)
+	}
+	controller := &CurrentNodeController{
+		permit:    NewMutationPermit(),
+		authority: sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}),
+		liveByNode: map[workflow.CurrentNodeReferenceKey]runtimeids.ExecutionScopeID{
+			key: scopeID,
+		},
+		live: map[runtimeids.ExecutionScopeID]currentNodeLiveScope{
+			scopeID: {reference: source},
+		},
+		completed: map[runtimeids.ExecutionScopeID]struct{}{scopeID: {}},
+		postTurnFinalization: map[runtimeids.ExecutionScopeID]currentNodePostTurnFinalization{
+			scopeID: {
+				sessionID:      &sessionID,
+				classification: classification,
+				reference:      source,
+			},
+		},
+		heldStarts: make(map[runtimeids.ExecutionScopeID][]currentNodeQueuedStart),
+	}
+	t.Cleanup(func() { _ = controller.authority.Close(context.Background()) })
+	return controller, scopeID, sessionID
+}
+
 func TestObserveWorkflowTaskExecutionsIgnoresLatchedWorkerFailure(t *testing.T) {
 	cause := errors.New("automatic assignment failed")
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
@@ -567,9 +800,17 @@ func TestCurrentNodeControllerHoldsSuccessorUntilSourceScopeRetires(t *testing.T
 	}
 	source := currentNodeReferenceForControllerTest(t, "task-successor", "node-source")
 	successor := currentNodeReferenceForControllerTest(t, "task-successor", "node-successor")
+	sessionID := runtimeids.NewSessionID()
 	store := &currentNodeControllerStore{
 		completion: workflowstore.CurrentNodeCompletionResult{
 			AutomaticIntents: []workflowstore.CurrentNodeAutomaticIntent{{CurrentNode: successor, NodeKind: workflow.NodeKindAgent}},
+			SessionReuse: &workflow.SessionReuseAnalysisInput{
+				CompletedCurrentNode: workflow.CurrentNode{
+					Reference: source,
+					SessionID: &sessionID,
+				},
+			},
+			PostCompletionEligible: true,
 		},
 	}
 	var controller *CurrentNodeController
@@ -629,6 +870,20 @@ func TestCurrentNodeControllerHoldsSuccessorUntilSourceScopeRetires(t *testing.T
 	select {
 	case started := <-runner.started:
 		t.Fatalf("successor %v started before source retirement", started)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if err := controller.FinalizeCurrentNodePostTurn(context.Background(), sourceScope, sessionID, workflowruntime.PostCompletionRuntime{
+		CompactionMode: "none",
+	}); err != nil {
+		t.Fatalf("finalize source post-turn: %v", err)
+	}
+	if snapshot := controller.Snapshot(); len(snapshot.HeldIntents) != 1 ||
+		!snapshot.HeldIntents[0].CurrentNode.Equal(successor) {
+		t.Fatalf("post-finalization held intents = %+v, want successor held until source retirement", snapshot.HeldIntents)
+	}
+	select {
+	case started := <-runner.started:
+		t.Fatalf("successor %v started before source retirement after finalization", started)
 	case <-time.After(50 * time.Millisecond):
 	}
 

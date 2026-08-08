@@ -156,11 +156,15 @@ Per-transition-branch policy for the next node's execution context:
 
 - `new_session`: start a blank Kent session and inject the previous transition result plus task metadata.
 - `continue_session`: continue a selected previous Kent session with a new prompt/goal and bound metadata.
-- `compact_and_continue_session`: compact the selected previous session first, then continue with a new prompt/goal and bound metadata.
+- `compact_and_continue_session`: ensure the selected previous session is compacted, then continue it under a fresh target-node Session Contract generation with a new prompt/goal and bound metadata. Kent may compact eagerly after the source assignment completes when future reuse is guaranteed; otherwise the existing lazy compaction runs when the selected target starts.
 
 ### Context Source
 
 Per-Transition-Branch policy deciding which retained Session supplies context for continuation modes. `immediate_source` uses the Session bound to the source Current Node during normal completion; during Manual Move it falls back to the latest retained unscoped Session associated with the selected Transition's source Node. `node:<node_key>` selects the latest retained Session associated with a guaranteed-prior agent Node. `previous_target` selects the latest retained Session associated with the Transition Branch target and requires that one exists. `previous_target_or_new` selects that Session when one exists and otherwise starts a new Session. While parallel work is active, every selection is scoped to the same Transition Branch Key as the source Current Node.
+
+### Workflow Pre-Compaction
+
+Post-completion compaction of a retained Workflow Session before it becomes dormant. Kent performs Workflow Pre-Compaction when future Workflow execution can reuse that Session and its context usage reaches the configured threshold. Guaranteed future `compact_and_continue_session` reuse also uses this boundary regardless of context usage.
 
 ### Exact Execution Scope
 
@@ -176,7 +180,7 @@ A workflow executable node that runs a local executable on the Kent server inste
 
 ### Session Contract
 
-The model, provider, generation settings, enabled tools, and native web-search mode that a Session uses for one contract generation. These values stay fixed until a product operation creates a new contract generation. `compact_and_continue_session` creates a fresh target-node generation. Ordinary compaction can refresh system and reviewer instructions within the existing contract generation. Developer context remains part of the transcript.
+The model, provider, generation settings, enabled tools, and native web-search mode that a Session uses for one contract generation. These values stay fixed until a product operation creates a new contract generation. `compact_and_continue_session` establishes a fresh target-node generation when that target starts, including when the selected history was compacted eagerly after an earlier assignment completed. Ordinary compaction can refresh system and reviewer instructions within the existing contract generation. Developer context remains part of the transcript.
 
 ### Runtime Parameter Contract
 
