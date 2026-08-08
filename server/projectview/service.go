@@ -19,6 +19,7 @@ import (
 	servicecontract "core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/serverapi"
+	"core/shared/setcomparison"
 )
 
 type Service struct {
@@ -400,7 +401,7 @@ func (s *Service) DeleteProject(ctx context.Context, req serverapi.ProjectDelete
 			if err != nil {
 				return err
 			}
-			if !sameProjectTaskIDs(rawTaskIDs, currentTaskIDs) {
+			if !setcomparison.Equal(rawTaskIDs, currentTaskIDs) {
 				return errors.New("Project Task set changed during deletion")
 			}
 			blockers, err = s.workflowExecution.DeleteProject(ctx, workflowstore.ProjectDeleteRequest{
@@ -421,22 +422,6 @@ func (s *Service) DeleteProject(ctx context.Context, req serverapi.ProjectDelete
 		return serverapi.ProjectDeleteResponse{ProjectID: projectID, Deleted: false, Blockers: blockers}, nil
 	}
 	return serverapi.ProjectDeleteResponse{ProjectID: projectID, Deleted: true}, nil
-}
-
-func sameProjectTaskIDs(left []string, right []string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	seen := make(map[string]struct{}, len(left))
-	for _, taskID := range left {
-		seen[taskID] = struct{}{}
-	}
-	for _, taskID := range right {
-		if _, exists := seen[taskID]; !exists {
-			return false
-		}
-	}
-	return true
 }
 
 func (s *Service) blockSessionStarts(ctx context.Context, sessionIDs []string) (func(), error) {

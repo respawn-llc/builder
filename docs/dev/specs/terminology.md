@@ -248,7 +248,7 @@ A read-only view of live Workflow activity at one point in time. The view can be
 
 ### Lifecycle Publication
 
-The process-local owner that publishes one observable Workflow lifecycle view from compatible durable stopped facts and runtime facts. It briefly couples a prepared SQLite lifecycle commit with an immutable runtime-root swap and gives reads a matching SQLite snapshot and runtime root. It never persists runtime state or derives queued or running authority from secondary signals.
+The owner that makes one complete observable Workflow lifecycle view visible from compatible stopped, queued, blocking, and exact-running facts. Readers see one published view at a time and never a mixture of facts from the prior and next views. Lifecycle Publication never derives queued or running authority from secondary signals.
 
 ### Task Comment
 

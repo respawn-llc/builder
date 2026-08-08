@@ -482,10 +482,11 @@
 - `running` means a matching Exact Execution Scope is actively executing the Agent loop, Script process, or mandatory result finalizer.
 - `stopped` means the Current Node has neither queued admission nor a live Exact Execution Scope. Typed durable or live Workflow state supplies its interruption, blocking attention, terminal failure, backlog, or completion semantics.
 - Preparation, assignment delivery, admission, and interruption persistence are internal lifecycle transitions, not observable Run states. Mandatory result finalization remains part of the live Exact Execution Scope.
-- Lifecycle Publication is the single owner of observable Workflow lifecycle publication. It pairs one immutable process-local runtime root with a compatible SQLite snapshot or commit.
-- A lifecycle-status request may wait only while Lifecycle Publication commits an already-prepared SQLite lifecycle transaction and swaps the matching runtime root. It does not wait for slow lifecycle preparation or for the rest of another read.
-- While a writer prepares the next state, a request may return the previous stable snapshot. It never derives an intermediate state from in-progress Current Node changes.
-- Kent does not persist Task lifecycle snapshots or reconstruct them from saved state.
+- Lifecycle Publication is the single owner of each complete observable Workflow lifecycle view.
+- A lifecycle-status request may wait only while an already-prepared next lifecycle view becomes visible. It does not wait for slow lifecycle preparation or for the rest of another read.
+- If publication overlaps a request, the request observes either the complete prior lifecycle view or the complete next lifecycle view. It never derives an intermediate state or combines facts from both views.
+- While a writer prepares the next state, a request may return the previous stable view.
+- After restart, no pre-restart queued or running view remains authoritative. Recovery establishes a new stable view from durable Workflow facts.
 - The current server owns each automatically materialized executable Current Node as a pending automatic start until its Exact Execution Scope begins or Kent interrupts it.
 - A pending automatic start is temporary. Kent loses it on restart and does not reconstruct it from saved Task state.
 - Workflow automation starts Agent Nodes within available agent capacity and prefers to continue related work on the same Task. `[workflow].concurrency` limits these agent runs only.
@@ -505,7 +506,7 @@
 - Task Interrupt can target one Session or every actively executing Agent, Script, or result finalizer on the Task. A waiting Question and any state without active execution are not interruptible.
 - Clients offer Interrupt only while Kent reports matching active execution. Kent checks again before interrupting and makes no change if execution has already stopped.
 - Runtime Interrupt from a workflow-scoped Session delegates execution cancellation and durable interruption publication to Workflow Execution. Runtime control still reconciles targeted and queued client input. Ordinary Sessions continue to use ordinary Engine interruption.
-- Interrupt cancels mandatory result finalization until its success Lifecycle Publication commit begins. Cancellation before that boundary rolls back the prepared success and publishes typed interruption. Once the commit begins it finishes atomically; Interrupt revalidation observes its completed successor or stopped result.
+- Interrupt cancels mandatory result finalization until its successful Lifecycle Publication begins making the completed state visible. Cancellation before that boundary rolls back the prepared success and publishes typed interruption. Once publication begins it finishes atomically; Interrupt revalidation observes its completed successor or stopped result.
 - If an interrupted result finalizer does not stop within 300 seconds, Kent records verbose Task, Current Node, Run, Exact Execution Scope, finalizer-phase, elapsed-time, and stack diagnostics when possible, then deliberately crashes the server. Startup recovery converts affected executable Current Nodes to resumable interruption.
 - An executable Current Node with no Exact Execution Scope, pending automatic start owned by the current server, typed interruption, blocking attention, or terminal failure is an ownership loss. Kent immediately interrupts it with an ownership-loss reason and never starts it automatically.
 - Saved state without matching live execution never becomes interruptible as a fallback.
@@ -518,10 +519,10 @@
 
 ## Task Status And Listing
 
-- Task Search, Task detail, Workflow boards, Task lists, dependency projection, status filtering, actions, and pagination use one server-owned Lifecycle Publication capture derived from process-local stable lifecycle facts, durable stopped state, and current live activity.
+- Task Search, Task detail, Workflow boards, Task lists, dependency projection, status filtering, actions, and pagination use one server-owned Lifecycle Publication view derived from authoritative Run, Exact Execution Scope, attention, and durable stopped facts.
 - The projection supplies primary status, every applicable attention kind and reference, available Task actions, and the exact Current Node, Session, or Script targets for those actions. A surface may omit fields it does not expose, but does not independently recompute lifecycle-sensitive facts.
-- Each request briefly enters Lifecycle Publication, establishes its SQLite read snapshot, pins the matching immutable runtime root, and then releases publication coordination before executing the remainder of the read. The pinned pair remains valid for the request even after newer lifecycle publications occur.
-- Each request is independent. Separate Search, List, Board, and Detail requests may observe different published lifecycle snapshots and live moments.
+- Each request uses one complete published lifecycle view for filtering, sorting, pagination, actions, and response materialization. A newer publication does not change the view already selected for that request.
+- Each request is independent. Separate Search, List, Board, and Detail requests may observe different published lifecycle views.
 - Agreement among List/Search status filtering, status sorting, and returned status is not a product invariant. Each evaluation still follows the authoritative Task-status semantics.
 - Projected actions and targets are hints that may become stale after the response. Each Task-changing operation checks its authoritative state again before changing the Task.
 - If required durable or live facts cannot be read, the request fails instead of returning a partial projection or using a surface-specific fallback.
@@ -561,8 +562,8 @@
 - Task search reuses the authoritative Task status defined above.
 - [Task Search](task-search.md) owns the complete query, matching, ranking, pagination, output, consistency, and compatibility contract.
 - Search returns Task status from the server-owned Task-status projection.
-- Each response uses one Lifecycle Publication capture. The capture pins a compatible SQLite snapshot and immutable runtime root before Search applies lifecycle-sensitive filtering, status projection, sorting, or pagination.
-- A Workflow lifecycle publication that overlaps capture places the whole response on either the prior lifecycle view or the next lifecycle view. Search never combines durable lifecycle facts from one publication with runtime lifecycle facts from another.
+- Each response selects one complete Lifecycle Publication view before Search applies lifecycle-sensitive filtering, status projection, sorting, or pagination.
+- A Workflow lifecycle publication that overlaps the request places the whole response on either the prior lifecycle view or the next lifecycle view. Search never combines durable lifecycle facts from one publication with runtime lifecycle facts from another.
 
 ## Execution Targets And Worktrees
 

@@ -21,6 +21,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/setcomparison"
 	"core/shared/textutil"
 )
 
@@ -599,7 +600,7 @@ func (s *Service) DeleteWorkflow(ctx context.Context, req serverapi.WorkflowDele
 			if err != nil {
 				return err
 			}
-			if !sameWorkflowTaskIDs(taskIDs, currentTaskIDs) {
+			if !setcomparison.Equal(taskIDs, currentTaskIDs) {
 				return errors.New("workflow Task set changed during deletion")
 			}
 			response, err = s.deleteWorkflow(ctx, req)
@@ -607,22 +608,6 @@ func (s *Service) DeleteWorkflow(ctx context.Context, req serverapi.WorkflowDele
 		})
 		return response, err
 	})
-}
-
-func sameWorkflowTaskIDs(left []workflow.TaskID, right []workflow.TaskID) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	seen := make(map[workflow.TaskID]struct{}, len(left))
-	for _, taskID := range left {
-		seen[taskID] = struct{}{}
-	}
-	for _, taskID := range right {
-		if _, exists := seen[taskID]; !exists {
-			return false
-		}
-	}
-	return true
 }
 
 func runWorkflowGraphMutation[T any](ctx context.Context, service *Service, workflowID runtimeids.WorkflowID, mutation func(context.Context) (T, error)) (T, error) {
