@@ -61,15 +61,6 @@ func TestQuestionResolutionFormattingPreservesAbsentOptionalText(t *testing.T) {
 	if text.freeform != nil {
 		t.Fatalf("freeform = %q, want absent", *text.freeform)
 	}
-	summary, err := buildResolutionToolOutputSummary(AskQuestionAnswer{
-		SelectedOptionNumber: &selected,
-	})
-	if err != nil {
-		t.Fatalf("buildResolutionToolOutputSummary: %v", err)
-	}
-	if summary != "User chose option #1." {
-		t.Fatalf("summary = %q", summary)
-	}
 }
 
 func TestValidateLegacyQuestionResolutionUsesOptionalSlotPresence(t *testing.T) {

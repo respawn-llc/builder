@@ -75,18 +75,9 @@ func FailureDiagnostic(scope Scope, operation string, cause error) Diagnostic {
 }
 
 func WorkflowPromptDiagnostic(operation string, promptID string, cause error) Diagnostic {
-	causeText := ""
-	if cause != nil {
-		causeText = cause.Error()
-	}
-	return Diagnostic{
-		Scope: ScopeWorkflowExecution,
-		Fields: fields(map[Field]string{
-			FieldOperation:      operation,
-			FieldPromptID:       promptID,
-			FieldInvariantError: causeText,
-		}),
-	}
+	diagnostic := FailureDiagnostic(ScopeWorkflowExecution, operation, cause)
+	diagnostic.Fields[FieldPromptID] = promptID
+	return diagnostic
 }
 
 type TUIProjectionDiagnosticInput struct {
