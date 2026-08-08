@@ -67,8 +67,18 @@ func newProjectedStaticUIModel(opts ...UIOption) *uiModel {
 }
 
 type recordingPromptControl struct {
+	singlePromptOnlyControl
 	askRequests      chan serverapi.AskAnswerRequest
 	approvalRequests chan serverapi.ApprovalAnswerRequest
+}
+
+type singlePromptOnlyControl struct{}
+
+func (singlePromptOnlyControl) AnswerPromptBatch(
+	context.Context,
+	serverapi.PromptAnswerBatchRequest,
+) (serverapi.PromptAnswerBatchResponse, error) {
+	panic("unexpected prompt batch answer")
 }
 
 func newRecordingPromptControl() *recordingPromptControl {

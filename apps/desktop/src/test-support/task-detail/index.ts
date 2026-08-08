@@ -10,7 +10,13 @@ import {
 
 import { guiTaskCommentAuthor, type JsonObject, type JsonValue, type TaskDetail } from "@/api";
 import { ApiClient } from "@/api/composition";
-import { SidebarContext } from "@/app-facade";
+import {
+  SidebarRootContext,
+  type SidebarPageNavigator,
+  type SidebarRootController,
+  type SidebarMode,
+  type TaskDetailInitialFocus,
+} from "@/app-facade";
 import { TaskDetailSurface } from "@/features/task-detail";
 import { FakeRpcTransport, type FakeRoute } from "../api";
 import { createTestServices, startupRoutes, TestAppProviders, type TestAppServices } from "../app-services";
@@ -356,8 +362,14 @@ export type TaskDetailFixtureOptions = Readonly<{
   attention?: JsonValue;
   asks?: unknown;
   comments?: unknown;
+  initialFocus?: TaskDetailInitialFocus | undefined;
   nativeBridge?: NativeBridge | undefined;
+  navigator?: SidebarPageNavigator | undefined;
+  onMutated?: (() => void) | undefined;
+  openSidebar?: SidebarRootController["open"] | undefined;
   path?: string | undefined;
+  retainedState?: unknown;
+  sidebarMode?: SidebarMode | undefined;
   routes?: readonly FakeRoute[] | undefined;
 }>;
 
@@ -408,10 +420,19 @@ export function mountTaskDetailSurface(
   render(
     createElement(RouterContextProvider, {
       router,
-      children: createElement(SidebarContext.Provider, {
+      children: createElement(SidebarRootContext.Provider, {
         value: createTestSidebarController(),
         children: createElement(TestAppProviders, {
-          children: createElement(TaskDetailSurface, { enabled: true, taskId: "task-1" }),
+          children: createElement(TaskDetailSurface, {
+            enabled: true,
+            initialFocus: options.initialFocus,
+            navigator: options.navigator,
+            onMutated: options.onMutated,
+            openSidebar: options.openSidebar,
+            retainedState: options.retainedState,
+            sidebarMode: options.sidebarMode,
+            taskId: "task-1",
+          }),
           services,
         }),
       }),

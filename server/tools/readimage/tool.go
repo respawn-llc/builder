@@ -308,7 +308,6 @@ func readImageOutsideWorkspaceApprovalFailed(req patchtool.OutsideWorkspaceReque
 
 func readImageOutsideWorkspaceUserDenied(req patchtool.OutsideWorkspaceRequest, approval patchtool.OutsideWorkspaceApproval, rejectionInstruction string) error {
 	path := readImageOutsideWorkspacePath(req)
-	commentary := strings.TrimSpace(approval.Commentary)
 
 	var builder strings.Builder
 	builder.WriteString("view_image path outside workspace rejected by user")
@@ -317,9 +316,9 @@ func readImageOutsideWorkspaceUserDenied(req patchtool.OutsideWorkspaceRequest, 
 		builder.WriteString(path)
 	}
 	builder.WriteString(".")
-	if commentary != "" {
+	if approval.Commentary != nil {
 		builder.WriteString(" User rejected the approval request for this tool call, and said: ")
-		builder.WriteString(strconv.Quote(commentary))
+		builder.WriteString(strconv.Quote(strings.TrimSpace(*approval.Commentary)))
 		builder.WriteString(".")
 	} else {
 		builder.WriteString(" User rejected the approval request for this tool call.")

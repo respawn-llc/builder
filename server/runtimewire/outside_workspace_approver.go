@@ -58,7 +58,7 @@ func (a *OutsideWorkspaceApprover) Approve(ctx context.Context, req patchtool.Ou
 		return patchtool.OutsideWorkspaceApproval{Decision: patchtool.OutsideWorkspaceDecisionDeny}, err
 	}
 
-	approval, err := OutsideWorkspaceApprovalFromResponse(resp)
+	approval, err := OutsideWorkspaceApprovalFromResolution(resp)
 	if err != nil {
 		return patchtool.OutsideWorkspaceApproval{Decision: patchtool.OutsideWorkspaceDecisionDeny}, err
 	}
@@ -70,13 +70,18 @@ func (a *OutsideWorkspaceApprover) Approve(ctx context.Context, req patchtool.Ou
 	return approval, nil
 }
 
-func OutsideWorkspaceApprovalFromResponse(resp askquestion.AskQuestionResponse) (patchtool.OutsideWorkspaceApproval, error) {
-	payload := resp.Approval
-	if payload == nil {
+func OutsideWorkspaceApprovalFromResolution(
+	resolution askquestion.AskQuestionResolution,
+) (patchtool.OutsideWorkspaceApproval, error) {
+	if err := askquestion.ValidateAskQuestionResolutionShape(resolution); err != nil {
+		return patchtool.OutsideWorkspaceApproval{}, fmt.Errorf("validate approval resolution: %w", err)
+	}
+	answer, ok := resolution.(askquestion.AskQuestionApproval)
+	if !ok {
 		return patchtool.OutsideWorkspaceApproval{}, errors.New("missing approval payload")
 	}
-	approval := patchtool.OutsideWorkspaceApproval{Commentary: strings.TrimSpace(payload.Commentary)}
-	switch payload.Decision {
+	approval := patchtool.OutsideWorkspaceApproval{Commentary: answer.Commentary}
+	switch answer.Decision {
 	case askquestion.AskQuestionApprovalDecisionAllowOnce:
 		approval.Decision = patchtool.OutsideWorkspaceDecisionAllowOnce
 	case askquestion.AskQuestionApprovalDecisionAllowSession:
@@ -84,7 +89,7 @@ func OutsideWorkspaceApprovalFromResponse(resp askquestion.AskQuestionResponse) 
 	case askquestion.AskQuestionApprovalDecisionDeny:
 		approval.Decision = patchtool.OutsideWorkspaceDecisionDeny
 	default:
-		return patchtool.OutsideWorkspaceApproval{}, fmt.Errorf("unsupported approval decision %q", payload.Decision)
+		return patchtool.OutsideWorkspaceApproval{}, fmt.Errorf("unsupported approval decision %q", answer.Decision)
 	}
 	return approval, nil
 }

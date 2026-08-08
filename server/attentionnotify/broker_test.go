@@ -143,7 +143,7 @@ func TestQuestionBatchTrackerPublishesOncePerBatchAndResolvesAfterClears(t *test
 	sub := fixture.subscribeDesktop()
 	tracker, batch := fixture.questionBatch()
 	fixture.noError("Prepare", tracker.Prepare(batch))
-	fixture.noError("MarkMaterialized ask-1", tracker.MarkMaterialized(batch.ID, "ask-1"))
+	fixture.noError("MarkMaterialized ask-1", tracker.MarkMaterialized(batch.StepID, "ask-1"))
 	first := fixture.next(sub)
 	if first.Pending.Question.DisplayCount != 2 || len(first.Pending.Question.CurrentUnresolvedAskIDs) != 1 {
 		t.Fatalf("first question state = %+v", first.Pending.Question)
@@ -153,15 +153,15 @@ func TestQuestionBatchTrackerPublishesOncePerBatchAndResolvesAfterClears(t *test
 	}
 	batch.Preview = "later question from agent"
 	fixture.noError("Prepare emitted batch update", tracker.Prepare(batch))
-	fixture.noError("MarkMaterialized ask-2", tracker.MarkMaterialized(batch.ID, "ask-2"))
+	fixture.noError("MarkMaterialized ask-2", tracker.MarkMaterialized(batch.StepID, "ask-2"))
 	fixture.requireNoEvent(sub, "second materialized ask redelivered batch attention")
-	fixture.noError("MarkDurablyCleared ask-1", tracker.MarkDurablyCleared(batch.ID, "ask-1"))
-	fixture.noError("MarkDurablyCleared ask-2", tracker.MarkDurablyCleared(batch.ID, "ask-2"))
+	fixture.noError("MarkDurablyCleared ask-1", tracker.MarkDurablyCleared(batch.StepID, "ask-1"))
+	fixture.noError("MarkDurablyCleared ask-2", tracker.MarkDurablyCleared(batch.StepID, "ask-2"))
 	resolved := fixture.next(sub)
-	if resolved.Type != clientui.AttentionNotificationEventResolved || !attentionNotificationEventIDMatches(resolved, attentionNotificationID(clientui.AttentionNotificationKindQuestion, batch.ID)) {
+	if resolved.Type != clientui.AttentionNotificationEventResolved || !attentionNotificationEventIDMatches(resolved, attentionNotificationID(clientui.AttentionNotificationKindQuestion, batch.StepID)) {
 		t.Fatalf("resolved event = %+v", resolved)
 	}
-	if err := tracker.MarkMaterialized(batch.ID, "ask-1"); !errors.Is(err, ErrBatchNotFound) {
+	if err := tracker.MarkMaterialized(batch.StepID, "ask-1"); !errors.Is(err, ErrBatchNotFound) {
 		t.Fatalf("MarkMaterialized after resolved = %v, want ErrBatchNotFound", err)
 	}
 }
@@ -171,13 +171,13 @@ func TestQuestionBatchTrackerResolvesWithoutRepublishingWhenAskSkipped(t *testin
 	sub := fixture.subscribeDesktop()
 	tracker, batch := fixture.questionBatch()
 	fixture.noError("Prepare", tracker.Prepare(batch))
-	fixture.noError("MarkMaterialized ask-1", tracker.MarkMaterialized(batch.ID, "ask-1"))
+	fixture.noError("MarkMaterialized ask-1", tracker.MarkMaterialized(batch.StepID, "ask-1"))
 	_ = fixture.next(sub)
-	fixture.noError("MarkSkipped ask-2", tracker.MarkSkipped(batch.ID, "ask-2"))
+	fixture.noError("MarkSkipped ask-2", tracker.MarkSkipped(batch.StepID, "ask-2"))
 	fixture.requireNoEvent(sub, "skipped ask published duplicate pending attention")
-	fixture.noError("MarkDurablyCleared ask-1", tracker.MarkDurablyCleared(batch.ID, "ask-1"))
+	fixture.noError("MarkDurablyCleared ask-1", tracker.MarkDurablyCleared(batch.StepID, "ask-1"))
 	resolved := fixture.next(sub)
-	if resolved.Type != clientui.AttentionNotificationEventResolved || !attentionNotificationEventIDMatches(resolved, attentionNotificationID(clientui.AttentionNotificationKindQuestion, batch.ID)) {
+	if resolved.Type != clientui.AttentionNotificationEventResolved || !attentionNotificationEventIDMatches(resolved, attentionNotificationID(clientui.AttentionNotificationKindQuestion, batch.StepID)) {
 		t.Fatalf("resolved event = %+v", resolved)
 	}
 }
@@ -257,7 +257,7 @@ func (f brokerFixture) noError(operation string, err error) {
 
 func (f brokerFixture) questionBatch() (*QuestionBatchTracker, QuestionBatch) {
 	return NewQuestionBatchTracker(f.Broker), QuestionBatch{
-		ID:             "batch-1",
+		StepID:         "22222222-2222-4222-8222-222222222222",
 		Route:          RoutingScope{Kind: RoutingWorkflowTask, TaskID: "task-1"},
 		Target:         testQuestionTarget(),
 		Preview:        "question from agent",

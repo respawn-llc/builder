@@ -13,8 +13,10 @@ import (
 	"core/server/workflow"
 	"core/server/workflowexecution"
 	"core/server/workflowstore"
+	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 func TestCompleteWorkflowTaskReturnsPendingApprovalWithoutReplacingCurrentNode(t *testing.T) {
@@ -187,10 +189,63 @@ func TestAnswerWorkflowTaskQuestionRoutesOnlyTaskAndAskToCurrentNodeExecution(t 
 	}
 	if execution.questionTaskID != workflow.TaskID(request.TaskID) ||
 		execution.questionAskID != request.AskID ||
-		execution.questionResponse.RequestID != request.AskID ||
-		execution.questionResponse.Answer != request.Answer ||
 		execution.questionSubmitErr != nil {
 		t.Fatalf("question dispatch = %+v, want task-scoped exact answer", execution)
+	}
+	answer, ok := execution.questionResolution.(askquestion.AskQuestionAnswer)
+	if !ok || answer.Freeform == nil || *answer.Freeform != request.Answer {
+		t.Fatalf("question resolution = %+v, want canonical exact answer", execution.questionResolution)
+	}
+}
+
+func TestAnswerWorkflowTaskApprovalNormalizesAbsentCommentary(t *testing.T) {
+	execution := &currentNodeCompletionExecutionStub{}
+	service := currentNodeCompletionService(execution)
+	request := serverapi.WorkflowTaskQuestionAnswerRequest{
+		ClientRequestID: "approval-request-1",
+		TaskID:          "task-question",
+		AskID:           "ask-approval",
+		Approval: &serverapi.WorkflowTaskQuestionApprovalAnswer{
+			Decision:   clientui.ApprovalDecisionAllowOnce,
+			Commentary: "  ",
+		},
+	}
+
+	if err := service.AnswerWorkflowTaskQuestion(context.Background(), request); err != nil {
+		t.Fatalf("AnswerWorkflowTaskQuestion: %v", err)
+	}
+	approval, ok := execution.questionResolution.(askquestion.AskQuestionApproval)
+	if !ok {
+		t.Fatalf("approval resolution type = %T, want AskQuestionApproval", execution.questionResolution)
+	}
+	if approval.Commentary != nil {
+		t.Fatalf("approval commentary = %q, want absent", *approval.Commentary)
+	}
+}
+
+func TestAnswerWorkflowTaskApprovalPreservesExactCommentary(t *testing.T) {
+	execution := &currentNodeCompletionExecutionStub{}
+	service := currentNodeCompletionService(execution)
+	commentary := "  approved from Task Detail  "
+	request := serverapi.WorkflowTaskQuestionAnswerRequest{
+		ClientRequestID: "approval-request-exact",
+		TaskID:          "task-question",
+		AskID:           "ask-approval",
+		Approval: &serverapi.WorkflowTaskQuestionApprovalAnswer{
+			Decision:   clientui.ApprovalDecisionAllowOnce,
+			Commentary: commentary,
+		},
+	}
+
+	if err := service.AnswerWorkflowTaskQuestion(context.Background(), request); err != nil {
+		t.Fatalf("AnswerWorkflowTaskQuestion: %v", err)
+	}
+	approval, ok := execution.questionResolution.(askquestion.AskQuestionApproval)
+	if !ok {
+		t.Fatalf("approval resolution type = %T, want AskQuestionApproval", execution.questionResolution)
+	}
+	if approval.Commentary == nil || *approval.Commentary != commentary {
+		t.Fatalf("approval commentary = %v, want exact Task Detail commentary", approval.Commentary)
 	}
 }
 
@@ -243,6 +298,73 @@ func TestAnswerWorkflowTaskQuestionRejectsConflictingIdempotentPayload(t *testin
 	request.Answer = "stop"
 	if err := service.AnswerWorkflowTaskQuestion(context.Background(), request); !errors.Is(err, requestmemo.ErrClientRequestIDReused) {
 		t.Fatalf("conflicting idempotent answer error = %v, want client request id reuse", err)
+	}
+}
+
+func TestAnswerWorkflowTaskQuestionMemoIdentityPreservesExactWhitespaceFields(t *testing.T) {
+	tests := []struct {
+		name   string
+		first  serverapi.WorkflowTaskQuestionAnswerRequest
+		mutate func(*serverapi.WorkflowTaskQuestionAnswerRequest)
+	}{
+		{
+			name: "answer",
+			first: serverapi.WorkflowTaskQuestionAnswerRequest{
+				SelectedOptionNumber: textutil.Value(1),
+			},
+			mutate: func(request *serverapi.WorkflowTaskQuestionAnswerRequest) {
+				request.Answer = "  "
+			},
+		},
+		{
+			name: "freeform answer",
+			first: serverapi.WorkflowTaskQuestionAnswerRequest{
+				SelectedOptionNumber: textutil.Value(1),
+			},
+			mutate: func(request *serverapi.WorkflowTaskQuestionAnswerRequest) {
+				request.FreeformAnswer = "  "
+			},
+		},
+		{
+			name: "error message",
+			first: serverapi.WorkflowTaskQuestionAnswerRequest{
+				SelectedOptionNumber: textutil.Value(1),
+			},
+			mutate: func(request *serverapi.WorkflowTaskQuestionAnswerRequest) {
+				request.ErrorMessage = "  "
+			},
+		},
+		{
+			name: "approval commentary",
+			first: serverapi.WorkflowTaskQuestionAnswerRequest{
+				Approval: &serverapi.WorkflowTaskQuestionApprovalAnswer{
+					Decision: clientui.ApprovalDecisionAllowOnce,
+				},
+			},
+			mutate: func(request *serverapi.WorkflowTaskQuestionAnswerRequest) {
+				request.Approval.Commentary = "  "
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			execution := &currentNodeCompletionExecutionStub{}
+			service := currentNodeCompletionService(execution)
+			request := test.first
+			request.ClientRequestID = "task-question-exact-whitespace"
+			request.TaskID = "task-question"
+			request.AskID = "ask-question"
+			if err := service.AnswerWorkflowTaskQuestion(context.Background(), request); err != nil {
+				t.Fatalf("AnswerWorkflowTaskQuestion first: %v", err)
+			}
+			test.mutate(&request)
+			if err := service.AnswerWorkflowTaskQuestion(context.Background(), request); !errors.Is(err, requestmemo.ErrClientRequestIDReused) {
+				t.Fatalf("AnswerWorkflowTaskQuestion whitespace-distinct replay error = %v, want payload mismatch", err)
+			}
+			if execution.questionAcceptCalls != 1 {
+				t.Fatalf("question acceptance calls = %d, want 1", execution.questionAcceptCalls)
+			}
+		})
 	}
 }
 
@@ -354,7 +476,7 @@ type currentNodeCompletionExecutionStub struct {
 	idleErr             error
 	questionTaskID      workflow.TaskID
 	questionAskID       string
-	questionResponse    askquestion.AskQuestionResponse
+	questionResolution  askquestion.AskQuestionResolution
 	questionSubmitErr   error
 	questionErr         error
 	questionAcceptance  workflowexecution.WorkflowQuestionAcceptance
@@ -524,13 +646,13 @@ func (s *currentNodeCompletionExecutionStub) AcceptWorkflowQuestion(
 	_ context.Context,
 	taskID workflow.TaskID,
 	askID string,
-	response askquestion.AskQuestionResponse,
+	resolution askquestion.AskQuestionResolution,
 	submitErr error,
 ) (workflowexecution.WorkflowQuestionAcceptance, error) {
 	s.questionAcceptCalls++
 	s.questionTaskID = taskID
 	s.questionAskID = askID
-	s.questionResponse = response
+	s.questionResolution = resolution
 	s.questionSubmitErr = submitErr
 	if s.questionErr != nil {
 		return nil, s.questionErr

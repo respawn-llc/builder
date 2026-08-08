@@ -1,6 +1,4 @@
-import { useLocation } from "@tanstack/react-router";
-import type { NativeDialogWindowOptions } from "@app/native-bridge";
-import { PictureInPicture, Plus, X } from "lucide-react";
+import { ArrowLeft, X } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -15,20 +13,14 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 
-import { errorMessage } from "@/api";
-import { ProjectDeleteButton } from "@/features/project-edit";
-import { SidebarInboxNav } from "@/features/home";
-import { WorkflowDeleteButton } from "@/features/workflow-editor";
-import { Button, cx, IconTooltipButton, showStatusToast } from "@/ui";
-import { useAppServices } from "@/app-facade";
-import { useStatusController } from "@/app-facade";
+import { cx, IconTooltipButton } from "@/ui";
 import { SidebarHeaderActionProvider, SidebarHeaderActionSlot } from "@/app-facade";
 import { SidebarDestinationView } from "./sidebarDestinations";
 import { SidebarHeaderOffsetContext } from "@/app-facade";
-import { sidebarPopOutOptions } from "./sidebarPopOut";
 import { sidebarTitle } from "@/app-facade";
 import { sidebarSizePreference } from "@/app-facade";
-import { useSidebar, type SidebarDestination } from "@/app-facade";
+import { useSidebarShell } from "@/app-facade";
+import { useSidebarCurrentPage } from "./sidebarPageContext";
 import {
   sidebarMaxWidthRatio,
   sidebarMinWidthPx,
@@ -38,28 +30,21 @@ import {
   type SidebarResizeBounds,
 } from "@/app-facade";
 
-export function SidebarRouteChangeCloser() {
-  const location = useLocation();
-  const { activeDestination, closeSidebar } = useSidebar();
-  const routeKey = `${location.pathname}?${location.searchStr}`;
-  const previousRouteKeyRef = useRef(routeKey);
-
-  useEffect(() => {
-    if (previousRouteKeyRef.current !== routeKey) {
-      previousRouteKeyRef.current = routeKey;
-      if (activeDestination !== null) {
-        closeSidebar("route_change");
-      }
-    }
-  }, [activeDestination, closeSidebar, routeKey]);
-
-  return null;
-}
-
 export function SidebarHost() {
   const { t } = useTranslation();
-  const { activeDestination, closeSidebar, phase, resizeSidebar, resolveSidebar, sidebarWidthPx } =
-    useSidebar();
+  const currentPage = useSidebarCurrentPage();
+  const {
+    activeDestination,
+    back,
+    backAvailable,
+    canGoBack,
+    close,
+    closeAvailable,
+    phase,
+    resize,
+    sidebarWidthPx,
+    transitionDirection,
+  } = useSidebarShell();
   const sizePreference = useMemo(() => sidebarSizePreference(activeDestination), [activeDestination]);
   const titleId = useId();
   const sidebarRef = useRef<HTMLElement | null>(null);
@@ -84,9 +69,9 @@ export function SidebarHost() {
     (widthPx: number) => {
       const nextBounds = sidebarResizeBounds(sidebarRef.current, sizePreference);
       setResizeBounds(nextBounds);
-      resizeSidebar(resolveSidebarWidth(widthPx, nextBounds));
+      resize(resolveSidebarWidth(widthPx, nextBounds));
     },
-    [resizeSidebar, sizePreference],
+    [resize, sizePreference],
   );
 
   const startResize = useCallback(
@@ -116,9 +101,9 @@ export function SidebarHost() {
         return;
       }
       event.preventDefault();
-      resizeSidebar(resolveSidebarWidth(drag.startWidth + drag.startX - event.clientX, drag.bounds));
+      resize(resolveSidebarWidth(drag.startWidth + drag.startX - event.clientX, drag.bounds));
     },
-    [resizeSidebar],
+    [resize],
   );
 
   const stopResize = useCallback((event: PointerEvent<HTMLDivElement>) => {
@@ -193,7 +178,7 @@ export function SidebarHost() {
     const clampToCurrentBounds = () => {
       const nextBounds = sidebarResizeBounds(sidebarRef.current, sizePreference);
       setResizeBounds(nextBounds);
-      resizeSidebar(resolveSidebarWidth(sidebarWidthPx, nextBounds));
+      resize(resolveSidebarWidth(sidebarWidthPx, nextBounds));
     };
     clampToCurrentBounds();
     const shellElement = sidebarRef.current?.closest('[data-testid="app-shell-content"]') ?? null;
@@ -209,14 +194,16 @@ export function SidebarHost() {
       resizeObserver?.disconnect();
       window.removeEventListener("resize", clampToCurrentBounds);
     };
-  }, [activeDestination, resizeSidebar, sidebarWidthPx, sizePreference]);
+  }, [activeDestination, resize, sidebarWidthPx, sizePreference]);
 
   if (activeDestination === null) {
     return null;
   }
+  const openPage = requireCurrentPage(currentPage);
 
   const title = sidebarTitle(activeDestination, t);
   const mode = activeDestination.mode ?? "shift";
+  const PageBoundary = openPage.Boundary;
 
   return (
     <SidebarHeaderActionProvider>
@@ -267,22 +254,29 @@ export function SidebarHost() {
           className="absolute top-0 right-0 left-0 z-10 grid grid-cols-[auto_minmax(0,auto)_minmax(min-content,1fr)] items-center gap-[var(--space-3)] border-b border-[var(--color-outline)] bg-[var(--color-island-0)] px-[var(--space-4)] py-[var(--space-3)] [backdrop-filter:blur(8px)]"
           ref={headerRef}
         >
-          <IconTooltipButton
-            label={t("app.close")}
-            onClick={() => {
-              closeSidebar("closed");
-            }}
-          >
-            <X aria-hidden="true" size={18} strokeWidth={1.5} />
-          </IconTooltipButton>
+          <div className="flex items-center gap-[var(--space-2)]" data-testid="app-sidebar-leading-controls">
+            <IconTooltipButton
+              disabled={!closeAvailable}
+              label={t("app.close")}
+              onClick={close}
+            >
+              <X aria-hidden="true" size={18} strokeWidth={1.5} />
+            </IconTooltipButton>
+            {canGoBack ? (
+              <IconTooltipButton
+                disabled={!backAvailable}
+                label={t("app.back")}
+                onClick={back}
+              >
+                <ArrowLeft aria-hidden="true" size={18} strokeWidth={1.5} />
+              </IconTooltipButton>
+            ) : null}
+          </div>
           <h2 className="m-0 min-w-0 truncate text-[1.05rem] font-bold" id={titleId}>
             {title}
           </h2>
           <div className="flex min-w-0 items-center justify-end gap-[var(--space-2)] justify-self-end">
-            <SidebarInboxNavSlot destination={activeDestination} />
-            <SidebarPopOutSlot destination={activeDestination} title={title} />
             <SidebarHeaderActionSlot />
-            <SidebarHeaderAccessory destination={activeDestination} />
           </div>
         </header>
         <div
@@ -295,166 +289,32 @@ export function SidebarHost() {
                 : "top-0 overflow-y-auto px-[var(--space-4)] pb-[var(--space-4)] pt-[calc(var(--app-sidebar-header-height)+var(--space-4))]",
           )}
         >
-          <SidebarHeaderOffsetContext.Provider value={headerOffsetPx}>
-            <SidebarDestinationView
-              closeSidebar={closeSidebar}
-              destination={activeDestination}
-              resolveSidebar={resolveSidebar}
-            />
-          </SidebarHeaderOffsetContext.Provider>
+          <PageBoundary>
+            <div
+              className="app-sidebar-page h-full"
+              data-direction={transitionDirection ?? undefined}
+              data-testid="app-sidebar-page"
+            >
+              <SidebarHeaderOffsetContext.Provider value={headerOffsetPx}>
+                <SidebarDestinationView
+                  destination={activeDestination}
+                  navigator={openPage.navigator}
+                  retainedState={openPage.retainedState}
+                />
+              </SidebarHeaderOffsetContext.Provider>
+            </div>
+          </PageBoundary>
         </div>
       </aside>
     </SidebarHeaderActionProvider>
   );
 }
 
-function SidebarInboxNavSlot({ destination }: Readonly<{ destination: SidebarDestination }>) {
-  if (destination.kind !== "taskDetail" || destination.inboxNav !== true) {
-    return null;
+function requireCurrentPage(page: ReturnType<typeof useSidebarCurrentPage>) {
+  if (page === null) {
+    throw new Error("An open sidebar requires a current page.");
   }
-  return <SidebarInboxNav destination={destination} />;
-}
-
-function SidebarPopOutSlot({
-  destination,
-  title,
-}: Readonly<{ destination: SidebarDestination; title: string }>) {
-  const options = sidebarPopOutOptions(destination, title);
-  if (options === null) {
-    return null;
-  }
-  return <SidebarPopOutButton options={options} />;
-}
-
-function SidebarPopOutButton({ options }: Readonly<{ options: NativeDialogWindowOptions }>) {
-  const { t } = useTranslation();
-  const { nativeBridge } = useAppServices();
-  const { closeSidebar } = useSidebar();
-  const { push } = useStatusController();
-  if (!nativeBridge.capabilities.dialogWindows) {
-    return null;
-  }
-  return (
-    <IconTooltipButton
-      label={t("app.popOut")}
-      onClick={() => {
-        void nativeBridge.dialogs
-          .openWindow(options)
-          .then(() => {
-            closeSidebar("closed");
-          })
-          .catch((error: unknown) => {
-            push({
-              id: "sidebar-popout-error",
-              tone: "danger",
-              title: t("app.popOutError"),
-              body: errorMessage(error),
-            });
-          });
-      }}
-    >
-      <PictureInPicture aria-hidden="true" size={18} strokeWidth={1.5} />
-    </IconTooltipButton>
-  );
-}
-
-function SidebarHeaderAccessory({ destination }: Readonly<{ destination: SidebarDestination }>) {
-  if (destination.kind === "linkWorkflow" && destination.creating !== true) {
-    return <LinkWorkflowCreateHeaderButton destination={destination} />;
-  }
-  if (destination.kind === "projectEdit") {
-    return <ProjectDeleteButton projectID={destination.projectID} />;
-  }
-  if (destination.kind === "workflowInspect") {
-    if (destination.selection.kind === "workflow") {
-      return <WorkflowDeleteButton workflowID={destination.workflowID} />;
-    }
-    if (destination.selection.kind === "node") {
-      return <WorkflowEntityIDHeader entityID={destination.selection.nodeID} entityKind="node" />;
-    }
-    if (destination.selection.kind === "edge") {
-      return <WorkflowEntityIDHeader entityID={destination.selection.edgeID} entityKind="edge" />;
-    }
-  }
-  return null;
-}
-
-function LinkWorkflowCreateHeaderButton({
-  destination,
-}: Readonly<{ destination: Extract<SidebarDestination, { kind: "linkWorkflow" }> }>) {
-  const { t } = useTranslation();
-  const { openSidebar } = useSidebar();
-  return (
-    <Button
-      aria-label={t("workflowLibrary.newWorkflow")}
-      className="justify-self-end"
-      onClick={() => {
-        void openSidebar({ ...destination, creating: true });
-      }}
-      size="icon"
-      title={t("workflowLibrary.newWorkflow")}
-      variant="ghost"
-    >
-      <Plus aria-hidden="true" size={18} strokeWidth={1.6} />
-    </Button>
-  );
-}
-
-function WorkflowEntityIDHeader({
-  entityID,
-  entityKind,
-}: Readonly<{ entityID: string; entityKind: "edge" | "node" }>) {
-  const { t } = useTranslation();
-  const { nativeBridge } = useAppServices();
-  const copyLabel =
-    entityKind === "node"
-      ? t("workflowEditor.copyNodeId", { id: entityID })
-      : t("workflowEditor.copyEdgeId", { id: entityID });
-  const successMessage =
-    entityKind === "node" ? t("workflowEditor.nodeIdCopied") : t("workflowEditor.edgeIdCopied");
-  const failureMessage =
-    entityKind === "node" ? t("workflowEditor.nodeIdCopyFailed") : t("workflowEditor.edgeIdCopyFailed");
-  const toastPrefix = entityKind === "node" ? "workflow-node-id" : "workflow-edge-id";
-  return (
-    <button
-      aria-label={copyLabel}
-      className="inline-grid min-w-0 max-w-full justify-self-end rounded-[var(--radius-s)] border border-transparent bg-transparent px-[var(--space-1)] py-[2px] font-mono text-xs text-[var(--color-muted)] outline-none hover:border-[var(--color-outline)] hover:bg-[var(--color-island-1)] focus-visible:border-[var(--color-primary)]"
-      onClick={() => {
-        void copyWorkflowEntityID(entityID, nativeBridge)
-          .then(() => {
-            showStatusToast({
-              id: `${toastPrefix}-copied-${entityID}`,
-              title: successMessage,
-              tone: "success",
-            });
-          })
-          .catch(() => {
-            showStatusToast({
-              id: `${toastPrefix}-copy-failed-${entityID}`,
-              title: failureMessage,
-              tone: "danger",
-            });
-          });
-      }}
-      title={entityID}
-      type="button"
-    >
-      <span className="block max-w-full overflow-hidden text-ellipsis whitespace-nowrap text-right">
-        {entityID}
-      </span>
-    </button>
-  );
-}
-
-async function copyWorkflowEntityID(
-  value: string,
-  nativeBridge: ReturnType<typeof useAppServices>["nativeBridge"],
-): Promise<void> {
-  if (nativeBridge.capabilities.clipboard.writeText) {
-    await nativeBridge.clipboard.writeText(value);
-    return;
-  }
-  await navigator.clipboard.writeText(value);
+  return page;
 }
 
 type SidebarStyle = CSSProperties &

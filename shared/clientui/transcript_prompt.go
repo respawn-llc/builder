@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"core/shared/runtimeids"
+	"core/shared/sessioncontract"
 )
 
 type PromptID string
@@ -126,12 +127,8 @@ func (p TranscriptPrompt) validateApproval() error {
 	}
 	seen := make(map[ApprovalDecision]struct{}, len(p.ApprovalOptions))
 	for index, decision := range p.ApprovalOptions {
-		switch decision {
-		case ApprovalDecisionAllowOnce,
-			ApprovalDecisionAllowSession,
-			ApprovalDecisionDeny:
-		default:
-			return fmt.Errorf("pending prompt approval option %d has unknown decision %q", index, decision)
+		if err := sessioncontract.ValidatePromptApprovalDecision(decision); err != nil {
+			return fmt.Errorf("pending prompt approval option %d: %w", index, err)
 		}
 		if _, exists := seen[decision]; exists {
 			return fmt.Errorf("pending prompt approval decision %q is duplicated", decision)
@@ -155,8 +152,12 @@ func (p *ToolProvenance) Validate() error {
 }
 
 func (id PromptID) Validate() error {
-	if strings.TrimSpace(string(id)) == "" {
+	raw := string(id)
+	if strings.TrimSpace(raw) == "" {
 		return fmt.Errorf("pending prompt id is required")
+	}
+	if strings.TrimSpace(raw) != raw {
+		return fmt.Errorf("pending prompt id must not have leading or trailing whitespace")
 	}
 	return nil
 }

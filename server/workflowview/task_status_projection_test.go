@@ -133,7 +133,7 @@ func (r *controllerBackedTaskStatusRunner) StartCurrentNode(
 			RunningPublication: currentNodeRunningPublicationForTest(controller),
 			Runner: func(ctx context.Context, scope sessionruntime.ExecutionScope, _ sessionruntime.AgentRuntimeBridge) error {
 				if config.request != nil {
-					_, err := r.authority.AwaitPromptResponse(ctx, scope.ID(), *config.request)
+					_, err := r.authority.AwaitPromptResolution(ctx, scope.ID(), *config.request)
 					return err
 				}
 				select {

@@ -923,6 +923,17 @@ func (c *Remote) AnswerAsk(ctx context.Context, req serverapi.AskAnswerRequest) 
 	return c.call(ctx, protocol.MethodAskAnswer, req, nil)
 }
 
+func (c *Remote) AnswerPromptBatch(ctx context.Context, req serverapi.PromptAnswerBatchRequest) (serverapi.PromptAnswerBatchResponse, error) {
+	response, err := callControlRPC[serverapi.PromptAnswerBatchRequest, serverapi.PromptAnswerBatchResponse](c, ctx, protocol.MethodPromptAnswerBatch, req)
+	if err != nil {
+		return serverapi.PromptAnswerBatchResponse{}, err
+	}
+	if err := serverapi.ValidatePromptAnswerBatchResponse(req, response); err != nil {
+		return serverapi.PromptAnswerBatchResponse{}, fmt.Errorf("validate prompt answer batch response: %w", err)
+	}
+	return response, nil
+}
+
 func (c *Remote) ListPendingApprovalsBySession(ctx context.Context, req serverapi.ApprovalListPendingBySessionRequest) (serverapi.ApprovalListPendingBySessionResponse, error) {
 	var resp serverapi.ApprovalListPendingBySessionResponse
 	return resp, c.call(ctx, protocol.MethodApprovalListPending, req, &resp)

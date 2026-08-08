@@ -26,6 +26,19 @@ export class RpcError extends Error {
   }
 }
 
+export function isTaskMissingError(error: unknown): boolean {
+  return error instanceof RpcError && error.code === rpcErrorCodes.workflowTaskNotFound;
+}
+
+const projectMissingDataSchema = z.looseObject({ reason: z.literal("project_not_found") });
+export function isProjectMissingError(error: unknown): boolean {
+  return (
+    error instanceof RpcError &&
+    (error.code === rpcErrorCodes.projectNotFound ||
+      projectMissingDataSchema.safeParse(error.data).success)
+  );
+}
+
 export type TaskSearchErrorReason = "normalized_too_short";
 
 export class TaskSearchError extends RpcError {

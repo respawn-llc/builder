@@ -310,6 +310,10 @@ type currentNodeViewQuestion struct {
 	handle    sessionruntime.ExecutionHandle
 }
 
+func workflowViewQuestionAnswer(answer string) tools.AskQuestionAnswer {
+	return tools.AskQuestionAnswer{Freeform: &answer}
+}
+
 func newCurrentNodeViewFixture(t *testing.T, requiresApproval bool) currentNodeViewFixture {
 	t.Helper()
 	home := t.TempDir()
@@ -650,7 +654,7 @@ func (f currentNodeViewFixture) startCurrentNodeQuestionOnAuthority(
 		Workflow:   &lease,
 		Resource:   sessionruntime.OpenAgentResource{},
 		Runner: func(ctx context.Context, scope sessionruntime.ExecutionScope, _ sessionruntime.AgentRuntimeBridge) error {
-			_, awaitErr := authority.AwaitPromptResponse(ctx, scope.ID(), request)
+			_, awaitErr := authority.AwaitPromptResolution(ctx, scope.ID(), request)
 			return awaitErr
 		},
 	})
@@ -688,11 +692,13 @@ func (workflowViewRunningPublicationStub) PublishWorkflowRunning(
 
 func (q currentNodeViewQuestion) resolve(t *testing.T, ctx context.Context) {
 	t.Helper()
-	if err := q.authority.SubmitPromptResponse(q.sessionID, tools.AskQuestionResponse{
-		RequestID: q.request.ID,
-		Answer:    "Yes",
-	}, nil); err != nil {
-		t.Fatalf("SubmitPromptResponse: %v", err)
+	if err := q.authority.SubmitPromptResolution(
+		q.sessionID,
+		q.request.ID,
+		workflowViewQuestionAnswer("Yes"),
+		nil,
+	); err != nil {
+		t.Fatalf("SubmitPromptResolution: %v", err)
 	}
 	if _, err := q.handle.Wait(ctx); err != nil {
 		t.Fatalf("wait Question execution: %v", err)
