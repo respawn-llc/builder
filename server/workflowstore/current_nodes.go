@@ -414,18 +414,7 @@ func insertTaskCurrentNode(ctx context.Context, q *sqlitegen.Queries, currentNod
 	if err := insertTaskCurrentNodeWithKind(ctx, q, currentNode, workflow.NodeKind(node.Kind)); err != nil {
 		return err
 	}
-	if currentNode.SessionID == nil {
-		return nil
-	}
-	association := TaskSessionAssociationRequest{
-		SessionID:    *currentNode.SessionID,
-		CurrentNode:  currentNode.Reference,
-		AssociatedAt: time.Now().UTC(),
-	}
-	if err := bindSessionToTask(ctx, q, association); err != nil {
-		return err
-	}
-	return upsertTaskSessionAssociation(ctx, q, association)
+	return nil
 }
 
 func (s *Store) CurrentNodeKind(
@@ -468,7 +457,21 @@ func insertTaskCurrentNodeWithKind(
 	if err != nil {
 		return err
 	}
-	return q.InsertTaskCurrentNode(ctx, params)
+	if err := q.InsertTaskCurrentNode(ctx, params); err != nil {
+		return err
+	}
+	if currentNode.SessionID == nil {
+		return nil
+	}
+	association := TaskSessionAssociationRequest{
+		SessionID:    *currentNode.SessionID,
+		CurrentNode:  currentNode.Reference,
+		AssociatedAt: time.Now().UTC(),
+	}
+	if err := bindSessionToTask(ctx, q, association); err != nil {
+		return err
+	}
+	return upsertTaskSessionAssociation(ctx, q, association)
 }
 
 func deleteTaskCurrentNode(ctx context.Context, q *sqlitegen.Queries, reference workflow.CurrentNodeReference) (int64, error) {

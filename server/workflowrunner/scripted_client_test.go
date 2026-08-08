@@ -1,6 +1,9 @@
 package workflowrunner
 
 import (
+	"context"
+	"sync"
+
 	"core/internal/testharness/scriptedllm"
 	"core/server/llm"
 )
@@ -9,6 +12,63 @@ var ErrScriptedRuntime = scriptedllm.ErrScriptExhausted
 
 type ScriptedRuntimeStep = scriptedllm.Step
 type ScriptedClient = scriptedllm.LegacyClient
+
+type compactingScriptedClient struct {
+	base        *ScriptedClient
+	mu          sync.Mutex
+	responses   []llm.CompactionResponse
+	compactions []llm.CompactionRequest
+}
+
+func NewCompactingScriptedClient(
+	caps llm.ProviderCapabilities,
+	compactions []llm.CompactionResponse,
+	steps ...ScriptedRuntimeStep,
+) *compactingScriptedClient {
+	return &compactingScriptedClient{
+		base:      NewScriptedClient(caps, steps...),
+		responses: append([]llm.CompactionResponse(nil), compactions...),
+	}
+}
+
+func (c *compactingScriptedClient) Generate(ctx context.Context, request llm.Request) (llm.Response, error) {
+	return c.base.Generate(ctx, request)
+}
+
+func (c *compactingScriptedClient) ProviderCapabilities(ctx context.Context) (llm.ProviderCapabilities, error) {
+	return c.base.ProviderCapabilities(ctx)
+}
+
+func (c *compactingScriptedClient) Requests() []llm.Request {
+	return c.base.Requests()
+}
+
+func (c *compactingScriptedClient) Compact(ctx context.Context, request llm.CompactionRequest) (llm.CompactionResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return llm.CompactionResponse{}, err
+	}
+	c.mu.Lock()
+	c.compactions = append(c.compactions, request)
+	if len(c.responses) == 0 {
+		c.mu.Unlock()
+		return llm.CompactionResponse{}, ErrScriptedRuntime
+	}
+	response := c.responses[0]
+	c.responses = c.responses[1:]
+	c.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return llm.CompactionResponse{}, err
+	}
+	response.TrimmedItemsCount = new(int)
+	*response.TrimmedItemsCount = len(request.InputItems)
+	return response, nil
+}
+
+func (c *compactingScriptedClient) CompactionCalls() []llm.CompactionRequest {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]llm.CompactionRequest(nil), c.compactions...)
+}
 
 func NewScriptedClient(caps llm.ProviderCapabilities, steps ...ScriptedRuntimeStep) *ScriptedClient {
 	return scriptedllm.NewLegacyOnlyClient(caps, steps...)

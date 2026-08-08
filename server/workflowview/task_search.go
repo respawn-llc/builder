@@ -155,6 +155,7 @@ func (s *TaskSearch) queryPage(ctx context.Context, queries *sqlitegen.Queries, 
 		OffsetRows:          int64(offset),
 		LimitRows:           int64(req.PageSize + 1),
 		LiveTaskStatesJson:  liveTaskStatesJSON,
+		ShortIDCaseMode:     int64(tasksearchtext.LiteralCaseInsensitive),
 	})
 }
 
@@ -170,14 +171,19 @@ func taskSearchOptionalJSON[T any](values []T) (sql.NullString, error) {
 }
 
 func (s *TaskSearch) materializeGroups(ctx context.Context, queries *sqlitegen.Queries, req serverapi.TaskSearchRequest, rows []sqlitegen.ListTaskSearchPageDescriptorsRow) ([]serverapi.TaskSearchGroup, error) {
-	var matcher tasksearchtext.LiteralMatcher
+	var textMatcher tasksearchtext.LiteralMatcher
+	var shortIDMatcher tasksearchtext.LiteralMatcher
 	if req.Mode == serverapi.TaskSearchModeLiteral {
 		mode := tasksearchtext.LiteralCaseInsensitive
 		if req.CaseSensitive {
 			mode = tasksearchtext.LiteralCaseSensitive
 		}
 		var err error
-		matcher, err = tasksearchtext.NewLiteralMatcher(req.Query, mode)
+		textMatcher, err = tasksearchtext.NewLiteralMatcher(req.Query, mode)
+		if err != nil {
+			return nil, err
+		}
+		shortIDMatcher, err = tasksearchtext.NewLiteralMatcher(req.Query, tasksearchtext.LiteralCaseInsensitive)
 		if err != nil {
 			return nil, err
 		}
@@ -223,7 +229,7 @@ func (s *TaskSearch) materializeGroups(ctx context.Context, queries *sqlitegen.Q
 				Hits:          []serverapi.TaskSearchHit{},
 			})
 		}
-		hit, err := taskSearchMaterializeHit(ctx, queries, req, matcher, row)
+		hit, err := taskSearchMaterializeHit(ctx, queries, req, textMatcher, shortIDMatcher, row)
 		if err != nil {
 			return nil, err
 		}
@@ -232,7 +238,14 @@ func (s *TaskSearch) materializeGroups(ctx context.Context, queries *sqlitegen.Q
 	return groups, nil
 }
 
-func taskSearchMaterializeHit(ctx context.Context, queries *sqlitegen.Queries, req serverapi.TaskSearchRequest, matcher tasksearchtext.LiteralMatcher, row sqlitegen.ListTaskSearchPageDescriptorsRow) (serverapi.TaskSearchHit, error) {
+func taskSearchMaterializeHit(
+	ctx context.Context,
+	queries *sqlitegen.Queries,
+	req serverapi.TaskSearchRequest,
+	textMatcher tasksearchtext.LiteralMatcher,
+	shortIDMatcher tasksearchtext.LiteralMatcher,
+	row sqlitegen.ListTaskSearchPageDescriptorsRow,
+) (serverapi.TaskSearchHit, error) {
 	apiSource := serverapi.TaskSearchSource{Kind: serverapi.TaskSearchSourceKind(row.SourceKind)}
 	if row.CommentID.Valid {
 		value := row.CommentID.String
@@ -252,7 +265,16 @@ func taskSearchMaterializeHit(ctx context.Context, queries *sqlitegen.Queries, r
 		if err != nil {
 			return serverapi.TaskSearchHit{}, err
 		}
-		literal, found := matcher.NthHit(sourceText, int(row.SourceOrdinal), req.Context)
+		matcher := textMatcher
+		sourceOrdinal := int(row.SourceOrdinal)
+		if row.SourceKind == string(serverapi.TaskSearchSourceKindShortID) {
+			if sourceOrdinal != 1 || sourceText != row.ShortID {
+				return serverapi.TaskSearchHit{}, errors.New("task search Short ID source is inconsistent")
+			}
+			matcher = shortIDMatcher
+			sourceText = row.ShortID
+		}
+		literal, found := matcher.NthHit(sourceText, sourceOrdinal, req.Context)
 		if !found {
 			return serverapi.TaskSearchHit{}, errors.New("task search selected literal occurrence is absent")
 		}
@@ -264,6 +286,9 @@ func taskSearchMaterializeHit(ctx context.Context, queries *sqlitegen.Queries, r
 			RightTruncated: literal.RightTruncated,
 		}
 	case serverapi.TaskSearchModeFTS5:
+		if row.SourceKind == string(serverapi.TaskSearchSourceKindShortID) {
+			return serverapi.TaskSearchHit{}, errors.New("task search Short ID source requires literal mode")
+		}
 		snippet, err := taskSearchSQLiteString(row.RawSnippet, "FTS5 snippet")
 		if err != nil {
 			return serverapi.TaskSearchHit{}, err
@@ -277,6 +302,8 @@ func taskSearchMaterializeHit(ctx context.Context, queries *sqlitegen.Queries, r
 
 func taskSearchSourceText(source sqlitegen.GetTaskSearchSourceByDocumentIDRow) (string, error) {
 	switch source.SourceKind {
+	case string(serverapi.TaskSearchSourceKindShortID):
+		return taskSearchSQLiteString(source.ShortID, "Short ID")
 	case string(serverapi.TaskSearchSourceKindTitle):
 		return taskSearchSQLiteString(source.Title, "title")
 	case string(serverapi.TaskSearchSourceKindBody):

@@ -25,6 +25,7 @@ type API struct {
 	authority                *Authority
 	runtimeClientFactory     runtimewire.RuntimeClientFactory
 	retainedWorkflow         RetainedWorkflowSessionActivator
+	managedWorktreeBaseDir   string
 }
 
 type RetainedWorkflowSessionActivator interface {
@@ -39,6 +40,7 @@ type APIOptions struct {
 	RuntimeClientFactory       runtimewire.RuntimeClientFactory
 	RecoveredWarningProvider   func() (string, bool, error)
 	RetainedWorkflowActivation RetainedWorkflowSessionActivator
+	ManagedWorktreeBaseDir     string
 }
 
 func NewAPI(metadataStore *metadata.Store, fastModeState *runtime.FastModeState, authority *Authority, options APIOptions) *API {
@@ -49,6 +51,7 @@ func NewAPI(metadataStore *metadata.Store, fastModeState *runtime.FastModeState,
 		authority:                authority,
 		runtimeClientFactory:     options.RuntimeClientFactory,
 		retainedWorkflow:         options.RetainedWorkflowActivation,
+		managedWorktreeBaseDir:   options.ManagedWorktreeBaseDir,
 	}
 }
 
@@ -140,6 +143,25 @@ func (s *API) interactiveRuntimePlan(ctx context.Context, req serverapi.SessionR
 	if err := context.Cause(ctx); err != nil {
 		return AgentRuntimePlan{}, err
 	}
+	projectWorkspaceBoundary, err := s.metadataStore.ResolveSessionProjectWorkspaceBoundary(ctx, sessionID)
+	if err != nil {
+		return AgentRuntimePlan{}, err
+	}
+	managedWorktreeRoots, err := s.metadataStore.ListManagedWorktreeRoots(ctx)
+	if err != nil {
+		return AgentRuntimePlan{}, err
+	}
+	executionRoot := target.WorkspaceRoot
+	var currentWorktreeRoot *string
+	if target.Worktree != nil {
+		executionRoot = target.Worktree.Root
+		root := target.Worktree.Root
+		currentWorktreeRoot = &root
+	}
+	filesystemContext, err := runtimewire.NewFilesystemContext(target.EffectiveWorkdir, executionRoot, projectWorkspaceBoundary)
+	if err != nil {
+		return AgentRuntimePlan{}, err
+	}
 	enabledTools, err := parseToolIDs(req.EnabledToolIDs)
 	if err != nil {
 		return AgentRuntimePlan{}, err
@@ -161,28 +183,22 @@ func (s *API) interactiveRuntimePlan(ctx context.Context, req serverapi.SessionR
 	for _, line := range runlog.FormatConfigSourceLines(req.Source.Sources) {
 		startLogLines = append(startLogLines, "config.source "+line)
 	}
-	var currentWorktreeRoot *string
-	if target.Worktree != nil {
-		root := target.Worktree.Root
-		currentWorktreeRoot = &root
-	}
 	var managedWorktreePathContext *tools.ManagedWorktreePathContext
-	if strings.TrimSpace(req.ActiveSettings.Worktrees.BaseDir) != "" {
-		managedWorktreePathContext, err = tools.NewManagedWorktreePathContext(req.ActiveSettings.Worktrees.BaseDir, currentWorktreeRoot)
+	if strings.TrimSpace(s.managedWorktreeBaseDir) != "" {
+		managedWorktreePathContext, err = tools.NewManagedWorktreePathContext(s.managedWorktreeBaseDir, currentWorktreeRoot, managedWorktreeRoots)
 		if err != nil {
 			return AgentRuntimePlan{}, err
 		}
 	}
 	return NewAgentRuntimePlan(AgentRuntimePlanOptions{
-		Settings:                   req.ActiveSettings,
-		EnabledTools:               enabledTools,
-		Workdir:                    target.EffectiveWorkdir,
-		ManagedWorktreePathContext: managedWorktreePathContext,
-		Sources:                    req.Source.Sources,
-		FastMode:                   s.fastModeState,
-		ClientFactory:              s.runtimeClientFactory,
-		StartLogLines:              startLogLines,
-		RecoveredWarningProvider:   s.recoveredWarningProvider,
+		Settings:                 req.ActiveSettings,
+		EnabledTools:             enabledTools,
+		FilesystemContext:        tools.FilesystemContext{Access: filesystemContext.Access, ManagedWorktree: managedWorktreePathContext},
+		Sources:                  req.Source.Sources,
+		FastMode:                 s.fastModeState,
+		ClientFactory:            s.runtimeClientFactory,
+		StartLogLines:            startLogLines,
+		RecoveredWarningProvider: s.recoveredWarningProvider,
 	})
 }
 

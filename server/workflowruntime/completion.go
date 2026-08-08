@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"core/server/llm"
+	"core/server/session"
 	"core/server/workflow"
 	"core/server/workflowstore"
 	"core/shared/config"
@@ -159,6 +160,28 @@ type CompletionObservationResult struct {
 
 type ResultFinalizer interface {
 	FinalizeCurrentNodeResult(context.Context, runtimeids.ExecutionScopeID, error) error
+}
+
+// PostCompletionCompactionResult preserves a durable history-replacement
+// receipt separately from operational work that ran after that replacement.
+type PostCompletionCompactionResult struct {
+	CommitReceipt session.CommitReceipt
+	Diagnostic    error
+}
+
+// PostCompletionRuntime is the live runtime authority supplied by the Agent
+// runner to the workflow controller after the completed turn returns.
+type PostCompletionRuntime struct {
+	UsedTokens          int
+	PreCompactionTokens int
+	CompactionMode      string
+	Compact             func(context.Context) PostCompletionCompactionResult
+}
+
+// PostTurnFinalizer owns the process-local completion fence and releases held
+// successors only after post-turn finalization has completed.
+type PostTurnFinalizer interface {
+	FinalizeCurrentNodePostTurn(context.Context, runtimeids.ExecutionScopeID, runtimeids.SessionID, PostCompletionRuntime) error
 }
 
 type ViolationKind string

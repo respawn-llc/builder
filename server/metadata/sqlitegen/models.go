@@ -309,6 +309,7 @@ type TaskRecord struct {
 
 type TaskSearchContent struct {
 	DocumentID int64
+	ShortID    interface{}
 	Title      interface{}
 	Body       interface{}
 	Comment    interface{}
@@ -327,6 +328,10 @@ type TaskSearchFt struct {
 	Comment       string
 	Rank          sql.NullFloat64
 	TaskSearchFts sql.NullString
+}
+
+type TaskSearchShortIDFt struct {
+	ShortID string
 }
 
 type Workflow struct {

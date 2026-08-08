@@ -1617,7 +1617,11 @@ func (c *CurrentNodeController) recoverCurrentNodeStartFailures(
 		if closed {
 			return nil
 		}
-		return c.interruptCurrentNodeStartFailures(ctx, starts, admitted, cause)
+		if err := c.interruptCurrentNodeStartFailures(ctx, starts, admitted, cause); err != nil {
+			return err
+		}
+		c.discardRuns(currentNodeRunKeys(starts), stopReason, cause)
+		return nil
 	})
 }
 
@@ -1761,7 +1765,7 @@ func (c *CurrentNodeController) currentNodeExplicitStarts(
 			return nil, fmt.Errorf("resolve explicit current node kind at index %d: %w", index, err)
 		}
 		run := newCurrentNodeRun(currentNode.Reference, nodeKind, currentNodeAdmissionExplicitOverride)
-		run.taskPromptDelivery = workflowruntime.TaskPromptDeliveryResume
+		run.taskPromptDelivery = workflowruntime.TaskPromptDeliveryAssignment
 		starts = append(starts, *run)
 	}
 	return starts, nil

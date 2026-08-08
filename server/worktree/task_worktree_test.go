@@ -3,6 +3,7 @@ package worktree
 import (
 	"context"
 	"core/internal/testharness/workflowtest"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -13,9 +14,11 @@ import (
 	"time"
 
 	"core/internal/testharness/testsetup"
+	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
 	"core/server/workflowstore"
+	"core/shared/config"
 	"core/shared/serverapi"
 )
 
@@ -34,6 +37,36 @@ func taskWorktreeBranch(entry serverapi.WorktreeTopologyEntry) string {
 	return *entry.Registered.Git.BranchName
 }
 
+func createExistingOutsideManagedWorktree(t *testing.T, env *serviceTestEnv, branch string) (string, GitRevision, string) {
+	t.Helper()
+	root := filepath.Join(t.TempDir(), "legacy")
+	runGit(t, env.workspaceRoot, "worktree", "add", "-b", branch, root, "HEAD")
+	canonicalRoot, err := config.CanonicalWorkspaceRoot(root)
+	if err != nil {
+		t.Fatalf("CanonicalWorkspaceRoot: %v", err)
+	}
+	worktrees, err := env.service.git.List(env.ctx, env.workspaceRoot)
+	if err != nil {
+		t.Fatalf("git.List: %v", err)
+	}
+	for _, worktree := range worktrees {
+		if worktree.Root != canonicalRoot {
+			continue
+		}
+		head, err := env.service.git.ResolveHEAD(env.ctx, canonicalRoot)
+		if err != nil {
+			t.Fatalf("ResolveHEAD: %v", err)
+		}
+		gitMetadata, err := marshalGitMetadata(worktree)
+		if err != nil {
+			t.Fatalf("marshalGitMetadata: %v", err)
+		}
+		return canonicalRoot, head, gitMetadata
+	}
+	t.Fatalf("created outside managed Worktree %q was not listed", canonicalRoot)
+	return "", GitRevision{}, ""
+}
+
 func TestMaterializeInitialTaskWorktreeRequiresResolvedCommit(t *testing.T) {
 	env := newServiceTestEnv(t)
 	task, _ := createTaskWorktreeTestTask(t, env)
@@ -50,6 +83,170 @@ func TestMaterializeInitialTaskWorktreeRequiresResolvedCommit(t *testing.T) {
 	}
 	if row.ManagedWorktreeID.Valid {
 		t.Fatalf("task managed worktree id = %+v, want no provisional candidate", row.ManagedWorktreeID)
+	}
+}
+
+func TestMaterializeInitialTaskWorktreeRejectsExistingOutsideNamespaceRoot(t *testing.T) {
+	env := newServiceTestEnv(t)
+	task, _ := createTaskWorktreeTestTask(t, env)
+	legacyRoot, resolved, gitMetadata := createExistingOutsideManagedWorktree(t, env, "legacy-initial")
+	creationBase := resolved.CommitOID
+	if err := env.store.UpsertWorktreeRecord(env.ctx, metadata.WorktreeRecord{
+		ID: "legacy-initial-record", WorkspaceID: env.binding.WorkspaceID, CanonicalRoot: legacyRoot,
+		Managed: true, CreatedBranch: true, GitMetadataJSON: gitMetadata,
+		CreationBaseCommitOID: &creationBase,
+	}); err != nil {
+		t.Fatalf("UpsertWorktreeRecord: %v", err)
+	}
+	if _, err := env.store.Queries().UpdateTaskManagedWorktree(env.ctx, sqlitegen.UpdateTaskManagedWorktreeParams{
+		ID:                string(task.ID),
+		ManagedWorktreeID: sql.NullString{String: "legacy-initial-record", Valid: true},
+		UpdatedAtUnixMs:   time.Now().UTC().UnixMilli(),
+	}); err != nil {
+		t.Fatalf("UpdateTaskManagedWorktree: %v", err)
+	}
+
+	_, err := env.service.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{
+		TaskID:         task.ID,
+		ResolvedTarget: resolved,
+	})
+	if err == nil {
+		t.Fatal("MaterializeInitialTaskWorktree accepted an existing root outside the server namespace")
+	}
+}
+
+func TestRestoreLockedTaskWorktreeRejectsExplicitRootOverlappingSourceWorkspace(t *testing.T) {
+	env := newServiceTestEnv(t)
+	task, materialized, _ := materializeAndLockTaskWorktree(t, env)
+	worktreeID := taskWorktreeID(materialized.Worktree)
+	record, err := env.store.GetWorktreeRecordByID(env.ctx, worktreeID)
+	if err != nil {
+		t.Fatalf("GetWorktreeRecordByID: %v", err)
+	}
+	originalRoot := record.CanonicalRoot
+	record.CanonicalRoot = filepath.Join(env.workspaceRoot, "nested")
+	record.UpdatedAt = time.Now().UTC()
+	canonicalRoot, err := config.CanonicalWorkspaceRoot(record.CanonicalRoot)
+	if err != nil {
+		t.Fatalf("CanonicalWorkspaceRoot overlapping root: %v", err)
+	}
+	if _, err := env.store.Queries().UpdateWorktreeCanonicalRoot(env.ctx, sqlitegen.UpdateWorktreeCanonicalRootParams{
+		CanonicalRootPath: canonicalRoot,
+		UpdatedAtUnixMs:   record.UpdatedAt.UnixMilli(),
+		ID:                record.ID,
+	}); err != nil {
+		t.Fatalf("UpdateWorktreeCanonicalRoot overlapping root: %v", err)
+	}
+
+	_, err = env.service.RestoreLockedTaskWorktree(env.ctx, LockedTaskWorktreeRestoreRequest{TaskID: task.ID})
+	if err == nil {
+		t.Fatal("RestoreLockedTaskWorktree accepted an explicit root overlapping the source Workspace")
+	}
+	if _, err := os.Stat(record.CanonicalRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("overlapping root was materialized: %v", err)
+	}
+	registered, err := env.service.git.List(env.ctx, env.workspaceRoot)
+	if err != nil {
+		t.Fatalf("git.List: %v", err)
+	}
+	foundOriginal := false
+	for _, worktree := range registered {
+		if worktree.Root == originalRoot {
+			foundOriginal = true
+			break
+		}
+	}
+	if !foundOriginal {
+		t.Fatalf("original managed Worktree %q disappeared after rejected restore", originalRoot)
+	}
+}
+
+func TestRestoreLockedTaskWorktreeRejectsExistingOutsideNamespaceRoot(t *testing.T) {
+	env := newServiceTestEnv(t)
+	task, materialized, _ := materializeAndLockTaskWorktree(t, env)
+	originalRoot := taskWorktreeRoot(materialized.Worktree)
+	legacyRoot := filepath.Join(t.TempDir(), "legacy")
+	runGit(t, env.workspaceRoot, "worktree", "remove", "--force", originalRoot)
+	runGit(t, env.workspaceRoot, "worktree", "add", legacyRoot, task.ShortID)
+	legacyRoot, err := config.CanonicalWorkspaceRoot(legacyRoot)
+	if err != nil {
+		t.Fatalf("CanonicalWorkspaceRoot legacy root: %v", err)
+	}
+	record, err := env.store.GetWorktreeRecordByID(env.ctx, taskWorktreeID(materialized.Worktree))
+	if err != nil {
+		t.Fatalf("GetWorktreeRecordByID: %v", err)
+	}
+	if _, err := env.store.Queries().UpdateWorktreeCanonicalRoot(env.ctx, sqlitegen.UpdateWorktreeCanonicalRootParams{
+		CanonicalRootPath: legacyRoot,
+		UpdatedAtUnixMs:   time.Now().UTC().UnixMilli(),
+		ID:                record.ID,
+	}); err != nil {
+		t.Fatalf("UpdateWorktreeCanonicalRoot: %v", err)
+	}
+
+	_, err = env.service.RestoreLockedTaskWorktree(env.ctx, LockedTaskWorktreeRestoreRequest{TaskID: task.ID})
+	if err == nil {
+		t.Fatal("RestoreLockedTaskWorktree accepted an existing root outside the server namespace")
+	}
+	registered, err := env.service.git.List(env.ctx, env.workspaceRoot)
+	if err != nil {
+		t.Fatalf("git.List: %v", err)
+	}
+	for _, worktree := range registered {
+		if worktree.Root == legacyRoot {
+			return
+		}
+	}
+	t.Fatalf("legacy root %q disappeared after rejected restore", legacyRoot)
+}
+
+func TestRestoreLockedTaskWorktreeRejectsLegacyRootOutsideNamespace(t *testing.T) {
+	env := newServiceTestEnv(t)
+	task, materialized, _ := materializeAndLockTaskWorktree(t, env)
+	worktreeID := taskWorktreeID(materialized.Worktree)
+	record, err := env.store.GetWorktreeRecordByID(env.ctx, worktreeID)
+	if err != nil {
+		t.Fatalf("GetWorktreeRecordByID: %v", err)
+	}
+	originalRoot := record.CanonicalRoot
+	legacyRoot := filepath.Join(t.TempDir(), "legacy")
+	canonicalRoot, err := config.CanonicalWorkspaceRoot(legacyRoot)
+	if err != nil {
+		t.Fatalf("CanonicalWorkspaceRoot legacy root: %v", err)
+	}
+	if _, err := env.store.Queries().UpdateWorktreeCanonicalRoot(env.ctx, sqlitegen.UpdateWorktreeCanonicalRootParams{
+		CanonicalRootPath: canonicalRoot,
+		UpdatedAtUnixMs:   time.Now().UTC().UnixMilli(),
+		ID:                record.ID,
+	}); err != nil {
+		t.Fatalf("UpdateWorktreeCanonicalRoot legacy root: %v", err)
+	}
+
+	_, err = env.service.RestoreLockedTaskWorktree(env.ctx, LockedTaskWorktreeRestoreRequest{TaskID: task.ID})
+	if err == nil {
+		t.Fatal("RestoreLockedTaskWorktree accepted a legacy root outside the server namespace")
+	}
+	if _, err := os.Stat(legacyRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("legacy root was materialized: %v", err)
+	}
+	registered, err := env.service.git.List(env.ctx, env.workspaceRoot)
+	if err != nil {
+		t.Fatalf("git.List: %v", err)
+	}
+	for _, worktree := range registered {
+		if worktree.Root == legacyRoot {
+			t.Fatalf("legacy root %q was registered after rejected restore", legacyRoot)
+		}
+	}
+	foundOriginal := false
+	for _, worktree := range registered {
+		if worktree.Root == originalRoot {
+			foundOriginal = true
+			break
+		}
+	}
+	if !foundOriginal {
+		t.Fatalf("original managed Worktree %q disappeared after rejected restore", originalRoot)
 	}
 }
 
@@ -876,6 +1073,26 @@ func TestMaterializeInitialTaskWorktreeUsesTaskSourceWorkspace(t *testing.T) {
 	}
 	if got := runGit(t, env.workspaceRoot, "branch", "--list", task.ShortID); strings.Contains(got, task.ShortID) {
 		t.Fatalf("primary branch list = %q, did not expect task branch %q", got, task.ShortID)
+	}
+}
+
+func TestTaskSourceWorkspaceRetainsProjectPrimaryOutsideCollectionLimit(t *testing.T) {
+	env := newServiceTestEnv(t)
+	for index := 0; index < metadata.ProjectWorkspaceCollectionLimit; index++ {
+		if _, err := env.store.AttachWorkspaceToProject(env.ctx, env.binding.ProjectID, t.TempDir()); err != nil {
+			t.Fatalf("AttachWorkspaceToProject %d: %v", index, err)
+		}
+	}
+
+	source, err := env.service.taskSourceWorkspace(env.ctx, env.binding.ProjectID, "")
+	if err != nil {
+		t.Fatalf("taskSourceWorkspace: %v", err)
+	}
+	if source.WorkspaceID != env.binding.WorkspaceID {
+		t.Fatalf("source workspace = %q, want project primary %q", source.WorkspaceID, env.binding.WorkspaceID)
+	}
+	if source.RootPath != env.workspaceRoot {
+		t.Fatalf("source root = %q, want project primary root %q", source.RootPath, env.workspaceRoot)
 	}
 }
 

@@ -274,6 +274,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	sessionRuntimeAPI := sessionruntime.NewAPI(metadataStore, runtimeSupport.FastModeState, runtimeAuthority, sessionruntime.APIOptions{
 		RuntimeClientFactory:       opts.RuntimeClientFactory,
 		RetainedWorkflowActivation: workflowController,
+		ManagedWorktreeBaseDir:     cfg.Settings.Worktrees.BaseDir,
 		RecoveredWarningProvider: func() (string, bool, error) {
 			nonEmpty, err := prompts.RecoveredRootNonEmptyFor(cfg.PersistenceRoot)
 			if err != nil {

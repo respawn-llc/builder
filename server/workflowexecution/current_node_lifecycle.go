@@ -216,6 +216,14 @@ func (e *TaskResumeConflictError) Error() string {
 	return fmt.Sprintf("task %q has no interrupted executable Current Nodes to resume", e.TaskID)
 }
 
+type taskExecutionRetirementPendingError struct {
+	taskID workflow.TaskID
+}
+
+func (e *taskExecutionRetirementPendingError) Error() string {
+	return fmt.Sprintf("task %q is waiting for its stopped exact execution to retire", e.taskID)
+}
+
 func (c *CurrentNodeController) resumeTask(
 	ctx context.Context,
 	taskID workflow.TaskID,
@@ -235,83 +243,151 @@ func (c *CurrentNodeController) resumeTask(
 			return preparationErr
 		}
 	}
-	var resolution workflowstore.TaskAttentionResolution
-	resumed, err := runTaskLifecycle(ctx, c.lifecycle, taskID, func(ctx context.Context) ([]workflow.CurrentNode, error) {
-		c.mu.Lock()
-		if err := c.ensureTaskAvailableLocked(taskID); err != nil {
-			c.mu.Unlock()
+	for {
+		if err := c.waitStoppedTaskExecutionRetirement(ctx, taskID); err != nil {
 			return nil, err
+		}
+		var resolution workflowstore.TaskAttentionResolution
+		resumed, err := runTaskLifecycle(ctx, c.lifecycle, taskID, func(ctx context.Context) ([]workflow.CurrentNode, error) {
+			c.mu.Lock()
+			if err := c.ensureTaskAvailableLocked(taskID); err != nil {
+				c.mu.Unlock()
+				return nil, err
+			}
+			if c.stoppedTaskExecutionPendingLocked(taskID) {
+				c.mu.Unlock()
+				return nil, &taskExecutionRetirementPendingError{taskID: taskID}
+			}
+			c.mu.Unlock()
+			classifications, err := c.store.PreflightTaskResume(ctx, taskID)
+			if err != nil {
+				return nil, err
+			}
+			if len(classifications) == 0 {
+				return nil, &TaskResumeConflictError{TaskID: taskID}
+			}
+			resumable := make([]workflow.CurrentNode, 0, len(classifications))
+			var resumeErrs []error
+			for _, classification := range classifications {
+				currentNode := classification.CurrentNode
+				if validationErr := classification.ValidationError(); validationErr != nil {
+					resumeErrs = append(resumeErrs, validationErr)
+					continue
+				}
+				nodeKind, kindErr := c.store.CurrentNodeKind(ctx, currentNode.Reference)
+				if kindErr != nil {
+					resumeErrs = append(resumeErrs, fmt.Errorf("resolve resumed current node kind %v: %w", currentNode.Reference, kindErr))
+					continue
+				}
+				c.mu.Lock()
+				if c.closed {
+					c.mu.Unlock()
+					resumeErrs = append(resumeErrs, errCurrentNodeControllerClosed)
+					continue
+				}
+				run := newCurrentNodeRun(currentNode.Reference, nodeKind, currentNodeAdmissionExplicitOverride)
+				run.preparation = preparation
+				run.taskPromptDelivery = workflowruntime.TaskPromptDeliveryResume
+				_, _, registerErr := c.runs.register(run)
+				c.mu.Unlock()
+				if registerErr != nil {
+					resumeErrs = append(resumeErrs, fmt.Errorf("stage resumed current node %v: %w", currentNode.Reference, registerErr))
+					continue
+				}
+				resumable = append(resumable, currentNode)
+			}
+			if len(resumable) == 0 {
+				return nil, errors.Join(resumeErrs...)
+			}
+			references := make([]workflow.CurrentNodeReference, 0, len(resumable))
+			for _, currentNode := range resumable {
+				references = append(references, currentNode.Reference)
+			}
+			delta, deltaErr := workflowstore.NewQueuedTaskLifecycleDelta(taskID, references)
+			if deltaErr != nil {
+				c.rollbackPreparedResumeRuns(references, deltaErr)
+				return nil, errors.Join(errors.Join(resumeErrs...), deltaErr)
+			}
+			publicationCtx, cancelPublication := context.WithCancelCause(ctx)
+			stopCloseCancellation := context.AfterFunc(c.workerContext, func() {
+				cancelPublication(errCurrentNodeControllerClosed)
+			})
+			attention, publishErr := c.publication.PublishResume(publicationCtx, delta)
+			stopCloseCancellation()
+			cancelPublication(context.Canceled)
+			if publishErr != nil {
+				c.rollbackPreparedResumeRuns(references, publishErr)
+				return nil, errors.Join(errors.Join(resumeErrs...), publishErr)
+			}
+			resolution.InterruptedCurrentNodes = append(
+				resolution.InterruptedCurrentNodes,
+				attention...,
+			)
+			c.makePreparedResumeRunsSchedulable(references)
+			return resumable, errors.Join(resumeErrs...)
+		})
+		var retirementPending *taskExecutionRetirementPendingError
+		if errors.As(err, &retirementPending) {
+			continue
+		}
+		c.finalizeTaskAttentionResolution(resolution)
+		return resumed, err
+	}
+}
+
+func (c *CurrentNodeController) waitStoppedTaskExecutionRetirement(
+	ctx context.Context,
+	taskID workflow.TaskID,
+) error {
+	for {
+		c.mu.Lock()
+		scopeIDs := make([]runtimeids.ExecutionScopeID, 0)
+		for _, run := range c.runs.byCurrentNode {
+			if run.reference.TaskID != taskID ||
+				run.disposition != currentNodeRunDispositionStopped ||
+				run.executionLease == nil {
+				continue
+			}
+			scopeIDs = append(scopeIDs, run.executionLease.ScopeID())
 		}
 		c.mu.Unlock()
-		classifications, err := c.store.PreflightTaskResume(ctx, taskID)
-		if err != nil {
-			return nil, err
+		if len(scopeIDs) == 0 {
+			return nil
 		}
-		if len(classifications) == 0 {
-			return nil, &TaskResumeConflictError{TaskID: taskID}
-		}
-		resumable := make([]workflow.CurrentNode, 0, len(classifications))
-		var resumeErrs []error
-		for _, classification := range classifications {
-			currentNode := classification.CurrentNode
-			if validationErr := classification.ValidationError(); validationErr != nil {
-				resumeErrs = append(resumeErrs, validationErr)
+		waited := false
+		for _, scopeID := range scopeIDs {
+			handle, live := c.authority.ExecutionByScope(scopeID)
+			if !live {
 				continue
 			}
-			nodeKind, kindErr := c.store.CurrentNodeKind(ctx, currentNode.Reference)
-			if kindErr != nil {
-				resumeErrs = append(resumeErrs, fmt.Errorf("resolve resumed current node kind %v: %w", currentNode.Reference, kindErr))
-				continue
+			waited = true
+			_, waitErr := handle.Wait(ctx)
+			if cause := context.Cause(ctx); cause != nil {
+				return errors.Join(waitErr, cause)
 			}
-			c.mu.Lock()
-			if c.closed {
-				c.mu.Unlock()
-				resumeErrs = append(resumeErrs, errCurrentNodeControllerClosed)
-				continue
-			}
-			run := newCurrentNodeRun(currentNode.Reference, nodeKind, currentNodeAdmissionExplicitOverride)
-			run.preparation = preparation
-			run.taskPromptDelivery = workflowruntime.TaskPromptDeliveryResume
-			_, _, registerErr := c.runs.register(run)
-			c.mu.Unlock()
-			if registerErr != nil {
-				resumeErrs = append(resumeErrs, fmt.Errorf("stage resumed current node %v: %w", currentNode.Reference, registerErr))
-				continue
-			}
-			resumable = append(resumable, currentNode)
+			// The completed execution's operational error is already persisted
+			// on the interrupted Current Node; Resume only waits for retirement.
 		}
-		if len(resumable) == 0 {
-			return nil, errors.Join(resumeErrs...)
+		if waited {
+			continue
 		}
-		references := make([]workflow.CurrentNodeReference, 0, len(resumable))
-		for _, currentNode := range resumable {
-			references = append(references, currentNode.Reference)
+		select {
+		case <-c.lifecycle.releasedSignal():
+		case <-ctx.Done():
+			return context.Cause(ctx)
 		}
-		delta, deltaErr := workflowstore.NewQueuedTaskLifecycleDelta(taskID, references)
-		if deltaErr != nil {
-			c.rollbackPreparedResumeRuns(references, deltaErr)
-			return nil, errors.Join(errors.Join(resumeErrs...), deltaErr)
+	}
+}
+
+func (c *CurrentNodeController) stoppedTaskExecutionPendingLocked(taskID workflow.TaskID) bool {
+	for _, run := range c.runs.byCurrentNode {
+		if run.reference.TaskID == taskID &&
+			run.disposition == currentNodeRunDispositionStopped &&
+			run.executionLease != nil {
+			return true
 		}
-		publicationCtx, cancelPublication := context.WithCancelCause(ctx)
-		stopCloseCancellation := context.AfterFunc(c.workerContext, func() {
-			cancelPublication(errCurrentNodeControllerClosed)
-		})
-		attention, publishErr := c.publication.PublishResume(publicationCtx, delta)
-		stopCloseCancellation()
-		cancelPublication(context.Canceled)
-		if publishErr != nil {
-			c.rollbackPreparedResumeRuns(references, publishErr)
-			return nil, errors.Join(errors.Join(resumeErrs...), publishErr)
-		}
-		resolution.InterruptedCurrentNodes = append(
-			resolution.InterruptedCurrentNodes,
-			attention...,
-		)
-		c.makePreparedResumeRunsSchedulable(references)
-		return resumable, errors.Join(resumeErrs...)
-	})
-	c.finalizeTaskAttentionResolution(resolution)
-	return resumed, err
+	}
+	return false
 }
 
 func (c *CurrentNodeController) rollbackPreparedResumeRuns(
@@ -395,18 +471,19 @@ func (c *CurrentNodeController) ApplyPendingApproval(
 		var sourceScopeID runtimeids.ExecutionScopeID
 		if sourceLive {
 			sourceScopeID = sourceRun.executionLease.ScopeID()
-			if _, completed := c.completed[sourceScopeID]; completed {
-				sourceLive = false
-			} else {
+			if _, completed := c.completed[sourceScopeID]; !completed {
 				c.mu.Unlock()
 				return workflowstore.PendingApprovalApplyResult{}, errors.New("pending approval source scope has not completed")
 			}
-			if sourceLive {
-				if _, stopping := c.stopping[sourceScopeID]; stopping {
-					c.mu.Unlock()
-					return workflowstore.PendingApprovalApplyResult{}, sessionruntime.ErrExecutionNoLongerLive
-				}
+			if _, finalizing := c.postTurnFinalization[sourceScopeID]; finalizing {
+				c.mu.Unlock()
+				return workflowstore.PendingApprovalApplyResult{}, ErrTaskExecutionNotQuiescent
 			}
+			if _, stopping := c.stopping[sourceScopeID]; stopping {
+				c.mu.Unlock()
+				return workflowstore.PendingApprovalApplyResult{}, sessionruntime.ErrExecutionNoLongerLive
+			}
+			sourceLive = false
 		}
 		c.mu.Unlock()
 

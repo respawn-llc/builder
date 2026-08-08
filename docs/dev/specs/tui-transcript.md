@@ -240,7 +240,9 @@
 - Deleting the requesting Session's current worktree is scheduled first. The request acknowledges scheduling before Kent checks blockers. The scheduled deletion then checks current state again before removal.
 - Branch cleanup is conservative/best-effort. Normal TUI deletion only auto-attempts branch deletion when provenance proves Kent created the branch. Explicit TUI Delete + Branch is available for every branch-backed worktree and uses safe branch deletion. Agent CLI deletion always retains branches.
 - New worktrees default under `worktrees.base_dir`, rooted under Kent persistence state by default.
-- After a target change, all Session tools use the new Execution Root.
+- After a target change, shell execution and relative file paths use the new Working Directory.
+- Containment checks for `edit`, `patch`, and `view_image` use the new Execution Target Root.
+- Tools without filesystem-path behavior use neither path authority.
 - Optional setup command `worktrees.setup_script` blocks every new-worktree creation path until it finishes. It receives command arguments, JSON input, and environment values.
 - Setup finishes before a Session or Workflow can use setup-provided skills, documentation, or files.
 - Setup progress is live operation state. It is not model-visible transcript history.

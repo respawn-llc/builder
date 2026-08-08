@@ -188,6 +188,10 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 				replacement.CommittedEntryStart,
 				projectedEntries,
 			)
+			replacementMode := session.CompactionMode(replacement.Mode)
+			if err := e.compactionRuntimeState().SetHistoryReplacementMode(&replacementMode); err != nil {
+				return fmt.Errorf("restore history replacement mode: %w", err)
+			}
 			if replacement.LastCommittedAssistantFinalAnswer != nil {
 				e.transcriptRuntimeState().SeedLastCommittedAssistantFinalAnswerIfEmpty(
 					*replacement.LastCommittedAssistantFinalAnswer,
@@ -205,6 +209,9 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 			}
 			reminderIssued = false
 		}
+		e.compactionRuntimeState().ApplyWorkflowPostCompletionActivity(
+			workflowPostCompletionActivityForSessionRecord(payload),
+		)
 	}
 	for _, generations := range generationsByStep {
 		for _, generation := range generations {
@@ -239,6 +246,28 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 		e.handoffRuntimeState().QueueRequest(req.summarizerPrompt, req.futureAgentMessage)
 	}
 	return nil
+}
+
+func workflowPostCompletionActivityForSessionRecord(payload any) workflowPostCompletionActivity {
+	switch record := payload.(type) {
+	case session.MessageRecord:
+		message := llm.Message{
+			Role:            llm.Role(record.Role),
+			SourcePath:      textutil.Pointer(record.SourcePath),
+			WorktreeContext: session.CloneWorktreeContext(record.WorktreeContext),
+		}
+		if record.MessageType != nil {
+			messageType := llm.MessageType(*record.MessageType)
+			message.MessageType = &messageType
+		}
+		return workflowPostCompletionMessageActivity(message)
+	case session.ToolCompletionRecord:
+		return workflowPostCompletionDurableActivity
+	case session.CacheRequestObservationRecord:
+		return workflowPostCompletionNoActivity
+	default:
+		return workflowPostCompletionNoActivity
+	}
 }
 
 func isUserInitiatedShellCall(call llm.ToolCall) bool {

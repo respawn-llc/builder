@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
 	"core/server/workflow/label"
@@ -633,21 +634,7 @@ func resolveTaskSourceWorkspaceWithQueries(ctx context.Context, q *sqlitegen.Que
 		}
 		return workspaceID, nil
 	}
-	workspaces, err := q.ListProjectWorkspaces(ctx, projectID)
-	if err != nil {
-		return "", err
-	}
-	for _, workspace := range workspaces {
-		if workspace.IsPrimary != 0 && strings.TrimSpace(workspace.ID) != "" {
-			return strings.TrimSpace(workspace.ID), nil
-		}
-	}
-	for _, workspace := range workspaces {
-		if strings.TrimSpace(workspace.ID) != "" {
-			return strings.TrimSpace(workspace.ID), nil
-		}
-	}
-	return "", fmt.Errorf("project %q has no source workspace", projectID)
+	return metadata.ResolveProjectSourceWorkspaceID(ctx, q, projectID)
 }
 
 func taskCurrentPositionIsBacklog(ctx context.Context, q *sqlitegen.Queries, taskID workflow.TaskID) (bool, error) {

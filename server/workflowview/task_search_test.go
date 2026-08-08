@@ -5,6 +5,7 @@ import (
 	"core/internal/testharness/workflowtest"
 	"os/exec"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -94,6 +95,168 @@ func TestTaskSearchFindsAndFiltersCanonicalTaskSources(t *testing.T) {
 	}
 	if len(withoutComments.Groups) != 0 {
 		t.Fatalf("Comment-excluded search = %+v", withoutComments)
+	}
+}
+
+func TestTaskSearchProjectScopedNumericShortIDRanksExactTaskFirst(t *testing.T) {
+	fixture, search := newTaskSearchFixture(t, false)
+	if _, err := fixture.metadata.DB().Exec(
+		`UPDATE projects SET next_task_seq = 345 WHERE id = ?`,
+		fixture.binding.ProjectID,
+	); err != nil {
+		t.Fatalf("set current Project Task sequence: %v", err)
+	}
+	exact := createTaskSearchTask(t, fixture, "Exact identifier", "ordinary body")
+	text := createTaskSearchTask(t, fixture, "345 title match", "ordinary body")
+
+	otherBinding, err := fixture.metadata.RegisterWorkspaceBinding(fixture.ctx, t.TempDir())
+	if err != nil {
+		t.Fatalf("RegisterWorkspaceBinding: %v", err)
+	}
+	if _, err := fixture.store.LinkWorkflow(fixture.ctx, otherBinding.ProjectID, fixture.workflowID, true); err != nil {
+		t.Fatalf("LinkWorkflow second Project: %v", err)
+	}
+	if _, err := fixture.metadata.DB().Exec(
+		`UPDATE projects SET next_task_seq = 345 WHERE id = ?`,
+		otherBinding.ProjectID,
+	); err != nil {
+		t.Fatalf("set second Project Task sequence: %v", err)
+	}
+	if _, err := fixture.store.CreateTask(fixture.ctx, workflowstore.CreateTaskRequest{
+		ProjectID:  otherBinding.ProjectID,
+		WorkflowID: &fixture.workflowID,
+		Title:      "Other Project exact identifier",
+		Body:       "ordinary body",
+	}); err != nil {
+		t.Fatalf("CreateTask second Project: %v", err)
+	}
+
+	response, err := search.Search(fixture.ctx, serverapi.TaskSearchRequest{
+		Mode:       serverapi.TaskSearchModeLiteral,
+		Query:      "345",
+		Context:    serverapi.TaskSearchDefaultContext,
+		ProjectIDs: []string{fixture.binding.ProjectID},
+		PageSize:   serverapi.TaskSearchDefaultPageSize,
+	})
+	if err != nil {
+		t.Fatalf("Search numeric Short ID: %v", err)
+	}
+	if len(response.Groups) != 2 ||
+		response.Groups[0].TaskID != string(exact.ID) ||
+		response.Groups[1].TaskID != string(text.ID) {
+		t.Fatalf("Project-scoped numeric Short ID response = %+v", response)
+	}
+	hits := response.Groups[0].Hits
+	if len(hits) != 1 ||
+		hits[0].Ordinal != 1 ||
+		hits[0].Source.Kind != serverapi.TaskSearchSourceKindShortID ||
+		hits[0].Literal == nil ||
+		hits[0].Literal.Match != "345" {
+		t.Fatalf("exact Short ID hits = %+v", hits)
+	}
+}
+
+func TestTaskSearchFullShortIDIgnoresTextCaseSensitivity(t *testing.T) {
+	fixture, search := newTaskSearchFixture(t, false)
+	task := createTaskSearchTaskAtSequence(t, fixture, 345, "Exact identifier", "ordinary body")
+	request := taskSearchRequest(strings.ToLower(task.ShortID))
+	request.CaseSensitive = true
+
+	response, err := search.Search(fixture.ctx, request)
+	if err != nil {
+		t.Fatalf("Search lowercase full Short ID: %v", err)
+	}
+	if len(response.Groups) != 1 ||
+		response.Groups[0].TaskID != string(task.ID) ||
+		len(response.Groups[0].Hits) != 1 ||
+		response.Groups[0].Hits[0].Source.Kind != serverapi.TaskSearchSourceKindShortID ||
+		response.Groups[0].Hits[0].Literal == nil ||
+		response.Groups[0].Hits[0].Literal.Match != task.ShortID {
+		t.Fatalf("lowercase full Short ID response = %+v", response)
+	}
+}
+
+func TestTaskSearchGlobalNumericShortIDReturnsEveryProjectWithDeterministicTies(t *testing.T) {
+	fixture, search := newTaskSearchFixture(t, false)
+	first := createTaskSearchTaskAtSequence(t, fixture, 345, "First exact identifier", "ordinary body")
+	otherBinding, err := fixture.metadata.RegisterWorkspaceBinding(fixture.ctx, t.TempDir())
+	if err != nil {
+		t.Fatalf("RegisterWorkspaceBinding: %v", err)
+	}
+	if _, err := fixture.store.LinkWorkflow(fixture.ctx, otherBinding.ProjectID, fixture.workflowID, true); err != nil {
+		t.Fatalf("LinkWorkflow second Project: %v", err)
+	}
+	if _, err := fixture.metadata.DB().Exec(
+		`UPDATE projects SET next_task_seq = 345 WHERE id = ?`,
+		otherBinding.ProjectID,
+	); err != nil {
+		t.Fatalf("set second Project Task sequence: %v", err)
+	}
+	second, err := fixture.store.CreateTask(fixture.ctx, workflowstore.CreateTaskRequest{
+		ProjectID:  otherBinding.ProjectID,
+		WorkflowID: &fixture.workflowID,
+		Title:      "Second exact identifier",
+		Body:       "ordinary body",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask second Project: %v", err)
+	}
+
+	response, err := search.Search(fixture.ctx, taskSearchRequest("345"))
+	if err != nil {
+		t.Fatalf("Search global numeric Short ID: %v", err)
+	}
+	wantTaskIDs := []string{string(first.ID), string(second.ID)}
+	slices.Sort(wantTaskIDs)
+	if len(response.Groups) != 2 {
+		t.Fatalf("global numeric Short ID groups = %+v, want two exact Tasks", response.Groups)
+	}
+	for index, wantTaskID := range wantTaskIDs {
+		group := response.Groups[index]
+		if group.TaskID != wantTaskID ||
+			len(group.Hits) != 1 ||
+			group.Hits[0].Source.Kind != serverapi.TaskSearchSourceKindShortID {
+			t.Fatalf("global numeric Short ID group %d = %+v, want Task %s", index, group, wantTaskID)
+		}
+	}
+}
+
+func TestTaskSearchLeadingZeroDoesNotAliasCanonicalTaskSequence(t *testing.T) {
+	fixture, search := newTaskSearchFixture(t, false)
+	createTaskSearchTaskAtSequence(t, fixture, 345, "Exact identifier", "ordinary body")
+
+	response, err := search.Search(fixture.ctx, taskSearchRequest("0345"))
+	if err != nil {
+		t.Fatalf("Search leading-zero numeric text: %v", err)
+	}
+	if len(response.Groups) != 0 {
+		t.Fatalf("leading-zero numeric text response = %+v, want no canonical sequence alias", response)
+	}
+}
+
+func TestTaskSearchShortIDMaterializesFirstRepeatedOccurrence(t *testing.T) {
+	fixture, search := newTaskSearchFixture(t, false)
+	if _, err := fixture.metadata.DB().Exec(
+		`UPDATE projects SET project_key = 'KENTKENT' WHERE id = ?`,
+		fixture.binding.ProjectID,
+	); err != nil {
+		t.Fatalf("set repeated Project key: %v", err)
+	}
+	task := createTaskSearchTask(t, fixture, "Repeated identifier", "ordinary body")
+
+	response, err := search.Search(fixture.ctx, taskSearchRequest("KENT"))
+	if err != nil {
+		t.Fatalf("Search repeated Short ID substring: %v", err)
+	}
+	if len(response.Groups) != 1 ||
+		response.Groups[0].TaskID != string(task.ID) ||
+		len(response.Groups[0].Hits) != 1 ||
+		response.Groups[0].Hits[0].Literal == nil {
+		t.Fatalf("repeated Short ID response = %+v", response)
+	}
+	literal := response.Groups[0].Hits[0].Literal
+	if literal.Before != "" || literal.Match != "KENT" || literal.After != "KENT-1" {
+		t.Fatalf("repeated Short ID fragment = %+v, want first left-to-right occurrence", literal)
 	}
 }
 
@@ -463,6 +626,24 @@ func createTaskSearchTask(t *testing.T, fixture currentNodeViewFixture, title st
 		t.Fatalf("CreateTask: %v", err)
 	}
 	return task
+}
+
+func createTaskSearchTaskAtSequence(
+	t *testing.T,
+	fixture currentNodeViewFixture,
+	sequence int,
+	title string,
+	body string,
+) workflowstore.TaskRecord {
+	t.Helper()
+	if _, err := fixture.metadata.DB().Exec(
+		`UPDATE projects SET next_task_seq = ? WHERE id = ?`,
+		sequence,
+		fixture.binding.ProjectID,
+	); err != nil {
+		t.Fatalf("set current Project Task sequence: %v", err)
+	}
+	return createTaskSearchTask(t, fixture, title, body)
 }
 
 func startTaskSearchTask(t *testing.T, fixture currentNodeViewFixture, task workflowstore.TaskRecord) startedCurrentNodeViewTask {

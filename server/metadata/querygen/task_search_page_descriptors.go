@@ -125,6 +125,7 @@ type ListTaskSearchPageDescriptorsParams struct {
 	OffsetRows                int64
 	LimitRows                 int64
 	LiveTaskStatesJson        string
+	ShortIDCaseMode           int64
 }
 
 type ListTaskSearchPageDescriptorsRow struct {
@@ -161,8 +162,9 @@ func (q *Queries) ListTaskSearchPageDescriptors(ctx context.Context, arg ListTas
 		arg.OffsetRows,
 		arg.LimitRows,
 		arg.LiveTaskStatesJson,
+		arg.ShortIDCaseMode,
 	)
-	err = recordQueryError(ctx, err, listTaskSearchPageDescriptors, 11)
+	err = recordQueryError(ctx, err, listTaskSearchPageDescriptors, 12)
 	if err != nil {
 		return nil, err
 	}
@@ -189,15 +191,15 @@ func (q *Queries) ListTaskSearchPageDescriptors(ctx context.Context, arg ListTas
 			&item.SourceOrdinal,
 			&item.TaskWeightedRank,
 			&item.RawSnippet,
-		), listTaskSearchPageDescriptors, 11); err != nil {
+		), listTaskSearchPageDescriptors, 12); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listTaskSearchPageDescriptors, 11); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listTaskSearchPageDescriptors, 12); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listTaskSearchPageDescriptors, 11); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listTaskSearchPageDescriptors, 12); err != nil {
 		return nil, err
 	}
 	return items, nil

@@ -96,6 +96,112 @@ const searchResponse = {
   ],
 } as const;
 
+const shortIDSearchResponse = {
+  mode: "literal",
+  groups: [
+    {
+      project_id: "project-1",
+      project_key: "KNT",
+      task_id: "task-exact",
+      short_id: "KNT-345",
+      workflow_id: "workflow-1",
+      title: "Exact identifier",
+      status: {
+        kind: "active",
+        native_state: "active",
+        node_ids: ["node-1"],
+        attention_types: [],
+      },
+      total_hit_count: 6,
+      hits: [
+        {
+          ordinal: 1,
+          source: { kind: "short_id" },
+          literal: {
+            before: "KNT-",
+            match: "345",
+            after: "",
+            left_truncated: false,
+            right_truncated: false,
+          },
+        },
+        {
+          ordinal: 2,
+          source: { kind: "title" },
+          literal: {
+            before: "",
+            match: "Preview two",
+            after: "",
+            left_truncated: false,
+            right_truncated: false,
+          },
+        },
+        {
+          ordinal: 3,
+          source: { kind: "body" },
+          literal: {
+            before: "",
+            match: "Preview three",
+            after: "",
+            left_truncated: false,
+            right_truncated: false,
+          },
+        },
+        {
+          ordinal: 4,
+          source: { kind: "comment", comment_id: "comment-1" },
+          literal: {
+            before: "",
+            match: "Preview four",
+            after: "",
+            left_truncated: false,
+            right_truncated: false,
+          },
+        },
+        {
+          ordinal: 5,
+          source: { kind: "body" },
+          literal: {
+            before: "",
+            match: "Preview five",
+            after: "",
+            left_truncated: false,
+            right_truncated: false,
+          },
+        },
+      ],
+    },
+    {
+      project_id: "project-1",
+      project_key: "KNT",
+      task_id: "task-text",
+      short_id: "KNT-999",
+      workflow_id: "workflow-1",
+      title: "345 title match",
+      status: {
+        kind: "backlog",
+        native_state: "active",
+        node_ids: [],
+        attention_types: [],
+      },
+      total_hit_count: 1,
+      hits: [
+        {
+          ordinal: 1,
+          source: { kind: "title" },
+          literal: {
+            before: "",
+            match: "345",
+            after: " title match",
+            left_truncated: false,
+            right_truncated: false,
+          },
+        },
+      ],
+    },
+  ],
+} as const;
+
 const testSidebarController: SidebarController = {
   activeDestination: null,
   closeSidebar: vi.fn(),
@@ -233,6 +339,65 @@ describe("Board Task Search", () => {
       expect(onOpenTask).toHaveBeenCalledWith("task-2");
     });
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("selects the exact numeric Short ID without duplicating its preview", async () => {
+    vi.useRealTimers();
+    const services = createTestServices([
+      { method: "workflow.task.search", result: shortIDSearchResponse },
+    ]);
+    const onOpenTask = vi.fn();
+
+    renderSearch(services, "project-short-id", onOpenTask);
+    fireEvent.click(screen.getByRole("button", { name: appI18n.t("taskSearch.open") }));
+    const input = screen.getByRole("searchbox", { name: appI18n.t("taskSearch.input") });
+    fireEvent.change(input, { target: { value: "345" } });
+    const options = await screen.findAllByRole("option");
+    const exact = options[0];
+    if (exact === undefined) {
+      throw new Error("Short ID Search requires an exact result.");
+    }
+    expect(exact).toHaveAttribute("aria-selected", "true");
+    expect(within(exact).getByText("KNT-345")).toBeInTheDocument();
+    expect(within(exact).queryByText("345")).not.toBeInTheDocument();
+    expect(within(exact).getByText("Preview two")).toBeInTheDocument();
+    expect(within(exact).getByText("Preview three")).toBeInTheDocument();
+    expect(within(exact).getByText("Preview four")).toBeInTheDocument();
+    expect(within(exact).queryByText("Preview five")).not.toBeInTheDocument();
+    expect(within(exact).getByText("…2 more hits")).toBeInTheDocument();
+
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => {
+      expect(onOpenTask).toHaveBeenCalledWith("task-exact");
+    });
+  });
+
+  it("derives continuation previews and remaining hits from that returned group", async () => {
+    vi.useRealTimers();
+    const continuationResponse = {
+      ...shortIDSearchResponse,
+      groups: [
+        {
+          ...shortIDSearchResponse.groups[0],
+          hits: shortIDSearchResponse.groups[0].hits.slice(1),
+        },
+      ],
+    };
+    const services = createTestServices([
+      { method: "workflow.task.search", result: continuationResponse },
+    ]);
+
+    renderSearch(services, "project-continuation");
+    fireEvent.click(screen.getByRole("button", { name: appI18n.t("taskSearch.open") }));
+    fireEvent.change(screen.getByRole("searchbox", { name: appI18n.t("taskSearch.input") }), {
+      target: { value: "345" },
+    });
+    const result = await screen.findByRole("option");
+    expect(within(result).getByText("Preview two")).toBeInTheDocument();
+    expect(within(result).getByText("Preview three")).toBeInTheDocument();
+    expect(within(result).getByText("Preview four")).toBeInTheDocument();
+    expect(within(result).queryByText("Preview five")).not.toBeInTheDocument();
+    expect(within(result).getByText("…2 more hits")).toBeInTheDocument();
   });
 
   it("retains one query while rerunning Search in the next Project scope", async () => {

@@ -11,6 +11,7 @@ import (
 	"core/server/llm"
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
+	"core/server/runtimewire"
 	"core/server/session"
 	"core/server/sessionruntime"
 	"core/server/tools"
@@ -637,8 +638,14 @@ func (f currentNodeViewFixture) newAgentRuntimePlan(t *testing.T) sessionruntime
 	settings.Reviewer.Frequency = "off"
 	plan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
 		Settings: settings,
-		Workdir:  f.cfg.WorkspaceRoot,
-		Client:   currentNodeViewLLMClient{},
+		FilesystemContext: func() tools.FilesystemContext {
+			context, err := runtimewire.NewFilesystemContext(f.cfg.WorkspaceRoot, f.cfg.WorkspaceRoot, metadata.ProjectWorkspaceBoundary{ProjectID: "test"})
+			if err != nil {
+				t.Fatalf("NewFilesystemContext: %v", err)
+			}
+			return context
+		}(),
+		Client: currentNodeViewLLMClient{},
 	})
 	if err != nil {
 		t.Fatalf("NewAgentRuntimePlan: %v", err)

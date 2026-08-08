@@ -3,6 +3,7 @@ package workflowexecution
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"core/server/runtimecontrol"
 	"core/server/session"
 	"core/server/sessionruntime"
+	"core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
@@ -617,10 +619,32 @@ func newRetainedSessionActivationFixture(t *testing.T) retainedSessionActivation
 	settings.Model = "gpt-5"
 	settings.ModelContextWindow = 200_000
 	settings.Reviewer.Frequency = "off"
+	realWorkspace, err := filepath.EvalSymlinks(cfg.WorkspaceRoot)
+	if err != nil {
+		t.Fatalf("resolve workspace: %v", err)
+	}
+	workspaceInfo, err := os.Stat(realWorkspace)
+	if err != nil {
+		t.Fatalf("stat workspace: %v", err)
+	}
+	workspaceRoot := tools.FilesystemRoot{
+		LexicalPath: cfg.WorkspaceRoot,
+		RealPath:    realWorkspace,
+		Info:        workspaceInfo,
+	}
 	plan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
 		Settings: settings,
-		Workdir:  cfg.WorkspaceRoot,
-		Client:   currentNodeQuestionLLMClient{},
+		FilesystemContext: tools.FilesystemContext{Access: tools.FileAccessScope{
+			WorkingDirectory:    workspaceRoot,
+			ExecutionTargetRoot: workspaceRoot,
+			ProjectWorkspace: tools.ProjectWorkspaceScope{
+				ProjectID: binding.ProjectID,
+				Roots: []tools.ProjectWorkspaceRoot{{
+					FilesystemRoot: workspaceRoot,
+				}},
+			},
+		}},
+		Client: currentNodeQuestionLLMClient{},
 	})
 	if err != nil {
 		t.Fatalf("NewAgentRuntimePlan: %v", err)
