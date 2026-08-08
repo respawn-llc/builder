@@ -195,68 +195,72 @@ func writeQueryConstant(out *bytes.Buffer, query lifecycleQuery) {
 	fmt.Fprintf(out, "const %s = %q\n\n", lowerFirst(query.name), query.sql)
 }
 
+type lifecycleQuestionField struct {
+	name     string
+	goType   string
+	identity bool
+}
+
+var lifecycleQuestionFields = []lifecycleQuestionField{
+	{name: "OccurredAtUnixMs", goType: "int64", identity: true},
+	{name: "ItemID", goType: "string", identity: true},
+	{name: "TaskID", goType: "string", identity: true},
+	{name: "NodeID", goType: "string", identity: true},
+	{name: "TransitionBranchKey", goType: "sql.NullString", identity: true},
+	{name: "ScopeID", goType: "string", identity: true},
+	{name: "PromptID", goType: "string", identity: true},
+	{name: "PromptKind", goType: "int64"},
+	{name: "Question", goType: "string"},
+	{name: "SuggestionsJSON", goType: "string"},
+	{name: "RecommendedOptionIndex", goType: "sql.NullInt64"},
+	{name: "ApprovalDecisionsJSON", goType: "string"},
+}
+
 func writeLifecycleQuestionFields(out *bytes.Buffer) {
-	writeLifecycleQuestionIdentityFields(out)
-	fmt.Fprintf(out, "\tPromptKind int64\n")
-	fmt.Fprintf(out, "\tQuestion string\n")
-	fmt.Fprintf(out, "\tSuggestionsJSON string\n")
-	fmt.Fprintf(out, "\tRecommendedOptionIndex sql.NullInt64\n")
-	fmt.Fprintf(out, "\tApprovalDecisionsJSON string\n")
+	writeLifecycleQuestionFieldDeclarations(out, false)
 }
 
 func writeLifecycleQuestionIdentityFields(out *bytes.Buffer) {
-	fmt.Fprintf(out, "\tOccurredAtUnixMs int64\n")
-	fmt.Fprintf(out, "\tItemID string\n")
-	fmt.Fprintf(out, "\tTaskID string\n")
-	fmt.Fprintf(out, "\tNodeID string\n")
-	fmt.Fprintf(out, "\tTransitionBranchKey sql.NullString\n")
-	fmt.Fprintf(out, "\tScopeID string\n")
-	fmt.Fprintf(out, "\tPromptID string\n")
+	writeLifecycleQuestionFieldDeclarations(out, true)
 }
 
 func writeLifecycleQuestionArguments(out *bytes.Buffer, indent string, variable string) {
-	writeLifecycleQuestionIdentityArguments(out, indent, variable)
-	for _, field := range []string{
-		"PromptKind",
-		"Question",
-		"SuggestionsJSON",
-		"RecommendedOptionIndex",
-		"ApprovalDecisionsJSON",
-	} {
-		fmt.Fprintf(out, "%s%s.%s,\n", indent, variable, field)
-	}
+	writeLifecycleQuestionFieldReferences(out, indent, variable, false, false)
 }
 
 func writeLifecycleQuestionIdentityArguments(out *bytes.Buffer, indent string, variable string) {
-	for _, field := range []string{
-		"OccurredAtUnixMs",
-		"ItemID",
-		"TaskID",
-		"NodeID",
-		"TransitionBranchKey",
-		"ScopeID",
-		"PromptID",
-	} {
-		fmt.Fprintf(out, "%s%s.%s,\n", indent, variable, field)
-	}
+	writeLifecycleQuestionFieldReferences(out, indent, variable, true, false)
 }
 
 func writeLifecycleQuestionScanTargets(out *bytes.Buffer, indent string, variable string) {
-	for _, field := range []string{
-		"OccurredAtUnixMs",
-		"ItemID",
-		"TaskID",
-		"NodeID",
-		"TransitionBranchKey",
-		"ScopeID",
-		"PromptID",
-		"PromptKind",
-		"Question",
-		"SuggestionsJSON",
-		"RecommendedOptionIndex",
-		"ApprovalDecisionsJSON",
-	} {
-		fmt.Fprintf(out, "%s&%s.%s,\n", indent, variable, field)
+	writeLifecycleQuestionFieldReferences(out, indent, variable, false, true)
+}
+
+func writeLifecycleQuestionFieldDeclarations(out *bytes.Buffer, identityOnly bool) {
+	for _, field := range lifecycleQuestionFields {
+		if identityOnly && !field.identity {
+			continue
+		}
+		fmt.Fprintf(out, "\t%s %s\n", field.name, field.goType)
+	}
+}
+
+func writeLifecycleQuestionFieldReferences(
+	out *bytes.Buffer,
+	indent string,
+	variable string,
+	identityOnly bool,
+	address bool,
+) {
+	prefix := ""
+	if address {
+		prefix = "&"
+	}
+	for _, field := range lifecycleQuestionFields {
+		if identityOnly && !field.identity {
+			continue
+		}
+		fmt.Fprintf(out, "%s%s%s.%s,\n", indent, prefix, variable, field.name)
 	}
 }
 
