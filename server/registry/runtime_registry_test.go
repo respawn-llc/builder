@@ -605,7 +605,9 @@ func TestAuthorityEventFeedProjectsExactResourceGeneration(t *testing.T) {
 		Transition:  clientui.WorktreeTransitionEnter,
 		State:       clientui.WorktreeTransitionCompleted,
 	}
-	registry.PublishWorktreeTransitionOutcome(engine.SessionID(), outcome)
+	if err := registry.PublishWorktreeTransitionOutcome(engine.SessionID(), outcome); err != nil {
+		t.Fatal(err)
+	}
 
 	message = nextTranscriptMessageOfKind(t, sub, clientui.TranscriptMessageWorktreeTransitionOutcome)
 	projected := transcriptPayload[clientui.TranscriptWorktreeTransitionOutcome](t, message)
@@ -626,7 +628,9 @@ func TestAuthorityEventFeedProjectsExactResourceGeneration(t *testing.T) {
 			},
 		},
 	}
-	registry.PublishWorktreeTransitionOutcome(engine.SessionID(), failed)
+	if err := registry.PublishWorktreeTransitionOutcome(engine.SessionID(), failed); err != nil {
+		t.Fatal(err)
+	}
 	message = nextTranscriptMessageOfKind(t, sub, clientui.TranscriptMessageWorktreeTransitionOutcome)
 	projected = transcriptPayload[clientui.TranscriptWorktreeTransitionOutcome](t, message)
 	if projected.DeletePrecondition == nil ||

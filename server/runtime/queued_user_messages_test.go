@@ -8,14 +8,14 @@ import (
 	"core/shared/textutil"
 )
 
-func TestQueuedUserMessageStorePreservesTypedAgentSteer(t *testing.T) {
+func TestQueuedUserMessagePreservesTypedAgentSteer(t *testing.T) {
 	sourceID := runtimeids.NewSessionID()
 	steer, err := NewAgentSteer(sourceID, "report status")
 	if err != nil {
 		t.Fatalf("NewAgentSteer: %v", err)
 	}
 	message := steer.Message()
-	item, err := (&queuedUserMessageStore{}).QueueItem(QueuedUserMessage{
+	item, err := normalizeQueuedUserMessage(QueuedUserMessage{
 		Message: message,
 	})
 	if err != nil {
@@ -27,13 +27,12 @@ func TestQueuedUserMessageStorePreservesTypedAgentSteer(t *testing.T) {
 	}
 }
 
-func TestQueuedUserMessageStoreReturnsErrorsForInvalidPayloads(t *testing.T) {
-	store := &queuedUserMessageStore{}
-	if _, err := store.QueueItem(QueuedUserMessage{}); err == nil {
+func TestQueuedUserMessageReturnsErrorsForInvalidPayloads(t *testing.T) {
+	if _, err := normalizeQueuedUserMessage(QueuedUserMessage{}); err == nil {
 		t.Fatal("QueueItem accepted an invalid payload")
 	}
 	for _, content := range []string{"", " \t "} {
-		if _, err := store.QueueItem(QueuedUserMessage{
+		if _, err := normalizeQueuedUserMessage(QueuedUserMessage{
 			Message: llm.Message{
 				Role:    llm.RoleUser,
 				Content: textutil.Value(content),

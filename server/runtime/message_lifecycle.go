@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -19,14 +18,12 @@ import (
 type defaultMessageLifecycle struct {
 	engine     *Engine
 	background backgroundNoticeScheduler
-	queue      *queuedUserMessageStore
 }
 
 func newDefaultMessageLifecycle(engine *Engine, background backgroundNoticeScheduler) *defaultMessageLifecycle {
 	return &defaultMessageLifecycle{
 		engine:     engine,
 		background: background,
-		queue:      newQueuedUserMessageStore(),
 	}
 }
 
@@ -472,170 +469,6 @@ func queuedUserMessagesForFlush(messages []queuedUserMessage) ([]QueuedUserMessa
 		items = append(items, item)
 	}
 	return items, nil
-}
-
-func (m *defaultMessageLifecycle) FlushPendingUserInjections(stepID string, selection userInjectionSelection) (userInjectionCommitResult, error) {
-	result, err := m.CommitPendingUserInjections(stepID, selection)
-	if err != nil || result.disposition != userInjectionFlushContinue {
-		return result, err
-	}
-	if m.background != nil {
-		flushed, flushErr := m.background.flushPendingNotices(stepID)
-		result.flushed += flushed
-		if flushErr != nil {
-			return result, flushErr
-		}
-	}
-	return result, nil
-}
-
-func (m *defaultMessageLifecycle) CommitPendingUserInjections(stepID string, selection userInjectionSelection) (userInjectionCommitResult, error) {
-	var pending []queuedUserMessage
-	m.engine.pendingWorkMu.Lock()
-	switch selected := selection.(type) {
-	case allPendingUserInjectionSelection:
-		pending = m.queue.Drain()
-	case steerUserInjectionSelection:
-		if len(selected.queueItemIDs) > 0 {
-			pending = m.queue.DrainByID(selected.queueItemIDs)
-		}
-	default:
-		m.engine.pendingWorkMu.Unlock()
-		return userInjectionCommitResult{}, fmt.Errorf("unsupported user injection selection %T", selection)
-	}
-	m.engine.pendingWorkMu.Unlock()
-	return m.commitPendingUserInjections(stepID, pending)
-}
-
-func (m *defaultMessageLifecycle) commitPendingUserInjections(stepID string, pending []queuedUserMessage) (userInjectionCommitResult, error) {
-	e := m.engine
-	result := userInjectionCommitResult{disposition: userInjectionFlushContinue}
-
-	// Recheck immediately before commit because a live-run stop can race the drain.
-	pending = e.dropStoppedLiveRunQueueItems(pending)
-	groups, err := queuedUserMessageFlushGroups(pending)
-	if err != nil {
-		return result, err
-	}
-	for groupIndex, group := range groups {
-		publishAllowed, err := e.commitLiveRunQueueItemsUnlessStopped(group.pending, func() error {
-			receipt, persistErr := e.steerWithCommitReceipt(
-				stepID,
-				steerQueuedUserMessageFlushIntent(group.message, group.batch, group.queueItems),
-			)
-			result.receipt = receipt
-			return persistErr
-		})
-		if err != nil {
-			e.unmarkQueuedUserInjectionForAutoDrainSet(result.queueItemIDs)
-			if !result.receipt.Committed {
-				tail := make([]queuedUserMessage, 0, len(groups)-groupIndex)
-				for _, remaining := range groups[groupIndex:] {
-					for _, item := range remaining.queueItems {
-						for _, original := range pending {
-							if original.message.ID == item.ID {
-								tail = append(tail, original)
-								break
-							}
-						}
-					}
-				}
-				err = errors.Join(err, e.steer(stepID, steerQueuedUserMessageRestoreIntent(tail)))
-			}
-			return result, err
-		}
-		if !publishAllowed {
-			e.pendingWorkMu.Lock()
-			tailItems := make([]QueuedUserMessage, 0)
-			for _, remaining := range groups[groupIndex:] {
-				tailItems = append(tailItems, remaining.queueItems...)
-			}
-			for _, item := range tailItems {
-				e.unmarkQueuedUserInjectionForAutoDrain(item.ID)
-				e.emitQueuedUserMessageStatus(item, QueuedUserMessageFailed, QueuedUserMessageFailureStopped, true)
-			}
-			e.pendingWorkMu.Unlock()
-			e.unmarkQueuedUserInjectionForAutoDrainSet(result.queueItemIDs)
-			e.completeLiveRunQueueItems(queuedUserMessageIDSet(tailItems))
-			result.disposition = userInjectionFlushStopped
-			return result, nil
-		}
-		if result.queueItemIDs == nil {
-			result.queueItemIDs = queuedUserMessageIDSet(group.queueItems)
-		} else {
-			for queueItemID := range queuedUserMessageIDSet(group.queueItems) {
-				result.queueItemIDs[queueItemID] = struct{}{}
-			}
-		}
-		result.flushed++
-	}
-	for _, item := range pending {
-		e.unmarkQueuedUserInjectionForAutoDrain(item.message.ID)
-	}
-	return result, nil
-}
-
-func (m *defaultMessageLifecycle) QueueUserMessage(text string, clientRequestID string) (QueuedUserMessage, error) {
-	if m == nil || m.queue == nil {
-		return QueuedUserMessage{}, errors.New("queued user message lifecycle is required")
-	}
-	return m.queue.Queue(text, clientRequestID)
-}
-
-func (m *defaultMessageLifecycle) QueueUserMessageWithID(item QueuedUserMessage) (QueuedUserMessage, error) {
-	if m == nil || m.queue == nil {
-		return QueuedUserMessage{}, errors.New("queued user message lifecycle is required")
-	}
-	return m.queue.QueueItem(item)
-}
-
-func (m *defaultMessageLifecycle) DrainPendingUserInjections() []QueuedUserMessage {
-	if m == nil || m.queue == nil {
-		return nil
-	}
-	pending := m.queue.Drain()
-	out := make([]QueuedUserMessage, 0, len(pending))
-	for _, item := range pending {
-		out = append(out, item.message)
-	}
-	return out
-}
-
-func (m *defaultMessageLifecycle) DrainPendingUserInjectionsByID(ids map[string]struct{}) []QueuedUserMessage {
-	if m == nil || m.queue == nil || len(ids) == 0 {
-		return nil
-	}
-	pending := m.queue.DrainByID(ids)
-	out := make([]QueuedUserMessage, 0, len(pending))
-	for _, item := range pending {
-		out = append(out, item.message)
-	}
-	return out
-}
-
-func (m *defaultMessageLifecycle) PendingUserMessages() []QueuedUserMessage {
-	if m == nil || m.queue == nil {
-		return nil
-	}
-	return m.queue.Snapshot()
-}
-
-func (m *defaultMessageLifecycle) RestorePendingUserInjections(items []queuedUserMessage) {
-	if m == nil || m.queue == nil {
-		return
-	}
-	m.queue.RestoreFront(items)
-}
-
-func (m *defaultMessageLifecycle) DiscardQueuedUserMessage(queueItemID string) (QueuedUserMessage, bool) {
-	if m == nil || m.queue == nil {
-		return QueuedUserMessage{}, false
-	}
-	return m.queue.DiscardItem(queueItemID)
-}
-
-func (m *defaultMessageLifecycle) HasPendingUserInjections() bool {
-	return m != nil && m.queue != nil && m.queue.HasPending()
 }
 
 func newActiveMetaContextBuilder(meta session.Meta, executionRoot, model, thinkingLevel, globalConfigDir string, skillPolicy config.SkillPolicy, now time.Time) metaContextBuilder {

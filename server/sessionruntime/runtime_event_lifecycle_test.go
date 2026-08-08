@@ -74,28 +74,31 @@ func testIndependentWorktreeBoundaries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("claim second Worktree boundary: %v", err)
 	}
-	if _, err := fixture.authority.GrantWorktreeBoundary(first.Resource()); err != nil {
-		t.Fatalf("grant first Worktree boundary: %v", err)
-	}
 	if err := firstClaim.AwaitGrant(context.Background()); err != nil {
 		t.Fatalf("await first Worktree boundary: %v", err)
 	}
-	waitCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-	defer cancel()
-	if err := secondClaim.AwaitGrant(waitCtx); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("second Worktree boundary before its grant = %v, want deadline", err)
+	if err := secondClaim.AwaitGrant(context.Background()); err != nil {
+		t.Fatalf("await independent second Worktree boundary: %v", err)
 	}
-	if err := firstClaim.Release(); err != nil {
+	firstGrant, err := firstClaim.Release()
+	if err != nil {
 		t.Fatalf("release first Worktree boundary: %v", err)
 	}
-	if _, err := fixture.authority.GrantWorktreeBoundary(second.Resource()); err != nil {
-		t.Fatalf("grant second Worktree boundary: %v", err)
+	if firstGrant == nil {
+		t.Fatal("idle first Worktree release did not transfer reducer ownership")
 	}
-	if err := secondClaim.AwaitGrant(context.Background()); err != nil {
-		t.Fatalf("await second Worktree boundary: %v", err)
+	if err := firstGrant.Release(); err != nil {
+		t.Fatalf("release first reducer boundary: %v", err)
 	}
-	if err := secondClaim.Release(); err != nil {
+	secondGrant, err := secondClaim.Release()
+	if err != nil {
 		t.Fatalf("release second Worktree boundary: %v", err)
+	}
+	if secondGrant == nil {
+		t.Fatal("idle second Worktree release did not transfer reducer ownership")
+	}
+	if err := secondGrant.Release(); err != nil {
+		t.Fatalf("release second reducer boundary: %v", err)
 	}
 }
 
@@ -256,14 +259,6 @@ func testRuntimeClosePreservesAcceptedOutcomes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("submit accepted Stop disposition outcome: %v", err)
 	}
-	claim, err := authority.ClaimWorktreeBoundary(
-		attachment.Resource(),
-		serverapi.NewWorktreeOperationID(),
-	)
-	if err != nil {
-		t.Fatalf("claim Worktree boundary: %v", err)
-	}
-
 	closed := make(chan error, 1)
 	go func() {
 		_, err := attachment.Release(context.Background(), RuntimeReleaseClose)
@@ -271,25 +266,12 @@ func testRuntimeClosePreservesAcceptedOutcomes(t *testing.T) {
 	}()
 	awaitRuntimeEventSignal(t, lifecycle.draining)
 
-	claimSettled := make(chan error, 1)
-	go func() {
-		claimSettled <- claim.AwaitGrant(context.Background())
-	}()
-	select {
-	case err := <-claimSettled:
-		t.Fatalf("canonical runtime state settled before accepted outcomes: %v", err)
-	case <-time.After(30 * time.Millisecond):
-	}
-
 	close(releaseBlocker)
 	if got := awaitRuntimeEventResult(t, committedCompletion); got != "committed-completion" {
 		t.Fatalf("committed completion outcome = %q", got)
 	}
 	if got := awaitRuntimeEventResult(t, acceptedStopDisposition); got != "accepted-stop-disposition" {
 		t.Fatalf("accepted Stop disposition outcome = %q", got)
-	}
-	if err := awaitRuntimeEventChannel(t, claimSettled); !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
-		t.Fatalf("canonical Worktree settlement = %v, want runtime unavailable", err)
 	}
 	if err := awaitRuntimeEventChannel(t, closed); err != nil {
 		t.Fatalf("close runtime: %v", err)
@@ -327,21 +309,19 @@ func testWorktreeBoundaryCloseSettlement(t *testing.T) {
 			if err != nil {
 				t.Fatalf("claim Worktree boundary: %v", err)
 			}
-			if test.grant {
-				if _, err := fixture.authority.GrantWorktreeBoundary(first.Resource()); err != nil {
-					t.Fatalf("grant Worktree boundary: %v", err)
-				}
+			if err := claim.AwaitGrant(context.Background()); err != nil {
+				t.Fatalf("await Worktree boundary: %v", err)
 			}
 			if _, err := first.Release(context.Background(), RuntimeReleaseClose); err != nil {
 				t.Fatalf("close runtime: %v", err)
 			}
 
 			if test.grant {
-				if err := claim.Release(); !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
+				if _, err := claim.Release(); !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
 					t.Fatalf("release closed active claim = %v, want runtime unavailable", err)
 				}
-			} else if err := claim.AwaitGrant(context.Background()); !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
-				t.Fatalf("closed pending claim = %v, want runtime unavailable", err)
+			} else if _, err := claim.Release(); !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
+				t.Fatalf("release closed claim = %v, want runtime unavailable", err)
 			}
 
 			replacement := openLifecycleRuntime(t, fixture.authority, sessionID, "worktree-boundary-b", &plan)
@@ -357,11 +337,18 @@ func testWorktreeBoundaryCloseSettlement(t *testing.T) {
 			if err != nil {
 				t.Fatalf("claim replacement Worktree boundary: %v", err)
 			}
-			if _, err := fixture.authority.GrantWorktreeBoundary(replacement.Resource()); err != nil {
-				t.Fatalf("grant replacement Worktree boundary: %v", err)
+			if err := replacementClaim.AwaitGrant(context.Background()); err != nil {
+				t.Fatalf("await replacement Worktree boundary: %v", err)
 			}
-			if err := replacementClaim.Release(); err != nil {
+			grant, err := replacementClaim.Release()
+			if err != nil {
 				t.Fatalf("release replacement Worktree boundary: %v", err)
+			}
+			if grant == nil {
+				t.Fatal("replacement idle release did not transfer reducer ownership")
+			}
+			if err := grant.Release(); err != nil {
+				t.Fatalf("release replacement reducer boundary: %v", err)
 			}
 		})
 	}
@@ -390,21 +377,18 @@ func testWorktreeBoundaryOwnership(t *testing.T) {
 		t.Fatalf("second Worktree boundary claim = (%v, %v), want claimed error", duplicate, err)
 	}
 
-	grant, err := fixture.authority.GrantWorktreeBoundary(attachment.Resource())
-	if err != nil {
-		t.Fatalf("grant Worktree boundary: %v", err)
-	}
-	if grant == nil || grant.OperationID != operationID {
-		t.Fatalf("Worktree boundary grant = %+v, want operation %s", grant, operationID)
-	}
 	if err := claim.AwaitGrant(context.Background()); err != nil {
 		t.Fatalf("await Worktree boundary grant: %v", err)
 	}
-	if err := claim.Release(); err != nil {
+	grant, err := claim.Release()
+	if err != nil {
 		t.Fatalf("release Worktree boundary: %v", err)
 	}
-	if grant, err := fixture.authority.GrantWorktreeBoundary(attachment.Resource()); err != nil || grant != nil {
-		t.Fatalf("grant released Worktree boundary = (%+v, %v), want no claim", grant, err)
+	if grant == nil {
+		t.Fatal("idle Worktree release did not transfer reducer ownership")
+	}
+	if err := grant.Release(); err != nil {
+		t.Fatalf("release reducer boundary: %v", err)
 	}
 }
 

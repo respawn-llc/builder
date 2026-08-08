@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"core/server/llm"
+	"core/server/runtimecommand"
 	"core/shared/runtimeids"
 	"core/shared/textutil"
 )
@@ -60,12 +61,9 @@ type LiveRunWaitHandle struct {
 }
 
 type liveRunCoordinator struct {
-	mu                          sync.Mutex
-	queueFlushCommitMu          sync.Mutex
-	current                     *liveRunGroup
-	stoppedQueueItems           map[runtimeids.QueueItemID]struct{}
-	stoppedPublishingQueueItems map[runtimeids.QueueItemID]struct{}
-	onCompleted                 func(LiveRunResult)
+	mu          sync.Mutex
+	current     *liveRunGroup
+	onCompleted func(LiveRunResult)
 }
 
 type liveRunGroup struct {
@@ -84,15 +82,8 @@ type liveRunGroup struct {
 	startedAt        time.Time
 	finishedAt       time.Time
 	done             chan struct{}
-	reservations     int
-	taggedQueueItems map[runtimeids.QueueItemID]struct{}
-	publishingItems  map[runtimeids.QueueItemID]struct{}
 	goalLoopHolding  bool
 	waiters          int
-}
-
-type liveRunAdmission struct {
-	group *liveRunGroup
 }
 
 func newLiveRunCoordinator(onCompleted ...func(LiveRunResult)) *liveRunCoordinator {
@@ -137,36 +128,36 @@ func (e *Engine) TryInterruptActiveRun() (bool, error) {
 	}
 	e.ensureOrchestrationCollaborators()
 	snapshot := e.stepLifecycle.Snapshot()
-	if (snapshot == nil || !activeKindInterruptibleByLiveStop(snapshot.ActiveKind)) && !e.liveRun.hasPendingStopTarget() {
+	if snapshot == nil || !activeKindInterruptibleByLiveStop(snapshot.ActiveKind) {
 		return false, nil
 	}
-	interrupted, taggedQueueItems, goalLoop := e.liveRun.interrupt()
-	if !interrupted {
-		if snapshot == nil || !activeKindInterruptibleByLiveStop(snapshot.ActiveKind) {
-			return false, nil
-		}
-		tracker := goalLoopInterruptTracker{engine: e, match: true}
-		interruptedSnapshot, err := e.stepLifecycle.InterruptCurrent(tracker.onSnapshot)
-		tracker.resolve(err, interruptedSnapshot)
-		if err != nil {
-			return interruptedSnapshot != nil, err
-		}
-		return interruptedSnapshot != nil, err
+	var stoppedScope runtimeids.ExecutionScopeID
+	if lifecycle, ok := e.cfg.StepLifecycle.(AgentStepScopeLifecycle); ok {
+		stoppedScope, _ = lifecycle.CurrentAgentExecutionScope(context.Background())
 	}
-	e.failStoppedLiveRunQueueItems(taggedQueueItems)
-	if snapshot == nil || !activeKindInterruptibleByLiveStop(snapshot.ActiveKind) {
-		return true, nil
+	interrupted, goalLoop := e.liveRun.interrupt()
+	tracker := goalLoopInterruptTracker{engine: e, match: goalLoop || !interrupted}
+	var interruptedSnapshot *RunSnapshot
+	var err error
+	if lifecycle, ok := e.stepLifecycle.(*defaultExclusiveStepLifecycle); ok {
+		interruptedSnapshot, err = lifecycle.cancelCurrent(tracker.onSnapshot)
+	} else {
+		interruptedSnapshot, err = e.stepLifecycle.InterruptCurrent(tracker.onSnapshot)
 	}
-	tracker := goalLoopInterruptTracker{engine: e, match: goalLoop}
-	interruptedSnapshot, err := e.stepLifecycle.InterruptCurrent(tracker.onSnapshot)
 	tracker.resolve(err, interruptedSnapshot)
 	if err != nil {
-		return true, err
+		return interrupted || interruptedSnapshot != nil, err
+	}
+	stopped := interrupted || interruptedSnapshot != nil
+	if stopped {
+		if err := e.submitStoppedScopeDisposition(stoppedScope); err != nil {
+			return stopped, err
+		}
 	}
 	if goalLoop && !tracker.pending && e.goalActive() {
 		e.goalLoopState().Suspend()
 	}
-	return true, nil
+	return stopped, nil
 }
 
 type goalLoopInterruptTracker struct {
@@ -216,16 +207,9 @@ func (e *Engine) queueMessageForActiveRun(ctx context.Context, message llm.Messa
 		return QueuedUserMessage{}, false, errors.New("empty message")
 	}
 	e.ensureOrchestrationCollaborators()
-	admission, admitted := e.liveRun.beginAdmission()
-	if !admitted {
+	if !e.liveRun.hasActive() {
 		return QueuedUserMessage{}, false, ErrNoActiveLiveRun
 	}
-	committed := false
-	defer func() {
-		if !committed {
-			e.liveRun.rollbackAdmission(admission)
-		}
-	}()
 	if beforeQueue != nil {
 		if err := beforeQueue(); err != nil {
 			return QueuedUserMessage{}, false, err
@@ -234,34 +218,15 @@ func (e *Engine) queueMessageForActiveRun(ctx context.Context, message llm.Messa
 	if err := ctx.Err(); err != nil {
 		return QueuedUserMessage{}, false, err
 	}
-	item := QueuedUserMessage{ID: runtimeids.NewQueueItemID().String(), ClientRequestID: clientRequestID.String(), Message: message}
-	finalized := e.liveRun.finishAdmission(admission, mustQueueItemID(item.ID), func(queueItemID string) {
-		e.markQueuedUserInjectionForAutoDrain(queueItemID)
-	})
-	if !finalized {
-		return QueuedUserMessage{}, false, context.Canceled
+	item, err := newQueuedUserMessage(message, clientRequestID.String())
+	if err != nil {
+		return QueuedUserMessage{}, false, err
 	}
-	committed = true
-	e.pendingWorkMu.Lock()
-	queuedItem, queueErr := e.messageFlow.QueueUserMessageWithID(item)
+	queuedItem, queueErr := e.acceptHumanAgendaItem(item, boundaryEligibilityStep, true)
 	if queueErr != nil {
-		e.pendingWorkMu.Unlock()
-		queueItemID := mustQueueItemID(item.ID)
-		e.liveRun.finishQueueItemPublication(queueItemID)
-		e.unmarkQueuedUserInjectionForAutoDrain(item.ID)
-		e.completeLiveRunQueueItems(map[string]struct{}{item.ID: {}})
 		return QueuedUserMessage{}, false, queueErr
 	}
-	item = queuedItem
-	e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
-	e.pendingWorkMu.Unlock()
-	queueItemID := mustQueueItemID(item.ID)
-	if e.liveRun.finishQueueItemPublication(queueItemID) {
-		e.failStoppedLiveRunQueueItems(map[runtimeids.QueueItemID]struct{}{queueItemID: {}})
-	} else {
-		e.scheduleQueuedUserInjectionsIfIdle()
-	}
-	return item, true, nil
+	return queuedItem, true, nil
 }
 
 func (e *Engine) beginLiveRunStep(snapshot *RunSnapshot) {
@@ -277,8 +242,7 @@ func (e *Engine) finishLiveRunStep(snapshot *RunSnapshot, status RunStatus, err 
 		return nil
 	}
 	e.ensureOrchestrationCollaborators()
-	stoppedQueueItems, result := e.liveRun.finishStepDeferred(snapshot, status, err, e.shouldHoldLiveRunForGoalLoopContinuation(snapshot, status))
-	e.failStoppedLiveRunQueueItems(stoppedQueueItems)
+	result := e.liveRun.finishStepDeferred(snapshot, status, err, e.shouldHoldLiveRunForGoalLoopContinuation(snapshot, status))
 	if result == nil {
 		return nil
 	}
@@ -303,73 +267,52 @@ func (e *Engine) recordLiveRunAssistantFinalAnswer(stepID string, message llm.Me
 	e.liveRun.recordAssistantFinalAnswer(stepID, message)
 }
 
-func (e *Engine) completeLiveRunQueueItems(ids map[string]struct{}) {
-	if e == nil || len(ids) == 0 {
-		return
+func (e *Engine) submitStoppedScopeDisposition(stopped runtimeids.ExecutionScopeID) error {
+	if e.runtimeEvents == nil {
+		steerErr := e.applySteeringBatch("", steerMessagesWithPersistenceIntent(
+			steeringPriorityNormal,
+			steeringMessageEventDefault,
+			true,
+			[]llm.Message{{
+				Role:        llm.RoleDeveloper,
+				MessageType: textutil.Value(llm.MessageTypeInterruption),
+				Content:     textutil.Value(interruptMessage),
+			}},
+		))
+		e.invalidateAgentStepScope(stopped, errBoundaryScopeStopped)
+		return steerErr
 	}
-	e.ensureOrchestrationCollaborators()
-	e.liveRun.completeQueueItems(typedQueueItemIDSet(ids))
-}
-
-func (e *Engine) failStoppedLiveRunQueueItems(ids map[runtimeids.QueueItemID]struct{}) {
-	if e == nil || len(ids) == 0 {
-		return
-	}
-	stringIDs := stringQueueItemIDSet(ids)
-	rawIDs := make([]string, 0, len(stringIDs))
-	for id := range stringIDs {
-		rawIDs = append(rawIDs, id)
-	}
-	e.unmarkQueuedUserInjectionForAutoDrain(rawIDs...)
-	e.pendingWorkMu.Lock()
-	failed := map[runtimeids.QueueItemID]struct{}{}
-	for _, item := range e.messageFlow.DrainPendingUserInjectionsByID(stringIDs) {
-		failed[mustQueueItemID(item.ID)] = struct{}{}
-		e.emitQueuedUserMessageStatus(item, QueuedUserMessageFailed, QueuedUserMessageFailureStopped, true)
-	}
-	e.pendingWorkMu.Unlock()
-	e.liveRun.clearStoppedQueueItems(failed)
-}
-
-func (e *Engine) dropStoppedLiveRunQueueItems(items []queuedUserMessage) []queuedUserMessage {
-	if e == nil || len(items) == 0 {
-		return items
-	}
-	ids := make(map[runtimeids.QueueItemID]struct{}, len(items))
-	for _, item := range items {
-		ids[mustQueueItemID(item.message.ID)] = struct{}{}
-	}
-	stopped := e.liveRun.takeStoppedQueueItems(ids)
-	if len(stopped) == 0 {
-		return items
-	}
-	filtered := items[:0]
-	e.pendingWorkMu.Lock()
-	for _, item := range items {
-		id := mustQueueItemID(item.message.ID)
-		if _, ok := stopped[id]; ok {
-			e.unmarkQueuedUserInjectionForAutoDrain(item.message.ID)
-			e.emitQueuedUserMessageStatus(item.message, QueuedUserMessageFailed, QueuedUserMessageFailureStopped, true)
-			continue
-		}
-		filtered = append(filtered, item)
-	}
-	e.pendingWorkMu.Unlock()
-	return filtered
-}
-
-func (e *Engine) commitLiveRunQueueItemsUnlessStopped(items []queuedUserMessage, commit func() error) (bool, error) {
-	if e == nil {
-		if commit == nil {
-			return true, nil
-		}
-		return true, commit()
-	}
-	ids := make(map[runtimeids.QueueItemID]struct{}, len(items))
-	for _, item := range items {
-		ids[mustQueueItemID(item.message.ID)] = struct{}{}
-	}
-	return e.liveRun.commitQueueItemsUnlessStopped(ids, commit)
+	_, err := runtimecommand.Submit(
+		e.lifecycleCtx,
+		e.runtimeEvents,
+		stopped,
+		func(
+			command runtimecommand.Admission,
+			scope runtimeids.ExecutionScopeID,
+			complete func(struct{}, error),
+		) error {
+			steerErr := runtimeEventAdmission{engine: e, command: command}.applySteering(
+				"",
+				steerMessagesWithPersistenceIntent(
+					steeringPriorityNormal,
+					steeringMessageEventDefault,
+					true,
+					[]llm.Message{{
+						Role:        llm.RoleDeveloper,
+						MessageType: textutil.Value(llm.MessageTypeInterruption),
+						Content:     textutil.Value(interruptMessage),
+					}},
+				),
+			)
+			for _, item := range e.boundaryAgenda.takeHumanScope(scope) {
+				item.settleBoundaryAgenda(errBoundaryScopeStopped)
+			}
+			e.invalidateAgentStepScope(scope, errBoundaryScopeStopped)
+			complete(struct{}{}, steerErr)
+			return nil
+		},
+	)
+	return runtimeSteeringError(err)
 }
 
 func (c *liveRunCoordinator) hasActive() bool {
@@ -379,16 +322,6 @@ func (c *liveRunCoordinator) hasActive() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.current != nil
-}
-
-func (c *liveRunCoordinator) hasPendingStopTarget() bool {
-	if c == nil {
-		return false
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	group := c.current
-	return group != nil && (len(group.taggedQueueItems) > 0 || len(group.publishingItems) > 0 || group.reservations > 0 || group.goalLoopHolding)
 }
 
 func (c *liveRunCoordinator) beginStep(snapshot *RunSnapshot) {
@@ -419,20 +352,19 @@ func (c *liveRunCoordinator) beginStep(snapshot *RunSnapshot) {
 	}
 }
 
-func (c *liveRunCoordinator) finishStep(snapshot *RunSnapshot, status RunStatus, err error, holdGoalLoop bool) map[runtimeids.QueueItemID]struct{} {
-	stoppedQueueItems, result := c.finishStepDeferred(snapshot, status, err, holdGoalLoop)
+func (c *liveRunCoordinator) finishStep(snapshot *RunSnapshot, status RunStatus, err error, holdGoalLoop bool) {
+	result := c.finishStepDeferred(snapshot, status, err, holdGoalLoop)
 	if result != nil {
 		c.publishCompleted(*result)
 	}
-	return stoppedQueueItems
 }
 
-func (c *liveRunCoordinator) finishStepDeferred(snapshot *RunSnapshot, status RunStatus, err error, holdGoalLoop bool) (map[runtimeids.QueueItemID]struct{}, *LiveRunResult) {
+func (c *liveRunCoordinator) finishStepDeferred(snapshot *RunSnapshot, status RunStatus, err error, holdGoalLoop bool) *LiveRunResult {
 	c.mu.Lock()
 	group := c.current
 	if group == nil {
 		c.mu.Unlock()
-		return nil, nil
+		return nil
 	}
 	group.runID = mustRunID(snapshot.RunID)
 	group.stepID = mustStepID(snapshot.StepID)
@@ -448,30 +380,17 @@ func (c *liveRunCoordinator) finishStepDeferred(snapshot *RunSnapshot, status Ru
 		group.resultKindSet = true
 		group.noFinalReason = liveRunNoFinalAnswerReason(snapshot.ActiveKind)
 	}
-	var stoppedQueueItems map[runtimeids.QueueItemID]struct{}
 	var done chan struct{}
 	if status == RunStatusFailed || status == RunStatusInterrupted {
-		stoppedQueueItems = cloneMapIfNonEmpty(group.taggedQueueItems)
-		for id := range group.publishingItems {
-			delete(stoppedQueueItems, id)
-			if c.stoppedPublishingQueueItems == nil {
-				c.stoppedPublishingQueueItems = make(map[runtimeids.QueueItemID]struct{})
-			}
-			c.stoppedPublishingQueueItems[id] = struct{}{}
-		}
-		c.markStoppedQueueItemsLocked(stoppedQueueItems)
-		group.taggedQueueItems = nil
-		group.publishingItems = nil
-		group.reservations = 0
 		c.current = nil
 		done = group.done
 		result := liveRunResultForGroup(group)
 		c.mu.Unlock()
 		close(done)
-		return stoppedQueueItems, &result
+		return &result
 	}
 	group.goalLoopHolding = snapshot.GoalLoop && holdGoalLoop
-	if group.reservations == 0 && len(group.taggedQueueItems) == 0 && !group.goalLoopHolding {
+	if !group.goalLoopHolding {
 		c.current = nil
 		done = group.done
 	}
@@ -479,9 +398,9 @@ func (c *liveRunCoordinator) finishStepDeferred(snapshot *RunSnapshot, status Ru
 	if done != nil {
 		close(done)
 		result := liveRunResultForGroup(group)
-		return nil, &result
+		return &result
 	}
-	return nil, nil
+	return nil
 }
 
 func (c *liveRunCoordinator) finishGoalLoop() {
@@ -493,7 +412,7 @@ func (c *liveRunCoordinator) finishGoalLoop() {
 	}
 	var done chan struct{}
 	group.goalLoopHolding = false
-	if group.status != RunStatusRunning && group.reservations == 0 && len(group.taggedQueueItems) == 0 {
+	if group.status != RunStatusRunning {
 		c.current = nil
 		done = group.done
 	}
@@ -530,251 +449,26 @@ func (c *liveRunCoordinator) recordAssistantFinalAnswer(stepID string, message l
 	c.current.assistantMessage = message
 }
 
-func (c *liveRunCoordinator) beginAdmission() (liveRunAdmission, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.current == nil {
-		return liveRunAdmission{}, false
-	}
-	if c.current.status == RunStatusFailed || c.current.status == RunStatusInterrupted {
-		return liveRunAdmission{}, false
-	}
-	c.current.reservations++
-	return liveRunAdmission{group: c.current}, true
-}
-
-func (c *liveRunCoordinator) finishAdmission(admission liveRunAdmission, queueItemID runtimeids.QueueItemID, markAutoDrain func(string)) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.current == nil || c.current != admission.group || c.current.status == RunStatusFailed || c.current.status == RunStatusInterrupted {
-		return false
-	}
-	if c.current.reservations > 0 {
-		c.current.reservations--
-	}
-	c.current.trackQueuedItemForLiveRun(queueItemID)
-	if markAutoDrain != nil {
-		markAutoDrain(queueItemID.String())
-	}
-	return true
-}
-
-func (c *liveRunCoordinator) beginQueueItemPublication(queueItemID runtimeids.QueueItemID, markAutoDrain func(string)) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.current == nil || (c.current.status != RunStatusRunning && c.current.status != RunStatusCompleted) {
-		return false
-	}
-	c.current.trackQueuedItemForLiveRun(queueItemID)
-	if markAutoDrain != nil {
-		markAutoDrain(queueItemID.String())
-	}
-	return true
-}
-
-func (c *liveRunCoordinator) finishQueueItemPublication(queueItemID runtimeids.QueueItemID) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.current != nil {
-		delete(c.current.publishingItems, queueItemID)
-		if len(c.current.publishingItems) == 0 {
-			c.current.publishingItems = nil
-		}
-	}
-	if _, stopped := c.stoppedPublishingQueueItems[queueItemID]; stopped {
-		delete(c.stoppedPublishingQueueItems, queueItemID)
-		if len(c.stoppedPublishingQueueItems) == 0 {
-			c.stoppedPublishingQueueItems = nil
-		}
-		return true
-	}
-	return false
-}
-
-func (g *liveRunGroup) trackQueuedItemForLiveRun(queueItemID runtimeids.QueueItemID) {
-	if g.taggedQueueItems == nil {
-		g.taggedQueueItems = make(map[runtimeids.QueueItemID]struct{})
-	}
-	g.taggedQueueItems[queueItemID] = struct{}{}
-	if g.publishingItems == nil {
-		g.publishingItems = make(map[runtimeids.QueueItemID]struct{})
-	}
-	g.publishingItems[queueItemID] = struct{}{}
-}
-
-func (c *liveRunCoordinator) rollbackAdmission(admission liveRunAdmission) {
-	c.mu.Lock()
-	group := c.current
-	if group == nil || group != admission.group {
-		c.mu.Unlock()
-		return
-	}
-	var done chan struct{}
-	if group.reservations > 0 {
-		group.reservations--
-	}
-	if group.status != RunStatusRunning && group.reservations == 0 && len(group.taggedQueueItems) == 0 && !group.goalLoopHolding {
-		c.current = nil
-		done = group.done
-	}
-	c.mu.Unlock()
-	if done != nil {
-		close(done)
-		c.publishCompleted(liveRunResultForGroup(group))
-	}
-}
-
-func (c *liveRunCoordinator) completeQueueItems(ids map[runtimeids.QueueItemID]struct{}) {
-	c.mu.Lock()
-	for id := range ids {
-		delete(c.stoppedQueueItems, id)
-	}
-	if len(c.stoppedQueueItems) == 0 {
-		c.stoppedQueueItems = nil
-	}
-	group := c.current
-	if group == nil {
-		c.mu.Unlock()
-		return
-	}
-	var done chan struct{}
-	for id := range ids {
-		delete(group.taggedQueueItems, id)
-		delete(group.publishingItems, id)
-	}
-	if len(group.taggedQueueItems) == 0 {
-		group.taggedQueueItems = nil
-	}
-	if len(group.publishingItems) == 0 {
-		group.publishingItems = nil
-	}
-	if group.status != RunStatusRunning && group.reservations == 0 && len(group.taggedQueueItems) == 0 && !group.goalLoopHolding {
-		c.current = nil
-		done = group.done
-	}
-	c.mu.Unlock()
-	if done != nil {
-		close(done)
-		c.publishCompleted(liveRunResultForGroup(group))
-	}
-}
-
-func (c *liveRunCoordinator) interrupt() (bool, map[runtimeids.QueueItemID]struct{}, bool) {
-	c.queueFlushCommitMu.Lock()
-	defer c.queueFlushCommitMu.Unlock()
+func (c *liveRunCoordinator) interrupt() (bool, bool) {
 	c.mu.Lock()
 	group := c.current
 	if group == nil {
 		c.mu.Unlock()
-		return false, nil, false
+		return false, false
 	}
 	goalLoop := group.goalLoop
-	ids := cloneMapIfNonEmpty(group.taggedQueueItems)
-	c.markStoppedQueueItemsLocked(ids)
-	for id := range group.publishingItems {
-		delete(ids, id)
-		if c.stoppedPublishingQueueItems == nil {
-			c.stoppedPublishingQueueItems = make(map[runtimeids.QueueItemID]struct{})
-		}
-		c.stoppedPublishingQueueItems[id] = struct{}{}
-	}
 	group.status = RunStatusInterrupted
 	group.err = context.Canceled
 	group.resultKind = LiveRunResultNoFinalAnswer
 	group.resultKindSet = true
 	group.noFinalReason = LiveRunNoFinalAnswerReasonUnknown
 	group.finishedAt = time.Now().UTC()
-	group.taggedQueueItems = nil
-	group.reservations = 0
 	c.current = nil
 	done := group.done
 	c.mu.Unlock()
 	close(done)
 	c.publishCompleted(liveRunResultForGroup(group))
-	return true, ids, goalLoop
-}
-
-func (c *liveRunCoordinator) clearStoppedQueueItems(ids map[runtimeids.QueueItemID]struct{}) {
-	if c == nil || len(ids) == 0 {
-		return
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for id := range ids {
-		delete(c.stoppedQueueItems, id)
-	}
-	if len(c.stoppedQueueItems) == 0 {
-		c.stoppedQueueItems = nil
-	}
-}
-
-func (c *liveRunCoordinator) takeStoppedQueueItems(ids map[runtimeids.QueueItemID]struct{}) map[runtimeids.QueueItemID]struct{} {
-	if c == nil || len(ids) == 0 {
-		return nil
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	out := map[runtimeids.QueueItemID]struct{}{}
-	for id := range ids {
-		if _, stopped := c.stoppedQueueItems[id]; stopped {
-			out[id] = struct{}{}
-			delete(c.stoppedQueueItems, id)
-		}
-	}
-	if len(c.stoppedQueueItems) == 0 {
-		c.stoppedQueueItems = nil
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
-func (c *liveRunCoordinator) commitQueueItemsUnlessStopped(ids map[runtimeids.QueueItemID]struct{}, commit func() error) (bool, error) {
-	if c == nil {
-		if commit == nil {
-			return true, nil
-		}
-		return true, commit()
-	}
-	c.queueFlushCommitMu.Lock()
-	defer c.queueFlushCommitMu.Unlock()
-	c.mu.Lock()
-	stopped := map[runtimeids.QueueItemID]struct{}{}
-	for id := range ids {
-		if _, ok := c.stoppedQueueItems[id]; ok {
-			stopped[id] = struct{}{}
-		}
-	}
-	if len(stopped) > 0 {
-		for id := range stopped {
-			delete(c.stoppedQueueItems, id)
-		}
-		if len(c.stoppedQueueItems) == 0 {
-			c.stoppedQueueItems = nil
-		}
-		c.mu.Unlock()
-		return false, nil
-	}
-	if commit == nil {
-		c.mu.Unlock()
-		return true, nil
-	}
-	c.mu.Unlock()
-	err := commit()
-	return true, err
-}
-
-func (c *liveRunCoordinator) markStoppedQueueItemsLocked(ids map[runtimeids.QueueItemID]struct{}) {
-	if len(ids) == 0 {
-		return
-	}
-	if c.stoppedQueueItems == nil {
-		c.stoppedQueueItems = make(map[runtimeids.QueueItemID]struct{}, len(ids))
-	}
-	for id := range ids {
-		c.stoppedQueueItems[id] = struct{}{}
-	}
+	return true, goalLoop
 }
 
 func (c *liveRunCoordinator) captureWait(ctx context.Context) (*LiveRunWaitHandle, error) {

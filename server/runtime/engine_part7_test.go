@@ -2,16 +2,17 @@ package runtime
 
 import (
 	"context"
-	"core/server/llm"
-	"core/server/tools"
-	shelltool "core/server/tools/shell"
-	"core/shared/textutil"
-	"core/shared/toolspec"
 	"encoding/json"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"core/server/llm"
+	"core/server/tools"
+	shelltool "core/server/tools/shell"
+	"core/shared/textutil"
+	"core/shared/toolspec"
 )
 
 // The readiness-gated background/reviewer tests below intentionally run
@@ -242,10 +243,8 @@ func TestSteerAcceptedDuringReviewerAppearsInMainAgentFollowUp(t *testing.T) {
 			Client:        reviewerClient,
 		},
 	})
-	eng.pauseQueuedUserAutoDrain()
 	t.Cleanup(func() {
 		eng.FailQueuedUserMessages(QueuedUserMessageFailureClosing)
-		eng.resumeQueuedUserAutoDrain()
 		waitEngineLifecycleTasks(t, eng)
 	})
 

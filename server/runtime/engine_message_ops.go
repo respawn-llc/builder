@@ -563,7 +563,6 @@ func (e *Engine) appendQueuedUserMessageFlush(stepID string, message llm.Message
 	}
 	e.emitRaw(event)
 	for _, item := range normalizedItems {
-		e.unmarkQueuedUserInjectionForAutoDrain(item.ID)
 		e.emitRaw(Event{
 			Kind: EventQueuedUserMessageStatus,
 			QueuedUserMessageStatus: &QueuedUserMessageStatusEvent{
@@ -574,7 +573,6 @@ func (e *Engine) appendQueuedUserMessageFlush(stepID string, message llm.Message
 			},
 		})
 	}
-	e.completeLiveRunQueueItems(queuedUserMessageIDSet(normalizedItems))
 	return appended.CommitReceipt, appendErr
 }
 
@@ -663,16 +661,22 @@ func (e *Engine) emitQueuedUserMessageStatus(
 
 func (e *Engine) FailQueuedUserMessages(reason QueuedUserMessageFailureReason) []QueuedUserMessage {
 	e.ensureOrchestrationCollaborators()
-	e.pendingWorkMu.Lock()
-	pending := e.messageFlow.DrainPendingUserInjections()
-	messages := make([]QueuedUserMessage, 0, len(pending))
-	for _, item := range pending {
-		messages = append(messages, item)
-		e.unmarkQueuedUserInjectionForAutoDrain(item.ID)
-		e.emitQueuedUserMessageStatus(item, QueuedUserMessageFailed, reason, true)
+	messages, err := submitRuntimeEvent(
+		e,
+		reason,
+		func(_ runtimeEventAdmission, failure QueuedUserMessageFailureReason) ([]QueuedUserMessage, error) {
+			pending := e.boundaryAgenda.selectAllHumanItems()
+			messages := make([]QueuedUserMessage, 0, len(pending))
+			for _, item := range pending {
+				messages = append(messages, item.message)
+				e.emitQueuedUserMessageStatus(item.message, QueuedUserMessageFailed, failure, true)
+			}
+			return messages, nil
+		},
+	)
+	if err != nil {
+		e.surfaceRunError(err)
 	}
-	e.pendingWorkMu.Unlock()
-	e.completeLiveRunQueueItems(queuedUserMessageIDSet(messages))
 	return messages
 }
 
@@ -808,11 +812,6 @@ func flushedUserMessageEvent(provenance *TranscriptCommittedRowProvenance, msg l
 		return nil
 	}
 	return &Event{Kind: EventUserMessageFlushed, StepID: stepID, UserMessage: *msg.Content, UserMessageBatch: []string{*msg.Content}, CommittedTranscriptChanged: true, CommittedProvenance: cloneTranscriptCommittedRowProvenance(provenance)}
-}
-
-func (e *Engine) flushPendingUserInjections(stepID string, selection userInjectionSelection) (userInjectionCommitResult, error) {
-	e.ensureOrchestrationCollaborators()
-	return e.messageFlow.FlushPendingUserInjections(stepID, selection)
 }
 
 // resolveGlobalConfigDir returns the directory that owns model-visible global

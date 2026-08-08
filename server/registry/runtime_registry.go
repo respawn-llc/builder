@@ -622,16 +622,16 @@ func (r *RuntimeRegistry) PublishRuntimeReadModelUpdate(sessionID string, update
 	}
 }
 
-func (r *RuntimeRegistry) PublishWorktreeTransitionOutcome(sessionID string, outcome clientui.WorktreeTransitionOutcome) {
+func (r *RuntimeRegistry) PublishWorktreeTransitionOutcome(sessionID string, outcome clientui.WorktreeTransitionOutcome) error {
 	if r == nil {
-		return
+		return nil
 	}
 	if err := outcome.Validate(); err != nil {
 		panic(fmt.Sprintf("publish invalid worktree transition outcome for session %q: %v", strings.TrimSpace(sessionID), err))
 	}
 	entry := r.authorityEntryBySession(sessionID)
 	if entry == nil {
-		return
+		return nil
 	}
 	transcriptOutcome := clientui.TranscriptWorktreeTransitionOutcome{
 		OperationID: outcome.OperationID,
@@ -649,6 +649,7 @@ func (r *RuntimeRegistry) PublishWorktreeTransitionOutcome(sessionID string, out
 		}
 	}
 	entry.sessionFeed.Publish([]clientui.TranscriptEvent{clientui.NewTranscriptEvent(transcriptOutcome)})
+	return nil
 }
 
 func (r *RuntimeRegistry) SubscribeSessionTranscript(ctx context.Context, req serverapi.TranscriptSubscribeRequest) (serverapi.TranscriptSubscription, error) {

@@ -231,8 +231,6 @@ func (c *defaultContextCompactor) compactContext(ctx context.Context, mode compa
 	if includePreservedUserMessage {
 		activeKind = ActiveKindCompaction
 	}
-	e.pauseQueuedUserAutoDrain()
-	defer e.resumeQueuedUserAutoDrain()
 	var receipt session.CommitReceipt
 	err := runExclusiveStepWhenIdle(ctx, c.steps, activeKind, reservation, func(stepCtx context.Context, stepID string) error {
 		if requireEligibility {

@@ -20,6 +20,7 @@ import (
 	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/shared/runtimeids"
+	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 	"core/shared/textutil"
 	"core/shared/toolspec"
@@ -79,6 +80,24 @@ func waitEngineLifecycleTasks(t *testing.T, eng *Engine) {
 	case <-done:
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for engine lifecycle tasks")
+	}
+}
+
+func installTestAgentStepOrigin(t *testing.T, engine *Engine, snapshot *RunSnapshot) {
+	t.Helper()
+	if engine == nil || snapshot == nil {
+		t.Fatal("test Agent Step origin requires an Engine and active Run snapshot")
+	}
+	origin := serverapi.RuntimeStepOrigin{RunID: snapshot.RunID, StepID: snapshot.StepID}
+	if err := origin.Validate(); err != nil {
+		t.Fatalf("test Agent Step origin: %v", err)
+	}
+	scopeID := runtimeids.NewExecutionScopeID()
+	engine.agentSteps.scopeID = scopeID
+	engine.agentSteps.current = &activeAgentStep{
+		scopeID: scopeID,
+		origin:  origin,
+		phase:   agentStepProviderRunning,
 	}
 }
 

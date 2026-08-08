@@ -73,20 +73,6 @@ func observeQueuedUserFlushCommit(options stepLoopOptions, receipt session.Commi
 	}
 }
 
-type userInjectionSelection interface {
-	userInjectionSelection()
-}
-
-type steerUserInjectionSelection struct {
-	queueItemIDs map[string]struct{}
-}
-
-func (steerUserInjectionSelection) userInjectionSelection() {}
-
-type allPendingUserInjectionSelection struct{}
-
-func (allPendingUserInjectionSelection) userInjectionSelection() {}
-
 type userInjectionFlushDisposition uint8
 
 const (
@@ -104,10 +90,6 @@ type userInjectionCommitResult struct {
 type queuedUserFlushStoppedError struct{}
 
 func (*queuedUserFlushStoppedError) Error() string { return "queued user flush stopped" }
-
-func steerUserInjections(queueItemIDs map[string]struct{}) userInjectionSelection {
-	return steerUserInjectionSelection{queueItemIDs: queueItemIDs}
-}
 
 type stepLoopResult struct {
 	FinalAnswer                *llm.Message
@@ -135,16 +117,6 @@ type toolExecutor interface {
 
 type messageLifecycle interface {
 	RestoreMessages() error
-	CommitPendingUserInjections(stepID string, selection userInjectionSelection) (userInjectionCommitResult, error)
-	FlushPendingUserInjections(stepID string, selection userInjectionSelection) (userInjectionCommitResult, error)
-	DrainPendingUserInjections() []QueuedUserMessage
-	DrainPendingUserInjectionsByID(ids map[string]struct{}) []QueuedUserMessage
-	PendingUserMessages() []QueuedUserMessage
-	RestorePendingUserInjections(items []queuedUserMessage)
-	QueueUserMessage(text string, clientRequestID string) (QueuedUserMessage, error)
-	QueueUserMessageWithID(item QueuedUserMessage) (QueuedUserMessage, error)
-	DiscardQueuedUserMessage(queueItemID string) (QueuedUserMessage, bool)
-	HasPendingUserInjections() bool
 }
 
 type reviewerPipeline interface {
@@ -212,6 +184,7 @@ func (e *Engine) ensureOrchestrationCollaborators() {
 				phase:    e.phaseProtocol,
 				reviewer: e.reviewerFlow,
 				messages: e.messageFlow,
+				tools:    e.toolFlow,
 			}
 		}
 		if reviewer, ok := e.reviewerFlow.(*defaultReviewerPipeline); ok && reviewer.stepRunner == nil {

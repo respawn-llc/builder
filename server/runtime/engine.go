@@ -7,7 +7,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"core/server/llm"
 	"core/server/runtimecommand"
@@ -169,24 +168,16 @@ type Engine struct {
 	closed           atomic.Bool
 	runtimeEvents    *runtimecommand.Queue
 	boundaryAgenda   *boundaryAgenda
+	agentSteps       agentStepAdmissionState
 	streamMutationMu sync.Mutex
 
-	store    *session.Store
-	eventLog session.MaterializedEventLog
-	llm      llm.Client
-	registry *tools.Registry
-	cfg      Config
-	// pendingWorkMu owns the legacy Pending Work store until the Boundary Agenda
-	// cutover removes that secondary store.
-	pendingWorkMu              sync.Mutex
+	store                      *session.Store
+	eventLog                   session.MaterializedEventLog
+	llm                        llm.Client
+	registry                   *tools.Registry
+	cfg                        Config
 	workflowAssignmentMu       sync.Mutex
 	pendingWorkflowAssignments []queuedWorkflowAssignment
-	// queuedUserWorkMu serializes the server-owned continuation that drains
-	// pending steering/user injections once a busy run releases.
-	queuedUserWorkMu           sync.Mutex
-	queuedUserWorkScheduled    bool
-	queuedUserWorkPauseCount   int
-	queuedUserWorkAutoDrainIDs map[string]struct{}
 	liveRun                    *liveRunCoordinator
 	activeStepGoalMutationsMu  sync.Mutex
 	activeStepGoalMutations    map[string][]activeStepGoalMutation
@@ -505,7 +496,7 @@ func (e *Engine) ApplyRuntimeCloseUnderAdmission() error {
 }
 
 func (e *Engine) applyRuntimeClose(admission runtimeEventAdmission) error {
-	if e == nil || e.boundaryAgenda == nil || !e.boundaryAgenda.close() {
+	if e == nil || e.boundaryAgenda == nil || !e.boundaryAgenda.close(errBoundaryRuntimeClosed) {
 		return nil
 	}
 	return admission.applySteering("runtime_close", steerLiveToolAbortIntent("canceled"))
@@ -565,66 +556,15 @@ func (e *Engine) QueueUserMessage(text string) (QueuedUserMessage, error) {
 }
 
 func (e *Engine) QueueUserMessageWithClientRequestID(text string, clientRequestID string) (QueuedUserMessage, error) {
-	return e.queueUserMessageWithClientRequestID(text, clientRequestID, false)
-}
-
-func (e *Engine) queueUserMessageWithClientRequestID(text string, clientRequestID string, forceAutoDrain bool) (QueuedUserMessage, error) {
 	e.ensureOrchestrationCollaborators()
-	if !forceAutoDrain {
-		e.pendingWorkMu.Lock()
-		defer e.pendingWorkMu.Unlock()
-		item, err := e.messageFlow.QueueUserMessage(text, clientRequestID)
-		if err != nil {
-			return QueuedUserMessage{}, err
-		}
-		e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
-		return item, nil
-	}
-	liveItem := queuedUserMessageWithID(runtimeids.NewQueueItemID().String(), text, clientRequestID)
-	waitedForLiveRunStep := false
-	for {
-		if e.liveRun.beginQueueItemPublication(mustQueueItemID(liveItem.ID), func(queueItemID string) {
-			e.markQueuedUserInjectionForAutoDrain(queueItemID)
-		}) {
-			e.pendingWorkMu.Lock()
-			item, err := e.messageFlow.QueueUserMessageWithID(liveItem)
-			if err != nil {
-				e.pendingWorkMu.Unlock()
-				return QueuedUserMessage{}, err
-			}
-			e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
-			e.pendingWorkMu.Unlock()
-			queueItemID := mustQueueItemID(item.ID)
-			if e.liveRun.finishQueueItemPublication(queueItemID) {
-				e.failStoppedLiveRunQueueItems(map[runtimeids.QueueItemID]struct{}{queueItemID: {}})
-			} else {
-				e.scheduleQueuedUserInjectionsIfIdle()
-			}
-			return item, nil
-		}
-		if !e.waitingForLiveRunStepStart() {
-			break
-		}
-		waitedForLiveRunStep = true
-		time.Sleep(time.Millisecond)
-	}
-	if waitedForLiveRunStep {
-		e.pendingWorkMu.Lock()
-		e.emitQueuedUserMessageStatus(liveItem, QueuedUserMessageFailed, QueuedUserMessageFailureStopped, true)
-		e.pendingWorkMu.Unlock()
-		return liveItem, nil
-	}
-	e.pendingWorkMu.Lock()
-	item, err := e.messageFlow.QueueUserMessage(text, clientRequestID)
+	item, err := newQueuedUserMessage(
+		llm.Message{Role: llm.RoleUser, Content: textutil.Value(text)},
+		clientRequestID,
+	)
 	if err != nil {
-		e.pendingWorkMu.Unlock()
 		return QueuedUserMessage{}, err
 	}
-	e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
-	e.pendingWorkMu.Unlock()
-	e.markQueuedUserInjectionForAutoDrain(item.ID)
-	e.scheduleQueuedUserInjectionsIfIdle()
-	return item, nil
+	return e.acceptHumanAgendaItem(item, boundaryEligibilityTurn, false)
 }
 
 func (e *Engine) waitingForLiveRunStepStart() bool {
@@ -653,13 +593,25 @@ func activeKindInterruptibleByLiveStop(kind ActiveKind) bool {
 
 func (e *Engine) DiscardQueuedUserMessage(queueItemID string) bool {
 	e.ensureOrchestrationCollaborators()
-	e.pendingWorkMu.Lock()
-	defer e.pendingWorkMu.Unlock()
-	item, discarded := e.messageFlow.DiscardQueuedUserMessage(queueItemID)
-	if discarded {
-		e.unmarkQueuedUserInjectionForAutoDrain(item.ID)
-		e.completeLiveRunQueueItems(map[string]struct{}{item.ID: {}})
-		e.emitQueuedUserMessageStatus(item, QueuedUserMessageDiscarded, "", false)
+	id, err := runtimeids.ParseQueueItemID(queueItemID)
+	if err != nil {
+		return false
+	}
+	discarded, err := submitRuntimeEvent(
+		e,
+		id,
+		func(_ runtimeEventAdmission, itemID runtimeids.QueueItemID) (bool, error) {
+			item, found := e.boundaryAgenda.takeHuman(itemID)
+			if !found {
+				return false, nil
+			}
+			e.emitQueuedUserMessageStatus(item.message, QueuedUserMessageDiscarded, "", false)
+			return true, nil
+		},
+	)
+	if err != nil {
+		e.surfaceRunError(err)
+		return false
 	}
 	return discarded
 }
@@ -927,50 +879,76 @@ func (e *Engine) ensureLocked() (session.LockedContract, error) {
 // each iteration so the retry observes the appended synthetic outputs. When the
 // 400 is unrelated to missing outputs (nothing to repair), the original error is
 // returned unchanged.
-func (e *Engine) generateWithMissingToolOutputRepair(ctx context.Context, stepID string, rebuild func() (llm.Request, error), onDelta func(llm.AssistantDelta), onReasoningDelta func(llm.ReasoningSummaryDelta), onAttemptReset func()) (llm.Response, error) {
+func (e *Engine) generateWithMissingToolOutputRepair(
+	ctx context.Context,
+	stepID string,
+	rebuild func(string) (llm.Request, error),
+	onDelta func(string, llm.AssistantDelta),
+	onReasoningDelta func(string, llm.ReasoningSummaryDelta),
+	onAttemptReset func(string),
+) (llm.Response, string, error) {
+	decision, beginErr := e.beginAgentProviderStep(ctx, stepID)
+	if beginErr != nil {
+		return llm.Response{}, "", beginErr
+	}
+	providerStepID := decision.providerStepID()
 	for {
-		req, err := rebuild()
+		req, err := rebuild(providerStepID)
 		if err != nil {
-			return llm.Response{}, err
+			return llm.Response{}, providerStepID, err
 		}
 		var emitted atomic.Bool
-		wrappedDelta := onDelta
+		var wrappedDelta func(llm.AssistantDelta)
 		if onDelta != nil {
 			wrappedDelta = func(delta llm.AssistantDelta) {
 				if delta.Text != "" {
 					emitted.Store(true)
 				}
-				onDelta(delta)
+				onDelta(providerStepID, delta)
 			}
 		}
-		wrappedReasoningDelta := onReasoningDelta
+		var wrappedReasoningDelta func(llm.ReasoningSummaryDelta)
 		if onReasoningDelta != nil {
 			wrappedReasoningDelta = func(delta llm.ReasoningSummaryDelta) {
 				if strings.TrimSpace(delta.Text) != "" {
 					emitted.Store(true)
 				}
-				onReasoningDelta(delta)
+				onReasoningDelta(providerStepID, delta)
 			}
 		}
-		resp, err := e.generateWithRetryClient(ctx, stepID, e.llm, req, wrappedDelta, wrappedReasoningDelta, onAttemptReset)
+		var wrappedAttemptReset func()
+		if onAttemptReset != nil {
+			wrappedAttemptReset = func() {
+				onAttemptReset(providerStepID)
+			}
+		}
+		resp, err := e.generateWithRetryClient(
+			ctx,
+			providerStepID,
+			e.llm,
+			req,
+			wrappedDelta,
+			wrappedReasoningDelta,
+			wrappedAttemptReset,
+		)
 		if err == nil {
-			return resp, nil
+			return resp, providerStepID, nil
 		}
 		if !llm.HasHTTPStatus(err, 400) {
-			return llm.Response{}, err
+			return llm.Response{}, providerStepID, err
 		}
-		if emitted.Load() && onAttemptReset != nil {
-			onAttemptReset()
+		if emitted.Load() && wrappedAttemptReset != nil {
+			wrappedAttemptReset()
 		}
 		repaired, repairErr := e.repairMissingToolOutputsByAppending(
-			textutil.OptionalTrimmedString(stepID),
+			textutil.OptionalTrimmedString(providerStepID),
 			missingToolOutputRepairLiveProvider400,
 		)
 		if repairErr != nil {
-			return llm.Response{}, errors.Join(err, repairErr)
+			return llm.Response{}, providerStepID, errors.Join(err, repairErr)
 		}
 		if repaired == 0 {
-			return llm.Response{}, err
+			return llm.Response{}, providerStepID, err
 		}
 	}
 }

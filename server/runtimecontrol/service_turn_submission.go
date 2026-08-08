@@ -111,7 +111,7 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 				}
 			}
 			if compactionBusy {
-				queued, queueErr := engine.QueueUserMessageForAutoDrain(
+				queued, queueErr := engine.QueueUserMessageWithClientRequestID(
 					projection.ExecutionText,
 					strings.TrimSpace(req.ClientRequestID),
 				)
@@ -175,10 +175,10 @@ func (s *Service) trySubmitUserTurnAsActiveExecution(ctx context.Context, attemp
 		committed, err := s.operations.TryCommitOperationMutation(memoReq.SessionID, req.OperationRef, func() error {
 			item, accepted, err := engine.QueueUserMessageForActiveRun(runCtx, projection.ExecutionText, req.OperationRef.ClientRequestID, nil)
 			if errors.Is(err, runtime.ErrNoActiveLiveRun) {
-				if !activeExecutionAllowsUserTurnAutoDrain(runtimeactivity.ActiveStepFromProvider(engine)) {
+				if !activeExecutionAllowsRuntimeBoundInput(runtimeactivity.ActiveStepFromProvider(engine)) {
 					return serverapi.ErrSessionRunStarting
 				}
-				item, err = engine.QueueUserMessageForAutoDrain(projection.ExecutionText, req.OperationRef.ClientRequestID.String())
+				item, err = engine.QueueUserMessageWithClientRequestID(projection.ExecutionText, req.OperationRef.ClientRequestID.String())
 				if err != nil {
 					return err
 				}
@@ -210,7 +210,7 @@ func (s *Service) trySubmitUserTurnAsActiveExecution(ctx context.Context, attemp
 	return resp, steered, nil
 }
 
-func activeExecutionAllowsUserTurnAutoDrain(snapshot *runtimeactivity.ActiveStepSnapshot) bool {
+func activeExecutionAllowsRuntimeBoundInput(snapshot *runtimeactivity.ActiveStepSnapshot) bool {
 	if snapshot == nil {
 		return false
 	}

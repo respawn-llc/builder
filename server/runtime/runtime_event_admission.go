@@ -8,11 +8,26 @@ import (
 )
 
 type runtimeEventAdmission struct {
-	engine *Engine
+	engine  *Engine
+	command runtimecommand.Admission
 }
 
 func (a runtimeEventAdmission) applySteering(stepID string, intents ...steeringIntent) error {
 	return a.engine.applySteeringBatch(stepID, intents...)
+}
+
+func (a runtimeEventAdmission) Context() context.Context {
+	if a.command.Context() != nil {
+		return a.command.Context()
+	}
+	if a.engine != nil && a.engine.lifecycleCtx != nil {
+		return a.engine.lifecycleCtx
+	}
+	return context.Background()
+}
+
+func (a runtimeEventAdmission) startWork(work func(context.Context)) error {
+	return a.command.StartWork(work)
 }
 
 func submitRuntimeEvent[Payload, Result any](
@@ -59,10 +74,11 @@ func submitRuntimeEventWithContext[Payload, Result any](
 		engine.runtimeEvents,
 		payload,
 		func(
-			_ runtimecommand.Admission,
+			command runtimecommand.Admission,
 			event Payload,
 			complete func(Result, error),
 		) error {
+			admission.command = command
 			result, handleErr := handle(admission, event)
 			complete(result, handleErr)
 			return nil

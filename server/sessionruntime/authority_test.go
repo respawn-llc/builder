@@ -574,47 +574,6 @@ func TestCloseIfIdleRetiresOwnerlessRuntimeAfterCurrentExecutionFinishes(t *test
 	assertRuntimeUnavailable(t, authority, attachment.Resource(), "execution finished")
 }
 
-func TestCloseIfIdleFailsQueuedWorkAndRetiresOwnerlessRuntime(t *testing.T) {
-	fixture := newSessionRuntimeFixture(t)
-	sessionID := lifecycleSessionID(t, fixture)
-	var statusMu sync.Mutex
-	var statuses []runtime.QueuedUserMessageStatusEvent
-	authority := newAuthorityWithEventFeed(t, fixture, func(_ AgentResourceDescriptor, event runtime.Event) {
-		if event.QueuedUserMessageStatus == nil {
-			return
-		}
-		statusMu.Lock()
-		statuses = append(statuses, *event.QueuedUserMessageStatus)
-		statusMu.Unlock()
-	})
-	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
-	attachment := openLifecycleRuntime(t, authority, sessionID, "owner-a", &plan)
-	if err := authority.WithRuntime(context.Background(), attachment.Resource(), func(_ context.Context, engine *runtime.Engine) error {
-		engine.QueueUserMessage("queued before disconnect")
-		return nil
-	}); err != nil {
-		t.Fatalf("queue user message: %v", err)
-	}
-
-	release, err := attachment.Release(context.Background(), RuntimeReleaseCloseIfIdle)
-	if err != nil {
-		t.Fatalf("release queued runtime: %v", err)
-	}
-	if !release.Released || release.Active {
-		t.Fatalf("queued release = %+v, want immediate retirement", release)
-	}
-	assertRuntimeUnavailable(t, authority, attachment.Resource(), "queued release")
-
-	statusMu.Lock()
-	defer statusMu.Unlock()
-	if len(statuses) != 2 ||
-		statuses[0].Status != runtime.QueuedUserMessageAccepted ||
-		statuses[1].Status != runtime.QueuedUserMessageFailed ||
-		statuses[1].FailureReason != runtime.QueuedUserMessageFailureClosing {
-		t.Fatalf("queued message statuses = %+v, want accepted then failed-closing", statuses)
-	}
-}
-
 func TestCloseIfIdleRetiresOwnerlessRuntimeAfterCallbackFinishes(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
@@ -753,7 +712,7 @@ func TestExecutionRetirementKeepsRetainedRuntimeSteerableUntilDrain(t *testing.T
 	assertRuntimeUnavailable(t, authority, resource, "execution retention released")
 }
 
-func TestExecutionRetirementDrainsAcceptedQueuedWorkBeforeClosing(t *testing.T) {
+func TestExecutionRetirementLaunchesAcceptedRuntimeBoundHumanWorkBeforeClosing(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
 	releaseModel := make(chan struct{})
@@ -810,10 +769,10 @@ func TestExecutionRetirementDrainsAcceptedQueuedWorkBeforeClosing(t *testing.T) 
 	if _, err := handle.Wait(context.Background()); err != nil {
 		t.Fatalf("wait execution retirement: %v", err)
 	}
+	waitRuntimeUnavailable(t, authority, resource, "accepted runtime-bound input completed")
 	if calls := client.callCount(); calls != 1 {
-		t.Fatalf("model calls = %d, want accepted queue drained before retirement", calls)
+		t.Fatalf("model calls = %d, want accepted runtime-bound input launched before retirement", calls)
 	}
-	assertRuntimeUnavailable(t, authority, resource, "accepted queue drained")
 
 	statusMu.Lock()
 	defer statusMu.Unlock()
@@ -824,7 +783,7 @@ func TestExecutionRetirementDrainsAcceptedQueuedWorkBeforeClosing(t *testing.T) 
 	}
 }
 
-func TestCloseIfIdleRetiresAfterActiveAutoDrainFinishes(t *testing.T) {
+func TestCloseIfIdleRetiresAfterEngineOwnedIdleHumanExecutionFinishes(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
 	client := &blockingLLMClient{
@@ -835,15 +794,15 @@ func TestCloseIfIdleRetiresAfterActiveAutoDrainFinishes(t *testing.T) {
 	authority := fixture.authority
 	attachment := openLifecycleRuntime(t, authority, sessionID, "owner-a", &plan)
 	if err := authority.WithRuntime(context.Background(), attachment.Resource(), func(_ context.Context, engine *runtime.Engine) error {
-		engine.QueueUserMessageForAutoDrain("queued before disconnect", "queued-request")
+		engine.QueueUserMessageWithClientRequestID("queued before disconnect", "queued-request")
 		return nil
 	}); err != nil {
-		t.Fatalf("queue auto-drained user message: %v", err)
+		t.Fatalf("queue idle human message: %v", err)
 	}
 	select {
 	case <-client.entered:
 	case <-time.After(3 * time.Second):
-		t.Fatal("auto-drained model request did not start")
+		t.Fatal("Engine-owned idle human execution did not start")
 	}
 
 	type releaseResult struct {
@@ -858,22 +817,22 @@ func TestCloseIfIdleRetiresAfterActiveAutoDrainFinishes(t *testing.T) {
 	select {
 	case outcome := <-released:
 		if outcome.err != nil {
-			t.Fatalf("release auto-draining runtime: %v", outcome.err)
+			t.Fatalf("release runtime with idle human execution: %v", outcome.err)
 		}
 		if !outcome.result.Active || outcome.result.Released {
-			t.Fatalf("auto-draining release = %+v, want active pending retirement", outcome.result)
+			t.Fatalf("idle-execution release = %+v, want active pending retirement", outcome.result)
 		}
 	case <-time.After(time.Second):
 		close(client.release)
 		<-released
-		t.Fatal("close-if-idle blocked on active auto-drain instead of recording retirement")
+		t.Fatal("close-if-idle blocked on Engine-owned idle execution instead of recording retirement")
 	}
 
 	close(client.release)
-	waitRuntimeUnavailable(t, authority, attachment.Resource(), "auto-drain finished")
+	waitRuntimeUnavailable(t, authority, attachment.Resource(), "idle human execution finished")
 }
 
-func TestCloseIfIdleDrainsAcceptedQueuedWorkBeforeOwnerlessRetirement(t *testing.T) {
+func TestCloseIfIdleCompletesAcceptedQueueAtTurnBoundaryBeforeOwnerlessRetirement(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
 	client := &ownerlessRetirementLLMClient{
@@ -911,7 +870,7 @@ func TestCloseIfIdleDrainsAcceptedQueuedWorkBeforeOwnerlessRetirement(t *testing
 		t.Fatal("active model request did not start")
 	}
 	if err := authority.WithRuntime(context.Background(), attachment.Resource(), func(_ context.Context, engine *runtime.Engine) error {
-		engine.QueueUserMessageForAutoDrain("queued after active turn", "queued-request")
+		engine.QueueUserMessageWithClientRequestID("queued after active turn", "queued-request")
 		return nil
 	}); err != nil {
 		t.Fatalf("queue follow-up user message: %v", err)
@@ -928,7 +887,7 @@ func TestCloseIfIdleDrainsAcceptedQueuedWorkBeforeOwnerlessRetirement(t *testing
 	if _, err := handle.Wait(context.Background()); err != nil {
 		t.Fatalf("wait current agent execution: %v", err)
 	}
-	waitRuntimeUnavailable(t, authority, attachment.Resource(), "queued auto-drain completion")
+	waitRuntimeUnavailable(t, authority, attachment.Resource(), "queued Turn Boundary completion")
 	if calls := client.callCount(); calls != 2 {
 		t.Fatalf("model calls = %d, want accepted queued follow-up drained before retirement", calls)
 	}
@@ -942,7 +901,7 @@ func TestCloseIfIdleDrainsAcceptedQueuedWorkBeforeOwnerlessRetirement(t *testing
 	}
 }
 
-func TestRuntimeReleaseCloseInterruptsActiveAutoDrain(t *testing.T) {
+func TestRuntimeReleaseCloseInterruptsEngineOwnedIdleHumanExecution(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
 	client := &ownerlessRetirementLLMClient{
@@ -953,15 +912,15 @@ func TestRuntimeReleaseCloseInterruptsActiveAutoDrain(t *testing.T) {
 	authority := fixture.authority
 	attachment := openLifecycleRuntime(t, authority, sessionID, "owner-a", &plan)
 	if err := authority.WithRuntime(context.Background(), attachment.Resource(), func(_ context.Context, engine *runtime.Engine) error {
-		engine.QueueUserMessageForAutoDrain("auto-drain before forced close", "queued-request")
+		engine.QueueUserMessageWithClientRequestID("idle input before forced close", "queued-request")
 		return nil
 	}); err != nil {
-		t.Fatalf("queue auto-drained user message: %v", err)
+		t.Fatalf("queue idle human message: %v", err)
 	}
 	select {
 	case <-client.firstStarted:
 	case <-time.After(3 * time.Second):
-		t.Fatal("auto-drained model request did not start")
+		t.Fatal("Engine-owned idle human execution did not start")
 	}
 
 	type releaseResult struct {
@@ -976,7 +935,7 @@ func TestRuntimeReleaseCloseInterruptsActiveAutoDrain(t *testing.T) {
 	select {
 	case outcome := <-released:
 		if outcome.err != nil {
-			t.Fatalf("force-close active auto-drain: %v", outcome.err)
+			t.Fatalf("force-close active idle human execution: %v", outcome.err)
 		}
 		if !outcome.result.Released || outcome.result.Active {
 			t.Fatalf("forced release = %+v, want closed runtime", outcome.result)
@@ -984,12 +943,12 @@ func TestRuntimeReleaseCloseInterruptsActiveAutoDrain(t *testing.T) {
 	case <-time.After(time.Second):
 		close(client.releaseFirst)
 		<-released
-		t.Fatal("forced close blocked instead of interrupting active auto-drain")
+		t.Fatal("forced close blocked instead of interrupting Engine-owned idle human execution")
 	}
-	assertRuntimeUnavailable(t, authority, attachment.Resource(), "forced auto-drain close")
+	assertRuntimeUnavailable(t, authority, attachment.Resource(), "forced idle human execution close")
 }
 
-func TestAuthorityCloseInterruptsActiveAutoDrain(t *testing.T) {
+func TestAuthorityCloseInterruptsEngineOwnedIdleHumanExecution(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
 	client := &ownerlessRetirementLLMClient{
@@ -1000,15 +959,15 @@ func TestAuthorityCloseInterruptsActiveAutoDrain(t *testing.T) {
 	authority := fixture.authority
 	attachment := openLifecycleRuntime(t, authority, sessionID, "owner-a", &plan)
 	if err := authority.WithRuntime(context.Background(), attachment.Resource(), func(_ context.Context, engine *runtime.Engine) error {
-		engine.QueueUserMessageForAutoDrain("auto-drain before authority close", "queued-request")
+		engine.QueueUserMessageWithClientRequestID("idle input before authority close", "queued-request")
 		return nil
 	}); err != nil {
-		t.Fatalf("queue auto-drained user message: %v", err)
+		t.Fatalf("queue idle human message: %v", err)
 	}
 	select {
 	case <-client.firstStarted:
 	case <-time.After(3 * time.Second):
-		t.Fatal("auto-drained model request did not start")
+		t.Fatal("Engine-owned idle human execution did not start")
 	}
 
 	closed := make(chan error, 1)
@@ -1018,14 +977,14 @@ func TestAuthorityCloseInterruptsActiveAutoDrain(t *testing.T) {
 	select {
 	case err := <-closed:
 		if err != nil {
-			t.Fatalf("close authority with active auto-drain: %v", err)
+			t.Fatalf("close authority with active idle human execution: %v", err)
 		}
 	case <-time.After(time.Second):
 		close(client.releaseFirst)
 		<-closed
-		t.Fatal("authority close blocked instead of interrupting active auto-drain")
+		t.Fatal("authority close blocked instead of interrupting Engine-owned idle human execution")
 	}
-	assertRuntimeUnavailable(t, authority, attachment.Resource(), "authority auto-drain close")
+	assertRuntimeUnavailable(t, authority, attachment.Resource(), "authority idle human execution close")
 }
 
 func TestDetachKeepsOwnerlessRuntimeAvailable(t *testing.T) {

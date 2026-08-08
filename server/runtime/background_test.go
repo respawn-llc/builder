@@ -293,7 +293,6 @@ func TestFlushPendingUserInjectionsRestoresOnlyLaterNoticeAfterCommittedObserver
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	steps := &stubExclusiveStepLifecycle{busy: true}
 	scheduler := &defaultBackgroundNoticeScheduler{engine: engine, steps: steps}
-	lifecycle := newDefaultMessageLifecycle(engine, scheduler)
 	for _, sessionID := range []string{"first", "second"} {
 		scheduler.QueueDeveloperNotice(llm.Message{
 			Role:    llm.RoleDeveloper,
@@ -303,7 +302,7 @@ func TestFlushPendingUserInjectionsRestoresOnlyLaterNoticeAfterCommittedObserver
 	}
 	gate.FailNext(observerErr)
 
-	_, err := lifecycle.FlushPendingUserInjections("step", allPendingUserInjectionSelection{})
+	_, err := scheduler.flushPendingNotices("step")
 	if !errors.Is(err, observerErr) {
 		t.Fatalf("flush error = %v, want observer failure", err)
 	}

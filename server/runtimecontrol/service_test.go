@@ -2263,7 +2263,7 @@ func TestServiceSubmitUserTurnQueuesWhileCompactionOwnsSessionExecution(t *testi
 	}
 }
 
-func TestActiveExecutionAllowsUserTurnAutoDrainOnlyForCompaction(t *testing.T) {
+func TestActiveExecutionAllowsRuntimeBoundInputOnlyForCompaction(t *testing.T) {
 	for _, test := range []struct {
 		name     string
 		snapshot *runtimeactivity.ActiveStepSnapshot
@@ -2278,8 +2278,8 @@ func TestActiveExecutionAllowsUserTurnAutoDrainOnlyForCompaction(t *testing.T) {
 		{name: "pre-submit compaction", snapshot: &runtimeactivity.ActiveStepSnapshot{ActiveKind: clientui.RuntimeActivityActiveKindPreSubmitCompaction}, want: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if got := activeExecutionAllowsUserTurnAutoDrain(test.snapshot); got != test.want {
-				t.Fatalf("activeExecutionAllowsUserTurnAutoDrain(%+v) = %t, want %t", test.snapshot, got, test.want)
+			if got := activeExecutionAllowsRuntimeBoundInput(test.snapshot); got != test.want {
+				t.Fatalf("activeExecutionAllowsRuntimeBoundInput(%+v) = %t, want %t", test.snapshot, got, test.want)
 			}
 		})
 	}

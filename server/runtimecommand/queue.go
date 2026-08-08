@@ -172,6 +172,10 @@ func (a Admission) Context() context.Context {
 	return a.state.queue.ctx
 }
 
+func (a Admission) Owns(queue *Queue) bool {
+	return a.state != nil && a.state.queue != nil && a.state.queue == queue
+}
+
 func (a Admission) StartWork(work func(context.Context)) error {
 	if a.state == nil || a.state.queue == nil {
 		return errors.New("runtime event admission is unavailable")

@@ -49,7 +49,6 @@ type steeringItem struct {
 	resultGroupClose            *steeringResultGroupClose
 	missingToolOutputRepair     *steeringMissingToolOutputRepair
 	queuedFlush                 *steeringQueuedUserMessageFlush
-	queuedRestore               *steeringQueuedUserMessageRestore
 	event                       *Event
 	streaming                   *steeringStreamingOutput
 	cacheWarning                *steeringCacheWarning
@@ -199,10 +198,6 @@ type steeringQueuedUserMessageFlush struct {
 	message    llm.Message
 	batch      []string
 	queueItems []QueuedUserMessage
-}
-
-type steeringQueuedUserMessageRestore struct {
-	items []queuedUserMessage
 }
 
 type steeringMessageEventPolicy uint8
@@ -368,15 +363,6 @@ func steerQueuedUserMessageFlushIntent(message llm.Message, batch []string, queu
 			message:    message,
 			batch:      append([]string(nil), batch...),
 			queueItems: append([]QueuedUserMessage(nil), queueItems...),
-		}}},
-	}
-}
-
-func steerQueuedUserMessageRestoreIntent(items []queuedUserMessage) steeringIntent {
-	return steeringIntent{
-		priority: steeringPriorityUser,
-		items: []steeringItem{{queuedRestore: &steeringQueuedUserMessageRestore{
-			items: append([]queuedUserMessage(nil), items...),
 		}}},
 	}
 }
@@ -966,13 +952,6 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 		receipt, err := e.appendQueuedUserMessageFlush(stepID, item.queuedFlush.message, item.queuedFlush.batch, item.queuedFlush.queueItems)
 		item.recordCommitReceipt(receipt)
 		return err
-	}
-	if item.queuedRestore != nil {
-		e.messageFlow.RestorePendingUserInjections(item.queuedRestore.items)
-		for _, pending := range item.queuedRestore.items {
-			e.emitQueuedUserMessageStatus(pending.message, QueuedUserMessageAccepted, "", false)
-		}
-		return nil
 	}
 	if item.event != nil {
 		evt := *item.event

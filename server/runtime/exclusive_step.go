@@ -315,6 +315,17 @@ func (s *defaultExclusiveStepLifecycle) Interrupt() error {
 }
 
 func (s *defaultExclusiveStepLifecycle) InterruptCurrent(beforeCancel func(*RunSnapshot)) (*RunSnapshot, error) {
+	return s.interruptCurrent(beforeCancel, true)
+}
+
+func (s *defaultExclusiveStepLifecycle) cancelCurrent(beforeCancel func(*RunSnapshot)) (*RunSnapshot, error) {
+	return s.interruptCurrent(beforeCancel, false)
+}
+
+func (s *defaultExclusiveStepLifecycle) interruptCurrent(
+	beforeCancel func(*RunSnapshot),
+	persistInterruption bool,
+) (*RunSnapshot, error) {
 	s.mu.Lock()
 	active := s.active
 	suspended := s.suspended
@@ -349,13 +360,15 @@ func (s *defaultExclusiveStepLifecycle) InterruptCurrent(beforeCancel func(*RunS
 		return nil, nil
 	}
 	s.mu.Unlock()
-	if err := s.engine.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeInterruption), Content: textutil.Value(interruptMessage)}})); err != nil {
-		s.mu.Lock()
-		if active != nil && s.active != nil && s.active.sequence == active.sequence {
-			s.active.interrupted = false
+	if persistInterruption {
+		if err := s.engine.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeInterruption), Content: textutil.Value(interruptMessage)}})); err != nil {
+			s.mu.Lock()
+			if active != nil && s.active != nil && s.active.sequence == active.sequence {
+				s.active.interrupted = false
+			}
+			s.mu.Unlock()
+			return nil, err
 		}
-		s.mu.Unlock()
-		return nil, err
 	}
 	return snapshot, nil
 }
@@ -598,12 +611,8 @@ func (s *defaultExclusiveStepLifecycle) notifyNextWaiterLocked() {
 	}
 }
 
-func (s *defaultExclusiveStepLifecycle) scheduleIdleWork(scheduleQueuedUserWork bool) error {
-	if scheduleQueuedUserWork {
-		if !s.engine.scheduleQueuedUserInjectionsIfIdle() && s.background != nil {
-			s.background.ScheduleIfIdle()
-		}
-	} else if s.background != nil {
+func (s *defaultExclusiveStepLifecycle) scheduleIdleWork(_ bool) error {
+	if s.background != nil {
 		s.background.ScheduleIfIdle()
 	}
 	return s.engine.startPendingGoalLoop()
@@ -692,6 +701,13 @@ func (s *defaultExclusiveStepLifecycle) snapshotLocked() *RunSnapshot {
 		GoalLoop:   active.activeKind == ActiveKindGoalLoop,
 		StartedAt:  active.startedAt,
 	}
+}
+
+func (s *defaultExclusiveStepLifecycle) activeStepWasInterrupted() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return (s.active != nil && s.active.interrupted) ||
+		(s.suspended != nil && s.suspended.interrupted)
 }
 
 func (s *defaultExclusiveStepLifecycle) snapshotWithFinishedAt(finishedAt time.Time, status RunStatus) *RunSnapshot {

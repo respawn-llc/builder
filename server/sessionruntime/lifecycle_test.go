@@ -544,7 +544,7 @@ func TestOwnerlessRuntimeStepPublishesResourceLifecycle(t *testing.T) {
 	}
 }
 
-func TestAuthoritySyncExecutionTargetPersistsReminderBeforeQueuedUserDrain(t *testing.T) {
+func TestAuthoritySyncExecutionTargetPersistsReminderBeforeIdleHumanExecution(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
 	client := make(lifecycleRequestCaptureClient, 1)
@@ -554,7 +554,7 @@ func TestAuthoritySyncExecutionTargetPersistsReminderBeforeQueuedUserDrain(t *te
 	attachment := openLifecycleRuntime(t, authority, sessionID, "owner-a", &plan)
 	observer.queue = func() {
 		if err := authority.WithRuntime(context.Background(), attachment.Resource(), func(_ context.Context, engine *runtime.Engine) error {
-			engine.QueueUserMessageForAutoDrain("queued after switch", "request-after-switch")
+			engine.QueueUserMessageWithClientRequestID("queued after switch", "request-after-switch")
 			return nil
 		}); err != nil {
 			t.Errorf("queue user work during reminder persistence: %v", err)

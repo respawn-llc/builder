@@ -32,13 +32,14 @@ type serviceTestPublisher struct {
 	mu       sync.Mutex
 	outcomes []clientui.WorktreeTransitionOutcome
 	ready    chan struct{}
+	err      error
 }
 
 func (p *serviceTestPublisher) PublishSessionIdentity(string) error {
 	return nil
 }
 
-func (p *serviceTestPublisher) PublishWorktreeTransitionOutcome(_ string, outcome clientui.WorktreeTransitionOutcome) {
+func (p *serviceTestPublisher) PublishWorktreeTransitionOutcome(_ string, outcome clientui.WorktreeTransitionOutcome) error {
 	p.mu.Lock()
 	p.outcomes = append(p.outcomes, outcome)
 	if p.ready == nil {
@@ -50,6 +51,7 @@ func (p *serviceTestPublisher) PublishWorktreeTransitionOutcome(_ string, outcom
 	case ready <- struct{}{}:
 	default:
 	}
+	return p.err
 }
 
 type serviceTestProcessSource struct {

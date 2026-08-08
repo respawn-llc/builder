@@ -1057,8 +1057,8 @@ func TestWorkflowObservedDurableCompletionFailsQueuedSteeringDuringCloseDrain(t 
 	if !completed {
 		t.Fatal("durable workflow completion was not observed")
 	}
-	if err := engine.DrainQueuedUserMessagesBeforeClose(context.Background()); err != nil {
-		t.Fatalf("drain queued user messages before close: %v", err)
+	if !engine.failQueuedUserWorkIfTerminal() {
+		t.Fatal("terminal workflow completion did not settle queued user work")
 	}
 	if calls := len(client.calls); calls != 0 {
 		t.Fatalf("terminal workflow completion dispatched %d model requests", calls)

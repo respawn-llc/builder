@@ -55,6 +55,9 @@ func (r *defaultReviewerPipeline) RunFollowUp(ctx context.Context, stepID string
 	if err := e.stepLifecycle.DrainAgentStepBoundary(ctx); err != nil {
 		return reviewerFollowUpResult{}, err
 	}
+	if _, err := e.completeAgentProviderBoundary(ctx, true); err != nil {
+		return reviewerFollowUpResult{}, fmt.Errorf("reduce Reviewer follow-up Step Boundary: %w", err)
+	}
 	instruction := formatReviewerDeveloperInstruction(suggestions)
 	if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeReviewerFeedback), Content: textutil.Value(instruction)}})); err != nil {
 		return reviewerFollowUpResult{}, fmt.Errorf("persist Reviewer follow-up instruction: %w", err)

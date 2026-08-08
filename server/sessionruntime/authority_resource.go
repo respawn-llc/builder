@@ -184,6 +184,7 @@ type agentResource struct {
 	engine               *runtime.Engine
 	events               *runtimecommand.Queue
 	worktreeBoundary     *worktreeBoundaryRecord
+	reducerBoundary      *reducerBoundaryRecord
 	eventBridge          *runtimewire.EventBridge
 	logger               *runlog.RunLogger
 	localTools           *runtimewire.LocalToolRegistryBinding
@@ -363,8 +364,37 @@ func (r *agentResource) closeResource(ctx context.Context) error {
 	case AgentResourceBuilding:
 		r.mu.Unlock()
 		return fmt.Errorf("agent resource %s generation %d is still building", r.ref.SessionID(), r.ref.Generation())
+	case AgentResourceDraining:
+		for r.state != AgentResourceClosed {
+			changed := r.changed
+			r.mu.Unlock()
+			select {
+			case <-changed:
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			}
+			r.mu.Lock()
+		}
+		r.mu.Unlock()
+		return nil
 	}
 	r.state = AgentResourceDraining
+	r.signalLocked()
+	r.mu.Unlock()
+	return r.finishResourceClose(ctx)
+}
+
+func (r *agentResource) finishResourceClose(ctx context.Context) error {
+	r.mu.Lock()
+	if r.state != AgentResourceDraining {
+		r.mu.Unlock()
+		return fmt.Errorf(
+			"agent resource %s generation %d cannot finish close from state %d",
+			r.ref.SessionID(),
+			r.ref.Generation(),
+			r.state,
+		)
+	}
 	r.cancel()
 	r.signalLocked()
 	notifyDraining := r.lifecycleReady && !r.lifecycleDraining && r.authority.options.resourceLifecycle != nil
@@ -613,8 +643,7 @@ func (a *Authority) ReleaseRuntime(ctx context.Context, request RuntimeReleaseRe
 			resource.callbacks != 0 ||
 			resource.steps != 0
 		queued := resource.engine != nil && resource.engine.HasQueuedUserWork()
-		scheduled := resource.engine != nil && resource.engine.HasScheduledQueuedUserWork()
-		if inFlight || scheduled || (!request.DropOwner && queued) {
+		if inFlight || (!request.DropOwner && queued) {
 			if request.DropOwner {
 				resource.ownerlessDisposition = agentResourceRetireWhenIdle
 			}
@@ -658,10 +687,6 @@ func (a *Authority) closeRetiringResource(ctx context.Context, resource *agentRe
 		resource.pins != 0 ||
 		resource.callbacks != 0 ||
 		resource.steps != 0 {
-		resource.mu.Unlock()
-		return nil
-	}
-	if resource.engine != nil && resource.engine.HasScheduledQueuedUserWork() {
 		resource.mu.Unlock()
 		return nil
 	}
@@ -729,7 +754,7 @@ func (a *Authority) closeAdmittedResource(ctx context.Context, resource *agentRe
 	if engine != nil {
 		engine.FailQueuedUserMessages(runtime.QueuedUserMessageFailureClosing)
 	}
-	closeErr := resource.closeResource(ctx)
+	closeErr := resource.finishResourceClose(ctx)
 	resource.mu.Lock()
 	closed := resource.state == AgentResourceClosed
 	resource.mu.Unlock()
