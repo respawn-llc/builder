@@ -11,7 +11,6 @@ import (
 	"core/server/requestmemo"
 	"core/server/runtime"
 	"core/server/runtimeactivity"
-	"core/server/runtimecommand"
 	"core/server/runtimeops"
 	"core/server/session"
 	"core/server/sessionruntime"
@@ -51,8 +50,8 @@ var errWorkflowTaskSessionAutoCompactionDisable = errors.New("auto-compaction ca
 
 type Service struct {
 	authority      *sessionruntime.Authority
-	execution      *runtimecommand.ExecutionAdapter
-	goalAuthority  *runtimecommand.GoalAuthority
+	execution      *ExecutionAdapter
+	goalAuthority  *GoalAuthority
 	activity       RuntimeActivityResolver
 	promptStore    PromptHistoryStore
 	promptCommands PromptCommandResolver
@@ -172,24 +171,24 @@ type goalClearMemoRequest struct {
 }
 
 func NewService(authority *sessionruntime.Authority) *Service {
-	execution := runtimecommand.NewExecutionAdapter(authority)
+	execution := NewExecutionAdapter(authority)
 	return NewServiceWithGoalCommands(
 		authority,
 		execution,
-		runtimecommand.NewGoalAuthority(authority, execution),
+		NewGoalAuthority(authority, execution),
 	)
 }
 
 func NewServiceWithGoalCommands(
 	authority *sessionruntime.Authority,
-	execution *runtimecommand.ExecutionAdapter,
-	goalAuthority *runtimecommand.GoalAuthority,
+	execution *ExecutionAdapter,
+	goalAuthority *GoalAuthority,
 ) *Service {
 	if execution == nil {
-		execution = runtimecommand.NewExecutionAdapter(authority)
+		execution = NewExecutionAdapter(authority)
 	}
 	if goalAuthority == nil {
-		goalAuthority = runtimecommand.NewGoalAuthority(authority, execution)
+		goalAuthority = NewGoalAuthority(authority, execution)
 	}
 	return &Service{
 		authority:      authority,

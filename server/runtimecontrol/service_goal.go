@@ -8,7 +8,6 @@ import (
 
 	"core/prompts"
 	"core/server/requestmemo"
-	"core/server/runtimecommand"
 	"core/server/session"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -50,8 +49,8 @@ func (s *Service) SetGoal(ctx context.Context, req serverapi.RuntimeGoalSetReque
 		RunID:     strings.TrimSpace(req.RunID),
 		StepID:    strings.TrimSpace(req.StepID),
 	}
-	return memoizedGoalMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq, s.goals, sameGoalSetMemoRequest, func(ctx context.Context) (runtimecommand.GoalCommandResult, error) {
-		return s.goalAuthority.Set(ctx, runtimecommand.GoalSetCommand{
+	return memoizedGoalMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq, s.goals, sameGoalSetMemoRequest, func(ctx context.Context) (GoalCommandResult, error) {
+		return s.goalAuthority.Set(ctx, GoalSetCommand{
 			SessionID: sessionID,
 			Objective: memoReq.Objective,
 			Actor:     session.GoalActor(memoReq.Actor),
@@ -87,8 +86,8 @@ func (s *Service) setGoalStatus(ctx context.Context, req serverapi.RuntimeGoalSt
 		RunID:     strings.TrimSpace(req.RunID),
 		StepID:    strings.TrimSpace(req.StepID),
 	}
-	return memoizedGoalMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq, s.goalStatuses, sameGoalStatusMemoRequest, func(ctx context.Context) (runtimecommand.GoalCommandResult, error) {
-		return s.goalAuthority.Status(ctx, runtimecommand.GoalStatusCommand{
+	return memoizedGoalMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq, s.goalStatuses, sameGoalStatusMemoRequest, func(ctx context.Context) (GoalCommandResult, error) {
+		return s.goalAuthority.Status(ctx, GoalStatusCommand{
 			SessionID: sessionID,
 			Status:    status,
 			Actor:     session.GoalActor(memoReq.Actor),
@@ -97,8 +96,8 @@ func (s *Service) setGoalStatus(ctx context.Context, req serverapi.RuntimeGoalSt
 	})
 }
 
-func goalExecutionIdentity(runID string, stepID string) runtimecommand.GoalExecutionIdentity {
-	return runtimecommand.GoalExecutionIdentity{
+func goalExecutionIdentity(runID string, stepID string) GoalExecutionIdentity {
+	return GoalExecutionIdentity{
 		RunID:  optionalGoalExecutionID(runID),
 		StepID: optionalGoalExecutionID(stepID),
 	}
@@ -121,8 +120,8 @@ func (s *Service) ClearGoal(ctx context.Context, req serverapi.RuntimeGoalClearR
 		return serverapi.RuntimeGoalShowResponse{}, err
 	}
 	memoReq := goalClearMemoRequest{SessionID: sessionID.String(), Actor: strings.TrimSpace(req.Actor)}
-	return memoizedGoalMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq, s.goalClears, sameGoalClearMemoRequest, func(ctx context.Context) (runtimecommand.GoalCommandResult, error) {
-		return s.goalAuthority.Clear(ctx, runtimecommand.GoalClearCommand{
+	return memoizedGoalMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq, s.goalClears, sameGoalClearMemoRequest, func(ctx context.Context) (GoalCommandResult, error) {
+		return s.goalAuthority.Clear(ctx, GoalClearCommand{
 			SessionID: sessionID,
 			Actor:     session.GoalActor(memoReq.Actor),
 		})
@@ -136,7 +135,7 @@ func memoizedGoalMutation[Req any](
 	req Req,
 	memo *requestmemo.Memo[Req, committedGoalMutationResult],
 	same func(Req, Req) bool,
-	run func(context.Context) (runtimecommand.GoalCommandResult, error),
+	run func(context.Context) (GoalCommandResult, error),
 ) (serverapi.RuntimeGoalShowResponse, error) {
 	if service == nil || service.goalAuthority == nil {
 		return serverapi.RuntimeGoalShowResponse{}, errors.New("goal command authority is required")
@@ -161,7 +160,7 @@ func memoizedGoalMutation[Req any](
 	return result.Response, result.Err
 }
 
-func goalResponseFromCommand(result runtimecommand.GoalCommandResult) (serverapi.RuntimeGoalShowResponse, error) {
+func goalResponseFromCommand(result GoalCommandResult) (serverapi.RuntimeGoalShowResponse, error) {
 	if result.Cleared {
 		return serverapi.RuntimeGoalShowResponse{}, nil
 	}

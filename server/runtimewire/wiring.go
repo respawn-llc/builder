@@ -10,6 +10,7 @@ import (
 	"core/server/launch"
 	"core/server/llm"
 	"core/server/runtime"
+	"core/server/runtimecommand"
 	"core/server/session"
 	"core/server/tools"
 	askquestion "core/server/tools"
@@ -57,6 +58,7 @@ type RuntimeWiringOptions struct {
 	LifecycleTaskFinished               func() error
 	LifecycleRuntimeAbort               func() error
 	DurabilityObserver                  runtime.ResultGroupDurabilityObserver
+	RuntimeEvents                       *runtimecommand.Queue
 	// GlobalConfigDir is the absolute persistence root that owns model-visible
 	// global context (AGENTS.md, system prompt, skills). Empty falls back to
 	// ~/.kent inside the runtime resolvers.
@@ -264,6 +266,7 @@ func NewRuntimeWiringWithBackground(
 		LifecycleTaskFinished: opts.LifecycleTaskFinished,
 		LifecycleRuntimeAbort: opts.LifecycleRuntimeAbort,
 		DurabilityObserver:    opts.DurabilityObserver,
+		RuntimeEvents:         opts.RuntimeEvents,
 	})
 	if err != nil {
 		return nil, err

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"core/server/llm"
+	"core/server/runtimecommand"
 	"core/server/session"
 	"core/server/tools"
 	"core/server/workflowruntime"
@@ -134,6 +135,7 @@ type Config struct {
 	LifecycleTaskFinished func() error
 	LifecycleRuntimeAbort func() error
 	DurabilityObserver    ResultGroupDurabilityObserver
+	RuntimeEvents         *runtimecommand.Queue
 }
 
 type ReviewerConfig struct {
@@ -165,6 +167,8 @@ type Engine struct {
 	lifecycleWG     sync.WaitGroup
 	lifecycleClosed bool
 	closed          atomic.Bool
+	runtimeEvents   *runtimecommand.Queue
+	boundaryAgenda  *boundaryAgenda
 
 	store    *session.Store
 	eventLog session.MaterializedEventLog
@@ -292,6 +296,8 @@ func New(
 		llm:                  client,
 		registry:             registry,
 		cfg:                  cfg,
+		runtimeEvents:        cfg.RuntimeEvents,
+		boundaryAgenda:       newBoundaryAgenda(),
 		diagnostics:          newDiagnosticDedupeStore(),
 		toolCallStarts:       newPendingToolCallStartStore(),
 		usageState:           newUsageTrackingState(),
@@ -459,6 +465,12 @@ func (e *Engine) Close() error {
 		cancel()
 	}
 	e.lifecycleWG.Wait()
+	if e.boundaryAgenda != nil {
+		e.boundaryAgenda.close()
+	}
+	if e.runtimeEvents != nil {
+		e.runtimeEvents.Close()
+	}
 	e.steerRuntimeClose("runtime_close", steerLiveToolAbortIntent("canceled"))
 	return interruptErr
 }

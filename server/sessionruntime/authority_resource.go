@@ -10,6 +10,7 @@ import (
 
 	"core/server/runlog"
 	"core/server/runtime"
+	"core/server/runtimecommand"
 	"core/server/runtimewire"
 	"core/server/session"
 	"core/server/tools"
@@ -142,6 +143,12 @@ type AgentRuntimeBridge struct {
 	resource  runtimeids.SessionResourceRef
 }
 
+type RuntimeEventTarget struct {
+	Resource runtimeids.SessionResourceRef
+	Engine   *runtime.Engine
+	Events   *runtimecommand.Queue
+}
+
 func (b AgentRuntimeBridge) WithEngine(ctx context.Context, callback func(context.Context, *runtime.Engine) error) error {
 	if b.authority == nil {
 		return errors.New("agent runtime bridge is uninitialized")
@@ -175,6 +182,7 @@ type agentResource struct {
 	ownerlessDisposition agentResourceOwnerlessDisposition
 	store                *session.Store
 	engine               *runtime.Engine
+	events               *runtimecommand.Queue
 	eventBridge          *runtimewire.EventBridge
 	logger               *runlog.RunLogger
 	localTools           *runtimewire.LocalToolRegistryBinding
@@ -250,7 +258,7 @@ func (r *agentResource) requestRetirementIfOwnerless() {
 	r.mu.Unlock()
 }
 
-func (r *agentResource) withEngine(ctx context.Context, ref runtimeids.SessionResourceRef, callback func(context.Context, *runtime.Engine) error) (err error) {
+func (r *agentResource) withRuntimeEvents(ctx context.Context, ref runtimeids.SessionResourceRef, callback func(context.Context, RuntimeEventTarget) error) (err error) {
 	if callback == nil {
 		return errors.New("agent resource callback is required")
 	}
@@ -258,14 +266,14 @@ func (r *agentResource) withEngine(ctx context.Context, ref runtimeids.SessionRe
 		return err
 	}
 	r.mu.Lock()
-	if r.ref != ref || r.rejectsNewUseLocked() || r.engine == nil {
+	if r.ref != ref || r.rejectsNewUseLocked() || r.engine == nil || r.events == nil {
 		r.mu.Unlock()
 		return errors.Join(
 			serverapi.ErrRuntimeUnavailable,
 			fmt.Errorf("agent resource %s generation %d is unavailable", ref.SessionID(), ref.Generation()),
 		)
 	}
-	engine := r.engine
+	target := RuntimeEventTarget{Resource: r.ref, Engine: r.engine, Events: r.events}
 	r.callbacks++
 	r.signalLocked()
 	r.mu.Unlock()
@@ -274,7 +282,16 @@ func (r *agentResource) withEngine(ctx context.Context, ref runtimeids.SessionRe
 			err = errors.Join(err, releaseErr)
 		}
 	}()
-	return callback(ctx, engine)
+	return callback(ctx, target)
+}
+
+func (r *agentResource) withEngine(ctx context.Context, ref runtimeids.SessionResourceRef, callback func(context.Context, *runtime.Engine) error) error {
+	if callback == nil {
+		return errors.New("agent resource callback is required")
+	}
+	return r.withRuntimeEvents(ctx, ref, func(callbackCtx context.Context, target RuntimeEventTarget) error {
+		return callback(callbackCtx, target.Engine)
+	})
 }
 
 // withStoreUnderAdmission runs while the caller owns the Session admission
@@ -898,6 +915,28 @@ func (a *Authority) WithRuntime(ctx context.Context, ref runtimeids.SessionResou
 		)
 	}
 	return resource.withEngine(ctx, ref, callback)
+}
+
+func (a *Authority) WithRuntimeEvents(ctx context.Context, ref runtimeids.SessionResourceRef, callback func(context.Context, RuntimeEventTarget) error) error {
+	if a == nil {
+		return errors.New("session runtime authority is required")
+	}
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
+	if err := ref.Validate(); err != nil {
+		return err
+	}
+	a.mu.Lock()
+	resource := a.resources[ref.SessionID()]
+	a.mu.Unlock()
+	if resource == nil {
+		return errors.Join(
+			serverapi.ErrRuntimeUnavailable,
+			fmt.Errorf("agent resource %s generation %d is unavailable", ref.SessionID(), ref.Generation()),
+		)
+	}
+	return resource.withRuntimeEvents(ctx, ref, callback)
 }
 
 func (a *Authority) WithCurrentRuntime(ctx context.Context, sessionID runtimeids.SessionID, callback func(context.Context, *runtime.Engine) error) error {
