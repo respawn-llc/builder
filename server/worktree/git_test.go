@@ -284,6 +284,23 @@ func TestGitInspectorProbeDirtyStateCountsMixedStatusWithoutDuplicateRenameOrCop
 	}
 }
 
+func TestGitInspectorProbeRecreationDirtyStateIncludesIgnoredFiles(t *testing.T) {
+	worktreeRoot := filepath.Join(t.TempDir(), "linked")
+	runner := &stubGitCommandRunner{output: []byte("!! dependency-output/\x00")}
+	inspector := NewGitInspector(runner)
+
+	state, err := inspector.ProbeRecreationDirtyState(context.Background(), worktreeRoot)
+	if err != nil {
+		t.Fatalf("ProbeRecreationDirtyState: %v", err)
+	}
+	if state.Kind != clientui.WorktreeDirtyStateDirty || state.DirtyFileCount == nil || *state.DirtyFileCount != 1 {
+		t.Fatalf("recreation dirty state = %+v, want dirty count 1", state)
+	}
+	if got, want := runner.args, []string{"status", "--porcelain=v1", "-z", "--ignored=matching"}; !slices.Equal(got, want) {
+		t.Fatalf("git args=%v want=%v", got, want)
+	}
+}
+
 func TestGitInspectorProbeDirtyStateUsesTypedCleanDirtyAndUnknownResults(t *testing.T) {
 	root := t.TempDir()
 	clean := NewGitInspector(&stubGitCommandRunner{})

@@ -2815,20 +2815,10 @@ type workflowAttentionInterruptionDetailSchema struct {
 		RequestedRef *string                                 `json:"requested_ref,omitempty"`
 		Cause        WorkflowExecutionTargetUnavailableCause `json:"cause"`
 	} `json:"configured_execution_target_unavailable,omitempty"`
-	SetupRecovery *struct {
-		SetupOperationID WorktreeSetupOperationID         `json:"setup_operation_id"`
-		Cause            WorktreeSetupFailureKind         `json:"cause"`
-		Diagnostic       string                           `json:"diagnostic"`
-		ExecutionTarget  WorkflowExecutionTargetSelection `json:"execution_target"`
-		RetainedWorktree *struct {
-			WorktreeID string `json:"worktree_id"`
-			Root       string `json:"root"`
-		} `json:"retained_worktree,omitempty"`
-		RetainedPreviousWorktree *struct {
-			WorktreeID string `json:"worktree_id"`
-			Root       string `json:"root"`
-		} `json:"retained_previous_worktree,omitempty"`
-	} `json:"setup_recovery,omitempty"`
+	SetupRecovery *workflowcontract.SetupRecoveryDetail[
+		WorktreeSetupOperationID,
+		WorkflowExecutionTargetSelection,
+	] `json:"setup_recovery,omitempty"`
 }
 
 func validateOptionalAttentionInterruptionDetailJSON(field string, value *string) error {
@@ -2864,30 +2854,8 @@ func validateOptionalAttentionInterruptionDetailJSON(field string, value *string
 		}
 	}
 	if recovery := detail.SetupRecovery; recovery != nil {
-		if err := recovery.SetupOperationID.Validate(); err != nil {
-			return workflowRequestError(WorkflowRequestErrorInvalidValue, field, field+" setup recovery operation id is invalid")
-		}
-		switch recovery.Cause {
-		case WorktreeSetupFailureProcessExit, WorktreeSetupFailureTimeout, WorktreeSetupFailureTargetPreparation, WorktreeSetupFailureOperational:
-		default:
-			return workflowRequestError(WorkflowRequestErrorInvalidValue, field, field+" setup recovery cause is invalid")
-		}
-		if strings.TrimSpace(recovery.Diagnostic) == "" {
+		if err := recovery.Validate(); err != nil {
 			return workflowRequestError(WorkflowRequestErrorInvalidValue, field, field+" setup recovery facts are invalid")
-		}
-		if err := recovery.ExecutionTarget.Validate(); err != nil {
-			return workflowRequestError(WorkflowRequestErrorInvalidValue, field, field+" setup recovery execution target is invalid")
-		}
-		if recovery.Cause != WorktreeSetupFailureTargetPreparation && recovery.RetainedWorktree == nil {
-			return workflowRequestError(WorkflowRequestErrorInvalidValue, field, field+" setup recovery retained worktree is required")
-		}
-		if retained := recovery.RetainedWorktree; retained != nil &&
-			(strings.TrimSpace(retained.WorktreeID) == "" || strings.TrimSpace(retained.Root) == "") {
-			return workflowRequestError(WorkflowRequestErrorInvalidValue, field, field+" retained worktree facts are invalid")
-		}
-		if previous := recovery.RetainedPreviousWorktree; previous != nil &&
-			(strings.TrimSpace(previous.WorktreeID) == "" || strings.TrimSpace(previous.Root) == "") {
-			return workflowRequestError(WorkflowRequestErrorInvalidValue, field, field+" retained previous worktree facts are invalid")
 		}
 	}
 	return nil

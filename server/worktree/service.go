@@ -2049,7 +2049,7 @@ func (s *Service) inspectSafeWorktreeRecreation(
 	if creationBase == nil || revision.CommitOID != *creationBase {
 		return revision, false, nil
 	}
-	dirtyState, err := s.git.ProbeDirtyState(ctx, root)
+	dirtyState, err := s.git.ProbeRecreationDirtyState(ctx, root)
 	if err != nil {
 		return GitRevision{}, false, err
 	}

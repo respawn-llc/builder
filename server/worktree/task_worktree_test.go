@@ -1505,7 +1505,7 @@ func TestPrepareTaskExecutionRootReturnsExistingManagedWorktree(t *testing.T) {
 	}
 }
 
-func TestPrepareTaskExecutionRootRetriesAfterCleanRecreation(t *testing.T) {
+func TestPrepareTaskExecutionRootRetriesIgnoredSetupChangesInPlace(t *testing.T) {
 	env := newServiceTestEnv(t)
 	task, _ := createTaskWorktreeTestTask(t, env)
 	probeName := ".setup-recreation-probe"
@@ -1521,7 +1521,7 @@ func TestPrepareTaskExecutionRootRetriesAfterCleanRecreation(t *testing.T) {
 	countPath := filepath.Join(t.TempDir(), "count")
 	scriptRelpath := filepath.Join("scripts", "retry-after-recreation.sh")
 	writeExecutableFile(t, filepath.Join(env.workspaceRoot, scriptRelpath), fmt.Sprintf(
-		"#!/bin/sh\ncount=0\nif [ -f %q ]; then count=$(cat %q); fi\ncount=$((count + 1))\nprintf '%%s' \"$count\" > %q\nif [ \"$count\" = \"1\" ]; then touch \"$PWD/%s\"; exit 3; fi\nif [ -e \"$PWD/%s\" ]; then exit 9; fi\n",
+		"#!/bin/sh\ncount=0\nif [ -f %q ]; then count=$(cat %q); fi\ncount=$((count + 1))\nprintf '%%s' \"$count\" > %q\nif [ \"$count\" = \"1\" ]; then touch \"$PWD/%s\"; exit 3; fi\nif [ ! -e \"$PWD/%s\" ]; then exit 9; fi\n",
 		countPath,
 		countPath,
 		countPath,
@@ -1549,8 +1549,8 @@ func TestPrepareTaskExecutionRootRetriesAfterCleanRecreation(t *testing.T) {
 	if err := materialized.SetupResult.Validate(); err != nil {
 		t.Fatalf("validate setup result: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(taskWorktreeRoot(materialized.Worktree), probeName)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("clean recreation retained first-attempt probe: %v", err)
+	if _, err := os.Stat(filepath.Join(taskWorktreeRoot(materialized.Worktree), probeName)); err != nil {
+		t.Fatalf("ignored setup output was not preserved for in-place retry: %v", err)
 	}
 	assertSetupAttemptEventsOnly(t, sub, 2)
 }
@@ -1591,7 +1591,7 @@ func TestPrepareTaskExecutionRootRetriesChangedRootInPlace(t *testing.T) {
 	assertSetupAttemptEventsOnly(t, sub, 2)
 }
 
-func TestPrepareTaskExecutionRootRecreatesExistingCleanProvisionalRootBeforeSetup(t *testing.T) {
+func TestPrepareTaskExecutionRootRetainsExistingIgnoredProvisionalRootBeforeSetup(t *testing.T) {
 	env := newServiceTestEnv(t)
 	task, _ := createTaskWorktreeTestTask(t, env)
 	probeName := ".existing-clean-probe"
@@ -1615,7 +1615,7 @@ func TestPrepareTaskExecutionRootRecreatesExistingCleanProvisionalRootBeforeSetu
 	countPath := filepath.Join(t.TempDir(), "count")
 	scriptRelpath := filepath.Join("scripts", "existing-clean.sh")
 	writeExecutableFile(t, filepath.Join(env.workspaceRoot, scriptRelpath), fmt.Sprintf(
-		"#!/bin/sh\ncount=0\nif [ -f %q ]; then count=$(cat %q); fi\ncount=$((count + 1))\nprintf '%%s' \"$count\" > %q\nif [ -e \"$PWD/%s\" ]; then exit 9; fi\n",
+		"#!/bin/sh\ncount=0\nif [ -f %q ]; then count=$(cat %q); fi\ncount=$((count + 1))\nprintf '%%s' \"$count\" > %q\nif [ ! -e \"$PWD/%s\" ]; then exit 9; fi\n",
 		countPath,
 		countPath,
 		countPath,
@@ -1633,14 +1633,17 @@ func TestPrepareTaskExecutionRootRecreatesExistingCleanProvisionalRootBeforeSetu
 	if err != nil {
 		t.Fatalf("recovery PrepareTaskExecutionRoot: %v", err)
 	}
-	if !second.Created || second.CreatedBranch {
-		t.Fatalf("existing provisional materialization flags = %+v, want recreated root on existing branch", second)
+	if second.Created || second.CreatedBranch {
+		t.Fatalf("existing provisional materialization flags = %+v, want retained root", second)
 	}
 	if taskWorktreeID(second.Worktree) != taskWorktreeID(first.Worktree) || taskWorktreeRoot(second.Worktree) != firstRoot {
-		t.Fatalf("recreated provisional identity = %+v, want id/root from %+v", second.Worktree, first.Worktree)
+		t.Fatalf("retained provisional identity = %+v, want id/root from %+v", second.Worktree, first.Worktree)
 	}
 	if got := waitForFileText(t, countPath); got != "1" {
 		t.Fatalf("setup attempt count = %q, want 1", got)
+	}
+	if _, err := os.Stat(filepath.Join(firstRoot, probeName)); err != nil {
+		t.Fatalf("ignored operator output was not preserved before setup: %v", err)
 	}
 	assertSetupAttemptEventsOnly(t, sub, 1)
 }
