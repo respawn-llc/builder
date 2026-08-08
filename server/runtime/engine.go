@@ -483,6 +483,13 @@ func (e *Engine) closeAdmissionAfterRuntimeAbort() {
 	e.failPendingWorkflowAssignments(ErrEngineClosed)
 }
 
+func (e *Engine) CloseBoundaryAgenda() {
+	if e == nil || e.boundaryAgenda == nil {
+		return
+	}
+	e.boundaryAgenda.close()
+}
+
 func (e *Engine) ensureLifecycle() {
 	if e == nil {
 		return

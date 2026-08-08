@@ -183,6 +183,7 @@ type agentResource struct {
 	store                *session.Store
 	engine               *runtime.Engine
 	events               *runtimecommand.Queue
+	worktreeBoundary     *worktreeBoundaryRecord
 	eventBridge          *runtimewire.EventBridge
 	logger               *runlog.RunLogger
 	localTools           *runtimewire.LocalToolRegistryBinding
@@ -393,13 +394,61 @@ func (r *agentResource) closeResource(ctx context.Context) error {
 		r.mu.Lock()
 	}
 	closeEngine := r.close
+	r.mu.Unlock()
+	runtimeStateErr := r.closeRuntimeState(ctx, engine)
+	if runtimeStateErr != nil {
+		return errors.Join(lifecycleErr, interruptErr, runtimeStateErr)
+	}
+	r.mu.Lock()
 	r.state = AgentResourceClosed
 	r.signalLocked()
 	r.mu.Unlock()
 	if closeEngine == nil {
-		return lifecycleErr
+		return errors.Join(lifecycleErr, interruptErr)
 	}
 	return errors.Join(lifecycleErr, interruptErr, closeEngine())
+}
+
+func (r *agentResource) closeRuntimeState(ctx context.Context, engine *runtime.Engine) error {
+	settle := func() {
+		if engine != nil {
+			engine.CloseBoundaryAgenda()
+		}
+		r.mu.Lock()
+		r.settleWorktreeBoundaryLocked(runtimeUnavailableError(r.ref))
+		r.mu.Unlock()
+	}
+	if r.events == nil {
+		settle()
+		return nil
+	}
+	deferred, err := runtimecommand.Submit(
+		context.Background(),
+		r.events,
+		struct{}{},
+		func(
+			_ runtimecommand.Admission,
+			_ struct{},
+			complete func(struct{}, error),
+		) error {
+			settle()
+			complete(struct{}{}, nil)
+			return nil
+		},
+	)
+	if err != nil {
+		if errors.Is(err, runtimecommand.ErrUnavailable) {
+			settle()
+			return nil
+		}
+		return err
+	}
+	_, err = deferred.Await(ctx)
+	if errors.Is(err, runtimecommand.ErrUnavailable) {
+		settle()
+		return nil
+	}
+	return err
 }
 
 func (r *agentResource) StepBegan(ctx context.Context, snapshot runtime.StepLifecycleSnapshot) error {
@@ -523,7 +572,12 @@ func (a *Authority) ReleaseRuntime(ctx context.Context, request RuntimeReleaseRe
 	sessionID := request.Resource.SessionID()
 	gate := a.gateFor(sessionID)
 	gate.lock.Lock()
-	defer gate.lock.Unlock()
+	gateHeld := true
+	defer func() {
+		if gateHeld {
+			gate.lock.Unlock()
+		}
+	}()
 
 	a.mu.Lock()
 	resource := a.resources[sessionID]
@@ -570,7 +624,10 @@ func (a *Authority) ReleaseRuntime(ctx context.Context, request RuntimeReleaseRe
 			return RuntimeReleaseResult{Active: true}, nil
 		}
 	}
-	closed, closeErr := a.closeAdmittedResourceLocked(ctx, resource)
+	a.beginResourceCloseLocked(resource)
+	gate.lock.Unlock()
+	gateHeld = false
+	closed, closeErr := a.closeAdmittedResource(ctx, resource)
 	return RuntimeReleaseResult{Released: closed}, closeErr
 }
 
@@ -588,7 +645,12 @@ func (a *Authority) closeRetiringResource(ctx context.Context, resource *agentRe
 	sessionID := resource.ref.SessionID()
 	gate := a.gateFor(sessionID)
 	gate.lock.Lock()
-	defer gate.lock.Unlock()
+	gateHeld := true
+	defer func() {
+		if gateHeld {
+			gate.lock.Unlock()
+		}
+	}()
 
 	resource.mu.Lock()
 	if resource.ownerlessDisposition != agentResourceRetireWhenIdle ||
@@ -605,7 +667,10 @@ func (a *Authority) closeRetiringResource(ctx context.Context, resource *agentRe
 		resource.mu.Unlock()
 		return nil
 	}
-	_, closeErr := a.closeAdmittedResourceLocked(ctx, resource)
+	a.beginResourceCloseLocked(resource)
+	gate.lock.Unlock()
+	gateHeld = false
+	_, closeErr := a.closeAdmittedResource(ctx, resource)
 	return closeErr
 }
 
@@ -616,7 +681,12 @@ func (a *Authority) retireRuntimeAbortResource(ctx context.Context, resource *ag
 	sessionID := resource.ref.SessionID()
 	gate := a.gateFor(sessionID)
 	gate.lock.Lock()
-	defer gate.lock.Unlock()
+	gateHeld := true
+	defer func() {
+		if gateHeld {
+			gate.lock.Unlock()
+		}
+	}()
 
 	resource.mu.Lock()
 	a.mu.Lock()
@@ -637,19 +707,26 @@ func (a *Authority) retireRuntimeAbortResource(ctx context.Context, resource *ag
 			descriptor.State,
 		)
 	}
-	_, err := a.closeAdmittedResourceLocked(ctx, resource)
-	return err
+	a.beginResourceCloseLocked(resource)
+	gate.lock.Unlock()
+	gateHeld = false
+	_, closeErr := a.closeAdmittedResource(ctx, resource)
+	return closeErr
 }
 
-// closeAdmittedResourceLocked owns the exact transition from a ready resource
-// admitted for closure to its removal from the live authority. The caller must
-// hold the session admission gate and resource.mu.
-func (a *Authority) closeAdmittedResourceLocked(ctx context.Context, resource *agentResource) (bool, error) {
-	sessionID := resource.ref.SessionID()
-	engine := resource.engine
+// beginResourceCloseLocked owns the short transition that rejects new use.
+// The caller must hold the Session admission gate and resource.mu.
+func (a *Authority) beginResourceCloseLocked(resource *agentResource) {
 	resource.state = AgentResourceDraining
 	resource.signalLocked()
 	resource.mu.Unlock()
+}
+
+// closeAdmittedResource joins a generation only after its Session admission
+// gate and resource mutex have been released.
+func (a *Authority) closeAdmittedResource(ctx context.Context, resource *agentResource) (bool, error) {
+	sessionID := resource.ref.SessionID()
+	engine := resource.engine
 
 	if engine != nil {
 		engine.FailQueuedUserMessages(runtime.QueuedUserMessageFailureClosing)
@@ -693,7 +770,7 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 	if len(gate.blocks) != 0 {
 		return nil, sessionStartsBlockedError(sessionID)
 	}
-	resource, closeResource, err := a.selectResource(ctx, request.Descriptor, request.Runtime, request.Resource)
+	resource, closeResource, err := a.selectResource(ctx, request.Descriptor, request.Runtime, request.Resource, gate)
 	if err != nil {
 		return nil, err
 	}
@@ -1007,7 +1084,13 @@ func (a *Authority) retainResource(ref runtimeids.SessionResourceRef) (*Resource
 	return &ResourceRetention{resource: resource}, nil
 }
 
-func (a *Authority) selectResource(ctx context.Context, descriptor session.SessionDescriptor, plan *AgentRuntimePlan, selection AgentResourceSelection) (*agentResource, bool, error) {
+func (a *Authority) selectResource(
+	ctx context.Context,
+	descriptor session.SessionDescriptor,
+	plan *AgentRuntimePlan,
+	selection AgentResourceSelection,
+	gate *sessionAdmissionGate,
+) (*agentResource, bool, error) {
 	sessionID := descriptor.SessionID()
 	switch selection.(type) {
 	case CurrentAgentResource:
@@ -1025,7 +1108,7 @@ func (a *Authority) selectResource(ctx context.Context, descriptor session.Sessi
 		resource, err := a.openResource(ctx, descriptor, plan, nil)
 		return resource, true, err
 	case ReplaceAgentResource:
-		resource, err := a.replaceResource(ctx, descriptor, plan)
+		resource, err := a.replaceResource(ctx, descriptor, plan, gate)
 		return resource, true, err
 	default:
 		return nil, false, fmt.Errorf("unsupported agent resource selection %T", selection)
@@ -1092,20 +1175,35 @@ func (a *Authority) openResource(ctx context.Context, descriptor session.Session
 	return resource, nil
 }
 
-func (a *Authority) replaceResource(ctx context.Context, descriptor session.SessionDescriptor, plan *AgentRuntimePlan) (*agentResource, error) {
+func (a *Authority) replaceResource(
+	ctx context.Context,
+	descriptor session.SessionDescriptor,
+	plan *AgentRuntimePlan,
+	gate *sessionAdmissionGate,
+) (*agentResource, error) {
+	if gate == nil {
+		return nil, errors.New("session admission gate is required")
+	}
 	sessionID := descriptor.SessionID()
 	a.mu.Lock()
 	existing := a.resources[sessionID]
 	a.mu.Unlock()
 	if existing != nil {
-		if err := a.retireResourceForReplacement(ctx, existing); err != nil {
+		if err := a.retireResourceForReplacement(ctx, existing, gate); err != nil {
 			return nil, err
 		}
 	}
 	return a.openResource(ctx, descriptor, plan, nil)
 }
 
-func (a *Authority) retireResourceForReplacement(ctx context.Context, resource *agentResource) error {
+// retireResourceForReplacement is entered and returns with the Session
+// admission gate held. It releases that gate before waiting for the exact
+// generation to close.
+func (a *Authority) retireResourceForReplacement(
+	ctx context.Context,
+	resource *agentResource,
+	gate *sessionAdmissionGate,
+) error {
 	for {
 		resource.mu.Lock()
 		switch resource.state {
@@ -1120,12 +1218,16 @@ func (a *Authority) retireResourceForReplacement(ctx context.Context, resource *
 		case AgentResourceDraining:
 			changed := resource.changed
 			resource.mu.Unlock()
+			gate.lock.Unlock()
 			select {
 			case <-changed:
-				continue
 			case <-ctx.Done():
-				return context.Cause(ctx)
 			}
+			gate.lock.Lock()
+			if err := context.Cause(ctx); err != nil {
+				return err
+			}
+			continue
 		case AgentResourceReady:
 		default:
 			state := resource.state
@@ -1138,30 +1240,10 @@ func (a *Authority) retireResourceForReplacement(ctx context.Context, resource *
 			)
 		}
 
-		if resource.current != nil || resource.callbacks != 0 || resource.steps != 0 {
-			changed := resource.changed
-			resource.mu.Unlock()
-			select {
-			case <-changed:
-				continue
-			case <-ctx.Done():
-				return context.Cause(ctx)
-			}
-		}
-		engine := resource.engine
-		if engine != nil && engine.HasQueuedUserWork() {
-			resource.mu.Unlock()
-			if err := engine.DrainQueuedUserMessagesBeforeClose(ctx); err != nil {
-				return fmt.Errorf(
-					"drain session %s runtime generation %d before replacement: %w",
-					resource.ref.SessionID(),
-					resource.ref.Generation(),
-					err,
-				)
-			}
-			continue
-		}
-		_, closeErr := a.closeAdmittedResourceLocked(ctx, resource)
+		a.beginResourceCloseLocked(resource)
+		gate.lock.Unlock()
+		_, closeErr := a.closeAdmittedResource(ctx, resource)
+		gate.lock.Lock()
 		return closeErr
 	}
 }
