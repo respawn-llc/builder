@@ -217,6 +217,17 @@ func (s currentNodeViewStatusObservationSource) CaptureWorkflowTaskLifecycleQuer
 	)
 }
 
+func (s currentNodeViewStatusObservationSource) CaptureWorkflowTaskBoundedLifecycleRead(
+	ctx context.Context,
+	operation func(string, *sqlitegen.Queries, workflowexecution.WorkflowTaskLifecycleReader) error,
+) error {
+	observation, err := s.ObserveWorkflowTaskExecutions(nil)
+	if err != nil {
+		return err
+	}
+	return captureWorkflowViewTestBoundedLifecycle(ctx, s.store, observation, operation)
+}
+
 func captureWorkflowViewTestObservation(
 	ctx context.Context,
 	store *workflowstore.Store,

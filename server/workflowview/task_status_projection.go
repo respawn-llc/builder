@@ -33,6 +33,13 @@ type TaskStatusLifecycleQuerySource interface {
 	) error
 }
 
+type TaskStatusBoundedLifecycleSource interface {
+	CaptureWorkflowTaskBoundedLifecycleRead(
+		context.Context,
+		func(string, *sqlitegen.Queries, workflowexecution.WorkflowTaskLifecycleReader) error,
+	) error
+}
+
 type TaskStatusObservation struct {
 	Live               workflowexecution.WorkflowTaskExecutionObservation
 	LiveTaskStatesJSON string
@@ -53,10 +60,11 @@ type TaskStatusProjectionResult struct {
 }
 
 type TaskStatusProjection struct {
-	workflowStore *workflowstore.Store
-	projector     *TaskProjector
-	capture       TaskStatusCaptureSource
-	queryCapture  TaskStatusLifecycleQuerySource
+	workflowStore  *workflowstore.Store
+	projector      *TaskProjector
+	capture        TaskStatusCaptureSource
+	queryCapture   TaskStatusLifecycleQuerySource
+	boundedCapture TaskStatusBoundedLifecycleSource
 }
 
 func NewTaskStatusProjection(
@@ -85,7 +93,52 @@ func NewTaskStatusProjection(
 			source, _ := capture.(TaskStatusLifecycleQuerySource)
 			return source
 		}(),
+		boundedCapture: func() TaskStatusBoundedLifecycleSource {
+			source, _ := capture.(TaskStatusBoundedLifecycleSource)
+			return source
+		}(),
 	}, nil
+}
+
+func (p *TaskStatusProjection) WithBoundedLifecycle(
+	ctx context.Context,
+	operation func(
+		string,
+		*TaskStatusDurableSnapshot,
+		workflowexecution.WorkflowTaskLifecycleReader,
+	) error,
+) error {
+	if p == nil {
+		return errors.New("task status projection is required")
+	}
+	if operation == nil {
+		return errors.New("task status bounded lifecycle operation is required")
+	}
+	if p.boundedCapture == nil {
+		return errors.New("task status bounded lifecycle source is required")
+	}
+	return p.boundedCapture.CaptureWorkflowTaskBoundedLifecycleRead(
+		ctx,
+		func(
+			token string,
+			queries *sqlitegen.Queries,
+			reader workflowexecution.WorkflowTaskLifecycleReader,
+		) error {
+			if strings.TrimSpace(token) == "" {
+				return errors.New("task status lifecycle query token is required")
+			}
+			durable := &TaskStatusDurableSnapshot{
+				queries:       queries,
+				workflowStore: p.workflowStore,
+				projector:     p.projector,
+			}
+			defer func() {
+				durable.closed = true
+				durable.queries = nil
+			}()
+			return operation(token, durable, reader)
+		},
+	)
 }
 
 func (p *TaskStatusProjection) DecodeStatus(input TaskStatusInput) (workflowTaskStatusFact, error) {

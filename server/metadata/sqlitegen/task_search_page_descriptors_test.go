@@ -621,7 +621,7 @@ func taskSearchPageDescriptorParams(mode, candidateExpression, literalQuery stri
 		ContextClusters:     20,
 		OffsetRows:          0,
 		LimitRows:           100,
-		LifecycleStateToken: taskSearchNoLifecycleStateToken,
+		LifecycleStateToken: noLifecycleTaskStateToken,
 		ShortIDCaseMode:     int64(tasksearchtext.LiteralCaseInsensitive),
 	}
 }
@@ -643,7 +643,7 @@ func taskSearchPageDescriptorArgs(params ListTaskSearchPageDescriptorsParams) []
 	}
 }
 
-var taskSearchNoLifecycleStateToken = func() string {
+var noLifecycleTaskStateToken = func() string {
 	token, release, err := RegisterLifecycleTaskStateResolver(func(string) (LifecycleTaskQueryState, error) {
 		return LifecycleTaskQueryState{}, nil
 	})

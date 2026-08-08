@@ -57,7 +57,7 @@ func TestBoardProjectsStartedCurrentNode(t *testing.T) {
 	}
 }
 
-func TestBoardMembershipUsesPinnedSuccessorCurrentNodeAtPublicationBoundary(t *testing.T) {
+func TestBoardMembershipUsesPublishedSuccessorCurrentNode(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
 	started := fixture.startTask(t, "Published successor")
 	definition, _, err := fixture.store.GetDefinition(t.Context(), fixture.workflowID)
@@ -65,18 +65,13 @@ func TestBoardMembershipUsesPinnedSuccessorCurrentNodeAtPublicationBoundary(t *t
 		t.Fatalf("GetDefinition: %v", err)
 	}
 	successorNodeID := terminalNodeID(t, definition)
-	successor, err := workflow.NewCurrentNodeReference(started.task.ID, successorNodeID, nil)
-	if err != nil {
-		t.Fatalf("NewCurrentNodeReference successor: %v", err)
+	if _, err := workflowtest.ManualMoveTask(fixture.store, t.Context(), workflowstore.ManualMoveRequest{
+		TaskID:       started.task.ID,
+		TargetNodeID: successorNodeID,
+	}); err != nil {
+		t.Fatalf("ManualMoveTask successor: %v", err)
 	}
-	board := boardWithStaticLifecycleObservation(t, fixture, workflowexecution.WorkflowTaskExecutionObservation{
-		Lifecycle: map[workflow.TaskID]workflowexecution.WorkflowTaskLifecycleSnapshot{
-			started.task.ID: {
-				CurrentNodes: []workflow.CurrentNode{{Reference: successor}},
-			},
-		},
-		Quiescence: map[workflow.TaskID]bool{started.task.ID: true},
-	})
+	board := fixture.board
 	request := serverapi.WorkflowBoardNodeCardsListRequest{
 		ProjectID:  fixture.binding.ProjectID,
 		WorkflowID: fixture.workflowID,
@@ -106,7 +101,7 @@ func TestBoardMembershipUsesPinnedSuccessorCurrentNodeAtPublicationBoundary(t *t
 	}
 }
 
-func TestBoardColumnCountsUsePinnedSuccessorCurrentNodeAtPublicationBoundary(t *testing.T) {
+func TestBoardColumnCountsUsePublishedSuccessorCurrentNode(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
 	started := fixture.startTask(t, "Published successor count")
 	definition, _, err := fixture.store.GetDefinition(t.Context(), fixture.workflowID)
@@ -114,19 +109,13 @@ func TestBoardColumnCountsUsePinnedSuccessorCurrentNodeAtPublicationBoundary(t *
 		t.Fatalf("GetDefinition: %v", err)
 	}
 	successorNodeID := terminalNodeID(t, definition)
-	successor, err := workflow.NewCurrentNodeReference(started.task.ID, successorNodeID, nil)
-	if err != nil {
-		t.Fatalf("NewCurrentNodeReference successor: %v", err)
+	if _, err := workflowtest.ManualMoveTask(fixture.store, t.Context(), workflowstore.ManualMoveRequest{
+		TaskID:       started.task.ID,
+		TargetNodeID: successorNodeID,
+	}); err != nil {
+		t.Fatalf("ManualMoveTask successor: %v", err)
 	}
-	boardProjection := boardWithStaticLifecycleObservation(t, fixture, workflowexecution.WorkflowTaskExecutionObservation{
-		Lifecycle: map[workflow.TaskID]workflowexecution.WorkflowTaskLifecycleSnapshot{
-			started.task.ID: {
-				CurrentNodes: []workflow.CurrentNode{{Reference: successor}},
-			},
-		},
-		Quiescence: map[workflow.TaskID]bool{started.task.ID: true},
-	})
-	board, err := boardProjection.Get(t.Context(), serverapi.WorkflowBoardRequest{
+	board, err := fixture.board.Get(t.Context(), serverapi.WorkflowBoardRequest{
 		ProjectID:  fixture.binding.ProjectID,
 		WorkflowID: &fixture.workflowID,
 		LabelFilter: serverapi.WorkflowTaskLabelFilter{
@@ -239,19 +228,6 @@ func TestBoardPaginationUsesCompleteRunningOrSuccessorPublicationInBothDirection
 		t.Fatalf("GetDefinition: %v", err)
 	}
 	successorNodeID := terminalNodeID(t, definition)
-	successor, err := workflow.NewCurrentNodeReference(transitioning.task.ID, successorNodeID, nil)
-	if err != nil {
-		t.Fatalf("NewCurrentNodeReference successor: %v", err)
-	}
-	nextBoard := boardWithStaticLifecycleObservation(t, fixture, workflowexecution.WorkflowTaskExecutionObservation{
-		Lifecycle: map[workflow.TaskID]workflowexecution.WorkflowTaskLifecycleSnapshot{
-			transitioning.task.ID: {
-				CurrentNodes: []workflow.CurrentNode{{Reference: successor}},
-			},
-		},
-		Quiescence: map[workflow.TaskID]bool{transitioning.task.ID: true},
-	})
-
 	priorAscending := []string{
 		string(started[0].task.ID),
 		string(started[1].task.ID),
@@ -263,7 +239,7 @@ func TestBoardPaginationUsesCompleteRunningOrSuccessorPublicationInBothDirection
 		string(started[2].task.ID),
 		string(started[3].task.ID),
 	}
-	for _, testCase := range []struct {
+	testCases := []struct {
 		name      string
 		direction serverapi.WorkflowTaskListSortDirection
 		priorWant []string
@@ -281,15 +257,27 @@ func TestBoardPaginationUsesCompleteRunningOrSuccessorPublicationInBothDirection
 			priorWant: reversedStrings(priorAscending),
 			nextWant:  reversedStrings(nextAscending),
 		},
-	} {
+	}
+	priorByName := make(map[string][]string, len(testCases))
+	for _, testCase := range testCases {
+		priorByName[testCase.name] = collectBoardNodeCardIDs(
+			t,
+			priorBoard,
+			fixture,
+			fixture.agentNodeID,
+			testCase.direction,
+		)
+	}
+	if _, err := workflowtest.ManualMoveTask(fixture.store, t.Context(), workflowstore.ManualMoveRequest{
+		TaskID:       transitioning.task.ID,
+		TargetNodeID: successorNodeID,
+	}); err != nil {
+		t.Fatalf("ManualMoveTask successor: %v", err)
+	}
+	nextBoard := fixture.board
+	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
-			prior := collectBoardNodeCardIDs(
-				t,
-				priorBoard,
-				fixture,
-				fixture.agentNodeID,
-				testCase.direction,
-			)
+			prior := priorByName[testCase.name]
 			if !equalStrings(prior, testCase.priorWant) {
 				t.Fatalf("prior page traversal = %v, want %v", prior, testCase.priorWant)
 			}
@@ -325,27 +313,14 @@ func TestBoardPaginationAddsStoppedToQueuedTaskOnlyInCompleteNextPublication(t *
 	fixture.setTaskUpdatedAt(t, first.task.ID, 1_000)
 	fixture.setTaskUpdatedAt(t, transitioning.ID, 2_000)
 	fixture.setTaskUpdatedAt(t, last.task.ID, 3_000)
-	queued, err := workflow.NewCurrentNodeReference(transitioning.ID, fixture.agentNodeID, nil)
-	if err != nil {
-		t.Fatalf("NewCurrentNodeReference queued: %v", err)
-	}
 	priorBoard := boardWithStaticLifecycleObservation(
 		t,
 		fixture,
 		workflowexecution.WorkflowTaskExecutionObservation{},
 	)
-	nextBoard := boardWithStaticLifecycleObservation(t, fixture, workflowexecution.WorkflowTaskExecutionObservation{
-		Lifecycle: map[workflow.TaskID]workflowexecution.WorkflowTaskLifecycleSnapshot{
-			transitioning.ID: {
-				CurrentNodes:       []workflow.CurrentNode{{Reference: queued}},
-				QueuedCurrentNodes: []workflow.CurrentNodeReference{queued},
-			},
-		},
-		Quiescence: map[workflow.TaskID]bool{transitioning.ID: false},
-	})
 	priorAscending := []string{string(first.task.ID), string(last.task.ID)}
 	nextAscending := []string{string(first.task.ID), string(transitioning.ID), string(last.task.ID)}
-	for _, testCase := range []struct {
+	testCases := []struct {
 		name      string
 		direction serverapi.WorkflowTaskListSortDirection
 		priorWant []string
@@ -363,9 +338,23 @@ func TestBoardPaginationAddsStoppedToQueuedTaskOnlyInCompleteNextPublication(t *
 			priorWant: reversedStrings(priorAscending),
 			nextWant:  reversedStrings(nextAscending),
 		},
-	} {
+	}
+	priorByName := make(map[string][]string, len(testCases))
+	for _, testCase := range testCases {
+		priorByName[testCase.name] = collectBoardNodeCardIDs(
+			t,
+			priorBoard,
+			fixture,
+			fixture.agentNodeID,
+			testCase.direction,
+		)
+	}
+	fixture.startExistingTask(t, transitioning)
+	fixture.setTaskUpdatedAt(t, transitioning.ID, 2_000)
+	nextBoard := fixture.board
+	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
-			prior := collectBoardNodeCardIDs(t, priorBoard, fixture, fixture.agentNodeID, testCase.direction)
+			prior := priorByName[testCase.name]
 			if !equalStrings(prior, testCase.priorWant) {
 				t.Fatalf("prior page traversal = %v, want %v", prior, testCase.priorWant)
 			}

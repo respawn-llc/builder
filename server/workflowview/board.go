@@ -11,6 +11,7 @@ import (
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
+	"core/server/workflowexecution"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
@@ -82,7 +83,7 @@ func (b *Board) Get(ctx context.Context, req serverapi.WorkflowBoardRequest) (se
 	selectedWorkflowID := selected.WorkflowID
 	groups := boardGroups(snapshot.api)
 	columns := boardColumns(snapshot)
-	if err := b.projection.WithSnapshot(ctx, nil, func(observation TaskStatusObservation, durable *TaskStatusDurableSnapshot) error {
+	if err := b.projection.WithLifecycleQuery(ctx, func(token string, durable *TaskStatusDurableSnapshot) error {
 		return b.applyColumnTaskCounts(
 			ctx,
 			durable.queries,
@@ -91,7 +92,7 @@ func (b *Board) Get(ctx context.Context, req serverapi.WorkflowBoardRequest) (se
 			selectedWorkflowID,
 			labelFilter,
 			req.DependencyFilter,
-			observation.LiveTaskStatesJSON,
+			token,
 		)
 	}); err != nil {
 		return serverapi.WorkflowBoard{}, err
@@ -151,7 +152,11 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 	var projectedByTaskID map[workflow.TaskID]TaskStatusProjectionResult
 	var labelIDsByTask map[string][]string
 	var hasExtra bool
-	err = b.projection.WithSnapshot(ctx, nil, func(observation TaskStatusObservation, durable *TaskStatusDurableSnapshot) error {
+	err = b.projection.WithBoundedLifecycle(ctx, func(
+		token string,
+		durable *TaskStatusDurableSnapshot,
+		reader workflowexecution.WorkflowTaskLifecycleReader,
+	) error {
 		definition, err = durable.Definition(ctx, workflowID)
 		if err != nil {
 			return err
@@ -172,7 +177,7 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 			SortDirection:        string(sortSelection.Direction),
 			OffsetRows:           int64(offset),
 			LimitRows:            int64(pageSize),
-			LiveTaskStatesJson:   observation.LiveTaskStatesJSON,
+			LifecycleStateToken:  token,
 		})
 		if err != nil {
 			return err
@@ -187,7 +192,20 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 			tasks = tasks[:pageSize]
 		}
 		selectedTaskIDs := workflowTaskIDs(taskIDs(tasks))
-		projectedByTaskID, err = b.projection.Project(ctx, observation, durable, selectedTaskIDs)
+		observation, err := reader.ObserveSelected(ctx, selectedTaskIDs)
+		if err != nil {
+			return err
+		}
+		liveTaskStatesJSON, err := taskStatusLiveStatesJSON(observation)
+		if err != nil {
+			return err
+		}
+		projectedByTaskID, err = b.projection.Project(
+			ctx,
+			TaskStatusObservation{Live: observation, LiveTaskStatesJSON: liveTaskStatesJSON},
+			durable,
+			selectedTaskIDs,
+		)
 		if err != nil {
 			return err
 		}
@@ -376,7 +394,7 @@ func (b *Board) applyColumnTaskCounts(
 	workflowID runtimeids.WorkflowID,
 	labelFilter workflowTaskLabelFilterFacts,
 	dependencyFilter *bool,
-	liveTaskStatesJSON string,
+	lifecycleStateToken string,
 ) error {
 	labelFilterArgs, err := labelFilter.queryArgs()
 	if err != nil {
@@ -390,7 +408,7 @@ func (b *Board) applyColumnTaskCounts(
 		LabelIdsJson:         labelFilterArgs.labelIDsJSON,
 		ExcludedLabelIdsJson: labelFilterArgs.excludedLabelIDsJSON,
 		DependencyFilter:     workflowTaskDependencyFilterQueryArg(dependencyFilter),
-		LiveTaskStatesJson:   liveTaskStatesJSON,
+		LifecycleStateToken:  lifecycleStateToken,
 	})
 	if err != nil {
 		return err

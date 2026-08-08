@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -449,6 +450,18 @@ func (s countingTaskStatusLiveObservationSource) CaptureWorkflowTaskLifecycleQue
 	return source.CaptureWorkflowTaskLifecycleQuery(ctx, operation)
 }
 
+func (s countingTaskStatusLiveObservationSource) CaptureWorkflowTaskBoundedLifecycleRead(
+	ctx context.Context,
+	operation func(string, *sqlitegen.Queries, workflowexecution.WorkflowTaskLifecycleReader) error,
+) error {
+	*s.calls++
+	source, ok := s.source.(TaskStatusBoundedLifecycleSource)
+	if !ok {
+		return errors.New("counted task status source has no bounded lifecycle capture")
+	}
+	return source.CaptureWorkflowTaskBoundedLifecycleRead(ctx, operation)
+}
+
 func (s staticTaskStatusLiveObservationSource) CaptureWorkflowTaskExecutions(
 	ctx context.Context,
 	_ []workflow.TaskID,
@@ -483,6 +496,111 @@ func (s staticTaskStatusLiveObservationSource) CaptureWorkflowTaskLifecycleQuery
 		s.observation,
 		func(_ workflowexecution.WorkflowTaskExecutionObservation, queries *sqlitegen.Queries) error {
 			return operation(token, queries)
+		},
+	)
+}
+
+func (s staticTaskStatusLiveObservationSource) CaptureWorkflowTaskBoundedLifecycleRead(
+	ctx context.Context,
+	operation func(string, *sqlitegen.Queries, workflowexecution.WorkflowTaskLifecycleReader) error,
+) error {
+	if s.queryCalls != nil {
+		*s.queryCalls++
+	}
+	return captureWorkflowViewTestBoundedLifecycle(ctx, s.store, s.observation, operation)
+}
+
+type workflowViewTestLifecycleReader struct {
+	observation workflowexecution.WorkflowTaskExecutionObservation
+}
+
+func (r workflowViewTestLifecycleReader) ObserveSelected(
+	_ context.Context,
+	taskIDs []workflow.TaskID,
+) (workflowexecution.WorkflowTaskExecutionObservation, error) {
+	selected := workflowexecution.WorkflowTaskExecutionObservation{
+		Executions: map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot{},
+		Quiescence: map[workflow.TaskID]bool{},
+		Lifecycle:  map[workflow.TaskID]workflowexecution.WorkflowTaskLifecycleSnapshot{},
+	}
+	for _, taskID := range taskIDs {
+		if execution, exists := r.observation.Executions[taskID]; exists {
+			selected.Executions[taskID] = execution
+		}
+		if quiescent, exists := r.observation.Quiescence[taskID]; exists {
+			selected.Quiescence[taskID] = quiescent
+		} else {
+			_, owned := r.observation.Lifecycle[taskID]
+			selected.Quiescence[taskID] = !owned
+		}
+		if lifecycle, exists := r.observation.Lifecycle[taskID]; exists {
+			selected.Lifecycle[taskID] = lifecycle
+		}
+	}
+	return selected, nil
+}
+
+func (r workflowViewTestLifecycleReader) PendingQuestions(
+	cursor workflowstore.LifecycleQuestionCursor,
+	limit int,
+) ([]workflowstore.LifecyclePendingQuestion, error) {
+	questions := lifecyclePendingQuestions(r.observation, nil)
+	type indexedQuestion struct {
+		question workflowstore.LifecyclePendingQuestion
+		itemID   string
+	}
+	indexed := make([]indexedQuestion, 0, len(questions))
+	for _, question := range questions {
+		itemID, err := workflowstore.LifecycleQuestionItemID(question.SessionID, question.Prompt.ID)
+		if err != nil {
+			return nil, err
+		}
+		indexed = append(indexed, indexedQuestion{question: question, itemID: itemID})
+	}
+	sort.Slice(indexed, func(i, j int) bool {
+		leftTime := indexed[i].question.Prompt.CreatedAt.UnixMilli()
+		rightTime := indexed[j].question.Prompt.CreatedAt.UnixMilli()
+		if leftTime != rightTime {
+			return leftTime > rightTime
+		}
+		return indexed[i].itemID > indexed[j].itemID
+	})
+	out := make([]workflowstore.LifecyclePendingQuestion, 0, min(limit, len(indexed)))
+	for _, candidate := range indexed {
+		question := candidate.question
+		itemID := candidate.itemID
+		occurredAt := question.Prompt.CreatedAt.UnixMilli()
+		if cursor.HasValue && (occurredAt > cursor.OccurredAtUnixMs ||
+			(occurredAt == cursor.OccurredAtUnixMs && itemID >= cursor.ItemID)) {
+			continue
+		}
+		out = append(out, question)
+		if len(out) == limit {
+			break
+		}
+	}
+	return out, nil
+}
+
+func captureWorkflowViewTestBoundedLifecycle(
+	ctx context.Context,
+	store *workflowstore.Store,
+	observation workflowexecution.WorkflowTaskExecutionObservation,
+	operation func(string, *sqlitegen.Queries, workflowexecution.WorkflowTaskLifecycleReader) error,
+) error {
+	token, release, err := sqlitegen.RegisterLifecycleTaskStateResolver(func(taskID string) (sqlitegen.LifecycleTaskQueryState, error) {
+		return testLifecycleTaskState(observation, workflow.TaskID(taskID))
+	})
+	if err != nil {
+		return err
+	}
+	defer release()
+	return captureWorkflowViewTestObservation(
+		ctx,
+		store,
+		observation,
+		func(_ workflowexecution.WorkflowTaskExecutionObservation, queries *sqlitegen.Queries) error {
+			return operation(token, queries, workflowViewTestLifecycleReader{observation: observation})
 		},
 	)
 }

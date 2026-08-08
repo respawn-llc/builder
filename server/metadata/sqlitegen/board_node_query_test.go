@@ -272,6 +272,6 @@ func boardNodeTasksQueryParams(
 		SortDirection:        sortDirection,
 		OffsetRows:           int64(offset),
 		LimitRows:            int64(limit),
-		LiveTaskStatesJson:   "[]",
+		LifecycleStateToken:  noLifecycleTaskStateToken,
 	}
 }

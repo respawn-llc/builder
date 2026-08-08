@@ -31,7 +31,7 @@ func TestLifecycleSensitiveReadModelsUseSharedCaptureBoundary(t *testing.T) {
 					return true
 				}
 				switch selector.Sel.Name {
-				case "WithSnapshot", "WithLifecycleQuery":
+				case "WithSnapshot", "WithLifecycleQuery", "WithBoundedLifecycle":
 					captures++
 				case "BeginTx", "WithTx", "ObserveWorkflowTaskExecutions",
 					"CurrentWorkflowTaskExecutionSnapshots",
@@ -79,6 +79,61 @@ func TestPagedTaskReadsUseBoundedLifecycleQuery(t *testing.T) {
 			})
 			if boundedCaptures != 1 {
 				t.Fatalf("%s bounded lifecycle captures = %d, want 1", fileName, boundedCaptures)
+			}
+		})
+	}
+}
+
+func TestPagedLifecycleReadsNeverUseGlobalSnapshotMaterialization(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range []struct {
+		fileName    string
+		function    string
+		captureName string
+	}{
+		{fileName: "attention.go", function: "List", captureName: "WithBoundedLifecycle"},
+		{fileName: "board.go", function: "ListNodeCards", captureName: "WithBoundedLifecycle"},
+	} {
+		testCase := testCase
+		t.Run(testCase.fileName+"."+testCase.function, func(t *testing.T) {
+			t.Parallel()
+			file := parseWorkflowViewArchitectureFile(t, testCase.fileName)
+			captures := 0
+			found := false
+			for _, declaration := range file.Decls {
+				function, ok := declaration.(*ast.FuncDecl)
+				if !ok || function.Name.Name != testCase.function {
+					continue
+				}
+				found = true
+				ast.Inspect(function.Body, func(node ast.Node) bool {
+					selector, ok := node.(*ast.SelectorExpr)
+					if !ok {
+						return true
+					}
+					switch selector.Sel.Name {
+					case testCase.captureName:
+						captures++
+					case "WithSnapshot":
+						t.Errorf(
+							"%s.%s materializes the complete lifecycle set through WithSnapshot",
+							testCase.fileName,
+							testCase.function,
+						)
+					}
+					return true
+				})
+			}
+			if !found {
+				t.Fatalf("%s.%s is missing", testCase.fileName, testCase.function)
+			}
+			if captures != 1 {
+				t.Fatalf(
+					"%s.%s bounded lifecycle captures = %d, want 1",
+					testCase.fileName,
+					testCase.function,
+					captures,
+				)
 			}
 		})
 	}

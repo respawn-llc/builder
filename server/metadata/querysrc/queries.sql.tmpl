@@ -1431,23 +1431,17 @@ label_filter_args AS (
         CAST(sqlc.narg(label_filter_mode) AS TEXT) AS label_filter_mode,
         CAST(sqlc.arg(label_ids_json) AS TEXT) AS label_ids_json,
         CAST(sqlc.narg(dependency_filter) AS INTEGER) AS dependency_filter,
-        CAST(sqlc.arg(live_task_states_json) AS TEXT) AS live_task_states_json
+        CAST(sqlc.arg(lifecycle_state_token) AS TEXT) AS lifecycle_state_token
 ),
-{{taskStatusProjection "" "(SELECT live_task_states_json FROM label_filter_args)" ","}}
+{{taskLifecycleStatusProjection "" "(SELECT lifecycle_state_token FROM label_filter_args)" ","}}
 effective_current_nodes AS (
     SELECT
         t.id AS task_id,
-        CAST(COALESCE(root_node.value, current_node.node_id) AS TEXT) AS node_id
+        CAST(current_node.node_id AS TEXT) AS node_id
     FROM task_records t
-    LEFT JOIN live_task_states live ON live.task_id = t.id
-    LEFT JOIN json_each(live.current_node_ids_json) root_node
-      ON COALESCE(live.has_lifecycle_override, 0) != 0
-    LEFT JOIN task_current_nodes current_node
-      ON current_node.task_id = t.id
-     AND COALESCE(live.has_lifecycle_override, 0) = 0
+    JOIN task_current_nodes current_node ON current_node.task_id = t.id
     WHERE t.project_id = sqlc.arg(project_id)
       AND t.workflow_id = sqlc.arg(workflow_id)
-      AND COALESCE(root_node.value, current_node.node_id) IS NOT NULL
 )
 SELECT
     node_id,
@@ -3583,21 +3577,15 @@ OR blocked_task_id IN (
 -- name: ListBoardNodeTasks :many
 WITH
 args AS (
-    SELECT CAST(sqlc.arg(live_task_states_json) AS TEXT) AS live_task_states_json
+    SELECT CAST(sqlc.arg(lifecycle_state_token) AS TEXT) AS lifecycle_state_token
 ),
-{{taskStatusProjection "" "(SELECT live_task_states_json FROM args)" ","}}
+{{taskLifecycleStatusProjection "" "(SELECT lifecycle_state_token FROM args)" ","}}
 effective_current_nodes AS (
     SELECT
         t.id AS task_id,
-        CAST(COALESCE(root_node.value, current_node.node_id) AS TEXT) AS node_id
+        CAST(current_node.node_id AS TEXT) AS node_id
     FROM task_records t
-    LEFT JOIN live_task_states live ON live.task_id = t.id
-    LEFT JOIN json_each(live.current_node_ids_json) root_node
-      ON COALESCE(live.has_lifecycle_override, 0) != 0
-    LEFT JOIN task_current_nodes current_node
-      ON current_node.task_id = t.id
-     AND COALESCE(live.has_lifecycle_override, 0) = 0
-    WHERE COALESCE(root_node.value, current_node.node_id) IS NOT NULL
+    JOIN task_current_nodes current_node ON current_node.task_id = t.id
 ),
 board_node_tasks AS (
     SELECT

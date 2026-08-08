@@ -25,6 +25,18 @@ type WorkflowTaskExecutionObservation struct {
 	Lifecycle  map[workflow.TaskID]WorkflowTaskLifecycleSnapshot
 }
 
+type WorkflowTaskLifecycleReader interface {
+	ObserveSelected(context.Context, []workflow.TaskID) (WorkflowTaskExecutionObservation, error)
+	PendingQuestions(
+		workflowstore.LifecycleQuestionCursor,
+		int,
+	) ([]workflowstore.LifecyclePendingQuestion, error)
+}
+
+type workflowTaskLifecycleReader struct {
+	capture workflowstore.LifecycleBoundedReadCapture
+}
+
 // ObserveWorkflowTaskExecutions captures the global published lifecycle and,
 // when taskIDs are supplied, derives their quiescence from that same root.
 func (c *CurrentNodeController) ObserveWorkflowTaskExecutions(taskIDs []workflow.TaskID) (WorkflowTaskExecutionObservation, error) {
@@ -59,6 +71,51 @@ func (c *CurrentNodeController) CaptureWorkflowTaskLifecycleQuery(
 	return queryPublication.CaptureQuery(ctx, operation)
 }
 
+func (c *CurrentNodeController) CaptureWorkflowTaskBoundedLifecycleRead(
+	ctx context.Context,
+	operation func(string, *sqlitegen.Queries, WorkflowTaskLifecycleReader) error,
+) error {
+	if c == nil {
+		return errors.New("current node workflow controller is required")
+	}
+	if operation == nil {
+		return errors.New("workflow Task bounded lifecycle read operation is required")
+	}
+	publication, ok := c.publication.(interface {
+		CaptureBoundedRead(
+			context.Context,
+			func(string, workflowstore.LifecycleBoundedReadCapture, *sqlitegen.Queries) error,
+		) error
+	})
+	if !ok {
+		return errors.New("workflow lifecycle publication does not support bounded reads")
+	}
+	return publication.CaptureBoundedRead(
+		ctx,
+		func(
+			token string,
+			capture workflowstore.LifecycleBoundedReadCapture,
+			queries *sqlitegen.Queries,
+		) error {
+			return operation(token, queries, workflowTaskLifecycleReader{capture: capture})
+		},
+	)
+}
+
+func (r workflowTaskLifecycleReader) ObserveSelected(
+	ctx context.Context,
+	taskIDs []workflow.TaskID,
+) (WorkflowTaskExecutionObservation, error) {
+	return workflowTaskExecutionObservationFromCapture(ctx, r.capture, taskIDs, taskIDs)
+}
+
+func (r workflowTaskLifecycleReader) PendingQuestions(
+	cursor workflowstore.LifecycleQuestionCursor,
+	limit int,
+) ([]workflowstore.LifecyclePendingQuestion, error) {
+	return r.capture.PendingQuestions(cursor, limit)
+}
+
 func (c *CurrentNodeController) CaptureWorkflowTaskExecutions(
 	ctx context.Context,
 	taskIDs []workflow.TaskID,
@@ -81,11 +138,6 @@ func (c *CurrentNodeController) CaptureWorkflowTaskExecutions(
 		selected[taskID] = struct{}{}
 	}
 
-	observation := WorkflowTaskExecutionObservation{
-		Executions: map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot{},
-		Quiescence: map[workflow.TaskID]bool{},
-		Lifecycle:  map[workflow.TaskID]WorkflowTaskLifecycleSnapshot{},
-	}
 	capture, err := c.publication.Capture(ctx)
 	if err != nil {
 		return err
@@ -95,24 +147,71 @@ func (c *CurrentNodeController) CaptureWorkflowTaskExecutions(
 			err = closeErr
 		}
 	}()
-	for _, taskID := range capture.TaskIDs() {
-		selected[taskID] = struct{}{}
+	lifecycleTaskIDs := capture.TaskIDs()
+	quiescenceTaskIDs := make([]workflow.TaskID, 0, len(selected)+len(lifecycleTaskIDs))
+	for taskID := range selected {
+		quiescenceTaskIDs = append(quiescenceTaskIDs, taskID)
+	}
+	quiescenceTaskIDs = append(quiescenceTaskIDs, lifecycleTaskIDs...)
+	observation, err := workflowTaskExecutionObservationFromCapture(
+		ctx,
+		capture,
+		lifecycleTaskIDs,
+		quiescenceTaskIDs,
+	)
+	if err != nil {
+		return err
+	}
+	return capture.WithQueries(func(queries *sqlitegen.Queries) error {
+		return operation(observation, queries)
+	})
+}
+
+type workflowTaskLifecycleCapture interface {
+	CurrentNodes(context.Context, workflow.TaskID) ([]workflow.CurrentNode, error)
+	QueuedCurrentNodes(workflow.TaskID) []workflow.CurrentNodeReference
+	ExactExecutions(workflow.TaskID) []workflowstore.LifecycleExactExecution
+}
+
+func workflowTaskExecutionObservationFromCapture(
+	ctx context.Context,
+	capture workflowTaskLifecycleCapture,
+	lifecycleTaskIDs []workflow.TaskID,
+	quiescenceTaskIDs []workflow.TaskID,
+) (WorkflowTaskExecutionObservation, error) {
+	observation := WorkflowTaskExecutionObservation{
+		Executions: map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot{},
+		Quiescence: map[workflow.TaskID]bool{},
+		Lifecycle:  map[workflow.TaskID]WorkflowTaskLifecycleSnapshot{},
+	}
+	seenLifecycle := make(map[workflow.TaskID]struct{}, len(lifecycleTaskIDs))
+	for _, taskID := range lifecycleTaskIDs {
+		if taskID == "" {
+			return WorkflowTaskExecutionObservation{}, errors.New("workflow task id is required")
+		}
+		if _, duplicate := seenLifecycle[taskID]; duplicate {
+			return WorkflowTaskExecutionObservation{}, fmt.Errorf("workflow task id %q is duplicated", taskID)
+		}
+		seenLifecycle[taskID] = struct{}{}
+		queued := capture.QueuedCurrentNodes(taskID)
+		exact := capture.ExactExecutions(taskID)
+		if len(queued) == 0 && len(exact) == 0 {
+			continue
+		}
 		currentNodes, err := capture.CurrentNodes(ctx, taskID)
 		if err != nil {
-			return err
+			return WorkflowTaskExecutionObservation{}, err
 		}
 		observation.Lifecycle[taskID] = WorkflowTaskLifecycleSnapshot{
 			CurrentNodes:       currentNodes,
-			QueuedCurrentNodes: capture.QueuedCurrentNodes(taskID),
-			ExactExecutions:    capture.ExactExecutions(taskID),
+			QueuedCurrentNodes: queued,
+			ExactExecutions:    exact,
 		}
-	}
-	for taskID, lifecycle := range observation.Lifecycle {
 		executions := sessionruntime.TaskExecutionSnapshot{}
-		for _, exact := range lifecycle.ExactExecutions {
-			execution, err := taskExecutionFromLifecycleExact(exact)
+		for _, published := range exact {
+			execution, err := taskExecutionFromLifecycleExact(published)
 			if err != nil {
-				return err
+				return WorkflowTaskExecutionObservation{}, err
 			}
 			executions.Executions = append(executions.Executions, execution)
 		}
@@ -120,13 +219,14 @@ func (c *CurrentNodeController) CaptureWorkflowTaskExecutions(
 			observation.Executions[taskID] = executions
 		}
 	}
-	for taskID := range selected {
+	for _, taskID := range quiescenceTaskIDs {
+		if taskID == "" {
+			return WorkflowTaskExecutionObservation{}, errors.New("workflow task id is required")
+		}
 		_, owned := observation.Lifecycle[taskID]
 		observation.Quiescence[taskID] = !owned
 	}
-	return capture.WithQueries(func(queries *sqlitegen.Queries) error {
-		return operation(observation, queries)
-	})
+	return observation, nil
 }
 
 func taskExecutionFromLifecycleExact(exact workflowstore.LifecycleExactExecution) (sessionruntime.TaskExecution, error) {
