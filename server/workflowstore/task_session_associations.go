@@ -207,8 +207,36 @@ func (s *Store) LatestTaskSessionForNode(ctx context.Context, currentNode workfl
 
 // ResolveCurrentSessionStartContext resolves prompt state only from direct
 // Session ownership, the matching Current Node, and the latest definition.
-// Discarded execution history is not an input.
+// Discarded execution history is not an input, and this operation never repairs
+// provenance.
 func (s *Store) ResolveCurrentSessionStartContext(ctx context.Context, sessionID runtimeids.SessionID) (CurrentNodeStartContext, error) {
+	if sessionID.IsZero() {
+		return CurrentNodeStartContext{}, errors.New("session id is required")
+	}
+	taskID, err := s.taskIDForSessionOwnership(ctx, sessionID)
+	if err != nil {
+		return CurrentNodeStartContext{}, err
+	}
+	if taskID == nil {
+		return CurrentNodeStartContext{}, ErrSessionNotCurrentWorkflowNode
+	}
+	currentNode, err := currentSessionNode(ctx, s.queries, *taskID, sessionID)
+	if err != nil {
+		return CurrentNodeStartContext{}, err
+	}
+	associated, err := hasCurrentNodeSessionAssociation(ctx, s.queries, currentNode)
+	if err != nil {
+		return CurrentNodeStartContext{}, err
+	}
+	if !associated {
+		return CurrentNodeStartContext{}, ErrSessionNotCurrentWorkflowNode
+	}
+	return s.resolveCurrentNodeStartContext(ctx, currentNode)
+}
+
+// EnsureCurrentSessionStartContext is the activation-owned resolver. Callers
+// must hold the Task lifecycle writer before allowing it to repair provenance.
+func (s *Store) EnsureCurrentSessionStartContext(ctx context.Context, sessionID runtimeids.SessionID) (CurrentNodeStartContext, error) {
 	if sessionID.IsZero() {
 		return CurrentNodeStartContext{}, errors.New("session id is required")
 	}
@@ -241,6 +269,32 @@ func (s *Store) ensureCurrentSessionNodeAssociation(
 		}
 	}()
 	q := s.queries.WithTx(tx)
+	currentNode, err := currentSessionNode(ctx, q, taskID, sessionID)
+	if err != nil {
+		return workflow.CurrentNode{}, err
+	}
+	if err := ensureCurrentNodeSessionAssociation(ctx, q, currentNode); err != nil {
+		if errors.Is(err, ErrSessionNotCurrentWorkflowNode) {
+			return workflow.CurrentNode{}, fmt.Errorf(
+				"session %q ownership contradicts Current Node %v",
+				sessionID,
+				currentNode.Reference,
+			)
+		}
+		return workflow.CurrentNode{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return workflow.CurrentNode{}, err
+	}
+	return currentNode, nil
+}
+
+func currentSessionNode(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	taskID workflow.TaskID,
+	sessionID runtimeids.SessionID,
+) (workflow.CurrentNode, error) {
 	rows, err := q.ListCurrentNodeReferencesBySession(
 		ctx,
 		sql.NullString{String: sessionID.String(), Valid: true},
@@ -278,19 +332,6 @@ func (s *Store) ensureCurrentSessionNodeAssociation(
 	}
 	currentNode, err := currentNodeForReference(ctx, q, reference)
 	if err != nil {
-		return workflow.CurrentNode{}, err
-	}
-	if err := ensureCurrentNodeSessionAssociation(ctx, q, currentNode); err != nil {
-		if errors.Is(err, ErrSessionNotCurrentWorkflowNode) {
-			return workflow.CurrentNode{}, fmt.Errorf(
-				"session %q ownership contradicts Current Node %v",
-				sessionID,
-				reference,
-			)
-		}
-		return workflow.CurrentNode{}, err
-	}
-	if err := tx.Commit(); err != nil {
 		return workflow.CurrentNode{}, err
 	}
 	return currentNode, nil
@@ -340,6 +381,61 @@ func (s *Store) ValidateCurrentNodeSessionBinding(
 	return nil
 }
 
+type currentNodeSessionAssociationIdentity struct {
+	taskID              string
+	nodeID              string
+	transitionBranchKey sql.NullString
+	sessionID           sql.NullString
+}
+
+func inspectCurrentNodeSessionAssociation(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	currentNode workflow.CurrentNode,
+) (currentNodeSessionAssociationIdentity, bool, bool, error) {
+	if currentNode.SessionID == nil {
+		return currentNodeSessionAssociationIdentity{}, false, false, nil
+	}
+	sessionID := *currentNode.SessionID
+	reference := currentNode.Reference
+	identity := currentNodeSessionAssociationIdentity{
+		taskID:    string(reference.TaskID),
+		nodeID:    string(reference.NodeID),
+		sessionID: sql.NullString{String: sessionID.String(), Valid: true},
+	}
+	if branchKey, branchScoped := reference.TransitionBranchKey(); branchScoped {
+		identity.transitionBranchKey = sql.NullString{String: string(branchKey), Valid: true}
+		associated, err := q.HasBranchCurrentNodeSessionAssociation(
+			ctx,
+			sqlitegen.HasBranchCurrentNodeSessionAssociationParams{
+				TaskID:              identity.taskID,
+				NodeID:              identity.nodeID,
+				TransitionBranchKey: identity.transitionBranchKey,
+				SessionID:           identity.sessionID,
+			},
+		)
+		return identity, true, associated, err
+	}
+	associated, err := q.HasSerialCurrentNodeSessionAssociation(
+		ctx,
+		sqlitegen.HasSerialCurrentNodeSessionAssociationParams{
+			TaskID:    identity.taskID,
+			NodeID:    identity.nodeID,
+			SessionID: identity.sessionID,
+		},
+	)
+	return identity, true, associated, err
+}
+
+func hasCurrentNodeSessionAssociation(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	currentNode workflow.CurrentNode,
+) (bool, error) {
+	_, _, associated, err := inspectCurrentNodeSessionAssociation(ctx, q, currentNode)
+	return associated, err
+}
+
 // ensureCurrentNodeSessionAssociation is the single retained-provenance repair
 // operation. Its caller owns the transaction that couples repair to Resume or
 // retained-Session classification.
@@ -348,58 +444,34 @@ func ensureCurrentNodeSessionAssociation(
 	q *sqlitegen.Queries,
 	currentNode workflow.CurrentNode,
 ) error {
-	if currentNode.SessionID == nil {
+	identity, bound, associated, err := inspectCurrentNodeSessionAssociation(ctx, q, currentNode)
+	if err != nil {
+		return err
+	}
+	if !bound || associated {
 		return nil
 	}
-	sessionID := *currentNode.SessionID
-	reference := currentNode.Reference
-	associatedAt := time.Now().UTC()
+	associatedAt := time.Now().UTC().UnixMilli()
 	var repaired int64
-	var err error
-	if branchKey, branchScoped := reference.TransitionBranchKey(); branchScoped {
-		params := sqlitegen.HasBranchCurrentNodeSessionAssociationParams{
-			TaskID:              string(reference.TaskID),
-			NodeID:              string(reference.NodeID),
-			TransitionBranchKey: sql.NullString{String: string(branchKey), Valid: true},
-			SessionID:           sql.NullString{String: sessionID.String(), Valid: true},
-		}
-		associated, err := q.HasBranchCurrentNodeSessionAssociation(ctx, params)
-		if err != nil {
-			return err
-		}
-		if associated {
-			return nil
-		}
+	if identity.transitionBranchKey.Valid {
 		repaired, err = q.RepairBranchCurrentNodeSessionAssociation(
 			ctx,
 			sqlitegen.RepairBranchCurrentNodeSessionAssociationParams{
-				AssociatedAtUnixMs:  associatedAt.UnixMilli(),
-				TaskID:              params.TaskID,
-				NodeID:              params.NodeID,
-				TransitionBranchKey: params.TransitionBranchKey,
-				SessionID:           params.SessionID,
+				AssociatedAtUnixMs:  associatedAt,
+				TaskID:              identity.taskID,
+				NodeID:              identity.nodeID,
+				TransitionBranchKey: identity.transitionBranchKey,
+				SessionID:           identity.sessionID,
 			},
 		)
 	} else {
-		params := sqlitegen.HasSerialCurrentNodeSessionAssociationParams{
-			TaskID:    string(reference.TaskID),
-			NodeID:    string(reference.NodeID),
-			SessionID: sql.NullString{String: sessionID.String(), Valid: true},
-		}
-		associated, err := q.HasSerialCurrentNodeSessionAssociation(ctx, params)
-		if err != nil {
-			return err
-		}
-		if associated {
-			return nil
-		}
 		repaired, err = q.RepairSerialCurrentNodeSessionAssociation(
 			ctx,
 			sqlitegen.RepairSerialCurrentNodeSessionAssociationParams{
-				AssociatedAtUnixMs: associatedAt.UnixMilli(),
-				TaskID:             params.TaskID,
-				NodeID:             params.NodeID,
-				SessionID:          params.SessionID,
+				AssociatedAtUnixMs: associatedAt,
+				TaskID:             identity.taskID,
+				NodeID:             identity.nodeID,
+				SessionID:          identity.sessionID,
 			},
 		)
 	}

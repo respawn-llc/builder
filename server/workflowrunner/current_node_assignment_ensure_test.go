@@ -2,6 +2,7 @@ package workflowrunner
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -270,6 +271,37 @@ func TestInteractiveActivationRepairsMissingRetainedSuccessorProvenance(t *testi
 		state.successor.Reference,
 	); count != 1 {
 		t.Fatalf("successor Session associations after repeated activation = %d, want one", count)
+	}
+}
+
+func TestPersistedWorkflowInspectionDoesNotRepairMissingRetainedSuccessorProvenance(t *testing.T) {
+	state := newMissingProvenanceRetainedSuccessor(t)
+	persisted, err := session.OpenByID(
+		state.fixture.cfg.PersistenceRoot,
+		state.sessionID.String(),
+		state.fixture.metadata.AuthoritativeSessionStoreOptions()...,
+	)
+	if err != nil {
+		t.Fatalf("open retained Session for inspection: %v", err)
+	}
+
+	_, inspectionErr := BuildPersistedWorkflowInspection(
+		context.Background(),
+		state.fixture.cfg,
+		persisted,
+		state.fixture.store,
+		nil,
+	)
+	if !errors.Is(inspectionErr, workflowstore.ErrSessionNotCurrentWorkflowNode) {
+		t.Fatalf("persisted inspection error = %v, want missing read-only provenance", inspectionErr)
+	}
+	if count := currentNodeSessionAssociationCount(
+		t,
+		state.fixture,
+		state.sessionID,
+		state.successor.Reference,
+	); count != 0 {
+		t.Fatalf("persisted inspection repaired %d successor associations, want none", count)
 	}
 }
 

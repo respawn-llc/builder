@@ -42,7 +42,7 @@ func (c *CurrentNodeController) ActivateOrAttachRetainedSession(
 		resolution workflowstore.TaskAttentionResolution
 	)
 	err = c.lifecycle.Run(ctx, *taskID, func(ctx context.Context) error {
-		input, resolveErr := c.store.ResolveCurrentSessionStartContext(ctx, sessionID)
+		input, resolveErr := c.store.EnsureCurrentSessionStartContext(ctx, sessionID)
 		if errors.Is(resolveErr, workflowstore.ErrSessionNotCurrentWorkflowNode) {
 			handled = false
 			return nil

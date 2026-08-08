@@ -190,7 +190,7 @@ type CurrentNodeController struct {
 		ResolveIdleExecutableCurrentNode(context.Context, workflowstore.IdleCurrentNodeSelector) (workflow.CurrentNode, error)
 		ValidateCurrentNodeSessionBinding(context.Context, runtimeids.SessionID, workflow.CurrentNodeReference) error
 		TaskIDForSession(context.Context, runtimeids.SessionID) (*workflow.TaskID, error)
-		ResolveCurrentSessionStartContext(context.Context, runtimeids.SessionID) (workflowstore.CurrentNodeStartContext, error)
+		EnsureCurrentSessionStartContext(context.Context, runtimeids.SessionID) (workflowstore.CurrentNodeStartContext, error)
 		TaskExecutionScope(context.Context, workflow.TaskID) (workflowstore.TaskExecutionScope, error)
 	}
 	runner      CurrentNodeRunner
@@ -240,7 +240,7 @@ func NewCurrentNodeController(
 		ResolveIdleExecutableCurrentNode(context.Context, workflowstore.IdleCurrentNodeSelector) (workflow.CurrentNode, error)
 		ValidateCurrentNodeSessionBinding(context.Context, runtimeids.SessionID, workflow.CurrentNodeReference) error
 		TaskIDForSession(context.Context, runtimeids.SessionID) (*workflow.TaskID, error)
-		ResolveCurrentSessionStartContext(context.Context, runtimeids.SessionID) (workflowstore.CurrentNodeStartContext, error)
+		EnsureCurrentSessionStartContext(context.Context, runtimeids.SessionID) (workflowstore.CurrentNodeStartContext, error)
 		TaskExecutionScope(context.Context, workflow.TaskID) (workflowstore.TaskExecutionScope, error)
 	},
 	runner CurrentNodeRunner,

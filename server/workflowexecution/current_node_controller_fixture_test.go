@@ -531,6 +531,13 @@ func (s *currentNodeControllerStore) ResolveCurrentSessionStartContext(
 	return input, nil
 }
 
+func (s *currentNodeControllerStore) EnsureCurrentSessionStartContext(
+	ctx context.Context,
+	sessionID runtimeids.SessionID,
+) (workflowstore.CurrentNodeStartContext, error) {
+	return s.ResolveCurrentSessionStartContext(ctx, sessionID)
+}
+
 func (s *currentNodeControllerStore) StartTask(ctx context.Context, taskID workflow.TaskID) (workflowstore.StartTaskResult, error) {
 	if s.startTaskCalls != nil {
 		s.startTaskCalls <- taskID
