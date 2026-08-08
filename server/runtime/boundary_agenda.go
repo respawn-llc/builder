@@ -59,6 +59,7 @@ const (
 	boundaryEligibilityStep boundaryEligibility = iota + 1
 	boundaryEligibilityTurn
 	boundaryEligibilityIdle
+	boundaryEligibilitySafe
 )
 
 type boundarySelection interface {
@@ -174,6 +175,23 @@ func (a *boundaryAgenda) selectNext(selection boundarySelection) boundaryAgendaI
 		}
 		a.entries = append(a.entries[:index], a.entries[index+1:]...)
 		return item
+	}
+	return nil
+}
+
+func (a *boundaryAgenda) peekNext(selection boundarySelection) boundaryAgendaItem {
+	if a == nil {
+		return nil
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if a.closed {
+		return nil
+	}
+	for _, item := range a.entries {
+		if boundaryAgendaItemEligible(item, selection) {
+			return item
+		}
 	}
 	return nil
 }
@@ -381,6 +399,35 @@ func (a *boundaryAgenda) selectHumanItems(selection boundarySelection) []*humanB
 	return selected
 }
 
+func (a *boundaryAgenda) selectHumanPrefix(selection boundarySelection) []*humanBoundaryAgendaItem {
+	if a == nil {
+		return nil
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.closed {
+		return nil
+	}
+	selected := make([]*humanBoundaryAgendaItem, 0)
+	remaining := make([]boundaryAgendaItem, 0, len(a.entries))
+	reachedAnotherFamily := false
+	for _, entry := range a.entries {
+		if reachedAnotherFamily || !boundaryAgendaItemEligible(entry, selection) {
+			remaining = append(remaining, entry)
+			continue
+		}
+		human, ok := entry.(*humanBoundaryAgendaItem)
+		if !ok {
+			reachedAnotherFamily = true
+			remaining = append(remaining, entry)
+			continue
+		}
+		selected = append(selected, human)
+	}
+	a.entries = remaining
+	return selected
+}
+
 func (a *boundaryAgenda) selectAllHumanItems() []*humanBoundaryAgendaItem {
 	if a == nil {
 		return nil
@@ -506,7 +553,10 @@ func validateBoundaryAgendaBinding(binding boundaryAgendaBinding) error {
 
 func (e boundaryEligibility) valid() bool {
 	switch e {
-	case boundaryEligibilityStep, boundaryEligibilityTurn, boundaryEligibilityIdle:
+	case boundaryEligibilityStep,
+		boundaryEligibilityTurn,
+		boundaryEligibilityIdle,
+		boundaryEligibilitySafe:
 		return true
 	default:
 		return false
@@ -520,21 +570,29 @@ func boundaryAgendaItemEligible(item boundaryAgendaItem, selection boundarySelec
 	binding := item.agendaBinding()
 	switch selected := selection.(type) {
 	case scopeStepBoundarySelection:
-		scope, ok := binding.(scopeAgendaBinding)
-		return ok &&
+		if _, runtimeBound := binding.(runtimeAgendaBinding); runtimeBound {
+			return item.agendaEligibility() == boundaryEligibilitySafe
+		}
+		scope, scopeBound := binding.(scopeAgendaBinding)
+		return scopeBound &&
 			item.agendaEligibility() == boundaryEligibilityStep &&
 			scope.scopeID == selected.scopeID &&
 			scope.origin == selected.origin
 	case scopeTurnBoundarySelection:
-		scope, ok := binding.(scopeAgendaBinding)
-		return ok &&
+		if _, runtimeBound := binding.(runtimeAgendaBinding); runtimeBound {
+			return item.agendaEligibility() == boundaryEligibilitySafe
+		}
+		scope, scopeBound := binding.(scopeAgendaBinding)
+		return scopeBound &&
 			(item.agendaEligibility() == boundaryEligibilityStep ||
 				item.agendaEligibility() == boundaryEligibilityTurn) &&
 			scope.scopeID == selected.scopeID &&
 			scope.origin == selected.origin
 	case idleAgendaSelection:
 		_, runtimeBound := binding.(runtimeAgendaBinding)
-		return runtimeBound && item.agendaEligibility() == boundaryEligibilityIdle
+		return runtimeBound &&
+			(item.agendaEligibility() == boundaryEligibilityIdle ||
+				item.agendaEligibility() == boundaryEligibilitySafe)
 	default:
 		return false
 	}

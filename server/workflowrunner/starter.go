@@ -219,25 +219,41 @@ func (s *Starter) SteerCurrentNodeAssignment(
 	if steerErr != nil {
 		return nil, prepared.cleanup(steerErr)
 	}
+	resource := workflowAssignmentResourceOpen
+	if admission.RuntimeAvailable {
+		resource = workflowAssignmentResourceReplace
+		source := input.SourceSessionID
+		contextSource := workflow.CanonicalContextSource(input.EnteringEdge.ContextSource)
+		if input.ContextMode == workflow.ContextModeContinueSession &&
+			!input.EnteringEdge.RequiresApproval &&
+			contextSource.Kind == workflow.ContextSourceImmediateSource &&
+			source != nil &&
+			prepared.plan.Descriptor.SessionID() == *source {
+			resource = workflowAssignmentResourceRetain
+		}
+	}
 	prepared.cleanup = func(err error) error { return err }
 	return &currentNodeAgentAssignmentSteer{
 		reference:  reference,
 		completion: steer,
 		prepared:   prepared,
-		retainSourceRuntime: admission.RuntimeAvailable &&
-			input.ContextMode == workflow.ContextModeContinueSession &&
-			!input.EnteringEdge.RequiresApproval &&
-			workflow.CanonicalContextSource(input.EnteringEdge.ContextSource).Kind == workflow.ContextSourceImmediateSource &&
-			input.SourceSessionID != nil &&
-			prepared.plan.Descriptor.SessionID() == *input.SourceSessionID,
+		resource:   resource,
 	}, nil
 }
 
+type workflowAssignmentResource uint8
+
+const (
+	workflowAssignmentResourceOpen workflowAssignmentResource = iota + 1
+	workflowAssignmentResourceRetain
+	workflowAssignmentResourceReplace
+)
+
 type currentNodeAgentAssignmentSteer struct {
-	reference           workflow.CurrentNodeReference
-	completion          runtime.WorkflowAssignmentSteer
-	prepared            preparedCurrentNodeAgentSession
-	retainSourceRuntime bool
+	reference  workflow.CurrentNodeReference
+	completion runtime.WorkflowAssignmentSteer
+	prepared   preparedCurrentNodeAgentSession
+	resource   workflowAssignmentResource
 }
 
 func (s *currentNodeAgentAssignmentSteer) Wait(ctx context.Context) (session.CommitReceipt, error) {
@@ -485,10 +501,18 @@ func (s *Starter) currentNodeAgentSessionForStart(
 	if !receipt.Committed {
 		return preparedCurrentNodeAgentSession{}, nil, errors.New("current node assignment was not committed")
 	}
-	if assignment.retainSourceRuntime {
+	switch assignment.resource {
+	case workflowAssignmentResourceRetain:
 		return assignment.prepared, sessionruntime.CurrentAgentResource{}, nil
+	case workflowAssignmentResourceOpen:
+		return assignment.prepared, sessionruntime.OpenAgentResource{}, nil
+	case workflowAssignmentResourceReplace:
+		return assignment.prepared, sessionruntime.ReplaceAgentResource{}, nil
+	default:
+		return preparedCurrentNodeAgentSession{}, nil, errors.New(
+			"current node assignment has no runtime Resource Generation disposition",
+		)
 	}
-	return assignment.prepared, sessionruntime.ReplaceAgentResource{}, nil
 }
 
 func (s *Starter) planCurrentNodeSession(

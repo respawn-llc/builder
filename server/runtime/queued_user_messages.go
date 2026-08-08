@@ -138,6 +138,13 @@ func (e *Engine) AgentExecutionScopeReleased(scopeID runtimeids.ExecutionScopeID
 		scopeID,
 		func(admission runtimeEventAdmission, released runtimeids.ExecutionScopeID) (struct{}, error) {
 			e.invalidateAgentStepScope(released, errBoundaryScopeFinalized)
+			if _, assignmentErr := e.applyWorkflowAssignmentBoundary(
+				admission,
+				"",
+				idleBoundarySelection(),
+			); assignmentErr != nil {
+				return struct{}{}, assignmentErr
+			}
 			if !e.boundaryAgenda.hasEligibleHuman(idleBoundarySelection()) {
 				return struct{}{}, nil
 			}
@@ -201,7 +208,30 @@ func (e *Engine) applyHumanBoundary(
 	stepID string,
 	selection boundarySelection,
 ) (humanBoundaryApplyResult, error) {
-	selected := e.boundaryAgenda.selectHumanItems(selection)
+	return e.applyHumanBoundaryItems(
+		admission,
+		stepID,
+		e.boundaryAgenda.selectHumanItems(selection),
+	)
+}
+
+func (e *Engine) applyHumanBoundaryPrefix(
+	admission runtimeEventAdmission,
+	stepID string,
+	selection boundarySelection,
+) (humanBoundaryApplyResult, error) {
+	return e.applyHumanBoundaryItems(
+		admission,
+		stepID,
+		e.boundaryAgenda.selectHumanPrefix(selection),
+	)
+}
+
+func (e *Engine) applyHumanBoundaryItems(
+	admission runtimeEventAdmission,
+	stepID string,
+	selected []*humanBoundaryAgendaItem,
+) (humanBoundaryApplyResult, error) {
 	if len(selected) == 0 {
 		return humanBoundaryApplyResult{}, nil
 	}

@@ -171,19 +171,17 @@ type Engine struct {
 	agentSteps       agentStepAdmissionState
 	streamMutationMu sync.Mutex
 
-	store                      *session.Store
-	eventLog                   session.MaterializedEventLog
-	llm                        llm.Client
-	registry                   *tools.Registry
-	cfg                        Config
-	workflowAssignmentMu       sync.Mutex
-	pendingWorkflowAssignments []queuedWorkflowAssignment
-	liveRun                    *liveRunCoordinator
-	activeStepGoalMutationsMu  sync.Mutex
-	activeStepGoalMutations    map[string][]activeStepGoalMutation
-	pendingGoalLoopStart       bool
-	diagnostics                *diagnosticDedupeStore
-	toolCallStarts             *pendingToolCallStartStore
+	store                     *session.Store
+	eventLog                  session.MaterializedEventLog
+	llm                       llm.Client
+	registry                  *tools.Registry
+	cfg                       Config
+	liveRun                   *liveRunCoordinator
+	activeStepGoalMutationsMu sync.Mutex
+	activeStepGoalMutations   map[string][]activeStepGoalMutation
+	pendingGoalLoopStart      bool
+	diagnostics               *diagnosticDedupeStore
+	toolCallStarts            *pendingToolCallStartStore
 
 	usageState           *usageTrackingState
 	goalLoop             *goalLoopState
@@ -449,7 +447,6 @@ func (e *Engine) Close() error {
 		return interruptErr
 	}
 	e.lifecycleClosed = true
-	e.failPendingWorkflowAssignments(ErrEngineClosed)
 	cancel := e.lifecycleCancel
 	e.lifecycleMu.Unlock()
 	if cancel != nil {

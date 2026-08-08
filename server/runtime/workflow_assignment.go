@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -12,6 +13,8 @@ import (
 	"core/server/workflowruntime"
 	"core/shared/config"
 	"core/shared/toolspec"
+
+	"github.com/google/uuid"
 )
 
 type WorkflowAssignment struct {
@@ -43,9 +46,46 @@ type workflowAssignmentSteerState struct {
 	err     error
 }
 
-type queuedWorkflowAssignment struct {
+type workflowAssignmentAgendaItem struct {
+	id     boundaryAgendaItemID
 	intent steeringIntent
 	steer  WorkflowAssignmentSteer
+	order  uint64
+}
+
+func newWorkflowAssignmentAgendaItem(
+	intent steeringIntent,
+	steer WorkflowAssignmentSteer,
+) *workflowAssignmentAgendaItem {
+	return &workflowAssignmentAgendaItem{
+		id:     boundaryAgendaItemID("workflow-assignment:" + uuid.NewString()),
+		intent: intent,
+		steer:  steer,
+	}
+}
+
+func (i *workflowAssignmentAgendaItem) agendaID() boundaryAgendaItemID {
+	return i.id
+}
+
+func (*workflowAssignmentAgendaItem) agendaBinding() boundaryAgendaBinding {
+	return runtimeBoundaryBinding()
+}
+
+func (*workflowAssignmentAgendaItem) agendaEligibility() boundaryEligibility {
+	return boundaryEligibilitySafe
+}
+
+func (i *workflowAssignmentAgendaItem) agendaOrder() uint64 {
+	return i.order
+}
+
+func (i *workflowAssignmentAgendaItem) setAgendaOrder(order uint64) {
+	i.order = order
+}
+
+func (i *workflowAssignmentAgendaItem) settleBoundaryAgenda(err error) {
+	i.steer.complete(session.CommitReceipt{}, err)
 }
 
 func newWorkflowAssignmentSteer() WorkflowAssignmentSteer {
@@ -99,29 +139,90 @@ func (e *Engine) SteerWorkflowAssignment(assignment WorkflowAssignment) (Workflo
 		true,
 		[]llm.Message{message},
 	)
-	e.ensureOrchestrationCollaborators()
-	active, err := e.stepLifecycle.WithActiveStep(func(string) error {
-		e.workflowAssignmentMu.Lock()
-		defer e.workflowAssignmentMu.Unlock()
-		if e.closed.Load() {
-			return ErrEngineClosed
-		}
-		e.pendingWorkflowAssignments = append(e.pendingWorkflowAssignments, queuedWorkflowAssignment{
-			intent: intent,
-			steer:  steer,
-		})
-		return nil
-	})
+	item := newWorkflowAssignmentAgendaItem(intent, steer)
+	acceptedSteer, err := submitRuntimeEvent(
+		e,
+		item,
+		func(
+			admission runtimeEventAdmission,
+			accepted *workflowAssignmentAgendaItem,
+		) (WorkflowAssignmentSteer, error) {
+			if err := e.boundaryAgenda.accept(accepted); err != nil {
+				return WorkflowAssignmentSteer{}, err
+			}
+			if !e.workflowAssignmentIdleEligible() {
+				return accepted.steer, nil
+			}
+			_, _ = e.applyWorkflowAssignmentBoundary(
+				admission,
+				"",
+				idleBoundarySelection(),
+			)
+			return accepted.steer, nil
+		},
+	)
 	if err != nil {
 		steer.complete(session.CommitReceipt{}, err)
 		return steer, err
 	}
-	if active {
-		return steer, nil
+	if acceptedSteer.state != steer.state {
+		panic("Workflow assignment Runtime Event returned a different typed steer")
 	}
-	receipt, err := e.steerWithCommitReceipt("", intent)
-	steer.complete(receipt, err)
 	return steer, nil
+}
+
+func (e *Engine) workflowAssignmentIdleEligible() bool {
+	return e.agentSteps.current == nil &&
+		e.agentSteps.boundary == nil &&
+		e.agentSteps.reducerGrant == nil
+}
+
+func (e *Engine) applyWorkflowAssignmentBoundary(
+	admission runtimeEventAdmission,
+	stepID string,
+	selection boundarySelection,
+) (int, error) {
+	applied := 0
+	for {
+		next := e.boundaryAgenda.peekNext(selection)
+		if next == nil {
+			return applied, nil
+		}
+		if _, ok := next.(*workflowAssignmentAgendaItem); !ok {
+			return applied, nil
+		}
+		selected := e.boundaryAgenda.selectNext(selection)
+		if selected == nil {
+			return applied, nil
+		}
+		assignment, ok := selected.(*workflowAssignmentAgendaItem)
+		if !ok {
+			return applied, fmt.Errorf(
+				"Workflow assignment reducer selected unexpected Boundary Agenda item %T",
+				selected,
+			)
+		}
+		if len(assignment.intent.items) != 1 {
+			err := fmt.Errorf(
+				"Workflow assignment steering requires exactly one item (items=%d)",
+				len(assignment.intent.items),
+			)
+			assignment.steer.complete(session.CommitReceipt{}, err)
+			return applied, err
+		}
+		receipt := session.CommitReceipt{}
+		assignment.intent.items[0].commitReceipt = &receipt
+		err := admission.applySteering(stepID, assignment.intent)
+		if err == nil && !receipt.Committed {
+			err = errors.New("workflow assignment message was not committed")
+		}
+		if err != nil {
+			assignment.steer.complete(receipt, err)
+			return applied, err
+		}
+		assignment.steer.complete(receipt, nil)
+		applied++
+	}
 }
 
 func SteerPersistedWorkflowAssignment(
@@ -173,39 +274,4 @@ func completePersistedWorkflowAssignment(engine *Engine, message llm.Message) Wo
 		[]llm.Message{message},
 	))
 	return CompletedWorkflowAssignmentSteer(receipt, err)
-}
-
-func (e *Engine) flushPendingWorkflowAssignments(stepID string) error {
-	e.workflowAssignmentMu.Lock()
-	pending := append([]queuedWorkflowAssignment(nil), e.pendingWorkflowAssignments...)
-	e.pendingWorkflowAssignments = nil
-	e.workflowAssignmentMu.Unlock()
-	for index, assignment := range pending {
-		receipt, err := e.steerWithCommitReceipt(stepID, assignment.intent)
-		assignment.steer.complete(receipt, err)
-		if err != nil {
-			for _, remaining := range pending[index+1:] {
-				remaining.steer.complete(session.CommitReceipt{}, err)
-			}
-			return err
-		}
-		if !receipt.Committed {
-			err = errors.New("workflow assignment message was not committed")
-			for _, remaining := range pending[index+1:] {
-				remaining.steer.complete(session.CommitReceipt{}, err)
-			}
-			return err
-		}
-	}
-	return nil
-}
-
-func (e *Engine) failPendingWorkflowAssignments(err error) {
-	e.workflowAssignmentMu.Lock()
-	pending := append([]queuedWorkflowAssignment(nil), e.pendingWorkflowAssignments...)
-	e.pendingWorkflowAssignments = nil
-	e.workflowAssignmentMu.Unlock()
-	for _, assignment := range pending {
-		assignment.steer.complete(session.CommitReceipt{}, err)
-	}
 }

@@ -314,12 +314,49 @@ func (e *Engine) acceptReducerBoundaryGrant(
 	if !continueTurn {
 		selection = turnBoundarySelection(step.scopeID, step.origin)
 	}
-	applied, err := e.applyHumanBoundary(admission, step.origin.StepID, selection)
-	if err != nil {
-		e.agentSteps.boundary = nil
-		return nil, errors.Join(err, grant.Release())
+	applied := humanBoundaryApplyResult{}
+	assignmentsApplied := 0
+	for {
+		next := e.boundaryAgenda.peekNext(selection)
+		if next == nil {
+			break
+		}
+		switch next.(type) {
+		case *humanBoundaryAgendaItem:
+			human, err := e.applyHumanBoundaryPrefix(admission, step.origin.StepID, selection)
+			applied.applied += human.applied
+			if human.receipt.Committed {
+				applied.receipt = human.receipt
+			}
+			if err != nil {
+				e.agentSteps.boundary = nil
+				return nil, errors.Join(err, grant.Release())
+			}
+		case *workflowAssignmentAgendaItem:
+			count, err := e.applyWorkflowAssignmentBoundary(
+				admission,
+				step.origin.StepID,
+				selection,
+			)
+			assignmentsApplied += count
+			if err != nil {
+				e.agentSteps.boundary = nil
+				return nil, errors.Join(err, grant.Release())
+			}
+			goto reduced
+		default:
+			e.agentSteps.boundary = nil
+			return nil, errors.Join(
+				fmt.Errorf("unsupported short Boundary Agenda item %T", next),
+				grant.Release(),
+			)
+		}
 	}
+reduced:
 	e.agentSteps.boundary = nil
+	if assignmentsApplied > 0 {
+		return finishAgentTurnDecision{}, grant.Release()
+	}
 	if continueTurn || applied.applied > 0 {
 		if e.agentSteps.reducerGrant != nil {
 			panic("Agent Step reducer grant duplicated")

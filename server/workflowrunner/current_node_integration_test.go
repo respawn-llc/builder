@@ -1859,7 +1859,7 @@ func TestCurrentNodeFanoutRuntimePreparationFailureKeepsAssignedBranchesResumabl
 	}
 }
 
-func TestCurrentNodeContinuationWithActiveTranscriptSubscriberDoesNotBlockLaterAutomaticScript(t *testing.T) {
+func TestRuntimeBoundWorkflowAssignmentLaunchesFreshRetainedSuccessorWithoutBlockingLaterAutomaticScript(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("fixture uses POSIX shell scripts")
 	}
@@ -1908,6 +1908,24 @@ func TestCurrentNodeContinuationWithActiveTranscriptSubscriberDoesNotBlockLaterA
 	case <-time.After(currentNodeRunnerWait):
 		t.Fatal("source Current Node did not start")
 	}
+	sourceScopeID := runtimeids.ExecutionScopeID{}
+	for _, live := range f.controller.Snapshot().LiveScopes {
+		if live.CurrentNode.Equal(source) {
+			sourceScopeID = live.ScopeID
+			break
+		}
+	}
+	if sourceScopeID.IsZero() {
+		t.Fatal("source Current Node reached its provider without an Exact Execution Scope")
+	}
+	sourceExecution, live := f.authority.ExecutionByScope(sourceScopeID)
+	if !live {
+		t.Fatalf("source Exact Execution Scope %s is not live", sourceScopeID)
+	}
+	sourceResource, hasResource := sourceExecution.Scope().Resource()
+	if !hasResource {
+		t.Fatalf("source Exact Execution Scope %s has no Active Session Runtime", sourceScopeID)
+	}
 	sourceNodes := f.waitForCurrentNode(t, continuedTask.ID, func(nodes []workflow.CurrentNode) bool {
 		return len(nodes) == 1 && nodes[0].Reference.Equal(source) && nodes[0].SessionID != nil
 	})
@@ -1939,9 +1957,23 @@ func TestCurrentNodeContinuationWithActiveTranscriptSubscriberDoesNotBlockLaterA
 	case <-time.After(currentNodeRunnerWait):
 		t.Fatal("continued Session successor did not reach its model turn")
 	}
-	successorExecution, live := f.authority.SessionExecution(sessionID)
+	successorScopeID := runtimeids.ExecutionScopeID{}
+	for _, live := range f.controller.Snapshot().LiveScopes {
+		if live.CurrentNode.Equal(successor) {
+			successorScopeID = live.ScopeID
+			break
+		}
+	}
+	if successorScopeID.IsZero() || successorScopeID == sourceScopeID {
+		t.Fatalf(
+			"successor Exact Execution Scope = %s, want fresh scope distinct from %s",
+			successorScopeID,
+			sourceScopeID,
+		)
+	}
+	successorExecution, live := f.authority.ExecutionByScope(successorScopeID)
 	if !live {
-		t.Fatal("successor Current Node reached its provider without an Exact Execution Scope")
+		t.Fatalf("successor Exact Execution Scope %s is not live", successorScopeID)
 	}
 	successorResource, hasResource := successorExecution.Scope().Resource()
 	if !hasResource || successorResource != sourceResource {
@@ -1949,6 +1981,36 @@ func TestCurrentNodeContinuationWithActiveTranscriptSubscriberDoesNotBlockLaterA
 			"successor Active Session Runtime = %+v, want retained source generation %+v",
 			successorResource,
 			sourceResource,
+		)
+	}
+	activity, err := f.runtimes.RuntimeActivity(sessionID.String())
+	if err != nil {
+		t.Fatalf("successor Runtime activity: %v", err)
+	}
+	if activity.ActiveStep == nil ||
+		activity.ActiveStep.RunID.IsZero() ||
+		activity.ActiveStep.StepID.IsZero() {
+		t.Fatalf("successor Runtime activity = %+v, want fresh Run/Agent Step origin", activity)
+	}
+	requests := f.client.Requests()
+	if len(requests) < 2 {
+		t.Fatalf("continued Session model requests = %d, want source and successor", len(requests))
+	}
+	sourceAssignments := workflowAssignments(requests[0])
+	successorAssignments := workflowAssignments(requests[1])
+	if len(sourceAssignments) != 1 || len(successorAssignments) != 2 {
+		t.Fatalf(
+			"direct continuation assignments = source:%+v successor:%+v, want inherited source plus exactly one target",
+			sourceAssignments,
+			successorAssignments,
+		)
+	}
+	if successorAssignments[0].sourcePath != sourceAssignments[0].sourcePath ||
+		successorAssignments[1].sourcePath == sourceAssignments[0].sourcePath {
+		t.Fatalf(
+			"direct continuation assignment identities = source:%+v successor:%+v",
+			sourceAssignments,
+			successorAssignments,
 		)
 	}
 
