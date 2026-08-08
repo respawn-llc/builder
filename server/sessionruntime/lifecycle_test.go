@@ -622,9 +622,6 @@ func TestGoalLifecycleDurabilityAbortRetiresCurrentGeneration(t *testing.T) {
 	if err := blocker.Restore(); err != nil {
 		t.Fatalf("restore Goal lifecycle event log: %v", err)
 	}
-	if state := failedResource.descriptor().State; state != AgentResourceClosed {
-		t.Fatalf("Goal lifecycle aborted resource state = %v, want closed", state)
-	}
 	var admitted *agentResource
 	deadline := time.Now().Add(3 * time.Second)
 	for {
@@ -638,6 +635,9 @@ func TestGoalLifecycleDurabilityAbortRetiresCurrentGeneration(t *testing.T) {
 	}
 	if admitted == failedResource {
 		t.Fatal("Goal lifecycle aborted resource remained admitted")
+	}
+	if state := failedResource.descriptor().State; state != AgentResourceClosed {
+		t.Fatalf("Goal lifecycle aborted resource state = %v, want closed", state)
 	}
 	reopened := openLifecycleRuntime(t, authority, sessionID, "owner-b", &plan)
 	if reopened.Resource() == attachment.Resource() {

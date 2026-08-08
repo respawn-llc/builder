@@ -909,10 +909,10 @@ func TestBackgroundProviderFailurePersistsDiagnosticBeforeTerminal(t *testing.T)
 		engine: engine,
 		steps:  engine.stepLifecycle,
 	}
-	scheduler.QueueDeveloperNotice(llm.Message{
+	scheduler.queueDeveloperNotice(llm.Message{
 		Role:    llm.RoleDeveloper,
 		Content: textutil.Value("background continuation"),
-	})
+	}, false)
 	if _, err := scheduler.runQueuedNotices(context.Background()); !llm.HasHTTPStatus(err, 401) {
 		t.Fatalf("background continuation error = %v, want provider failure", err)
 	}
