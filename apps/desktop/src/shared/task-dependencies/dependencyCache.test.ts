@@ -184,7 +184,7 @@ function detailFixture(): TaskDetail {
     executionTarget: null,
     worktreePath: null,
     currentNodes: [],
-    liveSessionIDs: [],
+    liveSessions: [],
     currentScripts: [],
     retainedSessionCount: 0,
     createdAt: 1,

@@ -130,7 +130,10 @@ func TestTaskShowHumanOutputReportsRetainedSessionsWithoutDuplicatingCurrentNode
 			NodeID:    "node-1",
 			SessionID: &sessionID,
 		}},
-		LiveSessionIDs:       []string{sessionID},
+		LiveSessions: []serverapi.WorkflowTaskLiveSession{{
+			SessionID:       sessionID,
+			NodeDisplayName: "Agent",
+		}},
 		RetainedSessionCount: 3,
 		Status: serverapi.WorkflowTaskStatus{
 			Kind:        serverapi.WorkflowTaskStatusKindActive,

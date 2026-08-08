@@ -2,36 +2,54 @@ import { useCallback, useMemo, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 import { errorMessage, isTaskMissingError, type TaskDetail, type TaskLabelAssignment } from "@/api";
-import type { TaskDetailInitialFocus } from "@/app-facade";
-import type { SidebarPageNavigator } from "@/app-facade";
-import type { SidebarMode } from "@/app-facade";
-import type { SidebarRootController } from "@/app-facade";
+import type {
+  SidebarDestination,
+  SidebarMode,
+  SidebarPageNavigator,
+  SidebarRootController,
+  TaskDetailInitialFocus,
+} from "@/app-facade";
 import { useSidebarBackWhen } from "@/app-facade";
 import { useStatusController } from "@/app-facade";
 import { ProjectLabelsProvider, TaskLabelAssignmentProvider, useProjectLabelCatalog } from "@/shared/labels";
 import { ErrorState, LoadingState } from "@/ui";
 import { TaskDetailContent } from "./TaskDetailContent";
+import type { TaskDetailDeleteDismissal } from "./taskDetailDismissal";
 import { useTaskActivity, useTaskAttention, useTaskComments, useTaskDetail } from "./useTaskDetailData";
 
-export type TaskDetailSurfaceProps = Readonly<{
+type TaskDetailSurfaceCommonProps = Readonly<{
   taskId: string;
   enabled: boolean;
   initialFocus?: TaskDetailInitialFocus | undefined;
   onMutated?: (() => void) | undefined;
-  navigator?: SidebarPageNavigator | undefined;
   openSidebar?: SidebarRootController["open"] | undefined;
   retainedState?: unknown;
+  sidebarDestination?: Extract<SidebarDestination, { kind: "taskDetail" }> | undefined;
   sidebarMode?: SidebarMode | undefined;
 }>;
+
+export type TaskDetailSurfaceProps = TaskDetailSurfaceCommonProps &
+  (
+    | Readonly<{
+        navigator: SidebarPageNavigator;
+        onDeleteDismiss?: undefined;
+      }>
+    | Readonly<{
+        navigator?: undefined;
+        onDeleteDismiss: TaskDetailDeleteDismissal;
+      }>
+  );
 
 export function TaskDetailSurface({
   taskId,
   enabled,
   initialFocus,
   navigator,
+  onDeleteDismiss,
   onMutated,
   openSidebar,
   retainedState,
+  sidebarDestination,
   sidebarMode,
 }: TaskDetailSurfaceProps) {
   const { t } = useTranslation();
@@ -52,6 +70,8 @@ export function TaskDetailSurface({
   const attention = useTaskAttention(taskId, enabled);
   const activity = useTaskActivity(taskId, enabled);
   const comments = useTaskComments(taskId, enabled);
+  const deleteDismissal: TaskDetailDeleteDismissal =
+    navigator === undefined ? onDeleteDismiss : async () => ({ kind: navigator.close() });
   const taskMissing = detail.isError && isTaskMissingError(detail.error);
   useSidebarBackWhen(taskMissing, navigator);
   if (detail.isPending) {
@@ -71,9 +91,11 @@ export function TaskDetailSurface({
           detail={detail.data}
           initialFocus={initialFocus}
           navigator={navigator}
+          onDeleteDismiss={deleteDismissal}
           onMutated={onMutated}
           openSidebar={openSidebar}
           retainedState={retainedState}
+          sidebarDestination={sidebarDestination}
           sidebarMode={sidebarMode}
         />
       </TaskDetailAssignmentScope>

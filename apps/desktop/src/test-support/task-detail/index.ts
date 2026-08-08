@@ -17,7 +17,7 @@ import {
   type SidebarMode,
   type TaskDetailInitialFocus,
 } from "@/app-facade";
-import { TaskDetailSurface } from "@/features/task-detail";
+import { TaskDetailSurface, type TaskDetailDeleteDismissal } from "@/features/task-detail";
 import { FakeRpcTransport, type FakeRoute } from "../api";
 import { createTestServices, startupRoutes, TestAppProviders, type TestAppServices } from "../app-services";
 import type { NativeBridge } from "../native-bridge";
@@ -94,7 +94,17 @@ export const taskDetailResponse = {
         session_id: "session-1",
       },
     ],
-    live_session_ids: ["session-1"],
+    live_sessions: [
+      {
+        session_id: "session-1",
+        session_name: "Review chat",
+        node_display_name: "Code Review",
+      },
+      {
+        session_id: "session-2",
+        node_display_name: "Implementation",
+      },
+    ],
     current_scripts: [],
     retained_session_count: 1,
     status: {
@@ -176,7 +186,14 @@ export async function createTaskDetailFixture(): Promise<TaskDetail> {
 export const taskDetailResponseWithAdditionalLiveSession = {
   task: {
     ...taskDetailResponse.task,
-    live_session_ids: ["session-1", "session-2"],
+    live_sessions: [
+      ...taskDetailResponse.task.live_sessions,
+      {
+        session_id: "session-3",
+        session_name: "QA chat",
+        node_display_name: "QA",
+      },
+    ],
   },
 };
 
@@ -191,7 +208,7 @@ export const taskDetailResponseWithCurrentScript = {
   task: {
     ...taskDetailNoInboxResponse.task,
     current_nodes: [{ node_id: "node-script", transition_branch_key: null, session_id: null }],
-    live_session_ids: [],
+    live_sessions: [],
     current_scripts: [
       {
         current_node: { node_id: "node-script", transition_branch_key: null, session_id: null },
@@ -365,6 +382,7 @@ export type TaskDetailFixtureOptions = Readonly<{
   initialFocus?: TaskDetailInitialFocus | undefined;
   nativeBridge?: NativeBridge | undefined;
   navigator?: SidebarPageNavigator | undefined;
+  onDeleteDismiss?: TaskDetailDeleteDismissal | undefined;
   onMutated?: (() => void) | undefined;
   openSidebar?: SidebarRootController["open"] | undefined;
   path?: string | undefined;
@@ -408,37 +426,65 @@ export function createTaskDetailTestServices(
   );
 }
 
+export type MountedTaskDetailServices = TestAppServices &
+  Readonly<{
+    unmountTaskDetail(): void;
+  }>;
+
 export function mountTaskDetailSurface(
   task: JsonValue,
   options: TaskDetailFixtureOptions = {},
-): TestAppServices {
+): MountedTaskDetailServices {
   const services = createTaskDetailTestServices(task, options);
   const router = createRouter({
     history: createMemoryHistory({ initialEntries: [options.path ?? "/tasks/task-1"] }),
     routeTree: createRootRoute(),
   });
-  render(
+  const mounted = render(
     createElement(RouterContextProvider, {
       router,
       children: createElement(SidebarRootContext.Provider, {
         value: createTestSidebarController(),
         children: createElement(TestAppProviders, {
-          children: createElement(TaskDetailSurface, {
-            enabled: true,
-            initialFocus: options.initialFocus,
-            navigator: options.navigator,
-            onMutated: options.onMutated,
-            openSidebar: options.openSidebar,
-            retainedState: options.retainedState,
-            sidebarMode: options.sidebarMode,
-            taskId: "task-1",
-          }),
+          children: createElement(
+            TaskDetailSurface,
+            options.navigator === undefined
+              ? {
+                  enabled: true,
+                  initialFocus: options.initialFocus,
+                  onDeleteDismiss: options.onDeleteDismiss ?? (async () => ({ kind: "accepted" })),
+                  onMutated: options.onMutated,
+                  openSidebar: options.openSidebar,
+                  retainedState: options.retainedState,
+                  sidebarMode: options.sidebarMode,
+                  taskId: "task-1",
+                }
+              : {
+                  enabled: true,
+                  initialFocus: options.initialFocus,
+                  navigator: options.navigator,
+                  onMutated: options.onMutated,
+                  openSidebar: options.openSidebar,
+                  retainedState: options.retainedState,
+                  sidebarDestination: {
+                    kind: "taskDetail",
+                    taskID: "task-1",
+                    ...(options.sidebarMode === undefined ? {} : { mode: options.sidebarMode }),
+                    ...(options.onMutated === undefined ? {} : { onMutated: options.onMutated }),
+                  },
+                  sidebarMode: options.sidebarMode,
+                  taskId: "task-1",
+                },
+          ),
           services,
         }),
       }),
     }),
   );
-  return services;
+  return {
+    ...services,
+    unmountTaskDetail: mounted.unmount,
+  };
 }
 
 function taskAttentionFixture(task: JsonValue): JsonValue {
