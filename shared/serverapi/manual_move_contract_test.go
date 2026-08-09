@@ -1,6 +1,7 @@
 package serverapi
 
 import (
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -18,7 +19,7 @@ func TestWorkflowTaskMovePreviewResponseValidatesEachOutcome(t *testing.T) {
 		RequiredValues: []WorkflowTaskMoveRequiredValue{{
 			NodeKey:       "plan",
 			OutputName:    "summary",
-			Description:   "Plan summary",
+			Description:   manualMoveStringPointer("Plan summary"),
 			ResolvedValue: &resolved,
 		}},
 	}
@@ -47,6 +48,87 @@ func TestWorkflowTaskMovePreviewResponseValidatesEachOutcome(t *testing.T) {
 			t.Fatalf("%s response rejected: %v", response.Outcome, err)
 		}
 	}
+}
+
+func TestWorkflowTaskMoveRequiredValueAllowsAbsentDescriptionAndMarshalsNull(t *testing.T) {
+	resolved := "plan output"
+	response := WorkflowTaskMovePreviewResponse{
+		Outcome: WorkflowTaskMovePreviewOutcomeTransition,
+		Transition: &WorkflowTaskMovePreviewTransition{Choices: []WorkflowTaskMovePreviewTransitionChoice{{
+			TransitionKey:         "plan-to-implement",
+			Label:                 "Implement",
+			SourceNodeDisplayName: "Plan",
+			RequiredValues: []WorkflowTaskMoveRequiredValue{{
+				NodeKey:       "plan",
+				OutputName:    "summary",
+				Description:   nil,
+				ResolvedValue: &resolved,
+			}},
+		}}},
+	}
+	if err := response.Validate(); err != nil {
+		t.Fatalf("absent description response rejected: %v", err)
+	}
+
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		t.Fatalf("marshal preview response: %v", err)
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &object); err != nil {
+		t.Fatalf("decode preview response: %v", err)
+	}
+	var transition map[string]json.RawMessage
+	if err := json.Unmarshal(object["transition"], &transition); err != nil {
+		t.Fatalf("decode transition: %v", err)
+	}
+	var choices []map[string]json.RawMessage
+	if err := json.Unmarshal(transition["choices"], &choices); err != nil {
+		t.Fatalf("decode transition choices: %v", err)
+	}
+	var requiredValues []map[string]json.RawMessage
+	if err := json.Unmarshal(choices[0]["required_values"], &requiredValues); err != nil {
+		t.Fatalf("decode required values: %v", err)
+	}
+	description, present := requiredValues[0]["description"]
+	if !present {
+		t.Fatal("description member is absent")
+	}
+	var descriptionValue any
+	if err := json.Unmarshal(description, &descriptionValue); err != nil {
+		t.Fatalf("decode description member: %v", err)
+	}
+	if descriptionValue != nil {
+		t.Fatalf("description member = %v, want JSON null", descriptionValue)
+	}
+}
+
+func TestWorkflowTaskMoveRequiredValueAcceptsNonBlankDescription(t *testing.T) {
+	value := WorkflowTaskMoveRequiredValue{
+		NodeKey:     "plan",
+		OutputName:  "summary",
+		Description: manualMoveStringPointer("Plan summary"),
+	}
+	if err := value.Validate(); err != nil {
+		t.Fatalf("nonblank description rejected: %v", err)
+	}
+}
+
+func TestWorkflowTaskMoveRequiredValueRejectsBlankDescription(t *testing.T) {
+	for _, description := range []string{"", " \t\n"} {
+		value := WorkflowTaskMoveRequiredValue{
+			NodeKey:     "plan",
+			OutputName:  "summary",
+			Description: manualMoveStringPointer(description),
+		}
+		if err := value.Validate(); err == nil {
+			t.Fatalf("blank description %q validated", description)
+		}
+	}
+}
+
+func manualMoveStringPointer(value string) *string {
+	return &value
 }
 
 func TestWorkflowTaskMovePreviewResponseRejectsUnknownOrMixedDiscriminators(t *testing.T) {

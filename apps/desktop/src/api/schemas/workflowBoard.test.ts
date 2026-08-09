@@ -167,6 +167,66 @@ describe("workflow board schemas", () => {
     });
   });
 
+  it("requires Manual Move descriptions to be explicit nullable nonblank metadata", () => {
+    const base = {
+      outcome: "transition" as const,
+      transition: {
+        choices: [
+          {
+            transition_key: "next",
+            label: "Next",
+            source_node_display_name: "Plan",
+            required_values: [
+              {
+                node_key: "plan",
+                output_name: "summary",
+                resolved_value: null,
+              },
+            ],
+          },
+        ],
+      },
+    };
+    const baseChoice = base.transition.choices[0];
+    if (baseChoice === undefined) {
+      throw new Error("expected base choice");
+    }
+    const parsed = taskMovePreviewResponseSchema.parse({
+        ...base,
+        transition: {
+          ...base.transition,
+          choices: [
+            {
+              ...baseChoice,
+              required_values: [{ ...baseChoice.required_values[0], description: null }],
+            },
+          ],
+        },
+      });
+    if (parsed.outcome !== "transition") {
+      throw new Error("expected transition preview");
+    }
+    if (!("transition" in parsed)) {
+      throw new Error("expected transition preview");
+    }
+    expect(parsed.transition.choices[0]?.requiredValues[0]?.description).toBeNull();
+    expect(() =>
+      taskMovePreviewResponseSchema.parse({
+        ...base,
+        transition: {
+          ...base.transition,
+          choices: [
+            {
+              ...baseChoice,
+              required_values: [{ ...baseChoice.required_values[0], description: " \t" }],
+            },
+          ],
+        },
+      }),
+    ).toThrow();
+    expect(() => taskMovePreviewResponseSchema.parse(base)).toThrow();
+  });
+
   it("rejects legacy prefixed Workflow IDs", () => {
     expect(() =>
       workflowBoardSchema.parse({

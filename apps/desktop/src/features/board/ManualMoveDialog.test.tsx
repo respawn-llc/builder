@@ -69,7 +69,7 @@ describe("ManualMoveDialog", () => {
 
     fireEvent.keyDown(screen.getByLabelText("summary"), { key: "Enter", metaKey: true });
     expect(onSubmit).not.toHaveBeenCalled();
-    await user.type(screen.getByLabelText("summary"), "A plan");
+    fireEvent.change(screen.getByLabelText("summary"), { target: { value: "A plan" } });
     expect(confirmButton).toBeEnabled();
     fireEvent.keyDown(screen.getByLabelText("summary"), { key: "Enter", metaKey: true });
 
@@ -77,6 +77,23 @@ describe("ManualMoveDialog", () => {
       transitionKey: "transition-0",
       values: { plan: { summary: "A plan" } },
     });
+  });
+
+  it("omits the hint element when a required value has no description", async () => {
+    renderDialog({
+      outcome: "transition",
+      transition: {
+        choices: [
+          {
+            transitionKey: "transition",
+            label: "Implement",
+            sourceNodeDisplayName: "Plan",
+            requiredValues: [{ nodeKey: "plan", outputName: "summary", description: null, resolvedValue: null }],
+          },
+        ],
+      },
+    });
+    expect(screen.queryByText("", { selector: 'span[id$="-hint"]' })).not.toBeInTheDocument();
   });
 
   it("auto-selects a sole choice, preserves prefills, and supports cancellation", async () => {
