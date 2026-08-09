@@ -241,6 +241,35 @@ describe("SidebarProvider stack", () => {
     expect(onBack).not.toHaveBeenCalled();
   });
 
+  it("does not invoke route Back from stale page capabilities", () => {
+    const { result } = renderHook(useHarness, { wrapper });
+    const onBack = vi.fn();
+    let root: SidebarRootHandle | undefined;
+
+    act(() => {
+      root = result.current.roots.open(destination("A"), onBack);
+    });
+    const a = requireNavigator(result.current);
+    act(() => {
+      a.registerCapture(() => ({ page: "A" }));
+      expect(root?.push(destination("B"))).toBe("accepted");
+    });
+    expect(a.back()).toBe("stale");
+
+    const b = requireNavigator(result.current);
+    act(() => {
+      expect(b.replace(destination("C"))).toBe("accepted");
+    });
+    expect(b.back()).toBe("stale");
+
+    const e = requireNavigator(result.current);
+    act(() => {
+      result.current.roots.open(destination("E"), onBack);
+    });
+    expect(e.back()).toBe("stale");
+    expect(onBack).not.toHaveBeenCalled();
+  });
+
   it("rejects append Push without capture while leaving the page capability active", () => {
     const { result } = renderHook(useHarness, { wrapper });
 

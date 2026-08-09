@@ -53,6 +53,7 @@ export function createSidebarStack(policy: SidebarDestinationPolicy, publish: (v
     const Boundary = ({ children }: Readonly<{ children: ReactNode }>) => createElement(Fragment, null, children);
     const navigator: SidebarPageNavigator = {
       back: () => {
+        if (!capability.active) return "stale";
         if (capability.rootBack !== undefined) {
           capability.rootBack();
           return "accepted";
