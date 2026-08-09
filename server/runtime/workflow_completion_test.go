@@ -1249,8 +1249,12 @@ func TestWorkflowShellToolDurableCompletionStopsAfterToolResult(t *testing.T) {
 		t.Fatalf("runtime completions = %d, want external completion only", got)
 	}
 	assertToolMessageWithCallID(t, eng, "call_shell")
-	if got := events.count(); got != 0 {
-		t.Fatalf("shell-command workflow completion published final-answer terminal facts: %+v", events.snapshot())
+	result := events.single(t)
+	if result.Status != RunStatusCompleted ||
+		result.ResultKind != LiveRunResultNoFinalAnswer ||
+		result.NoFinalReason != LiveRunNoFinalAnswerReasonWorkflow ||
+		result.AssistantMessage.Content != nil {
+		t.Fatalf("shell-command workflow completion result = %+v, want workflow no-final terminal fact", result)
 	}
 }
 
