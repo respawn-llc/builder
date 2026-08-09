@@ -477,21 +477,48 @@ func repairAssistantOutputItems(items []ResponseItem, text *string, textPresent 
 }
 
 type assistantMessageAccumulator struct {
-	byIndex map[int64]assistantAccumulatorItem
-	order   []int64
+	byIndex       map[int64]assistantAccumulatorItem
+	order         []int64
+	pendingDeltas map[int64]*assistantDeltaBuffer
 }
 
 type assistantAccumulatorItem struct {
 	message       ResponseItem
 	providerPhase *ProviderPhase
 	finalizedText *string
-	deltaText     string
+	deltaText     *assistantDeltaBuffer
+}
+
+type assistantDeltaBuffer struct {
+	chunks []string
+	length int
+}
+
+func (b *assistantDeltaBuffer) Append(text string) {
+	if b == nil || text == "" {
+		return
+	}
+	b.chunks = append(b.chunks, text)
+	b.length += len(text)
+}
+
+func (b *assistantDeltaBuffer) String() string {
+	if b == nil || b.length == 0 {
+		return ""
+	}
+	var builder strings.Builder
+	builder.Grow(b.length)
+	for _, chunk := range b.chunks {
+		builder.WriteString(chunk)
+	}
+	return builder.String()
 }
 
 func newAssistantMessageAccumulator() *assistantMessageAccumulator {
 	return &assistantMessageAccumulator{
-		byIndex: make(map[int64]assistantAccumulatorItem),
-		order:   make([]int64, 0, 4),
+		byIndex:       make(map[int64]assistantAccumulatorItem),
+		order:         make([]int64, 0, 4),
+		pendingDeltas: make(map[int64]*assistantDeltaBuffer),
 	}
 }
 
@@ -516,11 +543,16 @@ func (a *assistantMessageAccumulator) Upsert(item responses.ResponseOutputItemUn
 	if !exists {
 		a.order = append(a.order, outputIndex)
 	}
+	deltaText := current.deltaText
+	if pending := a.pendingDeltas[outputIndex]; pending != nil {
+		deltaText = pending
+		delete(a.pendingDeltas, outputIndex)
+	}
 	a.byIndex[outputIndex] = assistantAccumulatorItem{
 		message:       assistant,
 		providerPhase: providerPhase,
 		finalizedText: current.finalizedText,
-		deltaText:     current.deltaText,
+		deltaText:     deltaText,
 	}
 	return nil
 }
@@ -531,17 +563,18 @@ func (a *assistantMessageAccumulator) AppendDelta(outputIndex int64, text string
 	}
 	item, exists := a.byIndex[outputIndex]
 	if !exists {
-		a.order = append(a.order, outputIndex)
-		item = assistantAccumulatorItem{
-			message: ResponseItem{
-				Type:        ResponseItemTypeMessage,
-				OutputIndex: outputIndex,
-				Role:        textutil.Value(RoleAssistant),
-			},
-			providerPhase: AbsentProviderPhase(),
+		buffer := a.pendingDeltas[outputIndex]
+		if buffer == nil {
+			buffer = &assistantDeltaBuffer{}
+			a.pendingDeltas[outputIndex] = buffer
 		}
+		buffer.Append(text)
+		return
 	}
-	item.deltaText += text
+	if item.deltaText == nil {
+		item.deltaText = &assistantDeltaBuffer{}
+	}
+	item.deltaText.Append(text)
 	a.byIndex[outputIndex] = item
 }
 
@@ -559,7 +592,9 @@ func (a *assistantMessageAccumulator) SetFinalizedText(outputIndex int64, text s
 				Role:        textutil.Value(RoleAssistant),
 			},
 			providerPhase: AbsentProviderPhase(),
+			deltaText:     a.pendingDeltas[outputIndex],
 		}
+		delete(a.pendingDeltas, outputIndex)
 	}
 	item.finalizedText = textutil.Value(text)
 	a.byIndex[outputIndex] = item
@@ -586,16 +621,15 @@ func (a *assistantMessageAccumulator) Resolve() (*string, MessagePhase, *Provide
 		if (text == nil || strings.TrimSpace(*text) == "") && item.finalizedText != nil {
 			text = item.finalizedText
 		}
-		if (text == nil || strings.TrimSpace(*text) == "") && item.deltaText != "" {
-			text = textutil.Value(item.deltaText)
+		deltaText := item.deltaText.String()
+		if (text == nil || strings.TrimSpace(*text) == "") && deltaText != "" {
+			text = textutil.Value(deltaText)
 		}
-		if text != nil && strings.TrimSpace(*text) == "" && phase != MessagePhaseFinal {
-			text = nil
-		}
+		text = resolveAssistantContent(RoleAssistant, phase, text)
 		segments = append(segments, assistantOutputSegment{
 			Text:          optionalStringValue(text),
 			Content:       textutil.Pointer(text),
-			DeltaText:     item.deltaText,
+			DeltaText:     deltaText,
 			Phase:         phase,
 			ProviderPhase: item.providerPhase,
 			OutputIndex:   outputIndex,

@@ -721,7 +721,7 @@ func TestGenerateStream_PreservesResumedOutputWhitespaceAfterInterleavedOutput(t
 	)
 
 	var deltas []AssistantDelta
-	_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{
+	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{
 		OnAssistantDelta: func(delta AssistantDelta) {
 			deltas = append(deltas, delta)
 		},
@@ -731,6 +731,9 @@ func TestGenerateStream_PreservesResumedOutputWhitespaceAfterInterleavedOutput(t
 	}
 	if got := joinedAssistantDeltas(deltas); got != "firstsecond continuation" {
 		t.Fatalf("assistant deltas = %q, want resumed output whitespace preserved", got)
+	}
+	if optionalStringValue(resp.AssistantText) != "firstsecond continuation" {
+		t.Fatalf("assistant text = %q, want all interleaved unphased output", optionalStringValue(resp.AssistantText))
 	}
 }
 

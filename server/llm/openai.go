@@ -138,7 +138,7 @@ func responseFromOpenAI(providerResp OpenAIResponse) (Response, error) {
 	return Response{
 		Assistant: Message{
 			Role:           RoleAssistant,
-			Content:        responseAssistantContent(providerResp),
+			Content:        resolveAssistantContent(RoleAssistant, assistantPhase, providerResp.AssistantText),
 			Phase:          typedAssistantPhase,
 			ToolCalls:      append([]ToolCall(nil), providerResp.ToolCalls...),
 			ReasoningItems: append([]ReasoningItem(nil), providerResp.ReasoningItems...),
@@ -152,15 +152,15 @@ func responseFromOpenAI(providerResp OpenAIResponse) (Response, error) {
 	}, nil
 }
 
-func responseAssistantContent(providerResp OpenAIResponse) *string {
-	if providerResp.AssistantText == nil {
+func resolveAssistantContent(role Role, phase MessagePhase, content *string) *string {
+	if content == nil {
 		return nil
 	}
-	if strings.TrimSpace(*providerResp.AssistantText) == "" &&
-		!providerResp.ProviderPhase.Is(MessagePhaseFinal) {
+	if strings.TrimSpace(*content) == "" &&
+		!(role == RoleAssistant && phase == MessagePhaseFinal) {
 		return nil
 	}
-	return textutil.Pointer(providerResp.AssistantText)
+	return textutil.Pointer(content)
 }
 
 func (c *OpenAIClient) GenerateStream(ctx context.Context, request Request, onDelta func(text string)) (Response, error) {

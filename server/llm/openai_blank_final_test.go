@@ -12,19 +12,22 @@ import (
 
 func TestOpenAIBlankFinalResponsePresence(t *testing.T) {
 	tests := []struct {
-		name        string
-		content     string
-		wantContent *string
-		wantPhase   MessagePhase
+		name         string
+		content      string
+		contentField string
+		wantContent  *string
+		wantPhase    MessagePhase
 	}{
 		{name: "empty", content: `{"type":"output_text","text":""}`, wantContent: textutil.Value(""), wantPhase: MessagePhaseFinal},
 		{name: "whitespace", content: `{"type":"output_text","text":" \n\t"}`, wantContent: textutil.Value(" \n\t"), wantPhase: MessagePhaseFinal},
-		{name: "omitted", content: "", wantContent: nil, wantPhase: MessagePhaseFinal},
+		{name: "empty array", contentField: `"content":[],`, wantContent: textutil.Value(""), wantPhase: MessagePhaseFinal},
+		{name: "null", contentField: `"content":null,`, wantContent: nil, wantPhase: MessagePhaseFinal},
+		{name: "omitted", wantContent: nil, wantPhase: MessagePhaseFinal},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			content := ""
-			if test.content != "" {
+			content := test.contentField
+			if content == "" && test.content != "" {
 				content = `"content":[` + test.content + `],`
 			}
 			raw := `[{` + `"type":"message","role":"assistant",` + content + `"phase":"final_answer"` + `}]`
@@ -118,6 +121,12 @@ func TestOpenAIBlankFinalStreamingAfterCommentary(t *testing.T) {
 			name:        "omitted",
 			wantContent: nil,
 		},
+		{
+			name:          "null",
+			finalItem:     `"content":null,`,
+			finalResponse: `"content":null,`,
+			wantContent:   nil,
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -142,6 +151,19 @@ func TestOpenAIBlankFinalStreamingAfterCommentary(t *testing.T) {
 				t.Fatalf("assistant phase = %#v, want final", response.Assistant.Phase)
 			}
 		})
+	}
+}
+
+func TestOpenAIBlankFinalRejectsMalformedContentShape(t *testing.T) {
+	transport := newOpenAIStreamTestTransport(t,
+		`{"type":"response.output_item.done","output_index":0,"item":{"id":"msg_invalid","type":"message","role":"assistant","phase":"final_answer","content":{}}}`,
+		`[DONE]`,
+	)
+	if _, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{
+		Model:          "gpt-5",
+		ToolChoiceMode: ToolChoiceModeAutomatic,
+	}, StreamCallbacks{}); err == nil {
+		t.Fatal("expected malformed content shape to fail")
 	}
 }
 
