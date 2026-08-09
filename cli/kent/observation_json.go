@@ -5,6 +5,7 @@ import (
 	"core/cli/app"
 	"core/shared/client"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -160,8 +161,8 @@ func projectRunWatchJSON(targetSessionID string, response serverapi.RuntimeLiveW
 			observationJSONFinalAnswer{
 				observationJSONKind: observationJSONKind{Kind: "final_answer"},
 				Result:              response.Outcome.FinalAnswer.Result,
-				SessionName:         jsonStringPointer(response.Outcome.FinalAnswer.SessionName),
-				DurationMS:          jsonInt64Pointer(response.Outcome.FinalAnswer.DurationMillis),
+				SessionName:         textutil.Value(response.Outcome.FinalAnswer.SessionName),
+				DurationMS:          textutil.Value(response.Outcome.FinalAnswer.DurationMillis),
 			},
 		}}, 0, nil
 	case serverapi.RuntimeLiveWatchNoFinalResult:
@@ -198,8 +199,8 @@ func projectRunWaitJSON(targetSessionID string, result app.RunPromptResult, err 
 		Status: "success", Target: observationTargetSession(targetSessionID),
 		Outcomes: []observationJSONOutcome{observationJSONFinalAnswer{
 			observationJSONKind: observationJSONKind{Kind: "final_answer"},
-			Result:              jsonStringPointer(result.Result), SessionName: jsonStringPointer(result.SessionName),
-			DurationMS: jsonInt64Pointer(result.Duration.Milliseconds()), Warnings: append([]string(nil), result.Warnings...),
+			Result:              textutil.Value(result.Result), SessionName: textutil.Value(result.SessionName),
+			DurationMS: textutil.Value(result.Duration.Milliseconds()), Warnings: append([]string(nil), result.Warnings...),
 		}},
 	}, 0
 }
@@ -294,5 +295,3 @@ func emitObservationError(w io.Writer, operation observationOperation, target ob
 	envelope, code := projectObservationError(operation, target, caller, err)
 	return emitObservationJSONWithCleanup(w, envelope, code, warnings, closeFn)
 }
-func jsonStringPointer(value string) *string { return &value }
-func jsonInt64Pointer(value int64) *int64    { return &value }
