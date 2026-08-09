@@ -13,6 +13,7 @@ import (
 	"core/server/llm"
 	"core/server/runtime"
 	"core/server/runtimeactivity"
+	"core/server/runtimecommand"
 	"core/server/sessionruntime"
 	askquestion "core/server/tools"
 	"core/shared/clientui"
@@ -235,7 +236,7 @@ func TestRuntimeReadModelPublicationWaitsForHydrationAdmission(t *testing.T) {
 	registry := NewRuntimeRegistry()
 	engine := newRegistryTestRuntime(t, nil)
 	registerReady(t, registry, engine.SessionID(), engine)
-	update, err := registry.RuntimeReadModelFeedSnapshot(context.Background(), engine.SessionID(), nil)
+	update, err := registry.RuntimeReadModelFeedSnapshot(context.Background(), engine.SessionID())
 	if err != nil {
 		t.Fatalf("read runtime model: %v", err)
 	}
@@ -309,6 +310,7 @@ func newRegistryRuntime(t *testing.T, client llm.Client, toolRegistry *askquesti
 			onEvent(engine, evt)
 		}
 	}
+	cfg.RuntimeEvents = runtimecommand.NewQueue(context.Background())
 	engine, err = runtime.New(store, eventLog, client, toolRegistry, cfg)
 	if err != nil {
 		t.Fatalf("new runtime: %v", err)
@@ -910,8 +912,7 @@ func publishRunState(registry *RuntimeRegistry, sessionID string, running bool) 
 		}
 	}
 	registry.PublishRuntimeReadModelUpdate(sessionID, clientui.RuntimeReadModelUpdate{
-		Version:             runtimeactivity.NextReadModelVersion(sessionID),
-		Activity:            activity,
-		InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{},
+		Version:  runtimeactivity.NextReadModelVersion(sessionID),
+		Activity: activity,
 	})
 }

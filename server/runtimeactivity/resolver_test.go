@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"core/shared/clientui"
-	"core/shared/runtimeids"
 )
 
 const (
@@ -122,17 +121,6 @@ func TestResolveRuntimeActivityKeepsPassiveQueuedFactsIdle(t *testing.T) {
 	if activity.State != clientui.RuntimeActivityRegisteredIdle {
 		t.Fatalf("passive queued facts must not become active activity, got %+v", activity)
 	}
-
-	activity, err = ResolveRuntimeActivity(ResolverSnapshot{
-		Registry:            RegistrySnapshot{Registered: true},
-		PendingContinuation: PendingContinuationSnapshot{Promoted: true},
-	})
-	if err != nil {
-		t.Fatalf("ResolveRuntimeActivity promoted continuation: %v", err)
-	}
-	if activity.State != clientui.RuntimeActivityStarting {
-		t.Fatalf("promoted continuation activity = %+v, want starting", activity)
-	}
 }
 
 func TestResolveRuntimeActivityTreatsOpenLiveRunGroupAsBlocking(t *testing.T) {
@@ -166,28 +154,10 @@ func TestCoordinatorSnapshotsPermitResponseOnlyVersionHoles(t *testing.T) {
 
 func TestCoordinatorBuildsCanonicalFeedSnapshot(t *testing.T) {
 	cache := NewCoordinatorCache(4)
-	clientRequestID, err := runtimeids.ParseRuntimeClientRequestID("33333333-3333-4333-8333-333333333333")
-	if err != nil {
-		t.Fatalf("parse client request id: %v", err)
-	}
-	queueItemID, err := runtimeids.ParseQueueItemID("44444444-4444-4444-8444-444444444444")
-	if err != nil {
-		t.Fatalf("parse queue item id: %v", err)
-	}
 	update, err := cache.WithFeedSnapshot("session-feed", func() (SnapshotInput, error) {
 		return SnapshotInput{
 			Resolver: ResolverSnapshot{
 				Registry: RegistrySnapshot{Registered: true, QueueAccepting: true},
-			},
-			InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{
-				Operations: []clientui.RuntimeInputReconciliation{{
-					Operation: clientui.RuntimeOperationRef{
-						Kind:            clientui.RuntimeOperationKindQueuedMessage,
-						ClientRequestID: clientRequestID,
-						QueueItemID:     &queueItemID,
-					},
-					State: clientui.RuntimeInputReconciliationCommitted,
-				}},
 			},
 		}, nil
 	})
@@ -197,8 +167,8 @@ func TestCoordinatorBuildsCanonicalFeedSnapshot(t *testing.T) {
 	if err := update.Validate(); err != nil {
 		t.Fatalf("validate canonical feed snapshot: %v", err)
 	}
-	if got := update.InputReconciliation.Operations[0].Operation.ClientRequestID; got != clientRequestID {
-		t.Fatalf("canonical client request id = %q, want %q", got, clientRequestID)
+	if update.Activity.State != clientui.RuntimeActivityRegisteredIdle || !update.Activity.QueueAccepting {
+		t.Fatalf("canonical activity = %+v, want queue-accepting idle runtime", update.Activity)
 	}
 }
 

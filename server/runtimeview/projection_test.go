@@ -8,6 +8,7 @@ import (
 	"core/internal/testharness/testsetup"
 	"core/server/llm"
 	"core/server/runtime"
+	"core/server/runtimecommand"
 	"core/server/session"
 	"core/server/tools"
 	"core/server/workflow"
@@ -106,6 +107,7 @@ func newRuntimeViewEngine(t *testing.T, store *session.Store, client llm.Client,
 	if len(cfg) > 0 {
 		engineConfig = cfg[0]
 	}
+	engineConfig.RuntimeEvents = runtimecommand.NewQueue(context.Background())
 	eventLog, err := store.MaterializeEventLog()
 	if err != nil {
 		t.Fatalf("materialize event log: %v", err)
@@ -239,7 +241,9 @@ func TestMainViewFromRuntimeBundlesStatusAndSession(t *testing.T) {
 	} else if !changed {
 		t.Fatal("expected fast mode enable to report changed=true")
 	}
-	if changed, enabled := eng.SetAutoCompactionEnabled(false); !changed || enabled {
+	if changed, enabled, err := eng.SetAutoCompactionEnabled(false); err != nil {
+		t.Fatalf("disable auto-compaction: %v", err)
+	} else if !changed || enabled {
 		t.Fatalf("expected auto-compaction disabled, changed=%v enabled=%v", changed, enabled)
 	}
 
