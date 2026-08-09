@@ -68,8 +68,8 @@ func TestQuestionBatchMetadataValidationIsIdenticalForDirectAndObservedResolutio
 			request := questionBatchValidationRequest(t)
 			test.mutate(&request)
 
-			directErr := resolveMalformedQuestionBatchDirectly(t, request)
-			observedErr := resolveMalformedQuestionBatchWithObservation(t, request)
+			directErr := resolveMalformedQuestionBatch(t, request, false)
+			observedErr := resolveMalformedQuestionBatch(t, request, true)
 
 			var directInvariant PromptBatchInvariantError
 			var observedInvariant PromptBatchInvariantError
@@ -123,7 +123,7 @@ func questionBatchValidationRequest(t *testing.T) tools.AskQuestionRequest {
 	return request
 }
 
-func resolveMalformedQuestionBatchDirectly(t *testing.T, request tools.AskQuestionRequest) error {
+func resolveMalformedQuestionBatch(t *testing.T, request tools.AskQuestionRequest, watched bool) error {
 	t.Helper()
 	store, feed := newPromptBatchStore(t)
 	stepID := promptBatchStepID(t)
@@ -131,39 +131,25 @@ func resolveMalformedQuestionBatchDirectly(t *testing.T, request tools.AskQuesti
 	entry.snapshot.Request = request
 	installPromptBatchEntries(&store, entry)
 
+	if watched {
+		subscription, err := store.subscribePromptFollowUp(stepID, "ask-1")
+		if err != nil {
+			t.Fatalf("subscribe malformed watched resolution: %v", err)
+		}
+		defer func() { _ = subscription.Close() }()
+	}
 	_, err := store.ResolvePromptBatch(context.Background(), stepID, []PromptAnswerCommand{
 		promptDeclined("ask-1"),
 	})
 	if err == nil {
-		t.Fatal("malformed direct batch unexpectedly succeeded")
+		t.Fatal("malformed Question batch unexpectedly succeeded")
 	}
-	if !store.hasPendingID("ask-1") || len(feed.resolvedIDs()) != 0 {
-		t.Fatal("malformed direct batch mutated or published")
+	wantFollowUps := 0
+	if watched {
+		wantFollowUps = 1
 	}
-	return err
-}
-
-func resolveMalformedQuestionBatchWithObservation(t *testing.T, request tools.AskQuestionRequest) error {
-	t.Helper()
-	store, feed := newPromptBatchStore(t)
-	stepID := promptBatchStepID(t)
-	entry := promptBatchQuestion("ask-1", stepID, time.Unix(1, 0))
-	entry.snapshot.Request = request
-	installPromptBatchEntries(&store, entry)
-
-	subscription, err := store.subscribePromptFollowUp(stepID, "ask-1")
-	if err != nil {
-		t.Fatalf("subscribe malformed watched resolution: %v", err)
-	}
-	defer func() { _ = subscription.Close() }()
-	_, err = store.ResolvePromptBatch(context.Background(), stepID, []PromptAnswerCommand{
-		promptDeclined("ask-1"),
-	})
-	if err == nil {
-		t.Fatal("malformed watched resolution unexpectedly succeeded")
-	}
-	if !store.hasPendingID("ask-1") || len(feed.resolvedIDs()) != 0 || len(store.promptFollowUps) != 1 {
-		t.Fatal("malformed watched resolution mutated, published, or replaced its registered follow-up state")
+	if !store.hasPendingID("ask-1") || len(feed.resolvedIDs()) != 0 || len(store.promptFollowUps) != wantFollowUps {
+		t.Fatal("malformed Question batch mutated, published, or changed follow-up state")
 	}
 	return err
 }

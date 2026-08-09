@@ -11,12 +11,11 @@ func TestPromptFollowUpContractCarriesOnlyFullIdentityAndTerminalOutcome(t *test
 	if err != nil {
 		t.Fatalf("parse Step ID: %v", err)
 	}
-	request := PromptFollowUpWatchRequest{
+	if err := (PromptFollowUpWatchRequest{
 		SessionID: runtimeids.NewSessionID(),
 		StepID:    stepID,
 		PromptID:  "prompt-1",
-	}
-	if err := request.Validate(); err != nil {
+	}).Validate(); err != nil {
 		t.Fatalf("validate request: %v", err)
 	}
 	for _, kind := range []PromptFollowUpEventKind{

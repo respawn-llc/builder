@@ -33,8 +33,7 @@ func TestPromptFollowUpSubscriptionInstallsBeforeSubscribeResponse(t *testing.T)
 	if !ok {
 		t.Fatal("prompt follow-up route missing")
 	}
-	installed := false
-	conn := newPromptFollowUpRegistrationConn(&installed)
+	conn := &promptFollowUpRegistrationConn{}
 
 	serveGatewaySubscription(
 		conn,
@@ -47,7 +46,7 @@ func TestPromptFollowUpSubscriptionInstallsBeforeSubscribeResponse(t *testing.T)
 			Params:  params,
 		},
 		func(context.Context, serverapi.PromptFollowUpWatchRequest) (*scriptedPromptFollowUpSubscription, error) {
-			installed = true
+			conn.installed = true
 			return &scriptedPromptFollowUpSubscription{}, nil
 		},
 		func(event serverapi.PromptFollowUpEvent) protocol.PromptFollowUpEventParams {
@@ -84,22 +83,12 @@ func (*scriptedPromptFollowUpSubscription) Close() error {
 }
 
 type promptFollowUpRegistrationConn struct {
-	installed *bool
+	installed bool
 	frames    []rpcwire.Frame
-	events    chan rpcwire.Event
-	closed    chan struct{}
-}
-
-func newPromptFollowUpRegistrationConn(installed *bool) *promptFollowUpRegistrationConn {
-	return &promptFollowUpRegistrationConn{
-		installed: installed,
-		events:    make(chan rpcwire.Event),
-		closed:    make(chan struct{}),
-	}
 }
 
 func (c *promptFollowUpRegistrationConn) Send(_ context.Context, frame rpcwire.Frame) error {
-	if len(c.frames) == 0 && !*c.installed {
+	if len(c.frames) == 0 && !c.installed {
 		return errors.New("SubscribeResponse sent before watcher installation")
 	}
 	c.frames = append(c.frames, frame)
@@ -107,11 +96,11 @@ func (c *promptFollowUpRegistrationConn) Send(_ context.Context, frame rpcwire.F
 }
 
 func (c *promptFollowUpRegistrationConn) Events() <-chan rpcwire.Event {
-	return c.events
+	return nil
 }
 
 func (c *promptFollowUpRegistrationConn) Closed() <-chan struct{} {
-	return c.closed
+	return nil
 }
 
 func (c *promptFollowUpRegistrationConn) Close() error {

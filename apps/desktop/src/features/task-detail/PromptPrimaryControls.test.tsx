@@ -4,9 +4,11 @@ import { I18nextProvider } from "react-i18next";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { QuestionAttentionItem } from "@/api";
+import { attentionItemSchema } from "@/api/schemas/common";
 import { AppServicesProvider } from "@/app-facade";
 import { appI18n, initializeI18n } from "@/i18n";
 import { createTestServices } from "@/test-support/app-services";
+import { questionAttention } from "@/test-support/task-detail";
 import type { PromptPrimaryControl } from "./PromptPrimaryControlRegistry";
 import { questionPresentation, emptyQuestionSelection } from "./TaskDetailQuestionState";
 import { QuestionFormView } from "./TaskDetailQuestionFormView";
@@ -78,44 +80,35 @@ function Harness({
 }
 
 function ordinaryAttention(suggestions: readonly string[]): QuestionAttentionItem {
+  const attention = baseQuestionAttention();
   return {
-    id: "attention-1",
-    kind: "question",
-    message: "Question",
-    occurredAt: 0,
-    projectID: "project-1",
+    ...attention,
     question: {
-      kind: "ordinary",
-      promptID: "prompt-1",
+      ...attention.question,
       recommendedOptionIndex: suggestions.length === 0 ? null : 1,
-      sessionID: "session-1",
-      stepID: "step-1",
       suggestions,
     },
-    currentNode: {
-      effectiveAssignee: null,
-      effectiveThinking: null,
-      nodeID: "node-1",
-      sessionID: null,
-      transitionBranchKey: null,
-    },
-    sessionName: "Session",
-    taskID: "task-1",
-    taskShortID: "TASK-1",
-    taskTitle: "Task",
-    workflowID: "workflow-1",
   };
 }
 
 function approvalAttention(): QuestionAttentionItem {
+  const attention = baseQuestionAttention();
   return {
-    ...ordinaryAttention([]),
+    ...attention,
     question: {
       approvalDecisions: ["deny", "allow_once"],
       kind: "approval",
-      promptID: "prompt-1",
-      sessionID: "session-1",
-      stepID: "step-1",
+      promptID: attention.question.promptID,
+      sessionID: attention.question.sessionID,
+      stepID: attention.question.stepID,
     },
   };
+}
+
+function baseQuestionAttention(): QuestionAttentionItem {
+  const attention = attentionItemSchema.parse(questionAttention);
+  if (attention.kind !== "question") {
+    throw new Error("expected Question attention fixture");
+  }
+  return attention;
 }
