@@ -302,6 +302,30 @@ func TestSubmitUserMessageFailsWhenReviewerStatusPersistenceFailsAfterAssistantE
 	localEntryErr := errors.New("injected reviewer status persistence failure")
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
+	var (
+		gateMu              sync.Mutex
+		sawPendingRecovery  bool
+		recoveryClearCount  int
+		secondClearSequence int64
+	)
+	gate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
+		gateMu.Lock()
+		defer gateMu.Unlock()
+		if snapshot.Meta.PendingModelRecovery != nil {
+			sawPendingRecovery = true
+			return false
+		}
+		if sawPendingRecovery {
+			sawPendingRecovery = false
+			recoveryClearCount++
+			if recoveryClearCount == 2 {
+				secondClearSequence = snapshot.Meta.LastSequence
+			}
+			return false
+		}
+		return recoveryClearCount == 2 &&
+			snapshot.Meta.LastSequence > secondClearSequence
+	}, localEntryErr)
 
 	mainClient := &fakeClient{responses: []llm.Response{
 		{
@@ -319,9 +343,8 @@ func TestSubmitUserMessageFailsWhenReviewerStatusPersistenceFailsAfterAssistantE
 	}}}
 
 	var (
-		eventsMu        sync.Mutex
-		events          []Event
-		assistantEvents int
+		eventsMu sync.Mutex
+		events   []Event
 	)
 	eng := mustNewTestEngine(t, store, mainClient, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model: "gpt-5",
@@ -329,12 +352,6 @@ func TestSubmitUserMessageFailsWhenReviewerStatusPersistenceFailsAfterAssistantE
 			eventsMu.Lock()
 			defer eventsMu.Unlock()
 			events = append(events, evt)
-			if evt.Kind == EventAssistantMessage {
-				assistantEvents++
-				if assistantEvents == 2 {
-					gate.FailNext(localEntryErr)
-				}
-			}
 		},
 		Reviewer: ReviewerConfig{
 			Frequency:     "all",
