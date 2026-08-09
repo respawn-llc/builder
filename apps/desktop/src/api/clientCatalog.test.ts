@@ -173,6 +173,21 @@ describe("ApiClient catalog boundary", () => {
     expect(error).toBeInstanceOf(ContractError);
     expect(error).toMatchObject({ reason: "malformed_response" });
   });
+  it("preserves the complete diagnostic count when wrapping malformed responses", () => {
+    const source = new ContractError(
+      "source contract failure",
+      Array.from({ length: 12 }, (_, index) => ({
+        code: "invalid_type",
+        path: [`field-${String(index)}`],
+      })),
+    );
+
+    const error = CatalogContractError.malformedResponse("session.page", source);
+
+    expect(error.diagnostics).toHaveLength(8);
+    expect(error.totalDiagnosticCount).toBe(12);
+    expect(error.message).toContain("+4 more");
+  });
 });
 async function catchError(operation: Promise<unknown>): Promise<unknown> {
   try {

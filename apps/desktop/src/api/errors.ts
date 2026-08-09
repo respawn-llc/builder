@@ -358,12 +358,17 @@ export class ContractError extends Error {
   readonly diagnostics: readonly ContractIssueDiagnostic[];
   readonly totalDiagnosticCount: number;
 
-  constructor(message: string, diagnostics: readonly ContractIssueDiagnostic[] = []) {
+  constructor(
+    message: string,
+    diagnostics: readonly ContractIssueDiagnostic[] = [],
+    totalDiagnosticCount = diagnostics.length,
+  ) {
     const retainedDiagnostics = diagnostics.slice(0, 8);
-    super(contractErrorMessage(message, retainedDiagnostics, diagnostics.length));
+    const completeDiagnosticCount = Math.max(totalDiagnosticCount, diagnostics.length);
+    super(contractErrorMessage(message, retainedDiagnostics, completeDiagnosticCount));
     this.name = "ContractError";
     this.diagnostics = retainedDiagnostics;
-    this.totalDiagnosticCount = diagnostics.length;
+    this.totalDiagnosticCount = completeDiagnosticCount;
   }
 }
 
@@ -382,9 +387,9 @@ export class CatalogContractError extends ContractError {
     reason: CatalogContractErrorReason,
     facts: Readonly<{ method?: string; expectedProjectID?: string; actualProjectID?: string;
       expectedCategory?: "main" | "subagent"; actualCategory?: "main" | "subagent";
-      diagnostics?: readonly ContractIssueDiagnostic[] }>,
+      diagnostics?: readonly ContractIssueDiagnostic[]; totalDiagnosticCount?: number }>,
   ) {
-    super(message, facts.diagnostics);
+    super(message, facts.diagnostics, facts.totalDiagnosticCount);
     this.name = "CatalogContractError"; this.reason = reason; this.method = facts.method ?? null;
     this.expectedProjectID = facts.expectedProjectID ?? null; this.actualProjectID = facts.actualProjectID ?? null;
     this.expectedCategory = facts.expectedCategory ?? null; this.actualCategory = facts.actualCategory ?? null;
@@ -392,7 +397,7 @@ export class CatalogContractError extends ContractError {
 
   static malformedResponse(method: string, error: ContractError): CatalogContractError {
     return new CatalogContractError(`${method} response did not match the catalog contract.`, "malformed_response", {
-      method, diagnostics: error.diagnostics,
+      method, diagnostics: error.diagnostics, totalDiagnosticCount: error.totalDiagnosticCount,
     });
   }
 
