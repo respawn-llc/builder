@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"core/cli/app/internal/status"
-	"core/server/llm"
 	"core/shared/textutil"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -71,5 +70,5 @@ func sessionPickerModelSummary(facts *sessionPickerModelFacts) *string {
 			panic("session picker model facts require nonblank trimmed verbosity")
 		}
 	}
-	return textutil.OptionalTrimmedString(llm.ModelDisplayLabel(name, thinkingLevel))
+	return textutil.OptionalTrimmedString(status.ModelDisplaySummary(name, thinkingLevel))
 }
