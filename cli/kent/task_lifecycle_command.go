@@ -291,8 +291,7 @@ func readTaskEditBody(body string, bodyFile string, bodyFileProvided bool) (stri
 func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" task start", stderr, taskStartUsage)
 	projectRef := fs.String("project", ".", "project ID or attached workspace path used to resolve a short ID")
-	executionTargetRaw := fs.String("execution-target", "", "task-local execution target: "+executionTargetSelectorHelp)
-	branchNameRaw := fs.String("branch-name", "", "branch name for the task's first managed worktree")
+	executionTargetRaw, branchNameRaw := addInitialBranchExecutionFlags(fs)
 	ignoreDependencies := fs.Bool("ignore-dependencies", false, "proceed despite current unsatisfied Task Dependencies")
 	jsonOut := fs.Bool("json", false, "write the typed start outcome as JSON")
 	positionals, flagArgs := takeLeadingPositionals(args, 1)
@@ -309,14 +308,8 @@ func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	executionTarget, err := parseOptionalTaskExecutionTarget(*executionTargetRaw, flagExplicit(fs, "execution-target"))
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 2
-	}
-	branchName, err := parseExplicitBranchName(*branchNameRaw, flagExplicit(fs, "branch-name"))
-	if err != nil {
-		fmt.Fprintln(stderr, err)
+	executionTarget, branchName, ok := parseInitialBranchExecutionOptions(fs, *executionTargetRaw, *branchNameRaw, stderr)
+	if !ok {
 		return 2
 	}
 	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
@@ -336,8 +329,7 @@ func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 			})
 		})
 		if err != nil {
-			if !writeWorkflowExecutionTargetError(stderr, err) &&
-				!writeWorkflowTaskInitialBranchError(stderr, err) &&
+			if !writeWorkflowTaskTargetOrBranchError(stderr, err) &&
 				!writeWorkflowTaskMutationSelfTargetError(stderr, err) {
 				fmt.Fprintln(stderr, err)
 			}
@@ -473,8 +465,7 @@ func taskDeleteSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 func taskResumeSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" task resume", stderr, taskResumeUsage)
 	projectRef := fs.String("project", ".", "project ID or attached workspace path used to resolve a short ID")
-	executionTargetRaw := fs.String("execution-target", "", "task-local execution target: "+executionTargetSelectorHelp)
-	branchNameRaw := fs.String("branch-name", "", "branch name for the task's first managed worktree")
+	executionTargetRaw, branchNameRaw := addInitialBranchExecutionFlags(fs)
 	positionals, flagArgs := takeLeadingPositionals(args, 1)
 	if ok, exitCode := parseCommandFlags(fs, flagArgs); !ok {
 		return exitCode
@@ -489,14 +480,8 @@ func taskResumeSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	executionTarget, err := parseOptionalTaskExecutionTarget(*executionTargetRaw, flagExplicit(fs, "execution-target"))
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 2
-	}
-	branchName, err := parseExplicitBranchName(*branchNameRaw, flagExplicit(fs, "branch-name"))
-	if err != nil {
-		fmt.Fprintln(stderr, err)
+	executionTarget, branchName, ok := parseInitialBranchExecutionOptions(fs, *executionTargetRaw, *branchNameRaw, stderr)
+	if !ok {
 		return 2
 	}
 	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
@@ -515,8 +500,7 @@ func taskResumeSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 			})
 		})
 		if err != nil {
-			if writeWorkflowExecutionTargetError(stderr, err) ||
-				writeWorkflowTaskInitialBranchError(stderr, err) ||
+			if writeWorkflowTaskTargetOrBranchError(stderr, err) ||
 				writeWorkflowTaskMutationSelfTargetError(stderr, err) {
 				return 1
 			}
@@ -655,8 +639,7 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" task move", stderr, taskMoveUsage)
 	projectRef := fs.String("project", ".", "project ID or attached workspace path used to resolve a short ID")
 	commentary := fs.String("commentary", "", "note recorded with the workflow transition")
-	executionTargetRaw := fs.String("execution-target", "", "task-local execution target: "+executionTargetSelectorHelp)
-	branchNameRaw := fs.String("branch-name", "", "branch name for the task's first managed worktree")
+	executionTargetRaw, branchNameRaw := addInitialBranchExecutionFlags(fs)
 	ignoreDependencies := fs.Bool("ignore-dependencies", false, "proceed despite current unsatisfied Task Dependencies")
 	transition := fs.String("transition", "", "workflow Transition key")
 	valuesJSON := fs.String("values-json", "", "nested JSON values keyed by Node key and output name")
@@ -676,14 +659,8 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	executionTarget, err := parseOptionalTaskExecutionTarget(*executionTargetRaw, flagExplicit(fs, "execution-target"))
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 2
-	}
-	branchName, err := parseExplicitBranchName(*branchNameRaw, flagExplicit(fs, "branch-name"))
-	if err != nil {
-		fmt.Fprintln(stderr, err)
+	executionTarget, branchName, ok := parseInitialBranchExecutionOptions(fs, *executionTargetRaw, *branchNameRaw, stderr)
+	if !ok {
 		return 2
 	}
 	values, err := readManualMoveValues(
@@ -718,8 +695,7 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			return 1
 		}
 		if preview.Outcome == serverapi.WorkflowTaskMovePreviewOutcomeNoOp {
-			if branchName != nil {
-				fmt.Fprintln(stderr, "task move no-op does not accept --branch-name")
+			if rejectInitialBranchForMoveNoOp(stderr, branchName) {
 				return 2
 			}
 			if flagExplicit(fs, "transition") || len(values) != 0 {
@@ -793,8 +769,7 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			})
 		})
 		if err != nil {
-			if !writeWorkflowExecutionTargetError(stderr, err) &&
-				!writeWorkflowTaskInitialBranchError(stderr, err) &&
+			if !writeWorkflowTaskTargetOrBranchError(stderr, err) &&
 				!writeWorkflowTaskMutationSelfTargetError(stderr, err) {
 				fmt.Fprintln(stderr, err)
 			}

@@ -2,12 +2,49 @@ package main
 
 import (
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"strings"
 
 	"core/shared/serverapi"
 )
+
+func addInitialBranchExecutionFlags(fs *flag.FlagSet) (*string, *string) {
+	return fs.String("execution-target", "", "task-local execution target: "+executionTargetSelectorHelp),
+		fs.String("branch-name", "", "branch name for the task's first managed worktree")
+}
+
+func parseInitialBranchExecutionOptions(
+	fs *flag.FlagSet,
+	executionTargetRaw string,
+	branchNameRaw string,
+	stderr io.Writer,
+) (*serverapi.WorkflowExecutionTargetSelection, *string, bool) {
+	executionTarget, err := parseOptionalTaskExecutionTarget(executionTargetRaw, flagExplicit(fs, "execution-target"))
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return nil, nil, false
+	}
+	branchName, err := parseExplicitBranchName(branchNameRaw, flagExplicit(fs, "branch-name"))
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return nil, nil, false
+	}
+	return executionTarget, branchName, true
+}
+
+func writeWorkflowTaskTargetOrBranchError(stderr io.Writer, err error) bool {
+	return writeWorkflowExecutionTargetError(stderr, err) || writeWorkflowTaskInitialBranchError(stderr, err)
+}
+
+func rejectInitialBranchForMoveNoOp(stderr io.Writer, branchName *string) bool {
+	if branchName == nil {
+		return false
+	}
+	fmt.Fprintln(stderr, "task move no-op does not accept --branch-name")
+	return true
+}
 
 func parseExplicitBranchName(raw string, provided bool) (*string, error) {
 	if !provided {
