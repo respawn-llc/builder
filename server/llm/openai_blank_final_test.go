@@ -154,6 +154,49 @@ func TestOpenAIBlankFinalStreamingAfterCommentary(t *testing.T) {
 	}
 }
 
+func TestOpenAIBlankFinalStreamingWithPendingUnmaterializedOutput(t *testing.T) {
+	tests := []struct {
+		name          string
+		finalItem     string
+		finalResponse string
+		wantContent   *string
+	}{
+		{
+			name:          "empty",
+			finalItem:     `"content":[],`,
+			finalResponse: `"content":[],`,
+			wantContent:   textutil.Value(""),
+		},
+		{
+			name: "omitted",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			events := []string{
+				`{"type":"response.output_text.delta","output_index":0,"delta":"working"}`,
+				`{"type":"response.output_item.done","output_index":1,"item":{"id":"msg_final","type":"message","role":"assistant","phase":"final_answer",` + test.finalItem + `"status":"completed"}}`,
+				`{"type":"response.completed","response":{"output":[{"id":"msg_final","type":"message","role":"assistant","phase":"final_answer",` + test.finalResponse + `"status":"completed"}]}}`,
+				`[DONE]`,
+			}
+			transport := newOpenAIStreamTestTransport(t, events...)
+			response, err := NewOpenAIClient(transport).GenerateStreamWithEvents(context.Background(), Request{
+				Model:          "gpt-5",
+				ToolChoiceMode: ToolChoiceModeAutomatic,
+			}, StreamCallbacks{})
+			if err != nil {
+				t.Fatalf("generate stream: %v", err)
+			}
+			if !equalOptionalString(response.Assistant.Content, test.wantContent) {
+				t.Fatalf("assistant content = %#v, want %#v", response.Assistant.Content, test.wantContent)
+			}
+			if response.Assistant.Phase == nil || *response.Assistant.Phase != MessagePhaseFinal {
+				t.Fatalf("assistant phase = %#v, want final", response.Assistant.Phase)
+			}
+		})
+	}
+}
+
 func TestOpenAIBlankFinalRejectsMalformedContentShape(t *testing.T) {
 	transport := newOpenAIStreamTestTransport(t,
 		`{"type":"response.output_item.done","output_index":0,"item":{"id":"msg_invalid","type":"message","role":"assistant","phase":"final_answer","content":{}}}`,

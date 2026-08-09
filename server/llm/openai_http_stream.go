@@ -579,9 +579,6 @@ func (a *assistantMessageAccumulator) Resolve() (*string, MessagePhase, *Provide
 	if a == nil {
 		return nil, "", AbsentProviderPhase(), 0, "", false
 	}
-	if len(a.pendingDeltas) > 0 {
-		return nil, "", AbsentProviderPhase(), 0, "", false
-	}
 	segments := make([]assistantOutputSegment, 0, len(a.order))
 	for _, outputIndex := range a.order {
 		item, ok := a.byIndex[outputIndex]
@@ -616,7 +613,11 @@ func (a *assistantMessageAccumulator) Resolve() (*string, MessagePhase, *Provide
 			OutputIndex:   outputIndex,
 		})
 	}
-	return resolveAssistantOutput(segments)
+	text, phase, providerPhase, outputIndex, deltaText, resolved := resolveAssistantOutput(segments)
+	if len(a.pendingDeltas) > 0 && (!resolved || phase == "") {
+		return nil, "", AbsentProviderPhase(), 0, "", false
+	}
+	return text, phase, providerPhase, outputIndex, deltaText, resolved
 }
 
 func (a *assistantMessageAccumulator) Phase(outputIndex int64) MessagePhase {
