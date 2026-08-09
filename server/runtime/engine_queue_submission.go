@@ -47,6 +47,7 @@ func (e *Engine) RunWhenIdleBeforeQueuedUserWork(ctx context.Context, activeKind
 // (for example manual compaction) completes while queued steering is waiting.
 func (e *Engine) SubmitQueuedUserMessages(ctx context.Context) (assistant llm.Message, err error) {
 	assistant, _, err = e.SubmitQueuedUserMessagesWithActiveHook(ctx, nil)
+	e.surfaceRunError(err)
 	return assistant, err
 }
 
@@ -66,7 +67,7 @@ func (e *Engine) submitQueuedUserMessages(ctx context.Context, queueItemIDs map[
 				return llm.Message{}, receipt, consumedQueueItemIDs, err
 			}
 		}
-		err = e.stepLifecycle.Run(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserTurn}, e.withRunErrorFeedbackBeforeStepClose(func(stepCtx context.Context, stepID string) error {
+		err = e.stepLifecycle.Run(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserTurn}, func(stepCtx context.Context, stepID string) error {
 			if onActive != nil {
 				onActive()
 			}
@@ -95,8 +96,7 @@ func (e *Engine) submitQueuedUserMessages(ctx context.Context, queueItemIDs map[
 			})
 			assistant = msg
 			return runErr
-		}))
-		e.finishRunErrorFeedback(err)
+		})
 		if receipt.Committed || !errors.Is(err, ErrAgentBusy) {
 			return assistant, receipt, consumedQueueItemIDs, err
 		}
@@ -248,7 +248,7 @@ func (e *Engine) scheduleQueuedUserInjectionsIfIdle() bool {
 	return true
 }
 
-func (e *Engine) processQueuedUserWork(ctx context.Context) error {
+func (e *Engine) processQueuedUserWork(ctx context.Context) (runtimeAbort *resultGroupFatal) {
 	completed := false
 	defer func() {
 		e.clearQueuedUserWorkScheduled()
@@ -261,13 +261,12 @@ func (e *Engine) processQueuedUserWork(ctx context.Context) error {
 		}
 	}()
 	if err := e.waitQueuedUserAutoDrainAllowed(ctx); err != nil {
-		e.surfaceRunError(err)
-		return &persistedRunCallbackError{cause: err}
+		return e.lifecycleRuntimeAbort(err)
 	}
 	ids := e.queuedUserAutoDrainIDSnapshot()
 	_, _, consumedQueueItemIDs, err := e.submitQueuedUserMessages(ctx, ids, nil)
 	if err != nil {
-		return err
+		return e.lifecycleRuntimeAbort(err)
 	}
 	e.completeLiveRunQueueItems(consumedQueueItemIDs)
 	completed = true

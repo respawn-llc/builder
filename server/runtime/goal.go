@@ -575,7 +575,7 @@ func (e *Engine) startGoalLoop(firstTurnAlreadyPrompted bool) error {
 }
 
 func (e *Engine) launchGoalLoopTask(firstTurnAlreadyPrompted bool) {
-	launched := e.launchLifecycleTask(func(ctx context.Context) error {
+	launched := e.launchLifecycleTask(func(ctx context.Context) *resultGroupFatal {
 		defer e.finishGoalLoop()
 		return e.runGoalLoop(ctx, firstTurnAlreadyPrompted)
 	})
@@ -592,7 +592,7 @@ func (e *Engine) finishGoalLoop() {
 	e.finishLiveRunGoalLoop()
 }
 
-func (e *Engine) runGoalLoop(ctx context.Context, firstTurnAlreadyPrompted bool) error {
+func (e *Engine) runGoalLoop(ctx context.Context, firstTurnAlreadyPrompted bool) *resultGroupFatal {
 	appendNudge := !firstTurnAlreadyPrompted
 	for {
 		if !e.shouldContinueGoalLoop(ctx) {
@@ -605,7 +605,7 @@ func (e *Engine) runGoalLoop(ctx context.Context, firstTurnAlreadyPrompted bool)
 				}
 				continue
 			}
-			return err
+			return e.lifecycleRuntimeAbort(err)
 		}
 		appendNudge = true
 	}
@@ -613,7 +613,7 @@ func (e *Engine) runGoalLoop(ctx context.Context, firstTurnAlreadyPrompted bool)
 
 func (e *Engine) runGoalTurn(ctx context.Context, appendNudge bool) (assistant llm.Message, err error) {
 	e.ensureOrchestrationCollaborators()
-	err = e.stepLifecycle.Run(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindGoalLoop}, e.withRunErrorFeedbackBeforeStepClose(func(stepCtx context.Context, stepID string) error {
+	err = e.stepLifecycle.Run(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindGoalLoop}, func(stepCtx context.Context, stepID string) error {
 		if err := e.ensureMetaContextForRequest(stepCtx, stepID); err != nil {
 			return err
 		}
@@ -629,8 +629,7 @@ func (e *Engine) runGoalTurn(ctx context.Context, appendNudge bool) (assistant l
 		msg, runErr := e.runStepLoop(stepCtx, stepID)
 		assistant = msg
 		return runErr
-	}))
-	e.finishRunErrorFeedback(err)
+	})
 	if errors.Is(err, errGoalLoopInactive) {
 		return llm.Message{}, nil
 	}
@@ -649,20 +648,15 @@ func (e *Engine) waitBeforeGoalLoopBusyRetry(ctx context.Context) bool {
 }
 
 func (e *Engine) surfaceRunError(err error) {
-	if _, ok := resultGroupFatalFromError(err); ok {
-		err = removeErrorBranches(err, func(candidate error) bool { _, matches := candidate.(*resultGroupFatal); return matches })
-	}
-	message, present := e.persistRunErrorFeedback(err)
-	if !present {
+	if _, fatal := resultGroupFatalFromError(err); fatal {
 		return
 	}
-	e.SetStreamingError(message)
-}
-
-func (e *Engine) persistRunErrorFeedback(err error) (string, bool) {
-	message, ok := runErrorFeedbackMessage(err)
-	if !ok {
-		return "", false
+	if err == nil ||
+		errors.Is(err, context.Canceled) ||
+		errors.Is(err, ErrAgentBusy) ||
+		errors.Is(err, errGoalLoopInactive) ||
+		errors.Is(err, ErrEngineClosed) {
+		return
 	}
 	message, appendErr := e.steerRuntimeErrorFeedback(err)
 	if appendErr != nil {
@@ -675,40 +669,16 @@ func (e *Engine) persistRunErrorFeedback(err error) (string, bool) {
 			Text:       "Failed to persist run error: " + appendErr.Error(),
 		}))
 	}
-	return message, true
-}
-
-func (e *Engine) setStreamingRunError(err error) {
-	message, ok := runErrorFeedbackMessage(err)
-	if !ok {
-		return
-	}
 	e.SetStreamingError(message)
 }
 
-func (e *Engine) finishRunErrorFeedback(err error) {
-	e.setStreamingRunError(err)
-	unpersisted := removePersistedRunCallbackErrors(err)
-	if errors.Is(unpersisted, errPendingModelRecoveryClear) {
-		e.persistRunErrorFeedback(unpersisted)
+func (e *Engine) lifecycleRuntimeAbort(err error) *resultGroupFatal {
+	fatal, abort := resultGroupFatalFromError(err)
+	if !abort {
+		e.surfaceRunError(err)
+		return nil
 	}
-}
-
-func runErrorFeedbackMessage(err error) (string, bool) {
-	var collectorFatal *resultGroupFatal
-	if err == nil ||
-		errors.Is(err, context.Canceled) ||
-		errors.Is(err, ErrAgentBusy) ||
-		errors.Is(err, errGoalLoopInactive) ||
-		errors.Is(err, ErrEngineClosed) ||
-		errors.As(err, &collectorFatal) {
-		return "", false
-	}
-	message := strings.TrimSpace(llm.UserFacingError(err))
-	if message == "" {
-		message = err.Error()
-	}
-	return message, true
+	return fatal
 }
 
 func runtimeAbortFeedbackMessage(fatal *resultGroupFatal) string {
@@ -723,40 +693,6 @@ func runtimeAbortFeedbackMessage(fatal *resultGroupFatal) string {
 		message = fatal.Error()
 	}
 	return message
-}
-
-func (e *Engine) withRunErrorFeedbackBeforeStepClose(
-	run func(context.Context, string) error,
-) func(context.Context, string) error {
-	if run == nil {
-		panic("step run callback is required")
-	}
-	return func(ctx context.Context, stepID string) error {
-		err := run(ctx, stepID)
-		if _, present := e.persistRunErrorFeedback(err); present {
-			return &persistedRunCallbackError{cause: err}
-		}
-		return err
-	}
-}
-
-type persistedRunCallbackError struct {
-	cause error
-}
-
-func (e *persistedRunCallbackError) Error() string {
-	return e.cause.Error()
-}
-
-func (e *persistedRunCallbackError) Unwrap() error {
-	return e.cause
-}
-
-func removePersistedRunCallbackErrors(err error) error {
-	return removeErrorBranches(err, func(candidate error) bool {
-		_, persisted := candidate.(*persistedRunCallbackError)
-		return persisted
-	})
 }
 
 func (e *Engine) steerRuntimeErrorFeedback(err error) (string, error) {

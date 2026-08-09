@@ -203,6 +203,23 @@ func (c *resultGroupCollector) readyPrefix() []resultGroupUnit {
 	return result
 }
 
+func (c *resultGroupCollector) result(callID string) (tools.Result, bool, error) {
+	if c == nil {
+		return tools.Result{}, false, errors.New("result group collector is required")
+	}
+	callID = strings.TrimSpace(callID)
+	for _, slot := range c.slots {
+		if slot.call.CallID != callID {
+			continue
+		}
+		if slot.result == nil {
+			return tools.Result{}, false, nil
+		}
+		return cloneToolResult(slot.result.result), true, nil
+	}
+	return tools.Result{}, false, fmt.Errorf("result group call %q is not in the roster", callID)
+}
+
 func (c *resultGroupCollector) advanceReadyPrefix(count int) error {
 	if c == nil {
 		return errors.New("result group collector is required")

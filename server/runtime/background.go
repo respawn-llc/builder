@@ -268,10 +268,17 @@ func harvestedBackgroundCompletionSessionID(res tools.Result) (string, bool) {
 	return fmt.Sprintf("%d", out.SessionID), true
 }
 
-func (b *defaultBackgroundNoticeScheduler) processQueuedNotices(ctx context.Context) error {
-	_, err := b.runQueuedNotices(ctx)
-	if _, fatal := resultGroupFatalFromError(err); fatal {
-		return err
+func (b *defaultBackgroundNoticeScheduler) processQueuedNotices(ctx context.Context) *resultGroupFatal {
+	if _, err := b.runQueuedNotices(ctx); err != nil {
+		if errors.Is(err, context.Canceled) {
+			return nil
+		}
+		if fatal := b.engine.lifecycleRuntimeAbort(err); fatal != nil {
+			return fatal
+		}
+		if steerErr := b.engine.SteerBackgroundContinuationFailure(err); steerErr != nil {
+			b.engine.surfaceRunError(errors.Join(err, steerErr))
+		}
 	}
 	return nil
 }
@@ -281,56 +288,21 @@ func (b *defaultBackgroundNoticeScheduler) runQueuedNotices(ctx context.Context)
 		b.clearScheduled()
 		return llm.Message{}, nil
 	}
-	var persistedCallbackErr *persistedRunCallbackError
 	err = b.steps.Run(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindBackground}, func(stepCtx context.Context, stepID string) error {
-		runErr := func() error {
-			if err := b.engine.ensureMetaContextForRequest(stepCtx, stepID); err != nil {
-				return err
-			}
-			flushed, flushErr := b.flushPendingNotices(stepID)
-			if flushErr != nil {
-				return flushErr
-			}
-			if flushed == 0 {
-				return nil
-			}
-			msg, runErr := b.engine.runStepLoop(stepCtx, stepID)
-			assistant = msg
-			return runErr
-		}()
-		if runErr == nil {
+		if err := b.engine.ensureMetaContextForRequest(stepCtx, stepID); err != nil {
+			return err
+		}
+		flushed, flushErr := b.flushPendingNotices(stepID)
+		if flushErr != nil {
+			return flushErr
+		}
+		if flushed == 0 {
 			return nil
 		}
-		if _, fatal := resultGroupFatalFromError(runErr); fatal {
-			return runErr
-		}
-		if _, present := b.engine.persistRunErrorFeedback(runErr); !present {
-			return runErr
-		}
-		persistedCallbackErr = &persistedRunCallbackError{
-			cause: runErr,
-		}
-		return persistedCallbackErr
+		msg, runErr := b.engine.runStepLoop(stepCtx, stepID)
+		assistant = msg
+		return runErr
 	})
-	lifecycleErr := removePersistedBackgroundCallbackError(
-		err,
-		persistedCallbackErr,
-	)
-	unpersistedLifecycleErr := removePendingModelRecoveryClearError(lifecycleErr)
-	if _, persist := runErrorFeedbackMessage(unpersistedLifecycleErr); persist {
-		if feedbackErr := b.engine.SteerBackgroundContinuationFailure(
-			unpersistedLifecycleErr,
-		); feedbackErr != nil {
-			err = errors.Join(
-				err,
-				fmt.Errorf(
-					"persist background continuation lifecycle failure: %w",
-					feedbackErr,
-				),
-			)
-		}
-	}
-	b.engine.finishRunErrorFeedback(backgroundFinalFeedbackError(err))
 	if err != nil && b.HasPendingNotices() {
 		b.clearScheduled()
 	}
@@ -339,59 +311,6 @@ func (b *defaultBackgroundNoticeScheduler) runQueuedNotices(ctx context.Context)
 		return llm.Message{}, nil
 	}
 	return assistant, err
-}
-
-func removePersistedBackgroundCallbackError(
-	err error,
-	persisted *persistedRunCallbackError,
-) error {
-	if persisted == nil {
-		return err
-	}
-	return removeErrorBranches(err, func(candidate error) bool {
-		return candidate == persisted
-	})
-}
-
-func removePendingModelRecoveryClearError(err error) error {
-	return removeErrorBranches(err, func(candidate error) bool {
-		_, matches := candidate.(*pendingModelRecoveryClearError)
-		return matches
-	})
-}
-
-func backgroundFinalFeedbackError(err error) error {
-	var clearErr *pendingModelRecoveryClearError
-	if errors.As(err, &clearErr) {
-		return clearErr
-	}
-	return err
-}
-
-func removeErrorBranches(
-	err error,
-	remove func(error) bool,
-) error {
-	if err == nil {
-		return nil
-	}
-	if remove(err) {
-		return nil
-	}
-	joined, ok := err.(interface{ Unwrap() []error })
-	if !ok {
-		return err
-	}
-	remaining := make([]error, 0, len(joined.Unwrap()))
-	for _, child := range joined.Unwrap() {
-		if unpersisted := removeErrorBranches(
-			child,
-			remove,
-		); unpersisted != nil {
-			remaining = append(remaining, unpersisted)
-		}
-	}
-	return errors.Join(remaining...)
 }
 
 func (b *defaultBackgroundNoticeScheduler) pendingSnapshot() []queuedBackgroundNotice {

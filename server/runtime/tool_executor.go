@@ -19,10 +19,6 @@ type defaultToolExecutor struct {
 	engine *Engine
 }
 
-type completedToolResult struct {
-	result tools.Result
-}
-
 var ErrMissingProviderToolCallID = errors.New("provider tool call id is required")
 
 func (t *defaultToolExecutor) ExecuteToolCalls(
@@ -30,9 +26,8 @@ func (t *defaultToolExecutor) ExecuteToolCalls(
 	stepID string,
 	preparedCalls []executorToolCall,
 	collector *resultGroupCollector,
-) ([]*completedToolResult, error) {
+) error {
 	e := t.engine
-	results := make([]*completedToolResult, len(preparedCalls))
 	callErrs := make([]error, len(preparedCalls))
 	wg := sync.WaitGroup{}
 	runID := activeRunIDForStep(e, stepID)
@@ -40,7 +35,7 @@ func (t *defaultToolExecutor) ExecuteToolCalls(
 	serialGate := newSerialToolGate()
 	nextSerialOrdinal := 0
 	if collector == nil {
-		return results, errors.New("tool execution requires a result group collector")
+		return errors.New("tool execution requires a result group collector")
 	}
 	executionCtx, cancelExecution := context.WithCancel(ctx)
 	defer cancelExecution()
@@ -102,15 +97,14 @@ func (t *defaultToolExecutor) ExecuteToolCalls(
 				serialGate.wait(serialOrdinal)
 				defer serialGate.done(serialOrdinal)
 			}
-			completed, callErr := t.executePreparedToolCall(executionCtx, stepID, runID, tc, toolID, knownTool, askBatch)
+			res, completed, callErr := t.executePreparedToolCall(executionCtx, stepID, runID, tc, toolID, knownTool, askBatch)
 			if fatal := collector.fatalSnapshot(); fatal != nil {
 				return
 			}
-			if completed == nil {
+			if !completed {
 				callErrs[idx] = callErr
 				return
 			}
-			res := completed.result
 			var outcome *resultGroupReportOutcome
 			if err := e.steer(stepID, steerResultGroupReportIntent(
 				collector,
@@ -156,23 +150,19 @@ func (t *defaultToolExecutor) ExecuteToolCalls(
 				callErrs[idx] = fatal
 				return
 			}
-			results[idx] = completed
 			callErrs[idx] = callErr
 		}(executableCall, toolID, knownTool, serialOrdinal, prepared.askQuestionBatch)
 	}
 
 	wg.Wait()
-	if collector.fatalSnapshot() != nil {
-		clear(results)
-	}
 	var joined error
 	for _, err := range callErrs {
 		joined = errors.Join(joined, err)
 	}
 	if joined != nil {
-		return results, joined
+		return joined
 	}
-	return results, nil
+	return nil
 }
 
 func (t *defaultToolExecutor) resultGroupEffectBarrier(
@@ -246,21 +236,21 @@ func (t *defaultToolExecutor) executePreparedToolCall(
 	toolID toolspec.ID,
 	knownTool bool,
 	askBatch *tools.AskQuestionBatchMetadata,
-) (*completedToolResult, error) {
+) (tools.Result, bool, error) {
 	if !knownTool {
-		return &completedToolResult{result: tools.Result{CallID: call.ID, Name: toolspec.ID(call.Name), IsError: true, Output: mustJSON(map[string]any{"error": "unknown tool"}), Summary: textutil.Value("unknown tool")}}, nil
+		return tools.Result{CallID: call.ID, Name: toolspec.ID(call.Name), IsError: true, Output: mustJSON(map[string]any{"error": "unknown tool"}), Summary: textutil.Value("unknown tool")}, true, nil
 	}
 	if toolID == toolspec.ToolCompleteNode {
-		return &completedToolResult{result: t.executeCompleteNodeTool(ctx, stepID, call)}, nil
+		return t.executeCompleteNodeTool(ctx, stepID, call), true, nil
 	}
 	if toolID == toolspec.ToolWebSearch {
 		if err := tools.ValidateWebSearchInput(call.Input); err != nil {
-			return &completedToolResult{result: tools.ErrorResult(tools.Call{ID: call.ID, Name: toolID, Input: call.Input, RunID: runID, StepID: stepID}, tools.InvalidWebSearchQueryMessage)}, nil
+			return tools.ErrorResult(tools.Call{ID: call.ID, Name: toolID, Input: call.Input, RunID: runID, StepID: stepID}, tools.InvalidWebSearchQueryMessage), true, nil
 		}
 	}
 	handler, ok := t.engine.registry.Get(toolID)
 	if !ok {
-		return &completedToolResult{result: tools.Result{CallID: call.ID, Name: toolID, IsError: true, Output: mustJSON(map[string]any{"error": "unknown tool"}), Summary: textutil.Value("unknown tool")}}, nil
+		return tools.Result{CallID: call.ID, Name: toolID, IsError: true, Output: mustJSON(map[string]any{"error": "unknown tool"}), Summary: textutil.Value("unknown tool")}, true, nil
 	}
 	result, err := handler.Call(
 		tools.WithExecutionIdentity(ctx, tools.ExecutionIdentity{RunID: runID, StepID: stepID}),
@@ -270,7 +260,7 @@ func (t *defaultToolExecutor) executePreparedToolCall(
 		if errors.Is(err, context.Canceled) &&
 			ctx.Err() != nil &&
 			!toolResultHasCompletedOutcome(result) {
-			return nil, err
+			return tools.Result{}, false, err
 		}
 		if !toolResultHasCompletedOutcome(result) {
 			result = tools.Result{CallID: call.ID, Name: toolID, IsError: true, Output: mustJSON(map[string]any{"error": err.Error()}), Summary: textutil.Value(err.Error())}
@@ -278,7 +268,7 @@ func (t *defaultToolExecutor) executePreparedToolCall(
 	}
 	result.CallID = call.ID
 	result.Name = toolID
-	return &completedToolResult{result: tools.MaterializeModelWarnings(result)}, err
+	return tools.MaterializeModelWarnings(result), true, err
 }
 
 func toolResultHasCompletedOutcome(result tools.Result) bool {

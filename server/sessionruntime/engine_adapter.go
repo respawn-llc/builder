@@ -225,18 +225,11 @@ func (a *Authority) newRuntimeWiringFromPlan(resource *agentResource, store *ses
 		FilesystemContext:                   options.FilesystemContext,
 		StepLifecycle:                       resource,
 		DurabilityObserver:                  durabilityObserver,
-		LifecycleTaskFinished: func(taskErr error) error {
-			abort, abortErr := runtimeAbortFromError(taskErr)
-			if abort {
-				return errors.Join(
-					abortErr,
-					a.retireRuntimeAbortResource(context.Background(), resource),
-				)
-			}
-			return errors.Join(
-				abortErr,
-				a.closeRetiringResource(context.Background(), resource),
-			)
+		LifecycleTaskFinished: func() error {
+			return a.closeRetiringResource(context.Background(), resource)
+		},
+		LifecycleRuntimeAbort: func() error {
+			return a.retireRuntimeAbortResource(context.Background(), resource)
 		},
 		OnEvent: func(event runtime.Event) {
 			logger.Logf("%s", runlog.FormatRuntimeEvent(event))

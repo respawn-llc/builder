@@ -131,7 +131,8 @@ type Config struct {
 	GlobalConfigDir       string
 	OnEvent               func(Event)
 	StepLifecycle         StepLifecycleSink
-	LifecycleTaskFinished func(error) error
+	LifecycleTaskFinished func() error
+	LifecycleRuntimeAbort func() error
 	DurabilityObserver    ResultGroupDurabilityObserver
 }
 
@@ -479,7 +480,7 @@ func (e *Engine) ensureLifecycle() {
 	})
 }
 
-func (e *Engine) launchLifecycleTask(task func(context.Context) error) bool {
+func (e *Engine) launchLifecycleTask(task func(context.Context) *resultGroupFatal) bool {
 	if e == nil || task == nil {
 		return false
 	}
@@ -496,14 +497,17 @@ func (e *Engine) launchLifecycleTask(task func(context.Context) error) bool {
 	ctx := e.lifecycleCtx
 	e.lifecycleMu.Unlock()
 	go func(ctx context.Context) {
-		var taskErr error
+		var runtimeAbort *resultGroupFatal
 		defer func() {
 			e.lifecycleWG.Done()
 			if e.cfg.LifecycleTaskFinished != nil {
-				e.surfaceRunError(errors.Join(removePersistedRunCallbackErrors(taskErr), e.cfg.LifecycleTaskFinished(taskErr)))
+				e.surfaceRunError(e.cfg.LifecycleTaskFinished())
+			}
+			if runtimeAbort != nil && e.cfg.LifecycleRuntimeAbort != nil {
+				e.surfaceRunError(e.cfg.LifecycleRuntimeAbort())
 			}
 		}()
-		taskErr = task(ctx)
+		runtimeAbort = task(ctx)
 	}(ctx)
 	return true
 }
@@ -660,7 +664,7 @@ func (e *Engine) SubmitAgentSteerWithHooks(ctx context.Context, steer AgentSteer
 		return llm.Message{}, ErrEngineClosed
 	}
 	e.ensureOrchestrationCollaborators()
-	err = e.stepLifecycle.Run(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserTurn}, e.withRunErrorFeedbackBeforeStepClose(func(stepCtx context.Context, stepID string) error {
+	err = e.stepLifecycle.Run(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserTurn}, func(stepCtx context.Context, stepID string) error {
 		if onActive != nil {
 			onActive()
 		}
@@ -676,8 +680,8 @@ func (e *Engine) SubmitAgentSteerWithHooks(ctx context.Context, steer AgentSteer
 		msg, runErr := e.runStepLoop(stepCtx, stepID)
 		assistant = msg
 		return runErr
-	}))
-	e.finishRunErrorFeedback(err)
+	})
+	e.surfaceRunError(err)
 	return assistant, err
 }
 
@@ -690,7 +694,7 @@ func (e *Engine) submitUserMessage(ctx context.Context, text string, onActive fu
 	}
 
 	e.ensureOrchestrationCollaborators()
-	err = e.stepLifecycle.Run(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserTurn}, e.withRunErrorFeedbackBeforeStepClose(func(stepCtx context.Context, stepID string) error {
+	err = e.stepLifecycle.Run(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserTurn}, func(stepCtx context.Context, stepID string) error {
 		if onActive != nil {
 			onActive()
 		}
@@ -707,8 +711,8 @@ func (e *Engine) submitUserMessage(ctx context.Context, text string, onActive fu
 		msg, runErr := e.runStepLoop(stepCtx, stepID)
 		assistant = msg
 		return runErr
-	}))
-	e.finishRunErrorFeedback(err)
+	})
+	e.surfaceRunError(err)
 	return assistant, err
 }
 
@@ -721,15 +725,15 @@ func (e *Engine) SubmitWorkflowTurn(ctx context.Context) (assistant llm.Message,
 	}
 
 	e.ensureOrchestrationCollaborators()
-	err = e.stepLifecycle.RunNext(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindWorkflowTurn}, e.withRunErrorFeedbackBeforeStepClose(func(stepCtx context.Context, stepID string) error {
+	err = e.stepLifecycle.RunNext(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindWorkflowTurn}, func(stepCtx context.Context, stepID string) error {
 		if err := e.ensureMetaContextForRequest(stepCtx, stepID); err != nil {
 			return err
 		}
 		msg, runErr := e.runStepLoop(stepCtx, stepID)
 		assistant = msg
 		return runErr
-	}))
-	e.finishRunErrorFeedback(err)
+	})
+	e.surfaceRunError(err)
 	return assistant, err
 }
 
@@ -1097,7 +1101,6 @@ func (e *Engine) executeAcceptedToolCallsCoordinated(
 		postJoin, coordinateErr := e.coordinateAcceptedResponsePostJoin(
 			stepID,
 			prepared,
-			make([]*completedToolResult, len(prepared)),
 			collector,
 			fatal,
 		)
@@ -1153,11 +1156,10 @@ func (e *Engine) executeAcceptedToolCallsCoordinated(
 			)
 		}
 	}
-	completed, executeErr := e.toolFlow.ExecuteToolCalls(ctx, stepID, prepared, collector)
+	executeErr := e.toolFlow.ExecuteToolCalls(ctx, stepID, prepared, collector)
 	postJoin, err := e.coordinateAcceptedResponsePostJoin(
 		stepID,
 		prepared,
-		completed,
 		collector,
 		executeErr,
 	)
@@ -1176,22 +1178,18 @@ type acceptedResponsePostJoinOutcome struct {
 func (e *Engine) coordinateAcceptedResponsePostJoin(
 	stepID string,
 	prepared []executorToolCall,
-	completed []*completedToolResult,
 	collector *resultGroupCollector,
 	executeErr error,
 ) (acceptedResponsePostJoinOutcome, error) {
-	results := make([]tools.Result, len(completed))
-	for index, result := range completed {
-		if result != nil {
-			results[index] = result.result
-		}
-	}
 	if collector.fatalSnapshot() == nil {
-		for index, result := range completed {
-			if result != nil {
+		for _, preparedCall := range prepared {
+			call := preparedCall.call
+			if _, completed, resultErr := collector.result(call.ID); resultErr != nil {
+				e.abortResultGroupForOperationalFailure(stepID, collector, resultErr)
+				break
+			} else if completed {
 				continue
 			}
-			call := prepared[index].call
 			interrupted := missingToolOutputInterruptedResult(
 				call.ID,
 				toolspec.ID(call.Name),
@@ -1223,7 +1221,6 @@ func (e *Engine) coordinateAcceptedResponsePostJoin(
 				))
 				break
 			}
-			results[index] = interrupted
 		}
 	}
 	closeErr := e.steerRuntimeClose(
@@ -1233,6 +1230,10 @@ func (e *Engine) coordinateAcceptedResponsePostJoin(
 	var goalErr error
 	if fatal := collector.fatalSnapshot(); fatal != nil {
 		return acceptedResponsePostJoinOutcome{}, fatal
+	}
+	results, resultsErr := resultGroupResultsForPreparedCalls(collector, prepared)
+	if resultsErr != nil {
+		return acceptedResponsePostJoinOutcome{}, resultsErr
 	}
 	if closeErr != nil {
 		return acceptedResponsePostJoinOutcome{results: results}, closeErr
@@ -1245,4 +1246,25 @@ func (e *Engine) coordinateAcceptedResponsePostJoin(
 		results:     results,
 		semanticErr: executeErr,
 	}, nil
+}
+
+func resultGroupResultsForPreparedCalls(
+	collector *resultGroupCollector,
+	prepared []executorToolCall,
+) ([]tools.Result, error) {
+	results := make([]tools.Result, len(prepared))
+	for index, preparedCall := range prepared {
+		result, found, err := collector.result(preparedCall.call.ID)
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			return nil, fmt.Errorf(
+				"result group call %q has no completed result after close",
+				preparedCall.call.ID,
+			)
+		}
+		results[index] = result
+	}
+	return results, nil
 }

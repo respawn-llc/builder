@@ -130,7 +130,7 @@ type toolExecutor interface {
 		stepID string,
 		calls []executorToolCall,
 		collector *resultGroupCollector,
-	) ([]*completedToolResult, error)
+	) error
 }
 
 type messageLifecycle interface {

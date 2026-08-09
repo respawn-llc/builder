@@ -408,63 +408,6 @@ func TestServiceAppendCommittedEntryReplaysVisibility(t *testing.T) {
 	}
 }
 
-func TestServiceSubmitQueuedUserMessagesConsumesCommittedObserverError(t *testing.T) {
-	observerErr := errors.New("queued flush observer failed")
-	gate := sessiontest.NewPersistenceGate(runtimeControlTestSessionPersistence)
-	client := &runtimeControlFakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("seeded"), Phase: textutil.Value(llm.MessagePhaseFinal)},
-		Usage:     llm.Usage{WindowTokens: 200000},
-	}}}
-	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{}, session.WithPersistenceObserver(gate))
-	if _, err := engine.SubmitUserMessage(context.Background(), "seed"); err != nil {
-		t.Fatalf("seed runtime transcript: %v", err)
-	}
-	modelCallsBeforeSubmit := client.calls
-	entriesBeforeSubmit := engine.CommittedTranscriptEntryCount()
-	engine.QueueUserMessage("hello")
-	operations := runtimeops.NewCoordinator()
-	service.WithOperationCoordinator(operations)
-	ref := runtimeControlOperationRef(clientui.RuntimeOperationKindSubmitQueued)
-	req := serverapi.RuntimeSubmitQueuedUserMessagesRequest{
-		ClientRequestID: ref.ClientRequestID.String(),
-		SessionID:       store.Meta().SessionID,
-		OperationRef:    ref,
-	}
-	gate.FailNext(observerErr)
-
-	first, err := service.SubmitQueuedUserMessages(context.Background(), req)
-	if !errors.Is(err, observerErr) {
-		t.Fatalf("first queued submission error = %v, want observer error", err)
-	}
-	second, err := service.SubmitQueuedUserMessages(context.Background(), req)
-	if !errors.Is(err, observerErr) {
-		t.Fatalf("replayed queued submission error = %v, want cached observer error", err)
-	}
-	if first != second {
-		t.Fatalf("responses = (%+v, %+v), want identical replay", first, second)
-	}
-	if client.calls != modelCallsBeforeSubmit {
-		t.Fatalf("generate call count changed from %d to %d", modelCallsBeforeSubmit, client.calls)
-	}
-	if got := countUserMessagesWithContent(t, store, "hello"); got != 1 {
-		t.Fatalf("queued user flush count = %d, want 1", got)
-	}
-	if engine.HasQueuedUserWork() {
-		t.Fatal("committed queued flush retained retry ownership")
-	}
-	if got := engine.CommittedTranscriptEntryCount(); got != entriesBeforeSubmit+2 {
-		t.Fatalf(
-			"projected transcript entries = %d, want queued input and one diagnostic after %d",
-			got,
-			entriesBeforeSubmit,
-		)
-	}
-	snapshot := runtimeControlFeedSnapshot(t, operations, store.Meta().SessionID, []clientui.RuntimeOperationRef{ref})
-	if len(snapshot.Operations) != 1 || snapshot.Operations[0].State != clientui.RuntimeInputReconciliationSubmitted {
-		t.Fatalf("queued submission reconciliation = %+v, want submitted", snapshot)
-	}
-}
-
 func TestServiceDiscardQueuedUserMessageDedupesSuccessfulRetry(t *testing.T) {
 	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{})
 	firstQueued := mustQueueRuntimeControlMessage(t, engine, "same")
