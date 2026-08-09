@@ -305,7 +305,7 @@ describe("Board Task Search", () => {
     fireEvent.keyDown(input, { key: "Enter" });
 
     await waitFor(() => {
-      expect(openSidebarRoot).toHaveBeenCalledWith({
+      expect(openSidebarRoot.mock.calls[0]?.[0]).toEqual({
         kind: "taskDetail",
         mode: "overlay",
         taskID: "task-1",

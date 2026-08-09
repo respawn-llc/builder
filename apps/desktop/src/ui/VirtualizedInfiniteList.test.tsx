@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
+import { useLayoutEffect } from "react";
 
 import { VirtualizedInfiniteList } from "./VirtualizedInfiniteList";
 import {
@@ -98,6 +99,23 @@ describe("VirtualizedInfiniteList pixel restoration", () => {
 
     view.rerender(<List request={createVirtualizedPixelOffsetRequest("restore-2", 480)} />);
     expect(virtualizer.scrollToOffset).toHaveBeenLastCalledWith(480, { behavior: "auto" });
+  });
+
+  it("restores pixels before an owning layout effect can capture the initial anchor", () => {
+    const events: string[] = [];
+    virtualizer.scrollToOffset.mockImplementation(() => {
+      events.push("restore");
+    });
+    function LayoutOwner() {
+      useLayoutEffect(() => {
+        events.push("capture");
+      }, []);
+      return <List request={createVirtualizedPixelOffsetRequest("layout-order", 240)} />;
+    }
+
+    render(<LayoutOwner />);
+
+    expect(events).toEqual(["restore", "capture"]);
   });
 
   it("accepts absence without issuing a restoration request", () => {

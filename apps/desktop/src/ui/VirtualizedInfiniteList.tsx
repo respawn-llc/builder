@@ -284,7 +284,7 @@ export function VirtualizedInfiniteList<TItem>({
     virtualizer,
   ]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (
       validatedPixelOffsetRequest === undefined ||
       items.length === 0 ||
