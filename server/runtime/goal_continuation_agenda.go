@@ -170,11 +170,11 @@ func (e *Engine) startNextGoalContinuationLongWork(
 	if !e.idleBoundaryReductionEligible() || e.runtimeEvents == nil {
 		return nil
 	}
-	next, ok := e.boundaryAgenda.peekNext(idleBoundarySelection()).(*goalContinuationAgendaItem)
+	_, ok := e.boundaryAgenda.peekNext(idleBoundarySelection()).(*goalContinuationAgendaItem)
 	if !ok {
 		return nil
 	}
-	return e.startNextRuntimeBoundLongWork(admission, next.id)
+	return e.startNextRuntimeBoundLongWork(admission)
 }
 
 func (e *Engine) submitGoalContinuationRuntimeResult(

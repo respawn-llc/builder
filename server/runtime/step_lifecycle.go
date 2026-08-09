@@ -2,9 +2,9 @@ package runtime
 
 import (
 	"context"
-	"io"
 	"time"
 
+	"core/server/runtimecommand"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
@@ -41,30 +41,14 @@ type AgentStepOriginLifecycleSink interface {
 	) (AgentStepBoundaryTransfer, error)
 }
 
-type RuntimeBoundHumanExecutionLauncher interface {
-	RuntimeBoundExecutionRetainer
-	RegisterRuntimeBoundHumanExecution(context.Context) (RuntimeBoundHumanExecution, error)
+type RuntimeBoundExecutionLauncher interface {
+	RegisterRuntimeBoundExecution(
+		runtimecommand.Admission,
+	) (RuntimeBoundExecution, error)
 }
 
-type RuntimeBoundExecutionRetainer interface {
-	RetainRuntimeBoundExecution(context.Context) (io.Closer, error)
-}
-
-type RuntimeBoundHumanExecution interface {
-	Launch(context.Context) error
-}
-
-type RuntimeBoundLongExecutionLauncher interface {
-	RuntimeBoundExecutionRetainer
-	RegisterRuntimeBoundLongExecution(context.Context) (RuntimeBoundLongExecution, error)
-}
-
-type RuntimeBoundLongExecution interface {
-	Launch(
-		context.Context,
-		func(context.Context, *Engine) error,
-	) (runtimeids.ExecutionScopeID, error)
-	Cancel(context.Context) error
+type RuntimeBoundExecution interface {
+	Start(func(context.Context, *Engine) error) runtimeids.ExecutionScopeID
 }
 
 type AgentStepScopeLifecycle interface {

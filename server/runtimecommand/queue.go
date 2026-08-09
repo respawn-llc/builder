@@ -11,8 +11,11 @@ const waitingEventLimit = 10_000
 var ErrUnavailable = errors.New("runtime event queue unavailable")
 
 type Queue struct {
+	parent context.Context
 	ctx    context.Context
 	cancel context.CancelFunc
+
+	stopParentCancellation func() bool
 
 	ingress chan submission
 	work    chan queuedEvent
@@ -43,8 +46,9 @@ type resultSettler interface {
 }
 
 func NewQueue(parent context.Context) *Queue {
-	ctx, cancel := context.WithCancel(parent)
+	ctx, cancel := context.WithCancel(context.Background())
 	queue := &Queue{
+		parent:      parent,
 		ctx:         ctx,
 		cancel:      cancel,
 		ingress:     make(chan submission),
@@ -54,6 +58,7 @@ func NewQueue(parent context.Context) *Queue {
 		closed:      make(chan struct{}),
 		outstanding: make(map[resultSettler]struct{}),
 	}
+	queue.stopParentCancellation = context.AfterFunc(parent, queue.beginClose)
 	go queue.runBroker()
 	go queue.runWorker()
 	go queue.finishClose()
@@ -64,10 +69,17 @@ func (q *Queue) Close() {
 	if q == nil {
 		return
 	}
+	if q.stopParentCancellation != nil {
+		q.stopParentCancellation()
+	}
+	q.beginClose()
+	<-q.closed
+}
+
+func (q *Queue) beginClose() {
 	q.outstandingMu.Lock()
 	q.cancel()
 	q.outstandingMu.Unlock()
-	<-q.closed
 }
 
 func (q *Queue) runBroker() {
@@ -134,7 +146,7 @@ func (q *Queue) finishClose() {
 func (q *Queue) track(result resultSettler) bool {
 	q.outstandingMu.Lock()
 	defer q.outstandingMu.Unlock()
-	if q.ctx.Err() != nil {
+	if q.ctx.Err() != nil || q.parent.Err() != nil {
 		return false
 	}
 	q.outstanding[result] = struct{}{}
@@ -259,7 +271,10 @@ func (d *Deferred[Result]) complete(value Result, err error) {
 	}
 	d.queue.outstandingMu.Lock()
 	defer d.queue.outstandingMu.Unlock()
-	if d.queue.ctx.Err() != nil {
+	if d.queue.ctx.Err() != nil ||
+		d.queue.parent.Err() != nil ||
+		parentCancellationWon(d.queue.parent) {
+		d.queue.cancel()
 		var zero Result
 		value = zero
 		err = ErrUnavailable
@@ -274,6 +289,18 @@ func (d *Deferred[Result]) complete(value Result, err error) {
 	d.value = value
 	d.err = err
 	close(d.done)
+}
+
+func parentCancellationWon(parent context.Context) bool {
+	canceled := make(chan struct{})
+	stop := context.AfterFunc(parent, func() {
+		close(canceled)
+	})
+	if stop() {
+		return false
+	}
+	<-canceled
+	return true
 }
 
 func (d *Deferred[Result]) settle(err error) {

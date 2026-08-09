@@ -19,6 +19,8 @@ import (
 	creackpty "github.com/creack/pty"
 )
 
+const postExitDrainWait = time.Second
+
 func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -368,14 +370,19 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 		timeout = errors.Is(ctx.Err(), context.DeadlineExceeded)
 	case <-ctx.Done():
 		timeout = errors.Is(ctx.Err(), context.DeadlineExceeded)
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
-		}
+		eventErrors.Add(signalProcessGroup(cmd.Process.Pid, syscall.SIGKILL))
 		waitErr = <-waitDone
 	}
 	cancel()
 	eventWG.Wait()
-	<-readDone
+	select {
+	case <-readDone:
+	case <-time.After(postExitDrainWait):
+		eventErrors.Add(signalProcessGroup(cmd.Process.Pid, syscall.SIGKILL))
+		_ = ptmx.Close()
+		<-readDone
+	}
+	eventErrors.Add(signalProcessGroup(cmd.Process.Pid, syscall.SIGKILL))
 	_ = ptmx.Close()
 	<-analysisDone
 	readinessErr := readiness.Close()

@@ -204,11 +204,11 @@ func (e *Engine) startNextBackgroundLongWork(admission runtimeEventAdmission) er
 	if !e.idleBoundaryReductionEligible() || e.runtimeEvents == nil {
 		return nil
 	}
-	next, ok := e.boundaryAgenda.peekNext(idleBoundarySelection()).(*backgroundNoticeAgendaItem)
+	_, ok := e.boundaryAgenda.peekNext(idleBoundarySelection()).(*backgroundNoticeAgendaItem)
 	if !ok {
 		return nil
 	}
-	return e.startNextRuntimeBoundLongWork(admission, next.id)
+	return e.startNextRuntimeBoundLongWork(admission)
 }
 
 func (e *Engine) runBackgroundNoticeSelection(

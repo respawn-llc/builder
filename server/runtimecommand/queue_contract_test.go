@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -308,18 +309,19 @@ func testQueueCancellationBoundaries(t *testing.T) {
 }
 
 func testQueueCloseSettlement(t *testing.T) {
-	t.Run("parent cancellation overrides a dispatched handler completion", func(t *testing.T) {
-		parent, cancel := context.WithCancel(context.Background())
+	t.Run("parent cancellation linearizes while a handler completion is settling", func(t *testing.T) {
+		parent := newControlledCancellationContext()
 		queue := runtimecommand.NewQueue(parent)
 		t.Cleanup(queue.Close)
 		started := make(chan struct{})
+		completeNow := make(chan struct{})
 		deferred, err := runtimecommand.Submit(context.Background(), queue, 1, func(
-			scope runtimecommand.Admission,
+			_ runtimecommand.Admission,
 			value int,
 			complete func(int, error),
 		) error {
 			close(started)
-			<-scope.Context().Done()
+			<-completeNow
 			complete(value, nil)
 			return nil
 		})
@@ -327,7 +329,10 @@ func testQueueCloseSettlement(t *testing.T) {
 			t.Fatalf("submit dispatched event: %v", err)
 		}
 		waitSignal(t, started)
-		cancel()
+		close(completeNow)
+		waitSignal(t, parent.completionErrEntered)
+		parent.Cancel()
+		close(parent.releaseCompletionErr)
 		if _, err := deferred.Await(context.Background()); !errors.Is(err, runtimecommand.ErrUnavailable) {
 			t.Fatalf("handler completion after parent cancellation = %v, want runtime unavailable", err)
 		}
@@ -376,6 +381,44 @@ func testQueueCloseSettlement(t *testing.T) {
 	if deferred, err := runtimecommand.Submit(context.Background(), queue, 99, recordingHandler(make(chan int, 1))); !errors.Is(err, runtimecommand.ErrUnavailable) || deferred != nil {
 		t.Fatalf("submit after close = (%v, %v), want nil and runtime unavailable", deferred, err)
 	}
+}
+
+type controlledCancellationContext struct {
+	context.Context
+	done                 chan struct{}
+	errChecks            atomic.Int32
+	completionErrEntered chan struct{}
+	releaseCompletionErr chan struct{}
+}
+
+func newControlledCancellationContext() *controlledCancellationContext {
+	return &controlledCancellationContext{
+		Context:              context.Background(),
+		done:                 make(chan struct{}),
+		completionErrEntered: make(chan struct{}),
+		releaseCompletionErr: make(chan struct{}),
+	}
+}
+
+func (c *controlledCancellationContext) Done() <-chan struct{} {
+	return c.done
+}
+
+func (c *controlledCancellationContext) Err() error {
+	if c.errChecks.Add(1) == 2 {
+		close(c.completionErrEntered)
+		<-c.releaseCompletionErr
+	}
+	select {
+	case <-c.done:
+		return context.Canceled
+	default:
+		return nil
+	}
+}
+
+func (c *controlledCancellationContext) Cancel() {
+	close(c.done)
 }
 
 func testQueueOwnedWorkCancellation(t *testing.T) {

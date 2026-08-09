@@ -7,9 +7,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -71,6 +74,53 @@ func TestRunCommandPreservesEmptyCapture(t *testing.T) {
 	}
 	if !analysis.Screen.IsBlank() {
 		t.Fatalf("screen should be blank: %#v", analysis.Screen)
+	}
+}
+
+func TestRunCommandBoundsDrainWhenDescendantRetainsPTY(t *testing.T) {
+	pidPath := filepath.Join(t.TempDir(), "descendant.pid")
+	binary := buildHelper(t)
+	started := time.Now()
+	capture, err := driver.RunCommand(context.Background(), driver.CommandSpec{
+		Path:       binary,
+		Args:       []string{"retain-pty"},
+		Env:        []string{"PID_FILE=" + pidPath},
+		Dimensions: pty.MustDimensions(2, 8),
+	})
+	if err != nil {
+		t.Fatalf("RunCommand: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 3*time.Second {
+		t.Fatalf("RunCommand bounded PTY drain in %s, want at most 3s", elapsed)
+	}
+	if capture.ProcessExit == nil || capture.ProcessExit.Code != 0 {
+		t.Fatalf("process exit = %#v, want direct child code 0", capture.ProcessExit)
+	}
+	if !capture.ReadLoopDone {
+		t.Fatal("read loop completion not recorded after descendant cleanup")
+	}
+	pidBytes, err := os.ReadFile(pidPath)
+	if err != nil {
+		t.Fatalf("read retained PTY descendant pid: %v", err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(pidBytes)))
+	if err != nil {
+		t.Fatalf("parse retained PTY descendant pid: %v", err)
+	}
+	defer func() { _ = syscall.Kill(pid, syscall.SIGKILL) }()
+	deadline := time.Now().Add(time.Second)
+	for {
+		err := syscall.Kill(pid, 0)
+		if errors.Is(err, syscall.ESRCH) {
+			return
+		}
+		if err != nil {
+			t.Fatalf("inspect retained PTY descendant: %v", err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("RunCommand left a PTY descendant alive after direct-child exit")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

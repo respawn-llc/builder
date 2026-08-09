@@ -66,10 +66,6 @@ type CurrentAgentResource struct{}
 
 func (CurrentAgentResource) agentResourceSelection() {}
 
-type runtimeBoundAgentResource struct{}
-
-func (runtimeBoundAgentResource) agentResourceSelection() {}
-
 type OpenAgentResource struct{}
 
 func (OpenAgentResource) agentResourceSelection() {}
@@ -858,9 +854,15 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 			start agentExecutionStart,
 			complete func(*execution, error),
 		) error {
-			execution, startErr := a.admitAgentExecutionStart(admission, start)
+			if startErr := admission.StartWork(func(context.Context) {
+				close(start.launchReady)
+			}); startErr != nil {
+				complete(nil, startErr)
+				return startErr
+			}
+			execution, startErr := a.admitAgentExecutionStart(start, nil)
 			complete(execution, startErr)
-			return nil
+			return startErr
 		},
 	)
 	if err != nil {
@@ -909,17 +911,9 @@ type agentExecutionStart struct {
 }
 
 func (a *Authority) admitAgentExecutionStart(
-	admission runtimecommand.Admission,
 	start agentExecutionStart,
+	reducerBoundary *reducerBoundaryRecord,
 ) (*execution, error) {
-	if start.launchReady == nil {
-		return nil, errors.New("Agent execution launch boundary is required")
-	}
-	if err := admission.StartWork(func(context.Context) {
-		close(start.launchReady)
-	}); err != nil {
-		return nil, err
-	}
 	request := start.request
 	resource := start.resource
 	closeResource := start.closeResource
@@ -954,20 +948,23 @@ func (a *Authority) admitAgentExecutionStart(
 		}
 	}
 	resource.mu.Lock()
-	_, acceptedRuntimeBoundWork := request.Resource.(runtimeBoundAgentResource)
-	if resource.ownerlessDisposition == agentResourceRetireWhenIdle &&
-		len(resource.owners) == 0 &&
-		!acceptedRuntimeBoundWork {
+	if reducerBoundary != nil {
+		if resource.reducerBoundary != reducerBoundary ||
+			reducerBoundary.phase != reducerBoundaryActive {
+			resource.mu.Unlock()
+			a.mu.Unlock()
+			return nil, runtimeUnavailableError(resource.ref)
+		}
+	} else if resource.reducerBoundary != nil {
 		resource.mu.Unlock()
 		a.mu.Unlock()
 		return nil, errors.Join(
-			runtimeUnavailableError(resource.ref),
-			errors.New("agent execution start rejected because ownerless runtime retirement is pending"),
+			ErrSessionRunActive,
+			fmt.Errorf("session %s already has owned reducer Boundary", sessionID),
 		)
 	}
 	if resource.current != nil ||
-		resource.worktreeBoundary != nil ||
-		resource.reducerBoundary != nil {
+		resource.worktreeBoundary != nil {
 		resource.mu.Unlock()
 		a.mu.Unlock()
 		return nil, errors.Join(
@@ -1069,6 +1066,14 @@ func (a *Authority) admitAgentExecutionStart(
 		resource.askScope = &scopeID
 	}
 	resource.current = execution
+	if reducerBoundary != nil {
+		if _, err := resource.releaseReducerBoundaryLocked(reducerBoundary); err != nil {
+			resource.current = nil
+			resource.mu.Unlock()
+			a.mu.Unlock()
+			return nil, err
+		}
+	}
 	resource.signalLocked()
 	resource.mu.Unlock()
 	a.byScope[scope.ID()] = execution
@@ -1249,7 +1254,7 @@ func (a *Authority) selectResource(
 ) (*agentResource, bool, error) {
 	sessionID := descriptor.SessionID()
 	switch selection.(type) {
-	case CurrentAgentResource, runtimeBoundAgentResource:
+	case CurrentAgentResource:
 		a.mu.Lock()
 		resource := a.resources[sessionID]
 		a.mu.Unlock()

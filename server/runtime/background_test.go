@@ -4,12 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"sync"
 	"testing"
 	"time"
 
 	"core/server/llm"
+	"core/server/runtimecommand"
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/tools"
@@ -272,14 +272,14 @@ func (l *backgroundExecutionLauncher) AgentStepBoundary(
 	return AgentStepReducerBoundary{Grant: backgroundReducerGrant{}}, nil
 }
 
-func (l *backgroundExecutionLauncher) RegisterRuntimeBoundLongExecution(
-	context.Context,
-) (RuntimeBoundLongExecution, error) {
+func (l *backgroundExecutionLauncher) RegisterRuntimeBoundExecution(
+	runtimecommand.Admission,
+) (RuntimeBoundExecution, error) {
+	l.mu.Lock()
+	l.scopeID = runtimeids.NewExecutionScopeID()
+	l.active = true
+	l.mu.Unlock()
 	return &backgroundTestExecution{launcher: l}, nil
-}
-
-func (*backgroundExecutionLauncher) RetainRuntimeBoundExecution(context.Context) (io.Closer, error) {
-	return backgroundExecutionRetention{}, nil
 }
 
 func (l *backgroundExecutionLauncher) awaitLaunch(t *testing.T) backgroundExecutionLaunch {
@@ -297,29 +297,26 @@ type backgroundTestExecution struct {
 	launcher *backgroundExecutionLauncher
 }
 
-type backgroundExecutionRetention struct{}
-
-func (backgroundExecutionRetention) Close() error {
-	return nil
-}
-
-func (e *backgroundTestExecution) Launch(
-	ctx context.Context,
+func (e *backgroundTestExecution) Start(
 	work func(context.Context, *Engine) error,
-) (runtimeids.ExecutionScopeID, error) {
-	err := work(ctx, e.launcher.engine)
+) runtimeids.ExecutionScopeID {
 	e.launcher.mu.Lock()
-	launch := backgroundExecutionLaunch{
-		scopeID: e.launcher.scopeID,
-		origin:  e.launcher.origin,
-	}
+	scopeID := e.launcher.scopeID
 	e.launcher.mu.Unlock()
-	e.launcher.launched <- launch
-	return launch.scopeID, err
-}
-
-func (*backgroundTestExecution) Cancel(context.Context) error {
-	return nil
+	go func() {
+		if err := work(context.Background(), e.launcher.engine); err != nil {
+			e.launcher.engine.surfaceRunError(err)
+		}
+		e.launcher.mu.Lock()
+		launch := backgroundExecutionLaunch{
+			scopeID: scopeID,
+			origin:  e.launcher.origin,
+		}
+		e.launcher.active = false
+		e.launcher.mu.Unlock()
+		e.launcher.launched <- launch
+	}()
+	return scopeID
 }
 
 type backgroundReducerGrant struct{}

@@ -2,14 +2,14 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 
 	"core/server/llm"
 	"core/server/session"
 	"core/shared/runtimeids"
 	"core/shared/textutil"
-	"errors"
-	"strings"
 )
 
 var errInvalidQueuedUserMessage = errors.New("queued message requires a role and content")
@@ -102,32 +102,23 @@ func (e *Engine) acceptHumanAgendaItem(
 }
 
 func (e *Engine) startRuntimeBoundHumanExecution(admission runtimeEventAdmission) error {
-	launcher, ok := e.cfg.StepLifecycle.(RuntimeBoundHumanExecutionLauncher)
+	launcher, ok := e.cfg.StepLifecycle.(RuntimeBoundExecutionLauncher)
 	if !ok || e.runtimeEvents == nil {
 		return nil
 	}
-	retention, err := launcher.RetainRuntimeBoundExecution(admission.Context())
+	execution, err := launcher.RegisterRuntimeBoundExecution(
+		admission.command,
+	)
 	if err != nil {
-		return err
+		e.surfaceRunError(err)
+		e.settleIdleHumanAgendaItems(err)
+		return nil
 	}
-	startErr := admission.startWork(func(workCtx context.Context) {
-		execution, registerErr := launcher.RegisterRuntimeBoundHumanExecution(workCtx)
-		registerErr = errors.Join(registerErr, retention.Close())
-		if registerErr != nil {
-			e.surfaceRunError(registerErr)
-			e.failIdleHumanAgendaItems(registerErr)
-			return
-		}
-		if execution == nil {
-			return
-		}
-		if launchErr := execution.Launch(workCtx); launchErr != nil {
-			e.surfaceRunError(launchErr)
-			e.failIdleHumanAgendaItems(launchErr)
-		}
-	})
-	if startErr != nil {
-		return errors.Join(startErr, retention.Close())
+	if execution != nil {
+		execution.Start(func(ctx context.Context, engine *Engine) error {
+			_, runErr := engine.SubmitQueuedUserMessages(ctx)
+			return runErr
+		})
 	}
 	return nil
 }
@@ -147,19 +138,9 @@ func (e *Engine) AgentExecutionScopeReleased(scopeID runtimeids.ExecutionScopeID
 	return err
 }
 
-func (e *Engine) failIdleHumanAgendaItems(cause error) {
-	_, err := submitRuntimeEvent(
-		e,
-		cause,
-		func(_ runtimeEventAdmission, failure error) (struct{}, error) {
-			for _, item := range e.boundaryAgenda.selectHumanItems(idleBoundarySelection()) {
-				item.settleBoundaryAgenda(failure)
-			}
-			return struct{}{}, nil
-		},
-	)
-	if err != nil && !errors.Is(err, ErrEngineClosed) {
-		e.surfaceRunError(err)
+func (e *Engine) settleIdleHumanAgendaItems(cause error) {
+	for _, item := range e.boundaryAgenda.selectHumanItems(idleBoundarySelection()) {
+		item.settleBoundaryAgenda(cause)
 	}
 }
 

@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-
-	"core/shared/runtimeids"
 )
 
 type boundaryLongWork interface {
@@ -35,12 +33,6 @@ type boundaryLongAgendaItem interface {
 type boundaryLongWorkResult struct {
 	id  boundaryAgendaItemID
 	err error
-}
-
-type runtimeBoundLongPreparation struct {
-	id        boundaryAgendaItemID
-	execution RuntimeBoundLongExecution
-	err       error
 }
 
 type boundaryLongOrchestrator struct {
@@ -100,9 +92,8 @@ func (e *Engine) reduceIdleBoundary(admission runtimeEventAdmission) (resultErr 
 
 func (e *Engine) startNextRuntimeBoundLongWork(
 	admission runtimeEventAdmission,
-	id boundaryAgendaItemID,
 ) error {
-	launcher, hasLauncher := e.cfg.StepLifecycle.(RuntimeBoundLongExecutionLauncher)
+	launcher, hasLauncher := e.cfg.StepLifecycle.(RuntimeBoundExecutionLauncher)
 	scopes, hasScopeOwner := e.cfg.StepLifecycle.(AgentStepScopeLifecycle)
 	activeExecution := !hasScopeOwner
 	if hasScopeOwner {
@@ -114,84 +105,35 @@ func (e *Engine) startNextRuntimeBoundLongWork(
 	if !hasLauncher {
 		return nil
 	}
-	retention, err := launcher.RetainRuntimeBoundExecution(admission.Context())
+	execution, err := launcher.RegisterRuntimeBoundExecution(
+		admission.command,
+	)
 	if err != nil {
-		return err
-	}
-	startErr := admission.startWork(func(workCtx context.Context) {
-		execution, registerErr := launcher.RegisterRuntimeBoundLongExecution(workCtx)
-		registerErr = errors.Join(registerErr, retention.Close())
-		if execution == nil && registerErr == nil {
-			return
-		}
-		_, submitErr := submitRuntimeEventWithContext(
-			e.lifecycleCtx,
-			e.lifecycleCtx,
-			e,
-			runtimeBoundLongPreparation{
-				id:        id,
-				execution: execution,
-				err:       registerErr,
-			},
-			e.applyRuntimeBoundLongPreparation,
-		)
-		if submitErr != nil {
-			if execution != nil {
-				submitErr = errors.Join(submitErr, execution.Cancel(workCtx))
-			}
-			e.surfaceRunError(submitErr)
-		}
-	})
-	if startErr != nil {
-		return errors.Join(startErr, retention.Close())
-	}
-	return nil
-}
-
-func (e *Engine) applyRuntimeBoundLongPreparation(
-	admission runtimeEventAdmission,
-	preparation runtimeBoundLongPreparation,
-) (struct{}, error) {
-	next := e.boundaryAgenda.peekNext(idleBoundarySelection())
-	if next == nil || next.agendaID() != preparation.id {
-		if preparation.execution == nil {
-			return struct{}{}, e.reduceIdleBoundary(admission)
-		}
-		cancelErr := admission.startWork(func(workCtx context.Context) {
-			e.surfaceRunError(preparation.execution.Cancel(workCtx))
-		})
-		return struct{}{}, errors.Join(cancelErr, e.reduceIdleBoundary(admission))
-	}
-	if preparation.err != nil {
-		selected, err := e.longBoundary.selectNext(
+		selected, selectionErr := e.longBoundary.selectNext(
 			e.boundaryAgenda,
 			idleBoundarySelection(),
 		)
-		if err != nil || selected == nil {
-			return struct{}{}, err
+		if selectionErr != nil || selected == nil {
+			return errors.Join(err, selectionErr)
 		}
 		_, settleErr := e.longBoundary.settle(boundaryLongWorkResult{
 			id:  selected.longWorkID(),
-			err: preparation.err,
+			err: err,
 		})
-		return struct{}{}, errors.Join(
-			preparation.err,
-			settleErr,
-			e.reduceIdleBoundary(admission),
-		)
+		return errors.Join(err, settleErr)
 	}
-	if preparation.execution == nil {
-		return struct{}{}, nil
+	if execution == nil {
+		return nil
 	}
-	return struct{}{}, e.launchNextRuntimeBoundLongWork(
+	return e.launchNextRuntimeBoundLongWork(
 		admission,
-		preparation.execution,
+		execution,
 	)
 }
 
 func (e *Engine) launchNextRuntimeBoundLongWork(
 	admission runtimeEventAdmission,
-	execution RuntimeBoundLongExecution,
+	execution RuntimeBoundExecution,
 ) error {
 	selected, err := e.longBoundary.selectNext(
 		e.boundaryAgenda,
@@ -213,29 +155,31 @@ func (e *Engine) launchNextRuntimeBoundLongWork(
 				id:  selected.longWorkID(),
 				err: err,
 			})
-			return errors.Join(settleErr, e.reduceIdleBoundary(admission))
+			joined := errors.Join(err, settleErr, e.reduceIdleBoundary(admission))
+			if execution != nil {
+				execution.Start(func(context.Context, *Engine) error {
+					return joined
+				})
+			}
+			return joined
 		}
+	}
+	if execution != nil {
+		releasedScope := execution.Start(func(workCtx context.Context, _ *Engine) error {
+			runErr := selected.runLongWork(workCtx, e)
+			runtimeBound.completeRuntimeBoundLongWork(e, runErr)
+			return runErr
+		})
+		if releasedScope.IsZero() {
+			panic("runtime-bound long execution returned no Exact Execution Scope")
+		}
+		return nil
 	}
 	transferErr := e.transferBoundaryLongWork(
 		admission,
 		selected,
 		func(workCtx context.Context) {
-			var runErr error
-			if execution == nil {
-				runErr = selected.runLongWork(workCtx, e)
-			} else {
-				var releasedScope runtimeids.ExecutionScopeID
-				releasedScope, runErr = execution.Launch(
-					workCtx,
-					selected.runLongWork,
-				)
-				if releasedScope.IsZero() {
-					runErr = errors.Join(
-						runErr,
-						errors.New("runtime-bound long execution returned no released Exact Execution Scope"),
-					)
-				}
-			}
+			runErr := selected.runLongWork(workCtx, e)
 			runtimeBound.completeRuntimeBoundLongWork(e, runErr)
 		},
 	)
@@ -244,13 +188,7 @@ func (e *Engine) launchNextRuntimeBoundLongWork(
 			failed.failLongWorkTransfer(e)
 		}
 	}
-	if transferErr == nil || execution == nil {
-		return transferErr
-	}
-	cancelErr := admission.startWork(func(workCtx context.Context) {
-		e.surfaceRunError(execution.Cancel(workCtx))
-	})
-	return errors.Join(transferErr, cancelErr)
+	return transferErr
 }
 
 func (o *boundaryLongOrchestrator) selectNext(

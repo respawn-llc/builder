@@ -3,145 +3,89 @@ package sessionruntime
 import (
 	"context"
 	"errors"
-	"io"
 
 	"core/server/runtime"
+	"core/server/runtimecommand"
 	"core/server/session"
 	"core/shared/runtimeids"
 )
 
-type runtimeBoundHumanExecution struct {
-	start  chan struct{}
-	handle ExecutionHandle
+type runtimeBoundExecution struct {
+	work    chan func(context.Context, *runtime.Engine) error
+	scopeID runtimeids.ExecutionScopeID
 }
 
-type runtimeBoundLongExecution struct {
-	start  chan struct{}
-	work   chan func(context.Context, *runtime.Engine) error
-	handle ExecutionHandle
-}
-
-func (r *agentResource) RetainRuntimeBoundExecution(ctx context.Context) (io.Closer, error) {
-	if err := context.Cause(ctx); err != nil {
-		return nil, err
+func (r *agentResource) RegisterRuntimeBoundExecution(
+	admission runtimecommand.Admission,
+) (runtime.RuntimeBoundExecution, error) {
+	if !admission.Owns(r.events) {
+		return nil, errors.New("runtime-bound execution requires its Resource Generation admission")
 	}
-	return r.authority.retainResource(r.ref)
-}
-
-func (r *agentResource) RegisterRuntimeBoundHumanExecution(
-	ctx context.Context,
-) (runtime.RuntimeBoundHumanExecution, error) {
-	start := make(chan struct{})
-	handle, err := r.startRuntimeBoundExecution(
-		ctx,
-		func(executionCtx context.Context, bridge AgentRuntimeBridge) error {
-			select {
-			case <-start:
-			case <-executionCtx.Done():
-				return context.Cause(executionCtx)
-			}
-			return bridge.WithEngine(
-				executionCtx,
-				func(engineCtx context.Context, engine *runtime.Engine) error {
-					_, runErr := engine.SubmitQueuedUserMessages(engineCtx)
-					return runErr
-				},
-			)
-		},
-	)
-	if errors.Is(err, ErrSessionRunActive) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &runtimeBoundHumanExecution{start: start, handle: handle}, nil
-}
-
-func (r *agentResource) RegisterRuntimeBoundLongExecution(
-	ctx context.Context,
-) (runtime.RuntimeBoundLongExecution, error) {
-	start := make(chan struct{})
-	work := make(chan func(context.Context, *runtime.Engine) error, 1)
-	handle, err := r.startRuntimeBoundExecution(
-		ctx,
-		func(executionCtx context.Context, bridge AgentRuntimeBridge) error {
-			select {
-			case <-start:
-			case <-executionCtx.Done():
-				return context.Cause(executionCtx)
-			}
-			run := <-work
-			return bridge.WithEngine(
-				executionCtx,
-				func(engineCtx context.Context, engine *runtime.Engine) error {
-					return run(engineCtx, engine)
-				},
-			)
-		},
-	)
-	if errors.Is(err, ErrSessionRunActive) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &runtimeBoundLongExecution{
-		start:  start,
-		work:   work,
-		handle: handle,
-	}, nil
-}
-
-func (r *agentResource) startRuntimeBoundExecution(
-	ctx context.Context,
-	run func(context.Context, AgentRuntimeBridge) error,
-) (ExecutionHandle, error) {
 	descriptor, err := session.NewOpenSessionDescriptor(r.ref.SessionID())
 	if err != nil {
 		return nil, err
 	}
-	return r.authority.StartAgentExecution(ctx, AgentExecutionRequest{
+	work := make(chan func(context.Context, *runtime.Engine) error, 1)
+	request := AgentExecutionRequest{
 		Descriptor: descriptor,
-		Resource:   runtimeBoundAgentResource{},
+		Resource:   CurrentAgentResource{},
 		Runner: func(
 			executionCtx context.Context,
 			_ ExecutionScope,
 			bridge AgentRuntimeBridge,
 		) error {
-			return run(executionCtx, bridge)
+			select {
+			case run := <-work:
+				return bridge.WithEngine(executionCtx, run)
+			case <-executionCtx.Done():
+				return context.Cause(executionCtx)
+			}
 		},
-	})
-}
-
-func (e *runtimeBoundHumanExecution) Launch(ctx context.Context) error {
-	if e == nil || e.handle == nil || e.start == nil {
-		return errors.New("runtime-bound human execution is uninitialized")
 	}
-	close(e.start)
-	_, err := e.handle.Wait(ctx)
-	return err
+	var execution *execution
+	if err := admission.StartWork(func(context.Context) {
+		if execution == nil {
+			return
+		}
+		launchErr := r.engine.LaunchAgentExecution(
+			func(workCtx context.Context) error {
+				return r.authority.runAgentExecution(workCtx, execution, request)
+			},
+			func(runErr error) {
+				execution.finish(ExecutionResult{}, runErr, nil)
+			},
+		)
+		if launchErr != nil {
+			execution.finish(ExecutionResult{}, launchErr, nil)
+		}
+	}); err != nil {
+		return nil, err
+	}
+	r.mu.Lock()
+	reducerBoundary := r.reducerBoundary
+	r.mu.Unlock()
+	if reducerBoundary == nil {
+		return nil, errors.New("runtime-bound execution requires active idle Boundary ownership")
+	}
+	execution, err = r.authority.admitAgentExecutionStart(agentExecutionStart{
+		request:  request,
+		resource: r,
+	}, reducerBoundary)
+	if errors.Is(err, ErrSessionRunActive) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &runtimeBoundExecution{work: work, scopeID: execution.scope.ID()}, nil
 }
 
-func (e *runtimeBoundLongExecution) Launch(
-	ctx context.Context,
+func (e *runtimeBoundExecution) Start(
 	work func(context.Context, *runtime.Engine) error,
-) (runtimeids.ExecutionScopeID, error) {
-	if e == nil || e.handle == nil || e.start == nil || e.work == nil || work == nil {
-		return runtimeids.ExecutionScopeID{}, errors.New("runtime-bound long execution is uninitialized")
+) runtimeids.ExecutionScopeID {
+	if e == nil || e.scopeID.IsZero() || e.work == nil || work == nil {
+		panic("runtime-bound execution is uninitialized")
 	}
-	scopeID := e.handle.Scope().ID()
 	e.work <- work
-	close(e.start)
-	_, err := e.handle.Wait(ctx)
-	return scopeID, err
-}
-
-func (e *runtimeBoundLongExecution) Cancel(ctx context.Context) error {
-	if e == nil || e.handle == nil {
-		return errors.New("runtime-bound long execution is uninitialized")
-	}
-	e.handle.RequestStop()
-	_, err := e.handle.Wait(ctx)
-	return err
+	return e.scopeID
 }

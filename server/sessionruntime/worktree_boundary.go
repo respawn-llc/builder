@@ -446,6 +446,10 @@ func (g *idleReducerBoundaryGrant) Release() (bool, error) {
 	}
 	resource.mu.Lock()
 	defer resource.mu.Unlock()
+	if g.record.phase == reducerBoundaryReleased &&
+		resource.reducerBoundary != g.record {
+		return false, nil
+	}
 	return resource.releaseReducerBoundaryLocked(g.record)
 }
 
