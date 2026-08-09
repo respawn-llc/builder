@@ -298,6 +298,9 @@ func New(
 		currentNodeExecution: newCurrentNodeExecutionState(cfg.CurrentNodeExecution),
 		compactionPlanner:    newCompactionPlanner(),
 	}
+	if cfg.CurrentNodeExecution != nil {
+		eng.agentSteps.scopeID = cfg.CurrentNodeExecution.ScopeID
+	}
 	providerCapabilities, err := eng.providerCapabilities(context.Background())
 	if err != nil {
 		return nil, fmt.Errorf("resolve provider capabilities during runtime construction: %w", err)

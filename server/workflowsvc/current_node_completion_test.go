@@ -16,6 +16,8 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/textutil"
+
+	"github.com/google/uuid"
 )
 
 func TestCompleteWorkflowTaskReturnsPendingApprovalWithoutReplacingCurrentNode(t *testing.T) {
@@ -31,11 +33,13 @@ func TestCompleteWorkflowTaskReturnsPendingApprovalWithoutReplacingCurrentNode(t
 	}
 	service := currentNodeCompletionService(execution)
 	sessionID := runtimeids.NewSessionID()
+	origin := serverapi.RuntimeStepOrigin{RunID: uuid.NewString(), StepID: uuid.NewString()}
 
 	response, err := service.CompleteWorkflowTask(context.Background(), serverapi.WorkflowTaskCompleteRequest{
 		ActorKind:      serverapi.WorkflowTaskCompleteActorAgent,
 		AgentSessionID: sessionID.String(),
 		TransitionID:   "done",
+		Origin:         &origin,
 	})
 	if err != nil {
 		t.Fatalf("CompleteWorkflowTask: %v", err)
@@ -49,7 +53,10 @@ func TestCompleteWorkflowTaskReturnsPendingApprovalWithoutReplacingCurrentNode(t
 	if len(response.CurrentNodes) != 0 {
 		t.Fatalf("current nodes = %+v, want none while source remains pending approval", response.CurrentNodes)
 	}
-	if execution.sessionID != sessionID || execution.idleSelector.TaskID != nil || execution.idleSelector.SessionID != nil {
+	if execution.sessionID != sessionID ||
+		execution.sessionOrigin != origin ||
+		execution.idleSelector.TaskID != nil ||
+		execution.idleSelector.SessionID != nil {
 		t.Fatalf("completion dispatch = %+v, want live Session completion", execution)
 	}
 }
@@ -150,10 +157,12 @@ func TestCompleteWorkflowTaskMapsAmbiguousAndPendingSourceFailures(t *testing.T)
 	}
 
 	execution := &currentNodeCompletionExecutionStub{sessionErr: sessionruntime.ErrExecutionNoLongerLive}
+	origin := serverapi.RuntimeStepOrigin{RunID: uuid.NewString(), StepID: uuid.NewString()}
 	_, err := currentNodeCompletionService(execution).CompleteWorkflowTask(context.Background(), serverapi.WorkflowTaskCompleteRequest{
 		ActorKind:      serverapi.WorkflowTaskCompleteActorAgent,
 		AgentSessionID: sessionID.String(),
 		TransitionID:   "done",
+		Origin:         &origin,
 	})
 	if !errors.Is(err, serverapi.ErrWorkflowTaskCompleteTargetNotFound) {
 		t.Fatalf("live completion error = %v, want target-not-found", err)
@@ -466,6 +475,7 @@ type currentNodeCompletionExecutionStub struct {
 	store               *workflowstore.Store
 	startPreparations   chan<- workflowexecution.TaskStartPreparation
 	sessionID           runtimeids.SessionID
+	sessionOrigin       serverapi.RuntimeStepOrigin
 	sessionResult       workflowstore.CurrentNodeCompletionResult
 	sessionErr          error
 	idleSelector        workflowstore.IdleCurrentNodeSelector
@@ -590,8 +600,9 @@ func (s *currentNodeCompletionExecutionStub) AcceptWorkflowQuestion(
 	return workflowQuestionAcceptanceFunc(func(context.Context) error { return nil }), nil
 }
 
-func (s *currentNodeCompletionExecutionStub) CompleteSessionCurrentNode(_ context.Context, sessionID runtimeids.SessionID, _ string, _ map[string]string, _ string) (workflowstore.CurrentNodeCompletionResult, error) {
+func (s *currentNodeCompletionExecutionStub) CompleteSessionCurrentNode(_ context.Context, sessionID runtimeids.SessionID, origin serverapi.RuntimeStepOrigin, _ string, _ map[string]string, _ string) (workflowstore.CurrentNodeCompletionResult, error) {
 	s.sessionID = sessionID
+	s.sessionOrigin = origin
 	return s.sessionResult, s.sessionErr
 }
 

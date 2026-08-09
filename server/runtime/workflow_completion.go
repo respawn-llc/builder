@@ -9,9 +9,11 @@ import (
 
 	"core/prompts"
 	"core/server/llm"
+	"core/server/runtimecommand"
 	"core/server/tools"
 	"core/server/workflowruntime"
 	"core/shared/runtimeids"
+	"core/shared/serverapi"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 )
@@ -100,23 +102,80 @@ func (e *Engine) observeWorkflowDurableCompletion(ctx context.Context) (bool, er
 
 func (e *Engine) completeWorkflowCurrentNode(
 	ctx context.Context,
+	origin serverapi.RuntimeStepOrigin,
 	parsed workflowruntime.ParsedCompletion,
 ) (workflowruntime.CompletionResult, error) {
-	execution, active := e.currentNodeExecutionConfig()
-	if !active || execution.Controller == nil {
-		return workflowruntime.CompletionResult{}, errors.New("current node execution is unavailable")
-	}
-	sessionID, err := e.workflowSessionID()
+	acceptance, err := e.AcceptWorkflowCompletion(ctx, origin, parsed)
 	if err != nil {
 		return workflowruntime.CompletionResult{}, err
 	}
-	return execution.Controller.CompleteCurrentNode(ctx, workflowruntime.CompletionRequest{
+	return acceptance.Await(e.lifecycleCtx)
+}
+
+type WorkflowCompletionAcceptance struct {
+	deferred *runtimecommand.Deferred[workflowruntime.CompletionResult]
+}
+
+func (a *WorkflowCompletionAcceptance) Await(ctx context.Context) (workflowruntime.CompletionResult, error) {
+	if a == nil || a.deferred == nil {
+		return workflowruntime.CompletionResult{}, ErrEngineClosed
+	}
+	return a.deferred.Await(ctx)
+}
+
+func (e *Engine) AcceptWorkflowCompletion(
+	ctx context.Context,
+	origin serverapi.RuntimeStepOrigin,
+	parsed workflowruntime.ParsedCompletion,
+) (*WorkflowCompletionAcceptance, error) {
+	execution, active := e.currentNodeExecutionConfig()
+	if !active || execution.Controller == nil {
+		return nil, errors.New("current node execution is unavailable")
+	}
+	sessionID, err := e.workflowSessionID()
+	if err != nil {
+		return nil, err
+	}
+	request := workflowruntime.CompletionRequest{
 		ScopeID:      execution.ScopeID,
 		SessionID:    &sessionID,
+		Origin:       origin,
 		TransitionID: parsed.TransitionID,
 		OutputValues: parsed.OutputValues,
 		Commentary:   parsed.Commentary,
-	})
+	}
+	deferred, err := runtimecommand.Submit(
+		ctx,
+		e.runtimeEvents,
+		request,
+		func(
+			command runtimecommand.Admission,
+			accepted workflowruntime.CompletionRequest,
+			complete func(workflowruntime.CompletionResult, error),
+		) error {
+			current := e.agentSteps.current
+			if current == nil ||
+				current.scopeID != accepted.ScopeID ||
+				current.origin != accepted.Origin ||
+				e.boundaryAgenda.hasHumanScope(accepted.ScopeID) {
+				complete(workflowruntime.CompletionResult{}, ErrActiveStepInactive)
+				return nil
+			}
+			result, completionErr := execution.Controller.CompleteCurrentNode(
+				runtimeEventAdmission{engine: e, command: command}.Context(),
+				accepted,
+			)
+			if completionErr == nil {
+				e.invalidateAgentStepScope(accepted.ScopeID, errBoundaryScopeFinalized)
+			}
+			complete(result, completionErr)
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, runtimeSteeringError(err)
+	}
+	return &WorkflowCompletionAcceptance{deferred: deferred}, nil
 }
 
 func (e *Engine) workflowSessionID() (runtimeids.SessionID, error) {

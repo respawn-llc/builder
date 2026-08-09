@@ -319,6 +319,54 @@ func clearCompletionOriginLocked(
 	return nil
 }
 
+func (a *Authority) ApplyWorkflowCompletion(
+	scopeID runtimeids.ExecutionScopeID,
+	origin serverapi.RuntimeStepOrigin,
+	operation func() (bool, error),
+) (bool, error) {
+	if a == nil {
+		return false, errors.New("session runtime authority is required")
+	}
+	if scopeID.IsZero() {
+		return false, errors.New("execution scope id is required")
+	}
+	if err := origin.Validate(); err != nil {
+		return false, err
+	}
+	if operation == nil {
+		return false, errors.New("Workflow completion operation is required")
+	}
+	a.mu.Lock()
+	execution := a.byScope[scopeID]
+	a.mu.Unlock()
+	if execution == nil {
+		return false, ErrExecutionNoLongerLive
+	}
+	execution.exactMu.Lock()
+	defer execution.exactMu.Unlock()
+	a.mu.Lock()
+	live := a.byScope[scopeID] == execution
+	a.mu.Unlock()
+	if !live ||
+		execution.phase != executionPhaseRunning ||
+		execution.ctx.Err() != nil ||
+		execution.completionOrigin == nil ||
+		*execution.completionOrigin != origin {
+		return false, ErrExecutionNoLongerLive
+	}
+	committed, err := operation()
+	if !committed {
+		return false, err
+	}
+	execution.phase = executionPhaseFinalizing
+	execution.completionOrigin = nil
+	a.mu.Lock()
+	execution.retireWorkflowLocked()
+	a.mu.Unlock()
+	execution.cancel()
+	return true, err
+}
+
 func (r *agentResource) newReducerBoundaryGrantLocked() runtime.AgentStepReducerGrant {
 	record := r.newReducerBoundaryRecordLocked()
 	return &reducerBoundaryGrant{

@@ -16,7 +16,10 @@ import (
 	"core/server/tools"
 	"core/server/workflowruntime"
 	"core/shared/config"
+	"core/shared/serverapi"
 	"core/shared/toolspec"
+
+	"github.com/google/uuid"
 )
 
 func TestExecuteToolCallsRejectsMissingProviderCallIDBeforeToolExecution(t *testing.T) {
@@ -168,25 +171,34 @@ func TestCompleteNodeKeepsCommittedResultAfterCancelingSiblingTools(t *testing.T
 			started: siblingStarted,
 		},
 	})
+	origin := serverapi.RuntimeStepOrigin{
+		RunID:  uuid.NewString(),
+		StepID: uuid.NewString(),
+	}
+	engine.agentSteps.current = &activeAgentStep{
+		scopeID: engine.agentSteps.scopeID,
+		origin:  origin,
+		phase:   agentStepProviderRunning,
+	}
 
-	results, err := engine.executeToolCalls(ctx, "step", []llm.ToolCall{
-		completeNodeCall(
-			"complete-node",
-			json.RawMessage(`{"commentary":"complete","summary":"done"}`),
-		),
+	results, err := engine.executeToolCalls(ctx, origin.StepID, []llm.ToolCall{
 		{
 			ID:    "sibling-tool",
 			Name:  string(toolspec.ToolExecCommand),
 			Input: json.RawMessage(`{"cmd":"sleep"}`),
 		},
+		completeNodeCall(
+			"complete-node",
+			json.RawMessage(`{"commentary":"complete","summary":"done"}`),
+		),
 	})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("execute completion batch error = %v, want sibling cancellation", err)
 	}
 	if len(results) != 2 ||
-		results[0].CallID != "complete-node" ||
-		results[0].IsError ||
-		!results[0].Terminal {
+		results[1].CallID != "complete-node" ||
+		results[1].IsError ||
+		!results[1].Terminal {
 		t.Fatalf("committed complete_node result = %+v", results)
 	}
 	if baseController.completed.Load() != 1 {

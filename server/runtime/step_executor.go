@@ -264,6 +264,9 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 			}
 			return result, err
 		}
+		if s.engine.WorkflowTerminalState().Completed {
+			return result, nil
+		}
 		decision, boundaryErr := s.engine.completeAgentProviderBoundary(ctx, false)
 		if boundaryErr != nil {
 			return result, boundaryErr
@@ -783,6 +786,9 @@ func (s *defaultStepExecutor) materializeFinalAnswerToolCalls(ctx context.Contex
 	if err != nil {
 		return false, false, err
 	}
+	if terminal {
+		return patchEditsApplied, true, nil
+	}
 	if calls.hasCalls() {
 		if err := s.completeAgentStepBoundary(ctx); err != nil {
 			return false, false, err
@@ -881,7 +887,7 @@ func (s *defaultStepExecutor) handleWorkflowCompletionSubmission(ctx context.Con
 		terminal, nudgeErr := s.appendWorkflowInvalidCompletionNudge(ctx, stepID, err)
 		return true, terminal, nudgeErr
 	}
-	if completeErr := s.completeCurrentNodeExecutionFromParsed(ctx, parsed); completeErr != nil {
+	if completeErr := s.completeCurrentNodeExecutionFromParsed(ctx, stepID, parsed); completeErr != nil {
 		terminal, nudgeErr := s.appendWorkflowInvalidCompletionNudge(ctx, stepID, completeErr)
 		return true, terminal, nudgeErr
 	}
@@ -889,8 +895,12 @@ func (s *defaultStepExecutor) handleWorkflowCompletionSubmission(ctx context.Con
 	return true, true, nil
 }
 
-func (s *defaultStepExecutor) completeCurrentNodeExecutionFromParsed(ctx context.Context, parsed workflowruntime.ParsedCompletion) error {
-	_, completeErr := s.engine.completeWorkflowCurrentNode(ctx, parsed)
+func (s *defaultStepExecutor) completeCurrentNodeExecutionFromParsed(ctx context.Context, stepID string, parsed workflowruntime.ParsedCompletion) error {
+	_, completeErr := s.engine.completeWorkflowCurrentNode(
+		ctx,
+		workflowCompletionOriginForStep(s.engine, stepID),
+		parsed,
+	)
 	return completeErr
 }
 

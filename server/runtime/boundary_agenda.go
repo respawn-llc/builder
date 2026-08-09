@@ -373,6 +373,25 @@ func (a *boundaryAgenda) pendingHuman() []QueuedUserMessage {
 	return pending
 }
 
+func (a *boundaryAgenda) hasHumanScope(scopeID runtimeids.ExecutionScopeID) bool {
+	if a == nil || scopeID.IsZero() {
+		return false
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	for _, entry := range a.entries {
+		human, ok := entry.(*humanBoundaryAgendaItem)
+		if !ok {
+			continue
+		}
+		binding, scopeBound := human.binding.(scopeAgendaBinding)
+		if scopeBound && binding.scopeID == scopeID {
+			return true
+		}
+	}
+	return false
+}
+
 func (a *boundaryAgenda) hasEligibleHuman(selection boundarySelection) bool {
 	if a == nil {
 		return false

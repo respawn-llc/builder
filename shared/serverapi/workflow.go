@@ -1043,14 +1043,15 @@ func (e WorkflowTaskQuestionSelectorAmbiguousError) Is(target error) bool {
 }
 
 type WorkflowTaskCompleteRequest struct {
-	SessionID      string            `json:"session_id,omitempty"`
-	TaskID         string            `json:"task_id,omitempty"`
-	TransitionID   string            `json:"transition_id,omitempty"`
-	OutputValues   map[string]string `json:"output_values,omitempty"`
-	Commentary     string            `json:"commentary,omitempty"`
-	ActorKind      string            `json:"actor_kind"`
-	AgentSessionID string            `json:"agent_session_id,omitempty"`
-	Force          bool              `json:"force,omitempty"`
+	SessionID      string             `json:"session_id,omitempty"`
+	TaskID         string             `json:"task_id,omitempty"`
+	TransitionID   string             `json:"transition_id,omitempty"`
+	OutputValues   map[string]string  `json:"output_values,omitempty"`
+	Commentary     string             `json:"commentary,omitempty"`
+	ActorKind      string             `json:"actor_kind"`
+	AgentSessionID string             `json:"agent_session_id,omitempty"`
+	Origin         *RuntimeStepOrigin `json:"origin,omitempty"`
+	Force          bool               `json:"force,omitempty"`
 }
 
 type WorkflowTaskCompleteResponse struct {
@@ -2991,7 +2992,16 @@ func (r WorkflowTaskCompleteRequest) Validate() error {
 		if strings.TrimSpace(r.AgentSessionID) == "" {
 			return workflowRequestError(WorkflowRequestErrorRequired, "agent_session_id", "agent_session_id is required for agent completion")
 		}
+		if r.Origin == nil {
+			return workflowRequestError(WorkflowRequestErrorRequired, "origin", "origin is required for agent completion")
+		}
+		if err := r.Origin.Validate(); err != nil {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "origin", err.Error())
+		}
 		return nil
+	}
+	if r.Origin != nil {
+		return workflowRequestError(WorkflowRequestErrorInvalidMode, "origin", "origin is not allowed for forced completion")
 	}
 	if !r.Force {
 		return workflowRequestError(WorkflowRequestErrorInvalidMode, "force", "force is required for non-agent completion")

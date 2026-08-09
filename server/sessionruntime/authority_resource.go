@@ -222,7 +222,7 @@ func (r *agentResource) signalLocked() {
 func (r *agentResource) currentExecution() (ExecutionHandle, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.current == nil {
+	if r.current == nil || r.current.phase == executionPhaseFinalizing {
 		return nil, false
 	}
 	return executionHandle{execution: r.current}, true

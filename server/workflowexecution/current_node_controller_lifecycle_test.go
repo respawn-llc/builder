@@ -308,30 +308,17 @@ func TestCurrentNodeControllerCompletesRetainedSessionAfterScopeRetires(t *testi
 		_ = authority.Close(context.Background())
 	})
 
-	scopeID := runtimeids.NewExecutionScopeID()
-	if _, err := controller.RecordProtocolViolation(context.Background(), workflowruntime.ViolationRequest{
-		ScopeID:   scopeID,
-		SessionID: &sessionID,
-		Kind:      workflowruntime.ViolationKindInvalidCompletion,
-		MaxCount:  2,
-	}); err != nil {
-		t.Fatalf("record retained Session protocol violation before completion: %v", err)
-	}
-	if _, err := controller.CompleteCurrentNode(context.Background(), workflowruntime.CompletionRequest{
-		ScopeID:      scopeID,
-		SessionID:    &sessionID,
-		TransitionID: "next",
-	}); err != nil {
+	if _, err := controller.CompleteIdleCurrentNode(
+		context.Background(),
+		workflowstore.IdleCurrentNodeSelector{SessionID: &sessionID},
+		"next",
+		nil,
+		"",
+	); err != nil {
 		t.Fatalf("complete retained Session Current Node: %v", err)
 	}
 	if calls := store.completionCount(); calls != 1 {
 		t.Fatalf("completion calls = %d, want 1", calls)
-	}
-	controller.mu.Lock()
-	_, retainedViolation := controller.violations[scopeID]
-	controller.mu.Unlock()
-	if retainedViolation {
-		t.Fatal("successful retained Session completion kept its retired-scope violation counter")
 	}
 }
 

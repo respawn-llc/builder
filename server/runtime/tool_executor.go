@@ -11,6 +11,7 @@ import (
 	"core/server/llm"
 	"core/server/tools"
 	"core/server/workflowruntime"
+	"core/shared/serverapi"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 )
@@ -411,7 +412,7 @@ func (t *defaultToolExecutor) executeCompleteNodeTool(ctx context.Context, stepI
 			}, err.Error())
 		}
 	}
-	completed, err := e.completeWorkflowCurrentNode(ctx, parsed)
+	completed, err := e.completeWorkflowCurrentNode(ctx, workflowCompletionOriginForStep(e, stepID), parsed)
 	if err != nil {
 		return e.workflowCompletionRejectedResult(ctx, result, err)
 	}
@@ -445,4 +446,18 @@ func activeRunIDForStep(engine *Engine, stepID string) string {
 		return ""
 	}
 	return snapshot.RunID
+}
+
+func workflowCompletionOriginForStep(engine *Engine, stepID string) serverapi.RuntimeStepOrigin {
+	origin := serverapi.RuntimeStepOrigin{
+		RunID:  activeRunIDForStep(engine, stepID),
+		StepID: stepID,
+	}
+	if origin.RunID == "" &&
+		engine != nil &&
+		engine.agentSteps.current != nil &&
+		engine.agentSteps.current.origin.StepID == stepID {
+		return engine.agentSteps.current.origin
+	}
+	return origin
 }

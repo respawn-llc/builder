@@ -44,7 +44,7 @@ type Service struct {
 		InterruptForManualMove(context.Context, workflow.TaskID, func() error) error
 		Interrupt(context.Context, workflowexecution.InterruptSelector) error
 		EnsureTaskQuiescent(workflow.TaskID) error
-		CompleteSessionCurrentNode(context.Context, runtimeids.SessionID, string, map[string]string, string) (workflowstore.CurrentNodeCompletionResult, error)
+		CompleteSessionCurrentNode(context.Context, runtimeids.SessionID, serverapi.RuntimeStepOrigin, string, map[string]string, string) (workflowstore.CurrentNodeCompletionResult, error)
 		CompleteIdleCurrentNode(context.Context, workflowstore.IdleCurrentNodeSelector, string, map[string]string, string) (workflowstore.CurrentNodeCompletionResult, error)
 		AcceptWorkflowQuestion(context.Context, workflow.TaskID, string, askquestion.AskQuestionResolution, error) (workflowexecution.WorkflowQuestionAcceptance, error)
 	}
@@ -166,7 +166,7 @@ func WithCurrentNodeExecution(execution interface {
 	InterruptForManualMove(context.Context, workflow.TaskID, func() error) error
 	Interrupt(context.Context, workflowexecution.InterruptSelector) error
 	EnsureTaskQuiescent(workflow.TaskID) error
-	CompleteSessionCurrentNode(context.Context, runtimeids.SessionID, string, map[string]string, string) (workflowstore.CurrentNodeCompletionResult, error)
+	CompleteSessionCurrentNode(context.Context, runtimeids.SessionID, serverapi.RuntimeStepOrigin, string, map[string]string, string) (workflowstore.CurrentNodeCompletionResult, error)
 	CompleteIdleCurrentNode(context.Context, workflowstore.IdleCurrentNodeSelector, string, map[string]string, string) (workflowstore.CurrentNodeCompletionResult, error)
 	AcceptWorkflowQuestion(context.Context, workflow.TaskID, string, askquestion.AskQuestionResolution, error) (workflowexecution.WorkflowQuestionAcceptance, error)
 }) Option {
@@ -1784,7 +1784,7 @@ func (s *Service) completeWorkflowTask(ctx context.Context, req serverapi.Workfl
 		if parseErr != nil {
 			return serverapi.WorkflowTaskCompleteResponse{}, parseErr
 		}
-		completed, err = s.currentNodeExecution.CompleteSessionCurrentNode(ctx, sessionID, req.TransitionID, req.OutputValues, req.Commentary)
+		completed, err = s.currentNodeExecution.CompleteSessionCurrentNode(ctx, sessionID, *req.Origin, req.TransitionID, req.OutputValues, req.Commentary)
 	} else {
 		selector := workflowstore.IdleCurrentNodeSelector{}
 		if strings.TrimSpace(req.SessionID) != "" {

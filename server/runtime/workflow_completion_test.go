@@ -1134,56 +1134,6 @@ func TestCompatibleProviderCommentaryFlushesAcceptedSteeringBeforeContinuing(t *
 	}
 }
 
-func TestWorkflowTerminalCompletionFailsQueuedSteeringAtRunRelease(t *testing.T) {
-	store := mustCreateTestSession(t)
-	controller := &fakeWorkflowController{}
-	started := make(chan struct{})
-	release := make(chan struct{})
-	releaseRun := sync.OnceFunc(func() { close(release) })
-	defer releaseRun()
-	client := &hookClient{
-		response: structuredFinalResponse(`{"commentary":"complete","summary":"done"}`),
-		beforeReturn: func() error {
-			close(started)
-			<-release
-			return nil
-		},
-	}
-	var statuses []QueuedUserMessageStatusEvent
-	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeUnstructured), Config{
-		OnEvent: func(evt Event) {
-			if evt.QueuedUserMessageStatus != nil {
-				statuses = append(statuses, *evt.QueuedUserMessageStatus)
-			}
-		},
-	})
-	submitDone := make(chan error, 1)
-	go func() {
-		_, err := eng.SubmitUserMessage(context.Background(), "run")
-		submitDone <- err
-	}()
-	select {
-	case <-started:
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for workflow turn")
-	}
-	queued := mustQueueUserMessageWithClientRequestID(t, eng, "do not submit after run release", "req-after-release")
-	releaseRun()
-	if err := <-submitDone; err != nil {
-		t.Fatalf("submit: %v", err)
-	}
-	time.Sleep(50 * time.Millisecond)
-	if got := hookClientCallCount(client); got != 1 {
-		t.Fatalf("model calls = %d, want terminal completion to avoid queued turn", got)
-	}
-	if len(statuses) != 2 || statuses[0].Status != QueuedUserMessageAccepted || statuses[1].Status != QueuedUserMessageFailed {
-		t.Fatalf("queued statuses = %+v, want accepted then failed", statuses)
-	}
-	if statuses[1].QueueItemID != queued.ID || statuses[1].ClientRequestID != "req-after-release" || statuses[1].RestoreText != "do not submit after run release" || statuses[1].FailureReason != QueuedUserMessageFailureTerminalWorkflowCompletion {
-		t.Fatalf("failed queue status = %+v, want terminal completion failure for %q", statuses[1], queued.ID)
-	}
-}
-
 func hookClientCallCount(client *hookClient) int {
 	client.mu.Lock()
 	defer client.mu.Unlock()
