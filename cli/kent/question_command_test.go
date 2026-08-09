@@ -27,6 +27,7 @@ import (
 type stubQuestionCommandRemote struct {
 	listResponses     []serverapi.AskListPendingBySessionResponse
 	listRequests      []serverapi.AskListPendingBySessionRequest
+	listAsks          func(context.Context) error
 	approvalResponses []serverapi.ApprovalListPendingBySessionResponse
 	answerRequests    []serverapi.PromptAnswerBatchRequest
 	watchRequests     []serverapi.PromptFollowUpWatchRequest
@@ -34,6 +35,7 @@ type stubQuestionCommandRemote struct {
 	batchErr          error
 	watchErr          error
 	followUpErr       error
+	watchNext         func(context.Context) error
 	outcome           serverapi.PromptAnswerBatchOutcome
 }
 
@@ -123,10 +125,15 @@ func (r *stubQuestionTaskRemote) Close() error {
 }
 
 func (r *stubQuestionCommandRemote) ListPendingAsksBySession(
-	_ context.Context,
+	ctx context.Context,
 	req serverapi.AskListPendingBySessionRequest,
 ) (serverapi.AskListPendingBySessionResponse, error) {
 	r.listRequests = append(r.listRequests, req)
+	if r.listAsks != nil {
+		if err := r.listAsks(ctx); err != nil {
+			return serverapi.AskListPendingBySessionResponse{}, err
+		}
+	}
 	if len(r.listResponses) == 0 {
 		return serverapi.AskListPendingBySessionResponse{}, nil
 	}
@@ -172,6 +179,7 @@ func (r *stubQuestionCommandRemote) SubscribeFollowUp(_ context.Context, req ser
 	return &stubQuestionFollowUpSubscription{
 		event: serverapi.PromptFollowUpEvent{Kind: serverapi.PromptFollowUpNoPreparedSuccessor},
 		err:   r.followUpErr,
+		next:  r.watchNext,
 	}, nil
 }
 
@@ -182,10 +190,16 @@ func (r *stubQuestionCommandRemote) Close() error {
 type stubQuestionFollowUpSubscription struct {
 	event  serverapi.PromptFollowUpEvent
 	err    error
+	next   func(context.Context) error
 	closed bool
 }
 
-func (s *stubQuestionFollowUpSubscription) Next(context.Context) (serverapi.PromptFollowUpEvent, error) {
+func (s *stubQuestionFollowUpSubscription) Next(ctx context.Context) (serverapi.PromptFollowUpEvent, error) {
+	if s.next != nil {
+		if err := s.next(ctx); err != nil {
+			return serverapi.PromptFollowUpEvent{}, err
+		}
+	}
 	return s.event, s.err
 }
 
@@ -594,6 +608,72 @@ func TestQuestionAnswerAcceptsSkippedRaceAndStillReadsAuthoritativeFollowUp(t *t
 
 	if exitCode != 0 || stderr.Len() != 0 || stdout.Len() == 0 || len(remote.listRequests) != 2 {
 		t.Fatalf("exit=%d stdout=%q stderr=%q reads=%d", exitCode, stdout.String(), stderr.String(), len(remote.listRequests))
+	}
+}
+
+func TestQuestionAuthoritativeFollowUpReadHonorsParentCancellation(t *testing.T) {
+	sessionID := runtimeids.NewSessionID()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	remote := &stubQuestionCommandRemote{
+		listAsks: func(ctx context.Context) error {
+			return ctx.Err()
+		},
+	}
+
+	_, _, err := readPendingSessionPromptByKey(ctx, remote, questionCommandPendingQuestion{
+		SessionID: sessionID,
+	})
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("follow-up read error = %v, want context canceled", err)
+	}
+}
+
+func TestQuestionAnswerKeepsDeadlineThroughAuthoritativeFollowUpRead(t *testing.T) {
+	unsetSessionIDEnvironmentForTest(t)
+	sessionID := uuid.NewString()
+	var answerDeadline int64
+	readCount := 0
+	remote := &stubQuestionCommandRemote{
+		listResponses: []serverapi.AskListPendingBySessionResponse{
+			{Asks: []clientui.PendingAsk{pendingAsk(sessionID, "ask-1", "Choose?", "One")}},
+			{},
+		},
+		watchNext: func(ctx context.Context) error {
+			deadline, ok := ctx.Deadline()
+			if !ok {
+				return errors.New("answer context has no deadline")
+			}
+			answerDeadline = deadline.UnixNano()
+			return nil
+		},
+		listAsks: func(ctx context.Context) error {
+			readCount++
+			if readCount != 2 {
+				return nil
+			}
+			deadline, ok := ctx.Deadline()
+			if !ok {
+				return errors.New("follow-up read context has no deadline")
+			}
+			if deadline.UnixNano() != answerDeadline {
+				return errors.New("follow-up read extended the answer deadline")
+			}
+			return nil
+		},
+	}
+	command, _ := questionCommandWithRemote(remote)
+
+	var stderr bytes.Buffer
+	exitCode := command.run(
+		[]string{"answer", "--session", sessionID, "--option", "1"},
+		io.Discard,
+		&stderr,
+	)
+
+	if exitCode != 0 || stderr.Len() != 0 || answerDeadline == 0 {
+		t.Fatalf("exit=%d stderr=%q answer deadline=%d", exitCode, stderr.String(), answerDeadline)
 	}
 }
 

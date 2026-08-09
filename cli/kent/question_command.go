@@ -123,7 +123,7 @@ func (c questionCommand) showSubcommand(args []string, stdout io.Writer, stderr 
 
 func (c questionCommand) showSessionQuestion(sessionID runtimeids.SessionID, stdout io.Writer, stderr io.Writer) int {
 	return c.withRemote(stderr, sessionID, func(remote questionCommandRemote) int {
-		question, ok, err := listPendingSessionPrompt(remote, sessionID)
+		question, ok, err := listPendingSessionPrompt(context.Background(), remote, sessionID)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
@@ -186,7 +186,7 @@ func (c questionCommand) answerSessionQuestion(
 	stderr io.Writer,
 ) int {
 	return c.withRemote(stderr, sessionID, func(remote questionCommandRemote) int {
-		question, ok, err := listPendingSessionPrompt(remote, sessionID)
+		question, ok, err := listPendingSessionPrompt(context.Background(), remote, sessionID)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
@@ -200,8 +200,8 @@ func (c questionCommand) answerSessionQuestion(
 			question,
 			option,
 			commentary,
-			func() (questionCommandPendingQuestion, bool, error) {
-				return listPendingSessionPrompt(remote, sessionID)
+			func(ctx context.Context) (questionCommandPendingQuestion, bool, error) {
+				return listPendingSessionPrompt(ctx, remote, sessionID)
 			},
 			stdout,
 			stderr,
@@ -226,7 +226,7 @@ func (c questionCommand) showTaskQuestion(selector questionCommandSelector, stdo
 		}
 		expected := candidate.Questions[0]
 		return c.withRemote(stderr, candidate.SessionID, func(promptRemote questionCommandRemote) int {
-			question, ok, err := readPendingSessionPromptByKey(promptRemote, expected)
+			question, ok, err := readPendingSessionPromptByKey(context.Background(), promptRemote, expected)
 			if err != nil {
 				fmt.Fprintln(stderr, err)
 				return 1
@@ -264,7 +264,7 @@ func (c questionCommand) answerTaskQuestion(
 		}
 		expected := candidate.Questions[0]
 		return c.withRemote(stderr, candidate.SessionID, func(promptRemote questionCommandRemote) int {
-			question, ok, err := readPendingSessionPromptByKey(promptRemote, expected)
+			question, ok, err := readPendingSessionPromptByKey(context.Background(), promptRemote, expected)
 			if err != nil {
 				fmt.Fprintln(stderr, err)
 				return 1
@@ -278,8 +278,8 @@ func (c questionCommand) answerTaskQuestion(
 				question,
 				option,
 				commentary,
-				func() (questionCommandPendingQuestion, bool, error) {
-					return readTaskQuestionFollowUp(remote, promptRemote, taskID, candidate.SessionID)
+				func(ctx context.Context) (questionCommandPendingQuestion, bool, error) {
+					return readTaskQuestionFollowUp(ctx, remote, promptRemote, taskID, candidate.SessionID)
 				},
 				stdout,
 				stderr,
@@ -315,7 +315,7 @@ func answerQuestionThroughBatch(
 	question questionCommandPendingQuestion,
 	option *int,
 	commentary *string,
-	followUp func() (questionCommandPendingQuestion, bool, error),
+	followUp func(context.Context) (questionCommandPendingQuestion, bool, error),
 	stdout io.Writer,
 	stderr io.Writer,
 ) int {
@@ -362,7 +362,7 @@ func answerQuestionThroughBatch(
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	next, ok, err := followUp()
+	next, ok, err := followUp(answerCtx)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -405,42 +405,48 @@ func questionBatchAnswer(
 }
 
 func readTaskQuestionFollowUp(
+	ctx context.Context,
 	remote workflowCommandRemote,
 	promptRemote questionCommandRemote,
 	taskID string,
 	sessionID runtimeids.SessionID,
 ) (questionCommandPendingQuestion, bool, error) {
-	refreshed, err := listTaskQuestionCandidates(context.Background(), remote, taskID)
+	refreshed, err := listTaskQuestionCandidates(ctx, remote, taskID)
 	if err != nil {
 		return questionCommandPendingQuestion{}, false, err
 	}
 	for _, next := range refreshed {
 		if next.SessionID == sessionID && len(next.Questions) > 0 {
-			return readPendingSessionPromptByKey(promptRemote, next.Questions[0])
+			return readPendingSessionPromptByKey(ctx, promptRemote, next.Questions[0])
 		}
 	}
 	return questionCommandPendingQuestion{}, false, nil
 }
 
 func listPendingSessionQuestions(
+	ctx context.Context,
 	remote questionCommandRemote,
 	sessionID runtimeids.SessionID,
 ) (serverapi.AskListPendingBySessionResponse, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), questionCommandTimeout)
+	ctx, cancel := context.WithTimeout(ctx, questionCommandTimeout)
 	defer cancel()
 	return remote.ListPendingAsksBySession(ctx, serverapi.AskListPendingBySessionRequest{
 		SessionID: sessionID.String(),
 	})
 }
 
-func listPendingSessionPrompt(remote questionCommandRemote, sessionID runtimeids.SessionID) (questionCommandPendingQuestion, bool, error) {
-	asks, err := listPendingSessionQuestions(remote, sessionID)
+func listPendingSessionPrompt(
+	ctx context.Context,
+	remote questionCommandRemote,
+	sessionID runtimeids.SessionID,
+) (questionCommandPendingQuestion, bool, error) {
+	asks, err := listPendingSessionQuestions(ctx, remote, sessionID)
 	if err != nil {
 		return questionCommandPendingQuestion{}, false, err
 	}
 	var approvals serverapi.ApprovalListPendingBySessionResponse
-	ctx, cancel := context.WithTimeout(context.Background(), questionCommandTimeout)
-	approvals, err = remote.ListPendingApprovalsBySession(ctx, serverapi.ApprovalListPendingBySessionRequest{SessionID: sessionID.String()})
+	rpcCtx, cancel := context.WithTimeout(ctx, questionCommandTimeout)
+	approvals, err = remote.ListPendingApprovalsBySession(rpcCtx, serverapi.ApprovalListPendingBySessionRequest{SessionID: sessionID.String()})
 	cancel()
 	if err != nil {
 		return questionCommandPendingQuestion{}, false, err
@@ -453,16 +459,17 @@ func listPendingSessionPrompt(remote questionCommandRemote, sessionID runtimeids
 }
 
 func readPendingSessionPromptByKey(
+	ctx context.Context,
 	remote questionCommandRemote,
 	expected questionCommandPendingQuestion,
 ) (questionCommandPendingQuestion, bool, error) {
-	asks, err := listPendingSessionQuestions(remote, expected.SessionID)
+	asks, err := listPendingSessionQuestions(ctx, remote, expected.SessionID)
 	if err != nil {
 		return questionCommandPendingQuestion{}, false, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), questionCommandTimeout)
+	rpcCtx, cancel := context.WithTimeout(ctx, questionCommandTimeout)
 	approvals, err := remote.ListPendingApprovalsBySession(
-		ctx,
+		rpcCtx,
 		serverapi.ApprovalListPendingBySessionRequest{SessionID: expected.SessionID.String()},
 	)
 	cancel()
