@@ -953,7 +953,8 @@ func (i *GitInspector) ResolveCreateTarget(ctx context.Context, workspaceRoot st
 }
 
 func (i *GitInspector) isValidBranchName(ctx context.Context, workspaceRoot string, branchName string) (bool, error) {
-	output, exitCode, err := i.runner.Run(ctx, workspaceRoot, "check-ref-format", "--branch", branchName)
+	literalRef := "refs/heads/" + branchName
+	output, exitCode, err := i.runner.Run(ctx, workspaceRoot, "check-ref-format", literalRef)
 	if err == nil {
 		return true, nil
 	}
@@ -963,7 +964,7 @@ func (i *GitInspector) isValidBranchName(ctx context.Context, workspaceRoot stri
 	if exitCode > 0 {
 		return false, nil
 	}
-	return false, formatGitRunError(exitCode, err, output, "check-ref-format", "--branch", branchName)
+	return false, formatGitRunError(exitCode, err, output, "check-ref-format", literalRef)
 }
 
 func (i *GitInspector) Add(ctx context.Context, workspaceRoot string, worktreeRoot string, spec CreateSpec) (bool, error) {

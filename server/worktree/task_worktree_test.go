@@ -790,7 +790,7 @@ func TestMaterializeInitialTaskWorktreeUsesLeasedPendingBranchSnapshot(t *testin
 	runner := &taskWorktreeGitCommandInterceptor{
 		base: execGitCommandRunner{},
 		beforeRun: func(ctx context.Context, _ string, args []string) error {
-			if !slices.Equal(args, []string{"check-ref-format", "--branch", snapshotBranch}) {
+			if !slices.Equal(args, []string{"check-ref-format", "refs/heads/" + snapshotBranch}) {
 				return nil
 			}
 			pauseOnce.Do(func() { close(inspectionStarted) })

@@ -400,7 +400,7 @@ func TestGitInspectorResolveCreateTarget(t *testing.T) {
 		{
 			name: "invalid branch", target: "feature..bad",
 			results: map[string]stubGitCommandResult{
-				gitCommandKey("check-ref-format", "--branch", "feature..bad"):              {err: errors.New("exit status 128"), exitCode: 128},
+				gitCommandKey("check-ref-format", "refs/heads/feature..bad"):               {err: errors.New("exit status 1"), exitCode: 1},
 				gitCommandKey("rev-parse", "--verify", "--quiet", "feature..bad^{object}"): {err: errors.New("exit status 1"), exitCode: 1},
 			},
 			invalid: true,
@@ -484,6 +484,30 @@ func TestGitInspectorInspectProspectiveInitialTaskBranchRejectsInvalidName(t *te
 	}
 	if branchErr.Kind != InitialTaskBranchErrorInvalidName ||
 		branchErr.BranchName != "feature..invalid" ||
+		branchErr.Ref != nil ||
+		branchErr.Remote != nil {
+		t.Fatalf("initial Task branch error = %+v", branchErr)
+	}
+}
+
+func TestGitInspectorInspectProspectiveInitialTaskBranchRejectsCheckoutShorthand(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	initGitRepo(t, workspaceRoot)
+	runGit(t, workspaceRoot, "switch", "-c", "feature/previous-checkout")
+	runGit(t, workspaceRoot, "switch", "-")
+
+	err := NewGitInspector(nil).InspectProspectiveInitialTaskBranch(
+		context.Background(),
+		workspaceRoot,
+		"@{-1}",
+	)
+
+	var branchErr *InitialTaskBranchError
+	if !errors.As(err, &branchErr) {
+		t.Fatalf("error = %T %v, want InitialTaskBranchError", err, err)
+	}
+	if branchErr.Kind != InitialTaskBranchErrorInvalidName ||
+		branchErr.BranchName != "@{-1}" ||
 		branchErr.Ref != nil ||
 		branchErr.Remote != nil {
 		t.Fatalf("initial Task branch error = %+v", branchErr)

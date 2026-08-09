@@ -281,7 +281,7 @@ func createTaskWithQueries(ctx context.Context, q *sqlitegen.Queries, prepared p
 		ID: workflow.TaskID(prepared.taskID), ProjectID: prepared.projectID, WorkflowID: link.WorkflowID,
 		LinkID: link.ID, ShortID: shortID, Title: prepared.title, Body: prepared.body,
 		SourceURL: prepared.sourceURL, SourceWorkspaceID: sourceWorkspaceID,
-		PendingInitialManagedBranchName: optionalString(nullableString(shortID)),
+		PendingInitialManagedBranchName: metadata.OptionalString(nullableString(shortID)),
 		Version:                         record.Version,
 	}, nil
 }
@@ -608,18 +608,10 @@ func taskRecordFromTask(row sqlitegen.TaskRecord) (TaskRecord, error) {
 		LinkID: row.ProjectWorkflowLinkID, ShortID: row.ShortID, Title: row.Title, Body: row.Body,
 		SourceURL: row.SourceUrl, SourceWorkspaceID: strings.TrimSpace(row.SourceWorkspaceID.String),
 		ManagedWorktreeID:               strings.TrimSpace(row.ManagedWorktreeID.String),
-		PendingInitialManagedBranchName: optionalString(row.PendingInitialManagedBranchName),
+		PendingInitialManagedBranchName: metadata.OptionalString(row.PendingInitialManagedBranchName),
 		ExecutionTarget:                 target,
 		Version:                         row.WorkflowRevisionSeen,
 	}, nil
-}
-
-func optionalString(value sql.NullString) *string {
-	if !value.Valid {
-		return nil
-	}
-	result := value.String
-	return &result
 }
 
 func resolveTaskSourceWorkspaceWithQueries(ctx context.Context, q *sqlitegen.Queries, projectID, workspaceID string) (string, error) {
