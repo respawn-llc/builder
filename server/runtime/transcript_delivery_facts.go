@@ -233,9 +233,13 @@ func locateTranscriptCommittedRowFacts(facts []TranscriptCommittedRowFact) []Tra
 func TranscriptCommittedRowFactsFromSnapshot(snapshot ChatSnapshot) []TranscriptCommittedRowFact {
 	facts := make([]TranscriptCommittedRowFact, 0, len(snapshot.Entries))
 	for _, entry := range snapshot.Entries {
-		if strings.TrimSpace(entry.Role) == "assistant" &&
-			entry.Phase == llm.MessagePhaseFinal &&
-			strings.TrimSpace(entry.Text) == "" {
+		content := entry.Text
+		if transcript.IsBlankAssistantFinal(transcript.AssistantFinalCandidate{
+			IsAssistant:    entry.Role == string(llm.RoleAssistant),
+			IsFinal:        entry.Phase == llm.MessagePhaseFinal,
+			HasMessageType: entry.MessageType != "",
+			Content:        &content,
+		}) {
 			continue
 		}
 		fact, ok := transcriptCommittedRowFactFromChatEntry(entry)
