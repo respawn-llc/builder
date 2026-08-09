@@ -90,9 +90,11 @@ export function ApprovalBox({
 
 export function InterruptedCurrentNodeBox({
   attention,
+  canResume,
   disabled,
 }: Readonly<{
   attention: InterruptedCurrentNodeAttentionItem;
+  canResume: boolean;
   disabled: boolean;
 }>) {
   const { t } = useTranslation();
@@ -147,7 +149,9 @@ export function InterruptedCurrentNodeBox({
           {t("task.copyInterruptionDetail")}
         </Button>
       ) : null}
-      {recovery === null ? null : <TaskResumeButton disabled={disabled} recovery={recovery} />}
+      {recovery !== null || canResume ? (
+        <TaskResumeButton disabled={disabled} {...(recovery === null ? {} : { recovery })} />
+      ) : null}
     </Island>
   );
 }

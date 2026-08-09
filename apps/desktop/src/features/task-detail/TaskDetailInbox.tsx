@@ -56,7 +56,7 @@ export function TaskInbox({
           mutations={mutations}
           onQuestionSelectionChange={onQuestionSelectionChange}
           questionSelections={questionSelections}
-          taskId={detail.id}
+          task={detail}
         />
       ))}
     </>
@@ -110,7 +110,7 @@ function InboxItem({
   mutations,
   onQuestionSelectionChange,
   questionSelections,
-  taskId,
+  task,
 }: Readonly<{
   attention: AttentionItem;
   currentVersion: number;
@@ -119,7 +119,7 @@ function InboxItem({
   mutations: ReturnType<typeof useTaskMutations>;
   onQuestionSelectionChange: (askID: string, selection: QuestionSelectionState) => void;
   questionSelections: ReadonlyMap<string, QuestionSelectionState>;
-  taskId: string;
+  task: TaskDetail;
 }>) {
   const focusTargetRef = useRef<HTMLDivElement | null>(null);
   const scrolledRef = useRef(false);
@@ -154,7 +154,7 @@ function InboxItem({
             onQuestionSelectionChange(attention.questionID, selection);
           }}
           selectionState={questionSelection}
-          taskId={taskId}
+          taskId={task.id}
         />
       </div>
     );
@@ -173,7 +173,7 @@ function InboxItem({
   }
   return (
     <div ref={focusTargetRef}>
-      <InterruptedCurrentNodeBox attention={attention} disabled={disabled} />
+      <InterruptedCurrentNodeBox attention={attention} canResume={task.actions.canResume} disabled={disabled} />
     </div>
   );
 }

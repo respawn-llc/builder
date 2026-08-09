@@ -2145,14 +2145,11 @@ func (s *Service) prepareSetupAttempt(req setupExecutionRequest) (*preparedSetup
 	}
 	scriptPath, err := resolveSetupScriptPath(req.SourceWorkspaceRoot, trimmedScript)
 	if err != nil {
-		if strings.TrimSpace(scriptPath) != "" {
-			return nil, &setupScriptError{
-				Message:      fmt.Sprintf("resolve worktree setup script: %v", err),
-				ScriptPath:   scriptPath,
-				WorktreeRoot: strings.TrimSpace(req.WorktreeRoot),
-			}
+		return nil, &setupScriptError{
+			Message:      fmt.Sprintf("resolve worktree setup script: %v", err),
+			ScriptPath:   trimmedScript,
+			WorktreeRoot: strings.TrimSpace(req.WorktreeRoot),
 		}
-		return nil, fmt.Errorf("resolve worktree setup script: %w", err)
 	}
 	sessionID, err := normalizeSetupSessionID(req.ScriptPayload.SessionID)
 	if err != nil {

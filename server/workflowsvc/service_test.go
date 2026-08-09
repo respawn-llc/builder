@@ -635,9 +635,8 @@ func TestServiceManualMoveRevalidatesTaskQuiescenceBeforeDurableApply(t *testing
 	if err != nil {
 		t.Fatalf("GetTaskExecutionTargetContext: %v", err)
 	}
-	if targetContext.Task.ExecutionTarget == nil ||
-		targetContext.Task.ExecutionTarget.Mode != workflow.ExecutionTargetModeNone {
-		t.Fatalf("rejected move execution target = %+v, want prepared target locked before durable apply", targetContext.Task.ExecutionTarget)
+	if targetContext.Task.ExecutionTarget != nil {
+		t.Fatalf("rejected move execution target = %+v, want target unlocked", targetContext.Task.ExecutionTarget)
 	}
 	if len(execution.quiescentTaskIDs) != 1 {
 		t.Fatalf("quiescence checks = %v, want durable revalidation only", execution.quiescentTaskIDs)

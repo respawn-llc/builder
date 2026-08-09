@@ -62,8 +62,6 @@ base_dir = "~/.kent/worktrees"
 
 Kent waits for setup to finish. If setup fails, times out, or is canceled, creation fails and the worktree remains available for inspection, repair, or deletion.
 
-Workflow task setup retries the script once. Kent may recreate an unchanged provisional task worktree before retrying; a changed worktree is preserved and the script runs again in place, so workflow setup scripts must be idempotent. If both attempts fail, the task remains interrupted and its detail view offers Resume with the same target or another execution target. CLI Start and Resume observe setup for up to two minutes; an observation timeout reports inspection guidance without claiming that recovery is ready.
-
 Kent invokes the script with the new worktree as its cwd and three positional arguments:
 
 1. source workspace root

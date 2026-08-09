@@ -5,7 +5,7 @@ import { ContractError } from "./errors";
 import { FakeRpcTransport } from "@/test-support/api";
 import { newSetupOperationID, parseSetupOperationID, type SetupOperationID } from "./setupOperationID";
 import type { WorktreeSetupEvent } from "./worktreeSetup";
-import { parseTaskSetupRecoveryDetail } from "./worktreeSetup";
+import { parseTaskSetupRecoveryDetail, worktreeSetupEventParamsSchema } from "./worktreeSetup";
 
 const setupOperationIDWireSchema = z.string().transform((value, ctx): SetupOperationID => {
   try {
@@ -26,6 +26,22 @@ function parseSetupMutationParams(value: unknown): Readonly<{ setupOperationID: 
 }
 
 describe("worktree setup API", () => {
+  it("accepts retry-ready operational setup failures", () => {
+    const root = "/worktrees/task-1";
+    const event = worktreeSetupEventParamsSchema.parse({ event: { setup_operation_id:
+      "55555555-5555-4555-8555-555555555555", phase: "failed", failed: {
+        retry_readiness: "retry_ready", cause: { kind: "operational", operational: {} },
+        diagnostic: "setup process could not start", script_path: "/repo/setup.sh", execution_target: null,
+        retained_previous_worktree: null, retained_worktree: { variant: "registered", registered: {
+          git: { canonical_root: root, head_object: "abc", branch_ref: null, branch_name: null, detached: false, bare: false, locked_reason: null, prunable_reason: null, is_main: false, path_available: true },
+          kent: { worktree_id: "worktree-1", canonical_root: root, display_name: "Task", managed: true, created_branch: true, origin_session_id: null },
+        } },
+      },
+    } }).event;
+    expect(event).toMatchObject({ phase: "failed",
+      failed: { retryReadiness: "retry_ready", cause: { kind: "operational" } } });
+  });
+
   it("decodes canonical Task setup recovery without fabricating topology", () => {
     const recovery = parseTaskSetupRecoveryDetail(JSON.stringify({
       setup_recovery: {
@@ -68,6 +84,7 @@ describe("worktree setup API", () => {
           outcome: "applied",
           applied: {
             current_nodes: [{ node_id: "node-1", transition_branch_key: null, session_id: null }],
+            retained_previous_worktree: null,
           },
         },
       },

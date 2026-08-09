@@ -1132,14 +1132,6 @@ func coordinateInitiatingAction[T any](ctx context.Context, service *Service, re
 			return initiatingActionResult[T]{retainedPreviousWorktree: retainedPreviousWorktree}, err
 		}
 	}
-	if candidate != nil {
-		if err := service.store.LockTaskExecutionTarget(ctx, req.taskID, candidate); err != nil {
-			return initiatingActionResult[T]{
-				retainedPreviousWorktree: retainedPreviousWorktree,
-			}, err
-		}
-		candidate = nil
-	}
 	applied, err := apply(candidate)
 	if err != nil {
 		// A mutation may commit before its post-commit lifecycle work fails.
@@ -1872,7 +1864,8 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 		return serverapi.WorkflowTaskMoveResponse{
 			Outcome: serverapi.WorkflowExecutionTargetActionOutcomeNoOp,
 			NoOp: &serverapi.WorkflowTaskMoveNoOp{
-				CurrentNodes: workflowview.ProjectCurrentNodes(noOpBeforeInterrupt.currentNodes),
+				CurrentNodes:             workflowview.ProjectCurrentNodes(noOpBeforeInterrupt.currentNodes),
+				RetainedPreviousWorktree: coordinated.retainedPreviousWorktree,
 			},
 		}, nil
 	}
@@ -1904,7 +1897,8 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 		return serverapi.WorkflowTaskMoveResponse{
 			Outcome: serverapi.WorkflowExecutionTargetActionOutcomeNoOp,
 			NoOp: &serverapi.WorkflowTaskMoveNoOp{
-				CurrentNodes: workflowview.ProjectCurrentNodes(moved.CurrentNodes),
+				CurrentNodes:             workflowview.ProjectCurrentNodes(moved.CurrentNodes),
+				RetainedPreviousWorktree: coordinated.retainedPreviousWorktree,
 			},
 		}, nil
 	}
@@ -1915,7 +1909,8 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 	return serverapi.WorkflowTaskMoveResponse{
 		Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
 		Applied: &serverapi.WorkflowTaskMoveApplied{
-			CurrentNodes: workflowview.ProjectCurrentNodes(moved.Mutation.Created),
+			CurrentNodes:             workflowview.ProjectCurrentNodes(moved.Mutation.Created),
+			RetainedPreviousWorktree: coordinated.retainedPreviousWorktree,
 		},
 	}, nil
 }
