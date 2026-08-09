@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"core/shared/clientui"
+	"core/shared/config"
 	"core/shared/serverapi"
 )
 
@@ -21,6 +22,36 @@ func TestObservedQuestionUsesDynamicQuestionAndAnswerTarget(t *testing.T) {
 		if !strings.Contains(output.String(), value) {
 			t.Fatalf("output %q does not contain dynamic value %q", output.String(), value)
 		}
+	}
+}
+
+func TestRunWatchApprovalHintIncludesOptionalCommentary(t *testing.T) {
+	sessionID := "session-dynamic"
+	var output bytes.Buffer
+	code := writeRunWatchResponse(&output, io.Discard, serverapi.RuntimeLiveWatchResponse{
+		SessionID: sessionID,
+		Outcome: serverapi.RuntimeLiveWatchOutcome{
+			Kind: serverapi.RuntimeLiveWatchQuestion,
+			Question: &serverapi.ObservationQuestion{Approval: &clientui.PendingApproval{
+				ApprovalID: "approval-dynamic",
+				Question:   "Allow access?",
+				Options: []clientui.ApprovalOption{{
+					Label: "Allow once",
+				}},
+			}},
+		},
+	}, "")
+	if code != 0 {
+		t.Fatalf("writeRunWatchResponse exit code = %d", code)
+	}
+	hint := commandString([]string{
+		config.Command, "question", "answer",
+		"--session", sessionID,
+		"--option", "<number>",
+		"--commentary", "<commentary>",
+	})
+	if !strings.Contains(output.String(), hint) {
+		t.Fatalf("output %q does not contain answer hint %q", output.String(), hint)
 	}
 }
 

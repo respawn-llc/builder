@@ -74,7 +74,7 @@ func TestTaskObservationRendersDiscriminatorAndTaskTargetForOneQuestion(t *testi
 			SessionID: &sessionID,
 			NodeKey:   stringPointerForTest("build"),
 			Question: &serverapi.ObservationQuestion{Ask: &clientui.PendingAsk{
-				AskID: "ask-1", SessionID: sessionID, Question: "Proceed?",
+				AskID: "ask-1", SessionID: sessionID, Question: "Proceed?", Suggestions: []string{"Yes"},
 			}},
 		}},
 	}
@@ -86,8 +86,13 @@ func TestTaskObservationRendersDiscriminatorAndTaskTargetForOneQuestion(t *testi
 	text := output.String()
 	if !strings.Contains(text, sessionID) ||
 		!strings.Contains(text, "build") ||
-		!strings.Contains(text, response.TaskShortID) ||
-		!strings.Contains(text, "--project "+shellQuote(projectRef)) ||
+		!strings.Contains(text, commandString([]string{
+			config.Command, "question", "answer",
+			"--task", response.TaskShortID,
+			"--option", "<number>",
+			"--commentary", "<commentary>",
+			"--project", projectRef,
+		})) ||
 		strings.Contains(text, "--session "+sessionID) {
 		t.Fatalf("task observation output = %q", text)
 	}

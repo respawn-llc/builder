@@ -85,11 +85,7 @@ func writeTaskObservation(stdout io.Writer, stderr io.Writer, response serverapi
 			if questionCount > 1 && outcome.SessionID != nil {
 				hintArgs = []string{config.Command, "question", "answer", "--session", *outcome.SessionID}
 			}
-			if outcome.Question.Approval != nil || outcome.Question.Ask != nil && len(outcome.Question.Ask.Suggestions) > 0 {
-				hintArgs = append(hintArgs, "--option", "<number>")
-			} else {
-				hintArgs = append(hintArgs, "--commentary", "<answer>")
-			}
+			hintArgs = append(hintArgs, observationQuestionAnswerArgs(*outcome.Question)...)
 			if strings.TrimSpace(projectRef) != "" && projectRef != "." && questionCount == 1 {
 				hintArgs = append(hintArgs, "--project", projectRef)
 			}

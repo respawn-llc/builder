@@ -35,13 +35,15 @@ func writeObservedQuestion(w io.Writer, question serverapi.ObservationQuestion, 
 }
 
 func observationQuestionHint(sessionID string, question serverapi.ObservationQuestion) string {
-	if question.Approval != nil {
-		return commandString([]string{config.Command, "question", "answer", "--session", sessionID, "--option", "<number>"})
+	args := []string{config.Command, "question", "answer", "--session", sessionID}
+	return commandString(append(args, observationQuestionAnswerArgs(question)...))
+}
+
+func observationQuestionAnswerArgs(question serverapi.ObservationQuestion) []string {
+	if question.Approval != nil || question.Ask != nil && len(question.Ask.Suggestions) > 0 {
+		return []string{"--option", "<number>", "--commentary", "<commentary>"}
 	}
-	if question.Ask != nil && len(question.Ask.Suggestions) > 0 {
-		return commandString([]string{config.Command, "question", "answer", "--session", sessionID, "--option", "<number>"})
-	}
-	return commandString([]string{config.Command, "question", "answer", "--session", sessionID, "--commentary", "<answer>"})
+	return []string{"--commentary", "<answer>"}
 }
 
 func writeRunWatchResponse(w io.Writer, stderr io.Writer, response serverapi.RuntimeLiveWatchResponse, continueHint string) int {

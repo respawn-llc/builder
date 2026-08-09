@@ -244,8 +244,8 @@ To respond, run: kent run steer <source-session-id> "message"
 - A live internal access Approval, including an outside-workspace patch request, is an access-request Question for `kent question` and wait/watch presentation. Each authoritative ordered option carries its display label and typed allow-once, allow-session, or deny decision. A durable Workflow Transition Approval is a separate concept and is never a Question or wait/watch outcome.
 - `kent question --session|--task` shows the first pending ordinary Question or live internal access request. `kent question answer --session|--task` answers the same typed prompt. In the Question CLI, `--option` selects the corresponding typed access decision and optional `--commentary` is included directly in the existing Approval answer. Commentary without an option is invalid.
 - Run watch renders a Question through the same live-prompt presentation as `kent question --session`. It then prints a blank line and a directly targeted answer template.
-- A suggested Question uses `Answer with: kent question answer --session <session-id> --option <number>`. A freeform Question uses `Answer with: kent question answer --session <session-id> --commentary "<answer>"`.
-- An access request always uses the numbered-option answer template. Its labels come from the authoritative live prompt.
+- A suggested Question uses `Answer with: kent question answer --session <session-id> --option <number> --commentary "<commentary>"`. A freeform Question uses `Answer with: kent question answer --session <session-id> --commentary "<answer>"`.
+- An access request uses the option-and-commentary answer template. Its labels come from the authoritative live prompt. The option is required and the commentary is optional.
 - Run watch renders a final answer and continuation hint through the same presentation as Run wait.
 - Run watch prints authoritative reason and diagnostic text for execution errors and interruptions.
 - Run watch exits with code `0` after a Question or final answer, code `1` after an execution error, and code `130` after an interruption or explicit stop.
