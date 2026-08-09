@@ -1698,7 +1698,6 @@ type recordingExecutionTargetInfrastructure struct {
 
 type manualMoveExecutionStub struct {
 	currentNodeCompletionExecutionStub
-	mutationPermit   *workflowexecution.MutationPermit
 	started          []workflow.CurrentNodeReference
 	quiescentErr     error
 	quiescentErrors  []error
@@ -1765,19 +1764,6 @@ func (s *manualMoveExecutionStub) ApplyManualMove(
 	prepared workflowstore.ManualMovePreparation,
 	candidate *workflowstore.ExecutionTargetCandidate,
 ) (workflowstore.ManualMoveResult, error) {
-	if s.mutationPermit != nil {
-		return workflowexecution.RunMutation(ctx, s.mutationPermit, func(ctx context.Context) (workflowstore.ManualMoveResult, error) {
-			return s.applyManualMove(ctx, prepared, candidate)
-		})
-	}
-	return s.applyManualMove(ctx, prepared, candidate)
-}
-
-func (s *manualMoveExecutionStub) applyManualMove(
-	ctx context.Context,
-	prepared workflowstore.ManualMovePreparation,
-	candidate *workflowstore.ExecutionTargetCandidate,
-) (workflowstore.ManualMoveResult, error) {
 	if err := s.EnsureTaskQuiescent(prepared.TaskID()); err != nil {
 		return workflowstore.ManualMoveResult{}, err
 	}
@@ -1816,16 +1802,7 @@ func (s *manualMoveExecutionStub) ManualMoveDisposition(workflow.TaskID) (workfl
 	return s.disposition, nil
 }
 
-func (s *manualMoveExecutionStub) InterruptForManualMove(ctx context.Context, taskID workflow.TaskID, beforeSelection func() error) error {
-	if s.mutationPermit != nil {
-		return s.mutationPermit.Run(ctx, func(context.Context) error {
-			return s.interruptForManualMove(taskID, beforeSelection)
-		})
-	}
-	return s.interruptForManualMove(taskID, beforeSelection)
-}
-
-func (s *manualMoveExecutionStub) interruptForManualMove(taskID workflow.TaskID, beforeSelection func() error) error {
+func (s *manualMoveExecutionStub) InterruptForManualMove(_ context.Context, taskID workflow.TaskID, beforeSelection func() error) error {
 	if s.interruptHook != nil {
 		s.interruptHook()
 	}
