@@ -183,7 +183,6 @@ func TestMissingToolOutputRepairRetryIncludesQueuedSteering(t *testing.T) {
 			if _, accepted, err := eng.QueueUserMessageForActiveRun(
 				context.Background(),
 				"queued steering",
-				runtimeids.NewRuntimeClientRequestID(),
 				nil,
 			); err != nil {
 				return err

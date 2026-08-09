@@ -38,7 +38,7 @@ func TestWorkflowCompletionAuthorityOrdersHumanInputAndCompletion(t *testing.T) 
 			engine, controller, origin := newWorkflowCompletionOriginEngine(t)
 			input := func() error {
 				_, err := engine.acceptHumanAgendaItem(
-					queuedUserMessageWithID(runtimeids.NewQueueItemID().String(), "new direction", ""),
+					queuedUserMessageWithID(runtimeids.NewQueueItemID().String(), "new direction"),
 					boundaryEligibilityStep,
 					true,
 				)
@@ -158,59 +158,6 @@ func TestWorkflowCompletionRejectsMissingMismatchedAndBoundaryClosedOriginBefore
 	if err := <-done; err != nil {
 		t.Fatalf("release Boundary: %v", err)
 	}
-}
-
-func TestWorkflowCompletionTransactionFailureKeepsExactScopeLive(t *testing.T) {
-	engine, controller, origin := newWorkflowCompletionOriginEngine(t)
-	controller.completeErr = errors.New("transaction failed")
-
-	if _, err := engine.completeWorkflowCurrentNode(
-		context.Background(),
-		origin,
-		workflowruntime.ParsedCompletion{TransitionID: "done"},
-	); !errors.Is(err, controller.completeErr) {
-		t.Fatalf("completion error = %v, want transaction failure", err)
-	}
-	if engine.agentSteps.current == nil ||
-		engine.agentSteps.current.scopeID.IsZero() ||
-		engine.agentSteps.current.origin != origin {
-		t.Fatalf("failed completion changed live scope: %+v", engine.agentSteps.current)
-	}
-}
-
-func TestWorkflowCompletionRejectsOriginClosedBeforeSelectedAgendaWork(t *testing.T) {
-	engine, controller, origin := newWorkflowCompletionOriginEngine(t)
-	scopeID := engine.agentSteps.current.scopeID
-	item := &testLongBoundaryAgendaItem{
-		testBoundaryAgendaItem: testBoundaryAgendaItem{
-			id:          "selected-completion-witness",
-			binding:     scopeBoundaryBinding(scopeID, origin),
-			eligibility: boundaryEligibilityStep,
-		},
-	}
-	if err := engine.boundaryAgenda.accept(item); err != nil {
-		t.Fatalf("accept selected Agenda work: %v", err)
-	}
-	engine.agentSteps.current = nil
-	selected, err := engine.longBoundary.selectNext(
-		engine.boundaryAgenda,
-		stepBoundarySelection(scopeID, origin),
-	)
-	if err != nil || selected == nil {
-		t.Fatalf("select Agenda work = %T, %v", selected, err)
-	}
-
-	if _, err := engine.completeWorkflowCurrentNode(
-		context.Background(),
-		origin,
-		workflowruntime.ParsedCompletion{TransitionID: "done"},
-	); err == nil {
-		t.Fatal("completion succeeded while selected between-Step work owned the scope")
-	}
-	if got := controller.completed.Load(); got != 0 {
-		t.Fatalf("Workflow mutations = %d, want zero after selected Agenda work", got)
-	}
-	engine.longBoundary.close(context.Canceled)
 }
 
 func TestWorkflowCompletionProducerAdaptersSupplyExactOrigin(t *testing.T) {

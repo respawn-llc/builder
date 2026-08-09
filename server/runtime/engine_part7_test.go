@@ -264,7 +264,7 @@ func TestSteerAcceptedDuringReviewerAppearsInMainAgentFollowUp(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for reviewer request")
 	}
-	if _, accepted, err := eng.QueueUserMessageForActiveRun(context.Background(), "steer reviewer follow-up", liveRunTestRequestID(t), nil); err != nil || !accepted {
+	if _, accepted, err := eng.QueueUserMessageForActiveRun(context.Background(), "steer reviewer follow-up", nil); err != nil || !accepted {
 		t.Fatalf("QueueUserMessageForActiveRun accepted=%t err=%v", accepted, err)
 	}
 	releaseReviewer()

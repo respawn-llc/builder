@@ -97,9 +97,9 @@ func TestGatewayRequiresExplicitWorkspaceSelectionForMultiWorkspaceProject(t *te
 	callGateway(t, conn, "attach-project-explicit", protocol.MethodAttachProject, attachWorkspaceB, nil)
 	var planResp serverapi.SessionPlanResponse
 	callGateway(t, conn, "session-plan", protocol.MethodSessionPlan, serverapi.SessionPlanRequest{
-		ClientRequestID: "plan-after-explicit-workspace",
-		Mode:            serverapi.SessionLaunchModeInteractive,
-		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+
+		Mode:   serverapi.SessionLaunchModeInteractive,
+		Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
 	}, &planResp)
 	target := gatewaySessionExecutionTarget(t, conn, "main-view-after-explicit-workspace", planResp.Plan.SessionID)
 	if got, want := target.EffectiveWorkdir, bindingB.CanonicalRoot; got != want {
@@ -152,9 +152,9 @@ func TestGatewayAttachSessionClearsWorkspaceOverrideForLaterPlans(t *testing.T) 
 
 	var planResp serverapi.SessionPlanResponse
 	callGateway(t, conn, "session-plan", protocol.MethodSessionPlan, serverapi.SessionPlanRequest{
-		ClientRequestID: "new-after-attach-session",
-		Mode:            serverapi.SessionLaunchModeInteractive,
-		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+
+		Mode:   serverapi.SessionLaunchModeInteractive,
+		Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
 	}, &planResp)
 	wantWorkspaceRoot, err := config.CanonicalWorkspaceRoot(resolvedB.Config.WorkspaceRoot)
 	if err != nil {
@@ -239,7 +239,7 @@ func TestGatewayScopesProcessAPIsToAttachedProject(t *testing.T) {
 	if _, err := remote.GetInlineOutput(context.Background(), serverapi.ProcessInlineOutputRequest{ProcessID: foreignResult.SessionID, MaxChars: 128}); err == nil {
 		t.Fatal("expected foreign process inline output to be rejected")
 	}
-	if _, err := remote.KillProcess(context.Background(), serverapi.ProcessKillRequest{ClientRequestID: "kill-foreign", ProcessID: foreignResult.SessionID}); err == nil {
+	if _, err := remote.KillProcess(context.Background(), serverapi.ProcessKillRequest{ProcessID: foreignResult.SessionID}); err == nil {
 		t.Fatal("expected foreign process kill to be rejected")
 	}
 	if _, err := remote.SubscribeProcessOutput(context.Background(), serverapi.ProcessOutputSubscribeRequest{ProcessID: foreignResult.SessionID, OffsetBytes: 0}); err == nil {

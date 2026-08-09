@@ -554,8 +554,8 @@ func TestAuthoritySyncExecutionTargetPersistsReminderBeforeIdleHumanExecution(t 
 	attachment := openLifecycleRuntime(t, authority, sessionID, "owner-a", &plan)
 	observer.queue = func() {
 		if err := authority.WithRuntime(context.Background(), attachment.Resource(), func(_ context.Context, engine *runtime.Engine) error {
-			engine.QueueUserMessageWithClientRequestID("queued after switch", "request-after-switch")
-			return nil
+			_, err := engine.QueueUserMessage("queued after switch")
+			return err
 		}); err != nil {
 			t.Errorf("queue user work during reminder persistence: %v", err)
 		}
@@ -1192,7 +1192,6 @@ func TestAuthorityBlockingRuntimeActivityIncludesOpenLiveRunGroup(t *testing.T) 
 			item, accepted, err := engine.QueueUserMessageForActiveRun(
 				context.Background(),
 				"follow-up",
-				runtimeids.NewRuntimeClientRequestID(),
 				func() error {
 					close(beforeQueueStarted)
 					<-releaseBeforeQueue

@@ -75,8 +75,8 @@ func TestIdleHumanBoundaryAppliesBeforeInitialProviderOriginIsExposed(t *testing
 			},
 		},
 	)
-	if _, err := engine.QueueUserMessageWithClientRequestID("idle input", ""); err != nil {
-		t.Fatalf("QueueUserMessageWithClientRequestID: %v", err)
+	if _, err := engine.QueueUserMessage("idle input"); err != nil {
+		t.Fatalf("QueueUserMessage: %v", err)
 	}
 	if _, err := engine.SubmitQueuedUserMessages(context.Background()); err != nil {
 		t.Fatalf("SubmitQueuedUserMessages: %v", err)

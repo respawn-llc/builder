@@ -188,9 +188,8 @@ func TestAppendRecoveredWarningIfNeededSurfacesProviderError(t *testing.T) {
 func TestActivateSessionRuntimeRejectsPathLikeSessionID(t *testing.T) {
 	svc := &API{}
 	_, err := svc.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
-		ClientRequestID: "req-1",
-		SessionID:       "../session-1",
-		OwnerID:         "owner-a",
+		SessionID: "../session-1",
+		OwnerID:   "owner-a",
 	})
 	if !errors.Is(err, serverapi.ErrSessionIDNotSingle) {
 		t.Fatalf("expected path-like session id rejection, got %v", err)
@@ -200,8 +199,7 @@ func TestActivateSessionRuntimeRejectsPathLikeSessionID(t *testing.T) {
 func TestActivateSessionRuntimeRejectsMissingOwnerID(t *testing.T) {
 	svc := &API{}
 	_, err := svc.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
-		ClientRequestID: "req-1",
-		SessionID:       "session-1",
+		SessionID: "session-1",
 	})
 	if !errors.Is(err, ErrRuntimeOwnerIDRequired) {
 		t.Fatalf("expected runtime owner id rejection, got %v", err)
@@ -221,9 +219,8 @@ func TestServicePassesRuntimeClientFactoryIntoInteractiveRuntime(t *testing.T) {
 	fixture.api = NewAPI(fixture.metadata, nil, fixture.authority, APIOptions{RuntimeClientFactory: factory})
 
 	activation, err := fixture.api.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
-		ClientRequestID: "activate-factory",
-		SessionID:       fixture.store.Meta().SessionID,
-		OwnerID:         "owner",
+		SessionID: fixture.store.Meta().SessionID,
+		OwnerID:   "owner",
 		ActiveSettings: config.Settings{
 			Model:              "gpt-5",
 			ModelContextWindow: 200000,
@@ -241,11 +238,10 @@ func TestServicePassesRuntimeClientFactoryIntoInteractiveRuntime(t *testing.T) {
 		t.Fatalf("factory calls = %d, want 1", calls)
 	}
 	_, _ = fixture.api.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
-		ClientRequestID: "release-factory",
-		Attachment:      activation.Attachment,
-		OwnerID:         "owner",
-		DropOwner:       true,
-		ClosePolicy:     serverapi.SessionRuntimeReleaseClosePolicyDetachOnly,
+		Attachment:  activation.Attachment,
+		OwnerID:     "owner",
+		DropOwner:   true,
+		ClosePolicy: serverapi.SessionRuntimeReleaseClosePolicyDetachOnly,
 	})
 }
 
@@ -284,9 +280,8 @@ func TestActivateSessionRuntimeAllowsNativeEditInSiblingWorkspace(t *testing.T) 
 		}),
 	})
 	activation, err := fixture.api.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
-		ClientRequestID: "activate-sibling-edit",
-		SessionID:       fixture.store.Meta().SessionID,
-		OwnerID:         "interactive-owner",
+		SessionID: fixture.store.Meta().SessionID,
+		OwnerID:   "interactive-owner",
 		ActiveSettings: config.Settings{
 			Model:              "gpt-5",
 			ModelContextWindow: 200000,
@@ -303,11 +298,10 @@ func TestActivateSessionRuntimeAllowsNativeEditInSiblingWorkspace(t *testing.T) 
 	}
 	t.Cleanup(func() {
 		_, _ = fixture.api.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
-			ClientRequestID: "release-sibling-edit",
-			Attachment:      activation.Attachment,
-			OwnerID:         "interactive-owner",
-			DropOwner:       true,
-			ClosePolicy:     serverapi.SessionRuntimeReleaseClosePolicyDetachOnly,
+			Attachment:  activation.Attachment,
+			OwnerID:     "interactive-owner",
+			DropOwner:   true,
+			ClosePolicy: serverapi.SessionRuntimeReleaseClosePolicyDetachOnly,
 		})
 	})
 	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
@@ -418,7 +412,7 @@ func TestActivateSessionRuntimeDeniesEditInForeignManagedWorktree(t *testing.T) 
 		RuntimeClientFactory:   runtimewire.RuntimeClientFactoryFunc(func(context.Context, runtimewire.RuntimeClientRequest) (llm.Client, error) { return client, nil }),
 	})
 	activation, err := fixture.api.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
-		ClientRequestID: "activate-foreign-edit", SessionID: fixture.store.Meta().SessionID, OwnerID: "interactive-owner",
+		SessionID: fixture.store.Meta().SessionID, OwnerID: "interactive-owner",
 		ActiveSettings: config.Settings{
 			Model: "gpt-5", ModelContextWindow: 200000,
 			Reviewer: config.ReviewerSettings{Frequency: "off"}, Timeouts: config.Timeouts{ModelRequestSeconds: 1},
@@ -431,7 +425,7 @@ func TestActivateSessionRuntimeDeniesEditInForeignManagedWorktree(t *testing.T) 
 	}
 	t.Cleanup(func() {
 		_, _ = fixture.api.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
-			ClientRequestID: "release-foreign-edit", Attachment: activation.Attachment, OwnerID: "interactive-owner", DropOwner: true,
+			Attachment: activation.Attachment, OwnerID: "interactive-owner", DropOwner: true,
 			ClosePolicy: serverapi.SessionRuntimeReleaseClosePolicyDetachOnly,
 		})
 	})
@@ -503,9 +497,8 @@ func TestActivateSessionRuntimeRejectsManagedWorktreeOutsideServerNamespace(t *t
 	_, err = NewAPI(fixture.metadata, nil, fixture.authority, APIOptions{
 		ManagedWorktreeBaseDir: t.TempDir(),
 	}).ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
-		ClientRequestID: "activate-legacy-outside-namespace",
-		SessionID:       fixture.store.Meta().SessionID,
-		OwnerID:         "interactive-owner",
+		SessionID: fixture.store.Meta().SessionID,
+		OwnerID:   "interactive-owner",
 		ActiveSettings: config.Settings{
 			Model: "gpt-5", ModelContextWindow: 200000,
 			Reviewer: config.ReviewerSettings{Frequency: "off"},
@@ -573,17 +566,15 @@ func TestActivateSessionRuntimeUsesActiveShellPostprocessingWithSuppliedManager(
 			return
 		}
 		_, _ = fixture.api.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
-			ClientRequestID: "release-active-shell",
-			Attachment:      attachment,
-			OwnerID:         "interactive-owner",
-			DropOwner:       true,
+			Attachment: attachment,
+			OwnerID:    "interactive-owner",
+			DropOwner:  true,
 		})
 	})
 
 	activation, err := fixture.api.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
-		ClientRequestID: "activate-active-shell",
-		SessionID:       sessionID,
-		OwnerID:         "interactive-owner",
+		SessionID: sessionID,
+		OwnerID:   "interactive-owner",
 		ActiveSettings: config.Settings{
 			Model:                  "gpt-5",
 			ThinkingLevel:          "medium",
@@ -664,7 +655,6 @@ func TestActivateSessionRuntimeUsesActiveShellPostprocessingWithSuppliedManager(
 func TestReleaseSessionRuntimeRejectsPathLikeSessionID(t *testing.T) {
 	svc := &API{}
 	_, err := svc.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
-		ClientRequestID: "req-1",
 		Attachment: serverapi.SessionRuntimeAttachment{
 			SessionID:  "sessions/workspace-a/session-1",
 			Generation: 1,
@@ -679,7 +669,6 @@ func TestReleaseSessionRuntimeRejectsPathLikeSessionID(t *testing.T) {
 func TestReleaseSessionRuntimeRejectsMissingOwnerID(t *testing.T) {
 	svc := &API{}
 	_, err := svc.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
-		ClientRequestID: "req-1",
 		Attachment: serverapi.SessionRuntimeAttachment{
 			SessionID:  "session-1",
 			Generation: 1,

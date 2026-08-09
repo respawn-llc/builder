@@ -90,20 +90,20 @@ func newPromptControlTestService() (*PromptControlService, *stubPromptResponder)
 
 func askAnswerRequest(clientRequestID string) serverapi.AskAnswerRequest {
 	return serverapi.AskAnswerRequest{
-		ClientRequestID: clientRequestID,
-		SessionID:       "session-1",
-		AskID:           "ask-1",
+
+		SessionID: "session-1",
+		AskID:     "ask-1",
 	}
 }
 
 func approvalAnswerRequest(clientRequestID string) serverapi.ApprovalAnswerRequest {
 	commentary := "looks good"
 	return serverapi.ApprovalAnswerRequest{
-		ClientRequestID: clientRequestID,
-		SessionID:       "session-1",
-		ApprovalID:      "approval-1",
-		Decision:        clientui.ApprovalDecisionAllowOnce,
-		Commentary:      &commentary,
+
+		SessionID:  "session-1",
+		ApprovalID: "approval-1",
+		Decision:   clientui.ApprovalDecisionAllowOnce,
+		Commentary: &commentary,
 	}
 }
 

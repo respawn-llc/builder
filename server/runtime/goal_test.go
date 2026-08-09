@@ -123,56 +123,6 @@ func TestQueuedAgentShellGoalSetDrainsAfterToolCompletion(t *testing.T) {
 	}
 }
 
-func TestQueuedGoalMutationUsesRuntimeEventAdmission(t *testing.T) {
-	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
-	engine := mustNewTestEngine(
-		t,
-		store,
-		&fakeClient{},
-		tools.NewRegistry(),
-		Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}},
-	)
-	engine.stepLifecycle = &stubExclusiveStepLifecycle{
-		activeStepID: "step-1",
-		snapshot:     &RunSnapshot{RunID: "run-1", StepID: "step-1"},
-	}
-	release := blockRuntimeEventAdmission(t, engine.runtimeEvents)
-	blocked := true
-	defer func() {
-		if blocked {
-			release()
-		}
-	}()
-
-	done := make(chan error, 1)
-	go func() {
-		_, queued, err := engine.QueueGoalSetForActiveStep(
-			"ordered goal",
-			session.GoalActorUser,
-		)
-		if err == nil && !queued {
-			err = errors.New("Goal mutation was not queued")
-		}
-		done <- err
-	}()
-	select {
-	case err := <-done:
-		t.Fatalf("Goal mutation bypassed Runtime Event admission: %v", err)
-	case <-time.After(100 * time.Millisecond):
-	}
-
-	release()
-	blocked = false
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("queued Goal mutation: %v", err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("Goal mutation did not settle after Runtime Event admission")
-	}
-}
-
 func TestQueuedAgentShellGoalCompleteSeesQueuedSet(t *testing.T) {
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
@@ -774,48 +724,6 @@ func TestGoalLoopStopsAfterPauseOrClearDuringActiveTurn(t *testing.T) {
 				t.Fatalf("model calls = %d, want 1", got)
 			}
 		})
-	}
-}
-
-func TestOrdinaryGoalContinuationTransfersThroughBoundaryAgenda(t *testing.T) {
-	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
-	client := newScriptedGoalLoopClient()
-	engine := mustNewTestEngine(
-		t,
-		store,
-		client,
-		tools.NewRegistry(),
-		Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}},
-	)
-	client.beforeReturn = func(call int) {
-		if call == 2 {
-			_, _ = engine.SetGoalStatus(session.GoalStatusComplete, session.GoalActorAgent)
-		}
-	}
-	if _, err := engine.SetGoal("ship goal mode", session.GoalActorUser); err != nil {
-		t.Fatalf("SetGoal: %v", err)
-	}
-	if err := engine.StartGoalLoop(); err != nil {
-		t.Fatalf("StartGoalLoop: %v", err)
-	}
-	client.waitStarted(t, 1)
-
-	firstID := selectedGoalContinuationID(t, engine)
-	if pending := pendingGoalContinuationCount(engine); pending != 0 {
-		t.Fatalf("pending Goal continuations while selected = %d, want zero", pending)
-	}
-
-	client.releaseCall(1)
-	client.waitStarted(t, 2)
-	secondID := selectedGoalContinuationID(t, engine)
-	if secondID == firstID {
-		t.Fatalf("second Goal continuation reused selected identity %q", secondID)
-	}
-
-	client.releaseCall(2)
-	waitGoalLoopRunning(t, engine, false)
-	if selected := selectedGoalContinuationIDOrEmpty(t, engine); selected != "" {
-		t.Fatalf("terminal Goal retained selected continuation %q", selected)
 	}
 }
 

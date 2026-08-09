@@ -183,10 +183,10 @@ func TestAnswerWorkflowTaskQuestionRoutesOnlyTaskAndAskToCurrentNodeExecution(t 
 	execution := &currentNodeCompletionExecutionStub{}
 	service := currentNodeCompletionService(execution)
 	request := serverapi.WorkflowTaskQuestionAnswerRequest{
-		ClientRequestID: "question-request-1",
-		TaskID:          "task-question",
-		AskID:           "ask-question",
-		Answer:          "continue",
+
+		TaskID: "task-question",
+		AskID:  "ask-question",
+		Answer: "continue",
 	}
 
 	if err := service.AnswerWorkflowTaskQuestion(context.Background(), request); err != nil {
@@ -203,10 +203,10 @@ func TestAnswerWorkflowTaskQuestionRoutesOnlyTaskAndAskToCurrentNodeExecution(t 
 
 func TestAnswerWorkflowTaskQuestionMapsVolatileQuestionFailures(t *testing.T) {
 	request := serverapi.WorkflowTaskQuestionAnswerRequest{
-		ClientRequestID: "question-request-2",
-		TaskID:          "task-question",
-		AskID:           "ask-question",
-		Answer:          "continue",
+
+		TaskID: "task-question",
+		AskID:  "ask-question",
+		Answer: "continue",
 	}
 	tests := []struct {
 		name string

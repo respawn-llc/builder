@@ -152,17 +152,10 @@ func TestServiceKillProcessSignalsManagerEntry(t *testing.T) {
 		t.Fatalf("expected successful tool result, got %+v", result)
 	}
 
-	if _, err := fixture.service.KillProcess(context.Background(), serverapi.ProcessKillRequest{ClientRequestID: "req-kill-1", ProcessID: "1000"}); err != nil {
+	if _, err := fixture.service.KillProcess(context.Background(), serverapi.ProcessKillRequest{ProcessID: "1000"}); err != nil {
 		t.Fatalf("KillProcess: %v", err)
 	}
 	waitForProcessKilled(t, fixture.manager, "1000")
-}
-
-func TestServiceKillProcessRequiresClientRequestID(t *testing.T) {
-	fixture := newProcessViewFixture(t)
-	if _, err := fixture.service.KillProcess(context.Background(), serverapi.ProcessKillRequest{ProcessID: "1000"}); err == nil {
-		t.Fatal("expected KillProcess to require client_request_id")
-	}
 }
 
 func TestServiceKillProcessHonorsCanceledContext(t *testing.T) {
@@ -170,7 +163,7 @@ func TestServiceKillProcessHonorsCanceledContext(t *testing.T) {
 	svc := NewProcessViewService(source)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := svc.KillProcess(ctx, serverapi.ProcessKillRequest{ClientRequestID: "req-kill-1", ProcessID: "1000"}); err != context.Canceled {
+	if _, err := svc.KillProcess(ctx, serverapi.ProcessKillRequest{ProcessID: "1000"}); err != context.Canceled {
 		t.Fatalf("KillProcess error = %v, want context canceled", err)
 	}
 	if source.killCalls != 0 {

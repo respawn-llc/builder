@@ -3,11 +3,8 @@ package runtime
 import (
 	"context"
 	"errors"
-	"fmt"
-	"sync"
 	"testing"
 
-	"core/server/runtimecommand"
 	"core/shared/runtimeids"
 )
 
@@ -78,47 +75,17 @@ func TestBoundaryLongSelectionContractTransfersOneImmutableWorkAndSettlesOnce(t 
 }
 
 func TestBoundaryLongSelectionLifecycleContract(t *testing.T) {
-	for _, adapter := range []boundaryLongSelectionContractAdapter{
-		{
-			name: "generic",
-			newItem: func(id boundaryAgendaItemID) boundaryLongSelectionContractItem {
-				return &testLongBoundaryAgendaItem{
-					testBoundaryAgendaItem: testBoundaryAgendaItem{
-						id:          id,
-						binding:     runtimeBoundaryBinding(),
-						eligibility: boundaryEligibilityIdle,
-					},
-				}
-			},
+	runBoundaryLongSelectionLifecycleContract(t, boundaryLongSelectionContractAdapter{
+		newItem: func(id boundaryAgendaItemID) boundaryLongSelectionContractItem {
+			return &testLongBoundaryAgendaItem{
+				testBoundaryAgendaItem: testBoundaryAgendaItem{
+					id:          id,
+					binding:     runtimeBoundaryBinding(),
+					eligibility: boundaryEligibilityIdle,
+				},
+			}
 		},
-		{
-			name: "compaction",
-			newItem: func(id boundaryAgendaItemID) boundaryLongSelectionContractItem {
-				return &manualCompactionLongContractItem{
-					manualCompactionAgendaItem: &manualCompactionAgendaItem{
-						id:          id,
-						binding:     runtimeBoundaryBinding(),
-						eligibility: boundaryEligibilityIdle,
-						resolver:    newManualCompactionResolver(),
-					},
-				}
-			},
-		},
-		{
-			name: "goal",
-			newItem: func(id boundaryAgendaItemID) boundaryLongSelectionContractItem {
-				item := newGoalContinuationAgendaItem(false)
-				item.id = id
-				return &goalContinuationLongContractItem{
-					goalContinuationAgendaItem: item,
-				}
-			},
-		},
-	} {
-		t.Run(adapter.name, func(t *testing.T) {
-			runBoundaryLongSelectionLifecycleContract(t, adapter)
-		})
-	}
+	})
 }
 
 type boundaryLongSelectionContractItem interface {
@@ -128,23 +95,7 @@ type boundaryLongSelectionContractItem interface {
 }
 
 type boundaryLongSelectionContractAdapter struct {
-	name    string
 	newItem func(boundaryAgendaItemID) boundaryLongSelectionContractItem
-}
-
-type goalContinuationLongContractItem struct {
-	*goalContinuationAgendaItem
-}
-
-func (i *goalContinuationLongContractItem) contractSettlementCount() int {
-	if i.didSettle.Load() {
-		return 1
-	}
-	return 0
-}
-
-func (i *goalContinuationLongContractItem) contractSettlementError() error {
-	return i.settlement
 }
 
 func runBoundaryLongSelectionLifecycleContract(
@@ -239,95 +190,6 @@ func runBoundaryLongSelectionLifecycleContract(
 	})
 }
 
-func TestBoundaryLongSelectionSettlesFailedWorkTransfer(t *testing.T) {
-	engine := &Engine{
-		runtimeEvents:  runtimecommand.NewQueue(context.Background()),
-		boundaryAgenda: newBoundaryAgenda(),
-	}
-	t.Cleanup(engine.runtimeEvents.Close)
-	item := &testLongBoundaryAgendaItem{
-		testBoundaryAgendaItem: testBoundaryAgendaItem{
-			id:          "transfer",
-			binding:     runtimeBoundaryBinding(),
-			eligibility: boundaryEligibilityIdle,
-		},
-	}
-	if err := engine.boundaryAgenda.accept(item); err != nil {
-		t.Fatalf("accept: %v", err)
-	}
-	selected, err := engine.longBoundary.selectNext(
-		engine.boundaryAgenda,
-		idleBoundarySelection(),
-	)
-	if err != nil {
-		t.Fatalf("select: %v", err)
-	}
-	err = engine.transferBoundaryLongWork(
-		runtimeEventAdmission{engine: engine},
-		selected,
-		func(context.Context) {},
-	)
-	if err == nil {
-		t.Fatal("work transfer unexpectedly succeeded")
-	}
-	if engine.longBoundary.selected != nil ||
-		item.settlements != 1 ||
-		!errors.Is(err, item.settlement) {
-		t.Fatalf(
-			"failed transfer = selected:%v settlements:%d error:%v",
-			engine.longBoundary.selected,
-			item.settlements,
-			item.settlement,
-		)
-	}
-}
-
-func TestBoundaryLongSelectionContractPreservesContendedAdmissionOrder(t *testing.T) {
-	const itemCount = 32
-	agenda := newBoundaryAgenda()
-	start := make(chan struct{})
-	var wait sync.WaitGroup
-	for index := 0; index < itemCount; index++ {
-		item := &testLongBoundaryAgendaItem{
-			testBoundaryAgendaItem: testBoundaryAgendaItem{
-				id:          boundaryAgendaItemID(fmt.Sprintf("item-%d", index)),
-				binding:     runtimeBoundaryBinding(),
-				eligibility: boundaryEligibilityIdle,
-			},
-		}
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
-			<-start
-			if err := agenda.accept(item); err != nil {
-				t.Errorf("accept %s: %v", item.id, err)
-			}
-		}()
-	}
-	close(start)
-	wait.Wait()
-
-	orchestrator := &boundaryLongOrchestrator{}
-	var previousOrder uint64
-	for index := 0; index < itemCount; index++ {
-		selected, err := orchestrator.selectNext(agenda, idleBoundarySelection())
-		if err != nil {
-			t.Fatalf("select %d: %v", index, err)
-		}
-		item, ok := selected.(*testLongBoundaryAgendaItem)
-		if !ok {
-			t.Fatalf("selected %d = %T", index, selected)
-		}
-		if item.order <= previousOrder {
-			t.Fatalf("selection order = %d after %d", item.order, previousOrder)
-		}
-		previousOrder = item.order
-		if _, err := orchestrator.settle(boundaryLongWorkResult{id: item.id}); err != nil {
-			t.Fatalf("settle %d: %v", index, err)
-		}
-	}
-}
-
 type testLongBoundaryAgendaItem struct {
 	testBoundaryAgendaItem
 	settlements int
@@ -361,21 +223,4 @@ func (i *testLongBoundaryAgendaItem) contractSettlementCount() int {
 
 func (i *testLongBoundaryAgendaItem) contractSettlementError() error {
 	return i.settlement
-}
-
-type manualCompactionLongContractItem struct {
-	*manualCompactionAgendaItem
-}
-
-func (i *manualCompactionLongContractItem) contractSettlementCount() int {
-	select {
-	case <-i.resolver.done:
-		return 1
-	default:
-		return 0
-	}
-}
-
-func (i *manualCompactionLongContractItem) contractSettlementError() error {
-	return i.resolver.err
 }

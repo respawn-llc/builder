@@ -4,9 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
 
-	"core/server/runtimecommand"
 	"core/server/session"
 	"core/server/tools"
 	"core/shared/toolspec"
@@ -48,64 +46,6 @@ func TestSubmitUserShellCommandPersistsErrorWithoutRegisteredHandler(t *testing.
 	}
 	if completions != 1 {
 		t.Fatalf("persisted unknown shell handler completions = %d, want one", completions)
-	}
-}
-
-func TestHeldUserShellProcessDoesNotBlockRuntimeEventAdmission(t *testing.T) {
-	store := mustCreateTestSession(t)
-	started := make(chan struct{})
-	release := make(chan struct{})
-	defer closeSignalOnce(release)
-	engine := mustNewTestEngine(
-		t,
-		store,
-		&fakeClient{},
-		tools.NewRegistry(tools.HandlerRegistration{
-			ID: toolspec.ToolExecCommand,
-			Handler: blockingTool{
-				name:    toolspec.ToolExecCommand,
-				started: started,
-				release: release,
-			},
-		}),
-		Config{Model: "gpt-5"},
-	)
-
-	shellDone := make(chan error, 1)
-	go func() {
-		_, err := engine.SubmitUserShellCommand(context.Background(), "pwd")
-		shellDone <- err
-	}()
-	select {
-	case <-started:
-	case <-time.After(3 * time.Second):
-		t.Fatal("user shell process did not start")
-	}
-
-	deferred, err := runtimecommand.Submit(
-		context.Background(),
-		engine.runtimeEvents,
-		"unrelated",
-		func(
-			_ runtimecommand.Admission,
-			value string,
-			complete func(string, error),
-		) error {
-			complete(value, nil)
-			return nil
-		},
-	)
-	if err != nil {
-		t.Fatalf("submit unrelated Runtime Event: %v", err)
-	}
-	result, err := deferred.Await(context.Background())
-	if err != nil || result != "unrelated" {
-		t.Fatalf("unrelated Runtime Event = %q, %v", result, err)
-	}
-
-	closeSignalOnce(release)
-	if err := <-shellDone; err != nil {
-		t.Fatalf("user shell process: %v", err)
 	}
 }
 

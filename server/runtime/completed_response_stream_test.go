@@ -1049,7 +1049,7 @@ func TestWorkflowObservedDurableCompletionFailsQueuedSteeringDuringCloseDrain(t 
 		},
 	)
 
-	queued := mustQueueUserMessageWithClientRequestID(t, engine, "queued user input", "request-id")
+	queued := mustQueueUserMessage(t, engine, "queued user input")
 	completed, err := engine.observeWorkflowDurableCompletion(context.Background())
 	if err != nil {
 		t.Fatalf("observe durable workflow completion: %v", err)
@@ -1070,13 +1070,11 @@ func TestWorkflowObservedDurableCompletionFailsQueuedSteeringDuringCloseDrain(t 
 		t.Fatalf("queued user statuses = %+v", statuses)
 	}
 	if accepted := statuses[0]; accepted.Status != QueuedUserMessageAccepted ||
-		accepted.QueueItemID != queued.ID ||
-		accepted.ClientRequestID != queued.ClientRequestID {
+		accepted.QueueItemID != queued.ID {
 		t.Fatalf("accepted queue status = %+v", accepted)
 	}
 	if failed := statuses[1]; failed.Status != QueuedUserMessageFailed ||
 		failed.QueueItemID != queued.ID ||
-		failed.ClientRequestID != queued.ClientRequestID ||
 		failed.FailureReason != QueuedUserMessageFailureTerminalWorkflowCompletion {
 		t.Fatalf("terminal workflow queue failure = %+v", failed)
 	}

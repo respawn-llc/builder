@@ -209,9 +209,9 @@ func TestHumanBoundaryAgendaTakesOnlyTheStoppedExactScope(t *testing.T) {
 	secondScope := runtimeids.NewExecutionScopeID()
 	firstOrigin := serverapi.RuntimeStepOrigin{RunID: uuid.NewString(), StepID: uuid.NewString()}
 	secondOrigin := serverapi.RuntimeStepOrigin{RunID: uuid.NewString(), StepID: uuid.NewString()}
-	first := queuedUserMessageWithID(runtimeids.NewQueueItemID().String(), "first", "")
-	second := queuedUserMessageWithID(runtimeids.NewQueueItemID().String(), "second", "")
-	idle := queuedUserMessageWithID(runtimeids.NewQueueItemID().String(), "idle", "")
+	first := queuedUserMessageWithID(runtimeids.NewQueueItemID().String(), "first")
+	second := queuedUserMessageWithID(runtimeids.NewQueueItemID().String(), "second")
+	idle := queuedUserMessageWithID(runtimeids.NewQueueItemID().String(), "idle")
 
 	for _, accepted := range []struct {
 		message QueuedUserMessage

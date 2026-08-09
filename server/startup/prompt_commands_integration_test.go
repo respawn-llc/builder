@@ -14,9 +14,7 @@ import (
 	"core/server/metadata"
 	"core/server/onboarding"
 	"core/shared/client"
-	"core/shared/clientui"
 	"core/shared/config"
-	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
 
@@ -122,45 +120,31 @@ func TestRemotePromptCommandStartupCatalogAndInvocationUseImportedServerContent(
 	}
 
 	plan, err := remote.PlanSession(context.Background(), serverapi.SessionPlanRequest{
-		ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
-		Mode:            serverapi.SessionLaunchModeInteractive,
-		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+		Mode:   serverapi.SessionLaunchModeInteractive,
+		Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
 	})
 	if err != nil {
 		t.Fatalf("PlanSession: %v", err)
 	}
 	attachment, err := remote.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
-		ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
-		SessionID:       plan.Plan.SessionID,
-		ActiveSettings:  plan.Plan.ActiveSettings,
-		EnabledToolIDs:  plan.Plan.EnabledToolIDs,
-		Source:          plan.Plan.Source,
+		SessionID:      plan.Plan.SessionID,
+		ActiveSettings: plan.Plan.ActiveSettings,
+		EnabledToolIDs: plan.Plan.EnabledToolIDs,
+		Source:         plan.Plan.Source,
 	})
 	if err != nil {
 		t.Fatalf("ActivateSessionRuntime: %v", err)
 	}
-	submitID := runtimeids.NewRuntimeClientRequestID()
-	preSubmitID := runtimeids.NewRuntimeClientRequestID()
 	if _, err := remote.SubmitUserTurn(context.Background(), serverapi.RuntimeSubmitUserTurnRequest{
-		ClientRequestID: submitID.String(),
-		SessionID:       plan.Plan.SessionID,
-		Input:           runtimeinput.Command("prompt:remote_demo", "hello world"),
-		OperationRef: clientui.RuntimeOperationRef{
-			Kind:            clientui.RuntimeOperationKindSubmit,
-			ClientRequestID: submitID,
-		},
-		PreSubmitCompactionOperationRef: clientui.RuntimeOperationRef{
-			Kind:            clientui.RuntimeOperationKindPreSubmitCompact,
-			ClientRequestID: preSubmitID,
-		},
+		SessionID: plan.Plan.SessionID,
+		Input:     runtimeinput.Command("prompt:remote_demo", "hello world"),
 	}); err != nil {
 		t.Fatalf("SubmitUserTurn: %v", err)
 	}
 	_, _ = remote.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
-		ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
-		Attachment:      attachment.Attachment,
-		DropOwner:       true,
-		ClosePolicy:     serverapi.SessionRuntimeReleaseClosePolicyDetachOnly,
+		Attachment:  attachment.Attachment,
+		DropOwner:   true,
+		ClosePolicy: serverapi.SessionRuntimeReleaseClosePolicyDetachOnly,
 	})
 	var body json.RawMessage
 	testsetup.RequireUntil(t, time.Now().Add(10*time.Second), 10*time.Millisecond, func() bool {

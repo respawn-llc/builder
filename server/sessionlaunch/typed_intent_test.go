@@ -55,9 +55,9 @@ func TestServiceMapsEveryTypedLaunchIntentAsNewOperation(t *testing.T) {
 	}).WithRuntimeAuthority(authority)
 
 	createRequest := serverapi.SessionPlanRequest{
-		ClientRequestID: "same-request-id",
-		Mode:            serverapi.SessionLaunchModeInteractive,
-		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+
+		Mode:   serverapi.SessionLaunchModeInteractive,
+		Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
 	}
 	created, err := service.PlanSession(context.Background(), createRequest)
 	if err != nil {
@@ -73,12 +73,12 @@ func TestServiceMapsEveryTypedLaunchIntentAsNewOperation(t *testing.T) {
 	}
 
 	openRequest := serverapi.SessionPlanRequest{
-		ClientRequestID: "same-request-id",
-		Mode:            serverapi.SessionLaunchModeInteractive,
-		Intent:          serverapi.OpenExistingSessionLaunchIntent(targetID),
+
+		Mode:   serverapi.SessionLaunchModeInteractive,
+		Intent: serverapi.OpenExistingSessionLaunchIntent(targetID),
 	}
 	if _, err := service.PlanSession(context.Background(), openRequest); err != nil {
-		t.Fatalf("open existing after create with same request ID: %v", err)
+		t.Fatalf("open existing after create: %v", err)
 	}
 }
 

@@ -505,7 +505,7 @@ func testAcceptedLiveWorkflowSteeringToolChoice(t *testing.T, useAutomaticToolCh
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for active workflow request")
 	}
-	_, queued, err := eng.SubmitUserMessageOrSteer(context.Background(), "steer active workflow", "req-steer")
+	_, queued, err := eng.SubmitUserMessageOrSteer(context.Background(), "steer active workflow")
 	if err != nil {
 		t.Fatalf("SubmitUserMessageOrSteer: %v", err)
 	}
@@ -1101,7 +1101,7 @@ func TestCompatibleProviderCommentaryFlushesAcceptedSteeringBeforeContinuing(t *
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for commentary response")
 	}
-	_, accepted, err := eng.QueueUserMessageForActiveRun(context.Background(), "accepted steering", liveRunTestRequestID(t), nil)
+	_, accepted, err := eng.QueueUserMessageForActiveRun(context.Background(), "accepted steering", nil)
 	if err != nil || !accepted {
 		t.Fatalf("QueueUserMessageForActiveRun accepted=%t err=%v", accepted, err)
 	}

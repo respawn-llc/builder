@@ -129,7 +129,7 @@ func TestTerminalWorkflowQueueFailureSettlesCanonicalPendingInput(t *testing.T) 
 	}
 	eng.liveRun.beginStep(snapshot)
 	installTestAgentStepOrigin(t, eng, snapshot)
-	item, accepted, err := eng.QueueUserMessageForActiveRun(context.Background(), "steer after workflow", liveRunTestRequestID(t), nil)
+	item, accepted, err := eng.QueueUserMessageForActiveRun(context.Background(), "steer after workflow", nil)
 	if err != nil || !accepted || item.ID == "" {
 		t.Fatalf("QueueUserMessageForActiveRun item=%+v accepted=%t err=%v", item, accepted, err)
 	}
@@ -181,14 +181,13 @@ func TestExplicitQueueWaitsForTurnWhileLiveSteerAppliesAtStepBoundary(t *testing
 	eng.liveRun.beginStep(snapshot)
 	installTestAgentStepOrigin(t, eng, snapshot)
 
-	queued, err := eng.QueueUserMessageWithClientRequestID("queue", liveRunTestRequestID(t).String())
+	queued, err := eng.QueueUserMessage("queue")
 	if err != nil {
-		t.Fatalf("QueueUserMessageWithClientRequestID: %v", err)
+		t.Fatalf("QueueUserMessage: %v", err)
 	}
 	steered, accepted, err := eng.QueueUserMessageForActiveRun(
 		context.Background(),
 		"steer",
-		liveRunTestRequestID(t),
 		nil,
 	)
 	if err != nil {
@@ -363,7 +362,7 @@ func TestQueueUserMessageForActiveRunRejectsIdleWithoutBeforeQueue(t *testing.T)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	called := false
 
-	_, accepted, err := eng.QueueUserMessageForActiveRun(context.Background(), "steer", liveRunTestRequestID(t), func() error {
+	_, accepted, err := eng.QueueUserMessageForActiveRun(context.Background(), "steer", func() error {
 		called = true
 		return nil
 	})
@@ -400,7 +399,7 @@ func TestQueueUserMessageForActiveRunRollsBackBeforeQueueError(t *testing.T) {
 	}
 
 	beforeErr := errors.New("history failed")
-	if _, accepted, err := eng.QueueUserMessageForActiveRun(context.Background(), "steer", liveRunTestRequestID(t), func() error { return beforeErr }); !errors.Is(err, beforeErr) || accepted {
+	if _, accepted, err := eng.QueueUserMessageForActiveRun(context.Background(), "steer", func() error { return beforeErr }); !errors.Is(err, beforeErr) || accepted {
 		t.Fatalf("beforeQueue error accepted=%t err=%v, want rollback error", accepted, err)
 	}
 	if eng.HasQueuedUserWork() {
@@ -445,7 +444,7 @@ func testStopBeforeInputCommit(t *testing.T) {
 		err      error
 	}, 1)
 	go func() {
-		item, accepted, err := eng.QueueUserMessageForActiveRun(context.Background(), "must not queue", liveRunTestRequestID(t), func() error {
+		item, accepted, err := eng.QueueUserMessageForActiveRun(context.Background(), "must not queue", func() error {
 			close(beforeStarted)
 			<-releaseBefore
 			return nil
@@ -655,7 +654,6 @@ func testStopBeforePendingDelivery(t *testing.T) {
 	item, accepted, err := eng.QueueUserMessageForActiveRun(
 		context.Background(),
 		"must remain pending after cancellation",
-		liveRunTestRequestID(t),
 		nil,
 	)
 	if err != nil || !accepted {
@@ -895,7 +893,6 @@ func (f *stopAgendaFixture) accept(t *testing.T, text string) QueuedUserMessage 
 	item, accepted, err := f.engine.QueueUserMessageForActiveRun(
 		context.Background(),
 		text,
-		liveRunTestRequestID(t),
 		nil,
 	)
 	if err != nil || !accepted {
@@ -1040,13 +1037,4 @@ func assertQueuedStatusOrder(t *testing.T, statuses []QueuedUserMessageStatusEve
 			t.Fatalf("status order for %q = %+v, want %+v", queueItemID, got, want)
 		}
 	}
-}
-
-func liveRunTestRequestID(t *testing.T) runtimeids.RuntimeClientRequestID {
-	t.Helper()
-	id, err := runtimeids.ParseRuntimeClientRequestID("018fdd67-89ab-4cde-8123-456789abcdef")
-	if err != nil {
-		t.Fatalf("parse live-run test request id: %v", err)
-	}
-	return id
 }

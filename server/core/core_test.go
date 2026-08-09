@@ -3,14 +3,11 @@ package core
 import (
 	"context"
 	"errors"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
 
-	modelstub "core/internal/testharness/pty/blackbox"
 	"core/server/auth"
 	serverbootstrap "core/server/bootstrap"
 	"core/server/metadata"
@@ -18,7 +15,6 @@ import (
 	brand "core/shared/config"
 	"core/shared/protocol"
 	"core/shared/serverapi"
-	"core/shared/sessioncontract"
 )
 
 func TestNewBuildsReusableServerCore(t *testing.T) {
@@ -352,47 +348,6 @@ func TestSessionLaunchClientForProjectWorkspaceRejectsUnavailableProjectRoot(t *
 	}
 }
 
-func TestSessionLaunchClientForProjectWorkspaceReplaysForceNewSessionAcrossClientInstances(t *testing.T) {
-	home := t.TempDir()
-	workspace := t.TempDir()
-	t.Setenv("HOME", home)
-
-	resolved, err := serverbootstrap.ResolveConfig(serverbootstrap.Request{WorkspaceRoot: workspace})
-	if err != nil {
-		t.Fatalf("ResolveConfig: %v", err)
-	}
-	binding, err := metadata.RegisterBinding(context.Background(), resolved.Config.PersistenceRoot, resolved.Config.WorkspaceRoot)
-	if err != nil {
-		t.Fatalf("RegisterBinding: %v", err)
-	}
-	appCore := newCoreTestApp(t, resolved.Config, auth.EmptyState())
-
-	firstClient, err := appCore.SessionLaunchClientForProjectWorkspace(context.Background(), binding.ProjectID, workspace)
-	if err != nil {
-		t.Fatalf("SessionLaunchClientForProjectWorkspace first: %v", err)
-	}
-	secondClient, err := appCore.SessionLaunchClientForProjectWorkspace(context.Background(), binding.ProjectID, workspace)
-	if err != nil {
-		t.Fatalf("SessionLaunchClientForProjectWorkspace second: %v", err)
-	}
-	req := serverapi.SessionPlanRequest{
-		ClientRequestID: "req-1",
-		Mode:            serverapi.SessionLaunchModeInteractive,
-		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
-	}
-	firstPlan, err := firstClient.PlanSession(context.Background(), req)
-	if err != nil {
-		t.Fatalf("PlanSession first: %v", err)
-	}
-	secondPlan, err := secondClient.PlanSession(context.Background(), req)
-	if err != nil {
-		t.Fatalf("PlanSession second: %v", err)
-	}
-	if firstPlan.Plan.SessionID != secondPlan.Plan.SessionID {
-		t.Fatalf("session ids = %q and %q, want stable replay", firstPlan.Plan.SessionID, secondPlan.Plan.SessionID)
-	}
-}
-
 func TestSessionLaunchClientForProjectWorkspaceUsesWorkspaceLocalConfig(t *testing.T) {
 	home := t.TempDir()
 	workspaceA := t.TempDir()
@@ -423,86 +378,12 @@ func TestSessionLaunchClientForProjectWorkspaceUsesWorkspaceLocalConfig(t *testi
 	if err != nil {
 		t.Fatalf("SessionLaunchClientForProjectWorkspace: %v", err)
 	}
-	plan, err := client.PlanSession(context.Background(), serverapi.SessionPlanRequest{ClientRequestID: "req-1", Mode: serverapi.SessionLaunchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())})
+	plan, err := client.PlanSession(context.Background(), serverapi.SessionPlanRequest{Mode: serverapi.SessionLaunchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())})
 	if err != nil {
 		t.Fatalf("PlanSession: %v", err)
 	}
 	if plan.Plan.ActiveSettings.Model != "workspace-b-model" || plan.Plan.ActiveSettings.ThinkingLevel != "high" {
 		t.Fatalf("unexpected active settings: %+v", plan.Plan.ActiveSettings)
-	}
-}
-
-func TestRunPromptClientForProjectWorkspaceReplaysHeadlessRunAcrossClientInstances(t *testing.T) {
-	home := t.TempDir()
-	workspace := t.TempDir()
-	t.Setenv("HOME", home)
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if modelstub.HandleInputTokenCount(w, r, 1) {
-			return
-		}
-		if r.URL.Path != "/responses" {
-			t.Fatalf("unexpected path %q", r.URL.Path)
-		}
-		if got := r.Header.Get("Authorization"); got == "" {
-			t.Fatal("expected authorization header")
-		}
-		modelstub.WriteCompletedResponseStream(w, "ok", 1, 1)
-	}))
-	defer server.Close()
-
-	resolved, err := serverbootstrap.ResolveConfig(serverbootstrap.Request{WorkspaceRoot: workspace})
-	if err != nil {
-		t.Fatalf("ResolveConfig: %v", err)
-	}
-	resolved.Config.Settings.Model = "gpt-5"
-	resolved.Config.Settings.OpenAIBaseURL = server.URL
-	binding, err := metadata.RegisterBinding(context.Background(), resolved.Config.PersistenceRoot, resolved.Config.WorkspaceRoot)
-	if err != nil {
-		t.Fatalf("RegisterBinding: %v", err)
-	}
-	appCore := newCoreTestApp(t, resolved.Config, auth.State{
-		Scope:  auth.ScopeGlobal,
-		Method: auth.Method{Type: auth.MethodAPIKey, APIKey: &auth.APIKeyMethod{Key: "test-key"}},
-	})
-
-	firstClient, err := appCore.RunPromptClientForProjectWorkspace(context.Background(), binding.ProjectID, workspace)
-	if err != nil {
-		t.Fatalf("RunPromptClientForProjectWorkspace first: %v", err)
-	}
-	secondClient, err := appCore.RunPromptClientForProjectWorkspace(context.Background(), binding.ProjectID, workspace)
-	if err != nil {
-		t.Fatalf("RunPromptClientForProjectWorkspace second: %v", err)
-	}
-	req := serverapi.RunPromptRequest{ClientRequestID: "req-1", Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()), Prompt: "hello"}
-	firstRun, err := firstClient.RunPrompt(context.Background(), req, nil)
-	if err != nil {
-		t.Fatalf("RunPrompt first: %v", err)
-	}
-	secondRun, err := secondClient.RunPrompt(context.Background(), req, nil)
-	if err != nil {
-		t.Fatalf("RunPrompt second: %v", err)
-	}
-	if firstRun.SessionID != secondRun.SessionID {
-		t.Fatalf("session ids = %q and %q, want stable replay", firstRun.SessionID, secondRun.SessionID)
-	}
-	if firstRun.Result != "ok" || secondRun.Result != "ok" {
-		t.Fatalf("results = (%q, %q), want both ok", firstRun.Result, secondRun.Result)
-	}
-	page, err := appCore.ProjectViewClient().ListSessionPage(context.Background(), serverapi.SessionPageRequest{
-		ProjectID: binding.ProjectID,
-		Category:  sessioncontract.SessionCategorySubagent,
-		PageSize:  20,
-		Position:  serverapi.NewestSessionPagePosition(),
-	})
-	if err != nil {
-		t.Fatalf("ListSessionPage: %v", err)
-	}
-	if len(page.Sessions) != 1 {
-		t.Fatalf("session count = %d, want 1", len(page.Sessions))
-	}
-	if page.Sessions[0].SessionID.String() != firstRun.SessionID {
-		t.Fatalf("persisted session id = %q, want %q", page.Sessions[0].SessionID, firstRun.SessionID)
 	}
 }
 
