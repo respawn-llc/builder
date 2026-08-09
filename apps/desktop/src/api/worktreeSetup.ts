@@ -1,31 +1,144 @@
 import { z } from "zod";
 
 import { ContractError, RpcError } from "./errors";
-import { setupOperationIDSchema, type SetupOperationID } from "./setupOperationID";
+import { parseSetupOperationID, type SetupOperationID } from "./setupOperationID";
 import { workflowExecutionTargetSelectionSchema } from "./schemas/workflowExecutionTarget";
-import type { WorkflowExecutionTargetSelection } from "./workflowExecutionTarget";
-import {
-  registeredWorktreeTopologySchema,
-  retainedPreviousWorktreeSchema,
-  type RegisteredWorktreeTopology,
-  type RetainedPreviousWorktree,
-} from "./worktreeTopology";
 import type { RpcEventHandler } from "./transport";
+import type { WorkflowExecutionTargetSelection } from "./workflowExecutionTarget";
 
-export type WorktreeSetupPhase = "started" | "completed" | "not_required" | "failed";
+const nonBlank = z.string().trim().min(1);
+const nullableNonBlank = nonBlank.nullable();
+const setupOperationIDSchema = z.string().transform((value, context): SetupOperationID => {
+  try {
+    return parseSetupOperationID(value);
+  } catch {
+    context.addIssue({ code: "custom", message: "Setup operation id must be a UUID v4." });
+    return z.NEVER;
+  }
+});
 
-export type WorktreeSetupFailureCause =
-  | Readonly<{ kind: "process_exit"; exitCode: number; stdout: string | null; stderr: string | null }>
-  | Readonly<{ kind: "timeout"; stdout: string | null; stderr: string | null }>
-  | Readonly<{
-      kind:
-        | "target_preparation"
-        | "interruption_persistence"
-        | "canceled"
-        | "controller_shutdown"
-        | "operational";
-    }>;
+const gitFactsSchema = z
+  .object({
+    canonical_root: nonBlank,
+    head_object: nonBlank,
+    branch_ref: nullableNonBlank,
+    branch_name: nullableNonBlank,
+    detached: z.boolean(),
+    bare: z.boolean(),
+    locked_reason: nullableNonBlank,
+    prunable_reason: nullableNonBlank,
+    is_main: z.boolean(),
+    path_available: z.boolean(),
+  })
+  .strict()
+  .transform((value) => ({ canonicalRoot: value.canonical_root }));
+const kentFactsSchema = z
+  .object({
+    worktree_id: nonBlank,
+    canonical_root: nonBlank,
+    display_name: nonBlank,
+    managed: z.boolean(),
+    created_branch: z.boolean(),
+    origin_session_id: nullableNonBlank,
+  })
+  .strict()
+  .transform((value) => ({ worktreeID: value.worktree_id, canonicalRoot: value.canonical_root }));
 
+export type RegisteredWorktreeTopology = Readonly<{
+  variant: "registered";
+  registered: Readonly<{ git: z.output<typeof gitFactsSchema>; kent: z.output<typeof kentFactsSchema> }>;
+}>;
+export type RetainedPreviousWorktree = Readonly<{ worktree: RegisteredWorktreeTopology }>;
+
+const registeredWorktreeTopologySchema: z.ZodType<RegisteredWorktreeTopology> = z
+  .object({
+    variant: z.literal("registered"),
+    registered: z
+      .object({ git: gitFactsSchema, kent: kentFactsSchema })
+      .strict()
+      .refine((value) => value.git.canonicalRoot === value.kent.canonicalRoot),
+  })
+  .strict();
+const retainedPreviousWorktreeSchema: z.ZodType<RetainedPreviousWorktree> = z
+  .object({ worktree: registeredWorktreeTopologySchema })
+  .strict();
+
+export type TaskSetupRecovery = Readonly<{
+  setupOperationID: SetupOperationID;
+  cause: "process_exit" | "timeout" | "target_preparation" | "operational";
+  diagnostic: string;
+  scriptPath: string | null;
+  executionTarget: WorkflowExecutionTargetSelection;
+  retainedWorktree: Readonly<{ worktreeID: string; root: string }> | null;
+  retainedPreviousWorktree: Readonly<{ worktreeID: string; root: string }> | null;
+}>;
+
+const recoveryWorktreeSchema = z
+  .object({ worktree_id: nonBlank, root: nonBlank })
+  .strict()
+  .transform((value) => ({ worktreeID: value.worktree_id, root: value.root }));
+const taskSetupRecoverySchema: z.ZodType<TaskSetupRecovery> = z
+  .object({
+    setup_operation_id: setupOperationIDSchema,
+    cause: z.enum(["process_exit", "timeout", "target_preparation", "operational"]),
+    diagnostic: nonBlank,
+    script_path: nullableNonBlank,
+    setup_requirement: z.enum(["required", "already_completed"]),
+    execution_target: workflowExecutionTargetSelectionSchema,
+    retained_worktree: recoveryWorktreeSchema.nullable(),
+    retained_previous_worktree: recoveryWorktreeSchema.nullable(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    const scriptFailure = value.cause !== "target_preparation";
+    if (scriptFailure && (value.script_path === null || value.retained_worktree === null)) {
+      context.addIssue({ code: "custom", message: "Setup failure requires script and Worktree facts." });
+    }
+    if (!scriptFailure && value.script_path !== null) {
+      context.addIssue({ code: "custom", message: "Target preparation cannot include a setup script." });
+    }
+  })
+  .transform((value) => ({
+    setupOperationID: value.setup_operation_id,
+    cause: value.cause,
+    diagnostic: value.diagnostic,
+    scriptPath: value.script_path,
+    executionTarget: value.execution_target,
+    retainedWorktree: value.retained_worktree,
+    retainedPreviousWorktree: value.retained_previous_worktree,
+  }));
+
+export function parseTaskSetupRecoveryDetail(detailJSON: string | null): TaskSetupRecovery | null {
+  if (detailJSON === null) return null;
+  try {
+    const envelope = z
+      .object({ setup_recovery: taskSetupRecoverySchema.optional() })
+      .loose()
+      .parse(JSON.parse(detailJSON));
+    return envelope.setup_recovery ?? null;
+  } catch {
+    return null;
+  }
+}
+
+type WorktreeSetupFailureKind =
+  | "process_exit"
+  | "timeout"
+  | "target_preparation"
+  | "interruption_persistence"
+  | "canceled"
+  | "controller_shutdown"
+  | "operational";
+const failureKindSchema = z.enum([
+  "process_exit",
+  "timeout",
+  "target_preparation",
+  "interruption_persistence",
+  "canceled",
+  "controller_shutdown",
+  "operational",
+]);
+export type WorktreeSetupFailureCause = Readonly<{ kind: WorktreeSetupFailureKind }>;
 export type WorktreeSetupFailure = Readonly<{
   retryReadiness: "retry_ready" | "non_retryable";
   cause: WorktreeSetupFailureCause;
@@ -36,124 +149,52 @@ export type WorktreeSetupFailure = Readonly<{
   retainedPreviousWorktree: RetainedPreviousWorktree | null;
 }>;
 
-const processExitCauseSchema = z
-  .object({
-    kind: z.literal("process_exit"),
-    process_exit: z
-      .object({
-        exit_code: z
-          .number()
-          .int()
-          .refine((value) => value !== 0),
-        stdout: z.string().nullable(),
-        stderr: z.string().nullable(),
-      })
-      .strict(),
-  })
-  .strict()
-  .transform((value): WorktreeSetupFailureCause => ({
-    kind: value.kind,
-    exitCode: value.process_exit.exit_code,
-    stdout: value.process_exit.stdout,
-    stderr: value.process_exit.stderr,
-  }));
+const outputSchema = z.object({ stdout: z.string().nullable(), stderr: z.string().nullable() }).strict();
+const markerKinds = [
+  "target_preparation",
+  "interruption_persistence",
+  "canceled",
+  "controller_shutdown",
+  "operational",
+] as const;
+const failureCauseSchema = z
+  .union([
+    z.object({
+      kind: z.literal("process_exit"),
+      process_exit: outputSchema.extend({ exit_code: z.number().int().refine((value) => value !== 0) }),
+    }).strict(),
+    z.object({ kind: z.literal("timeout"), timeout: outputSchema }).strict(),
+    ...markerKinds.map((kind) =>
+      z.object({ kind: z.literal(kind), [kind]: z.object({}).strict() }).strict(),
+    ),
+  ])
+  .transform((value): WorktreeSetupFailureCause => ({ kind: failureKindSchema.parse(value.kind) }));
 
-const timeoutCauseSchema = z
-  .object({
-    kind: z.literal("timeout"),
-    timeout: z
-      .object({
-        stdout: z.string().nullable(),
-        stderr: z.string().nullable(),
-      })
-      .strict(),
-  })
-  .strict()
-  .transform((value): WorktreeSetupFailureCause => ({
-    kind: value.kind,
-    stdout: value.timeout.stdout,
-    stderr: value.timeout.stderr,
-  }));
-
-const markerCauseSchema = (
-  kind:
-    "target_preparation" | "interruption_persistence" | "canceled" | "controller_shutdown" | "operational",
-) =>
-  z
-    .object({
-      kind: z.literal(kind),
-      [kind]: z.object({}).strict(),
-    })
-    .strict()
-    .transform((): WorktreeSetupFailureCause => ({ kind }));
-
-const failureCauseSchema = z.discriminatedUnion("kind", [
-  processExitCauseSchema,
-  timeoutCauseSchema,
-  markerCauseSchema("target_preparation"),
-  markerCauseSchema("interruption_persistence"),
-  markerCauseSchema("canceled"),
-  markerCauseSchema("controller_shutdown"),
-  markerCauseSchema("operational"),
-]);
-
-const worktreeSetupFailureWireSchema = z
+const worktreeSetupFailureWireSchema: z.ZodType<WorktreeSetupFailure> = z
   .object({
     retry_readiness: z.enum(["retry_ready", "non_retryable"]),
     cause: failureCauseSchema,
-    diagnostic: z.string().trim().min(1),
-    script_path: z.string().trim().min(1).nullable(),
+    diagnostic: nonBlank,
+    script_path: nullableNonBlank,
     execution_target: workflowExecutionTargetSelectionSchema.nullable(),
     retained_worktree: registeredWorktreeTopologySchema.nullable(),
     retained_previous_worktree: retainedPreviousWorktreeSchema.nullable(),
   })
   .strict()
   .superRefine((value, context) => {
-    const retryable =
-      value.cause.kind === "process_exit" ||
-      value.cause.kind === "timeout" ||
-      value.cause.kind === "target_preparation";
-    const nonRetryable =
-      value.cause.kind === "interruption_persistence" ||
-      value.cause.kind === "canceled" ||
-      value.cause.kind === "controller_shutdown";
-    if (
-      (retryable && value.retry_readiness !== "retry_ready") ||
-      (nonRetryable && value.retry_readiness !== "non_retryable")
-    ) {
-      context.addIssue({
-        code: "custom",
-        message: "Failure retry readiness does not match its typed cause.",
-        path: ["retry_readiness"],
-      });
+    const retryable = ["process_exit", "timeout", "target_preparation"].includes(value.cause.kind);
+    const scriptFailure = value.retry_readiness === "retry_ready" && value.cause.kind !== "target_preparation";
+    if (retryable !== (value.retry_readiness === "retry_ready")) {
+      context.addIssue({ code: "custom", message: "Retry readiness does not match failure cause." });
     }
-    if (
-      value.retry_readiness === "retry_ready" &&
-      value.cause.kind !== "target_preparation" &&
-      value.retained_worktree == null
-    ) {
-      context.addIssue({
-        code: "custom",
-        message: "Retry-ready setup-script failure requires a retained Worktree.",
-        path: ["retained_worktree"],
-      });
+    if (scriptFailure && (value.script_path === null || value.retained_worktree === null)) {
+      context.addIssue({ code: "custom", message: "Setup failure requires script and Worktree facts." });
+    }
+    if (value.cause.kind === "target_preparation" && value.script_path !== null) {
+      context.addIssue({ code: "custom", message: "Target preparation cannot include a setup script." });
     }
   })
-  .refine(
-    (value) =>
-      value.retry_readiness !== "retry_ready" ||
-      value.cause.kind === "target_preparation" ||
-      value.script_path !== null,
-    {
-      message: "Retry-ready setup-script failure requires its script path.",
-      path: ["script_path"],
-    },
-  )
-  .refine((value) => value.cause.kind !== "target_preparation" || value.script_path === null, {
-    message: "Target-preparation failure cannot include a setup script.",
-    path: ["script_path"],
-  })
-  .transform((value): WorktreeSetupFailure => ({
+  .transform((value) => ({
     retryReadiness: value.retry_readiness,
     cause: value.cause,
     diagnostic: value.diagnostic,
@@ -169,21 +210,13 @@ export class WorktreeSetupRetainedError extends RpcError {
   readonly diagnostic: string;
   readonly retainedPreviousWorktree: RetainedPreviousWorktree | null;
 
-  constructor(
-    rpcError: RpcError,
-    facts: Readonly<{
-      worktree: RegisteredWorktreeTopology;
-      scriptPath: string;
-      diagnostic: string;
-      retainedPreviousWorktree: RetainedPreviousWorktree | null;
-    }>,
-  ) {
-    super({
-      code: rpcError.code,
-      message: rpcError.message,
-      method: rpcError.method,
-      data: rpcError.data,
-    });
+  constructor(rpcError: RpcError, facts: Readonly<{
+    worktree: RegisteredWorktreeTopology;
+    scriptPath: string;
+    diagnostic: string;
+    retainedPreviousWorktree: RetainedPreviousWorktree | null;
+  }>) {
+    super(rpcError);
     this.worktree = facts.worktree;
     this.scriptPath = facts.scriptPath;
     this.diagnostic = facts.diagnostic;
@@ -191,58 +224,116 @@ export class WorktreeSetupRetainedError extends RpcError {
   }
 }
 
-const worktreeSetupRetainedErrorDataSchema = z
+const retainedErrorSchema = z
   .object({
     type: z.literal("worktree_setup_retained"),
     worktree: registeredWorktreeTopologySchema,
-    script_path: z.string().trim().min(1),
-    diagnostic: z.string().trim().min(1),
+    script_path: nonBlank,
+    diagnostic: nonBlank,
     retained_previous_worktree: retainedPreviousWorktreeSchema.nullable(),
   })
   .strict();
 
-export function decodeWorktreeSetupRetainedError(
-  error: unknown,
-): WorktreeSetupRetainedError | null {
-  if (!(error instanceof RpcError) || error.code !== -32039) {
-    return null;
-  }
-  const parsed = worktreeSetupRetainedErrorDataSchema.safeParse(error.data);
-  if (!parsed.success) {
-    return null;
-  }
-  return new WorktreeSetupRetainedError(error, {
-    worktree: parsed.data.worktree,
-    scriptPath: parsed.data.script_path,
-    diagnostic: parsed.data.diagnostic,
-    retainedPreviousWorktree: parsed.data.retained_previous_worktree,
-  });
+export function decodeWorktreeSetupRetainedError(error: unknown): WorktreeSetupRetainedError | null {
+  if (!(error instanceof RpcError) || error.code !== -32039) return null;
+  const parsed = retainedErrorSchema.safeParse(error.data);
+  return parsed.success
+    ? new WorktreeSetupRetainedError(error, {
+        worktree: parsed.data.worktree,
+        scriptPath: parsed.data.script_path,
+        diagnostic: parsed.data.diagnostic,
+        retainedPreviousWorktree: parsed.data.retained_previous_worktree,
+      })
+    : null;
 }
 
+export type WorktreeSetupPhase = "started" | "completed" | "not_required" | "failed";
+type SetupEvent<Phase extends WorktreeSetupPhase, Payload> = Readonly<
+  { setupOperationID: SetupOperationID; phase: Phase } & Payload
+>;
 export type WorktreeSetupEvent =
-  | Readonly<{
-      setupOperationID: SetupOperationID;
-      phase: "started";
-      started: Readonly<{ sourceWorkspaceRoot: string; worktreeRoot: string; scriptPath: string }>;
-    }>
-  | Readonly<{
-      setupOperationID: SetupOperationID;
-      phase: "completed";
-      completed: Readonly<{ retainedPreviousWorktree: RetainedPreviousWorktree | null }>;
-    }>
-  | Readonly<{
-      setupOperationID: SetupOperationID;
-      phase: "not_required";
-      notRequired: Readonly<{
-        reason: "no_target_preparation" | "no_configured_script";
-        retainedPreviousWorktree: RetainedPreviousWorktree | null;
-      }>;
-    }>
-  | Readonly<{
-      setupOperationID: SetupOperationID;
-      phase: "failed";
-      failed: WorktreeSetupFailure;
-    }>;
+  | SetupEvent<
+      "started",
+      { started: Readonly<{ sourceWorkspaceRoot: string; worktreeRoot: string; scriptPath: string }> }
+    >
+  | SetupEvent<"completed", { completed: Readonly<{ retainedPreviousWorktree: RetainedPreviousWorktree | null }> }>
+  | SetupEvent<
+      "not_required",
+      {
+        notRequired: Readonly<{
+          reason: "no_target_preparation" | "no_configured_script";
+          retainedPreviousWorktree: RetainedPreviousWorktree | null;
+        }>;
+      }
+    >
+  | SetupEvent<"failed", { failed: WorktreeSetupFailure }>;
+
+const setupEventWireSchema = z
+  .discriminatedUnion("phase", [
+    z
+      .object({
+        setup_operation_id: setupOperationIDSchema,
+        phase: z.literal("started"),
+        started: z
+          .object({ source_workspace_root: nonBlank, worktree_root: nonBlank, script_path: nonBlank })
+          .strict(),
+      })
+      .strict(),
+    z
+      .object({
+        setup_operation_id: setupOperationIDSchema,
+        phase: z.literal("completed"),
+        completed: z.object({ retained_previous_worktree: retainedPreviousWorktreeSchema.nullable() }).strict(),
+      })
+      .strict(),
+    z
+      .object({
+        setup_operation_id: setupOperationIDSchema,
+        phase: z.literal("not_required"),
+        not_required: z
+          .object({
+            reason: z.enum(["no_target_preparation", "no_configured_script"]),
+            retained_previous_worktree: retainedPreviousWorktreeSchema.nullable(),
+          })
+          .strict(),
+      })
+      .strict(),
+    z
+      .object({ setup_operation_id: setupOperationIDSchema, phase: z.literal("failed"), failed: worktreeSetupFailureWireSchema })
+      .strict(),
+  ])
+  .transform((value): WorktreeSetupEvent => {
+    const setupOperationID = value.setup_operation_id;
+    switch (value.phase) {
+      case "started":
+        return {
+          setupOperationID,
+          phase: value.phase,
+          started: {
+            sourceWorkspaceRoot: value.started.source_workspace_root,
+            worktreeRoot: value.started.worktree_root,
+            scriptPath: value.started.script_path,
+          },
+        };
+      case "completed":
+        return {
+          setupOperationID,
+          phase: value.phase,
+          completed: { retainedPreviousWorktree: value.completed.retained_previous_worktree },
+        };
+      case "not_required":
+        return {
+          setupOperationID,
+          phase: value.phase,
+          notRequired: {
+            reason: value.not_required.reason,
+            retainedPreviousWorktree: value.not_required.retained_previous_worktree,
+          },
+        };
+      case "failed":
+        return { setupOperationID, phase: value.phase, failed: value.failed };
+    }
+  });
 
 export type WorktreeSetupEventHandler = Readonly<{
   onOpen?(): void;
@@ -250,102 +341,17 @@ export type WorktreeSetupEventHandler = Readonly<{
   onComplete(code: number, message: string): void;
   onError(error: Error): void;
 }>;
-
-const setupEventWireSchema = z.discriminatedUnion("phase", [
-  z
-    .object({
-      setup_operation_id: setupOperationIDSchema,
-      phase: z.literal("started"),
-      started: z
-        .object({
-          source_workspace_root: z.string().trim().min(1),
-          worktree_root: z.string().trim().min(1),
-          script_path: z.string().trim().min(1),
-        })
-        .strict(),
-    })
-    .strict()
-    .transform((value): WorktreeSetupEvent => ({
-      setupOperationID: value.setup_operation_id,
-      phase: value.phase,
-      started: {
-        sourceWorkspaceRoot: value.started.source_workspace_root,
-        worktreeRoot: value.started.worktree_root,
-        scriptPath: value.started.script_path,
-      },
-    })),
-  z
-    .object({
-      setup_operation_id: setupOperationIDSchema,
-      phase: z.literal("completed"),
-      completed: z
-        .object({
-          retained_previous_worktree: retainedPreviousWorktreeSchema.nullable(),
-        })
-        .strict(),
-    })
-    .strict()
-    .transform((value): WorktreeSetupEvent => ({
-      setupOperationID: value.setup_operation_id,
-      phase: value.phase,
-      completed: {
-        retainedPreviousWorktree: value.completed.retained_previous_worktree,
-      },
-    })),
-  z
-    .object({
-      setup_operation_id: setupOperationIDSchema,
-      phase: z.literal("not_required"),
-      not_required: z
-        .object({
-          reason: z.enum(["no_target_preparation", "no_configured_script"]),
-          retained_previous_worktree: retainedPreviousWorktreeSchema.nullable(),
-        })
-        .strict(),
-    })
-    .strict()
-    .transform((value): WorktreeSetupEvent => ({
-      setupOperationID: value.setup_operation_id,
-      phase: value.phase,
-      notRequired: {
-        reason: value.not_required.reason,
-        retainedPreviousWorktree: value.not_required.retained_previous_worktree,
-      },
-    })),
-  z
-    .object({
-      setup_operation_id: setupOperationIDSchema,
-      phase: z.literal("failed"),
-      failed: worktreeSetupFailureWireSchema,
-    })
-    .strict()
-    .transform((value): WorktreeSetupEvent => ({
-      setupOperationID: value.setup_operation_id,
-      phase: value.phase,
-      failed: value.failed,
-    })),
-]);
-
-export const worktreeSetupEventParamsSchema = z
-  .object({
-    event: setupEventWireSchema,
-  })
-  .strict();
-
+export const worktreeSetupEventParamsSchema = z.object({ event: setupEventWireSchema }).strict();
 export function worktreeSetupRpcHandler(handler: WorktreeSetupEventHandler): RpcEventHandler {
   return {
-    ...(handler.onOpen !== undefined ? { onOpen: handler.onOpen } : {}),
+    ...(handler.onOpen === undefined ? {} : { onOpen: handler.onOpen }),
     onComplete: handler.onComplete,
     onError: handler.onError,
     onEvent(method, params) {
-      if (method !== "worktree.setup") {
-        return;
-      }
-      try {
-        handler.onEvent(worktreeSetupEventParamsSchema.parse(params).event);
-      } catch {
-        handler.onError(new ContractError("worktree.setup event did not match GUI contract."));
-      }
+      if (method !== "worktree.setup") return;
+      const parsed = worktreeSetupEventParamsSchema.safeParse(params);
+      if (parsed.success) handler.onEvent(parsed.data.event);
+      else handler.onError(new ContractError("worktree.setup event did not match GUI contract."));
     },
   };
 }

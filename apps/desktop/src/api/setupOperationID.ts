@@ -1,5 +1,3 @@
-import { z } from "zod";
-
 export class SetupOperationID {
   readonly #value: string;
 
@@ -52,15 +50,6 @@ function isHexDigit(char: string): boolean {
 export function parseSetupOperationID(value: string): SetupOperationID {
   return SetupOperationID.parse(value);
 }
-
-export const setupOperationIDSchema = z.string().transform((value, context): SetupOperationID => {
-  try {
-    return parseSetupOperationID(value);
-  } catch {
-    context.addIssue({ code: "custom", message: "Setup operation id must be a UUID v4." });
-    return z.NEVER;
-  }
-});
 
 export function newSetupOperationID(): SetupOperationID {
   return parseSetupOperationID(crypto.randomUUID());

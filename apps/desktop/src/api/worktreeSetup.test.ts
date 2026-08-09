@@ -5,6 +5,7 @@ import { ContractError } from "./errors";
 import { FakeRpcTransport } from "@/test-support/api";
 import { newSetupOperationID, parseSetupOperationID, type SetupOperationID } from "./setupOperationID";
 import type { WorktreeSetupEvent } from "./worktreeSetup";
+import { parseTaskSetupRecoveryDetail } from "./worktreeSetup";
 
 const setupOperationIDWireSchema = z.string().transform((value, ctx): SetupOperationID => {
   try {
@@ -25,6 +26,29 @@ function parseSetupMutationParams(value: unknown): Readonly<{ setupOperationID: 
 }
 
 describe("worktree setup API", () => {
+  it("decodes canonical Task setup recovery without fabricating topology", () => {
+    const recovery = parseTaskSetupRecoveryDetail(JSON.stringify({
+      code: "workflow_task_setup_failed",
+      fields: {},
+      setup_recovery: {
+        setup_operation_id: "55555555-5555-4555-8555-555555555555",
+        cause: "target_preparation",
+        diagnostic: "target failed",
+        script_path: null,
+        setup_requirement: "required",
+        execution_target: { mode: "head" },
+        retained_worktree: null,
+        retained_previous_worktree: null,
+      },
+    }));
+    expect(recovery).toMatchObject({
+      cause: "target_preparation",
+      diagnostic: "target failed",
+      executionTarget: { mode: "head", customRef: null },
+      retainedWorktree: null,
+    });
+  });
+
   it("rejects malformed setup operation ids before RPC submission can use them", () => {
     expect(() => parseSetupOperationID("11111111-1111-1111-1111-111111111111")).toThrow(
       "Setup operation id must be a UUID v4.",

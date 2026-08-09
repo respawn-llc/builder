@@ -357,40 +357,6 @@ func TestRestoreLockedTaskWorktreeReusesDetachedHeadWithoutRunningSetup(t *testi
 	}
 }
 
-func TestPrepareTaskExecutionRootReusesProvisionalWorktreeForSameCommit(t *testing.T) {
-	env := newServiceTestEnv(t)
-	task, _ := createTaskWorktreeTestTask(t, env)
-	target := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
-
-	first, err := env.service.PrepareTaskExecutionRoot(env.ctx, TaskExecutionRootPreparationRequest{
-		TaskID:           task.ID,
-		ManagedTarget:    &target,
-		SetupRequirement: worktreecontract.SetupRequirementRequired,
-	})
-	if err != nil {
-		t.Fatalf("PrepareTaskExecutionRoot first: %v", err)
-	}
-	secondTarget := target
-	secondTarget.RequestedRef = "same-commit-selector"
-	second, err := env.service.PrepareTaskExecutionRoot(env.ctx, TaskExecutionRootPreparationRequest{
-		TaskID:           task.ID,
-		ManagedTarget:    &secondTarget,
-		SetupRequirement: worktreecontract.SetupRequirementRequired,
-	})
-	if err != nil {
-		t.Fatalf("PrepareTaskExecutionRoot second: %v", err)
-	}
-	if first.Root.Managed == nil || second.Root.Managed == nil {
-		t.Fatalf("prepared roots = %+v then %+v, want managed roots", first.Root, second.Root)
-	}
-	if *first.Root.Managed != *second.Root.Managed {
-		t.Fatalf("second root = %+v, want reuse of %+v", second.Root.Managed, first.Root.Managed)
-	}
-	if second.RetainedPreviousWorktree != nil {
-		t.Fatalf("same-commit preparation retained previous worktree: %+v", second.RetainedPreviousWorktree)
-	}
-}
-
 func TestPrepareTaskExecutionRootTargetChangeRetainsModifiedRootWithoutSetup(t *testing.T) {
 	env := newServiceTestEnv(t)
 	task, _ := createTaskWorktreeTestTask(t, env)

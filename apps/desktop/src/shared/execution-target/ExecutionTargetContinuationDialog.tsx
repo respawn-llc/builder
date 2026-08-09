@@ -1,12 +1,14 @@
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import type {
   WorkflowExecutionTargetSelection,
   WorkflowExecutionTargetSelectionMode,
   WorkflowExecutionTargetSelectionRequirement,
+  TaskSetupRecovery,
 } from "@/api";
 import { useTextFieldSubmitShortcut } from "@/app-facade";
-import { Button, compactDialogWidth, Dialog, RadioGroup, RadioGroupItem, TextInput } from "@/ui";
+import { Button, compactDialogWidth, Dialog, RadioGroup, RadioGroupItem, SelectField, TextInput } from "@/ui";
 import {
   executionTargetSelectionFromDraft,
   proceedWithTaskInitiatingAction,
@@ -19,6 +21,82 @@ import type {
 
 const concreteModes = ["none", "head", "default_branch", "custom_ref"] as const;
 type ExecutionTargetPending = Extract<PendingTaskInitiatingAction, { kind: "execution_target" }>;
+
+export function TaskSetupRecoveryDialog({
+  onClose,
+  onSubmit,
+  open,
+  recovery,
+  running,
+}: Readonly<{
+  onClose(): void;
+  onSubmit(selection: WorkflowExecutionTargetSelection): void;
+  open: boolean;
+  recovery: TaskSetupRecovery;
+  running: boolean;
+}>) {
+  const { t } = useTranslation();
+  const [mode, setMode] = useState<WorkflowExecutionTargetSelectionMode | null>(null);
+  const [customRef, setCustomRef] = useState("");
+  const close = () => {
+    setMode(null);
+    setCustomRef("");
+    onClose();
+  };
+  const selection =
+    mode === null || (mode === "custom_ref" && customRef.trim().length === 0)
+      ? null
+      : { mode, customRef: mode === "custom_ref" ? customRef.trim() : null };
+  return (
+    <Dialog closeLabel={t("app.close")} onClose={close} open={open} title={t("task.interrupted")}>
+      <div className="grid gap-[var(--space-3)]">
+        <p className="m-0 whitespace-pre-wrap font-mono text-sm text-[var(--color-error)]">
+          {recovery.diagnostic}
+        </p>
+        {[recovery.scriptPath, recovery.retainedWorktree?.root].map((value) =>
+          value == null ? null : <p className="m-0 break-all font-mono text-sm" key={value}>{value}</p>,
+        )}
+        {mode === null ? (
+          <div className="flex justify-end gap-[var(--space-2)]">
+            <Button onClick={close}>{t("app.cancel")}</Button>
+            <Button data-testid="setup-recovery-choose" onClick={() => {
+              setMode("default_branch");
+            }}>
+              {t("executionTargetContinuation.title")}
+            </Button>
+            <Button data-testid="setup-recovery-retry" disabled={running} onClick={() => {
+              onSubmit(recovery.executionTarget);
+            }} variant="primary">
+              {t("board.resume")}
+            </Button>
+          </div>
+        ) : (
+          <>
+            <SelectField
+              label={t("executionTargetContinuation.choice")}
+              onValueChange={(value) => {
+                if (isConcreteMode(value)) setMode(value);
+              }}
+              options={concreteModes.map((value) => ({ label: t(`executionTargetContinuation.mode_${value}`), value }))}
+              value={mode}
+            />
+            {mode === "custom_ref" ? <TextInput label={t("executionTargetContinuation.customRef")} onChange={(event) => {
+              setCustomRef(event.currentTarget.value);
+            }} value={customRef} /> : null}
+            <div className="flex justify-end gap-[var(--space-2)]">
+              <Button onClick={close}>{t("app.cancel")}</Button>
+              <Button data-testid="setup-recovery-target-submit" disabled={selection === null || running} onClick={() => {
+                if (selection !== null) onSubmit(selection);
+              }} variant="primary">
+                {t("executionTargetContinuation.continue")}
+              </Button>
+            </div>
+          </>
+        )}
+      </div>
+    </Dialog>
+  );
+}
 
 export type TaskInitiatingActionDialogResult =
   | Readonly<{

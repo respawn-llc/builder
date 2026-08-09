@@ -1,4 +1,5 @@
 export {
+  TaskSetupRecoveryDialog,
   TaskInitiatingActionDialogs,
   type TaskInitiatingActionDialogResult,
 } from "./ExecutionTargetContinuationDialog";

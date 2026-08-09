@@ -31,27 +31,7 @@ type eofWorktreeSetupSubscription struct {
 	returned chan<- struct{}
 }
 
-type terminalWorktreeSetupSubscription struct{ event serverapi.WorktreeSetupEvent }
-
-func (s terminalWorktreeSetupSubscription) Next(context.Context) (serverapi.WorktreeSetupEvent, error) {
-	return s.event, nil
-}
-func (terminalWorktreeSetupSubscription) Close() error { return nil }
-
-type gatedWorktreeSetupSubscription struct {
-	terminal <-chan serverapi.WorktreeSetupEvent
-}
-
-func (s gatedWorktreeSetupSubscription) Next(ctx context.Context) (serverapi.WorktreeSetupEvent, error) {
-	select {
-	case event := <-s.terminal:
-		return event, nil
-	case <-ctx.Done():
-		return serverapi.WorktreeSetupEvent{}, ctx.Err()
-	}
-}
-
-func (gatedWorktreeSetupSubscription) Close() error { return nil }
+type testWorktreeSetupSubscription func(context.Context) (serverapi.WorktreeSetupEvent, error)
 
 type gatedWorktreeSetupRemote struct {
 	*taskInterruptCommandRemote
@@ -59,8 +39,20 @@ type gatedWorktreeSetupRemote struct {
 }
 
 func (r gatedWorktreeSetupRemote) SubscribeWorktreeSetup(context.Context, serverapi.WorktreeSetupSubscribeRequest) (serverapi.WorktreeSetupSubscription, error) {
-	return gatedWorktreeSetupSubscription{terminal: r.terminal}, nil
+	return testWorktreeSetupSubscription(func(ctx context.Context) (serverapi.WorktreeSetupEvent, error) {
+		select {
+		case event := <-r.terminal:
+			return event, nil
+		case <-ctx.Done():
+			return serverapi.WorktreeSetupEvent{}, ctx.Err()
+		}
+	}), nil
 }
+
+func (s testWorktreeSetupSubscription) Next(ctx context.Context) (serverapi.WorktreeSetupEvent, error) {
+	return s(ctx)
+}
+func (testWorktreeSetupSubscription) Close() error { return nil }
 
 func (s eofWorktreeSetupSubscription) Next(context.Context) (serverapi.WorktreeSetupEvent, error) {
 	close(s.returned)
@@ -126,7 +118,8 @@ func (r *taskInterruptCommandRemote) ResumeWorkflowTask(_ context.Context, req s
 }
 
 func (r *taskInterruptCommandRemote) SubscribeWorktreeSetup(_ context.Context, req serverapi.WorktreeSetupSubscribeRequest) (serverapi.WorktreeSetupSubscription, error) {
-	return terminalWorktreeSetupSubscription{event: serverapi.WorktreeSetupEvent{SetupOperationID: req.SetupOperationID, Phase: serverapi.WorktreeSetupPhaseNotRequired, NotRequired: &serverapi.WorktreeSetupNotRequired{Reason: serverapi.WorktreeSetupNotRequiredNoTargetPreparation}}}, nil
+	event := serverapi.WorktreeSetupEvent{SetupOperationID: req.SetupOperationID, Phase: serverapi.WorktreeSetupPhaseNotRequired, NotRequired: &serverapi.WorktreeSetupNotRequired{Reason: serverapi.WorktreeSetupNotRequiredNoTargetPreparation}}
+	return testWorktreeSetupSubscription(func(context.Context) (serverapi.WorktreeSetupEvent, error) { return event, nil }), nil
 }
 
 func (r *taskInterruptCommandRemote) MoveWorkflowTask(_ context.Context, req serverapi.WorkflowTaskMoveRequest) (serverapi.WorkflowTaskMoveResponse, error) {

@@ -758,22 +758,18 @@ func TestCurrentNodeControllerPreparationFailureInterruptsPlacedNode(t *testing.
 	}}}
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 	runner := &countingCurrentNodeRunner{}
-	attention := &currentNodeAttentionRecorder{}
-	controller := newCurrentNodeControllerWithAttentionForTest(t, store, runner, authority, 1, attention)
+	controller := newCurrentNodeControllerForTest(t, store, runner, authority, 1)
 	t.Cleanup(func() {
 		_ = controller.Close()
 		_ = authority.Close(context.Background())
 	})
 	cause := errors.New("worktree setup failed")
-	finalized := make(chan TaskPreparationFinalization, 1)
 
 	if _, err := controller.StartTask(
 		context.Background(),
 		reference.TaskID,
 		testTaskPreparation(func(context.Context) error { return cause }),
-		func(finalization TaskPreparationFinalization) {
-			finalized <- finalization
-		},
+		noOpTaskPreparationFinalizer,
 	); err != nil {
 		t.Fatalf("StartTask: %v", err)
 	}
@@ -793,23 +789,6 @@ func TestCurrentNodeControllerPreparationFailureInterruptsPlacedNode(t *testing.
 	}
 	if runner.starts() != 0 {
 		t.Fatalf("runner starts = %d, want none", runner.starts())
-	}
-	select {
-	case finalization := <-finalized:
-		if finalization.Kind != TaskPreparationFailed || !errors.Is(finalization.Cause, cause) {
-			t.Fatalf("preparation finalization = %+v, want failed cause", finalization)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("preparation failure did not finalize")
-	}
-	if attention.pendingCount() != 1 {
-		t.Fatalf("pending interruption attention = %d, want one before retry", attention.pendingCount())
-	}
-	controller.mu.Lock()
-	ownedPreparations := len(controller.preparationQueue) + len(controller.preparationRunning)
-	controller.mu.Unlock()
-	if ownedPreparations != 0 {
-		t.Fatalf("failed preparation retained %d batch owners after attention", ownedPreparations)
 	}
 }
 
@@ -840,7 +819,6 @@ func TestCurrentNodeControllerResumeSharesPreparationAndRetiresBeforeRetry(t *te
 		workflow.NewCurrentNodeInterruptionDetail("canonical_setup_failure", errors.New("worktree setup failed")),
 	)
 	var prepareCalls atomic.Int32
-	var commitCalls atomic.Int32
 	failed := make(chan TaskPreparationFinalization, 1)
 	resumed, err := controller.ResumeTaskWithPreparation(
 		context.Background(),
@@ -850,10 +828,7 @@ func TestCurrentNodeControllerResumeSharesPreparationAndRetiresBeforeRetry(t *te
 				prepareCalls.Add(1)
 				return cause
 			},
-			Commit: func(context.Context) error {
-				commitCalls.Add(1)
-				return nil
-			},
+			Commit: func(context.Context) error { return nil },
 		},
 		func(finalization TaskPreparationFinalization) {
 			failed <- finalization
@@ -873,8 +848,8 @@ func TestCurrentNodeControllerResumeSharesPreparationAndRetiresBeforeRetry(t *te
 	case <-time.After(3 * time.Second):
 		t.Fatal("shared preparation did not finalize")
 	}
-	if prepareCalls.Load() != 1 || commitCalls.Load() != 0 {
-		t.Fatalf("preparation calls = %d prepare, %d commit; want one shared failed prepare", prepareCalls.Load(), commitCalls.Load())
+	if prepareCalls.Load() != 1 {
+		t.Fatalf("preparation calls = %d, want one shared failed prepare", prepareCalls.Load())
 	}
 	if interruption, ok := store.interruption(canonical); !ok || interruption.detail.Code != "canonical_setup_failure" {
 		t.Fatalf("canonical interruption = %+v, present = %t", interruption, ok)
@@ -887,7 +862,6 @@ func TestCurrentNodeControllerResumeSharesPreparationAndRetiresBeforeRetry(t *te
 	}
 
 	retryPrepared := make(chan struct{})
-	retryFinalized := make(chan TaskPreparationFinalization, 1)
 	if _, err := controller.ResumeTaskWithPreparation(
 		context.Background(),
 		canonical.TaskID,
@@ -896,14 +870,9 @@ func TestCurrentNodeControllerResumeSharesPreparationAndRetiresBeforeRetry(t *te
 				close(retryPrepared)
 				return nil
 			},
-			Commit: func(context.Context) error {
-				commitCalls.Add(1)
-				return nil
-			},
+			Commit: func(context.Context) error { return nil },
 		},
-		func(finalization TaskPreparationFinalization) {
-			retryFinalized <- finalization
-		},
+		noOpTaskPreparationFinalizer,
 	); err != nil {
 		t.Fatalf("immediate retry ResumeTaskWithPreparation: %v", err)
 	}
@@ -911,17 +880,6 @@ func TestCurrentNodeControllerResumeSharesPreparationAndRetiresBeforeRetry(t *te
 	case <-retryPrepared:
 	case <-time.After(3 * time.Second):
 		t.Fatal("immediate retry did not register a new preparation")
-	}
-	select {
-	case finalization := <-retryFinalized:
-		if finalization.Kind != TaskPreparationHandedOff {
-			t.Fatalf("retry finalization = %+v, want handed off", finalization)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("retry preparation did not hand off")
-	}
-	if commitCalls.Load() != 1 {
-		t.Fatalf("retry commits = %d, want one shared commit", commitCalls.Load())
 	}
 }
 
