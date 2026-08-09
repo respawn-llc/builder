@@ -47,6 +47,7 @@ export function TaskDetailList({
   draft,
   descriptionPresentation,
   editingComment,
+  focusRequestKey,
   initialFocus,
   mutations,
   newCommentBody,
@@ -76,6 +77,7 @@ export function TaskDetailList({
   draft: TaskDraft;
   descriptionPresentation: DescriptionPresentationState;
   editingComment: Readonly<{ id: string; body: string }> | null;
+  focusRequestKey?: string | undefined;
   initialFocus?: TaskDetailInitialFocus | undefined;
   mutations: ReturnType<typeof useTaskMutations>;
   newCommentBody: string;
@@ -163,9 +165,7 @@ export function TaskDetailList({
       getItemKey={taskDetailListItemKey}
       hasNextPage={paging.hasNextPage}
       initialScrollKey={initialScrollKey}
-      initialScrollRequestKey={
-        initialFocus !== undefined ? taskDetailInitialFocusRequestKey(detail.id, initialFocus) : undefined
-      }
+      initialScrollRequestKey={resolveTaskDetailFocusRequestKey(detail.id, initialFocus, focusRequestKey)}
       isFetchingNextPage={paging.isFetchingNextPage}
       items={listItems}
       loadingLabel={t("app.loadingMore")}
@@ -222,6 +222,17 @@ export function TaskDetailList({
       testId="task-detail-island-stack"
     />
   );
+}
+
+function resolveTaskDetailFocusRequestKey(
+  taskID: string,
+  focus: TaskDetailInitialFocus | undefined,
+  requestKey: string | undefined,
+): string | undefined {
+  if (requestKey !== undefined) {
+    return requestKey;
+  }
+  return focus === undefined ? undefined : taskDetailInitialFocusRequestKey(taskID, focus);
 }
 
 type TaskDetailListRowProps = Readonly<{

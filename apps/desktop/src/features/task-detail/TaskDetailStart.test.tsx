@@ -65,3 +65,61 @@ it("starts the persisted Task without submitting a dirty title or description dr
     proceed_despite_dependencies: false,
   });
 });
+
+it("focuses Dependencies in-place for every View deps request without a sidebar host", async () => {
+  const scrollTo = vi.fn();
+  Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+    configurable: true,
+    value: scrollTo,
+  });
+  mountTaskDetailSurface(
+    {
+      task: {
+        ...taskDetailResponse.task,
+        current_nodes: [],
+        live_sessions: [],
+        status: {
+          kind: "backlog",
+          native_state: "backlog",
+          node_ids: [],
+          attention_types: [],
+        },
+        actions: {
+          ...taskDetailResponse.task.actions,
+          can_start: true,
+          can_interrupt: false,
+        },
+        attention_count: 0,
+      },
+    },
+    {
+      routes: [
+        {
+          method: "workflow.task.start",
+          result: {
+            outcome: "dependency_confirmation_required",
+            unsatisfied_dependency_count: 1,
+          },
+        },
+      ],
+    },
+  );
+  const user = userEvent.setup();
+  const start = await screen.findByTestId("task-detail-start");
+
+  await user.click(start);
+  const firstViewDependencies = await screen.findByTestId("dependency-confirmation-view");
+  const firstRequestBaseline = scrollTo.mock.calls.length;
+  await user.click(firstViewDependencies);
+  await waitFor(() => {
+    expect(scrollTo.mock.calls.length).toBeGreaterThan(firstRequestBaseline);
+  });
+
+  await user.click(start);
+  const secondViewDependencies = await screen.findByTestId("dependency-confirmation-view");
+  const secondRequestBaseline = scrollTo.mock.calls.length;
+  await user.click(secondViewDependencies);
+  await waitFor(() => {
+    expect(scrollTo.mock.calls.length).toBeGreaterThan(secondRequestBaseline);
+  });
+});

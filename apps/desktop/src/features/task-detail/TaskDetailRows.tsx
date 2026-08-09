@@ -504,7 +504,7 @@ function TaskOpenButtons({ detail, disabled }: Readonly<{ detail: TaskDetail; di
     <>
       {detail.liveSessions.map((session) => {
         const target = taskLiveSessionTarget(session);
-        const fullLabel = t("task.openChat", { name: target });
+        const fullLabel = t("task.openInCli", { name: target });
         return (
           <Button
             aria-label={fullLabel}
@@ -519,7 +519,7 @@ function TaskOpenButtons({ detail, disabled }: Readonly<{ detail: TaskDetail; di
             title={fullLabel}
             variant="secondary"
           >
-            {t("task.openChat", { name: ellipsizeActionTarget(target) })}
+            {t("task.openInCli", { name: ellipsizeActionTarget(target) })}
           </Button>
         );
       })}

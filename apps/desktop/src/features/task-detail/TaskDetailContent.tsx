@@ -95,6 +95,7 @@ export function TaskDetailContent({
   const [selectedTab, setSelectedTab] = useState<"comments" | "activity">(
     restored?.selectedTab ?? "comments",
   );
+  const [localDependencyFocusRequest, setLocalDependencyFocusRequest] = useState<number | null>(null);
   const [questionSelections, setQuestionSelections] = useState<ReadonlyMap<string, QuestionSelectionState>>(
     () => new Map(),
   );
@@ -110,6 +111,7 @@ export function TaskDetailContent({
     setNewCommentBody("");
     setDescriptionPresentation(initialDescriptionPresentationState);
     setQuestionSelections(new Map());
+    setLocalDependencyFocusRequest(null);
   }
   const update = useUpdateTask(detail.id, detail.projectID);
   useTaskDetailRetainedCapture({
@@ -158,6 +160,11 @@ export function TaskDetailContent({
     setDraftState(reconciled);
   }
   const draft = reconciled.draft;
+  const focusPresentation = taskDetailFocusPresentation({
+    initialFocus,
+    localDependencyFocusRequest,
+    restored: restored !== undefined,
+  });
 
   async function saveDraft(nextDraft: TaskDraft = draft): Promise<void> {
     await update.mutateAsync({
@@ -173,15 +180,13 @@ export function TaskDetailContent({
       key={detail.id}
       onApplied={mutations.refresh}
       onViewDependencies={(taskID) => {
-        if (navigator !== undefined && sidebarDestination !== undefined) {
-          navigator.replace(
-            taskDetailSidebarDestination(sidebarDestination, taskID, { kind: "dependencies" }),
-          );
-          return;
-        }
-        openSidebar?.({
-          kind: "taskDetail",
-          initialFocus: { kind: "dependencies" },
+        presentTaskDependencies({
+          navigator,
+          openSidebar,
+          requestLocalFocus: () => {
+            setLocalDependencyFocusRequest((current) => (current === null ? 1 : current + 1));
+          },
+          sidebarDestination,
           taskID,
         });
       }}
@@ -197,7 +202,12 @@ export function TaskDetailContent({
           draft={draft}
           descriptionPresentation={descriptionPresentation}
           editingComment={editingComment}
-          initialFocus={restored === undefined ? initialFocus : undefined}
+          focusRequestKey={
+            localDependencyFocusRequest === null
+              ? undefined
+              : `${detail.id}:dependencies:${localDependencyFocusRequest.toString()}`
+          }
+          initialFocus={focusPresentation}
           mutations={mutations}
           newCommentBody={newCommentBody}
           relationshipNavigationAvailable={relationshipNavigationAvailable}
@@ -239,6 +249,49 @@ export function TaskDetailContent({
       </TaskDeleteProvider>
     </TaskInitiatingActionProvider>
   );
+}
+
+function taskDetailFocusPresentation({
+  initialFocus,
+  localDependencyFocusRequest,
+  restored,
+}: Readonly<{
+  initialFocus: TaskDetailInitialFocus | undefined;
+  localDependencyFocusRequest: number | null;
+  restored: boolean;
+}>): TaskDetailInitialFocus | undefined {
+  if (localDependencyFocusRequest !== null) {
+    return { kind: "dependencies" };
+  }
+  return restored ? undefined : initialFocus;
+}
+
+function presentTaskDependencies({
+  navigator,
+  openSidebar,
+  requestLocalFocus,
+  sidebarDestination,
+  taskID,
+}: Readonly<{
+  navigator: SidebarPageNavigator | undefined;
+  openSidebar: SidebarRootController["open"] | undefined;
+  requestLocalFocus(): void;
+  sidebarDestination: Extract<SidebarDestination, { kind: "taskDetail" }> | undefined;
+  taskID: string;
+}>): void {
+  if (navigator !== undefined && sidebarDestination !== undefined) {
+    navigator.replace(taskDetailSidebarDestination(sidebarDestination, taskID, { kind: "dependencies" }));
+    return;
+  }
+  if (openSidebar !== undefined) {
+    openSidebar({
+      kind: "taskDetail",
+      initialFocus: { kind: "dependencies" },
+      taskID,
+    });
+    return;
+  }
+  requestLocalFocus();
 }
 
 function dependencyDestination(
