@@ -429,6 +429,7 @@ function renderMarkdownFieldAffordance(
       />
       <button
         aria-label={expandLabel}
+        aria-hidden={phase === "visible" ? undefined : true}
         className={cx(
           "app-region-no-drag absolute inset-x-0 bottom-0 grid h-10 place-items-center text-[var(--color-on-island)] transition-opacity motion-reduce:transition-none",
           phase === "visible"
@@ -437,6 +438,7 @@ function renderMarkdownFieldAffordance(
         )}
         data-state={phase}
         onClick={onExpand}
+        tabIndex={phase === "visible" ? undefined : -1}
         type="button"
       >
         <ChevronDown aria-hidden="true" size={20} strokeWidth={1.5} />
