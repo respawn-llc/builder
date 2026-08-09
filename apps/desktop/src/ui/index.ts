@@ -61,6 +61,20 @@ export { compactExternalUrlLabel, safeExternalUrl } from "./externalLinks";
 export { readEffectiveTheme, type AppTheme } from "./theme";
 export { cx } from "./classes";
 export { motionDurationFromCSSVar, prefersReducedMotion, useOpacityExit } from "./motion";
+export {
+  CollapsibleMarkdownField,
+  MarkdownField,
+  type CollapsibleMarkdownFieldProps,
+  type MarkdownFieldHeightClamp,
+  type MarkdownFieldProps,
+  type MarkdownFieldSubmitIntent,
+  type MarkdownFieldTaskListInteraction,
+} from "./MarkdownField";
+export {
+  consumeTextFieldSubmitShortcut,
+  isTextFieldSubmitShortcut,
+  type TextFieldSubmitShortcutPolicy,
+} from "./textFieldSubmitShortcut";
 export { Spinner } from "./Spinner";
 export type { SpinnerProps } from "./Spinner";
 export { Switch } from "./radix/switch";
