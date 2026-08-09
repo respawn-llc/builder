@@ -3,6 +3,7 @@ package sessionruntime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"sync"
 
@@ -12,9 +13,9 @@ import (
 )
 
 type promptFollowUpState struct {
-	descriptor *validatedQuestionBatchDescriptor
-	resolved   bool
-	watchers   map[*promptFollowUpSubscription]struct{}
+	descriptor   *validatedQuestionBatchDescriptor
+	resolved     bool
+	subscription *promptFollowUpSubscription
 }
 
 type promptFollowUpKey struct {
@@ -66,23 +67,21 @@ func (s *executionPromptStore) subscribePromptFollowUp(
 	}
 	rawPromptID := string(key.promptID)
 	s.mu.Lock()
-	state := s.promptFollowUps[key]
-	if state == nil {
-		entry := s.pending[rawPromptID]
-		if entry == nil || entry.snapshot.Request.StepID != key.stepID.String() {
-			s.mu.Unlock()
-			return nil, serverapi.ErrPromptNotFound
-		}
-		descriptor, err := validateQuestionBatchMetadata(entry.snapshot.Request)
-		if err != nil {
-			s.mu.Unlock()
-			return nil, err
-		}
-		subscription := s.registerPromptFollowUpLocked(key, descriptor)
+	if s.promptFollowUps[key] != nil {
 		s.mu.Unlock()
-		return subscription, nil
+		return nil, fmt.Errorf(
+			"prompt follow-up subscription is already active for session %s step %s prompt %s",
+			key.sessionID,
+			key.stepID,
+			key.promptID,
+		)
 	}
-	subscription := s.registerPromptFollowUpLocked(key, state.descriptor)
+	entry := s.pending[rawPromptID]
+	if entry == nil || entry.snapshot.Request.StepID != key.stepID.String() {
+		s.mu.Unlock()
+		return nil, serverapi.ErrPromptNotFound
+	}
+	subscription := s.registerPromptFollowUpLocked(key)
 	s.mu.Unlock()
 	return subscription, nil
 }
@@ -104,29 +103,23 @@ func (s *executionPromptStore) promptFollowUpKey(
 
 func (s *executionPromptStore) registerPromptFollowUpLocked(
 	key promptFollowUpKey,
-	descriptor *validatedQuestionBatchDescriptor,
 ) *promptFollowUpSubscription {
-	state := s.promptFollowUps[key]
-	if state == nil {
-		state = &promptFollowUpState{
-			descriptor: descriptor,
-			watchers:   make(map[*promptFollowUpSubscription]struct{}),
-		}
-		if s.promptFollowUps == nil {
-			s.promptFollowUps = make(map[promptFollowUpKey]*promptFollowUpState)
-		}
-		s.promptFollowUps[key] = state
+	if s.promptFollowUps == nil {
+		s.promptFollowUps = make(map[promptFollowUpKey]*promptFollowUpState)
 	}
 	subscription := &promptFollowUpSubscription{
 		events:   make(chan serverapi.PromptFollowUpEvent, 1),
 		canceled: make(chan struct{}),
 	}
+	state := &promptFollowUpState{subscription: subscription}
 	subscription.onClose = func() {
 		s.mu.Lock()
-		delete(state.watchers, subscription)
+		if s.promptFollowUps[key] == state {
+			delete(s.promptFollowUps, key)
+		}
 		s.mu.Unlock()
 	}
-	state.watchers[subscription] = struct{}{}
+	s.promptFollowUps[key] = state
 	return subscription
 }
 
@@ -148,14 +141,18 @@ func (s *executionPromptStore) resolvePromptFollowUpLocked(
 	}
 	state.descriptor = descriptor
 	state.resolved = true
+	if descriptor == nil {
+		s.emitPromptFollowUpLocked(key, serverapi.PromptFollowUpNoPreparedSuccessor)
+		return
+	}
 	successorIDs := descriptor.successorPromptIDs()
 	if len(successorIDs) == 0 {
-		s.broadcastPromptFollowUpLocked(key, serverapi.PromptFollowUpNoPreparedSuccessor)
+		s.emitPromptFollowUpLocked(key, serverapi.PromptFollowUpNoPreparedSuccessor)
 		return
 	}
 	for _, successorID := range successorIDs {
 		if _, pending := s.pending[successorID]; pending {
-			s.broadcastPromptFollowUpLocked(key, serverapi.PromptFollowUpSuccessorReady)
+			s.emitPromptFollowUpLocked(key, serverapi.PromptFollowUpSuccessorReady)
 			return
 		}
 	}
@@ -179,7 +176,7 @@ func (s *executionPromptStore) observePromptFollowUpsLocked(rawStepID string, su
 		}
 	}
 	for _, key := range keys {
-		s.broadcastPromptFollowUpLocked(key, serverapi.PromptFollowUpSuccessorReady)
+		s.emitPromptFollowUpLocked(key, serverapi.PromptFollowUpSuccessorReady)
 	}
 }
 
@@ -189,11 +186,11 @@ func (s *executionPromptStore) closePromptFollowUpsLocked() {
 		keys = append(keys, key)
 	}
 	for _, key := range keys {
-		s.broadcastPromptFollowUpLocked(key, serverapi.PromptFollowUpExecutionClosed)
+		s.emitPromptFollowUpLocked(key, serverapi.PromptFollowUpExecutionClosed)
 	}
 }
 
-func (s *executionPromptStore) broadcastPromptFollowUpLocked(
+func (s *executionPromptStore) emitPromptFollowUpLocked(
 	key promptFollowUpKey,
 	kind serverapi.PromptFollowUpEventKind,
 ) {
@@ -203,9 +200,7 @@ func (s *executionPromptStore) broadcastPromptFollowUpLocked(
 	}
 	delete(s.promptFollowUps, key)
 	event := serverapi.PromptFollowUpEvent{Kind: kind}
-	for watcher := range state.watchers {
-		watcher.publish(event)
-	}
+	state.subscription.publish(event)
 }
 
 func (s *promptFollowUpSubscription) publish(event serverapi.PromptFollowUpEvent) {

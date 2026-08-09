@@ -151,12 +151,19 @@ func resolveMalformedQuestionBatchWithObservation(t *testing.T, request tools.As
 	entry.snapshot.Request = request
 	installPromptBatchEntries(&store, entry)
 
-	_, err := store.subscribePromptFollowUp(stepID, "ask-1")
+	subscription, err := store.subscribePromptFollowUp(stepID, "ask-1")
+	if err != nil {
+		t.Fatalf("subscribe malformed watched resolution: %v", err)
+	}
+	defer func() { _ = subscription.Close() }()
+	_, err = store.ResolvePromptBatch(context.Background(), stepID, []PromptAnswerCommand{
+		promptDeclined("ask-1"),
+	})
 	if err == nil {
 		t.Fatal("malformed watched resolution unexpectedly succeeded")
 	}
-	if !store.hasPendingID("ask-1") || len(feed.resolvedIDs()) != 0 || len(store.promptFollowUps) != 0 {
-		t.Fatal("malformed watched resolution mutated, published, or allocated follow-up state")
+	if !store.hasPendingID("ask-1") || len(feed.resolvedIDs()) != 0 || len(store.promptFollowUps) != 1 {
+		t.Fatal("malformed watched resolution mutated, published, or replaced its registered follow-up state")
 	}
 	return err
 }
