@@ -117,7 +117,6 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 			}
 		},
 		ResourceLifecycle: runtimeRegistry,
-		StepLifecycle:     authorityStepLifecycle{registry: runtimeRegistry},
 		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
 			if workflowController != nil {
 				workflowController.ExecutionFinalized(scope)
@@ -575,18 +574,6 @@ func (r authorityPromptResponder) ResolvePromptBatch(
 	commands []sessionruntime.PromptAnswerCommand,
 ) ([]sessionruntime.PromptAnswerResult, error) {
 	return r.authority.ResolvePromptBatch(ctx, sessionID, stepID, commands)
-}
-
-type authorityStepLifecycle struct {
-	registry *registry.RuntimeRegistry
-}
-
-func (s authorityStepLifecycle) StepBegan(ctx context.Context, resource sessionruntime.AgentResourceDescriptor, snapshot runtime.StepLifecycleSnapshot) error {
-	return runtimewire.NewStepLifecycleSink(resource.Ref.SessionID().String(), s.registry).StepBegan(ctx, snapshot)
-}
-
-func (s authorityStepLifecycle) StepEnded(ctx context.Context, resource sessionruntime.AgentResourceDescriptor, snapshot runtime.StepLifecycleSnapshot) error {
-	return runtimewire.NewStepLifecycleSink(resource.Ref.SessionID().String(), s.registry).StepEnded(ctx, snapshot)
 }
 
 type workflowViewPendingPromptSource struct {

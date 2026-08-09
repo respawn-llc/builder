@@ -77,29 +77,6 @@ type lifecycleReminderQueueObserver struct {
 	once  sync.Once
 }
 
-type lifecycleStepProbe struct {
-	began chan runtime.StepLifecycleSnapshot
-	ended chan runtime.StepLifecycleSnapshot
-}
-
-func (p *lifecycleStepProbe) StepBegan(
-	_ context.Context,
-	_ AgentResourceDescriptor,
-	snapshot runtime.StepLifecycleSnapshot,
-) error {
-	p.began <- snapshot
-	return nil
-}
-
-func (p *lifecycleStepProbe) StepEnded(
-	_ context.Context,
-	_ AgentResourceDescriptor,
-	snapshot runtime.StepLifecycleSnapshot,
-) error {
-	p.ended <- snapshot
-	return nil
-}
-
 func (o *lifecycleReminderQueueObserver) ObservePersistedStore(_ context.Context, snapshot session.PersistedStoreSnapshot) error {
 	if snapshot.Meta.WorktreeReminder != nil {
 		o.once.Do(o.queue)
@@ -485,69 +462,6 @@ func assertRuntimeAbortResourceRetired(
 	}
 }
 
-func TestExactAgentStepPublishesResourceLifecycle(t *testing.T) {
-	fixture := newSessionRuntimeFixture(t)
-	sessionID := lifecycleSessionID(t, fixture)
-	client := &ownerlessRetirementLLMClient{
-		firstStarted: make(chan struct{}),
-		releaseFirst: make(chan struct{}),
-	}
-	probe := &lifecycleStepProbe{
-		began: make(chan runtime.StepLifecycleSnapshot, 1),
-		ended: make(chan runtime.StepLifecycleSnapshot, 1),
-	}
-	authority := NewAuthority(AuthorityOptions{
-		PersistenceRoot: fixture.config.PersistenceRoot,
-		StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
-		StepLifecycle:   probe,
-	})
-	t.Cleanup(func() {
-		if err := authority.Close(context.Background()); err != nil {
-			t.Errorf("close authority: %v", err)
-		}
-	})
-	plan := authorityTestRuntimePlan(t, fixture, client)
-	openLifecycleRuntime(t, authority, sessionID, "owner-a", &plan)
-
-	done := make(chan error, 1)
-	go func() {
-		done <- authority.RunCurrentAgentExecution(
-			context.Background(),
-			mustOpenSessionDescriptor(t, sessionID),
-			func(ctx context.Context, engine *runtime.Engine) error {
-				_, err := engine.SubmitUserMessage(ctx, "ownerless step")
-				return err
-			},
-		)
-	}()
-	select {
-	case <-client.firstStarted:
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for exact Agent Step")
-	}
-	select {
-	case snapshot := <-probe.began:
-		if snapshot.Transition != runtime.StepLifecycleTransitionBegan {
-			t.Fatalf("began snapshot transition = %q", snapshot.Transition)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("exact Agent Step did not publish began lifecycle")
-	}
-
-	close(client.releaseFirst)
-	if err := <-done; err != nil {
-		t.Fatalf("exact Agent Step: %v", err)
-	}
-	select {
-	case snapshot := <-probe.ended:
-		if snapshot.Transition != runtime.StepLifecycleTransitionEnded {
-			t.Fatalf("ended snapshot transition = %q", snapshot.Transition)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("exact Agent Step did not publish ended lifecycle")
-	}
-}
-
 func TestAuthoritySyncExecutionTargetPersistsReminderBeforeIdleHumanExecution(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
@@ -614,7 +528,6 @@ func (p *startupRepairReadyProbe) ResourceReady(
 	_ context.Context,
 	_ AgentResourceDescriptor,
 	engine *runtime.Engine,
-	_ AgentResourceRetainer,
 ) error {
 	if p.callID != "" {
 		if err := engine.WithTranscriptHydrationSnapshot(func(snapshot runtime.TranscriptHydrationSnapshot) error {
@@ -647,7 +560,7 @@ func (*startupRepairReadyProbe) ResourceDraining(
 	return nil
 }
 
-func (l *authorityStartBarrierLifecycle) ResourceReady(ctx context.Context, _ AgentResourceDescriptor, _ *runtime.Engine, _ AgentResourceRetainer) error {
+func (l *authorityStartBarrierLifecycle) ResourceReady(ctx context.Context, _ AgentResourceDescriptor, _ *runtime.Engine) error {
 	return l.ArriveAndWait(ctx)
 }
 

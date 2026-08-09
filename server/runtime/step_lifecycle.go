@@ -42,13 +42,11 @@ type AgentStepOriginLifecycleSink interface {
 }
 
 type RuntimeBoundExecutionLauncher interface {
-	RegisterRuntimeBoundExecution(
+	LaunchRuntimeBoundExecution(
 		runtimecommand.Admission,
-	) (RuntimeBoundExecution, error)
-}
-
-type RuntimeBoundExecution interface {
-	Start(func(context.Context, *Engine) error) runtimeids.ExecutionScopeID
+		func(context.Context, *Engine) error,
+		func(error),
+	) error
 }
 
 type AgentStepScopeLifecycle interface {

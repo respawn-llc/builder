@@ -331,8 +331,6 @@ func isSessionRuntimeClientMethod(pkg *packages.Package, function *ast.FuncDecl)
 
 func TestProductionRuntimeAuthorityAdaptersStayCentralized(t *testing.T) {
 	repoRoot := findRepoRoot(t)
-	compositionPath := filepath.Join("server", "core", "composition.go")
-	var authorityConfigured, foundSink bool
 	if err := walkProductionGoFiles(repoRoot, func(path, relPath string) error {
 		fileSet := token.NewFileSet()
 		file, err := parser.ParseFile(fileSet, path, nil, parser.SkipObjectResolution)
@@ -361,35 +359,11 @@ func TestProductionRuntimeAuthorityAdaptersStayCentralized(t *testing.T) {
 				!approvedRawEngineAdapterDirs[filepath.ToSlash(filepath.Dir(relPath))] {
 				t.Errorf("%s:%d calls raw Engine bridge %s outside an approved Authority adapter", relPath, fileSet.Position(selector.Sel.Pos()).Line, selector.Sel.Name)
 			}
-			pkg, ok := selector.X.(*ast.Ident)
-			if !ok {
-				return true
-			}
-			if relPath == compositionPath && pkg.Name == "sessionruntime" && selector.Sel.Name == "NewAuthority" && len(call.Args) == 1 {
-				if options, ok := call.Args[0].(*ast.CompositeLit); ok {
-					for _, element := range options.Elts {
-						if field, ok := element.(*ast.KeyValueExpr); ok {
-							key, ok := field.Key.(*ast.Ident)
-							authorityConfigured = authorityConfigured || ok && key.Name == "StepLifecycle"
-						}
-					}
-				}
-			}
-			if pkg.Name != "runtimewire" || selector.Sel.Name != "NewStepLifecycleSink" {
-				return true
-			}
-			foundSink = true
-			if relPath != compositionPath {
-				t.Errorf("%s constructs runtimewire.NewStepLifecycleSink outside Authority composition", relPath)
-			}
 			return true
 		})
 		return nil
 	}); err != nil {
-		t.Fatalf("scan production StepLifecycle construction: %v", err)
-	}
-	if !authorityConfigured || !foundSink {
-		t.Fatalf("%s Authority StepLifecycle composition = configured:%t sink:%t", compositionPath, authorityConfigured, foundSink)
+		t.Fatalf("scan production runtime authority adapters: %v", err)
 	}
 }
 

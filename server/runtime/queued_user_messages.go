@@ -106,21 +106,36 @@ func (e *Engine) startRuntimeBoundHumanExecution(admission runtimeEventAdmission
 	if !ok || e.runtimeEvents == nil {
 		return nil
 	}
-	execution, err := launcher.RegisterRuntimeBoundExecution(
+	err := launcher.LaunchRuntimeBoundExecution(
 		admission.command,
-	)
-	if err != nil {
-		e.surfaceRunError(err)
-		e.settleIdleHumanAgendaItems(err)
-		return nil
-	}
-	if execution != nil {
-		execution.Start(func(ctx context.Context, engine *Engine) error {
+		func(ctx context.Context, engine *Engine) error {
 			_, runErr := engine.SubmitQueuedUserMessages(ctx)
 			return runErr
-		})
+		},
+		e.abortRuntimeBoundHumanExecution,
+	)
+	if err != nil {
+		e.settleIdleHumanAgendaItems(err)
+		return errors.Join(err, e.reduceIdleBoundary(admission))
 	}
 	return nil
+}
+
+func (e *Engine) abortRuntimeBoundHumanExecution(cause error) {
+	_, err := submitRuntimeEventWithContext(
+		e.lifecycleCtx,
+		e.lifecycleCtx,
+		e,
+		cause,
+		func(
+			admission runtimeEventAdmission,
+			abortErr error,
+		) (struct{}, error) {
+			e.settleIdleHumanAgendaItems(abortErr)
+			return struct{}{}, e.reduceIdleBoundary(admission)
+		},
+	)
+	e.surfaceRunError(errors.Join(cause, err))
 }
 
 func (e *Engine) AgentExecutionScopeReleased(scopeID runtimeids.ExecutionScopeID) error {

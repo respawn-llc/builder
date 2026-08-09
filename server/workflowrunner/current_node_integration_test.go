@@ -81,32 +81,6 @@ func workflowPostCompletionCompactionResponse(summary string) llm.CompactionResp
 	}
 }
 
-type currentNodeRunnerStepLifecycle struct {
-	runtimes *registry.RuntimeRegistry
-}
-
-func (s currentNodeRunnerStepLifecycle) StepBegan(
-	ctx context.Context,
-	resource sessionruntime.AgentResourceDescriptor,
-	snapshot agentruntime.StepLifecycleSnapshot,
-) error {
-	return runtimewire.NewStepLifecycleSink(
-		resource.Ref.SessionID().String(),
-		s.runtimes,
-	).StepBegan(ctx, snapshot)
-}
-
-func (s currentNodeRunnerStepLifecycle) StepEnded(
-	ctx context.Context,
-	resource sessionruntime.AgentResourceDescriptor,
-	snapshot agentruntime.StepLifecycleSnapshot,
-) error {
-	return runtimewire.NewStepLifecycleSink(
-		resource.Ref.SessionID().String(),
-		s.runtimes,
-	).StepEnded(ctx, snapshot)
-}
-
 type currentNodeStartContextStore struct {
 	RuntimeStore
 	transform func(workflowstore.CurrentNodeStartContext) workflowstore.CurrentNodeStartContext
@@ -217,7 +191,6 @@ func newCurrentNodeRunnerFixtureWithClientAndPersistence(
 			fixture.runtimes.PublishAuthorityRuntimeEvent(resource.Ref, event)
 		},
 		ResourceLifecycle: fixture.runtimes,
-		StepLifecycle:     currentNodeRunnerStepLifecycle{runtimes: fixture.runtimes},
 	})
 	t.Cleanup(func() {
 		if fixture.controller != nil {

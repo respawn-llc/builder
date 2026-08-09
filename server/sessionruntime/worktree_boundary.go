@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	"core/server/runtime"
 	"core/shared/runtimeids"
@@ -44,7 +45,21 @@ const (
 )
 
 type reducerBoundaryRecord struct {
-	phase reducerBoundaryPhase
+	phase              reducerBoundaryPhase
+	sessionGate        *sessionAdmissionGate
+	idleGrantIssued    bool
+	sessionGateRelease sync.Once
+}
+
+func (r *reducerBoundaryRecord) releaseSessionGate() {
+	if r == nil {
+		return
+	}
+	r.sessionGateRelease.Do(func() {
+		if r.sessionGate != nil {
+			r.sessionGate.lock.Unlock()
+		}
+	})
 }
 
 type WorktreeBoundaryClaim struct {
@@ -197,12 +212,29 @@ func (r *agentResource) TryAcquireIdleBoundary(
 	if err := context.Cause(ctx); err != nil {
 		return nil, false, err
 	}
+	gate := r.authority.gateFor(r.ref.SessionID())
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if r.rejectsNewUseLocked() {
+		r.mu.Unlock()
 		return nil, false, runtimeUnavailableError(r.ref)
 	}
-	if r.current != nil || r.reducerBoundary != nil {
+	if reducer := r.reducerBoundary; reducer != nil {
+		if reducer.phase == reducerBoundaryActive &&
+			reducer.sessionGate != nil &&
+			!reducer.idleGrantIssued {
+			reducer.idleGrantIssued = true
+			r.mu.Unlock()
+			return &idleReducerBoundaryGrant{
+				authority: r.authority,
+				resource:  r.ref,
+				record:    reducer,
+			}, true, nil
+		}
+		r.mu.Unlock()
+		return nil, false, nil
+	}
+	if r.current != nil {
+		r.mu.Unlock()
 		return nil, false, nil
 	}
 	if worktree := r.worktreeBoundary; worktree != nil {
@@ -226,14 +258,75 @@ func (r *agentResource) TryAcquireIdleBoundary(
 				worktree.phase,
 			))
 		}
+		r.mu.Unlock()
+		return nil, false, nil
+	}
+	if !gate.lock.TryLock() {
+		record := r.newReducerBoundaryRecordLocked()
+		r.mu.Unlock()
+		if !r.waitForIdleBoundarySessionAdmission(ctx, gate, record) {
+			r.mu.Lock()
+			if r.reducerBoundary == record &&
+				record.phase == reducerBoundaryActive &&
+				record.sessionGate == nil {
+				record.phase = reducerBoundaryUnavailable
+				r.reducerBoundary = nil
+				r.signalLocked()
+			}
+			r.mu.Unlock()
+			return nil, false, ErrAuthorityClosed
+		}
 		return nil, false, nil
 	}
 	record := r.newReducerBoundaryRecordLocked()
+	record.sessionGate = gate
+	record.idleGrantIssued = true
+	r.mu.Unlock()
 	return &idleReducerBoundaryGrant{
 		authority: r.authority,
 		resource:  r.ref,
 		record:    record,
 	}, true, nil
+}
+
+func (r *agentResource) waitForIdleBoundarySessionAdmission(
+	parent context.Context,
+	gate *sessionAdmissionGate,
+	record *reducerBoundaryRecord,
+) bool {
+	return r.authority.launchLifecycleTask(func(authorityCtx context.Context) {
+		waitCtx, stop := MergeContexts(parent, authorityCtx)
+		defer stop()
+		if err := gate.lock.LockContext(waitCtx); err != nil {
+			return
+		}
+		r.mu.Lock()
+		if r.reducerBoundary != record ||
+			record.phase != reducerBoundaryActive ||
+			record.sessionGate != nil ||
+			r.rejectsNewUseLocked() {
+			r.mu.Unlock()
+			gate.lock.Unlock()
+			return
+		}
+		record.sessionGate = gate
+		r.signalLocked()
+		r.mu.Unlock()
+		if err := r.engine.ResumeIdleBoundaryReduction(waitCtx); err == nil {
+			return
+		}
+		r.mu.Lock()
+		if r.reducerBoundary == record &&
+			record.phase == reducerBoundaryActive &&
+			record.sessionGate == gate &&
+			!record.idleGrantIssued {
+			record.phase = reducerBoundaryUnavailable
+			r.reducerBoundary = nil
+			r.signalLocked()
+		}
+		r.mu.Unlock()
+		record.releaseSessionGate()
+	})
 }
 
 func (r *agentResource) AgentStepBoundary(
@@ -442,15 +535,40 @@ func (g *idleReducerBoundaryGrant) Release() (bool, error) {
 	}
 	resource, err := g.authority.resourceForBoundary(g.resource)
 	if err != nil {
+		g.record.releaseSessionGate()
 		return false, err
 	}
 	resource.mu.Lock()
-	defer resource.mu.Unlock()
 	if g.record.phase == reducerBoundaryReleased &&
 		resource.reducerBoundary != g.record {
+		resource.mu.Unlock()
+		g.record.releaseSessionGate()
 		return false, nil
 	}
-	return resource.releaseReducerBoundaryLocked(g.record)
+	retry, releaseErr := resource.releaseReducerBoundaryLocked(g.record)
+	retiring := resource.state == AgentResourceReady &&
+		resource.ownerlessDisposition == agentResourceRetireWhenIdle &&
+		len(resource.owners) == 0 &&
+		resource.current == nil
+	resource.mu.Unlock()
+	if releaseErr != nil {
+		return retry, releaseErr
+	}
+	g.record.releaseSessionGate()
+	if !retiring {
+		return retry, nil
+	}
+	if !g.authority.launchLifecycleTask(func(context.Context) {
+		if closeErr := g.authority.closeRetiringResource(
+			context.Background(),
+			resource,
+		); closeErr != nil && resource.logger != nil {
+			resource.logger.Logf("runtime.retirement.error error=%q", closeErr.Error())
+		}
+	}) {
+		return retry, ErrAuthorityClosed
+	}
+	return retry, nil
 }
 
 func (r *agentResource) releaseReducerBoundaryLocked(
@@ -635,7 +753,8 @@ func runtimeUnavailableError(resource runtimeids.SessionResourceRef) error {
 	)
 }
 
-func (r *agentResource) settleWorktreeBoundaryLocked(err error) {
+func (r *agentResource) settleWorktreeBoundaryLocked(err error) *reducerBoundaryRecord {
+	var settledReducer *reducerBoundaryRecord
 	if reducer := r.reducerBoundary; reducer != nil {
 		if reducer.phase != reducerBoundaryActive {
 			panic(fmt.Sprintf(
@@ -647,10 +766,11 @@ func (r *agentResource) settleWorktreeBoundaryLocked(err error) {
 		}
 		reducer.phase = reducerBoundaryUnavailable
 		r.reducerBoundary = nil
+		settledReducer = reducer
 	}
 	record := r.worktreeBoundary
 	if record == nil {
-		return
+		return settledReducer
 	}
 	switch record.phase {
 	case worktreeBoundaryPending, worktreeBoundaryActiveIdle, worktreeBoundaryActiveStepWait:
@@ -668,4 +788,5 @@ func (r *agentResource) settleWorktreeBoundaryLocked(err error) {
 	}
 	r.worktreeBoundary = nil
 	r.signalLocked()
+	return settledReducer
 }

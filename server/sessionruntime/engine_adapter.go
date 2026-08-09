@@ -100,7 +100,6 @@ type authorityRuntimeOptions struct {
 	storeOptions      []session.StoreOption
 	eventFeed         AgentResourceEventFeed
 	resourceLifecycle AgentResourceLifecycle
-	stepLifecycle     AgentResourceStepLifecycle
 }
 
 func newAuthorityRuntimeOptions(options AuthorityOptions) authorityRuntimeOptions {
@@ -111,7 +110,6 @@ func newAuthorityRuntimeOptions(options AuthorityOptions) authorityRuntimeOption
 		storeOptions:      append([]session.StoreOption(nil), options.StoreOptions...),
 		eventFeed:         options.EventFeed,
 		resourceLifecycle: options.ResourceLifecycle,
-		stepLifecycle:     options.StepLifecycle,
 	}
 }
 

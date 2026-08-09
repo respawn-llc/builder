@@ -68,23 +68,18 @@ func (s *defaultExclusiveStepLifecycle) run(ctx context.Context, options exclusi
 	if err != nil {
 		return err
 	}
-	if options.EmitRunState {
-		if snapshot := s.Snapshot(); snapshot != nil {
-			s.engine.beginLiveRunStep(snapshot)
-		}
+	if snapshot := s.Snapshot(); snapshot != nil && options.EmitRunState {
+		s.engine.beginLiveRunStep(snapshot)
 	}
-	if options.EmitRunState {
-		if snapshot := s.Snapshot(); snapshot != nil {
-			mode := runModeFromActiveKind(snapshot.ActiveKind)
-			_ = s.engine.steer(stepID, steerEventIntent(Event{Kind: EventRunStateChanged, StepID: stepID, RunState: &RunState{
-				Lifecycle:  RunningRunLifecycle(mode),
-				RunID:      snapshot.RunID,
-				ActiveKind: snapshot.ActiveKind,
-				Status:     snapshot.Status,
-				StartedAt:  snapshot.StartedAt,
-			}}))
-
-		}
+	if snapshot := s.Snapshot(); snapshot != nil {
+		mode := runModeFromActiveKind(snapshot.ActiveKind)
+		_ = s.engine.steer(stepID, steerEventIntent(Event{Kind: EventRunStateChanged, StepID: stepID, RunState: &RunState{
+			Lifecycle:  RunningRunLifecycle(mode),
+			RunID:      snapshot.RunID,
+			ActiveKind: snapshot.ActiveKind,
+			Status:     snapshot.Status,
+			StartedAt:  snapshot.StartedAt,
+		}}))
 	}
 	err = fn(stepCtx, stepID)
 	return s.finishStep(stepID, options, err)
@@ -187,23 +182,21 @@ func (s *defaultExclusiveStepLifecycle) publishTerminalStep(
 	beforeLiveRun func() error,
 ) (error, error, func()) {
 	s.beginTerminalPublication()
-	if options.EmitRunState {
-		state := &RunState{Lifecycle: IdleRunLifecycle()}
-		if snapshot != nil {
-			mode := runModeFromActiveKind(snapshot.ActiveKind)
-			state.Lifecycle = FinishedRunLifecycle(mode)
-			state.RunID = snapshot.RunID
-			state.ActiveKind = snapshot.ActiveKind
-			state.Status = snapshot.Status
-			state.StartedAt = snapshot.StartedAt
-			state.FinishedAt = snapshot.FinishedAt
-		}
-		_ = s.engine.steer(stepID, steerEventIntent(Event{
-			Kind:     EventRunStateChanged,
-			StepID:   stepID,
-			RunState: state,
-		}))
+	state := &RunState{Lifecycle: IdleRunLifecycle()}
+	if snapshot != nil {
+		mode := runModeFromActiveKind(snapshot.ActiveKind)
+		state.Lifecycle = FinishedRunLifecycle(mode)
+		state.RunID = snapshot.RunID
+		state.ActiveKind = snapshot.ActiveKind
+		state.Status = snapshot.Status
+		state.StartedAt = snapshot.StartedAt
+		state.FinishedAt = snapshot.FinishedAt
 	}
+	_ = s.engine.steer(stepID, steerEventIntent(Event{
+		Kind:     EventRunStateChanged,
+		StepID:   stepID,
+		RunState: state,
+	}))
 	var publicationErr error
 	if snapshot != nil && s.engine.cfg.StepLifecycle != nil {
 		if publishErr := s.engine.cfg.StepLifecycle.StepEnded(
@@ -425,19 +418,17 @@ func (s *defaultExclusiveStepLifecycle) publishStepBegan(options exclusiveStepOp
 		if err := s.engine.cfg.StepLifecycle.StepBegan(context.Background(), stepLifecycleSnapshot(s.engine.SessionID(), StepLifecycleTransitionBegan, *snapshot)); err != nil {
 			finished := s.snapshotWithFinishedAt(time.Now().UTC(), RunStatusFailed)
 			s.beginTerminalPublication()
-			if options.EmitRunState {
-				state := &RunState{Lifecycle: IdleRunLifecycle()}
-				if finished != nil {
-					mode := runModeFromActiveKind(finished.ActiveKind)
-					state.Lifecycle = FinishedRunLifecycle(mode)
-					state.RunID = finished.RunID
-					state.ActiveKind = finished.ActiveKind
-					state.Status = finished.Status
-					state.StartedAt = finished.StartedAt
-					state.FinishedAt = finished.FinishedAt
-				}
-				_ = s.engine.steer(stepID, steerEventIntent(Event{Kind: EventRunStateChanged, StepID: stepID, RunState: state}))
+			state := &RunState{Lifecycle: IdleRunLifecycle()}
+			if finished != nil {
+				mode := runModeFromActiveKind(finished.ActiveKind)
+				state.Lifecycle = FinishedRunLifecycle(mode)
+				state.RunID = finished.RunID
+				state.ActiveKind = finished.ActiveKind
+				state.Status = finished.Status
+				state.StartedAt = finished.StartedAt
+				state.FinishedAt = finished.FinishedAt
 			}
+			_ = s.engine.steer(stepID, steerEventIntent(Event{Kind: EventRunStateChanged, StepID: stepID, RunState: state}))
 			if finished != nil {
 				if endErr := s.engine.cfg.StepLifecycle.StepEnded(context.Background(), stepLifecycleSnapshot(s.engine.SessionID(), StepLifecycleTransitionEnded, *finished)); endErr != nil {
 					err = errors.Join(err, fmt.Errorf("publish start-failed step ended: %w", endErr))

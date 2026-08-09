@@ -272,14 +272,30 @@ func (l *backgroundExecutionLauncher) AgentStepBoundary(
 	return AgentStepReducerBoundary{Grant: backgroundReducerGrant{}}, nil
 }
 
-func (l *backgroundExecutionLauncher) RegisterRuntimeBoundExecution(
-	runtimecommand.Admission,
-) (RuntimeBoundExecution, error) {
+func (l *backgroundExecutionLauncher) LaunchRuntimeBoundExecution(
+	_ runtimecommand.Admission,
+	work func(context.Context, *Engine) error,
+	_ func(error),
+) error {
 	l.mu.Lock()
 	l.scopeID = runtimeids.NewExecutionScopeID()
 	l.active = true
+	scopeID := l.scopeID
 	l.mu.Unlock()
-	return &backgroundTestExecution{launcher: l}, nil
+	go func() {
+		if err := work(context.Background(), l.engine); err != nil {
+			l.engine.surfaceRunError(err)
+		}
+		l.mu.Lock()
+		launch := backgroundExecutionLaunch{
+			scopeID: scopeID,
+			origin:  l.origin,
+		}
+		l.active = false
+		l.mu.Unlock()
+		l.launched <- launch
+	}()
+	return nil
 }
 
 func (l *backgroundExecutionLauncher) awaitLaunch(t *testing.T) backgroundExecutionLaunch {
@@ -291,32 +307,6 @@ func (l *backgroundExecutionLauncher) awaitLaunch(t *testing.T) backgroundExecut
 		t.Fatal("timed out waiting for background execution")
 		return backgroundExecutionLaunch{}
 	}
-}
-
-type backgroundTestExecution struct {
-	launcher *backgroundExecutionLauncher
-}
-
-func (e *backgroundTestExecution) Start(
-	work func(context.Context, *Engine) error,
-) runtimeids.ExecutionScopeID {
-	e.launcher.mu.Lock()
-	scopeID := e.launcher.scopeID
-	e.launcher.mu.Unlock()
-	go func() {
-		if err := work(context.Background(), e.launcher.engine); err != nil {
-			e.launcher.engine.surfaceRunError(err)
-		}
-		e.launcher.mu.Lock()
-		launch := backgroundExecutionLaunch{
-			scopeID: scopeID,
-			origin:  e.launcher.origin,
-		}
-		e.launcher.active = false
-		e.launcher.mu.Unlock()
-		e.launcher.launched <- launch
-	}()
-	return scopeID
 }
 
 type backgroundReducerGrant struct{}

@@ -3,29 +3,44 @@ package sessionruntime
 import (
 	"context"
 	"errors"
+	"sync"
 
 	"core/server/runtime"
 	"core/server/runtimecommand"
 	"core/server/session"
-	"core/shared/runtimeids"
 )
 
-type runtimeBoundExecution struct {
-	work    chan func(context.Context, *runtime.Engine) error
-	scopeID runtimeids.ExecutionScopeID
+type runtimeBoundExecutionHandoff struct {
+	run   func(context.Context, *runtime.Engine) error
+	abort func(error)
+
+	once     sync.Once
+	terminal error
 }
 
-func (r *agentResource) RegisterRuntimeBoundExecution(
+func (r *agentResource) LaunchRuntimeBoundExecution(
 	admission runtimecommand.Admission,
-) (runtime.RuntimeBoundExecution, error) {
+	work func(context.Context, *runtime.Engine) error,
+	abort func(error),
+) error {
 	if !admission.Owns(r.events) {
-		return nil, errors.New("runtime-bound execution requires its Resource Generation admission")
+		return errors.New(
+			"runtime-bound execution requires its Resource Generation admission",
+		)
+	}
+	if work == nil || abort == nil {
+		return errors.New(
+			"runtime-bound execution requires work and abort callbacks",
+		)
 	}
 	descriptor, err := session.NewOpenSessionDescriptor(r.ref.SessionID())
 	if err != nil {
-		return nil, err
+		return err
 	}
-	work := make(chan func(context.Context, *runtime.Engine) error, 1)
+	handoff := &runtimeBoundExecutionHandoff{
+		run:   work,
+		abort: abort,
+	}
 	request := AgentExecutionRequest{
 		Descriptor: descriptor,
 		Resource:   CurrentAgentResource{},
@@ -34,15 +49,24 @@ func (r *agentResource) RegisterRuntimeBoundExecution(
 			_ ExecutionScope,
 			bridge AgentRuntimeBridge,
 		) error {
-			select {
-			case run := <-work:
-				return bridge.WithEngine(executionCtx, run)
-			case <-executionCtx.Done():
-				return context.Cause(executionCtx)
-			}
+			return handoff.execute(executionCtx, bridge)
 		},
 	}
 	var execution *execution
+	sessionID := descriptor.SessionID()
+	r.mu.Lock()
+	reducerBoundary := r.reducerBoundary
+	r.mu.Unlock()
+	if reducerBoundary == nil ||
+		reducerBoundary.phase != reducerBoundaryActive ||
+		reducerBoundary.sessionGate == nil {
+		return errors.New(
+			"runtime-bound execution requires Session-authorized idle Boundary ownership",
+		)
+	}
+	if len(reducerBoundary.sessionGate.blocks) != 0 {
+		return sessionStartsBlockedError(sessionID)
+	}
 	if err := admission.StartWork(func(context.Context) {
 		if execution == nil {
 			return
@@ -56,36 +80,58 @@ func (r *agentResource) RegisterRuntimeBoundExecution(
 			},
 		)
 		if launchErr != nil {
+			handoff.fail(launchErr)
 			execution.finish(ExecutionResult{}, launchErr, nil)
 		}
 	}); err != nil {
-		return nil, err
-	}
-	r.mu.Lock()
-	reducerBoundary := r.reducerBoundary
-	r.mu.Unlock()
-	if reducerBoundary == nil {
-		return nil, errors.New("runtime-bound execution requires active idle Boundary ownership")
+		return err
 	}
 	execution, err = r.authority.admitAgentExecutionStart(agentExecutionStart{
 		request:  request,
 		resource: r,
 	}, reducerBoundary)
-	if errors.Is(err, ErrSessionRunActive) {
-		return nil, nil
-	}
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return &runtimeBoundExecution{work: work, scopeID: execution.scope.ID()}, nil
+	return nil
 }
 
-func (e *runtimeBoundExecution) Start(
-	work func(context.Context, *runtime.Engine) error,
-) runtimeids.ExecutionScopeID {
-	if e == nil || e.scopeID.IsZero() || e.work == nil || work == nil {
-		panic("runtime-bound execution is uninitialized")
+func (h *runtimeBoundExecutionHandoff) execute(
+	executionCtx context.Context,
+	bridge AgentRuntimeBridge,
+) error {
+	if cause := context.Cause(executionCtx); cause != nil {
+		h.fail(cause)
+		return cause
 	}
-	e.work <- work
-	return e.scopeID
+	invoked := false
+	runErr := bridge.WithEngine(executionCtx, func(
+		workCtx context.Context,
+		engine *runtime.Engine,
+	) error {
+		invoked = true
+		h.once.Do(func() {
+			if cause := context.Cause(workCtx); cause != nil {
+				h.terminal = cause
+				h.abort(cause)
+				return
+			}
+			h.terminal = h.run(workCtx, engine)
+		})
+		return h.terminal
+	})
+	if !invoked {
+		h.fail(runErr)
+	}
+	return runErr
+}
+
+func (h *runtimeBoundExecutionHandoff) fail(cause error) {
+	if cause == nil {
+		cause = errors.New("runtime-bound execution handoff failed")
+	}
+	h.once.Do(func() {
+		h.terminal = cause
+		h.abort(cause)
+	})
 }

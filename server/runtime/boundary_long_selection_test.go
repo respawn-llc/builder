@@ -4,8 +4,13 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
+	"core/server/llm"
+	"core/server/runtimecommand"
+	"core/server/tools"
 	"core/shared/runtimeids"
+	"core/shared/textutil"
 )
 
 func TestBoundaryLongSelectionContractTransfersOneImmutableWorkAndSettlesOnce(t *testing.T) {
@@ -86,6 +91,89 @@ func TestBoundaryLongSelectionLifecycleContract(t *testing.T) {
 			}
 		},
 	})
+}
+
+func TestRuntimeBoundLongHandoffFailureSettlesSelectionAndRunsLaterAgendaWork(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		launcher RuntimeBoundExecutionLauncher
+		wantErr  error
+	}{
+		{
+			name:     "execution launch failure",
+			launcher: abortingRuntimeBoundTestLauncher{cause: ErrEngineClosed},
+			wantErr:  ErrEngineClosed,
+		},
+		{
+			name:     "cancellation before runner delivery",
+			launcher: abortingRuntimeBoundTestLauncher{cause: context.Canceled},
+			wantErr:  context.Canceled,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			engine := mustNewTestEngine(
+				t,
+				mustCreateTestSession(t),
+				&fakeClient{},
+				tools.NewRegistry(),
+				Config{Model: "gpt-5"},
+			)
+			first := newRuntimeBoundTestLongItem("first")
+			second, err := newBackgroundNoticeAgendaItem(llm.Message{
+				Role:    llm.RoleDeveloper,
+				Content: textutil.Value("later background work"),
+			})
+			if err != nil {
+				t.Fatalf("create second item: %v", err)
+			}
+			if err := engine.boundaryAgenda.accept(first); err != nil {
+				t.Fatalf("accept first: %v", err)
+			}
+			if err := engine.boundaryAgenda.accept(second); err != nil {
+				t.Fatalf("accept second: %v", err)
+			}
+			_, submitErr := submitRuntimeEvent(
+				engine,
+				struct{}{},
+				func(admission runtimeEventAdmission, _ struct{}) (struct{}, error) {
+					return struct{}{}, engine.launchNextRuntimeBoundLongWork(
+						admission,
+						test.launcher,
+					)
+				},
+			)
+			if submitErr != nil {
+				t.Fatalf("launch first: %v", submitErr)
+			}
+			settlement := first.awaitSettlement(t)
+			if !errors.Is(settlement, test.wantErr) {
+				t.Fatalf("first settlement = %v, want %v", settlement, test.wantErr)
+			}
+			deadline := time.Now().Add(3 * time.Second)
+			for {
+				settled, err := submitRuntimeEvent(
+					engine,
+					struct{}{},
+					func(runtimeEventAdmission, struct{}) (bool, error) {
+						return second.settled && engine.longBoundary.selected == nil, nil
+					},
+				)
+				if err != nil {
+					t.Fatalf("inspect later Agenda work: %v", err)
+				}
+				if settled {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("later Agenda work did not run after terminal handoff failure")
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			if engine.longBoundary.selected != nil {
+				t.Fatalf("terminal selection = %T, want none", engine.longBoundary.selected)
+			}
+		})
+	}
 }
 
 type boundaryLongSelectionContractItem interface {
@@ -223,4 +311,71 @@ func (i *testLongBoundaryAgendaItem) contractSettlementCount() int {
 
 func (i *testLongBoundaryAgendaItem) contractSettlementError() error {
 	return i.settlement
+}
+
+type abortingRuntimeBoundTestLauncher struct {
+	cause error
+}
+
+func (l abortingRuntimeBoundTestLauncher) LaunchRuntimeBoundExecution(
+	_ runtimecommand.Admission,
+	_ func(context.Context, *Engine) error,
+	abort func(error),
+) error {
+	go abort(l.cause)
+	return nil
+}
+
+type runtimeBoundTestLongItem struct {
+	testBoundaryAgendaItem
+	settled chan error
+}
+
+func newRuntimeBoundTestLongItem(id boundaryAgendaItemID) *runtimeBoundTestLongItem {
+	return &runtimeBoundTestLongItem{
+		testBoundaryAgendaItem: testBoundaryAgendaItem{
+			id:          id,
+			binding:     runtimeBoundaryBinding(),
+			eligibility: boundaryEligibilityIdle,
+		},
+		settled: make(chan error, 1),
+	}
+}
+
+func (i *runtimeBoundTestLongItem) selectLongWork() boundaryLongWork {
+	return i
+}
+
+func (i *runtimeBoundTestLongItem) longWorkID() boundaryAgendaItemID {
+	return i.id
+}
+
+func (*runtimeBoundTestLongItem) runLongWork(context.Context, *Engine) error {
+	return nil
+}
+
+func (i *runtimeBoundTestLongItem) settleLongWork(err error) {
+	i.settled <- err
+}
+
+func (i *runtimeBoundTestLongItem) settleBoundaryAgenda(err error) {
+	i.settleLongWork(err)
+}
+
+func (i *runtimeBoundTestLongItem) completeRuntimeBoundLongWork(
+	engine *Engine,
+	err error,
+) {
+	engine.submitBoundaryLongWorkResult(i.id, err)
+}
+
+func (i *runtimeBoundTestLongItem) awaitSettlement(t *testing.T) error {
+	t.Helper()
+	select {
+	case err := <-i.settled:
+		return err
+	case <-time.After(3 * time.Second):
+		t.Fatalf("timed out waiting for %q settlement", i.id)
+		return nil
+	}
 }

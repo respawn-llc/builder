@@ -90,6 +90,20 @@ func (e *Engine) reduceIdleBoundary(admission runtimeEventAdmission) (resultErr 
 	}
 }
 
+func (e *Engine) ResumeIdleBoundaryReduction(ctx context.Context) error {
+	_, err := submitRuntimeEventWithContext(
+		ctx,
+		e.lifecycleCtx,
+		e,
+		struct{}{},
+		func(admission runtimeEventAdmission, _ struct{}) (struct{}, error) {
+			return struct{}{}, e.reduceIdleBoundary(admission)
+		},
+	)
+	e.surfaceRunError(err)
+	return err
+}
+
 func (e *Engine) startNextRuntimeBoundLongWork(
 	admission runtimeEventAdmission,
 ) error {
@@ -105,35 +119,15 @@ func (e *Engine) startNextRuntimeBoundLongWork(
 	if !hasLauncher {
 		return nil
 	}
-	execution, err := launcher.RegisterRuntimeBoundExecution(
-		admission.command,
-	)
-	if err != nil {
-		selected, selectionErr := e.longBoundary.selectNext(
-			e.boundaryAgenda,
-			idleBoundarySelection(),
-		)
-		if selectionErr != nil || selected == nil {
-			return errors.Join(err, selectionErr)
-		}
-		_, settleErr := e.longBoundary.settle(boundaryLongWorkResult{
-			id:  selected.longWorkID(),
-			err: err,
-		})
-		return errors.Join(err, settleErr)
-	}
-	if execution == nil {
-		return nil
-	}
 	return e.launchNextRuntimeBoundLongWork(
 		admission,
-		execution,
+		launcher,
 	)
 }
 
 func (e *Engine) launchNextRuntimeBoundLongWork(
 	admission runtimeEventAdmission,
-	execution RuntimeBoundExecution,
+	launcher RuntimeBoundExecutionLauncher,
 ) error {
 	selected, err := e.longBoundary.selectNext(
 		e.boundaryAgenda,
@@ -155,23 +149,31 @@ func (e *Engine) launchNextRuntimeBoundLongWork(
 				id:  selected.longWorkID(),
 				err: err,
 			})
-			joined := errors.Join(err, settleErr, e.reduceIdleBoundary(admission))
-			if execution != nil {
-				execution.Start(func(context.Context, *Engine) error {
-					return joined
-				})
-			}
-			return joined
+			return errors.Join(err, settleErr, e.reduceIdleBoundary(admission))
 		}
 	}
-	if execution != nil {
-		releasedScope := execution.Start(func(workCtx context.Context, _ *Engine) error {
-			runErr := selected.runLongWork(workCtx, e)
-			runtimeBound.completeRuntimeBoundLongWork(e, runErr)
-			return runErr
-		})
-		if releasedScope.IsZero() {
-			panic("runtime-bound long execution returned no Exact Execution Scope")
+	if launcher != nil {
+		launchErr := launcher.LaunchRuntimeBoundExecution(
+			admission.command,
+			func(workCtx context.Context, _ *Engine) error {
+				runErr := selected.runLongWork(workCtx, e)
+				runtimeBound.completeRuntimeBoundLongWork(e, runErr)
+				return runErr
+			},
+			func(abortErr error) {
+				runtimeBound.completeRuntimeBoundLongWork(e, abortErr)
+			},
+		)
+		if launchErr != nil {
+			_, settleErr := e.longBoundary.settle(boundaryLongWorkResult{
+				id:  selected.longWorkID(),
+				err: launchErr,
+			})
+			return errors.Join(
+				launchErr,
+				settleErr,
+				e.reduceIdleBoundary(admission),
+			)
 		}
 		return nil
 	}

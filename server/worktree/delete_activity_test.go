@@ -28,7 +28,11 @@ type deleteInFlightStartLifecycle struct {
 	*testsetup.StartBarrier
 }
 
-func (l *deleteInFlightStartLifecycle) ResourceReady(ctx context.Context, _ sessionruntime.AgentResourceDescriptor, _ *runtime.Engine, _ sessionruntime.AgentResourceRetainer) error {
+func (l *deleteInFlightStartLifecycle) ResourceReady(
+	ctx context.Context,
+	_ sessionruntime.AgentResourceDescriptor,
+	_ *runtime.Engine,
+) error {
 	return l.ArriveAndWait(ctx)
 }
 
