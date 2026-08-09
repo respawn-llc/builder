@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,8 +23,15 @@ func TestSubmitUserMessageSurfacesInFlightClearFailure(t *testing.T) {
 	clearErr := errors.New("pending model recovery observer failure")
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
+	var sawPendingRecovery atomic.Bool
+	gate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
+		if snapshot.Meta.PendingModelRecovery != nil {
+			sawPendingRecovery.Store(true)
+			return false
+		}
+		return sawPendingRecovery.Load()
+	}, clearErr)
 	var events []Event
-	failureArmed := false
 	engine := mustNewTestEngine(t, store, &fakeClient{responses: []llm.Response{{
 		Assistant: llm.Message{
 			Role:    llm.RoleAssistant,
@@ -34,18 +42,11 @@ func TestSubmitUserMessageSurfacesInFlightClearFailure(t *testing.T) {
 		Model: "gpt-5",
 		OnEvent: func(event Event) {
 			events = append(events, event)
-			if event.Kind == EventAssistantMessage && !failureArmed {
-				failureArmed = true
-				gate.FailNext(clearErr)
-			}
 		},
 	})
 
 	if _, err := engine.SubmitUserMessage(context.Background(), "input"); !errors.Is(err, errPendingModelRecoveryClear) {
 		t.Fatalf("submit error = %v, want typed pending-recovery clear failure", err)
-	}
-	if !failureArmed {
-		t.Fatal("assistant commit did not arm pending-recovery clear failure")
 	}
 
 	clearFailureEvents := 0

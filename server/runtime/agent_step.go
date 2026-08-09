@@ -213,6 +213,18 @@ func (e *Engine) applyAgentStepBoundary(
 	if current == nil {
 		return nil, nil
 	}
+	if clearErr := e.store.ClearPendingModelRecoveryForStep(current.origin.StepID); clearErr != nil {
+		wrapped := fmt.Errorf("%w: %w", errPendingModelRecoveryClear, clearErr)
+		eventErr := admission.applySteering(
+			current.origin.StepID,
+			steerEventIntent(Event{
+				Kind:   EventInFlightClearFailed,
+				StepID: current.origin.StepID,
+				Error:  wrapped.Error(),
+			}),
+		)
+		return nil, errors.Join(wrapped, eventErr)
+	}
 	e.agentSteps.current = nil
 	e.agentSteps.boundary = current
 	sink, ok := e.cfg.StepLifecycle.(AgentStepOriginLifecycleSink)

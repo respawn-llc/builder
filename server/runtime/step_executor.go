@@ -269,6 +269,12 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 		}
 		decision, boundaryErr := s.engine.completeAgentProviderBoundary(ctx, false)
 		if boundaryErr != nil {
+			if !s.engine.activeStepWasInterrupted() {
+				boundaryErr = errors.Join(
+					boundaryErr,
+					s.engine.failAgentStepScope(boundaryErr),
+				)
+			}
 			return result, boundaryErr
 		}
 		if _, continueAgent := decision.(prepareNextAgentStepDecision); continueAgent {
