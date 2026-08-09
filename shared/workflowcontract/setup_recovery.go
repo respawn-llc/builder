@@ -21,6 +21,7 @@ type SetupRecoveryDetail[OperationID SetupRecoveryUUID, ExecutionTarget SetupRec
 	SetupOperationID         OperationID                       `json:"setup_operation_id"`
 	Cause                    worktreecontract.SetupFailureKind `json:"cause"`
 	Diagnostic               string                            `json:"diagnostic"`
+	ScriptPath               *string                           `json:"script_path"`
 	ExecutionTarget          ExecutionTarget                   `json:"execution_target"`
 	RetainedWorktree         *RetainedWorktree                 `json:"retained_worktree,omitempty"`
 	RetainedPreviousWorktree *RetainedWorktree                 `json:"retained_previous_worktree,omitempty"`
@@ -43,6 +44,15 @@ func (d SetupRecoveryDetail[OperationID, ExecutionTarget]) Validate() error {
 	}
 	if !worktreecontract.IsRetryReadySetupFailure(d.Cause) {
 		return errors.New("setup recovery cause must be retry-ready")
+	}
+	if d.ScriptPath != nil && strings.TrimSpace(*d.ScriptPath) == "" {
+		return errors.New("setup recovery script_path must be non-blank when present")
+	}
+	if d.Cause == worktreecontract.SetupFailureTargetPreparation && d.ScriptPath != nil {
+		return errors.New("target-preparation setup recovery cannot include script_path")
+	}
+	if d.Cause != worktreecontract.SetupFailureTargetPreparation && d.ScriptPath == nil {
+		return errors.New("setup recovery script_path is required for setup-script failure")
 	}
 	if err := d.ExecutionTarget.Validate(); err != nil {
 		return fmt.Errorf("setup recovery execution target: %w", err)

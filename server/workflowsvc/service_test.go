@@ -1576,7 +1576,17 @@ func TestServiceTaskStartPublishesRetryReadyRetainedSetupFailureAfterAppliedResp
 	worktreeID := "worktree-" + task.Task.ID
 	worktreeRoot := filepath.Join(t.TempDir(), "task-worktree")
 	retained := registeredWorktreeTopologyFixture(worktreeRoot, worktreeID)
-	setupErr := errors.New("setup failed twice")
+	scriptPath := filepath.Join(binding.CanonicalRoot, "setup-worktree.sh")
+	setupCause := errors.New("setup failed twice")
+	setupErr, err := serverapi.NewWorktreeSetupRetainedError(
+		retained,
+		scriptPath,
+		setupCause.Error(),
+		setupCause,
+	)
+	if err != nil {
+		t.Fatalf("NewWorktreeSetupRetainedError: %v", err)
+	}
 	service.executionTargets = &recordingExecutionTargetInfrastructure{
 		resolution: workflowstore.ExecutionTargetSnapshot{
 			Mode:         workflow.ExecutionTargetModeHead,
@@ -1604,7 +1614,7 @@ func TestServiceTaskStartPublishesRetryReadyRetainedSetupFailureAfterAppliedResp
 							Kind:        serverapi.WorktreeSetupFailureOperational,
 							Operational: &serverapi.WorktreeSetupOperationalFailure{},
 						},
-						Diagnostic:       setupErr.Error(),
+						Diagnostic:       setupErr.Diagnostic,
 						RetainedWorktree: &retained,
 					},
 				},
@@ -1641,15 +1651,17 @@ func TestServiceTaskStartPublishesRetryReadyRetainedSetupFailureAfterAppliedResp
 	}
 	interruptionDetail := typed.InterruptionDetail()
 	if interruptionDetail.SetupRecovery == nil ||
-		interruptionDetail.SetupRecovery.SetupOperationID != uuid.UUID(setupID) {
+		interruptionDetail.SetupRecovery.SetupOperationID != uuid.UUID(setupID) ||
+		interruptionDetail.SetupRecovery.ScriptPath == nil ||
+		*interruptionDetail.SetupRecovery.ScriptPath != scriptPath {
 		t.Fatalf("preparation interruption detail = %+v, want typed setup recovery", interruptionDetail)
 	}
 	if _, duplicated := interruptionDetail.Fields[workflow.CurrentNodeInterruptionDiagnosticField]; duplicated {
 		t.Fatalf("preparation interruption detail duplicated setup diagnostic: %+v", interruptionDetail.Fields)
 	}
 	diagnostic := interruptionDetail.Diagnostic()
-	if diagnostic == nil || *diagnostic != setupErr.Error() {
-		t.Fatalf("preparation diagnostic = %v, want %q", diagnostic, setupErr.Error())
+	if diagnostic == nil || *diagnostic != setupErr.Diagnostic {
+		t.Fatalf("preparation diagnostic = %v, want %q", diagnostic, setupErr.Diagnostic)
 	}
 	(<-finalizers)(workflowexecution.TaskPreparationFinalization{
 		Kind:  workflowexecution.TaskPreparationFailed,
@@ -1920,7 +1932,16 @@ func TestServiceSetupFailureRecoverySequenceKeepsTaskReadableAndLocksOnlyAfterRe
 	worktreeRoot := filepath.Join(t.TempDir(), "task-worktree")
 	scriptPath := filepath.Join(binding.CanonicalRoot, "setup-worktree.sh")
 	retained := registeredWorktreeTopologyFixture(worktreeRoot, worktreeID)
-	setupErr := errors.New("setup failed after automatic retry")
+	setupCause := errors.New("setup failed after automatic retry")
+	setupErr, err := serverapi.NewWorktreeSetupRetainedError(
+		retained,
+		scriptPath,
+		setupCause.Error(),
+		setupCause,
+	)
+	if err != nil {
+		t.Fatalf("NewWorktreeSetupRetainedError: %v", err)
+	}
 	prepareCalls := 0
 	service.executionTargets = &recordingExecutionTargetInfrastructure{
 		resolution: workflowstore.ExecutionTargetSnapshot{
@@ -1963,7 +1984,7 @@ func TestServiceSetupFailureRecoverySequenceKeepsTaskReadableAndLocksOnlyAfterRe
 								Kind:        serverapi.WorktreeSetupFailureProcessExit,
 								ProcessExit: &serverapi.WorktreeSetupProcessExit{ExitCode: 1},
 							},
-							Diagnostic:       setupErr.Error(),
+							Diagnostic:       setupErr.Diagnostic,
 							RetainedWorktree: &retained,
 						},
 					},

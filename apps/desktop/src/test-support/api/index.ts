@@ -22,8 +22,12 @@ export function registeredWorktreeWire(root: string, id: string) {
       git: {
         canonical_root: root,
         head_object: "abc123",
+        branch_ref: null,
+        branch_name: null,
         detached: false,
         bare: false,
+        locked_reason: null,
+        prunable_reason: null,
         is_main: false,
         path_available: true,
       },
@@ -33,6 +37,7 @@ export function registeredWorktreeWire(root: string, id: string) {
         display_name: id,
         managed: true,
         created_branch: true,
+        origin_session_id: null,
       },
     },
   } as const;

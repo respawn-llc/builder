@@ -366,6 +366,7 @@ function setupRecoveryTaskAttention(setupOperationID: string) {
             setup_operation_id: setupOperationID,
             cause: "target_preparation",
             diagnostic: "target preparation failed",
+            script_path: null,
             execution_target: { mode: "default_branch" },
           },
         }),

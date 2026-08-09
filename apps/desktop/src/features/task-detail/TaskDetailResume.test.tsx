@@ -180,9 +180,11 @@ it("gives only the exact canonical setup interruption a recoverable Resume contr
           fields: {},
           setup_recovery: {
             setup_operation_id: setupOperationID,
-            cause: "target_preparation",
-            diagnostic: "target preparation failed",
+            cause: "operational",
+            diagnostic: "setup failed after retry",
+            script_path: "/repo/setup.sh",
             execution_target: { mode: "custom_ref", custom_ref: "refs/heads/dev" },
+            retained_worktree: { worktree_id: "worktree-current", root: "/repo/current" },
           },
         }),
         occurred_at_unix_ms: 2,
@@ -217,6 +219,7 @@ it("gives only the exact canonical setup interruption a recoverable Resume contr
   }
   await user.click(resumeButton);
   expect(await screen.findByTestId("setup-recovery-retry")).toBeInTheDocument();
+  expect(screen.getByText("/repo/setup.sh")).toBeInTheDocument();
 
   await user.click(screen.getByRole("button", { name: "Cancel" }));
   expect(screen.queryByTestId("setup-recovery-retry")).not.toBeInTheDocument();

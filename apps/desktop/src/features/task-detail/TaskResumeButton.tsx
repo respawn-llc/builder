@@ -152,6 +152,17 @@ export function TaskResumeButton({
   );
 }
 
+function setupRecoveryFailure(recovery: TaskSetupRecovery): TaskSetupRecoveryFailure {
+  return {
+    kind: recovery.cause === "target_preparation" ? "target_preparation" : "setup_script",
+    diagnostic: recovery.diagnostic,
+    scriptPath: recovery.scriptPath,
+    retainedWorktree: recovery.retainedWorktree === null ? null : { root: recovery.retainedWorktree.root },
+    retainedPreviousWorktree:
+      recovery.retainedPreviousWorktree === null ? null : { root: recovery.retainedPreviousWorktree.root },
+  };
+}
+
 export function TaskStartButton({ disabled }: Readonly<{ disabled: boolean }>) {
   const { t } = useTranslation();
   const controller = useContext(TaskInitiatingActionContext);

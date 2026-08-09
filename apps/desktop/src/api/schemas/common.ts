@@ -456,6 +456,7 @@ const taskSetupRecoveryDetailSchema = z
         setup_operation_id: setupOperationIDSchema,
         cause: z.enum(["process_exit", "timeout", "target_preparation", "operational"]),
         diagnostic: nonBlankString,
+        script_path: nonBlankString.nullable(),
         execution_target: workflowExecutionTargetSelectionSchema,
         retained_worktree: taskSetupRecoveryRetainedWorktreeSchema.optional(),
         retained_previous_worktree: taskSetupRecoveryRetainedWorktreeSchema.optional(),
@@ -465,12 +466,22 @@ const taskSetupRecoveryDetailSchema = z
   .loose()
   .superRefine((value, context) => {
     if (
-      value.setup_recovery.cause !== "target_preparation" &&
-      value.setup_recovery.retained_worktree === undefined
+      value.setup_recovery.cause === "target_preparation" &&
+      value.setup_recovery.script_path !== null
     ) {
       context.addIssue({
         code: "custom",
-        message: "setup script failure requires retained worktree facts",
+        message: "target preparation recovery cannot include a setup script",
+      });
+    }
+    if (
+      value.setup_recovery.cause !== "target_preparation" &&
+      (value.setup_recovery.script_path === null ||
+        value.setup_recovery.retained_worktree === undefined)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "setup script failure requires script and retained worktree facts",
       });
     }
   })
@@ -478,6 +489,7 @@ const taskSetupRecoveryDetailSchema = z
     setupOperationID: value.setup_recovery.setup_operation_id,
     cause: value.setup_recovery.cause,
     diagnostic: value.setup_recovery.diagnostic,
+    scriptPath: value.setup_recovery.script_path,
     executionTarget: value.setup_recovery.execution_target,
     retainedWorktree: value.setup_recovery.retained_worktree ?? null,
     retainedPreviousWorktree: value.setup_recovery.retained_previous_worktree ?? null,

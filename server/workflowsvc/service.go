@@ -1211,14 +1211,9 @@ func movePreparationError(
 	cause error,
 ) (*serverapi.WorkflowTaskMovePreparationError, error) {
 	failed := preparationFailurePayload(prepared.setupResult, prepared.retainedWorktree, prepared.retainedPreviousWorktree, cause)
-	var setupScriptPath *string
-	if failed.Cause.Kind != serverapi.WorktreeSetupFailureTargetPreparation {
-		var retained *serverapi.WorktreeSetupRetainedError
-		if !errors.As(cause, &retained) {
-			return nil, errors.New("setup-script Move preparation failure requires retained setup error facts")
-		}
-		scriptPath := retained.ScriptPath
-		setupScriptPath = &scriptPath
+	setupScriptPath, err := setupFailureScriptPath(failed, cause)
+	if err != nil {
+		return nil, err
 	}
 	return serverapi.NewWorkflowTaskMovePreparationError(*failed, setupScriptPath, cause)
 }

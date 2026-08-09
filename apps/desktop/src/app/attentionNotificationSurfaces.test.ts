@@ -59,6 +59,7 @@ it("reconciles setup recovery against the exact Setup Operation", async () => {
                 setup_operation_id: currentSetupOperationID,
                 cause: "target_preparation",
                 diagnostic: "target preparation failed",
+                script_path: null,
                 execution_target: { mode: "default_branch" },
               },
             }),

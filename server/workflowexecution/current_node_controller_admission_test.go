@@ -1037,6 +1037,7 @@ func TestCurrentNodeControllerPreparationPersistenceFailureNeverAdvertisesCanoni
 	})
 	setupID := uuid.New()
 	retainedRoot := t.TempDir()
+	scriptPath := "scripts/setup.sh"
 	cause := NewTaskStartPreparationError(
 		errors.New("setup failed"),
 		workflow.CurrentNodeInterruptionDetail{
@@ -1045,6 +1046,7 @@ func TestCurrentNodeControllerPreparationPersistenceFailureNeverAdvertisesCanoni
 				SetupOperationID: setupID,
 				Cause:            workflow.CurrentNodeSetupRecoveryCauseOperational,
 				Diagnostic:       "setup failed twice",
+				ScriptPath:       &scriptPath,
 				ExecutionTarget: workflow.ExecutionTargetSelection{
 					Mode: workflow.ExecutionTargetModeHead,
 				},
@@ -1280,6 +1282,7 @@ func TestCurrentNodeControllerDurableRecoverySnapshotWaitsForBatchRetirementBefo
 	})
 	setupID := uuid.New()
 	firstFinalized := make(chan TaskPreparationFinalization, 1)
+	scriptPath := "scripts/setup.sh"
 	cause := NewTaskStartPreparationError(
 		errors.New("setup failed"),
 		workflow.CurrentNodeInterruptionDetail{
@@ -1288,6 +1291,7 @@ func TestCurrentNodeControllerDurableRecoverySnapshotWaitsForBatchRetirementBefo
 				SetupOperationID: setupID,
 				Cause:            workflow.CurrentNodeSetupRecoveryCauseOperational,
 				Diagnostic:       "setup failed twice",
+				ScriptPath:       &scriptPath,
 				ExecutionTarget: workflow.ExecutionTargetSelection{
 					Mode: workflow.ExecutionTargetModeHead,
 				},

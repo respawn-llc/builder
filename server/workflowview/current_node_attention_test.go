@@ -101,6 +101,7 @@ func TestAttentionProjectsTypedSetupRecoveryIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse setup operation id: %v", err)
 	}
+	scriptPath := "scripts/setup.sh"
 	if err := fixture.store.InterruptCurrentNode(
 		fixture.ctx,
 		started.currentNode,
@@ -111,6 +112,7 @@ func TestAttentionProjectsTypedSetupRecoveryIdentity(t *testing.T) {
 				SetupOperationID: setupUUID,
 				Cause:            workflow.CurrentNodeSetupRecoveryCauseOperational,
 				Diagnostic:       "setup failed after retry",
+				ScriptPath:       &scriptPath,
 				ExecutionTarget: workflow.ExecutionTargetSelection{
 					Mode: workflow.ExecutionTargetModeHead,
 				},

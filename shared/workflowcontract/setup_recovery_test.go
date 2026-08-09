@@ -25,6 +25,7 @@ func TestSetupRecoveryDetailOwnsCanonicalValidation(t *testing.T) {
 		SetupOperationID: uuid.New(),
 		Cause:            worktreecontract.SetupFailureProcessExit,
 		Diagnostic:       "setup failed",
+		ScriptPath:       stringPointer("scripts/setup.sh"),
 		ExecutionTarget:  validSetupRecoveryTarget{},
 		RetainedWorktree: &RetainedWorktree{
 			WorktreeID: "worktree-1",
@@ -54,6 +55,11 @@ func TestSetupRecoveryDetailOwnsCanonicalValidation(t *testing.T) {
 			detail.Diagnostic = " "
 			return detail
 		}()},
+		{name: "missing setup script", detail: func() SetupRecoveryDetail[uuid.UUID, validSetupRecoveryTarget] {
+			detail := valid
+			detail.ScriptPath = nil
+			return detail
+		}()},
 		{name: "missing retained worktree", detail: func() SetupRecoveryDetail[uuid.UUID, validSetupRecoveryTarget] {
 			detail := valid
 			detail.RetainedWorktree = nil
@@ -70,9 +76,14 @@ func TestSetupRecoveryDetailOwnsCanonicalValidation(t *testing.T) {
 
 	targetPreparation := valid
 	targetPreparation.Cause = worktreecontract.SetupFailureTargetPreparation
+	targetPreparation.ScriptPath = nil
 	targetPreparation.RetainedWorktree = nil
 	if err := targetPreparation.Validate(); err != nil {
 		t.Fatalf("Validate target preparation without retained worktree: %v", err)
+	}
+	targetPreparation.ScriptPath = stringPointer("scripts/setup.sh")
+	if err := targetPreparation.Validate(); err == nil {
+		t.Fatal("Validate accepted target preparation with a setup script")
 	}
 
 	invalidTarget := SetupRecoveryDetail[uuid.UUID, invalidSetupRecoveryTarget]{
@@ -84,4 +95,8 @@ func TestSetupRecoveryDetailOwnsCanonicalValidation(t *testing.T) {
 	if err := invalidTarget.Validate(); err == nil {
 		t.Fatal("Validate accepted invalid execution target")
 	}
+}
+
+func stringPointer(value string) *string {
+	return &value
 }

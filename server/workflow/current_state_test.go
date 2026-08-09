@@ -32,10 +32,12 @@ func TestCurrentNodeInterruptionDetailOwnsPersistedDiagnosticField(t *testing.T)
 
 func TestCurrentNodeInterruptionDetailCarriesTypedSetupRecovery(t *testing.T) {
 	setupOperationID := uuid.New()
+	scriptPath := "scripts/setup.sh"
 	recovery := workflow.CurrentNodeSetupRecoveryDetail{
 		SetupOperationID: setupOperationID,
 		Cause:            workflow.CurrentNodeSetupRecoveryCauseProcessExit,
 		Diagnostic:       "setup failed after retry",
+		ScriptPath:       &scriptPath,
 		ExecutionTarget: workflow.ExecutionTargetSelection{
 			Mode: workflow.ExecutionTargetModeHead,
 		},
@@ -73,6 +75,8 @@ func TestCurrentNodeInterruptionDetailCarriesTypedSetupRecovery(t *testing.T) {
 	if decoded.SetupRecovery == nil ||
 		decoded.SetupRecovery.SetupOperationID != setupOperationID ||
 		decoded.SetupRecovery.ExecutionTarget.Mode != workflow.ExecutionTargetModeHead ||
+		decoded.SetupRecovery.ScriptPath == nil ||
+		*decoded.SetupRecovery.ScriptPath != scriptPath ||
 		decoded.SetupRecovery.RetainedWorktree == nil ||
 		decoded.SetupRecovery.RetainedWorktree.Root != recovery.RetainedWorktree.Root {
 		t.Fatalf("decoded setup recovery = %+v, want %+v", decoded.SetupRecovery, recovery)

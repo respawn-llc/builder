@@ -1,17 +1,17 @@
 import { z } from "zod";
 
-const optionalNonBlankString = z.string().trim().min(1).nullable().optional();
+const nullableNonBlankString = z.string().trim().min(1).nullable();
 
 const gitFactsSchema = z
   .object({
     canonical_root: z.string().trim().min(1),
     head_object: z.string().trim().min(1),
-    branch_ref: optionalNonBlankString,
-    branch_name: optionalNonBlankString,
+    branch_ref: nullableNonBlankString,
+    branch_name: nullableNonBlankString,
     detached: z.boolean(),
     bare: z.boolean(),
-    locked_reason: optionalNonBlankString,
-    prunable_reason: optionalNonBlankString,
+    locked_reason: nullableNonBlankString,
+    prunable_reason: nullableNonBlankString,
     is_main: z.boolean(),
     path_available: z.boolean(),
   })
@@ -36,7 +36,7 @@ const kentFactsSchema = z
     display_name: z.string().trim().min(1),
     managed: z.boolean(),
     created_branch: z.boolean(),
-    origin_session_id: optionalNonBlankString,
+    origin_session_id: nullableNonBlankString,
   })
   .strict()
   .transform((value) => ({
