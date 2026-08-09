@@ -308,17 +308,43 @@ func testQueueCancellationBoundaries(t *testing.T) {
 }
 
 func testQueueCloseSettlement(t *testing.T) {
+	t.Run("parent cancellation overrides a dispatched handler completion", func(t *testing.T) {
+		parent, cancel := context.WithCancel(context.Background())
+		queue := runtimecommand.NewQueue(parent)
+		t.Cleanup(queue.Close)
+		started := make(chan struct{})
+		deferred, err := runtimecommand.Submit(context.Background(), queue, 1, func(
+			scope runtimecommand.Admission,
+			value int,
+			complete func(int, error),
+		) error {
+			close(started)
+			<-scope.Context().Done()
+			complete(value, nil)
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("submit dispatched event: %v", err)
+		}
+		waitSignal(t, started)
+		cancel()
+		if _, err := deferred.Await(context.Background()); !errors.Is(err, runtimecommand.ErrUnavailable) {
+			t.Fatalf("handler completion after parent cancellation = %v, want runtime unavailable", err)
+		}
+	})
+
 	queue := runtimecommand.NewQueue(context.Background())
 
 	started := make(chan struct{})
-	_, err := runtimecommand.Submit(context.Background(), queue, 1, func(
+	current, err := runtimecommand.Submit(context.Background(), queue, 1, func(
 		scope runtimecommand.Admission,
-		_ int,
-		_ func(int, error),
+		value int,
+		complete func(int, error),
 	) error {
 		close(started)
 		<-scope.Context().Done()
-		return scope.Context().Err()
+		complete(value, nil)
+		return nil
 	})
 	if err != nil {
 		t.Fatalf("submit current event: %v", err)
@@ -339,6 +365,9 @@ func testQueueCloseSettlement(t *testing.T) {
 		}(index)
 	}
 	queue.Close()
+	if _, err := current.Await(context.Background()); !errors.Is(err, runtimecommand.ErrUnavailable) {
+		t.Fatalf("handler completion after close = %v, want runtime unavailable", err)
+	}
 	for range senderCount {
 		if err := receive(t, results); !errors.Is(err, runtimecommand.ErrUnavailable) {
 			t.Fatalf("close-racing sender result = %v, want runtime unavailable", err)

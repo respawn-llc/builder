@@ -64,7 +64,9 @@ func (q *Queue) Close() {
 	if q == nil {
 		return
 	}
+	q.outstandingMu.Lock()
 	q.cancel()
+	q.outstandingMu.Unlock()
 	<-q.closed
 }
 
@@ -87,7 +89,11 @@ func (q *Queue) runBroker() {
 			}
 			return
 		case accepted := <-q.ingress:
-			q.track(accepted.event.result())
+			if !q.track(accepted.event.result()) {
+				accepted.event.settle(ErrUnavailable)
+				accepted.received <- struct{}{}
+				continue
+			}
 			pending = append(pending, accepted.event)
 			if len(pending) >= waitingEventLimit {
 				panic("runtime event queue reached 10,000 waiting events")
@@ -125,16 +131,14 @@ func (q *Queue) finishClose() {
 	close(q.closed)
 }
 
-func (q *Queue) track(result resultSettler) {
+func (q *Queue) track(result resultSettler) bool {
 	q.outstandingMu.Lock()
+	defer q.outstandingMu.Unlock()
+	if q.ctx.Err() != nil {
+		return false
+	}
 	q.outstanding[result] = struct{}{}
-	q.outstandingMu.Unlock()
-}
-
-func (q *Queue) untrack(result resultSettler) {
-	q.outstandingMu.Lock()
-	delete(q.outstanding, result)
-	q.outstandingMu.Unlock()
+	return true
 }
 
 func (q *Queue) settleOutstanding() {
@@ -143,6 +147,7 @@ func (q *Queue) settleOutstanding() {
 	for result := range q.outstanding {
 		results = append(results, result)
 	}
+	clear(q.outstanding)
 	q.outstandingMu.Unlock()
 	for _, result := range results {
 		result.settle(ErrUnavailable)
@@ -224,11 +229,11 @@ type Deferred[Result interface{}] struct {
 	completed bool
 	value     Result
 	err       error
-	onSettle  func()
+	queue     *Queue
 }
 
-func newDeferred[Result interface{}]() *Deferred[Result] {
-	return &Deferred[Result]{done: make(chan struct{})}
+func newDeferred[Result interface{}](queue *Queue) *Deferred[Result] {
+	return &Deferred[Result]{done: make(chan struct{}), queue: queue}
 }
 
 func (d *Deferred[Result]) Await(ctx context.Context) (Result, error) {
@@ -252,20 +257,23 @@ func (d *Deferred[Result]) complete(value Result, err error) {
 	if d == nil {
 		return
 	}
+	d.queue.outstandingMu.Lock()
+	defer d.queue.outstandingMu.Unlock()
+	if d.queue.ctx.Err() != nil {
+		var zero Result
+		value = zero
+		err = ErrUnavailable
+	}
+	delete(d.queue.outstanding, d)
 	d.mu.Lock()
+	defer d.mu.Unlock()
 	if d.completed {
-		d.mu.Unlock()
 		return
 	}
 	d.completed = true
 	d.value = value
 	d.err = err
-	onSettle := d.onSettle
 	close(d.done)
-	d.mu.Unlock()
-	if onSettle != nil {
-		onSettle()
-	}
 }
 
 func (d *Deferred[Result]) settle(err error) {
@@ -306,14 +314,11 @@ func Submit[Payload, Result interface{}](
 	if handler == nil {
 		return nil, errors.New("runtime event handler is required")
 	}
-	deferred := newDeferred[Result]()
+	deferred := newDeferred[Result](queue)
 	event := &eventEnvelope[Payload, Result]{
 		payload:  payload,
 		handler:  handler,
 		deferred: deferred,
-	}
-	deferred.onSettle = func() {
-		queue.untrack(deferred)
 	}
 	accepted := submission{
 		event:    event,

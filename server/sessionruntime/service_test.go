@@ -553,12 +553,16 @@ func TestActivateSessionRuntimeUsesActiveShellPostprocessingWithSuppliedManager(
 			ToolCalls: []llm.ToolCall{{
 				ID:    "call-active-shell",
 				Name:  string(toolspec.ToolExecCommand),
-				Input: json.RawMessage(`{"cmd":"printf '\\033[31mactive\\033[0m'; sleep 2","shell":"/bin/sh","login":false,"yield_time_ms":200}`),
+				Input: json.RawMessage(`{"cmd":"printf '\\033[31mactive\\033[0m'; sleep 30","shell":"/bin/sh","login":false,"yield_time_ms":200}`),
 			}},
 			Usage: llm.Usage{WindowTokens: 200000},
 		},
 		{
 			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
+			Usage:     llm.Usage{WindowTokens: 200000},
+		},
+		{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("background done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}

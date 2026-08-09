@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"io"
 	"time"
 
 	"core/shared/runtimeids"
@@ -41,7 +42,12 @@ type AgentStepOriginLifecycleSink interface {
 }
 
 type RuntimeBoundHumanExecutionLauncher interface {
+	RuntimeBoundExecutionRetainer
 	RegisterRuntimeBoundHumanExecution(context.Context) (RuntimeBoundHumanExecution, error)
+}
+
+type RuntimeBoundExecutionRetainer interface {
+	RetainRuntimeBoundExecution(context.Context) (io.Closer, error)
 }
 
 type RuntimeBoundHumanExecution interface {
@@ -49,6 +55,7 @@ type RuntimeBoundHumanExecution interface {
 }
 
 type RuntimeBoundLongExecutionLauncher interface {
+	RuntimeBoundExecutionRetainer
 	RegisterRuntimeBoundLongExecution(context.Context) (RuntimeBoundLongExecution, error)
 }
 

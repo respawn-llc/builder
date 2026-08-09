@@ -375,12 +375,8 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 	}
 	cancel()
 	eventWG.Wait()
-	select {
-	case <-readDone:
-	case <-time.After(100 * time.Millisecond):
-	}
-	_ = ptmx.Close()
 	<-readDone
+	_ = ptmx.Close()
 	<-analysisDone
 	readinessErr := readiness.Close()
 

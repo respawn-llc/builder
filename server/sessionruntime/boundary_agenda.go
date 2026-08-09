@@ -3,6 +3,7 @@ package sessionruntime
 import (
 	"context"
 	"errors"
+	"io"
 
 	"core/server/runtime"
 	"core/server/session"
@@ -18,6 +19,13 @@ type runtimeBoundLongExecution struct {
 	start  chan struct{}
 	work   chan func(context.Context, *runtime.Engine) error
 	handle ExecutionHandle
+}
+
+func (r *agentResource) RetainRuntimeBoundExecution(ctx context.Context) (io.Closer, error) {
+	if err := context.Cause(ctx); err != nil {
+		return nil, err
+	}
+	return r.authority.retainResource(r.ref)
 }
 
 func (r *agentResource) RegisterRuntimeBoundHumanExecution(
@@ -95,7 +103,7 @@ func (r *agentResource) startRuntimeBoundExecution(
 	}
 	return r.authority.StartAgentExecution(ctx, AgentExecutionRequest{
 		Descriptor: descriptor,
-		Resource:   CurrentAgentResource{},
+		Resource:   runtimeBoundAgentResource{},
 		Runner: func(
 			executionCtx context.Context,
 			_ ExecutionScope,

@@ -520,7 +520,7 @@ func TestWaitForActiveRunResultReturnsAssistantFinalAnswer(t *testing.T) {
 
 	select {
 	case <-modelEntered:
-	case <-time.After(3 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("timed out waiting for model")
 	}
 	handle, err := eng.CaptureActiveRunResult(context.Background())

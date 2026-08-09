@@ -66,6 +66,10 @@ type CurrentAgentResource struct{}
 
 func (CurrentAgentResource) agentResourceSelection() {}
 
+type runtimeBoundAgentResource struct{}
+
+func (runtimeBoundAgentResource) agentResourceSelection() {}
+
 type OpenAgentResource struct{}
 
 func (OpenAgentResource) agentResourceSelection() {}
@@ -950,8 +954,10 @@ func (a *Authority) admitAgentExecutionStart(
 		}
 	}
 	resource.mu.Lock()
+	_, acceptedRuntimeBoundWork := request.Resource.(runtimeBoundAgentResource)
 	if resource.ownerlessDisposition == agentResourceRetireWhenIdle &&
-		len(resource.owners) == 0 {
+		len(resource.owners) == 0 &&
+		!acceptedRuntimeBoundWork {
 		resource.mu.Unlock()
 		a.mu.Unlock()
 		return nil, errors.Join(
@@ -1243,7 +1249,7 @@ func (a *Authority) selectResource(
 ) (*agentResource, bool, error) {
 	sessionID := descriptor.SessionID()
 	switch selection.(type) {
-	case CurrentAgentResource:
+	case CurrentAgentResource, runtimeBoundAgentResource:
 		a.mu.Lock()
 		resource := a.resources[sessionID]
 		a.mu.Unlock()

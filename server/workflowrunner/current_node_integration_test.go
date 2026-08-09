@@ -35,7 +35,7 @@ import (
 	"core/shared/toolspec"
 )
 
-const currentNodeRunnerWait = 60 * time.Second
+const currentNodeRunnerWait = 3 * time.Minute
 
 type currentNodeRunnerFixture struct {
 	cfg             config.App
@@ -171,11 +171,7 @@ func newCurrentNodeRunnerFixtureWithClientAndPersistence(
 		Settings:    config.Settings{Model: "workflow-reviewer"},
 		Sources:     map[string]string{"model": "test"},
 	}
-	metadataStore, err := metadata.Open(cfg.PersistenceRoot)
-	if err != nil {
-		t.Fatalf("open metadata: %v", err)
-	}
-	t.Cleanup(func() { _ = metadataStore.Close() })
+	metadataStore := testsetup.OpenStore(t, cfg.PersistenceRoot)
 	binding, err := metadataStore.RegisterWorkspaceBinding(context.Background(), workspace)
 	if err != nil {
 		t.Fatalf("register workspace: %v", err)

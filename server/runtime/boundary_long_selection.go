@@ -114,8 +114,13 @@ func (e *Engine) startNextRuntimeBoundLongWork(
 	if !hasLauncher {
 		return nil
 	}
-	return admission.startWork(func(workCtx context.Context) {
+	retention, err := launcher.RetainRuntimeBoundExecution(admission.Context())
+	if err != nil {
+		return err
+	}
+	startErr := admission.startWork(func(workCtx context.Context) {
 		execution, registerErr := launcher.RegisterRuntimeBoundLongExecution(workCtx)
+		registerErr = errors.Join(registerErr, retention.Close())
 		if execution == nil && registerErr == nil {
 			return
 		}
@@ -137,6 +142,10 @@ func (e *Engine) startNextRuntimeBoundLongWork(
 			e.surfaceRunError(submitErr)
 		}
 	})
+	if startErr != nil {
+		return errors.Join(startErr, retention.Close())
+	}
+	return nil
 }
 
 func (e *Engine) applyRuntimeBoundLongPreparation(

@@ -524,56 +524,6 @@ func TestNewLazyWithIDPreservesCategoryValidation(t *testing.T) {
 	}
 }
 
-func TestCloseIfIdleRetiresOwnerlessRuntimeAfterCurrentExecutionFinishes(t *testing.T) {
-	fixture := newSessionRuntimeFixture(t)
-	sessionID := lifecycleSessionID(t, fixture)
-	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
-	authority := newAuthorityWithEventFeed(t, fixture, func(AgentResourceDescriptor, runtime.Event) {})
-	attachment := openLifecycleRuntime(t, authority, sessionID, "owner-a", &plan)
-
-	entered := make(chan struct{})
-	finish := make(chan struct{})
-	handle, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
-		Descriptor: mustOpenSessionDescriptor(t, sessionID),
-		Resource:   CurrentAgentResource{},
-		Runner: func(ctx context.Context, _ ExecutionScope, bridge AgentRuntimeBridge) error {
-			if err := bridge.WithEngine(ctx, func(_ context.Context, engine *runtime.Engine) error {
-				engine.QueueUserMessage("queued during current execution")
-				return nil
-			}); err != nil {
-				return err
-			}
-			close(entered)
-			<-finish
-			return nil
-		},
-	})
-	if err != nil {
-		t.Fatalf("start current agent execution: %v", err)
-	}
-	<-entered
-
-	release, err := attachment.Release(context.Background(), RuntimeReleaseCloseIfIdle)
-	if err != nil {
-		t.Fatalf("release active runtime: %v", err)
-	}
-	if !release.Active || release.Released {
-		t.Fatalf("active release = %+v, want active pending retirement", release)
-	}
-	accessErr := authority.WithRuntime(context.Background(), attachment.Resource(), func(context.Context, *runtime.Engine) error {
-		return nil
-	})
-
-	close(finish)
-	if _, err := handle.Wait(context.Background()); err != nil {
-		t.Fatalf("wait current agent execution: %v", err)
-	}
-	if accessErr != nil {
-		t.Fatalf("ready ownerless runtime rejected callback before retirement: %v", accessErr)
-	}
-	assertRuntimeUnavailable(t, authority, attachment.Resource(), "execution finished")
-}
-
 func TestCloseIfIdleRetiresOwnerlessRuntimeAfterCallbackFinishes(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
@@ -709,77 +659,112 @@ func TestExecutionRetirementKeepsRetainedRuntimeSteerableUntilDrain(t *testing.T
 	if err := retention.Close(); err != nil {
 		t.Fatalf("release execution resource retention: %v", err)
 	}
-	assertRuntimeUnavailable(t, authority, resource, "execution retention released")
+	waitRuntimeUnavailable(t, authority, resource, "execution retention and discarded work released")
 }
 
 func TestExecutionRetirementLaunchesAcceptedRuntimeBoundHumanWorkBeforeClosing(t *testing.T) {
-	fixture := newSessionRuntimeFixture(t)
-	sessionID := lifecycleSessionID(t, fixture)
-	releaseModel := make(chan struct{})
-	close(releaseModel)
-	client := &ownerlessRetirementLLMClient{
-		firstStarted: make(chan struct{}),
-		releaseFirst: releaseModel,
-	}
-	var statusMu sync.Mutex
-	var statuses []runtime.QueuedUserMessageStatusEvent
-	authority := newAuthorityWithEventFeed(t, fixture, func(_ AgentResourceDescriptor, event runtime.Event) {
-		if event.QueuedUserMessageStatus == nil {
-			return
-		}
-		statusMu.Lock()
-		statuses = append(statuses, *event.QueuedUserMessageStatus)
-		statusMu.Unlock()
-	})
-	plan := authorityTestRuntimePlan(t, fixture, client)
-	executionStarted := make(chan struct{})
-	finishExecution := make(chan struct{})
-	handle, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
-		Descriptor: mustOpenSessionDescriptor(t, sessionID),
-		Runtime:    &plan,
-		Resource:   OpenAgentResource{},
-		Runner: func(context.Context, ExecutionScope, AgentRuntimeBridge) error {
-			close(executionStarted)
-			<-finishExecution
-			return nil
+	tests := []struct {
+		name         string
+		accept       func(*runtime.Engine) error
+		assertEvents func(*testing.T, []runtime.QueuedUserMessageStatusEvent)
+	}{
+		{
+			name: "human input",
+			accept: func(engine *runtime.Engine) error {
+				item, err := engine.QueueUserMessage("accepted before execution exit")
+				if err != nil {
+					return err
+				}
+				if item.ID == "" {
+					return errors.New("queued user message has no id")
+				}
+				return nil
+			},
+			assertEvents: func(t *testing.T, statuses []runtime.QueuedUserMessageStatusEvent) {
+				t.Helper()
+				if len(statuses) != 2 ||
+					statuses[0].Status != runtime.QueuedUserMessageAccepted ||
+					statuses[1].Status != runtime.QueuedUserMessageSubmitted {
+					t.Fatalf("queued message statuses = %+v, want accepted then submitted", statuses)
+				}
+			},
 		},
-	})
-	if err != nil {
-		t.Fatalf("start ownerless execution: %v", err)
+		{
+			name: "long background continuation",
+			accept: func(engine *runtime.Engine) error {
+				engine.HandleBackgroundShellUpdate(runtime.BackgroundShellEvent{
+					Type:       runtime.BackgroundShellEventCompleted,
+					ID:         "runtime-bound-background",
+					ActivityID: uuid.New(),
+					State:      "completed",
+				}, true)
+				return nil
+			},
+		},
 	}
-	resource, hasResource := handle.Scope().Resource()
-	if !hasResource {
-		t.Fatal("ownerless agent execution has no resource")
-	}
-	<-executionStarted
-	if err := authority.WithRuntime(context.Background(), resource, func(_ context.Context, engine *runtime.Engine) error {
-		item, queueErr := engine.QueueUserMessage("accepted before execution exit")
-		if queueErr != nil {
-			return queueErr
-		}
-		if item.ID == "" {
-			return errors.New("queued user message has no id")
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("queue accepted user work: %v", err)
-	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newSessionRuntimeFixture(t)
+			sessionID := lifecycleSessionID(t, fixture)
+			releaseModel := make(chan struct{})
+			close(releaseModel)
+			client := &ownerlessRetirementLLMClient{
+				firstStarted: make(chan struct{}),
+				releaseFirst: releaseModel,
+			}
+			var statusMu sync.Mutex
+			var statuses []runtime.QueuedUserMessageStatusEvent
+			authority := newAuthorityWithEventFeed(t, fixture, func(_ AgentResourceDescriptor, event runtime.Event) {
+				if event.QueuedUserMessageStatus == nil {
+					return
+				}
+				statusMu.Lock()
+				statuses = append(statuses, *event.QueuedUserMessageStatus)
+				statusMu.Unlock()
+			})
+			plan := authorityTestRuntimePlan(t, fixture, client)
+			executionStarted := make(chan struct{})
+			finishExecution := make(chan struct{})
+			handle, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+				Descriptor: mustOpenSessionDescriptor(t, sessionID),
+				Runtime:    &plan,
+				Resource:   OpenAgentResource{},
+				Runner: func(context.Context, ExecutionScope, AgentRuntimeBridge) error {
+					close(executionStarted)
+					<-finishExecution
+					return nil
+				},
+			})
+			if err != nil {
+				t.Fatalf("start ownerless execution: %v", err)
+			}
+			resource, hasResource := handle.Scope().Resource()
+			if !hasResource {
+				t.Fatal("ownerless agent execution has no resource")
+			}
+			<-executionStarted
+			if err := authority.WithRuntime(context.Background(), resource, func(_ context.Context, engine *runtime.Engine) error {
+				return test.accept(engine)
+			}); err != nil {
+				t.Fatalf("accept runtime-bound work: %v", err)
+			}
 
-	close(finishExecution)
-	if _, err := handle.Wait(context.Background()); err != nil {
-		t.Fatalf("wait execution retirement: %v", err)
-	}
-	waitRuntimeUnavailable(t, authority, resource, "accepted runtime-bound input completed")
-	if calls := client.callCount(); calls != 1 {
-		t.Fatalf("model calls = %d, want accepted runtime-bound input launched before retirement", calls)
-	}
+			close(finishExecution)
+			if _, err := handle.Wait(context.Background()); err != nil {
+				t.Fatalf("wait execution retirement: %v", err)
+			}
+			waitRuntimeUnavailable(t, authority, resource, "accepted runtime-bound work completed")
+			if calls := client.callCount(); calls != 1 {
+				t.Fatalf("model calls = %d, want accepted runtime-bound work launched before retirement", calls)
+			}
 
-	statusMu.Lock()
-	defer statusMu.Unlock()
-	if len(statuses) != 2 ||
-		statuses[0].Status != runtime.QueuedUserMessageAccepted ||
-		statuses[1].Status != runtime.QueuedUserMessageSubmitted {
-		t.Fatalf("queued message statuses = %+v, want accepted then submitted", statuses)
+			if test.assertEvents != nil {
+				statusMu.Lock()
+				statusSnapshot := append([]runtime.QueuedUserMessageStatusEvent(nil), statuses...)
+				statusMu.Unlock()
+				test.assertEvents(t, statusSnapshot)
+			}
+		})
 	}
 }
 

@@ -106,8 +106,13 @@ func (e *Engine) startRuntimeBoundHumanExecution(admission runtimeEventAdmission
 	if !ok || e.runtimeEvents == nil {
 		return nil
 	}
-	return admission.startWork(func(workCtx context.Context) {
+	retention, err := launcher.RetainRuntimeBoundExecution(admission.Context())
+	if err != nil {
+		return err
+	}
+	startErr := admission.startWork(func(workCtx context.Context) {
 		execution, registerErr := launcher.RegisterRuntimeBoundHumanExecution(workCtx)
+		registerErr = errors.Join(registerErr, retention.Close())
 		if registerErr != nil {
 			e.surfaceRunError(registerErr)
 			e.failIdleHumanAgendaItems(registerErr)
@@ -121,6 +126,10 @@ func (e *Engine) startRuntimeBoundHumanExecution(admission runtimeEventAdmission
 			e.failIdleHumanAgendaItems(launchErr)
 		}
 	})
+	if startErr != nil {
+		return errors.Join(startErr, retention.Close())
+	}
+	return nil
 }
 
 func (e *Engine) AgentExecutionScopeReleased(scopeID runtimeids.ExecutionScopeID) error {

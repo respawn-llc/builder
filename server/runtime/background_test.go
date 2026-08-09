@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"sync"
 	"testing"
 	"time"
@@ -277,6 +278,10 @@ func (l *backgroundExecutionLauncher) RegisterRuntimeBoundLongExecution(
 	return &backgroundTestExecution{launcher: l}, nil
 }
 
+func (*backgroundExecutionLauncher) RetainRuntimeBoundExecution(context.Context) (io.Closer, error) {
+	return backgroundExecutionRetention{}, nil
+}
+
 func (l *backgroundExecutionLauncher) awaitLaunch(t *testing.T) backgroundExecutionLaunch {
 	t.Helper()
 	select {
@@ -290,6 +295,12 @@ func (l *backgroundExecutionLauncher) awaitLaunch(t *testing.T) backgroundExecut
 
 type backgroundTestExecution struct {
 	launcher *backgroundExecutionLauncher
+}
+
+type backgroundExecutionRetention struct{}
+
+func (backgroundExecutionRetention) Close() error {
+	return nil
 }
 
 func (e *backgroundTestExecution) Launch(
