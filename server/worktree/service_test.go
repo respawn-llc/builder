@@ -29,10 +29,11 @@ func sessionTargetWorktreeID(target clientui.SessionExecutionTarget) string {
 }
 
 type serviceTestPublisher struct {
-	mu       sync.Mutex
-	outcomes []clientui.WorktreeTransitionOutcome
-	ready    chan struct{}
-	err      error
+	mu        sync.Mutex
+	outcomes  []clientui.WorktreeTransitionOutcome
+	ready     chan struct{}
+	err       error
+	onOutcome func(clientui.WorktreeTransitionOutcome)
 }
 
 func (p *serviceTestPublisher) PublishSessionIdentity(string) error {
@@ -46,7 +47,11 @@ func (p *serviceTestPublisher) PublishWorktreeTransitionOutcome(_ string, outcom
 		p.ready = make(chan struct{}, 1)
 	}
 	ready := p.ready
+	onOutcome := p.onOutcome
 	p.mu.Unlock()
+	if onOutcome != nil {
+		onOutcome(outcome)
+	}
 	select {
 	case ready <- struct{}{}:
 	default:

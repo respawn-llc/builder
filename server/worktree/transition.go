@@ -233,6 +233,7 @@ func (s *Service) submitClaimedWorktreeTransitionOutcome(
 	sessionID string,
 	outcome clientui.WorktreeTransitionOutcome,
 ) error {
+	outcomeAdmitted := false
 	err := s.authority.WithRuntimeEvents(
 		s.transitionCtx,
 		claim.Resource(),
@@ -246,6 +247,7 @@ func (s *Service) submitClaimedWorktreeTransitionOutcome(
 					event clientui.WorktreeTransitionOutcome,
 					complete func(struct{}, error),
 				) error {
+					outcomeAdmitted = true
 					admission, admissionErr := target.Engine.AdmitWorktreeOutcome(command)
 					publicationErr := s.publisher.PublishWorktreeTransitionOutcome(
 						sessionID,
@@ -276,6 +278,9 @@ func (s *Service) submitClaimedWorktreeTransitionOutcome(
 	)
 	if err == nil {
 		return nil
+	}
+	if outcomeAdmitted {
+		return err
 	}
 	return errors.Join(err, claim.Cancel(err))
 }
