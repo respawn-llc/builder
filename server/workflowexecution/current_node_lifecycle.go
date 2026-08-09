@@ -11,6 +11,7 @@ import (
 	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
+	"core/shared/runtimeids"
 )
 
 const ReasonCurrentNodeStartupRecovery workflow.CurrentNodeInterruptionReason = "workflow_startup_recovery"
@@ -149,6 +150,21 @@ func (e *TaskResumeConflictError) Error() string {
 	return fmt.Sprintf("task %q has no interrupted executable Current Nodes to resume", e.TaskID)
 }
 
+type resumeActiveSessionInvariant struct {
+	currentNode workflow.CurrentNodeReference
+	sessionID   runtimeids.SessionID
+	scopeID     runtimeids.ExecutionScopeID
+}
+
+func (e resumeActiveSessionInvariant) Error() string {
+	return fmt.Sprintf(
+		"resume current node %v: retained Session %s already has active execution scope %s",
+		e.currentNode,
+		e.sessionID,
+		e.scopeID,
+	)
+}
+
 func (c *CurrentNodeController) resumeTask(
 	ctx context.Context,
 	taskID workflow.TaskID,
@@ -190,6 +206,15 @@ func (c *CurrentNodeController) resumeTask(
 			if validationErr := classification.ValidationError(); validationErr != nil {
 				resumeErrs = append(resumeErrs, validationErr)
 				continue
+			}
+			if currentNode.SessionID != nil {
+				if active, exists := c.authority.SessionExecution(*currentNode.SessionID); exists {
+					panic(resumeActiveSessionInvariant{
+						currentNode: currentNode.Reference,
+						sessionID:   *currentNode.SessionID,
+						scopeID:     active.Scope().ID(),
+					})
+				}
 			}
 			projection, found, err := c.store.ResumeCurrentNode(ctx, currentNode.Reference)
 			if err != nil {

@@ -1254,6 +1254,81 @@ func TestWorkflowShellToolDurableCompletionStopsAfterToolResult(t *testing.T) {
 	}
 }
 
+func TestWorkflowStoppedQueuedFlushDoesNotFinalizeWithoutOutcome(t *testing.T) {
+	store := mustCreateTestSession(t)
+	controller := &fakeWorkflowController{}
+	shellTool := &externalCompletionTool{controller: controller}
+	var (
+		eng        *Engine
+		firstID    string
+		tailID     string
+		stopMarked bool
+	)
+	client := &hookClient{response: commentaryResponse("continue working")}
+	client.beforeReturn = func() error {
+		first, accepted, err := eng.QueueUserMessageForActiveRun(
+			context.Background(),
+			"queued correction",
+			runtimeids.NewRuntimeClientRequestID(),
+			nil,
+		)
+		if err != nil {
+			return err
+		}
+		if !accepted {
+			return errors.New("workflow queued correction was not accepted")
+		}
+		steer, err := NewAgentSteer(runtimeids.NewSessionID(), "queued agent correction")
+		if err != nil {
+			return err
+		}
+		tail, accepted, err := eng.QueueAgentSteerForActiveRun(
+			context.Background(),
+			steer,
+			runtimeids.NewRuntimeClientRequestID(),
+			nil,
+		)
+		if err != nil {
+			return err
+		}
+		if !accepted {
+			return errors.New("workflow queued agent correction was not accepted")
+		}
+		firstID = first.ID
+		tailID = tail.ID
+		return nil
+	}
+	eng = mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{
+		ID:      toolspec.ToolExecCommand,
+		Handler: shellTool,
+	}), Config{
+		CurrentNodeExecution: testWorkflowConfig(controller, config.WorkflowCompletionModeShellCommand),
+		OnEvent: func(event Event) {
+			if stopMarked ||
+				event.QueuedUserMessageStatus == nil ||
+				event.QueuedUserMessageStatus.QueueItemID != firstID ||
+				event.QueuedUserMessageStatus.Status != QueuedUserMessageSubmitted {
+				return
+			}
+			stopMarked = true
+			eng.liveRun.mu.Lock()
+			eng.liveRun.markStoppedQueueItemsLocked(map[runtimeids.QueueItemID]struct{}{
+				mustQueueItemID(tailID): {},
+			})
+			eng.liveRun.mu.Unlock()
+		},
+	})
+
+	_, err := eng.SubmitWorkflowTurn(context.Background())
+	var stopped *queuedUserFlushStoppedError
+	if !errors.As(err, &stopped) {
+		t.Fatalf("submit workflow turn error = %v, want stopped queued flush", err)
+	}
+	if !stopMarked {
+		t.Fatal("workflow queued flush never marked its tail stopped")
+	}
+}
+
 func TestWorkflowInvalidCompletionAttemptsInterruptAtCap(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)

@@ -33,6 +33,60 @@ func TestCurrentTaskQuiescenceIgnoresLatchedWorkerFailure(t *testing.T) {
 	}
 }
 
+func TestResumeTaskPanicsBeforeMutationWhenRetainedSessionExecutionIsActive(t *testing.T) {
+	fixture := newCurrentNodeQuestionFixture(t)
+	reference := currentNodeReferenceForControllerTest(t, "task-resume-active-session", "node-implementation")
+	release := make(chan struct{})
+	handle, sessionID := fixture.startQuestionExecution(
+		t,
+		reference,
+		func(context.Context, sessionruntime.ExecutionScope, sessionruntime.AgentRuntimeBridge) error {
+			<-release
+			return nil
+		},
+	)
+	t.Cleanup(func() {
+		close(release)
+		if err := handle.Close(context.Background()); err != nil {
+			t.Errorf("close active retained Session execution: %v", err)
+		}
+	})
+	key, err := reference.Key()
+	if err != nil {
+		t.Fatalf("current node key: %v", err)
+	}
+	fixture.controller.mu.Lock()
+	delete(fixture.controller.live, handle.Scope().ID())
+	delete(fixture.controller.liveByNode, key)
+	fixture.controller.mu.Unlock()
+	fixture.store.interrupted = []workflow.CurrentNode{{
+		Reference: reference,
+		SessionID: &sessionID,
+	}}
+
+	var recovered any
+	func() {
+		defer func() {
+			recovered = recover()
+		}()
+		_, _ = fixture.controller.ResumeTask(context.Background(), reference.TaskID)
+	}()
+	invariant, ok := recovered.(resumeActiveSessionInvariant)
+	if !ok {
+		t.Fatalf("resume panic = %T, want resumeActiveSessionInvariant", recovered)
+	}
+	if !invariant.currentNode.Equal(reference) ||
+		invariant.sessionID != sessionID ||
+		invariant.scopeID != handle.Scope().ID() {
+		t.Fatalf("resume invariant = %+v, want current node %v Session %s scope %s", invariant, reference, sessionID, handle.Scope().ID())
+	}
+	fixture.store.mu.Lock()
+	defer fixture.store.mu.Unlock()
+	if len(fixture.store.resumed) != 0 {
+		t.Fatalf("resume mutations = %+v, want none before panic", fixture.store.resumed)
+	}
+}
+
 func TestPostTurnCompactionReleasesMutationPermitWhileApprovalFenceIsActive(t *testing.T) {
 	source := currentNodeReferenceForControllerTest(t, "task-post-turn-fence", "node-source")
 	sessionID := runtimeids.NewSessionID()
