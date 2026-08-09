@@ -31,10 +31,15 @@ func LatestCommittedAssistantFinalAnswerFromEventLog(eventLog session.Materializ
 			}
 			if message.Role != llm.RoleAssistant ||
 				message.Phase == nil ||
-				*message.Phase != llm.MessagePhaseFinal ||
-				message.Content == nil ||
-				strings.TrimSpace(*message.Content) == "" ||
-				isBlankFinalAnswer(message) {
+				*message.Phase != llm.MessagePhaseFinal {
+				return false
+			}
+			if isBlankFinalAnswer(message) {
+				answer = nil
+				matchErr = nil
+				return true
+			}
+			if message.Content == nil || strings.TrimSpace(*message.Content) == "" {
 				return false
 			}
 			text := *message.Content

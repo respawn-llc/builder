@@ -65,7 +65,7 @@ func TestLatestCommittedAssistantFinalAnswerReturnsNewestFinalByteForByte(t *tes
 	}
 }
 
-func TestLatestCommittedAssistantFinalAnswerBlankDoesNotReplacePrevious(t *testing.T) {
+func TestLatestCommittedAssistantFinalAnswerBlankStopsBeforePrevious(t *testing.T) {
 	t.Parallel()
 	eventLog := mustMaterializeTestEventLog(t, mustCreateTestSession(t))
 	appendFinalAnswerTestRecord(t, eventLog, finalAnswerMessageRecord(t, llm.Message{
@@ -89,8 +89,8 @@ func TestLatestCommittedAssistantFinalAnswerBlankDoesNotReplacePrevious(t *testi
 	if err != nil {
 		t.Fatalf("lookup final answer: %v", err)
 	}
-	if answer == nil || *answer != "committed answer" {
-		t.Fatalf("answer = %v, want committed answer", answer)
+	if answer != nil {
+		t.Fatalf("answer = %q, want absence at blank final", *answer)
 	}
 }
 
