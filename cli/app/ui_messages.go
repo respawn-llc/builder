@@ -98,7 +98,6 @@ type runtimeControlDoneMsg struct {
 	changed        bool
 	mode           string
 	compactionMode string
-	runtimeTuple   *runtimeTupleCandidate
 	err            error
 }
 
@@ -137,7 +136,6 @@ type activeSubmitState struct {
 	text               string
 	queuedID           string
 	origin             activeSubmitOrigin
-	operationRef       clientui.RuntimeOperationRef
 	restoreOnInterrupt bool
 	flushed            bool
 }

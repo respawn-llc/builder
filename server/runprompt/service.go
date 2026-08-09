@@ -9,6 +9,8 @@ import (
 	"core/server/metadata"
 	servicecontract "core/shared/apicontract"
 	"core/shared/serverapi"
+
+	"github.com/google/uuid"
 )
 
 type inProcessRunPromptService struct {
@@ -23,7 +25,6 @@ func (s *inProcessRunPromptService) runPrompt(ctx context.Context, req serverapi
 	if s == nil || s.launcher == nil {
 		return serverapi.RunPromptResponse{}, errors.New("run prompt service is not configured")
 	}
-	req.ClientRequestID = strings.TrimSpace(req.ClientRequestID)
 	req.Prompt = strings.TrimSpace(req.Prompt)
 	if err := req.Validate(); err != nil {
 		return serverapi.RunPromptResponse{}, err
@@ -48,7 +49,7 @@ func (s *inProcessRunPromptService) runPrompt(ctx context.Context, req serverapi
 	if history := s.launcher.boot.PromptHistory; history != nil {
 		_, _, err := history.RecordPromptHistoryEntry(runCtx, metadata.PromptHistoryEntry{
 			SessionID: runtimeHandle.plan.sessionID,
-			SourceID:  req.ClientRequestID,
+			SourceID:  uuid.NewString(),
 			Text:      runtimeHandle.plan.PromptHistoryText(req.Prompt),
 		})
 		if err != nil {

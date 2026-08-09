@@ -565,10 +565,9 @@ func (e *Engine) appendQueuedUserMessageFlush(stepID string, message llm.Message
 		e.emitRaw(Event{
 			Kind: EventQueuedUserMessageStatus,
 			QueuedUserMessageStatus: &QueuedUserMessageStatusEvent{
-				SessionID:       e.SessionID(),
-				QueueItemID:     item.ID,
-				ClientRequestID: item.ClientRequestID,
-				Status:          QueuedUserMessageSubmitted,
+				SessionID:   e.SessionID(),
+				QueueItemID: item.ID,
+				Status:      QueuedUserMessageSubmitted,
 			},
 		})
 	}
@@ -580,7 +579,6 @@ func normalizedQueuedUserMessageStatusItems(raw []QueuedUserMessage) []QueuedUse
 	seen := map[string]bool{}
 	for _, item := range raw {
 		item.ID = strings.TrimSpace(item.ID)
-		item.ClientRequestID = strings.TrimSpace(item.ClientRequestID)
 		if item.ID == "" || seen[item.ID] {
 			continue
 		}
@@ -607,8 +605,7 @@ func queuedUserMessageIdentities(items []QueuedUserMessage) []QueuedUserMessageI
 	identities := make([]QueuedUserMessageIdentity, 0, len(items))
 	for _, item := range items {
 		identities = append(identities, QueuedUserMessageIdentity{
-			QueueItemID:     strings.TrimSpace(item.ID),
-			ClientRequestID: strings.TrimSpace(item.ClientRequestID),
+			QueueItemID: strings.TrimSpace(item.ID),
 		})
 	}
 	return identities
@@ -638,11 +635,10 @@ func (e *Engine) emitQueuedUserMessageStatus(
 		return
 	}
 	event := &QueuedUserMessageStatusEvent{
-		SessionID:       e.SessionID(),
-		QueueItemID:     item.ID,
-		ClientRequestID: item.ClientRequestID,
-		Status:          status,
-		FailureReason:   reason,
+		SessionID:     e.SessionID(),
+		QueueItemID:   item.ID,
+		Status:        status,
+		FailureReason: reason,
 	}
 	text, err := item.DisplayText()
 	if err != nil {

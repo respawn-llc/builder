@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"core/shared/runtimeids"
+	"core/shared/runtimeinput"
 )
 
 type ConversationFreshness uint8
@@ -76,22 +77,53 @@ const (
 )
 
 type RuntimeMainView struct {
-	Version             ReadModelVersion
-	Status              RuntimeStatus
-	Session             RuntimeSessionView
-	Activity            RuntimeActivity
-	InputReconciliation RuntimeInputReconciliationSnapshot
+	Version  ReadModelVersion
+	Status   RuntimeStatus
+	Session  RuntimeSessionView
+	Activity RuntimeActivity
 }
 
 type QueuedUserMessage struct {
-	ID              string
-	Text            string
-	ClientRequestID string
+	ID   string
+	Text string
 }
 
 type UserTurnSubmission struct {
 	Message string
 	Queued  QueuedUserMessage
+}
+
+type RuntimeSubmitRequest struct {
+	Input runtimeinput.Input
+}
+
+func (r RuntimeSubmitRequest) Validate() error {
+	return r.Input.Validate()
+}
+
+type RuntimeShellRequest struct {
+	Command string
+}
+
+func (r RuntimeShellRequest) Validate() error {
+	if strings.TrimSpace(r.Command) == "" {
+		return errors.New("shell command is required")
+	}
+	return nil
+}
+
+type RuntimeCompactRequest struct {
+	Args string
+}
+
+func (RuntimeCompactRequest) Validate() error {
+	return nil
+}
+
+type RuntimeSubmitQueuedRequest struct{}
+
+func (RuntimeSubmitQueuedRequest) Validate() error {
+	return nil
 }
 
 type SessionExecutionTarget struct {

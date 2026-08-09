@@ -593,21 +593,13 @@ func (e *Engine) LaunchPromptHistoryAppend(
 }
 
 type QueuedUserMessage struct {
-	ID              string
-	ClientRequestID string
-	Message         llm.Message
+	ID      string
+	Message llm.Message
 }
 
 func (e *Engine) QueueUserMessage(text string) (QueuedUserMessage, error) {
-	return e.QueueUserMessageWithClientRequestID(text, "")
-}
-
-func (e *Engine) QueueUserMessageWithClientRequestID(text string, clientRequestID string) (QueuedUserMessage, error) {
 	e.ensureOrchestrationCollaborators()
-	item, err := newQueuedUserMessage(
-		llm.Message{Role: llm.RoleUser, Content: textutil.Value(text)},
-		clientRequestID,
-	)
+	item, err := newQueuedUserMessage(llm.Message{Role: llm.RoleUser, Content: textutil.Value(text)})
 	if err != nil {
 		return QueuedUserMessage{}, err
 	}

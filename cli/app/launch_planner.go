@@ -16,8 +16,6 @@ import (
 	"core/shared/lifecyclecontract"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
-
-	"github.com/google/uuid"
 )
 
 type launchMode string
@@ -210,6 +208,19 @@ func (p *launchPlanner) PrepareRuntime(ctx context.Context, plan sessionLaunchPl
 		return nil, errors.New("runtime attachment server is required")
 	}
 	return prepareSharedRuntime(ctx, runtimeServer, plan, diagnosticWriter, startLogLine)
+}
+
+func (p *launchPlanner) resolvePlanRequest(ctx context.Context, req sessionLaunchRequest) (resolvedSessionPlanRequest, error) {
+	overrides := sessionPlanOverridesFromConfig(p.server.Config())
+	overrides = mergeSessionPlanOverrides(overrides, req.Overrides)
+	if err := req.Intent.Validate(); err != nil {
+		return resolvedSessionPlanRequest{}, err
+	}
+	return resolvedSessionPlanRequest{request: serverapi.SessionPlanRequest{
+		Mode:      serverapi.SessionLaunchMode(req.Mode),
+		Intent:    req.Intent,
+		Overrides: overrides,
+	}}, nil
 }
 
 func (p *launchPlanner) selectSession(ctx context.Context, notice *startupPickerNotice) (sessionPickerResult, error) {

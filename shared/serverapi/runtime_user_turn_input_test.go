@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"testing"
 
-	"core/shared/clientui"
-	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 )
 
@@ -54,17 +52,11 @@ func TestRuntimeUserTurnInputRejectsInvalidCardinality(t *testing.T) {
 
 func TestRuntimeSubmitUserTurnRequestUsesInputAndRejectsMissingInput(t *testing.T) {
 	req := RuntimeSubmitUserTurnRequest{
-		ClientRequestID: "request-1",
-		SessionID:       "session-1",
-		Input:           runtimeinput.Text("hello"),
-		OperationRef: clientui.RuntimeOperationRef{
-			Kind:            clientui.RuntimeOperationKindSubmit,
-			ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
-		},
+		SessionID: "session-1",
+		Input:     runtimeinput.Text("hello"),
 	}
-	req.OperationRef = clientui.RuntimeOperationRef{}
-	if err := req.Validate(); err == nil {
-		t.Fatal("Validate accepted an invalid operation reference")
+	if err := req.Validate(); err != nil {
+		t.Fatalf("Validate valid request: %v", err)
 	}
 	req.Input = RuntimeUserTurnInput{}
 	if err := req.Validate(); err == nil {

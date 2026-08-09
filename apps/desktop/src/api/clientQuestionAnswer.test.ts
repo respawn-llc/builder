@@ -8,7 +8,6 @@ describe("ApiClient task question answers", () => {
 
     await client.answerQuestion({
       kind: "ordinary",
-      clientRequestID: "request-1",
       taskID: "task-1",
       askID: "question-1",
       selectedOptionNumber: null,
@@ -18,7 +17,6 @@ describe("ApiClient task question answers", () => {
     expect(transport.calls).toContainEqual({
       method: "workflow.task.question.answer",
       params: {
-        client_request_id: "request-1",
         task_id: "task-1",
         ask_id: "question-1",
         selected_option_number: null,

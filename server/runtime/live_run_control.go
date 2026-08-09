@@ -185,15 +185,15 @@ func (t *goalLoopInterruptTracker) resolve(err error, snapshot *RunSnapshot) {
 	t.engine.goalLoopState().ClearInterruptPending()
 }
 
-func (e *Engine) QueueUserMessageForActiveRun(ctx context.Context, text string, clientRequestID runtimeids.RuntimeClientRequestID, beforeQueue func() error) (QueuedUserMessage, bool, error) {
-	return e.queueMessageForActiveRun(ctx, llm.Message{Role: llm.RoleUser, Content: textutil.Value(text)}, clientRequestID, beforeQueue)
+func (e *Engine) QueueUserMessageForActiveRun(ctx context.Context, text string, beforeQueue func() error) (QueuedUserMessage, bool, error) {
+	return e.queueMessageForActiveRun(ctx, llm.Message{Role: llm.RoleUser, Content: textutil.Value(text)}, beforeQueue)
 }
 
-func (e *Engine) QueueAgentSteerForActiveRun(ctx context.Context, steer AgentSteer, clientRequestID runtimeids.RuntimeClientRequestID, beforeQueue func() error) (QueuedUserMessage, bool, error) {
-	return e.queueMessageForActiveRun(ctx, steer.Message(), clientRequestID, beforeQueue)
+func (e *Engine) QueueAgentSteerForActiveRun(ctx context.Context, steer AgentSteer, beforeQueue func() error) (QueuedUserMessage, bool, error) {
+	return e.queueMessageForActiveRun(ctx, steer.Message(), beforeQueue)
 }
 
-func (e *Engine) queueMessageForActiveRun(ctx context.Context, message llm.Message, clientRequestID runtimeids.RuntimeClientRequestID, beforeQueue func() error) (QueuedUserMessage, bool, error) {
+func (e *Engine) queueMessageForActiveRun(ctx context.Context, message llm.Message, beforeQueue func() error) (QueuedUserMessage, bool, error) {
 	if e == nil {
 		return QueuedUserMessage{}, false, ErrNoActiveLiveRun
 	}
@@ -218,7 +218,7 @@ func (e *Engine) queueMessageForActiveRun(ctx context.Context, message llm.Messa
 	if err := ctx.Err(); err != nil {
 		return QueuedUserMessage{}, false, err
 	}
-	item, err := newQueuedUserMessage(message, clientRequestID.String())
+	item, err := newQueuedUserMessage(message)
 	if err != nil {
 		return QueuedUserMessage{}, false, err
 	}

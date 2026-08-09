@@ -51,22 +51,21 @@ type liveBandLine struct {
 type FrameSectionKind string
 
 const (
-	FrameSectionRuntimeActivity     FrameSectionKind = "runtime_activity"
-	FrameSectionQueuedOrSteered     FrameSectionKind = "queued_or_steered"
-	FrameSectionPendingPrompt       FrameSectionKind = "pending_prompt"
-	FrameSectionContextUsage        FrameSectionKind = "context_usage"
-	FrameSectionGoal                FrameSectionKind = "goal"
-	FrameSectionStatus              FrameSectionKind = "status"
-	FrameSectionInput               FrameSectionKind = "input"
-	FrameSectionPicker              FrameSectionKind = "picker"
-	FrameSectionHelp                FrameSectionKind = "help"
-	FrameSectionPromptHistory       FrameSectionKind = "prompt_history"
-	FrameSectionPendingTools        FrameSectionKind = "pending_tools"
-	FrameSectionRunState            FrameSectionKind = "run_state"
-	FrameSectionInputReconciliation FrameSectionKind = "input_reconciliation"
-	FrameSectionSessionStatus       FrameSectionKind = "session_status"
-	FrameSectionSessionIdentity     FrameSectionKind = "session_identity"
-	FrameSectionCompaction          FrameSectionKind = "compaction"
+	FrameSectionRuntimeActivity FrameSectionKind = "runtime_activity"
+	FrameSectionQueuedOrSteered FrameSectionKind = "queued_or_steered"
+	FrameSectionPendingPrompt   FrameSectionKind = "pending_prompt"
+	FrameSectionContextUsage    FrameSectionKind = "context_usage"
+	FrameSectionGoal            FrameSectionKind = "goal"
+	FrameSectionStatus          FrameSectionKind = "status"
+	FrameSectionInput           FrameSectionKind = "input"
+	FrameSectionPicker          FrameSectionKind = "picker"
+	FrameSectionHelp            FrameSectionKind = "help"
+	FrameSectionPromptHistory   FrameSectionKind = "prompt_history"
+	FrameSectionPendingTools    FrameSectionKind = "pending_tools"
+	FrameSectionRunState        FrameSectionKind = "run_state"
+	FrameSectionSessionStatus   FrameSectionKind = "session_status"
+	FrameSectionSessionIdentity FrameSectionKind = "session_identity"
+	FrameSectionCompaction      FrameSectionKind = "compaction"
 )
 
 type Result struct {

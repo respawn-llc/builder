@@ -151,9 +151,8 @@ func TestSessionLaunchIntentRejectsMalformedUnknownMixedAndLegacyShapes(t *testi
 func TestSessionPlanRequestOwnsExactlyOneTypedLaunchIntent(t *testing.T) {
 	target := mustSessionLaunchIntentID(t, "target-session")
 	request := SessionPlanRequest{
-		ClientRequestID: "request-1",
-		Mode:            SessionLaunchModeInteractive,
-		Intent:          OpenExistingSessionLaunchIntent(target),
+		Mode:   SessionLaunchModeInteractive,
+		Intent: OpenExistingSessionLaunchIntent(target),
 	}
 	if err := request.Validate(); err != nil {
 		t.Fatalf("Validate: %v", err)
@@ -171,10 +170,11 @@ func TestSessionPlanRequestOwnsExactlyOneTypedLaunchIntent(t *testing.T) {
 	}
 
 	for _, raw := range []string{
-		`{"client_request_id":"request-1","mode":"interactive"}`,
-		`{"client_request_id":"request-1","mode":"interactive","selected_session_id":"target-session","intent":{"kind":"open_existing","session_id":"target-session"}}`,
-		`{"client_request_id":"request-1","mode":"interactive","force_new_session":true,"intent":{"kind":"create_new","origin":{"kind":"independent"}}}`,
-		`{"client_request_id":"request-1","mode":"interactive","parent_session_id":"legacy-parent","intent":{"kind":"create_new","origin":{"kind":"parent_agent","session_id":"parent-agent"}}}`,
+		`{"mode":"interactive"}`,
+		`{"client_request_id":"request-1","mode":"interactive","intent":{"kind":"create_new","origin":{"kind":"independent"}}}`,
+		`{"mode":"interactive","selected_session_id":"target-session","intent":{"kind":"open_existing","session_id":"target-session"}}`,
+		`{"mode":"interactive","force_new_session":true,"intent":{"kind":"create_new","origin":{"kind":"independent"}}}`,
+		`{"mode":"interactive","parent_session_id":"legacy-parent","intent":{"kind":"create_new","origin":{"kind":"parent_agent","session_id":"parent-agent"}}}`,
 	} {
 		var legacy SessionPlanRequest
 		if err := json.Unmarshal([]byte(raw), &legacy); err == nil {

@@ -26,22 +26,17 @@ func (m QueuedUserMessage) DisplayText() (string, error) {
 	return *m.Message.Content, nil
 }
 
-func queuedUserMessageWithID(id, text, clientRequestID string) QueuedUserMessage {
+func queuedUserMessageWithID(id, text string) QueuedUserMessage {
 	return QueuedUserMessage{
-		ID:              strings.TrimSpace(id),
-		ClientRequestID: strings.TrimSpace(clientRequestID),
-		Message:         llm.Message{Role: llm.RoleUser, Content: textutil.Value(text)},
+		ID:      strings.TrimSpace(id),
+		Message: llm.Message{Role: llm.RoleUser, Content: textutil.Value(text)},
 	}
 }
 
-func newQueuedUserMessage(
-	message llm.Message,
-	clientRequestID string,
-) (QueuedUserMessage, error) {
+func newQueuedUserMessage(message llm.Message) (QueuedUserMessage, error) {
 	item := QueuedUserMessage{
-		ID:              runtimeids.NewQueueItemID().String(),
-		ClientRequestID: strings.TrimSpace(clientRequestID),
-		Message:         message,
+		ID:      runtimeids.NewQueueItemID().String(),
+		Message: message,
 	}
 	text, err := item.DisplayText()
 	if err != nil || item.Message.Role == "" || strings.TrimSpace(text) == "" {
@@ -58,7 +53,6 @@ func normalizeQueuedUserMessage(item QueuedUserMessage) (QueuedUserMessage, erro
 	if _, err := runtimeids.ParseQueueItemID(item.ID); err != nil {
 		return QueuedUserMessage{}, fmt.Errorf("Queue Item ID: %w", err)
 	}
-	item.ClientRequestID = strings.TrimSpace(item.ClientRequestID)
 	text, err := item.DisplayText()
 	if err != nil || item.Message.Role == "" || strings.TrimSpace(text) == "" {
 		return QueuedUserMessage{}, errInvalidQueuedUserMessage

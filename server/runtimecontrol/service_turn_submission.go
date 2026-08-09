@@ -60,7 +60,6 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 			s.launchPromptHistoryAppend(
 				engine,
 				sessionID,
-				strings.TrimSpace(req.ClientRequestID),
 				projection.HistoryText,
 			)
 		}()
@@ -71,7 +70,7 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 		compacted := false
 		compactionBusy := false
 		if shouldCompact {
-			compactErr := s.runPreSubmitCompaction(runCtx, sessionID, req.PreSubmitCompactionOperationRef, engine)
+			compactErr := s.runPreSubmitCompaction(runCtx, sessionID, engine)
 			if compactErr != nil {
 				if !errors.Is(compactErr, runtime.ErrAgentBusy) {
 					return compactErr
@@ -82,10 +81,7 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 			}
 		}
 		if compactionBusy {
-			queued, queueErr := engine.QueueUserMessageWithClientRequestID(
-				projection.ExecutionText,
-				strings.TrimSpace(req.ClientRequestID),
-			)
+			queued, queueErr := engine.QueueUserMessage(projection.ExecutionText)
 			if queueErr != nil {
 				return queueErr
 			}
@@ -93,7 +89,7 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 			resp = serverapi.RuntimeSubmitUserTurnResponse{Compacted: compacted, Steered: true, QueueItemID: queued.ID}
 			return nil
 		}
-		msg, queued, err := engine.SubmitUserMessageOrSteerWithHooks(runCtx, projection.ExecutionText, strings.TrimSpace(req.ClientRequestID), nil, recordAccepted)
+		msg, queued, err := engine.SubmitUserMessageOrSteerWithHooks(runCtx, projection.ExecutionText, nil, recordAccepted)
 		if err != nil {
 			return err
 		}
@@ -135,12 +131,12 @@ func (s *Service) trySubmitUserTurnAsActiveExecution(ctx context.Context, accept
 		return serverapi.RuntimeSubmitUserTurnResponse{}, false, errors.New("session runtime authority is required")
 	}
 	err = s.withLiveExecutionRuntime(ctx, sessionID, func(_ context.Context, engine *runtime.Engine) error {
-		item, accepted, err := engine.QueueUserMessageForActiveRun(ctx, projection.ExecutionText, req.OperationRef.ClientRequestID, nil)
+		item, accepted, err := engine.QueueUserMessageForActiveRun(ctx, projection.ExecutionText, nil)
 		if errors.Is(err, runtime.ErrNoActiveLiveRun) {
 			if !activeExecutionAllowsRuntimeBoundInput(runtimeactivity.ActiveStepFromProvider(engine)) {
 				return serverapi.ErrSessionRunStarting
 			}
-			item, err = engine.QueueUserMessageWithClientRequestID(projection.ExecutionText, req.OperationRef.ClientRequestID.String())
+			item, err = engine.QueueUserMessage(projection.ExecutionText)
 			if err != nil {
 				return err
 			}
@@ -159,7 +155,6 @@ func (s *Service) trySubmitUserTurnAsActiveExecution(ctx context.Context, accept
 		s.launchPromptHistoryAppend(
 			engine,
 			acceptedSessionID,
-			strings.TrimSpace(req.ClientRequestID),
 			projection.HistoryText,
 		)
 		return nil
@@ -182,7 +177,7 @@ func activeExecutionAllowsRuntimeBoundInput(snapshot *runtimeactivity.ActiveStep
 	}
 }
 
-func (s *Service) runPreSubmitCompaction(ctx context.Context, sessionID string, ref clientui.RuntimeOperationRef, engine *runtime.Engine) error {
+func (s *Service) runPreSubmitCompaction(ctx context.Context, sessionID string, engine *runtime.Engine) error {
 	_, err := engine.CompactContextForPreSubmitWithActiveHook(ctx, nil)
 	return err
 }

@@ -16,10 +16,12 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/transcript"
+
+	"github.com/google/uuid"
 )
 
 type RuntimeActivityResolver interface {
-	RuntimeReadModelSnapshot(ctx context.Context, sessionID string, refs []clientui.RuntimeOperationRef) (runtimeactivity.ResponseSnapshot, error)
+	RuntimeReadModelSnapshot(ctx context.Context, sessionID string) (runtimeactivity.ResponseSnapshot, error)
 }
 
 type sessionIdentityPublisher interface {
@@ -386,40 +388,32 @@ func (s *Service) Interrupt(ctx context.Context, req serverapi.RuntimeInterruptR
 	}
 	sessionID := strings.TrimSpace(req.SessionID)
 	err := s.withRuntime(ctx, sessionID, func(_ context.Context, engine *runtime.Engine) error {
-		for _, ref := range req.PendingOperationRefs {
-			if ref.Kind != clientui.RuntimeOperationKindQueuedMessage || ref.QueueItemID == nil {
-				continue
-			}
-			engine.DiscardQueuedUserMessage(ref.QueueItemID.String())
-		}
 		return engine.Interrupt()
 	})
 	if err != nil && !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
 		return serverapi.RuntimeInterruptResponse{}, err
 	}
-	return s.runtimeInterruptResponse(sessionID, req.PendingOperationRefs)
+	return s.runtimeInterruptResponse(sessionID)
 }
 
-func (s *Service) runtimeInterruptResponse(sessionID string, refs []clientui.RuntimeOperationRef) (serverapi.RuntimeInterruptResponse, error) {
+func (s *Service) runtimeInterruptResponse(sessionID string) (serverapi.RuntimeInterruptResponse, error) {
 	var snapshot runtimeactivity.ResponseSnapshot
 	var err error
 	if s.activity != nil {
-		snapshot, err = s.activity.RuntimeReadModelSnapshot(context.Background(), sessionID, refs)
+		snapshot, err = s.activity.RuntimeReadModelSnapshot(context.Background(), sessionID)
 	} else {
 		err = errors.New("runtime activity resolver is unavailable")
 	}
 	if err != nil {
 		version := runtimeactivity.NextReadModelVersion(sessionID)
 		return serverapi.RuntimeInterruptResponse{
-			Version:             version,
-			Activity:            clientui.RuntimeActivity{State: clientui.RuntimeActivityUnavailable, DiagnosticRecovery: true},
-			InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{},
+			Version:  version,
+			Activity: clientui.RuntimeActivity{State: clientui.RuntimeActivityUnavailable, DiagnosticRecovery: true},
 		}, nil
 	}
 	return serverapi.RuntimeInterruptResponse{
-		Version:             snapshot.Version,
-		Activity:            snapshot.Activity,
-		InputReconciliation: snapshot.InputReconciliation,
+		Version:  snapshot.Version,
+		Activity: snapshot.Activity,
 	}, nil
 }
 
@@ -442,19 +436,18 @@ func (s *Service) RecordPromptHistory(ctx context.Context, req serverapi.Runtime
 	_, _, err := s.recordPromptHistory(
 		ctx,
 		strings.TrimSpace(req.SessionID),
-		strings.TrimSpace(req.ClientRequestID),
 		req.Text,
 	)
 	return err
 }
 
-func (s *Service) recordPromptHistory(ctx context.Context, sessionID string, sourceID string, text string) (metadata.PromptHistoryRecord, bool, error) {
+func (s *Service) recordPromptHistory(ctx context.Context, sessionID string, text string) (metadata.PromptHistoryRecord, bool, error) {
 	if s == nil || s.promptStore == nil {
 		return metadata.PromptHistoryRecord{}, false, nil
 	}
 	return s.promptStore.RecordPromptHistoryEntry(ctx, metadata.PromptHistoryEntry{
 		SessionID: strings.TrimSpace(sessionID),
-		SourceID:  strings.TrimSpace(sourceID),
+		SourceID:  uuid.NewString(),
 		Text:      text,
 	})
 }
@@ -462,7 +455,6 @@ func (s *Service) recordPromptHistory(ctx context.Context, sessionID string, sou
 func (s *Service) launchPromptHistoryAppend(
 	engine *runtime.Engine,
 	sessionID string,
-	sourceID string,
 	text string,
 ) {
 	if s == nil || s.promptStore == nil || engine == nil {
@@ -472,7 +464,6 @@ func (s *Service) launchPromptHistoryAppend(
 		_, _, err := s.recordPromptHistory(
 			ctx,
 			sessionID,
-			sourceID,
 			text,
 		)
 		return err

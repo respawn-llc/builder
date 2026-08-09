@@ -454,7 +454,6 @@ func queuedUserMessagesForFlush(messages []queuedUserMessage) ([]QueuedUserMessa
 	for _, message := range messages {
 		item := message.message
 		item.ID = strings.TrimSpace(item.ID)
-		item.ClientRequestID = strings.TrimSpace(item.ClientRequestID)
 		text, err := queuedUserMessageText(item)
 		if err != nil {
 			return nil, err

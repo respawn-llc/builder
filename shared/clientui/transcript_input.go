@@ -26,45 +26,24 @@ const (
 )
 
 type TranscriptUserMessageFlushed struct {
-	StepID     runtimeids.StepID
-	Operations []RuntimeOperationRef
+	StepID runtimeids.StepID
 }
 
 type TranscriptQueuedMessageState struct {
-	ClientRequestID runtimeids.RuntimeClientRequestID
-	QueueItemID     runtimeids.QueueItemID
-	Status          QueuedUserMessageStatus
-	FailureReason   *QueuedUserMessageFailureReason
-	Text            *string
+	QueueItemID   runtimeids.QueueItemID
+	Status        QueuedUserMessageStatus
+	FailureReason *QueuedUserMessageFailureReason
+	Text          *string
 }
 
 func (f TranscriptUserMessageFlushed) Validate() error {
 	if f.StepID.IsZero() {
 		return fmt.Errorf("user-message flush step id is required")
 	}
-	if len(f.Operations) == 0 {
-		return fmt.Errorf("user-message flush requires operation identities")
-	}
-	seen := make(map[runtimeids.RuntimeClientRequestID]struct{}, len(f.Operations))
-	for index, operation := range f.Operations {
-		if err := operation.Validate(); err != nil {
-			return fmt.Errorf("validate user-message flush operation %d: %w", index, err)
-		}
-		if operation.Kind == RuntimeOperationKindQueuedMessage && operation.QueueItemID == nil {
-			return fmt.Errorf("user-message flush queued operation %d requires queue item id", index)
-		}
-		if _, exists := seen[operation.ClientRequestID]; exists {
-			return fmt.Errorf("user-message flush repeats client request id %q", operation.ClientRequestID.String())
-		}
-		seen[operation.ClientRequestID] = struct{}{}
-	}
 	return nil
 }
 
 func (s TranscriptQueuedMessageState) Validate() error {
-	if s.ClientRequestID.IsZero() {
-		return fmt.Errorf("queued-message state requires client request id")
-	}
 	if s.QueueItemID.IsZero() {
 		return fmt.Errorf("queued-message state requires queue item id")
 	}

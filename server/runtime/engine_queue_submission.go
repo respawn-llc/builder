@@ -101,24 +101,21 @@ func (e *Engine) SubmitQueuedUserMessagesWithActiveHook(
 func (e *Engine) SubmitUserMessageOrSteer(
 	ctx context.Context,
 	text string,
-	clientRequestID string,
 ) (assistant llm.Message, queued *QueuedUserMessage, err error) {
-	return e.SubmitUserMessageOrSteerWithAcceptedHook(ctx, text, clientRequestID, nil)
+	return e.SubmitUserMessageOrSteerWithAcceptedHook(ctx, text, nil)
 }
 
 func (e *Engine) SubmitUserMessageOrSteerWithAcceptedHook(
 	ctx context.Context,
 	text string,
-	clientRequestID string,
 	onAccepted func(queued bool),
 ) (assistant llm.Message, queued *QueuedUserMessage, err error) {
-	return e.SubmitUserMessageOrSteerWithHooks(ctx, text, clientRequestID, nil, onAccepted)
+	return e.SubmitUserMessageOrSteerWithHooks(ctx, text, nil, onAccepted)
 }
 
 func (e *Engine) SubmitUserMessageOrSteerWithHooks(
 	ctx context.Context,
 	text string,
-	clientRequestID string,
 	onActive func(),
 	onAccepted func(queued bool),
 ) (assistant llm.Message, queued *QueuedUserMessage, err error) {
@@ -131,10 +128,7 @@ func (e *Engine) SubmitUserMessageOrSteerWithHooks(
 		}
 	})
 	if errors.Is(err, ErrAgentBusy) {
-		item, queueErr := newQueuedUserMessage(
-			llm.Message{Role: llm.RoleUser, Content: &text},
-			clientRequestID,
-		)
+		item, queueErr := newQueuedUserMessage(llm.Message{Role: llm.RoleUser, Content: &text})
 		if queueErr != nil {
 			return llm.Message{}, nil, queueErr
 		}

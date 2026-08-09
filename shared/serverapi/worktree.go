@@ -666,7 +666,8 @@ func (r WorktreeCreateTargetResolveRequest) Validate() error {
 }
 
 func (r WorktreeCreateRequest) Validate() error {
-	if err := validateClientRequestID(r.ClientRequestID); err != nil {
+	if strings.TrimSpace(r.ClientRequestID) == "" {
+		err := errors.New("client_request_id is required")
 		return NewWorktreeCreateError(WorktreeCreateErrorOwnerForm, err.Error(), err)
 	}
 	if err := r.SetupOperationID.Validate(); err != nil {

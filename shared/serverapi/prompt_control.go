@@ -11,7 +11,6 @@ import (
 )
 
 type AskAnswerRequest struct {
-	ClientRequestID      string `json:"client_request_id"`
 	SessionID            string `json:"session_id"`
 	AskID                string `json:"ask_id"`
 	ErrorMessage         string `json:"error_message,omitempty"`
@@ -21,12 +20,11 @@ type AskAnswerRequest struct {
 }
 
 type ApprovalAnswerRequest struct {
-	ClientRequestID string                    `json:"client_request_id"`
-	SessionID       string                    `json:"session_id"`
-	ApprovalID      string                    `json:"approval_id"`
-	ErrorMessage    string                    `json:"error_message,omitempty"`
-	Decision        clientui.ApprovalDecision `json:"decision"`
-	Commentary      *string                   `json:"commentary,omitempty"`
+	SessionID    string                    `json:"session_id"`
+	ApprovalID   string                    `json:"approval_id"`
+	ErrorMessage string                    `json:"error_message,omitempty"`
+	Decision     clientui.ApprovalDecision `json:"decision"`
+	Commentary   *string                   `json:"commentary,omitempty"`
 }
 
 type PromptAnswerBatchRequest struct {
@@ -177,9 +175,6 @@ func ValidatePromptAnswerBatchResponse(request PromptAnswerBatchRequest, respons
 }
 
 func (r AskAnswerRequest) Validate() error {
-	if strings.TrimSpace(r.ClientRequestID) == "" {
-		return errors.New("client_request_id is required")
-	}
 	if err := validateRequiredSessionID(r.SessionID); err != nil {
 		return err
 	}
@@ -200,9 +195,6 @@ func (r AskAnswerRequest) Validate() error {
 }
 
 func (r ApprovalAnswerRequest) Validate() error {
-	if strings.TrimSpace(r.ClientRequestID) == "" {
-		return errors.New("client_request_id is required")
-	}
 	if err := validateRequiredSessionID(r.SessionID); err != nil {
 		return err
 	}

@@ -107,9 +107,8 @@ function OrdinaryQuestionForm({
       answerQuestion,
       attention,
       failureTitle: t("states.error"),
-      input: (clientRequestID) => ({
+      input: () => ({
         kind: "ordinary",
-        clientRequestID,
         taskID: taskId,
         askID: attention.questionID,
         selectedOptionNumber: selectedOption,
@@ -215,9 +214,8 @@ function ApprovalQuestionForm({
       answerQuestion,
       attention,
       failureTitle: t("states.error"),
-      input: (clientRequestID) => ({
+      input: () => ({
         kind: "approval",
-        clientRequestID,
         taskID: taskId,
         askID: attention.questionID,
         decision: selectedDecision,
@@ -405,10 +403,6 @@ function activateRadioFromOption(
   radioRef.current?.click();
 }
 
-function questionClientRequestID(askID: string): string {
-  return `gui-question-${askID}-${Date.now().toString()}`;
-}
-
 async function submitQuestionAnswer({
   answerQuestion,
   attention,
@@ -420,15 +414,14 @@ async function submitQuestionAnswer({
   answerQuestion: QuestionAnswerMutation;
   attention: QuestionAttentionItem;
   failureTitle: string;
-  input: (clientRequestID: string) => QuestionAnswerInput;
+  input: () => QuestionAnswerInput;
   onSelectionStateChange: (selection: QuestionSelectionState) => void;
   selection: QuestionSelectionState;
 }>): Promise<void> {
-  const clientRequestID = selection.clientRequestID ?? questionClientRequestID(attention.questionID);
-  const submittingSelection = { ...selection, clientRequestID, submission: "submitting" as const };
+  const submittingSelection = { ...selection, submission: "submitting" as const };
   onSelectionStateChange(submittingSelection);
   try {
-    await answerQuestion.mutateAsync(input(clientRequestID));
+    await answerQuestion.mutateAsync(input());
     onSelectionStateChange({ ...submittingSelection, submission: "accepted" });
   } catch (error: unknown) {
     onSelectionStateChange({ ...submittingSelection, submission: "idle" });

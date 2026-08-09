@@ -280,7 +280,7 @@ describe("questionPresentation", () => {
     });
   });
 
-  it("retains an ordinary anchored choice and request identity across refresh, failure, and retry", async () => {
+  it("retains an ordinary anchored choice across refresh, failure, and retry", async () => {
     const initialAttention = ordinaryAttention(["one", "two", "three"], 2);
     const initialPresentation = questionPresentation(initialAttention, undefined, false);
     const selection = anchorQuestionSelection(
@@ -338,10 +338,9 @@ describe("questionPresentation", () => {
         selectedOptionNumber: 2,
       }),
     ]);
-    expectSameQuestionRequestID(inputs);
   });
 
-  it("retains an anchored approval decision and request identity across refresh, failure, and retry", async () => {
+  it("retains an anchored approval decision across refresh, failure, and retry", async () => {
     const initialAttention = approvalAttention(["deny", "allow_session", "allow_once"]);
     const initialPresentation = questionPresentation(initialAttention, undefined, false);
     const selection = anchorQuestionSelection(
@@ -400,7 +399,6 @@ describe("questionPresentation", () => {
         kind: "approval",
       }),
     ]);
-    expectSameQuestionRequestID(inputs);
   });
 });
 
@@ -619,14 +617,6 @@ function failingOnceQuestionAnswerMutation(inputs: QuestionAnswerInput[]): Quest
       }
     },
   };
-}
-
-function expectSameQuestionRequestID(inputs: readonly QuestionAnswerInput[]): void {
-  const [first, second] = inputs;
-  if (first === undefined || second === undefined) {
-    throw new Error("expected two question-answer inputs");
-  }
-  expect(second.clientRequestID).toBe(first.clientRequestID);
 }
 
 function renderQuestionForm(

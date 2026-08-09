@@ -442,11 +442,10 @@ func (g *Gateway) cleanupConnectionRuntimes(state *connectionState) {
 	for _, attachment := range owned {
 		ctx, cancel := context.WithTimeout(context.Background(), gatewayRuntimeCleanupTimeout)
 		_, _ = client.ReleaseSessionRuntime(ctx, serverapi.SessionRuntimeReleaseRequest{
-			ClientRequestID: uuid.NewString(),
-			Attachment:      attachment,
-			DropOwner:       true,
-			ClosePolicy:     serverapi.SessionRuntimeReleaseClosePolicyCloseIfIdle,
-			OwnerID:         ownerID,
+			Attachment:  attachment,
+			DropOwner:   true,
+			ClosePolicy: serverapi.SessionRuntimeReleaseClosePolicyCloseIfIdle,
+			OwnerID:     ownerID,
 		})
 		cancel()
 	}

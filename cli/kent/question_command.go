@@ -19,8 +19,6 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/textutil"
-
-	"github.com/google/uuid"
 )
 
 const questionCommandTimeout = 5 * time.Second
@@ -220,7 +218,6 @@ func (c questionCommand) answerSessionQuestion(
 			return 0
 		}
 		request := serverapi.AskAnswerRequest{
-			ClientRequestID:      uuid.NewString(),
 			SessionID:            sessionID.String(),
 			AskID:                question.AskID,
 			SelectedOptionNumber: option,
@@ -306,7 +303,6 @@ func answerTaskQuestion(
 			return writeTaskQuestionFollowUp(remote, taskID, candidate.SessionID, stdout, stderr)
 		}
 		request := serverapi.WorkflowTaskQuestionAnswerRequest{
-			ClientRequestID:      uuid.NewString(),
 			TaskID:               taskID,
 			AskID:                question.AskID,
 			SelectedOptionNumber: option,
@@ -365,11 +361,10 @@ func answerApprovalQuestion(
 	answerCtx, stopAnswer := questionAnswerContext()
 	defer stopAnswer()
 	return approvalRemote.AnswerApproval(answerCtx, serverapi.ApprovalAnswerRequest{
-		ClientRequestID: uuid.NewString(),
-		SessionID:       sessionID.String(),
-		ApprovalID:      approval.ApprovalID,
-		Decision:        approval.Options[*option-1].Decision,
-		Commentary:      optionalQuestionCommentary(commentary),
+		SessionID:  sessionID.String(),
+		ApprovalID: approval.ApprovalID,
+		Decision:   approval.Options[*option-1].Decision,
+		Commentary: optionalQuestionCommentary(commentary),
 	})
 }
 

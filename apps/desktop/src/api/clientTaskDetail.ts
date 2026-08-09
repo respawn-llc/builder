@@ -98,7 +98,6 @@ export async function answerQuestion(transport: RpcTransport, input: QuestionAns
   await transport.call(
     "workflow.task.question.answer",
     compactJsonObject({
-      client_request_id: input.clientRequestID,
       task_id: input.taskID,
       ask_id: input.askID,
       ...answer,

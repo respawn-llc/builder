@@ -15,6 +15,7 @@ import (
 	"core/shared/textutil"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/google/uuid"
 )
 
 var transcriptPromptAnswerRetryDelays = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second}
@@ -34,13 +35,13 @@ type transcriptPromptKey struct {
 
 type activePromptAnswerDelivery struct {
 	key       transcriptPromptKey
-	requestID runtimeids.RuntimeClientRequestID
+	requestID uuid.UUID
 	cancel    context.CancelFunc
 }
 
 type promptAnswerDeliveryResultMsg struct {
 	key       transcriptPromptKey
-	requestID runtimeids.RuntimeClientRequestID
+	requestID uuid.UUID
 	err       error
 }
 
@@ -80,7 +81,7 @@ func (a *transcriptPromptAnswerer) delivery(
 	if err != nil {
 		return nil, nil, err
 	}
-	requestID := runtimeids.NewRuntimeClientRequestID()
+	requestID := uuid.New()
 	deliveryCtx, cancel := context.WithCancel(a.ctx)
 	active, err := newActivePromptAnswerDelivery(key, requestID, cancel)
 	if err != nil {
@@ -110,13 +111,12 @@ func (a *transcriptPromptAnswerer) submitter(
 	prompt clientui.TranscriptPrompt,
 	answer clientui.PromptAnswer,
 	answerErr error,
-	requestID runtimeids.RuntimeClientRequestID,
+	requestID uuid.UUID,
 ) (func(context.Context) error, error) {
 	if transcriptPromptIsApproval(prompt) {
 		request := serverapi.ApprovalAnswerRequest{
-			ClientRequestID: requestID.String(),
-			SessionID:       prompt.SessionID.String(),
-			ApprovalID:      string(prompt.PromptID),
+			SessionID:  prompt.SessionID.String(),
+			ApprovalID: string(prompt.PromptID),
 		}
 		switch {
 		case answerErr != nil:
@@ -136,7 +136,6 @@ func (a *transcriptPromptAnswerer) submitter(
 		}, nil
 	}
 	request := serverapi.AskAnswerRequest{
-		ClientRequestID:      requestID.String(),
 		SessionID:            prompt.SessionID.String(),
 		AskID:                string(prompt.PromptID),
 		Answer:               answer.Answer,
@@ -170,13 +169,13 @@ func newTranscriptPromptKey(prompt clientui.TranscriptPrompt) (transcriptPromptK
 
 func newActivePromptAnswerDelivery(
 	key transcriptPromptKey,
-	requestID runtimeids.RuntimeClientRequestID,
+	requestID uuid.UUID,
 	cancel context.CancelFunc,
 ) (*activePromptAnswerDelivery, error) {
 	if key.sessionID.IsZero() || strings.TrimSpace(string(key.promptID)) == "" {
 		return nil, errors.New("prompt answer delivery key is required")
 	}
-	if requestID.IsZero() {
+	if requestID == uuid.Nil {
 		return nil, errors.New("prompt answer delivery request id is required")
 	}
 	if cancel == nil {
@@ -191,7 +190,7 @@ func (d *activePromptAnswerDelivery) cancelPending() {
 	}
 }
 
-func (d *activePromptAnswerDelivery) matches(key transcriptPromptKey, requestID runtimeids.RuntimeClientRequestID) bool {
+func (d *activePromptAnswerDelivery) matches(key transcriptPromptKey, requestID uuid.UUID) bool {
 	return d != nil && d.key == key && d.requestID == requestID
 }
 

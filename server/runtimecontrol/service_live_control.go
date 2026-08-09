@@ -31,10 +31,6 @@ func (s *Service) LiveSteer(ctx context.Context, req serverapi.RuntimeLiveSteerR
 	if err != nil {
 		return serverapi.RuntimeLiveSteerResponse{}, err
 	}
-	clientRequestID, err := runtimeids.ParseRuntimeClientRequestID(req.ClientRequestID)
-	if err != nil {
-		return serverapi.RuntimeLiveSteerResponse{}, err
-	}
 	callerSessionID := serverapi.CanonicalOptionalString(req.CallerSessionID)
 	text := strings.TrimSpace(req.Text)
 	var resp serverapi.RuntimeLiveSteerResponse
@@ -55,9 +51,9 @@ func (s *Service) LiveSteer(ctx context.Context, req serverapi.RuntimeLiveSteerR
 		var item runtime.QueuedUserMessage
 		var accepted bool
 		if callerSessionID.Present {
-			item, accepted, err = engine.QueueAgentSteerForActiveRun(callbackCtx, agentSteer, clientRequestID, nil)
+			item, accepted, err = engine.QueueAgentSteerForActiveRun(callbackCtx, agentSteer, nil)
 		} else {
-			item, accepted, err = engine.QueueUserMessageForActiveRun(callbackCtx, queueText, clientRequestID, nil)
+			item, accepted, err = engine.QueueUserMessageForActiveRun(callbackCtx, queueText, nil)
 		}
 		if errors.Is(err, runtime.ErrNoActiveLiveRun) {
 			return serverapi.ErrRuntimeNoActiveRun
@@ -72,11 +68,10 @@ func (s *Service) LiveSteer(ctx context.Context, req serverapi.RuntimeLiveSteerR
 		if displayErr != nil {
 			return displayErr
 		}
-		resp = serverapi.RuntimeLiveSteerResponse{QueueItemID: item.ID, Text: displayText, ClientRequestID: item.ClientRequestID}
+		resp = serverapi.RuntimeLiveSteerResponse{QueueItemID: item.ID, Text: displayText}
 		s.launchPromptHistoryAppend(
 			engine,
 			sessionID.String(),
-			clientRequestID.String(),
 			queueText,
 		)
 		return nil

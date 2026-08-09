@@ -7,7 +7,6 @@ import (
 	"core/cli/app/commands"
 	"core/cli/app/internal/runtimeattach"
 	"core/shared/clientui"
-	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -41,7 +40,6 @@ type injectedRuntimeQueueItem struct {
 	LocalID                  string
 	ServerID                 string
 	Text                     string
-	ClientRequestID          string
 	State                    injectedRuntimeQueueState
 	CreateToken              uint64
 	DiscardToken             uint64
@@ -63,21 +61,17 @@ func (m *uiModel) registerSteeredQueuedUserMessage(queued clientui.QueuedUserMes
 		return
 	}
 	index := m.injectedQueueIndexByAnyID(serverID)
-	if index < 0 {
-		index = m.injectedQueueIndexByAnyID(queued.ClientRequestID)
-	}
 	if index >= 0 {
 		item := m.injectedQueue[index]
 		item.ServerID = serverID
 		item.Text = queued.Text
-		item.ClientRequestID = queued.ClientRequestID
 		item.State = injectedRuntimeQueueEnqueued
 		m.injectedQueue[index] = item
 		m.replacePendingInjectedID(item.LocalID, queued)
 		return
 	}
-	m.pendingInjected = append(m.pendingInjected, clientui.QueuedUserMessage{ID: serverID, Text: queued.Text, ClientRequestID: queued.ClientRequestID})
-	m.injectedQueue = append(m.injectedQueue, injectedRuntimeQueueItem{LocalID: serverID, ServerID: serverID, Text: queued.Text, ClientRequestID: queued.ClientRequestID, State: injectedRuntimeQueueEnqueued})
+	m.pendingInjected = append(m.pendingInjected, clientui.QueuedUserMessage{ID: serverID, Text: queued.Text})
+	m.injectedQueue = append(m.injectedQueue, injectedRuntimeQueueItem{LocalID: serverID, ServerID: serverID, Text: queued.Text, State: injectedRuntimeQueueEnqueued})
 }
 
 func (m *uiModel) enqueueInjectedInputWithApprovalAnswer(text string, answer *clientui.PromptAnswer) tea.Cmd {
@@ -93,24 +87,22 @@ func (m *uiModel) enqueueInjectedInputWithApprovalAnswer(text string, answer *cl
 		return nil
 	}
 	token := m.nextInjectedQueueToken()
-	clientRequestID := runtimeids.NewRuntimeClientRequestID()
 	var approvalCommentaryAnswer *clientui.PromptAnswer
 	if answer != nil {
 		snap := *answer
 		approvalCommentaryAnswer = &snap
 	}
-	m.pendingInjected = append(m.pendingInjected, clientui.QueuedUserMessage{ID: localID, Text: trimmed, ClientRequestID: clientRequestID.String()})
+	m.pendingInjected = append(m.pendingInjected, clientui.QueuedUserMessage{ID: localID, Text: trimmed})
 	m.injectedQueue = append(m.injectedQueue, injectedRuntimeQueueItem{
 		LocalID:                  localID,
 		Text:                     trimmed,
-		ClientRequestID:          clientRequestID.String(),
 		State:                    injectedRuntimeQueuePendingCreate,
 		CreateToken:              token,
 		ApprovalCommentaryAnswer: approvalCommentaryAnswer,
 	})
 	client := m.runtimeClient()
 	return func() tea.Msg {
-		item, completed, err := submitRuntimeSteering(client, trimmed, clientRequestID)
+		item, completed, err := submitRuntimeSteering(client, trimmed)
 		return injectedQueueCreateDoneMsg{
 			token:                    token,
 			localID:                  localID,
@@ -122,14 +114,9 @@ func (m *uiModel) enqueueInjectedInputWithApprovalAnswer(text string, answer *cl
 	}
 }
 
-func submitRuntimeSteering(client clientui.RuntimeClient, text string, clientRequestID runtimeids.RuntimeClientRequestID) (clientui.QueuedUserMessage, bool, error) {
+func submitRuntimeSteering(client clientui.RuntimeClient, text string) (clientui.QueuedUserMessage, bool, error) {
 	submission, err := client.SubmitRuntimeInput(context.Background(), clientui.RuntimeSubmitRequest{
-		OperationRef: clientui.RuntimeOperationRef{
-			Kind:            clientui.RuntimeOperationKindSubmit,
-			ClientRequestID: clientRequestID,
-		},
-		PreSubmitCompactionOperationRef: newRuntimeOperationRef(clientui.RuntimeOperationKindPreSubmitCompact),
-		Input:                           runtimeinput.Text(text),
+		Input: runtimeinput.Text(text),
 	})
 	if err != nil {
 		return clientui.QueuedUserMessage{}, false, err
@@ -451,7 +438,7 @@ func (m *uiModel) injectedQueueIndexByAnyID(id string) int {
 		return -1
 	}
 	for index, item := range m.injectedQueue {
-		if item.LocalID == id || item.ServerID == id || item.ClientRequestID == id {
+		if item.LocalID == id || item.ServerID == id {
 			return index
 		}
 	}
@@ -538,13 +525,12 @@ func (c uiInputController) handleInjectedQueueCreateDone(msg injectedQueueCreate
 	}
 	item.ServerID = serverID
 	item.Text = serverText
-	item.ClientRequestID = strings.TrimSpace(msg.item.ClientRequestID)
 	item.ApprovalCommentaryAnswer = nil
 	switch item.State {
 	case injectedRuntimeQueuePendingCreate:
 		item.State = injectedRuntimeQueueEnqueued
 		m.injectedQueue[index] = item
-		m.replacePendingInjectedID(item.LocalID, clientui.QueuedUserMessage{ID: serverID, Text: serverText, ClientRequestID: item.ClientRequestID})
+		m.replacePendingInjectedID(item.LocalID, clientui.QueuedUserMessage{ID: serverID, Text: serverText})
 		m.rememberPromptHistoryLocally(serverText)
 		if approvalCommentaryAnswer != nil {
 			return m, m.answerQueuedApprovalCommentary(*approvalCommentaryAnswer)
@@ -624,7 +610,7 @@ func (m *uiModel) removePendingInjectedByID(id string) {
 	}
 	filtered := m.pendingInjected[:0]
 	for _, item := range m.pendingInjected {
-		if item.ID == id || item.ClientRequestID == id {
+		if item.ID == id {
 			continue
 		}
 		filtered = append(filtered, item)
@@ -648,11 +634,11 @@ func (m *uiModel) ensurePendingInjectedVisible(item injectedRuntimeQueueItem) {
 		return
 	}
 	for _, pending := range m.pendingInjected {
-		if pending.ID == id || pending.ClientRequestID == id {
+		if pending.ID == id {
 			return
 		}
 	}
-	m.pendingInjected = append(m.pendingInjected, clientui.QueuedUserMessage{ID: id, Text: item.Text, ClientRequestID: item.ClientRequestID})
+	m.pendingInjected = append(m.pendingInjected, clientui.QueuedUserMessage{ID: id, Text: item.Text})
 }
 
 func (m *uiModel) removeInjectedQueueItemsByIDs(ids []string) []clientui.PromptAnswer {
@@ -662,7 +648,7 @@ func (m *uiModel) removeInjectedQueueItemsByIDs(ids []string) []clientui.PromptA
 	var approvalAnswers []clientui.PromptAnswer
 	filtered := m.injectedQueue[:0]
 	for _, item := range m.injectedQueue {
-		if containsInjectedQueueID(ids, item.ServerID) || containsInjectedQueueID(ids, item.LocalID) || containsInjectedQueueID(ids, item.ClientRequestID) {
+		if containsInjectedQueueID(ids, item.ServerID) || containsInjectedQueueID(ids, item.LocalID) {
 			if item.ApprovalCommentaryAnswer != nil {
 				approvalAnswers = append(approvalAnswers, *item.ApprovalCommentaryAnswer)
 			}

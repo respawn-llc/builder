@@ -82,17 +82,15 @@ const (
 )
 
 type QueuedUserMessageStatusEvent struct {
-	SessionID       string
-	QueueItemID     string
-	ClientRequestID string
-	Status          QueuedUserMessageStatus
-	FailureReason   QueuedUserMessageFailureReason
-	RestoreText     string
+	SessionID     string
+	QueueItemID   string
+	Status        QueuedUserMessageStatus
+	FailureReason QueuedUserMessageFailureReason
+	RestoreText   string
 }
 
 type QueuedUserMessageIdentity struct {
-	QueueItemID     string
-	ClientRequestID string
+	QueueItemID string
 }
 
 type Event struct {
