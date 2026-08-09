@@ -123,7 +123,7 @@ func TestAdmittedAssistantFinalFlushesWhenQueueAbortsIdle(t *testing.T) {
 	}
 }
 
-func TestAdmittedAssistantFinalWaitsForInjectedQueuedPromptDrain(t *testing.T) {
+func TestAdmittedAssistantFinalDoesNotWaitForUnownedQueuedPrompt(t *testing.T) {
 	completions := &recordingTaskCompletionSink{}
 	hooks := newTurnQueueHooks(newUnfocusedBellHooks(&countRinger{}), completions)
 	model := newTurnQueueHookTestModel(hooks)
@@ -145,8 +145,8 @@ func TestAdmittedAssistantFinalWaitsForInjectedQueuedPromptDrain(t *testing.T) {
 		message:       "current answer",
 	})
 
-	if got := len(completions.results); got != 0 {
-		t.Fatalf("completion hooks before injected queue drain = %d, want 0", got)
+	if got := len(completions.results); got != 1 {
+		t.Fatalf("completion hooks after current turn = %d, want 1", got)
 	}
 
 	model.handleOngoingTranscriptEvent(ongoingTranscriptEvent{
@@ -155,7 +155,7 @@ func TestAdmittedAssistantFinalWaitsForInjectedQueuedPromptDrain(t *testing.T) {
 	})
 
 	if got := len(completions.results); got != 1 {
-		t.Fatalf("completion hooks after injected queue drain = %d, want 1", got)
+		t.Fatalf("completion hooks after unrelated queue delivery = %d, want no duplicate", got)
 	}
 }
 

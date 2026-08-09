@@ -113,7 +113,7 @@ func TestTranscriptHydrationSnapshotProjectsAndResetsAllRuntimeOwners(t *testing
 	}
 }
 
-func TestFailedQueueFlushRestoresAcceptedStateAcrossHydrationRace(t *testing.T) {
+func TestFailedQueueFlushRetainsSingleAcceptedStatusAcrossHydrationRace(t *testing.T) {
 	store := mustCreateTestSession(t)
 	statuses := make(chan QueuedUserMessageStatusEvent, 4)
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
@@ -166,7 +166,7 @@ func TestFailedQueueFlushRestoresAcceptedStateAcrossHydrationRace(t *testing.T) 
 				accepted++
 			}
 		default:
-			if accepted != 2 {
+			if accepted != 1 {
 				t.Fatalf("accepted queue statuses = %d", accepted)
 			}
 			if len(duringFlush.QueuedMessages) > 0 && duringFlush.QueuedMessages[0].ID != queued.ID {

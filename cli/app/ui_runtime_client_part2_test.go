@@ -297,7 +297,7 @@ func TestRuntimeClientGoalMutationMethodsPatchCachedMainView(t *testing.T) {
 	}
 }
 
-func TestRuntimeClientPublicInterruptMethodsDoNotCommitRuntimeTuple(t *testing.T) {
+func TestRuntimeClientPublicInterruptCommitsAuthoritativeRuntimeTuple(t *testing.T) {
 	current := runtimeTupleTestView(
 		10,
 		runtimeTupleTestIdleActivity(),
@@ -312,7 +312,11 @@ func TestRuntimeClientPublicInterruptMethodsDoNotCommitRuntimeTuple(t *testing.T
 	if err := runtimeClient.Interrupt(); err != nil {
 		t.Fatalf("interrupt: %v", err)
 	}
-	assertRuntimeTupleView(t, runtimeClient.MainView(), current)
+	assertRuntimeTupleView(
+		t,
+		runtimeClient.MainView(),
+		runtimeTupleTestView(11, runtimeTupleTestRunningActivity()),
+	)
 }
 
 func TestCloneRuntimeGoalReturnsIndependentCopy(t *testing.T) {
@@ -528,7 +532,7 @@ func TestRuntimeClientMainViewRecoveryPreservesReadDeadline(t *testing.T) {
 	}
 }
 
-func TestRuntimeClientShowGoalRecoversRuntimeUnavailableSilently(t *testing.T) {
+func TestRuntimeClientShowGoalSurfacesRuntimeUnavailableWithoutReplay(t *testing.T) {
 	goal := &serverapi.RuntimeGoal{ID: "goal-1", Objective: "ship", Status: "active"}
 	controls := &reconnectRetryRuntimeControlClient{
 		showGoalErr:  serverapi.ErrRuntimeUnavailable,
@@ -544,24 +548,24 @@ func TestRuntimeClientShowGoalRecoversRuntimeUnavailableSilently(t *testing.T) {
 	runtimeClient.SetRuntimeReactivator(reactivator)
 
 	got, err := runtimeClient.ShowGoal()
-	if err != nil {
-		t.Fatalf("ShowGoal: %v", err)
+	if !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
+		t.Fatalf("ShowGoal error = %v, want runtime unavailable", err)
 	}
-	if recoveryCalls != 1 {
-		t.Fatalf("recovery call count = %d, want 1", recoveryCalls)
+	if recoveryCalls != 0 {
+		t.Fatalf("recovery call count = %d, want 0", recoveryCalls)
 	}
-	if controls.showGoalCalls != 2 {
-		t.Fatalf("show goal call count = %d, want 2", controls.showGoalCalls)
+	if controls.showGoalCalls != 1 {
+		t.Fatalf("show goal call count = %d, want 1", controls.showGoalCalls)
 	}
-	if got == nil || got.ID != "goal-1" || got.Objective != "ship" || got.Status != clientui.RuntimeGoalStatusActive {
-		t.Fatalf("goal = %+v, want recovered active goal", got)
+	if got != nil {
+		t.Fatalf("goal = %+v, want no replayed result", got)
 	}
 	if entries := controls.appendedLocalEntries(); len(entries) != 0 {
 		t.Fatalf("did not expect visible recovery warning during goal read, got %+v", entries)
 	}
 }
 
-func TestRuntimeClientHasQueuedUserWorkRecoversRuntimeUnavailableSilently(t *testing.T) {
+func TestRuntimeClientHasQueuedUserWorkSurfacesRuntimeUnavailableWithoutReplay(t *testing.T) {
 	controls := &reconnectRetryRuntimeControlClient{
 		queuedWorkErr: serverapi.ErrRuntimeUnavailable,
 		queuedWork:    true,
@@ -576,17 +580,17 @@ func TestRuntimeClientHasQueuedUserWorkRecoversRuntimeUnavailableSilently(t *tes
 	runtimeClient.SetRuntimeReactivator(reactivator)
 
 	hasWork, err := runtimeClient.HasQueuedUserWork()
-	if err != nil {
-		t.Fatalf("HasQueuedUserWork: %v", err)
+	if !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
+		t.Fatalf("HasQueuedUserWork error = %v, want runtime unavailable", err)
 	}
-	if !hasWork {
-		t.Fatal("HasQueuedUserWork = false, want true")
+	if hasWork {
+		t.Fatal("HasQueuedUserWork = true, want no replayed result")
 	}
-	if recoveryCalls != 1 {
-		t.Fatalf("recovery call count = %d, want 1", recoveryCalls)
+	if recoveryCalls != 0 {
+		t.Fatalf("recovery call count = %d, want 0", recoveryCalls)
 	}
-	if controls.queuedWorkCalls != 2 {
-		t.Fatalf("queued-work call count = %d, want 2", controls.queuedWorkCalls)
+	if controls.queuedWorkCalls != 1 {
+		t.Fatalf("queued-work call count = %d, want 1", controls.queuedWorkCalls)
 	}
 	if entries := controls.appendedLocalEntries(); len(entries) != 0 {
 		t.Fatalf("did not expect visible recovery warning during queued-work read, got %+v", entries)

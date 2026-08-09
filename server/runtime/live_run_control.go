@@ -449,7 +449,8 @@ func (c *liveRunCoordinator) finishGoalLoop() {
 func (c *liveRunCoordinator) recordToolStart(stepID string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if !liveRunGroupMatchesStep(c.current, mustStepID(stepID)) {
+	if c.current == nil ||
+		!liveRunGroupMatchesStep(c.current, mustStepID(stepID)) {
 		return
 	}
 	if c.current.stepToolStarts < liveStepToolStartsMultiple {
@@ -460,7 +461,8 @@ func (c *liveRunCoordinator) recordToolStart(stepID string) {
 func (c *liveRunCoordinator) recordAssistantFinalAnswer(stepID string, message llm.Message) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if !liveRunGroupMatchesStep(c.current, mustStepID(stepID)) {
+	if c.current == nil ||
+		!liveRunGroupMatchesStep(c.current, mustStepID(stepID)) {
 		return
 	}
 	if c.current.goalLoop {

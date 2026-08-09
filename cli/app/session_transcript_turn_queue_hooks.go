@@ -10,6 +10,7 @@ type turnQueueHook interface {
 	OnTranscriptMessage(clientui.TranscriptMessage)
 	OnTurnQueueDrained()
 	OnTurnQueueAborted()
+	OnTurnSubmissionAborted()
 	OnUserCompactionCompleted(bool)
 }
 
@@ -59,15 +60,19 @@ func (h *turnQueueHooks) OnTurnQueueDrained() {
 	if h == nil {
 		return
 	}
+	h.flushTaskCompletions()
+	if h.notifications != nil {
+		h.notifications.OnTurnQueueDrained()
+	}
+}
+
+func (h *turnQueueHooks) flushTaskCompletions() {
 	h.mu.Lock()
 	pending := h.pendingTaskCompletions
 	h.pendingTaskCompletions = nil
 	h.mu.Unlock()
 	for _, result := range pending {
 		h.taskCompletions.enqueueTaskCompletion(result)
-	}
-	if h.notifications != nil {
-		h.notifications.OnTurnQueueDrained()
 	}
 }
 
@@ -76,6 +81,16 @@ func (h *turnQueueHooks) OnTurnQueueAborted() {
 		return
 	}
 	h.notifications.OnTurnQueueAborted()
+}
+
+func (h *turnQueueHooks) OnTurnSubmissionAborted() {
+	if h == nil {
+		return
+	}
+	h.flushTaskCompletions()
+	if h.notifications != nil {
+		h.notifications.OnTurnQueueAborted()
+	}
 }
 
 func (h *turnQueueHooks) OnUserCompactionCompleted(queueDrained bool) {

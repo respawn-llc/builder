@@ -363,6 +363,10 @@ func (h *bellHooks) OnTurnQueueAborted() {
 	h.mu.Unlock()
 }
 
+func (h *bellHooks) OnTurnSubmissionAborted() {
+	h.OnTurnQueueAborted()
+}
+
 const compactionCompletionNotificationMessage = "Compaction finished"
 
 func (h *bellHooks) OnUserCompactionCompleted(queueDrained bool) {

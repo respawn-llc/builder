@@ -250,7 +250,7 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 			m.activeSubmit = activeSubmitState{}
 		}
 		if m.turnQueueHook != nil {
-			m.turnQueueHook.OnTurnQueueAborted()
+			m.turnQueueHook.OnTurnSubmissionAborted()
 		}
 		restoreInjectedCmd := tea.Cmd(nil)
 		if submitOrigin != activeSubmitOriginQueued {

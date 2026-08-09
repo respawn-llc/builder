@@ -239,7 +239,10 @@ func TestDetailModeReentryReloadsNewestPageAndSelectsItsEnd(t *testing.T) {
 }
 
 func TestDetailTranscriptLoadMergesAdjacentCursorPages(t *testing.T) {
-	model := newProjectedClosedUIModel(&runtimeControlFakeClient{})
+	model := newProjectedClosedUIModel(
+		&runtimeControlFakeClient{},
+		WithUISessionID(detailTestSessionID),
+	)
 	newest := clientui.TranscriptPage{
 		SessionID:    detailTestSessionID,
 		OlderCursor:  appInt64Ptr(40),
@@ -274,7 +277,10 @@ func TestDetailTranscriptLoadMergesAdjacentCursorPages(t *testing.T) {
 }
 
 func TestDetailTranscriptLoadIgnoresDuplicateAdjacentCursorResponse(t *testing.T) {
-	model := newProjectedClosedUIModel(&runtimeControlFakeClient{})
+	model := newProjectedClosedUIModel(
+		&runtimeControlFakeClient{},
+		WithUISessionID(detailTestSessionID),
+	)
 	newest := clientui.TranscriptPage{
 		SessionID:    detailTestSessionID,
 		OlderCursor:  appInt64Ptr(40),
@@ -307,7 +313,10 @@ func TestDetailTranscriptLoadIgnoresDuplicateAdjacentCursorResponse(t *testing.T
 }
 
 func TestDetailTranscriptNewestRefreshReplacesResidentWindow(t *testing.T) {
-	model := newProjectedClosedUIModel(&runtimeControlFakeClient{})
+	model := newProjectedClosedUIModel(
+		&runtimeControlFakeClient{},
+		WithUISessionID(detailTestSessionID),
+	)
 	newest := clientui.TranscriptPage{
 		SessionID:    detailTestSessionID,
 		OlderCursor:  appInt64Ptr(40),
@@ -344,7 +353,10 @@ func TestDetailTranscriptNewestRefreshReplacesResidentWindow(t *testing.T) {
 }
 
 func TestDetailTranscriptNewestRefreshReplacesChangedSelectedRow(t *testing.T) {
-	model := newProjectedClosedUIModel(&runtimeControlFakeClient{})
+	model := newProjectedClosedUIModel(
+		&runtimeControlFakeClient{},
+		WithUISessionID(detailTestSessionID),
+	)
 	model.view = tui.NewModel()
 	model.view = mustUpdateTUIModel(t, model.view, tui.SetViewportSizeMsg{Lines: 2, Width: 80})
 	model.view = mustUpdateTUIModel(t, model.view, tui.SetModeMsg{Mode: tui.ModeDetail})
@@ -463,7 +475,10 @@ func TestDetailTranscriptWindowTrimsFarSegmentByCountAfterPrepend(t *testing.T) 
 }
 
 func TestDetailTranscriptPageDeepClonesPatchRender(t *testing.T) {
-	model := newProjectedClosedUIModel(&runtimeControlFakeClient{})
+	model := newProjectedClosedUIModel(
+		&runtimeControlFakeClient{},
+		WithUISessionID(detailTestSessionID),
+	)
 	sourcePatch := &patchformat.RenderedPatch{Files: []patchformat.RenderedFile{{
 		RelPath: "file.txt",
 		Diff:    []string{"old"},
@@ -516,7 +531,10 @@ func TestDetailTranscriptPageDeepClonesPatchRender(t *testing.T) {
 }
 
 func TestDetailTranscriptPagePreservesKnownZeroDeletionCount(t *testing.T) {
-	model := newProjectedClosedUIModel(&runtimeControlFakeClient{})
+	model := newProjectedClosedUIModel(
+		&runtimeControlFakeClient{},
+		WithUISessionID(detailTestSessionID),
+	)
 	id := patchformat.WholeFileDeletionOperationID{HunkOrdinal: 0}
 	page := clientui.TranscriptPage{
 		SessionID: detailTestSessionID,
