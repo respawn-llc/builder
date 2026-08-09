@@ -146,6 +146,25 @@ describe("Task description checklist", () => {
     );
   });
 
+  it("returns to rendered Markdown when focus moves to the Task title", async () => {
+    mountTaskDetailSurface(taskDetailResponse);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("textbox", { name: appI18n.t("task.description") }));
+    const editor = screen.getByRole("textbox", { name: appI18n.t("task.description") });
+
+    await user.clear(editor);
+    await user.type(editor, "Blur manual QA draft");
+    await user.click(screen.getByRole("textbox", { name: appI18n.t("task.name") }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Blur manual QA draft")).toBeInTheDocument();
+      expect(screen.getByRole("textbox", { name: appI18n.t("task.description") })).not.toBeInstanceOf(
+        HTMLTextAreaElement,
+      );
+    });
+    expect(screen.getByTestId("task-detail-save")).toBeInTheDocument();
+  });
+
   it("does not edit or toggle a disabled description", async () => {
     const services = mountTaskDetailSurface({
       task: {

@@ -194,6 +194,29 @@ function MarkdownFieldEditor({
   placeholder: string;
   value: string;
 }>) {
+  const editorRef = useRef<HTMLTextAreaElement | null>(null);
+  const onBlurRef = useRef(onBlur);
+
+  // Attach to the editor node so browser-native focus loss always returns the
+  // controlled field to its rendered Markdown presentation.
+  useEffect(() => {
+    onBlurRef.current = onBlur;
+  }, [onBlur]);
+
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (editor === null) {
+      return;
+    }
+    const handleBlur = () => {
+      onBlurRef.current();
+    };
+    editor.addEventListener("blur", handleBlur);
+    return () => {
+      editor.removeEventListener("blur", handleBlur);
+    };
+  }, []);
+
   return (
     <textarea
       aria-describedby={describedBy}
@@ -205,7 +228,7 @@ function MarkdownFieldEditor({
         "block h-full min-h-0 min-w-0 resize-none p-[var(--space-2)] font-mono",
       )}
       id={fieldID}
-      onBlur={onBlur}
+      ref={editorRef}
       onChange={(event) => {
         onChange(event.target.value);
       }}
