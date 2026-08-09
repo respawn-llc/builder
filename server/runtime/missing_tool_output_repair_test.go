@@ -166,7 +166,7 @@ func TestNormalGenerationLive400RepairWaitsForMatchingStartThenRetriesOnce(t *te
 	}
 }
 
-func TestMissingToolOutputRepairRetryIncludesQueuedSteering(t *testing.T) {
+func TestMissingToolOutputRepairRetryDefersQueuedSteeringToNextStep(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 
@@ -198,8 +198,8 @@ func TestMissingToolOutputRepairRetryIncludesQueuedSteering(t *testing.T) {
 	if _, err := eng.SubmitUserMessage(context.Background(), "continue"); err != nil {
 		t.Fatalf("submit user message: %v", err)
 	}
-	if len(client.calls) != 2 {
-		t.Fatalf("model calls = %d, want initial 400 plus repaired retry", len(client.calls))
+	if len(client.calls) != 3 {
+		t.Fatalf("model calls = %d, want initial 400, repaired retry, and queued successor", len(client.calls))
 	}
 	countUserItems := func(items []llm.ResponseItem) int {
 		count := 0
@@ -210,8 +210,15 @@ func TestMissingToolOutputRepairRetryIncludesQueuedSteering(t *testing.T) {
 		}
 		return count
 	}
-	if got, want := countUserItems(client.calls[1].Items), countUserItems(client.calls[0].Items)+1; got != want {
-		t.Fatalf("retry user-message count = %d, want queued steering to add one item to %d", got, want)
+	initialUsers := countUserItems(client.calls[0].Items)
+	if got := countUserItems(client.calls[1].Items); got != initialUsers {
+		t.Fatalf("repair retry user-message count = %d, want same-Step count %d", got, initialUsers)
+	}
+	if got := countUserItems(client.calls[2].Items); got != initialUsers+1 {
+		t.Fatalf("successor user-message count = %d, want queued steering to add one item to %d", got, initialUsers)
+	}
+	if eng.HasQueuedUserWork() {
+		t.Fatal("delivered queued steering remained pending")
 	}
 }
 
