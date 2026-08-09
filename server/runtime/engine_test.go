@@ -431,6 +431,25 @@ func TestLastCommittedAssistantFinalAnswerSkipsTrailingReminderEntries(t *testin
 	}
 }
 
+func TestLastCommittedAssistantFinalAnswerClearsAtBlankFinal(t *testing.T) {
+	t.Parallel()
+	store := mustCreateTestSession(t)
+
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	for _, message := range []llm.Message{
+		{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final handoff")},
+		{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("")},
+	} {
+		if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{message})); err != nil {
+			t.Fatalf("append assistant final: %v", err)
+		}
+	}
+
+	if got := eng.LastCommittedAssistantFinalAnswer(); got != "" {
+		t.Fatalf("LastCommittedAssistantFinalAnswer() = %q, want absence after blank final", got)
+	}
+}
+
 func TestLastCommittedAssistantFinalAnswerSkipsTrailingErrorFeedback(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)

@@ -77,6 +77,29 @@ func TestPersistedTranscriptScanReconstructsPersistedTranscript(t *testing.T) {
 	}
 }
 
+func TestPersistedTranscriptScanBlankFinalClearsLastCommittedAnswer(t *testing.T) {
+	t.Parallel()
+	store := mustCreateTestSession(t)
+	records := []session.EventRecord{
+		appendPersistedTranscriptRecord(t, store, llm.Message{
+			Role:    llm.RoleAssistant,
+			Phase:   textutil.Value(llm.MessagePhaseFinal),
+			Content: textutil.Value("previous answer"),
+		}),
+		appendPersistedTranscriptRecord(t, store, llm.Message{
+			Role:    llm.RoleAssistant,
+			Phase:   textutil.Value(llm.MessagePhaseFinal),
+			Content: textutil.Value(""),
+		}),
+	}
+	scan := NewPersistedTranscriptScan(PersistedTranscriptScanRequest{})
+	applyPersistedTranscriptRecords(t, scan, records)
+
+	if got := scan.LastCommittedAssistantFinalAnswer(); got != "" {
+		t.Fatalf("LastCommittedAssistantFinalAnswer() = %q, want absence after blank final", got)
+	}
+}
+
 func TestPersistedTranscriptScanRestoresMaterializedToolResultFromCompletion(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)

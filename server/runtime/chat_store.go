@@ -878,7 +878,7 @@ func applyLastCommittedAssistantFinalAnswer(current string, msg llm.Message) str
 		return current
 	}
 	if isBlankFinalAnswer(msg) {
-		return current
+		return ""
 	}
 	if msg.Role == llm.RoleAssistant &&
 		msg.Phase != nil &&

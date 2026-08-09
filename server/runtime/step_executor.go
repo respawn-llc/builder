@@ -263,10 +263,6 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 	e := s.engine
 	executedToolCall := false
 	patchEditsApplied := false
-	deferredFinal := llm.Message{}
-	var deferredFinalCommittedCoordinate *committedAssistantCoordinate
-	deferredFinalEventEmitted := false
-	hasDeferredFinal := false
 	for {
 		if err := ctx.Err(); err != nil {
 			return stepLoopResult{}, err
@@ -459,15 +455,6 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 				return stepLoopResult{}, err
 			}
 			if flushed > 0 {
-				if messagePhaseIs(assistantMsg, llm.MessagePhaseFinal) &&
-					assistantMsg.Content != nil &&
-					strings.TrimSpace(*assistantMsg.Content) != "" &&
-					!silentFinalAnswer {
-					deferredFinal = assistantMsg
-					deferredFinalCommittedCoordinate = cloneCommittedAssistantCoordinate(assistantCommittedCoordinate)
-					deferredFinalEventEmitted = assistantEventEmitted
-					hasDeferredFinal = true
-				}
 				if len(localToolCalls) == 0 && len(hostedToolExecutions) == 0 {
 					if err := e.stepLifecycle.DrainAgentStepBoundary(ctx); err != nil {
 						return stepLoopResult{}, err
@@ -514,17 +501,6 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 			resolvedSilentFinalAnswer := silentFinalAnswer
 			resolvedCommittedCoordinate := cloneCommittedAssistantCoordinate(assistantCommittedCoordinate)
 			var reviewerCompletion *ReviewerStatus
-			if hasDeferredFinal {
-				if resolvedSilentFinalAnswer {
-					resolved = deferredFinal
-					resolvedSilentFinalAnswer = isBlankFinalAnswer(resolved)
-					resolvedCommittedCoordinate = cloneCommittedAssistantCoordinate(deferredFinalCommittedCoordinate)
-					assistantEventEmitted = deferredFinalEventEmitted
-				}
-				hasDeferredFinal = false
-				deferredFinalCommittedCoordinate = nil
-				deferredFinalEventEmitted = false
-			}
 			if resolvedSilentFinalAnswer {
 				resolvedCommittedStart, resolvedCommittedStartSet := committedAssistantCoordinateFields(resolvedCommittedCoordinate)
 				return stepLoopResult{SilentFinal: true, ExecutedToolCall: executedToolCall, AssistantCommittedStart: resolvedCommittedStart, AssistantCommittedStartSet: resolvedCommittedStartSet}, nil
