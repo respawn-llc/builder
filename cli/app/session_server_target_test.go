@@ -2,6 +2,15 @@ package app
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
 	"core/cli/app/internal/startupconfig"
 	modelstub "core/internal/testharness/pty/blackbox"
 	"core/internal/testharness/testsetup"
@@ -15,17 +24,6 @@ import (
 	"core/shared/protocol"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
-	"encoding/json"
-	"fmt"
-	"io"
-	"net/http"
-	"net/http/httptest"
-	"os"
-	"path/filepath"
-	"strings"
-	"sync/atomic"
-	"testing"
-	"time"
 
 	"github.com/google/uuid"
 )
@@ -50,54 +48,36 @@ type appTestRuntimeSubmissionResult struct {
 	err        error
 }
 
-func newAppTestModelServer(t *testing.T, steps ...appTestModelStep) *httptest.Server {
+func newAppTestModelServer(t *testing.T, steps ...appTestModelStep) *modelstub.ResponsesStub {
 	t.Helper()
-	var hits atomic.Int32
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if modelstub.HandleInputTokenCount(w, r, 11) {
-			return
+	script := make([]modelstub.ScriptStep, len(steps))
+	for index, step := range steps {
+		script[index] = modelstub.FinalAnswer(step.Final)
+		if len(step.Calls) > 0 {
+			calls := make([]llm.ToolCall, len(step.Calls))
+			for callIndex, call := range step.Calls {
+				input, err := json.Marshal(call.Arguments)
+				if err != nil {
+					t.Fatalf("marshal %s tool arguments: %v", call.Name, err)
+				}
+				calls[callIndex] = llm.ToolCall{ID: call.ID, Name: string(call.Name), Input: input}
+			}
+			script[index] = modelstub.ToolBatch("", calls...)
 		}
-		if r.URL.Path != "/responses" {
-			t.Fatalf("unexpected model path %q", r.URL.Path)
-		}
-		index := int(hits.Add(1)) - 1
-		if index >= len(steps) {
-			t.Fatalf("unexpected model request index %d", index)
-		}
-		writeAppTestModelStep(t, w, steps[index])
-	}))
-}
-
-func writeAppTestModelStep(t *testing.T, w http.ResponseWriter, step appTestModelStep) {
-	t.Helper()
-	if len(step.Calls) == 0 {
-		modelstub.WriteCompletedResponseStream(w, step.Final, 11, 7)
-		return
 	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	output := make([]map[string]any, 0, len(step.Calls))
-	for index, call := range step.Calls {
-		arguments, err := json.Marshal(call.Arguments)
-		if err != nil {
-			t.Fatalf("marshal model tool arguments: %v", err)
-		}
-		itemID := fmt.Sprintf("fc_%d", index)
-		output = append(output, map[string]any{
-			"id": itemID, "type": "function_call", "name": call.Name,
-			"call_id": call.ID, "arguments": string(arguments),
-		})
-	}
-	payload, err := json.Marshal(map[string]any{
-		"type": "response.completed",
-		"response": map[string]any{
-			"usage":  map[string]any{"input_tokens": 11, "output_tokens": 7, "total_tokens": 18},
-			"output": output,
-		},
-	})
+	stub, err := modelstub.StartScriptedResponsesStub(modelstub.Script{Steps: script})
 	if err != nil {
-		t.Fatalf("marshal model event: %v", err)
+		t.Fatalf("StartScriptedResponsesStub: %v", err)
 	}
-	_, _ = fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", payload)
+	t.Cleanup(func() {
+		if err := stub.Verify(); err != nil {
+			t.Errorf("verify scripted Responses stub: %v", err)
+		}
+		if err := stub.Stop(); err != nil {
+			t.Errorf("stop scripted Responses stub: %v", err)
+		}
+	})
+	return stub
 }
 
 func appTestAskCall(id, question string, suggestions []string, recommended int) appTestModelToolCall {
@@ -110,14 +90,10 @@ func appTestAskCall(id, question string, suggestions []string, recommended int) 
 }
 
 func appTestOutsidePatchCall(id, path string) appTestModelToolCall {
-	return appTestModelToolCall{
-		ID:   id,
-		Name: toolspec.ToolPatch,
-		Arguments: map[string]any{"patch": fmt.Sprintf(
-			"*** Begin Patch\n*** Add File: %s\n+approved\n*** End Patch\n",
-			path,
-		)},
-	}
+	return appTestModelToolCall{ID: id, Name: toolspec.ToolPatch, Arguments: map[string]any{"patch": fmt.Sprintf(
+		"*** Begin Patch\n*** Add File: %s\n+approved\n*** End Patch\n",
+		path,
+	)}}
 }
 
 func appTestOutsidePatchPath(t *testing.T) string {
@@ -244,12 +220,11 @@ func TestStartSessionServerConfiguredDaemonNoAuthSkipsLaterPrompt(t *testing.T) 
 			return authMethodPickerResult{Choice: authMethodChoiceSkip}, nil
 		},
 	}
-	firstOptions := Options{
+	firstServer, err := startSessionServer(context.Background(), Options{
 		WorkspaceRoot:         workspace,
 		WorkspaceRootExplicit: true,
 		Model:                 "gpt-5",
-	}
-	firstServer, err := startSessionServer(context.Background(), firstOptions, firstInteractor, true)
+	}, firstInteractor, true)
 	if err != nil {
 		t.Fatalf("first startSessionServer: %v", err)
 	}
@@ -272,12 +247,11 @@ func TestStartSessionServerConfiguredDaemonNoAuthSkipsLaterPrompt(t *testing.T) 
 			return authMethodPickerResult{}, nil
 		},
 	}
-	secondOptions := Options{
+	secondServer, err := startSessionServer(context.Background(), Options{
 		WorkspaceRoot:         workspace,
 		WorkspaceRootExplicit: true,
 		Model:                 "gpt-5",
-	}
-	secondServer, err := startSessionServer(context.Background(), secondOptions, secondInteractor, true)
+	}, secondInteractor, true)
 	if err != nil {
 		t.Fatalf("second startSessionServer: %v", err)
 	}
@@ -479,7 +453,7 @@ func TestRemoteInteractiveRuntimeAnswersPromptsFromAnyAttachedClientAcrossWorksp
 		appTestModelStep{Final: "multi-client prompt flow complete"},
 	)
 	defer model.Close()
-	fixture := startRemoteMultiClientRuntimeFixture(t, model.URL)
+	fixture := startRemoteMultiClientRuntimeFixture(t, model.URL())
 	if got, want := fixture.serverA.ProjectID(), fixture.serverB.ProjectID(); got != want {
 		t.Fatalf("project id mismatch across clients: a=%q b=%q", got, want)
 	}
@@ -572,7 +546,7 @@ func startRemoteMultiClientRuntimeFixture(t *testing.T, openAIBaseURL string) *r
 	if err != nil {
 		t.Fatalf("DialRemote workspace B: %v", err)
 	}
-	fixture.serverB = newRemoteAppServerWithAuth(remoteB, cfgB, nil, false)
+	fixture.serverB = newRemoteAppServerWithAuth(remoteB, cfgB)
 	t.Cleanup(func() { closeInteractiveSessionServer(t, fixture.serverB) })
 
 	fixture.planA, fixture.runtimePlanA = prepareAppRuntimePlan(t, fixture.serverA, sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())}, io.Discard, "test remote multi-client runtime A")

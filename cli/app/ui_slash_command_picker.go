@@ -2,11 +2,12 @@ package app
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"unicode"
 
 	"core/cli/app/commands"
-	"core/cli/app/internal/authui"
+	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -20,17 +21,6 @@ const (
 	authSlashCommandLogin
 	authSlashCommandLogout
 )
-
-func authSlashCommandFromName(name string) authSlashCommandKind {
-	switch strings.TrimSpace(name) {
-	case "login":
-		return authSlashCommandLogin
-	case "logout":
-		return authSlashCommandLogout
-	default:
-		return authSlashCommandUnknown
-	}
-}
 
 func (k authSlashCommandKind) commandName() string {
 	switch k {
@@ -95,13 +85,9 @@ func (m *uiModel) refreshSlashCommandFilterFromInputWithAuth(scheduleAuth bool) 
 		m.slashCommandSelection = 0
 		return nil
 	}
-	cmd := tea.Cmd(nil)
 	if !m.authSlashSessionOpen {
 		m.authSlashSessionOpen = true
 		m.authSlashGeneration = nextNonZeroToken(m.authSlashGeneration)
-	}
-	if scheduleAuth {
-		cmd = m.requestAuthSlashCommandRefresh()
 	}
 	normalized := strings.ToLower(strings.TrimSpace(parsed.token))
 	if !m.slashCommandFilterSet || m.slashCommandFilter != normalized {
@@ -110,7 +96,14 @@ func (m *uiModel) refreshSlashCommandFilterFromInputWithAuth(scheduleAuth bool) 
 	m.slashCommandFilter = normalized
 	m.slashCommandFilterSet = true
 	m.clampSlashCommandSelection()
-	return cmd
+	if scheduleAuth && m.commandRegistry != nil {
+		for _, command := range m.commandRegistry.Match(normalized) {
+			if isAuthSlashCommand(command.Name) {
+				return m.requestAuthSlashCommandRefresh()
+			}
+		}
+	}
+	return nil
 }
 
 func (m *uiModel) currentSlashCommandQuery(token string) string {
@@ -159,23 +152,12 @@ func (m *uiModel) filterSlashCommandMatches(matches []commands.Command) []comman
 }
 
 func isAuthSlashCommand(name string) bool {
-	switch strings.TrimSpace(name) {
-	case "login", "logout":
-		return true
-	default:
-		return false
-	}
+	name = strings.TrimSpace(name)
+	return name == "login" || name == "logout"
 }
 
 func (m *uiModel) requestAuthSlashCommandRefresh() tea.Cmd {
 	if m == nil {
-		return nil
-	}
-	if m.statusConfig.AuthManager == nil {
-		m.authSlashCommand = authSlashCommandLogin
-		m.authSlashCommandErr = ""
-		m.authSlashResolved = m.authSlashGeneration
-		m.authSlashLoading = false
 		return nil
 	}
 	if m.authSlashResolved == m.authSlashGeneration || m.authSlashLoading {
@@ -184,11 +166,29 @@ func (m *uiModel) requestAuthSlashCommandRefresh() tea.Cmd {
 	m.authSlashToken = nextNonZeroToken(m.authSlashToken)
 	token := m.authSlashToken
 	generation := m.authSlashGeneration
-	loader := m.statusConfig.AuthManager
+	loader := m.statusConfig.AuthStatus
 	m.authSlashLoading = true
 	return func() tea.Msg {
-		name, err := authui.AuthSlashCommandName(context.Background(), loader)
-		return authSlashCommandRefreshedMsg{token: token, generation: generation, name: name, err: err}
+		if loader == nil {
+			return authSlashCommandRefreshedMsg{token: token, generation: generation, err: errors.New("auth status client is required")}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), statusRefreshTimeout)
+		defer cancel()
+		response, err := loader.GetAuthStatus(ctx, serverapi.AuthStatusRequest{})
+		if err != nil {
+			return authSlashCommandRefreshedMsg{token: token, generation: generation, err: err}
+		}
+		if err := response.Validate(); err != nil {
+			return authSlashCommandRefreshedMsg{token: token, generation: generation, err: err}
+		}
+		if response.Resolution.Kind == serverapi.AuthStatusResolutionUnavailable {
+			return authSlashCommandRefreshedMsg{token: token, generation: generation, err: errors.New(response.Resolution.Failure.Cause)}
+		}
+		kind := authSlashCommandLogin
+		if response.Resolution.Facts.Method == serverapi.AuthStatusMethodOAuth {
+			kind = authSlashCommandLogout
+		}
+		return authSlashCommandRefreshedMsg{token: token, generation: generation, kind: kind}
 	}
 }
 
@@ -204,7 +204,7 @@ func (m *uiModel) applyAuthSlashCommandRefreshed(msg authSlashCommandRefreshedMs
 		m.clampSlashCommandSelection()
 		return
 	}
-	m.authSlashCommand = authSlashCommandFromName(msg.name)
+	m.authSlashCommand = msg.kind
 	m.authSlashCommandErr = ""
 	m.clampSlashCommandSelection()
 }

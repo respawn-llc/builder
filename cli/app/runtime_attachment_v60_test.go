@@ -21,6 +21,32 @@ type runtimeAttachmentTestServer struct {
 	runtimeControl    apicontract.RuntimeControlService
 }
 
+type recordingSessionRuntimeClient struct {
+	activate func(context.Context, serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error)
+	release  func(context.Context, serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error)
+}
+
+func sessionRuntimeActivateResponse(sessionID string, generation uint64) serverapi.SessionRuntimeActivateResponse {
+	return serverapi.SessionRuntimeActivateResponse{Attachment: serverapi.SessionRuntimeAttachment{
+		SessionID:  sessionID,
+		Generation: generation,
+	}}
+}
+
+func (c *recordingSessionRuntimeClient) ActivateSessionRuntime(ctx context.Context, req serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
+	if c.activate != nil {
+		return c.activate(ctx, req)
+	}
+	return sessionRuntimeActivateResponse(req.SessionID, 1), nil
+}
+
+func (c *recordingSessionRuntimeClient) ReleaseSessionRuntime(ctx context.Context, req serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error) {
+	if c.release != nil {
+		return c.release(ctx, req)
+	}
+	return serverapi.SessionRuntimeReleaseResponse{}, nil
+}
+
 func (s runtimeAttachmentTestServer) RuntimeAttachmentClients() runtimeAttachmentClients {
 	return runtimeAttachmentClients{
 		RuntimeControls:   s.runtimeControl,

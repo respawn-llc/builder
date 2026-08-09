@@ -7,9 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"core/cli/app/internal/status"
-	"core/server/auth"
-	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/runtimeids"
@@ -20,25 +17,31 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-type panicAuthStatusClient struct{}
-
-func (panicAuthStatusClient) GetAuthStatus(context.Context, serverapi.AuthStatusRequest) (serverapi.AuthStatusResponse, error) {
-	panic("session picker must not call slow auth status")
+type staticAuthStatusClient struct {
+	response serverapi.AuthStatusResponse
+	err      error
+	calls    int
 }
 
-type fastOnlyAuthResolver struct {
-	state auth.State
+func (c *staticAuthStatusClient) GetAuthStatus(context.Context, serverapi.AuthStatusRequest) (serverapi.AuthStatusResponse, error) {
+	c.calls++
+	return c.response, c.err
 }
 
-func (r fastOnlyAuthResolver) Load(context.Context) (auth.State, error) {
-	return r.state, nil
+func authStatusResponse(method serverapi.AuthStatusMethod) serverapi.AuthStatusResponse {
+	facts := serverapi.AuthStatusFacts{
+		Method:        method,
+		Provider:      serverapi.OpenAIAuthProviderFacts(),
+		EnvPreference: serverapi.AuthStatusEnvPreferenceUnspecified,
+	}
+	switch method {
+	case serverapi.AuthStatusMethodAPIKey:
+		facts.APIKey = &serverapi.AuthAPIKeyFacts{}
+	case serverapi.AuthStatusMethodOAuth:
+		facts.OAuth = &serverapi.AuthOAuthFacts{}
+	}
+	return serverapi.AuthStatusResponse{Resolution: serverapi.KnownAuthStatusResolution(facts, nil)}
 }
-
-func (fastOnlyAuthResolver) CurrentState(context.Context) (auth.State, error) {
-	panic("session picker must not resolve current auth state")
-}
-
-var _ apicontract.AuthStatusService = panicAuthStatusClient{}
 
 func newTestSessionPickerModel(t *testing.T, summaries []clientui.SessionSummary, header sessionPickerHeaderInfo) *sessionPickerModel {
 	t.Helper()
@@ -193,6 +196,7 @@ func TestSessionPickerHeaderLoadsGitBranchAsync(t *testing.T) {
 			ModelName:     "gpt-5",
 			ThinkingLevel: "high",
 			Settings:      config.Settings{Model: "gpt-5", ThinkingLevel: "high"},
+			AuthStatus:    &staticAuthStatusClient{response: authStatusResponse(serverapi.AuthStatusMethodNone)},
 		},
 	})
 	cmd := collectSessionPickerStatusCmd(m.header)
@@ -214,13 +218,13 @@ func TestSessionPickerHeaderInitialAsyncPaintUsesOnlyStaticShell(t *testing.T) {
 	repoRoot := initStatusLineGitRepo(t, "picker-branch")
 	m := newUninitializedTestSessionPickerModel(t, nil, sessionPickerHeaderInfo{
 		Version:       "1.2.3",
-		OwnsServer:    true,
 		ServerAddress: "127.0.0.1:53082",
 		StatusRequest: uiStatusRequest{
 			WorkspaceRoot: repoRoot,
 			ModelName:     "gpt-5",
 			ThinkingLevel: "high",
 			Settings:      config.Settings{Model: "gpt-5", ThinkingLevel: "high"},
+			AuthStatus:    &staticAuthStatusClient{response: authStatusResponse(serverapi.AuthStatusMethodNone)},
 		},
 	})
 	m.width = 80
@@ -240,17 +244,14 @@ func TestSessionPickerHeaderInitialAsyncPaintUsesOnlyStaticShell(t *testing.T) {
 	}
 }
 
-func TestSessionPickerHeaderLoadsFastAuthStateOnly(t *testing.T) {
+func TestSessionPickerHeaderLoadsRemoteAuthStatus(t *testing.T) {
 	m := newTestSessionPickerModel(t, nil, sessionPickerHeaderInfo{
 		Version: "1.2.3",
 		StatusRequest: uiStatusRequest{
 			Settings:   config.Settings{Model: "gpt-5"},
 			ModelName:  "gpt-5",
-			AuthStatus: panicAuthStatusClient{},
+			AuthStatus: &staticAuthStatusClient{response: authStatusResponse(serverapi.AuthStatusMethodOAuth)},
 		},
-		AuthManager: fastOnlyAuthResolver{state: auth.State{
-			Method: auth.Method{Type: auth.MethodOAuth, OAuth: &auth.OAuthMethod{Email: "user@example.com"}},
-		}},
 	})
 	cmd := collectSessionPickerStatusCmd(m.header)
 	if cmd == nil {
@@ -268,11 +269,8 @@ func TestSessionPickerHeaderLoadsFastAuthStateOnly(t *testing.T) {
 func TestSessionPickerStatusOmitsAbsentModel(t *testing.T) {
 	header := sessionPickerHeaderInfo{
 		StatusRequest: uiStatusRequest{
-			AuthStatus: panicAuthStatusClient{},
+			AuthStatus: &staticAuthStatusClient{response: authStatusResponse(serverapi.AuthStatusMethodOAuth)},
 		},
-		AuthManager: fastOnlyAuthResolver{state: auth.State{
-			Method: auth.Method{Type: auth.MethodOAuth, OAuth: &auth.OAuthMethod{Email: "user@example.com"}},
-		}},
 	}
 	cmd := collectSessionPickerStatusCmd(header)
 	if cmd == nil {
@@ -290,15 +288,15 @@ func TestSessionPickerStatusOmitsAbsentModel(t *testing.T) {
 	}
 }
 
-func TestSessionPickerHeaderLoadsFastAuthStateVariants(t *testing.T) {
+func TestSessionPickerHeaderLoadsAuthStatusVariants(t *testing.T) {
 	tests := []struct {
-		name  string
-		state auth.State
-		want  string
+		name   string
+		method serverapi.AuthStatusMethod
+		want   string
 	}{
-		{name: "no auth", state: auth.EmptyState(), want: "No auth"},
-		{name: "api key", state: auth.State{Method: auth.Method{Type: auth.MethodAPIKey, APIKey: &auth.APIKeyMethod{Key: "sk-test-1234"}}}, want: "OpenAI API Key"},
-		{name: "oauth", state: auth.State{Method: auth.Method{Type: auth.MethodOAuth, OAuth: &auth.OAuthMethod{Email: "user@example.com"}}}, want: "OpenAI Subscription"},
+		{name: "no auth", method: serverapi.AuthStatusMethodNone, want: "No auth"},
+		{name: "api key", method: serverapi.AuthStatusMethodAPIKey, want: "OpenAI API Key"},
+		{name: "oauth", method: serverapi.AuthStatusMethodOAuth, want: "OpenAI Subscription"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -307,9 +305,8 @@ func TestSessionPickerHeaderLoadsFastAuthStateVariants(t *testing.T) {
 				StatusRequest: uiStatusRequest{
 					Settings:   config.Settings{Model: "gpt-5"},
 					ModelName:  "gpt-5",
-					AuthStatus: panicAuthStatusClient{},
+					AuthStatus: &staticAuthStatusClient{response: authStatusResponse(tt.method)},
 				},
-				AuthManager: fastOnlyAuthResolver{state: tt.state},
 			})
 			cmd := collectSessionPickerStatusCmd(m.header)
 			if cmd == nil {
@@ -365,25 +362,6 @@ func TestSessionPickerHeaderRendersMissingRemoteAddressFallback(t *testing.T) {
 	plain := stripANSIAndTrimRight(m.renderHeader())
 	if !strings.Contains(plain, "Server") {
 		t.Fatalf("expected remote server fallback copy, got %q", plain)
-	}
-}
-
-func TestSessionPickerAuthLabelExamples(t *testing.T) {
-	tests := []struct {
-		name string
-		info uiStatusAuthInfo
-		want string
-	}{
-		{name: "no auth", info: uiStatusAuthInfo{Summary: "No Auth", Visible: true, Method: auth.MethodNone}, want: "No auth"},
-		{name: "api key", info: uiStatusAuthInfo{Summary: "API Key ...1234", Visible: true, Method: auth.MethodAPIKey, Provider: "openai"}, want: "OpenAI API Key"},
-		{name: "subscription", info: uiStatusAuthInfo{Summary: "user@example.com", Visible: true, Method: auth.MethodOAuth, Provider: "chatgpt-codex"}, want: "OpenAI Subscription"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := status.AuthDisplayLabel(tt.info); got != tt.want {
-				t.Fatalf("auth label = %q, want %q", got, tt.want)
-			}
-		})
 	}
 }
 

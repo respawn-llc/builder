@@ -11,10 +11,10 @@ import (
 	"time"
 
 	"core/shared/apicontract"
-	"core/shared/auth"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/runtimeids"
+	"core/shared/serverapi"
 )
 
 const (
@@ -44,11 +44,8 @@ type Request struct {
 	SessionViews          apicontract.SessionViewService
 	Settings              config.Settings
 	Source                config.SourceReport
-	AuthCacheIdentity     string
-	AuthCacheUnseedable   bool
 	CacheKeys             CacheKeys
 	AuthStatus            apicontract.AuthStatusService
-	AuthStatePath         string
 	SessionName           string
 	SessionID             string
 	AgentRole             *string
@@ -61,7 +58,6 @@ type Request struct {
 	ReviewerMode          string
 	AutoCompactionEnabled bool
 	QuestionsEnabled      bool
-	OwnsServer            bool
 	CurrentTime           time.Time
 }
 
@@ -75,7 +71,6 @@ type Snapshot struct {
 	PreviousSessionName    string
 	ParentAgentSessionID   *runtimeids.SessionID
 	ParentAgentSessionName string
-	OwnsServer             bool
 	Git                    GitInfo
 	Auth                   AuthInfo
 	Context                ContextInfo
@@ -95,7 +90,7 @@ type AuthInfo struct {
 	Summary     string
 	Details     []string
 	Visible     bool
-	Method      auth.MethodType
+	Method      serverapi.AuthStatusMethod
 	Provider    string
 	Unavailable bool
 }
@@ -225,9 +220,6 @@ func (r *memoryRepository) SeedSnapshot(req Request, base Snapshot, now time.Tim
 	seed := SeedResult{Snapshot: base, Warnings: map[Section]string{}}
 
 	authEntry, authCached := r.authByKey[strings.TrimSpace(req.CacheKeys.Auth)]
-	if req.AuthCacheUnseedable {
-		authCached = false
-	}
 	if authCached {
 		seed.Snapshot.Auth = authEntry.result.Auth
 		seed.Snapshot.Subscription = authEntry.result.Subscription
@@ -308,18 +300,6 @@ func repositoryTime(now time.Time) time.Time {
 		return time.Now()
 	}
 	return now
-}
-
-func AuthCacheKey(req Request) string {
-	identity := strings.TrimSpace(req.AuthCacheIdentity)
-	if identity == "" {
-		identity = "auth:none"
-	}
-	return strings.Join([]string{
-		strings.TrimSpace(req.Settings.OpenAIBaseURL),
-		strings.TrimSpace(req.Settings.ProviderOverride),
-		identity,
-	}, "|")
 }
 
 func GitCacheKey(workdir string) string {

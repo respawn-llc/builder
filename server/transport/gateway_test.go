@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -641,16 +642,16 @@ func TestGatewayHandshakeRejectsProtocolVersionMismatch(t *testing.T) {
 	}
 }
 
-func TestGatewayHandshakeRejectsPreviousProtocolGeneration(t *testing.T) {
+func TestGatewayHandshakeRejectsProtocolVersion97(t *testing.T) {
 	_, server := newGatewayTestServer(t)
 	defer server.Close()
 
 	conn := dialGateway(t, server)
 	defer func() { _ = conn.Close() }()
 
-	respErr := callGatewayExpectError(t, conn, "1", protocol.MethodHandshake, protocol.HandshakeRequest{ProtocolVersion: "76"})
+	respErr := callGatewayExpectError(t, conn, "1", protocol.MethodHandshake, protocol.HandshakeRequest{ProtocolVersion: "97"})
 	if respErr.Code != protocol.ErrCodeProtocolVersionMismatch {
-		t.Fatalf("expected previous protocol generation rejection, got %+v", respErr)
+		t.Fatalf("expected protocol version 97 rejection, got %+v", respErr)
 	}
 }
 
@@ -862,6 +863,7 @@ func TestGatewayPreAuthMethodPolicy(t *testing.T) {
 		{name: "capability facts", method: protocol.MethodCapabilityFactsGet, requiresAuth: false},
 		{name: "bootstrap status", method: protocol.MethodAuthGetBootstrapStatus, requiresAuth: false},
 		{name: "bootstrap complete", method: protocol.MethodAuthCompleteBootstrap, requiresAuth: false},
+		{name: "auth status", method: protocol.MethodAuthGetStatus, requiresAuth: false},
 		{name: "project list", method: protocol.MethodProjectList, requiresAuth: false},
 		{name: "project binding plan", method: protocol.MethodProjectPlanWorkspaceBinding, requiresAuth: false},
 		{name: "project attach workspace", method: protocol.MethodProjectAttachWorkspace, requiresAuth: true},
@@ -930,6 +932,89 @@ func TestGatewayAuthBootstrapStatusAllowedBeforeAttach(t *testing.T) {
 	}
 	if !sameStringSet(status.AllowedPreAuthMethods, apicontract.AllowedPreAuthMethods()) {
 		t.Fatalf("allowed pre-auth methods = %+v, want %+v", status.AllowedPreAuthMethods, apicontract.AllowedPreAuthMethods())
+	}
+}
+
+type gatewayAuthStatusService func(context.Context, serverapi.AuthStatusRequest) (serverapi.AuthStatusResponse, error)
+
+func (service gatewayAuthStatusService) GetAuthStatus(ctx context.Context, request serverapi.AuthStatusRequest) (serverapi.AuthStatusResponse, error) {
+	return service(ctx, request)
+}
+
+type gatewayAuthStatusDependencies struct {
+	*core.Core
+	status apicontract.AuthStatusService
+}
+
+func (dependencies *gatewayAuthStatusDependencies) AuthStatusClient() apicontract.AuthStatusService {
+	return dependencies.status
+}
+
+func TestGatewayAuthStatusRoundTripsTypedFactsBeforeAttach(t *testing.T) {
+	for _, fixture := range testsetup.AuthStatusTransportCases() {
+		t.Run(fixture.Name, func(t *testing.T) {
+			if err := fixture.Response.Validate(); err != nil {
+				t.Fatalf("test auth status: %v", err)
+			}
+			appCore, _ := newGatewayTestCore(t, true, false)
+			defer func() { _ = appCore.Close() }()
+			gateway, err := NewGateway(
+				&gatewayAuthStatusDependencies{
+					Core: appCore,
+					status: gatewayAuthStatusService(func(context.Context, serverapi.AuthStatusRequest) (serverapi.AuthStatusResponse, error) {
+						return fixture.Response, nil
+					}),
+				},
+				protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"},
+			)
+			if err != nil {
+				t.Fatalf("NewGateway: %v", err)
+			}
+			server := httptest.NewServer(gateway.Handler())
+			defer server.Close()
+
+			conn := dialGateway(t, server)
+			defer func() { _ = conn.Close() }()
+			handshakeGateway(t, conn)
+			var got serverapi.AuthStatusResponse
+			callGateway(t, conn, "auth-status", protocol.MethodAuthGetStatus, serverapi.AuthStatusRequest{}, &got)
+			if !reflect.DeepEqual(got, fixture.Response) {
+				t.Fatalf("auth status = %+v, want %+v", got, fixture.Response)
+			}
+		})
+	}
+}
+
+func TestGatewayAuthStatusReturnsOnlyRedactedAPIKeyFacts(t *testing.T) {
+	appCore, server, authSupport := newGatewayTestServerWithAuth(t, false)
+	defer func() { _ = appCore.Close() }()
+	defer server.Close()
+	if _, err := authSupport.AuthManager.SwitchMethodAndSetEnvAPIKeyPreference(
+		context.Background(),
+		auth.Method{Type: auth.MethodAPIKey, APIKey: &auth.APIKeyMethod{Key: "sk-secret-1234"}},
+		auth.EnvAPIKeyPreferencePreferSaved,
+		true,
+		true,
+	); err != nil {
+		t.Fatalf("configure auth: %v", err)
+	}
+
+	conn := dialGateway(t, server)
+	defer func() { _ = conn.Close() }()
+	handshakeGateway(t, conn)
+	var status serverapi.AuthStatusResponse
+	callGateway(t, conn, "auth-status", protocol.MethodAuthGetStatus, serverapi.AuthStatusRequest{}, &status)
+	if err := status.Validate(); err != nil {
+		t.Fatalf("auth status validation: %v", err)
+	}
+	facts := status.Resolution.Facts
+	if status.Resolution.Kind != serverapi.AuthStatusResolutionKnown ||
+		facts == nil ||
+		facts.Method != serverapi.AuthStatusMethodAPIKey ||
+		facts.APIKey == nil ||
+		facts.APIKey.Suffix == nil ||
+		*facts.APIKey.Suffix != "1234" {
+		t.Fatalf("auth status facts = %+v", status)
 	}
 }
 

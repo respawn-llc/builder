@@ -70,7 +70,7 @@ func loadAppTestConfig(t *testing.T, workspace string, opts config.LoadOptions) 
 
 func newAppMetadataProjectViewClient(t *testing.T, cfg config.App) apicontract.ProjectViewService {
 	t.Helper()
-	prepareAppTestPersistenceRoot(t, cfg.PersistenceRoot)
+	testsetup.PrepareMetadataPersistenceRoot(t, cfg.PersistenceRoot)
 	store, err := metadata.Open(cfg.PersistenceRoot)
 	if err != nil {
 		t.Fatalf("metadata.Open: %v", err)
@@ -94,7 +94,7 @@ func startStandingRunPromptServer(t *testing.T, workspace, openAIBaseURL string)
 
 func startStandingRunPromptServerWithAuth(t *testing.T, workspace, openAIBaseURL string, authHandler serverstartup.AuthHandler) func() {
 	t.Helper()
-	releasePortProbe := reserveAppDirectServePort(t)
+	releasePortProbe := reserveAppTestServerPort(t)
 	srv, err := serverstartup.StartServeServer(context.Background(), serverstartup.Request{
 		WorkspaceRoot:         workspace,
 		WorkspaceRootExplicit: true,
@@ -125,18 +125,6 @@ func serveAppServer(t *testing.T, srv *serverstartup.ServeServer) func() {
 	return serveAppServerAfter(t, srv, releaseConfiguredAppTestServerPort)
 }
 
-func startAppTestEmbeddedServer(
-	t *testing.T,
-	ctx context.Context,
-	opts Options,
-	interactor authInteractor,
-	interactive bool,
-) (*embeddedAppServer, error) {
-	t.Helper()
-	releaseConfiguredAppTestServerPort()
-	return startEmbeddedServer(ctx, opts, interactor, interactive)
-}
-
 func serveAppServerAfter(t *testing.T, srv *serverstartup.ServeServer, beforeServe func()) func() {
 	t.Helper()
 	serveCtx, cancel := context.WithCancel(context.Background())
@@ -151,11 +139,6 @@ func serveAppServerAfter(t *testing.T, srv *serverstartup.ServeServer, beforeSer
 			t.Fatalf("Serve error = %v, want context canceled", serveErr)
 		}
 	}
-}
-
-func reserveAppDirectServePort(t *testing.T) func() {
-	t.Helper()
-	return reserveAppTestServerPort(t)
 }
 
 func configureAppTestServerPort(t *testing.T) {
@@ -175,10 +158,9 @@ func reserveAppTestServerPort(t *testing.T) func() {
 func releaseConfiguredAppTestServerPort() {
 	host, hostFound := os.LookupEnv("KENT_SERVER_HOST")
 	port, portFound := os.LookupEnv("KENT_SERVER_PORT")
-	if !hostFound || !portFound {
-		return
+	if hostFound && portFound {
+		testsetup.ReleaseLoopbackAddress(net.JoinHostPort(host, port))
 	}
-	testsetup.ReleaseLoopbackAddress(net.JoinHostPort(host, port))
 }
 
 func prepareAppRuntimePlan(t *testing.T, server launchPlannerServer, req sessionLaunchRequest, diagnosticWriter io.Writer, startLogLine string) (sessionLaunchPlan, *runtimeLaunchPlan) {
@@ -247,39 +229,14 @@ func newAppRuntimeEngineWithStore(t *testing.T, store *session.Store, client llm
 	return eng
 }
 
-func TestConfigureAppTestServerPortKeepsAddressBoundUntilServerStarts(t *testing.T) {
-	release := reserveAppTestServerPort(t)
-	address := net.JoinHostPort(
-		os.Getenv("KENT_SERVER_HOST"),
-		os.Getenv("KENT_SERVER_PORT"),
-	)
-	if listener, err := net.Listen("tcp", address); err == nil {
-		_ = listener.Close()
-		t.Fatalf("test server port %q was not held", address)
-	}
-	release()
-	listener, err := net.Listen("tcp", address)
-	if err != nil {
-		t.Fatalf("bind released test server port %q: %v", address, err)
-	}
-	if err := listener.Close(); err != nil {
-		t.Fatalf("close released test server port %q: %v", address, err)
-	}
-}
-
 func mustRegisterAppBinding(t *testing.T, persistenceRoot string, workspaceRoot string) metadata.Binding {
 	t.Helper()
-	prepareAppTestPersistenceRoot(t, persistenceRoot)
+	testsetup.PrepareMetadataPersistenceRoot(t, persistenceRoot)
 	binding, err := metadata.RegisterBinding(context.Background(), persistenceRoot, workspaceRoot)
 	if err != nil {
 		t.Fatalf("RegisterBinding: %v", err)
 	}
 	return binding
-}
-
-func prepareAppTestPersistenceRoot(t *testing.T, persistenceRoot string) {
-	t.Helper()
-	testsetup.PrepareMetadataPersistenceRoot(t, persistenceRoot)
 }
 
 func createAuthoritativeAppSession(t *testing.T, persistenceRoot string, workspaceRoot string) *session.Store {

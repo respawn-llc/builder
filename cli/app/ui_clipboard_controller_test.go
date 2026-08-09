@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"testing"
 
-	"core/server/auth"
+	"core/shared/serverapi"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -91,9 +91,9 @@ func (secretClipboardExitError) ExitCode() int {
 }
 
 func TestClipboardPasteMainReturnsAutocompleteRefreshCommand(t *testing.T) {
-	store := &countingAuthStore{}
+	authStatus := &staticAuthStatusClient{response: authStatusResponse(serverapi.AuthStatusMethodNone)}
 	m := newProjectedStaticUIModel(WithUIStatusConfig(uiStatusConfig{
-		AuthManager: auth.NewManager(store, nil, nil),
+		AuthStatus: authStatus,
 	}))
 	m.replaceMainInputAtEnd("/l")
 
@@ -110,8 +110,8 @@ func TestClipboardPasteMainReturnsAutocompleteRefreshCommand(t *testing.T) {
 		next, _ = updated.Update(msg)
 		updated = next.(*uiModel)
 	}
-	if store.loads != 1 || updated.authSlashLoading {
-		t.Fatalf("auth refresh state = loads:%d loading:%v, want loads:1 loading:false", store.loads, updated.authSlashLoading)
+	if authStatus.calls != 1 || updated.authSlashLoading {
+		t.Fatalf("auth refresh state = calls:%d loading:%v, want calls:1 loading:false", authStatus.calls, updated.authSlashLoading)
 	}
 }
 

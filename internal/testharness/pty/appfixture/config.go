@@ -12,12 +12,9 @@ import (
 	"core/server/metadata"
 )
 
-func PrepareConfigAndBinding(ctx context.Context, persistenceRoot string, workspaceRoot string) error {
-	return PrepareConfigAndBindingWithOptions(ctx, persistenceRoot, workspaceRoot, ConfigOptions{})
-}
-
 type ConfigOptions struct {
 	LifecycleHookCommand []string
+	OpenAIBaseURL        *string
 }
 
 func PrepareConfigAndBindingWithOptions(
@@ -45,9 +42,17 @@ func WriteConfigWithOptions(ctx context.Context, persistenceRoot string, options
 	}
 	configPath := filepath.Join(persistenceRoot, "config.toml")
 	var config strings.Builder
+	baseURL := "http://127.0.0.1:1/v1"
+	if options.OpenAIBaseURL != nil {
+		baseURL = strings.TrimSpace(*options.OpenAIBaseURL)
+		if baseURL == "" {
+			return fmt.Errorf("OpenAI base URL cannot be blank")
+		}
+	}
 	fmt.Fprintf(
 		&config,
-		"model = \"gpt-5\"\nprovider_override = \"openai\"\nopenai_base_url = \"http://127.0.0.1:1/v1\"\nserver_port = %d\ntheme = \"dark\"\n",
+		"model = \"gpt-5\"\nprovider_override = \"openai\"\nopenai_base_url = %s\nserver_port = %d\ntheme = \"dark\"\n",
+		strconv.Quote(baseURL),
 		port,
 	)
 	if len(options.LifecycleHookCommand) > 0 {

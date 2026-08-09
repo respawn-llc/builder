@@ -3,13 +3,13 @@ package status
 import (
 	"context"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	"core/prompts"
 	"core/server/runtime"
 	"core/shared/apicontract"
-	"core/shared/auth"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/runtimeids"
@@ -17,14 +17,7 @@ import (
 	"core/shared/textutil"
 )
 
-const DefaultUsageBaseURL = "https://chatgpt.com/backend-api"
-
-type UsagePayloadFetcher func(context.Context, string, auth.State) (UsagePayload, error)
-
 type Collector struct {
-	AuthManager            AuthStateResolver
-	UsagePayloadFetcher    UsagePayloadFetcher
-	UsageBaseURL           string
 	RequestTimeout         time.Duration
 	GitTimeout             time.Duration
 	SessionNameReadTimeout time.Duration
@@ -44,17 +37,8 @@ func (c Collector) Collect(ctx context.Context, req Request) (Snapshot, error) {
 	snapshot.SkillTokenCounts = envResult.SkillTokenCounts
 	snapshot.AgentsPaths = envResult.AgentsPaths
 	snapshot.AgentTokenCounts = envResult.AgentTokenCounts
-	warnings := make([]string, 0, 3)
-	if strings.TrimSpace(snapshot.CollectorWarning) != "" {
-		warnings = append(warnings, strings.TrimSpace(snapshot.CollectorWarning))
-	}
-	if strings.TrimSpace(authResult.Warning) != "" {
-		warnings = append(warnings, strings.TrimSpace(authResult.Warning))
-	}
-	if strings.TrimSpace(envResult.CollectorWarning) != "" {
-		warnings = append(warnings, strings.TrimSpace(envResult.CollectorWarning))
-	}
-	snapshot.CollectorWarning = strings.Join(warnings, " | ")
+	snapshot.CollectorWarning = JoinWarnings(snapshot.CollectorWarning, authResult.Warning)
+	snapshot.CollectorWarning = JoinWarnings(snapshot.CollectorWarning, envResult.CollectorWarning)
 	return snapshot, nil
 }
 
@@ -96,7 +80,6 @@ func (c Collector) CollectBase(req Request) Snapshot {
 		AgentRole:            textutil.Pointer(req.AgentRole),
 		PreviousSessionID:    previousSessionID,
 		ParentAgentSessionID: parentAgentSessionID,
-		OwnsServer:           req.OwnsServer,
 		Context:              contextInfo,
 		Model:                ModelInfo{Summary: ModelSummary(req)},
 		Config: ConfigInfo{
@@ -120,44 +103,30 @@ func (c Collector) EnrichBase(ctx context.Context, req Request, snapshot Snapsho
 			snapshot.AgentRole = textutil.Pointer(currentSession.AgentRole)
 		}
 	}
-	if snapshot.PreviousSessionID != nil {
-		previousSessionName, err := c.ResolveSessionName(ctx, req.SessionViews, snapshot.PreviousSessionID.String())
-		if strings.TrimSpace(previousSessionName) != "" {
-			snapshot.PreviousSessionName = previousSessionName
-		}
-		if err != nil {
-			snapshot.CollectorWarning = JoinWarnings(snapshot.CollectorWarning, "previous session: "+err.Error())
-		}
-	}
-	if snapshot.ParentAgentSessionID != nil {
-		parentAgentSessionName, err := c.ResolveSessionName(ctx, req.SessionViews, snapshot.ParentAgentSessionID.String())
-		if strings.TrimSpace(parentAgentSessionName) != "" {
-			snapshot.ParentAgentSessionName = parentAgentSessionName
-		}
-		if err != nil {
-			snapshot.CollectorWarning = JoinWarnings(snapshot.CollectorWarning, "parent agent session: "+err.Error())
-		}
-	}
+	var warning string
+	snapshot.PreviousSessionName, warning = c.relatedSessionName(ctx, req.SessionViews, snapshot.PreviousSessionID, "previous session")
+	snapshot.CollectorWarning = JoinWarnings(snapshot.CollectorWarning, warning)
+	snapshot.ParentAgentSessionName, warning = c.relatedSessionName(ctx, req.SessionViews, snapshot.ParentAgentSessionID, "parent agent session")
+	snapshot.CollectorWarning = JoinWarnings(snapshot.CollectorWarning, warning)
 	return snapshot
 }
 
 func JoinWarnings(existing string, warning string) string {
-	parts := make([]string, 0, 2)
-	if trimmed := strings.TrimSpace(existing); trimmed != "" {
-		parts = append(parts, trimmed)
-	}
-	if trimmed := strings.TrimSpace(warning); trimmed != "" {
-		parts = append(parts, trimmed)
-	}
-	return strings.Join(parts, " | ")
+	parts := []string{strings.TrimSpace(existing), strings.TrimSpace(warning)}
+	return strings.Join(slices.DeleteFunc(parts, func(value string) bool {
+		return value == ""
+	}), " | ")
 }
 
-func (c Collector) ResolveSessionName(ctx context.Context, sessionViews apicontract.SessionViewService, sessionID string) (string, error) {
-	sessionView, err := c.resolveSessionView(ctx, sessionViews, sessionID)
-	if err != nil {
-		return "", err
+func (c Collector) relatedSessionName(ctx context.Context, sessionViews apicontract.SessionViewService, sessionID *runtimeids.SessionID, label string) (string, string) {
+	if sessionID == nil {
+		return "", ""
 	}
-	return strings.TrimSpace(sessionView.SessionName), nil
+	sessionView, err := c.resolveSessionView(ctx, sessionViews, sessionID.String())
+	if err != nil {
+		return "", label + ": " + err.Error()
+	}
+	return strings.TrimSpace(sessionView.SessionName), ""
 }
 
 func (c Collector) resolveSessionView(ctx context.Context, sessionViews apicontract.SessionViewService, sessionID string) (clientui.RuntimeSessionView, error) {
@@ -182,67 +151,14 @@ func (c Collector) resolveSessionView(ctx context.Context, sessionViews apicontr
 }
 
 func (c Collector) CollectAuth(ctx context.Context, req Request, _ Snapshot) AuthStageResult {
-	if req.AuthStatus != nil {
-		resp, err := req.AuthStatus.GetAuthStatus(ctx, serverapi.AuthStatusRequest{})
-		if err != nil {
-			errText := err.Error()
-			return AuthStageResult{
-				Auth:         AuthInfo{Summary: "Auth unavailable", Details: []string{errText}, Visible: true},
-				Subscription: SubscriptionInfo{Applicable: true, Summary: "Subscription unavailable: " + errText, Error: errText},
-				Warning:      "auth: " + errText,
-			}
-		}
-		return AuthStageResult{
-			Auth: AuthInfo{
-				Summary:     strings.TrimSpace(resp.Auth.Summary),
-				Details:     append([]string(nil), resp.Auth.Details...),
-				Visible:     resp.Auth.Visible,
-				Method:      resp.Auth.Method,
-				Provider:    strings.TrimSpace(resp.Auth.Provider),
-				Unavailable: resp.Auth.Unavailable,
-			},
-			Subscription: SubscriptionInfo{
-				Applicable: resp.Subscription.Applicable,
-				Summary:    strings.TrimSpace(resp.Subscription.Summary),
-				Error:      strings.TrimSpace(resp.Subscription.Error),
-				Windows:    SubscriptionWindowsFromAPI(resp.Subscription.Windows),
-			},
-			Warning: strings.TrimSpace(resp.Warning),
-		}
+	if req.AuthStatus == nil {
+		return AuthStageResult{}
 	}
-	state := auth.EmptyState()
-	authStateErr := error(nil)
-	authManager := NormalizeAuthStateResolver(c.AuthManager)
-	if authManager != nil {
-		loaded, loadErr := authManager.Load(ctx)
-		if loadErr != nil {
-			authStateErr = loadErr
-		} else {
-			state = loaded
-			resolved, resolveErr := authManager.CurrentState(ctx)
-			if resolveErr == nil {
-				state = resolved
-			} else {
-				authStateErr = resolveErr
-			}
-		}
+	response, err := req.AuthStatus.GetAuthStatus(ctx, serverapi.AuthStatusRequest{})
+	if err != nil {
+		return UnavailableAuthStage(err)
 	}
-	usageFetcher := c.UsagePayloadFetcher
-	if usageFetcher == nil {
-		usageFetcher = FetchUsagePayload
-	}
-	usageBaseURL := strings.TrimSpace(c.UsageBaseURL)
-	if usageBaseURL == "" {
-		usageBaseURL = DefaultUsageBaseURL
-	}
-	result := AuthStageResult{
-		Auth:         BuildAuthInfo(state, req.Settings, authStateErr),
-		Subscription: CollectSubscriptionStatus(ctx, req, state, authStateErr, usageFetcher, usageBaseURL),
-	}
-	if authStateErr != nil {
-		result.Warning = "auth: " + authStateErr.Error()
-	}
-	return result
+	return AuthStageFromResponse(response)
 }
 
 func (c Collector) CollectGit(ctx context.Context, req Request, _ Snapshot) GitStageResult {
@@ -254,8 +170,7 @@ func (c Collector) CollectGit(ctx context.Context, req Request, _ Snapshot) GitS
 }
 
 func (Collector) CollectEnvironment(_ context.Context, req Request, _ Snapshot) EnvironmentStageResult {
-	policy := config.ResolveSkillPolicy(req.Settings)
-	result := EnvironmentStageResult{SkillPolicy: policy}
+	result := EnvironmentStageResult{SkillPolicy: config.ResolveSkillPolicy(req.Settings)}
 	warnings := make([]string, 0, 3)
 	workspaceRoot := EnvironmentRoot(req.WorkspaceRoot, ExecutionTarget(req))
 	if recovered, err := prompts.RecoveredRootNonEmptyFor(req.PersistenceRoot); err != nil {
@@ -267,7 +182,7 @@ func (Collector) CollectEnvironment(_ context.Context, req Request, _ Snapshot) 
 			warnings = append(warnings, warning)
 		}
 	}
-	inspectedSkills, skillsErr := runtime.InspectSkills(workspaceRoot, req.PersistenceRoot, policy)
+	inspectedSkills, skillsErr := runtime.InspectSkills(workspaceRoot, req.PersistenceRoot, result.SkillPolicy)
 	if skillsErr != nil {
 		warnings = append(warnings, "skills: "+skillsErr.Error())
 	} else {

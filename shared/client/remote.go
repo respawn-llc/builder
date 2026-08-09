@@ -269,7 +269,14 @@ func (c *Remote) AcknowledgeNoAuth(ctx context.Context, req serverapi.AuthAcknow
 }
 
 func (c *Remote) GetAuthStatus(ctx context.Context, req serverapi.AuthStatusRequest) (serverapi.AuthStatusResponse, error) {
-	return callUnscopedRPC[serverapi.AuthStatusRequest, serverapi.AuthStatusResponse](c, ctx, protocol.MethodAuthGetStatus, req)
+	response, err := callUnscopedRPC[serverapi.AuthStatusRequest, serverapi.AuthStatusResponse](c, ctx, protocol.MethodAuthGetStatus, req)
+	if err != nil {
+		return serverapi.AuthStatusResponse{}, err
+	}
+	if err := response.Validate(); err != nil {
+		return serverapi.AuthStatusResponse{}, fmt.Errorf("validate auth status response: %w", err)
+	}
+	return response, nil
 }
 
 func (c *Remote) ListProjects(ctx context.Context, req serverapi.ProjectListRequest) (serverapi.ProjectListResponse, error) {

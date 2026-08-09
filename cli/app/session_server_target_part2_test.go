@@ -2,96 +2,15 @@ package app
 
 import (
 	"context"
-	"core/cli/app/internal/status"
-	"core/server/auth"
-	"core/server/authservice"
-	serverstartup "core/server/startup"
-	"core/shared/clientui"
-	"core/shared/config"
-	"core/shared/serverapi"
-	"core/shared/toolspec"
 	"io"
-	"path/filepath"
 	"testing"
 	"time"
+
+	serverstartup "core/server/startup"
+	"core/shared/clientui"
+	"core/shared/serverapi"
+	"core/shared/toolspec"
 )
-
-func TestStartEmbeddedServerUnknownWorkspaceCreateProjectFlowCanPlanSession(t *testing.T) {
-	home := newAppTestHome(t)
-	workspace := t.TempDir()
-	if _, _, err := config.WriteDefaultSettingsFileAt(filepath.Join(home, config.ConfigDirName, "config.toml")); err != nil {
-		t.Fatalf("write test settings: %v", err)
-	}
-	cfg := loadAppTestConfig(t, workspace, config.LoadOptions{})
-	store := auth.NewFileStore(config.GlobalAuthConfigPath(cfg))
-	if err := store.Save(context.Background(), auth.State{
-		Scope: auth.ScopeGlobal,
-		Method: auth.Method{
-			Type:   auth.MethodAPIKey,
-			APIKey: &auth.APIKeyMethod{Key: "test-key"},
-		},
-		UpdatedAt: time.Now().UTC(),
-	}); err != nil {
-		t.Fatalf("save auth state: %v", err)
-	}
-
-	originalPicker := runProjectBindingPickerFlow
-	originalPrompt := runProjectNamePromptFlow
-	t.Cleanup(func() {
-		runProjectBindingPickerFlow = originalPicker
-		runProjectNamePromptFlow = originalPrompt
-	})
-	runProjectBindingPickerFlow = func(projects []clientui.ProjectSummary, theme string) (projectBindingPickerResult, error) {
-		if len(projects) != 0 {
-			t.Fatalf("expected no existing projects, got %+v", projects)
-		}
-		return projectBindingPickerResult{CreateNew: true}, nil
-	}
-	runProjectNamePromptFlow = func(defaultName string, theme string) (string, error) {
-		if want := filepath.Base(workspace); defaultName != want {
-			t.Fatalf("default project name = %q, want %q", defaultName, want)
-		}
-		return "Created From Startup", nil
-	}
-
-	t.Log("starting embedded server")
-	server, err := startAppTestEmbeddedServer(t, context.Background(), Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, newHeadlessAuthInteractor(), false)
-	if err != nil {
-		t.Fatalf("startEmbeddedServer: %v", err)
-	}
-	defer func() { _ = server.Close() }()
-
-	t.Log("binding unknown workspace")
-	bound, err := ensureInteractiveProjectBinding(context.Background(), server)
-	if err != nil {
-		t.Fatalf("ensureInteractiveProjectBinding: %v", err)
-	}
-	if got := bound.ProjectID(); got == "" {
-		t.Fatal("expected bound project id after create-project flow")
-	}
-
-	t.Log("planning interactive session")
-	planner := newSessionLaunchPlanner(bound)
-	plan, err := planner.PlanSession(context.Background(), sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())})
-	if err != nil {
-		t.Fatalf("PlanSession: %v", err)
-	}
-	canonicalWorkspace, err := filepath.EvalSymlinks(workspace)
-	if err != nil {
-		t.Fatalf("EvalSymlinks workspace: %v", err)
-	}
-	if plan.ExecutionTarget.EffectiveWorkdir != canonicalWorkspace {
-		t.Fatalf("plan execution workdir = %q, want %q", plan.ExecutionTarget.EffectiveWorkdir, canonicalWorkspace)
-	}
-	resolved, err := bound.ProjectViewClient().ResolveProjectPath(context.Background(), serverapi.ProjectResolvePathRequest{Path: workspace})
-	if err != nil {
-		t.Fatalf("ResolveProjectPath: %v", err)
-	}
-	t.Log("resolved created binding")
-	if resolved.Binding == nil || resolved.Binding.ProjectName != "Created From Startup" {
-		t.Fatalf("expected created binding metadata, got %+v", resolved.Binding)
-	}
-}
 
 func TestRemoteNoAuthUnregisteredWorkspaceBindingCanPrepareRuntime(t *testing.T) {
 	newAppTestHome(t)
@@ -155,102 +74,6 @@ func TestRemoteNoAuthUnregisteredWorkspaceBindingCanPrepareRuntime(t *testing.T)
 	runtimePlan.Close()
 	if hits.Load() != 1 {
 		t.Fatalf("expected fake LLM call once, got %d", hits.Load())
-	}
-}
-
-func TestRemoteSessionStatusDoesNotReuseLocalAuthState(t *testing.T) {
-	_, workspace := newRegisteredAppWorkspace(t)
-
-	originalFetcher := authservice.DefaultUsagePayloadFetcher
-	defer func() { authservice.DefaultUsagePayloadFetcher = originalFetcher }()
-	called := false
-	authservice.DefaultUsagePayloadFetcher = func(_ context.Context, baseURL string, state auth.State) (authservice.UsagePayload, error) {
-		called = true
-		return authservice.UsagePayload{PlanType: "pro"}, nil
-	}
-
-	startConfiguredDaemonFixture(t, workspace, serverstartup.Request{
-		WorkspaceRoot:         workspace,
-		WorkspaceRootExplicit: true,
-		Model:                 "gpt-5",
-	}, memoryAuthHandler{state: auth.State{
-		Scope: auth.ScopeGlobal,
-		Method: auth.Method{
-			Type: auth.MethodOAuth,
-			OAuth: &auth.OAuthMethod{
-				AccessToken: "server-access-token",
-				AccountID:   "server-acct",
-				Email:       "user@example.com",
-			},
-		},
-		UpdatedAt: time.Now().UTC(),
-	}})
-
-	loadCfg := loadAppTestConfig(t, workspace, config.LoadOptions{})
-	store := auth.NewFileStore(config.GlobalAuthConfigPath(loadCfg))
-	if err := store.Save(context.Background(), auth.State{
-		Scope: auth.ScopeGlobal,
-		Method: auth.Method{
-			Type:   auth.MethodAPIKey,
-			APIKey: &auth.APIKeyMethod{Key: "local-key"},
-		},
-		UpdatedAt: time.Now().UTC(),
-	}); err != nil {
-		t.Fatalf("save auth state: %v", err)
-	}
-
-	interactor := &interactiveAuthInteractor{
-		pickMethod: func(authInteraction) (authMethodPickerResult, error) {
-			t.Fatal("remote startup validation must not open auth picker when server auth is ready")
-			return authMethodPickerResult{}, nil
-		},
-	}
-	server, err := startSessionServer(context.Background(), Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, interactor, true)
-	if err != nil {
-		t.Fatalf("startSessionServer: %v", err)
-	}
-	t.Cleanup(func() { closeInteractiveSessionServer(t, server) })
-	if _, ok := server.(*remoteAppServer); !ok {
-		t.Fatalf("expected remote app server, got %T", server)
-	}
-
-	planner := newSessionLaunchPlanner(server)
-	plan, err := planner.PlanSession(context.Background(), sessionLaunchRequest{Mode: launchModeInteractive, Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())})
-	if err != nil {
-		t.Fatalf("PlanSession: %v", err)
-	}
-	if plan.StatusConfig.OwnsServer {
-		t.Fatal("expected attached configured service to be reported as not owned")
-	}
-	if plan.StatusConfig.AuthManager != nil {
-		t.Fatal("expected remote session status to avoid local auth manager")
-	}
-	if plan.StatusConfig.AuthStatePath != "" {
-		t.Fatalf("expected empty remote auth state path, got %q", plan.StatusConfig.AuthStatePath)
-	}
-
-	collector := defaultUIStatusCollector{authManager: plan.StatusConfig.AuthManager}
-	snapshot, err := collector.Collect(context.Background(), populateStatusRequestCacheKeys(uiStatusRequest{
-		WorkspaceRoot:     plan.StatusConfig.WorkspaceRoot,
-		PersistenceRoot:   plan.StatusConfig.PersistenceRoot,
-		Settings:          plan.StatusConfig.Settings,
-		Source:            plan.StatusConfig.Source,
-		AuthCacheIdentity: status.AuthCacheIdentity(plan.StatusConfig.AuthManager),
-		AuthStatus:        plan.StatusConfig.AuthStatus,
-		AuthStatePath:     plan.StatusConfig.AuthStatePath,
-		OwnsServer:        plan.StatusConfig.OwnsServer,
-	}))
-	if err != nil {
-		t.Fatalf("collect status: %v", err)
-	}
-	if got := snapshot.Auth.Summary; got != "user@example.com" {
-		t.Fatalf("auth summary = %q", got)
-	}
-	if !snapshot.Subscription.Applicable || snapshot.Subscription.Summary != "Pro subscription" {
-		t.Fatalf("expected remote status subscription to come from server auth, got %+v", snapshot.Subscription)
-	}
-	if !called {
-		t.Fatal("expected remote session status to fetch subscription through server auth")
 	}
 }
 
@@ -322,7 +145,7 @@ func TestStartSessionServerUsesConfiguredDaemonForPromptRoundTrip(t *testing.T) 
 		WorkspaceRoot:         workspace,
 		WorkspaceRootExplicit: true,
 		Model:                 "gpt-5",
-		OpenAIBaseURL:         model.URL,
+		OpenAIBaseURL:         model.URL(),
 		OpenAIBaseURLExplicit: true,
 	}, apiKeyMemoryAuthHandler("test-key"))
 

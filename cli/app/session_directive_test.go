@@ -7,11 +7,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 
-	"core/server/metadata"
-	"core/shared/clientui"
-	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/textutil"
@@ -111,73 +107,6 @@ func TestSessionLifecycleResultExitIsClientLocalStop(t *testing.T) {
 	}
 }
 
-func TestSessionLifecycleResultResumeReleasesThenUsesSamePickerWithoutPlan(t *testing.T) {
-	releaseCalls := 0
-	planCalls := 0
-	binding := metadataBindingForLifecycleResult()
-	server := &testEmbeddedServer{
-		cfg: config.App{
-			WorkspaceRoot:   binding.workspaceRoot,
-			PersistenceRoot: t.TempDir(),
-			Settings:        config.Settings{Theme: "dark"},
-		},
-		projectID: binding.projectID,
-		projectViewClient: sessionLifecycleProjectViewClient(
-			binding.binding,
-			binding.workspaceRoot,
-			[]clientui.SessionSummary{sessionLifecycleSessionSummary(t, "other", time.Now().UTC())},
-		),
-		sessionLaunch: stubSessionLaunchClient{planSession: func(context.Context, serverapi.SessionPlanRequest) (serverapi.SessionPlanResponse, error) {
-			planCalls++
-			return serverapi.SessionPlanResponse{}, nil
-		}},
-	}
-	planner := newSessionLaunchPlanner(server)
-	planner.pickSession = func(
-		context.Context,
-		sessionPageLoader,
-		string,
-		sessionPickerHeaderInfo,
-	) (sessionPickerResult, error) {
-		if releaseCalls != 1 {
-			t.Fatalf("picker opened before runtime release: releases=%d", releaseCalls)
-		}
-		return newSessionPickerCancelResult(), nil
-	}
-
-	result, err := resolveAndReleaseSessionAction(
-		context.Background(),
-		narrowSessionLifecycleServer{lifecycle: &recordingSessionLifecycleClient{
-			resolveTransition: func(context.Context, serverapi.SessionResolveTransitionRequest) (serverapi.SessionDirective, error) {
-				return serverapi.SelectSessionDirective(serverapi.SessionAuthPreparationKeepCurrent), nil
-			},
-		}},
-		nil,
-		"origin",
-		UITransition{Action: UIActionResume},
-		&runtimeLaunchPlan{close: func() error {
-			releaseCalls++
-			return nil
-		}},
-		nil,
-	)
-	if err != nil {
-		t.Fatalf("resolveAndReleaseSessionAction: %v", err)
-	}
-	if result.Kind() != serverapi.SessionDirectiveSelectSession {
-		t.Fatalf("result kind = %q, want select session", result.Kind())
-	}
-	if _, err := planner.selectSession(context.Background(), nil); err != nil {
-		t.Fatalf("selectSession: %v", err)
-	}
-	if planCalls != 0 {
-		t.Fatalf("session plan calls = %d, want zero", planCalls)
-	}
-	if releaseCalls != 1 {
-		t.Fatalf("runtime release calls = %d, want one", releaseCalls)
-	}
-}
-
 func TestSessionLifecycleResultReauthenticationCompletesBeforeDispatch(t *testing.T) {
 	events := make([]string, 0, 3)
 	target := sessionLifecycleSessionID(t, "target-session")
@@ -266,54 +195,6 @@ func requireSessionDirectiveWireEqual(t *testing.T, got serverapi.SessionDirecti
 	}
 }
 
-func TestSessionSelectionPickerCreateSendsCreateNewWithoutParent(t *testing.T) {
-	originalPicker := runSessionPickerFlow
-	defer func() { runSessionPickerFlow = originalPicker }()
-	runSessionPickerFlow = func(
-		context.Context,
-		sessionPageLoader,
-		string,
-		sessionPickerHeaderInfo,
-	) (sessionPickerResult, error) {
-		return newSessionPickerCreateResult(), nil
-	}
-
-	stopErr := errors.New("stop after create-new plan")
-	planCalls := 0
-	binding := metadataBindingForLifecycleResult()
-	server := &testEmbeddedServer{
-		cfg: config.App{
-			WorkspaceRoot:   binding.workspaceRoot,
-			PersistenceRoot: t.TempDir(),
-			Settings:        config.Settings{Theme: "dark"},
-		},
-		projectID: binding.projectID,
-		projectViewClient: sessionLifecycleProjectViewClient(
-			binding.binding,
-			binding.workspaceRoot,
-			nil,
-		),
-		sessionLaunch: stubSessionLaunchClient{planSession: func(_ context.Context, req serverapi.SessionPlanRequest) (serverapi.SessionPlanResponse, error) {
-			planCalls++
-			if req.Intent.Kind() != serverapi.SessionLaunchIntentCreateNew {
-				t.Fatalf("intent kind = %q, want create new", req.Intent.Kind())
-			}
-			origin, present := req.Intent.CreateOrigin()
-			if !present || origin.Kind() != serverapi.SessionCreateOriginIndependent {
-				t.Fatalf("picker create origin = %+v/%v, want independent", origin, present)
-			}
-			return serverapi.SessionPlanResponse{}, stopErr
-		}},
-	}
-
-	if err := runSessionLifecycle(context.Background(), server, nil, ""); !errors.Is(err, stopErr) {
-		t.Fatalf("runSessionLifecycle error = %v, want %v", err, stopErr)
-	}
-	if planCalls != 1 {
-		t.Fatalf("session plan calls = %d, want one", planCalls)
-	}
-}
-
 func TestInitialInputPolicyComesFromLifecycleResultNotTransitionAction(t *testing.T) {
 	target := sessionLifecycleSessionID(t, "target-session")
 	want := serverapi.LaunchSessionDirective(
@@ -374,27 +255,6 @@ func TestSessionTransitionInitialInputPreservesOpenSessionOmission(t *testing.T)
 	}
 	if recorded.Transition.InitialInput != nil {
 		t.Fatalf("open Session emitted initial input = %q, want absent", *recorded.Transition.InitialInput)
-	}
-}
-
-type lifecycleResultBinding struct {
-	projectID     string
-	workspaceRoot string
-	binding       metadata.Binding
-}
-
-func metadataBindingForLifecycleResult() lifecycleResultBinding {
-	const projectID = "project-1"
-	const workspaceID = "workspace-1"
-	workspaceRoot := "/tmp/lifecycle-result-workspace"
-	return lifecycleResultBinding{
-		projectID:     projectID,
-		workspaceRoot: workspaceRoot,
-		binding: metadata.Binding{
-			ProjectID:     projectID,
-			WorkspaceID:   workspaceID,
-			CanonicalRoot: workspaceRoot,
-		},
 	}
 }
 

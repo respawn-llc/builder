@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"core/internal/testharness/testsetup"
 	"core/shared/clientui"
 	"core/shared/llmerrors"
 	"core/shared/protocol"
@@ -429,6 +430,71 @@ func remoteDefaultBlankWorkflowIDResponse() map[string]any {
 func TestDialRemoteWithTransportRejectsBlankSessionID(t *testing.T) {
 	if _, err := newRemoteSessionAttachmentIntent(" \t "); !errors.Is(err, errRemoteSessionIDRequired) {
 		t.Fatalf("intent error = %v, want required session ID error", err)
+	}
+}
+
+func TestRemoteGetAuthStatusRoundTripsTypedFactsAndRejectsMalformedResponse(t *testing.T) {
+	tests := []struct {
+		name     string
+		response serverapi.AuthStatusResponse
+		wantErr  bool
+	}{}
+	for _, fixture := range testsetup.AuthStatusTransportCases() {
+		tests = append(tests, struct {
+			name     string
+			response serverapi.AuthStatusResponse
+			wantErr  bool
+		}{name: fixture.Name, response: fixture.Response})
+	}
+	tests = append(tests, struct {
+		name     string
+		response serverapi.AuthStatusResponse
+		wantErr  bool
+	}{
+		name: "malformed response",
+		response: serverapi.AuthStatusResponse{
+			Resolution: serverapi.AuthStatusResolution{Kind: serverapi.AuthStatusResolutionKnown},
+		},
+		wantErr: true,
+	})
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if !test.wantErr {
+				if err := test.response.Validate(); err != nil {
+					t.Fatalf("test auth status: %v", err)
+				}
+			}
+			server := newRemoteTestServer(t, func(ws *websocket.Conn) {
+				acceptRemoteHandshake(t, ws)
+				var request protocol.Request
+				if err := websocket.JSON.Receive(ws, &request); err != nil {
+					t.Errorf("receive auth status request: %v", err)
+					return
+				}
+				if request.Method != protocol.MethodAuthGetStatus {
+					t.Errorf("method = %q, want %q", request.Method, protocol.MethodAuthGetStatus)
+					return
+				}
+				if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(request.ID, test.response)); err != nil {
+					t.Errorf("send auth status response: %v", err)
+				}
+			})
+			remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
+			if err != nil {
+				t.Fatalf("DialRemoteURL: %v", err)
+			}
+			defer func() { _ = remote.Close() }()
+			got, err := remote.GetAuthStatus(context.Background(), serverapi.AuthStatusRequest{})
+			if test.wantErr {
+				if err == nil {
+					t.Fatal("malformed auth status was accepted")
+				}
+				return
+			}
+			if err != nil || !reflect.DeepEqual(got, test.response) {
+				t.Fatalf("GetAuthStatus = %+v, %v; want %+v", got, err, test.response)
+			}
+		})
 	}
 }
 

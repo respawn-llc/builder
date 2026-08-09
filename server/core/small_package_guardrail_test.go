@@ -103,7 +103,6 @@ func listRepoPackages(t *testing.T, repoRoot string) []smallPackageInfo {
 var allowedSmallPackages = map[string]string{
 	"cmd/dumpmetadataschema":                      "narrow developer-only metadata schema audit command that reuses the authoritative metadata migration and generated-query paths",
 	"cmd/dumpmodelrequest":                        "temporary standalone model-request inspector command that keeps diagnostic request serialization out of production server startup paths",
-	"cli/app/internal/embeddedattach":             "narrow embedded-server attachment seam after absorbing embedded binding/startup helpers",
 	"cli/app/internal/projectbinding":             "interactive project binding workflow seam after absorbing project picker behavior",
 	"cli/app/internal/ptyfixture":                 "test-only compile proof that app-owned PTY fixture packages can import internal runner seams without exporting cli/app harness APIs",
 	"cli/app/internal/remoteattach":               "narrow remote attachment seam after absorbing remote binding",

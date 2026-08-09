@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/url"
 	"strings"
 	"time"
@@ -295,46 +294,6 @@ var runAuthCallbackPage = func(ctx context.Context, data authCallbackPageData, w
 		return authCallbackPageResult{}, nil
 	}
 	return page.result, nil
-}
-
-func (i *interactiveAuthInteractor) runAuthBrowserHybridPage(
-	ctx context.Context,
-	theme string,
-	opts authui.OAuthOptions,
-	session authui.OAuthBrowserSession,
-	openErr error,
-	listener authui.OAuthCallbackListener,
-	complete authui.OAuthCompleteBrowserFlowFunc,
-) (authui.AuthMethod, error) {
-	if listener == nil {
-		return authui.AuthMethod{}, errors.New("oauth callback listener is required")
-	}
-	runPage := i.runCallbackPage
-	if runPage == nil {
-		runPage = runAuthCallbackPage
-	}
-	result, err := runPage(ctx, authCallbackPageData{
-		Theme:        theme,
-		AuthorizeURL: session.AuthorizeURL,
-		OpenErr:      openErr,
-	}, func(waitCtx context.Context) (authui.OAuthBrowserCallback, error) {
-		return listener.Wait(waitCtx, opts.PollTimeout)
-	}, func(completeCtx context.Context, input string) (authui.AuthMethod, error) {
-		return complete(completeCtx, opts, session, input)
-	})
-	if err != nil {
-		return authui.AuthMethod{}, err
-	}
-	if result.Canceled {
-		return authui.AuthMethod{}, ErrAuthCanceledByUser
-	}
-	if result.Err != nil {
-		return authui.AuthMethod{}, result.Err
-	}
-	if strings.TrimSpace(string(result.Method.Type)) == "" {
-		return authui.AuthMethod{}, fmt.Errorf("auth callback did not complete")
-	}
-	return result.Method, nil
 }
 
 func browserCallbackInput(callback authui.OAuthBrowserCallback) string {

@@ -18,8 +18,6 @@ type remoteAppServer struct {
 	remote         *client.Remote
 	identity       protocol.ServerIdentity
 	cfg            config.App
-	closeFn        func() error
-	owns           bool
 	presentation   startupPresentation
 	retarget       *sessionWorkspaceRetargetContext
 	clientSettings config.ClientSettings
@@ -29,19 +27,14 @@ type startupPresentation struct {
 	Theme string
 }
 
-func newRemoteAppServerWithAuth(remote *client.Remote, cfg config.App, closeFn func() error, ownsServer bool) *remoteAppServer {
+func newRemoteAppServerWithAuth(remote *client.Remote, cfg config.App) *remoteAppServer {
 	if remote == nil {
 		return nil
-	}
-	if closeFn == nil {
-		closeFn = remote.Close
 	}
 	server := &remoteAppServer{
 		remote:       remote,
 		identity:     remote.Identity(),
 		cfg:          cfg,
-		closeFn:      closeFn,
-		owns:         ownsServer,
 		presentation: startupPresentation{Theme: theme.Resolve(cfg.Settings.Theme)},
 	}
 	if binding, present := remote.ProjectBinding(); present {
@@ -65,17 +58,10 @@ func (s *remoteAppServer) Close() error {
 	if s == nil {
 		return nil
 	}
-	if s.closeFn != nil {
-		return s.closeFn()
-	}
 	if s.remote == nil {
 		return nil
 	}
 	return s.remote.Close()
-}
-
-func (s *remoteAppServer) OwnsServer() bool {
-	return s != nil && s.owns
 }
 
 func (s *remoteAppServer) Config() config.App {
@@ -102,40 +88,24 @@ func (s *remoteAppServer) workspaceRetargetContext() *sessionWorkspaceRetargetCo
 
 func (s *remoteAppServer) BindProjectWorkspace(ctx context.Context, projectID string, workspaceID string) (interactiveSessionServer, error) {
 	if s == nil {
-		_, err := remoteattach.BindProjectWorkspace(ctx, remoteattach.ProjectWorkspaceBindingRequest{ProjectID: projectID, WorkspaceID: workspaceID})
-		return nil, err
+		return nil, errors.New("remote server is required")
 	}
-	bound, err := remoteattach.BindProjectWorkspace(ctx, remoteattach.ProjectWorkspaceBindingRequest{
-		Current:     s.remote,
-		Config:      s.cfg,
-		ProjectID:   projectID,
-		WorkspaceID: workspaceID,
-		OwnsServer:  s.owns,
-		OwnedClose:  s.closeFn,
-		RootID:      config.ExplicitPersistenceRootID(s.cfg),
-	})
+	bound, err := remoteattach.BindProjectWorkspace(ctx, s.remote, s.cfg, projectID, workspaceID, config.ExplicitPersistenceRootID(s.cfg))
 	if err != nil {
 		return nil, err
 	}
-	binding, present := bound.Remote.ProjectBinding()
+	binding, present := bound.ProjectBinding()
 	if !present {
-		var closeErr error
-		if bound.CloseFn != nil {
-			closeErr = bound.CloseFn()
-		} else {
-			closeErr = bound.Remote.Close()
-		}
+		closeErr := bound.Close()
 		s.remote = nil
-		s.closeFn = nil
 		return nil, errors.Join(errors.New("remote project attachment binding is required"), closeErr)
 	}
 	retargetContext := sessionWorkspaceRetargetContextFromBinding(binding, s.presentation.Theme)
-	next := newRemoteAppServerWithAuth(bound.Remote, s.cfg, bound.CloseFn, s.owns)
+	next := newRemoteAppServerWithAuth(bound, s.cfg)
 	next.presentation = s.presentation
 	next.retarget = retargetContext
 	next.clientSettings = s.clientSettings
 	s.remote = nil
-	s.closeFn = nil
 	return next, nil
 }
 

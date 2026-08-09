@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"core/cli/app/internal/status"
 	"core/shared/apicontract"
 	"core/shared/serverapi"
 
@@ -21,8 +20,6 @@ type sessionPickerHeaderInfo struct {
 	Model         string
 	Auth          string
 	StatusRequest uiStatusRequest
-	AuthManager   status.AuthStateResolver
-	OwnsServer    bool
 	ServerAddress string
 	Notice        *startupPickerNotice
 	updateStatus  apicontract.ServerStatusService
@@ -40,7 +37,6 @@ const (
 	sessionPickerHeaderRowUpdateAvailable
 	sessionPickerHeaderRowUpdateFailed
 	sessionPickerHeaderRowMetadata
-	sessionPickerHeaderRowOwnedServer
 	sessionPickerHeaderRowRemoteServer
 )
 
@@ -79,20 +75,14 @@ func (m *sessionPickerModel) projectHeaderRows(maxWidth int) []sessionPickerHead
 	}
 	lines = append(lines, m.renderHeaderPairLines(gitBranchHeaderSegment(info.Branch), info.CWD, maxWidth)...)
 	lines = append(lines, m.renderHeaderPairLines(info.Auth, info.Model, maxWidth)...)
-	serverLine := m.serverHeaderLine(info)
-	if serverLine != "" {
-		if runewidth.StringWidth(serverLine) > maxWidth {
-			serverLine = truncateQueuedMessageLine(serverLine, maxWidth)
-		}
-		role := sessionPickerHeaderRowRemoteServer
-		if info.OwnsServer {
-			role = sessionPickerHeaderRowOwnedServer
-		}
-		lines = append(lines, sessionPickerHeaderLine{
-			role:  role,
-			plain: serverLine,
-		})
+	serverLine := "Server"
+	if info.ServerAddress != "" {
+		serverLine += " at " + info.ServerAddress
 	}
+	lines = append(lines, sessionPickerHeaderLine{
+		role:  sessionPickerHeaderRowRemoteServer,
+		plain: truncateQueuedMessageLine(serverLine, maxWidth),
+	})
 	return lines
 }
 
@@ -200,13 +190,9 @@ func (m *sessionPickerModel) renderHeaderPairLines(first string, second string, 
 }
 
 func (m *sessionPickerModel) renderHeaderTextLine(text string, maxWidth int) sessionPickerHeaderLine {
-	renderedText := strings.TrimSpace(text)
-	if runewidth.StringWidth(renderedText) > maxWidth {
-		renderedText = truncateSessionPickerHeaderSegment(renderedText, maxWidth)
-	}
 	return sessionPickerHeaderLine{
 		role:  sessionPickerHeaderRowMetadata,
-		plain: renderedText,
+		plain: truncateSessionPickerHeaderSegment(strings.TrimSpace(text), maxWidth),
 	}
 }
 
@@ -215,16 +201,6 @@ func gitBranchHeaderSegment(branch string) string {
 		return "git " + trimmed
 	}
 	return ""
-}
-
-func (m *sessionPickerModel) serverHeaderLine(info sessionPickerHeaderInfo) string {
-	if info.OwnsServer {
-		return "Server owned by this terminal"
-	}
-	if info.ServerAddress == "" {
-		return "Server"
-	}
-	return "Server at " + info.ServerAddress
 }
 
 func maxRenderedHeaderLineWidth(lines []sessionPickerHeaderLine) int {
@@ -267,8 +243,6 @@ func (m *sessionPickerModel) sessionPickerHeaderRowStyle(role sessionPickerHeade
 		return m.styles.headerError, true
 	case sessionPickerHeaderRowMetadata:
 		return m.styles.headerText, true
-	case sessionPickerHeaderRowOwnedServer:
-		return m.styles.headerWarning, true
 	default:
 		return m.styles.headerError, false
 	}

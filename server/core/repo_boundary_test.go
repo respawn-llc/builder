@@ -2,12 +2,15 @@ package core_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -585,8 +588,7 @@ func TestCLIPackagesDoNotImportServerOutsideCompositionBridges(t *testing.T) {
 func allowedCLIServerImports() map[string]map[string]string {
 	return map[string]map[string]string{
 		filepath.Join("cli", "app", "auth_gate.go"): {
-			"core/server/auth":        "auth startup gate owns auth state conversion after deleting the app bridge package",
-			"core/server/authservice": "auth startup gate owns auth flow conversion after deleting the app bridge package",
+			"core/server/auth": "remote auth collection uses provider OAuth primitives at the client boundary",
 		},
 		filepath.Join("cli", "app", "remote_auth_bootstrap.go"): {
 			"core/server/auth": "remote auth bootstrap constructs server auth grants at the startup boundary",
@@ -603,21 +605,11 @@ func allowedCLIServerImports() map[string]map[string]string {
 		filepath.Join("cli", "app", "internal", "status", "statuscollect_environment.go"): {
 			"core/server/runtime": "status collection reads runtime memory status at the CLI status boundary",
 		},
-		filepath.Join("cli", "app", "internal", "authui", "authflowadapter_flow.go"): {
-			"core/server/auth":        "auth adapter intentionally translates server auth types for app startup",
-			"core/server/authservice": "auth adapter intentionally translates server auth-flow types for app startup",
-		},
-		filepath.Join("cli", "app", "internal", "authui", "authoauth_runner.go"): {
-			"core/server/auth": "OAuth runner owns server auth OAuth calls after deleting one-line adapters",
-		},
 		filepath.Join("cli", "app", "internal", "authui", "oauthadapter_oauth.go"): {
 			"core/server/auth": "OAuth adapter re-exports server auth OAuth DTO aliases",
 		},
 		filepath.Join("cli", "app", "internal", "startupconfig", "config.go"): {
 			"core/server/bootstrap": "startup config resolves server bootstrap context at the startup boundary",
-		},
-		filepath.Join("cli", "app", "internal", "embeddedattach", "embeddedstartup_start.go"): {
-			"core/server/startup": "embedded startup is the CLI composition root for server startup",
 		},
 		filepath.Join("cli", "kent", "serve.go"): {
 			"core/server/startup": "kent serve command is a composition root",
@@ -802,36 +794,245 @@ func TestCLIAppStartupEntrypointsUseServerAttach(t *testing.T) {
 	}
 }
 
-func TestCLIAppStartupFilesDoNotReachIntoEmbeddedInternals(t *testing.T) {
+func TestStartServeServerHasOneProductionCallSite(t *testing.T) {
+	wantPath := filepath.Join("cli", "kent", "serve.go")
 	repoRoot := findRepoRoot(t)
-	for _, relPath := range []string{
-		filepath.Join("cli", "app", "session_server_target.go"),
-		filepath.Join("cli", "app", "run_prompt_target.go"),
-		filepath.Join("cli", "app", "session_lifecycle.go"),
-	} {
-		path := filepath.Join(repoRoot, relPath)
-		fileSet := token.NewFileSet()
-		file, err := parser.ParseFile(fileSet, path, nil, parser.SkipObjectResolution)
-		if err != nil {
-			t.Fatalf("parse %s: %v", relPath, err)
+	references, violations := scanStartServeServerReferences(t, repoRoot)
+	violations = append(violations, validateStartServeServerTopology(references, wantPath)...)
+	if len(violations) > 0 {
+		t.Fatalf("startup composition topology violations:\n%s", strings.Join(violations, "\n"))
+	}
+}
+
+func validateStartServeServerTopology(references []startServeServerReference, wantPath string) []string {
+	violations := make([]string, 0)
+	if len(references) != 1 {
+		violations = append(violations, fmt.Sprintf(
+			"StartServeServer production reference count = %d, want exactly 1; references: %v",
+			len(references),
+			references,
+		))
+	} else {
+		reference := references[0]
+		if reference.RelPath != wantPath {
+			violations = append(violations, fmt.Sprintf(
+				"StartServeServer production reference = %s:%d:%d, want %s",
+				reference.RelPath,
+				reference.Position.Line,
+				reference.Position.Column,
+				wantPath,
+			))
 		}
-		violations := make([]string, 0)
-		ast.Inspect(file, func(node ast.Node) bool {
-			selector, ok := node.(*ast.SelectorExpr)
-			if ok && selector.Sel.Name == "inner" {
-				violations = append(violations, relPath+": startup files must use narrow embedded attachments instead of embeddedAppServer.inner")
+		if !reference.DirectCall {
+			violations = append(violations, reference.Position.String()+": StartServeServer must be the direct call target")
+		}
+	}
+	return violations
+}
+
+func TestStartServeServerReferenceScanFindsIndirectAndBuildTaggedUses(t *testing.T) {
+	root := t.TempDir()
+	testsetup.WriteFile(t, filepath.Join(root, "go.mod"), "module core\n\ngo 1.26.4\n")
+	testsetup.WriteFile(t, filepath.Join(root, "server/startup/start.go"), `package startup
+
+func StartServeServer() {}
+
+var samePackageAlias = StartServeServer
+`)
+	testsetup.WriteFile(t, filepath.Join(root, "cli/kent/serve.go"), `package kent
+
+import "core/server/startup"
+
+func serve() {
+	startup.StartServeServer()
+}
+`)
+	testsetup.WriteFile(t, filepath.Join(root, "cli/kent/alias.go"), `package kent
+
+import "core/server/startup"
+
+var indirect = startup.StartServeServer
+`)
+	testsetup.WriteFile(t, filepath.Join(root, "buildonly/alias.go"), `//go:build impossible
+
+package buildonly
+
+import "core/server/startup"
+
+var buildOnly = startup.StartServeServer
+`)
+
+	references, violations := scanStartServeServerReferences(t, root)
+	if len(violations) != 0 {
+		t.Fatalf("fixture scan violations = %v", violations)
+	}
+	want := map[string]bool{
+		filepath.Join("cli", "kent", "serve.go"):       true,
+		filepath.Join("cli", "kent", "alias.go"):       false,
+		filepath.Join("server", "startup", "start.go"): false,
+		filepath.Join("buildonly", "alias.go"):         false,
+	}
+	if len(references) != 4 {
+		t.Fatalf("fixture references = %+v, want direct plus three indirect references", references)
+	}
+	for _, reference := range references {
+		direct, found := want[reference.RelPath]
+		if !found || reference.DirectCall != direct {
+			t.Fatalf("unexpected fixture reference: %+v", reference)
+		}
+	}
+}
+
+func TestStartServeServerReferenceScanIgnoresShadowedImportAlias(t *testing.T) {
+	root := t.TempDir()
+	testsetup.WriteFile(t, filepath.Join(root, "go.mod"), "module core\n\ngo 1.26.4\n")
+	testsetup.WriteFile(t, filepath.Join(root, "server/startup/start.go"), `package startup
+
+type Request struct{}
+
+func StartServeServer() {}
+`)
+	testsetup.WriteFile(t, filepath.Join(root, "cli/kent/serve.go"), `package kent
+
+import serverstartup "core/server/startup"
+
+var _ serverstartup.Request
+
+type localStartup struct{}
+
+func (localStartup) StartServeServer() {}
+
+func serve(serverstartup localStartup) {
+	serverstartup.StartServeServer()
+}
+`)
+
+	references, scanViolations := scanStartServeServerReferences(t, root)
+	if len(scanViolations) != 0 {
+		t.Fatalf("fixture scan violations = %v", scanViolations)
+	}
+	if len(references) != 0 {
+		t.Fatalf("shadowed import alias references = %+v, want none", references)
+	}
+	topologyViolations := validateStartServeServerTopology(references, filepath.Join("cli", "kent", "serve.go"))
+	if len(topologyViolations) != 1 {
+		t.Fatalf("topology violation count = %d, want 1", len(topologyViolations))
+	}
+}
+
+type startServeServerReference struct {
+	RelPath    string
+	Position   token.Position
+	DirectCall bool
+}
+
+func scanStartServeServerReferences(t *testing.T, repoRoot string) ([]startServeServerReference, []string) {
+	t.Helper()
+	references := make([]startServeServerReference, 0)
+	violations := make([]string, 0)
+	recordReferences := func(source parsedGoSource) {
+		directCalls := make(map[*ast.Ident]struct{})
+		selectorNames := make(map[*ast.Ident]struct{})
+		functionDeclarations := make(map[*ast.Ident]struct{})
+		startupAliases := make(map[string]struct{})
+		for _, spec := range source.File.Imports {
+			importPath, err := strconv.Unquote(spec.Path.Value)
+			if err != nil {
+				violations = append(violations, source.RelPath+": decode import path: "+err.Error())
+				continue
+			}
+			if importPath != "core/server/startup" {
+				continue
+			}
+			alias := "startup"
+			if spec.Name != nil {
+				alias = spec.Name.Name
+			}
+			if alias == "." || alias == "_" {
+				violations = append(violations, source.RelPath+": startup import must use a selector-capable package name")
+				continue
+			}
+			startupAliases[alias] = struct{}{}
+		}
+		ast.Inspect(source.File, func(node ast.Node) bool {
+			switch typed := node.(type) {
+			case *ast.FuncDecl:
+				functionDeclarations[typed.Name] = struct{}{}
+			case *ast.SelectorExpr:
+				selectorNames[typed.Sel] = struct{}{}
+			case *ast.CallExpr:
+				switch target := typed.Fun.(type) {
+				case *ast.Ident:
+					directCalls[target] = struct{}{}
+				case *ast.SelectorExpr:
+					directCalls[target.Sel] = struct{}{}
+				}
 			}
 			return true
 		})
-		if len(violations) > 0 {
-			t.Fatalf("embedded startup boundary violations:\n%s", strings.Join(violations, "\n"))
+		ast.Inspect(source.File, func(node ast.Node) bool {
+			selector, ok := node.(*ast.SelectorExpr)
+			if !ok || selector.Sel.Name != "StartServeServer" {
+				return true
+			}
+			qualifier, ok := selector.X.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			if qualifier.Obj != nil {
+				return true
+			}
+			if _, importsStartup := startupAliases[qualifier.Name]; !importsStartup {
+				return true
+			}
+			_, direct := directCalls[selector.Sel]
+			references = append(references, startServeServerReference{
+				RelPath: source.RelPath, Position: source.FileSet.Position(selector.Sel.Pos()), DirectCall: direct,
+			})
+			return true
+		})
+		if filepath.ToSlash(filepath.Dir(source.RelPath)) != "server/startup" {
+			return
 		}
+		ast.Inspect(source.File, func(node ast.Node) bool {
+			ident, ok := node.(*ast.Ident)
+			if !ok || ident.Name != "StartServeServer" {
+				return true
+			}
+			if _, declaration := functionDeclarations[ident]; declaration {
+				return true
+			}
+			if _, selector := selectorNames[ident]; selector {
+				return true
+			}
+			_, direct := directCalls[ident]
+			references = append(references, startServeServerReference{
+				RelPath: source.RelPath, Position: source.FileSet.Position(ident.Pos()), DirectCall: direct,
+			})
+			return true
+		})
 	}
+	walkRepositoryGoSources(t, repoRoot, repositoryGoSourceScan{
+		Operation:    "scan StartServeServer production references",
+		Root:         ".",
+		Recursive:    true,
+		IncludeTests: false,
+		Mode:         0,
+		Selection:    allRepositoryGoSources{},
+	}, recordReferences)
+	sort.Slice(references, func(i, j int) bool {
+		if references[i].RelPath != references[j].RelPath {
+			return references[i].RelPath < references[j].RelPath
+		}
+		return references[i].Position.Offset < references[j].Position.Offset
+	})
+	return references, violations
 }
 
 type parsedGoSource struct {
 	RelPath string
 	File    *ast.File
+	FileSet *token.FileSet
 }
 
 type repositoryGoSourceScan struct {
@@ -869,6 +1070,9 @@ func walkRepositoryGoSources(t *testing.T, repoRoot string, scan repositoryGoSou
 			return err
 		}
 		if d.IsDir() {
+			if path == filepath.Join(repoRoot, "tui-rs") {
+				return filepath.SkipDir
+			}
 			if !scan.Recursive && path != root {
 				return filepath.SkipDir
 			}
@@ -889,7 +1093,7 @@ func walkRepositoryGoSources(t *testing.T, repoRoot string, scan repositoryGoSou
 		if relErr != nil {
 			relPath = path
 		}
-		visit(parsedGoSource{RelPath: relPath, File: file})
+		visit(parsedGoSource{RelPath: relPath, File: file, FileSet: fileSet})
 		return nil
 	}); err != nil {
 		t.Fatalf("%s: %v", scan.Operation, err)
@@ -1034,7 +1238,6 @@ func TestCLIAppInternalPackageBoundaries(t *testing.T) {
 		{Name: "ProjectBinding", Packages: []string{"projectbinding"}, Label: "project binding package", ForbidServer: true},
 		{Name: "WorktreeUI", Packages: []string{"worktreeui"}, Label: "worktree UI package", ForbidServer: true},
 		{Name: "StartupConfig", Packages: []string{"startupconfig"}, Label: "startup config package"},
-		{Name: "EmbeddedAttach", Packages: []string{"embeddedattach"}, Label: "embedded attach package"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.Name, func(t *testing.T) {

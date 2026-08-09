@@ -8,9 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"core/cli/app/internal/status"
-	"core/server/auth"
-	"core/server/sessionview"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -144,9 +141,7 @@ func TestStatusRequestCarriesCachedRuntimeAgentRole(t *testing.T) {
 		},
 		hasCachedMainView: true,
 	}
-	model := newProjectedTestUIModel(runtimeClient)
-
-	request := model.newStatusRequest(time.Now())
+	request := newProjectedTestUIModel(runtimeClient).newStatusRequest(time.Now())
 	if request.AgentRole == nil || *request.AgentRole != role {
 		t.Fatalf("status request agent role = %v, want %q", request.AgentRole, role)
 	}
@@ -190,22 +185,6 @@ func TestStatusRefreshUsesCurrentSessionAgentRoleWhenRuntimeCacheIsCold(t *testi
 	t.Fatal("status refresh did not emit a base snapshot")
 }
 
-func TestStatusSessionNameResolvesFromSessionViews(t *testing.T) {
-	persistenceRoot := t.TempDir()
-	parentStore := createAuthoritativeAppSession(t, persistenceRoot, "/tmp/work-a")
-	if err := parentStore.SetName("incident-root"); err != nil {
-		t.Fatalf("set parent name: %v", err)
-	}
-	sessionViews := sessionview.NewService(testSessionViewSessionResolver{store: parentStore}, nil, nil, nil)
-	got, err := status.Collector{SessionNameReadTimeout: uiRuntimeReadTimeout}.ResolveSessionName(context.Background(), sessionViews, parentStore.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("ResolveSessionName: %v", err)
-	}
-	if got != "incident-root" {
-		t.Fatalf("parent session name = %q", got)
-	}
-}
-
 func TestStatusRefreshCmdSchedulesBaseEnrichmentForProgressiveCollector(t *testing.T) {
 	previousSessionID := runtimeids.NewSessionID()
 	sessionViews := stubSessionViewClient{
@@ -246,33 +225,21 @@ func TestStatusRefreshCmdSchedulesBaseEnrichmentForProgressiveCollector(t *testi
 }
 
 func TestStatusRefreshDefersRuntimeAndAuthReadsToCommands(t *testing.T) {
-	store := &countingAuthStore{}
-	manager := auth.NewManager(store, nil, nil)
+	authStatus := &staticAuthStatusClient{response: authStatusResponse(serverapi.AuthStatusMethodNone)}
 	runtimeClient := &statusRefreshRuntimeClient{}
-	model := newProjectedStaticUIModel(WithUIStatusConfig(uiStatusConfig{AuthManager: manager}))
+	model := newProjectedStaticUIModel(WithUIStatusConfig(uiStatusConfig{AuthStatus: authStatus}))
 	model.engine = runtimeClient
 
 	cmd := model.statusRefreshCmd()
 	if cmd == nil {
 		t.Fatal("expected status refresh command")
 	}
-	if runtimeClient.statusCalls != 0 || store.loads != 0 {
-		t.Fatalf("status refresh performed eager reads: runtime=%d auth=%d", runtimeClient.statusCalls, store.loads)
+	if runtimeClient.statusCalls != 0 || authStatus.calls != 0 {
+		t.Fatalf("status refresh performed eager reads: runtime=%d auth=%d", runtimeClient.statusCalls, authStatus.calls)
 	}
 	_ = collectCmdMessages(t, cmd)
-	if runtimeClient.statusCalls == 0 || store.loads == 0 {
-		t.Fatalf("status refresh command reads: runtime=%d auth=%d", runtimeClient.statusCalls, store.loads)
-	}
-}
-
-func TestStatusCollectorPrefersWorkspaceRootForWorkdir(t *testing.T) {
-	workspaceRoot := t.TempDir()
-	snapshot, err := (defaultUIStatusCollector{}).Collect(context.Background(), newStatusRequestForTest(withStatusWorkspaceRoot(workspaceRoot)))
-	if err != nil {
-		t.Fatalf("collect status: %v", err)
-	}
-	if snapshot.Workdir != workspaceRoot || snapshot.Git.Visible {
-		t.Fatalf("snapshot = workdir %q, git visible %t", snapshot.Workdir, snapshot.Git.Visible)
+	if runtimeClient.statusCalls == 0 || authStatus.calls == 0 {
+		t.Fatalf("status refresh command reads: runtime=%d auth=%d", runtimeClient.statusCalls, authStatus.calls)
 	}
 }
 
@@ -283,14 +250,7 @@ type statusRefreshRuntimeClient struct {
 
 func (c *statusRefreshRuntimeClient) Status() clientui.RuntimeStatus {
 	c.statusCalls++
-	parentSessionID, err := runtimeids.ParseSessionID("parent-session")
-	if err != nil {
-		panic(err)
-	}
-	return clientui.RuntimeStatus{
-		PreviousSessionID:         &parentSessionID,
-		NavigationTargetSessionID: &parentSessionID,
-	}
+	return clientui.RuntimeStatus{}
 }
 
 func initStatusLineGitRepo(t *testing.T, branch string) string {
