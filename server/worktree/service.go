@@ -949,7 +949,7 @@ func (s *Service) createAndBindManagedTaskWorktree(ctx context.Context, req mana
 		exemptRoot = &req.ExistingRecord.CanonicalRoot
 	}
 	if err := s.validateManagedRootForCreation(ctx, worktreeRoot, rootKind, exemptRoot); err != nil {
-		return TaskWorktreeMaterialization{}, err
+		return boundManagedTaskWorktree{}, err
 	}
 	cleanup := failedCreateCleanup{
 		workspaceID:   req.Workspace.WorkspaceID,

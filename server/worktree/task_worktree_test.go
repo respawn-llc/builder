@@ -37,36 +37,6 @@ func taskWorktreeBranch(entry serverapi.WorktreeTopologyEntry) string {
 	return *entry.Registered.Git.BranchName
 }
 
-func createExistingOutsideManagedWorktree(t *testing.T, env *serviceTestEnv, branch string) (string, GitRevision, string) {
-	t.Helper()
-	root := filepath.Join(t.TempDir(), "legacy")
-	runGit(t, env.workspaceRoot, "worktree", "add", "-b", branch, root, "HEAD")
-	canonicalRoot, err := config.CanonicalWorkspaceRoot(root)
-	if err != nil {
-		t.Fatalf("CanonicalWorkspaceRoot: %v", err)
-	}
-	worktrees, err := env.service.git.List(env.ctx, env.workspaceRoot)
-	if err != nil {
-		t.Fatalf("git.List: %v", err)
-	}
-	for _, worktree := range worktrees {
-		if worktree.Root != canonicalRoot {
-			continue
-		}
-		head, err := env.service.git.ResolveHEAD(env.ctx, canonicalRoot)
-		if err != nil {
-			t.Fatalf("ResolveHEAD: %v", err)
-		}
-		gitMetadata, err := marshalGitMetadata(worktree)
-		if err != nil {
-			t.Fatalf("marshalGitMetadata: %v", err)
-		}
-		return canonicalRoot, head, gitMetadata
-	}
-	t.Fatalf("created outside managed Worktree %q was not listed", canonicalRoot)
-	return "", GitRevision{}, ""
-}
-
 func prepareManagedTaskExecutionRoot(
 	ctx context.Context,
 	service *Service,
@@ -804,6 +774,36 @@ END`); err != nil {
 	assertFailedTaskWorktreeCreationRolledBack(t, env, task)
 }
 
+func createExistingOutsideManagedWorktree(t *testing.T, env *serviceTestEnv, branch string) (string, GitRevision, string) {
+	t.Helper()
+	root := filepath.Join(t.TempDir(), "legacy")
+	runGit(t, env.workspaceRoot, "worktree", "add", "-b", branch, root, "HEAD")
+	canonicalRoot, err := config.CanonicalWorkspaceRoot(root)
+	if err != nil {
+		t.Fatalf("CanonicalWorkspaceRoot: %v", err)
+	}
+	worktrees, err := env.service.git.List(env.ctx, env.workspaceRoot)
+	if err != nil {
+		t.Fatalf("git.List: %v", err)
+	}
+	for _, worktree := range worktrees {
+		if worktree.Root != canonicalRoot {
+			continue
+		}
+		head, err := env.service.git.ResolveHEAD(env.ctx, canonicalRoot)
+		if err != nil {
+			t.Fatalf("ResolveHEAD: %v", err)
+		}
+		gitMetadata, err := marshalGitMetadata(worktree)
+		if err != nil {
+			t.Fatalf("marshalGitMetadata: %v", err)
+		}
+		return canonicalRoot, head, gitMetadata
+	}
+	t.Fatalf("created outside managed Worktree %q was not listed", canonicalRoot)
+	return "", GitRevision{}, ""
+}
+
 func TestPrepareTaskExecutionRootRequiresResolvedCommit(t *testing.T) {
 	env := newServiceTestEnv(t)
 	task, _ := createTaskWorktreeTestTask(t, env)
@@ -821,7 +821,7 @@ func TestPrepareTaskExecutionRootRequiresResolvedCommit(t *testing.T) {
 	}
 }
 
-func TestMaterializeInitialTaskWorktreeRejectsExistingOutsideNamespaceRoot(t *testing.T) {
+func TestPrepareTaskExecutionRootRejectsExistingOutsideNamespaceRoot(t *testing.T) {
 	env := newServiceTestEnv(t)
 	task, _ := createTaskWorktreeTestTask(t, env)
 	legacyRoot, resolved, gitMetadata := createExistingOutsideManagedWorktree(t, env, "legacy-initial")

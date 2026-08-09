@@ -10,15 +10,20 @@ import {
 } from "@/test-support/task-detail";
 import { parseSetupOperationID } from "@/api";
 import { createTestServices, TestAppProviders } from "@/test-support/app-services";
-import { TaskResumeButton, TaskResumeProvider } from "./TaskResumeButton";
+import { TaskInitiatingActionProvider, TaskResumeButton } from "./TaskResumeButton";
 
 it("hides Resume when its authority is unavailable", () => {
   const services = createTestServices([]);
   render(
     <TestAppProviders services={services}>
-      <TaskResumeProvider authority={{ kind: "unavailable" }} onApplied={() => undefined} taskID="task-1">
+      <TaskInitiatingActionProvider
+        authority={{ kind: "unavailable" }}
+        onApplied={() => undefined}
+        onViewDependencies={() => undefined}
+        taskID="task-1"
+      >
         <TaskResumeButton disabled={false} />
-      </TaskResumeProvider>
+      </TaskInitiatingActionProvider>
     </TestAppProviders>,
   );
 

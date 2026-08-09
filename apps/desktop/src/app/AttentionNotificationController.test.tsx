@@ -4,7 +4,12 @@ import { vi } from "vitest";
 import { createBrowserNativeBridge, type NativeNotificationActivation } from "@app/native-bridge";
 
 import { parseSetupOperationID, type AttentionNotification } from "@/api";
-import { AppServicesProvider, SidebarContext, StatusContext, type SidebarDestination } from "@/app-facade";
+import {
+  AppServicesProvider,
+  SidebarRootContext,
+  StatusContext,
+  type SidebarDestination,
+} from "@/app-facade";
 import { createTestServices } from "@/test-support/app-services";
 import { createTestSidebarController } from "@/test-support/sidebar";
 import {
@@ -42,13 +47,13 @@ it("surfaces one persistent canonical setup notification while no Task route is 
   render(
     <AppServicesProvider services={services}>
       <StatusContext.Provider value={status}>
-        <SidebarContext.Provider
+        <SidebarRootContext.Provider
           value={createTestSidebarController((destination) => {
             destinations.push(destination);
           })}
         >
           <AttentionNotificationController />
-        </SidebarContext.Provider>
+        </SidebarRootContext.Provider>
       </StatusContext.Provider>
     </AppServicesProvider>,
   );
@@ -144,13 +149,13 @@ it("maps native setup-notification activation to exact Task-detail focus", async
   render(
     <AppServicesProvider services={services}>
       <StatusContext.Provider value={{ dismiss: vi.fn(), push: vi.fn() }}>
-        <SidebarContext.Provider
+        <SidebarRootContext.Provider
           value={createTestSidebarController((destination) => {
             destinations.push(destination);
           })}
         >
           <AttentionNotificationController />
-        </SidebarContext.Provider>
+        </SidebarRootContext.Provider>
       </StatusContext.Provider>
     </AppServicesProvider>,
   );
@@ -218,13 +223,13 @@ it.each(["live", "snapshot"] as const)(
             }),
           }}
         >
-          <SidebarContext.Provider
+          <SidebarRootContext.Provider
             value={createTestSidebarController((destination) => {
               destinations.push(destination);
             })}
           >
             <AttentionNotificationController />
-          </SidebarContext.Provider>
+          </SidebarRootContext.Provider>
         </StatusContext.Provider>
       </AppServicesProvider>,
     );

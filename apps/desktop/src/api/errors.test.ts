@@ -14,17 +14,6 @@ import { rpcErrorCodes } from "./rpcErrorCodes";
 
 const labelID = "f74ce532-9e6e-4cf6-b3c1-d67d5a3eedcf";
 
-describe("sidebar missing-entity errors", () => {
-  it("recognizes typed Task and Project missing errors without parsing messages", () => {
-    const error = (code: number, data?: Readonly<Record<string, string>>) =>
-      new RpcError({ code, data, message: "changed", method: "owner.operation" });
-    expect(isTaskMissingError(error(rpcErrorCodes.workflowTaskNotFound))).toBe(true);
-    expect(isProjectMissingError(error(-32000, { reason: "project_not_found" }))).toBe(true);
-    expect(isProjectMissingError(error(rpcErrorCodes.projectNotFound))).toBe(true);
-    expect(isProjectMissingError(new Error("project_not_found"))).toBe(false);
-  });
-});
-
 describe("Workflow Task Move preparation RPC errors", () => {
   it("decodes target preparation with only a retained previous Worktree", () => {
     const decoded = decodeWorkflowTaskMovePreparationError(

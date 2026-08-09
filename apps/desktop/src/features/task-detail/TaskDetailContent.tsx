@@ -422,15 +422,6 @@ function decodeTaskDetailRetainedState(state: unknown): TaskDetailRetainedState 
   return taskDetailRetainedStateSchema.safeParse(state).data;
 }
 
-function canonicalSetupRecovery(items: readonly AttentionItem[]): TaskSetupRecovery | null {
-  for (const item of items) {
-    if (item.kind === "interrupted_current_node" && item.setupRecovery !== null) {
-      return item.setupRecovery;
-    }
-  }
-  return null;
-}
-
 function taskDraft(detail: TaskDetail): TaskDraft {
   return { title: detail.title, body: detail.body };
 }

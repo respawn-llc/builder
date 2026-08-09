@@ -180,14 +180,3 @@ export function TaskStartButton({ disabled }: Readonly<{ disabled: boolean }>) {
     </Button>
   );
 }
-
-function setupRecoveryFailure(recovery: TaskSetupRecovery): TaskSetupRecoveryFailure {
-  return {
-    kind: recovery.cause === "target_preparation" ? "target_preparation" : "setup_script",
-    diagnostic: recovery.diagnostic,
-    scriptPath: null,
-    retainedWorktree: recovery.retainedWorktree === null ? null : { root: recovery.retainedWorktree.root },
-    retainedPreviousWorktree:
-      recovery.retainedPreviousWorktree === null ? null : { root: recovery.retainedPreviousWorktree.root },
-  };
-}

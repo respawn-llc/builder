@@ -250,7 +250,7 @@ func waitForWorkflowTaskRunSession(
 				err,
 			)
 		}
-		if len(detail.CurrentScripts) > 0 || len(detail.LiveSessionIDs) > 0 {
+		if len(detail.CurrentScripts) > 0 || len(detail.LiveSessions) > 0 {
 			return detail, nil
 		}
 		timer := time.NewTimer(interval)

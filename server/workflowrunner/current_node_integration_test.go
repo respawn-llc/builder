@@ -304,6 +304,7 @@ func (f *currentNodeRunnerFixture) createTask(t *testing.T, workflowID runtimeid
 
 func (f *currentNodeRunnerFixture) startTask(t *testing.T, task workflowstore.TaskRecord) workflow.CurrentNodeReference {
 	t.Helper()
+	finalized := make(chan workflowexecution.TaskPreparationFinalization, 1)
 	started, err := f.controller.StartTask(
 		context.Background(),
 		task.ID,
@@ -322,10 +323,20 @@ func (f *currentNodeRunnerFixture) startTask(t *testing.T, task workflowstore.Ta
 				})
 			},
 		},
-		func(workflowexecution.TaskPreparationFinalization) {},
+		func(finalization workflowexecution.TaskPreparationFinalization) {
+			finalized <- finalization
+		},
 	)
 	if err != nil {
 		t.Fatalf("start task: %v", err)
+	}
+	select {
+	case finalization := <-finalized:
+		if finalization.Kind != workflowexecution.TaskPreparationHandedOff {
+			t.Fatalf("task preparation finalization = %+v, want handed off", finalization)
+		}
+	case <-time.After(currentNodeRunnerWait):
+		t.Fatal("task preparation did not hand off to Current Node admission")
 	}
 	if len(started.Mutation.Created) != 1 {
 		t.Fatalf("start mutation = %+v, want one Current Node", started.Mutation)
@@ -1613,6 +1624,7 @@ func TestCurrentNodeRuntimePreparationFailureRetainsAssignedFreshSession(t *test
 	f.clientErr = errors.New("provider unavailable")
 	f.mu.Unlock()
 
+	finalized := make(chan workflowexecution.TaskPreparationFinalization, 1)
 	started, err := f.controller.StartTask(
 		context.Background(),
 		task.ID,
@@ -1631,10 +1643,20 @@ func TestCurrentNodeRuntimePreparationFailureRetainsAssignedFreshSession(t *test
 				})
 			},
 		},
-		func(workflowexecution.TaskPreparationFinalization) {},
+		func(finalization workflowexecution.TaskPreparationFinalization) {
+			finalized <- finalization
+		},
 	)
 	if err != nil {
 		t.Fatalf("start task: %v", err)
+	}
+	select {
+	case finalization := <-finalized:
+		if finalization.Kind != workflowexecution.TaskPreparationHandedOff {
+			t.Fatalf("task preparation finalization = %+v, want handed off", finalization)
+		}
+	case <-time.After(currentNodeRunnerWait):
+		t.Fatal("task preparation did not hand off before runtime preparation")
 	}
 	if len(started.Mutation.Created) != 1 {
 		t.Fatalf("start mutation = %+v, want one Current Node", started.Mutation)
