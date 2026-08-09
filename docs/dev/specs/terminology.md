@@ -178,6 +178,14 @@ Post-completion compaction of a retained Workflow Session before it becomes dorm
 
 The immutable identity of one live agent or Script execution for a Task's Current Node and, when applicable, its parallel branch. Resume creates a new Exact Execution Scope only after the previous scope stops. Only a matching Exact Execution Scope proves that execution is live. Saved Task state, transcript entries, timestamps, Goals, and client state do not prove liveness.
 
+### Run
+
+The process-local Workflow Execution owner for one executable Current Node accepted for admission. A Run is queued before a matching Exact Execution Scope actively executes. A queued Run waiting for capacity or a predecessor is not interruptible. Once it begins potentially blocking preparation or launch, the Run authorizes Interrupt until Exact execution takes over that authority. A fresh user Session activation, explicit attached Session operation that starts agent execution, Task Resume, selected-existing-Session RunPrompt continuation, or healthy Workflow automation may create a Run. Technical reattachment never does. Interactive clients and attached operations may wait for an existing agent Run and use only its still-current Exact Execution Scope. An attachment is not another execution owner. A selected-existing-Session RunPrompt continuation remains idle-only and fails as already running instead of joining an existing Run. Durable interrupted or terminal Current Nodes have no Run. Runs are never persisted or reconstructed after restart.
+
+### Session Runtime Activation Operation
+
+The required typed reason for a Session Runtime activation request. User activation is a newly constructed client activation caused by a fresh user action and may create or join the same Run as Task Resume. Technical reattachment is automatic connection or runtime recovery and may attach to whichever matching Exact execution is live when Kent handles it, but cannot create, resume, join, or wait for a Run. It carries no prior-execution proof. A retry, reconnect, gateway owner, Session row, transcript, or durable Current Node never changes one operation into another.
+
 ### Resource Generation
 
 The version of the live Session resources used by an Exact Execution Scope. Replacing those resources advances the Resource Generation. No stale handle can mutate or close the replacement.
@@ -208,7 +216,7 @@ A non-agent fan-in Node that waits for the required current parallel branches be
 
 ### Task Interrupt
 
-A resumable stop operation for one Session or every Exact Execution Scope on a Task. It waits for affected execution to stop and records the affected Current Nodes as interrupted. It does not delete the Task, Session, or worktree.
+A resumable stop operation for one Session or every interruptible Run on a Task. It durably records the affected Current Nodes as interrupted before stopping their launch or Exact execution. A Run waiting only for capacity or a predecessor is not interruptible. Task Interrupt does not delete the Task, Session, or worktree.
 
 ### Task Delete
 
@@ -236,7 +244,7 @@ The product authority that sequences Workflow lifecycle changes, starts eligible
 
 ### Automatic Intent
 
-A temporary request for Workflow Execution to start eligible work automatically. Automatic Intents are lost on restart and are not reconstructed from saved Task state.
+A temporary description of eligible work that Workflow Execution may accept into a Run. Automatic Intents are lost on restart, are not reconstructed from saved Task state, and never prove Run ownership or liveness.
 
 ### Immutable Live Snapshot
 
@@ -340,7 +348,7 @@ Recovery that erases the Mutable Band, reopens the Session, and appends the acti
 
 ### Active Session Runtime
 
-The shared live resource for one Session. Interactive clients, headless runs, and Workflow execution use the same resource as equal control surfaces. An available but idle Session is not a live execution.
+The shared live resource for one Session. Interactive clients, headless runs, and Workflow execution use the same resource as equal control surfaces. An available but idle Session is not a live execution. Attaching a retained Workflow client requires an atomic Authority check that its expected Exact Execution Scope and Resource Generation are still current. Attachment never creates a replacement as fallback.
 
 ### RuntimeActivity
 

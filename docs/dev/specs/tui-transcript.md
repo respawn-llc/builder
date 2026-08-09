@@ -200,10 +200,16 @@
 - Multiple queued human steering messages flushed at one boundary coalesce into one user message separated by blank lines. Each queued steer issued from another Session remains a separate message.
 - Pending queues have no fixed count limit and are lost on process exit.
 - A mid-turn message becomes durable only when Kent delivers it.
-- Ctrl+C interrupts only an active Agent Turn: stop the current model step and active tool process and keep the app/session alive. It does not cancel a submission before its Agent Turn starts; a submission already sent to the server may start or continue after the client detaches.
+- In an ordinary Session, Ctrl+C interrupts only an active Agent Turn. It stops the current model step and active tool process and keeps the app and Session alive. It does not cancel a submission before its Agent Turn starts. A submission already sent to the server may start or continue after the client detaches.
+- Retained Workflow user activation does not open a transcript while its Run is queued or launching. It returns the ordinary ready Session attachment only after Authority atomically verifies and attaches to the expected still-current Exact Execution Scope and Resource Generation. Opening failure surfaces the activation error without a pre-Exact transcript.
+- Automatic transcript or control recovery uses technical reattachment. It never creates or joins a Workflow Run or waits for future execution. It attaches to the matching Exact execution live when Kent handles the request, or returns unavailable, leaves the Current Node unchanged, and creates no transcript when none is live.
+- In an opened retained Workflow Session, Ctrl+C targets that matching Exact Execution Scope through Workflow Execution. If durable interruption fails, the client surfaces the failure and Exact execution remains active.
+- If the Exact ends while the retained Workflow transcript remains attached, the next explicit message, user shell, or compaction operation creates or joins the Current-Node Run and uses its Workflow-owned Exact scope. The transcript does not need to close and reopen, and no ordinary Session execution is created.
+- If that explicit operation created an interruptible launching Run, Ctrl+C targets the creator operation and restores its text only after Workflow Execution durably interrupts the Current Node and Runtime Command reports canceled-not-committed. A failed interruption leaves the operation and Run unchanged.
+- Transcript opening and reconnection retain the ordinary hydration-first subscription contract and existing Resource Generation ownership.
 - Interrupt injects detail-only developer-role control message `User interrupted you`.
 - Post-interrupt state returns idle with input ready.
-- Resume after interrupt requires explicit user text.
+- Resume after ordinary Session interruption requires explicit user text. A retained Workflow Current Node may Resume through any fresh user-initiated Session activation or an explicit attached message, user-shell, or compaction operation that starts Agent execution. Automatic technical reattachment never Resumes it.
 - Session reopening after a crash or durability-failure retirement follows the fresh-resource recovery contract in `core-runtime-tools.md`. The TUI does not expose a stale tool call as live; otherwise it restores normal state.
 - Failed prompt-history navigation emits plain terminal BEL with no transient UI notification.
 

@@ -160,6 +160,10 @@
 - Run steer never starts or queues work for an idle Session; it fails with the equivalent `kent run --continue <session-id> <message>` command.
 - Run steer invoked from another Session emits each accepted submission as a separate developer-role `agent_steer` message in submission order.
 - `kent run --continue` invoked from another Session that opens an existing Session uses the same `agent_steer` message. Prompts that create a Session retain their ordinary behavior.
+- `kent run --continue` remains an idle-only selected-Session operation.
+- When the selected Session is retained by an interrupted Workflow Current Node, the command preserves its existing selected-Session planning and overrides, caller-origin `agent_steer` wrapping, prompt history, request identity, progress, one non-interactive prompt, timeout and cancellation, headless Question rejection, result waiting, response, and error behavior while executing through a Workflow-owned Run and Exact Execution Scope.
+- If the selected Session has active or retiring execution, or if any queued, launching, Exact, or retiring Workflow Run already owns the retained Current Node, `kent run --continue` returns the existing already-running error before Resume, planning, prompt history, or input. It does not join or steer that Run. `kent run steer` remains the active-execution input command.
+- A retained-Workflow continuation remains one Workflow execution. Task or TUI Resume cannot create a competing Run, Task and Session control target its Exact Execution Scope, and `kent task complete` resolves its Current Node.
 - A steer issued from another Session contains exactly:
 
 ```text
