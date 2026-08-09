@@ -136,6 +136,24 @@ describe("VirtualizedInfiniteList pixel restoration", () => {
     expect(list.scrollTop).toBe(240);
   });
 
+  it("ignores a stale virtual row that starts after the restored offset", () => {
+    const items = Array.from({ length: 20 }, (_value, index) => `item-${index.toString()}`);
+    const request = createVirtualizedPixelOffsetRequest("stale-range", 240);
+    virtualizer.getVirtualItems.mockReturnValue([
+      { end: 360, index: 0, key: "item-0", lane: 0, size: 40, start: 320 },
+    ]);
+    const view = render(<List items={items} request={request} />);
+    const list = screen.getByRole("list");
+    expect(list.scrollTop).toBe(240);
+
+    virtualizer.getVirtualItems.mockReturnValue([
+      { end: 280, index: 6, key: "item-6", lane: 0, size: 40, start: 240 },
+    ]);
+    view.rerender(<List items={items} request={request} />);
+
+    expect(list.scrollTop).toBe(240);
+  });
+
   it("accepts a clamped retained offset without chasing later virtual-item changes", () => {
     const items = Array.from({ length: 20 }, (_value, index) => `item-${index.toString()}`);
     let scrollTop = 0;

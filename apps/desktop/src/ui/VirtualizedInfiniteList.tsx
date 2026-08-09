@@ -133,6 +133,10 @@ export function VirtualizedInfiniteList<TItem>({
     initialRect: { width: 800, height: 600 },
     paddingEnd,
     paddingStart,
+    // Pixel restoration and leading-anchor recovery issue absolute scroll
+    // commands from layout effects. Do not re-enter React synchronously from
+    // those lifecycle paths.
+    useFlushSync: false,
     getItemKey: (index) => {
       if (previousBoundary !== undefined && index === 0) {
         return "boundary-previous";
@@ -199,7 +203,10 @@ export function VirtualizedInfiniteList<TItem>({
       .getVirtualItems()
       .find(
         (item) =>
-          item.index >= itemStartIndex && item.index < itemStartIndex + items.length && item.end > scrollTop,
+          item.index >= itemStartIndex &&
+          item.index < itemStartIndex + items.length &&
+          item.start <= scrollTop &&
+          item.end > scrollTop,
       );
     if (virtualItem !== undefined) {
       const item = items[virtualItem.index - itemStartIndex];
