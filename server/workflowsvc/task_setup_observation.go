@@ -106,9 +106,12 @@ func (o *taskSetupObservation) finalize(finalization workflowexecution.TaskPrepa
 		event.Failed.ExecutionTarget = &executionTarget
 	case workflowexecution.TaskPreparationInterruptionFailed:
 		event.Phase = serverapi.WorktreeSetupPhaseFailed
-		event.Failed = nonRetryablePreparationFailure(
-			serverapi.WorktreeSetupFailureInterruptionPersistence,
-			errors.Join(preparationErr, finalization.Cause),
+		event.Failed = interruptionPersistenceFailurePayload(
+			result,
+			retainedWorktree,
+			retainedPreviousWorktree,
+			preparationErr,
+			finalization.Cause,
 		)
 	case workflowexecution.TaskPreparationCanceled:
 		event.Phase = serverapi.WorktreeSetupPhaseFailed
@@ -162,8 +165,6 @@ func nonRetryablePreparationFailure(
 ) *serverapi.WorktreeSetupFailed {
 	failureCause := serverapi.WorktreeSetupFailureCause{Kind: kind}
 	switch kind {
-	case serverapi.WorktreeSetupFailureInterruptionPersistence:
-		failureCause.InterruptionPersistence = &serverapi.WorktreeSetupInterruptionPersistenceFailure{}
 	case serverapi.WorktreeSetupFailureCanceled:
 		failureCause.Canceled = &serverapi.WorktreeSetupCanceled{}
 	case serverapi.WorktreeSetupFailureControllerShutdown:
@@ -176,6 +177,28 @@ func nonRetryablePreparationFailure(
 		Cause:          failureCause,
 		Diagnostic:     preparationDiagnostic(cause),
 	}
+}
+
+func interruptionPersistenceFailurePayload(
+	result *worktree.WorktreeSetupResult,
+	retainedWorktree *serverapi.WorktreeTopologyEntry,
+	retainedPreviousWorktree *serverapi.RetainedPreviousWorktree,
+	preparationErr error,
+	persistenceErr error,
+) *serverapi.WorktreeSetupFailed {
+	failed := preparationFailurePayload(
+		result,
+		retainedWorktree,
+		retainedPreviousWorktree,
+		errors.Join(preparationErr, persistenceErr),
+	)
+	failed.RetryReadiness = serverapi.WorktreeSetupNonRetryable
+	failed.Cause = serverapi.WorktreeSetupFailureCause{
+		Kind:                    serverapi.WorktreeSetupFailureInterruptionPersistence,
+		InterruptionPersistence: &serverapi.WorktreeSetupInterruptionPersistenceFailure{},
+	}
+	failed.Diagnostic = preparationDiagnostic(errors.Join(preparationErr, persistenceErr))
+	return failed
 }
 
 func preparationDiagnostic(err error) string {

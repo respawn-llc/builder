@@ -311,8 +311,33 @@ func (c *CurrentNodeController) persistAndRetireFailedTaskPreparationBatch(
 	if c.runningTaskPreparationLocked(batch.taskID) != batch {
 		return interrupted, errors.Join(persistenceErr, errors.New("failed task preparation ownership changed before retirement"))
 	}
+	if persistenceErr != nil {
+		// The controller fails closed after this path. Keep ready Current Nodes
+		// whose interruption did not commit under the existing preparation owner.
+		unpersisted := make([]currentNodeQueuedStart, 0, len(batch.starts)-len(interrupted))
+		for _, start := range batch.starts {
+			persisted := false
+			for _, reference := range interrupted {
+				if start.reference.Equal(reference) {
+					persisted = true
+					break
+				}
+			}
+			if !persisted {
+				unpersisted = append(unpersisted, start)
+			}
+		}
+		if len(unpersisted) == 0 {
+			return interrupted, errors.Join(
+				persistenceErr,
+				errors.New("task preparation interruption failed without an unpersisted Current Node"),
+			)
+		}
+		batch.starts = unpersisted
+		return interrupted, persistenceErr
+	}
 	c.removeRunningTaskPreparationLocked(batch)
-	return interrupted, persistenceErr
+	return interrupted, nil
 }
 
 func (c *CurrentNodeController) publishFailedTaskPreparationBatch(

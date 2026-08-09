@@ -1002,98 +1002,135 @@ func TestCurrentNodeControllerPreparationFailureInterruptsPlacedNode(t *testing.
 	}
 }
 
-func TestCurrentNodeControllerPreparationPersistenceFailureNeverAdvertisesCanonicalRecovery(t *testing.T) {
-	taskID := workflow.TaskID("task-preparation-persistence-failure")
-	canonical := currentNodeReferenceForControllerTest(t, string(taskID), "node-a")
-	persistedSibling := currentNodeReferenceForControllerTest(t, string(taskID), "node-b")
-	failedSibling := currentNodeReferenceForControllerTest(t, string(taskID), "node-c")
-	failedSiblingKey, err := failedSibling.Key()
-	if err != nil {
-		t.Fatalf("failed sibling key: %v", err)
-	}
-	store := &currentNodeControllerStore{
-		interrupted: []workflow.CurrentNode{
-			{Reference: failedSibling, Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingInterrupted}},
-			{Reference: canonical, Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingInterrupted}},
-			{Reference: persistedSibling, Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingInterrupted}},
+func TestCurrentNodeControllerPreparationPersistenceFailureRetainsUnpersistedOwnershipWithoutCanonicalRecovery(t *testing.T) {
+	for _, test := range []struct {
+		name              string
+		failureNodeID     string
+		expectedOwnerIDs  []workflow.NodeID
+		expectedAttention int
+	}{
+		{
+			name:              "sibling",
+			failureNodeID:     "node-c",
+			expectedOwnerIDs:  []workflow.NodeID{"node-a", "node-c"},
+			expectedAttention: 1,
 		},
-		interruptionErrors: map[workflow.CurrentNodeReferenceKey]error{
-			failedSiblingKey: errors.New("persist sibling interruption"),
+		{
+			name:              "canonical",
+			failureNodeID:     "node-a",
+			expectedOwnerIDs:  []workflow.NodeID{"node-a"},
+			expectedAttention: 2,
 		},
-	}
-	attention := &currentNodeAttentionRecorder{}
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
-	controller := newCurrentNodeControllerWithAttentionForTest(
-		t,
-		store,
-		&countingCurrentNodeRunner{},
-		authority,
-		3,
-		attention,
-	)
-	t.Cleanup(func() {
-		_ = controller.Close()
-		_ = authority.Close(context.Background())
-	})
-	setupID := uuid.New()
-	retainedRoot := t.TempDir()
-	scriptPath := "scripts/setup.sh"
-	cause := NewTaskStartPreparationError(
-		errors.New("setup failed"),
-		workflow.CurrentNodeInterruptionDetail{
-			Code: "workflow_task_setup_failed",
-			SetupRecovery: &workflow.CurrentNodeSetupRecoveryDetail{
-				SetupOperationID: setupID,
-				Cause:            workflow.CurrentNodeSetupRecoveryCauseOperational,
-				Diagnostic:       "setup failed twice",
-				ScriptPath:       &scriptPath,
-				SetupRequirement: workflow.CurrentNodeSetupRequirementRequired,
-				ExecutionTarget: workflow.ExecutionTargetSelection{
-					Mode: workflow.ExecutionTargetModeHead,
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			taskID := workflow.TaskID("task-preparation-persistence-failure-" + test.name)
+			canonical := currentNodeReferenceForControllerTest(t, string(taskID), "node-a")
+			siblings := []workflow.CurrentNodeReference{
+				currentNodeReferenceForControllerTest(t, string(taskID), "node-b"),
+				currentNodeReferenceForControllerTest(t, string(taskID), "node-c"),
+			}
+			failed := currentNodeReferenceForControllerTest(t, string(taskID), test.failureNodeID)
+			failedKey, err := failed.Key()
+			if err != nil {
+				t.Fatalf("failed Current Node key: %v", err)
+			}
+			store := &currentNodeControllerStore{
+				interrupted: []workflow.CurrentNode{
+					{Reference: siblings[1], Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingInterrupted}},
+					{Reference: canonical, Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingInterrupted}},
+					{Reference: siblings[0], Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingInterrupted}},
 				},
-				RetainedWorktree: &workflow.CurrentNodeRetainedWorktree{
-					WorktreeID: "worktree-primary",
-					Root:       retainedRoot,
+				interruptionErrors: map[workflow.CurrentNodeReferenceKey]error{
+					failedKey: errors.New("persist preparation interruption"),
 				},
-			},
-		},
-	)
-	finalized := make(chan TaskPreparationFinalization, 1)
+			}
+			attention := &currentNodeAttentionRecorder{}
+			authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+			controller := newCurrentNodeControllerWithAttentionForTest(
+				t,
+				store,
+				&countingCurrentNodeRunner{},
+				authority,
+				3,
+				attention,
+			)
+			t.Cleanup(func() {
+				_ = controller.Close()
+				_ = authority.Close(context.Background())
+			})
+			setupID := uuid.New()
+			retainedRoot := t.TempDir()
+			scriptPath := "scripts/setup.sh"
+			cause := NewTaskStartPreparationError(
+				errors.New("setup failed"),
+				workflow.CurrentNodeInterruptionDetail{
+					Code: "workflow_task_setup_failed",
+					SetupRecovery: &workflow.CurrentNodeSetupRecoveryDetail{
+						SetupOperationID: setupID,
+						Cause:            workflow.CurrentNodeSetupRecoveryCauseOperational,
+						Diagnostic:       "setup failed twice",
+						ScriptPath:       &scriptPath,
+						SetupRequirement: workflow.CurrentNodeSetupRequirementRequired,
+						ExecutionTarget: workflow.ExecutionTargetSelection{
+							Mode: workflow.ExecutionTargetModeHead,
+						},
+						RetainedWorktree: &workflow.CurrentNodeRetainedWorktree{
+							WorktreeID: "worktree-primary",
+							Root:       retainedRoot,
+						},
+					},
+				},
+			)
+			finalized := make(chan TaskPreparationFinalization, 1)
 
-	if _, err := controller.ResumeTaskWithPreparation(
-		context.Background(),
-		taskID,
-		testTaskPreparation(func(context.Context) error { return cause }),
-		func(finalization TaskPreparationFinalization) {
-			finalized <- finalization
-		},
-	); err != nil {
-		t.Fatalf("ResumeTaskWithPreparation: %v", err)
-	}
-	select {
-	case finalization := <-finalized:
-		if finalization.Kind != TaskPreparationInterruptionFailed ||
-			!errors.Is(finalization.Cause, cause) {
-			t.Fatalf("preparation finalization = %+v, want non-retryable interruption persistence failure", finalization)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("preparation persistence failure was not finalized")
-	}
-	if _, interrupted := store.interruption(canonical); interrupted {
-		t.Fatal("canonical setup-recovery interruption was persisted after sibling failure")
-	}
-	persisted, interrupted := store.interruption(persistedSibling)
-	if !interrupted || persisted.detail.SetupRecovery != nil {
-		t.Fatalf("persisted sibling interruption = %+v, %t; want generic interruption", persisted, interrupted)
-	}
-	if _, interrupted := store.interruption(failedSibling); interrupted {
-		t.Fatal("failed sibling interruption was reported as persisted")
-	}
-	if pending := attention.pendingCount(); pending != 1 {
-		t.Fatalf("live interruption attention count = %d, want only the successfully persisted generic sibling", pending)
-	}
-	if batches := currentNodePreparationBatchesForTest(controller); len(batches) != 0 {
-		t.Fatalf("failed preparation batch remained owned: %+v", batches)
+			if _, err := controller.ResumeTaskWithPreparation(
+				context.Background(),
+				taskID,
+				testTaskPreparation(func(context.Context) error { return cause }),
+				func(finalization TaskPreparationFinalization) {
+					finalized <- finalization
+				},
+			); err != nil {
+				t.Fatalf("ResumeTaskWithPreparation: %v", err)
+			}
+			select {
+			case finalization := <-finalized:
+				if finalization.Kind != TaskPreparationInterruptionFailed ||
+					!errors.Is(finalization.Cause, cause) {
+					t.Fatalf("preparation finalization = %+v, want non-retryable interruption persistence failure", finalization)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("preparation persistence failure was not finalized")
+			}
+			if _, interrupted := store.interruption(canonical); interrupted {
+				t.Fatal("canonical setup-recovery interruption was persisted after interruption failure")
+			}
+			for _, sibling := range siblings {
+				persisted, interrupted := store.interruption(sibling)
+				if sibling.Equal(failed) {
+					if interrupted {
+						t.Fatalf("failed sibling interruption was reported as persisted: %+v", persisted)
+					}
+					continue
+				}
+				if !interrupted || persisted.detail.SetupRecovery != nil {
+					t.Fatalf("persisted sibling interruption = %+v, %t; want generic interruption", persisted, interrupted)
+				}
+			}
+			if pending := attention.pendingCount(); pending != test.expectedAttention {
+				t.Fatalf("live interruption attention count = %d, want %d persisted siblings", pending, test.expectedAttention)
+			}
+			batches := currentNodePreparationBatchesForTest(controller)
+			if len(batches) != 1 || !batches[0].Running ||
+				len(batches[0].CurrentNodes) != len(test.expectedOwnerIDs) {
+				t.Fatalf("failed preparation ownership = %+v, want nodes %v", batches, test.expectedOwnerIDs)
+			}
+			for index, nodeID := range test.expectedOwnerIDs {
+				if batches[0].CurrentNodes[index].NodeID != nodeID {
+					t.Fatalf("failed preparation ownership = %+v, want nodes %v", batches, test.expectedOwnerIDs)
+				}
+			}
+		})
 	}
 }
 

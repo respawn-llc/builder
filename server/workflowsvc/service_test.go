@@ -1596,6 +1596,52 @@ func TestTaskSetupObservationPreservesPayloadRetainedPreviousWorktree(t *testing
 	}
 }
 
+func TestTaskSetupObservationInterruptionPersistenceFailurePreservesSetupFacts(t *testing.T) {
+	recorder := &workflowTaskSetupEventRecorder{}
+	observation, err := newTaskSetupObservation(serverapi.NewWorktreeSetupOperationID(), recorder)
+	if err != nil {
+		t.Fatalf("newTaskSetupObservation: %v", err)
+	}
+	scriptPath := "/repo/setup.sh"
+	retained := registeredWorktreeTopologyFixture("/repo/retained", "worktree-retained")
+	previous := retainedPreviousWorktreeFixture("/repo/previous", "worktree-previous")
+	result := &worktree.WorktreeSetupResult{
+		Failed: &serverapi.WorktreeSetupFailed{
+			RetryReadiness: serverapi.WorktreeSetupRetryReady,
+			Cause: serverapi.WorktreeSetupFailureCause{
+				Kind:        serverapi.WorktreeSetupFailureProcessExit,
+				ProcessExit: &serverapi.WorktreeSetupProcessExit{ExitCode: 1},
+			},
+			Diagnostic: "setup failed",
+			ScriptPath: &scriptPath,
+		},
+	}
+	observation.record(result, &retained, previous, errors.New("setup failed"))
+	observation.finalize(workflowexecution.TaskPreparationFinalization{
+		Kind:  workflowexecution.TaskPreparationInterruptionFailed,
+		Cause: errors.New("persist interrupted Current Nodes"),
+	})
+
+	events := recorder.recordedEvents()
+	if len(events) != 1 {
+		t.Fatalf("setup events = %+v, want one terminal", events)
+	}
+	event := events[0]
+	if err := event.Validate(); err != nil {
+		t.Fatalf("setup event validation: %v", err)
+	}
+	if event.Phase != serverapi.WorktreeSetupPhaseFailed ||
+		event.Failed == nil ||
+		event.Failed.RetryReadiness != serverapi.WorktreeSetupNonRetryable ||
+		event.Failed.Cause.Kind != serverapi.WorktreeSetupFailureInterruptionPersistence ||
+		event.Failed.ScriptPath == nil ||
+		*event.Failed.ScriptPath != scriptPath ||
+		event.Failed.RetainedWorktree != &retained ||
+		event.Failed.RetainedPreviousWorktree != previous {
+		t.Fatalf("setup event = %+v, want interruption-persistence failure with recorded setup facts", event)
+	}
+}
+
 func TestServiceTaskStartPublishesCompletedAfterTwoAttemptsWithRetainedPreviousWorktree(t *testing.T) {
 	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
