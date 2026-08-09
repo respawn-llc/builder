@@ -25,6 +25,9 @@ const virtualizer = vi.hoisted(() => ({
   scrollToOffset: vi.fn(),
   shouldAdjustScrollPositionOnItemSizeChange: undefined,
 }));
+const testEstimateSize = () => 40;
+const testGetItemKey = (item: string) => item;
+const testRenderItem = (item: string) => item;
 
 vi.mock("@tanstack/react-virtual", () => ({
   defaultRangeExtractor: ({ startIndex, endIndex }: Readonly<{ startIndex: number; endIndex: number }>) =>
@@ -63,8 +66,8 @@ function List({
 }>) {
   return (
     <VirtualizedInfiniteList
-      estimateSize={() => 40}
-      getItemKey={(item) => item}
+      estimateSize={testEstimateSize}
+      getItemKey={testGetItemKey}
       hasNextPage={hasNextPage}
       hasPreviousPage={hasPreviousPage}
       isFetchingNextPage={false}
@@ -78,7 +81,7 @@ function List({
       previousBoundary={previousBoundary}
       previousLoadItemKey={previousLoadItemKey}
       pixelOffsetRequest={ready ? request : undefined}
-      renderItem={(item) => item}
+      renderItem={testRenderItem}
     />
   );
 }
@@ -120,16 +123,15 @@ describe("VirtualizedInfiniteList pixel restoration", () => {
 
   it("preserves the restored anchor when a later layout resets the scroll element", () => {
     const items = Array.from({ length: 20 }, (_value, index) => `item-${index.toString()}`);
+    const request = createVirtualizedPixelOffsetRequest("layout-reset", 240);
+    const view = render(<List items={items} request={request} />);
+    const list = screen.getByRole("list");
+    list.scrollTop = 0;
     virtualizer.getVirtualItems.mockReturnValue([
       { end: 280, index: 6, key: "item-6", lane: 0, size: 40, start: 240 },
     ]);
-    const view = render(<List items={items} request={createVirtualizedPixelOffsetRequest("layout-reset", 240)} />);
-    const list = screen.getByRole("list");
-    list.scrollTop = 0;
 
-    view.rerender(
-      <List items={items} request={createVirtualizedPixelOffsetRequest("layout-reset", 240)} />,
-    );
+    view.rerender(<List items={items} request={request} />);
 
     expect(list.scrollTop).toBe(240);
   });

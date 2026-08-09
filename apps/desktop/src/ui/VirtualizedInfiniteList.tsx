@@ -323,6 +323,7 @@ export function VirtualizedInfiniteList<TItem>({
     items,
     paddingStart,
     previousBoundaryIndex,
+    virtualItems,
     virtualizer,
   ]);
 
