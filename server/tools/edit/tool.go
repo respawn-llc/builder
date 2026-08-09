@@ -33,6 +33,8 @@ type Tool struct {
 	managedWorktreePathContext   *tools.ManagedWorktreePathContext
 }
 
+var errForeignManagedWorktree = errors.New(tools.ForeignManagedWorktreeEditDeniedMessage)
+
 type resolvedPath struct {
 	cleaned string
 	real    string
@@ -79,8 +81,8 @@ func (t *Tool) Call(ctx context.Context, c tools.Call) (tools.Result, error) {
 	if err != nil {
 		return editErrorResult(c, err), nil
 	}
-	if err := t.checkForeignManagedWorktreePath(resolved.real); err != nil {
-		return editErrorResult(c, err), nil
+	if t.managedWorktreePathContext != nil && t.managedWorktreePathContext.IsForeignManagedWorktreePath(resolved.real) {
+		return tools.ErrorResult(c, tools.ForeignManagedWorktreeEditDeniedMessage), nil
 	}
 	unlock := tools.LockFSGuardPaths([]string{resolved.real})
 	defer unlock()
@@ -212,16 +214,15 @@ func (t *Tool) create(path resolvedPath, newText string, info os.FileInfo, statE
 }
 
 func (t *Tool) validateManagedWorktreeMutation(path resolvedPath) error {
+	if t.managedWorktreePathContext == nil {
+		return nil
+	}
 	real, err := resolveRealTarget(path.cleaned)
 	if err != nil {
 		return err
 	}
-	return t.checkForeignManagedWorktreePath(real)
-}
-
-func (t *Tool) checkForeignManagedWorktreePath(real string) error {
-	if t.managedWorktreePathContext != nil {
-		return t.managedWorktreePathContext.CheckMutationPath(real)
+	if t.managedWorktreePathContext.IsForeignManagedWorktreePath(real) {
+		return errors.New(tools.ForeignManagedWorktreeEditDeniedMessage)
 	}
 	return nil
 }
@@ -378,8 +379,8 @@ func (t *Tool) resolvePath(ctx context.Context, requested string) (resolvedPath,
 	if err != nil {
 		return resolvedPath{}, err
 	}
-	if err := t.checkForeignManagedWorktreePath(preApprovalReal); err != nil {
-		return resolvedPath{}, err
+	if t.managedWorktreePathContext != nil && t.managedWorktreePathContext.IsForeignManagedWorktreePath(preApprovalReal) {
+		return resolvedPath{}, errForeignManagedWorktree
 	}
 	approved := map[string]bool{}
 	if _, err := t.outsideGuard().Allow(ctx, requested, cleaned, approved); err != nil {
@@ -387,9 +388,6 @@ func (t *Tool) resolvePath(ctx context.Context, requested string) (resolvedPath,
 	}
 	real, err := resolveRealTarget(cleaned)
 	if err != nil {
-		return resolvedPath{}, err
-	}
-	if err := t.checkForeignManagedWorktreePath(real); err != nil {
 		return resolvedPath{}, err
 	}
 	if approved[cleaned] && canReuseOutsideApproval(cleaned, real) {

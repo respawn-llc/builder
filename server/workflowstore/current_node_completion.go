@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"core/server/metadata/sqlitegen"
+	"core/server/metadata/sqlitelifecyclegen"
 	"core/server/session"
 	"core/server/workflow"
 	"core/shared/runtimeids"
@@ -153,12 +154,29 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 	}
 	nowTime := s.now().UTC()
 	now := nowTime.UnixMilli()
-	tx, err := beginCurrentNodeCompletionTransaction(ctx, s.db)
+	connection, err := s.db.Conn(ctx)
 	if err != nil {
 		return CurrentNodeCompletionResult{}, err
 	}
-	defer func() { _ = tx.Rollback() }()
-	q := tx.Queries()
+	defer func() { _ = connection.Close() }()
+	lifecycle := sqlitelifecyclegen.New(connection)
+	if err := lifecycle.BeginImmediate(ctx); err != nil {
+		return CurrentNodeCompletionResult{}, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = lifecycle.Rollback(context.Background())
+		}
+	}()
+	commit := func() error {
+		if err := lifecycle.Commit(ctx); err != nil {
+			return err
+		}
+		committed = true
+		return nil
+	}
+	q := sqlitegen.New(connection)
 	currentSource, err := currentNodeForReference(ctx, q, prepared.Source)
 	if err != nil {
 		return CurrentNodeCompletionResult{}, err
@@ -199,7 +217,7 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 		if err := touchTaskUpdatedAt(ctx, q, string(prepared.Source.TaskID), now); err != nil {
 			return CurrentNodeCompletionResult{}, err
 		}
-		if err := tx.Commit(ctx); err != nil {
+		if err := commit(); err != nil {
 			return CurrentNodeCompletionResult{}, err
 		}
 		if len(result.Mutation.Removed) > 0 {
@@ -227,7 +245,7 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 		if err := touchTaskUpdatedAt(ctx, q, string(prepared.Source.TaskID), now); err != nil {
 			return CurrentNodeCompletionResult{}, err
 		}
-		if err := tx.Commit(ctx); err != nil {
+		if err := commit(); err != nil {
 			return CurrentNodeCompletionResult{}, err
 		}
 		result.SessionReuse = newSessionReuseAnalysisInput(definition, currentSource, []workflow.Edge{target.Edge})
@@ -278,7 +296,7 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 		if err := touchTaskUpdatedAt(ctx, q, string(prepared.Source.TaskID), now); err != nil {
 			return CurrentNodeCompletionResult{}, err
 		}
-		if err := tx.Commit(ctx); err != nil {
+		if err := commit(); err != nil {
 			return CurrentNodeCompletionResult{}, err
 		}
 		return CurrentNodeCompletionResult{
@@ -304,7 +322,7 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 	if err := touchTaskUpdatedAt(ctx, q, string(prepared.Source.TaskID), now); err != nil {
 		return CurrentNodeCompletionResult{}, err
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := commit(); err != nil {
 		return CurrentNodeCompletionResult{}, err
 	}
 	result := CurrentNodeCompletionResult{

@@ -142,8 +142,8 @@ func (t *Tool) targetsForeignManagedWorktree(doc patchformat.Document) (bool, er
 }
 
 func (t *Tool) checkForeignManagedWorktreePath(resolved string) error {
-	if t.managedWorktreePathContext != nil {
-		return t.managedWorktreePathContext.CheckMutationPath(resolved)
+	if t.managedWorktreePathContext != nil && t.managedWorktreePathContext.IsForeignManagedWorktreePath(resolved) {
+		return fmt.Errorf("%s", tools.ForeignManagedWorktreeEditDeniedMessage)
 	}
 	return nil
 }

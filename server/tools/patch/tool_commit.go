@@ -67,18 +67,23 @@ func commitStagedFiles(
 	removedPaths := make(map[string]struct{}, len(deleteTargets)+len(states))
 	deletionFacts := make([]patchformat.WholeFileDeletionFact, 0, len(deleteTargets))
 	rollback := func() error {
-		// These paths were already mutated by this invocation. Reapplying the
-		// live Worktree policy here could strand a partial patch if config
-		// changes during commit.
 		var rollbackErr error
 		for i := len(committed) - 1; i >= 0; i-- {
 			entry := committed[i]
+			if err := revalidateCommitPath(tool, entry.Path); err != nil {
+				rollbackErr = errors.Join(rollbackErr, err)
+				continue
+			}
 			if err := restoreSnapshot(entry.Path, entry.Before); err != nil {
 				rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restore target %s: %w", entry.Path, err))
 			}
 		}
 		for i := len(removed) - 1; i >= 0; i-- {
 			entry := removed[i]
+			if err := revalidateCommitPath(tool, entry.Path); err != nil {
+				rollbackErr = errors.Join(rollbackErr, err)
+				continue
+			}
 			if err := restoreSnapshot(entry.Path, entry.Before); err != nil {
 				rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restore moved source %s: %w", entry.Path, err))
 			}

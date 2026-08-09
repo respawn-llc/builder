@@ -13,9 +13,9 @@ However, Kent's [client-server](../server/) architecture makes it easy to run Ke
 
 ## Outside-Workspace Edits
 
-By default, native edit tools prompt before modifying files outside the Session's Execution Target Root and the bounded collection of up to 500 most recently attached Workspaces in the Session's current Project. `view_image` uses the same trusted boundary for local image reads. Targets under the operating system's temporary roots and their canonical platform aliases, such as `/tmp` and `/private/tmp` on macOS, are allowed without approval. The temporary-root allowance does not override path-deny rules or Worktree-root protection. Kent prepares the Project boundary once for the runtime; native file operations do not query Project metadata for each target.
+By default, native edit tools prompt before modifying files outside the Session's Execution Target Root and the bounded collection of up to 500 most recently attached Workspaces in the Session's current Project. `view_image` uses the same trusted boundary for local image reads. Targets under the operating system's temporary roots and their canonical platform aliases, such as `/tmp` and `/private/tmp` on macOS, are allowed without approval. The temporary-root allowance does not override path-deny rules or the prohibition on directly editing another Kent-managed Worktree. Kent prepares this boundary once for the runtime; native file operations do not query Project metadata for each target.
 
-**This is not sandboxing: the agent can easily bypass this.** It's intended for convenience, hallucination and mismatched working-directory prevention. Native `edit` and `patch` read the global `worktrees.base_dir` value at each target check and deny every path beneath it unless the path is inside the Session's current Worktree.
+**This is not sandboxing: the agent can easily bypass this.** It's intended for convenience, hallucination and mismatched working-directory prevention. Edits to another Kent-managed Worktree remain forbidden even when that Worktree belongs to the same Project.
 
 To disable, set config:
 

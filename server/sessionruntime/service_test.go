@@ -331,19 +331,16 @@ func TestActivateSessionRuntimeAllowsNativeEditInSiblingWorkspace(t *testing.T) 
 	t.Fatalf("interactive sibling edit data = %q, read error = %v", data, readErr)
 }
 
-func TestActivateSessionRuntimeUsesConfiguredWorktreeRootChangedAfterActivation(t *testing.T) {
+func TestActivateSessionRuntimeDeniesEditInForeignManagedWorktree(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	binding, err := fixture.metadata.ResolveSessionNavigationBinding(context.Background(), fixture.store.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("ResolveSessionNavigationBinding: %v", err)
 	}
-	initialManagedBase := t.TempDir()
-	configuredManagedBase := initialManagedBase
-	managedParent := filepath.Join(initialManagedBase, "kent")
-	currentRoot := filepath.Join(managedParent, "current")
-	nextManagedBase := t.TempDir()
-	foreignRoot := filepath.Join(nextManagedBase, "foreign")
-	missingRoot := filepath.Join(initialManagedBase, "missing")
+	managedBase := t.TempDir()
+	currentRoot := filepath.Join(managedBase, "current")
+	foreignRoot := filepath.Join(managedBase, "foreign")
+	missingRoot := filepath.Join(managedBase, "missing")
 	for _, root := range []string{currentRoot, foreignRoot} {
 		if err := os.MkdirAll(root, 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", root, err)
@@ -381,6 +378,12 @@ func TestActivateSessionRuntimeUsesConfiguredWorktreeRootChangedAfterActivation(
 	if err != nil {
 		t.Fatalf("AttachWorkspaceToProject foreign: %v", err)
 	}
+	if err := fixture.metadata.UpsertWorktreeRecord(context.Background(), metadata.WorktreeRecord{
+		ID: "interactive-foreign-workspace", WorkspaceID: foreignBinding.WorkspaceID, CanonicalRoot: foreignRoot,
+		DisplayName: "foreign-workspace", Availability: "available", Managed: true, GitMetadataJSON: `{}`,
+	}); err != nil {
+		t.Fatalf("UpsertWorktreeRecord foreign workspace: %v", err)
+	}
 	for index := 0; index < metadata.ProjectWorkspaceCollectionLimit; index++ {
 		if _, err := fixture.metadata.AttachWorkspaceToProject(context.Background(), binding.ProjectID, t.TempDir()); err != nil {
 			t.Fatalf("AttachWorkspaceToProject filler %d: %v", index, err)
@@ -411,11 +414,8 @@ func TestActivateSessionRuntimeUsesConfiguredWorktreeRootChangedAfterActivation(
 		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)}, Usage: llm.Usage{WindowTokens: 200000}},
 	}}
 	fixture.api = NewAPI(fixture.metadata, nil, fixture.authority, APIOptions{
-		ManagedWorktreeBaseDir: initialManagedBase,
-		ManagedWorktreeBaseRootResolver: func() (string, error) {
-			return configuredManagedBase, nil
-		},
-		RuntimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(context.Context, runtimewire.RuntimeClientRequest) (llm.Client, error) { return client, nil }),
+		ManagedWorktreeBaseDir: managedBase,
+		RuntimeClientFactory:   runtimewire.RuntimeClientFactoryFunc(func(context.Context, runtimewire.RuntimeClientRequest) (llm.Client, error) { return client, nil }),
 	})
 	activation, err := fixture.api.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
 		ClientRequestID: "activate-foreign-edit", SessionID: fixture.store.Meta().SessionID, OwnerID: "interactive-owner",
@@ -435,13 +435,6 @@ func TestActivateSessionRuntimeUsesConfiguredWorktreeRootChangedAfterActivation(
 			ClosePolicy: serverapi.SessionRuntimeReleaseClosePolicyDetachOnly,
 		})
 	})
-	configuredManagedBase = nextManagedBase
-	if err := fixture.metadata.UpsertWorktreeRecord(context.Background(), metadata.WorktreeRecord{
-		ID: "interactive-foreign-workspace", WorkspaceID: foreignBinding.WorkspaceID, CanonicalRoot: foreignRoot,
-		DisplayName: "foreign-workspace", Availability: "available", Managed: true, GitMetadataJSON: `{}`,
-	}); err != nil {
-		t.Fatalf("UpsertWorktreeRecord foreign workspace after activation: %v", err)
-	}
 	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("ParseSessionID: %v", err)

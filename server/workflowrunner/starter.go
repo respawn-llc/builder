@@ -731,12 +731,7 @@ func (s *Starter) currentNodeManagedWorktreePathContext(plan launch.SessionPlan,
 	if root.Managed != nil {
 		currentRoot = &root.Managed.Root
 	}
-	return askquestion.NewManagedWorktreePathContext(
-		s.cfg.Settings.Worktrees.BaseDir,
-		currentRoot,
-		plan.ManagedWorktreeRoots,
-		runtimewire.ManagedWorktreeBaseRootResolver(s.cfg.PersistenceRoot),
-	)
+	return askquestion.NewManagedWorktreePathContext(s.cfg.Settings.Worktrees.BaseDir, currentRoot, plan.ManagedWorktreeRoots)
 }
 
 func workflowSessionNameFromCurrentNode(input workflowstore.CurrentNodeStartContext) (string, error) {

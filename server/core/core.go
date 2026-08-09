@@ -13,7 +13,6 @@ import (
 	"core/server/metadata"
 	"core/server/runprompt"
 	"core/server/runtime"
-	"core/server/runtimewire"
 	"core/server/sessionlaunch"
 	shelltool "core/server/tools/shell"
 	"core/shared/apicontract"
@@ -298,12 +297,11 @@ func (s *Core) runPromptClientForProjectContext(projectCtx projectContext) apico
 		return cached
 	}
 	client := runprompt.NewInProcessRunPromptClient(runprompt.HeadlessBootstrap{
-		SessionLaunch:                   s.sessionLaunchServiceForProjectContext(projectCtx),
-		FastModeState:                   s.safeBundles().Runtime.fastModeState,
-		PromptHistory:                   s.safeBundles().Persistence.metadataStore,
-		RuntimeAuthority:                s.safeBundles().Runtime.runtimeAuthority,
-		ManagedWorktreeBaseDir:          s.safeBundles().Projects.cfg.Settings.Worktrees.BaseDir,
-		ManagedWorktreeBaseRootResolver: runtimewire.ManagedWorktreeBaseRootResolver(s.safeBundles().Projects.cfg.PersistenceRoot),
+		SessionLaunch:          s.sessionLaunchServiceForProjectContext(projectCtx),
+		FastModeState:          s.safeBundles().Runtime.fastModeState,
+		PromptHistory:          s.safeBundles().Persistence.metadataStore,
+		RuntimeAuthority:       s.safeBundles().Runtime.runtimeAuthority,
+		ManagedWorktreeBaseDir: s.safeBundles().Projects.cfg.Settings.Worktrees.BaseDir,
 	})
 	s.safeBundles().Sessions.runPromptMap[scopeKey] = client
 	return client

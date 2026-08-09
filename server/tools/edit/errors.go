@@ -30,7 +30,7 @@ func failf(format string, args ...any) error {
 }
 
 func editErrorResult(c tools.Call, err error) tools.Result {
-	if errors.Is(err, tools.ErrForeignManagedWorktreeEditDenied) {
+	if errors.Is(err, errForeignManagedWorktree) {
 		return tools.ErrorResult(c, tools.ForeignManagedWorktreeEditDeniedMessage)
 	}
 	message := "Edit failed."

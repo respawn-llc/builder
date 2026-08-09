@@ -35,11 +35,6 @@ func TestAbsoluteForeignManagedWorktreePatchIsDeniedBeforeMove(t *testing.T) {
 	base := t.TempDir()
 	currentRoot := filepath.Join(base, "current")
 	foreignRoot := filepath.Join(base, "foreign")
-	for _, dir := range []string{currentRoot, foreignRoot} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatalf("mkdir %s: %v", dir, err)
-		}
-	}
 	if err := os.MkdirAll(filepath.Join(currentRoot, "nested"), 0o755); err != nil {
 		t.Fatalf("mkdir nested workdir: %v", err)
 	}
@@ -48,16 +43,23 @@ func TestAbsoluteForeignManagedWorktreePatchIsDeniedBeforeMove(t *testing.T) {
 	if err := os.WriteFile(source, []byte("before\n"), 0o644); err != nil {
 		t.Fatalf("write source: %v", err)
 	}
-	context, err := tools.NewManagedWorktreePathContext(
-		base,
-		&currentRoot,
-		[]string{currentRoot, foreignRoot},
-		func() (string, error) { return base, nil },
-	)
+	pathContext, err := tools.NewManagedWorktreePathContext(base, &currentRoot, []string{currentRoot})
 	if err != nil {
 		t.Fatalf("managed worktree path context: %v", err)
 	}
-	tool := newPatchTestTool(t, filepath.Join(currentRoot, "nested"), WithManagedWorktreePathContext(context))
+	approvalCalls := 0
+	tool := newPatchTestTool(
+		t,
+		filepath.Join(currentRoot, "nested"),
+		WithManagedWorktreePathContext(pathContext),
+		WithOutsideWorkspaceApprover(func(context.Context, OutsideWorkspaceRequest) (OutsideWorkspaceApproval, error) {
+			approvalCalls++
+			return OutsideWorkspaceApproval{Decision: OutsideWorkspaceDecisionAllowOnce}, nil
+		}),
+	)
+	if err := os.MkdirAll(foreignRoot, 0o755); err != nil {
+		t.Fatalf("mkdir foreign root: %v", err)
+	}
 
 	result := callPatch(t, tool, "foreign-move", "*** Begin Patch\n*** Update File: "+source+"\n*** Move to: "+destination+"\n-before\n+after\n*** End Patch\n")
 
@@ -74,54 +76,9 @@ func TestAbsoluteForeignManagedWorktreePatchIsDeniedBeforeMove(t *testing.T) {
 	if _, err := os.Stat(destination); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("destination stat error = %v, want not exist", err)
 	}
-}
-
-func TestPatchDeniesSiblingCreatedAfterToolStartupBeforeApproval(t *testing.T) {
-	base := outsideNonTempDir(t)
-	managedParent := filepath.Join(base, "kent")
-	currentRoot := filepath.Join(managedParent, "current")
-	currentWorkspace := filepath.Join(currentRoot, "nested")
-	if err := os.MkdirAll(currentWorkspace, 0o755); err != nil {
-		t.Fatalf("mkdir current Workspace: %v", err)
-	}
-	pathContext, err := tools.NewManagedWorktreePathContext(
-		base,
-		&currentRoot,
-		[]string{currentRoot},
-		func() (string, error) { return base, nil },
-	)
-	if err != nil {
-		t.Fatalf("managed worktree path context: %v", err)
-	}
-	approvalCalls := 0
-	tool := newPatchTestTool(
-		t,
-		currentWorkspace,
-		WithManagedWorktreePathContext(pathContext),
-		WithOutsideWorkspaceApprover(func(context.Context, OutsideWorkspaceRequest) (OutsideWorkspaceApproval, error) {
-			approvalCalls++
-			return OutsideWorkspaceApproval{Decision: OutsideWorkspaceDecisionAllowOnce}, nil
-		}),
-	)
-
-	siblingRoot := filepath.Join(managedParent, "created-later")
-	if err := os.MkdirAll(siblingRoot, 0o755); err != nil {
-		t.Fatalf("mkdir later sibling: %v", err)
-	}
-	siblingFile := filepath.Join(siblingRoot, "foreign.txt")
-	if err := os.WriteFile(siblingFile, []byte("before\n"), 0o644); err != nil {
-		t.Fatalf("write sibling file: %v", err)
-	}
-
-	result := callPatch(t, tool, "late-sibling", "*** Begin Patch\n*** Update File: "+siblingFile+"\n-before\n+after\n*** End Patch\n")
-
-	if !result.IsError || result.Summary == nil || *result.Summary != tools.ForeignManagedWorktreeEditDeniedMessage {
-		t.Fatalf("sibling worktree patch result = %+v", result)
-	}
 	if approvalCalls != 0 {
 		t.Fatalf("outside-workspace approval calls = %d, want 0", approvalCalls)
 	}
-	assertPatchFileContent(t, siblingFile, "before\n")
 }
 
 func TestPatchDeniesEveryForeignAbsoluteTargetKind(t *testing.T) {
@@ -133,12 +90,7 @@ func TestPatchDeniesEveryForeignAbsoluteTargetKind(t *testing.T) {
 			t.Fatalf("mkdir %s: %v", dir, err)
 		}
 	}
-	context, err := tools.NewManagedWorktreePathContext(
-		base,
-		&currentRoot,
-		[]string{currentRoot, foreignRoot},
-		func() (string, error) { return base, nil },
-	)
+	context, err := tools.NewManagedWorktreePathContext(base, &currentRoot, []string{currentRoot, foreignRoot})
 	if err != nil {
 		t.Fatalf("managed worktree path context: %v", err)
 	}
@@ -191,12 +143,7 @@ func TestPatchManagedWorktreeGuardSkipsRelativeCurrentAndOutsideBase(t *testing.
 			t.Fatalf("write %s: %v", path, err)
 		}
 	}
-	context, err := tools.NewManagedWorktreePathContext(
-		base,
-		&currentRoot,
-		[]string{currentRoot, foreignRoot},
-		func() (string, error) { return base, nil },
-	)
+	context, err := tools.NewManagedWorktreePathContext(base, &currentRoot, []string{currentRoot, foreignRoot})
 	if err != nil {
 		t.Fatalf("managed worktree path context: %v", err)
 	}
@@ -752,12 +699,7 @@ func TestCommitStagedFilesRollsBackOnManagedWorktreeRevalidationFailure(t *testi
 	}
 	t.Cleanup(func() { _ = os.Remove(stage) })
 
-	context, err := tools.NewManagedWorktreePathContext(
-		base,
-		&currentRoot,
-		[]string{currentRoot, foreignRoot},
-		func() (string, error) { return base, nil },
-	)
+	context, err := tools.NewManagedWorktreePathContext(base, &currentRoot, []string{currentRoot, foreignRoot})
 	if err != nil {
 		t.Fatalf("managed worktree path context: %v", err)
 	}
@@ -779,58 +721,6 @@ func TestCommitStagedFilesRollsBackOnManagedWorktreeRevalidationFailure(t *testi
 	}
 }
 
-func TestCommitStagedFilesRollbackRetainsAuthorityAfterConfiguredRootChanges(t *testing.T) {
-	workspace := t.TempDir()
-	initialManagedBase := t.TempDir()
-	first := filepath.Join(workspace, "first.txt")
-	second := filepath.Join(workspace, "second.txt")
-	if err := os.WriteFile(first, []byte("original\n"), 0o644); err != nil {
-		t.Fatalf("seed first target: %v", err)
-	}
-	firstStage, err := createStagedFile(first, []byte("patched\n"), 0o644)
-	if err != nil {
-		t.Fatalf("stage first target: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Remove(firstStage) })
-	secondStage, err := createStagedFile(second, []byte("blocked\n"), 0o644)
-	if err != nil {
-		t.Fatalf("stage second target: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Remove(secondStage) })
-
-	pathContext, err := tools.NewManagedWorktreePathContext(
-		initialManagedBase,
-		nil,
-		nil,
-		func() (string, error) {
-			data, readErr := os.ReadFile(first)
-			if readErr != nil {
-				return "", readErr
-			}
-			if string(data) == "patched\n" {
-				return workspace, nil
-			}
-			return initialManagedBase, nil
-		},
-	)
-	if err != nil {
-		t.Fatalf("managed worktree path context: %v", err)
-	}
-	tool := newPatchTestTool(t, workspace, WithManagedWorktreePathContext(pathContext))
-
-	_, err = commitStagedFiles(tool, []*patchFileState{
-		{Exists: true, NewPath: first, Original: first, StagedPath: firstStage},
-		{Exists: true, NewPath: second, Original: second, StagedPath: secondStage},
-	}, nil)
-	if err == nil || !strings.Contains(err.Error(), tools.ForeignManagedWorktreeEditDeniedMessage) {
-		t.Fatalf("commit error = %v, want live configured-root denial", err)
-	}
-	assertPatchFileContent(t, first, "original\n")
-	if _, statErr := os.Stat(second); !errors.Is(statErr, os.ErrNotExist) {
-		t.Fatalf("second target stat error = %v, want not exist", statErr)
-	}
-}
-
 func TestPrepareCommitStatesRevalidatesBeforeStagingForeignTargets(t *testing.T) {
 	base := t.TempDir()
 	currentRoot := filepath.Join(base, "current")
@@ -842,12 +732,7 @@ func TestPrepareCommitStatesRevalidatesBeforeStagingForeignTargets(t *testing.T)
 		}
 	}
 
-	context, err := tools.NewManagedWorktreePathContext(
-		base,
-		&currentRoot,
-		[]string{currentRoot, foreignRoot},
-		func() (string, error) { return base, nil },
-	)
+	context, err := tools.NewManagedWorktreePathContext(base, &currentRoot, []string{currentRoot, foreignRoot})
 	if err != nil {
 		t.Fatalf("managed worktree path context: %v", err)
 	}

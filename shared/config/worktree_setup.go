@@ -17,32 +17,15 @@ func LoadWorktreeSetupSettings(workspaceRoot string, persistenceRoot string) (Wo
 	if strings.TrimSpace(workspaceRoot) == "" {
 		return WorktreeSettings{}, errors.New("workspace root is required")
 	}
-	workspacePath, err := resolveWorkspaceSettingsFilePath(workspaceRoot)
-	if err != nil {
-		return WorktreeSettings{}, err
-	}
-	return loadWorktreeSettings(
-		persistenceRoot,
-		[]string{workspacePath},
-		worktreeSetupScriptKey,
-		worktreeSetupTimeoutKey,
-	)
-}
-
-func LoadGlobalWorktreeBaseDir(persistenceRoot string) (string, error) {
-	settings, err := loadWorktreeSettings(persistenceRoot, nil, worktreeBaseDirKey)
-	if err != nil {
-		return "", err
-	}
-	return prepareWorktreeBaseDir(persistenceRoot, settings.BaseDir)
-}
-
-func loadWorktreeSettings(persistenceRoot string, additionalSettingsPaths []string, selectedKeys ...string) (WorktreeSettings, error) {
 	homePath, err := resolveSettingsFilePathInRoot(persistenceRoot)
 	if err != nil {
 		return WorktreeSettings{}, err
 	}
-	settings, err := configRegistry.settingsForKeys(selectedKeys...)
+	workspacePath, err := resolveWorkspaceSettingsFilePath(workspaceRoot)
+	if err != nil {
+		return WorktreeSettings{}, err
+	}
+	settings, err := configRegistry.settingsForKeys(worktreeSetupScriptKey, worktreeSetupTimeoutKey)
 	if err != nil {
 		return WorktreeSettings{}, err
 	}
@@ -62,13 +45,12 @@ func loadWorktreeSettings(persistenceRoot string, additionalSettingsPaths []stri
 		}
 		fileSetting.registerFileKeys(keyTree)
 	}
-	state := settingsState{PersistenceRoot: persistenceRoot}
+	state := settingsState{}
 	sources := map[string]string{}
 	for _, setting := range settings {
 		setting.applyDefault(&state)
 	}
-	settingsPaths := append([]string{homePath}, additionalSettingsPaths...)
-	for _, path := range settingsPaths {
+	for _, path := range []string{homePath, workspacePath} {
 		file, err := readOptionalSettingsFile(path)
 		if err != nil {
 			return WorktreeSettings{}, err

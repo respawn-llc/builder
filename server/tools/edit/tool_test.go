@@ -3,7 +3,6 @@ package edit
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -39,26 +38,28 @@ func TestAbsoluteForeignManagedWorktreeEditIsDenied(t *testing.T) {
 	base := t.TempDir()
 	currentRoot := filepath.Join(base, "current")
 	foreignRoot := filepath.Join(base, "foreign")
-	for _, dir := range []string{currentRoot, foreignRoot} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatalf("mkdir %s: %v", dir, err)
-		}
-	}
 	if err := os.MkdirAll(filepath.Join(currentRoot, "nested"), 0o755); err != nil {
 		t.Fatalf("mkdir nested workdir: %v", err)
 	}
-	foreignFile := filepath.Join(foreignRoot, "foreign.txt")
-	writeEditTestFile(t, foreignFile, "before\n", 0o644)
-	context, err := tools.NewManagedWorktreePathContext(
-		base,
-		&currentRoot,
-		[]string{currentRoot, foreignRoot},
-		func() (string, error) { return base, nil },
-	)
+	pathContext, err := tools.NewManagedWorktreePathContext(base, &currentRoot, []string{currentRoot})
 	if err != nil {
 		t.Fatalf("managed worktree path context: %v", err)
 	}
-	tool := newTestTool(t, filepath.Join(currentRoot, "nested"), WithManagedWorktreePathContext(context))
+	approvalCalls := 0
+	tool := newTestTool(
+		t,
+		filepath.Join(currentRoot, "nested"),
+		WithManagedWorktreePathContext(pathContext),
+		WithOutsideWorkspaceApprover(func(context.Context, tools.FSGuardRequest) (tools.FSGuardApproval, error) {
+			approvalCalls++
+			return tools.FSGuardApproval{Decision: tools.FSGuardDecisionAllowOnce}, nil
+		}),
+	)
+	if err := os.MkdirAll(foreignRoot, 0o755); err != nil {
+		t.Fatalf("mkdir foreign root: %v", err)
+	}
+	foreignFile := filepath.Join(foreignRoot, "foreign.txt")
+	writeEditTestFile(t, foreignFile, "before\n", 0o644)
 
 	result := callEdit(t, tool, map[string]any{
 		"path":       foreignFile,
@@ -69,80 +70,10 @@ func TestAbsoluteForeignManagedWorktreeEditIsDenied(t *testing.T) {
 	if !result.IsError || result.Summary == nil || *result.Summary != tools.ForeignManagedWorktreeEditDeniedMessage {
 		t.Fatalf("foreign worktree edit result = %+v", result)
 	}
-	assertEditTestFileContent(t, foreignFile, "before\n")
-}
-
-func TestEditUsesCurrentConfiguredWorktreeRootBeforeApproval(t *testing.T) {
-	base := newNonTemporaryOutsideDir(t)
-	managedParent := filepath.Join(base, "kent")
-	currentRoot := filepath.Join(managedParent, "current")
-	currentWorkspace := filepath.Join(currentRoot, "nested")
-	if err := os.MkdirAll(currentWorkspace, 0o755); err != nil {
-		t.Fatalf("mkdir current Workspace: %v", err)
-	}
-	configuredBase := base
-	pathContext, err := tools.NewManagedWorktreePathContext(
-		base,
-		&currentRoot,
-		[]string{currentRoot},
-		func() (string, error) { return configuredBase, nil },
-	)
-	if err != nil {
-		t.Fatalf("managed worktree path context: %v", err)
-	}
-	approvalCalls := 0
-	tool := newTestTool(
-		t,
-		currentWorkspace,
-		WithManagedWorktreePathContext(pathContext),
-		WithOutsideWorkspaceApprover(func(context.Context, tools.FSGuardRequest) (tools.FSGuardApproval, error) {
-			approvalCalls++
-			return tools.FSGuardApproval{Decision: tools.FSGuardDecisionAllowOnce}, nil
-		}),
-	)
-
-	siblingRoot := filepath.Join(managedParent, "created-later")
-	if err := os.MkdirAll(siblingRoot, 0o755); err != nil {
-		t.Fatalf("mkdir later sibling: %v", err)
-	}
-	siblingFile := filepath.Join(siblingRoot, "foreign.txt")
-	writeEditTestFile(t, siblingFile, "before\n", 0o644)
-
-	result := callEdit(t, tool, map[string]any{
-		"path":       siblingFile,
-		"old_string": "before",
-		"new_string": "after",
-	})
-
-	if !result.IsError || result.Summary == nil || *result.Summary != tools.ForeignManagedWorktreeEditDeniedMessage {
-		t.Fatalf("sibling worktree edit result = %+v", result)
-	}
 	if approvalCalls != 0 {
 		t.Fatalf("outside-workspace approval calls = %d, want 0", approvalCalls)
 	}
-	assertEditTestFileContent(t, siblingFile, "before\n")
-
-	nextBase := newNonTemporaryOutsideDir(t)
-	nextTarget := filepath.Join(nextBase, "created-after-config-change", "foreign.txt")
-	if err := os.MkdirAll(filepath.Dir(nextTarget), 0o755); err != nil {
-		t.Fatalf("mkdir next configured Worktree root: %v", err)
-	}
-	writeEditTestFile(t, nextTarget, "before\n", 0o644)
-	configuredBase = nextBase
-
-	result = callEdit(t, tool, map[string]any{
-		"path":       nextTarget,
-		"old_string": "before",
-		"new_string": "after",
-	})
-
-	if !result.IsError || result.Summary == nil || *result.Summary != tools.ForeignManagedWorktreeEditDeniedMessage {
-		t.Fatalf("new configured Worktree root edit result = %+v", result)
-	}
-	if approvalCalls != 0 {
-		t.Fatalf("outside-workspace approval calls after config change = %d, want 0", approvalCalls)
-	}
-	assertEditTestFileContent(t, nextTarget, "before\n")
+	assertEditTestFileContent(t, foreignFile, "before\n")
 }
 
 func TestEditManagedWorktreeGuardSkipsNonForeignTargets(t *testing.T) {
@@ -164,12 +95,7 @@ func TestEditManagedWorktreeGuardSkipsNonForeignTargets(t *testing.T) {
 	writeEditTestFile(t, currentFile, "before\n", 0o644)
 	writeEditTestFile(t, foreignFile, "before\n", 0o644)
 	writeEditTestFile(t, outsideFile, "before\n", 0o644)
-	context, err := tools.NewManagedWorktreePathContext(
-		base,
-		&currentRoot,
-		[]string{currentRoot, foreignRoot},
-		func() (string, error) { return base, nil },
-	)
+	context, err := tools.NewManagedWorktreePathContext(base, &currentRoot, []string{currentRoot, foreignRoot})
 	if err != nil {
 		t.Fatalf("managed worktree path context: %v", err)
 	}
@@ -212,12 +138,7 @@ func TestManagedWorktreePathContextProtectsConfiguredRootWithoutKnownWorktrees(t
 	}
 	target := filepath.Join(workspaceRoot, "file.txt")
 	writeEditTestFile(t, target, "before\n", 0o644)
-	context, err := tools.NewManagedWorktreePathContext(
-		base,
-		nil,
-		nil,
-		func() (string, error) { return base, nil },
-	)
+	context, err := tools.NewManagedWorktreePathContext(base, nil, nil)
 	if err != nil {
 		t.Fatalf("managed worktree path context: %v", err)
 	}
@@ -225,8 +146,8 @@ func TestManagedWorktreePathContextProtectsConfiguredRootWithoutKnownWorktrees(t
 	if err != nil {
 		t.Fatalf("resolve target: %v", err)
 	}
-	if err := context.CheckMutationPath(resolvedTarget); !errors.Is(err, tools.ErrForeignManagedWorktreeEditDenied) {
-		t.Fatalf("configured Worktree root target error = %v, want foreign Worktree denial", err)
+	if !context.IsForeignManagedWorktreePath(resolvedTarget) {
+		t.Fatal("configured Worktree root target was not classified as foreign")
 	}
 }
 
@@ -237,13 +158,13 @@ func TestManagedWorktreePathContextRejectsNestedRoots(t *testing.T) {
 	if err := os.MkdirAll(inner, 0o755); err != nil {
 		t.Fatalf("mkdir nested roots: %v", err)
 	}
-	if _, err := tools.NewManagedWorktreePathContext(base, nil, []string{outer, inner}, func() (string, error) { return base, nil }); err == nil {
+	if _, err := tools.NewManagedWorktreePathContext(base, nil, []string{outer, inner}); err == nil {
 		t.Fatal("managed worktree path context accepted nested managed roots")
 	}
-	if _, err := tools.NewManagedWorktreePathContext(base, &inner, []string{outer}, func() (string, error) { return base, nil }); err == nil {
+	if _, err := tools.NewManagedWorktreePathContext(base, &inner, []string{outer}); err == nil {
 		t.Fatal("managed worktree path context accepted a current root nested in a foreign root")
 	}
-	context, err := tools.NewManagedWorktreePathContext(base, &outer, []string{outer}, func() (string, error) { return base, nil })
+	context, err := tools.NewManagedWorktreePathContext(base, &outer, []string{outer})
 	if err != nil {
 		t.Fatalf("managed worktree path context with registered current root: %v", err)
 	}
@@ -251,7 +172,7 @@ func TestManagedWorktreePathContextRejectsNestedRoots(t *testing.T) {
 	if err := os.MkdirAll(externalRoot, 0o755); err != nil {
 		t.Fatalf("mkdir external root: %v", err)
 	}
-	if _, err := tools.NewManagedWorktreePathContext(base, &externalRoot, []string{outer}, func() (string, error) { return base, nil }); err != nil {
+	if _, err := tools.NewManagedWorktreePathContext(base, &externalRoot, []string{outer}); err != nil {
 		t.Fatalf("managed worktree path context rejected adopted external current root: %v", err)
 	}
 	if _, err := context.WithCurrentWorktreeRoot(&externalRoot); err != nil {

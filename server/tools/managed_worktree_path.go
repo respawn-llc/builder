@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"errors"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -11,35 +10,21 @@ import (
 )
 
 type ManagedWorktreePathContext struct {
-	baseRoot         string
-	currentRoot      *string
-	managedRoots     []string
-	baseRootResolver ManagedWorktreeBaseRootResolver
+	baseRoot     string
+	currentRoot  *string
+	managedRoots []string
 }
-
-type ManagedWorktreeBaseRootResolver func() (string, error)
 
 const ForeignManagedWorktreeEditDeniedMessage = "Directly reaching into another agent's worktree is not permitted. Enter the worktree first instead with `kent worktree enter`"
 
-var ErrForeignManagedWorktreeEditDenied = errors.New(ForeignManagedWorktreeEditDeniedMessage)
-
-func NewManagedWorktreePathContext(
-	baseDir string,
-	currentWorktreeRoot *string,
-	managedWorktreeRoots []string,
-	baseRootResolver ManagedWorktreeBaseRootResolver,
-) (*ManagedWorktreePathContext, error) {
-	if baseRootResolver == nil {
-		return nil, errors.New("managed worktree base root resolver is required")
-	}
+func NewManagedWorktreePathContext(baseDir string, currentWorktreeRoot *string, managedWorktreeRoots []string) (*ManagedWorktreePathContext, error) {
 	base, err := config.ResolveExistingPathRealPath(strings.TrimSpace(baseDir))
 	if err != nil {
 		return nil, fmt.Errorf("resolve managed worktree base: %w", err)
 	}
 	context := &ManagedWorktreePathContext{
-		baseRoot:         base,
-		managedRoots:     make([]string, 0, len(managedWorktreeRoots)),
-		baseRootResolver: baseRootResolver,
+		baseRoot:     base,
+		managedRoots: make([]string, 0, len(managedWorktreeRoots)),
 	}
 	if currentWorktreeRoot != nil {
 		current, err := config.ResolveExistingPathRealPath(*currentWorktreeRoot)
@@ -78,26 +63,11 @@ func NewManagedWorktreePathContext(
 	return context, nil
 }
 
-func (c ManagedWorktreePathContext) CheckMutationPath(resolvedPath string) error {
-	configuredBaseRoot, err := c.baseRootResolver()
-	if err != nil {
-		return fmt.Errorf("resolve configured managed worktree root: %w", err)
-	}
-	baseRoot, err := config.ResolveExistingPathRealPath(strings.TrimSpace(configuredBaseRoot))
-	if err != nil {
-		return fmt.Errorf("resolve configured managed worktree root: %w", err)
-	}
-	if c.isForeignManagedWorktreePath(baseRoot, resolvedPath) {
-		return ErrForeignManagedWorktreeEditDenied
-	}
-	return nil
-}
-
-func (c ManagedWorktreePathContext) isForeignManagedWorktreePath(baseRoot string, resolvedPath string) bool {
+func (c ManagedWorktreePathContext) IsForeignManagedWorktreePath(resolvedPath string) bool {
 	if c.currentRoot != nil && pathWithin(*c.currentRoot, resolvedPath) {
 		return false
 	}
-	return pathWithin(baseRoot, resolvedPath)
+	return pathWithin(c.baseRoot, resolvedPath)
 }
 
 func (c *ManagedWorktreePathContext) WithCurrentWorktreeRoot(currentWorktreeRoot *string) (*ManagedWorktreePathContext, error) {
@@ -105,9 +75,8 @@ func (c *ManagedWorktreePathContext) WithCurrentWorktreeRoot(currentWorktreeRoot
 		return nil, nil
 	}
 	next := &ManagedWorktreePathContext{
-		baseRoot:         c.baseRoot,
-		managedRoots:     append([]string(nil), c.managedRoots...),
-		baseRootResolver: c.baseRootResolver,
+		baseRoot:     c.baseRoot,
+		managedRoots: append([]string(nil), c.managedRoots...),
 	}
 	if currentWorktreeRoot == nil {
 		return next, nil
