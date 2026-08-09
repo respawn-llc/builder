@@ -2,6 +2,7 @@ package workflowview
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -73,15 +74,32 @@ type startedCurrentNodeViewTask struct {
 	currentNode workflow.CurrentNodeReference
 }
 
-type currentNodeViewQuestion struct {
+type currentNodeViewPrompt struct {
 	authority *sessionruntime.Authority
 	sessionID runtimeids.SessionID
 	request   tools.AskQuestionRequest
 	handle    sessionruntime.ExecutionHandle
 }
 
+type currentNodeViewQuestion struct {
+	currentNodeViewPrompt
+}
+
 func workflowViewQuestionAnswer(answer string) tools.AskQuestionAnswer {
 	return tools.AskQuestionAnswer{Freeform: &answer}
+}
+
+func workflowViewApprovalRequest() tools.AskQuestionRequest {
+	return tools.AskQuestionRequest{
+		ID:       uuid.NewString(),
+		StepID:   uuid.NewString(),
+		Question: "Approve this workflow action?",
+		Approval: true,
+		ApprovalOptions: []tools.AskQuestionApprovalOption{
+			{Decision: tools.AskQuestionApprovalDecisionAllowOnce, Label: "Allow once"},
+			{Decision: tools.AskQuestionApprovalDecisionDeny, Label: "Deny"},
+		},
+	}
 }
 
 func newCurrentNodeViewFixture(t *testing.T, requiresApproval bool) currentNodeViewFixture {
@@ -386,18 +404,6 @@ func (f currentNodeViewFixture) newAgentAuthority(t *testing.T) (*sessionruntime
 
 func (f currentNodeViewFixture) startCurrentNodeQuestion(t *testing.T, started startedCurrentNodeViewTask) currentNodeViewQuestion {
 	t.Helper()
-	authority, plan := f.newAgentAuthority(t)
-	return f.startCurrentNodeQuestionOnAuthority(t, started, authority, plan)
-}
-
-func (f currentNodeViewFixture) startCurrentNodeQuestionOnAuthority(
-	t *testing.T,
-	started startedCurrentNodeViewTask,
-	authority *sessionruntime.Authority,
-	plan sessionruntime.AgentRuntimePlan,
-) currentNodeViewQuestion {
-	t.Helper()
-	sessionID := f.bindCurrentNodeSession(t, started)
 	request := tools.AskQuestionRequest{
 		ID:                     uuid.NewString(),
 		StepID:                 uuid.NewString(),
@@ -405,6 +411,17 @@ func (f currentNodeViewFixture) startCurrentNodeQuestionOnAuthority(
 		Suggestions:            []string{"Yes", "No"},
 		RecommendedOptionIndex: 1,
 	}
+	return currentNodeViewQuestion{currentNodeViewPrompt: f.startCurrentNodePrompt(t, started, request)}
+}
+
+func (f currentNodeViewFixture) startCurrentNodePrompt(
+	t *testing.T,
+	started startedCurrentNodeViewTask,
+	request tools.AskQuestionRequest,
+) currentNodeViewPrompt {
+	t.Helper()
+	authority, plan := f.newAgentAuthority(t)
+	sessionID := f.bindCurrentNodeSession(t, started)
 	lease, err := authority.NewWorkflowExecutionLease(sessionruntime.WorkflowExecutionRef{
 		ProjectID:   f.binding.ProjectID,
 		WorkflowID:  f.workflowID,
@@ -427,15 +444,24 @@ func (f currentNodeViewFixture) startCurrentNodeQuestionOnAuthority(
 	if err != nil {
 		t.Fatalf("StartAgentExecution: %v", err)
 	}
+	t.Cleanup(func() {
+		if err := handle.Stop(context.Background()); err != nil {
+			t.Errorf("stop live workflow prompt execution: %v", err)
+		}
+	})
+	pendingKind := sessionruntime.PendingPromptKindQuestion
+	if request.Approval {
+		pendingKind = sessionruntime.PendingPromptKindSessionApproval
+	}
 	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
 		snapshots, snapshotErr := authority.CurrentWorkflowTaskExecutionSnapshots()
 		if snapshotErr != nil {
 			return false
 		}
 		executions := snapshots[started.task.ID].Executions
-		return len(executions) == 1 && executions[0].HasPendingPromptKind(sessionruntime.PendingPromptKindQuestion)
-	}, "timed out waiting for live workflow Question")
-	return currentNodeViewQuestion{
+		return len(executions) == 1 && executions[0].HasPendingPromptKind(pendingKind)
+	}, "timed out waiting for live workflow prompt")
+	return currentNodeViewPrompt{
 		authority: authority,
 		sessionID: sessionID,
 		request:   request,
@@ -443,13 +469,13 @@ func (f currentNodeViewFixture) startCurrentNodeQuestionOnAuthority(
 	}
 }
 
-func (q currentNodeViewQuestion) resolve(t *testing.T, ctx context.Context) {
+func (p currentNodeViewPrompt) resolve(t *testing.T, ctx context.Context, resolution tools.AskQuestionResolution) {
 	t.Helper()
-	if err := resolveWorkflowViewQuestion(q.authority, q.sessionID, q.request); err != nil {
+	if err := resolveWorkflowViewPrompt(p.authority, p.sessionID, p.request, resolution); err != nil {
 		t.Fatalf("ResolvePromptBatch: %v", err)
 	}
-	if _, err := q.handle.Wait(ctx); err != nil {
-		t.Fatalf("wait Question execution: %v", err)
+	if _, err := p.handle.Wait(ctx); err != nil {
+		t.Fatalf("wait prompt execution: %v", err)
 	}
 }
 
@@ -458,17 +484,38 @@ func resolveWorkflowViewQuestion(
 	sessionID runtimeids.SessionID,
 	request tools.AskQuestionRequest,
 ) error {
+	return resolveWorkflowViewPrompt(authority, sessionID, request, workflowViewQuestionAnswer("Yes"))
+}
+
+func resolveWorkflowViewPrompt(
+	authority *sessionruntime.Authority,
+	sessionID runtimeids.SessionID,
+	request tools.AskQuestionRequest,
+	resolution tools.AskQuestionResolution,
+) error {
 	stepID, err := runtimeids.ParseStepID(request.StepID)
 	if err != nil {
 		return err
 	}
+	var payload sessionruntime.PromptAnswerPayload
+	switch value := resolution.(type) {
+	case tools.AskQuestionAnswer:
+		payload = sessionruntime.PromptQuestionAnswerCommand{Answer: value}
+	case tools.AskQuestionApproval:
+		payload = sessionruntime.PromptApprovalAnswerCommand{Answer: value}
+	default:
+		return fmt.Errorf("unsupported prompt resolution %T", resolution)
+	}
 	_, err = authority.ResolvePromptBatch(context.Background(), sessionID, stepID, []sessionruntime.PromptAnswerCommand{{
 		PromptID: clientui.PromptID(request.ID),
-		Payload: sessionruntime.PromptQuestionAnswerCommand{
-			Answer: workflowViewQuestionAnswer("Yes"),
-		},
+		Payload:  payload,
 	}})
 	return err
+}
+
+func (q currentNodeViewQuestion) resolve(t *testing.T, ctx context.Context) {
+	t.Helper()
+	q.currentNodeViewPrompt.resolve(t, ctx, workflowViewQuestionAnswer("Yes"))
 }
 
 func (f currentNodeViewFixture) newAgentRuntimePlan(t *testing.T) sessionruntime.AgentRuntimePlan {

@@ -27,11 +27,10 @@ import { WorkflowValidationIssues } from "@/shared/workflow-validation";
 import { ErrorState, FloatingNoticeIsland, LoadingState } from "@/ui";
 import { BoardHoverMenu } from "./BoardHoverMenu";
 import { BoardHorizontalScrollbar } from "./BoardHorizontalScrollbar";
-import { useBoardDragAutoScroll } from "./BoardDragAutoScroll";
 import { BoardRailMotionController } from "./BoardRailMotionController";
 import { taskDeleteWindowOptions, type TaskDeleteTarget } from "./taskDeleteConfirmationModel";
 import type { BoardColumnDropState } from "./BoardDragTypes";
-import type { ActiveBoardCardDrag } from "./BoardDragState";
+import { classifyBoardColumnDropState, useBoardDragLifecycle } from "./BoardDragState";
 import { BoardBackgroundRefreshNotice } from "./BoardBackgroundRefreshNotice";
 import { BoardNoWorkflowState } from "./BoardNoWorkflowState";
 import { classifyDrop } from "./BoardDropActions";
@@ -222,8 +221,6 @@ function BoardContent({
   selectedTaskId: string;
 }>) {
   const { t } = useTranslation();
-  const [workflowIssuesCollapsed, setWorkflowIssuesCollapsed] = useState(false);
-  const [activeDrag, setActiveDrag] = useState<ActiveBoardCardDrag | null>(null);
   const [pendingCardMove, setPendingCardMove] = useState<PendingBoardCardMove | null>(null);
   const [expandedEmptyColumns, setExpandedEmptyColumns] = useState<
     Readonly<{ ids: ReadonlySet<string>; scope: string }>
@@ -232,12 +229,6 @@ function BoardContent({
   const { api, nativeBridge } = useAppServices();
   const navigation = useAppNavigation();
   const scrollportRef = useRef<HTMLDivElement | null>(null);
-  const dragAutoScroll = useBoardDragAutoScroll({ active: activeDrag !== null, rootRef: scrollportRef });
-  const stopDragAutoScroll = dragAutoScroll.stop;
-  const cancelActiveDrag = useCallback(() => {
-    stopDragAutoScroll();
-    setActiveDrag(null);
-  }, [stopDragAutoScroll]);
   const { open } = useOwnedSidebarRoots();
   const connection = useConnectionSnapshot();
   const actions = useBoardTaskActions(board.projectID);
@@ -295,6 +286,15 @@ function BoardContent({
   });
   const actionsDisabled =
     initiatingActionsDisabled || resumeAction.actionsDisabled || manualMove.actionsDisabled;
+  const dragDisabled = actionsDisabled || !board.selectedWorkflow.validForTaskCreation;
+  const {
+    activeDrag,
+    autoScroll: dragAutoScroll,
+    cancel: cancelActiveDrag,
+    dragBlocked,
+    start: startActiveDrag,
+  } = useBoardDragLifecycle({ disabled: dragDisabled, rootRef: scrollportRef });
+  const stopDragAutoScroll = dragAutoScroll.stop;
   const taskDeleteDialog = useNativeDialogFallback<TaskDeleteTarget>({
     errorNoticeID: "task-delete-window-error",
     errorTitle: t("board.deleteTaskWindowError"),
@@ -386,7 +386,7 @@ function BoardContent({
     event.preventDefault();
     const dragPayload = activeDrag === null ? null : activeDrag.payload;
     cancelActiveDrag();
-    if (dragPayload === null || actionsDisabled) {
+    if (dragPayload === null) {
       reportRejectedDrop();
       return;
     }
@@ -451,14 +451,12 @@ function BoardContent({
   }
 
   function columnDropState(column: BoardColumn): BoardColumnDropState {
-    if (activeDrag === null) {
-      return "idle";
-    }
-    if (actionsDisabled) {
-      return "blocked";
-    }
-    const action = classifyDrop(column, activeDrag.payload, firstActive?.id);
-    return action.kind === "reject" ? "blocked" : "idle";
+    return classifyBoardColumnDropState({
+      column,
+      drag: activeDrag,
+      dragBlocked,
+      firstActiveID: firstActive?.id,
+    });
   }
 
   function columnIsCollapsed(column: BoardColumn): boolean {
@@ -575,12 +573,11 @@ function BoardContent({
             board={board}
             columnDropState={columnDropState}
             columnIsCollapsed={columnIsCollapsed}
+            dragDisabled={dragDisabled}
             firstActiveID={firstActive?.id}
             onCardClick={openTask}
             onCardDragEnd={cancelActiveDrag}
-            onCardDragStart={(drag) => {
-              setActiveDrag(drag);
-            }}
+            onCardDragStart={startActiveDrag}
             onDeleteTask={deleteTask}
             onDropTask={dropTask}
             onExpandColumn={expandColumn}
@@ -609,19 +606,7 @@ function BoardContent({
       {boardRefreshError === null ? null : (
         <BoardBackgroundRefreshNotice error={boardRefreshError} onRetry={onBoardRefreshRetry} />
       )}
-      {!board.selectedWorkflow.validForTaskCreation ? (
-        <FloatingNoticeIsland
-          collapsed={workflowIssuesCollapsed}
-          collapseLabel={t("app.collapse")}
-          expandLabel={t("app.expand")}
-          onCollapsedChange={setWorkflowIssuesCollapsed}
-          positionClassName="right-[var(--space-4)] bottom-[var(--space-4)]"
-          title={t("board.workflowIssues")}
-          tone="danger"
-        >
-          <WorkflowValidationIssues errors={board.selectedWorkflow.validationErrors} />
-        </FloatingNoticeIsland>
-      ) : null}
+      <BoardWorkflowIssuesNotice workflow={board.selectedWorkflow} />
       <BoardHoverMenu
         board={board}
         canCreateTask={connection.phase === "connected"}
@@ -631,5 +616,28 @@ function BoardContent({
         onWorkflowSelect={selectWorkflow}
       />
     </div>
+  );
+}
+
+function BoardWorkflowIssuesNotice({
+  workflow,
+}: Readonly<{ workflow: SelectedWorkflowBoard["selectedWorkflow"] }>) {
+  const { t } = useTranslation();
+  const [collapsed, setCollapsed] = useState(false);
+  if (workflow.validForTaskCreation) {
+    return null;
+  }
+  return (
+    <FloatingNoticeIsland
+      collapsed={collapsed}
+      collapseLabel={t("app.collapse")}
+      expandLabel={t("app.expand")}
+      onCollapsedChange={setCollapsed}
+      positionClassName="right-[var(--space-4)] bottom-[var(--space-4)]"
+      title={t("board.workflowIssues")}
+      tone="danger"
+    >
+      <WorkflowValidationIssues errors={workflow.validationErrors} />
+    </FloatingNoticeIsland>
   );
 }

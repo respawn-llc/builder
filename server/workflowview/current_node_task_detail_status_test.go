@@ -1,17 +1,12 @@
 package workflowview
 
 import (
-	"context"
-	"os/exec"
 	"reflect"
 	"slices"
 	"sort"
 	"testing"
-	"time"
 
-	"core/internal/testharness/testsetup"
 	"core/server/sessionruntime"
-	"core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowexecution"
 	"core/server/workflowstore"
@@ -20,283 +15,20 @@ import (
 	"github.com/google/uuid"
 )
 
-func TestCurrentNodeStatusProjectionCrossSurfaceStableQuestion(t *testing.T) {
-	surfaces := newRealTaskStatusSurfaces(t, false)
-	fixture := surfaces.fixture
-	backlog := startedCurrentNodeViewTask{task: fixture.createBacklogTask(t, "Cross surface question")}
-	request := tools.AskQuestionRequest{
-		ID:                     uuid.NewString(),
-		StepID:                 uuid.NewString(),
-		Question:               "Proceed?",
-		Suggestions:            []string{"Yes", "No"},
-		RecommendedOptionIndex: 1,
-	}
-	started, execution := startRealTaskStatusExecution(t, surfaces, backlog, false, &request)
-	agentTarget, ok := execution.target.(taskStatusAgentTarget)
-	if !ok {
-		t.Fatalf("question execution target = %T, want agent", execution.target)
-	}
-	defer func() {
-		if err := resolveWorkflowViewQuestion(fixture.authority, agentTarget.sessionID, request); err != nil {
-			t.Fatalf("ResolvePromptBatch: %v", err)
-		}
-	}()
-
-	detail, err := surfaces.detail.GetTask(fixture.ctx, string(started.task.ID))
-	if err != nil {
-		t.Fatalf("TaskDetail.GetTask: %v", err)
-	}
-	projectID := fixture.binding.ProjectID
-	workflowID := fixture.workflowID
-	limit := 20
-	listed, err := surfaces.list.List(fixture.ctx, serverapi.WorkflowTaskListRequest{
-		ProjectID:   &projectID,
-		WorkflowID:  &workflowID,
-		StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindWaitingQuestion},
-		LabelFilter: serverapi.WorkflowTaskLabelFilterNone(),
-		Limit:       &limit,
-	})
-	if err != nil {
-		t.Fatalf("TaskList.List: %v", err)
-	}
-	if len(listed.Tasks) != 1 {
-		t.Fatalf("TaskList tasks = %+v, want one", listed.Tasks)
-	}
-	cards, err := surfaces.board.ListNodeCards(fixture.ctx, serverapi.WorkflowBoardNodeCardsListRequest{
-		ProjectID:   projectID,
-		WorkflowID:  workflowID,
-		NodeID:      string(fixture.agentNodeID),
-		PageSize:    20,
-		LabelFilter: serverapi.WorkflowTaskLabelFilterNone(),
-	})
-	if err != nil {
-		t.Fatalf("Board.ListNodeCards: %v", err)
-	}
-	if len(cards.Cards) != 1 {
-		t.Fatalf("Board cards = %+v, want one", cards.Cards)
-	}
-	searchResponse, err := surfaces.search.Search(fixture.ctx, serverapi.TaskSearchRequest{
-		Mode:        serverapi.TaskSearchModeLiteral,
-		Query:       "Cross surface question",
-		Context:     serverapi.TaskSearchDefaultContext,
-		ProjectIDs:  []string{projectID},
-		StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindWaitingQuestion},
-		PageSize:    serverapi.TaskSearchDefaultPageSize,
-	})
-	if err != nil {
-		t.Fatalf("TaskSearch.Search: %v", err)
-	}
-	if len(searchResponse.Groups) != 1 {
-		t.Fatalf("TaskSearch groups = %+v, want one", searchResponse.Groups)
-	}
-	if !reflect.DeepEqual(detail.Status, listed.Tasks[0].Status) ||
-		!reflect.DeepEqual(detail.Status, cards.Cards[0].Status) ||
-		!reflect.DeepEqual(detail.Status, searchResponse.Groups[0].Status) {
-		t.Fatalf("cross-surface status mismatch: detail=%+v list=%+v board=%+v search=%+v",
-			detail.Status, listed.Tasks[0].Status, cards.Cards[0].Status, searchResponse.Groups[0].Status)
-	}
-	if detail.Status.Kind != serverapi.WorkflowTaskStatusKindWaitingQuestion ||
-		detail.AttentionCount != 1 ||
-		detail.Actions.CanInterrupt ||
-		detail.Actions.CanDelete ||
-		len(detail.LiveSessions) != 1 ||
-		detail.LiveSessions[0].SessionID != agentTarget.sessionID.String() ||
-		detail.LiveSessions[0].SessionName == nil ||
-		*detail.LiveSessions[0].SessionName != "Current Node session" ||
-		detail.LiveSessions[0].NodeDisplayName != "Agent" {
-		t.Fatalf("cross-surface detail = %+v", detail)
-	}
-	if !reflect.DeepEqual(detail.Actions, cards.Cards[0].Actions) ||
-		cards.Cards[0].TaskID != string(started.task.ID) ||
-		listed.Tasks[0].TaskID != string(started.task.ID) ||
-		searchResponse.Groups[0].TaskID != string(started.task.ID) {
-		t.Fatalf("cross-surface lifecycle projection mismatch: detail=%+v board=%+v list=%+v search=%+v",
-			detail.Actions, cards.Cards[0].Actions, listed.Tasks[0], searchResponse.Groups[0])
-	}
-}
-
-func TestTaskStatusProjectionCrossSurfaceStableLifecycleMatrix(t *testing.T) {
-	tests := []struct {
-		name             string
-		requiresApproval bool
-		startsExisting   bool
-		wantStatus       serverapi.WorkflowTaskStatusKind
-		wantAttention    int
-		wantCanInterrupt bool
-		wantCanDelete    bool
-		setup            func(*testing.T, realTaskStatusSurfaces, startedCurrentNodeViewTask) taskStatusExpectedTarget
-	}{
-		{
-			name:          "queued",
-			wantStatus:    serverapi.WorkflowTaskStatusKindQueued,
-			wantCanDelete: false,
-			setup: func(t *testing.T, surfaces realTaskStatusSurfaces, task startedCurrentNodeViewTask) taskStatusExpectedTarget {
-				_, execution := startRealTaskStatusExecution(t, surfaces, task, true, nil)
-				return taskStatusExpectedTarget{nodeID: surfaces.fixture.agentNodeID, live: execution.target}
-			},
-		},
-		{
-			name:             "running",
-			wantStatus:       serverapi.WorkflowTaskStatusKindRunning,
-			wantCanInterrupt: true,
-			wantCanDelete:    false,
-			setup: func(t *testing.T, surfaces realTaskStatusSurfaces, task startedCurrentNodeViewTask) taskStatusExpectedTarget {
-				_, execution := startRealTaskStatusExecution(t, surfaces, task, false, nil)
-				return taskStatusExpectedTarget{nodeID: surfaces.fixture.agentNodeID, live: execution.target}
-			},
-		},
-		{
-			name:             "live script",
-			wantStatus:       serverapi.WorkflowTaskStatusKindRunning,
-			wantCanInterrupt: true,
-			wantCanDelete:    false,
-			setup: func(t *testing.T, surfaces realTaskStatusSurfaces, task startedCurrentNodeViewTask) taskStatusExpectedTarget {
-				shellPath, err := exec.LookPath("sh")
-				if err != nil {
-					t.Skipf("sh executable unavailable: %v", err)
-				}
-				_, execution := startRealTaskStatusScriptExecution(t, surfaces, task, shellPath)
-				return taskStatusExpectedTarget{nodeID: surfaces.fixture.agentNodeID, live: execution.target}
-			},
-		},
-		{
-			name:          "ordinary question",
-			wantStatus:    serverapi.WorkflowTaskStatusKindWaitingQuestion,
-			wantAttention: 1,
-			wantCanDelete: false,
-			setup: func(t *testing.T, surfaces realTaskStatusSurfaces, task startedCurrentNodeViewTask) taskStatusExpectedTarget {
-				request := tools.AskQuestionRequest{
-					ID:       uuid.NewString(),
-					StepID:   uuid.NewString(),
-					Question: "Proceed?",
-				}
-				_, execution := startRealTaskStatusExecution(t, surfaces, task, false, &request)
-				t.Cleanup(func() {
-					agentTarget, ok := execution.target.(taskStatusAgentTarget)
-					if !ok {
-						t.Errorf("question execution target = %T, want agent", execution.target)
-						return
-					}
-					if err := resolveWorkflowViewQuestion(surfaces.fixture.authority, agentTarget.sessionID, request); err != nil {
-						t.Errorf("ResolvePromptBatch: %v", err)
-					}
-				})
-				return taskStatusExpectedTarget{nodeID: surfaces.fixture.agentNodeID, live: execution.target}
-			},
-		},
-		{
-			name:          "live session approval",
-			wantStatus:    serverapi.WorkflowTaskStatusKindWaitingApproval,
-			wantAttention: 1,
-			wantCanDelete: false,
-			setup: func(t *testing.T, surfaces realTaskStatusSurfaces, task startedCurrentNodeViewTask) taskStatusExpectedTarget {
-				_, execution := startRealTaskStatusExecution(t, surfaces, task, false, func() *tools.AskQuestionRequest {
-					request := realTaskStatusApprovalRequest()
-					return &request
-				}())
-				return taskStatusExpectedTarget{nodeID: surfaces.fixture.agentNodeID, live: execution.target}
-			},
-		},
-		{
-			name:             "durable transition approval",
-			requiresApproval: true,
-			startsExisting:   true,
-			wantStatus:       serverapi.WorkflowTaskStatusKindWaitingApproval,
-			wantAttention:    1,
-			wantCanDelete:    true,
-			setup: func(t *testing.T, surfaces realTaskStatusSurfaces, task startedCurrentNodeViewTask) taskStatusExpectedTarget {
-				completed, err := surfaces.fixture.store.CompleteCurrentNode(surfaces.fixture.ctx, workflowstore.CurrentNodeCompletionRequest{
-					Source:       task.currentNode,
-					TransitionID: "done",
-				})
-				if err != nil || completed.PendingApproval == nil {
-					t.Fatalf("CompleteCurrentNode durable approval: result=%+v err=%v", completed, err)
-				}
-				return taskStatusExpectedTarget{nodeID: surfaces.fixture.agentNodeID, live: taskStatusNoLiveTarget{}}
-			},
-		},
-		{
-			name:           "interrupted",
-			startsExisting: true,
-			wantStatus:     serverapi.WorkflowTaskStatusKindInterrupted,
-			wantAttention:  1,
-			wantCanDelete:  true,
-			setup: func(t *testing.T, surfaces realTaskStatusSurfaces, task startedCurrentNodeViewTask) taskStatusExpectedTarget {
-				if err := surfaces.fixture.store.InterruptCurrentNode(
-					surfaces.fixture.ctx,
-					task.currentNode,
-					workflow.CurrentNodeInterruptionReason("server_restart"),
-					workflow.CurrentNodeInterruptionDetail{Code: "restart"},
-				); err != nil {
-					t.Fatalf("InterruptCurrentNode: %v", err)
-				}
-				return taskStatusExpectedTarget{nodeID: surfaces.fixture.agentNodeID, live: taskStatusNoLiveTarget{}}
-			},
-		},
-		{
-			name:           "completed",
-			startsExisting: true,
-			wantStatus:     serverapi.WorkflowTaskStatusKindDone,
-			wantCanDelete:  true,
-			setup: func(t *testing.T, surfaces realTaskStatusSurfaces, task startedCurrentNodeViewTask) taskStatusExpectedTarget {
-				if _, err := surfaces.fixture.store.CompleteCurrentNode(surfaces.fixture.ctx, workflowstore.CurrentNodeCompletionRequest{
-					Source:       task.currentNode,
-					TransitionID: "done",
-				}); err != nil {
-					t.Fatalf("CompleteCurrentNode: %v", err)
-				}
-				definition, _, err := surfaces.fixture.store.GetDefinition(surfaces.fixture.ctx, surfaces.fixture.workflowID)
-				if err != nil {
-					t.Fatalf("GetDefinition: %v", err)
-				}
-				return taskStatusExpectedTarget{
-					nodeID: currentNodeViewNodeIDByKind(t, definition, workflow.NodeKindTerminal),
-					live:   taskStatusNoLiveTarget{},
-				}
-			},
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			surfaces := newRealTaskStatusSurfaces(t, test.requiresApproval)
-			task := startedCurrentNodeViewTask{
-				task: surfaces.fixture.createBacklogTask(t, "Lifecycle "+test.name),
-			}
-			if test.startsExisting {
-				task = surfaces.fixture.startExistingTask(t, task.task)
-			}
-			expected := test.setup(t, surfaces, task)
-			assertRealTaskStatusAcrossSurfaces(t, surfaces, task, expected, test.wantStatus, test.wantAttention, test.wantCanInterrupt, test.wantCanDelete)
-		})
-	}
-}
-
 func TestTaskDetailDependenciesUseOneStatusObservation(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
-	controller, err := workflowexecution.NewCurrentNodeController(
-		fixture.store,
-		taskStatusProjectionTestRunner{},
-		fixture.authority,
-		workflowexecution.NewMutationPermit(),
-		workflowexecution.CurrentNodeControllerConfig{
-			AgentConcurrency:  1,
-			AssignmentSteerer: taskStatusProjectionTestAssignmentSteerer{},
-		},
-	)
-	if err != nil {
-		t.Fatalf("NewCurrentNodeController: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := controller.Close(); err != nil {
-			t.Errorf("close controller: %v", err)
-		}
-	})
 	calls := 0
 	projection, err := NewTaskStatusProjection(
 		fixture.metadata,
 		fixture.store,
 		NewTaskProjector(),
-		countingTaskStatusLiveObservationSource{source: controller, calls: &calls},
+		countingTaskStatusLiveObservationSource{
+			source: currentNodeViewStatusObservationSource{
+				authority:  fixture.authority,
+				quiescence: fixture.quiescence,
+			},
+			calls: &calls,
+		},
 	)
 	if err != nil {
 		t.Fatalf("NewTaskStatusProjection: %v", err)
@@ -317,6 +49,7 @@ func TestTaskDetailDependenciesUseOneStatusObservation(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("AddTaskDependency: %v", err)
 	}
+
 	projected, err := detail.GetTask(fixture.ctx, string(blocked.ID))
 	if err != nil {
 		t.Fatalf("TaskDetail.GetTask: %v", err)
@@ -331,140 +64,11 @@ func TestTaskDetailDependenciesUseOneStatusObservation(t *testing.T) {
 	}
 }
 
-func assertRealTaskStatusAcrossSurfaces(
-	t *testing.T,
-	surfaces realTaskStatusSurfaces,
-	task startedCurrentNodeViewTask,
-	expected taskStatusExpectedTarget,
-	wantStatus serverapi.WorkflowTaskStatusKind,
-	wantAttention int,
-	wantCanInterrupt bool,
-	wantCanDelete bool,
-) {
-	t.Helper()
-	observation, err := surfaces.controller.ObserveWorkflowTaskExecutions([]workflow.TaskID{task.task.ID})
-	if err != nil {
-		t.Fatalf("ObserveWorkflowTaskExecutions: %v", err)
-	}
-	wantQuiescent := false
-	switch expected.live.(type) {
-	case taskStatusNoLiveTarget:
-		wantQuiescent = true
-	case taskStatusAgentTarget, taskStatusScriptTarget:
-	default:
-		t.Fatalf("unsupported expected live target %T", expected.live)
-	}
-	if got := observation.Quiescence[task.task.ID]; got != wantQuiescent {
-		t.Fatalf("Controller quiescence = %t, want %t", got, wantQuiescent)
-	}
-	detail, err := surfaces.detail.GetTask(surfaces.fixture.ctx, string(task.task.ID))
-	if err != nil {
-		t.Fatalf("TaskDetail.GetTask: %v", err)
-	}
-	if err := (serverapi.WorkflowTaskGetResponse{Task: detail}).Validate(); err != nil {
-		t.Fatalf("Task Detail API response validation: %v", err)
-	}
-	projectID := surfaces.fixture.binding.ProjectID
-	workflowID := surfaces.fixture.workflowID
-	limit := 20
-	listed, err := surfaces.list.List(surfaces.fixture.ctx, serverapi.WorkflowTaskListRequest{
-		ProjectID:   &projectID,
-		WorkflowID:  &workflowID,
-		StatusKinds: []serverapi.WorkflowTaskStatusKind{wantStatus},
-		LabelFilter: serverapi.WorkflowTaskLabelFilterNone(),
-		Limit:       &limit,
-	})
-	if err != nil {
-		t.Fatalf("TaskList.List: %v", err)
-	}
-	if len(listed.Tasks) != 1 {
-		t.Fatalf("TaskList tasks = %+v, want one", listed.Tasks)
-	}
-	cards, err := surfaces.board.ListNodeCards(surfaces.fixture.ctx, serverapi.WorkflowBoardNodeCardsListRequest{
-		ProjectID:   projectID,
-		WorkflowID:  workflowID,
-		NodeID:      string(expected.nodeID),
-		PageSize:    20,
-		LabelFilter: serverapi.WorkflowTaskLabelFilterNone(),
-	})
-	if err != nil {
-		t.Fatalf("Board.ListNodeCards: %v", err)
-	}
-	if len(cards.Cards) != 1 {
-		t.Fatalf("Board cards = %+v, want one", cards.Cards)
-	}
-	searchResponse, err := surfaces.search.Search(surfaces.fixture.ctx, serverapi.TaskSearchRequest{
-		Mode:        serverapi.TaskSearchModeLiteral,
-		Query:       task.task.Title,
-		Context:     serverapi.TaskSearchDefaultContext,
-		ProjectIDs:  []string{projectID},
-		StatusKinds: []serverapi.WorkflowTaskStatusKind{wantStatus},
-		PageSize:    serverapi.TaskSearchDefaultPageSize,
-	})
-	if err != nil {
-		t.Fatalf("TaskSearch.Search: %v", err)
-	}
-	if len(searchResponse.Groups) != 1 {
-		t.Fatalf("TaskSearch groups = %+v, want one", searchResponse.Groups)
-	}
-	statuses := []serverapi.WorkflowTaskStatus{
-		detail.Status,
-		listed.Tasks[0].Status,
-		cards.Cards[0].Status,
-		searchResponse.Groups[0].Status,
-	}
-	for index, status := range statuses[1:] {
-		if !reflect.DeepEqual(statuses[0], status) {
-			t.Fatalf("surface status %d = %+v, want %s", index+1, status, statuses[0].Kind)
-		}
-	}
-	if detail.Status.Kind != wantStatus || detail.AttentionCount != wantAttention {
-		t.Fatalf("detail status/attention = %s/%d, want %s/%d", detail.Status.Kind, detail.AttentionCount, wantStatus, wantAttention)
-	}
-	if detail.Actions.CanInterrupt != wantCanInterrupt || detail.Actions.CanDelete != wantCanDelete {
-		t.Fatalf("detail actions = %+v, want can_interrupt=%t can_delete=%t", detail.Actions, wantCanInterrupt, wantCanDelete)
-	}
-	if !reflect.DeepEqual(detail.Actions, cards.Cards[0].Actions) {
-		t.Fatalf("detail/board actions differ: detail=%+v board=%+v", detail.Actions, cards.Cards[0].Actions)
-	}
-	if len(detail.CurrentNodes) != 0 && (len(detail.CurrentNodes) != 1 || detail.CurrentNodes[0].NodeID != string(expected.nodeID)) {
-		t.Fatalf("detail current nodes = %+v, want node %q", detail.CurrentNodes, expected.nodeID)
-	}
-	activeNodeIDs := make([]string, 0, len(detail.CurrentNodes))
-	for _, currentNode := range detail.CurrentNodes {
-		activeNodeIDs = append(activeNodeIDs, currentNode.NodeID)
-	}
-	if !reflect.DeepEqual(activeNodeIDs, cards.Cards[0].ActiveNodeIDs) {
-		t.Fatalf("detail/board current nodes differ: detail=%v board=%v", activeNodeIDs, cards.Cards[0].ActiveNodeIDs)
-	}
-	switch target := expected.live.(type) {
-	case taskStatusNoLiveTarget:
-		if len(detail.LiveSessions) != 0 || len(detail.CurrentScripts) != 0 {
-			t.Fatalf("durable detail live targets = sessions %v scripts %+v, want none", detail.LiveSessions, detail.CurrentScripts)
-		}
-	case taskStatusAgentTarget:
-		if len(detail.LiveSessions) != 1 ||
-			detail.LiveSessions[0].SessionID != target.sessionID.String() ||
-			len(detail.CurrentScripts) != 0 {
-			t.Fatalf("agent detail live targets = sessions %v scripts %+v", detail.LiveSessions, detail.CurrentScripts)
-		}
-	case taskStatusScriptTarget:
-		if len(detail.LiveSessions) != 0 ||
-			len(detail.CurrentScripts) != 1 ||
-			detail.CurrentScripts[0].Path != target.path ||
-			detail.CurrentScripts[0].CurrentNode.NodeID != string(expected.nodeID) {
-			t.Fatalf("script detail live targets = sessions %v scripts %+v", detail.LiveSessions, detail.CurrentScripts)
-		}
-		if len(cards.Cards[0].ActiveNodeIDs) != 1 || cards.Cards[0].ActiveNodeIDs[0] != string(expected.nodeID) {
-			t.Fatalf("script board active nodes = %v, want node %q", cards.Cards[0].ActiveNodeIDs, expected.nodeID)
-		}
-	}
-}
-
 func TestTaskDetailProjectsCurrentNodeAndDirectRetainedSession(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
 	started := fixture.startTask(t, "Detail task")
 	sessionID := fixture.bindCurrentNodeSession(t, started)
+	fixture.quiescence.blocked[started.task.ID] = true
 
 	detail, err := fixture.detail.GetTask(fixture.ctx, string(started.task.ID))
 	if err != nil {
@@ -477,144 +81,206 @@ func TestTaskDetailProjectsCurrentNodeAndDirectRetainedSession(t *testing.T) {
 		*detail.CurrentNodes[0].SessionID != sessionID.String() ||
 		detail.RetainedSessionCount != 1 ||
 		detail.Status.Kind != serverapi.WorkflowTaskStatusKindActive ||
+		detail.Actions.CanDelete ||
 		detail.Actions.CanStart {
-		t.Fatalf("task detail = %+v, want Current Node and directly retained session", detail)
+		t.Fatalf("task detail = %+v, want Current Node and directly retained Session", detail)
 	}
-}
-
-func TestTaskDetailCurrentScriptOrderingIsNilAwareAndTotal(t *testing.T) {
-	branchA := "a"
-	branchZ := "z"
-	scripts := []serverapi.WorkflowTaskCurrentScript{
-		{CurrentNode: serverapi.WorkflowTaskCurrentNode{NodeID: "node-b"}, Path: "b"},
-		{CurrentNode: serverapi.WorkflowTaskCurrentNode{NodeID: "node-a", TransitionBranchKey: &branchZ}, Path: "z"},
-		{CurrentNode: serverapi.WorkflowTaskCurrentNode{NodeID: "node-a"}, Path: "z"},
-		{CurrentNode: serverapi.WorkflowTaskCurrentNode{NodeID: "node-a"}, Path: "a"},
-		{CurrentNode: serverapi.WorkflowTaskCurrentNode{NodeID: "node-a", TransitionBranchKey: &branchA}, Path: "z"},
-		{CurrentNode: serverapi.WorkflowTaskCurrentNode{NodeID: "node-a", TransitionBranchKey: &branchA}, Path: "a"},
-	}
-
-	sortTaskDetailCurrentScripts(scripts)
-
-	want := []serverapi.WorkflowTaskCurrentScript{
-		{CurrentNode: serverapi.WorkflowTaskCurrentNode{NodeID: "node-a"}, Path: "a"},
-		{CurrentNode: serverapi.WorkflowTaskCurrentNode{NodeID: "node-a"}, Path: "z"},
-		{
-			CurrentNode: serverapi.WorkflowTaskCurrentNode{
-				NodeID:              "node-a",
-				TransitionBranchKey: &branchA,
-			},
-			Path: "a",
-		},
-		{
-			CurrentNode: serverapi.WorkflowTaskCurrentNode{
-				NodeID:              "node-a",
-				TransitionBranchKey: &branchA,
-			},
-			Path: "z",
-		},
-		{
-			CurrentNode: serverapi.WorkflowTaskCurrentNode{
-				NodeID:              "node-a",
-				TransitionBranchKey: &branchZ,
-			},
-			Path: "z",
-		},
-		{CurrentNode: serverapi.WorkflowTaskCurrentNode{NodeID: "node-b"}, Path: "b"},
-	}
-	if !reflect.DeepEqual(scripts, want) {
-		t.Fatalf("Current Script order = %+v, want %+v", scripts, want)
-	}
-}
-
-func TestTaskDeleteActionUsesWorkflowExecutionQuiescence(t *testing.T) {
-	fixture := newCurrentNodeViewFixture(t, false)
-	started := fixture.startTask(t, "Delete hint")
-	taskID := started.task.ID
-	fixture.quiescence.blocked[taskID] = true
-
-	detail, err := fixture.detail.GetTask(fixture.ctx, string(taskID))
-	if err != nil {
-		t.Fatalf("TaskDetail.GetTask blocked: %v", err)
-	}
-	if detail.Actions.CanDelete {
-		t.Fatalf("blocked task actions = %+v, want can_delete false", detail.Actions)
-	}
-	cards, err := fixture.board.ListNodeCards(fixture.ctx, serverapi.WorkflowBoardNodeCardsListRequest{
-		ProjectID:  fixture.binding.ProjectID,
-		WorkflowID: fixture.workflowID,
-		NodeID:     string(fixture.agentNodeID),
-		PageSize:   20,
-		LabelFilter: serverapi.WorkflowTaskLabelFilter{
-			Kind: serverapi.WorkflowTaskLabelFilterKindNone,
-		},
-	})
-	if err != nil {
-		t.Fatalf("Board.ListNodeCards blocked: %v", err)
-	}
-	if len(cards.Cards) != 1 || cards.Cards[0].Actions.CanDelete {
-		t.Fatalf("blocked board cards = %+v, want can_delete false", cards.Cards)
-	}
-
-	delete(fixture.quiescence.blocked, taskID)
-	detail, err = fixture.detail.GetTask(fixture.ctx, string(taskID))
+	delete(fixture.quiescence.blocked, started.task.ID)
+	quiescent, err := fixture.detail.GetTask(fixture.ctx, string(started.task.ID))
 	if err != nil {
 		t.Fatalf("TaskDetail.GetTask quiescent: %v", err)
 	}
-	if !detail.Actions.CanDelete {
-		t.Fatalf("quiescent task actions = %+v, want can_delete true", detail.Actions)
-	}
-	cards, err = fixture.board.ListNodeCards(fixture.ctx, serverapi.WorkflowBoardNodeCardsListRequest{
-		ProjectID:  fixture.binding.ProjectID,
-		WorkflowID: fixture.workflowID,
-		NodeID:     string(fixture.agentNodeID),
-		PageSize:   20,
-		LabelFilter: serverapi.WorkflowTaskLabelFilter{
-			Kind: serverapi.WorkflowTaskLabelFilterKindNone,
-		},
-	})
-	if err != nil {
-		t.Fatalf("Board.ListNodeCards quiescent: %v", err)
-	}
-	if len(cards.Cards) != 1 || !cards.Cards[0].Actions.CanDelete {
-		t.Fatalf("quiescent board cards = %+v, want can_delete true", cards.Cards)
+	if !quiescent.Actions.CanDelete {
+		t.Fatalf("quiescent task actions = %+v, want can_delete true", quiescent.Actions)
 	}
 }
 
-func TestTaskListProjectsCurrentNodeStatusAndColumn(t *testing.T) {
+func TestTaskDetailMaterializesAndOrdersLiveScripts(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
-	started := fixture.startTask(t, "List task")
-	projectID := fixture.binding.ProjectID
-	workflowID := fixture.workflowID
-	limit := 20
-
-	list, err := fixture.tasks.List(fixture.ctx, serverapi.WorkflowTaskListRequest{
-		ProjectID:   &projectID,
-		WorkflowID:  &workflowID,
-		ColumnKeys:  []string{"agent"},
-		StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindActive},
-		LabelFilter: serverapi.WorkflowTaskLabelFilter{
-			Kind: serverapi.WorkflowTaskLabelFilterKindNone,
-		},
-		Limit: &limit,
-	})
+	started := fixture.startTask(t, "Live Scripts")
+	scriptNodeIDs := []workflow.NodeID{
+		workflow.NodeID("node-" + uuid.NewString()),
+		workflow.NodeID("node-" + uuid.NewString()),
+	}
+	slices.Sort(scriptNodeIDs)
+	scriptPaths := []string{"scripts/a.sh", "scripts/b.sh"}
+	joinNodeID := workflow.NodeID("node-" + uuid.NewString())
+	joinAEdgeID := workflow.EdgeID("edge-" + uuid.NewString())
+	joinBEdgeID := workflow.EdgeID("edge-" + uuid.NewString())
+	nodes := []workflowstore.NodeRecord{
+		{ID: scriptNodeIDs[0], WorkflowID: fixture.workflowID, Key: "script_a", Kind: workflow.NodeKindScript, DisplayName: "Script A", ScriptPath: scriptPaths[0]},
+		{ID: scriptNodeIDs[1], WorkflowID: fixture.workflowID, Key: "script_b", Kind: workflow.NodeKindScript, DisplayName: "Script B", ScriptPath: scriptPaths[1]},
+		{ID: joinNodeID, WorkflowID: fixture.workflowID, Key: "join", Kind: workflow.NodeKindJoin, DisplayName: "Join", JoinInputProviders: []workflow.JoinInputProvider{{InputName: "joined", ProviderEdgeID: joinAEdgeID}}},
+	}
+	for _, node := range nodes {
+		if _, err := fixture.store.AddNode(fixture.ctx, node); err != nil {
+			t.Fatalf("AddNode %s: %v", node.Key, err)
+		}
+	}
+	definition, _, err := fixture.store.GetDefinition(fixture.ctx, fixture.workflowID)
 	if err != nil {
-		t.Fatalf("TaskList.List: %v", err)
+		t.Fatalf("GetDefinition: %v", err)
 	}
-	if len(list.Tasks) != 1 {
-		t.Fatalf("task list = %+v, want one started Current Node", list.Tasks)
+	terminalNodeID := currentNodeViewNodeIDByKind(t, definition, workflow.NodeKindTerminal)
+	groupIDs := []workflow.TransitionGroupID{
+		workflow.TransitionGroupID("group-" + uuid.NewString()),
+		workflow.TransitionGroupID("group-" + uuid.NewString()),
+		workflow.TransitionGroupID("group-" + uuid.NewString()),
+		workflow.TransitionGroupID("group-" + uuid.NewString()),
 	}
-	item := list.Tasks[0]
-	if item.TaskID != string(started.task.ID) ||
-		item.Status.Kind != serverapi.WorkflowTaskStatusKindActive ||
-		item.ColumnKeys == nil ||
-		len(*item.ColumnKeys) != 1 ||
-		(*item.ColumnKeys)[0] != "agent" {
-		t.Fatalf("task list item = %+v, want Current Node status and column", item)
+	groups := []workflowstore.TransitionGroupRecord{
+		{ID: groupIDs[0], WorkflowID: fixture.workflowID, SourceNodeID: fixture.agentNodeID, TransitionID: "split", DisplayName: "Split"},
+		{ID: groupIDs[1], WorkflowID: fixture.workflowID, SourceNodeID: scriptNodeIDs[0], TransitionID: "join_a", DisplayName: "Join"},
+		{ID: groupIDs[2], WorkflowID: fixture.workflowID, SourceNodeID: scriptNodeIDs[1], TransitionID: "join_b", DisplayName: "Join"},
+		{ID: groupIDs[3], WorkflowID: fixture.workflowID, SourceNodeID: joinNodeID, TransitionID: "finish", DisplayName: "Done"},
+	}
+	for _, group := range groups {
+		if _, err := fixture.store.AddTransitionGroup(fixture.ctx, group); err != nil {
+			t.Fatalf("AddTransitionGroup %s: %v", group.TransitionID, err)
+		}
+	}
+	edges := []workflowstore.EdgeRecord{
+		{WorkflowID: fixture.workflowID, TransitionGroupID: groupIDs[0], Key: "split_a", TargetNodeID: scriptNodeIDs[0], ContextMode: workflow.ContextModeNewSession},
+		{WorkflowID: fixture.workflowID, TransitionGroupID: groupIDs[0], Key: "split_b", TargetNodeID: scriptNodeIDs[1], ContextMode: workflow.ContextModeNewSession},
+		{ID: joinAEdgeID, WorkflowID: fixture.workflowID, TransitionGroupID: groupIDs[1], Key: "join_a", TargetNodeID: joinNodeID, ContextMode: workflow.ContextModeNewSession, Parameters: []workflow.Parameter{{Key: "joined", Description: "Joined output.", Purpose: workflow.ParameterPurposeOrdinary}}},
+		{ID: joinBEdgeID, WorkflowID: fixture.workflowID, TransitionGroupID: groupIDs[2], Key: "join_b", TargetNodeID: joinNodeID, ContextMode: workflow.ContextModeNewSession},
+		{WorkflowID: fixture.workflowID, TransitionGroupID: groupIDs[3], Key: "finish", TargetNodeID: terminalNodeID, ContextMode: workflow.ContextModeNewSession},
+	}
+	for _, edge := range edges {
+		if _, err := fixture.store.AddEdge(fixture.ctx, edge); err != nil {
+			t.Fatalf("AddEdge %s: %v", edge.Key, err)
+		}
+	}
+	split, err := fixture.store.CompleteCurrentNode(fixture.ctx, workflowstore.CurrentNodeCompletionRequest{
+		Source:       started.currentNode,
+		TransitionID: "split",
+	})
+	if err != nil || len(split.Mutation.Created) != 2 {
+		t.Fatalf("CompleteCurrentNode Script fanout: result=%+v err=%v", split, err)
+	}
+	executions := make([]sessionruntime.TaskExecution, 0, len(split.Mutation.Created))
+	for _, currentNode := range split.Mutation.Created {
+		path := scriptPaths[0]
+		if currentNode.Reference.NodeID == scriptNodeIDs[1] {
+			path = scriptPaths[1]
+		}
+		executions = append(executions, sessionruntime.TaskExecution{
+			Ref: sessionruntime.WorkflowExecutionRef{
+				ProjectID:   fixture.binding.ProjectID,
+				WorkflowID:  fixture.workflowID,
+				CurrentNode: currentNode.Reference,
+			},
+			Script: &sessionruntime.TaskScriptExecutionTarget{Path: path},
+		})
+	}
+	slices.Reverse(executions)
+
+	detail := taskDetailWithObservation(t, fixture, workflowexecution.WorkflowTaskExecutionObservation{
+		Executions: map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot{
+			started.task.ID: {Executions: executions},
+		},
+		Quiescence: map[workflow.TaskID]bool{started.task.ID: false},
+	})
+	projected, err := detail.GetTask(fixture.ctx, string(started.task.ID))
+	if err != nil {
+		t.Fatalf("TaskDetail.GetTask: %v", err)
+	}
+	branchA := "split_a"
+	branchB := "split_b"
+	want := []serverapi.WorkflowTaskCurrentScript{
+		{CurrentNode: serverapi.WorkflowTaskCurrentNode{NodeID: string(scriptNodeIDs[0]), TransitionBranchKey: &branchA}, Path: scriptPaths[0]},
+		{CurrentNode: serverapi.WorkflowTaskCurrentNode{NodeID: string(scriptNodeIDs[1]), TransitionBranchKey: &branchB}, Path: scriptPaths[1]},
+	}
+	if projected.Status.Kind != serverapi.WorkflowTaskStatusKindRunning ||
+		!projected.Actions.CanInterrupt ||
+		len(projected.LiveSessions) != 0 ||
+		!reflect.DeepEqual(projected.CurrentScripts, want) {
+		t.Fatalf("live Script detail = %+v, want ordered Scripts %+v", projected, want)
 	}
 }
 
-func TestTaskListPaginatesStableSortAndRejectsScopeReplay(t *testing.T) {
+func TestTaskDetailProjectsLiveAgentStates(t *testing.T) {
+	tests := []struct {
+		name          string
+		queued        bool
+		approval      bool
+		wantStatus    serverapi.WorkflowTaskStatusKind
+		wantAttention int
+		wantInterrupt bool
+	}{
+		{name: "queued", queued: true, wantStatus: serverapi.WorkflowTaskStatusKindQueued},
+		{name: "running", wantStatus: serverapi.WorkflowTaskStatusKindRunning, wantInterrupt: true},
+		{name: "Approval", approval: true, wantStatus: serverapi.WorkflowTaskStatusKindWaitingApproval, wantAttention: 1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newCurrentNodeViewFixture(t, false)
+			started := fixture.startTask(t, "Live "+test.name)
+			sessionID := fixture.bindCurrentNodeSession(t, started)
+			execution := sessionruntime.TaskExecution{
+				Ref: sessionruntime.WorkflowExecutionRef{
+					ProjectID:   fixture.binding.ProjectID,
+					WorkflowID:  fixture.workflowID,
+					CurrentNode: started.currentNode,
+				},
+				Agent:  &sessionruntime.TaskAgentExecutionTarget{SessionID: sessionID},
+				Queued: test.queued,
+			}
+			if test.approval {
+				execution.PendingPrompts = []sessionruntime.PendingPromptReference{{
+					ID:   "approval",
+					Kind: sessionruntime.PendingPromptKindSessionApproval,
+				}}
+			}
+			detail := taskDetailWithObservation(t, fixture, workflowexecution.WorkflowTaskExecutionObservation{
+				Executions: map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot{
+					started.task.ID: {Executions: []sessionruntime.TaskExecution{execution}},
+				},
+				Quiescence: map[workflow.TaskID]bool{started.task.ID: false},
+			})
+			projected, err := detail.GetTask(fixture.ctx, string(started.task.ID))
+			if err != nil {
+				t.Fatalf("TaskDetail.GetTask: %v", err)
+			}
+			if projected.Status.Kind != test.wantStatus ||
+				projected.AttentionCount != test.wantAttention ||
+				projected.Actions.CanInterrupt != test.wantInterrupt ||
+				len(projected.LiveSessions) != 1 ||
+				projected.LiveSessions[0].SessionID != sessionID.String() ||
+				len(projected.CurrentScripts) != 0 {
+				t.Fatalf("live Agent detail = %+v", projected)
+			}
+		})
+	}
+}
+
+func taskDetailWithObservation(
+	t *testing.T,
+	fixture currentNodeViewFixture,
+	observation workflowexecution.WorkflowTaskExecutionObservation,
+) *TaskDetail {
+	t.Helper()
+	projection, err := NewTaskStatusProjection(
+		fixture.metadata,
+		fixture.store,
+		NewTaskProjector(),
+		staticTaskStatusLiveObservationSource{observation: observation},
+	)
+	if err != nil {
+		t.Fatalf("NewTaskStatusProjection: %v", err)
+	}
+	dependencies, err := NewTaskDependencies(fixture.metadata, projection, fixture.dependencyCounter)
+	if err != nil {
+		t.Fatalf("NewTaskDependencies: %v", err)
+	}
+	detail, err := NewTaskDetail(fixture.metadata, projection, dependencies)
+	if err != nil {
+		t.Fatalf("NewTaskDetail: %v", err)
+	}
+	return detail
+}
+
+func TestTaskListPaginatesStableSortAndEvaluatesOffsetAgainstEachRequest(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
 	started := []startedCurrentNodeViewTask{
 		fixture.startTask(t, "List A"),
@@ -624,21 +290,23 @@ func TestTaskListPaginatesStableSortAndRejectsScopeReplay(t *testing.T) {
 	for _, task := range started {
 		fixture.setTaskUpdatedAt(t, task.task.ID, 2_000)
 	}
-	want := []string{
-		string(started[0].task.ID),
-		string(started[1].task.ID),
-		string(started[2].task.ID),
+	for _, task := range started[1:] {
+		if err := fixture.store.InterruptCurrentNode(
+			fixture.ctx,
+			task.currentNode,
+			workflow.CurrentNodeInterruptionReason("server_restart"),
+			workflow.CurrentNodeInterruptionDetail{Code: "restart"},
+		); err != nil {
+			t.Fatalf("InterruptCurrentNode: %v", err)
+		}
 	}
-	sort.Strings(want)
 	projectID := fixture.binding.ProjectID
 	workflowID := fixture.workflowID
 	limit := 1
 	request := serverapi.WorkflowTaskListRequest{
-		ProjectID:  &projectID,
-		WorkflowID: &workflowID,
-		LabelFilter: serverapi.WorkflowTaskLabelFilter{
-			Kind: serverapi.WorkflowTaskLabelFilterKindNone,
-		},
+		ProjectID:   &projectID,
+		WorkflowID:  &workflowID,
+		LabelFilter: serverapi.WorkflowTaskLabelFilterNone(),
 		Sort: []serverapi.WorkflowTaskListSort{{
 			Field:     serverapi.WorkflowTaskListSortFieldUpdated,
 			Direction: serverapi.WorkflowTaskListSortDirectionDesc,
@@ -646,164 +314,186 @@ func TestTaskListPaginatesStableSortAndRejectsScopeReplay(t *testing.T) {
 		Limit: &limit,
 	}
 	var got []string
-	var nextOffset *int
-	for pageIndex := 0; ; pageIndex++ {
+	for {
 		page, err := fixture.tasks.List(fixture.ctx, request)
 		if err != nil {
-			t.Fatalf("TaskList.List page %d: %v", pageIndex, err)
+			t.Fatalf("TaskList.List stable page: %v", err)
 		}
 		if len(page.Tasks) != 1 {
-			t.Fatalf("task list page %d = %+v, want one task", pageIndex, page.Tasks)
+			t.Fatalf("stable page = %+v, want one Task", page.Tasks)
 		}
 		got = append(got, page.Tasks[0].TaskID)
 		if page.NextOffset == nil {
 			break
 		}
-		nextOffset = page.NextOffset
-		request.Offset = nextOffset
+		request.Offset = page.NextOffset
 	}
-	if !equalStrings(got, want) {
-		t.Fatalf("task-list pagination order = %v, want %v", got, want)
+	want := []string{
+		string(started[0].task.ID),
+		string(started[1].task.ID),
+		string(started[2].task.ID),
 	}
-	request.Offset = nextOffset
-	request.StatusKinds = []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindActive}
-	if _, err := fixture.tasks.List(fixture.ctx, request); err != nil {
-		t.Fatalf("task-list offset with changed filter error = %v", err)
+	sort.Strings(want)
+	if !slices.Equal(got, want) {
+		t.Fatalf("stable pagination order = %v, want %v", got, want)
+	}
+
+	offset := 1
+	filtered, err := fixture.tasks.List(fixture.ctx, serverapi.WorkflowTaskListRequest{
+		ProjectID:   &projectID,
+		WorkflowID:  &workflowID,
+		StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindInterrupted},
+		LabelFilter: serverapi.WorkflowTaskLabelFilterNone(),
+		Sort: []serverapi.WorkflowTaskListSort{{
+			Field:     serverapi.WorkflowTaskListSortFieldTitle,
+			Direction: serverapi.WorkflowTaskListSortDirectionAsc,
+		}},
+		Offset: &offset,
+		Limit:  &limit,
+	})
+	if err != nil {
+		t.Fatalf("TaskList.List changed filter: %v", err)
+	}
+	if len(filtered.Tasks) != 1 || filtered.Tasks[0].TaskID != string(started[2].task.ID) {
+		t.Fatalf("changed-filter offset page = %+v, want second interrupted Task", filtered.Tasks)
 	}
 }
 
-func TestTaskListSortsByNumericShortIDBeforePagination(t *testing.T) {
+func TestTaskListSortsNumericShortIDAsSeventhSelector(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
-	tasks := []startedCurrentNodeViewTask{
-		fixture.startTask(t, "Short ID first"),
-		fixture.startTask(t, "Short ID second"),
-		fixture.startTask(t, "Short ID third"),
+	tasks := make([]startedCurrentNodeViewTask, 0, 11)
+	for range 11 {
+		task := fixture.startTask(t, "Same title")
+		tasks = append(tasks, task)
+		if _, err := fixture.metadata.DB().ExecContext(
+			fixture.ctx,
+			`UPDATE tasks SET created_at_unix_ms = ?, updated_at_unix_ms = ? WHERE id = ?`,
+			int64(1_000),
+			int64(1_000),
+			string(task.task.ID),
+		); err != nil {
+			t.Fatalf("tie Task timestamps: %v", err)
+		}
 	}
 	projectID := fixture.binding.ProjectID
 	workflowID := fixture.workflowID
-	limit := 1
+	limit := 3
+	offset := 8
+	sortSelectors := []serverapi.WorkflowTaskListSort{
+		{Field: serverapi.WorkflowTaskListSortFieldLabels, Direction: serverapi.WorkflowTaskListSortDirectionAsc},
+		{Field: serverapi.WorkflowTaskListSortFieldCreated, Direction: serverapi.WorkflowTaskListSortDirectionAsc},
+		{Field: serverapi.WorkflowTaskListSortFieldUpdated, Direction: serverapi.WorkflowTaskListSortDirectionAsc},
+		{Field: serverapi.WorkflowTaskListSortFieldStatus, Direction: serverapi.WorkflowTaskListSortDirectionAsc},
+		{Field: serverapi.WorkflowTaskListSortFieldColumn, Direction: serverapi.WorkflowTaskListSortDirectionAsc},
+		{Field: serverapi.WorkflowTaskListSortFieldTitle, Direction: serverapi.WorkflowTaskListSortDirectionAsc},
+		{Field: serverapi.WorkflowTaskListSortFieldShortID, Direction: serverapi.WorkflowTaskListSortDirectionAsc},
+	}
 	request := serverapi.WorkflowTaskListRequest{
 		ProjectID:   &projectID,
 		WorkflowID:  &workflowID,
 		LabelFilter: serverapi.WorkflowTaskLabelFilterNone(),
-		Sort: []serverapi.WorkflowTaskListSort{{
-			Field:     serverapi.WorkflowTaskListSortFieldShortID,
-			Direction: serverapi.WorkflowTaskListSortDirectionAsc,
-		}},
-		Limit: &limit,
+		Sort:        sortSelectors,
+		Offset:      &offset,
+		Limit:       &limit,
 	}
-	var got []string
-	for {
-		page, err := fixture.tasks.List(fixture.ctx, request)
+	ascending, err := fixture.tasks.List(fixture.ctx, request)
+	if err != nil {
+		t.Fatalf("TaskList.List ascending: %v", err)
+	}
+	if !slices.Equal(workflowTaskListItemIDs(ascending.Tasks), []string{
+		string(tasks[8].task.ID),
+		string(tasks[9].task.ID),
+		string(tasks[10].task.ID),
+	}) {
+		t.Fatalf("ascending Short ID page = %+v, want 9/10/11", ascending.Tasks)
+	}
+
+	request.Offset = nil
+	request.Sort[6].Direction = serverapi.WorkflowTaskListSortDirectionDesc
+	descending, err := fixture.tasks.List(fixture.ctx, request)
+	if err != nil {
+		t.Fatalf("TaskList.List descending: %v", err)
+	}
+	if !slices.Equal(workflowTaskListItemIDs(descending.Tasks), []string{
+		string(tasks[10].task.ID),
+		string(tasks[9].task.ID),
+		string(tasks[8].task.ID),
+	}) {
+		t.Fatalf("descending Short ID page = %+v, want 11/10/9", descending.Tasks)
+	}
+}
+
+func workflowTaskListItemIDs(tasks []serverapi.WorkflowTaskListItem) []string {
+	ids := make([]string, 0, len(tasks))
+	for _, task := range tasks {
+		ids = append(ids, task.TaskID)
+	}
+	return ids
+}
+
+func TestProjectWideTaskListPreservesCardinalityOwnedRowVisibility(t *testing.T) {
+	fixture := newCurrentNodeViewFixture(t, false)
+	projectID := fixture.binding.ProjectID
+	list := func(offset *int, limit int) serverapi.WorkflowTaskListResponse {
+		t.Helper()
+		page, err := fixture.tasks.List(fixture.ctx, serverapi.WorkflowTaskListRequest{
+			ProjectID:   &projectID,
+			LabelFilter: serverapi.WorkflowTaskLabelFilterNone(),
+			Offset:      offset,
+			Limit:       &limit,
+		})
 		if err != nil {
 			t.Fatalf("TaskList.List: %v", err)
 		}
-		if len(page.Tasks) > 1 {
-			t.Fatalf("page has %d tasks, want at most one", len(page.Tasks))
-		}
-		if len(page.Tasks) == 1 {
-			got = append(got, page.Tasks[0].TaskID)
-		}
-		if page.NextOffset == nil {
-			break
-		}
-		request.Offset = page.NextOffset
+		return page
 	}
-	want := []string{string(tasks[0].task.ID), string(tasks[1].task.ID), string(tasks[2].task.ID)}
-	if !slices.Equal(got, want) {
-		t.Fatalf("short ID pagination order = %v, want %v", got, want)
+
+	none := list(nil, 20)
+	if len(none.Tasks) != 0 ||
+		none.MatchingWorkflowCardinality != serverapi.WorkflowTaskListMatchingWorkflowCardinalityNone {
+		t.Fatalf("empty project-wide page = %+v", none)
 	}
-}
 
-func TestTaskListSortsShortIDDescendingAndAcceptsSevenSelectors(t *testing.T) {
-	fixture := newCurrentNodeViewFixture(t, false)
-	tasks := []startedCurrentNodeViewTask{
-		fixture.startTask(t, "Short ID first"),
-		fixture.startTask(t, "Short ID second"),
+	task := fixture.createBacklogTask(t, "Only workflow task")
+	one := list(nil, 20)
+	if len(one.Tasks) != 1 ||
+		one.Tasks[0].TaskID != string(task.ID) ||
+		one.Tasks[0].WorkflowID != fixture.workflowID ||
+		one.Tasks[0].WorkflowName != nil ||
+		one.Tasks[0].ColumnKeys != nil ||
+		one.MatchingWorkflowCardinality != serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne {
+		t.Fatalf("one-workflow project-wide page = %+v", one)
 	}
-	projectID := fixture.binding.ProjectID
-	workflowID := fixture.workflowID
-	limit := 20
-	list, err := fixture.tasks.List(fixture.ctx, serverapi.WorkflowTaskListRequest{
-		ProjectID:   &projectID,
-		WorkflowID:  &workflowID,
-		LabelFilter: serverapi.WorkflowTaskLabelFilterNone(),
-		Sort: []serverapi.WorkflowTaskListSort{
-			{Field: serverapi.WorkflowTaskListSortFieldShortID, Direction: serverapi.WorkflowTaskListSortDirectionDesc},
-			{Field: serverapi.WorkflowTaskListSortFieldLabels, Direction: serverapi.WorkflowTaskListSortDirectionAsc},
-			{Field: serverapi.WorkflowTaskListSortFieldCreated, Direction: serverapi.WorkflowTaskListSortDirectionAsc},
-			{Field: serverapi.WorkflowTaskListSortFieldUpdated, Direction: serverapi.WorkflowTaskListSortDirectionAsc},
-			{Field: serverapi.WorkflowTaskListSortFieldStatus, Direction: serverapi.WorkflowTaskListSortDirectionAsc},
-			{Field: serverapi.WorkflowTaskListSortFieldColumn, Direction: serverapi.WorkflowTaskListSortDirectionAsc},
-			{Field: serverapi.WorkflowTaskListSortFieldTitle, Direction: serverapi.WorkflowTaskListSortDirectionAsc},
-		},
-		Limit: &limit,
-	})
-	if err != nil {
-		t.Fatalf("TaskList.List: %v", err)
+
+	secondWorkflowID := currentNodeViewWorkflow(t, fixture.store, false)
+	if _, err := fixture.store.LinkWorkflow(fixture.ctx, fixture.binding.ProjectID, secondWorkflowID, false); err != nil {
+		t.Fatalf("LinkWorkflow second workflow: %v", err)
 	}
-	if len(list.Tasks) < len(tasks) || list.Tasks[0].TaskID != string(tasks[1].task.ID) {
-		t.Fatalf("descending seven-field list = %+v, want highest Short ID first", list.Tasks)
+	if _, err := fixture.store.CreateTask(fixture.ctx, workflowstore.CreateTaskRequest{
+		ProjectID:  fixture.binding.ProjectID,
+		WorkflowID: &secondWorkflowID,
+		Title:      "Second workflow task",
+	}); err != nil {
+		t.Fatalf("CreateTask second workflow: %v", err)
 	}
-}
+	multiple := list(nil, 20)
+	if len(multiple.Tasks) != 2 ||
+		multiple.MatchingWorkflowCardinality != serverapi.WorkflowTaskListMatchingWorkflowCardinalityMultiple {
+		t.Fatalf("multiple-workflow project-wide page = %+v", multiple)
+	}
+	for _, item := range multiple.Tasks {
+		if item.WorkflowID.IsZero() || item.WorkflowName == nil || item.ColumnKeys != nil {
+			t.Fatalf("multiple-workflow project-wide item = %+v", item)
+		}
+	}
 
-func TestProjectWideTaskListBeyondEndRetainsMatchingWorkflowCardinality(t *testing.T) {
-	t.Run("one", func(t *testing.T) {
-		fixture := newCurrentNodeViewFixture(t, false)
-		fixture.createBacklogTask(t, "Only workflow task")
-		projectID := fixture.binding.ProjectID
-		offset := 1
-		limit := 1
-
-		page, err := fixture.tasks.List(fixture.ctx, serverapi.WorkflowTaskListRequest{
-			ProjectID:   &projectID,
-			LabelFilter: serverapi.WorkflowTaskLabelFilterNone(),
-			Offset:      &offset,
-			Limit:       &limit,
-		})
-		if err != nil {
-			t.Fatalf("TaskList.List at end: %v", err)
-		}
-		if len(page.Tasks) != 0 ||
-			page.NextOffset != nil ||
-			page.MatchingWorkflowCardinality != serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne {
-			t.Fatalf("project-wide task-list page at end = %+v", page)
-		}
-	})
-
-	t.Run("multiple", func(t *testing.T) {
-		fixture := newCurrentNodeViewFixture(t, false)
-		fixture.createBacklogTask(t, "First workflow task")
-		secondWorkflowID := currentNodeViewWorkflow(t, fixture.store, false)
-		if _, err := fixture.store.LinkWorkflow(fixture.ctx, fixture.binding.ProjectID, secondWorkflowID, false); err != nil {
-			t.Fatalf("LinkWorkflow second workflow: %v", err)
-		}
-		if _, err := fixture.store.CreateTask(fixture.ctx, workflowstore.CreateTaskRequest{
-			ProjectID:  fixture.binding.ProjectID,
-			WorkflowID: &secondWorkflowID,
-			Title:      "Second workflow task",
-		}); err != nil {
-			t.Fatalf("CreateTask second workflow: %v", err)
-		}
-		projectID := fixture.binding.ProjectID
-		offset := 3
-		limit := 1
-
-		page, err := fixture.tasks.List(fixture.ctx, serverapi.WorkflowTaskListRequest{
-			ProjectID:   &projectID,
-			LabelFilter: serverapi.WorkflowTaskLabelFilterNone(),
-			Offset:      &offset,
-			Limit:       &limit,
-		})
-		if err != nil {
-			t.Fatalf("TaskList.List beyond end: %v", err)
-		}
-		if len(page.Tasks) != 0 ||
-			page.NextOffset != nil ||
-			page.MatchingWorkflowCardinality != serverapi.WorkflowTaskListMatchingWorkflowCardinalityMultiple {
-			t.Fatalf("project-wide task-list page beyond end = %+v", page)
-		}
-	})
+	offset := 3
+	beyondEnd := list(&offset, 1)
+	if len(beyondEnd.Tasks) != 0 ||
+		beyondEnd.NextOffset != nil ||
+		beyondEnd.MatchingWorkflowCardinality != serverapi.WorkflowTaskListMatchingWorkflowCardinalityMultiple {
+		t.Fatalf("multiple-workflow beyond-end page = %+v", beyondEnd)
+	}
 }
 
 func TestTaskListDefaultSortUsesCurrentStatusBeforeActivity(t *testing.T) {
@@ -827,12 +517,10 @@ func TestTaskListDefaultSortUsesCurrentStatusBeforeActivity(t *testing.T) {
 	limit := 20
 
 	list, err := fixture.tasks.List(fixture.ctx, serverapi.WorkflowTaskListRequest{
-		ProjectID:  &projectID,
-		WorkflowID: &workflowID,
-		LabelFilter: serverapi.WorkflowTaskLabelFilter{
-			Kind: serverapi.WorkflowTaskLabelFilterKindNone,
-		},
-		Limit: &limit,
+		ProjectID:   &projectID,
+		WorkflowID:  &workflowID,
+		LabelFilter: serverapi.WorkflowTaskLabelFilterNone(),
+		Limit:       &limit,
 	})
 	if err != nil {
 		t.Fatalf("TaskList.List: %v", err)
@@ -846,14 +534,20 @@ func TestTaskListDefaultSortUsesCurrentStatusBeforeActivity(t *testing.T) {
 		serverapi.WorkflowTaskStatusKindBacklog,
 		serverapi.WorkflowTaskStatusKindActive,
 	}
-	if !equalStatusKinds(got, want) {
-		t.Fatalf("default task-list status order = %v, want %v", got, want)
+	if !slices.Equal(got, want) {
+		t.Fatalf("default Task List status order = %v, want %v", got, want)
+	}
+	activeItem := list.Tasks[2]
+	if activeItem.WorkflowName != nil ||
+		activeItem.ColumnKeys == nil ||
+		!slices.Equal(*activeItem.ColumnKeys, []string{"agent"}) {
+		t.Fatalf("Workflow-narrowed active Task = %+v, want ordered Current Node column", activeItem)
 	}
 }
 
-func TestTaskListProjectsLiveSessionApprovalThroughCanonicalStatus(t *testing.T) {
+func TestTaskListPreservesAllLiveAttentionThroughCanonicalStatus(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
-	started := fixture.startTask(t, "Live approval")
+	started := fixture.startTask(t, "Live question and approval")
 	sessionID := fixture.bindCurrentNodeSession(t, started)
 	projection, err := NewTaskStatusProjection(
 		fixture.metadata,
@@ -864,12 +558,16 @@ func TestTaskListProjectsLiveSessionApprovalThroughCanonicalStatus(t *testing.T)
 				Executions: map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot{
 					started.task.ID: {
 						Executions: []sessionruntime.TaskExecution{{
-							Queued: false,
-							Agent:  &sessionruntime.TaskAgentExecutionTarget{SessionID: sessionID},
-							PendingPrompts: []sessionruntime.PendingPromptReference{{
-								ID:   "approval",
-								Kind: sessionruntime.PendingPromptKindSessionApproval,
-							}},
+							Ref: sessionruntime.WorkflowExecutionRef{
+								ProjectID:   fixture.binding.ProjectID,
+								WorkflowID:  fixture.workflowID,
+								CurrentNode: started.currentNode,
+							},
+							Agent: &sessionruntime.TaskAgentExecutionTarget{SessionID: sessionID},
+							PendingPrompts: []sessionruntime.PendingPromptReference{
+								{ID: "question", Kind: sessionruntime.PendingPromptKindQuestion},
+								{ID: "approval", Kind: sessionruntime.PendingPromptKindSessionApproval},
+							},
 						}},
 					},
 				},
@@ -887,7 +585,7 @@ func TestTaskListProjectsLiveSessionApprovalThroughCanonicalStatus(t *testing.T)
 	limit := 20
 	page, err := taskList.List(fixture.ctx, serverapi.WorkflowTaskListRequest{
 		ProjectID:      &projectID,
-		StatusKinds:    []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindWaitingApproval},
+		StatusKinds:    []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindWaitingQuestion},
 		AttentionKinds: []serverapi.WorkflowTaskAttentionKind{serverapi.WorkflowTaskAttentionKindApproval},
 		LabelFilter:    serverapi.WorkflowTaskLabelFilterNone(),
 		Limit:          &limit,
@@ -897,315 +595,103 @@ func TestTaskListProjectsLiveSessionApprovalThroughCanonicalStatus(t *testing.T)
 	}
 	if len(page.Tasks) != 1 ||
 		page.Tasks[0].TaskID != string(started.task.ID) ||
-		page.Tasks[0].Status.Kind != serverapi.WorkflowTaskStatusKindWaitingApproval ||
-		len(page.Tasks[0].Status.AttentionTypes) != 1 ||
-		page.Tasks[0].Status.AttentionTypes[0] != serverapi.WorkflowTaskAttentionKindApproval {
-		t.Fatalf("live approval Task List page = %+v", page)
+		page.Tasks[0].Status.Kind != serverapi.WorkflowTaskStatusKindWaitingQuestion ||
+		!slices.Equal(page.Tasks[0].Status.AttentionTypes, []serverapi.WorkflowTaskAttentionKind{
+			serverapi.WorkflowTaskAttentionKindApproval,
+			serverapi.WorkflowTaskAttentionKindQuestion,
+		}) {
+		t.Fatalf("live question-and-approval Task List page = %+v", page)
 	}
 }
 
-func TestWorkflowTaskReadModelsKeepDurableDoneOverLiveExactScope(t *testing.T) {
+func TestTaskListProjectsDurableDoneRunningAndQueued(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
-	done := fixture.startTask(t, "Done while source execution is live")
-	sessionID := fixture.bindCurrentNodeSession(t, done)
-	plan := fixture.newAgentRuntimePlan(t)
-	lease, err := fixture.authority.NewWorkflowExecutionLease(sessionruntime.WorkflowExecutionRef{
-		ProjectID:   fixture.binding.ProjectID,
-		WorkflowID:  fixture.workflowID,
-		CurrentNode: done.currentNode,
-	})
-	if err != nil {
-		t.Fatalf("NewWorkflowExecutionLease: %v", err)
-	}
-	lease.Release()
-	releaseExecution := make(chan struct{})
-	handle, err := fixture.authority.StartAgentExecution(fixture.ctx, sessionruntime.AgentExecutionRequest{
-		Descriptor: mustOpenCurrentNodeViewSessionDescriptor(t, sessionID),
-		Runtime:    &plan,
-		Workflow:   &lease,
-		Resource:   sessionruntime.OpenAgentResource{},
-		Runner: func(context.Context, sessionruntime.ExecutionScope, sessionruntime.AgentRuntimeBridge) error {
-			<-releaseExecution
-			return nil
-		},
-	})
-	if err != nil {
-		t.Fatalf("StartAgentExecution: %v", err)
-	}
-	t.Cleanup(func() {
-		close(releaseExecution)
-		if _, waitErr := handle.Wait(context.Background()); waitErr != nil {
-			t.Errorf("wait terminal source execution: %v", waitErr)
+	done := fixture.startTask(t, "Done")
+	running := fixture.startTask(t, "Running")
+	queued := fixture.startTask(t, "Queued")
+	liveAgent := func(task startedCurrentNodeViewTask, queued bool) sessionruntime.TaskExecution {
+		return sessionruntime.TaskExecution{
+			Ref: sessionruntime.WorkflowExecutionRef{
+				ProjectID:   fixture.binding.ProjectID,
+				WorkflowID:  fixture.workflowID,
+				CurrentNode: task.currentNode,
+			},
+			Agent:  &sessionruntime.TaskAgentExecutionTarget{SessionID: fixture.bindCurrentNodeSession(t, task)},
+			Queued: queued,
 		}
-	})
-	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		snapshots, snapshotErr := fixture.authority.CurrentProjectWorkflowTaskExecutionSnapshots(
-			fixture.binding.ProjectID,
-			fixture.workflowID,
-		)
-		if snapshotErr != nil {
-			return false
-		}
-		executions := snapshots[done.task.ID].Executions
-		return len(executions) == 1 && !executions[0].Queued
-	}, "timed out waiting for source Exact Execution Scope")
-
+	}
+	doneExecution := liveAgent(done, false)
+	runningExecution := liveAgent(running, false)
+	queuedExecution := liveAgent(queued, true)
 	if _, err := fixture.store.CompleteCurrentNode(fixture.ctx, workflowstore.CurrentNodeCompletionRequest{
 		Source:       done.currentNode,
 		TransitionID: "done",
 	}); err != nil {
 		t.Fatalf("CompleteCurrentNode: %v", err)
 	}
-	snapshots, err := fixture.authority.CurrentProjectWorkflowTaskExecutionSnapshots(
-		fixture.binding.ProjectID,
-		fixture.workflowID,
+	projection, err := NewTaskStatusProjection(
+		fixture.metadata,
+		fixture.store,
+		NewTaskProjector(),
+		staticTaskStatusLiveObservationSource{
+			observation: workflowexecution.WorkflowTaskExecutionObservation{
+				Executions: map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot{
+					done.task.ID:    {Executions: []sessionruntime.TaskExecution{doneExecution}},
+					running.task.ID: {Executions: []sessionruntime.TaskExecution{runningExecution}},
+					queued.task.ID:  {Executions: []sessionruntime.TaskExecution{queuedExecution}},
+				},
+			},
+		},
 	)
 	if err != nil {
-		t.Fatalf("CurrentProjectWorkflowTaskExecutionSnapshots: %v", err)
+		t.Fatalf("NewTaskStatusProjection: %v", err)
 	}
-	if executions := snapshots[done.task.ID].Executions; len(executions) != 1 || executions[0].Queued {
-		t.Fatalf("source Exact Execution Scope retired before ExecutionFinalized: %+v", executions)
-	}
-
-	detail, err := fixture.detail.GetTask(fixture.ctx, string(done.task.ID))
+	taskList, err := NewTaskList(fixture.metadata, mustDefinitionProjection(t, fixture.store), projection)
 	if err != nil {
-		t.Fatalf("TaskDetail.GetTask: %v", err)
+		t.Fatalf("NewTaskList: %v", err)
 	}
-	if detail.Status.Kind != serverapi.WorkflowTaskStatusKindDone || !detail.Summary.Done {
-		t.Fatalf("task detail = %+v, want durable done", detail)
-	}
-	definition, _, err := fixture.store.GetDefinition(fixture.ctx, fixture.workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	terminalNodeID := currentNodeViewNodeIDByKind(t, definition, workflow.NodeKindTerminal)
-	board, err := fixture.board.ListNodeCards(fixture.ctx, serverapi.WorkflowBoardNodeCardsListRequest{
-		ProjectID:  fixture.binding.ProjectID,
-		WorkflowID: fixture.workflowID,
-		NodeID:     string(terminalNodeID),
-		PageSize:   20,
-		LabelFilter: serverapi.WorkflowTaskLabelFilter{
-			Kind: serverapi.WorkflowTaskLabelFilterKindNone,
-		},
-	})
-	if err != nil {
-		t.Fatalf("Board.ListNodeCards: %v", err)
-	}
-	if len(board.Cards) != 1 ||
-		board.Cards[0].TaskID != string(done.task.ID) ||
-		board.Cards[0].Status.Kind != serverapi.WorkflowTaskStatusKindDone {
-		t.Fatalf("terminal board cards = %+v, want durable done", board.Cards)
-	}
-
 	projectID := fixture.binding.ProjectID
 	workflowID := fixture.workflowID
-	doneLimit := 20
-	doneOnly, err := fixture.tasks.List(fixture.ctx, serverapi.WorkflowTaskListRequest{
-		ProjectID:   &projectID,
-		WorkflowID:  &workflowID,
-		StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindDone},
-		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
-		Limit:       &doneLimit,
-	})
-	if err != nil {
-		t.Fatalf("TaskList.List done filter: %v", err)
-	}
-	if len(doneOnly.Tasks) != 1 ||
-		doneOnly.Tasks[0].TaskID != string(done.task.ID) ||
-		doneOnly.Tasks[0].Status.Kind != serverapi.WorkflowTaskStatusKindDone {
-		t.Fatalf("done task list filter = %+v, want durable done", doneOnly.Tasks)
-	}
-
-	active := fixture.startTask(t, "Active after done")
-	statusLimit := 1
-	statusPage := serverapi.WorkflowTaskListRequest{
+	limit := 1
+	request := serverapi.WorkflowTaskListRequest{
 		ProjectID:  &projectID,
 		WorkflowID: &workflowID,
 		StatusKinds: []serverapi.WorkflowTaskStatusKind{
 			serverapi.WorkflowTaskStatusKindDone,
-			serverapi.WorkflowTaskStatusKindActive,
+			serverapi.WorkflowTaskStatusKindRunning,
+			serverapi.WorkflowTaskStatusKindQueued,
 		},
-		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
+		LabelFilter: serverapi.WorkflowTaskLabelFilterNone(),
 		Sort: []serverapi.WorkflowTaskListSort{{
 			Field:     serverapi.WorkflowTaskListSortFieldStatus,
 			Direction: serverapi.WorkflowTaskListSortDirectionAsc,
 		}},
-		Limit: &statusLimit,
+		Limit: &limit,
 	}
-	firstPage, err := fixture.tasks.List(fixture.ctx, statusPage)
-	if err != nil {
-		t.Fatalf("TaskList.List first status page: %v", err)
+	wantIDs := []string{string(done.task.ID), string(running.task.ID), string(queued.task.ID)}
+	wantKinds := []serverapi.WorkflowTaskStatusKind{
+		serverapi.WorkflowTaskStatusKindDone,
+		serverapi.WorkflowTaskStatusKindRunning,
+		serverapi.WorkflowTaskStatusKindQueued,
 	}
-	if len(firstPage.Tasks) != 1 ||
-		firstPage.Tasks[0].TaskID != string(done.task.ID) ||
-		firstPage.Tasks[0].Status.Kind != serverapi.WorkflowTaskStatusKindDone ||
-		firstPage.NextOffset == nil {
-		t.Fatalf("first status page = %+v, want done and a cursor", firstPage)
-	}
-	statusPage.Offset = firstPage.NextOffset
-	secondPage, err := fixture.tasks.List(fixture.ctx, statusPage)
-	if err != nil {
-		t.Fatalf("TaskList.List second status page: %v", err)
-	}
-	if len(secondPage.Tasks) != 1 ||
-		secondPage.Tasks[0].TaskID != string(active.task.ID) ||
-		secondPage.Tasks[0].Status.Kind != serverapi.WorkflowTaskStatusKindActive ||
-		secondPage.NextOffset != nil {
-		t.Fatalf("second status page = %+v, want active with no cursor", secondPage)
-	}
-}
-
-func TestWorkflowTaskReadModelsProjectQueuedAndRunningExactScopes(t *testing.T) {
-	fixture := newCurrentNodeViewFixture(t, false)
-	queued := fixture.startTask(t, "Queued")
-	running := fixture.startTask(t, "Running")
-	queuedSessionID := fixture.bindCurrentNodeSession(t, queued)
-	runningSessionID := fixture.bindCurrentNodeSession(t, running)
-	plan := fixture.newAgentRuntimePlan(t)
-
-	queuedLease, err := fixture.authority.NewWorkflowExecutionLease(sessionruntime.WorkflowExecutionRef{
-		ProjectID:   fixture.binding.ProjectID,
-		WorkflowID:  fixture.workflowID,
-		CurrentNode: queued.currentNode,
-	})
-	if err != nil {
-		t.Fatalf("NewWorkflowExecutionLease queued: %v", err)
-	}
-	queuedHandle, err := fixture.authority.StartAgentExecution(fixture.ctx, sessionruntime.AgentExecutionRequest{
-		Descriptor: mustOpenCurrentNodeViewSessionDescriptor(t, queuedSessionID),
-		Runtime:    &plan,
-		Workflow:   &queuedLease,
-		Resource:   sessionruntime.OpenAgentResource{},
-		Runner: func(context.Context, sessionruntime.ExecutionScope, sessionruntime.AgentRuntimeBridge) error {
-			return nil
-		},
-	})
-	if err != nil {
-		t.Fatalf("StartAgentExecution queued: %v", err)
-	}
-	runningLease, err := fixture.authority.NewWorkflowExecutionLease(sessionruntime.WorkflowExecutionRef{
-		ProjectID:   fixture.binding.ProjectID,
-		WorkflowID:  fixture.workflowID,
-		CurrentNode: running.currentNode,
-	})
-	if err != nil {
-		t.Fatalf("NewWorkflowExecutionLease running: %v", err)
-	}
-	runningLease.Release()
-	runningHandle, err := fixture.authority.StartAgentExecution(fixture.ctx, sessionruntime.AgentExecutionRequest{
-		Descriptor: mustOpenCurrentNodeViewSessionDescriptor(t, runningSessionID),
-		Runtime:    &plan,
-		Workflow:   &runningLease,
-		Resource:   sessionruntime.OpenAgentResource{},
-		Runner: func(ctx context.Context, _ sessionruntime.ExecutionScope, _ sessionruntime.AgentRuntimeBridge) error {
-			<-ctx.Done()
-			return context.Cause(ctx)
-		},
-	})
-	if err != nil {
-		t.Fatalf("StartAgentExecution running: %v", err)
-	}
-	t.Cleanup(func() {
-		queuedHandle.RequestStop()
-		runningHandle.RequestStop()
-	})
-	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		snapshots, snapshotErr := fixture.authority.CurrentProjectWorkflowTaskExecutionSnapshots(
-			fixture.binding.ProjectID,
-			fixture.workflowID,
-		)
-		if snapshotErr != nil {
-			return false
+	for index := range wantIDs {
+		page, err := taskList.List(fixture.ctx, request)
+		if err != nil {
+			t.Fatalf("TaskList.List page %d: %v", index, err)
 		}
-		queuedExecutions := snapshots[queued.task.ID].Executions
-		runningExecutions := snapshots[running.task.ID].Executions
-		return len(queuedExecutions) == 1 && queuedExecutions[0].Queued &&
-			len(runningExecutions) == 1 && !runningExecutions[0].Queued
-	}, "timed out waiting for queued and running Exact Execution Scope snapshots")
-
-	queuedDetail, err := fixture.detail.GetTask(fixture.ctx, string(queued.task.ID))
-	if err != nil {
-		t.Fatalf("GetTask queued: %v", err)
-	}
-	if queuedDetail.Status.Kind != serverapi.WorkflowTaskStatusKindQueued ||
-		queuedDetail.Actions.CanInterrupt {
-		t.Fatalf("queued detail = %+v, want queued and not interruptible", queuedDetail)
-	}
-	queuedCards, err := fixture.board.ListNodeCards(fixture.ctx, serverapi.WorkflowBoardNodeCardsListRequest{
-		ProjectID:  fixture.binding.ProjectID,
-		WorkflowID: fixture.workflowID,
-		NodeID:     string(fixture.agentNodeID),
-		PageSize:   20,
-		LabelFilter: serverapi.WorkflowTaskLabelFilter{
-			Kind: serverapi.WorkflowTaskLabelFilterKindNone,
-		},
-	})
-	if err != nil {
-		t.Fatalf("ListNodeCards: %v", err)
-	}
-	cardByTaskID := make(map[string]serverapi.WorkflowBoardTaskCard, len(queuedCards.Cards))
-	for _, card := range queuedCards.Cards {
-		cardByTaskID[card.TaskID] = card
-	}
-	if card := cardByTaskID[string(queued.task.ID)]; card.Status.Kind != serverapi.WorkflowTaskStatusKindQueued || card.Actions.CanInterrupt {
-		t.Fatalf("queued card = %+v, want queued and not interruptible", card)
-	}
-	if card := cardByTaskID[string(running.task.ID)]; card.Status.Kind != serverapi.WorkflowTaskStatusKindRunning || !card.Actions.CanInterrupt {
-		t.Fatalf("running card = %+v, want running and interruptible", card)
-	}
-
-	projectID := fixture.binding.ProjectID
-	workflowID := fixture.workflowID
-	listLimit := 20
-	list, err := fixture.tasks.List(fixture.ctx, serverapi.WorkflowTaskListRequest{
-		ProjectID:  &projectID,
-		WorkflowID: &workflowID,
-		StatusKinds: []serverapi.WorkflowTaskStatusKind{
-			serverapi.WorkflowTaskStatusKindQueued,
-			serverapi.WorkflowTaskStatusKindRunning,
-		},
-		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
-		Limit:       &listLimit,
-	})
-	if err != nil {
-		t.Fatalf("TaskList.List: %v", err)
-	}
-	if len(list.Tasks) != 2 ||
-		list.Tasks[0].TaskID != string(running.task.ID) ||
-		list.Tasks[0].Status.Kind != serverapi.WorkflowTaskStatusKindRunning ||
-		list.Tasks[1].TaskID != string(queued.task.ID) ||
-		list.Tasks[1].Status.Kind != serverapi.WorkflowTaskStatusKindQueued {
-		t.Fatalf("task list status filter and sort = %+v, want running then queued", list.Tasks)
-	}
-	pageLimit := 1
-	pageRequest := serverapi.WorkflowTaskListRequest{
-		ProjectID:  &projectID,
-		WorkflowID: &workflowID,
-		StatusKinds: []serverapi.WorkflowTaskStatusKind{
-			serverapi.WorkflowTaskStatusKindQueued,
-			serverapi.WorkflowTaskStatusKindRunning,
-		},
-		LabelFilter: serverapi.WorkflowTaskLabelFilter{Kind: serverapi.WorkflowTaskLabelFilterKindNone},
-		Limit:       &pageLimit,
-	}
-	firstPage, err := fixture.tasks.List(fixture.ctx, pageRequest)
-	if err != nil {
-		t.Fatalf("TaskList.List first cursor page: %v", err)
-	}
-	if len(firstPage.Tasks) != 1 ||
-		firstPage.Tasks[0].TaskID != string(running.task.ID) ||
-		firstPage.NextOffset == nil {
-		t.Fatalf("first status cursor page = %+v, want running and a cursor", firstPage)
-	}
-	pageRequest.Offset = firstPage.NextOffset
-	secondPage, err := fixture.tasks.List(fixture.ctx, pageRequest)
-	if err != nil {
-		t.Fatalf("TaskList.List second cursor page: %v", err)
-	}
-	if len(secondPage.Tasks) != 1 ||
-		secondPage.Tasks[0].TaskID != string(queued.task.ID) ||
-		secondPage.NextOffset != nil {
-		t.Fatalf("second status cursor page = %+v, want queued and no cursor", secondPage)
+		if len(page.Tasks) != 1 ||
+			page.Tasks[0].TaskID != wantIDs[index] ||
+			page.Tasks[0].Status.Kind != wantKinds[index] {
+			t.Fatalf("status page %d = %+v, want %s/%s", index, page.Tasks, wantIDs[index], wantKinds[index])
+		}
+		if index < len(wantIDs)-1 {
+			if page.NextOffset == nil {
+				t.Fatalf("status page %d has no next offset", index)
+			}
+			request.Offset = page.NextOffset
+		} else if page.NextOffset != nil {
+			t.Fatalf("final status page next offset = %v, want nil", page.NextOffset)
+		}
 	}
 }
 

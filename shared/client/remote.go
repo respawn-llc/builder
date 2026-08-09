@@ -16,6 +16,29 @@ import (
 	"core/shared/serverapi"
 )
 
+type InvalidResponseError struct {
+	Operation string
+	Cause     error
+}
+
+func (e *InvalidResponseError) Error() string {
+	return fmt.Sprintf("validate %s response: %v", e.Operation, e.Cause)
+}
+func (e *InvalidResponseError) Unwrap() error { return e.Cause }
+func invalidResponseError(operation string, cause error) error {
+	return &InvalidResponseError{Operation: operation, Cause: cause}
+}
+
+func validateRuntimeLiveResponseSession(operation string, requestedSessionID string, responseSessionID string) error {
+	if responseSessionID != requestedSessionID {
+		return invalidResponseError(operation, fmt.Errorf(
+			"response session ID %q does not match requested session %q",
+			responseSessionID, requestedSessionID,
+		))
+	}
+	return nil
+}
+
 type Remote struct {
 	plan           remoteDialPlan
 	transport      rpcwire.ClientTransport
@@ -269,7 +292,14 @@ func (c *Remote) AcknowledgeNoAuth(ctx context.Context, req serverapi.AuthAcknow
 }
 
 func (c *Remote) GetAuthStatus(ctx context.Context, req serverapi.AuthStatusRequest) (serverapi.AuthStatusResponse, error) {
-	return callUnscopedRPC[serverapi.AuthStatusRequest, serverapi.AuthStatusResponse](c, ctx, protocol.MethodAuthGetStatus, req)
+	response, err := callUnscopedRPC[serverapi.AuthStatusRequest, serverapi.AuthStatusResponse](c, ctx, protocol.MethodAuthGetStatus, req)
+	if err != nil {
+		return serverapi.AuthStatusResponse{}, err
+	}
+	if err := response.Validate(); err != nil {
+		return serverapi.AuthStatusResponse{}, fmt.Errorf("validate auth status response: %w", err)
+	}
+	return response, nil
 }
 
 func (c *Remote) ListProjects(ctx context.Context, req serverapi.ProjectListRequest) (serverapi.ProjectListResponse, error) {
@@ -644,7 +674,7 @@ func (c *Remote) ObserveWorkflowTask(ctx context.Context, req serverapi.Workflow
 		return serverapi.WorkflowTaskObservationResponse{}, err
 	}
 	if err := response.Validate(); err != nil {
-		return serverapi.WorkflowTaskObservationResponse{}, fmt.Errorf("validate workflow task observation response: %w", err)
+		return serverapi.WorkflowTaskObservationResponse{}, invalidResponseError("workflow task observation", err)
 	}
 	return response, nil
 }
@@ -819,18 +849,6 @@ func (c *Remote) CompactContext(ctx context.Context, req serverapi.RuntimeCompac
 	return c.callDedicated(ctx, "runtime-compact-context", protocol.MethodRuntimeCompactContext, req, nil)
 }
 
-func (c *Remote) CompactContextForPreSubmit(ctx context.Context, req serverapi.RuntimeCompactContextForPreSubmitRequest) error {
-	return c.callDedicated(ctx, "runtime-compact-context-pre-submit", protocol.MethodRuntimeCompactContextForPreSubmit, req, nil)
-}
-
-func (c *Remote) HasQueuedUserWork(ctx context.Context, req serverapi.RuntimeHasQueuedUserWorkRequest) (serverapi.RuntimeHasQueuedUserWorkResponse, error) {
-	return callControlRPC[serverapi.RuntimeHasQueuedUserWorkRequest, serverapi.RuntimeHasQueuedUserWorkResponse](c, ctx, protocol.MethodRuntimeHasQueuedUserWork, req)
-}
-
-func (c *Remote) SubmitQueuedUserMessages(ctx context.Context, req serverapi.RuntimeSubmitQueuedUserMessagesRequest) (serverapi.RuntimeSubmitQueuedUserMessagesResponse, error) {
-	return callDedicatedRPC[serverapi.RuntimeSubmitQueuedUserMessagesRequest, serverapi.RuntimeSubmitQueuedUserMessagesResponse](c, ctx, "runtime-submit-queued-user-messages", protocol.MethodRuntimeSubmitQueuedUserMessages, req)
-}
-
 func (c *Remote) Interrupt(ctx context.Context, req serverapi.RuntimeInterruptRequest) (serverapi.RuntimeInterruptResponse, error) {
 	return callDedicatedRPC[serverapi.RuntimeInterruptRequest, serverapi.RuntimeInterruptResponse](c, ctx, "runtime-interrupt", protocol.MethodRuntimeInterrupt, req)
 }
@@ -844,7 +862,17 @@ func (c *Remote) LiveStop(ctx context.Context, req serverapi.RuntimeLiveStopRequ
 }
 
 func (c *Remote) LiveWait(ctx context.Context, req serverapi.RuntimeLiveWaitRequest) (serverapi.RuntimeLiveWaitResponse, error) {
-	return callDedicatedRPC[serverapi.RuntimeLiveWaitRequest, serverapi.RuntimeLiveWaitResponse](c, ctx, "runtime-live-wait", protocol.MethodRuntimeLiveWait, req)
+	response, err := callDedicatedRPC[serverapi.RuntimeLiveWaitRequest, serverapi.RuntimeLiveWaitResponse](c, ctx, "runtime-live-wait", protocol.MethodRuntimeLiveWait, req)
+	if err != nil {
+		return serverapi.RuntimeLiveWaitResponse{}, err
+	}
+	if err := response.Validate(); err != nil {
+		return serverapi.RuntimeLiveWaitResponse{}, invalidResponseError("runtime live wait", err)
+	}
+	if err := validateRuntimeLiveResponseSession("runtime live wait", req.SessionID, response.SessionID); err != nil {
+		return serverapi.RuntimeLiveWaitResponse{}, err
+	}
+	return response, nil
 }
 
 func (c *Remote) LiveWatch(ctx context.Context, req serverapi.RuntimeLiveWatchRequest) (serverapi.RuntimeLiveWatchResponse, error) {
@@ -853,7 +881,10 @@ func (c *Remote) LiveWatch(ctx context.Context, req serverapi.RuntimeLiveWatchRe
 		return serverapi.RuntimeLiveWatchResponse{}, err
 	}
 	if err := response.Validate(); err != nil {
-		return serverapi.RuntimeLiveWatchResponse{}, fmt.Errorf("validate runtime live watch response: %w", err)
+		return serverapi.RuntimeLiveWatchResponse{}, invalidResponseError("runtime live watch", err)
+	}
+	if err := validateRuntimeLiveResponseSession("runtime live watch", req.SessionID, response.SessionID); err != nil {
+		return serverapi.RuntimeLiveWatchResponse{}, err
 	}
 	return response, nil
 }

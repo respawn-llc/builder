@@ -13,6 +13,34 @@ func TestParseCanonicalUUIDv4RejectsNonRFCVariant(t *testing.T) {
 	}
 }
 
+func TestParseTaskIDAcceptsCanonicalAndLegacyPersistentIDs(t *testing.T) {
+	for _, raw := range []string{
+		"task-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+		"task-1",
+		"task-legacy-id",
+	} {
+		t.Run(raw, func(t *testing.T) {
+			got, err := ParseTaskID(raw)
+			if err != nil {
+				t.Fatalf("ParseTaskID(%q): %v", raw, err)
+			}
+			if got != raw {
+				t.Fatalf("ParseTaskID(%q) = %q", raw, got)
+			}
+		})
+	}
+}
+
+func TestParseTaskIDRejectsMissingIdentifier(t *testing.T) {
+	for _, raw := range []string{"", "task-", "KENT-1"} {
+		t.Run(raw, func(t *testing.T) {
+			if _, err := ParseTaskID(raw); err == nil {
+				t.Fatalf("ParseTaskID(%q) succeeded", raw)
+			}
+		})
+	}
+}
+
 func TestParseSessionIDAcceptsCanonicalUUIDv4AndSupportedLegacyIDs(t *testing.T) {
 	for _, raw := range []string{
 		"7fd3bc93-f11c-4814-87d0-b60f10e6dd5c",

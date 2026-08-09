@@ -123,30 +123,6 @@ type RuntimeCompactContextRequest struct {
 	OperationRef    clientui.RuntimeOperationRef `json:"operation_ref"`
 }
 
-type RuntimeCompactContextForPreSubmitRequest struct {
-	ClientRequestID string                       `json:"client_request_id"`
-	SessionID       string                       `json:"session_id"`
-	OperationRef    clientui.RuntimeOperationRef `json:"operation_ref"`
-}
-
-type RuntimeHasQueuedUserWorkRequest struct {
-	SessionID string `json:"session_id"`
-}
-
-type RuntimeHasQueuedUserWorkResponse struct {
-	HasQueuedUserWork bool `json:"has_queued_user_work"`
-}
-
-type RuntimeSubmitQueuedUserMessagesRequest struct {
-	ClientRequestID string                       `json:"client_request_id"`
-	SessionID       string                       `json:"session_id"`
-	OperationRef    clientui.RuntimeOperationRef `json:"operation_ref"`
-}
-
-type RuntimeSubmitQueuedUserMessagesResponse struct {
-	Message string `json:"message"`
-}
-
 type RuntimeInterruptRequest struct {
 	ClientRequestID      string                         `json:"client_request_id"`
 	SessionID            string                         `json:"session_id"`
@@ -370,21 +346,6 @@ func (r RuntimeCompactContextRequest) Validate() error {
 		return err
 	}
 	return validateRuntimeOperationRef(r.OperationRef, clientui.RuntimeOperationKindCompact, r.ClientRequestID)
-}
-func (r RuntimeCompactContextForPreSubmitRequest) Validate() error {
-	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID); err != nil {
-		return err
-	}
-	return validateRuntimeOperationRef(r.OperationRef, clientui.RuntimeOperationKindPreSubmitCompact, r.ClientRequestID)
-}
-func (r RuntimeHasQueuedUserWorkRequest) Validate() error {
-	return validateRequiredSessionID(r.SessionID)
-}
-func (r RuntimeSubmitQueuedUserMessagesRequest) Validate() error {
-	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID); err != nil {
-		return err
-	}
-	return validateRuntimeOperationRef(r.OperationRef, clientui.RuntimeOperationKindSubmitQueued, r.ClientRequestID)
 }
 func (r RuntimeInterruptRequest) Validate() error {
 	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID); err != nil {

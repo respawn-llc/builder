@@ -35,11 +35,15 @@ func ModelSummary(req Request) string {
 	if modelName == "" {
 		modelName = "<unset>"
 	}
-	parts := []string{llm.ModelDisplayLabel(modelName, strings.TrimSpace(req.ThinkingLevel))}
+	parts := []string{ModelDisplaySummary(modelName, req.ThinkingLevel)}
 	if req.FastModeAvailable && req.FastModeEnabled {
 		parts = append(parts, "fast")
 	}
 	return strings.Join(parts, " ")
+}
+
+func ModelDisplaySummary(modelName, thinkingLevel string) string {
+	return llm.ModelDisplayLabel(strings.TrimSpace(modelName), strings.TrimSpace(thinkingLevel))
 }
 
 func SupervisorLabel(enabled bool, mode string) string {

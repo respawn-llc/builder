@@ -3,15 +3,14 @@ package startup
 import (
 	"context"
 	"encoding/json"
-	"io"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
 	modelstub "core/internal/testharness/pty/blackbox"
+	"core/internal/testharness/testsetup"
 	"core/server/metadata"
 	"core/server/onboarding"
 	"core/shared/client"
@@ -53,102 +52,72 @@ func TestRemotePromptCommandStartupCatalogAndInvocationUseImportedServerContent(
 	if err := os.WriteFile(filepath.Join(sourceRoot, "remote_demo.md"), []byte("server body $ARGUMENTS"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	var providerUUID *uuid.UUID
-	for _, provider := range onboarding.ProductionProviderCatalog() {
-		if provider.HomeEntry == ".claude" {
-			value := provider.UUID
-			providerUUID = &value
-			break
-		}
-	}
-	if providerUUID == nil {
+	providers := onboarding.ProductionProviderCatalog()
+	providerIndex := slices.IndexFunc(providers, func(provider onboarding.Provider) bool { return provider.HomeEntry == ".claude" })
+	if providerIndex < 0 {
 		t.Fatal("Claude Code provider UUID is missing")
 	}
-	finalizer, err := onboarding.NewFinalizer(onboarding.Options{
-		PersistenceRoot: cfg.PersistenceRoot,
-		WorkspaceRoot:   workspaceA,
-		HomeDir:         os.Getenv("HOME"),
-		SettingsPath:    cfg.Source.HomeSettingsPath,
-	})
+	providerUUID := providers[providerIndex].UUID
+	finalizer, err := onboarding.NewFinalizer(onboarding.Options{PersistenceRoot: cfg.PersistenceRoot, WorkspaceRoot: workspaceA, HomeDir: os.Getenv("HOME"), SettingsPath: cfg.Source.HomeSettingsPath})
 	if err != nil {
 		t.Fatalf("NewFinalizer: %v", err)
 	}
 	if _, err := finalizer.FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
 		CommandsImport: &serverapi.OnboardingImportSelection{
 			Mode:         serverapi.OnboardingImportModeSymlinkSource,
-			ProviderUUID: providerUUID,
+			ProviderUUID: &providerUUID,
 		},
 	}); err != nil {
 		t.Fatalf("FinalizeOnboarding: %v", err)
 	}
 
-	providerRequests := make(chan []byte, 1)
-	responseServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if modelstub.HandleInputTokenCount(w, r, 11) {
-			return
-		}
-		body, err := io.ReadAll(r.Body)
-		if err == nil {
-			providerRequests <- body
-		}
-		modelstub.WriteCompletedResponseStream(w, "accepted", 11, 7)
-	}))
-	defer responseServer.Close()
+	output := "accepted"
+	responseServer, err := modelstub.StartResponsesStub([]modelstub.RequiredOperation{{
+		ID: uuid.New(), Route: modelstub.RouteResponses, Outcome: modelstub.OutcomeStream,
+		Output: &output, ResponsePhase: modelstub.NewResponsePhase(modelstub.ResponsePhaseFinal),
+	}})
+	if err != nil {
+		t.Fatalf("StartResponsesStub: %v", err)
+	}
+	t.Cleanup(func() { _ = responseServer.Stop() })
 	workspaceConfigDir := filepath.Join(workspaceB, config.ConfigDirName)
 	if err := os.MkdirAll(workspaceConfigDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(workspaceConfigDir, "config.toml"), []byte(
-		"model = \"gpt-5\"\nopenai_base_url = \""+responseServer.URL+"\"\n",
+		"model = \"gpt-5\"\nopenai_base_url = \""+responseServer.URL()+"\"\n",
 	), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	server, err := StartWithOptions(context.Background(), Request{
+	server := startServeTestServer(t, Request{
 		WorkspaceRoot:         workspaceA,
 		WorkspaceRootExplicit: true,
-		OpenAIBaseURL:         responseServer.URL,
+		OpenAIBaseURL:         responseServer.URL(),
 		OpenAIBaseURLExplicit: true,
 		LoadOptions: config.LoadOptions{
 			Model:         "gpt-5",
-			OpenAIBaseURL: responseServer.URL,
+			OpenAIBaseURL: responseServer.URL(),
 		},
-	}, envAuthHandler{}, nil, Options{})
-	if err != nil {
-		t.Fatalf("StartWithOptions: %v", err)
+	}, envAuthHandler{}, nil)
+	if got := server.Config().Settings.OpenAIBaseURL; got != responseServer.URL() {
+		t.Fatalf("OpenAIBaseURL = %q, want %q", got, responseServer.URL())
 	}
-	if got := server.Config().Settings.OpenAIBaseURL; got != responseServer.URL {
-		t.Fatalf("OpenAIBaseURL = %q, want %q", got, responseServer.URL)
-	}
-	releaseServeTestPortForConfig(server.Config())
-	if err := server.ServeBackground(); err != nil {
-		_ = server.Close()
-		t.Fatalf("ServeBackground: %v", err)
-	}
-	defer func() { _ = server.Close() }()
+	startServingTestServer(t, server)
 
-	remote, err := client.DialRemoteURLForProjectWorkspace(
-		context.Background(),
-		config.ServerRPCURL(server.Config()),
-		binding.ProjectID,
-		workspaceB,
-	)
-	if err != nil {
-		t.Fatalf("DialRemoteURLForProjectWorkspace: %v", err)
-	}
+	var remote *client.Remote
+	testsetup.RequireUntil(t, time.Now().Add(5*time.Second), 10*time.Millisecond, func() bool {
+		remote, err = client.DialRemoteURLForProjectWorkspace(context.Background(), config.ServerRPCURL(server.Config()), binding.ProjectID, workspaceB)
+		return err == nil
+	}, "DialRemoteURLForProjectWorkspace")
 	defer func() { _ = remote.Close() }()
 	catalog, err := remote.GetPromptCommandCatalog(context.Background(), serverapi.PromptCommandCatalogRequest{})
 	if err != nil {
 		t.Fatalf("GetPromptCommandCatalog: %v", err)
 	}
-	foundRemoteCommand := false
-	for _, command := range catalog.Commands {
-		if command.Name == "prompt:remote_demo" && command.Preview == "server body $ARGUMENTS" {
-			foundRemoteCommand = true
-			break
-		}
-	}
-	if !foundRemoteCommand {
+	if !slices.ContainsFunc(catalog.Commands, func(command serverapi.PromptCommandCatalogEntry) bool {
+		return command.Name == "prompt:remote_demo" && command.Preview == "server body $ARGUMENTS"
+	}) {
 		t.Fatalf("catalog = %+v", catalog.Commands)
 	}
 
@@ -193,36 +162,31 @@ func TestRemotePromptCommandStartupCatalogAndInvocationUseImportedServerContent(
 		DropOwner:       true,
 		ClosePolicy:     serverapi.SessionRuntimeReleaseClosePolicyDetachOnly,
 	})
-	select {
-	case body := <-providerRequests:
-		var payload struct {
-			Input []struct {
-				Type    string `json:"type"`
-				Role    string `json:"role"`
-				Content []struct {
-					Type string `json:"type"`
-					Text string `json:"text"`
-				} `json:"content"`
-			} `json:"input"`
-		}
-		if err := json.Unmarshal(body, &payload); err != nil {
-			t.Fatalf("decode provider request: %v", err)
-		}
-		found := false
-		for _, item := range payload.Input {
-			if item.Type != "message" || item.Role != "user" {
-				continue
-			}
-			for _, content := range item.Content {
-				if content.Type == "input_text" && content.Text == "server body hello world" {
-					found = true
-				}
+	var body json.RawMessage
+	testsetup.RequireUntil(t, time.Now().Add(10*time.Second), 10*time.Millisecond, func() bool {
+		for _, call := range responseServer.Snapshot().Observed {
+			if call.Route == modelstub.RouteResponses {
+				body = append(json.RawMessage(nil), call.Body...)
+				return true
 			}
 		}
-		if !found {
-			t.Fatalf("provider request omitted resolved prompt body: %+v", payload.Input)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("timed out waiting for provider request")
+		return false
+	}, "timed out waiting for provider request")
+	type responseContent struct{ Type, Text string }
+	type responseInput struct {
+		Type, Role string
+		Content    []responseContent
+	}
+	var payload struct{ Input []responseInput }
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("decode provider request: %v", err)
+	}
+	if !slices.ContainsFunc(payload.Input, func(item responseInput) bool {
+		return item.Type == "message" && item.Role == "user" &&
+			slices.ContainsFunc(item.Content, func(content responseContent) bool {
+				return content.Type == "input_text" && content.Text == "server body hello world"
+			})
+	}) {
+		t.Fatalf("provider request omitted resolved prompt body: %+v", payload.Input)
 	}
 }

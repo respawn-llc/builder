@@ -1,3 +1,5 @@
+import { installResizeObserverGeometry } from "../resize-observer";
+
 export type OneLineOverflowGeometryHarness = Readonly<{
   notify(): void;
   restore(): void;
@@ -12,19 +14,12 @@ export function installOneLineOverflowGeometry(
     overflowWidth: number;
   }>,
 ): OneLineOverflowGeometryHarness {
-  const originalResizeObserver = globalThis.ResizeObserver;
+  const resizeObserverGeometry = installResizeObserverGeometry();
   const originalGetBoundingClientRect = Object.getOwnPropertyDescriptor(
     HTMLElement.prototype,
     "getBoundingClientRect",
   );
-  const observers: ControlledResizeObserver[] = [];
   let availableWidth = input.availableWidth;
-  globalThis.ResizeObserver = class extends ControlledResizeObserver {
-    constructor(callback: ResizeObserverCallback) {
-      super(callback);
-      observers.push(this);
-    }
-  };
   Object.defineProperty(HTMLElement.prototype, "getBoundingClientRect", {
     configurable: true,
     value(this: HTMLElement): DOMRect {
@@ -49,17 +44,15 @@ export function installOneLineOverflowGeometry(
   });
   return {
     notify() {
-      for (const observer of observers) {
-        observer.notify();
-      }
+      resizeObserverGeometry.notify();
     },
     restore() {
-      globalThis.ResizeObserver = originalResizeObserver;
       if (originalGetBoundingClientRect === undefined) {
         Reflect.deleteProperty(HTMLElement.prototype, "getBoundingClientRect");
       } else {
         Object.defineProperty(HTMLElement.prototype, "getBoundingClientRect", originalGetBoundingClientRect);
       }
+      resizeObserverGeometry.restore();
     },
     setAvailableWidth(width) {
       availableWidth = width;
@@ -72,30 +65,6 @@ export function visibleOneLineOverflowText(row: HTMLElement): string {
     .filter((child) => child.getAttribute("aria-hidden") !== "true")
     .map((child) => child.textContent)
     .join("");
-}
-
-class ControlledResizeObserver implements ResizeObserver {
-  readonly #callback: ResizeObserverCallback;
-
-  constructor(callback: ResizeObserverCallback) {
-    this.#callback = callback;
-  }
-
-  disconnect(): void {
-    return;
-  }
-
-  observe(): void {
-    return;
-  }
-
-  unobserve(): void {
-    return;
-  }
-
-  notify(): void {
-    this.#callback([], this);
-  }
 }
 
 function rect(width: number, left = 0): DOMRect {

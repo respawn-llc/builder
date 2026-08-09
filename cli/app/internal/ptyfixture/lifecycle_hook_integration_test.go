@@ -82,17 +82,11 @@ func TestLifecycleHooksLocalConfiguredPTYRunsRepresentativeFlow(t *testing.T) {
 		t.Fatalf("run local lifecycle PTY fixture: %v raw=%q", err, string(capture.Raw))
 	}
 	records := appfixture.WaitForLifecycleHookRecords(t, recordPath, 3)
-	requireLifecycleCategoryCount(t, records, lifecyclecontract.CategoryTaskComplete, 1)
-	events := lifecycleEventsByCategory(t, records)
-	for _, category := range []lifecyclecontract.Category{
+	events := requireLifecycleEvents(t, records,
 		lifecyclecontract.CategorySessionStart,
 		lifecyclecontract.CategoryInputRequired,
 		lifecyclecontract.CategoryTaskComplete,
-	} {
-		if _, ok := events[category]; !ok {
-			t.Fatalf("missing lifecycle category %q in %+v", category, events)
-		}
-	}
+	)
 	started := events[lifecyclecontract.CategorySessionStart]
 	if started.Context.SessionTitle == nil || *started.Context.SessionTitle != "Lifecycle fixture" {
 		t.Fatalf("session start title = %v, want available launch title", started.Context.SessionTitle)
@@ -187,16 +181,10 @@ func TestLifecycleHooksRemotePTYRunsInControllingClient(t *testing.T) {
 		t.Fatalf("run remote lifecycle PTY fixture: %v raw=%q server=%q", err, string(capture.Raw), serverOutput.String())
 	}
 	records := appfixture.WaitForLifecycleHookRecords(t, recordPath, 2)
-	requireLifecycleCategoryCount(t, records, lifecyclecontract.CategoryTaskComplete, 1)
-	events := lifecycleEventsByCategory(t, records)
-	for _, category := range []lifecyclecontract.Category{
+	requireLifecycleEvents(t, records,
 		lifecyclecontract.CategorySessionStart,
 		lifecyclecontract.CategoryTaskComplete,
-	} {
-		if _, ok := events[category]; !ok {
-			t.Fatalf("missing remote lifecycle category %q in %+v", category, events)
-		}
-	}
+	)
 	for index, record := range records {
 		if record.ParentPID == serverReady.PID {
 			t.Fatalf("remote server process executed lifecycle hook %d", index)
@@ -246,11 +234,7 @@ func TestLifecycleHookFailureIsVisibleAndDoesNotBlockPTYRuntime(t *testing.T) {
 		t.Fatalf("run failing-hook lifecycle PTY fixture: %v raw=%q", err, string(capture.Raw))
 	}
 	records := appfixture.WaitForLifecycleHookRecords(t, recordPath, 2)
-	requireLifecycleCategoryCount(t, records, lifecyclecontract.CategoryTaskComplete, 1)
-	events := lifecycleEventsByCategory(t, records)
-	if _, ok := events[lifecyclecontract.CategoryTaskComplete]; !ok {
-		t.Fatalf("runtime did not complete after hook failure: %+v", events)
-	}
+	requireLifecycleEvents(t, records, lifecyclecontract.CategoryTaskComplete)
 	analysis, err := pty.Analyze(capture)
 	if err != nil {
 		t.Fatalf("analyze failing-hook PTY capture: %v", err)
@@ -277,34 +261,29 @@ func lifecyclePTYProcessEnv(t *testing.T, root string, config appfixture.Lifecyc
 	return appfixture.LifecycleProcessConfigEnvName + "=" + path
 }
 
-func lifecycleEventsByCategory(
+func requireLifecycleEvents(
 	t *testing.T,
 	records []appfixture.LifecycleHookRecord,
+	required ...lifecyclecontract.Category,
 ) map[lifecyclecontract.Category]appfixture.LifecycleHookEvent {
 	t.Helper()
 	events := make(map[lifecyclecontract.Category]appfixture.LifecycleHookEvent, len(records))
+	taskCompletions := 0
 	for _, event := range appfixture.DecodeLifecycleHookEvents(t, records) {
 		events[event.Category] = event
-	}
-	return events
-}
-
-func requireLifecycleCategoryCount(
-	t *testing.T,
-	records []appfixture.LifecycleHookRecord,
-	category lifecyclecontract.Category,
-	want int,
-) {
-	t.Helper()
-	got := 0
-	for _, event := range appfixture.DecodeLifecycleHookEvents(t, records) {
-		if event.Category == category {
-			got++
+		if event.Category == lifecyclecontract.CategoryTaskComplete {
+			taskCompletions++
 		}
 	}
-	if got != want {
-		t.Fatalf("lifecycle category %q count = %d, want %d", category, got, want)
+	for _, category := range required {
+		if _, exists := events[category]; !exists {
+			t.Fatalf("missing lifecycle category %q in %+v", category, events)
+		}
 	}
+	if _, required := events[lifecyclecontract.CategoryTaskComplete]; required && taskCompletions != 1 {
+		t.Fatalf("task-complete count = %d, want 1", taskCompletions)
+	}
+	return events
 }
 
 func waitForLifecycleServerReady(

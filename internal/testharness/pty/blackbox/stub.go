@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"core/internal/testharness/pty/analyzer"
+	"core/internal/testharness/scriptedllm"
+	"core/server/llm"
 	"core/shared/runtimeids"
 
 	"github.com/google/uuid"
@@ -47,6 +49,7 @@ type ResponsesStub struct {
 	server           *http.Server
 	listener         net.Listener
 	required         []RequiredOperation
+	scripted         *scriptedResponsesProgram
 	mu               sync.Mutex
 	index            int
 	requiredInFlight bool
@@ -74,6 +77,21 @@ func StartResponsesStub(required []RequiredOperation) (*ResponsesStub, error) {
 		}
 		seen[operation.ID] = struct{}{}
 	}
+	return startResponsesStub(required, nil)
+}
+
+func StartScriptedResponsesStub(script Script) (*ResponsesStub, error) {
+	return startResponsesStub(nil, &scriptedResponsesProgram{
+		client:   scriptedllm.NewClient(script),
+		lineages: make(map[scriptedLineage]*scriptedLineageState),
+		active:   make(map[scriptedLineage]struct{}),
+	})
+}
+
+func startResponsesStub(required []RequiredOperation, scripted *scriptedResponsesProgram) (*ResponsesStub, error) {
+	if len(required) > 0 && scripted != nil {
+		return nil, errors.New("required-operation and scripted Responses programs are mutually exclusive")
+	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, fmt.Errorf("listen response stub: %w", err)
@@ -81,6 +99,7 @@ func StartResponsesStub(required []RequiredOperation) (*ResponsesStub, error) {
 	stub := &ResponsesStub{
 		listener: listener,
 		required: append([]RequiredOperation(nil), required...),
+		scripted: scripted,
 		handlers: map[uint64]context.CancelFunc{},
 		done:     make(chan struct{}),
 		events:   make(chan struct{}, 1),
@@ -175,7 +194,31 @@ func (s *ResponsesStub) Verify() error {
 	if !snapshot.RequiredConsumed() {
 		return fmt.Errorf("required model operations remain: consumed=%d total=%d active=%d", snapshot.RequiredIndex, snapshot.RequiredTotal, snapshot.ActiveRequests)
 	}
+	if s.scripted != nil && s.scripted.client.RemainingSteps() != 0 {
+		return fmt.Errorf("scripted model operations remain: %d", s.scripted.client.RemainingSteps())
+	}
 	return nil
+}
+
+func (s *ResponsesStub) ScriptedRequestCount() int {
+	if s == nil || s.scripted == nil {
+		return 0
+	}
+	return len(s.scripted.client.Requests())
+}
+
+func (s *ResponsesStub) RemainingScriptedSteps() int {
+	if s == nil || s.scripted == nil {
+		return 0
+	}
+	return s.scripted.client.RemainingSteps()
+}
+
+func (s *ResponsesStub) WaitUntilScriptedActive(ctx context.Context) error {
+	if s == nil || s.scripted == nil {
+		return errors.New("Responses stub has no scripted program")
+	}
+	return s.scripted.client.WaitUntilActive(ctx)
 }
 
 // Stop stops admission, cancels all handlers, and closes listener connections
@@ -238,6 +281,19 @@ func (s *ResponsesStub) serveRoute(route Route) http.HandlerFunc {
 		if err := s.recordObserved(call); err != nil {
 			s.recordFailure(err)
 			http.Error(writer, "model diagnostics exceed limit", http.StatusRequestEntityTooLarge)
+			return
+		}
+		if s.scripted != nil {
+			admission, err := s.serveScripted(ctx, writer, request, route, body)
+			if err != nil {
+				if admission == scriptedllm.RequestAdmitted ||
+					(!errors.Is(err, scriptedllm.ErrConcurrentCall) && !errors.Is(err, scriptedllm.ErrScriptExhausted)) {
+					s.recordFailure(err)
+				}
+				if !errors.Is(err, context.Canceled) && !errors.Is(err, request.Context().Err()) {
+					http.Error(writer, err.Error(), http.StatusBadGateway)
+				}
+			}
 			return
 		}
 		operation, err := s.consume(route, body, request.Header)
@@ -371,28 +427,18 @@ func (s *ResponsesStub) writeResponse(ctx context.Context, writer http.ResponseW
 	case OutcomeProviderFailure:
 	case OutcomeStream:
 		writer.Header().Set("Content-Type", "text/event-stream")
-		addedItem, err := json.Marshal(assistantMessageOutputItem(nil, *operation.ResponsePhase))
-		if err != nil {
-			s.recordFailure(fmt.Errorf("encode response output item: %w", err))
-			return
-		}
-		if !s.writeSSE(writer, fmt.Sprintf("data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":%s}\n\n", addedItem)) {
+		if !s.writeResponseOutputItem(writer, 0, assistantMessageOutputItem(nil, *operation.ResponsePhase)) {
 			return
 		}
 		if operation.Output != nil {
-			delta, err := json.Marshal(*operation.Output)
-			if err != nil {
-				s.recordFailure(fmt.Errorf("encode response delta: %w", err))
-				return
-			}
-			if !s.writeSSE(writer, fmt.Sprintf("data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"delta\":%s}\n\n", delta)) {
+			if !s.writeResponseAssistantDelta(writer, 0, llm.AssistantDelta{Text: *operation.Output, Phase: llm.MessagePhase(*operation.ResponsePhase)}) {
 				return
 			}
 		}
-		if !s.writeSSE(writer, fmt.Sprintf("data: {\"type\":\"response.completed\",\"response\":{\"output\":%s}}\n\n", responseOutputJSON(operation.Output, operation.ResponsePhase))) {
+		if !s.writeResponseCompleted(writer, "", responseOutput(operation.Output, operation.ResponsePhase), llm.Usage{}) {
 			return
 		}
-		s.writeSSE(writer, "data: [DONE]\n\n")
+		s.writeResponseDone(writer)
 		return
 	case OutcomeJSON:
 	default:
@@ -430,12 +476,51 @@ func assistantMessageOutputItem(value *string, phase ResponsePhase) map[string]a
 	return item
 }
 
-func responseOutputJSON(value *string, phase *ResponsePhase) string {
-	encoded, err := json.Marshal(responseOutput(value, phase))
+func (s *ResponsesStub) writeResponseOutputItem(writer http.ResponseWriter, index int, item any) bool {
+	return s.writeResponseEvent(writer, map[string]any{"type": "response.output_item.added", "output_index": index, "item": item})
+}
+
+func (s *ResponsesStub) writeResponseAssistantDelta(writer http.ResponseWriter, index int, delta llm.AssistantDelta) bool {
+	return s.writeResponseEvent(writer, map[string]any{"type": "response.output_text.delta", "output_index": index, "delta": delta.Text})
+}
+
+func (s *ResponsesStub) writeResponseCompleted(writer http.ResponseWriter, model string, output []any, usage llm.Usage) bool {
+	return s.writeResponseEvent(writer, map[string]any{
+		"type": "response.completed",
+		"response": map[string]any{
+			"id": "resp_scripted", "object": "response", "status": "completed", "model": model,
+			"output": output,
+			"usage": map[string]int{
+				"input_tokens": usage.InputTokens, "output_tokens": usage.OutputTokens,
+				"total_tokens": usage.InputTokens + usage.OutputTokens,
+			},
+		},
+	})
+}
+
+func (s *ResponsesStub) writeResponseEvent(writer http.ResponseWriter, event any) bool {
+	encoded, err := json.Marshal(event)
 	if err != nil {
-		panic(fmt.Sprintf("marshal fixed response output: %v", err))
+		s.recordFailure(fmt.Errorf("encode Responses SSE event: %w", err))
+		return false
 	}
-	return string(encoded)
+	if !s.writeSSE(writer, "data: "+string(encoded)+"\n\n") {
+		return false
+	}
+	flushResponseWriter(writer)
+	return true
+}
+
+func (s *ResponsesStub) writeResponseDone(writer http.ResponseWriter) bool {
+	written := s.writeSSE(writer, "data: [DONE]\n\n")
+	flushResponseWriter(writer)
+	return written
+}
+
+func flushResponseWriter(writer http.ResponseWriter) {
+	if flusher, ok := writer.(http.Flusher); ok {
+		flusher.Flush()
+	}
 }
 
 func HandleInputTokenCount(writer http.ResponseWriter, request *http.Request, inputTokens int) bool {

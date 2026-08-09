@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"core/server/metadata"
 	"core/server/session"
 	serverstartup "core/server/startup"
 	"core/shared/apicontract"
@@ -32,222 +31,41 @@ func appStringPointer(value string) *string {
 	return &value
 }
 
-func TestBackParentPrefillTransportParity(t *testing.T) {
-	t.Run("embedded loopback", func(t *testing.T) {
-		_, workspace := newRegisteredAppWorkspace(t)
-		server, err := startAppTestEmbeddedServer(t, context.Background(), Options{
-			WorkspaceRoot:         workspace,
-			WorkspaceRootExplicit: true,
-			Model:                 "gpt-5",
-		}, readyMemoryAuthHandler(), false)
-		if err != nil {
-			t.Fatalf("start embedded server: %v", err)
-		}
-		defer func() { _ = server.Close() }()
-
-		runBackParentPrefillScenario(t, server)
-	})
-
-	t.Run("served remote", func(t *testing.T) {
-		_, workspace := newRegisteredAppWorkspace(t)
-		srv, err := serverstartup.StartServeServer(context.Background(), serverstartup.Request{
-			WorkspaceRoot:         workspace,
-			WorkspaceRootExplicit: true,
-			Model:                 "gpt-5",
-		}, apiKeyMemoryAuthHandler("test-key"), autoOnboarding)
-		if err != nil {
-			t.Fatalf("start served app server: %v", err)
-		}
-		defer func() { _ = srv.Close() }()
-
-		stopServing := serveAppServer(t, srv)
-		defer stopServing()
-		waitForConfiguredRemoteIdentity(t, workspace)
-
-		server, err := startSessionServer(
-			context.Background(),
-			Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true},
-			newHeadlessAuthInteractor(),
-			false,
-		)
-		if err != nil {
-			t.Fatalf("start remote session server: %v", err)
-		}
-		defer func() { _ = server.Close() }()
-		remote, ok := server.(*remoteAppServer)
-		if !ok {
-			t.Fatalf("session server = %T, want remote app server", server)
-		}
-		boundServer, err := ensureInteractiveProjectBinding(context.Background(), remote)
-		if err != nil {
-			t.Fatalf("bind remote server to project workspace: %v", err)
-		}
-		boundRemote, ok := boundServer.(*remoteAppServer)
-		if !ok {
-			t.Fatalf("bound session server = %T, want remote app server", boundServer)
-		}
-		defer func() { _ = boundRemote.Close() }()
-
-		runBackParentPrefillScenario(t, boundRemote)
-	})
-}
-
-func TestBackReopensPreviousSessionAcrossProjects(t *testing.T) {
-	_, workspaceA := newRegisteredAppWorkspace(t)
-	server, err := startAppTestEmbeddedServer(t, context.Background(), Options{
-		WorkspaceRoot:         workspaceA,
+func TestBackParentPrefillOverServedRemote(t *testing.T) {
+	_, workspace := newRegisteredAppWorkspace(t)
+	srv, err := serverstartup.StartServeServer(context.Background(), serverstartup.Request{
+		WorkspaceRoot:         workspace,
 		WorkspaceRootExplicit: true,
-	}, readyMemoryAuthHandler(), false)
+		Model:                 "gpt-5",
+	}, apiKeyMemoryAuthHandler("test-key"), autoOnboarding)
 	if err != nil {
-		t.Fatalf("start embedded server: %v", err)
+		t.Fatalf("start served app server: %v", err)
+	}
+	defer func() { _ = srv.Close() }()
+	stopServing := serveAppServer(t, srv)
+	defer stopServing()
+	waitForConfiguredRemoteIdentity(t, workspace)
+
+	server, err := startSessionServer(
+		context.Background(),
+		Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true},
+		newHeadlessAuthInteractor(),
+		false,
+	)
+	if err != nil {
+		t.Fatalf("start remote session server: %v", err)
 	}
 	defer func() { _ = server.Close() }()
-
-	workspaceB := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(workspaceB, config.ConfigDirName), 0o755); err != nil {
-		t.Fatalf("create embedded target config dir: %v", err)
-	}
-	if err := os.WriteFile(
-		filepath.Join(workspaceB, config.ConfigDirName, "config.toml"),
-		[]byte("model = \"embedded-target-model\"\nprovider_override = \"openai\"\n"),
-		0o644,
-	); err != nil {
-		t.Fatalf("write embedded target config: %v", err)
-	}
-	bindingB := mustRegisterAppBinding(t, server.Config().PersistenceRoot, workspaceB)
-	parent := createAttachedAuthoritativeAppSession(t, server.Config().PersistenceRoot, bindingB.ProjectID, workspaceB)
-	if err := parent.SetInputDraft("embedded target draft"); err != nil {
-		t.Fatalf("set embedded target parent draft: %v", err)
-	}
-
-	metadataStore, err := metadata.Open(server.Config().PersistenceRoot)
-	if err != nil {
-		t.Fatalf("metadata.Open: %v", err)
-	}
-	defer func() { _ = metadataStore.Close() }()
-	child, err := session.NewLazy(
-		filepath.Join(server.Config().PersistenceRoot, "projects", server.ProjectID(), "sessions"),
-		filepath.Base(filepath.Clean(workspaceA)),
-		workspaceA,
-		sessioncontract.SessionCategoryMain,
-		metadataStore.AuthoritativeSessionStoreOptions()...,
-	)
-	if err != nil {
-		t.Fatalf("create child: %v", err)
-	}
-	if err := session.InitializeCreationContext(child, parent, session.SessionCreationSourcePreviousSession, session.ChildContextOptions{}); err != nil {
-		t.Fatalf("initialize cross-project provenance: %v", err)
-	}
-	if err := child.EnsureDurable(); err != nil {
-		t.Fatalf("persist child: %v", err)
-	}
-	childLog, err := child.MaterializeEventLog()
-	if err != nil {
-		t.Fatalf("materialize child event log: %v", err)
-	}
-	childText := "child task"
-	if _, _, err := childLog.AppendRecord(
-		appStringPointer("child-step"),
-		session.MessageRecord{Role: session.MessageRoleUser, Content: &childText},
-	); err != nil {
-		t.Fatalf("append child event: %v", err)
-	}
-
-	childView, err := server.SessionViewClient().GetSessionMainView(
-		context.Background(),
-		serverapi.SessionMainViewRequest{SessionID: child.Meta().SessionID},
-	)
-	if err != nil {
-		t.Fatalf("load child main view: %v", err)
-	}
-	childModel := newProjectedClosedUIModel(&runtimeControlFakeClient{
-		mainView: clientui.RuntimeMainView{Status: childView.MainView.Status, Session: childView.MainView.Session},
-	}, WithUISessionID(child.Meta().SessionID))
-	childModel.statusConfig.SessionViews = server.SessionViewClient()
-
-	next, lookupCmd := childModel.inputController().handleBackCommand()
-	childModel = next.(*uiModel)
-	if lookupCmd == nil {
-		t.Fatal("/back did not start final-answer lookup")
-	}
-	batch, ok := lookupCmd().(tea.BatchMsg)
-	if !ok || len(batch) == 0 {
-		t.Fatal("/back lookup did not return a batch")
-	}
-	lookupDone, ok := batch[0]().(latestFinalAnswerDoneMsg)
+	remote, ok := server.(*remoteAppServer)
 	if !ok {
-		t.Fatalf("/back lookup result = %T, want latestFinalAnswerDoneMsg", batch[0]())
+		t.Fatalf("session server = %T, want remote app server", server)
 	}
-	next, quitCmd := childModel.Update(lookupDone)
-	childModel = next.(*uiModel)
-	if quitCmd == nil {
-		t.Fatal("/back did not request child UI exit")
-	}
-	transition := childModel.Transition()
-	if transition.TargetSessionID != parent.Meta().SessionID {
-		t.Fatalf("/back target = %q, want cross-project parent %q", transition.TargetSessionID, parent.Meta().SessionID)
-	}
-
-	handoff, err := resolveSessionAction(context.Background(), server, nil, child.Meta().SessionID, transition)
+	bound, err := ensureInteractiveProjectBinding(context.Background(), remote)
 	if err != nil {
-		t.Fatalf("resolve /back transition: %v", err)
+		t.Fatalf("bind remote server to project workspace: %v", err)
 	}
-	intent, _ := requireAppLifecycleLaunch(t, handoff)
-	preparation, _ := handoff.LaunchPreparation()
-	navigationBinding, present := preparation.NavigationBinding()
-	if !present || navigationBinding.ProjectID != bindingB.ProjectID || navigationBinding.WorkspaceID != bindingB.WorkspaceID {
-		t.Fatalf("embedded /back navigation binding = %+v/%t, want project=%q workspace=%q", navigationBinding, present, bindingB.ProjectID, bindingB.WorkspaceID)
-	}
-	targetServer, rebound, err := bindNavigationSessionContext(context.Background(), server, preparation)
-	if err != nil {
-		t.Fatalf("bind cross-project parent context: %v", err)
-	}
-	if !rebound {
-		t.Fatal("cross-project /back did not rebind the session server")
-	}
-	retargetContextProvider, ok := targetServer.(sessionWorkspaceRetargetContextProvider)
-	if !ok {
-		t.Fatal("cross-project embedded /back omitted workspace retarget context")
-	}
-	embeddedRetargetContext := retargetContextProvider.workspaceRetargetContext()
-	if embeddedRetargetContext == nil || comparableWorkspaceChangeRoot(embeddedRetargetContext.workspaceRoot) != comparableWorkspaceChangeRoot(workspaceB) {
-		t.Fatalf("cross-project embedded /back retarget root = %+v, want %q", embeddedRetargetContext, workspaceB)
-	}
-	planner := newSessionLaunchPlanner(targetServer)
-	plan, err := planner.PlanSession(context.Background(), sessionLaunchRequest{
-		Mode:   launchModeInteractive,
-		Intent: intent,
-	})
-	if err != nil {
-		t.Fatalf("plan cross-project parent: %v", err)
-	}
-	wantWorkspaceRoot, err := filepath.EvalSymlinks(workspaceB)
-	if err != nil {
-		t.Fatalf("canonicalize parent workspace: %v", err)
-	}
-	if plan.SessionID != parent.Meta().SessionID || plan.ExecutionTarget.WorkspaceRoot != wantWorkspaceRoot {
-		t.Fatalf("cross-project plan = session %q workspace %q, want %q %q", plan.SessionID, plan.ExecutionTarget.WorkspaceRoot, parent.Meta().SessionID, wantWorkspaceRoot)
-	}
-	if plan.ActiveSettings.Model != "embedded-target-model" || plan.Source.Sources["model"] != "file" {
-		t.Fatalf("embedded target plan model/source = %q/%q, want embedded-target-model/file", plan.ActiveSettings.Model, plan.Source.Sources["model"])
-	}
-	runtimePlan, request, err := prepareSessionUIRun(
-		context.Background(),
-		targetServer,
-		planner,
-		plan,
-		"",
-		false,
-		"",
-		false,
-	)
-	if err != nil {
-		t.Fatalf("prepare embedded target parent UI: %v", err)
-	}
-	defer func() { _ = runtimePlan.Close() }()
-	if request.initialInput != "embedded target draft" || request.active.Model != "embedded-target-model" {
-		t.Fatalf("prepared embedded target UI input/model = %q/%q", request.initialInput, request.active.Model)
-	}
+	defer func() { _ = bound.Close() }()
+	runBackParentPrefillScenario(t, bound.(backParentPrefillScenarioServer))
 }
 
 func TestRemoteBackRebindsToParentProjectBeforeRuntimePreparation(t *testing.T) {
@@ -636,13 +454,6 @@ func runBackParentPrefillScenario(t *testing.T, server backParentPrefillScenario
 			}
 			if afterEdit.Activity != beforeEdit.Activity || afterEdit.Activity.State != clientui.RuntimeActivityRegisteredIdle {
 				t.Fatalf("normal edit changed parent runtime activity: before=%+v after=%+v", beforeEdit.Activity, afterEdit.Activity)
-			}
-			hasQueuedWork, err := parentRuntimePlan.Wiring.runtimeClient.HasQueuedUserWork()
-			if err != nil {
-				t.Fatalf("read parent queued work after edit: %v", err)
-			}
-			if hasQueuedWork {
-				t.Fatal("normal parent composer edit created queued runtime work")
 			}
 		})
 	}

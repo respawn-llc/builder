@@ -13,6 +13,11 @@ type Manager struct {
 	now       func() time.Time
 }
 
+type CurrentStateResolution struct {
+	Loaded  *State
+	Current *State
+}
+
 func NewManager(store Store, refresher *OAuthRefresher, now func() time.Time) *Manager {
 	if now == nil {
 		now = time.Now
@@ -62,11 +67,25 @@ func (m *Manager) loadState(ctx context.Context, persistedOnly bool) (State, err
 }
 
 func (m *Manager) CurrentState(ctx context.Context) (State, error) {
-	state, err := m.Load(ctx)
+	resolution, err := m.ResolveCurrentState(ctx)
 	if err != nil {
 		return State{}, err
 	}
-	return m.resolveState(ctx, state)
+	return *resolution.Current, nil
+}
+
+func (m *Manager) ResolveCurrentState(ctx context.Context) (CurrentStateResolution, error) {
+	state, err := m.Load(ctx)
+	if err != nil {
+		return CurrentStateResolution{}, err
+	}
+	resolution := CurrentStateResolution{Loaded: &state}
+	current, err := m.resolveState(ctx, state)
+	if err != nil {
+		return resolution, err
+	}
+	resolution.Current = &current
+	return resolution, nil
 }
 
 func (m *Manager) EnsureStartupReady(ctx context.Context) error {

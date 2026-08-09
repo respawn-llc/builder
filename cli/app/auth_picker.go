@@ -12,10 +12,7 @@ import (
 	ansi "github.com/charmbracelet/x/ansi"
 )
 
-const (
-	authPickerHeaderMarkdown         = "**Pick auth options**"
-	authConflictPickerHeaderMarkdown = "**Choose Auth Source**"
-)
+const authPickerHeaderMarkdown = "**Pick auth options**"
 
 var runStartupPickerFlow = runStartupPicker
 
@@ -335,11 +332,10 @@ func runStartupPicker(model *startupPickerModel) (startupPickerResult, error) {
 type authMethodChoice string
 
 const (
-	authMethodChoiceSkip         authMethodChoice = "skip"
-	authMethodChoiceEnvAPIKey    authMethodChoice = "env_api_key"
-	authMethodChoiceBrowserAuto  authMethodChoice = "oauth_browser"
-	authMethodChoiceBrowserPaste authMethodChoice = "oauth_browser_paste"
-	authMethodChoiceDevice       authMethodChoice = "oauth_device"
+	authMethodChoiceSkip        authMethodChoice = "skip"
+	authMethodChoiceEnvAPIKey   authMethodChoice = "env_api_key"
+	authMethodChoiceBrowserAuto authMethodChoice = "oauth_browser"
+	authMethodChoiceDevice      authMethodChoice = "oauth_device"
 )
 
 type authMethodPickerResult struct {
@@ -348,7 +344,7 @@ type authMethodPickerResult struct {
 }
 
 func authMethodOptions(includeEnvAPIKey bool, allowSkip bool) []startupPickerOption {
-	items := make([]startupPickerOption, 0, 5)
+	items := make([]startupPickerOption, 0, 4)
 	items = append(items,
 		startupPickerOption{
 			ID:    string(authMethodChoiceBrowserAuto),
@@ -383,8 +379,6 @@ func newAuthMethodPickerModel(theme string, notice startupPickerNotice, includeE
 func authMethodPickerNoticeForRequest(req authInteraction) startupPickerNotice {
 	notice := authui.AuthMethodPickerNotice(authui.AuthMethodPickerNoticeRequest{
 		FlowErr:      req.FlowErr,
-		StartupErr:   req.StartupErr,
-		GateReason:   req.Gate.Reason,
 		HasEnvAPIKey: req.HasEnvAPIKey,
 	})
 	kind := startupPickerNoticeNeutral
@@ -410,44 +404,4 @@ func runAuthMethodPicker(req authInteraction) (authMethodPickerResult, error) {
 		return authMethodPickerResult{}, err
 	}
 	return authMethodPickerResult{Choice: authMethodChoice(picked.ChoiceID), Canceled: picked.Canceled}, nil
-}
-
-type authConflictChoice string
-
-const (
-	authConflictChoiceEnvAPIKey authConflictChoice = "env_api_key"
-	authConflictChoiceSavedAuth authConflictChoice = "saved_auth"
-)
-
-type authConflictPickerResult struct {
-	Choice   authConflictChoice
-	Canceled bool
-}
-
-func authConflictOptions() []startupPickerOption {
-	return []startupPickerOption{
-		{
-			ID:    string(authConflictChoiceEnvAPIKey),
-			Title: "Use provided OPENAI_API_KEY from now on",
-		},
-		{
-			ID:    string(authConflictChoiceSavedAuth),
-			Title: "Keep using saved subscription sign-in",
-		},
-	}
-}
-
-func runAuthConflictPicker(req authInteraction) (authConflictPickerResult, error) {
-	model := newStartupPickerModel(
-		authConflictPickerHeaderMarkdown,
-		"Choose auth source",
-		req.Theme,
-		startupPickerNotice{Text: "Kent found both saved subscription auth and OPENAI_API_KEY. Choose which auth source should win from now on.", Kind: startupPickerNoticeNeutral},
-		authConflictOptions(),
-	)
-	picked, err := runStartupPickerFlow(model)
-	if err != nil {
-		return authConflictPickerResult{}, err
-	}
-	return authConflictPickerResult{Choice: authConflictChoice(picked.ChoiceID), Canceled: picked.Canceled}, nil
 }

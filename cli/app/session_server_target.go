@@ -29,7 +29,7 @@ func startSessionServer(ctx context.Context, opts Options, interactor authIntera
 			returnErr = errors.Join(returnErr, remote.Close())
 		}
 	}()
-	remoteServer := newRemoteAppServerWithAuth(remote, cfg, remote.Close, false)
+	remoteServer := newRemoteAppServerWithAuth(remote, cfg)
 	server = remoteServer
 	if err := server.EnsureAuthReady(ctx, interactor, interactive); err != nil {
 		return nil, err

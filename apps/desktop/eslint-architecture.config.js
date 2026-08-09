@@ -18,89 +18,22 @@ export const architectureOwners = Object.freeze({
 });
 
 export const architectureElements = Object.freeze([
-  Object.freeze({
-    type: architectureOwners.SHELL,
-    pattern: "src/app",
-    partialMatch: false,
-  }),
-  Object.freeze({
-    type: architectureOwners.SHELL,
-    pattern: "src/dev-showcase",
-    partialMatch: false,
-  }),
-  Object.freeze({
-    type: architectureOwners.APP_FACADE,
-    pattern: "src/app-facade",
-    partialMatch: false,
-  }),
-  Object.freeze({
-    type: architectureOwners.FEATURE,
-    pattern: "src/features/*",
-    capture: ["name"],
-    partialMatch: false,
-  }),
-  Object.freeze({
-    type: architectureOwners.SHARED,
-    pattern: "src/shared/*",
-    capture: ["name"],
-    partialMatch: false,
-  }),
-  Object.freeze({
-    type: architectureOwners.UI,
-    pattern: "src/ui",
-    partialMatch: false,
-  }),
-  Object.freeze({
-    type: architectureOwners.UI_KIT,
-    pattern: "packages/ui-kit",
-    partialMatch: false,
-  }),
-  Object.freeze({
-    type: architectureOwners.API,
-    pattern: "src/api",
-    partialMatch: false,
-  }),
-  Object.freeze({
-    type: architectureOwners.TEST_SUPPORT,
-    pattern: "src/test-support",
-    partialMatch: false,
-  }),
-  Object.freeze({
-    type: architectureOwners.NATIVE_PACKAGE,
-    pattern: "packages/*",
-    capture: ["name"],
-    partialMatch: false,
-  }),
-  Object.freeze({
-    type: architectureOwners.I18N,
-    pattern: "src/i18n",
-    partialMatch: false,
-  }),
-  Object.freeze({
-    type: architectureOwners.VENDOR,
-    pattern: "src/vendor",
-    partialMatch: false,
-  }),
-  Object.freeze({
-    type: architectureOwners.NATIVE_CONFIG,
-    pattern: "src-tauri",
-    partialMatch: false,
-  }),
-  Object.freeze({
-    type: architectureOwners.TOOLING,
-    pattern: "tooling",
-    partialMatch: false,
-  }),
-  Object.freeze({
-    type: architectureOwners.TOOLING,
-    pattern: "test",
-    partialMatch: false,
-  }),
-  Object.freeze({
-    type: architectureOwners.TOOLING,
-    pattern: "src/types",
-    partialMatch: false,
-  }),
+  architectureElement(architectureOwners.SHELL, "src/app"),
+  architectureElement(architectureOwners.SHELL, "src/dev-showcase"),
+  architectureElement(architectureOwners.APP_FACADE, "src/app-facade"),
+  architectureElement(architectureOwners.FEATURE, "src/features/*", "name"),
+  architectureElement(architectureOwners.SHARED, "src/shared/*", "name"),
+  architectureElement(architectureOwners.UI, "src/ui"),
+  architectureElement(architectureOwners.API, "src/api"),
+  architectureElement(architectureOwners.TEST_SUPPORT, "src/test-support"),
+  architectureElement(architectureOwners.UI_KIT, "packages/ui-kit"),
+  architectureElement(architectureOwners.NATIVE_PACKAGE, "packages/*", "name"),
+  architectureElement(architectureOwners.I18N, "src/i18n"),
+  architectureElement(architectureOwners.VENDOR, "src/vendor"),
+  architectureElement(architectureOwners.NATIVE_CONFIG, "src-tauri"),
+  architectureElement(architectureOwners.TOOLING, "tooling"),
+  architectureElement(architectureOwners.TOOLING, "test"),
+  architectureElement(architectureOwners.TOOLING, "src/types"),
 ]);
 
 export const architectureEntrypoints = Object.freeze({
@@ -119,18 +52,9 @@ export const architectureFileCategories = Object.freeze({
 });
 
 export const architectureFiles = Object.freeze([
-  Object.freeze({
-    category: architectureFileCategories.TEST,
-    pattern: "**/*.test.{ts,tsx}",
-  }),
-  Object.freeze({
-    category: architectureFileCategories.TEST,
-    pattern: "test/**/*.{ts,tsx}",
-  }),
-  Object.freeze({
-    category: architectureFileCategories.DECLARATION,
-    pattern: "**/*.d.ts",
-  }),
+  architectureFile(architectureFileCategories.TEST, "**/*.test.{ts,tsx}"),
+  architectureFile(architectureFileCategories.TEST, "test/**/*.{ts,tsx}"),
+  architectureFile(architectureFileCategories.DECLARATION, "**/*.d.ts"),
 ]);
 
 export const architectureDependencyNodes = Object.freeze(["import", "export", "dynamic-import", "require"]);
@@ -145,270 +69,103 @@ export const architectureAdditionalDependencyNodes = Object.freeze(
   ),
 );
 
-const shellDependencyPolicies = Object.freeze([
-  allowOwnerDependency({
-    from: architectureOwners.SHELL,
-    to: architectureOwners.SHELL,
-  }),
-  allowOwnerDependency({
-    from: architectureOwners.SHELL,
-    to: architectureOwners.APP_FACADE,
-    source: "@/app-facade",
-  }),
-  allowOwnerDependency({
-    from: architectureOwners.SHELL,
-    to: architectureOwners.FEATURE,
-    source: "@/features/*",
-  }),
-  allowOwnerDependency({
-    from: architectureOwners.SHELL,
-    to: architectureOwners.SHARED,
-    source: "@/shared/*",
-  }),
-  allowOwnerDependency({
-    from: architectureOwners.SHELL,
-    to: architectureOwners.UI,
-    source: "@/ui",
-  }),
-  allowOwnerDependency({
-    from: architectureOwners.SHELL,
-    to: architectureOwners.API,
-    source: "@/api",
-  }),
-  allowOwnerDependency({
-    from: architectureOwners.SHELL,
-    to: architectureOwners.API,
-    source: "@/api/composition",
-    targetFile: architectureEntrypoints.API_COMPOSITION,
-  }),
-  allowOwnerDependency({
-    from: architectureOwners.SHELL,
-    to: architectureOwners.I18N,
-    source: "@/i18n",
-  }),
-  allowOwnerDependency({
-    from: architectureOwners.SHELL,
-    to: architectureOwners.NATIVE_PACKAGE,
-    source: "@app/native-bridge",
-    targetFile: architectureEntrypoints.NATIVE_PACKAGE,
-  }),
-  allowOwnerDependency({
-    from: architectureOwners.SHELL,
-    to: architectureOwners.VENDOR,
-    source: "@xyflow/react",
-    targetFile: architectureEntrypoints.VENDOR_XYFLOW,
-  }),
-  allowOwnerDependency({
-    from: architectureOwners.SHELL,
-    to: architectureOwners.VENDOR,
-    source: "elkjs/lib/elk-api",
-    targetFile: architectureEntrypoints.VENDOR_ELK_API,
-  }),
-  allowOwnerDependency({
-    from: architectureOwners.SHELL,
-    to: architectureOwners.VENDOR,
-    source: "elkjs/lib/elk.bundled.js",
-    targetFile: architectureEntrypoints.VENDOR_ELK_BUNDLED,
-  }),
-]);
+const dependencyTargets = {
+  API: dependencyTarget(architectureOwners.API, "@/api"),
+  API_COMPOSITION: dependencyTarget(
+    architectureOwners.API,
+    "@/api/composition",
+    architectureEntrypoints.API_COMPOSITION,
+  ),
+  APP_FACADE: dependencyTarget(architectureOwners.APP_FACADE, "@/app-facade"),
+  FEATURE: dependencyTarget(architectureOwners.FEATURE, "@/features/*"),
+  I18N: dependencyTarget(architectureOwners.I18N, "@/i18n"),
+  NATIVE_PACKAGE: dependencyTarget(
+    architectureOwners.NATIVE_PACKAGE,
+    "@app/native-bridge",
+    architectureEntrypoints.NATIVE_PACKAGE,
+  ),
+  SHARED: dependencyTarget(architectureOwners.SHARED, "@/shared/*"),
+  TOOLING_TYPES: dependencyTarget(architectureOwners.TOOLING, "@/types"),
+  UI: dependencyTarget(architectureOwners.UI, "@/ui"),
+  UI_KIT: dependencyTarget(
+    architectureOwners.UI_KIT,
+    "@app/ui-kit",
+    architectureEntrypoints.UI_KIT,
+  ),
+  VENDOR_ELK_API: dependencyTarget(
+    architectureOwners.VENDOR,
+    "elkjs/lib/elk-api",
+    architectureEntrypoints.VENDOR_ELK_API,
+  ),
+  VENDOR_ELK_BUNDLED: dependencyTarget(
+    architectureOwners.VENDOR,
+    "elkjs/lib/elk.bundled.js",
+    architectureEntrypoints.VENDOR_ELK_BUNDLED,
+  ),
+  VENDOR_XYFLOW: dependencyTarget(
+    architectureOwners.VENDOR,
+    "@xyflow/react",
+    architectureEntrypoints.VENDOR_XYFLOW,
+  ),
+};
 
-const appFacadeDependencyPolicies = Object.freeze([
-  allowOwnerDependency({
-    from: architectureOwners.APP_FACADE,
-    to: architectureOwners.API,
-    source: "@/api",
-  }),
-  allowOwnerDependency({
-    from: architectureOwners.APP_FACADE,
-    to: architectureOwners.UI,
-    source: "@/ui",
-  }),
-  allowOwnerDependency({
-    from: architectureOwners.APP_FACADE,
-    to: architectureOwners.NATIVE_PACKAGE,
-    source: "@app/native-bridge",
-    targetFile: architectureEntrypoints.NATIVE_PACKAGE,
-  }),
-]);
+const vendorDependencies = [
+  dependencyTargets.VENDOR_XYFLOW,
+  dependencyTargets.VENDOR_ELK_API,
+  dependencyTargets.VENDOR_ELK_BUNDLED,
+];
 
-const featureDependencyPolicies = Object.freeze([
-  allowOwnerDependency({
-    from: architectureOwners.FEATURE,
-    to: architectureOwners.APP_FACADE,
-    source: "@/app-facade",
-  }),
-  allowOwnerDependency({
-    from: architectureOwners.FEATURE,
-    to: architectureOwners.SHARED,
-    source: "@/shared/*",
-  }),
-  allowOwnerDependency({
-    from: architectureOwners.FEATURE,
-    to: architectureOwners.UI,
-    source: "@/ui",
-  }),
-  allowOwnerDependency({
-    from: architectureOwners.FEATURE,
-    to: architectureOwners.UI_KIT,
-    source: "@app/ui-kit",
-    targetFile: architectureEntrypoints.UI_KIT,
-  }),
-  allowOwnerDependency({
-    from: architectureOwners.FEATURE,
-    to: architectureOwners.API,
-    source: "@/api",
-  }),
-  allowOwnerDependency({
-    from: architectureOwners.FEATURE,
-    to: architectureOwners.I18N,
-    source: "@/i18n",
-  }),
-  allowOwnerDependency({
-    from: architectureOwners.FEATURE,
-    to: architectureOwners.VENDOR,
-    source: "@xyflow/react",
-    targetFile: architectureEntrypoints.VENDOR_XYFLOW,
-  }),
-  allowOwnerDependency({
-    from: architectureOwners.FEATURE,
-    to: architectureOwners.VENDOR,
-    source: "elkjs/lib/elk-api",
-    targetFile: architectureEntrypoints.VENDOR_ELK_API,
-  }),
-  allowOwnerDependency({
-    from: architectureOwners.FEATURE,
-    to: architectureOwners.VENDOR,
-    source: "elkjs/lib/elk.bundled.js",
-    targetFile: architectureEntrypoints.VENDOR_ELK_BUNDLED,
-  }),
-]);
+const compositionDependencies = [
+  dependencyTargets.APP_FACADE,
+  dependencyTargets.FEATURE,
+  dependencyTargets.SHARED,
+  dependencyTargets.UI,
+  dependencyTargets.API,
+  dependencyTargets.API_COMPOSITION,
+  dependencyTargets.I18N,
+  dependencyTargets.NATIVE_PACKAGE,
+  ...vendorDependencies,
+];
 
-const sharedDependencyPolicies = Object.freeze([
-  allowOwnerDependency({
-    from: architectureOwners.SHARED,
-    to: architectureOwners.APP_FACADE,
-    source: "@/app-facade",
-  }),
-  allowOwnerDependency({
-    from: architectureOwners.SHARED,
-    to: architectureOwners.API,
-    source: "@/api",
-  }),
-  allowOwnerDependency({
-    from: architectureOwners.SHARED,
-    to: architectureOwners.UI,
-    source: "@/ui",
-  }),
-  allowOwnerDependency({
-    from: architectureOwners.SHARED,
-    to: architectureOwners.UI_KIT,
-    source: "@app/ui-kit",
-    targetFile: architectureEntrypoints.UI_KIT,
-  }),
-  allowOwnerDependency({
-    from: architectureOwners.SHARED,
-    to: architectureOwners.SHARED,
-    source: "@/shared/*",
-  }),
-  allowOwnerDependency({
-    from: architectureOwners.SHARED,
-    to: architectureOwners.VENDOR,
-    source: "@xyflow/react",
-    targetFile: architectureEntrypoints.VENDOR_XYFLOW,
-  }),
-  allowOwnerDependency({
-    from: architectureOwners.SHARED,
-    to: architectureOwners.VENDOR,
-    source: "elkjs/lib/elk-api",
-    targetFile: architectureEntrypoints.VENDOR_ELK_API,
-  }),
-  allowOwnerDependency({
-    from: architectureOwners.SHARED,
-    to: architectureOwners.VENDOR,
-    source: "elkjs/lib/elk.bundled.js",
-    targetFile: architectureEntrypoints.VENDOR_ELK_BUNDLED,
-  }),
-]);
+const ownerDependencyMatrix = [
+  ownerDependencies(
+    architectureOwners.SHELL,
+    dependencyTarget(architectureOwners.SHELL),
+    ...compositionDependencies,
+  ),
+  ownerDependencies(
+    architectureOwners.APP_FACADE,
+    dependencyTargets.API,
+    dependencyTargets.UI,
+    dependencyTargets.NATIVE_PACKAGE,
+  ),
+  ownerDependencies(
+    architectureOwners.FEATURE,
+    dependencyTargets.APP_FACADE,
+    dependencyTargets.SHARED,
+    dependencyTargets.UI,
+    dependencyTargets.UI_KIT,
+    dependencyTargets.API,
+    dependencyTargets.I18N,
+    ...vendorDependencies,
+  ),
+  ownerDependencies(
+    architectureOwners.SHARED,
+    dependencyTargets.APP_FACADE,
+    dependencyTargets.API,
+    dependencyTargets.UI,
+    dependencyTargets.UI_KIT,
+    dependencyTargets.SHARED,
+    ...vendorDependencies,
+  ),
+  ownerDependencies(architectureOwners.UI_KIT, dependencyTargets.UI_KIT),
+  ownerDependencies(architectureOwners.TEST_SUPPORT, ...compositionDependencies),
+  ownerDependencies(architectureOwners.TOOLING, dependencyTargets.TOOLING_TYPES),
+];
 
-const uiKitDependencyPolicies = Object.freeze([
-  allowOwnerDependency({
-    from: architectureOwners.UI_KIT,
-    to: architectureOwners.UI_KIT,
-    source: "@app/ui-kit",
-    targetFile: architectureEntrypoints.UI_KIT,
-  }),
-]);
-
-const testSupportDependencyPolicies = Object.freeze([
-  allowOwnerDependency({
-    from: architectureOwners.TEST_SUPPORT,
-    to: architectureOwners.APP_FACADE,
-    source: "@/app-facade",
-  }),
-  allowOwnerDependency({
-    from: architectureOwners.TEST_SUPPORT,
-    to: architectureOwners.FEATURE,
-    source: "@/features/*",
-  }),
-  allowOwnerDependency({
-    from: architectureOwners.TEST_SUPPORT,
-    to: architectureOwners.SHARED,
-    source: "@/shared/*",
-  }),
-  allowOwnerDependency({
-    from: architectureOwners.TEST_SUPPORT,
-    to: architectureOwners.UI,
-    source: "@/ui",
-  }),
-  allowOwnerDependency({
-    from: architectureOwners.TEST_SUPPORT,
-    to: architectureOwners.API,
-    source: "@/api",
-  }),
-  allowOwnerDependency({
-    from: architectureOwners.TEST_SUPPORT,
-    to: architectureOwners.API,
-    source: "@/api/composition",
-    targetFile: architectureEntrypoints.API_COMPOSITION,
-  }),
-  allowOwnerDependency({
-    from: architectureOwners.TEST_SUPPORT,
-    to: architectureOwners.I18N,
-    source: "@/i18n",
-  }),
-  allowOwnerDependency({
-    from: architectureOwners.TEST_SUPPORT,
-    to: architectureOwners.NATIVE_PACKAGE,
-    source: "@app/native-bridge",
-    targetFile: architectureEntrypoints.NATIVE_PACKAGE,
-  }),
-  allowOwnerDependency({
-    from: architectureOwners.TEST_SUPPORT,
-    to: architectureOwners.VENDOR,
-    source: "@xyflow/react",
-    targetFile: architectureEntrypoints.VENDOR_XYFLOW,
-  }),
-  allowOwnerDependency({
-    from: architectureOwners.TEST_SUPPORT,
-    to: architectureOwners.VENDOR,
-    source: "elkjs/lib/elk-api",
-    targetFile: architectureEntrypoints.VENDOR_ELK_API,
-  }),
-  allowOwnerDependency({
-    from: architectureOwners.TEST_SUPPORT,
-    to: architectureOwners.VENDOR,
-    source: "elkjs/lib/elk.bundled.js",
-    targetFile: architectureEntrypoints.VENDOR_ELK_BUNDLED,
-  }),
-]);
-
-const toolingDependencyPolicies = Object.freeze([
-  allowOwnerDependency({
-    from: architectureOwners.TOOLING,
-    to: architectureOwners.TOOLING,
-    source: "@/types",
-  }),
-]);
+const ownerDependencyPolicies = ownerDependencyMatrix.flatMap(({ from, dependencies }) =>
+  dependencies.map((dependency) => allowOwnerDependency({ from, ...dependency })),
+);
 
 const testDependencyPolicies = Object.freeze([
   Object.freeze({
@@ -452,16 +209,7 @@ const testDependencyPolicies = Object.freeze([
 export const architectureDependencyOptions = Object.freeze({
   default: "disallow",
   checkUnknownLocals: true,
-  policies: Object.freeze([
-    ...shellDependencyPolicies,
-    ...appFacadeDependencyPolicies,
-    ...featureDependencyPolicies,
-    ...sharedDependencyPolicies,
-    ...uiKitDependencyPolicies,
-    ...testSupportDependencyPolicies,
-    ...toolingDependencyPolicies,
-    ...testDependencyPolicies,
-  ]),
+  policies: Object.freeze([...ownerDependencyPolicies, ...testDependencyPolicies]),
 });
 
 export function createArchitecturePolicy({ rootPath, parserProjects }) {
@@ -544,4 +292,28 @@ function allowOwnerDependency({ from, to, source, targetFile = architectureEntry
     },
     allow: dependencySelector,
   });
+}
+
+function dependencyTarget(to, source, targetFile) {
+  return Object.freeze({ to, source, targetFile });
+}
+
+function ownerDependencies(from, ...dependencies) {
+  return { from, dependencies };
+}
+
+function architectureElement(type, pattern, capture) {
+  const element = {
+    type,
+    pattern,
+    partialMatch: false,
+  };
+  if (capture !== undefined) {
+    element.capture = Object.freeze([capture]);
+  }
+  return Object.freeze(element);
+}
+
+function architectureFile(category, pattern) {
+  return Object.freeze({ category, pattern });
 }

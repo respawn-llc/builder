@@ -66,9 +66,8 @@ func TestTUIStrictIOViewDoesNotFetchProcessesForStatusOrOverlay(t *testing.T) {
 type strictRuntimeClient struct {
 	clientui.RuntimeClient
 
-	submitQueuedID         string
-	submitCalls            int
-	hasQueuedUserWorkCalls int
+	submitQueuedID string
+	submitCalls    int
 }
 
 func (*strictRuntimeClient) MainView() clientui.RuntimeMainView {
@@ -84,11 +83,6 @@ func (c *strictRuntimeClient) SubmitRuntimeInput(_ context.Context, request clie
 			ClientRequestID: request.OperationRef.ClientRequestID.String(),
 		},
 	}, nil
-}
-
-func (c *strictRuntimeClient) HasQueuedUserWork() (bool, error) {
-	c.hasQueuedUserWorkCalls++
-	return false, nil
 }
 
 func TestTUIStrictIOBusyEnterQueuesInjectedInputAsCommand(t *testing.T) {
@@ -118,26 +112,6 @@ func TestTUIStrictIOBusyEnterQueuesInjectedInputAsCommand(t *testing.T) {
 	}
 	if len(updated.pendingInjected) != 1 || updated.pendingInjected[0].ID != "server-queue-1" {
 		t.Fatalf("expected server queue item after command, got %+v", updated.pendingInjected)
-	}
-}
-
-func TestTUIStrictIOCompactDoneChecksQueuedRuntimeWorkAsCommand(t *testing.T) {
-	client := &strictRuntimeClient{}
-	m := newStrictUIModel(client)
-	m.startupCmds = nil
-	setStrictTestRuntimeBusy(t, m)
-	m.setCompacting(true)
-
-	_, cmd := m.Update(compactDoneMsg{})
-	if cmd == nil {
-		t.Fatal("expected queued-work check command")
-	}
-	if client.hasQueuedUserWorkCalls != 0 {
-		t.Fatalf("HasQueuedUserWork called during Update: %d", client.hasQueuedUserWorkCalls)
-	}
-	_ = strictCmdMessages(cmd)
-	if client.hasQueuedUserWorkCalls != 1 {
-		t.Fatalf("HasQueuedUserWork calls after command = %d, want 1", client.hasQueuedUserWorkCalls)
 	}
 }
 

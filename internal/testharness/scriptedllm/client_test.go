@@ -6,6 +6,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"core/internal/testharness/scriptedllm"
 	"core/server/llm"
@@ -177,4 +178,89 @@ func TestClientExhaustedCancellationAndConcurrentCallErrors(t *testing.T) {
 	}
 	close(block)
 	wg.Wait()
+}
+
+func TestClientGenerationOutcomeReportsStepAdmission(t *testing.T) {
+	block := make(chan struct{})
+	client := scriptedllm.NewClient(scriptedllm.Script{Steps: []scriptedllm.Step{
+		{BeforeResponse: func(context.Context) error { <-block; return errors.New("admitted failure") }},
+		scriptedllm.FinalAnswer("unused"),
+	}})
+	admitted := make(chan scriptedllm.GenerationOutcome, 1)
+	go func() {
+		outcome, _ := client.GenerateWithOutcome(
+			context.Background(),
+			llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic, Model: "m"},
+		)
+		admitted <- outcome
+	}()
+	if err := client.WaitUntilActive(context.Background()); err != nil {
+		t.Fatalf("WaitUntilActive: %v", err)
+	}
+
+	rejected, err := client.GenerateWithOutcome(
+		context.Background(),
+		llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic, Model: "m"},
+	)
+	if !errors.Is(err, scriptedllm.ErrConcurrentCall) {
+		t.Fatalf("concurrent error = %v, want ErrConcurrentCall", err)
+	}
+	if rejected.Admission != scriptedllm.RequestNotAdmitted {
+		t.Fatalf("concurrent admission = %v, want not admitted", rejected.Admission)
+	}
+
+	close(block)
+	if outcome := <-admitted; outcome.Admission != scriptedllm.RequestAdmitted {
+		t.Fatalf("consumed failing step admission = %v, want admitted", outcome.Admission)
+	}
+}
+
+func TestClientGenerationOutcomeAdmitsEveryConsumedFailure(t *testing.T) {
+	declared := errors.New("declared")
+	cases := []struct {
+		name string
+		step scriptedllm.Step
+		req  llm.Request
+	}{
+		{name: "validation", step: scriptedllm.Step{
+			ExpectedToolResults: []scriptedllm.ExpectedToolResult{{CallID: "missing", Name: "exec_command"}},
+		}, req: llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic, Model: "m"}},
+		{name: "scripted error", step: scriptedllm.RuntimeError(declared), req: llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic, Model: "m"}},
+		{name: "before response", step: scriptedllm.Step{
+			BeforeResponse: func(context.Context) error { return declared },
+		}, req: llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic, Model: "m"}},
+		{name: "after response", step: scriptedllm.Step{
+			AfterResponse: func(context.Context) error { return declared },
+		}, req: llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic, Model: "m"}},
+		{name: "cancellation", step: scriptedllm.Cancellation(), req: llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic, Model: "m"}},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			client := scriptedllm.NewClient(scriptedllm.Script{Steps: []scriptedllm.Step{testCase.step}})
+			outcome, err := client.GenerateWithOutcome(context.Background(), testCase.req)
+			if err == nil {
+				t.Fatal("consumed failing step returned no error")
+			}
+			if outcome.Admission != scriptedllm.RequestAdmitted {
+				t.Fatalf("admission = %v, want admitted", outcome.Admission)
+			}
+		})
+	}
+
+	delay := time.Hour
+	streaming := scriptedllm.FinalAnswer("unused")
+	streaming.StreamDeltas = []llm.AssistantDelta{{Text: "first"}, {Text: "second"}}
+	streaming.StreamDeltaDelay = &delay
+	client := scriptedllm.NewClient(scriptedllm.Script{Steps: []scriptedllm.Step{streaming}})
+	ctx, cancel := context.WithCancel(context.Background())
+	outcome, err := client.GenerateStreamWithEventsOutcome(ctx, llm.Request{
+		ToolChoiceMode: llm.ToolChoiceModeAutomatic,
+		Model:          "m",
+	}, llm.StreamCallbacks{OnAssistantDelta: func(llm.AssistantDelta) { cancel() }})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("streaming error = %v, want context.Canceled", err)
+	}
+	if outcome.Admission != scriptedllm.RequestAdmitted {
+		t.Fatalf("streaming admission = %v, want admitted", outcome.Admission)
+	}
 }

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	testharness "core/internal/testharness/testsetup"
+	"core/shared/apicontract"
 
 	"golang.org/x/tools/go/packages"
 )
@@ -143,6 +144,100 @@ func TestRuntimeClientInputIdentityBoundaryStaysRequestShaped(t *testing.T) {
 	assertSessionRuntimeClientDoesNotSynthesizeInputIdentity(t, testharness.PackageByPath(t, pkgs, "core/cli/app"), repoRoot)
 }
 
+func TestRuntimeQueueKickAndStandalonePreSubmitSurfacesStayDeleted(t *testing.T) {
+	repoRoot := findRepoRoot(t)
+	pkgs := testharness.LoadTypedPackages(
+		t,
+		repoRoot,
+		false,
+		"./shared/apicontract",
+		"./shared/client",
+		"./shared/clientui",
+		"./shared/protocol",
+		"./shared/serverapi",
+		"./server/runtimecontrol",
+	)
+	for pkgPath, names := range map[string][]string{
+		"core/shared/clientui": {
+			"RuntimeOperationKindSubmitQueued",
+			"RuntimeSubmitQueuedRequest",
+		},
+		"core/shared/protocol": {
+			"MethodRuntimeCompactContextForPreSubmit",
+			"MethodRuntimeHasQueuedUserWork",
+			"MethodRuntimeSubmitQueuedUserMessages",
+		},
+		"core/shared/serverapi": {
+			"RuntimeCompactContextForPreSubmitRequest",
+			"RuntimeHasQueuedUserWorkRequest",
+			"RuntimeHasQueuedUserWorkResponse",
+			"RuntimeSubmitQueuedUserMessagesRequest",
+			"RuntimeSubmitQueuedUserMessagesResponse",
+		},
+	} {
+		assertPackageScopeNamesAbsent(t, testharness.PackageByPath(t, pkgs, pkgPath), names...)
+	}
+	for _, contract := range []struct {
+		pkgPath  string
+		typeName string
+		methods  []string
+	}{
+		{
+			pkgPath:  "core/shared/apicontract",
+			typeName: "RuntimeControlService",
+			methods:  []string{"CompactContextForPreSubmit", "HasQueuedUserWork", "SubmitQueuedUserMessages"},
+		},
+		{
+			pkgPath:  "core/shared/client",
+			typeName: "Remote",
+			methods:  []string{"CompactContextForPreSubmit", "HasQueuedUserWork", "SubmitQueuedUserMessages"},
+		},
+		{
+			pkgPath:  "core/shared/clientui",
+			typeName: "RuntimeClient",
+			methods:  []string{"HasQueuedUserWork", "SubmitRuntimeQueued"},
+		},
+		{
+			pkgPath:  "core/server/runtimecontrol",
+			typeName: "Service",
+			methods:  []string{"CompactContextForPreSubmit", "HasQueuedUserWork", "SubmitQueuedUserMessages"},
+		},
+	} {
+		assertTypeMethodsAbsent(t, testharness.PackageByPath(t, pkgs, contract.pkgPath), contract.typeName, contract.methods...)
+	}
+	for _, method := range []string{
+		"runtime.compactContextForPreSubmit",
+		"runtime.hasQueuedUserWork",
+		"runtime.submitQueuedUserMessages",
+	} {
+		if route, found := apicontract.RouteByMethod(method); found {
+			t.Errorf("removed runtime orchestration route %q restored with contract %+v", method, route)
+		}
+	}
+}
+
+func assertPackageScopeNamesAbsent(t *testing.T, pkg *packages.Package, names ...string) {
+	t.Helper()
+	for _, name := range names {
+		if object := pkg.Types.Scope().Lookup(name); object != nil {
+			t.Errorf("%s must not export removed runtime orchestration symbol %s", pkg.PkgPath, name)
+		}
+	}
+}
+
+func assertTypeMethodsAbsent(t *testing.T, pkg *packages.Package, typeName string, methods ...string) {
+	t.Helper()
+	object := pkg.Types.Scope().Lookup(typeName)
+	if object == nil {
+		t.Fatalf("%s.%s is missing", pkg.PkgPath, typeName)
+	}
+	for _, method := range methods {
+		if member, _, _ := types.LookupFieldOrMethod(object.Type(), true, pkg.Types, method); member != nil {
+			t.Errorf("%s.%s must not expose removed runtime orchestration method %s", pkg.PkgPath, typeName, method)
+		}
+	}
+}
+
 func TestRuntimeViewDoesNotExportGlobalLivenessMainViewHelper(t *testing.T) {
 	repoRoot := findRepoRoot(t)
 	pkg := testharness.PackageByPath(t, testharness.LoadTypedPackages(t, repoRoot, false, "./server/runtimeview"), "core/server/runtimeview")
@@ -196,8 +291,6 @@ func legacyRuntimeClientInputSignature(method *types.Func) bool {
 	switch method.Name() {
 	case "SubmitUserMessage", "SubmitUserShellCommand", "CompactContext":
 		return signatureHasContextAndSingleString(signature)
-	case "SubmitQueuedUserMessages":
-		return signatureHasContextOnly(signature)
 	case "QueueUserMessage":
 		return signatureHasSingleString(signature)
 	default:
@@ -209,10 +302,6 @@ func signatureHasContextAndSingleString(signature *types.Signature) bool {
 	return signature.Params().Len() == 2 &&
 		isContextType(signature.Params().At(0).Type()) &&
 		isStringType(signature.Params().At(1).Type())
-}
-
-func signatureHasContextOnly(signature *types.Signature) bool {
-	return signature.Params().Len() == 1 && isContextType(signature.Params().At(0).Type())
 }
 
 func signatureHasSingleString(signature *types.Signature) bool {
@@ -243,7 +332,7 @@ func assertSessionRuntimeClientDoesNotSynthesizeInputIdentity(t *testing.T, pkg 
 				continue
 			}
 			switch function.Name.Name {
-			case "SubmitUserMessage", "SubmitUserShellCommand", "CompactContext", "SubmitQueuedUserMessages", "QueueUserMessage", "QueueUserMessageWithClientRequestID":
+			case "SubmitUserMessage", "SubmitUserShellCommand", "CompactContext", "QueueUserMessage", "QueueUserMessageWithClientRequestID":
 				t.Fatalf("sessionRuntimeClient must not synthesize hidden input operation refs, found %s", function.Name.Name)
 			}
 		}

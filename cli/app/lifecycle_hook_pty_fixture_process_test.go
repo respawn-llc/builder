@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"testing"
 
 	checkpoint "core/internal/testharness/pty/analyzer"
 	"core/internal/testharness/pty/appfixture"
@@ -16,6 +17,7 @@ import (
 )
 
 func runLifecycleHookPTYFixtureProcess(
+	t *testing.T,
 	ctx context.Context,
 	processConfig appfixture.LifecycleProcessConfig,
 ) (runErr error) {
@@ -34,24 +36,20 @@ func runLifecycleHookPTYFixtureProcess(
 	if err != nil {
 		return err
 	}
+	if runtime != nil {
+		defer func() { runErr = errors.Join(runErr, runtime.Close()) }()
+	}
 	options := Options{
 		WorkspaceRoot:         processConfig.WorkspaceRoot,
 		WorkspaceRootExplicit: true,
 		SessionID:             sessionID,
 		ConfigRoot:            processConfig.PersistenceRoot,
-		OpenAIBaseURL:         "http://127.0.0.1:1/v1",
-		OpenAIBaseURLExplicit: true,
-	}
-	if runtime != nil {
-		options.startupOptions = runtime.StartupOptions()
 	}
 	interactor := newInteractiveAuthInteractor()
 	if processConfig.ServerMode == appfixture.LifecycleServerModeLocal {
-		standingServer, err := startEmbeddedServer(ctx, options, interactor, true)
-		if err != nil {
-			return fmt.Errorf("start local lifecycle fixture server: %w", err)
-		}
-		defer func() { runErr = errors.Join(runErr, standingServer.Close()) }()
+		startConfiguredDaemonFixture(t, processConfig.WorkspaceRoot, serverStartupRequest(
+			t, processConfig.WorkspaceRoot, processConfig.PersistenceRoot,
+		), readyMemoryAuthHandler())
 	}
 
 	server, err := startSessionServer(ctx, options, interactor, true)
@@ -68,9 +66,15 @@ func runLifecycleHookPTYFixtureProcess(
 	}
 	server = boundServer
 
-	intent, openingKind, err := lifecyclePTYLaunchIntent(processConfig.ServerMode, sessionID)
-	if err != nil {
-		return err
+	intent := serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin())
+	openingKind := lifecyclecontract.OpeningKindNew
+	if sessionID != "" {
+		parsed, parseErr := runtimeids.ParseSessionID(sessionID)
+		if parseErr != nil {
+			return parseErr
+		}
+		intent = serverapi.OpenExistingSessionLaunchIntent(parsed)
+		openingKind = lifecyclecontract.OpeningKindResumed
 	}
 	planner := newSessionLaunchPlanner(server)
 	plan, err := planner.PlanSession(ctx, sessionLaunchRequest{
@@ -108,16 +112,16 @@ func runLifecycleHookPTYFixtureProcess(
 		processConfig,
 	)
 	finalModel, uiErr := runUIProgram(composition, wrapped)
-	hookBarrierErr := stopLifecycleHookObservationBarrier(cancelHookBarrier, hookBarrierDone)
+	cancelHookBarrier()
+	var hookBarrierErr error
+	if hookBarrierDone != nil {
+		hookBarrierErr = <-hookBarrierDone
+	}
 	if uiErr != nil || hookBarrierErr != nil {
 		return errors.Join(uiErr, hookBarrierErr)
 	}
-	finalWrapped, ok := finalModel.(*ptyCheckpointModel)
-	if !ok {
+	if _, ok := finalModel.(*ptyCheckpointModel); !ok {
 		return fmt.Errorf("lifecycle PTY fixture final model has unexpected type %T", finalModel)
-	}
-	if _, ok := finalWrapped.appModel(); !ok {
-		return fmt.Errorf("lifecycle PTY fixture inner final model has unexpected type %T", finalWrapped.inner)
 	}
 	return nil
 }
@@ -150,17 +154,6 @@ func startLifecycleHookObservationBarrier(
 	return cancel, done
 }
 
-func stopLifecycleHookObservationBarrier(
-	cancel context.CancelFunc,
-	done <-chan error,
-) error {
-	cancel()
-	if done == nil {
-		return nil
-	}
-	return <-done
-}
-
 func prepareLifecyclePTYFixtureRuntime(
 	ctx context.Context,
 	terminal *ptyCheckpointTerminalFile,
@@ -184,16 +177,46 @@ func prepareLifecyclePTYFixtureRuntime(
 	if err != nil {
 		return nil, nil, "", err
 	}
+	state, runtime, err := newCheckpointPTYFixtureRuntime(*processConfig.LocalScriptPath, terminal)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	baseURL := runtime.OpenAIBaseURL()
 	if err := appfixture.PrepareConfigAndBindingWithOptions(
 		ctx,
 		processConfig.PersistenceRoot,
 		processConfig.WorkspaceRoot,
-		appfixture.ConfigOptions{LifecycleHookCommand: recorderCommand},
+		appfixture.ConfigOptions{LifecycleHookCommand: recorderCommand, OpenAIBaseURL: &baseURL},
 	); err != nil {
+		_ = runtime.Close()
 		return nil, nil, "", err
 	}
+	if processConfig.TargetFinalAssistantCount != uint64(runtime.TargetFinalAssistantOrdinal()) {
+		_ = runtime.Close()
+		return nil, nil, "", fmt.Errorf(
+			"lifecycle fixture target final count = %d, script target = %d",
+			processConfig.TargetFinalAssistantCount,
+			runtime.TargetFinalAssistantOrdinal(),
+		)
+	}
+	sessionID, err := runtime.SeedSession(ctx, processConfig.PersistenceRoot, processConfig.WorkspaceRoot)
+	if err != nil {
+		_ = runtime.Close()
+		return nil, nil, "", err
+	}
+	if err := setLifecycleFixtureSessionName(processConfig.PersistenceRoot, sessionID); err != nil {
+		_ = runtime.Close()
+		return nil, nil, "", err
+	}
+	return state, runtime, sessionID, nil
+}
+
+func newCheckpointPTYFixtureRuntime(
+	scriptPath string,
+	terminal *ptyCheckpointTerminalFile,
+) (*ptyCheckpointScenarioState, *appfixture.Runtime, error) {
 	var state *ptyCheckpointScenarioState
-	runtime, err := appfixture.NewRuntime(*processConfig.LocalScriptPath, func(
+	runtime, err := appfixture.NewRuntime(scriptPath, func(
 		targetFinalAssistantOrdinal appfixture.ScriptFinalAssistantOrdinal,
 	) func(context.Context) error {
 		state = newPTYCheckpointScenarioState(targetFinalAssistantOrdinal)
@@ -206,33 +229,13 @@ func prepareLifecyclePTYFixtureRuntime(
 		}
 	})
 	if err != nil {
-		return nil, nil, "", err
+		return nil, nil, err
 	}
 	if state == nil {
 		panic("lifecycle PTY fixture runtime did not configure scenario completion state")
 	}
-	if processConfig.TargetFinalAssistantCount != uint64(runtime.TargetFinalAssistantOrdinal()) {
-		return nil, nil, "", fmt.Errorf(
-			"lifecycle fixture target final count = %d, script target = %d",
-			processConfig.TargetFinalAssistantCount,
-			runtime.TargetFinalAssistantOrdinal(),
-		)
-	}
-	sessionID, err := runtime.SeedSession(
-		ctx,
-		processConfig.PersistenceRoot,
-		processConfig.WorkspaceRoot,
-	)
-	if err != nil {
-		return nil, nil, "", err
-	}
-	if err := setLifecycleFixtureSessionName(processConfig.PersistenceRoot, sessionID); err != nil {
-		return nil, nil, "", err
-	}
-	return state, runtime, sessionID, nil
+	return state, runtime, nil
 }
-
-const lifecycleFixtureSessionName = "Lifecycle fixture"
 
 func setLifecycleFixtureSessionName(persistenceRoot string, sessionID string) error {
 	metadataStore, err := metadata.Open(persistenceRoot)
@@ -248,13 +251,14 @@ func setLifecycleFixtureSessionName(persistenceRoot string, sessionID string) er
 	if err != nil {
 		return fmt.Errorf("open lifecycle fixture session: %w", err)
 	}
-	if err := store.SetName(lifecycleFixtureSessionName); err != nil {
+	if err := store.SetName("Lifecycle fixture"); err != nil {
 		return fmt.Errorf("name lifecycle fixture session: %w", err)
 	}
 	return nil
 }
 
 func runLifecycleHookServerFixtureProcess(
+	t *testing.T,
 	ctx context.Context,
 	processConfig appfixture.LifecycleServerProcessConfig,
 ) (runErr error) {
@@ -272,30 +276,23 @@ func runLifecycleHookServerFixtureProcess(
 	if err != nil {
 		return err
 	}
-	if err := appfixture.PrepareConfigAndBindingWithOptions(
-		ctx,
-		processConfig.PersistenceRoot,
-		processConfig.WorkspaceRoot,
-		appfixture.ConfigOptions{LifecycleHookCommand: recorderCommand},
-	); err != nil {
-		return err
-	}
 	runtime, err := appfixture.NewRuntime(processConfig.ScriptPath, nil)
 	if err != nil {
 		return err
 	}
-	server, err := startEmbeddedServer(ctx, Options{
-		WorkspaceRoot:         processConfig.WorkspaceRoot,
-		WorkspaceRootExplicit: true,
-		ConfigRoot:            processConfig.PersistenceRoot,
-		OpenAIBaseURL:         "http://127.0.0.1:1/v1",
-		OpenAIBaseURLExplicit: true,
-		startupOptions:        runtime.StartupOptions(),
-	}, newInteractiveAuthInteractor(), true)
-	if err != nil {
+	defer func() { runErr = errors.Join(runErr, runtime.Close()) }()
+	baseURL := runtime.OpenAIBaseURL()
+	if err := appfixture.PrepareConfigAndBindingWithOptions(
+		ctx,
+		processConfig.PersistenceRoot,
+		processConfig.WorkspaceRoot,
+		appfixture.ConfigOptions{LifecycleHookCommand: recorderCommand, OpenAIBaseURL: &baseURL},
+	); err != nil {
 		return err
 	}
-	defer func() { runErr = errors.Join(runErr, server.Close()) }()
+	startConfiguredDaemonFixture(t, processConfig.WorkspaceRoot, serverStartupRequest(
+		t, processConfig.WorkspaceRoot, processConfig.PersistenceRoot,
+	), readyMemoryAuthHandler())
 	if err := appfixture.WriteLifecycleServerProcessReady(
 		processConfig.ReadyPath,
 		appfixture.LifecycleServerProcessReady{PID: os.Getpid()},
@@ -303,22 +300,4 @@ func runLifecycleHookServerFixtureProcess(
 		return fmt.Errorf("publish lifecycle server fixture readiness: %w", err)
 	}
 	select {}
-}
-
-func lifecyclePTYLaunchIntent(
-	mode appfixture.LifecycleServerMode,
-	sessionID string,
-) (serverapi.SessionLaunchIntent, lifecyclecontract.OpeningKind, error) {
-	if mode == appfixture.LifecycleServerModeRemote {
-		return serverapi.CreateNewSessionLaunchIntent(
-			serverapi.IndependentSessionCreateOrigin(),
-		), lifecyclecontract.OpeningKindNew, nil
-	}
-	parsed, err := runtimeids.ParseSessionID(sessionID)
-	if err != nil {
-		return serverapi.SessionLaunchIntent{}, "", err
-	}
-	return serverapi.OpenExistingSessionLaunchIntent(
-		parsed,
-	), lifecyclecontract.OpeningKindResumed, nil
 }

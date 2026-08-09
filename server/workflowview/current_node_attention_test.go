@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowstore"
 	"core/shared/clientui"
@@ -305,19 +306,14 @@ func TestAttentionAndDetailProjectLiveQuestionFromExactScope(t *testing.T) {
 }
 
 func TestAttentionProjectsLiveSessionApprovalFromExactScope(t *testing.T) {
-	surfaces := newRealTaskStatusSurfaces(t, false)
-	fixture := surfaces.fixture
-	backlog := startedCurrentNodeViewTask{task: fixture.createBacklogTask(t, "Live approval")}
-	request := realTaskStatusApprovalRequest()
-	started, execution := startRealTaskStatusExecution(t, surfaces, backlog, false, &request)
-	agentTarget, ok := execution.target.(taskStatusAgentTarget)
-	if !ok {
-		t.Fatalf("approval execution target = %T, want agent", execution.target)
-	}
+	fixture := newCurrentNodeViewFixture(t, false)
+	started := fixture.startTask(t, "Live approval")
+	request := workflowViewApprovalRequest()
+	prompt := fixture.startCurrentNodePrompt(t, started, request)
 	prompts := currentNodeViewPrompts{bySession: map[string][]PendingPromptSnapshot{
-		agentTarget.sessionID.String(): {{
+		prompt.sessionID.String(): {{
 			PromptID:          clientui.PromptID(request.ID),
-			SessionID:         agentTarget.sessionID,
+			SessionID:         prompt.sessionID,
 			StepID:            mustWorkflowViewStepID(t, request.StepID),
 			ID:                request.ID,
 			CreatedAt:         time.UnixMilli(4_000).UTC(),
@@ -329,7 +325,7 @@ func TestAttentionProjectsLiveSessionApprovalFromExactScope(t *testing.T) {
 	attention, err := NewAttention(
 		fixture.metadata,
 		mustDefinitionProjection(t, fixture.store),
-		fixture.authority,
+		prompt.authority,
 		prompts,
 	)
 	if err != nil {
@@ -350,7 +346,7 @@ func TestAttentionProjectsLiveSessionApprovalFromExactScope(t *testing.T) {
 		item.SessionID != nil ||
 		item.Question == nil ||
 		item.Question.PromptID != clientui.PromptID(request.ID) ||
-		item.Question.SessionID != agentTarget.sessionID ||
+		item.Question.SessionID != prompt.sessionID ||
 		item.Question.StepID != mustWorkflowViewStepID(t, request.StepID) ||
 		item.Question.Kind != serverapi.WorkflowAttentionQuestionKindApproval ||
 		item.CurrentNode == nil ||
@@ -358,6 +354,9 @@ func TestAttentionProjectsLiveSessionApprovalFromExactScope(t *testing.T) {
 		item.CurrentNode.NodeID != string(fixture.agentNodeID) {
 		t.Fatalf("live approval attention item = %+v", item)
 	}
+	prompt.resolve(t, fixture.ctx, tools.AskQuestionApproval{
+		Decision: tools.AskQuestionApprovalDecisionAllowOnce,
+	})
 }
 
 func mustWorkflowViewStepID(t *testing.T, raw string) runtimeids.StepID {
@@ -370,19 +369,14 @@ func mustWorkflowViewStepID(t *testing.T, raw string) runtimeids.StepID {
 }
 
 func TestAttentionOmitsLivePromptThatRetiredBeforePromptProjection(t *testing.T) {
-	surfaces := newRealTaskStatusSurfaces(t, false)
-	fixture := surfaces.fixture
-	backlog := startedCurrentNodeViewTask{task: fixture.createBacklogTask(t, "Retired prompt")}
-	request := realTaskStatusApprovalRequest()
-	started, execution := startRealTaskStatusExecution(t, surfaces, backlog, false, &request)
-	agentTarget, ok := execution.target.(taskStatusAgentTarget)
-	if !ok {
-		t.Fatalf("prompt execution target = %T, want agent", execution.target)
-	}
+	fixture := newCurrentNodeViewFixture(t, false)
+	started := fixture.startTask(t, "Retired prompt")
+	request := workflowViewApprovalRequest()
+	prompt := fixture.startCurrentNodePrompt(t, started, request)
 	attention, err := NewAttention(
 		fixture.metadata,
 		mustDefinitionProjection(t, fixture.store),
-		fixture.authority,
+		prompt.authority,
 		currentNodeViewPrompts{},
 	)
 	if err != nil {
@@ -395,6 +389,9 @@ func TestAttentionOmitsLivePromptThatRetiredBeforePromptProjection(t *testing.T)
 		t.Fatalf("Attention.ListTask: %v", err)
 	}
 	if len(response.Items) != 0 {
-		t.Fatalf("retired prompt attention = %+v, want no items for session %s", response.Items, agentTarget.sessionID)
+		t.Fatalf("retired prompt attention = %+v, want no items for session %s", response.Items, prompt.sessionID)
 	}
+	prompt.resolve(t, fixture.ctx, tools.AskQuestionApproval{
+		Decision: tools.AskQuestionApprovalDecisionAllowOnce,
+	})
 }

@@ -1,7 +1,6 @@
 package runner
 
 import (
-	"context"
 	"testing"
 
 	"core/shared/runtimeids"
@@ -14,27 +13,27 @@ func TestSessionLifecycleOptionsUseExplicitTypedInitialIntent(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		request       Request[NoStartupOptions]
+		request       Request
 		wantKind      serverapi.SessionLaunchIntentKind
 		wantSessionID runtimeids.SessionID
 		wantParentID  runtimeids.SessionID
 	}{
 		{
 			name:          "open selected session",
-			request:       Request[NoStartupOptions]{SessionID: selected.String()},
+			request:       Request{SessionID: selected.String()},
 			wantKind:      serverapi.SessionLaunchIntentOpenExisting,
 			wantSessionID: selected,
 		},
 		{
 			name: "create for non-default agent role",
-			request: Request[NoStartupOptions]{
+			request: Request{
 				AgentRole: runnerStringPtr("reviewer"),
 			},
 			wantKind: serverapi.SessionLaunchIntentCreateNew,
 		},
 		{
 			name: "create with workspace context parent",
-			request: Request[NoStartupOptions]{
+			request: Request{
 				WorkspaceContextSessionID: parent.String(),
 			},
 			wantKind:     serverapi.SessionLaunchIntentCreateNew,
@@ -44,21 +43,21 @@ func TestSessionLifecycleOptionsUseExplicitTypedInitialIntent(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			opts, err := SessionLifecycleOptionsFor(test.request)
+			intent, _, err := SessionLifecycleOptionsFor(test.request)
 			if err != nil {
 				t.Fatalf("SessionLifecycleOptionsFor: %v", err)
 			}
-			if (*opts.Intent).Kind() != test.wantKind {
-				t.Fatalf("intent kind = %q, want %q", (*opts.Intent).Kind(), test.wantKind)
+			if intent.Kind() != test.wantKind {
+				t.Fatalf("intent kind = %q, want %q", intent.Kind(), test.wantKind)
 			}
 			if test.wantSessionID.IsZero() {
-				if _, present := (*opts.Intent).SessionID(); present {
+				if _, present := intent.SessionID(); present {
 					t.Fatal("create intent unexpectedly has an existing session identity")
 				}
-			} else if got, present := (*opts.Intent).SessionID(); !present || got != test.wantSessionID {
+			} else if got, present := intent.SessionID(); !present || got != test.wantSessionID {
 				t.Fatalf("session identity = %q/%v, want %q/true", got.String(), present, test.wantSessionID.String())
 			}
-			origin, hasOrigin := (*opts.Intent).CreateOrigin()
+			origin, hasOrigin := intent.CreateOrigin()
 			if test.wantParentID.IsZero() {
 				if hasOrigin && origin.Kind() == serverapi.SessionCreateOriginParentAgent {
 					t.Fatal("intent unexpectedly has a parent-agent origin")
@@ -71,37 +70,13 @@ func TestSessionLifecycleOptionsUseExplicitTypedInitialIntent(t *testing.T) {
 }
 
 func TestSessionLifecycleOptionsRejectInvalidIdentityWithoutEmptyStringInference(t *testing.T) {
-	for _, request := range []Request[NoStartupOptions]{
+	for _, request := range []Request{
 		{SessionID: "   "},
 		{WorkspaceContextSessionID: "   "},
 	} {
-		if _, err := SessionLifecycleOptionsFor(request); err == nil {
+		if _, _, err := SessionLifecycleOptionsFor(request); err == nil {
 			t.Fatalf("SessionLifecycleOptionsFor(%+v) succeeded; want invalid identity error", request)
 		}
-	}
-}
-
-func TestRunInteractivePassesTypedInitialIntentToLifecycle(t *testing.T) {
-	server := &fakeServer{}
-	err := RunInteractive(t.Context(), Request[NoStartupOptions]{
-		AgentRole: runnerStringPtr("reviewer"),
-	}, Dependencies[*fakeServer, struct{}, NoStartupOptions]{
-		NewAuthInteractor: func() struct{} { return struct{}{} },
-		StartSessionServer: func(_ context.Context, _ Request[NoStartupOptions], _ struct{}, _ bool) (*fakeServer, error) {
-			return server, nil
-		},
-		RunSessionLifecycle: func(_ context.Context, _ *fakeServer, _ struct{}, opts SessionLifecycleOptions) error {
-			if (*opts.Intent).Kind() != serverapi.SessionLaunchIntentCreateNew {
-				t.Fatalf("intent kind = %q, want create_new", (*opts.Intent).Kind())
-			}
-			if opts.Overrides.AgentRole == nil || *opts.Overrides.AgentRole != "reviewer" {
-				t.Fatalf("agent role override = %v, want reviewer", opts.Overrides.AgentRole)
-			}
-			return nil
-		},
-	})
-	if err != nil {
-		t.Fatalf("RunInteractive: %v", err)
 	}
 }
 

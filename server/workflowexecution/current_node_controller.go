@@ -2,6 +2,7 @@ package workflowexecution
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -15,7 +16,10 @@ import (
 	"core/shared/runtimeids"
 )
 
-const reasonProtocolViolationCap workflow.CurrentNodeInterruptionReason = "workflow_protocol_violation_cap"
+const (
+	reasonProtocolViolationCap                      workflow.CurrentNodeInterruptionReason = "workflow_protocol_violation_cap"
+	reasonCurrentNodeRuntimeFinalizedWithoutOutcome workflow.CurrentNodeInterruptionReason = "workflow_runtime_finalized_without_outcome"
+)
 
 // CurrentNodeRunner starts a lease that has already been admitted under the
 // controller mutation permit. The runner owns slow launch preparation; the
@@ -767,9 +771,17 @@ func (c *CurrentNodeController) ExecutionFinalized(scope sessionruntime.Executio
 	if !closed {
 		c.wakeAdmissionWorker()
 	}
-	if !isLive || !live.lease.Workflow().CurrentNode.Equal(ref.CurrentNode) || !completed || interrupted || closed {
+	if !isLive || !live.lease.Workflow().CurrentNode.Equal(ref.CurrentNode) || interrupted || closed {
 		if !closed {
 			c.wakeAdmissionWorker()
+		}
+		return
+	}
+	if !completed {
+		if err := c.interruptOutcomeLessFinalization(live.reference); err != nil {
+			c.mu.Lock()
+			c.workerErr = errors.Join(c.workerErr, err)
+			c.mu.Unlock()
 		}
 		return
 	}
@@ -803,6 +815,43 @@ func (c *CurrentNodeController) ExecutionFinalized(scope sessionruntime.Executio
 	if len(starts) == 0 {
 		c.wakeAdmissionWorker()
 	}
+}
+
+func (c *CurrentNodeController) interruptOutcomeLessFinalization(reference workflow.CurrentNodeReference) error {
+	ctx, cancel := context.WithTimeout(context.Background(), interruptCleanupTimeout)
+	defer cancel()
+	interrupted, err := RunMutation(ctx, c.permit, func(ctx context.Context) (bool, error) {
+		c.mu.Lock()
+		closed := c.closed
+		c.mu.Unlock()
+		if closed {
+			return false, nil
+		}
+		diagnostic := errors.New("exact workflow execution finalized without a durable completion or interruption outcome")
+		err := c.store.InterruptAdmittedCurrentNode(
+			ctx,
+			reference,
+			reasonCurrentNodeRuntimeFinalizedWithoutOutcome,
+			workflow.NewCurrentNodeInterruptionDetail(
+				string(reasonCurrentNodeRuntimeFinalizedWithoutOutcome),
+				diagnostic,
+			),
+		)
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		if err != nil {
+			return false, fmt.Errorf("interrupt outcome-less finalized Current Node %v: %w", reference, err)
+		}
+		return true, nil
+	})
+	if err != nil {
+		return err
+	}
+	if interrupted {
+		c.publishPendingInterruptedCurrentNode(ctx, reference, reasonCurrentNodeRuntimeFinalizedWithoutOutcome)
+	}
+	return nil
 }
 
 func (c *CurrentNodeController) Snapshot() CurrentNodeExecutionSnapshot {

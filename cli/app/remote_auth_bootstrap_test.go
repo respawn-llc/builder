@@ -3,7 +3,10 @@ package app
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
 	"core/cli/app/internal/authui"
 	"core/shared/config"
@@ -14,6 +17,7 @@ type stubAuthBootstrapClient struct {
 	status          serverapi.AuthGetBootstrapStatusResponse
 	completeReq     serverapi.AuthCompleteBootstrapRequest
 	completeCalls   int
+	completeErr     error
 	completeResp    serverapi.AuthCompleteBootstrapResponse
 	acknowledgeReq  serverapi.AuthAcknowledgeNoAuthRequest
 	acknowledge     int
@@ -28,6 +32,11 @@ func (c *stubAuthBootstrapClient) GetAuthBootstrapStatus(context.Context, server
 func (c *stubAuthBootstrapClient) CompleteAuthBootstrap(_ context.Context, req serverapi.AuthCompleteBootstrapRequest) (serverapi.AuthCompleteBootstrapResponse, error) {
 	c.completeCalls++
 	c.completeReq = req
+	if c.completeErr != nil {
+		err := c.completeErr
+		c.completeErr = nil
+		return serverapi.AuthCompleteBootstrapResponse{}, err
+	}
 	if c.completeResp != (serverapi.AuthCompleteBootstrapResponse{}) {
 		return c.completeResp, nil
 	}
@@ -44,6 +53,125 @@ func (c *stubAuthBootstrapClient) AcknowledgeNoAuth(_ context.Context, req serve
 		return c.acknowledgeResp, nil
 	}
 	return serverapi.AuthAcknowledgeNoAuthResponse{AuthReady: true}, nil
+}
+
+type stubOAuthCallbackListener struct {
+	callback authui.OAuthBrowserCallback
+	waitErr  error
+	closed   int
+}
+
+func (l *stubOAuthCallbackListener) RedirectURI() string {
+	return "http://127.0.0.1:0/callback"
+}
+
+func (l *stubOAuthCallbackListener) Wait(context.Context, time.Duration) (authui.OAuthBrowserCallback, error) {
+	if l.waitErr != nil {
+		return authui.OAuthBrowserCallback{}, l.waitErr
+	}
+	return l.callback, nil
+}
+
+func (l *stubOAuthCallbackListener) Close() error {
+	l.closed++
+	return nil
+}
+
+func TestRemoteAuthBootstrapRetriesUnsupportedSelectedMode(t *testing.T) {
+	remote := &stubAuthBootstrapClient{status: serverapi.AuthGetBootstrapStatusResponse{
+		AuthRequired:   true,
+		SupportedModes: []serverapi.AuthBootstrapMode{serverapi.AuthBootstrapModeAPIKey},
+	}}
+	pickerCalls := 0
+	interactor := &interactiveAuthInteractor{
+		lookupEnv: func(string) string { return "api-key" },
+		pickMethod: func(req authInteraction) (authMethodPickerResult, error) {
+			pickerCalls++
+			if pickerCalls == 1 {
+				return authMethodPickerResult{Choice: authMethodChoiceBrowserAuto}, nil
+			}
+			if req.FlowErr == nil {
+				t.Fatal("unsupported mode must be surfaced on retry")
+			}
+			return authMethodPickerResult{Choice: authMethodChoiceEnvAPIKey}, nil
+		},
+	}
+
+	if err := ensureRemoteAuthReady(context.Background(), remote, config.Settings{}, interactor, true); err != nil {
+		t.Fatalf("ensureRemoteAuthReady: %v", err)
+	}
+	if pickerCalls != 2 || remote.completeCalls != 1 {
+		t.Fatalf("picker calls=%d complete calls=%d, want 2 and 1", pickerCalls, remote.completeCalls)
+	}
+}
+
+func TestRemoteAuthBootstrapSurfacesCompletionFailureThenRetries(t *testing.T) {
+	completeErr := errors.New("remote completion failed")
+	remote := &stubAuthBootstrapClient{
+		status: serverapi.AuthGetBootstrapStatusResponse{
+			AuthRequired:   true,
+			SupportedModes: []serverapi.AuthBootstrapMode{serverapi.AuthBootstrapModeAPIKey},
+		},
+		completeErr: completeErr,
+	}
+	pickerCalls := 0
+	interactor := &interactiveAuthInteractor{
+		lookupEnv: func(string) string { return "api-key" },
+		pickMethod: func(req authInteraction) (authMethodPickerResult, error) {
+			pickerCalls++
+			if pickerCalls == 1 && req.FlowErr != nil {
+				t.Fatalf("initial flow error = %v", req.FlowErr)
+			}
+			if pickerCalls == 2 && !errors.Is(req.FlowErr, completeErr) {
+				t.Fatalf("retry flow error = %v, want completion failure", req.FlowErr)
+			}
+			return authMethodPickerResult{Choice: authMethodChoiceEnvAPIKey}, nil
+		},
+	}
+
+	if err := ensureRemoteAuthReady(context.Background(), remote, config.Settings{}, interactor, true); err != nil {
+		t.Fatalf("ensureRemoteAuthReady: %v", err)
+	}
+	if pickerCalls != 2 || remote.completeCalls != 2 {
+		t.Fatalf("picker calls=%d complete calls=%d, want 2 and 2", pickerCalls, remote.completeCalls)
+	}
+}
+
+func TestRemoteAuthBootstrapMapsProviderDeviceGrantToCompletion(t *testing.T) {
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/accounts/deviceauth/usercode":
+			_, _ = w.Write([]byte(`{"device_auth_id":"device-1","user_code":"CODE-1","interval":1}`))
+		case "/api/accounts/deviceauth/token":
+			_, _ = w.Write([]byte(`{"authorization_code":"authorization-1","code_verifier":"verifier-1"}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer provider.Close()
+
+	remote := &stubAuthBootstrapClient{status: serverapi.AuthGetBootstrapStatusResponse{
+		AuthRequired:   true,
+		SupportedModes: []serverapi.AuthBootstrapMode{serverapi.AuthBootstrapModeDeviceCode},
+		OAuth: serverapi.AuthBootstrapOAuthConfig{
+			Issuer:   provider.URL,
+			ClientID: "client-1",
+		},
+	}}
+	interactor := &interactiveAuthInteractor{
+		pickMethod: func(authInteraction) (authMethodPickerResult, error) {
+			return authMethodPickerResult{Choice: authMethodChoiceDevice}, nil
+		},
+	}
+
+	if err := ensureRemoteAuthReady(context.Background(), remote, config.Settings{}, interactor, true); err != nil {
+		t.Fatalf("ensureRemoteAuthReady: %v", err)
+	}
+	if remote.completeReq.Mode != serverapi.AuthBootstrapModeDeviceCode ||
+		remote.completeReq.DeviceAuthorizationCode != "authorization-1" ||
+		remote.completeReq.DeviceCodeVerifier != "verifier-1" {
+		t.Fatalf("unexpected completion request: %+v", remote.completeReq)
+	}
 }
 
 func TestRemoteAuthBootstrapHybridBrowserAcceptsCallbackOrPaste(t *testing.T) {

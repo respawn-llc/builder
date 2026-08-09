@@ -351,12 +351,6 @@ func routeSessionID(params any) (string, bool) {
 		return p.SessionID, true
 	case serverapi.RuntimeCompactContextRequest:
 		return p.SessionID, true
-	case serverapi.RuntimeCompactContextForPreSubmitRequest:
-		return p.SessionID, true
-	case serverapi.RuntimeHasQueuedUserWorkRequest:
-		return p.SessionID, true
-	case serverapi.RuntimeSubmitQueuedUserMessagesRequest:
-		return p.SessionID, true
 	case serverapi.RuntimeInterruptRequest:
 		return p.SessionID, true
 	case serverapi.RuntimeLiveSteerRequest:

@@ -318,7 +318,7 @@ func TestResponsesStubConsumesTypedProbeAndRejectsUnconsumedQueue(t *testing.T) 
 	if err != nil {
 		t.Fatalf("POST responses: %v", err)
 	}
-	_ = response.Body.Close()
+	drainResponseBody(t, response)
 	if err := stub.Verify(); err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
@@ -391,7 +391,7 @@ func TestResponsesStubAcceptsLosslessResponseDTOAndStaticAdaptiveDefaults(t *tes
 	if err != nil {
 		t.Fatalf("POST response: %v", err)
 	}
-	_ = response.Body.Close()
+	drainResponseBody(t, response)
 	if err := stub.Verify(); err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
@@ -419,7 +419,7 @@ func TestResponsesStubAcceptsCompactedSessionCacheKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("POST response: %v", err)
 	}
-	_ = response.Body.Close()
+	drainResponseBody(t, response)
 	if err := stub.Verify(); err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
@@ -448,7 +448,7 @@ func TestResponsesStubAcceptsSupervisorCompactedSessionCacheKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("POST response: %v", err)
 	}
-	_ = response.Body.Close()
+	drainResponseBody(t, response)
 	if err := stub.Verify(); err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
@@ -469,9 +469,19 @@ func TestResponsesStubRejectsProbeMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("POST responses: %v", err)
 	}
-	_ = response.Body.Close()
+	drainResponseBody(t, response)
 	if err := stub.Verify(); err == nil {
 		t.Fatal("Verify accepted probe mismatch")
+	}
+}
+
+func drainResponseBody(t *testing.T, response *http.Response) {
+	t.Helper()
+	if _, err := io.Copy(io.Discard, response.Body); err != nil {
+		t.Fatalf("read response body: %v", err)
+	}
+	if err := response.Body.Close(); err != nil {
+		t.Fatalf("close response body: %v", err)
 	}
 }
 

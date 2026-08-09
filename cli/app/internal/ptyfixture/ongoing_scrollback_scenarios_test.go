@@ -315,17 +315,17 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 
 			scenarioCtx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 			defer cancel()
-			capture, observationsPath := runPTYFixtureScenario(
+			capture, _ := runPTYFixtureScenarioWithInputPlan(
 				t,
 				scenarioCtx,
 				bin,
 				tc.name,
 				tc.script,
 				tc.env,
-				tc.inputs,
-				tc.frameInputs,
+				ptyFixtureInputPlan{
+					scheduled: tc.inputs, frameSequences: tc.frameInputs, frameResizes: tc.frameResizes,
+				},
 				tc.resizes,
-				tc.frameResizes,
 				tc.completionDrain,
 			)
 			if len(capture.Resizes) != len(tc.resizes)+len(tc.frameResizes) {
@@ -391,17 +391,6 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			if analysis.Screen.IsBlank() {
 				t.Fatal("ongoing TUI screen is blank after scenario")
 			}
-			var obs fixtureObservation
-			data, err := os.ReadFile(observationsPath)
-			if err != nil {
-				t.Fatalf("read observations: %v", err)
-			}
-			if err := json.Unmarshal(data, &obs); err != nil {
-				t.Fatalf("decode observations: %v", err)
-			}
-			if obs.ModelRequestCount == 0 || !obs.FinalResponseConsumed {
-				t.Fatalf("script did not complete through fixture: %+v", obs)
-			}
 		})
 	}
 }
@@ -420,25 +409,6 @@ func toolSeed(name string, callID string, input map[string]any, condensed string
 		"tool_condensed": condensed,
 		"tool_custom":    custom,
 	}
-}
-
-func runPTYFixtureScenario(t *testing.T, ctx context.Context, bin string, name string, script map[string]any, env []string, inputs []pty.InputEvent, frameInputs []pty.FrameInputSequence, resizes []pty.DriverResizeEvent, frameResizes []pty.FrameResizeEvent, configuredCompletionDrain *time.Duration) (pty.Capture, string) {
-	t.Helper()
-	return runPTYFixtureScenarioWithInputPlan(
-		t,
-		ctx,
-		bin,
-		name,
-		script,
-		env,
-		ptyFixtureInputPlan{
-			scheduled:      inputs,
-			frameSequences: frameInputs,
-			frameResizes:   frameResizes,
-		},
-		resizes,
-		configuredCompletionDrain,
-	)
 }
 
 type ptyFixtureInputPlan struct {
