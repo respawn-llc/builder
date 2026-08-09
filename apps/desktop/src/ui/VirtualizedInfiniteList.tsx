@@ -296,6 +296,11 @@ export function VirtualizedInfiniteList<TItem>({
     lastPixelOffsetKeyRef.current = validatedPixelOffsetRequest.key;
     scrollRef.current.scrollTop = validatedPixelOffsetRequest.offsetPx;
     virtualizer.scrollToOffset(validatedPixelOffsetRequest.offsetPx, { behavior: "auto" });
+    requestAnimationFrame(() => {
+      if (lastPixelOffsetKeyRef.current !== validatedPixelOffsetRequest.key || scrollRef.current === null) return;
+      scrollRef.current.scrollTop = validatedPixelOffsetRequest.offsetPx;
+      virtualizer.scrollToOffset(validatedPixelOffsetRequest.offsetPx, { behavior: "auto" });
+    });
   }, [items.length, validatedPixelOffsetRequest, virtualizer]);
 
   useLayoutEffect(() => {

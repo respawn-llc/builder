@@ -118,6 +118,18 @@ describe("VirtualizedInfiniteList pixel restoration", () => {
     expect(capturedScrollTop).toBe(240);
   });
 
+  it("keeps restored pixels after the first browser layout frame", async () => {
+    render(<List request={createVirtualizedPixelOffsetRequest("layout-frame", 240)} />);
+
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => {
+        resolve();
+      });
+    });
+
+    expect(screen.getByRole("list").scrollTop).toBe(240);
+  });
+
   it("accepts absence without issuing a restoration request", () => {
     render(<List />);
     expect(virtualizer.scrollToOffset).not.toHaveBeenCalled();
