@@ -48,6 +48,19 @@ func (e TaskCreateConflictError) Unwrap() error {
 	return e.Cause
 }
 
+type TaskStartConflictReason string
+
+const TaskStartConflictAlreadyStarted TaskStartConflictReason = "already_started"
+
+type TaskStartConflictError struct {
+	TaskID workflow.TaskID
+	Reason TaskStartConflictReason
+}
+
+func (e TaskStartConflictError) Error() string {
+	return fmt.Sprintf("task %q start conflict: %s", e.TaskID, e.Reason)
+}
+
 func taskCreateStoreError(err error) error {
 	if err == nil {
 		return nil

@@ -928,6 +928,22 @@ func workflowTaskCreateError(err error, projectID string) error {
 	return workflowLabelError(err, workflowLabelErrorScope{projectID: &projectID})
 }
 
+func workflowTaskStartError(err error) error {
+	var conflict workflowstore.TaskStartConflictError
+	if !errors.As(err, &conflict) {
+		return err
+	}
+	switch conflict.Reason {
+	case workflowstore.TaskStartConflictAlreadyStarted:
+		return &serverapi.WorkflowTaskStartConflictError{
+			TaskID: string(conflict.TaskID),
+			Reason: serverapi.WorkflowTaskStartConflictAlreadyStarted,
+		}
+	default:
+		return err
+	}
+}
+
 func (s *Service) UpdateWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskUpdateRequest) (serverapi.WorkflowTaskUpdateResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowTaskUpdateResponse{}, err
@@ -977,7 +993,7 @@ func (s *Service) startWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 		return initiatingActionPreflight{unsatisfiedDependencyCount: count, target: target}, nil
 	})
 	if err != nil {
-		return serverapi.WorkflowTaskStartResponse{}, err
+		return serverapi.WorkflowTaskStartResponse{}, workflowTaskStartError(err)
 	}
 	if preflight.unsatisfiedDependencyCount > 0 {
 		count := preflight.unsatisfiedDependencyCount
@@ -1072,7 +1088,7 @@ func (s *Service) startWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 		observation.finalize,
 	)
 	if err != nil {
-		return serverapi.WorkflowTaskStartResponse{}, err
+		return serverapi.WorkflowTaskStartResponse{}, workflowTaskStartError(err)
 	}
 	if len(started.Mutation.Created) != 1 {
 		return serverapi.WorkflowTaskStartResponse{}, errors.New("task start did not create exactly one current node")
