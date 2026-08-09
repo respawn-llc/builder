@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"core/shared/textutil"
+	"core/shared/transcript"
 )
 
 type OpenAIRequest struct {
@@ -157,7 +158,11 @@ func resolveAssistantContent(role Role, phase MessagePhase, content *string) *st
 		return nil
 	}
 	if strings.TrimSpace(*content) == "" &&
-		!(role == RoleAssistant && phase == MessagePhaseFinal) {
+		!transcript.IsBlankAssistantFinal(transcript.AssistantFinalCandidate{
+			IsAssistant: role == RoleAssistant,
+			IsFinal:     phase == MessagePhaseFinal,
+			Content:     content,
+		}) {
 		return nil
 	}
 	return textutil.Pointer(content)

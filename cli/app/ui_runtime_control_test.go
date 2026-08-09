@@ -11,6 +11,8 @@ import (
 
 	"core/server/llm"
 	"core/shared/clientui"
+	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 type runtimeControlFakeClient struct {
@@ -52,6 +54,28 @@ type runtimeControlFakeClient struct {
 	submitErr             error
 	interruptErr          error
 	collaborative         bool
+}
+
+func TestUserTurnSubmissionFromResponsePreservesMessagePresence(t *testing.T) {
+	t.Parallel()
+	blank := ""
+	withBlank := userTurnSubmissionFromResponse(
+		serverapi.RuntimeSubmitUserTurnResponse{Message: &blank},
+		"turn",
+		"request",
+	)
+	if withBlank.Message == nil || *withBlank.Message != "" {
+		t.Fatalf("blank submission message = %v, want present empty message", withBlank.Message)
+	}
+
+	withoutMessage := userTurnSubmissionFromResponse(
+		serverapi.RuntimeSubmitUserTurnResponse{},
+		"turn",
+		"request",
+	)
+	if withoutMessage.Message != nil {
+		t.Fatalf("omitted submission message = %v, want absent", withoutMessage.Message)
+	}
 }
 
 type timeoutNetError struct{}
@@ -156,7 +180,7 @@ func (f *runtimeControlFakeClient) AppendCommittedEntryWithNoticeID(role, text, 
 }
 func (f *runtimeControlFakeClient) submitUserMessage(_ context.Context, text string) (clientui.UserTurnSubmission, error) {
 	f.submitText = text
-	result := clientui.UserTurnSubmission{Message: f.submitResult}
+	result := clientui.UserTurnSubmission{Message: textutil.Value(f.submitResult)}
 	if f.submitErr != nil {
 		return result, f.submitErr
 	}

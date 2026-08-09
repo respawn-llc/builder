@@ -293,7 +293,12 @@ func (s *Surface) activeAssistantPromotionDeferred() bool {
 	if s.activeAssistant.phase != transcript.AssistantPhaseFinal {
 		return false
 	}
-	return strings.TrimSpace(s.activeAssistant.source[s.activeAssistant.phaseSourceStart:]) == ""
+	content := s.activeAssistant.source[s.activeAssistant.phaseSourceStart:]
+	return transcript.IsBlankAssistantFinal(transcript.AssistantFinalCandidate{
+		IsAssistant: true,
+		IsFinal:     true,
+		Content:     &content,
+	})
 }
 
 func (s *Surface) abortAssistantStream(streamID runtimeids.AssistantStreamID, frame FrameInput) (Result, error) {
@@ -346,6 +351,13 @@ func (s *Surface) finalizeAssistantStream(streamID runtimeids.AssistantStreamID,
 }
 
 func (s *Surface) appendAssistantFinalWithoutActiveStream(text string, frame FrameInput) (Result, error) {
+	if transcript.IsBlankAssistantFinal(transcript.AssistantFinalCandidate{
+		IsAssistant: true,
+		IsFinal:     true,
+		Content:     &text,
+	}) {
+		return s.writeFrameTransaction(frame, nil)
+	}
 	row := clientui.TranscriptCommittedRow{
 		Kind:      clientui.TranscriptRowAssistant,
 		Assistant: &clientui.TranscriptAssistantRow{Text: text, Phase: transcript.AssistantPhaseFinal},

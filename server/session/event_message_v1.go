@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"core/shared/clientui"
+	"core/shared/transcript"
 )
 
 type MessageType string
@@ -163,10 +164,12 @@ func normalizeMessageRecord(message MessageRecord) (MessageRecord, error) {
 func normalizeMessageContent(message MessageRecord) (*string, error) {
 	if message.Content != nil &&
 		strings.TrimSpace(*message.Content) == "" {
-		if message.Role == MessageRoleAssistant &&
-			message.Phase != nil &&
-			*message.Phase == MessagePhaseFinal &&
-			message.MessageType == nil {
+		if transcript.IsBlankAssistantFinal(transcript.AssistantFinalCandidate{
+			IsAssistant:    message.Role == MessageRoleAssistant,
+			IsFinal:        message.Phase != nil && *message.Phase == MessagePhaseFinal,
+			HasMessageType: message.MessageType != nil,
+			Content:        message.Content,
+		}) {
 			content := *message.Content
 			return &content, nil
 		}

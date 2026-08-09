@@ -98,9 +98,15 @@ func (c uiInputController) submitCmd(text string, input runtimeinput.Input, queu
 			}
 			return newSubmitDoneMsg(token, "", text, err)
 		}
-		done := newSubmitDoneMsg(token, submission.Message, text, nil)
+		message := ""
+		if submission.Message != nil {
+			message = *submission.Message
+		}
+		done := newSubmitDoneMsg(token, message, text, nil)
 		done.queued = submission.Queued
-		done.silentFinal = done.queued.ID == "" && strings.TrimSpace(done.message) == ""
+		done.silentFinal = done.queued.ID == "" &&
+			submission.Message != nil &&
+			strings.TrimSpace(*submission.Message) == ""
 		return done
 	}
 }

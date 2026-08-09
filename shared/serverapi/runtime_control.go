@@ -103,10 +103,10 @@ type RuntimePromptCommandInput = runtimeinput.PromptCommand
 type RuntimeUserTurnInput = runtimeinput.Input
 
 type RuntimeSubmitUserTurnResponse struct {
-	Message     string `json:"message"`
-	Compacted   bool   `json:"compacted,omitempty"`
-	Steered     bool   `json:"steered,omitempty"`
-	QueueItemID string `json:"queue_item_id,omitempty"`
+	Message     *string `json:"message,omitempty"`
+	Compacted   bool    `json:"compacted,omitempty"`
+	Steered     bool    `json:"steered,omitempty"`
+	QueueItemID string  `json:"queue_item_id,omitempty"`
 }
 
 type RuntimeSubmitUserShellCommandRequest struct {

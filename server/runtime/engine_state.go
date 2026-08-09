@@ -603,25 +603,26 @@ func (e *Engine) ContinuationAgentRole() *string {
 }
 
 func conversationPromptCacheKey(sessionID string, compactionCount int) string {
-	trimmed := strings.TrimSpace(sessionID)
-	if trimmed == "" {
-		return ""
-	}
-	if compactionCount <= 0 {
-		return trimmed
-	}
-	return fmt.Sprintf("%s/compact-%d", trimmed, compactionCount)
+	return conversationPromptCacheKeyForLineage(sessionID, 0, compactionCount)
 }
+
+// stablePromptCacheContractVersion namespaces provider cache entries by the
+// stable prompt prefix that precedes the conversation transcript.
+const stablePromptCacheContractVersion = 2
 
 func conversationPromptCacheKeyForLineage(sessionID string, lineageGeneration, compactionCount int) string {
 	trimmed := strings.TrimSpace(sessionID)
 	if trimmed == "" {
 		return ""
 	}
+	trimmed = fmt.Sprintf("%s/prompt-contract-%d", trimmed, stablePromptCacheContractVersion)
 	if lineageGeneration > 0 {
 		trimmed = fmt.Sprintf("%s/contract-%d", trimmed, lineageGeneration)
 	}
-	return conversationPromptCacheKey(trimmed, compactionCount)
+	if compactionCount <= 0 {
+		return trimmed
+	}
+	return fmt.Sprintf("%s/compact-%d", trimmed, compactionCount)
 }
 
 func (e *Engine) conversationPromptCacheKey(sessionID string) string {

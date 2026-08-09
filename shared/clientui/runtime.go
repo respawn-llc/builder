@@ -90,7 +90,7 @@ type QueuedUserMessage struct {
 }
 
 type UserTurnSubmission struct {
-	Message string
+	Message *string
 	Queued  QueuedUserMessage
 }
 
