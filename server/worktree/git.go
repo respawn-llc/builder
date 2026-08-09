@@ -920,18 +920,6 @@ func (i *GitInspector) Add(ctx context.Context, workspaceRoot string, worktreeRo
 }
 
 func (i *GitInspector) ProbeDirtyState(ctx context.Context, worktreeRoot string) (clientui.WorktreeDirtyState, error) {
-	return i.probeDirtyState(ctx, worktreeRoot, false)
-}
-
-func (i *GitInspector) ProbeRecreationDirtyState(ctx context.Context, worktreeRoot string) (clientui.WorktreeDirtyState, error) {
-	return i.probeDirtyState(ctx, worktreeRoot, true)
-}
-
-func (i *GitInspector) probeDirtyState(
-	ctx context.Context,
-	worktreeRoot string,
-	includeIgnored bool,
-) (clientui.WorktreeDirtyState, error) {
 	if i == nil {
 		return clientui.WorktreeDirtyState{}, fmt.Errorf("git inspector is required")
 	}
@@ -939,11 +927,7 @@ func (i *GitInspector) probeDirtyState(
 	if err != nil {
 		return clientui.WorktreeDirtyState{}, err
 	}
-	args := []string{"status", "--porcelain=v1", "-z"}
-	if includeIgnored {
-		args = append(args, "--ignored=matching")
-	}
-	output, err := i.runner.Output(ctx, canonicalWorktreeRoot, args...)
+	output, err := i.runner.Output(ctx, canonicalWorktreeRoot, "status", "--porcelain=v1", "-z")
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return clientui.WorktreeDirtyState{}, ctxErr

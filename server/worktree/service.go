@@ -515,10 +515,7 @@ func (s *Service) prepareManagedTaskWorktree(
 			}
 			return s.runManagedTaskWorktreeSetupRecovery(ctx, bound, setupOperationID, true)
 		}
-		var typedIdentityErr *ManagedWorktreeIdentityError
-		if !errors.As(identityErr, &typedIdentityErr) || typedIdentityErr.Kind != ManagedWorktreeIdentityErrorRootMissing {
-			return TaskWorktreeMaterialization{}, identityErr
-		}
+		return TaskWorktreeMaterialization{}, identityErr
 	}
 	createSpec := CreateSpec{BaseRef: resolvedTarget.CommitOID, CreateBranch: true, BranchName: task.ShortID}
 	var location managedTaskWorktreeLocation
@@ -616,13 +613,6 @@ func (s *Service) releaseProvisionalTaskWorktree(
 		recorded,
 	)
 	if err != nil {
-		var identityErr *ManagedWorktreeIdentityError
-		if errors.As(err, &identityErr) && identityErr.Kind == ManagedWorktreeIdentityErrorRootMissing {
-			if err := s.finalizeReleasedProvisionalTaskWorktree(ctx, task, workspace, record, recorded); err != nil {
-				return nil, err
-			}
-			return nil, nil
-		}
 		return nil, err
 	}
 	topology := registeredTopologyEntry(syncedWorktree{record: record, git: live})
@@ -632,41 +622,25 @@ func (s *Service) releaseProvisionalTaskWorktree(
 		}
 		return &serverapi.RetainedPreviousWorktree{Worktree: topology}, nil
 	}
-	if _, named := worktreeNamedBranch(live); record.CreatedBranch && !named {
+	branchName, named := worktreeNamedBranch(live)
+	if record.CreatedBranch && !named {
 		return nil, &ManagedWorktreeIdentityError{Kind: ManagedWorktreeIdentityErrorDetachedHead}
 	}
 	if err := s.git.Remove(ctx, workspace.RootPath, record.CanonicalRoot, false); err != nil {
 		return nil, err
 	}
-	if err := s.finalizeReleasedProvisionalTaskWorktree(ctx, task, workspace, record, live); err != nil {
+	if err := s.unbindTaskManagedWorktree(ctx, task); err != nil {
+		return nil, err
+	}
+	if record.CreatedBranch {
+		if err := s.git.deleteBranch(ctx, workspace.RootPath, branchName, true); err != nil {
+			return nil, err
+		}
+	}
+	if err := s.metadata.DeleteWorktreeRecordByID(ctx, record.ID); err != nil {
 		return nil, err
 	}
 	return nil, nil
-}
-
-func (s *Service) finalizeReleasedProvisionalTaskWorktree(
-	ctx context.Context,
-	task sqlitegen.TaskRecord,
-	workspace taskSourceWorkspace,
-	record metadata.WorktreeRecord,
-	checkout GitWorktree,
-) error {
-	branchName, named := worktreeNamedBranch(checkout)
-	if record.CreatedBranch && !named {
-		return &ManagedWorktreeIdentityError{Kind: ManagedWorktreeIdentityErrorDetachedHead}
-	}
-	if record.CreatedBranch {
-		exists, err := s.git.BranchExists(ctx, workspace.RootPath, branchName)
-		if err != nil {
-			return err
-		}
-		if exists {
-			if err := s.git.deleteBranch(ctx, workspace.RootPath, branchName, true); err != nil {
-				return err
-			}
-		}
-	}
-	return s.metadata.ReleaseTaskManagedWorktree(ctx, task.ID, record.ID, time.Now().UTC())
 }
 
 func (s *Service) unbindTaskManagedWorktree(ctx context.Context, task sqlitegen.TaskRecord) error {
@@ -2229,10 +2203,14 @@ func (s *Service) inspectSafeWorktreeRecreation(
 	}
 	if creationBase == nil ||
 		revision.CommitOID != *creationBase ||
-		!sameWorktreeBranchTopology(recordedCheckout, live) {
+		recordedCheckout.Detached ||
+		recordedCheckout.Branch == nil ||
+		live.Detached ||
+		live.Branch == nil ||
+		recordedCheckout.Branch.Ref() != live.Branch.Ref() {
 		return live, false, nil
 	}
-	dirtyState, err := s.git.ProbeRecreationDirtyState(ctx, root)
+	dirtyState, err := s.git.ProbeDirtyState(ctx, root)
 	if err != nil {
 		return GitWorktree{}, false, err
 	}

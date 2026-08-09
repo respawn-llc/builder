@@ -1817,50 +1817,6 @@ func TestPrepareTaskExecutionRootReturnsBoundWorktreeWhenSetupRecreationRemovalF
 	}
 }
 
-func TestPrepareTaskExecutionRootRecoversBindingAfterRemovedWorktreeUnbindCancellation(t *testing.T) {
-	env := newServiceTestEnv(t)
-	task, _ := createTaskWorktreeTestTask(t, env)
-	initialTarget := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
-	initial, err := prepareManagedTaskExecutionRoot(env.ctx, env.service, task.ID, nil, initialTarget)
-	if err != nil {
-		t.Fatalf("initial PrepareTaskExecutionRoot: %v", err)
-	}
-	nextTarget := advanceTaskWorktreeTestTarget(t, env)
-	canceledCtx, cancel := context.WithCancel(env.ctx)
-	env.service.git = NewGitInspector(&cancelAfterWorktreeRemoveGitRunner{
-		delegate: execGitCommandRunner{},
-		cancel:   cancel,
-	})
-
-	_, err = prepareManagedTaskExecutionRoot(canceledCtx, env.service, task.ID, nil, nextTarget)
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("PrepareTaskExecutionRoot removal error = %v, want context cancellation", err)
-	}
-	initialRoot := taskWorktreeRoot(initial.Worktree)
-	if _, err := os.Stat(initialRoot); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("removed provisional root stat error = %v, want missing", err)
-	}
-	assertTaskManagedWorktree(t, env, task.ID, taskWorktreeID(initial.Worktree))
-
-	env.service.git = NewGitInspector(nil)
-	retried, err := prepareManagedTaskExecutionRoot(env.ctx, env.service, task.ID, nil, nextTarget)
-	if err != nil {
-		t.Fatalf("PrepareTaskExecutionRoot after removed binding: %v", err)
-	}
-	if taskWorktreeID(retried.Worktree) == taskWorktreeID(initial.Worktree) {
-		t.Fatalf("retried worktree reused removed record %q", taskWorktreeID(initial.Worktree))
-	}
-	assertTaskManagedWorktree(t, env, task.ID, taskWorktreeID(retried.Worktree))
-	if _, err := env.store.GetWorktreeRecordByID(env.ctx, taskWorktreeID(initial.Worktree)); !errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("removed provisional record remains: %v", err)
-	}
-	if exists, err := env.service.git.BranchExists(env.ctx, env.workspaceRoot, task.ShortID); err != nil {
-		t.Fatalf("inspect removed provisional branch: %v", err)
-	} else if exists {
-		t.Fatalf("removed provisional branch %q remains", task.ShortID)
-	}
-}
-
 func TestPrepareTaskExecutionRootRetriesIgnoredSetupChangesInPlace(t *testing.T) {
 	env := newServiceTestEnv(t)
 	task, _ := createTaskWorktreeTestTask(t, env)
@@ -2631,23 +2587,6 @@ type selectedCommandFailingGitRunner struct {
 	base      gitCommandRunner
 	directory string
 	arguments []string
-}
-
-type cancelAfterWorktreeRemoveGitRunner struct {
-	delegate gitCommandRunner
-	cancel   context.CancelFunc
-}
-
-func (r *cancelAfterWorktreeRemoveGitRunner) Output(ctx context.Context, dir string, args ...string) ([]byte, error) {
-	output, err := r.delegate.Output(ctx, dir, args...)
-	if err == nil && len(args) >= 2 && args[0] == "worktree" && args[1] == "remove" {
-		r.cancel()
-	}
-	return output, err
-}
-
-func (r *cancelAfterWorktreeRemoveGitRunner) Run(ctx context.Context, dir string, args ...string) ([]byte, int, error) {
-	return r.delegate.Run(ctx, dir, args...)
 }
 
 func (r *selectedCommandFailingGitRunner) Output(ctx context.Context, dir string, args ...string) ([]byte, error) {
