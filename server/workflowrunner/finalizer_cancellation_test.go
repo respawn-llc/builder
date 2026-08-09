@@ -62,33 +62,50 @@ func TestScriptFinalizerCancellationUsesTypedDurableInterruption(t *testing.T) {
 }
 
 func TestAgentFinalizerContinuesPostTurnAfterCommittedDiagnostic(t *testing.T) {
-	diagnostic := errors.New("completion event delivery failed")
-	controller := &committedDiagnosticFinalizerController{diagnostic: diagnostic}
-	scopeID := runtimeids.NewExecutionScopeID()
-	err := (&Starter{}).finalizeCurrentNodeAgentExecution(
-		context.Background(),
-		controller,
-		scopeID,
-		nil,
-		&currentNodeAgentPostTurn{
-			sessionID: runtimeids.NewSessionID(),
-			runtime:   workflowruntime.PostCompletionRuntime{CompactionMode: "none"},
-		},
-	)
-	if !errors.Is(err, diagnostic) {
-		t.Fatalf("Agent finalizer error = %v, want committed diagnostic %v", err, diagnostic)
-	}
-	if controller.postTurnFinalizations != 1 {
-		t.Fatalf("post-turn finalizations = %d, want 1", controller.postTurnFinalizations)
-	}
-	if controller.failurePublications != 0 {
-		t.Fatalf("durable failure publications = %d, want 0", controller.failurePublications)
+	for _, test := range []struct {
+		name              string
+		cancelAfterCommit bool
+	}{
+		{name: "ordinary diagnostic"},
+		{name: "canceled after commit", cancelAfterCommit: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			eventErr := errors.New("completion event delivery failed")
+			ctx, cancel := context.WithCancel(context.Background())
+			diagnostic := error(eventErr)
+			controller := &committedDiagnosticFinalizerController{diagnostic: diagnostic}
+			if test.cancelAfterCommit {
+				diagnostic = errors.Join(eventErr, context.Canceled)
+				controller.diagnostic = diagnostic
+				controller.afterResult = cancel
+			}
+			err := (&Starter{}).finalizeCurrentNodeAgentExecution(
+				ctx,
+				controller,
+				runtimeids.NewExecutionScopeID(),
+				nil,
+				&currentNodeAgentPostTurn{
+					sessionID: runtimeids.NewSessionID(),
+					runtime:   workflowruntime.PostCompletionRuntime{CompactionMode: "none"},
+				},
+			)
+			if !errors.Is(err, eventErr) {
+				t.Fatalf("Agent finalizer error = %v, want committed diagnostic %v", err, diagnostic)
+			}
+			if controller.postTurnFinalizations != 1 {
+				t.Fatalf("post-turn finalizations = %d, want 1", controller.postTurnFinalizations)
+			}
+			if controller.failurePublications != 0 {
+				t.Fatalf("durable failure publications = %d, want 0", controller.failurePublications)
+			}
+		})
 	}
 }
 
 type committedDiagnosticFinalizerController struct {
 	canceledFinalizerController
 	diagnostic            error
+	afterResult           func()
 	postTurnFinalizations int
 	failurePublications   int
 }
@@ -105,17 +122,20 @@ func (c *committedDiagnosticFinalizerController) FinalizeCurrentNodeResult(
 	runtimeids.ExecutionScopeID,
 	error,
 ) error {
+	if c.afterResult != nil {
+		c.afterResult()
+	}
 	return workflowruntime.NewCommittedCompletionDiagnostic(c.diagnostic)
 }
 
 func (c *committedDiagnosticFinalizerController) FinalizeCurrentNodePostTurn(
-	context.Context,
-	runtimeids.ExecutionScopeID,
-	runtimeids.SessionID,
-	workflowruntime.PostCompletionRuntime,
+	ctx context.Context,
+	_ runtimeids.ExecutionScopeID,
+	_ runtimeids.SessionID,
+	_ workflowruntime.PostCompletionRuntime,
 ) error {
 	c.postTurnFinalizations++
-	return nil
+	return context.Cause(ctx)
 }
 
 func (c *committedDiagnosticFinalizerController) FailCurrentNodeScope(

@@ -658,6 +658,23 @@ func (c *CurrentNodeController) discardRuns(
 	}
 }
 
+func (c *CurrentNodeController) finishHeldRunAssignments(
+	ctx context.Context,
+	taskID workflow.TaskID,
+	outcome currentNodeAssignmentWaitOutcome,
+) error {
+	if len(outcome.failed) != 0 {
+		c.handleCurrentNodeStartFailures(outcome.failed, false, outcome.err)
+	}
+	if len(outcome.ready) == 0 {
+		return nil
+	}
+	return c.lifecycle.Run(ctx, taskID, func(context.Context) error {
+		c.enqueueHeldRuns(currentNodeRunKeys(outcome.ready))
+		return nil
+	})
+}
+
 func (c *CurrentNodeController) continueHeldRunAssignments(
 	keys []workflow.CurrentNodeReferenceKey,
 	starts []currentNodeQueuedStart,
@@ -691,21 +708,9 @@ func (c *CurrentNodeController) continueHeldRunAssignments(
 			}
 			return
 		}
-		if outcome.err != nil {
-			c.handleCurrentNodeStartFailures(outcome.committed, false, outcome.err)
-			if err := c.lifecycle.Run(context.Background(), taskID, func(context.Context) error {
-				c.discardRuns(keys, currentNodeRunStopWorkerFailed, outcome.err)
-				return nil
-			}); err != nil {
-				panic(fmt.Sprintf("discard failed held current node Runs: %v", err))
-			}
-			return
-		}
-		if err := c.lifecycle.Run(c.workerContext, taskID, func(context.Context) error {
-			c.enqueueHeldRuns(keys)
-			return nil
-		}); err != nil && context.Cause(c.workerContext) == nil {
-			panic(fmt.Sprintf("transfer held current node Runs: %v", err))
+		if err := c.finishHeldRunAssignments(c.workerContext, taskID, outcome); err != nil &&
+			context.Cause(c.workerContext) == nil {
+			panic(fmt.Sprintf("finish held current node Run assignments: %v", err))
 		}
 	}()
 }

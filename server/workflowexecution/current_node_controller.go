@@ -1481,20 +1481,9 @@ func (c *CurrentNodeController) ExecutionFinalized(scope sessionruntime.Executio
 			c.continueHeldRunAssignments(heldKeys, starts)
 			return
 		}
-		c.handleCurrentNodeStartFailures(outcome.committed, false, outcome.err)
-		if err := c.lifecycle.Run(context.Background(), ref.CurrentNode.TaskID, func(context.Context) error {
-			c.discardRuns(heldKeys, currentNodeRunStopWorkerFailed, outcome.err)
-			return nil
-		}); err != nil {
-			panic(fmt.Sprintf("discard failed workflow successor Runs: %v", err))
-		}
-		return
 	}
-	if err := c.lifecycle.Run(context.Background(), ref.CurrentNode.TaskID, func(context.Context) error {
-		c.enqueueHeldRuns(heldKeys)
-		return nil
-	}); err != nil {
-		panic(fmt.Sprintf("transfer finalized workflow successor Runs: %v", err))
+	if err := c.finishHeldRunAssignments(context.Background(), ref.CurrentNode.TaskID, outcome); err != nil {
+		panic(fmt.Sprintf("finish finalized workflow successor Run assignments: %v", err))
 	}
 	if len(starts) == 0 {
 		c.wakeAdmissionWorker()

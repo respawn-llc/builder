@@ -483,8 +483,7 @@ func (s *Starter) finalizeCurrentNodeAgentExecution(
 ) error {
 	resultErr := s.finalizeCurrentNodeAgent(ctx, controller, scopeID, runErr)
 	if resultErr != nil {
-		if context.Cause(ctx) != nil ||
-			!workflowruntime.IsCommittedCompletionDiagnostic(resultErr) ||
+		if !workflowruntime.IsCommittedCompletionDiagnostic(resultErr) ||
 			postTurn == nil {
 			return resultErr
 		}
@@ -499,8 +498,12 @@ func (s *Starter) finalizeCurrentNodeAgentExecution(
 			errors.New("workflow controller does not finalize Current Node post-turn state"),
 		)
 	}
+	postTurnCtx := ctx
+	if resultErr != nil && context.Cause(ctx) != nil {
+		postTurnCtx = context.WithoutCancel(ctx)
+	}
 	postTurnErr := finalizer.FinalizeCurrentNodePostTurn(
-		ctx,
+		postTurnCtx,
 		scopeID,
 		postTurn.sessionID,
 		postTurn.runtime,
@@ -509,10 +512,10 @@ func (s *Starter) finalizeCurrentNodeAgentExecution(
 		return resultErr
 	}
 	reason := ReasonRuntimeFailed
-	failureCtx := ctx
-	if errors.Is(postTurnErr, context.Canceled) || context.Cause(ctx) != nil {
+	failureCtx := postTurnCtx
+	if errors.Is(postTurnErr, context.Canceled) || context.Cause(postTurnCtx) != nil {
 		reason = string(workflow.CurrentNodeInterruptionReasonRuntimeCanceled)
-		failureCtx = context.WithoutCancel(ctx)
+		failureCtx = context.WithoutCancel(postTurnCtx)
 	}
 	return errors.Join(
 		resultErr,
@@ -558,6 +561,9 @@ func (s *Starter) finalizeCurrentNodeAgent(
 		return errors.New("workflow controller does not finalize Current Node results")
 	}
 	err := finalizer.FinalizeCurrentNodeResult(ctx, scopeID, runErr)
+	if workflowruntime.IsCommittedCompletionDiagnostic(err) {
+		return err
+	}
 	if context.Cause(ctx) != nil {
 		return errors.Join(err, s.failCanceledCurrentNodeScope(ctx, controller, scopeID, runErr))
 	}

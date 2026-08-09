@@ -393,18 +393,22 @@ func TestCurrentNodeControllerFinalizedGateReleasesAgentCapacity(t *testing.T) {
 	}
 }
 
-func TestExecutionFinalizationDoesNotMakeUnassignedHeldSuccessorResumable(t *testing.T) {
+func TestExecutionFinalizationInterruptsFailedHeldSuccessorAndStartsHealthySibling(t *testing.T) {
 	shellPath, err := exec.LookPath("sh")
 	if err != nil {
 		t.Skipf("sh executable unavailable: %v", err)
 	}
 	source := currentNodeReferenceForControllerTest(t, "task-successor-steer-failure", "node-source")
 	successor := currentNodeReferenceForControllerTest(t, "task-successor-steer-failure", "node-successor")
+	healthySuccessor := currentNodeReferenceForControllerTest(t, "task-successor-steer-failure", "node-healthy-successor")
 	queuedAgent := currentNodeReferenceForControllerTest(t, "task-unrelated-agent", "node-agent")
 	queuedScript := currentNodeReferenceForControllerTest(t, "task-unrelated-script", "node-script")
 	store := &currentNodeControllerStore{
 		completion: workflowstore.CurrentNodeCompletionResult{
-			AutomaticIntents: []workflowstore.CurrentNodeAutomaticIntent{{CurrentNode: successor, NodeKind: workflow.NodeKindAgent}},
+			AutomaticIntents: []workflowstore.CurrentNodeAutomaticIntent{
+				{CurrentNode: successor, NodeKind: workflow.NodeKindAgent},
+				{CurrentNode: healthySuccessor, NodeKind: workflow.NodeKindScript},
+			},
 		},
 	}
 	ensurer := &recordingCurrentNodeAssignmentEnsurer{}
@@ -465,21 +469,27 @@ func TestExecutionFinalizationDoesNotMakeUnassignedHeldSuccessorResumable(t *tes
 		t.Fatalf("stop source: %v", err)
 	}
 
-	if interruption, interrupted := store.interruption(successor); interrupted {
-		t.Fatalf("unassigned held successor was made resumable: %+v", interruption)
+	if interruption, interrupted := store.interruption(successor); !interrupted ||
+		interruption.reason != reasonCurrentNodeRuntimeStartFailed {
+		t.Fatalf("failed held successor interruption = %+v, present=%t, want runtime-start interruption", interruption, interrupted)
 	}
-	if err := controller.EnsureTaskQuiescent(source.TaskID); err != nil {
-		t.Fatalf("uncommitted assignment failure latched controller failure: %v", err)
+	controller.mu.Lock()
+	workerErr := controller.workerErr
+	controller.mu.Unlock()
+	if workerErr != nil {
+		t.Fatalf("failed successor recovery latched controller failure: %v", workerErr)
 	}
-	started := make(map[workflow.CurrentNodeReferenceKey]struct{}, 2)
+	started := make(map[workflow.CurrentNodeReferenceKey]struct{}, 3)
 	deadline := time.After(3 * time.Second)
-	for len(started) < 2 {
+	for len(started) < 3 {
 		select {
 		case currentNode := <-runner.started:
 			if currentNode.Equal(successor) {
-				t.Fatalf("unassigned held successor started after assignment failure")
+				t.Fatalf("failed held successor started after assignment failure")
 			}
-			if !currentNode.Equal(queuedAgent) && !currentNode.Equal(queuedScript) {
+			if !currentNode.Equal(healthySuccessor) &&
+				!currentNode.Equal(queuedAgent) &&
+				!currentNode.Equal(queuedScript) {
 				t.Fatalf("unexpected start after assignment failure: %v", currentNode)
 			}
 			currentNodeKey, err := currentNode.Key()

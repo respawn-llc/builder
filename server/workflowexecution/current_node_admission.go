@@ -844,6 +844,7 @@ func waitCurrentNodeAssignmentEnsures(
 	}
 	for _, start := range starts {
 		if start.assignmentEnsure == nil {
+			outcome.failed = append(outcome.failed, start)
 			outcome.err = errors.Join(outcome.err, fmt.Errorf(
 				"current node assignment %v has no ensure completion",
 				start.reference,
