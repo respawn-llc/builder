@@ -187,7 +187,9 @@ describe("SidebarProvider stack", () => {
       a.registerCapture(() => ({ scrollOffsetPx: 240 }));
       expect(root?.push(destination("B"))).toBe("accepted");
     });
-    expect(result.current.shell.back()).toBe("accepted");
+    act(() => {
+      expect(result.current.shell.back()).toBe("accepted");
+    });
 
     expect(onBack).toHaveBeenCalledOnce();
     expect(result.current.shell.activeDestination).toEqual(destination("B"));
@@ -202,6 +204,41 @@ describe("SidebarProvider stack", () => {
       expect(root?.push(destination("B"))).toBe("accepted");
     });
     expect(result.current.shell.activeDestination).toEqual(destination("B"));
+  });
+
+  it("keeps nested sidebar pages on stack Back after a route-owned transition", () => {
+    const { result } = renderHook(useHarness, { wrapper });
+    const onBack = vi.fn();
+    let root: SidebarRootHandle | undefined;
+
+    act(() => {
+      root = result.current.roots.open(destination("A"), onBack);
+    });
+    const a = requireNavigator(result.current);
+    act(() => {
+      a.registerCapture(() => ({ page: "A" }));
+      expect(root?.push(destination("B"))).toBe("accepted");
+    });
+    const b = requireNavigator(result.current);
+    act(() => {
+      b.registerCapture(() => ({ page: "B" }));
+      expect(b.push(destination("C"))).toBe("accepted");
+    });
+    act(() => {
+      expect(result.current.shell.back()).toBe("accepted");
+    });
+    expect(result.current.shell.activeDestination).toEqual(destination("B"));
+    expect(onBack).not.toHaveBeenCalled();
+
+    const restoredB = requireNavigator(result.current);
+    act(() => {
+      expect(restoredB.replace(destination("C"))).toBe("accepted");
+    });
+    act(() => {
+      expect(result.current.shell.back()).toBe("accepted");
+    });
+    expect(result.current.shell.activeDestination).toEqual(destination("A"));
+    expect(onBack).not.toHaveBeenCalled();
   });
 
   it("rejects append Push without capture while leaving the page capability active", () => {

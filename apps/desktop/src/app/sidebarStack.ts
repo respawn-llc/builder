@@ -132,7 +132,7 @@ export function createSidebarStack(policy: SidebarDestinationPolicy, publish: (v
     }
     capability.active = false;
     emit(
-      [...view.entries.slice(0, -1), createEntry(destination, undefined, capability.rootBack)],
+      [...view.entries.slice(0, -1), createEntry(destination)],
       "open",
       "replace",
     );
