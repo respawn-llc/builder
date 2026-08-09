@@ -132,11 +132,7 @@ export function createSidebarStack(policy: SidebarDestinationPolicy, publish: (v
       return "stale";
     }
     capability.active = false;
-    emit(
-      [...view.entries.slice(0, -1), createEntry(destination)],
-      "open",
-      "replace",
-    );
+    emit([...view.entries.slice(0, -1), createEntry(destination)], "open", "replace");
     return "accepted";
   };
   const push = (
