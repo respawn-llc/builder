@@ -1,22 +1,26 @@
-import { useEffect, useId, useRef, useState, type KeyboardEventHandler, type RefObject } from "react";
-import { ChevronDown, Save } from "lucide-react";
+import { useState } from "react";
+import { Save } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import type { TaskCurrentNode, TaskDetail } from "@/api";
 import { errorMessage } from "@/api";
-import { useAppServices, useTextFieldSubmitShortcut } from "@/app-facade";
+import {
+  useAppServices,
+  useTextFieldSubmitShortcut,
+  useTextFieldSubmitShortcutPolicy,
+} from "@/app-facade";
 import { useOpenExternalLink } from "@/app-facade";
 import { writeClipboardText } from "@/shared/native-clipboard";
 import { taskStatusTone } from "@/shared/task-status";
 import {
   Button,
+  CollapsibleMarkdownField,
   Island,
-  StaticMarkdown,
   compactExternalUrlLabel,
   safeExternalUrl,
   showStatusToast,
 } from "@/ui";
-import { cx, fieldIslandInputClassName, useOpacityExit } from "@/ui";
+import { cx, fieldIslandInputClassName } from "@/ui";
 import type { DescriptionPresentationState } from "./TaskDetailDescriptionPresentation";
 import { ellipsizeActionTarget } from "./ellipsizeActionTarget";
 import { TaskExecutionTargetFacts } from "./TaskExecutionTargetFacts";
@@ -123,6 +127,7 @@ export function DescriptionIsland({
   onPresentationChange,
   onSave,
   presentation,
+  submitting,
 }: Readonly<{
   disabled: boolean;
   draft: TaskDraft;
@@ -132,237 +137,65 @@ export function DescriptionIsland({
   onPresentationChange: (presentation: DescriptionPresentationState) => void;
   onSave: (draft?: TaskDraft) => Promise<void>;
   presentation: DescriptionPresentationState;
+  submitting: boolean;
 }>) {
-  const descriptionId = useId();
-  const descriptionErrorId = `${descriptionId}-error`;
-  const descriptionError = error == null ? "" : errorMessage(error);
-  const descriptionShortcut = useTextFieldSubmitShortcut({
-    action: () => {
+  const { t } = useTranslation();
+  const descriptionError = error == null ? undefined : errorMessage(error);
+  const submitPolicy = useTextFieldSubmitShortcutPolicy();
+  const submitIntent = {
+    available: !disabled && !submitting && draft.title.trim().length > 0 && presentation.editing,
+    onSubmitIntent: () => {
       if (!draftDirty) {
         onPresentationChange({ ...presentation, editing: false });
         return;
       }
-      void onSave(draft).then(() => {
-        onPresentationChange({ ...presentation, editing: false });
-      });
+      void onSave(draft)
+        .then(() => {
+          onPresentationChange({ ...presentation, editing: false });
+        })
+        .catch(() => {
+          return;
+        });
     },
-    available: !disabled && draft.title.trim().length > 0 && presentation.editing,
-    kind: "direct",
-  });
+    policy: submitPolicy,
+  } as const;
 
   return (
     <div
-      className="task-detail-description-island grid min-h-0 min-w-0 gap-[var(--space-2)]"
+      className="task-detail-description-island grid h-full min-h-0 min-w-0 gap-[var(--space-2)]"
       data-testid="task-description-input-frame"
     >
-      {presentation.editing && !disabled ? (
-        <DescriptionEditor
-          describedBy={descriptionError.length > 0 ? descriptionErrorId : undefined}
-          error={descriptionError.length > 0}
-          id={descriptionId}
-          onBlur={() => {
-            onPresentationChange({ ...presentation, editing: false });
-          }}
-          onChange={(body) => {
-            onDraftChange({ ...draft, body });
-          }}
-          onKeyDown={descriptionShortcut}
-          value={draft.body}
-        />
-      ) : (
-        <DescriptionReadView
-          disabled={disabled}
-          expanded={presentation.expanded}
-          onChange={(body) => {
-            onDraftChange({ ...draft, body });
-          }}
-          onEdit={() => {
-            onPresentationChange({ editing: true, expanded: true });
-          }}
-          onExpand={() => {
-            onPresentationChange({ ...presentation, expanded: true });
-          }}
-          value={draft.body}
-        />
-      )}
-      {descriptionError.length > 0 ? (
-        <span className="text-[var(--color-error)]" id={descriptionErrorId}>
-          {descriptionError}
-        </span>
-      ) : null}
-    </div>
-  );
-}
-
-function DescriptionEditor({
-  describedBy,
-  error,
-  id,
-  onBlur,
-  onChange,
-  onKeyDown,
-  value,
-}: Readonly<{
-  describedBy: string | undefined;
-  error: boolean;
-  id: string;
-  onBlur: () => void;
-  onChange: (value: string) => void;
-  onKeyDown: KeyboardEventHandler<HTMLTextAreaElement>;
-  value: string;
-}>) {
-  const { t } = useTranslation();
-  return (
-    <textarea
-      aria-describedby={describedBy}
-      aria-invalid={error ? true : undefined}
-      aria-label={t("task.description")}
-      autoFocus
-      className={cx(
-        fieldIslandInputClassName(1),
-        "task-detail-description-surface block min-h-[220px] min-w-0 resize-none p-[var(--space-2)] font-mono",
-      )}
-      id={id}
-      onBlur={onBlur}
-      onChange={(event) => {
-        onChange(event.target.value);
-      }}
-      onKeyDown={onKeyDown}
-      placeholder={t("task.bodyPlaceholder")}
-      value={value}
-    />
-  );
-}
-
-function DescriptionReadView({
-  disabled,
-  expanded,
-  onChange,
-  onEdit,
-  onExpand,
-  value,
-}: Readonly<{
-  disabled: boolean;
-  expanded: boolean;
-  onChange: (value: string) => void;
-  onEdit: () => void;
-  onExpand: () => void;
-  value: string;
-}>) {
-  const { t } = useTranslation();
-  const viewportRef = useRef<HTMLDivElement | null>(null);
-  const contentRef = useRef<HTMLDivElement | null>(null);
-  const overflows = useDescriptionOverflow({ contentRef, enabled: !expanded, viewportRef });
-  const affordancePhase = useOpacityExit(!expanded && overflows);
-  return (
-    <div className="task-detail-description-shell relative min-w-0">
-      <div
-        aria-label={t("task.description")}
-        aria-readonly
-        className={cx(
-          fieldIslandInputClassName(1),
-          "task-detail-description-surface block min-w-0 p-[var(--space-2)]",
-          !disabled && "cursor-text",
-          expanded ? "overflow-visible" : "max-h-[clamp(5lh,50dvh,10lh)] overflow-hidden",
-        )}
-        onFocus={(event) => {
-          if (!disabled && event.target === event.currentTarget) {
-            onEdit();
-          }
+      <CollapsibleMarkdownField
+        collapsedHeightClamp={{ maximumLines: 10, minimumLines: 5, viewportPercent: 50 }}
+        disabled={disabled}
+        editorMinHeight={220}
+        error={descriptionError}
+        editing={presentation.editing}
+        expandLabel={t("app.expand")}
+        expanded={presentation.expanded}
+        label={t("task.description")}
+        onChange={(body) => {
+          onDraftChange({ ...draft, body });
         }}
-        ref={viewportRef}
-        role="textbox"
-        tabIndex={disabled ? -1 : 0}
-      >
-        <div ref={contentRef}>
-          {value.trim().length > 0 ? (
-            <StaticMarkdown
-              disabled={disabled}
-              onTaskListChange={onChange}
-              taskListItemToggleLabel={(checked) =>
-                checked ? t("markdown.markIncomplete") : t("markdown.markComplete")
-              }
-              value={value}
-            />
-          ) : (
-            <span className="text-[var(--color-muted)]">{t("task.bodyPlaceholder")}</span>
-          )}
-        </div>
-      </div>
-      {affordancePhase !== "hidden" ? (
-        <>
-          <div
-            aria-hidden="true"
-            className={cx(
-              "pointer-events-none absolute inset-x-[var(--space-2)] bottom-[var(--space-2)] h-12 bg-gradient-to-b from-transparent to-[var(--color-island-1)] transition-opacity motion-reduce:transition-none",
-              affordancePhase === "visible" ? "opacity-100" : "opacity-0",
-            )}
-            data-state={affordancePhase}
-            data-testid="task-description-fade"
-          />
-          <button
-            aria-label={t("app.expand")}
-            className={cx(
-              "app-region-no-drag absolute inset-x-0 bottom-0 grid h-10 place-items-center text-[var(--color-on-island)] transition-opacity motion-reduce:transition-none",
-              affordancePhase === "visible"
-                ? "pointer-events-auto opacity-100"
-                : "pointer-events-none opacity-0",
-            )}
-            data-state={affordancePhase}
-            data-testid="task-description-expand"
-            onClick={onExpand}
-            type="button"
-          >
-            <ChevronDown aria-hidden="true" size={20} strokeWidth={1.5} />
-          </button>
-        </>
-      ) : null}
+        onEdit={() => {
+          onPresentationChange({ editing: true, expanded: true });
+        }}
+        onEditingChange={(editing) => {
+          onPresentationChange({ ...presentation, editing });
+        }}
+        onExpand={() => {
+          onPresentationChange({ ...presentation, expanded: true });
+        }}
+        placeholder={t("task.bodyPlaceholder")}
+        submitIntent={submitIntent}
+        taskListInteraction={{
+          checkedLabel: t("markdown.markIncomplete"),
+          uncheckedLabel: t("markdown.markComplete"),
+        }}
+        value={draft.body}
+      />
     </div>
   );
-}
-
-function useDescriptionOverflow({
-  contentRef,
-  enabled,
-  viewportRef,
-}: Readonly<{
-  contentRef: RefObject<HTMLDivElement | null>;
-  enabled: boolean;
-  viewportRef: RefObject<HTMLDivElement | null>;
-}>): boolean {
-  const [overflows, setOverflows] = useState(false);
-  useEffect(() => {
-    if (!enabled) {
-      return;
-    }
-    const measureOverflow = () => {
-      const viewport = viewportRef.current;
-      if (viewport !== null) {
-        setOverflows(viewport.scrollHeight > viewport.clientHeight);
-      }
-    };
-    const frame = window.requestAnimationFrame(measureOverflow);
-    window.addEventListener("resize", measureOverflow);
-    if (typeof ResizeObserver === "undefined") {
-      return () => {
-        window.cancelAnimationFrame(frame);
-        window.removeEventListener("resize", measureOverflow);
-      };
-    }
-    const observer = new ResizeObserver(measureOverflow);
-    if (viewportRef.current !== null) {
-      observer.observe(viewportRef.current);
-    }
-    if (contentRef.current !== null) {
-      observer.observe(contentRef.current);
-    }
-    return () => {
-      observer.disconnect();
-      window.cancelAnimationFrame(frame);
-      window.removeEventListener("resize", measureOverflow);
-    };
-  }, [contentRef, enabled, viewportRef]);
-  return enabled && overflows;
 }
 
 export function PropertiesIsland({

@@ -2,7 +2,11 @@ import { createEvent, fireEvent, render, screen } from "@testing-library/react";
 import type { NativePlatform } from "@app/native-bridge";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { isTextFieldSubmitShortcut, useTextFieldSubmitShortcut } from "./textFieldSubmitShortcut";
+import {
+  isTextFieldSubmitShortcut,
+  textFieldSubmitShortcutPolicyForPlatform,
+  useTextFieldSubmitShortcut,
+} from "./textFieldSubmitShortcut";
 const nativePlatform = vi.hoisted((): { current: NativePlatform } => ({ current: "macos" }));
 vi.mock("./useAppServices", () => ({
   useAppServices: () => ({ nativeBridge: { capabilities: { platform: nativePlatform.current } } }),
@@ -58,7 +62,21 @@ describe("text field submit shortcut", () => {
     ["browser", { key: "Enter", metaKey: true }],
     ["unknown", { key: "Enter", ctrlKey: true }],
   ] as const)("ignores unsupported shortcut %s", (platform, event) => {
-    expect(isTextFieldSubmitShortcut(new KeyboardEvent("keydown", event), platform)).toBe(false);
+    expect(
+      isTextFieldSubmitShortcut(
+        new KeyboardEvent("keydown", event),
+        textFieldSubmitShortcutPolicyForPlatform(platform),
+      ),
+    ).toBe(false);
+  });
+  it.each([
+    ["macos", "meta-enter"],
+    ["windows", "control-enter"],
+    ["linux", "control-enter"],
+    ["browser", "unavailable"],
+    ["unknown", "unavailable"],
+  ] as const)("maps %s to its closed UI policy", (platform, policy) => {
+    expect(textFieldSubmitShortcutPolicyForPlatform(platform)).toBe(policy);
   });
   it("consumes repeated and unavailable direct shortcuts", () => {
     nativePlatform.current = "macos";
