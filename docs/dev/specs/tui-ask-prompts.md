@@ -12,9 +12,10 @@
 - Submitting an answer fixes the submitted content for that attempt. The editor remains responsive while Kent delivers it. Further edits affect only a later retry if delivery fails.
 - Kent attempts to queue Allow commentary before the Approval answer. The prompt does not accept another action until that queue operation finishes. Queue-creation failure recovery is defined in `tui-chat-core.md`.
 - Repeated `Enter` during delivery does not submit another answer. It shows a brief nonblocking sending notice.
-- A terminal delivery failure preserves the prompt, selection, and edited retry draft.
+- A terminal delivery failure preserves the prompt, selection, and edited retry draft and returns the prompt to an actionable state.
 - Resolving the prompt discards the retry draft.
-- Kent retries temporary delivery failures with finite exponential backoff while preserving one submission identity. A deadline failure is terminal immediately, is not retried, and returns the prompt to an actionable state.
+- A `Resolved` or `Skipped` result finishes delivery immediately. The TUI does not wait for another prepared Question or Exact Execution Scope closure and does not keep the submitted prompt visible while it waits for later prompt state.
+- Kent does not retry answer delivery automatically. The operator submits again manually.
 - After the last prompt resolves, focus returns to the main composer and activity returns to running/idle.
 - The status-line spinner pauses while a prompt waits.
 

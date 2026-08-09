@@ -10,8 +10,9 @@ import {
 } from "@/test-support/task-detail";
 
 describe("Task Detail live refresh", () => {
-  it("keeps an accepted question mounted until server attention replaces it", async () => {
-    const attention = taskAttention("ask-1", 1);
+  it("hides a submitted question before the answer request settles", async () => {
+    let attention = taskAttention("ask-1", 1);
+    const answer = deferred<undefined>();
     mountTaskDetailSurface(taskDetailResponse, {
       routes: [
         {
@@ -19,8 +20,12 @@ describe("Task Detail live refresh", () => {
           handler: () => attention,
         },
         {
-          method: "workflow.task.question.answer",
-          handler: () => ({}),
+          method: "prompt.answerBatch",
+          handler: async () => {
+            await answer.promise;
+            attention = { items: [], generated_at_unix_ms: 4 };
+            return { results: [{ prompt_id: "ask-1", outcome: "resolved" }] };
+          },
         },
       ],
     });
@@ -33,8 +38,61 @@ describe("Task Detail live refresh", () => {
     }
     await user.click(screen.getByRole("button", { name: appI18n.t("task.submitAnswer") }));
 
-    await waitFor(() => expect(firstOption).toBeDisabled());
-    expect(firstOption).toBeInTheDocument();
+    await waitFor(() => expect(firstOption).not.toBeInTheDocument());
+    answer.resolve(undefined);
+  });
+
+  it("focuses and submits the next prompt while the earlier answer remains in flight", async () => {
+    let attention = taskAttentionMany([
+      ["ask-1", 1],
+      ["ask-2", 1],
+    ]);
+    const first = deferred<undefined>();
+    const second = deferred<undefined>();
+    let answerCount = 0;
+    mountTaskDetailSurface(taskDetailResponse, {
+      routes: [
+        {
+          method: "workflow.task.attention.list",
+          handler: () => attention,
+        },
+        {
+          method: "prompt.answerBatch",
+          handler: async () => {
+            answerCount += 1;
+            if (answerCount === 1) {
+              await first.promise;
+              attention = taskAttention("ask-2", 1);
+              return { results: [{ prompt_id: "ask-1", outcome: "resolved" }] };
+            }
+            await second.promise;
+            attention = { items: [], generated_at_unix_ms: 5 };
+            return { results: [{ prompt_id: "ask-2", outcome: "resolved" }] };
+          },
+        },
+      ],
+    });
+    const user = userEvent.setup();
+
+    await waitFor(() => {
+      expect(screen.getAllByRole("radio")).toHaveLength(4);
+    });
+    const [firstSubmit] = screen.getAllByRole("button", { name: appI18n.t("task.submitAnswer") });
+    if (firstSubmit === undefined) {
+      throw new Error("expected the first submit button");
+    }
+    await user.click(firstSubmit);
+
+    await waitFor(() => {
+      expect(screen.queryByText("ask-1")).not.toBeInTheDocument();
+      expect(screen.getByText("ask-2")).toBeInTheDocument();
+      expect(screen.getAllByRole("radio")[0]).toHaveFocus();
+    });
+    await user.click(screen.getByRole("button", { name: appI18n.t("task.submitAnswer") }));
+    expect(answerCount).toBe(2);
+
+    second.resolve(undefined);
+    first.resolve(undefined);
   });
 
   it("shows the next batch question when its waiting event arrives after an answer", async () => {
@@ -46,10 +104,10 @@ describe("Task Detail live refresh", () => {
           handler: () => attention,
         },
         {
-          method: "workflow.task.question.answer",
+          method: "prompt.answerBatch",
           handler: () => {
             attention = taskAttention("ask-2", 2);
-            return {};
+            return { results: [{ prompt_id: "ask-1", outcome: "resolved" }] };
           },
         },
       ],
@@ -59,13 +117,17 @@ describe("Task Detail live refresh", () => {
     await waitForProjectSubscription(() => services.transport.subscriptions);
     const subscriptionStarts = projectSubscriptionStartCount(services.transport.subscriptionStarts);
     expect(subscriptionStarts).toBeGreaterThan(0);
-    await services.api.answerQuestion({
-      kind: "ordinary",
-      clientRequestID: "request-1",
-      taskID: "task-1",
-      askID: "ask-1",
-      selectedOptionNumber: null,
-      freeformAnswer: "answered",
+    await services.api.answerPromptBatch({
+      sessionID: "session-1",
+      stepID: "22222222-2222-4222-8222-222222222222",
+      entries: [
+        {
+          kind: "question",
+          promptID: "ask-1",
+          selectedOptionNumber: null,
+          freeform: "answered",
+        },
+      ],
     });
 
     act(() => {
@@ -113,16 +175,21 @@ describe("Task Detail live refresh", () => {
 });
 
 function taskAttention(askID: string, optionCount: number) {
+  return taskAttentionMany([[askID, optionCount]]);
+}
+
+function taskAttentionMany(prompts: readonly (readonly [string, number])[]) {
   return {
-    items: [
-      {
-        ...questionAttention,
-        id: `attention-${askID}`,
-        question_id: askID,
-        message: askID,
+    items: prompts.map(([askID, optionCount]) => ({
+      ...questionAttention,
+      id: `attention-${askID}`,
+      message: askID,
+      question: {
+        ...questionAttention.question,
+        prompt_id: askID,
         suggestions: Array.from({ length: optionCount }, (_, index) => `option-${String(index + 1)}`),
       },
-    ],
+    })),
     generated_at_unix_ms: 3,
   };
 }
@@ -157,4 +224,16 @@ async function waitForQuestionOptionCount(count: number) {
   await waitFor(() => {
     expect(screen.getAllByRole("radio")).toHaveLength(count + 1);
   });
+}
+
+function deferred<T>(): Readonly<{ promise: Promise<T>; resolve(value: T): void }> {
+  let resolve: ((value: T) => void) | undefined;
+  return {
+    promise: new Promise<T>((nextResolve) => {
+      resolve = nextResolve;
+    }),
+    resolve(value) {
+      resolve?.(value);
+    },
+  };
 }

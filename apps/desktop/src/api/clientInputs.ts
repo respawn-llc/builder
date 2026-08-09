@@ -141,20 +141,51 @@ export type TaskResumeInput = Readonly<{
 
 export type OrdinaryQuestionAnswerInput = Readonly<{
   kind: "ordinary";
-  clientRequestID: string;
-  taskID: string;
-  askID: string;
+  promptID: string;
+  sessionID: string;
+  stepID: string;
   selectedOptionNumber: number | null;
   freeformAnswer: string;
 }>;
 
 export type ApprovalQuestionAnswerInput = Readonly<{
   kind: "approval";
-  clientRequestID: string;
-  taskID: string;
-  askID: string;
+  promptID: string;
+  sessionID: string;
+  stepID: string;
   decision: ApprovalDecision;
   commentary: string;
 }>;
 
 export type QuestionAnswerInput = OrdinaryQuestionAnswerInput | ApprovalQuestionAnswerInput;
+
+export type PromptAnswerBatchEntryInput =
+  | Readonly<{
+      kind: "question";
+      promptID: string;
+      selectedOptionNumber: number | null;
+      freeform: string | null;
+    }>
+  | Readonly<{
+      kind: "approval";
+      promptID: string;
+      decision: ApprovalDecision;
+      commentary: string | null;
+    }>
+  | Readonly<{
+      kind: "declined";
+      promptID: string;
+    }>;
+
+export type PromptAnswerBatchInput = Readonly<{
+  sessionID: string;
+  stepID: string;
+  entries: readonly PromptAnswerBatchEntryInput[];
+}>;
+
+export type PromptAnswerBatchResponse = Readonly<{
+  results: readonly Readonly<{
+    promptID: string;
+    outcome: "resolved" | "skipped";
+  }>[];
+}>;

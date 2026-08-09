@@ -9,6 +9,7 @@ import (
 	askquestion "core/server/tools"
 	servicecontract "core/shared/apicontract"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -31,21 +32,42 @@ func (s *ApprovalViewService) ListPendingApprovalsBySession(_ context.Context, r
 	if s == nil || s.prompts == nil {
 		return serverapi.ApprovalListPendingBySessionResponse{}, fmt.Errorf("pending prompt source is required")
 	}
-	items := s.prompts.ListPendingPrompts(strings.TrimSpace(req.SessionID))
+	sessionID, err := runtimeids.ParseSessionID(strings.TrimSpace(req.SessionID))
+	if err != nil {
+		return serverapi.ApprovalListPendingBySessionResponse{}, fmt.Errorf("pending approval session identity: %w", err)
+	}
+	items := s.prompts.ListPendingPrompts(sessionID.String())
 	approvals := make([]clientui.PendingApproval, 0, len(items))
 	for _, item := range items {
 		if !item.Request.Approval {
 			continue
 		}
+		promptID, stepID, err := pendingPromptIdentity(item.Request.ID, item.Request.StepID)
+		if err != nil {
+			return serverapi.ApprovalListPendingBySessionResponse{}, fmt.Errorf("pending approval identity: %w", err)
+		}
 		approvals = append(approvals, clientui.PendingApproval{
-			ApprovalID: item.Request.ID,
-			SessionID:  strings.TrimSpace(req.SessionID),
-			Question:   item.Request.Question,
-			Options:    approvalOptionsFromRequest(item.Request.ApprovalOptions),
-			CreatedAt:  item.CreatedAt,
+			PromptID:  promptID,
+			SessionID: sessionID,
+			StepID:    stepID,
+			Question:  item.Request.Question,
+			Options:   approvalOptionsFromRequest(item.Request.ApprovalOptions),
+			CreatedAt: item.CreatedAt,
 		})
 	}
 	return serverapi.ApprovalListPendingBySessionResponse{Approvals: approvals}, nil
+}
+
+func pendingPromptIdentity(rawPromptID, rawStepID string) (clientui.PromptID, runtimeids.StepID, error) {
+	promptID := clientui.PromptID(rawPromptID)
+	if err := promptID.Validate(); err != nil {
+		return "", runtimeids.StepID{}, err
+	}
+	stepID, err := runtimeids.ParseStepID(rawStepID)
+	if err != nil {
+		return "", runtimeids.StepID{}, err
+	}
+	return promptID, stepID, nil
 }
 
 func approvalOptionsFromRequest(options []askquestion.AskQuestionApprovalOption) []clientui.ApprovalOption {

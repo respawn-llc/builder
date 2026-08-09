@@ -37,13 +37,8 @@ func TestCurrentNodeStatusProjectionCrossSurfaceStableQuestion(t *testing.T) {
 		t.Fatalf("question execution target = %T, want agent", execution.target)
 	}
 	defer func() {
-		if err := fixture.authority.SubmitPromptResolution(
-			agentTarget.sessionID,
-			request.ID,
-			workflowViewQuestionAnswer("Yes"),
-			nil,
-		); err != nil {
-			t.Fatalf("SubmitPromptResolution: %v", err)
+		if err := resolveWorkflowViewQuestion(fixture.authority, agentTarget.sessionID, request); err != nil {
+			t.Fatalf("ResolvePromptBatch: %v", err)
 		}
 	}()
 
@@ -182,13 +177,8 @@ func TestTaskStatusProjectionCrossSurfaceStableLifecycleMatrix(t *testing.T) {
 						t.Errorf("question execution target = %T, want agent", execution.target)
 						return
 					}
-					if err := surfaces.fixture.authority.SubmitPromptResolution(
-						agentTarget.sessionID,
-						request.ID,
-						workflowViewQuestionAnswer("Yes"),
-						nil,
-					); err != nil {
-						t.Errorf("SubmitPromptResolution: %v", err)
+					if err := resolveWorkflowViewQuestion(surfaces.fixture.authority, agentTarget.sessionID, request); err != nil {
+						t.Errorf("ResolvePromptBatch: %v", err)
 					}
 				})
 				return taskStatusExpectedTarget{nodeID: surfaces.fixture.agentNodeID, live: execution.target}

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/textutil"
 )
@@ -17,6 +18,9 @@ type SessionActiveTranscriptProvider interface {
 }
 
 type PendingPromptSnapshot struct {
+	PromptID               clientui.PromptID
+	SessionID              runtimeids.SessionID
+	StepID                 runtimeids.StepID
 	ID                     string
 	CreatedAt              time.Time
 	Question               string
@@ -109,6 +113,18 @@ func (r *pendingQuestionResolver) questionFromPendingPrompt(sessionID string, as
 }
 
 func pendingQuestionFromPrompt(snapshot PendingPromptSnapshot) (pendingQuestion, bool, error) {
+	if err := snapshot.PromptID.Validate(); err != nil {
+		return pendingQuestion{}, true, fmt.Errorf("pending prompt identity: %w", err)
+	}
+	if snapshot.SessionID.IsZero() {
+		return pendingQuestion{}, true, fmt.Errorf("pending prompt %q has no session identity", snapshot.PromptID)
+	}
+	if snapshot.StepID.IsZero() {
+		return pendingQuestion{}, true, fmt.Errorf("pending prompt %q has no step identity", snapshot.PromptID)
+	}
+	if string(snapshot.PromptID) != strings.TrimSpace(snapshot.ID) {
+		return pendingQuestion{}, true, fmt.Errorf("pending prompt identity %q does not match request identity %q", snapshot.PromptID, snapshot.ID)
+	}
 	if snapshot.Approval {
 		decisions := append([]clientui.ApprovalDecision(nil), snapshot.ApprovalDecisions...)
 		for _, decision := range decisions {
@@ -124,6 +140,9 @@ func pendingQuestionFromPrompt(snapshot PendingPromptSnapshot) (pendingQuestion,
 		return pendingQuestion{
 			message: strings.TrimSpace(snapshot.Question),
 			prompt: &serverapi.WorkflowAttentionQuestionPrompt{
+				SessionID:         snapshot.SessionID,
+				StepID:            snapshot.StepID,
+				PromptID:          snapshot.PromptID,
 				Kind:              serverapi.WorkflowAttentionQuestionKindApproval,
 				ApprovalDecisions: decisions,
 			},
@@ -139,6 +158,9 @@ func pendingQuestionFromPrompt(snapshot PendingPromptSnapshot) (pendingQuestion,
 		suggestions:            suggestions,
 		recommendedOptionIndex: recommended,
 		prompt: &serverapi.WorkflowAttentionQuestionPrompt{
+			SessionID:              snapshot.SessionID,
+			StepID:                 snapshot.StepID,
+			PromptID:               snapshot.PromptID,
 			Kind:                   serverapi.WorkflowAttentionQuestionKindOrdinary,
 			Suggestions:            suggestions,
 			RecommendedOptionIndex: textutil.Pointer(recommended),

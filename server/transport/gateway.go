@@ -218,6 +218,7 @@ var gatewaySubscriptionHandlerEntries = map[string]gatewaySubscriptionHandler{
 	protocol.MethodProcessSubscribeOutput:                (*Gateway).serveProcessOutputSubscription,
 	protocol.MethodAttentionNotificationSubscribe:        (*Gateway).serveAttentionNotificationSubscription,
 	protocol.MethodAttentionSessionNotificationSubscribe: (*Gateway).serveSessionAttentionNotificationSubscription,
+	protocol.MethodPromptFollowUpWatch:                   (*Gateway).servePromptFollowUpSubscription,
 	protocol.MethodWorkflowSubscribe:                     (*Gateway).serveWorkflowSubscription,
 	protocol.MethodWorkflowSubscribeProject:              (*Gateway).serveWorkflowProjectSubscription,
 	protocol.MethodWorktreeSetupSubscribe:                (*Gateway).serveWorktreeSetupSubscription,

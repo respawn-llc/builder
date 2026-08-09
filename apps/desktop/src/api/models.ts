@@ -2,7 +2,11 @@ import type { AttentionItem } from "./attention";
 import type { TaskLiveSession } from "./taskDetailModels";
 
 import type { WorkflowExecutionTarget, WorkflowExecutionTargetPolicy } from "./workflowExecutionTarget";
-import type { WorkflowEdgeSelectionMode, WorkflowParameterPurpose, WorkflowSelectorApplicability } from "./workflowSelectionModels";
+import type {
+  WorkflowEdgeSelectionMode,
+  WorkflowParameterPurpose,
+  WorkflowSelectorApplicability,
+} from "./workflowSelectionModels";
 
 export { defaultWorkflowExecutionTargetPolicy } from "./workflowExecutionTarget";
 export type {
@@ -150,8 +154,9 @@ export type BindingPlan = Readonly<{
 }>;
 
 export type PendingAsk = Readonly<{
-  askID: string;
+  promptID: string;
   sessionID: string;
+  stepID: string;
   question: string;
   suggestions: readonly string[];
   recommendedOptionIndex: number | null;
@@ -159,19 +164,6 @@ export type PendingAsk = Readonly<{
 }>;
 
 export type ApprovalDecision = "allow_once" | "allow_session" | "deny";
-
-export type OrdinaryQuestionPrompt = Readonly<{
-  kind: "ordinary";
-  suggestions: readonly string[];
-  recommendedOptionIndex: number | null;
-}>;
-
-export type ApprovalQuestionPrompt = Readonly<{
-  kind: "approval";
-  approvalDecisions: readonly ApprovalDecision[];
-}>;
-
-export type AttentionQuestionPrompt = OrdinaryQuestionPrompt | ApprovalQuestionPrompt;
 
 export type WorkflowValidationError = Readonly<{
   code: string;
@@ -204,7 +196,11 @@ export type WorkflowInputField = Readonly<{
   description: string;
 }>;
 
-export type WorkflowParameter = Readonly<{ key: string; description: string; purpose: WorkflowParameterPurpose }>;
+export type WorkflowParameter = Readonly<{
+  key: string;
+  description: string;
+  purpose: WorkflowParameterPurpose;
+}>;
 
 export type WorkflowJoinInputProvider = Readonly<{
   inputName: string;

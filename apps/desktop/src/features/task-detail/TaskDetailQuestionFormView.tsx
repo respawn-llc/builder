@@ -1,4 +1,12 @@
-import { type MouseEvent, type ReactNode, useId, useRef } from "react";
+import {
+  type MouseEvent,
+  type ReactNode,
+  type RefCallback,
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+} from "react";
 import { useTranslation } from "react-i18next";
 
 import { errorMessage, type ApprovalDecision, type QuestionAttentionItem } from "@/api";
@@ -7,6 +15,7 @@ import { useTextFieldSubmitShortcut } from "@/app-facade";
 import { Button, RadioGroup, RadioGroupItem, showStatusToast, StaticMarkdown } from "@/ui";
 import { cx, fieldInputClassName } from "@/ui";
 import type { QuestionAnswerMutation } from "./TaskDetailQuestionAnswer";
+import type { PromptPrimaryControl } from "./PromptPrimaryControlRegistry";
 import {
   withApprovalQuestionDecision,
   withOrdinaryQuestionOption,
@@ -23,19 +32,19 @@ export function QuestionFormView({
   disabled,
   onSelectionStateChange,
   presentation,
+  registerPrimaryControl,
   selectionState,
-  taskId,
 }: Readonly<{
   answerQuestion: QuestionAnswerMutation;
   attention: QuestionAttentionItem;
   disabled: boolean;
   onSelectionStateChange: (selection: QuestionSelectionState) => void;
   presentation: QuestionPresentation;
+  registerPrimaryControl?: ((control: PromptPrimaryControl) => () => void) | undefined;
   selectionState: QuestionSelectionState;
-  taskId: string;
 }>) {
   const approvalDecisions =
-    attention.question?.kind === "approval" ? attention.question.approvalDecisions : null;
+    attention.question.kind === "approval" ? attention.question.approvalDecisions : null;
   if (approvalDecisions !== null) {
     return (
       <ApprovalQuestionForm
@@ -45,8 +54,8 @@ export function QuestionFormView({
         disabled={disabled}
         onSelectionStateChange={onSelectionStateChange}
         question={presentation.question}
+        registerPrimaryControl={registerPrimaryControl}
         selectionState={selectionState}
-        taskId={taskId}
       />
     );
   }
@@ -58,9 +67,9 @@ export function QuestionFormView({
       onSelectionStateChange={onSelectionStateChange}
       question={presentation.question}
       recommendedOption={presentation.recommendedOption}
+      registerPrimaryControl={registerPrimaryControl}
       selectionState={selectionState}
       suggestions={presentation.suggestions}
-      taskId={taskId}
     />
   );
 }
@@ -72,9 +81,9 @@ function OrdinaryQuestionForm({
   onSelectionStateChange,
   question,
   recommendedOption,
+  registerPrimaryControl,
   selectionState,
   suggestions,
-  taskId,
 }: Readonly<{
   answerQuestion: QuestionAnswerMutation;
   attention: QuestionAttentionItem;
@@ -82,19 +91,20 @@ function OrdinaryQuestionForm({
   onSelectionStateChange: (selection: QuestionSelectionState) => void;
   question: string | undefined;
   recommendedOption: number | null;
+  registerPrimaryControl?: ((control: PromptPrimaryControl) => () => void) | undefined;
   selectionState: QuestionSelectionState;
   suggestions: readonly string[];
-  taskId: string;
 }>) {
   const { t } = useTranslation();
   const selection = selectionState;
   const selectedOption = selection.selectedOption;
   const answer = selection.answer;
   const answerID = useId();
+  const primaryControlRef = usePrimaryControlRef(registerPrimaryControl);
   // A real option can submit on its own; otherwise any typed freeform answer is
   // submittable, including freeform-only asks where no option is selected.
   const canSubmit = (selectedOption !== null && selectedOption > 0) || answer.trim().length > 0;
-  const interactionDisabled = disabled || answerQuestion.isPending || selection.submission !== "idle";
+  const interactionDisabled = disabled || answerQuestion.isPending;
   const selectedNeither = selection.provenance === "explicit" && selectedOption === null;
   const radioValue = selectedNeither
     ? neitherRadioValue
@@ -107,15 +117,14 @@ function OrdinaryQuestionForm({
       answerQuestion,
       attention,
       failureTitle: t("states.error"),
-      input: (clientRequestID) => ({
+      input: () => ({
         kind: "ordinary",
-        clientRequestID,
-        taskID: taskId,
-        askID: attention.questionID,
+        promptID: attention.question.promptID,
+        sessionID: attention.question.sessionID,
+        stepID: attention.question.stepID,
         selectedOptionNumber: selectedOption,
         freeformAnswer: answer,
       }),
-      onSelectionStateChange,
       selection,
     });
   }
@@ -124,6 +133,7 @@ function OrdinaryQuestionForm({
     <QuestionFormFrame
       answer={answer}
       answerID={answerID}
+      answerRef={suggestions.length === 0 ? primaryControlRef : undefined}
       canSubmit={canSubmit}
       interactionDisabled={interactionDisabled}
       onAnswerChange={(nextAnswer) => {
@@ -142,6 +152,7 @@ function OrdinaryQuestionForm({
               <QuestionOption
                 disabled={interactionDisabled}
                 key={`${optionIndex.toString()}:${suggestion}`}
+                primaryControlRef={optionIndex === 0 ? primaryControlRef : undefined}
                 recommended={recommendedOption === optionIndex + 1}
                 text={suggestion}
                 value={suggestionRadioValue(optionIndex + 1)}
@@ -158,7 +169,7 @@ function OrdinaryQuestionForm({
       }
       question={question}
       radioValue={radioValue}
-      submitting={selection.submission === "submitting"}
+      submitting={answerQuestion.isPending}
     />
   );
 }
@@ -187,8 +198,8 @@ function ApprovalQuestionForm({
   disabled,
   onSelectionStateChange,
   question,
+  registerPrimaryControl,
   selectionState,
-  taskId,
 }: Readonly<{
   answerQuestion: QuestionAnswerMutation;
   approvalDecisions: readonly ApprovalDecision[];
@@ -196,16 +207,17 @@ function ApprovalQuestionForm({
   disabled: boolean;
   onSelectionStateChange: (selection: QuestionSelectionState) => void;
   question: string | undefined;
+  registerPrimaryControl?: ((control: PromptPrimaryControl) => () => void) | undefined;
   selectionState: QuestionSelectionState;
-  taskId: string;
 }>) {
   const { t } = useTranslation();
   const selection = selectionState;
   const selectedDecision = selectedApprovalDecisionFor(approvalDecisions, selection);
   const answer = selection.answer;
   const answerID = useId();
+  const primaryControlRef = usePrimaryControlRef(registerPrimaryControl);
   const canSubmit = selectedDecision !== null && (selectedDecision !== "deny" || answer.trim().length > 0);
-  const interactionDisabled = disabled || answerQuestion.isPending || selection.submission !== "idle";
+  const interactionDisabled = disabled || answerQuestion.isPending;
 
   async function submit(): Promise<void> {
     if (selectedDecision === null) {
@@ -215,15 +227,14 @@ function ApprovalQuestionForm({
       answerQuestion,
       attention,
       failureTitle: t("states.error"),
-      input: (clientRequestID) => ({
+      input: () => ({
         kind: "approval",
-        clientRequestID,
-        taskID: taskId,
-        askID: attention.questionID,
+        promptID: attention.question.promptID,
+        sessionID: attention.question.sessionID,
+        stepID: attention.question.stepID,
         decision: selectedDecision,
         commentary: answer,
       }),
-      onSelectionStateChange,
       selection,
     });
   }
@@ -243,10 +254,11 @@ function ApprovalQuestionForm({
         );
       }}
       onSubmit={submit}
-      optionGroup={approvalDecisions.map((decision) => (
+      optionGroup={approvalDecisions.map((decision, decisionIndex) => (
         <QuestionOption
           disabled={interactionDisabled}
           key={decision}
+          primaryControlRef={decisionIndex === 0 ? primaryControlRef : undefined}
           recommended={false}
           text={approvalDecisionLabel(decision, t)}
           value={decision}
@@ -254,7 +266,7 @@ function ApprovalQuestionForm({
       ))}
       question={question}
       radioValue={selectedDecision ?? ""}
-      submitting={selection.submission === "submitting"}
+      submitting={answerQuestion.isPending}
     />
   );
 }
@@ -262,6 +274,7 @@ function ApprovalQuestionForm({
 function QuestionFormFrame({
   answer,
   answerID,
+  answerRef,
   canSubmit,
   interactionDisabled,
   onAnswerChange,
@@ -274,6 +287,7 @@ function QuestionFormFrame({
 }: Readonly<{
   answer: string;
   answerID: string;
+  answerRef?: RefCallback<HTMLTextAreaElement> | undefined;
   canSubmit: boolean;
   interactionDisabled: boolean;
   onAnswerChange: (answer: string) => void;
@@ -328,6 +342,7 @@ function QuestionFormFrame({
           onAnswerChange(event.target.value);
         }}
         placeholder={t("task.answerPlaceholder")}
+        ref={answerRef}
         rows={3}
         value={answer}
       />
@@ -340,11 +355,13 @@ function QuestionFormFrame({
 
 function QuestionOption({
   disabled,
+  primaryControlRef,
   recommended,
   text,
   value,
 }: Readonly<{
   disabled: boolean;
+  primaryControlRef?: RefCallback<HTMLButtonElement> | undefined;
   recommended: boolean;
   text: string;
   value: string;
@@ -368,7 +385,10 @@ function QuestionOption({
         className="mt-1"
         disabled={disabled}
         id={id}
-        ref={radioRef}
+        ref={(element) => {
+          radioRef.current = element;
+          primaryControlRef?.(element);
+        }}
         value={value}
       />
       <div
@@ -384,6 +404,33 @@ function QuestionOption({
         ) : null}
       </div>
     </div>
+  );
+}
+
+function usePrimaryControlRef(
+  register: ((control: PromptPrimaryControl) => () => void) | undefined,
+): RefCallback<HTMLElement> {
+  const unregisterRef = useRef<(() => void) | undefined>(undefined);
+  useEffect(
+    () => () => {
+      unregisterRef.current?.();
+      unregisterRef.current = undefined;
+    },
+    [],
+  );
+  return useCallback(
+    (element) => {
+      unregisterRef.current?.();
+      unregisterRef.current = undefined;
+      if (element !== null && register !== undefined) {
+        unregisterRef.current = register({
+          focusPrimary(options) {
+            element.focus(options);
+          },
+        });
+      }
+    },
+    [register],
   );
 }
 
@@ -405,36 +452,25 @@ function activateRadioFromOption(
   radioRef.current?.click();
 }
 
-function questionClientRequestID(askID: string): string {
-  return `gui-question-${askID}-${Date.now().toString()}`;
-}
-
 async function submitQuestionAnswer({
   answerQuestion,
   attention,
   failureTitle,
   input,
-  onSelectionStateChange,
   selection,
 }: Readonly<{
   answerQuestion: QuestionAnswerMutation;
   attention: QuestionAttentionItem;
   failureTitle: string;
-  input: (clientRequestID: string) => QuestionAnswerInput;
-  onSelectionStateChange: (selection: QuestionSelectionState) => void;
+  input: () => QuestionAnswerInput;
   selection: QuestionSelectionState;
 }>): Promise<void> {
-  const clientRequestID = selection.clientRequestID ?? questionClientRequestID(attention.questionID);
-  const submittingSelection = { ...selection, clientRequestID, submission: "submitting" as const };
-  onSelectionStateChange(submittingSelection);
   try {
-    await answerQuestion.mutateAsync(input(clientRequestID));
-    onSelectionStateChange({ ...submittingSelection, submission: "accepted" });
+    await answerQuestion.mutateAsync(input(), { attention, selection });
   } catch (error: unknown) {
-    onSelectionStateChange({ ...submittingSelection, submission: "idle" });
     showStatusToast({
       body: errorMessage(error),
-      id: `task-question-answer-failed:${attention.questionID}`,
+      id: `task-question-answer-failed:${attention.question.promptID}`,
       title: failureTitle,
       tone: "danger",
     });

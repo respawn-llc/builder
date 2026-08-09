@@ -243,14 +243,17 @@ func TestAllowCommentaryQueueCreateConnectionFailureAnswersIndependently(t *test
 		t.Fatal("transient expiry did not start")
 	}
 
-	var approvalRequest serverapi.ApprovalAnswerRequest
+	var batchRequest serverapi.PromptAnswerBatchRequest
 	select {
-	case approvalRequest = <-control.approvalRequests:
+	case batchRequest = <-control.batchRequests:
 	case <-time.After(time.Second):
 		t.Fatal("approval answer did not start while transient expiry was blocked")
 	}
-	if approvalCommentary(approvalRequest) != "failed commentary" || approvalRequest.Decision != clientui.ApprovalDecisionAllowOnce {
-		t.Fatalf("approval request = %+v, want Allow once with failed commentary", approvalRequest)
+	entry := requireApprovalAnswerEntry(t, batchRequest)
+	if entry.ApprovalAnswer.Commentary == nil ||
+		*entry.ApprovalAnswer.Commentary != "failed commentary" ||
+		entry.ApprovalAnswer.Decision != clientui.ApprovalDecisionAllowOnce {
+		t.Fatalf("approval request = %+v, want Allow once with failed commentary", batchRequest)
 	}
 
 	deliveryResult := <-results

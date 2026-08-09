@@ -220,8 +220,19 @@ func TestExecutionPromptStoreResolvePromptBatchFirstResolverWins(t *testing.T) {
 	}()
 	<-feed.blocked
 
-	if err := store.Submit("second", testQuestionResolution("external"), nil); err != nil {
-		t.Fatalf("external Submit: %v", err)
+	externalResults, err := store.ResolvePromptBatch(context.Background(), stepID, []PromptAnswerCommand{
+		{
+			PromptID: "second",
+			Payload: PromptQuestionAnswerCommand{
+				Answer: testQuestionResolution("external"),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("external ResolvePromptBatch: %v", err)
+	}
+	if len(externalResults) != 1 || externalResults[0].Outcome != PromptAnswerOutcomeResolved {
+		t.Fatalf("external results = %+v, want resolved", externalResults)
 	}
 	close(feed.release)
 	call := <-done

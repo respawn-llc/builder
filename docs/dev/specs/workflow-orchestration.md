@@ -359,6 +359,7 @@
 - The Session's current executable Node pauses until the Question is answered.
 - All clients use the same authoritative Question and Approval state. A client marks an interaction resolved only after Kent accepts the answer.
 - A Question belongs to its Session. Workflow attention refers to that Question and does not create a second Task-owned copy.
+- Workflow Question attention carries Session, Step, and prompt identity only in its Question payload. The attention item and its Current Node do not repeat Question Session identity.
 - Live Questions and live Approvals exist only within their Exact Execution Scope. A restart does not restore them, and a failed preceding durability barrier does not present them. Kent interrupts the affected Current Node. Session reopening follows the fresh-resource recovery contract in `core-runtime-tools.md`; Resume does not replay the blocked interaction.
 - The bounded active Session transcript supplies Question content to read surfaces. An unfinished transcript operation without a matching Exact Execution Scope does not create a live Question or `waiting_question` Task status.
 - A pending Workflow Transition Approval belongs to the current Task and survives restart.

@@ -5,17 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"sync"
 
 	"core/server/session"
 	"core/server/sessionruntime"
-	askquestion "core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
 	"core/shared/runtimeids"
-	"core/shared/serverapi"
 )
 
 const reasonProtocolViolationCap workflow.CurrentNodeInterruptionReason = "workflow_protocol_violation_cap"
@@ -280,62 +277,6 @@ func (c *CurrentNodeController) CompleteSessionCurrentNode(
 		OutputValues: outputValues,
 		Commentary:   commentary,
 	})
-}
-
-type WorkflowQuestionAcceptance interface {
-	AwaitSuccessor(context.Context) error
-}
-
-// AcceptWorkflowQuestion delivers an answer only after resolving one exact
-// live Authority prompt and proving its Session still owns the same Current
-// Node in durable Task state. Prompt state itself remains volatile.
-func (c *CurrentNodeController) AcceptWorkflowQuestion(
-	ctx context.Context,
-	taskID workflow.TaskID,
-	askID string,
-	answer askquestion.AskQuestionResolution,
-	submitErr error,
-) (WorkflowQuestionAcceptance, error) {
-	if c == nil {
-		return nil, errors.New("current node workflow controller is required")
-	}
-	if strings.TrimSpace(string(taskID)) == "" {
-		return nil, errors.New("workflow task id is required")
-	}
-	askID = strings.TrimSpace(askID)
-	if askID == "" {
-		return nil, errors.New("workflow ask id is required")
-	}
-	var acceptance sessionruntime.PromptResponseAcceptance
-	err := c.permit.Run(ctx, func(ctx context.Context) error {
-		resolution, err := c.authority.ResolvePendingWorkflowPrompt(taskID, askID)
-		if err != nil {
-			return err
-		}
-		c.mu.Lock()
-		live, isLive := c.live[resolution.ScopeID]
-		c.mu.Unlock()
-		if !isLive || !live.reference.Equal(resolution.CurrentNode) {
-			return serverapi.ErrPromptNotFound
-		}
-		if err := c.store.ValidateCurrentNodeSessionBinding(ctx, resolution.SessionID, resolution.CurrentNode); err != nil {
-			if errors.Is(err, workflowstore.ErrSessionNotCurrentWorkflowNode) {
-				return serverapi.ErrPromptNotFound
-			}
-			return err
-		}
-		acceptance, err = c.authority.AcceptPromptResolutionForScope(
-			resolution.ScopeID,
-			askID,
-			answer,
-			submitErr,
-		)
-		return err
-	})
-	if err != nil {
-		return nil, err
-	}
-	return acceptance, nil
 }
 
 func (c *CurrentNodeController) completeLiveCurrentNode(ctx context.Context, req workflowruntime.CompletionRequest) (workflowstore.CurrentNodeCompletionResult, error) {

@@ -753,6 +753,7 @@ func (r *RuntimeRegistry) PromptResolvedScope(scope sessionruntime.ExecutionScop
 		}
 		r.publishAttentionResolved(id, snapshot)
 		r.publishCurrentRuntimeActivity(id)
+		return r.publishTaskQuestionCleared(id, snapshot)
 	}
 	return nil
 }
@@ -763,6 +764,14 @@ func (r *RuntimeRegistry) publishPromptResolution(entry *authorityRuntimeEntry, 
 	}
 	publishPendingPrompt(entry.sessionFeed, sessionID, snapshot, pendingPromptEventResolved)
 	r.publishAttentionResolved(sessionID, snapshot)
+	if err := r.publishTaskQuestionCleared(sessionID, snapshot); err != nil {
+		logAttentionNotificationOperationFailure(
+			"publish workflow prompt resolution event",
+			sessionID,
+			snapshot.Request.ID,
+			err,
+		)
+	}
 }
 
 func (r *RuntimeRegistry) ListPendingPrompts(sessionID string) []PendingPromptSnapshot {

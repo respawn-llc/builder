@@ -248,14 +248,18 @@ export const questionAttention = {
   current_node: {
     node_id: "node-1",
     transition_branch_key: null,
-    session_id: "session-1",
+    session_id: null,
   },
-  session_id: "session-1",
   session_name: "Session one",
-  question_id: "ask-1",
   message: "Choose snack",
-  recommended_option_index: 1,
-  suggestions: ["Trail mix", "Dark chocolate"],
+  question: {
+    session_id: "session-1",
+    step_id: "22222222-2222-4222-8222-222222222222",
+    prompt_id: "ask-1",
+    kind: "ordinary",
+    recommended_option_index: 1,
+    suggestions: ["Trail mix", "Dark chocolate"],
+  },
 };
 
 export const taskQuestionWaitingEvent = {
@@ -306,8 +310,9 @@ export const activityResponse = {
 export const pendingAskResponse = {
   Asks: [
     {
-      AskID: "ask-1",
+      PromptID: "ask-1",
       SessionID: "session-1",
+      StepID: "11111111-1111-4111-8111-111111111111",
       Question: "Choose path",
       Suggestions: ["Use option A", "Use option B"],
       RecommendedOptionIndex: 1,

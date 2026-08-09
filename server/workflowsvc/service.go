@@ -9,19 +9,15 @@ import (
 	"strings"
 	"time"
 
-	"core/server/requestmemo"
 	"core/server/sessionruntime"
-	askquestion "core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowexecution"
 	"core/server/workflowscript"
 	"core/server/workflowstore"
 	"core/server/workflowview"
 	"core/server/worktree"
-	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
-	"core/shared/textutil"
 )
 
 type Service struct {
@@ -32,7 +28,6 @@ type Service struct {
 	taskWorktreeCleanup  taskWorktreeDeleter
 	events               *workflowProjectEventBroker
 	attentionFinalizer   workflowAttentionFinalizer
-	questionMemo         *requestmemo.Memo[taskQuestionAnswerMemoRequest, workflowexecution.WorkflowQuestionAcceptance]
 	mutationPermit       *workflowexecution.MutationPermit
 	currentNodeExecution interface {
 		StartTask(context.Context, workflow.TaskID, workflowexecution.TaskStartPreparation) (workflowstore.StartTaskResult, error)
@@ -46,7 +41,6 @@ type Service struct {
 		EnsureTaskQuiescent(workflow.TaskID) error
 		CompleteSessionCurrentNode(context.Context, runtimeids.SessionID, string, map[string]string, string) (workflowstore.CurrentNodeCompletionResult, error)
 		CompleteIdleCurrentNode(context.Context, workflowstore.IdleCurrentNodeSelector, string, map[string]string, string) (workflowstore.CurrentNodeCompletionResult, error)
-		AcceptWorkflowQuestion(context.Context, workflow.TaskID, string, askquestion.AskQuestionResolution, error) (workflowexecution.WorkflowQuestionAcceptance, error)
 	}
 }
 
@@ -143,17 +137,6 @@ const (
 	workflowAttentionFinalizationTimeout = 5 * time.Second
 )
 
-type taskQuestionAnswerMemoRequest struct {
-	TaskID               string
-	AskID                string
-	ErrorMessage         string
-	Answer               string
-	SelectedOptionNumber *int
-	FreeformAnswer       string
-	ApprovalDecision     clientui.ApprovalDecision
-	ApprovalCommentary   string
-}
-
 type Option func(*Service)
 
 func WithCurrentNodeExecution(execution interface {
@@ -168,7 +151,6 @@ func WithCurrentNodeExecution(execution interface {
 	EnsureTaskQuiescent(workflow.TaskID) error
 	CompleteSessionCurrentNode(context.Context, runtimeids.SessionID, string, map[string]string, string) (workflowstore.CurrentNodeCompletionResult, error)
 	CompleteIdleCurrentNode(context.Context, workflowstore.IdleCurrentNodeSelector, string, map[string]string, string) (workflowstore.CurrentNodeCompletionResult, error)
-	AcceptWorkflowQuestion(context.Context, workflow.TaskID, string, askquestion.AskQuestionResolution, error) (workflowexecution.WorkflowQuestionAcceptance, error)
 }) Option {
 	return func(s *Service) {
 		s.currentNodeExecution = execution
@@ -205,7 +187,7 @@ func New(store *workflowstore.Store, readModels ReadModels, roleResolver workflo
 	}
 	events := newWorkflowProjectEventBroker()
 	store.SetWorkflowEventPublisher(events)
-	service := &Service{store: store, readModels: readModels, roleResolver: roleResolver, events: events, questionMemo: requestmemo.New[taskQuestionAnswerMemoRequest, workflowexecution.WorkflowQuestionAcceptance](), mutationPermit: mutationPermit}
+	service := &Service{store: store, readModels: readModels, roleResolver: roleResolver, events: events, mutationPermit: mutationPermit}
 	for _, opt := range opts {
 		opt(service)
 	}
@@ -1911,88 +1893,6 @@ func (s *Service) ListWorkflowTaskAttention(ctx context.Context, req serverapi.W
 		return serverapi.WorkflowTaskAttentionListResponse{}, err
 	}
 	return response, nil
-}
-
-func (s *Service) AnswerWorkflowTaskQuestion(ctx context.Context, req serverapi.WorkflowTaskQuestionAnswerRequest) error {
-	if err := req.Validate(); err != nil {
-		return err
-	}
-	if s == nil || s.currentNodeExecution == nil {
-		return errors.New("current node workflow execution is required")
-	}
-	memoReq := taskQuestionAnswerMemoRequest{
-		TaskID:               req.TaskID,
-		AskID:                req.AskID,
-		ErrorMessage:         req.ErrorMessage,
-		Answer:               req.Answer,
-		SelectedOptionNumber: textutil.Pointer(req.SelectedOptionNumber),
-		FreeformAnswer:       req.FreeformAnswer,
-	}
-	if req.Approval != nil {
-		memoReq.ApprovalDecision = req.Approval.Decision
-		memoReq.ApprovalCommentary = req.Approval.Commentary
-	}
-	acceptance, err := s.questionMemo.Do(ctx, req.ClientRequestID, memoReq, sameTaskQuestionAnswerMemoRequest, func(ctx context.Context) (workflowexecution.WorkflowQuestionAcceptance, error) {
-		return s.acceptWorkflowTaskQuestion(ctx, req)
-	})
-	if err != nil {
-		return err
-	}
-	return acceptance.AwaitSuccessor(ctx)
-}
-
-func (s *Service) acceptWorkflowTaskQuestion(
-	ctx context.Context,
-	req serverapi.WorkflowTaskQuestionAnswerRequest,
-) (workflowexecution.WorkflowQuestionAcceptance, error) {
-	var resolution askquestion.AskQuestionResolution
-	var submitErr error
-	errorMessage := textutil.OptionalExactString(req.ErrorMessage)
-	if errorMessage != nil {
-		submitErr = errors.New(*errorMessage)
-	} else if req.Approval != nil {
-		resolution = askquestion.AskQuestionApproval{
-			Decision:   askquestion.AskQuestionApprovalDecision(req.Approval.Decision),
-			Commentary: textutil.OptionalExactString(req.Approval.Commentary),
-		}
-	} else {
-		resolution = askquestion.AskQuestionAnswerFromLegacyFields(
-			textutil.Pointer(req.SelectedOptionNumber),
-			textutil.OptionalExactString(req.Answer),
-			textutil.OptionalExactString(req.FreeformAnswer),
-		)
-	}
-	acceptance, err := s.currentNodeExecution.AcceptWorkflowQuestion(
-		ctx,
-		workflow.TaskID(req.TaskID),
-		req.AskID,
-		resolution,
-		submitErr,
-	)
-	if err != nil {
-		if errors.Is(err, sessionruntime.ErrWorkflowPromptAmbiguous) {
-			return nil, serverapi.WorkflowTaskQuestionSelectorAmbiguousError{Message: err.Error()}
-		}
-		return nil, err
-	}
-	if acceptance == nil {
-		return nil, errors.New("workflow question acceptance is required")
-	}
-	if detail, err := s.readModels.TaskDetail.GetTask(ctx, req.TaskID); err == nil {
-		s.publishProjectWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionQuestionAnswered, req.TaskID, req.AskID)
-	}
-	return acceptance, nil
-}
-
-func sameTaskQuestionAnswerMemoRequest(a taskQuestionAnswerMemoRequest, b taskQuestionAnswerMemoRequest) bool {
-	return a.TaskID == b.TaskID &&
-		a.AskID == b.AskID &&
-		a.ErrorMessage == b.ErrorMessage &&
-		a.Answer == b.Answer &&
-		textutil.EqualOptional(a.SelectedOptionNumber, b.SelectedOptionNumber) &&
-		a.FreeformAnswer == b.FreeformAnswer &&
-		a.ApprovalDecision == b.ApprovalDecision &&
-		a.ApprovalCommentary == b.ApprovalCommentary
 }
 
 func (s *Service) AddWorkflowTaskComment(ctx context.Context, req serverapi.WorkflowTaskCommentAddRequest) (serverapi.WorkflowTaskCommentAddResponse, error) {

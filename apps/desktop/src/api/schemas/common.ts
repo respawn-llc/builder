@@ -2,8 +2,6 @@ import { z } from "zod";
 
 import type {
   ApprovalDecision,
-  ApprovalQuestionPrompt,
-  AttentionQuestionPrompt,
   BoardCard,
   BoardColumn,
   BoardGroup,
@@ -20,8 +18,12 @@ import type {
   WorkflowValidationError,
   WorkspaceSummary,
   WorkspaceAvailability,
-  OrdinaryQuestionPrompt,
 } from "../models";
+import type {
+  ApprovalQuestionPrompt,
+  AttentionQuestionPrompt,
+  OrdinaryQuestionPrompt,
+} from "../promptModels";
 import type {
   ApprovalAttentionItem,
   AttentionItem,
@@ -66,6 +68,9 @@ export const approvalDecisionSchema: z.ZodType<ApprovalDecision> = z.enum([
 
 const ordinaryQuestionPromptSchema = z
   .object({
+    prompt_id: nonBlankString,
+    session_id: nonBlankString,
+    step_id: nonBlankString,
     kind: z.literal("ordinary"),
     suggestions: stringList,
     recommended_option_index: nullablePositiveInteger,
@@ -74,6 +79,9 @@ const ordinaryQuestionPromptSchema = z
 
 const approvalQuestionPromptSchema = z
   .object({
+    prompt_id: nonBlankString,
+    session_id: nonBlankString,
+    step_id: nonBlankString,
     kind: z.literal("approval"),
     approval_decisions: z.array(approvalDecisionSchema).min(1),
   })
@@ -85,12 +93,18 @@ export const questionPromptSchema: z.ZodType<AttentionQuestionPrompt> = z
     switch (value.kind) {
       case "ordinary":
         return {
+          promptID: value.prompt_id,
+          sessionID: value.session_id,
+          stepID: value.step_id,
           kind: "ordinary",
           suggestions: value.suggestions,
           recommendedOptionIndex: value.recommended_option_index,
         } satisfies OrdinaryQuestionPrompt;
       case "approval":
         return {
+          promptID: value.prompt_id,
+          sessionID: value.session_id,
+          stepID: value.step_id,
           kind: "approval",
           approvalDecisions: value.approval_decisions,
         } satisfies ApprovalQuestionPrompt;
@@ -423,7 +437,10 @@ export const scriptCurrentNodeSchema: z.ZodType<TaskScriptCurrentNode> = z
   .object({
     node_id: nonBlankString,
     transition_branch_key: nullableNonBlankString,
-    session_id: z.null().optional().transform(() => null),
+    session_id: z
+      .null()
+      .optional()
+      .transform(() => null),
   })
   .strict()
   .transform((value) => ({
@@ -436,27 +453,19 @@ export const attentionItemSchema: z.ZodType<AttentionItem> = z.discriminatedUnio
   attentionItemBaseWireSchema
     .extend({
       kind: z.literal("question"),
-      current_node: currentNodeSchema,
-      session_id: nullableNonBlankString,
+      current_node: currentNodeSchema.refine((node) => node.sessionID === null),
       session_name: nonBlankString.nullable(),
-      question_id: nonBlankString,
       message: nonBlankString,
-      suggestions: stringList,
-      recommended_option_index: nullablePositiveInteger,
-      question: questionPromptSchema.nullish(),
+      question: questionPromptSchema,
     })
     .strict()
     .transform((value): QuestionAttentionItem => ({
       ...adaptAttentionItemBase(value),
       kind: value.kind,
       currentNode: value.current_node,
-      sessionID: value.session_id,
       sessionName: value.session_name,
-      questionID: value.question_id,
       message: value.message,
-      suggestions: value.suggestions,
-      recommendedOptionIndex: value.recommended_option_index,
-      question: value.question ?? null,
+      question: value.question,
     })),
   attentionItemBaseWireSchema
     .extend({

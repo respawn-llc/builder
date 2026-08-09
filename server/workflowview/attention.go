@@ -15,6 +15,7 @@ import (
 	"core/server/metadata/sqlitegen"
 	"core/server/sessionruntime"
 	"core/server/workflow"
+	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/textutil"
@@ -349,26 +350,19 @@ func (a *Attention) liveQuestionCandidates(ctx context.Context, taskFilter *stri
 				if occurredAt <= 0 {
 					return nil, fmt.Errorf("task %q session %q prompt %q has no occurrence time", taskID, execution.Agent.SessionID, promptReference.ID)
 				}
-				questionID := promptReference.ID
-				sessionID := execution.Agent.SessionID.String()
 				currentNode := workflowCurrentNodeReference(execution.Ref.CurrentNode)
-				currentNode.SessionID = &sessionID
 				out = append(out, attentionCandidate{item: serverapi.WorkflowAttentionItem{
-					ID:                     "question:" + sessionID + ":" + questionID,
-					Kind:                   "question",
-					ProjectID:              task.ProjectID,
-					WorkflowID:             task.WorkflowID,
-					TaskID:                 task.ID,
-					TaskShortID:            task.ShortID,
-					TaskTitle:              task.Title,
-					Message:                textutil.Value(question.message),
-					CurrentNode:            &currentNode,
-					SessionID:              &sessionID,
-					QuestionID:             &questionID,
-					Suggestions:            question.suggestions,
-					RecommendedOptionIndex: question.recommendedOptionIndex,
-					Question:               question.prompt,
-					OccurredAtUnixMs:       occurredAt,
+					ID:               liveQuestionAttentionID(execution.Agent.SessionID, question.prompt.StepID, question.prompt.PromptID),
+					Kind:             "question",
+					ProjectID:        task.ProjectID,
+					WorkflowID:       task.WorkflowID,
+					TaskID:           task.ID,
+					TaskShortID:      task.ShortID,
+					TaskTitle:        task.Title,
+					Message:          textutil.Value(question.message),
+					CurrentNode:      &currentNode,
+					Question:         question.prompt,
+					OccurredAtUnixMs: occurredAt,
 				}})
 			}
 		}
@@ -379,20 +373,28 @@ func (a *Attention) liveQuestionCandidates(ctx context.Context, taskFilter *stri
 	return out, nil
 }
 
+func liveQuestionAttentionID(
+	sessionID runtimeids.SessionID,
+	stepID runtimeids.StepID,
+	promptID clientui.PromptID,
+) string {
+	return "question:" + sessionID.String() + ":" + stepID.String() + ":" + string(promptID)
+}
+
 func (a *Attention) attachLiveQuestionSessionNames(ctx context.Context, candidates []attentionCandidate) error {
 	sessionIDs := make([]string, 0, len(candidates))
 	for _, candidate := range candidates {
-		if candidate.item.SessionID == nil {
-			return fmt.Errorf("live question attention %q has no session id", candidate.item.ID)
+		if candidate.item.Question == nil {
+			return fmt.Errorf("live question attention %q has no prompt", candidate.item.ID)
 		}
-		sessionIDs = append(sessionIDs, *candidate.item.SessionID)
+		sessionIDs = append(sessionIDs, candidate.item.Question.SessionID.String())
 	}
 	names, err := resolveSessionNames(ctx, a.queries.ListSessionNamesByIDs, sessionIDs)
 	if err != nil {
 		return err
 	}
 	for index := range candidates {
-		candidates[index].item.SessionName = names[*candidates[index].item.SessionID]
+		candidates[index].item.SessionName = names[candidates[index].item.Question.SessionID.String()]
 	}
 	return nil
 }

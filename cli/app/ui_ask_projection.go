@@ -183,13 +183,13 @@ func (m *uiModel) handleQuestionProjectionError(result questionRenderResultMsg) 
 		promptID = string(m.ask.current.prompt.PromptID)
 	}
 	m.logf(
-		"ask.question_projection.error prompt_id=%q current_token=%d operation_token=%s rendered_at=%+v desired=%+v delivery_request_id=%q err=%q stack=%s",
+		"ask.question_projection.error prompt_id=%q current_token=%d operation_token=%s rendered_at=%+v desired=%+v delivery_generation=%d err=%q stack=%s",
 		promptID,
 		m.ask.currentToken,
 		result.request.operationToken,
 		questionRenderIdentityDiagnosticsFor(m.ask.activeProjection),
 		questionRenderIdentityDiagnostics(result.request.identity),
-		activePromptDeliveryRequestID(m.ask.activeDelivery),
+		activePromptDeliveryGeneration(m.ask.activeDelivery),
 		result.err.Error(),
 		result.stack,
 	)
@@ -223,9 +223,9 @@ func questionRenderIdentityDiagnosticsFor(projection *activeQuestionProjection) 
 	return &diagnostic
 }
 
-func activePromptDeliveryRequestID(delivery *activePromptAnswerDelivery) string {
+func activePromptDeliveryGeneration(delivery *activePromptAnswerDelivery) uint64 {
 	if delivery == nil {
-		return ""
+		return 0
 	}
-	return delivery.requestID.String()
+	return delivery.generation
 }

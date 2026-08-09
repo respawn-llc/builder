@@ -50,10 +50,12 @@ type PromptAnswerResult struct {
 }
 
 type preparedPromptAnswer struct {
-	command    PromptAnswerCommand
-	entry      *executionPromptEntry
-	resolution tools.AskQuestionResolution
-	submitErr  error
+	command       PromptAnswerCommand
+	entry         *executionPromptEntry
+	resolution    tools.AskQuestionResolution
+	submitErr     error
+	stepID        runtimeids.StepID
+	questionBatch *validatedQuestionBatchDescriptor
 }
 
 func PendingPromptOrderLess(leftCreatedAt time.Time, leftID string, rightCreatedAt time.Time, rightID string) bool {
@@ -124,16 +126,18 @@ func (s *executionPromptStore) ResolvePromptBatch(
 		if entry == nil || entry.snapshot.Request.StepID != stepID.String() {
 			continue
 		}
-		resolution, submitErr, err := promptResolutionForCommand(entry, command)
+		resolution, submitErr, questionBatch, err := promptResolutionForCommand(entry, command)
 		if err != nil {
 			s.mu.RUnlock()
 			return nil, err
 		}
 		prepared = append(prepared, preparedPromptAnswer{
-			command:    command,
-			entry:      entry,
-			resolution: resolution,
-			submitErr:  submitErr,
+			command:       command,
+			entry:         entry,
+			resolution:    resolution,
+			submitErr:     submitErr,
+			stepID:        stepID,
+			questionBatch: questionBatch,
 		})
 	}
 	s.mu.RUnlock()
@@ -160,6 +164,11 @@ func (s *executionPromptStore) ResolvePromptBatch(
 
 func (s *executionPromptStore) resolvePreparedPromptAnswer(answer preparedPromptAnswer) (bool, error) {
 	s.mu.Lock()
+	if s.pending[string(answer.command.PromptID)] != answer.entry {
+		s.mu.Unlock()
+		return false, nil
+	}
+	s.resolvePromptFollowUpLocked(answer.stepID, answer.command.PromptID, answer.questionBatch)
 	removed := s.removePromptEntryLocked(string(answer.command.PromptID), answer.entry)
 	s.mu.Unlock()
 	if !removed {
@@ -190,9 +199,9 @@ func (s *executionPromptStore) deliverPromptResolution(
 func promptResolutionForCommand(
 	entry *executionPromptEntry,
 	command PromptAnswerCommand,
-) (tools.AskQuestionResolution, error, error) {
+) (tools.AskQuestionResolution, error, *validatedQuestionBatchDescriptor, error) {
 	if entry == nil {
-		return nil, nil, errors.New("pending prompt entry is required")
+		return nil, nil, nil, errors.New("pending prompt entry is required")
 	}
 	var submitErr error
 	var resolution tools.AskQuestionResolution
@@ -204,18 +213,19 @@ func promptResolutionForCommand(
 	case PromptDeclinedCommand:
 		submitErr = context.Canceled
 	default:
-		return nil, nil, errors.New("prompt answer command payload is invalid")
+		return nil, nil, nil, errors.New("prompt answer command payload is invalid")
 	}
 	if err := validatePromptResolution(entry, resolution, submitErr); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	if _, err := preparedSuccessorPromptIDs(entry.snapshot.Request, submitErr); err != nil {
-		return nil, nil, err
+	questionBatch, err := validateQuestionBatchMetadata(entry.snapshot.Request)
+	if err != nil {
+		return nil, nil, nil, err
 	}
 	if submitErr != nil {
-		return nil, submitErr, nil
+		return nil, submitErr, questionBatch, nil
 	}
-	return resolution, nil, nil
+	return resolution, nil, questionBatch, nil
 }
 
 func validatePromptResolution(

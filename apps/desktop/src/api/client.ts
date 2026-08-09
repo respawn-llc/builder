@@ -5,6 +5,7 @@ import { parseRpcResponse as parse } from "./clientParse";
 import * as taskLifecycle from "./clientTaskLifecycle";
 import * as taskDependencies from "./clientTaskDependencies";
 import * as taskDetail from "./clientTaskDetail";
+import * as promptAnswers from "./clientPromptAnswers";
 import * as taskSearch from "./clientTaskSearch";
 import {
   workflowGraphDraftPayload,
@@ -13,7 +14,8 @@ import {
 } from "./clientWorkflowGraph";
 import type {
   BoardNodeCardsInput,
-  QuestionAnswerInput,
+  PromptAnswerBatchInput,
+  PromptAnswerBatchResponse,
   TaskEditInput,
   TaskMoveInput,
   TaskResumeInput,
@@ -362,7 +364,10 @@ export class ApiClient implements ApiService {
     return parse(
       "workflow.validate",
       workflowValidationSchema,
-      await this.#transport.call("workflow.validate", { workflow_id: workflowIDSchema.parse(workflowID), mode }),
+      await this.#transport.call("workflow.validate", {
+        workflow_id: workflowIDSchema.parse(workflowID),
+        mode,
+      }),
     );
   }
 
@@ -450,7 +455,9 @@ export class ApiClient implements ApiService {
     return parse(
       "workflow.deletePreview",
       workflowDeletePreviewSchema,
-      await this.#transport.call("workflow.deletePreview", { workflow_id: workflowIDSchema.parse(workflowID) }),
+      await this.#transport.call("workflow.deletePreview", {
+        workflow_id: workflowIDSchema.parse(workflowID),
+      }),
     );
   }
 
@@ -608,8 +615,8 @@ export class ApiClient implements ApiService {
     await this.#transport.call("workflow.task.comment.delete", { comment_id: commentID });
   }
 
-  async answerQuestion(input: QuestionAnswerInput): Promise<void> {
-    await taskDetail.answerQuestion(this.#transport, input);
+  async answerPromptBatch(input: PromptAnswerBatchInput): Promise<PromptAnswerBatchResponse> {
+    return promptAnswers.answerPromptBatch(this.#transport, input);
   }
 
   async listPendingAsks(sessionID: string): Promise<readonly PendingAsk[]> {

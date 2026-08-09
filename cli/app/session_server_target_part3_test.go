@@ -50,8 +50,8 @@ func TestStartSessionServerListsPendingPromptSnapshotOverRemoteReads(t *testing.
 				t.Fatalf("unexpected question prompt: %+v", prompt)
 			}
 			answerRemoteTranscriptPrompt(t, runtimePlan.Wiring.promptAnswers, prompt, clientui.PromptAnswer{
-				PromptID: string(prompt.PromptID),
-				Answer:   "done",
+				PromptID:       string(prompt.PromptID),
+				FreeformAnswer: "done",
 			})
 		case clientui.TranscriptPromptKindApproval:
 			answerRemoteTranscriptPrompt(t, runtimePlan.Wiring.promptAnswers, prompt, clientui.PromptAnswer{

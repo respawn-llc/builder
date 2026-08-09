@@ -16,6 +16,7 @@ import (
 	"core/server/workflow"
 	"core/server/workflowexecution"
 	"core/server/workflowstore"
+	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -444,17 +445,30 @@ func (f currentNodeViewFixture) startCurrentNodeQuestionOnAuthority(
 
 func (q currentNodeViewQuestion) resolve(t *testing.T, ctx context.Context) {
 	t.Helper()
-	if err := q.authority.SubmitPromptResolution(
-		q.sessionID,
-		q.request.ID,
-		workflowViewQuestionAnswer("Yes"),
-		nil,
-	); err != nil {
-		t.Fatalf("SubmitPromptResolution: %v", err)
+	if err := resolveWorkflowViewQuestion(q.authority, q.sessionID, q.request); err != nil {
+		t.Fatalf("ResolvePromptBatch: %v", err)
 	}
 	if _, err := q.handle.Wait(ctx); err != nil {
 		t.Fatalf("wait Question execution: %v", err)
 	}
+}
+
+func resolveWorkflowViewQuestion(
+	authority *sessionruntime.Authority,
+	sessionID runtimeids.SessionID,
+	request tools.AskQuestionRequest,
+) error {
+	stepID, err := runtimeids.ParseStepID(request.StepID)
+	if err != nil {
+		return err
+	}
+	_, err = authority.ResolvePromptBatch(context.Background(), sessionID, stepID, []sessionruntime.PromptAnswerCommand{{
+		PromptID: clientui.PromptID(request.ID),
+		Payload: sessionruntime.PromptQuestionAnswerCommand{
+			Answer: workflowViewQuestionAnswer("Yes"),
+		},
+	}})
+	return err
 }
 
 func (f currentNodeViewFixture) newAgentRuntimePlan(t *testing.T) sessionruntime.AgentRuntimePlan {

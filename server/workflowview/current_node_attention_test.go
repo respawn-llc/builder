@@ -10,6 +10,7 @@ import (
 	"core/server/workflow"
 	"core/server/workflowstore"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -222,6 +223,9 @@ func TestAttentionAndDetailProjectLiveQuestionFromExactScope(t *testing.T) {
 	}
 	prompts := currentNodeViewPrompts{bySession: map[string][]PendingPromptSnapshot{
 		question.sessionID.String(): {{
+			PromptID:               clientui.PromptID(question.request.ID),
+			SessionID:              question.sessionID,
+			StepID:                 mustWorkflowViewStepID(t, question.request.StepID),
 			ID:                     question.request.ID,
 			CreatedAt:              time.UnixMilli(4_000).UTC(),
 			Question:               question.request.Question,
@@ -252,15 +256,18 @@ func TestAttentionAndDetailProjectLiveQuestionFromExactScope(t *testing.T) {
 	}
 	if len(taskAttention.Items) != 1 ||
 		taskAttention.Items[0].Kind != "question" ||
-		taskAttention.Items[0].QuestionID == nil ||
-		*taskAttention.Items[0].QuestionID != question.request.ID ||
+		taskAttention.Items[0].QuestionID != nil ||
 		taskAttention.Items[0].Message == nil ||
 		*taskAttention.Items[0].Message != question.request.Question ||
-		taskAttention.Items[0].SessionID == nil ||
-		*taskAttention.Items[0].SessionID != question.sessionID.String() ||
+		taskAttention.Items[0].SessionID != nil ||
 		taskAttention.Items[0].SessionName == nil ||
 		*taskAttention.Items[0].SessionName != "Current Node session" ||
+		taskAttention.Items[0].Question == nil ||
+		taskAttention.Items[0].Question.PromptID != clientui.PromptID(question.request.ID) ||
+		taskAttention.Items[0].Question.SessionID != question.sessionID ||
+		taskAttention.Items[0].Question.StepID != mustWorkflowViewStepID(t, question.request.StepID) ||
 		taskAttention.Items[0].CurrentNode == nil ||
+		taskAttention.Items[0].CurrentNode.SessionID != nil ||
 		taskAttention.Items[0].CurrentNode.NodeID != string(fixture.agentNodeID) {
 		t.Fatalf("question attention = %+v", taskAttention.Items)
 	}
@@ -309,6 +316,9 @@ func TestAttentionProjectsLiveSessionApprovalFromExactScope(t *testing.T) {
 	}
 	prompts := currentNodeViewPrompts{bySession: map[string][]PendingPromptSnapshot{
 		agentTarget.sessionID.String(): {{
+			PromptID:          clientui.PromptID(request.ID),
+			SessionID:         agentTarget.sessionID,
+			StepID:            mustWorkflowViewStepID(t, request.StepID),
 			ID:                request.ID,
 			CreatedAt:         time.UnixMilli(4_000).UTC(),
 			Question:          request.Question,
@@ -336,16 +346,27 @@ func TestAttentionProjectsLiveSessionApprovalFromExactScope(t *testing.T) {
 	}
 	item := response.Items[0]
 	if item.Kind != "question" ||
-		item.QuestionID == nil ||
-		*item.QuestionID != request.ID ||
-		item.SessionID == nil ||
-		*item.SessionID != agentTarget.sessionID.String() ||
+		item.QuestionID != nil ||
+		item.SessionID != nil ||
 		item.Question == nil ||
+		item.Question.PromptID != clientui.PromptID(request.ID) ||
+		item.Question.SessionID != agentTarget.sessionID ||
+		item.Question.StepID != mustWorkflowViewStepID(t, request.StepID) ||
 		item.Question.Kind != serverapi.WorkflowAttentionQuestionKindApproval ||
 		item.CurrentNode == nil ||
+		item.CurrentNode.SessionID != nil ||
 		item.CurrentNode.NodeID != string(fixture.agentNodeID) {
 		t.Fatalf("live approval attention item = %+v", item)
 	}
+}
+
+func mustWorkflowViewStepID(t *testing.T, raw string) runtimeids.StepID {
+	t.Helper()
+	id, err := runtimeids.ParseStepID(raw)
+	if err != nil {
+		t.Fatalf("ParseStepID(%q): %v", raw, err)
+	}
+	return id
 }
 
 func TestAttentionOmitsLivePromptThatRetiredBeforePromptProjection(t *testing.T) {

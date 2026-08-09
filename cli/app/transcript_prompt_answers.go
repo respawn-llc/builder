@@ -5,11 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
-	"core/shared/apicontract"
 	"core/shared/clientui"
-	"core/shared/rpcwire"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/textutil"
@@ -17,41 +14,41 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-var transcriptPromptAnswerRetryDelays = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second}
-
 type transcriptPromptAnswerer struct {
 	ctx                   context.Context
-	control               apicontract.PromptControlService
+	control               promptBatchAnswerer
 	connectionOutcomeSink func(error)
-	retryDelays           []time.Duration
-	retryWait             func(context.Context, time.Duration) error
+	nextGeneration        uint64
+}
+
+type promptBatchAnswerer interface {
+	AnswerPromptBatch(context.Context, serverapi.PromptAnswerBatchRequest) (serverapi.PromptAnswerBatchResponse, error)
 }
 
 type transcriptPromptKey struct {
 	sessionID runtimeids.SessionID
+	stepID    runtimeids.StepID
 	promptID  clientui.PromptID
 }
 
 type activePromptAnswerDelivery struct {
-	key       transcriptPromptKey
-	requestID runtimeids.RuntimeClientRequestID
-	cancel    context.CancelFunc
+	key        transcriptPromptKey
+	generation uint64
+	cancel     context.CancelFunc
 }
 
 type promptAnswerDeliveryResultMsg struct {
-	key       transcriptPromptKey
-	requestID runtimeids.RuntimeClientRequestID
-	err       error
+	key        transcriptPromptKey
+	generation uint64
+	err        error
 }
 
-func newTranscriptPromptAnswerer(ctx context.Context, control apicontract.PromptControlService) *transcriptPromptAnswerer {
+func newTranscriptPromptAnswerer(ctx context.Context, control promptBatchAnswerer) *transcriptPromptAnswerer {
 	if ctx == nil || control == nil {
 		return nil
 	}
 	return &transcriptPromptAnswerer{
 		ctx: ctx, control: control,
-		retryDelays: transcriptPromptAnswerRetryDelays,
-		retryWait:   rpcwire.WaitForRetry,
 	}
 }
 
@@ -80,29 +77,31 @@ func (a *transcriptPromptAnswerer) delivery(
 	if err != nil {
 		return nil, nil, err
 	}
-	requestID := runtimeids.NewRuntimeClientRequestID()
+	a.nextGeneration++
+	if a.nextGeneration == 0 {
+		a.nextGeneration++
+	}
+	generation := a.nextGeneration
 	deliveryCtx, cancel := context.WithCancel(a.ctx)
-	active, err := newActivePromptAnswerDelivery(key, requestID, cancel)
+	active, err := newActivePromptAnswerDelivery(key, generation, cancel)
 	if err != nil {
 		cancel()
 		return nil, nil, err
 	}
-	submit, err := a.submitter(prompt, clonePromptAnswer(answer), answerErr, requestID)
+	submit, err := a.submitter(prompt, clonePromptAnswer(answer), answerErr)
 	if err != nil {
 		cancel()
 		return nil, nil, err
 	}
-	delays := append([]time.Duration(nil), a.retryDelays...)
-	wait := a.retryWait
 	return active, func() tea.Msg {
-		err := retryTranscriptPromptAnswer(deliveryCtx, delays, wait, func() error {
-			err := submit(deliveryCtx)
+		err := context.Cause(deliveryCtx)
+		if err == nil {
+			err = submit(deliveryCtx)
 			if a.connectionOutcomeSink != nil {
 				a.connectionOutcomeSink(err)
 			}
-			return err
-		})
-		return promptAnswerDeliveryResultMsg{key: key, requestID: requestID, err: err}
+		}
+		return promptAnswerDeliveryResultMsg{key: key, generation: generation, err: err}
 	}, nil
 }
 
@@ -110,50 +109,38 @@ func (a *transcriptPromptAnswerer) submitter(
 	prompt clientui.TranscriptPrompt,
 	answer clientui.PromptAnswer,
 	answerErr error,
-	requestID runtimeids.RuntimeClientRequestID,
 ) (func(context.Context) error, error) {
-	if transcriptPromptIsApproval(prompt) {
-		request := serverapi.ApprovalAnswerRequest{
-			ClientRequestID: requestID.String(),
-			SessionID:       prompt.SessionID.String(),
-			ApprovalID:      string(prompt.PromptID),
-		}
-		switch {
-		case answerErr != nil:
-			request.ErrorMessage = answerErr.Error()
-		case answer.Approval != nil:
-			request.Decision = answer.Approval.Decision
-			commentary := answer.Approval.Commentary
-			request.Commentary = textutil.OptionalExactString(commentary)
-		default:
-			return nil, errors.New("approval response is required")
-		}
-		if err := request.Validate(); err != nil {
-			return nil, fmt.Errorf("validate approval answer: %w", err)
-		}
-		return func(ctx context.Context) error {
-			return a.control.AnswerApproval(ctx, request)
-		}, nil
+	var answerPayload serverapi.PromptAnswer
+	switch {
+	case answerErr != nil:
+		answerPayload = serverapi.DeclinedPromptAnswer()
+	case transcriptPromptIsApproval(prompt) && answer.Approval != nil:
+		answerPayload = serverapi.ApprovalPromptAnswer(serverapi.PromptApprovalAnswer{
+			Decision:   answer.Approval.Decision,
+			Commentary: textutil.OptionalExactString(answer.Approval.Commentary),
+		})
+	case transcriptPromptIsApproval(prompt):
+		return nil, errors.New("approval response is required")
+	case answer.Approval != nil:
+		return nil, errors.New("question response cannot carry approval answer")
+	default:
+		answerPayload = serverapi.QuestionPromptAnswer(serverapi.PromptQuestionAnswer{
+			SelectedOptionNumber: answer.SelectedOptionNumber,
+			Freeform:             textutil.OptionalExactString(answer.FreeformAnswer),
+		})
 	}
-	request := serverapi.AskAnswerRequest{
-		ClientRequestID:      requestID.String(),
-		SessionID:            prompt.SessionID.String(),
-		AskID:                string(prompt.PromptID),
-		Answer:               answer.Answer,
-		SelectedOptionNumber: answer.SelectedOptionNumber,
-		FreeformAnswer:       answer.FreeformAnswer,
+	entry, err := serverapi.PromptAnswerBatchEntryFrom(prompt.PromptID, answerPayload)
+	if err != nil {
+		return nil, fmt.Errorf("convert prompt answer: %w", err)
 	}
-	if answerErr != nil {
-		request.ErrorMessage = answerErr.Error()
-		request.Answer = ""
-		request.SelectedOptionNumber = nil
-		request.FreeformAnswer = ""
-	}
-	if err := request.Validate(); err != nil {
-		return nil, fmt.Errorf("validate ask answer: %w", err)
+	request := serverapi.PromptAnswerBatchRequest{
+		SessionID: prompt.SessionID,
+		StepID:    prompt.StepID,
+		Entries:   []serverapi.PromptAnswerBatchEntry{entry},
 	}
 	return func(ctx context.Context) error {
-		return a.control.AnswerAsk(ctx, request)
+		_, err := a.control.AnswerPromptBatch(ctx, request)
+		return err
 	}, nil
 }
 
@@ -161,28 +148,38 @@ func newTranscriptPromptKey(prompt clientui.TranscriptPrompt) (transcriptPromptK
 	if prompt.SessionID.IsZero() {
 		return transcriptPromptKey{}, errors.New("prompt answer session id is required")
 	}
+	if prompt.StepID.IsZero() {
+		return transcriptPromptKey{}, errors.New("prompt answer step id is required")
+	}
 	rawPromptID := string(prompt.PromptID)
 	if strings.TrimSpace(rawPromptID) == "" || strings.TrimSpace(rawPromptID) != rawPromptID {
 		return transcriptPromptKey{}, errors.New("prompt answer prompt id is required without surrounding whitespace")
 	}
-	return transcriptPromptKey{sessionID: prompt.SessionID, promptID: prompt.PromptID}, nil
+	return transcriptPromptKey{
+		sessionID: prompt.SessionID,
+		stepID:    prompt.StepID,
+		promptID:  prompt.PromptID,
+	}, nil
 }
 
 func newActivePromptAnswerDelivery(
 	key transcriptPromptKey,
-	requestID runtimeids.RuntimeClientRequestID,
+	generation uint64,
 	cancel context.CancelFunc,
 ) (*activePromptAnswerDelivery, error) {
 	if key.sessionID.IsZero() || strings.TrimSpace(string(key.promptID)) == "" {
 		return nil, errors.New("prompt answer delivery key is required")
 	}
-	if requestID.IsZero() {
-		return nil, errors.New("prompt answer delivery request id is required")
+	if key.stepID.IsZero() {
+		return nil, errors.New("prompt answer delivery step id is required")
+	}
+	if generation == 0 {
+		return nil, errors.New("prompt answer delivery generation is required")
 	}
 	if cancel == nil {
 		return nil, errors.New("prompt answer delivery cancellation is required")
 	}
-	return &activePromptAnswerDelivery{key: key, requestID: requestID, cancel: cancel}, nil
+	return &activePromptAnswerDelivery{key: key, generation: generation, cancel: cancel}, nil
 }
 
 func (d *activePromptAnswerDelivery) cancelPending() {
@@ -191,44 +188,8 @@ func (d *activePromptAnswerDelivery) cancelPending() {
 	}
 }
 
-func (d *activePromptAnswerDelivery) matches(key transcriptPromptKey, requestID runtimeids.RuntimeClientRequestID) bool {
-	return d != nil && d.key == key && d.requestID == requestID
-}
-
-func retryTranscriptPromptAnswer(
-	ctx context.Context,
-	delays []time.Duration,
-	wait func(context.Context, time.Duration) error,
-	submit func() error,
-) error {
-	submitIfActive := func() error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		return submit()
-	}
-	err := submitIfActive()
-	for _, delay := range delays {
-		if !shouldRetryTranscriptPromptAnswer(err) {
-			return err
-		}
-		if err := wait(ctx, delay); err != nil {
-			return err
-		}
-		err = submitIfActive()
-	}
-	return err
-}
-
-func shouldRetryTranscriptPromptAnswer(err error) bool {
-	if err == nil {
-		return false
-	}
-	return !errors.Is(err, context.Canceled) &&
-		!errors.Is(err, context.DeadlineExceeded) &&
-		!errors.Is(err, serverapi.ErrPromptNotFound) &&
-		!errors.Is(err, serverapi.ErrPromptAlreadyResolved) &&
-		!errors.Is(err, serverapi.ErrPromptUnsupported)
+func (d *activePromptAnswerDelivery) matches(key transcriptPromptKey, generation uint64) bool {
+	return d != nil && d.key == key && d.generation == generation
 }
 
 func clonePromptAnswer(answer clientui.PromptAnswer) clientui.PromptAnswer {

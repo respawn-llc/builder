@@ -1,7 +1,5 @@
-import type { QuestionAnswerInput } from "./clientInputs";
 import { parseRpcResponse } from "./clientParse";
 import { requireTaskBoundItems } from "./clientParse";
-import { compactJsonObject } from "./json";
 import type { ActivityPage, CommentPage, PendingAsk, TaskAttention, TaskComment, TaskDetail } from "./models";
 import {
   activityPageSchema,
@@ -80,30 +78,6 @@ export async function addComment(
       author,
     }),
   ).comment;
-}
-
-export async function answerQuestion(transport: RpcTransport, input: QuestionAnswerInput): Promise<void> {
-  const answer =
-    input.kind === "approval"
-      ? {
-          approval: {
-            decision: input.decision,
-            commentary: input.commentary,
-          },
-        }
-      : {
-          selected_option_number: input.selectedOptionNumber,
-          freeform_answer: input.freeformAnswer,
-        };
-  await transport.call(
-    "workflow.task.question.answer",
-    compactJsonObject({
-      client_request_id: input.clientRequestID,
-      task_id: input.taskID,
-      ask_id: input.askID,
-      ...answer,
-    }),
-  );
 }
 
 export async function listPendingAsks(

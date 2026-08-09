@@ -273,22 +273,24 @@ export const taskMovePreviewResponseSchema: z.ZodType<TaskMovePreviewResponse> =
         outcome: z.literal("transition"),
         transition: z
           .object({
-            choices: z.array(
-              z
-                .object({
-                  transition_key: z.string().trim().min(1),
-                  label: z.string().trim().min(1),
-                  source_node_display_name: z.string().trim().min(1),
-                  required_values: z.array(manualMoveRequiredValueSchema),
-                })
-                .strict()
-                .transform((value) => ({
-                  transitionKey: value.transition_key,
-                  label: value.label,
-                  sourceNodeDisplayName: value.source_node_display_name,
-                  requiredValues: value.required_values,
-                })),
-            ).min(1),
+            choices: z
+              .array(
+                z
+                  .object({
+                    transition_key: z.string().trim().min(1),
+                    label: z.string().trim().min(1),
+                    source_node_display_name: z.string().trim().min(1),
+                    required_values: z.array(manualMoveRequiredValueSchema),
+                  })
+                  .strict()
+                  .transform((value) => ({
+                    transitionKey: value.transition_key,
+                    label: value.label,
+                    sourceNodeDisplayName: value.source_node_display_name,
+                    requiredValues: value.required_values,
+                  })),
+              )
+              .min(1),
           })
           .strict(),
       })
@@ -590,8 +592,9 @@ export const pendingAskListSchema = z
       .array(
         z
           .object({
-            AskID: z.string(),
+            PromptID: z.string(),
             SessionID: z.string(),
+            StepID: z.string(),
             Question: z.string(),
             Suggestions: z.array(z.string()).optional().default([]),
             RecommendedOptionIndex: z.number().int().positive().nullable(),
@@ -610,8 +613,9 @@ export const pendingAskListSchema = z
             }
           })
           .transform((value): PendingAsk => ({
-            askID: value.AskID,
+            promptID: value.PromptID,
             sessionID: value.SessionID,
+            stepID: value.StepID,
             question: value.Question,
             suggestions: value.Suggestions,
             recommendedOptionIndex: value.RecommendedOptionIndex,

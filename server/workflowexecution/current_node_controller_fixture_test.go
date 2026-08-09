@@ -19,6 +19,7 @@ import (
 	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
+	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/sessioncontract"
@@ -594,6 +595,30 @@ func currentNodeQuestionAnswer(answer string) askquestion.AskQuestionAnswer {
 	}
 }
 
+func (f currentNodeQuestionFixture) answerPromptBatch(
+	ctx context.Context,
+	pending currentNodePendingPrompt,
+	stepID string,
+	promptID string,
+	answer askquestion.AskQuestionAnswer,
+) (sessionruntime.PromptAnswerOutcome, error) {
+	parsedStepID, err := runtimeids.ParseStepID(stepID)
+	if err != nil {
+		return "", err
+	}
+	results, err := f.authority.ResolvePromptBatch(ctx, pending.sessionID, parsedStepID, []sessionruntime.PromptAnswerCommand{{
+		PromptID: clientui.PromptID(promptID),
+		Payload:  sessionruntime.PromptQuestionAnswerCommand{Answer: answer},
+	}})
+	if err != nil {
+		return "", err
+	}
+	if len(results) != 1 {
+		return "", errors.New("one prompt answer result is required")
+	}
+	return results[0].Outcome, nil
+}
+
 type currentNodeQuestionLLMClient struct{}
 
 func (currentNodeQuestionLLMClient) Generate(context.Context, llm.Request) (llm.Response, error) {
@@ -606,20 +631,6 @@ func (currentNodeQuestionLLMClient) ProviderCapabilities(context.Context) (llm.P
 		SupportsResponsesAPI: true,
 		IsOpenAIFirstParty:   true,
 	}, nil
-}
-
-func (f currentNodeQuestionFixture) answerWorkflowQuestion(
-	ctx context.Context,
-	taskID workflow.TaskID,
-	askID string,
-	resolution askquestion.AskQuestionResolution,
-	submitErr error,
-) error {
-	acceptance, err := f.controller.AcceptWorkflowQuestion(ctx, taskID, askID, resolution, submitErr)
-	if err != nil {
-		return err
-	}
-	return acceptance.AwaitSuccessor(ctx)
 }
 
 func newCurrentNodeQuestionFixture(t *testing.T) currentNodeQuestionFixture {
@@ -748,17 +759,35 @@ func (f currentNodeQuestionFixture) startQuestionExecution(
 func (f currentNodeQuestionFixture) waitForPendingPrompt(t *testing.T, taskID workflow.TaskID, askID string) {
 	t.Helper()
 	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		_, err := f.authority.ResolvePendingWorkflowPrompt(taskID, askID)
-		return err == nil || errors.Is(err, sessionruntime.ErrWorkflowPromptAmbiguous)
+		return f.pendingPromptCount(taskID, askID) >= 1
 	}, "timed out waiting for workflow prompt %q on task %q", askID, taskID)
 }
 
 func (f currentNodeQuestionFixture) waitForAmbiguousPendingPrompt(t *testing.T, taskID workflow.TaskID, askID string) {
 	t.Helper()
 	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		_, err := f.authority.ResolvePendingWorkflowPrompt(taskID, askID)
-		return errors.Is(err, sessionruntime.ErrWorkflowPromptAmbiguous)
+		return f.pendingPromptCount(taskID, askID) >= 2
 	}, "timed out waiting for ambiguous workflow prompt %q on task %q", askID, taskID)
+}
+
+func (f currentNodeQuestionFixture) pendingPromptCount(taskID workflow.TaskID, promptID string) int {
+	snapshots, err := f.authority.CurrentWorkflowTaskExecutionSnapshots()
+	if err != nil {
+		return 0
+	}
+	snapshot, exists := snapshots[taskID]
+	if !exists {
+		return 0
+	}
+	count := 0
+	for _, execution := range snapshot.Executions {
+		for _, pending := range execution.PendingPrompts {
+			if pending.ID == promptID {
+				count++
+			}
+		}
+	}
+	return count
 }
 
 type controlledScriptRunner struct {

@@ -130,7 +130,8 @@ func TestLiveWatchReturnsInitialPendingQuestionWhenNoRunIsActive(t *testing.T) {
 	attention := registry.NewRuntimeRegistry().WithAttentionNotifications(attentionnotify.NewBroker())
 	service.WithLiveWatchPromptSources(
 		liveWatchAskViewStub{asks: []clientui.PendingAsk{{
-			AskID: "ask-1", SessionID: sessionID, Question: "Continue?", CreatedAt: time.Now().UTC(),
+			PromptID: "ask-1", SessionID: mustRuntimeControlSessionID(t, sessionID),
+			StepID: mustRuntimeControlStepID(t), Question: "Continue?", CreatedAt: time.Now().UTC(),
 		}}},
 		liveWatchApprovalViewStub{},
 		attention,
@@ -142,7 +143,7 @@ func TestLiveWatchReturnsInitialPendingQuestionWhenNoRunIsActive(t *testing.T) {
 	}
 	if response.Outcome.Kind != serverapi.RuntimeLiveWatchQuestion ||
 		response.Outcome.Question == nil || response.Outcome.Question.Ask == nil ||
-		response.Outcome.Question.Ask.AskID != "ask-1" {
+		response.Outcome.Question.Ask.PromptID != "ask-1" {
 		t.Fatalf("LiveWatch response = %+v", response)
 	}
 }
@@ -216,7 +217,8 @@ func TestLiveWatchPromptWakeWinsWhileRunIsBlocked(t *testing.T) {
 
 	now := time.Now().UTC()
 	askView.set(clientui.PendingAsk{
-		AskID: "ask-1", SessionID: store.Meta().SessionID, Question: "Continue?", CreatedAt: now,
+		PromptID: "ask-1", SessionID: mustRuntimeControlSessionID(t, store.Meta().SessionID),
+		StepID: mustRuntimeControlStepID(t), Question: "Continue?", CreatedAt: now,
 	})
 	if err := broker.PublishPending(
 		attentionnotify.RoutingScope{Kind: attentionnotify.RoutingSessionPrompt, SessionID: store.Meta().SessionID},
@@ -248,7 +250,7 @@ func TestLiveWatchPromptWakeWinsWhileRunIsBlocked(t *testing.T) {
 	if response.Outcome.Kind != serverapi.RuntimeLiveWatchQuestion ||
 		response.Outcome.Question == nil ||
 		response.Outcome.Question.Ask == nil ||
-		response.Outcome.Question.Ask.AskID != "ask-1" {
+		response.Outcome.Question.Ask.PromptID != "ask-1" {
 		t.Fatalf("LiveWatch outcome = %+v", response.Outcome)
 	}
 	if err := engine.Interrupt(); err != nil {
@@ -259,6 +261,15 @@ func TestLiveWatchPromptWakeWinsWhileRunIsBlocked(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("live run did not stop after prompt wake")
 	}
+}
+
+func mustRuntimeControlSessionID(t *testing.T, raw string) runtimeids.SessionID {
+	t.Helper()
+	id, err := runtimeids.ParseSessionID(raw)
+	if err != nil {
+		t.Fatalf("ParseSessionID: %v", err)
+	}
+	return id
 }
 
 func TestLiveWatchCancellationWhileRunIsBlocked(t *testing.T) {

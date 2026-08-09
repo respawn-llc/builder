@@ -576,10 +576,6 @@ func (c *Remote) ListWorkflowTaskAttention(ctx context.Context, req serverapi.Wo
 	return validateWorkflowTaskBoundResponse("list workflow task attention", strings.TrimSpace(req.TaskID), response, err)
 }
 
-func (c *Remote) AnswerWorkflowTaskQuestion(ctx context.Context, req serverapi.WorkflowTaskQuestionAnswerRequest) error {
-	return c.callUnscoped(ctx, protocol.MethodWorkflowTaskQuestionAnswer, req, &struct{}{})
-}
-
 func (c *Remote) AddWorkflowTaskComment(ctx context.Context, req serverapi.WorkflowTaskCommentAddRequest) (serverapi.WorkflowTaskCommentAddResponse, error) {
 	return callUnscopedRPC[serverapi.WorkflowTaskCommentAddRequest, serverapi.WorkflowTaskCommentAddResponse](c, ctx, protocol.MethodWorkflowTaskCommentAdd, req)
 }
@@ -919,10 +915,6 @@ func (c *Remote) ListPendingAsksBySession(ctx context.Context, req serverapi.Ask
 	return resp, c.call(ctx, protocol.MethodAskListPending, req, &resp)
 }
 
-func (c *Remote) AnswerAsk(ctx context.Context, req serverapi.AskAnswerRequest) error {
-	return c.call(ctx, protocol.MethodAskAnswer, req, nil)
-}
-
 func (c *Remote) AnswerPromptBatch(ctx context.Context, req serverapi.PromptAnswerBatchRequest) (serverapi.PromptAnswerBatchResponse, error) {
 	response, err := callControlRPC[serverapi.PromptAnswerBatchRequest, serverapi.PromptAnswerBatchResponse](c, ctx, protocol.MethodPromptAnswerBatch, req)
 	if err != nil {
@@ -937,10 +929,6 @@ func (c *Remote) AnswerPromptBatch(ctx context.Context, req serverapi.PromptAnsw
 func (c *Remote) ListPendingApprovalsBySession(ctx context.Context, req serverapi.ApprovalListPendingBySessionRequest) (serverapi.ApprovalListPendingBySessionResponse, error) {
 	var resp serverapi.ApprovalListPendingBySessionResponse
 	return resp, c.call(ctx, protocol.MethodApprovalListPending, req, &resp)
-}
-
-func (c *Remote) AnswerApproval(ctx context.Context, req serverapi.ApprovalAnswerRequest) error {
-	return c.call(ctx, protocol.MethodApprovalAnswer, req, nil)
 }
 
 func (c *Remote) ensureOpen() error {

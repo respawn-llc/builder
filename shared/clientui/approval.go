@@ -3,6 +3,7 @@ package clientui
 import (
 	"time"
 
+	"core/shared/runtimeids"
 	"core/shared/sessioncontract"
 )
 
@@ -20,9 +21,10 @@ type ApprovalOption struct {
 }
 
 type PendingApproval struct {
-	ApprovalID string
-	SessionID  string
-	Question   string
-	Options    []ApprovalOption
-	CreatedAt  time.Time
+	PromptID  PromptID
+	SessionID runtimeids.SessionID
+	StepID    runtimeids.StepID
+	Question  string
+	Options   []ApprovalOption
+	CreatedAt time.Time
 }

@@ -26,8 +26,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 type configuredDaemonFixture struct {
@@ -493,13 +491,16 @@ func TestRemoteInteractiveRuntimeAnswersPromptsFromAnyAttachedClientAcrossWorksp
 	}
 	runtimeClientsB := fixture.serverB.RuntimeAttachmentClients()
 
-	if err := runtimeClientsB.PromptControl.AnswerAsk(context.Background(), serverapi.AskAnswerRequest{
-		ClientRequestID: uuid.NewString(),
-		SessionID:       fixture.planA.SessionID,
-		AskID:           "ask-race-1",
-		Answer:          "answer from client B",
+	askAnswer := "answer from client B"
+	if _, err := runtimeClientsB.PromptControl.AnswerPromptBatch(context.Background(), serverapi.PromptAnswerBatchRequest{
+		SessionID: askPrompt.SessionID,
+		StepID:    askPrompt.StepID,
+		Entries: []serverapi.PromptAnswerBatchEntry{{
+			PromptID:       askPrompt.PromptID,
+			QuestionAnswer: &serverapi.PromptQuestionAnswer{Freeform: &askAnswer},
+		}},
 	}); err != nil {
-		t.Fatalf("AnswerAsk from attached client B: %v", err)
+		t.Fatalf("AnswerPromptBatch Question from attached client B: %v", err)
 	}
 
 	approvalPrompt := waitForRemoteTranscriptPrompt(t, fixture.runtimePlanA.Wiring.eventDispatcher.transcriptEvents, "", submissionFailed)
@@ -508,14 +509,18 @@ func TestRemoteInteractiveRuntimeAnswersPromptsFromAnyAttachedClientAcrossWorksp
 	}
 
 	commentary := "approved by client B"
-	if err := runtimeClientsB.PromptControl.AnswerApproval(context.Background(), serverapi.ApprovalAnswerRequest{
-		ClientRequestID: uuid.NewString(),
-		SessionID:       fixture.planA.SessionID,
-		ApprovalID:      string(approvalPrompt.PromptID),
-		Decision:        clientui.ApprovalDecisionAllowOnce,
-		Commentary:      &commentary,
+	if _, err := runtimeClientsB.PromptControl.AnswerPromptBatch(context.Background(), serverapi.PromptAnswerBatchRequest{
+		SessionID: approvalPrompt.SessionID,
+		StepID:    approvalPrompt.StepID,
+		Entries: []serverapi.PromptAnswerBatchEntry{{
+			PromptID: approvalPrompt.PromptID,
+			ApprovalAnswer: &serverapi.PromptApprovalAnswer{
+				Decision:   clientui.ApprovalDecisionAllowOnce,
+				Commentary: &commentary,
+			},
+		}},
 	}); err != nil {
-		t.Fatalf("AnswerApproval from attached client B: %v", err)
+		t.Fatalf("AnswerPromptBatch Approval from attached client B: %v", err)
 	}
 
 	select {
