@@ -93,6 +93,8 @@ export type {
   TaskComment,
   TaskAttention,
   TaskCommentAuthorKind,
+  CommentPage,
+  OffsetPage,
   TaskDetail,
   TaskDependencies,
   TaskDependencyAddAvailability,

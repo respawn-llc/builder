@@ -299,8 +299,7 @@ export const activityResponse = {
       },
     },
   ],
-  next_page_token: "",
-  generated_at_unix_ms: 3,
+  next_offset: null,
 };
 
 export const pendingAskResponse = {
@@ -328,7 +327,7 @@ export const commentAddResponse = {
 };
 
 export const commentListResponse = {
-  comments: [
+  items: [
     {
       id: "comment-1",
       task_id: "task-1",
@@ -338,11 +337,11 @@ export const commentListResponse = {
       updated_at_unix_ms: 1,
     },
   ],
-  next_page_token: "",
+  next_offset: null,
 };
 
 export const firstCommentListResponse = {
-  comments: [
+  items: [
     {
       id: "comment-page-1",
       task_id: "task-1",
@@ -352,11 +351,11 @@ export const firstCommentListResponse = {
       updated_at_unix_ms: 5,
     },
   ],
-  next_page_token: "cursor-2",
+  next_offset: 50,
 };
 
 export const secondCommentListResponse = {
-  comments: [
+  items: [
     {
       id: "comment-page-2",
       task_id: "task-1",
@@ -366,7 +365,7 @@ export const secondCommentListResponse = {
       updated_at_unix_ms: 6,
     },
   ],
-  next_page_token: "",
+  next_offset: null,
 };
 
 export const taskUpdateResponse = {

@@ -666,11 +666,6 @@ export type TaskComment = Readonly<{
   updatedAt: number;
 }>;
 
-export type CommentPage = Readonly<{
-  comments: readonly TaskComment[];
-  nextOffset: number | null;
-}>;
-
 export type TaskCurrentNode = Readonly<{
   nodeID: string;
   transitionBranchKey: string | null;
@@ -734,8 +729,11 @@ export type SessionStartedActivityItem = Readonly<{
 
 export type ActivityItem = CommentActivityItem | SessionStartedActivityItem;
 
-export type ActivityPage = Readonly<{
-  items: readonly ActivityItem[];
-  nextPageToken: string;
-  generatedAt: number;
+export type OffsetPage<T> = Readonly<{
+  items: readonly T[];
+  nextOffset: number | null;
 }>;
+
+export type CommentPage = OffsetPage<TaskComment>;
+
+export type ActivityPage = OffsetPage<ActivityItem>;

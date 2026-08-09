@@ -149,8 +149,8 @@ export const startupRoutes: readonly FakeRoute[] = [
   {
     method: "workflow.task.comment.list",
     result: {
-      comments: [],
-      next_page_token: "",
+      items: [],
+      next_offset: null,
     },
   },
   {

@@ -372,8 +372,7 @@ describe("task activity schema", () => {
     expect(
       activityPageSchema.parse({
         items: [commentActivity, sessionStartedActivity],
-        next_page_token: "",
-        generated_at_unix_ms: 2,
+        next_offset: 50,
       }),
     ).toMatchObject({
       items: [
@@ -395,10 +394,19 @@ describe("task activity schema", () => {
       expect(() =>
         activityPageSchema.parse({
           items: [item],
-          next_page_token: "",
-          generated_at_unix_ms: 2,
+          next_offset: null,
         }),
       ).toThrow();
     }
+  });
+
+  it("rejects Activity cursor and generated-at fields", () => {
+    expect(() =>
+      activityPageSchema.parse({
+        items: [],
+        next_page_token: "legacy",
+        generated_at_unix_ms: 2,
+      }),
+    ).toThrow();
   });
 });

@@ -81,3 +81,79 @@ func TestWorkflowListPaginationJSONContractUsesNullableOffsets(t *testing.T) {
 		t.Fatalf("absent next offset encoded as a value: %s", absentJSON)
 	}
 }
+
+func TestWorkflowTaskOffsetPageJSONContractUsesItemsAndNextOffset(t *testing.T) {
+	offset := 25
+	limit := 50
+	request := WorkflowTaskOffsetPageRequest{TaskID: "task-1", Offset: &offset, Limit: &limit}
+	nextOffset := 75
+	response := WorkflowOffsetPage[int]{
+		Items:      []int{1, 2},
+		NextOffset: &nextOffset,
+	}
+
+	requestJSON, requestShape := marshalWorkflowJSON[map[string]any](t, request)
+	if requestShape["task_id"] != "task-1" ||
+		requestShape["offset"] != float64(offset) ||
+		requestShape["limit"] != float64(limit) {
+		t.Fatalf("request JSON = %s", requestJSON)
+	}
+
+	responseJSON, responseShape := marshalWorkflowJSON[map[string]any](t, response)
+	if len(responseShape["items"].([]any)) != 2 || responseShape["next_offset"] != float64(nextOffset) {
+		t.Fatalf("response JSON = %s", responseJSON)
+	}
+
+	emptyJSON, emptyShape := marshalWorkflowJSON[map[string]any](t, WorkflowOffsetPage[int]{})
+	if _, exists := emptyShape["comments"]; exists {
+		t.Fatalf("response retains endpoint-specific comments field: %s", emptyJSON)
+	}
+	if _, exists := emptyShape["next_offset"]; exists {
+		t.Fatalf("empty response encoded a next offset: %s", emptyJSON)
+	}
+
+	commentResponseJSON, commentResponseShape := marshalWorkflowJSON[map[string]any](t, WorkflowTaskCommentListResponse{
+		WorkflowOffsetPage: WorkflowOffsetPage[WorkflowTaskComment]{
+			Items: []WorkflowTaskComment{{ID: "comment-1"}},
+		},
+	})
+	if _, exists := commentResponseShape["comments"]; exists {
+		t.Fatalf("comment response retains old collection key: %s", commentResponseJSON)
+	}
+	if len(commentResponseShape["items"].([]any)) != 1 {
+		t.Fatalf("comment response = %s", commentResponseJSON)
+	}
+
+	activityResponseJSON, activityResponseShape := marshalWorkflowJSON[map[string]any](t, WorkflowTaskActivityListResponse{
+		WorkflowOffsetPage: WorkflowOffsetPage[WorkflowTaskActivityItem]{
+			Items: []WorkflowTaskActivityItem{{
+				Type:   "session_started",
+				TaskID: "task-1",
+				SessionStarted: &WorkflowTaskSessionStarted{
+					SessionID: "session-1",
+					Name:      "Session",
+				},
+			}},
+		},
+	})
+	if _, exists := activityResponseShape["next_page_token"]; exists {
+		t.Fatalf("activity response retains next page token: %s", activityResponseJSON)
+	}
+	if _, exists := activityResponseShape["generated_at_unix_ms"]; exists {
+		t.Fatalf("activity response retains generated timestamp: %s", activityResponseJSON)
+	}
+}
+
+func TestFinalizeWorkflowOffsetPageTrimsLookaheadAndCalculatesContinuation(t *testing.T) {
+	nextOffset := 2
+	page := FinalizeWorkflowOffsetPage(WorkflowOffsetWindow{Offset: 0, Limit: 2}, []string{"a", "b", "c"})
+	if len(page.Items) != 2 || page.Items[0] != "a" || page.Items[1] != "b" ||
+		page.NextOffset == nil || *page.NextOffset != nextOffset {
+		t.Fatalf("page = %+v", page)
+	}
+
+	terminal := FinalizeWorkflowOffsetPage(WorkflowOffsetWindow{Offset: 2, Limit: 2}, []string{"c"})
+	if len(terminal.Items) != 1 || terminal.NextOffset != nil {
+		t.Fatalf("terminal page = %+v", terminal)
+	}
+}

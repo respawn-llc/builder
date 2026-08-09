@@ -43,6 +43,7 @@ describe("Task Detail retained sidebar state", () => {
     if (latest === undefined) throw new Error("Expected Task Detail retained-state capture.");
     expect(latest()).toEqual(
       expect.objectContaining({
+        base: { body: "Need operator input", title: "Resolve blocker" },
         descriptionPresentation: { editing: false, expanded: true },
         draft: { body: "Unsaved body", title: "Unsaved title" },
         editingComment: { body: "Unsaved edited comment", id: "comment-1" },
