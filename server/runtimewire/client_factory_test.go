@@ -9,6 +9,7 @@ import (
 	"core/internal/testharness/pty/blackbox"
 	"core/server/llm"
 	"core/server/runtime"
+	"core/server/runtimecommand"
 	"core/server/session"
 	"core/shared/config"
 	"core/shared/textutil"
@@ -43,7 +44,7 @@ func TestRuntimeClientFactoryCreatesMainAndReviewerClients(t *testing.T) {
 		nil,
 		nil,
 		nil,
-		RuntimeWiringOptions{FilesystemContext: runtimeWireFilesystemContext(t, root), ClientFactory: factory},
+		clientFactoryRuntimeWiringOptions(t, RuntimeWiringOptions{FilesystemContext: runtimeWireFilesystemContext(t, root), ClientFactory: factory}),
 	)
 	if err != nil {
 		t.Fatalf("NewRuntimeWiringWithBackground: %v", err)
@@ -105,11 +106,11 @@ func TestReviewerRuntimeClientFactoryCanPairWithDirectMainClient(t *testing.T) {
 		nil,
 		nil,
 		nil,
-		RuntimeWiringOptions{
+		clientFactoryRuntimeWiringOptions(t, RuntimeWiringOptions{
 			FilesystemContext:     runtimeWireFilesystemContext(t, root),
 			Client:                &runtimewireCaptureClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok"), Phase: textutil.Value(llm.MessagePhaseFinal)}, Usage: llm.Usage{WindowTokens: 200000}}}},
 			ReviewerClientFactory: factory,
-		},
+		}),
 	)
 	if err != nil {
 		t.Fatalf("NewRuntimeWiringWithBackground: %v", err)
@@ -146,7 +147,7 @@ func TestRuntimeClientFactoryReceivesActivationContext(t *testing.T) {
 		nil,
 		nil,
 		nil,
-		RuntimeWiringOptions{FilesystemContext: runtimeWireFilesystemContext(t, root), Context: ctx, ClientFactory: factory},
+		clientFactoryRuntimeWiringOptions(t, RuntimeWiringOptions{FilesystemContext: runtimeWireFilesystemContext(t, root), Context: ctx, ClientFactory: factory}),
 	)
 	if err != nil {
 		t.Fatalf("NewRuntimeWiringWithBackground: %v", err)
@@ -262,7 +263,7 @@ func TestResumedMainClientUsesLockedProviderVerbosityForBothRequestPaths(t *test
 		nil,
 		nil,
 		nil,
-		RuntimeWiringOptions{FilesystemContext: runtimeWireFilesystemContext(t, root), ClientFactory: factory},
+		clientFactoryRuntimeWiringOptions(t, RuntimeWiringOptions{FilesystemContext: runtimeWireFilesystemContext(t, root), ClientFactory: factory}),
 	)
 	if err != nil {
 		t.Fatalf("NewRuntimeWiringWithBackground: %v", err)
@@ -289,4 +290,17 @@ func TestResumedMainClientUsesLockedProviderVerbosityForBothRequestPaths(t *test
 			t.Fatalf("%s request verbosity = %q, %v", call.Route, payload.Text["verbosity"], err)
 		}
 	}
+}
+
+func clientFactoryRuntimeWiringOptions(
+	t *testing.T,
+	options RuntimeWiringOptions,
+) RuntimeWiringOptions {
+	t.Helper()
+	if options.RuntimeEvents != nil {
+		return options
+	}
+	options.RuntimeEvents = runtimecommand.NewQueue(t.Context())
+	t.Cleanup(options.RuntimeEvents.Close)
+	return options
 }

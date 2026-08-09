@@ -9,7 +9,6 @@ import (
 	"strings"
 	"sync"
 
-	runtimeengine "core/server/runtime"
 	"core/server/session"
 	"core/server/sessionruntime"
 	askquestion "core/server/tools"
@@ -265,22 +264,14 @@ func (c *CurrentNodeController) CompleteSessionCurrentNode(
 	if err := origin.Validate(); err != nil {
 		return workflowstore.CurrentNodeCompletionResult{}, err
 	}
-	var acceptance *runtimeengine.WorkflowCompletionAcceptance
-	err := c.authority.WithCurrentRuntime(
+	acceptance, err := c.authority.AcceptWorkflowCompletion(
 		ctx,
 		sessionID,
-		func(callbackCtx context.Context, engine *runtimeengine.Engine) error {
-			var acceptErr error
-			acceptance, acceptErr = engine.AcceptWorkflowCompletion(
-				callbackCtx,
-				origin,
-				workflowruntime.ParsedCompletion{
-					TransitionID: transitionID,
-					OutputValues: outputValues,
-					Commentary:   commentary,
-				},
-			)
-			return acceptErr
+		origin,
+		workflowruntime.ParsedCompletion{
+			TransitionID: transitionID,
+			OutputValues: outputValues,
+			Commentary:   commentary,
 		},
 	)
 	if err != nil {
