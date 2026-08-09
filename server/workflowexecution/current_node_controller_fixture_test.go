@@ -140,6 +140,33 @@ func (s *lateCommitCurrentNodeAssignmentSteer) Wait(ctx context.Context) (sessio
 	}
 }
 
+type blockingCurrentNodeAssignmentPreparation struct {
+	reference workflow.CurrentNodeReference
+	started   chan struct{}
+	release   chan struct{}
+	once      sync.Once
+}
+
+func (s *blockingCurrentNodeAssignmentPreparation) SteerCurrentNodeAssignment(
+	ctx context.Context,
+	reference workflow.CurrentNodeReference,
+) (CurrentNodeAssignmentSteer, error) {
+	if !reference.Equal(s.reference) {
+		return completedCurrentNodeAssignmentSteer{
+			receipt: session.CommitReceipt{Committed: true},
+		}, nil
+	}
+	s.once.Do(func() { close(s.started) })
+	select {
+	case <-s.release:
+		return completedCurrentNodeAssignmentSteer{
+			receipt: session.CommitReceipt{Committed: true},
+		}, nil
+	case <-ctx.Done():
+		return nil, context.Cause(ctx)
+	}
+}
+
 type recordingCurrentNodeAssignmentSteerer struct {
 	mu          sync.Mutex
 	steered     []workflow.CurrentNodeReference

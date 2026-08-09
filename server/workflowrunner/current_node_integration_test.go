@@ -353,8 +353,9 @@ func (f *currentNodeRunnerFixture) waitForCurrentNode(t *testing.T, taskID workf
 func (f *currentNodeRunnerFixture) waitForControllerCurrentNode(t *testing.T, reference workflow.CurrentNodeReference) {
 	t.Helper()
 	deadline := time.Now().Add(currentNodeRunnerWait)
+	var snapshot workflowexecution.CurrentNodeExecutionSnapshot
 	for time.Now().Before(deadline) {
-		snapshot := f.controller.Snapshot()
+		snapshot = f.controller.Snapshot()
 		for _, gate := range snapshot.Gates {
 			if gate.CurrentNode.Equal(reference) {
 				return
@@ -367,7 +368,15 @@ func (f *currentNodeRunnerFixture) waitForControllerCurrentNode(t *testing.T, re
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("Current Node %v never reached controller admission or live state", reference)
+	nodes, listErr := f.store.ListCurrentNodes(context.Background(), reference.TaskID)
+	t.Fatalf(
+		"Current Node %v never reached controller admission or live state; controller snapshot = %+v; controller error = %v; durable nodes = %+v; list error = %v",
+		reference,
+		snapshot,
+		f.controller.EnsureTaskQuiescent(reference.TaskID),
+		nodes,
+		listErr,
+	)
 }
 
 func (f *currentNodeRunnerFixture) waitForControllerCurrentNodeFinalized(t *testing.T, reference workflow.CurrentNodeReference) {

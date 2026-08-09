@@ -192,6 +192,9 @@ func (e *execution) finish(result ExecutionResult, runErr error, stopErr error) 
 		executionErr = errors.Join(executionErr, abortErr)
 	}
 	var closeErr error
+	if _, hasWorkflow := e.scope.Workflow(); hasWorkflow && authority.executionFinalized != nil {
+		authority.executionFinalized.ExecutionFinalized(e.scope)
+	}
 	if e.resource != nil {
 		if e.resource.eventBridge != nil {
 			result.DroppedRuntimeEvents = e.resource.eventBridge.Dropped.Load()
@@ -226,9 +229,6 @@ func (e *execution) finish(result ExecutionResult, runErr error, stopErr error) 
 	e.runErr = finalErr
 	e.stopErr = errors.Join(stopErr, cleanupErr, closeErr, abortErr)
 	e.resultMu.Unlock()
-	if _, hasWorkflow := e.scope.Workflow(); hasWorkflow && authority.executionFinalized != nil {
-		authority.executionFinalized.ExecutionFinalized(e.scope)
-	}
 	close(e.done)
 }
 

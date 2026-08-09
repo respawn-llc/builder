@@ -366,7 +366,7 @@ func (c *CurrentNodeController) completeLiveCurrentNode(ctx context.Context, req
 		if !ok {
 			return sessionruntime.ErrExecutionNoLongerLive
 		}
-		if err := c.authority.WithExactExecutions([]sessionruntime.ExecutionHandle{handle}, func() error {
+		return c.authority.WithExactExecutions([]sessionruntime.ExecutionHandle{handle}, func() error {
 			c.mu.Lock()
 			exact, stillLive := c.live[req.ScopeID]
 			if !stillLive || !exact.reference.Equal(live.reference) {
@@ -428,18 +428,26 @@ func (c *CurrentNodeController) completeLiveCurrentNode(ctx context.Context, req
 			c.heldStarts[req.ScopeID] = starts
 			c.mu.Unlock()
 			return nil
-		}); err != nil {
-			exactErr := err
-			resolveErr := c.resolvePendingCurrentNodeAssignmentSteers(ctx, starts, pending)
-			return errors.Join(exactErr, resolveErr)
-		}
-		if completed.PostCompletionEligible {
-			return nil
-		}
-		return c.resolvePendingCurrentNodeAssignmentSteers(ctx, starts, pending)
+		})
 	})
-	if err != nil {
-		return workflowstore.CurrentNodeCompletionResult{}, err
+	if completed.PostCompletionEligible {
+		if err != nil {
+			return workflowstore.CurrentNodeCompletionResult{}, err
+		}
+		return completed, nil
+	}
+	preparationCtx := ctx
+	cancelPreparation := func() {}
+	stopControllerCancellation := func() bool { return false }
+	if len(pending) != 0 {
+		preparationCtx, cancelPreparation = context.WithCancel(context.WithoutCancel(ctx))
+		stopControllerCancellation = context.AfterFunc(c.workerContext, cancelPreparation)
+	}
+	resolveErr := c.resolvePendingCurrentNodeAssignmentSteers(preparationCtx, starts, pending)
+	stopControllerCancellation()
+	cancelPreparation()
+	if err != nil || resolveErr != nil {
+		return workflowstore.CurrentNodeCompletionResult{}, errors.Join(err, resolveErr)
 	}
 	return completed, nil
 }
@@ -844,7 +852,7 @@ func (c *CurrentNodeController) ExecutionFinalized(scope sessionruntime.Executio
 		}
 		return
 	}
-	waitCtx, cancel := context.WithTimeout(context.Background(), interruptCleanupTimeout)
+	waitCtx, cancel := context.WithTimeout(c.workerContext, interruptCleanupTimeout)
 	defer cancel()
 	needsAssignmentSteer := false
 	for _, start := range starts {
@@ -870,7 +878,19 @@ func (c *CurrentNodeController) ExecutionFinalized(scope sessionruntime.Executio
 		c.handleCurrentNodeStartFailures(outcome.committed, false, outcome.err)
 		return
 	}
+	for index := range starts {
+		if starts[index].done == nil {
+			starts[index].done = make(chan struct{})
+		}
+	}
 	c.enqueueStarts(starts)
+	for _, start := range starts {
+		select {
+		case <-start.done:
+		case <-waitCtx.Done():
+			return
+		}
+	}
 	if len(starts) == 0 {
 		c.wakeAdmissionWorker()
 	}
