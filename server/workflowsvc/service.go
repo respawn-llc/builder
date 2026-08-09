@@ -61,6 +61,7 @@ type initiatingActionTargetPreflight struct {
 	selection              workflow.ExecutionTargetSelection
 	explicit               bool
 	initialBranchAssertion *string
+	pendingBranchReplaced  bool
 	unavailable            initiatingActionTargetUnavailable
 }
 
@@ -1063,13 +1064,17 @@ func (s *Service) preflightInitiatingActionTarget(
 				return initiatingActionTargetPreflight{}, errExecutionTargetInfrastructureRequired
 			}
 		}
-		branchAssertion, err := s.preflightInitialTaskBranch(ctx, targetContext, workflow.ExecutionTargetSelection{
+		branchAssertion, pendingBranchReplaced, err := s.preflightInitialTaskBranch(ctx, targetContext, workflow.ExecutionTargetSelection{
 			Mode: targetContext.Task.ExecutionTarget.Mode,
 		}, requestedBranchName)
 		if err != nil {
 			return initiatingActionTargetPreflight{}, err
 		}
-		return initiatingActionTargetPreflight{context: targetContext, initialBranchAssertion: branchAssertion}, nil
+		return initiatingActionTargetPreflight{
+			context:                targetContext,
+			initialBranchAssertion: branchAssertion,
+			pendingBranchReplaced:  pendingBranchReplaced,
+		}, nil
 	}
 	selection := workflow.ExecutionTargetSelection{
 		Mode:      targetContext.Policy.Mode,
@@ -1092,7 +1097,7 @@ func (s *Service) preflightInitiatingActionTarget(
 			return initiatingActionTargetPreflight{}, errExecutionTargetInfrastructureRequired
 		}
 	}
-	branchAssertion, err := s.preflightInitialTaskBranch(ctx, targetContext, selection, requestedBranchName)
+	branchAssertion, pendingBranchReplaced, err := s.preflightInitialTaskBranch(ctx, targetContext, selection, requestedBranchName)
 	if err != nil {
 		return initiatingActionTargetPreflight{}, err
 	}
@@ -1101,6 +1106,7 @@ func (s *Service) preflightInitiatingActionTarget(
 		selection:              selection,
 		explicit:               explicit != nil,
 		initialBranchAssertion: branchAssertion,
+		pendingBranchReplaced:  pendingBranchReplaced,
 	}, nil
 }
 
@@ -1109,44 +1115,45 @@ func (s *Service) preflightInitialTaskBranch(
 	targetContext workflowstore.TaskExecutionTargetContext,
 	selection workflow.ExecutionTargetSelection,
 	requestedBranchName *string,
-) (*string, error) {
+) (*string, bool, error) {
 	if selection.Mode == workflow.ExecutionTargetModeNone {
 		if requestedBranchName != nil {
-			return nil, &serverapi.WorkflowTaskInitialBranchError{
+			return nil, false, &serverapi.WorkflowTaskInitialBranchError{
 				Reason:     serverapi.WorkflowTaskInitialBranchErrorReasonNoManagedTarget,
 				BranchName: *requestedBranchName,
 			}
 		}
-		return nil, nil
+		return nil, false, nil
 	}
 	if targetContext.Task.ManagedWorktreeID != "" {
-		return requestedBranchName, nil
+		return requestedBranchName, false, nil
 	}
 	if targetContext.Task.ExecutionTarget != nil {
 		if requestedBranchName != nil {
-			return nil, operationCannotCreateInitialWorktreeError(*requestedBranchName)
+			return nil, false, operationCannotCreateInitialWorktreeError(*requestedBranchName)
 		}
-		return nil, nil
+		return nil, false, nil
 	}
 	branchName := requestedBranchName
 	if branchName == nil {
 		branchName = targetContext.Task.PendingInitialManagedBranchName
 	}
 	if branchName == nil {
-		return nil, fmt.Errorf("task %q has no pending initial managed branch", targetContext.Task.ID)
+		return nil, false, fmt.Errorf("task %q has no pending initial managed branch", targetContext.Task.ID)
 	}
 	if err := s.executionTargets.InspectProspectiveInitialTaskBranch(ctx, InitialTaskBranchInspectionRequest{
 		SourceWorkspaceRoot: targetContext.SourceWorkspaceRoot,
 		BranchName:          *branchName,
 	}); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if requestedBranchName != nil && targetContext.Task.ExecutionTarget == nil {
 		if err := s.store.ReplacePendingInitialManagedBranchName(ctx, targetContext.Task.ID, *requestedBranchName); err != nil {
-			return nil, err
+			return nil, false, err
 		}
+		return requestedBranchName, true, nil
 	}
-	return requestedBranchName, nil
+	return requestedBranchName, false, nil
 }
 
 func operationCannotCreateInitialWorktreeError(branchName string) *serverapi.WorkflowTaskInitialBranchError {
@@ -1767,6 +1774,9 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 	})
 	var noOpBeforeInterrupt *manualMoveNoOpBeforeInterruptError
 	if errors.As(err, &noOpBeforeInterrupt) {
+		if targetPreflight.pendingBranchReplaced {
+			return serverapi.WorkflowTaskMoveResponse{}, workflowexecution.ErrManualMoveLifecycleConflict
+		}
 		return serverapi.WorkflowTaskMoveResponse{
 			Outcome: serverapi.WorkflowExecutionTargetActionOutcomeNoOp,
 			NoOp: &serverapi.WorkflowTaskMoveNoOp{
@@ -1799,6 +1809,9 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 		return serverapi.WorkflowTaskMoveResponse{}, err
 	}
 	if moved.Outcome == workflowstore.ManualMoveResultOutcomeNoOp {
+		if targetPreflight.pendingBranchReplaced {
+			return serverapi.WorkflowTaskMoveResponse{}, workflowexecution.ErrManualMoveLifecycleConflict
+		}
 		return serverapi.WorkflowTaskMoveResponse{
 			Outcome: serverapi.WorkflowExecutionTargetActionOutcomeNoOp,
 			NoOp: &serverapi.WorkflowTaskMoveNoOp{

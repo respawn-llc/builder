@@ -1,11 +1,17 @@
 package workflowsvc
 
 import (
+	"database/sql"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"core/server/metadata"
+	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
+	"core/server/workflowexecution"
 	"core/server/workflowstore"
 	"core/shared/serverapi"
 )
@@ -148,5 +154,125 @@ func TestServiceManualMoveCarriesBranchAssertionAndDoesNotApplyOnMismatch(t *tes
 	}
 	if len(execution.interruptTaskIDs) != 0 || len(execution.started) != 0 {
 		t.Fatalf("move mutated lifecycle after mismatch: interrupts=%v starts=%v", execution.interruptTaskIDs, execution.started)
+	}
+}
+
+func TestServiceManualMoveAcceptedBranchReturnsConflictWhenFinalRevalidationBecomesNoOp(t *testing.T) {
+	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
+	workflowID := createWorkflowServiceChainedWorkflow(t, ctx, service)
+	setWorkflowServiceExecutionTargetPolicy(t, ctx, service, workflowID, serverapi.WorkflowExecutionTargetConfiguration{
+		Mode: serverapi.WorkflowExecutionTargetModeHead,
+	})
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	taskID := workflow.TaskID(task.Task.ID)
+	definition, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow: %v", err)
+	}
+	targetNodeID := workflow.NodeID(workflowServiceNodeIDByKey(t, definition.Definition, "plan"))
+	execution := newManualMoveExecutionStub(service)
+	service.currentNodeExecution = execution
+	requestedRef := "HEAD"
+	commitOID := strings.Repeat("e", 40)
+	branchName := "feature/stale-manual-move"
+	worktreeID := "worktree-" + task.Task.ID
+	worktreeRoot := filepath.Join(t.TempDir(), "task-worktree")
+	materializedBranch := ""
+	targets := &recordingExecutionTargetInfrastructure{
+		resolution: workflowstore.ExecutionTargetSnapshot{
+			Mode: workflow.ExecutionTargetModeHead, RequestedRef: &requestedRef,
+			CommitOID: &commitOID, Provenance: workflowstore.ExecutionTargetProvenanceResolved,
+		},
+	}
+	targets.materialize = func(taskID workflow.TaskID) (ExecutionTargetMaterialization, error) {
+		targetContext, err := service.store.GetTaskExecutionTargetContext(ctx, taskID)
+		if err != nil {
+			return ExecutionTargetMaterialization{}, err
+		}
+		if targetContext.Task.PendingInitialManagedBranchName == nil {
+			return ExecutionTargetMaterialization{}, errors.New("pending initial managed branch is absent")
+		}
+		materializedBranch = *targetContext.Task.PendingInitialManagedBranchName
+		if err := metadataStore.UpsertWorktreeRecord(ctx, metadata.WorktreeRecord{
+			ID: worktreeID, WorkspaceID: binding.WorkspaceID,
+			CanonicalRoot: worktreeRoot, Managed: true, CreatedBranch: true,
+		}); err != nil {
+			return ExecutionTargetMaterialization{}, err
+		}
+		updated, err := metadataStore.Queries().BindInitialTaskManagedWorktree(ctx, sqlitegen.BindInitialTaskManagedWorktreeParams{
+			ManagedWorktreeID: sql.NullString{String: worktreeID, Valid: true},
+			UpdatedAtUnixMs:   time.Now().UTC().UnixMilli(),
+			TaskID:            string(taskID),
+		})
+		if err != nil {
+			return ExecutionTargetMaterialization{}, err
+		}
+		if updated != 1 {
+			return ExecutionTargetMaterialization{}, errors.New("initial Worktree bind did not update the Task")
+		}
+		root := workflowstore.ManagedExecutionRoot{WorktreeID: worktreeID, Root: worktreeRoot}
+		return ExecutionTargetMaterialization{RetainedRoot: &root}, nil
+	}
+	service.executionTargets = targets
+	execution.interruptHook = func() {
+		prepared, err := service.store.PrepareManualMove(ctx, workflowstore.ManualMoveRequest{
+			TaskID: taskID, TargetNodeID: targetNodeID,
+		})
+		if err != nil {
+			t.Errorf("prepare concurrent Manual Move: %v", err)
+			return
+		}
+		targetContext, err := service.store.GetTaskExecutionTargetContext(ctx, taskID)
+		if err != nil {
+			t.Errorf("GetTaskExecutionTargetContext for concurrent Manual Move: %v", err)
+			return
+		}
+		candidate := &workflowstore.ExecutionTargetCandidate{
+			Snapshot: targets.resolution,
+			Root: workflowstore.ExecutionRoot{
+				SourceWorkspaceID:   targetContext.SourceWorkspaceID,
+				SourceWorkspaceRoot: targetContext.SourceWorkspaceRoot,
+				Managed: &workflowstore.ManagedExecutionRoot{
+					WorktreeID: worktreeID,
+					Root:       worktreeRoot,
+				},
+			},
+		}
+		moved, err := service.store.ApplyManualMove(ctx, prepared, candidate)
+		if err != nil {
+			t.Errorf("apply concurrent Manual Move: %v", err)
+			return
+		}
+		if moved.Outcome != workflowstore.ManualMoveResultOutcomeApplied {
+			t.Errorf("concurrent Manual Move outcome = %q, want applied", moved.Outcome)
+		}
+	}
+
+	response, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
+		TaskID: task.Task.ID, TargetNodeID: string(targetNodeID),
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(), BranchName: &branchName,
+	})
+
+	if !errors.Is(err, workflowexecution.ErrManualMoveLifecycleConflict) {
+		t.Fatalf("MoveWorkflowTask error = %T %v, want Manual Move lifecycle conflict", err, err)
+	}
+	if response.Outcome != "" {
+		t.Fatalf("MoveWorkflowTask response = %+v, want no successful outcome", response)
+	}
+	if materializedBranch != branchName {
+		t.Fatalf("materialized branch = %q, want accepted branch %q", materializedBranch, branchName)
+	}
+	targetContext, err := service.store.GetTaskExecutionTargetContext(ctx, taskID)
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetContext: %v", err)
+	}
+	if targetContext.Task.PendingInitialManagedBranchName != nil ||
+		targetContext.Task.ManagedWorktreeID != worktreeID ||
+		targetContext.Task.ExecutionTarget == nil {
+		t.Fatalf("target context after concurrent move = %+v, want accepted branch lifecycle consumed by applied move", targetContext.Task)
+	}
+	if len(execution.interruptTaskIDs) != 0 {
+		t.Fatalf("stale Manual Move interruptions = %v, want none", execution.interruptTaskIDs)
 	}
 }
