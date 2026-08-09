@@ -2,21 +2,22 @@ package runtimewire
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
-	"core/internal/testharness/scriptedllm"
+	"core/internal/testharness/pty/blackbox"
 	"core/server/llm"
 	"core/server/runtime"
 	"core/server/session"
 	"core/shared/config"
 	"core/shared/textutil"
 	"core/shared/toolspec"
+
+	"github.com/google/uuid"
 )
 
 func TestRuntimeClientFactoryCreatesMainAndReviewerClients(t *testing.T) {
-	t.Parallel()
-
 	root := t.TempDir()
 	store := newRuntimeWireSession(t, root, "factory")
 	var purposes []RuntimeClientPurpose
@@ -57,8 +58,6 @@ func TestRuntimeClientFactoryCreatesMainAndReviewerClients(t *testing.T) {
 }
 
 func TestRuntimeClientFactoryRejectsDirectClientOverride(t *testing.T) {
-	t.Parallel()
-
 	root := t.TempDir()
 	store := newRuntimeWireSession(t, root, "factory-conflict")
 	_, err := NewRuntimeWiringWithBackground(
@@ -81,8 +80,6 @@ func TestRuntimeClientFactoryRejectsDirectClientOverride(t *testing.T) {
 }
 
 func TestReviewerRuntimeClientFactoryCanPairWithDirectMainClient(t *testing.T) {
-	t.Parallel()
-
 	root := t.TempDir()
 	store := newRuntimeWireSession(t, root, "reviewer-factory")
 	reviewerCalls := 0
@@ -124,8 +121,6 @@ func TestReviewerRuntimeClientFactoryCanPairWithDirectMainClient(t *testing.T) {
 }
 
 func TestRuntimeClientFactoryReceivesActivationContext(t *testing.T) {
-	t.Parallel()
-
 	root := t.TempDir()
 	store := newRuntimeWireSession(t, root, "factory-context")
 	type contextKey struct{}
@@ -160,8 +155,6 @@ func TestRuntimeClientFactoryReceivesActivationContext(t *testing.T) {
 }
 
 func TestRuntimeClientFactoryErrorDoesNotFallBackToProvider(t *testing.T) {
-	t.Parallel()
-
 	root := t.TempDir()
 	store := newRuntimeWireSession(t, root, "factory-error")
 	wantErr := errors.New("factory failed")
@@ -213,7 +206,13 @@ func TestResumedMainClientUsesLockedProviderVerbosityForBothRequestPaths(t *test
 		t.Fatalf("lock session: %v", err)
 	}
 
-	recorder := scriptedllm.NewOpenAIResponsesRecorder(t)
+	recorder, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{
+		ID: uuid.New(), Route: blackbox.RouteResponses, Outcome: blackbox.OutcomeJSON,
+	}})
+	if err != nil {
+		t.Fatalf("StartResponsesStub: %v", err)
+	}
+	t.Cleanup(func() { _ = recorder.Stop() })
 
 	var mainClient llm.Client
 	factory := RuntimeClientFactoryFunc(func(_ context.Context, req RuntimeClientRequest) (llm.Client, error) {
@@ -228,7 +227,6 @@ func TestResumedMainClientUsesLockedProviderVerbosityForBothRequestPaths(t *test
 			Provider:                     llm.Provider(req.ProviderSettings.ProviderOverride),
 			Model:                        req.ProviderSettings.Model,
 			Auth:                         nil,
-			HTTPClient:                   recorder.Client(),
 			OpenAIBaseURL:                req.ProviderSettings.OpenAIBaseURL,
 			ModelVerbosity:               string(req.ProviderSettings.ModelVerbosity),
 			Store:                        req.ProviderSettings.Store,
@@ -248,7 +246,7 @@ func TestResumedMainClientUsesLockedProviderVerbosityForBothRequestPaths(t *test
 		config.Settings{
 			Model:              "operator-alias",
 			ProviderOverride:   "openai",
-			OpenAIBaseURL:      recorder.URL() + "/v1",
+			OpenAIBaseURL:      recorder.URL(),
 			ModelVerbosity:     config.ModelVerbosityHigh,
 			ModelContextWindow: 200000,
 			ProviderCapabilities: config.ProviderCapabilitiesOverride{
@@ -278,13 +276,17 @@ func TestResumedMainClientUsesLockedProviderVerbosityForBothRequestPaths(t *test
 	if _, err := mainClient.Generate(context.Background(), request); err != nil {
 		t.Fatalf("generate through resumed main client: %v", err)
 	}
-	counter, ok := mainClient.(llm.RequestInputTokenCountClient)
-	if !ok {
-		t.Fatalf("main client does not support request input token counting: %T", mainClient)
-	}
-	if _, err := counter.CountRequestInputTokens(context.Background(), request); err != nil {
+	if _, err := mainClient.(llm.RequestInputTokenCountClient).CountRequestInputTokens(context.Background(), request); err != nil {
 		t.Fatalf("count input tokens through resumed main client: %v", err)
 	}
 
-	recorder.AssertTextVerbosity(t, "high")
+	observed := recorder.Snapshot().Observed
+	for _, call := range observed {
+		var payload struct {
+			Text map[string]string `json:"text"`
+		}
+		if err := json.Unmarshal(call.Body, &payload); err != nil || payload.Text["verbosity"] != "high" {
+			t.Fatalf("%s request verbosity = %q, %v", call.Route, payload.Text["verbosity"], err)
+		}
+	}
 }

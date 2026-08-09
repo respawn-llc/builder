@@ -355,21 +355,22 @@ func (s *Service) resolveAuth(ctx context.Context, model serverapi.SessionExecut
 	if !ok || !sessionExecutionProviderUsesKentManagedAuth(effectiveModel.Provider) {
 		return serverapi.UnavailableSessionExecutionAuth(serverapi.SessionExecutionAuthUnavailableNotApplicable)
 	}
-	var statusReq serverapi.AuthStatusRequest
-	status, err := s.auth.GetAuthStatus(ctx, statusReq)
+	status, err := s.auth.GetAuthStatus(ctx, serverapi.AuthStatusRequest{})
 	if err != nil {
 		return serverapi.FailedSessionExecutionAuth(serverapi.SessionExecutionFieldError{Code: serverapi.SessionExecutionFieldErrorSourceFailure, Message: err.Error()})
 	}
-	if !status.Auth.Visible && status.Auth.Method == "" {
-		return serverapi.UnavailableSessionExecutionAuth(serverapi.SessionExecutionAuthUnavailableNotApplicable)
+	if err := status.Validate(); err != nil {
+		return serverapi.FailedSessionExecutionAuth(serverapi.SessionExecutionFieldError{Code: serverapi.SessionExecutionFieldErrorSourceFailure, Message: err.Error()})
 	}
-	method := serverapi.SessionExecutionAuthMethod(string(status.Auth.Method))
-	if method == "" {
-		method = serverapi.SessionExecutionAuthMethodNone
+	if status.Resolution.Kind == serverapi.AuthStatusResolutionUnavailable {
+		return serverapi.FailedSessionExecutionAuth(serverapi.SessionExecutionFieldError{
+			Code:    serverapi.SessionExecutionFieldErrorSourceFailure,
+			Message: status.Resolution.Failure.Cause,
+		})
 	}
 	return serverapi.AvailableSessionExecutionAuth(serverapi.SessionExecutionAuth{
 		Provider: effectiveModel.Provider,
-		Method:   method,
+		Method:   serverapi.SessionExecutionAuthMethod(status.Resolution.Facts.Method),
 	})
 }
 

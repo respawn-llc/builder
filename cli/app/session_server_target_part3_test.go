@@ -33,7 +33,7 @@ func TestStartSessionServerListsPendingPromptSnapshotOverRemoteReads(t *testing.
 		WorkspaceRoot:         workspace,
 		WorkspaceRootExplicit: true,
 		Model:                 "gpt-5",
-		OpenAIBaseURL:         model.URL,
+		OpenAIBaseURL:         model.URL(),
 		OpenAIBaseURLExplicit: true,
 	}, apiKeyMemoryAuthHandler("test-key"))
 

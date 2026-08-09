@@ -189,29 +189,6 @@ func (m *uiModel) compactRuntimeInput(ctx context.Context, req clientui.RuntimeC
 	return nil
 }
 
-func (m *uiModel) hasQueuedRuntimeUserWork() (bool, error) {
-	m.checkTUIBlockingOperation("runtime queue read", "has queued user work")
-	if client := m.runtimeClient(); client != nil {
-		hasWork, err := client.HasQueuedUserWork()
-		m.observeRuntimeRequestResult(err)
-		return hasWork, err
-	}
-	return false, nil
-}
-
-func (m *uiModel) submitQueuedRuntimeUserMessages(ctx context.Context) (string, error) {
-	m.checkTUIBlockingOperation("runtime queue mutation", "submit queued user messages")
-	if client := m.runtimeClient(); client != nil {
-		operationRef := newRuntimeOperationRef(clientui.RuntimeOperationKindSubmitQueued)
-		m.addPendingRuntimeOperation(operationRef)
-		message, err := client.SubmitRuntimeQueued(ctx, clientui.RuntimeSubmitQueuedRequest{OperationRef: operationRef})
-		m.clearPendingRuntimeOperations(clientui.RuntimeOperationKindSubmitQueued)
-		m.observeRuntimeRequestResult(err)
-		return message, err
-	}
-	return "", nil
-}
-
 func (m *uiModel) interruptRuntime() error {
 	m.checkTUIBlockingOperation("runtime control mutation", "interrupt")
 	candidate, err := executeRuntimeInterrupt(runtimeInterruptRequestFromModel(m))

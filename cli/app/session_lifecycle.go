@@ -11,7 +11,6 @@ import (
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/lifecyclecontract"
-	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/textutil"
 
@@ -41,7 +40,7 @@ type promptCommandCatalogServer interface {
 }
 
 type interactiveSessionServer interface {
-	appServerCore
+	Close() error
 	launchPlannerServer
 	sessionWorkspaceChangeServer
 	sessionTransitionServer
@@ -52,19 +51,6 @@ type interactiveSessionServer interface {
 type sessionLifecycleOptions struct {
 	Intent    *serverapi.SessionLaunchIntent
 	Overrides serverapi.RunPromptOverrides
-}
-
-func runSessionLifecycle(ctx context.Context, server interactiveSessionServer, interactor authInteractor, initialSessionID string) error {
-	var intent *serverapi.SessionLaunchIntent
-	if trimmed := strings.TrimSpace(initialSessionID); trimmed != "" {
-		sessionID, err := runtimeids.ParseSessionID(trimmed)
-		if err != nil {
-			return err
-		}
-		open := serverapi.OpenExistingSessionLaunchIntent(sessionID)
-		intent = &open
-	}
-	return runSessionLifecycleWithOptions(ctx, server, interactor, sessionLifecycleOptions{Intent: intent})
 }
 
 func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessionServer, interactor authInteractor, opts sessionLifecycleOptions) error {
@@ -347,16 +333,8 @@ func releaseRuntimePlanAfterUIResult(runtimePlan *runtimeLaunchPlan, finalModel 
 	}
 	return releaseErr
 }
-func shouldCloseReboundServer(original appServerCore, rebound appServerCore) bool {
-	if original == nil || rebound == nil || original == rebound {
-		return false
-	}
-	originalEmbedded, originalOK := original.(*embeddedAppServer)
-	reboundEmbedded, reboundOK := rebound.(*embeddedAppServer)
-	if originalOK && reboundOK {
-		return !originalEmbedded.SharesProcessWith(reboundEmbedded)
-	}
-	return true
+func shouldCloseReboundServer(original, rebound interactiveSessionServer) bool {
+	return original != nil && rebound != nil && original != rebound
 }
 
 type sessionLaunchInitialState struct {

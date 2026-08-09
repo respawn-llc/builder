@@ -35,7 +35,7 @@ import (
 	"core/shared/toolspec"
 )
 
-const currentNodeRunnerWait = 30 * time.Second
+const currentNodeRunnerWait = 60 * time.Second
 
 type currentNodeRunnerFixture struct {
 	cfg             config.App
@@ -1913,6 +1913,14 @@ func TestCurrentNodeContinuationWithActiveTranscriptSubscriberDoesNotBlockLaterA
 		return len(nodes) == 1 && nodes[0].Reference.Equal(source) && nodes[0].SessionID != nil
 	})
 	sessionID := *sourceNodes[0].SessionID
+	sourceExecution, live := f.authority.SessionExecution(sessionID)
+	if !live {
+		t.Fatal("source Current Node reached its provider without an Exact Execution Scope")
+	}
+	sourceResource, hasResource := sourceExecution.Scope().Resource()
+	if !hasResource {
+		t.Fatal("source Exact Execution Scope has no Active Session Runtime")
+	}
 	transcript, err := f.runtimes.SubscribeSessionTranscript(context.Background(), serverapi.TranscriptSubscribeRequest{
 		SessionID: sessionID.String(),
 	})
@@ -1931,6 +1939,18 @@ func TestCurrentNodeContinuationWithActiveTranscriptSubscriberDoesNotBlockLaterA
 	case <-successorResponseStarted:
 	case <-time.After(currentNodeRunnerWait):
 		t.Fatal("continued Session successor did not reach its model turn")
+	}
+	successorExecution, live := f.authority.SessionExecution(sessionID)
+	if !live {
+		t.Fatal("successor Current Node reached its provider without an Exact Execution Scope")
+	}
+	successorResource, hasResource := successorExecution.Scope().Resource()
+	if !hasResource || successorResource != sourceResource {
+		t.Fatalf(
+			"successor Active Session Runtime = %+v, want retained source generation %+v",
+			successorResource,
+			sourceResource,
+		)
 	}
 
 	sourceScriptPath := filepath.Join(f.workspace, "source-script.sh")

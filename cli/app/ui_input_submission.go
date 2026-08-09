@@ -274,12 +274,6 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 	m.logf("step.done assistant_chars=%d", len(msg.message))
 	m.clearActiveAssistantStreamSource()
 	if len(m.queued) > 0 {
-		if m.hasRuntimeClient() && c.queuedDrainRequiresHydration() {
-			m.pendingQueuedDrainAfterHydration = true
-			m.queuedDrainReadyAfterHydration = false
-			m.layout().syncViewport()
-			return m, m.requestRuntimeQueuedDrainAfterHydration()
-		}
 		next, drainCmd := c.flushQueuedInputs(queueDrainAuto)
 		c.notifyTurnQueueDrainedIfIdle()
 		return next, drainCmd
@@ -287,31 +281,6 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 	c.notifyTurnQueueDrainedIfIdle()
 	m.layout().syncViewport()
 	return m, nil
-}
-
-func (c uiInputController) queuedDrainRequiresHydration() bool {
-	m := c.model
-	if m == nil || !m.hasRuntimeClient() {
-		return false
-	}
-	if len(m.queued) == 0 {
-		return false
-	}
-	if m.commandRegistry == nil {
-		return true
-	}
-	for _, item := range m.queued {
-		trimmed := strings.TrimSpace(item.Text)
-		if trimmed == "" {
-			continue
-		}
-		commandResult := m.commandRegistry.Execute(trimmed)
-		if commandResult.Handled && !commandResult.SubmitUser {
-			continue
-		}
-		return true
-	}
-	return false
 }
 
 func (c uiInputController) handleSpinnerTick(msg spinnerTickMsg) (tea.Model, tea.Cmd) {
@@ -375,20 +344,14 @@ func (c uiInputController) handleCompactDone(msg compactDoneMsg) (tea.Model, tea
 		c.notifyTurnQueueDrainedIfIdle()
 		return next, cmd
 	}
-	if m.injectedQueueBlocksDrain() {
+	if m.injectedQueueBlocksDrain() || m.hasEnqueuedInjectedRuntimeWork() {
 		c.notifyUserCompactionCompleted(compactionOrigin, false)
-		m.queuedRuntimeWorkCheckCompactionOrigin = compactionOrigin
 		m.layout().syncViewport()
 		return m, nil
 	}
-	if !m.hasRuntimeClient() {
-		c.notifyUserCompactionCompleted(compactionOrigin, !m.pendingQueuedDrainAfterHydration)
-		m.layout().syncViewport()
-		return m, nil
-	}
-	m.queuedRuntimeWorkCheckCompactionOrigin = compactionOrigin
+	c.notifyUserCompactionCompleted(compactionOrigin, true)
 	m.layout().syncViewport()
-	return m, c.startQueuedInjectionSubmission()
+	return m, nil
 }
 
 func (c uiInputController) notifyUserCompactionCompleted(origin uiCompactionOrigin, queueDrained bool) {

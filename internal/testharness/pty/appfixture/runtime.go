@@ -8,17 +8,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
+	"core/internal/testharness/pty/blackbox"
 	"core/internal/testharness/scriptedllm"
-	"core/server/core"
 	"core/server/llm"
 	"core/server/metadata"
 	serverruntime "core/server/runtime"
-	"core/server/runtimewire"
 	"core/server/session"
-	serverstartup "core/server/startup"
 	"core/server/tools"
 	"core/shared/sessioncontract"
 	"core/shared/transcript"
@@ -76,8 +73,7 @@ type ScriptFinalAssistantOrdinal uint64
 
 type Runtime struct {
 	ScriptFile                  ScriptFile
-	Client                      *scriptedllm.Client
-	recorder                    *FactoryRecorder
+	provider                    *blackbox.ResponsesStub
 	targetFinalAssistantOrdinal ScriptFinalAssistantOrdinal
 }
 
@@ -92,10 +88,13 @@ func NewRuntime(
 	if err != nil {
 		return nil, err
 	}
+	provider, err := blackbox.StartScriptedResponsesStub(script)
+	if err != nil {
+		return nil, fmt.Errorf("start scripted Responses provider: %w", err)
+	}
 	return &Runtime{
 		ScriptFile:                  scriptFile,
-		Client:                      scriptedllm.NewClient(script),
-		recorder:                    &FactoryRecorder{},
+		provider:                    provider,
 		targetFinalAssistantOrdinal: targetFinalAssistantOrdinal,
 	}, nil
 }
@@ -107,15 +106,12 @@ func (r *Runtime) TargetFinalAssistantOrdinal() ScriptFinalAssistantOrdinal {
 	return r.targetFinalAssistantOrdinal
 }
 
-func (r *Runtime) StartupOptions() serverstartup.Options {
-	return serverstartup.Options{Core: core.Options{RuntimeClientFactory: r.RuntimeClientFactory()}}
+func (r *Runtime) OpenAIBaseURL() string {
+	return r.provider.URL()
 }
 
-func (r *Runtime) RuntimeClientFactory() runtimewire.RuntimeClientFactory {
-	return runtimewire.RuntimeClientFactoryFunc(func(ctx context.Context, req runtimewire.RuntimeClientRequest) (llm.Client, error) {
-		r.recorder.Record(req.Purpose)
-		return r.Client, nil
-	})
+func (r *Runtime) Close() error {
+	return r.provider.Stop()
 }
 
 func (r *Runtime) SeedSession(ctx context.Context, persistenceRoot string, workspaceRoot string) (string, error) {
@@ -154,13 +150,12 @@ func (r *Runtime) SeedSession(ctx context.Context, persistenceRoot string, works
 }
 
 func (r *Runtime) Observation(runErr error) Observation {
+	requestCount := r.provider.ScriptedRequestCount()
+	remainingSteps := r.provider.RemainingScriptedSteps()
 	obs := Observation{
-		FactoryPurposes:          r.recorder.Purposes(),
-		ModelRequestCount:        len(r.Client.Requests()),
-		RemainingScriptSteps:     r.Client.RemainingSteps(),
-		StreamDeltaCount:         len(r.ScriptFile.StreamDeltas),
-		FinalResponseConsumed:    r.Client.RemainingSteps() == 0 && len(r.Client.Requests()) > 0,
-		DefaultProviderFallbacks: 0,
+		ModelRequestCount:     requestCount,
+		RemainingScriptSteps:  remainingSteps,
+		FinalResponseConsumed: remainingSteps == 0 && requestCount > 0,
 	}
 	if runErr != nil {
 		obs.RunError = runErr.Error()
@@ -449,13 +444,10 @@ func seedToolMessageType(custom bool) *llm.MessageType {
 }
 
 type Observation struct {
-	FactoryPurposes          []string `json:"factory_purposes"`
-	ModelRequestCount        int      `json:"model_request_count"`
-	RemainingScriptSteps     int      `json:"remaining_script_steps"`
-	StreamDeltaCount         int      `json:"stream_delta_count"`
-	FinalResponseConsumed    bool     `json:"final_response_consumed"`
-	DefaultProviderFallbacks int      `json:"default_provider_fallbacks"`
-	RunError                 string   `json:"run_error,omitempty"`
+	ModelRequestCount     int    `json:"model_request_count"`
+	RemainingScriptSteps  int    `json:"remaining_script_steps"`
+	FinalResponseConsumed bool   `json:"final_response_consumed"`
+	RunError              string `json:"run_error,omitempty"`
 }
 
 func WriteObservation(path string, obs Observation) error {
@@ -467,34 +459,4 @@ func WriteObservation(path string, obs Observation) error {
 		return fmt.Errorf("write observations: %w", err)
 	}
 	return nil
-}
-
-type FactoryRecorder struct {
-	mu           sync.Mutex
-	purposeNames []string
-}
-
-func (r *FactoryRecorder) Record(purpose runtimewire.RuntimeClientPurpose) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.purposeNames = append(r.purposeNames, runtimeClientPurposeName(purpose))
-}
-
-func (r *FactoryRecorder) Purposes() []string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return append([]string(nil), r.purposeNames...)
-}
-
-func runtimeClientPurposeName(purpose runtimewire.RuntimeClientPurpose) string {
-	switch purpose {
-	case runtimewire.RuntimeClientPurposeMain:
-		return "main"
-	case runtimewire.RuntimeClientPurposeReviewer:
-		return "reviewer"
-	case runtimewire.RuntimeClientPurposeWorkflow:
-		return "workflow"
-	default:
-		return fmt.Sprintf("unknown-%d", purpose)
-	}
 }

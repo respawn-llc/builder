@@ -99,9 +99,6 @@ func (m *uiModel) reduceStatusMessage(msg tea.Msg) uiFeatureUpdateResult {
 		}
 		m.status.snapshot.Auth = msg.result.Auth
 		m.status.snapshot.Subscription = msg.result.Subscription
-		if m.statusRepository != nil {
-			m.statusRepository.StoreAuth(msg.cacheKey, msg.result, time.Now())
-		}
 		m.finishStatusSectionRefresh(uiStatusSectionAuth, msg.result.Warning)
 		m.layout().syncViewport()
 		return handledUIFeatureUpdate(m, nil)

@@ -8,17 +8,14 @@ import (
 	"time"
 
 	"core/internal/testharness/pty/appfixture"
-	"core/shared/config"
 )
 
 const onboardingRemoteLifecycleTestRunArgument = "-test.run=^TestOnboardingRemoteLifecycleProcess$"
 
 func init() {
-	if appTestProcessInvocation() {
-		return
+	if !appTestProcessInvocation() {
+		transientStatusDuration, spinnerTickInterval = 30*time.Millisecond, time.Millisecond
 	}
-	transientStatusDuration = 30 * time.Millisecond
-	spinnerTickInterval = time.Millisecond
 }
 
 func appTestProcessInvocation() bool {
@@ -47,54 +44,43 @@ func TestOnboardingRemoteLifecycleProcess(t *testing.T) {
 }
 
 func TestLifecycleHookServerFixtureProcess(t *testing.T) {
-	configPath, runningHelper := os.LookupEnv(appfixture.LifecycleServerProcessConfigEnvName)
-	if !runningHelper {
-		t.Skip("lifecycle server fixture process runs only through its exact subprocess invocation")
-	}
-	processConfig, err := appfixture.ReadLifecycleServerProcessConfig(configPath)
-	if err == nil {
-		err = os.Setenv(config.PersistenceRootEnvName, processConfig.PersistenceRoot)
-	}
-	if err == nil {
-		err = runLifecycleHookServerFixtureProcess(context.Background(), processConfig)
-	}
-	exitAppTestProcess(err)
+	runAppFixtureProcess(t, appfixture.LifecycleServerProcessConfigEnvName, appfixture.ReadLifecycleServerProcessConfig, func(value appfixture.LifecycleServerProcessConfig) error {
+		return runLifecycleHookServerFixtureProcess(t, context.Background(), value)
+	})
 }
 
 func TestLifecycleHookPTYFixtureProcess(t *testing.T) {
-	configPath, runningHelper := os.LookupEnv(appfixture.LifecycleProcessConfigEnvName)
-	if !runningHelper {
-		t.Skip("lifecycle PTY fixture process runs only through its exact subprocess invocation")
-	}
-	processConfig, err := appfixture.ReadLifecycleProcessConfig(configPath)
-	if err == nil {
-		err = os.Setenv(config.PersistenceRootEnvName, processConfig.PersistenceRoot)
-	}
-	if err == nil {
-		err = runLifecycleHookPTYFixtureProcess(context.Background(), processConfig)
-	}
-	exitAppTestProcess(err)
+	runAppFixtureProcess(t, appfixture.LifecycleProcessConfigEnvName, appfixture.ReadLifecycleProcessConfig, func(value appfixture.LifecycleProcessConfig) error {
+		return runLifecycleHookPTYFixtureProcess(t, context.Background(), value)
+	})
 }
 
 func TestPTYFixtureProcess(t *testing.T) {
-	configPath, runningHelper := os.LookupEnv(appfixture.ProcessConfigEnvName)
+	runAppFixtureProcess(t, appfixture.ProcessConfigEnvName, appfixture.ReadProcessConfig, func(value appfixture.ProcessConfig) error {
+		return runPTYFixtureProcess(t, context.Background(), value)
+	})
+}
+
+func runAppFixtureProcess[T any](
+	t *testing.T,
+	environmentName string,
+	read func(string) (T, error),
+	run func(T) error,
+) {
+	configPath, runningHelper := os.LookupEnv(environmentName)
 	if !runningHelper {
-		t.Skip("PTY fixture process runs only through its exact subprocess invocation")
+		t.Skip("fixture process runs only through its exact subprocess invocation")
 	}
-	processConfig, err := appfixture.ReadProcessConfig(configPath)
+	processConfig, err := read(configPath)
 	if err == nil {
-		err = os.Setenv(config.PersistenceRootEnvName, processConfig.PersistenceRoot)
-	}
-	if err == nil {
-		err = runPTYFixtureProcess(context.Background(), processConfig)
+		err = run(processConfig)
 	}
 	exitAppTestProcess(err)
 }
 
 func exitAppTestProcess(err error) {
 	if err != nil {
-		log.Print(err)
-		os.Exit(1)
+		log.Fatal(err)
 	}
 	os.Exit(0)
 }

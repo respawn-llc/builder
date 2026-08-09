@@ -59,6 +59,7 @@ export type BoardRailMotionControllerProps = Readonly<{
   board: SelectedWorkflowBoard;
   columnDropState: (column: BoardColumn) => BoardColumnDropState;
   columnIsCollapsed: (column: BoardColumn) => boolean;
+  dragDisabled: boolean;
   firstActiveID: string | undefined;
   onCardClick: (taskID: string) => void;
   onCardDragEnd: () => void;
@@ -85,6 +86,7 @@ export function BoardRailMotionController({
   board,
   columnDropState,
   columnIsCollapsed,
+  dragDisabled,
   firstActiveID,
   onCardClick,
   onCardDragEnd,
@@ -443,6 +445,7 @@ export function BoardRailMotionController({
                     board={board}
                     displayedCards={displayedColumns.get(column.id)}
                     column={column}
+                    dragDisabled={dragDisabled}
                     dropState={columnDropState(column)}
                     isCollapsed={effectiveColumnIsCollapsed(column)}
                     isFirstActive={column.id === firstActiveID}
@@ -472,6 +475,7 @@ export function BoardRailMotionController({
                 board={board}
                 displayedCards={displayedColumns.get(section.column.id)}
                 column={section.column}
+                dragDisabled={dragDisabled}
                 dropState={columnDropState(section.column)}
                 isCollapsed={effectiveColumnIsCollapsed(section.column)}
                 isFirstActive={section.column.id === firstActiveID}

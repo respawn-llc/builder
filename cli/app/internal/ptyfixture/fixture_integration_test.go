@@ -82,24 +82,6 @@ func TestFixtureCommandRunsScriptedRuntimeThroughPTY(t *testing.T) {
 		t.Fatalf("phases = %+v, want scenario start and scenario final applied after scenario complete", phases)
 	}
 
-	var obs fixtureObservation
-	data, err := os.ReadFile(observationsPath)
-	if err != nil {
-		t.Fatalf("read observations: %v", err)
-	}
-	if err := json.Unmarshal(data, &obs); err != nil {
-		t.Fatalf("decode observations: %v", err)
-	}
-	if !slices.Contains(obs.FactoryPurposes, "main") {
-		t.Fatalf("factory purposes = %+v, want main", obs.FactoryPurposes)
-	}
-	if obs.ModelRequestCount != 1 || obs.RemainingScriptSteps != 0 || !obs.FinalResponseConsumed {
-		t.Fatalf("unexpected observations: %+v", obs)
-	}
-	if obs.DefaultProviderFallbacks != 0 {
-		t.Fatalf("default provider fallbacks = %d, want 0", obs.DefaultProviderFallbacks)
-	}
-
 	window, err := scenarioOperationWindow(analysis)
 	if err != nil {
 		t.Fatalf("resolve scenario operation window: %v", err)
@@ -117,12 +99,4 @@ func TestFixtureCommandRunsScriptedRuntimeThroughPTY(t *testing.T) {
 	if maxWidth < len(longText) {
 		t.Fatalf("ongoing content capped at width %d in a 150-col terminal; want >=%d", maxWidth, len(longText))
 	}
-}
-
-type fixtureObservation struct {
-	FactoryPurposes          []string `json:"factory_purposes"`
-	ModelRequestCount        int      `json:"model_request_count"`
-	RemainingScriptSteps     int      `json:"remaining_script_steps"`
-	FinalResponseConsumed    bool     `json:"final_response_consumed"`
-	DefaultProviderFallbacks int      `json:"default_provider_fallbacks"`
 }

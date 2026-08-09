@@ -50,7 +50,7 @@ type committedEntryPersistDoneMsg struct {
 type authSlashCommandRefreshedMsg struct {
 	token      uint64
 	generation uint64
-	name       string
+	kind       authSlashCommandKind
 	err        error
 }
 
@@ -116,12 +116,6 @@ type injectedQueueDiscardDoneMsg struct {
 	localID   string
 	serverID  string
 	discarded bool
-}
-
-type queuedRuntimeWorkCheckDoneMsg struct {
-	token   uint64
-	hasWork bool
-	err     error
 }
 
 type compactDoneMsg struct {

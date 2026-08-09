@@ -33,6 +33,8 @@ type Tool struct {
 	managedWorktreePathContext   *tools.ManagedWorktreePathContext
 }
 
+var errForeignManagedWorktree = errors.New(tools.ForeignManagedWorktreeEditDeniedMessage)
+
 type resolvedPath struct {
 	cleaned string
 	real    string
@@ -373,6 +375,13 @@ func (t *Tool) resolvePath(ctx context.Context, requested string) (resolvedPath,
 		candidate = filepath.Join(t.fileAccessScope.WorkingDirectory.LexicalPath, candidate)
 	}
 	cleaned := filepath.Clean(candidate)
+	preApprovalReal, err := resolveRealTarget(cleaned)
+	if err != nil {
+		return resolvedPath{}, err
+	}
+	if t.managedWorktreePathContext != nil && t.managedWorktreePathContext.IsForeignManagedWorktreePath(preApprovalReal) {
+		return resolvedPath{}, errForeignManagedWorktree
+	}
 	approved := map[string]bool{}
 	if _, err := t.outsideGuard().Allow(ctx, requested, cleaned, approved); err != nil {
 		return resolvedPath{}, err

@@ -25,7 +25,7 @@ func TestObservedQuestionUsesDynamicQuestionAndAnswerTarget(t *testing.T) {
 	}
 }
 
-func TestRunWatchApprovalHintIncludesOptionalCommentary(t *testing.T) {
+func TestRunWatchApprovalHintUsesOptionOnly(t *testing.T) {
 	sessionID := "session-dynamic"
 	var output bytes.Buffer
 	code := writeRunWatchResponse(&output, io.Discard, serverapi.RuntimeLiveWatchResponse{
@@ -48,7 +48,6 @@ func TestRunWatchApprovalHintIncludesOptionalCommentary(t *testing.T) {
 		config.Command, "question", "answer",
 		"--session", sessionID,
 		"--option", "<number>",
-		"--commentary", "<commentary>",
 	})
 	if !strings.Contains(output.String(), hint) {
 		t.Fatalf("output %q does not contain answer hint %q", output.String(), hint)

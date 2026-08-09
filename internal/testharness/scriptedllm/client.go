@@ -12,6 +12,18 @@ import (
 
 const defaultContextWindowTokens = 200000
 
+type RequestAdmission uint8
+
+const (
+	RequestNotAdmitted RequestAdmission = iota
+	RequestAdmitted
+)
+
+type GenerationOutcome struct {
+	Response  llm.Response
+	Admission RequestAdmission
+}
+
 type Client struct {
 	mu              sync.Mutex
 	steps           []Step
@@ -48,21 +60,37 @@ func NewClient(script Script) *Client {
 }
 
 func (c *Client) Generate(ctx context.Context, req llm.Request) (llm.Response, error) {
+	outcome, err := c.GenerateWithOutcome(ctx, req)
+	return outcome.Response, err
+}
+
+func (c *Client) GenerateWithOutcome(ctx context.Context, req llm.Request) (GenerationOutcome, error) {
 	step, finish, err := c.nextStep(req)
 	if err != nil {
-		return llm.Response{}, err
+		return GenerationOutcome{Admission: RequestNotAdmitted}, err
 	}
 	defer finish()
-	return c.completeStep(ctx, req, step, nil)
+	response, err := c.completeStep(ctx, req, step, nil)
+	return GenerationOutcome{Response: response, Admission: RequestAdmitted}, err
 }
 
 func (c *Client) GenerateStreamWithEvents(ctx context.Context, req llm.Request, callbacks llm.StreamCallbacks) (llm.Response, error) {
+	outcome, err := c.GenerateStreamWithEventsOutcome(ctx, req, callbacks)
+	return outcome.Response, err
+}
+
+func (c *Client) GenerateStreamWithEventsOutcome(
+	ctx context.Context,
+	req llm.Request,
+	callbacks llm.StreamCallbacks,
+) (GenerationOutcome, error) {
 	step, finish, err := c.nextStep(req)
 	if err != nil {
-		return llm.Response{}, err
+		return GenerationOutcome{Admission: RequestNotAdmitted}, err
 	}
 	defer finish()
-	return c.completeStep(ctx, req, step, &callbacks)
+	response, err := c.completeStep(ctx, req, step, &callbacks)
+	return GenerationOutcome{Response: response, Admission: RequestAdmitted}, err
 }
 
 func (c *Client) Compact(_ context.Context, req llm.CompactionRequest) (llm.CompactionResponse, error) {

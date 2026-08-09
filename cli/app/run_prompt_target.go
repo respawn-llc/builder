@@ -13,7 +13,6 @@ import (
 	"core/shared/apicontract"
 	"core/shared/client"
 	"core/shared/config"
-	"core/shared/protocol"
 )
 
 var dialConfiguredRemote = client.DialConfiguredRemoteForProjectWorkspaceID
@@ -24,8 +23,6 @@ var dialConfiguredRuntimeLiveControlRemote = client.DialConfiguredRemote
 
 var configuredRemoteAttachTimeout = 500 * time.Millisecond
 var configuredRemoteWorkspaceDiscoveryTimeout = 5 * time.Second
-
-type configuredProjectViewRemote = remoteattach.ProjectViewRemote
 
 type runPromptWorkspaceConfig struct {
 	Options       Options
@@ -43,30 +40,14 @@ func startRunPromptClient(ctx context.Context, opts Options) (apicontract.RunPro
 
 func startRunPromptClientWithWorkspaceConfig(ctx context.Context, workspaceConfig runPromptWorkspaceConfig) (apicontract.RunPromptService, func() error, error) {
 	cfg := workspaceConfig.Config
-	// Omitting LaunchDaemon and StartEmbedded keeps kent run a pure client (see
-	// docs/dev/specs/core-runtime-tools.md): Resolve returns ErrNoServerAvailable
-	// when nothing is reachable, translated into errRunRequiresServer below.
-	target, err := serverattach.Resolve[serverattach.RunPromptTarget](ctx, serverattach.Request[serverattach.RunPromptTarget]{
-		Mode:   serverattach.ModeHeadless,
-		Remote: serverAttachRemotePolicy(cfg, remoteattach.SupportsRunPrompt, true),
-		WrapRemote: func(remote *client.Remote, cfg config.App, closeFn func() error, _ serverattach.OwnershipState) (serverattach.Target[serverattach.RunPromptTarget], error) {
-			target := serverattach.RunPromptRemoteWithClose(remote, cfg, closeFn)
-			return serverattach.Target[serverattach.RunPromptTarget]{Value: target.Value, Close: target.Close}, nil
-		},
-		Validate: func(ctx context.Context, resolution serverattach.Resolution[serverattach.RunPromptTarget]) (serverattach.AuthReadiness, error) {
-			if err := serverattach.ValidateRunPromptTarget(ctx, serverattach.RunPromptValidateRequest{
-				Target: resolution.Value,
-				Config: cfg,
-				EnsureAuthReady: func(ctx context.Context, auth apicontract.AuthBootstrapService) error {
-					return ensureRemoteAuthReady(ctx, auth, cfg.Settings, newHeadlessAuthInteractor(), false)
-				},
-			}); err != nil {
-				return serverattach.AuthReadinessUnchecked, err
-			}
-			if resolution.Value.Auth == nil {
-				return serverattach.AuthReadinessUnchecked, nil
-			}
-			return serverattach.AuthReadinessValidated, nil
+	runPrompt, closeFn, err := serverattach.AttachRunPrompt(ctx, serverattach.AttachRunPromptRequest{
+		Config:           cfg,
+		AttachTimeout:    configuredRemoteAttachTimeout,
+		DiscoveryTimeout: configuredRemoteWorkspaceDiscoveryTimeout,
+		DialProjectView:  dialConfiguredProjectViewRemote,
+		DialWorkspace:    dialConfiguredRemote,
+		EnsureAuthReady: func(ctx context.Context, auth apicontract.AuthBootstrapService) error {
+			return ensureRemoteAuthReady(ctx, auth, cfg.Settings, newHeadlessAuthInteractor(), false)
 		},
 	})
 	if err != nil {
@@ -89,7 +70,7 @@ func startRunPromptClientWithWorkspaceConfig(ctx context.Context, workspaceConfi
 		}
 		return nil, nil, err
 	}
-	return target.Value.Client, target.Close, nil
+	return runPrompt, closeFn, nil
 }
 
 func startRuntimeLiveControlClient(ctx context.Context, opts Options) (apicontract.RuntimeLiveControlService, func() error, error) {
@@ -104,16 +85,13 @@ func startRuntimeLiveControlClient(ctx context.Context, opts Options) (apicontra
 		return nil, nil, fmt.Errorf("%w: %v", errRunRequiresServer, err)
 	}
 	if err := remote.RequireRoot(config.ExplicitPersistenceRootID(cfg)); err != nil {
-		_ = remote.Close()
-		return nil, nil, errRunServerRootMismatch
+		return nil, remote.Close, errRunServerRootMismatch
 	}
 	if !remoteattach.SupportsRuntimeLiveControl(remote.Identity().Capabilities) {
-		_ = remote.Close()
-		return nil, nil, errRunServerIncompatible
+		return nil, remote.Close, errRunServerIncompatible
 	}
 	if err := ensureRemoteAuthReady(ctx, remote, cfg.Settings, newHeadlessAuthInteractor(), false); err != nil {
-		_ = remote.Close()
-		return nil, nil, err
+		return nil, remote.Close, err
 	}
 	return remote, remote.Close, nil
 }
@@ -131,18 +109,6 @@ var errRunServerIncompatible = errors.New("a Kent server is running on the confi
 // operator must stop/reconfigure the other-root server or target a matching
 // endpoint.
 var errRunServerRootMismatch = errors.New("a Kent server is running on the configured endpoint but serves a different persistence root than the selected one. Stop or reconfigure that server, or point `--persistence-root`/the configured endpoint at the matching instance, instead of starting another server which would conflict on the same address")
-
-func tryDialMatchingConfiguredRemoteWithRequirement(ctx context.Context, opts Options, supports func(protocol.CapabilityFlags) bool, accept func(protocol.ServerIdentity) bool, requireRegistered bool) (*client.Remote, bool) {
-	cfg, err := loadRemoteAttachConfig(opts)
-	if err != nil {
-		return nil, false
-	}
-	remote, ok, err := serverattach.DialRemote(ctx, serverattach.ModeInteractive, serverAttachRemotePolicy(cfg, supports, requireRegistered), accept)
-	if err != nil {
-		return nil, false
-	}
-	return remote, ok
-}
 
 func loadRemoteAttachConfig(opts Options) (config.App, error) {
 	workspaceConfig, err := resolveRunPromptWorkspaceConfig(opts)
@@ -182,18 +148,5 @@ func startupConfigRequest(opts Options) startupconfig.Request {
 			Tools:               opts.Tools,
 			ConfigRoot:          opts.ConfigRoot,
 		},
-	}
-}
-
-func serverAttachRemotePolicy(cfg config.App, supports remoteattach.Supports, requireBound bool) serverattach.RemotePolicy {
-	return serverattach.RemotePolicy{
-		Config:           cfg,
-		AttachTimeout:    configuredRemoteAttachTimeout,
-		DiscoveryTimeout: configuredRemoteWorkspaceDiscoveryTimeout,
-		DialProjectView:  dialConfiguredProjectViewRemote,
-		DialWorkspace:    dialConfiguredRemote,
-		Supports:         supports,
-		RequireBound:     requireBound,
-		RootID:           config.ExplicitPersistenceRootID(cfg),
 	}
 }

@@ -546,64 +546,6 @@ func (s *Service) CompactContext(ctx context.Context, req serverapi.RuntimeCompa
 	return err
 }
 
-func (s *Service) CompactContextForPreSubmit(ctx context.Context, req serverapi.RuntimeCompactContextForPreSubmitRequest) error {
-	if err := req.Validate(); err != nil {
-		return err
-	}
-	memoReq := sessionOnlyMemoRequest{SessionID: strings.TrimSpace(req.SessionID)}
-	_, err := runtimeops.Do(s.operations, ctx, memoReq.SessionID, req.OperationRef, memoReq, func(a sessionOnlyMemoRequest, b sessionOnlyMemoRequest) bool { return a.SessionID == b.SessionID }, func(ctx context.Context, attempt runtimeops.Attempt) (struct{}, error) {
-		var receipt session.CommitReceipt
-		err := s.runAgentExecution(attempt.Context(), req.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
-			compactReceipt, compactErr := engine.CompactContextForPreSubmitWithActiveHook(runCtx, func() {
-				s.operations.MarkOperationActive(memoReq.SessionID, req.OperationRef)
-			})
-			receipt = compactReceipt
-			return compactErr
-		})
-		s.recordOperationCompletion(memoReq.SessionID, req.OperationRef, receipt, err, attempt, s.operations.RecordCompactCompletion)
-		return struct{}{}, err
-	})
-	return err
-}
-
-func (s *Service) HasQueuedUserWork(ctx context.Context, req serverapi.RuntimeHasQueuedUserWorkRequest) (serverapi.RuntimeHasQueuedUserWorkResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.RuntimeHasQueuedUserWorkResponse{}, err
-	}
-	var hasQueuedUserWork bool
-	err := s.withRuntime(ctx, req.SessionID, func(_ context.Context, engine *runtime.Engine) error {
-		hasQueuedUserWork = engine.HasQueuedUserWork()
-		return nil
-	})
-	if err != nil {
-		return serverapi.RuntimeHasQueuedUserWorkResponse{}, err
-	}
-	return serverapi.RuntimeHasQueuedUserWorkResponse{HasQueuedUserWork: hasQueuedUserWork}, nil
-}
-
-func (s *Service) SubmitQueuedUserMessages(ctx context.Context, req serverapi.RuntimeSubmitQueuedUserMessagesRequest) (serverapi.RuntimeSubmitQueuedUserMessagesResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.RuntimeSubmitQueuedUserMessagesResponse{}, err
-	}
-	memoReq := sessionOnlyMemoRequest{SessionID: strings.TrimSpace(req.SessionID)}
-	return runtimeops.Do(s.operations, ctx, memoReq.SessionID, req.OperationRef, memoReq, func(a sessionOnlyMemoRequest, b sessionOnlyMemoRequest) bool { return a.SessionID == b.SessionID }, func(ctx context.Context, attempt runtimeops.Attempt) (serverapi.RuntimeSubmitQueuedUserMessagesResponse, error) {
-		var resp serverapi.RuntimeSubmitQueuedUserMessagesResponse
-		var receipt session.CommitReceipt
-		err := s.runAgentExecution(attempt.Context(), req.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
-			msg, flushReceipt, err := engine.SubmitQueuedUserMessagesWithActiveHook(runCtx, func() {
-				s.operations.MarkOperationActive(memoReq.SessionID, req.OperationRef)
-			})
-			receipt = flushReceipt
-			if msg.Content != nil {
-				resp = serverapi.RuntimeSubmitQueuedUserMessagesResponse{Message: *msg.Content}
-			}
-			return err
-		})
-		s.recordOperationCompletion(memoReq.SessionID, req.OperationRef, receipt, err, attempt, s.operations.RecordSubmitQueuedCompletion)
-		return resp, err
-	})
-}
-
 func (s *Service) Interrupt(ctx context.Context, req serverapi.RuntimeInterruptRequest) (serverapi.RuntimeInterruptResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.RuntimeInterruptResponse{}, err

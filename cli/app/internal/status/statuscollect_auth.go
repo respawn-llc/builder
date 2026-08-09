@@ -1,106 +1,196 @@
 package status
 
 import (
-	"context"
-	"core/shared/auth"
-	"core/shared/config"
-	"crypto/sha256"
 	"fmt"
+	"net"
+	"net/netip"
 	"net/url"
-	"path/filepath"
-	"reflect"
 	"strings"
+
+	"core/shared/serverapi"
 )
 
-type AuthStateLoader interface {
-	Load(context.Context) (auth.State, error)
+func AuthStageFromResponse(response serverapi.AuthStatusResponse) AuthStageResult {
+	if err := response.Validate(); err != nil {
+		return UnavailableAuthStage(err)
+	}
+	resolution := response.Resolution
+	if resolution.Kind == serverapi.AuthStatusResolutionUnavailable {
+		return UnavailableAuthStage(fmt.Errorf("%s", resolution.Failure.Cause))
+	}
+	facts := *resolution.Facts
+	result := AuthStageResult{
+		Auth:         authInfoFromFacts(facts, resolution.Failure),
+		Subscription: subscriptionInfoFromFacts(response.Subscription),
+	}
+	if resolution.Failure != nil {
+		result.Warning = "auth: " + strings.TrimSpace(resolution.Failure.Cause)
+	}
+	return result
 }
 
-type AuthStateResolver interface {
-	AuthStateLoader
-	CurrentState(context.Context) (auth.State, error)
+func UnavailableAuthStage(err error) AuthStageResult {
+	cause := strings.TrimSpace(err.Error())
+	result := AuthStageResult{
+		Auth: AuthInfo{
+			Summary:     "Auth unavailable",
+			Details:     []string{cause},
+			Visible:     true,
+			Unavailable: true,
+		},
+		Warning: "auth: " + cause,
+	}
+	return result
 }
 
-func NormalizeAuthStateResolver(resolver AuthStateResolver) AuthStateResolver {
-	if isNilAuthDependency(resolver) {
-		return nil
-	}
-	return resolver
-}
-
-func NormalizeAuthStateLoader(loader AuthStateLoader) AuthStateLoader {
-	if isNilAuthDependency(loader) {
-		return nil
-	}
-	return loader
-}
-
-func isNilAuthDependency(value any) bool {
-	if value == nil {
-		return true
-	}
-	reflected := reflect.ValueOf(value)
-	switch reflected.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return reflected.IsNil()
-	default:
-		return false
-	}
-}
-
-func BuildAuthInfo(state auth.State, settings config.Settings, statusErr error) AuthInfo {
-	if statusErr != nil && !state.IsConfigured() {
-		return AuthInfo{Summary: "Auth unavailable", Details: []string{statusErr.Error()}, Visible: true, Unavailable: true}
-	}
-	details := make([]string, 0, 2)
-	baseURL := strings.TrimSpace(settings.OpenAIBaseURL)
-	if baseURL != "" && !IsOfficialChatGPTBaseURL(baseURL) {
-		details = append(details, filepath.ToSlash(baseURL))
-	}
-	switch state.Method.Type {
-	case auth.MethodOAuth:
-		summary := "Subscription"
-		if state.Method.OAuth != nil && strings.TrimSpace(state.Method.OAuth.Email) != "" {
-			summary = strings.TrimSpace(state.Method.OAuth.Email)
+func authInfoFromFacts(facts serverapi.AuthStatusFacts, failure *serverapi.AuthStatusFailure) AuthInfo {
+	provider := authProviderStatusLabel(facts.Provider)
+	details := make([]string, 0, 4)
+	if facts.Provider.Kind == serverapi.AuthProviderKindOpenAICompatible {
+		if origin := authProviderDisplayOrigin(facts.Provider.DisplayOrigin); origin != "" {
+			details = append(details, origin)
 		}
-		if statusErr != nil {
-			details = append(details, statusErr.Error())
+	}
+	info := AuthInfo{
+		Visible:  true,
+		Method:   facts.Method,
+		Provider: provider,
+	}
+	switch facts.Method {
+	case serverapi.AuthStatusMethodOAuth:
+		info.Summary = "Subscription"
+		if facts.OAuth != nil && facts.OAuth.Email != nil {
+			info.Summary = *facts.OAuth.Email
 		}
-		return AuthInfo{Summary: summary, Details: details, Visible: true, Method: auth.MethodOAuth, Provider: ProviderLabel(state, settings)}
-	case auth.MethodAPIKey:
-		summary := auth.MaskedAPIKeySummary(state.Method.APIKey)
-		provider := ProviderLabel(state, settings)
+	case serverapi.AuthStatusMethodAPIKey:
+		info.Summary = "API Key"
+		if facts.APIKey != nil && facts.APIKey.Suffix != nil {
+			info.Summary += " ..." + *facts.APIKey.Suffix
+		}
 		if provider != "" {
-			details = append(details, provider)
+			details = append(details, authProviderDetailLabel(facts.Provider))
 		}
-		if pref := EnvPreferenceLabel(state.EnvAPIKeyPreference); pref != "" {
-			details = append(details, pref)
+		if preference := authEnvPreferenceLabel(facts.EnvPreference); preference != "" {
+			details = append(details, preference)
 		}
-		if statusErr != nil {
-			details = append(details, statusErr.Error())
-		}
-		return AuthInfo{Summary: summary, Details: details, Visible: true, Method: auth.MethodAPIKey, Provider: provider}
 	default:
-		if statusErr != nil {
-			return AuthInfo{Summary: "Auth unavailable", Details: []string{statusErr.Error()}, Visible: true, Unavailable: true}
+		info.Summary = "No Auth"
+	}
+	if failure != nil {
+		details = append(details, strings.TrimSpace(failure.Cause))
+	}
+	info.Details = details
+	return info
+}
+
+func subscriptionInfoFromFacts(facts serverapi.AuthSubscriptionFacts) SubscriptionInfo {
+	if !facts.Applicable {
+		return SubscriptionInfo{}
+	}
+	if facts.Failure != nil {
+		cause := strings.TrimSpace(facts.Failure.Cause)
+		return SubscriptionInfo{
+			Applicable: true,
+			Summary:    "Subscription unavailable: " + cause,
+			Error:      cause,
 		}
-		return AuthInfo{Summary: "No Auth", Visible: true, Method: auth.MethodNone}
+	}
+	return SubscriptionInfo{
+		Applicable: true,
+		Summary:    subscriptionPlanSummary(facts.Plan),
+		Windows:    subscriptionWindowsFromFacts(facts.Windows),
 	}
 }
 
-func FastAuthInfo(ctx context.Context, loader AuthStateLoader, settings config.Settings) AuthInfo {
-	state := auth.EmptyState()
-	statusErr := error(nil)
-	loader = NormalizeAuthStateLoader(loader)
-	if loader != nil {
-		loaded, err := loader.Load(ctx)
-		if err != nil {
-			statusErr = err
-		} else {
-			state = loaded
-		}
+func subscriptionWindowsFromFacts(facts []serverapi.AuthSubscriptionWindowFacts) []SubscriptionWindow {
+	if len(facts) == 0 {
+		return nil
 	}
-	return BuildAuthInfo(state, settings, statusErr)
+	qualifierCounts := map[string]int{}
+	windows := make([]SubscriptionWindow, 0, len(facts))
+	for _, fact := range facts {
+		window := SubscriptionWindow{
+			Label:       subscriptionWindowDuration(fact.DurationSecs / 60),
+			UsedPercent: fact.UsedPercent,
+		}
+		if fact.ResetAt != nil {
+			window.ResetAt = *fact.ResetAt
+		}
+		if fact.Bucket == serverapi.AuthSubscriptionWindowBucketAdditional {
+			window.Qualifier = subscriptionWindowQualifier(fact, qualifierCounts)
+		}
+		windows = append(windows, window)
+	}
+	return windows
+}
+
+func subscriptionPlanSummary(plan *string) string {
+	if plan == nil {
+		return "Subscription"
+	}
+	normalized := strings.ToLower(strings.TrimSpace(*plan))
+	if normalized == "" {
+		return "Subscription"
+	}
+	return strings.ToUpper(normalized[:1]) + normalized[1:] + " subscription"
+}
+
+func subscriptionWindowQualifier(
+	window serverapi.AuthSubscriptionWindowFacts,
+	counts map[string]int,
+) string {
+	limitName := optionalAuthFactValue(window.LimitName)
+	feature := optionalAuthFactValue(window.MeteredFeature)
+	base := ""
+	switch {
+	case limitName == "" && feature == "":
+		base = "extra"
+	case limitName == "":
+		base = feature
+	case feature == "" || strings.EqualFold(limitName, feature):
+		base = limitName
+	default:
+		base = limitName + " / " + feature
+	}
+	counts[base]++
+	if counts[base] == 1 {
+		return base
+	}
+	return fmt.Sprintf("%s #%d", base, counts[base])
+}
+
+func subscriptionWindowDuration(windowMinutes int) string {
+	const minutesPerHour = 60
+	const minutesPerDay = 24 * minutesPerHour
+	const minutesPerWeek = 7 * minutesPerDay
+	const minutesPerMonth = 30 * minutesPerDay
+	const minutesPerYear = 365 * minutesPerDay
+	const roundingBiasMinutes = 3
+
+	if windowMinutes < 0 {
+		windowMinutes = 0
+	}
+	if windowMinutes <= minutesPerDay+roundingBiasMinutes {
+		hours := (windowMinutes + roundingBiasMinutes) / minutesPerHour
+		if hours < 1 {
+			hours = 1
+		}
+		return fmt.Sprintf("%dh", hours)
+	}
+	if windowMinutes <= minutesPerWeek+roundingBiasMinutes {
+		return "weekly"
+	}
+	if windowMinutes <= minutesPerMonth+roundingBiasMinutes {
+		return "monthly"
+	}
+	if windowMinutes < minutesPerYear-roundingBiasMinutes {
+		days := (windowMinutes + minutesPerDay/2) / minutesPerDay
+		if days < 31 {
+			days = 31
+		}
+		return fmt.Sprintf("%dd", days)
+	}
+	return "annual"
 }
 
 func AuthDisplayLabel(info AuthInfo) string {
@@ -111,22 +201,41 @@ func AuthDisplayLabel(info AuthInfo) string {
 		return "Auth unavailable"
 	}
 	switch info.Method {
-	case auth.MethodNone:
+	case serverapi.AuthStatusMethodNone:
 		return "No auth"
-	case auth.MethodAPIKey:
+	case serverapi.AuthStatusMethodAPIKey:
 		return authDisplayProviderLabel(info.Provider) + " API Key"
-	case auth.MethodOAuth:
+	case serverapi.AuthStatusMethodOAuth:
 		return authDisplayProviderLabel(info.Provider) + " Subscription"
 	default:
-		// Older remote servers may not send structured auth metadata. In that
-		// case, preserve their summary instead of deriving semantics from copy.
-		return strings.TrimSpace(info.Summary)
+		return ""
 	}
+}
+
+func authProviderStatusLabel(provider serverapi.AuthProviderFacts) string {
+	switch provider.Kind {
+	case serverapi.AuthProviderKindOpenAI:
+		return "openai"
+	case serverapi.AuthProviderKindOpenAICompatible:
+		if origin := authProviderDisplayOrigin(provider.DisplayOrigin); origin != "" {
+			return origin
+		}
+		return "openai-compatible"
+	default:
+		return strings.TrimSpace(provider.Identifier)
+	}
+}
+
+func authProviderDetailLabel(provider serverapi.AuthProviderFacts) string {
+	if provider.Kind == serverapi.AuthProviderKindOpenAI {
+		return "OpenAI"
+	}
+	return authProviderStatusLabel(provider)
 }
 
 func authDisplayProviderLabel(provider string) string {
 	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "", "openai", "chatgpt-codex":
+	case "", "openai":
 		return "OpenAI"
 	case "openai-compatible":
 		return "OpenAI-compatible"
@@ -135,97 +244,33 @@ func authDisplayProviderLabel(provider string) string {
 	}
 }
 
-func AuthCacheIdentity(manager AuthStateLoader) string {
-	manager = NormalizeAuthStateLoader(manager)
-	if manager == nil {
-		return "auth:none"
+func authProviderDisplayOrigin(origin *serverapi.AuthProviderDisplayOrigin) string {
+	if origin == nil {
+		return ""
 	}
-	state, err := manager.Load(context.Background())
-	if err != nil {
-		return "auth:error"
+	host := origin.Hostname
+	if origin.Port != nil {
+		host = net.JoinHostPort(host, *origin.Port)
+	} else if address, err := netip.ParseAddr(host); err == nil && address.Is6() {
+		host = "[" + host + "]"
 	}
-	return AuthIdentity(state)
+	return (&url.URL{Scheme: origin.Scheme, Host: host}).String()
 }
 
-func AuthIdentity(state auth.State) string {
-	switch state.Method.Type {
-	case auth.MethodOAuth:
-		oauth := state.Method.OAuth
-		if oauth == nil {
-			return "oauth"
-		}
-		parts := []string{
-			"oauth",
-			strings.TrimSpace(oauth.AccountID),
-			strings.TrimSpace(oauth.Email),
-		}
-		if parts[1] == "" && parts[2] == "" {
-			parts = append(parts, OpaqueOAuthIdentity(*oauth))
-		}
-		return strings.Join(parts, "|")
-	case auth.MethodAPIKey:
-		return strings.Join([]string{
-			"apikey",
-			string(state.EnvAPIKeyPreference),
-		}, "|")
-	default:
-		return "auth:none"
-	}
-}
-
-func OpaqueOAuthIdentity(oauth auth.OAuthMethod) string {
-	token := strings.TrimSpace(oauth.RefreshToken)
-	if token == "" {
-		token = strings.TrimSpace(oauth.AccessToken)
-	}
-	if token == "" {
-		return "opaque"
-	}
-	sum := sha256.Sum256([]byte(token))
-	return fmt.Sprintf("opaque:%x", sum[:8])
-}
-
-func ProviderLabel(state auth.State, settings config.Settings) string {
-	providerOverride := strings.ToLower(strings.TrimSpace(settings.ProviderOverride))
-	if providerOverride != "" {
-		return providerOverride
-	}
-	if state.Method.Type == auth.MethodOAuth {
-		return "chatgpt-codex"
-	}
-	if strings.TrimSpace(settings.OpenAIBaseURL) != "" {
-		return "openai-compatible"
-	}
-	return "openai"
-}
-
-func EnvPreferenceLabel(preference auth.EnvAPIKeyPreference) string {
+func authEnvPreferenceLabel(preference serverapi.AuthStatusEnvPreference) string {
 	switch preference {
-	case auth.EnvAPIKeyPreferencePreferEnv:
-		return "prefer env"
-	case auth.EnvAPIKeyPreferencePreferSaved:
-		return "prefer saved"
+	case serverapi.AuthStatusEnvPreferencePreferSaved:
+		return "saved auth preferred"
+	case serverapi.AuthStatusEnvPreferencePreferEnv:
+		return "OPENAI_API_KEY preferred"
 	default:
 		return ""
 	}
 }
 
-func IsOfficialChatGPTBaseURL(baseURL string) bool {
-	trimmed := strings.TrimSpace(baseURL)
-	if trimmed == "" {
-		return true
+func optionalAuthFactValue(value *string) string {
+	if value == nil {
+		return ""
 	}
-	parsed, err := url.Parse(trimmed)
-	if err != nil {
-		return false
-	}
-	if !strings.EqualFold(parsed.Scheme, "https") {
-		return false
-	}
-	host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
-	if host != "chatgpt.com" && host != "chat.openai.com" {
-		return false
-	}
-	pathValue := strings.TrimRight(strings.TrimSpace(parsed.EscapedPath()), "/")
-	return pathValue == "" || pathValue == "/backend-api"
+	return strings.TrimSpace(*value)
 }
