@@ -335,8 +335,9 @@ func TestHeadlessRuntimeUsesServerManagedWorktreeNamespace(t *testing.T) {
 	}), nil, time.Now)
 	authority := newTestHeadlessRuntimeAuthority(root, authManager, nil, persistence.Options()...)
 	launcher := &headlessPromptLauncher{boot: HeadlessBootstrap{
-		RuntimeAuthority:       authority,
-		ManagedWorktreeBaseDir: serverManagedBase,
+		RuntimeAuthority:                authority,
+		ManagedWorktreeBaseDir:          serverManagedBase,
+		ManagedWorktreeBaseRootResolver: func() (string, error) { return serverManagedBase, nil },
 	}}
 	runtimePlan, err := launcher.prepareRuntime(context.Background(), launch.SessionPlan{
 		Descriptor: descriptor,
@@ -656,9 +657,10 @@ func TestHeadlessChildUsesInheritedExecutionTargetAfterWorktreeReminderWasConsum
 			PersistedSessions:        meta,
 			ProjectWorkspaceBoundary: meta,
 		}).WithAuthStateReader(authManager).WithRuntimeAuthority(authority),
-		RuntimeAuthority:       authority,
-		PromptHistory:          meta,
-		ManagedWorktreeBaseDir: managedBase,
+		RuntimeAuthority:                authority,
+		PromptHistory:                   meta,
+		ManagedWorktreeBaseDir:          managedBase,
+		ManagedWorktreeBaseRootResolver: func() (string, error) { return managedBase, nil },
 	})
 	parentID := parent.Meta().SessionID
 	response, err := client.RunPrompt(ctx, serverapi.RunPromptRequest{
