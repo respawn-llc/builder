@@ -92,7 +92,10 @@ func (e *Engine) compactWithContextRepairRetry(
 		if !canRepair {
 			panic(missingToolOutputAfterCollapseInvariant)
 		}
-		repaired, repairErr := e.repairMissingToolOutputsByAppending(textutil.OptionalTrimmedString(stepID))
+		repaired, repairErr := e.repairMissingToolOutputsByAppending(
+			textutil.OptionalTrimmedString(stepID),
+			missingToolOutputRepairLiveProvider400,
+		)
 		if repairErr != nil {
 			return resp, items, errors.Join(err, repairErr)
 		}
@@ -280,7 +283,10 @@ func (e *Engine) localCompactionSummaryWithRepair(ctx context.Context, repairSte
 		if !canRepair {
 			panic(missingToolOutputAfterCollapseInvariant)
 		}
-		repaired, repairErr := e.repairMissingToolOutputsByAppending(repairStepID)
+		repaired, repairErr := e.repairMissingToolOutputsByAppending(
+			repairStepID,
+			missingToolOutputRepairLiveProvider400,
+		)
 		if repairErr != nil {
 			return "", w, errors.Join(err, repairErr)
 		}

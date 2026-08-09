@@ -565,8 +565,7 @@
   }
 
   .task-detail-description-island,
-  .task-detail-description-shell,
-  .task-detail-description-surface {
+  .task-detail-description-island > * {
     height: 100%;
   }
 }

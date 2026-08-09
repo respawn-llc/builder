@@ -268,15 +268,19 @@ func harvestedBackgroundCompletionSessionID(res tools.Result) (string, bool) {
 	return fmt.Sprintf("%d", out.SessionID), true
 }
 
-func (b *defaultBackgroundNoticeScheduler) processQueuedNotices(ctx context.Context) {
+func (b *defaultBackgroundNoticeScheduler) processQueuedNotices(ctx context.Context) *resultGroupFatal {
 	if _, err := b.runQueuedNotices(ctx); err != nil {
 		if errors.Is(err, context.Canceled) {
-			return
+			return nil
+		}
+		if fatal, abort := resultGroupFatalFromError(err); abort {
+			return fatal
 		}
 		if steerErr := b.engine.SteerBackgroundContinuationFailure(err); steerErr != nil {
 			b.engine.surfaceRunError(errors.Join(err, steerErr))
 		}
 	}
+	return nil
 }
 
 func (b *defaultBackgroundNoticeScheduler) runQueuedNotices(ctx context.Context) (assistant llm.Message, err error) {

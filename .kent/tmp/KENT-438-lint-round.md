@@ -1,0 +1,6 @@
+- [x] Read the failed lint job output and identify the exact blocker.
+- [x] Reproduce the lint failure locally.
+- [x] Fix only the in-scope root cause and add/update verification if needed.
+- [x] Run focused verification, the required build, and confirm repository state.
+- [x] Commit and push the complete remediation round.
+- [x] Confirm no unresolved review threads and return PR #724 to the watcher.

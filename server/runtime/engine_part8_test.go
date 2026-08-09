@@ -2,9 +2,9 @@ package runtime
 
 import (
 	"context"
-	"errors"
-
 	"encoding/json"
+	"errors"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -353,6 +353,27 @@ func TestSubmitUserShellCommandPersistsDeveloperNoticeAndToolEntries(t *testing.
 	}
 }
 
+func TestSubmitUserShellCommandPreservesFatalCauseWhenNoResultIsReturned(t *testing.T) {
+	handler := &closeEngineBeforeResultReportHandler{}
+	engine := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		&fakeClient{},
+		tools.NewRegistry(tools.HandlerRegistration{
+			ID:      toolspec.ToolExecCommand,
+			Handler: handler,
+		}),
+		Config{Model: "gpt-5"},
+	)
+	handler.engine = engine
+
+	_, err := engine.SubmitUserShellCommand(context.Background(), "pwd")
+	var fatal *resultGroupFatal
+	if !errors.As(err, &fatal) || !errors.Is(err, ErrEngineClosed) {
+		t.Fatalf("shell command error = %v, want preserved engine-closed Result Group fatal", err)
+	}
+}
+
 func TestSubmitUserShellCommandReturnsUnknownToolErrorWhenShellNotRegistered(t *testing.T) {
 	store := mustCreateTestSession(t)
 
@@ -466,7 +487,7 @@ func TestParallelToolsReturnDeclaredOrder(t *testing.T) {
 
 }
 
-func TestParallelToolCompletionAppearsInChatSnapshotBeforeAllToolsFinish(t *testing.T) {
+func TestParallelToolCompletionsStayPendingUntilResultGroupClose(t *testing.T) {
 	store := mustCreateTestSession(t)
 	watchdog, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 	defer cancel()
@@ -526,34 +547,44 @@ func TestParallelToolCompletionAppearsInChatSnapshotBeforeAllToolsFinish(t *test
 		t.Fatalf("timed out waiting for slow tool to start: %v", watchdog.Err())
 	}
 
-	var completed tools.Result
 	select {
-	case completed = <-toolCompleted:
+	case completed := <-toolCompleted:
+		t.Fatalf("tool completion published before result group close: %+v", completed)
 	case submitErr := <-submitDone:
-		t.Fatalf("submit completed before fast tool result: %v", submitErr)
-	case <-watchdog.Done():
-		t.Fatalf("timed out waiting for fast tool completion: %v", watchdog.Err())
-	}
-	if completed.CallID != "b" {
-		t.Fatalf("expected fast patch tool to complete first, got %+v", completed)
+		t.Fatalf("submit completed before slow tool release: %v", submitErr)
+	case <-time.After(100 * time.Millisecond):
 	}
 
 	snapshot := eng.ChatSnapshot()
 	foundPendingA := false
-	foundCompletedB := false
+	foundPendingB := false
 	for _, entry := range snapshot.Entries {
 		switch {
 		case entry.Role == "tool_call" && entry.ToolCallID == "a":
 			foundPendingA = true
-		case entry.Role == "tool_result_ok" && entry.ToolCallID == "b":
-			foundCompletedB = true
+		case entry.Role == "tool_call" && entry.ToolCallID == "b":
+			foundPendingB = true
+		case entry.Role == "tool_result_ok":
+			t.Fatalf("snapshot exposed result before result group close: %+v", snapshot.Entries)
 		}
 	}
-	if !foundPendingA || !foundCompletedB {
-		t.Fatalf("expected snapshot to expose pending a and completed b before slow tool finishes, got %+v", snapshot.Entries)
+	if !foundPendingA || !foundPendingB {
+		t.Fatalf("expected snapshot to retain both pending tools before close, got %+v", snapshot.Entries)
 	}
 
 	release()
+	completedIDs := make([]string, 0, 2)
+	for len(completedIDs) < 2 {
+		select {
+		case completed := <-toolCompleted:
+			completedIDs = append(completedIDs, completed.CallID)
+		case <-watchdog.Done():
+			t.Fatalf("timed out waiting for grouped completions: %v", watchdog.Err())
+		}
+	}
+	if !reflect.DeepEqual(completedIDs, []string{"a", "b"}) {
+		t.Fatalf("grouped completion order = %v, want [a b]", completedIDs)
+	}
 	select {
 	case submitErr := <-submitDone:
 		if submitErr != nil {
@@ -758,8 +789,9 @@ func TestExecuteToolCallsAppliesToolCompletionByCommitReceipt(t *testing.T) {
 			_, err := eng.executeToolCalls(context.Background(), "step", []llm.ToolCall{{
 				ID: "call-1", Name: tc.callName, Input: json.RawMessage(`{}`),
 			}})
-			if !errors.Is(err, errPersistToolCompletion) {
-				t.Fatalf("expected errPersistToolCompletion, got %v", err)
+			var fatal *resultGroupFatal
+			if !errors.As(err, &fatal) || fatal.Committed {
+				t.Fatalf("expected uncommitted result group fatal, got %v", err)
 			}
 			if got := eng.transcriptRuntimeState().ToolCompletionCount(); got != 0 {
 				t.Fatalf("uncommitted tool completions = %d, want 0", got)
@@ -776,8 +808,11 @@ func TestExecuteToolCallsAppliesToolCompletionByCommitReceipt(t *testing.T) {
 			_, err := eng.executeToolCalls(context.Background(), "step", []llm.ToolCall{{
 				ID: "call-1", Name: tc.callName, Input: json.RawMessage(`{}`),
 			}})
-			if !errors.Is(err, errPersistToolCompletion) || !errors.Is(err, observerErr) {
-				t.Fatalf("tool completion error = %v, want persistence wrapper and observer error", err)
+			var fatal *resultGroupFatal
+			if !errors.As(err, &fatal) ||
+				!fatal.Committed ||
+				!errors.Is(fatal.Cause, observerErr) {
+				t.Fatalf("tool completion error = %v, want committed observer fatal", err)
 			}
 			if got := eng.transcriptRuntimeState().ToolCompletionCount(); got != 1 {
 				t.Fatalf("committed tool completions = %d, want 1", got)

@@ -33,6 +33,7 @@ func TestRuntimeDerivesTargetFinalAssistantOrdinalFromCompiledScript(t *testing.
 	if err != nil {
 		t.Fatalf("create runtime: %v", err)
 	}
+	t.Cleanup(func() { _ = runtime.Close() })
 	want := ScriptFinalAssistantOrdinal(2)
 	if configuredTarget == nil || *configuredTarget != want {
 		t.Fatalf("configured target = %v, want %d", configuredTarget, want)
@@ -43,7 +44,7 @@ func TestRuntimeDerivesTargetFinalAssistantOrdinalFromCompiledScript(t *testing.
 }
 
 func TestRuntimeRejectsScriptWithoutAssistantFinal(t *testing.T) {
-	_, err := NewRuntime(
+	runtime, err := NewRuntime(
 		writeRuntimeScriptFile(t, ScriptFile{
 			Steps: []StepFile{{
 				ToolCalls: []ToolCallFile{{
@@ -56,12 +57,13 @@ func TestRuntimeRejectsScriptWithoutAssistantFinal(t *testing.T) {
 		nil,
 	)
 	if err == nil {
+		_ = runtime.Close()
 		t.Fatal("runtime accepted a script without an assistant final")
 	}
 }
 
 func TestRuntimeRejectsScriptThatDoesNotEndWithAssistantFinal(t *testing.T) {
-	_, err := NewRuntime(
+	runtime, err := NewRuntime(
 		writeRuntimeScriptFile(t, ScriptFile{
 			Steps: []StepFile{
 				{Final: "earlier final"},
@@ -75,6 +77,7 @@ func TestRuntimeRejectsScriptThatDoesNotEndWithAssistantFinal(t *testing.T) {
 		nil,
 	)
 	if err == nil {
+		_ = runtime.Close()
 		t.Fatal("runtime accepted a script whose final step is not an assistant final")
 	}
 }

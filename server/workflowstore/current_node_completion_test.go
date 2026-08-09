@@ -112,6 +112,62 @@ func TestCompleteCurrentNodeAtomicallyReplacesAgentAndReturnsSuccessorIntent(t *
 	}
 }
 
+func TestCompleteCurrentNodeWaitsForConcurrentWriterWithoutLosingItsSnapshot(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+
+	writer, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin concurrent writer: %v", err)
+	}
+	defer func() { _ = writer.Rollback() }()
+	if _, err := writer.ExecContext(
+		ctx,
+		"UPDATE tasks SET updated_at_unix_ms = updated_at_unix_ms WHERE id = ?",
+		task.ID,
+	); err != nil {
+		t.Fatalf("hold concurrent writer: %v", err)
+	}
+
+	type completionOutcome struct {
+		result CurrentNodeCompletionResult
+		err    error
+	}
+	completed := make(chan completionOutcome, 1)
+	go func() {
+		result, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+			Source:       source.Reference,
+			TransitionID: "review",
+			OutputValues: map[string]string{"summary": "completed after contention"},
+		})
+		completed <- completionOutcome{result: result, err: err}
+	}()
+
+	select {
+	case outcome := <-completed:
+		t.Fatalf("completion returned before the concurrent writer committed: result=%+v err=%v", outcome.result, outcome.err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if err := writer.Commit(); err != nil {
+		t.Fatalf("commit concurrent writer: %v", err)
+	}
+
+	select {
+	case outcome := <-completed:
+		if outcome.err != nil {
+			t.Fatalf("CompleteCurrentNode after concurrent writer: %v", outcome.err)
+		}
+		if len(outcome.result.Mutation.Created) != 1 {
+			t.Fatalf("completion mutation = %+v, want one successor", outcome.result.Mutation)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("CompleteCurrentNode did not finish after the concurrent writer committed")
+	}
+}
+
 func TestCompleteCurrentNodeInfersOnlyOutgoingFanoutTransition(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createFanoutJoinWorkflow(t, ctx, store)

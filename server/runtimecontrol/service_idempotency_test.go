@@ -244,62 +244,53 @@ func TestServiceCommittedControlObserverErrorIsMemoized(t *testing.T) {
 }
 
 func TestServiceCompactionConsumesCommittedObserverError(t *testing.T) {
-	testCases := []struct {
-		name string
-		kind clientui.RuntimeOperationKind
-		run  func(*Service, string, clientui.RuntimeOperationRef) error
-	}{
-		{
-			name: "manual",
-			kind: clientui.RuntimeOperationKindCompact,
-			run: func(service *Service, sessionID string, ref clientui.RuntimeOperationRef) error {
-				return service.CompactContext(context.Background(), serverapi.RuntimeCompactContextRequest{
-					ClientRequestID: ref.ClientRequestID.String(),
-					SessionID:       sessionID,
-					Args:            "compact now",
-					OperationRef:    ref,
-				})
-			},
-		},
-		{
-			name: "pre-submit",
-			kind: clientui.RuntimeOperationKindPreSubmitCompact,
-			run: func(service *Service, sessionID string, ref clientui.RuntimeOperationRef) error {
-				return service.CompactContextForPreSubmit(context.Background(), serverapi.RuntimeCompactContextForPreSubmitRequest{
-					ClientRequestID: ref.ClientRequestID.String(),
-					SessionID:       sessionID,
-					OperationRef:    ref,
-				})
-			},
-		},
+	observerErr := errors.New("history replacement observer failed")
+	gate := sessiontest.NewPersistenceGate(runtimeControlTestSessionPersistence)
+	store, _, client, service := newRuntimeControlCompactionFixture(t, session.WithPersistenceObserver(gate))
+	operations := runtimeops.NewCoordinator()
+	service.WithOperationCoordinator(operations)
+	ref := runtimeControlOperationRef(clientui.RuntimeOperationKindCompact)
+	request := serverapi.RuntimeCompactContextRequest{
+		ClientRequestID: ref.ClientRequestID.String(),
+		SessionID:       store.Meta().SessionID,
+		Args:            "compact now",
+		OperationRef:    ref,
 	}
-	for _, testCase := range testCases {
-		t.Run(testCase.name, func(t *testing.T) {
-			observerErr := errors.New("history replacement observer failed")
-			gate := sessiontest.NewPersistenceGate(runtimeControlTestSessionPersistence)
-			store, _, client, service := newRuntimeControlCompactionFixture(t, session.WithPersistenceObserver(gate))
-			operations := runtimeops.NewCoordinator()
-			service.WithOperationCoordinator(operations)
-			ref := runtimeControlOperationRef(testCase.kind)
-			gate.FailNext(observerErr)
+	gate.FailNext(observerErr)
+	if err := service.CompactContext(context.Background(), request); !errors.Is(err, observerErr) {
+		t.Fatalf("first compaction error = %v, want observer error", err)
+	}
+	if err := service.CompactContext(context.Background(), request); !errors.Is(err, observerErr) {
+		t.Fatalf("replayed compaction error = %v, want cached observer error", err)
+	}
+	if client.compactionCalls != 1 {
+		t.Fatalf("compaction call count = %d, want 1", client.compactionCalls)
+	}
+	if got := countEventsByKind(t, store, "history_replaced"); got != 1 {
+		t.Fatalf("history_replaced event count = %d, want 1", got)
+	}
+	snapshot := runtimeControlFeedSnapshot(t, operations, store.Meta().SessionID, []clientui.RuntimeOperationRef{ref})
+	if len(snapshot.Operations) != 1 || snapshot.Operations[0].State != clientui.RuntimeInputReconciliationCommitted {
+		t.Fatalf("compaction reconciliation = %+v, want committed", snapshot)
+	}
+}
 
-			if err := testCase.run(service, store.Meta().SessionID, ref); !errors.Is(err, observerErr) {
-				t.Fatalf("first compaction error = %v, want observer error", err)
-			}
-			if err := testCase.run(service, store.Meta().SessionID, ref); !errors.Is(err, observerErr) {
-				t.Fatalf("replayed compaction error = %v, want cached observer error", err)
-			}
-			if client.compactionCalls != 1 {
-				t.Fatalf("compaction call count = %d, want 1", client.compactionCalls)
-			}
-			if got := countEventsByKind(t, store, "history_replaced"); got != 1 {
-				t.Fatalf("history_replaced event count = %d, want 1", got)
-			}
-			snapshot := runtimeControlFeedSnapshot(t, operations, store.Meta().SessionID, []clientui.RuntimeOperationRef{ref})
-			if len(snapshot.Operations) != 1 || snapshot.Operations[0].State != clientui.RuntimeInputReconciliationCommitted {
-				t.Fatalf("compaction reconciliation = %+v, want committed", snapshot)
-			}
-		})
+func TestServiceSubmitUserTurnRunsParentOwnedPreSubmitCompaction(t *testing.T) {
+	store, engine, client, service := newRuntimeControlCompactionFixture(t)
+	if shouldCompact, compactErr := engine.ShouldCompactBeforeUserMessage(context.Background(), "after compaction"); !shouldCompact || compactErr != nil {
+		t.Fatalf("pre-submit compaction precondition = (%t, %v), usage=%+v", shouldCompact, compactErr, engine.ContextUsage())
+	}
+	resp, err := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "parent-compaction", "after compaction"))
+	if err != nil || !resp.Compacted || resp.Message != "done" {
+		t.Fatalf("SubmitUserTurn = (%+v, %v), usage=%+v, want compacted assistant response", resp, err, engine.ContextUsage())
+	}
+	if client.compactionCalls != 1 ||
+		countEventsByKind(t, store, "history_replaced") != 1 ||
+		countUserMessagesWithContent(t, store, "after compaction") != 1 {
+		t.Fatalf("pre-submit compaction calls/events/submits = %d/%d/%d, want 1/1/1",
+			client.compactionCalls,
+			countEventsByKind(t, store, "history_replaced"),
+			countUserMessagesWithContent(t, store, "after compaction"))
 	}
 }
 
@@ -307,10 +298,10 @@ func newRuntimeControlCompactionFixture(t *testing.T, options ...session.StoreOp
 	t.Helper()
 	trimmed := 1
 	client := &runtimeControlFakeClient{
-		responses: []llm.Response{{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
-			Usage:     llm.Usage{WindowTokens: 200000},
-		}},
+		responses: []llm.Response{
+			{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("seeded"), Phase: textutil.Value(llm.MessagePhaseFinal)}, Usage: llm.Usage{InputTokens: 330000, WindowTokens: 372000}},
+			{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)}, Usage: llm.Usage{WindowTokens: 1000}},
+		},
 		compactionResponses: []llm.CompactionResponse{{
 			OutputItems: []llm.ResponseItem{
 				{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("summary")},
@@ -372,9 +363,10 @@ func localEntryEvents(t *testing.T, store *session.Store) []runtime.ChatEntry {
 		if !ok {
 			t.Fatalf("local_entry payload = %T, want session.LocalEntryRecord", payload)
 		}
+		text, _ := textutil.OptionalValue(entryRecord.Text)
 		entries = append(entries, runtime.ChatEntry{
 			Role: entryRecord.Role,
-			Text: entryRecord.Text,
+			Text: text,
 			Visibility: transcript.NormalizeEntryVisibility(
 				transcript.EntryVisibility(entryRecord.Visibility),
 			),
@@ -404,59 +396,6 @@ func TestServiceAppendCommittedEntryReplaysVisibility(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("visible warning entry count = %d, want 1", count)
-	}
-}
-
-func TestServiceSubmitQueuedUserMessagesConsumesCommittedObserverError(t *testing.T) {
-	observerErr := errors.New("queued flush observer failed")
-	gate := sessiontest.NewPersistenceGate(runtimeControlTestSessionPersistence)
-	client := &runtimeControlFakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("seeded"), Phase: textutil.Value(llm.MessagePhaseFinal)},
-		Usage:     llm.Usage{WindowTokens: 200000},
-	}}}
-	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{}, session.WithPersistenceObserver(gate))
-	if _, err := engine.SubmitUserMessage(context.Background(), "seed"); err != nil {
-		t.Fatalf("seed runtime transcript: %v", err)
-	}
-	modelCallsBeforeSubmit := client.calls
-	entriesBeforeSubmit := engine.CommittedTranscriptEntryCount()
-	engine.QueueUserMessage("hello")
-	operations := runtimeops.NewCoordinator()
-	service.WithOperationCoordinator(operations)
-	ref := runtimeControlOperationRef(clientui.RuntimeOperationKindSubmitQueued)
-	req := serverapi.RuntimeSubmitQueuedUserMessagesRequest{
-		ClientRequestID: ref.ClientRequestID.String(),
-		SessionID:       store.Meta().SessionID,
-		OperationRef:    ref,
-	}
-	gate.FailNext(observerErr)
-
-	first, err := service.SubmitQueuedUserMessages(context.Background(), req)
-	if !errors.Is(err, observerErr) {
-		t.Fatalf("first queued submission error = %v, want observer error", err)
-	}
-	second, err := service.SubmitQueuedUserMessages(context.Background(), req)
-	if !errors.Is(err, observerErr) {
-		t.Fatalf("replayed queued submission error = %v, want cached observer error", err)
-	}
-	if first != second {
-		t.Fatalf("responses = (%+v, %+v), want identical replay", first, second)
-	}
-	if client.calls != modelCallsBeforeSubmit {
-		t.Fatalf("generate call count changed from %d to %d", modelCallsBeforeSubmit, client.calls)
-	}
-	if got := countUserMessagesWithContent(t, store, "hello"); got != 1 {
-		t.Fatalf("queued user flush count = %d, want 1", got)
-	}
-	if engine.HasQueuedUserWork() {
-		t.Fatal("committed queued flush retained retry ownership")
-	}
-	if got := engine.CommittedTranscriptEntryCount(); got != entriesBeforeSubmit+1 {
-		t.Fatalf("projected transcript entries = %d, want %d", got, entriesBeforeSubmit+1)
-	}
-	snapshot := runtimeControlFeedSnapshot(t, operations, store.Meta().SessionID, []clientui.RuntimeOperationRef{ref})
-	if len(snapshot.Operations) != 1 || snapshot.Operations[0].State != clientui.RuntimeInputReconciliationSubmitted {
-		t.Fatalf("queued submission reconciliation = %+v, want submitted", snapshot)
 	}
 }
 

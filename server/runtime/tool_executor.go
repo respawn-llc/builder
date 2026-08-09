@@ -21,36 +21,66 @@ type defaultToolExecutor struct {
 
 var ErrMissingProviderToolCallID = errors.New("provider tool call id is required")
 
-func (t *defaultToolExecutor) ExecuteToolCalls(ctx context.Context, stepID string, calls []llm.ToolCall) ([]tools.Result, error) {
+func (t *defaultToolExecutor) ExecuteToolCalls(
+	ctx context.Context,
+	stepID string,
+	preparedCalls []executorToolCall,
+	collector *resultGroupCollector,
+) error {
 	e := t.engine
-	results := make([]tools.Result, len(calls))
-	callErrs := make([]error, len(calls))
+	callErrs := make([]error, len(preparedCalls))
 	wg := sync.WaitGroup{}
 	runID := activeRunIDForStep(e, stepID)
-	workingDir := e.transcriptWorkingDir()
 	workflowActive := e.currentNodeExecutionActive()
 	serialGate := newSerialToolGate()
 	nextSerialOrdinal := 0
-	preparedCalls, err := prepareExecutorToolCalls(e, stepID, runID, workflowActive, calls)
-	if err != nil {
-		return results, err
+	if collector == nil {
+		return errors.New("tool execution requires a result group collector")
 	}
+	executionCtx, cancelExecution := context.WithCancel(ctx)
+	defer cancelExecution()
+	executionCtx = tools.WithEffectBarrier(
+		executionCtx,
+		t.resultGroupEffectBarrier(
+			executionCtx,
+			stepID,
+			collector,
+			cancelExecution,
+		),
+	)
 
 	for i := range preparedCalls {
+		if fatal := collector.fatalSnapshot(); fatal != nil {
+			cancelExecution()
+			callErrs[i] = fatal
+			break
+		}
 		prepared := preparedCalls[i]
 		call := prepared.call
 		toolID := prepared.toolID
 		knownTool := prepared.knownTool
 		executableCall := prepared.call
-		transcriptCall := normalizeToolCallForTranscript(executableCall, workingDir)
+		transcriptCall := normalizeToolCallForTranscript(executableCall, e.transcriptWorkingDir())
 		started := Event{Kind: EventToolCallStarted, StepID: stepID, ToolCall: &transcriptCall, CommittedTranscriptChanged: true}
 		if start, ok := e.pendingToolCallStart(call.ID); ok {
 			started.CommittedEntryStart = start
 			started.CommittedEntryStartSet = true
 		}
 		if err := e.steer(stepID, steerEventIntent(started)); err != nil {
-			callErrs[i] = fmt.Errorf("persist tool started (call_id=%s tool=%s): %w", call.ID, executableCall.Name, err)
-			continue
+			failure := fmt.Errorf(
+				"persist tool started (call_id=%s tool=%s): %w",
+				call.ID,
+				executableCall.Name,
+				err,
+			)
+			fatal := e.abortResultGroupForOperationalFailure(
+				stepID,
+				collector,
+				failure,
+			)
+			cancelExecution()
+			callErrs[i] = fatal
+			break
 		}
 		idx := i
 		serialOrdinal := -1
@@ -62,58 +92,62 @@ func (t *defaultToolExecutor) ExecuteToolCalls(ctx context.Context, stepID strin
 		go func(tc llm.ToolCall, toolID toolspec.ID, knownTool bool, serialOrdinal int, askBatch *tools.AskQuestionBatchMetadata) {
 			defer wg.Done()
 			defer e.forgetPendingToolCallStart(tc.ID)
-			var callErr error
 
 			if serialOrdinal >= 0 {
 				serialGate.wait(serialOrdinal)
 				defer serialGate.done(serialOrdinal)
 			}
-			if !knownTool {
-				results[idx] = tools.Result{CallID: tc.ID, Name: toolspec.ID(tc.Name), IsError: true, Output: mustJSON(map[string]any{"error": "unknown tool"}), Summary: textutil.Value("unknown tool")}
-				if err := e.steer(stepID, steerToolCompletionIntent(results[idx])); err != nil {
-					callErrs[idx] = fmt.Errorf("%w (call_id=%s tool=%s): %w", errPersistToolCompletion, tc.ID, results[idx].Name, err)
-				}
+			res, completed, callErr := t.executePreparedToolCall(executionCtx, stepID, runID, tc, toolID, knownTool, askBatch)
+			if fatal := collector.fatalSnapshot(); fatal != nil {
 				return
 			}
-			if toolID == toolspec.ToolCompleteNode {
-				results[idx] = t.executeCompleteNodeTool(ctx, stepID, tc)
-				if err := e.steer(stepID, steerToolCompletionIntent(results[idx])); err != nil {
-					callErrs[idx] = fmt.Errorf("%w (call_id=%s tool=%s): %w", errPersistToolCompletion, tc.ID, results[idx].Name, err)
-				}
+			if !completed {
+				callErrs[idx] = callErr
 				return
 			}
-			h, ok := e.registry.Get(toolID)
-			if toolID == toolspec.ToolWebSearch {
-				if err := tools.ValidateWebSearchInput(tc.Input); err != nil {
-					results[idx] = tools.ErrorResult(tools.Call{ID: tc.ID, Name: toolID, Input: tc.Input, RunID: runID, StepID: stepID}, tools.InvalidWebSearchQueryMessage)
-					if err := e.steer(stepID, steerToolCompletionIntent(results[idx])); err != nil {
-						callErrs[idx] = fmt.Errorf("%w (call_id=%s tool=%s): %w", errPersistToolCompletion, tc.ID, results[idx].Name, err)
-					}
+			var outcome *resultGroupReportOutcome
+			if err := e.steer(stepID, steerResultGroupReportIntent(
+				collector,
+				tc.ID,
+				resultGroupUnit{result: res},
+				&outcome,
+			)); err != nil {
+				if fatal := collector.fatalSnapshot(); fatal != nil {
+					cancelExecution()
+					callErrs[idx] = fatal
 					return
 				}
-			}
-			if !ok {
-				results[idx] = tools.Result{CallID: tc.ID, Name: toolID, IsError: true, Output: mustJSON(map[string]any{"error": "unknown tool"}), Summary: textutil.Value("unknown tool")}
-				if err := e.steer(stepID, steerToolCompletionIntent(results[idx])); err != nil {
-					callErrs[idx] = fmt.Errorf("%w (call_id=%s tool=%s): %w", errPersistToolCompletion, tc.ID, results[idx].Name, err)
-				}
+				failure := errors.Join(callErr, fmt.Errorf(
+					"report tool result (call_id=%s tool=%s): %w",
+					tc.ID,
+					res.Name,
+					err,
+				))
+				fatal := e.abortResultGroupForOperationalFailure(
+					stepID,
+					collector,
+					failure,
+				)
+				cancelExecution()
+				callErrs[idx] = fatal
 				return
 			}
-			res, err := h.Call(
-				tools.WithExecutionIdentity(ctx, tools.ExecutionIdentity{RunID: runID, StepID: stepID}),
-				tools.Call{ID: tc.ID, Name: toolID, Input: tc.Input, RunID: runID, StepID: stepID, AskQuestionBatch: askBatch, OnAskQuestionBatchSkipped: e.cfg.AskQuestionBatchSkipped},
-			)
-			if err != nil {
-				callErr = err
-				res = tools.Result{CallID: tc.ID, Name: toolID, IsError: true, Output: mustJSON(map[string]any{"error": err.Error()}), Summary: textutil.Value(err.Error())}
+			if fatal := collector.fatalSnapshot(); fatal != nil {
+				return
 			}
-			res.CallID = tc.ID
-			res.Name = toolID
-			res = tools.MaterializeModelWarnings(res)
-			results[idx] = res
-			if err := e.steer(stepID, steerToolCompletionIntent(res)); err != nil {
-				persistErr := fmt.Errorf("%w (call_id=%s tool=%s): %w", errPersistToolCompletion, tc.ID, res.Name, err)
-				callErrs[idx] = errors.Join(callErr, persistErr)
+			if outcome == nil || *outcome != resultGroupReportAccepted {
+				failure := fmt.Errorf(
+					"result group ignored tool result without fatal (call_id=%s tool=%s)",
+					tc.ID,
+					res.Name,
+				)
+				fatal := e.abortResultGroupForOperationalFailure(
+					stepID,
+					collector,
+					failure,
+				)
+				cancelExecution()
+				callErrs[idx] = fatal
 				return
 			}
 			callErrs[idx] = callErr
@@ -125,11 +159,127 @@ func (t *defaultToolExecutor) ExecuteToolCalls(ctx context.Context, stepID strin
 	for _, err := range callErrs {
 		joined = errors.Join(joined, err)
 	}
-	joined = errors.Join(joined, e.drainActiveStepGoalMutations(stepID))
 	if joined != nil {
-		return results, joined
+		return joined
 	}
-	return results, nil
+	return nil
+}
+
+func (t *defaultToolExecutor) resultGroupEffectBarrier(
+	ctx context.Context,
+	stepID string,
+	collector *resultGroupCollector,
+	cancel context.CancelFunc,
+) tools.EffectBarrier {
+	return func(reason tools.EffectBarrierReason) error {
+		flushReason, err := resultGroupFlushReasonForEffect(reason)
+		if err != nil {
+			return err
+		}
+		return runResultGroupEffectBarrier(
+			ctx,
+			collector,
+			cancel,
+			func() error {
+				return t.engine.steer(
+					stepID,
+					steerResultGroupFlushIntent(collector, flushReason),
+				)
+			},
+		)
+	}
+}
+
+func runResultGroupEffectBarrier(
+	ctx context.Context,
+	collector *resultGroupCollector,
+	cancel context.CancelFunc,
+	flush func() error,
+) error {
+	flushErr := flush()
+	if fatal := collector.fatalSnapshot(); fatal != nil {
+		cancel()
+		return fatal
+	}
+	if flushErr != nil {
+		return fmt.Errorf(
+			"result group effect barrier failed without collector fatal: %w",
+			flushErr,
+		)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func resultGroupFlushReasonForEffect(
+	reason tools.EffectBarrierReason,
+) (ResultGroupFlushReason, error) {
+	switch reason {
+	case tools.EffectBarrierQuestion:
+		return ResultGroupFlushQuestion, nil
+	case tools.EffectBarrierApproval:
+		return ResultGroupFlushApproval, nil
+	case tools.EffectBarrierCompleteNode:
+		return ResultGroupFlushCompleteNode, nil
+	default:
+		return 0, fmt.Errorf("unknown tool effect barrier reason %d", reason)
+	}
+}
+
+func (t *defaultToolExecutor) executePreparedToolCall(
+	ctx context.Context,
+	stepID string,
+	runID string,
+	call llm.ToolCall,
+	toolID toolspec.ID,
+	knownTool bool,
+	askBatch *tools.AskQuestionBatchMetadata,
+) (tools.Result, bool, error) {
+	if !knownTool {
+		return tools.Result{CallID: call.ID, Name: toolspec.ID(call.Name), IsError: true, Output: mustJSON(map[string]any{"error": "unknown tool"}), Summary: textutil.Value("unknown tool")}, true, nil
+	}
+	if toolID == toolspec.ToolCompleteNode {
+		return t.executeCompleteNodeTool(ctx, stepID, call), true, nil
+	}
+	if toolID == toolspec.ToolWebSearch {
+		if err := tools.ValidateWebSearchInput(call.Input); err != nil {
+			return tools.ErrorResult(tools.Call{ID: call.ID, Name: toolID, Input: call.Input, RunID: runID, StepID: stepID}, tools.InvalidWebSearchQueryMessage), true, nil
+		}
+	}
+	handler, ok := t.engine.registry.Get(toolID)
+	if !ok {
+		return tools.Result{CallID: call.ID, Name: toolID, IsError: true, Output: mustJSON(map[string]any{"error": "unknown tool"}), Summary: textutil.Value("unknown tool")}, true, nil
+	}
+	result, err := handler.Call(
+		tools.WithExecutionIdentity(ctx, tools.ExecutionIdentity{RunID: runID, StepID: stepID}),
+		tools.Call{ID: call.ID, Name: toolID, Input: call.Input, RunID: runID, StepID: stepID, AskQuestionBatch: askBatch, OnAskQuestionBatchSkipped: t.engine.cfg.AskQuestionBatchSkipped},
+	)
+	if err != nil {
+		if errors.Is(err, context.Canceled) &&
+			ctx.Err() != nil &&
+			!toolResultHasCompletedOutcome(result) {
+			return tools.Result{}, false, err
+		}
+		if !toolResultHasCompletedOutcome(result) {
+			result = tools.Result{CallID: call.ID, Name: toolID, IsError: true, Output: mustJSON(map[string]any{"error": err.Error()}), Summary: textutil.Value(err.Error())}
+		}
+	}
+	result.CallID = call.ID
+	result.Name = toolID
+	return tools.MaterializeModelWarnings(result), true, err
+}
+
+func toolResultHasCompletedOutcome(result tools.Result) bool {
+	return len(result.Output) > 0 ||
+		result.IsError ||
+		result.Terminal ||
+		result.Summary != nil ||
+		result.CondensedText != nil ||
+		len(result.ModelWarnings) > 0 ||
+		result.Presentation != nil ||
+		result.PresentationDelta != nil
 }
 
 type executorToolCall struct {
@@ -251,6 +401,15 @@ func (t *defaultToolExecutor) executeCompleteNodeTool(ctx context.Context, stepI
 	parsed, err := workflowruntime.DecodeCompletion(call.Input, execution.Contract)
 	if err != nil {
 		return e.workflowCompletionRejectedResult(ctx, result, err)
+	}
+	if barrier, ok := tools.EffectBarrierFromContext(ctx); ok {
+		if err := barrier(tools.EffectBarrierCompleteNode); err != nil {
+			return tools.ErrorResult(tools.Call{
+				ID:    call.ID,
+				Name:  toolspec.ToolCompleteNode,
+				Input: call.Input,
+			}, err.Error())
+		}
 	}
 	completed, err := e.completeWorkflowCurrentNode(ctx, parsed)
 	if err != nil {

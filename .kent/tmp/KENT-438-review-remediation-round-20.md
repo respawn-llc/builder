@@ -1,0 +1,5 @@
+- [x] Enumerate every failing test from CI run 31276717035.
+- [x] Compare failures with prior runs and reproduce branch-related failures locally.
+- [x] Fix only the proven root cause within the remaining cumulative LoC cap.
+- [x] Verify, commit, push, and confirm no unresolved review threads.
+- [x] Return PR #724 to the watcher.

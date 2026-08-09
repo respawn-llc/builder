@@ -34,6 +34,16 @@ func TestExecuteToolCallsCanonicalizesEditAliases(t *testing.T) {
 	if len(results) != 1 || results[0].Name != toolspec.ToolEdit {
 		t.Fatalf("results = %+v, want canonical edit", results)
 	}
+	snapshot := mustTranscriptHydrationSnapshot(t, eng)
+	var persistedSummary string
+	for _, row := range snapshot.CommittedRows {
+		if row.Tool != nil && row.Tool.ToolCallID == "call-replace" {
+			persistedSummary = row.Tool.ResultSummary
+		}
+	}
+	if persistedSummary != "edited file" {
+		t.Fatalf("persisted edit summary = %q, want %q", persistedSummary, "edited file")
+	}
 	var started *llm.ToolCall
 	for _, evt := range events {
 		if evt.Kind == EventToolCallStarted && evt.ToolCall != nil && evt.ToolCall.ID == "call-replace" {
@@ -101,5 +111,10 @@ func (t capturingTool) Call(_ context.Context, c tools.Call) (tools.Result, erro
 		return tools.Result{CallID: c.ID, Name: c.Name, Output: out, IsError: true, Summary: textutil.Value("Edit failed: expected JSON object input.")}, nil
 	}
 	out, _ := json.Marshal("ok")
-	return tools.Result{CallID: c.ID, Name: c.Name, Output: out}, nil
+	return tools.Result{
+		CallID:  c.ID,
+		Name:    c.Name,
+		Output:  out,
+		Summary: textutil.Value("edited file"),
+	}, nil
 }

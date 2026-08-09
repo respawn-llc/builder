@@ -273,7 +273,9 @@ func (r *agentResource) withEngine(ctx context.Context, ref runtimeids.SessionRe
 	r.signalLocked()
 	r.mu.Unlock()
 	defer func() {
-		err = errors.Join(err, r.releaseCallback())
+		if releaseErr := r.releaseCallback(); releaseErr != nil {
+			err = errors.Join(err, releaseErr)
+		}
 	}()
 	return callback(ctx, engine)
 }
@@ -648,6 +650,38 @@ func (a *Authority) closeRetiringResource(ctx context.Context, resource *agentRe
 	}
 	_, closeErr := a.closeAdmittedResourceLocked(ctx, resource)
 	return closeErr
+}
+
+func (a *Authority) retireRuntimeAbortResource(ctx context.Context, resource *agentResource) error {
+	if resource == nil {
+		return nil
+	}
+	sessionID := resource.ref.SessionID()
+	gate := a.gateFor(sessionID)
+	gate.lock.Lock()
+	defer gate.lock.Unlock()
+
+	resource.mu.Lock()
+	a.mu.Lock()
+	admitted := a.resources[sessionID] == resource
+	a.mu.Unlock()
+	if !admitted || resource.state == AgentResourceClosed {
+		resource.mu.Unlock()
+		return nil
+	}
+	if resource.state != AgentResourceReady ||
+		resource.steps != 0 {
+		descriptor := resource.descriptorLocked()
+		resource.mu.Unlock()
+		return fmt.Errorf(
+			"retire runtime-aborted resource %s generation %d from state %d with live ownership",
+			descriptor.Ref.SessionID(),
+			descriptor.Ref.Generation(),
+			descriptor.State,
+		)
+	}
+	_, err := a.closeAdmittedResourceLocked(ctx, resource)
+	return err
 }
 
 // closeAdmittedResourceLocked owns the exact transition from a ready resource

@@ -10,9 +10,67 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"core/shared/rollbacktarget"
 )
+
+type recordingDurabilityObserver struct {
+	appends []EventLogAppendObservation
+	syncs   []EventLogSyncObservation
+}
+
+func (o *recordingDurabilityObserver) ObserveEventLogAppend(observation EventLogAppendObservation) {
+	o.appends = append(o.appends, observation)
+}
+
+func (o *recordingDurabilityObserver) ObserveEventLogSync(observation EventLogSyncObservation) {
+	o.syncs = append(o.syncs, observation)
+}
+
+func TestCurrentEventLogObservesAppendAttemptAndPhysicalSync(t *testing.T) {
+	path := filepath.Join(t.TempDir(), eventsFile)
+	log, err := createCurrentEventLog(path)
+	if err != nil {
+		t.Fatalf("create current event log: %v", err)
+	}
+	observer := &recordingDurabilityObserver{}
+	log.durabilityObserver = observer
+	content := "observed"
+	record, err := NewEventRecord(1, nil, MessageRecord{
+		Role:    MessageRoleAssistant,
+		Content: &content,
+	})
+	if err != nil {
+		t.Fatalf("create event record: %v", err)
+	}
+
+	if _, err := log.appendRecords([]EventRecord{record}); err != nil {
+		t.Fatalf("append current record: %v", err)
+	}
+
+	if len(observer.appends) != 1 {
+		t.Fatalf("append observations = %d, want 1", len(observer.appends))
+	}
+	if observer.appends[0].RecordCount != 1 {
+		t.Fatalf("append record count = %d, want 1", observer.appends[0].RecordCount)
+	}
+	if observer.appends[0].Latency < 0 {
+		t.Fatalf("append latency = %s, want non-negative", observer.appends[0].Latency)
+	}
+	if !observer.appends[0].Succeeded {
+		t.Fatal("append observation did not report success")
+	}
+	if len(observer.syncs) != 1 {
+		t.Fatalf("sync observations = %d, want 1", len(observer.syncs))
+	}
+	if observer.syncs[0].Latency < 0*time.Nanosecond {
+		t.Fatalf("sync latency = %s, want non-negative", observer.syncs[0].Latency)
+	}
+	if !observer.syncs[0].Succeeded {
+		t.Fatal("sync observation did not report success")
+	}
+}
 
 func TestCurrentEventLogCreatesHeaderOnlyLog(t *testing.T) {
 	path := filepath.Join(t.TempDir(), eventsFile)

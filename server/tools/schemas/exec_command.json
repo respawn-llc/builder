@@ -1,39 +1,41 @@
 {
-  "type": "object",
-  "additionalProperties": false,
-  "required": ["cmd"],
-  "properties": {
-    "cmd": {
-      "type": "string",
-      "description": "Shell command to execute."
-    },
-    "workdir": {
-      "type": "string",
-      "description": "Optional working directory to run the command in; defaults to the workspace root."
-    },
-    "shell": {
-      "type": "string",
-      "description": "Shell binary to launch. Defaults to the user's default shell."
-    },
-    "login": {
-      "type": "boolean",
-      "description": "Whether to run the shell with login semantics. Defaults to true."
-    },
-    "tty": {
-      "type": "boolean",
-      "description": "Whether to keep stdin open for follow-up write_stdin calls. Defaults to false."
-    },
-    "raw": {
-      "type": "boolean",
-      "description": "Bypass automatic optimization that reduces noise. Rerun the command in raw mode if the original output hid important details. Defaults to false."
-    },
-    "yield_time_ms": {
-      "type": "integer",
-      "description": "How long to wait for command to finish before backgrounding the process. Omit this for most commands."
-    },
-    "max_output_tokens": {
-      "type": "integer",
-      "description": "Maximum amount of output to return. Excess output will be truncated, and the full log remains available on disk. Omit this unless you want an override."
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+        "cmd"
+    ],
+    "properties": {
+        "cmd": {
+            "type": "string",
+            "description": "Shell command to execute."
+        },
+        "workdir": {
+            "type": "string",
+            "description": "Optional working directory to run the command in; defaults to the workspace root."
+        },
+        "shell": {
+            "type": "string",
+            "description": "Shell binary to launch. Defaults to the user's default shell."
+        },
+        "login": {
+            "type": "boolean",
+            "description": "Whether to run the shell with login semantics. Defaults to true."
+        },
+        "tty": {
+            "type": "boolean",
+            "description": "Whether to keep stdin open for follow-up write_stdin calls. Defaults to false."
+        },
+        "raw": {
+            "type": "boolean",
+            "description": "Bypass automatic optimizations that reduce noise. Rerun the command in raw mode if the original output hid important details. Defaults to false."
+        },
+        "yield_time_ms": {
+            "type": "integer",
+            "description": "How long to wait for command to finish before backgrounding the process. Omit this for most commands."
+        },
+        "max_output_tokens": {
+            "type": "integer",
+            "description": "Maximum amount of output to return. The full log still remains available on disk. Omit this unless there's a reason to read large chunks of text."
+        }
     }
-  }
 }

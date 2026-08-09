@@ -1,0 +1,8 @@
+- [x] Reproduce immediate successor-assignment failure escaping post-turn finalization.
+- [x] Keep committed source completion successful and leave successor failure to ExecutionFinalized recovery.
+- [x] Reproduce Agent and Script finalizing-publication failures without terminal disposition.
+- [x] Route non-cancellation finalizing-publication failures through typed scope failure.
+- [x] Run focused repetitions, race coverage, relevant full suites, vet, and the required build.
+- [x] Commit and push the complete review round.
+- [x] Reply to and resolve both addressed threads.
+- [x] Confirm PR state and return PR #724 to the watcher.

@@ -8,9 +8,9 @@ This repository contains Kent - a coding agent focused on output quality, built 
 - `server/runtimecommand`
   - Runtime Command ordering and dormant goal-command mutation authority.
 - `server/bootstrap`
-  - Server-owned embedded bootstrap composition for config/container resolution, auth-manager creation, and runtime-support setup shared by CLI flows.
+  - Server-owned bootstrap composition for config/container resolution, auth-manager creation, and runtime-support setup.
 - `server/startup`
-  - Explicit in-process app-server and daemon startup composition used by embedded and serve flows; owns startup orchestration across bootstrap/auth/onboarding hooks and exposes server capabilities to frontends.
+  - `kent serve` composition root; owns startup orchestration across bootstrap, auth, onboarding, and server capability activation.
 - `server/authservice`
   - Server-owned auth readiness, bootstrap/status services, and env-backed auth-store policy used by CLI auth UX.
 - `server/sessionservice`

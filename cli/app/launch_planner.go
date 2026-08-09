@@ -9,8 +9,8 @@ import (
 	"strings"
 	"sync"
 
-	"core/cli/app/internal/status"
 	"core/shared/apicontract"
+	"core/shared/authstatus"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/lifecyclecontract"
@@ -47,10 +47,6 @@ type sessionLaunchPlan struct {
 	Source                     config.SourceReport
 	ClientLifecycleCommand     []string
 	ClientLifecycleOpeningKind lifecyclecontract.OpeningKind
-}
-
-type resolvedSessionPlanRequest struct {
-	request serverapi.SessionPlanRequest
 }
 
 type runtimeLaunchPlan struct {
@@ -105,7 +101,6 @@ type sessionViewReader interface {
 }
 
 type launchPlannerServer interface {
-	OwnsServer() bool
 	Config() config.App
 	PresentationTheme() string
 	ProjectID() string
@@ -116,32 +111,13 @@ type launchPlannerServer interface {
 	SessionViewClient() apicontract.SessionViewService
 }
 
-type launchPlannerAuthStateProvider interface {
-	AuthStateResolver() status.AuthStateResolver
-	AuthStatePath() string
-}
-
-type launchPlannerAuthStateMetadata struct {
-	Resolver status.AuthStateResolver
-	Path     string
-}
-
-type launchPlannerRuntimePreparer interface {
-	PrepareRuntime(ctx context.Context, plan sessionLaunchPlan, diagnosticWriter io.Writer, startLogLine string) (*runtimeLaunchPlan, error)
-}
-
 type launchPlanner struct {
 	server      launchPlannerServer
 	pickSession sessionPickerRunner
 }
 
 func newSessionLaunchPlanner(server launchPlannerServer) *launchPlanner {
-	return &launchPlanner{
-		server: server,
-		pickSession: func(ctx context.Context, loader sessionPageLoader, theme string, header sessionPickerHeaderInfo) (sessionPickerResult, error) {
-			return runSessionPickerFlow(ctx, loader, theme, header)
-		},
-	}
+	return &launchPlanner{server: server, pickSession: runSessionPickerFlow}
 }
 
 type projectScopedSessionPageLoader struct {
@@ -161,11 +137,15 @@ func (p *launchPlanner) PlanSession(ctx context.Context, req sessionLaunchReques
 	if p == nil || p.server == nil || p.server.SessionLaunchClient() == nil {
 		return sessionLaunchPlan{}, errors.New("launch planner bootstrap is required")
 	}
-	resolved, err := p.resolvePlanRequest(ctx, req)
-	if err != nil {
+	if err := req.Intent.Validate(); err != nil {
 		return sessionLaunchPlan{}, err
 	}
-	resp, err := p.server.SessionLaunchClient().PlanSession(ctx, resolved.request)
+	resp, err := p.server.SessionLaunchClient().PlanSession(ctx, serverapi.SessionPlanRequest{
+		ClientRequestID: uuid.NewString(),
+		Mode:            serverapi.SessionLaunchMode(req.Mode),
+		Intent:          req.Intent,
+		Overrides:       mergeSessionPlanOverrides(sessionPlanOverridesFromConfig(p.server.Config()), req.Overrides),
+	})
 	if err != nil {
 		return sessionLaunchPlan{}, err
 	}
@@ -180,7 +160,8 @@ func (p *launchPlanner) PlanSession(ctx context.Context, req sessionLaunchReques
 		}
 	}
 	cfg := p.server.Config()
-	authState := launchPlannerAuthState(p.server)
+	activeSettings := resp.Plan.ActiveSettings
+	authSelection := authstatus.ProviderSelection(activeSettings)
 	sessionTitle, err := validateLaunchSessionTitle(resp.Plan.SessionName)
 	if err != nil {
 		return sessionLaunchPlan{}, err
@@ -188,7 +169,7 @@ func (p *launchPlanner) PlanSession(ctx context.Context, req sessionLaunchReques
 	return sessionLaunchPlan{
 		Mode:                req.Mode,
 		SessionID:           resp.Plan.SessionID,
-		ActiveSettings:      resp.Plan.ActiveSettings,
+		ActiveSettings:      activeSettings,
 		EnabledTools:        enabledTools,
 		ConfiguredModelName: resp.Plan.ConfiguredModelName,
 		SessionTitle:        sessionTitle,
@@ -199,27 +180,14 @@ func (p *launchPlanner) PlanSession(ctx context.Context, req sessionLaunchReques
 			ExecutionTarget: executionTarget,
 			PersistenceRoot: cfg.PersistenceRoot,
 			SessionViews:    p.server.SessionViewClient(),
-			Settings:        resp.Plan.ActiveSettings,
+			Settings:        activeSettings,
+			AuthSelection:   &authSelection,
 			Source:          resp.Plan.Source,
-			AuthManager:     status.NormalizeAuthStateResolver(authState.Resolver),
 			AuthStatus:      p.server.AuthStatusClient(),
-			AuthStatePath:   authState.Path,
-			OwnsServer:      p.server.OwnsServer(),
 		},
 		ExecutionTarget: executionTarget,
 		Source:          resp.Plan.Source,
 	}, nil
-}
-
-func launchPlannerAuthState(server launchPlannerServer) launchPlannerAuthStateMetadata {
-	authProvider, ok := server.(launchPlannerAuthStateProvider)
-	if !ok {
-		return launchPlannerAuthStateMetadata{}
-	}
-	return launchPlannerAuthStateMetadata{
-		Resolver: authProvider.AuthStateResolver(),
-		Path:     strings.TrimSpace(authProvider.AuthStatePath()),
-	}
 }
 
 func loadSelectedSessionExecutionTarget(ctx context.Context, sessionViews sessionViewReader, sessionID string) (clientui.SessionExecutionTarget, error) {
@@ -237,28 +205,11 @@ func (p *launchPlanner) PrepareRuntime(ctx context.Context, plan sessionLaunchPl
 	if p == nil || p.server == nil {
 		return nil, io.ErrClosedPipe
 	}
-	if preparer, ok := p.server.(launchPlannerRuntimePreparer); ok {
-		return preparer.PrepareRuntime(ctx, plan, diagnosticWriter, startLogLine)
-	}
 	runtimeServer, ok := p.server.(runtimeAttachmentSource)
 	if !ok {
 		return nil, errors.New("runtime attachment server is required")
 	}
 	return prepareSharedRuntime(ctx, runtimeServer, plan, diagnosticWriter, startLogLine)
-}
-
-func (p *launchPlanner) resolvePlanRequest(ctx context.Context, req sessionLaunchRequest) (resolvedSessionPlanRequest, error) {
-	overrides := sessionPlanOverridesFromConfig(p.server.Config())
-	overrides = mergeSessionPlanOverrides(overrides, req.Overrides)
-	if err := req.Intent.Validate(); err != nil {
-		return resolvedSessionPlanRequest{}, err
-	}
-	return resolvedSessionPlanRequest{request: serverapi.SessionPlanRequest{
-		ClientRequestID: uuid.NewString(),
-		Mode:            serverapi.SessionLaunchMode(req.Mode),
-		Intent:          req.Intent,
-		Overrides:       overrides,
-	}}, nil
 }
 
 func (p *launchPlanner) selectSession(ctx context.Context, notice *startupPickerNotice) (sessionPickerResult, error) {
@@ -282,39 +233,16 @@ func (p *launchPlanner) selectSession(ctx context.Context, notice *startupPicker
 }
 
 func (p *launchPlanner) sessionPickerHeaderInfo(cfg config.App) sessionPickerHeaderInfo {
-	workspaceRoot := strings.TrimSpace(cfg.WorkspaceRoot)
-	authState := launchPlannerAuthState(p.server)
-	settings := cfg.Settings
-	modelName := strings.TrimSpace(settings.Model)
-	thinkingLevel := strings.TrimSpace(settings.ThinkingLevel)
-	if !p.server.OwnsServer() {
-		// A configured server's persisted runtime settings are not client config
-		// state. The picker has no session plan yet, so omit those values until a
-		// server read model supplies them.
-		settings.Model = ""
-		settings.ThinkingLevel = ""
-		settings.ModelVerbosity = ""
-		settings.EnabledTools = nil
-		modelName = ""
-		thinkingLevel = ""
-	}
 	statusReq := populateStatusRequestCacheKeys(uiStatusRequest{
-		WorkspaceRoot:     workspaceRoot,
-		PersistenceRoot:   strings.TrimSpace(cfg.PersistenceRoot),
-		Settings:          settings,
-		Source:            cfg.Source,
-		AuthCacheIdentity: status.AuthCacheIdentity(authState.Resolver),
-		AuthStatus:        p.server.AuthStatusClient(),
-		AuthStatePath:     strings.TrimSpace(authState.Path),
-		ModelName:         modelName,
-		ThinkingLevel:     thinkingLevel,
-		OwnsServer:        p.server.OwnsServer(),
+		WorkspaceRoot:   strings.TrimSpace(cfg.WorkspaceRoot),
+		PersistenceRoot: strings.TrimSpace(cfg.PersistenceRoot),
+		Settings:        cfg.Settings,
+		Source:          cfg.Source,
+		AuthStatus:      p.server.AuthStatusClient(),
 	})
 	return sessionPickerHeaderInfo{
 		Version:       config.Version,
 		StatusRequest: statusReq,
-		AuthManager:   status.NormalizeAuthStateResolver(authState.Resolver),
-		OwnsServer:    p != nil && p.server != nil && p.server.OwnsServer(),
 		ServerAddress: net.JoinHostPort(cfg.Settings.ServerHost, strconv.Itoa(cfg.Settings.ServerPort)),
 		updateStatus:  p.server.ServerStatusClient(),
 	}

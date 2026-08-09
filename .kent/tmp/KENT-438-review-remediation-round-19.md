@@ -1,0 +1,5 @@
+- [x] Identify every failing CI test and classify branch-related defects versus infrastructure/flakes.
+- [x] Reproduce each genuine branch-related failure locally.
+- [x] Apply only an in-scope root-cause correction within the cumulative LoC cap, if required.
+- [x] Verify affected tests/build and push any required atomic fix.
+- [x] Confirm no unresolved review threads and return PR #724 to the watcher.

@@ -176,18 +176,3 @@ func (m *uiModel) applyRuntimeSessionMetadata(session clientui.RuntimeSessionVie
 	loadCmd := m.loadDetailTranscriptPageCmd(m.detailTranscript.requestedPageForDetailEntry())
 	return sequenceCmds(rollbackCmd, cancelCmd, resetCmd, loadCmd)
 }
-
-func (m *uiModel) flushQueuedInputsAfterHydration() tea.Cmd {
-	if m == nil || !m.pendingQueuedDrainAfterHydration {
-		return nil
-	}
-	m.pendingQueuedDrainAfterHydration = false
-	m.queuedDrainReadyAfterHydration = false
-	if len(m.queued) == 0 {
-		m.inputController().notifyTurnQueueDrainedIfIdle()
-		return nil
-	}
-	_, cmd := m.inputController().flushQueuedInputs(queueDrainAuto)
-	m.inputController().notifyTurnQueueDrainedIfIdle()
-	return cmd
-}

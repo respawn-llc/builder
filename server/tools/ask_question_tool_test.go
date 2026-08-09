@@ -28,6 +28,122 @@ func testQuestionAnswer(text string) AskQuestionAnswer {
 	return AskQuestionAnswer{Freeform: textutil.Value(text)}
 }
 
+func TestAskRunsTypedEffectBarrierAfterValidationBeforeHandlerSelection(t *testing.T) {
+	b := NewAskQuestionBroker()
+	order := make([]string, 0, 2)
+	b.SetAskHandler(func(_ context.Context, _ AskQuestionRequest) (AskQuestionResolution, error) {
+		order = append(order, "handler")
+		return testQuestionAnswer("handled"), nil
+	})
+	ctx := WithEffectBarrier(context.Background(), func(reason EffectBarrierReason) error {
+		if reason != EffectBarrierQuestion {
+			t.Fatalf("barrier reason = %d, want Question", reason)
+		}
+		order = append(order, "barrier")
+		// This would deadlock if Ask held the broker mutex while invoking the barrier.
+		b.SetAskHandler(func(_ context.Context, _ AskQuestionRequest) (AskQuestionResolution, error) {
+			order = append(order, "replacement")
+			return testQuestionAnswer("replaced"), nil
+		})
+		return nil
+	})
+
+	resolution, err := b.Ask(ctx, AskQuestionRequest{ID: "question", Question: "one?"})
+	if err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+	answer, ok := resolution.(AskQuestionAnswer)
+	if !ok || answer.Freeform == nil || *answer.Freeform != "replaced" {
+		t.Fatalf("resolution = %+v, want replacement handler response", resolution)
+	}
+	if !slices.Equal(order, []string{"barrier", "replacement"}) {
+		t.Fatalf("execution order = %v, want barrier then selected handler", order)
+	}
+}
+
+func TestAskUsesApprovalBarrierAndBlocksInteractionWhenItFails(t *testing.T) {
+	b := NewAskQuestionBroker()
+	handlerCalled := false
+	b.SetAskHandler(func(_ context.Context, _ AskQuestionRequest) (AskQuestionResolution, error) {
+		handlerCalled = true
+		return AskQuestionApproval{Decision: AskQuestionApprovalDecisionAllowOnce}, nil
+	})
+	barrierErr := errors.New("flush failed")
+	ctx := WithEffectBarrier(context.Background(), func(reason EffectBarrierReason) error {
+		if reason != EffectBarrierApproval {
+			t.Fatalf("barrier reason = %d, want Approval", reason)
+		}
+		return barrierErr
+	})
+
+	if _, err := b.Ask(ctx, testApprovalRequest("approval")); !errors.Is(err, barrierErr) {
+		t.Fatalf("Ask error = %v, want barrier error", err)
+	}
+	if handlerCalled {
+		t.Fatal("approval handler ran after barrier failure")
+	}
+	if pending := b.Pending(); len(pending) != 0 {
+		t.Fatalf("approval was queued after barrier failure: %+v", pending)
+	}
+}
+
+func TestAskRejectsInvalidRequestBeforeEffectBarrier(t *testing.T) {
+	calls := 0
+	ctx := WithEffectBarrier(context.Background(), func(EffectBarrierReason) error {
+		calls++
+		return nil
+	})
+
+	if _, err := NewAskQuestionBroker().Ask(ctx, AskQuestionRequest{}); err == nil {
+		t.Fatal("invalid ask succeeded")
+	}
+	if calls != 0 {
+		t.Fatalf("barrier calls = %d, want zero for invalid request", calls)
+	}
+}
+
+func TestQueuedToolCallBarrierFailureDoesNotMaterializeRequestAndRunsBatchCleanup(t *testing.T) {
+	b := NewAskQuestionBroker()
+	barrierErr := errors.New("flush failed")
+	executionCtx, cancelExecution := context.WithCancel(context.Background())
+	ctx := WithEffectBarrier(executionCtx, func(reason EffectBarrierReason) error {
+		if reason != EffectBarrierQuestion {
+			t.Fatalf("barrier reason = %d, want Question", reason)
+		}
+		cancelExecution()
+		return barrierErr
+	})
+	skipped := 0
+	result, err := NewAskQuestionTool(b, func() bool { return true }).Call(ctx, Call{
+		ID:    "queued-question",
+		Name:  toolspec.ToolAskQuestion,
+		Input: json.RawMessage(`{"question":"Continue?"}`),
+		AskQuestionBatch: &AskQuestionBatchMetadata{
+			Origin:              AskQuestionOriginModelTool,
+			RunID:               "run-1",
+			StepID:              "step-1",
+			PromptID:            "queued-question",
+			BatchPromptIDs:      []string{"queued-question"},
+			CandidateOrdinal:    0,
+			PreparedPromptCount: 1,
+		},
+		OnAskQuestionBatchSkipped: func(AskQuestionBatchMetadata) {
+			skipped++
+		},
+	})
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+	if !result.IsError {
+		t.Fatalf("result = %+v, want provisional barrier error", result)
+	}
+	if skipped != 1 {
+		t.Fatalf("batch cleanup calls = %d, want one", skipped)
+	}
+	if pending := b.Pending(); len(pending) != 0 {
+		t.Fatalf("barrier-failed queued request materialized: %+v", pending)
+	}
+}
 func TestBrokerFIFOQueue(t *testing.T) {
 	b := NewAskQuestionBroker()
 

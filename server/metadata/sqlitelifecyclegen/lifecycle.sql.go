@@ -12,3 +12,38 @@ func (q *Queries) DeferForeignKeys(ctx context.Context) error {
 	_, err := q.db.ExecContext(ctx, deferForeignKeys)
 	return err
 }
+
+const setBusyTimeout15Seconds = "PRAGMA busy_timeout = 15000;"
+
+func (q *Queries) SetBusyTimeout15Seconds(ctx context.Context) error {
+	_, err := q.db.ExecContext(ctx, setBusyTimeout15Seconds)
+	return err
+}
+
+const setBusyTimeout5Seconds = "PRAGMA busy_timeout = 5000;"
+
+func (q *Queries) SetBusyTimeout5Seconds(ctx context.Context) error {
+	_, err := q.db.ExecContext(ctx, setBusyTimeout5Seconds)
+	return err
+}
+
+const beginImmediate = "BEGIN IMMEDIATE;"
+
+func (q *Queries) BeginImmediate(ctx context.Context) error {
+	_, err := q.db.ExecContext(ctx, beginImmediate)
+	return err
+}
+
+const commit = "COMMIT;"
+
+func (q *Queries) Commit(ctx context.Context) error {
+	_, err := q.db.ExecContext(ctx, commit)
+	return err
+}
+
+const rollback = "ROLLBACK;"
+
+func (q *Queries) Rollback(ctx context.Context) error {
+	_, err := q.db.ExecContext(ctx, rollback)
+	return err
+}

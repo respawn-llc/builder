@@ -4,90 +4,59 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"core/shared/apicontract"
-	"core/shared/config"
 	"core/shared/serverapi"
 )
 
-type testRunPromptClient struct {
-	apicontract.RunPromptService
-}
-
-type testAuthClient struct {
-	apicontract.AuthBootstrapService
-}
-
-func TestEmbeddedTargetCarriesClientProjectAndClose(t *testing.T) {
-	closed := false
-	runPrompt := &testRunPromptClient{}
-	target := RunPromptEmbedded(runPrompt, func() string { return "project-1" }, func() error {
-		closed = true
-		return nil
-	})
-
-	if target.Value.Client != runPrompt {
-		t.Fatalf("client = %T, want embedded run prompt client", target.Value.Client)
-	}
-	if target.Value.Auth != nil {
-		t.Fatalf("auth = %T, want nil for embedded target", target.Value.Auth)
-	}
-	if target.Value.ProjectID == nil || target.Value.ProjectID() != "project-1" {
-		t.Fatalf("project id = %q, want project-1", target.Value.ProjectID())
-	}
-	if err := target.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	if !closed {
-		t.Fatal("expected close function called")
-	}
-}
-
-func TestValidateEnsuresRemoteAuthAndProjectRegistration(t *testing.T) {
-	auth := &testAuthClient{}
-	calls := 0
-	err := ValidateRunPromptTarget(context.Background(), RunPromptValidateRequest{
-		Config: config.App{WorkspaceRoot: "/repo"},
-		Target: RunPromptTarget{
-			Auth:      auth,
-			ProjectID: func() string { return "project-1" },
-		},
-		EnsureAuthReady: func(_ context.Context, got apicontract.AuthBootstrapService) error {
-			calls++
-			if got != auth {
-				t.Fatalf("auth client = %T, want test auth client", got)
-			}
-			return nil
-		},
-	})
-	if err != nil {
-		t.Fatalf("Validate: %v", err)
-	}
-	if calls != 1 {
-		t.Fatalf("ensure calls = %d, want 1", calls)
-	}
-}
-
-func TestValidateReturnsAuthErrorBeforeProjectRegistration(t *testing.T) {
+func TestAttachRunPromptValidationFailuresCloseRemote(t *testing.T) {
 	authErr := errors.New("auth failed")
-	err := ValidateRunPromptTarget(context.Background(), RunPromptValidateRequest{
-		Config: config.App{WorkspaceRoot: "/repo"},
-		Target: RunPromptTarget{Auth: &testAuthClient{}},
-		EnsureAuthReady: func(context.Context, apicontract.AuthBootstrapService) error {
-			return authErr
-		},
-	})
-	if !errors.Is(err, authErr) {
-		t.Fatalf("Validate error = %v, want auth error", err)
+	for _, tc := range []struct {
+		name          string
+		attachProject bool
+		authErr       error
+		wantErr       error
+		notErr        error
+	}{
+		{name: "auth", attachProject: true, authErr: authErr, wantErr: authErr, notErr: serverapi.ErrWorkspaceNotRegistered},
+		{name: "project", wantErr: serverapi.ErrWorkspaceNotRegistered},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dialWorkspace, closeServer, disconnected := dialWorkspaceServerWithRoot(t, "", tc.attachProject)
+			defer closeServer()
+			req := testAttachRequest(planProjectDial(boundPlanResponse()))
+			req.DialWorkspace = dialWorkspace
+			if tc.authErr != nil {
+				req.EnsureAuthReady = func(context.Context, apicontract.AuthBootstrapService) error {
+					return tc.authErr
+				}
+			}
+			_, _, err := AttachRunPrompt(context.Background(), req)
+			if !errors.Is(err, tc.wantErr) || tc.notErr != nil && errors.Is(err, tc.notErr) {
+				t.Fatalf("AttachRunPrompt error = %v, want %v", err, tc.wantErr)
+			}
+			select {
+			case <-disconnected:
+			case <-time.After(time.Second):
+				t.Fatal("validation failure did not close the attached remote")
+			}
+		})
 	}
 }
 
-func TestValidateRequiresProjectRegistration(t *testing.T) {
-	err := ValidateRunPromptTarget(context.Background(), RunPromptValidateRequest{
-		Config: config.App{WorkspaceRoot: "/repo"},
-		Target: RunPromptTarget{ProjectID: func() string { return " " }},
+func TestRunPromptValidationFailureClosesExactlyOnceAndJoinsCloseError(t *testing.T) {
+	validationErr := errors.New("validation failed")
+	closeErr := errors.New("close failed")
+	closeCalls := 0
+	err := closeRunPromptValidationFailure(validationErr, func() error {
+		closeCalls++
+		return closeErr
 	})
-	if err == nil || !errors.Is(err, serverapi.ErrWorkspaceNotRegistered) {
-		t.Fatalf("Validate error = %v, want workspace registration error", err)
+	if !errors.Is(err, validationErr) || !errors.Is(err, closeErr) {
+		t.Fatalf("error = %v, want joined validation and close errors", err)
+	}
+	if closeCalls != 1 {
+		t.Fatalf("close calls = %d, want 1", closeCalls)
 	}
 }

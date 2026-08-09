@@ -73,10 +73,11 @@ func appendRecoveredWarning(store *session.Store, provider func() (string, bool,
 	if err != nil {
 		return err
 	}
+	warningText := warning
 	_, err = eventLog.AppendGeneratedRecoveredWarning(session.LocalEntryRecord{
 		Visibility: session.EntryVisibilityOngoing,
 		Role:       "warning",
-		Text:       warning,
+		Text:       &warningText,
 	})
 	return err
 }

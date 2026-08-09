@@ -5,7 +5,6 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
-	"core/server/tools"
 	"core/server/workflowruntime"
 )
 
@@ -127,7 +126,12 @@ type stepLoopRunner interface {
 }
 
 type toolExecutor interface {
-	ExecuteToolCalls(ctx context.Context, stepID string, calls []llm.ToolCall) ([]tools.Result, error)
+	ExecuteToolCalls(
+		ctx context.Context,
+		stepID string,
+		calls []executorToolCall,
+		collector *resultGroupCollector,
+	) error
 }
 
 type messageLifecycle interface {
@@ -209,7 +213,6 @@ func (e *Engine) ensureOrchestrationCollaborators() {
 				phase:    e.phaseProtocol,
 				reviewer: e.reviewerFlow,
 				messages: e.messageFlow,
-				tools:    e.toolFlow,
 			}
 		}
 		if reviewer, ok := e.reviewerFlow.(*defaultReviewerPipeline); ok && reviewer.stepRunner == nil {

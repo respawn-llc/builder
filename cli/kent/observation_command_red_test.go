@@ -48,19 +48,19 @@ func TestLiveControlSubcommandPreservesHeadlessControlVerbPrompts(t *testing.T) 
 }
 
 func TestRunWatchStreamFailureDoesNotUseInterruptExitCode(t *testing.T) {
-	run := func(context.Context, app.Options, runtimeids.SessionID) (serverapi.RuntimeLiveWatchResponse, error) {
-		return serverapi.RuntimeLiveWatchResponse{}, fmt.Errorf("%w: %v", serverapi.ErrStreamFailed, context.Canceled)
+	run := func(context.Context, app.Options, runtimeids.SessionID) app.RunLiveWatchResult {
+		return app.RunLiveWatchResult{Error: fmt.Errorf("%w: %v", serverapi.ErrStreamFailed, context.Canceled)}
 	}
-	if code := runLiveWatchSubcommandWithRunner([]string{runtimeids.NewSessionID().String()}, run); code != 1 {
+	if code := runLiveWatchSubcommandWithCleanup([]string{runtimeids.NewSessionID().String()}, run); code != 1 {
 		t.Fatalf("runLiveWatchSubcommand stream failure exit code = %d, want 1", code)
 	}
 }
 
 func TestRunWatchCallerCancellationKeepsInterruptExitCode(t *testing.T) {
-	run := func(context.Context, app.Options, runtimeids.SessionID) (serverapi.RuntimeLiveWatchResponse, error) {
-		return serverapi.RuntimeLiveWatchResponse{}, context.Canceled
+	run := func(context.Context, app.Options, runtimeids.SessionID) app.RunLiveWatchResult {
+		return app.RunLiveWatchResult{Error: context.Canceled}
 	}
-	if code := runLiveWatchSubcommandWithRunner([]string{runtimeids.NewSessionID().String()}, run); code != 130 {
+	if code := runLiveWatchSubcommandWithCleanup([]string{runtimeids.NewSessionID().String()}, run); code != 130 {
 		t.Fatalf("runLiveWatchSubcommand cancellation exit code = %d, want 130", code)
 	}
 }
@@ -74,7 +74,7 @@ func TestTaskObservationRendersDiscriminatorAndTaskTargetForOneQuestion(t *testi
 			SessionID: &sessionID,
 			NodeKey:   stringPointerForTest("build"),
 			Question: &serverapi.ObservationQuestion{Ask: &clientui.PendingAsk{
-				AskID: "ask-1", SessionID: sessionID, Question: "Proceed?",
+				AskID: "ask-1", SessionID: sessionID, Question: "Proceed?", Suggestions: []string{"Yes"},
 			}},
 		}},
 	}
@@ -86,8 +86,12 @@ func TestTaskObservationRendersDiscriminatorAndTaskTargetForOneQuestion(t *testi
 	text := output.String()
 	if !strings.Contains(text, sessionID) ||
 		!strings.Contains(text, "build") ||
-		!strings.Contains(text, response.TaskShortID) ||
-		!strings.Contains(text, "--project "+shellQuote(projectRef)) ||
+		!strings.Contains(text, commandString([]string{
+			config.Command, "question", "answer",
+			"--task", response.TaskShortID,
+			"--option", "<number>",
+			"--project", projectRef,
+		})) ||
 		strings.Contains(text, "--session "+sessionID) {
 		t.Fatalf("task observation output = %q", text)
 	}

@@ -1,0 +1,4 @@
+- [x] Verify the new finding against the explicit offline workflow-capture product decision.
+- [x] Reply with the authority/scope rationale and resolve the invalid thread.
+- [x] Confirm no unresolved threads and inspect current CI readiness.
+- [ ] Return PR #724 to the watcher.

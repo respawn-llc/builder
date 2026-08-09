@@ -1,15 +1,17 @@
 {
-  "type": "object",
-  "additionalProperties": false,
-  "required": ["path"],
-  "properties": {
-    "path": {
-      "type": "string",
-      "description": "Local filesystem path to a PNG, JPEG, still GIF, or PDF file. Relative paths resolve from the workspace root."
-    },
-    "raw": {
-      "type": "boolean",
-      "description": "Whether to bypass image compression and postprocessing. Defaults to false. The file size cap still applies."
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+        "path"
+    ],
+    "properties": {
+        "path": {
+            "type": "string",
+            "description": "Local filesystem path to a PNG, JPEG, still GIF, or PDF file. Relative paths resolve from the workspace root."
+        },
+        "raw": {
+            "type": "boolean",
+            "description": "Whether to disable image optimization, keep on unless facing issues. Defaults to false."
+        }
     }
-  }
 }

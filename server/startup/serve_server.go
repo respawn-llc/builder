@@ -60,7 +60,7 @@ func StartServeServer(ctx context.Context, req Request, authHandler AuthHandler,
 	}
 	cfg := resolved.Config
 	if cfg.Source.SettingsFileExists {
-		appCore, err := startCoreWithBootstrap(ctx, bootstrapReq, !req.AllowUnauthenticated, authHandler, onboardingHandler, Options{})
+		appCore, err := startCoreWithBootstrap(ctx, bootstrapReq, !req.AllowUnauthenticated, authHandler, onboardingHandler)
 		if err != nil {
 			return nil, err
 		}
@@ -72,17 +72,17 @@ func StartServeServer(ctx context.Context, req Request, authHandler AuthHandler,
 			return nil, err
 		}
 		if completed && onboardingCfg.Source.SettingsFileExists {
-			appCore, err := startCoreWithBootstrap(ctx, bootstrapReq, !req.AllowUnauthenticated, authHandler, nil, Options{})
+			appCore, err := startCoreWithBootstrap(ctx, bootstrapReq, !req.AllowUnauthenticated, authHandler, nil)
 			if err != nil {
 				return nil, err
 			}
 			return &ServeServer{Core: appCore, cfg: appCore.Config()}, nil
 		}
 	}
-	cfg, deps, err := buildStartupControlSurface(ctx, bootstrapReq, !req.AllowUnauthenticated, authHandler, Options{})
+	cfg, deps, err := buildStartupControlSurface(ctx, bootstrapReq, authHandler)
 	if err != nil {
 		if errors.Is(err, errStartupControlSurfaceNotRequired) {
-			appCore, coreErr := startCoreWithBootstrap(ctx, bootstrapReq, !req.AllowUnauthenticated, authHandler, onboardingHandler, Options{})
+			appCore, coreErr := startCoreWithBootstrap(ctx, bootstrapReq, !req.AllowUnauthenticated, authHandler, onboardingHandler)
 			if coreErr != nil {
 				return nil, coreErr
 			}
@@ -93,7 +93,7 @@ func StartServeServer(ctx context.Context, req Request, authHandler AuthHandler,
 	return &ServeServer{deps: deps, cfg: cfg}, nil
 }
 
-func runStartupOnboardingHandler(ctx context.Context, cfg config.App, bootstrapReq serverbootstrap.Request, authHandler startupAuthHandler, onboardingHandler OnboardingHandler) (config.App, bool, error) {
+func runStartupOnboardingHandler(ctx context.Context, cfg config.App, bootstrapReq serverbootstrap.Request, authHandler AuthHandler, onboardingHandler OnboardingHandler) (config.App, bool, error) {
 	store := authHandler.WrapStore(auth.NewFileStore(config.GlobalAuthConfigPath(cfg)))
 	authSupport, err := serverbootstrap.BuildAuthSupport(store, bootstrapReq.LookupEnv, bootstrapReq.Now)
 	if err != nil {
@@ -122,7 +122,7 @@ func runStartupOnboardingHandler(ctx context.Context, cfg config.App, bootstrapR
 	return onboardingCfg, onboardingCfg.Source.SettingsFileExists, nil
 }
 
-func buildStartupControlSurface(ctx context.Context, bootstrapReq serverbootstrap.Request, _ bool, authHandler startupAuthHandler, opts Options) (config.App, *startupGatewayDependencies, error) {
+func buildStartupControlSurface(ctx context.Context, bootstrapReq serverbootstrap.Request, authHandler AuthHandler) (config.App, *startupGatewayDependencies, error) {
 	resolved, err := serverbootstrap.ResolveConfig(bootstrapReq)
 	if err != nil {
 		return config.App{}, nil, err
@@ -157,7 +157,7 @@ func buildStartupControlSurface(ctx context.Context, bootstrapReq serverbootstra
 		_ = rootLease.Close()
 		return config.App{}, nil, err
 	}
-	return cfg, newStartupGatewayDependencies(ctx, cfg, bootstrapReq, authSupport, rootLease, finalizer, opts.Core), nil
+	return cfg, newStartupGatewayDependencies(ctx, cfg, bootstrapReq, authSupport, rootLease, finalizer), nil
 }
 
 func (s *ServeServer) Serve(ctx context.Context) error {
@@ -245,12 +245,9 @@ func (r *runningRPC) waitRemaining() {
 	}
 }
 
-// startCoreRPC binds the configured TCP control endpoint and the derived
-// same-machine Unix socket (when available) and serves the Core's health,
-// readiness, and JSON-RPC handlers over them in background goroutines. It is
-// shared by the standalone serve daemon and the embedded interactive server so
-// both expose the same control surface for client attach. The caller owns the
-// returned handle and must call shutdown to release the listeners.
+// startCoreRPC binds the configured TCP control endpoint and derived
+// same-machine Unix socket and serves the Core control surface. The caller owns
+// the returned handle and must call shutdown to release the listeners.
 func startCoreRPC(appCore *core.Core) (*runningRPC, error) {
 	if appCore == nil {
 		return nil, errors.New("server core is required")
@@ -443,16 +440,15 @@ type startupGatewayDependencies struct {
 	authSupport serverbootstrap.AuthSupport
 	rootLease   *core.RootLockLease
 	finalizer   apicontract.OnboardingFinalizeService
-	coreOptions core.Options
 	core        *core.Core
 	activation  error
 }
 
-func newStartupGatewayDependencies(ctx context.Context, cfg config.App, bootstrapReq serverbootstrap.Request, authSupport serverbootstrap.AuthSupport, rootLease *core.RootLockLease, finalizer *onboarding.Finalizer, coreOptions core.Options) *startupGatewayDependencies {
+func newStartupGatewayDependencies(ctx context.Context, cfg config.App, bootstrapReq serverbootstrap.Request, authSupport serverbootstrap.AuthSupport, rootLease *core.RootLockLease, finalizer *onboarding.Finalizer) *startupGatewayDependencies {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	deps := &startupGatewayDependencies{cfg: cfg, bootstrap: bootstrapReq, authSupport: authSupport, rootLease: rootLease, coreOptions: coreOptions}
+	deps := &startupGatewayDependencies{cfg: cfg, bootstrap: bootstrapReq, authSupport: authSupport, rootLease: rootLease}
 	deps.finalizer = startupFinalizeService{service: finalizer, activate: deps.activate, activationContext: ctx}
 	return deps
 }
@@ -479,21 +475,18 @@ func (d *startupGatewayDependencies) activate(ctx context.Context, resp serverap
 	}
 	refreshed, err := serverbootstrap.ResolveConfig(d.bootstrap)
 	if err != nil {
-		d.activation = err
-		return serverapi.NewServerNotReadyError(serverapi.ServerNotReadyActivationFailed, activationFailureDetails(resp, err), err)
+		return d.activationError(resp, err)
 	}
 	runtimeSupport, err := serverbootstrap.BuildRuntimeSupport(refreshed.Config)
 	if err != nil {
-		d.activation = err
-		return serverapi.NewServerNotReadyError(serverapi.ServerNotReadyActivationFailed, activationFailureDetails(resp, err), err)
+		return d.activationError(resp, err)
 	}
-	coreOptions := d.coreOptions
-	coreOptions.RootLease = d.rootLease
-	appCore, err := core.NewWithContextOptions(ctx, refreshed.Config, d.authSupport, runtimeSupport, coreOptions)
+	appCore, err := core.NewWithContextOptions(ctx, refreshed.Config, d.authSupport, runtimeSupport, core.Options{
+		RootLease: d.rootLease,
+	})
 	if err != nil {
 		_ = runtimeSupport.Background.Close()
-		d.activation = err
-		return serverapi.NewServerNotReadyError(serverapi.ServerNotReadyActivationFailed, activationFailureDetails(resp, err), err)
+		return d.activationError(resp, err)
 	}
 	d.core = appCore
 	d.rootLease = nil
@@ -502,10 +495,15 @@ func (d *startupGatewayDependencies) activate(ctx context.Context, resp serverap
 	return nil
 }
 
-func activationFailureDetails(resp serverapi.OnboardingFinalizeResponse, err error) serverapi.ServerNotReadyDetails {
+func (d *startupGatewayDependencies) activationError(resp serverapi.OnboardingFinalizeResponse, err error) error {
+	d.activation = err
 	settingsPath := resp.SettingsPath
 	diagnostic := err.Error()
-	return serverapi.ServerNotReadyDetails{OnboardingCompleted: true, SettingsPath: &settingsPath, Diagnostic: &diagnostic}
+	return serverapi.NewServerNotReadyError(serverapi.ServerNotReadyActivationFailed, serverapi.ServerNotReadyDetails{
+		OnboardingCompleted: true,
+		SettingsPath:        &settingsPath,
+		Diagnostic:          &diagnostic,
+	}, err)
 }
 
 func (d *startupGatewayDependencies) activeCore() *core.Core {
@@ -661,16 +659,13 @@ func (s startupFinalizeService) FinalizeOnboarding(ctx context.Context, req serv
 
 func (d *startupGatewayDependencies) AuthManager() *auth.Manager { return d.authSupport.AuthManager }
 func (d *startupGatewayDependencies) AuthBootstrapClient() apicontract.AuthBootstrapService {
-	cfg := d.snapshotConfig()
-	return authservice.NewBootstrapService(d.authSupport.AuthManager, d.authSupport.OAuthOptions, cfg.Settings, apicontract.AllowedPreAuthMethods())
+	return authservice.NewBootstrapService(d.authSupport.AuthManager, d.authSupport.OAuthOptions, d.snapshotConfig().Settings, apicontract.AllowedPreAuthMethods())
 }
 func (d *startupGatewayDependencies) AuthStatusClient() apicontract.AuthStatusService {
-	cfg := d.snapshotConfig()
-	return authservice.NewStatusService(d.authSupport.AuthManager, cfg.Settings)
+	return authservice.NewStatusService(d.authSupport.AuthManager, d.snapshotConfig().Settings)
 }
 func (d *startupGatewayDependencies) CapabilityFactsClient() apicontract.CapabilityFactsService {
-	cfg := d.snapshotConfig()
-	return capabilityfacts.NewService(capabilityfacts.Options{Config: cfg, AuthManager: d.authSupport.AuthManager})
+	return capabilityfacts.NewService(capabilityfacts.Options{Config: d.snapshotConfig(), AuthManager: d.authSupport.AuthManager})
 }
 func (d *startupGatewayDependencies) ServerStatusClient() apicontract.ServerStatusService {
 	cfg := d.snapshotConfig()
@@ -681,8 +676,7 @@ func (d *startupGatewayDependencies) ServerStatusClient() apicontract.ServerStat
 	}
 }
 func (d *startupGatewayDependencies) ServerAuthRequired() bool {
-	cfg := d.snapshotConfig()
-	return authservice.StartupAuthRequired(cfg.Settings)
+	return authservice.StartupAuthRequired(d.snapshotConfig().Settings)
 }
 func (d *startupGatewayDependencies) OnboardingFinalizeClient() apicontract.OnboardingFinalizeService {
 	return d.finalizer

@@ -45,8 +45,6 @@ var (
 	ErrModelRequired = errors.New("model is required")
 	// errUnknownTool is returned when a tool call targets a tool that is not registered.
 	errUnknownTool = errors.New("unknown tool")
-	// errPersistToolCompletion wraps failures to persist a tool completion result.
-	errPersistToolCompletion = errors.New("persist tool completion")
 )
 
 func NormalizeThinkingLevel(level string) (string, bool) {
@@ -134,6 +132,8 @@ type Config struct {
 	OnEvent               func(Event)
 	StepLifecycle         StepLifecycleSink
 	LifecycleTaskFinished func() error
+	LifecycleRuntimeAbort func() error
+	DurabilityObserver    ResultGroupDurabilityObserver
 }
 
 type ReviewerConfig struct {
@@ -356,12 +356,19 @@ func New(
 	// stores reconcile event-derived metadata there, so subsequent metadata
 	// reads must use the refreshed authoritative snapshot.
 	meta = store.Meta()
-	recoveryStepID := ""
+	var recoveryStepID *string
 	if meta.PendingModelRecovery != nil {
-		recoveryStepID = meta.PendingModelRecovery.StepID
+		recoveryStepID = textutil.OptionalTrimmedString(meta.PendingModelRecovery.StepID)
 	}
-	if err := eng.seedTranscriptLiveToolsFromDanglingToolCalls(recoveryStepID); err != nil {
-		return nil, err
+	repairedDangling, err := eng.repairMissingToolOutputsByAppending(
+		recoveryStepID,
+		missingToolOutputRepairFreshResource,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("repair missing tool outputs during runtime construction: %w", err)
+	}
+	if dangling := eng.pendingRecoveryDanglingToolCallIDs(); len(dangling) > 0 {
+		return nil, fmt.Errorf("runtime construction retained %d dangling tool call(s) after repair", len(dangling))
 	}
 	eng.restorePersistedUsageState(meta.UsageState)
 	if meta.PendingModelRecovery != nil {
@@ -372,13 +379,15 @@ func New(
 			}
 			return eng, nil
 		}
-		needsMarker, err := eng.pendingModelRecoveryNeedsInterruptionMarker(&recovery)
-		if err != nil {
-			return nil, err
-		}
-		if needsMarker {
-			if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeInterruption), Content: textutil.Value(interruptMessage)}})); err != nil {
+		if repairedDangling == 0 {
+			needsMarker, err := eng.pendingModelRecoveryNeedsInterruptionMarker(&recovery)
+			if err != nil {
 				return nil, err
+			}
+			if needsMarker {
+				if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeInterruption), Content: textutil.Value(interruptMessage)}})); err != nil {
+					return nil, err
+				}
 			}
 		}
 		if err := store.ClearPendingModelRecovery(); err != nil {
@@ -426,47 +435,6 @@ func (e *Engine) pendingRecoveryDanglingToolCallIDs() map[string]struct{} {
 	return out
 }
 
-func (e *Engine) seedTranscriptLiveToolsFromDanglingToolCalls(stepID string) error {
-	if e == nil {
-		return nil
-	}
-	chat := e.transcriptRuntimeState().chatProjection()
-	if chat == nil {
-		return nil
-	}
-	dangling := chat.danglingToolCalls()
-	if len(dangling) == 0 {
-		return nil
-	}
-	stepID = strings.TrimSpace(stepID)
-	starts := make([]TranscriptLiveToolStart, 0, len(dangling))
-	for _, call := range dangling {
-		starts = append(starts, TranscriptLiveToolStart{
-			StepID:     stepID,
-			ToolCallID: strings.TrimSpace(call.callID),
-			ToolName:   strings.TrimSpace(call.name),
-		})
-	}
-	if stepID == "" {
-		e.transcriptRuntimeState().SeedLiveTools(starts)
-		return nil
-	}
-	for _, start := range starts {
-		call := llm.ToolCall{ID: start.ToolCallID, Name: start.ToolName}
-		if restored, ok := e.transcriptRuntimeState().ToolCallSnapshot(start.ToolCallID); ok {
-			call = restored
-		}
-		if err := e.steer(stepID, steerEventIntent(Event{
-			Kind:     EventToolCallStarted,
-			StepID:   stepID,
-			ToolCall: &call,
-		})); err != nil {
-			return fmt.Errorf("publish recovered tool start %q: %w", start.ToolCallID, err)
-		}
-	}
-	return nil
-}
-
 func (e *Engine) pendingRecoveryStepHasTerminalAssistant(stepID string) (bool, error) {
 	return e.eventLog.PendingRecoveryStepHasTerminalAssistant(stepID)
 }
@@ -495,6 +463,14 @@ func (e *Engine) Close() error {
 	return interruptErr
 }
 
+func (e *Engine) closeAdmissionAfterRuntimeAbort() {
+	if e == nil {
+		return
+	}
+	e.closed.Store(true)
+	e.failPendingWorkflowAssignments(ErrEngineClosed)
+}
+
 func (e *Engine) ensureLifecycle() {
 	if e == nil {
 		return
@@ -504,13 +480,16 @@ func (e *Engine) ensureLifecycle() {
 	})
 }
 
-func (e *Engine) launchLifecycleTask(task func(context.Context)) bool {
+func (e *Engine) launchLifecycleTask(task func(context.Context) *resultGroupFatal) bool {
 	if e == nil || task == nil {
+		return false
+	}
+	if e.closed.Load() {
 		return false
 	}
 	e.ensureLifecycle()
 	e.lifecycleMu.Lock()
-	if e.lifecycleClosed {
+	if e.lifecycleClosed || e.closed.Load() {
 		e.lifecycleMu.Unlock()
 		return false
 	}
@@ -518,13 +497,19 @@ func (e *Engine) launchLifecycleTask(task func(context.Context)) bool {
 	ctx := e.lifecycleCtx
 	e.lifecycleMu.Unlock()
 	go func(ctx context.Context) {
+		var runtimeAbort *resultGroupFatal
 		defer func() {
+			// Retirement may synchronously close this Engine and wait for lifecycle
+			// tasks, so this task must leave the wait group before callbacks run.
 			e.lifecycleWG.Done()
 			if e.cfg.LifecycleTaskFinished != nil {
 				e.surfaceRunError(e.cfg.LifecycleTaskFinished())
 			}
+			if runtimeAbort != nil && e.cfg.LifecycleRuntimeAbort != nil {
+				e.surfaceRunError(e.cfg.LifecycleRuntimeAbort())
+			}
 		}()
-		task(ctx)
+		runtimeAbort = task(ctx)
 	}(ctx)
 	return true
 }
@@ -809,30 +794,14 @@ func (e *Engine) submitUserShellCommand(ctx context.Context, command string, onA
 		if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{call}}})); err != nil {
 			return err
 		}
-		if _, ok := e.registry.Get(toolspec.ToolExecCommand); !ok {
-			transcriptCall := normalizeToolCallForTranscript(call, e.transcriptWorkingDir())
-			_ = e.steer(stepID, steerEventIntent(Event{Kind: EventToolCallStarted, StepID: stepID, ToolCall: &transcriptCall, CommittedTranscriptChanged: true}))
-			result = tools.Result{
-				CallID: call.ID, Name: toolspec.ToolExecCommand, IsError: true,
-				Output:  mustJSON(map[string]any{"error": "unknown tool"}),
-				Summary: textutil.Value("unknown tool"),
-			}
-			if err := e.steer(stepID, steerToolCompletionIntent(result)); err != nil {
-				return fmt.Errorf("%w (call_id=%s tool=%s): %w", errPersistToolCompletion, call.ID, result.Name, err)
-			}
-			if appendErr := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleTool, Content: textutil.Value(string(result.Output)), ToolCallID: textutil.Value(result.CallID), Name: textutil.Value(string(result.Name))}})); appendErr != nil {
-				return appendErr
-			}
-			return errUnknownTool
-		}
-
+		_, registered := e.registry.Get(toolspec.ToolExecCommand)
 		results, execErr := e.executeToolCalls(stepCtx, stepID, []llm.ToolCall{call})
 		if len(results) == 0 {
-			return errors.New("shell tool execution returned no result")
+			return errors.Join(execErr, errors.New("shell tool execution returned no result"))
 		}
 		result = results[0]
-		if appendErr := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleTool, Content: textutil.Value(string(result.Output)), ToolCallID: textutil.Value(result.CallID), Name: textutil.Value(string(result.Name))}})); appendErr != nil {
-			return errors.Join(execErr, appendErr)
+		if !registered {
+			return errors.Join(execErr, errUnknownTool)
 		}
 		return execErr
 	})
@@ -974,7 +943,10 @@ func (e *Engine) generateWithMissingToolOutputRepair(ctx context.Context, stepID
 		if emitted.Load() && onAttemptReset != nil {
 			onAttemptReset()
 		}
-		repaired, repairErr := e.repairMissingToolOutputsByAppending(textutil.OptionalTrimmedString(stepID))
+		repaired, repairErr := e.repairMissingToolOutputsByAppending(
+			textutil.OptionalTrimmedString(stepID),
+			missingToolOutputRepairLiveProvider400,
+		)
 		if repairErr != nil {
 			return llm.Response{}, errors.Join(err, repairErr)
 		}
@@ -1096,6 +1068,226 @@ func providerFailureRetriesAllowed(req llm.Request) bool {
 }
 
 func (e *Engine) executeToolCalls(ctx context.Context, stepID string, calls []llm.ToolCall) ([]tools.Result, error) {
+	accepted := acceptedResponseCalls{
+		local: append([]llm.ToolCall(nil), calls...),
+		order: make([]acceptedResponseCallRef, len(calls)),
+	}
+	for index := range calls {
+		accepted.order[index] = acceptedResponseCallRef{
+			source: acceptedResponseCallLocal,
+			index:  index,
+		}
+	}
+	return e.executeAcceptedToolCalls(ctx, stepID, accepted)
+}
+
+func (e *Engine) executeAcceptedToolCalls(
+	ctx context.Context,
+	stepID string,
+	calls acceptedResponseCalls,
+) ([]tools.Result, error) {
+	results, _, err := e.executeAcceptedToolCallsCoordinated(ctx, stepID, calls)
+	return results, err
+}
+
+func (e *Engine) executeAcceptedToolCallsCoordinated(
+	ctx context.Context,
+	stepID string,
+	calls acceptedResponseCalls,
+) ([]tools.Result, bool, error) {
 	e.ensureOrchestrationCollaborators()
-	return e.toolFlow.ExecuteToolCalls(ctx, stepID, calls)
+	prepared, err := prepareExecutorToolCalls(
+		e,
+		stepID,
+		activeRunIDForStep(e, stepID),
+		e.currentNodeExecutionActive(),
+		calls.local,
+	)
+	if err != nil {
+		return nil, false, err
+	}
+	executionCalls := calls
+	executionCalls.local = make([]llm.ToolCall, len(prepared))
+	for index := range prepared {
+		executionCalls.local[index] = prepared[index].call
+	}
+	collector, err := newResultGroupCollector(resultGroupRosterFromAcceptedCalls(executionCalls))
+	if err != nil {
+		return nil, false, err
+	}
+	abortBeforeLocalExecution := func(cause error) ([]tools.Result, bool, error) {
+		fatal := e.abortResultGroupForOperationalFailure(
+			stepID,
+			collector,
+			cause,
+		)
+		postJoin, coordinateErr := e.coordinateAcceptedResponsePostJoin(
+			stepID,
+			prepared,
+			collector,
+			fatal,
+		)
+		return postJoin.results, false, coordinateErr
+	}
+	for _, ref := range executionCalls.order {
+		if ref.source != acceptedResponseCallHosted {
+			continue
+		}
+		hosted := executionCalls.hosted[ref.index]
+		normalized := normalizeToolCallForTranscript(hosted.Call, e.transcriptWorkingDir())
+		if err := e.steer(stepID, steerEventIntent(Event{
+			Kind:                       EventToolCallStarted,
+			StepID:                     stepID,
+			ToolCall:                   &normalized,
+			CommittedTranscriptChanged: true,
+		})); err != nil {
+			return abortBeforeLocalExecution(
+				fmt.Errorf(
+					"persist hosted tool started (call_id=%s tool=%s): %w",
+					hosted.Call.ID,
+					hosted.Call.Name,
+					err,
+				),
+			)
+		}
+		var outcome *resultGroupReportOutcome
+		if err := e.steer(stepID, steerResultGroupReportIntent(
+			collector,
+			hosted.Call.ID,
+			resultGroupUnit{result: hosted.Result},
+			&outcome,
+		)); err != nil {
+			return abortBeforeLocalExecution(
+				fmt.Errorf(
+					"report hosted tool result (call_id=%s tool=%s): %w",
+					hosted.Call.ID,
+					hosted.Call.Name,
+					err,
+				),
+			)
+		}
+		if fatal := collector.fatalSnapshot(); fatal != nil {
+			return abortBeforeLocalExecution(fatal)
+		}
+		if outcome == nil || *outcome != resultGroupReportAccepted {
+			return abortBeforeLocalExecution(
+				fmt.Errorf(
+					"result group ignored hosted result without fatal (call_id=%s tool=%s)",
+					hosted.Call.ID,
+					hosted.Call.Name,
+				),
+			)
+		}
+	}
+	executeErr := e.toolFlow.ExecuteToolCalls(ctx, stepID, prepared, collector)
+	postJoin, err := e.coordinateAcceptedResponsePostJoin(
+		stepID,
+		prepared,
+		collector,
+		executeErr,
+	)
+	if err != nil {
+		return postJoin.results, false, err
+	}
+	durableTerminal, observeErr := e.observeWorkflowDurableCompletion(ctx)
+	return postJoin.results, durableTerminal, errors.Join(postJoin.semanticErr, observeErr)
+}
+
+type acceptedResponsePostJoinOutcome struct {
+	results     []tools.Result
+	semanticErr error
+}
+
+func (e *Engine) coordinateAcceptedResponsePostJoin(
+	stepID string,
+	prepared []executorToolCall,
+	collector *resultGroupCollector,
+	executeErr error,
+) (acceptedResponsePostJoinOutcome, error) {
+	if collector.fatalSnapshot() == nil {
+		for _, preparedCall := range prepared {
+			call := preparedCall.call
+			if _, completed, resultErr := collector.result(call.ID); resultErr != nil {
+				e.abortResultGroupForOperationalFailure(stepID, collector, resultErr)
+				break
+			} else if completed {
+				continue
+			}
+			interrupted := missingToolOutputInterruptedResult(
+				call.ID,
+				toolspec.ID(call.Name),
+			)
+			var outcome *resultGroupReportOutcome
+			if err := e.steer(stepID, steerResultGroupReportIntent(
+				collector,
+				call.ID,
+				resultGroupUnit{result: interrupted},
+				&outcome,
+			)); err != nil {
+				if fatal := collector.fatalSnapshot(); fatal != nil {
+					break
+				}
+				e.abortResultGroupForOperationalFailure(stepID, collector, fmt.Errorf(
+					"semantic close failed to report interrupted tool result (call_id=%s tool=%s): %w",
+					call.ID,
+					call.Name,
+					err,
+				))
+				break
+			}
+			if outcome == nil || *outcome != resultGroupReportAccepted {
+				e.abortResultGroupForOperationalFailure(stepID, collector, fmt.Errorf(
+					"semantic close result group ignored interrupted tool result without fatal (call_id=%s tool=%s outcome=%v)",
+					call.ID,
+					call.Name,
+					outcome,
+				))
+				break
+			}
+		}
+	}
+	closeErr := e.steerRuntimeClose(
+		stepID,
+		steerResultGroupCloseIntent(collector),
+	)
+	var goalErr error
+	if fatal := collector.fatalSnapshot(); fatal != nil {
+		return acceptedResponsePostJoinOutcome{}, fatal
+	}
+	results, resultsErr := resultGroupResultsForPreparedCalls(collector, prepared)
+	if resultsErr != nil {
+		return acceptedResponsePostJoinOutcome{}, resultsErr
+	}
+	if closeErr != nil {
+		return acceptedResponsePostJoinOutcome{results: results}, closeErr
+	}
+	goalErr = e.drainActiveStepGoalMutations(stepID)
+	if goalErr != nil {
+		return acceptedResponsePostJoinOutcome{results: results}, goalErr
+	}
+	return acceptedResponsePostJoinOutcome{
+		results:     results,
+		semanticErr: executeErr,
+	}, nil
+}
+
+func resultGroupResultsForPreparedCalls(
+	collector *resultGroupCollector,
+	prepared []executorToolCall,
+) ([]tools.Result, error) {
+	results := make([]tools.Result, len(prepared))
+	for index, preparedCall := range prepared {
+		result, found, err := collector.result(preparedCall.call.ID)
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			return nil, fmt.Errorf(
+				"result group call %q has no completed result after close",
+				preparedCall.call.ID,
+			)
+		}
+		results[index] = result
+	}
+	return results, nil
 }
