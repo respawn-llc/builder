@@ -203,7 +203,7 @@ func TestCurrentNodeControllerManualMoveDispositionClassifiesLifecycle(t *testin
 	})
 }
 
-func TestWorkflowPromptReadSelectsAndBatchAnswersExactPrompt(t *testing.T) {
+func TestCurrentNodeControllerAnswersOnlyDurablyBoundExactPromptScope(t *testing.T) {
 	fixture := newCurrentNodeQuestionFixture(t)
 	reference := currentNodeReferenceForControllerTest(t, "task-question", "node-question")
 	request := askquestion.AskQuestionRequest{
@@ -250,7 +250,7 @@ func TestWorkflowPromptReadSelectsAndBatchAnswersExactPrompt(t *testing.T) {
 	}
 }
 
-func TestPromptBatchReturnsBeforePreparedSuccessor(t *testing.T) {
+func TestCurrentNodeControllerReleasesMutationPermitAfterAcceptingAnswer(t *testing.T) {
 	fixture := newCurrentNodeQuestionFixture(t)
 	reference := currentNodeReferenceForControllerTest(t, "task-question-permit", "node-question")
 	firstID := uuid.NewString()
@@ -399,7 +399,7 @@ func TestPromptBatchReturnsBeforePreparedSuccessor(t *testing.T) {
 	}
 }
 
-func TestMalformedPreparedBatchLeavesPromptPending(t *testing.T) {
+func TestCurrentNodeControllerMalformedPreparedBatchResolvesAwaiterWithInvariantError(t *testing.T) {
 	fixture := newCurrentNodeQuestionFixture(t)
 	reference := currentNodeReferenceForControllerTest(t, "task-question-invalid-batch", "node-question")
 	request := askquestion.AskQuestionRequest{
@@ -453,7 +453,7 @@ func TestMalformedPreparedBatchLeavesPromptPending(t *testing.T) {
 	}
 }
 
-func TestPromptBatchDoesNotConsultWorkflowDurableBinding(t *testing.T) {
+func TestCurrentNodeControllerRejectsOwnershipMismatchWithoutPromptDelivery(t *testing.T) {
 	fixture := newCurrentNodeQuestionFixture(t)
 	reference := currentNodeReferenceForControllerTest(t, "task-question-mismatch", "node-question")
 	request := askquestion.AskQuestionRequest{
@@ -491,7 +491,7 @@ func TestPromptBatchDoesNotConsultWorkflowDurableBinding(t *testing.T) {
 	}
 }
 
-func TestTaskPromptReadCanRepresentDuplicatePromptIDsAcrossExactExecutions(t *testing.T) {
+func TestCurrentNodeControllerRejectsAmbiguousPromptScope(t *testing.T) {
 	fixture := newCurrentNodeQuestionFixture(t)
 	taskID := workflow.TaskID("task-question-ambiguous")
 	request := askquestion.AskQuestionRequest{

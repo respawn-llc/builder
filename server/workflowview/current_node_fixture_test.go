@@ -479,14 +479,6 @@ func (p currentNodeViewPrompt) resolve(t *testing.T, ctx context.Context, resolu
 	}
 }
 
-func resolveWorkflowViewQuestion(
-	authority *sessionruntime.Authority,
-	sessionID runtimeids.SessionID,
-	request tools.AskQuestionRequest,
-) error {
-	return resolveWorkflowViewPrompt(authority, sessionID, request, workflowViewQuestionAnswer("Yes"))
-}
-
 func resolveWorkflowViewPrompt(
 	authority *sessionruntime.Authority,
 	sessionID runtimeids.SessionID,

@@ -1,20 +1,10 @@
 package serverapi
 
-import (
-	"testing"
-
-	"core/shared/runtimeids"
-)
+import "testing"
 
 func TestPromptFollowUpContractCarriesOnlyFullIdentityAndTerminalOutcome(t *testing.T) {
-	stepID, err := runtimeids.ParseStepID("22222222-2222-4222-8222-222222222222")
-	if err != nil {
-		t.Fatalf("parse Step ID: %v", err)
-	}
 	if err := (PromptFollowUpWatchRequest{
-		SessionID: runtimeids.NewSessionID(),
-		StepID:    stepID,
-		PromptID:  "prompt-1",
+		SessionID: mustPromptBatchSessionID(t), StepID: mustPromptBatchStepID(t), PromptID: "prompt-1",
 	}).Validate(); err != nil {
 		t.Fatalf("validate request: %v", err)
 	}

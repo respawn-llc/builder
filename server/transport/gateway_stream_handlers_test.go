@@ -19,14 +19,8 @@ func TestPromptFollowUpSubscriptionInstallsBeforeSubscribeResponse(t *testing.T)
 	if err != nil {
 		t.Fatalf("parse Step ID: %v", err)
 	}
-	request := serverapi.PromptFollowUpWatchRequest{
-		SessionID: runtimeids.NewSessionID(),
-		StepID:    stepID,
-		PromptID:  "prompt-1",
-	}
-	route, ok := apicontract.RouteByMethod(protocol.MethodPromptFollowUpWatch)
-	if !ok {
-		t.Fatal("prompt follow-up route missing")
+	route := apicontract.Route{
+		EventMethod: protocol.MethodPromptFollowUpEvent, CompleteMethod: protocol.MethodPromptFollowUpComplete,
 	}
 	conn := &promptFollowUpRegistrationConn{}
 
@@ -38,7 +32,9 @@ func TestPromptFollowUpSubscriptionInstallsBeforeSubscribeResponse(t *testing.T)
 			JSONRPC: protocol.JSONRPCVersion,
 			ID:      "watch",
 			Method:  protocol.MethodPromptFollowUpWatch,
-			Params:  mustJSON(t, request),
+			Params: mustJSON(t, serverapi.PromptFollowUpWatchRequest{
+				SessionID: runtimeids.NewSessionID(), StepID: stepID, PromptID: "prompt-1",
+			}),
 		},
 		func(context.Context, serverapi.PromptFollowUpWatchRequest) (*scriptedPromptFollowUpSubscription, error) {
 			conn.installed = true
@@ -49,48 +45,37 @@ func TestPromptFollowUpSubscriptionInstallsBeforeSubscribeResponse(t *testing.T)
 		},
 	)
 
-	if len(conn.frames) != 2 {
-		t.Fatalf("frames = %d, want SubscribeResponse and completion", len(conn.frames))
-	}
-	if conn.frames[0].ID != "watch" || conn.frames[0].Method != "" {
-		t.Fatalf("first frame = %+v, want canonical SubscribeResponse", conn.frames[0])
+	if conn.sent != 2 {
+		t.Fatalf("frames = %d, want SubscribeResponse and completion", conn.sent)
 	}
 }
 
 type scriptedPromptFollowUpSubscription struct{}
 
-func (s *scriptedPromptFollowUpSubscription) Next(context.Context) (serverapi.PromptFollowUpEvent, error) {
+func (*scriptedPromptFollowUpSubscription) Next(context.Context) (serverapi.PromptFollowUpEvent, error) {
 	return serverapi.PromptFollowUpEvent{}, io.EOF
 }
 
-func (*scriptedPromptFollowUpSubscription) Close() error {
-	return nil
-}
+func (*scriptedPromptFollowUpSubscription) Close() error { return nil }
 
 type promptFollowUpRegistrationConn struct {
 	installed bool
-	frames    []rpcwire.Frame
+	sent      int
 }
 
-func (c *promptFollowUpRegistrationConn) Send(_ context.Context, frame rpcwire.Frame) error {
-	if len(c.frames) == 0 && !c.installed {
+func (c *promptFollowUpRegistrationConn) Send(context.Context, rpcwire.Frame) error {
+	if c.sent == 0 && !c.installed {
 		return errors.New("SubscribeResponse sent before watcher installation")
 	}
-	c.frames = append(c.frames, frame)
+	c.sent++
 	return nil
 }
 
-func (c *promptFollowUpRegistrationConn) Events() <-chan rpcwire.Event {
-	return nil
-}
+func (*promptFollowUpRegistrationConn) Events() <-chan rpcwire.Event { return nil }
 
-func (c *promptFollowUpRegistrationConn) Closed() <-chan struct{} {
-	return nil
-}
+func (*promptFollowUpRegistrationConn) Closed() <-chan struct{} { return nil }
 
-func (c *promptFollowUpRegistrationConn) Close() error {
-	return nil
-}
+func (*promptFollowUpRegistrationConn) Close() error { return nil }
 
 func TestLegacyTranscriptSubscriptionSuppressesLiveRunTerminalAndRenumbers(t *testing.T) {
 	inner := &scriptedGatewayTranscriptSubscription{

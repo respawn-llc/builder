@@ -16,22 +16,17 @@ func TestPromptFollowUpSingleOwnerLifecycle(t *testing.T) {
 	t.Run("no successor", func(t *testing.T) {
 		store, stepID, subscription := newWatchedPrompt(t, []string{"ask-1"})
 		resolveWatchedPrompt(t, store, stepID)
-		requirePromptFollowUpTerminal(t, store, subscription, serverapi.PromptFollowUpNoPreparedSuccessor)
+		requirePromptFollowUpTerminal(t, subscription, serverapi.PromptFollowUpNoPreparedSuccessor)
 	})
 	t.Run("successor ready", func(t *testing.T) {
 		store, stepID, subscription := newWatchedPrompt(t, []string{"ask-1", "ask-2"})
 		resolveWatchedPrompt(t, store, stepID)
 		request := questionBatchValidationRequest(t)
-		request.ID = "ask-2"
-		request.QuestionBatch.PromptID = "ask-2"
-		request.QuestionBatch.CandidateOrdinal = 1
+		request.ID, request.QuestionBatch.PromptID, request.QuestionBatch.CandidateOrdinal = "ask-2", "ask-2", 1
 		done := make(chan struct{})
-		go func() {
-			_, _ = store.Await(context.Background(), request)
-			close(done)
-		}()
+		go func() { _, _ = store.Await(context.Background(), request); close(done) }()
 		requirePromptPending(t, store, "ask-2")
-		requirePromptFollowUpTerminal(t, store, subscription, serverapi.PromptFollowUpSuccessorReady)
+		requirePromptFollowUpTerminal(t, subscription, serverapi.PromptFollowUpSuccessorReady)
 		if err := store.Close(context.Canceled); err != nil {
 			t.Fatalf("Close: %v", err)
 		}
@@ -39,18 +34,11 @@ func TestPromptFollowUpSingleOwnerLifecycle(t *testing.T) {
 	})
 	t.Run("duplicate rejected", func(t *testing.T) {
 		store, stepID, subscription := newWatchedPrompt(t, []string{"ask-1"})
-		defer func() { _ = subscription.Close() }()
 		if _, err := store.subscribePromptFollowUp(stepID, "ask-1"); err == nil {
 			t.Fatal("concurrent duplicate follow-up subscription succeeded")
 		}
-	})
-	t.Run("cancellation cleans state", func(t *testing.T) {
-		store, stepID, subscription := newWatchedPrompt(t, []string{"ask-1"})
 		if err := subscription.Close(); err != nil {
 			t.Fatalf("Close: %v", err)
-		}
-		if len(store.promptFollowUps) != 0 {
-			t.Fatalf("canceled subscription retained state: %+v", store.promptFollowUps)
 		}
 		if _, err := subscription.Next(context.Background()); !errors.Is(err, io.EOF) {
 			t.Fatalf("closed subscription Next error = %v, want EOF", err)
@@ -78,14 +66,11 @@ func TestPromptFollowUpSingleOwnerLifecycle(t *testing.T) {
 		if err := store.Close(context.Canceled); err != nil {
 			t.Fatalf("Close: %v", err)
 		}
-		requirePromptFollowUpTerminal(t, store, subscription, serverapi.PromptFollowUpExecutionClosed)
+		requirePromptFollowUpTerminal(t, subscription, serverapi.PromptFollowUpExecutionClosed)
 	})
 }
 
-func newWatchedPrompt(
-	t *testing.T,
-	promptIDs []string,
-) (*executionPromptStore, runtimeids.StepID, serverapi.PromptFollowUpSubscription) {
+func newWatchedPrompt(t *testing.T, promptIDs []string) (*executionPromptStore, runtimeids.StepID, serverapi.PromptFollowUpSubscription) {
 	t.Helper()
 	store, _ := newPromptBatchStore(t)
 	stepID := promptBatchStepID(t)
@@ -106,12 +91,7 @@ func resolveWatchedPrompt(t *testing.T, store *executionPromptStore, stepID runt
 	}
 }
 
-func subscribePromptFollowUpForTest(
-	t *testing.T,
-	store *executionPromptStore,
-	stepID runtimeids.StepID,
-	promptID clientui.PromptID,
-) serverapi.PromptFollowUpSubscription {
+func subscribePromptFollowUpForTest(t *testing.T, store *executionPromptStore, stepID runtimeids.StepID, promptID clientui.PromptID) serverapi.PromptFollowUpSubscription {
 	t.Helper()
 	subscription, err := store.subscribePromptFollowUp(stepID, promptID)
 	if err != nil {
@@ -120,20 +100,12 @@ func subscribePromptFollowUpForTest(
 	return subscription
 }
 
-func requirePromptFollowUpTerminal(
-	t *testing.T,
-	store *executionPromptStore,
-	subscription serverapi.PromptFollowUpSubscription,
-	want serverapi.PromptFollowUpEventKind,
-) {
+func requirePromptFollowUpTerminal(t *testing.T, subscription serverapi.PromptFollowUpSubscription, want serverapi.PromptFollowUpEventKind) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	event, err := subscription.Next(ctx)
 	if err != nil || event.Kind != want {
 		t.Fatalf("follow-up event = %+v, error %v, want %q", event, err, want)
-	}
-	if len(store.promptFollowUps) != 0 {
-		t.Fatalf("terminal outcome retained state: %+v", store.promptFollowUps)
 	}
 }

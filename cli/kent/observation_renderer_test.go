@@ -13,7 +13,7 @@ import (
 
 func TestObservedQuestionUsesDynamicQuestionAndAnswerTarget(t *testing.T) {
 	question := serverapi.ObservationQuestion{Approval: &clientui.PendingApproval{
-		PromptID: "approval-dynamic", SessionID: questionCommandSessionID(t),
+		PromptID: "approval-dynamic", SessionID: mustQuestionCommandSessionID("session-1"),
 		StepID: questionCommandStepID(), Question: "dynamic question",
 		Options: []clientui.ApprovalOption{{Label: "dynamic allow", Decision: clientui.ApprovalDecisionAllowOnce}},
 	}}
@@ -34,7 +34,7 @@ func TestRunWatchApprovalHintUsesOptionOnly(t *testing.T) {
 		Outcome: serverapi.RuntimeLiveWatchOutcome{
 			Kind: serverapi.RuntimeLiveWatchQuestion,
 			Question: &serverapi.ObservationQuestion{Approval: &clientui.PendingApproval{
-				PromptID: "approval-dynamic", SessionID: questionCommandSessionID(t),
+				PromptID: "approval-dynamic", SessionID: mustQuestionCommandSessionID("session-1"),
 				StepID: questionCommandStepID(), Question: "Allow access?",
 				Options: []clientui.ApprovalOption{{
 					Label: "Allow once",

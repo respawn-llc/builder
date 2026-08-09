@@ -20,30 +20,32 @@ import (
 )
 
 type stubQuestionCommandRemote struct {
+	listResponses     []serverapi.AskListPendingBySessionResponse
+	listRequests      []serverapi.AskListPendingBySessionRequest
+	listAsks          func(context.Context) error
+	approvalResponses []serverapi.ApprovalListPendingBySessionResponse
+	answerRequests    []serverapi.PromptAnswerBatchRequest
+	watchRequests     []serverapi.PromptFollowUpWatchRequest
+	batchErr          error
+	watchErr          error
+	followUpErr       error
+	watchNext         func(context.Context) error
+	followUpKind      serverapi.PromptFollowUpEventKind
+	outcome           serverapi.PromptAnswerBatchOutcome
+	watchNexts        int
+	watchClosed       bool
+}
+
+type stubQuestionTaskRemote struct {
 	apicontract.WorkflowService
 	task               serverapi.WorkflowTaskDetail
 	taskRequests       []serverapi.WorkflowTaskGetRequest
 	attentionResponses []serverapi.WorkflowTaskAttentionListResponse
 	attentionRequests  []serverapi.WorkflowTaskAttentionListRequest
-	listResponses      []serverapi.AskListPendingBySessionResponse
-	listRequests       []serverapi.AskListPendingBySessionRequest
-	listAsks           func(context.Context) error
-	approvalResponses  []serverapi.ApprovalListPendingBySessionResponse
-	answerRequests     []serverapi.PromptAnswerBatchRequest
-	watchRequests      []serverapi.PromptFollowUpWatchRequest
-	operations         []string
-	batchErr           error
-	watchErr           error
-	followUpErr        error
-	watchNext          func(context.Context) error
-	followUpKind       serverapi.PromptFollowUpEventKind
-	outcome            serverapi.PromptAnswerBatchOutcome
-	watchNexts         int
-	watchClosed        bool
-	watchSubscriptions int
+	*stubQuestionCommandRemote
 }
 
-func (r *stubQuestionCommandRemote) GetWorkflowTask(
+func (r *stubQuestionTaskRemote) GetWorkflowTask(
 	_ context.Context,
 	req serverapi.WorkflowTaskGetRequest,
 ) (serverapi.WorkflowTaskGetResponse, error) {
@@ -51,7 +53,7 @@ func (r *stubQuestionCommandRemote) GetWorkflowTask(
 	return serverapi.WorkflowTaskGetResponse{Task: r.task}, nil
 }
 
-func (r *stubQuestionCommandRemote) ListWorkflowTaskAttention(
+func (r *stubQuestionTaskRemote) ListWorkflowTaskAttention(
 	_ context.Context,
 	req serverapi.WorkflowTaskAttentionListRequest,
 ) (serverapi.WorkflowTaskAttentionListResponse, error) {
@@ -64,7 +66,7 @@ func (r *stubQuestionCommandRemote) ListWorkflowTaskAttention(
 	return response, nil
 }
 
-func (r *stubQuestionCommandRemote) ResolveProjectPath(
+func (r *stubQuestionTaskRemote) ResolveProjectPath(
 	_ context.Context,
 	_ serverapi.ProjectResolvePathRequest,
 ) (serverapi.ProjectResolvePathResponse, error) {
@@ -92,7 +94,9 @@ func (r *stubQuestionCommandRemote) ListPendingAsksBySession(
 }
 
 func (r *stubQuestionCommandRemote) AnswerPromptBatch(_ context.Context, req serverapi.PromptAnswerBatchRequest) (serverapi.PromptAnswerBatchResponse, error) {
-	r.operations = append(r.operations, "batch")
+	if len(r.watchRequests) == 0 {
+		return serverapi.PromptAnswerBatchResponse{}, errors.New("batch opened before follow-up watch")
+	}
 	r.answerRequests = append(r.answerRequests, req)
 	if r.batchErr != nil {
 		return serverapi.PromptAnswerBatchResponse{}, r.batchErr
@@ -120,12 +124,10 @@ func (r *stubQuestionCommandRemote) ListPendingApprovalsBySession(
 }
 
 func (r *stubQuestionCommandRemote) SubscribeFollowUp(_ context.Context, req serverapi.PromptFollowUpWatchRequest) (serverapi.PromptFollowUpSubscription, error) {
-	r.operations = append(r.operations, "watch")
 	r.watchRequests = append(r.watchRequests, req)
 	if r.watchErr != nil {
 		return nil, r.watchErr
 	}
-	r.watchSubscriptions++
 	kind := r.followUpKind
 	if kind == "" {
 		kind = serverapi.PromptFollowUpNoPreparedSuccessor
@@ -136,6 +138,10 @@ func (r *stubQuestionCommandRemote) SubscribeFollowUp(_ context.Context, req ser
 
 func (r *stubQuestionCommandRemote) Close() error {
 	r.watchClosed = true
+	return nil
+}
+
+func (r *stubQuestionTaskRemote) Close() error {
 	return nil
 }
 
@@ -157,22 +163,14 @@ func requireQuestionBatchEntry(t *testing.T, request serverapi.PromptAnswerBatch
 	return request.Entries[0]
 }
 
-func requireQuestionWatch(t *testing.T, remote *stubQuestionCommandRemote, wantSubscriptions, wantNext int) {
+func requireQuestionWatch(t *testing.T, remote *stubQuestionCommandRemote, wantNext int) {
 	t.Helper()
-	if remote.watchSubscriptions != wantSubscriptions {
-		t.Fatalf("subscriptions = %d, want %d", remote.watchSubscriptions, wantSubscriptions)
+	if len(remote.watchRequests) != 1 {
+		t.Fatalf("watch requests = %d, want 1", len(remote.watchRequests))
 	}
-	if wantSubscriptions > 0 && (!remote.watchClosed || remote.watchNexts != wantNext) {
+	if remote.watchErr == nil && (!remote.watchClosed || remote.watchNexts != wantNext) {
 		t.Fatalf("subscription = %+v, want closed with %d reads", remote, wantNext)
 	}
-}
-
-func requireApprovalBatchEntry(t *testing.T, request serverapi.PromptAnswerBatchRequest) serverapi.PromptAnswerBatchEntry {
-	t.Helper()
-	if len(request.Entries) != 1 || request.Entries[0].ApprovalAnswer == nil {
-		t.Fatalf("batch request = %+v, want one Approval answer", request)
-	}
-	return request.Entries[0]
 }
 
 func questionCommandWithRemote(remote questionCommandRemote) (questionCommand, *[]string) {
@@ -185,7 +183,7 @@ func questionCommandWithRemote(remote questionCommandRemote) (questionCommand, *
 	}, &openedSessions
 }
 
-func installQuestionTaskRemote(t *testing.T, remote *stubQuestionCommandRemote) questionCommand {
+func installQuestionTaskRemote(t *testing.T, remote *stubQuestionTaskRemote) questionCommand {
 	t.Helper()
 	previous := workflowCommandRemoteOpener
 	workflowCommandRemoteOpener = func(context.Context, string) (config.App, workflowCommandRemote, error) {
@@ -194,7 +192,7 @@ func installQuestionTaskRemote(t *testing.T, remote *stubQuestionCommandRemote) 
 	t.Cleanup(func() {
 		workflowCommandRemoteOpener = previous
 	})
-	command, _ := questionCommandWithRemote(remote)
+	command, _ := questionCommandWithRemote(remote.stubQuestionCommandRemote)
 	return command
 }
 
@@ -205,21 +203,6 @@ func pendingAsk(sessionID, askID, question string, suggestions ...string) client
 		StepID:      questionCommandStepID(),
 		Question:    question,
 		Suggestions: suggestions,
-	}
-}
-
-func pendingApproval(
-	sessionID string,
-	promptID string,
-	question string,
-	options ...clientui.ApprovalOption,
-) clientui.PendingApproval {
-	return clientui.PendingApproval{
-		PromptID:  clientui.PromptID(promptID),
-		SessionID: mustQuestionCommandSessionID(sessionID),
-		StepID:    questionCommandStepID(),
-		Question:  question,
-		Options:   append([]clientui.ApprovalOption(nil), options...),
 	}
 }
 
@@ -243,27 +226,6 @@ func taskQuestionAttention(
 			Kind:      serverapi.WorkflowAttentionQuestionKindOrdinary,
 		},
 		OccurredAtUnixMs: occurredAt,
-	}
-}
-
-func taskApprovalAttention(
-	taskID string,
-	sessionID string,
-	approvalID string,
-	question string,
-	decisions ...clientui.ApprovalDecision,
-) serverapi.WorkflowAttentionItem {
-	return serverapi.WorkflowAttentionItem{
-		Kind:    string(serverapi.WorkflowTaskAttentionKindQuestion),
-		TaskID:  taskID,
-		Message: &question,
-		Question: &serverapi.WorkflowAttentionQuestionPrompt{
-			SessionID:         mustQuestionCommandSessionID(sessionID),
-			StepID:            questionCommandStepID(),
-			PromptID:          clientui.PromptID(approvalID),
-			Kind:              serverapi.WorkflowAttentionQuestionKindApproval,
-			ApprovalDecisions: append([]clientui.ApprovalDecision(nil), decisions...),
-		},
 	}
 }
 
@@ -308,11 +270,6 @@ func questionCommandStepID() runtimeids.StepID {
 	return stepID
 }
 
-func questionCommandSessionID(t *testing.T) runtimeids.SessionID {
-	t.Helper()
-	return mustQuestionCommandSessionID("session-1")
-}
-
 func mustQuestionCommandSessionID(raw string) runtimeids.SessionID {
 	sessionID, err := runtimeids.ParseSessionID(raw)
 	if err != nil {
@@ -335,6 +292,16 @@ func TestQuestionsAliasDispatchesQuestionCommand(t *testing.T) {
 func TestQuestionAnswerSubmitsOptionAndCommentaryThenReadsNextQuestion(t *testing.T) {
 	unsetSessionIDEnvironmentForTest(t)
 	sessionID := uuid.NewString()
+	var answerDeadline int64
+	readCount := 0
+	checkDeadline := func(ctx context.Context) error {
+		deadline, ok := ctx.Deadline()
+		if !ok || answerDeadline != 0 && deadline.UnixNano() != answerDeadline {
+			return errors.New("answer deadline missing or changed")
+		}
+		answerDeadline = deadline.UnixNano()
+		return nil
+	}
 	remote := &stubQuestionCommandRemote{
 		outcome:      serverapi.PromptAnswerBatchOutcomeSkipped,
 		followUpKind: serverapi.PromptFollowUpExecutionClosed,
@@ -342,12 +309,19 @@ func TestQuestionAnswerSubmitsOptionAndCommentaryThenReadsNextQuestion(t *testin
 			{Asks: []clientui.PendingAsk{pendingAsk(sessionID, "ask-1", "First?", "Yes", "No")}},
 			{Asks: []clientui.PendingAsk{pendingAsk(sessionID, "ask-2", "Second?", "A", "B")}},
 		},
+		listAsks: func(ctx context.Context) error {
+			readCount++
+			if readCount == 2 {
+				return checkDeadline(ctx)
+			}
+			return nil
+		},
 	}
-	remote.watchNext = func(context.Context) error {
+	remote.watchNext = func(ctx context.Context) error {
 		if len(remote.answerRequests) != 1 {
 			return errors.New("follow-up read started before batch completion")
 		}
-		return nil
+		return checkDeadline(ctx)
 	}
 	command, _ := questionCommandWithRemote(remote)
 
@@ -382,13 +356,10 @@ func TestQuestionAnswerSubmitsOptionAndCommentaryThenReadsNextQuestion(t *testin
 	if entry.QuestionAnswer.Freeform == nil || *entry.QuestionAnswer.Freeform != "Because it is safer" {
 		t.Fatalf("commentary = %v", entry.QuestionAnswer.Freeform)
 	}
-	if len(remote.operations) < 2 || remote.operations[0] != "watch" || remote.operations[1] != "batch" {
-		t.Fatalf("operations = %v, want watch before batch", remote.operations)
-	}
 	if len(remote.listRequests) != 2 {
 		t.Fatalf("list requests = %+v, want initial and post-answer reads", remote.listRequests)
 	}
-	requireQuestionWatch(t, remote, 1, 1)
+	requireQuestionWatch(t, remote, 1)
 }
 
 func TestQuestionAnswerAcceptsFreeformWithoutOption(t *testing.T) {
@@ -442,99 +413,35 @@ func TestQuestionAnswerAcceptsOptionWithoutCommentary(t *testing.T) {
 	}
 }
 
-func TestQuestionAnswerKeepsDeadlineThroughAuthoritativeFollowUpRead(t *testing.T) {
-	unsetSessionIDEnvironmentForTest(t)
-	sessionID := uuid.NewString()
-	var answerDeadline int64
-	readCount := 0
-	checkDeadline := func(ctx context.Context) error {
-		deadline, ok := ctx.Deadline()
-		if !ok {
-			return errors.New("answer context has no deadline")
-		}
-		if answerDeadline == 0 {
-			answerDeadline = deadline.UnixNano()
-		} else if deadline.UnixNano() != answerDeadline {
-			return errors.New("follow-up read extended the answer deadline")
-		}
-		return nil
-	}
-	remote := &stubQuestionCommandRemote{
-		listResponses: []serverapi.AskListPendingBySessionResponse{
-			{Asks: []clientui.PendingAsk{pendingAsk(sessionID, "ask-1", "Choose?", "One")}},
-			{},
-		},
-		watchNext: checkDeadline,
-		listAsks: func(ctx context.Context) error {
-			readCount++
-			if readCount != 2 {
-				return nil
-			}
-			return checkDeadline(ctx)
-		},
-	}
-	command, _ := questionCommandWithRemote(remote)
-
-	var stderr bytes.Buffer
-	exitCode := command.run(
-		[]string{"answer", "--session", sessionID, "--option", "1"},
-		io.Discard,
-		&stderr,
-	)
-
-	if exitCode != 0 || stderr.Len() != 0 || answerDeadline == 0 {
-		t.Fatalf("exit=%d stderr=%q answer deadline=%d", exitCode, stderr.String(), answerDeadline)
-	}
-}
-
 func TestQuestionAnswerFailuresDoNotAuthorizeMutationOrDone(t *testing.T) {
 	unsetSessionIDEnvironmentForTest(t)
 	sessionID := uuid.NewString()
 	tests := []struct {
-		name        string
-		watchErr    error
-		batchErr    error
-		followUpErr error
-		wantBatch   int
-		wantWatch   int
-		wantNext    int
+		name                string
+		remote              *stubQuestionCommandRemote
+		wantBatch, wantNext int
 	}{
-		{name: "watch", watchErr: errors.New("unknown prompt")},
-		{name: "batch", batchErr: errors.New("answer failed"), wantBatch: 1, wantWatch: 1},
-		{name: "follow-up", followUpErr: errors.New("watch failed"), wantBatch: 1, wantWatch: 1, wantNext: 1},
+		{name: "watch", remote: &stubQuestionCommandRemote{watchErr: errors.New("unknown prompt")}},
+		{name: "batch", remote: &stubQuestionCommandRemote{batchErr: errors.New("answer failed")}, wantBatch: 1},
+		{name: "follow-up", remote: &stubQuestionCommandRemote{followUpErr: errors.New("watch failed")}, wantBatch: 1, wantNext: 1},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			remote := &stubQuestionCommandRemote{
-				watchErr:    test.watchErr,
-				batchErr:    test.batchErr,
-				followUpErr: test.followUpErr,
-				listResponses: []serverapi.AskListPendingBySessionResponse{{
-					Asks: []clientui.PendingAsk{pendingAsk(sessionID, "ask-1", "Choose?", "One")},
-				}},
-			}
+			remote := test.remote
+			remote.listResponses = []serverapi.AskListPendingBySessionResponse{{Asks: []clientui.PendingAsk{
+				pendingAsk(sessionID, "ask-1", "Choose?", "One"),
+			}}}
 			command, _ := questionCommandWithRemote(remote)
 			var stdout, stderr bytes.Buffer
 
-			exitCode := command.run(
-				[]string{"answer", "--session", sessionID, "--option", "1"},
-				&stdout,
-				&stderr,
-			)
+			exitCode := command.run([]string{"answer", "--session", sessionID, "--option", "1"}, &stdout, &stderr)
 
 			if exitCode != 1 || stdout.Len() != 0 || stderr.Len() == 0 ||
 				len(remote.answerRequests) != test.wantBatch ||
 				len(remote.listRequests) != 1 {
-				t.Fatalf(
-					"exit=%d stdout=%q stderr=%q batches=%d reads=%d",
-					exitCode,
-					stdout.String(),
-					stderr.String(),
-					len(remote.answerRequests),
-					len(remote.listRequests),
-				)
+				t.Fatalf("exit=%d stdout=%q stderr=%q batches=%d reads=%d", exitCode, stdout.String(), stderr.String(), len(remote.answerRequests), len(remote.listRequests))
 			}
-			requireQuestionWatch(t, remote, test.wantWatch, test.wantNext)
+			requireQuestionWatch(t, remote, test.wantNext)
 		})
 	}
 }
@@ -624,7 +531,12 @@ func TestQuestionAnswerByTaskSelectsUniqueSession(t *testing.T) {
 	unsetSessionIDEnvironmentForTest(t)
 	taskID := "task-1"
 	sessionID := uuid.NewString()
-	remote := &stubQuestionCommandRemote{
+	remote := &stubQuestionTaskRemote{
+		stubQuestionCommandRemote: &stubQuestionCommandRemote{
+			listResponses: []serverapi.AskListPendingBySessionResponse{{
+				Asks: []clientui.PendingAsk{pendingAsk(sessionID, "ask-1", "Continue?")},
+			}},
+		},
 		task: serverapi.WorkflowTaskDetail{
 			Summary: serverapi.WorkflowTaskSummary{ID: taskID},
 		},
@@ -634,9 +546,6 @@ func TestQuestionAnswerByTaskSelectsUniqueSession(t *testing.T) {
 			}},
 			{},
 		},
-		listResponses: []serverapi.AskListPendingBySessionResponse{{
-			Asks: []clientui.PendingAsk{pendingAsk(sessionID, "ask-1", "Continue?")},
-		}},
 	}
 	command := installQuestionTaskRemote(t, remote)
 
@@ -665,7 +574,7 @@ func TestQuestionAnswerByTaskSelectsUniqueSession(t *testing.T) {
 	if len(remote.attentionRequests) != 2 {
 		t.Fatalf("attention requests = %+v", remote.attentionRequests)
 	}
-	requireQuestionWatch(t, remote, 1, 1)
+	requireQuestionWatch(t, remote.stubQuestionCommandRemote, 1)
 }
 
 func TestQuestionByTaskApprovalReadsSuccessorQuestion(t *testing.T) {
@@ -675,20 +584,26 @@ func TestQuestionByTaskApprovalReadsSuccessorQuestion(t *testing.T) {
 	approvalID := "approval-1"
 	successorQuestion := "Next?"
 	approvalLabel := "Grant this workspace once"
-	attention := taskApprovalAttention(
-		taskID,
-		sessionID,
-		approvalID,
-		"Allow access?",
-		clientui.ApprovalDecisionAllowOnce,
-	)
-	approval := pendingApproval(
-		sessionID,
-		approvalID,
-		"Allow access?",
-		clientui.ApprovalOption{Decision: clientui.ApprovalDecisionAllowOnce, Label: approvalLabel},
-	)
-	remote := &stubQuestionCommandRemote{
+	attention := taskQuestionAttention(taskID, sessionID, "Implementer", approvalID, "Allow access?", 1)
+	attention.Question.Kind = serverapi.WorkflowAttentionQuestionKindApproval
+	attention.Question.ApprovalDecisions = []clientui.ApprovalDecision{clientui.ApprovalDecisionAllowOnce}
+	approval := clientui.PendingApproval{
+		PromptID: clientui.PromptID(approvalID), SessionID: mustQuestionCommandSessionID(sessionID),
+		StepID: questionCommandStepID(), Question: "Allow access?",
+		Options: []clientui.ApprovalOption{{Decision: clientui.ApprovalDecisionAllowOnce, Label: approvalLabel}},
+	}
+	remote := &stubQuestionTaskRemote{
+		stubQuestionCommandRemote: &stubQuestionCommandRemote{
+			listResponses: []serverapi.AskListPendingBySessionResponse{
+				{},
+				{Asks: []clientui.PendingAsk{pendingAsk(sessionID, "ask-next", successorQuestion)}},
+			},
+			approvalResponses: []serverapi.ApprovalListPendingBySessionResponse{
+				{Approvals: []clientui.PendingApproval{approval}},
+				{Approvals: []clientui.PendingApproval{approval}},
+				{},
+			},
+		},
 		task: serverapi.WorkflowTaskDetail{
 			Summary: serverapi.WorkflowTaskSummary{ID: taskID},
 		},
@@ -698,15 +613,6 @@ func TestQuestionByTaskApprovalReadsSuccessorQuestion(t *testing.T) {
 			{Items: []serverapi.WorkflowAttentionItem{
 				taskQuestionAttention(taskID, sessionID, "Implementer", "ask-next", successorQuestion, 2),
 			}},
-		},
-		listResponses: []serverapi.AskListPendingBySessionResponse{
-			{},
-			{Asks: []clientui.PendingAsk{pendingAsk(sessionID, "ask-next", successorQuestion)}},
-		},
-		approvalResponses: []serverapi.ApprovalListPendingBySessionResponse{
-			{Approvals: []clientui.PendingApproval{approval}},
-			{Approvals: []clientui.PendingApproval{approval}},
-			{},
 		},
 	}
 	command := installQuestionTaskRemote(t, remote)
@@ -730,7 +636,10 @@ func TestQuestionByTaskApprovalReadsSuccessorQuestion(t *testing.T) {
 		t.Fatalf("approval requests = %+v", remote.answerRequests)
 	}
 	request := remote.answerRequests[0]
-	entry := requireApprovalBatchEntry(t, request)
+	if len(request.Entries) != 1 || request.Entries[0].ApprovalAnswer == nil {
+		t.Fatalf("approval batch request = %+v", request)
+	}
+	entry := request.Entries[0]
 	if request.SessionID.String() != sessionID || request.StepID != questionCommandStepID() ||
 		entry.PromptID != clientui.PromptID(approvalID) ||
 		entry.ApprovalAnswer.Decision != clientui.ApprovalDecisionAllowOnce ||
@@ -740,7 +649,7 @@ func TestQuestionByTaskApprovalReadsSuccessorQuestion(t *testing.T) {
 	if len(remote.attentionRequests) != 3 {
 		t.Fatalf("attention requests = %+v", remote.attentionRequests)
 	}
-	requireQuestionWatch(t, remote, 1, 1)
+	requireQuestionWatch(t, remote.stubQuestionCommandRemote, 1)
 }
 
 func TestQuestionByTaskRejectsAmbiguousSessionsWithoutAnswering(t *testing.T) {
@@ -748,7 +657,8 @@ func TestQuestionByTaskRejectsAmbiguousSessionsWithoutAnswering(t *testing.T) {
 	taskID := "task-1"
 	firstSessionID := uuid.NewString()
 	secondSessionID := uuid.NewString()
-	remote := &stubQuestionCommandRemote{
+	remote := &stubQuestionTaskRemote{
+		stubQuestionCommandRemote: &stubQuestionCommandRemote{},
 		task: serverapi.WorkflowTaskDetail{
 			Summary: serverapi.WorkflowTaskSummary{ID: taskID},
 		},
@@ -790,7 +700,8 @@ func TestQuestionByTaskRejectsCurrentAgentSession(t *testing.T) {
 			_ = os.Unsetenv(sessionenv.SessionIDEnv)
 		}
 	})
-	remote := &stubQuestionCommandRemote{
+	remote := &stubQuestionTaskRemote{
+		stubQuestionCommandRemote: &stubQuestionCommandRemote{},
 		task: serverapi.WorkflowTaskDetail{
 			Summary: serverapi.WorkflowTaskSummary{ID: taskID},
 		},
@@ -817,7 +728,15 @@ func TestQuestionByTaskUsesOldestQuestionInSelectedSession(t *testing.T) {
 	unsetSessionIDEnvironmentForTest(t)
 	taskID := "task-1"
 	sessionID := uuid.NewString()
-	remote := &stubQuestionCommandRemote{
+	remote := &stubQuestionTaskRemote{
+		stubQuestionCommandRemote: &stubQuestionCommandRemote{
+			listResponses: []serverapi.AskListPendingBySessionResponse{{
+				Asks: []clientui.PendingAsk{
+					pendingAsk(sessionID, "ask-new", "Newer?"),
+					pendingAsk(sessionID, "ask-old", "Older?"),
+				},
+			}},
+		},
 		task: serverapi.WorkflowTaskDetail{
 			Summary: serverapi.WorkflowTaskSummary{ID: taskID},
 		},
@@ -827,12 +746,6 @@ func TestQuestionByTaskUsesOldestQuestionInSelectedSession(t *testing.T) {
 				taskQuestionAttention(taskID, sessionID, "Implementer", "ask-old", "Older?", 1),
 			},
 		}, {}},
-		listResponses: []serverapi.AskListPendingBySessionResponse{{
-			Asks: []clientui.PendingAsk{
-				pendingAsk(sessionID, "ask-new", "Newer?"),
-				pendingAsk(sessionID, "ask-old", "Older?"),
-			},
-		}},
 	}
 	command := installQuestionTaskRemote(t, remote)
 
@@ -926,7 +839,8 @@ func TestQuestionTaskStaleLiveApprovalIsOmittedForShowAndAnswer(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			unsetSessionIDEnvironmentForTest(t)
-			remote := &stubQuestionCommandRemote{
+			remote := &stubQuestionTaskRemote{
+				stubQuestionCommandRemote: &stubQuestionCommandRemote{},
 				task: serverapi.WorkflowTaskDetail{
 					Summary: serverapi.WorkflowTaskSummary{ID: "task-1", ShortID: "KENT-335"},
 				},
@@ -943,7 +857,8 @@ func TestQuestionTaskStaleLiveApprovalIsOmittedForShowAndAnswer(t *testing.T) {
 
 func TestQuestionByTaskResolvesProjectScopedShortID(t *testing.T) {
 	unsetSessionIDEnvironmentForTest(t)
-	remote := &stubQuestionCommandRemote{
+	remote := &stubQuestionTaskRemote{
+		stubQuestionCommandRemote: &stubQuestionCommandRemote{},
 		task: serverapi.WorkflowTaskDetail{
 			Summary: serverapi.WorkflowTaskSummary{ID: "task-1", ShortID: "KENT-335"},
 		},

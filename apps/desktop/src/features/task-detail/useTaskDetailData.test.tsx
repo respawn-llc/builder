@@ -47,11 +47,7 @@ describe("Task Detail live refresh", () => {
     });
     const list = screen.getByTestId("task-detail-island-stack");
     list.scrollTop = 241;
-    const [firstSubmit] = screen.getAllByRole("button", { name: appI18n.t("task.submitAnswer") });
-    if (firstSubmit === undefined) {
-      throw new Error("expected the first submit button");
-    }
-    await user.click(firstSubmit);
+    await user.click(screen.getAllByRole("button", { name: appI18n.t("task.submitAnswer") })[0]!);
 
     await waitFor(() => {
       expect(screen.queryByText("ask-1")).not.toBeInTheDocument();
@@ -199,13 +195,9 @@ async function waitForQuestionOptionCount(count: number) {
 }
 
 function deferred<T>(): Readonly<{ promise: Promise<T>; resolve(value: T): void }> {
-  let resolve: ((value: T) => void) | undefined;
-  return {
-    promise: new Promise<T>((nextResolve) => {
-      resolve = nextResolve;
-    }),
-    resolve(value) {
-      resolve?.(value);
-    },
-  };
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((nextResolve) => {
+    resolve = nextResolve;
+  });
+  return { promise, resolve };
 }

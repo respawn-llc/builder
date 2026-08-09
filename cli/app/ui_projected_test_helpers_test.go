@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
@@ -78,7 +77,7 @@ func (singlePromptOnlyControl) AnswerPromptBatch(
 	context.Context,
 	serverapi.PromptAnswerBatchRequest,
 ) (serverapi.PromptAnswerBatchResponse, error) {
-	return serverapi.PromptAnswerBatchResponse{}, errors.New("unexpected prompt batch answer")
+	panic("unexpected prompt batch answer")
 }
 
 func newRecordingPromptControl() *recordingPromptControl {

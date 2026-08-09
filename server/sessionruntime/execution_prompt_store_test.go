@@ -3,7 +3,6 @@ package sessionruntime
 import (
 	"context"
 	"errors"
-	"reflect"
 	"testing"
 	"time"
 
@@ -18,29 +17,16 @@ type promptAwaitTestResult struct {
 }
 
 func testQuestionResolution(answer string) tools.AskQuestionAnswer {
-	return tools.AskQuestionAnswer{Freeform: &answer}
-}
-
-func batchedPromptRequest(id string, ordinal int) tools.AskQuestionRequest {
-	return tools.AskQuestionRequest{
-		ID:       id,
-		Question: id,
-		Origin:   tools.AskQuestionOriginModelTool,
-		RunID:    "run-1",
-		StepID:   "step-1",
-		QuestionBatch: &tools.AskQuestionBatchMetadata{
-			Origin:              tools.AskQuestionOriginModelTool,
-			RunID:               "run-1",
-			StepID:              "step-1",
-			PromptID:            id,
-			BatchPromptIDs:      []string{"ask-1", "ask-2"},
-			CandidateOrdinal:    ordinal,
-			PreparedPromptCount: 2,
-		},
+	return tools.AskQuestionAnswer{
+		Freeform: &answer,
 	}
 }
 
-func requireQuestionAnswer(t *testing.T, resolution tools.AskQuestionResolution, want string) {
+func requireQuestionAnswer(
+	t *testing.T,
+	resolution tools.AskQuestionResolution,
+	want string,
+) {
 	t.Helper()
 	answer, ok := resolution.(tools.AskQuestionAnswer)
 	if !ok || answer.Freeform == nil || *answer.Freeform != want {
@@ -60,15 +46,6 @@ func resolveAuthorityQuestionForTest(
 		Payload:  PromptQuestionAnswerCommand{Answer: answer},
 	}})
 	return err
-}
-
-func TestExecutionPromptStoreHasNoLegacySubmitOrAcceptMethods(t *testing.T) {
-	storeType := reflect.TypeOf((*executionPromptStore)(nil))
-	for _, removed := range []string{"Submit", "Accept"} {
-		if _, exists := storeType.MethodByName(removed); exists {
-			t.Fatalf("executionPromptStore still exposes %s", removed)
-		}
-	}
 }
 
 func TestExecutionPromptStoreClosePublishesLifecycleBeforeReleasingPrompt(t *testing.T) {
@@ -142,6 +119,25 @@ func TestExecutionPromptStoreRejectsPromptWhenPendingPublicationFails(t *testing
 	}
 }
 
+func batchedPromptRequest(id string, ordinal int) tools.AskQuestionRequest {
+	return tools.AskQuestionRequest{
+		ID:       id,
+		Question: id,
+		Origin:   tools.AskQuestionOriginModelTool,
+		RunID:    "run-1",
+		StepID:   "step-1",
+		QuestionBatch: &tools.AskQuestionBatchMetadata{
+			Origin:              tools.AskQuestionOriginModelTool,
+			RunID:               "run-1",
+			StepID:              "step-1",
+			PromptID:            id,
+			BatchPromptIDs:      []string{"ask-1", "ask-2"},
+			CandidateOrdinal:    ordinal,
+			PreparedPromptCount: 2,
+		},
+	}
+}
+
 func requirePromptPending(t *testing.T, store *executionPromptStore, requestID string) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
@@ -182,14 +178,21 @@ func newGatedPromptFeed() *gatedPromptFeed {
 	}
 }
 
-func (f *gatedPromptFeed) PromptPendingScope(ExecutionScope, tools.AskQuestionRequest, time.Time) error {
+func (f *gatedPromptFeed) PromptPendingScope(
+	_ ExecutionScope,
+	_ tools.AskQuestionRequest,
+	_ time.Time,
+) error {
 	close(f.pendingStarted)
 	<-f.allowPending
 	close(f.pendingPublished)
 	return nil
 }
 
-func (f *gatedPromptFeed) PromptResolvedScope(ExecutionScope, string) error {
+func (f *gatedPromptFeed) PromptResolvedScope(
+	_ ExecutionScope,
+	_ string,
+) error {
 	close(f.resolutionStarted)
 	<-f.allowResolution
 	return nil

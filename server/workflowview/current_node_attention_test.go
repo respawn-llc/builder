@@ -368,6 +368,27 @@ func mustWorkflowViewStepID(t *testing.T, raw string) runtimeids.StepID {
 	return id
 }
 
+func TestMergeAttentionCandidatesPreservesQuestionStepIdentity(t *testing.T) {
+	sessionID := runtimeids.NewSessionID()
+	promptID := clientui.PromptID("shared-prompt")
+	ids := []string{
+		liveQuestionAttentionID(sessionID, mustWorkflowViewStepID(t, "11111111-1111-4111-8111-111111111111"), promptID),
+		liveQuestionAttentionID(sessionID, mustWorkflowViewStepID(t, "22222222-2222-4222-8222-222222222222"), promptID),
+	}
+	items := mergeAttentionCandidates(
+		attentionPageCursor{},
+		[]attentionCandidate{{item: serverapi.WorkflowAttentionItem{ID: ids[0], OccurredAtUnixMs: 1}}},
+		[]attentionCandidate{{item: serverapi.WorkflowAttentionItem{ID: ids[1], OccurredAtUnixMs: 1}}},
+	)
+	page := mergeAttentionCandidates(
+		attentionPageCursor{occurredAtUnixMs: 1, itemID: items[0].ID, hasValue: true},
+		[]attentionCandidate{{item: items[0]}, {item: items[1]}},
+	)
+	if ids[0] == ids[1] || len(items) != 2 || len(page) != 1 || page[0].ID != items[1].ID {
+		t.Fatalf("full-key merge = ids %v items %+v page %+v", ids, items, page)
+	}
+}
+
 func TestAttentionOmitsLivePromptThatRetiredBeforePromptProjection(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
 	started := fixture.startTask(t, "Retired prompt")

@@ -47,12 +47,8 @@ func TestQuestionBatchMetadataValidationIsIdenticalForDirectAndObservedResolutio
 		t.Run(test.name, func(t *testing.T) {
 			request := questionBatchValidationRequest(t)
 			test.mutate(&request)
-
-			directErr := resolveMalformedQuestionBatch(t, request, false)
-			observedErr := resolveMalformedQuestionBatch(t, request, true)
-
-			var directInvariant PromptBatchInvariantError
-			var observedInvariant PromptBatchInvariantError
+			directErr, observedErr := resolveMalformedQuestionBatch(t, request, false), resolveMalformedQuestionBatch(t, request, true)
+			var directInvariant, observedInvariant PromptBatchInvariantError
 			if !errors.As(directErr, &directInvariant) || !errors.As(observedErr, &observedInvariant) {
 				t.Fatalf("errors = direct %v observed %v, want typed batch invariants", directErr, observedErr)
 			}
@@ -63,32 +59,20 @@ func TestQuestionBatchMetadataValidationIsIdenticalForDirectAndObservedResolutio
 	}
 }
 
-func TestValidatedQuestionBatchDescriptorOwnsSuccessorIdentity(t *testing.T) {
+func TestValidatedQuestionBatchDescriptorOwnsSuccessorIdentityWithoutDirectObservation(t *testing.T) {
 	request := questionBatchValidationRequest(t)
 	descriptor, err := validateQuestionBatchMetadata(request)
 	if err != nil {
 		t.Fatalf("validate QuestionBatch: %v", err)
 	}
 	request.QuestionBatch.BatchPromptIDs[1] = "mutated"
-
 	if got, want := descriptor.successorPromptIDs(), []string{"ask-2"}; !equalPromptBatchStrings(got, want) {
 		t.Fatalf("successor IDs = %v, want immutable %v", got, want)
 	}
-}
-
-func TestDirectPromptBatchValidationAllocatesNoSuccessorObservation(t *testing.T) {
 	store, _ := newPromptBatchStore(t)
 	stepID := promptBatchStepID(t)
-	entry := promptBatchQuestion("ask-1", stepID, time.Unix(1, 0))
-	entry.snapshot.Request = questionBatchValidationRequest(t)
-	installPromptBatchEntries(&store, entry)
-	selected := 1
-
-	if _, err := store.ResolvePromptBatch(context.Background(), stepID, []PromptAnswerCommand{
-		promptQuestionAnswer("ask-1", &selected, nil),
-	}); err != nil {
-		t.Fatalf("ResolvePromptBatch: %v", err)
-	}
+	installPromptBatchEntries(&store, promptBatchEntry(questionBatchValidationRequest(t), time.Unix(1, 0)))
+	resolveWatchedPrompt(t, &store, stepID)
 	if len(store.promptFollowUps) != 0 {
 		t.Fatalf("direct batch allocated follow-up state: %+v", store.promptFollowUps)
 	}
@@ -110,7 +94,6 @@ func resolveMalformedQuestionBatch(t *testing.T, request tools.AskQuestionReques
 	entry := promptBatchQuestion("ask-1", stepID, time.Unix(1, 0))
 	entry.snapshot.Request = request
 	installPromptBatchEntries(&store, entry)
-
 	if watched {
 		subscription, err := store.subscribePromptFollowUp(stepID, "ask-1")
 		if err != nil {
@@ -118,15 +101,12 @@ func resolveMalformedQuestionBatch(t *testing.T, request tools.AskQuestionReques
 		}
 		defer func() { _ = subscription.Close() }()
 	}
+	wantFollowUps := len(store.promptFollowUps)
 	_, err := store.ResolvePromptBatch(context.Background(), stepID, []PromptAnswerCommand{
 		promptDeclined("ask-1"),
 	})
 	if err == nil {
 		t.Fatal("malformed Question batch unexpectedly succeeded")
-	}
-	wantFollowUps := 0
-	if watched {
-		wantFollowUps = 1
 	}
 	if !store.hasPendingID("ask-1") || len(feed.resolvedIDs()) != 0 || len(store.promptFollowUps) != wantFollowUps {
 		t.Fatal("malformed Question batch mutated, published, or changed follow-up state")

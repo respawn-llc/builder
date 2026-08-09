@@ -20,91 +20,12 @@ func approvalCommentary(answer *serverapi.PromptApprovalAnswer) string {
 	return *answer.Commentary
 }
 
-func onePromptAnswerEntry(t *testing.T, request serverapi.PromptAnswerBatchRequest) serverapi.PromptAnswerBatchEntry {
-	t.Helper()
-	if len(request.Entries) != 1 {
-		t.Fatalf("prompt answer batch entries = %d, want 1", len(request.Entries))
-	}
-	return request.Entries[0]
-}
-
-func questionFreeform(t *testing.T, request serverapi.PromptAnswerBatchRequest) string {
-	t.Helper()
-	answer := onePromptAnswerEntry(t, request).QuestionAnswer
-	if answer == nil || answer.Freeform == nil {
-		return ""
-	}
-	return *answer.Freeform
-}
-
-type fixedOutcomePromptControl struct {
-	*recordingPromptControl
-	outcome serverapi.PromptAnswerBatchOutcome
-}
-
-func (c *fixedOutcomePromptControl) AnswerPromptBatch(
-	_ context.Context,
-	request serverapi.PromptAnswerBatchRequest,
-) (serverapi.PromptAnswerBatchResponse, error) {
-	c.batchRequests <- request
-	return serverapi.PromptAnswerBatchResponse{Results: []serverapi.PromptAnswerBatchResult{{
-		PromptID: request.Entries[0].PromptID,
-		Outcome:  c.outcome,
-	}}}, nil
-}
-
 type deadlineThenSuccessPromptControl struct {
 	singlePromptOnlyControl
 	mu           sync.Mutex
 	askRequests  []serverapi.PromptAnswerBatchRequest
 	firstStarted chan struct{}
 	firstRelease chan struct{}
-}
-
-func TestSkippedBatchImmediatelyFinishesPrompt(t *testing.T) {
-	base := newRecordingPromptControl()
-	control := &fixedOutcomePromptControl{
-		recordingPromptControl: base,
-		outcome:                serverapi.PromptAnswerBatchOutcomeSkipped,
-	}
-	model := newProjectedStaticUIModel()
-	model.promptAnswers = newTranscriptPromptAnswerer(context.Background(), control)
-	model = updateUIModel(t, model, askEventMsg{event: model.transcriptPromptEvent(
-		testQuestionPrompt("question-skipped", "Proceed?", "Yes", "No"),
-	)})
-
-	next, delivery := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	model = runPromptDeliveryCommand(t, next.(*uiModel), delivery)
-
-	if testActiveAsk(model) != nil || testPromptAnswerDeliveryActive(model) {
-		t.Fatal("Skipped batch did not immediately finish local delivery")
-	}
-	if model.activity != uiActivityIdle || model.inputMode() != uiInputModeMain {
-		t.Fatalf("Skipped completion = activity %d input %q, want idle main composer", model.activity, model.inputMode())
-	}
-}
-
-func TestResolvedBatchReturnsBeforeDelayedSuccessorProjection(t *testing.T) {
-	model, control := newProjectedPromptTestUIModel(t)
-	model.setRuntimeActivityBusyForTest(true)
-	first := testQuestionPrompt("question-first", "First?", "Yes", "No")
-	model = updateUIModel(t, model, askEventMsg{event: model.transcriptPromptEvent(first)})
-
-	next, delivery := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	model = runPromptDeliveryCommand(t, next.(*uiModel), delivery)
-	_ = requirePromptAnswerBatchRequest(t, control)
-	if testActiveAsk(model) != nil || model.activity != uiActivityRunning || model.inputMode() != uiInputModeMain {
-		t.Fatalf("pre-successor completion = prompt %v activity %d input %q", testActiveAsk(model), model.activity, model.inputMode())
-	}
-
-	second := testQuestionPrompt("question-second", "Second?", "Continue", "Stop")
-	model = updateUIModel(t, model, askEventMsg{event: model.transcriptPromptEvent(second)})
-	if active := testActiveAsk(model); active == nil || active.prompt.PromptID != second.PromptID {
-		t.Fatalf("later authoritative successor = %+v, want %q", active, second.PromptID)
-	}
-	if model.activity != uiActivityQuestion || model.inputMode() != uiInputModeAsk {
-		t.Fatalf("successor presentation = activity %d input %q, want Question focus", model.activity, model.inputMode())
-	}
 }
 
 type scriptedAskPromptControl struct {
@@ -191,7 +112,9 @@ func (c *deadlineThenSuccessPromptControl) AnswerPromptBatch(
 	c.askRequests = append(c.askRequests, request)
 	c.mu.Unlock()
 	if call != 0 {
-		return resolvedPromptBatchResponse(request), nil
+		response := resolvedPromptBatchResponse(request)
+		response.Results[0].Outcome = serverapi.PromptAnswerBatchOutcomeSkipped
+		return response, nil
 	}
 	close(c.firstStarted)
 	select {
@@ -216,6 +139,7 @@ func TestAskDeadlineKeepsEditedRetryDraftActionableUntilCanonicalResolution(t *t
 
 	model := newProjectedStaticUIModel()
 	model.promptAnswers = newTranscriptPromptAnswerer(ctx, control)
+	model.setRuntimeActivityBusyForTest(true)
 	model = updateUIModel(t, model, askEventMsg{event: model.transcriptPromptEvent(
 		testQuestionPrompt("ask-deadline", "How should I proceed?", "Use the draft", "Stop"),
 	)})
@@ -270,17 +194,25 @@ func TestAskDeadlineKeepsEditedRetryDraftActionableUntilCanonicalResolution(t *t
 	}
 	model = updateUIModel(t, model, secondDelivery())
 	if testPromptAnswerDeliveryActive(model) || testActiveAsk(model) != nil {
-		t.Fatal("successful delivery did not immediately finish the prompt")
+		t.Fatal("Skipped delivery did not immediately finish the prompt")
+	}
+	if model.activity != uiActivityRunning || model.inputMode() != uiInputModeMain {
+		t.Fatalf("pre-successor completion = activity %d input %q", model.activity, model.inputMode())
+	}
+	successor := testQuestionPrompt("ask-successor", "Next?", "Continue", "Stop")
+	model = updateUIModel(t, model, askEventMsg{event: model.transcriptPromptEvent(successor)})
+	if active := testActiveAsk(model); active == nil || active.prompt.PromptID != successor.PromptID {
+		t.Fatalf("later authoritative successor = %+v", active)
 	}
 
 	requests := control.requests()
 	if len(requests) != 2 {
 		t.Fatalf("ask requests = %d, want deadline attempt plus user resubmission", len(requests))
 	}
-	if questionFreeform(t, requests[0]) != "original" {
+	if freeform := requireQuestionAnswerEntry(t, requests[0]).QuestionAnswer.Freeform; freeform == nil || *freeform != "original" {
 		t.Fatalf("first immutable request = %+v, want original draft", requests[0])
 	}
-	if questionFreeform(t, requests[1]) != "original edited" {
+	if freeform := requireQuestionAnswerEntry(t, requests[1]).QuestionAnswer.Freeform; freeform == nil || *freeform != "original edited" {
 		t.Fatalf("resubmitted request = %+v, want edited retry draft", requests[1])
 	}
 }
@@ -399,9 +331,9 @@ func TestAskSameKeyRefreshPreservesActiveDeliveryDraftAndSelection(t *testing.T)
 func TestAskTypedTerminalFailureRestoresDraftAndShowsError(t *testing.T) {
 	disableTransientStatusClearForTest(t)
 	control := &scriptedAskPromptControl{results: []error{serverapi.ErrPromptNotFound}}
-	outcomes := make([]error, 0, 1)
+	var outcome error
 	answerer := newTranscriptPromptAnswerer(context.Background(), control).withConnectionOutcomeSink(func(err error) {
-		outcomes = append(outcomes, err)
+		outcome = err
 	})
 
 	model := newProjectedStaticUIModel()
@@ -422,8 +354,8 @@ func TestAskTypedTerminalFailureRestoresDraftAndShowsError(t *testing.T) {
 	if model.transientStatusKind != uiStatusNoticeError || model.transientStatus == "" {
 		t.Fatalf("typed failure notice = kind %d text %q, want visible error", model.transientStatusKind, model.transientStatus)
 	}
-	if len(outcomes) != 1 || !errors.Is(outcomes[0], serverapi.ErrPromptNotFound) || len(control.requests()) != 1 {
-		t.Fatalf("connection outcomes = %+v requests = %d", outcomes, len(control.requests()))
+	if !errors.Is(outcome, serverapi.ErrPromptNotFound) || len(control.requests()) != 1 {
+		t.Fatalf("connection outcome = %v requests = %d", outcome, len(control.requests()))
 	}
 }
 
@@ -598,10 +530,9 @@ func TestDenyCommentaryDeadlineKeepsEditedDraftActionableWithoutQueuedCopy(t *te
 	if len(requests) != 2 {
 		t.Fatalf("denial requests = %d, want deadline plus user resubmission", len(requests))
 	}
-	firstAnswer := onePromptAnswerEntry(t, requests[0]).ApprovalAnswer
-	secondAnswer := onePromptAnswerEntry(t, requests[1]).ApprovalAnswer
-	if firstAnswer == nil || secondAnswer == nil ||
-		firstAnswer.Decision != clientui.ApprovalDecisionDeny ||
+	firstAnswer := requireApprovalAnswerEntry(t, requests[0]).ApprovalAnswer
+	secondAnswer := requireApprovalAnswerEntry(t, requests[1]).ApprovalAnswer
+	if firstAnswer.Decision != clientui.ApprovalDecisionDeny ||
 		secondAnswer.Decision != clientui.ApprovalDecisionDeny {
 		t.Fatalf("denial answers = %+v then %+v, want deny", firstAnswer, secondAnswer)
 	}
@@ -668,11 +599,11 @@ func TestAllowCommentaryQueueUnlocksBeforeCancelableApprovalDelivery(t *testing.
 	if len(requests) != 2 {
 		t.Fatalf("approval requests = %d, want original allow plus cancellation", len(requests))
 	}
-	firstAnswer := onePromptAnswerEntry(t, requests[0]).ApprovalAnswer
-	if firstAnswer == nil || firstAnswer.Decision != clientui.ApprovalDecisionAllowOnce || approvalCommentary(firstAnswer) != "safe operation" {
+	firstAnswer := requireApprovalAnswerEntry(t, requests[0]).ApprovalAnswer
+	if firstAnswer.Decision != clientui.ApprovalDecisionAllowOnce || approvalCommentary(firstAnswer) != "safe operation" {
 		t.Fatalf("original immutable approval request = %+v", requests[0])
 	}
-	if onePromptAnswerEntry(t, requests[1]).Declined == nil {
+	if len(requests[1].Entries) != 1 || requests[1].Entries[0].Declined == nil {
 		t.Fatalf("replacement approval request = %+v, want Declined", requests[1])
 	}
 	if testActiveAsk(model) != nil {
@@ -760,8 +691,8 @@ func TestAllowCommentaryAnswerDeadlineRestoresFreshQueueAndAnswerResubmission(t 
 	if len(requests) != 2 {
 		t.Fatalf("allow requests = %d, want deadline plus user resubmission", len(requests))
 	}
-	firstAnswer := onePromptAnswerEntry(t, requests[0]).ApprovalAnswer
-	secondAnswer := onePromptAnswerEntry(t, requests[1]).ApprovalAnswer
+	firstAnswer := requireApprovalAnswerEntry(t, requests[0]).ApprovalAnswer
+	secondAnswer := requireApprovalAnswerEntry(t, requests[1]).ApprovalAnswer
 	if approvalCommentary(firstAnswer) != "original allow" || approvalCommentary(secondAnswer) != "original allow edited" {
 		t.Fatalf("allow commentary = %q then %q, want original then edited resubmission", approvalCommentary(firstAnswer), approvalCommentary(secondAnswer))
 	}

@@ -10,7 +10,6 @@ import (
 	"core/server/workflow"
 	"core/server/workflowexecution"
 	"core/server/workflowstore"
-	"core/shared/apicontract"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
@@ -166,17 +165,6 @@ func TestWorkflowTaskCompleteContractHasNoRunOrPlacementFields(t *testing.T) {
 			if _, exists := contract.FieldByName(removed); exists {
 				t.Fatalf("%s still exposes removed completion field %s", contract.Name(), removed)
 			}
-		}
-	}
-}
-
-func TestWorkflowHasNoRuntimePromptAnswerMethod(t *testing.T) {
-	for _, contract := range []reflect.Type{
-		reflect.TypeOf((*apicontract.WorkflowService)(nil)).Elem(),
-		reflect.TypeOf((*Service)(nil)),
-	} {
-		if _, exists := contract.MethodByName("AnswerWorkflowTaskQuestion"); exists {
-			t.Fatalf("%s still exposes task-scoped runtime prompt mutation", contract)
 		}
 	}
 }

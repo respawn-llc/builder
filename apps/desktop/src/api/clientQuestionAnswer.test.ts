@@ -1,7 +1,7 @@
 import { ApiClient } from "./client";
 import { FakeRpcTransport } from "@/test-support/api";
 
-const questionRequest = {
+const batchRequest = {
   sessionID: "session-1",
   stepID: "22222222-2222-4222-8222-222222222222",
   entries: [
@@ -11,6 +11,13 @@ const questionRequest = {
       selectedOptionNumber: 1,
       freeform: null,
     },
+    {
+      kind: "approval" as const,
+      promptID: "approval-1",
+      decision: "allow_once" as const,
+      commentary: null,
+    },
+    { kind: "declined" as const, promptID: "declined-1" },
   ],
 };
 
@@ -31,22 +38,11 @@ describe("ApiClient prompt answer batches", () => {
     const client = new ApiClient(transport);
 
     const response = await client.answerPromptBatch({
-      sessionID: "session-1",
-      stepID: "22222222-2222-4222-8222-222222222222",
+      ...batchRequest,
       entries: [
-        {
-          kind: "question",
-          promptID: "question-1",
-          selectedOptionNumber: 2,
-          freeform: "because",
-        },
-        {
-          kind: "approval",
-          promptID: "approval-1",
-          decision: "allow_once",
-          commentary: null,
-        },
-        { kind: "declined", promptID: "declined-1" },
+        { ...batchRequest.entries[0], selectedOptionNumber: 2, freeform: "because" },
+        batchRequest.entries[1],
+        batchRequest.entries[2],
       ],
     });
 
@@ -90,6 +86,6 @@ describe("ApiClient prompt answer batches", () => {
     },
   ])("rejects malformed result identity sets", async (result) => {
     const client = new ApiClient(new FakeRpcTransport([{ method: "prompt.answerBatch", result }]));
-    await expect(client.answerPromptBatch(questionRequest)).rejects.toThrow();
+    await expect(client.answerPromptBatch(batchRequest)).rejects.toThrow();
   });
 });
