@@ -243,6 +243,21 @@ func TestStatusRefreshDefersRuntimeAndAuthReadsToCommands(t *testing.T) {
 	}
 }
 
+func TestStatusRefreshAlwaysReloadsRemotelyMutableAuth(t *testing.T) {
+	authStatus := &staticAuthStatusClient{response: authStatusResponse(serverapi.AuthStatusMethodNone)}
+	model := newProjectedStaticUIModel(WithUIStatusConfig(uiStatusConfig{AuthStatus: authStatus}))
+
+	for refresh := 1; refresh <= 2; refresh++ {
+		for _, msg := range collectCmdMessages(t, model.statusRefreshCmd()) {
+			next, _ := model.Update(msg)
+			model = next.(*uiModel)
+		}
+		if authStatus.calls != refresh {
+			t.Fatalf("auth status calls after refresh %d = %d, want %d", refresh, authStatus.calls, refresh)
+		}
+	}
+}
+
 type statusRefreshRuntimeClient struct {
 	runtimeControlFakeClient
 	statusCalls int

@@ -18,20 +18,17 @@ import (
 )
 
 const (
-	authCacheFreshness        = time.Minute
 	gitCacheFreshness         = 5 * time.Second
 	environmentCacheFreshness = 5 * time.Minute
 )
 
 type Repository interface {
 	SeedSnapshot(req Request, base Snapshot, now time.Time) SeedResult
-	StoreAuth(cacheKey string, result AuthStageResult, now time.Time)
 	StoreGit(cacheKey string, result GitStageResult, now time.Time)
 	StoreEnvironment(cacheKey string, result EnvironmentStageResult, now time.Time)
 }
 
 type CacheKeys struct {
-	Auth        string
 	Git         string
 	Environment string
 }
@@ -185,15 +182,9 @@ type EnvironmentStageResult struct {
 }
 
 type memoryRepository struct {
-	mu        sync.Mutex
-	authByKey map[string]authCacheEntry
-	gitByKey  map[string]gitCacheEntry
-	envByKey  map[string]environmentCacheEntry
-}
-
-type authCacheEntry struct {
-	fetchedAt time.Time
-	result    AuthStageResult
+	mu       sync.Mutex
+	gitByKey map[string]gitCacheEntry
+	envByKey map[string]environmentCacheEntry
 }
 
 type gitCacheEntry struct {
@@ -208,9 +199,8 @@ type environmentCacheEntry struct {
 
 func NewMemoryRepository() Repository {
 	return &memoryRepository{
-		authByKey: map[string]authCacheEntry{},
-		gitByKey:  map[string]gitCacheEntry{},
-		envByKey:  map[string]environmentCacheEntry{},
+		gitByKey: map[string]gitCacheEntry{},
+		envByKey: map[string]environmentCacheEntry{},
 	}
 }
 
@@ -219,18 +209,7 @@ func (r *memoryRepository) SeedSnapshot(req Request, base Snapshot, now time.Tim
 	defer r.mu.Unlock()
 
 	seed := SeedResult{Snapshot: base, Warnings: map[Section]string{}}
-
-	authEntry, authCached := r.authByKey[strings.TrimSpace(req.CacheKeys.Auth)]
-	if authCached {
-		seed.Snapshot.Auth = authEntry.result.Auth
-		seed.Snapshot.Subscription = authEntry.result.Subscription
-		if warning := strings.TrimSpace(authEntry.result.Warning); warning != "" {
-			seed.Warnings[SectionAuth] = warning
-		}
-	}
-	if !authCached || now.Sub(authEntry.fetchedAt) > authCacheFreshness {
-		seed.PendingSections = append(seed.PendingSections, SectionAuth)
-	}
+	seed.PendingSections = append(seed.PendingSections, SectionAuth)
 
 	gitEntry, gitCached := r.gitByKey[strings.TrimSpace(req.CacheKeys.Git)]
 	if gitCached {
@@ -263,15 +242,6 @@ func (r *memoryRepository) SeedSnapshot(req Request, base Snapshot, now time.Tim
 		seed.Warnings = nil
 	}
 	return seed
-}
-
-func (r *memoryRepository) StoreAuth(cacheKey string, result AuthStageResult, now time.Time) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if strings.TrimSpace(cacheKey) == "" {
-		return
-	}
-	r.authByKey[cacheKey] = authCacheEntry{fetchedAt: repositoryTime(now), result: result}
 }
 
 func (r *memoryRepository) StoreGit(cacheKey string, result GitStageResult, now time.Time) {
