@@ -740,6 +740,66 @@ func TestServiceManualMoveTargetPreparationFailureCarriesRetainedWorktrees(t *te
 	}
 }
 
+func TestServiceManualMoveResolutionFailureReturnsTopologyFreePreparationError(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		mode       serverapi.WorkflowExecutionTargetMode
+		resolveErr error
+	}{
+		{
+			name: "head",
+			mode: serverapi.WorkflowExecutionTargetModeHead,
+			resolveErr: &worktree.GitRevisionResolutionError{
+				Kind:         worktree.GitRevisionResolutionErrorGitFailure,
+				RequestedRef: "HEAD",
+			},
+		},
+		{
+			name: "default branch",
+			mode: serverapi.WorkflowExecutionTargetModeDefaultBranch,
+			resolveErr: &worktree.GitDefaultBranchResolutionError{
+				Kind: worktree.GitDefaultBranchResolutionErrorMissing,
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, service, binding := newWorkflowServiceTestContext(t)
+			workflowID := createWorkflowServiceChainedWorkflow(t, ctx, service)
+			linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+			task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+			definition, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+			if err != nil {
+				t.Fatalf("GetWorkflow: %v", err)
+			}
+			targetNodeID := workflowServiceNodeIDByKey(t, definition.Definition, "plan")
+			service.executionTargets = &recordingExecutionTargetInfrastructure{resolveErr: test.resolveErr}
+			execution := newManualMoveExecutionStub(service)
+			service.currentNodeExecution = execution
+
+			response, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
+				TaskID:       task.Task.ID,
+				TargetNodeID: targetNodeID,
+				ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
+					Mode: test.mode,
+				},
+			})
+			var preparationError *serverapi.WorkflowTaskMovePreparationError
+			if !errors.As(err, &preparationError) ||
+				!errors.Is(err, test.resolveErr) ||
+				preparationError.Failure.RetryReadiness != serverapi.WorktreeSetupRetryReady ||
+				preparationError.Failure.Cause.Kind != serverapi.WorktreeSetupFailureTargetPreparation ||
+				preparationError.Failure.ScriptPath != nil ||
+				preparationError.Failure.RetainedWorktree != nil ||
+				preparationError.Failure.RetainedPreviousWorktree != nil {
+				t.Fatalf("MoveWorkflowTask = %+v, %T %v; want topology-free preparation failure", response, err, err)
+			}
+			if len(execution.interruptTaskIDs) != 0 {
+				t.Fatalf("interruptions after resolution failure = %v, want none", execution.interruptTaskIDs)
+			}
+		})
+	}
+}
+
 func TestServicePreviewManualMoveMapsOutcomesAndLiveBlockers(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceChainedWorkflow(t, ctx, service)

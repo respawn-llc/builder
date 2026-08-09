@@ -53,8 +53,9 @@ type Service struct {
 }
 
 type initiatingActionTargetDecision struct {
-	prepared          *preparedInitiatingActionTarget
-	selectionRequired *serverapi.WorkflowExecutionTargetSelectionRequirement
+	prepared                  *preparedInitiatingActionTarget
+	selectionRequired         *serverapi.WorkflowExecutionTargetSelectionRequirement
+	preMaterializationFailure bool
 }
 
 type initiatingActionTargetPreflight struct {
@@ -1108,8 +1109,12 @@ func coordinateInitiatingAction[T any](ctx context.Context, service *Service, re
 	if req.requiresExecutionTarget {
 		targetDecision, err := service.initiatingActionTarget(ctx, req.taskID, req.setupOperationID, req.targetPreflight)
 		if err != nil {
-			if targetDecision.prepared != nil {
-				preparationFailure, preparationFailureErr := movePreparationError(*targetDecision.prepared, err)
+			if targetDecision.prepared != nil || targetDecision.preMaterializationFailure {
+				prepared := preparedInitiatingActionTarget{}
+				if targetDecision.prepared != nil {
+					prepared = *targetDecision.prepared
+				}
+				preparationFailure, preparationFailureErr := movePreparationError(prepared, err)
 				if preparationFailureErr != nil {
 					return initiatingActionResult[T]{}, errors.Join(err, preparationFailureErr)
 				}
@@ -1212,7 +1217,13 @@ func (s *Service) initiatingActionTarget(ctx context.Context, taskID workflow.Ta
 		return initiatingActionTargetDecision{}, nil
 	}
 	snapshot, selectionRequired, err := s.resolveInitiatingActionTarget(ctx, preflight)
-	if err != nil || selectionRequired != nil {
+	if err != nil {
+		return initiatingActionTargetDecision{
+			preMaterializationFailure: !preflight.explicit ||
+				preflight.selection.Mode != workflow.ExecutionTargetModeCustomRef,
+		}, err
+	}
+	if selectionRequired != nil {
 		return initiatingActionTargetDecision{selectionRequired: selectionRequired}, err
 	}
 	prepared, err := s.materializeInitiatingActionTarget(
