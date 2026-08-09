@@ -29,6 +29,16 @@ func invalidResponseError(operation string, cause error) error {
 	return &InvalidResponseError{Operation: operation, Cause: cause}
 }
 
+func validateRuntimeLiveResponseSession(operation string, requestedSessionID string, responseSessionID string) error {
+	if responseSessionID != requestedSessionID {
+		return invalidResponseError(operation, fmt.Errorf(
+			"response session ID %q does not match requested session %q",
+			responseSessionID, requestedSessionID,
+		))
+	}
+	return nil
+}
+
 type Remote struct {
 	plan           remoteDialPlan
 	transport      rpcwire.ClientTransport
@@ -863,6 +873,9 @@ func (c *Remote) LiveWait(ctx context.Context, req serverapi.RuntimeLiveWaitRequ
 	if err := response.Validate(); err != nil {
 		return serverapi.RuntimeLiveWaitResponse{}, invalidResponseError("runtime live wait", err)
 	}
+	if err := validateRuntimeLiveResponseSession("runtime live wait", req.SessionID, response.SessionID); err != nil {
+		return serverapi.RuntimeLiveWaitResponse{}, err
+	}
 	return response, nil
 }
 
@@ -873,6 +886,9 @@ func (c *Remote) LiveWatch(ctx context.Context, req serverapi.RuntimeLiveWatchRe
 	}
 	if err := response.Validate(); err != nil {
 		return serverapi.RuntimeLiveWatchResponse{}, invalidResponseError("runtime live watch", err)
+	}
+	if err := validateRuntimeLiveResponseSession("runtime live watch", req.SessionID, response.SessionID); err != nil {
+		return serverapi.RuntimeLiveWatchResponse{}, err
 	}
 	return response, nil
 }

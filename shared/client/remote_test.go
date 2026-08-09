@@ -622,6 +622,84 @@ func TestRemoteLiveWaitRejectsMalformedResponse(t *testing.T) {
 	}
 }
 
+func TestRemoteLiveResponsesRejectMismatchedSessionIDs(t *testing.T) {
+	tests := []struct {
+		name     string
+		method   string
+		response any
+		call     func(context.Context, *Remote) error
+	}{
+		{
+			name:   "live watch",
+			method: protocol.MethodRuntimeLiveWatch,
+			response: serverapi.RuntimeLiveWatchResponse{
+				SessionID: "session-b",
+				Outcome: serverapi.RuntimeLiveWatchOutcome{
+					Kind: serverapi.RuntimeLiveWatchFinalAnswer,
+					FinalAnswer: &serverapi.RuntimeLiveWatchFinal{
+						SessionName: "Session", DurationMillis: 1,
+					},
+				},
+			},
+			call: func(ctx context.Context, remote *Remote) error {
+				_, err := remote.LiveWatch(ctx, serverapi.RuntimeLiveWatchRequest{SessionID: "session-a"})
+				return err
+			},
+		},
+		{
+			name:   "live wait",
+			method: protocol.MethodRuntimeLiveWait,
+			response: serverapi.RuntimeLiveWaitResponse{
+				SessionID:      "018fdd67-89ab-4cde-8123-456789abcdee",
+				SessionName:    "Session",
+				Result:         stringPointer("done"),
+				DurationMillis: 1,
+				LiveRunGroupID: "018fdd67-89ab-4cde-8123-456789abcdef",
+				TerminalRunID:  "018fdd67-89ab-4cde-8123-456789abcdef",
+				TerminalStepID: "018fdd67-89ab-4cde-8123-456789abcdef",
+				TerminalStatus: "completed",
+				ResultKind:     serverapi.RuntimeLiveResultKindAssistantFinalAnswer,
+			},
+			call: func(ctx context.Context, remote *Remote) error {
+				_, err := remote.LiveWait(ctx, serverapi.RuntimeLiveWaitRequest{
+					SessionID: "018fdd67-89ab-4cde-8123-456789abcdef",
+				})
+				return err
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := newRemoteTestServer(t, func(ws *websocket.Conn) {
+				acceptRemoteHandshake(t, ws)
+				var request protocol.Request
+				if err := websocket.JSON.Receive(ws, &request); err != nil {
+					return
+				}
+				if request.Method != test.method {
+					return
+				}
+				_ = websocket.JSON.Send(ws, protocol.NewSuccessResponse(request.ID, test.response))
+			})
+			remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
+			if err != nil {
+				t.Fatalf("DialRemoteURL: %v", err)
+			}
+			defer func() { _ = remote.Close() }()
+
+			err = test.call(context.Background(), remote)
+			var invalidResponse *InvalidResponseError
+			if err == nil || !errors.As(err, &invalidResponse) {
+				t.Fatalf("%s error = %v, want InvalidResponseError", test.name, err)
+			}
+		})
+	}
+}
+
+func stringPointer(value string) *string {
+	return &value
+}
+
 func TestRemoteObserveWorkflowTaskRejectsMalformedResponseAsInvalidResponse(t *testing.T) {
 	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
 		acceptRemoteHandshake(t, ws)
