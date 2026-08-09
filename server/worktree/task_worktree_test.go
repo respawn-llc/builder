@@ -621,16 +621,18 @@ func TestPrepareTaskExecutionRootRollsBackReservationWhenGitCreationFails(t *tes
 	assertFailedTaskWorktreeCreationRolledBack(t, env, task)
 }
 
-func TestPrepareTaskExecutionRootReleasesReservationWhenSetupSettingsResolutionFails(t *testing.T) {
+func TestPrepareTaskExecutionRootSettingsFailureRetainsNewProvisionalMaterialization(t *testing.T) {
 	env := newServiceTestEnv(t)
 	task, _ := createTaskWorktreeTestTask(t, env)
 	target := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
 	settingsErr := errors.New("injected setup settings failure")
+	resolveCalls := 0
 	env.service.resolveSetup = func(string) (config.WorktreeSettings, error) {
+		resolveCalls++
 		return config.WorktreeSettings{}, settingsErr
 	}
 
-	_, err := env.service.PrepareTaskExecutionRoot(env.ctx, TaskExecutionRootPreparationRequest{
+	prepared, err := env.service.PrepareTaskExecutionRoot(env.ctx, TaskExecutionRootPreparationRequest{
 		TaskID:           task.ID,
 		ManagedTarget:    &target,
 		SetupRequirement: worktreecontract.SetupRequirementRequired,
@@ -638,7 +640,16 @@ func TestPrepareTaskExecutionRootReleasesReservationWhenSetupSettingsResolutionF
 	if !errors.Is(err, settingsErr) {
 		t.Fatalf("PrepareTaskExecutionRoot error = %v, want %v", err, settingsErr)
 	}
-	assertFailedTaskWorktreeCreationRolledBack(t, env, task)
+	if resolveCalls != 2 {
+		t.Fatalf("setup settings resolutions = %d, want one automatic retry", resolveCalls)
+	}
+	if prepared.Materialization == nil || prepared.Root.Managed == nil {
+		t.Fatalf("settings failure preparation = %+v, want retained provisional root", prepared)
+	}
+	if _, err := os.Stat(prepared.Root.Managed.Root); err != nil {
+		t.Fatalf("retained provisional root: %v", err)
+	}
+	assertTaskManagedWorktree(t, env, task.ID, prepared.Root.Managed.WorktreeID)
 }
 
 func TestPrepareTaskExecutionRootSettingsFailureRetainsExistingProvisionalMaterialization(t *testing.T) {
@@ -1805,6 +1816,45 @@ func TestPrepareTaskExecutionRootReturnsBoundWorktreeWhenSetupRecreationRemovalF
 	if _, err := os.Stat(taskWorktreeRoot(first.Worktree)); err != nil {
 		t.Fatalf("retained bound worktree is unavailable: %v", err)
 	}
+}
+
+func TestPrepareTaskExecutionRootRetriesTransientSetupSettingsFailureForNewRoot(t *testing.T) {
+	env := newServiceTestEnv(t)
+	task, _ := createTaskWorktreeTestTask(t, env)
+	target := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
+	markerPath := filepath.Join(t.TempDir(), "setup-ran")
+	scriptRelpath := filepath.Join("scripts", "setup.sh")
+	writeExecutableFile(t, filepath.Join(env.workspaceRoot, scriptRelpath), fmt.Sprintf("#!/bin/sh\ntouch %q\n", markerPath))
+	resolveErr := errors.New("read setup settings")
+	resolveCalls := 0
+	env.service.resolveSetup = func(string) (config.WorktreeSettings, error) {
+		resolveCalls++
+		if resolveCalls == 1 {
+			return config.WorktreeSettings{}, resolveErr
+		}
+		return config.WorktreeSettings{SetupScript: scriptRelpath}, nil
+	}
+
+	materialized, err := prepareManagedTaskExecutionRoot(
+		env.ctx,
+		env.service,
+		task.ID,
+		newWorktreeSetupOperationIDPointer(),
+		target,
+	)
+	if err != nil {
+		t.Fatalf("PrepareTaskExecutionRoot: %v", err)
+	}
+	if resolveCalls != 2 {
+		t.Fatalf("setup settings resolutions = %d, want one automatic retry", resolveCalls)
+	}
+	if materialized.SetupResult == nil || materialized.SetupResult.Completed == nil {
+		t.Fatalf("setup result = %+v, want completed", materialized.SetupResult)
+	}
+	if _, err := os.Stat(markerPath); err != nil {
+		t.Fatalf("setup marker: %v", err)
+	}
+	assertTaskManagedWorktree(t, env, task.ID, taskWorktreeID(materialized.Worktree))
 }
 
 func TestPrepareTaskExecutionRootRetriesTransientSetupSettingsFailureForExistingRoot(t *testing.T) {

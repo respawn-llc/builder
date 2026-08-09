@@ -927,18 +927,11 @@ func (s *Service) validateManagedRootForCreation(ctx context.Context, root strin
 }
 
 func (s *Service) createManagedTaskWorktree(ctx context.Context, req managedTaskWorktreeCreationRequest) (resp TaskWorktreeMaterialization, err error) {
-	setupSettings, err := s.worktreeSetupSettings(req.Workspace.RootPath)
-	if err != nil {
-		if req.ReservedRoot && req.RequestedRoot != nil {
-			err = errors.Join(err, removeEmptyManagedRootAfterAddFailure(strings.TrimSpace(*req.RequestedRoot)))
-		}
-		return TaskWorktreeMaterialization{}, err
-	}
 	bound, err := s.createAndBindManagedTaskWorktree(ctx, req)
 	if err != nil {
 		return TaskWorktreeMaterialization{}, err
 	}
-	return s.runManagedTaskWorktreeSetupRecoveryWithSettings(ctx, bound, req.SetupOperationID, false, &setupSettings)
+	return s.runManagedTaskWorktreeSetupRecovery(ctx, bound, req.SetupOperationID, false)
 }
 
 func (s *Service) createAndBindManagedTaskWorktree(ctx context.Context, req managedTaskWorktreeCreationRequest) (resp boundManagedTaskWorktree, err error) {
@@ -1068,27 +1061,11 @@ func (s *Service) runManagedTaskWorktreeSetupRecovery(
 	setupOperationID *serverapi.WorktreeSetupOperationID,
 	recreateBeforeFirstAttempt bool,
 ) (TaskWorktreeMaterialization, error) {
-	return s.runManagedTaskWorktreeSetupRecoveryWithSettings(
-		ctx,
-		bound,
-		setupOperationID,
-		recreateBeforeFirstAttempt,
-		nil,
-	)
-}
-
-func (s *Service) runManagedTaskWorktreeSetupRecoveryWithSettings(
-	ctx context.Context,
-	bound boundManagedTaskWorktree,
-	setupOperationID *serverapi.WorktreeSetupOperationID,
-	recreateBeforeFirstAttempt bool,
-	settings *config.WorktreeSettings,
-) (TaskWorktreeMaterialization, error) {
 	observer, err := s.taskSetupAttemptObserver(setupOperationID)
 	if err != nil {
 		return bound.materialization, err
 	}
-	attempt, err := bound.setupExecution(settings)
+	attempt, err := bound.setupExecution(nil)
 	if err != nil {
 		return bound.materialization, err
 	}
@@ -1109,7 +1086,7 @@ func (s *Service) runManagedTaskWorktreeSetupRecoveryWithSettings(
 			bound = recreated
 			retainedMaterialization = bound.materialization
 			hasRetainedMaterialization = true
-			return bound.setupExecution(settings)
+			return bound.setupExecution(nil)
 		},
 	})
 	if err != nil {
