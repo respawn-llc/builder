@@ -955,10 +955,12 @@ func (e *Engine) publishLiveRunFinished(result LiveRunResult) {
 		return
 	}
 	copyResult := result
-	e.emitRaw(Event{
-		Kind:          EventLiveRunFinished,
-		StepID:        result.StepID.String(),
-		LiveRunResult: &copyResult,
+	e.launchLifecycleTask(func(context.Context) {
+		e.emitRaw(Event{
+			Kind:          EventLiveRunFinished,
+			StepID:        result.StepID.String(),
+			LiveRunResult: &copyResult,
+		})
 	})
 }
 

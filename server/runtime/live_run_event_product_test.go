@@ -97,7 +97,7 @@ func TestEnginePublishesLiveRunTerminalFactsThroughSubmitSeam(t *testing.T) {
 		}
 	})
 
-	t.Run("terminal callback does not hold waiters or queued successor scheduling", func(t *testing.T) {
+	t.Run("terminal callback does not hold completion or successor scheduling", func(t *testing.T) {
 		store := mustCreateTestSession(t)
 		client := &fakeClient{responses: []llm.Response{
 			finalTextResponse("first"),
@@ -106,6 +106,13 @@ func TestEnginePublishesLiveRunTerminalFactsThroughSubmitSeam(t *testing.T) {
 		stepLifecycle := newBlockingStepLifecycleSink()
 		callbackStarted := make(chan struct{})
 		releaseCallback := make(chan struct{})
+		t.Cleanup(func() {
+			select {
+			case <-releaseCallback:
+			default:
+				close(releaseCallback)
+			}
+		})
 		var terminalCallbacks int
 		var callbackMu sync.Mutex
 		eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{
@@ -136,7 +143,6 @@ func TestEnginePublishesLiveRunTerminalFactsThroughSubmitSeam(t *testing.T) {
 		case <-time.After(3 * time.Second):
 			t.Fatal("timed out waiting for step terminal publication")
 		}
-		eng.QueueUserMessage("queued successor")
 		close(stepLifecycle.releaseEnded)
 		select {
 		case <-callbackStarted:
@@ -144,20 +150,33 @@ func TestEnginePublishesLiveRunTerminalFactsThroughSubmitSeam(t *testing.T) {
 			t.Fatal("timed out waiting for terminal callback")
 		}
 
+		select {
+		case err := <-firstDone:
+			if err != nil {
+				t.Fatalf("first SubmitUserMessage: %v", err)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("terminal callback held the completed request")
+		}
+		secondDone := make(chan error, 1)
+		go func() {
+			_, err := eng.SubmitUserMessage(context.Background(), "second")
+			secondDone <- err
+		}()
 		deadline := time.Now().Add(3 * time.Second)
 		for {
 			calls := fakeClientCallCount(client)
 			if calls >= 2 || !time.Now().Before(deadline) {
 				if calls < 2 {
-					t.Fatal("queued successor scheduling waited for prior terminal callback")
+					t.Fatal("successor scheduling waited for prior terminal callback")
 				}
 				break
 			}
 			time.Sleep(10 * time.Millisecond)
 		}
 		close(releaseCallback)
-		if err := <-firstDone; err != nil {
-			t.Fatalf("first SubmitUserMessage: %v", err)
+		if err := <-secondDone; err != nil {
+			t.Fatalf("second SubmitUserMessage: %v", err)
 		}
 		waitEngineLifecycleTasks(t, eng)
 	})
@@ -191,12 +210,21 @@ func (c *liveRunEventCollector) snapshot() []LiveRunResult {
 
 func (c *liveRunEventCollector) single(t *testing.T) LiveRunResult {
 	t.Helper()
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if len(c.results) != 1 {
-		t.Fatalf("live-run terminal facts = %d, want 1", len(c.results))
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		c.mu.Lock()
+		if len(c.results) == 1 {
+			result := c.results[0]
+			c.mu.Unlock()
+			return result
+		}
+		count := len(c.results)
+		c.mu.Unlock()
+		if !time.Now().Before(deadline) {
+			t.Fatalf("live-run terminal facts = %d, want 1", count)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	return c.results[0]
 }
 
 type interruptibleLiveRunClient struct {
