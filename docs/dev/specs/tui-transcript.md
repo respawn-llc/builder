@@ -99,6 +99,9 @@
 
 - Transcript visibility is defined by one product matrix, not ad hoc filters.
 - Visibility changes presentation only. It does not change Session history.
+- Outside an active Goal and Workflow Mode, an explicitly present empty or whitespace-only assistant final answer ends work silently. It creates no visible assistant row, completion notification, or terminal bell.
+- Omitted final-answer text is not a silent final answer and keeps its existing missing-output handling.
+- During an active Goal or Workflow Mode, a blank final answer follows that mode's ordinary incomplete-output behavior and does not silently stop.
 - Visibility values are `O` full ongoing+detail, `OC` collapsed/short ongoing plus full detail, `D` detail-only, and `X` hidden.
 - Unknown/malformed entries with recoverable text are `O`; empty unknown/malformed entries are `D` diagnostics.
 - Locked message-type visibility:
@@ -367,7 +370,7 @@
 - The Reviewer receives shorter tool output than the main agent.
 - Reviewer contract is minimal JSON `{"suggestions":["..."]}`; invalid payloads are ignored non-fatally.
 - A Reviewer generation failure creates one expanded Reviewer error row. Reviewer running and completion create no transcript row.
-- If suggestions exist, Kent runs one extra main-agent follow-up. A successful follow-up creates exactly one Reviewer feedback row after that follow-up's committed output. The row preserves the ordered Markdown suggestions and uses their count as its compact summary.
+- If suggestions exist, Kent runs one extra main-agent follow-up. A follow-up that returns either a nonblank final answer or an explicitly blank silent final answer succeeds and creates exactly one Reviewer feedback row after the follow-up completes. The row preserves the ordered Markdown suggestions and uses their count as its compact summary.
 - `reviewer.verbose_output` controls only the TUI's initial feedback presentation: enabled uses `O`, disabled uses `OC`. It never controls whether the feedback row exists.
-- If Kent cannot apply nonempty Reviewer feedback, the current engine and Session fail and create neither a Reviewer feedback row nor a Reviewer error row for that result. This includes a missing follow-up answer and the exact `NO_OP` answer.
+- If Kent cannot apply nonempty Reviewer feedback, the current engine and Session fail and create neither a Reviewer feedback row nor a Reviewer error row for that result. This includes a missing follow-up answer; an explicitly blank follow-up final answer is successful, not missing.
 - The Reviewer runs once and does not review its own follow-up.

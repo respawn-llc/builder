@@ -8,7 +8,6 @@ import (
 	"core/server/tools"
 	"core/shared/textutil"
 	"core/shared/toolspec"
-	"core/shared/transcript"
 	"encoding/json"
 	"path/filepath"
 	"strings"
@@ -193,11 +192,11 @@ func TestReviewerSuggestionsRequestInheritsFastMode(t *testing.T) {
 	}
 }
 
-func TestFinalNoopAnswerIsInvisibleAndSkipsReviewer(t *testing.T) {
+func TestBlankFinalProjectionIsInvisibleAndSkipsReviewer(t *testing.T) {
 	store := mustCreateTestSession(t)
 
 	mainClient := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(reviewerNoopToken), Phase: textutil.Value(llm.MessagePhaseFinal)},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(""), Phase: textutil.Value(llm.MessagePhaseFinal)},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 	reviewerClient := &fakeClient{responses: []llm.Response{{
@@ -235,7 +234,7 @@ func TestFinalNoopAnswerIsInvisibleAndSkipsReviewer(t *testing.T) {
 		t.Fatalf("expected one main model call, got %d", len(mainClient.calls))
 	}
 	if len(reviewerClient.calls) != 0 {
-		t.Fatalf("expected reviewer not to run for NO_OP final, got %d calls", len(reviewerClient.calls))
+		t.Fatalf("expected reviewer not to run for former-marker final, got %d calls", len(reviewerClient.calls))
 	}
 
 	finalAssistantContents := make([]string, 0)
@@ -244,20 +243,20 @@ func TestFinalNoopAnswerIsInvisibleAndSkipsReviewer(t *testing.T) {
 		if persisted.Role == llm.RoleAssistant && persisted.Phase != nil && *persisted.Phase == llm.MessagePhaseFinal {
 			finalAssistantContents = append(finalAssistantContents, messageContent(persisted))
 		}
-		if isNoopFinalAnswer(persisted) {
+		if isBlankFinalAnswer(persisted) {
 			noopFinalCount++
 		}
 	}
 	if noopFinalCount != 1 {
 		t.Fatalf("noop final count = %d, want 1; messages=%+v", noopFinalCount, eng.transcriptRuntimeState().SnapshotMessages())
 	}
-	if len(finalAssistantContents) != 1 || finalAssistantContents[0] != reviewerNoopToken {
-		t.Fatalf("expected hidden persisted noop final assistant message, got %q", finalAssistantContents)
+	if len(finalAssistantContents) != 1 || finalAssistantContents[0] != "" {
+		t.Fatalf("expected hidden persisted blank final assistant message, got %q", finalAssistantContents)
 	}
 
 	snapshot := eng.ChatSnapshot()
 	for _, entry := range snapshot.Entries {
-		if strings.Contains(entry.Text, reviewerNoopToken) {
+		if strings.Contains(entry.Text, "NO_OP") {
 			t.Fatalf("noop token leaked into chat snapshot: %+v", snapshot.Entries)
 		}
 	}
@@ -323,7 +322,7 @@ func TestReviewerRunsOnEditsFrequencyOnlyWhenPatchApplied(t *testing.T) {
 	}
 }
 
-func TestReviewerSuggestionsTriggerFollowUpAndNoopKeepsOriginalAnswer(t *testing.T) {
+func TestReviewerBlankFinalKeepsOriginalAnswerAndPersistsFeedback(t *testing.T) {
 	store := mustCreateTestSession(t)
 	mainClient := &fakeClient{responses: []llm.Response{
 		{
@@ -334,7 +333,7 @@ func TestReviewerSuggestionsTriggerFollowUpAndNoopKeepsOriginalAnswer(t *testing
 			Usage: llm.Usage{WindowTokens: 200000},
 		},
 		finalTextResponse("original final"),
-		finalTextResponse(reviewerNoopToken),
+		finalTextResponse(""),
 	}}
 	reviewerClient := &streamRequiredClient{response: llm.Response{
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":["Double-check test output before final handoff."]}`)},
@@ -351,8 +350,8 @@ func TestReviewerSuggestionsTriggerFollowUpAndNoopKeepsOriginalAnswer(t *testing
 	})
 
 	_, err := eng.SubmitUserMessage(context.Background(), "do task")
-	if err == nil {
-		t.Fatal("expected explicit Reviewer NO_OP follow-up failure")
+	if err != nil {
+		t.Fatalf("submit with blank Reviewer follow-up: %v", err)
 	}
 	if reviewerClient.StreamCalls() != 1 {
 		t.Fatalf("reviewer stream calls = %d, want 1", reviewerClient.StreamCalls())
@@ -372,25 +371,68 @@ func TestReviewerSuggestionsTriggerFollowUpAndNoopKeepsOriginalAnswer(t *testing
 		t.Fatalf("reviewer feedback messages = %d, want 1; messages=%+v", feedback, requestMessages(mainClient.calls[2]))
 	}
 
-	statuses := 0
+	feedbackRows := 0
 	snapshot := eng.ChatSnapshot()
 	for _, entry := range snapshot.Entries {
-		if entry.Text == reviewerNoopToken {
-			t.Fatalf("noop token leaked into chat snapshot: %+v", snapshot.Entries)
-		}
-		if transcript.EntryRole(entry.Role) == transcript.EntryRoleReviewerStatus {
-			statuses++
+		if entry.ReviewerFeedback != nil {
+			feedbackRows++
 		}
 	}
-	if statuses != 0 {
-		t.Fatalf("reviewer status entries = %d, want none; entries=%+v", statuses, snapshot.Entries)
+	if feedbackRows != 1 {
+		t.Fatalf("reviewer feedback rows = %d, want one; entries=%+v", feedbackRows, snapshot.Entries)
 	}
 	restored := mustNewExecTestEngine(t, store, &fakeClient{}, Config{Model: "gpt-5"})
-	for _, restoredEntry := range restored.ChatSnapshot().Entries {
-		if transcript.IsReviewerEntryRole(restoredEntry.Role) {
-			t.Fatalf("application failure persisted a Reviewer row: %+v", restoredEntry)
+	if len(restored.ChatSnapshot().Entries) == 0 {
+		t.Fatal("restored chat snapshot is empty")
+	}
+	finals := 0
+	for _, entry := range restored.ChatSnapshot().Entries {
+		if entry.Role == "assistant" && entry.Phase == llm.MessagePhaseFinal {
+			finals++
 		}
 	}
+	if finals != 1 {
+		t.Fatalf("restored visible final rows = %d, want original only", finals)
+	}
+}
+
+func TestReviewerFollowUpMissingAnswer(t *testing.T) {
+	store := mustCreateTestSession(t)
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+		Model:    "gpt-5",
+		Reviewer: ReviewerConfig{Model: "gpt-5"},
+	})
+	pipeline := &defaultReviewerPipeline{
+		engine:     engine,
+		stepRunner: missingReviewerFollowUpRunner{},
+	}
+	_, err := pipeline.RunFollowUp(
+		context.Background(),
+		"review-step",
+		llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("original")},
+		0,
+		false,
+		&fakeClient{responses: []llm.Response{{
+			Assistant: llm.Message{
+				Role:    llm.RoleAssistant,
+				Content: textutil.Value(`{"suggestions":["fix"]}`),
+			},
+		}}},
+	)
+	if err == nil {
+		t.Fatal("missing Reviewer follow-up answer unexpectedly succeeded")
+	}
+	for _, entry := range engine.ChatSnapshot().Entries {
+		if entry.ReviewerFeedback != nil {
+			t.Fatalf("missing follow-up created Reviewer feedback: %+v", entry)
+		}
+	}
+}
+
+type missingReviewerFollowUpRunner struct{}
+
+func (missingReviewerFollowUpRunner) RunStepLoopWithOptions(context.Context, string, stepLoopOptions) (stepLoopResult, error) {
+	return stepLoopResult{}, nil
 }
 
 func TestSubmitUserMessageRejectedAfterClose(t *testing.T) {

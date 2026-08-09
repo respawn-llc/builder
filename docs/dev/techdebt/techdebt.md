@@ -260,7 +260,7 @@ Entry shape: checklist title line, summary evidence paragraph, impact paragraph,
 
 - [ ] `TD-047` [P1] Reviewer pipeline lives in engine helpers and classifies responses by message content.
 
-  `server/runtime/engine_reviewer_helpers.go` (445 LoC) owns reviewer request building, meta-context classification, transcript formatting, and response parsing on `Engine`. It classifies and formats responses from content rather than typed protocol: `sanitizeReviewerSuggestions` matches `reviewerNoopToken` via `strings.EqualFold`, `parseReviewerSuggestionsObject` parses suggestion text, `reviewerStatusText` builds operator-facing status from literal phrases such as "Supervisor ran:", and `splitMetaContextItems`/`buildReviewerRequestItemsWithBuilder` reshape transcript items for the reviewer pass.
+  `server/runtime/engine_reviewer_helpers.go` (445 LoC) owns reviewer request building, meta-context classification, transcript formatting, and response parsing on `Engine`. It classifies and formats responses from content rather than typed protocol: `parseReviewerSuggestionsObject` parses suggestion text, `reviewerStatusText` builds operator-facing status from literal phrases such as "Supervisor ran:", and `splitMetaContextItems`/`buildReviewerRequestItemsWithBuilder` reshape transcript items for the reviewer pass.
 
   Concentrating reviewer orchestration, classification, and formatting in one engine helper makes the reviewer pipeline hard to test in isolation, and content-based classification violates the repository rule against deriving information from substring/string matching, so reviewer protocol changes risk silent misclassification.
 

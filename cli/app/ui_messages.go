@@ -25,7 +25,7 @@ func newSubmitDoneMsg(token uint64, message string, submittedText string, err er
 		token:         token,
 		message:       message,
 		submittedText: submittedText,
-		silentFinal:   isNoopFinalText(message),
+		silentFinal:   false,
 		err:           err,
 	}
 }

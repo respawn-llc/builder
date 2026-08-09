@@ -3,6 +3,8 @@ package llm
 import (
 	"context"
 	"testing"
+
+	"core/shared/textutil"
 )
 
 type streamingOnlyTransport struct{}
@@ -20,7 +22,7 @@ func (streamingOnlyTransport) GenerateStream(_ context.Context, _ OpenAIRequest,
 		onDelta("Hel")
 		onDelta("lo")
 	}
-	return OpenAIResponse{AssistantText: "Hello", ProviderPhase: AbsentProviderPhase()}, nil
+	return OpenAIResponse{AssistantText: textutil.Value("Hello"), ProviderPhase: AbsentProviderPhase()}, nil
 }
 
 type capturingInputTokenTransport struct {
@@ -112,7 +114,7 @@ func (trailingWhitespaceStreamingTransport) GenerateStream(
 		onDelta("done\n\n")
 	}
 	return OpenAIResponse{
-		AssistantText: "done\n\n",
+		AssistantText: textutil.Value("done\n\n"),
 		ProviderPhase: AbsentProviderPhase(),
 	}, nil
 }

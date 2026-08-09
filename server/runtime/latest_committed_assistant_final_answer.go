@@ -34,7 +34,7 @@ func LatestCommittedAssistantFinalAnswerFromEventLog(eventLog session.Materializ
 				*message.Phase != llm.MessagePhaseFinal ||
 				message.Content == nil ||
 				strings.TrimSpace(*message.Content) == "" ||
-				isNoopFinalAnswer(message) {
+				isBlankFinalAnswer(message) {
 				return false
 			}
 			text := *message.Content

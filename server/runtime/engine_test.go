@@ -539,11 +539,8 @@ func (fakeNoopStreamClient) Generate(_ context.Context, _ llm.Request) (llm.Resp
 }
 
 func (fakeNoopStreamClient) GenerateStream(_ context.Context, _ llm.Request, onDelta func(string)) (llm.Response, error) {
-	if onDelta != nil {
-		onDelta(reviewerNoopToken)
-	}
 	return llm.Response{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(reviewerNoopToken), Phase: textutil.Value(llm.MessagePhaseFinal)},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(""), Phase: textutil.Value(llm.MessagePhaseFinal)},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}, nil
 }

@@ -290,8 +290,10 @@ func (s *Surface) applyAssistantDelta(streamID runtimeids.AssistantStreamID, del
 }
 
 func (s *Surface) activeAssistantPromotionDeferred() bool {
-	return s.activeAssistant.phase == transcript.AssistantPhaseFinal &&
-		transcript.IsNoopFinalText(s.activeAssistant.source[s.activeAssistant.phaseSourceStart:])
+	if s.activeAssistant.phase != transcript.AssistantPhaseFinal {
+		return false
+	}
+	return strings.TrimSpace(s.activeAssistant.source[s.activeAssistant.phaseSourceStart:]) == ""
 }
 
 func (s *Surface) abortAssistantStream(streamID runtimeids.AssistantStreamID, frame FrameInput) (Result, error) {

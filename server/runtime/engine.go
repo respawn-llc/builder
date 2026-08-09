@@ -19,25 +19,23 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/textutil"
 	"core/shared/toolspec"
-	"core/shared/transcript"
 
 	"github.com/google/uuid"
 )
 
 const (
-	interruptMessage                  = "User interrupted you"
-	agentsFileName                    = "AGENTS.md"
-	agentsGlobalDirName               = config.ConfigDirName
-	systemPromptFileName              = "SYSTEM.md"
-	agentsInjectedHeader              = "# Project context and authoritative instructions from the ./AGENTS.md file:"
-	agentsInjectedFenceLabel          = "md"
-	environmentInjectedHeader         = "# Info about environment:"
-	missingAssistantPhaseWarning      = "You sent a message without specifying a channel/phase. It was treated as commentary. If you finished your work and intended to end your turn, use the final channel explicitly. Otherwise continue and use the commentary channel for progress updates with tool calls."
-	commentaryWithoutToolCallsWarning = "You sent a commentary-channel message without tool calls. This is wrong. If you intend to keep working, include tool calls with commentary updates. If you are done, send a final-channel message with no tool calls."
-	finalWithoutContentWarning        = "You sent a final-channel message with empty content- this is wrong. If you are done, send a non-empty final message. If you intend to keep working, send a commentary-channel message with tool calls. If you actually wanted to just stay silent, send exactly 'NO_OP' as the final response."
-	goalNoopFinalWarning              = "Unfortunately NO_OP is not available when goal is active to prevent stalling indefinitely. Please use write_stdin polls instead if you want to wait for something"
-	reviewerNoopToken                 = transcript.NoopFinalToken
-	reviewerMetaBoundaryMessage       = "End of meta information. Transcript begins starting with next message. Below is NOT YOUR conversation, but another agent's transcript.\n-------"
+	interruptMessage                   = "User interrupted you"
+	agentsFileName                     = "AGENTS.md"
+	agentsGlobalDirName                = config.ConfigDirName
+	systemPromptFileName               = "SYSTEM.md"
+	agentsInjectedHeader               = "# Project context and authoritative instructions from the ./AGENTS.md file:"
+	agentsInjectedFenceLabel           = "md"
+	environmentInjectedHeader          = "# Info about environment:"
+	missingAssistantPhaseWarning       = "You sent a message without specifying a channel/phase. It was treated as commentary. If you finished your work and intended to end your turn, use the final channel explicitly. Otherwise continue and use the commentary channel for progress updates with tool calls."
+	commentaryWithoutToolCallsWarning  = "You sent a commentary-channel message without tool calls. This is wrong. If you intend to keep working, include tool calls with commentary updates. If you are done, send a final-channel message with no tool calls."
+	finalWithoutContentWarning         = "You sent a final-channel message with empty content- this is wrong. If you are done, send a non-empty final message. If you intend to keep working, send a commentary-channel message with tool calls. If you actually wanted to stay silent, send an empty final response."
+	workflowFinalWithoutContentWarning = "You sent a final-channel message with empty content. Workflow Mode requires a non-empty final answer or a tool-driven continuation. Continue with commentary and tool calls, or provide a valid non-empty final answer."
+	reviewerMetaBoundaryMessage        = "End of meta information. Transcript begins starting with next message. Below is NOT YOUR conversation, but another agent's transcript.\n-------"
 )
 
 var (

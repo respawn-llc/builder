@@ -100,6 +100,7 @@ func (c uiInputController) submitCmd(text string, input runtimeinput.Input, queu
 		}
 		done := newSubmitDoneMsg(token, submission.Message, text, nil)
 		done.queued = submission.Queued
+		done.silentFinal = done.queued.ID == "" && strings.TrimSpace(done.message) == ""
 		return done
 	}
 }

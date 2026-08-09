@@ -272,16 +272,26 @@ func (a *responseStreamAccumulator) Response() (OpenAIResponse, error) {
 	if a.callbacks.OnAssistantDelta != nil {
 		streamedDeltaText = rawDeltaText
 	}
-	finalText := rawDeltaText
-	if assistantResponseTextExtendsStream(streamedDeltaText, streamText) {
-		finalText = streamText
+	finalText := streamText
+	finalTextPresent := streamText != nil
+	if rawDeltaText != "" {
+		finalText = textutil.Value(rawDeltaText)
+		finalTextPresent = true
+	}
+	if streamedDeltaText != "" {
+		finalText = textutil.Value(streamedDeltaText)
+		finalTextPresent = true
+	}
+	if streamText != nil && assistantResponseTextExtendsStream(streamedDeltaText, *streamText) {
+		finalText = cloneOptionalString(streamText)
+		finalTextPresent = true
 	}
 	finalPhase := streamPhase
 	finalProviderPhase := streamProviderPhase
 	finalCalls := a.toolCalls.ToToolCalls()
 	finalReasoning := a.reasoning.Entries()
 	finalReasoningItems := a.reasoning.Items()
-	finalOutputItems := mergePassthroughOutputItems(buildOutputItemsFromStream(finalText, finalPhase, finalCalls, finalReasoning, finalReasoningItems), a.passthrough.Items())
+	finalOutputItems := mergePassthroughOutputItems(buildOutputItemsFromStream(finalText, finalTextPresent, finalPhase, finalCalls, finalReasoning, finalReasoningItems), a.passthrough.Items())
 
 	if a.completed == nil {
 		return OpenAIResponse{
@@ -302,15 +312,24 @@ func (a *responseStreamAccumulator) Response() (OpenAIResponse, error) {
 	if err != nil {
 		return OpenAIResponse{}, err
 	}
-	reconciled := completedAssistantTextReconcilesStream(streamedDeltaText, parsedText)
-	if reconciled {
-		finalText = reconciledCompletedAssistantText(streamedDeltaText, parsedText)
+	parsedTextValue := ""
+	if parsedText != nil {
+		parsedTextValue = *parsedText
 	}
-	if responseItemsContainAssistantMessage(parsedItems) && !reconciled && finalText != parsedText {
+	reconciled := parsedText != nil && completedAssistantTextReconcilesStream(streamedDeltaText, parsedTextValue)
+	if reconciled {
+		finalText = textutil.Value(reconciledCompletedAssistantText(streamedDeltaText, parsedTextValue))
+		finalTextPresent = true
+	} else if parsedText != nil && rawDeltaText == "" {
+		finalText = cloneOptionalString(parsedText)
+		finalTextPresent = true
+	}
+	if responseItemsContainAssistantMessage(parsedItems) && !reconciled &&
+		optionalStringsDiffer(finalText, parsedText) {
 		return OpenAIResponse{}, fmt.Errorf(
 			"completed assistant content conflicts with streamed assistant content: streamed bytes=%d completed bytes=%d",
-			len(finalText),
-			len(parsedText),
+			lenOptionalString(finalText),
+			lenOptionalString(parsedText),
 		)
 	}
 	if parsedPhase != "" {
@@ -326,7 +345,7 @@ func (a *responseStreamAccumulator) Response() (OpenAIResponse, error) {
 	finalReasoning = normalizeReasoningEntries(mergedReasoning)
 	finalReasoningItems = mergeReasoningItems(parsedReasoningItems, finalReasoningItems)
 	if len(parsedItems) > 0 {
-		finalOutputItems = mergePassthroughOutputItems(repairAssistantOutputItems(parsedItems, finalText, finalPhase, streamOutputIndex, hasResolvedStream), a.passthrough.Items())
+		finalOutputItems = mergePassthroughOutputItems(repairAssistantOutputItems(parsedItems, finalText, finalTextPresent, finalPhase, streamOutputIndex, hasResolvedStream), a.passthrough.Items())
 	}
 
 	return OpenAIResponse{
@@ -347,6 +366,20 @@ func responseItemsContainAssistantMessage(items []ResponseItem) bool {
 		}
 	}
 	return false
+}
+
+func lenOptionalString(value *string) int {
+	if value == nil {
+		return 0
+	}
+	return len(*value)
+}
+
+func optionalStringsDiffer(left *string, right *string) bool {
+	if left == nil || right == nil {
+		return left != right
+	}
+	return *left != *right
 }
 
 func assistantResponseTextExtendsStream(streamed string, candidate string) bool {
@@ -378,7 +411,7 @@ func reconciledCompletedAssistantText(streamed string, completed string) string 
 	return completed
 }
 
-func repairAssistantOutputItems(items []ResponseItem, text string, phase MessagePhase, outputIndex int64, hasResolvedStream bool) []ResponseItem {
+func repairAssistantOutputItems(items []ResponseItem, text *string, textPresent bool, phase MessagePhase, outputIndex int64, hasResolvedStream bool) []ResponseItem {
 	if len(items) == 0 {
 		return nil
 	}
@@ -392,7 +425,7 @@ func repairAssistantOutputItems(items []ResponseItem, text string, phase Message
 		}
 	}
 	if len(assistantIndexes) == 0 {
-		if strings.TrimSpace(text) == "" {
+		if !textPresent {
 			return repaired
 		}
 		assistant := ResponseItem{
@@ -400,7 +433,7 @@ func repairAssistantOutputItems(items []ResponseItem, text string, phase Message
 			OutputIndex: outputIndex,
 			Role:        textutil.Value(RoleAssistant),
 			Phase:       optionalMessagePhase(phase),
-			Content:     textutil.Value(text),
+			Content:     cloneOptionalString(text),
 		}
 		if !hasResolvedStream {
 			return append([]ResponseItem{assistant}, repaired...)
@@ -426,10 +459,10 @@ func repairAssistantOutputItems(items []ResponseItem, text string, phase Message
 			}
 		}
 	}
-	if len(assistantIndexes) == 1 && text != "" &&
+	if len(assistantIndexes) == 1 && textPresent && text != nil &&
 		(repaired[targetAssistantIdx].Content == nil ||
-			*repaired[targetAssistantIdx].Content != text) {
-		repaired[targetAssistantIdx].Content = textutil.Value(text)
+			*repaired[targetAssistantIdx].Content != *text) {
+		repaired[targetAssistantIdx].Content = cloneOptionalString(text)
 	}
 	if repaired[targetAssistantIdx].Phase == nil && phase != "" {
 		repaired[targetAssistantIdx].Phase = textutil.Value(phase)
@@ -485,7 +518,7 @@ func (a *assistantMessageAccumulator) Upsert(item responses.ResponseOutputItemUn
 }
 
 func (a *assistantMessageAccumulator) SetFinalizedText(outputIndex int64, text string) {
-	if a == nil || strings.TrimSpace(text) == "" {
+	if a == nil {
 		return
 	}
 	item, exists := a.byIndex[outputIndex]
@@ -504,9 +537,9 @@ func (a *assistantMessageAccumulator) SetFinalizedText(outputIndex int64, text s
 	a.byIndex[outputIndex] = item
 }
 
-func (a *assistantMessageAccumulator) Resolve() (string, MessagePhase, *ProviderPhase, int64, bool) {
+func (a *assistantMessageAccumulator) Resolve() (*string, MessagePhase, *ProviderPhase, int64, bool) {
 	if a == nil {
-		return "", "", AbsentProviderPhase(), 0, false
+		return nil, "", AbsentProviderPhase(), 0, false
 	}
 	segments := make([]assistantOutputSegment, 0, len(a.order))
 	for _, outputIndex := range a.order {
@@ -521,15 +554,13 @@ func (a *assistantMessageAccumulator) Resolve() (string, MessagePhase, *Provider
 		if (text == nil || strings.TrimSpace(*text) == "") && item.finalizedText != nil {
 			text = item.finalizedText
 		}
-		if text == nil {
-			continue
-		}
 		phase := MessagePhase("")
 		if item.message.Phase != nil {
 			phase = *item.message.Phase
 		}
 		segments = append(segments, assistantOutputSegment{
-			Text:          *text,
+			Text:          optionalStringValue(text),
+			Content:       cloneOptionalString(text),
 			Phase:         phase,
 			ProviderPhase: item.providerPhase,
 			OutputIndex:   outputIndex,
@@ -727,12 +758,12 @@ func (a *toolCallAccumulator) ToToolCalls() []ToolCall {
 	return out
 }
 
-func buildOutputItemsFromStream(text string, phase MessagePhase, toolCalls []ToolCall, reasoning []ReasoningEntry, reasoningItems []ReasoningItem) []ResponseItem {
+func buildOutputItemsFromStream(text *string, textPresent bool, phase MessagePhase, toolCalls []ToolCall, reasoning []ReasoningEntry, reasoningItems []ReasoningItem) []ResponseItem {
 	items := make([]ResponseItem, 0, 1+len(toolCalls)+len(reasoningItems))
-	if strings.TrimSpace(text) != "" {
+	if textPresent {
 		items = append(items, ResponseItem{
 			Type: ResponseItemTypeMessage, Role: textutil.Value(RoleAssistant),
-			Phase: optionalMessagePhase(phase), Content: textutil.Value(text),
+			Phase: optionalMessagePhase(phase), Content: cloneOptionalString(text),
 		})
 	}
 	for _, call := range toolCalls {
@@ -783,6 +814,13 @@ func optionalMessagePhase(phase MessagePhase) *MessagePhase {
 		return nil
 	}
 	return textutil.Value(phase)
+}
+
+func optionalStringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 type passthroughOutputAccumulator struct {

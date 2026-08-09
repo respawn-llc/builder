@@ -8,10 +8,7 @@ import (
 func (h *bellHooks) OnTranscriptMessage(message clientui.TranscriptMessage) {
 	switch message.Kind() {
 	case clientui.TranscriptMessageAssistantDelta:
-		delta := message.Payload().(clientui.TranscriptAssistantDelta)
-		if isNoopFinalText(delta.Delta) {
-			h.clearPendingTurnCompletionForSilentFinal(delta.StepID)
-		}
+		_ = message.Payload().(clientui.TranscriptAssistantDelta)
 	case clientui.TranscriptMessageToolStart:
 		tool := message.Payload().(clientui.TranscriptToolStart)
 		h.recordToolCall(tool.StepID)

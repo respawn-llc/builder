@@ -2,12 +2,12 @@ package runtime
 
 import (
 	"core/server/llm"
-	"core/shared/transcript"
+	"strings"
 )
 
-func isNoopFinalAnswer(msg llm.Message) bool {
+func isBlankFinalAnswer(msg llm.Message) bool {
 	return msg.Phase != nil &&
 		*msg.Phase == llm.MessagePhaseFinal &&
 		msg.Content != nil &&
-		transcript.IsNoopFinalText(*msg.Content)
+		strings.TrimSpace(*msg.Content) == ""
 }

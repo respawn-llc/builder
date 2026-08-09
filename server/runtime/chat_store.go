@@ -877,7 +877,7 @@ func applyLastCommittedAssistantFinalAnswer(current string, msg llm.Message) str
 	if messagePreservesLastCommittedAssistantFinalAnswer(msg) {
 		return current
 	}
-	if isNoopFinalAnswer(msg) {
+	if isBlankFinalAnswer(msg) {
 		return current
 	}
 	if msg.Role == llm.RoleAssistant &&

@@ -215,8 +215,8 @@ func TestGenerateStream_AcceptsCompletedResponseEOFWithoutDoneSentinel(t *testin
 		t.Fatalf("GenerateStream failed: %v", err)
 	}
 
-	if resp.AssistantText != "Hello" {
-		t.Fatalf("assistant text = %q, want Hello", resp.AssistantText)
+	if optionalStringValue(resp.AssistantText) != "Hello" {
+		t.Fatalf("assistant text = %q, want Hello", optionalStringValue(resp.AssistantText))
 	}
 	if resp.Usage.InputTokens != 11 || resp.Usage.OutputTokens != 7 {
 		t.Fatalf("unexpected usage: %+v", resp.Usage)
@@ -239,8 +239,8 @@ func TestGenerateStream_SalvagesCompletedResponseBeforeTrailingMalformedEvent(t 
 		t.Fatalf("GenerateStream failed: %v", err)
 	}
 
-	if resp.AssistantText != "Done" {
-		t.Fatalf("assistant text = %q, want Done", resp.AssistantText)
+	if optionalStringValue(resp.AssistantText) != "Done" {
+		t.Fatalf("assistant text = %q, want Done", optionalStringValue(resp.AssistantText))
 	}
 	if resp.Usage.InputTokens != 3 || resp.Usage.OutputTokens != 5 {
 		t.Fatalf("unexpected usage: %+v", resp.Usage)
@@ -444,8 +444,8 @@ func TestGenerateStream_EmitsAssistantDeltasAndToolCalls(t *testing.T) {
 	if len(deltas) != 2 || deltas[0].Phase != MessagePhaseCommentary || deltas[1].Phase != MessagePhaseCommentary {
 		t.Fatalf("unexpected delta phases: %+v", deltas)
 	}
-	if resp.AssistantText != "Hello" {
-		t.Fatalf("unexpected assistant text: %q", resp.AssistantText)
+	if optionalStringValue(resp.AssistantText) != "Hello" {
+		t.Fatalf("unexpected assistant text: %q", optionalStringValue(resp.AssistantText))
 	}
 	if !resp.ProviderPhase.Is(MessagePhaseCommentary) {
 		t.Fatalf("unexpected provider phase: %#v", resp.ProviderPhase)
@@ -579,7 +579,7 @@ func TestGenerateStream_RejectsCompletedMessageThatConflictsWithDisplayedDeltas(
 	}
 }
 
-func TestGenerateStream_IgnoresWhitespaceOnlyAssistantShimBeforeToolCall(t *testing.T) {
+func TestGenerateStream_PreservesExplicitEmptyAssistantContentBeforeToolCall(t *testing.T) {
 	transport := newOpenAIStreamTestTransport(t,
 		`{"type":"response.output_item.added","output_index":1,"item":{"id":"msg_1","type":"message","role":"assistant","content":[]}}`,
 		`{"type":"response.output_text.delta","item_id":"msg_1","output_index":1,"content_index":0,"delta":"\n\n"}`,
@@ -605,8 +605,8 @@ func TestGenerateStream_IgnoresWhitespaceOnlyAssistantShimBeforeToolCall(t *test
 	if len(deltas) != 0 {
 		t.Fatalf("assistant deltas = %+v, want no semantic assistant output", deltas)
 	}
-	if resp.AssistantText != "" {
-		t.Fatalf("assistant text = %q, want empty", resp.AssistantText)
+	if resp.AssistantText == nil || *resp.AssistantText != "" {
+		t.Fatalf("assistant text = %#v, want present empty content", resp.AssistantText)
 	}
 	if len(resp.ToolCalls) != 1 || resp.ToolCalls[0].ID != "call_1" || resp.ToolCalls[0].Name != "shell" {
 		t.Fatalf("tool calls = %+v, want shell call_1", resp.ToolCalls)
@@ -624,8 +624,8 @@ func TestGenerateStream_UsesFinalizedOutputTextWhenProviderOmitsDeltas(t *testin
 	if err != nil {
 		t.Fatalf("GenerateStream failed: %v", err)
 	}
-	if resp.AssistantText != "Compaction summary" {
-		t.Fatalf("assistant text = %q, want finalized output text", resp.AssistantText)
+	if optionalStringValue(resp.AssistantText) != "Compaction summary" {
+		t.Fatalf("assistant text = %q, want finalized output text", optionalStringValue(resp.AssistantText))
 	}
 	if len(resp.OutputItems) != 1 || resp.OutputItems[0].Content == nil || *resp.OutputItems[0].Content != "Compaction summary" {
 		t.Fatalf("output items = %+v, want synthesized finalized assistant output", resp.OutputItems)
@@ -657,8 +657,8 @@ func TestGenerateStream_DeliversTrailingWhitespaceBeforeToolCallWithoutBuffering
 	if got := joinedAssistantDeltas(deltas); got != "I will run it.\n\n" {
 		t.Fatalf("assistant deltas = %q, want exact streamed content", got)
 	}
-	if resp.AssistantText != "I will run it.\n\n" {
-		t.Fatalf("assistant text = %q, want exact streamed content", resp.AssistantText)
+	if optionalStringValue(resp.AssistantText) != "I will run it.\n\n" {
+		t.Fatalf("assistant text = %q, want exact streamed content", optionalStringValue(resp.AssistantText))
 	}
 	if len(resp.ToolCalls) != 1 || resp.ToolCalls[0].ID != "call_1" || resp.ToolCalls[0].Name != "shell" {
 		t.Fatalf("tool calls = %+v, want shell call_1", resp.ToolCalls)
@@ -678,8 +678,8 @@ func TestGenerateStream_IgnoresStructuredTrailingWhitespaceShimWithoutDeltaConsu
 	if err != nil {
 		t.Fatalf("GenerateStream failed: %v", err)
 	}
-	if resp.AssistantText != "Hello" {
-		t.Fatalf("assistant text = %q, want finalized content", resp.AssistantText)
+	if optionalStringValue(resp.AssistantText) != "Hello" {
+		t.Fatalf("assistant text = %q, want finalized content", optionalStringValue(resp.AssistantText))
 	}
 }
 
@@ -706,8 +706,8 @@ func TestGenerateStream_IgnoresLeadingWhitespaceAssistantShimBeforeContent(t *te
 	if got := joinedAssistantDeltas(deltas); got != "Hello world" {
 		t.Fatalf("assistant deltas = %q, want finalized content", got)
 	}
-	if resp.AssistantText != "Hello world" {
-		t.Fatalf("assistant text = %q, want finalized content", resp.AssistantText)
+	if optionalStringValue(resp.AssistantText) != "Hello world" {
+		t.Fatalf("assistant text = %q, want finalized content", optionalStringValue(resp.AssistantText))
 	}
 }
 
@@ -756,8 +756,8 @@ func TestGenerateStream_PreservesWhitespaceBetweenAssistantContent(t *testing.T)
 	if got := joinedAssistantDeltas(deltas); got != "Hello world" {
 		t.Fatalf("assistant deltas = %q, want preserved interstitial whitespace", got)
 	}
-	if resp.AssistantText != "Hello world" {
-		t.Fatalf("assistant text = %q, want preserved interstitial whitespace", resp.AssistantText)
+	if optionalStringValue(resp.AssistantText) != "Hello world" {
+		t.Fatalf("assistant text = %q, want preserved interstitial whitespace", optionalStringValue(resp.AssistantText))
 	}
 }
 
@@ -772,8 +772,8 @@ func TestGenerateStream_DoesNotRepairMultiMessageAssistantOutputWithAggregateTex
 		t.Fatalf("GenerateStream failed: %v", err)
 	}
 
-	if resp.AssistantText != "AB" {
-		t.Fatalf("assistant text = %q, want aggregate completed text", resp.AssistantText)
+	if optionalStringValue(resp.AssistantText) != "AB" {
+		t.Fatalf("assistant text = %q, want aggregate completed text", optionalStringValue(resp.AssistantText))
 	}
 	if len(resp.OutputItems) != 2 ||
 		resp.OutputItems[0].Content == nil || *resp.OutputItems[0].Content != "A" ||
@@ -1039,7 +1039,7 @@ func TestGenerateStream_RejectsEmptyCompletedMessageAfterAssistantDeltas(t *test
 }
 
 func TestBuildOutputItemsFromStreamPreservesAbsentPhase(t *testing.T) {
-	items := buildOutputItemsFromStream("streamed text", "", nil, nil, nil)
+	items := buildOutputItemsFromStream(textutil.Value("streamed text"), true, "", nil, nil, nil)
 	if len(items) != 1 {
 		t.Fatalf("output items = %+v, want one assistant message", items)
 	}
@@ -1060,8 +1060,8 @@ func TestGenerateStream_PreservesAssistantOutputItemPhaseWhenCompletedPhaseIsMis
 		t.Fatalf("GenerateStream failed: %v", err)
 	}
 
-	if resp.AssistantText != "Done" {
-		t.Fatalf("assistant text = %q, want Done", resp.AssistantText)
+	if optionalStringValue(resp.AssistantText) != "Done" {
+		t.Fatalf("assistant text = %q, want Done", optionalStringValue(resp.AssistantText))
 	}
 	if !resp.ProviderPhase.Is(MessagePhaseFinal) {
 		t.Fatalf("provider phase = %#v, want %q", resp.ProviderPhase, MessagePhaseFinal)
@@ -1089,8 +1089,8 @@ func TestGenerateStream_PrefersPhaseResolvedAssistantTextOverRawDeltaConcatenati
 		t.Fatalf("GenerateStream failed: %v", err)
 	}
 
-	if resp.AssistantText != "Done" {
-		t.Fatalf("assistant text = %q, want Done", resp.AssistantText)
+	if optionalStringValue(resp.AssistantText) != "Done" {
+		t.Fatalf("assistant text = %q, want Done", optionalStringValue(resp.AssistantText))
 	}
 	if !resp.ProviderPhase.Is(MessagePhaseFinal) {
 		t.Fatalf("provider phase = %#v, want %q", resp.ProviderPhase, MessagePhaseFinal)
@@ -1135,8 +1135,8 @@ func TestGenerateStream_PreservesHostedWebSearchOutputItemFromStream(t *testing.
 	if err != nil {
 		t.Fatalf("GenerateStream failed: %v", err)
 	}
-	if resp.AssistantText != "Done" {
-		t.Fatalf("assistant text = %q, want Done", resp.AssistantText)
+	if optionalStringValue(resp.AssistantText) != "Done" {
+		t.Fatalf("assistant text = %q, want Done", optionalStringValue(resp.AssistantText))
 	}
 	if len(resp.OutputItems) != 2 {
 		t.Fatalf("expected hosted passthrough output item + assistant message, got %+v", resp.OutputItems)

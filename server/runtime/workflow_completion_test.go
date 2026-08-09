@@ -1362,7 +1362,7 @@ func TestCompatibleProviderPhaseAbsentProseConsumesWorkflowViolationAndCanRecove
 	}
 }
 
-func TestCompatibleProviderEmptyNoToolResponsesContinueWithoutWorkflowViolation(t *testing.T) {
+func TestWorkflowBlankFinalUsesNormalIncompleteOutputHandling(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name     string

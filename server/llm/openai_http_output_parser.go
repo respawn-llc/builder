@@ -42,7 +42,7 @@ func newResponseOutputItemParsers(registrations ...responseOutputItemParserRegis
 	return responseOutputItemParsers{byType: byType}
 }
 
-func parseOutputItems(items []responses.ResponseOutputItemUnion) ([]ResponseItem, string, MessagePhase, *ProviderPhase, []ToolCall, []ReasoningEntry, []ReasoningItem, error) {
+func parseOutputItems(items []responses.ResponseOutputItemUnion) ([]ResponseItem, *string, MessagePhase, *ProviderPhase, []ToolCall, []ReasoningEntry, []ReasoningItem, error) {
 	parsers := newResponseOutputItemParsers(
 		responseOutputItemParserRegistration{itemType: "message", parser: messageOutputItemParser{}},
 		responseOutputItemParserRegistration{itemType: "function_call", parser: functionCallOutputItemParser{}},
@@ -70,7 +70,7 @@ func parseOutputItems(items []responses.ResponseOutputItemUnion) ([]ResponseItem
 			var err error
 			providerPhase, err = decodeProviderPhase(item.RawJSON())
 			if err != nil {
-				return nil, "", "", nil, nil, nil, nil, err
+				return nil, nil, "", nil, nil, nil, nil, err
 			}
 		}
 		contribution := parsed.Parse(item, providerPhase)
@@ -164,6 +164,10 @@ func (messageOutputItemParser) Parse(item responses.ResponseOutputItemUnion, pro
 	if phase != "" {
 		typedPhase = textutil.Value(phase)
 	}
+	var content *string
+	if responseOutputItemHasField(item, "content") {
+		content = textutil.Value(text)
+	}
 	raw := json.RawMessage(item.RawJSON())
 	parsed := parsedResponseOutputItem{
 		CanonicalItems: []ResponseItem{{
@@ -171,14 +175,28 @@ func (messageOutputItemParser) Parse(item responses.ResponseOutputItemUnion, pro
 			Role:    textutil.Value(role),
 			Phase:   typedPhase,
 			ID:      textutil.OptionalExactString(item.ID),
-			Content: textutil.Value(text),
+			Content: content,
 			Raw:     raw,
 		}},
 	}
 	if role == RoleAssistant {
-		parsed.AssistantSegments = append(parsed.AssistantSegments, assistantOutputSegment{Text: text, Phase: phase, ProviderPhase: providerPhase})
+		parsed.AssistantSegments = append(parsed.AssistantSegments, assistantOutputSegment{
+			Text:          text,
+			Content:       cloneOptionalString(content),
+			Phase:         phase,
+			ProviderPhase: providerPhase,
+		})
 	}
 	return parsed
+}
+
+func responseOutputItemHasField(item responses.ResponseOutputItemUnion, field string) bool {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(item.RawJSON()), &fields); err != nil {
+		return false
+	}
+	_, present := fields[field]
+	return present
 }
 
 type functionCallOutputItemParser struct{}
@@ -302,14 +320,15 @@ func (compactionOutputItemParser) Parse(item responses.ResponseOutputItemUnion, 
 
 type assistantOutputSegment struct {
 	Text          string
+	Content       *string
 	Phase         MessagePhase
 	ProviderPhase *ProviderPhase
 	OutputIndex   int64
 }
 
-func resolveAssistantOutput(segments []assistantOutputSegment) (string, MessagePhase, *ProviderPhase, int64, bool) {
+func resolveAssistantOutput(segments []assistantOutputSegment) (*string, MessagePhase, *ProviderPhase, int64, bool) {
 	if len(segments) == 0 {
-		return "", "", AbsentProviderPhase(), 0, false
+		return nil, "", AbsentProviderPhase(), 0, false
 	}
 	sorted := append([]assistantOutputSegment(nil), segments...)
 	slices.SortFunc(sorted, func(a, b assistantOutputSegment) int {
@@ -317,7 +336,7 @@ func resolveAssistantOutput(segments []assistantOutputSegment) (string, MessageP
 	})
 	last := len(sorted) - 1
 	if sorted[last].Phase == "" {
-		return sorted[last].Text, "", sorted[last].ProviderPhase, sorted[last].OutputIndex, true
+		return cloneOptionalString(sorted[last].Content), "", sorted[last].ProviderPhase, sorted[last].OutputIndex, true
 	}
 	phase := sorted[last].Phase
 	start := last
@@ -328,8 +347,13 @@ func resolveAssistantOutput(segments []assistantOutputSegment) (string, MessageP
 		start--
 	}
 	textParts := make([]string, 0, last-start+1)
+	contentPresent := false
 	for i := start; i <= last; i++ {
 		textParts = append(textParts, sorted[i].Text)
+		contentPresent = contentPresent || sorted[i].Content != nil
 	}
-	return strings.Join(textParts, ""), phase, sorted[last].ProviderPhase, sorted[start].OutputIndex, true
+	if !contentPresent {
+		return nil, phase, sorted[last].ProviderPhase, sorted[start].OutputIndex, true
+	}
+	return textutil.Value(strings.Join(textParts, "")), phase, sorted[last].ProviderPhase, sorted[start].OutputIndex, true
 }

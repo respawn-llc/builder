@@ -353,8 +353,8 @@ func TestParseOutputItems_PreservesCompactionItem(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse output: %v", err)
 	}
-	if assistantText != "" {
-		t.Fatalf("expected no assistant text, got %q", assistantText)
+	if assistantText != nil {
+		t.Fatalf("expected no assistant text, got %#v", assistantText)
 	}
 	if assistantPhase != "" {
 		t.Fatalf("expected empty assistant phase, got %q", assistantPhase)
@@ -393,8 +393,8 @@ func TestParseOutputItems_UsesLastAssistantMessageWhenMultipleUnphased(t *testin
 	if err != nil {
 		t.Fatalf("parse output: %v", err)
 	}
-	if assistantText != "done" {
-		t.Fatalf("assistantText = %q, want done", assistantText)
+	if optionalStringValue(assistantText) != "done" {
+		t.Fatalf("assistantText = %#v, want done", assistantText)
 	}
 	if assistantPhase != "" {
 		t.Fatalf("assistantPhase = %q, want empty", assistantPhase)
@@ -433,8 +433,8 @@ func TestParseOutputItems_UsesTrailingAssistantPhaseBlock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse output: %v", err)
 	}
-	if assistantText != "final-1final-2" {
-		t.Fatalf("assistantText = %q, want final-1final-2", assistantText)
+	if optionalStringValue(assistantText) != "final-1final-2" {
+		t.Fatalf("assistantText = %#v, want final-1final-2", assistantText)
 	}
 	if assistantPhase != MessagePhaseFinal {
 		t.Fatalf("assistantPhase = %q, want %q", assistantPhase, MessagePhaseFinal)

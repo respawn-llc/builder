@@ -324,12 +324,16 @@ func openAIMessageInputRaw(item ResponseItem) (json.RawMessage, bool) {
 	if item.MessageType != nil && *item.MessageType == MessageTypeCompactionSummary {
 		text = prompts.CompactionSummaryPrefix + "\n\n" + strings.TrimSpace(text)
 	}
-	if strings.TrimSpace(text) == "" {
-		return nil, false
-	}
 	role := ""
 	if item.Role != nil {
 		role = strings.TrimSpace(string(*item.Role))
+	}
+	blankFinal := role == string(RoleAssistant) &&
+		item.Phase != nil &&
+		*item.Phase == MessagePhaseFinal &&
+		item.MessageType == nil
+	if strings.TrimSpace(text) == "" && !blankFinal {
+		return nil, false
 	}
 	if role == string(RoleAssistant) {
 		content := []openAIOutputTextContentRaw{{
