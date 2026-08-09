@@ -269,7 +269,7 @@ func (e *Engine) recordLiveRunAssistantFinalAnswer(stepID string, message llm.Me
 
 func (e *Engine) submitStoppedScopeDisposition(stopped runtimeids.ExecutionScopeID) error {
 	if e.runtimeEvents == nil {
-		steerErr := e.applySteeringBatch("", steerMessagesWithPersistenceIntent(
+		steerErr := e.steer("", steerMessagesWithPersistenceIntent(
 			steeringPriorityNormal,
 			steeringMessageEventDefault,
 			true,
