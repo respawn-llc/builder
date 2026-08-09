@@ -92,8 +92,16 @@ export type WorkspaceList = Readonly<{
   projectID: string;
   workspaces: readonly WorkspaceSummary[];
   defaultWorkspaceID: string;
-  nextPageToken: string;
+  nextPageToken: string | null;
 }>;
+
+export type SessionCategory = "main" | "subagent";
+
+export type SessionPagePosition = Readonly<{ kind: "newest" }>
+  | Readonly<{ kind: "older"; token: string }>
+  | Readonly<{ kind: "newer"; token: string }>;
+export type SessionCatalogSummary = Readonly<{ id: string; category: SessionCategory; name: string | null; firstPromptPreview: string | null; updatedAt: number }>;
+export type SessionCatalogPage = Readonly<{ projectID: string; category: SessionCategory; sessions: readonly SessionCatalogSummary[]; older: string | null; newer: string | null }>;
 
 export type ProjectEdit = Readonly<{
   projectID: string;

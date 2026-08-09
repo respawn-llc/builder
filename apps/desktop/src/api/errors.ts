@@ -367,6 +367,55 @@ export class ContractError extends Error {
   }
 }
 
+export type CatalogContractErrorReason =
+  | "malformed_response"
+  | "project_mismatch"
+  | "session_category_mismatch";
+
+export class CatalogContractError extends ContractError {
+  readonly reason: CatalogContractErrorReason;
+  readonly method: string | null; readonly expectedProjectID: string | null; readonly actualProjectID: string | null;
+  readonly expectedCategory: "main" | "subagent" | null; readonly actualCategory: "main" | "subagent" | null;
+
+  private constructor(
+    message: string,
+    reason: CatalogContractErrorReason,
+    facts: Readonly<{ method?: string; expectedProjectID?: string; actualProjectID?: string;
+      expectedCategory?: "main" | "subagent"; actualCategory?: "main" | "subagent";
+      diagnostics?: readonly ContractIssueDiagnostic[] }>,
+  ) {
+    super(message, facts.diagnostics);
+    this.name = "CatalogContractError"; this.reason = reason; this.method = facts.method ?? null;
+    this.expectedProjectID = facts.expectedProjectID ?? null; this.actualProjectID = facts.actualProjectID ?? null;
+    this.expectedCategory = facts.expectedCategory ?? null; this.actualCategory = facts.actualCategory ?? null;
+  }
+
+  static malformedResponse(method: string, error: ContractError): CatalogContractError {
+    return new CatalogContractError(`${method} response did not match the catalog contract.`, "malformed_response", {
+      method, diagnostics: error.diagnostics,
+    });
+  }
+
+  static projectMismatch(
+    method: string,
+    expectedProjectID: string,
+    actualProjectID: string,
+  ): CatalogContractError {
+    return new CatalogContractError(`${method} response Project identity did not match the request.`, "project_mismatch", {
+      method, expectedProjectID, actualProjectID,
+    });
+  }
+
+  static sessionCategoryMismatch(
+    expectedCategory: "main" | "subagent",
+    actualCategory: "main" | "subagent",
+  ): CatalogContractError {
+    return new CatalogContractError("session.page response category did not match the request.", "session_category_mismatch", {
+      method: "session.page", expectedCategory, actualCategory,
+    });
+  }
+}
+
 export class ProtocolMismatchError extends Error {
   constructor(message: string) {
     super(message);
