@@ -109,28 +109,6 @@ func TestTaskStartReplacesBacklogCurrentNodeWithFirstExecutableCurrentNode(t *te
 	}
 }
 
-func TestTaskStartAfterLeavingStartNodeReturnsTypedConflict(t *testing.T) {
-	ctx, store, binding := newTestStoreContext(t)
-	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
-	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	if _, err := store.StartTask(ctx, task.ID); err != nil {
-		t.Fatalf("StartTask first attempt: %v", err)
-	}
-
-	assertConflict := func(operation string, err error) {
-		t.Helper()
-		var conflict TaskStartConflictError
-		if !errors.As(err, &conflict) ||
-			conflict.TaskID != task.ID ||
-			conflict.Reason != TaskStartConflictAlreadyStarted {
-			t.Fatalf("%s error = %T %+v, want already-started conflict for %q", operation, err, err, task.ID)
-		}
-	}
-	assertConflict("ValidateTaskStart", store.ValidateTaskStart(ctx, task.ID))
-	_, err := store.StartTask(ctx, task.ID)
-	assertConflict("StartTask", err)
-}
-
 func TestTaskStartPlacementFreezesSourceWorkspace(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)

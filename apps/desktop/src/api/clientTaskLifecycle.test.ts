@@ -5,7 +5,7 @@ import {
   taskMoveResponseSchema,
   taskStartResponseSchema,
 } from "./schemas/workflowBoard";
-import { FakeRpcTransport, retainedPreviousWorktreeWire } from "@/test-support/api";
+import { FakeRpcTransport } from "@/test-support/api";
 
 describe("task lifecycle client", () => {
   it("uses Current Node responses and does not emit board-only lifecycle flags", async () => {
@@ -23,10 +23,7 @@ describe("task lifecycle client", () => {
         method: "workflow.task.move",
         result: {
           outcome: "applied",
-          applied: {
-            current_nodes: [{ node_id: "node-2", transition_branch_key: null, session_id: null }],
-            retained_previous_worktree: retainedPreviousWorktreeWire("/repo/feature", "worktree-1"),
-          },
+          applied: { current_nodes: [{ node_id: "node-2", transition_branch_key: null, session_id: null }] },
         },
       },
       {
@@ -65,31 +62,8 @@ describe("task lifecycle client", () => {
     ]);
     const client = new ApiClient(transport);
 
-    await expect(client.startTask({ taskID: "task-1" })).resolves.toMatchObject({
-      outcome: "applied",
-      applied: { currentNodes: [{ nodeID: "node-1" }] },
-    });
-    await expect(
-      client.moveTask({
-        taskID: "task-1",
-        targetNodeID: "node-2",
-        transitionKey: "ship",
-        values: { agent: { result: "ready" } },
-        commentary: "operator override",
-        proceedDespiteDependencies: true,
-      }),
-    ).resolves.toMatchObject({
-      outcome: "applied",
-      applied: {
-        currentNodes: [{ nodeID: "node-2" }],
-        retainedPreviousWorktree: {
-          worktree: {
-            variant: "registered",
-            registered: { kent: { canonicalRoot: "/repo/feature" } },
-          },
-        },
-      },
-    });
+    await expect(client.startTask({ taskID: "task-1" })).resolves.toMatchObject({ outcome: "applied", applied: { currentNodes: [{ nodeID: "node-1" }] } });
+    await expect(client.moveTask({ taskID: "task-1", targetNodeID: "node-2" })).resolves.toMatchObject({ outcome: "applied", applied: { currentNodes: [{ nodeID: "node-2" }] } });
     await expect(client.previewMoveTask("task-1", "node-2")).resolves.toEqual({
       outcome: "transition",
       transition: {
@@ -105,33 +79,15 @@ describe("task lifecycle client", () => {
         ],
       },
     });
-    await expect(client.approveApproval("approval-1")).resolves.toMatchObject({
-      outcome: "applied",
-      applied: { taskID: "task-1", currentNodes: [{ nodeID: "node-3" }] },
-    });
+    await expect(client.approveApproval("approval-1")).resolves.toMatchObject({ outcome: "applied", applied: { taskID: "task-1", currentNodes: [{ nodeID: "node-3" }] } });
 
     expect(transport.calls).toContainEqual({
       method: "workflow.task.approve",
       options: { timeoutMs: null },
       params: { approval_id: "approval-1" },
     });
-    expect(transport.calls.find((call) => call.method === "workflow.task.move")?.params).not.toHaveProperty(
-      "allow_missing_edge",
-    );
-    expect(transport.calls.find((call) => call.method === "workflow.task.move")?.params).not.toHaveProperty(
-      "auto_approve",
-    );
-    expect(transport.calls.find((call) => call.method === "workflow.task.move")?.params).not.toHaveProperty(
-      "setup_operation_id",
-    );
-    expect(transport.calls.find((call) => call.method === "workflow.task.move")?.params).toMatchObject({
-      task_id: "task-1",
-      target_node_id: "node-2",
-      transition_key: "ship",
-      values: { agent: { result: "ready" } },
-      commentary: "operator override",
-      proceed_despite_dependencies: true,
-    });
+    expect(transport.calls.find((call) => call.method === "workflow.task.move")?.params).not.toHaveProperty("allow_missing_edge");
+    expect(transport.calls.find((call) => call.method === "workflow.task.move")?.params).not.toHaveProperty("auto_approve");
     expect(transport.calls.find((call) => call.method === "workflow.task.move.preview")).toEqual({
       method: "workflow.task.move.preview",
       options: { timeoutMs: null },
@@ -184,28 +140,6 @@ describe("task lifecycle client", () => {
       outcome: "selection_required",
       selectionRequired: { reason: "policy_requires_selection" },
     });
-  });
-
-  it("accepts explicit null and rejects omitted Move retained topology", () => {
-    expect(
-      taskMoveResponseSchema.parse({
-        outcome: "applied",
-        applied: {
-          current_nodes: [{ node_id: "node-1", transition_branch_key: null, session_id: null }],
-          retained_previous_worktree: null,
-        },
-      }),
-    ).toMatchObject({
-      applied: { retainedPreviousWorktree: null },
-    });
-    expect(() =>
-      taskMoveResponseSchema.parse({
-        outcome: "no_op",
-        no_op: {
-          current_nodes: [{ node_id: "node-1", transition_branch_key: null, session_id: null }],
-        },
-      }),
-    ).toThrow();
   });
 
   it("parses every Manual Move preview outcome and same-current no-op", () => {

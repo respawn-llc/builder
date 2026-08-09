@@ -1,14 +1,10 @@
 import { z } from "zod";
 
 import { ApiClient } from "./client";
-import { ContractError, RpcError } from "./errors";
-import { FakeRpcTransport, registeredWorktreeWire } from "@/test-support/api";
+import { ContractError } from "./errors";
+import { FakeRpcTransport } from "@/test-support/api";
 import { newSetupOperationID, parseSetupOperationID, type SetupOperationID } from "./setupOperationID";
-import {
-  decodeWorktreeSetupRetainedError,
-  type WorktreeSetupEvent,
-  WorktreeSetupRetainedError,
-} from "./worktreeSetup";
+import type { WorktreeSetupEvent } from "./worktreeSetup";
 
 const setupOperationIDWireSchema = z.string().transform((value, ctx): SetupOperationID => {
   try {
@@ -29,29 +25,6 @@ function parseSetupMutationParams(value: unknown): Readonly<{ setupOperationID: 
 }
 
 describe("worktree setup API", () => {
-  it("decodes the retained setup error used by synchronous Move recovery", () => {
-    const decoded = decodeWorktreeSetupRetainedError(
-      new RpcError({
-        code: -32039,
-        method: "workflow.task.move",
-        message: "human text is not the contract",
-        data: {
-          type: "worktree_setup_retained",
-          worktree: registeredWorktreeWire("/repo/current", "worktree-current"),
-          diagnostic: "setup failed after retry",
-          script_path: "/repo/setup.sh",
-          retained_previous_worktree: null,
-        },
-      }),
-    );
-    expect(decoded).toBeInstanceOf(WorktreeSetupRetainedError);
-    expect(decoded).toMatchObject({
-      diagnostic: "setup failed after retry",
-      scriptPath: "/repo/setup.sh",
-      worktree: { registered: { kent: { canonicalRoot: "/repo/current" } } },
-    });
-  });
-
   it("rejects malformed setup operation ids before RPC submission can use them", () => {
     expect(() => parseSetupOperationID("11111111-1111-1111-1111-111111111111")).toThrow(
       "Setup operation id must be a UUID v4.",
@@ -59,7 +32,7 @@ describe("worktree setup API", () => {
     expect(() => parseSetupOperationID("not-a-uuid")).toThrow("Setup operation id must be a UUID v4.");
   });
 
-  it("keeps Start correlation and sends no setup correlation for synchronous Move", async () => {
+  it("uses caller-provided setup operation ids and disables generic timeouts for workflow lifecycle mutations", async () => {
     const transport = new FakeRpcTransport([
       {
         method: "workflow.task.start",
@@ -76,13 +49,13 @@ describe("worktree setup API", () => {
           outcome: "applied",
           applied: {
             current_nodes: [{ node_id: "node-1", transition_branch_key: null, session_id: null }],
-            retained_previous_worktree: null,
           },
         },
       },
     ]);
     const client = new ApiClient(transport);
     const startSetupID = newSetupOperationID();
+    const moveSetupID = newSetupOperationID();
 
     client.subscribeWorktreeSetup(startSetupID, {
       onEvent() {
@@ -99,20 +72,23 @@ describe("worktree setup API", () => {
     await client.moveTask({
       taskID: "task-1",
       targetNodeID: "node-1",
+      setupOperationID: moveSetupID,
     });
 
     expect(transport.subscriptions).toContainEqual({
       method: "worktree.setup.subscribe",
       params: { setup_operation_id: startSetupID.toJSONValue() },
     });
-    const startCall = transport.calls.find((entry) => entry.method === "workflow.task.start");
-    expect(startCall?.options).toEqual({ timeoutMs: null });
-    expect(parseSetupMutationParams(startCall?.params).setupOperationID.toJSONValue()).toBe(
-      startSetupID.toJSONValue(),
-    );
-    const moveCall = transport.calls.find((entry) => entry.method === "workflow.task.move");
-    expect(moveCall?.options).toEqual({ timeoutMs: null });
-    expect(moveCall?.params).not.toHaveProperty("setup_operation_id");
+    for (const [method, expectedSetupID] of [
+      ["workflow.task.start", startSetupID],
+      ["workflow.task.move", moveSetupID],
+    ] as const) {
+      const call = transport.calls.find((entry) => entry.method === method);
+      expect(call?.options).toEqual({ timeoutMs: null });
+      expect(parseSetupMutationParams(call?.params).setupOperationID.toJSONValue()).toBe(
+        expectedSetupID.toJSONValue(),
+      );
+    }
   });
 
   it("subscribes to typed worktree setup events and rejects malformed setup ids", () => {
@@ -141,200 +117,38 @@ describe("worktree setup API", () => {
     transport.emit("worktree.setup", {
       event: {
         setup_operation_id: setupOperationID.toJSONValue(),
+        source_workspace_root: "/src",
+        worktree_root: "/worktree",
+        script_path: "/src/setup.sh",
         phase: "started",
-        started: {
-          source_workspace_root: "/src",
-          worktree_root: "/worktree",
-          script_path: "/src/setup.sh",
-        },
       },
     });
 
     expect(events).toEqual([
       {
         setupOperationID,
+        sourceWorkspaceRoot: "/src",
+        worktreeRoot: "/worktree",
+        scriptPath: "/src/setup.sh",
         phase: "started",
-        started: {
-          sourceWorkspaceRoot: "/src",
-          worktreeRoot: "/worktree",
-          scriptPath: "/src/setup.sh",
-        },
+        timeout: false,
+        canceled: false,
+        stdout: "",
+        stderr: "",
+        error: "",
       },
     ]);
 
     transport.emit("worktree.setup", {
       event: {
         setup_operation_id: "not-a-uuid",
+        source_workspace_root: "/src",
+        worktree_root: "/worktree",
+        script_path: "/src/setup.sh",
         phase: "started",
-        started: {
-          source_workspace_root: "/src",
-          worktree_root: "/worktree",
-          script_path: "/src/setup.sh",
-        },
       },
     });
 
     expect(errors[0]).toBeInstanceOf(ContractError);
   });
-
-  it("decodes terminal phase payloads and rejects inapplicable sentinel fields", () => {
-    const transport = new FakeRpcTransport([]);
-    const client = new ApiClient(transport);
-    const setupOperationID = newSetupOperationID();
-    const events: WorktreeSetupEvent[] = [];
-    const errors: Error[] = [];
-    client.subscribeWorktreeSetup(setupOperationID, {
-      onEvent(event) {
-        events.push(event);
-      },
-      onComplete() {
-        return;
-      },
-      onError(error) {
-        errors.push(error);
-      },
-    });
-
-    transport.emit("worktree.setup", {
-      event: {
-        setup_operation_id: setupOperationID.toJSONValue(),
-        phase: "not_required",
-        not_required: {
-          reason: "no_configured_script",
-          retained_previous_worktree: {
-            worktree: {
-              variant: "registered",
-              registered: {
-                git: {
-                  canonical_root: "/old-worktree",
-                  head_object: "abc123",
-                  branch_ref: "refs/heads/old-worktree",
-                  branch_name: "old-worktree",
-                  detached: false,
-                  bare: false,
-                  locked_reason: null,
-                  prunable_reason: null,
-                  is_main: false,
-                  path_available: true,
-                },
-                kent: {
-                  worktree_id: "worktree-old",
-                  canonical_root: "/old-worktree",
-                  display_name: "old-worktree",
-                  managed: true,
-                  created_branch: false,
-                  origin_session_id: null,
-                },
-              },
-            },
-          },
-        },
-      },
-    });
-    transport.emit("worktree.setup", {
-      event: {
-        setup_operation_id: setupOperationID.toJSONValue(),
-        phase: "failed",
-        failed: {
-          retry_readiness: "retry_ready",
-          cause: {
-            kind: "process_exit",
-            process_exit: { exit_code: 7, stdout: "", stderr: null },
-          },
-          diagnostic: "setup exited",
-          script_path: "/src/setup.sh",
-          execution_target: { mode: "custom_ref", custom_ref: "refs/heads/recovery" },
-          retained_worktree: registeredWorktreeWire("/worktree", "worktree-current"),
-          retained_previous_worktree: null,
-        },
-      },
-    });
-    transport.emit("worktree.setup", {
-      event: {
-        setup_operation_id: setupOperationID.toJSONValue(),
-        phase: "not_required",
-        not_required: {
-          reason: "no_configured_script",
-          retained_previous_worktree: null,
-        },
-        script_path: "",
-      },
-    });
-    transport.emit("worktree.setup", {
-      event: {
-        setup_operation_id: setupOperationID.toJSONValue(),
-        phase: "failed",
-        failed: {
-          retry_readiness: "retry_ready",
-          cause: {
-            kind: "canceled",
-            canceled: {},
-          },
-          diagnostic: "preparation canceled",
-          script_path: null,
-          execution_target: null,
-          retained_worktree: null,
-          retained_previous_worktree: null,
-        },
-      },
-    });
-
-    expect(events).toMatchObject([
-      {
-        setupOperationID,
-        phase: "not_required",
-        notRequired: {
-          reason: "no_configured_script",
-          retainedPreviousWorktree: {
-            worktree: {
-              variant: "registered",
-              registered: {
-                git: {
-                  canonicalRoot: "/old-worktree",
-                  headObject: "abc123",
-                  branchRef: "refs/heads/old-worktree",
-                  branchName: "old-worktree",
-                  detached: false,
-                  bare: false,
-                  lockedReason: null,
-                  prunableReason: null,
-                  isMain: false,
-                  pathAvailable: true,
-                },
-                kent: {
-                  worktreeID: "worktree-old",
-                  canonicalRoot: "/old-worktree",
-                  displayName: "old-worktree",
-                  managed: true,
-                  createdBranch: false,
-                  originSessionID: null,
-                },
-              },
-            },
-          },
-        },
-      },
-      {
-        setupOperationID,
-        phase: "failed",
-        failed: {
-          retryReadiness: "retry_ready",
-          cause: { kind: "process_exit", exitCode: 7, stdout: "", stderr: null },
-          diagnostic: "setup exited",
-          scriptPath: "/src/setup.sh",
-          executionTarget: { mode: "custom_ref", customRef: "refs/heads/recovery" },
-          retainedWorktree: {
-            registered: {
-              git: { canonicalRoot: "/worktree" },
-              kent: { worktreeID: "worktree-current", canonicalRoot: "/worktree" },
-            },
-          },
-          retainedPreviousWorktree: null,
-        },
-      },
-    ]);
-    expect(errors).toHaveLength(2);
-    expect(errors[0]).toBeInstanceOf(ContractError);
-  });
-
 });

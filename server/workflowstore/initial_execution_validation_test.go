@@ -1,6 +1,7 @@
 package workflowstore
 
 import (
+	"database/sql"
 	"errors"
 	"testing"
 
@@ -65,11 +66,8 @@ func TestRepeatedStartAfterRoleToolDriftSkipsInitialExecutionPreflight(t *testin
 	if errors.As(err, &validationErr) && validationErr.HasCode(workflow.CodeAgentRoleRequiredToolDisabled) {
 		t.Fatalf("repeated StartTask returned post-start role-tool validation: %+v", validationErr.Diagnostics)
 	}
-	var conflict TaskStartConflictError
-	if !errors.As(err, &conflict) ||
-		conflict.TaskID != task.ID ||
-		conflict.Reason != TaskStartConflictAlreadyStarted {
-		t.Fatalf("repeated StartTask error = %T %+v, want typed already-started conflict", err, err)
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("repeated StartTask error = %v, want no active Start placement", err)
 	}
 }
 

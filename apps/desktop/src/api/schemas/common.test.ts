@@ -50,7 +50,6 @@ const interruptedCurrentNodeAttentionItem = {
   current_node: { node_id: "node-1", transition_branch_key: null, session_id: null },
   session_id: null,
   session_name: null,
-  setup_operation_id: null,
   message: "Current Node interrupted",
   occurred_at_unix_ms: 1,
 };
@@ -91,7 +90,6 @@ describe("attentionItemSchema", () => {
     expect(interrupted.currentNode.nodeID).toBe("node-1");
     expect(interrupted.sessionID).toBeNull();
     expect(interrupted.detailJSON).toBeNull();
-    expect(interrupted.setupRecovery).toBeNull();
 
     const rejected = [
       { ...baseAttentionItem, kind: "validation_blocker" },
@@ -133,11 +131,6 @@ describe("attentionItemSchema", () => {
       { ...interruptedCurrentNodeAttentionItem, question: { kind: "ordinary" } },
       { ...interruptedCurrentNodeAttentionItem, approval_id: "approval-1" },
       { ...interruptedCurrentNodeAttentionItem, approval_snapshot: approvalSnapshot },
-      (() => {
-        const item = { ...interruptedCurrentNodeAttentionItem };
-        Reflect.deleteProperty(item, "setup_operation_id");
-        return item;
-      })(),
       { ...baseAttentionItem, session_id: "" },
       { ...interruptedCurrentNodeAttentionItem, detail_json: "" },
       (() => {
@@ -160,105 +153,6 @@ describe("attentionItemSchema", () => {
     for (const item of rejected) {
       expect(() => attentionItemSchema.parse(item)).toThrow();
     }
-  });
-
-  it("decodes the canonical typed setup-recovery interruption", () => {
-    const setupOperationID = "22222222-2222-4222-8222-222222222222";
-    const parsed = attentionItemSchema.parse({
-      ...interruptedCurrentNodeAttentionItem,
-      current_node: {
-        node_id: "canonical-node",
-        transition_branch_key: "fan-out",
-        session_id: null,
-      },
-      setup_operation_id: setupOperationID,
-      detail_json: JSON.stringify({
-        code: "workflow_setup_recovery",
-        fields: {},
-        setup_recovery: {
-          setup_operation_id: setupOperationID,
-          cause: "operational",
-          diagnostic: "setup failed after retry",
-          script_path: "/repo/setup.sh",
-          setup_requirement: "required",
-          execution_target: { mode: "head" },
-          retained_worktree: { worktree_id: "worktree-current", root: "/repo/current" },
-          retained_previous_worktree: {
-            worktree_id: "worktree-previous",
-            root: "/repo/previous",
-          },
-        },
-      }),
-    });
-    if (parsed.kind !== "interrupted_current_node") {
-      throw new Error("Expected interrupted Current Node attention.");
-    }
-    expect(parsed.setupOperationID?.toJSONValue()).toBe(setupOperationID);
-    expect(parsed.setupRecovery).toMatchObject({
-      diagnostic: "setup failed after retry",
-      scriptPath: "/repo/setup.sh",
-      setupRequirement: "required",
-      retainedWorktree: { worktreeID: "worktree-current", root: "/repo/current" },
-      retainedPreviousWorktree: {
-        worktreeID: "worktree-previous",
-        root: "/repo/previous",
-      },
-    });
-  });
-
-  it("rejects inconsistent setup-recovery interruption identity", () => {
-    const setupOperationID = "22222222-2222-4222-8222-222222222222";
-    const recoveryDetail = JSON.stringify({
-      code: "workflow_setup_recovery",
-      fields: {},
-      setup_recovery: {
-        setup_operation_id: setupOperationID,
-        cause: "target_preparation",
-        diagnostic: "target preparation failed",
-        script_path: null,
-        setup_requirement: "required",
-        execution_target: { mode: "default_branch" },
-        retained_worktree: null,
-        retained_previous_worktree: null,
-      },
-    });
-
-    expect(() =>
-      attentionItemSchema.parse({
-        ...interruptedCurrentNodeAttentionItem,
-        detail_json: recoveryDetail,
-      }),
-    ).toThrow();
-    expect(() =>
-      attentionItemSchema.parse({
-        ...interruptedCurrentNodeAttentionItem,
-        setup_operation_id: setupOperationID,
-        detail_json: JSON.stringify({
-          code: "workflow_runtime_failed",
-          fields: {},
-        }),
-      }),
-    ).toThrow();
-    expect(() =>
-      attentionItemSchema.parse({
-        ...interruptedCurrentNodeAttentionItem,
-        setup_operation_id: setupOperationID,
-        detail_json: JSON.stringify({
-          code: "workflow_setup_recovery",
-          fields: {},
-          setup_recovery: {
-            setup_operation_id: "33333333-3333-4333-8333-333333333333",
-            cause: "target_preparation",
-            diagnostic: "target preparation failed",
-            script_path: null,
-            setup_requirement: "required",
-            execution_target: { mode: "default_branch" },
-            retained_worktree: null,
-            retained_previous_worktree: null,
-          },
-        }),
-      }),
-    ).toThrow();
   });
 
   it("parses runtime approval question prompt metadata", () => {

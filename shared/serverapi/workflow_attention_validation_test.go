@@ -3,7 +3,6 @@ package serverapi
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"testing"
 
 	"core/shared/runtimeids"
@@ -25,24 +24,6 @@ func TestWorkflowAttentionItemEncodesAbsentSessionNameAsNull(t *testing.T) {
 	}
 	if string(sessionName) != "null" {
 		t.Fatalf("session_name = %s, want null", sessionName)
-	}
-}
-
-func TestWorkflowAttentionItemEncodesAbsentSetupOperationIDAsNull(t *testing.T) {
-	encoded, err := json.Marshal(validWorkflowAttentionInterrupted())
-	if err != nil {
-		t.Fatalf("marshal attention item: %v", err)
-	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(encoded, &fields); err != nil {
-		t.Fatalf("decode attention item: %v", err)
-	}
-	setupOperationID, present := fields["setup_operation_id"]
-	if !present {
-		t.Fatal("setup_operation_id was omitted")
-	}
-	if string(setupOperationID) != "null" {
-		t.Fatalf("setup_operation_id = %s, want null", setupOperationID)
 	}
 }
 
@@ -135,36 +116,6 @@ func TestWorkflowAttentionItemValidateRequiresStrictInterruptedDetailSchema(t *t
 			item.DetailJSON = textutil.Value(detail)
 			requireWorkflowAttentionValidationError(t, item.Validate(), "detail_json")
 		})
-	}
-}
-
-func TestWorkflowAttentionItemCarriesTypedSetupRecoveryIdentity(t *testing.T) {
-	setupOperationID := NewWorktreeSetupOperationID()
-	item := validWorkflowAttentionInterrupted()
-	item.SetupOperationID = &setupOperationID
-	item.DetailJSON = textutil.Value(fmt.Sprintf(
-		`{"code":"workflow_setup_recovery","fields":{},"setup_recovery":{"setup_operation_id":%q,"cause":"process_exit","diagnostic":"setup failed","script_path":"scripts/setup.sh","setup_requirement":"required","execution_target":{"mode":"head"},"retained_worktree":{"worktree_id":"worktree-1","root":"/repo/worktree-1"}}}`,
-		setupOperationID.String(),
-	))
-	if err := item.Validate(); err != nil {
-		t.Fatalf("setup recovery attention rejected: %v", err)
-	}
-
-	mismatch := NewWorktreeSetupOperationID()
-	item.SetupOperationID = &mismatch
-	requireWorkflowAttentionValidationError(t, item.Validate(), "setup_operation_id")
-}
-
-func TestWorkflowAttentionItemAcceptsTargetPreparationRecoveryWithoutRetainedWorktree(t *testing.T) {
-	setupOperationID := NewWorktreeSetupOperationID()
-	item := validWorkflowAttentionInterrupted()
-	item.SetupOperationID = &setupOperationID
-	item.DetailJSON = textutil.Value(fmt.Sprintf(
-		`{"code":"workflow_target_preparation_failed","fields":{},"setup_recovery":{"setup_operation_id":%q,"cause":"target_preparation","diagnostic":"target resolution failed","script_path":null,"setup_requirement":"required","execution_target":{"mode":"default_branch"}}}`,
-		setupOperationID.String(),
-	))
-	if err := item.Validate(); err != nil {
-		t.Fatalf("target-preparation recovery attention rejected: %v", err)
 	}
 }
 

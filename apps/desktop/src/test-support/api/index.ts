@@ -15,38 +15,6 @@ export type FakeRoute = Readonly<{
   handler?: (params: JsonValue, callIndex: number) => unknown;
 }>;
 
-export function registeredWorktreeWire(root: string, id: string) {
-  return {
-    variant: "registered",
-    registered: {
-      git: {
-        canonical_root: root,
-        head_object: "abc123",
-        branch_ref: null,
-        branch_name: null,
-        detached: false,
-        bare: false,
-        locked_reason: null,
-        prunable_reason: null,
-        is_main: false,
-        path_available: true,
-      },
-      kent: {
-        worktree_id: id,
-        canonical_root: root,
-        display_name: id,
-        managed: true,
-        created_branch: true,
-        origin_session_id: null,
-      },
-    },
-  } as const;
-}
-
-export function retainedPreviousWorktreeWire(root: string, id: string) {
-  return { worktree: registeredWorktreeWire(root, id) } as const;
-}
-
 export class FakeRpcTransport implements RpcTransport {
   readonly connection = new ConnectionStore();
   readonly calls: Readonly<{ method: string; params: JsonValue; options?: RpcCallOptions }>[] = [];
