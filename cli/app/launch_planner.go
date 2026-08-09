@@ -3,15 +3,12 @@ package app
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"strconv"
 	"strings"
 	"sync"
 
-	serverauth "core/server/auth"
-	"core/server/llm"
 	"core/shared/apicontract"
 	"core/shared/authstatus"
 	"core/shared/clientui"
@@ -165,10 +162,6 @@ func (p *launchPlanner) PlanSession(ctx context.Context, req sessionLaunchReques
 	cfg := p.server.Config()
 	activeSettings := resp.Plan.ActiveSettings
 	authSelection := authstatus.ProviderSelection(activeSettings)
-	authProviderFallback, err := authProviderFallbackFactsForSettings(activeSettings)
-	if err != nil {
-		return sessionLaunchPlan{}, fmt.Errorf("resolve active auth provider: %w", err)
-	}
 	sessionTitle, err := validateLaunchSessionTitle(resp.Plan.SessionName)
 	if err != nil {
 		return sessionLaunchPlan{}, err
@@ -183,31 +176,18 @@ func (p *launchPlanner) PlanSession(ctx context.Context, req sessionLaunchReques
 		PromptHistory:       append([]string(nil), resp.Plan.PromptHistory...),
 		ModelContractLocked: resp.Plan.ModelContractLocked,
 		StatusConfig: uiStatusConfig{
-			WorkspaceRoot:        executionTarget.EffectiveWorkdir,
-			ExecutionTarget:      executionTarget,
-			PersistenceRoot:      cfg.PersistenceRoot,
-			SessionViews:         p.server.SessionViewClient(),
-			Settings:             activeSettings,
-			AuthProviderFallback: &authProviderFallback,
-			AuthSelection:        &authSelection,
-			Source:               resp.Plan.Source,
-			AuthStatus:           p.server.AuthStatusClient(),
+			WorkspaceRoot:   executionTarget.EffectiveWorkdir,
+			ExecutionTarget: executionTarget,
+			PersistenceRoot: cfg.PersistenceRoot,
+			SessionViews:    p.server.SessionViewClient(),
+			Settings:        activeSettings,
+			AuthSelection:   &authSelection,
+			Source:          resp.Plan.Source,
+			AuthStatus:      p.server.AuthStatusClient(),
 		},
 		ExecutionTarget: executionTarget,
 		Source:          resp.Plan.Source,
 	}, nil
-}
-
-func authProviderFallbackFactsForSettings(settings config.Settings) (serverapi.AuthProviderFacts, error) {
-	capabilities, err := llm.ResolveRuntimeProviderCapabilities(serverauth.EmptyState(), settings)
-	if err != nil {
-		return serverapi.AuthProviderFacts{}, err
-	}
-	return authstatus.ProviderFacts(
-		capabilities.ProviderID,
-		capabilities.IsOpenAIFirstParty,
-		settings,
-	), nil
 }
 
 func loadSelectedSessionExecutionTarget(ctx context.Context, sessionViews sessionViewReader, sessionID string) (clientui.SessionExecutionTarget, error) {

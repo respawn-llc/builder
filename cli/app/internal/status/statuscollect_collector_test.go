@@ -133,9 +133,8 @@ func TestCollectorRequestsEffectiveSessionAuthProvider(t *testing.T) {
 	selection := authstatus.ProviderSelection(config.Settings{OpenAIBaseURL: "https://session.example/v1"})
 
 	result := (Collector{}).CollectAuth(context.Background(), Request{
-		AuthStatus:           authStatus,
-		AuthProviderFallback: &provider,
-		AuthSelection:        &selection,
+		AuthStatus:    authStatus,
+		AuthSelection: &selection,
 	}, Snapshot{})
 
 	if authStatus.request.Provider == nil ||

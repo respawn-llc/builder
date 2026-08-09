@@ -7,17 +7,16 @@ import (
 	"net/url"
 	"strings"
 
-	"core/shared/authstatus"
 	"core/shared/serverapi"
 )
 
-func AuthStageFromResponse(response serverapi.AuthStatusResponse, requestedProvider *serverapi.AuthProviderFacts) AuthStageResult {
+func AuthStageFromResponse(response serverapi.AuthStatusResponse) AuthStageResult {
 	if err := response.Validate(); err != nil {
-		return UnavailableAuthStage(err, requestedProvider)
+		return UnavailableAuthStage(err)
 	}
 	resolution := response.Resolution
 	if resolution.Kind == serverapi.AuthStatusResolutionUnavailable {
-		return UnavailableAuthStage(fmt.Errorf("%s", resolution.Failure.Cause), requestedProvider)
+		return UnavailableAuthStage(fmt.Errorf("%s", resolution.Failure.Cause))
 	}
 	facts := *resolution.Facts
 	result := AuthStageResult{
@@ -30,7 +29,7 @@ func AuthStageFromResponse(response serverapi.AuthStatusResponse, requestedProvi
 	return result
 }
 
-func UnavailableAuthStage(err error, provider *serverapi.AuthProviderFacts) AuthStageResult {
+func UnavailableAuthStage(err error) AuthStageResult {
 	cause := strings.TrimSpace(err.Error())
 	result := AuthStageResult{
 		Auth: AuthInfo{
@@ -40,13 +39,6 @@ func UnavailableAuthStage(err error, provider *serverapi.AuthProviderFacts) Auth
 			Unavailable: true,
 		},
 		Warning: "auth: " + cause,
-	}
-	if provider == nil || authstatus.SupportsSubscriptionUsageForProvider(*provider) {
-		result.Subscription = SubscriptionInfo{
-			Applicable: true,
-			Summary:    "Subscription unavailable: " + cause,
-			Error:      cause,
-		}
 	}
 	return result
 }

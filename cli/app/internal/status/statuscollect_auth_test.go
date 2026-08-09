@@ -28,13 +28,13 @@ func TestAuthStageFromResponseProjectsTypedMethods(t *testing.T) {
 		APIKey:        &serverapi.AuthAPIKeyFacts{Suffix: &longSuffix},
 	}, nil)
 
-	short := AuthStageFromResponse(shortKey, nil)
+	short := AuthStageFromResponse(shortKey)
 	if short.Auth.Summary != "API Key" ||
 		AuthDisplayLabel(short.Auth) != "OpenAI API Key" ||
 		!reflect.DeepEqual(short.Auth.Details, []string{"OpenAI", "OPENAI_API_KEY preferred"}) {
 		t.Fatalf("short key projection = %+v", short)
 	}
-	long := AuthStageFromResponse(longKey, nil)
+	long := AuthStageFromResponse(longKey)
 	if long.Auth.Summary != "API Key ...1234" ||
 		!reflect.DeepEqual(long.Auth.Details, []string{"OpenAI", "saved auth preferred"}) {
 		t.Fatalf("long key projection = %+v", long)
@@ -44,7 +44,7 @@ func TestAuthStageFromResponseProjectsTypedMethods(t *testing.T) {
 func TestAuthStageFromResponseProjectsUnavailableAndRetainedOAuth(t *testing.T) {
 	unavailable := AuthStageFromResponse(serverapi.AuthStatusResponse{
 		Resolution: serverapi.UnavailableAuthStatusResolution(serverapi.AuthStatusFailure{Cause: "permission denied"}),
-	}, nil)
+	})
 	if unavailable.Auth.Summary != "Auth unavailable" ||
 		!unavailable.Auth.Unavailable ||
 		unavailable.Warning != "auth: permission denied" {
@@ -64,7 +64,7 @@ func TestAuthStageFromResponseProjectsUnavailableAndRetainedOAuth(t *testing.T) 
 			Applicable: true,
 			Failure:    &refreshFailure,
 		},
-	}, nil)
+	})
 	if retained.Auth.Summary != email ||
 		AuthDisplayLabel(retained.Auth) != "OpenAI Subscription" ||
 		!reflect.DeepEqual(retained.Auth.Details, []string{"refresh failed"}) ||
@@ -92,7 +92,7 @@ func TestAuthStageFromResponseProjectsCredentialFreeProviderOrigin(t *testing.T)
 			APIKey:        &serverapi.AuthAPIKeyFacts{},
 		}, nil),
 	}
-	projected := AuthStageFromResponse(response, nil)
+	projected := AuthStageFromResponse(response)
 	origin := "https://example.com:8443"
 	if projected.Auth.Provider != origin ||
 		AuthDisplayLabel(projected.Auth) != origin+" API Key" ||
@@ -139,7 +139,7 @@ func TestSubscriptionProjectionPreservesDurationAndDuplicateBuckets(t *testing.T
 			},
 		},
 	}
-	projected := AuthStageFromResponse(response, nil).Subscription
+	projected := AuthStageFromResponse(response).Subscription
 	if projected.Summary != "Pro subscription" || len(projected.Windows) != 4 {
 		t.Fatalf("subscription = %+v", projected)
 	}
@@ -155,21 +155,9 @@ func TestSubscriptionProjectionPreservesDurationAndDuplicateBuckets(t *testing.T
 	}
 }
 
-func TestUnavailableAuthStageSurfacesRPCFailure(t *testing.T) {
-	result := UnavailableAuthStage(errors.New("connection lost"), nil)
-	if result.Subscription.Summary != "Subscription unavailable: connection lost" ||
-		result.Subscription.Error != "connection lost" {
-		t.Fatalf("RPC failure projection = %+v", result)
-	}
-}
-
-func TestUnavailableAuthStageKeepsCustomProviderSubscriptionInapplicable(t *testing.T) {
-	provider := serverapi.AuthProviderFacts{
-		Kind:       serverapi.AuthProviderKindConfiguredProvider,
-		Identifier: "anthropic",
-	}
-	result := UnavailableAuthStage(errors.New("connection lost"), &provider)
+func TestUnavailableAuthStageKeepsSubscriptionApplicabilityUnknown(t *testing.T) {
+	result := UnavailableAuthStage(errors.New("connection lost"))
 	if result.Subscription.Applicable || result.Subscription.Summary != "" {
-		t.Fatalf("custom-provider RPC failure projection = %+v", result)
+		t.Fatalf("RPC failure invented subscription applicability: %+v", result)
 	}
 }

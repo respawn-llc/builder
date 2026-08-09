@@ -59,10 +59,6 @@ func ProviderSettings(selection serverapi.AuthProviderSelection) config.Settings
 	return settings
 }
 
-func SupportsSubscriptionUsageForProvider(provider serverapi.AuthProviderFacts) bool {
-	return provider.Kind == serverapi.AuthProviderKindOpenAI
-}
-
 func SupportsSubscriptionUsage(settings config.Settings, isOpenAIFirstParty bool) bool {
 	if !isOpenAIFirstParty {
 		return false

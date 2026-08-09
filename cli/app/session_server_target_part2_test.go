@@ -108,11 +108,6 @@ func TestStartSessionServerUsesInvocationOverridesWhenAttachingToDiscoveredDaemo
 	if plan.ActiveSettings.Model != "gpt-5.3-codex" {
 		t.Fatalf("model = %q, want gpt-5.3-codex", plan.ActiveSettings.Model)
 	}
-	if plan.StatusConfig.AuthProviderFallback == nil ||
-		plan.StatusConfig.AuthProviderFallback.DisplayOrigin == nil ||
-		plan.StatusConfig.AuthProviderFallback.DisplayOrigin.Hostname != "127.0.0.1" {
-		t.Fatalf("status auth provider fallback = %+v, want invocation override", plan.StatusConfig.AuthProviderFallback)
-	}
 	if plan.StatusConfig.AuthSelection == nil ||
 		plan.StatusConfig.AuthSelection.OpenAIBaseURL == nil ||
 		!strings.HasPrefix(*plan.StatusConfig.AuthSelection.OpenAIBaseURL, "http://127.0.0.1:") {

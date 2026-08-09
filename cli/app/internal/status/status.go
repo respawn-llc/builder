@@ -43,7 +43,6 @@ type Request struct {
 	Source                config.SourceReport
 	CacheKeys             CacheKeys
 	AuthStatus            apicontract.AuthStatusService
-	AuthProviderFallback  *serverapi.AuthProviderFacts
 	AuthSelection         *serverapi.AuthProviderSelection
 	SessionName           string
 	SessionID             string

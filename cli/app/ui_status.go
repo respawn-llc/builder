@@ -22,15 +22,14 @@ const (
 )
 
 type uiStatusConfig struct {
-	WorkspaceRoot        string
-	PersistenceRoot      string
-	ExecutionTarget      clientui.SessionExecutionTarget
-	SessionViews         apicontract.SessionViewService
-	Settings             config.Settings
-	AuthProviderFallback *serverapi.AuthProviderFacts
-	AuthSelection        *serverapi.AuthProviderSelection
-	Source               config.SourceReport
-	AuthStatus           apicontract.AuthStatusService
+	WorkspaceRoot   string
+	PersistenceRoot string
+	ExecutionTarget clientui.SessionExecutionTarget
+	SessionViews    apicontract.SessionViewService
+	Settings        config.Settings
+	AuthSelection   *serverapi.AuthProviderSelection
+	Source          config.SourceReport
+	AuthStatus      apicontract.AuthStatusService
 }
 
 type uiStatusCollector interface {
@@ -134,7 +133,6 @@ func (m *uiModel) newStatusRequest(now time.Time) uiStatusRequest {
 		ExecutionTarget:       executionTarget,
 		SessionViews:          m.statusConfig.SessionViews,
 		Settings:              m.statusConfig.Settings,
-		AuthProviderFallback:  m.statusConfig.AuthProviderFallback,
 		AuthSelection:         m.statusConfig.AuthSelection,
 		Source:                m.statusConfig.Source,
 		AuthStatus:            m.statusConfig.AuthStatus,
