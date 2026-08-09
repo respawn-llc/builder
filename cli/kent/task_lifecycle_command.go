@@ -832,6 +832,19 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 				renderTaskLifecyclePresentation(stderr, presentation)
 				return 1
 			}
+			var retainedErr *serverapi.WorkflowTaskMoveRetainedWorktreeError
+			if errors.As(err, &retainedErr) {
+				presentation, projectionErr := taskLifecycleRetainedWorktreePresentation(
+					taskLifecycleOperationMove,
+					positionals[0],
+					&retainedErr.RetainedPreviousWorktree,
+				)
+				if projectionErr != nil {
+					fmt.Fprintln(stderr, projectionErr)
+					return 1
+				}
+				renderTaskLifecyclePresentation(stderr, presentation)
+			}
 			if !writeWorkflowExecutionTargetError(stderr, err) &&
 				!writeWorkflowTaskMutationSelfTargetError(stderr, err) {
 				fmt.Fprintln(stderr, err)
@@ -859,6 +872,18 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			return 1
 		}
 		if resp.Outcome == serverapi.WorkflowExecutionTargetActionOutcomeNoOp {
+			if resp.NoOp != nil && resp.NoOp.RetainedPreviousWorktree != nil {
+				presentation, projectionErr := taskLifecycleRetainedWorktreePresentation(
+					taskLifecycleOperationMove,
+					positionals[0],
+					resp.NoOp.RetainedPreviousWorktree,
+				)
+				if projectionErr != nil {
+					fmt.Fprintln(stderr, projectionErr)
+					return 1
+				}
+				renderTaskLifecyclePresentation(stderr, presentation)
+			}
 			if *jsonOut {
 				return writeCommandJSON(stdout, stderr, resp)
 			}

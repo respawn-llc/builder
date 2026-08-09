@@ -1,6 +1,7 @@
 package workflowcontract
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -86,6 +87,20 @@ func TestSetupRecoveryDetailOwnsCanonicalValidation(t *testing.T) {
 	targetPreparation.RetainedWorktree = nil
 	if err := targetPreparation.Validate(); err != nil {
 		t.Fatalf("Validate target preparation without retained worktree: %v", err)
+	}
+	encoded, err := json.Marshal(targetPreparation)
+	if err != nil {
+		t.Fatalf("Marshal target preparation: %v", err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		t.Fatalf("Decode target preparation: %v", err)
+	}
+	for _, field := range []string{"retained_worktree", "retained_previous_worktree"} {
+		value, exists := fields[field]
+		if !exists || string(value) != "null" {
+			t.Fatalf("%s = %s, exists %t; want explicit null", field, value, exists)
+		}
 	}
 	targetPreparation.ScriptPath = stringPointer("scripts/setup.sh")
 	if err := targetPreparation.Validate(); err == nil {

@@ -556,6 +556,9 @@ func protocolError(resp *protocol.ResponseError) error {
 	if resp.Code == protocol.ErrCodeWorkflowTaskMovePreparation && len(resp.Data) > 0 {
 		return serverapi.DecodeWorkflowTaskMovePreparationError(resp.Data, message)
 	}
+	if resp.Code == protocol.ErrCodeWorkflowTaskMoveRetainedWorktree && len(resp.Data) > 0 {
+		return serverapi.DecodeWorkflowTaskMoveRetainedWorktreeError(resp.Data, message)
+	}
 	if resp.Code == protocol.ErrCodeWorkflowTaskDependency && len(resp.Data) > 0 {
 		return serverapi.DecodeWorkflowTaskDependencyError(resp.Data, message)
 	}

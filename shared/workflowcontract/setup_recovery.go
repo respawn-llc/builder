@@ -24,8 +24,8 @@ type SetupRecoveryDetail[OperationID SetupRecoveryUUID, ExecutionTarget SetupRec
 	ScriptPath               *string                           `json:"script_path"`
 	SetupRequirement         worktreecontract.SetupRequirement `json:"setup_requirement"`
 	ExecutionTarget          ExecutionTarget                   `json:"execution_target"`
-	RetainedWorktree         *RetainedWorktree                 `json:"retained_worktree,omitempty"`
-	RetainedPreviousWorktree *RetainedWorktree                 `json:"retained_previous_worktree,omitempty"`
+	RetainedWorktree         *RetainedWorktree                 `json:"retained_worktree"`
+	RetainedPreviousWorktree *RetainedWorktree                 `json:"retained_previous_worktree"`
 }
 
 type RetainedWorktree struct {

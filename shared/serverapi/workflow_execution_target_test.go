@@ -201,6 +201,25 @@ func TestWorkflowTaskMovePreparationErrorRequiresSetupScriptForScriptFailure(t *
 	}
 }
 
+func TestWorkflowTaskMoveRetainedWorktreeErrorRoundTrips(t *testing.T) {
+	source, err := NewWorkflowTaskMoveRetainedWorktreeError(
+		*testRetainedPreviousWorktree(),
+		errors.New("manual move is blocked"),
+	)
+	if err != nil {
+		t.Fatalf("NewWorkflowTaskMoveRetainedWorktreeError: %v", err)
+	}
+	decoded := DecodeWorkflowTaskMoveRetainedWorktreeError(source.RPCErrorData(), source.Error())
+	var retained *WorkflowTaskMoveRetainedWorktreeError
+	if !errors.As(decoded, &retained) ||
+		retained.RetainedPreviousWorktree.Worktree.Registered == nil {
+		t.Fatalf("decoded retained-Worktree error = %+v (%v)", retained, decoded)
+	}
+	if source.RPCErrorCode() != protocol.ErrCodeWorkflowTaskMoveRetainedWorktree {
+		t.Fatalf("RPC error code = %d", source.RPCErrorCode())
+	}
+}
+
 func TestWorkflowGraphMetadataExecutionTargetPolicyValidation(t *testing.T) {
 	customRef := "refs/tags/v1"
 	if err := (WorkflowGraphSavePreviewRequest{

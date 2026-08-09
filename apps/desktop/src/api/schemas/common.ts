@@ -459,8 +459,8 @@ const taskSetupRecoveryDetailSchema = z
         script_path: nonBlankString.nullable(),
         setup_requirement: z.enum(["required", "already_completed"]),
         execution_target: workflowExecutionTargetSelectionSchema,
-        retained_worktree: taskSetupRecoveryRetainedWorktreeSchema.optional(),
-        retained_previous_worktree: taskSetupRecoveryRetainedWorktreeSchema.optional(),
+        retained_worktree: taskSetupRecoveryRetainedWorktreeSchema.nullable(),
+        retained_previous_worktree: taskSetupRecoveryRetainedWorktreeSchema.nullable(),
       })
       .strict(),
   })
@@ -479,7 +479,7 @@ const taskSetupRecoveryDetailSchema = z
       value.setup_recovery.cause !== "target_preparation" &&
       (value.setup_recovery.setup_requirement !== "required" ||
         value.setup_recovery.script_path === null ||
-        value.setup_recovery.retained_worktree === undefined)
+        value.setup_recovery.retained_worktree === null)
     ) {
       context.addIssue({
         code: "custom",
@@ -488,7 +488,7 @@ const taskSetupRecoveryDetailSchema = z
     }
     if (
       value.setup_recovery.setup_requirement === "already_completed" &&
-      value.setup_recovery.retained_worktree === undefined
+      value.setup_recovery.retained_worktree === null
     ) {
       context.addIssue({
         code: "custom",

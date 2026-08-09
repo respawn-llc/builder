@@ -228,7 +228,7 @@ func TestExecutableMoveWithProceedSkipsDependencyReaderBeforeTargetCompatibility
 			"plan": {"prior_summary": "manual plan"},
 		},
 		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
-			Mode: serverapi.WorkflowExecutionTargetModeNone,
+			Mode: serverapi.WorkflowExecutionTargetModeHead,
 		},
 	})
 	if !errors.Is(err, workflowstore.ErrExecutionTargetAlreadyLocked) {

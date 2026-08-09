@@ -968,7 +968,7 @@ func TestServiceManualMoveApprovalAppliesImmediately(t *testing.T) {
 }
 
 func TestServiceManualMoveRevalidatesTaskQuiescenceBeforeDurableApply(t *testing.T) {
-	ctx, service, binding := newWorkflowServiceTestContext(t)
+	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
 	workflowID := createWorkflowServiceChainedWorkflow(t, ctx, service)
 	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
 	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
@@ -980,16 +980,53 @@ func TestServiceManualMoveRevalidatesTaskQuiescenceBeforeDurableApply(t *testing
 	execution := newManualMoveExecutionStub(service)
 	execution.quiescentErrors = []error{workflowexecution.ErrTaskExecutionNotQuiescent}
 	service.currentNodeExecution = execution
+	requestedRef := "HEAD"
+	commitOID := strings.Repeat("d", 40)
+	worktreeID := "worktree-" + task.Task.ID
+	worktreeRoot := filepath.Join(t.TempDir(), "task-worktree")
+	previous := retainedPreviousWorktreeFixture(filepath.Join(t.TempDir(), "previous"), "worktree-previous")
+	prepareCalls := 0
+	service.executionTargets = &recordingExecutionTargetInfrastructure{
+		resolution: workflowstore.ExecutionTargetSnapshot{
+			Mode:         workflow.ExecutionTargetModeHead,
+			RequestedRef: &requestedRef,
+			CommitOID:    &commitOID,
+			Provenance:   workflowstore.ExecutionTargetProvenanceResolved,
+		},
+		prepare: func(req TaskExecutionRootPreparationRequest) (TaskExecutionRootPreparation, error) {
+			prepareCalls++
+			bindWorkflowServiceProvisionalWorktree(
+				t, ctx, metadataStore, binding, req.TaskID, worktreeID, worktreeRoot,
+			)
+			return TaskExecutionRootPreparation{
+				Root: workflowstore.ExecutionRoot{
+					SourceWorkspaceID:   req.SourceWorkspaceID,
+					SourceWorkspaceRoot: req.SourceWorkspaceRoot,
+					Managed: &workflowstore.ManagedExecutionRoot{
+						WorktreeID: worktreeID,
+						Root:       worktreeRoot,
+					},
+				},
+				SetupResult: &worktree.WorktreeSetupResult{
+					Completed: &serverapi.WorktreeSetupCompleted{},
+				},
+				RetainedPreviousWorktree: previous,
+			}, nil
+		},
+	}
 
 	_, err = service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
 		TaskID:       task.Task.ID,
 		TargetNodeID: targetNodeID,
 		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
-			Mode: serverapi.WorkflowExecutionTargetModeNone,
+			Mode: serverapi.WorkflowExecutionTargetModeHead,
 		},
 	})
-	if !errors.Is(err, workflowexecution.ErrTaskExecutionNotQuiescent) {
-		t.Fatalf("MoveWorkflowTask quiescence error = %v, want %v", err, workflowexecution.ErrTaskExecutionNotQuiescent)
+	var retainedErr *serverapi.WorkflowTaskMoveRetainedWorktreeError
+	if !errors.As(err, &retainedErr) ||
+		!errors.Is(err, workflowexecution.ErrTaskExecutionNotQuiescent) ||
+		retainedErr.RetainedPreviousWorktree.Worktree.Registered.Kent.WorktreeID != "worktree-previous" {
+		t.Fatalf("MoveWorkflowTask quiescence error = %T %+v, want retained previous Worktree", err, err)
 	}
 	currentNodes, err := service.store.ListCurrentNodes(ctx, workflow.TaskID(task.Task.ID))
 	if err != nil {
@@ -1002,11 +1039,25 @@ func TestServiceManualMoveRevalidatesTaskQuiescenceBeforeDurableApply(t *testing
 	if err != nil {
 		t.Fatalf("GetTaskExecutionTargetContext: %v", err)
 	}
-	if targetContext.Task.ExecutionTarget != nil {
-		t.Fatalf("rejected move locked execution target = %+v", targetContext.Task.ExecutionTarget)
+	if targetContext.Task.ExecutionTarget == nil ||
+		targetContext.Task.ExecutionTarget.Mode != workflow.ExecutionTargetModeHead {
+		t.Fatalf("rejected move execution target = %+v, want successfully prepared target locked", targetContext.Task.ExecutionTarget)
 	}
 	if len(execution.quiescentTaskIDs) != 1 {
 		t.Fatalf("quiescence checks = %v, want durable revalidation only", execution.quiescentTaskIDs)
+	}
+	retried, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
+		TaskID:       task.Task.ID,
+		TargetNodeID: targetNodeID,
+		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
+			Mode: serverapi.WorkflowExecutionTargetModeHead,
+		},
+	})
+	if err != nil || retried.Applied == nil {
+		t.Fatalf("MoveWorkflowTask retry = %+v, %v; want applied", retried, err)
+	}
+	if prepareCalls != 1 {
+		t.Fatalf("execution-root preparations = %d, want completed setup preserved", prepareCalls)
 	}
 }
 

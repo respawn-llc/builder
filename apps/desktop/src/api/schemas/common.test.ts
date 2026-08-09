@@ -212,6 +212,8 @@ describe("attentionItemSchema", () => {
         script_path: null,
         setup_requirement: "required",
         execution_target: { mode: "default_branch" },
+        retained_worktree: null,
+        retained_previous_worktree: null,
       },
     });
 
@@ -245,6 +247,8 @@ describe("attentionItemSchema", () => {
             script_path: null,
             setup_requirement: "required",
             execution_target: { mode: "default_branch" },
+            retained_worktree: null,
+            retained_previous_worktree: null,
           },
         }),
       }),

@@ -1123,11 +1123,24 @@ func coordinateInitiatingAction[T any](ctx context.Context, service *Service, re
 		if targetDecision.prepared != nil {
 			candidate = targetDecision.prepared.candidate
 			retainedPreviousWorktree = targetDecision.prepared.retainedPreviousWorktree
+			if candidate != nil {
+				if err := service.store.LockTaskExecutionTarget(ctx, req.taskID, candidate); err != nil {
+					preparationFailure, preparationFailureErr := movePreparationError(*targetDecision.prepared, err)
+					if preparationFailureErr != nil {
+						return initiatingActionResult[T]{}, errors.Join(err, preparationFailureErr)
+					}
+					return initiatingActionResult[T]{
+						retainedPreviousWorktree: retainedPreviousWorktree,
+						preparationFailure:       preparationFailure,
+					}, err
+				}
+				candidate = nil
+			}
 		}
 	}
 	if req.afterTargetResolution != nil {
 		if err := req.afterTargetResolution(); err != nil {
-			return initiatingActionResult[T]{}, err
+			return initiatingActionResult[T]{retainedPreviousWorktree: retainedPreviousWorktree}, err
 		}
 	}
 	applied, err := apply(candidate)
@@ -1138,7 +1151,7 @@ func coordinateInitiatingAction[T any](ctx context.Context, service *Service, re
 		if applied != nil {
 			return initiatingActionResult[T]{applied: applied, retainedPreviousWorktree: retainedPreviousWorktree}, err
 		}
-		return initiatingActionResult[T]{}, err
+		return initiatingActionResult[T]{retainedPreviousWorktree: retainedPreviousWorktree}, err
 	}
 	return initiatingActionResult[T]{applied: applied, retainedPreviousWorktree: retainedPreviousWorktree}, nil
 }
@@ -1831,6 +1844,17 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 			}
 		}
 		targetPreflight, err = s.preflightInitiatingActionTarget(ctx, moveRequest.TaskID, req.ExecutionTarget)
+		if errors.Is(err, workflowstore.ErrExecutionTargetAlreadyLocked) && req.ExecutionTarget != nil {
+			targetPreflight, err = s.preflightInitiatingActionTarget(ctx, moveRequest.TaskID, nil)
+			selection := workflow.ExecutionTargetSelection{
+				Mode:      workflow.ExecutionTargetMode(req.ExecutionTarget.Mode),
+				CustomRef: req.ExecutionTarget.CustomRef,
+			}
+			if err == nil && (targetPreflight.context.Task.ExecutionTarget == nil ||
+				!targetPreflight.context.Task.ExecutionTarget.MatchesSelection(selection)) {
+				err = workflowstore.ErrExecutionTargetAlreadyLocked
+			}
+		}
 		if err != nil {
 			return serverapi.WorkflowTaskMoveResponse{}, err
 		}
@@ -1867,13 +1891,24 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 		return serverapi.WorkflowTaskMoveResponse{
 			Outcome: serverapi.WorkflowExecutionTargetActionOutcomeNoOp,
 			NoOp: &serverapi.WorkflowTaskMoveNoOp{
-				CurrentNodes: workflowview.ProjectCurrentNodes(noOpBeforeInterrupt.currentNodes),
+				CurrentNodes:             workflowview.ProjectCurrentNodes(noOpBeforeInterrupt.currentNodes),
+				RetainedPreviousWorktree: coordinated.retainedPreviousWorktree,
 			},
 		}, nil
 	}
 	if err != nil && coordinated.applied == nil {
 		if coordinated.preparationFailure != nil {
 			return serverapi.WorkflowTaskMoveResponse{}, coordinated.preparationFailure
+		}
+		if coordinated.retainedPreviousWorktree != nil {
+			retainedErr, retainedErrCreation := serverapi.NewWorkflowTaskMoveRetainedWorktreeError(
+				*coordinated.retainedPreviousWorktree,
+				err,
+			)
+			if retainedErrCreation != nil {
+				return serverapi.WorkflowTaskMoveResponse{}, errors.Join(err, retainedErrCreation)
+			}
+			return serverapi.WorkflowTaskMoveResponse{}, retainedErr
 		}
 		return serverapi.WorkflowTaskMoveResponse{}, err
 	}

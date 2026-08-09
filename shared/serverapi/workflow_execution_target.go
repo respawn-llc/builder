@@ -115,6 +115,82 @@ type WorkflowTaskMovePreparationError struct {
 	cause           error
 }
 
+type WorkflowTaskMoveRetainedWorktreeError struct {
+	RetainedPreviousWorktree RetainedPreviousWorktree `json:"retained_previous_worktree"`
+	cause                    error
+}
+
+func NewWorkflowTaskMoveRetainedWorktreeError(
+	retained RetainedPreviousWorktree,
+	cause error,
+) (*WorkflowTaskMoveRetainedWorktreeError, error) {
+	result := &WorkflowTaskMoveRetainedWorktreeError{
+		RetainedPreviousWorktree: retained,
+		cause:                    cause,
+	}
+	if err := result.Validate(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (e *WorkflowTaskMoveRetainedWorktreeError) Error() string {
+	if e == nil || e.cause == nil || strings.TrimSpace(e.cause.Error()) == "" {
+		return "Workflow Task Move aborted after retaining a previous Worktree"
+	}
+	return e.cause.Error()
+}
+
+func (e *WorkflowTaskMoveRetainedWorktreeError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.cause
+}
+
+func (e *WorkflowTaskMoveRetainedWorktreeError) RPCErrorCode() int {
+	return protocol.ErrCodeWorkflowTaskMoveRetainedWorktree
+}
+
+func (e *WorkflowTaskMoveRetainedWorktreeError) RPCErrorData() json.RawMessage {
+	if e == nil {
+		return nil
+	}
+	return marshalRPCErrorData(struct {
+		Type                     string                   `json:"type"`
+		RetainedPreviousWorktree RetainedPreviousWorktree `json:"retained_previous_worktree"`
+	}{
+		Type:                     "workflow_task_move_retained_worktree",
+		RetainedPreviousWorktree: e.RetainedPreviousWorktree,
+	})
+}
+
+func (e *WorkflowTaskMoveRetainedWorktreeError) Validate() error {
+	if e == nil {
+		return errors.New("Workflow Task Move retained-Worktree error is required")
+	}
+	return e.RetainedPreviousWorktree.Validate()
+}
+
+func DecodeWorkflowTaskMoveRetainedWorktreeError(data json.RawMessage, message string) error {
+	var envelope struct {
+		Type                     string                   `json:"type"`
+		RetainedPreviousWorktree RetainedPreviousWorktree `json:"retained_previous_worktree"`
+	}
+	if err := protocol.DecodeStrictJSON(data, &envelope); err != nil ||
+		envelope.Type != "workflow_task_move_retained_worktree" {
+		return errors.New(strings.TrimSpace(message))
+	}
+	result := &WorkflowTaskMoveRetainedWorktreeError{
+		RetainedPreviousWorktree: envelope.RetainedPreviousWorktree,
+		cause:                    errors.New(strings.TrimSpace(message)),
+	}
+	if err := result.Validate(); err != nil {
+		return errors.New(strings.TrimSpace(message))
+	}
+	return result
+}
+
 func NewWorkflowTaskMovePreparationError(
 	failure WorktreeSetupFailed,
 	setupScriptPath *string,
@@ -528,7 +604,13 @@ func (r WorkflowTaskMoveResponse) Validate() error {
 }
 
 func validateWorkflowTaskMoveNoOp(noOp WorkflowTaskMoveNoOp) error {
-	return validateWorkflowTaskCurrentNodes(noOp.CurrentNodes, "move no_op payload")
+	if err := validateWorkflowTaskCurrentNodes(noOp.CurrentNodes, "move no_op payload"); err != nil {
+		return err
+	}
+	if noOp.RetainedPreviousWorktree != nil {
+		return noOp.RetainedPreviousWorktree.Validate()
+	}
+	return nil
 }
 
 func validateWorkflowTaskCurrentNodes(currentNodes []WorkflowTaskCurrentNode, payload string) error {

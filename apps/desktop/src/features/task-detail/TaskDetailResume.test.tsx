@@ -186,6 +186,7 @@ it("gives only the exact canonical setup interruption a recoverable Resume contr
             setup_requirement: "required",
             execution_target: { mode: "custom_ref", custom_ref: "refs/heads/dev" },
             retained_worktree: { worktree_id: "worktree-current", root: "/repo/current" },
+            retained_previous_worktree: null,
           },
         }),
         occurred_at_unix_ms: 2,

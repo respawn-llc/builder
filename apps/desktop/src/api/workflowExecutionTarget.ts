@@ -67,7 +67,11 @@ export type TaskMoveApplied = Readonly<{
   currentNodes: readonly TaskCurrentNode[];
   retainedPreviousWorktree: RetainedPreviousWorktree | null;
 }>;
-export type TaskMoveNoOp = Readonly<{ currentNodes: readonly TaskCurrentNode[] }>;
+export type TaskMoveNoOp = Readonly<{
+  currentNodes: readonly TaskCurrentNode[];
+  retainedPreviousWorktree: RetainedPreviousWorktree | null;
+}>;
+export type TaskMovePreviewNoOp = Readonly<{ currentNodes: readonly TaskCurrentNode[] }>;
 
 export type TaskApproveApplied = Readonly<{ taskID: string; currentNodes: readonly TaskCurrentNode[] }>;
 
@@ -121,7 +125,7 @@ export type TaskMovePreviewChoice = Readonly<{
 }>;
 
 export type TaskMovePreviewResponse =
-  | Readonly<{ outcome: "no_op"; noOp: TaskMoveNoOp }>
+  | Readonly<{ outcome: "no_op"; noOp: TaskMovePreviewNoOp }>
   | Readonly<{ outcome: "direct"; direct: Readonly<Record<string, never>> }>
   | Readonly<{
       outcome: "transition";

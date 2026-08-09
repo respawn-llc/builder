@@ -383,7 +383,7 @@ describe("task initiating action controller", () => {
           action,
           response: {
             outcome: "no_op",
-            noOp: { currentNodes: [] },
+            noOp: { currentNodes: [], retainedPreviousWorktree: null },
           },
         };
       },

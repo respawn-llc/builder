@@ -237,7 +237,33 @@ export const taskResumeResponseSchema: z.ZodType<TaskResumeResponse> = z.discrim
   selectionRequiredResponseSchema,
 ]);
 
-const taskMoveNoOpResponseSchema = z
+const taskMoveActionNoOpResponseSchema = z
+  .object({
+    outcome: z.literal("no_op"),
+    no_op: z
+      .object({
+        current_nodes: z.array(currentNodeSchema).min(1),
+        retained_previous_worktree: retainedPreviousWorktreeSchema.nullable().optional(),
+      })
+      .strict(),
+  })
+  .strict()
+  .transform((value) => ({
+    outcome: value.outcome,
+    noOp: {
+      currentNodes: value.no_op.current_nodes,
+      retainedPreviousWorktree: value.no_op.retained_previous_worktree ?? null,
+    },
+  }));
+
+export const taskMoveResponseSchema: z.ZodType<TaskMoveResponse> = z.discriminatedUnion("outcome", [
+  moveAppliedResponseSchema,
+  selectionRequiredResponseSchema,
+  taskMoveActionNoOpResponseSchema,
+  dependencyConfirmationRequiredResponseSchema,
+]);
+
+const taskMovePreviewNoOpResponseSchema = z
   .object({
     outcome: z.literal("no_op"),
     no_op: z.object({ current_nodes: z.array(currentNodeSchema).min(1) }).strict(),
@@ -247,13 +273,6 @@ const taskMoveNoOpResponseSchema = z
     outcome: value.outcome,
     noOp: { currentNodes: value.no_op.current_nodes },
   }));
-
-export const taskMoveResponseSchema: z.ZodType<TaskMoveResponse> = z.discriminatedUnion("outcome", [
-  moveAppliedResponseSchema,
-  selectionRequiredResponseSchema,
-  taskMoveNoOpResponseSchema,
-  dependencyConfirmationRequiredResponseSchema,
-]);
 
 const manualMoveBlockerSchema = z.enum([
   "invalid_workflow",
@@ -286,7 +305,7 @@ const manualMoveRequiredValueSchema = z
 export const taskMovePreviewResponseSchema: z.ZodType<TaskMovePreviewResponse> = z.discriminatedUnion(
   "outcome",
   [
-    taskMoveNoOpResponseSchema,
+    taskMovePreviewNoOpResponseSchema,
     z
       .object({ outcome: z.literal("direct"), direct: z.object({}).strict() })
       .strict()

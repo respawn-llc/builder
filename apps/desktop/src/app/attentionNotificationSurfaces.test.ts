@@ -62,6 +62,8 @@ it("reconciles setup recovery against the exact Setup Operation", async () => {
                 script_path: null,
                 setup_requirement: "required",
                 execution_target: { mode: "default_branch" },
+                retained_worktree: null,
+                retained_previous_worktree: null,
               },
             }),
             occurred_at_unix_ms: 1,
