@@ -213,7 +213,7 @@
 - Desktop has no `/goal` command. The visible Goal affordance and Goal sidebar are its only Goal entry path.
 - Goal uses the shared adaptive contextual-sidebar host.
 - The same Goal sidebar handles creation and management. It edits the complete objective as Markdown and has an explicit `Save` action.
-- Goal objective editing uses the same shared UI-kit editor as Task Description. Desktop does not maintain a Goal-specific large-text editor implementation.
+- Goal objective uses the shared collapsible large Markdown field defined for Desktop and used by Task Description.
 - An existing Goal opens as rendered Markdown. Activating the objective enters the shared editor. Goal creation opens the editor focused.
 - `Save` appears only while the objective draft differs from the authoritative Goal and contains non-whitespace text. A whitespace-only draft has no Save action. Saving an existing Goal replaces it directly without another confirmation. Success keeps the sidebar open and re-baselines the editor to the authoritative Goal.
 - Every successful Save uses set-or-replace semantics: the resulting Goal is active and Goal work starts or continues, including when the previous Goal was paused or complete.

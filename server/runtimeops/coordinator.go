@@ -315,10 +315,6 @@ func (c *Coordinator) RecordQueuedMessageSubmitted(sessionID string, ref clientu
 	c.recordRuntimeAccepted(sessionID, ref, clientui.RuntimeInputReconciliationSubmitted)
 }
 
-func (c *Coordinator) RecordSubmitQueuedCompletion(sessionID string, ref clientui.RuntimeOperationRef, receipt session.CommitReceipt, err error) {
-	c.recordCompletionOutcome(sessionID, ref, receipt, err, c.RecordQueuedMessageSubmitted)
-}
-
 func (c *Coordinator) RecordCanceledNotCommitted(sessionID string, ref clientui.RuntimeOperationRef) {
 	c.record(sessionID, ref, clientui.RuntimeInputReconciliationCanceledNotCommitted)
 }

@@ -35,11 +35,6 @@ func TestAbsoluteForeignManagedWorktreePatchIsDeniedBeforeMove(t *testing.T) {
 	base := t.TempDir()
 	currentRoot := filepath.Join(base, "current")
 	foreignRoot := filepath.Join(base, "foreign")
-	for _, dir := range []string{currentRoot, foreignRoot} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatalf("mkdir %s: %v", dir, err)
-		}
-	}
 	if err := os.MkdirAll(filepath.Join(currentRoot, "nested"), 0o755); err != nil {
 		t.Fatalf("mkdir nested workdir: %v", err)
 	}
@@ -48,11 +43,23 @@ func TestAbsoluteForeignManagedWorktreePatchIsDeniedBeforeMove(t *testing.T) {
 	if err := os.WriteFile(source, []byte("before\n"), 0o644); err != nil {
 		t.Fatalf("write source: %v", err)
 	}
-	context, err := tools.NewManagedWorktreePathContext(base, &currentRoot, []string{currentRoot, foreignRoot})
+	pathContext, err := tools.NewManagedWorktreePathContext(base, &currentRoot, []string{currentRoot})
 	if err != nil {
 		t.Fatalf("managed worktree path context: %v", err)
 	}
-	tool := newPatchTestTool(t, filepath.Join(currentRoot, "nested"), WithManagedWorktreePathContext(context))
+	approvalCalls := 0
+	tool := newPatchTestTool(
+		t,
+		filepath.Join(currentRoot, "nested"),
+		WithManagedWorktreePathContext(pathContext),
+		WithOutsideWorkspaceApprover(func(context.Context, OutsideWorkspaceRequest) (OutsideWorkspaceApproval, error) {
+			approvalCalls++
+			return OutsideWorkspaceApproval{Decision: OutsideWorkspaceDecisionAllowOnce}, nil
+		}),
+	)
+	if err := os.MkdirAll(foreignRoot, 0o755); err != nil {
+		t.Fatalf("mkdir foreign root: %v", err)
+	}
 
 	result := callPatch(t, tool, "foreign-move", "*** Begin Patch\n*** Update File: "+source+"\n*** Move to: "+destination+"\n-before\n+after\n*** End Patch\n")
 
@@ -68,6 +75,9 @@ func TestAbsoluteForeignManagedWorktreePatchIsDeniedBeforeMove(t *testing.T) {
 	}
 	if _, err := os.Stat(destination); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("destination stat error = %v, want not exist", err)
+	}
+	if approvalCalls != 0 {
+		t.Fatalf("outside-workspace approval calls = %d, want 0", approvalCalls)
 	}
 }
 

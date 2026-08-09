@@ -285,6 +285,9 @@ func (c uiInputController) flushQueuedInputs(mode queueDrainMode) (tea.Model, te
 	if blocked, disconnectCmd := c.blockDisconnectedQueuedSubmission(); blocked {
 		return m, disconnectCmd
 	}
+	if m.injectedQueueBlocksDrain() || m.hasEnqueuedInjectedRuntimeWork() {
+		return m, nil
+	}
 	cmds := make([]tea.Cmd, 0, 2)
 	for len(m.queued) > 0 {
 		next := m.popQueued()
@@ -301,22 +304,11 @@ func (c uiInputController) flushQueuedInputs(mode queueDrainMode) (tea.Model, te
 func (c uiInputController) resumeQueuedInputsAfterIdleRuntime() tea.Cmd {
 	m := c.model
 	if m == nil || m.blocksRuntimeInput() || m.ask.hasCurrent() ||
-		m.pendingQueuedDrainAfterHydration || m.processList.actionInFlight {
+		m.processList.actionInFlight {
 		return nil
 	}
-	hasQueuedInputs := len(m.queued) > 0
-	hasInjectedWork := m.hasRuntimeClient() && m.hasEnqueuedInjectedRuntimeWork()
-	if !hasQueuedInputs && !hasInjectedWork {
+	if len(m.queued) == 0 {
 		return nil
-	}
-	if !hasQueuedInputs {
-		return c.startQueuedInjectionSubmission()
-	}
-	if m.hasRuntimeClient() && c.queuedDrainRequiresHydration() {
-		m.pendingQueuedDrainAfterHydration = true
-		m.queuedDrainReadyAfterHydration = false
-		m.layout().syncViewport()
-		return m.requestRuntimeQueuedDrainAfterHydration()
 	}
 	_, cmd := c.flushQueuedInputs(queueDrainAuto)
 	c.notifyTurnQueueDrainedIfIdle()
@@ -557,9 +549,6 @@ func (c uiInputController) handleInjectedQueueCreateDone(msg injectedQueueCreate
 		if approvalCommentaryAnswer != nil {
 			return m, m.answerQueuedApprovalCommentary(*approvalCommentaryAnswer)
 		}
-		if !m.blocksRuntimeInput() && !m.injectedQueueBlocksDrain() {
-			return m, c.startQueuedInjectionSubmission()
-		}
 	case injectedRuntimeQueueCanceledBeforeCreate:
 		token := m.nextInjectedQueueToken()
 		item.State = injectedRuntimeQueueDiscardPending
@@ -590,10 +579,7 @@ func (c uiInputController) handleInjectedQueueDiscardDone(msg injectedQueueDisca
 		m.removePendingInjectedByID(item.LocalID)
 		m.removePendingInjectedByID(item.ServerID)
 		m.removeInjectedQueueItemAt(index)
-		if !m.blocksRuntimeInput() && !m.injectedQueueBlocksDrain() {
-			return m, c.startQueuedInjectionSubmission()
-		}
-		return m, nil
+		return m, c.resumeQueuedInputsAfterIdleRuntime()
 	}
 	item.State = injectedRuntimeQueueDiscardFailed
 	m.injectedQueue[index] = item

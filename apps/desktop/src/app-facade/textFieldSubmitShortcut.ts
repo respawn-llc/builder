@@ -1,21 +1,16 @@
 import { useCallback, type KeyboardEvent as ReactKeyboardEvent, type KeyboardEventHandler } from "react";
 import type { NativePlatform } from "@app/native-bridge";
+
+import {
+  consumeTextFieldSubmitShortcut,
+  isTextFieldSubmitShortcut,
+  type TextFieldSubmitShortcutPolicy,
+} from "@/ui";
 import { useAppServices } from "./useAppServices";
-type TextFieldSubmitKeyEvent = Readonly<{
-  altKey: boolean;
-  ctrlKey: boolean;
-  defaultPrevented: boolean;
-  isComposing?: boolean | undefined;
-  key: string;
-  metaKey: boolean;
-  nativeEvent?: Readonly<{ isComposing?: boolean | undefined }> | undefined;
-  preventDefault(): void;
-  repeat: boolean;
-  shiftKey: boolean;
-  stopPropagation(): void;
-}>;
+
 type DirectShortcutOptions = Readonly<{ kind: "direct"; action: (() => void) | null; available: boolean }>;
 type FormShortcutOptions = Readonly<{ kind: "form"; available: boolean }>;
+
 export function useTextFieldSubmitShortcut(options: DirectShortcutOptions): KeyboardEventHandler<HTMLElement>;
 export function useTextFieldSubmitShortcut(
   options: FormShortcutOptions,
@@ -23,63 +18,48 @@ export function useTextFieldSubmitShortcut(
 export function useTextFieldSubmitShortcut(
   options: DirectShortcutOptions | FormShortcutOptions,
 ): KeyboardEventHandler<HTMLElement | HTMLFormElement> {
-  const { nativeBridge } = useAppServices();
-  const platform = nativeBridge.capabilities.platform;
+  const policy = useTextFieldSubmitShortcutPolicy();
   return useCallback(
     (event) => {
       if (options.kind === "direct") {
-        handleDirectTextFieldSubmit(event, platform, options.available, options.action);
+        handleDirectTextFieldSubmit(event, policy, options.available, options.action);
         return;
       }
-      handleFormTextFieldSubmit(event, platform, options.available);
+      handleFormTextFieldSubmit(event, policy, options.available);
     },
-    [options, platform],
+    [options, policy],
   );
 }
 
-export function isTextFieldSubmitShortcut(
-  event: Pick<
-    TextFieldSubmitKeyEvent,
-    | "altKey"
-    | "ctrlKey"
-    | "isComposing"
-    | "key"
-    | "metaKey"
-    | "nativeEvent"
-    | "repeat"
-    | "shiftKey"
-  >,
-  platform: NativePlatform,
-): boolean {
-  if (
-    event.key !== "Enter" ||
-    event.isComposing === true ||
-    event.nativeEvent?.isComposing === true ||
-    event.altKey ||
-    event.shiftKey
-  ) {
-    return false;
-  }
-  if (platform === "macos") {
-    return event.metaKey && !event.ctrlKey;
-  }
-  if (platform === "linux" || platform === "windows") {
-    return event.ctrlKey && !event.metaKey;
-  }
-  return false;
+export function useTextFieldSubmitShortcutPolicy(): TextFieldSubmitShortcutPolicy {
+  const { nativeBridge } = useAppServices();
+  return textFieldSubmitShortcutPolicyForPlatform(nativeBridge.capabilities.platform);
 }
 
-function handleDirectTextFieldSubmit(
-  event: TextFieldSubmitKeyEvent,
+export function textFieldSubmitShortcutPolicyForPlatform(
   platform: NativePlatform,
+): TextFieldSubmitShortcutPolicy {
+  if (platform === "macos") {
+    return "meta-enter";
+  }
+  if (platform === "linux" || platform === "windows") {
+    return "control-enter";
+  }
+  return "unavailable";
+}
+
+export { isTextFieldSubmitShortcut };
+export type { TextFieldSubmitShortcutPolicy };
+
+function handleDirectTextFieldSubmit(
+  event: ReactKeyboardEvent<HTMLElement>,
+  policy: TextFieldSubmitShortcutPolicy,
   available: boolean,
   action: (() => void) | null,
 ): void {
-  if (!isTextFieldSubmitShortcut(event, platform)) {
+  if (!consumeTextFieldSubmitShortcut(event, policy)) {
     return;
   }
-  event.preventDefault();
-  event.stopPropagation();
   if (!event.repeat && available) {
     action?.();
   }
@@ -87,10 +67,10 @@ function handleDirectTextFieldSubmit(
 
 function handleFormTextFieldSubmit(
   event: ReactKeyboardEvent<HTMLElement | HTMLFormElement>,
-  platform: NativePlatform,
+  policy: TextFieldSubmitShortcutPolicy,
   available: boolean,
 ): void {
-  if (event.defaultPrevented || !isTextFieldSubmitShortcut(event, platform)) {
+  if (event.defaultPrevented || !isTextFieldSubmitShortcut(event, policy)) {
     return;
   }
   const form = event.currentTarget;
@@ -101,8 +81,9 @@ function handleFormTextFieldSubmit(
   if (!isTextualFormTarget(target) || target.form !== form) {
     return;
   }
-  event.preventDefault();
-  event.stopPropagation();
+  if (!consumeTextFieldSubmitShortcut(event, policy)) {
+    return;
+  }
   if (!event.repeat && available) {
     form.requestSubmit();
   }

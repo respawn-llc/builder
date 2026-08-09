@@ -6,14 +6,31 @@ import (
 
 const defaultPersistenceObserverTimeout = 2 * time.Second
 
+type EventLogAppendObservation struct {
+	RecordCount int
+	Latency     time.Duration
+	Succeeded   bool
+}
+
+type EventLogSyncObservation struct {
+	Latency   time.Duration
+	Succeeded bool
+}
+
+type DurabilityObserver interface {
+	ObserveEventLogAppend(EventLogAppendObservation)
+	ObserveEventLogSync(EventLogSyncObservation)
+}
+
 type StoreOption func(*storeOptions)
 
 type storeOptions struct {
-	observer        PersistenceObserver
-	reconciler      EventLogReconciliationObserver
-	resolver        PersistedSessionResolver
-	observerTimeout time.Duration
-	now             func() time.Time
+	observer           PersistenceObserver
+	reconciler         EventLogReconciliationObserver
+	resolver           PersistedSessionResolver
+	durabilityObserver DurabilityObserver
+	observerTimeout    time.Duration
+	now                func() time.Time
 }
 
 func WithPersistenceObserver(observer PersistenceObserver) StoreOption {
@@ -28,6 +45,12 @@ func WithPersistenceObserver(observer PersistenceObserver) StoreOption {
 func WithPersistedSessionResolver(resolver PersistedSessionResolver) StoreOption {
 	return func(options *storeOptions) {
 		options.resolver = resolver
+	}
+}
+
+func WithDurabilityObserver(observer DurabilityObserver) StoreOption {
+	return func(options *storeOptions) {
+		options.durabilityObserver = observer
 	}
 }
 

@@ -76,8 +76,6 @@ func TestStaleHydrationDeveloperErrorPanicsInEveryModeBeforeSideEffects(t *testi
 			runtimeClient.storeMainView(current)
 			m := sizedTestUIModel(newProjectedTestUIModel(runtimeClient, WithUIDebug(debugMode)), 93, 31)
 			m.queued = []queuedInputItem{{ID: "queued-1", Text: "do not flush"}}
-			m.pendingQueuedDrainAfterHydration = true
-			m.queuedDrainReadyAfterHydration = true
 			surface := &ongoingSurfaceSpy{}
 			m.ongoingTranscript = newOngoingTranscriptController(
 				surface,
@@ -114,13 +112,6 @@ func TestStaleHydrationDeveloperErrorPanicsInEveryModeBeforeSideEffects(t *testi
 			}
 			assertUnchanged(t, "cached main view", runtimeClient.MainView(), beforeView)
 			assertUnchanged(t, "queued input", m.queued, beforeQueue)
-			if !m.pendingQueuedDrainAfterHydration || !m.queuedDrainReadyAfterHydration {
-				t.Fatalf(
-					"stale hydration changed drain flags: pending=%t ready=%t",
-					m.pendingQueuedDrainAfterHydration,
-					m.queuedDrainReadyAfterHydration,
-				)
-			}
 			if len(surface.calls) != 0 {
 				t.Fatalf("stale hydration reached terminal surface: %+v", surface.calls)
 			}

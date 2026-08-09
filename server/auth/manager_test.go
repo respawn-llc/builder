@@ -9,6 +9,50 @@ import (
 
 var managerTestNow = time.Date(2026, time.January, 1, 10, 0, 0, 0, time.UTC)
 
+type managerCountingStore struct {
+	state State
+	loads int
+}
+
+func (s *managerCountingStore) Load(context.Context) (State, error) {
+	s.loads++
+	return s.state, nil
+}
+
+func (*managerCountingStore) Save(context.Context, State) error {
+	return nil
+}
+
+func TestResolveCurrentStatePreservesLoadedStateOnRefreshFailure(t *testing.T) {
+	store := &managerCountingStore{
+		state: managerTestOAuthState("stale-token", "refresh-token", managerTestNow.Add(-time.Minute)),
+	}
+	refreshErr := errors.New("refresh failed")
+	mgr := NewManager(store, NewOAuthRefresher(
+		func() time.Time { return managerTestNow },
+		30*time.Second,
+		func(context.Context, Method) (Method, error) {
+			return Method{}, refreshErr
+		},
+	), func() time.Time { return managerTestNow })
+
+	resolution, err := mgr.ResolveCurrentState(context.Background())
+	if !errors.Is(err, refreshErr) {
+		t.Fatalf("ResolveCurrentState error = %v, want %v", err, refreshErr)
+	}
+	if store.loads != 1 {
+		t.Fatalf("auth state loads = %d, want 1", store.loads)
+	}
+	if resolution.Loaded == nil ||
+		resolution.Loaded.Method.OAuth == nil ||
+		resolution.Loaded.Method.OAuth.AccessToken != "stale-token" {
+		t.Fatalf("loaded state = %+v, want stale OAuth state", resolution.Loaded)
+	}
+	if resolution.Current != nil {
+		t.Fatalf("current state = %+v, want absent after refresh failure", resolution.Current)
+	}
+}
+
 func TestSwitchMethodRequiresIdle(t *testing.T) {
 	store := NewMemoryStore(testAuthStateAt(testAPIKeyState("old-key"), 10))
 	mgr := NewManager(store, nil, func() time.Time { return managerTestNow.Add(time.Minute) })

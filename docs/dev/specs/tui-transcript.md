@@ -38,7 +38,7 @@
 - **Tool completion appends exactly one final committed line in Kent commit order. Ongoing Mode never changes an earlier tool line.**
 - A pending whole-file deletion keeps its path visible without a removal-count badge while the count is unavailable. In ongoing and detail, a failed whole-file deletion remains path-only, while a successful whole-file deletion uses the existing compact removal badge to show its logical removed-line count, including a known count of zero.
 - **A shell invocation that moves to the background renders both its committed tool row and volatile background-activity row with a secondary `$`, faint foreground command, and `· backgrounded` suffix. The command truncates before the suffix so the complete suffix remains visible whenever the terminal can fit it; these rows never label the state as `running`.**
-- **Parallel tool calls commit in server emission order with no ordering guarantee among concurrent calls.**
+- **Parallel tool calls commit in canonical server order: provider-required order when present, otherwise the Agent Step's stable result order. Execution-completion races do not change that order. Clients consume server emission order and never reorder tool rows.**
 - **In main-input mode, `Up`/`Down` are reserved for prompt-history recall at whole-buffer boundaries or multiline cursor movement. They do not scroll ongoing transcript.**
 - `PgUp`/`PgDn` also do not scroll ongoing transcript state.
 - **Ongoing mouse capture is disabled to preserve native text selection.**
@@ -204,7 +204,7 @@
 - Interrupt injects detail-only developer-role control message `User interrupted you`.
 - Post-interrupt state returns idle with input ready.
 - Resume after interrupt requires explicit user text.
-- After a crash during an Agent Step, recovery follows interruption behavior. Otherwise Kent restores normal state.
+- Session reopening after a crash or durability-failure retirement follows the fresh-resource recovery contract in `core-runtime-tools.md`. The TUI does not expose a stale tool call as live; otherwise it restores normal state.
 - Failed prompt-history navigation emits plain terminal BEL with no transient UI notification.
 
 ## Worktree Management
@@ -237,7 +237,7 @@
 - A Kent background shell process in the worktree blocks deletion immediately. Kent does not wait or retry automatically.
 - A busy deletion reports `worktree blocked`. It is not a successful deletion and includes no blocker-detail payload.
 - Deleting the requesting Session's current worktree is scheduled first. The request acknowledges scheduling before Kent checks blockers. The scheduled deletion then checks current state again before removal.
-- Branch cleanup is conservative/best-effort. Normal TUI deletion only auto-attempts branch deletion when provenance proves Kent created the branch. Explicit TUI Delete + Branch is available for every branch-backed worktree and uses safe branch deletion. Agent CLI deletion always retains branches.
+- Branch cleanup is conservative/best-effort. Normal TUI deletion only auto-attempts branch deletion when provenance proves Kent created the branch. Explicit TUI Delete + Branch is available for every branch-backed worktree and uses safe branch deletion.
 - New worktrees default under `worktrees.base_dir`, rooted under Kent persistence state by default.
 - After a target change, shell execution and relative file paths use the new Working Directory.
 - Containment checks for `edit`, `patch`, and `view_image` use the new Execution Target Root.
@@ -247,9 +247,8 @@
 - Setup progress is live operation state. It is not model-visible transcript history.
 - Creating a worktree and completing setup does not change the Session target.
 - After successful TUI creation, the TUI applies the ordinary enter operation.
-- Agent CLI creation stops after setup and prints a separate enter action.
 - Setup failure keeps the Session on its previous worktree, preserves the created worktree for inspection or repair, and shows a foreground error.
-- CLI and TUI enter and leave actions return before an active Agent Step finishes.
+- TUI enter and leave actions return before an active Agent Step finishes.
 - Each Session can have one pending worktree target change.
 - An identical retry returns the existing acknowledgement. A different target change is rejected while one is pending.
 - Kent applies the target change between Agent Steps before queued user work.

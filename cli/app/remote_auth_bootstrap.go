@@ -67,10 +67,8 @@ func (i *interactiveAuthInteractor) completeRemoteAuthBootstrap(ctx context.Cont
 		return errors.New("interactive auth interactor is required")
 	}
 	req := authInteraction{
-		Theme:          string(settings.Theme),
-		AuthRequired:   status.AuthRequired,
-		PromptOptional: !status.AuthRequired,
-		HasEnvAPIKey:   strings.TrimSpace(i.LookupEnv("OPENAI_API_KEY")) != "",
+		Theme:        string(settings.Theme),
+		HasEnvAPIKey: strings.TrimSpace(i.LookupEnv("OPENAI_API_KEY")) != "",
 	}
 	for {
 		choice, err := i.chooseMethod(req)
@@ -247,8 +245,6 @@ func supportsBootstrapMode(modes []serverapi.AuthBootstrapMode, choice authMetho
 		need = serverapi.AuthBootstrapModeAPIKey
 	case authMethodChoiceBrowserAuto:
 		need = serverapi.AuthBootstrapModeBrowserCallbackURL
-	case authMethodChoiceBrowserPaste:
-		need = serverapi.AuthBootstrapModeBrowserCallbackCode
 	case authMethodChoiceDevice:
 		need = serverapi.AuthBootstrapModeDeviceCode
 	default:

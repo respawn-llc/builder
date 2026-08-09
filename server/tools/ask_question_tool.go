@@ -120,6 +120,18 @@ func (b *AskQuestionBroker) Ask(ctx context.Context, req AskQuestionRequest) (As
 	if err := validateRequest(req); err != nil {
 		return nil, err
 	}
+	if barrier, ok := EffectBarrierFromContext(ctx); ok {
+		reason, err := effectBarrierReasonForAsk(req)
+		if err != nil {
+			return nil, err
+		}
+		if err := barrier(reason); err != nil {
+			return nil, err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	h := b.askHandler()
 	if h != nil {
@@ -156,7 +168,9 @@ func (b *AskQuestionBroker) askSync(ctx context.Context, req AskQuestionRequest,
 }
 
 func (b *AskQuestionBroker) askQueued(ctx context.Context, req AskQuestionRequest) (AskQuestionResolution, error) {
-
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	p := &pending{req: req, ch: make(chan responseResult, 1)}
 	b.mu.Lock()
 	b.queue = append(b.queue, p)

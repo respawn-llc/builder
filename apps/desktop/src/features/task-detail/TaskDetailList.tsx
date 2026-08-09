@@ -341,7 +341,7 @@ function BodyRow({
       data-testid="task-detail-body-split"
     >
       <DescriptionIsland
-        disabled={disabled || updatePending}
+        disabled={disabled}
         draft={draft}
         draftDirty={draftDirty}
         error={updateError}
@@ -349,6 +349,7 @@ function BodyRow({
         onPresentationChange={onDescriptionPresentationChange}
         onSave={onSaveDraft}
         presentation={descriptionPresentation}
+        submitting={updatePending}
       />
       <PropertiesIsland detail={detail} disabled={disabled} mutations={mutations} />
     </div>

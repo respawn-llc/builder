@@ -38,6 +38,7 @@ type ChatEntry struct {
 	BackgroundActivityID string
 	BackgroundProcessID  string
 	BackgroundExitCode   *int
+	ToolOutputRepair     *transcript.ToolOutputRepairNotice
 	ToolCall             *transcript.ToolCallMeta
 	CommittedProvenance  *TranscriptCommittedRowProvenance
 	ReviewerFeedback     *ReviewerFeedbackChatEntry
@@ -506,7 +507,7 @@ func cloneTranscriptStreamID(streamID *uuid.UUID) *uuid.UUID {
 }
 
 func (s *chatStore) appendLocalEntryRecord(entry ChatEntry, afterToolCallID *string, provenances ...*TranscriptCommittedRowProvenance) {
-	if strings.TrimSpace(entry.Text) == "" && entry.ReviewerFeedback == nil && entry.ReviewerError == nil {
+	if strings.TrimSpace(entry.Text) == "" && entry.ToolOutputRepair == nil && entry.ReviewerFeedback == nil && entry.ReviewerError == nil {
 		return
 	}
 	entry.Visibility = normalizeRuntimeEntryVisibility(entry.Visibility)

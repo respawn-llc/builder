@@ -55,6 +55,8 @@ type RuntimeWiringOptions struct {
 	SkipContinuationAgentRoleValidation bool
 	StepLifecycle                       runtime.StepLifecycleSink
 	LifecycleTaskFinished               func() error
+	LifecycleRuntimeAbort               func() error
+	DurabilityObserver                  runtime.ResultGroupDurabilityObserver
 	// GlobalConfigDir is the absolute persistence root that owns model-visible
 	// global context (AGENTS.md, system prompt, skills). Empty falls back to
 	// ~/.kent inside the runtime resolvers.
@@ -260,6 +262,8 @@ func NewRuntimeWiringWithBackground(
 		},
 		StepLifecycle:         opts.StepLifecycle,
 		LifecycleTaskFinished: opts.LifecycleTaskFinished,
+		LifecycleRuntimeAbort: opts.LifecycleRuntimeAbort,
+		DurabilityObserver:    opts.DurabilityObserver,
 	})
 	if err != nil {
 		return nil, err

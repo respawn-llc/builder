@@ -119,7 +119,12 @@ func (a *Authority) buildAgentResource(ctx context.Context, descriptor session.S
 		return nil, errors.New("authority persistence root is required")
 	}
 	sessionID := descriptor.SessionID()
-	store, err := session.MaterializeSessionDescriptor(a.options.persistenceRoot, descriptor, a.options.storeOptions...)
+	durabilityObserver := runlog.NewDurabilityObserver()
+	storeOptions := append(
+		append([]session.StoreOption(nil), a.options.storeOptions...),
+		session.WithDurabilityObserver(durabilityObserver),
+	)
+	store, err := session.MaterializeSessionDescriptor(a.options.persistenceRoot, descriptor, storeOptions...)
 	if err != nil {
 		return nil, err
 	}
@@ -165,10 +170,11 @@ func (a *Authority) buildAgentResource(ctx context.Context, descriptor session.S
 		cancel()
 		return nil, err
 	}
+	durabilityObserver.Attach(logger)
 	for _, line := range plan.options.StartLogLines {
 		logger.Logf("%s", line)
 	}
-	wiring, err := a.newRuntimeWiringFromPlan(resource, store, logger, *plan)
+	wiring, err := a.newRuntimeWiringFromPlan(resource, store, logger, durabilityObserver, *plan)
 	if err != nil {
 		cancel()
 		err = errors.Join(err, logger.Close())
@@ -196,7 +202,7 @@ func (a *Authority) buildAgentResource(ctx context.Context, descriptor session.S
 	return resource, nil
 }
 
-func (a *Authority) newRuntimeWiringFromPlan(resource *agentResource, store *session.Store, logger *runlog.RunLogger, plan AgentRuntimePlan) (*runtimewire.RuntimeWiring, error) {
+func (a *Authority) newRuntimeWiringFromPlan(resource *agentResource, store *session.Store, logger *runlog.RunLogger, durabilityObserver *runlog.DurabilityObserver, plan AgentRuntimePlan) (*runtimewire.RuntimeWiring, error) {
 	eventLog, err := store.MaterializeEventLog()
 	if err != nil {
 		return nil, err
@@ -218,8 +224,12 @@ func (a *Authority) newRuntimeWiringFromPlan(resource *agentResource, store *ses
 		GlobalConfigDir:                     a.options.persistenceRoot,
 		FilesystemContext:                   options.FilesystemContext,
 		StepLifecycle:                       resource,
+		DurabilityObserver:                  durabilityObserver,
 		LifecycleTaskFinished: func() error {
 			return a.closeRetiringResource(context.Background(), resource)
+		},
+		LifecycleRuntimeAbort: func() error {
+			return a.retireRuntimeAbortResource(context.Background(), resource)
 		},
 		OnEvent: func(event runtime.Event) {
 			logger.Logf("%s", runlog.FormatRuntimeEvent(event))

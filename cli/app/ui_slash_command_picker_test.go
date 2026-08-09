@@ -4,13 +4,26 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"core/cli/app/commands"
-	"core/server/auth"
 	"core/shared/clientui"
+	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+type deadlineAuthStatusClient struct {
+	remaining time.Duration
+}
+
+func (c *deadlineAuthStatusClient) GetAuthStatus(ctx context.Context, _ serverapi.AuthStatusRequest) (serverapi.AuthStatusResponse, error) {
+	deadline, ok := ctx.Deadline()
+	if ok {
+		c.remaining = time.Until(deadline)
+	}
+	return authStatusResponse(serverapi.AuthStatusMethodNone), nil
+}
 
 func refreshSlashCommandFilterForTest(t *testing.T, m *uiModel) {
 	t.Helper()
@@ -116,45 +129,21 @@ func TestSlashCommandPickerShowsResumeWhenCurrentSessionIsOnlyKnownSession(t *te
 func TestSlashCommandPickerProjectsAuthCommand(t *testing.T) {
 	cases := []struct {
 		name      string
-		manager   *auth.Manager
+		method    serverapi.AuthStatusMethod
 		visible   string
 		hidden    string
 		wantTyped authSlashCommandKind
 	}{
-		{name: "missing auth", visible: "login", hidden: "logout", wantTyped: authSlashCommandLogin},
-		{
-			name: "api key",
-			manager: auth.NewManager(auth.NewMemoryStore(auth.State{
-				Scope: auth.ScopeGlobal,
-				Method: auth.Method{
-					Type:   auth.MethodAPIKey,
-					APIKey: &auth.APIKeyMethod{Key: "sk-test"},
-				},
-			}), nil, nil),
-			visible:   "login",
-			hidden:    "logout",
-			wantTyped: authSlashCommandLogin,
-		},
-		{
-			name: "oauth",
-			manager: auth.NewManager(auth.NewMemoryStore(auth.State{
-				Scope: auth.ScopeGlobal,
-				Method: auth.Method{
-					Type: auth.MethodOAuth,
-					OAuth: &auth.OAuthMethod{
-						AccessToken: "access-token",
-						TokenType:   "Bearer",
-					},
-				},
-			}), nil, nil),
-			visible:   "logout",
-			hidden:    "login",
-			wantTyped: authSlashCommandLogout,
-		},
+		{name: "no auth", method: serverapi.AuthStatusMethodNone, visible: "login", hidden: "logout", wantTyped: authSlashCommandLogin},
+		{name: "api key", method: serverapi.AuthStatusMethodAPIKey, visible: "login", hidden: "logout", wantTyped: authSlashCommandLogin},
+		{name: "oauth", method: serverapi.AuthStatusMethodOAuth, visible: "logout", hidden: "login", wantTyped: authSlashCommandLogout},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			m := newProjectedStaticUIModel(WithUIStatusConfig(uiStatusConfig{AuthManager: tc.manager}))
+			client := &staticAuthStatusClient{response: authStatusResponse(tc.method)}
+			m := newProjectedStaticUIModel(WithUIStatusConfig(uiStatusConfig{
+				AuthStatus: client,
+			}))
 			testSetMainInput(m, "/")
 			refreshSlashCommandFilterForTest(t, m)
 
@@ -165,6 +154,9 @@ func TestSlashCommandPickerProjectsAuthCommand(t *testing.T) {
 			if m.authSlashCommand != tc.wantTyped {
 				t.Fatalf("typed auth slash command = %v, want %v", m.authSlashCommand, tc.wantTyped)
 			}
+			if !client.request.SkipSubscriptionUsage {
+				t.Fatalf("slash auth request = %+v, want subscription usage skipped", client.request)
+			}
 			if slashPickerContainsCommand(state, tc.hidden) || slashPickerContainsCommand(state, "fast") {
 				t.Fatalf("unexpected gated command in slash picker: %+v", slashPickerCommandNames(state))
 			}
@@ -174,39 +166,15 @@ func TestSlashCommandPickerProjectsAuthCommand(t *testing.T) {
 
 func TestExactHiddenAuthSlashCommandsStillExecute(t *testing.T) {
 	cases := []struct {
-		name    string
-		manager *auth.Manager
-		input   string
+		name  string
+		input string
 	}{
-		{
-			name: "login while oauth shows logout",
-			manager: auth.NewManager(auth.NewMemoryStore(auth.State{
-				Scope: auth.ScopeGlobal,
-				Method: auth.Method{
-					Type: auth.MethodOAuth,
-					OAuth: &auth.OAuthMethod{
-						AccessToken: "access-token",
-						TokenType:   "Bearer",
-					},
-				},
-			}), nil, nil),
-			input: "/login",
-		},
-		{
-			name: "logout while api key shows login",
-			manager: auth.NewManager(auth.NewMemoryStore(auth.State{
-				Scope: auth.ScopeGlobal,
-				Method: auth.Method{
-					Type:   auth.MethodAPIKey,
-					APIKey: &auth.APIKeyMethod{Key: "sk-test"},
-				},
-			}), nil, nil),
-			input: "/logout",
-		},
+		{name: "login", input: "/login"},
+		{name: "logout", input: "/logout"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			m := newProjectedStaticUIModel(WithUIStatusConfig(uiStatusConfig{AuthManager: tc.manager}))
+			m := newProjectedStaticUIModel()
 			testSetMainInput(m, tc.input)
 
 			next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -222,8 +190,9 @@ func TestExactHiddenAuthSlashCommandsStillExecute(t *testing.T) {
 }
 
 func TestSlashCommandPickerHidesAuthCommandsWhenAuthStateCannotLoad(t *testing.T) {
-	manager := auth.NewManager(errorAuthStore{err: errors.New("permission denied")}, nil, nil)
-	m := newProjectedStaticUIModel(WithUIStatusConfig(uiStatusConfig{AuthManager: manager}))
+	m := newProjectedStaticUIModel(WithUIStatusConfig(uiStatusConfig{
+		AuthStatus: &staticAuthStatusClient{err: errors.New("permission denied")},
+	}))
 	testSetMainInput(m, "/")
 	refreshSlashCommandFilterForTest(t, m)
 
@@ -240,28 +209,9 @@ func TestSlashCommandPickerHidesAuthCommandsWhenAuthStateCannotLoad(t *testing.T
 }
 
 func TestSlashCommandPickerRefreshesAuthStateAfterModelInit(t *testing.T) {
-	store := auth.NewMemoryStore(auth.State{
-		Scope: auth.ScopeGlobal,
-		Method: auth.Method{
-			Type:   auth.MethodAPIKey,
-			APIKey: &auth.APIKeyMethod{Key: "sk-test"},
-		},
-	})
-	manager := auth.NewManager(store, nil, nil)
-	m := newProjectedStaticUIModel(WithUIStatusConfig(uiStatusConfig{AuthManager: manager}))
-
-	if err := store.Save(context.Background(), auth.State{
-		Scope: auth.ScopeGlobal,
-		Method: auth.Method{
-			Type: auth.MethodOAuth,
-			OAuth: &auth.OAuthMethod{
-				AccessToken: "access-token",
-				TokenType:   "Bearer",
-			},
-		},
-	}); err != nil {
-		t.Fatalf("update auth store: %v", err)
-	}
+	client := &staticAuthStatusClient{response: authStatusResponse(serverapi.AuthStatusMethodAPIKey)}
+	m := newProjectedStaticUIModel(WithUIStatusConfig(uiStatusConfig{AuthStatus: client}))
+	client.response = authStatusResponse(serverapi.AuthStatusMethodOAuth)
 
 	testSetMainInput(m, "/")
 	refreshSlashCommandFilterForTest(t, m)
@@ -275,66 +225,46 @@ func TestSlashCommandPickerRefreshesAuthStateAfterModelInit(t *testing.T) {
 }
 
 func TestSlashCommandPickerLoadsAuthStateOncePerSlashSession(t *testing.T) {
-	store := &countingAuthStore{state: auth.State{
-		Scope: auth.ScopeGlobal,
-		Method: auth.Method{
-			Type: auth.MethodOAuth,
-			OAuth: &auth.OAuthMethod{
-				AccessToken: "access-token",
-				TokenType:   "Bearer",
-			},
-		},
-	}}
-	manager := auth.NewManager(store, nil, nil)
-	m := newProjectedStaticUIModel(WithUIStatusConfig(uiStatusConfig{AuthManager: manager}))
-	loadsAfterInit := store.loads
+	client := &staticAuthStatusClient{response: authStatusResponse(serverapi.AuthStatusMethodOAuth)}
+	m := newProjectedStaticUIModel(WithUIStatusConfig(uiStatusConfig{AuthStatus: client}))
+	callsAfterInit := client.calls
 
 	for _, input := range []string{"/", "/l", "/lo"} {
 		testSetMainInput(m, input)
 		refreshSlashCommandFilterForTest(t, m)
 	}
-	if got := store.loads - loadsAfterInit; got != 1 {
-		t.Fatalf("expected one auth load while editing one slash session, got %d", got)
+	if got := client.calls - callsAfterInit; got != 1 {
+		t.Fatalf("expected one auth request while editing one slash session, got %d", got)
 	}
 
 	testSetMainInput(m, "ordinary prompt")
 	m.refreshSlashCommandFilterFromInputWithAuth(true)
 	testSetMainInput(m, "/")
 	refreshSlashCommandFilterForTest(t, m)
-	if got := store.loads - loadsAfterInit; got != 2 {
-		t.Fatalf("expected auth load after starting a new slash session, got %d", got)
+	if got := client.calls - callsAfterInit; got != 2 {
+		t.Fatalf("expected auth request after starting a new slash session, got %d", got)
 	}
 }
 
 func TestSlashCommandPickerTypingSlashDefersAuthLoadToCommand(t *testing.T) {
-	store := &countingAuthStore{state: auth.State{
-		Scope: auth.ScopeGlobal,
-		Method: auth.Method{
-			Type: auth.MethodOAuth,
-			OAuth: &auth.OAuthMethod{
-				AccessToken: "access-token",
-				TokenType:   "Bearer",
-			},
-		},
-	}}
-	manager := auth.NewManager(store, nil, nil)
-	m := newProjectedStaticUIModel(WithUIStatusConfig(uiStatusConfig{AuthManager: manager}))
-	loadsAfterInit := store.loads
+	client := &staticAuthStatusClient{response: authStatusResponse(serverapi.AuthStatusMethodOAuth)}
+	m := newProjectedStaticUIModel(WithUIStatusConfig(uiStatusConfig{AuthStatus: client}))
+	callsAfterInit := client.calls
 
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
 	updated := next.(*uiModel)
 	if cmd == nil {
 		t.Fatal("expected auth slash refresh command")
 	}
-	if got := store.loads - loadsAfterInit; got != 0 {
-		t.Fatalf("expected no auth load during Update, got %d", got)
+	if got := client.calls - callsAfterInit; got != 0 {
+		t.Fatalf("expected no auth request during Update, got %d", got)
 	}
 	for _, msg := range collectCmdMessages(t, cmd) {
 		next, _ = updated.Update(msg)
 		updated = next.(*uiModel)
 	}
-	if got := store.loads - loadsAfterInit; got != 1 {
-		t.Fatalf("expected auth load after command executes, got %d", got)
+	if got := client.calls - callsAfterInit; got != 1 {
+		t.Fatalf("expected auth request after command executes, got %d", got)
 	}
 	if state := updated.slashCommandPicker(); !slashPickerContainsCommand(state, "logout") {
 		t.Fatalf("expected /logout after async auth refresh, got %+v", slashPickerCommandNames(state))
@@ -342,18 +272,8 @@ func TestSlashCommandPickerTypingSlashDefersAuthLoadToCommand(t *testing.T) {
 }
 
 func TestSlashCommandPickerAuthRefreshSingleFlightsAfterScheduledCommand(t *testing.T) {
-	store := &countingAuthStore{state: auth.State{
-		Scope: auth.ScopeGlobal,
-		Method: auth.Method{
-			Type: auth.MethodOAuth,
-			OAuth: &auth.OAuthMethod{
-				AccessToken: "access-token",
-				TokenType:   "Bearer",
-			},
-		},
-	}}
-	manager := auth.NewManager(store, nil, nil)
-	m := newProjectedStaticUIModel(WithUIStatusConfig(uiStatusConfig{AuthManager: manager}))
+	client := &staticAuthStatusClient{response: authStatusResponse(serverapi.AuthStatusMethodOAuth)}
+	m := newProjectedStaticUIModel(WithUIStatusConfig(uiStatusConfig{AuthStatus: client}))
 	m.replaceMainInputAtEnd("/")
 	if m.authSlashLoading {
 		t.Fatal("replaceMainInput must not mark an unscheduled auth refresh in flight")
@@ -371,46 +291,33 @@ func TestSlashCommandPickerAuthRefreshSingleFlightsAfterScheduledCommand(t *test
 	if secondCmd != nil {
 		t.Fatal("did not expect concurrent auth slash refresh while first is loading")
 	}
-	if store.loads != 0 {
-		t.Fatalf("expected no auth load before command executes, got %d", store.loads)
+	if client.calls != 0 {
+		t.Fatalf("expected no auth request before command executes, got %d", client.calls)
 	}
 	for _, msg := range collectCmdMessages(t, cmd) {
 		next, _ := m.Update(msg)
 		m = next.(*uiModel)
 	}
-	if store.loads != 1 {
-		t.Fatalf("expected one auth load after command executes, got %d", store.loads)
+	if client.calls != 1 {
+		t.Fatalf("expected one auth request after command executes, got %d", client.calls)
 	}
 	if state := m.slashCommandPicker(); !slashPickerContainsCommand(state, "logout") {
 		t.Fatalf("expected /logout after rescheduled auth refresh, got %+v", slashPickerCommandNames(state))
 	}
 }
 
-type errorAuthStore struct {
-	err error
-}
-
-func (s errorAuthStore) Load(context.Context) (auth.State, error) {
-	return auth.State{}, s.err
-}
-
-func (s errorAuthStore) Save(context.Context, auth.State) error {
-	return nil
-}
-
-type countingAuthStore struct {
-	state auth.State
-	loads int
-}
-
-func (s *countingAuthStore) Load(context.Context) (auth.State, error) {
-	s.loads++
-	return s.state, nil
-}
-
-func (s *countingAuthStore) Save(_ context.Context, state auth.State) error {
-	s.state = state
-	return nil
+func TestSlashCommandPickerAuthRefreshUsesBoundedStatusTimeout(t *testing.T) {
+	client := &deadlineAuthStatusClient{}
+	m := newProjectedStaticUIModel(WithUIStatusConfig(uiStatusConfig{AuthStatus: client}))
+	m.replaceMainInputAtEnd("/")
+	cmd := m.refreshSlashCommandFilterFromInputWithAuth(true)
+	if cmd == nil {
+		t.Fatal("expected auth slash refresh command")
+	}
+	_ = cmd()
+	if client.remaining <= 0 || client.remaining > statusRefreshTimeout {
+		t.Fatalf("auth slash refresh timeout = %s, want bounded by %s", client.remaining, statusRefreshTimeout)
+	}
 }
 
 func TestSlashCommandPickerAlwaysShowsCopyWithoutReadingCachedRuntimeStatus(t *testing.T) {

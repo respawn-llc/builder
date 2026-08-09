@@ -12,6 +12,7 @@ import (
 	"core/server/tools"
 	"core/shared/textutil"
 	"core/shared/toolspec"
+	"core/shared/transcript"
 
 	"github.com/google/uuid"
 )
@@ -723,6 +724,78 @@ func TestExclusiveStepLifecycleCanEmitRunStateWithoutPersistingDurableRun(t *tes
 	}
 	if runEvents := collectRunStateEvents(events); len(runEvents) != 2 {
 		t.Fatalf("expected run-state events, got %+v", runEvents)
+	}
+}
+
+func TestExclusiveStepRuntimeAbortPreservesRecoveryAndSkipsIdleWork(t *testing.T) {
+	t.Parallel()
+	store := mustCreateTestSession(t)
+	lifecycleErr := errors.New("step-ended publication failed")
+	stepLifecycle := &callbackStepLifecycleSink{onTransition: func(transition StepLifecycleTransition) error {
+		if transition == StepLifecycleTransitionEnded {
+			return lifecycleErr
+		}
+		return nil
+	}}
+	eng := mustNewTestEngine(
+		t,
+		store,
+		&fakeClient{},
+		tools.NewRegistry(),
+		Config{Model: "gpt-5", StepLifecycle: stepLifecycle},
+	)
+	var idleSchedules int
+	lifecycle := &defaultExclusiveStepLifecycle{
+		engine: eng,
+		background: &stubBackgroundNoticeScheduler{
+			scheduleIfIdle: func() {
+				idleSchedules++
+			},
+		},
+	}
+	cause := errors.New("result group persistence failed")
+	fatal := &resultGroupFatal{Committed: false, Cause: cause}
+	err := lifecycle.Run(
+		context.Background(),
+		exclusiveStepOptions{
+			ActiveKind:   ActiveKindUserTurn,
+			EmitRunState: true,
+		},
+		func(_ context.Context, stepID string) error {
+			if markerErr := store.SetPendingModelRecovery(session.PendingModelRecovery{
+				RecoveryID: "runtime-abort",
+				StepID:     stepID,
+				Reason:     "test",
+				CreatedAt:  time.Now().UTC(),
+			}); markerErr != nil {
+				t.Fatalf("set pending model recovery: %v", markerErr)
+			}
+			return fatal
+		},
+	)
+	if !errors.Is(err, fatal) || !errors.Is(err, lifecycleErr) {
+		t.Fatalf("runtime abort error = %v, want fatal and step-ended failure", err)
+	}
+	diagnostics := 0
+	for _, entry := range eng.ChatSnapshot().Entries {
+		if entry.Role == string(transcript.EntryRoleDeveloperErrorFeedback) {
+			diagnostics++
+		}
+	}
+	if diagnostics != 1 {
+		t.Fatalf("runtime abort terminal-publication diagnostics = %d, want one", diagnostics)
+	}
+	if marker := store.Meta().PendingModelRecovery; marker == nil {
+		t.Fatal("runtime abort cleared PendingModelRecovery")
+	}
+	if idleSchedules != 0 {
+		t.Fatalf("runtime abort idle schedules = %d, want none", idleSchedules)
+	}
+	if _, submitErr := eng.SubmitUserMessage(context.Background(), "later"); !errors.Is(submitErr, ErrEngineClosed) {
+		t.Fatalf("later submission error = %v, want ErrEngineClosed", submitErr)
+	}
+	if snapshot := eng.ChatSnapshot(); snapshot.StreamingError == "" {
+		t.Fatal("runtime abort did not publish transient streaming failure")
 	}
 }
 

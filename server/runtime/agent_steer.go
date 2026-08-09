@@ -22,8 +22,7 @@ func NewAgentSteer(sourceSessionID runtimeids.SessionID, text string) (AgentStee
 		return AgentSteer{}, errors.New("agent steer text is required")
 	}
 	content := fmt.Sprintf(
-		"Agent from session %s said:\n> %s\n\nTo respond, run: kent run steer %s \"message\"",
-		sourceSessionID.String(),
+		"Agent from another session said:\n> %s\n\nYou can use `kent run steer %s \"message\"` to respond.",
 		text,
 		sourceSessionID.String(),
 	)

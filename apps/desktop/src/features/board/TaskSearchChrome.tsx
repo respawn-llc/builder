@@ -112,15 +112,20 @@ export function TaskSearchProjectTrigger({
 }
 
 export function TaskSearchGlobalTrigger() {
+  const { t } = useTranslation();
   const { invocation, open, openSearch } = useTaskSearchController();
   return (
-    <TaskSearchTrigger
-      compact
+    <button
+      aria-label={t("taskSearch.open")}
+      aria-pressed={open && invocation?.projectId === undefined}
+      className="app-region-no-drag grid h-6 w-6 place-items-center rounded-full border border-transparent bg-transparent text-[var(--color-on-island)]"
       onClick={() => {
         openSearch({});
       }}
-      selected={open && invocation?.projectId === undefined}
-    />
+      type="button"
+    >
+      <SearchIcon aria-hidden="true" size={16} strokeWidth={1.25} />
+    </button>
   );
 }
 

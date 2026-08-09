@@ -1,23 +1,25 @@
 {
-  "type": "object",
-  "additionalProperties": false,
-  "required": ["session_id"],
-  "properties": {
-    "session_id": {
-      "type": "integer",
-      "description": "Identifier of the running exec_command session."
-    },
-    "chars": {
-      "type": "string",
-      "description": "Bytes to write to stdin. May be empty to poll for output."
-    },
-    "yield_time_ms": {
-      "type": "integer",
-      "description": "How long to wait in milliseconds for output before yielding."
-    },
-    "max_output_tokens": {
-      "type": "integer",
-      "description": "Optional maximum amount of output to return back. Excess output will be truncated."
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+        "session_id"
+    ],
+    "properties": {
+        "session_id": {
+            "type": "integer",
+            "description": "Identifier of the running exec_command session."
+        },
+        "chars": {
+            "type": "string",
+            "description": "Bytes to write to stdin. May be empty to poll for output."
+        },
+        "yield_time_ms": {
+            "type": "integer",
+            "description": "How long to wait in milliseconds for output before yielding."
+        },
+        "max_output_tokens": {
+            "type": "integer",
+            "description": "Optional maximum amount of output to return back. Full logs are always still available on disk. Prefer defaults unless you want to read large chunks of text."
+        }
     }
-  }
 }

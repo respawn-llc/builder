@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 )
 
 const currentEventLogHeaderMaxBytes = 4096
@@ -19,10 +20,11 @@ const (
 )
 
 type currentEventLog struct {
-	path             string
-	firstEventOffset int64
-	lastSequence     int64
-	mode             currentEventLogMode
+	path               string
+	firstEventOffset   int64
+	lastSequence       int64
+	mode               currentEventLogMode
+	durabilityObserver DurabilityObserver
 }
 
 type currentEventLogAppendTransaction struct {
@@ -151,6 +153,16 @@ func (l *currentEventLog) appendRecordsWithTransaction(
 		}
 		return info.Size(), nil
 	}
+	appendStarted := time.Now()
+	defer func() {
+		if l.durabilityObserver != nil {
+			l.durabilityObserver.ObserveEventLogAppend(EventLogAppendObservation{
+				RecordCount: len(records),
+				Latency:     time.Since(appendStarted),
+				Succeeded:   resultErr == nil,
+			})
+		}
+	}()
 	expectedSequence := l.lastSequence + 1
 	for index, record := range records {
 		if record.Seq() != expectedSequence {
@@ -227,7 +239,7 @@ func (l *currentEventLog) appendRecordsWithTransaction(
 		return endOffset, err
 	}
 	if transaction != nil {
-		if err := fp.Sync(); err != nil {
+		if err := l.syncAppend(fp); err != nil {
 			if transaction.rollback != nil {
 				return endOffset, transaction.rollback(fp, currentSize, fmt.Errorf("fsync current event log: %w", err))
 			}
@@ -241,11 +253,24 @@ func (l *currentEventLog) appendRecordsWithTransaction(
 				return endOffset, err
 			}
 		}
-	} else if err := fp.Sync(); err != nil {
+	} else if err := l.syncAppend(fp); err != nil {
 		return endOffset, fmt.Errorf("fsync current event log: %w", err)
 	}
 	l.lastSequence = records[len(records)-1].Seq()
 	return endOffset, nil
+}
+
+func (l *currentEventLog) syncAppend(fp *os.File) (resultErr error) {
+	started := time.Now()
+	defer func() {
+		if l.durabilityObserver != nil {
+			l.durabilityObserver.ObserveEventLogSync(EventLogSyncObservation{
+				Latency:   time.Since(started),
+				Succeeded: resultErr == nil,
+			})
+		}
+	}()
+	return fp.Sync()
 }
 
 func (l *currentEventLog) readSegmentForward(

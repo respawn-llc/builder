@@ -311,7 +311,8 @@ func TestMaterializeEventLogMigratesLegacyNoticeAndCacheRecords(t *testing.T) {
 		t.Fatalf("migrated records = %d, want 4", len(window.Records))
 	}
 	local, ok := mustEventRecordPayload(window.Records[0]).(LocalEntryRecord)
-	if !ok || local.Visibility != EntryVisibilityOngoing || local.Text != "legacy notice" {
+	if !ok || local.Visibility != EntryVisibilityOngoing ||
+		local.Text == nil || *local.Text != "legacy notice" {
 		t.Fatalf("migrated local entry = %#v", mustEventRecordPayload(window.Records[0]))
 	}
 	request, ok := mustEventRecordPayload(window.Records[1]).(CacheRequestObservationRecord)

@@ -5,24 +5,24 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"testing"
 
 	checkpoint "core/internal/testharness/pty/analyzer"
 	"core/internal/testharness/pty/appfixture"
+	serverstartup "core/server/startup"
+	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
 type ptyCheckpointTerminalFile struct {
-	file   *os.File
+	*os.File
 	writer *checkpoint.Writer
 }
 
 func newPTYCheckpointTerminalFile(file *os.File) *ptyCheckpointTerminalFile {
-	if file == nil {
-		panic("create PTY checkpoint terminal with nil file")
-	}
 	return &ptyCheckpointTerminalFile{
-		file:   file,
+		File:   file,
 		writer: checkpoint.NewWriter(file),
 	}
 }
@@ -31,60 +31,37 @@ func (file *ptyCheckpointTerminalFile) Write(payload []byte) (int, error) {
 	return file.writer.Write(payload)
 }
 
-func (file *ptyCheckpointTerminalFile) Read(payload []byte) (int, error) {
-	return file.file.Read(payload)
-}
-
-func (file *ptyCheckpointTerminalFile) Close() error {
-	return file.file.Close()
-}
-
-func (file *ptyCheckpointTerminalFile) Fd() uintptr {
-	return file.file.Fd()
-}
-
-func runPTYFixtureProcess(ctx context.Context, processConfig appfixture.ProcessConfig) (runErr error) {
+func runPTYFixtureProcess(t *testing.T, ctx context.Context, processConfig appfixture.ProcessConfig) (runErr error) {
+	t.Helper()
 	if err := processConfig.Validate(); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(processConfig.WorkspaceRoot, 0o755); err != nil {
 		return fmt.Errorf("create fixture workspace: %w", err)
 	}
-	if err := appfixture.PrepareConfigAndBinding(ctx, processConfig.PersistenceRoot, processConfig.WorkspaceRoot); err != nil {
-		return err
-	}
-
 	terminal := newPTYCheckpointTerminalFile(os.Stdout)
 	if err := terminal.writer.QueueBeforeNextWrite(checkpoint.KindScenarioStart, nil); err != nil {
 		return fmt.Errorf("queue scenario-start checkpoint: %w", err)
 	}
-	var scenarioState *ptyCheckpointScenarioState
-	runtime, err := appfixture.NewRuntime(processConfig.ScriptPath, func(
-		targetFinalAssistantOrdinal appfixture.ScriptFinalAssistantOrdinal,
-	) func(context.Context) error {
-		scenarioState = newPTYCheckpointScenarioState(targetFinalAssistantOrdinal)
-		return func(context.Context) error {
-			if err := terminal.writer.Emit(checkpoint.KindScenarioComplete, nil); err != nil {
-				return err
-			}
-			scenarioState.markScenarioComplete()
-			return nil
-		}
-	})
+	scenarioState, runtime, err := newCheckpointPTYFixtureRuntime(processConfig.ScriptPath, terminal)
 	if err != nil {
 		return err
 	}
-	if scenarioState == nil {
-		panic("PTY fixture runtime did not configure scenario completion state")
+	defer func() { runErr = errors.Join(runErr, runtime.Close()) }()
+	baseURL := runtime.OpenAIBaseURL()
+	if err := appfixture.PrepareConfigAndBindingWithOptions(
+		ctx,
+		processConfig.PersistenceRoot,
+		processConfig.WorkspaceRoot,
+		appfixture.ConfigOptions{OpenAIBaseURL: &baseURL},
+	); err != nil {
+		return err
 	}
 	defer func() {
-		observationErr := appfixture.WriteObservation(
+		runErr = errors.Join(runErr, appfixture.WriteObservation(
 			processConfig.ObservationPath,
 			runtime.Observation(runErr),
-		)
-		if observationErr != nil {
-			runErr = errors.Join(runErr, fmt.Errorf("write fixture observation: %w", observationErr))
-		}
+		))
 	}()
 
 	sessionID, err := runtime.SeedSession(ctx, processConfig.PersistenceRoot, processConfig.WorkspaceRoot)
@@ -93,18 +70,14 @@ func runPTYFixtureProcess(ctx context.Context, processConfig appfixture.ProcessC
 	}
 	options := Options{
 		WorkspaceRoot:         processConfig.WorkspaceRoot,
+		WorkspaceRootExplicit: true,
 		SessionID:             sessionID,
 		ConfigRoot:            processConfig.PersistenceRoot,
-		OpenAIBaseURL:         "http://127.0.0.1:1/v1",
-		OpenAIBaseURLExplicit: true,
-		startupOptions:        runtime.StartupOptions(),
 	}
 	interactor := newInteractiveAuthInteractor()
-	standingServer, err := startEmbeddedServer(ctx, options, interactor, true)
-	if err != nil {
-		return fmt.Errorf("start fixture server: %w", err)
-	}
-	defer func() { _ = standingServer.Close() }()
+	startConfiguredDaemonFixture(t, processConfig.WorkspaceRoot, serverStartupRequest(
+		t, processConfig.WorkspaceRoot, processConfig.PersistenceRoot,
+	), readyMemoryAuthHandler())
 
 	server, err := startSessionServer(ctx, options, interactor, true)
 	if err != nil {
@@ -147,12 +120,18 @@ func runPTYFixtureProcess(ctx context.Context, processConfig appfixture.ProcessC
 	if err != nil {
 		return err
 	}
-	finalWrapped, ok := finalModel.(*ptyCheckpointModel)
-	if !ok {
+	if _, ok := finalModel.(*ptyCheckpointModel); !ok {
 		return fmt.Errorf("PTY fixture final model has unexpected type %T", finalModel)
 	}
-	if _, ok := finalWrapped.appModel(); !ok {
-		return fmt.Errorf("PTY fixture inner final model has unexpected type %T", finalWrapped.inner)
-	}
 	return nil
+}
+
+func serverStartupRequest(t *testing.T, workspaceRoot, persistenceRoot string) serverstartup.Request {
+	t.Setenv(config.PersistenceRootEnvName, persistenceRoot)
+	return serverstartup.Request{
+		WorkspaceRoot:         workspaceRoot,
+		WorkspaceRootExplicit: true,
+		AllowUnauthenticated:  true,
+		LoadOptions:           config.LoadOptions{ConfigRoot: persistenceRoot},
+	}
 }
