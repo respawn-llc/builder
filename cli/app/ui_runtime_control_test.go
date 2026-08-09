@@ -59,13 +59,17 @@ type runtimeControlFakeClient struct {
 func TestUserTurnSubmissionFromResponsePreservesMessagePresence(t *testing.T) {
 	t.Parallel()
 	blank := ""
+	blankKind := clientui.UserTurnResultKindSilentFinal
 	withBlank := userTurnSubmissionFromResponse(
-		serverapi.RuntimeSubmitUserTurnResponse{Message: &blank},
+		serverapi.RuntimeSubmitUserTurnResponse{Message: &blank, ResultKind: &blankKind},
 		"turn",
 		"request",
 	)
 	if withBlank.Message == nil || *withBlank.Message != "" {
 		t.Fatalf("blank submission message = %v, want present empty message", withBlank.Message)
+	}
+	if withBlank.ResultKind == nil || *withBlank.ResultKind != clientui.UserTurnResultKindSilentFinal {
+		t.Fatalf("blank submission result kind = %v, want silent final", withBlank.ResultKind)
 	}
 
 	withoutMessage := userTurnSubmissionFromResponse(

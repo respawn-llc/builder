@@ -573,6 +573,9 @@ func TestServiceSubmitUserTurnPreservesBlankFinalPresence(t *testing.T) {
 	if resp.Message == nil || *resp.Message != "" {
 		t.Fatalf("blank final response message = %v, want present empty message", resp.Message)
 	}
+	if resp.ResultKind == nil || *resp.ResultKind != clientui.UserTurnResultKindSilentFinal {
+		t.Fatalf("blank final response result kind = %v, want silent final", resp.ResultKind)
+	}
 }
 
 func (c *runtimeControlFakeClient) Generate(context.Context, llm.Request) (llm.Response, error) {
