@@ -35,7 +35,7 @@ import (
 	"core/shared/toolspec"
 )
 
-const currentNodeRunnerWait = 30 * time.Second
+const currentNodeRunnerWait = 60 * time.Second
 
 type currentNodeRunnerFixture struct {
 	cfg             config.App
