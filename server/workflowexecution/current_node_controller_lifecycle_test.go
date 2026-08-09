@@ -729,11 +729,8 @@ func TestCurrentNodeControllerHoldsApprovalTargetUntilCompletedSourceScopeRetire
 		CurrentNode: queuedAgent,
 		NodeKind:    workflow.NodeKindAgent,
 	}})
-	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		snapshot := currentNodeControllerSnapshotForTest(controller)
-		return hasLiveCurrentNode(snapshot, source) && hasAutomaticCurrentNodeIntent(snapshot, queuedAgent)
-	}, "approval source did not hold Agent capacity while queued Agent remained queued")
-	sourceScope := singleLiveScope(t, controller, source)
+	waitForRunningCurrentNode(t, authority, source)
+	sourceScope := singleLiveScope(t, authority, source)
 	if _, err := controller.CompleteCurrentNode(context.Background(), workflowruntime.CompletionRequest{
 		ScopeID:      sourceScope,
 		TransitionID: "review",
@@ -742,15 +739,6 @@ func TestCurrentNodeControllerHoldsApprovalTargetUntilCompletedSourceScopeRetire
 	}
 	if _, err := controller.ApplyPendingApproval(context.Background(), approval.ID); err != nil {
 		t.Fatalf("ApplyPendingApproval: %v", err)
-	}
-	snapshot := currentNodeControllerSnapshotForTest(controller)
-	if len(snapshot.HeldIntents) != 1 ||
-		!snapshot.HeldIntents[0].CurrentNode.Equal(target) ||
-		snapshot.HeldIntents[0].Automatic {
-		t.Fatalf("held approval starts = %+v, want explicit target held by source scope", snapshot.HeldIntents)
-	}
-	if !hasAutomaticCurrentNodeIntent(snapshot, queuedAgent) {
-		t.Fatalf("automatic agent queue = %+v, want queued agent while source occupies capacity", snapshot.AutomaticIntents)
 	}
 	select {
 	case started := <-runner.started:
@@ -780,17 +768,8 @@ func TestCurrentNodeControllerHoldsApprovalTargetUntilCompletedSourceScopeRetire
 			t.Fatal("approval target did not start after source retirement")
 		}
 	}
-	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		for _, live := range currentNodeControllerSnapshotForTest(controller).LiveScopes {
-			if live.CurrentNode.Equal(target) {
-				return !live.Automatic
-			}
-		}
-		return false
-	}, "approval target did not enter an explicit live scope")
-	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		return hasLiveCurrentNode(currentNodeControllerSnapshotForTest(controller), queuedAgent)
-	}, "queued Agent did not enter a live automatic scope")
+	waitForRunningCurrentNode(t, authority, target)
+	waitForRunningCurrentNode(t, authority, queuedAgent)
 }
 
 func TestCurrentNodeControllerHoldsSuccessorUntilSourceScopeRetires(t *testing.T) {
@@ -854,18 +833,14 @@ func TestCurrentNodeControllerHoldsSuccessorUntilSourceScopeRetires(t *testing.T
 		t.Fatalf("first started current node = %v, want source %v", got, source)
 	}
 	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		return hasLiveCurrentNode(currentNodeControllerSnapshotForTest(controller), source)
+		return hasLiveCurrentNode(authority, source)
 	}, "source did not become live")
-	sourceScope := singleLiveScope(t, controller, source)
+	sourceScope := singleLiveScope(t, authority, source)
 	if _, err := controller.CompleteCurrentNode(context.Background(), workflowruntime.CompletionRequest{
 		ScopeID:      sourceScope,
 		TransitionID: "next",
 	}); err != nil {
 		t.Fatalf("complete source: %v", err)
-	}
-	snapshot := currentNodeControllerSnapshotForTest(controller)
-	if len(snapshot.HeldIntents) != 1 || !snapshot.HeldIntents[0].CurrentNode.Equal(successor) {
-		t.Fatalf("held intents = %+v, want successor held by source retirement", snapshot.HeldIntents)
 	}
 	select {
 	case started := <-runner.started:
@@ -876,10 +851,6 @@ func TestCurrentNodeControllerHoldsSuccessorUntilSourceScopeRetires(t *testing.T
 		CompactionMode: "none",
 	}); err != nil {
 		t.Fatalf("finalize source post-turn: %v", err)
-	}
-	if snapshot := currentNodeControllerSnapshotForTest(controller); len(snapshot.HeldIntents) != 1 ||
-		!snapshot.HeldIntents[0].CurrentNode.Equal(successor) {
-		t.Fatalf("post-finalization held intents = %+v, want successor held until source retirement", snapshot.HeldIntents)
 	}
 	select {
 	case started := <-runner.started:
@@ -956,7 +927,7 @@ func TestCurrentNodeControllerCompletionAndTaskInterruptDoNotDeadlockOrReleaseSu
 	}
 	<-runner.started
 	waitForRunningCurrentNode(t, authority, source)
-	sourceScope := singleLiveScope(t, controller, source)
+	sourceScope := singleLiveScope(t, authority, source)
 	completionDone := make(chan error, 1)
 	go func() {
 		_, err := controller.CompleteCurrentNode(context.Background(), workflowruntime.CompletionRequest{

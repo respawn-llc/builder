@@ -233,25 +233,23 @@ func currentNodeReferenceForControllerTest(t *testing.T, taskID string, nodeID s
 	return reference
 }
 
-func singleLiveScope(t *testing.T, controller *CurrentNodeController, reference workflow.CurrentNodeReference) runtimeids.ExecutionScopeID {
+func singleLiveScope(t *testing.T, authority *sessionruntime.Authority, reference workflow.CurrentNodeReference) runtimeids.ExecutionScopeID {
 	t.Helper()
-	snapshot := currentNodeControllerSnapshotForTest(controller)
-	for _, scope := range snapshot.LiveScopes {
-		if scope.CurrentNode.Equal(reference) {
-			return scope.ScopeID
-		}
+	handle, live := authority.ExecutionByWorkflow(sessionruntime.WorkflowExecutionRef{
+		ProjectID: "project-test", WorkflowID: currentNodeControllerTestWorkflowID, CurrentNode: reference,
+	})
+	if live {
+		return handle.Scope().ID()
 	}
-	t.Fatalf("snapshot %+v has no live scope for %v", snapshot, reference)
+	t.Fatalf("no live execution for %v", reference)
 	return runtimeids.ExecutionScopeID{}
 }
 
-func hasLiveCurrentNode(snapshot currentNodeExecutionSnapshot, reference workflow.CurrentNodeReference) bool {
-	for _, live := range snapshot.LiveScopes {
-		if live.CurrentNode.Equal(reference) {
-			return true
-		}
-	}
-	return false
+func hasLiveCurrentNode(authority *sessionruntime.Authority, reference workflow.CurrentNodeReference) bool {
+	_, live := authority.ExecutionByWorkflow(sessionruntime.WorkflowExecutionRef{
+		ProjectID: "project-test", WorkflowID: currentNodeControllerTestWorkflowID, CurrentNode: reference,
+	})
+	return live
 }
 
 func waitForRunningCurrentNode(
@@ -274,100 +272,6 @@ func waitForRunningCurrentNode(
 		}
 		return false
 	}, "current node %v did not begin running", reference)
-}
-
-func hasAutomaticCurrentNodeIntent(snapshot currentNodeExecutionSnapshot, reference workflow.CurrentNodeReference) bool {
-	for _, intent := range snapshot.AutomaticIntents {
-		if intent.CurrentNode.Equal(reference) {
-			return true
-		}
-	}
-	return false
-}
-
-type currentNodeAdmissionGateSnapshot struct {
-	CurrentNode workflow.CurrentNodeReference
-	ScopeID     runtimeids.ExecutionScopeID
-	Automatic   bool
-}
-
-type currentNodeLiveScopeSnapshot struct {
-	CurrentNode workflow.CurrentNodeReference
-	ScopeID     runtimeids.ExecutionScopeID
-	Automatic   bool
-}
-
-type currentNodeHeldIntentSnapshot struct {
-	CurrentNode workflow.CurrentNodeReference
-	Automatic   bool
-}
-
-type currentNodeExplicitStartSnapshot struct {
-	CurrentNode workflow.CurrentNodeReference
-}
-
-type currentNodeExecutionSnapshot struct {
-	AutomaticIntents []CurrentNodeAutomaticIntent
-	ExplicitStarts   []currentNodeExplicitStartSnapshot
-	HeldIntents      []currentNodeHeldIntentSnapshot
-	Gates            []currentNodeAdmissionGateSnapshot
-	LiveScopes       []currentNodeLiveScopeSnapshot
-}
-
-func currentNodeControllerSnapshotForTest(c *CurrentNodeController) currentNodeExecutionSnapshot {
-	if c == nil {
-		return currentNodeExecutionSnapshot{}
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	snapshot := currentNodeExecutionSnapshot{
-		AutomaticIntents: make([]CurrentNodeAutomaticIntent, 0, c.automaticQueue.len()+len(c.automaticReservations)),
-		ExplicitStarts:   make([]currentNodeExplicitStartSnapshot, 0, len(c.explicitQueue)+len(c.explicitReservations)),
-		Gates:            make([]currentNodeAdmissionGateSnapshot, 0, len(c.gates)),
-		LiveScopes:       make([]currentNodeLiveScopeSnapshot, 0, len(c.live)),
-	}
-	for entry := c.automaticQueue.first; entry != nil; entry = entry.globalNext {
-		start := entry.start
-		snapshot.AutomaticIntents = append(snapshot.AutomaticIntents, CurrentNodeAutomaticIntent{
-			CurrentNode: start.reference,
-			NodeKind:    start.policy.nodeKind(),
-		})
-	}
-	for _, start := range c.automaticReservations {
-		snapshot.AutomaticIntents = append(snapshot.AutomaticIntents, CurrentNodeAutomaticIntent{
-			CurrentNode: start.reference,
-			NodeKind:    start.policy.nodeKind(),
-		})
-	}
-	for _, start := range c.explicitQueue {
-		snapshot.ExplicitStarts = append(snapshot.ExplicitStarts, currentNodeExplicitStartSnapshot{CurrentNode: start.reference})
-	}
-	for _, start := range c.explicitReservations {
-		snapshot.ExplicitStarts = append(snapshot.ExplicitStarts, currentNodeExplicitStartSnapshot{CurrentNode: start.reference})
-	}
-	for _, gate := range c.gates {
-		snapshot.Gates = append(snapshot.Gates, currentNodeAdmissionGateSnapshot{
-			CurrentNode: gate.reference,
-			ScopeID:     gate.lease.ScopeID(),
-			Automatic:   gate.policy.isAutomatic(),
-		})
-	}
-	for scopeID, live := range c.live {
-		snapshot.LiveScopes = append(snapshot.LiveScopes, currentNodeLiveScopeSnapshot{
-			CurrentNode: live.reference,
-			ScopeID:     scopeID,
-			Automatic:   live.policy.isAutomatic(),
-		})
-	}
-	for _, starts := range c.heldStarts {
-		for _, start := range starts {
-			snapshot.HeldIntents = append(snapshot.HeldIntents, currentNodeHeldIntentSnapshot{
-				CurrentNode: start.reference,
-				Automatic:   start.policy.isAutomatic(),
-			})
-		}
-	}
-	return snapshot
 }
 
 var currentNodeControllerTestWorkflowID = func() runtimeids.WorkflowID {

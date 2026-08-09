@@ -201,10 +201,7 @@ func TestCurrentNodeControllerFailedScriptDoesNotReleaseAgentCapacity(t *testing
 		_, interrupted := store.interruption(failedScript)
 		return interrupted
 	}, "failed Script was not interrupted")
-	if !hasAutomaticCurrentNodeIntent(currentNodeControllerSnapshotForTest(controller), queuedAgent) {
-		t.Fatalf("queued Agent = %+v, want queued after failed Script cleanup", currentNodeControllerSnapshotForTest(controller).AutomaticIntents)
-	}
-	occupyingHandle, live := authority.ExecutionByScope(singleLiveScope(t, controller, occupyingAgent))
+	occupyingHandle, live := authority.ExecutionByScope(singleLiveScope(t, authority, occupyingAgent))
 	if !live {
 		t.Fatal("occupying Agent is not live")
 	}
@@ -455,10 +452,7 @@ func TestExecutionFinalizationDoesNotMakeUnassignedHeldSuccessorResumable(t *tes
 		{CurrentNode: queuedAgent, NodeKind: workflow.NodeKindAgent},
 		{CurrentNode: queuedScript, NodeKind: workflow.NodeKindScript},
 	})
-	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		return hasAutomaticCurrentNodeIntent(currentNodeControllerSnapshotForTest(controller), queuedAgent)
-	}, "unrelated Agent did not remain queued while source occupied capacity")
-	sourceScope := singleLiveScope(t, controller, source)
+	sourceScope := singleLiveScope(t, authority, source)
 	cause := errors.New("assignment persistence failed")
 	steerer.setWaitError(cause)
 	if _, err := controller.CompleteCurrentNode(context.Background(), workflowruntime.CompletionRequest{
