@@ -314,7 +314,7 @@ func executionRootForLockedTaskIfPresent(ctx context.Context, q *sqlitegen.Queri
 	return &root, nil
 }
 
-func executionRootForManagedWorktree(ctx context.Context, q *sqlitegen.Queries, sourceWorkspace sqlitegen.Workspace, managedWorktreeID string) (ExecutionRoot, error) {
+func executionRootForManagedWorktree(ctx context.Context, q *sqlitegen.Queries, sourceWorkspace sqlitegen.GetWorkspaceByIDRow, managedWorktreeID string) (ExecutionRoot, error) {
 	worktreeID := strings.TrimSpace(managedWorktreeID)
 	if worktreeID == "" {
 		return ExecutionRoot{}, &ExecutionRootError{Kind: ExecutionRootErrorManagedRelationMissing}
@@ -394,27 +394,27 @@ func nullableStringPointer(value *string) sql.NullString {
 	return nullableString(*value)
 }
 
-func taskSourceWorkspaceForExecution(ctx context.Context, q *sqlitegen.Queries, task sqlitegen.TaskRecord) (sqlitegen.Workspace, error) {
+func taskSourceWorkspaceForExecution(ctx context.Context, q *sqlitegen.Queries, task sqlitegen.TaskRecord) (sqlitegen.GetWorkspaceByIDRow, error) {
 	sourceWorkspaceID := strings.TrimSpace(task.SourceWorkspaceID.String)
 	if sourceWorkspaceID == "" {
 		var err error
 		sourceWorkspaceID, err = metadata.ResolveProjectSourceWorkspaceID(ctx, q, task.ProjectID)
 		if err != nil {
-			return sqlitegen.Workspace{}, err
+			return sqlitegen.GetWorkspaceByIDRow{}, err
 		}
 	}
 	if sourceWorkspaceID == "" {
-		return sqlitegen.Workspace{}, &ExecutionRootError{Kind: ExecutionRootErrorSourceWorkspaceMissing}
+		return sqlitegen.GetWorkspaceByIDRow{}, &ExecutionRootError{Kind: ExecutionRootErrorSourceWorkspaceMissing}
 	}
 	workspace, err := q.GetWorkspaceByID(ctx, sourceWorkspaceID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return sqlitegen.Workspace{}, &ExecutionRootError{Kind: ExecutionRootErrorSourceWorkspaceMissing, Cause: err}
+			return sqlitegen.GetWorkspaceByIDRow{}, &ExecutionRootError{Kind: ExecutionRootErrorSourceWorkspaceMissing, Cause: err}
 		}
-		return sqlitegen.Workspace{}, err
+		return sqlitegen.GetWorkspaceByIDRow{}, err
 	}
 	if strings.TrimSpace(workspace.ProjectID) != strings.TrimSpace(task.ProjectID) {
-		return sqlitegen.Workspace{}, &ExecutionRootError{
+		return sqlitegen.GetWorkspaceByIDRow{}, &ExecutionRootError{
 			Kind:  ExecutionRootErrorSourceWorkspaceOwnership,
 			Cause: fmt.Errorf("source workspace %q does not belong to task project %q", workspace.ID, task.ProjectID),
 		}

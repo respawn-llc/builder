@@ -698,6 +698,11 @@ func (c *Remote) PlanSession(ctx context.Context, req serverapi.SessionPlanReque
 	return resp, c.call(ctx, protocol.MethodSessionPlan, req, &resp)
 }
 
+func (c *Remote) WorkspaceChatDraft(ctx context.Context, req serverapi.WorkspaceChatDraftRequest) (serverapi.WorkspaceChatDraftResponse, error) {
+	var resp serverapi.WorkspaceChatDraftResponse
+	return resp, c.call(ctx, protocol.MethodSessionWorkspaceChatDraft, req, &resp)
+}
+
 func (c *Remote) GetSessionMainView(ctx context.Context, req serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
 	var resp serverapi.SessionMainViewResponse
 	return resp, c.call(ctx, protocol.MethodSessionGetMainView, req, &resp)

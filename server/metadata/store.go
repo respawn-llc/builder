@@ -430,31 +430,88 @@ func bindingFromProjectCanonicalRootRow(row sqlitegen.GetWorkspaceBindingByProje
 	)
 }
 
-func (s *Store) GetWorkspaceByID(ctx context.Context, workspaceID string) (sqlitegen.Workspace, error) {
+func (s *Store) GetWorkspaceByID(ctx context.Context, workspaceID string) (sqlitegen.GetWorkspaceByIDRow, error) {
 	if s == nil || s.queries == nil {
-		return sqlitegen.Workspace{}, errors.New("metadata store is required")
+		return sqlitegen.GetWorkspaceByIDRow{}, errors.New("metadata store is required")
 	}
 	row, err := s.queries.GetWorkspaceByID(ctx, strings.TrimSpace(workspaceID))
 	if err != nil {
-		return sqlitegen.Workspace{}, fmt.Errorf("get workspace by id: %w", err)
+		return sqlitegen.GetWorkspaceByIDRow{}, fmt.Errorf("get workspace by id: %w", err)
 	}
 	return row, nil
 }
 
-func (s *Store) ResolveProjectSourceWorkspace(ctx context.Context, projectID string) (sqlitegen.Workspace, error) {
+func (s *Store) ReadWorkspaceChatDraft(ctx context.Context, workspaceID string) (*WorkspaceChatDraftDocument, error) {
 	if s == nil || s.queries == nil {
-		return sqlitegen.Workspace{}, errors.New("metadata store is required")
+		return nil, errors.New("metadata store is required")
+	}
+	trimmedWorkspaceID := strings.TrimSpace(workspaceID)
+	if trimmedWorkspaceID == "" {
+		return nil, errors.New("workspace id is required")
+	}
+	document, err := s.queries.GetWorkspaceChatDraft(ctx, trimmedWorkspaceID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("%w: %q", serverapi.ErrWorkspaceNotRegistered, trimmedWorkspaceID)
+		}
+		return nil, fmt.Errorf("get workspace Chat draft: %w", err)
+	}
+	if !document.Valid {
+		return nil, nil
+	}
+	var draft WorkspaceChatDraftDocument
+	if err := json.Unmarshal([]byte(document.String), &draft); err != nil {
+		return nil, fmt.Errorf("decode workspace Chat draft: %w", err)
+	}
+	return &draft, nil
+}
+
+func (s *Store) ReplaceWorkspaceChatDraft(ctx context.Context, workspaceID string, draft *WorkspaceChatDraftDocument) error {
+	if s == nil || s.queries == nil {
+		return errors.New("metadata store is required")
+	}
+	trimmedWorkspaceID := strings.TrimSpace(workspaceID)
+	if trimmedWorkspaceID == "" {
+		return errors.New("workspace id is required")
+	}
+	value := sql.NullString{}
+	if draft != nil {
+		if err := draft.Validate(); err != nil {
+			return err
+		}
+		encoded, err := json.Marshal(draft)
+		if err != nil {
+			return fmt.Errorf("encode workspace Chat draft: %w", err)
+		}
+		value = sql.NullString{String: string(encoded), Valid: true}
+	}
+	rows, err := s.queries.ReplaceWorkspaceChatDraft(ctx, sqlitegen.ReplaceWorkspaceChatDraftParams{
+		ChatDraftJson: value,
+		ID:            trimmedWorkspaceID,
+	})
+	if err != nil {
+		return fmt.Errorf("replace workspace Chat draft: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("%w: %q", serverapi.ErrWorkspaceNotRegistered, trimmedWorkspaceID)
+	}
+	return nil
+}
+
+func (s *Store) ResolveProjectSourceWorkspace(ctx context.Context, projectID string) (sqlitegen.GetWorkspaceByIDRow, error) {
+	if s == nil || s.queries == nil {
+		return sqlitegen.GetWorkspaceByIDRow{}, errors.New("metadata store is required")
 	}
 	workspaceID, err := ResolveProjectSourceWorkspaceID(ctx, s.queries, projectID)
 	if err != nil {
-		return sqlitegen.Workspace{}, err
+		return sqlitegen.GetWorkspaceByIDRow{}, err
 	}
 	workspace, err := s.GetWorkspaceByID(ctx, workspaceID)
 	if err != nil {
-		return sqlitegen.Workspace{}, err
+		return sqlitegen.GetWorkspaceByIDRow{}, err
 	}
 	if strings.TrimSpace(workspace.ProjectID) != strings.TrimSpace(projectID) {
-		return sqlitegen.Workspace{}, fmt.Errorf("source workspace %q does not belong to project %q", workspaceID, strings.TrimSpace(projectID))
+		return sqlitegen.GetWorkspaceByIDRow{}, fmt.Errorf("source workspace %q does not belong to project %q", workspaceID, strings.TrimSpace(projectID))
 	}
 	return workspace, nil
 }
@@ -1030,7 +1087,7 @@ func (s *Store) ListWorkspaceSessionIDs(ctx context.Context, workspaceID string)
 	return s.queries.ListWorkspaceSessionIDs(ctx, sql.NullString{String: trimmed, Valid: trimmed != ""})
 }
 
-func workspaceUnlinkBlockersWithQueries(ctx context.Context, q *sqlitegen.Queries, projectID string, workspace sqlitegen.Workspace) ([]serverapi.ProjectWorkspaceUnlinkBlocker, error) {
+func workspaceUnlinkBlockersWithQueries(ctx context.Context, q *sqlitegen.Queries, projectID string, workspace sqlitegen.GetWorkspaceByIDRow) ([]serverapi.ProjectWorkspaceUnlinkBlocker, error) {
 	blockers := []serverapi.ProjectWorkspaceUnlinkBlocker{}
 	addCountBlocker := func(code string, message string, count int64) {
 		if count > 0 {
@@ -1251,14 +1308,14 @@ func (s *Store) RebindWorkspaceWithExpectedBinding(
 	return s.lookupProjectWorkspaceBinding(ctx, oldWorkspace.ProjectID, newCanonicalRoot)
 }
 
-func singleWorkspaceByCanonicalRoot(ctx context.Context, q *sqlitegen.Queries, canonicalRoot string) (sqlitegen.Workspace, error) {
+func singleWorkspaceByCanonicalRoot(ctx context.Context, q *sqlitegen.Queries, canonicalRoot string) (sqlitegen.ListWorkspacesByCanonicalRootRow, error) {
 	rows, err := q.ListWorkspacesByCanonicalRoot(ctx, canonicalRoot)
 	if err != nil {
-		return sqlitegen.Workspace{}, err
+		return sqlitegen.ListWorkspacesByCanonicalRootRow{}, err
 	}
 	switch len(rows) {
 	case 0:
-		return sqlitegen.Workspace{}, sql.ErrNoRows
+		return sqlitegen.ListWorkspacesByCanonicalRootRow{}, sql.ErrNoRows
 	case 1:
 		return rows[0], nil
 	default:
@@ -1266,7 +1323,7 @@ func singleWorkspaceByCanonicalRoot(ctx context.Context, q *sqlitegen.Queries, c
 		for _, row := range rows {
 			projectIDs = append(projectIDs, row.ProjectID)
 		}
-		return sqlitegen.Workspace{}, serverapi.WorkspaceBindingAmbiguousError{CanonicalRoot: canonicalRoot, ProjectIDs: projectIDs}
+		return sqlitegen.ListWorkspacesByCanonicalRootRow{}, serverapi.WorkspaceBindingAmbiguousError{CanonicalRoot: canonicalRoot, ProjectIDs: projectIDs}
 	}
 }
 

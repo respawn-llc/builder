@@ -51,6 +51,18 @@ FROM workspaces
 WHERE id = sqlc.arg(id)
 LIMIT 1;
 
+-- name: GetWorkspaceChatDraft :one
+SELECT
+    chat_draft_json
+FROM workspaces
+WHERE id = sqlc.arg(id)
+LIMIT 1;
+
+-- name: ReplaceWorkspaceChatDraft :execrows
+UPDATE workspaces
+SET chat_draft_json = sqlc.arg(chat_draft_json)
+WHERE id = sqlc.arg(id);
+
 -- name: ListProjectKeyRows :many
 SELECT
     id,

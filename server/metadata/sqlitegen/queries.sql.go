@@ -2669,9 +2669,18 @@ WHERE id = ?1
 LIMIT 1
 `
 
-func (q *Queries) GetWorkspaceByID(ctx context.Context, id string) (Workspace, error) {
+type GetWorkspaceByIDRow struct {
+	ID                string
+	ProjectID         string
+	CanonicalRootPath string
+	GitMetadataJson   string
+	CreatedAtUnixMs   int64
+	UpdatedAtUnixMs   int64
+}
+
+func (q *Queries) GetWorkspaceByID(ctx context.Context, id string) (GetWorkspaceByIDRow, error) {
 	row := q.db.QueryRowContext(ctx, getWorkspaceByID, id)
-	var i Workspace
+	var i GetWorkspaceByIDRow
 	err := recordQueryError(ctx, row.Scan(
 		&i.ID,
 		&i.ProjectID,
@@ -2682,6 +2691,22 @@ func (q *Queries) GetWorkspaceByID(ctx context.Context, id string) (Workspace, e
 	), getWorkspaceByID, 1)
 
 	return i, err
+}
+
+const getWorkspaceChatDraft = `-- name: GetWorkspaceChatDraft :one
+SELECT
+    chat_draft_json
+FROM workspaces
+WHERE id = ?1
+LIMIT 1
+`
+
+func (q *Queries) GetWorkspaceChatDraft(ctx context.Context, id string) (sql.NullString, error) {
+	row := q.db.QueryRowContext(ctx, getWorkspaceChatDraft, id)
+	var chat_draft_json sql.NullString
+	err := recordQueryError(ctx, row.Scan(&chat_draft_json), getWorkspaceChatDraft, 1)
+
+	return chat_draft_json, err
 }
 
 const getWorktreeByCanonicalRoot = `-- name: GetWorktreeByCanonicalRoot :one
@@ -8180,16 +8205,25 @@ WHERE canonical_root_path = ?1
 ORDER BY created_at_unix_ms ASC, rowid ASC
 `
 
-func (q *Queries) ListWorkspacesByCanonicalRoot(ctx context.Context, canonicalRootPath string) ([]Workspace, error) {
+type ListWorkspacesByCanonicalRootRow struct {
+	ID                string
+	ProjectID         string
+	CanonicalRootPath string
+	GitMetadataJson   string
+	CreatedAtUnixMs   int64
+	UpdatedAtUnixMs   int64
+}
+
+func (q *Queries) ListWorkspacesByCanonicalRoot(ctx context.Context, canonicalRootPath string) ([]ListWorkspacesByCanonicalRootRow, error) {
 	rows, err := q.db.QueryContext(ctx, listWorkspacesByCanonicalRoot, canonicalRootPath)
 	err = recordQueryError(ctx, err, listWorkspacesByCanonicalRoot, 1)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Workspace
+	var items []ListWorkspacesByCanonicalRootRow
 	for rows.Next() {
-		var i Workspace
+		var i ListWorkspacesByCanonicalRootRow
 		if err := recordQueryError(ctx, rows.Scan(
 			&i.ID,
 			&i.ProjectID,
@@ -8488,6 +8522,26 @@ func (q *Queries) RenameProjectLabel(ctx context.Context, arg RenameProjectLabel
 	), renameProjectLabel, 4)
 
 	return i, err
+}
+
+const replaceWorkspaceChatDraft = `-- name: ReplaceWorkspaceChatDraft :execrows
+UPDATE workspaces
+SET chat_draft_json = ?1
+WHERE id = ?2
+`
+
+type ReplaceWorkspaceChatDraftParams struct {
+	ChatDraftJson sql.NullString
+	ID            string
+}
+
+func (q *Queries) ReplaceWorkspaceChatDraft(ctx context.Context, arg ReplaceWorkspaceChatDraftParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, replaceWorkspaceChatDraft, arg.ChatDraftJson, arg.ID)
+	err = recordQueryError(ctx, err, replaceWorkspaceChatDraft, 2)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const resumeBranchCurrentNode = `-- name: ResumeBranchCurrentNode :execrows

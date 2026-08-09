@@ -12,6 +12,7 @@ import (
 	"core/server/processview"
 	"core/server/promptcontrol"
 	"core/server/registry"
+	"core/server/requestmemo"
 	"core/server/runtime"
 	"core/server/runtimecontrol"
 	"core/server/serverstatus"
@@ -97,6 +98,7 @@ type SessionBundle struct {
 	sessionLaunchMap map[string]apicontract.SessionLaunchService
 	sessionServices  map[string]*sessionlaunch.Service
 	runPromptMap     map[string]apicontract.RunPromptService
+	workspaceChatDraftLanes *requestmemo.MutationLaneRegistry[string]
 	sessionLaunch    apicontract.SessionLaunchService
 	sessionViews     apicontract.SessionViewService
 	sessionLifecycle apicontract.SessionLifecycleService
@@ -165,6 +167,7 @@ func emptySessionBundle() *SessionBundle {
 		sessionLaunchMap: make(map[string]apicontract.SessionLaunchService),
 		sessionServices:  make(map[string]*sessionlaunch.Service),
 		runPromptMap:     make(map[string]apicontract.RunPromptService),
+		workspaceChatDraftLanes: requestmemo.NewMutationLaneRegistry[string](),
 	}
 }
 
@@ -320,6 +323,7 @@ func newSessionBundle(sessionViewService *sessionview.Service, sessionLifecycleS
 		sessionLaunchMap: make(map[string]apicontract.SessionLaunchService),
 		sessionServices:  make(map[string]*sessionlaunch.Service),
 		runPromptMap:     make(map[string]apicontract.RunPromptService),
+		workspaceChatDraftLanes: requestmemo.NewMutationLaneRegistry[string](),
 		sessionLaunch:    unregisteredSessionLaunchClient{},
 		sessionViews:     sessionViewService,
 		sessionLifecycle: sessionLifecycleService,
