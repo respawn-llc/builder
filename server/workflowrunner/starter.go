@@ -499,14 +499,16 @@ func (s *Starter) finalizeCurrentNodeAgentExecution(
 		)
 	}
 	postTurnCtx := ctx
+	postTurnRuntime := postTurn.runtime
 	if resultErr != nil && context.Cause(ctx) != nil {
 		postTurnCtx = context.WithoutCancel(ctx)
+		postTurnRuntime.Compact = nil
 	}
 	postTurnErr := finalizer.FinalizeCurrentNodePostTurn(
 		postTurnCtx,
 		scopeID,
 		postTurn.sessionID,
-		postTurn.runtime,
+		postTurnRuntime,
 	)
 	if postTurnErr == nil {
 		return resultErr

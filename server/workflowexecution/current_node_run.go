@@ -663,16 +663,17 @@ func (c *CurrentNodeController) finishHeldRunAssignments(
 	taskID workflow.TaskID,
 	outcome currentNodeAssignmentWaitOutcome,
 ) error {
+	var readyErr error
+	if len(outcome.ready) != 0 {
+		readyErr = c.lifecycle.Run(ctx, taskID, func(context.Context) error {
+			c.enqueueHeldRuns(currentNodeRunKeys(outcome.ready))
+			return nil
+		})
+	}
 	if len(outcome.failed) != 0 {
 		c.handleCurrentNodeStartFailures(outcome.failed, false, outcome.err)
 	}
-	if len(outcome.ready) == 0 {
-		return nil
-	}
-	return c.lifecycle.Run(ctx, taskID, func(context.Context) error {
-		c.enqueueHeldRuns(currentNodeRunKeys(outcome.ready))
-		return nil
-	})
+	return readyErr
 }
 
 func (c *CurrentNodeController) continueHeldRunAssignments(

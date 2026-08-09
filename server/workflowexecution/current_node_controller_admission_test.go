@@ -405,6 +405,56 @@ func TestCurrentNodeControllerWorkerFailureWaitsForTaskLifecycleWriterBeforeClea
 	}
 }
 
+func TestHeldRunAssignmentFailureQueuesReadySiblingBeforeRecoveryWait(t *testing.T) {
+	taskID := "task-held-assignment-recovery"
+	failedReference := currentNodeReferenceForControllerTest(t, taskID, "node-failed")
+	readyReference := currentNodeReferenceForControllerTest(t, taskID, "node-ready")
+	releaseInterrupt := make(chan struct{})
+	var releaseOnce sync.Once
+	store := &currentNodeControllerStore{
+		interruptStarted: make(chan struct{}),
+		interruptRelease: releaseInterrupt,
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller := newCurrentNodeControllerForTest(t, store, &countingCurrentNodeRunner{}, authority, 1)
+	controller.workerCancel()
+	controller.workerWG.Wait()
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(releaseInterrupt) })
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+	failed := newCurrentNodeRun(failedReference, workflow.NodeKindAgent, currentNodeAdmissionAutomaticAgent)
+	ready := newCurrentNodeRun(readyReference, workflow.NodeKindAgent, currentNodeAdmissionAutomaticAgent)
+	controller.mu.Lock()
+	installCurrentNodeRunLockedForTest(controller, failed)
+	readyKey := installCurrentNodeRunLockedForTest(controller, ready)
+	controller.mu.Unlock()
+	publishCurrentNodeRunForControllerTest(t, controller, failedReference)
+	publishCurrentNodeRunForControllerTest(t, controller, readyReference)
+
+	finished := make(chan error, 1)
+	go func() {
+		finished <- controller.finishHeldRunAssignments(context.Background(), failedReference.TaskID, currentNodeAssignmentWaitOutcome{
+			failed: []currentNodeQueuedStart{*failed},
+			ready:  []currentNodeQueuedStart{*ready},
+			err:    errors.New("assignment persistence failed"),
+		})
+	}()
+	<-store.interruptStarted
+
+	controller.mu.Lock()
+	_, queued := controller.queued[readyKey]
+	controller.mu.Unlock()
+	if !queued {
+		t.Fatal("ready sibling was not queued before failed-sibling recovery blocked")
+	}
+	releaseOnce.Do(func() { close(releaseInterrupt) })
+	if err := <-finished; err != nil {
+		t.Fatalf("finish held assignments: %v", err)
+	}
+}
+
 func TestCurrentNodeControllerRunnerNoLongerLiveErrorStillStopsAcceptedRun(t *testing.T) {
 	reference := currentNodeReferenceForControllerTest(t, "task-runner-no-longer-live", "node-agent")
 	store := &currentNodeControllerStore{}

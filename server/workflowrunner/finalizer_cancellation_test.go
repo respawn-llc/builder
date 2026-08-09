@@ -65,8 +65,9 @@ func TestAgentFinalizerContinuesPostTurnAfterCommittedDiagnostic(t *testing.T) {
 	for _, test := range []struct {
 		name              string
 		cancelAfterCommit bool
+		wantCompaction    bool
 	}{
-		{name: "ordinary diagnostic"},
+		{name: "ordinary diagnostic", wantCompaction: true},
 		{name: "canceled after commit", cancelAfterCommit: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -87,7 +88,12 @@ func TestAgentFinalizerContinuesPostTurnAfterCommittedDiagnostic(t *testing.T) {
 				nil,
 				&currentNodeAgentPostTurn{
 					sessionID: runtimeids.NewSessionID(),
-					runtime:   workflowruntime.PostCompletionRuntime{CompactionMode: "none"},
+					runtime: workflowruntime.PostCompletionRuntime{
+						CompactionMode: "native",
+						Compact: func(context.Context) workflowruntime.PostCompletionCompactionResult {
+							return workflowruntime.PostCompletionCompactionResult{}
+						},
+					},
 				},
 			)
 			if !errors.Is(err, eventErr) {
@@ -99,6 +105,13 @@ func TestAgentFinalizerContinuesPostTurnAfterCommittedDiagnostic(t *testing.T) {
 			if controller.failurePublications != 0 {
 				t.Fatalf("durable failure publications = %d, want 0", controller.failurePublications)
 			}
+			if controller.compactionAvailable != test.wantCompaction {
+				t.Fatalf(
+					"post-turn compaction available = %t, want %t",
+					controller.compactionAvailable,
+					test.wantCompaction,
+				)
+			}
 		})
 	}
 }
@@ -109,6 +122,7 @@ type committedDiagnosticFinalizerController struct {
 	afterResult           func()
 	postTurnFinalizations int
 	failurePublications   int
+	compactionAvailable   bool
 }
 
 func (*committedDiagnosticFinalizerController) PublishCurrentNodeExactFinalizing(
@@ -133,9 +147,10 @@ func (c *committedDiagnosticFinalizerController) FinalizeCurrentNodePostTurn(
 	ctx context.Context,
 	_ runtimeids.ExecutionScopeID,
 	_ runtimeids.SessionID,
-	_ workflowruntime.PostCompletionRuntime,
+	runtimeState workflowruntime.PostCompletionRuntime,
 ) error {
 	c.postTurnFinalizations++
+	c.compactionAvailable = runtimeState.Compact != nil
 	return context.Cause(ctx)
 }
 
