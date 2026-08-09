@@ -6,30 +6,19 @@ import (
 	"sync"
 	"testing"
 
-	"core/server/requestmemo"
-	"core/server/sessionruntime"
 	askquestion "core/server/tools"
 	"core/shared/clientui"
-	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/textutil"
 )
 
 type stubPromptResponder struct {
-	calls      int
-	awaits     int
-	sessionID  string
-	promptID   string
-	resolution askquestion.AskQuestionResolution
-	err        error
-	submitErr  error
-
-	batchCalls    int
-	batchSession  runtimeids.SessionID
-	batchStep     runtimeids.StepID
-	batchCommands []sessionruntime.PromptAnswerCommand
-	batchResults  []sessionruntime.PromptAnswerResult
-	batchErr      error
+	calls     int
+	awaits    int
+	sessionID string
+	response  askquestion.AskQuestionResponse
+	err       error
+	submitErr error
 }
 
 type stubPromptAcceptance struct {
@@ -41,34 +30,19 @@ func (a stubPromptAcceptance) AwaitSuccessor(context.Context) error {
 	return nil
 }
 
-func (s *stubPromptResponder) AcceptPromptResolution(
+func (s *stubPromptResponder) AcceptPromptResponse(
 	sessionID string,
-	promptID string,
-	resolution askquestion.AskQuestionResolution,
+	resp askquestion.AskQuestionResponse,
 	err error,
 ) (PromptResponseAcceptance, error) {
 	s.calls++
 	s.sessionID = sessionID
-	s.promptID = promptID
-	s.resolution = resolution
+	s.response = resp
 	s.err = err
 	if s.submitErr != nil {
 		return nil, s.submitErr
 	}
 	return stubPromptAcceptance{responder: s}, nil
-}
-
-func (s *stubPromptResponder) ResolvePromptBatch(
-	_ context.Context,
-	sessionID runtimeids.SessionID,
-	stepID runtimeids.StepID,
-	commands []sessionruntime.PromptAnswerCommand,
-) ([]sessionruntime.PromptAnswerResult, error) {
-	s.batchCalls++
-	s.batchSession = sessionID
-	s.batchStep = stepID
-	s.batchCommands = append([]sessionruntime.PromptAnswerCommand(nil), commands...)
-	return append([]sessionruntime.PromptAnswerResult(nil), s.batchResults...), s.batchErr
 }
 
 type cancellationAfterAcceptanceResponder struct {
@@ -91,10 +65,9 @@ func (a cancellationAfterAcceptance) AwaitSuccessor(ctx context.Context) error {
 	}
 }
 
-func (r *cancellationAfterAcceptanceResponder) AcceptPromptResolution(
+func (r *cancellationAfterAcceptanceResponder) AcceptPromptResponse(
 	_ string,
-	_ string,
-	_ askquestion.AskQuestionResolution,
+	_ askquestion.AskQuestionResponse,
 	_ error,
 ) (PromptResponseAcceptance, error) {
 	r.mu.Lock()
@@ -102,15 +75,6 @@ func (r *cancellationAfterAcceptanceResponder) AcceptPromptResolution(
 	r.mu.Unlock()
 	r.accepted <- struct{}{}
 	return cancellationAfterAcceptance{successor: r.successor}, nil
-}
-
-func (r *cancellationAfterAcceptanceResponder) ResolvePromptBatch(
-	context.Context,
-	runtimeids.SessionID,
-	runtimeids.StepID,
-	[]sessionruntime.PromptAnswerCommand,
-) ([]sessionruntime.PromptAnswerResult, error) {
-	panic("unexpected batch resolution")
 }
 
 func (r *cancellationAfterAcceptanceResponder) callCount() int {
@@ -157,28 +121,8 @@ func TestServiceAnswerAskSubmitsResponse(t *testing.T) {
 	if responder.awaits != 1 {
 		t.Fatalf("successor-aware responder call count = %d, want 1", responder.awaits)
 	}
-	answer, ok := responder.resolution.(askquestion.AskQuestionAnswer)
-	if responder.sessionID != "session-1" || responder.promptID != "ask-1" || !ok ||
-		answer.Freeform == nil || *answer.Freeform != "hello" {
-		t.Fatalf("unexpected stored resolution: session=%q prompt=%q resolution=%+v", responder.sessionID, responder.promptID, responder.resolution)
-	}
-}
-
-func TestServiceAnswerAskCanonicalizesLegacyQuestionTextAtBoundary(t *testing.T) {
-	service, responder := newPromptControlTestService()
-	req := askAnswerRequest("req-exact")
-	req.Answer = "  answer  "
-	req.FreeformAnswer = "  freeform  "
-
-	if err := service.AnswerAsk(context.Background(), req); err != nil {
-		t.Fatalf("AnswerAsk: %v", err)
-	}
-	answer, ok := responder.resolution.(askquestion.AskQuestionAnswer)
-	if !ok {
-		t.Fatalf("resolution type = %T", responder.resolution)
-	}
-	if answer.Freeform == nil || *answer.Freeform != req.FreeformAnswer {
-		t.Fatalf("canonical freeform = %v, want exact preferred freeform value", answer.Freeform)
+	if responder.sessionID != "session-1" || responder.response.RequestID != "ask-1" || responder.response.Answer != "hello" {
+		t.Fatalf("unexpected stored response: session=%q response=%+v", responder.sessionID, responder.response)
 	}
 }
 
@@ -190,47 +134,12 @@ func TestServiceAnswerAskPreservesAbsentSelectedOption(t *testing.T) {
 	if err := service.AnswerAsk(context.Background(), req); err != nil {
 		t.Fatalf("AnswerAsk: %v", err)
 	}
-	answer := responder.resolution.(askquestion.AskQuestionAnswer)
-	if answer.SelectedOptionNumber != nil {
-		t.Fatalf("selected option = %v, want nil", *answer.SelectedOptionNumber)
+	if responder.response.SelectedOptionNumber != nil {
+		t.Fatalf("selected option = %v, want nil", *responder.response.SelectedOptionNumber)
 	}
 }
 
-func TestServiceAnswerAskPreservesAbsentCanonicalText(t *testing.T) {
-	service, responder := newPromptControlTestService()
-	req := askAnswerRequest("req-option-only")
-	req.SelectedOptionNumber = textutil.Value(1)
-
-	if err := service.AnswerAsk(context.Background(), req); err != nil {
-		t.Fatalf("AnswerAsk: %v", err)
-	}
-	answer := responder.resolution.(askquestion.AskQuestionAnswer)
-	if answer.Freeform != nil {
-		t.Fatalf("canonical freeform = %v, want absent", answer.Freeform)
-	}
-}
-
-func TestServiceAnswerAskNormalizesWhitespaceSlotsAfterMemoAdmission(t *testing.T) {
-	service, responder := newPromptControlTestService()
-	req := askAnswerRequest("req-option-whitespace")
-	req.SelectedOptionNumber = textutil.Value(1)
-	req.Answer = "  "
-	req.FreeformAnswer = "\t"
-	req.ErrorMessage = "\n"
-
-	if err := service.AnswerAsk(context.Background(), req); err != nil {
-		t.Fatalf("AnswerAsk: %v", err)
-	}
-	answer := responder.resolution.(askquestion.AskQuestionAnswer)
-	if answer.Freeform != nil {
-		t.Fatalf("canonical freeform = %v, want absent", answer.Freeform)
-	}
-	if responder.err != nil {
-		t.Fatalf("prompt submission error = %v, want absent whitespace error", responder.err)
-	}
-}
-
-func TestServiceAnswerAskMemoizesSelectedOptionByValue(t *testing.T) {
+func TestServiceAnswerAskTreatsRepeatedSelectedOptionAsNewAnswer(t *testing.T) {
 	service, responder := newPromptControlTestService()
 	request := askAnswerRequest("req-option")
 	request.SelectedOptionNumber = textutil.Value(1)
@@ -241,68 +150,29 @@ func TestServiceAnswerAskMemoizesSelectedOptionByValue(t *testing.T) {
 	if err := service.AnswerAsk(context.Background(), request); err != nil {
 		t.Fatalf("AnswerAsk equivalent replay: %v", err)
 	}
-	if responder.calls != 1 {
-		t.Fatalf("responder calls = %d, want 1", responder.calls)
+	if responder.calls != 2 {
+		t.Fatalf("responder calls = %d, want 2", responder.calls)
 	}
 }
 
-func TestServiceAnswerAskDistinguishesAbsentAndPresentSelectedOption(t *testing.T) {
-	service, _ := newPromptControlTestService()
+func TestServiceAnswerAskTreatsChangedSelectedOptionAsNewAnswer(t *testing.T) {
+	service, responder := newPromptControlTestService()
 	request := askAnswerRequest("req-presence")
 	request.FreeformAnswer = "typed"
 	if err := service.AnswerAsk(context.Background(), request); err != nil {
 		t.Fatalf("AnswerAsk absent selection: %v", err)
 	}
 	request.SelectedOptionNumber = textutil.Value(1)
-	if err := service.AnswerAsk(context.Background(), request); !errors.Is(err, requestmemo.ErrClientRequestIDReused) {
-		t.Fatalf("AnswerAsk present selection replay error = %v, want payload mismatch", err)
+	if err := service.AnswerAsk(context.Background(), request); err != nil {
+		t.Fatalf("AnswerAsk present selection: %v", err)
+	}
+	if responder.calls != 2 || responder.response.SelectedOptionNumber == nil ||
+		*responder.response.SelectedOptionNumber != 1 {
+		t.Fatalf("responder = calls:%d response:%+v", responder.calls, responder.response)
 	}
 }
 
-func TestServiceAnswerAskMemoIdentityPreservesExactWhitespaceFields(t *testing.T) {
-	tests := []struct {
-		name   string
-		mutate func(*serverapi.AskAnswerRequest)
-	}{
-		{
-			name: "answer",
-			mutate: func(request *serverapi.AskAnswerRequest) {
-				request.Answer = "  "
-			},
-		},
-		{
-			name: "freeform answer",
-			mutate: func(request *serverapi.AskAnswerRequest) {
-				request.FreeformAnswer = "  "
-			},
-		},
-		{
-			name: "error message",
-			mutate: func(request *serverapi.AskAnswerRequest) {
-				request.ErrorMessage = "  "
-			},
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			service, responder := newPromptControlTestService()
-			request := askAnswerRequest("req-exact-whitespace")
-			request.SelectedOptionNumber = textutil.Value(1)
-			if err := service.AnswerAsk(context.Background(), request); err != nil {
-				t.Fatalf("AnswerAsk first: %v", err)
-			}
-			test.mutate(&request)
-			if err := service.AnswerAsk(context.Background(), request); !errors.Is(err, requestmemo.ErrClientRequestIDReused) {
-				t.Fatalf("AnswerAsk whitespace-distinct replay error = %v, want payload mismatch", err)
-			}
-			if responder.calls != 1 {
-				t.Fatalf("responder calls = %d, want 1", responder.calls)
-			}
-		})
-	}
-}
-
-func TestServiceAnswerAskDedupesSuccessfulRetry(t *testing.T) {
+func TestServiceAnswerAskRepeatedCallReturnsPromptOwnerOutcome(t *testing.T) {
 	service, responder := newPromptControlTestService()
 	req := askAnswerRequest("req-1")
 	req.Answer = "hello"
@@ -311,11 +181,11 @@ func TestServiceAnswerAskDedupesSuccessfulRetry(t *testing.T) {
 		t.Fatalf("AnswerAsk first: %v", err)
 	}
 	responder.submitErr = serverapi.ErrPromptAlreadyResolved
-	if err := service.AnswerAsk(context.Background(), req); err != nil {
-		t.Fatalf("AnswerAsk replay: %v", err)
+	if err := service.AnswerAsk(context.Background(), req); !errors.Is(err, serverapi.ErrPromptAlreadyResolved) {
+		t.Fatalf("AnswerAsk repeated error = %v, want already resolved", err)
 	}
-	if responder.calls != 1 {
-		t.Fatalf("responder call count = %d, want 1", responder.calls)
+	if responder.calls != 2 {
+		t.Fatalf("responder call count = %d, want 2", responder.calls)
 	}
 }
 
@@ -343,12 +213,12 @@ func TestServiceAnswerAskRetryAfterCanceledSuccessorWaitDoesNotResubmitAcceptedA
 	if err := service.AnswerAsk(context.Background(), req); err != nil {
 		t.Fatalf("retry AnswerAsk: %v", err)
 	}
-	if calls := responder.callCount(); calls != 1 {
-		t.Fatalf("accepted answer submissions = %d, want 1", calls)
+	if calls := responder.callCount(); calls != 2 {
+		t.Fatalf("accepted answer submissions = %d, want 2", calls)
 	}
 }
 
-func TestServiceAnswerAskRejectsClientRequestIDPayloadMismatch(t *testing.T) {
+func TestServiceAnswerAskTreatsChangedPayloadAsNewAnswer(t *testing.T) {
 	service, responder := newPromptControlTestService()
 	request := askAnswerRequest("req-1")
 	request.Answer = "hello"
@@ -356,12 +226,11 @@ func TestServiceAnswerAskRejectsClientRequestIDPayloadMismatch(t *testing.T) {
 		t.Fatalf("AnswerAsk first: %v", err)
 	}
 	request.Answer = "different"
-	err := service.AnswerAsk(context.Background(), request)
-	if !errors.Is(err, requestmemo.ErrClientRequestIDReused) {
-		t.Fatalf("AnswerAsk mismatch error = %v, want reused with different parameters", err)
+	if err := service.AnswerAsk(context.Background(), request); err != nil {
+		t.Fatalf("AnswerAsk changed payload: %v", err)
 	}
-	if responder.calls != 1 {
-		t.Fatalf("responder call count = %d, want 1", responder.calls)
+	if responder.calls != 2 || responder.response.Answer != "different" {
+		t.Fatalf("responder call count/response = %d/%+v", responder.calls, responder.response)
 	}
 }
 
@@ -378,48 +247,18 @@ func TestServiceAnswerApprovalSubmitsPromptError(t *testing.T) {
 	if responder.calls != 1 {
 		t.Fatalf("responder call count = %d, want 1", responder.calls)
 	}
-	if responder.promptID != "approval-1" {
-		t.Fatalf("unexpected prompt id: %q", responder.promptID)
+	if responder.response.RequestID != "approval-1" {
+		t.Fatalf("unexpected response: %+v", responder.response)
 	}
 	if responder.err == nil || responder.err.Error() != serverapi.ErrPromptAlreadyResolved.Error() {
 		t.Fatalf("unexpected prompt error: %v", responder.err)
 	}
-	if responder.resolution != nil {
-		t.Fatalf("unexpected resolution for prompt error: %+v", responder.resolution)
+	if responder.response.Approval != nil {
+		t.Fatalf("unexpected approval payload for prompt error: %+v", responder.response.Approval)
 	}
 }
 
-func TestServiceAnswerApprovalMemoIdentityPreservesExactWhitespaceError(t *testing.T) {
-	service, responder := newPromptControlTestService()
-	request := approvalAnswerRequest("approval-exact-whitespace")
-	if err := service.AnswerApproval(context.Background(), request); err != nil {
-		t.Fatalf("AnswerApproval first: %v", err)
-	}
-	request.ErrorMessage = "  "
-	if err := service.AnswerApproval(context.Background(), request); !errors.Is(err, requestmemo.ErrClientRequestIDReused) {
-		t.Fatalf("AnswerApproval whitespace-distinct replay error = %v, want payload mismatch", err)
-	}
-	if responder.calls != 1 {
-		t.Fatalf("responder calls = %d, want 1", responder.calls)
-	}
-}
-
-func TestServiceAnswerApprovalPreservesExactCommentary(t *testing.T) {
-	service, responder := newPromptControlTestService()
-	req := approvalAnswerRequest("req-exact-approval")
-	commentary := "  exact commentary  "
-	req.Commentary = &commentary
-
-	if err := service.AnswerApproval(context.Background(), req); err != nil {
-		t.Fatalf("AnswerApproval: %v", err)
-	}
-	approval, ok := responder.resolution.(askquestion.AskQuestionApproval)
-	if !ok || approval.Commentary == nil || *approval.Commentary != commentary {
-		t.Fatalf("Approval resolution = %+v, want exact commentary", responder.resolution)
-	}
-}
-
-func TestServiceAnswerApprovalDedupesSuccessfulRetry(t *testing.T) {
+func TestServiceAnswerApprovalRepeatedCallReturnsPromptOwnerOutcome(t *testing.T) {
 	service, responder := newPromptControlTestService()
 	req := approvalAnswerRequest("req-1")
 
@@ -427,207 +266,13 @@ func TestServiceAnswerApprovalDedupesSuccessfulRetry(t *testing.T) {
 		t.Fatalf("AnswerApproval first: %v", err)
 	}
 	responder.submitErr = serverapi.ErrPromptAlreadyResolved
-	if err := service.AnswerApproval(context.Background(), req); err != nil {
-		t.Fatalf("AnswerApproval replay: %v", err)
+	if err := service.AnswerApproval(context.Background(), req); !errors.Is(err, serverapi.ErrPromptAlreadyResolved) {
+		t.Fatalf("AnswerApproval repeated error = %v, want already resolved", err)
 	}
-	if responder.calls != 1 {
-		t.Fatalf("responder call count = %d, want 1", responder.calls)
+	if responder.calls != 2 {
+		t.Fatalf("responder call count = %d, want 2", responder.calls)
 	}
 	if responder.awaits != 0 {
 		t.Fatalf("approval unexpectedly awaited a successor %d times", responder.awaits)
-	}
-}
-
-func TestServiceAnswerPromptBatchTranslatesMixedEntriesAndValidatesReorderedResults(t *testing.T) {
-	service, responder := newPromptControlTestService()
-	request := promptAnswerBatchRequest(t)
-	responder.batchResults = []sessionruntime.PromptAnswerResult{
-		{PromptID: "declined-1", Outcome: sessionruntime.PromptAnswerOutcomeSkipped},
-		{PromptID: "question-1", Outcome: sessionruntime.PromptAnswerOutcomeResolved},
-		{PromptID: "approval-1", Outcome: sessionruntime.PromptAnswerOutcomeResolved},
-	}
-
-	response, err := service.AnswerPromptBatch(context.Background(), request)
-	if err != nil {
-		t.Fatalf("AnswerPromptBatch: %v", err)
-	}
-	if responder.batchCalls != 1 || responder.batchSession != request.SessionID || responder.batchStep != request.StepID {
-		t.Fatalf("batch delegation = calls %d session %s step %s", responder.batchCalls, responder.batchSession, responder.batchStep)
-	}
-	if len(responder.batchCommands) != 3 {
-		t.Fatalf("batch commands = %+v", responder.batchCommands)
-	}
-	question, ok := responder.batchCommands[0].Payload.(sessionruntime.PromptQuestionAnswerCommand)
-	if !ok ||
-		question.Answer.SelectedOptionNumber == nil ||
-		*question.Answer.SelectedOptionNumber != 2 ||
-		question.Answer.Freeform == nil ||
-		*question.Answer.Freeform != "question commentary" {
-		t.Fatalf("question command = %+v", responder.batchCommands[0])
-	}
-	approval, ok := responder.batchCommands[1].Payload.(sessionruntime.PromptApprovalAnswerCommand)
-	if !ok ||
-		approval.Answer.Decision != askquestion.AskQuestionApprovalDecisionDeny ||
-		approval.Answer.Commentary == nil ||
-		*approval.Answer.Commentary != "approval commentary" {
-		t.Fatalf("approval command = %+v", responder.batchCommands[1])
-	}
-	if _, ok := responder.batchCommands[2].Payload.(sessionruntime.PromptDeclinedCommand); !ok {
-		t.Fatalf("declined command = %+v", responder.batchCommands[2])
-	}
-	if err := serverapi.ValidatePromptAnswerBatchResponse(request, response); err != nil {
-		t.Fatalf("response correlation: %v", err)
-	}
-}
-
-func TestServiceAnswerPromptBatchPreservesAbsentOptionalText(t *testing.T) {
-	service, responder := newPromptControlTestService()
-	request := promptAnswerBatchRequest(t)
-	request.Entries[0].QuestionAnswer.Freeform = nil
-	request.Entries[1].ApprovalAnswer.Commentary = nil
-	responder.batchResults = []sessionruntime.PromptAnswerResult{
-		{PromptID: "question-1", Outcome: sessionruntime.PromptAnswerOutcomeResolved},
-		{PromptID: "approval-1", Outcome: sessionruntime.PromptAnswerOutcomeResolved},
-		{PromptID: "declined-1", Outcome: sessionruntime.PromptAnswerOutcomeResolved},
-	}
-
-	if _, err := service.AnswerPromptBatch(context.Background(), request); err != nil {
-		t.Fatalf("AnswerPromptBatch: %v", err)
-	}
-	question, ok := responder.batchCommands[0].Payload.(sessionruntime.PromptQuestionAnswerCommand)
-	if !ok {
-		t.Fatalf("question command = %+v", responder.batchCommands[0])
-	}
-	if question.Answer.Freeform != nil {
-		t.Fatal("absent Question freeform became present")
-	}
-	approval, ok := responder.batchCommands[1].Payload.(sessionruntime.PromptApprovalAnswerCommand)
-	if !ok {
-		t.Fatalf("approval command = %+v", responder.batchCommands[1])
-	}
-	if approval.Answer.Commentary != nil {
-		t.Fatal("absent Approval commentary became present")
-	}
-}
-
-func TestPromptBatchTranslationInvariantUsesDebugAwarePolicy(t *testing.T) {
-	t.Run("production", func(t *testing.T) {
-		t.Setenv("KENT_DEBUG", "")
-		t.Setenv("KENT_INVARIANT_MODE", "diagnostic")
-		if err := reportPromptBatchTranslationInvariant("prompt-1"); err == nil {
-			t.Fatal("translation invariant did not surface an error")
-		}
-	})
-	t.Run("debug", func(t *testing.T) {
-		t.Setenv("KENT_INVARIANT_MODE", "panic")
-		defer func() {
-			if recovered := recover(); recovered == nil {
-				t.Fatal("translation invariant did not panic in debug mode")
-			}
-		}()
-		_ = reportPromptBatchTranslationInvariant("prompt-1")
-	})
-}
-
-func TestServiceAnswerPromptBatchRejectsMalformedRuntimeResultSets(t *testing.T) {
-	request := promptAnswerBatchRequest(t)
-	tests := []struct {
-		name    string
-		results []sessionruntime.PromptAnswerResult
-	}{
-		{
-			name: "missing",
-			results: []sessionruntime.PromptAnswerResult{
-				{PromptID: "question-1", Outcome: sessionruntime.PromptAnswerOutcomeResolved},
-				{PromptID: "approval-1", Outcome: sessionruntime.PromptAnswerOutcomeResolved},
-			},
-		},
-		{
-			name: "foreign",
-			results: []sessionruntime.PromptAnswerResult{
-				{PromptID: "question-1", Outcome: sessionruntime.PromptAnswerOutcomeResolved},
-				{PromptID: "approval-1", Outcome: sessionruntime.PromptAnswerOutcomeResolved},
-				{PromptID: "foreign", Outcome: sessionruntime.PromptAnswerOutcomeSkipped},
-			},
-		},
-		{
-			name: "duplicate",
-			results: []sessionruntime.PromptAnswerResult{
-				{PromptID: "question-1", Outcome: sessionruntime.PromptAnswerOutcomeResolved},
-				{PromptID: "question-1", Outcome: sessionruntime.PromptAnswerOutcomeSkipped},
-				{PromptID: "declined-1", Outcome: sessionruntime.PromptAnswerOutcomeSkipped},
-			},
-		},
-		{
-			name: "invalid outcome",
-			results: []sessionruntime.PromptAnswerResult{
-				{PromptID: "question-1", Outcome: sessionruntime.PromptAnswerOutcome("later")},
-				{PromptID: "approval-1", Outcome: sessionruntime.PromptAnswerOutcomeResolved},
-				{PromptID: "declined-1", Outcome: sessionruntime.PromptAnswerOutcomeSkipped},
-			},
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			service, responder := newPromptControlTestService()
-			responder.batchResults = test.results
-			if _, err := service.AnswerPromptBatch(context.Background(), request); err == nil {
-				t.Fatal("malformed runtime result set unexpectedly succeeded")
-			}
-		})
-	}
-}
-
-func TestServiceAnswerPromptBatchDoesNotMemoizeRepeatedInvocation(t *testing.T) {
-	service, responder := newPromptControlTestService()
-	request := promptAnswerBatchRequest(t)
-	responder.batchResults = []sessionruntime.PromptAnswerResult{
-		{PromptID: "question-1", Outcome: sessionruntime.PromptAnswerOutcomeSkipped},
-		{PromptID: "approval-1", Outcome: sessionruntime.PromptAnswerOutcomeSkipped},
-		{PromptID: "declined-1", Outcome: sessionruntime.PromptAnswerOutcomeSkipped},
-	}
-	for attempt := 0; attempt < 2; attempt++ {
-		if _, err := service.AnswerPromptBatch(context.Background(), request); err != nil {
-			t.Fatalf("AnswerPromptBatch attempt %d: %v", attempt+1, err)
-		}
-	}
-	if responder.batchCalls != 2 {
-		t.Fatalf("batch responder calls = %d, want 2 independent invocations", responder.batchCalls)
-	}
-}
-
-func promptAnswerBatchRequest(t *testing.T) serverapi.PromptAnswerBatchRequest {
-	t.Helper()
-	sessionID, err := runtimeids.ParseSessionID("session-1")
-	if err != nil {
-		t.Fatalf("ParseSessionID: %v", err)
-	}
-	stepID, err := runtimeids.ParseStepID("22222222-2222-4222-8222-222222222222")
-	if err != nil {
-		t.Fatalf("ParseStepID: %v", err)
-	}
-	selected := 2
-	questionCommentary := "question commentary"
-	approvalCommentary := "approval commentary"
-	return serverapi.PromptAnswerBatchRequest{
-		SessionID: sessionID,
-		StepID:    stepID,
-		Entries: []serverapi.PromptAnswerBatchEntry{
-			{
-				PromptID: "question-1",
-				QuestionAnswer: &serverapi.PromptQuestionAnswer{
-					SelectedOptionNumber: &selected,
-					Freeform:             &questionCommentary,
-				},
-			},
-			{
-				PromptID: "approval-1",
-				ApprovalAnswer: &serverapi.PromptApprovalAnswer{
-					Decision:   clientui.ApprovalDecisionDeny,
-					Commentary: &approvalCommentary,
-				},
-			},
-			{PromptID: "declined-1", Declined: &serverapi.PromptDeclined{}},
-		},
 	}
 }

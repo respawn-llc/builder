@@ -486,14 +486,12 @@ func (r *RuntimeRegistry) PublishAuthorityRuntimeEvent(ref runtimeids.SessionRes
 }
 
 func (r *RuntimeRegistry) publishRuntimeEvent(entry *authorityRuntimeEntry, evt runtime.Event) error {
-	if !transcriptEventRequiresVisibleSubscriber(evt) || entry.sessionFeed.HasSubscribers() {
-		messages, err := runtimeview.TranscriptMessagesFromRuntimeEventChecked(evt)
-		if err != nil {
-			contractErr := entry.sessionFeed.CloseContractViolation(fmt.Errorf("project runtime transcript event: %w", err))
-			return contractErr
-		}
-		entry.sessionFeed.Publish(messages)
+	messages, err := runtimeview.TranscriptMessagesFromRuntimeEventChecked(evt)
+	if err != nil {
+		contractErr := entry.sessionFeed.CloseContractViolation(fmt.Errorf("project runtime transcript event: %w", err))
+		return contractErr
 	}
+	entry.sessionFeed.Publish(messages)
 	if runtimeEventShouldPublishSessionStatus(evt) {
 		if err := entry.sessionFeed.PublishBuilt(func() ([]clientui.TranscriptEvent, error) {
 			status, err := runtimeview.TranscriptSessionStatusFromRuntime(entry.engine)
@@ -505,7 +503,6 @@ func (r *RuntimeRegistry) publishRuntimeEvent(entry *authorityRuntimeEntry, evt 
 			return err
 		}
 	}
-	r.recordQueuedMessageOperationStatus(evt)
 	return nil
 }
 
@@ -569,47 +566,6 @@ func (r *RuntimeRegistry) resolveSessionExecutionTarget(ctx context.Context, ses
 
 func runtimeEventShouldPublishSessionStatus(evt runtime.Event) bool {
 	return evt.ContextUsage != nil || evt.GoalStatus != nil || evt.Compaction != nil || evt.Kind == runtime.EventAssistantMessage
-}
-
-func transcriptEventRequiresVisibleSubscriber(evt runtime.Event) bool {
-	return evt.Kind == runtime.EventAssistantDelta || evt.Kind == runtime.EventAssistantDeltaReset
-}
-
-func (r *RuntimeRegistry) recordQueuedMessageOperationStatus(evt runtime.Event) {
-	if r == nil || r.operations == nil || evt.Kind != runtime.EventQueuedUserMessageStatus || evt.QueuedUserMessageStatus == nil {
-		return
-	}
-	status := evt.QueuedUserMessageStatus
-	clientRequestID, err := runtimeids.ParseRuntimeClientRequestID(status.ClientRequestID)
-	if err != nil {
-		panic(fmt.Sprintf("record queued-message runtime status with invalid client request id for session %q queue item %q: %v", strings.TrimSpace(status.SessionID), strings.TrimSpace(status.QueueItemID), err))
-	}
-	queueItemID, err := runtimeids.ParseQueueItemID(status.QueueItemID)
-	if err != nil {
-		panic(fmt.Sprintf("record queued-message runtime status with invalid queue item id for session %q client request %q: %v", strings.TrimSpace(status.SessionID), strings.TrimSpace(status.ClientRequestID), err))
-	}
-	ref := clientui.RuntimeOperationRef{
-		Kind:            clientui.RuntimeOperationKindQueuedMessage,
-		ClientRequestID: clientRequestID,
-		QueueItemID:     &queueItemID,
-	}
-	var state clientui.RuntimeInputReconciliationState
-	switch status.Status {
-	case runtime.QueuedUserMessageAccepted:
-		state = clientui.RuntimeInputReconciliationAccepted
-	case runtime.QueuedUserMessageSubmitted:
-		state = clientui.RuntimeInputReconciliationSubmitted
-	case runtime.QueuedUserMessageFailed:
-		state = clientui.RuntimeInputReconciliationFailedWithRestore
-	case runtime.QueuedUserMessageDiscarded:
-		state = clientui.RuntimeInputReconciliationCanceledNotCommitted
-	default:
-		return
-	}
-	recordErr := r.operations.RecordQueuedMessageStatus(status.SessionID, ref, state)
-	if recordErr != nil {
-		panic(fmt.Sprintf("record queued-message runtime status for session %q client request %q queue item %q: %v", strings.TrimSpace(status.SessionID), clientRequestID.String(), queueItemID.String(), recordErr))
-	}
 }
 
 func (r *RuntimeRegistry) PublishRuntimeReadModelUpdate(sessionID string, update clientui.RuntimeReadModelUpdate) {

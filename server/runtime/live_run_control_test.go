@@ -11,6 +11,7 @@ import (
 	"core/server/runtimecommand"
 	"core/server/tools"
 	"core/shared/runtimeids"
+	"core/shared/serverapi"
 	"core/shared/textutil"
 
 	"github.com/google/uuid"
@@ -52,6 +53,52 @@ func (p *liveRunScopeLifecycleProbe) setScope(scope runtimeids.ExecutionScopeID)
 	p.scope = scope
 	p.live = true
 	p.mu.Unlock()
+}
+
+func (p *liveRunScopeLifecycleProbe) setLive(live bool) {
+	p.mu.Lock()
+	p.live = live
+	p.mu.Unlock()
+}
+
+func TestStoppedScopeRejectsInputBeforeAgendaAcceptance(t *testing.T) {
+	statuses := make(chan QueuedUserMessageStatusEvent, 1)
+	scopeLifecycle := &liveRunScopeLifecycleProbe{}
+	eng := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{
+		Model:         "gpt-5",
+		StepLifecycle: scopeLifecycle,
+		OnEvent: func(evt Event) {
+			if evt.QueuedUserMessageStatus != nil {
+				statuses <- *evt.QueuedUserMessageStatus
+			}
+		},
+	})
+	origin := serverapi.RuntimeStepOrigin{RunID: uuid.NewString(), StepID: uuid.NewString()}
+	scopeID := runtimeids.NewExecutionScopeID()
+	eng.agentSteps.current = &activeAgentStep{
+		scopeID: scopeID,
+		origin:  origin,
+		phase:   agentStepProviderRunning,
+	}
+	scopeLifecycle.setScope(scopeID)
+	scopeLifecycle.setLive(false)
+
+	_, err := eng.acceptHumanAgendaItem(
+		queuedUserMessageWithID(runtimeids.NewQueueItemID().String(), "too late", ""),
+		boundaryEligibilityStep,
+		true,
+	)
+	if !errors.Is(err, ErrNoActiveLiveRun) {
+		t.Fatalf("stopped-scope input error = %v, want no active run", err)
+	}
+	if eng.HasQueuedUserWork() {
+		t.Fatal("stopped-scope input entered the Boundary Agenda")
+	}
+	select {
+	case status := <-statuses:
+		t.Fatalf("stopped-scope input published status %+v", status)
+	default:
+	}
 }
 
 func TestLiveRunWaitIdleReturnsNoActive(t *testing.T) {

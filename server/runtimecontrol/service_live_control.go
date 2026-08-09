@@ -97,24 +97,21 @@ func (s *Service) LiveStop(ctx context.Context, req serverapi.RuntimeLiveStopReq
 	if err != nil {
 		return serverapi.RuntimeLiveStopResponse{}, err
 	}
-	memoReq := liveStopMemoRequest{SessionID: sessionID}
-	return s.liveStops.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameLiveStopMemoRequest, func(ctx context.Context) (serverapi.RuntimeLiveStopResponse, error) {
-		resp := serverapi.RuntimeLiveStopResponse{Status: serverapi.RuntimeLiveStopStatusIdle}
-		err := s.withLiveExecutionRuntime(ctx, memoReq.SessionID, func(_ context.Context, engine *runtime.Engine) error {
-			stopped, err := engine.TryInterruptActiveRun()
-			if err != nil {
-				return err
-			}
-			if stopped {
-				resp.Status = serverapi.RuntimeLiveStopStatusStopped
-			}
-			return nil
-		})
-		if errors.Is(err, serverapi.ErrRuntimeUnavailable) || errors.Is(err, serverapi.ErrRuntimeNoActiveRun) {
-			return resp, nil
+	resp := serverapi.RuntimeLiveStopResponse{Status: serverapi.RuntimeLiveStopStatusIdle}
+	err = s.withLiveExecutionRuntime(ctx, sessionID, func(_ context.Context, engine *runtime.Engine) error {
+		stopped, stopErr := engine.TryInterruptActiveRun()
+		if stopErr != nil {
+			return stopErr
 		}
-		return resp, err
+		if stopped {
+			resp.Status = serverapi.RuntimeLiveStopStatusStopped
+		}
+		return nil
 	})
+	if errors.Is(err, serverapi.ErrRuntimeUnavailable) || errors.Is(err, serverapi.ErrRuntimeNoActiveRun) {
+		return resp, nil
+	}
+	return resp, err
 }
 
 func (s *Service) captureLiveRun(ctx context.Context, id runtimeids.SessionID) (*runtime.LiveRunWaitHandle, string, error) {

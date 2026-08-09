@@ -32,10 +32,6 @@ func newSessionFeedSequencer(broker *transcriptSubscriptionBroker) *sessionFeedS
 	return &sessionFeedSequencer{broker: broker}
 }
 
-func (s *sessionFeedSequencer) HasSubscribers() bool {
-	return s != nil && s.broker != nil && s.broker.SubscriberCount() > 0
-}
-
 func (s *sessionFeedSequencer) Subscribe(
 	build func() (clientui.TranscriptHydration, error),
 ) (*transcriptSubscription, error) {

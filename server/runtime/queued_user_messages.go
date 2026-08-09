@@ -169,6 +169,12 @@ func (e *Engine) humanAgendaBinding(
 		current = e.agentSteps.boundary
 	}
 	if current != nil {
+		if requireActiveScope {
+			if lifecycle, ok := e.cfg.StepLifecycle.(AgentStepScopeLifecycle); ok &&
+				!lifecycle.AgentStepScopeLive(e.lifecycleCtx, current.scopeID) {
+				return nil, 0, ErrNoActiveLiveRun
+			}
+		}
 		return scopeBoundaryBinding(current.scopeID, current.origin), eligibility, nil
 	}
 	if requireActiveScope {

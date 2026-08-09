@@ -65,7 +65,6 @@ type Service struct {
 
 	queuedDiscards *requestmemo.Memo[queuedUserMessageMemoRequest, serverapi.RuntimeDiscardQueuedUserMessageResponse]
 	liveSteers     *requestmemo.Memo[liveSteerMemoRequest, serverapi.RuntimeLiveSteerResponse]
-	liveStops      *requestmemo.Memo[liveStopMemoRequest, serverapi.RuntimeLiveStopResponse]
 }
 
 type committedRuntimeMutationResult[Resp any] struct {
@@ -95,10 +94,6 @@ type liveSteerMemoRequest struct {
 	SessionID       runtimeids.SessionID
 	CallerSessionID serverapi.OptionalStringKey
 	Text            string
-}
-
-type liveStopMemoRequest struct {
-	SessionID runtimeids.SessionID
 }
 
 type queuedUserMessageMemoRequest struct {
@@ -150,7 +145,6 @@ func NewServiceWithGoalCommands(
 
 		queuedDiscards: requestmemo.New[queuedUserMessageMemoRequest, serverapi.RuntimeDiscardQueuedUserMessageResponse](),
 		liveSteers:     requestmemo.New[liveSteerMemoRequest, serverapi.RuntimeLiveSteerResponse](),
-		liveStops:      requestmemo.New[liveStopMemoRequest, serverapi.RuntimeLiveStopResponse](),
 	}
 }
 
@@ -673,7 +667,6 @@ func (s *Service) workflowTaskSession(ctx context.Context, sessionID string, eng
 var (
 	sameSessionTextMemoRequest       = sameComparable[sessionTextMemoRequest]
 	sameLiveSteerMemoRequest         = sameComparable[liveSteerMemoRequest]
-	sameLiveStopMemoRequest          = sameComparable[liveStopMemoRequest]
 	sameQueuedUserMessageMemoRequest = sameComparable[queuedUserMessageMemoRequest]
 	sameSessionStringMemoRequest     = sameComparable[sessionStringMemoRequest]
 	sameSessionCommandMemoRequest    = sameComparable[sessionCommandMemoRequest]
