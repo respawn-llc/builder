@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"core/cli/tui/transcriptrender"
@@ -370,6 +371,7 @@ func TestBellHooksBlankFinalFollowUpPreservesTurn(t *testing.T) {
 	hooks.OnTranscriptMessage(bellReviewerStateMessage(1, clientui.ReviewerStateRunning))
 	hooks.OnTranscriptMessage(bellToolStartMessage(1))
 	hooks.OnTranscriptMessage(bellAssistantDeltaMessage(1, " \n\t"))
+	hooks.OnTranscriptMessage(bellLiveRunNoFinalMessage())
 	hooks.OnTranscriptMessage(bellReviewerStateMessage(1, clientui.ReviewerStateCompleted))
 	hooks.OnTranscriptMessage(bellStepFinishedMessage(1))
 	hooks.OnTurnQueueDrained()
@@ -452,6 +454,20 @@ func TestBellHooksBlankFinalDoesNotCreateNotification(t *testing.T) {
 	hooks.OnTurnQueueDrained()
 	if ringer.total() != 0 {
 		t.Fatalf("blank final emitted %d events", ringer.total())
+	}
+}
+
+func TestBellHooksNoFinalLiveRunClearsEarlierPendingCompletion(t *testing.T) {
+	ringer := &countRinger{}
+	hooks := newUnfocusedBellHooks(ringer)
+
+	recordToolHeavyBellTurn(hooks, 1)
+	hooks.OnTranscriptMessage(bellLiveRunNoFinalMessage())
+	hooks.OnTranscriptMessage(bellStepFinishedMessage(2))
+	hooks.OnTurnQueueDrained()
+
+	if ringer.total() != 0 {
+		t.Fatalf("no-final live run emitted %d stale completion events", ringer.total())
 	}
 }
 
@@ -610,6 +626,16 @@ func bellAssistantDeltaMessage(step int, delta string) clientui.TranscriptMessag
 		StepID: bellTestStepID(step), StreamID: runtimeids.NewAssistantStreamID(), Delta: delta, Phase: transcript.AssistantPhaseFinal,
 	}))
 
+}
+
+func bellLiveRunNoFinalMessage() clientui.TranscriptMessage {
+	startedAt := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+	return clientui.NewTranscriptMessage(2, clientui.NewTranscriptEvent(clientui.TranscriptLiveRunResult{
+		Status:     clientui.LiveRunStatusCompleted,
+		ResultKind: clientui.LiveRunResultNoFinalAnswer,
+		StartedAt:  startedAt,
+		FinishedAt: startedAt.Add(time.Second),
+	}))
 }
 
 func recordToolHeavyBellTurn(hooks *bellHooks, step int) {

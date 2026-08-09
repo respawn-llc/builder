@@ -9,6 +9,7 @@ import (
 
 	"core/server/llm"
 	"core/server/tools"
+	"core/shared/textutil"
 )
 
 func TestEnginePublishesLiveRunTerminalFactsThroughSubmitSeam(t *testing.T) {
@@ -47,6 +48,36 @@ func TestEnginePublishesLiveRunTerminalFactsThroughSubmitSeam(t *testing.T) {
 		result := events.single(t)
 		if result.Status != RunStatusFailed ||
 			!errors.Is(result.Error, failure) {
+			t.Fatalf("result = %+v", result)
+		}
+	})
+
+	t.Run("completed blank final", func(t *testing.T) {
+		store := mustCreateTestSession(t)
+		events := &liveRunEventCollector{}
+		eng := mustNewTestEngine(t, store, &fakeClient{responses: []llm.Response{{
+			Assistant: llm.Message{
+				Role:    llm.RoleAssistant,
+				Phase:   textutil.Value(llm.MessagePhaseFinal),
+				Content: textutil.Value(""),
+			},
+			Usage: llm.Usage{WindowTokens: 200_000},
+		}}}, tools.NewRegistry(), Config{
+			Model:   "gpt-5",
+			OnEvent: events.accept,
+		})
+
+		message, err := eng.SubmitUserMessage(t.Context(), "finish silently")
+		if err != nil {
+			t.Fatalf("SubmitUserMessage: %v", err)
+		}
+		if message.Content != nil {
+			t.Fatalf("blank final content = %#v, want absent", message.Content)
+		}
+		result := events.single(t)
+		if result.Status != RunStatusCompleted ||
+			result.ResultKind != LiveRunResultNoFinalAnswer ||
+			result.NoFinalReason != LiveRunNoFinalAnswerReasonUnknown {
 			t.Fatalf("result = %+v", result)
 		}
 	})

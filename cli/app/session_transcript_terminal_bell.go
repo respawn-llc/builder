@@ -19,6 +19,11 @@ func (h *bellHooks) OnTranscriptMessage(message clientui.TranscriptMessage) {
 		if step.Lifecycle == clientui.StepLifecycleFinished {
 			h.recordStepFinished(step.StepID)
 		}
+	case clientui.TranscriptMessageLiveRunFinished:
+		result := message.Payload().(clientui.TranscriptLiveRunResult)
+		if result.ResultKind == clientui.LiveRunResultNoFinalAnswer {
+			h.clearPendingTurnCompletionForNoFinal()
+		}
 	case clientui.TranscriptMessageCommittedRow:
 		row := message.Payload().(clientui.TranscriptCommittedRow)
 		if row.Kind != clientui.TranscriptRowAssistant || row.Assistant == nil {

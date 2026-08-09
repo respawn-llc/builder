@@ -902,7 +902,10 @@ func (e *Engine) emitRawAtRevision(evt Event, revision int64) error {
 
 func (e *Engine) publishLiveRunFinished(result LiveRunResult) {
 	if result.Status == RunStatusCompleted && result.ResultKind != LiveRunResultAssistantFinalAnswer {
-		return
+		switch result.NoFinalReason {
+		case LiveRunNoFinalAnswerReasonUserShell, LiveRunNoFinalAnswerReasonBackground:
+			return
+		}
 	}
 	if result.Status == RunStatusInterrupted || errors.Is(result.Error, context.Canceled) {
 		return
