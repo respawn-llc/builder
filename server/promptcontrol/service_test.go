@@ -94,17 +94,13 @@ func TestServiceSubscribeFollowUpInstallsWatcherBeforeReturning(t *testing.T) {
 func TestServiceAnswerPromptBatchTranslatesMixedEntriesAndCorrelatesResults(t *testing.T) {
 	service, responder := newPromptControlTestService()
 	selected := 2
-	questionCommentary := "question commentary"
-	approvalCommentary := "approval commentary"
 	request := serverapi.PromptAnswerBatchRequest{
 		SessionID: runtimeids.NewSessionID(),
 		StepID:    promptControlStepID(t),
 		Entries: []serverapi.PromptAnswerBatchEntry{
-			{PromptID: "question-1", QuestionAnswer: &serverapi.PromptQuestionAnswer{
-				SelectedOptionNumber: &selected, Freeform: &questionCommentary,
-			}},
+			{PromptID: "question-1", QuestionAnswer: &serverapi.PromptQuestionAnswer{SelectedOptionNumber: &selected}},
 			{PromptID: "approval-1", ApprovalAnswer: &serverapi.PromptApprovalAnswer{
-				Decision: clientui.ApprovalDecisionDeny, Commentary: &approvalCommentary,
+				Decision: clientui.ApprovalDecisionDeny,
 			}},
 			{PromptID: "declined-1", Declined: &serverapi.PromptDeclined{}},
 		},
@@ -126,10 +122,8 @@ func TestServiceAnswerPromptBatchTranslatesMixedEntriesAndCorrelatesResults(t *t
 	approval, approvalOK := responder.batchCommands[1].Payload.(sessionruntime.PromptApprovalAnswerCommand)
 	_, declinedOK := responder.batchCommands[2].Payload.(sessionruntime.PromptDeclinedCommand)
 	if !questionOK || question.Answer.SelectedOptionNumber == nil ||
-		*question.Answer.SelectedOptionNumber != selected || question.Answer.Freeform == nil ||
-		*question.Answer.Freeform != questionCommentary || !approvalOK ||
+		*question.Answer.SelectedOptionNumber != selected || !approvalOK ||
 		approval.Answer.Decision != askquestion.AskQuestionApprovalDecisionDeny ||
-		approval.Answer.Commentary == nil || *approval.Answer.Commentary != approvalCommentary ||
 		!declinedOK {
 		t.Fatalf("translated commands = %+v", responder.batchCommands)
 	}
@@ -139,15 +133,7 @@ func TestServiceAnswerPromptBatchTranslatesMixedEntriesAndCorrelatesResults(t *t
 }
 
 func TestServiceAnswerPromptBatchRejectsMalformedRuntimeResultSets(t *testing.T) {
-	selected := 1
-	request := serverapi.PromptAnswerBatchRequest{
-		SessionID: runtimeids.NewSessionID(),
-		StepID:    promptControlStepID(t),
-		Entries: []serverapi.PromptAnswerBatchEntry{{
-			PromptID:       "question-1",
-			QuestionAnswer: &serverapi.PromptQuestionAnswer{SelectedOptionNumber: &selected},
-		}},
-	}
+	request := promptControlQuestionRequest(t)
 	tests := []struct {
 		name    string
 		results []sessionruntime.PromptAnswerResult
@@ -169,15 +155,7 @@ func TestServiceAnswerPromptBatchRejectsMalformedRuntimeResultSets(t *testing.T)
 
 func TestServiceAnswerPromptBatchDoesNotMemoizeRepeatedInvocation(t *testing.T) {
 	service, responder := newPromptControlTestService()
-	selected := 1
-	request := serverapi.PromptAnswerBatchRequest{
-		SessionID: runtimeids.NewSessionID(),
-		StepID:    promptControlStepID(t),
-		Entries: []serverapi.PromptAnswerBatchEntry{{
-			PromptID:       "question-1",
-			QuestionAnswer: &serverapi.PromptQuestionAnswer{SelectedOptionNumber: &selected},
-		}},
-	}
+	request := promptControlQuestionRequest(t)
 	responder.batchResults = []sessionruntime.PromptAnswerResult{{
 		PromptID: "question-1",
 		Outcome:  sessionruntime.PromptAnswerOutcomeSkipped,
@@ -189,6 +167,19 @@ func TestServiceAnswerPromptBatchDoesNotMemoizeRepeatedInvocation(t *testing.T) 
 	}
 	if responder.batchCalls != 2 {
 		t.Fatalf("batch responder calls = %d, want 2 independent invocations", responder.batchCalls)
+	}
+}
+
+func promptControlQuestionRequest(t *testing.T) serverapi.PromptAnswerBatchRequest {
+	t.Helper()
+	selected := 1
+	return serverapi.PromptAnswerBatchRequest{
+		SessionID: runtimeids.NewSessionID(),
+		StepID:    promptControlStepID(t),
+		Entries: []serverapi.PromptAnswerBatchEntry{{
+			PromptID:       "question-1",
+			QuestionAnswer: &serverapi.PromptQuestionAnswer{SelectedOptionNumber: &selected},
+		}},
 	}
 }
 

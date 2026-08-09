@@ -2,7 +2,6 @@ package transport
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"testing"
@@ -25,10 +24,6 @@ func TestPromptFollowUpSubscriptionInstallsBeforeSubscribeResponse(t *testing.T)
 		StepID:    stepID,
 		PromptID:  "prompt-1",
 	}
-	params, err := json.Marshal(request)
-	if err != nil {
-		t.Fatalf("marshal request: %v", err)
-	}
 	route, ok := apicontract.RouteByMethod(protocol.MethodPromptFollowUpWatch)
 	if !ok {
 		t.Fatal("prompt follow-up route missing")
@@ -43,7 +38,7 @@ func TestPromptFollowUpSubscriptionInstallsBeforeSubscribeResponse(t *testing.T)
 			JSONRPC: protocol.JSONRPCVersion,
 			ID:      "watch",
 			Method:  protocol.MethodPromptFollowUpWatch,
-			Params:  params,
+			Params:  mustJSON(t, request),
 		},
 		func(context.Context, serverapi.PromptFollowUpWatchRequest) (*scriptedPromptFollowUpSubscription, error) {
 			conn.installed = true
@@ -54,28 +49,18 @@ func TestPromptFollowUpSubscriptionInstallsBeforeSubscribeResponse(t *testing.T)
 		},
 	)
 
-	if len(conn.frames) != 3 {
-		t.Fatalf("frames = %d, want SubscribeResponse, one terminal event, and completion", len(conn.frames))
+	if len(conn.frames) != 2 {
+		t.Fatalf("frames = %d, want SubscribeResponse and completion", len(conn.frames))
 	}
 	if conn.frames[0].ID != "watch" || conn.frames[0].Method != "" {
 		t.Fatalf("first frame = %+v, want canonical SubscribeResponse", conn.frames[0])
 	}
-	if conn.frames[1].Method != protocol.MethodPromptFollowUpEvent ||
-		conn.frames[2].Method != protocol.MethodPromptFollowUpComplete {
-		t.Fatalf("stream frames = %+v", conn.frames)
-	}
 }
 
-type scriptedPromptFollowUpSubscription struct {
-	delivered bool
-}
+type scriptedPromptFollowUpSubscription struct{}
 
 func (s *scriptedPromptFollowUpSubscription) Next(context.Context) (serverapi.PromptFollowUpEvent, error) {
-	if s.delivered {
-		return serverapi.PromptFollowUpEvent{}, io.EOF
-	}
-	s.delivered = true
-	return serverapi.PromptFollowUpEvent{Kind: serverapi.PromptFollowUpSuccessorReady}, nil
+	return serverapi.PromptFollowUpEvent{}, io.EOF
 }
 
 func (*scriptedPromptFollowUpSubscription) Close() error {

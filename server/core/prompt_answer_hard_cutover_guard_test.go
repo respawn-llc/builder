@@ -24,30 +24,18 @@ func TestPromptFollowUpContractsCarryIdentityAndTerminalOnlyEvents(t *testing.T)
 
 func TestObsoletePromptMutationSymbolsStayDeleted(t *testing.T) {
 	forbiddenIdentifiers := map[string]struct{}{
-		"Ask" + "AnswerRequest":                         {},
-		"Approval" + "AnswerRequest":                    {},
-		"Answer" + "Ask":                                {},
-		"Answer" + "Approval":                           {},
-		"AnswerWorkflowTask" + "Question":               {},
-		"WorkflowTaskQuestion" + "AnswerRequest":        {},
-		"WorkflowTaskQuestionApproval" + "Answer":       {},
-		"MethodAsk" + "Answer":                          {},
-		"MethodApproval" + "Answer":                     {},
-		"MethodWorkflowTaskQuestion" + "Answer":         {},
-		"PromptResponse" + "Acceptance":                 {},
-		"AcceptPrompt" + "Resolution":                   {},
-		"AcceptPromptResolution" + "ForScope":           {},
-		"SubmitPrompt" + "Resolution":                   {},
-		"SubmitPromptResolution" + "ForScope":           {},
-		"ResolvePendingWorkflow" + "Prompt":             {},
-		"WorkflowPrompt" + "Resolution":                 {},
-		"ErrWorkflowPrompt" + "Ambiguous":               {},
-		"ErrWorkflowTaskQuestionSelector" + "Ambiguous": {},
+		"Ask" + "AnswerRequest": {}, "Approval" + "AnswerRequest": {}, "Answer" + "Ask": {},
+		"Answer" + "Approval": {}, "AnswerWorkflowTask" + "Question": {},
+		"WorkflowTaskQuestion" + "AnswerRequest": {}, "WorkflowTaskQuestionApproval" + "Answer": {},
+		"MethodAsk" + "Answer": {}, "MethodApproval" + "Answer": {},
+		"MethodWorkflowTaskQuestion" + "Answer": {}, "PromptResponse" + "Acceptance": {},
+		"AcceptPrompt" + "Resolution": {}, "AcceptPromptResolution" + "ForScope": {},
+		"SubmitPrompt" + "Resolution": {}, "SubmitPromptResolution" + "ForScope": {},
+		"ResolvePendingWorkflow" + "Prompt": {}, "WorkflowPrompt" + "Resolution": {},
+		"ErrWorkflowPrompt" + "Ambiguous": {}, "ErrWorkflowTaskQuestionSelector" + "Ambiguous": {},
 	}
 	forbiddenWireValues := map[string]struct{}{
-		"ask." + "answer":                    {},
-		"approval." + "answer":               {},
-		"workflow.task.question." + "answer": {},
+		"ask." + "answer": {}, "approval." + "answer": {}, "workflow.task.question." + "answer": {},
 	}
 	var findings []string
 	repoRoot := findRepoRoot(t)

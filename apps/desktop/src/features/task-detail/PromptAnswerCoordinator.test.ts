@@ -4,7 +4,8 @@ import type { QuestionAttentionItem } from "@/api";
 import { attentionItemSchema } from "@/api/schemas/common";
 import { questionAttention as questionFixture } from "@/test-support/task-detail";
 import { PromptAnswerCoordinator } from "./PromptAnswerCoordinator";
-import { emptyPromptAnswerState, promptAnswerKey } from "./PromptAnswerState";
+import { emptyPromptAnswerState, promptAnswerKey, samePromptAnswerKey } from "./PromptAnswerState";
+import { taskDetailAttentionRowKey } from "./TaskDetailAttentionRowKey";
 import {
   emptyQuestionSelection,
   withQuestionCommentary,
@@ -82,10 +83,13 @@ describe("Task Detail prompt answer reconciliation", () => {
 
   it("reconciles full-key collisions independently when reads finish out of order", async () => {
     const first = question("session-1", "step-1", "shared");
-    const second = question("session-2", "step-1", "shared");
+    const second = question("session-1", "step-2", "shared");
     const firstRead = deferred<readonly QuestionAttentionItem[]>();
     const secondRead = deferred<readonly QuestionAttentionItem[]>();
     const reads = [firstRead, secondRead];
+    expect(Object.isFrozen(promptAnswerKey(first))).toBe(true);
+    expect(samePromptAnswerKey(promptAnswerKey(first), promptAnswerKey(second))).toBe(false);
+    expect(taskDetailAttentionRowKey(first)).not.toBe(taskDetailAttentionRowKey(second));
     const harness = coordinatorHarness(
       [
         [first, draft("first")],

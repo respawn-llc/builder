@@ -1,6 +1,19 @@
 import { ApiClient } from "./client";
 import { FakeRpcTransport } from "@/test-support/api";
 
+const questionRequest = {
+  sessionID: "session-1",
+  stepID: "22222222-2222-4222-8222-222222222222",
+  entries: [
+    {
+      kind: "question" as const,
+      promptID: "question-1",
+      selectedOptionNumber: 1,
+      freeform: null,
+    },
+  ],
+};
+
 describe("ApiClient prompt answer batches", () => {
   it("encodes Question, Approval, and Declined entries and parses identity-keyed outcomes", async () => {
     const transport = new FakeRpcTransport([
@@ -77,19 +90,6 @@ describe("ApiClient prompt answer batches", () => {
     },
   ])("rejects malformed result identity sets", async (result) => {
     const client = new ApiClient(new FakeRpcTransport([{ method: "prompt.answerBatch", result }]));
-    await expect(
-      client.answerPromptBatch({
-        sessionID: "session-1",
-        stepID: "22222222-2222-4222-8222-222222222222",
-        entries: [
-          {
-            kind: "question",
-            promptID: "question-1",
-            selectedOptionNumber: 1,
-            freeform: null,
-          },
-        ],
-      }),
-    ).rejects.toThrow();
+    await expect(client.answerPromptBatch(questionRequest)).rejects.toThrow();
   });
 });

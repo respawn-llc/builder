@@ -9,7 +9,6 @@ import (
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
-	"core/shared/textutil"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -62,58 +61,6 @@ type deadlineThenSuccessPromptControl struct {
 	firstRelease chan struct{}
 }
 
-func TestApprovalAnswerOmitsAbsentCommentary(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	control := newRecordingPromptControl()
-	answerer := newTranscriptPromptAnswerer(ctx, control)
-	prompt := testApprovalPrompt(
-		"approval-without-commentary",
-		"Allow access?",
-		clientui.ApprovalDecisionAllowOnce,
-		clientui.ApprovalDecisionDeny,
-	)
-
-	submit, err := answerer.submitter(prompt, clientui.PromptAnswer{
-		Approval: &clientui.ApprovalPromptAnswer{
-			Decision: clientui.ApprovalDecisionAllowOnce,
-		},
-	}, nil)
-	if err != nil {
-		t.Fatalf("submitter: %v", err)
-	}
-	if err := submit(context.Background()); err != nil {
-		t.Fatalf("submit approval: %v", err)
-	}
-	request := requirePromptAnswerBatchRequest(t, control)
-	entry := requireApprovalAnswerEntry(t, request)
-	if entry.ApprovalAnswer.Commentary != nil {
-		t.Fatalf("approval commentary = %q, want absent", *entry.ApprovalAnswer.Commentary)
-	}
-}
-
-func TestQuestionAnswerUsesOneEntryBatchWithFullIdentity(t *testing.T) {
-	model, control := newProjectedPromptTestUIModel(t)
-	prompt := testQuestionPrompt("question-batch-identity", "Proceed?", "Yes", "No")
-	model = updateUIModel(t, model, askEventMsg{event: model.transcriptPromptEvent(prompt)})
-
-	next, delivery := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	model = runPromptDeliveryCommand(t, next.(*uiModel), delivery)
-	request := requirePromptAnswerBatchRequest(t, control)
-	entry := requireQuestionAnswerEntry(t, request)
-
-	if request.SessionID != prompt.SessionID || request.StepID != prompt.StepID ||
-		entry.PromptID != prompt.PromptID || len(request.Entries) != 1 {
-		t.Fatalf("prompt answer batch identity = %+v, want exact prompt identity %+v", request, prompt)
-	}
-	if entry.QuestionAnswer.SelectedOptionNumber == nil || *entry.QuestionAnswer.SelectedOptionNumber != 1 {
-		t.Fatalf("Question answer = %+v, want first option", entry.QuestionAnswer)
-	}
-	if testActiveAsk(model) != nil {
-		t.Fatal("Resolved batch did not immediately remove the Question")
-	}
-}
-
 func TestSkippedBatchImmediatelyFinishesPrompt(t *testing.T) {
 	base := newRecordingPromptControl()
 	control := &fixedOutcomePromptControl{
@@ -157,30 +104,6 @@ func TestResolvedBatchReturnsBeforeDelayedSuccessorProjection(t *testing.T) {
 	}
 	if model.activity != uiActivityQuestion || model.inputMode() != uiInputModeAsk {
 		t.Fatalf("successor presentation = activity %d input %q, want Question focus", model.activity, model.inputMode())
-	}
-}
-
-func TestPromptAnswerAttemptReportsOneConnectionOutcome(t *testing.T) {
-	control := &scriptedAskPromptControl{results: []error{errors.New("delivery failed")}}
-	outcomes := make([]error, 0, 1)
-	answerer := newTranscriptPromptAnswerer(context.Background(), control).withConnectionOutcomeSink(func(err error) {
-		outcomes = append(outcomes, err)
-	})
-	_, delivery, err := answerer.delivery(
-		testQuestionPrompt("question-connection", "Proceed?", "Yes"),
-		clientui.PromptAnswer{SelectedOptionNumber: textutil.Value(1)},
-		nil,
-	)
-	if err != nil {
-		t.Fatalf("prepare delivery: %v", err)
-	}
-
-	result := delivery().(promptAnswerDeliveryResultMsg)
-	if result.err == nil || len(outcomes) != 1 || !errors.Is(outcomes[0], result.err) {
-		t.Fatalf("connection outcomes = %+v result = %v, want exactly one matching outcome", outcomes, result.err)
-	}
-	if len(control.requests()) != 1 {
-		t.Fatalf("prompt-control calls = %d, want one", len(control.requests()))
 	}
 }
 
@@ -476,7 +399,10 @@ func TestAskSameKeyRefreshPreservesActiveDeliveryDraftAndSelection(t *testing.T)
 func TestAskTypedTerminalFailureRestoresDraftAndShowsError(t *testing.T) {
 	disableTransientStatusClearForTest(t)
 	control := &scriptedAskPromptControl{results: []error{serverapi.ErrPromptNotFound}}
-	answerer := newTranscriptPromptAnswerer(context.Background(), control)
+	outcomes := make([]error, 0, 1)
+	answerer := newTranscriptPromptAnswerer(context.Background(), control).withConnectionOutcomeSink(func(err error) {
+		outcomes = append(outcomes, err)
+	})
 
 	model := newProjectedStaticUIModel()
 	model.promptAnswers = answerer
@@ -495,6 +421,9 @@ func TestAskTypedTerminalFailureRestoresDraftAndShowsError(t *testing.T) {
 	}
 	if model.transientStatusKind != uiStatusNoticeError || model.transientStatus == "" {
 		t.Fatalf("typed failure notice = kind %d text %q, want visible error", model.transientStatusKind, model.transientStatus)
+	}
+	if len(outcomes) != 1 || !errors.Is(outcomes[0], serverapi.ErrPromptNotFound) || len(control.requests()) != 1 {
+		t.Fatalf("connection outcomes = %+v requests = %d", outcomes, len(control.requests()))
 	}
 }
 

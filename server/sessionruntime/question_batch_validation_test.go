@@ -14,12 +14,8 @@ func TestQuestionBatchMetadataValidationIsIdenticalForDirectAndObservedResolutio
 		name   string
 		mutate func(*tools.AskQuestionRequest)
 	}{
-		{name: "metadata origin", mutate: func(request *tools.AskQuestionRequest) {
-			request.QuestionBatch.Origin = "invalid"
-		}},
-		{name: "request origin agreement", mutate: func(request *tools.AskQuestionRequest) {
-			request.Origin = ""
-		}},
+		{name: "metadata origin", mutate: func(request *tools.AskQuestionRequest) { request.QuestionBatch.Origin = "invalid" }},
+		{name: "request origin agreement", mutate: func(request *tools.AskQuestionRequest) { request.Origin = "" }},
 		{name: "blank run identity", mutate: func(request *tools.AskQuestionRequest) {
 			request.RunID = ""
 			request.QuestionBatch.RunID = ""
@@ -28,33 +24,17 @@ func TestQuestionBatchMetadataValidationIsIdenticalForDirectAndObservedResolutio
 			request.RunID = " run-1 "
 			request.QuestionBatch.RunID = " run-1 "
 		}},
-		{name: "blank step identity", mutate: func(request *tools.AskQuestionRequest) {
-			request.QuestionBatch.StepID = ""
-		}},
-		{name: "non-normalized step identity", mutate: func(request *tools.AskQuestionRequest) {
-			request.QuestionBatch.StepID = " " + request.StepID + " "
-		}},
-		{name: "request run mismatch", mutate: func(request *tools.AskQuestionRequest) {
-			request.QuestionBatch.RunID = "run-other"
-		}},
-		{name: "request step mismatch", mutate: func(request *tools.AskQuestionRequest) {
-			request.QuestionBatch.StepID = "step-other"
-		}},
-		{name: "metadata prompt identity", mutate: func(request *tools.AskQuestionRequest) {
-			request.QuestionBatch.PromptID = "other"
-		}},
-		{name: "prepared count", mutate: func(request *tools.AskQuestionRequest) {
-			request.QuestionBatch.PreparedPromptCount = 3
-		}},
-		{name: "candidate ordinal", mutate: func(request *tools.AskQuestionRequest) {
-			request.QuestionBatch.CandidateOrdinal = 2
-		}},
+		{name: "blank step identity", mutate: func(request *tools.AskQuestionRequest) { request.QuestionBatch.StepID = "" }},
+		{name: "non-normalized step identity", mutate: func(request *tools.AskQuestionRequest) { request.QuestionBatch.StepID = " " + request.StepID + " " }},
+		{name: "request run mismatch", mutate: func(request *tools.AskQuestionRequest) { request.QuestionBatch.RunID = "run-other" }},
+		{name: "request step mismatch", mutate: func(request *tools.AskQuestionRequest) { request.QuestionBatch.StepID = "step-other" }},
+		{name: "metadata prompt identity", mutate: func(request *tools.AskQuestionRequest) { request.QuestionBatch.PromptID = "other" }},
+		{name: "prepared count", mutate: func(request *tools.AskQuestionRequest) { request.QuestionBatch.PreparedPromptCount = 3 }},
+		{name: "candidate ordinal", mutate: func(request *tools.AskQuestionRequest) { request.QuestionBatch.CandidateOrdinal = 2 }},
 		{name: "candidate identity", mutate: func(request *tools.AskQuestionRequest) {
 			request.QuestionBatch.BatchPromptIDs = []string{"other", "ask-2"}
 		}},
-		{name: "blank candidate id", mutate: func(request *tools.AskQuestionRequest) {
-			request.QuestionBatch.BatchPromptIDs = []string{"", "ask-2"}
-		}},
+		{name: "blank candidate id", mutate: func(request *tools.AskQuestionRequest) { request.QuestionBatch.BatchPromptIDs = []string{"", "ask-2"} }},
 		{name: "non-normalized candidate id", mutate: func(request *tools.AskQuestionRequest) {
 			request.QuestionBatch.BatchPromptIDs = []string{" ask-1 ", "ask-2"}
 		}},

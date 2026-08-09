@@ -1,5 +1,4 @@
 import { render, screen } from "@testing-library/react";
-import { useState } from "react";
 import { I18nextProvider } from "react-i18next";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -14,6 +13,7 @@ import { questionPresentation, emptyQuestionSelection } from "./TaskDetailQuesti
 import { QuestionFormView } from "./TaskDetailQuestionFormView";
 
 const services = createTestServices([], undefined, { platform: "macos" });
+const baseQuestion = attentionItemSchema.parse(questionAttention) as QuestionAttentionItem;
 
 beforeAll(async () => {
   await initializeI18n();
@@ -29,17 +29,22 @@ describe("Task Detail prompt primary controls", () => {
     const focus = vi.spyOn(HTMLElement.prototype, "focus");
     try {
       render(
-        <Harness
-          attention={attention}
-          register={(next) => {
-            control = next;
-            return () => {
-              if (control === next) {
-                control = undefined;
-              }
-            };
-          }}
-        />,
+        <I18nextProvider i18n={appI18n}>
+          <AppServicesProvider services={services}>
+            <QuestionFormView
+              answerQuestion={{ isPending: false, mutateAsync: async () => undefined }}
+              attention={attention}
+              disabled={false}
+              onSelectionStateChange={() => undefined}
+              presentation={questionPresentation(attention)}
+              registerPrimaryControl={(next) => {
+                control = next;
+                return () => undefined;
+              }}
+              selectionState={emptyQuestionSelection()}
+            />
+          </AppServicesProvider>
+        </I18nextProvider>,
       );
 
       if (control !== undefined) {
@@ -54,37 +59,11 @@ describe("Task Detail prompt primary controls", () => {
   });
 });
 
-function Harness({
-  attention,
-  register,
-}: Readonly<{
-  attention: QuestionAttentionItem;
-  register(control: PromptPrimaryControl): () => void;
-}>) {
-  const [selection, setSelection] = useState(emptyQuestionSelection());
-  return (
-    <I18nextProvider i18n={appI18n}>
-      <AppServicesProvider services={services}>
-        <QuestionFormView
-          answerQuestion={{ isPending: false, mutateAsync: async () => undefined }}
-          attention={attention}
-          disabled={false}
-          onSelectionStateChange={setSelection}
-          presentation={questionPresentation(attention)}
-          registerPrimaryControl={register}
-          selectionState={selection}
-        />
-      </AppServicesProvider>
-    </I18nextProvider>
-  );
-}
-
 function ordinaryAttention(suggestions: readonly string[]): QuestionAttentionItem {
-  const attention = baseQuestionAttention();
   return {
-    ...attention,
+    ...baseQuestion,
     question: {
-      ...attention.question,
+      ...baseQuestion.question,
       recommendedOptionIndex: suggestions.length === 0 ? null : 1,
       suggestions,
     },
@@ -92,23 +71,14 @@ function ordinaryAttention(suggestions: readonly string[]): QuestionAttentionIte
 }
 
 function approvalAttention(): QuestionAttentionItem {
-  const attention = baseQuestionAttention();
   return {
-    ...attention,
+    ...baseQuestion,
     question: {
       approvalDecisions: ["deny", "allow_once"],
       kind: "approval",
-      promptID: attention.question.promptID,
-      sessionID: attention.question.sessionID,
-      stepID: attention.question.stepID,
+      promptID: baseQuestion.question.promptID,
+      sessionID: baseQuestion.question.sessionID,
+      stepID: baseQuestion.question.stepID,
     },
   };
-}
-
-function baseQuestionAttention(): QuestionAttentionItem {
-  const attention = attentionItemSchema.parse(questionAttention);
-  if (attention.kind !== "question") {
-    throw new Error("expected Question attention fixture");
-  }
-  return attention;
 }

@@ -306,7 +306,9 @@ func TestAskQuestionRecommendedOptionIsSelectedAndSubmitted(t *testing.T) {
 
 	updated, request := submitAskPromptKey(t, updated, control, tea.KeyMsg{Type: tea.KeyEnter})
 	entry := requireQuestionAnswerEntry(t, request)
-	if entry.QuestionAnswer.SelectedOptionNumber == nil || *entry.QuestionAnswer.SelectedOptionNumber != recommended {
+	if request.SessionID != event.prompt.SessionID || request.StepID != event.prompt.StepID ||
+		entry.PromptID != event.prompt.PromptID || entry.QuestionAnswer.SelectedOptionNumber == nil ||
+		*entry.QuestionAnswer.SelectedOptionNumber != recommended {
 		t.Fatalf("selected option = %+v, want %d", entry.QuestionAnswer.SelectedOptionNumber, recommended)
 	}
 	if testActiveAsk(updated) != nil {
@@ -699,8 +701,8 @@ func TestApprovalAskDefaultsToAllowOnceOrFirstDecision(t *testing.T) {
 			updated = runPromptDeliveryCommand(t, next.(*uiModel), command)
 			request := requirePromptAnswerBatchRequest(t, control)
 			entry := requireApprovalAnswerEntry(t, request)
-			if entry.ApprovalAnswer.Decision != test.want {
-				t.Fatalf("approval decision = %q, want %q", entry.ApprovalAnswer.Decision, test.want)
+			if entry.ApprovalAnswer.Decision != test.want || entry.ApprovalAnswer.Commentary != nil {
+				t.Fatalf("approval answer = %+v, want %q without commentary", entry.ApprovalAnswer, test.want)
 			}
 		})
 	}

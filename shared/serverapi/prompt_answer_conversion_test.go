@@ -12,62 +12,20 @@ func TestPromptAnswerBatchEntryFromTypedAnswer(t *testing.T) {
 	selected := 2
 	freeform := "details"
 	commentary := "approved"
+	question := PromptQuestionAnswer{SelectedOptionNumber: &selected, Freeform: &freeform}
+	approval := PromptApprovalAnswer{Decision: clientui.ApprovalDecisionAllowOnce, Commentary: &commentary}
+	optionOnly := PromptQuestionAnswer{SelectedOptionNumber: textutil.Value(1)}
+	deny := PromptApprovalAnswer{Decision: clientui.ApprovalDecisionDeny}
 	tests := []struct {
 		name     string
 		answer   PromptAnswer
 		expected PromptAnswerBatchEntry
 	}{
-		{
-			name: "question",
-			answer: QuestionPromptAnswer(PromptQuestionAnswer{
-				SelectedOptionNumber: &selected,
-				Freeform:             &freeform,
-			}),
-			expected: PromptAnswerBatchEntry{
-				PromptID: "prompt-1",
-				QuestionAnswer: &PromptQuestionAnswer{
-					SelectedOptionNumber: &selected,
-					Freeform:             &freeform,
-				},
-			},
-		},
-		{
-			name: "approval",
-			answer: ApprovalPromptAnswer(PromptApprovalAnswer{
-				Decision:   clientui.ApprovalDecisionAllowOnce,
-				Commentary: &commentary,
-			}),
-			expected: PromptAnswerBatchEntry{
-				PromptID: "prompt-1",
-				ApprovalAnswer: &PromptApprovalAnswer{
-					Decision:   clientui.ApprovalDecisionAllowOnce,
-					Commentary: &commentary,
-				},
-			},
-		},
-		{
-			name:     "declined",
-			answer:   DeclinedPromptAnswer(),
-			expected: PromptAnswerBatchEntry{PromptID: "prompt-1", Declined: &PromptDeclined{}},
-		},
-		{
-			name: "question absent optional text",
-			answer: QuestionPromptAnswer(PromptQuestionAnswer{
-				SelectedOptionNumber: textutil.Value(1),
-			}),
-			expected: PromptAnswerBatchEntry{PromptID: "prompt-1", QuestionAnswer: &PromptQuestionAnswer{
-				SelectedOptionNumber: textutil.Value(1),
-			}},
-		},
-		{
-			name: "approval absent optional text",
-			answer: ApprovalPromptAnswer(PromptApprovalAnswer{
-				Decision: clientui.ApprovalDecisionDeny,
-			}),
-			expected: PromptAnswerBatchEntry{PromptID: "prompt-1", ApprovalAnswer: &PromptApprovalAnswer{
-				Decision: clientui.ApprovalDecisionDeny,
-			}},
-		},
+		{name: "question", answer: QuestionPromptAnswer(question), expected: PromptAnswerBatchEntry{PromptID: "prompt-1", QuestionAnswer: &question}},
+		{name: "approval", answer: ApprovalPromptAnswer(approval), expected: PromptAnswerBatchEntry{PromptID: "prompt-1", ApprovalAnswer: &approval}},
+		{name: "declined", answer: DeclinedPromptAnswer(), expected: PromptAnswerBatchEntry{PromptID: "prompt-1", Declined: &PromptDeclined{}}},
+		{name: "question absent optional text", answer: QuestionPromptAnswer(optionOnly), expected: PromptAnswerBatchEntry{PromptID: "prompt-1", QuestionAnswer: &optionOnly}},
+		{name: "approval absent optional text", answer: ApprovalPromptAnswer(deny), expected: PromptAnswerBatchEntry{PromptID: "prompt-1", ApprovalAnswer: &deny}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
