@@ -11,7 +11,6 @@ import (
 	"core/server/auth"
 	"core/server/launch"
 	"core/server/metadata"
-	"core/server/requestmemo"
 	"core/server/runprompt"
 	"core/server/runtime"
 	"core/server/sessionlaunch"
@@ -27,8 +26,6 @@ type Core struct {
 	closeOnce sync.Once
 	closeErr  error
 }
-
-var workspaceChatDraftLanes = requestmemo.NewMutationLaneRegistry[string]()
 
 type unregisteredSessionLaunchClient struct{}
 
@@ -296,7 +293,7 @@ func (s *Core) sessionLaunchServiceForProjectContextLocked(projectCtx projectCon
 	}).
 		WithWorkspaceID(projectCtx.workspaceID).
 		WithFastModeState(s.safeBundles().Runtime.fastModeState).
-		WithWorkspaceChatDraftMutationLanes(workspaceChatDraftLanes).
+		WithWorkspaceChatDraftMutationLanes(s.safeBundles().Sessions.workspaceChatDraftLanes).
 		WithWorkspaceChatDraftStore(s.safeBundles().Persistence.metadataStore).
 		WithAuthStateReader(s.safeBundles().Auth.support.AuthManager).
 		WithPromptHistoryReader(s.safeBundles().Persistence.metadataStore).

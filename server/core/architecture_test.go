@@ -27,7 +27,7 @@ func TestBundlesStructOnlyExposesCohesiveBundleSlots(t *testing.T) {
 	want := []string{"Auth", "Capability", "Persistence", "Processes", "Projects", "Prompts", "Runtime", "Sessions", "Workflows", "Worktrees", "cleanup"}
 	assertStringSet(t, "Bundles fields", got, want)
 }
-
+func TestSessionBundleOwnsWorkspaceChatDraftLane(t *testing.T) { f := parseGoFile(t, filepath.Join("..", "core", "bundles.go")); for _, v := range structFieldNames(findStruct(t, f, "SessionBundle")) { if v == "workspaceChatDraftLanes" { return } }; t.Fatal("SessionBundle must own workspace Chat draft lane") }
 func structFieldNames(structType *ast.StructType) []string {
 	names := make([]string, 0, len(structType.Fields.List))
 	for _, field := range structType.Fields.List {

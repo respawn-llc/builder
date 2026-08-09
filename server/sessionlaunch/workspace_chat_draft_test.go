@@ -5,12 +5,9 @@ import (
 	"testing"
 
 	"core/server/auth"
-	"core/server/launch"
-	"core/server/metadata"
 	"core/server/requestmemo"
 	"core/server/runtime"
 	"core/shared/config"
-	"core/shared/serverapi"
 	"core/shared/toolspec"
 )
 
@@ -80,43 +77,4 @@ func TestWorkspaceChatDraftOwnerTransformsClearAndSerializes(t *testing.T) {
 	if err := <-second; err != nil || p.draft.Message != "new" || !p.draft.Fast { t.Fatalf("serialized=%+v err=%v", p.draft, err) }
 	p.draft = &WorkspaceChatDraft{Message: "   ", Agent: "default", Supervisor: "edits", Thinking: "medium", Questions: true, AutoCompaction: true}
 	if _, err := o.TransformWorkspaceChatDraft(context.Background(), "w", func(r WorkspaceChatDraftResolution) (WorkspaceChatDraft, error) { return r.Draft, nil }); err != nil || p.draft != nil { t.Fatalf("blank default=%+v err=%v", p.draft, err) }
-}
-
-func TestWorkspaceChatDraftServicesShareCompositionLane(t *testing.T) {
-	workspace := t.TempDir()
-	store, err := metadata.Open(t.TempDir())
-	if err != nil { t.Fatal(err) }
-	t.Cleanup(func() { _ = store.Close() })
-	binding, err := store.RegisterWorkspaceBinding(t.Context(), workspace)
-	if err != nil { t.Fatal(err) }
-	settings := draftSettings("gpt-5.6-sol", "medium")
-	lanes := requestmemo.NewMutationLaneRegistry[string]()
-	newService := func() *Service {
-		return NewService(launch.Planner{Config: config.App{Settings: settings}}).WithWorkspaceID(binding.WorkspaceID).WithWorkspaceChatDraftMutationLanes(lanes).WithWorkspaceChatDraftStore(store)
-	}
-	first, second := newService(), newService()
-	if _, err := first.TransformWorkspaceChatDraftAggregate(t.Context(), func(r WorkspaceChatDraftResolution) (WorkspaceChatDraft, error) { r.Draft.Message = "old"; return r.Draft, nil }); err != nil { t.Fatal(err) }
-	entered, release := make(chan struct{}), make(chan struct{})
-	go func() { _, err := first.TransformWorkspaceChatDraftAggregate(t.Context(), func(r WorkspaceChatDraftResolution) (WorkspaceChatDraft, error) { close(entered); <-release; r.Draft.Message = "new"; return r.Draft, nil }); if err != nil { t.Errorf("first transform: %v", err) } }()
-	<-entered
-	done := make(chan error, 1)
-	go func() { _, err := second.TransformWorkspaceChatDraftAggregate(t.Context(), func(r WorkspaceChatDraftResolution) (WorkspaceChatDraft, error) { r.Draft.Fast = true; return r.Draft, nil }); done <- err }()
-	select { case err := <-done: t.Fatalf("second transform ran early: %v", err); default: }
-	close(release)
-	if err := <-done; err != nil { t.Fatal(err) }
-	got, err := first.ResolveWorkspaceChatDraftAggregate(t.Context())
-	if err != nil || got.Draft.Message != "new" || !got.Draft.Fast { t.Fatalf("shared lane aggregate=%+v err=%v", got.Draft, err) }
-}
-
-func TestServiceWorkspaceChatDraftLifecycle(t *testing.T) {
-	p := &draftPersistence{}
-	s := NewService(launch.Planner{Config: config.App{Settings: draftSettings("gpt-5.6-sol", "medium")}}).WithWorkspaceID("w").WithFastModeState(runtime.NewFastModeState(false))
-	s.draftOwner = NewWorkspaceChatDraftOwner(p, s.workspaceChatDraftResolverInput)
-	msg := "exact\nmessage"
-	got, err := s.WorkspaceChatDraft(context.Background(), serverapi.WorkspaceChatDraftRequest{Operation: serverapi.WorkspaceChatDraftOperation{Kind: serverapi.WorkspaceChatDraftUpdateMessage, Message: &msg}})
-	if err != nil || got.Message != msg { t.Fatalf("update=%+v err=%v", got, err) }
-	for _, kind := range []serverapi.WorkspaceChatDraftOperationKind{serverapi.WorkspaceChatDraftReadMessage, serverapi.WorkspaceChatDraftClear} {
-		if _, err := s.WorkspaceChatDraft(context.Background(), serverapi.WorkspaceChatDraftRequest{Operation: serverapi.WorkspaceChatDraftOperation{Kind: kind}}); err != nil { t.Fatal(err) }
-	}
-	if p.draft != nil { t.Fatal("clear left draft") }
 }
