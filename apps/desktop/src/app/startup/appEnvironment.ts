@@ -241,6 +241,10 @@ class BootstrapErrorTransport implements RpcTransport {
     throw this.#error;
   }
 
+  async callAttachedSession(): Promise<unknown> {
+    throw this.#error;
+  }
+
   subscribe(_method: string, _params: JsonValue, handler: RpcEventHandler): RpcSubscription {
     handler.onError(this.#error);
     return {

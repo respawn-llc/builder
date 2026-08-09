@@ -37,7 +37,7 @@ export async function answerPromptBatch(
   const response = parseRpcResponse(
     "prompt.answerBatch",
     responseSchema,
-    await transport.call("prompt.answerBatch", {
+    await transport.callAttachedSession(input.sessionID, "prompt.answerBatch", {
       session_id: input.sessionID,
       step_id: input.stepID,
       entries: input.entries.map(encodeEntry),

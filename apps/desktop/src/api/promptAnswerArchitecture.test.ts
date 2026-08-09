@@ -1,7 +1,7 @@
 /// <reference types="node" />
 
 import { readdirSync, readFileSync } from "node:fs";
-import { extname, join } from "node:path";
+import { join } from "node:path";
 import * as ts from "typescript";
 import { expect, it } from "vitest";
 
@@ -20,30 +20,26 @@ it("keeps Desktop off the command-only prompt follow-up stream", () => {
   const root = join(process.cwd(), "src");
   const findings: string[] = [];
   for (const path of productionTypeScriptFiles(root)) {
-    const source = ts.createSourceFile(
-      path,
-      readFileSync(path, "utf8"),
+    const text = readFileSync(path, "utf8");
+    const scanner = ts.createScanner(
       ts.ScriptTarget.Latest,
       true,
-      extname(path) === ".tsx" ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+      ts.LanguageVariant.JSX,
+      text,
     );
-    const visit = (node: ts.Node): void => {
-      if (ts.isIdentifier(node) && forbiddenIdentifiers.has(node.text)) {
-        findings.push(
-          `${path}:${(source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1).toString()}:${node.text}`,
-        );
+    for (let token = scanner.scan(); token !== ts.SyntaxKind.EndOfFileToken; token = scanner.scan()) {
+      const value = scanner.getTokenValue();
+      if (token === ts.SyntaxKind.Identifier && forbiddenIdentifiers.has(value)) {
+        findings.push(`${path}:${value}`);
       }
       if (
-        (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) &&
-        forbiddenWireValues.has(node.text)
+        (token === ts.SyntaxKind.StringLiteral ||
+          token === ts.SyntaxKind.NoSubstitutionTemplateLiteral) &&
+        forbiddenWireValues.has(value)
       ) {
-        findings.push(
-          `${path}:${(source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1).toString()}:${node.text}`,
-        );
+        findings.push(`${path}:${value}`);
       }
-      ts.forEachChild(node, visit);
-    };
-    visit(source);
+    }
   }
   expect(findings).toEqual([]);
 });

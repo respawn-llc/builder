@@ -67,6 +67,39 @@ class JsonRpcWebSocketTransport implements RpcTransport {
     params: JsonValue,
     options?: RpcDedicatedCallOptions,
   ): Promise<unknown> {
+    return this.#withDedicatedSocket(options, async (socket, requestOptions) =>
+      sendSocketRequest(socket, method, params, requestOptions),
+    );
+  }
+
+  async callAttachedSession(
+    sessionID: string,
+    method: string,
+    params: JsonValue,
+    options?: RpcDedicatedCallOptions,
+  ): Promise<unknown> {
+    const attachedSessionID = sessionID.trim();
+    if (attachedSessionID.length === 0) {
+      throw new TransportError("Session attachment requires a Session ID.");
+    }
+    return this.#withDedicatedSocket(options, async (socket, requestOptions) => {
+      await sendSocketRequest(
+        socket,
+        "session.attach",
+        { session_id: attachedSessionID },
+        requestOptions,
+      );
+      return sendSocketRequest(socket, method, params, requestOptions);
+    });
+  }
+
+  async #withDedicatedSocket<Result>(
+    options: RpcDedicatedCallOptions | undefined,
+    run: (
+      socket: WebSocket,
+      requestOptions: Readonly<{ timeoutMilliseconds: number | null; signal?: AbortSignal }>,
+    ) => Promise<Result>,
+  ): Promise<Result> {
     const socket = await openSocket(this.#endpoint, socketOpenTimeoutMs, options?.signal);
     try {
       await handshakeSubscription(socket, rpcRequestTimeoutMs, this.#expectedRootId, options?.signal);
@@ -75,7 +108,7 @@ class JsonRpcWebSocketTransport implements RpcTransport {
         options?.signal === undefined
           ? { timeoutMilliseconds: timeoutMs }
           : { timeoutMilliseconds: timeoutMs, signal: options.signal };
-      return await sendSocketRequest(socket, method, params, requestOptions);
+      return await run(socket, requestOptions);
     } finally {
       socket.close();
     }

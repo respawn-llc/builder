@@ -87,6 +87,8 @@ export async function listPendingAsks(
   return parseRpcResponse(
     "ask.listPendingBySession",
     pendingAskListSchema,
-    await transport.call("ask.listPendingBySession", { SessionID: sessionID }),
+    await transport.callAttachedSession(sessionID, "ask.listPendingBySession", {
+      SessionID: sessionID,
+    }),
   );
 }

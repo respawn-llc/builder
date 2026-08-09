@@ -23,6 +23,12 @@ export class FakeRpcTransport implements RpcTransport {
     params: JsonValue;
     options?: RpcDedicatedCallOptions;
   }>[] = [];
+  readonly attachedSessionCalls: Readonly<{
+    sessionID: string;
+    method: string;
+    params: JsonValue;
+    options?: RpcDedicatedCallOptions;
+  }>[] = [];
   readonly subscriptionStarts: Readonly<{ method: string; params: JsonValue }>[] = [];
   #routes = new Map<string, FakeRoute>();
   #callCounts = new Map<string, number>();
@@ -46,6 +52,20 @@ export class FakeRpcTransport implements RpcTransport {
     options?: RpcDedicatedCallOptions,
   ): Promise<unknown> {
     this.dedicatedCalls.push(options === undefined ? { method, params } : { method, params, options });
+    return this.#dispatch(method, params);
+  }
+
+  async callAttachedSession(
+    sessionID: string,
+    method: string,
+    params: JsonValue,
+    options?: RpcDedicatedCallOptions,
+  ): Promise<unknown> {
+    this.attachedSessionCalls.push(
+      options === undefined
+        ? { sessionID, method, params }
+        : { sessionID, method, params, options },
+    );
     return this.#dispatch(method, params);
   }
 

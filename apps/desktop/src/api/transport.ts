@@ -25,5 +25,11 @@ export type RpcTransport = Readonly<{
   connection: ConnectionStore;
   call(method: string, params: JsonValue, options?: RpcCallOptions): Promise<unknown>;
   callDedicated(method: string, params: JsonValue, options?: RpcDedicatedCallOptions): Promise<unknown>;
+  callAttachedSession(
+    sessionID: string,
+    method: string,
+    params: JsonValue,
+    options?: RpcDedicatedCallOptions,
+  ): Promise<unknown>;
   subscribe(method: string, params: JsonValue, handler: RpcEventHandler): RpcSubscription;
 }>;

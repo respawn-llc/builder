@@ -37,8 +37,10 @@ describe("ApiClient prompt answer batches", () => {
       ],
     });
 
-    expect(transport.calls).toEqual([
+    expect(transport.calls).toEqual([]);
+    expect(transport.attachedSessionCalls).toEqual([
       {
+        sessionID: "session-1",
         method: "prompt.answerBatch",
         params: {
           session_id: "session-1",
