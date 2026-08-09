@@ -924,6 +924,59 @@ func TestServiceManualMoveStaleFinalRevalidationReturnsNoOpWithoutSideEffects(t 
 	}
 }
 
+func TestServiceManualMoveTransactionalNoOpCarriesRetainedPreviousWorktree(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceChainedWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	definition, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow: %v", err)
+	}
+	targetNodeID := workflowServiceNodeIDByKey(t, definition.Definition, "plan")
+	previous := retainedPreviousWorktreeFixture("/repo/previous", "previous-worktree")
+	service.executionTargets = &recordingExecutionTargetInfrastructure{
+		prepare: func(req TaskExecutionRootPreparationRequest) (TaskExecutionRootPreparation, error) {
+			return TaskExecutionRootPreparation{
+				Root: workflowstore.ExecutionRoot{
+					SourceWorkspaceID:   req.SourceWorkspaceID,
+					SourceWorkspaceRoot: req.SourceWorkspaceRoot,
+				},
+				RetainedPreviousWorktree: previous,
+			}, nil
+		},
+	}
+	execution := newManualMoveExecutionStub(service)
+	execution.applyHook = func() {
+		if _, err := service.store.ManualMoveTask(ctx, workflowstore.ManualMoveRequest{
+			TaskID:       workflow.TaskID(task.Task.ID),
+			TargetNodeID: workflow.NodeID(targetNodeID),
+		}); err != nil {
+			t.Errorf("concurrent manual move: %v", err)
+		}
+	}
+	service.currentNodeExecution = execution
+
+	response, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
+		TaskID:       task.Task.ID,
+		TargetNodeID: targetNodeID,
+		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
+			Mode: serverapi.WorkflowExecutionTargetModeNone,
+		},
+	})
+	if err != nil {
+		t.Fatalf("MoveWorkflowTask: %v", err)
+	}
+	if err := response.Validate(); err != nil {
+		t.Fatalf("MoveWorkflowTask response validation: %v", err)
+	}
+	if response.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeNoOp ||
+		response.NoOp == nil ||
+		response.NoOp.RetainedPreviousWorktree != previous {
+		t.Fatalf("move response = %+v, want no-op with retained previous Worktree", response)
+	}
+}
+
 func TestServiceManualMoveApprovalAppliesImmediately(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceChainedWorkflow(t, ctx, service)
@@ -2990,6 +3043,7 @@ type manualMoveExecutionStub struct {
 	interruptTaskIDs []workflow.TaskID
 	interruptErr     error
 	interruptHook    func()
+	applyHook        func()
 }
 
 type workflowAttentionRecorder struct {
@@ -3122,6 +3176,9 @@ func (s *manualMoveExecutionStub) ApplyManualMove(
 ) (workflowstore.ManualMoveResult, error) {
 	if err := s.EnsureTaskQuiescent(prepared.TaskID()); err != nil {
 		return workflowstore.ManualMoveResult{}, err
+	}
+	if s.applyHook != nil {
+		s.applyHook()
 	}
 	moved, err := s.currentNodeCompletionExecutionStub.ApplyManualMove(ctx, prepared, candidate)
 	if err == nil && moved.Outcome == workflowstore.ManualMoveResultOutcomeApplied {

@@ -1938,7 +1938,8 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 		return serverapi.WorkflowTaskMoveResponse{
 			Outcome: serverapi.WorkflowExecutionTargetActionOutcomeNoOp,
 			NoOp: &serverapi.WorkflowTaskMoveNoOp{
-				CurrentNodes: workflowview.ProjectCurrentNodes(moved.CurrentNodes),
+				CurrentNodes:             workflowview.ProjectCurrentNodes(moved.CurrentNodes),
+				RetainedPreviousWorktree: coordinated.retainedPreviousWorktree,
 			},
 		}, nil
 	}
