@@ -308,8 +308,11 @@ export function VirtualizedInfiniteList<TItem>({
           : virtualizer.getOffsetForIndex(virtualIndex, "start")?.[0];
         const rowOffset = measuredOffset ?? paddingStart + virtualIndex * Math.max(1, estimateSize());
         const scrollOffset = rowOffset + anchor.inRowOffset;
-        if (element.scrollTop !== scrollOffset) element.scrollTop = scrollOffset;
-        if (!isFallbackRendering) virtualizer.scrollToOffset(element.scrollTop, { behavior: "auto" });
+        const scrollOffsetChanged = element.scrollTop !== scrollOffset;
+        if (scrollOffsetChanged) element.scrollTop = scrollOffset;
+        if (scrollOffsetChanged && !isFallbackRendering) {
+          virtualizer.scrollToOffset(scrollOffset, { behavior: "auto" });
+        }
       }
     }
     previousItemKeysRef.current = currentKeys;
