@@ -927,11 +927,24 @@ func (s *Service) validateManagedRootForCreation(ctx context.Context, root strin
 }
 
 func (s *Service) createManagedTaskWorktree(ctx context.Context, req managedTaskWorktreeCreationRequest) (resp TaskWorktreeMaterialization, err error) {
+	setupSettings, err := s.worktreeSetupSettings(req.Workspace.RootPath)
+	if err != nil {
+		if req.ReservedRoot && req.RequestedRoot != nil {
+			err = errors.Join(err, removeEmptyManagedRootAfterAddFailure(strings.TrimSpace(*req.RequestedRoot)))
+		}
+		return TaskWorktreeMaterialization{}, err
+	}
 	bound, err := s.createAndBindManagedTaskWorktree(ctx, req)
 	if err != nil {
 		return TaskWorktreeMaterialization{}, err
 	}
-	return s.runManagedTaskWorktreeSetupRecovery(ctx, bound, req.SetupOperationID, false)
+	return s.runManagedTaskWorktreeSetupRecoveryWithSettings(
+		ctx,
+		bound,
+		req.SetupOperationID,
+		false,
+		setupSettings,
+	)
 }
 
 func (s *Service) createAndBindManagedTaskWorktree(ctx context.Context, req managedTaskWorktreeCreationRequest) (resp boundManagedTaskWorktree, err error) {
@@ -1061,11 +1074,31 @@ func (s *Service) runManagedTaskWorktreeSetupRecovery(
 	setupOperationID *serverapi.WorktreeSetupOperationID,
 	recreateBeforeFirstAttempt bool,
 ) (TaskWorktreeMaterialization, error) {
+	settings, err := s.worktreeSetupSettings(bound.workspace.RootPath)
+	if err != nil {
+		return bound.materialization, err
+	}
+	return s.runManagedTaskWorktreeSetupRecoveryWithSettings(
+		ctx,
+		bound,
+		setupOperationID,
+		recreateBeforeFirstAttempt,
+		settings,
+	)
+}
+
+func (s *Service) runManagedTaskWorktreeSetupRecoveryWithSettings(
+	ctx context.Context,
+	bound boundManagedTaskWorktree,
+	setupOperationID *serverapi.WorktreeSetupOperationID,
+	recreateBeforeFirstAttempt bool,
+	settings config.WorktreeSettings,
+) (TaskWorktreeMaterialization, error) {
 	observer, err := s.taskSetupAttemptObserver(setupOperationID)
 	if err != nil {
 		return bound.materialization, err
 	}
-	attempt, err := bound.setupExecution(nil)
+	attempt, err := bound.setupExecution(&settings)
 	if err != nil {
 		return bound.materialization, err
 	}
@@ -1086,7 +1119,7 @@ func (s *Service) runManagedTaskWorktreeSetupRecovery(
 			bound = recreated
 			retainedMaterialization = bound.materialization
 			hasRetainedMaterialization = true
-			return bound.setupExecution(nil)
+			return bound.setupExecution(&settings)
 		},
 	})
 	if err != nil {
@@ -2313,7 +2346,7 @@ func (s *Service) worktreeSetupSettings(sourceWorkspaceRoot string) (config.Work
 	}
 	settings, err := s.resolveSetup(sourceWorkspaceRoot)
 	if err != nil {
-		return config.WorktreeSettings{}, &setupSettingsResolutionError{cause: err}
+		return config.WorktreeSettings{}, fmt.Errorf("resolve worktree setup settings: %w", err)
 	}
 	return settings, nil
 }
@@ -2405,30 +2438,9 @@ type setupScriptError struct {
 	Stderr         string
 }
 
-type setupSettingsResolutionError struct {
-	cause error
-}
-
-func (e *setupSettingsResolutionError) Error() string {
-	if e == nil || e.cause == nil {
-		return "resolve worktree setup settings"
-	}
-	return fmt.Sprintf("resolve worktree setup settings: %v", e.cause)
-}
-
-func (e *setupSettingsResolutionError) Unwrap() error {
-	if e == nil {
-		return nil
-	}
-	return e.cause
-}
-
 func retryableSetupPreparationError(err error) bool {
-	if _, identified := setupScriptPathFromError(err); identified {
-		return true
-	}
-	var settingsErr *setupSettingsResolutionError
-	return errors.As(err, &settingsErr)
+	_, identified := setupScriptPathFromError(err)
+	return identified
 }
 
 func setupScriptPathFromError(err error) (string, bool) {
