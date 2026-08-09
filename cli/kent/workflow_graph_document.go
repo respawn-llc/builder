@@ -30,12 +30,11 @@ type workflowGraphDocumentNode struct {
 	Key                string                                `json:"key"`
 	Kind               string                                `json:"kind"`
 	DisplayName        string                                `json:"display_name"`
-	GroupID            string                                `json:"group_id,omitempty"`
+	GroupID            *string                               `json:"group_id,omitempty"`
 	SubagentRole       string                                `json:"subagent_role,omitempty"`
 	CompletionMode     string                                `json:"completion_mode,omitempty"`
 	ScriptPath         *string                               `json:"script_path,omitempty"`
 	JoinInputProviders []serverapi.WorkflowJoinInputProvider `json:"join_input_providers,omitempty"`
-	groupIDPresent     bool
 }
 
 type workflowGraphDocumentDecode struct {
@@ -76,10 +75,10 @@ const (
 )
 
 type workflowGraphJSONSchema struct {
-	fields    map[string]workflowGraphJSONContext
-	required  []string
-	element   workflowGraphJSONContext
-	forbidden string
+	fields          map[string]workflowGraphJSONContext
+	required        []string
+	element         workflowGraphJSONContext
+	forbiddenFields map[string]struct{}
 }
 
 var workflowGraphJSONSchemas = map[workflowGraphJSONContext]workflowGraphJSONSchema{
@@ -107,8 +106,8 @@ var workflowGraphJSONSchemas = map[workflowGraphJSONContext]workflowGraphJSONSch
 			"id": workflowGraphJSONString, "key": workflowGraphJSONString, "kind": workflowGraphJSONString,
 			"display_name": workflowGraphJSONString, "join_input_providers": workflowGraphJSONJoinInputProviders,
 		},
-		required:  []string{"id", "key", "kind", "display_name"},
-		forbidden: "group_key",
+		required:        []string{"id", "key", "kind", "display_name"},
+		forbiddenFields: map[string]struct{}{"group_key": {}},
 	},
 	workflowGraphJSONJoinInputProvider: {
 		fields: map[string]workflowGraphJSONContext{
@@ -153,21 +152,6 @@ var workflowGraphJSONSchemas = map[workflowGraphJSONContext]workflowGraphJSONSch
 	workflowGraphJSONParameters:         {element: workflowGraphJSONParameter},
 }
 
-func (n *workflowGraphDocumentNode) UnmarshalJSON(data []byte) error {
-	type documentNode workflowGraphDocumentNode
-	var decoded documentNode
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		return err
-	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(data, &fields); err != nil {
-		return err
-	}
-	*n = workflowGraphDocumentNode(decoded)
-	_, n.groupIDPresent = fields["group_id"]
-	return nil
-}
-
 func workflowGraphDocumentFromDefinition(definition serverapi.WorkflowDefinition) (workflowGraphDocument, error) {
 	graph, err := canonicalWorkflowGraphDraftFromDefinition(definition)
 	if err != nil {
@@ -192,12 +176,17 @@ func workflowGraphDocumentFromDraft(
 		},
 	}
 	for _, node := range graph.Nodes {
+		var groupID *string
+		if node.GroupID != "" {
+			value := node.GroupID
+			groupID = &value
+		}
 		document.Graph.Nodes = append(document.Graph.Nodes, workflowGraphDocumentNode{
 			ID:                 node.ID,
 			Key:                node.Key,
 			Kind:               node.Kind,
 			DisplayName:        node.DisplayName,
-			GroupID:            node.GroupID,
+			GroupID:            groupID,
 			SubagentRole:       node.SubagentRole,
 			CompletionMode:     node.CompletionMode,
 			ScriptPath:         node.ScriptPath,
@@ -281,7 +270,7 @@ func scanWorkflowGraphJSONValue(decoder *json.Decoder, context workflowGraphJSON
 			if seen[key] {
 				return fmt.Errorf("duplicate JSON field %q", key)
 			}
-			if schema.forbidden != "" && key == schema.forbidden {
+			if _, forbidden := schema.forbiddenFields[key]; forbidden {
 				return fmt.Errorf("%s is not allowed", key)
 			}
 			seen[key] = true
@@ -379,11 +368,11 @@ func (d workflowGraphDocument) Validate() error {
 		if strings.TrimSpace(node.ID) == "" {
 			return fmt.Errorf("graph.nodes[%d].id is required", index)
 		}
-		if node.groupIDPresent && strings.TrimSpace(node.GroupID) == "" {
+		if node.GroupID != nil && strings.TrimSpace(*node.GroupID) == "" {
 			return fmt.Errorf("graph.nodes[%d].group_id is required when present", index)
 		}
-		if node.GroupID != "" && !groupIDs[node.GroupID] {
-			return fmt.Errorf("graph.nodes[%d].group_id %q is not in graph.node_groups", index, node.GroupID)
+		if node.GroupID != nil && !groupIDs[*node.GroupID] {
+			return fmt.Errorf("graph.nodes[%d].group_id %q is not in graph.node_groups", index, *node.GroupID)
 		}
 	}
 	_, err := d.WorkflowGraphDraft()
@@ -398,12 +387,16 @@ func (d workflowGraphDocument) WorkflowGraphDraft() (serverapi.WorkflowGraphDraf
 		Edges:            d.Graph.Edges,
 	}
 	for _, node := range d.Graph.Nodes {
+		var groupID string
+		if node.GroupID != nil {
+			groupID = *node.GroupID
+		}
 		graph.Nodes = append(graph.Nodes, serverapi.WorkflowGraphDraftNode{
 			ID:                 node.ID,
 			Key:                node.Key,
 			Kind:               node.Kind,
 			DisplayName:        node.DisplayName,
-			GroupID:            node.GroupID,
+			GroupID:            groupID,
 			SubagentRole:       node.SubagentRole,
 			CompletionMode:     node.CompletionMode,
 			ScriptPath:         node.ScriptPath,

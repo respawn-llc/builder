@@ -41,4 +41,14 @@ func TestServiceWorkflowGraphSaveIgnoresPersistedDerivedEdgeWiring(t *testing.T)
 	if preview.Changed {
 		t.Fatalf("preview = %+v, want unchanged authored graph", preview)
 	}
+	saved, err := service.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
+		WorkflowID: workflowID, ExpectedVersion: current.Workflow.Version,
+		Graph: workflowGraphDraftFromDefinition(current),
+	})
+	if err != nil {
+		t.Fatalf("SaveWorkflowGraph: %v", err)
+	}
+	if !saved.Saved || saved.Changed || saved.CurrentVersion != current.Workflow.Version {
+		t.Fatalf("direct no-op save = %+v", saved)
+	}
 }

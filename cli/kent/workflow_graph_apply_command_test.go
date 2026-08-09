@@ -7,6 +7,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	"core/shared/apicontract"
@@ -26,14 +28,16 @@ type workflowGraphApplyRemote struct {
 	previewCalls    int
 	saveCalls       int
 	closeCalls      int
+	previewRequest  serverapi.WorkflowGraphSavePreviewRequest
 	saveRequest     serverapi.WorkflowGraphSaveRequest
 }
 
 func (r *workflowGraphApplyRemote) GetWorkflow(context.Context, serverapi.WorkflowGetRequest) (serverapi.WorkflowGetResponse, error) {
 	return serverapi.WorkflowGetResponse{Definition: r.definition}, r.getError
 }
-func (r *workflowGraphApplyRemote) PreviewWorkflowGraphSave(context.Context, serverapi.WorkflowGraphSavePreviewRequest) (serverapi.WorkflowGraphSavePreviewResponse, error) {
+func (r *workflowGraphApplyRemote) PreviewWorkflowGraphSave(_ context.Context, req serverapi.WorkflowGraphSavePreviewRequest) (serverapi.WorkflowGraphSavePreviewResponse, error) {
 	r.previewCalls++
+	r.previewRequest = req
 	return r.previewResponse, r.previewError
 }
 func (r *workflowGraphApplyRemote) SaveWorkflowGraph(_ context.Context, req serverapi.WorkflowGraphSaveRequest) (serverapi.WorkflowGraphSaveResponse, error) {
@@ -172,10 +176,18 @@ func TestWorkflowGraphApplyFileOperationalCloseAndSaveBlockerPaths(t *testing.T)
 }
 
 func TestWorkflowGraphApplyHumanDetailsWriteAllTypedSections(t *testing.T) {
+	workflowID := workflowGraphApplyID(t)
 	base := workflowGraphApplyOutcome{
 		ValidationResults: map[serverapi.WorkflowValidationMode]serverapi.WorkflowValidateResponse{
 			serverapi.WorkflowValidationModeDraft: {
-				Errors: []serverapi.WorkflowValidationError{{Code: "invalid", NodeID: "node"}},
+				Errors: []serverapi.WorkflowValidationError{{
+					Code: "invalid", WorkflowID: &workflowID,
+					NodeID: "node", TransitionGroupID: "transition-group", EdgeID: "edge",
+					RelatedIDs: []string{"related"},
+					Details: &serverapi.WorkflowValidationErrorDetails{
+						FieldName: "field", InputName: "input", Placeholder: "placeholder", ProviderEdgeID: "provider-edge",
+					},
+				}},
 			},
 		},
 		Impact: &serverapi.WorkflowGraphSaveImpact{
@@ -195,6 +207,11 @@ func TestWorkflowGraphApplyHumanDetailsWriteAllTypedSections(t *testing.T) {
 		return output.Bytes()
 	}
 	rendered := render(base)
+	for _, identity := range []string{workflowID.String(), "node", "transition-group", "edge", "related"} {
+		if !slices.Contains(strings.Fields(string(rendered)), identity) {
+			t.Fatalf("human details tokens = %v, want typed value %q", strings.Fields(string(rendered)), identity)
+		}
+	}
 	countChanged := base
 	countImpact := *base.Impact
 	countImpact.RemovedEdgeCount++
@@ -206,10 +223,21 @@ func TestWorkflowGraphApplyHumanDetailsWriteAllTypedSections(t *testing.T) {
 	affectedIDChanged := base
 	affectedIDChanged.Blockers = []serverapi.WorkflowGraphSaveBlocker{base.Blockers[0]}
 	affectedIDChanged.Blockers[0].AffectedEntities = []serverapi.WorkflowGraphEntityReference{{EntityType: serverapi.WorkflowGraphEntityTypeEdge, EntityID: "other-edge"}}
+	validationDetailsChanged := base
+	validationDetailsChanged.ValidationResults = map[serverapi.WorkflowValidationMode]serverapi.WorkflowValidateResponse{
+		serverapi.WorkflowValidationModeDraft: base.ValidationResults[serverapi.WorkflowValidationModeDraft],
+	}
+	draftValidation := validationDetailsChanged.ValidationResults[serverapi.WorkflowValidationModeDraft]
+	draftValidation.Errors = slices.Clone(draftValidation.Errors)
+	changedDetails := *draftValidation.Errors[0].Details
+	changedDetails.FieldName = "other-field"
+	draftValidation.Errors[0].Details = &changedDetails
+	validationDetailsChanged.ValidationResults[serverapi.WorkflowValidationModeDraft] = draftValidation
 	for name, changed := range map[string]workflowGraphApplyOutcome{
-		"aggregate count": countChanged,
-		"removed entity":  removedIDChanged,
-		"affected entity": affectedIDChanged,
+		"aggregate count":    countChanged,
+		"removed entity":     removedIDChanged,
+		"affected entity":    affectedIDChanged,
+		"validation details": validationDetailsChanged,
 	} {
 		if bytes.Equal(rendered, render(changed)) {
 			t.Fatalf("%s did not affect human details", name)

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -387,81 +388,87 @@ func writeWorkflowGraphApplyHumanOutcome(stdout io.Writer, stderr io.Writer, out
 }
 
 func writeWorkflowGraphApplyPreviewDetails(stderr io.Writer, outcome workflowGraphApplyOutcome) error {
-	write := func(format string, args ...any) error {
-		_, err := fmt.Fprintf(stderr, format, args...)
-		return err
+	var writeErr error
+	write := func(format string, args ...any) {
+		if writeErr == nil {
+			_, writeErr = fmt.Fprintf(stderr, format, args...)
+		}
+	}
+	writeEntities := func(label string, entities []serverapi.WorkflowGraphEntityReference) {
+		if writeErr == nil {
+			writeErr = writeWorkflowGraphEntityReferences(stderr, label, entities)
+		}
 	}
 	if len(outcome.ValidationResults) > 0 {
-		if err := write("Validation:\n"); err != nil {
-			return err
-		}
+		write("Validation:\n")
 		for _, mode := range slices.Sorted(maps.Keys(outcome.ValidationResults)) {
 			result := outcome.ValidationResults[mode]
-			if err := write("- %s: valid=%t\n", mode, result.Valid); err != nil {
-				return err
-			}
+			write("- %s: valid=%t\n", mode, result.Valid)
 			for _, validationError := range result.Errors {
-				if err := write("  - [%s] %s\n", validationError.Code, validationError.Message); err != nil {
-					return err
+				write("  - [%s] %s\n", validationError.Code, validationError.Message)
+				identities := []struct{ name, value string }{
+					{"node", validationError.NodeID},
+					{"transition_group", validationError.TransitionGroupID},
+					{"edge", validationError.EdgeID},
+				}
+				if validationError.WorkflowID != nil {
+					identities = append([]struct{ name, value string }{{"workflow", validationError.WorkflowID.String()}}, identities...)
+				}
+				for _, identity := range identities {
+					if identity.value != "" {
+						write("    %s: %s\n", identity.name, identity.value)
+					}
+				}
+				for _, relatedID := range validationError.RelatedIDs {
+					write("    related: %s\n", relatedID)
+				}
+				if details := validationError.Details; details != nil {
+					encoded, err := json.Marshal(details)
+					if err != nil {
+						return err
+					}
+					write("    details: %s\n", encoded)
 				}
 			}
 		}
 	}
 	if outcome.Impact != nil {
-		impact := *outcome.Impact
-		if err := write("Impact:\n"); err != nil {
-			return err
-		}
+		write("Impact:\n")
 		for _, count := range []struct {
 			name  string
 			value int64
 		}{
-			{"removed_node_groups", impact.RemovedNodeGroupCount},
-			{"removed_nodes", impact.RemovedNodeCount},
-			{"removed_transition_groups", impact.RemovedTransitionGroupCount},
-			{"removed_edges", impact.RemovedEdgeCount},
-			{"node_task_references", impact.NodeTaskReferenceCount},
-			{"edge_task_references", impact.EdgeTaskReferenceCount},
-			{"active_current_nodes", impact.ActiveCurrentNodeCount},
-			{"pending_approvals", impact.PendingApprovalCount},
-			{"start_node_changes", impact.StartNodeChangeCount},
-			{"last_terminal_changes", impact.LastTerminalChangeCount},
-			{"task_referenced_node_kind_changes", impact.TaskReferencedNodeKindChangeCount},
+			{"removed_node_groups", outcome.Impact.RemovedNodeGroupCount},
+			{"removed_nodes", outcome.Impact.RemovedNodeCount},
+			{"removed_transition_groups", outcome.Impact.RemovedTransitionGroupCount},
+			{"removed_edges", outcome.Impact.RemovedEdgeCount},
+			{"node_task_references", outcome.Impact.NodeTaskReferenceCount},
+			{"edge_task_references", outcome.Impact.EdgeTaskReferenceCount},
+			{"active_current_nodes", outcome.Impact.ActiveCurrentNodeCount},
+			{"pending_approvals", outcome.Impact.PendingApprovalCount},
+			{"start_node_changes", outcome.Impact.StartNodeChangeCount},
+			{"last_terminal_changes", outcome.Impact.LastTerminalChangeCount},
+			{"task_referenced_node_kind_changes", outcome.Impact.TaskReferencedNodeKindChangeCount},
 		} {
-			if err := write("- %s: %d\n", count.name, count.value); err != nil {
-				return err
-			}
+			write("- %s: %d\n", count.name, count.value)
 		}
-		if err := writeWorkflowGraphEntityReferences(stderr, "Removed entities", impact.RemovedEntities); err != nil {
-			return err
-		}
+		writeEntities("Removed entities", outcome.Impact.RemovedEntities)
 	}
 	if len(outcome.Blockers) > 0 {
-		if err := write("Blockers:\n"); err != nil {
-			return err
-		}
+		write("Blockers:\n")
 		for _, blocker := range outcome.Blockers {
-			if err := write("- [%s] %s (count=%d)\n", blocker.Code, blocker.Message, blocker.Count); err != nil {
-				return err
-			}
-			if err := writeWorkflowGraphEntityReferences(stderr, "  Affected entities", blocker.AffectedEntities); err != nil {
-				return err
-			}
+			write("- [%s] %s (count=%d)\n", blocker.Code, blocker.Message, blocker.Count)
+			writeEntities("  Affected entities", blocker.AffectedEntities)
 		}
 	}
-	return nil
+	return writeErr
 }
-
 func writeWorkflowGraphEntityReferences(stderr io.Writer, label string, entities []serverapi.WorkflowGraphEntityReference) error {
-	write := func(format string, args ...any) error {
-		_, err := fmt.Fprintf(stderr, format, args...)
-		return err
-	}
-	if err := write("%s:\n", label); err != nil {
+	if _, err := fmt.Fprintf(stderr, "%s:\n", label); err != nil {
 		return err
 	}
 	for _, entity := range entities {
-		if err := write("  - %s %s\n", entity.EntityType, entity.EntityID); err != nil {
+		if _, err := fmt.Fprintf(stderr, "  - %s %s\n", entity.EntityType, entity.EntityID); err != nil {
 			return err
 		}
 	}
