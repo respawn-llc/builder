@@ -525,35 +525,57 @@ func (e *Engine) QueueUserMessage(text string) (QueuedUserMessage, error) {
 }
 
 func (e *Engine) QueueUserMessageWithClientRequestID(text string, clientRequestID string) (QueuedUserMessage, error) {
-	return e.queueUserMessageWithClientRequestID(text, clientRequestID, false)
+	return e.queueUserMessageWithClientRequestID(text, clientRequestID, false, nil)
 }
 
-func (e *Engine) queueUserMessageWithClientRequestID(text string, clientRequestID string, forceAutoDrain bool) (QueuedUserMessage, error) {
+func (e *Engine) queueUserMessageWithClientRequestID(text string, clientRequestID string, forceAutoDrain bool, accept CommandAcceptance) (QueuedUserMessage, error) {
 	e.ensureOrchestrationCollaborators()
 	if !forceAutoDrain {
-		e.outputMutationMu.Lock()
-		defer e.outputMutationMu.Unlock()
-		item, err := e.messageFlow.QueueUserMessage(text, clientRequestID)
-		if err != nil {
-			return QueuedUserMessage{}, err
-		}
-		e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
-		return item, nil
+		var item QueuedUserMessage
+		committed, err := runCommandAcceptance(accept, func() (bool, error) {
+			e.outputMutationMu.Lock()
+			defer e.outputMutationMu.Unlock()
+			var queueErr error
+			item, queueErr = e.messageFlow.QueueUserMessage(text, clientRequestID)
+			if queueErr != nil {
+				return false, queueErr
+			}
+			e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
+			return true, nil
+		})
+		return item, commandAcceptanceResult(committed, err)
 	}
 	liveItem := queuedUserMessageWithID(runtimeids.NewQueueItemID().String(), text, clientRequestID)
 	waitedForLiveRunStep := false
 	for {
-		if e.liveRun.beginQueueItemPublication(mustQueueItemID(liveItem.ID), func(queueItemID string) {
-			e.markQueuedUserInjectionForAutoDrain(queueItemID)
-		}) {
-			e.outputMutationMu.Lock()
-			item, err := e.messageFlow.QueueUserMessageWithID(liveItem)
-			if err != nil {
-				e.outputMutationMu.Unlock()
-				return QueuedUserMessage{}, err
+		var item QueuedUserMessage
+		livePublication := false
+		committed, err := runCommandAcceptance(accept, func() (bool, error) {
+			if !e.liveRun.beginQueueItemPublication(mustQueueItemID(liveItem.ID), func(queueItemID string) {
+				e.markQueuedUserInjectionForAutoDrain(queueItemID)
+			}) {
+				return false, nil
 			}
+			livePublication = true
+			e.outputMutationMu.Lock()
+			queuedItem, queueErr := e.messageFlow.QueueUserMessageWithID(liveItem)
+			if queueErr != nil {
+				e.outputMutationMu.Unlock()
+				queueItemID := mustQueueItemID(liveItem.ID)
+				e.liveRun.finishQueueItemPublication(queueItemID)
+				e.unmarkQueuedUserInjectionForAutoDrain(liveItem.ID)
+				e.completeLiveRunQueueItems(map[string]struct{}{liveItem.ID: {}})
+				return false, queueErr
+			}
+			item = queuedItem
 			e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
 			e.outputMutationMu.Unlock()
+			return true, nil
+		})
+		if err != nil {
+			return QueuedUserMessage{}, err
+		}
+		if committed {
 			queueItemID := mustQueueItemID(item.ID)
 			if e.liveRun.finishQueueItemPublication(queueItemID) {
 				e.failStoppedLiveRunQueueItems(map[runtimeids.QueueItemID]struct{}{queueItemID: {}})
@@ -562,6 +584,9 @@ func (e *Engine) queueUserMessageWithClientRequestID(text string, clientRequestI
 			}
 			return item, nil
 		}
+		if livePublication {
+			return QueuedUserMessage{}, context.Canceled
+		}
 		if !e.waitingForLiveRunStepStart() {
 			break
 		}
@@ -569,19 +594,29 @@ func (e *Engine) queueUserMessageWithClientRequestID(text string, clientRequestI
 		time.Sleep(time.Millisecond)
 	}
 	if waitedForLiveRunStep {
+		if accept != nil {
+			return QueuedUserMessage{}, context.Canceled
+		}
 		e.outputMutationMu.Lock()
 		e.emitQueuedUserMessageStatus(liveItem, QueuedUserMessageFailed, QueuedUserMessageFailureStopped, true)
 		e.outputMutationMu.Unlock()
 		return liveItem, nil
 	}
-	e.outputMutationMu.Lock()
-	item, err := e.messageFlow.QueueUserMessage(text, clientRequestID)
-	if err != nil {
-		e.outputMutationMu.Unlock()
+	var item QueuedUserMessage
+	committed, err := runCommandAcceptance(accept, func() (bool, error) {
+		e.outputMutationMu.Lock()
+		defer e.outputMutationMu.Unlock()
+		var queueErr error
+		item, queueErr = e.messageFlow.QueueUserMessage(text, clientRequestID)
+		if queueErr != nil {
+			return false, queueErr
+		}
+		e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
+		return true, nil
+	})
+	if err := commandAcceptanceResult(committed, err); err != nil {
 		return QueuedUserMessage{}, err
 	}
-	e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
-	e.outputMutationMu.Unlock()
 	e.markQueuedUserInjectionForAutoDrain(item.ID)
 	e.scheduleQueuedUserInjectionsIfIdle()
 	return item, nil
@@ -650,15 +685,15 @@ func (e *Engine) Interrupt() error {
 }
 
 func (e *Engine) SubmitUserMessage(ctx context.Context, text string) (assistant llm.Message, err error) {
-	return e.submitUserMessage(ctx, text, nil, nil)
+	return e.submitUserMessage(ctx, text, nil, nil, nil)
 }
 
 func (e *Engine) SubmitUserMessageWithFlushHook(ctx context.Context, text string, onFlushed func()) (assistant llm.Message, err error) {
-	return e.submitUserMessage(ctx, text, nil, onFlushed)
+	return e.submitUserMessage(ctx, text, nil, onFlushed, nil)
 }
 
 func (e *Engine) SubmitUserMessageWithHooks(ctx context.Context, text string, onActive func(), onFlushed func()) (assistant llm.Message, err error) {
-	return e.submitUserMessage(ctx, text, onActive, onFlushed)
+	return e.submitUserMessage(ctx, text, onActive, onFlushed, nil)
 }
 
 func (e *Engine) SubmitAgentSteerWithHooks(ctx context.Context, steer AgentSteer, onActive func(), onFlushed func()) (assistant llm.Message, err error) {
@@ -687,7 +722,7 @@ func (e *Engine) SubmitAgentSteerWithHooks(ctx context.Context, steer AgentSteer
 	return assistant, err
 }
 
-func (e *Engine) submitUserMessage(ctx context.Context, text string, onActive func(), onFlushed func()) (assistant llm.Message, err error) {
+func (e *Engine) submitUserMessage(ctx context.Context, text string, onActive func(), onFlushed func(), accept CommandAcceptance) (assistant llm.Message, err error) {
 	if text == "" {
 		return llm.Message{}, errors.New("empty message")
 	}
@@ -704,7 +739,11 @@ func (e *Engine) submitUserMessage(ctx context.Context, text string, onActive fu
 			return err
 		}
 		userMessage := llm.Message{Role: llm.RoleUser, Content: textutil.Value(text)}
-		if err := e.steer(stepID, steerUserMessageWithFlushIntent(userMessage)); err != nil {
+		committed, steerErr := runCommandAcceptance(accept, func() (bool, error) {
+			receipt, err := e.steerWithCommitReceipt(stepID, steerUserMessageWithFlushIntent(userMessage))
+			return receipt.Committed, err
+		})
+		if err := commandAcceptanceResult(committed, steerErr); err != nil {
 			return err
 		}
 		if onFlushed != nil {
@@ -740,14 +779,18 @@ func (e *Engine) SubmitWorkflowTurn(ctx context.Context) (assistant llm.Message,
 }
 
 func (e *Engine) SubmitUserShellCommand(ctx context.Context, command string) (result tools.Result, err error) {
-	return e.submitUserShellCommand(ctx, command, nil)
+	return e.submitUserShellCommand(ctx, command, nil, nil)
 }
 
 func (e *Engine) SubmitUserShellCommandWithActiveHook(ctx context.Context, command string, onActive func()) (result tools.Result, err error) {
-	return e.submitUserShellCommand(ctx, command, onActive)
+	return e.submitUserShellCommand(ctx, command, onActive, nil)
 }
 
-func (e *Engine) submitUserShellCommand(ctx context.Context, command string, onActive func()) (result tools.Result, err error) {
+func (e *Engine) SubmitUserShellCommandWithAcceptance(ctx context.Context, command string, accept CommandAcceptance) (result tools.Result, err error) {
+	return e.submitUserShellCommand(ctx, command, nil, accept)
+}
+
+func (e *Engine) submitUserShellCommand(ctx context.Context, command string, onActive func(), accept CommandAcceptance) (result tools.Result, err error) {
 	command = strings.TrimSpace(command)
 	if command == "" {
 		return tools.Result{}, errors.New("empty command")
@@ -770,7 +813,11 @@ func (e *Engine) submitUserShellCommand(ctx context.Context, command string, onA
 				"user_initiated": true,
 			}),
 		}
-		if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{call}}})); err != nil {
+		committed, steerErr := runCommandAcceptance(accept, func() (bool, error) {
+			receipt, err := e.steerWithCommitReceipt(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{call}}}))
+			return receipt.Committed, err
+		})
+		if err := commandAcceptanceResult(committed, steerErr); err != nil {
 			return err
 		}
 		_, registered := e.registry.Get(toolspec.ToolExecCommand)

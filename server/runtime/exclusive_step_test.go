@@ -9,6 +9,7 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/server/tools"
 	"core/shared/textutil"
 	"core/shared/toolspec"
@@ -111,6 +112,14 @@ func (s *stubExclusiveStepLifecycle) Interrupt() error {
 }
 
 func (s *stubExclusiveStepLifecycle) InterruptCurrent(func(*RunSnapshot)) (*RunSnapshot, error) {
+	return nil, nil
+}
+
+func (s *stubExclusiveStepLifecycle) InterruptCurrentAgentTurn(func(*RunSnapshot)) (*RunSnapshot, error) {
+	return nil, nil
+}
+
+func (s *blockingBackgroundStepLifecycle) InterruptCurrentAgentTurn(func(*RunSnapshot)) (*RunSnapshot, error) {
 	return nil, nil
 }
 
@@ -596,6 +605,198 @@ func TestExclusiveStepLifecycleEmitsInterruptedRunStatePayloads(t *testing.T) {
 	}
 	if finished.FinishedAt.IsZero() || finished.StartedAt.IsZero() {
 		t.Fatalf("expected interrupted payload timestamps, got %+v", finished)
+	}
+}
+
+func TestExclusiveStepLifecycleAgentTurnInterruptMatchesOnlyAgentTurns(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		kind      ActiveKind
+		closing   bool
+		wantMatch bool
+	}{
+		{name: string(ActiveKindUserTurn), kind: ActiveKindUserTurn, wantMatch: true},
+		{name: string(ActiveKindWorkflowTurn), kind: ActiveKindWorkflowTurn, wantMatch: true},
+		{name: string(ActiveKindGoalLoop), kind: ActiveKindGoalLoop, wantMatch: true},
+		{name: "closing_user_turn", kind: ActiveKindUserTurn, closing: true},
+		{name: string(ActiveKindCompaction), kind: ActiveKindCompaction},
+		{name: string(ActiveKindPreSubmitCompaction), kind: ActiveKindPreSubmitCompaction},
+		{name: string(ActiveKindUserShell), kind: ActiveKindUserShell},
+		{name: string(ActiveKindBackground), kind: ActiveKindBackground},
+		{name: string(ActiveKindRuntimeMaintenance), kind: ActiveKindRuntimeMaintenance},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			store := mustCreateTestSession(t)
+			eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+			canceled := false
+			lifecycle := &defaultExclusiveStepLifecycle{
+				engine: eng,
+				active: &exclusiveRunState{
+					sequence:   1,
+					activeKind: test.kind,
+					cancel: func() {
+						canceled = true
+					},
+					runID:     uuid.NewString(),
+					stepID:    uuid.NewString(),
+					startedAt: time.Now().UTC(),
+					closing:   test.closing,
+				},
+			}
+
+			interrupted, err := lifecycle.InterruptCurrentAgentTurn(nil)
+			if err != nil {
+				t.Fatalf("agent-turn interrupt: %v", err)
+			}
+			if matched := interrupted != nil; matched != test.wantMatch {
+				t.Fatalf("agent-turn interrupt matched=%t, want %t for %s", matched, test.wantMatch, test.kind)
+			}
+			if canceled != test.wantMatch {
+				t.Fatalf("agent-turn interrupt canceled=%t, want %t for %s", canceled, test.wantMatch, test.kind)
+			}
+			if lifecycle.active.interrupted != test.wantMatch {
+				t.Fatalf("agent-turn interrupted state=%t, want %t for %s", lifecycle.active.interrupted, test.wantMatch, test.kind)
+			}
+		})
+	}
+}
+
+func TestExclusiveStepLifecycleAgentTurnInterruptKeepsSuccessorBehindPersistence(t *testing.T) {
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	lifecycle := &defaultExclusiveStepLifecycle{
+		engine: eng,
+		active: &exclusiveRunState{
+			sequence:   1,
+			activeKind: ActiveKindUserTurn,
+			cancel:     func() {},
+			runID:      uuid.NewString(),
+			stepID:     uuid.NewString(),
+			startedAt:  time.Now().UTC(),
+		},
+	}
+	persistEntered, releasePersist := gate.BlockNext()
+
+	type interruptResult struct {
+		snapshot *RunSnapshot
+		err      error
+	}
+	interruptDone := make(chan interruptResult, 1)
+	go func() {
+		snapshot, err := lifecycle.InterruptCurrentAgentTurn(nil)
+		interruptDone <- interruptResult{snapshot: snapshot, err: err}
+	}()
+	select {
+	case <-persistEntered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for Agent Turn interruption persistence")
+	}
+
+	lifecycle.beginTerminalPublication()
+	lifecycle.finishTerminalPublication()
+	successorStarted := make(chan struct{})
+	successorDone := make(chan error, 1)
+	go func() {
+		successorDone <- lifecycle.RunNext(
+			context.Background(),
+			exclusiveStepOptions{ActiveKind: ActiveKindUserShell},
+			func(context.Context, string) error {
+				close(successorStarted)
+				return nil
+			},
+		)
+	}()
+	select {
+	case <-successorStarted:
+		t.Fatal("shell successor started before Agent Turn interruption persisted")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	releasePersist()
+	result := <-interruptDone
+	if result.err != nil || result.snapshot == nil || result.snapshot.ActiveKind != ActiveKindUserTurn {
+		t.Fatalf("agent-turn interrupt = (%+v, %v), want persisted user Agent Turn", result.snapshot, result.err)
+	}
+	select {
+	case <-successorStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for shell successor")
+	}
+	if err := <-successorDone; err != nil {
+		t.Fatalf("shell successor: %v", err)
+	}
+}
+
+func TestRunNextRetriesWhenPublicationStartsAfterBoundarySignal(t *testing.T) {
+	store := mustCreateTestSession(t)
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	lifecycle := &defaultExclusiveStepLifecycle{
+		engine: eng,
+		active: &exclusiveRunState{
+			sequence:   1,
+			activeKind: ActiveKindUserTurn,
+			cancel:     func() {},
+			runID:      uuid.NewString(),
+			stepID:     uuid.NewString(),
+			startedAt:  time.Now().UTC(),
+		},
+	}
+	successorStarted := make(chan struct{})
+	successorDone := make(chan error, 1)
+	go func() {
+		successorDone <- lifecycle.RunNext(
+			context.Background(),
+			exclusiveStepOptions{ActiveKind: ActiveKindUserShell},
+			func(context.Context, string) error {
+				close(successorStarted)
+				return nil
+			},
+		)
+	}()
+
+	var waiter *exclusiveStepWaiter
+	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); {
+		lifecycle.mu.Lock()
+		if len(lifecycle.nextWaiters) == 1 {
+			waiter = lifecycle.nextWaiters[0]
+		}
+		lifecycle.mu.Unlock()
+		if waiter != nil {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if waiter == nil {
+		t.Fatal("timed out waiting for queued successor")
+	}
+
+	lifecycle.mu.Lock()
+	lifecycle.boundaryReady = true
+	close(waiter.ready)
+	lifecycle.beginPublicationLocked()
+	lifecycle.boundaryReady = false
+	lifecycle.active = nil
+	lifecycle.mu.Unlock()
+
+	select {
+	case err := <-successorDone:
+		t.Fatalf("successor finished during publication fence: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	lifecycle.mu.Lock()
+	lifecycle.finishPublicationLocked()
+	lifecycle.mu.Unlock()
+	select {
+	case <-successorStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for successor after publication")
+	}
+	if err := <-successorDone; err != nil {
+		t.Fatalf("successor after publication: %v", err)
 	}
 }
 

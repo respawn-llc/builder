@@ -37,7 +37,7 @@ type defaultExclusiveStepLifecycle struct {
 	boundaryReady      bool
 	boundaryDone       chan struct{}
 	runSeq             uint64
-	terminalPublishing bool
+	publicationDepth   uint8
 }
 
 type exclusiveStepWaiter struct {
@@ -336,6 +336,7 @@ func (s *defaultExclusiveStepLifecycle) InterruptCurrent(beforeCancel func(*RunS
 	if suspended != nil {
 		suspended.interrupted = true
 	}
+	s.beginPublicationLocked()
 	s.mu.Unlock()
 	if active != nil && active.cancel != nil {
 		active.cancel()
@@ -344,26 +345,75 @@ func (s *defaultExclusiveStepLifecycle) InterruptCurrent(beforeCancel func(*RunS
 		suspended.cancel()
 	}
 	s.mu.Lock()
-	if active != nil && (s.active == nil || s.active.sequence != active.sequence) {
+	stale := (active != nil && (s.active == nil || s.active.sequence != active.sequence)) ||
+		(suspended != nil && (s.suspended == nil || s.suspended.sequence != suspended.sequence))
+	if stale {
+		s.finishPublicationLocked()
 		s.mu.Unlock()
 		return nil, nil
 	}
 	s.mu.Unlock()
-	if err := s.engine.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeInterruption), Content: textutil.Value(interruptMessage)}})); err != nil {
-		s.mu.Lock()
-		if active != nil && s.active != nil && s.active.sequence == active.sequence {
-			s.active.interrupted = false
-		}
-		s.mu.Unlock()
+	err := s.persistInterruption()
+	s.mu.Lock()
+	if err != nil && active != nil && s.active != nil && s.active.sequence == active.sequence {
+		s.active.interrupted = false
+	}
+	if err != nil && suspended != nil && s.suspended != nil && s.suspended.sequence == suspended.sequence {
+		s.suspended.interrupted = false
+	}
+	s.finishPublicationLocked()
+	s.mu.Unlock()
+	if err != nil {
 		return nil, err
 	}
 	return snapshot, nil
 }
 
+func (s *defaultExclusiveStepLifecycle) InterruptCurrentAgentTurn(beforeCancel func(*RunSnapshot)) (*RunSnapshot, error) {
+	s.mu.Lock()
+	active := s.active
+	if active == nil || !isAgentStepCapable(active.activeKind) || active.closing || active.interrupted {
+		s.mu.Unlock()
+		return nil, nil
+	}
+	snapshot := cloneRunSnapshot(s.snapshotLocked())
+	if beforeCancel != nil {
+		beforeCancel(cloneRunSnapshot(snapshot))
+	}
+	active.interrupted = true
+	s.beginPublicationLocked()
+	s.mu.Unlock()
+	if active.cancel != nil {
+		active.cancel()
+	}
+	s.mu.Lock()
+	if s.active == nil || s.active.sequence != active.sequence {
+		s.finishPublicationLocked()
+		s.mu.Unlock()
+		return nil, nil
+	}
+	s.mu.Unlock()
+	err := s.persistInterruption()
+	s.mu.Lock()
+	if err != nil && s.active != nil && s.active.sequence == active.sequence {
+		s.active.interrupted = false
+	}
+	s.finishPublicationLocked()
+	s.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return snapshot, nil
+}
+
+func (s *defaultExclusiveStepLifecycle) persistInterruption() error {
+	return s.engine.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeInterruption), Content: textutil.Value(interruptMessage)}}))
+}
+
 func (s *defaultExclusiveStepLifecycle) IsBusy() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.active != nil || s.heldReservation != nil || s.terminalPublishing || len(s.nextWaiters) > 0
+	return s.active != nil || s.heldReservation != nil || s.publicationDepth > 0 || len(s.nextWaiters) > 0
 }
 
 func (s *defaultExclusiveStepLifecycle) Snapshot() *RunSnapshot {
@@ -416,7 +466,7 @@ func (s *defaultExclusiveStepLifecycle) begin(ctx context.Context, options exclu
 		return nil, "", err
 	}
 	s.mu.Lock()
-	if s.active != nil || s.heldReservation != nil || s.terminalPublishing || len(s.nextWaiters) > 0 {
+	if s.active != nil || s.heldReservation != nil || s.publicationDepth > 0 || len(s.nextWaiters) > 0 {
 		s.mu.Unlock()
 		return nil, "", ErrAgentBusy
 	}
@@ -442,7 +492,7 @@ func (s *defaultExclusiveStepLifecycle) beginNext(ctx context.Context, options e
 		s.mu.Unlock()
 		return nil, "", ErrExclusiveStepReservationPending
 	}
-	if options.Reservation == nil && s.active == nil && s.heldReservation == nil && !s.terminalPublishing && len(s.nextWaiters) == 0 {
+	if options.Reservation == nil && s.active == nil && s.heldReservation == nil && s.publicationDepth == 0 && len(s.nextWaiters) == 0 {
 		stepCtx, stepID := s.activateLocked(ctx, options)
 		s.mu.Unlock()
 		return s.publishStepBegan(options, stepCtx, stepID)
@@ -461,40 +511,45 @@ func (s *defaultExclusiveStepLifecycle) beginNext(ctx context.Context, options e
 	}
 	s.mu.Unlock()
 
-	select {
-	case <-ctx.Done():
-	case <-waiter.ready:
-	}
-	if err := ctx.Err(); err != nil {
-		idle := s.cancelNextWaiter(waiter)
-		if idle {
-			return nil, "", errors.Join(err, s.scheduleIdleWork(true))
+	for {
+		select {
+		case <-ctx.Done():
+		case <-waiter.ready:
 		}
-		return nil, "", err
-	}
+		if err := ctx.Err(); err != nil {
+			idle := s.cancelNextWaiter(waiter)
+			if idle {
+				return nil, "", errors.Join(err, s.scheduleIdleWork(true))
+			}
+			return nil, "", err
+		}
 
-	s.mu.Lock()
-	if len(s.nextWaiters) == 0 || s.nextWaiters[0] != waiter ||
-		(s.active != nil && !s.boundaryReady) ||
-		s.terminalPublishing {
+		s.mu.Lock()
+		if len(s.nextWaiters) == 0 || s.nextWaiters[0] != waiter {
+			s.mu.Unlock()
+			return nil, "", errors.New("exclusive step next-boundary reservation invariant violated")
+		}
+		if (s.active != nil && !s.boundaryReady) || s.publicationDepth > 0 {
+			waiter.ready = make(chan struct{})
+			s.mu.Unlock()
+			continue
+		}
+		s.nextWaiters = s.nextWaiters[1:]
+		if s.active != nil {
+			s.suspended = s.active
+			s.active = nil
+			s.boundaryReady = false
+		}
+		if waiter == s.heldWaiter {
+			s.heldWaiter = nil
+		}
+		if options.Reservation != nil {
+			delete(s.reservationWaiters, options.Reservation)
+		}
+		stepCtx, stepID := s.activateLocked(ctx, options)
 		s.mu.Unlock()
-		return nil, "", errors.New("exclusive step next-boundary reservation invariant violated")
+		return s.publishStepBegan(options, stepCtx, stepID)
 	}
-	s.nextWaiters = s.nextWaiters[1:]
-	if s.active != nil && s.boundaryReady {
-		s.suspended = s.active
-		s.active = nil
-		s.boundaryReady = false
-	}
-	if waiter == s.heldWaiter {
-		s.heldWaiter = nil
-	}
-	if options.Reservation != nil {
-		delete(s.reservationWaiters, options.Reservation)
-	}
-	stepCtx, stepID := s.activateLocked(ctx, options)
-	s.mu.Unlock()
-	return s.publishStepBegan(options, stepCtx, stepID)
 }
 
 func validateExclusiveStepStart(ctx context.Context, options exclusiveStepOptions) error {
@@ -581,11 +636,11 @@ func (s *defaultExclusiveStepLifecycle) cancelNextWaiter(waiter *exclusiveStepWa
 		s.nextWaiters = append(s.nextWaiters[:index], s.nextWaiters[index+1:]...)
 	}
 	s.notifyNextWaiterLocked()
-	return removed && s.active == nil && !s.terminalPublishing && len(s.nextWaiters) == 0
+	return removed && s.active == nil && s.publicationDepth == 0 && len(s.nextWaiters) == 0
 }
 
 func (s *defaultExclusiveStepLifecycle) notifyNextWaiterLocked() {
-	if (s.active != nil && !s.boundaryReady) || s.terminalPublishing || len(s.nextWaiters) == 0 {
+	if (s.active != nil && !s.boundaryReady) || s.publicationDepth > 0 || len(s.nextWaiters) == 0 {
 		return
 	}
 	if s.heldReservation != nil && s.heldWaiter == nil {
@@ -619,13 +674,12 @@ func (s *defaultExclusiveStepLifecycle) end() {
 func (s *defaultExclusiveStepLifecycle) beginTerminalPublication() {
 	s.mu.Lock()
 	s.active = nil
-	s.terminalPublishing = true
+	s.beginPublicationLocked()
 	s.mu.Unlock()
 }
 
 func (s *defaultExclusiveStepLifecycle) finishTerminalPublication() {
 	s.mu.Lock()
-	s.terminalPublishing = false
 	if s.suspended != nil {
 		s.active = s.suspended
 		s.suspended = nil
@@ -634,8 +688,20 @@ func (s *defaultExclusiveStepLifecycle) finishTerminalPublication() {
 			s.boundaryDone = nil
 		}
 	}
-	s.notifyNextWaiterLocked()
+	s.finishPublicationLocked()
 	s.mu.Unlock()
+}
+
+func (s *defaultExclusiveStepLifecycle) beginPublicationLocked() {
+	s.publicationDepth++
+}
+
+func (s *defaultExclusiveStepLifecycle) finishPublicationLocked() {
+	if s.publicationDepth == 0 {
+		panic("exclusive step publication depth underflow")
+	}
+	s.publicationDepth--
+	s.notifyNextWaiterLocked()
 }
 
 func (s *defaultExclusiveStepLifecycle) DrainAgentStepBoundary(ctx context.Context) error {
