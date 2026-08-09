@@ -9,6 +9,13 @@ import {
 } from "@/api";
 import { TestAppProviders, createTestServices } from "@/test-support/app-services";
 import {
+  callParams,
+  getCallCount,
+  interruptedTaskAttentionResponse,
+  mountTaskDetailSurface,
+  taskDetailResponseWithInterruptedCurrentScript,
+} from "@/test-support/task-detail";
+import {
   startTaskInitiatingAction,
   moveTaskInitiatingAction,
   TaskInitiatingActionDialogs,
@@ -174,6 +181,37 @@ describe("TaskInitiatingActionDialogs", () => {
     expect(execute.mock.calls[2]?.[1]).toEqual({ mode: "head", customRef: null });
     expect(execute.mock.calls[2]?.[0]).toEqual(execute.mock.calls[0]?.[0]);
     expect(screen.queryByTestId("setup-recovery-retry")).not.toBeInTheDocument();
+  });
+
+  it("recovers the canonical Task-detail interruption with its recorded target", async () => {
+    const attention = { ...interruptedTaskAttentionResponse, items: [{
+      ...interruptedTaskAttentionResponse.items[0],
+      session_name: null,
+      detail_json: JSON.stringify({ setup_recovery: {
+        setup_operation_id: "55555555-5555-4555-8555-555555555555",
+        cause: "process_exit", diagnostic: "task setup failed", script_path: "/repo/setup.sh",
+        setup_requirement: "required", execution_target: { mode: "head" },
+        retained_worktree: { worktree_id: "worktree-1", root: "/worktrees/task-1" },
+        retained_previous_worktree: null,
+      } }),
+    }] };
+    const services = mountTaskDetailSurface(taskDetailResponseWithInterruptedCurrentScript, {
+      attention,
+      routes: [{ method: "workflow.task.resume", result: {
+        outcome: "applied", applied: { current_nodes: [] },
+      } }],
+    });
+    const user = userEvent.setup();
+
+    const [resume] = (await screen.findAllByTestId("task-detail-resume")).reverse();
+    if (resume === undefined) throw new Error("Expected setup recovery Resume.");
+    await user.click(resume);
+    expect(await screen.findByText("task setup failed")).toBeInTheDocument();
+    await user.click(screen.getByTestId("setup-recovery-retry"));
+    await waitFor(() => { expect(getCallCount(services.transport.calls, "workflow.task.resume")).toBe(1); });
+    expect(callParams(services.transport.calls, "workflow.task.resume")).toMatchObject({
+      execution_target: { mode: "head" },
+    });
   });
 });
 
