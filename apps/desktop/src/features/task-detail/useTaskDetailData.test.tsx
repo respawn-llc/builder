@@ -10,39 +10,7 @@ import {
 } from "@/test-support/task-detail";
 
 describe("Task Detail live refresh", () => {
-  it("hides a submitted question before the answer request settles", async () => {
-    let attention = taskAttention("ask-1", 1);
-    const answer = deferred<undefined>();
-    mountTaskDetailSurface(taskDetailResponse, {
-      routes: [
-        {
-          method: "workflow.task.attention.list",
-          handler: () => attention,
-        },
-        {
-          method: "prompt.answerBatch",
-          handler: async () => {
-            await answer.promise;
-            attention = { items: [], generated_at_unix_ms: 4 };
-            return { results: [{ prompt_id: "ask-1", outcome: "resolved" }] };
-          },
-        },
-      ],
-    });
-    const user = userEvent.setup();
-
-    await waitForQuestionOptionCount(1);
-    const [firstOption] = screen.getAllByRole("radio");
-    if (firstOption === undefined) {
-      throw new Error("expected a question option");
-    }
-    await user.click(screen.getByRole("button", { name: appI18n.t("task.submitAnswer") }));
-
-    await waitFor(() => expect(firstOption).not.toBeInTheDocument());
-    answer.resolve(undefined);
-  });
-
-  it("focuses and submits the next prompt while the earlier answer remains in flight", async () => {
+  it("preserves position, focuses, and submits the next prompt while the earlier answer is in flight", async () => {
     let attention = taskAttentionMany([
       ["ask-1", 1],
       ["ask-2", 1],
@@ -77,6 +45,8 @@ describe("Task Detail live refresh", () => {
     await waitFor(() => {
       expect(screen.getAllByRole("radio")).toHaveLength(4);
     });
+    const list = screen.getByTestId("task-detail-island-stack");
+    list.scrollTop = 241;
     const [firstSubmit] = screen.getAllByRole("button", { name: appI18n.t("task.submitAnswer") });
     if (firstSubmit === undefined) {
       throw new Error("expected the first submit button");
@@ -87,9 +57,11 @@ describe("Task Detail live refresh", () => {
       expect(screen.queryByText("ask-1")).not.toBeInTheDocument();
       expect(screen.getByText("ask-2")).toBeInTheDocument();
       expect(screen.getAllByRole("radio")[0]).toHaveFocus();
+      expect(list.scrollTop).toBe(241);
     });
     await user.click(screen.getByRole("button", { name: appI18n.t("task.submitAnswer") }));
     expect(answerCount).toBe(2);
+    await waitFor(() => expect(screen.queryAllByRole("radio")).toHaveLength(0));
 
     second.resolve(undefined);
     first.resolve(undefined);
