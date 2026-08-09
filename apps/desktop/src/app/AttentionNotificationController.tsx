@@ -28,14 +28,9 @@ import { useAppServices } from "@/app-facade";
 import { useConnectionSnapshot } from "@/app-facade";
 import { SidebarRootOwner, useOwnedSidebarRoots } from "@/app-facade";
 import { useStatusController } from "@/app-facade";
-import type { TaskDetailInitialFocus } from "@/app-facade";
 
 export function AttentionNotificationController() {
-  return (
-    <SidebarRootOwner>
-      <OwnedAttentionNotificationController />
-    </SidebarRootOwner>
-  );
+  return <SidebarRootOwner><OwnedAttentionNotificationController /></SidebarRootOwner>;
 }
 
 function OwnedAttentionNotificationController() {
@@ -60,10 +55,7 @@ function OwnedAttentionNotificationController() {
       try {
         await open({
           kind: "taskDetail",
-          initialFocus:
-            target.kind === "task_detail"
-              ? nativeTaskDetailInitialFocus(target)
-              : taskDetailInitialFocus(target),
+          initialFocus: taskDetailInitialFocus(target.focus),
           inboxNav: true,
           mode: "overlay",
           taskID: target.taskID,
@@ -178,7 +170,12 @@ function OwnedAttentionNotificationController() {
       }
       const notificationKey = attentionNotificationIDKey(notification.id);
       const existing = surfacedRef.current.get(notificationKey);
-      if (!advancesAttentionNotificationRevision(existing?.notification.revision, notification.revision)) {
+      if (
+        !advancesAttentionNotificationRevision(
+          existing?.notification.revision,
+          notification.revision,
+        )
+      ) {
         return;
       }
       if (existing !== undefined) {
@@ -360,15 +357,4 @@ function OwnedAttentionNotificationController() {
   }, [bridge.notifications, logger, openTarget]);
 
   return null;
-}
-
-function nativeTaskDetailInitialFocus(target: NativeNotificationTarget): TaskDetailInitialFocus | undefined {
-  const { focus } = target;
-  if (focus.kind === "question") {
-    return { kind: focus.kind, askIDs: focus.askIDs };
-  }
-  if (focus.kind === "approval") {
-    return { kind: focus.kind, approvalID: focus.approvalID };
-  }
-  return undefined;
 }

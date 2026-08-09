@@ -48,7 +48,7 @@ export async function moveTask(transport: RpcTransport, input: TaskMoveInput): P
         target_node_id: input.targetNodeID,
         transition_key: input.transitionKey,
         values: input.values,
-        commentary: input.commentary,
+        setup_operation_id: (input.setupOperationID ?? newSetupOperationID()).toJSONValue(),
         execution_target: executionTargetPayload(input.executionTarget),
         proceed_despite_dependencies: input.proceedDespiteDependencies ?? false,
       }),

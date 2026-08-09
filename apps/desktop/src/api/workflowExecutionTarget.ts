@@ -58,20 +58,12 @@ export const defaultWorkflowExecutionTargetPolicy: WorkflowExecutionTargetPolicy
 };
 
 import type { TaskCurrentNode } from "./models";
-import type { RetainedPreviousWorktree } from "./worktreeTopology";
 
 export type TaskStartApplied = Readonly<{ currentNodes: readonly TaskCurrentNode[] }>;
 export type TaskResumeApplied = Readonly<{ currentNodes: readonly TaskCurrentNode[] }>;
 
-export type TaskMoveApplied = Readonly<{
-  currentNodes: readonly TaskCurrentNode[];
-  retainedPreviousWorktree: RetainedPreviousWorktree | null;
-}>;
-export type TaskMoveNoOp = Readonly<{
-  currentNodes: readonly TaskCurrentNode[];
-  retainedPreviousWorktree: RetainedPreviousWorktree | null;
-}>;
-export type TaskMovePreviewNoOp = Readonly<{ currentNodes: readonly TaskCurrentNode[] }>;
+export type TaskMoveApplied = Readonly<{ currentNodes: readonly TaskCurrentNode[] }>;
+export type TaskMoveNoOp = Readonly<{ currentNodes: readonly TaskCurrentNode[] }>;
 
 export type TaskApproveApplied = Readonly<{ taskID: string; currentNodes: readonly TaskCurrentNode[] }>;
 
@@ -97,7 +89,8 @@ export type TaskResumeResponse =
       selectionRequired: WorkflowExecutionTargetSelectionRequirement;
     }>;
 export type TaskMoveResponse =
-  WorkflowExecutionTargetActionResponse<TaskMoveApplied> | Readonly<{ outcome: "no_op"; noOp: TaskMoveNoOp }>;
+  | WorkflowExecutionTargetActionResponse<TaskMoveApplied>
+  | Readonly<{ outcome: "no_op"; noOp: TaskMoveNoOp }>;
 export type TaskApproveResponse = WorkflowExecutionTargetActionResponse<TaskApproveApplied>;
 
 export type TaskMovePreviewBlocker =
@@ -125,7 +118,7 @@ export type TaskMovePreviewChoice = Readonly<{
 }>;
 
 export type TaskMovePreviewResponse =
-  | Readonly<{ outcome: "no_op"; noOp: TaskMovePreviewNoOp }>
+  | Readonly<{ outcome: "no_op"; noOp: TaskMoveNoOp }>
   | Readonly<{ outcome: "direct"; direct: Readonly<Record<string, never>> }>
   | Readonly<{
       outcome: "transition";

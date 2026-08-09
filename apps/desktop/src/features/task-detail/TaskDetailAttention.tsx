@@ -27,14 +27,16 @@ export function ApprovalBox({
   const snapshot = attention.approvalSnapshot;
   const stale = snapshot.version !== currentVersion;
   function approve(): void {
-    void mutations.approveApproval.mutateAsync(attention.approvalID).catch((error: unknown) => {
-      showStatusToast({
-        body: errorMessage(error),
-        id: "task-approval-failed",
-        title: t("task.approvalFailed"),
-        tone: "danger",
+    void mutations.approveApproval
+      .mutateAsync(attention.approvalID)
+      .catch((error: unknown) => {
+        showStatusToast({
+          body: errorMessage(error),
+          id: "task-approval-failed",
+          title: t("task.approvalFailed"),
+          tone: "danger",
+        });
       });
-    });
   }
   return (
     <>
@@ -61,7 +63,10 @@ export function ApprovalBox({
             <span className="min-w-0 flex-1" />
             <Button
               className="shrink-0"
-              disabled={disabled || mutations.approveApproval.isPending}
+              disabled={
+                disabled ||
+                mutations.approveApproval.isPending
+              }
               onClick={approve}
               variant="primary"
             >
@@ -131,7 +136,7 @@ export function InterruptedCurrentNodeBox({
           {t("task.copyInterruptionDetail")}
         </Button>
       ) : null}
-      <TaskResumeButton disabled={disabled} setupRecovery={attention.setupRecovery ?? undefined} />
+      <TaskResumeButton disabled={disabled} />
     </Island>
   );
 }

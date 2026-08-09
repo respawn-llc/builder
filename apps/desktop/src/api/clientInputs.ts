@@ -121,7 +121,7 @@ export type TaskMoveInput = Readonly<{
   targetNodeID: string;
   transitionKey?: string | undefined;
   values?: Readonly<Record<string, Readonly<Record<string, string>>>>;
-  commentary?: string | undefined;
+  setupOperationID?: SetupOperationID | undefined;
   executionTarget?: WorkflowExecutionTargetSelection | undefined;
   proceedDespiteDependencies?: boolean | undefined;
 }>;

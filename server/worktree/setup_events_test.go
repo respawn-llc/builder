@@ -21,13 +21,11 @@ func TestSetupEventBrokerPublishCloseConcurrent(t *testing.T) {
 		subs = append(subs, sub)
 	}
 	evt := serverapi.WorktreeSetupEvent{
-		SetupOperationID: setupID,
-		Phase:            serverapi.WorktreeSetupPhaseStarted,
-		Started: &serverapi.WorktreeSetupStarted{
-			SourceWorkspaceRoot: "/source",
-			WorktreeRoot:        "/worktree",
-			ScriptPath:          "/source/setup.sh",
-		},
+		SetupOperationID:    setupID,
+		SourceWorkspaceRoot: "/source",
+		WorktreeRoot:        "/worktree",
+		ScriptPath:          "/source/setup.sh",
+		Phase:               serverapi.WorktreeSetupPhaseStarted,
 	}
 	var wg sync.WaitGroup
 	for _, sub := range subs {
@@ -56,13 +54,11 @@ func TestSetupEventBrokerUsesTypedSetupOperationIDKey(t *testing.T) {
 	}
 	defer func() { _ = sub.Close() }()
 	broker.Publish(serverapi.WorktreeSetupEvent{
-		SetupOperationID: setupID,
-		Phase:            serverapi.WorktreeSetupPhaseStarted,
-		Started: &serverapi.WorktreeSetupStarted{
-			SourceWorkspaceRoot: "/source",
-			WorktreeRoot:        "/worktree",
-			ScriptPath:          "/source/setup.sh",
-		},
+		SetupOperationID:    setupID,
+		SourceWorkspaceRoot: "/source",
+		WorktreeRoot:        "/worktree",
+		ScriptPath:          "/source/setup.sh",
+		Phase:               serverapi.WorktreeSetupPhaseStarted,
 	})
 	evt, err := sub.Next(context.Background())
 	if err != nil {

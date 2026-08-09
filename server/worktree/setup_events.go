@@ -3,7 +3,6 @@ package worktree
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"sync"
 
@@ -46,11 +45,8 @@ func (b *setupEventBroker) Subscribe(req serverapi.WorktreeSetupSubscribeRequest
 }
 
 func (b *setupEventBroker) Publish(evt serverapi.WorktreeSetupEvent) {
-	if b == nil {
+	if b == nil || evt.SetupOperationID.Validate() != nil {
 		return
-	}
-	if err := evt.Validate(); err != nil {
-		panic(fmt.Sprintf("publish invalid worktree setup event: %v; event=%+v", err, evt))
 	}
 	id := evt.SetupOperationID
 	b.mu.Lock()
@@ -58,17 +54,13 @@ func (b *setupEventBroker) Publish(evt serverapi.WorktreeSetupEvent) {
 	for sub := range b.subscribers[id] {
 		subscribers = append(subscribers, sub)
 	}
-	if evt.Phase == serverapi.WorktreeSetupPhaseCompleted ||
-		evt.Phase == serverapi.WorktreeSetupPhaseNotRequired ||
-		evt.Phase == serverapi.WorktreeSetupPhaseFailed {
+	if evt.Phase == serverapi.WorktreeSetupPhaseCompleted || evt.Phase == serverapi.WorktreeSetupPhaseFailed {
 		delete(b.subscribers, id)
 	}
 	b.mu.Unlock()
 	for _, sub := range subscribers {
 		sub.publish(evt)
-		if evt.Phase == serverapi.WorktreeSetupPhaseCompleted ||
-			evt.Phase == serverapi.WorktreeSetupPhaseNotRequired ||
-			evt.Phase == serverapi.WorktreeSetupPhaseFailed {
+		if evt.Phase == serverapi.WorktreeSetupPhaseCompleted || evt.Phase == serverapi.WorktreeSetupPhaseFailed {
 			sub.Close()
 		}
 	}

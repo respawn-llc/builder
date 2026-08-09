@@ -1,22 +1,4 @@
 import type { ApprovalSnapshot, AttentionQuestionPrompt, TaskCurrentNode } from "./models";
-import type { SetupOperationID } from "./setupOperationID";
-import type { WorkflowExecutionTargetSelection } from "./workflowExecutionTarget";
-
-export type TaskSetupRecoveryRetainedWorktree = Readonly<{
-  worktreeID: string;
-  root: string;
-}>;
-
-export type TaskSetupRecovery = Readonly<{
-  setupOperationID: SetupOperationID;
-  cause: "process_exit" | "timeout" | "target_preparation" | "operational";
-  diagnostic: string;
-  scriptPath: string | null;
-  setupRequirement: "required" | "already_completed";
-  executionTarget: WorkflowExecutionTargetSelection;
-  retainedWorktree: TaskSetupRecoveryRetainedWorktree | null;
-  retainedPreviousWorktree: TaskSetupRecoveryRetainedWorktree | null;
-}>;
 
 type AttentionItemBase = Readonly<{
   id: string;
@@ -56,9 +38,6 @@ export type InterruptedCurrentNodeAttentionItem = AttentionItemBase &
     sessionID: string | null;
     detailJSON: string | null;
     message: string | null;
-    setupOperationID: SetupOperationID | null;
-    setupRecovery: TaskSetupRecovery | null;
   }>;
 
-export type AttentionItem =
-  QuestionAttentionItem | ApprovalAttentionItem | InterruptedCurrentNodeAttentionItem;
+export type AttentionItem = QuestionAttentionItem | ApprovalAttentionItem | InterruptedCurrentNodeAttentionItem;

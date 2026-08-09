@@ -24,11 +24,6 @@ func ApprovalProjections(projections []workflowstore.ApprovalAttentionProjection
 }
 
 func InterruptedCurrentNodeProjectionFromStore(projection workflowstore.InterruptedCurrentNodeAttentionProjection) InterruptedCurrentNodeProjection {
-	var setupOperationID *string
-	if projection.InterruptionDetail.SetupRecovery != nil {
-		value := projection.InterruptionDetail.SetupRecovery.SetupOperationID.String()
-		setupOperationID = &value
-	}
 	return InterruptedCurrentNodeProjection{
 		CurrentNode:      projection.CurrentNode,
 		ProjectID:        projection.ProjectID,
@@ -38,7 +33,6 @@ func InterruptedCurrentNodeProjectionFromStore(projection workflowstore.Interrup
 		SessionID:        projection.SessionID,
 		Reason:           projection.InterruptionReason,
 		DetailJSON:       projection.InterruptionDetailJSON,
-		SetupOperationID: setupOperationID,
 		OccurredAtUnixMs: projection.OccurredAtUnixMs,
 	}
 }

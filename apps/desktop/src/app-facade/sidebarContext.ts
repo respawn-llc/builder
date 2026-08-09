@@ -1,14 +1,4 @@
-import {
-  createContext,
-  createElement,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useState,
-  type ReactNode,
-} from "react";
-import type { SetupOperationID } from "@/api";
+import { createContext, createElement, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 
 import type { ResolvedSidebarWidth, SidebarSizePreference } from "./sidebarSizing";
 
@@ -29,12 +19,7 @@ export type WorkflowInspectorInitialFocus = "firstEditableControl";
 export type TaskDetailInitialFocus =
   | Readonly<{ kind: "question"; askIDs: readonly string[] }>
   | Readonly<{ kind: "approval"; approvalID: string }>
-  | Readonly<{
-      kind: "interrupted_current_node";
-      currentNodeID: string;
-      currentNodeBranchKey: string | null;
-      setupOperationID: SetupOperationID | null;
-    }>
+  | Readonly<{ kind: "interrupted_current_node" }>
   | Readonly<{ kind: "dependencies" }>;
 
 export type SidebarDestination =
@@ -185,7 +170,10 @@ export function useOwnedSidebarRoots(): SidebarRootController {
   return value;
 }
 
-export function useSidebarBackWhen(condition: boolean, navigator: SidebarPageNavigator | undefined): void {
+export function useSidebarBackWhen(
+  condition: boolean,
+  navigator: SidebarPageNavigator | undefined,
+): void {
   useEffect(() => {
     if (condition) navigator?.back();
   }, [condition, navigator]);

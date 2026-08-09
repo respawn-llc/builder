@@ -8,7 +8,6 @@ import type {
   AttentionNotificationTaskDetailFocus,
 } from "../attentionNotifications";
 import { workflowIDSchema } from "./common";
-import { setupOperationIDSchema } from "../setupOperationID";
 
 const id = z.string().min(1);
 const ids = z.array(id);
@@ -18,12 +17,7 @@ const notificationKind = z.enum(["question", "approval", "workflow_approval", "i
 const identifierSchema = z.object({ kind: notificationKind, uuid: id }).strict();
 const questionFocusSchema = z.object({ kind: z.literal("question"), ask_ids: nonEmptyIDs }).strict();
 const approvalFocusSchema = z.object({ kind: z.literal("approval"), approval_id: id }).strict();
-const interruptedFocusSchema = z
-  .object({
-    kind: z.literal("interrupted_current_node"),
-    setup_operation_id: setupOperationIDSchema.nullable(),
-  })
-  .strict();
+const interruptedFocusSchema = z.object({ kind: z.literal("interrupted_current_node") }).strict();
 const focusSchema = z.discriminatedUnion("kind", [
   questionFocusSchema,
   approvalFocusSchema,
@@ -37,7 +31,7 @@ function focus(value: z.infer<typeof focusSchema>): AttentionNotificationTaskDet
     case "approval":
       return { kind: value.kind, approvalID: value.approval_id };
     case "interrupted_current_node":
-      return { kind: value.kind, setupOperationID: value.setup_operation_id };
+      return { kind: value.kind };
   }
 }
 

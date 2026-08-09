@@ -15,10 +15,7 @@ export function useBoardResumeAction(controller: TaskInitiatingActionController)
       taskID: string,
       action: Extract<TaskInitiatingAction, { kind: "resume" }>,
       selection?: WorkflowExecutionTargetSelection,
-    ) =>
-      pending.execute(taskID, async () => {
-        await controller.run(action, selection);
-      }),
+    ) => pending.execute(taskID, async () => controller.run(action, selection)),
     [controller, pending],
   );
   return {

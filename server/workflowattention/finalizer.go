@@ -44,7 +44,6 @@ type InterruptedCurrentNodeProjection struct {
 	SessionID        string
 	Reason           string
 	DetailJSON       string
-	SetupOperationID *string
 	OccurredAtUnixMs int64
 }
 
@@ -286,11 +285,6 @@ func approvalNotification(projection ApprovalProjection) clientui.AttentionNotif
 }
 
 func interruptedCurrentNodeNotification(projection InterruptedCurrentNodeProjection) clientui.AttentionNotification {
-	setupOperationID := projection.SetupOperationID
-	focus := &clientui.AttentionNotificationTaskDetailFocus{
-		Kind:             clientui.AttentionNotificationFocusInterruptedCurrentNode,
-		SetupOperationID: &setupOperationID,
-	}
 	return clientui.AttentionNotification{
 		ID:         interruptedCurrentNodeNotificationID(projection.CurrentNode),
 		Kind:       clientui.AttentionNotificationKindInterruptedCurrentNode,
@@ -300,15 +294,11 @@ func interruptedCurrentNodeNotification(projection InterruptedCurrentNodeProject
 			Reason:     strings.TrimSpace(projection.Reason),
 			DetailJSON: strings.TrimSpace(projection.DetailJSON),
 		},
-		Target: workflowTaskTargetWithFocus(projection.ProjectID, projection.WorkflowID, projection.CurrentNode, projection.TaskShortID, projection.TaskTitle, projection.SessionID, focus),
+		Target: workflowTaskTarget(projection.ProjectID, projection.WorkflowID, projection.CurrentNode, projection.TaskShortID, projection.TaskTitle, projection.SessionID, clientui.AttentionNotificationFocusInterruptedCurrentNode, ""),
 	}
 }
 
 func workflowTaskTarget(projectID string, workflowID runtimeids.WorkflowID, reference workflow.CurrentNodeReference, shortID, title, sessionID string, focusKind clientui.AttentionNotificationFocusKind, approvalID string) clientui.AttentionNotificationTarget {
-	return workflowTaskTargetWithFocus(projectID, workflowID, reference, shortID, title, sessionID, &clientui.AttentionNotificationTaskDetailFocus{Kind: focusKind, ApprovalID: approvalID})
-}
-
-func workflowTaskTargetWithFocus(projectID string, workflowID runtimeids.WorkflowID, reference workflow.CurrentNodeReference, shortID, title, sessionID string, focus *clientui.AttentionNotificationTaskDetailFocus) clientui.AttentionNotificationTarget {
 	nodeID := string(reference.NodeID)
 	target := clientui.AttentionNotificationTarget{
 		Kind:          clientui.AttentionNotificationTargetWorkflowTask,
@@ -319,7 +309,7 @@ func workflowTaskTargetWithFocus(projectID string, workflowID runtimeids.Workflo
 		TaskTitle:     strings.TrimSpace(title),
 		SessionID:     strings.TrimSpace(sessionID),
 		CurrentNodeID: &nodeID,
-		Focus:         focus,
+		Focus:         &clientui.AttentionNotificationTaskDetailFocus{Kind: focusKind, ApprovalID: approvalID},
 	}
 	if branchKey, branchScoped := reference.TransitionBranchKey(); branchScoped {
 		value := string(branchKey)

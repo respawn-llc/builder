@@ -40,7 +40,6 @@ import { emptyArray } from "./workflowHelpers";
 import { workflowExecutionTargetSchema } from "./workflowExecutionTarget";
 import { labelIDListSchema } from "./workflowLabels";
 import { taskDependenciesSchema } from "./taskDependencies";
-import { retainedPreviousWorktreeSchema } from "../worktreeTopology";
 export {
   taskDependenciesSchema,
   taskDependencyAddResponseSchema,
@@ -204,28 +203,6 @@ const appliedCurrentNodesResponseSchema = z
       }) as const,
   );
 
-const moveAppliedResponseSchema = z
-  .object({
-    outcome: z.literal("applied"),
-    applied: z
-      .object({
-        current_nodes: z.array(currentNodeSchema).min(1),
-        retained_previous_worktree: retainedPreviousWorktreeSchema.nullable(),
-      })
-      .strict(),
-  })
-  .strict()
-  .transform(
-    (value) =>
-      ({
-        outcome: value.outcome,
-        applied: {
-          currentNodes: value.applied.current_nodes,
-          retainedPreviousWorktree: value.applied.retained_previous_worktree,
-        },
-      }) as const,
-  );
-
 export const taskStartResponseSchema: z.ZodType<TaskStartResponse> = z.discriminatedUnion("outcome", [
   appliedCurrentNodesResponseSchema,
   selectionRequiredResponseSchema,
@@ -237,33 +214,7 @@ export const taskResumeResponseSchema: z.ZodType<TaskResumeResponse> = z.discrim
   selectionRequiredResponseSchema,
 ]);
 
-const taskMoveActionNoOpResponseSchema = z
-  .object({
-    outcome: z.literal("no_op"),
-    no_op: z
-      .object({
-        current_nodes: z.array(currentNodeSchema).min(1),
-        retained_previous_worktree: retainedPreviousWorktreeSchema.nullable(),
-      })
-      .strict(),
-  })
-  .strict()
-  .transform((value) => ({
-    outcome: value.outcome,
-    noOp: {
-      currentNodes: value.no_op.current_nodes,
-      retainedPreviousWorktree: value.no_op.retained_previous_worktree,
-    },
-  }));
-
-export const taskMoveResponseSchema: z.ZodType<TaskMoveResponse> = z.discriminatedUnion("outcome", [
-  moveAppliedResponseSchema,
-  selectionRequiredResponseSchema,
-  taskMoveActionNoOpResponseSchema,
-  dependencyConfirmationRequiredResponseSchema,
-]);
-
-const taskMovePreviewNoOpResponseSchema = z
+const taskMoveNoOpResponseSchema = z
   .object({
     outcome: z.literal("no_op"),
     no_op: z.object({ current_nodes: z.array(currentNodeSchema).min(1) }).strict(),
@@ -273,6 +224,13 @@ const taskMovePreviewNoOpResponseSchema = z
     outcome: value.outcome,
     noOp: { currentNodes: value.no_op.current_nodes },
   }));
+
+export const taskMoveResponseSchema: z.ZodType<TaskMoveResponse> = z.discriminatedUnion("outcome", [
+  appliedCurrentNodesResponseSchema,
+  selectionRequiredResponseSchema,
+  taskMoveNoOpResponseSchema,
+  dependencyConfirmationRequiredResponseSchema,
+]);
 
 const manualMoveBlockerSchema = z.enum([
   "invalid_workflow",
@@ -305,7 +263,7 @@ const manualMoveRequiredValueSchema = z
 export const taskMovePreviewResponseSchema: z.ZodType<TaskMovePreviewResponse> = z.discriminatedUnion(
   "outcome",
   [
-    taskMovePreviewNoOpResponseSchema,
+    taskMoveNoOpResponseSchema,
     z
       .object({ outcome: z.literal("direct"), direct: z.object({}).strict() })
       .strict()
@@ -315,24 +273,22 @@ export const taskMovePreviewResponseSchema: z.ZodType<TaskMovePreviewResponse> =
         outcome: z.literal("transition"),
         transition: z
           .object({
-            choices: z
-              .array(
-                z
-                  .object({
-                    transition_key: z.string().trim().min(1),
-                    label: z.string().trim().min(1),
-                    source_node_display_name: z.string().trim().min(1),
-                    required_values: z.array(manualMoveRequiredValueSchema),
-                  })
-                  .strict()
-                  .transform((value) => ({
-                    transitionKey: value.transition_key,
-                    label: value.label,
-                    sourceNodeDisplayName: value.source_node_display_name,
-                    requiredValues: value.required_values,
-                  })),
-              )
-              .min(1),
+            choices: z.array(
+              z
+                .object({
+                  transition_key: z.string().trim().min(1),
+                  label: z.string().trim().min(1),
+                  source_node_display_name: z.string().trim().min(1),
+                  required_values: z.array(manualMoveRequiredValueSchema),
+                })
+                .strict()
+                .transform((value) => ({
+                  transitionKey: value.transition_key,
+                  label: value.label,
+                  sourceNodeDisplayName: value.source_node_display_name,
+                  requiredValues: value.required_values,
+                })),
+            ).min(1),
           })
           .strict(),
       })

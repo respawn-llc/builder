@@ -42,109 +42,12 @@ export function TaskInitiatingActionDialogs({
   if (pending?.kind === "dependency_confirmation") {
     return <DependencyConfirmationDialog continuation={continuation} onResult={onResult} pending={pending} />;
   }
-  if (pending?.kind === "setup_recovery") {
-    return <SetupRecoveryDialog continuation={continuation} onResult={onResult} pending={pending} />;
-  }
   return (
     <ExecutionTargetDialog
       continuation={continuation}
       onResult={onResult}
       pending={pending?.kind === "execution_target" ? pending : null}
     />
-  );
-}
-
-function SetupRecoveryDialog({
-  continuation,
-  onResult,
-  pending,
-}: Readonly<{
-  continuation: TaskInitiatingActionController;
-  onResult(result: TaskInitiatingActionDialogResult): void;
-  pending: Extract<PendingTaskInitiatingAction, { kind: "setup_recovery" }>;
-}>) {
-  const { t } = useTranslation();
-  const selectedTarget =
-    pending.selection === null ? null : executionTargetSelectionFromDraft(pending.selection);
-  const retrySelection =
-    pending.targetIntent.kind === "explicit_override" ? pending.targetIntent.selection : undefined;
-  return (
-    <Dialog closeLabel={t("app.close")} onClose={continuation.close} open title={t("setupRecovery.title")}>
-      <div className="grid gap-[var(--space-4)]">
-        <div className="grid gap-[var(--space-2)]">
-          <p className="m-0 text-[var(--color-muted)]">
-            {t("setupRecovery.setupScriptBody")}
-          </p>
-          <p className="m-0 whitespace-pre-wrap font-mono text-sm text-[var(--color-error)]">
-            {pending.failure.diagnostic}
-          </p>
-          {pending.failure.scriptPath === null ? null : (
-            <p className="m-0 break-all font-mono text-sm text-[var(--color-muted)]">
-              {pending.failure.scriptPath}
-            </p>
-          )}
-          {pending.failure.retainedWorktree === null ? null : (
-            <p className="m-0 break-all font-mono text-sm text-[var(--color-muted)]">
-              {pending.failure.retainedWorktree.root}
-            </p>
-          )}
-          {pending.failure.retainedPreviousWorktree === null ? null : (
-            <p className="m-0 break-all font-mono text-sm text-[var(--color-muted)]">
-              {pending.failure.retainedPreviousWorktree.root}
-            </p>
-          )}
-        </div>
-        {pending.selection === null ? (
-          <div className="flex flex-wrap justify-end gap-[var(--space-2)]">
-            <Button onClick={continuation.close}>{t("app.cancel")}</Button>
-            <Button
-              data-testid="setup-recovery-choose"
-              onClick={continuation.chooseAnotherTarget}
-              variant="primary-outline"
-            >
-              {t("setupRecovery.chooseTarget")}
-            </Button>
-            <Button
-              data-testid="setup-recovery-retry"
-              disabled={continuation.running}
-              onClick={() => {
-                onResult({
-                  kind: "continue",
-                  action: pending.action,
-                  ...(retrySelection === undefined ? {} : { selection: retrySelection }),
-                });
-              }}
-              variant="primary"
-            >
-              {t("setupRecovery.retry")}
-            </Button>
-          </div>
-        ) : (
-          <form
-            className="grid gap-[var(--space-4)]"
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (selectedTarget !== null) {
-                onResult({ kind: "continue", action: pending.action, selection: selectedTarget });
-              }
-            }}
-          >
-            <ExecutionTargetChoices continuation={continuation} pending={pending} />
-            <div className="flex justify-end gap-[var(--space-2)]">
-              <Button onClick={continuation.close}>{t("app.cancel")}</Button>
-              <Button
-                data-testid="setup-recovery-target-submit"
-                disabled={selectedTarget === null || continuation.running}
-                type="submit"
-                variant="primary"
-              >
-                {t("setupRecovery.useTarget")}
-              </Button>
-            </div>
-          </form>
-        )}
-      </div>
-    </Dialog>
   );
 }
 
@@ -276,12 +179,9 @@ function ExecutionTargetChoices({
   pending,
 }: Readonly<{
   continuation: TaskInitiatingActionController;
-  pending: ExecutionTargetPending | Extract<PendingTaskInitiatingAction, { kind: "setup_recovery" }>;
+  pending: ExecutionTargetPending;
 }>) {
   const { t } = useTranslation();
-  if (pending.selection === null) {
-    throw new Error("Execution Target choices require an active selection draft.");
-  }
   return (
     <>
       <RadioGroup

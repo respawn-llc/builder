@@ -356,9 +356,6 @@ func appendAdmissionWait(
 }
 
 func taskHasControllerQueuedWorkLocked(c *CurrentNodeController, taskID workflow.TaskID) bool {
-	if c.queuedTaskPreparationLocked(taskID) != nil || c.runningTaskPreparationLocked(taskID) != nil {
-		return true
-	}
 	for entry := c.automaticQueue.first; entry != nil; entry = entry.globalNext {
 		if entry.start.reference.TaskID == taskID {
 			return true
@@ -400,16 +397,6 @@ func taskHasControllerQueuedWorkLocked(c *CurrentNodeController, taskID workflow
 }
 
 func validateTaskControllerWorkLocked(c *CurrentNodeController, taskID workflow.TaskID) error {
-	for _, batch := range []*taskPreparationBatch{c.queuedTaskPreparationLocked(taskID), c.runningTaskPreparationLocked(taskID)} {
-		if batch == nil {
-			continue
-		}
-		for index, start := range batch.starts {
-			if _, err := start.reference.Key(); err != nil {
-				return fmt.Errorf("validate task preparation Current Node at index %d for task %s: %w", index, taskID, err)
-			}
-		}
-	}
 	for entry := c.automaticQueue.first; entry != nil; entry = entry.globalNext {
 		if entry.start.reference.TaskID == taskID {
 			if _, err := entry.start.reference.Key(); err != nil {
@@ -472,41 +459,6 @@ func drainTaskControllerWorkLocked(
 	admissionWaits *[]currentNodeAdmissionWait,
 	drainedGates *[]currentNodeAdmissionGate,
 ) error {
-	preparationQueue := c.preparationQueue[:0]
-	for _, batch := range c.preparationQueue {
-		if batch.taskID != taskID {
-			preparationQueue = append(preparationQueue, batch)
-			continue
-		}
-		if c.queuedTaskPreparationLocked(taskID) != batch {
-			return errors.New("queued task preparation ownership was replaced before drain")
-		}
-		closeQueuedTaskPreparationBatch(batch, preparationCancellationCause())
-		for _, start := range batch.starts {
-			key, err := start.reference.Key()
-			if err != nil {
-				return fmt.Errorf("drain queued task preparation for task %s: %w", taskID, err)
-			}
-			c.interrupts.addCurrentNode(fence, key)
-			*references = append(*references, start.reference)
-			*admissionWaits = appendAdmissionWait(*admissionWaits, key, nil)
-		}
-	}
-	c.preparationQueue = preparationQueue
-
-	if batch := c.runningTaskPreparationLocked(taskID); batch != nil {
-		batch.cancel(preparationCancellationCause())
-		for _, start := range batch.starts {
-			key, err := start.reference.Key()
-			if err != nil {
-				return fmt.Errorf("drain running task preparation for task %s: %w", taskID, err)
-			}
-			c.interrupts.addCurrentNode(fence, key)
-			*references = append(*references, start.reference)
-			*admissionWaits = appendAdmissionWait(*admissionWaits, key, batch.done)
-		}
-	}
-
 	explicitQueue := c.explicitQueue[:0]
 	for _, start := range c.explicitQueue {
 		if start.reference.TaskID != taskID {

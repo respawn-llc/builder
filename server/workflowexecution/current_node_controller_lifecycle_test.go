@@ -730,7 +730,7 @@ func TestCurrentNodeControllerHoldsApprovalTargetUntilCompletedSourceScopeRetire
 		NodeKind:    workflow.NodeKindAgent,
 	}})
 	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		snapshot := currentNodeControllerSnapshotForTest(controller)
+		snapshot := controller.Snapshot()
 		return hasLiveCurrentNode(snapshot, source) && hasAutomaticCurrentNodeIntent(snapshot, queuedAgent)
 	}, "approval source did not hold Agent capacity while queued Agent remained queued")
 	sourceScope := singleLiveScope(t, controller, source)
@@ -743,7 +743,7 @@ func TestCurrentNodeControllerHoldsApprovalTargetUntilCompletedSourceScopeRetire
 	if _, err := controller.ApplyPendingApproval(context.Background(), approval.ID); err != nil {
 		t.Fatalf("ApplyPendingApproval: %v", err)
 	}
-	snapshot := currentNodeControllerSnapshotForTest(controller)
+	snapshot := controller.Snapshot()
 	if len(snapshot.HeldIntents) != 1 ||
 		!snapshot.HeldIntents[0].CurrentNode.Equal(target) ||
 		snapshot.HeldIntents[0].Automatic {
@@ -781,7 +781,7 @@ func TestCurrentNodeControllerHoldsApprovalTargetUntilCompletedSourceScopeRetire
 		}
 	}
 	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		for _, live := range currentNodeControllerSnapshotForTest(controller).LiveScopes {
+		for _, live := range controller.Snapshot().LiveScopes {
 			if live.CurrentNode.Equal(target) {
 				return !live.Automatic
 			}
@@ -789,7 +789,7 @@ func TestCurrentNodeControllerHoldsApprovalTargetUntilCompletedSourceScopeRetire
 		return false
 	}, "approval target did not enter an explicit live scope")
 	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		return hasLiveCurrentNode(currentNodeControllerSnapshotForTest(controller), queuedAgent)
+		return hasLiveCurrentNode(controller.Snapshot(), queuedAgent)
 	}, "queued Agent did not enter a live automatic scope")
 }
 
@@ -854,7 +854,7 @@ func TestCurrentNodeControllerHoldsSuccessorUntilSourceScopeRetires(t *testing.T
 		t.Fatalf("first started current node = %v, want source %v", got, source)
 	}
 	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		return hasLiveCurrentNode(currentNodeControllerSnapshotForTest(controller), source)
+		return hasLiveCurrentNode(controller.Snapshot(), source)
 	}, "source did not become live")
 	sourceScope := singleLiveScope(t, controller, source)
 	if _, err := controller.CompleteCurrentNode(context.Background(), workflowruntime.CompletionRequest{
@@ -863,7 +863,7 @@ func TestCurrentNodeControllerHoldsSuccessorUntilSourceScopeRetires(t *testing.T
 	}); err != nil {
 		t.Fatalf("complete source: %v", err)
 	}
-	snapshot := currentNodeControllerSnapshotForTest(controller)
+	snapshot := controller.Snapshot()
 	if len(snapshot.HeldIntents) != 1 || !snapshot.HeldIntents[0].CurrentNode.Equal(successor) {
 		t.Fatalf("held intents = %+v, want successor held by source retirement", snapshot.HeldIntents)
 	}
@@ -877,7 +877,7 @@ func TestCurrentNodeControllerHoldsSuccessorUntilSourceScopeRetires(t *testing.T
 	}); err != nil {
 		t.Fatalf("finalize source post-turn: %v", err)
 	}
-	if snapshot := currentNodeControllerSnapshotForTest(controller); len(snapshot.HeldIntents) != 1 ||
+	if snapshot := controller.Snapshot(); len(snapshot.HeldIntents) != 1 ||
 		!snapshot.HeldIntents[0].CurrentNode.Equal(successor) {
 		t.Fatalf("post-finalization held intents = %+v, want successor held until source retirement", snapshot.HeldIntents)
 	}

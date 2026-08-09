@@ -29,12 +29,12 @@ const (
 type WorktreeGitFacts struct {
 	CanonicalRoot  string  `json:"canonical_root"`
 	HeadObject     string  `json:"head_object"`
-	BranchRef      *string `json:"branch_ref"`
-	BranchName     *string `json:"branch_name"`
+	BranchRef      *string `json:"branch_ref,omitempty"`
+	BranchName     *string `json:"branch_name,omitempty"`
 	Detached       bool    `json:"detached"`
 	Bare           bool    `json:"bare"`
-	LockedReason   *string `json:"locked_reason"`
-	PrunableReason *string `json:"prunable_reason"`
+	LockedReason   *string `json:"locked_reason,omitempty"`
+	PrunableReason *string `json:"prunable_reason,omitempty"`
 	IsMain         bool    `json:"is_main"`
 	PathAvailable  bool    `json:"path_available"`
 }
@@ -45,7 +45,7 @@ type WorktreeKentFacts struct {
 	DisplayName     string  `json:"display_name"`
 	Managed         bool    `json:"managed"`
 	CreatedBranch   bool    `json:"created_branch"`
-	OriginSessionID *string `json:"origin_session_id"`
+	OriginSessionID *string `json:"origin_session_id,omitempty"`
 }
 
 type WorktreePathAvailability string

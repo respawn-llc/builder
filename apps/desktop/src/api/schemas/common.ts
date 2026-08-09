@@ -27,11 +27,8 @@ import type {
   AttentionItem,
   InterruptedCurrentNodeAttentionItem,
   QuestionAttentionItem,
-  TaskSetupRecovery,
 } from "../attention";
-import { setupOperationIDSchema } from "../setupOperationID";
 import { labelIDListSchema } from "./workflowLabels";
-import { workflowExecutionTargetSelectionSchema } from "./workflowExecutionTarget";
 import { workflowIDSchema } from "./workflowID";
 
 export { workflowIDSchema } from "./workflowID";
@@ -426,10 +423,7 @@ export const scriptCurrentNodeSchema: z.ZodType<TaskScriptCurrentNode> = z
   .object({
     node_id: nonBlankString,
     transition_branch_key: nullableNonBlankString,
-    session_id: z
-      .null()
-      .optional()
-      .transform(() => null),
+    session_id: z.null().optional().transform(() => null),
   })
   .strict()
   .transform((value) => ({
@@ -437,77 +431,6 @@ export const scriptCurrentNodeSchema: z.ZodType<TaskScriptCurrentNode> = z
     transitionBranchKey: value.transition_branch_key,
     sessionID: value.session_id,
   }));
-
-const taskSetupRecoveryRetainedWorktreeSchema = z
-  .object({
-    worktree_id: nonBlankString,
-    root: nonBlankString,
-  })
-  .strict()
-  .transform((value) => ({
-    worktreeID: value.worktree_id,
-    root: value.root,
-  }));
-
-const taskSetupRecoveryDetailSchema = z
-  .object({
-    setup_recovery: z
-      .object({
-        setup_operation_id: setupOperationIDSchema,
-        cause: z.enum(["process_exit", "timeout", "target_preparation", "operational"]),
-        diagnostic: nonBlankString,
-        script_path: nonBlankString.nullable(),
-        setup_requirement: z.enum(["required", "already_completed"]),
-        execution_target: workflowExecutionTargetSelectionSchema,
-        retained_worktree: taskSetupRecoveryRetainedWorktreeSchema.nullable(),
-        retained_previous_worktree: taskSetupRecoveryRetainedWorktreeSchema.nullable(),
-      })
-      .strict(),
-  })
-  .loose()
-  .superRefine((value, context) => {
-    if (
-      value.setup_recovery.cause === "target_preparation" &&
-      value.setup_recovery.script_path !== null
-    ) {
-      context.addIssue({
-        code: "custom",
-        message: "target preparation recovery cannot include a setup script",
-      });
-    }
-    if (
-      value.setup_recovery.cause !== "target_preparation" &&
-      (value.setup_recovery.setup_requirement !== "required" ||
-        value.setup_recovery.script_path === null ||
-        value.setup_recovery.retained_worktree === null)
-    ) {
-      context.addIssue({
-        code: "custom",
-        message: "setup script failure requires script and retained worktree facts",
-      });
-    }
-    if (
-      value.setup_recovery.setup_requirement === "already_completed" &&
-      value.setup_recovery.retained_worktree === null
-    ) {
-      context.addIssue({
-        code: "custom",
-        message: "completed setup recovery requires retained worktree facts",
-      });
-    }
-  })
-  .transform((value): TaskSetupRecovery => ({
-    setupOperationID: value.setup_recovery.setup_operation_id,
-    cause: value.setup_recovery.cause,
-    diagnostic: value.setup_recovery.diagnostic,
-    scriptPath: value.setup_recovery.script_path,
-    setupRequirement: value.setup_recovery.setup_requirement,
-    executionTarget: value.setup_recovery.execution_target,
-    retainedWorktree: value.setup_recovery.retained_worktree ?? null,
-    retainedPreviousWorktree: value.setup_recovery.retained_previous_worktree ?? null,
-  }));
-
-const interruptionDetailEnvelopeSchema = z.object({ setup_recovery: z.unknown().optional() }).loose();
 
 export const attentionItemSchema: z.ZodType<AttentionItem> = z.discriminatedUnion("kind", [
   attentionItemBaseWireSchema
@@ -558,45 +481,9 @@ export const attentionItemSchema: z.ZodType<AttentionItem> = z.discriminatedUnio
       session_id: nullableNonBlankString,
       session_name: z.null(),
       detail_json: nullableNonBlankString,
-      setup_operation_id: setupOperationIDSchema.nullable(),
       message: nullableNonBlankString,
     })
     .strict()
-    .superRefine((value, context) => {
-      if (value.detail_json === null) {
-        if (value.setup_operation_id != null) {
-          context.addIssue({ code: "custom", message: "setup recovery detail is required" });
-        }
-        return;
-      }
-      let detail: unknown;
-      try {
-        detail = JSON.parse(value.detail_json);
-      } catch {
-        if (value.setup_operation_id != null) {
-          context.addIssue({ code: "custom", message: "setup recovery detail must be valid JSON" });
-        }
-        return;
-      }
-      const envelope = interruptionDetailEnvelopeSchema.safeParse(detail);
-      const declaresSetupRecovery = envelope.success && envelope.data.setup_recovery !== undefined;
-      if (value.setup_operation_id == null) {
-        if (declaresSetupRecovery) {
-          context.addIssue({
-            code: "custom",
-            message: "setup recovery operation id is required",
-          });
-        }
-        return;
-      }
-      const parsed = taskSetupRecoveryDetailSchema.safeParse(detail);
-      if (
-        !parsed.success ||
-        parsed.data.setupOperationID.toJSONValue() !== value.setup_operation_id.toJSONValue()
-      ) {
-        context.addIssue({ code: "custom", message: "setup recovery detail does not match operation id" });
-      }
-    })
     .transform((value): InterruptedCurrentNodeAttentionItem => ({
       ...adaptAttentionItemBase(value),
       kind: value.kind,
@@ -604,11 +491,6 @@ export const attentionItemSchema: z.ZodType<AttentionItem> = z.discriminatedUnio
       sessionID: value.session_id,
       detailJSON: value.detail_json,
       message: value.message,
-      setupOperationID: value.setup_operation_id ?? null,
-      setupRecovery:
-        value.setup_operation_id == null || value.detail_json === null
-          ? null
-          : taskSetupRecoveryDetailSchema.parse(JSON.parse(value.detail_json)),
     })),
 ]);
 

@@ -22,7 +22,7 @@ import { TaskDetailList } from "./TaskDetailList";
 import { taskDetailSidebarDestination } from "./taskDetailSidebarDestination";
 import type { TaskDetailDeleteDismissal } from "./taskDetailDismissal";
 import type { QuestionSelectionState } from "./TaskDetailQuestionState";
-import { TaskInitiatingActionProvider, type TaskResumeAuthority } from "./TaskResumeButton";
+import { TaskInitiatingActionProvider } from "./TaskResumeButton";
 import type { TaskDraft } from "./TaskDetailRows";
 import { useTaskMutations, useTaskDetailLiveRefresh } from "./useTaskDetailData";
 import type { useTaskActivity, useTaskAttention, useTaskComments } from "./useTaskDetailData";
@@ -148,7 +148,6 @@ export function TaskDetailContent({
   });
   const connection = useConnectionSnapshot();
   useTaskDetailLiveRefresh(detail, true);
-  const resumeAuthority = taskResumeAuthority(attention);
 
   // Reconcile the draft with the latest server snapshot during render (the
   // React "adjust state on prop change" pattern). Switching tasks resets to the
@@ -178,7 +177,6 @@ export function TaskDetailContent({
 
   return (
     <TaskInitiatingActionProvider
-      authority={resumeAuthority}
       key={detail.id}
       onApplied={mutations.refresh}
       onViewDependencies={(taskID) => {
@@ -251,18 +249,6 @@ export function TaskDetailContent({
       </TaskDeleteProvider>
     </TaskInitiatingActionProvider>
   );
-}
-
-function taskResumeAuthority(attention: ReturnType<typeof useTaskAttention>): TaskResumeAuthority {
-  if (!attention.isSuccess || attention.isFetching) {
-    return { kind: "unavailable" };
-  }
-  for (const item of attention.data.items) {
-    if (item.kind === "interrupted_current_node" && item.setupRecovery !== null) {
-      return { kind: "setup_recovery", recovery: item.setupRecovery };
-    }
-  }
-  return { kind: "ordinary" };
 }
 
 function taskDetailFocusPresentation({

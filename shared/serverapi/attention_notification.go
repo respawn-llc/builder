@@ -216,9 +216,6 @@ func validateTaskDetailFocus(focus clientui.AttentionNotificationTaskDetailFocus
 }
 
 func validateQuestionAttentionFocus(focus clientui.AttentionNotificationTaskDetailFocus) error {
-	if focus.SetupOperationID != nil {
-		return errors.New("question attention notification focus must not carry setup_operation_id")
-	}
 	if len(focus.AskIDs) == 0 {
 		return errors.New("question attention notification focus ask_ids is required")
 	}
@@ -231,9 +228,6 @@ func validateQuestionAttentionFocus(focus clientui.AttentionNotificationTaskDeta
 }
 
 func validateApprovalAttentionFocus(focus clientui.AttentionNotificationTaskDetailFocus) error {
-	if focus.SetupOperationID != nil {
-		return errors.New("approval attention notification focus must not carry setup_operation_id")
-	}
 	if focus.ApprovalID == "" {
 		return errors.New("approval attention notification focus approval_id is required")
 	}
@@ -241,14 +235,6 @@ func validateApprovalAttentionFocus(focus clientui.AttentionNotificationTaskDeta
 }
 
 func validateInterruptedCurrentNodeAttentionFocus(focus clientui.AttentionNotificationTaskDetailFocus) error {
-	if focus.SetupOperationID == nil {
-		return errors.New("interrupted current node attention notification focus requires nullable setup_operation_id")
-	}
-	if *focus.SetupOperationID != nil {
-		if _, err := ParseWorktreeSetupOperationID(**focus.SetupOperationID); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 

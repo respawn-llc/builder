@@ -5,7 +5,6 @@ import type {
   WorkflowExecutionTargetSelectionMode,
   WorkflowExecutionTargetSelectionRequirement,
 } from "@/api";
-import { decodeWorktreeSetupRetainedError } from "@/api";
 import {
   initialExecutionTargetSelectionDraft,
   type ExecutionTargetSelectionDraft,
@@ -24,42 +23,12 @@ export type PendingTaskInitiatingAction =
       action: TaskInitiatingAction;
       requirement: WorkflowExecutionTargetSelectionRequirement;
       selection: ExecutionTargetSelectionDraft;
-    }>
-  | Readonly<{
-      kind: "setup_recovery";
-      action: Extract<TaskInitiatingAction, { kind: "move" | "resume" }>;
-      failure: TaskSetupRecoveryFailure;
-      targetIntent: TaskExecutionTargetIntent;
-      selection: ExecutionTargetSelectionDraft | null;
     }>;
-
-export type TaskExecutionTargetIntent =
-  | Readonly<{ kind: "configured_policy" }>
-  | Readonly<{ kind: "explicit_override"; selection: WorkflowExecutionTargetSelection }>;
-
-export type TaskSetupRecoveryFailure = Readonly<{
-  kind: "setup_script";
-  diagnostic: string;
-  scriptPath: string | null;
-  retainedWorktree: Readonly<{ root: string }> | null;
-  retainedPreviousWorktree: Readonly<{ root: string }> | null;
-}>;
-
-export type TaskInitiatingActionRunOutcome = "settled" | "setup_recovery";
 
 export type TaskInitiatingActionController = Readonly<{
   pending: PendingTaskInitiatingAction | null;
   running: boolean;
-  run(
-    action: TaskInitiatingAction,
-    selection?: WorkflowExecutionTargetSelection,
-  ): Promise<TaskInitiatingActionRunOutcome>;
-  openSetupRecovery(
-    action: Extract<TaskInitiatingAction, { kind: "move" | "resume" }>,
-    failure: TaskSetupRecoveryFailure,
-    targetIntent?: TaskExecutionTargetIntent,
-  ): void;
-  chooseAnotherTarget(): void;
+  run(action: TaskInitiatingAction, selection?: WorkflowExecutionTargetSelection): Promise<void>;
   close(): void;
   selectMode(mode: WorkflowExecutionTargetSelectionMode): void;
   setCustomRef(customRef: string): void;
@@ -69,7 +38,6 @@ export function useTaskInitiatingActionController({
   execute,
   onApplied,
   onAppliedError,
-  onClosed,
 }: Readonly<{
   execute: (
     action: TaskInitiatingAction,
@@ -77,14 +45,13 @@ export function useTaskInitiatingActionController({
   ) => Promise<TaskInitiatingActionResult>;
   onApplied: (result: TaskInitiatingActionResult) => void | Promise<void>;
   onAppliedError: (error: unknown) => void;
-  onClosed?: (() => void) | undefined;
 }>): TaskInitiatingActionController {
   const [pending, setPending] = useState<PendingTaskInitiatingAction | null>(null);
   const [running, setRunning] = useState(false);
-  const initialRunRef = useRef<Promise<TaskInitiatingActionRunOutcome> | null>(null);
+  const initialRunRef = useRef<Promise<void> | null>(null);
 
   const handleResult = useCallback(
-    async (result: TaskInitiatingActionResult): Promise<TaskInitiatingActionRunOutcome> => {
+    async (result: TaskInitiatingActionResult): Promise<void> => {
       if (result.response.outcome === "applied" || result.response.outcome === "no_op") {
         setPending(null);
         try {
@@ -92,7 +59,7 @@ export function useTaskInitiatingActionController({
         } catch (error) {
           onAppliedError(error);
         }
-        return "settled";
+        return;
       }
       if (result.response.outcome === "dependency_confirmation_required") {
         setPending({
@@ -100,7 +67,7 @@ export function useTaskInitiatingActionController({
           action: result.action,
           unsatisfiedDependencyCount: result.response.unsatisfiedDependencyCount,
         });
-        return "settled";
+        return;
       }
       setPending({
         kind: "execution_target",
@@ -108,61 +75,20 @@ export function useTaskInitiatingActionController({
         requirement: result.response.selectionRequired,
         selection: initialExecutionTargetSelectionDraft(result.response.selectionRequired),
       });
-      return "settled";
     },
     [onApplied, onAppliedError],
   );
 
   const run = useCallback(
-    async (
-      action: TaskInitiatingAction,
-      selection?: WorkflowExecutionTargetSelection,
-    ): Promise<TaskInitiatingActionRunOutcome> => {
+    async (action: TaskInitiatingAction, selection?: WorkflowExecutionTargetSelection): Promise<void> => {
       if (initialRunRef.current !== null) {
-        return initialRunRef.current;
+        await initialRunRef.current;
+        return;
       }
       setRunning(true);
-      const operation = (async (): Promise<TaskInitiatingActionRunOutcome> => {
-        try {
-          const result = await execute(action, selection);
-          return await handleResult(result);
-        } catch (error) {
-          if (action.kind !== "move") {
-            setPending((current) => (current?.kind === "setup_recovery" ? null : current));
-            throw error;
-          }
-          const setupError = decodeWorktreeSetupRetainedError(error);
-          if (setupError === null) {
-            setPending((current) => (current?.kind === "setup_recovery" ? null : current));
-            throw error;
-          }
-          setPending({
-            kind: "setup_recovery",
-            action,
-            failure: {
-              kind: "setup_script",
-              diagnostic: setupError.diagnostic,
-              scriptPath: setupError.scriptPath,
-              retainedWorktree: {
-                root: setupError.worktree.registered.kent.canonicalRoot,
-              },
-              retainedPreviousWorktree:
-                setupError.retainedPreviousWorktree === null
-                  ? null
-                  : {
-                      root:
-                        setupError.retainedPreviousWorktree.worktree.registered.kent
-                          .canonicalRoot,
-                    },
-            },
-            targetIntent:
-              selection === undefined
-                ? { kind: "configured_policy" }
-                : { kind: "explicit_override", selection },
-            selection: null,
-          });
-          return "setup_recovery";
-        }
+      const operation = (async () => {
+        const result = await execute(action, selection);
+        await handleResult(result);
       })();
       initialRunRef.current = operation;
       const settle = () => {
@@ -172,76 +98,41 @@ export function useTaskInitiatingActionController({
         }
       };
       void operation.then(settle, settle);
-      return operation;
+      await operation;
     },
     [execute, handleResult],
   );
 
   const close = useCallback(() => {
     setPending(null);
-    onClosed?.();
-  }, [onClosed]);
+  }, []);
 
-  const openSetupRecovery = useCallback(
-    (
-      action: Extract<TaskInitiatingAction, { kind: "move" | "resume" }>,
-      failure: TaskSetupRecoveryFailure,
-      targetIntent: TaskExecutionTargetIntent = { kind: "configured_policy" },
-    ) => {
-      setPending({
-        kind: "setup_recovery",
-        action,
-        failure,
-        targetIntent,
-        selection: null,
-      });
-    },
-    [],
-  );
-
-  const chooseAnotherTarget = useCallback(() => {
+  const selectMode = useCallback((mode: WorkflowExecutionTargetSelectionMode) => {
     setPending((current) =>
-      current?.kind !== "setup_recovery"
+      current?.kind !== "execution_target"
         ? current
         : {
             ...current,
-            selection: initialExecutionTargetSelectionDraft({
-              reason: "policy_requires_selection",
-            }),
+            selection: { ...current.selection, mode },
           },
     );
   }, []);
 
-  const selectMode = useCallback((mode: WorkflowExecutionTargetSelectionMode) => {
-    setPending((current) => {
-      if (current?.kind === "execution_target") {
-        return { ...current, selection: { ...current.selection, mode } };
-      }
-      if (current?.kind === "setup_recovery" && current.selection !== null) {
-        return { ...current, selection: { ...current.selection, mode } };
-      }
-      return current;
-    });
-  }, []);
-
   const setCustomRef = useCallback((customRef: string) => {
-    setPending((current) => {
-      if (current?.kind === "execution_target") {
-        return { ...current, selection: { ...current.selection, customRef } };
-      }
-      if (current?.kind === "setup_recovery" && current.selection !== null) {
-        return { ...current, selection: { ...current.selection, customRef } };
-      }
-      return current;
-    });
+    setPending((current) =>
+      current?.kind !== "execution_target"
+        ? current
+        : {
+            ...current,
+            selection: { ...current.selection, customRef },
+          },
+    );
   }, []);
 
   return {
     pending,
     running,
     run,
-    openSetupRecovery,
-    chooseAnotherTarget,
     close,
     selectMode,
     setCustomRef,

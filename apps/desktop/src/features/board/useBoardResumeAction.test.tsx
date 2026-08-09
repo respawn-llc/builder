@@ -1,17 +1,18 @@
 import { act, renderHook } from "@testing-library/react";
 import { vi } from "vitest";
 
-import { resumeTaskInitiatingAction, type TaskInitiatingActionController } from "@/shared/execution-target";
+import {
+  resumeTaskInitiatingAction,
+  type TaskInitiatingActionController,
+} from "@/shared/execution-target";
 import { useBoardResumeAction } from "./useBoardResumeAction";
 
 it("routes Board Resume through the target-continuation controller", async () => {
-  const run = vi.fn<TaskInitiatingActionController["run"]>().mockResolvedValue("settled");
+  const run = vi.fn<TaskInitiatingActionController["run"]>().mockResolvedValue(undefined);
   const controller: TaskInitiatingActionController = {
     pending: null,
     running: false,
     run,
-    openSetupRecovery: vi.fn(),
-    chooseAnotherTarget: vi.fn(),
     close: vi.fn(),
     selectMode: vi.fn(),
     setCustomRef: vi.fn(),
@@ -28,13 +29,11 @@ it("routes Board Resume through the target-continuation controller", async () =>
 });
 
 it("continues Board Resume with the original action and selected target", async () => {
-  const run = vi.fn<TaskInitiatingActionController["run"]>().mockResolvedValue("settled");
+  const run = vi.fn<TaskInitiatingActionController["run"]>().mockResolvedValue(undefined);
   const controller: TaskInitiatingActionController = {
     pending: null,
     running: false,
     run,
-    openSetupRecovery: vi.fn(),
-    chooseAnotherTarget: vi.fn(),
     close: vi.fn(),
     selectMode: vi.fn(),
     setCustomRef: vi.fn(),

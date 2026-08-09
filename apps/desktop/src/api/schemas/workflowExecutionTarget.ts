@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import type { WorkflowExecutionTarget, WorkflowExecutionTargetSelection } from "../workflowExecutionTarget";
+import type { WorkflowExecutionTarget } from "../workflowExecutionTarget";
 
 const nonBlankString = z.string().trim().min(1);
 const optionalNonBlankString = nonBlankString.optional().transform((value) => value ?? null);
@@ -40,20 +40,3 @@ export const workflowExecutionTargetSchema: z.ZodType<WorkflowExecutionTarget> =
   noManagedWorktreeTargetSchema,
   managedTargetSchema,
 ]);
-
-export const workflowExecutionTargetSelectionSchema: z.ZodType<WorkflowExecutionTargetSelection> =
-  z.discriminatedUnion("mode", [
-    z
-      .object({
-        mode: z.enum(["none", "head", "default_branch"]),
-      })
-      .strict()
-      .transform((value) => ({ mode: value.mode, customRef: null })),
-    z
-      .object({
-        mode: z.literal("custom_ref"),
-        custom_ref: nonBlankString,
-      })
-      .strict()
-      .transform((value) => ({ mode: value.mode, customRef: value.custom_ref })),
-  ]);

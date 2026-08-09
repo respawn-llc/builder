@@ -9,6 +9,7 @@ import type {
   AttentionItem,
   AttentionNotification,
   AttentionNotificationID,
+  AttentionNotificationTaskDetailFocus,
   AttentionNotificationWorkflowTaskTarget,
 } from "@/api";
 import { errorMessage, isTaskMissingError } from "@/api";
@@ -165,25 +166,14 @@ export async function openNativeActivation(
   }
 }
 
-export function taskDetailInitialFocus(
-  target: AttentionNotificationWorkflowTaskTarget,
-): TaskDetailInitialFocus {
-  const { focus } = target;
+export function taskDetailInitialFocus(focus: AttentionNotificationTaskDetailFocus): TaskDetailInitialFocus {
   if (focus.kind === "question") {
     return { kind: "question", askIDs: focus.askIDs };
   }
   if (focus.kind === "approval") {
     return { kind: "approval", approvalID: focus.approvalID };
   }
-  if (target.currentNodeID === undefined) {
-    throw new Error("Interrupted Current Node attention target requires an exact Current Node.");
-  }
-  return {
-    kind: "interrupted_current_node",
-    currentNodeID: target.currentNodeID,
-    currentNodeBranchKey: target.currentNodeBranchKey ?? null,
-    setupOperationID: focus.setupOperationID,
-  };
+  return { kind: "interrupted_current_node" };
 }
 
 export function notificationTitle(notification: AttentionNotification, t: Translate): string {
@@ -360,7 +350,7 @@ function nativeTarget(target: AttentionNotification["target"]): NativeNotificati
   if (target.kind !== "workflow_task") {
     return null;
   }
-  const focus = taskDetailInitialFocus(target);
+  const focus = taskDetailInitialFocus(target.focus);
   if (focus.kind === "question" && focus.askIDs.length === 0) {
     return null;
   }
@@ -373,9 +363,7 @@ function nativeTarget(target: AttentionNotification["target"]): NativeNotificati
     focus:
       focus.kind === "question"
         ? { kind: "question", askIDs: [focus.askIDs[0] ?? "", ...focus.askIDs.slice(1)] }
-        : focus.kind === "interrupted_current_node"
-          ? { kind: "interrupted_current_node" }
-          : focus,
+        : focus,
   };
 }
 

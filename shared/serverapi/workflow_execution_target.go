@@ -430,13 +430,7 @@ func (r WorkflowTaskMoveResponse) Validate() error {
 }
 
 func validateWorkflowTaskMoveNoOp(noOp WorkflowTaskMoveNoOp) error {
-	if err := validateWorkflowTaskCurrentNodes(noOp.CurrentNodes, "move no_op payload"); err != nil {
-		return err
-	}
-	if noOp.RetainedPreviousWorktree != nil {
-		return noOp.RetainedPreviousWorktree.Validate()
-	}
-	return nil
+	return validateWorkflowTaskCurrentNodes(noOp.CurrentNodes, "move no_op payload")
 }
 
 func validateWorkflowTaskCurrentNodes(currentNodes []WorkflowTaskCurrentNode, payload string) error {
@@ -477,8 +471,8 @@ func validateWorkflowTaskApproveApplied(applied WorkflowTaskApproveApplied) erro
 }
 
 func validateWorkflowTaskMoveApplied(applied WorkflowTaskMoveApplied) error {
-	if err := validateWorkflowTaskCurrentNodes(applied.CurrentNodes, "move applied payload"); err != nil {
-		return err
+	if len(applied.CurrentNodes) == 0 {
+		return errors.New("move applied payload requires current_nodes")
 	}
-	return validateRetainedPreviousWorktree(applied.RetainedPreviousWorktree)
+	return nil
 }

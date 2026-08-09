@@ -32,7 +32,6 @@ type InterruptedCurrentNodeAttentionProjection struct {
 	SessionID              string
 	InterruptionReason     string
 	InterruptionDetailJSON string
-	InterruptionDetail     workflow.CurrentNodeInterruptionDetail
 	OccurredAtUnixMs       int64
 }
 
@@ -123,7 +122,6 @@ func pendingInterruptedCurrentNodeAttentionProjection(ctx context.Context, q *sq
 		SessionID:              sessionID,
 		InterruptionReason:     reason,
 		InterruptionDetailJSON: detail,
-		InterruptionDetail:     currentNode.Scheduling.Interruption.Detail,
 		OccurredAtUnixMs:       currentNode.Scheduling.Interruption.OccurredAt.UnixMilli(),
 	}, true, nil
 }

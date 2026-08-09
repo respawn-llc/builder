@@ -830,12 +830,17 @@ type WorktreeSetupEventParams struct {
 }
 
 type WorktreeSetupEvent struct {
-	SetupOperationID string          `json:"setup_operation_id"`
-	Phase            string          `json:"phase"`
-	Started          json.RawMessage `json:"started,omitempty"`
-	Completed        json.RawMessage `json:"completed,omitempty"`
-	NotRequired      json.RawMessage `json:"not_required,omitempty"`
-	Failed           json.RawMessage `json:"failed,omitempty"`
+	SetupOperationID    string `json:"setup_operation_id"`
+	SourceWorkspaceRoot string `json:"source_workspace_root"`
+	WorktreeRoot        string `json:"worktree_root"`
+	ScriptPath          string `json:"script_path"`
+	Phase               string `json:"phase"`
+	Timeout             bool   `json:"timeout,omitempty"`
+	Canceled            bool   `json:"canceled,omitempty"`
+	ExitCode            *int   `json:"exit_code,omitempty"`
+	Stdout              string `json:"stdout,omitempty"`
+	Stderr              string `json:"stderr,omitempty"`
+	Error               string `json:"error,omitempty"`
 }
 
 type WorkflowProjectEventResource string

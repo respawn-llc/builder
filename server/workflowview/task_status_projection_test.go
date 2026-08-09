@@ -276,26 +276,18 @@ func startControllerBackedTaskStatusExecution(
 	options.executionRelease = release
 	options.started = startedHandle
 	surfaces.runner.configure(backlog.task.ID, options)
-	startedResult, err := surfaces.controller.StartTask(
-		t.Context(),
-		backlog.task.ID,
-		workflowexecution.TaskStartPreparation{
-			Prepare: func(context.Context) error { return nil },
-			Commit: func(ctx context.Context) error {
-				return surfaces.fixture.store.LockTaskExecutionTarget(ctx, backlog.task.ID, &workflowstore.ExecutionTargetCandidate{
-					Snapshot: workflowstore.ExecutionTargetSnapshot{
-						Mode:       workflow.ExecutionTargetModeNone,
-						Provenance: workflowstore.ExecutionTargetProvenanceResolved,
-					},
-					Root: workflowstore.ExecutionRoot{
-						SourceWorkspaceID:   surfaces.fixture.binding.WorkspaceID,
-						SourceWorkspaceRoot: surfaces.fixture.binding.CanonicalRoot,
-					},
-				})
+	startedResult, err := surfaces.controller.StartTask(t.Context(), backlog.task.ID, func(ctx context.Context) error {
+		return surfaces.fixture.store.LockTaskExecutionTarget(ctx, backlog.task.ID, &workflowstore.ExecutionTargetCandidate{
+			Snapshot: workflowstore.ExecutionTargetSnapshot{
+				Mode:       workflow.ExecutionTargetModeNone,
+				Provenance: workflowstore.ExecutionTargetProvenanceResolved,
 			},
-		},
-		func(workflowexecution.TaskPreparationFinalization) {},
-	)
+			Root: workflowstore.ExecutionRoot{
+				SourceWorkspaceID:   surfaces.fixture.binding.WorkspaceID,
+				SourceWorkspaceRoot: surfaces.fixture.binding.CanonicalRoot,
+			},
+		})
+	})
 	if err != nil {
 		t.Fatalf("StartTask: %v", err)
 	}

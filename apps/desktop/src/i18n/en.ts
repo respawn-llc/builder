@@ -295,14 +295,6 @@ export const englishResources = {
       unavailable_default_branch_ambiguous: "The repository default branch is ambiguous.",
       unavailable_git_failure: "Git could not resolve the configured target.",
     },
-    setupRecovery: {
-      title: "Worktree setup needs attention",
-      setupScriptBody:
-        "The setup script failed after one automatic retry. Retry this target or choose another execution target.",
-      retry: "Retry setup",
-      chooseTarget: "Choose another target",
-      useTarget: "Use target",
-    },
     taskDependencyConfirmation: {
       title: "Start task ahead of deps?",
       body: "This task has {{count}} unsatisfied dependencies. Do you still want to start it?",

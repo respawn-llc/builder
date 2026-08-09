@@ -246,7 +246,7 @@ describe("attention notification API", () => {
             workflow_id: "11111111-1111-4111-8111-111111111111",
             task_id: "task-1",
             current_node_id: "node-1",
-            focus: { kind: "interrupted_current_node", setup_operation_id: null },
+            focus: { kind: "interrupted_current_node" },
           },
         },
       },
@@ -258,10 +258,7 @@ describe("attention notification API", () => {
     }
     expect(event.pending.kind).toBe("interrupted_current_node");
     expect(event.pending.question).toBeNull();
-    expect(event.pending.target.focus).toEqual({
-      kind: "interrupted_current_node",
-      setupOperationID: null,
-    });
+    expect(event.pending.target.focus).toEqual({ kind: "interrupted_current_node" });
   });
 
   it("rejects incoherent attention payloads and targets", () => {

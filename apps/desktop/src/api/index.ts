@@ -53,10 +53,6 @@ export {
   TransportError,
   errorMessage,
 } from "./errors";
-export {
-  decodeWorktreeSetupRetainedError,
-  WorktreeSetupRetainedError,
-} from "./worktreeSetup";
 export type { WorkflowLabelErrorReason } from "./errors";
 export type { WorkflowTaskDependencyErrorReason } from "./errors";
 export type { TaskSearchErrorReason } from "./errors";
@@ -65,14 +61,7 @@ export type { JsonArray, JsonObject, JsonPrimitive, JsonValue } from "./json";
 export { newSetupOperationID, parseSetupOperationID, SetupOperationID } from "./setupOperationID";
 export { rpcErrorCodes } from "./rpcErrorCodes";
 export { workflowIDSchema } from "./schemas/workflowID";
-export type {
-  WorktreeSetupEvent,
-  WorktreeSetupEventHandler,
-  WorktreeSetupFailure,
-  WorktreeSetupFailureCause,
-  WorktreeSetupPhase,
-} from "./worktreeSetup";
-export type { RegisteredWorktreeTopology, RetainedPreviousWorktree } from "./worktreeTopology";
+export type { WorktreeSetupEvent, WorktreeSetupEventHandler, WorktreeSetupPhase } from "./worktreeSetup";
 export type { WorkflowProjectEvent, WorkflowProjectEventHandler } from "./workflowProjectEvents";
 export { workflowLabelMaxIDs } from "./workflowLabelContract";
 export type { ConnectionPhase, ConnectionSnapshot } from "./connectionStore";
@@ -81,8 +70,6 @@ export type {
   AttentionItem,
   InterruptedCurrentNodeAttentionItem,
   QuestionAttentionItem,
-  TaskSetupRecovery,
-  TaskSetupRecoveryRetainedWorktree,
 } from "./attention";
 export type {
   ActivityItem,

@@ -125,13 +125,11 @@ func TestWorktreeCreateSetupEventUpdatesPendingOperationState(t *testing.T) {
 	model.worktrees.mutationToken = 7
 	model.worktrees.create.submitting = true
 	event := serverapi.WorktreeSetupEvent{
-		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		Phase:            serverapi.WorktreeSetupPhaseStarted,
-		Started: &serverapi.WorktreeSetupStarted{
-			SourceWorkspaceRoot: "/repo",
-			WorktreeRoot:        "/repo/.worktrees/feature",
-			ScriptPath:          "/repo/scripts/setup.sh",
-		},
+		SetupOperationID:    serverapi.NewWorktreeSetupOperationID(),
+		SourceWorkspaceRoot: "/repo",
+		WorktreeRoot:        "/repo/.worktrees/feature",
+		ScriptPath:          "/repo/scripts/setup.sh",
+		Phase:               serverapi.WorktreeSetupPhaseStarted,
 	}
 
 	updated := model.reduceWorktreeMessage(worktreeSetupEventMsg{token: 7, event: event}).model
@@ -139,9 +137,7 @@ func TestWorktreeCreateSetupEventUpdatesPendingOperationState(t *testing.T) {
 	if updated.worktrees.create.setupEvent == nil {
 		t.Fatal("setup event was not reduced into create state")
 	}
-	if updated.worktrees.create.setupEvent.Started == nil ||
-		updated.worktrees.create.setupEvent.Started.ScriptPath != event.Started.ScriptPath ||
-		updated.worktrees.create.setupEvent.Started.WorktreeRoot != event.Started.WorktreeRoot {
+	if updated.worktrees.create.setupEvent.ScriptPath != event.ScriptPath || updated.worktrees.create.setupEvent.WorktreeRoot != event.WorktreeRoot {
 		t.Fatalf("setup event state = %+v, want script/worktree paths", updated.worktrees.create.setupEvent)
 	}
 	if !updated.worktrees.create.submitting {
@@ -229,7 +225,7 @@ func TestWorktreeCreateFormErrorsUseDialogErrorRegion(t *testing.T) {
 func TestWorktreeCreateNonTypedAndSetupRetainedErrorsUseFormRegion(t *testing.T) {
 	for _, source := range []error{
 		errors.New("transport failed"),
-		&serverapi.WorktreeSetupRetainedError{ScriptPath: "/repo/setup.sh", Diagnostic: "setup retained"},
+		&serverapi.WorktreeSetupRetainedError{Diagnostic: "setup retained"},
 		&serverapi.WorktreeCreateContractError{Cause: errors.New("invalid contract")},
 	} {
 		model := newWorktreeCreateControllerTestModel(t, nil)

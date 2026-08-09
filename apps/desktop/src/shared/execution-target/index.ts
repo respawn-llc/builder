@@ -14,5 +14,4 @@ export {
 export {
   useTaskInitiatingActionController,
   type TaskInitiatingActionController,
-  type TaskSetupRecoveryFailure,
 } from "./useExecutionTargetContinuation";

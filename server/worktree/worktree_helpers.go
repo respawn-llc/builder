@@ -156,10 +156,10 @@ func resolveSetupScriptPath(workspaceRoot string, configuredPath string) (string
 	}
 	info, err := os.Stat(canonical)
 	if err != nil {
-		return canonical, err
+		return "", err
 	}
 	if info.IsDir() {
-		return canonical, fmt.Errorf("setup script %q is a directory", canonical)
+		return "", fmt.Errorf("setup script %q is a directory", canonical)
 	}
 	return canonical, nil
 }

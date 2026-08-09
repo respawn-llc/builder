@@ -2,7 +2,6 @@ package workflowview
 
 import (
 	"context"
-	"database/sql"
 	"os/exec"
 	"reflect"
 	"slices"
@@ -11,8 +10,6 @@ import (
 	"time"
 
 	"core/internal/testharness/testsetup"
-	"core/server/metadata"
-	"core/server/metadata/sqlitegen"
 	"core/server/sessionruntime"
 	"core/server/tools"
 	"core/server/workflow"
@@ -22,80 +19,6 @@ import (
 
 	"github.com/google/uuid"
 )
-
-func TestTaskDetailHidesProvisionalManagedWorktreeUntilTargetLock(t *testing.T) {
-	fixture := newCurrentNodeViewFixture(t, false)
-	task := fixture.createBacklogTask(t, "Provisional worktree")
-	worktreeRoot := t.TempDir()
-	worktreeID := "worktree-" + string(task.ID)
-	if err := fixture.metadata.UpsertWorktreeRecord(fixture.ctx, metadata.WorktreeRecord{
-		ID:              worktreeID,
-		WorkspaceID:     fixture.binding.WorkspaceID,
-		CanonicalRoot:   worktreeRoot,
-		DisplayName:     task.ShortID,
-		Availability:    "available",
-		Managed:         true,
-		GitMetadataJSON: "{}",
-	}); err != nil {
-		t.Fatalf("UpsertWorktreeRecord: %v", err)
-	}
-	updated, err := fixture.metadata.Queries().UpdateTaskManagedWorktree(fixture.ctx, sqlitegen.UpdateTaskManagedWorktreeParams{
-		ManagedWorktreeID: sql.NullString{String: worktreeID, Valid: true},
-		UpdatedAtUnixMs:   time.Now().UTC().UnixMilli(),
-		ID:                string(task.ID),
-	})
-	if err != nil {
-		t.Fatalf("UpdateTaskManagedWorktree: %v", err)
-	}
-	if updated != 1 {
-		t.Fatalf("UpdateTaskManagedWorktree updated %d rows, want 1", updated)
-	}
-
-	detail, err := fixture.detail.GetTask(fixture.ctx, string(task.ID))
-	if err != nil {
-		t.Fatalf("TaskDetail.GetTask: %v", err)
-	}
-	if detail.ExecutionTarget != nil || detail.WorktreePath != nil {
-		t.Fatalf("provisional Task target presentation = target %+v worktree %v, want both absent", detail.ExecutionTarget, detail.WorktreePath)
-	}
-	if detail.SourceWorkspace.WorkspaceID != fixture.binding.WorkspaceID ||
-		detail.SourceWorkspace.RootPath != fixture.binding.CanonicalRoot ||
-		!detail.Actions.CanStart {
-		t.Fatalf("provisional Task detail = %+v, want source workspace and Start action", detail)
-	}
-}
-
-func TestTaskDetailRejectsBlankProvisionalManagedWorktreeID(t *testing.T) {
-	fixture := newCurrentNodeViewFixture(t, false)
-	task := fixture.createBacklogTask(t, "Blank provisional worktree")
-	now := time.Now().UTC().UnixMilli()
-	if err := fixture.metadata.Queries().UpsertWorktree(fixture.ctx, sqlitegen.UpsertWorktreeParams{
-		ID:                "",
-		WorkspaceID:       fixture.binding.WorkspaceID,
-		CanonicalRootPath: t.TempDir(),
-		Managed:           1,
-		GitMetadataJson:   "{}",
-		CreatedAtUnixMs:   now,
-		UpdatedAtUnixMs:   now,
-	}); err != nil {
-		t.Fatalf("UpsertWorktree: %v", err)
-	}
-	updated, err := fixture.metadata.Queries().UpdateTaskManagedWorktree(fixture.ctx, sqlitegen.UpdateTaskManagedWorktreeParams{
-		ManagedWorktreeID: sql.NullString{String: "", Valid: true},
-		UpdatedAtUnixMs:   now,
-		ID:                string(task.ID),
-	})
-	if err != nil {
-		t.Fatalf("UpdateTaskManagedWorktree: %v", err)
-	}
-	if updated != 1 {
-		t.Fatalf("UpdateTaskManagedWorktree updated %d rows, want 1", updated)
-	}
-
-	if _, err := fixture.detail.GetTask(fixture.ctx, string(task.ID)); err == nil {
-		t.Fatal("TaskDetail.GetTask accepted a blank provisional managed Worktree ID")
-	}
-}
 
 func TestCurrentNodeStatusProjectionCrossSurfaceStableQuestion(t *testing.T) {
 	surfaces := newRealTaskStatusSurfaces(t, false)

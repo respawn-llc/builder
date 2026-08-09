@@ -330,11 +330,9 @@ func (d *TaskDetail) executionTargetForTask(ctx context.Context, task sqlitegen.
 		if task.ExecutionTargetRequestedRef.Valid ||
 			task.ExecutionTargetResolvedRef.Valid ||
 			task.ExecutionTargetCommitOid.Valid ||
-			task.ExecutionTargetProvenance.Valid {
+			task.ExecutionTargetProvenance.Valid ||
+			task.ManagedWorktreeID.Valid {
 			return nil, nil, errors.New("unlocked task has execution target facts")
-		}
-		if task.ManagedWorktreeID.Valid && strings.TrimSpace(task.ManagedWorktreeID.String) == "" {
-			return nil, nil, errors.New("task managed worktree id is blank")
 		}
 		return nil, nil, nil
 	}
