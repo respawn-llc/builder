@@ -35,12 +35,6 @@ type backgroundNoticeSelection struct {
 	item    *backgroundNoticeAgendaItem
 }
 
-type backgroundLongPreparation struct {
-	id        boundaryAgendaItemID
-	execution RuntimeBoundLongExecution
-	err       error
-}
-
 func newBackgroundNoticeAgendaItem(msg llm.Message) (*backgroundNoticeAgendaItem, error) {
 	if msg.Content == nil || strings.TrimSpace(*msg.Content) == "" {
 		return nil, errors.New("background notice content is required")
@@ -103,6 +97,13 @@ func (s *backgroundNoticeSelection) runLongWork(ctx context.Context, engine *Eng
 
 func (s *backgroundNoticeSelection) settleLongWork(err error) {
 	s.item.settleBoundaryAgenda(err)
+}
+
+func (s *backgroundNoticeSelection) completeRuntimeBoundLongWork(
+	engine *Engine,
+	err error,
+) {
+	engine.submitBoundaryLongWorkResult(s.id, err)
 }
 
 func (e *Engine) HandleBackgroundShellUpdate(evt BackgroundShellEvent, queueNotice bool) {
@@ -203,110 +204,11 @@ func (e *Engine) startNextBackgroundLongWork(admission runtimeEventAdmission) er
 	if !e.idleBoundaryReductionEligible() || e.runtimeEvents == nil {
 		return nil
 	}
-	launcher, hasLauncher := e.cfg.StepLifecycle.(RuntimeBoundLongExecutionLauncher)
-	scopes, hasScopeOwner := e.cfg.StepLifecycle.(AgentStepScopeLifecycle)
-	activeExecution := false
-	if hasScopeOwner {
-		if _, active := scopes.CurrentAgentExecutionScope(admission.Context()); active {
-			activeExecution = true
-		}
-	}
-	if !activeExecution && !hasLauncher {
-		return nil
-	}
 	next, ok := e.boundaryAgenda.peekNext(idleBoundarySelection()).(*backgroundNoticeAgendaItem)
 	if !ok {
 		return nil
 	}
-	if activeExecution {
-		selected, err := e.longBoundary.selectNext(e.boundaryAgenda, idleBoundarySelection())
-		if err != nil || selected == nil {
-			return err
-		}
-		return e.transferBoundaryLongWork(admission, selected, func(workCtx context.Context) {
-			runErr := selected.runLongWork(workCtx, e)
-			e.submitBoundaryLongWorkResult(selected.longWorkID(), runErr)
-		})
-	}
-
-	return admission.startWork(func(workCtx context.Context) {
-		execution, registerErr := launcher.RegisterRuntimeBoundLongExecution(workCtx)
-		if execution == nil && registerErr == nil {
-			return
-		}
-		_, submitErr := submitRuntimeEventWithContext(
-			e.lifecycleCtx,
-			e.lifecycleCtx,
-			e,
-			backgroundLongPreparation{
-				id:        next.id,
-				execution: execution,
-				err:       registerErr,
-			},
-			e.applyBackgroundLongPreparation,
-		)
-		if submitErr != nil {
-			if execution != nil {
-				submitErr = errors.Join(submitErr, execution.Cancel(workCtx))
-			}
-			e.surfaceRunError(submitErr)
-		}
-	})
-}
-
-func (e *Engine) applyBackgroundLongPreparation(
-	admission runtimeEventAdmission,
-	preparation backgroundLongPreparation,
-) (struct{}, error) {
-	next := e.boundaryAgenda.peekNext(idleBoundarySelection())
-	if next == nil || next.agendaID() != preparation.id {
-		if preparation.execution == nil {
-			return struct{}{}, e.reduceIdleBoundary(admission)
-		}
-		cancelErr := admission.startWork(func(workCtx context.Context) {
-			e.surfaceRunError(preparation.execution.Cancel(workCtx))
-		})
-		return struct{}{}, errors.Join(cancelErr, e.reduceIdleBoundary(admission))
-	}
-	if preparation.err != nil {
-		selected, err := e.longBoundary.selectNext(e.boundaryAgenda, idleBoundarySelection())
-		if err != nil || selected == nil {
-			return struct{}{}, err
-		}
-		_, settleErr := e.longBoundary.settle(boundaryLongWorkResult{
-			id:  selected.longWorkID(),
-			err: preparation.err,
-		})
-		return struct{}{}, errors.Join(
-			preparation.err,
-			settleErr,
-			e.reduceIdleBoundary(admission),
-		)
-	}
-	if preparation.execution == nil {
-		return struct{}{}, nil
-	}
-	selected, err := e.longBoundary.selectNext(e.boundaryAgenda, idleBoundarySelection())
-	if err != nil || selected == nil {
-		return struct{}{}, err
-	}
-	transferErr := e.transferBoundaryLongWork(admission, selected, func(workCtx context.Context) {
-		releasedScope, runErr := preparation.execution.Launch(workCtx, selected.runLongWork)
-		if releasedScope.IsZero() {
-			runErr = errors.Join(
-				runErr,
-				errors.New("runtime-bound background execution returned no released Exact Execution Scope"),
-			)
-		}
-		e.submitBoundaryLongWorkResult(selected.longWorkID(), runErr)
-	})
-	if transferErr == nil {
-		return struct{}{}, nil
-	}
-	cancelErr := admission.startWork(func(workCtx context.Context) {
-		e.surfaceRunError(preparation.execution.Cancel(workCtx))
-	})
-	return struct{}{}, errors.Join(transferErr, cancelErr)
+	return e.startNextRuntimeBoundLongWork(admission, next.id)
 }
 
 func (e *Engine) runBackgroundNoticeSelection(

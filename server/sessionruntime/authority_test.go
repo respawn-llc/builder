@@ -2183,6 +2183,96 @@ func TestIdleWorktreeBoundaryDefersAcceptedBackgroundNotice(t *testing.T) {
 	}
 }
 
+func TestIdleWorktreeBoundaryDefersAcceptedGoalContinuation(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	client := newSequentialBackgroundClient(1)
+	plan := authorityTestRuntimePlan(t, fixture, client)
+	plan.options.EnabledTools = []toolspec.ID{toolspec.ToolAskQuestion}
+	attachment := openLifecycleRuntime(
+		t,
+		fixture.authority,
+		sessionID,
+		"goal-worktree-boundary",
+		&plan,
+	)
+	claim, err := fixture.authority.ClaimWorktreeBoundary(
+		attachment.Resource(),
+		serverapi.NewWorktreeOperationID(),
+	)
+	if err != nil {
+		t.Fatalf("claim Worktree boundary: %v", err)
+	}
+	if err := claim.AwaitGrant(context.Background()); err != nil {
+		t.Fatalf("await Worktree boundary: %v", err)
+	}
+	if err := fixture.authority.WithRuntime(
+		context.Background(),
+		attachment.Resource(),
+		func(_ context.Context, engine *runtime.Engine) error {
+			if _, setErr := engine.SetGoal(
+				"finish the migration",
+				session.GoalActorUser,
+			); setErr != nil {
+				return setErr
+			}
+			return engine.StartGoalLoop()
+		},
+	); err != nil {
+		t.Fatalf("accept Goal continuation: %v", err)
+	}
+	select {
+	case request := <-client.requests:
+		t.Fatalf("Worktree-owned boundary launched Goal request: %+v", request)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if execution, active := fixture.authority.SessionExecution(sessionID); active {
+		t.Fatalf("Worktree-owned boundary registered Exact Execution Scope: %+v", execution.Scope())
+	}
+
+	grant, err := claim.Release()
+	if err != nil {
+		t.Fatalf("release Worktree boundary: %v", err)
+	}
+	if grant == nil {
+		t.Fatal("idle Worktree release returned no reducer grant")
+	}
+	if err := grant.Release(); err != nil {
+		t.Fatalf("release reducer grant: %v", err)
+	}
+	if err := fixture.authority.WithRuntime(
+		context.Background(),
+		attachment.Resource(),
+		func(_ context.Context, engine *runtime.Engine) error {
+			return engine.AgentExecutionScopeReleased(runtimeids.NewExecutionScopeID())
+		},
+	); err != nil {
+		t.Fatalf("trigger idle reduction: %v", err)
+	}
+	_ = client.awaitRequest(t)
+	execution, active := fixture.authority.SessionExecution(sessionID)
+	if !active {
+		t.Fatal("released Worktree boundary did not launch Goal execution")
+	}
+	if err := fixture.authority.WithRuntime(
+		context.Background(),
+		attachment.Resource(),
+		func(_ context.Context, engine *runtime.Engine) error {
+			_, completeErr := engine.SetGoalStatus(
+				session.GoalStatusComplete,
+				session.GoalActorSystem,
+			)
+			return completeErr
+		},
+	); err != nil {
+		t.Fatalf("complete Goal: %v", err)
+	}
+	client.release(0)
+	if _, err := execution.Wait(context.Background()); err != nil {
+		t.Fatalf("wait Goal execution: %v", err)
+	}
+}
+
 type sequentialBackgroundClient struct {
 	requests chan llm.Request
 	releases []chan struct{}

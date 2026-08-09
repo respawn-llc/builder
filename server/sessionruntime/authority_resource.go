@@ -966,35 +966,20 @@ func (a *Authority) RunCurrentAgentExecution(
 	if run == nil {
 		return errors.New("agent runtime callback is required")
 	}
-	operationContinues := make(chan bool, 1)
 	handle, err := a.StartAgentExecution(ctx, AgentExecutionRequest{
 		Descriptor: descriptor,
 		Resource:   CurrentAgentResource{},
 		Runner: func(executionCtx context.Context, _ ExecutionScope, bridge AgentRuntimeBridge) error {
-			callbackRan := false
-			runErr := bridge.WithEngine(executionCtx, func(_ context.Context, engine *runtime.Engine) error {
-				callbackRan = true
+			return bridge.WithEngine(executionCtx, func(_ context.Context, engine *runtime.Engine) error {
 				runCtx, stop := MergeContexts(executionCtx, ctx)
 				err := run(runCtx, engine)
 				stop()
-				goalLoopActive := err == nil && engine.GoalLoopRunning()
-				operationContinues <- goalLoopActive
-				if err != nil || !goalLoopActive {
-					return err
-				}
-				return engine.WaitForGoalLoop(executionCtx)
+				return err
 			})
-			if !callbackRan {
-				operationContinues <- false
-			}
-			return runErr
 		},
 	})
 	if err != nil {
 		return err
-	}
-	if <-operationContinues {
-		return nil
 	}
 	_, err = handle.Wait(context.Background())
 	return err

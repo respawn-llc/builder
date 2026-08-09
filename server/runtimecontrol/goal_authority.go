@@ -325,7 +325,7 @@ func liveStatus(engine *runtime.Engine, command GoalStatusCommand) (GoalCommandR
 	if !out.Accepted() || err != nil {
 		return out, err
 	}
-	if command.Status == session.GoalStatusActive && out.Disposition != runtime.GoalCommandNoop {
+	if command.Status == session.GoalStatusActive {
 		if startErr := engine.StartGoalLoop(); startErr != nil {
 			out.Err = startErr
 			return out, startErr

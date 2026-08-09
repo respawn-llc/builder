@@ -403,6 +403,13 @@ func (e *Engine) acceptReducerBoundaryGrantWithResolver(
 					grant.Release(),
 				)
 			}
+			if goal, selected := e.longBoundary.selected.(*goalContinuationSelection); selected {
+				goal.detached.Store(true)
+				if err := e.longBoundary.detach(goal); err != nil {
+					e.agentSteps.boundary = nil
+					return nil, errors.Join(err, grant.Release())
+				}
+			}
 			compactionItem.boundary = &manualCompactionBoundaryContinuation{
 				engine:       e,
 				grant:        grant,

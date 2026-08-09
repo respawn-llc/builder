@@ -172,17 +172,15 @@ type Engine struct {
 	agentSteps       agentStepAdmissionState
 	streamMutationMu sync.Mutex
 
-	store                     *session.Store
-	eventLog                  session.MaterializedEventLog
-	llm                       llm.Client
-	registry                  *tools.Registry
-	cfg                       Config
-	liveRun                   *liveRunCoordinator
-	activeStepGoalMutationsMu sync.Mutex
-	activeStepGoalMutations   map[string][]activeStepGoalMutation
-	pendingGoalLoopStart      bool
-	diagnostics               *diagnosticDedupeStore
-	toolCallStarts            *pendingToolCallStartStore
+	store                   *session.Store
+	eventLog                session.MaterializedEventLog
+	llm                     llm.Client
+	registry                *tools.Registry
+	cfg                     Config
+	liveRun                 *liveRunCoordinator
+	activeStepGoalMutations map[string][]activeStepGoalMutation
+	diagnostics             *diagnosticDedupeStore
+	toolCallStarts          *pendingToolCallStartStore
 
 	usageState           *usageTrackingState
 	goalLoop             *goalLoopState
@@ -498,6 +496,7 @@ func (e *Engine) applyRuntimeClose(admission runtimeEventAdmission) error {
 		return nil
 	}
 	e.longBoundary.close(errBoundaryRuntimeClosed)
+	e.finishGoalContinuationOnRuntimeClose()
 	return admission.applySteering("runtime_close", steerLiveToolAbortIntent("canceled"))
 }
 

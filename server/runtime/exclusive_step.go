@@ -133,7 +133,7 @@ func (s *defaultExclusiveStepLifecycle) finishStep(stepID string, options exclus
 		if status == RunStatusCompleted && snapshot != nil && snapshot.ActiveKind == ActiveKindUserTurn {
 			s.engine.resumeSuspendedGoalAfterSuccessfulUserTurn()
 		}
-		if startErr := s.scheduleIdleWork(status != RunStatusFailed); startErr != nil {
+		if startErr := s.engine.triggerIdleBoundaryReduction(); startErr != nil {
 			err = errors.Join(err, startErr)
 		}
 	}
@@ -373,7 +373,7 @@ func (s *defaultExclusiveStepLifecycle) beginNext(ctx context.Context, options e
 	if err := ctx.Err(); err != nil {
 		idle := s.cancelNextWaiter(waiter)
 		if idle {
-			return nil, "", errors.Join(err, s.scheduleIdleWork(true))
+			return nil, "", errors.Join(err, s.engine.triggerIdleBoundaryReduction())
 		}
 		return nil, "", err
 	}
@@ -473,10 +473,6 @@ func (s *defaultExclusiveStepLifecycle) notifyNextWaiterLocked() {
 	default:
 		close(s.nextWaiters[0].ready)
 	}
-}
-
-func (s *defaultExclusiveStepLifecycle) scheduleIdleWork(_ bool) error {
-	return s.engine.startPendingGoalLoop()
 }
 
 func (s *defaultExclusiveStepLifecycle) end() {

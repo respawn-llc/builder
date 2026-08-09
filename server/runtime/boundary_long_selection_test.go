@@ -104,6 +104,16 @@ func TestBoundaryLongSelectionLifecycleContract(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "goal",
+			newItem: func(id boundaryAgendaItemID) boundaryLongSelectionContractItem {
+				item := newGoalContinuationAgendaItem(false)
+				item.id = id
+				return &goalContinuationLongContractItem{
+					goalContinuationAgendaItem: item,
+				}
+			},
+		},
 	} {
 		t.Run(adapter.name, func(t *testing.T) {
 			runBoundaryLongSelectionLifecycleContract(t, adapter)
@@ -120,6 +130,21 @@ type boundaryLongSelectionContractItem interface {
 type boundaryLongSelectionContractAdapter struct {
 	name    string
 	newItem func(boundaryAgendaItemID) boundaryLongSelectionContractItem
+}
+
+type goalContinuationLongContractItem struct {
+	*goalContinuationAgendaItem
+}
+
+func (i *goalContinuationLongContractItem) contractSettlementCount() int {
+	if i.didSettle.Load() {
+		return 1
+	}
+	return 0
+}
+
+func (i *goalContinuationLongContractItem) contractSettlementError() error {
+	return i.settlement
 }
 
 func runBoundaryLongSelectionLifecycleContract(
