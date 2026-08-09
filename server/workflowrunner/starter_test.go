@@ -1,18 +1,28 @@
 package workflowrunner
 
 import (
+	"errors"
+	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"core/server/launch"
+	"core/server/tools"
 	"core/server/workflowstore"
 	"core/shared/config"
 )
 
 func TestCurrentNodeManagedWorktreePathContextProtectsNamespaceWithoutCurrentWorktree(t *testing.T) {
 	baseDir := t.TempDir()
+	persistenceRoot := t.TempDir()
+	configText := "[worktrees]\nbase_dir = " + strconv.Quote(baseDir) + "\n"
+	if err := os.WriteFile(filepath.Join(persistenceRoot, "config.toml"), []byte(configText), 0o644); err != nil {
+		t.Fatalf("write global config: %v", err)
+	}
 	starter := &Starter{
 		cfg: config.App{
+			PersistenceRoot: persistenceRoot,
 			Settings: config.Settings{
 				Worktrees: config.WorktreeSettings{BaseDir: baseDir},
 			},
@@ -33,7 +43,7 @@ func TestCurrentNodeManagedWorktreePathContextProtectsNamespaceWithoutCurrentWor
 	if err != nil {
 		t.Fatalf("ResolveExistingAncestorRealPath: %v", err)
 	}
-	if !pathContext.IsForeignManagedWorktreePath(resolvedPath) {
-		t.Fatal("managed-worktree namespace path was not classified as foreign without a current Worktree")
+	if err := pathContext.CheckMutationPath(resolvedPath); !errors.Is(err, tools.ErrForeignManagedWorktreeEditDenied) {
+		t.Fatalf("managed-worktree namespace path error = %v, want foreign Worktree denial", err)
 	}
 }

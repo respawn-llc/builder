@@ -3,6 +3,7 @@ package edit
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -209,8 +210,8 @@ func TestManagedWorktreePathContextProtectsConfiguredRootWithoutKnownWorktrees(t
 	if err != nil {
 		t.Fatalf("resolve target: %v", err)
 	}
-	if !context.IsForeignManagedWorktreePath(resolvedTarget) {
-		t.Fatal("configured Worktree root target was not classified as foreign")
+	if err := context.CheckMutationPath(resolvedTarget); !errors.Is(err, tools.ErrForeignManagedWorktreeEditDenied) {
+		t.Fatalf("configured Worktree root target error = %v, want foreign Worktree denial", err)
 	}
 }
 

@@ -80,10 +80,6 @@ func NewManagedWorktreePathContext(
 	return context, nil
 }
 
-func (c ManagedWorktreePathContext) IsForeignManagedWorktreePath(resolvedPath string) bool {
-	return c.isForeignManagedWorktreePath(c.baseRoot, resolvedPath)
-}
-
 func (c ManagedWorktreePathContext) CheckMutationPath(resolvedPath string) error {
 	baseRoot := c.baseRoot
 	if c.baseRootResolver != nil {
