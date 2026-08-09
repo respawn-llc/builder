@@ -4,17 +4,35 @@ import (
 	"context"
 	"testing"
 
+	"core/server/metadata"
 	"core/server/workflow"
+	"core/shared/config"
 	"core/shared/runtimeids"
 )
 
 func TestManualMoveRouterPreviewAndApplyPreservesRouteValues(t *testing.T) {
-	ctx, store, binding := newTestStoreContext(t)
-	workflowID := createManualMoveQARouterWorkflow(t, ctx, store)
+	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
+	workflowID := createManualMoveStaticReviewRouterWorkflow(t, ctx, store)
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
-	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 
-	scopeReview := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	t.Run("qa route", func(t *testing.T) {
+		testManualMoveQARoute(t, ctx, store, binding, workflowID)
+	})
+	t.Run("join route", func(t *testing.T) {
+		testManualMoveJoinRoute(t, ctx, store, binding, cfg, workflowID)
+	})
+}
+
+func advanceStaticReviewTaskToImplementation(
+	t *testing.T,
+	ctx context.Context,
+	store *Store,
+	taskID workflow.TaskID,
+	codeFindings string,
+	complianceFindings string,
+) workflow.CurrentNode {
+	t.Helper()
+	scopeReview := startTask(t, ctx, store, taskID).Mutation.Created[0]
 	if _, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 		Source:       scopeReview.Reference,
 		TransitionID: "plan_approved",
@@ -22,22 +40,54 @@ func TestManualMoveRouterPreviewAndApplyPreservesRouteValues(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("complete plan_approved: %v", err)
 	}
-	currentNodes, err := store.ListCurrentNodes(ctx, task.ID)
+	currentNodes, err := store.ListCurrentNodes(ctx, taskID)
 	if err != nil {
-		t.Fatalf("list implementation current node: %v", err)
+		t.Fatalf("list plan checkpoint current node: %v", err)
 	}
-	planCheckpoint := currentNodes[0]
+	split, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       currentNodes[0].Reference,
+		TransitionID: "begin_review",
+	})
+	if err != nil {
+		t.Fatalf("complete begin_review: %v", err)
+	}
+	branches := make(map[workflow.TransitionBranchKey]workflow.CurrentNode)
+	for _, currentNode := range split.Mutation.Created {
+		branch, ok := currentNode.Reference.TransitionBranchKey()
+		if !ok {
+			t.Fatalf("review branch = %+v, want branch scope", currentNode)
+		}
+		branches[branch] = currentNode
+	}
 	if _, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
-		Source:       planCheckpoint.Reference,
-		TransitionID: "implementation_started",
+		Source:       branches["review_a"].Reference,
+		TransitionID: "approve_findings_a",
+		OutputValues: map[string]string{"code_review_findings": codeFindings},
 	}); err != nil {
-		t.Fatalf("complete implementation_started: %v", err)
+		t.Fatalf("complete approve_findings_a: %v", err)
 	}
-	currentNodes, err = store.ListCurrentNodes(ctx, task.ID)
+	if _, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       branches["review_b"].Reference,
+		TransitionID: "approve_findings_b",
+		OutputValues: map[string]string{"compliance_findings": complianceFindings},
+	}); err != nil {
+		t.Fatalf("complete approve_findings_b: %v", err)
+	}
+	currentNodes, err = store.ListCurrentNodes(ctx, taskID)
 	if err != nil {
-		t.Fatalf("list implementation current node: %v", err)
+		t.Fatalf("list implementation after Join: %v", err)
 	}
-	implementation := currentNodes[0]
+	if len(currentNodes) != 1 {
+		t.Fatalf("current nodes after Join = %+v, want implementation", currentNodes)
+	}
+	return currentNodes[0]
+}
+
+func testManualMoveQARoute(t *testing.T, ctx context.Context, store *Store, binding metadata.Binding, workflowID runtimeids.WorkflowID) {
+	t.Helper()
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+
+	implementation := advanceStaticReviewTaskToImplementation(t, ctx, store, task.ID, "No code findings.", "No compliance findings.")
 	if _, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 		Source:       implementation.Reference,
 		TransitionID: "implementation_ready",
@@ -45,28 +95,18 @@ func TestManualMoveRouterPreviewAndApplyPreservesRouteValues(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("complete implementation_ready: %v", err)
 	}
-	currentNodes, err = store.ListCurrentNodes(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("list context relay current node: %v", err)
-	}
-	contextRelay := currentNodes[0]
-	if _, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
-		Source:       contextRelay.Reference,
-		TransitionID: "route_to_router",
-	}); err != nil {
-		t.Fatalf("complete route_to_router: %v", err)
-	}
 
 	definition, _, err := store.GetDefinition(ctx, workflowID)
 	if err != nil {
 		t.Fatalf("get workflow definition: %v", err)
 	}
 	qa := nodeByKey(t, definition, "qa")
+	router := nodeByKey(t, definition, "router")
 	routerNodes, err := store.ListCurrentNodes(ctx, task.ID)
 	if err != nil {
 		t.Fatalf("list router current node: %v", err)
 	}
-	if len(routerNodes) != 1 || routerNodes[0].Reference.NodeID != workflow.NodeIDOf(nodeByKey(t, definition, "router")) {
+	if len(routerNodes) != 1 || routerNodes[0].Reference.NodeID != workflow.NodeIDOf(router) {
 		t.Fatalf("router current nodes = %+v, want one router node", routerNodes)
 	}
 
@@ -124,63 +164,19 @@ func TestManualMoveRouterPreviewAndApplyPreservesRouteValues(t *testing.T) {
 	}
 }
 
-func TestManualMoveJoinRouterPreviewAndApplyPreservesFindings(t *testing.T) {
-	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
-	workflowID := createManualMoveJoinRouterWorkflow(t, ctx, store)
-	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+func testManualMoveJoinRoute(t *testing.T, ctx context.Context, store *Store, binding metadata.Binding, cfg config.App, workflowID runtimeids.WorkflowID) {
+	t.Helper()
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-
-	definition, _, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("get workflow definition: %v", err)
-	}
-	started := startTask(t, ctx, store, task.ID).Mutation.Created[0]
-	split, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
-		Source:       started.Reference,
-		TransitionID: "begin_review",
-	})
-	if err != nil {
-		t.Fatalf("complete begin_review: %v", err)
-	}
-	branches := make(map[workflow.TransitionBranchKey]workflow.CurrentNode)
-	for _, currentNode := range split.Mutation.Created {
-		branch, ok := currentNode.Reference.TransitionBranchKey()
-		if !ok {
-			t.Fatalf("review branch = %+v, want branch scope", currentNode)
-		}
-		branches[branch] = currentNode
-	}
+	implementation := advanceStaticReviewTaskToImplementation(t, ctx, store, task.ID, "No code findings.", "No compliance findings.")
+	sessionID := associateAndBindCurrentNodeSessionForTest(t, ctx, store, binding, cfg, implementation.Reference)
 	if _, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
-		Source:       branches["review_a"].Reference,
-		TransitionID: "approve_findings_a",
-		OutputValues: map[string]string{"code_review_findings": "No code findings."},
-	}); err != nil {
-		t.Fatalf("complete approve_findings_a: %v", err)
-	}
-	if _, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
-		Source:       branches["review_b"].Reference,
-		TransitionID: "approve_findings_b",
-		OutputValues: map[string]string{"compliance_findings": "No compliance findings."},
-	}); err != nil {
-		t.Fatalf("complete approve_findings_b: %v", err)
-	}
-	currentNodes, err := store.ListCurrentNodes(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("list implementation after Join: %v", err)
-	}
-	if len(currentNodes) != 1 {
-		t.Fatalf("current nodes after Join = %+v, want implementation", currentNodes)
-	}
-	sessionID := associateAndBindCurrentNodeSessionForTest(t, ctx, store, binding, cfg, currentNodes[0].Reference)
-	if _, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
-		Source:       currentNodes[0].Reference,
+		Source:       implementation.Reference,
 		TransitionID: "implementation_ready",
-		Commentary:   "Implementation is ready.",
 	}); err != nil {
 		t.Fatalf("complete implementation_ready: %v", err)
 	}
 
-	definition, _, err = store.GetDefinition(ctx, workflowID)
+	definition, _, err := store.GetDefinition(ctx, workflowID)
 	if err != nil {
 		t.Fatalf("get workflow definition: %v", err)
 	}
@@ -196,10 +192,6 @@ func TestManualMoveJoinRouterPreviewAndApplyPreservesFindings(t *testing.T) {
 		t.Fatalf("router current nodes = %+v, want one router node", routerNodes)
 	}
 
-	definition, _, err = store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("reload workflow definition: %v", err)
-	}
 	target := nodeByKey(t, definition, "implementation")
 	transition := workflow.TransitionID("code_review_rejected")
 	preview, err := store.PreviewManualMove(ctx, ManualMoveRequest{
@@ -210,18 +202,12 @@ func TestManualMoveJoinRouterPreviewAndApplyPreservesFindings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("preview code_review_rejected manual move: %v", err)
 	}
-	if preview.Outcome != ManualMovePreviewOutcomeTransition {
-		t.Fatalf("Implementation preview outcome = %q, want transition", preview.Outcome)
-	}
-	if len(preview.Choices) != 1 {
-		t.Fatalf("Implementation preview choices = %d, want one: %+v", len(preview.Choices), preview.Choices)
+	if preview.Outcome != ManualMovePreviewOutcomeTransition || len(preview.Choices) != 1 {
+		t.Fatalf("Implementation preview = %+v, want one transition choice", preview)
 	}
 	choice := preview.Choices[0]
-	if choice.TransitionKey != "code_review_rejected" {
-		t.Fatalf("Implementation transition = %q, want code_review_rejected", choice.TransitionKey)
-	}
-	if len(choice.RequiredValues) != 2 {
-		t.Fatalf("Implementation required values = %+v, want two values", choice.RequiredValues)
+	if choice.TransitionKey != "code_review_rejected" || len(choice.RequiredValues) != 3 {
+		t.Fatalf("Implementation choice transition=%q required_values=%#v, want rejected transition with three values", choice.TransitionKey, choice.RequiredValues)
 	}
 	required := make(map[string]ManualMoveRequiredValue, len(choice.RequiredValues))
 	for _, value := range choice.RequiredValues {
@@ -241,6 +227,10 @@ func TestManualMoveJoinRouterPreviewAndApplyPreservesFindings(t *testing.T) {
 		*complianceFindings.Description != "Compliance findings." {
 		t.Fatalf("compliance findings route value = %+v, want resolved authored Join value", complianceFindings)
 	}
+	planValue := required["scope_review.plan_file_path"]
+	if planValue.ResolvedValue == nil || *planValue.ResolvedValue != "plans/KENT-477.md" {
+		t.Fatalf("plan route value = %+v, want resolved prior value", planValue)
+	}
 
 	prepared, err := store.PrepareManualMove(ctx, ManualMoveRequest{
 		TaskID:        task.ID,
@@ -251,6 +241,7 @@ func TestManualMoveJoinRouterPreviewAndApplyPreservesFindings(t *testing.T) {
 				"code_review_findings": "No code findings.",
 				"compliance_findings":  "No compliance findings.",
 			},
+			"scope_review": {"plan_file_path": "plans/KENT-477.md"},
 		},
 	})
 	if err != nil {
@@ -270,9 +261,9 @@ func TestManualMoveJoinRouterPreviewAndApplyPreservesFindings(t *testing.T) {
 	}
 }
 
-func createManualMoveQARouterWorkflow(t *testing.T, ctx context.Context, store *Store) runtimeids.WorkflowID {
+func createManualMoveStaticReviewRouterWorkflow(t *testing.T, ctx context.Context, store *Store) runtimeids.WorkflowID {
 	t.Helper()
-	created, err := store.CreateWorkflow(ctx, CreateWorkflowRequest{Name: "Manual Move QA Router"})
+	created, err := store.CreateWorkflow(ctx, CreateWorkflowRequest{Name: "Manual Move Static Review Router"})
 	if err != nil {
 		t.Fatalf("CreateWorkflow: %v", err)
 	}
@@ -280,77 +271,31 @@ func createManualMoveQARouterWorkflow(t *testing.T, ctx context.Context, store *
 	scopeReviewID := workflow.NodeID("node-scope-review-" + workflowID.String())
 	planCheckpointID := workflow.NodeID("node-plan-checkpoint-" + workflowID.String())
 	implementationID := workflow.NodeID("node-implementation-" + workflowID.String())
-	contextRelayID := workflow.NodeID("node-context-relay-" + workflowID.String())
+	reviewAID := workflow.NodeID("node-review-a-" + workflowID.String())
+	reviewBID := workflow.NodeID("node-review-b-" + workflowID.String())
+	joinID := workflow.NodeID("node-code-review-parallel-join-" + workflowID.String())
 	routerID := workflow.NodeID("node-router-" + workflowID.String())
 	qaID := workflow.NodeID("node-qa-" + workflowID.String())
 	startGroupID := workflow.TransitionGroupID("group-start-" + workflowID.String())
 	planApprovedGroupID := workflow.TransitionGroupID("group-plan-approved-" + workflowID.String())
-	implementationStartedGroupID := workflow.TransitionGroupID("group-implementation-started-" + workflowID.String())
+	beginReviewGroupID := workflow.TransitionGroupID("group-begin-review-" + workflowID.String())
+	approveAGroupID := workflow.TransitionGroupID("group-approve-findings-a-" + workflowID.String())
+	approveBGroupID := workflow.TransitionGroupID("group-approve-findings-b-" + workflowID.String())
+	approveReviewGroupID := workflow.TransitionGroupID("group-approve-review-findings-" + workflowID.String())
 	implementationReadyGroupID := workflow.TransitionGroupID("group-implementation-ready-" + workflowID.String())
-	routeToRouterGroupID := workflow.TransitionGroupID("group-route-to-router-" + workflowID.String())
 	qaReadyGroupID := workflow.TransitionGroupID("group-qa-ready-" + workflowID.String())
-	doneGroupID := workflow.TransitionGroupID("group-done-" + workflowID.String())
+	rejectedGroupID := workflow.TransitionGroupID("group-code-review-rejected-" + workflowID.String())
+	doneImplementationGroupID := workflow.TransitionGroupID("group-implementation-done-" + workflowID.String())
+	doneQAGroupID := workflow.TransitionGroupID("group-qa-done-" + workflowID.String())
+	joinAEdgeID := workflow.EdgeID("edge-approve-findings-a-" + workflowID.String())
+	joinBEdgeID := workflow.EdgeID("edge-approve-findings-b-" + workflowID.String())
+
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
 		start := nodeByKind(t, def, workflow.NodeKindStart)
 		done := nodeByKind(t, def, workflow.NodeKindTerminal)
 		req.Nodes = append(req.Nodes,
 			NodeRecord{ID: scopeReviewID, WorkflowID: workflowID, Key: "scope_review", Kind: workflow.NodeKindAgent, DisplayName: "Scope Review", SubagentRole: "coder"},
 			NodeRecord{ID: planCheckpointID, WorkflowID: workflowID, Key: "plan_checkpoint", Kind: workflow.NodeKindAgent, DisplayName: "Plan Checkpoint", SubagentRole: "coder"},
-			NodeRecord{ID: implementationID, WorkflowID: workflowID, Key: "implementation", Kind: workflow.NodeKindAgent, DisplayName: "Implementation", SubagentRole: "coder"},
-			NodeRecord{ID: contextRelayID, WorkflowID: workflowID, Key: "context_relay", Kind: workflow.NodeKindAgent, DisplayName: "Context Relay", SubagentRole: "coder"},
-			NodeRecord{ID: routerID, WorkflowID: workflowID, Key: "router", Kind: workflow.NodeKindScript, DisplayName: "Router", ScriptPath: "scripts/static_review_router.sh"},
-			NodeRecord{ID: qaID, WorkflowID: workflowID, Key: "qa", Kind: workflow.NodeKindAgent, DisplayName: "QA", SubagentRole: "coder"},
-		)
-		req.TransitionGroups = append(req.TransitionGroups,
-			TransitionGroupRecord{ID: startGroupID, WorkflowID: workflowID, SourceNodeID: workflow.NodeIDOf(start), TransitionID: "start", DisplayName: "Start"},
-			TransitionGroupRecord{ID: planApprovedGroupID, WorkflowID: workflowID, SourceNodeID: scopeReviewID, TransitionID: "plan_approved", DisplayName: "Plan Approved"},
-			TransitionGroupRecord{ID: implementationStartedGroupID, WorkflowID: workflowID, SourceNodeID: planCheckpointID, TransitionID: "implementation_started", DisplayName: "Implementation Started"},
-			TransitionGroupRecord{ID: implementationReadyGroupID, WorkflowID: workflowID, SourceNodeID: implementationID, TransitionID: "implementation_ready", DisplayName: "Implementation Ready"},
-			TransitionGroupRecord{ID: routeToRouterGroupID, WorkflowID: workflowID, SourceNodeID: contextRelayID, TransitionID: "route_to_router", DisplayName: "Route to Router"},
-			TransitionGroupRecord{ID: qaReadyGroupID, WorkflowID: workflowID, SourceNodeID: routerID, TransitionID: "qa_ready", DisplayName: "QA Ready"},
-			TransitionGroupRecord{ID: doneGroupID, WorkflowID: workflowID, SourceNodeID: qaID, TransitionID: "done", DisplayName: "Done"},
-		)
-		req.Edges = append(req.Edges,
-			EdgeRecord{ID: workflow.EdgeID("edge-start-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: startGroupID, Key: "start", TargetNodeID: scopeReviewID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Review scope."},
-			EdgeRecord{ID: workflow.EdgeID("edge-plan-approved-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: planApprovedGroupID, Key: "plan_approved", TargetNodeID: planCheckpointID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Check {{.Params.plan_file_path}}.", Parameters: []workflow.Parameter{{Key: "plan_file_path", Description: "Plan file path."}}},
-			EdgeRecord{ID: workflow.EdgeID("edge-implementation-started-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: implementationStartedGroupID, Key: "implementation_started", TargetNodeID: implementationID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Implement {{.Params.plan_approved.plan_file_path}}."},
-			EdgeRecord{ID: workflow.EdgeID("edge-implementation-ready-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: implementationReadyGroupID, Key: "implementation_ready", TargetNodeID: contextRelayID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Relay {{.Params.commentary}}."},
-			EdgeRecord{ID: workflow.EdgeID("edge-route-to-router-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: routeToRouterGroupID, Key: "route_to_router", TargetNodeID: routerID, ContextMode: workflow.ContextModeNewSession},
-			EdgeRecord{ID: workflow.EdgeID("edge-qa-ready-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: qaReadyGroupID, Key: "qa_ready", TargetNodeID: qaID, ContextMode: workflow.ContextModeContinueSession, ContextSource: workflow.ContextSource{Kind: workflow.ContextSourcePreviousTargetOrNew}, PromptTemplate: "QA {{.Params.plan_approved.plan_file_path}} {{.Params.implementation_ready.commentary}}."},
-			EdgeRecord{ID: workflow.EdgeID("edge-done-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: doneGroupID, Key: "done", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession},
-		)
-	})
-	return workflowID
-}
-
-func createManualMoveJoinRouterWorkflow(t *testing.T, ctx context.Context, store *Store) runtimeids.WorkflowID {
-	t.Helper()
-	created, err := store.CreateWorkflow(ctx, CreateWorkflowRequest{Name: "Manual Move Join Router"})
-	if err != nil {
-		t.Fatalf("CreateWorkflow: %v", err)
-	}
-	workflowID := created.ID
-	implementationSourceID := workflow.NodeID("node-implementation-source-" + workflowID.String())
-	implementationID := workflow.NodeID("node-implementation-" + workflowID.String())
-	reviewAID := workflow.NodeID("node-review-a-" + workflowID.String())
-	reviewBID := workflow.NodeID("node-review-b-" + workflowID.String())
-	joinID := workflow.NodeID("node-code-review-parallel-join-" + workflowID.String())
-	routerID := workflow.NodeID("node-router-" + workflowID.String())
-	joinAEdgeID := workflow.EdgeID("edge-approve-findings-a-" + workflowID.String())
-	joinBEdgeID := workflow.EdgeID("edge-approve-findings-b-" + workflowID.String())
-	startGroupID := workflow.TransitionGroupID("group-start-" + workflowID.String())
-	beginReviewGroupID := workflow.TransitionGroupID("group-begin-review-" + workflowID.String())
-	approveAGroupID := workflow.TransitionGroupID("group-approve-findings-a-" + workflowID.String())
-	approveBGroupID := workflow.TransitionGroupID("group-approve-findings-b-" + workflowID.String())
-	approveReviewGroupID := workflow.TransitionGroupID("group-approve-review-findings-" + workflowID.String())
-	implementationReadyGroupID := workflow.TransitionGroupID("group-implementation-ready-" + workflowID.String())
-	rejectedGroupID := workflow.TransitionGroupID("group-code-review-rejected-" + workflowID.String())
-	doneGroupID := workflow.TransitionGroupID("group-done-" + workflowID.String())
-	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
-		start := nodeByKind(t, def, workflow.NodeKindStart)
-		done := nodeByKind(t, def, workflow.NodeKindTerminal)
-		req.Nodes = append(req.Nodes,
-			NodeRecord{ID: implementationSourceID, WorkflowID: workflowID, Key: "implementation_source", Kind: workflow.NodeKindAgent, DisplayName: "Implementation Source", SubagentRole: "coder"},
 			NodeRecord{ID: implementationID, WorkflowID: workflowID, Key: "implementation", Kind: workflow.NodeKindAgent, DisplayName: "Implementation", SubagentRole: "coder"},
 			NodeRecord{ID: reviewAID, WorkflowID: workflowID, Key: "review_a", Kind: workflow.NodeKindAgent, DisplayName: "Review A", SubagentRole: "coder"},
 			NodeRecord{ID: reviewBID, WorkflowID: workflowID, Key: "review_b", Kind: workflow.NodeKindAgent, DisplayName: "Review B", SubagentRole: "coder"},
@@ -359,27 +304,34 @@ func createManualMoveJoinRouterWorkflow(t *testing.T, ctx context.Context, store
 				{InputName: "compliance_findings", ProviderEdgeID: joinBEdgeID},
 			}},
 			NodeRecord{ID: routerID, WorkflowID: workflowID, Key: "router", Kind: workflow.NodeKindScript, DisplayName: "Router", ScriptPath: "scripts/static_review_router.sh"},
+			NodeRecord{ID: qaID, WorkflowID: workflowID, Key: "qa", Kind: workflow.NodeKindAgent, DisplayName: "QA", SubagentRole: "coder"},
 		)
 		req.TransitionGroups = append(req.TransitionGroups,
 			TransitionGroupRecord{ID: startGroupID, WorkflowID: workflowID, SourceNodeID: workflow.NodeIDOf(start), TransitionID: "start", DisplayName: "Start"},
-			TransitionGroupRecord{ID: beginReviewGroupID, WorkflowID: workflowID, SourceNodeID: implementationSourceID, TransitionID: "begin_review", DisplayName: "Begin Review"},
+			TransitionGroupRecord{ID: planApprovedGroupID, WorkflowID: workflowID, SourceNodeID: scopeReviewID, TransitionID: "plan_approved", DisplayName: "Plan Approved"},
+			TransitionGroupRecord{ID: beginReviewGroupID, WorkflowID: workflowID, SourceNodeID: planCheckpointID, TransitionID: "begin_review", DisplayName: "Begin Review"},
 			TransitionGroupRecord{ID: approveAGroupID, WorkflowID: workflowID, SourceNodeID: reviewAID, TransitionID: "approve_findings_a", DisplayName: "Approve A"},
 			TransitionGroupRecord{ID: approveBGroupID, WorkflowID: workflowID, SourceNodeID: reviewBID, TransitionID: "approve_findings_b", DisplayName: "Approve B"},
 			TransitionGroupRecord{ID: approveReviewGroupID, WorkflowID: workflowID, SourceNodeID: joinID, TransitionID: "approve_review_findings", DisplayName: "Approve Review Findings"},
 			TransitionGroupRecord{ID: implementationReadyGroupID, WorkflowID: workflowID, SourceNodeID: implementationID, TransitionID: "implementation_ready", DisplayName: "Implementation Ready"},
+			TransitionGroupRecord{ID: qaReadyGroupID, WorkflowID: workflowID, SourceNodeID: routerID, TransitionID: "qa_ready", DisplayName: "QA Ready"},
 			TransitionGroupRecord{ID: rejectedGroupID, WorkflowID: workflowID, SourceNodeID: routerID, TransitionID: "code_review_rejected", DisplayName: "Code Review Rejected"},
-			TransitionGroupRecord{ID: doneGroupID, WorkflowID: workflowID, SourceNodeID: implementationID, TransitionID: "done", DisplayName: "Done"},
+			TransitionGroupRecord{ID: doneImplementationGroupID, WorkflowID: workflowID, SourceNodeID: implementationID, TransitionID: "implementation_done", DisplayName: "Done"},
+			TransitionGroupRecord{ID: doneQAGroupID, WorkflowID: workflowID, SourceNodeID: qaID, TransitionID: "qa_done", DisplayName: "Done"},
 		)
 		req.Edges = append(req.Edges,
-			EdgeRecord{ID: workflow.EdgeID("edge-start-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: startGroupID, Key: "start", TargetNodeID: implementationSourceID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Prepare review."},
-			EdgeRecord{ID: workflow.EdgeID("edge-begin-review-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: beginReviewGroupID, Key: "review_a", TargetNodeID: reviewAID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Review code."},
+			EdgeRecord{ID: workflow.EdgeID("edge-start-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: startGroupID, Key: "start", TargetNodeID: scopeReviewID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Review scope."},
+			EdgeRecord{ID: workflow.EdgeID("edge-plan-approved-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: planApprovedGroupID, Key: "plan_approved", TargetNodeID: planCheckpointID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Check {{.Params.plan_file_path}}.", Parameters: []workflow.Parameter{{Key: "plan_file_path", Description: "Plan file path."}}},
+			EdgeRecord{ID: workflow.EdgeID("edge-begin-review-a-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: beginReviewGroupID, Key: "review_a", TargetNodeID: reviewAID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Review code."},
 			EdgeRecord{ID: workflow.EdgeID("edge-begin-review-b-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: beginReviewGroupID, Key: "review_b", TargetNodeID: reviewBID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Review compliance."},
 			EdgeRecord{ID: joinAEdgeID, WorkflowID: workflowID, TransitionGroupID: approveAGroupID, Key: "approve_findings_a", TargetNodeID: joinID, ContextMode: workflow.ContextModeNewSession, Parameters: []workflow.Parameter{{Key: "code_review_findings", Description: "Code review findings."}}},
 			EdgeRecord{ID: joinBEdgeID, WorkflowID: workflowID, TransitionGroupID: approveBGroupID, Key: "approve_findings_b", TargetNodeID: joinID, ContextMode: workflow.ContextModeNewSession, Parameters: []workflow.Parameter{{Key: "compliance_findings", Description: "Compliance findings."}}},
 			EdgeRecord{ID: workflow.EdgeID("edge-approve-review-findings-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: approveReviewGroupID, Key: "approve_review_findings", TargetNodeID: implementationID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Review {{.Params.code_review_findings}} {{.Params.compliance_findings}}."},
 			EdgeRecord{ID: workflow.EdgeID("edge-implementation-ready-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: implementationReadyGroupID, Key: "implementation_ready", TargetNodeID: routerID, ContextMode: workflow.ContextModeNewSession},
+			EdgeRecord{ID: workflow.EdgeID("edge-qa-ready-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: qaReadyGroupID, Key: "qa_ready", TargetNodeID: qaID, ContextMode: workflow.ContextModeContinueSession, ContextSource: workflow.ContextSource{Kind: workflow.ContextSourcePreviousTargetOrNew}, PromptTemplate: "QA {{.Params.plan_approved.plan_file_path}} {{.Params.implementation_ready.commentary}}."},
 			EdgeRecord{ID: workflow.EdgeID("edge-code-review-rejected-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: rejectedGroupID, Key: "code_review_rejected", TargetNodeID: implementationID, ContextMode: workflow.ContextModeContinueSession, ContextSource: workflow.ContextSource{Kind: workflow.ContextSourcePreviousTarget}, PromptTemplate: "Rework {{.Params.approve_review_findings.code_review_findings}} {{.Params.approve_review_findings.compliance_findings}}."},
-			EdgeRecord{ID: workflow.EdgeID("edge-done-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: doneGroupID, Key: "done", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession},
+			EdgeRecord{ID: workflow.EdgeID("edge-done-implementation-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: doneImplementationGroupID, Key: "done", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession},
+			EdgeRecord{ID: workflow.EdgeID("edge-done-qa-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: doneQAGroupID, Key: "done", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession},
 		)
 	})
 	return workflowID
