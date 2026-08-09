@@ -162,12 +162,13 @@ func (messageOutputItemParser) Parse(item responses.ResponseOutputItemUnion, pro
 		}
 	}
 	text := strings.Join(textParts, "")
+	hasTextPart := len(textParts) > 0
 	phase := providerPhaseProjection(providerPhase)
 	var typedPhase *MessagePhase
 	if phase != "" {
 		typedPhase = textutil.Value(phase)
 	}
-	content, err := resolveOpenAIMessageContent(item, role, phase, text)
+	content, err := resolveOpenAIMessageContent(item, role, phase, text, hasTextPart)
 	if err != nil {
 		return parsedResponseOutputItem{}, err
 	}
@@ -193,7 +194,7 @@ func (messageOutputItemParser) Parse(item responses.ResponseOutputItemUnion, pro
 	return parsed, nil
 }
 
-func resolveOpenAIMessageContent(item responses.ResponseOutputItemUnion, role Role, phase MessagePhase, text string) (*string, error) {
+func resolveOpenAIMessageContent(item responses.ResponseOutputItemUnion, role Role, phase MessagePhase, text string, hasTextPart bool) (*string, error) {
 	raw := strings.TrimSpace(item.JSON.Content.Raw())
 	if raw == "" || raw == "null" {
 		return nil, nil
@@ -204,6 +205,9 @@ func resolveOpenAIMessageContent(item responses.ResponseOutputItemUnion, role Ro
 	var parts []json.RawMessage
 	if err := json.Unmarshal([]byte(raw), &parts); err != nil {
 		return nil, fmt.Errorf("decode assistant content: %w", err)
+	}
+	if len(parts) > 0 && !hasTextPart {
+		return nil, nil
 	}
 	return resolveAssistantContent(role, phase, textutil.Value(text)), nil
 }

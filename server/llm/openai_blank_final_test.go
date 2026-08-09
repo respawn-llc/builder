@@ -21,6 +21,7 @@ func TestOpenAIBlankFinalResponsePresence(t *testing.T) {
 		{name: "empty", content: `{"type":"output_text","text":""}`, wantContent: textutil.Value(""), wantPhase: MessagePhaseFinal},
 		{name: "whitespace", content: `{"type":"output_text","text":" \n\t"}`, wantContent: textutil.Value(" \n\t"), wantPhase: MessagePhaseFinal},
 		{name: "empty array", contentField: `"content":[],`, wantContent: textutil.Value(""), wantPhase: MessagePhaseFinal},
+		{name: "refusal", content: `{"type":"refusal","refusal":"I cannot help with that"}`, wantContent: nil, wantPhase: MessagePhaseFinal},
 		{name: "null", contentField: `"content":null,`, wantContent: nil, wantPhase: MessagePhaseFinal},
 		{name: "omitted", wantContent: nil, wantPhase: MessagePhaseFinal},
 	}
@@ -118,6 +119,12 @@ func TestOpenAIBlankFinalStreamingAfterCommentary(t *testing.T) {
 			wantContent:   textutil.Value(" \n\t"),
 		},
 		{
+			name:          "refusal",
+			finalItem:     `"content":[{"type":"refusal","refusal":"I cannot help with that"}],`,
+			finalResponse: `"content":[{"type":"refusal","refusal":"I cannot help with that"}],`,
+			wantContent:   nil,
+		},
+		{
 			name:        "omitted",
 			wantContent: nil,
 		},
@@ -154,18 +161,16 @@ func TestOpenAIBlankFinalStreamingAfterCommentary(t *testing.T) {
 	}
 }
 
-func TestOpenAIBlankFinalStreamingWithPendingUnmaterializedOutput(t *testing.T) {
+func TestOpenAIBlankFinalStreamingRejectsPendingUnmaterializedOutput(t *testing.T) {
 	tests := []struct {
 		name          string
 		finalItem     string
 		finalResponse string
-		wantContent   *string
 	}{
 		{
 			name:          "empty",
 			finalItem:     `"content":[],`,
 			finalResponse: `"content":[],`,
-			wantContent:   textutil.Value(""),
 		},
 		{
 			name: "omitted",
@@ -180,31 +185,12 @@ func TestOpenAIBlankFinalStreamingWithPendingUnmaterializedOutput(t *testing.T) 
 				`[DONE]`,
 			}
 			transport := newOpenAIStreamTestTransport(t, events...)
-			rawResponse, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{
+			_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{
 				Model:          "gpt-5",
 				ToolChoiceMode: ToolChoiceModeAutomatic,
 			}, StreamCallbacks{})
-			if err != nil {
-				t.Fatalf("generate raw stream: %v", err)
-			}
-			if !equalOptionalString(rawResponse.AssistantText, test.wantContent) {
-				t.Fatalf("raw assistant text = %#v, want %#v", rawResponse.AssistantText, test.wantContent)
-			}
-			if !rawResponse.ProviderPhase.Is(MessagePhaseFinal) {
-				t.Fatalf("raw provider phase = %v, want final", rawResponse.ProviderPhase.Value())
-			}
-			response, err := NewOpenAIClient(transport).GenerateStreamWithEvents(context.Background(), Request{
-				Model:          "gpt-5",
-				ToolChoiceMode: ToolChoiceModeAutomatic,
-			}, StreamCallbacks{})
-			if err != nil {
-				t.Fatalf("generate stream: %v", err)
-			}
-			if !equalOptionalString(response.Assistant.Content, test.wantContent) {
-				t.Fatalf("assistant content = %#v, want %#v", response.Assistant.Content, test.wantContent)
-			}
-			if response.Assistant.Phase == nil || *response.Assistant.Phase != MessagePhaseFinal {
-				t.Fatalf("assistant phase = %#v, want final", response.Assistant.Phase)
+			if err == nil {
+				t.Fatal("pending assistant output without a matching output item was accepted")
 			}
 		})
 	}

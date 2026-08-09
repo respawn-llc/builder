@@ -546,6 +546,39 @@ func TestGenerateStream_EmitsUnknownPhaseWhenDeltaPrecedesAssistantItem(t *testi
 	}
 }
 
+func TestGenerateStreamRejectsUnmatchedAssistantDelta(t *testing.T) {
+	transport := newOpenAIStreamTestTransport(t,
+		`{"type":"response.output_text.delta","delta":"stray"}`,
+		`{"type":"response.output_item.added","output_index":1,"item":{"id":"msg_1","type":"message","role":"assistant","phase":"final_answer","content":[]}}`,
+		`{"type":"response.output_text.delta","output_index":1,"delta":"done"}`,
+		`{"type":"response.completed","response":{"output":[{"id":"msg_1","type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"done"}]}]}}`,
+		`[DONE]`,
+	)
+
+	var deltas []AssistantDelta
+	_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{
+		Model:          "gpt-5",
+		ToolChoiceMode: ToolChoiceModeAutomatic,
+	}, StreamCallbacks{
+		OnAssistantDelta: func(delta AssistantDelta) {
+			deltas = append(deltas, delta)
+		},
+	})
+	if err == nil {
+		t.Fatalf("unmatched assistant delta was accepted; emitted deltas = %+v", deltas)
+	}
+	var providerErr *ProviderAPIError
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("error = %T %v, want ProviderAPIError", err, err)
+	}
+	if providerErr.Code != UnifiedErrorCodeProviderContract {
+		t.Fatalf("provider error code = %q, want %q", providerErr.Code, UnifiedErrorCodeProviderContract)
+	}
+	if got := joinedAssistantDeltas(deltas); got != "straydone" {
+		t.Fatalf("emitted assistant deltas = %q, want all provider bytes", got)
+	}
+}
+
 func TestGenerateStream_RejectsCompletedMessageThatConflictsWithDisplayedDeltas(t *testing.T) {
 	transport := newOpenAIStreamTestTransport(t,
 		`{"type":"response.output_item.added","output_index":0,"item":{"type":"message","role":"assistant","phase":"final_answer","content":[]}}`,
