@@ -479,46 +479,21 @@ func repairAssistantOutputItems(items []ResponseItem, text *string, textPresent 
 type assistantMessageAccumulator struct {
 	byIndex       map[int64]assistantAccumulatorItem
 	order         []int64
-	pendingDeltas map[int64]*assistantDeltaBuffer
+	pendingDeltas map[int64]*strings.Builder
 }
 
 type assistantAccumulatorItem struct {
 	message       ResponseItem
 	providerPhase *ProviderPhase
 	finalizedText *string
-	deltaText     *assistantDeltaBuffer
-}
-
-type assistantDeltaBuffer struct {
-	chunks []string
-	length int
-}
-
-func (b *assistantDeltaBuffer) Append(text string) {
-	if b == nil || text == "" {
-		return
-	}
-	b.chunks = append(b.chunks, text)
-	b.length += len(text)
-}
-
-func (b *assistantDeltaBuffer) String() string {
-	if b == nil || b.length == 0 {
-		return ""
-	}
-	var builder strings.Builder
-	builder.Grow(b.length)
-	for _, chunk := range b.chunks {
-		builder.WriteString(chunk)
-	}
-	return builder.String()
+	deltaText     *strings.Builder
 }
 
 func newAssistantMessageAccumulator() *assistantMessageAccumulator {
 	return &assistantMessageAccumulator{
 		byIndex:       make(map[int64]assistantAccumulatorItem),
 		order:         make([]int64, 0, 4),
-		pendingDeltas: make(map[int64]*assistantDeltaBuffer),
+		pendingDeltas: make(map[int64]*strings.Builder),
 	}
 }
 
@@ -565,16 +540,16 @@ func (a *assistantMessageAccumulator) AppendDelta(outputIndex int64, text string
 	if !exists {
 		buffer := a.pendingDeltas[outputIndex]
 		if buffer == nil {
-			buffer = &assistantDeltaBuffer{}
+			buffer = &strings.Builder{}
 			a.pendingDeltas[outputIndex] = buffer
 		}
-		buffer.Append(text)
+		buffer.WriteString(text)
 		return
 	}
 	if item.deltaText == nil {
-		item.deltaText = &assistantDeltaBuffer{}
+		item.deltaText = &strings.Builder{}
 	}
-	item.deltaText.Append(text)
+	item.deltaText.WriteString(text)
 	a.byIndex[outputIndex] = item
 }
 
@@ -604,6 +579,9 @@ func (a *assistantMessageAccumulator) Resolve() (*string, MessagePhase, *Provide
 	if a == nil {
 		return nil, "", AbsentProviderPhase(), 0, "", false
 	}
+	if len(a.pendingDeltas) > 0 {
+		return nil, "", AbsentProviderPhase(), 0, "", false
+	}
 	segments := make([]assistantOutputSegment, 0, len(a.order))
 	for _, outputIndex := range a.order {
 		item, ok := a.byIndex[outputIndex]
@@ -621,7 +599,10 @@ func (a *assistantMessageAccumulator) Resolve() (*string, MessagePhase, *Provide
 		if (text == nil || strings.TrimSpace(*text) == "") && item.finalizedText != nil {
 			text = item.finalizedText
 		}
-		deltaText := item.deltaText.String()
+		deltaText := ""
+		if item.deltaText != nil {
+			deltaText = item.deltaText.String()
+		}
 		if (text == nil || strings.TrimSpace(*text) == "") && deltaText != "" {
 			text = textutil.Value(deltaText)
 		}

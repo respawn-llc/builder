@@ -737,6 +737,24 @@ func TestGenerateStream_PreservesResumedOutputWhitespaceAfterInterleavedOutput(t
 	}
 }
 
+func TestGenerateStream_PreservesPendingOutputIndexAfterFinalizedOutput(t *testing.T) {
+	transport := newOpenAIStreamTestTransport(t,
+		`{"type":"response.output_text.delta","output_index":0,"delta":"first"}`,
+		`{"type":"response.output_text.delta","output_index":1,"delta":"second"}`,
+		`{"type":"response.output_text.done","output_index":0,"text":"first"}`,
+		`{"type":"response.completed","response":{"output":[]}}`,
+		`[DONE]`,
+	)
+
+	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{})
+	if err != nil {
+		t.Fatalf("GenerateStream failed: %v", err)
+	}
+	if optionalStringValue(resp.AssistantText) != "firstsecond" {
+		t.Fatalf("assistant text = %q, want finalized and pending output", optionalStringValue(resp.AssistantText))
+	}
+}
+
 func TestGenerateStream_PreservesWhitespaceBetweenAssistantContent(t *testing.T) {
 	transport := newOpenAIStreamTestTransport(t,
 		`{"type":"response.output_item.added","output_index":0,"item":{"id":"msg_1","type":"message","role":"assistant","phase":"final_answer","content":[]}}`,
