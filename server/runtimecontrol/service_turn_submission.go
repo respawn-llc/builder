@@ -89,9 +89,12 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 				if !inputAccepted {
 					return
 				}
-				if _, _, err := s.recordPromptHistory(context.Background(), memoReq.SessionID, strings.TrimSpace(req.ClientRequestID), projection.HistoryText); err != nil {
-					engine.ReportPromptHistoryPersistError(err.Error())
-				}
+				s.launchPromptHistoryAppend(
+					engine,
+					memoReq.SessionID,
+					strings.TrimSpace(req.ClientRequestID),
+					projection.HistoryText,
+				)
 			}()
 			shouldCompact, err := engine.ShouldCompactBeforeUserMessage(runCtx, projection.ExecutionText)
 			if err != nil {
@@ -199,9 +202,12 @@ func (s *Service) trySubmitUserTurnAsActiveExecution(ctx context.Context, attemp
 		if !committed {
 			return runtimeops.ErrOperationCanceled
 		}
-		if _, _, err := s.recordPromptHistory(context.Background(), memoReq.SessionID, strings.TrimSpace(req.ClientRequestID), projection.HistoryText); err != nil {
-			engine.ReportPromptHistoryPersistError(err.Error())
-		}
+		s.launchPromptHistoryAppend(
+			engine,
+			memoReq.SessionID,
+			strings.TrimSpace(req.ClientRequestID),
+			projection.HistoryText,
+		)
 		return nil
 	})
 	if err != nil {

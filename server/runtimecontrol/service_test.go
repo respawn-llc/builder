@@ -95,6 +95,40 @@ type runtimeControlPromptHistoryStore struct {
 	recordCtxErr   error
 }
 
+type blockingRuntimeControlPromptHistoryStore struct {
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func newBlockingRuntimeControlPromptHistoryStore() *blockingRuntimeControlPromptHistoryStore {
+	return &blockingRuntimeControlPromptHistoryStore{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+}
+
+func (s *blockingRuntimeControlPromptHistoryStore) RecordPromptHistoryEntry(
+	ctx context.Context,
+	entry metadata.PromptHistoryEntry,
+) (metadata.PromptHistoryRecord, bool, error) {
+	s.once.Do(func() {
+		close(s.started)
+	})
+	select {
+	case <-ctx.Done():
+		return metadata.PromptHistoryRecord{}, false, ctx.Err()
+	case <-s.release:
+		return metadata.PromptHistoryRecord{
+			Sequence:  1,
+			SessionID: entry.SessionID,
+			SourceID:  entry.SourceID,
+			Text:      entry.Text,
+			CreatedAt: entry.CreatedAt,
+		}, true, nil
+	}
+}
+
 func newRuntimeControlPromptHistoryStore(sessionID string) *runtimeControlPromptHistoryStore {
 	store := &runtimeControlPromptHistoryStore{}
 	runtimeControlPromptHistoryStores.Store(sessionID, store)
@@ -847,9 +881,19 @@ func TestServiceLiveSteerAgentCallerUsesOneWrappedDeveloperMessage(t *testing.T)
 	<-submitDone
 }
 
-func TestServiceLiveSteerPreservesAdmittedPromptHistoryError(t *testing.T) {
+func TestServiceLiveSteerPromptHistoryFailureDoesNotChangeAcceptedOutcome(t *testing.T) {
 	client := newCancelObservingRuntimeControlClient()
-	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
+	var (
+		eventsMu sync.Mutex
+		events   []runtime.Event
+	)
+	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{
+		OnEvent: func(event runtime.Event) {
+			eventsMu.Lock()
+			events = append(events, event)
+			eventsMu.Unlock()
+		},
+	})
 	submitDone := make(chan error, 1)
 	go func() {
 		_, err := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "keep-running", "keep running"))
@@ -862,16 +906,29 @@ func TestServiceLiveSteerPreservesAdmittedPromptHistoryError(t *testing.T) {
 	}
 	historyErr := errors.New("prompt history failed")
 	runtimeControlPromptHistoryStoresLoad(t, store.Meta().SessionID).SetRecordError(historyErr)
-	_, err := service.LiveSteer(context.Background(), serverapi.RuntimeLiveSteerRequest{
+	resp, steerErr := service.LiveSteer(context.Background(), serverapi.RuntimeLiveSteerRequest{
 		ClientRequestID: "8b0364cc-5c6c-412e-a4e8-31380661d1e1",
 		SessionID:       store.Meta().SessionID,
 		Text:            "steer live",
 	})
-	if !errors.Is(err, historyErr) {
-		t.Fatalf("LiveSteer error = %v, want prompt history failure", err)
-	}
-	if errors.Is(err, serverapi.ErrRuntimeNoActiveRun) {
-		t.Fatalf("LiveSteer mapped prompt history failure to no-active: %v", err)
+	observedFailure := false
+	if steerErr == nil {
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			eventsMu.Lock()
+			snapshot := append([]runtime.Event(nil), events...)
+			eventsMu.Unlock()
+			for _, event := range snapshot {
+				if event.Kind == runtime.EventPromptHistoryPersistFailed {
+					observedFailure = true
+					break
+				}
+			}
+			if observedFailure {
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
 	}
 	_, _ = service.LiveStop(context.Background(), serverapi.RuntimeLiveStopRequest{
 		ClientRequestID: "6859fdfa-6808-4109-a031-de3d432e88dd",
@@ -879,6 +936,68 @@ func TestServiceLiveSteerPreservesAdmittedPromptHistoryError(t *testing.T) {
 	})
 	close(client.release)
 	<-submitDone
+	if steerErr != nil {
+		t.Fatalf("LiveSteer: %v", steerErr)
+	}
+	if resp.QueueItemID == "" {
+		t.Fatalf("LiveSteer response = %+v, want accepted Queue Item", resp)
+	}
+	if !observedFailure {
+		t.Fatal("prompt-history failure did not reach the runtime event feed")
+	}
+}
+
+func TestServiceSubmitUserTurnDoesNotWaitForOptionalPromptHistory(t *testing.T) {
+	store, _, service := newRuntimeControlTestService(
+		t,
+		finalResponseRuntimeControlClient(),
+		nil,
+		runtime.Config{},
+	)
+	history := newBlockingRuntimeControlPromptHistoryStore()
+	service.WithPromptHistoryStore(history)
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() {
+			close(history.release)
+		})
+	}
+	defer release()
+
+	type submitOutcome struct {
+		response serverapi.RuntimeSubmitUserTurnResponse
+		err      error
+	}
+	done := make(chan submitOutcome, 1)
+	go func() {
+		response, err := service.SubmitUserTurn(
+			context.Background(),
+			runtimeControlUserTurnRequest(
+				store,
+				"optional-history",
+				"ship it",
+			),
+		)
+		done <- submitOutcome{response: response, err: err}
+	}()
+	select {
+	case <-history.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("optional prompt-history append did not start")
+	}
+	select {
+	case outcome := <-done:
+		if outcome.err != nil || outcome.response.Message != "done" {
+			t.Fatalf(
+				"SubmitUserTurn outcome = %+v, error=%v",
+				outcome.response,
+				outcome.err,
+			)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("committed user turn waited for optional prompt history")
+	}
+	release()
 }
 
 func TestServiceLiveStopIdleReturnsIdle(t *testing.T) {

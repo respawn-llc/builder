@@ -63,12 +63,8 @@ type Service struct {
 	operations     *runtimeops.Coordinator
 	sessionNames   *requestmemo.Memo[sessionStringMemoRequest, struct{}]
 	thinkingLevels *requestmemo.Memo[sessionStringMemoRequest, struct{}]
-	fastModes      *requestmemo.Memo[sessionBoolMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSetFastModeEnabledResponse]]
-	reviewers      *requestmemo.Memo[sessionBoolMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSetReviewerEnabledResponse]]
 	autoCompacts   *requestmemo.Memo[sessionBoolMemoRequest, serverapi.RuntimeSetAutoCompactionEnabledResponse]
-	questions      *requestmemo.Memo[sessionBoolMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSetQuestionsEnabledResponse]]
 
-	localEntries   *requestmemo.Memo[localEntryMemoRequest, struct{}]
 	queuedDiscards *requestmemo.Memo[queuedUserMessageMemoRequest, serverapi.RuntimeDiscardQueuedUserMessageResponse]
 	liveSteers     *requestmemo.Memo[liveSteerMemoRequest, serverapi.RuntimeLiveSteerResponse]
 	liveStops      *requestmemo.Memo[liveStopMemoRequest, serverapi.RuntimeLiveStopResponse]
@@ -197,12 +193,8 @@ func NewServiceWithGoalCommands(
 		operations:     runtimeops.NewCoordinator(),
 		sessionNames:   requestmemo.New[sessionStringMemoRequest, struct{}](),
 		thinkingLevels: requestmemo.New[sessionStringMemoRequest, struct{}](),
-		fastModes:      requestmemo.New[sessionBoolMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSetFastModeEnabledResponse]](),
-		reviewers:      requestmemo.New[sessionBoolMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSetReviewerEnabledResponse]](),
 		autoCompacts:   requestmemo.New[sessionBoolMemoRequest, serverapi.RuntimeSetAutoCompactionEnabledResponse](),
-		questions:      requestmemo.New[sessionBoolMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSetQuestionsEnabledResponse]](),
 
-		localEntries:   requestmemo.New[localEntryMemoRequest, struct{}](),
 		queuedDiscards: requestmemo.New[queuedUserMessageMemoRequest, serverapi.RuntimeDiscardQueuedUserMessageResponse](),
 		liveSteers:     requestmemo.New[liveSteerMemoRequest, serverapi.RuntimeLiveSteerResponse](),
 		liveStops:      requestmemo.New[liveStopMemoRequest, serverapi.RuntimeLiveStopResponse](),
@@ -356,8 +348,7 @@ func (s *Service) SetFastModeEnabled(ctx context.Context, req serverapi.RuntimeS
 	if err := req.Validate(); err != nil {
 		return serverapi.RuntimeSetFastModeEnabledResponse{}, err
 	}
-	memoReq := sessionBoolMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Enabled: req.Enabled}
-	return memoizedCommittedRuntimeMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq.SessionID, memoReq, s.fastModes, sameSessionBoolMemoRequest, func(engine *runtime.Engine) (serverapi.RuntimeSetFastModeEnabledResponse, session.CommitReceipt, error) {
+	return committedRuntimeMutation(s, ctx, strings.TrimSpace(req.SessionID), func(engine *runtime.Engine) (serverapi.RuntimeSetFastModeEnabledResponse, session.CommitReceipt, error) {
 		changed, receipt, err := engine.SetFastModeEnabledWithCommittedFeedback(req.Enabled, func(changed bool) string {
 			return serverapi.FastModeToggleStatusMessage(req.Enabled, changed)
 		})
@@ -369,8 +360,7 @@ func (s *Service) SetReviewerEnabled(ctx context.Context, req serverapi.RuntimeS
 	if err := req.Validate(); err != nil {
 		return serverapi.RuntimeSetReviewerEnabledResponse{}, err
 	}
-	memoReq := sessionBoolMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Enabled: req.Enabled}
-	return memoizedCommittedRuntimeMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq.SessionID, memoReq, s.reviewers, sameSessionBoolMemoRequest, func(engine *runtime.Engine) (serverapi.RuntimeSetReviewerEnabledResponse, session.CommitReceipt, error) {
+	return committedRuntimeMutation(s, ctx, strings.TrimSpace(req.SessionID), func(engine *runtime.Engine) (serverapi.RuntimeSetReviewerEnabledResponse, session.CommitReceipt, error) {
 		changed, mode, receipt, err := engine.SetReviewerEnabledWithCommittedFeedback(req.Enabled, func(enabled bool, mode string, changed bool) string {
 			return serverapi.ReviewerToggleStatusMessage(enabled, mode, changed)
 		})
@@ -406,8 +396,7 @@ func (s *Service) SetQuestionsEnabled(ctx context.Context, req serverapi.Runtime
 	if err := req.Validate(); err != nil {
 		return serverapi.RuntimeSetQuestionsEnabledResponse{}, err
 	}
-	memoReq := sessionBoolMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Enabled: req.Enabled}
-	return memoizedCommittedRuntimeMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq.SessionID, memoReq, s.questions, sameSessionBoolMemoRequest, func(engine *runtime.Engine) (serverapi.RuntimeSetQuestionsEnabledResponse, session.CommitReceipt, error) {
+	return committedRuntimeMutation(s, ctx, strings.TrimSpace(req.SessionID), func(engine *runtime.Engine) (serverapi.RuntimeSetQuestionsEnabledResponse, session.CommitReceipt, error) {
 		changed, enabled, receipt, err := engine.SetQuestionsEnabledWithCommittedFeedback(req.Enabled, func(enabled bool, changed bool) string {
 			return serverapi.QuestionsToggleStatusMessage(enabled, changed)
 		})
@@ -415,29 +404,22 @@ func (s *Service) SetQuestionsEnabled(ctx context.Context, req serverapi.Runtime
 	})
 }
 
-func memoizedCommittedRuntimeMutation[Req any, Resp any](
+func committedRuntimeMutation[Resp any](
 	service *Service,
 	ctx context.Context,
-	requestID string,
 	sessionID string,
-	req Req,
-	memo *requestmemo.Memo[Req, committedRuntimeMutationResult[Resp]],
-	same func(Req, Req) bool,
 	run func(*runtime.Engine) (Resp, session.CommitReceipt, error),
 ) (Resp, error) {
 	var zero Resp
-	result, err := memo.Do(ctx, requestID, req, same, func(ctx context.Context) (committedRuntimeMutationResult[Resp], error) {
-		var result committedRuntimeMutationResult[Resp]
-		err := service.withRuntime(ctx, sessionID, func(_ context.Context, engine *runtime.Engine) error {
-			response, receipt, mutationErr := run(engine)
-			result.Response = response
-			if !receipt.Committed {
-				return mutationErr
-			}
-			result.Err = errors.Join(mutationErr, service.publishSessionStatus(sessionID))
-			return nil
-		})
-		return result, err
+	var result committedRuntimeMutationResult[Resp]
+	err := service.withRuntime(ctx, sessionID, func(_ context.Context, engine *runtime.Engine) error {
+		response, receipt, mutationErr := run(engine)
+		result.Response = response
+		if !receipt.Committed {
+			return mutationErr
+		}
+		result.Err = errors.Join(mutationErr, service.publishSessionStatus(sessionID))
+		return nil
 	})
 	if err != nil {
 		return zero, err
@@ -457,19 +439,15 @@ func (s *Service) AppendCommittedEntry(ctx context.Context, req serverapi.Runtim
 		return err
 	}
 	visibility := transcript.NormalizeEntryVisibility(transcript.EntryVisibility(req.Visibility))
-	memoReq := localEntryMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Role: strings.TrimSpace(req.Role), Text: req.Text, Visibility: visibility, NoticeID: strings.TrimSpace(req.NoticeID)}
-	_, err := s.localEntries.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameLocalEntryMemoRequest, func(ctx context.Context) (struct{}, error) {
-		return struct{}{}, s.withRuntime(ctx, req.SessionID, func(_ context.Context, engine *runtime.Engine) error {
-			if visibility == transcript.EntryVisibilityAuto && strings.TrimSpace(req.NoticeID) != "" {
-				return engine.AppendCommittedEntryWithNoticeID(req.Role, req.Text, req.NoticeID)
-			}
-			if visibility == transcript.EntryVisibilityAuto {
-				return engine.AppendCommittedEntry(req.Role, req.Text)
-			}
-			return engine.AppendCommittedEntryWithVisibility(req.Role, req.Text, visibility)
-		})
+	return s.withRuntime(ctx, req.SessionID, func(_ context.Context, engine *runtime.Engine) error {
+		if visibility == transcript.EntryVisibilityAuto && strings.TrimSpace(req.NoticeID) != "" {
+			return engine.AppendCommittedEntryWithNoticeID(req.Role, req.Text, req.NoticeID)
+		}
+		if visibility == transcript.EntryVisibilityAuto {
+			return engine.AppendCommittedEntry(req.Role, req.Text)
+		}
+		return engine.AppendCommittedEntryWithVisibility(req.Role, req.Text, visibility)
 	})
-	return err
 }
 
 func (s *Service) AppendSessionEntry(ctx context.Context, sessionID string, role string, text string) error {
@@ -697,6 +675,26 @@ func (s *Service) recordPromptHistory(ctx context.Context, sessionID string, sou
 		SessionID: strings.TrimSpace(sessionID),
 		SourceID:  strings.TrimSpace(sourceID),
 		Text:      text,
+	})
+}
+
+func (s *Service) launchPromptHistoryAppend(
+	engine *runtime.Engine,
+	sessionID string,
+	sourceID string,
+	text string,
+) {
+	if s == nil || s.promptStore == nil || engine == nil {
+		return
+	}
+	_ = engine.LaunchPromptHistoryAppend(func(ctx context.Context) error {
+		_, _, err := s.recordPromptHistory(
+			ctx,
+			sessionID,
+			sourceID,
+			text,
+		)
+		return err
 	})
 }
 

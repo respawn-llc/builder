@@ -55,7 +55,7 @@ func TestServiceSetThinkingLevelDedupesSuccessfulRetry(t *testing.T) {
 	}
 }
 
-func TestServiceCommittedRuntimeMutationReturnsAndCachesSessionStatusPublishError(t *testing.T) {
+func TestServiceCommittedRuntimeMutationKeepsStateAcrossRepeatedPublishErrors(t *testing.T) {
 	statusErr := errors.New("session status publish failed")
 	store, engine, service := newRuntimeControlTestService(t, &runtimeControlFakeClient{}, nil, runtime.Config{
 		Model:                        "gpt-5",
@@ -77,11 +77,11 @@ func TestServiceCommittedRuntimeMutationReturnsAndCachesSessionStatusPublishErro
 	if !errors.Is(err, statusErr) {
 		t.Fatalf("replayed SetFastModeEnabled error = %v, want status publish error", err)
 	}
-	if !first.Changed || first != second || !engine.FastModeEnabled() {
+	if !first.Changed || second.Changed || !engine.FastModeEnabled() {
 		t.Fatalf("responses = (%+v, %+v), fast mode = %t", first, second, engine.FastModeEnabled())
 	}
-	if resolver.publishCount != 1 {
-		t.Fatalf("session status publish count = %d, want 1", resolver.publishCount)
+	if resolver.publishCount != 2 {
+		t.Fatalf("session status publish count = %d, want 2", resolver.publishCount)
 	}
 }
 
@@ -375,7 +375,7 @@ func localEntryEvents(t *testing.T, store *session.Store) []runtime.ChatEntry {
 	return entries
 }
 
-func TestServiceAppendCommittedEntryReplaysVisibility(t *testing.T) {
+func TestServiceAppendCommittedEntryTreatsRepeatedRequestAsNewEntry(t *testing.T) {
 	store, _, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{})
 	req := serverapi.RuntimeAppendCommittedEntryRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, Role: "warning", Text: "visible warning", Visibility: string(transcript.EntryVisibilityOngoing)}
 
@@ -394,8 +394,8 @@ func TestServiceAppendCommittedEntryReplaysVisibility(t *testing.T) {
 			}
 		}
 	}
-	if count != 1 {
-		t.Fatalf("visible warning entry count = %d, want 1", count)
+	if count != 2 {
+		t.Fatalf("visible warning entry count = %d, want 2", count)
 	}
 }
 

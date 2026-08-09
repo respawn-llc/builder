@@ -570,6 +570,25 @@ func (e *Engine) LaunchAgentExecution(
 	return nil
 }
 
+func (e *Engine) LaunchPromptHistoryAppend(
+	appendEntry func(context.Context) error,
+) error {
+	if appendEntry == nil {
+		return errors.New("prompt history append is required")
+	}
+	if !e.launchLifecycleWork(
+		appendEntry,
+		func(err error) {
+			if err != nil {
+				e.ReportPromptHistoryPersistError(err.Error())
+			}
+		},
+	) {
+		return ErrEngineClosed
+	}
+	return nil
+}
+
 type QueuedUserMessage struct {
 	ID              string
 	ClientRequestID string
