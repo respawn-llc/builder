@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"core/shared/apicontract"
+	"core/shared/authstatus"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/lifecyclecontract"
@@ -160,6 +161,7 @@ func (p *launchPlanner) PlanSession(ctx context.Context, req sessionLaunchReques
 	}
 	cfg := p.server.Config()
 	activeSettings := resp.Plan.ActiveSettings
+	authProvider := authstatus.ProviderFacts(activeSettings)
 	sessionTitle, err := validateLaunchSessionTitle(resp.Plan.SessionName)
 	if err != nil {
 		return sessionLaunchPlan{}, err
@@ -174,14 +176,14 @@ func (p *launchPlanner) PlanSession(ctx context.Context, req sessionLaunchReques
 		PromptHistory:       append([]string(nil), resp.Plan.PromptHistory...),
 		ModelContractLocked: resp.Plan.ModelContractLocked,
 		StatusConfig: uiStatusConfig{
-			WorkspaceRoot:        executionTarget.EffectiveWorkdir,
-			ExecutionTarget:      executionTarget,
-			PersistenceRoot:      cfg.PersistenceRoot,
-			SessionViews:         p.server.SessionViewClient(),
-			Settings:             activeSettings,
-			AuthProviderSettings: &activeSettings,
-			Source:               resp.Plan.Source,
-			AuthStatus:           p.server.AuthStatusClient(),
+			WorkspaceRoot:   executionTarget.EffectiveWorkdir,
+			ExecutionTarget: executionTarget,
+			PersistenceRoot: cfg.PersistenceRoot,
+			SessionViews:    p.server.SessionViewClient(),
+			Settings:        activeSettings,
+			AuthProvider:    &authProvider,
+			Source:          resp.Plan.Source,
+			AuthStatus:      p.server.AuthStatusClient(),
 		},
 		ExecutionTarget: executionTarget,
 		Source:          resp.Plan.Source,

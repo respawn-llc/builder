@@ -10,6 +10,7 @@ import (
 	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/config"
+	"core/shared/serverapi"
 	"core/shared/textutil"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -21,14 +22,14 @@ const (
 )
 
 type uiStatusConfig struct {
-	WorkspaceRoot        string
-	PersistenceRoot      string
-	ExecutionTarget      clientui.SessionExecutionTarget
-	SessionViews         apicontract.SessionViewService
-	Settings             config.Settings
-	AuthProviderSettings *config.Settings
-	Source               config.SourceReport
-	AuthStatus           apicontract.AuthStatusService
+	WorkspaceRoot   string
+	PersistenceRoot string
+	ExecutionTarget clientui.SessionExecutionTarget
+	SessionViews    apicontract.SessionViewService
+	Settings        config.Settings
+	AuthProvider    *serverapi.AuthProviderFacts
+	Source          config.SourceReport
+	AuthStatus      apicontract.AuthStatusService
 }
 
 type uiStatusCollector interface {
@@ -133,7 +134,7 @@ func (m *uiModel) newStatusRequest(now time.Time) uiStatusRequest {
 		ExecutionTarget:       executionTarget,
 		SessionViews:          m.statusConfig.SessionViews,
 		Settings:              m.statusConfig.Settings,
-		AuthProviderSettings:  m.statusConfig.AuthProviderSettings,
+		AuthProvider:          m.statusConfig.AuthProvider,
 		Source:                m.statusConfig.Source,
 		AuthStatus:            m.statusConfig.AuthStatus,
 		SessionName:           strings.TrimSpace(m.sessionName),

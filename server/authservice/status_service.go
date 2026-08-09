@@ -29,11 +29,20 @@ func NewStatusService(manager *auth.Manager, settings config.Settings) *StatusSe
 	return &StatusService{manager: manager, settings: settings}
 }
 
-func (s *StatusService) GetAuthStatus(ctx context.Context, _ serverapi.AuthStatusRequest) (serverapi.AuthStatusResponse, error) {
+func (s *StatusService) GetAuthStatus(ctx context.Context, req serverapi.AuthStatusRequest) (serverapi.AuthStatusResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.AuthStatusResponse{}, err
+	}
 	state := auth.EmptyState()
 	settings := config.Settings{}
 	if s != nil {
 		settings = s.settings
+	}
+	provider := authstatus.ProviderFacts(settings)
+	subscriptionUsageSupported := authstatus.SupportsSubscriptionUsage(settings)
+	if req.Provider != nil {
+		provider = *req.Provider
+		subscriptionUsageSupported = authstatus.SupportsSubscriptionUsageForProvider(provider)
 	}
 	if s != nil && s.manager != nil {
 		resolution, err := s.manager.ResolveCurrentState(ctx)
@@ -44,8 +53,8 @@ func (s *StatusService) GetAuthStatus(ctx context.Context, _ serverapi.AuthStatu
 			if resolution.Loaded != nil {
 				failure := authStatusFailure(err)
 				return validatedAuthStatusResponse(serverapi.AuthStatusResponse{
-					Resolution:   serverapi.KnownAuthStatusResolution(authFacts(state, settings), &failure),
-					Subscription: subscriptionStatus(ctx, settings, state, err),
+					Resolution:   serverapi.KnownAuthStatusResolution(authFacts(state, provider), &failure),
+					Subscription: subscriptionStatus(ctx, state, err, subscriptionUsageSupported),
 				})
 			}
 			return validatedAuthStatusResponse(serverapi.AuthStatusResponse{
@@ -55,8 +64,8 @@ func (s *StatusService) GetAuthStatus(ctx context.Context, _ serverapi.AuthStatu
 		state = *resolution.Current
 	}
 	return validatedAuthStatusResponse(serverapi.AuthStatusResponse{
-		Resolution:   serverapi.KnownAuthStatusResolution(authFacts(state, settings), nil),
-		Subscription: subscriptionStatus(ctx, settings, state, nil),
+		Resolution:   serverapi.KnownAuthStatusResolution(authFacts(state, provider), nil),
+		Subscription: subscriptionStatus(ctx, state, nil, subscriptionUsageSupported),
 	})
 }
 
@@ -67,10 +76,10 @@ func validatedAuthStatusResponse(response serverapi.AuthStatusResponse) (servera
 	return response, nil
 }
 
-func authFacts(state auth.State, settings config.Settings) serverapi.AuthStatusFacts {
+func authFacts(state auth.State, provider serverapi.AuthProviderFacts) serverapi.AuthStatusFacts {
 	facts := serverapi.AuthStatusFacts{
 		Method:        authStatusMethod(state.Method.Type),
-		Provider:      authstatus.ProviderFacts(settings),
+		Provider:      provider,
 		EnvPreference: authStatusEnvPreference(state.EnvAPIKeyPreference),
 	}
 	switch state.Method.Type {
@@ -124,11 +133,11 @@ func apiKeyFacts(method *auth.APIKeyMethod) *serverapi.AuthAPIKeyFacts {
 
 func subscriptionStatus(
 	ctx context.Context,
-	settings config.Settings,
 	state auth.State,
 	authStateErr error,
+	subscriptionUsageSupported bool,
 ) serverapi.AuthSubscriptionFacts {
-	if !shouldFetchSubscriptionUsage(settings, state) {
+	if !shouldFetchSubscriptionUsage(state, subscriptionUsageSupported) {
 		return serverapi.AuthSubscriptionFacts{}
 	}
 	if authStateErr != nil {
@@ -152,10 +161,10 @@ func subscriptionStatus(
 	}
 }
 
-func shouldFetchSubscriptionUsage(settings config.Settings, state auth.State) bool {
+func shouldFetchSubscriptionUsage(state auth.State, subscriptionUsageSupported bool) bool {
 	if state.Method.Type != auth.MethodOAuth ||
 		state.Method.OAuth == nil ||
-		!authstatus.SupportsSubscriptionUsage(settings) {
+		!subscriptionUsageSupported {
 		return false
 	}
 	return true

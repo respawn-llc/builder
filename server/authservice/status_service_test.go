@@ -178,6 +178,49 @@ func TestStatusServicePublishesOnlySafeAPIKeyFacts(t *testing.T) {
 	}
 }
 
+func TestStatusServiceUsesRequestedEffectiveProviderForSubscription(t *testing.T) {
+	now := time.Date(2026, time.August, 9, 9, 0, 0, 0, time.UTC)
+	store := auth.NewMemoryStore(auth.State{
+		Method: auth.Method{Type: auth.MethodOAuth, OAuth: &auth.OAuthMethod{
+			AccessToken:  "access-token",
+			RefreshToken: "refresh-token",
+			TokenType:    "Bearer",
+			Expiry:       now.Add(-time.Minute),
+		}},
+	})
+	refreshErr := errors.New("refresh failed")
+	refresher := auth.NewOAuthRefresher(
+		func() time.Time { return now },
+		30*time.Second,
+		func(context.Context, auth.Method) (auth.Method, error) {
+			return auth.Method{}, refreshErr
+		},
+	)
+	service := NewStatusService(auth.NewManager(store, refresher, func() time.Time { return now }), config.Settings{
+		OpenAIBaseURL: "https://daemon.example/v1",
+	})
+
+	global, err := service.GetAuthStatus(context.Background(), serverapi.AuthStatusRequest{})
+	if err != nil {
+		t.Fatalf("global GetAuthStatus: %v", err)
+	}
+	if global.Subscription.Applicable {
+		t.Fatalf("global custom-provider subscription = %+v, want not applicable", global.Subscription)
+	}
+
+	provider := serverapi.OpenAIAuthProviderFacts()
+	effective, err := service.GetAuthStatus(context.Background(), serverapi.AuthStatusRequest{Provider: &provider})
+	if err != nil {
+		t.Fatalf("effective GetAuthStatus: %v", err)
+	}
+	if effective.Resolution.Facts == nil ||
+		!reflect.DeepEqual(effective.Resolution.Facts.Provider, provider) ||
+		!effective.Subscription.Applicable ||
+		effective.Subscription.Failure == nil {
+		t.Fatalf("effective subscription response = %+v", effective)
+	}
+}
+
 func TestUsageWindowFactsKeepStableDuplicateDurations(t *testing.T) {
 	resetAt := time.Date(2026, time.August, 9, 5, 0, 0, 0, time.UTC).Unix()
 	windows, err := usageWindowFacts(usagePayload{

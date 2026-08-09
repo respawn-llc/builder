@@ -34,6 +34,10 @@ func SupportsSubscriptionUsage(settings config.Settings) bool {
 	return baseURL == "" || isOfficialChatGPTBaseURL(baseURL)
 }
 
+func SupportsSubscriptionUsageForProvider(provider serverapi.AuthProviderFacts) bool {
+	return provider.Kind == serverapi.AuthProviderKindOpenAI
+}
+
 func providerDisplayOrigin(raw string) *serverapi.AuthProviderDisplayOrigin {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || !parsed.IsAbs() || parsed.Opaque != "" {

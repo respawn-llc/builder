@@ -8,6 +8,7 @@ import (
 	"core/shared/serverapi"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -27,6 +28,19 @@ func (s statusAuthStatusStub) GetAuthStatus(
 	serverapi.AuthStatusRequest,
 ) (serverapi.AuthStatusResponse, error) {
 	return s.response, s.err
+}
+
+type recordingStatusAuthStatusStub struct {
+	request  serverapi.AuthStatusRequest
+	response serverapi.AuthStatusResponse
+}
+
+func (s *recordingStatusAuthStatusStub) GetAuthStatus(
+	_ context.Context,
+	request serverapi.AuthStatusRequest,
+) (serverapi.AuthStatusResponse, error) {
+	s.request = request
+	return s.response, nil
 }
 
 func (s *statusSessionViewStub) GetSessionMainView(_ context.Context, _ serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
@@ -94,6 +108,37 @@ func TestCollectorUsesTypedAuthStatusService(t *testing.T) {
 	}
 	if snapshot.Subscription.Summary != "Pro subscription" {
 		t.Fatalf("subscription summary = %q", snapshot.Subscription.Summary)
+	}
+}
+
+func TestCollectorRequestsEffectiveSessionAuthProvider(t *testing.T) {
+	provider := serverapi.AuthProviderFacts{
+		Kind:       serverapi.AuthProviderKindOpenAICompatible,
+		Identifier: "openai-compatible",
+		DisplayOrigin: &serverapi.AuthProviderDisplayOrigin{
+			Scheme:   "https",
+			Hostname: "session.example",
+		},
+	}
+	authStatus := &recordingStatusAuthStatusStub{
+		response: serverapi.AuthStatusResponse{
+			Resolution: serverapi.KnownAuthStatusResolution(serverapi.AuthStatusFacts{
+				Method:        serverapi.AuthStatusMethodNone,
+				Provider:      provider,
+				EnvPreference: serverapi.AuthStatusEnvPreferenceUnspecified,
+			}, nil),
+		},
+	}
+
+	result := (Collector{}).CollectAuth(context.Background(), Request{
+		AuthStatus:   authStatus,
+		AuthProvider: &provider,
+	}, Snapshot{})
+
+	if authStatus.request.Provider == nil ||
+		!reflect.DeepEqual(*authStatus.request.Provider, provider) ||
+		result.Auth.Provider != "https://session.example" {
+		t.Fatalf("effective provider request/result = %+v / %+v", authStatus.request, result)
 	}
 }
 

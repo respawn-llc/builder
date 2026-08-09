@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"core/shared/config"
 	"core/shared/serverapi"
 )
 
@@ -156,30 +155,6 @@ func TestSubscriptionProjectionPreservesDurationAndDuplicateBuckets(t *testing.T
 	}
 }
 
-func TestAuthStageFromResponseUsesEffectiveSessionProviderSettings(t *testing.T) {
-	plan := "pro"
-	response := serverapi.AuthStatusResponse{
-		Resolution: serverapi.KnownAuthStatusResolution(serverapi.AuthStatusFacts{
-			Method:        serverapi.AuthStatusMethodOAuth,
-			Provider:      serverapi.OpenAIAuthProviderFacts(),
-			EnvPreference: serverapi.AuthStatusEnvPreferencePreferSaved,
-			OAuth:         &serverapi.AuthOAuthFacts{},
-		}, nil),
-		Subscription: serverapi.AuthSubscriptionFacts{
-			Applicable: true,
-			Plan:       &plan,
-		},
-	}
-	effectiveSettings := config.Settings{OpenAIBaseURL: "https://session.example/v1"}
-
-	projected := AuthStageFromResponse(response, &effectiveSettings)
-
-	if projected.Auth.Provider != "https://session.example" ||
-		projected.Subscription.Applicable {
-		t.Fatalf("session-scoped auth projection = %+v", projected)
-	}
-}
-
 func TestUnavailableAuthStageSurfacesRPCFailure(t *testing.T) {
 	result := UnavailableAuthStage(errors.New("connection lost"), nil)
 	if result.Subscription.Summary != "Subscription unavailable: connection lost" ||
@@ -189,8 +164,11 @@ func TestUnavailableAuthStageSurfacesRPCFailure(t *testing.T) {
 }
 
 func TestUnavailableAuthStageKeepsCustomProviderSubscriptionInapplicable(t *testing.T) {
-	effectiveSettings := config.Settings{ProviderOverride: "anthropic"}
-	result := UnavailableAuthStage(errors.New("connection lost"), &effectiveSettings)
+	provider := serverapi.AuthProviderFacts{
+		Kind:       serverapi.AuthProviderKindConfiguredProvider,
+		Identifier: "anthropic",
+	}
+	result := UnavailableAuthStage(errors.New("connection lost"), &provider)
 	if result.Subscription.Applicable || result.Subscription.Summary != "" {
 		t.Fatalf("custom-provider RPC failure projection = %+v", result)
 	}

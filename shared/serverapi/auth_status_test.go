@@ -33,6 +33,20 @@ func TestAuthStatusResponseValidatesKnownAndUnavailableResolution(t *testing.T) 
 	}
 }
 
+func TestAuthStatusRequestValidatesOptionalEffectiveProvider(t *testing.T) {
+	if err := (AuthStatusRequest{}).Validate(); err != nil {
+		t.Fatalf("server-scoped request: %v", err)
+	}
+	provider := OpenAIAuthProviderFacts()
+	if err := (AuthStatusRequest{Provider: &provider}).Validate(); err != nil {
+		t.Fatalf("effective-provider request: %v", err)
+	}
+	invalid := AuthProviderFacts{Kind: AuthProviderKindOpenAI, Identifier: "custom"}
+	if err := (AuthStatusRequest{Provider: &invalid}).Validate(); err == nil {
+		t.Fatal("request accepted invalid effective provider")
+	}
+}
+
 func TestAuthStatusResponseRejectsMethodPayloadMismatch(t *testing.T) {
 	tests := []AuthStatusFacts{
 		{Method: AuthStatusMethodNone, Provider: OpenAIAuthProviderFacts(), EnvPreference: AuthStatusEnvPreferenceUnspecified, OAuth: &AuthOAuthFacts{}},
@@ -158,6 +172,16 @@ func TestAuthStatusProviderDisplayOriginAcceptsIPHostnames(t *testing.T) {
 		if err := authStatusResponseWithDisplayHostname(hostname).Validate(); err != nil {
 			t.Fatalf("display origin hostname %q: %v", hostname, err)
 		}
+	}
+}
+
+func TestAuthStatusProviderDisplayOriginAllowsDefaultPortAbsence(t *testing.T) {
+	response := authStatusResponseWithDisplayHostname("example.com")
+	if err := response.Validate(); err != nil {
+		t.Fatalf("default-port display origin: %v", err)
+	}
+	if response.Resolution.Facts.Provider.DisplayOrigin.Port != nil {
+		t.Fatalf("default-port display origin = %+v, want absent port", response.Resolution.Facts.Provider.DisplayOrigin)
 	}
 }
 

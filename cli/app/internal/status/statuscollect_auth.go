@@ -8,29 +8,21 @@ import (
 	"strings"
 
 	"core/shared/authstatus"
-	"core/shared/config"
 	"core/shared/serverapi"
 )
 
-func AuthStageFromResponse(response serverapi.AuthStatusResponse, effectiveSettings *config.Settings) AuthStageResult {
+func AuthStageFromResponse(response serverapi.AuthStatusResponse, requestedProvider *serverapi.AuthProviderFacts) AuthStageResult {
 	if err := response.Validate(); err != nil {
-		return UnavailableAuthStage(err, effectiveSettings)
+		return UnavailableAuthStage(err, requestedProvider)
 	}
 	resolution := response.Resolution
 	if resolution.Kind == serverapi.AuthStatusResolutionUnavailable {
-		return UnavailableAuthStage(fmt.Errorf("%s", resolution.Failure.Cause), effectiveSettings)
+		return UnavailableAuthStage(fmt.Errorf("%s", resolution.Failure.Cause), requestedProvider)
 	}
 	facts := *resolution.Facts
-	subscription := response.Subscription
-	if effectiveSettings != nil {
-		facts.Provider = authstatus.ProviderFacts(*effectiveSettings)
-		if !authstatus.SupportsSubscriptionUsage(*effectiveSettings) {
-			subscription = serverapi.AuthSubscriptionFacts{}
-		}
-	}
 	result := AuthStageResult{
 		Auth:         authInfoFromFacts(facts, resolution.Failure),
-		Subscription: subscriptionInfoFromFacts(subscription),
+		Subscription: subscriptionInfoFromFacts(response.Subscription),
 	}
 	if resolution.Failure != nil {
 		result.Warning = "auth: " + strings.TrimSpace(resolution.Failure.Cause)
@@ -38,7 +30,7 @@ func AuthStageFromResponse(response serverapi.AuthStatusResponse, effectiveSetti
 	return result
 }
 
-func UnavailableAuthStage(err error, effectiveSettings *config.Settings) AuthStageResult {
+func UnavailableAuthStage(err error, provider *serverapi.AuthProviderFacts) AuthStageResult {
 	cause := strings.TrimSpace(err.Error())
 	result := AuthStageResult{
 		Auth: AuthInfo{
@@ -49,7 +41,7 @@ func UnavailableAuthStage(err error, effectiveSettings *config.Settings) AuthSta
 		},
 		Warning: "auth: " + cause,
 	}
-	if effectiveSettings == nil || authstatus.SupportsSubscriptionUsage(*effectiveSettings) {
+	if provider == nil || authstatus.SupportsSubscriptionUsageForProvider(*provider) {
 		result.Subscription = SubscriptionInfo{
 			Applicable: true,
 			Summary:    "Subscription unavailable: " + cause,

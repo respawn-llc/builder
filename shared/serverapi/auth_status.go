@@ -12,7 +12,9 @@ import (
 	"unicode/utf8"
 )
 
-type AuthStatusRequest struct{}
+type AuthStatusRequest struct {
+	Provider *AuthProviderFacts `json:"provider,omitempty"`
+}
 
 type AuthStatusResponse struct {
 	Resolution   AuthStatusResolution  `json:"resolution"`
@@ -132,6 +134,16 @@ func OpenAIAuthProviderFacts() AuthProviderFacts {
 		Kind:       AuthProviderKindOpenAI,
 		Identifier: "openai",
 	}
+}
+
+func (r AuthStatusRequest) Validate() error {
+	if r.Provider == nil {
+		return nil
+	}
+	if err := r.Provider.validate(); err != nil {
+		return fmt.Errorf("auth status provider: %w", err)
+	}
+	return nil
 }
 
 func (r AuthStatusResponse) Validate() error {
@@ -266,7 +278,10 @@ func (o AuthProviderDisplayOrigin) Validate() error {
 			return errors.New("display origin hostname contains URL syntax")
 		}
 	}
-	if err := validateOptionalAuthString("display origin port", o.Port); err != nil || o.Port == nil {
+	if o.Port == nil {
+		return nil
+	}
+	if err := validateOptionalAuthString("display origin port", o.Port); err != nil {
 		return err
 	}
 	port, err := strconv.Atoi(*o.Port)
