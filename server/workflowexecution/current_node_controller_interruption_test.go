@@ -3,7 +3,6 @@ package workflowexecution
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os/exec"
 	"sync"
 	"testing"
@@ -160,7 +159,7 @@ func TestCurrentNodeControllerTaskInterruptFenceRejectsLifecycleMutationsUntilRe
 	}
 }
 
-func TestCurrentNodeControllerTaskInterruptCancelsOneRunningPreparationBatch(t *testing.T) {
+func TestCurrentNodeControllerTaskInterruptPreservesSiblingPreparation(t *testing.T) {
 	shellPath, err := exec.LookPath("sh")
 	if err != nil {
 		t.Skipf("sh executable unavailable: %v", err)
@@ -218,7 +217,6 @@ func TestCurrentNodeControllerTaskInterruptCancelsOneRunningPreparationBatch(t *
 	}}
 	store.mu.Unlock()
 	preparationStarted := make(chan struct{})
-	finalized := make(chan TaskPreparationFinalization, 1)
 	if _, err := controller.ResumeTaskWithPreparation(
 		context.Background(),
 		running.TaskID,
@@ -231,9 +229,7 @@ func TestCurrentNodeControllerTaskInterruptCancelsOneRunningPreparationBatch(t *
 				return context.Cause(ctx)
 			}
 		}),
-		func(finalization TaskPreparationFinalization) {
-			finalized <- finalization
-		},
+		noOpTaskPreparationFinalizer,
 	); err != nil {
 		t.Fatalf("resume preparing sibling: %v", err)
 	}
@@ -253,294 +249,20 @@ func TestCurrentNodeControllerTaskInterruptCancelsOneRunningPreparationBatch(t *
 			t.Fatalf("interrupt running sibling: %v", err)
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("Task Interrupt did not join the running preparation batch")
+		t.Fatal("Task Interrupt waited for non-selected sibling preparation")
 	}
-	interruption, interrupted := store.interruption(preparing)
-	if !interrupted || interruption.reason != workflow.CurrentNodeInterruptionReasonUserInterrupt ||
-		interruption.detail.SetupRecovery != nil {
-		t.Fatalf("preparing sibling interruption = %+v, %t; want ordinary user interruption", interruption, interrupted)
+	if interruption, interrupted := store.interruption(preparing); interrupted {
+		t.Fatalf("preparing sibling was interrupted: %+v", interruption)
 	}
-	select {
-	case finalization := <-finalized:
-		if finalization.Kind != TaskPreparationCanceled {
-			t.Fatalf("preparation finalization = %+v, want canceled", finalization)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("running preparation did not publish one cancellation terminal")
-	}
+
+	close(preparationRelease)
 	select {
 	case started := <-runner.started:
-		t.Fatalf("canceled preparation admitted Current Node %v", started)
-	default:
-	}
-	if batches := currentNodePreparationBatchesForTest(controller); len(batches) != 0 {
-		t.Fatalf("controller retained preparation ownership after cancellation: %+v", batches)
-	}
-	if snapshot := currentNodeControllerSnapshotForTest(controller); len(snapshot.ExplicitStarts) != 0 ||
-		len(snapshot.Gates) != 0 || len(snapshot.LiveScopes) != 0 {
-		t.Fatalf("controller snapshot after preparation cancellation = %+v", snapshot)
-	}
-}
-
-func TestCurrentNodeControllerShutdownRemovesQueuedPreparationWithoutTerminal(t *testing.T) {
-	const runningBatchCount = explicitAdmissionConcurrency
-	store := &currentNodeControllerStore{}
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
-	controller := newCurrentNodeControllerForTest(t, store, &countingCurrentNodeRunner{}, authority, 1)
-	releaseRunning := make(chan struct{})
-	var releaseOnce sync.Once
-	release := func() {
-		releaseOnce.Do(func() { close(releaseRunning) })
-	}
-	t.Cleanup(func() {
-		release()
-		_ = controller.Close()
-		_ = authority.Close(context.Background())
-	})
-	startedPreparations := make(chan struct{}, runningBatchCount)
-	for index := 0; index < runningBatchCount; index++ {
-		reference := currentNodeReferenceForControllerTest(
-			t,
-			fmt.Sprintf("task-running-preparation-%d", index),
-			"node-agent",
-		)
-		store.mu.Lock()
-		store.started = workflowstore.StartTaskResult{Mutation: workflow.CurrentNodeMutationResult{
-			Created: []workflow.CurrentNode{{
-				Reference:  reference,
-				Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
-			}},
-		}}
-		store.mu.Unlock()
-		if _, err := controller.StartTask(
-			context.Background(),
-			reference.TaskID,
-			testTaskPreparation(func(ctx context.Context) error {
-				startedPreparations <- struct{}{}
-				select {
-				case <-releaseRunning:
-					return nil
-				case <-ctx.Done():
-					return context.Cause(ctx)
-				}
-			}),
-			noOpTaskPreparationFinalizer,
-		); err != nil {
-			t.Fatalf("StartTask running preparation %d: %v", index, err)
-		}
-	}
-	for index := 0; index < runningBatchCount; index++ {
-		select {
-		case <-startedPreparations:
-		case <-time.After(3 * time.Second):
-			t.Fatalf("running preparation %d did not start", index)
-		}
-	}
-
-	queued := currentNodeReferenceForControllerTest(t, "task-queued-preparation", "node-agent")
-	store.mu.Lock()
-	store.started = workflowstore.StartTaskResult{Mutation: workflow.CurrentNodeMutationResult{
-		Created: []workflow.CurrentNode{{
-			Reference:  queued,
-			Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
-		}},
-	}}
-	store.mu.Unlock()
-	queuedStarted := make(chan struct{}, 1)
-	queuedFinalized := make(chan TaskPreparationFinalization, 1)
-	if _, err := controller.StartTask(
-		context.Background(),
-		queued.TaskID,
-		testTaskPreparation(func(context.Context) error {
-			queuedStarted <- struct{}{}
-			return nil
-		}),
-		func(finalization TaskPreparationFinalization) {
-			queuedFinalized <- finalization
-		},
-	); err != nil {
-		t.Fatalf("StartTask queued preparation: %v", err)
-	}
-	preparationBatches := currentNodePreparationBatchesForTest(controller)
-	if len(preparationBatches) != runningBatchCount+1 {
-		t.Fatalf("preparation batches = %+v, want %d running and one queued", preparationBatches, runningBatchCount)
-	}
-	queuedObserved := false
-	for _, batch := range preparationBatches {
-		if batch.TaskID == queued.TaskID {
-			queuedObserved = true
-			if batch.Running {
-				t.Fatal("queued preparation entered running ownership while all explicit slots were occupied")
-			}
-		}
-	}
-	if !queuedObserved {
-		t.Fatal("queued preparation batch is absent from snapshot")
-	}
-
-	if err := controller.Close(); err != nil {
-		t.Fatalf("Close controller: %v", err)
-	}
-	select {
-	case <-queuedStarted:
-		t.Fatal("queued preparation ran before Task Interrupt removed it")
-	default:
-	}
-	select {
-	case terminal := <-queuedFinalized:
-		t.Fatalf("queued preparation published terminal %+v", terminal)
-	default:
-	}
-	for _, batch := range currentNodePreparationBatchesForTest(controller) {
-		if batch.TaskID == queued.TaskID {
-			t.Fatalf("queued preparation remained owned after shutdown: %+v", batch)
-		}
-	}
-	release()
-}
-
-func TestCurrentNodeControllerShutdownCancelsOneRunningFanoutPreparation(t *testing.T) {
-	const branchCount = explicitAdmissionConcurrency + 3
-	taskID := workflow.TaskID("task-shutdown-running-preparation")
-	interrupted := make([]workflow.CurrentNode, 0, branchCount)
-	for index := 0; index < branchCount; index++ {
-		interrupted = append(interrupted, workflow.CurrentNode{
-			Reference: currentNodeReferenceForControllerTest(
-				t,
-				string(taskID),
-				fmt.Sprintf("node-%02d", index),
-			),
-			Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingInterrupted},
-		})
-	}
-	store := &currentNodeControllerStore{interrupted: interrupted}
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
-	controller := newCurrentNodeControllerForTest(t, store, &countingCurrentNodeRunner{}, authority, 1)
-	t.Cleanup(func() {
-		_ = authority.Close(context.Background())
-	})
-	preparationStarted := make(chan struct{})
-	finalized := make(chan TaskPreparationFinalization, 2)
-
-	if _, err := controller.ResumeTaskWithPreparation(
-		context.Background(),
-		taskID,
-		testTaskPreparation(func(ctx context.Context) error {
-			close(preparationStarted)
-			<-ctx.Done()
-			return context.Cause(ctx)
-		}),
-		func(finalization TaskPreparationFinalization) {
-			finalized <- finalization
-		},
-	); err != nil {
-		t.Fatalf("ResumeTaskWithPreparation: %v", err)
-	}
-	select {
-	case <-preparationStarted:
-	case <-time.After(3 * time.Second):
-		t.Fatal("fan-out preparation did not start")
-	}
-	if err := controller.Close(); err != nil {
-		t.Fatalf("Close controller: %v", err)
-	}
-	select {
-	case finalization := <-finalized:
-		if finalization.Kind != TaskPreparationControllerShutDown {
-			t.Fatalf("shutdown finalization = %+v, want controller shutdown", finalization)
+		if !started.Equal(preparing) {
+			t.Fatalf("started Current Node = %v, want preserved sibling %v", started, preparing)
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("shutdown did not publish one preparation terminal")
-	}
-	select {
-	case duplicate := <-finalized:
-		t.Fatalf("shutdown published duplicate terminal %+v", duplicate)
-	default:
-	}
-	if batches := currentNodePreparationBatchesForTest(controller); len(batches) != 0 {
-		t.Fatalf("controller retained preparation ownership after shutdown: %+v", batches)
-	}
-	snapshot := currentNodeControllerSnapshotForTest(controller)
-	if len(snapshot.ExplicitStarts) != 0 || len(snapshot.Gates) != 0 || len(snapshot.LiveScopes) != 0 {
-		t.Fatalf("controller leaked ownership after shutdown: %+v", snapshot)
-	}
-}
-
-func TestCurrentNodeControllerShutdownCannotInterleaveTargetCommitAndBatchHandoff(t *testing.T) {
-	reference := currentNodeReferenceForControllerTest(t, "task-shutdown-commit-boundary", "node-agent")
-	store := &currentNodeControllerStore{started: workflowstore.StartTaskResult{Mutation: workflow.CurrentNodeMutationResult{
-		Created: []workflow.CurrentNode{{
-			Reference:  reference,
-			Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
-		}},
-	}}}
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
-	controller := newCurrentNodeControllerForTest(t, store, &countingCurrentNodeRunner{}, authority, 1)
-	t.Cleanup(func() {
-		_ = controller.Close()
-		_ = authority.Close(context.Background())
-	})
-	commitEntered := make(chan struct{})
-	commitRelease := make(chan struct{})
-	finalized := make(chan TaskPreparationFinalization, 2)
-
-	if _, err := controller.StartTask(
-		context.Background(),
-		reference.TaskID,
-		TaskStartPreparation{
-			Prepare: func(context.Context) error { return nil },
-			Commit: func(ctx context.Context) error {
-				close(commitEntered)
-				select {
-				case <-commitRelease:
-					return nil
-				case <-ctx.Done():
-					return context.Cause(ctx)
-				}
-			},
-		},
-		func(finalization TaskPreparationFinalization) {
-			finalized <- finalization
-		},
-	); err != nil {
-		t.Fatalf("StartTask: %v", err)
-	}
-	select {
-	case <-commitEntered:
-	case <-time.After(3 * time.Second):
-		t.Fatal("target commit did not enter the mutation boundary")
-	}
-	closeReturned := make(chan error, 1)
-	go func() {
-		closeReturned <- controller.Close()
-	}()
-	select {
-	case err := <-closeReturned:
-		t.Fatalf("Close crossed an active target commit: %v", err)
-	case <-time.After(75 * time.Millisecond):
-	}
-
-	close(commitRelease)
-	select {
-	case finalization := <-finalized:
-		if finalization.Kind != TaskPreparationHandedOff {
-			t.Fatalf("commit-owner finalization = %+v, want successful handoff", finalization)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("target commit owner did not finalize")
-	}
-	select {
-	case err := <-closeReturned:
-		if err != nil {
-			t.Fatalf("Close after target commit handoff: %v", err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("Close did not continue after target commit handoff")
-	}
-	select {
-	case duplicate := <-finalized:
-		t.Fatalf("shutdown published a second terminal after handoff: %+v", duplicate)
-	default:
+		t.Fatal("preserved sibling did not start after Task Interrupt")
 	}
 }
 

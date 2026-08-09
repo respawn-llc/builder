@@ -285,6 +285,91 @@ func hasAutomaticCurrentNodeIntent(snapshot currentNodeExecutionSnapshot, refere
 	return false
 }
 
+type currentNodeAdmissionGateSnapshot struct {
+	CurrentNode workflow.CurrentNodeReference
+	ScopeID     runtimeids.ExecutionScopeID
+	Automatic   bool
+}
+
+type currentNodeLiveScopeSnapshot struct {
+	CurrentNode workflow.CurrentNodeReference
+	ScopeID     runtimeids.ExecutionScopeID
+	Automatic   bool
+}
+
+type currentNodeHeldIntentSnapshot struct {
+	CurrentNode workflow.CurrentNodeReference
+	Automatic   bool
+}
+
+type currentNodeExplicitStartSnapshot struct {
+	CurrentNode workflow.CurrentNodeReference
+}
+
+type currentNodeExecutionSnapshot struct {
+	AutomaticIntents []CurrentNodeAutomaticIntent
+	ExplicitStarts   []currentNodeExplicitStartSnapshot
+	HeldIntents      []currentNodeHeldIntentSnapshot
+	Gates            []currentNodeAdmissionGateSnapshot
+	LiveScopes       []currentNodeLiveScopeSnapshot
+}
+
+func currentNodeControllerSnapshotForTest(c *CurrentNodeController) currentNodeExecutionSnapshot {
+	if c == nil {
+		return currentNodeExecutionSnapshot{}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	snapshot := currentNodeExecutionSnapshot{
+		AutomaticIntents: make([]CurrentNodeAutomaticIntent, 0, c.automaticQueue.len()+len(c.automaticReservations)),
+		ExplicitStarts:   make([]currentNodeExplicitStartSnapshot, 0, len(c.explicitQueue)+len(c.explicitReservations)),
+		Gates:            make([]currentNodeAdmissionGateSnapshot, 0, len(c.gates)),
+		LiveScopes:       make([]currentNodeLiveScopeSnapshot, 0, len(c.live)),
+	}
+	for entry := c.automaticQueue.first; entry != nil; entry = entry.globalNext {
+		start := entry.start
+		snapshot.AutomaticIntents = append(snapshot.AutomaticIntents, CurrentNodeAutomaticIntent{
+			CurrentNode: start.reference,
+			NodeKind:    start.policy.nodeKind(),
+		})
+	}
+	for _, start := range c.automaticReservations {
+		snapshot.AutomaticIntents = append(snapshot.AutomaticIntents, CurrentNodeAutomaticIntent{
+			CurrentNode: start.reference,
+			NodeKind:    start.policy.nodeKind(),
+		})
+	}
+	for _, start := range c.explicitQueue {
+		snapshot.ExplicitStarts = append(snapshot.ExplicitStarts, currentNodeExplicitStartSnapshot{CurrentNode: start.reference})
+	}
+	for _, start := range c.explicitReservations {
+		snapshot.ExplicitStarts = append(snapshot.ExplicitStarts, currentNodeExplicitStartSnapshot{CurrentNode: start.reference})
+	}
+	for _, gate := range c.gates {
+		snapshot.Gates = append(snapshot.Gates, currentNodeAdmissionGateSnapshot{
+			CurrentNode: gate.reference,
+			ScopeID:     gate.lease.ScopeID(),
+			Automatic:   gate.policy.isAutomatic(),
+		})
+	}
+	for scopeID, live := range c.live {
+		snapshot.LiveScopes = append(snapshot.LiveScopes, currentNodeLiveScopeSnapshot{
+			CurrentNode: live.reference,
+			ScopeID:     scopeID,
+			Automatic:   live.policy.isAutomatic(),
+		})
+	}
+	for _, starts := range c.heldStarts {
+		for _, start := range starts {
+			snapshot.HeldIntents = append(snapshot.HeldIntents, currentNodeHeldIntentSnapshot{
+				CurrentNode: start.reference,
+				Automatic:   start.policy.isAutomatic(),
+			})
+		}
+	}
+	return snapshot
+}
+
 var currentNodeControllerTestWorkflowID = func() runtimeids.WorkflowID {
 	workflowID, err := runtimeids.ParseWorkflowID("550e8400-e29b-41d4-a716-446655440201")
 	if err != nil {
@@ -294,88 +379,39 @@ var currentNodeControllerTestWorkflowID = func() runtimeids.WorkflowID {
 }()
 
 type currentNodeControllerStore struct {
-	mu                     sync.Mutex
-	started                workflowstore.StartTaskResult
-	interrupted            []workflow.CurrentNode
-	pendingApproval        workflow.PendingApproval
-	approvalApplied        workflowstore.PendingApprovalApplyResult
-	manualMoved            workflowstore.ManualMoveResult
-	admitted               []workflow.CurrentNodeReference
-	resumed                []workflow.CurrentNodeReference
-	resumeErrors           map[workflow.CurrentNodeReferenceKey]error
-	resumeClassifications  []workflowstore.CurrentNodeResumeClassification
-	interruptions          map[workflow.CurrentNodeReferenceKey]currentNodeInterruptionRecord
-	interruptionCalls      map[workflow.CurrentNodeReferenceKey]int
-	interruptionErrors     map[workflow.CurrentNodeReferenceKey]error
-	recovered              []workflow.CurrentNodeReference
-	completion             workflowstore.CurrentNodeCompletionResult
-	completions            int
-	startTaskStarted       chan struct{}
-	startTaskRelease       chan struct{}
-	startTaskOnce          sync.Once
-	completionStarted      chan struct{}
-	completionRelease      chan struct{}
-	completionOnce         sync.Once
-	bindingErr             error
-	bindings               []currentNodeSessionBindingCall
-	interruptStarted       chan struct{}
-	interruptRelease       chan struct{}
-	interruptOnce          sync.Once
-	interruptAfterRecord   *workflow.CurrentNodeReference
-	interruptRecorded      chan struct{}
-	interruptRecordRelease chan struct{}
-	interruptRecordOnce    sync.Once
-	idleResolved           *workflow.CurrentNode
+	mu                    sync.Mutex
+	started               workflowstore.StartTaskResult
+	interrupted           []workflow.CurrentNode
+	pendingApproval       workflow.PendingApproval
+	approvalApplied       workflowstore.PendingApprovalApplyResult
+	manualMoved           workflowstore.ManualMoveResult
+	admitted              []workflow.CurrentNodeReference
+	resumed               []workflow.CurrentNodeReference
+	resumeErrors          map[workflow.CurrentNodeReferenceKey]error
+	resumeClassifications []workflowstore.CurrentNodeResumeClassification
+	interruptions         map[workflow.CurrentNodeReferenceKey]currentNodeInterruptionRecord
+	interruptionCalls     map[workflow.CurrentNodeReferenceKey]int
+	recovered             []workflow.CurrentNodeReference
+	completion            workflowstore.CurrentNodeCompletionResult
+	completions           int
+	startTaskStarted      chan struct{}
+	startTaskRelease      chan struct{}
+	startTaskOnce         sync.Once
+	completionStarted     chan struct{}
+	completionRelease     chan struct{}
+	completionOnce        sync.Once
+	bindingErr            error
+	bindings              []currentNodeSessionBindingCall
+	interruptStarted      chan struct{}
+	interruptRelease      chan struct{}
+	interruptOnce         sync.Once
+	idleResolved          *workflow.CurrentNode
 }
 
 type currentNodeAttentionRecorder struct {
 	mu          sync.Mutex
 	pending     []workflow.CurrentNodeReference
 	resolutions []workflowstore.TaskAttentionResolution
-}
-
-type blockingTaskResolutionAttention struct {
-	resolutionStarted chan struct{}
-	resolutionRelease chan struct{}
-	resolutionOnce    sync.Once
-}
-
-func (*blockingTaskResolutionAttention) PublishPendingInterruptedCurrentNode(context.Context, workflow.CurrentNodeReference) {
-}
-
-func (a *blockingTaskResolutionAttention) FinalizeTaskResolution(workflowstore.TaskAttentionResolution) {
-	a.resolutionOnce.Do(func() { close(a.resolutionStarted) })
-	<-a.resolutionRelease
-}
-
-type currentNodePreparationBatchSnapshotForTest struct {
-	TaskID       workflow.TaskID
-	CurrentNodes []workflow.CurrentNodeReference
-	Running      bool
-}
-
-func currentNodePreparationBatchesForTest(controller *CurrentNodeController) []currentNodePreparationBatchSnapshotForTest {
-	controller.mu.Lock()
-	defer controller.mu.Unlock()
-	batches := make(
-		[]currentNodePreparationBatchSnapshotForTest,
-		0,
-		len(controller.preparationQueue)+len(controller.preparationRunning),
-	)
-	for _, batch := range controller.preparationQueue {
-		batches = append(batches, currentNodePreparationBatchSnapshotForTest{
-			TaskID:       batch.taskID,
-			CurrentNodes: taskPreparationReferences(batch),
-		})
-	}
-	for _, batch := range controller.preparationRunning {
-		batches = append(batches, currentNodePreparationBatchSnapshotForTest{
-			TaskID:       batch.taskID,
-			CurrentNodes: taskPreparationReferences(batch),
-			Running:      true,
-		})
-	}
-	return batches
 }
 
 func (r *currentNodeAttentionRecorder) PublishPendingInterruptedCurrentNode(_ context.Context, reference workflow.CurrentNodeReference) {
@@ -394,12 +430,6 @@ func (r *currentNodeAttentionRecorder) pendingCount() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return len(r.pending)
-}
-
-func (r *currentNodeAttentionRecorder) pendingReferences() []workflow.CurrentNodeReference {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return append([]workflow.CurrentNodeReference(nil), r.pending...)
 }
 
 func (r *currentNodeAttentionRecorder) resolvedInterruptions() []workflowstore.InterruptedCurrentNodeAttentionProjection {
@@ -510,16 +540,13 @@ func (s *currentNodeControllerStore) ResumeCurrentNode(_ context.Context, refere
 	}, true, nil
 }
 
-func (s *currentNodeControllerStore) InterruptAdmittedCurrentNode(ctx context.Context, reference workflow.CurrentNodeReference, reason workflow.CurrentNodeInterruptionReason, detail workflow.CurrentNodeInterruptionDetail) error {
+func (s *currentNodeControllerStore) InterruptAdmittedCurrentNode(_ context.Context, reference workflow.CurrentNodeReference, reason workflow.CurrentNodeInterruptionReason, detail workflow.CurrentNodeInterruptionDetail) error {
 	key, err := reference.Key()
 	if err != nil {
 		return err
 	}
 	s.mu.Lock()
-	if err := s.interruptionErrors[key]; err != nil {
-		s.mu.Unlock()
-		return err
-	}
+	defer s.mu.Unlock()
 	if s.interruptions == nil {
 		s.interruptions = make(map[workflow.CurrentNodeReferenceKey]currentNodeInterruptionRecord)
 	}
@@ -528,21 +555,6 @@ func (s *currentNodeControllerStore) InterruptAdmittedCurrentNode(ctx context.Co
 	}
 	s.interruptions[key] = currentNodeInterruptionRecord{reason: reason, detail: detail}
 	s.interruptionCalls[key]++
-	blockAfterRecord := s.interruptAfterRecord != nil &&
-		reference.Equal(*s.interruptAfterRecord) &&
-		s.interruptRecorded != nil &&
-		s.interruptRecordRelease != nil
-	if blockAfterRecord {
-		s.interruptRecordOnce.Do(func() { close(s.interruptRecorded) })
-	}
-	s.mu.Unlock()
-	if blockAfterRecord {
-		select {
-		case <-s.interruptRecordRelease:
-		case <-ctx.Done():
-			return context.Cause(ctx)
-		}
-	}
 	return nil
 }
 

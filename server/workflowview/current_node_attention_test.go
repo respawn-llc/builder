@@ -11,7 +11,6 @@ import (
 	"core/server/workflowstore"
 	"core/shared/clientui"
 	"core/shared/serverapi"
-	"github.com/google/uuid"
 )
 
 func TestAttentionProjectsPendingApprovalAndInterruptedCurrentNode(t *testing.T) {
@@ -90,63 +89,6 @@ func TestAttentionProjectsPendingApprovalAndInterruptedCurrentNode(t *testing.T)
 	}
 	if len(taskInterruptions.Items) != 1 || taskInterruptions.Items[0].ID != interrupted.ID {
 		t.Fatalf("task interrupted attention = %+v, want exact Current Node attention", taskInterruptions.Items)
-	}
-}
-
-func TestAttentionProjectsTypedSetupRecoveryIdentity(t *testing.T) {
-	fixture := newCurrentNodeViewFixture(t, false)
-	started := fixture.startTask(t, "Setup recovery")
-	setupOperationID := serverapi.NewWorktreeSetupOperationID()
-	setupUUID, err := uuid.Parse(setupOperationID.String())
-	if err != nil {
-		t.Fatalf("parse setup operation id: %v", err)
-	}
-	scriptPath := "scripts/setup.sh"
-	if err := fixture.store.InterruptCurrentNode(
-		fixture.ctx,
-		started.currentNode,
-		workflow.CurrentNodeInterruptionReason("setup_failed"),
-		workflow.CurrentNodeInterruptionDetail{
-			Code: "workflow_setup_recovery",
-			SetupRecovery: &workflow.CurrentNodeSetupRecoveryDetail{
-				SetupOperationID: setupUUID,
-				Cause:            workflow.CurrentNodeSetupRecoveryCauseOperational,
-				Diagnostic:       "setup failed after retry",
-				ScriptPath:       &scriptPath,
-				SetupRequirement: workflow.CurrentNodeSetupRequirementRequired,
-				ExecutionTarget: workflow.ExecutionTargetSelection{
-					Mode: workflow.ExecutionTargetModeHead,
-				},
-				RetainedWorktree: &workflow.CurrentNodeRetainedWorktree{
-					WorktreeID: "worktree-1",
-					Root:       "/repo/worktree-1",
-				},
-			},
-		},
-	); err != nil {
-		t.Fatalf("InterruptCurrentNode: %v", err)
-	}
-
-	response, err := fixture.attention(t).ListTask(
-		fixture.ctx,
-		serverapi.WorkflowTaskAttentionListRequest{TaskID: string(started.task.ID)},
-	)
-	if err != nil {
-		t.Fatalf("Attention.ListTask: %v", err)
-	}
-	if len(response.Items) != 1 ||
-		response.Items[0].CurrentNode == nil ||
-		response.Items[0].CurrentNode.NodeID != string(started.currentNode.NodeID) ||
-		response.Items[0].SetupOperationID == nil ||
-		*response.Items[0].SetupOperationID != setupOperationID {
-		t.Fatalf("setup recovery attention = %+v", response.Items)
-	}
-	detail, err := fixture.detail.GetTask(fixture.ctx, string(started.task.ID))
-	if err != nil {
-		t.Fatalf("TaskDetail.GetTask: %v", err)
-	}
-	if detail.Actions.CanResume {
-		t.Fatalf("setup recovery Task actions = %+v, want ordinary Resume suppressed", detail.Actions)
 	}
 }
 

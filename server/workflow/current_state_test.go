@@ -1,14 +1,12 @@
 package workflow_test
 
 import (
-	"encoding/json"
 	"errors"
 	"testing"
 	"time"
 
 	"core/server/workflow"
 	"core/shared/runtimeids"
-	"github.com/google/uuid"
 )
 
 func TestCurrentNodeInterruptionDetailOwnsPersistedDiagnosticField(t *testing.T) {
@@ -27,105 +25,6 @@ func TestCurrentNodeInterruptionDetailOwnsPersistedDiagnosticField(t *testing.T)
 	diagnostic = legacy.Diagnostic()
 	if diagnostic == nil || *diagnostic != "legacy failure" {
 		t.Fatalf("legacy diagnostic = %v", diagnostic)
-	}
-}
-
-func TestCurrentNodeInterruptionDetailCarriesTypedSetupRecovery(t *testing.T) {
-	setupOperationID := uuid.New()
-	scriptPath := "scripts/setup.sh"
-	recovery := workflow.CurrentNodeSetupRecoveryDetail{
-		SetupOperationID: setupOperationID,
-		Cause:            workflow.CurrentNodeSetupRecoveryCauseProcessExit,
-		Diagnostic:       "setup failed after retry",
-		ScriptPath:       &scriptPath,
-		SetupRequirement: workflow.CurrentNodeSetupRequirementRequired,
-		ExecutionTarget: workflow.ExecutionTargetSelection{
-			Mode: workflow.ExecutionTargetModeHead,
-		},
-		RetainedWorktree: &workflow.CurrentNodeRetainedWorktree{
-			WorktreeID: "worktree-1",
-			Root:       "/repo/worktree-1",
-		},
-	}
-	if err := recovery.Validate(); err != nil {
-		t.Fatalf("Validate: %v", err)
-	}
-	detail := workflow.CurrentNodeInterruptionDetail{
-		Code:          "workflow_setup_recovery",
-		SetupRecovery: &recovery,
-	}
-	diagnostic := detail.Diagnostic()
-	if diagnostic == nil || *diagnostic != recovery.Diagnostic {
-		t.Fatalf("derived setup recovery diagnostic = %v, want %q", diagnostic, recovery.Diagnostic)
-	}
-	duplicated := detail
-	duplicated.Fields = map[string]string{
-		workflow.CurrentNodeInterruptionDiagnosticField: "contradictory generic diagnostic",
-	}
-	if err := duplicated.Validate(); err == nil {
-		t.Fatal("setup recovery with a duplicated generic diagnostic validated")
-	}
-	raw, err := json.Marshal(detail)
-	if err != nil {
-		t.Fatalf("marshal interruption detail: %v", err)
-	}
-	var decoded workflow.CurrentNodeInterruptionDetail
-	if err := json.Unmarshal(raw, &decoded); err != nil {
-		t.Fatalf("unmarshal interruption detail: %v", err)
-	}
-	if decoded.SetupRecovery == nil ||
-		decoded.SetupRecovery.SetupOperationID != setupOperationID ||
-		decoded.SetupRecovery.ExecutionTarget.Mode != workflow.ExecutionTargetModeHead ||
-		decoded.SetupRecovery.ScriptPath == nil ||
-		*decoded.SetupRecovery.ScriptPath != scriptPath ||
-		decoded.SetupRecovery.RetainedWorktree == nil ||
-		decoded.SetupRecovery.RetainedWorktree.Root != recovery.RetainedWorktree.Root {
-		t.Fatalf("decoded setup recovery = %+v, want %+v", decoded.SetupRecovery, recovery)
-	}
-}
-
-func TestCurrentNodeSetupRecoveryRequiresExecutionTargetSelection(t *testing.T) {
-	recovery := workflow.CurrentNodeSetupRecoveryDetail{
-		SetupOperationID: uuid.New(),
-		Cause:            workflow.CurrentNodeSetupRecoveryCauseTargetPreparation,
-		Diagnostic:       "target preparation failed",
-		SetupRequirement: workflow.CurrentNodeSetupRequirementRequired,
-	}
-	if err := recovery.Validate(); err == nil {
-		t.Fatal("setup recovery without the failed execution target selection validated")
-	}
-}
-
-func TestCurrentNodeSetupRecoveryAllowsTargetPreparationWithoutRetainedWorktree(t *testing.T) {
-	setupOperationID := uuid.New()
-	recovery := workflow.CurrentNodeSetupRecoveryDetail{
-		SetupOperationID: setupOperationID,
-		Cause:            workflow.CurrentNodeSetupRecoveryCauseTargetPreparation,
-		Diagnostic:       "target resolution failed",
-		SetupRequirement: workflow.CurrentNodeSetupRequirementRequired,
-		ExecutionTarget: workflow.ExecutionTargetSelection{
-			Mode: workflow.ExecutionTargetModeDefaultBranch,
-		},
-	}
-	if err := recovery.Validate(); err != nil {
-		t.Fatalf("Validate target-preparation recovery without topology: %v", err)
-	}
-	raw, err := json.Marshal(workflow.CurrentNodeInterruptionDetail{
-		Code:          "workflow_target_preparation_failed",
-		SetupRecovery: &recovery,
-	})
-	if err != nil {
-		t.Fatalf("marshal interruption detail: %v", err)
-	}
-	decoded, err := workflow.DecodeCurrentNodeInterruptionDetail(string(raw))
-	if err != nil {
-		t.Fatalf("DecodeCurrentNodeInterruptionDetail: %v", err)
-	}
-	if decoded.SetupRecovery == nil ||
-		decoded.SetupRecovery.SetupOperationID != setupOperationID ||
-		decoded.SetupRecovery.Cause != workflow.CurrentNodeSetupRecoveryCauseTargetPreparation ||
-		decoded.SetupRecovery.RetainedWorktree != nil {
-		t.Fatalf("decoded target-preparation recovery = %+v", decoded.SetupRecovery)
 	}
 }
 
