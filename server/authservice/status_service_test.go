@@ -161,14 +161,14 @@ func TestStatusServicePublishesOnlySafeAPIKeyFacts(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			service := NewStatusService(auth.NewManager(auth.NewMemoryStore(auth.State{
 				Method: auth.Method{Type: auth.MethodAPIKey, APIKey: &auth.APIKeyMethod{Key: test.key}},
-			}), nil, time.Now), config.Settings{ProviderOverride: "internal-openai"})
+			}), nil, time.Now), config.Settings{ProviderOverride: "anthropic"})
 
 			response, err := service.GetAuthStatus(context.Background(), serverapi.AuthStatusRequest{})
 			if err != nil {
 				t.Fatalf("GetAuthStatus: %v", err)
 			}
 			facts := response.Resolution.Facts
-			if facts == nil || facts.APIKey == nil || facts.Provider.Identifier != "internal-openai" {
+			if facts == nil || facts.APIKey == nil || facts.Provider.Identifier != "anthropic" {
 				t.Fatalf("facts = %+v", facts)
 			}
 			if !reflect.DeepEqual(facts.APIKey.Suffix, test.wantSuffix) {
@@ -218,6 +218,64 @@ func TestStatusServiceUsesRequestedEffectiveProviderForSubscription(t *testing.T
 		!effective.Subscription.Applicable ||
 		effective.Subscription.Failure == nil {
 		t.Fatalf("effective subscription response = %+v", effective)
+	}
+}
+
+func TestStatusServiceSkipsSubscriptionUsageWhenRequested(t *testing.T) {
+	now := time.Date(2026, time.August, 9, 11, 0, 0, 0, time.UTC)
+	service := NewStatusService(auth.NewManager(auth.NewMemoryStore(auth.State{
+		Method: auth.Method{Type: auth.MethodOAuth, OAuth: &auth.OAuthMethod{
+			AccessToken: "access-token",
+			TokenType:   "Bearer",
+			Expiry:      now.Add(time.Hour),
+		}},
+	}), nil, func() time.Time { return now }), config.Settings{})
+
+	response, err := service.GetAuthStatus(context.Background(), serverapi.AuthStatusRequest{
+		SkipSubscriptionUsage: true,
+	})
+	if err != nil {
+		t.Fatalf("GetAuthStatus: %v", err)
+	}
+	if response.Resolution.Facts == nil ||
+		response.Resolution.Facts.Method != serverapi.AuthStatusMethodOAuth ||
+		response.Subscription.Applicable {
+		t.Fatalf("method-only auth status = %+v", response)
+	}
+}
+
+func TestStatusServiceUsesCanonicalRuntimeProviderResolution(t *testing.T) {
+	tests := []struct {
+		name     string
+		settings config.Settings
+		wantKind serverapi.AuthProviderKind
+		wantID   string
+	}{
+		{
+			name:     "explicit OpenAI provider",
+			settings: config.Settings{ProviderOverride: "openai"},
+			wantKind: serverapi.AuthProviderKindOpenAI,
+			wantID:   "openai",
+		},
+		{
+			name:     "model-inferred provider",
+			settings: config.Settings{Model: "claude-3-7-sonnet"},
+			wantKind: serverapi.AuthProviderKindConfiguredProvider,
+			wantID:   "anthropic",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			service := NewStatusService(nil, test.settings)
+			response, err := service.GetAuthStatus(context.Background(), serverapi.AuthStatusRequest{})
+			if err != nil {
+				t.Fatalf("GetAuthStatus: %v", err)
+			}
+			provider := response.Resolution.Facts.Provider
+			if provider.Kind != test.wantKind || provider.Identifier != test.wantID {
+				t.Fatalf("provider = %+v, want kind %q identifier %q", provider, test.wantKind, test.wantID)
+			}
+		})
 	}
 }
 

@@ -21,10 +21,12 @@ type staticAuthStatusClient struct {
 	response serverapi.AuthStatusResponse
 	err      error
 	calls    int
+	request  serverapi.AuthStatusRequest
 }
 
-func (c *staticAuthStatusClient) GetAuthStatus(context.Context, serverapi.AuthStatusRequest) (serverapi.AuthStatusResponse, error) {
+func (c *staticAuthStatusClient) GetAuthStatus(_ context.Context, request serverapi.AuthStatusRequest) (serverapi.AuthStatusResponse, error) {
 	c.calls++
+	c.request = request
 	return c.response, c.err
 }
 

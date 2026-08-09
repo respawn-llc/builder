@@ -140,8 +140,9 @@ func TestSlashCommandPickerProjectsAuthCommand(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			client := &staticAuthStatusClient{response: authStatusResponse(tc.method)}
 			m := newProjectedStaticUIModel(WithUIStatusConfig(uiStatusConfig{
-				AuthStatus: &staticAuthStatusClient{response: authStatusResponse(tc.method)},
+				AuthStatus: client,
 			}))
 			testSetMainInput(m, "/")
 			refreshSlashCommandFilterForTest(t, m)
@@ -152,6 +153,9 @@ func TestSlashCommandPickerProjectsAuthCommand(t *testing.T) {
 			}
 			if m.authSlashCommand != tc.wantTyped {
 				t.Fatalf("typed auth slash command = %v, want %v", m.authSlashCommand, tc.wantTyped)
+			}
+			if !client.request.SkipSubscriptionUsage {
+				t.Fatalf("slash auth request = %+v, want subscription usage skipped", client.request)
 			}
 			if slashPickerContainsCommand(state, tc.hidden) || slashPickerContainsCommand(state, "fast") {
 				t.Fatalf("unexpected gated command in slash picker: %+v", slashPickerCommandNames(state))

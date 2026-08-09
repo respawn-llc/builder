@@ -13,7 +13,8 @@ import (
 )
 
 type AuthStatusRequest struct {
-	Provider *AuthProviderFacts `json:"provider,omitempty"`
+	Provider              *AuthProviderFacts `json:"provider,omitempty"`
+	SkipSubscriptionUsage bool               `json:"skip_subscription_usage,omitempty"`
 }
 
 type AuthStatusResponse struct {

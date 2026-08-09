@@ -8,34 +8,34 @@ import (
 	"core/shared/serverapi"
 )
 
-func ProviderFacts(settings config.Settings) serverapi.AuthProviderFacts {
-	if identifier := strings.TrimSpace(settings.ProviderOverride); identifier != "" {
+func ProviderFacts(providerID string, isOpenAIFirstParty bool, settings config.Settings) serverapi.AuthProviderFacts {
+	providerID = strings.TrimSpace(providerID)
+	if isOpenAIFirstParty {
+		return serverapi.OpenAIAuthProviderFacts()
+	}
+	if providerID != "openai-compatible" {
 		return serverapi.AuthProviderFacts{
 			Kind:       serverapi.AuthProviderKindConfiguredProvider,
-			Identifier: identifier,
+			Identifier: providerID,
 		}
-	}
-	baseURL := strings.TrimSpace(settings.OpenAIBaseURL)
-	if baseURL == "" || isOfficialChatGPTBaseURL(baseURL) {
-		return serverapi.OpenAIAuthProviderFacts()
 	}
 	return serverapi.AuthProviderFacts{
 		Kind:          serverapi.AuthProviderKindOpenAICompatible,
 		Identifier:    "openai-compatible",
-		DisplayOrigin: providerDisplayOrigin(baseURL),
+		DisplayOrigin: providerDisplayOrigin(settings.OpenAIBaseURL),
 	}
-}
-
-func SupportsSubscriptionUsage(settings config.Settings) bool {
-	if strings.TrimSpace(settings.ProviderOverride) != "" {
-		return false
-	}
-	baseURL := strings.TrimSpace(settings.OpenAIBaseURL)
-	return baseURL == "" || isOfficialChatGPTBaseURL(baseURL)
 }
 
 func SupportsSubscriptionUsageForProvider(provider serverapi.AuthProviderFacts) bool {
 	return provider.Kind == serverapi.AuthProviderKindOpenAI
+}
+
+func SupportsSubscriptionUsage(settings config.Settings, isOpenAIFirstParty bool) bool {
+	if !isOpenAIFirstParty {
+		return false
+	}
+	baseURL := strings.TrimSpace(settings.OpenAIBaseURL)
+	return baseURL == "" || isOfficialSubscriptionBaseURL(baseURL)
 }
 
 func providerDisplayOrigin(raw string) *serverapi.AuthProviderDisplayOrigin {
@@ -61,7 +61,7 @@ func providerDisplayOrigin(raw string) *serverapi.AuthProviderDisplayOrigin {
 	return origin
 }
 
-func isOfficialChatGPTBaseURL(raw string) bool {
+func isOfficialSubscriptionBaseURL(raw string) bool {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil ||
 		!parsed.IsAbs() ||
@@ -73,9 +73,12 @@ func isOfficialChatGPTBaseURL(raw string) bool {
 		parsed.Fragment != "" {
 		return false
 	}
-	hostname := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
-	if hostname != "chatgpt.com" && hostname != "chat.openai.com" {
+	switch strings.ToLower(strings.TrimSpace(parsed.Hostname())) {
+	case "chatgpt.com", "chat.openai.com":
+		return parsed.Path == "" || parsed.Path == "/" || parsed.Path == "/backend-api"
+	case "api.openai.com":
+		return parsed.Path == "" || parsed.Path == "/" || parsed.Path == "/v1"
+	default:
 		return false
 	}
-	return parsed.Path == "" || parsed.Path == "/" || parsed.Path == "/backend-api"
 }

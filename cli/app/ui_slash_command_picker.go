@@ -174,7 +174,7 @@ func (m *uiModel) requestAuthSlashCommandRefresh() tea.Cmd {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), statusRefreshTimeout)
 		defer cancel()
-		response, err := loader.GetAuthStatus(ctx, serverapi.AuthStatusRequest{})
+		response, err := loader.GetAuthStatus(ctx, serverapi.AuthStatusRequest{SkipSubscriptionUsage: true})
 		if err != nil {
 			return authSlashCommandRefreshedMsg{token: token, generation: generation, err: err}
 		}

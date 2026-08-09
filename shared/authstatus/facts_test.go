@@ -9,7 +9,7 @@ import (
 )
 
 func TestProviderFactsDropsCredentialBearingURLComponents(t *testing.T) {
-	facts := ProviderFacts(config.Settings{
+	facts := ProviderFacts("openai-compatible", false, config.Settings{
 		OpenAIBaseURL: "https://user:secret@example.com:8443/v1/key?token=secret#fragment",
 	})
 	want := &serverapi.AuthProviderDisplayOrigin{
@@ -28,32 +28,56 @@ func TestProviderFactsDropsCredentialBearingURLComponents(t *testing.T) {
 		"https://example.com:0",
 		"https://example.com:65536",
 	} {
-		if got := ProviderFacts(config.Settings{OpenAIBaseURL: raw}).DisplayOrigin; got != nil {
+		if got := ProviderFacts("openai-compatible", false, config.Settings{OpenAIBaseURL: raw}).DisplayOrigin; got != nil {
 			t.Fatalf("display origin for %q = %+v, want nil", raw, got)
 		}
 	}
 }
 
-func TestSupportsSubscriptionUsageUsesEffectiveProviderSettings(t *testing.T) {
+func TestProviderFactsProjectsCanonicalRuntimeCapabilities(t *testing.T) {
 	tests := []struct {
-		name     string
-		settings config.Settings
-		want     bool
+		name               string
+		providerID         string
+		isOpenAIFirstParty bool
+		wantKind           serverapi.AuthProviderKind
+		wantIdentifier     string
 	}{
-		{name: "default", want: true},
-		{name: "ChatGPT", settings: config.Settings{OpenAIBaseURL: "https://chatgpt.com/backend-api"}, want: true},
-		{name: "ChatGPT root", settings: config.Settings{OpenAIBaseURL: "https://chat.openai.com/"}, want: true},
-		{name: "configured provider", settings: config.Settings{ProviderOverride: "anthropic"}},
-		{name: "compatible endpoint", settings: config.Settings{OpenAIBaseURL: "https://example.com/v1"}},
-		{name: "insecure ChatGPT transport", settings: config.Settings{OpenAIBaseURL: "http://chatgpt.com/backend-api"}},
-		{name: "custom ChatGPT port", settings: config.Settings{OpenAIBaseURL: "https://chatgpt.com:8443/backend-api"}},
-		{name: "custom ChatGPT path", settings: config.Settings{OpenAIBaseURL: "https://chatgpt.com/v1"}},
-		{name: "credential-bearing ChatGPT URL", settings: config.Settings{OpenAIBaseURL: "https://user@chatgpt.com/backend-api"}},
-		{name: "query-bearing ChatGPT URL", settings: config.Settings{OpenAIBaseURL: "https://chatgpt.com/backend-api?token=secret"}},
+		{name: "OpenAI", providerID: "openai", isOpenAIFirstParty: true, wantKind: serverapi.AuthProviderKindOpenAI, wantIdentifier: "openai"},
+		{name: "ChatGPT", providerID: "chatgpt-codex", isOpenAIFirstParty: true, wantKind: serverapi.AuthProviderKindOpenAI, wantIdentifier: "openai"},
+		{name: "configured provider", providerID: "anthropic", wantKind: serverapi.AuthProviderKindConfiguredProvider, wantIdentifier: "anthropic"},
+		{name: "compatible endpoint", providerID: "openai-compatible", wantKind: serverapi.AuthProviderKindOpenAICompatible, wantIdentifier: "openai-compatible"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if got := SupportsSubscriptionUsage(test.settings); got != test.want {
+			got := ProviderFacts(test.providerID, test.isOpenAIFirstParty, config.Settings{})
+			if got.Kind != test.wantKind || got.Identifier != test.wantIdentifier {
+				t.Fatalf("ProviderFacts = %+v, want kind %q identifier %q", got, test.wantKind, test.wantIdentifier)
+			}
+		})
+	}
+}
+
+func TestSupportsSubscriptionUsageRequiresCanonicalFirstPartyAndOfficialEndpoint(t *testing.T) {
+	tests := []struct {
+		name               string
+		settings           config.Settings
+		isOpenAIFirstParty bool
+		want               bool
+	}{
+		{name: "default first party", isOpenAIFirstParty: true, want: true},
+		{name: "ChatGPT", settings: config.Settings{OpenAIBaseURL: "https://chatgpt.com/backend-api"}, isOpenAIFirstParty: true, want: true},
+		{name: "OpenAI API", settings: config.Settings{OpenAIBaseURL: "https://api.openai.com/v1"}, isOpenAIFirstParty: true, want: true},
+		{name: "canonical custom provider", isOpenAIFirstParty: false},
+		{name: "compatible endpoint", settings: config.Settings{OpenAIBaseURL: "https://example.com/v1"}, isOpenAIFirstParty: true},
+		{name: "insecure ChatGPT transport", settings: config.Settings{OpenAIBaseURL: "http://chatgpt.com/backend-api"}, isOpenAIFirstParty: true},
+		{name: "custom ChatGPT port", settings: config.Settings{OpenAIBaseURL: "https://chatgpt.com:8443/backend-api"}, isOpenAIFirstParty: true},
+		{name: "custom ChatGPT path", settings: config.Settings{OpenAIBaseURL: "https://chatgpt.com/v1"}, isOpenAIFirstParty: true},
+		{name: "credential-bearing ChatGPT URL", settings: config.Settings{OpenAIBaseURL: "https://user@chatgpt.com/backend-api"}, isOpenAIFirstParty: true},
+		{name: "query-bearing ChatGPT URL", settings: config.Settings{OpenAIBaseURL: "https://chatgpt.com/backend-api?token=secret"}, isOpenAIFirstParty: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := SupportsSubscriptionUsage(test.settings, test.isOpenAIFirstParty); got != test.want {
 				t.Fatalf("SupportsSubscriptionUsage = %v, want %v", got, test.want)
 			}
 		})

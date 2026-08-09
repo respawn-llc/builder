@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"core/server/auth"
+	"core/server/llm"
 	servicecontract "core/shared/apicontract"
 	"core/shared/authstatus"
 	"core/shared/config"
@@ -34,39 +35,58 @@ func (s *StatusService) GetAuthStatus(ctx context.Context, req serverapi.AuthSta
 		return serverapi.AuthStatusResponse{}, err
 	}
 	state := auth.EmptyState()
-	settings := config.Settings{}
-	if s != nil {
-		settings = s.settings
-	}
-	provider := authstatus.ProviderFacts(settings)
-	subscriptionUsageSupported := authstatus.SupportsSubscriptionUsage(settings)
-	if req.Provider != nil {
-		provider = *req.Provider
-		subscriptionUsageSupported = authstatus.SupportsSubscriptionUsageForProvider(provider)
-	}
+	var authStateErr error
 	if s != nil && s.manager != nil {
 		resolution, err := s.manager.ResolveCurrentState(ctx)
 		if resolution.Loaded != nil {
 			state = *resolution.Loaded
 		}
 		if err != nil {
-			if resolution.Loaded != nil {
-				failure := authStatusFailure(err)
+			if resolution.Loaded == nil {
 				return validatedAuthStatusResponse(serverapi.AuthStatusResponse{
-					Resolution:   serverapi.KnownAuthStatusResolution(authFacts(state, provider), &failure),
-					Subscription: subscriptionStatus(ctx, state, err, subscriptionUsageSupported),
+					Resolution: serverapi.UnavailableAuthStatusResolution(authStatusFailure(err)),
 				})
 			}
-			return validatedAuthStatusResponse(serverapi.AuthStatusResponse{
-				Resolution: serverapi.UnavailableAuthStatusResolution(authStatusFailure(err)),
-			})
+			authStateErr = err
+		} else {
+			state = *resolution.Current
 		}
-		state = *resolution.Current
+	}
+	provider, subscriptionUsageSupported, err := s.resolveProvider(state, req.Provider)
+	if err != nil {
+		return serverapi.AuthStatusResponse{}, err
+	}
+	subscriptionUsageSupported = subscriptionUsageSupported && !req.SkipSubscriptionUsage
+	if authStateErr != nil {
+		failure := authStatusFailure(authStateErr)
+		return validatedAuthStatusResponse(serverapi.AuthStatusResponse{
+			Resolution:   serverapi.KnownAuthStatusResolution(authFacts(state, provider), &failure),
+			Subscription: subscriptionStatus(ctx, state, authStateErr, subscriptionUsageSupported),
+		})
 	}
 	return validatedAuthStatusResponse(serverapi.AuthStatusResponse{
 		Resolution:   serverapi.KnownAuthStatusResolution(authFacts(state, provider), nil),
 		Subscription: subscriptionStatus(ctx, state, nil, subscriptionUsageSupported),
 	})
+}
+
+func (s *StatusService) resolveProvider(
+	state auth.State,
+	requested *serverapi.AuthProviderFacts,
+) (serverapi.AuthProviderFacts, bool, error) {
+	if requested != nil {
+		return *requested, authstatus.SupportsSubscriptionUsageForProvider(*requested), nil
+	}
+	settings := config.Settings{}
+	if s != nil {
+		settings = s.settings
+	}
+	capabilities, err := llm.ResolveRuntimeProviderCapabilities(state, settings)
+	if err != nil {
+		return serverapi.AuthProviderFacts{}, false, fmt.Errorf("resolve auth status provider: %w", err)
+	}
+	provider := authstatus.ProviderFacts(capabilities.ProviderID, capabilities.IsOpenAIFirstParty, settings)
+	return provider, authstatus.SupportsSubscriptionUsage(settings, capabilities.IsOpenAIFirstParty), nil
 }
 
 func validatedAuthStatusResponse(response serverapi.AuthStatusResponse) (serverapi.AuthStatusResponse, error) {
