@@ -442,22 +442,19 @@ func activeRunIDForStep(engine *Engine, stepID string) string {
 		return ""
 	}
 	snapshot := engine.ActiveRun()
-	if snapshot == nil || snapshot.StepID != stepID {
-		return ""
+	if snapshot != nil && snapshot.StepID == stepID {
+		return snapshot.RunID
 	}
-	return snapshot.RunID
+	if engine.agentSteps.current != nil &&
+		engine.agentSteps.current.origin.StepID == stepID {
+		return engine.agentSteps.current.origin.RunID
+	}
+	return ""
 }
 
 func workflowCompletionOriginForStep(engine *Engine, stepID string) serverapi.RuntimeStepOrigin {
-	origin := serverapi.RuntimeStepOrigin{
+	return serverapi.RuntimeStepOrigin{
 		RunID:  activeRunIDForStep(engine, stepID),
 		StepID: stepID,
 	}
-	if origin.RunID == "" &&
-		engine != nil &&
-		engine.agentSteps.current != nil &&
-		engine.agentSteps.current.origin.StepID == stepID {
-		return engine.agentSteps.current.origin
-	}
-	return origin
 }

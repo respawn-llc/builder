@@ -11,6 +11,7 @@ import (
 	"core/server/llm"
 	"core/server/runtimecommand"
 	"core/shared/runtimeids"
+	"core/shared/serverapi"
 	"core/shared/textutil"
 )
 
@@ -70,6 +71,7 @@ type liveRunGroup struct {
 	id               runtimeids.LiveRunGroupID
 	runID            runtimeids.RunID
 	stepID           runtimeids.StepID
+	agentStepID      *runtimeids.StepID
 	stepToolStarts   liveStepToolStartCount
 	workPerformed    bool
 	goalLoop         bool
@@ -330,6 +332,7 @@ func (c *liveRunCoordinator) beginStep(snapshot *RunSnapshot) {
 	if c.current != nil {
 		c.current.runID = mustRunID(snapshot.RunID)
 		c.current.stepID = mustStepID(snapshot.StepID)
+		c.current.agentStepID = nil
 		c.current.stepToolStarts = liveStepToolStartsNone
 		c.current.goalLoop = snapshot.GoalLoop
 		c.current.status = RunStatusRunning
@@ -350,6 +353,26 @@ func (c *liveRunCoordinator) beginStep(snapshot *RunSnapshot) {
 		startedAt:     snapshot.StartedAt,
 		done:          make(chan struct{}),
 	}
+}
+
+func (c *liveRunCoordinator) beginAgentStep(origin serverapi.RuntimeStepOrigin) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.current == nil || c.current.runID != mustRunID(origin.RunID) {
+		return
+	}
+	stepID := mustStepID(origin.StepID)
+	if c.current.agentStepID != nil && *c.current.agentStepID == stepID {
+		return
+	}
+	if c.current.stepToolStarts == liveStepToolStartsMultiple {
+		c.current.workPerformed = true
+	}
+	c.current.agentStepID = &stepID
+	c.current.stepToolStarts = liveStepToolStartsNone
 }
 
 func (c *liveRunCoordinator) finishStep(snapshot *RunSnapshot, status RunStatus, err error, holdGoalLoop bool) {
@@ -426,7 +449,7 @@ func (c *liveRunCoordinator) finishGoalLoop() {
 func (c *liveRunCoordinator) recordToolStart(stepID string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.current == nil || c.current.stepID != mustStepID(stepID) {
+	if !liveRunGroupMatchesStep(c.current, mustStepID(stepID)) {
 		return
 	}
 	if c.current.stepToolStarts < liveStepToolStartsMultiple {
@@ -437,7 +460,7 @@ func (c *liveRunCoordinator) recordToolStart(stepID string) {
 func (c *liveRunCoordinator) recordAssistantFinalAnswer(stepID string, message llm.Message) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.current == nil || c.current.stepID != mustStepID(stepID) {
+	if !liveRunGroupMatchesStep(c.current, mustStepID(stepID)) {
 		return
 	}
 	if c.current.goalLoop {
@@ -447,6 +470,12 @@ func (c *liveRunCoordinator) recordAssistantFinalAnswer(stepID string, message l
 	c.current.resultKindSet = true
 	c.current.err = nil
 	c.current.assistantMessage = message
+}
+
+func liveRunGroupMatchesStep(group *liveRunGroup, stepID runtimeids.StepID) bool {
+	return group != nil &&
+		(group.stepID == stepID ||
+			(group.agentStepID != nil && *group.agentStepID == stepID))
 }
 
 func (c *liveRunCoordinator) interrupt() (bool, bool) {

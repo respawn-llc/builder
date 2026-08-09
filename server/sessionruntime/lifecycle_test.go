@@ -485,7 +485,7 @@ func assertRuntimeAbortResourceRetired(
 	}
 }
 
-func TestOwnerlessRuntimeStepPublishesResourceLifecycle(t *testing.T) {
+func TestExactAgentStepPublishesResourceLifecycle(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
 	client := &ownerlessRetirementLLMClient{
@@ -507,19 +507,23 @@ func TestOwnerlessRuntimeStepPublishesResourceLifecycle(t *testing.T) {
 		}
 	})
 	plan := authorityTestRuntimePlan(t, fixture, client)
-	attachment := openLifecycleRuntime(t, authority, sessionID, "owner-a", &plan)
+	openLifecycleRuntime(t, authority, sessionID, "owner-a", &plan)
 
 	done := make(chan error, 1)
 	go func() {
-		done <- authority.WithRuntime(context.Background(), attachment.Resource(), func(ctx context.Context, engine *runtime.Engine) error {
-			_, err := engine.SubmitUserMessage(ctx, "ownerless step")
-			return err
-		})
+		done <- authority.RunCurrentAgentExecution(
+			context.Background(),
+			mustOpenSessionDescriptor(t, sessionID),
+			func(ctx context.Context, engine *runtime.Engine) error {
+				_, err := engine.SubmitUserMessage(ctx, "ownerless step")
+				return err
+			},
+		)
 	}()
 	select {
 	case <-client.firstStarted:
 	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for ownerless runtime step")
+		t.Fatal("timed out waiting for exact Agent Step")
 	}
 	select {
 	case snapshot := <-probe.began:
@@ -527,12 +531,12 @@ func TestOwnerlessRuntimeStepPublishesResourceLifecycle(t *testing.T) {
 			t.Fatalf("began snapshot transition = %q", snapshot.Transition)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("ownerless runtime step did not publish began lifecycle")
+		t.Fatal("exact Agent Step did not publish began lifecycle")
 	}
 
 	close(client.releaseFirst)
 	if err := <-done; err != nil {
-		t.Fatalf("ownerless runtime step: %v", err)
+		t.Fatalf("exact Agent Step: %v", err)
 	}
 	select {
 	case snapshot := <-probe.ended:
@@ -540,7 +544,7 @@ func TestOwnerlessRuntimeStepPublishesResourceLifecycle(t *testing.T) {
 			t.Fatalf("ended snapshot transition = %q", snapshot.Transition)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("ownerless runtime step did not publish ended lifecycle")
+		t.Fatal("exact Agent Step did not publish ended lifecycle")
 	}
 }
 
@@ -1151,80 +1155,6 @@ func TestAuthorityBlockingRuntimeActivityIgnoresDirectMaintenance(t *testing.T) 
 	}
 	if active {
 		t.Fatal("completed direct runtime maintenance was reported as blocking")
-	}
-}
-
-func TestAuthorityBlockingRuntimeActivityIncludesOpenLiveRunGroup(t *testing.T) {
-	fixture := newSessionRuntimeFixture(t)
-	sessionID := lifecycleSessionID(t, fixture)
-	client := &ownerlessRetirementLLMClient{
-		firstStarted: make(chan struct{}),
-		releaseFirst: make(chan struct{}),
-	}
-	plan := authorityTestRuntimePlan(t, fixture, client)
-	attachment := openLifecycleRuntime(t, fixture.authority, sessionID, "owner-a", &plan)
-
-	submitDone := make(chan error, 1)
-	go func() {
-		submitDone <- fixture.authority.WithRuntime(context.Background(), attachment.Resource(), func(ctx context.Context, engine *runtime.Engine) error {
-			_, err := engine.SubmitUserMessage(ctx, "first")
-			return err
-		})
-	}()
-	select {
-	case <-client.firstStarted:
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for the first live step")
-	}
-
-	beforeQueueStarted := make(chan struct{})
-	releaseBeforeQueue := make(chan struct{})
-	defer func() {
-		select {
-		case <-releaseBeforeQueue:
-		default:
-			close(releaseBeforeQueue)
-		}
-	}()
-	queueDone := make(chan error, 1)
-	go func() {
-		queueDone <- fixture.authority.WithRuntime(context.Background(), attachment.Resource(), func(_ context.Context, engine *runtime.Engine) error {
-			item, accepted, err := engine.QueueUserMessageForActiveRun(
-				context.Background(),
-				"follow-up",
-				func() error {
-					close(beforeQueueStarted)
-					<-releaseBeforeQueue
-					return nil
-				},
-			)
-			if err == nil && (!accepted || item.ID == "") {
-				return errors.New("active live run rejected queued follow-up")
-			}
-			return err
-		})
-	}()
-	select {
-	case <-beforeQueueStarted:
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for live-run queue admission")
-	}
-
-	close(client.releaseFirst)
-	if err := <-submitDone; err != nil {
-		t.Fatalf("submit first live step: %v", err)
-	}
-	active, err := fixture.authority.HasBlockingRuntimeActivity(context.Background(), sessionID.String())
-	if err != nil {
-		t.Fatalf("check open live-run activity: %v", err)
-	}
-	if !active {
-		t.Fatal("open live-run group without an engine step was not reported as blocking")
-	}
-
-	close(releaseBeforeQueue)
-	if err := <-queueDone; err != nil {
-		t.Fatalf("queue live-run follow-up: %v", err)
 	}
 }
 

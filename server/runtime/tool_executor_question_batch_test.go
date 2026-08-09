@@ -7,6 +7,8 @@ import (
 
 	"core/server/llm"
 	"core/server/tools"
+	"core/shared/runtimeids"
+	"core/shared/serverapi"
 	"core/shared/toolspec"
 )
 
@@ -49,5 +51,25 @@ func TestPrepareExecutorToolCallsAssignsQuestionBatchOutsideWorkflow(t *testing.
 		if call.askQuestionBatch.BatchPromptIDs[index] != call.call.ID {
 			t.Fatalf("prepared call %d prompt order = %v", index, call.askQuestionBatch.BatchPromptIDs)
 		}
+	}
+}
+
+func TestActiveRunIDForStepUsesExactAgentStepOrigin(t *testing.T) {
+	origin := serverapi.RuntimeStepOrigin{
+		RunID:  "run-1",
+		StepID: "step-1",
+	}
+	engine := &Engine{
+		agentSteps: agentStepAdmissionState{
+			current: &activeAgentStep{
+				scopeID: runtimeids.NewExecutionScopeID(),
+				origin:  origin,
+				phase:   agentStepProviderRunning,
+			},
+		},
+	}
+
+	if got := activeRunIDForStep(engine, origin.StepID); got != origin.RunID {
+		t.Fatalf("active Run ID = %q, want %q", got, origin.RunID)
 	}
 }

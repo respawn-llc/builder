@@ -154,6 +154,7 @@ func (e *Engine) registerAgentProviderStep(
 		phase = agentStepProviderRunning
 	}
 	e.agentSteps.current = &activeAgentStep{scopeID: scopeID, origin: origin, phase: phase}
+	e.liveRun.beginAgentStep(origin)
 	return continueAgentStepDecision{Origin: origin}, nil
 }
 

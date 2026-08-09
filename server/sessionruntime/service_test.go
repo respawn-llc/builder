@@ -308,10 +308,14 @@ func TestActivateSessionRuntimeAllowsNativeEditInSiblingWorkspace(t *testing.T) 
 	if err != nil {
 		t.Fatalf("ParseSessionID: %v", err)
 	}
-	if err := fixture.authority.WithCurrentRuntime(context.Background(), sessionID, func(_ context.Context, engine *runtimepkg.Engine) error {
-		_, err := engine.SubmitUserMessage(context.Background(), "edit the sibling Workspace")
-		return err
-	}); err != nil {
+	if err := fixture.authority.RunCurrentAgentExecution(
+		context.Background(),
+		mustOpenSessionDescriptor(t, sessionID),
+		func(ctx context.Context, engine *runtimepkg.Engine) error {
+			_, err := engine.SubmitUserMessage(ctx, "edit the sibling Workspace")
+			return err
+		},
+	); err != nil {
 		t.Fatalf("SubmitUserMessage through activated runtime: %v", err)
 	}
 	deadline := time.Now().Add(3 * time.Second)
@@ -433,10 +437,14 @@ func TestActivateSessionRuntimeDeniesEditInForeignManagedWorktree(t *testing.T) 
 	if err != nil {
 		t.Fatalf("ParseSessionID: %v", err)
 	}
-	if err := fixture.authority.WithCurrentRuntime(context.Background(), sessionID, func(_ context.Context, engine *runtimepkg.Engine) error {
-		_, err := engine.SubmitUserMessage(context.Background(), "edit the foreign worktree")
-		return err
-	}); err != nil {
+	if err := fixture.authority.RunCurrentAgentExecution(
+		context.Background(),
+		mustOpenSessionDescriptor(t, sessionID),
+		func(ctx context.Context, engine *runtimepkg.Engine) error {
+			_, err := engine.SubmitUserMessage(ctx, "edit the foreign worktree")
+			return err
+		},
+	); err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
 	}
 	select {
@@ -597,10 +605,14 @@ func TestActivateSessionRuntimeUsesActiveShellPostprocessingWithSuppliedManager(
 	if err != nil {
 		t.Fatalf("ParseSessionID: %v", err)
 	}
-	err = authority.WithCurrentRuntime(context.Background(), id, func(_ context.Context, engine *runtimepkg.Engine) error {
-		_, submitErr := engine.SubmitUserMessage(context.Background(), "run active shell")
-		return submitErr
-	})
+	err = authority.RunCurrentAgentExecution(
+		context.Background(),
+		mustOpenSessionDescriptor(t, id),
+		func(ctx context.Context, engine *runtimepkg.Engine) error {
+			_, submitErr := engine.SubmitUserMessage(ctx, "run active shell")
+			return submitErr
+		},
+	)
 	if err != nil {
 		t.Fatalf("SubmitUserMessage through activated runtime: %v", err)
 	}

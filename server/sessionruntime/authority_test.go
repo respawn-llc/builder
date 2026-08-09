@@ -1654,7 +1654,7 @@ func TestResourceReplacementWaitsForCurrentExecutionToFinish(t *testing.T) {
 	}
 }
 
-func TestAgentExecutionBindsAndClearsShellCorrelation(t *testing.T) {
+func TestAgentExecutionBindsShellCorrelationToExactScope(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
 	if err != nil {
@@ -1710,12 +1710,12 @@ func TestAgentExecutionBindsAndClearsShellCorrelation(t *testing.T) {
 		}
 	})
 
-	startBackground := func(callID string) (shelltool.Snapshot, error) {
+	startBackground := func(ctx context.Context, bridge AgentRuntimeBridge, callID string) (shelltool.Snapshot, error) {
 		before := make(map[string]struct{})
 		for _, snapshot := range manager.List() {
 			before[snapshot.ID] = struct{}{}
 		}
-		if err := authority.WithCurrentRuntime(context.Background(), sessionID, func(ctx context.Context, engine *runtime.Engine) error {
+		if err := bridge.WithEngine(ctx, func(ctx context.Context, engine *runtime.Engine) error {
 			_, submitErr := engine.SubmitUserMessage(ctx, callID)
 			return submitErr
 		}); err != nil {
@@ -1741,45 +1741,46 @@ func TestAgentExecutionBindsAndClearsShellCorrelation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open runtime: %v", err)
 	}
-	started := make(chan backgroundStartResult, 1)
-	handle, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
-		Descriptor: mustOpenSessionDescriptor(t, sessionID),
-		Resource:   CurrentAgentResource{},
-		Runner: func(context.Context, ExecutionScope, AgentRuntimeBridge) error {
-			snapshot, startErr := startBackground("scoped")
-			started <- backgroundStartResult{snapshot: snapshot, err: startErr}
-			return startErr
-		},
-	})
-	if err != nil {
-		t.Fatalf("start agent execution: %v", err)
-	}
-	startResult := <-started
-	if startResult.err != nil {
-		t.Fatalf("start scoped process: %v", startResult.err)
-	}
-	scoped := startResult.snapshot
-	if _, err := handle.Wait(context.Background()); err != nil {
-		t.Fatalf("wait agent execution: %v", err)
-	}
-	resource, ok := handle.Scope().Resource()
-	if !ok {
-		t.Fatal("agent scope has no resource")
-	}
-	want, err := runtimeids.NewExecutionCorrelation(handle.Scope().ID(), resource.Generation())
-	if err != nil {
-		t.Fatalf("new expected correlation: %v", err)
-	}
-	if scoped.ExecutionCorrelation == nil || *scoped.ExecutionCorrelation != want {
-		t.Fatalf("scoped process correlation = %#v, want %#v", scoped.ExecutionCorrelation, want)
+	runExecution := func(callID string) (shelltool.Snapshot, runtimeids.ExecutionCorrelation) {
+		t.Helper()
+		started := make(chan backgroundStartResult, 1)
+		handle, startErr := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+			Descriptor: mustOpenSessionDescriptor(t, sessionID),
+			Resource:   CurrentAgentResource{},
+			Runner: func(ctx context.Context, _ ExecutionScope, bridge AgentRuntimeBridge) error {
+				snapshot, runErr := startBackground(ctx, bridge, callID)
+				started <- backgroundStartResult{snapshot: snapshot, err: runErr}
+				return runErr
+			},
+		})
+		if startErr != nil {
+			t.Fatalf("start agent execution: %v", startErr)
+		}
+		startResult := <-started
+		if startResult.err != nil {
+			t.Fatalf("start scoped process: %v", startResult.err)
+		}
+		if _, waitErr := handle.Wait(context.Background()); waitErr != nil {
+			t.Fatalf("wait agent execution: %v", waitErr)
+		}
+		resource, ok := handle.Scope().Resource()
+		if !ok {
+			t.Fatal("agent scope has no resource")
+		}
+		want, correlationErr := runtimeids.NewExecutionCorrelation(handle.Scope().ID(), resource.Generation())
+		if correlationErr != nil {
+			t.Fatalf("new expected correlation: %v", correlationErr)
+		}
+		if startResult.snapshot.ExecutionCorrelation == nil || *startResult.snapshot.ExecutionCorrelation != want {
+			t.Fatalf("scoped process correlation = %#v, want %#v", startResult.snapshot.ExecutionCorrelation, want)
+		}
+		return startResult.snapshot, want
 	}
 
-	unscoped, err := startBackground("idle")
-	if err != nil {
-		t.Fatalf("start idle process: %v", err)
-	}
-	if unscoped.ExecutionCorrelation != nil {
-		t.Fatalf("idle process correlation = %#v, want nil", *unscoped.ExecutionCorrelation)
+	_, firstCorrelation := runExecution("call-scoped")
+	_, secondCorrelation := runExecution("call-idle")
+	if secondCorrelation == firstCorrelation {
+		t.Fatalf("successive exact Agent executions reused correlation %#v", secondCorrelation)
 	}
 	if _, err := attachment.Release(context.Background(), RuntimeReleaseClose); err != nil {
 		t.Fatalf("release runtime: %v", err)
