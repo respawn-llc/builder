@@ -72,20 +72,24 @@ func (s *StatusService) GetAuthStatus(ctx context.Context, req serverapi.AuthSta
 
 func (s *StatusService) resolveProvider(
 	state auth.State,
-	requested *serverapi.AuthProviderFacts,
+	requested *serverapi.AuthProviderSelection,
 ) (serverapi.AuthProviderFacts, bool, error) {
-	if requested != nil {
-		return *requested, authstatus.SupportsSubscriptionUsageForProvider(*requested), nil
-	}
 	settings := config.Settings{}
 	if s != nil {
 		settings = s.settings
+	}
+	requestedSelection := requested != nil
+	if requested != nil {
+		settings = authstatus.ProviderSettings(*requested)
 	}
 	capabilities, err := llm.ResolveRuntimeProviderCapabilities(state, settings)
 	if err != nil {
 		return serverapi.AuthProviderFacts{}, false, fmt.Errorf("resolve auth status provider: %w", err)
 	}
 	provider := authstatus.ProviderFacts(capabilities.ProviderID, capabilities.IsOpenAIFirstParty, settings)
+	if requestedSelection {
+		return provider, capabilities.IsOpenAIFirstParty, nil
+	}
 	return provider, authstatus.SupportsSubscriptionUsage(settings, capabilities.IsOpenAIFirstParty), nil
 }
 

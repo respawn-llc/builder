@@ -13,8 +13,20 @@ import (
 )
 
 type AuthStatusRequest struct {
-	Provider              *AuthProviderFacts `json:"provider,omitempty"`
-	SkipSubscriptionUsage bool               `json:"skip_subscription_usage,omitempty"`
+	Provider              *AuthProviderSelection `json:"provider,omitempty"`
+	SkipSubscriptionUsage bool                   `json:"skip_subscription_usage,omitempty"`
+}
+
+type AuthProviderSelection struct {
+	Model                *string                          `json:"model,omitempty"`
+	ProviderOverride     *string                          `json:"provider_override,omitempty"`
+	OpenAIBaseURL        *string                          `json:"openai_base_url,omitempty"`
+	ProviderCapabilities *AuthProviderCapabilitySelection `json:"provider_capabilities,omitempty"`
+}
+
+type AuthProviderCapabilitySelection struct {
+	ProviderID         string `json:"provider_id"`
+	IsOpenAIFirstParty bool   `json:"is_openai_first_party"`
 }
 
 type AuthStatusResponse struct {
@@ -145,6 +157,20 @@ func (r AuthStatusRequest) Validate() error {
 		return fmt.Errorf("auth status provider: %w", err)
 	}
 	return nil
+}
+
+func (s AuthProviderSelection) validate() error {
+	if err := errors.Join(
+		validateOptionalAuthString("model", s.Model),
+		validateOptionalAuthString("provider override", s.ProviderOverride),
+		validateOptionalAuthString("OpenAI base URL", s.OpenAIBaseURL),
+	); err != nil {
+		return err
+	}
+	if s.ProviderCapabilities == nil {
+		return nil
+	}
+	return validateRequiredAuthString("provider capability ID", s.ProviderCapabilities.ProviderID)
 }
 
 func (r AuthStatusResponse) Validate() error {
@@ -364,6 +390,13 @@ func (f AuthStatusFailure) validate() error {
 
 func validateOptionalAuthString(label string, value *string) error {
 	if value != nil && (strings.TrimSpace(*value) == "" || *value != strings.TrimSpace(*value)) {
+		return fmt.Errorf("%s must be nonblank and trimmed", label)
+	}
+	return nil
+}
+
+func validateRequiredAuthString(label, value string) error {
+	if strings.TrimSpace(value) == "" || value != strings.TrimSpace(value) {
 		return fmt.Errorf("%s must be nonblank and trimmed", label)
 	}
 	return nil

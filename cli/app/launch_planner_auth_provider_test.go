@@ -7,7 +7,7 @@ import (
 	"core/shared/serverapi"
 )
 
-func TestAuthProviderFactsForSettingsUsesCanonicalRuntimeProviderResolution(t *testing.T) {
+func TestAuthProviderFallbackFactsUseCanonicalRuntimeProviderResolution(t *testing.T) {
 	tests := []struct {
 		name     string
 		settings config.Settings
@@ -29,9 +29,9 @@ func TestAuthProviderFactsForSettingsUsesCanonicalRuntimeProviderResolution(t *t
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			provider, err := authProviderFactsForSettings(test.settings)
+			provider, err := authProviderFallbackFactsForSettings(test.settings)
 			if err != nil {
-				t.Fatalf("authProviderFactsForSettings: %v", err)
+				t.Fatalf("authProviderFallbackFactsForSettings: %v", err)
 			}
 			if provider.Kind != test.wantKind || provider.Identifier != test.wantID {
 				t.Fatalf("provider = %+v, want kind %q identifier %q", provider, test.wantKind, test.wantID)

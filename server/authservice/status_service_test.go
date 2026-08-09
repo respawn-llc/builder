@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"core/server/auth"
+	"core/shared/authstatus"
 	"core/shared/config"
 	"core/shared/serverapi"
 )
@@ -208,8 +209,11 @@ func TestStatusServiceUsesRequestedEffectiveProviderForSubscription(t *testing.T
 		t.Fatalf("global custom-provider subscription = %+v, want not applicable", global.Subscription)
 	}
 
+	selection := authstatus.ProviderSelection(config.Settings{
+		OpenAIBaseURL: "https://session.example/v1",
+	})
 	provider := serverapi.OpenAIAuthProviderFacts()
-	effective, err := service.GetAuthStatus(context.Background(), serverapi.AuthStatusRequest{Provider: &provider})
+	effective, err := service.GetAuthStatus(context.Background(), serverapi.AuthStatusRequest{Provider: &selection})
 	if err != nil {
 		t.Fatalf("effective GetAuthStatus: %v", err)
 	}

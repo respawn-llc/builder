@@ -26,6 +26,39 @@ func ProviderFacts(providerID string, isOpenAIFirstParty bool, settings config.S
 	}
 }
 
+func ProviderSelection(settings config.Settings) serverapi.AuthProviderSelection {
+	selection := serverapi.AuthProviderSelection{
+		Model:            optionalTrimmedString(settings.Model),
+		ProviderOverride: optionalTrimmedString(settings.ProviderOverride),
+		OpenAIBaseURL:    optionalTrimmedString(settings.OpenAIBaseURL),
+	}
+	if providerID := strings.TrimSpace(settings.ProviderCapabilities.ProviderID); providerID != "" {
+		selection.ProviderCapabilities = &serverapi.AuthProviderCapabilitySelection{
+			ProviderID:         providerID,
+			IsOpenAIFirstParty: settings.ProviderCapabilities.IsOpenAIFirstParty,
+		}
+	}
+	return selection
+}
+
+func ProviderSettings(selection serverapi.AuthProviderSelection) config.Settings {
+	settings := config.Settings{}
+	if selection.Model != nil {
+		settings.Model = *selection.Model
+	}
+	if selection.ProviderOverride != nil {
+		settings.ProviderOverride = *selection.ProviderOverride
+	}
+	if selection.OpenAIBaseURL != nil {
+		settings.OpenAIBaseURL = *selection.OpenAIBaseURL
+	}
+	if selection.ProviderCapabilities != nil {
+		settings.ProviderCapabilities.ProviderID = selection.ProviderCapabilities.ProviderID
+		settings.ProviderCapabilities.IsOpenAIFirstParty = selection.ProviderCapabilities.IsOpenAIFirstParty
+	}
+	return settings
+}
+
 func SupportsSubscriptionUsageForProvider(provider serverapi.AuthProviderFacts) bool {
 	return provider.Kind == serverapi.AuthProviderKindOpenAI
 }
@@ -81,4 +114,12 @@ func isOfficialSubscriptionBaseURL(raw string) bool {
 	default:
 		return false
 	}
+}
+
+func optionalTrimmedString(value string) *string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
 }

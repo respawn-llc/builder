@@ -8,6 +8,27 @@ import (
 	"core/shared/serverapi"
 )
 
+func TestProviderSelectionRoundTripsCanonicalInputs(t *testing.T) {
+	settings := config.Settings{
+		Model:            "gpt-5.6-sol",
+		ProviderOverride: "openai",
+		OpenAIBaseURL:    "https://api.openai.com/v1",
+		ProviderCapabilities: config.ProviderCapabilitiesOverride{
+			ProviderID:         "internal-openai",
+			IsOpenAIFirstParty: true,
+		},
+	}
+	selection := ProviderSelection(settings)
+	roundTripped := ProviderSettings(selection)
+	if roundTripped.Model != settings.Model ||
+		roundTripped.ProviderOverride != settings.ProviderOverride ||
+		roundTripped.OpenAIBaseURL != settings.OpenAIBaseURL ||
+		roundTripped.ProviderCapabilities.ProviderID != settings.ProviderCapabilities.ProviderID ||
+		roundTripped.ProviderCapabilities.IsOpenAIFirstParty != settings.ProviderCapabilities.IsOpenAIFirstParty {
+		t.Fatalf("provider settings round trip = %+v, want canonical inputs from %+v", roundTripped, settings)
+	}
+}
+
 func TestProviderFactsDropsCredentialBearingURLComponents(t *testing.T) {
 	facts := ProviderFacts("openai-compatible", false, config.Settings{
 		OpenAIBaseURL: "https://user:secret@example.com:8443/v1/key?token=secret#fragment",

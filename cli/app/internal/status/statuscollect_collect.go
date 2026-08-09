@@ -154,11 +154,11 @@ func (c Collector) CollectAuth(ctx context.Context, req Request, _ Snapshot) Aut
 	if req.AuthStatus == nil {
 		return AuthStageResult{}
 	}
-	response, err := req.AuthStatus.GetAuthStatus(ctx, serverapi.AuthStatusRequest{Provider: req.AuthProvider})
+	response, err := req.AuthStatus.GetAuthStatus(ctx, serverapi.AuthStatusRequest{Provider: req.AuthSelection})
 	if err != nil {
-		return UnavailableAuthStage(err, req.AuthProvider)
+		return UnavailableAuthStage(err, req.AuthProviderFallback)
 	}
-	return AuthStageFromResponse(response, req.AuthProvider)
+	return AuthStageFromResponse(response, req.AuthProviderFallback)
 }
 
 func (c Collector) CollectGit(ctx context.Context, req Request, _ Snapshot) GitStageResult {

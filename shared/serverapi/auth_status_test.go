@@ -37,11 +37,12 @@ func TestAuthStatusRequestValidatesOptionalEffectiveProvider(t *testing.T) {
 	if err := (AuthStatusRequest{}).Validate(); err != nil {
 		t.Fatalf("server-scoped request: %v", err)
 	}
-	provider := OpenAIAuthProviderFacts()
+	provider := AuthProviderSelection{}
 	if err := (AuthStatusRequest{Provider: &provider}).Validate(); err != nil {
 		t.Fatalf("effective-provider request: %v", err)
 	}
-	invalid := AuthProviderFacts{Kind: AuthProviderKindOpenAI, Identifier: "custom"}
+	untrimmed := " openai"
+	invalid := AuthProviderSelection{ProviderOverride: &untrimmed}
 	if err := (AuthStatusRequest{Provider: &invalid}).Validate(); err == nil {
 		t.Fatal("request accepted invalid effective provider")
 	}

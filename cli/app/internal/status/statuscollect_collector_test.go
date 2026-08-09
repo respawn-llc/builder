@@ -3,6 +3,7 @@ package status
 import (
 	"context"
 	"core/shared/apicontract"
+	"core/shared/authstatus"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
@@ -129,14 +130,16 @@ func TestCollectorRequestsEffectiveSessionAuthProvider(t *testing.T) {
 			}, nil),
 		},
 	}
+	selection := authstatus.ProviderSelection(config.Settings{OpenAIBaseURL: "https://session.example/v1"})
 
 	result := (Collector{}).CollectAuth(context.Background(), Request{
-		AuthStatus:   authStatus,
-		AuthProvider: &provider,
+		AuthStatus:           authStatus,
+		AuthProviderFallback: &provider,
+		AuthSelection:        &selection,
 	}, Snapshot{})
 
 	if authStatus.request.Provider == nil ||
-		!reflect.DeepEqual(*authStatus.request.Provider, provider) ||
+		!reflect.DeepEqual(*authStatus.request.Provider, selection) ||
 		result.Auth.Provider != "https://session.example" {
 		t.Fatalf("effective provider request/result = %+v / %+v", authStatus.request, result)
 	}

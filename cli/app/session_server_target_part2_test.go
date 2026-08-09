@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -107,10 +108,15 @@ func TestStartSessionServerUsesInvocationOverridesWhenAttachingToDiscoveredDaemo
 	if plan.ActiveSettings.Model != "gpt-5.3-codex" {
 		t.Fatalf("model = %q, want gpt-5.3-codex", plan.ActiveSettings.Model)
 	}
-	if plan.StatusConfig.AuthProvider == nil ||
-		plan.StatusConfig.AuthProvider.DisplayOrigin == nil ||
-		plan.StatusConfig.AuthProvider.DisplayOrigin.Hostname != "127.0.0.1" {
-		t.Fatalf("status auth provider = %+v, want invocation override", plan.StatusConfig.AuthProvider)
+	if plan.StatusConfig.AuthProviderFallback == nil ||
+		plan.StatusConfig.AuthProviderFallback.DisplayOrigin == nil ||
+		plan.StatusConfig.AuthProviderFallback.DisplayOrigin.Hostname != "127.0.0.1" {
+		t.Fatalf("status auth provider fallback = %+v, want invocation override", plan.StatusConfig.AuthProviderFallback)
+	}
+	if plan.StatusConfig.AuthSelection == nil ||
+		plan.StatusConfig.AuthSelection.OpenAIBaseURL == nil ||
+		!strings.HasPrefix(*plan.StatusConfig.AuthSelection.OpenAIBaseURL, "http://127.0.0.1:") {
+		t.Fatalf("status auth selection = %+v, want invocation override", plan.StatusConfig.AuthSelection)
 	}
 	if len(plan.EnabledTools) != 1 || plan.EnabledTools[0] != toolspec.ToolExecCommand {
 		t.Fatalf("enabled tools = %+v, want only shell", plan.EnabledTools)

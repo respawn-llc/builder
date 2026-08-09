@@ -164,7 +164,8 @@ func (p *launchPlanner) PlanSession(ctx context.Context, req sessionLaunchReques
 	}
 	cfg := p.server.Config()
 	activeSettings := resp.Plan.ActiveSettings
-	authProvider, err := authProviderFactsForSettings(activeSettings)
+	authSelection := authstatus.ProviderSelection(activeSettings)
+	authProviderFallback, err := authProviderFallbackFactsForSettings(activeSettings)
 	if err != nil {
 		return sessionLaunchPlan{}, fmt.Errorf("resolve active auth provider: %w", err)
 	}
@@ -182,21 +183,22 @@ func (p *launchPlanner) PlanSession(ctx context.Context, req sessionLaunchReques
 		PromptHistory:       append([]string(nil), resp.Plan.PromptHistory...),
 		ModelContractLocked: resp.Plan.ModelContractLocked,
 		StatusConfig: uiStatusConfig{
-			WorkspaceRoot:   executionTarget.EffectiveWorkdir,
-			ExecutionTarget: executionTarget,
-			PersistenceRoot: cfg.PersistenceRoot,
-			SessionViews:    p.server.SessionViewClient(),
-			Settings:        activeSettings,
-			AuthProvider:    &authProvider,
-			Source:          resp.Plan.Source,
-			AuthStatus:      p.server.AuthStatusClient(),
+			WorkspaceRoot:        executionTarget.EffectiveWorkdir,
+			ExecutionTarget:      executionTarget,
+			PersistenceRoot:      cfg.PersistenceRoot,
+			SessionViews:         p.server.SessionViewClient(),
+			Settings:             activeSettings,
+			AuthProviderFallback: &authProviderFallback,
+			AuthSelection:        &authSelection,
+			Source:               resp.Plan.Source,
+			AuthStatus:           p.server.AuthStatusClient(),
 		},
 		ExecutionTarget: executionTarget,
 		Source:          resp.Plan.Source,
 	}, nil
 }
 
-func authProviderFactsForSettings(settings config.Settings) (serverapi.AuthProviderFacts, error) {
+func authProviderFallbackFactsForSettings(settings config.Settings) (serverapi.AuthProviderFacts, error) {
 	capabilities, err := llm.ResolveRuntimeProviderCapabilities(serverauth.EmptyState(), settings)
 	if err != nil {
 		return serverapi.AuthProviderFacts{}, err
