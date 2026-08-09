@@ -204,6 +204,9 @@ func (e *Engine) applyHumanBoundary(
 	stepID string,
 	selection boundarySelection,
 ) (humanBoundaryApplyResult, error) {
+	if !e.humanBoundarySelectionLive(selection) {
+		return humanBoundaryApplyResult{}, ErrNoActiveLiveRun
+	}
 	return e.applyHumanBoundaryItems(
 		admission,
 		stepID,
@@ -216,11 +219,28 @@ func (e *Engine) applyHumanBoundaryPrefix(
 	stepID string,
 	selection boundarySelection,
 ) (humanBoundaryApplyResult, error) {
+	if !e.humanBoundarySelectionLive(selection) {
+		return humanBoundaryApplyResult{}, ErrNoActiveLiveRun
+	}
 	return e.applyHumanBoundaryItems(
 		admission,
 		stepID,
 		e.boundaryAgenda.selectHumanPrefix(selection),
 	)
+}
+
+func (e *Engine) humanBoundarySelectionLive(selection boundarySelection) bool {
+	var scopeID runtimeids.ExecutionScopeID
+	switch selected := selection.(type) {
+	case scopeStepBoundarySelection:
+		scopeID = selected.scopeID
+	case scopeTurnBoundarySelection:
+		scopeID = selected.scopeID
+	default:
+		return true
+	}
+	lifecycle, ok := e.cfg.StepLifecycle.(AgentStepScopeLifecycle)
+	return !ok || lifecycle.AgentStepScopeLive(e.lifecycleCtx, scopeID)
 }
 
 func (e *Engine) applyHumanBoundaryItems(
