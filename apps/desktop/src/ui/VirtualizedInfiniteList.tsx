@@ -117,7 +117,6 @@ export function VirtualizedInfiniteList<TItem>({
     legacyPlaceholderIndex,
     nextBoundaryIndex,
     previousBoundaryIndex,
-    previousBoundaryCount,
   } = virtualizedListLayout({
     empty,
     getItemKey,
@@ -427,7 +426,6 @@ export function VirtualizedInfiniteList<TItem>({
               items,
               nextBoundaryIndex,
               previousBoundaryIndex,
-              previousBoundaryCount,
             })}
             role={virtualizedRowRole(role)}
             style={fallbackRowStyle({ count, index, paddingEnd, paddingStart })}
@@ -529,7 +527,6 @@ function fallbackRowKey<TItem>({
   items,
   nextBoundaryIndex,
   previousBoundaryIndex,
-  previousBoundaryCount,
 }: Readonly<{
   emptyCount: number;
   emptyIndex: number;
@@ -540,9 +537,8 @@ function fallbackRowKey<TItem>({
   items: readonly TItem[];
   nextBoundaryIndex: number | null;
   previousBoundaryIndex: number | null;
-  previousBoundaryCount: number;
 }>): string {
-  if (previousBoundaryCount > 0 && index === previousBoundaryIndex) {
+  if (previousBoundaryIndex !== null && index === previousBoundaryIndex) {
     return "boundary-previous";
   }
   if (headerIndex >= 0 && index === headerIndex) {

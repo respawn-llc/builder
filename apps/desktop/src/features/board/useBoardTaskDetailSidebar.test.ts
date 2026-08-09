@@ -1,6 +1,11 @@
 import { renderHook } from "@testing-library/react";
 
-import type { AppNavigation, SidebarRootHandle, SidebarRootOutcome } from "@/app-facade";
+import type {
+  AppNavigation,
+  SidebarRootController,
+  SidebarRootHandle,
+  SidebarRootOutcome,
+} from "@/app-facade";
 import { useBoardTaskDetailSidebar } from "./useBoardTaskDetailSidebar";
 
 const navigation: AppNavigation = {
@@ -17,6 +22,10 @@ const navigation: AppNavigation = {
 };
 
 describe("Board Task Detail sidebar route owner", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("pushes route changes through one root so browser Back reuses the prior entry", () => {
     const push = vi.fn(() => "accepted" as const);
     let resolveLifecycle: ((outcome: SidebarRootOutcome) => void) | undefined;
@@ -27,7 +36,7 @@ describe("Board Task Detail sidebar route owner", () => {
       push,
       release: vi.fn(),
     };
-    const openSidebar = vi.fn(() => root);
+    const openSidebar = vi.fn<SidebarRootController["open"]>(() => root);
     const onNavigationError = vi.fn();
     const { rerender } = renderHook(
       ({ selectedTaskID }: Readonly<{ selectedTaskID: string }>) => {
@@ -43,12 +52,15 @@ describe("Board Task Detail sidebar route owner", () => {
       { initialProps: { selectedTaskID: "task-1" } },
     );
 
-    expect(openSidebar).toHaveBeenCalledWith({
-      kind: "taskDetail",
-      mode: "overlay",
-      onMutated: undefined,
-      taskID: "task-1",
-    });
+    expect(openSidebar).toHaveBeenCalledWith(
+      {
+        kind: "taskDetail",
+        mode: "overlay",
+        onMutated: undefined,
+        taskID: "task-1",
+      },
+      expect.anything(),
+    );
 
     rerender({ selectedTaskID: "task-2" });
     expect(push).toHaveBeenCalledWith({
@@ -57,6 +69,9 @@ describe("Board Task Detail sidebar route owner", () => {
       onMutated: undefined,
       taskID: "task-2",
     });
+    const onBack = openSidebar.mock.calls[0]?.[1];
+    onBack?.();
+    expect(navigation.back).toHaveBeenCalledOnce();
 
     rerender({ selectedTaskID: "task-1" });
     expect(push).toHaveBeenLastCalledWith({
@@ -64,6 +79,13 @@ describe("Board Task Detail sidebar route owner", () => {
       mode: "overlay",
       onMutated: undefined,
       taskID: "task-1",
+    });
+    rerender({ selectedTaskID: "task-2" });
+    expect(push).toHaveBeenLastCalledWith({
+      kind: "taskDetail",
+      mode: "overlay",
+      onMutated: undefined,
+      taskID: "task-2",
     });
     expect(openSidebar).toHaveBeenCalledOnce();
     expect(onNavigationError).not.toHaveBeenCalled();

@@ -1,13 +1,5 @@
-import { useCallback, useEffect, useRef } from "react";
-
-import type {
-  AppNavigation,
-  SidebarDestination,
-  SidebarRootController,
-  SidebarRootHandle,
-} from "@/app-facade";
-
-type BoardTaskDetailDestination = Extract<SidebarDestination, { kind: "taskDetail" }>;
+import { useEffect, useRef } from "react";
+import type { AppNavigation, SidebarRootController, SidebarRootHandle } from "@/app-facade";
 
 export function useBoardTaskDetailSidebar({
   navigation,
@@ -25,67 +17,46 @@ export function useBoardTaskDetailSidebar({
   workflowID: string;
 }>): void {
   const rootRef = useRef<SidebarRootHandle | null>(null);
-  const lastPageTaskIDRef = useRef<string | null>(null);
-  const registerRoot = useCallback(
-    (root: SidebarRootHandle, taskID: string) => {
-      rootRef.current = root;
-      lastPageTaskIDRef.current = taskID;
-      void root.lifecycle.then((outcome) => {
-        if (rootRef.current !== root) {
-          return;
-        }
-        rootRef.current = null;
-        lastPageTaskIDRef.current = null;
-        if (outcome === "closed") {
-          void navigation.closeProjectTask(projectID, workflowID).catch(onNavigationError);
-        }
-      });
-    },
-    [navigation, onNavigationError, projectID, workflowID],
-  );
-
+  const lastTaskIDRef = useRef<string | null>(null);
   useEffect(() => {
     if (selectedTaskID.length === 0) {
       rootRef.current?.release();
       rootRef.current = null;
-      lastPageTaskIDRef.current = null;
+      lastTaskIDRef.current = null;
       return;
     }
-
-    const destination = boardTaskDetailDestination(selectedTaskID);
+    const destination = {
+      kind: "taskDetail" as const,
+      mode: "overlay" as const,
+      onMutated: undefined,
+      taskID: selectedTaskID,
+    };
+    const openRoot = () => {
+      const root = openSidebar(destination, () => void navigation.back().catch(onNavigationError));
+      rootRef.current = root;
+      lastTaskIDRef.current = selectedTaskID;
+      void root.lifecycle.then((outcome) => {
+        if (rootRef.current !== root) return;
+        rootRef.current = null;
+        lastTaskIDRef.current = null;
+        if (outcome === "closed") {
+          void navigation.closeProjectTask(projectID, workflowID).catch(onNavigationError);
+        }
+      });
+    };
     const root = rootRef.current;
     if (root === null) {
-      registerRoot(openSidebar(destination), selectedTaskID);
+      openRoot();
       return;
     }
-    if (lastPageTaskIDRef.current === selectedTaskID) {
-      return;
-    }
-
-    const outcome = root.push(destination);
-    if (outcome !== "accepted") {
+    if (lastTaskIDRef.current === selectedTaskID) return;
+    if (root.push(destination) !== "accepted") {
       root.release();
-      registerRoot(openSidebar(destination), selectedTaskID);
+      openRoot();
       return;
     }
-    lastPageTaskIDRef.current = selectedTaskID;
-  }, [openSidebar, registerRoot, selectedTaskID]);
+    lastTaskIDRef.current = selectedTaskID;
+  }, [navigation, onNavigationError, openSidebar, projectID, selectedTaskID, workflowID]);
 
-  useEffect(
-    () => () => {
-      const root = rootRef.current;
-      rootRef.current = null;
-      root?.release();
-    },
-    [],
-  );
-}
-
-function boardTaskDetailDestination(taskID: string): BoardTaskDetailDestination {
-  return {
-    kind: "taskDetail",
-    mode: "overlay",
-    onMutated: undefined,
-    taskID,
-  };
+  useEffect(() => () => rootRef.current?.release(), []);
 }

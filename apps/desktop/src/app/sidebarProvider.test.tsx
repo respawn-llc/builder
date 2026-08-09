@@ -174,6 +174,36 @@ describe("SidebarProvider stack", () => {
     expect(result.current.shell.activeDestination).toEqual(destination("A"));
   });
 
+  it("delegates route-owned sidebar Back to the route history owner", () => {
+    const { result } = renderHook(useHarness, { wrapper });
+    const onBack = vi.fn();
+    let root: SidebarRootHandle | undefined;
+
+    act(() => {
+      root = result.current.roots.open(destination("A"), onBack);
+    });
+    const a = requireNavigator(result.current);
+    act(() => {
+      a.registerCapture(() => ({ scrollOffsetPx: 240 }));
+      expect(root?.push(destination("B"))).toBe("accepted");
+    });
+    expect(result.current.shell.back()).toBe("accepted");
+
+    expect(onBack).toHaveBeenCalledOnce();
+    expect(result.current.shell.activeDestination).toEqual(destination("B"));
+
+    act(() => {
+      expect(root?.push(destination("A"))).toBe("accepted");
+    });
+    expect(result.current.page?.retainedState).toEqual({ scrollOffsetPx: 240 });
+    const restoredA = requireNavigator(result.current);
+    act(() => {
+      restoredA.registerCapture(() => ({ scrollOffsetPx: 300 }));
+      expect(root?.push(destination("B"))).toBe("accepted");
+    });
+    expect(result.current.shell.activeDestination).toEqual(destination("B"));
+  });
+
   it("rejects append Push without capture while leaving the page capability active", () => {
     const { result } = renderHook(useHarness, { wrapper });
 

@@ -104,7 +104,7 @@ export type SidebarRootHandle = Readonly<{
 }>;
 
 export type SidebarRootController = Readonly<{
-  open(destination: SidebarDestination): SidebarRootHandle;
+  open(destination: SidebarDestination, onBack?: () => void): SidebarRootHandle;
 }>;
 
 export type SidebarShellController = Readonly<{
@@ -144,8 +144,8 @@ export function SidebarRootOwner({ children }: Readonly<{ children: ReactNode }>
   const roots = useSidebarRoots();
   const [handles] = useState(() => new Set<SidebarRootHandle>());
   const open = useCallback(
-    (destination: SidebarDestination) => {
-      const handle = roots.open(destination);
+    (destination: SidebarDestination, onBack?: () => void) => {
+      const handle = roots.open(destination, onBack);
       handles.add(handle);
       void handle.lifecycle.finally(() => {
         handles.delete(handle);

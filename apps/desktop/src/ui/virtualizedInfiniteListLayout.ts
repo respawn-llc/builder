@@ -1,17 +1,8 @@
 import type { ReactNode } from "react";
-
 import type { VirtualizedInfiniteListBoundaryState } from "./InfiniteListBoundary";
 
-export type VirtualizedListLayout = Readonly<{
-  count: number;
-  emptyIndex: number;
-  emptyCount: number;
-  itemStartIndex: number;
-  legacyPlaceholderIndex: number | null;
-  nextBoundaryIndex: number | null;
-  previousBoundaryIndex: number | null;
-  previousBoundaryCount: number;
-}>;
+const boundaryCount = (boundary: unknown): number => Number(boundary !== undefined);
+const previousIndex = <T,>(boundary: VirtualizedInfiniteListBoundaryState | undefined, key: string | undefined, items: readonly T[], getKey: (item: T) => string): number | null => boundary === undefined ? null : key === undefined ? 0 : Math.max(0, items.findIndex((item) => getKey(item) === key));
 
 export function virtualizedListLayout<TItem>({
   empty,
@@ -33,72 +24,34 @@ export function virtualizedListLayout<TItem>({
   nextBoundary: VirtualizedInfiniteListBoundaryState | undefined;
   previousBoundary: VirtualizedInfiniteListBoundaryState | undefined;
   previousLoadItemKey: string | undefined;
-}>): VirtualizedListLayout {
-  const previousBoundaryCount = previousBoundary === undefined ? 0 : 1;
-  const headerCount = hasHeader ? 1 : 0;
-  const emptyCount = itemCount === 0 && empty !== undefined ? 1 : 0;
-  const itemStartIndex = headerCount;
-  const previousBoundaryIndex = resolvePreviousBoundaryIndex({
-    getItemKey,
-    itemStartIndex,
-    items,
+}>) {
+  const itemStartIndex = Number(hasHeader);
+  const emptyCount = Number(itemCount === 0 && empty !== undefined);
+  const previousItemIndex = previousIndex(
     previousBoundary,
     previousLoadItemKey,
-  });
+    items,
+    getItemKey,
+  );
+  const previousBoundaryIndex =
+    previousItemIndex === null ? null : itemStartIndex + previousItemIndex;
   const contentCount = Math.max(itemCount, emptyCount);
-  const emptyIndex = resolveEmptyIndex(emptyCount, itemStartIndex, previousBoundaryIndex);
-  const nextBoundaryCount = nextBoundary === undefined ? 0 : 1;
-  const placeholderCount = nextBoundary === undefined && hasNextPage ? 1 : 0;
-  const nextContentIndex = itemStartIndex + contentCount + previousBoundaryCount;
+  const emptyIndex =
+    emptyCount === 0 ? itemStartIndex : virtualIndexForDataIndex(itemStartIndex, 0, previousBoundaryIndex);
+  const nextContentIndex = itemStartIndex + contentCount + boundaryCount(previousBoundary);
   return {
-    count: nextContentIndex + nextBoundaryCount + placeholderCount,
+    count: nextContentIndex + boundaryCount(nextBoundary) +
+      Number(nextBoundary === undefined && hasNextPage),
     emptyIndex,
     emptyCount,
     itemStartIndex,
     legacyPlaceholderIndex: nextBoundary === undefined && hasNextPage ? nextContentIndex : null,
     nextBoundaryIndex: nextBoundary === undefined ? null : nextContentIndex,
     previousBoundaryIndex,
-    previousBoundaryCount,
   };
 }
 
-function resolvePreviousBoundaryIndex<TItem>({
-  getItemKey,
-  itemStartIndex,
-  items,
-  previousBoundary,
-  previousLoadItemKey,
-}: Readonly<{
-  getItemKey: (item: TItem) => string;
-  itemStartIndex: number;
-  items: readonly TItem[];
-  previousBoundary: VirtualizedInfiniteListBoundaryState | undefined;
-  previousLoadItemKey: string | undefined;
-}>): number | null {
-  if (previousBoundary === undefined) {
-    return null;
-  }
-  if (previousLoadItemKey === undefined) {
-    return 0;
-  }
-  const itemIndex = items.findIndex((item) => getItemKey(item) === previousLoadItemKey);
-  return itemStartIndex + Math.max(0, itemIndex);
-}
-
-function resolveEmptyIndex(
-  emptyCount: number,
-  itemStartIndex: number,
-  previousBoundaryIndex: number | null,
-): number {
-  if (emptyCount === 0) {
-    return itemStartIndex;
-  }
-  return virtualIndexForDataIndex(itemStartIndex, 0, previousBoundaryIndex);
-}
-
-export function headerIndex(previousBoundaryIndex: number | null): number {
-  return previousBoundaryIndex === 0 ? 1 : 0;
-}
+export const headerIndex = (previousBoundaryIndex: number | null): number => previousBoundaryIndex === 0 ? 1 : 0;
 
 export function virtualIndexForDataIndex(
   itemStartIndex: number,
@@ -106,9 +59,7 @@ export function virtualIndexForDataIndex(
   previousBoundaryIndex: number | null,
 ): number {
   const virtualIndex = itemStartIndex + dataIndex;
-  return previousBoundaryIndex !== null && virtualIndex >= previousBoundaryIndex
-    ? virtualIndex + 1
-    : virtualIndex;
+  return previousBoundaryIndex !== null && virtualIndex >= previousBoundaryIndex ? virtualIndex + 1 : virtualIndex;
 }
 
 export function dataIndexForVirtualIndex(
@@ -116,9 +67,7 @@ export function dataIndexForVirtualIndex(
   itemStartIndex: number,
   previousBoundaryIndex: number | null,
 ): number | null {
-  if (previousBoundaryIndex !== null && virtualIndex === previousBoundaryIndex) {
-    return null;
-  }
+  if (previousBoundaryIndex !== null && virtualIndex === previousBoundaryIndex) return null;
   const shift = previousBoundaryIndex !== null && virtualIndex > previousBoundaryIndex ? 1 : 0;
   const dataIndex = virtualIndex - itemStartIndex - shift;
   return dataIndex < 0 ? null : dataIndex;

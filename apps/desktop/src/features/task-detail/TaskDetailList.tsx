@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import type { ActivityItem, AttentionItem, TaskComment, TaskDetail, TaskDependencyDirection } from "@/api";
 import { errorMessage } from "@/api";
 import type { TaskDetailInitialFocus } from "@/app-facade";
+import { taskDetailInitialFocusRequestKey } from "@/app-facade";
 import { useSidebarHeaderOffset } from "@/app-facade";
 import type { TaskDependencyPair } from "@/shared/task-dependencies";
 import {
@@ -21,14 +22,7 @@ import { DescriptionIsland, PropertiesIsland, TaskHeaderIsland, type TaskDraft }
 import { TaskTabs, type DetailTab } from "./TaskDetailTabs";
 import { TaskDependenciesArea } from "./TaskDependenciesArea";
 import type { QuestionSelectionState } from "./TaskDetailQuestionState";
-import {
-  resolveFeedPixelOffsetRequest,
-  resolveFirstFeedItemKey,
-  resolveTaskDetailFocusRequestKey,
-  resolveTaskDetailInitialScrollKey,
-  taskDetailDraftState,
-} from "./taskDetailListHelpers";
-import { taskDetailPaging } from "./taskDetailPaging";
+import { feedPixelOffsetRequest, selectedFeed, taskDetailPaging } from "./taskDetailPaging";
 import type {
   useTaskActivity,
   useTaskAttention,
@@ -120,7 +114,8 @@ export function TaskDetailList({
 }>) {
   const { t } = useTranslation();
   const headerOffset = useSidebarHeaderOffset();
-  const { canSaveDraft, draftDirty } = taskDetailDraftState({ detail, disabled, draft, updatePending });
+  const draftDirty = draft.title !== detail.title || draft.body !== detail.body;
+  const canSaveDraft = draftDirty && !disabled && !updatePending && draft.title.trim().length > 0;
   const activityItems = useMemo(
     () =>
       withPresentationKeys(
@@ -171,7 +166,8 @@ export function TaskDetailList({
       selectedTab,
     ],
   );
-  const initialScrollKey = resolveTaskDetailInitialScrollKey(initialFocus);
+  const initialScrollKey =
+    initialFocus?.kind === "dependencies" ? "dependencies" : initialFocus === undefined ? undefined : "inbox";
   const pinnedItemKeys = useMemo(() => {
     const keys = new Set<string>();
     if (attention.isPending || (initialFocus !== undefined && initialFocus.kind !== "dependencies")) {
@@ -199,14 +195,12 @@ export function TaskDetailList({
     onRetry: paging.loadNext,
     retryLabel: t("app.retry"),
   });
-  const firstFeedItemKey = resolveFirstFeedItemKey(selectedTab, activityItems, commentItems);
-  const feedPixelOffsetRequest = resolveFeedPixelOffsetRequest({
-    activityPending: activity.isPending,
-    commentsPending: comments.isPending,
-    attentionPending: attention.isPending,
+  const firstFeedItemKey = selectedFeed(selectedTab, commentItems, activityItems)[0]?.presentationKey;
+  const feedOffsetRequest = feedPixelOffsetRequest(
+    attention.isPending,
+    selectedFeed(selectedTab, comments.isPending, activity.isPending),
     pixelOffsetRequest,
-    selectedTab,
-  });
+  );
 
   return (
     <VirtualizedInfiniteList
@@ -217,7 +211,10 @@ export function TaskDetailList({
       hasNextPage={autoLoadAvailable(paging.hasNextPage, nextBoundary)}
       hasPreviousPage={autoLoadAvailable(paging.hasPreviousPage, previousBoundary)}
       initialScrollKey={initialScrollKey}
-      initialScrollRequestKey={resolveTaskDetailFocusRequestKey(detail.id, initialFocus, focusRequestKey)}
+      initialScrollRequestKey={
+        focusRequestKey ??
+        (initialFocus === undefined ? undefined : taskDetailInitialFocusRequestKey(detail.id, initialFocus))
+      }
       isFetchingNextPage={paging.isFetchingNextPage}
       isFetchingPreviousPage={paging.isFetchingPreviousPage}
       items={listItems}
@@ -229,7 +226,7 @@ export function TaskDetailList({
       onScrollElementChange={onScrollElementChange}
       paddingStart={headerOffset}
       pinnedItemKeys={pinnedItemKeys}
-      pixelOffsetRequest={feedPixelOffsetRequest}
+      pixelOffsetRequest={feedOffsetRequest}
       rowSpacing="compact"
       nextBoundary={nextBoundary}
       previousBoundary={previousBoundary}
