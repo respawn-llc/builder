@@ -125,9 +125,9 @@ func projectObservationQuestion(question serverapi.ObservationQuestion, answerSe
 	var recommendation *int
 	switch {
 	case question.Ask != nil:
-		id, text, suggestions, recommendation = question.Ask.AskID, question.Ask.Question, append(suggestions, question.Ask.Suggestions...), question.Ask.RecommendedOptionIndex
+		id, text, suggestions, recommendation = string(question.Ask.PromptID), question.Ask.Question, append(suggestions, question.Ask.Suggestions...), question.Ask.RecommendedOptionIndex
 	case question.Approval != nil:
-		id, text = question.Approval.ApprovalID, question.Approval.Question
+		id, text = string(question.Approval.PromptID), question.Approval.Question
 		suggestions = make([]string, 0, len(question.Approval.Options))
 		for _, option := range question.Approval.Options {
 			suggestions = append(suggestions, option.Label)
@@ -223,9 +223,9 @@ func projectTaskObservationJSON(targetTaskID string, response serverapi.Workflow
 			var err error
 			switch {
 			case observed.Question.Ask != nil:
-				outcome, err = projectObservationQuestion(*observed.Question, observed.Question.Ask.SessionID, observed.NodeKey)
+				outcome, err = projectObservationQuestion(*observed.Question, observed.Question.Ask.SessionID.String(), observed.NodeKey)
 			case observed.Question.Approval != nil:
-				outcome, err = projectObservationQuestion(*observed.Question, observed.Question.Approval.SessionID, observed.NodeKey)
+				outcome, err = projectObservationQuestion(*observed.Question, observed.Question.Approval.SessionID.String(), observed.NodeKey)
 			default:
 				err = errors.New("question outcome has no question payload")
 			}
