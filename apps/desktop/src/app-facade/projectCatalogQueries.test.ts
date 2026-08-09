@@ -78,17 +78,22 @@ describe("Project catalog query authority", () => {
     expect(requests.at(-1)).toEqual({ kind: "newer", token: "newer-0" });
     unsubscribe();
   });
-  it("keeps workspace traversal forward-only and retains five pages", async () => {
+  it("keeps workspace traversal forward-only and retains fewer than the full collection", async () => {
     const requests: (string | undefined)[] = [];
+    const pageByToken = new Map<string, number>();
     const api: Pick<ApiService, "listWorkspaces"> = {
       listWorkspaces: async (projectID: string, pageToken?: string): Promise<WorkspaceList> => {
         expect(projectID).toBe("project-1");
         requests.push(pageToken);
+        const page = pageToken === undefined ? 0 : pageByToken.get(pageToken);
+        if (page === undefined) throw new Error("fixture received an unknown continuation.");
+        const nextPageToken = `next-${String(page + 1)}`;
+        pageByToken.set(nextPageToken, page + 1);
         return {
           projectID,
           workspaces: [],
           defaultWorkspaceID: "workspace-1",
-          nextPageToken: pageToken === undefined ? "next-1" : pageToken === "next-1" ? "next-2" : null,
+          nextPageToken,
         };
       },
     };
@@ -100,10 +105,11 @@ describe("Project catalog query authority", () => {
     const unsubscribe = observer.subscribe(() => undefined);
 
     await waitForSuccess(observer);
-    await observer.fetchNextPage();
-    await observer.fetchNextPage();
-    expect(requests).toEqual([undefined, "next-1", "next-2"]);
-    expect(observer.getCurrentResult().data?.pages).toHaveLength(3);
+    for (let index = 0; index < 5; index += 1) {
+      await observer.fetchNextPage();
+    }
+    expect(requests).toEqual([undefined, "next-1", "next-2", "next-3", "next-4", "next-5"]);
+    expect(observer.getCurrentResult().data?.pages).toHaveLength(4);
     expect(observer.getCurrentResult().hasPreviousPage).toBe(false);
     unsubscribe();
   });

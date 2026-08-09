@@ -11,7 +11,7 @@ import type {
   WorkspaceUnlinkResponse,
 } from "../models";
 import { projectBindingSchema, workflowIDSchema, workspaceSummarySchema } from "./common";
-import { canonicalProjectIDSchema, workspacePageTokenSchema } from "./catalog";
+import { canonicalProjectIDSchema, workspaceContinuationWireSchema } from "./catalog";
 
 const workspaceListRowSchema = workspaceSummarySchema.superRefine((value, context) => {
   if (!canonicalProjectIDSchema.safeParse(value.id).success) {
@@ -25,7 +25,7 @@ const workspaceListRowSchema = workspaceSummarySchema.superRefine((value, contex
   }
 });
 
-export const workspaceContinuationSchema = workspacePageTokenSchema
+export const workspaceContinuationSchema = workspaceContinuationWireSchema
   .optional()
   .transform((value) => (value === undefined || value === "" ? null : value));
 

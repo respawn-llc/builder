@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sessionPageResponseSchema } from "./catalog";
+import { sessionPageResponseSchema, workspacePageTokenSchema } from "./catalog";
 import { workspaceListSchema } from "./project";
 const session = {
   session_id: "session-1",
@@ -208,5 +208,9 @@ describe("Workspace list schema", () => {
         })),
       }),
     ).toThrow();
+  });
+  it("does not represent an absent initial cursor as an empty page token", () => {
+    expect(workspacePageTokenSchema.safeParse("").success).toBe(false);
+    expect(workspacePageTokenSchema.safeParse("next-token").success).toBe(true);
   });
 });

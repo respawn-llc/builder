@@ -8,7 +8,8 @@ import type {
 } from "@/api";
 import { queryKeys } from "./queryKeys";
 
-const catalogMaxPages = 5;
+const sessionCatalogMaxPages = 5;
+const workspaceCatalogMaxPages = 4;
 type SessionCatalogApi = Pick<ApiService, "listSessionPage">;
 type WorkspaceCatalogApi = Pick<ApiService, "listWorkspaces">;
 type WorkspaceCatalogQueryKey = ReturnType<typeof queryKeys.projectWorkspaceCatalog>;
@@ -43,7 +44,7 @@ export function workspaceCatalogInfiniteQueryOptions(
       pageParam === null ? api.listWorkspaces(projectID) : api.listWorkspaces(projectID, pageParam),
     initialPageParam: null,
     getNextPageParam: (lastPage: WorkspaceList) => lastPage.nextPageToken ?? undefined,
-    maxPages: catalogMaxPages,
+    maxPages: workspaceCatalogMaxPages,
   });
 }
 
@@ -70,6 +71,6 @@ function sessionCatalogInfiniteQueryOptions(
       lastPage.older === null ? undefined : { kind: "older", token: lastPage.older },
     getPreviousPageParam: (firstPage: SessionCatalogPage): SessionPagePosition | undefined =>
       firstPage.newer === null ? undefined : { kind: "newer", token: firstPage.newer },
-    maxPages: catalogMaxPages,
+    maxPages: sessionCatalogMaxPages,
   });
 }

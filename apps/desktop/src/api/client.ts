@@ -197,17 +197,20 @@ export class ApiClient implements ApiService {
     return response;
   }
 
-  async listWorkspaces(projectID: string, pageToken = ""): Promise<WorkspaceList> {
+  async listWorkspaces(projectID: string, pageToken?: string): Promise<WorkspaceList> {
     const validatedProjectID = parseCatalogInput("project.workspace.list project ID", canonicalProjectIDSchema, projectID);
-    const validatedPageToken = parseCatalogInput("project.workspace.list page token", workspacePageTokenSchema, pageToken);
+    const validatedPageToken =
+      pageToken === undefined
+        ? undefined
+        : parseCatalogInput("project.workspace.list page token", workspacePageTokenSchema, pageToken);
+    const request =
+      validatedPageToken === undefined
+        ? { project_id: validatedProjectID, page_size: 100 }
+        : { project_id: validatedProjectID, page_size: 100, page_token: validatedPageToken };
     const response = parseCatalogResponse(
       "project.workspace.list",
       workspaceListSchema,
-      await this.#transport.call("project.workspace.list", {
-        project_id: validatedProjectID,
-        page_size: 100,
-        page_token: validatedPageToken,
-      }),
+      await this.#transport.call("project.workspace.list", request),
     );
     requireCatalogProject("project.workspace.list", validatedProjectID, response.projectID);
     return response;

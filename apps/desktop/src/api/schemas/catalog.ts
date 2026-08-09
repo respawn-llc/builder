@@ -10,9 +10,8 @@ export const canonicalProjectIDSchema = z
   .refine((value) => value.trim().length > 0 && value.trim() === value);
 const canonicalNonBlankString = canonicalProjectIDSchema;
 const opaqueTokenSchema = canonicalNonBlankString;
-export const workspacePageTokenSchema = z.string().refine(
-  (value) => value === "" || canonicalProjectIDSchema.safeParse(value).success,
-);
+export const workspacePageTokenSchema = canonicalNonBlankString;
+export const workspaceContinuationWireSchema = z.union([z.literal(""), canonicalNonBlankString]);
 export const sessionCategorySchema: z.ZodType<SessionCategory> = z.enum(["main", "subagent"]);
 export const sessionPagePositionSchema: z.ZodType<SessionPagePosition> = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("newest") }).strict(),

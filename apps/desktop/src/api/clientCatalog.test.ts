@@ -66,7 +66,7 @@ describe("ApiClient catalog boundary", () => {
     ).rejects.toBeInstanceOf(ContractError);
     expect(transport.calls).toHaveLength(0);
   });
-  it.each([" ", " next-token", "next-token "])("rejects invalid workspace page tokens %j", async (pageToken) => {
+  it.each(["", " ", " next-token", "next-token "])("rejects invalid workspace page tokens %j", async (pageToken) => {
     const transport = new FakeRpcTransport([]);
     await expect(new ApiClient(transport).listWorkspaces("project-1", pageToken)).rejects.toBeInstanceOf(ContractError);
     expect(transport.calls).toHaveLength(0);
@@ -110,7 +110,7 @@ describe("ApiClient catalog boundary", () => {
     expect(transport.calls).toEqual([
       {
         method: "project.workspace.list",
-        params: { project_id: "project-1", page_size: 100, page_token: "" },
+        params: { project_id: "project-1", page_size: 100 },
       },
     ]);
     await expect(
