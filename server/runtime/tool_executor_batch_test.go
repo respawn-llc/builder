@@ -11,8 +11,11 @@ import (
 	"time"
 
 	"core/server/llm"
+	"core/server/runtimecommand"
 	"core/server/session"
 	"core/server/tools"
+	"core/server/workflowruntime"
+	"core/shared/config"
 	"core/shared/toolspec"
 )
 
@@ -39,6 +42,186 @@ func TestExecuteToolCallsRejectsMissingProviderCallIDBeforeToolExecution(t *test
 	if probe.calls.Load() != 0 {
 		t.Fatal("missing provider call ID reached a local tool handler")
 	}
+}
+
+func TestToolLifecycleUsesStartAndResultRuntimeEvents(t *testing.T) {
+	store := mustCreateTestSession(t)
+	startPublished := make(chan struct{})
+	completionPublished := make(chan struct{})
+	handlerStarted := make(chan struct{})
+	releaseHandler := make(chan struct{})
+	defer closeSignalOnce(releaseHandler)
+	engine := mustNewTestEngine(
+		t,
+		store,
+		&fakeClient{},
+		tools.NewRegistry(tools.HandlerRegistration{
+			ID: toolspec.ToolExecCommand,
+			Handler: blockingTool{
+				name:    toolspec.ToolExecCommand,
+				started: handlerStarted,
+				release: releaseHandler,
+			},
+		}),
+		Config{
+			Model: "gpt-5",
+			OnEvent: func(event Event) {
+				switch {
+				case event.Kind == EventToolCallStarted &&
+					event.ToolCall != nil &&
+					event.ToolCall.ID == "event-owned-tool":
+					closeSignalOnce(startPublished)
+				case event.Kind == EventToolCallCompleted &&
+					event.ToolResult != nil &&
+					event.ToolResult.CallID == "event-owned-tool":
+					closeSignalOnce(completionPublished)
+				}
+			},
+		},
+	)
+
+	executionDone := make(chan error, 1)
+	go func() {
+		_, err := engine.executeToolCalls(context.Background(), "step", []llm.ToolCall{{
+			ID:    "event-owned-tool",
+			Name:  string(toolspec.ToolExecCommand),
+			Input: json.RawMessage(`{"cmd":"pwd"}`),
+		}})
+		executionDone <- err
+	}()
+	select {
+	case <-startPublished:
+	case <-time.After(3 * time.Second):
+		t.Fatal("tool start was not published")
+	}
+	select {
+	case <-handlerStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("tool handler did not start after its start event")
+	}
+
+	blockerStarted := make(chan struct{})
+	releaseBlocker := make(chan struct{})
+	defer closeSignalOnce(releaseBlocker)
+	if _, err := runtimecommand.Submit(
+		context.Background(),
+		engine.runtimeEvents,
+		struct{}{},
+		func(
+			admission runtimecommand.Admission,
+			_ struct{},
+			complete func(struct{}, error),
+		) error {
+			close(blockerStarted)
+			select {
+			case <-releaseBlocker:
+				complete(struct{}{}, nil)
+			case <-admission.Context().Done():
+			}
+			return nil
+		},
+	); err != nil {
+		t.Fatalf("submit Runtime Event blocker: %v", err)
+	}
+	<-blockerStarted
+	closeSignalOnce(releaseHandler)
+	select {
+	case err := <-executionDone:
+		t.Fatalf("tool execution finished before terminal result admission: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	closeSignalOnce(releaseBlocker)
+	if err := <-executionDone; err != nil {
+		t.Fatalf("execute tool: %v", err)
+	}
+	select {
+	case <-completionPublished:
+	case <-time.After(3 * time.Second):
+		t.Fatal("tool completion was not published through its result event")
+	}
+}
+
+func TestCompleteNodeKeepsCommittedResultAfterCancelingSiblingTools(t *testing.T) {
+	store := mustCreateTestSession(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	siblingStarted := make(chan struct{})
+	baseController := &fakeWorkflowController{}
+	controller := &cancelingCompletionController{
+		fakeWorkflowController: baseController,
+		siblingStarted:         siblingStarted,
+		cancel:                 cancel,
+	}
+	engine := mustNewWorkflowTestEngine(
+		t,
+		store,
+		&fakeClient{},
+		testWorkflowConfig(controller, config.WorkflowCompletionModeTool),
+		Config{
+			EnabledTools: []toolspec.ID{toolspec.ToolExecCommand},
+		},
+	)
+	engine.registry = tools.NewRegistry(tools.HandlerRegistration{
+		ID: toolspec.ToolExecCommand,
+		Handler: cancellationAwareTool{
+			started: siblingStarted,
+		},
+	})
+
+	results, err := engine.executeToolCalls(ctx, "step", []llm.ToolCall{
+		completeNodeCall(
+			"complete-node",
+			json.RawMessage(`{"commentary":"complete","summary":"done"}`),
+		),
+		{
+			ID:    "sibling-tool",
+			Name:  string(toolspec.ToolExecCommand),
+			Input: json.RawMessage(`{"cmd":"sleep"}`),
+		},
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("execute completion batch error = %v, want sibling cancellation", err)
+	}
+	if len(results) != 2 ||
+		results[0].CallID != "complete-node" ||
+		results[0].IsError ||
+		!results[0].Terminal {
+		t.Fatalf("committed complete_node result = %+v", results)
+	}
+	if baseController.completed.Load() != 1 {
+		t.Fatalf("workflow completions = %d, want one", baseController.completed.Load())
+	}
+	if completion, ok := engine.transcriptRuntimeState().ToolCompletionSnapshot("complete-node"); !ok ||
+		completion.IsError {
+		t.Fatalf("persisted complete_node completion = %+v, found=%t", completion, ok)
+	}
+	if completion, ok := engine.transcriptRuntimeState().ToolCompletionSnapshot("sibling-tool"); !ok ||
+		!completion.IsError {
+		t.Fatalf("persisted sibling completion = %+v, found=%t", completion, ok)
+	}
+}
+
+type cancelingCompletionController struct {
+	*fakeWorkflowController
+	siblingStarted <-chan struct{}
+	cancel         context.CancelFunc
+}
+
+func (c *cancelingCompletionController) CompleteCurrentNode(
+	ctx context.Context,
+	request workflowruntime.CompletionRequest,
+) (workflowruntime.CompletionResult, error) {
+	select {
+	case <-c.siblingStarted:
+	case <-ctx.Done():
+		return workflowruntime.CompletionResult{}, context.Cause(ctx)
+	}
+	result, err := c.fakeWorkflowController.CompleteCurrentNode(ctx, request)
+	if err == nil {
+		c.cancel()
+	}
+	return result, err
 }
 
 type toolExecutionProbe struct {
