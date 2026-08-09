@@ -48,9 +48,6 @@ type reconnectRetryRuntimeControlClient struct {
 	compactCalls     int
 	showGoalErr      error
 	showGoalCalls    int
-	queuedWorkErr    error
-	queuedWork       bool
-	queuedWorkCalls  int
 	submitCalls      int
 	recordCalls      int
 	submitRequestID  []string
@@ -144,24 +141,6 @@ func (c *reconnectRetryRuntimeControlClient) SubmitUserShellCommand(context.Cont
 
 func (c *reconnectRetryRuntimeControlClient) CompactContext(context.Context, serverapi.RuntimeCompactContextRequest) error {
 	return nil
-}
-
-func (c *reconnectRetryRuntimeControlClient) CompactContextForPreSubmit(context.Context, serverapi.RuntimeCompactContextForPreSubmitRequest) error {
-	return nil
-}
-
-func (c *reconnectRetryRuntimeControlClient) HasQueuedUserWork(context.Context, serverapi.RuntimeHasQueuedUserWorkRequest) (serverapi.RuntimeHasQueuedUserWorkResponse, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.queuedWorkCalls++
-	if c.queuedWorkCalls == 1 && c.queuedWorkErr != nil {
-		return serverapi.RuntimeHasQueuedUserWorkResponse{}, c.queuedWorkErr
-	}
-	return serverapi.RuntimeHasQueuedUserWorkResponse{HasQueuedUserWork: c.queuedWork}, nil
-}
-
-func (c *reconnectRetryRuntimeControlClient) SubmitQueuedUserMessages(context.Context, serverapi.RuntimeSubmitQueuedUserMessagesRequest) (serverapi.RuntimeSubmitQueuedUserMessagesResponse, error) {
-	return serverapi.RuntimeSubmitQueuedUserMessagesResponse{}, nil
 }
 
 func (c *reconnectRetryRuntimeControlClient) Interrupt(_ context.Context, req serverapi.RuntimeInterruptRequest) (serverapi.RuntimeInterruptResponse, error) {
@@ -680,38 +659,6 @@ func TestRuntimeClientShowGoalRecoversRuntimeUnavailableSilently(t *testing.T) {
 	}
 	if entries := controls.appendedLocalEntries(); len(entries) != 0 {
 		t.Fatalf("did not expect visible recovery warning during goal read, got %+v", entries)
-	}
-}
-
-func TestRuntimeClientHasQueuedUserWorkRecoversRuntimeUnavailableSilently(t *testing.T) {
-	controls := &reconnectRetryRuntimeControlClient{
-		queuedWorkErr: serverapi.ErrRuntimeUnavailable,
-		queuedWork:    true,
-	}
-	runtimeClient := newTestSessionRuntimeClientWithControls(controls)
-	reactivator := newRuntimeReactivator()
-	recoveryCalls := 0
-	reactivator.SetReactivateFunc(func(context.Context) error {
-		recoveryCalls++
-		return nil
-	})
-	runtimeClient.SetRuntimeReactivator(reactivator)
-
-	hasWork, err := runtimeClient.HasQueuedUserWork()
-	if err != nil {
-		t.Fatalf("HasQueuedUserWork: %v", err)
-	}
-	if !hasWork {
-		t.Fatal("HasQueuedUserWork = false, want true")
-	}
-	if recoveryCalls != 1 {
-		t.Fatalf("recovery call count = %d, want 1", recoveryCalls)
-	}
-	if controls.queuedWorkCalls != 2 {
-		t.Fatalf("queued-work call count = %d, want 2", controls.queuedWorkCalls)
-	}
-	if entries := controls.appendedLocalEntries(); len(entries) != 0 {
-		t.Fatalf("did not expect visible recovery warning during queued-work read, got %+v", entries)
 	}
 }
 

@@ -455,13 +455,6 @@ func runBackParentPrefillScenario(t *testing.T, server backParentPrefillScenario
 			if afterEdit.Activity != beforeEdit.Activity || afterEdit.Activity.State != clientui.RuntimeActivityRegisteredIdle {
 				t.Fatalf("normal edit changed parent runtime activity: before=%+v after=%+v", beforeEdit.Activity, afterEdit.Activity)
 			}
-			hasQueuedWork, err := parentRuntimePlan.Wiring.runtimeClient.HasQueuedUserWork()
-			if err != nil {
-				t.Fatalf("read parent queued work after edit: %v", err)
-			}
-			if hasQueuedWork {
-				t.Fatal("normal parent composer edit created queued runtime work")
-			}
 		})
 	}
 }

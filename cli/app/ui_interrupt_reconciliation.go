@@ -21,7 +21,6 @@ func (m *uiModel) acknowledgePendingInterrupt() tea.Cmd {
 		clientui.RuntimeOperationKindPreSubmitCompact,
 		clientui.RuntimeOperationKindUserShell,
 		clientui.RuntimeOperationKindCompact,
-		clientui.RuntimeOperationKindSubmitQueued,
 	)
 	controller := m.inputController()
 	cmd = controller.restorePendingInjectedIntoInput()

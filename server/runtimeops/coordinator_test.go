@@ -74,7 +74,7 @@ func TestCoordinatorExactRecordersMapRuntimeFactsToReconciliation(t *testing.T) 
 		testRuntimeOperationRef(clientui.RuntimeOperationKindUserShell),
 		testRuntimeOperationRef(clientui.RuntimeOperationKindCompact),
 		testRuntimeOperationRef(clientui.RuntimeOperationKindPreSubmitCompact),
-		testRuntimeOperationRef(clientui.RuntimeOperationKindSubmitQueued),
+		testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit),
 	}
 
 	coord.RecordUserMessageFlushed("session-1", refs[0])
@@ -98,7 +98,6 @@ func TestCoordinatorRecordsQueuedMessageSubmittedByServerQueueItemID(t *testing.
 	clientRequestID := runtimeids.NewRuntimeClientRequestID()
 	queueItemID := runtimeids.NewQueueItemID()
 	serverQueued := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindQueuedMessage, ClientRequestID: clientRequestID, QueueItemID: &queueItemID}
-	clientOnly := testRuntimeOperationRef(clientui.RuntimeOperationKindSubmitQueued)
 
 	if err := coord.RecordQueuedMessageStatus("session-1", clientui.RuntimeOperationRef{
 		Kind:            clientui.RuntimeOperationKindQueuedMessage,
@@ -108,9 +107,8 @@ func TestCoordinatorRecordsQueuedMessageSubmittedByServerQueueItemID(t *testing.
 		t.Fatalf("RecordQueuedMessageSubmitted: %v", err)
 	}
 
-	snapshot := mustFeedSnapshot(t, coord, "session-1", []clientui.RuntimeOperationRef{serverQueued, clientOnly})
+	snapshot := mustFeedSnapshot(t, coord, "session-1", []clientui.RuntimeOperationRef{serverQueued})
 	assertState(t, snapshot, serverQueued, clientui.RuntimeInputReconciliationSubmitted)
-	assertState(t, snapshot, clientOnly, clientui.RuntimeInputReconciliationUnknown)
 
 	feedSnapshot, err := coord.FeedSnapshot("session-1", []clientui.RuntimeOperationRef{serverQueued})
 	if err != nil {
@@ -327,52 +325,6 @@ func TestCoordinatorRetainsQueuedIdentityThroughEvictionWindowThenReleasesIt(t *
 		unknown.Operations[0].State != clientui.RuntimeInputReconciliationUnknown ||
 		unknown.Operations[0].Operation != queueRef {
 		t.Fatalf("unknown reconciliation = %+v, want original queued ref in unknown state", unknown.Operations)
-	}
-}
-
-func TestCoordinatorRecordsSubmitQueuedCompletionByCommitReceipt(t *testing.T) {
-	testCases := []struct {
-		name    string
-		receipt session.CommitReceipt
-		err     error
-		want    clientui.RuntimeInputReconciliationState
-		cancel  bool
-	}{
-		{
-			name:    "committed observer error",
-			receipt: session.CommitReceipt{Committed: true},
-			err:     errRecorderTest,
-			want:    clientui.RuntimeInputReconciliationSubmitted,
-		},
-		{
-			name: "successful empty submission",
-			want: clientui.RuntimeInputReconciliationSubmitted,
-		},
-		{
-			name: "uncommitted error",
-			err:  errRecorderTest,
-			want: clientui.RuntimeInputReconciliationFailedWithRestore,
-		},
-		{
-			name:    "committed completion overrides cancellation",
-			receipt: session.CommitReceipt{Committed: true},
-			err:     context.Canceled,
-			want:    clientui.RuntimeInputReconciliationSubmitted,
-			cancel:  true,
-		},
-	}
-
-	for _, testCase := range testCases {
-		t.Run(testCase.name, func(t *testing.T) {
-			coord := NewCoordinator()
-			ref := testRuntimeOperationRef(clientui.RuntimeOperationKindSubmitQueued)
-			if testCase.cancel {
-				coord.RecordCanceledNotCommitted("session-1", ref)
-			}
-			coord.RecordSubmitQueuedCompletion("session-1", ref, testCase.receipt, testCase.err)
-			snapshot := mustFeedSnapshot(t, coord, "session-1", []clientui.RuntimeOperationRef{ref})
-			assertState(t, snapshot, ref, testCase.want)
-		})
 	}
 }
 
@@ -815,7 +767,7 @@ func TestCoordinatorFailedAttemptCanRetryWithSameOperationRecord(t *testing.T) {
 
 func TestCoordinatorCancelBeforeRegisterCreatesNonEvictableTombstone(t *testing.T) {
 	coord := NewCoordinator(WithLimit(1))
-	canceled := testRuntimeOperationRef(clientui.RuntimeOperationKindSubmitQueued)
+	canceled := testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit)
 	if err := coord.CancelOperation("session-1", canceled); err != nil {
 		t.Fatalf("CancelOperation: %v", err)
 	}
@@ -860,39 +812,6 @@ func TestCoordinatorCancelInFlightCancelsAttemptContext(t *testing.T) {
 		t.Fatal("timed out waiting for in-flight operation cancellation")
 	}
 	assertState(t, mustFeedSnapshot(t, coord, "session-1", []clientui.RuntimeOperationRef{ref}), ref, clientui.RuntimeInputReconciliationCanceledNotCommitted)
-}
-
-func TestCoordinatorCancelActiveSubmitQueuedRequestsRuntimeInterrupt(t *testing.T) {
-	coord := NewCoordinator()
-	ref := testRuntimeOperationRef(clientui.RuntimeOperationKindSubmitQueued)
-	started := make(chan struct{})
-	done := make(chan error, 1)
-	go func() {
-		_, err := Do(coord, context.Background(), "session-1", ref, "same", func(a string, b string) bool { return a == b }, func(_ context.Context, attempt Attempt) (struct{}, error) {
-			coord.MarkOperationActive("session-1", ref)
-			close(started)
-			<-attempt.Context().Done()
-			return struct{}{}, attempt.Context().Err()
-		})
-		done <- err
-	}()
-	<-started
-	result, err := coord.CancelOperationTarget("session-1", ref)
-	if err != nil {
-		t.Fatalf("CancelOperationTarget: %v", err)
-	}
-	if !result.InterruptActive {
-		t.Fatal("active submit-queued operation must request runtime interrupt")
-	}
-	result.CancelOperationAttempt()
-	select {
-	case err := <-done:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("in-flight error = %v, want context canceled", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for active submit-queued cancellation")
-	}
 }
 
 func TestCoordinatorTerminalTTLMarksEvictedButKeepsUnexpiredTombstones(t *testing.T) {

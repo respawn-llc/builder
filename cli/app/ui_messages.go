@@ -118,12 +118,6 @@ type injectedQueueDiscardDoneMsg struct {
 	discarded bool
 }
 
-type queuedRuntimeWorkCheckDoneMsg struct {
-	token   uint64
-	hasWork bool
-	err     error
-}
-
 type compactDoneMsg struct {
 	err error
 }

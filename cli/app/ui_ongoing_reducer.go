@@ -55,9 +55,6 @@ func (m *uiModel) handleOngoingTranscriptEvent(event ongoingTranscriptEvent) tea
 			m.observeRuntimeRequestResult(nil)
 		}
 		stateCmd = sequenceCmds(stateCmd, m.inputController().resumeQueuedInputsAfterIdleRuntime())
-		if acceptedHydration {
-			stateCmd = sequenceCmds(stateCmd, m.flushQueuedInputsAfterHydration())
-		}
 		m.inputController().notifyTurnQueueDrainedIfIdle()
 		m.layout().syncViewport()
 		var connectionStatusCmd tea.Cmd
