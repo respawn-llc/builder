@@ -204,6 +204,7 @@ const shortIDSearchResponse = {
 
 const openSidebarRoot = vi.fn<SidebarRootController["open"]>(() => ({
   lifecycle: Promise.resolve("closed" as const),
+  push: vi.fn(() => "accepted" as const),
   release: vi.fn(),
 }));
 const testSidebarRoots: SidebarRootController = {

@@ -7,6 +7,7 @@ import {
   type SidebarDestination,
   type SidebarDestinationPolicy,
   type SidebarPageNavigator,
+  type SidebarRootHandle,
 } from "@/app-facade";
 import { SidebarProvider } from "./sidebarProvider";
 import { useSidebarCurrentPage } from "./sidebarPageContext";
@@ -147,6 +148,30 @@ describe("SidebarProvider stack", () => {
     });
     expect(result.current.shell.phase).toBe("closing");
     await expect(lifecycle).resolves.toBe("closed");
+  });
+
+  it("lets an owning root push route changes through its retained stack", () => {
+    const { result } = renderHook(useHarness, { wrapper });
+    let root: SidebarRootHandle | undefined;
+
+    act(() => {
+      root = result.current.roots.open(destination("A"));
+    });
+    const a = requireNavigator(result.current);
+    act(() => {
+      a.registerCapture(() => ({ scrollOffsetPx: 240, selectedTab: "activity" }));
+      expect(root?.push(destination("B"))).toBe("accepted");
+    });
+    expect(result.current.shell.activeDestination).toEqual(destination("B"));
+
+    act(() => {
+      expect(root?.push(destination("A"))).toBe("accepted");
+    });
+    expect(result.current.page?.retainedState).toEqual({
+      scrollOffsetPx: 240,
+      selectedTab: "activity",
+    });
+    expect(result.current.shell.activeDestination).toEqual(destination("A"));
   });
 
   it("rejects append Push without capture while leaving the page capability active", () => {

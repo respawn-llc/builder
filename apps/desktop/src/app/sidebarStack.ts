@@ -175,6 +175,13 @@ export function createSidebarStack(policy: SidebarDestinationPolicy, publish: (v
     emit([createEntry(destination)], "open", "replace");
     return {
       lifecycle,
+      push: (next) => {
+        if (ownedRoot.settled || root !== ownedRoot) {
+          return "stale";
+        }
+        const entry = current();
+        return entry === undefined ? "stale" : entry.navigator.push(next);
+      },
       release: () => {
         if (ownedRoot.settled || root !== ownedRoot) {
           return;

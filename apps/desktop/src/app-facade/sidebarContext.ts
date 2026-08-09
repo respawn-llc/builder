@@ -99,6 +99,7 @@ export type SidebarPageNavigator = Readonly<{
 
 export type SidebarRootHandle = Readonly<{
   lifecycle: Promise<SidebarRootOutcome>;
+  push(destination: SidebarDestination): SidebarNavigationOutcome;
   release(): void;
 }>;
 
