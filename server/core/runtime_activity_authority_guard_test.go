@@ -7,11 +7,11 @@ import (
 	"go/types"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
 
 	testharness "core/internal/testharness/testsetup"
+	"core/shared/apicontract"
 
 	"golang.org/x/tools/go/packages"
 )
@@ -146,49 +146,95 @@ func TestRuntimeClientInputIdentityBoundaryStaysRequestShaped(t *testing.T) {
 
 func TestRuntimeQueueKickAndStandalonePreSubmitSurfacesStayDeleted(t *testing.T) {
 	repoRoot := findRepoRoot(t)
-	forbiddenNames := make(map[string]struct{})
-	for _, name := range strings.Fields(`
-		RuntimeOperationKindSubmitQueued RuntimeSubmitQueuedRequest RuntimeCompactContextForPreSubmitRequest
-		RuntimeHasQueuedUserWorkRequest RuntimeHasQueuedUserWorkResponse RuntimeSubmitQueuedUserMessagesRequest
-		RuntimeSubmitQueuedUserMessagesResponse MethodRuntimeCompactContextForPreSubmit MethodRuntimeHasQueuedUserWork
-		MethodRuntimeSubmitQueuedUserMessages SubmitRuntimeQueued HasQueuedUserWork SubmitQueuedUserMessages
-		CompactContextForPreSubmit`) {
-		forbiddenNames[name] = struct{}{}
+	pkgs := testharness.LoadTypedPackages(
+		t,
+		repoRoot,
+		false,
+		"./shared/apicontract",
+		"./shared/client",
+		"./shared/clientui",
+		"./shared/protocol",
+		"./shared/serverapi",
+		"./server/runtimecontrol",
+	)
+	for pkgPath, names := range map[string][]string{
+		"core/shared/clientui": {
+			"RuntimeOperationKindSubmitQueued",
+			"RuntimeSubmitQueuedRequest",
+		},
+		"core/shared/protocol": {
+			"MethodRuntimeCompactContextForPreSubmit",
+			"MethodRuntimeHasQueuedUserWork",
+			"MethodRuntimeSubmitQueuedUserMessages",
+		},
+		"core/shared/serverapi": {
+			"RuntimeCompactContextForPreSubmitRequest",
+			"RuntimeHasQueuedUserWorkRequest",
+			"RuntimeHasQueuedUserWorkResponse",
+			"RuntimeSubmitQueuedUserMessagesRequest",
+			"RuntimeSubmitQueuedUserMessagesResponse",
+		},
+	} {
+		assertPackageScopeNamesAbsent(t, testharness.PackageByPath(t, pkgs, pkgPath), names...)
 	}
-	forbiddenWire := map[string]struct{}{
-		"runtime." + "compactContextForPreSubmit": {}, "runtime." + "hasQueuedUserWork": {},
-		"runtime." + "submitQueuedUserMessages": {}, "runtime-compact-context-" + "pre-submit": {},
-		"runtime-submit-queued-user-" + "messages": {},
+	for _, contract := range []struct {
+		pkgPath  string
+		typeName string
+		methods  []string
+	}{
+		{
+			pkgPath:  "core/shared/apicontract",
+			typeName: "RuntimeControlService",
+			methods:  []string{"CompactContextForPreSubmit", "HasQueuedUserWork", "SubmitQueuedUserMessages"},
+		},
+		{
+			pkgPath:  "core/shared/client",
+			typeName: "Remote",
+			methods:  []string{"CompactContextForPreSubmit", "HasQueuedUserWork", "SubmitQueuedUserMessages"},
+		},
+		{
+			pkgPath:  "core/shared/clientui",
+			typeName: "RuntimeClient",
+			methods:  []string{"HasQueuedUserWork", "SubmitRuntimeQueued"},
+		},
+		{
+			pkgPath:  "core/server/runtimecontrol",
+			typeName: "Service",
+			methods:  []string{"CompactContextForPreSubmit", "HasQueuedUserWork", "SubmitQueuedUserMessages"},
+		},
+	} {
+		assertTypeMethodsAbsent(t, testharness.PackageByPath(t, pkgs, contract.pkgPath), contract.typeName, contract.methods...)
 	}
-	var findings []string
-	walkRepositoryGoSources(t, repoRoot, repositoryGoSourceScan{
-		Operation: "scan removed runtime orchestration", Root: ".", Recursive: true,
-		IncludeTests: true, Mode: parser.SkipObjectResolution, Selection: allRepositoryGoSources{},
-	}, func(source parsedGoSource) {
-		ast.Inspect(source.File, func(node ast.Node) bool {
-			switch typed := node.(type) {
-			case *ast.Ident:
-				if _, forbidden := forbiddenNames[typed.Name]; !forbidden {
-					break
-				}
-				relPath := filepath.ToSlash(source.RelPath)
-				runtimeInternal := strings.HasPrefix(relPath, "server/runtime/") && (typed.Name == "HasQueuedUserWork" || typed.Name == "SubmitQueuedUserMessages" || typed.Name == "CompactContextForPreSubmit")
-				retainedEngineRead := typed.Name == "HasQueuedUserWork" && (relPath == "server/sessionruntime/authority_resource.go" || relPath == "server/runtimecontrol/service_test.go")
-				if !runtimeInternal && !retainedEngineRead {
-					findings = append(findings, relPath+":"+strconv.Itoa(source.FileSet.Position(typed.Pos()).Line)+" still uses "+typed.Name)
-				}
-			case *ast.BasicLit:
-				value, err := strconv.Unquote(typed.Value)
-				if _, forbidden := forbiddenWire[value]; err == nil && forbidden {
-					findings = append(findings, source.RelPath+":"+strconv.Itoa(source.FileSet.Position(typed.Pos()).Line)+" still contains removed wire method")
-				}
-			}
-			return true
-		})
-	})
-	if len(findings) > 0 {
-		sort.Strings(findings)
-		t.Fatalf("removed runtime queue-kick or standalone pre-submit surfaces restored:\n%s", strings.Join(findings, "\n"))
+	for _, method := range []string{
+		"runtime.compactContextForPreSubmit",
+		"runtime.hasQueuedUserWork",
+		"runtime.submitQueuedUserMessages",
+	} {
+		if route, found := apicontract.RouteByMethod(method); found {
+			t.Errorf("removed runtime orchestration route %q restored with contract %+v", method, route)
+		}
+	}
+}
+
+func assertPackageScopeNamesAbsent(t *testing.T, pkg *packages.Package, names ...string) {
+	t.Helper()
+	for _, name := range names {
+		if object := pkg.Types.Scope().Lookup(name); object != nil {
+			t.Errorf("%s must not export removed runtime orchestration symbol %s", pkg.PkgPath, name)
+		}
+	}
+}
+
+func assertTypeMethodsAbsent(t *testing.T, pkg *packages.Package, typeName string, methods ...string) {
+	t.Helper()
+	object := pkg.Types.Scope().Lookup(typeName)
+	if object == nil {
+		t.Fatalf("%s.%s is missing", pkg.PkgPath, typeName)
+	}
+	for _, method := range methods {
+		if member, _, _ := types.LookupFieldOrMethod(object.Type(), true, pkg.Types, method); member != nil {
+			t.Errorf("%s.%s must not expose removed runtime orchestration method %s", pkg.PkgPath, typeName, method)
+		}
 	}
 }
 
