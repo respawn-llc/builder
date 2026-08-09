@@ -64,18 +64,10 @@ func NewManagedWorktreePathContext(baseDir string, currentWorktreeRoot *string, 
 }
 
 func (c ManagedWorktreePathContext) IsForeignManagedWorktreePath(resolvedPath string) bool {
-	if !pathWithin(c.baseRoot, resolvedPath) {
-		return false
-	}
 	if c.currentRoot != nil && pathWithin(*c.currentRoot, resolvedPath) {
 		return false
 	}
-	for _, managedRoot := range c.managedRoots {
-		if pathWithin(managedRoot, resolvedPath) {
-			return true
-		}
-	}
-	return false
+	return pathWithin(c.baseRoot, resolvedPath)
 }
 
 func (c *ManagedWorktreePathContext) WithCurrentWorktreeRoot(currentWorktreeRoot *string) (*ManagedWorktreePathContext, error) {
