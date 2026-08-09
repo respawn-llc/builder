@@ -1719,7 +1719,6 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 			return serverapi.WorkflowTaskMoveResponse{}, err
 		}
 	}
-	var targetPreflight initiatingActionTargetPreflight
 	if prepared.RequiresExecutionTarget() {
 		if !req.ProceedDespiteDependencies {
 			count, countErr := s.readModels.TaskDependencies.CountUnsatisfiedBlockers(ctx, req.TaskID)
@@ -1733,37 +1732,63 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 				}, nil
 			}
 		}
-		targetPreflight, err = s.preflightInitiatingActionTarget(ctx, moveRequest.TaskID, req.ExecutionTarget, req.BranchName)
-		if err != nil {
-			return serverapi.WorkflowTaskMoveResponse{}, err
-		}
 	}
-	coordinated, err := coordinateInitiatingAction(ctx, s, initiatingActionRequest{
-		taskID:                  moveRequest.TaskID,
-		setupOperationID:        req.SetupOperationID,
-		requiresExecutionTarget: prepared.RequiresExecutionTarget(),
-		targetPreflight:         targetPreflight,
-		afterTargetResolution: func() error {
-			return s.currentNodeExecution.InterruptForManualMove(ctx, moveRequest.TaskID, func() error {
-				preview, err := s.store.PreviewManualMove(ctx, moveRequest)
-				if err != nil {
-					return err
-				}
-				if preview.Outcome == workflowstore.ManualMovePreviewOutcomeNoOp {
-					return &manualMoveNoOpBeforeInterruptError{
-						currentNodes: append([]workflow.CurrentNode(nil), preview.CurrentNodes...),
-					}
-				}
-				return nil
-			})
-		},
-	}, func(candidate *workflowstore.ExecutionTargetCandidate) (*workflowstore.ManualMoveResult, error) {
-		moved, err := s.currentNodeExecution.ApplyManualMove(ctx, prepared, candidate)
-		if err != nil && moved.Outcome != workflowstore.ManualMoveResultOutcomeApplied &&
-			moved.Outcome != workflowstore.ManualMoveResultOutcomeNoOp {
-			return nil, err
+	// The final no-op decision, initial branch selection, target preparation,
+	// and applied move share the Workflow mutation permit. A stale move can
+	// therefore return no-op before its branch request mutates Task state.
+	coordinated, err := workflowexecution.RunMutation(ctx, s.mutationPermit, func(mutationCtx context.Context) (initiatingActionResult[workflowstore.ManualMoveResult], error) {
+		preview, previewErr := s.store.PreviewManualMove(mutationCtx, moveRequest)
+		if previewErr != nil {
+			return initiatingActionResult[workflowstore.ManualMoveResult]{}, previewErr
 		}
-		return &moved, err
+		if preview.Outcome == workflowstore.ManualMovePreviewOutcomeNoOp {
+			return initiatingActionResult[workflowstore.ManualMoveResult]{
+				applied: &workflowstore.ManualMoveResult{
+					Outcome:      workflowstore.ManualMoveResultOutcomeNoOp,
+					CurrentNodes: append([]workflow.CurrentNode(nil), preview.CurrentNodes...),
+				},
+			}, nil
+		}
+		var targetPreflight initiatingActionTargetPreflight
+		if prepared.RequiresExecutionTarget() {
+			var preflightErr error
+			targetPreflight, preflightErr = s.preflightInitiatingActionTarget(
+				mutationCtx,
+				moveRequest.TaskID,
+				req.ExecutionTarget,
+				req.BranchName,
+			)
+			if preflightErr != nil {
+				return initiatingActionResult[workflowstore.ManualMoveResult]{}, preflightErr
+			}
+		}
+		return coordinateInitiatingAction(mutationCtx, s, initiatingActionRequest{
+			taskID:                  moveRequest.TaskID,
+			setupOperationID:        req.SetupOperationID,
+			requiresExecutionTarget: prepared.RequiresExecutionTarget(),
+			targetPreflight:         targetPreflight,
+			afterTargetResolution: func() error {
+				return s.currentNodeExecution.InterruptForManualMove(mutationCtx, moveRequest.TaskID, func() error {
+					latest, latestErr := s.store.PreviewManualMove(mutationCtx, moveRequest)
+					if latestErr != nil {
+						return latestErr
+					}
+					if latest.Outcome == workflowstore.ManualMovePreviewOutcomeNoOp {
+						return &manualMoveNoOpBeforeInterruptError{
+							currentNodes: append([]workflow.CurrentNode(nil), latest.CurrentNodes...),
+						}
+					}
+					return nil
+				})
+			},
+		}, func(candidate *workflowstore.ExecutionTargetCandidate) (*workflowstore.ManualMoveResult, error) {
+			moved, applyErr := s.currentNodeExecution.ApplyManualMove(mutationCtx, prepared, candidate)
+			if applyErr != nil && moved.Outcome != workflowstore.ManualMoveResultOutcomeApplied &&
+				moved.Outcome != workflowstore.ManualMoveResultOutcomeNoOp {
+				return nil, applyErr
+			}
+			return &moved, applyErr
+		})
 	})
 	var noOpBeforeInterrupt *manualMoveNoOpBeforeInterruptError
 	if errors.As(err, &noOpBeforeInterrupt) {
