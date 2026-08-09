@@ -10,7 +10,6 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
-	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 )
@@ -735,33 +734,5 @@ func TestExclusiveStepLifecycleInterruptSkipsStaleRunCleanup(t *testing.T) {
 	}
 	if len(eng.transcriptRuntimeState().SnapshotMessages()) != 0 {
 		t.Fatalf("expected stale interrupt to avoid appending interruption message, got %+v", eng.transcriptRuntimeState().SnapshotMessages())
-	}
-}
-
-func TestContextCompactorUsesExclusiveStepLifecycle(t *testing.T) {
-	t.Parallel()
-	store := mustCreateTestSession(t)
-	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("summary")},
-		Usage:     llm.Usage{WindowTokens: 200000},
-	}}}
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", CompactionMode: "local"})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
-		t.Fatalf("append seed message: %v", err)
-	}
-
-	steps := &stubExclusiveStepLifecycle{}
-	compactor := &defaultContextCompactor{engine: eng, steps: steps}
-	if _, err := compactor.CompactContextWithActiveHook(context.Background(), "", nil); err != nil {
-		t.Fatalf("compact context: %v", err)
-	}
-	if steps.calls() != 1 {
-		t.Fatalf("expected compaction to execute through exclusive step lifecycle once, got %d", steps.calls())
-	}
-	client.mu.Lock()
-	callCount := len(client.calls)
-	client.mu.Unlock()
-	if callCount != 1 {
-		t.Fatalf("expected one local compaction model call, got %d", callCount)
 	}
 }

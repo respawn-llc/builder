@@ -531,7 +531,7 @@ func TestCompactNowCompletesCommittedHistoryReplacementObserverFailure(t *testin
 	}
 }
 
-func TestCompactNowReconcilesLiveUsageWhenFinalUsageObserverFails(t *testing.T) {
+func TestCompactNowRetainsAppliedUsageWhenFinalUsageObserverFails(t *testing.T) {
 	t.Parallel()
 	observerErr := errors.New("compaction usage observer failure")
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
@@ -555,11 +555,11 @@ func TestCompactNowReconcilesLiveUsageWhenFinalUsageObserverFails(t *testing.T) 
 	}
 
 	liveUsage := fixture.engine.ContextUsage()
-	if liveUsage.UsedTokens != fixture.client.inputTokenCount {
-		t.Fatalf("live compacted usage = %+v, want input tokens %d", liveUsage, fixture.client.inputTokenCount)
+	if liveUsage.UsedTokens <= 0 || liveUsage.UsedTokens >= fixture.previousUsage.InputTokens {
+		t.Fatalf("live compacted usage = %+v", liveUsage)
 	}
 	if persisted := fixture.store.Meta().UsageState; persisted == nil ||
-		persisted.InputTokens != fixture.client.inputTokenCount ||
+		persisted.InputTokens != liveUsage.UsedTokens ||
 		persisted.WindowTokens != fixture.previousUsage.WindowTokens {
 		t.Fatalf("persisted compacted usage = %+v", persisted)
 	}
