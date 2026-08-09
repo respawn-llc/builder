@@ -485,9 +485,14 @@ func (i taskExecutionTargetInfrastructure) PrepareTaskExecutionRoot(ctx context.
 		SetupOperationID: req.SetupOperationID,
 		ManagedTarget:    managedTarget,
 	})
+	var retainedWorktree *serverapi.WorktreeTopologyEntry
+	if prepared.Materialization != nil {
+		retainedWorktree = &prepared.Materialization.Worktree
+	}
 	result := workflowsvc.TaskExecutionRootPreparation{
 		Root:                     prepared.Root,
 		SetupResult:              prepared.SetupResult,
+		RetainedWorktree:         retainedWorktree,
 		RetainedPreviousWorktree: prepared.RetainedPreviousWorktree,
 	}
 	if result.Root.SourceWorkspaceID != req.SourceWorkspaceID ||

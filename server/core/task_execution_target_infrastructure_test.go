@@ -81,9 +81,20 @@ func TestTaskExecutionTargetInfrastructureMapsManagedSnapshotAndPreservesFailure
 		Managed:             managed,
 	}
 	setupErr := errors.New("setup failed")
+	retainedWorktree := serverapi.WorktreeTopologyEntry{
+		Variant: serverapi.WorktreeTopologyVariantRegistered,
+		Registered: &serverapi.WorktreeRegisteredFacts{
+			Kent: serverapi.WorktreeKentFacts{WorktreeID: "retained-worktree"},
+		},
+	}
 	stub := &taskExecutionRootServiceStub{
-		prepared: worktree.TaskExecutionRootPreparation{Root: root},
-		err:      setupErr,
+		prepared: worktree.TaskExecutionRootPreparation{
+			Root: root,
+			Materialization: &worktree.TaskWorktreeMaterialization{
+				Worktree: retainedWorktree,
+			},
+		},
+		err: setupErr,
 	}
 	infrastructure := taskExecutionTargetInfrastructure{service: stub}
 
@@ -114,5 +125,10 @@ func TestTaskExecutionTargetInfrastructureMapsManagedSnapshotAndPreservesFailure
 	}
 	if prepared.Root.Managed != managed {
 		t.Fatalf("prepared managed root = %+v, want preserved failure result", prepared.Root.Managed)
+	}
+	if prepared.RetainedWorktree == nil ||
+		prepared.RetainedWorktree.Registered == nil ||
+		prepared.RetainedWorktree.Registered.Kent.WorktreeID != "retained-worktree" {
+		t.Fatalf("prepared retained Worktree = %+v, want materialized Worktree", prepared.RetainedWorktree)
 	}
 }

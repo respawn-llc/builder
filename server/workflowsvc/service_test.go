@@ -680,7 +680,7 @@ func TestServiceManualMoveSetupFailureLeavesActionUnappliedAndTargetUnlocked(t *
 	}
 }
 
-func TestServiceManualMoveTargetPreparationFailureCarriesRetainedPreviousWorktree(t *testing.T) {
+func TestServiceManualMoveTargetPreparationFailureCarriesRetainedWorktrees(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceChainedWorkflow(t, ctx, service)
 	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
@@ -690,6 +690,7 @@ func TestServiceManualMoveTargetPreparationFailureCarriesRetainedPreviousWorktre
 		t.Fatalf("GetWorkflow: %v", err)
 	}
 	targetNodeID := workflowServiceNodeIDByKey(t, definition.Definition, "plan")
+	retained := registeredWorktreeTopologyFixture("/repo/retained", "retained-worktree")
 	previous := retainedPreviousWorktreeFixture("/repo/previous", "previous-worktree")
 	creationErr := errors.New("replacement creation failed")
 	requestedRef := "HEAD"
@@ -707,6 +708,7 @@ func TestServiceManualMoveTargetPreparationFailureCarriesRetainedPreviousWorktre
 					SourceWorkspaceID:   req.SourceWorkspaceID,
 					SourceWorkspaceRoot: req.SourceWorkspaceRoot,
 				},
+				RetainedWorktree:         &retained,
 				RetainedPreviousWorktree: previous,
 			}, creationErr
 		},
@@ -726,9 +728,10 @@ func TestServiceManualMoveTargetPreparationFailureCarriesRetainedPreviousWorktre
 		!errors.Is(err, creationErr) ||
 		preparationError.SetupScriptPath != nil ||
 		preparationError.Failure.Cause.Kind != serverapi.WorktreeSetupFailureTargetPreparation ||
-		preparationError.Failure.RetainedWorktree != nil ||
+		preparationError.Failure.RetainedWorktree == nil ||
+		preparationError.Failure.RetainedWorktree.Registered.Kent.WorktreeID != "retained-worktree" ||
 		preparationError.Failure.RetainedPreviousWorktree != previous {
-		t.Fatalf("MoveWorkflowTask = %+v, %v; want target-preparation failure with previous Worktree", response, err)
+		t.Fatalf("MoveWorkflowTask = %+v, %v; want target-preparation failure with retained Worktrees", response, err)
 	}
 	if len(execution.interruptTaskIDs) != 0 {
 		t.Fatalf("interruptions after failed target preparation = %v, want none", execution.interruptTaskIDs)
@@ -1465,7 +1468,7 @@ func TestTaskSetupObservationPreservesPayloadRetainedPreviousWorktree(t *testing
 			if err != nil {
 				t.Fatalf("newTaskSetupObservation: %v", err)
 			}
-			observation.record(&terminal.result, nil, nil)
+			observation.record(&terminal.result, nil, nil, nil)
 			observation.finalize(workflowexecution.TaskPreparationFinalization{
 				Kind: workflowexecution.TaskPreparationHandedOff,
 			})
@@ -1666,10 +1669,28 @@ func TestServiceTaskStartPublishesRetryReadyTargetPreparationFailure(t *testing.
 	ctx, service, _, _, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
 	setupID := serverapi.NewWorktreeSetupOperationID()
 	customRef := "refs/heads/dev"
+	commitOID := strings.Repeat("d", 40)
+	retained := registeredWorktreeTopologyFixture("/repo/retained", "retained-worktree")
+	preparationCause := errors.New("load setup settings")
 	service.executionTargets = &recordingExecutionTargetInfrastructure{
-		resolveErr: &worktree.GitRevisionResolutionError{
-			Kind:         worktree.GitRevisionResolutionErrorInvalidRevision,
-			RequestedRef: customRef,
+		resolution: workflowstore.ExecutionTargetSnapshot{
+			Mode:         workflow.ExecutionTargetModeCustomRef,
+			RequestedRef: &customRef,
+			CommitOID:    &commitOID,
+			Provenance:   workflowstore.ExecutionTargetProvenanceResolved,
+		},
+		prepare: func(req TaskExecutionRootPreparationRequest) (TaskExecutionRootPreparation, error) {
+			return TaskExecutionRootPreparation{
+				Root: workflowstore.ExecutionRoot{
+					SourceWorkspaceID:   req.SourceWorkspaceID,
+					SourceWorkspaceRoot: req.SourceWorkspaceRoot,
+					Managed: &workflowstore.ManagedExecutionRoot{
+						WorktreeID: "retained-worktree",
+						Root:       "/repo/retained",
+					},
+				},
+				RetainedWorktree: &retained,
+			}, preparationCause
 		},
 	}
 	preparations := make(chan workflowexecution.TaskStartPreparation, 1)
@@ -1701,9 +1722,10 @@ func TestServiceTaskStartPublishesRetryReadyTargetPreparationFailure(t *testing.
 		typed.InterruptionDetail().SetupRecovery.ExecutionTarget.Mode != workflow.ExecutionTargetModeCustomRef ||
 		typed.InterruptionDetail().SetupRecovery.ExecutionTarget.CustomRef == nil ||
 		*typed.InterruptionDetail().SetupRecovery.ExecutionTarget.CustomRef != customRef ||
-		typed.InterruptionDetail().SetupRecovery.RetainedWorktree != nil ||
+		typed.InterruptionDetail().SetupRecovery.RetainedWorktree == nil ||
+		typed.InterruptionDetail().SetupRecovery.RetainedWorktree.WorktreeID != "retained-worktree" ||
 		typed.InterruptionDetail().SetupRecovery.SetupOperationID != uuid.UUID(setupID) {
-		t.Fatalf("target preparation error = %T %v, want canonical typed recovery without retained topology", preparationErr, preparationErr)
+		t.Fatalf("target preparation error = %T %v, want canonical typed recovery with retained topology", preparationErr, preparationErr)
 	}
 	(<-finalizers)(workflowexecution.TaskPreparationFinalization{
 		Kind:  workflowexecution.TaskPreparationFailed,
@@ -1718,8 +1740,9 @@ func TestServiceTaskStartPublishesRetryReadyTargetPreparationFailure(t *testing.
 		events[0].Failed.ExecutionTarget.Mode != serverapi.WorkflowExecutionTargetModeCustomRef ||
 		events[0].Failed.ExecutionTarget.CustomRef == nil ||
 		*events[0].Failed.ExecutionTarget.CustomRef != customRef ||
-		events[0].Failed.RetainedWorktree != nil {
-		t.Fatalf("setup events = %+v, want retry-ready target-preparation failure without retained worktree", events)
+		events[0].Failed.RetainedWorktree == nil ||
+		events[0].Failed.RetainedWorktree.Registered.Kent.WorktreeID != "retained-worktree" {
+		t.Fatalf("setup events = %+v, want retry-ready target-preparation failure with retained worktree", events)
 	}
 }
 

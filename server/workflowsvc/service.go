@@ -87,6 +87,7 @@ type initiatingActionResult[T any] struct {
 
 type preparedInitiatingActionTarget struct {
 	candidate                *workflowstore.ExecutionTargetCandidate
+	retainedWorktree         *serverapi.WorktreeTopologyEntry
 	retainedPreviousWorktree *serverapi.RetainedPreviousWorktree
 	setupResult              *worktree.WorktreeSetupResult
 }
@@ -132,6 +133,7 @@ type TaskExecutionRootPreparationRequest struct {
 type TaskExecutionRootPreparation struct {
 	Root                     workflowstore.ExecutionRoot
 	SetupResult              *worktree.WorktreeSetupResult
+	RetainedWorktree         *serverapi.WorktreeTopologyEntry
 	RetainedPreviousWorktree *serverapi.RetainedPreviousWorktree
 }
 
@@ -1036,22 +1038,25 @@ func (s *Service) startWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 					preparationErr = errors.New("Task Start target preparation produced no lock candidate")
 				}
 				var setupResult *worktree.WorktreeSetupResult
+				var retainedWorktree *serverapi.WorktreeTopologyEntry
 				var retainedPreviousWorktree *serverapi.RetainedPreviousWorktree
 				if decision.prepared != nil {
 					setupResult = decision.prepared.setupResult
+					retainedWorktree = decision.prepared.retainedWorktree
 					retainedPreviousWorktree = decision.prepared.retainedPreviousWorktree
 				}
 				preparationErr = taskPreparationError(
 					req.SetupOperationID,
 					target,
 					setupResult,
+					retainedWorktree,
 					retainedPreviousWorktree,
 					preparationErr,
 				)
-				observation.record(setupResult, retainedPreviousWorktree, preparationErr)
+				observation.record(setupResult, retainedWorktree, retainedPreviousWorktree, preparationErr)
 				return preparationErr
 			}
-			observation.record(decision.prepared.setupResult, decision.prepared.retainedPreviousWorktree, nil)
+			observation.record(decision.prepared.setupResult, decision.prepared.retainedWorktree, decision.prepared.retainedPreviousWorktree, nil)
 			return nil
 		},
 		Commit: func(commitCtx context.Context) error {
@@ -1064,10 +1069,11 @@ func (s *Service) startWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 				req.SetupOperationID,
 				target,
 				decision.prepared.setupResult,
+				decision.prepared.retainedWorktree,
 				decision.prepared.retainedPreviousWorktree,
 				lockErr,
 			)
-			observation.record(decision.prepared.setupResult, decision.prepared.retainedPreviousWorktree, lockErr)
+			observation.record(decision.prepared.setupResult, decision.prepared.retainedWorktree, decision.prepared.retainedPreviousWorktree, lockErr)
 			return lockErr
 		},
 	}
@@ -1204,7 +1210,7 @@ func movePreparationError(
 	prepared preparedInitiatingActionTarget,
 	cause error,
 ) (*serverapi.WorkflowTaskMovePreparationError, error) {
-	failed := preparationFailurePayload(prepared.setupResult, prepared.retainedPreviousWorktree, cause)
+	failed := preparationFailurePayload(prepared.setupResult, prepared.retainedWorktree, prepared.retainedPreviousWorktree, cause)
 	var setupScriptPath *string
 	if failed.Cause.Kind != serverapi.WorktreeSetupFailureTargetPreparation {
 		var retained *serverapi.WorktreeSetupRetainedError
@@ -1274,6 +1280,7 @@ func (s *Service) materializeInitiatingActionTarget(
 	})
 	if preparationErr != nil {
 		return preparedInitiatingActionTarget{
+			retainedWorktree:         prepared.RetainedWorktree,
 			retainedPreviousWorktree: prepared.RetainedPreviousWorktree,
 			setupResult:              prepared.SetupResult,
 		}, preparationErr
@@ -1294,6 +1301,7 @@ func (s *Service) materializeInitiatingActionTarget(
 	}
 	return preparedInitiatingActionTarget{
 		candidate:                candidate,
+		retainedWorktree:         prepared.RetainedWorktree,
 		retainedPreviousWorktree: prepared.RetainedPreviousWorktree,
 		setupResult:              prepared.SetupResult,
 	}, nil
@@ -1536,13 +1544,14 @@ func (s *Service) resumeWorkflowTask(ctx context.Context, req serverapi.Workflow
 						req.SetupOperationID,
 						target,
 						preparedTarget.setupResult,
+						preparedTarget.retainedWorktree,
 						preparedTarget.retainedPreviousWorktree,
 						preparationErr,
 					)
-					observation.record(preparedTarget.setupResult, preparedTarget.retainedPreviousWorktree, preparationErr)
+					observation.record(preparedTarget.setupResult, preparedTarget.retainedWorktree, preparedTarget.retainedPreviousWorktree, preparationErr)
 					return preparationErr
 				}
-				observation.record(preparedTarget.setupResult, preparedTarget.retainedPreviousWorktree, nil)
+				observation.record(preparedTarget.setupResult, preparedTarget.retainedWorktree, preparedTarget.retainedPreviousWorktree, nil)
 				return nil
 			},
 			Commit: func(commitCtx context.Context) error {
@@ -1551,10 +1560,11 @@ func (s *Service) resumeWorkflowTask(ctx context.Context, req serverapi.Workflow
 					req.SetupOperationID,
 					target,
 					preparedTarget.setupResult,
+					preparedTarget.retainedWorktree,
 					preparedTarget.retainedPreviousWorktree,
 					lockErr,
 				)
-				observation.record(preparedTarget.setupResult, preparedTarget.retainedPreviousWorktree, lockErr)
+				observation.record(preparedTarget.setupResult, preparedTarget.retainedWorktree, preparedTarget.retainedPreviousWorktree, lockErr)
 				return lockErr
 			},
 		}

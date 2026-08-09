@@ -19,6 +19,7 @@ type taskSetupObservation struct {
 
 	mu                       sync.Mutex
 	setupResult              *worktree.WorktreeSetupResult
+	retainedWorktree         *serverapi.WorktreeTopologyEntry
 	retainedPreviousWorktree *serverapi.RetainedPreviousWorktree
 	preparationErr           error
 	finalized                bool
@@ -42,12 +43,14 @@ func newTaskSetupObservation(
 
 func (o *taskSetupObservation) record(
 	result *worktree.WorktreeSetupResult,
+	retainedWorktree *serverapi.WorktreeTopologyEntry,
 	retainedPreviousWorktree *serverapi.RetainedPreviousWorktree,
 	err error,
 ) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.setupResult = result
+	o.retainedWorktree = retainedWorktree
 	o.retainedPreviousWorktree = retainedPreviousWorktree
 	o.preparationErr = err
 }
@@ -60,6 +63,7 @@ func (o *taskSetupObservation) finalize(finalization workflowexecution.TaskPrepa
 	}
 	o.finalized = true
 	result := o.setupResult
+	retainedWorktree := o.retainedWorktree
 	retainedPreviousWorktree := o.retainedPreviousWorktree
 	preparationErr := o.preparationErr
 	o.mu.Unlock()
@@ -93,7 +97,7 @@ func (o *taskSetupObservation) finalize(finalization workflowexecution.TaskPrepa
 		}
 	case workflowexecution.TaskPreparationFailed:
 		event.Phase = serverapi.WorktreeSetupPhaseFailed
-		event.Failed = preparationFailurePayload(result, retainedPreviousWorktree, errors.Join(preparationErr, finalization.Cause))
+		event.Failed = preparationFailurePayload(result, retainedWorktree, retainedPreviousWorktree, errors.Join(preparationErr, finalization.Cause))
 		executionTarget, err := taskSetupRecoveryExecutionTarget(preparationErr)
 		if err != nil {
 			panic(fmt.Sprintf("project Workflow Task setup recovery execution target: %v", err))
@@ -125,11 +129,15 @@ func (o *taskSetupObservation) finalize(finalization workflowexecution.TaskPrepa
 
 func preparationFailurePayload(
 	result *worktree.WorktreeSetupResult,
+	retainedWorktree *serverapi.WorktreeTopologyEntry,
 	retainedPreviousWorktree *serverapi.RetainedPreviousWorktree,
 	cause error,
 ) *serverapi.WorktreeSetupFailed {
 	if result != nil && result.Failed != nil {
 		failed := *result.Failed
+		if failed.RetainedWorktree == nil && retainedWorktree != nil {
+			failed.RetainedWorktree = retainedWorktree
+		}
 		if retainedPreviousWorktree != nil {
 			failed.RetainedPreviousWorktree = retainedPreviousWorktree
 		}
@@ -142,6 +150,7 @@ func preparationFailurePayload(
 			Preparation: &serverapi.WorktreeSetupPreparationFailure{},
 		},
 		Diagnostic:               preparationDiagnostic(cause),
+		RetainedWorktree:         retainedWorktree,
 		RetainedPreviousWorktree: retainedPreviousWorktree,
 	}
 }
@@ -198,6 +207,7 @@ func taskPreparationError(
 	setupOperationID serverapi.WorktreeSetupOperationID,
 	preflight initiatingActionTargetPreflight,
 	result *worktree.WorktreeSetupResult,
+	retainedWorktree *serverapi.WorktreeTopologyEntry,
 	retainedPreviousWorktree *serverapi.RetainedPreviousWorktree,
 	err error,
 ) error {
@@ -215,7 +225,7 @@ func taskPreparationError(
 			return err
 		}
 	}
-	failed := preparationFailurePayload(result, retainedPreviousWorktree, err)
+	failed := preparationFailurePayload(result, retainedWorktree, retainedPreviousWorktree, err)
 	if failed.RetryReadiness != serverapi.WorktreeSetupRetryReady {
 		return err
 	}
