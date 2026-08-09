@@ -3,8 +3,10 @@ package workflowstore
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"core/server/metadata/sqlitegen"
 	"core/server/metadata/sqlitelifecyclegen"
@@ -65,7 +67,17 @@ func (t *currentNodeCompletionTransaction) Commit(ctx context.Context) error {
 			cleanupErr,
 		)
 	}
-	return resetCurrentNodeCompletionConnection(t.lifecycle, t.connection)
+	if cleanupErr := resetCurrentNodeCompletionConnection(t.lifecycle, t.connection); cleanupErr != nil {
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		slog.ErrorContext(
+			ctx,
+			"current node completion committed but connection cleanup failed",
+			"error", cleanupErr,
+		)
+	}
+	return nil
 }
 
 func (t *currentNodeCompletionTransaction) Rollback() error {
@@ -83,11 +95,25 @@ func (t *currentNodeCompletionTransaction) Rollback() error {
 
 func resetCurrentNodeCompletionConnection(lifecycle *sqlitelifecyclegen.Queries, connection *sql.Conn) error {
 	resetErr := lifecycle.SetBusyTimeout5Seconds(context.Background())
+	if resetErr != nil {
+		discardErr := discardCurrentNodeCompletionConnection(connection)
+		return errors.Join(
+			wrapCurrentNodeCompletionCleanupError("restore metadata busy timeout", resetErr),
+			wrapCurrentNodeCompletionCleanupError("discard current node completion connection", discardErr),
+		)
+	}
 	closeErr := connection.Close()
-	return errors.Join(
-		wrapCurrentNodeCompletionCleanupError("restore metadata busy timeout", resetErr),
-		wrapCurrentNodeCompletionCleanupError("release current node completion connection", closeErr),
-	)
+	return wrapCurrentNodeCompletionCleanupError("release current node completion connection", closeErr)
+}
+
+func discardCurrentNodeCompletionConnection(connection *sql.Conn) error {
+	err := connection.Raw(func(any) error {
+		return driver.ErrBadConn
+	})
+	if errors.Is(err, driver.ErrBadConn) {
+		return nil
+	}
+	return err
 }
 
 func wrapCurrentNodeCompletionCleanupError(operation string, err error) error {

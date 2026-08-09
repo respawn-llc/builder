@@ -48,7 +48,12 @@ func TestAbsoluteForeignManagedWorktreePatchIsDeniedBeforeMove(t *testing.T) {
 	if err := os.WriteFile(source, []byte("before\n"), 0o644); err != nil {
 		t.Fatalf("write source: %v", err)
 	}
-	context, err := tools.NewManagedWorktreePathContext(base, &currentRoot, []string{currentRoot, foreignRoot})
+	context, err := tools.NewManagedWorktreePathContext(
+		base,
+		&currentRoot,
+		[]string{currentRoot, foreignRoot},
+		func() (string, error) { return base, nil },
+	)
 	if err != nil {
 		t.Fatalf("managed worktree path context: %v", err)
 	}
@@ -79,7 +84,12 @@ func TestPatchDeniesSiblingCreatedAfterToolStartupBeforeApproval(t *testing.T) {
 	if err := os.MkdirAll(currentWorkspace, 0o755); err != nil {
 		t.Fatalf("mkdir current Workspace: %v", err)
 	}
-	pathContext, err := tools.NewManagedWorktreePathContext(base, &currentRoot, []string{currentRoot})
+	pathContext, err := tools.NewManagedWorktreePathContext(
+		base,
+		&currentRoot,
+		[]string{currentRoot},
+		func() (string, error) { return base, nil },
+	)
 	if err != nil {
 		t.Fatalf("managed worktree path context: %v", err)
 	}
@@ -123,7 +133,12 @@ func TestPatchDeniesEveryForeignAbsoluteTargetKind(t *testing.T) {
 			t.Fatalf("mkdir %s: %v", dir, err)
 		}
 	}
-	context, err := tools.NewManagedWorktreePathContext(base, &currentRoot, []string{currentRoot, foreignRoot})
+	context, err := tools.NewManagedWorktreePathContext(
+		base,
+		&currentRoot,
+		[]string{currentRoot, foreignRoot},
+		func() (string, error) { return base, nil },
+	)
 	if err != nil {
 		t.Fatalf("managed worktree path context: %v", err)
 	}
@@ -176,7 +191,12 @@ func TestPatchManagedWorktreeGuardSkipsRelativeCurrentAndOutsideBase(t *testing.
 			t.Fatalf("write %s: %v", path, err)
 		}
 	}
-	context, err := tools.NewManagedWorktreePathContext(base, &currentRoot, []string{currentRoot, foreignRoot})
+	context, err := tools.NewManagedWorktreePathContext(
+		base,
+		&currentRoot,
+		[]string{currentRoot, foreignRoot},
+		func() (string, error) { return base, nil },
+	)
 	if err != nil {
 		t.Fatalf("managed worktree path context: %v", err)
 	}
@@ -732,7 +752,12 @@ func TestCommitStagedFilesRollsBackOnManagedWorktreeRevalidationFailure(t *testi
 	}
 	t.Cleanup(func() { _ = os.Remove(stage) })
 
-	context, err := tools.NewManagedWorktreePathContext(base, &currentRoot, []string{currentRoot, foreignRoot})
+	context, err := tools.NewManagedWorktreePathContext(
+		base,
+		&currentRoot,
+		[]string{currentRoot, foreignRoot},
+		func() (string, error) { return base, nil },
+	)
 	if err != nil {
 		t.Fatalf("managed worktree path context: %v", err)
 	}
@@ -765,7 +790,12 @@ func TestPrepareCommitStatesRevalidatesBeforeStagingForeignTargets(t *testing.T)
 		}
 	}
 
-	context, err := tools.NewManagedWorktreePathContext(base, &currentRoot, []string{currentRoot, foreignRoot})
+	context, err := tools.NewManagedWorktreePathContext(
+		base,
+		&currentRoot,
+		[]string{currentRoot, foreignRoot},
+		func() (string, error) { return base, nil },
+	)
 	if err != nil {
 		t.Fatalf("managed worktree path context: %v", err)
 	}

@@ -201,7 +201,12 @@ func (f realSessionRetargetFixture) openRuntime(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewFilesystemContext: %v", err)
 			}
-			context.ManagedWorktree, err = tools.NewManagedWorktreePathContext(f.managedBase, nil, nil)
+			context.ManagedWorktree, err = tools.NewManagedWorktreePathContext(
+				f.managedBase,
+				nil,
+				nil,
+				func() (string, error) { return f.managedBase, nil },
+			)
 			if err != nil {
 				t.Fatalf("NewManagedWorktreePathContext: %v", err)
 			}

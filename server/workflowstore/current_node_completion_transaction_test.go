@@ -1,6 +1,10 @@
 package workflowstore
 
-import "testing"
+import (
+	"database/sql"
+	"errors"
+	"testing"
+)
 
 func TestCurrentNodeCompletionTransactionScopesBusyTimeoutToItsConnection(t *testing.T) {
 	for _, test := range []struct {
@@ -43,5 +47,35 @@ func TestCurrentNodeCompletionTransactionScopesBusyTimeoutToItsConnection(t *tes
 				t.Fatalf("pooled busy timeout = %d, want 5000", pooledBusyTimeout)
 			}
 		})
+	}
+}
+
+func TestDiscardCurrentNodeCompletionConnectionPreventsPoolReuse(t *testing.T) {
+	_, store, _ := newTestStoreContext(t)
+	store.db.SetMaxOpenConns(1)
+	store.db.SetMaxIdleConns(1)
+
+	connection, err := store.db.Conn(t.Context())
+	if err != nil {
+		t.Fatalf("acquire metadata connection: %v", err)
+	}
+	if err := discardCurrentNodeCompletionConnection(connection); err != nil {
+		t.Fatalf("discard metadata connection: %v", err)
+	}
+	if err := connection.PingContext(t.Context()); !errors.Is(err, sql.ErrConnDone) {
+		t.Fatalf("discarded connection ping error = %v, want sql.ErrConnDone", err)
+	}
+
+	replacement, err := store.db.Conn(t.Context())
+	if err != nil {
+		t.Fatalf("acquire replacement metadata connection: %v", err)
+	}
+	defer func() { _ = replacement.Close() }()
+	var busyTimeout int64
+	if err := replacement.QueryRowContext(t.Context(), "PRAGMA busy_timeout").Scan(&busyTimeout); err != nil {
+		t.Fatalf("read replacement busy timeout: %v", err)
+	}
+	if busyTimeout != 5000 {
+		t.Fatalf("replacement busy timeout = %d, want 5000", busyTimeout)
 	}
 }

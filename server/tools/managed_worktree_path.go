@@ -27,21 +27,19 @@ func NewManagedWorktreePathContext(
 	baseDir string,
 	currentWorktreeRoot *string,
 	managedWorktreeRoots []string,
-	baseRootResolvers ...ManagedWorktreeBaseRootResolver,
+	baseRootResolver ManagedWorktreeBaseRootResolver,
 ) (*ManagedWorktreePathContext, error) {
-	if len(baseRootResolvers) > 1 {
-		return nil, errors.New("at most one managed worktree base root resolver is allowed")
+	if baseRootResolver == nil {
+		return nil, errors.New("managed worktree base root resolver is required")
 	}
 	base, err := config.ResolveExistingPathRealPath(strings.TrimSpace(baseDir))
 	if err != nil {
 		return nil, fmt.Errorf("resolve managed worktree base: %w", err)
 	}
 	context := &ManagedWorktreePathContext{
-		baseRoot:     base,
-		managedRoots: make([]string, 0, len(managedWorktreeRoots)),
-	}
-	if len(baseRootResolvers) == 1 {
-		context.baseRootResolver = baseRootResolvers[0]
+		baseRoot:         base,
+		managedRoots:     make([]string, 0, len(managedWorktreeRoots)),
+		baseRootResolver: baseRootResolver,
 	}
 	if currentWorktreeRoot != nil {
 		current, err := config.ResolveExistingPathRealPath(*currentWorktreeRoot)
@@ -81,16 +79,13 @@ func NewManagedWorktreePathContext(
 }
 
 func (c ManagedWorktreePathContext) CheckMutationPath(resolvedPath string) error {
-	baseRoot := c.baseRoot
-	if c.baseRootResolver != nil {
-		configuredBaseRoot, err := c.baseRootResolver()
-		if err != nil {
-			return fmt.Errorf("resolve configured managed worktree root: %w", err)
-		}
-		baseRoot, err = config.ResolveExistingPathRealPath(strings.TrimSpace(configuredBaseRoot))
-		if err != nil {
-			return fmt.Errorf("resolve configured managed worktree root: %w", err)
-		}
+	configuredBaseRoot, err := c.baseRootResolver()
+	if err != nil {
+		return fmt.Errorf("resolve configured managed worktree root: %w", err)
+	}
+	baseRoot, err := config.ResolveExistingPathRealPath(strings.TrimSpace(configuredBaseRoot))
+	if err != nil {
+		return fmt.Errorf("resolve configured managed worktree root: %w", err)
 	}
 	if c.isForeignManagedWorktreePath(baseRoot, resolvedPath) {
 		return ErrForeignManagedWorktreeEditDenied
