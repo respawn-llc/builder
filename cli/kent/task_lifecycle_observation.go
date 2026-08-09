@@ -18,8 +18,9 @@ type worktreeSetupProgressSubscriber interface {
 }
 
 type worktreeSetupObservation struct {
-	cancel context.CancelFunc
-	done   <-chan worktreeSetupObservationResult
+	ctx         context.Context
+	cancelCause context.CancelCauseFunc
+	done        <-chan worktreeSetupObservationResult
 }
 
 type worktreeSetupObservationResult struct {
@@ -29,6 +30,26 @@ type worktreeSetupObservationResult struct {
 
 type worktreeSetupTerminalObservation struct {
 	Event serverapi.WorktreeSetupEvent
+}
+
+func (o worktreeSetupObservation) cancel() {
+	o.cancelCause(context.Canceled)
+}
+
+func (o worktreeSetupObservation) startTimeout(timeout time.Duration) {
+	if timeout <= 0 {
+		o.cancelCause(context.DeadlineExceeded)
+		return
+	}
+	go func() {
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			o.cancelCause(context.DeadlineExceeded)
+		case <-o.ctx.Done():
+		}
+	}()
 }
 
 type worktreeSetupObservationError struct {
@@ -100,6 +121,7 @@ func runWorkflowMutationWithSetupProgress[T any](
 		<-observation.done
 		return resp, nil, mutateErr
 	}
+	observation.startTimeout(workflowTaskSetupObservationTimeout)
 	result := <-observation.done
 	if result.err != nil {
 		return resp, nil, &worktreeSetupObservationError{cause: result.err}
@@ -120,22 +142,26 @@ func subscribeWorktreeSetupProgress(
 	if !ok {
 		return worktreeSetupObservation{}, errors.New("worktree setup progress subscription is unavailable")
 	}
-	observationCtx, cancel := context.WithTimeout(ctx, workflowTaskSetupObservationTimeout)
+	observationCtx, cancelCause := context.WithCancelCause(ctx)
 	subscription, err := subscriber.SubscribeWorktreeSetup(
 		observationCtx,
 		serverapi.WorktreeSetupSubscribeRequest{SetupOperationID: setupOperationID},
 	)
 	if err != nil {
-		cancel()
+		cancelCause(context.Canceled)
 		return worktreeSetupObservation{}, err
 	}
 	done := make(chan worktreeSetupObservationResult, 1)
 	go func() {
-		defer cancel()
+		defer cancelCause(context.Canceled)
 		defer func() { _ = subscription.Close() }()
 		for {
 			event, err := subscription.Next(observationCtx)
 			if err != nil {
+				if errors.Is(context.Cause(observationCtx), context.DeadlineExceeded) {
+					done <- worktreeSetupObservationResult{err: context.DeadlineExceeded}
+					return
+				}
 				if errors.Is(err, io.EOF) {
 					done <- worktreeSetupObservationResult{err: io.ErrUnexpectedEOF}
 					return
@@ -173,7 +199,11 @@ func subscribeWorktreeSetupProgress(
 			}
 		}
 	}()
-	return worktreeSetupObservation{cancel: cancel, done: done}, nil
+	return worktreeSetupObservation{
+		ctx:         observationCtx,
+		cancelCause: cancelCause,
+		done:        done,
+	}, nil
 }
 
 func writeWorktreeSetupProgress(stderr io.Writer, event serverapi.WorktreeSetupEvent) {

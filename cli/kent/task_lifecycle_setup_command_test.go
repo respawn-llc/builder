@@ -91,17 +91,31 @@ func (s gatedSetupSubscription) Next(ctx context.Context) (serverapi.WorktreeSet
 
 func (gatedSetupSubscription) Close() error { return nil }
 
+type observedGatedSetupSubscription struct {
+	context  chan<- context.Context
+	terminal <-chan serverapi.WorktreeSetupEvent
+}
+
+func (s observedGatedSetupSubscription) Next(ctx context.Context) (serverapi.WorktreeSetupEvent, error) {
+	s.context <- ctx
+	select {
+	case event := <-s.terminal:
+		return event, nil
+	case <-ctx.Done():
+		return serverapi.WorktreeSetupEvent{}, ctx.Err()
+	}
+}
+
+func (observedGatedSetupSubscription) Close() error { return nil }
+
 type deadlineSetupSubscription struct {
-	deadline chan<- time.Time
+	context chan<- context.Context
 }
 
 func (s deadlineSetupSubscription) Next(ctx context.Context) (serverapi.WorktreeSetupEvent, error) {
-	deadline, ok := ctx.Deadline()
-	if !ok {
-		return serverapi.WorktreeSetupEvent{}, errors.New("setup observation context has no deadline")
-	}
-	s.deadline <- deadline
-	return serverapi.WorktreeSetupEvent{}, context.DeadlineExceeded
+	s.context <- ctx
+	<-ctx.Done()
+	return serverapi.WorktreeSetupEvent{}, ctx.Err()
 }
 
 func (deadlineSetupSubscription) Close() error { return nil }
@@ -151,6 +165,67 @@ func TestWorkflowMutationWaitsForBufferedSetupTerminalAfterAppliedResponse(t *te
 		}
 	case <-time.After(time.Second):
 		t.Fatal("mutation did not return after terminal setup event")
+	}
+}
+
+func TestWorkflowMutationStartsSetupObservationTimeoutAfterAppliedResponse(t *testing.T) {
+	terminal := make(chan serverapi.WorktreeSetupEvent, 1)
+	contexts := make(chan context.Context, 1)
+	remote := lifecycleSetupTestRemote{
+		subscription: observedGatedSetupSubscription{
+			context:  contexts,
+			terminal: terminal,
+		},
+	}
+	mutationPending := make(chan struct{})
+	releaseMutation := make(chan struct{})
+	prematureDeadline := make(chan bool, 1)
+	returned := make(chan error, 1)
+	setupIDs := make(chan serverapi.WorktreeSetupOperationID, 1)
+
+	go func() {
+		_, _, err := runWorkflowMutationWithSetupProgress(
+			context.Background(),
+			remote,
+			io.Discard,
+			func(_ context.Context, setupOperationID serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskResumeResponse, error) {
+				setupIDs <- setupOperationID
+				observationCtx := <-contexts
+				_, hasDeadline := observationCtx.Deadline()
+				prematureDeadline <- hasDeadline
+				close(mutationPending)
+				<-releaseMutation
+				return serverapi.WorkflowTaskResumeResponse{
+					Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
+					Applied: &serverapi.WorkflowTaskResumeApplied{
+						CurrentNodes: []serverapi.WorkflowTaskCurrentNode{{NodeID: "node-1"}},
+					},
+				}, nil
+			},
+			func(resp serverapi.WorkflowTaskResumeResponse) bool {
+				return resp.Outcome == serverapi.WorkflowExecutionTargetActionOutcomeApplied
+			},
+		)
+		returned <- err
+	}()
+
+	<-mutationPending
+	terminal <- serverapi.WorktreeSetupEvent{
+		SetupOperationID: <-setupIDs,
+		Phase:            serverapi.WorktreeSetupPhaseCompleted,
+		Completed:        &serverapi.WorktreeSetupCompleted{},
+	}
+	close(releaseMutation)
+	select {
+	case err := <-returned:
+		if err != nil {
+			t.Fatalf("mutation returned error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("mutation did not return after its buffered terminal setup event")
+	}
+	if <-prematureDeadline {
+		t.Fatal("setup observation timeout started before mutation applied")
 	}
 }
 
@@ -260,40 +335,40 @@ func TestStartSetupFailurePresentationProvidesTypedResumeActions(t *testing.T) {
 }
 
 func TestWorkflowSetupObservationTimeoutUsesTwoMinuteBudgetAndInspectionOnlyPresentation(t *testing.T) {
-	deadlines := make(chan time.Time, 1)
-	remote := lifecycleSetupTestRemote{subscription: deadlineSetupSubscription{deadline: deadlines}}
-	startedAt := time.Now()
-
-	_, terminal, err := runWorkflowMutationWithSetupProgress(
+	contexts := make(chan context.Context, 1)
+	remote := lifecycleSetupTestRemote{subscription: deadlineSetupSubscription{context: contexts}}
+	observation, err := subscribeWorktreeSetupProgress(
 		context.Background(),
 		remote,
+		serverapi.NewWorktreeSetupOperationID(),
 		io.Discard,
-		func(context.Context, serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskResumeResponse, error) {
-			return serverapi.WorkflowTaskResumeResponse{
-				Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
-				Applied: &serverapi.WorkflowTaskResumeApplied{
-					CurrentNodes: []serverapi.WorkflowTaskCurrentNode{{NodeID: "node-1"}},
-				},
-			}, nil
-		},
-		func(resp serverapi.WorkflowTaskResumeResponse) bool {
-			return resp.Outcome == serverapi.WorkflowExecutionTargetActionOutcomeApplied
-		},
 	)
-	if terminal != nil || !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("terminal=%+v err=%v, want deadline exceeded", terminal, err)
+	if err != nil {
+		t.Fatalf("subscribeWorktreeSetupProgress: %v", err)
 	}
-	deadline := <-deadlines
-	budget := deadline.Sub(startedAt)
-	if budget < workflowTaskSetupObservationTimeout-time.Second ||
-		budget > workflowTaskSetupObservationTimeout+time.Second {
-		t.Fatalf("observation budget = %s, want %s", budget, workflowTaskSetupObservationTimeout)
+	observationCtx := <-contexts
+	if _, hasDeadline := observationCtx.Deadline(); hasDeadline {
+		t.Fatal("setup observation timeout started before being armed")
+	}
+	const testTimeout = 20 * time.Millisecond
+	startedAt := time.Now()
+	observation.startTimeout(testTimeout)
+	result := <-observation.done
+	if !errors.Is(result.err, context.DeadlineExceeded) {
+		t.Fatalf("observation error = %v, want deadline exceeded", result.err)
+	}
+	elapsed := time.Since(startedAt)
+	if elapsed < testTimeout || elapsed > time.Second {
+		t.Fatalf("observation timeout elapsed = %s, want at least %s", elapsed, testTimeout)
+	}
+	if workflowTaskSetupObservationTimeout != 2*time.Minute {
+		t.Fatalf("observation budget = %s, want two minutes", workflowTaskSetupObservationTimeout)
 	}
 
 	presentation := taskLifecycleObservationPresentation(
 		taskLifecycleOperationResume,
 		taskLifecycleCommandContext{TaskRef: "KENT-453"},
-		err,
+		&worktreeSetupObservationError{cause: result.err},
 	)
 	if presentation.Kind != taskLifecyclePresentationObservationTimedOut ||
 		presentation.Operation != taskLifecycleOperationResume {
