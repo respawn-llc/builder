@@ -130,6 +130,16 @@ describe("VirtualizedInfiniteList pixel restoration", () => {
     expect(screen.getByRole("list").scrollTop).toBe(240);
   });
 
+  it("does not overwrite a user scroll after restoration", () => {
+    const view = render(<List request={createVirtualizedPixelOffsetRequest("user-scroll", 240)} />);
+    const list = screen.getByRole("list");
+    list.scrollTop = 640;
+
+    view.rerender(<List request={createVirtualizedPixelOffsetRequest("user-scroll", 240)} />);
+
+    expect(list.scrollTop).toBe(640);
+  });
+
   it("accepts absence without issuing a restoration request", () => {
     render(<List />);
     expect(virtualizer.scrollToOffset).not.toHaveBeenCalled();
