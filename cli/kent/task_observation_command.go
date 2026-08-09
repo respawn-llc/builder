@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 
+	"core/shared/client"
 	"core/shared/config"
 	"core/shared/serverapi"
 )
@@ -23,21 +25,48 @@ func taskWatchSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 }
 
 func taskObservationSubcommand(args []string, stdout io.Writer, stderr io.Writer, mode serverapi.WorkflowTaskObservationMode) int {
-	fs := newCommandFlagSet(config.Command+" task "+string(mode), stderr, leafCommandUsage(
+	return taskObservationSubcommandWithOpener(args, stdout, stderr, mode, openWorkflowObservationRemote)
+}
+
+type workflowObservationOpener func(context.Context, string) (config.App, workflowCommandRemote, error)
+
+func openWorkflowObservationRemote(ctx context.Context, path string) (config.App, workflowCommandRemote, error) {
+	cfg, remote, err := openBindingCommandRemoteLifecycle(ctx, path)
+	return cfg, remote, err
+}
+
+func taskObservationSubcommandWithOpener(args []string, stdout io.Writer, stderr io.Writer, mode serverapi.WorkflowTaskObservationMode, open workflowObservationOpener) int {
+	var diagnostics bytes.Buffer
+	fs := newCommandFlagSet(config.Command+" task "+string(mode), &diagnostics, leafCommandUsage(
 		config.Command+" task "+string(mode)+" <task>",
 		"Wait for a Workflow Task outcome.",
 	))
 	project := fs.String("project", ".", "project path or ID")
+	jsonOut := fs.Bool("json", false, "write a stable JSON envelope")
 	positionals, ok, code := parseInterspersedPositionals(fs, args)
 	if !ok {
+		if code == 0 {
+			_, _ = io.Copy(stderr, &diagnostics)
+			return 0
+		}
+		if *jsonOut {
+			return writeObservationUsage(stdout, strings.TrimSpace(diagnostics.String()))
+		}
+		_, _ = io.Copy(stderr, &diagnostics)
 		return code
 	}
 	if len(positionals) != 1 {
+		if *jsonOut {
+			return writeObservationUsage(stdout, "task reference is required")
+		}
 		fmt.Fprintln(stderr, "task reference is required")
 		return 2
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if *jsonOut {
+		return taskObservationJSON(ctx, stdout, mode, *project, positionals[0], open)
+	}
 	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
 		detail, err := resolveWorkflowTask(ctx, cfg, remote, *project, positionals[0])
 		if err != nil {
@@ -56,6 +85,46 @@ func taskObservationSubcommand(args []string, stdout io.Writer, stderr io.Writer
 		}
 		return writeTaskObservation(stdout, stderr, response, *project)
 	})
+}
+
+func taskObservationJSON(ctx context.Context, stdout io.Writer, mode serverapi.WorkflowTaskObservationMode, projectRef string, ref string, open workflowObservationOpener) int {
+	cfg, remote, err := open(ctx, ".")
+	var closeFn func() error
+	if remote != nil {
+		closeFn = remote.Close
+	}
+	operation := observationOperationTaskWait
+	if mode == serverapi.WorkflowTaskObservationWatch {
+		operation = observationOperationTaskWatch
+	}
+	if err != nil {
+		return emitObservationError(stdout, operation, nil, ctx, err, nil, closeFn)
+	}
+	detail, err := resolveWorkflowTask(ctx, cfg, remote, projectRef, ref)
+	if err != nil {
+		return emitObservationError(stdout, operation, nil, ctx, err, nil, closeFn)
+	}
+	target := observationTargetTask(detail.Summary.ID)
+	response, err := remote.ObserveWorkflowTask(ctx, serverapi.WorkflowTaskObservationRequest{
+		TaskID: detail.Summary.ID, ProjectID: detail.Summary.ProjectID, Mode: mode,
+	})
+	if err != nil {
+		return emitObservationError(stdout, operation, target, ctx, err, nil, closeFn)
+	}
+	if response.TaskID != detail.Summary.ID {
+		err := &client.InvalidResponseError{
+			Operation: "workflow task observation",
+			Cause:     fmt.Errorf("response task ID %q does not match requested task %q", response.TaskID, detail.Summary.ID),
+		}
+		envelope, exitCode := projectObservationError(operation, target, ctx, err)
+		return emitObservationJSONWithCleanup(stdout, envelope, exitCode, nil, closeFn)
+	}
+	envelope, exitCode, err := projectTaskObservationJSON(detail.Summary.ID, response)
+	if err != nil {
+		err = &client.InvalidResponseError{Operation: "workflow task observation", Cause: err}
+		envelope, exitCode = projectObservationError(operation, target, ctx, err)
+	}
+	return emitObservationJSONWithCleanup(stdout, envelope, exitCode, nil, closeFn)
 }
 
 func writeTaskObservation(stdout io.Writer, stderr io.Writer, response serverapi.WorkflowTaskObservationResponse, projectRef string) int {
