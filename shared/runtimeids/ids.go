@@ -49,15 +49,6 @@ func ParseCanonicalUUIDv4(raw string, field string) (uuid.UUID, error) {
 	return parsed, nil
 }
 
-func ParseCanonicalTaskID(raw string) (string, error) {
-	kind, uuidText, ok := strings.Cut(raw, "-")
-	parsed, err := ParseCanonicalUUIDv4(uuidText, "task ID")
-	if !ok || kind != "task" || err != nil || "task-"+parsed.String() != raw {
-		return "", fmt.Errorf("task ID must be task-<uuidv4>")
-	}
-	return raw, nil
-}
-
 // ParseTaskID accepts canonical UUIDv4 task IDs and existing task-<legacy-id>
 // identities. New Task IDs are canonical UUIDv4, but lookup preserves older
 // persistent identities until an explicit migration is approved.
