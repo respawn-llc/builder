@@ -11,27 +11,24 @@ import (
 	"time"
 
 	"core/shared/apicontract"
-	"core/shared/auth"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/runtimeids"
+	"core/shared/serverapi"
 )
 
 const (
-	authCacheFreshness        = time.Minute
 	gitCacheFreshness         = 5 * time.Second
 	environmentCacheFreshness = 5 * time.Minute
 )
 
 type Repository interface {
 	SeedSnapshot(req Request, base Snapshot, now time.Time) SeedResult
-	StoreAuth(cacheKey string, result AuthStageResult, now time.Time)
 	StoreGit(cacheKey string, result GitStageResult, now time.Time)
 	StoreEnvironment(cacheKey string, result EnvironmentStageResult, now time.Time)
 }
 
 type CacheKeys struct {
-	Auth        string
 	Git         string
 	Environment string
 }
@@ -44,11 +41,9 @@ type Request struct {
 	SessionViews          apicontract.SessionViewService
 	Settings              config.Settings
 	Source                config.SourceReport
-	AuthCacheIdentity     string
-	AuthCacheUnseedable   bool
 	CacheKeys             CacheKeys
 	AuthStatus            apicontract.AuthStatusService
-	AuthStatePath         string
+	AuthSelection         *serverapi.AuthProviderSelection
 	SessionName           string
 	SessionID             string
 	AgentRole             *string
@@ -61,7 +56,6 @@ type Request struct {
 	ReviewerMode          string
 	AutoCompactionEnabled bool
 	QuestionsEnabled      bool
-	OwnsServer            bool
 	CurrentTime           time.Time
 }
 
@@ -75,7 +69,6 @@ type Snapshot struct {
 	PreviousSessionName    string
 	ParentAgentSessionID   *runtimeids.SessionID
 	ParentAgentSessionName string
-	OwnsServer             bool
 	Git                    GitInfo
 	Auth                   AuthInfo
 	Context                ContextInfo
@@ -95,7 +88,7 @@ type AuthInfo struct {
 	Summary     string
 	Details     []string
 	Visible     bool
-	Method      auth.MethodType
+	Method      serverapi.AuthStatusMethod
 	Provider    string
 	Unavailable bool
 }
@@ -189,15 +182,9 @@ type EnvironmentStageResult struct {
 }
 
 type memoryRepository struct {
-	mu        sync.Mutex
-	authByKey map[string]authCacheEntry
-	gitByKey  map[string]gitCacheEntry
-	envByKey  map[string]environmentCacheEntry
-}
-
-type authCacheEntry struct {
-	fetchedAt time.Time
-	result    AuthStageResult
+	mu       sync.Mutex
+	gitByKey map[string]gitCacheEntry
+	envByKey map[string]environmentCacheEntry
 }
 
 type gitCacheEntry struct {
@@ -212,9 +199,8 @@ type environmentCacheEntry struct {
 
 func NewMemoryRepository() Repository {
 	return &memoryRepository{
-		authByKey: map[string]authCacheEntry{},
-		gitByKey:  map[string]gitCacheEntry{},
-		envByKey:  map[string]environmentCacheEntry{},
+		gitByKey: map[string]gitCacheEntry{},
+		envByKey: map[string]environmentCacheEntry{},
 	}
 }
 
@@ -223,21 +209,7 @@ func (r *memoryRepository) SeedSnapshot(req Request, base Snapshot, now time.Tim
 	defer r.mu.Unlock()
 
 	seed := SeedResult{Snapshot: base, Warnings: map[Section]string{}}
-
-	authEntry, authCached := r.authByKey[strings.TrimSpace(req.CacheKeys.Auth)]
-	if req.AuthCacheUnseedable {
-		authCached = false
-	}
-	if authCached {
-		seed.Snapshot.Auth = authEntry.result.Auth
-		seed.Snapshot.Subscription = authEntry.result.Subscription
-		if warning := strings.TrimSpace(authEntry.result.Warning); warning != "" {
-			seed.Warnings[SectionAuth] = warning
-		}
-	}
-	if !authCached || now.Sub(authEntry.fetchedAt) > authCacheFreshness {
-		seed.PendingSections = append(seed.PendingSections, SectionAuth)
-	}
+	seed.PendingSections = append(seed.PendingSections, SectionAuth)
 
 	gitEntry, gitCached := r.gitByKey[strings.TrimSpace(req.CacheKeys.Git)]
 	if gitCached {
@@ -272,15 +244,6 @@ func (r *memoryRepository) SeedSnapshot(req Request, base Snapshot, now time.Tim
 	return seed
 }
 
-func (r *memoryRepository) StoreAuth(cacheKey string, result AuthStageResult, now time.Time) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if strings.TrimSpace(cacheKey) == "" {
-		return
-	}
-	r.authByKey[cacheKey] = authCacheEntry{fetchedAt: repositoryTime(now), result: result}
-}
-
 func (r *memoryRepository) StoreGit(cacheKey string, result GitStageResult, now time.Time) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -308,18 +271,6 @@ func repositoryTime(now time.Time) time.Time {
 		return time.Now()
 	}
 	return now
-}
-
-func AuthCacheKey(req Request) string {
-	identity := strings.TrimSpace(req.AuthCacheIdentity)
-	if identity == "" {
-		identity = "auth:none"
-	}
-	return strings.Join([]string{
-		strings.TrimSpace(req.Settings.OpenAIBaseURL),
-		strings.TrimSpace(req.Settings.ProviderOverride),
-		identity,
-	}, "|")
 }
 
 func GitCacheKey(workdir string) string {

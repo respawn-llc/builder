@@ -3,179 +3,213 @@ package remoteattach
 import (
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"core/shared/client"
-	"core/shared/config"
+	"core/shared/protocol"
+	"core/shared/rpcwire"
+	"core/shared/serverapi"
 )
 
-func TestBindProjectWorkspaceDialsWorkspaceRootWithTrimmedProject(t *testing.T) {
-	var gotProjectID string
-	var gotWorkspaceRoot string
-	next := &client.Remote{}
-	bound, err := BindProjectWorkspace(context.Background(), ProjectWorkspaceBindingRequest{
-		Current:     &client.Remote{},
-		Config:      config.App{WorkspaceRoot: "/workspace"},
-		ProjectID:   " project-1 ",
-		WorkspaceID: " ",
-		DialWorkspaceRoot: func(_ context.Context, _ config.App, projectID string, workspaceRoot string) (*client.Remote, error) {
-			gotProjectID = projectID
-			gotWorkspaceRoot = workspaceRoot
-			return next, nil
-		},
+func TestBindProjectWorkspaceFailuresKeepCurrentUsableAndCloseCreatedSuccessor(t *testing.T) {
+	tests := []struct {
+		name       string
+		rootID     string
+		dialErr    error
+		next       remoteBindingServerOptions
+		enableAuth bool
+		wantRoot   bool
+	}{
+		{name: "dial", dialErr: errors.New("dial failed")},
+		{name: "root pin", rootID: "required-root", next: remoteBindingServerOptions{rootID: "other-root"}, wantRoot: true},
+		{name: "no-auth acknowledgement", rootID: "next-root", next: remoteBindingServerOptions{rootID: "next-root", ackErr: errors.New("ack failed")}, enableAuth: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			currentServer := newRemoteBindingServer(t, remoteBindingServerOptions{rootID: "current-root"})
+			current := currentServer.dial(t)
+			t.Cleanup(func() { _ = current.Close() })
+			if test.enableAuth {
+				if err := current.EnableNoAuthBootstrapAcknowledgement(context.Background()); err != nil {
+					t.Fatalf("enable no-auth acknowledgement: %v", err)
+				}
+			}
+
+			var nextServer *remoteBindingServer
+			var next *client.Remote
+			if test.dialErr == nil {
+				nextServer = newRemoteBindingServer(t, test.next)
+				next = nextServer.dial(t)
+			}
+			_, err := bindProjectWorkspace(context.Background(), current, "project-1", "", test.rootID, func(context.Context, string, string) (*client.Remote, error) {
+				return next, test.dialErr
+			})
+			if test.wantRoot {
+				if !errors.Is(err, client.ErrServerRootMismatch) {
+					t.Fatalf("error = %v, want ErrServerRootMismatch", err)
+				}
+			} else if err == nil {
+				t.Fatal("expected binding failure")
+			}
+			requireRemoteUsable(t, current)
+			if nextServer != nil {
+				nextServer.requireClosed(t)
+			}
+		})
+	}
+}
+
+func TestBindProjectWorkspaceAcknowledgesBeforeSwitchAndFinalCloseIsIdempotent(t *testing.T) {
+	currentServer := newRemoteBindingServer(t, remoteBindingServerOptions{rootID: "current-root"})
+	current := currentServer.dial(t)
+	if err := current.EnableNoAuthBootstrapAcknowledgement(context.Background()); err != nil {
+		t.Fatalf("enable no-auth acknowledgement: %v", err)
+	}
+
+	ackStarted := make(chan struct{})
+	releaseAck := make(chan struct{}, 1)
+	t.Cleanup(func() {
+		select {
+		case releaseAck <- struct{}{}:
+		default:
+		}
 	})
+	nextServer := newRemoteBindingServer(t, remoteBindingServerOptions{
+		rootID: "next-root", ackStarted: ackStarted, releaseAck: releaseAck,
+	})
+	next := nextServer.dial(t)
+
+	type result struct {
+		remote *client.Remote
+		err    error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		remote, err := bindProjectWorkspace(context.Background(), current, "project-1", "", "next-root", func(context.Context, string, string) (*client.Remote, error) {
+			return next, nil
+		})
+		resultCh <- result{remote: remote, err: err}
+	}()
+
+	select {
+	case <-ackStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("successor acknowledgement did not start")
+	}
+	requireRemoteUsable(t, current)
+	releaseAck <- struct{}{}
+
+	var bound result
+	select {
+	case bound = <-resultCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("binding did not finish")
+	}
+	if bound.err != nil {
+		t.Fatalf("bind project workspace: %v", bound.err)
+	}
+	if bound.remote != next {
+		t.Fatal("binding did not return the acknowledged successor")
+	}
+	currentServer.requireClosed(t)
+
+	if err := errors.Join(bound.remote.Close(), bound.remote.Close()); err != nil {
+		t.Fatalf("close final remote twice: %v", err)
+	}
+	nextServer.requireClosed(t)
+}
+
+type remoteBindingServerOptions struct {
+	rootID     string
+	ackErr     error
+	ackStarted chan struct{}
+	releaseAck <-chan struct{}
+}
+
+type remoteBindingServer struct {
+	*httptest.Server
+	closed     chan struct{}
+	closeCount atomic.Int32
+}
+
+func newRemoteBindingServer(t *testing.T, options remoteBindingServerOptions) *remoteBindingServer {
+	t.Helper()
+	server := &remoteBindingServer{closed: make(chan struct{})}
+	server.Server = httptest.NewServer(rpcwire.NewWebSocketTransport().Handler(func(ctx context.Context, conn rpcwire.Conn) {
+		defer func() {
+			server.closeCount.Add(1)
+			close(server.closed)
+		}()
+		handshaken := false
+		for event := range conn.Events() {
+			if event.Err != nil {
+				return
+			}
+			request := event.Frame.Request()
+			var response protocol.Response
+			switch {
+			case !handshaken && request.Method == protocol.MethodHandshake:
+				handshaken = true
+				response = protocol.NewSuccessResponse(request.ID, protocol.HandshakeResponse{Identity: protocol.ServerIdentity{
+					ProtocolVersion: protocol.Version, ServerID: "binding-test", PersistenceRootID: options.rootID,
+				}})
+			case handshaken && request.Method == protocol.MethodServerReadinessGet:
+				response = protocol.NewSuccessResponse(request.ID, serverapi.ServerReadinessResponse{Ready: true})
+			case handshaken && request.Method == protocol.MethodAuthAcknowledgeNoAuth:
+				if options.ackStarted != nil {
+					close(options.ackStarted)
+				}
+				if options.releaseAck != nil {
+					<-options.releaseAck
+				}
+				if options.ackErr != nil {
+					response = protocol.NewErrorResponse(request.ID, protocol.ErrCodeInternalError, options.ackErr.Error())
+				} else {
+					response = protocol.NewSuccessResponse(request.ID, serverapi.AuthAcknowledgeNoAuthResponse{NoAuthSelected: true})
+				}
+			default:
+				response = protocol.NewErrorResponse(request.ID, protocol.ErrCodeMethodNotFound, "unexpected test method")
+			}
+			if err := conn.Send(ctx, rpcwire.FrameFromResponse(response)); err != nil {
+				return
+			}
+		}
+	}))
+	t.Cleanup(server.Server.Close)
+	return server
+}
+
+func (s *remoteBindingServer) dial(t *testing.T) *client.Remote {
+	t.Helper()
+	remote, err := client.DialRemoteURL(context.Background(), "ws"+s.URL[len("http"):])
 	if err != nil {
-		t.Fatalf("BindProjectWorkspace: %v", err)
+		t.Fatalf("dial remote: %v", err)
 	}
-	if bound.Remote != next {
-		t.Fatal("expected bound remote from workspace-root dialer")
+	return remote
+}
+
+func (s *remoteBindingServer) requireClosed(t *testing.T) {
+	t.Helper()
+	select {
+	case <-s.closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("underlying connection did not close")
 	}
-	if gotProjectID != "project-1" {
-		t.Fatalf("project id = %q, want trimmed project id", gotProjectID)
-	}
-	if gotWorkspaceRoot != "/workspace" {
-		t.Fatalf("workspace root = %q, want config workspace root", gotWorkspaceRoot)
+	if count := s.closeCount.Load(); count != 1 {
+		t.Fatalf("underlying connection close count = %d, want 1", count)
 	}
 }
 
-func TestBindProjectWorkspaceDialsWorkspaceIDWithoutReadingUnavailableWorkspaceRoot(t *testing.T) {
-	var rootDialed bool
-	var gotWorkspaceID string
-	unavailableRoot := filepath.Join(t.TempDir(), "server-host-only-workspace")
-	if _, err := os.Stat(unavailableRoot); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("unavailable workspace root precondition: %v", err)
-	}
-	next := &client.Remote{}
-	bound, err := BindProjectWorkspace(context.Background(), ProjectWorkspaceBindingRequest{
-		Current:     &client.Remote{},
-		Config:      config.App{WorkspaceRoot: unavailableRoot},
-		ProjectID:   "project-1",
-		WorkspaceID: " workspace-id ",
-		DialWorkspaceRoot: func(context.Context, config.App, string, string) (*client.Remote, error) {
-			rootDialed = true
-			return nil, nil
-		},
-		DialWorkspaceID: func(_ context.Context, _ config.App, _ string, workspaceID string) (*client.Remote, error) {
-			gotWorkspaceID = workspaceID
-			return next, nil
-		},
-	})
+func requireRemoteUsable(t *testing.T, remote *client.Remote) {
+	t.Helper()
+	response, err := remote.GetServerReadiness(context.Background(), serverapi.ServerReadinessRequest{})
 	if err != nil {
-		t.Fatalf("BindProjectWorkspace: %v", err)
+		t.Fatalf("remote is not usable: %v", err)
 	}
-	if bound.Remote != next {
-		t.Fatal("expected bound remote from workspace-id dialer")
-	}
-	if rootDialed {
-		t.Fatal("workspace root dialer should not be used for workspace id binding")
-	}
-	if gotWorkspaceID != "workspace-id" {
-		t.Fatalf("workspace id = %q, want trimmed workspace id", gotWorkspaceID)
-	}
-}
-
-func TestBindProjectWorkspaceRejectsMissingInputsBeforeDial(t *testing.T) {
-	dialed := false
-	_, err := BindProjectWorkspace(context.Background(), ProjectWorkspaceBindingRequest{
-		Current:   &client.Remote{},
-		ProjectID: " ",
-		DialWorkspaceRoot: func(context.Context, config.App, string, string) (*client.Remote, error) {
-			dialed = true
-			return &client.Remote{}, nil
-		},
-	})
-	if err == nil {
-		t.Fatal("expected missing project id error")
-	}
-	if dialed {
-		t.Fatal("dialer should not be called for missing project id")
-	}
-	_, err = BindProjectWorkspace(context.Background(), ProjectWorkspaceBindingRequest{ProjectID: "project-1"})
-	if err == nil {
-		t.Fatal("expected missing current remote error")
-	}
-}
-
-func TestBindProjectWorkspacePinsRootOnReboundRemote(t *testing.T) {
-	// The rebound remote must validate the expected persistence root just like the
-	// initially attached one. The zero-value remote reports an empty root id, so a
-	// non-empty required RootID must reject it on mismatch rather than handing back
-	// an unpinned remote that could reconnect to a different root.
-	next := &client.Remote{}
-	_, err := BindProjectWorkspace(context.Background(), ProjectWorkspaceBindingRequest{
-		Current:   &client.Remote{},
-		ProjectID: "project-1",
-		RootID:    "root-iso",
-		DialWorkspaceRoot: func(context.Context, config.App, string, string) (*client.Remote, error) {
-			return next, nil
-		},
-	})
-	if !errors.Is(err, client.ErrServerRootMismatch) {
-		t.Fatalf("error = %v, want ErrServerRootMismatch from rebound-remote root pin", err)
-	}
-}
-
-func TestBindProjectWorkspaceKeepsCurrentRemoteOpenWhenDialFails(t *testing.T) {
-	dialErr := errors.New("dial failed")
-	_, err := BindProjectWorkspace(context.Background(), ProjectWorkspaceBindingRequest{
-		Current:   &client.Remote{},
-		ProjectID: "project-1",
-		DialWorkspaceRoot: func(context.Context, config.App, string, string) (*client.Remote, error) {
-			return nil, dialErr
-		},
-	})
-	if !errors.Is(err, dialErr) {
-		t.Fatalf("error = %v, want %v", err, dialErr)
-	}
-}
-
-func TestBindProjectWorkspaceOwnedCloseClosesBoundAndOwnedServer(t *testing.T) {
-	next := &client.Remote{}
-	ownedCloseCalled := false
-	bound, err := BindProjectWorkspace(context.Background(), ProjectWorkspaceBindingRequest{
-		Current:    &client.Remote{},
-		ProjectID:  "project-1",
-		OwnsServer: true,
-		OwnedClose: func() error {
-			ownedCloseCalled = true
-			return nil
-		},
-		DialWorkspaceRoot: func(context.Context, config.App, string, string) (*client.Remote, error) {
-			return next, nil
-		},
-	})
-	if err != nil {
-		t.Fatalf("BindProjectWorkspace: %v", err)
-	}
-	if bound.CloseFn == nil {
-		t.Fatal("expected owned close fn")
-	}
-	if err := bound.CloseFn(); err != nil {
-		t.Fatalf("CloseFn: %v", err)
-	}
-	if !ownedCloseCalled {
-		t.Fatal("expected owned server close")
-	}
-}
-
-func TestBindProjectWorkspaceDoesNotPromoteCloseFnToOwnership(t *testing.T) {
-	next := &client.Remote{}
-	bound, err := BindProjectWorkspace(context.Background(), ProjectWorkspaceBindingRequest{
-		Current:   &client.Remote{},
-		ProjectID: "project-1",
-		OwnedClose: func() error {
-			return nil
-		},
-		DialWorkspaceRoot: func(context.Context, config.App, string, string) (*client.Remote, error) {
-			return next, nil
-		},
-	})
-	if err != nil {
-		t.Fatalf("BindProjectWorkspace: %v", err)
-	}
-	if bound.CloseFn != nil {
-		t.Fatal("expected non-owned binding to avoid owned close fn")
+	if !response.Ready {
+		t.Fatal("remote readiness = false")
 	}
 }

@@ -50,7 +50,7 @@ type committedEntryPersistDoneMsg struct {
 type authSlashCommandRefreshedMsg struct {
 	token      uint64
 	generation uint64
-	name       string
+	kind       authSlashCommandKind
 	err        error
 }
 

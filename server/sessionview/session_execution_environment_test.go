@@ -12,7 +12,6 @@ import (
 	"core/server/metadata"
 	"core/server/session"
 	"core/server/worktree"
-	"core/shared/auth"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/runtimeids"
@@ -93,10 +92,13 @@ func TestSessionExecutionEnvironmentCompleteResponseIsReadOnly(t *testing.T) {
 	fixture := newSessionExecutionEnvironmentFixture(t)
 	markSessionExecutionEnvironmentGitRepository(t, fixture.workspaceRoot)
 	authClient := &sessionExecutionEnvironmentAuthClient{
-		response: serverapi.AuthStatusResponse{Auth: serverapi.AuthStatusInfo{
-			Visible: true,
-			Method:  auth.MethodNone,
-		}},
+		response: serverapi.AuthStatusResponse{
+			Resolution: serverapi.KnownAuthStatusResolution(serverapi.AuthStatusFacts{
+				Method:        serverapi.AuthStatusMethodNone,
+				Provider:      serverapi.OpenAIAuthProviderFacts(),
+				EnvPreference: serverapi.AuthStatusEnvPreferenceUnspecified,
+			}, nil),
+		},
 	}
 	service := NewService(newTestSessionResolver(fixture.store), nil, nil, fixture.metadata).
 		WithExecutionEnvironmentConfig(config.App{Settings: config.Settings{Model: "gpt-5.6-sol"}}).

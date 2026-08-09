@@ -2,8 +2,6 @@ package startup
 
 import (
 	"context"
-	"errors"
-	"os"
 
 	"core/server/auth"
 	"core/server/authservice"
@@ -30,10 +28,6 @@ type Request struct {
 	LoadOptions           config.LoadOptions
 }
 
-type Options struct {
-	Core core.Options
-}
-
 type AuthHandler interface {
 	WrapStore(base auth.Store) auth.Store
 	NeedsInteraction(req authservice.FlowInteractionRequest) bool
@@ -50,38 +44,7 @@ type OnboardingRequest struct {
 	ReloadConfig          func() (config.App, error)
 }
 
-func StartWithOptions(ctx context.Context, req Request, authHandler AuthHandler, onboardingHandler OnboardingHandler, opts Options) (*EmbeddedServer, error) {
-	if authHandler == nil {
-		return nil, errors.New("auth handler is required")
-	}
-	bootstrapReq := buildRequest(req, authHandler)
-	resolved, err := serverbootstrap.ResolveConfig(bootstrapReq)
-	if err != nil {
-		return nil, err
-	}
-	if !resolved.Config.Source.SettingsFileExists && onboardingHandler == nil {
-		cfg, deps, surfaceErr := buildStartupControlSurface(ctx, bootstrapReq, !req.AllowUnauthenticated, authHandler, opts)
-		if surfaceErr == nil {
-			return &EmbeddedServer{deps: deps, cfg: cfg}, nil
-		}
-		if !errors.Is(surfaceErr, errStartupControlSurfaceNotRequired) {
-			return nil, surfaceErr
-		}
-	}
-	appCore, err := startCoreWithBootstrap(ctx, bootstrapReq, !req.AllowUnauthenticated, authHandler, onboardingHandler, opts)
-	if err != nil {
-		return nil, err
-	}
-	return &EmbeddedServer{Core: appCore}, nil
-}
-
-type startupAuthHandler interface {
-	WrapStore(base auth.Store) auth.Store
-	NeedsInteraction(req authservice.FlowInteractionRequest) bool
-	Interact(ctx context.Context, req authservice.FlowInteractionRequest) (authservice.FlowInteractionOutcome, error)
-}
-
-func startCoreWithBootstrap(ctx context.Context, bootstrapReq serverbootstrap.Request, requireAuth bool, authHandler startupAuthHandler, onboardingHandler OnboardingHandler, opts Options) (*core.Core, error) {
+func startCoreWithBootstrap(ctx context.Context, bootstrapReq serverbootstrap.Request, requireAuth bool, authHandler AuthHandler, onboardingHandler OnboardingHandler) (*core.Core, error) {
 	resolved, err := serverbootstrap.ResolveConfig(bootstrapReq)
 	if err != nil {
 		return nil, err
@@ -122,7 +85,7 @@ func startCoreWithBootstrap(ctx context.Context, bootstrapReq serverbootstrap.Re
 	if err != nil {
 		return nil, err
 	}
-	appCore, err := core.NewWithContextOptions(ctx, cfg, authSupport, runtimeSupport, opts.Core)
+	appCore, err := core.NewWithContext(ctx, cfg, authSupport, runtimeSupport)
 	if err != nil {
 		_ = runtimeSupport.Background.Close()
 		return nil, err
@@ -142,17 +105,13 @@ func buildRequest(req Request, authHandler AuthHandler) serverbootstrap.Request 
 			Tools:               req.Tools,
 		}
 	}
-	lookupEnv := os.Getenv
-	if authHandler != nil {
-		lookupEnv = authHandler.LookupEnv
-	}
 	return serverbootstrap.Request{
 		WorkspaceRoot:         req.WorkspaceRoot,
 		WorkspaceRootExplicit: req.WorkspaceRootExplicit,
 		SessionID:             req.SessionID,
 		OpenAIBaseURL:         req.OpenAIBaseURL,
 		OpenAIBaseURLExplicit: req.OpenAIBaseURLExplicit,
-		LookupEnv:             lookupEnv,
+		LookupEnv:             authHandler.LookupEnv,
 		LoadOptions:           loadOptions,
 	}
 }

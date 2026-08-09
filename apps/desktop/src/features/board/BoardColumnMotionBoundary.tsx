@@ -30,6 +30,7 @@ export type BoardColumnMotionBoundaryProps = Readonly<{
   board: SelectedWorkflowBoard;
   displayedCards: readonly KanbanCardVM[] | undefined;
   column: BoardColumn;
+  dragDisabled: boolean;
   dropState: BoardColumnDropState;
   isCollapsed: boolean;
   isFirstActive: boolean;
@@ -78,6 +79,7 @@ export function BoardColumnMotionBoundary({
   board,
   displayedCards,
   column,
+  dragDisabled,
   dropState,
   isCollapsed,
   isFirstActive,
@@ -182,6 +184,7 @@ export function BoardColumnMotionBoundary({
         cards={renderedCards}
         column={columnVM}
         columnRef={setRegisteredColumnElement}
+        dragDisabled={dragDisabled}
         scrollportRef={setRegisteredScrollElement}
         dropState={dropState}
         hasMoreCards={presentation.hasMoreCards}

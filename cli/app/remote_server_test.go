@@ -13,43 +13,50 @@ import (
 	"core/shared/config"
 )
 
-func TestRemoteAppServerReauthenticateConfiguresServerOwnedAuth(t *testing.T) {
-	_, workspace := newRegisteredAppWorkspace(t)
-	t.Setenv("OPENAI_API_KEY", "reauthed-key")
+type remoteAuthTestFixture struct {
+	daemon *serverstartup.ServeServer
+	server *remoteAppServer
+	config config.App
+}
 
+func startRemoteAuthTestFixture(t *testing.T, workspace string, allowUnauthenticated bool, authHandler memoryAuthHandler) remoteAuthTestFixture {
+	t.Helper()
 	cfg := loadAppTestConfig(t, workspace, config.LoadOptions{})
-	srv, err := serverstartup.StartServeServer(context.Background(), serverstartup.Request{
+	daemon, err := serverstartup.StartServeServer(context.Background(), serverstartup.Request{
 		WorkspaceRoot:         workspace,
 		WorkspaceRootExplicit: true,
-		AllowUnauthenticated:  true,
-	}, memoryAuthHandler{state: auth.EmptyState()}, autoOnboarding)
+		AllowUnauthenticated:  allowUnauthenticated,
+	}, authHandler, autoOnboarding)
 	if err != nil {
-		t.Fatalf("serve.Start: %v", err)
+		t.Fatalf("StartServeServer: %v", err)
 	}
-	defer func() { _ = srv.Close() }()
-	stopServing := serveAppServer(t, srv)
-	defer stopServing()
+	t.Cleanup(func() { _ = daemon.Close() })
+	t.Cleanup(serveAppServer(t, daemon))
 	waitForConfiguredRemoteIdentity(t, workspace)
-
 	remote, err := client.DialRemoteURL(context.Background(), config.ServerRPCURL(cfg))
 	if err != nil {
 		t.Fatalf("DialRemoteURL: %v", err)
 	}
-	defer func() { _ = remote.Close() }()
+	t.Cleanup(func() { _ = remote.Close() })
+	return remoteAuthTestFixture{daemon: daemon, server: newRemoteAppServerWithAuth(remote, cfg), config: cfg}
+}
 
-	server := newRemoteAppServerWithAuth(remote, cfg, nil, false)
-	if err := server.Reauthenticate(context.Background(), newHeadlessAuthInteractor(), false); err != nil {
+func TestRemoteAppServerReauthenticateConfiguresServerOwnedAuth(t *testing.T) {
+	_, workspace := newRegisteredAppWorkspace(t)
+	t.Setenv("OPENAI_API_KEY", "reauthed-key")
+	fixture := startRemoteAuthTestFixture(t, workspace, true, memoryAuthHandler{state: auth.EmptyState()})
+	if err := fixture.server.Reauthenticate(context.Background(), newHeadlessAuthInteractor(), false); err != nil {
 		t.Fatalf("Reauthenticate: %v", err)
 	}
 
-	state, err := srv.AuthManager().StoredState(context.Background())
+	state, err := fixture.daemon.AuthManager().StoredState(context.Background())
 	if err != nil {
 		t.Fatalf("StoredState: %v", err)
 	}
 	if state.Method.APIKey == nil || state.Method.APIKey.Key != "reauthed-key" {
 		t.Fatalf("unexpected stored auth state: %+v", state.Method)
 	}
-	if _, err := os.Stat(config.GlobalAuthConfigPath(cfg)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(config.GlobalAuthConfigPath(fixture.config)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected client auth file to remain absent, got %v", err)
 	}
 }
@@ -57,25 +64,7 @@ func TestRemoteAppServerReauthenticateConfiguresServerOwnedAuth(t *testing.T) {
 func TestRemoteAppServerReauthenticatePromptsWhenServerAuthAlreadyReady(t *testing.T) {
 	_, workspace := newRegisteredAppWorkspace(t)
 	t.Setenv("OPENAI_API_KEY", "reauthed-key")
-
-	cfg := loadAppTestConfig(t, workspace, config.LoadOptions{})
-	srv, err := serverstartup.StartServeServer(context.Background(), serverstartup.Request{
-		WorkspaceRoot:         workspace,
-		WorkspaceRootExplicit: true,
-	}, apiKeyMemoryAuthHandlerWithoutTimestamp("old-key"), autoOnboarding)
-	if err != nil {
-		t.Fatalf("serve.Start: %v", err)
-	}
-	defer func() { _ = srv.Close() }()
-	stopServing := serveAppServer(t, srv)
-	defer stopServing()
-	waitForConfiguredRemoteIdentity(t, workspace)
-
-	remote, err := client.DialRemoteURL(context.Background(), config.ServerRPCURL(cfg))
-	if err != nil {
-		t.Fatalf("DialRemoteURL: %v", err)
-	}
-	defer func() { _ = remote.Close() }()
+	fixture := startRemoteAuthTestFixture(t, workspace, false, apiKeyMemoryAuthHandlerWithoutTimestamp("old-key"))
 
 	pickerCalls := 0
 	interactor := &interactiveAuthInteractor{
@@ -91,14 +80,13 @@ func TestRemoteAppServerReauthenticatePromptsWhenServerAuthAlreadyReady(t *testi
 		},
 	}
 
-	server := newRemoteAppServerWithAuth(remote, cfg, nil, false)
-	if err := server.Reauthenticate(context.Background(), interactor, true); err != nil {
+	if err := fixture.server.Reauthenticate(context.Background(), interactor, true); err != nil {
 		t.Fatalf("Reauthenticate: %v", err)
 	}
 	if pickerCalls != 1 {
 		t.Fatalf("expected remote /login to open auth picker once, got %d", pickerCalls)
 	}
-	state, err := srv.AuthManager().StoredState(context.Background())
+	state, err := fixture.daemon.AuthManager().StoredState(context.Background())
 	if err != nil {
 		t.Fatalf("StoredState: %v", err)
 	}
@@ -109,25 +97,7 @@ func TestRemoteAppServerReauthenticatePromptsWhenServerAuthAlreadyReady(t *testi
 
 func TestRemoteAppServerEnsureAuthReadySkipsPickerWhenServerAuthAlreadyReady(t *testing.T) {
 	_, workspace := newRegisteredAppWorkspace(t)
-
-	cfg := loadAppTestConfig(t, workspace, config.LoadOptions{})
-	srv, err := serverstartup.StartServeServer(context.Background(), serverstartup.Request{
-		WorkspaceRoot:         workspace,
-		WorkspaceRootExplicit: true,
-	}, apiKeyMemoryAuthHandlerWithoutTimestamp("ready-key"), autoOnboarding)
-	if err != nil {
-		t.Fatalf("serve.Start: %v", err)
-	}
-	defer func() { _ = srv.Close() }()
-	stopServing := serveAppServer(t, srv)
-	defer stopServing()
-	waitForConfiguredRemoteIdentity(t, workspace)
-
-	remote, err := client.DialRemoteURL(context.Background(), config.ServerRPCURL(cfg))
-	if err != nil {
-		t.Fatalf("DialRemoteURL: %v", err)
-	}
-	defer func() { _ = remote.Close() }()
+	fixture := startRemoteAuthTestFixture(t, workspace, false, apiKeyMemoryAuthHandlerWithoutTimestamp("ready-key"))
 
 	interactor := &interactiveAuthInteractor{
 		pickMethod: func(authInteraction) (authMethodPickerResult, error) {
@@ -136,12 +106,11 @@ func TestRemoteAppServerEnsureAuthReadySkipsPickerWhenServerAuthAlreadyReady(t *
 		},
 	}
 
-	server := newRemoteAppServerWithAuth(remote, cfg, nil, false)
-	if err := server.EnsureAuthReady(context.Background(), interactor, true); err != nil {
+	if err := fixture.server.EnsureAuthReady(context.Background(), interactor, true); err != nil {
 		t.Fatalf("EnsureAuthReady: %v", err)
 	}
 
-	state, err := srv.AuthManager().StoredState(context.Background())
+	state, err := fixture.daemon.AuthManager().StoredState(context.Background())
 	if err != nil {
 		t.Fatalf("StoredState: %v", err)
 	}
@@ -153,25 +122,7 @@ func TestRemoteAppServerEnsureAuthReadySkipsPickerWhenServerAuthAlreadyReady(t *
 func TestRemoteLoginTransitionWaitsForAuthChoiceWhenServerAuthAlreadyReady(t *testing.T) {
 	_, workspace := newRegisteredAppWorkspace(t)
 	t.Setenv("OPENAI_API_KEY", "reauthed-key")
-
-	cfg := loadAppTestConfig(t, workspace, config.LoadOptions{})
-	srv, err := serverstartup.StartServeServer(context.Background(), serverstartup.Request{
-		WorkspaceRoot:         workspace,
-		WorkspaceRootExplicit: true,
-	}, apiKeyMemoryAuthHandlerWithoutTimestamp("old-key"), autoOnboarding)
-	if err != nil {
-		t.Fatalf("serve.Start: %v", err)
-	}
-	defer func() { _ = srv.Close() }()
-	stopServing := serveAppServer(t, srv)
-	defer stopServing()
-	waitForConfiguredRemoteIdentity(t, workspace)
-
-	remote, err := client.DialRemoteURL(context.Background(), config.ServerRPCURL(cfg))
-	if err != nil {
-		t.Fatalf("DialRemoteURL: %v", err)
-	}
-	defer func() { _ = remote.Close() }()
+	fixture := startRemoteAuthTestFixture(t, workspace, false, apiKeyMemoryAuthHandlerWithoutTimestamp("old-key"))
 
 	pickerEntered := make(chan struct{})
 	releasePicker := make(chan struct{})
@@ -188,10 +139,9 @@ func TestRemoteLoginTransitionWaitsForAuthChoiceWhenServerAuthAlreadyReady(t *te
 			return authMethodPickerResult{Choice: authMethodChoiceEnvAPIKey}, nil
 		},
 	}
-	server := newRemoteAppServerWithAuth(remote, cfg, nil, false)
 	done := make(chan error, 1)
 	go func() {
-		_, err := resolveSessionAction(context.Background(), server, interactor, "", UITransition{Action: UIActionLogout})
+		_, err := resolveSessionAction(context.Background(), fixture.server, interactor, "", UITransition{Action: UIActionLogout})
 		done <- err
 	}()
 
@@ -217,7 +167,7 @@ func TestRemoteLoginTransitionWaitsForAuthChoiceWhenServerAuthAlreadyReady(t *te
 		t.Fatal("login transition did not finish after auth choice")
 	}
 
-	state, err := srv.AuthManager().StoredState(context.Background())
+	state, err := fixture.daemon.AuthManager().StoredState(context.Background())
 	if err != nil {
 		t.Fatalf("StoredState: %v", err)
 	}

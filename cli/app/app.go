@@ -2,10 +2,11 @@ package app
 
 import (
 	"context"
+	"errors"
+	"io"
 	"strings"
 	"time"
 
-	"core/cli/app/internal/embeddedattach"
 	"core/cli/app/internal/runner"
 	"core/shared/serverapi"
 )
@@ -25,19 +26,22 @@ type Options struct {
 	OpenAIBaseURL             string
 	OpenAIBaseURLExplicit     bool
 	ConfigRoot                string
-	startupOptions            embeddedattach.StartupOptions
 }
 
 func Run(ctx context.Context, opts Options) error {
-	return runner.RunInteractive(ctx, runnerRequestFromOptions(opts), runner.Dependencies[interactiveSessionServer, authInteractor, embeddedattach.StartupOptions]{
-		NewAuthInteractor: newInteractiveAuthInteractor,
-		StartSessionServer: func(ctx context.Context, req runner.Request[embeddedattach.StartupOptions], interactor authInteractor, interactive bool) (interactiveSessionServer, error) {
-			return startSessionServer(ctx, optionsFromRunnerRequest(req), interactor, interactive)
+	interactor := newInteractiveAuthInteractor()
+	return runner.RunInteractive(ctx, runnerRequestFromOptions(opts), runner.Dependencies{
+		StartSessionServer: func(ctx context.Context) (io.Closer, error) {
+			return startSessionServer(ctx, opts, interactor, true)
 		},
-		RunSessionLifecycle: func(ctx context.Context, server interactiveSessionServer, interactor authInteractor, opts runner.SessionLifecycleOptions) error {
-			return runSessionLifecycleWithOptions(ctx, server, interactor, sessionLifecycleOptions{
-				Intent:    opts.Intent,
-				Overrides: opts.Overrides,
+		RunSessionLifecycle: func(ctx context.Context, server io.Closer, intent *serverapi.SessionLaunchIntent, overrides serverapi.RunPromptOverrides) error {
+			interactive, ok := server.(interactiveSessionServer)
+			if !ok {
+				return errors.New("interactive session server is required")
+			}
+			return runSessionLifecycleWithOptions(ctx, interactive, interactor, sessionLifecycleOptions{
+				Intent:    intent,
+				Overrides: overrides,
 			})
 		},
 	})
@@ -60,42 +64,10 @@ func RunPrompt(ctx context.Context, opts Options, prompt string, timeout time.Du
 	return runPrompt(ctx, runClient, workspaceConfig.Options, workspaceConfig.CallerContext, strings.TrimSpace(opts.SessionID), prompt, timeout, progress)
 }
 
-func runnerRequestFromOptions(opts Options) runner.Request[embeddedattach.StartupOptions] {
-	return runner.Request[embeddedattach.StartupOptions]{
-		WorkspaceRoot:             opts.WorkspaceRoot,
-		WorkspaceRootExplicit:     opts.WorkspaceRootExplicit,
+func runnerRequestFromOptions(opts Options) runner.Request {
+	return runner.Request{
 		SessionID:                 opts.SessionID,
 		WorkspaceContextSessionID: opts.WorkspaceContextSessionID,
 		AgentRole:                 opts.AgentRole,
-		Model:                     opts.Model,
-		ProviderOverride:          opts.ProviderOverride,
-		ThinkingLevel:             opts.ThinkingLevel,
-		Theme:                     opts.Theme,
-		ModelTimeoutSeconds:       opts.ModelTimeoutSeconds,
-		Tools:                     opts.Tools,
-		OpenAIBaseURL:             opts.OpenAIBaseURL,
-		OpenAIBaseURLExplicit:     opts.OpenAIBaseURLExplicit,
-		ConfigRoot:                opts.ConfigRoot,
-		StartupOptions:            opts.startupOptions,
-	}
-}
-
-func optionsFromRunnerRequest(req runner.Request[embeddedattach.StartupOptions]) Options {
-	return Options{
-		WorkspaceRoot:             req.WorkspaceRoot,
-		WorkspaceRootExplicit:     req.WorkspaceRootExplicit,
-		SessionID:                 req.SessionID,
-		WorkspaceContextSessionID: req.WorkspaceContextSessionID,
-		AgentRole:                 req.AgentRole,
-		Model:                     req.Model,
-		ProviderOverride:          req.ProviderOverride,
-		ThinkingLevel:             req.ThinkingLevel,
-		Theme:                     req.Theme,
-		ModelTimeoutSeconds:       req.ModelTimeoutSeconds,
-		Tools:                     req.Tools,
-		OpenAIBaseURL:             req.OpenAIBaseURL,
-		OpenAIBaseURLExplicit:     req.OpenAIBaseURLExplicit,
-		ConfigRoot:                req.ConfigRoot,
-		startupOptions:            req.StartupOptions,
 	}
 }

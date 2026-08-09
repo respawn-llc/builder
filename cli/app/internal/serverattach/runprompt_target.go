@@ -2,7 +2,9 @@ package serverattach
 
 import (
 	"context"
+	"errors"
 	"strings"
+	"time"
 
 	"core/cli/app/internal/remoteattach"
 	"core/shared/apicontract"
@@ -10,47 +12,38 @@ import (
 	"core/shared/config"
 )
 
-type RunPromptTarget struct {
-	Client    apicontract.RunPromptService
-	Auth      apicontract.AuthBootstrapService
-	ProjectID func() string
+type AttachRunPromptRequest struct {
+	Config           config.App
+	AttachTimeout    time.Duration
+	DiscoveryTimeout time.Duration
+	DialProjectView  remoteattach.DialProjectView
+	DialWorkspace    remoteattach.DialWorkspace
+	EnsureAuthReady  func(context.Context, apicontract.AuthBootstrapService) error
 }
 
-type RunPromptValidateRequest struct {
-	Target          RunPromptTarget
-	Config          config.App
-	EnsureAuthReady func(context.Context, apicontract.AuthBootstrapService) error
-}
-
-func RunPromptRemoteWithClose(remote *client.Remote, _ config.App, closeFn func() error) Target[RunPromptTarget] {
-	return Target[RunPromptTarget]{
-		Value: RunPromptTarget{
-			Client:    remote,
-			Auth:      remote,
-			ProjectID: remote.ProjectID,
-		},
-		Close: closeFn,
+func AttachRunPrompt(ctx context.Context, req AttachRunPromptRequest) (apicontract.RunPromptService, func() error, error) {
+	remote, err := attachRunPromptRemote(ctx, req)
+	if err != nil {
+		return nil, nil, err
 	}
-}
-
-func RunPromptEmbedded(runPrompt apicontract.RunPromptService, projectID func() string, closeFn func() error) Target[RunPromptTarget] {
-	return Target[RunPromptTarget]{
-		Value: RunPromptTarget{
-			Client:    runPrompt,
-			ProjectID: projectID,
-		},
-		Close: closeFn,
+	if err := validateRunPromptRemote(ctx, req, remote); err != nil {
+		return nil, nil, closeRunPromptValidationFailure(err, remote.Close)
 	}
+	return remote, remote.Close, nil
 }
 
-func ValidateRunPromptTarget(ctx context.Context, req RunPromptValidateRequest) error {
-	if req.Target.Auth != nil && req.EnsureAuthReady != nil {
-		if err := req.EnsureAuthReady(ctx, req.Target.Auth); err != nil {
+func validateRunPromptRemote(ctx context.Context, req AttachRunPromptRequest, remote *client.Remote) error {
+	if req.EnsureAuthReady != nil {
+		if err := req.EnsureAuthReady(ctx, remote); err != nil {
 			return err
 		}
 	}
-	if req.Target.ProjectID == nil || strings.TrimSpace(req.Target.ProjectID()) == "" {
+	if strings.TrimSpace(remote.ProjectID()) == "" {
 		return remoteattach.HeadlessWorkspaceRegistrationError(req.Config.WorkspaceRoot)
 	}
 	return nil
+}
+
+func closeRunPromptValidationFailure(validationErr error, closeRemote func() error) error {
+	return errors.Join(validationErr, closeRemote())
 }

@@ -19,32 +19,23 @@ type sessionPickerStatusMsg struct {
 
 func collectSessionPickerStatusCmd(header sessionPickerHeaderInfo) tea.Cmd {
 	req := populateStatusRequestCacheKeys(header.StatusRequest)
-	if !sessionPickerStatusRequestUseful(req, header.AuthManager) {
+	model := sessionPickerModelSummary(header.ModelFacts)
+	if strings.TrimSpace(req.WorkspaceRoot) == "" && model == nil && req.AuthStatus == nil {
 		return nil
 	}
-	authManager := status.NormalizeAuthStateResolver(header.AuthManager)
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), statusRefreshTimeout)
 		defer cancel()
 
-		collector := defaultUIStatusCollector{authManager: authManager}.adapter()
+		collector := defaultUIStatusCollector()
 		base := collector.CollectBase(req)
 		gitResult := collector.CollectGit(ctx, req, base)
-		authInfo := status.FastAuthInfo(ctx, authManager, req.Settings)
-		if authManager == nil && req.AuthStatus != nil {
-			authInfo = collector.CollectAuth(ctx, req, base).Auth
-		}
+		authInfo := collector.CollectAuth(ctx, req, base).Auth
 
-		var branch *string
-		if gitResult.Git.Visible && strings.TrimSpace(gitResult.Git.Error) == "" {
-			value := strings.TrimSpace(gitResult.Git.Branch)
-			if value != "" && value != "unknown" {
-				branch = &value
-			}
-		}
-		var model *string
-		if sessionPickerStatusHasModel(req) {
-			model = textutil.OptionalTrimmedString(base.Model.Summary)
+		branch := textutil.OptionalTrimmedString(gitResult.Git.Branch)
+		if !gitResult.Git.Visible || strings.TrimSpace(gitResult.Git.Error) != "" ||
+			(branch != nil && *branch == "unknown") {
+			branch = nil
 		}
 		return sessionPickerStatusMsg{
 			cwd:    textutil.OptionalTrimmedString(statusDisplayPath(base.Workdir, "")),
@@ -55,21 +46,29 @@ func collectSessionPickerStatusCmd(header sessionPickerHeaderInfo) tea.Cmd {
 	}
 }
 
-func sessionPickerStatusRequestUseful(req uiStatusRequest, authManager status.AuthStateResolver) bool {
-	if strings.TrimSpace(req.WorkspaceRoot) != "" {
-		return true
+func sessionPickerModelSummary(facts *sessionPickerModelFacts) *string {
+	if facts == nil {
+		return nil
 	}
-	if sessionPickerStatusHasModel(req) {
-		return true
+	if facts.Name == nil {
+		panic("session picker model facts require a model name")
 	}
-	if req.AuthStatus != nil {
-		return true
+	name := strings.TrimSpace(*facts.Name)
+	if name == "" || name != *facts.Name {
+		panic("session picker model facts require a nonblank trimmed model name")
 	}
-	return status.NormalizeAuthStateResolver(authManager) != nil
-}
-
-func sessionPickerStatusHasModel(req uiStatusRequest) bool {
-	return strings.TrimSpace(req.ModelName) != "" ||
-		strings.TrimSpace(req.ConfiguredModelName) != "" ||
-		strings.TrimSpace(req.Settings.Model) != ""
+	thinkingLevel := ""
+	if facts.ThinkingLevel != nil {
+		thinkingLevel = strings.TrimSpace(*facts.ThinkingLevel)
+		if thinkingLevel == "" || thinkingLevel != *facts.ThinkingLevel {
+			panic("session picker model facts require a nonblank trimmed thinking level")
+		}
+	}
+	if facts.Verbosity != nil {
+		verbosity := strings.TrimSpace(string(*facts.Verbosity))
+		if verbosity == "" || verbosity != string(*facts.Verbosity) {
+			panic("session picker model facts require nonblank trimmed verbosity")
+		}
+	}
+	return textutil.OptionalTrimmedString(status.ModelDisplaySummary(name, thinkingLevel))
 }
