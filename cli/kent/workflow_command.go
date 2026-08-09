@@ -1081,6 +1081,44 @@ func writeWorkflowSummary(stdout io.Writer, workflow serverapi.WorkflowRecord) {
 	fmt.Fprintf(stdout, "Execution target: %s\n", workflowExecutionTargetPolicySelector(workflow.ExecutionTargetPolicy))
 }
 
+func workflowGraphDraftFromDefinition(def serverapi.WorkflowDefinition) serverapi.WorkflowGraphDraft {
+	graph := serverapi.WorkflowGraphDraft{
+		NodeGroups:       make([]serverapi.WorkflowGraphDraftNodeGroup, 0, len(def.NodeGroups)),
+		Nodes:            make([]serverapi.WorkflowGraphDraftNode, 0, len(def.Nodes)),
+		TransitionGroups: make([]serverapi.WorkflowGraphDraftTransitionGroup, 0, len(def.TransitionGroups)),
+		Edges:            make([]serverapi.WorkflowGraphDraftEdge, 0, len(def.Edges)),
+	}
+	for _, group := range def.NodeGroups {
+		graph.NodeGroups = append(graph.NodeGroups, serverapi.WorkflowGraphDraftNodeGroup{
+			ID: group.GroupID, Key: group.GroupKey, DisplayName: group.DisplayName,
+		})
+	}
+	for _, node := range def.Nodes {
+		graph.Nodes = append(graph.Nodes, serverapi.WorkflowGraphDraftNode{
+			ID: node.ID, Key: node.Key, Kind: node.Kind, DisplayName: node.DisplayName,
+			GroupID: node.GroupID, GroupKey: node.GroupKey, SubagentRole: node.SubagentRole,
+			CompletionMode: node.CompletionMode, ScriptPath: node.ScriptPath,
+			JoinInputProviders: node.JoinInputProviders,
+		})
+	}
+	for _, group := range def.TransitionGroups {
+		graph.TransitionGroups = append(graph.TransitionGroups, serverapi.WorkflowGraphDraftTransitionGroup{
+			ID: group.ID, SourceNodeID: group.SourceNodeID, TransitionID: group.TransitionID,
+			DisplayName: group.DisplayName, Description: group.Description,
+		})
+	}
+	for _, edge := range def.Edges {
+		graph.Edges = append(graph.Edges, serverapi.WorkflowGraphDraftEdge{
+			ID: edge.ID, TransitionGroupID: edge.TransitionGroupID, Key: edge.Key,
+			TargetNodeID: edge.TargetNodeID, AssigneeSelection: edge.AssigneeSelection,
+			ThinkingSelection: edge.ThinkingSelection, RequiresApproval: edge.RequiresApproval,
+			ContextMode: edge.ContextMode, ContextSource: edge.ContextSource,
+			PromptTemplate: edge.PromptTemplate, Parameters: cloneWorkflowParameters(edge.Parameters),
+		})
+	}
+	return graph
+}
+
 func writeWorkflowDefinitionNodes(stdout io.Writer, nodes []serverapi.WorkflowNode) {
 	fmt.Fprintf(stdout, "\nNodes (%d):\n", len(nodes))
 	for _, node := range nodes {

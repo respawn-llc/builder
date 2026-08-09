@@ -75,6 +75,84 @@ const (
 	workflowGraphJSONBoolean
 )
 
+type workflowGraphJSONSchema struct {
+	fields    map[string]workflowGraphJSONContext
+	required  []string
+	element   workflowGraphJSONContext
+	forbidden string
+}
+
+var workflowGraphJSONSchemas = map[workflowGraphJSONContext]workflowGraphJSONSchema{
+	workflowGraphJSONDocument: {
+		fields: map[string]workflowGraphJSONContext{
+			"workflow_id": workflowGraphJSONString, "expected_version": workflowGraphJSONInteger, "graph": workflowGraphJSONGraph,
+		},
+		required: []string{"workflow_id", "expected_version", "graph"},
+	},
+	workflowGraphJSONGraph: {
+		fields: map[string]workflowGraphJSONContext{
+			"node_groups": workflowGraphJSONNodeGroups, "nodes": workflowGraphJSONNodes,
+			"transition_groups": workflowGraphJSONTransitionGroups, "edges": workflowGraphJSONEdges,
+		},
+		required: []string{"node_groups", "nodes", "transition_groups", "edges"},
+	},
+	workflowGraphJSONNodeGroup: {
+		fields: map[string]workflowGraphJSONContext{
+			"id": workflowGraphJSONString, "key": workflowGraphJSONString, "display_name": workflowGraphJSONString,
+		},
+		required: []string{"id", "key", "display_name"},
+	},
+	workflowGraphJSONNode: {
+		fields: map[string]workflowGraphJSONContext{
+			"id": workflowGraphJSONString, "key": workflowGraphJSONString, "kind": workflowGraphJSONString,
+			"display_name": workflowGraphJSONString, "join_input_providers": workflowGraphJSONJoinInputProviders,
+		},
+		required:  []string{"id", "key", "kind", "display_name"},
+		forbidden: "group_key",
+	},
+	workflowGraphJSONJoinInputProvider: {
+		fields: map[string]workflowGraphJSONContext{
+			"input_name": workflowGraphJSONString, "provider_edge_id": workflowGraphJSONString,
+		},
+		required: []string{"input_name", "provider_edge_id"},
+	},
+	workflowGraphJSONTransitionGroup: {
+		fields: map[string]workflowGraphJSONContext{
+			"id": workflowGraphJSONString, "source_node_id": workflowGraphJSONString,
+			"transition_id": workflowGraphJSONString, "display_name": workflowGraphJSONString,
+		},
+		required: []string{"id", "source_node_id", "transition_id", "display_name"},
+	},
+	workflowGraphJSONEdge: {
+		fields: map[string]workflowGraphJSONContext{
+			"id": workflowGraphJSONString, "transition_group_id": workflowGraphJSONString,
+			"key": workflowGraphJSONString, "target_node_id": workflowGraphJSONString,
+			"assignee_selection": workflowGraphJSONString, "thinking_selection": workflowGraphJSONString,
+			"requires_approval": workflowGraphJSONBoolean, "context_mode": workflowGraphJSONString,
+			"context_source": workflowGraphJSONContextSource, "parameters": workflowGraphJSONParameters,
+		},
+		required: []string{
+			"id", "transition_group_id", "key", "target_node_id", "assignee_selection",
+			"thinking_selection", "requires_approval", "context_mode", "context_source",
+		},
+	},
+	workflowGraphJSONContextSource: {
+		fields: map[string]workflowGraphJSONContext{"kind": workflowGraphJSONString}, required: []string{"kind"},
+	},
+	workflowGraphJSONParameter: {
+		fields: map[string]workflowGraphJSONContext{
+			"key": workflowGraphJSONString, "description": workflowGraphJSONString, "purpose": workflowGraphJSONString,
+		},
+		required: []string{"key", "description", "purpose"},
+	},
+	workflowGraphJSONNodeGroups:         {element: workflowGraphJSONNodeGroup},
+	workflowGraphJSONNodes:              {element: workflowGraphJSONNode},
+	workflowGraphJSONJoinInputProviders: {element: workflowGraphJSONJoinInputProvider},
+	workflowGraphJSONTransitionGroups:   {element: workflowGraphJSONTransitionGroup},
+	workflowGraphJSONEdges:              {element: workflowGraphJSONEdge},
+	workflowGraphJSONParameters:         {element: workflowGraphJSONParameter},
+}
+
 func (n *workflowGraphDocumentNode) UnmarshalJSON(data []byte) error {
 	type documentNode workflowGraphDocumentNode
 	var decoded documentNode
@@ -107,10 +185,10 @@ func workflowGraphDocumentFromDraft(
 		WorkflowID:      workflowID,
 		ExpectedVersion: expectedVersion,
 		Graph: workflowGraphDocumentGraph{
-			NodeGroups:       cloneWorkflowGraphDocumentEntities(graph.NodeGroups),
+			NodeGroups:       graph.NodeGroups,
 			Nodes:            make([]workflowGraphDocumentNode, 0, len(graph.Nodes)),
-			TransitionGroups: cloneWorkflowGraphDocumentEntities(graph.TransitionGroups),
-			Edges:            make([]serverapi.WorkflowGraphDraftEdge, 0, len(graph.Edges)),
+			TransitionGroups: graph.TransitionGroups,
+			Edges:            graph.Edges,
 		},
 	}
 	for _, node := range graph.Nodes {
@@ -123,23 +201,13 @@ func workflowGraphDocumentFromDraft(
 			SubagentRole:       node.SubagentRole,
 			CompletionMode:     node.CompletionMode,
 			ScriptPath:         node.ScriptPath,
-			JoinInputProviders: append([]serverapi.WorkflowJoinInputProvider(nil), node.JoinInputProviders...),
+			JoinInputProviders: node.JoinInputProviders,
 		})
-	}
-	for _, edge := range graph.Edges {
-		edge.Parameters = append([]serverapi.WorkflowParameter(nil), edge.Parameters...)
-		document.Graph.Edges = append(document.Graph.Edges, edge)
 	}
 	if err := document.Validate(); err != nil {
 		return workflowGraphDocument{}, err
 	}
 	return document, nil
-}
-
-func cloneWorkflowGraphDocumentEntities[T any](entities []T) []T {
-	cloned := make([]T, len(entities))
-	copy(cloned, entities)
-	return cloned
 }
 
 func decodeWorkflowGraphDocument(data []byte) (workflowGraphDocument, error) {
@@ -215,6 +283,7 @@ func scanWorkflowGraphJSONValue(decoder *json.Decoder, context workflowGraphJSON
 	}
 	switch delimiter {
 	case '{':
+		schema := workflowGraphJSONSchemas[context]
 		seen := map[string]bool{}
 		for decoder.More() {
 			keyToken, err := decoder.Token()
@@ -228,25 +297,25 @@ func scanWorkflowGraphJSONValue(decoder *json.Decoder, context workflowGraphJSON
 			if seen[key] {
 				return fmt.Errorf("duplicate JSON field %q", key)
 			}
-			if context == workflowGraphJSONNode && key == "group_key" {
-				return errors.New("graph.nodes[].group_key is not allowed")
+			if key == schema.forbidden {
+				return fmt.Errorf("%s is not allowed", key)
 			}
 			seen[key] = true
-			if err := scanWorkflowGraphJSONValue(decoder, workflowGraphJSONChildContext(context, key)); err != nil {
+			if err := scanWorkflowGraphJSONValue(decoder, schema.fields[key]); err != nil {
 				return err
 			}
 		}
 		if _, err := decoder.Token(); err != nil {
 			return err
 		}
-		for _, field := range workflowGraphJSONRequiredFields(context) {
+		for _, field := range schema.required {
 			if !seen[field] {
 				return fmt.Errorf("%s is required", field)
 			}
 		}
 		return nil
 	case '[':
-		elementContext := workflowGraphJSONArrayElementContext(context)
+		elementContext := workflowGraphJSONSchemas[context].element
 		for decoder.More() {
 			if err := scanWorkflowGraphJSONValue(decoder, elementContext); err != nil {
 				return err
@@ -302,128 +371,6 @@ func validateWorkflowGraphJSONToken(context workflowGraphJSONContext, token json
 	return nil
 }
 
-func workflowGraphJSONChildContext(context workflowGraphJSONContext, key string) workflowGraphJSONContext {
-	switch context {
-	case workflowGraphJSONDocument:
-		switch key {
-		case "workflow_id":
-			return workflowGraphJSONString
-		case "expected_version":
-			return workflowGraphJSONInteger
-		case "graph":
-			return workflowGraphJSONGraph
-		}
-	case workflowGraphJSONGraph:
-		switch key {
-		case "node_groups":
-			return workflowGraphJSONNodeGroups
-		case "nodes":
-			return workflowGraphJSONNodes
-		case "transition_groups":
-			return workflowGraphJSONTransitionGroups
-		case "edges":
-			return workflowGraphJSONEdges
-		}
-	case workflowGraphJSONNodeGroup:
-		switch key {
-		case "id", "key", "display_name":
-			return workflowGraphJSONString
-		}
-	case workflowGraphJSONNode:
-		switch key {
-		case "id", "key", "kind", "display_name":
-			return workflowGraphJSONString
-		case "join_input_providers":
-			return workflowGraphJSONJoinInputProviders
-		}
-	case workflowGraphJSONJoinInputProvider:
-		switch key {
-		case "input_name", "provider_edge_id":
-			return workflowGraphJSONString
-		}
-	case workflowGraphJSONTransitionGroup:
-		switch key {
-		case "id", "source_node_id", "transition_id", "display_name":
-			return workflowGraphJSONString
-		}
-	case workflowGraphJSONEdge:
-		switch key {
-		case "id", "transition_group_id", "key", "target_node_id", "assignee_selection", "thinking_selection", "context_mode":
-			return workflowGraphJSONString
-		case "requires_approval":
-			return workflowGraphJSONBoolean
-		case "context_source":
-			return workflowGraphJSONContextSource
-		case "parameters":
-			return workflowGraphJSONParameters
-		}
-	case workflowGraphJSONContextSource:
-		if key == "kind" {
-			return workflowGraphJSONString
-		}
-	case workflowGraphJSONParameter:
-		switch key {
-		case "key", "description", "purpose":
-			return workflowGraphJSONString
-		}
-	}
-	return workflowGraphJSONUnknown
-}
-
-func workflowGraphJSONArrayElementContext(context workflowGraphJSONContext) workflowGraphJSONContext {
-	switch context {
-	case workflowGraphJSONNodeGroups:
-		return workflowGraphJSONNodeGroup
-	case workflowGraphJSONNodes:
-		return workflowGraphJSONNode
-	case workflowGraphJSONJoinInputProviders:
-		return workflowGraphJSONJoinInputProvider
-	case workflowGraphJSONTransitionGroups:
-		return workflowGraphJSONTransitionGroup
-	case workflowGraphJSONEdges:
-		return workflowGraphJSONEdge
-	case workflowGraphJSONParameters:
-		return workflowGraphJSONParameter
-	default:
-		return workflowGraphJSONUnknown
-	}
-}
-
-func workflowGraphJSONRequiredFields(context workflowGraphJSONContext) []string {
-	switch context {
-	case workflowGraphJSONDocument:
-		return []string{"workflow_id", "expected_version", "graph"}
-	case workflowGraphJSONGraph:
-		return []string{"node_groups", "nodes", "transition_groups", "edges"}
-	case workflowGraphJSONNodeGroup:
-		return []string{"id", "key", "display_name"}
-	case workflowGraphJSONNode:
-		return []string{"id", "key", "kind", "display_name"}
-	case workflowGraphJSONJoinInputProvider:
-		return []string{"input_name", "provider_edge_id"}
-	case workflowGraphJSONTransitionGroup:
-		return []string{"id", "source_node_id", "transition_id", "display_name"}
-	case workflowGraphJSONEdge:
-		return []string{
-			"id",
-			"transition_group_id",
-			"key",
-			"target_node_id",
-			"assignee_selection",
-			"thinking_selection",
-			"requires_approval",
-			"context_mode",
-			"context_source",
-		}
-	case workflowGraphJSONContextSource:
-		return []string{"kind"}
-	case workflowGraphJSONParameter:
-		return []string{"key", "description", "purpose"}
-	default:
-		return nil
-	}
-}
-
 func (d workflowGraphDocument) Validate() error {
 	if d.WorkflowID.IsZero() {
 		return errors.New("workflow_id is required")
@@ -461,10 +408,10 @@ func (d workflowGraphDocument) Validate() error {
 
 func (d workflowGraphDocument) WorkflowGraphDraft() (serverapi.WorkflowGraphDraft, error) {
 	graph := serverapi.WorkflowGraphDraft{
-		NodeGroups:       append([]serverapi.WorkflowGraphDraftNodeGroup(nil), d.Graph.NodeGroups...),
+		NodeGroups:       d.Graph.NodeGroups,
 		Nodes:            make([]serverapi.WorkflowGraphDraftNode, 0, len(d.Graph.Nodes)),
-		TransitionGroups: append([]serverapi.WorkflowGraphDraftTransitionGroup(nil), d.Graph.TransitionGroups...),
-		Edges:            make([]serverapi.WorkflowGraphDraftEdge, 0, len(d.Graph.Edges)),
+		TransitionGroups: d.Graph.TransitionGroups,
+		Edges:            d.Graph.Edges,
 	}
 	for _, node := range d.Graph.Nodes {
 		graph.Nodes = append(graph.Nodes, serverapi.WorkflowGraphDraftNode{
@@ -476,12 +423,8 @@ func (d workflowGraphDocument) WorkflowGraphDraft() (serverapi.WorkflowGraphDraf
 			SubagentRole:       node.SubagentRole,
 			CompletionMode:     node.CompletionMode,
 			ScriptPath:         node.ScriptPath,
-			JoinInputProviders: append([]serverapi.WorkflowJoinInputProvider(nil), node.JoinInputProviders...),
+			JoinInputProviders: node.JoinInputProviders,
 		})
-	}
-	for _, edge := range d.Graph.Edges {
-		edge.Parameters = append([]serverapi.WorkflowParameter(nil), edge.Parameters...)
-		graph.Edges = append(graph.Edges, edge)
 	}
 	if err := (serverapi.WorkflowGraphSavePreviewRequest{
 		WorkflowID:      d.WorkflowID,

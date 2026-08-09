@@ -12,21 +12,11 @@ import (
 
 type workflowGraphDraftMutation[T any] func(serverapi.WorkflowGraphDraft) (serverapi.WorkflowGraphDraft, T, error)
 
-type workflowGraphMutationResult struct {
-	Version int64
-	Changed bool
-}
-
-type workflowGraphMutationResolution uint8
-
-const (
-	workflowGraphMutationResolutionGraphApply workflowGraphMutationResolution = iota + 1
-)
+type workflowGraphMutationResult struct{ Version int64 }
 
 type workflowGraphMutationBlockedError struct {
 	WorkflowID   runtimeids.WorkflowID
 	BlockerCodes []string
-	Resolution   workflowGraphMutationResolution
 }
 
 func (e workflowGraphMutationBlockedError) Error() string {
@@ -75,10 +65,7 @@ func runWorkflowGraphMutation[T any](
 		return zero, workflowGraphMutationResult{}, newWorkflowGraphMutationBlockedError(workflowID, preview.Response.Blockers)
 	}
 	if !preview.Response.Changed {
-		return value, workflowGraphMutationResult{
-			Version: preview.Response.CurrentVersion,
-			Changed: false,
-		}, nil
+		return value, workflowGraphMutationResult{Version: preview.Response.CurrentVersion}, nil
 	}
 	response, err := remote.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
 		WorkflowID:      current.Workflow.ID,
@@ -94,10 +81,7 @@ func runWorkflowGraphMutation[T any](
 	if !response.Saved || response.ConfirmationRequired || len(response.Blockers) != 0 || !response.CanSave {
 		return zero, workflowGraphMutationResult{}, newWorkflowGraphMutationBlockedError(workflowID, response.Blockers)
 	}
-	return value, workflowGraphMutationResult{
-		Version: response.CurrentVersion,
-		Changed: response.Changed,
-	}, nil
+	return value, workflowGraphMutationResult{Version: response.CurrentVersion}, nil
 }
 
 func newWorkflowGraphMutationBlockedError(workflowID runtimeids.WorkflowID, blockers []serverapi.WorkflowGraphSaveBlocker) error {
@@ -108,7 +92,6 @@ func newWorkflowGraphMutationBlockedError(workflowID runtimeids.WorkflowID, bloc
 	return workflowGraphMutationBlockedError{
 		WorkflowID:   workflowID,
 		BlockerCodes: codes,
-		Resolution:   workflowGraphMutationResolutionGraphApply,
 	}
 }
 
@@ -179,7 +162,6 @@ type workflowEdgeUpdateDraftMutation struct {
 
 func addWorkflowNodeDraftMutation(node serverapi.WorkflowGraphDraftNode) workflowGraphDraftMutation[serverapi.WorkflowGraphDraftNode] {
 	return func(graph serverapi.WorkflowGraphDraft) (serverapi.WorkflowGraphDraft, serverapi.WorkflowGraphDraftNode, error) {
-		graph = cloneWorkflowGraphDraft(graph)
 		graph.Nodes = append(graph.Nodes, node)
 		return graph, node, nil
 	}
@@ -187,7 +169,6 @@ func addWorkflowNodeDraftMutation(node serverapi.WorkflowGraphDraftNode) workflo
 
 func updateWorkflowNodeDraftMutation(update workflowNodeUpdateDraftMutation) workflowGraphDraftMutation[serverapi.WorkflowGraphDraftNode] {
 	return func(graph serverapi.WorkflowGraphDraft) (serverapi.WorkflowGraphDraft, serverapi.WorkflowGraphDraftNode, error) {
-		graph = cloneWorkflowGraphDraft(graph)
 		nodeKey := strings.TrimSpace(update.NodeKey)
 		for index := range graph.Nodes {
 			if graph.Nodes[index].Key != nodeKey {
@@ -219,7 +200,6 @@ func updateWorkflowNodeDraftMutation(update workflowNodeUpdateDraftMutation) wor
 
 func addWorkflowEdgeDraftMutation(add workflowEdgeAddDraftMutation) workflowGraphDraftMutation[workflowEdgeDraftMutationResult] {
 	return func(graph serverapi.WorkflowGraphDraft) (serverapi.WorkflowGraphDraft, workflowEdgeDraftMutationResult, error) {
-		graph = cloneWorkflowGraphDraft(graph)
 		source, err := findWorkflowGraphDraftNodeByKey(graph, add.SourceNodeKey)
 		if err != nil {
 			return serverapi.WorkflowGraphDraft{}, workflowEdgeDraftMutationResult{}, err
@@ -263,7 +243,6 @@ func addWorkflowEdgeDraftMutation(add workflowEdgeAddDraftMutation) workflowGrap
 
 func updateWorkflowEdgeDraftMutation(update workflowEdgeUpdateDraftMutation) workflowGraphDraftMutation[workflowEdgeDraftMutationResult] {
 	return func(graph serverapi.WorkflowGraphDraft) (serverapi.WorkflowGraphDraft, workflowEdgeDraftMutationResult, error) {
-		graph = cloneWorkflowGraphDraft(graph)
 		edgeIndex := -1
 		edgeID := strings.TrimSpace(update.EdgeID)
 		for index := range graph.Edges {
@@ -402,26 +381,4 @@ func findWorkflowGraphDraftNodeByID(graph serverapi.WorkflowGraphDraft, id strin
 		}
 	}
 	return serverapi.WorkflowGraphDraftNode{}, fmt.Errorf("workflow node %q not found", id)
-}
-
-func cloneWorkflowGraphDraft(graph serverapi.WorkflowGraphDraft) serverapi.WorkflowGraphDraft {
-	cloned := serverapi.WorkflowGraphDraft{
-		NodeGroups:       append([]serverapi.WorkflowGraphDraftNodeGroup(nil), graph.NodeGroups...),
-		Nodes:            append([]serverapi.WorkflowGraphDraftNode(nil), graph.Nodes...),
-		TransitionGroups: append([]serverapi.WorkflowGraphDraftTransitionGroup(nil), graph.TransitionGroups...),
-		Edges:            append([]serverapi.WorkflowGraphDraftEdge(nil), graph.Edges...),
-	}
-	for index := range cloned.Nodes {
-		cloned.Nodes[index].JoinInputProviders = append(
-			[]serverapi.WorkflowJoinInputProvider(nil),
-			cloned.Nodes[index].JoinInputProviders...,
-		)
-	}
-	for index := range cloned.Edges {
-		cloned.Edges[index].Parameters = append(
-			[]serverapi.WorkflowParameter(nil),
-			cloned.Edges[index].Parameters...,
-		)
-	}
-	return cloned
 }
