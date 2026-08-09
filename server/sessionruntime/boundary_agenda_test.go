@@ -9,10 +9,7 @@ import (
 
 	"core/server/runtime"
 	"core/server/runtimecommand"
-	"core/server/session"
 	"core/shared/runtimeids"
-
-	"github.com/google/uuid"
 )
 
 func TestRuntimeBoundExecutionAbortsBeforeWorkHandoff(t *testing.T) {
@@ -147,7 +144,7 @@ func TestRuntimeBoundExecutionAbortsBeforeWorkHandoff(t *testing.T) {
 	}
 }
 
-func TestCloseIfIdleTreatsIdleReducerBoundaryAsInFlightAndRetriesRetirement(t *testing.T) {
+func TestCloseIfIdleDefersRetirementForIdleReducerBoundary(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
 	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
@@ -165,36 +162,21 @@ func TestCloseIfIdleTreatsIdleReducerBoundaryAsInFlightAndRetriesRetirement(t *t
 	if err != nil || !acquired {
 		t.Fatalf("acquire idle reducer Boundary = (%T, %t, %v)", grant, acquired, err)
 	}
-	type releaseResult struct {
-		result RuntimeReleaseResult
-		err    error
+	release, err := attachment.Release(
+		context.Background(),
+		RuntimeReleaseCloseIfIdle,
+	)
+	if err != nil {
+		t.Fatalf("close-if-idle with active reducer Boundary: %v", err)
 	}
-	released := make(chan releaseResult, 1)
-	go func() {
-		result, releaseErr := attachment.Release(
-			context.Background(),
-			RuntimeReleaseCloseIfIdle,
-		)
-		released <- releaseResult{result: result, err: releaseErr}
-	}()
-	select {
-	case outcome := <-released:
+	if !release.Active || release.Released {
 		t.Fatalf(
-			"close-if-idle passed the active reducer Boundary: %+v, %v",
-			outcome.result,
-			outcome.err,
+			"close-if-idle result = %+v, want active pending retirement",
+			release,
 		)
-	case <-time.After(20 * time.Millisecond):
 	}
 	if retry, err := grant.Release(); err != nil || retry {
 		t.Fatalf("release idle reducer Boundary = (%t, %v)", retry, err)
-	}
-	outcome := <-released
-	if outcome.err != nil {
-		t.Fatalf("close-if-idle after Boundary release: %v", outcome.err)
-	}
-	if !outcome.result.Released || outcome.result.Active {
-		t.Fatalf("close-if-idle result = %+v, want retired runtime", outcome.result)
 	}
 	waitRuntimeUnavailable(
 		t,
@@ -204,127 +186,53 @@ func TestCloseIfIdleTreatsIdleReducerBoundaryAsInFlightAndRetriesRetirement(t *t
 	)
 }
 
-func TestRuntimeBoundIdleWorkRespectsSessionStartMaintenanceBlock(t *testing.T) {
-	for _, test := range []struct {
-		name          string
-		accept        func(*runtime.Engine) error
-		wantAcceptErr error
-	}{
-		{
-			name:          "human",
-			wantAcceptErr: ErrSessionStartsBlocked,
-			accept: func(engine *runtime.Engine) error {
-				_, err := engine.QueueUserMessage("blocked human input")
-				return err
-			},
+func TestRuntimeBoundIdleWorkDoesNotUseSessionStartAdmission(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	releaseModel := make(chan struct{})
+	close(releaseModel)
+	client := &ownerlessRetirementLLMClient{
+		firstStarted: make(chan struct{}),
+		releaseFirst: releaseModel,
+	}
+	plan := authorityTestRuntimePlan(t, fixture, client)
+	attachment := openLifecycleRuntime(
+		t,
+		fixture.authority,
+		sessionID,
+		"owner-a",
+		&plan,
+	)
+	block, err := fixture.authority.BlockSessionStarts(
+		context.Background(),
+		[]runtimeids.SessionID{sessionID},
+		SessionStartBlockMaintenance,
+	)
+	if err != nil {
+		t.Fatalf("block Session starts: %v", err)
+	}
+	if err := fixture.authority.WithRuntime(
+		context.Background(),
+		attachment.Resource(),
+		func(_ context.Context, engine *runtime.Engine) error {
+			_, queueErr := engine.QueueUserMessage("accepted during maintenance admission")
+			return queueErr
 		},
-		{
-			name: "long",
-			accept: func(engine *runtime.Engine) error {
-				engine.HandleBackgroundShellUpdate(runtime.BackgroundShellEvent{
-					Type:       runtime.BackgroundShellEventCompleted,
-					ID:         "blocked-background",
-					ActivityID: uuid.New(),
-					State:      "completed",
-				}, true)
-				return nil
-			},
-		},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			fixture := newSessionRuntimeFixture(t)
-			sessionID := lifecycleSessionID(t, fixture)
-			releaseModel := make(chan struct{})
-			close(releaseModel)
-			client := &ownerlessRetirementLLMClient{
-				firstStarted: make(chan struct{}),
-				releaseFirst: releaseModel,
-			}
-			plan := authorityTestRuntimePlan(t, fixture, client)
-			attachment := openLifecycleRuntime(
-				t,
-				fixture.authority,
-				sessionID,
-				"owner-a",
-				&plan,
-			)
-			block, err := fixture.authority.BlockSessionStarts(
-				context.Background(),
-				[]runtimeids.SessionID{sessionID},
-				SessionStartBlockMaintenance,
-			)
-			if err != nil {
-				t.Fatalf("block Session starts: %v", err)
-			}
-			acceptErr := fixture.authority.WithRuntime(
-				context.Background(),
-				attachment.Resource(),
-				func(_ context.Context, engine *runtime.Engine) error {
-					return test.accept(engine)
-				},
-			)
-			if !errors.Is(acceptErr, test.wantAcceptErr) ||
-				(test.wantAcceptErr == nil && acceptErr != nil) {
-				t.Fatalf(
-					"accept blocked runtime-bound work = %v, want %v",
-					acceptErr,
-					test.wantAcceptErr,
-				)
-			}
-			maintenanceRan := false
-			if err := fixture.authority.RunSessionMaintenance(
-				block.AuthorizeMaintenance(context.Background()),
-				sessionID.String(),
-				func(context.Context, *session.Store, *ActiveRuntimeMaintenance) error {
-					maintenanceRan = true
-					if calls := client.callCount(); calls != 0 {
-						t.Fatalf("model calls during maintenance = %d, want 0", calls)
-					}
-					return nil
-				},
-			); err != nil {
-				t.Fatalf("run authorized maintenance: %v", err)
-			}
-			if !maintenanceRan {
-				t.Fatal("authorized maintenance did not run")
-			}
-			if err := block.Close(context.Background()); err != nil {
-				t.Fatalf("release Session start block: %v", err)
-			}
-			if err := fixture.authority.WithRuntime(
-				context.Background(),
-				attachment.Resource(),
-				func(_ context.Context, engine *runtime.Engine) error {
-					_, queueErr := engine.QueueUserMessage("later human input")
-					return queueErr
-				},
-			); err != nil {
-				t.Fatalf("queue later work: %v", err)
-			}
-			select {
-			case <-client.firstStarted:
-			case <-time.After(3 * time.Second):
-				t.Fatal("later Agenda item did not run after maintenance")
-			}
-			deadline := time.Now().Add(3 * time.Second)
-			for {
-				fixture.authority.mu.Lock()
-				resource := fixture.authority.resources[sessionID]
-				fixture.authority.mu.Unlock()
-				if resource == nil {
-					break
-				}
-				resource.mu.Lock()
-				idle := resource.current == nil
-				resource.mu.Unlock()
-				if idle {
-					break
-				}
-				if time.Now().After(deadline) {
-					t.Fatal("later Agenda execution did not finish")
-				}
-				time.Sleep(10 * time.Millisecond)
-			}
-		})
+	); err != nil {
+		t.Fatalf("accept runtime-bound work: %v", err)
+	}
+	select {
+	case <-client.firstStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Session start admission blocked accepted Boundary Agenda work")
+	}
+	if err := block.Close(context.Background()); err != nil {
+		t.Fatalf("release Session start block: %v", err)
+	}
+	if _, err := attachment.Release(
+		context.Background(),
+		RuntimeReleaseClose,
+	); err != nil {
+		t.Fatalf("close runtime: %v", err)
 	}
 }

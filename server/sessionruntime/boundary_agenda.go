@@ -53,19 +53,15 @@ func (r *agentResource) LaunchRuntimeBoundExecution(
 		},
 	}
 	var execution *execution
-	sessionID := descriptor.SessionID()
 	r.mu.Lock()
 	reducerBoundary := r.reducerBoundary
+	reducerBoundaryActive := reducerBoundary != nil &&
+		reducerBoundary.phase == reducerBoundaryActive
 	r.mu.Unlock()
-	if reducerBoundary == nil ||
-		reducerBoundary.phase != reducerBoundaryActive ||
-		reducerBoundary.sessionGate == nil {
+	if !reducerBoundaryActive {
 		return errors.New(
-			"runtime-bound execution requires Session-authorized idle Boundary ownership",
+			"runtime-bound execution requires active idle Boundary ownership",
 		)
-	}
-	if len(reducerBoundary.sessionGate.blocks) != 0 {
-		return sessionStartsBlockedError(sessionID)
 	}
 	if err := admission.StartWork(func(context.Context) {
 		if execution == nil {

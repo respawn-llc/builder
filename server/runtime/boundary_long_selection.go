@@ -90,20 +90,6 @@ func (e *Engine) reduceIdleBoundary(admission runtimeEventAdmission) (resultErr 
 	}
 }
 
-func (e *Engine) ResumeIdleBoundaryReduction(ctx context.Context) error {
-	_, err := submitRuntimeEventWithContext(
-		ctx,
-		e.lifecycleCtx,
-		e,
-		struct{}{},
-		func(admission runtimeEventAdmission, _ struct{}) (struct{}, error) {
-			return struct{}{}, e.reduceIdleBoundary(admission)
-		},
-	)
-	e.surfaceRunError(err)
-	return err
-}
-
 func (e *Engine) startNextRuntimeBoundLongWork(
 	admission runtimeEventAdmission,
 ) error {

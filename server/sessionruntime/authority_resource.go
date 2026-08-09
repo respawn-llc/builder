@@ -215,6 +215,15 @@ func (r *agentResource) descriptor() AgentResourceDescriptor {
 	return r.descriptorLocked()
 }
 
+func (r *agentResource) hasInFlightUseLocked() bool {
+	return r.current != nil ||
+		r.worktreeBoundary != nil ||
+		r.reducerBoundary != nil ||
+		r.pins != 0 ||
+		r.callbacks != 0 ||
+		r.steps != 0
+}
+
 func (r *agentResource) signalLocked() {
 	close(r.changed)
 	r.changed = make(chan struct{})
@@ -462,9 +471,8 @@ func (r *agentResource) closeRuntimeState(ctx context.Context, engine *runtime.E
 			engineErr = engine.ApplyRuntimeCloseUnderAdmission()
 		}
 		r.mu.Lock()
-		reducer := r.settleWorktreeBoundaryLocked(runtimeUnavailableError(r.ref))
+		r.settleWorktreeBoundaryLocked(runtimeUnavailableError(r.ref))
 		r.mu.Unlock()
-		reducer.releaseSessionGate()
 		return engineErr
 	}
 	if r.events == nil {
@@ -652,11 +660,7 @@ func (a *Authority) ReleaseRuntime(ctx context.Context, request RuntimeReleaseRe
 			resource.mu.Unlock()
 			return RuntimeReleaseResult{}, nil
 		}
-		inFlight := resource.current != nil ||
-			resource.reducerBoundary != nil ||
-			resource.pins != 0 ||
-			resource.callbacks != 0 ||
-			resource.steps != 0
+		inFlight := resource.hasInFlightUseLocked()
 		queued := resource.engine != nil && resource.engine.HasQueuedUserWork()
 		if inFlight || (!request.DropOwner && queued) {
 			if request.DropOwner {
@@ -698,11 +702,7 @@ func (a *Authority) closeRetiringResource(ctx context.Context, resource *agentRe
 	if resource.ownerlessDisposition != agentResourceRetireWhenIdle ||
 		resource.state != AgentResourceReady ||
 		len(resource.owners) != 0 ||
-		resource.current != nil ||
-		resource.reducerBoundary != nil ||
-		resource.pins != 0 ||
-		resource.callbacks != 0 ||
-		resource.steps != 0 {
+		resource.hasInFlightUseLocked() {
 		resource.mu.Unlock()
 		return nil
 	}
@@ -893,7 +893,6 @@ func (a *Authority) admitAgentExecutionStart(
 	closeResource := start.closeResource
 	sessionID := request.Descriptor.SessionID()
 	var err error
-	var releasedReducerBoundary *reducerBoundaryRecord
 	a.mu.Lock()
 	if a.closed {
 		a.mu.Unlock()
@@ -1048,7 +1047,6 @@ func (a *Authority) admitAgentExecutionStart(
 			a.mu.Unlock()
 			return nil, err
 		}
-		releasedReducerBoundary = reducerBoundary
 	}
 	resource.signalLocked()
 	resource.mu.Unlock()
@@ -1057,7 +1055,6 @@ func (a *Authority) admitAgentExecutionStart(
 		a.addWorkflowExecutionLocked(*workflowRef, workflowKey, execution)
 	}
 	a.mu.Unlock()
-	releasedReducerBoundary.releaseSessionGate()
 	return execution, nil
 }
 
