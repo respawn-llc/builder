@@ -56,7 +56,7 @@ export {
 export {
   decodeWorktreeSetupRetainedError,
   WorktreeSetupRetainedError,
-} from "./worktreeSetupFailure";
+} from "./worktreeSetup";
 export type { WorkflowLabelErrorReason } from "./errors";
 export type { WorkflowTaskDependencyErrorReason } from "./errors";
 export type { TaskSearchErrorReason } from "./errors";
@@ -65,7 +65,13 @@ export type { JsonArray, JsonObject, JsonPrimitive, JsonValue } from "./json";
 export { newSetupOperationID, parseSetupOperationID, SetupOperationID } from "./setupOperationID";
 export { rpcErrorCodes } from "./rpcErrorCodes";
 export { workflowIDSchema } from "./schemas/workflowID";
-export type { WorktreeSetupEvent, WorktreeSetupEventHandler, WorktreeSetupPhase } from "./worktreeSetup";
+export type {
+  WorktreeSetupEvent,
+  WorktreeSetupEventHandler,
+  WorktreeSetupFailure,
+  WorktreeSetupFailureCause,
+  WorktreeSetupPhase,
+} from "./worktreeSetup";
 export type { RegisteredWorktreeTopology, RetainedPreviousWorktree } from "./worktreeTopology";
 export type { WorkflowProjectEvent, WorkflowProjectEventHandler } from "./workflowProjectEvents";
 export { workflowLabelMaxIDs } from "./workflowLabelContract";

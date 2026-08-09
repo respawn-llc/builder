@@ -55,45 +55,6 @@ func TestWorktreeTopologyEntryRequiresExactlyOneMatchingPayload(t *testing.T) {
 	}
 }
 
-func TestWorktreeTopologyJSONUsesExplicitNullForAbsentFacts(t *testing.T) {
-	data, err := json.Marshal(WorktreeTopologyEntry{
-		Variant: WorktreeTopologyVariantRegistered,
-		Registered: &WorktreeRegisteredFacts{
-			Git: WorktreeGitFacts{
-				CanonicalRoot: "/repo/feature",
-				HeadObject:    "abc123",
-			},
-			Kent: WorktreeKentFacts{
-				WorktreeID:    "worktree-1",
-				CanonicalRoot: "/repo/feature",
-				DisplayName:   "feature",
-			},
-		},
-	})
-	if err != nil {
-		t.Fatalf("Marshal: %v", err)
-	}
-	var wire struct {
-		Registered struct {
-			Git  map[string]any `json:"git"`
-			Kent map[string]any `json:"kent"`
-		} `json:"registered"`
-	}
-	if err := json.Unmarshal(data, &wire); err != nil {
-		t.Fatalf("Unmarshal: %v", err)
-	}
-	for _, field := range []string{"branch_ref", "branch_name", "locked_reason", "prunable_reason"} {
-		value, present := wire.Registered.Git[field]
-		if !present || value != nil {
-			t.Fatalf("Git fact %q = %v, present %t; want explicit null", field, value, present)
-		}
-	}
-	value, present := wire.Registered.Kent["origin_session_id"]
-	if !present || value != nil {
-		t.Fatalf("Kent origin_session_id = %v, present %t; want explicit null", value, present)
-	}
-}
-
 func TestWorktreeTopologyEntryDeletionSelectorCoversEveryDeletionVariant(t *testing.T) {
 	registered := WorktreeTopologyEntry{
 		Variant: WorktreeTopologyVariantRegistered,

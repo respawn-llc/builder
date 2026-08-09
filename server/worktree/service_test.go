@@ -415,8 +415,9 @@ func TestCreateWorktreeBlocksUntilSetupCompletesBeforeSessionSwitch(t *testing.T
 func TestCreateWorktreeSetupFailureKeepsWorktreeAndSessionTarget(t *testing.T) {
 	env := newServiceTestEnv(t)
 	scriptRelpath := filepath.Join("scripts", "fails.sh")
+	attemptsPath := filepath.Join(t.TempDir(), "attempts")
 	longOutput := strings.Repeat("x", setupDiagnosticLimitBytes+128)
-	writeExecutableFile(t, filepath.Join(env.workspaceRoot, scriptRelpath), fmt.Sprintf("#!/bin/sh\nprintf '%%s' %q >&2\nexit 7\n", longOutput))
+	writeExecutableFile(t, filepath.Join(env.workspaceRoot, scriptRelpath), fmt.Sprintf("#!/bin/sh\nprintf x >> %q\nprintf '%%s' %q >&2\nexit 7\n", attemptsPath, longOutput))
 	env.service.setupScript = scriptRelpath
 	setupID := serverapi.NewWorktreeSetupOperationID()
 	sub, err := env.service.SubscribeWorktreeSetup(env.ctx, serverapi.WorktreeSetupSubscribeRequest{SetupOperationID: setupID})
@@ -434,6 +435,9 @@ func TestCreateWorktreeSetupFailureKeepsWorktreeAndSessionTarget(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("CreateWorktree succeeded, want setup failure")
+	}
+	if got := waitForFileText(t, attemptsPath); got != "x" {
+		t.Fatalf("direct setup attempts = %q, want one", got)
 	}
 	var retained *serverapi.WorktreeSetupRetainedError
 	if !errors.As(err, &retained) || retained.Worktree.Registered == nil {
@@ -503,83 +507,6 @@ func TestCreateWorktreeSetupTimeoutKeepsWorktreeAndSessionTarget(t *testing.T) {
 	}
 	if evt.Failed.Diagnostic != setupErr.Error() {
 		t.Fatalf("timeout setup event = %+v, want final diagnostic", evt)
-	}
-}
-
-func TestRunSetupRecoveryRetriesTransientScriptPreparationFailure(t *testing.T) {
-	env := newServiceTestEnv(t)
-	worktreeRoot := t.TempDir()
-	markerPath := filepath.Join(t.TempDir(), "recovered")
-	scriptRelpath := filepath.Join("scripts", "appears-before-retry.sh")
-	scriptPath := filepath.Join(env.workspaceRoot, scriptRelpath)
-	resolveCalls := 0
-	env.service.resolveSetup = func(string) (config.WorktreeSettings, error) {
-		resolveCalls++
-		if resolveCalls == 2 {
-			writeExecutableFile(t, scriptPath, fmt.Sprintf("#!/bin/sh\nprintf recovered > %q\n", markerPath))
-		}
-		return config.WorktreeSettings{SetupScript: scriptRelpath}, nil
-	}
-	observedAttempts := 0
-
-	recovery, err := env.service.runSetupRecovery(env.ctx, setupRecoveryRequest{
-		Attempt: setupExecutionRequest{
-			SourceWorkspaceRoot: env.workspaceRoot,
-			BranchName:          "feature/retry-script-preparation",
-			WorktreeRoot:        worktreeRoot,
-			ScriptPayload: setupScriptPayload{
-				ProjectID:   env.binding.ProjectID,
-				WorkspaceID: env.binding.WorkspaceID,
-				WorktreeID:  "worktree-retry-script-preparation",
-			},
-			CreatedBranch: true,
-		},
-		Observer: setupAttemptObserverFunc(func(serverapi.WorktreeSetupStarted) {
-			observedAttempts++
-		}),
-	})
-	if err != nil {
-		t.Fatalf("runSetupRecovery: %v", err)
-	}
-	if recovery.Err != nil {
-		t.Fatalf("setup recovery error = %v, want recovered preparation", recovery.Err)
-	}
-	if recovery.Result.Completed == nil {
-		t.Fatalf("setup recovery result = %+v, want completed", recovery.Result)
-	}
-	if resolveCalls != 2 {
-		t.Fatalf("setup settings resolutions = %d, want 2", resolveCalls)
-	}
-	if observedAttempts != 1 {
-		t.Fatalf("executed setup attempts = %d, want 1", observedAttempts)
-	}
-	if got := waitForFileText(t, markerPath); got != "recovered" {
-		t.Fatalf("recovery marker = %q, want recovered", got)
-	}
-}
-
-func TestRunSetupRecoveryReturnsRecreationFailureWithoutLosingPriorAttempt(t *testing.T) {
-	env := newServiceTestEnv(t)
-	sourceRoot := t.TempDir()
-	worktreeRoot := t.TempDir()
-	writeExecutableFile(t, filepath.Join(sourceRoot, "setup.sh"), "#!/bin/sh\nexit 1\n")
-	settings := config.WorktreeSettings{SetupScript: "setup.sh"}
-
-	recovery, err := env.service.runSetupRecovery(env.ctx, setupRecoveryRequest{
-		Attempt: setupExecutionRequest{
-			SourceWorkspaceRoot: sourceRoot,
-			BranchName:          "feature/recreation-failure",
-			WorktreeRoot:        worktreeRoot,
-			ResolvedSettings:    &settings,
-		},
-		Observer: setupAttemptObserverFunc(func(serverapi.WorktreeSetupStarted) {}),
-		Recreate: func(context.Context) (setupExecutionRequest, error) {
-			t.Fatal("recreation callback called without recorded checkout topology")
-			return setupExecutionRequest{}, nil
-		},
-	})
-	if err == nil {
-		t.Fatalf("runSetupRecovery = %+v, nil; want recreation failure", recovery)
 	}
 }
 
