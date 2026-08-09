@@ -752,18 +752,15 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			authoredKey := choice.TransitionKey
 			transitionKey = &authoredKey
 		}
-		resp, err := runWorkflowMutationWithSetupProgress(context.Background(), remote, stderr, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskMoveResponse, error) {
-			return remote.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
-				TaskID:                     taskID,
-				InvokingSessionID:          invokingSessionID,
-				TargetNodeID:               positionals[1],
-				TransitionKey:              transitionKey,
-				Values:                     values,
-				Commentary:                 *commentary,
-				SetupOperationID:           setupOperationID,
-				ExecutionTarget:            executionTarget,
-				ProceedDespiteDependencies: *ignoreDependencies,
-			})
+		resp, err := remote.MoveWorkflowTask(context.Background(), serverapi.WorkflowTaskMoveRequest{
+			TaskID:                     taskID,
+			InvokingSessionID:          invokingSessionID,
+			TargetNodeID:               positionals[1],
+			TransitionKey:              transitionKey,
+			Values:                     values,
+			Commentary:                 *commentary,
+			ExecutionTarget:            executionTarget,
+			ProceedDespiteDependencies: *ignoreDependencies,
 		})
 		if err != nil {
 			if !writeWorkflowExecutionTargetError(stderr, err) &&
@@ -960,7 +957,10 @@ func writeWorktreeSetupProgress(stderr io.Writer, event serverapi.WorktreeSetupE
 	if event.Phase != serverapi.WorktreeSetupPhaseStarted {
 		return
 	}
-	fmt.Fprintf(stderr, "Waiting for worktree setup script %s in %s.\n", event.ScriptPath, event.WorktreeRoot)
+	if event.Started == nil {
+		return
+	}
+	fmt.Fprintf(stderr, "Waiting for worktree setup script %s in %s.\n", event.Started.ScriptPath, event.Started.WorktreeRoot)
 }
 
 func waitForWorkflowTaskRunSession(ctx context.Context, remote workflowCommandRemote, taskID string, _ string, timeout time.Duration, interval time.Duration) (serverapi.WorkflowTaskDetail, error) {

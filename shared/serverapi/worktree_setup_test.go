@@ -20,28 +20,48 @@ func TestWorktreeSetupOperationIDRequiresUUIDV4(t *testing.T) {
 func TestWorktreeSetupEventValidation(t *testing.T) {
 	id := NewWorktreeSetupOperationID()
 	started := WorktreeSetupEvent{
-		SetupOperationID:    id,
-		SourceWorkspaceRoot: "/source",
-		WorktreeRoot:        "/worktree",
-		ScriptPath:          "/source/scripts/setup.sh",
-		Phase:               WorktreeSetupPhaseStarted,
+		SetupOperationID: id,
+		Phase:            WorktreeSetupPhaseStarted,
+		Started: &WorktreeSetupStarted{
+			SourceWorkspaceRoot: "/source",
+			WorktreeRoot:        "/worktree",
+			ScriptPath:          "/source/scripts/setup.sh",
+		},
 	}
 	if err := started.Validate(); err != nil {
 		t.Fatalf("started setup event validate: %v", err)
 	}
 	invalidStarted := started
-	invalidStarted.ScriptPath = ""
+	invalidStarted.Started = &WorktreeSetupStarted{
+		SourceWorkspaceRoot: started.Started.SourceWorkspaceRoot,
+		WorktreeRoot:        started.Started.WorktreeRoot,
+	}
 	if err := invalidStarted.Validate(); err == nil {
 		t.Fatal("started setup event without script path validated")
 	}
-	failed := started
-	failed.Phase = WorktreeSetupPhaseFailed
-	failed.Error = "exit status 1"
+	failed := WorktreeSetupEvent{
+		SetupOperationID: id,
+		Phase:            WorktreeSetupPhaseFailed,
+		Failed: &WorktreeSetupFailed{
+			RetryReadiness: WorktreeSetupRetryReady,
+			Cause: WorktreeSetupFailureCause{
+				Kind:        WorktreeSetupFailureTargetPreparation,
+				Preparation: &WorktreeSetupPreparationFailure{},
+			},
+			Diagnostic: "target preparation failed",
+		},
+	}
 	if err := failed.Validate(); err != nil {
 		t.Fatalf("failed setup event validate: %v", err)
 	}
-	invalidFailed := started
-	invalidFailed.Phase = WorktreeSetupPhaseFailed
+	invalidFailed := failed
+	invalidFailed.Failed = &WorktreeSetupFailed{
+		RetryReadiness: WorktreeSetupRetryReady,
+		Cause: WorktreeSetupFailureCause{
+			Kind:        WorktreeSetupFailureTargetPreparation,
+			Preparation: &WorktreeSetupPreparationFailure{},
+		},
+	}
 	if err := invalidFailed.Validate(); err == nil {
 		t.Fatal("failed setup event without terminal facts validated")
 	}

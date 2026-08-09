@@ -1846,6 +1846,7 @@ func remoteTestWorktreeStructuredErrors(operationID serverapi.WorktreeOperationI
 					},
 				},
 			},
+			ScriptPath: "/repo/scripts/setup.sh",
 			Diagnostic: "setup failed",
 		},
 		&serverapi.WorktreeDeletePreconditionError{

@@ -71,7 +71,7 @@ const (
 
 type initiatingActionRequest struct {
 	taskID                  workflow.TaskID
-	setupOperationID        serverapi.WorktreeSetupOperationID
+	setupOperationID        *serverapi.WorktreeSetupOperationID
 	requiresExecutionTarget bool
 	targetPreflight         initiatingActionTargetPreflight
 	afterTargetResolution   func() error
@@ -114,7 +114,7 @@ type ExecutionTargetResolveRequest struct {
 
 type ExecutionTargetMaterializeRequest struct {
 	TaskID           workflow.TaskID
-	SetupOperationID serverapi.WorktreeSetupOperationID
+	SetupOperationID *serverapi.WorktreeSetupOperationID
 	Snapshot         workflowstore.ExecutionTargetSnapshot
 }
 
@@ -124,7 +124,7 @@ type ExecutionTargetMaterialization struct {
 
 type ExecutionTargetRestoreRequest struct {
 	TaskID           workflow.TaskID
-	SetupOperationID serverapi.WorktreeSetupOperationID
+	SetupOperationID *serverapi.WorktreeSetupOperationID
 }
 
 var errExecutionTargetInfrastructureRequired = errors.New("execution target infrastructure is required")
@@ -976,7 +976,7 @@ func (s *Service) startWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 	}
 	target.unavailable = initiatingActionTargetInterrupt
 	started, err := s.currentNodeExecution.StartTask(ctx, workflow.TaskID(req.TaskID), func(preparationCtx context.Context) error {
-		decision, preparationErr := s.initiatingActionTarget(preparationCtx, workflow.TaskID(req.TaskID), req.SetupOperationID, target)
+		decision, preparationErr := s.initiatingActionTarget(preparationCtx, workflow.TaskID(req.TaskID), &req.SetupOperationID, target)
 		if decision.candidate == nil {
 			return configuredTargetPreparationError(target, preparationErr)
 		}
@@ -1076,7 +1076,7 @@ func (s *Service) preflightInitiatingActionTarget(ctx context.Context, taskID wo
 	}, nil
 }
 
-func (s *Service) initiatingActionTarget(ctx context.Context, taskID workflow.TaskID, setupOperationID serverapi.WorktreeSetupOperationID, preflight initiatingActionTargetPreflight) (initiatingActionTargetDecision, error) {
+func (s *Service) initiatingActionTarget(ctx context.Context, taskID workflow.TaskID, setupOperationID *serverapi.WorktreeSetupOperationID, preflight initiatingActionTargetPreflight) (initiatingActionTargetDecision, error) {
 	targetContext := preflight.context
 	if targetContext.Task.ExecutionTarget != nil {
 		if targetContext.Task.ExecutionTarget.Mode != workflow.ExecutionTargetModeNone {
@@ -1140,7 +1140,7 @@ func (s *Service) resolveInitiatingActionTarget(
 func (s *Service) materializeInitiatingActionTarget(
 	ctx context.Context,
 	taskID workflow.TaskID,
-	setupOperationID serverapi.WorktreeSetupOperationID,
+	setupOperationID *serverapi.WorktreeSetupOperationID,
 	preflight initiatingActionTargetPreflight,
 	snapshot *workflowstore.ExecutionTargetSnapshot,
 ) (*workflowstore.ExecutionTargetCandidate, error) {
@@ -1403,7 +1403,7 @@ func (s *Service) resumeWorkflowTask(ctx context.Context, req serverapi.Workflow
 			candidate, preparationErr := s.materializeInitiatingActionTarget(
 				preparationCtx,
 				taskID,
-				req.SetupOperationID,
+				&req.SetupOperationID,
 				target,
 				snapshot,
 			)
@@ -1618,11 +1618,6 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 			},
 		}, nil
 	}
-	if prepared.RequiresExecutionTarget() {
-		if err := req.SetupOperationID.Validate(); err != nil {
-			return serverapi.WorkflowTaskMoveResponse{}, err
-		}
-	}
 	var targetPreflight initiatingActionTargetPreflight
 	if prepared.RequiresExecutionTarget() {
 		if !req.ProceedDespiteDependencies {
@@ -1644,7 +1639,6 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 	}
 	coordinated, err := coordinateInitiatingAction(ctx, s, initiatingActionRequest{
 		taskID:                  moveRequest.TaskID,
-		setupOperationID:        req.SetupOperationID,
 		requiresExecutionTarget: prepared.RequiresExecutionTarget(),
 		targetPreflight:         targetPreflight,
 		afterTargetResolution: func() error {

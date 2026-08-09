@@ -92,10 +92,9 @@ func TestWorkflowTaskMoveRequestUsesStructuredTransitionValues(t *testing.T) {
 
 	transitionKey := "plan-to-implement"
 	request := WorkflowTaskMoveRequest{
-		SetupOperationID: NewWorktreeSetupOperationID(),
-		TaskID:           "task",
-		TargetNodeID:     "implement",
-		TransitionKey:    &transitionKey,
+		TaskID:        "task",
+		TargetNodeID:  "implement",
+		TransitionKey: &transitionKey,
 		Values: map[string]map[string]string{
 			"plan": {"summary": "manual plan"},
 		},
@@ -109,23 +108,20 @@ func TestWorkflowTaskMoveRequestRejectsBlankStructuredValues(t *testing.T) {
 	transitionKey := "plan-to-implement"
 	for _, request := range []WorkflowTaskMoveRequest{
 		{
-			SetupOperationID: NewWorktreeSetupOperationID(),
-			TaskID:           "task",
-			TargetNodeID:     "implement",
-			TransitionKey:    &transitionKey,
-			Values:           map[string]map[string]string{"plan": {"summary": " "}},
+			TaskID:        "task",
+			TargetNodeID:  "implement",
+			TransitionKey: &transitionKey,
+			Values:        map[string]map[string]string{"plan": {"summary": " "}},
 		},
 		{
-			SetupOperationID: NewWorktreeSetupOperationID(),
-			TaskID:           "task",
-			TargetNodeID:     "implement",
-			Values:           map[string]map[string]string{"": {"summary": "value"}},
+			TaskID:       "task",
+			TargetNodeID: "implement",
+			Values:       map[string]map[string]string{"": {"summary": "value"}},
 		},
 		{
-			SetupOperationID: NewWorktreeSetupOperationID(),
-			TaskID:           "task",
-			TargetNodeID:     "implement",
-			Values:           map[string]map[string]string{"plan": {"": "value"}},
+			TaskID:       "task",
+			TargetNodeID: "implement",
+			Values:       map[string]map[string]string{"plan": {"": "value"}},
 		},
 	} {
 		if err := request.Validate(); err == nil {
@@ -137,10 +133,9 @@ func TestWorkflowTaskMoveRequestRejectsBlankStructuredValues(t *testing.T) {
 func TestWorkflowTaskMoveRequestRejectsOversizedStructuredValues(t *testing.T) {
 	transitionKey := "plan-to-implement"
 	request := WorkflowTaskMoveRequest{
-		SetupOperationID: NewWorktreeSetupOperationID(),
-		TaskID:           "task",
-		TargetNodeID:     "implement",
-		TransitionKey:    &transitionKey,
+		TaskID:        "task",
+		TargetNodeID:  "implement",
+		TransitionKey: &transitionKey,
 		Values: map[string]map[string]string{
 			"plan": {"summary": strings.Repeat("x", workflowcontract.MaxOutputValueBytes+1)},
 		},

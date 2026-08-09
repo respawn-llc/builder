@@ -540,7 +540,7 @@ func TestTaskMoveCarriesExecutionTargetAndSetupOperation(t *testing.T) {
 		t.Fatalf("move requests = %+v, want one", remote.moveRequests)
 	}
 	request := remote.moveRequests[0]
-	if request.TaskID != "task-1" || request.TargetNodeID != "done" || request.SetupOperationID.Validate() != nil ||
+	if request.TaskID != "task-1" || request.TargetNodeID != "done" ||
 		request.ExecutionTarget == nil || request.ExecutionTarget.Mode != serverapi.WorkflowExecutionTargetModeHead {
 		t.Fatalf("move request = %+v", request)
 	}

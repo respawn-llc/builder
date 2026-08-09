@@ -321,9 +321,8 @@ func TestServiceManualMoveExecutableSelectsTargetThenStartsCurrentNode(t *testin
 	service.currentNodeExecution = execution
 
 	selectionRequired, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
-		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		TaskID:           task.Task.ID,
-		TargetNodeID:     targetNodeID,
+		TaskID:       task.Task.ID,
+		TargetNodeID: targetNodeID,
 	})
 	if err != nil {
 		t.Fatalf("MoveWorkflowTask selection: %v", err)
@@ -339,9 +338,8 @@ func TestServiceManualMoveExecutableSelectsTargetThenStartsCurrentNode(t *testin
 	}
 
 	applied, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
-		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		TaskID:           task.Task.ID,
-		TargetNodeID:     targetNodeID,
+		TaskID:       task.Task.ID,
+		TargetNodeID: targetNodeID,
 		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
 			Mode: serverapi.WorkflowExecutionTargetModeNone,
 		},
@@ -564,10 +562,9 @@ func TestServiceManualMoveApprovalAppliesImmediately(t *testing.T) {
 	execution.started = nil
 
 	moved, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
-		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		TaskID:           task.Task.ID,
-		TargetNodeID:     targetNodeID,
-		Values:           map[string]map[string]string{"plan": {"prior_summary": "manual plan"}},
+		TaskID:       task.Task.ID,
+		TargetNodeID: targetNodeID,
+		Values:       map[string]map[string]string{"plan": {"prior_summary": "manual plan"}},
 	})
 	if err != nil {
 		t.Fatalf("MoveWorkflowTask: %v", err)
@@ -607,9 +604,8 @@ func TestServiceManualMoveRevalidatesTaskQuiescenceBeforeDurableApply(t *testing
 	service.currentNodeExecution = execution
 
 	_, err = service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
-		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		TaskID:           task.Task.ID,
-		TargetNodeID:     targetNodeID,
+		TaskID:       task.Task.ID,
+		TargetNodeID: targetNodeID,
 		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
 			Mode: serverapi.WorkflowExecutionTargetModeNone,
 		},
@@ -914,7 +910,8 @@ func TestServiceTaskStartMaterializesConfiguredHeadBeforeLockingTarget(t *testin
 	}
 	if infrastructure.resolveSelection.Mode != workflow.ExecutionTargetModeHead ||
 		infrastructure.materializeTaskID != workflow.TaskID(task.Task.ID) ||
-		infrastructure.setupOperationID != setupID {
+		infrastructure.setupOperationID == nil ||
+		*infrastructure.setupOperationID != setupID {
 		t.Fatalf("execution target infrastructure = %+v, want resolved and materialized HEAD for task", infrastructure)
 	}
 	targetContext, err := service.store.GetTaskExecutionTargetContext(ctx, workflow.TaskID(task.Task.ID))
@@ -1667,7 +1664,7 @@ type recordingExecutionTargetInfrastructure struct {
 	resolveSelection  workflow.ExecutionTargetSelection
 	materializeTaskID workflow.TaskID
 	restoreTaskID     workflow.TaskID
-	setupOperationID  serverapi.WorktreeSetupOperationID
+	setupOperationID  *serverapi.WorktreeSetupOperationID
 	materialize       func(workflow.TaskID) (ExecutionTargetMaterialization, error)
 	resolveErr        error
 	materializeErr    error

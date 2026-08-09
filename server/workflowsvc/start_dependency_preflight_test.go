@@ -132,7 +132,6 @@ func TestExecutableMoveWithProceedSkipsDependencyReaderBeforeTargetInfrastructur
 	_, err = service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
 		TaskID:                     task.Task.ID,
 		TargetNodeID:               workflowServiceNodeIDByKey(t, definition.Definition, "plan"),
-		SetupOperationID:           serverapi.NewWorktreeSetupOperationID(),
 		ProceedDespiteDependencies: true,
 		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
 			Mode: serverapi.WorkflowExecutionTargetModeHead,
@@ -169,9 +168,8 @@ func TestExecutableMoveDependencyPreflightRequiresExplicitProceed(t *testing.T) 
 	service.executionTargets = targets
 
 	warning, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
-		TaskID:           blocked.Task.ID,
-		TargetNodeID:     targetNodeID,
-		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		TaskID:       blocked.Task.ID,
+		TargetNodeID: targetNodeID,
 	})
 	if err != nil {
 		t.Fatalf("MoveWorkflowTask warning: %v", err)
@@ -193,7 +191,6 @@ func TestExecutableMoveDependencyPreflightRequiresExplicitProceed(t *testing.T) 
 	proceeded, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
 		TaskID:                     blocked.Task.ID,
 		TargetNodeID:               targetNodeID,
-		SetupOperationID:           serverapi.NewWorktreeSetupOperationID(),
 		ExecutionTarget:            &serverapi.WorkflowExecutionTargetSelection{Mode: serverapi.WorkflowExecutionTargetModeNone},
 		ProceedDespiteDependencies: true,
 	})
@@ -226,7 +223,6 @@ func TestExecutableMoveWithProceedSkipsDependencyReaderBeforeTargetCompatibility
 	_, err = service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
 		TaskID:                     task.Task.ID,
 		TargetNodeID:               workflowServiceNodeIDByKey(t, definition.Definition, "implement"),
-		SetupOperationID:           serverapi.NewWorktreeSetupOperationID(),
 		ProceedDespiteDependencies: true,
 		Values: map[string]map[string]string{
 			"plan": {"prior_summary": "manual plan"},

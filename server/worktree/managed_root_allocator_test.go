@@ -354,8 +354,13 @@ func TestManagedRootAllocatorReturnsEntropyFailure(t *testing.T) {
 	}
 }
 
-type errorReader struct{}
+type errorReader struct {
+	err error
+}
 
-func (errorReader) Read([]byte) (int, error) {
+func (r errorReader) Read([]byte) (int, error) {
+	if r.err != nil {
+		return 0, r.err
+	}
 	return 0, errors.New("entropy unavailable")
 }
