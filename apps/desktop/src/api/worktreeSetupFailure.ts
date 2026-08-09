@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { workflowExecutionTargetSelectionSchema } from "./schemas/workflowExecutionTarget";
+import type { WorkflowExecutionTargetSelection } from "./workflowExecutionTarget";
 import {
   registeredWorktreeTopologySchema,
   retainedPreviousWorktreeSchema,
@@ -23,6 +25,7 @@ export type WorktreeSetupFailure = Readonly<{
   retryReadiness: "retry_ready" | "non_retryable";
   cause: WorktreeSetupFailureCause;
   diagnostic: string;
+  executionTarget: WorkflowExecutionTargetSelection | null;
   retainedWorktree: RegisteredWorktreeTopology | null;
   retainedPreviousWorktree: RetainedPreviousWorktree | null;
 }>;
@@ -93,6 +96,7 @@ export const worktreeSetupFailureWireSchema = z
     retry_readiness: z.enum(["retry_ready", "non_retryable"]),
     cause: failureCauseSchema,
     diagnostic: z.string().trim().min(1),
+    execution_target: workflowExecutionTargetSelectionSchema.optional(),
     retained_worktree: registeredWorktreeTopologySchema.nullable().optional(),
     retained_previous_worktree: retainedPreviousWorktreeSchema.nullable().optional(),
   })
@@ -128,12 +132,11 @@ export const worktreeSetupFailureWireSchema = z
       });
     }
   })
-  .transform(
-    (value): WorktreeSetupFailure => ({
-      retryReadiness: value.retry_readiness,
-      cause: value.cause,
-      diagnostic: value.diagnostic,
-      retainedWorktree: value.retained_worktree ?? null,
-      retainedPreviousWorktree: value.retained_previous_worktree ?? null,
-    }),
-  );
+  .transform((value): WorktreeSetupFailure => ({
+    retryReadiness: value.retry_readiness,
+    cause: value.cause,
+    diagnostic: value.diagnostic,
+    executionTarget: value.execution_target ?? null,
+    retainedWorktree: value.retained_worktree ?? null,
+    retainedPreviousWorktree: value.retained_previous_worktree ?? null,
+  }));

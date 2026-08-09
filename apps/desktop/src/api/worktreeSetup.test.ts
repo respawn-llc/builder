@@ -214,6 +214,7 @@ describe("worktree setup API", () => {
             process_exit: { exit_code: 7, stdout: "", stderr: null },
           },
           diagnostic: "setup exited",
+          execution_target: { mode: "custom_ref", custom_ref: "refs/heads/recovery" },
           retained_worktree: registeredWorktreeWire("/worktree", "worktree-current"),
         },
       },
@@ -283,6 +284,7 @@ describe("worktree setup API", () => {
           retryReadiness: "retry_ready",
           cause: { kind: "process_exit", exitCode: 7, stdout: "", stderr: null },
           diagnostic: "setup exited",
+          executionTarget: { mode: "custom_ref", customRef: "refs/heads/recovery" },
           retainedWorktree: {
             registered: {
               git: { canonicalRoot: "/worktree" },
