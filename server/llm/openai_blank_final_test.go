@@ -20,6 +20,8 @@ func TestOpenAIBlankFinalResponsePresence(t *testing.T) {
 	}{
 		{name: "empty", content: `{"type":"output_text","text":""}`, wantContent: textutil.Value(""), wantPhase: MessagePhaseFinal},
 		{name: "whitespace", content: `{"type":"output_text","text":" \n\t"}`, wantContent: textutil.Value(" \n\t"), wantPhase: MessagePhaseFinal},
+		{name: "text field omitted", content: `{"type":"output_text"}`, wantContent: nil, wantPhase: MessagePhaseFinal},
+		{name: "text field null", content: `{"type":"output_text","text":null}`, wantContent: nil, wantPhase: MessagePhaseFinal},
 		{name: "empty array", contentField: `"content":[],`, wantContent: textutil.Value(""), wantPhase: MessagePhaseFinal},
 		{name: "refusal", content: `{"type":"refusal","refusal":"I cannot help with that"}`, wantContent: nil, wantPhase: MessagePhaseFinal},
 		{name: "null", contentField: `"content":null,`, wantContent: nil, wantPhase: MessagePhaseFinal},
@@ -117,6 +119,18 @@ func TestOpenAIBlankFinalStreamingAfterCommentary(t *testing.T) {
 			finalItem:     `"content":[{"type":"output_text","text":" \n\t"}],`,
 			finalResponse: `"content":[{"type":"output_text","text":" \n\t"}],`,
 			wantContent:   textutil.Value(" \n\t"),
+		},
+		{
+			name:          "text field omitted",
+			finalItem:     `"content":[{"type":"output_text"}],`,
+			finalResponse: `"content":[{"type":"output_text"}],`,
+			wantContent:   nil,
+		},
+		{
+			name:          "text field null",
+			finalItem:     `"content":[{"type":"output_text","text":null}],`,
+			finalResponse: `"content":[{"type":"output_text","text":null}],`,
+			wantContent:   nil,
 		},
 		{
 			name:          "refusal",

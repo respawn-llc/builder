@@ -162,13 +162,12 @@ func (messageOutputItemParser) Parse(item responses.ResponseOutputItemUnion, pro
 		}
 	}
 	text := strings.Join(textParts, "")
-	hasTextPart := len(textParts) > 0
 	phase := providerPhaseProjection(providerPhase)
 	var typedPhase *MessagePhase
 	if phase != "" {
 		typedPhase = textutil.Value(phase)
 	}
-	content, err := resolveOpenAIMessageContent(item, role, phase, text, hasTextPart)
+	content, err := resolveOpenAIMessageContent(item, role, phase, text)
 	if err != nil {
 		return parsedResponseOutputItem{}, err
 	}
@@ -194,7 +193,7 @@ func (messageOutputItemParser) Parse(item responses.ResponseOutputItemUnion, pro
 	return parsed, nil
 }
 
-func resolveOpenAIMessageContent(item responses.ResponseOutputItemUnion, role Role, phase MessagePhase, text string, hasTextPart bool) (*string, error) {
+func resolveOpenAIMessageContent(item responses.ResponseOutputItemUnion, role Role, phase MessagePhase, text string) (*string, error) {
 	raw := strings.TrimSpace(item.JSON.Content.Raw())
 	if raw == "" || raw == "null" {
 		return nil, nil
@@ -206,10 +205,39 @@ func resolveOpenAIMessageContent(item responses.ResponseOutputItemUnion, role Ro
 	if err := json.Unmarshal([]byte(raw), &parts); err != nil {
 		return nil, fmt.Errorf("decode assistant content: %w", err)
 	}
+	hasTextPart, err := hasExplicitOpenAITextPart(parts)
+	if err != nil {
+		return nil, err
+	}
 	if len(parts) > 0 && !hasTextPart {
 		return nil, nil
 	}
 	return resolveAssistantContent(role, phase, textutil.Value(text)), nil
+}
+
+func hasExplicitOpenAITextPart(parts []json.RawMessage) (bool, error) {
+	for _, rawPart := range parts {
+		var part struct {
+			Type string          `json:"type"`
+			Text json.RawMessage `json:"text"`
+		}
+		if err := json.Unmarshal(rawPart, &part); err != nil {
+			return false, fmt.Errorf("decode assistant content part: %w", err)
+		}
+		if part.Type != "output_text" && part.Type != "text" && part.Type != "input_text" {
+			continue
+		}
+		rawText := strings.TrimSpace(string(part.Text))
+		if rawText == "" || rawText == "null" {
+			continue
+		}
+		var text string
+		if err := json.Unmarshal(part.Text, &text); err != nil {
+			return false, fmt.Errorf("decode assistant text part: expected string: %w", err)
+		}
+		return true, nil
+	}
+	return false, nil
 }
 
 type functionCallOutputItemParser struct{}

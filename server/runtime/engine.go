@@ -813,8 +813,9 @@ func (e *Engine) runStepLoopWithPendingUserInjectionOutcomeObserver(ctx context.
 	reviewerFrequency := e.ReviewerFrequency()
 	reviewerClient := e.reviewerRuntimeState().Client()
 	result, err := e.runStepLoopWithQueuedUserFlushObserver(ctx, stepID, reviewerFrequency, reviewerClient, true, onQueuedUserFlushCommitted)
-	if result.FinalAnswer != nil {
-		e.recordLiveRunAssistantFinalAnswer(stepID, *result.FinalAnswer)
+	outcome := userTurnResultFromStepLoop(result)
+	if outcome.Kind == UserTurnResultAssistantFinal && outcome.FinalAnswer != nil {
+		e.recordLiveRunAssistantFinalAnswer(stepID, *outcome.FinalAnswer)
 	}
 	return result, err
 }

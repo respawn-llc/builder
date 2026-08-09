@@ -8,8 +8,10 @@ import (
 	"time"
 
 	"core/server/llm"
+	"core/server/session"
 	"core/server/tools"
 	"core/shared/textutil"
+	"core/shared/toolspec"
 )
 
 func TestEnginePublishesLiveRunTerminalFactsThroughSubmitSeam(t *testing.T) {
@@ -63,8 +65,9 @@ func TestEnginePublishesLiveRunTerminalFactsThroughSubmitSeam(t *testing.T) {
 			},
 			Usage: llm.Usage{WindowTokens: 200_000},
 		}}}, tools.NewRegistry(), Config{
-			Model:   "gpt-5",
-			OnEvent: events.accept,
+			Model:        "gpt-5",
+			OnEvent:      events.accept,
+			EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
 		})
 
 		message, err := eng.SubmitUserMessage(t.Context(), "finish silently")
@@ -78,6 +81,36 @@ func TestEnginePublishesLiveRunTerminalFactsThroughSubmitSeam(t *testing.T) {
 		if result.Status != RunStatusCompleted ||
 			result.ResultKind != LiveRunResultNoFinalAnswer ||
 			result.NoFinalReason != LiveRunNoFinalAnswerReasonUnknown {
+			t.Fatalf("result = %+v", result)
+		}
+	})
+
+	t.Run("active goal blank final", func(t *testing.T) {
+		store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
+		events := &liveRunEventCollector{}
+		eng := mustNewTestEngine(t, store, &fakeClient{responses: []llm.Response{{
+			Assistant: llm.Message{
+				Role:    llm.RoleAssistant,
+				Phase:   textutil.Value(llm.MessagePhaseFinal),
+				Content: textutil.Value(""),
+			},
+			Usage: llm.Usage{WindowTokens: 200_000},
+		}}}, tools.NewRegistry(), Config{
+			Model:        "gpt-5",
+			OnEvent:      events.accept,
+			EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
+		})
+		if _, err := eng.SetGoal("ship goal mode", session.GoalActorUser); err != nil {
+			t.Fatalf("SetGoal: %v", err)
+		}
+
+		if _, err := eng.SubmitUserMessage(t.Context(), "continue"); err != nil {
+			t.Fatalf("SubmitUserMessage: %v", err)
+		}
+		result := events.single(t)
+		if result.Status != RunStatusCompleted ||
+			result.ResultKind != LiveRunResultNoFinalAnswer ||
+			result.AssistantMessage.Content != nil {
 			t.Fatalf("result = %+v", result)
 		}
 	})
