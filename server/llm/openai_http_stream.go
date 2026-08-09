@@ -614,7 +614,7 @@ func (a *assistantMessageAccumulator) Resolve() (*string, MessagePhase, *Provide
 		})
 	}
 	text, phase, providerPhase, outputIndex, deltaText, resolved := resolveAssistantOutput(segments)
-	if len(a.pendingDeltas) > 0 && (!resolved || phase == "") {
+	if len(a.pendingDeltas) > 0 && (!resolved || providerPhase == nil || providerPhase.IsAbsent()) {
 		return nil, "", AbsentProviderPhase(), 0, "", false
 	}
 	return text, phase, providerPhase, outputIndex, deltaText, resolved

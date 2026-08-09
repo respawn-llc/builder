@@ -180,6 +180,19 @@ func TestOpenAIBlankFinalStreamingWithPendingUnmaterializedOutput(t *testing.T) 
 				`[DONE]`,
 			}
 			transport := newOpenAIStreamTestTransport(t, events...)
+			rawResponse, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{
+				Model:          "gpt-5",
+				ToolChoiceMode: ToolChoiceModeAutomatic,
+			}, StreamCallbacks{})
+			if err != nil {
+				t.Fatalf("generate raw stream: %v", err)
+			}
+			if !equalOptionalString(rawResponse.AssistantText, test.wantContent) {
+				t.Fatalf("raw assistant text = %#v, want %#v", rawResponse.AssistantText, test.wantContent)
+			}
+			if !rawResponse.ProviderPhase.Is(MessagePhaseFinal) {
+				t.Fatalf("raw provider phase = %v, want final", rawResponse.ProviderPhase.Value())
+			}
 			response, err := NewOpenAIClient(transport).GenerateStreamWithEvents(context.Background(), Request{
 				Model:          "gpt-5",
 				ToolChoiceMode: ToolChoiceModeAutomatic,

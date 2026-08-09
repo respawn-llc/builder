@@ -753,6 +753,9 @@ func TestGenerateStream_PreservesPendingOutputIndexAfterFinalizedOutput(t *testi
 	if optionalStringValue(resp.AssistantText) != "firstsecond" {
 		t.Fatalf("assistant text = %q, want finalized and pending output", optionalStringValue(resp.AssistantText))
 	}
+	if !resp.ProviderPhase.IsAbsent() {
+		t.Fatalf("provider phase = %v, want structurally absent for unphased fallback", resp.ProviderPhase.Value())
+	}
 }
 
 func TestGenerateStream_PreservesWhitespaceBetweenAssistantContent(t *testing.T) {
