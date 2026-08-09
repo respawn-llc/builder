@@ -20,6 +20,9 @@ func userTurnResultFromStepLoop(result stepLoopResult) UserTurnResult {
 		return UserTurnResult{Kind: UserTurnResultSilentFinal}
 	}
 	if result.FinalAnswer != nil {
+		if isBlankFinalAnswer(*result.FinalAnswer) {
+			return UserTurnResult{Kind: UserTurnResultNoFinal}
+		}
 		return UserTurnResult{
 			Kind:        UserTurnResultAssistantFinal,
 			FinalAnswer: result.FinalAnswer,
