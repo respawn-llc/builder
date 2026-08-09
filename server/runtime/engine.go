@@ -509,8 +509,24 @@ func (e *Engine) ensureLifecycle() {
 	})
 }
 
-func (e *Engine) launchLifecycleTask(task func(context.Context) *resultGroupFatal) bool {
-	if e == nil || task == nil {
+func (e *Engine) launchLifecycleTask(task func(context.Context)) bool {
+	if task == nil {
+		return false
+	}
+	return e.launchLifecycleWork(
+		func(ctx context.Context) error {
+			task(ctx)
+			return nil
+		},
+		func(error) {},
+	)
+}
+
+func (e *Engine) launchLifecycleWork(
+	work func(context.Context) error,
+	finish func(error),
+) bool {
+	if e == nil || work == nil || finish == nil {
 		return false
 	}
 	if e.closed.Load() {
@@ -525,22 +541,33 @@ func (e *Engine) launchLifecycleTask(task func(context.Context) *resultGroupFata
 	e.lifecycleWG.Add(1)
 	ctx := e.lifecycleCtx
 	e.lifecycleMu.Unlock()
-	go func(ctx context.Context) {
-		var runtimeAbort *resultGroupFatal
-		defer func() {
-			// Retirement may synchronously close this Engine and wait for lifecycle
-			// tasks, so this task must leave the wait group before callbacks run.
-			e.lifecycleWG.Done()
-			if e.cfg.LifecycleTaskFinished != nil {
-				e.surfaceRunError(e.cfg.LifecycleTaskFinished())
-			}
-			if runtimeAbort != nil && e.cfg.LifecycleRuntimeAbort != nil {
-				e.surfaceRunError(e.cfg.LifecycleRuntimeAbort())
-			}
-		}()
-		runtimeAbort = task(ctx)
-	}(ctx)
+	go func() {
+		runErr := work(ctx)
+		// Finalization may retire the owning resource and close this Engine, so
+		// release Engine-scope membership before invoking the natural owner.
+		e.lifecycleWG.Done()
+		finish(runErr)
+		if e.cfg.LifecycleTaskFinished != nil {
+			e.surfaceRunError(e.cfg.LifecycleTaskFinished())
+		}
+	}()
 	return true
+}
+
+func (e *Engine) LaunchAgentExecution(
+	work func(context.Context) error,
+	finish func(error),
+) error {
+	if work == nil {
+		return errors.New("Agent execution work is required")
+	}
+	if finish == nil {
+		return errors.New("Agent execution finalizer is required")
+	}
+	if !e.launchLifecycleWork(work, finish) {
+		return ErrEngineClosed
+	}
+	return nil
 }
 
 type QueuedUserMessage struct {

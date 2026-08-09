@@ -171,9 +171,16 @@ func (e *execution) stopError() error {
 func (e *execution) finish(result ExecutionResult, runErr error, stopErr error) {
 	cleanupErr := e.cleanup()
 	if e.resource != nil {
+		scopeReleaseErr := e.resource.engine.AgentExecutionScopeReleased(e.scope.ID())
+		e.resource.mu.Lock()
+		resourceDraining := e.resource.state != AgentResourceReady
+		e.resource.mu.Unlock()
+		if resourceDraining && errors.Is(scopeReleaseErr, serverapi.ErrRuntimeUnavailable) {
+			scopeReleaseErr = nil
+		}
 		cleanupErr = errors.Join(
 			cleanupErr,
-			e.resource.engine.AgentExecutionScopeReleased(e.scope.ID()),
+			scopeReleaseErr,
 		)
 	}
 	e.retire()

@@ -31,9 +31,137 @@ func TestRuntimeEventLifecycle(t *testing.T) {
 		{name: "runtime close joins outside Session admission", run: testRuntimeCloseOutsideSessionAdmission},
 		{name: "runtime replacement joins outside Session admission", run: testRuntimeReplacementOutsideSessionAdmission},
 		{name: "runtime close preserves accepted terminal outcomes before canonical settlement", run: testRuntimeClosePreservesAcceptedOutcomes},
+		{name: "Agent execution starts through Runtime Event admission", run: testAgentExecutionStartAdmission},
 	}
 	for _, test := range tests {
 		t.Run(test.name, test.run)
+	}
+}
+
+func testAgentExecutionStartAdmission(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
+	attachment := openLifecycleRuntime(t, fixture.authority, sessionID, "execution-start", &plan)
+	t.Cleanup(func() {
+		if _, err := attachment.Release(context.Background(), RuntimeReleaseClose); err != nil {
+			t.Errorf("close runtime: %v", err)
+		}
+	})
+
+	var target RuntimeEventTarget
+	if err := fixture.authority.WithRuntimeEvents(
+		context.Background(),
+		attachment.Resource(),
+		func(_ context.Context, current RuntimeEventTarget) error {
+			target = current
+			return nil
+		},
+	); err != nil {
+		t.Fatalf("read runtime target: %v", err)
+	}
+
+	blockerStarted := make(chan struct{})
+	releaseBlocker := make(chan struct{})
+	defer closeSignal(releaseBlocker)
+	if _, err := runtimecommand.Submit(context.Background(), target.Events, struct{}{}, func(
+		admission runtimecommand.Admission,
+		_ struct{},
+		complete func(struct{}, error),
+	) error {
+		close(blockerStarted)
+		select {
+		case <-releaseBlocker:
+			complete(struct{}{}, nil)
+		case <-admission.Context().Done():
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("submit admission blocker: %v", err)
+	}
+	awaitRuntimeEventSignal(t, blockerStarted)
+
+	runnerStarted := make(chan struct{})
+	releaseRunner := make(chan struct{})
+	defer closeSignal(releaseRunner)
+	type startResult struct {
+		handle ExecutionHandle
+		err    error
+	}
+	submissionCtx, cancelSubmission := context.WithCancel(context.Background())
+	defer cancelSubmission()
+	started := make(chan startResult, 1)
+	go func() {
+		handle, err := fixture.authority.StartAgentExecution(
+			submissionCtx,
+			AgentExecutionRequest{
+				Descriptor: mustOpenSessionDescriptor(t, sessionID),
+				Resource:   CurrentAgentResource{},
+				Runner: func(ctx context.Context, _ ExecutionScope, _ AgentRuntimeBridge) error {
+					close(runnerStarted)
+					select {
+					case <-releaseRunner:
+						return nil
+					case <-ctx.Done():
+						return context.Cause(ctx)
+					}
+				},
+			},
+		)
+		started <- startResult{handle: handle, err: err}
+	}()
+
+	select {
+	case <-runnerStarted:
+		t.Fatal("Agent runner started while its Runtime Event admission was blocked")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	closeSignal(releaseBlocker)
+	var result startResult
+	select {
+	case result = <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for Agent execution start")
+	}
+	if result.err != nil {
+		t.Fatalf("start Agent execution: %v", result.err)
+	}
+	awaitRuntimeEventSignal(t, runnerStarted)
+	cancelSubmission()
+	waitCtx, cancelWait := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	if _, err := result.handle.Wait(waitCtx); !errors.Is(err, context.DeadlineExceeded) {
+		cancelWait()
+		t.Fatalf("accepted Agent execution after submitting-context cancellation = %v, want still running", err)
+	}
+	cancelWait()
+
+	unrelated, err := runtimecommand.Submit(
+		context.Background(),
+		target.Events,
+		"unrelated",
+		runtimeEventStringEcho,
+	)
+	if err != nil {
+		t.Fatalf("submit unrelated Runtime Event: %v", err)
+	}
+	if got := awaitRuntimeEventResult(t, unrelated); got != "unrelated" {
+		t.Fatalf("unrelated Runtime Event result = %q", got)
+	}
+	closeSignal(releaseRunner)
+	if _, err := result.handle.Wait(context.Background()); err != nil {
+		t.Fatalf("wait Agent execution: %v", err)
+	}
+	if current, live := fixture.authority.SessionExecution(sessionID); live || current != nil {
+		t.Fatalf("completed Agent execution remained live: %v", current)
+	}
+}
+
+func closeSignal(signal chan struct{}) {
+	select {
+	case <-signal:
+	default:
+		close(signal)
 	}
 }
 

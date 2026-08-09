@@ -797,6 +797,88 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 	if err != nil {
 		return nil, err
 	}
+	launchReady := make(chan struct{})
+	deferred, err := runtimecommand.Submit(
+		ctx,
+		resource.events,
+		agentExecutionStart{
+			request:       request,
+			resource:      resource,
+			closeResource: closeResource,
+			launchReady:   launchReady,
+		},
+		func(
+			admission runtimecommand.Admission,
+			start agentExecutionStart,
+			complete func(*execution, error),
+		) error {
+			execution, startErr := a.admitAgentExecutionStart(admission, start)
+			complete(execution, startErr)
+			return nil
+		},
+	)
+	if err != nil {
+		if errors.Is(err, runtimecommand.ErrUnavailable) {
+			return nil, errors.Join(
+				runtimeUnavailableError(resource.ref),
+				errors.New("agent execution start event was not admitted"),
+			)
+		}
+		return nil, err
+	}
+	execution, err := deferred.Await(context.Background())
+	if errors.Is(err, runtimecommand.ErrUnavailable) {
+		return nil, errors.Join(
+			runtimeUnavailableError(resource.ref),
+			errors.New("agent execution start event did not settle before runtime closure"),
+		)
+	}
+	if err != nil {
+		return nil, err
+	}
+	<-launchReady
+	launchErr := resource.engine.LaunchAgentExecution(
+		func(workCtx context.Context) error {
+			return a.runAgentExecution(workCtx, execution, request)
+		},
+		func(runErr error) {
+			execution.finish(ExecutionResult{}, runErr, nil)
+		},
+	)
+	if launchErr != nil {
+		execution.finish(ExecutionResult{}, launchErr, nil)
+		return nil, errors.Join(
+			launchErr,
+			a.closeRetiringResource(context.Background(), resource),
+		)
+	}
+	return executionHandle{execution: execution}, nil
+}
+
+type agentExecutionStart struct {
+	request       AgentExecutionRequest
+	resource      *agentResource
+	closeResource bool
+	launchReady   chan struct{}
+}
+
+func (a *Authority) admitAgentExecutionStart(
+	admission runtimecommand.Admission,
+	start agentExecutionStart,
+) (*execution, error) {
+	if start.launchReady == nil {
+		return nil, errors.New("Agent execution launch boundary is required")
+	}
+	if err := admission.StartWork(func(context.Context) {
+		close(start.launchReady)
+	}); err != nil {
+		return nil, err
+	}
+	request := start.request
+	resource := start.resource
+	closeResource := start.closeResource
+	sessionID := request.Descriptor.SessionID()
+	var err error
 	a.mu.Lock()
 	if a.closed {
 		a.mu.Unlock()
@@ -826,6 +908,15 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 		}
 	}
 	resource.mu.Lock()
+	if resource.ownerlessDisposition == agentResourceRetireWhenIdle &&
+		len(resource.owners) == 0 {
+		resource.mu.Unlock()
+		a.mu.Unlock()
+		return nil, errors.Join(
+			runtimeUnavailableError(resource.ref),
+			errors.New("agent execution start rejected because ownerless runtime retirement is pending"),
+		)
+	}
 	if resource.current != nil ||
 		resource.worktreeBoundary != nil ||
 		resource.reducerBoundary != nil {
@@ -937,22 +1028,26 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 		a.addWorkflowExecutionLocked(*workflowRef, workflowKey, execution)
 	}
 	a.mu.Unlock()
+	return execution, nil
+}
 
-	go func() {
-		if request.Workflow != nil {
-			if waitErr := request.Workflow.wait(execution.ctx); waitErr != nil {
-				execution.finish(ExecutionResult{}, waitErr, nil)
-				return
-			}
-			a.beginWorkflowExecution(execution)
+func (a *Authority) runAgentExecution(
+	workCtx context.Context,
+	execution *execution,
+	request AgentExecutionRequest,
+) error {
+	runCtx, stop := MergeContexts(execution.ctx, workCtx)
+	defer stop()
+	if request.Workflow != nil {
+		if waitErr := request.Workflow.wait(runCtx); waitErr != nil {
+			return waitErr
 		}
-		runErr := request.Runner(execution.ctx, execution.scope, AgentRuntimeBridge{
-			authority: a,
-			resource:  resource.ref,
-		})
-		execution.finish(ExecutionResult{}, runErr, nil)
-	}()
-	return executionHandle{execution: execution}, nil
+		a.beginWorkflowExecution(execution)
+	}
+	return request.Runner(runCtx, execution.scope, AgentRuntimeBridge{
+		authority: a,
+		resource:  execution.resource.ref,
+	})
 }
 
 func (a *Authority) RunCurrentAgentExecution(
