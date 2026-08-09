@@ -8,7 +8,7 @@ import (
 	"core/server/workflow"
 )
 
-func TestLifecyclePublicationResumeWaitsForConcurrentWriterBeforeReadingInterruption(t *testing.T) {
+func TestResumeCurrentNodeWaitsForConcurrentWriterBeforeReadingInterruption(t *testing.T) {
 	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
 	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
@@ -38,28 +38,20 @@ func TestLifecyclePublicationResumeWaitsForConcurrentWriterBeforeReadingInterrup
 
 	resumeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	publication, err := NewLifecyclePublication(resumeStore)
-	if err != nil {
-		t.Fatalf("NewLifecyclePublication: %v", err)
-	}
-	delta, err := NewQueuedTaskLifecycleDelta(task.ID, []workflow.CurrentNodeReference{reference})
-	if err != nil {
-		t.Fatalf("NewQueuedTaskLifecycleDelta: %v", err)
-	}
 	resumed := make(chan error, 1)
 	go func() {
-		_, err := publication.PublishResume(resumeCtx, delta)
+		_, _, err := resumeStore.ResumeCurrentNode(resumeCtx, reference)
 		resumed <- err
 	}()
 	select {
 	case err := <-resumed:
-		t.Fatalf("PublishResume returned before the competing writer committed: %v", err)
+		t.Fatalf("ResumeCurrentNode returned before the competing writer committed: %v", err)
 	case <-time.After(100 * time.Millisecond):
 	}
 	if err := writer.Commit(); err != nil {
 		t.Fatalf("commit competing writer: %v", err)
 	}
 	if err := <-resumed; err != nil {
-		t.Fatalf("PublishResume after competing commit: %v", err)
+		t.Fatalf("ResumeCurrentNode after competing commit: %v", err)
 	}
 }

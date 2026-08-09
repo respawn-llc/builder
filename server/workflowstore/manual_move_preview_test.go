@@ -78,7 +78,7 @@ func TestManualMovePreviewFindsIncomingTransitionWithoutCurrentEdge(t *testing.T
 	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	if _, err := publishTaskStartForTest(ctx, store, task.ID); err != nil {
+	if _, err := store.StartTask(ctx, task.ID); err != nil {
 		t.Fatalf("StartTask: %v", err)
 	}
 	definition, _, err := store.GetDefinition(ctx, workflowID)
@@ -103,7 +103,7 @@ func TestManualMovePreviewExpandsFanoutTransitionChoice(t *testing.T) {
 	workflowID := createFanoutJoinWorkflow(t, ctx, store)
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	if _, err := publishTaskStartForTest(ctx, store, task.ID); err != nil {
+	if _, err := store.StartTask(ctx, task.ID); err != nil {
 		t.Fatalf("StartTask: %v", err)
 	}
 	definition, _, err := store.GetDefinition(ctx, workflowID)
@@ -166,7 +166,7 @@ func TestManualMovePreviewDescribesPriorJoinParameterRequirement(t *testing.T) {
 	})
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	if _, err := publishTaskStartForTest(ctx, store, task.ID); err != nil {
+	if _, err := store.StartTask(ctx, task.ID); err != nil {
 		t.Fatalf("StartTask: %v", err)
 	}
 
@@ -217,7 +217,7 @@ func TestManualMovePreviewRequiresAndHonorsStableTransitionSelection(t *testing.
 	})
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	if _, err := publishTaskStartForTest(ctx, store, task.ID); err != nil {
+	if _, err := store.StartTask(ctx, task.ID); err != nil {
 		t.Fatalf("StartTask: %v", err)
 	}
 	definition, _, err := store.GetDefinition(ctx, workflowID)
@@ -263,7 +263,7 @@ func TestManualMovePreviewRejectsFieldsForDirectDestinations(t *testing.T) {
 	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	if _, err := publishTaskStartForTest(ctx, store, task.ID); err != nil {
+	if _, err := store.StartTask(ctx, task.ID); err != nil {
 		t.Fatalf("StartTask: %v", err)
 	}
 	definition, _, err := store.GetDefinition(ctx, workflowID)
@@ -357,7 +357,7 @@ func TestManualMovePreviewHidesAuthorizedSoleRoleSelection(t *testing.T) {
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	plan := startTask(t, ctx, store, task.ID).Mutation.Created[0]
-	review, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
+	review, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 		Source:       plan.Reference,
 		TransitionID: "review",
 		OutputValues: map[string]string{"summary": "plan complete"},
@@ -395,7 +395,7 @@ func TestManualMovePreviewHidesAuthorizedSoleRoleSelection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareManualMove: %v", err)
 	}
-	moved, err := applyManualMoveForStoreTest(store, ctx, prepared, &ExecutionTargetCandidate{
+	moved, err := store.ApplyManualMove(ctx, prepared, &ExecutionTargetCandidate{
 		Snapshot: ExecutionTargetSnapshot{
 			Mode:       workflow.ExecutionTargetModeNone,
 			Provenance: ExecutionTargetProvenanceResolved,
@@ -438,7 +438,7 @@ func TestManualMoveAppliesAutomaticSoleRoleSelection(t *testing.T) {
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	plan := startTask(t, ctx, store, task.ID).Mutation.Created[0]
-	review, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
+	review, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 		Source:       plan.Reference,
 		TransitionID: "review",
 		OutputValues: map[string]string{"summary": "plan complete"},
@@ -460,7 +460,7 @@ func TestManualMoveAppliesAutomaticSoleRoleSelection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareManualMove: %v", err)
 	}
-	moved, err := applyManualMoveForStoreTest(store, ctx, prepared, &ExecutionTargetCandidate{
+	moved, err := store.ApplyManualMove(ctx, prepared, &ExecutionTargetCandidate{
 		Snapshot: ExecutionTargetSnapshot{
 			Mode:       workflow.ExecutionTargetModeNone,
 			Provenance: ExecutionTargetProvenanceResolved,
@@ -498,7 +498,7 @@ func TestManualMoveValidatesAndAppliesManyRoleSelection(t *testing.T) {
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	plan := startTask(t, ctx, store, task.ID).Mutation.Created[0]
-	review, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
+	review, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 		Source:       plan.Reference,
 		TransitionID: "review",
 		OutputValues: map[string]string{"summary": "plan complete"},
@@ -538,7 +538,7 @@ func TestManualMoveValidatesAndAppliesManyRoleSelection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareManualMove: %v", err)
 	}
-	moved, err := applyManualMoveForStoreTest(store, ctx, prepared, &ExecutionTargetCandidate{
+	moved, err := store.ApplyManualMove(ctx, prepared, &ExecutionTargetCandidate{
 		Snapshot: ExecutionTargetSnapshot{
 			Mode:       workflow.ExecutionTargetModeNone,
 			Provenance: ExecutionTargetProvenanceResolved,
@@ -594,7 +594,7 @@ func TestManualMovePreviewBlocksSerialDestinationInsideFanoutBranch(t *testing.T
 	})
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	if _, err := publishTaskStartForTest(ctx, store, task.ID); err != nil {
+	if _, err := store.StartTask(ctx, task.ID); err != nil {
 		t.Fatalf("StartTask: %v", err)
 	}
 
@@ -613,7 +613,7 @@ func TestManualMovePreviewReportsUnavailableImmediateContext(t *testing.T) {
 	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeContinueSession, "coder")
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	if _, err := publishTaskStartForTest(ctx, store, task.ID); err != nil {
+	if _, err := store.StartTask(ctx, task.ID); err != nil {
 		t.Fatalf("StartTask: %v", err)
 	}
 	definition, _, err := store.GetDefinition(ctx, workflowID)
@@ -646,7 +646,7 @@ func TestManualMoveBackwardUsesRetainedImmediateSourceSession(t *testing.T) {
 		t.Fatalf("GetDefinition: %v", err)
 	}
 	done := nodeByKey(t, definition, "done")
-	if _, err := manualMoveTaskForStoreTest(store, ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(done)}); err != nil {
+	if _, err := store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(done)}); err != nil {
 		t.Fatalf("move to done: %v", err)
 	}
 
@@ -661,7 +661,7 @@ func TestManualMoveBackwardUsesRetainedImmediateSourceSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareManualMove backward: %v", err)
 	}
-	moved, err := applyManualMoveForStoreTest(store, ctx, prepared, &ExecutionTargetCandidate{
+	moved, err := store.ApplyManualMove(ctx, prepared, &ExecutionTargetCandidate{
 		Snapshot: ExecutionTargetSnapshot{Mode: workflow.ExecutionTargetModeNone, Provenance: ExecutionTargetProvenanceResolved},
 		Root:     ExecutionRoot{SourceWorkspaceID: binding.WorkspaceID, SourceWorkspaceRoot: binding.CanonicalRoot},
 	})
@@ -703,7 +703,7 @@ func TestManualMovePreviewAndApplyUsesUnscopedRetainedSessionForParallelTask(t *
 		started.Mutation.Created[0].Reference,
 		time.UnixMilli(1_700_000_000_000).UTC(),
 	)
-	if _, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
+	if _, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 		Source:       started.Mutation.Created[0].Reference,
 		TransitionID: "split",
 		OutputValues: map[string]string{"summary": "plan complete"},
@@ -730,7 +730,7 @@ func TestManualMovePreviewAndApplyUsesUnscopedRetainedSessionForParallelTask(t *
 	if err != nil {
 		t.Fatalf("PrepareManualMove: %v", err)
 	}
-	moved, err := applyManualMoveForStoreTest(store, ctx, prepared, &ExecutionTargetCandidate{
+	moved, err := store.ApplyManualMove(ctx, prepared, &ExecutionTargetCandidate{
 		Snapshot: ExecutionTargetSnapshot{
 			Mode:       workflow.ExecutionTargetModeNone,
 			Provenance: ExecutionTargetProvenanceResolved,
@@ -758,7 +758,7 @@ func TestManualMovePreviewPrefillsAndOverridesPendingApprovalValues(t *testing.T
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
-	if _, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
+	if _, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 		Source:       source.Reference,
 		TransitionID: "next",
 		OutputValues: map[string]string{"prior_summary": "approved plan"},
@@ -838,7 +838,7 @@ func TestManualMovePreviewPrefillsPartiallyArrivedFanoutValuesBySourceNode(t *te
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	started := startTask(t, ctx, store, task.ID)
-	splitResult, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
+	splitResult, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 		Source:       started.Mutation.Created[0].Reference,
 		TransitionID: "split",
 		OutputValues: map[string]string{"summary": "plan summary"},
@@ -854,7 +854,7 @@ func TestManualMovePreviewPrefillsPartiallyArrivedFanoutValuesBySourceNode(t *te
 		}
 		branches[key] = branch
 	}
-	if _, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
+	if _, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 		Source:       branches["split_a"].Reference,
 		TransitionID: "join_a",
 		OutputValues: map[string]string{"joined": "arrived from A"},

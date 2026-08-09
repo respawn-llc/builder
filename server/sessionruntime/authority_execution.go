@@ -19,46 +19,10 @@ import (
 
 type ExecutionHandle interface {
 	Scope() ExecutionScope
-	PublishRunning(context.Context, WorkflowRunningPublication) error
 	RequestStop() bool
 	Stop(context.Context) error
 	Wait(context.Context) (ExecutionResult, error)
 	Close(context.Context) error
-}
-
-type WorkflowRunningPublication interface {
-	PublishWorkflowRunning(context.Context, TaskExecution, WorkflowRunningActivation) error
-}
-
-// WorkflowRunningActivation is a single-use staged Authority capability.
-// Lifecycle Publication activates it only after every fallible root validation
-// has succeeded and immediately before the infallible root swap.
-type WorkflowRunningActivation interface {
-	Scope() ExecutionScope
-	Activate() error
-}
-
-type WorkflowRunningPublicationError struct {
-	cause     error
-	activated bool
-}
-
-func (e *WorkflowRunningPublicationError) Error() string {
-	if e == nil || e.cause == nil {
-		return "workflow running publication failed"
-	}
-	return e.cause.Error()
-}
-
-func (e *WorkflowRunningPublicationError) Unwrap() error {
-	if e == nil {
-		return nil
-	}
-	return e.cause
-}
-
-func (e *WorkflowRunningPublicationError) Activated() bool {
-	return e != nil && e.activated
 }
 
 type ExecutionResult struct {
@@ -70,7 +34,6 @@ type executionPhase uint8
 
 const (
 	executionPhaseQueued executionPhase = iota + 1
-	executionPhasePublishing
 	executionPhaseRunning
 	executionPhaseFinalizing
 )
@@ -99,69 +62,19 @@ type ExecutionPromptFeed interface {
 	PromptResolvedScope(ExecutionScope, string) error
 }
 
-type joinedExecutionPromptFeed struct {
-	first  ExecutionPromptFeed
-	second ExecutionPromptFeed
-}
-
-func joinExecutionPromptFeeds(first, second ExecutionPromptFeed) ExecutionPromptFeed {
-	switch {
-	case first == nil:
-		return second
-	case second == nil:
-		return first
-	default:
-		return joinedExecutionPromptFeed{first: first, second: second}
-	}
-}
-
-func (f joinedExecutionPromptFeed) PromptPendingScope(
-	scope ExecutionScope,
-	request tools.AskQuestionRequest,
-	createdAt time.Time,
-) error {
-	if err := f.first.PromptPendingScope(scope, request, createdAt); err != nil {
-		return err
-	}
-	if err := f.second.PromptPendingScope(scope, request, createdAt); err != nil {
-		return errors.Join(err, f.first.PromptResolvedScope(scope, request.ID))
-	}
-	return nil
-}
-
-func (f joinedExecutionPromptFeed) PromptResolvedScope(
-	scope ExecutionScope,
-	requestID string,
-) error {
-	if err := f.first.PromptResolvedScope(scope, requestID); err != nil {
-		return err
-	}
-	return f.second.PromptResolvedScope(scope, requestID)
-}
-
 type execution struct {
-	authority       *Authority
-	exactMu         sync.Mutex
-	resource        *agentResource
-	scope           ExecutionScope
-	script          *TaskScriptExecutionTarget
-	workflow        *runtime.CurrentNodeExecutionBinding
-	ctx             context.Context
-	cancel          context.CancelFunc
-	done            chan struct{}
-	started         chan struct{}
-	runningPublish  WorkflowRunningPublication
-	publishOnce     sync.Once
-	publishDone     chan struct{}
-	publishErr      error
-	startOnce       sync.Once
-	disposition     chan struct{}
-	dispositionOnce sync.Once
+	authority *Authority
+	exactMu   sync.Mutex
+	resource  *agentResource
+	scope     ExecutionScope
+	script    *TaskScriptExecutionTarget
+	workflow  *runtime.CurrentNodeExecutionBinding
+	ctx       context.Context
+	cancel    context.CancelFunc
+	done      chan struct{}
 
 	resultMu sync.RWMutex
 	result   ExecutionResult
-	start    TaskExecution
-	startErr error
 	runErr   error
 	stopErr  error
 	prompts  executionPromptStore
@@ -175,129 +88,11 @@ type executionHandle struct {
 	execution *execution
 }
 
-type workflowRunningActivationState uint8
-
-const (
-	workflowRunningActivationPrepared workflowRunningActivationState = iota + 1
-	workflowRunningActivationCommitted
-	workflowRunningActivationFailed
-)
-
-type workflowRunningActivation struct {
-	mu        sync.Mutex
-	execution *execution
-	state     workflowRunningActivationState
-}
-
-func (a *workflowRunningActivation) Scope() ExecutionScope {
-	if a == nil || a.execution == nil {
-		return ExecutionScope{}
-	}
-	return a.execution.scope
-}
-
-func (a *workflowRunningActivation) Activate() error {
-	if a == nil || a.execution == nil {
-		return errors.New("workflow running activation is required")
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.state != workflowRunningActivationPrepared {
-		return fmt.Errorf("workflow running activation cannot activate from state %d", a.state)
-	}
-
-	execution := a.execution
-	authority := execution.authority
-	authority.mu.Lock()
-	var err error
-	switch {
-	case authority.byScope[execution.scope.ID()] != execution:
-		err = ErrExecutionNoLongerLive
-	case execution.phase != executionPhasePublishing &&
-		!(execution.phase == executionPhaseRunning && execution.runningPublish == nil):
-		err = fmt.Errorf(
-			"workflow execution scope %s cannot activate from phase %d",
-			execution.scope.ID(),
-			execution.phase,
-		)
-	case context.Cause(execution.ctx) != nil:
-		err = context.Cause(execution.ctx)
-	default:
-		if execution.phase == executionPhasePublishing {
-			execution.phase = executionPhaseRunning
-		}
-	}
-	authority.mu.Unlock()
-
-	if err == nil {
-		a.state = workflowRunningActivationCommitted
-	} else {
-		a.state = workflowRunningActivationFailed
-	}
-	return err
-}
-
-func (a *workflowRunningActivation) committed() bool {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.state == workflowRunningActivationCommitted
-}
-
 func (h executionHandle) Scope() ExecutionScope {
 	if h.execution == nil {
 		panic("execution handle is uninitialized")
 	}
 	return h.execution.scope
-}
-
-func (h executionHandle) PublishRunning(
-	ctx context.Context,
-	publication WorkflowRunningPublication,
-) error {
-	if h.execution == nil {
-		panic("execution handle is uninitialized")
-	}
-	if publication == nil {
-		return errors.New("running execution publication is required")
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	select {
-	case <-h.execution.started:
-	case <-ctx.Done():
-		return context.Cause(ctx)
-	}
-	h.execution.resultMu.RLock()
-	start := cloneTaskExecution(h.execution.start)
-	startErr := h.execution.startErr
-	h.execution.resultMu.RUnlock()
-	if startErr != nil {
-		return startErr
-	}
-	h.execution.publishOnce.Do(func() {
-		activation := &workflowRunningActivation{
-			execution: h.execution,
-			state:     workflowRunningActivationPrepared,
-		}
-		publishErr := publication.PublishWorkflowRunning(ctx, start, activation)
-		if publishErr != nil {
-			h.execution.publishErr = &WorkflowRunningPublicationError{
-				cause:     publishErr,
-				activated: activation.committed(),
-			}
-		}
-		if h.execution.publishErr == nil && !activation.committed() {
-			h.execution.publishErr = errors.New("running execution publication returned without Authority activation")
-		}
-		close(h.execution.publishDone)
-	})
-	select {
-	case <-h.execution.publishDone:
-		return h.execution.publishErr
-	case <-ctx.Done():
-		return context.Cause(ctx)
-	}
 }
 
 func (h executionHandle) Stop(ctx context.Context) error {
@@ -371,13 +166,19 @@ func (e *execution) stopError() error {
 }
 
 func (e *execution) finish(result ExecutionResult, runErr error, stopErr error) {
-	e.publishStart(TaskExecution{}, runErr)
 	drainErr := e.drainQueuedWorkBeforeRetirement(runErr, stopErr)
 	cleanupErr := e.cleanup()
 	e.retire()
 
 	authority := e.authority
-	executionErr := errors.Join(runErr, drainErr)
+	executionErr := runErr
+	if drainErr != nil {
+		executionErr = errors.Join(executionErr, drainErr)
+	}
+	abort, abortErr := runtimeAbortFromError(runErr)
+	if abortErr != nil {
+		executionErr = errors.Join(executionErr, abortErr)
+	}
 	var closeErr error
 	if e.resource != nil {
 		if e.resource.eventBridge != nil {
@@ -397,11 +198,21 @@ func (e *execution) finish(result ExecutionResult, runErr error, stopErr error) 
 			e.resource.requestRetirementIfOwnerless()
 		}
 		closeErr = e.resource.releasePin()
+		if abort {
+			closeErr = errors.Join(
+				closeErr,
+				authority.retireRuntimeAbortResource(context.Background(), e.resource),
+			)
+		}
+	}
+	finalErr := executionErr
+	if cleanupErr != nil || closeErr != nil {
+		finalErr = errors.Join(finalErr, cleanupErr, closeErr)
 	}
 	e.resultMu.Lock()
 	e.result = result
-	e.runErr = errors.Join(executionErr, cleanupErr, closeErr)
-	e.stopErr = errors.Join(stopErr, drainErr, cleanupErr, closeErr)
+	e.runErr = finalErr
+	e.stopErr = errors.Join(stopErr, drainErr, cleanupErr, closeErr, abortErr)
 	e.resultMu.Unlock()
 	if _, hasWorkflow := e.scope.Workflow(); hasWorkflow && authority.executionFinalized != nil {
 		authority.executionFinalized.ExecutionFinalized(e.scope)
@@ -409,31 +220,22 @@ func (e *execution) finish(result ExecutionResult, runErr error, stopErr error) 
 	close(e.done)
 }
 
-func (e *execution) publishStart(start TaskExecution, err error) {
-	e.startOnce.Do(func() {
-		e.resultMu.Lock()
-		e.start = cloneTaskExecution(start)
-		e.startErr = err
-		e.resultMu.Unlock()
-		close(e.started)
-	})
-}
-
-func (e *execution) publishConfiguredRunning() error {
-	if e.runningPublish == nil {
-		return nil
+func runtimeAbortFromError(err error) (bool, error) {
+	type runtimeAbort interface {
+		RuntimeAbortDisposition() (committed bool, cause error)
 	}
-	return (executionHandle{execution: e}).PublishRunning(e.ctx, e.runningPublish)
-}
-
-func (e *execution) confirmDisposition() {
-	e.dispositionOnce.Do(func() {
-		close(e.disposition)
-	})
-}
-
-func (e *execution) awaitDisposition() {
-	<-e.disposition
+	var abort runtimeAbort
+	if !errors.As(err, &abort) {
+		return false, nil
+	}
+	_, cause := abort.RuntimeAbortDisposition()
+	if cause == nil || !errors.Is(err, cause) {
+		return true, fmt.Errorf(
+			"runtime abort disposition %T must expose its exact cause through the error chain",
+			abort,
+		)
+	}
+	return true, nil
 }
 
 func (e *execution) drainQueuedWorkBeforeRetirement(runErr error, stopErr error) error {
@@ -461,38 +263,21 @@ func (e *execution) retire() {
 	authority.mu.Unlock()
 }
 
-// beginWorkflowFinalization keeps the same Exact Execution Scope live while
-// the mandatory result finalizer runs.
+// beginWorkflowFinalization removes a terminal Script from workflow liveness
+// indexes while retaining its Exact Execution Scope for its completion
+// finalizer. A Script becomes terminal when its process exits or Start fails.
+// Its finalizer can still prove Current Node ownership, but no longer
+// authorizes Interrupt or appears in queued/running read models.
 func (e *execution) beginWorkflowFinalization() {
 	e.authority.mu.Lock()
 	if e.authority.byScope[e.scope.ID()] != e {
 		e.authority.mu.Unlock()
 		return
 	}
-	if e.phase != executionPhaseQueued &&
-		e.phase != executionPhasePublishing &&
-		e.phase != executionPhaseRunning {
+	if e.phase != executionPhaseQueued && e.phase != executionPhaseRunning {
 		e.authority.mu.Unlock()
 		panic(fmt.Sprintf(
 			"workflow execution scope %s began finalization from phase %d",
-			e.scope.ID(),
-			e.phase,
-		))
-	}
-	e.phase = executionPhaseFinalizing
-	e.authority.mu.Unlock()
-}
-
-func (e *execution) beginWorkflowStartupFailureFinalization() {
-	e.authority.mu.Lock()
-	if e.authority.byScope[e.scope.ID()] != e {
-		e.authority.mu.Unlock()
-		return
-	}
-	if e.phase != executionPhaseQueued {
-		e.authority.mu.Unlock()
-		panic(fmt.Sprintf(
-			"workflow execution scope %s began startup-failure finalization from phase %d",
 			e.scope.ID(),
 			e.phase,
 		))
@@ -608,7 +393,6 @@ type promptSuccessorObservation struct {
 }
 
 type executionPromptEntry struct {
-	resolutionMu    sync.Mutex
 	snapshot        ExecutionPromptSnapshot
 	response        chan executionPromptResult
 	publicationDone chan struct{}
@@ -695,8 +479,6 @@ func (s *executionPromptStore) Await(ctx context.Context, req tools.AskQuestionR
 	s.observePromptSuccessorLocked(requestID)
 	s.mu.Unlock()
 	defer func() {
-		entry.resolutionMu.Lock()
-		defer entry.resolutionMu.Unlock()
 		s.mu.Lock()
 		current := s.pending[requestID]
 		if current == entry {
@@ -751,21 +533,9 @@ func (s *executionPromptStore) submit(
 	if s.authority == nil {
 		return PromptResponseAcceptance{}, errors.New("session runtime authority is required")
 	}
-	s.mu.RLock()
-	entry := s.pending[requestID]
-	s.mu.RUnlock()
-	if entry == nil {
-		return PromptResponseAcceptance{}, fmt.Errorf(
-			"prompt %q not found: %w",
-			requestID,
-			serverapi.ErrPromptNotFound,
-		)
-	}
-	<-entry.publicationDone
-	entry.resolutionMu.Lock()
-	defer entry.resolutionMu.Unlock()
 	s.mu.Lock()
-	if s.pending[requestID] != entry {
+	entry := s.pending[requestID]
+	if entry == nil {
 		s.mu.Unlock()
 		return PromptResponseAcceptance{}, fmt.Errorf(
 			"prompt %q not found: %w",
@@ -777,37 +547,43 @@ func (s *executionPromptStore) submit(
 		s.mu.Unlock()
 		return PromptResponseAcceptance{}, err
 	}
-	successorIDs, preparationErr := preparedSuccessorPromptIDs(entry.snapshot.Request, submitErr)
-	s.mu.Unlock()
-	publicationErr := s.publishResolved(entry.snapshot)
-	if publicationErr != nil {
-		return PromptResponseAcceptance{}, errors.Join(preparationErr, publicationErr)
+	successorIDs, err := preparedSuccessorPromptIDs(entry.snapshot.Request, submitErr)
+	if err != nil {
+		if !s.removePromptEntryLocked(requestID, entry) {
+			s.mu.Unlock()
+			return PromptResponseAcceptance{}, reportPromptInvariant(
+				"remove_invalid_prompt_response",
+				requestID,
+				"pending prompt changed while the prompt store lock was held",
+			)
+		}
+		s.mu.Unlock()
+		publicationErr := s.deliverPromptResolution(entry, nil, err)
+		return PromptResponseAcceptance{}, errors.Join(err, publicationErr)
 	}
-	s.mu.Lock()
 	acceptance := PromptResponseAcceptance{}
-	if preparationErr == nil && latchSuccessor {
-		observation := &promptSuccessorObservation{
+	var observation *promptSuccessorObservation
+	if latchSuccessor {
+		observation = &promptSuccessorObservation{
 			done:         make(chan struct{}),
 			successorIDs: successorIDs,
 		}
 		acceptance.observation = observation
-		s.registerPromptSuccessorObservationLocked(observation)
 	}
 	if !s.removePromptEntryLocked(requestID, entry) {
 		s.mu.Unlock()
 		return PromptResponseAcceptance{}, reportPromptInvariant(
 			"remove_prompt_response",
 			requestID,
-			"pending prompt changed during lifecycle publication",
+			"pending prompt changed while the prompt store lock was held",
 		)
 	}
-	s.mu.Unlock()
-	if preparationErr != nil {
-		entry.response <- executionPromptResult{err: preparationErr}
-		return PromptResponseAcceptance{}, preparationErr
+	if observation != nil {
+		s.registerPromptSuccessorObservationLocked(observation)
 	}
-	entry.response <- executionPromptResult{resolution: resolution, err: submitErr}
-	return acceptance, nil
+	s.mu.Unlock()
+	publicationErr := s.deliverPromptResolution(entry, resolution, submitErr)
+	return acceptance, publicationErr
 }
 
 func reportPromptInvariant(operation string, promptID string, detail string) error {
@@ -889,26 +665,7 @@ func (s *executionPromptStore) Close(err error) error {
 		return nil
 	}
 	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		return nil
-	}
-	s.closed = true
-	entries := make([]*executionPromptEntry, 0, len(s.pending))
-	for _, entry := range s.pending {
-		entries = append(entries, entry)
-	}
-	s.mu.Unlock()
-	for _, entry := range entries {
-		entry.resolutionMu.Lock()
-	}
-	defer func() {
-		for _, entry := range entries {
-			entry.resolutionMu.Unlock()
-		}
-	}()
-	s.mu.Lock()
-	closure := s.closePendingLocked(err)
+	closure := s.closeLocked(err)
 	s.mu.Unlock()
 	publicationErr := s.publishClosure(closure)
 	s.releaseClosure(closure)
@@ -923,10 +680,6 @@ func (s *executionPromptStore) closeLocked(err error) executionPromptClosure {
 		return executionPromptClosure{}
 	}
 	s.closed = true
-	return s.closePendingLocked(err)
-}
-
-func (s *executionPromptStore) closePendingLocked(err error) executionPromptClosure {
 	closure := executionPromptClosure{
 		err:     err,
 		entries: make([]*executionPromptEntry, 0, len(s.pending)),

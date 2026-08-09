@@ -154,15 +154,12 @@ type AgentRunner func(context.Context, ExecutionScope, AgentRuntimeBridge) error
 type ExecutionAskHandler func(context.Context, ExecutionScope, tools.AskQuestionRequest) (tools.AskQuestionResolution, error)
 
 type AgentExecutionRequest struct {
-	Descriptor         session.SessionDescriptor
-	Runtime            *AgentRuntimePlan
-	Workflow           *WorkflowExecutionLease
-	Resource           AgentResourceSelection
-	Ask                ExecutionAskHandler
-	PromptFeed         ExecutionPromptFeed
-	RunningPublication WorkflowRunningPublication
-	Runner             AgentRunner
-	Finalize           func(context.Context, ExecutionScope, error) error
+	Descriptor session.SessionDescriptor
+	Runtime    *AgentRuntimePlan
+	Workflow   *WorkflowExecutionLease
+	Resource   AgentResourceSelection
+	Ask        ExecutionAskHandler
+	Runner     AgentRunner
 }
 
 type agentResource struct {
@@ -481,63 +478,6 @@ func (a *Authority) OpenRuntime(ctx context.Context, request RuntimeOpenRequest)
 	return RuntimeAttachment{authority: a, resource: resource.ref, ownerID: ownerID}, nil
 }
 
-func (a *Authority) AttachWorkflowRuntime(
-	ctx context.Context,
-	ref runtimeids.SessionResourceRef,
-	scopeID runtimeids.ExecutionScopeID,
-	ownerID string,
-) (RuntimeAttachment, error) {
-	if a == nil {
-		return RuntimeAttachment{}, errors.New("session runtime authority is required")
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if err := context.Cause(ctx); err != nil {
-		return RuntimeAttachment{}, err
-	}
-	if err := ref.Validate(); err != nil {
-		return RuntimeAttachment{}, err
-	}
-	if scopeID.IsZero() {
-		return RuntimeAttachment{}, errors.New("workflow execution scope id is required")
-	}
-	ownerID = strings.TrimSpace(ownerID)
-	if ownerID == "" {
-		return RuntimeAttachment{}, errors.New("runtime owner id is required")
-	}
-	gate := a.gateFor(ref.SessionID())
-	if err := gate.lock.LockContext(ctx); err != nil {
-		return RuntimeAttachment{}, err
-	}
-	defer gate.lock.Unlock()
-
-	a.mu.Lock()
-	resource := a.resources[ref.SessionID()]
-	execution := a.byScope[scopeID]
-	a.mu.Unlock()
-	if resource == nil || resource.ref != ref {
-		return RuntimeAttachment{}, ErrExecutionNoLongerLive
-	}
-	if execution == nil || execution.resource != resource {
-		return RuntimeAttachment{}, ErrExecutionNoLongerLive
-	}
-	if _, workflowScoped := execution.scope.Workflow(); !workflowScoped {
-		return RuntimeAttachment{}, errors.New("execution scope is not workflow-owned")
-	}
-	resource.mu.Lock()
-	defer resource.mu.Unlock()
-	if resource.state != AgentResourceReady ||
-		resource.current != execution ||
-		execution.scope.ID() != scopeID {
-		return RuntimeAttachment{}, ErrExecutionNoLongerLive
-	}
-	resource.owners[ownerID] = struct{}{}
-	resource.ownerlessDisposition = agentResourceRemainAvailable
-	resource.signalLocked()
-	return RuntimeAttachment{authority: a, resource: resource.ref, ownerID: ownerID}, nil
-}
-
 func (a *Authority) ReleaseRuntime(ctx context.Context, request RuntimeReleaseRequest) (RuntimeReleaseResult, error) {
 	if a == nil {
 		return RuntimeReleaseResult{}, errors.New("session runtime authority is required")
@@ -840,20 +780,16 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 	}
 	runCtx, cancel := context.WithCancel(resource.ctx)
 	execution := &execution{
-		authority:      a,
-		resource:       resource,
-		scope:          scope,
-		workflow:       workflowBinding,
-		ctx:            runCtx,
-		cancel:         cancel,
-		done:           make(chan struct{}),
-		started:        make(chan struct{}),
-		runningPublish: request.RunningPublication,
-		publishDone:    make(chan struct{}),
-		disposition:    make(chan struct{}),
-		prompts:        newExecutionPromptStore(a, scope, joinExecutionPromptFeeds(request.PromptFeed, a.promptFeed)),
-		closeResource:  closeResource,
-		phase:          executionPhaseRunning,
+		authority:     a,
+		resource:      resource,
+		scope:         scope,
+		workflow:      workflowBinding,
+		ctx:           runCtx,
+		cancel:        cancel,
+		done:          make(chan struct{}),
+		prompts:       newExecutionPromptStore(a, scope, a.promptFeed),
+		closeResource: closeResource,
+		phase:         executionPhaseRunning,
 	}
 	if workflowRef != nil {
 		execution.phase = executionPhaseQueued
@@ -888,31 +824,11 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 			}
 			a.beginWorkflowExecution(execution)
 		}
-		var runErr error
-		if request.Workflow != nil {
-			runErr = execution.publishConfiguredRunning()
-		}
-		if runErr == nil {
-			runErr = request.Runner(execution.ctx, execution.scope, AgentRuntimeBridge{
-				authority: a,
-				resource:  resource.ref,
-			})
-		}
-		if request.Workflow != nil {
-			execution.beginWorkflowFinalization()
-		}
-		var finalizeErr error
-		if request.Finalize != nil {
-			finalizeErr = request.Finalize(execution.ctx, execution.scope, runErr)
-		}
-		if request.Workflow != nil {
-			if finalizeErr == nil {
-				execution.confirmDisposition()
-			} else {
-				execution.awaitDisposition()
-			}
-		}
-		execution.finish(ExecutionResult{}, errors.Join(runErr, finalizeErr), nil)
+		runErr := request.Runner(execution.ctx, execution.scope, AgentRuntimeBridge{
+			authority: a,
+			resource:  resource.ref,
+		})
+		execution.finish(ExecutionResult{}, runErr, nil)
 	}()
 	return executionHandle{execution: execution}, nil
 }
@@ -985,28 +901,8 @@ func (a *Authority) WithRuntime(ctx context.Context, ref runtimeids.SessionResou
 }
 
 func (a *Authority) WithCurrentRuntime(ctx context.Context, sessionID runtimeids.SessionID, callback func(context.Context, *runtime.Engine) error) error {
-	if callback == nil {
-		return errors.New("agent resource callback is required")
-	}
-	return a.WithCurrentRuntimeResource(
-		ctx,
-		sessionID,
-		func(ctx context.Context, _ runtimeids.SessionResourceRef, engine *runtime.Engine) error {
-			return callback(ctx, engine)
-		},
-	)
-}
-
-func (a *Authority) WithCurrentRuntimeResource(
-	ctx context.Context,
-	sessionID runtimeids.SessionID,
-	callback func(context.Context, runtimeids.SessionResourceRef, *runtime.Engine) error,
-) error {
 	if a == nil {
 		return errors.New("session runtime authority is required")
-	}
-	if callback == nil {
-		return errors.New("agent resource callback is required")
 	}
 	if sessionID.IsZero() {
 		return errors.New("session id is required")
@@ -1020,10 +916,7 @@ func (a *Authority) WithCurrentRuntimeResource(
 			fmt.Errorf("session %s has no active runtime available", sessionID),
 		)
 	}
-	ref := resource.ref
-	return resource.withEngine(ctx, ref, func(ctx context.Context, engine *runtime.Engine) error {
-		return callback(ctx, ref, engine)
-	})
+	return resource.withEngine(ctx, resource.ref, callback)
 }
 
 func (a *Authority) WithLiveExecutionRuntime(

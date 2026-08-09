@@ -107,7 +107,9 @@ func TestTaskDependencyMutationsAdvanceCollidingTimestamps(t *testing.T) {
 		t.Fatalf("re-add dependency: %v", err)
 	}
 	store.now = func() time.Time { return time.UnixMilli(pinned + 3) }
-	deleteTaskThroughLifecyclePublication(t, store, ctx, blocked.ID)
+	if _, err := store.DeleteTask(ctx, blocked.ID); err != nil {
+		t.Fatalf("DeleteTask: %v", err)
+	}
 	if got := taskUpdatedAt(t, store, blocker.ID); got != pinned+4 {
 		t.Fatalf("surviving task timestamp after dependency deletion = %d, want %d", got, pinned+4)
 	}

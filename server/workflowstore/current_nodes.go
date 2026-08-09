@@ -77,96 +77,6 @@ func interruptCurrentNodeQuery(
 	})
 }
 
-func interruptAdmittedCurrentNodeQuery(
-	ctx context.Context,
-	q *sqlitegen.Queries,
-	reference workflow.CurrentNodeReference,
-	reason workflow.CurrentNodeInterruptionReason,
-	detailJSON string,
-	now int64,
-) (int64, error) {
-	if branchKey, branchScoped := reference.TransitionBranchKey(); branchScoped {
-		return q.InterruptBranchAdmittedCurrentNode(ctx, sqlitegen.InterruptBranchAdmittedCurrentNodeParams{
-			TaskID:                 string(reference.TaskID),
-			NodeID:                 string(reference.NodeID),
-			TransitionBranchKey:    sql.NullString{String: string(branchKey), Valid: true},
-			InterruptionReason:     sql.NullString{String: string(reason), Valid: true},
-			InterruptionDetailJson: sql.NullString{String: detailJSON, Valid: true},
-			InterruptedAtUnixMs:    sql.NullInt64{Int64: now, Valid: true},
-		})
-	}
-	return q.InterruptSerialAdmittedCurrentNode(ctx, sqlitegen.InterruptSerialAdmittedCurrentNodeParams{
-		TaskID:                 string(reference.TaskID),
-		NodeID:                 string(reference.NodeID),
-		InterruptionReason:     sql.NullString{String: string(reason), Valid: true},
-		InterruptionDetailJson: sql.NullString{String: detailJSON, Valid: true},
-		InterruptedAtUnixMs:    sql.NullInt64{Int64: now, Valid: true},
-	})
-}
-
-type preparedCurrentNodeInterruption struct {
-	*preparedSQLLifecycleMutation
-}
-
-func (s *Store) prepareCurrentNodeInterruption(
-	ctx context.Context,
-	references []workflow.CurrentNodeReference,
-	predecessor CurrentNodeInterruptionPredecessor,
-	reason workflow.CurrentNodeInterruptionReason,
-	detail workflow.CurrentNodeInterruptionDetail,
-) (*preparedCurrentNodeInterruption, error) {
-	if len(references) == 0 {
-		return nil, errors.New("current node interruption requires Current Nodes")
-	}
-	taskID := references[0].TaskID
-	if strings.TrimSpace(string(reason)) == "" {
-		return nil, errors.New("current node interruption reason is required")
-	}
-	detailJSON, err := json.Marshal(detail)
-	if err != nil {
-		return nil, fmt.Errorf("encode current node interruption detail: %w", err)
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	rollbackOnError := func(cause error) (*preparedCurrentNodeInterruption, error) {
-		rollbackErr := tx.Rollback()
-		if errors.Is(rollbackErr, sql.ErrTxDone) {
-			rollbackErr = nil
-		}
-		return nil, errors.Join(cause, rollbackErr)
-	}
-	q := s.queries.WithTx(tx)
-	now := s.now().UTC().UnixMilli()
-	for _, reference := range references {
-		if err := reference.Validate(); err != nil {
-			return rollbackOnError(err)
-		}
-		if reference.TaskID != taskID {
-			return rollbackOnError(errors.New("current node interruption cannot cross Tasks"))
-		}
-		var interrupted int64
-		switch predecessor {
-		case CurrentNodeInterruptionFromAdmitted:
-			interrupted, err = interruptAdmittedCurrentNodeQuery(ctx, q, reference, reason, string(detailJSON), now)
-		case CurrentNodeInterruptionFromReadyOrAdmitted:
-			interrupted, err = interruptCurrentNodeQuery(ctx, q, reference, reason, string(detailJSON), now)
-		default:
-			return rollbackOnError(errors.New("current node interruption predecessor is invalid"))
-		}
-		if err != nil {
-			return rollbackOnError(err)
-		}
-		if interrupted != 1 {
-			return rollbackOnError(sql.ErrNoRows)
-		}
-	}
-	return &preparedCurrentNodeInterruption{
-		preparedSQLLifecycleMutation: newPreparedSQLLifecycleMutation(tx),
-	}, nil
-}
-
 // ListCurrentNodesByTaskWithQueries decodes Current Nodes through the supplied
 // generated queries. A read-only transaction can therefore own the query
 // generation without duplicating the canonical Current Node decoder.
@@ -411,28 +321,7 @@ func insertTaskCurrentNode(ctx context.Context, q *sqlitegen.Queries, currentNod
 	if err != nil {
 		return fmt.Errorf("resolve current node kind: %w", err)
 	}
-	if err := insertTaskCurrentNodeWithKind(ctx, q, currentNode, workflow.NodeKind(node.Kind)); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (s *Store) CurrentNodeKind(
-	ctx context.Context,
-	reference workflow.CurrentNodeReference,
-) (workflow.NodeKind, error) {
-	if err := reference.Validate(); err != nil {
-		return "", err
-	}
-	node, err := s.queries.GetWorkflowNode(ctx, string(reference.NodeID))
-	if err != nil {
-		return "", err
-	}
-	kind := workflow.NodeKind(node.Kind)
-	if !executableNodeKind(kind) {
-		return "", fmt.Errorf("current node %v has non-executable Node kind %q", reference, kind)
-	}
-	return kind, nil
+	return insertTaskCurrentNodeWithKind(ctx, q, currentNode, workflow.NodeKind(node.Kind))
 }
 
 func insertTaskCurrentNodeWithKind(
@@ -457,21 +346,7 @@ func insertTaskCurrentNodeWithKind(
 	if err != nil {
 		return err
 	}
-	if err := q.InsertTaskCurrentNode(ctx, params); err != nil {
-		return err
-	}
-	if currentNode.SessionID == nil {
-		return nil
-	}
-	association := TaskSessionAssociationRequest{
-		SessionID:    *currentNode.SessionID,
-		CurrentNode:  currentNode.Reference,
-		AssociatedAt: time.Now().UTC(),
-	}
-	if err := bindSessionToTask(ctx, q, association); err != nil {
-		return err
-	}
-	return upsertTaskSessionAssociation(ctx, q, association)
+	return q.InsertTaskCurrentNode(ctx, params)
 }
 
 func deleteTaskCurrentNode(ctx context.Context, q *sqlitegen.Queries, reference workflow.CurrentNodeReference) (int64, error) {
@@ -489,53 +364,102 @@ func deleteTaskCurrentNode(ctx context.Context, q *sqlitegen.Queries, reference 
 	})
 }
 
-func (s *Store) prepareCurrentNodeAdmission(
-	ctx context.Context,
-	reference workflow.CurrentNodeReference,
-) (*preparedSQLLifecycleMutation, error) {
+// AdmitCurrentNode atomically moves a ready executable Current Node into the
+// durable restart-marker state before Workflow Execution starts its
+// process-local Exact Execution Scope.
+func (s *Store) AdmitCurrentNode(ctx context.Context, reference workflow.CurrentNodeReference) error {
 	if err := reference.Validate(); err != nil {
-		return nil, err
+		return err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	rollbackOnError := func(cause error) (*preparedSQLLifecycleMutation, error) {
-		rollbackErr := tx.Rollback()
-		if errors.Is(rollbackErr, sql.ErrTxDone) {
-			rollbackErr = nil
-		}
-		return nil, errors.Join(cause, rollbackErr)
-	}
-	q := s.queries.WithTx(tx)
 	var (
 		admitted int64
-		admitErr error
+		err      error
 	)
 	if branchKey, branchScoped := reference.TransitionBranchKey(); branchScoped {
-		admitted, admitErr = q.AdmitBranchCurrentNode(ctx, sqlitegen.AdmitBranchCurrentNodeParams{
+		admitted, err = s.queries.AdmitBranchCurrentNode(ctx, sqlitegen.AdmitBranchCurrentNodeParams{
 			TaskID:              string(reference.TaskID),
 			NodeID:              string(reference.NodeID),
 			TransitionBranchKey: sql.NullString{String: string(branchKey), Valid: true},
 		})
 	} else {
-		admitted, admitErr = q.AdmitSerialCurrentNode(ctx, sqlitegen.AdmitSerialCurrentNodeParams{
+		admitted, err = s.queries.AdmitSerialCurrentNode(ctx, sqlitegen.AdmitSerialCurrentNodeParams{
 			TaskID: string(reference.TaskID),
 			NodeID: string(reference.NodeID),
 		})
 	}
-	if admitErr != nil {
-		return rollbackOnError(admitErr)
+	if err != nil {
+		return err
 	}
 	if admitted != 1 {
-		return rollbackOnError(sql.ErrNoRows)
+		return sql.ErrNoRows
 	}
-	return newPreparedSQLLifecycleMutation(tx), nil
+	return nil
+}
+
+// ResumeCurrentNode clears an interrupted restart marker. Workflow Execution
+// immediately follows it with AdmitCurrentNode under the same mutation permit;
+// it is deliberately not an automatic recovery path.
+func (s *Store) ResumeCurrentNode(ctx context.Context, reference workflow.CurrentNodeReference) (InterruptedCurrentNodeAttentionProjection, bool, error) {
+	if err := reference.Validate(); err != nil {
+		return InterruptedCurrentNodeAttentionProjection{}, false, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return InterruptedCurrentNodeAttentionProjection{}, false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	q := s.queries.WithTx(tx)
+	branchKey, branchScoped := reference.TransitionBranchKey()
+	var branchValue any
+	if branchScoped {
+		branchValue = string(branchKey)
+	}
+	locked, err := q.AcquireCurrentNodeResumeWriteLock(ctx, sqlitegen.AcquireCurrentNodeResumeWriteLockParams{
+		TaskID:              string(reference.TaskID),
+		NodeID:              string(reference.NodeID),
+		TransitionBranchKey: branchValue,
+	})
+	if err != nil {
+		return InterruptedCurrentNodeAttentionProjection{}, false, err
+	}
+	if locked != 1 {
+		return InterruptedCurrentNodeAttentionProjection{}, false, sql.ErrNoRows
+	}
+	projection, found, err := pendingInterruptedCurrentNodeAttentionProjection(ctx, q, reference)
+	if err != nil {
+		return InterruptedCurrentNodeAttentionProjection{}, false, err
+	}
+	var (
+		resumed   int64
+		resumeErr error
+	)
+	if branchScoped {
+		resumed, resumeErr = q.ResumeBranchCurrentNode(ctx, sqlitegen.ResumeBranchCurrentNodeParams{
+			TaskID:              string(reference.TaskID),
+			NodeID:              string(reference.NodeID),
+			TransitionBranchKey: sql.NullString{String: string(branchKey), Valid: true},
+		})
+	} else {
+		resumed, resumeErr = q.ResumeSerialCurrentNode(ctx, sqlitegen.ResumeSerialCurrentNodeParams{
+			TaskID: string(reference.TaskID),
+			NodeID: string(reference.NodeID),
+		})
+	}
+	if resumeErr != nil {
+		return InterruptedCurrentNodeAttentionProjection{}, false, resumeErr
+	}
+	if resumed != 1 {
+		return InterruptedCurrentNodeAttentionProjection{}, false, sql.ErrNoRows
+	}
+	if err := tx.Commit(); err != nil {
+		return InterruptedCurrentNodeAttentionProjection{}, false, err
+	}
+	return projection, found, nil
 }
 
 // InterruptedExecutableCurrentNodes returns the exact interrupted nodes a
 // caller may explicitly resume. Pending Approval sources are excluded here
-// and again atomically by prepared Resume/admission mutations.
+// and again atomically by ResumeCurrentNode/AdmitCurrentNode.
 func (s *Store) InterruptedExecutableCurrentNodes(ctx context.Context, taskID workflow.TaskID) ([]workflow.CurrentNode, error) {
 	if strings.TrimSpace(string(taskID)) == "" {
 		return nil, errors.New("task id is required")
@@ -549,6 +473,55 @@ func (s *Store) InterruptedExecutableCurrentNodes(ctx context.Context, taskID wo
 		return nil, err
 	}
 	return s.interruptedExecutableCurrentNodesWithDefinition(ctx, taskID, definition)
+}
+
+// InterruptAdmittedCurrentNode records that a scope preparation or live
+// execution failed after admission. The caller owns exact-scope validation;
+// persistence only accepts the durable admitted marker so a stale predecessor
+// cannot overwrite a successor or a manually changed Current Node.
+func (s *Store) InterruptAdmittedCurrentNode(
+	ctx context.Context,
+	reference workflow.CurrentNodeReference,
+	reason workflow.CurrentNodeInterruptionReason,
+	detail workflow.CurrentNodeInterruptionDetail,
+) error {
+	if err := reference.Validate(); err != nil {
+		return err
+	}
+	if strings.TrimSpace(string(reason)) == "" {
+		return errors.New("current node interruption reason is required")
+	}
+	detailJSON, err := json.Marshal(detail)
+	if err != nil {
+		return fmt.Errorf("encode current node interruption detail: %w", err)
+	}
+	now := s.now().UTC().UnixMilli()
+	var interrupted int64
+	if branchKey, branchScoped := reference.TransitionBranchKey(); branchScoped {
+		interrupted, err = s.queries.InterruptBranchAdmittedCurrentNode(ctx, sqlitegen.InterruptBranchAdmittedCurrentNodeParams{
+			TaskID:                 string(reference.TaskID),
+			NodeID:                 string(reference.NodeID),
+			TransitionBranchKey:    sql.NullString{String: string(branchKey), Valid: true},
+			InterruptionReason:     sql.NullString{String: string(reason), Valid: true},
+			InterruptionDetailJson: sql.NullString{String: string(detailJSON), Valid: true},
+			InterruptedAtUnixMs:    sql.NullInt64{Int64: now, Valid: true},
+		})
+	} else {
+		interrupted, err = s.queries.InterruptSerialAdmittedCurrentNode(ctx, sqlitegen.InterruptSerialAdmittedCurrentNodeParams{
+			TaskID:                 string(reference.TaskID),
+			NodeID:                 string(reference.NodeID),
+			InterruptionReason:     sql.NullString{String: string(reason), Valid: true},
+			InterruptionDetailJson: sql.NullString{String: string(detailJSON), Valid: true},
+			InterruptedAtUnixMs:    sql.NullInt64{Int64: now, Valid: true},
+		})
+	}
+	if err != nil {
+		return err
+	}
+	if interrupted != 1 {
+		return sql.ErrNoRows
+	}
+	return s.publishCurrentNodeTaskEvent(ctx, reference.TaskID, serverapi.WorkflowProjectEventActionInterrupted)
 }
 
 // InterruptCurrentNode records an interruption for ready or admitted

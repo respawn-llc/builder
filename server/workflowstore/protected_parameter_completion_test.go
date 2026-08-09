@@ -22,7 +22,7 @@ func TestCompletionContractsApplyProtectedParameterConsumptionPolicies(t *testin
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	plan := startTask(t, ctx, store, task.ID).Mutation.Created[0]
-	review, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
+	review, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 		Source:       plan.Reference,
 		TransitionID: "review",
 		OutputValues: map[string]string{"summary": "plan complete"},
@@ -30,7 +30,7 @@ func TestCompletionContractsApplyProtectedParameterConsumptionPolicies(t *testin
 	if err != nil {
 		t.Fatalf("complete plan: %v", err)
 	}
-	_, err = completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
+	_, err = store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 		Source:       review.Mutation.Created[0].Reference,
 		TransitionID: "audit",
 	})
@@ -38,7 +38,7 @@ func TestCompletionContractsApplyProtectedParameterConsumptionPolicies(t *testin
 	if !errors.As(err, &validationErr) || !completionHasCode(err, CompletionCodeUnavailableTargetAgentRole) {
 		t.Fatalf("missing protected role error = %v, want unavailable-role validation", err)
 	}
-	completed, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
+	completed, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 		Source:       review.Mutation.Created[0].Reference,
 		TransitionID: "audit",
 		OutputValues: map[string]string{"role": "reviewer"},
@@ -88,7 +88,7 @@ func TestAutomaticCompletionMaterializesSoleRoleWithoutProtectedValue(t *testing
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	plan := startTask(t, ctx, store, task.ID).Mutation.Created[0]
-	review, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
+	review, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 		Source:       plan.Reference,
 		TransitionID: "review",
 		OutputValues: map[string]string{"summary": "plan complete"},
@@ -96,7 +96,7 @@ func TestAutomaticCompletionMaterializesSoleRoleWithoutProtectedValue(t *testing
 	if err != nil {
 		t.Fatalf("complete plan: %v", err)
 	}
-	completed, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
+	completed, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 		Source:       review.Mutation.Created[0].Reference,
 		TransitionID: "audit",
 	})
@@ -159,7 +159,7 @@ func TestAutomaticCompletionMaterializesFiniteThinkingSelection(t *testing.T) {
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	plan := startTask(t, ctx, store, task.ID).Mutation.Created[0]
-	review, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
+	review, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 		Source:       plan.Reference,
 		TransitionID: "review",
 		OutputValues: map[string]string{"summary": "plan complete"},
@@ -167,7 +167,7 @@ func TestAutomaticCompletionMaterializesFiniteThinkingSelection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("complete plan: %v", err)
 	}
-	completed, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
+	completed, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 		Source:       review.Mutation.Created[0].Reference,
 		TransitionID: "audit",
 		OutputValues: map[string]string{"effort": "high"},
@@ -211,7 +211,7 @@ func TestAutomaticCompletionMaterializesOpenThinkingSelection(t *testing.T) {
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	plan := startTask(t, ctx, store, task.ID).Mutation.Created[0]
-	review, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
+	review, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 		Source:       plan.Reference,
 		TransitionID: "review",
 		OutputValues: map[string]string{"summary": "plan complete"},
@@ -219,7 +219,7 @@ func TestAutomaticCompletionMaterializesOpenThinkingSelection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("complete plan: %v", err)
 	}
-	completed, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
+	completed, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 		Source:       review.Mutation.Created[0].Reference,
 		TransitionID: "audit",
 		OutputValues: map[string]string{"effort": "provider-custom"},
@@ -248,7 +248,7 @@ func TestAutomaticCompletionRejectsInvalidSelectionBeforeMutation(t *testing.T) 
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	plan := startTask(t, ctx, store, task.ID).Mutation.Created[0]
-	review, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
+	review, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 		Source:       plan.Reference,
 		TransitionID: "review",
 		OutputValues: map[string]string{"summary": "plan complete"},
@@ -256,7 +256,7 @@ func TestAutomaticCompletionRejectsInvalidSelectionBeforeMutation(t *testing.T) 
 	if err != nil {
 		t.Fatalf("complete plan: %v", err)
 	}
-	_, err = completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
+	_, err = store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 		Source:       review.Mutation.Created[0].Reference,
 		TransitionID: "audit",
 		OutputValues: map[string]string{"role": "not-configured"},
@@ -302,7 +302,7 @@ func TestAutomaticCompletionMaterializesSelectionFromScriptSource(t *testing.T) 
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	plan := startTask(t, ctx, store, task.ID).Mutation.Created[0]
-	script, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
+	script, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 		Source:       plan.Reference,
 		TransitionID: "review",
 		OutputValues: map[string]string{"summary": "script input"},
@@ -310,7 +310,7 @@ func TestAutomaticCompletionMaterializesSelectionFromScriptSource(t *testing.T) 
 	if err != nil {
 		t.Fatalf("complete Agent source: %v", err)
 	}
-	completed, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
+	completed, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 		Source:       script.Mutation.Created[0].Reference,
 		TransitionID: "audit",
 		OutputValues: map[string]string{"role": "reviewer"},
@@ -351,7 +351,7 @@ func TestCompletionContractsRejectDormantProtectedValuesAsUnknownOutputs(t *test
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	plan := startTask(t, ctx, store, task.ID).Mutation.Created[0]
-	review, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
+	review, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 		Source:       plan.Reference,
 		TransitionID: "review",
 		OutputValues: map[string]string{"summary": "plan complete"},
@@ -359,7 +359,7 @@ func TestCompletionContractsRejectDormantProtectedValuesAsUnknownOutputs(t *test
 	if err != nil {
 		t.Fatalf("complete plan: %v", err)
 	}
-	_, err = completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
+	_, err = store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 		Source:       review.Mutation.Created[0].Reference,
 		TransitionID: "audit",
 		OutputValues: map[string]string{"role": "reviewer"},

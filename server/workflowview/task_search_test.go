@@ -2,7 +2,6 @@ package workflowview
 
 import (
 	"context"
-	"core/internal/testharness/workflowtest"
 	"os/exec"
 	"slices"
 	"strings"
@@ -15,7 +14,6 @@ import (
 	"core/server/workflow"
 	"core/server/workflowexecution"
 	"core/server/workflowstore"
-	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -373,7 +371,7 @@ func TestTaskSearchFiltersDurableCurrentNodeStatuses(t *testing.T) {
 			requiresApproval: true,
 			prepare: func(t *testing.T, fixture currentNodeViewFixture, task workflowstore.TaskRecord) {
 				started := startTaskSearchTask(t, fixture, task)
-				if _, err := workflowtest.CompleteCurrentNode(fixture.store, fixture.ctx, workflowstore.CurrentNodeCompletionRequest{
+				if _, err := fixture.store.CompleteCurrentNode(fixture.ctx, workflowstore.CurrentNodeCompletionRequest{
 					Source:       started.currentNode,
 					TransitionID: "done",
 				}); err != nil {
@@ -386,7 +384,7 @@ func TestTaskSearchFiltersDurableCurrentNodeStatuses(t *testing.T) {
 			name: "done",
 			prepare: func(t *testing.T, fixture currentNodeViewFixture, task workflowstore.TaskRecord) {
 				started := startTaskSearchTask(t, fixture, task)
-				if _, err := workflowtest.CompleteCurrentNode(fixture.store, fixture.ctx, workflowstore.CurrentNodeCompletionRequest{
+				if _, err := fixture.store.CompleteCurrentNode(fixture.ctx, workflowstore.CurrentNodeCompletionRequest{
 					Source:       started.currentNode,
 					TransitionID: "done",
 				}); err != nil {
@@ -452,58 +450,6 @@ func TestTaskSearchFiltersQueuedAndRunningCurrentNodeExecutions(t *testing.T) {
 	}
 }
 
-func TestTaskSearchAppliesPinnedLifecycleStatusBeforeFilterAndPagination(t *testing.T) {
-	fixture := newCurrentNodeViewFixture(t, false)
-	task := createTaskSearchTask(t, fixture, "Pinned Search", "needle")
-	started := startTaskSearchTask(t, fixture, task)
-	snapshotCalls := 0
-	queryCalls := 0
-	projection, err := NewTaskStatusProjection(
-		fixture.metadata,
-		fixture.store,
-		NewTaskProjector(),
-		staticTaskStatusLiveObservationSource{
-			store:         fixture.store,
-			snapshotCalls: &snapshotCalls,
-			queryCalls:    &queryCalls,
-			observation: workflowexecution.WorkflowTaskExecutionObservation{
-				Lifecycle: map[workflow.TaskID]workflowexecution.WorkflowTaskLifecycleSnapshot{
-					task.ID: {
-						CurrentNodes:       []workflow.CurrentNode{{Reference: started.currentNode}},
-						QueuedCurrentNodes: []workflow.CurrentNodeReference{started.currentNode},
-					},
-				},
-			},
-		},
-	)
-	if err != nil {
-		t.Fatalf("NewTaskStatusProjection: %v", err)
-	}
-	search, err := NewTaskSearch(fixture.metadata, projection)
-	if err != nil {
-		t.Fatalf("NewTaskSearch: %v", err)
-	}
-	request := taskSearchRequest("needle")
-	request.StatusKinds = []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindQueued}
-	request.PageSize = 1
-	response, err := search.Search(fixture.ctx, request)
-	if err != nil {
-		t.Fatalf("TaskSearch.Search: %v", err)
-	}
-	if len(response.Groups) != 1 ||
-		response.Groups[0].TaskID != string(started.task.ID) ||
-		response.Groups[0].Status.Kind != serverapi.WorkflowTaskStatusKindQueued ||
-		!slices.Equal(response.Groups[0].Status.NodeIDs, []string{string(started.currentNode.NodeID)}) {
-		t.Fatalf("Task Search pinned lifecycle response = %+v", response)
-	}
-	if response.NextOffset != nil {
-		t.Fatalf("Task Search pinned lifecycle next offset = %v, want none", response.NextOffset)
-	}
-	if snapshotCalls != 0 || queryCalls != 1 {
-		t.Fatalf("Task Search lifecycle captures = snapshots:%d queries:%d, want bounded query capture only", snapshotCalls, queryCalls)
-	}
-}
-
 func TestTaskSearchFiltersWaitingQuestionCurrentNodeExecution(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
 	task := createTaskSearchTask(t, fixture, "Question", "needle")
@@ -515,7 +461,6 @@ func TestTaskSearchFiltersWaitingQuestionCurrentNodeExecution(t *testing.T) {
 		currentNodeViewStatusObservationSource{
 			authority:  question.authority,
 			quiescence: fixture.quiescence,
-			store:      fixture.store,
 		},
 	)
 	if err != nil {
@@ -534,40 +479,26 @@ func TestTaskSearchFiltersWaitingQuestionCurrentNodeExecution(t *testing.T) {
 func TestTaskSearchProjectsLiveSessionApprovalStatus(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
 	task := createTaskSearchTask(t, fixture, "Approval", "needle")
-	started := startTaskSearchTask(t, fixture, task)
+	started := fixture.startTask(t, "Approval execution")
 	sessionID := fixture.bindCurrentNodeSession(t, started)
-	scopeID := runtimeids.NewExecutionScopeID()
-	executions := map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot{
-		task.ID: {
-			Executions: []sessionruntime.TaskExecution{{
-				Ref: sessionruntime.WorkflowExecutionRef{
-					ProjectID:   fixture.binding.ProjectID,
-					WorkflowID:  fixture.workflowID,
-					CurrentNode: started.currentNode,
-				},
-				ScopeID: scopeID,
-				Agent:   &sessionruntime.TaskAgentExecutionTarget{SessionID: sessionID},
-				PendingPrompts: []sessionruntime.PendingPromptReference{{
-					ID:   "approval",
-					Kind: sessionruntime.PendingPromptKindSessionApproval,
-				}},
-			}},
-		},
-	}
 	projection, err := NewTaskStatusProjection(
 		fixture.metadata,
 		fixture.store,
 		NewTaskProjector(),
 		staticTaskStatusLiveObservationSource{
-			store: fixture.store,
-			observation: workflowTaskExecutionObservationForTest(
-				t,
-				map[workflow.TaskID][]workflow.CurrentNode{
-					task.ID: {{Reference: started.currentNode}},
+			observation: workflowexecution.WorkflowTaskExecutionObservation{
+				Executions: map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot{
+					task.ID: {
+						Executions: []sessionruntime.TaskExecution{{
+							Agent: &sessionruntime.TaskAgentExecutionTarget{SessionID: sessionID},
+							PendingPrompts: []sessionruntime.PendingPromptReference{{
+								ID:   "approval",
+								Kind: sessionruntime.PendingPromptKindSessionApproval,
+							}},
+						}},
+					},
 				},
-				executions,
-				nil,
-			),
+			},
 		},
 	)
 	if err != nil {
@@ -646,7 +577,14 @@ func createTaskSearchTaskAtSequence(
 
 func startTaskSearchTask(t *testing.T, fixture currentNodeViewFixture, task workflowstore.TaskRecord) startedCurrentNodeViewTask {
 	t.Helper()
-	return fixture.startExistingTask(t, task)
+	started, err := fixture.store.StartTask(fixture.ctx, task.ID)
+	if err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	if len(started.Mutation.Created) != 1 {
+		t.Fatalf("StartTask mutation = %+v", started.Mutation)
+	}
+	return startedCurrentNodeViewTask{task: task, currentNode: started.Mutation.Created[0].Reference}
 }
 
 func newTaskSearchLease(t *testing.T, fixture currentNodeViewFixture, started startedCurrentNodeViewTask) sessionruntime.WorkflowExecutionLease {

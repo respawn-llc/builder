@@ -203,8 +203,6 @@ func currentNodeProductionCompositionFindings(index currentNodeTypeIndex) []curr
 		"core/server/sessionruntime.NewAuthority",
 		"core/server/workflowrunner.NewStarter",
 		"core/server/workflowview.NewTaskStatusProjection",
-		"core/server/workflowview.NewTaskDependencies",
-		"core/server/core.bindTaskDependencies",
 		"core/server/workflowsvc.New",
 		"core/server/workflowview.NewTaskSearch",
 		"core/server/projectview.WithWorkflowExecution",
@@ -358,23 +356,19 @@ func currentNodeProductionCompositionFindings(index currentNodeTypeIndex) []curr
 	}
 
 	controllerPosition := controllerCalls[0].call.Pos()
-	projectionPosition := calls["core/server/workflowview.NewTaskStatusProjection"][0].call.Pos()
-	dependenciesPosition := calls["core/server/workflowview.NewTaskDependencies"][0].call.Pos()
-	dependencyBindPosition := calls["core/server/core.bindTaskDependencies"][0].call.Pos()
 	recoveryPosition := calls["core/server/workflowexecution.Recover"][0].call.Pos()
+	projectionPosition := calls["core/server/workflowview.NewTaskStatusProjection"][0].call.Pos()
 	projectWiringPosition := calls["core/server/projectview.WithWorkflowExecution"][0].call.Pos()
 	servicePosition := calls["core/server/workflowsvc.New"][0].call.Pos()
 	corePosition := calls["core/server/core.composeBundles"][0].call.Pos()
-	if !(controllerPosition < projectionPosition &&
-		projectionPosition < dependenciesPosition &&
-		dependenciesPosition < dependencyBindPosition &&
-		dependencyBindPosition < recoveryPosition &&
+	if !(controllerPosition < recoveryPosition &&
 		recoveryPosition < projectWiringPosition &&
+		recoveryPosition < projectionPosition &&
 		projectWiringPosition < servicePosition &&
 		servicePosition < corePosition) {
 		findings = append(findings, currentNodeStructureFinding{
 			kind:     findingControllerComposition,
-			position: "shared lifecycle-aware Task dependencies must bind before Current Node recovery, workflow service wiring, and Core composition",
+			position: "Current Node recovery must finish before workflow services are wired and the Core is composed",
 		})
 	}
 	return findings

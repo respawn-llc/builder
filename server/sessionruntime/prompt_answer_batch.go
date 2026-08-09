@@ -159,33 +159,13 @@ func (s *executionPromptStore) ResolvePromptBatch(
 }
 
 func (s *executionPromptStore) resolvePreparedPromptAnswer(answer preparedPromptAnswer) (bool, error) {
-	answer.entry.resolutionMu.Lock()
-	defer answer.entry.resolutionMu.Unlock()
-	s.mu.Lock()
-	if s.pending[string(answer.command.PromptID)] != answer.entry {
-		s.mu.Unlock()
-		return false, nil
-	}
-	s.mu.Unlock()
-	<-answer.entry.publicationDone
-	if err := s.publishResolved(answer.entry.snapshot); err != nil {
-		return false, err
-	}
 	s.mu.Lock()
 	removed := s.removePromptEntryLocked(string(answer.command.PromptID), answer.entry)
 	s.mu.Unlock()
 	if !removed {
-		return false, reportPromptInvariant(
-			"remove_prompt_batch_answer",
-			string(answer.command.PromptID),
-			"pending prompt changed during lifecycle publication",
-		)
+		return false, nil
 	}
-	answer.entry.response <- executionPromptResult{
-		resolution: answer.resolution,
-		err:        answer.submitErr,
-	}
-	return true, nil
+	return true, s.deliverPromptResolution(answer.entry, answer.resolution, answer.submitErr)
 }
 
 func (s *executionPromptStore) removePromptEntryLocked(requestID string, expected *executionPromptEntry) bool {
@@ -194,6 +174,17 @@ func (s *executionPromptStore) removePromptEntryLocked(requestID string, expecte
 	}
 	delete(s.pending, requestID)
 	return true
+}
+
+func (s *executionPromptStore) deliverPromptResolution(
+	entry *executionPromptEntry,
+	resolution tools.AskQuestionResolution,
+	submitErr error,
+) error {
+	<-entry.publicationDone
+	publicationErr := s.publishResolved(entry.snapshot)
+	entry.response <- executionPromptResult{resolution: resolution, err: submitErr}
+	return publicationErr
 }
 
 func promptResolutionForCommand(

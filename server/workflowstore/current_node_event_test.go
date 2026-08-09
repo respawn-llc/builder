@@ -60,7 +60,7 @@ func TestCompleteCurrentNodePublishesCompletionEventAfterCommittedMutation(t *te
 	publisher := &recordingCurrentNodeEventPublisher{}
 	store.SetWorkflowEventPublisher(publisher)
 
-	if _, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
+	if _, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 		Source:       source.Reference,
 		TransitionID: "review",
 		OutputValues: map[string]string{"summary": "completed"},

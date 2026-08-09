@@ -2,6 +2,7 @@ package workflowview
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,26 +19,8 @@ import (
 	"core/shared/serverapi"
 )
 
-type TaskStatusCaptureSource interface {
-	CaptureWorkflowTaskExecutions(
-		context.Context,
-		[]workflow.TaskID,
-		func(workflowexecution.WorkflowTaskExecutionObservation, *sqlitegen.Queries) error,
-	) error
-}
-
-type TaskStatusLifecycleQuerySource interface {
-	CaptureWorkflowTaskLifecycleQuery(
-		context.Context,
-		func(string, *sqlitegen.Queries) error,
-	) error
-}
-
-type TaskStatusBoundedLifecycleSource interface {
-	CaptureWorkflowTaskBoundedLifecycleRead(
-		context.Context,
-		func(string, *sqlitegen.Queries, workflowexecution.WorkflowTaskLifecycleReader) error,
-	) error
+type TaskStatusLiveObservationSource interface {
+	ObserveWorkflowTaskExecutions([]workflow.TaskID) (workflowexecution.WorkflowTaskExecutionObservation, error)
 }
 
 type TaskStatusObservation struct {
@@ -58,18 +41,17 @@ type TaskStatusProjectionResult struct {
 }
 
 type TaskStatusProjection struct {
-	workflowStore  *workflowstore.Store
-	projector      *TaskProjector
-	capture        TaskStatusCaptureSource
-	queryCapture   TaskStatusLifecycleQuerySource
-	boundedCapture TaskStatusBoundedLifecycleSource
+	metadata        *metadata.Store
+	workflowStore   *workflowstore.Store
+	projector       *TaskProjector
+	liveObservation TaskStatusLiveObservationSource
 }
 
 func NewTaskStatusProjection(
 	metadataStore *metadata.Store,
 	workflowStore *workflowstore.Store,
 	projector *TaskProjector,
-	capture TaskStatusCaptureSource,
+	liveObservation TaskStatusLiveObservationSource,
 ) (*TaskStatusProjection, error) {
 	if metadataStore == nil || metadataStore.DB() == nil || metadataStore.Queries() == nil {
 		return nil, errors.New("metadata store is required")
@@ -80,63 +62,33 @@ func NewTaskStatusProjection(
 	if projector == nil {
 		return nil, errors.New("task projector is required")
 	}
-	if capture == nil {
-		return nil, errors.New("workflow Task lifecycle capture source is required")
+	if liveObservation == nil {
+		return nil, errors.New("workflow task live observation source is required")
 	}
 	return &TaskStatusProjection{
-		workflowStore: workflowStore,
-		projector:     projector,
-		capture:       capture,
-		queryCapture: func() TaskStatusLifecycleQuerySource {
-			source, _ := capture.(TaskStatusLifecycleQuerySource)
-			return source
-		}(),
-		boundedCapture: func() TaskStatusBoundedLifecycleSource {
-			source, _ := capture.(TaskStatusBoundedLifecycleSource)
-			return source
-		}(),
+		metadata:        metadataStore,
+		workflowStore:   workflowStore,
+		projector:       projector,
+		liveObservation: liveObservation,
 	}, nil
 }
 
-func (p *TaskStatusProjection) WithBoundedLifecycle(
-	ctx context.Context,
-	operation func(
-		string,
-		*TaskStatusDurableSnapshot,
-		workflowexecution.WorkflowTaskLifecycleReader,
-	) error,
-) error {
-	if p == nil {
-		return errors.New("task status projection is required")
+func (p *TaskStatusProjection) Observe(taskIDs []workflow.TaskID) (TaskStatusObservation, error) {
+	if p == nil || p.liveObservation == nil {
+		return TaskStatusObservation{}, errors.New("task status projection live observation is required")
 	}
-	if operation == nil {
-		return errors.New("task status bounded lifecycle operation is required")
+	observation, err := p.liveObservation.ObserveWorkflowTaskExecutions(taskIDs)
+	if err != nil {
+		return TaskStatusObservation{}, err
 	}
-	if p.boundedCapture == nil {
-		return errors.New("task status bounded lifecycle source is required")
+	liveTaskStatesJSON, err := taskStatusLiveStatesJSON(observation.Executions)
+	if err != nil {
+		return TaskStatusObservation{}, err
 	}
-	return p.boundedCapture.CaptureWorkflowTaskBoundedLifecycleRead(
-		ctx,
-		func(
-			token string,
-			queries *sqlitegen.Queries,
-			reader workflowexecution.WorkflowTaskLifecycleReader,
-		) error {
-			if strings.TrimSpace(token) == "" {
-				return errors.New("task status lifecycle query token is required")
-			}
-			durable := &TaskStatusDurableSnapshot{
-				queries:       queries,
-				workflowStore: p.workflowStore,
-				projector:     p.projector,
-			}
-			defer func() {
-				durable.closed = true
-				durable.queries = nil
-			}()
-			return operation(token, durable, reader)
-		},
-	)
+	return TaskStatusObservation{
+		Live:               observation,
+		LiveTaskStatesJSON: liveTaskStatesJSON,
+	}, nil
 }
 
 func (p *TaskStatusProjection) DecodeStatus(input TaskStatusInput) (workflowTaskStatusFact, error) {
@@ -147,123 +99,28 @@ func (p *TaskStatusProjection) DecodeStatus(input TaskStatusInput) (workflowTask
 }
 
 type taskStatusLiveState struct {
-	TaskID               string   `json:"task_id"`
-	HasLifecycleOverride bool     `json:"has_lifecycle_override"`
-	CurrentNodeIDs       []string `json:"current_node_ids"`
-	HasRunning           bool     `json:"has_running"`
-	HasQueued            bool     `json:"has_queued"`
-	WaitingQuestion      bool     `json:"waiting_question"`
-	HasWaitingApproval   bool     `json:"has_waiting_approval"`
+	TaskID             string `json:"task_id"`
+	HasRunning         bool   `json:"has_running"`
+	HasQueued          bool   `json:"has_queued"`
+	WaitingQuestion    bool   `json:"waiting_question"`
+	HasWaitingApproval bool   `json:"has_waiting_approval"`
 }
 
-func taskStatusLiveStatesJSON(observation workflowexecution.WorkflowTaskExecutionObservation) (string, error) {
-	states := make([]taskStatusLiveState, 0, len(observation.Lifecycle))
-	for taskID, lifecycle := range observation.Lifecycle {
-		if taskID == "" {
-			return "", errors.New("workflow lifecycle observation has a blank Task id")
+func taskStatusLiveStatesJSON(snapshots map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot) (string, error) {
+	states := make([]taskStatusLiveState, 0, len(snapshots))
+	for taskID, snapshot := range snapshots {
+		if len(snapshot.Executions) == 0 {
+			continue
 		}
-		currentNodeKeys := make(map[workflow.CurrentNodeReferenceKey]struct{}, len(lifecycle.CurrentNodes))
-		nodeIDs := make(map[workflow.NodeID]struct{}, len(lifecycle.CurrentNodes))
-		for _, currentNode := range lifecycle.CurrentNodes {
-			if currentNode.Reference.TaskID != taskID {
-				return "", fmt.Errorf("workflow lifecycle observation Current Node belongs to another Task: %v", currentNode.Reference)
-			}
-			key, err := currentNode.Reference.Key()
-			if err != nil {
-				return "", err
-			}
-			if _, duplicate := currentNodeKeys[key]; duplicate {
-				return "", fmt.Errorf("workflow lifecycle observation contains duplicate Current Node %v", currentNode.Reference)
-			}
-			currentNodeKeys[key] = struct{}{}
-			nodeIDs[currentNode.Reference.NodeID] = struct{}{}
+		state := taskStatusLiveState{TaskID: string(taskID)}
+		for _, execution := range snapshot.Executions {
+			state.HasRunning = state.HasRunning || !execution.Queued
+			state.HasQueued = state.HasQueued || execution.Queued
+			state.WaitingQuestion = state.WaitingQuestion ||
+				execution.HasPendingPromptKind(sessionruntime.PendingPromptKindQuestion)
+			state.HasWaitingApproval = state.HasWaitingApproval ||
+				execution.HasPendingPromptKind(sessionruntime.PendingPromptKindSessionApproval)
 		}
-		if len(currentNodeKeys) == 0 {
-			return "", fmt.Errorf("workflow lifecycle observation for Task %q has no Current Nodes", taskID)
-		}
-		exactScopes := make(map[runtimeids.ExecutionScopeID]workflow.CurrentNodeReferenceKey, len(lifecycle.ExactExecutions))
-		for _, exact := range lifecycle.ExactExecutions {
-			if exact.CurrentNode.TaskID != taskID {
-				return "", fmt.Errorf("workflow lifecycle Exact execution belongs to another Task: %v", exact.CurrentNode)
-			}
-			key, err := exact.CurrentNode.Key()
-			if err != nil {
-				return "", err
-			}
-			if _, exists := currentNodeKeys[key]; !exists {
-				return "", fmt.Errorf("workflow lifecycle Exact execution has no Current Node override: %v", exact.CurrentNode)
-			}
-			if exact.ScopeID.IsZero() {
-				return "", fmt.Errorf("workflow lifecycle Exact execution for %v has no scope id", exact.CurrentNode)
-			}
-			if _, duplicate := exactScopes[exact.ScopeID]; duplicate {
-				return "", fmt.Errorf("workflow lifecycle observation contains duplicate Exact execution %v", exact.CurrentNode)
-			}
-			exactScopes[exact.ScopeID] = key
-		}
-		state := taskStatusLiveState{
-			TaskID:               string(taskID),
-			HasLifecycleOverride: true,
-			CurrentNodeIDs:       make([]string, 0, len(nodeIDs)),
-		}
-		for nodeID := range nodeIDs {
-			state.CurrentNodeIDs = append(state.CurrentNodeIDs, string(nodeID))
-		}
-		sort.Strings(state.CurrentNodeIDs)
-		for _, queued := range lifecycle.QueuedCurrentNodes {
-			if queued.TaskID != taskID {
-				return "", fmt.Errorf("workflow lifecycle queued Run belongs to another Task: %v", queued)
-			}
-			key, err := queued.Key()
-			if err != nil {
-				return "", err
-			}
-			if _, exists := currentNodeKeys[key]; !exists {
-				return "", fmt.Errorf("workflow lifecycle queued Run has no Current Node override: %v", queued)
-			}
-		}
-		matchedExact := make(map[runtimeids.ExecutionScopeID]struct{}, len(exactScopes))
-		executionStatuses := make([]workflowstore.LifecycleTaskExecutionStatus, 0, len(exactScopes))
-		for _, execution := range observation.Executions[taskID].Executions {
-			key, err := execution.Ref.CurrentNode.Key()
-			if err != nil {
-				return "", err
-			}
-			exactKey, exact := exactScopes[execution.ScopeID]
-			if !exact {
-				continue
-			}
-			if exactKey != key {
-				return "", fmt.Errorf(
-					"workflow lifecycle Exact Scope %s references %v but Authority references %v",
-					execution.ScopeID,
-					lifecycle.ExactExecutions,
-					execution.Ref.CurrentNode,
-				)
-			}
-			matchedExact[execution.ScopeID] = struct{}{}
-			executionStatuses = append(executionStatuses, workflowstore.LifecycleTaskExecutionStatus{
-				CurrentNode:     execution.Ref.CurrentNode,
-				WaitingQuestion: execution.HasPendingPromptKind(sessionruntime.PendingPromptKindQuestion),
-				WaitingApproval: execution.HasPendingPromptKind(sessionruntime.PendingPromptKindSessionApproval),
-			})
-		}
-		if len(matchedExact) != len(exactScopes) {
-			return "", fmt.Errorf(
-				"workflow lifecycle observation for Task %q has %d Exact facts but %d matching Authority executions",
-				taskID,
-				len(exactScopes),
-				len(matchedExact),
-			)
-		}
-		status, err := workflowstore.DeriveLifecycleTaskStatus(taskID, lifecycle.QueuedCurrentNodes, executionStatuses)
-		if err != nil {
-			return "", err
-		}
-		state.HasRunning = status.HasRunning
-		state.HasQueued = status.HasQueued
-		state.WaitingQuestion = status.WaitingQuestion
-		state.HasWaitingApproval = status.WaitingApproval
 		states = append(states, state)
 	}
 	sort.Slice(states, func(i, j int) bool { return states[i].TaskID < states[j].TaskID })
@@ -285,62 +142,13 @@ func (p *TaskStatusProjection) WithSnapshot(
 	if operation == nil {
 		return errors.New("task status snapshot operation is required")
 	}
-	return p.capture.CaptureWorkflowTaskExecutions(
-		ctx,
-		taskIDs,
-		func(live workflowexecution.WorkflowTaskExecutionObservation, queries *sqlitegen.Queries) error {
-			liveTaskStatesJSON, err := taskStatusLiveStatesJSON(live)
-			if err != nil {
-				return err
-			}
-			durable := &TaskStatusDurableSnapshot{
-				queries:       queries,
-				workflowStore: p.workflowStore,
-				projector:     p.projector,
-			}
-			defer func() {
-				durable.closed = true
-				durable.queries = nil
-			}()
-			return operation(TaskStatusObservation{
-				Live:               live,
-				LiveTaskStatesJSON: liveTaskStatesJSON,
-			}, durable)
-		},
-	)
-}
-
-func (p *TaskStatusProjection) WithLifecycleQuery(
-	ctx context.Context,
-	operation func(string, *TaskStatusDurableSnapshot) error,
-) error {
-	if p == nil {
-		return errors.New("task status projection is required")
+	observation, err := p.Observe(taskIDs)
+	if err != nil {
+		return err
 	}
-	if operation == nil {
-		return errors.New("task status lifecycle query operation is required")
-	}
-	if p.queryCapture == nil {
-		return errors.New("task status lifecycle query source is required")
-	}
-	return p.queryCapture.CaptureWorkflowTaskLifecycleQuery(
-		ctx,
-		func(token string, queries *sqlitegen.Queries) error {
-			if strings.TrimSpace(token) == "" {
-				return errors.New("task status lifecycle query token is required")
-			}
-			durable := &TaskStatusDurableSnapshot{
-				queries:       queries,
-				workflowStore: p.workflowStore,
-				projector:     p.projector,
-			}
-			defer func() {
-				durable.closed = true
-				durable.queries = nil
-			}()
-			return operation(token, durable)
-		},
-	)
+	return p.WithDurableSnapshot(ctx, func(durable *TaskStatusDurableSnapshot) error {
+		return operation(observation, durable)
+	})
 }
 
 func (p *TaskStatusProjection) Project(
@@ -413,10 +221,7 @@ func (p *TaskStatusProjection) Project(
 		}
 		quiescent, exists := observation.Live.Quiescence[taskID]
 		if !exists {
-			if _, lifecycleOwned := observation.Live.Lifecycle[taskID]; lifecycleOwned {
-				return nil, fmt.Errorf("workflow execution omitted lifecycle-owned Task %q from Quiescence snapshot", taskID)
-			}
-			quiescent = true
+			return nil, fmt.Errorf("workflow execution omitted Task %q from Quiescence snapshot", taskID)
 		}
 		liveExecutions := append([]sessionruntime.TaskExecution(nil), observation.Live.Executions[taskID].Executions...)
 		pendingApprovals := pendingApprovalsByTask[taskID]
@@ -475,6 +280,39 @@ type TaskStatusDurableSnapshot struct {
 	workflowStore *workflowstore.Store
 	projector     *TaskProjector
 	closed        bool
+}
+
+func (p *TaskStatusProjection) WithDurableSnapshot(
+	ctx context.Context,
+	operation func(*TaskStatusDurableSnapshot) error,
+) (err error) {
+	if p == nil {
+		return errors.New("task status projection is required")
+	}
+	if operation == nil {
+		return errors.New("task status durable snapshot operation is required")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	tx, err := p.metadata.DB().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return fmt.Errorf("begin task status durable snapshot: %w", err)
+	}
+	snapshot := &TaskStatusDurableSnapshot{
+		queries:       p.metadata.Queries().WithTx(tx),
+		workflowStore: p.workflowStore,
+		projector:     p.projector,
+	}
+	defer func() {
+		rollbackErr := tx.Rollback()
+		snapshot.closed = true
+		snapshot.queries = nil
+		if err == nil && rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+			err = fmt.Errorf("close task status durable snapshot: %w", rollbackErr)
+		}
+	}()
+	return operation(snapshot)
 }
 
 func (s *TaskStatusDurableSnapshot) validate() error {

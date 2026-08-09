@@ -2,7 +2,6 @@ package workflowsvc
 
 import (
 	"context"
-	"core/internal/testharness/workflowtest"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -37,22 +36,6 @@ func nextWorkflowProjectEvent(t *testing.T, sub serverapi.WorkflowProjectSubscri
 		t.Fatalf("subscription Next: %v", err)
 	}
 	return event
-}
-
-func publishWorkflowStoreTaskStart(
-	ctx context.Context,
-	store *workflowstore.Store,
-	taskID workflow.TaskID,
-) (workflowstore.StartTaskResult, error) {
-	publication, err := workflowstore.NewLifecyclePublication(store)
-	if err != nil {
-		return workflowstore.StartTaskResult{}, err
-	}
-	return publication.PublishTaskStart(
-		ctx,
-		taskID,
-		testsetup.PreparedPublicationStage(workflowstore.NewTaskStartLifecycleDelta),
-	)
 }
 
 func waitWorkflowProjectActions(t *testing.T, sub serverapi.WorkflowProjectSubscription, resource serverapi.WorkflowProjectEventResource, expected ...serverapi.WorkflowProjectEventAction) []serverapi.WorkflowProjectEvent {
@@ -526,7 +509,7 @@ func TestServiceManualMoveStaleFinalRevalidationReturnsNoOpWithoutSideEffects(t 
 	}
 	defer func() { _ = subscription.Close() }()
 	execution.interruptHook = func() {
-		if _, err := workflowtest.ManualMoveTask(service.store, ctx, workflowstore.ManualMoveRequest{
+		if _, err := service.store.ManualMoveTask(ctx, workflowstore.ManualMoveRequest{
 			TaskID:       workflow.TaskID(task.Task.ID),
 			TargetNodeID: workflow.NodeID(terminalID),
 		}); err != nil {
@@ -782,52 +765,6 @@ func TestServiceWorkflowDeleteRevalidatesWorkflowTasksAtCommit(t *testing.T) {
 	}
 	if _, err := service.GetWorkflowTask(ctx, serverapi.WorkflowTaskGetRequest{TaskID: taskID}); err != nil {
 		t.Fatalf("GetWorkflowTask after rejected delete: %v", err)
-	}
-}
-
-func TestServiceWorkflowDeleteRejectsChangedTaskSetWithoutDeletingAnyTask(t *testing.T) {
-	ctx, service, projectID, workflowID, originalTaskID := newWorkflowServiceOrdinaryTaskFixture(t)
-	preview, err := service.PreviewWorkflowDelete(ctx, serverapi.WorkflowDeletePreviewRequest{WorkflowID: workflowID})
-	if err != nil {
-		t.Fatalf("PreviewWorkflowDelete: %v", err)
-	}
-	execution := newManualMoveExecutionStub(service)
-	var addedTaskID workflow.TaskID
-	execution.deletionHook = func() {
-		added, createErr := service.store.CreateTask(ctx, workflowstore.CreateTaskRequest{
-			ProjectID:  projectID,
-			WorkflowID: &workflowID,
-			Title:      "Concurrent Task",
-			Body:       "Created after Workflow deletion acquired its original Task gates.",
-		})
-		if createErr != nil {
-			t.Fatalf("CreateTask during Workflow deletion: %v", createErr)
-		}
-		addedTaskID = added.ID
-	}
-	service.currentNodeExecution = execution
-
-	if _, err := service.DeleteWorkflow(ctx, serverapi.WorkflowDeleteRequest{
-		WorkflowID:           workflowID,
-		Confirmed:            true,
-		ExpectedVersion:      preview.Impact.Version,
-		ExpectedProjectCount: preview.Impact.ProjectCount,
-		ExpectedLinkCount:    preview.Impact.LinkCount,
-		ExpectedTaskCount:    preview.Impact.TaskCount,
-	}); err == nil {
-		t.Fatal("DeleteWorkflow succeeded after its exact Task set changed")
-	}
-	if addedTaskID == "" {
-		t.Fatal("Workflow deletion did not execute the concurrent Task-set mutation")
-	}
-	if _, err := service.GetWorkflowTask(ctx, serverapi.WorkflowTaskGetRequest{TaskID: originalTaskID}); err != nil {
-		t.Fatalf("original Task after rejected Workflow deletion: %v", err)
-	}
-	if _, err := service.GetWorkflowTask(ctx, serverapi.WorkflowTaskGetRequest{TaskID: string(addedTaskID)}); err != nil {
-		t.Fatalf("concurrently added Task after rejected Workflow deletion: %v", err)
-	}
-	if _, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID}); err != nil {
-		t.Fatalf("Workflow after rejected deletion: %v", err)
 	}
 }
 
@@ -1106,7 +1043,7 @@ func TestServiceTaskResumeReselectsUnavailableUnlockedTarget(t *testing.T) {
 	})
 	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
 	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
-	started, err := publishWorkflowStoreTaskStart(ctx, service.store, workflow.TaskID(task.Task.ID))
+	started, err := service.store.StartTask(ctx, workflow.TaskID(task.Task.ID))
 	if err != nil {
 		t.Fatalf("StartTask: %v", err)
 	}
@@ -1186,7 +1123,7 @@ func TestServiceTaskResumePreservesConfiguredSelectionAfterMaterializationFailur
 	})
 	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
 	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
-	started, err := publishWorkflowStoreTaskStart(ctx, service.store, workflow.TaskID(task.Task.ID))
+	started, err := service.store.StartTask(ctx, workflow.TaskID(task.Task.ID))
 	if err != nil {
 		t.Fatalf("StartTask: %v", err)
 	}
@@ -1749,7 +1686,6 @@ type manualMoveExecutionStub struct {
 	interruptTaskIDs []workflow.TaskID
 	interruptErr     error
 	interruptHook    func()
-	deletionHook     func()
 }
 
 type workflowAttentionRecorder struct {
@@ -1831,22 +1767,6 @@ func (s *manualMoveExecutionStub) EnsureTaskQuiescent(taskID workflow.TaskID) er
 		return s.quiescentErrors[index]
 	}
 	return s.quiescentErr
-}
-
-func (s *manualMoveExecutionStub) RunTaskDeletion(
-	ctx context.Context,
-	taskIDs []workflow.TaskID,
-	operation func(context.Context) error,
-) error {
-	for _, taskID := range taskIDs {
-		if err := s.EnsureTaskQuiescent(taskID); err != nil {
-			return err
-		}
-	}
-	if s.deletionHook != nil {
-		s.deletionHook()
-	}
-	return operation(ctx)
 }
 
 func (s *manualMoveExecutionStub) ManualMoveDisposition(workflow.TaskID) (workflowexecution.ManualMoveDisposition, error) {
@@ -2720,10 +2640,14 @@ func newWorkflowServiceReadModels(
 		metadataStore,
 		store,
 		projector,
-		workflowViewStatusObservationSource{authority: authority, quiescence: quiescence, store: store},
+		workflowViewStatusObservationSource{authority: authority, quiescence: quiescence},
 	)
 	if err != nil {
 		t.Fatalf("workflowview.NewTaskStatusProjection: %v", err)
+	}
+	dependencyCounter, err := workflowview.NewTaskDependencyCounter(metadataStore)
+	if err != nil {
+		t.Fatalf("workflowview.NewTaskDependencyCounter: %v", err)
 	}
 	taskSearch, err := workflowview.NewTaskSearch(metadataStore, projection)
 	if err != nil {
@@ -2737,7 +2661,7 @@ func newWorkflowServiceReadModels(
 	if err != nil {
 		t.Fatalf("workflowview.NewBoard: %v", err)
 	}
-	dependencies, err := workflowview.NewTaskDependencies(metadataStore, projection)
+	dependencies, err := workflowview.NewTaskDependencies(metadataStore, projection, dependencyCounter)
 	if err != nil {
 		t.Fatalf("workflowview.NewTaskDependencies: %v", err)
 	}
@@ -2749,7 +2673,7 @@ func newWorkflowServiceReadModels(
 	if err != nil {
 		t.Fatalf("workflowview.NewActivity: %v", err)
 	}
-	attention, err := workflowview.NewAttention(metadataStore, projection)
+	attention, err := workflowview.NewAttention(metadataStore, definitions, authority, prompts)
 	if err != nil {
 		t.Fatalf("workflowview.NewAttention: %v", err)
 	}
@@ -2771,7 +2695,6 @@ type workflowViewQuiescenceSource struct{}
 type workflowViewStatusObservationSource struct {
 	authority  *sessionruntime.Authority
 	quiescence workflowViewTaskQuiescenceSource
-	store      *workflowstore.Store
 }
 
 type workflowViewTaskQuiescenceSource interface {
@@ -2791,113 +2714,6 @@ func (s workflowViewStatusObservationSource) ObserveWorkflowTaskExecutions(taskI
 		Executions: executions,
 		Quiescence: quiescence,
 	}, nil
-}
-
-func (s workflowViewStatusObservationSource) CaptureWorkflowTaskExecutions(
-	ctx context.Context,
-	taskIDs []workflow.TaskID,
-	operation func(workflowexecution.WorkflowTaskExecutionObservation, *sqlitegen.Queries) error,
-) (err error) {
-	observation, err := s.ObserveWorkflowTaskExecutions(taskIDs)
-	if err != nil {
-		return err
-	}
-	publication, err := workflowstore.NewLifecyclePublication(s.store)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if closeErr := publication.Close(); err == nil && closeErr != nil {
-			err = closeErr
-		}
-	}()
-	capture, err := publication.Capture(ctx)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if closeErr := capture.Close(); err == nil && closeErr != nil {
-			err = closeErr
-		}
-	}()
-	return capture.WithQueries(func(queries *sqlitegen.Queries) error {
-		return operation(observation, queries)
-	})
-}
-
-func (s workflowViewStatusObservationSource) CaptureWorkflowTaskLifecycleQuery(
-	ctx context.Context,
-	operation func(string, *sqlitegen.Queries) error,
-) (err error) {
-	publication, err := workflowstore.NewLifecyclePublication(s.store)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if closeErr := publication.Close(); err == nil && closeErr != nil {
-			err = closeErr
-		}
-	}()
-	return publication.CaptureQuery(ctx, operation)
-}
-
-func (s workflowViewStatusObservationSource) CaptureWorkflowTaskBoundedLifecycleRead(
-	ctx context.Context,
-	operation func(
-		string,
-		*sqlitegen.Queries,
-		workflowexecution.WorkflowTaskLifecycleReader,
-	) error,
-) (err error) {
-	publication, err := workflowstore.NewLifecyclePublication(s.store)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if closeErr := publication.Close(); err == nil && closeErr != nil {
-			err = closeErr
-		}
-	}()
-	return publication.CaptureBoundedRead(
-		ctx,
-		func(
-			token string,
-			capture workflowstore.LifecycleBoundedReadCapture,
-			queries *sqlitegen.Queries,
-		) error {
-			return operation(token, queries, workflowServiceLifecycleReader{
-				source:  s,
-				capture: capture,
-			})
-		},
-	)
-}
-
-type workflowServiceLifecycleReader struct {
-	source  workflowViewStatusObservationSource
-	capture workflowstore.LifecycleBoundedReadCapture
-}
-
-func (r workflowServiceLifecycleReader) ObserveSelected(
-	_ context.Context,
-	taskIDs []workflow.TaskID,
-) (workflowexecution.WorkflowTaskExecutionObservation, error) {
-	return r.source.ObserveWorkflowTaskExecutions(taskIDs)
-}
-
-func (r workflowServiceLifecycleReader) PendingQuestions(
-	ctx context.Context,
-	cursor workflowstore.LifecycleQuestionCursor,
-	limit int,
-) ([]workflowstore.LifecyclePendingQuestion, error) {
-	return r.capture.PendingQuestions(ctx, cursor, limit)
-}
-
-func (r workflowServiceLifecycleReader) PendingQuestionsForTask(
-	ctx context.Context,
-	taskID workflow.TaskID,
-) ([]workflowstore.LifecyclePendingQuestion, error) {
-	return r.capture.PendingQuestionsForTask(ctx, taskID)
 }
 
 func (workflowViewQuiescenceSource) CurrentTaskQuiescence(taskIDs []workflow.TaskID) (map[workflow.TaskID]bool, error) {

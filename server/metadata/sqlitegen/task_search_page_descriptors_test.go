@@ -110,44 +110,6 @@ func TestListTaskSearchPageDescriptorsAllocatesSourceOrdinalsFromOneFTSRelation(
 	}
 }
 
-func TestListTaskSearchPageDescriptorsPreservesDurableParallelCurrentNodesDuringLiveStatus(t *testing.T) {
-	db := openSQLiteFixture(t, ":memory:")
-	t.Cleanup(func() { _ = db.Close() })
-	createTaskSearchPageDescriptorFixture(t, db)
-	if _, err := db.Exec(
-		`UPDATE workflow_task_status_records SET node_ids_json = ? WHERE task_id = ?`,
-		`["node-active","node-terminal"]`,
-		"task-1",
-	); err != nil {
-		t.Fatalf("update durable parallel Current Nodes: %v", err)
-	}
-	token, release, err := RegisterLifecycleTaskStateResolver(func(taskID string) (LifecycleTaskQueryState, error) {
-		if taskID == "task-1" {
-			return LifecycleTaskQueryState{Present: true, Flags: LifecycleTaskStateOwned | LifecycleTaskStateRunning}, nil
-		}
-		return LifecycleTaskQueryState{}, nil
-	})
-	if err != nil {
-		t.Fatalf("RegisterLifecycleTaskStateResolver: %v", err)
-	}
-	defer release()
-	params := taskSearchPageDescriptorParams(
-		"literal",
-		"needle",
-		"needle",
-		int64(tasksearchtext.LiteralCaseInsensitive),
-	)
-	params.LifecycleStateToken = token
-	rows, err := New(db).ListTaskSearchPageDescriptors(t.Context(), params)
-	if err != nil {
-		t.Fatalf("ListTaskSearchPageDescriptors: %v", err)
-	}
-	if len(rows) == 0 || rows[0].StatusKind != "running" ||
-		rows[0].NodeIdsJson != `["node-active","node-terminal"]` {
-		t.Fatalf("live descriptor status = %+v, want running with every durable Current Node", rows)
-	}
-}
-
 func TestListTaskSearchPageDescriptorsFiltersShortIDIndexBeforeSourceRelations(t *testing.T) {
 	db := openSQLiteFixture(t, ":memory:")
 	t.Cleanup(func() { _ = db.Close() })
@@ -621,7 +583,7 @@ func taskSearchPageDescriptorParams(mode, candidateExpression, literalQuery stri
 		ContextClusters:     20,
 		OffsetRows:          0,
 		LimitRows:           100,
-		LifecycleStateToken: noLifecycleTaskStateToken,
+		LiveTaskStatesJson:  "[]",
 		ShortIDCaseMode:     int64(tasksearchtext.LiteralCaseInsensitive),
 	}
 }
@@ -638,21 +600,10 @@ func taskSearchPageDescriptorArgs(params ListTaskSearchPageDescriptorsParams) []
 		params.ContextClusters,
 		params.OffsetRows,
 		params.LimitRows,
-		params.LifecycleStateToken,
+		params.LiveTaskStatesJson,
 		params.ShortIDCaseMode,
 	}
 }
-
-var noLifecycleTaskStateToken = func() string {
-	token, release, err := RegisterLifecycleTaskStateResolver(func(string) (LifecycleTaskQueryState, error) {
-		return LifecycleTaskQueryState{}, nil
-	})
-	if err != nil {
-		panic(fmt.Sprintf("register task-search lifecycle Task state resolver: %v", err))
-	}
-	_ = release
-	return token
-}()
 
 func createTaskSearchPageDescriptorFixture(t *testing.T, db *sql.DB) {
 	t.Helper()

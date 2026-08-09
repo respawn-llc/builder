@@ -2,40 +2,19 @@ package sqlitegen
 
 import (
 	"database/sql/driver"
-	"errors"
 	"fmt"
-	"strings"
 	"sync"
 
 	"core/server/workflow/label"
 	"core/shared/labelcontract"
 	"core/shared/tasksearchtext"
 
-	"github.com/google/uuid"
 	sqlitedriver "modernc.org/sqlite"
 )
 
 const LabelCollationName = "kent_label_casefold_v1"
 const LabelFoldFunctionName = "kent_label_casefold_v1_fold"
 const LiteralOccurrenceCountFunctionName = "kent_task_search_occurrence_count_v1"
-const LifecycleTaskStateFunctionName = "kent_lifecycle_task_state_v1"
-
-const (
-	LifecycleTaskStateOwned int64 = 1 << iota
-	LifecycleTaskStateRunning
-	LifecycleTaskStateQueued
-	LifecycleTaskStateWaitingQuestion
-	LifecycleTaskStateWaitingApproval
-)
-
-type LifecycleTaskQueryState struct {
-	Present bool
-	Flags   int64
-}
-
-type LifecycleTaskStateResolver func(taskID string) (LifecycleTaskQueryState, error)
-
-var lifecycleTaskStateResolvers sync.Map
 
 type RegistrationError struct {
 	ExtensionName string
@@ -87,82 +66,9 @@ func RegisterSQLiteExtensions() error {
 				ExtensionName: LiteralOccurrenceCountFunctionName,
 				Cause:         err,
 			}
-			return
-		}
-		if err := sqlitedriver.RegisterScalarFunction(
-			LifecycleTaskStateFunctionName,
-			2,
-			lifecycleTaskState,
-		); err != nil {
-			registrationErr = &RegistrationError{
-				ExtensionName: LifecycleTaskStateFunctionName,
-				Cause:         err,
-			}
-			return
 		}
 	})
 	return registrationErr
-}
-
-func RegisterLifecycleTaskStateResolver(resolver LifecycleTaskStateResolver) (string, func(), error) {
-	if resolver == nil {
-		return "", nil, errors.New("lifecycle Task state resolver is required")
-	}
-	token := uuid.NewString()
-	lifecycleTaskStateResolvers.Store(token, resolver)
-	var releaseOnce sync.Once
-	return token, func() {
-		releaseOnce.Do(func() {
-			lifecycleTaskStateResolvers.Delete(token)
-		})
-	}, nil
-}
-
-func lifecycleTaskState(_ *sqlitedriver.FunctionContext, arguments []driver.Value) (driver.Value, error) {
-	resolver, taskID, err := lifecycleTaskStateResolver(arguments)
-	if err != nil {
-		return nil, err
-	}
-	state, err := resolver(taskID)
-	if err != nil {
-		return nil, err
-	}
-	if !state.Present {
-		if state.Flags != 0 {
-			return nil, errors.New("absent lifecycle Task state has flags")
-		}
-		return nil, nil
-	}
-	if state.Flags&LifecycleTaskStateOwned == 0 {
-		return nil, errors.New("present lifecycle Task state is not owned")
-	}
-	return state.Flags, nil
-}
-
-func lifecycleTaskStateResolver(arguments []driver.Value) (LifecycleTaskStateResolver, string, error) {
-	token, err := textArgument(arguments, 0, "lifecycle state token")
-	if err != nil {
-		return nil, "", err
-	}
-	taskID, err := textArgument(arguments, 1, "lifecycle Task id")
-	if err != nil {
-		return nil, "", err
-	}
-	if strings.TrimSpace(token) != token || token == "" {
-		return nil, "", errors.New("SQLite lifecycle state token is invalid")
-	}
-	if strings.TrimSpace(taskID) != taskID || taskID == "" {
-		return nil, "", errors.New("SQLite lifecycle Task id is invalid")
-	}
-	rawResolver, exists := lifecycleTaskStateResolvers.Load(token)
-	if !exists {
-		return nil, "", errors.New("SQLite lifecycle state resolver is unavailable")
-	}
-	resolver, ok := rawResolver.(LifecycleTaskStateResolver)
-	if !ok || resolver == nil {
-		return nil, "", errors.New("SQLite lifecycle state resolver has an invalid type")
-	}
-	return resolver, taskID, nil
 }
 
 func labelFold(_ *sqlitedriver.FunctionContext, arguments []driver.Value) (driver.Value, error) {

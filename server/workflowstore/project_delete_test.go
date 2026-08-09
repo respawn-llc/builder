@@ -16,7 +16,7 @@ func TestDeleteProjectValidatesEveryArtifactBeforeStaging(t *testing.T) {
 	validateErr := errors.New("second artifact cannot be staged")
 	artifacts := &projectDeleteArtifactsFake{validateErrAt: 2, validateErr: validateErr}
 
-	_, err := deleteProjectThroughLifecyclePublication(store, ctx, ProjectDeleteRequest{
+	_, err := store.DeleteProject(ctx, ProjectDeleteRequest{
 		ProjectID: binding.ProjectID,
 		Artifacts: artifacts,
 	})
@@ -41,7 +41,7 @@ func TestDeleteProjectAuthoritativeCurrentNodeBlockerWinsPreparationInvalidation
 	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
 	artifacts := &projectDeleteArtifactsFake{}
 
-	blockers, err := deleteProjectThroughLifecyclePublication(store, ctx, ProjectDeleteRequest{
+	blockers, err := store.DeleteProject(ctx, ProjectDeleteRequest{
 		ProjectID: binding.ProjectID,
 		RuntimeBlocker: func(context.Context, []string) ([]serverapi.ProjectDeleteBlocker, func(), error) {
 			createTestSession(t, ctx, store, binding, cfg)
@@ -75,7 +75,7 @@ func TestDeleteProjectRecoversStagedArtifactsBeforeReturningPreflightBlocker(t *
 	startTask(t, ctx, store, task.ID)
 	artifacts := &projectDeleteArtifactsFake{staged: true}
 
-	blockers, err := deleteProjectThroughLifecyclePublication(store, ctx, ProjectDeleteRequest{
+	blockers, err := store.DeleteProject(ctx, ProjectDeleteRequest{
 		ProjectID: binding.ProjectID,
 		Artifacts: artifacts,
 	})
@@ -98,7 +98,7 @@ func TestDeleteProjectRestoresStagedArtifactsWhenPreparedSessionSetChanges(t *te
 	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
 	artifacts := &projectDeleteArtifactsFake{}
 
-	_, err := deleteProjectThroughLifecyclePublication(store, ctx, ProjectDeleteRequest{
+	_, err := store.DeleteProject(ctx, ProjectDeleteRequest{
 		ProjectID: binding.ProjectID,
 		RuntimeBlocker: func(context.Context, []string) ([]serverapi.ProjectDeleteBlocker, func(), error) {
 			createTestSession(t, ctx, store, binding, cfg)
@@ -123,7 +123,7 @@ func TestDeleteProjectRuntimePreparationDoesNotBlockUnrelatedMetadata(t *testing
 	artifacts := &projectDeleteArtifactsFake{}
 	deleted := make(chan error, 1)
 	go func() {
-		_, err := deleteProjectThroughLifecyclePublication(store, ctx, ProjectDeleteRequest{
+		_, err := store.DeleteProject(ctx, ProjectDeleteRequest{
 			ProjectID: binding.ProjectID,
 			RuntimeBlocker: func(context.Context, []string) ([]serverapi.ProjectDeleteBlocker, func(), error) {
 				close(started)
@@ -157,7 +157,7 @@ func TestDeleteProjectArtifactPreparationAndStagingDoNotHoldWriteTransaction(t *
 	}
 	deleted := make(chan error, 1)
 	go func() {
-		_, err := deleteProjectThroughLifecyclePublication(store, ctx, ProjectDeleteRequest{
+		_, err := store.DeleteProject(ctx, ProjectDeleteRequest{
 			ProjectID: binding.ProjectID,
 			Artifacts: artifacts,
 		})
@@ -187,7 +187,7 @@ END`); err != nil {
 	}
 	artifacts := &projectDeleteArtifactsFake{}
 
-	_, err := deleteProjectThroughLifecyclePublication(store, ctx, ProjectDeleteRequest{
+	_, err := store.DeleteProject(ctx, ProjectDeleteRequest{
 		ProjectID: binding.ProjectID,
 		Artifacts: artifacts,
 	})
@@ -214,7 +214,7 @@ END`); err != nil {
 	restoreErr := errors.New("restore staged tree failed")
 	artifacts := &projectDeleteArtifactsFake{restoreErr: restoreErr}
 
-	_, err := deleteProjectThroughLifecyclePublication(store, ctx, ProjectDeleteRequest{
+	_, err := store.DeleteProject(ctx, ProjectDeleteRequest{
 		ProjectID: binding.ProjectID,
 		Artifacts: artifacts,
 	})
@@ -233,7 +233,7 @@ func TestDeleteProjectRetryFinalizesCommittedTombstone(t *testing.T) {
 	cleanupErr := errors.New("post-commit cleanup failed")
 	artifacts := &projectDeleteArtifactsFake{finalizeErr: cleanupErr}
 
-	_, err := deleteProjectThroughLifecyclePublication(store, ctx, ProjectDeleteRequest{
+	_, err := store.DeleteProject(ctx, ProjectDeleteRequest{
 		ProjectID: binding.ProjectID,
 		Artifacts: artifacts,
 	})
@@ -246,7 +246,7 @@ func TestDeleteProjectRetryFinalizesCommittedTombstone(t *testing.T) {
 	assertProjectAbsent(t, ctx, store, binding.ProjectID)
 
 	artifacts.finalizeErr = nil
-	blockers, err := deleteProjectThroughLifecyclePublication(store, ctx, ProjectDeleteRequest{
+	blockers, err := store.DeleteProject(ctx, ProjectDeleteRequest{
 		ProjectID: binding.ProjectID,
 		Artifacts: artifacts,
 	})
@@ -262,7 +262,7 @@ func TestDeleteProjectStagesThenFinalizesArtifactsOnSuccess(t *testing.T) {
 	ctx, store, binding, _ := newTestStoreWithConfigContext(t)
 	artifacts := &projectDeleteArtifactsFake{}
 
-	blockers, err := deleteProjectThroughLifecyclePublication(store, ctx, ProjectDeleteRequest{
+	blockers, err := store.DeleteProject(ctx, ProjectDeleteRequest{
 		ProjectID: binding.ProjectID,
 		Artifacts: artifacts,
 	})

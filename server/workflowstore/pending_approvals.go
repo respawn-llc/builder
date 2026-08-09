@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"core/server/metadata/sqlitegen"
@@ -20,22 +19,6 @@ type PendingApprovalApplyResult struct {
 	Handoff          CompletionHandoff
 	AutomaticIntents []workflow.CurrentNodeReference
 	TaskAttentionResolution
-}
-
-type preparedPendingApprovalApply struct {
-	mutation *preparedSQLLifecycleMutation
-	result   PendingApprovalApplyResult
-	release  func()
-}
-
-func (p *preparedPendingApprovalApply) commit() error {
-	defer p.release()
-	return p.mutation.commit()
-}
-
-func (p *preparedPendingApprovalApply) rollback() error {
-	defer p.release()
-	return p.mutation.rollback()
 }
 
 type pendingApprovalTransitionSnapshot struct {
@@ -103,19 +86,11 @@ func (s *Store) ListPendingApprovals(ctx context.Context, taskID workflow.TaskID
 }
 
 func (s *Store) PendingApproval(ctx context.Context, approvalID workflow.ApprovalID) (workflow.PendingApproval, error) {
-	return PendingApprovalWithQueries(ctx, s.queries, approvalID)
-}
-
-// PendingApprovalWithQueries decodes an Approval through the supplied query snapshot.
-func PendingApprovalWithQueries(ctx context.Context, q *sqlitegen.Queries, approvalID workflow.ApprovalID) (workflow.PendingApproval, error) {
-	if q == nil {
-		return workflow.PendingApproval{}, errors.New("workflow queries are required")
-	}
 	normalizedID, err := normalizeApprovalID(approvalID)
 	if err != nil {
 		return workflow.PendingApproval{}, err
 	}
-	return pendingApprovalByID(ctx, q, normalizedID)
+	return pendingApprovalByID(ctx, s.queries, normalizedID)
 }
 
 func (s *Store) IsCurrentNodeExecutionEligible(ctx context.Context, reference workflow.CurrentNodeReference) (bool, error) {
@@ -129,92 +104,81 @@ func (s *Store) IsCurrentNodeExecutionEligible(ctx context.Context, reference wo
 	return !pending, nil
 }
 
-func (s *Store) preparePendingApprovalApply(
-	ctx context.Context,
-	approvalID workflow.ApprovalID,
-) (*preparedPendingApprovalApply, error) {
+func (s *Store) ApplyPendingApproval(ctx context.Context, approvalID workflow.ApprovalID) (PendingApprovalApplyResult, error) {
 	normalizedID, err := normalizeApprovalID(approvalID)
 	if err != nil {
-		return nil, err
+		return PendingApprovalApplyResult{}, err
 	}
 	select {
 	case s.approvalGate <- struct{}{}:
+		defer func() { <-s.approvalGate }()
 	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-	var releaseOnce sync.Once
-	release := func() {
-		releaseOnce.Do(func() { <-s.approvalGate })
+		return PendingApprovalApplyResult{}, ctx.Err()
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		release()
-		return nil, err
+		return PendingApprovalApplyResult{}, err
 	}
-	rollbackOnError := func(cause error) (*preparedPendingApprovalApply, error) {
-		rollbackErr := tx.Rollback()
-		if errors.Is(rollbackErr, sql.ErrTxDone) {
-			rollbackErr = nil
-		}
-		release()
-		return nil, errors.Join(cause, rollbackErr)
-	}
+	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
 	approval, err := pendingApprovalByID(ctx, q, normalizedID)
 	if err != nil {
-		return rollbackOnError(err)
+		return PendingApprovalApplyResult{}, err
 	}
 	approvalAttention, found, err := pendingApprovalAttentionProjection(ctx, q, normalizedID)
 	if err != nil {
-		return rollbackOnError(err)
+		return PendingApprovalApplyResult{}, err
 	}
 	if !found {
-		return rollbackOnError(fmt.Errorf("pending approval %q disappeared during attention resolution", normalizedID))
+		return PendingApprovalApplyResult{}, fmt.Errorf("pending approval %q disappeared during attention resolution", normalizedID)
 	}
 	if _, err := currentNodeForReference(ctx, q, approval.Source); err != nil {
-		return rollbackOnError(err)
+		return PendingApprovalApplyResult{}, err
 	}
 	targets := make([]workflow.CurrentNode, 0, len(approval.Branches))
 	for _, branch := range approval.Branches {
 		targets = append(targets, branch.Target.CurrentNode)
 	}
 	if len(targets) == 0 {
-		return rollbackOnError(errors.New("pending approval has no target branches"))
+		return PendingApprovalApplyResult{}, errors.New("pending approval has no target branches")
 	}
 	var fanoutTargets []currentNodeFanoutTarget
 	if len(targets) == 1 {
 		if err := validatePendingApprovalSequentialTarget(approval.Source, targets[0].Reference); err != nil {
-			return rollbackOnError(err)
+			return PendingApprovalApplyResult{}, err
 		}
 	} else {
 		fanoutTargets, err = pendingApprovalFanoutTargets(approval.Source, approval.Branches)
 		if err != nil {
-			return rollbackOnError(err)
+			return PendingApprovalApplyResult{}, err
 		}
 	}
 	removedApproval, err := q.DeleteTaskPendingApproval(ctx, normalizedID.String())
 	if err != nil {
-		return rollbackOnError(err)
+		return PendingApprovalApplyResult{}, err
 	}
 	if removedApproval != 1 {
-		return rollbackOnError(sql.ErrNoRows)
+		return PendingApprovalApplyResult{}, sql.ErrNoRows
 	}
 	if len(targets) == 1 {
 		removedCurrentNode, err := deleteTaskCurrentNode(ctx, q, approval.Source)
 		if err != nil {
-			return rollbackOnError(err)
+			return PendingApprovalApplyResult{}, err
 		}
 		if removedCurrentNode != 1 {
-			return rollbackOnError(sql.ErrNoRows)
+			return PendingApprovalApplyResult{}, sql.ErrNoRows
 		}
 		if err := insertTaskCurrentNodeWithKind(ctx, q, targets[0], approval.Branches[0].Target.NodeKind); err != nil {
-			return rollbackOnError(err)
+			return PendingApprovalApplyResult{}, err
 		}
 	} else if err := replaceCurrentNodeWithFanout(ctx, q, approval.Source, fanoutTargets); err != nil {
-		return rollbackOnError(err)
+		return PendingApprovalApplyResult{}, err
 	}
 	if err := touchTaskUpdatedAt(ctx, q, string(approval.Source.TaskID), s.now().UnixMilli()); err != nil {
-		return rollbackOnError(err)
+		return PendingApprovalApplyResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return PendingApprovalApplyResult{}, err
 	}
 	result := PendingApprovalApplyResult{
 		Mutation: workflow.CurrentNodeMutationResult{
@@ -232,11 +196,7 @@ func (s *Store) preparePendingApprovalApply(
 			result.AutomaticIntents = append(result.AutomaticIntents, target.Reference)
 		}
 	}
-	return &preparedPendingApprovalApply{
-		mutation: newPreparedSQLLifecycleMutation(tx),
-		result:   result,
-		release:  release,
-	}, nil
+	return result, nil
 }
 
 func pendingApprovalByID(

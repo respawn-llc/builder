@@ -51,7 +51,7 @@ func TestManualMoveForwardExecutableAgentReplacesSerialCurrentNode(t *testing.T)
 	if !prepared.RequiresExecutionTarget() {
 		t.Fatal("forward executable move did not require execution-target selection")
 	}
-	moved, err := applyManualMoveForStoreTest(store, ctx, prepared, &ExecutionTargetCandidate{
+	moved, err := store.ApplyManualMove(ctx, prepared, &ExecutionTargetCandidate{
 		Snapshot: ExecutionTargetSnapshot{
 			Mode:       workflow.ExecutionTargetModeNone,
 			Provenance: ExecutionTargetProvenanceResolved,
@@ -163,7 +163,7 @@ func TestManualMoveForwardExecutableReplacesApprovalWithoutStartingTarget(t *tes
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
-	completed, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
+	completed, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 		Source:       source.Reference,
 		TransitionID: "next",
 		OutputValues: map[string]string{"prior_summary": "automatic proposal"},
@@ -190,7 +190,7 @@ func TestManualMoveForwardExecutableReplacesApprovalWithoutStartingTarget(t *tes
 	if err != nil {
 		t.Fatalf("PrepareManualMove: %v", err)
 	}
-	moved, err := applyManualMoveForStoreTest(store, ctx, prepared, &ExecutionTargetCandidate{
+	moved, err := store.ApplyManualMove(ctx, prepared, &ExecutionTargetCandidate{
 		Snapshot: ExecutionTargetSnapshot{
 			Mode:       workflow.ExecutionTargetModeNone,
 			Provenance: ExecutionTargetProvenanceResolved,
@@ -263,7 +263,7 @@ func TestManualMoveForwardExecutableScriptValidatesAndMaterializesTarget(t *test
 	if !prepared.RequiresExecutionTarget() {
 		t.Fatal("script move did not require an execution target")
 	}
-	moved, err := applyManualMoveForStoreTest(fixture.store, fixture.ctx, prepared, nil)
+	moved, err := fixture.store.ApplyManualMove(fixture.ctx, prepared, nil)
 	if err != nil {
 		t.Fatalf("ApplyManualMove: %v", err)
 	}
@@ -301,7 +301,7 @@ func TestManualMoveExecutableRejectsMissingBackwardAndParallelPaths(t *testing.T
 		linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 		task := createDefaultTask(t, ctx, store, binding.ProjectID)
 		source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
-		if _, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
+		if _, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 			Source:       source.Reference,
 			TransitionID: "next",
 			OutputValues: map[string]string{"prior_summary": "plan"},
@@ -326,7 +326,7 @@ func TestManualMoveExecutableRejectsMissingBackwardAndParallelPaths(t *testing.T
 		linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 		task := createDefaultTask(t, ctx, store, binding.ProjectID)
 		source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
-		if _, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
+		if _, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 			Source:       source.Reference,
 			TransitionID: "split",
 			OutputValues: map[string]string{"summary": "plan"},
@@ -353,7 +353,7 @@ func TestManualMoveToNonExecutableSupersedesPendingApproval(t *testing.T) {
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
-	if _, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
+	if _, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 		Source:       source.Reference,
 		TransitionID: "next",
 		OutputValues: map[string]string{"prior_summary": "plan"},
@@ -377,7 +377,7 @@ func TestManualMoveToNonExecutableSupersedesPendingApproval(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareManualMove: %v", err)
 	}
-	moved, err := applyManualMoveForStoreTest(store, ctx, prepared, nil)
+	moved, err := store.ApplyManualMove(ctx, prepared, nil)
 	if err != nil {
 		t.Fatalf("ApplyManualMove: %v", err)
 	}
@@ -415,7 +415,7 @@ func TestManualMoveFanoutTransitionReplacesTaskWithEveryBranch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareManualMove: %v", err)
 	}
-	moved, err := applyManualMoveForStoreTest(store, ctx, prepared, &ExecutionTargetCandidate{
+	moved, err := store.ApplyManualMove(ctx, prepared, &ExecutionTargetCandidate{
 		Snapshot: ExecutionTargetSnapshot{
 			Mode:       workflow.ExecutionTargetModeNone,
 			Provenance: ExecutionTargetProvenanceResolved,
@@ -453,7 +453,7 @@ func TestManualMoveFromPartiallyArrivedFanoutReplacesTheWholeTaskGroup(t *testin
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	plan := startTask(t, ctx, store, task.ID).Mutation.Created[0]
-	split, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
+	split, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 		Source:       plan.Reference,
 		TransitionID: "split",
 		OutputValues: map[string]string{"summary": "plan"},
@@ -469,7 +469,7 @@ func TestManualMoveFromPartiallyArrivedFanoutReplacesTheWholeTaskGroup(t *testin
 		}
 		branches[branch] = currentNode
 	}
-	if _, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
+	if _, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 		Source:       branches["split_a"].Reference,
 		TransitionID: "join_a",
 		OutputValues: map[string]string{"joined": "branch A"},
@@ -491,7 +491,7 @@ func TestManualMoveFromPartiallyArrivedFanoutReplacesTheWholeTaskGroup(t *testin
 	if err != nil {
 		t.Fatalf("PrepareManualMove: %v", err)
 	}
-	moved, err := applyManualMoveForStoreTest(store, ctx, prepared, &ExecutionTargetCandidate{
+	moved, err := store.ApplyManualMove(ctx, prepared, &ExecutionTargetCandidate{
 		Snapshot: ExecutionTargetSnapshot{
 			Mode:       workflow.ExecutionTargetModeNone,
 			Provenance: ExecutionTargetProvenanceResolved,
@@ -536,14 +536,14 @@ func TestManualMoveFinalRevalidationReturnsNoOpWithoutExecutionTargetMutation(t 
 	if err != nil {
 		t.Fatalf("PrepareManualMove: %v", err)
 	}
-	if _, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
+	if _, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 		Source:       source.Reference,
 		TransitionID: "next",
 		OutputValues: map[string]string{"prior_summary": "automatic plan"},
 	}); err != nil {
 		t.Fatalf("CompleteCurrentNode before final apply: %v", err)
 	}
-	moved, err := applyManualMoveForStoreTest(store, ctx, prepared, &ExecutionTargetCandidate{
+	moved, err := store.ApplyManualMove(ctx, prepared, &ExecutionTargetCandidate{
 		Snapshot: ExecutionTargetSnapshot{
 			Mode:       workflow.ExecutionTargetModeNone,
 			Provenance: ExecutionTargetProvenanceResolved,
@@ -578,7 +578,7 @@ func TestManualMoveScriptValidationRollsBackReplacement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareManualMove: %v", err)
 	}
-	if _, err := applyManualMoveForStoreTest(fixture.store, fixture.ctx, prepared, nil); err == nil {
+	if _, err := fixture.store.ApplyManualMove(fixture.ctx, prepared, nil); err == nil {
 		t.Fatal("ApplyManualMove: want invalid script error")
 	}
 	currentNodes, err := fixture.store.ListCurrentNodes(fixture.ctx, fixture.task.ID)

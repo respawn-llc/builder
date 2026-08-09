@@ -26,15 +26,13 @@ type taskLabelFilterTemplateData struct {
 type taskDependencyFilterTemplateData struct {
 	DependencyFilter string
 	Indent           string
-	StatusRelation   string
 	TaskID           string
 }
 
 type taskStatusProjectionTemplateData struct {
-	LiveTaskStatesJSON  string
-	LifecycleStateToken string
-	Indent              string
-	Suffix              string
+	LiveTaskStatesJSON string
+	Indent             string
+	Suffix             string
 }
 
 type taskListSortSlotTemplateData struct {
@@ -260,30 +258,10 @@ func parseMetadataQueryTemplate(source []byte, filterSource []byte, dependencySo
 		}
 		return rendered.String(), nil
 	}
-	renderTaskLifecycleStatusProjection := func(
-		indent string,
-		lifecycleStateToken string,
-		suffix string,
-	) (string, error) {
-		data := taskStatusProjectionTemplateData{
-			LifecycleStateToken: lifecycleStateToken,
-			Indent:              indent,
-			Suffix:              suffix,
-		}
-		if err := data.validate(); err != nil {
-			return "", err
-		}
-		var rendered bytes.Buffer
-		if err := statusTemplate.Execute(&rendered, data); err != nil {
-			return "", fmt.Errorf("render Task lifecycle status projection template: %w", err)
-		}
-		return rendered.String(), nil
-	}
-	renderTaskDependencyFilter := func(indent string, taskID string, dependencyFilter string, statusRelation string) (string, error) {
+	renderTaskDependencyFilter := func(indent string, taskID string, dependencyFilter string) (string, error) {
 		data := taskDependencyFilterTemplateData{
 			DependencyFilter: dependencyFilter,
 			Indent:           indent,
-			StatusRelation:   statusRelation,
 			TaskID:           taskID,
 		}
 		if err := data.validate(); err != nil {
@@ -298,10 +276,9 @@ func parseMetadataQueryTemplate(source []byte, filterSource []byte, dependencySo
 	queryTemplate, err := template.New("queries").
 		Option("missingkey=error").
 		Funcs(template.FuncMap{
-			"taskLabelFilter":               renderTaskLabelFilter,
-			"taskDependencyFilter":          renderTaskDependencyFilter,
-			"taskStatusProjection":          renderTaskStatusProjection,
-			"taskLifecycleStatusProjection": renderTaskLifecycleStatusProjection,
+			"taskLabelFilter":      renderTaskLabelFilter,
+			"taskDependencyFilter": renderTaskDependencyFilter,
+			"taskStatusProjection": renderTaskStatusProjection,
 		}).
 		Parse(string(source))
 	if err != nil {
@@ -316,8 +293,6 @@ func (d taskDependencyFilterTemplateData) validate() error {
 		return errors.New("task ID template expression is empty")
 	case strings.TrimSpace(d.DependencyFilter) == "":
 		return errors.New("dependency filter template expression is empty")
-	case strings.TrimSpace(d.StatusRelation) == "":
-		return errors.New("dependency filter status relation is empty")
 	default:
 		return nil
 	}
@@ -342,8 +317,8 @@ func (d taskLabelFilterTemplateData) validate() error {
 
 func (d taskStatusProjectionTemplateData) validate() error {
 	switch {
-	case (strings.TrimSpace(d.LiveTaskStatesJSON) == "") == (strings.TrimSpace(d.LifecycleStateToken) == ""):
-		return errors.New("exactly one Task status live source template expression is required")
+	case strings.TrimSpace(d.LiveTaskStatesJSON) == "":
+		return errors.New("live task states JSON template expression is empty")
 	case d.Suffix != "" && d.Suffix != ",":
 		return fmt.Errorf("task status projection suffix %q is invalid", d.Suffix)
 	default:

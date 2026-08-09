@@ -30,7 +30,6 @@ type exclusiveStepLifecycle interface {
 	ReleaseReservation(reservation *exclusiveStepReservation)
 	Interrupt() error
 	InterruptCurrent(beforeCancel func(*RunSnapshot)) (*RunSnapshot, error)
-	InterruptMatching(runID, stepID string, beforeCancel func(*RunSnapshot)) (*RunSnapshot, error)
 	IsBusy() bool
 	Snapshot() *RunSnapshot
 	WithActiveStep(fn func(stepID string) error) (bool, error)

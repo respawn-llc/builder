@@ -34,13 +34,13 @@ VALUES
 	rows, err := New(db).ListWorkflowTaskStatusProjectionByTasks(t.Context(), ListWorkflowTaskStatusProjectionByTasksParams{
 		TaskIdsJson: `["approval-durable","approval-live","both-live","done","queued","question","running","stale-question","stale-queued","stale-running"]`,
 		LiveTaskStatesJson: `[
-				{"task_id":"approval-durable","has_lifecycle_override":true,"current_node_ids":["approval-durable-node"],"has_running":true},
-				{"task_id":"approval-live","has_lifecycle_override":true,"current_node_ids":["approval-live-node"],"has_waiting_approval":true},
-				{"task_id":"both-live","has_lifecycle_override":true,"current_node_ids":["both-live-node"],"has_waiting_approval":true,"waiting_question":true},
+				{"task_id":"approval-durable","has_running":true},
+				{"task_id":"approval-live","has_waiting_approval":true},
+				{"task_id":"both-live","has_waiting_approval":true,"waiting_question":true},
 				{"task_id":"done","has_waiting_approval":true,"waiting_question":true},
-				{"task_id":"question","has_lifecycle_override":true,"current_node_ids":["question-node"],"waiting_question":true},
-				{"task_id":"queued","has_lifecycle_override":true,"current_node_ids":["queued-node"],"has_queued":true},
-				{"task_id":"running","has_lifecycle_override":true,"current_node_ids":["running-node"],"has_running":true}
+				{"task_id":"question","waiting_question":true},
+				{"task_id":"queued","has_queued":true},
+				{"task_id":"running","has_running":true}
 			]`,
 	})
 	if err != nil {

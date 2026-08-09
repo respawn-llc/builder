@@ -200,16 +200,10 @@
 - Multiple queued human steering messages flushed at one boundary coalesce into one user message separated by blank lines. Each queued steer issued from another Session remains a separate message.
 - Pending queues have no fixed count limit and are lost on process exit.
 - A mid-turn message becomes durable only when Kent delivers it.
-- In an ordinary Session, Ctrl+C interrupts only an active Agent Turn: stop the current model step and active tool process and keep the app/session alive. It does not cancel a submission before its Agent Turn starts; a submission already sent to the server may start or continue after the client detaches.
-- Retained Workflow user activation does not open a transcript while its Run is queued or launching. It returns the ordinary ready Session attachment only after Authority atomically verifies and attaches to the expected still-current Exact Execution Scope and Resource Generation; opening failure surfaces the activation error without a pre-Exact transcript.
-- Automatic transcript/control recovery uses technical reattachment. It never creates or joins a Workflow Run or waits for future execution. It attaches to the matching Exact execution live when Kent handles the request, or returns unavailable, leaves the Current Node unchanged, and creates no transcript when none is live.
-- In an opened retained Workflow Session, Ctrl+C targets that matching Exact Execution Scope through Workflow Execution. If durable interruption fails, the client surfaces the failure and Exact execution remains active.
-- If the Exact ends while the retained Workflow transcript remains attached, the next explicit message, user shell, or compaction operation creates or joins the Current-Node Run and uses its Workflow-owned Exact scope. The transcript does not need to close and reopen, and no ordinary Session execution is created.
-- If that explicit operation created an interruptible launching Run, Ctrl+C targets the creator operation and restores its text only after Workflow Execution durably interrupts the Current Node and Runtime Command reports canceled-not-committed. A failed interruption leaves the operation and Run unchanged.
-- Transcript opening and reconnection retain the ordinary hydration-first subscription contract and existing Resource Generation ownership.
+- Ctrl+C interrupts only an active Agent Turn: stop the current model step and active tool process and keep the app/session alive. It does not cancel a submission before its Agent Turn starts; a submission already sent to the server may start or continue after the client detaches.
 - Interrupt injects detail-only developer-role control message `User interrupted you`.
 - Post-interrupt state returns idle with input ready.
-- Resume after ordinary Session interruption requires explicit user text. A retained Workflow Current Node may Resume through any fresh user-initiated Session activation or an explicit attached message, user-shell, or compaction operation that starts Agent execution; automatic technical reattachment never Resumes it.
+- Resume after interrupt requires explicit user text.
 - Session reopening after a crash or durability-failure retirement follows the fresh-resource recovery contract in `core-runtime-tools.md`. The TUI does not expose a stale tool call as live; otherwise it restores normal state.
 - Failed prompt-history navigation emits plain terminal BEL with no transient UI notification.
 
@@ -243,7 +237,7 @@
 - A Kent background shell process in the worktree blocks deletion immediately. Kent does not wait or retry automatically.
 - A busy deletion reports `worktree blocked`. It is not a successful deletion and includes no blocker-detail payload.
 - Deleting the requesting Session's current worktree is scheduled first. The request acknowledges scheduling before Kent checks blockers. The scheduled deletion then checks current state again before removal.
-- Branch cleanup is conservative/best-effort. Normal TUI deletion only auto-attempts branch deletion when provenance proves Kent created the branch. Explicit TUI Delete + Branch is available for every branch-backed worktree and uses safe branch deletion. Agent CLI deletion always retains branches.
+- Branch cleanup is conservative/best-effort. Normal TUI deletion only auto-attempts branch deletion when provenance proves Kent created the branch. Explicit TUI Delete + Branch is available for every branch-backed worktree and uses safe branch deletion.
 - New worktrees default under `worktrees.base_dir`, rooted under Kent persistence state by default.
 - After a target change, shell execution and relative file paths use the new Working Directory.
 - Containment checks for `edit`, `patch`, and `view_image` use the new Execution Target Root.
@@ -253,9 +247,8 @@
 - Setup progress is live operation state. It is not model-visible transcript history.
 - Creating a worktree and completing setup does not change the Session target.
 - After successful TUI creation, the TUI applies the ordinary enter operation.
-- Agent CLI creation stops after setup and prints a separate enter action.
 - Setup failure keeps the Session on its previous worktree, preserves the created worktree for inspection or repair, and shows a foreground error.
-- CLI and TUI enter and leave actions return before an active Agent Step finishes.
+- TUI enter and leave actions return before an active Agent Step finishes.
 - Each Session can have one pending worktree target change.
 - An identical retry returns the existing acknowledgement. A different target change is rejected while one is pending.
 - Kent applies the target change between Agent Steps before queued user work.

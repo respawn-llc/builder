@@ -797,7 +797,7 @@ func TestTaskLabelAssignmentSupportsEveryTaskLifecycleState(t *testing.T) {
 
 	admitted := createDefaultTask(t, ctx, store, binding.ProjectID)
 	admittedStart := startTask(t, ctx, store, admitted.ID)
-	if err := publishCurrentNodeAdmissionForTest(ctx, store, admittedStart.Mutation.Created[0].Reference); err != nil {
+	if err := store.AdmitCurrentNode(ctx, admittedStart.Mutation.Created[0].Reference); err != nil {
 		t.Fatalf("AdmitCurrentNode: %v", err)
 	}
 
@@ -809,7 +809,7 @@ func TestTaskLabelAssignmentSupportsEveryTaskLifecycleState(t *testing.T) {
 
 	done := createDefaultTask(t, ctx, store, binding.ProjectID)
 	doneStart := startTask(t, ctx, store, done.ID)
-	if _, err := completeCurrentNodeForStoreTest(store, ctx, CurrentNodeCompletionRequest{
+	if _, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 		Source:       doneStart.Mutation.Created[0].Reference,
 		TransitionID: "done",
 	}); err != nil {

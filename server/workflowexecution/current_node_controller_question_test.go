@@ -55,14 +55,13 @@ func TestCurrentNodeControllerTaskInterruptLeavesWaitingQuestionScopeNonQuiescen
 	if err != nil {
 		t.Fatalf("StartScriptExecution: %v", err)
 	}
+	runningKey, err := running.Key()
+	if err != nil {
+		t.Fatalf("running Current Node key: %v", err)
+	}
 	fixture.controller.mu.Lock()
-	installLiveCurrentNodeRunLockedForTest(
-		fixture.controller,
-		running,
-		workflow.NodeKindScript,
-		currentNodeAdmissionExplicitOverride,
-		lease,
-	)
+	fixture.controller.live[lease.ScopeID()] = currentNodeLiveScope{reference: running, lease: lease}
+	fixture.controller.liveByNode[runningKey] = lease.ScopeID()
 	fixture.controller.mu.Unlock()
 	waitForRunningCurrentNode(t, fixture.authority, running)
 
@@ -124,14 +123,13 @@ func TestCurrentNodeControllerManualMoveRejectsWaitingQuestionWithoutStoppingSib
 	if err != nil {
 		t.Fatalf("StartScriptExecution: %v", err)
 	}
+	key, err := running.Key()
+	if err != nil {
+		t.Fatalf("running Current Node key: %v", err)
+	}
 	fixture.controller.mu.Lock()
-	installLiveCurrentNodeRunLockedForTest(
-		fixture.controller,
-		running,
-		workflow.NodeKindScript,
-		currentNodeAdmissionExplicitOverride,
-		lease,
-	)
+	fixture.controller.live[lease.ScopeID()] = currentNodeLiveScope{reference: running, lease: lease}
+	fixture.controller.liveByNode[key] = lease.ScopeID()
 	fixture.controller.mu.Unlock()
 	waitForRunningCurrentNode(t, fixture.authority, running)
 
@@ -251,7 +249,7 @@ func TestCurrentNodeControllerAnswersOnlyDurablyBoundExactPromptScope(t *testing
 	}
 }
 
-func TestCurrentNodeControllerAcceptedAnswerDoesNotBlockIndependentTask(t *testing.T) {
+func TestCurrentNodeControllerReleasesMutationPermitAfterAcceptingAnswer(t *testing.T) {
 	fixture := newCurrentNodeQuestionFixture(t)
 	reference := currentNodeReferenceForControllerTest(t, "task-question-permit", "node-question")
 	firstID := uuid.NewString()

@@ -289,21 +289,6 @@ func (q *Queries) AllocateProjectTaskSequence(ctx context.Context, arg AllocateP
 	return i, err
 }
 
-const anchorLifecycleReadSnapshot = `-- name: AnchorLifecycleReadSnapshot :one
-SELECT EXISTS(
-    SELECT 1
-    FROM tasks
-) AS anchored
-`
-
-func (q *Queries) AnchorLifecycleReadSnapshot(ctx context.Context) (bool, error) {
-	row := q.db.QueryRowContext(ctx, anchorLifecycleReadSnapshot)
-	var anchored bool
-	err := recordQueryError(ctx, row.Scan(&anchored), anchorLifecycleReadSnapshot, 0)
-
-	return anchored, err
-}
-
 const anchorTaskSearchReadSnapshot = `-- name: AnchorTaskSearchReadSnapshot :one
 SELECT EXISTS(
     SELECT 1
@@ -2805,76 +2790,6 @@ func (q *Queries) GetWorktreeByID(ctx context.Context, id string) (GetWorktreeBy
 	return i, err
 }
 
-const hasBranchCurrentNodeSessionAssociation = `-- name: HasBranchCurrentNodeSessionAssociation :one
-SELECT EXISTS (
-    SELECT 1
-    FROM task_current_nodes current_node
-    JOIN sessions session
-      ON session.id = current_node.session_id
-     AND session.task_id = current_node.task_id
-    JOIN session_workflow_node_associations association
-      ON association.session_id = current_node.session_id
-     AND association.node_id = current_node.node_id
-     AND association.transition_branch_key = current_node.transition_branch_key
-    WHERE current_node.task_id = ?1
-      AND current_node.node_id = ?2
-      AND current_node.transition_branch_key = ?3
-      AND current_node.session_id = ?4
-)
-`
-
-type HasBranchCurrentNodeSessionAssociationParams struct {
-	TaskID              string
-	NodeID              string
-	TransitionBranchKey sql.NullString
-	SessionID           sql.NullString
-}
-
-func (q *Queries) HasBranchCurrentNodeSessionAssociation(ctx context.Context, arg HasBranchCurrentNodeSessionAssociationParams) (bool, error) {
-	row := q.db.QueryRowContext(ctx, hasBranchCurrentNodeSessionAssociation,
-		arg.TaskID,
-		arg.NodeID,
-		arg.TransitionBranchKey,
-		arg.SessionID,
-	)
-	var exists bool
-	err := recordQueryError(ctx, row.Scan(&exists), hasBranchCurrentNodeSessionAssociation, 4)
-
-	return exists, err
-}
-
-const hasSerialCurrentNodeSessionAssociation = `-- name: HasSerialCurrentNodeSessionAssociation :one
-SELECT EXISTS (
-    SELECT 1
-    FROM task_current_nodes current_node
-    JOIN sessions session
-      ON session.id = current_node.session_id
-     AND session.task_id = current_node.task_id
-    JOIN session_workflow_node_associations association
-      ON association.session_id = current_node.session_id
-     AND association.node_id = current_node.node_id
-     AND association.transition_branch_key IS NULL
-    WHERE current_node.task_id = ?1
-      AND current_node.node_id = ?2
-      AND current_node.transition_branch_key IS NULL
-      AND current_node.session_id = ?3
-)
-`
-
-type HasSerialCurrentNodeSessionAssociationParams struct {
-	TaskID    string
-	NodeID    string
-	SessionID sql.NullString
-}
-
-func (q *Queries) HasSerialCurrentNodeSessionAssociation(ctx context.Context, arg HasSerialCurrentNodeSessionAssociationParams) (bool, error) {
-	row := q.db.QueryRowContext(ctx, hasSerialCurrentNodeSessionAssociation, arg.TaskID, arg.NodeID, arg.SessionID)
-	var exists bool
-	err := recordQueryError(ctx, row.Scan(&exists), hasSerialCurrentNodeSessionAssociation, 3)
-
-	return exists, err
-}
-
 const hasTaskPendingApprovalForCurrentNode = `-- name: HasTaskPendingApprovalForCurrentNode :one
 SELECT EXISTS (
     SELECT 1
@@ -3872,71 +3787,16 @@ label_filter_args AS (
         CAST(?2 AS TEXT) AS label_filter_kind,
         CAST(?3 AS TEXT) AS label_filter_mode,
         CAST(?4 AS TEXT) AS label_ids_json,
-        CAST(?5 AS INTEGER) AS dependency_filter,
-        CAST(?6 AS TEXT) AS lifecycle_state_token
+        CAST(?5 AS INTEGER) AS dependency_filter
 ),
-
-effective_status AS (
-    SELECT
-        durable.task_id,
-        CAST(CASE
-            WHEN kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM label_filter_args), durable.task_id) IS NOT NULL THEN 0
-            ELSE durable.is_done
-        END AS INTEGER) AS is_done,
-        CASE
-            WHEN kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM label_filter_args), durable.task_id) IS NULL
-              AND durable.is_done != 0 THEN 'done'
-            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM label_filter_args), durable.task_id) & 8) != 0 THEN 'waiting_question'
-            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM label_filter_args), durable.task_id) & 16) != 0
-              OR durable.kind = 'waiting_approval' THEN 'waiting_approval'
-            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM label_filter_args), durable.task_id) & 2) != 0 THEN 'running'
-            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM label_filter_args), durable.task_id) & 4) != 0 THEN 'queued'
-            WHEN durable.kind IN ('running', 'queued', 'waiting_question') THEN 'active'
-            ELSE durable.kind
-        END AS kind,
-        CAST(CASE
-            WHEN kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM label_filter_args), durable.task_id) IS NULL
-              AND durable.is_done != 0 THEN 1
-            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM label_filter_args), durable.task_id) & 8) != 0 THEN 2
-            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM label_filter_args), durable.task_id) & 16) != 0
-              OR durable.kind = 'waiting_approval' THEN 3
-            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM label_filter_args), durable.task_id) & 2) != 0 THEN 5
-            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM label_filter_args), durable.task_id) & 4) != 0 THEN 6
-            WHEN durable.kind IN ('running', 'queued', 'waiting_question') THEN 8
-            ELSE durable.primary_status_rank
-        END AS INTEGER) AS primary_status_rank,
-        durable.node_ids_json,
-        CASE
-            WHEN kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM label_filter_args), durable.task_id) IS NULL
-              AND durable.is_done != 0 THEN durable.attention_types_json
-            ELSE (
-                SELECT json_group_array(attention_type)
-                FROM (
-                    SELECT CAST(existing_attention.value AS TEXT) AS attention_type
-                    FROM json_each(durable.attention_types_json) existing_attention
-                    WHERE existing_attention.value != 'question'
-                    UNION
-                    SELECT 'question'
-                    WHERE (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM label_filter_args), durable.task_id) & 8) != 0
-                    UNION
-                    SELECT 'approval'
-                    WHERE (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM label_filter_args), durable.task_id) & 16) != 0
-                    ORDER BY attention_type ASC
-                )
-            )
-        END AS attention_types_json
-    FROM workflow_task_status_records durable
-),
-
-
 effective_current_nodes AS (
     SELECT
         t.id AS task_id,
-        CAST(current_node.node_id AS TEXT) AS node_id
-    FROM task_records t
-    JOIN task_current_nodes current_node ON current_node.task_id = t.id
-    WHERE t.project_id = ?7
-      AND t.workflow_id = ?8
+        current_node.node_id
+    FROM task_current_nodes current_node
+    JOIN task_records t ON t.id = current_node.task_id
+    WHERE t.project_id = ?6
+      AND t.workflow_id = ?7
 )
 SELECT
     node_id,
@@ -4008,7 +3868,7 @@ AND
                 WHERE dependency.blocked_task_id = effective_current_nodes.task_id
                   AND NOT EXISTS (
                       SELECT 1
-                      FROM effective_status status
+                      FROM workflow_task_status_records status
                       WHERE status.task_id = dependency.blocker_task_id
                         AND status.is_done != 0
                   )
@@ -4026,7 +3886,6 @@ type ListBoardColumnTaskCountsParams struct {
 	LabelFilterMode      sql.NullString
 	LabelIdsJson         string
 	DependencyFilter     sql.NullInt64
-	LifecycleStateToken  string
 	ProjectID            string
 	WorkflowID           runtimeids.WorkflowID
 }
@@ -4043,11 +3902,10 @@ func (q *Queries) ListBoardColumnTaskCounts(ctx context.Context, arg ListBoardCo
 		arg.LabelFilterMode,
 		arg.LabelIdsJson,
 		arg.DependencyFilter,
-		arg.LifecycleStateToken,
 		arg.ProjectID,
 		arg.WorkflowID,
 	)
-	err = recordQueryError(ctx, err, listBoardColumnTaskCounts, 8)
+	err = recordQueryError(ctx, err, listBoardColumnTaskCounts, 7)
 
 	if err != nil {
 		return nil, err
@@ -4056,87 +3914,22 @@ func (q *Queries) ListBoardColumnTaskCounts(ctx context.Context, arg ListBoardCo
 	var items []ListBoardColumnTaskCountsRow
 	for rows.Next() {
 		var i ListBoardColumnTaskCountsRow
-		if err := recordQueryError(ctx, rows.Scan(&i.NodeID, &i.TaskCount), listBoardColumnTaskCounts, 8); err != nil {
+		if err := recordQueryError(ctx, rows.Scan(&i.NodeID, &i.TaskCount), listBoardColumnTaskCounts, 7); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listBoardColumnTaskCounts, 8); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listBoardColumnTaskCounts, 7); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listBoardColumnTaskCounts, 8); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listBoardColumnTaskCounts, 7); err != nil {
 		return nil, err
 	}
 	return items, nil
 }
 
 const listBoardNodeTasks = `-- name: ListBoardNodeTasks :many
-WITH
-args AS (
-    SELECT CAST(?1 AS TEXT) AS lifecycle_state_token
-),
-
-effective_status AS (
-    SELECT
-        durable.task_id,
-        CAST(CASE
-            WHEN kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) IS NOT NULL THEN 0
-            ELSE durable.is_done
-        END AS INTEGER) AS is_done,
-        CASE
-            WHEN kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) IS NULL
-              AND durable.is_done != 0 THEN 'done'
-            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 8) != 0 THEN 'waiting_question'
-            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 16) != 0
-              OR durable.kind = 'waiting_approval' THEN 'waiting_approval'
-            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 2) != 0 THEN 'running'
-            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 4) != 0 THEN 'queued'
-            WHEN durable.kind IN ('running', 'queued', 'waiting_question') THEN 'active'
-            ELSE durable.kind
-        END AS kind,
-        CAST(CASE
-            WHEN kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) IS NULL
-              AND durable.is_done != 0 THEN 1
-            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 8) != 0 THEN 2
-            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 16) != 0
-              OR durable.kind = 'waiting_approval' THEN 3
-            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 2) != 0 THEN 5
-            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 4) != 0 THEN 6
-            WHEN durable.kind IN ('running', 'queued', 'waiting_question') THEN 8
-            ELSE durable.primary_status_rank
-        END AS INTEGER) AS primary_status_rank,
-        durable.node_ids_json,
-        CASE
-            WHEN kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) IS NULL
-              AND durable.is_done != 0 THEN durable.attention_types_json
-            ELSE (
-                SELECT json_group_array(attention_type)
-                FROM (
-                    SELECT CAST(existing_attention.value AS TEXT) AS attention_type
-                    FROM json_each(durable.attention_types_json) existing_attention
-                    WHERE existing_attention.value != 'question'
-                    UNION
-                    SELECT 'question'
-                    WHERE (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 8) != 0
-                    UNION
-                    SELECT 'approval'
-                    WHERE (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 16) != 0
-                    ORDER BY attention_type ASC
-                )
-            )
-        END AS attention_types_json
-    FROM workflow_task_status_records durable
-),
-
-
-effective_current_nodes AS (
-    SELECT
-        t.id AS task_id,
-        CAST(current_node.node_id AS TEXT) AS node_id
-    FROM task_records t
-    JOIN task_current_nodes current_node ON current_node.task_id = t.id
-),
-board_node_tasks AS (
+WITH board_node_tasks AS (
     SELECT
         t.id,
         t.project_id,
@@ -4171,24 +3964,24 @@ board_node_tasks AS (
 )
  AS label_ordinals
     FROM task_records t
-    WHERE t.project_id = ?2
-      AND t.workflow_id = ?3
+    WHERE t.project_id = ?1
+      AND t.workflow_id = ?2
       AND (
-          ?4 = 'none'
+          ?3 = 'none'
           OR (
-              ?4 = 'named'
-              AND ?5 = 'any'
+              ?3 = 'named'
+              AND ?4 = 'any'
               AND (
                   EXISTS (
                       SELECT 1
-                      FROM json_each(?6) selected_label
+                      FROM json_each(?5) selected_label
                       JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
                         ON assignment.label_id = selected_label.value
                       WHERE assignment.task_id = t.id
                   )
                   OR EXISTS (
                       SELECT 1
-                      FROM json_each(?7) excluded_label
+                      FROM json_each(?6) excluded_label
                       WHERE NOT EXISTS (
                           SELECT 1
                           FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
@@ -4199,11 +3992,11 @@ board_node_tasks AS (
               )
           )
           OR (
-              ?4 = 'named'
-              AND ?5 = 'all'
+              ?3 = 'named'
+              AND ?4 = 'all'
               AND NOT EXISTS (
                   SELECT 1
-                  FROM json_each(?6) selected_label
+                  FROM json_each(?5) selected_label
                   WHERE NOT EXISTS (
                       SELECT 1
                       FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
@@ -4213,14 +4006,14 @@ board_node_tasks AS (
               )
               AND NOT EXISTS (
                   SELECT 1
-                  FROM json_each(?7) excluded_label
+                  FROM json_each(?6) excluded_label
                   JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
                     ON assignment.label_id = excluded_label.value
                   WHERE assignment.task_id = t.id
               )
           )
           OR (
-              ?4 = 'unlabeled'
+              ?3 = 'unlabeled'
               AND NOT EXISTS (
                   SELECT 1
                   FROM task_label_assignments assignment
@@ -4230,15 +4023,15 @@ board_node_tasks AS (
       )
       AND
           (
-              ?8 IS NULL
-              OR CAST(?8 AS INTEGER) = (
+              ?7 IS NULL
+              OR CAST(?7 AS INTEGER) = (
                   NOT EXISTS (
                       SELECT 1
                       FROM task_dependencies dependency INDEXED BY task_dependencies_reverse_idx
                       WHERE dependency.blocked_task_id = t.id
                         AND NOT EXISTS (
                             SELECT 1
-                            FROM effective_status status
+                            FROM workflow_task_status_records status
                             WHERE status.task_id = dependency.blocker_task_id
                               AND status.is_done != 0
                         )
@@ -4249,16 +4042,16 @@ board_node_tasks AS (
       AND (
           EXISTS (
               SELECT 1
-              FROM effective_current_nodes current_node
+              FROM task_current_nodes current_node
               WHERE current_node.task_id = t.id
-                AND current_node.node_id = ?9
+                AND current_node.node_id = ?8
           )
       )
 ),
 board_sort AS (
     SELECT
-        CAST(?10 AS TEXT) AS sort_field,
-        CAST(?11 AS TEXT) AS sort_direction
+        CAST(?9 AS TEXT) AS sort_field,
+        CAST(?10 AS TEXT) AS sort_direction
 ),
 board_sort_keys AS (
     SELECT
@@ -4292,8 +4085,8 @@ paged_board_tasks AS (
         sort_short_id_descending DESC,
         sort_tiebreak_ascending ASC,
         sort_tiebreak_descending DESC
-    LIMIT ?13 + 1
-    OFFSET ?12
+    LIMIT ?12 + 1
+    OFFSET ?11
 ),
 dependency_progress AS (
     SELECT
@@ -4301,7 +4094,7 @@ dependency_progress AS (
         CAST(COUNT(*) AS INTEGER) AS dependency_total_count,
         CAST(SUM(CASE WHEN (
             SELECT status.is_done
-            FROM effective_status status
+            FROM workflow_task_status_records status
             WHERE status.task_id = td.blocker_task_id
             LIMIT 1
         ) != 0 THEN 1 ELSE 0 END) AS INTEGER) AS dependency_satisfied_count
@@ -4351,7 +4144,6 @@ ORDER BY
 `
 
 type ListBoardNodeTasksParams struct {
-	LifecycleStateToken  string
 	ProjectID            string
 	WorkflowID           runtimeids.WorkflowID
 	LabelFilterKind      interface{}
@@ -4393,7 +4185,6 @@ type ListBoardNodeTasksRow struct {
 
 func (q *Queries) ListBoardNodeTasks(ctx context.Context, arg ListBoardNodeTasksParams) ([]ListBoardNodeTasksRow, error) {
 	rows, err := q.db.QueryContext(ctx, listBoardNodeTasks,
-		arg.LifecycleStateToken,
 		arg.ProjectID,
 		arg.WorkflowID,
 		arg.LabelFilterKind,
@@ -4407,7 +4198,7 @@ func (q *Queries) ListBoardNodeTasks(ctx context.Context, arg ListBoardNodeTasks
 		arg.OffsetRows,
 		arg.LimitRows,
 	)
-	err = recordQueryError(ctx, err, listBoardNodeTasks, 13)
+	err = recordQueryError(ctx, err, listBoardNodeTasks, 12)
 
 	if err != nil {
 		return nil, err
@@ -4439,58 +4230,15 @@ func (q *Queries) ListBoardNodeTasks(ctx context.Context, arg ListBoardNodeTasks
 			&i.MetadataJson,
 			&i.DependencySatisfiedCount,
 			&i.DependencyTotalCount,
-		), listBoardNodeTasks, 13); err != nil {
+		), listBoardNodeTasks, 12); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listBoardNodeTasks, 13); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listBoardNodeTasks, 12); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listBoardNodeTasks, 13); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listCurrentNodeReferencesBySession = `-- name: ListCurrentNodeReferencesBySession :many
-SELECT
-    task_id,
-    node_id,
-    transition_branch_key
-FROM task_current_nodes
-WHERE session_id = ?1
-ORDER BY
-    task_id,
-    CASE WHEN transition_branch_key IS NULL THEN 0 ELSE 1 END,
-    transition_branch_key
-`
-
-type ListCurrentNodeReferencesBySessionRow struct {
-	TaskID              string
-	NodeID              string
-	TransitionBranchKey sql.NullString
-}
-
-func (q *Queries) ListCurrentNodeReferencesBySession(ctx context.Context, sessionID sql.NullString) ([]ListCurrentNodeReferencesBySessionRow, error) {
-	rows, err := q.db.QueryContext(ctx, listCurrentNodeReferencesBySession, sessionID)
-	err = recordQueryError(ctx, err, listCurrentNodeReferencesBySession, 1)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListCurrentNodeReferencesBySessionRow
-	for rows.Next() {
-		var i ListCurrentNodeReferencesBySessionRow
-		if err := recordQueryError(ctx, rows.Scan(&i.TaskID, &i.NodeID, &i.TransitionBranchKey), listCurrentNodeReferencesBySession, 1); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := recordQueryError(ctx, rows.Close(), listCurrentNodeReferencesBySession, 1); err != nil {
-		return nil, err
-	}
-	if err := recordQueryError(ctx, rows.Err(), listCurrentNodeReferencesBySession, 1); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listBoardNodeTasks, 12); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -7421,12 +7169,7 @@ WITH
 args AS (
     SELECT
         CAST(?1 AS TEXT) AS project_id,
-        (
-            SELECT workflow_type.id
-            FROM workflows workflow_type
-            WHERE workflow_type.id = ?2
-            LIMIT 1
-        ) AS workflow_id,
+        ?2 AS workflow_id,
         CAST(?3 AS TEXT) AS visible_columns_json,
         CAST(?4 AS INTEGER) AS column_filter_set,
         CAST(?5 AS TEXT) AS column_keys_json,
@@ -7463,7 +7206,7 @@ args AS (
             (CAST(?15 AS INTEGER) >= 6 AND CAST(?26 AS TEXT) = 'labels') OR
             (CAST(?15 AS INTEGER) >= 7 AND CAST(?28 AS TEXT) = 'labels')
         THEN 1 ELSE 0 END AS labels_requested,
-        CAST(?30 AS TEXT) AS lifecycle_state_token,
+        CAST(?30 AS TEXT) AS live_task_states_json,
         CAST(?31 AS INTEGER) AS limit_rows
 ),
 visible_columns AS (
@@ -7474,64 +7217,8 @@ visible_columns AS (
         CAST(json_extract(value, '$.status_order') AS INTEGER) AS column_rank
     FROM args, json_each(args.visible_columns_json)
 ),
-
-effective_status AS (
-    SELECT
-        durable.task_id,
-        CAST(CASE
-            WHEN kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) IS NOT NULL THEN 0
-            ELSE durable.is_done
-        END AS INTEGER) AS is_done,
-        CASE
-            WHEN kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) IS NULL
-              AND durable.is_done != 0 THEN 'done'
-            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 8) != 0 THEN 'waiting_question'
-            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 16) != 0
-              OR durable.kind = 'waiting_approval' THEN 'waiting_approval'
-            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 2) != 0 THEN 'running'
-            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 4) != 0 THEN 'queued'
-            WHEN durable.kind IN ('running', 'queued', 'waiting_question') THEN 'active'
-            ELSE durable.kind
-        END AS kind,
-        CAST(CASE
-            WHEN kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) IS NULL
-              AND durable.is_done != 0 THEN 1
-            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 8) != 0 THEN 2
-            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 16) != 0
-              OR durable.kind = 'waiting_approval' THEN 3
-            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 2) != 0 THEN 5
-            WHEN (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 4) != 0 THEN 6
-            WHEN durable.kind IN ('running', 'queued', 'waiting_question') THEN 8
-            ELSE durable.primary_status_rank
-        END AS INTEGER) AS primary_status_rank,
-        durable.node_ids_json,
-        CASE
-            WHEN kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) IS NULL
-              AND durable.is_done != 0 THEN durable.attention_types_json
-            ELSE (
-                SELECT json_group_array(attention_type)
-                FROM (
-                    SELECT CAST(existing_attention.value AS TEXT) AS attention_type
-                    FROM json_each(durable.attention_types_json) existing_attention
-                    WHERE existing_attention.value != 'question'
-                    UNION
-                    SELECT 'question'
-                    WHERE (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 8) != 0
-                    UNION
-                    SELECT 'approval'
-                    WHERE (kent_lifecycle_task_state_v1((SELECT lifecycle_state_token FROM args), durable.task_id) & 16) != 0
-                    ORDER BY attention_type ASC
-                )
-            )
-        END AS attention_types_json
-    FROM workflow_task_status_records durable
-),
-
-
 current_positions AS (
-    SELECT
-        t.id AS task_id,
-        CAST(current_node.node_id AS TEXT) AS node_id
+    SELECT current_node.task_id, current_node.node_id
     FROM args
     CROSS JOIN project_workflow_links task_link
     CROSS JOIN tasks t INDEXED BY tasks_project_workflow_link_idx
@@ -7557,6 +7244,62 @@ column_facts AS (
     )
     GROUP BY task_id
 ),
+live_task_states AS (
+    SELECT
+        CAST(json_extract(value, '$.task_id') AS TEXT) AS task_id,
+        CAST(json_extract(value, '$.has_running') AS INTEGER) AS has_running,
+        CAST(json_extract(value, '$.has_queued') AS INTEGER) AS has_queued,
+        CAST(json_extract(value, '$.waiting_question') AS INTEGER) AS waiting_question,
+        CAST(json_extract(value, '$.has_waiting_approval') AS INTEGER) AS has_waiting_approval
+    FROM json_each((SELECT live_task_states_json FROM args))
+),
+effective_status AS (
+    SELECT
+        durable.task_id,
+        durable.is_done,
+        CASE
+            WHEN durable.is_done != 0 THEN 'done'
+            WHEN COALESCE(live.waiting_question, 0) != 0 THEN 'waiting_question'
+            WHEN COALESCE(live.has_waiting_approval, 0) != 0
+              OR durable.kind = 'waiting_approval' THEN 'waiting_approval'
+            WHEN COALESCE(live.has_running, 0) != 0 THEN 'running'
+            WHEN COALESCE(live.has_queued, 0) != 0 THEN 'queued'
+            WHEN durable.kind IN ('running', 'queued', 'waiting_question') THEN 'active'
+            ELSE durable.kind
+        END AS kind,
+        CASE
+            WHEN durable.is_done != 0 THEN 1
+            WHEN COALESCE(live.waiting_question, 0) != 0 THEN 2
+            WHEN COALESCE(live.has_waiting_approval, 0) != 0
+              OR durable.kind = 'waiting_approval' THEN 3
+            WHEN COALESCE(live.has_running, 0) != 0 THEN 5
+            WHEN COALESCE(live.has_queued, 0) != 0 THEN 6
+            WHEN durable.kind IN ('running', 'queued', 'waiting_question') THEN 8
+            ELSE durable.primary_status_rank
+        END AS primary_status_rank,
+        durable.node_ids_json,
+        CASE
+            WHEN durable.is_done != 0 THEN durable.attention_types_json
+            ELSE (
+                SELECT json_group_array(attention_type)
+                FROM (
+                    SELECT CAST(existing_attention.value AS TEXT) AS attention_type
+                    FROM json_each(durable.attention_types_json) existing_attention
+                    WHERE existing_attention.value != 'question'
+                    UNION
+                    SELECT 'question'
+                    WHERE COALESCE(live.waiting_question, 0) != 0
+                    UNION
+                    SELECT 'approval'
+                    WHERE COALESCE(live.has_waiting_approval, 0) != 0
+                    ORDER BY attention_type ASC
+                )
+            )
+        END AS attention_types_json
+    FROM workflow_task_status_records durable
+    LEFT JOIN live_task_states live ON live.task_id = durable.task_id
+),
+
 eligible_rows AS (
     SELECT
         t.id,
@@ -7683,7 +7426,7 @@ eligible_rows AS (
                       WHERE dependency.blocked_task_id = t.id
                         AND NOT EXISTS (
                             SELECT 1
-                            FROM effective_status status
+                            FROM workflow_task_status_records status
                             WHERE status.task_id = dependency.blocker_task_id
                               AND status.is_done != 0
                         )
@@ -7928,7 +7671,7 @@ type ListWorkflowTaskListRowsParams struct {
 	Sort6Desc            int64
 	Sort7Field           string
 	Sort7Desc            int64
-	LifecycleStateToken  string
+	LiveTaskStatesJson   string
 	LimitRows            int64
 	ExcludedLabelIdsJson interface{}
 }
@@ -7996,7 +7739,7 @@ func (q *Queries) ListWorkflowTaskListRows(ctx context.Context, arg ListWorkflow
 		arg.Sort6Desc,
 		arg.Sort7Field,
 		arg.Sort7Desc,
-		arg.LifecycleStateToken,
+		arg.LiveTaskStatesJson,
 		arg.LimitRows,
 		arg.ExcludedLabelIdsJson,
 	)
@@ -8062,12 +7805,9 @@ requested_task_ids AS (
 args AS (
     SELECT CAST(?2 AS TEXT) AS live_task_states_json
 ),
-
 live_task_states AS (
     SELECT
         CAST(json_extract(value, '$.task_id') AS TEXT) AS task_id,
-        CAST(json_extract(value, '$.has_lifecycle_override') AS INTEGER) AS has_lifecycle_override,
-        CAST(json_extract(value, '$.current_node_ids') AS TEXT) AS current_node_ids_json,
         CAST(json_extract(value, '$.has_running') AS INTEGER) AS has_running,
         CAST(json_extract(value, '$.has_queued') AS INTEGER) AS has_queued,
         CAST(json_extract(value, '$.waiting_question') AS INTEGER) AS waiting_question,
@@ -8077,52 +7817,30 @@ live_task_states AS (
 effective_status AS (
     SELECT
         durable.task_id,
-        CAST(CASE
-            WHEN COALESCE(live.has_lifecycle_override, 0) != 0 THEN 0
-            ELSE durable.is_done
-        END AS INTEGER) AS is_done,
+        durable.is_done,
         CASE
-            WHEN COALESCE(live.has_lifecycle_override, 0) = 0
-              AND durable.is_done != 0 THEN 'done'
-            WHEN COALESCE(live.has_lifecycle_override, 0) != 0
-              AND COALESCE(live.waiting_question, 0) != 0 THEN 'waiting_question'
-            WHEN (
-                COALESCE(live.has_lifecycle_override, 0) != 0
-                AND COALESCE(live.has_waiting_approval, 0) != 0
-            )
+            WHEN durable.is_done != 0 THEN 'done'
+            WHEN COALESCE(live.waiting_question, 0) != 0 THEN 'waiting_question'
+            WHEN COALESCE(live.has_waiting_approval, 0) != 0
               OR durable.kind = 'waiting_approval' THEN 'waiting_approval'
-            WHEN COALESCE(live.has_lifecycle_override, 0) != 0
-              AND COALESCE(live.has_running, 0) != 0 THEN 'running'
-            WHEN COALESCE(live.has_lifecycle_override, 0) != 0
-              AND COALESCE(live.has_queued, 0) != 0 THEN 'queued'
+            WHEN COALESCE(live.has_running, 0) != 0 THEN 'running'
+            WHEN COALESCE(live.has_queued, 0) != 0 THEN 'queued'
             WHEN durable.kind IN ('running', 'queued', 'waiting_question') THEN 'active'
             ELSE durable.kind
         END AS kind,
-        CAST(CASE
-            WHEN COALESCE(live.has_lifecycle_override, 0) = 0
-              AND durable.is_done != 0 THEN 1
-            WHEN COALESCE(live.has_lifecycle_override, 0) != 0
-              AND COALESCE(live.waiting_question, 0) != 0 THEN 2
-            WHEN (
-                COALESCE(live.has_lifecycle_override, 0) != 0
-                AND COALESCE(live.has_waiting_approval, 0) != 0
-            )
+        CASE
+            WHEN durable.is_done != 0 THEN 1
+            WHEN COALESCE(live.waiting_question, 0) != 0 THEN 2
+            WHEN COALESCE(live.has_waiting_approval, 0) != 0
               OR durable.kind = 'waiting_approval' THEN 3
-            WHEN COALESCE(live.has_lifecycle_override, 0) != 0
-              AND COALESCE(live.has_running, 0) != 0 THEN 5
-            WHEN COALESCE(live.has_lifecycle_override, 0) != 0
-              AND COALESCE(live.has_queued, 0) != 0 THEN 6
+            WHEN COALESCE(live.has_running, 0) != 0 THEN 5
+            WHEN COALESCE(live.has_queued, 0) != 0 THEN 6
             WHEN durable.kind IN ('running', 'queued', 'waiting_question') THEN 8
             ELSE durable.primary_status_rank
-        END AS INTEGER) AS primary_status_rank,
+        END AS primary_status_rank,
+        durable.node_ids_json,
         CASE
-            WHEN COALESCE(live.has_lifecycle_override, 0) != 0
-                THEN live.current_node_ids_json
-            ELSE durable.node_ids_json
-        END AS node_ids_json,
-        CASE
-            WHEN COALESCE(live.has_lifecycle_override, 0) = 0
-              AND durable.is_done != 0 THEN durable.attention_types_json
+            WHEN durable.is_done != 0 THEN durable.attention_types_json
             ELSE (
                 SELECT json_group_array(attention_type)
                 FROM (
@@ -8131,12 +7849,10 @@ effective_status AS (
                     WHERE existing_attention.value != 'question'
                     UNION
                     SELECT 'question'
-                    WHERE COALESCE(live.has_lifecycle_override, 0) != 0
-                      AND COALESCE(live.waiting_question, 0) != 0
+                    WHERE COALESCE(live.waiting_question, 0) != 0
                     UNION
                     SELECT 'approval'
-                    WHERE COALESCE(live.has_lifecycle_override, 0) != 0
-                      AND COALESCE(live.has_waiting_approval, 0) != 0
+                    WHERE COALESCE(live.has_waiting_approval, 0) != 0
                     ORDER BY attention_type ASC
                 )
             )
@@ -8144,7 +7860,6 @@ effective_status AS (
     FROM workflow_task_status_records durable
     LEFT JOIN live_task_states live ON live.task_id = durable.task_id
 )
-
 
 SELECT
     task_id,
@@ -8167,7 +7882,7 @@ type ListWorkflowTaskStatusProjectionByTasksRow struct {
 	TaskID             string
 	IsDone             int64
 	Kind               string
-	PrimaryStatusRank  int64
+	PrimaryStatusRank  interface{}
 	NodeIdsJson        string
 	AttentionTypesJson string
 }
@@ -8773,100 +8488,6 @@ func (q *Queries) RenameProjectLabel(ctx context.Context, arg RenameProjectLabel
 	), renameProjectLabel, 4)
 
 	return i, err
-}
-
-const repairBranchCurrentNodeSessionAssociation = `-- name: RepairBranchCurrentNodeSessionAssociation :execrows
-INSERT INTO session_workflow_node_associations (
-    session_id,
-    node_id,
-    transition_branch_key,
-    associated_at_unix_ms
-)
-SELECT
-    current_node.session_id,
-    current_node.node_id,
-    current_node.transition_branch_key,
-    ?1
-FROM task_current_nodes current_node
-JOIN sessions session
-  ON session.id = current_node.session_id
- AND session.task_id = current_node.task_id
-WHERE current_node.task_id = ?2
-  AND current_node.node_id = ?3
-  AND current_node.transition_branch_key = ?4
-  AND current_node.session_id = ?5
-ON CONFLICT(session_id, node_id, transition_branch_key) WHERE transition_branch_key IS NOT NULL DO UPDATE SET
-    associated_at_unix_ms = session_workflow_node_associations.associated_at_unix_ms
-`
-
-type RepairBranchCurrentNodeSessionAssociationParams struct {
-	AssociatedAtUnixMs  int64
-	TaskID              string
-	NodeID              string
-	TransitionBranchKey sql.NullString
-	SessionID           sql.NullString
-}
-
-func (q *Queries) RepairBranchCurrentNodeSessionAssociation(ctx context.Context, arg RepairBranchCurrentNodeSessionAssociationParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, repairBranchCurrentNodeSessionAssociation,
-		arg.AssociatedAtUnixMs,
-		arg.TaskID,
-		arg.NodeID,
-		arg.TransitionBranchKey,
-		arg.SessionID,
-	)
-	err = recordQueryError(ctx, err, repairBranchCurrentNodeSessionAssociation, 5)
-
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const repairSerialCurrentNodeSessionAssociation = `-- name: RepairSerialCurrentNodeSessionAssociation :execrows
-INSERT INTO session_workflow_node_associations (
-    session_id,
-    node_id,
-    transition_branch_key,
-    associated_at_unix_ms
-)
-SELECT
-    current_node.session_id,
-    current_node.node_id,
-    NULL,
-    ?1
-FROM task_current_nodes current_node
-JOIN sessions session
-  ON session.id = current_node.session_id
- AND session.task_id = current_node.task_id
-WHERE current_node.task_id = ?2
-  AND current_node.node_id = ?3
-  AND current_node.transition_branch_key IS NULL
-  AND current_node.session_id = ?4
-ON CONFLICT(session_id, node_id) WHERE transition_branch_key IS NULL DO UPDATE SET
-    associated_at_unix_ms = session_workflow_node_associations.associated_at_unix_ms
-`
-
-type RepairSerialCurrentNodeSessionAssociationParams struct {
-	AssociatedAtUnixMs int64
-	TaskID             string
-	NodeID             string
-	SessionID          sql.NullString
-}
-
-func (q *Queries) RepairSerialCurrentNodeSessionAssociation(ctx context.Context, arg RepairSerialCurrentNodeSessionAssociationParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, repairSerialCurrentNodeSessionAssociation,
-		arg.AssociatedAtUnixMs,
-		arg.TaskID,
-		arg.NodeID,
-		arg.SessionID,
-	)
-	err = recordQueryError(ctx, err, repairSerialCurrentNodeSessionAssociation, 4)
-
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
 }
 
 const resumeBranchCurrentNode = `-- name: ResumeBranchCurrentNode :execrows

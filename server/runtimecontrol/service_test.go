@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -93,32 +92,6 @@ type runtimeControlPromptHistoryStore struct {
 	recordInserted []bool
 	recordErr      error
 	recordCtxErr   error
-}
-
-type runtimeControlEngineActivityResolver struct {
-	engine *runtime.Engine
-	err    error
-}
-
-func (r runtimeControlEngineActivityResolver) RuntimeReadModelSnapshot(
-	_ context.Context,
-	sessionID string,
-	_ []clientui.RuntimeOperationRef,
-) (runtimeactivity.ResponseSnapshot, error) {
-	if r.err != nil {
-		return runtimeactivity.ResponseSnapshot{}, r.err
-	}
-	activity, err := runtimeactivity.ResolveRuntimeActivity(runtimeactivity.ResolverSnapshot{
-		Registry: runtimeactivity.RegistrySnapshot{Registered: true, QueueAccepting: true},
-		Active:   runtimeactivity.ActiveStepFromProvider(r.engine),
-	})
-	if err != nil {
-		return runtimeactivity.ResponseSnapshot{}, err
-	}
-	return runtimeactivity.ResponseSnapshot{
-		Version:  runtimeactivity.NextReadModelVersion(sessionID),
-		Activity: activity,
-	}, nil
 }
 
 func newRuntimeControlPromptHistoryStore(sessionID string) *runtimeControlPromptHistoryStore {
@@ -216,26 +189,6 @@ func (r staticRuntimeControlWorkflowTaskResolver) SessionHasWorkflowTask(context
 	return r.workflow, nil
 }
 
-type runtimeControlWorkflowSessionInterruptor struct {
-	handled bool
-	err     error
-	calls   []runtimeids.SessionID
-	hook    func(context.Context, runtimeids.SessionID) error
-}
-
-func (i *runtimeControlWorkflowSessionInterruptor) InterruptSessionExecution(
-	ctx context.Context,
-	sessionID runtimeids.SessionID,
-) (bool, error) {
-	i.calls = append(i.calls, sessionID)
-	if i.hook != nil {
-		if err := i.hook(ctx, sessionID); err != nil {
-			return false, err
-		}
-	}
-	return i.handled, i.err
-}
-
 type runtimeControlFakeClient struct {
 	mu                  sync.Mutex
 	responses           []llm.Response
@@ -279,65 +232,6 @@ type cancelObservingRuntimeControlClient struct {
 	release     chan struct{}
 	ctxCanceled chan struct{}
 	cancelOnce  sync.Once
-}
-
-type successorTurnRuntimeControlClient struct {
-	mu             sync.Mutex
-	calls          int
-	firstStarted   chan struct{}
-	firstRelease   chan struct{}
-	secondStarted  chan struct{}
-	secondRelease  chan struct{}
-	secondCanceled chan struct{}
-	cancelOnce     sync.Once
-}
-
-func newSuccessorTurnRuntimeControlClient() *successorTurnRuntimeControlClient {
-	return &successorTurnRuntimeControlClient{
-		firstStarted:   make(chan struct{}),
-		firstRelease:   make(chan struct{}),
-		secondStarted:  make(chan struct{}),
-		secondRelease:  make(chan struct{}),
-		secondCanceled: make(chan struct{}),
-	}
-}
-
-func (c *successorTurnRuntimeControlClient) Generate(ctx context.Context, _ llm.Request) (llm.Response, error) {
-	c.mu.Lock()
-	c.calls++
-	call := c.calls
-	c.mu.Unlock()
-	switch call {
-	case 1:
-		close(c.firstStarted)
-		select {
-		case <-c.firstRelease:
-		case <-ctx.Done():
-			return llm.Response{}, context.Cause(ctx)
-		}
-	case 2:
-		close(c.secondStarted)
-		select {
-		case <-c.secondRelease:
-		case <-ctx.Done():
-			c.cancelOnce.Do(func() { close(c.secondCanceled) })
-			return llm.Response{}, context.Cause(ctx)
-		}
-	default:
-		return llm.Response{}, errors.New("unexpected successor-turn model request")
-	}
-	return llm.Response{
-		Assistant: llm.Message{
-			Role:    llm.RoleAssistant,
-			Content: textutil.Value("done"),
-			Phase:   textutil.Value(llm.MessagePhaseFinal),
-		},
-		Usage: llm.Usage{WindowTokens: 200000},
-	}, nil
-}
-
-func (c *successorTurnRuntimeControlClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
-	return llm.ProviderCapabilities{}, nil
 }
 
 func newCancelObservingRuntimeControlClient() *cancelObservingRuntimeControlClient {
@@ -566,60 +460,6 @@ func newRuntimeControlTestService(t *testing.T, client llm.Client, registry *too
 	if client == nil {
 		client = &runtimeControlFakeClient{}
 	}
-	plan := newRuntimeControlTestPlan(t, store, client, registry, cfg)
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		PersistenceRoot: t.TempDir(),
-		StoreOptions:    append(runtimeControlTestSessionPersistence.Options(), opts...),
-	})
-	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("parse session id: %v", err)
-	}
-	if _, err := authority.OpenRuntime(context.Background(), sessionruntime.RuntimeOpenRequest{
-		SessionID: sessionID,
-		OwnerID:   "runtimecontrol-test",
-		Runtime:   &plan,
-	}); err != nil {
-		t.Fatalf("open authority runtime: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := authority.Close(context.Background()); err != nil {
-			t.Errorf("close authority: %v", err)
-		}
-	})
-	var engine *runtime.Engine
-	if err := authority.WithCurrentRuntime(context.Background(), sessionID, func(_ context.Context, current *runtime.Engine) error {
-		engine = current
-		return nil
-	}); err != nil {
-		t.Fatalf("resolve authority runtime: %v", err)
-	}
-	descriptor, err := session.NewOpenSessionDescriptor(sessionID)
-	if err != nil {
-		t.Fatalf("new session descriptor: %v", err)
-	}
-	if err := authority.WithSessionStore(context.Background(), descriptor, func(_ context.Context, current *session.Store) error {
-		store = current
-		return nil
-	}); err != nil {
-		t.Fatalf("resolve authority session store: %v", err)
-	}
-	history := newRuntimeControlPromptHistoryStore(store.Meta().SessionID)
-	service := NewService(authority).
-		WithRuntimeActivityResolver(runtimeControlEngineActivityResolver{engine: engine}).
-		WithPromptHistoryStore(history).
-		WithPersistedSessionResolver(runtimeControlTestSessionPersistence)
-	return store, engine, service
-}
-
-func newRuntimeControlTestPlan(
-	t *testing.T,
-	store *session.Store,
-	client llm.Client,
-	registry *tools.Registry,
-	cfg runtime.Config,
-) sessionruntime.AgentRuntimePlan {
-	t.Helper()
 	settings := config.DefaultOnboardingSettings()
 	settings.ProviderOverride = "openai"
 	settings.Reviewer.Frequency = "off"
@@ -664,7 +504,48 @@ func newRuntimeControlTestPlan(
 	if err != nil {
 		t.Fatalf("new authority runtime plan: %v", err)
 	}
-	return plan
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		PersistenceRoot: t.TempDir(),
+		StoreOptions:    append(runtimeControlTestSessionPersistence.Options(), opts...),
+	})
+	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("parse session id: %v", err)
+	}
+	if _, err := authority.OpenRuntime(context.Background(), sessionruntime.RuntimeOpenRequest{
+		SessionID: sessionID,
+		OwnerID:   "runtimecontrol-test",
+		Runtime:   &plan,
+	}); err != nil {
+		t.Fatalf("open authority runtime: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+	var engine *runtime.Engine
+	if err := authority.WithCurrentRuntime(context.Background(), sessionID, func(_ context.Context, current *runtime.Engine) error {
+		engine = current
+		return nil
+	}); err != nil {
+		t.Fatalf("resolve authority runtime: %v", err)
+	}
+	descriptor, err := session.NewOpenSessionDescriptor(sessionID)
+	if err != nil {
+		t.Fatalf("new session descriptor: %v", err)
+	}
+	if err := authority.WithSessionStore(context.Background(), descriptor, func(_ context.Context, current *session.Store) error {
+		store = current
+		return nil
+	}); err != nil {
+		t.Fatalf("resolve authority session store: %v", err)
+	}
+	history := newRuntimeControlPromptHistoryStore(store.Meta().SessionID)
+	service := NewService(authority).
+		WithPromptHistoryStore(history).
+		WithPersistedSessionResolver(runtimeControlTestSessionPersistence)
+	return store, engine, service
 }
 
 func finalResponseRuntimeControlClient() *runtimeControlFakeClient {
@@ -1043,80 +924,6 @@ func TestServiceInterruptReturnsCurrentActivitySnapshot(t *testing.T) {
 	}
 	if err := resp.Version.Validate(); err != nil {
 		t.Fatalf("invalid response version: %v", err)
-	}
-}
-
-func TestServiceOrdinaryInterruptReturnsActivityResolutionFailure(t *testing.T) {
-	store, _, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{})
-	activityErr := errors.New("activity snapshot failed")
-	service.WithRuntimeActivityResolver(runtimeControlEngineActivityResolver{err: activityErr})
-	if _, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
-		ClientRequestID: "interrupt-activity-failure",
-		SessionID:       store.Meta().SessionID,
-	}); !errors.Is(err, activityErr) {
-		t.Fatalf("Interrupt error = %v, want %v", err, activityErr)
-	}
-}
-
-func TestServiceInterruptRoutesWorkflowExecutionWithoutInterruptingOrdinaryEngine(t *testing.T) {
-	for _, test := range []struct {
-		name                  string
-		workflowHandled       bool
-		wantEngineInterrupted bool
-	}{
-		{name: "workflow execution", workflowHandled: true},
-		{name: "ordinary execution", wantEngineInterrupted: true},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			client := newCancelObservingRuntimeControlClient()
-			store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
-			interruptor := &runtimeControlWorkflowSessionInterruptor{handled: test.workflowHandled}
-			service.WithWorkflowSessionInterruptor(interruptor)
-
-			runDone := make(chan error, 1)
-			go func() {
-				_, err := engine.SubmitUserMessage(context.Background(), "active turn")
-				runDone <- err
-			}()
-			select {
-			case <-client.started:
-			case <-time.After(time.Second):
-				t.Fatal("active turn did not reach model request")
-			}
-
-			if _, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
-				ClientRequestID: "interrupt-routing",
-				SessionID:       store.Meta().SessionID,
-			}); err != nil {
-				t.Fatalf("Interrupt: %v", err)
-			}
-			if len(interruptor.calls) != 1 {
-				t.Fatalf("workflow interrupt calls = %d, want 1", len(interruptor.calls))
-			}
-
-			select {
-			case <-client.ctxCanceled:
-				if !test.wantEngineInterrupted {
-					t.Fatal("workflow-scoped interrupt also interrupted the ordinary Engine")
-				}
-			case <-time.After(50 * time.Millisecond):
-				if test.wantEngineInterrupted {
-					t.Fatal("ordinary interrupt did not reach Engine.Interrupt")
-				}
-			}
-			close(client.release)
-			select {
-			case err := <-runDone:
-				if test.wantEngineInterrupted && !errors.Is(err, context.Canceled) {
-					t.Fatalf("ordinary run error = %v, want context canceled", err)
-				}
-				if !test.wantEngineInterrupted && err != nil {
-					t.Fatalf("workflow-routed ordinary Engine run error = %v, want nil", err)
-				}
-			case <-time.After(time.Second):
-				t.Fatal("timed out waiting for active turn")
-			}
-		})
 	}
 }
 
@@ -2563,279 +2370,6 @@ reconciled:
 		}
 	case <-time.After(time.Second):
 		t.Fatal("active submit did not stop after interrupt")
-	}
-}
-
-func TestServiceWorkflowInterruptReconcilesQueuedInputOnce(t *testing.T) {
-	discarded := make(chan struct{}, 2)
-	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{
-		OnEvent: func(event runtime.Event) {
-			if event.QueuedUserMessageStatus != nil &&
-				event.QueuedUserMessageStatus.Status == runtime.QueuedUserMessageDiscarded {
-				discarded <- struct{}{}
-			}
-		},
-	})
-	interruptor := &runtimeControlWorkflowSessionInterruptor{handled: true}
-	service.WithWorkflowSessionInterruptor(interruptor)
-	clientRequestID := runtimeids.NewRuntimeClientRequestID()
-	queued := mustQueueRuntimeControlMessageWithClientRequestID(
-		t,
-		engine,
-		"discard exactly once",
-		clientRequestID.String(),
-	)
-	queueItemID := mustRuntimeControlQueueItemID(t, queued.ID)
-	ref := clientui.RuntimeOperationRef{
-		Kind:            clientui.RuntimeOperationKindQueuedMessage,
-		ClientRequestID: clientRequestID,
-		QueueItemID:     &queueItemID,
-	}
-	if err := service.operations.RecordQueuedMessageStatus(
-		store.Meta().SessionID,
-		ref,
-		clientui.RuntimeInputReconciliationAccepted,
-	); err != nil {
-		t.Fatalf("record accepted queued message: %v", err)
-	}
-
-	response, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
-		ClientRequestID:      "interrupt-workflow-with-queued-input",
-		SessionID:            store.Meta().SessionID,
-		PendingOperationRefs: []clientui.RuntimeOperationRef{ref},
-	})
-	if err != nil {
-		t.Fatalf("Interrupt: %v", err)
-	}
-	if engine.HasQueuedUserWork() {
-		t.Fatal("workflow Interrupt left queued input in the ordinary Runtime")
-	}
-	if len(interruptor.calls) != 1 {
-		t.Fatalf("workflow interrupt calls = %d, want 1", len(interruptor.calls))
-	}
-	if len(response.InputReconciliation.Operations) != 1 ||
-		response.InputReconciliation.Operations[0].Operation.Key() != ref.Key() ||
-		response.InputReconciliation.Operations[0].State != clientui.RuntimeInputReconciliationCanceledNotCommitted {
-		t.Fatalf("input reconciliation = %+v, want one canceled queued operation", response.InputReconciliation)
-	}
-	select {
-	case <-discarded:
-	case <-time.After(time.Second):
-		t.Fatal("queued input emitted no discarded status")
-	}
-	select {
-	case <-discarded:
-		t.Fatal("workflow Interrupt discarded queued input more than once")
-	case <-time.After(50 * time.Millisecond):
-	}
-}
-
-func TestServiceOrdinaryInterruptStaysBoundToObservedRuntimeGeneration(t *testing.T) {
-	store, _, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{})
-	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("ParseSessionID: %v", err)
-	}
-	var original runtimeids.SessionResourceRef
-	if err := service.authority.WithCurrentRuntimeResource(
-		context.Background(),
-		sessionID,
-		func(_ context.Context, resource runtimeids.SessionResourceRef, _ *runtime.Engine) error {
-			original = resource
-			return nil
-		},
-	); err != nil {
-		t.Fatalf("observe original runtime: %v", err)
-	}
-
-	replacementClient := newCancelObservingRuntimeControlClient()
-	replacementPlan := newRuntimeControlTestPlan(t, store, replacementClient, nil, runtime.Config{})
-	var replacementEngine *runtime.Engine
-	replacementDone := make(chan error, 1)
-	service.WithWorkflowSessionInterruptor(&runtimeControlWorkflowSessionInterruptor{
-		hook: func(ctx context.Context, _ runtimeids.SessionID) error {
-			if _, err := service.authority.ReleaseRuntime(ctx, sessionruntime.RuntimeReleaseRequest{
-				Resource:  original,
-				OwnerID:   "runtimecontrol-test",
-				DropOwner: true,
-				Policy:    sessionruntime.RuntimeReleaseClose,
-			}); err != nil {
-				return err
-			}
-			attachment, err := service.authority.OpenRuntime(ctx, sessionruntime.RuntimeOpenRequest{
-				SessionID: sessionID,
-				OwnerID:   "runtimecontrol-replacement",
-				Runtime:   &replacementPlan,
-			})
-			if err != nil {
-				return err
-			}
-			if err := service.authority.WithRuntime(
-				ctx,
-				attachment.Resource(),
-				func(_ context.Context, engine *runtime.Engine) error {
-					replacementEngine = engine
-					return nil
-				},
-			); err != nil {
-				return err
-			}
-			go func() {
-				_, err := replacementEngine.SubmitUserMessage(context.Background(), "replacement turn")
-				replacementDone <- err
-			}()
-			select {
-			case <-replacementClient.started:
-				return nil
-			case <-time.After(time.Second):
-				return errors.New("replacement runtime turn did not start")
-			}
-		},
-	})
-
-	if _, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
-		ClientRequestID: "interrupt-observed-generation",
-		SessionID:       sessionID.String(),
-	}); err != nil {
-		t.Fatalf("Interrupt: %v", err)
-	}
-	select {
-	case <-replacementClient.ctxCanceled:
-		t.Fatal("ordinary Interrupt canceled a replacement runtime generation")
-	case <-time.After(100 * time.Millisecond):
-	}
-	close(replacementClient.release)
-	select {
-	case err := <-replacementDone:
-		if err != nil {
-			t.Fatalf("replacement runtime turn: %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("replacement runtime turn did not finish")
-	}
-}
-
-func TestServiceOrdinaryInterruptStaysBoundToObservedTurn(t *testing.T) {
-	client := newSuccessorTurnRuntimeControlClient()
-	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
-	firstDone := make(chan error, 1)
-	go func() {
-		_, err := engine.SubmitUserMessage(context.Background(), "observed workflow turn")
-		firstDone <- err
-	}()
-	select {
-	case <-client.firstStarted:
-	case <-time.After(time.Second):
-		t.Fatal("observed turn did not reach the model request")
-	}
-
-	secondDone := make(chan error, 1)
-	service.WithWorkflowSessionInterruptor(&runtimeControlWorkflowSessionInterruptor{
-		hook: func(context.Context, runtimeids.SessionID) error {
-			close(client.firstRelease)
-			select {
-			case err := <-firstDone:
-				if err != nil {
-					return fmt.Errorf("finish observed turn: %w", err)
-				}
-			case <-time.After(time.Second):
-				return errors.New("observed turn did not finish")
-			}
-			go func() {
-				_, err := engine.SubmitUserMessage(context.Background(), "successor ordinary turn")
-				secondDone <- err
-			}()
-			select {
-			case <-client.secondStarted:
-				return nil
-			case <-time.After(time.Second):
-				return errors.New("successor turn did not start")
-			}
-		},
-	})
-
-	if _, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
-		ClientRequestID: "interrupt-observed-turn",
-		SessionID:       store.Meta().SessionID,
-	}); err != nil {
-		t.Fatalf("Interrupt: %v", err)
-	}
-	select {
-	case <-client.secondCanceled:
-		t.Fatal("ordinary Interrupt canceled a successor turn on the observed runtime generation")
-	case <-time.After(100 * time.Millisecond):
-	}
-	close(client.secondRelease)
-	select {
-	case err := <-secondDone:
-		if err != nil {
-			t.Fatalf("successor turn: %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("successor turn did not finish")
-	}
-}
-
-func TestServiceWorkflowInterruptFailureStillCancelsTargetedClientOperation(t *testing.T) {
-	client := newCancelObservingRuntimeControlClient()
-	var releaseOnce sync.Once
-	release := func() {
-		releaseOnce.Do(func() { close(client.release) })
-	}
-	defer release()
-	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
-	delegateErr := errors.New("workflow interruption failed")
-	service.WithWorkflowSessionInterruptor(&runtimeControlWorkflowSessionInterruptor{
-		handled: true,
-		err:     delegateErr,
-	})
-	runID := mustRuntimeControlRunID(t)
-	stepID := mustRuntimeControlStepID(t)
-	service.WithRuntimeActivityResolver(&sequenceRuntimeActivityResolver{
-		snapshots: []runtimeactivity.ResponseSnapshot{{
-			Version: clientui.ReadModelVersion{Epoch: "epoch-1", Generation: 1, Sequence: 1},
-			Activity: clientui.RuntimeActivity{
-				State: clientui.RuntimeActivityRunning,
-				ActiveStep: &clientui.RuntimeActiveStep{
-					RunID:      runID,
-					StepID:     stepID,
-					ActiveKind: clientui.RuntimeActivityActiveKindWorkflowTurn,
-				},
-			},
-		}},
-	})
-	request := runtimeControlUserTurnRequest(store, "targeted-workflow-failure", "keep running")
-	submitDone := make(chan error, 1)
-	go func() {
-		_, err := service.SubmitUserTurn(context.Background(), request)
-		submitDone <- err
-	}()
-	select {
-	case <-client.started:
-	case <-time.After(time.Second):
-		t.Fatal("targeted operation did not reach the model request")
-	}
-
-	if _, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
-		ClientRequestID:    "interrupt-targeted-workflow-failure",
-		SessionID:          store.Meta().SessionID,
-		TargetOperationRef: &request.OperationRef,
-	}); !errors.Is(err, delegateErr) {
-		t.Fatalf("Interrupt error = %v, want workflow delegate failure", err)
-	}
-	select {
-	case <-client.ctxCanceled:
-	case <-time.After(100 * time.Millisecond):
-		t.Fatal("workflow delegate failure left the targeted client operation running")
-	}
-	release()
-	select {
-	case err := <-submitDone:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("targeted SubmitUserTurn error = %v, want context canceled", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("targeted SubmitUserTurn did not finish after cancellation")
 	}
 }
 

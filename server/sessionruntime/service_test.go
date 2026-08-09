@@ -71,26 +71,6 @@ type blockingLLMClient struct {
 	release     chan struct{}
 }
 
-type retainedWorkflowActivationStub struct {
-	attachment RuntimeAttachment
-	handled    bool
-	err        error
-	calls      int
-	sessionID  runtimeids.SessionID
-	ownerID    string
-}
-
-func (s *retainedWorkflowActivationStub) ActivateOrAttachRetainedSession(
-	_ context.Context,
-	sessionID runtimeids.SessionID,
-	ownerID string,
-) (RuntimeAttachment, bool, error) {
-	s.calls++
-	s.sessionID = sessionID
-	s.ownerID = ownerID
-	return s.attachment, s.handled, s.err
-}
-
 func (c *blockingLLMClient) Generate(_ context.Context, _ llm.Request) (llm.Response, error) {
 	c.enteredOnce.Do(func() { close(c.entered) })
 	<-c.release
@@ -228,73 +208,9 @@ func TestActivateSessionRuntimeRejectsMissingOwnerID(t *testing.T) {
 	}
 }
 
-func TestActivateSessionRuntimeUsesAuthoritativeRetainedWorkflowActivationBeforeOrdinaryRuntime(t *testing.T) {
-	fixture := newSessionRuntimeFixture(t)
-	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("ParseSessionID: %v", err)
-	}
-	resource, err := runtimeids.NewSessionResourceRef(sessionID, 7)
-	if err != nil {
-		t.Fatalf("NewSessionResourceRef: %v", err)
-	}
-	activator := &retainedWorkflowActivationStub{
-		handled: true,
-		attachment: RuntimeAttachment{
-			resource: resource,
-			ownerID:  "owner-workflow",
-		},
-	}
-	fixture.api = NewAPI(fixture.metadata, nil, fixture.authority, APIOptions{
-		RetainedWorkflowActivation: activator,
-		RuntimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(context.Context, runtimewire.RuntimeClientRequest) (llm.Client, error) {
-			t.Fatal("retained Workflow activation attempted to build an ordinary Runtime")
-			return nil, nil
-		}),
-	})
-
-	activated, err := fixture.api.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
-		ClientRequestID: "activate-retained-workflow",
-		SessionID:       sessionID.String(),
-		OwnerID:         "owner-workflow",
-	})
-	if err != nil {
-		t.Fatalf("ActivateSessionRuntime: %v", err)
-	}
-	if activator.calls != 1 || activator.sessionID != sessionID || activator.ownerID != "owner-workflow" {
-		t.Fatalf("retained Workflow activation = calls:%d session:%s owner:%q", activator.calls, activator.sessionID, activator.ownerID)
-	}
-	if activated.Attachment.SessionID != sessionID.String() || activated.Attachment.Generation != 7 {
-		t.Fatalf("activation attachment = %+v, want retained Workflow resource", activated.Attachment)
-	}
-}
-
-func TestActivateSessionRuntimeDoesNotFallBackAfterRetainedWorkflowConsistencyFailure(t *testing.T) {
-	fixture := newSessionRuntimeFixture(t)
-	consistencyErr := errors.New("contradictory retained Workflow ownership")
-	activator := &retainedWorkflowActivationStub{handled: true, err: consistencyErr}
-	fixture.api = NewAPI(fixture.metadata, nil, fixture.authority, APIOptions{
-		RetainedWorkflowActivation: activator,
-		RuntimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(context.Context, runtimewire.RuntimeClientRequest) (llm.Client, error) {
-			t.Fatal("retained Workflow consistency failure attempted ordinary Runtime fallback")
-			return nil, nil
-		}),
-	})
-
-	_, err := fixture.api.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
-		ClientRequestID: "activate-retained-conflict",
-		SessionID:       fixture.store.Meta().SessionID,
-		OwnerID:         "owner-conflict",
-	})
-	if !errors.Is(err, consistencyErr) {
-		t.Fatalf("ActivateSessionRuntime error = %v, want %v", err, consistencyErr)
-	}
-}
-
 func TestServicePassesRuntimeClientFactoryIntoInteractiveRuntime(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	calls := 0
-	activator := &retainedWorkflowActivationStub{}
 	factory := runtimewire.RuntimeClientFactoryFunc(func(_ context.Context, req runtimewire.RuntimeClientRequest) (llm.Client, error) {
 		calls++
 		if req.Purpose != runtimewire.RuntimeClientPurposeMain {
@@ -302,10 +218,7 @@ func TestServicePassesRuntimeClientFactoryIntoInteractiveRuntime(t *testing.T) {
 		}
 		return &sessionRuntimeTestLLMClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok"), Phase: textutil.Value(llm.MessagePhaseFinal)}, Usage: llm.Usage{WindowTokens: 200000}}}}, nil
 	})
-	fixture.api = NewAPI(fixture.metadata, nil, fixture.authority, APIOptions{
-		RuntimeClientFactory:       factory,
-		RetainedWorkflowActivation: activator,
-	})
+	fixture.api = NewAPI(fixture.metadata, nil, fixture.authority, APIOptions{RuntimeClientFactory: factory})
 
 	activation, err := fixture.api.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
 		ClientRequestID: "activate-factory",
@@ -326,9 +239,6 @@ func TestServicePassesRuntimeClientFactoryIntoInteractiveRuntime(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatalf("factory calls = %d, want 1", calls)
-	}
-	if activator.calls != 1 {
-		t.Fatalf("ordinary Session classifier calls = %d, want 1", activator.calls)
 	}
 	_, _ = fixture.api.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
 		ClientRequestID: "release-factory",

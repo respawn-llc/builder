@@ -2,7 +2,6 @@ package worktree
 
 import (
 	"context"
-	"core/internal/testharness/workflowtest"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -1189,22 +1188,14 @@ func TestDeleteWorktreeAllowsTerminalTaskManagedWorktree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MaterializeInitialTaskWorktree: %v", err)
 	}
-	publication, err := workflowstore.NewLifecyclePublication(workflowStore)
-	if err != nil {
-		t.Fatalf("NewLifecyclePublication: %v", err)
-	}
-	started, err := publication.PublishTaskStart(
-		env.ctx,
-		task.ID,
-		testsetup.PreparedPublicationStage(workflowstore.NewTaskStartLifecycleDelta),
-	)
+	started, err := workflowStore.StartTask(env.ctx, task.ID)
 	if err != nil {
 		t.Fatalf("StartTask: %v", err)
 	}
 	if len(started.Mutation.Created) != 1 {
 		t.Fatalf("StartTask mutation = %+v, want one current node", started.Mutation)
 	}
-	if _, err := workflowtest.CompleteCurrentNode(workflowStore, env.ctx, workflowstore.CurrentNodeCompletionRequest{
+	if _, err := workflowStore.CompleteCurrentNode(env.ctx, workflowstore.CurrentNodeCompletionRequest{
 		Source:       started.Mutation.Created[0].Reference,
 		TransitionID: "done",
 	}); err != nil {
@@ -1330,7 +1321,7 @@ func lockTaskWorktreeExecutionTarget(t *testing.T, env *serviceTestEnv, store *w
 	t.Helper()
 	requestedRef := resolvedTarget.RequestedRef
 	commitOID := resolvedTarget.CommitOID
-	candidate := &workflowstore.ExecutionTargetCandidate{
+	_, err := store.StartTaskWithExecutionTarget(env.ctx, task.ID, &workflowstore.ExecutionTargetCandidate{
 		Snapshot: workflowstore.ExecutionTargetSnapshot{
 			Mode:         workflow.ExecutionTargetModeHead,
 			RequestedRef: &requestedRef,
@@ -1346,20 +1337,9 @@ func lockTaskWorktreeExecutionTarget(t *testing.T, env *serviceTestEnv, store *w
 				Root:       taskWorktreeRoot(materialized.Worktree),
 			},
 		},
-	}
-	if err := store.LockTaskExecutionTarget(env.ctx, task.ID, candidate); err != nil {
-		t.Fatalf("LockTaskExecutionTarget: %v", err)
-	}
-	publication, err := workflowstore.NewLifecyclePublication(store)
+	})
 	if err != nil {
-		t.Fatalf("NewLifecyclePublication: %v", err)
-	}
-	if _, err := publication.PublishTaskStart(
-		env.ctx,
-		task.ID,
-		testsetup.PreparedPublicationStage(workflowstore.NewTaskStartLifecycleDelta),
-	); err != nil {
-		t.Fatalf("StartTask: %v", err)
+		t.Fatalf("StartTaskWithExecutionTarget: %v", err)
 	}
 }
 

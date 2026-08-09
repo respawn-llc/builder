@@ -47,8 +47,7 @@ type UpdateTaskRequest struct {
 }
 
 type StartTaskResult struct {
-	Mutation        workflow.CurrentNodeMutationResult
-	CreatedNodeKind workflow.NodeKind
+	Mutation workflow.CurrentNodeMutationResult
 }
 
 type TaskExecutionScope struct {
@@ -356,46 +355,33 @@ func (s *Store) UpdateTask(ctx context.Context, req UpdateTaskRequest) (TaskReco
 	return taskRecordFromTask(row)
 }
 
-type preparedTaskDeletion struct {
-	*preparedSQLLifecycleMutation
-	result DeleteTaskResult
-}
-
-func (s *Store) prepareTaskDeletion(
-	ctx context.Context,
-	taskID workflow.TaskID,
-) (*preparedTaskDeletion, error) {
+func (s *Store) DeleteTask(ctx context.Context, taskID workflow.TaskID) (DeleteTaskResult, error) {
 	if strings.TrimSpace(string(taskID)) == "" {
-		return nil, errors.New("task id is required")
+		return DeleteTaskResult{}, errors.New("task id is required")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, err
+		return DeleteTaskResult{}, err
 	}
-	handedOff := false
-	defer func() {
-		if !handedOff {
-			_ = tx.Rollback()
-		}
-	}()
+	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
 	task, err := q.GetTask(ctx, string(taskID))
 	if err != nil {
-		return nil, err
+		return DeleteTaskResult{}, err
 	}
 	record, err := taskRecordFromTask(task)
 	if err != nil {
-		return nil, err
+		return DeleteTaskResult{}, err
 	}
 	if _, err := q.AcquireTaskDependencyWriteLock(ctx, string(taskID)); err != nil {
-		return nil, fmt.Errorf("lock task dependency project for task deletion: %w", err)
+		return DeleteTaskResult{}, fmt.Errorf("lock task dependency project for task deletion: %w", err)
 	}
 	neighbors, err := q.ListTaskDependencyNeighborIDs(ctx, string(taskID))
 	if err != nil {
-		return nil, fmt.Errorf("list task dependency neighbors for task deletion: %w", err)
+		return DeleteTaskResult{}, fmt.Errorf("list task dependency neighbors for task deletion: %w", err)
 	}
 	if _, err := q.DeleteTaskDependenciesByTask(ctx, string(taskID)); err != nil {
-		return nil, fmt.Errorf("delete task dependencies for task deletion: %w", err)
+		return DeleteTaskResult{}, fmt.Errorf("delete task dependencies for task deletion: %w", err)
 	}
 	if len(neighbors) > 0 {
 		touched, err := q.TouchTasksUpdatedAt(ctx, sqlitegen.TouchTasksUpdatedAtParams{
@@ -403,68 +389,71 @@ func (s *Store) prepareTaskDeletion(
 			TaskIds:         neighbors,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("touch task dependency neighbors after task deletion: %w", err)
+			return DeleteTaskResult{}, fmt.Errorf("touch task dependency neighbors after task deletion: %w", err)
 		}
 		if touched != int64(len(neighbors)) {
-			return nil, fmt.Errorf("touch task dependency neighbors affected %d rows, want %d", touched, len(neighbors))
+			return DeleteTaskResult{}, fmt.Errorf("touch task dependency neighbors affected %d rows, want %d", touched, len(neighbors))
 		}
 	}
 	resolution, err := taskAttentionResolution(ctx, q, taskID)
 	if err != nil {
-		return nil, err
+		return DeleteTaskResult{}, err
 	}
 	if _, err := q.DeleteTaskPendingApprovalsByTask(ctx, string(taskID)); err != nil {
-		return nil, err
+		return DeleteTaskResult{}, err
 	}
 	if _, err := q.DeleteTaskLabelAssignmentsByTask(ctx, string(taskID)); err != nil {
-		return nil, err
+		return DeleteTaskResult{}, err
 	}
 	if _, err := q.DeleteTaskCurrentNodes(ctx, string(taskID)); err != nil {
-		return nil, err
+		return DeleteTaskResult{}, err
 	}
 	if _, err := q.DeleteTaskActiveFanout(ctx, string(taskID)); err != nil {
-		return nil, err
+		return DeleteTaskResult{}, err
 	}
 	if _, err := q.DeleteTaskCommentsByTask(ctx, string(taskID)); err != nil {
-		return nil, err
+		return DeleteTaskResult{}, err
 	}
 	deleted, err := q.DeleteTask(ctx, string(taskID))
 	if err != nil {
-		return nil, err
+		return DeleteTaskResult{}, err
 	}
 	if deleted != 1 {
-		return nil, sql.ErrNoRows
+		return DeleteTaskResult{}, sql.ErrNoRows
 	}
-	handedOff = true
-	return &preparedTaskDeletion{
-		preparedSQLLifecycleMutation: newPreparedSQLLifecycleMutation(tx),
-		result: DeleteTaskResult{
-			TaskRecord:              record,
-			TaskAttentionResolution: resolution,
-		},
-	}, nil
+	if err := tx.Commit(); err != nil {
+		return DeleteTaskResult{}, err
+	}
+	return DeleteTaskResult{TaskRecord: record, TaskAttentionResolution: resolution}, nil
 }
 
-type preparedStartTaskMutation struct {
-	*preparedSQLLifecycleMutation
-	result StartTaskResult
+func (s *Store) StartTask(ctx context.Context, taskID workflow.TaskID) (StartTaskResult, error) {
+	return s.startTask(ctx, taskID, nil, false)
 }
 
-func (s *Store) prepareStartTaskMutation(
-	ctx context.Context,
-	taskID workflow.TaskID,
-) (*preparedStartTaskMutation, error) {
+func (s *Store) StartTaskWithExecutionTarget(ctx context.Context, taskID workflow.TaskID, candidate *ExecutionTargetCandidate) (StartTaskResult, error) {
+	return s.startTask(ctx, taskID, candidate, true)
+}
+
+func (s *Store) startTask(ctx context.Context, taskID workflow.TaskID, candidate *ExecutionTargetCandidate, requireTarget bool) (StartTaskResult, error) {
 	prepared, err := s.prepareTaskStart(ctx, taskID)
 	if err != nil {
-		return nil, err
+		return StartTaskResult{}, err
+	}
+	var targetMutation preparedExecutionTargetMutation
+	if requireTarget {
+		targetMutation, err = s.prepareExecutionTargetMutation(ctx, prepared.task, candidate)
+		if err != nil {
+			return StartTaskResult{}, err
+		}
 	}
 	executionRoot, err := executionRootForLockedTaskIfPresent(ctx, s.queries, prepared.task)
 	if err != nil {
-		return nil, err
+		return StartTaskResult{}, err
 	}
 	if prepared.target.Kind() == workflow.NodeKindScript {
 		if err := s.validateScriptNodeForExecution(ctx, s.queries, workflow.NodeIDOf(prepared.target), executionRoot); err != nil {
-			return nil, err
+			return StartTaskResult{}, err
 		}
 	}
 	var targetSelection *workflow.AgentExecutionSelection
@@ -486,47 +475,46 @@ func (s *Store) prepareStartTaskMutation(
 			selectionErr = errors.New("transition selection planner omitted Agent execution selection")
 		}
 		if selectionErr != nil {
-			return nil, fmt.Errorf("materialize Agent target selection: %w", selectionErr)
+			return StartTaskResult{}, fmt.Errorf("materialize Agent target selection: %w", selectionErr)
 		}
 		targetSelection = &value
 	}
 	target, err := newReadyCurrentNode(taskID, workflow.NodeIDOf(prepared.target), prepared.startEdge.ID, targetSelection)
 	if err != nil {
-		return nil, err
+		return StartTaskResult{}, err
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, err
+		return StartTaskResult{}, err
 	}
-	rollbackOnError := func(cause error) (*preparedStartTaskMutation, error) {
-		rollbackErr := tx.Rollback()
-		if errors.Is(rollbackErr, sql.ErrTxDone) {
-			rollbackErr = nil
-		}
-		return nil, errors.Join(cause, rollbackErr)
-	}
+	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
 	now := s.now().UnixMilli()
+	if requireTarget {
+		if err := applyPreparedExecutionTargetMutation(ctx, q, prepared.task, targetMutation, now); err != nil {
+			return StartTaskResult{}, err
+		}
+	}
 	removed, err := q.DeleteSerialTaskCurrentNode(ctx, sqlitegen.DeleteSerialTaskCurrentNodeParams{TaskID: string(taskID), NodeID: string(workflow.NodeIDOf(prepared.start))})
 	if err != nil {
-		return rollbackOnError(err)
+		return StartTaskResult{}, err
 	}
 	if removed != 1 {
-		return rollbackOnError(sql.ErrNoRows)
+		return StartTaskResult{}, sql.ErrNoRows
 	}
 	if err := insertTaskCurrentNode(ctx, q, target); err != nil {
-		return rollbackOnError(err)
+		return StartTaskResult{}, err
 	}
 	if err := touchTaskUpdatedAt(ctx, q, string(taskID), now); err != nil {
-		return rollbackOnError(err)
+		return StartTaskResult{}, err
 	}
-	return &preparedStartTaskMutation{
-		preparedSQLLifecycleMutation: newPreparedSQLLifecycleMutation(tx),
-		result: StartTaskResult{Mutation: workflow.CurrentNodeMutationResult{
-			Removed: []workflow.CurrentNodeReference{prepared.startCurrentNode.Reference},
-			Created: []workflow.CurrentNode{target},
-		}, CreatedNodeKind: prepared.target.Kind()},
-	}, nil
+	if err := tx.Commit(); err != nil {
+		return StartTaskResult{}, err
+	}
+	return StartTaskResult{Mutation: workflow.CurrentNodeMutationResult{
+		Removed: []workflow.CurrentNodeReference{prepared.startCurrentNode.Reference},
+		Created: []workflow.CurrentNode{target},
+	}}, nil
 }
 
 func (s *Store) ValidateTaskStart(ctx context.Context, taskID workflow.TaskID) error {

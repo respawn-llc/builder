@@ -1,15 +1,14 @@
 package workflowview
 
 import (
-	"core/internal/testharness/workflowtest"
 	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
 	"time"
 
+	"core/server/tools"
 	"core/server/workflow"
-	"core/server/workflowexecution"
 	"core/server/workflowstore"
 	"core/shared/clientui"
 	"core/shared/serverapi"
@@ -18,7 +17,7 @@ import (
 func TestAttentionProjectsPendingApprovalAndInterruptedCurrentNode(t *testing.T) {
 	approvalFixture := newCurrentNodeViewFixture(t, true)
 	approvalStarted := approvalFixture.startTask(t, "Approval task")
-	completed, err := workflowtest.CompleteCurrentNode(approvalFixture.store, approvalFixture.ctx, workflowstore.CurrentNodeCompletionRequest{
+	completed, err := approvalFixture.store.CompleteCurrentNode(approvalFixture.ctx, workflowstore.CurrentNodeCompletionRequest{
 		Source:       approvalStarted.currentNode,
 		TransitionID: "done",
 		Commentary:   "Ready to merge.",
@@ -42,26 +41,15 @@ func TestAttentionProjectsPendingApprovalAndInterruptedCurrentNode(t *testing.T)
 		t.Fatalf("InterruptCurrentNode: %v", err)
 	}
 
-	var approval serverapi.WorkflowAttentionItem
-	if err = approvalFixture.projection.WithBoundedLifecycle(approvalFixture.ctx, func(_ string, durable *TaskStatusDurableSnapshot, _ workflowexecution.WorkflowTaskLifecycleReader) error {
-		snapshot := *approvalFixture.attention(t)
-		snapshot.queries = durable.queries
-		taskID := string(approvalStarted.task.ID)
-		rows, err := snapshot.durableCandidateRows(approvalFixture.ctx, attentionPageCursor{}, &taskID, 0)
-		if err != nil {
-			return err
-		}
-		if len(rows) != 1 {
-			return errors.New("pinned approval attention candidate is missing")
-		}
-		if _, err := approvalFixture.metadata.DB().ExecContext(approvalFixture.ctx, `DELETE FROM task_pending_approvals WHERE id = ?`, completed.PendingApproval.ID.String()); err != nil {
-			return err
-		}
-		approval, err = snapshot.durableCandidate(approvalFixture.ctx, rows[0])
-		return err
-	}); err != nil {
-		t.Fatalf("project pinned approval attention: %v", err)
+	approvalAttention := approvalFixture.attention(t)
+	approvals, err := approvalAttention.ListTask(approvalFixture.ctx, serverapi.WorkflowTaskAttentionListRequest{TaskID: string(approvalStarted.task.ID)})
+	if err != nil {
+		t.Fatalf("Attention.ListTask approval: %v", err)
 	}
+	if len(approvals.Items) != 1 {
+		t.Fatalf("approval attention = %+v, want one approval", approvals.Items)
+	}
+	approval := approvals.Items[0]
 	if approval.Kind != "approval" ||
 		approval.ApprovalID == nil ||
 		*approval.ApprovalID != completed.PendingApproval.ID.String() ||
@@ -123,7 +111,7 @@ func requireAttentionMessageOmitted(t *testing.T, item serverapi.WorkflowAttenti
 func TestAttentionPaginatesDurableCurrentStateAndScopesTaskQuery(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, true)
 	approvalTask := fixture.startTask(t, "Approval")
-	completed, err := workflowtest.CompleteCurrentNode(fixture.store, fixture.ctx, workflowstore.CurrentNodeCompletionRequest{
+	completed, err := fixture.store.CompleteCurrentNode(fixture.ctx, workflowstore.CurrentNodeCompletionRequest{
 		Source:       approvalTask.currentNode,
 		TransitionID: "done",
 	})
@@ -202,7 +190,6 @@ func TestAttentionAndDetailProjectLiveQuestionFromExactScope(t *testing.T) {
 		currentNodeViewStatusObservationSource{
 			authority:  question.authority,
 			quiescence: fixture.quiescence,
-			store:      fixture.store,
 		},
 	)
 	if err != nil {
@@ -249,23 +236,11 @@ func TestAttentionAndDetailProjectLiveQuestionFromExactScope(t *testing.T) {
 			ApprovalDecisions: []clientui.ApprovalDecision{clientui.ApprovalDecisionAllowOnce},
 		}},
 	}}
-	attentionProjection, err := NewTaskStatusProjection(
-		fixture.metadata,
-		fixture.store,
-		projector,
-		currentNodeViewStatusObservationSource{
-			authority:  question.authority,
-			quiescence: fixture.quiescence,
-			store:      fixture.store,
-			prompts:    prompts,
-		},
-	)
-	if err != nil {
-		t.Fatalf("NewTaskStatusProjection attention: %v", err)
-	}
 	attention, err := NewAttention(
 		fixture.metadata,
-		attentionProjection,
+		mustDefinitionProjection(t, fixture.store),
+		question.authority,
+		prompts,
 	)
 	if err != nil {
 		t.Fatalf("NewAttention: %v", err)
@@ -299,7 +274,7 @@ func TestAttentionAndDetailProjectLiveQuestionFromExactScope(t *testing.T) {
 	if len(unrelatedAttention.Items) != 0 {
 		t.Fatalf("unrelated task attention = %+v, want none", unrelatedAttention.Items)
 	}
-	dependencies, err := NewTaskDependencies(fixture.metadata, questionProjection)
+	dependencies, err := NewTaskDependencies(fixture.metadata, questionProjection, fixture.dependencyCounter)
 	if err != nil {
 		t.Fatalf("NewTaskDependencies: %v", err)
 	}
@@ -324,18 +299,24 @@ func TestAttentionAndDetailProjectLiveQuestionFromExactScope(t *testing.T) {
 }
 
 func TestAttentionProjectsLiveSessionApprovalFromExactScope(t *testing.T) {
-	surfaces := newRealTaskStatusSurfaces(t, false)
-	fixture := surfaces.fixture
-	backlog := startedCurrentNodeViewTask{task: fixture.createBacklogTask(t, "Live approval")}
-	request := realTaskStatusApprovalRequest()
-	started, execution := startRealTaskStatusExecution(t, surfaces, backlog, false, &request)
-	agentTarget, ok := execution.target.(taskStatusAgentTarget)
-	if !ok {
-		t.Fatalf("approval execution target = %T, want agent", execution.target)
-	}
+	fixture := newCurrentNodeViewFixture(t, false)
+	started := fixture.startTask(t, "Live approval")
+	request := workflowViewApprovalRequest()
+	prompt := fixture.startCurrentNodePrompt(t, started, request)
+	prompts := currentNodeViewPrompts{bySession: map[string][]PendingPromptSnapshot{
+		prompt.sessionID.String(): {{
+			ID:                request.ID,
+			CreatedAt:         time.UnixMilli(4_000).UTC(),
+			Question:          request.Question,
+			Approval:          true,
+			ApprovalDecisions: []clientui.ApprovalDecision{clientui.ApprovalDecisionAllowOnce, clientui.ApprovalDecisionDeny},
+		}},
+	}}
 	attention, err := NewAttention(
 		fixture.metadata,
-		surfaces.projection,
+		mustDefinitionProjection(t, fixture.store),
+		prompt.authority,
+		prompts,
 	)
 	if err != nil {
 		t.Fatalf("NewAttention: %v", err)
@@ -354,28 +335,28 @@ func TestAttentionProjectsLiveSessionApprovalFromExactScope(t *testing.T) {
 		item.QuestionID == nil ||
 		*item.QuestionID != request.ID ||
 		item.SessionID == nil ||
-		*item.SessionID != agentTarget.sessionID.String() ||
+		*item.SessionID != prompt.sessionID.String() ||
 		item.Question == nil ||
 		item.Question.Kind != serverapi.WorkflowAttentionQuestionKindApproval ||
 		item.CurrentNode == nil ||
 		item.CurrentNode.NodeID != string(fixture.agentNodeID) {
 		t.Fatalf("live approval attention item = %+v", item)
 	}
+	prompt.resolve(t, fixture.ctx, tools.AskQuestionApproval{
+		Decision: tools.AskQuestionApprovalDecisionAllowOnce,
+	})
 }
 
-func TestAttentionKeepsPublishedPromptWithoutASecondLivePromptLookup(t *testing.T) {
-	surfaces := newRealTaskStatusSurfaces(t, false)
-	fixture := surfaces.fixture
-	backlog := startedCurrentNodeViewTask{task: fixture.createBacklogTask(t, "Retired prompt")}
-	request := realTaskStatusApprovalRequest()
-	started, execution := startRealTaskStatusExecution(t, surfaces, backlog, false, &request)
-	agentTarget, ok := execution.target.(taskStatusAgentTarget)
-	if !ok {
-		t.Fatalf("prompt execution target = %T, want agent", execution.target)
-	}
+func TestAttentionOmitsLivePromptThatRetiredBeforePromptProjection(t *testing.T) {
+	fixture := newCurrentNodeViewFixture(t, false)
+	started := fixture.startTask(t, "Retired prompt")
+	request := workflowViewApprovalRequest()
+	prompt := fixture.startCurrentNodePrompt(t, started, request)
 	attention, err := NewAttention(
 		fixture.metadata,
-		surfaces.projection,
+		mustDefinitionProjection(t, fixture.store),
+		prompt.authority,
+		currentNodeViewPrompts{},
 	)
 	if err != nil {
 		t.Fatalf("NewAttention: %v", err)
@@ -386,11 +367,10 @@ func TestAttentionKeepsPublishedPromptWithoutASecondLivePromptLookup(t *testing.
 	if err != nil {
 		t.Fatalf("Attention.ListTask: %v", err)
 	}
-	if len(response.Items) != 1 ||
-		response.Items[0].SessionID == nil ||
-		*response.Items[0].SessionID != agentTarget.sessionID.String() ||
-		response.Items[0].QuestionID == nil ||
-		*response.Items[0].QuestionID != request.ID {
-		t.Fatalf("published prompt attention = %+v, want prompt for session %s", response.Items, agentTarget.sessionID)
+	if len(response.Items) != 0 {
+		t.Fatalf("retired prompt attention = %+v, want no items for session %s", response.Items, prompt.sessionID)
 	}
+	prompt.resolve(t, fixture.ctx, tools.AskQuestionApproval{
+		Decision: tools.AskQuestionApprovalDecisionAllowOnce,
+	})
 }

@@ -2,7 +2,6 @@ package workflowrunner
 
 import (
 	"context"
-	"core/internal/testharness/workflowtest"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -53,32 +52,14 @@ type currentNodeRunnerFixture struct {
 	client          currentNodeRunnerClient
 	persistenceGate *sessiontest.PersistenceGate
 
-	mu              sync.Mutex
-	clientRequests  []runtimewire.RuntimeClientRequest
-	clientErr       error
-	providerEntered chan struct{}
-	providerRelease chan struct{}
-	providerOnce    sync.Once
+	mu             sync.Mutex
+	clientRequests []runtimewire.RuntimeClientRequest
+	clientErr      error
 }
 
 type currentNodeRunnerClient interface {
 	llm.Client
 	Requests() []llm.Request
-}
-
-type currentNodeRunnerDependencyCounter func(context.Context, string) (int, error)
-
-func (c currentNodeRunnerDependencyCounter) CountUnsatisfiedBlockers(ctx context.Context, taskID string) (int, error) {
-	return c(ctx, taskID)
-}
-
-type currentNodeRunnerWorkflowEventPublisherFunc func(context.Context, workflowstore.WorkflowEventRecord) error
-
-func (f currentNodeRunnerWorkflowEventPublisherFunc) PublishWorkflowEvent(
-	ctx context.Context,
-	event workflowstore.WorkflowEventRecord,
-) error {
-	return f(ctx, event)
 }
 
 func workflowPostCompletionCompactionResponse(summary string) llm.CompactionResponse {
@@ -258,31 +239,19 @@ func newCurrentNodeRunnerFixtureWithClientAndPersistence(
 		}
 	})
 	permit := workflowexecution.NewMutationPermit()
-	var sharedDependencies *workflowview.TaskDependencies
+	dependencyCounter, err := workflowview.NewTaskDependencyCounter(metadataStore)
+	if err != nil {
+		t.Fatalf("new Task dependency counter: %v", err)
+	}
 	starter, err := NewStarter(cfg, metadataStore, store, nil, nil, StarterOptions{
 		RuntimeAuthority: fixture.authority,
 		MutationPermit:   permit,
-		TaskDependencies: currentNodeRunnerDependencyCounter(func(ctx context.Context, taskID string) (int, error) {
-			if sharedDependencies == nil {
-				return 0, errors.New("shared Task dependencies are not bound")
-			}
-			return sharedDependencies.CountUnsatisfiedBlockers(ctx, taskID)
-		}),
-		RuntimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(factoryCtx context.Context, request runtimewire.RuntimeClientRequest) (llm.Client, error) {
+		TaskDependencies: dependencyCounter,
+		RuntimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(_ context.Context, request runtimewire.RuntimeClientRequest) (llm.Client, error) {
 			fixture.mu.Lock()
 			fixture.clientRequests = append(fixture.clientRequests, request)
 			err := fixture.clientErr
-			entered := fixture.providerEntered
-			release := fixture.providerRelease
 			fixture.mu.Unlock()
-			if entered != nil {
-				fixture.providerOnce.Do(func() { close(entered) })
-				select {
-				case <-release:
-				case <-factoryCtx.Done():
-					return nil, context.Cause(factoryCtx)
-				}
-			}
 			if err != nil {
 				return nil, err
 			}
@@ -295,7 +264,7 @@ func newCurrentNodeRunnerFixtureWithClientAndPersistence(
 	fixture.starter = starter
 	controller, err = workflowexecution.NewCurrentNodeController(store, starter, fixture.authority, permit, workflowexecution.CurrentNodeControllerConfig{
 		AgentConcurrency:  1,
-		AssignmentEnsurer: starter,
+		AssignmentSteerer: starter,
 	})
 	if err != nil {
 		t.Fatalf("new current node controller: %v", err)
@@ -310,11 +279,10 @@ func newCurrentNodeRunnerFixtureWithClientAndPersistence(
 	if err != nil {
 		t.Fatalf("new Task status projection: %v", err)
 	}
-	dependencies, err := workflowview.NewTaskDependencies(metadataStore, projection)
+	dependencies, err := workflowview.NewTaskDependencies(metadataStore, projection, dependencyCounter)
 	if err != nil {
 		t.Fatalf("new Task dependency projection: %v", err)
 	}
-	sharedDependencies = dependencies
 	fixture.dependencies = dependencies
 	return fixture
 }
@@ -332,26 +300,6 @@ func (f *currentNodeRunnerFixture) createTask(t *testing.T, workflowID runtimeid
 		t.Fatalf("create task: %v", err)
 	}
 	return task
-}
-
-func (f *currentNodeRunnerFixture) publishTaskStart(
-	t *testing.T,
-	taskID workflow.TaskID,
-) workflowstore.StartTaskResult {
-	t.Helper()
-	publication, err := workflowstore.NewLifecyclePublication(f.store)
-	if err != nil {
-		t.Fatalf("NewLifecyclePublication: %v", err)
-	}
-	started, err := publication.PublishTaskStart(
-		context.Background(),
-		taskID,
-		testsetup.PreparedPublicationStage(workflowstore.NewTaskStartLifecycleDelta),
-	)
-	if err != nil {
-		t.Fatalf("StartTask: %v", err)
-	}
-	return started
 }
 
 func (f *currentNodeRunnerFixture) startTask(t *testing.T, task workflowstore.TaskRecord) workflow.CurrentNodeReference {
@@ -1229,51 +1177,6 @@ func TestPostTurnCompactionDiagnosticReleasesAssignedSuccessor(t *testing.T) {
 	}
 }
 
-func TestCommittedCompletionEventDiagnosticReleasesAutomaticSuccessor(t *testing.T) {
-	eventErr := errors.New("completion event delivery failed")
-	var completionEventFailed atomic.Bool
-	f := newCurrentNodeRunnerFixture(
-		t,
-		ScriptedToolBatch(
-			"complete first node",
-			llm.ToolCall{
-				ID:    "complete-first",
-				Name:  string(toolspec.ToolCompleteNode),
-				Input: json.RawMessage(`{"transition":"next","commentary":"first done"}`),
-			},
-		),
-		ScriptedRuntimeError(ErrScriptedRuntime),
-	)
-	f.store.SetWorkflowEventPublisher(currentNodeRunnerWorkflowEventPublisherFunc(
-		func(_ context.Context, event workflowstore.WorkflowEventRecord) error {
-			if event.Action == serverapi.WorkflowProjectEventActionCompleted {
-				completionEventFailed.Store(true)
-				return eventErr
-			}
-			return nil
-		},
-	))
-	workflowID := createCurrentNodeTwoStepWorkflow(
-		t,
-		f.store,
-		"Committed diagnostic successor",
-		workflow.ContextModeCompactAndContinueSession,
-		currentNodeWorkflowStep{kind: workflow.NodeKindAgent, role: "coder", prompt: "Complete the first node."},
-		currentNodeWorkflowStep{kind: workflow.NodeKindAgent, role: "reviewer", prompt: "Review the work."},
-	)
-	task := f.createTask(t, workflowID)
-	source := f.startTask(t, task)
-
-	requests := f.waitForModelRequests(t, 2)
-	if len(requests) != 2 {
-		t.Fatalf("model requests = %d, want source and automatic successor", len(requests))
-	}
-	if !completionEventFailed.Load() {
-		t.Fatal("committed completion event diagnostic was not exercised")
-	}
-	f.waitForControllerCurrentNodeFinalized(t, source)
-}
-
 func TestWorkflowRunnerCancellationDuringPostTurnFinalizationFinalizesInterruptedSourceScope(t *testing.T) {
 	client := NewCompactingScriptedClient(
 		llm.ProviderCapabilities{
@@ -1553,25 +1456,7 @@ func TestResumeRetainsEstablishedSessionContractAndAttachedRuntime(t *testing.T)
 	event, err := subscription.Next(eventCtx)
 	cancelEvent()
 	if err != nil {
-		nodes, nodesErr := f.store.ListCurrentNodes(context.Background(), task.ID)
-		var scheduling *workflow.CurrentNodeScheduling
-		var interruption *workflow.CurrentNodeInterruption
-		if len(nodes) != 0 {
-			scheduling = nodes[0].Scheduling
-			if scheduling != nil {
-				interruption = scheduling.Interruption
-			}
-		}
-		t.Fatalf(
-			"attached transcript subscription did not receive resumed runtime event: %v; current_nodes=%+v scheduling=%+v interruption=%+v current_nodes_error=%v controller=%+v model_requests=%d",
-			err,
-			nodes,
-			scheduling,
-			interruption,
-			nodesErr,
-			f.controller.Snapshot(),
-			len(f.client.Requests()),
-		)
+		t.Fatalf("attached transcript subscription did not receive resumed runtime event: %v", err)
 	}
 	if event.Sequence <= 1 {
 		t.Fatalf("resumed runtime event sequence = %d, want post-hydration delivery", event.Sequence)
@@ -1669,24 +1554,27 @@ func TestCurrentNodeTaskAwarenessMatchesCanonicalDependencyProjectionAcrossTermi
 	if err != nil {
 		t.Fatalf("GetDefinition: %v", err)
 	}
-	if _, err := workflowtest.ManualMoveTask(f.store, context.Background(), workflowstore.ManualMoveRequest{
+	if _, err := f.store.ManualMoveTask(context.Background(), workflowstore.ManualMoveRequest{
 		TaskID: blocker.ID, TargetNodeID: currentNodeKindID(t, definition, workflow.NodeKindTerminal),
 	}); err != nil {
 		t.Fatalf("manual terminal move: %v", err)
 	}
 	assertAwareness(0)
-	if _, err := workflowtest.ManualMoveTask(f.store, context.Background(), workflowstore.ManualMoveRequest{
+	if _, err := f.store.ManualMoveTask(context.Background(), workflowstore.ManualMoveRequest{
 		TaskID: blocker.ID, TargetNodeID: currentNodeKindID(t, definition, workflow.NodeKindStart),
 	}); err != nil {
 		t.Fatalf("reopen blocker: %v", err)
 	}
 	assertAwareness(1)
 
-	started := f.publishTaskStart(t, blocker.ID)
+	started, err := f.store.StartTask(context.Background(), blocker.ID)
+	if err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
 	if len(started.Mutation.Created) != 1 {
 		t.Fatalf("started Current Nodes = %+v, want one", started.Mutation.Created)
 	}
-	if _, err := workflowtest.CompleteCurrentNode(f.store, context.Background(), workflowstore.CurrentNodeCompletionRequest{
+	if _, err := f.store.CompleteCurrentNode(context.Background(), workflowstore.CurrentNodeCompletionRequest{
 		Source: started.Mutation.Created[0].Reference, TransitionID: "done",
 	}); err != nil {
 		t.Fatalf("complete blocker to ordinary terminal: %v", err)
@@ -2088,12 +1976,12 @@ func TestCurrentNodeContinuationWithActiveTranscriptSubscriberDoesNotBlockLaterA
 		return len(nodes) == 1 && !nodes[0].Reference.Equal(scriptSource)
 	})
 
+	releaseSuccessor.Do(func() { close(successorResponseRelease) })
 	f.waitForPath(t, laterScriptMarker)
-	f.waitForCurrentNode(t, scriptTask.ID, func(nodes []workflow.CurrentNode) bool {
+	f.waitForCurrentNode(t, continuedTask.ID, func(nodes []workflow.CurrentNode) bool {
 		return len(nodes) == 1 && nodes[0].Scheduling == nil
 	})
-	releaseSuccessor.Do(func() { close(successorResponseRelease) })
-	f.waitForCurrentNode(t, continuedTask.ID, func(nodes []workflow.CurrentNode) bool {
+	f.waitForCurrentNode(t, scriptTask.ID, func(nodes []workflow.CurrentNode) bool {
 		return len(nodes) == 1 && nodes[0].Scheduling == nil
 	})
 }

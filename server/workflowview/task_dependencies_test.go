@@ -1,26 +1,23 @@
 package workflowview
 
 import (
-	"core/internal/testharness/workflowtest"
-	"slices"
 	"testing"
 
 	"core/server/workflow"
-	"core/server/workflowexecution"
 	"core/server/workflowstore"
 	"core/shared/serverapi"
 )
 
 func TestNewTaskDependenciesRequiresTaskStatusProjection(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
-	if _, err := NewTaskDependencies(fixture.metadata, nil); err == nil {
+	if _, err := NewTaskDependencies(fixture.metadata, nil, fixture.dependencyCounter); err == nil {
 		t.Fatal("NewTaskDependencies accepted a nil TaskStatusProjection")
 	}
 }
 
 func TestTaskDependenciesProjectsCompleteDirectionsOrderingAndAvailability(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
-	dependencies, err := NewTaskDependencies(fixture.metadata, fixture.projection)
+	dependencies, err := NewTaskDependencies(fixture.metadata, fixture.projection, fixture.dependencyCounter)
 	if err != nil {
 		t.Fatalf("NewTaskDependencies: %v", err)
 	}
@@ -41,7 +38,7 @@ func TestTaskDependenciesProjectsCompleteDirectionsOrderingAndAvailability(t *te
 	if err != nil {
 		t.Fatalf("GetDefinition: %v", err)
 	}
-	if _, err := workflowtest.ManualMoveTask(fixture.store, fixture.ctx, workflowstore.ManualMoveRequest{
+	if _, err := fixture.store.ManualMoveTask(fixture.ctx, workflowstore.ManualMoveRequest{
 		TaskID:       doneBlocker.ID,
 		TargetNodeID: terminalNodeID(t, definition),
 	}); err != nil {
@@ -82,7 +79,7 @@ func TestTaskDependenciesProjectsCompleteDirectionsOrderingAndAvailability(t *te
 
 func TestTaskDependenciesEmptyProjectionAndFocusedCountFollowSatisfactionWithoutTouchingBlockedTask(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
-	dependencies, err := NewTaskDependencies(fixture.metadata, fixture.projection)
+	dependencies, err := NewTaskDependencies(fixture.metadata, fixture.projection, fixture.dependencyCounter)
 	if err != nil {
 		t.Fatalf("NewTaskDependencies: %v", err)
 	}
@@ -125,7 +122,7 @@ func TestTaskDependenciesEmptyProjectionAndFocusedCountFollowSatisfactionWithout
 	if err != nil {
 		t.Fatalf("GetDefinition: %v", err)
 	}
-	if _, err := workflowtest.ManualMoveTask(fixture.store, fixture.ctx, workflowstore.ManualMoveRequest{
+	if _, err := fixture.store.ManualMoveTask(fixture.ctx, workflowstore.ManualMoveRequest{
 		TaskID:       blocker.ID,
 		TargetNodeID: terminalNodeID(t, doneDefinition),
 	}); err != nil {
@@ -148,7 +145,7 @@ func TestTaskDependenciesEmptyProjectionAndFocusedCountFollowSatisfactionWithout
 	if got := viewTaskUpdatedAt(t, fixture, emptyTask.ID); got != beforeUpdatedAt {
 		t.Fatalf("blocked task timestamp = %d, want unchanged %d", got, beforeUpdatedAt)
 	}
-	if _, err := workflowtest.ManualMoveTask(fixture.store, fixture.ctx, workflowstore.ManualMoveRequest{
+	if _, err := fixture.store.ManualMoveTask(fixture.ctx, workflowstore.ManualMoveRequest{
 		TaskID:       blocker.ID,
 		TargetNodeID: backlogNodeID(t, doneDefinition),
 	}); err != nil {
@@ -165,7 +162,7 @@ func TestTaskDependenciesEmptyProjectionAndFocusedCountFollowSatisfactionWithout
 
 func TestListTaskDependenciesOmitsEmptyDirections(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
-	dependencies, err := NewTaskDependencies(fixture.metadata, fixture.projection)
+	dependencies, err := NewTaskDependencies(fixture.metadata, fixture.projection, fixture.dependencyCounter)
 	if err != nil {
 		t.Fatalf("NewTaskDependencies: %v", err)
 	}
@@ -192,143 +189,9 @@ func TestListTaskDependenciesOmitsEmptyDirections(t *testing.T) {
 	}
 }
 
-func TestTaskDependencyReadsObserveOnlyRelatedTasks(t *testing.T) {
-	fixture := newCurrentNodeViewFixture(t, false)
-	subject := createViewTask(t, fixture, "Dependency subject")
-	related := createViewTask(t, fixture, "Dependency related")
-	unrelated := createViewTask(t, fixture, "Dependency unrelated")
-	if _, err := fixture.store.AddTaskDependency(fixture.ctx, workflowstore.TaskDependencyAddRequest{
-		BlockerTaskID: related.ID,
-		BlockedTaskID: subject.ID,
-	}); err != nil {
-		t.Fatalf("AddTaskDependency: %v", err)
-	}
-	unrelatedReference, err := workflow.NewCurrentNodeReference(
-		unrelated.ID,
-		fixture.agentNodeID,
-		nil,
-	)
-	if err != nil {
-		t.Fatalf("NewCurrentNodeReference: %v", err)
-	}
-	var capturedTaskIDs [][]workflow.TaskID
-	var boundedSelectedTaskIDs [][]workflow.TaskID
-	projection, err := NewTaskStatusProjection(
-		fixture.metadata,
-		fixture.store,
-		NewTaskProjector(),
-		staticTaskStatusLiveObservationSource{
-			store: fixture.store,
-			observation: workflowexecution.WorkflowTaskExecutionObservation{
-				Lifecycle: map[workflow.TaskID]workflowexecution.WorkflowTaskLifecycleSnapshot{
-					unrelated.ID: {
-						CurrentNodes:       []workflow.CurrentNode{{Reference: unrelatedReference}},
-						QueuedCurrentNodes: []workflow.CurrentNodeReference{unrelatedReference},
-					},
-				},
-			},
-			capturedTaskIDs:        &capturedTaskIDs,
-			boundedSelectedTaskIDs: &boundedSelectedTaskIDs,
-		},
-	)
-	if err != nil {
-		t.Fatalf("NewTaskStatusProjection: %v", err)
-	}
-	dependencies, err := NewTaskDependencies(fixture.metadata, projection)
-	if err != nil {
-		t.Fatalf("NewTaskDependencies: %v", err)
-	}
-
-	if _, err := dependencies.GetTaskDependencies(fixture.ctx, string(subject.ID)); err != nil {
-		t.Fatalf("GetTaskDependencies: %v", err)
-	}
-	if _, err := dependencies.CountUnsatisfiedBlockers(fixture.ctx, string(subject.ID)); err != nil {
-		t.Fatalf("CountUnsatisfiedBlockers: %v", err)
-	}
-	if _, err := dependencies.ListTaskDependencies(fixture.ctx, string(subject.ID), nil); err != nil {
-		t.Fatalf("ListTaskDependencies: %v", err)
-	}
-	if len(capturedTaskIDs) != 0 {
-		t.Fatalf("dependency reads used unbounded lifecycle captures: %+v", capturedTaskIDs)
-	}
-	if len(boundedSelectedTaskIDs) != 3 {
-		t.Fatalf("bounded dependency lifecycle selections = %+v, want three reads", boundedSelectedTaskIDs)
-	}
-	for _, selected := range boundedSelectedTaskIDs {
-		if !slices.Equal(selected, []workflow.TaskID{related.ID}) {
-			t.Fatalf("bounded dependency lifecycle selection = %+v, want only %q", selected, related.ID)
-		}
-	}
-}
-
-func TestTaskDependenciesProjectsPinnedQueuedBlockerAsUnsatisfied(t *testing.T) {
-	fixture := newCurrentNodeViewFixture(t, false)
-	blocker := fixture.startTask(t, "Pinned dependency blocker")
-	blocked := fixture.startTask(t, "Pinned dependency blocked")
-	if _, err := fixture.store.AddTaskDependency(fixture.ctx, workflowstore.TaskDependencyAddRequest{
-		BlockerTaskID: blocker.task.ID,
-		BlockedTaskID: blocked.task.ID,
-	}); err != nil {
-		t.Fatalf("AddTaskDependency: %v", err)
-	}
-	definition, _, err := fixture.store.GetDefinition(fixture.ctx, fixture.workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	if _, err := workflowtest.ManualMoveTask(fixture.store, fixture.ctx, workflowstore.ManualMoveRequest{
-		TaskID:       blocker.task.ID,
-		TargetNodeID: currentNodeViewNodeIDByKind(t, definition, workflow.NodeKindTerminal),
-	}); err != nil {
-		t.Fatalf("move blocker to done: %v", err)
-	}
-	overrideReference, err := workflow.NewCurrentNodeReference(blocker.task.ID, fixture.agentNodeID, nil)
-	if err != nil {
-		t.Fatalf("NewCurrentNodeReference override: %v", err)
-	}
-	projection, err := NewTaskStatusProjection(
-		fixture.metadata,
-		fixture.store,
-		NewTaskProjector(),
-		staticTaskStatusLiveObservationSource{
-			store: fixture.store,
-			observation: workflowexecution.WorkflowTaskExecutionObservation{
-				Lifecycle: map[workflow.TaskID]workflowexecution.WorkflowTaskLifecycleSnapshot{
-					blocker.task.ID: {
-						CurrentNodes:       []workflow.CurrentNode{{Reference: overrideReference}},
-						QueuedCurrentNodes: []workflow.CurrentNodeReference{overrideReference},
-					},
-				},
-			},
-		},
-	)
-	if err != nil {
-		t.Fatalf("NewTaskStatusProjection: %v", err)
-	}
-	dependencies, err := NewTaskDependencies(fixture.metadata, projection)
-	if err != nil {
-		t.Fatalf("NewTaskDependencies: %v", err)
-	}
-	projected, err := dependencies.GetTaskDependencies(fixture.ctx, string(blocked.task.ID))
-	if err != nil {
-		t.Fatalf("GetTaskDependencies: %v", err)
-	}
-	if projected.BlockerCount != 1 || projected.UnsatisfiedBlockerCount != 1 {
-		t.Fatalf("pinned blocker dependency summary = %+v", projected)
-	}
-	if len(projected.Directions) == 0 ||
-		len(projected.Directions[0].Items) != 1 ||
-		projected.Directions[0].Items[0].Status.Kind != serverapi.WorkflowTaskStatusKindQueued ||
-		!slices.Equal(
-			projected.Directions[0].Items[0].Status.NodeIDs,
-			[]string{string(fixture.agentNodeID)},
-		) {
-		t.Fatalf("pinned blocker dependency projection = %+v", projected.Directions)
-	}
-}
-
 func TestListTaskDependenciesSortsBothDirectionsUnfinishedFirstThenShortID(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
-	dependencies, err := NewTaskDependencies(fixture.metadata, fixture.projection)
+	dependencies, err := NewTaskDependencies(fixture.metadata, fixture.projection, fixture.dependencyCounter)
 	if err != nil {
 		t.Fatalf("NewTaskDependencies: %v", err)
 	}
@@ -354,7 +217,7 @@ func TestListTaskDependenciesSortsBothDirectionsUnfinishedFirstThenShortID(t *te
 		t.Fatalf("GetDefinition: %v", err)
 	}
 	for _, task := range []workflowstore.TaskRecord{blockerDone, blockedDone} {
-		if _, err := workflowtest.ManualMoveTask(fixture.store, fixture.ctx, workflowstore.ManualMoveRequest{
+		if _, err := fixture.store.ManualMoveTask(fixture.ctx, workflowstore.ManualMoveRequest{
 			TaskID:       task.ID,
 			TargetNodeID: terminalNodeID(t, definition),
 		}); err != nil {

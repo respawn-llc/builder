@@ -261,15 +261,8 @@ func TestStartServeServerRecoversAdmittedCurrentNodeOnRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetWorkflowTask after restart: %v", err)
 	}
-	if detail.Task.Status.Kind != serverapi.WorkflowTaskStatusKindInterrupted ||
-		!detail.Task.Actions.CanResume ||
-		detail.Task.Actions.CanInterrupt ||
-		len(detail.Task.LiveSessions) != 0 ||
-		len(detail.Task.CurrentScripts) != 0 {
-		t.Fatalf(
-			"task after restart reconciliation = %+v, want stopped resumable state without live activation",
-			detail.Task,
-		)
+	if !detail.Task.Actions.CanResume || detail.Task.Actions.CanInterrupt {
+		t.Fatalf("task actions after restart reconciliation = %+v, want resumable and not interruptible", detail.Task.Actions)
 	}
 	store, err := workflowstore.New(restarted.MetadataStore(), workflowstore.WithRoleResolver(testsetup.QuestionsEnabled("coder")))
 	if err != nil {
@@ -361,15 +354,7 @@ func createAdmittedCurrentNodeForRecovery(t *testing.T, server *ServeServer) (wo
 	if err != nil {
 		t.Fatalf("workflowstore.New: %v", err)
 	}
-	publication, err := workflowstore.NewLifecyclePublication(store)
-	if err != nil {
-		t.Fatalf("NewLifecyclePublication: %v", err)
-	}
-	started, err := publication.PublishTaskStart(
-		ctx,
-		workflow.TaskID(task.Task.ID),
-		testsetup.PreparedPublicationStage(workflowstore.NewTaskStartLifecycleDelta),
-	)
+	started, err := store.StartTask(ctx, workflow.TaskID(task.Task.ID))
 	if err != nil {
 		t.Fatalf("StartTask: %v", err)
 	}
@@ -377,7 +362,7 @@ func createAdmittedCurrentNodeForRecovery(t *testing.T, server *ServeServer) (wo
 		t.Fatalf("StartTask created current nodes = %+v, want one", started.Mutation.Created)
 	}
 	currentNode := started.Mutation.Created[0].Reference
-	if err := publication.PublishCurrentNodeAdmission(ctx, currentNode); err != nil {
+	if err := store.AdmitCurrentNode(ctx, currentNode); err != nil {
 		t.Fatalf("AdmitCurrentNode: %v", err)
 	}
 	return workflow.TaskID(task.Task.ID), currentNode

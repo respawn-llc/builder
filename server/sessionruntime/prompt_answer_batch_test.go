@@ -304,11 +304,11 @@ func TestExecutionPromptStoreResolvePromptBatchStopsAtCanonicalOperationalFailur
 			if got, want := feed.resolvedIDs(), []string{"first", "second"}; !equalPromptBatchStrings(got, want) {
 				t.Fatalf("resolution attempts = %v, want %v", got, want)
 			}
-			if store.hasPendingID("first") {
+			if store.hasPendingID("first") || store.hasPendingID("second") {
 				t.Fatal("committed canonical prefix remained pending")
 			}
-			if !store.hasPendingID("second") || !store.hasPendingID("third") {
-				t.Fatal("failed prompt or unprocessed canonical suffix was removed")
+			if !store.hasPendingID("third") {
+				t.Fatal("unprocessed canonical suffix was removed")
 			}
 		})
 	}

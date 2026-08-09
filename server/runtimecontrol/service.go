@@ -47,32 +47,27 @@ type WorkflowTaskSessionResolver interface {
 	SessionHasWorkflowTask(ctx context.Context, sessionID string) (bool, error)
 }
 
-type WorkflowSessionInterruptor interface {
-	InterruptSessionExecution(ctx context.Context, sessionID runtimeids.SessionID) (bool, error)
-}
-
 var errWorkflowTaskSessionAutoCompactionDisable = errors.New("auto-compaction cannot be disabled for workflow task sessions")
 
 type Service struct {
-	authority         *sessionruntime.Authority
-	execution         *runtimecommand.ExecutionAdapter
-	goalAuthority     *runtimecommand.GoalAuthority
-	activity          RuntimeActivityResolver
-	promptStore       PromptHistoryStore
-	promptCommands    PromptCommandResolver
-	workflowTasks     WorkflowTaskSessionResolver
-	workflowInterrupt WorkflowSessionInterruptor
-	persisted         session.PersistedSessionResolver
-	askViews          servicecontract.AskViewService
-	approvalViews     servicecontract.ApprovalViewService
-	attention         servicecontract.AttentionNotificationService
-	operations        *runtimeops.Coordinator
-	sessionNames      *requestmemo.Memo[sessionStringMemoRequest, struct{}]
-	thinkingLevels    *requestmemo.Memo[sessionStringMemoRequest, struct{}]
-	fastModes         *requestmemo.Memo[sessionBoolMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSetFastModeEnabledResponse]]
-	reviewers         *requestmemo.Memo[sessionBoolMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSetReviewerEnabledResponse]]
-	autoCompacts      *requestmemo.Memo[sessionBoolMemoRequest, serverapi.RuntimeSetAutoCompactionEnabledResponse]
-	questions         *requestmemo.Memo[sessionBoolMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSetQuestionsEnabledResponse]]
+	authority      *sessionruntime.Authority
+	execution      *runtimecommand.ExecutionAdapter
+	goalAuthority  *runtimecommand.GoalAuthority
+	activity       RuntimeActivityResolver
+	promptStore    PromptHistoryStore
+	promptCommands PromptCommandResolver
+	workflowTasks  WorkflowTaskSessionResolver
+	persisted      session.PersistedSessionResolver
+	askViews       servicecontract.AskViewService
+	approvalViews  servicecontract.ApprovalViewService
+	attention      servicecontract.AttentionNotificationService
+	operations     *runtimeops.Coordinator
+	sessionNames   *requestmemo.Memo[sessionStringMemoRequest, struct{}]
+	thinkingLevels *requestmemo.Memo[sessionStringMemoRequest, struct{}]
+	fastModes      *requestmemo.Memo[sessionBoolMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSetFastModeEnabledResponse]]
+	reviewers      *requestmemo.Memo[sessionBoolMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSetReviewerEnabledResponse]]
+	autoCompacts   *requestmemo.Memo[sessionBoolMemoRequest, serverapi.RuntimeSetAutoCompactionEnabledResponse]
+	questions      *requestmemo.Memo[sessionBoolMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSetQuestionsEnabledResponse]]
 
 	localEntries   *requestmemo.Memo[localEntryMemoRequest, struct{}]
 	queuedDiscards *requestmemo.Memo[queuedUserMessageMemoRequest, serverapi.RuntimeDiscardQueuedUserMessageResponse]
@@ -273,14 +268,6 @@ func (s *Service) WithWorkflowTaskSessionResolver(resolver WorkflowTaskSessionRe
 	return s
 }
 
-func (s *Service) WithWorkflowSessionInterruptor(interruptor WorkflowSessionInterruptor) *Service {
-	if s == nil {
-		return nil
-	}
-	s.workflowInterrupt = interruptor
-	return s
-}
-
 func (s *Service) WithPersistedSessionResolver(resolver session.PersistedSessionResolver) *Service {
 	if s == nil {
 		return nil
@@ -305,21 +292,6 @@ func (s *Service) withRuntime(ctx context.Context, sessionID string, fn func(con
 		return err
 	}
 	return s.authority.WithCurrentRuntime(ctx, id, fn)
-}
-
-func (s *Service) withRuntimeResource(
-	ctx context.Context,
-	sessionID string,
-	fn func(context.Context, runtimeids.SessionResourceRef, *runtime.Engine) error,
-) error {
-	if s == nil || s.authority == nil {
-		return errors.New("session runtime authority is required")
-	}
-	id, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
-	if err != nil {
-		return err
-	}
-	return s.authority.WithCurrentRuntimeResource(ctx, id, fn)
 }
 
 func mergeOperationContexts(contexts ...context.Context) (context.Context, func()) {
@@ -596,10 +568,6 @@ func (s *Service) interrupt(ctx context.Context, req runtimeInterruptMemoRequest
 	interruptActive := req.TargetOperationRef == nil
 	targetQueuedMessage := false
 	var cancelResult runtimeops.CancellationResult
-	var observedRuntime *runtimeids.SessionResourceRef
-	var observedRun *clientui.RuntimeActiveStep
-	var activitySnapshot runtimeactivity.ResponseSnapshot
-	var activityErr error
 	if req.TargetOperationRef != nil {
 		targetQueuedMessage = req.TargetOperationRef.Kind == clientui.RuntimeOperationKindQueuedMessage
 		var err error
@@ -607,27 +575,12 @@ func (s *Service) interrupt(ctx context.Context, req runtimeInterruptMemoRequest
 		if err != nil {
 			return serverapi.RuntimeInterruptResponse{}, err
 		}
-		defer cancelResult.CancelOperationAttempt()
+		interruptActive = !targetQueuedMessage && cancelResult.InterruptActive && s.runtimeActivityActiveForControl(ctx, sessionID, pendingRefs)
 		if !slices.Contains(pendingRefs, *req.TargetOperationRef) {
 			pendingRefs = append([]clientui.RuntimeOperationRef{*req.TargetOperationRef}, pendingRefs...)
 		}
 	}
-	err := s.withRuntimeResource(ctx, sessionID, func(
-		_ context.Context,
-		resource runtimeids.SessionResourceRef,
-		engine *runtime.Engine,
-	) error {
-		observed := resource
-		observedRuntime = &observed
-		if s.activity == nil {
-			activityErr = errors.New("runtime activity resolver is unavailable")
-		} else {
-			activitySnapshot, activityErr = s.activity.RuntimeReadModelSnapshot(ctx, sessionID, pendingRefs)
-		}
-		if activityErr == nil && activitySnapshot.Activity.ActiveStep != nil {
-			observed := *activitySnapshot.Activity.ActiveStep
-			observedRun = &observed
-		}
+	err := s.withRuntime(ctx, sessionID, func(_ context.Context, engine *runtime.Engine) error {
 		for _, ref := range pendingRefs {
 			if ref.Kind != clientui.RuntimeOperationKindQueuedMessage || ref.QueueItemID == nil {
 				continue
@@ -643,43 +596,28 @@ func (s *Service) interrupt(ctx context.Context, req runtimeInterruptMemoRequest
 				return err
 			}
 		}
+		if interruptActive {
+			if err := engine.Interrupt(); err != nil {
+				return err
+			}
+		}
 		return nil
 	})
 	if err != nil && !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
 		return serverapi.RuntimeInterruptResponse{}, err
 	}
 	if req.TargetOperationRef != nil {
-		interruptActive = !targetQueuedMessage &&
-			cancelResult.InterruptActive &&
-			activityErr == nil &&
-			activitySnapshot.Activity.ActiveForControl()
-	}
-	if interruptActive {
-		workflowHandled := false
-		if s.workflowInterrupt != nil {
-			id, parseErr := runtimeids.ParseSessionID(sessionID)
-			if parseErr != nil {
-				return serverapi.RuntimeInterruptResponse{}, parseErr
-			}
-			workflowHandled, err = s.workflowInterrupt.InterruptSessionExecution(ctx, id)
-			if err != nil {
-				return serverapi.RuntimeInterruptResponse{}, err
-			}
-		}
-		if !workflowHandled && activityErr != nil {
-			return serverapi.RuntimeInterruptResponse{}, fmt.Errorf("resolve runtime activity for Interrupt: %w", activityErr)
-		}
-		if !workflowHandled && observedRuntime != nil && observedRun != nil {
-			err = s.authority.WithRuntime(ctx, *observedRuntime, func(_ context.Context, engine *runtime.Engine) error {
-				_, err := engine.InterruptObservedRun(observedRun.RunID, observedRun.StepID)
-				return err
-			})
-			if err != nil && !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
-				return serverapi.RuntimeInterruptResponse{}, err
-			}
-		}
+		cancelResult.CancelOperationAttempt()
 	}
 	return s.runtimeInterruptResponse(sessionID, pendingRefs)
+}
+
+func (s *Service) runtimeActivityActiveForControl(ctx context.Context, sessionID string, refs []clientui.RuntimeOperationRef) bool {
+	if s == nil || s.activity == nil {
+		return false
+	}
+	snapshot, err := s.activity.RuntimeReadModelSnapshot(ctx, sessionID, refs)
+	return err == nil && snapshot.Activity.ActiveForControl()
 }
 
 func (s *Service) runtimeInterruptResponse(sessionID string, refs []clientui.RuntimeOperationRef) (serverapi.RuntimeInterruptResponse, error) {

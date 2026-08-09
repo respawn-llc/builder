@@ -7,12 +7,13 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	"core/server/metadata/sqlitegen"
+	"core/server/metadata/sqlitelifecyclegen"
 	"core/server/session"
 	"core/server/workflow"
 	"core/shared/runtimeids"
+	"core/shared/serverapi"
 )
 
 type CurrentNodeCompletionRequest struct {
@@ -124,98 +125,77 @@ func (s *Store) ResolveIdleExecutableCurrentNode(ctx context.Context, selector I
 	}
 }
 
-type preparedCurrentNodeCompletion struct {
-	*preparedSQLLifecycleMutation
-	result       CurrentNodeCompletionResult
-	publishEvent bool
-}
-
-func (s *Store) prepareCurrentNodeCompletion(
-	ctx context.Context,
-	req CurrentNodeCompletionRequest,
-) (*preparedCurrentNodeCompletion, error) {
+func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompletionRequest) (CurrentNodeCompletionResult, error) {
 	prepared, err := prepareCurrentNodeCompletionRequest(req)
 	if err != nil {
-		return nil, err
+		return CurrentNodeCompletionResult{}, err
 	}
 	task, err := s.queries.GetTask(ctx, string(prepared.Source.TaskID))
 	if err != nil {
-		return nil, err
+		return CurrentNodeCompletionResult{}, err
 	}
 	definition, workflowRecord, err := s.GetDefinition(ctx, task.WorkflowID)
 	if err != nil {
-		return nil, err
+		return CurrentNodeCompletionResult{}, err
 	}
 	if err := s.preflightInitialExecution(definition); err != nil {
-		return nil, err
+		return CurrentNodeCompletionResult{}, err
 	}
 	source, err := currentNodeDefinitionNode(definition, prepared.Source.NodeID)
 	if err != nil {
-		return nil, err
+		return CurrentNodeCompletionResult{}, err
 	}
 	if !executableNodeKind(source.Kind()) {
-		return nil, errors.New("current node is not executable")
+		return CurrentNodeCompletionResult{}, errors.New("current node is not executable")
 	}
 	group, targets, err := currentNodeCompletionTransition(definition, source, prepared.TransitionID)
 	if err != nil {
-		return nil, err
+		return CurrentNodeCompletionResult{}, err
+	}
+	connection, err := s.db.Conn(ctx)
+	if err != nil {
+		return CurrentNodeCompletionResult{}, err
+	}
+	defer func() { _ = connection.Close() }()
+	lifecycle := sqlitelifecyclegen.New(connection)
+	if err := lifecycle.SetBusyTimeout15Seconds(ctx); err != nil {
+		return CurrentNodeCompletionResult{}, err
+	}
+	defer func() { _ = lifecycle.SetBusyTimeout5Seconds(context.Background()) }()
+	if err := lifecycle.BeginImmediate(ctx); err != nil {
+		return CurrentNodeCompletionResult{}, err
 	}
 	nowTime := s.now().UTC()
 	now := nowTime.UnixMilli()
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
+	committed := false
+	defer func() {
+		if !committed {
+			_ = lifecycle.Rollback(context.Background())
+		}
+	}()
+	commit := func() error {
+		if err := lifecycle.Commit(ctx); err != nil {
+			return err
+		}
+		committed = true
+		return nil
 	}
-	q := s.queries.WithTx(tx)
-	result, publishEvent, err := s.completeCurrentNodeInTx(
-		ctx,
-		q,
-		prepared,
-		definition,
-		workflowRecord,
-		source,
-		group,
-		targets,
-		nowTime,
-		now,
-	)
-	if err != nil {
-		return nil, errors.Join(err, tx.Rollback())
-	}
-	return &preparedCurrentNodeCompletion{
-		preparedSQLLifecycleMutation: newPreparedSQLLifecycleMutation(tx),
-		result:                       result,
-		publishEvent:                 publishEvent,
-	}, nil
-}
-
-func (s *Store) completeCurrentNodeInTx(
-	ctx context.Context,
-	q *sqlitegen.Queries,
-	prepared CurrentNodeCompletionRequest,
-	definition workflow.Definition,
-	workflowRecord WorkflowRecord,
-	source workflow.Node,
-	group workflow.TransitionGroup,
-	targets []currentNodeCompletionTarget,
-	nowTime time.Time,
-	now int64,
-) (CurrentNodeCompletionResult, bool, error) {
+	q := sqlitegen.New(connection)
 	currentSource, err := currentNodeForReference(ctx, q, prepared.Source)
 	if err != nil {
-		return CurrentNodeCompletionResult{}, false, err
+		return CurrentNodeCompletionResult{}, err
 	}
 	if _, pending, err := currentNodePendingApprovalID(ctx, q, currentSource.Reference); err != nil {
-		return CurrentNodeCompletionResult{}, false, err
+		return CurrentNodeCompletionResult{}, err
 	} else if pending {
-		return CurrentNodeCompletionResult{}, false, ErrCurrentNodePendingApproval
+		return CurrentNodeCompletionResult{}, ErrCurrentNodePendingApproval
 	}
 	issues, err := s.currentNodeCompletionOutputIssues(ctx, q, definition, group, source, targets, currentSource, prepared.OutputValues)
 	if err != nil {
-		return CurrentNodeCompletionResult{}, false, err
+		return CurrentNodeCompletionResult{}, err
 	}
 	if len(issues) > 0 {
-		return CurrentNodeCompletionResult{}, false, CompletionValidationError{Issues: issues}
+		return CurrentNodeCompletionResult{}, CompletionValidationError{Issues: issues}
 	}
 	if len(targets) > 1 {
 		result, err := completeCurrentNodeFanout(
@@ -234,14 +214,22 @@ func (s *Store) completeCurrentNodeInTx(
 			nowTime,
 		)
 		if err != nil {
-			return CurrentNodeCompletionResult{}, false, err
+			return CurrentNodeCompletionResult{}, err
 		}
 		result.SessionReuse = newSessionReuseAnalysisInput(definition, currentSource, completionTargetEdges(targets))
 		result.PostCompletionEligible = source.Kind() == workflow.NodeKindAgent
 		if err := touchTaskUpdatedAt(ctx, q, string(prepared.Source.TaskID), now); err != nil {
-			return CurrentNodeCompletionResult{}, false, err
+			return CurrentNodeCompletionResult{}, err
 		}
-		return result, len(result.Mutation.Removed) > 0, nil
+		if err := commit(); err != nil {
+			return CurrentNodeCompletionResult{}, err
+		}
+		if len(result.Mutation.Removed) > 0 {
+			if err := s.publishCurrentNodeTaskEvent(ctx, prepared.Source.TaskID, serverapi.WorkflowProjectEventActionCompleted); err != nil {
+				return CurrentNodeCompletionResult{}, err
+			}
+		}
+		return result, nil
 	}
 	target := targets[0]
 	if target.Node.Kind() == workflow.NodeKindJoin {
@@ -256,14 +244,22 @@ func (s *Store) completeCurrentNodeInTx(
 			s.resolveRetainedSessionSelection,
 		)
 		if err != nil {
-			return CurrentNodeCompletionResult{}, false, err
+			return CurrentNodeCompletionResult{}, err
 		}
 		if err := touchTaskUpdatedAt(ctx, q, string(prepared.Source.TaskID), now); err != nil {
-			return CurrentNodeCompletionResult{}, false, err
+			return CurrentNodeCompletionResult{}, err
+		}
+		if err := commit(); err != nil {
+			return CurrentNodeCompletionResult{}, err
 		}
 		result.SessionReuse = newSessionReuseAnalysisInput(definition, currentSource, []workflow.Edge{target.Edge})
 		result.PostCompletionEligible = source.Kind() == workflow.NodeKindAgent
-		return result, len(result.Mutation.Removed) > 0, nil
+		if len(result.Mutation.Removed) > 0 {
+			if err := s.publishCurrentNodeTaskEvent(ctx, prepared.Source.TaskID, serverapi.WorkflowProjectEventActionCompleted); err != nil {
+				return CurrentNodeCompletionResult{}, err
+			}
+		}
+		return result, nil
 	}
 	targetCurrentNode, err := materializeCompletionTargetCurrentNode(
 		ctx,
@@ -280,7 +276,7 @@ func (s *Store) completeCurrentNodeInTx(
 		currentNodeReferenceBranchKey(currentSource.Reference),
 	)
 	if err != nil {
-		return CurrentNodeCompletionResult{}, false, err
+		return CurrentNodeCompletionResult{}, err
 	}
 	if target.Edge.RequiresApproval {
 		approval, err := newPendingApproval(
@@ -296,36 +292,42 @@ func (s *Store) completeCurrentNodeInTx(
 			nowTime,
 		)
 		if err != nil {
-			return CurrentNodeCompletionResult{}, false, err
+			return CurrentNodeCompletionResult{}, err
 		}
 		if err := insertPendingApproval(ctx, q, approval); err != nil {
-			return CurrentNodeCompletionResult{}, false, err
+			return CurrentNodeCompletionResult{}, err
 		}
 		if err := touchTaskUpdatedAt(ctx, q, string(prepared.Source.TaskID), now); err != nil {
-			return CurrentNodeCompletionResult{}, false, err
+			return CurrentNodeCompletionResult{}, err
+		}
+		if err := commit(); err != nil {
+			return CurrentNodeCompletionResult{}, err
 		}
 		return CurrentNodeCompletionResult{
 			PendingApproval:        &approval,
 			SessionReuse:           newSessionReuseAnalysisInput(definition, currentSource, []workflow.Edge{target.Edge}),
 			PostCompletionEligible: source.Kind() == workflow.NodeKindAgent,
-		}, false, nil
+		}, nil
 	}
 	handoff, err := currentNodeCompletionHandoff(source, target.Node)
 	if err != nil {
-		return CurrentNodeCompletionResult{}, false, err
+		return CurrentNodeCompletionResult{}, err
 	}
 	removed, err := deleteTaskCurrentNode(ctx, q, prepared.Source)
 	if err != nil {
-		return CurrentNodeCompletionResult{}, false, err
+		return CurrentNodeCompletionResult{}, err
 	}
 	if removed != 1 {
-		return CurrentNodeCompletionResult{}, false, sql.ErrNoRows
+		return CurrentNodeCompletionResult{}, sql.ErrNoRows
 	}
 	if err := insertTaskCurrentNode(ctx, q, targetCurrentNode); err != nil {
-		return CurrentNodeCompletionResult{}, false, err
+		return CurrentNodeCompletionResult{}, err
 	}
 	if err := touchTaskUpdatedAt(ctx, q, string(prepared.Source.TaskID), now); err != nil {
-		return CurrentNodeCompletionResult{}, false, err
+		return CurrentNodeCompletionResult{}, err
+	}
+	if err := commit(); err != nil {
+		return CurrentNodeCompletionResult{}, err
 	}
 	result := CurrentNodeCompletionResult{
 		Mutation: workflow.CurrentNodeMutationResult{
@@ -339,11 +341,14 @@ func (s *Store) completeCurrentNodeInTx(
 	if executableNodeKind(target.Node.Kind()) {
 		intent, err := newCurrentNodeAutomaticIntent(targetCurrentNode.Reference, target.Node)
 		if err != nil {
-			return CurrentNodeCompletionResult{}, false, err
+			return CurrentNodeCompletionResult{}, err
 		}
 		result.AutomaticIntents = []CurrentNodeAutomaticIntent{intent}
 	}
-	return result, true, nil
+	if err := s.publishCurrentNodeTaskEvent(ctx, prepared.Source.TaskID, serverapi.WorkflowProjectEventActionCompleted); err != nil {
+		return CurrentNodeCompletionResult{}, err
+	}
+	return result, nil
 }
 
 func completionTargetEdges(targets []currentNodeCompletionTarget) []workflow.Edge {

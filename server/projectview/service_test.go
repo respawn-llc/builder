@@ -149,71 +149,6 @@ func TestServiceProjectDeleteRevalidatesWorkflowTasksAtCommit(t *testing.T) {
 	}
 }
 
-func TestServiceProjectDeleteRejectsChangedTaskSetWithoutDeletingAnyTask(t *testing.T) {
-	ctx := context.Background()
-	store, _, binding := newProjectViewMetadataStore(t)
-	workflowStore, err := workflowstore.New(store)
-	if err != nil {
-		t.Fatalf("workflowstore.New: %v", err)
-	}
-	workflowRecord, err := workflowStore.CreateWorkflow(ctx, workflowstore.CreateWorkflowRequest{Name: "Changed Project Tasks"})
-	if err != nil {
-		t.Fatalf("CreateWorkflow: %v", err)
-	}
-	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowRecord.ID, true); err != nil {
-		t.Fatalf("LinkWorkflow: %v", err)
-	}
-	original, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{
-		ProjectID: binding.ProjectID,
-		Title:     "Original",
-		Body:      "Body",
-	})
-	if err != nil {
-		t.Fatalf("CreateTask original: %v", err)
-	}
-	publication, err := workflowstore.NewLifecyclePublication(workflowStore)
-	if err != nil {
-		t.Fatalf("NewLifecyclePublication: %v", err)
-	}
-	var added workflow.TaskID
-	execution := projectViewQuiescentExecution{
-		publication: publication,
-		deletionHook: func() {
-			task, createErr := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{
-				ProjectID: binding.ProjectID,
-				Title:     "Concurrent",
-				Body:      "Created after Project deletion acquired its original Task gates.",
-			})
-			if createErr != nil {
-				t.Fatalf("CreateTask during Project deletion: %v", createErr)
-			}
-			added = task.ID
-		},
-	}
-	svc, err := NewMetadataService(store, binding.ProjectID)
-	if err != nil {
-		t.Fatalf("NewMetadataService: %v", err)
-	}
-	svc.WithWorkflowExecution(workflowexecution.NewMutationPermit(), execution)
-
-	if _, err := svc.DeleteProject(ctx, serverapi.ProjectDeleteRequest{ProjectID: binding.ProjectID}); err == nil {
-		t.Fatal("DeleteProject succeeded after its exact Task set changed")
-	}
-	if added == "" {
-		t.Fatal("Project deletion did not execute the concurrent Task-set mutation")
-	}
-	taskIDs, err := store.ListProjectTaskIDs(ctx, binding.ProjectID)
-	if err != nil {
-		t.Fatalf("ListProjectTaskIDs after rejected deletion: %v", err)
-	}
-	if !slices.Contains(taskIDs, string(original.ID)) || !slices.Contains(taskIDs, string(added)) {
-		t.Fatalf("Project Tasks after rejected deletion = %v, want %q and %q", taskIDs, original.ID, added)
-	}
-	if _, err := svc.GetProjectOverview(ctx, serverapi.ProjectGetOverviewRequest{ProjectID: binding.ProjectID}); err != nil {
-		t.Fatalf("Project after rejected deletion: %v", err)
-	}
-}
-
 func TestServiceProjectDeleteWaitsForConcurrentWorkflowMutation(t *testing.T) {
 	store, _, binding := newProjectViewMetadataStore(t)
 	svc := newProjectViewMetadataService(t, store, binding.ProjectID)
@@ -1391,50 +1326,15 @@ func newProjectViewMetadataService(t testing.TB, store *metadata.Store, projectI
 	if err != nil {
 		t.Fatalf("workflowstore.New: %v", err)
 	}
-	publication, err := workflowstore.NewLifecyclePublication(workflowStore)
-	if err != nil {
-		t.Fatalf("NewLifecyclePublication: %v", err)
-	}
-	return svc.WithWorkflowExecution(
-		workflowexecution.NewMutationPermit(),
-		projectViewQuiescentExecution{publication: publication},
-	)
+	return svc.WithWorkflowExecution(workflowexecution.NewMutationPermit(), projectViewQuiescentExecution{}, workflowStore)
 }
 
 type projectViewQuiescentExecution struct {
-	err          error
-	publication  *workflowstore.LifecyclePublication
-	deletionHook func()
+	err error
 }
 
 func (e projectViewQuiescentExecution) EnsureTaskQuiescent(workflow.TaskID) error {
 	return e.err
-}
-
-func (e projectViewQuiescentExecution) RunTaskDeletion(
-	ctx context.Context,
-	taskIDs []workflow.TaskID,
-	operation func(context.Context) error,
-) error {
-	for _, taskID := range taskIDs {
-		if err := e.EnsureTaskQuiescent(taskID); err != nil {
-			return err
-		}
-	}
-	if e.deletionHook != nil {
-		e.deletionHook()
-	}
-	return operation(ctx)
-}
-
-func (e projectViewQuiescentExecution) DeleteProject(
-	ctx context.Context,
-	req workflowstore.ProjectDeleteRequest,
-) ([]serverapi.ProjectDeleteBlocker, error) {
-	if e.publication == nil {
-		return nil, errors.New("lifecycle publication is required")
-	}
-	return e.publication.PublishProjectDeletion(ctx, req)
 }
 
 func createProjectViewSession(t testing.TB, store *metadata.Store, cfg config.App, projectID string, workspaceRoot string, name string) *session.Store {

@@ -49,9 +49,6 @@ func (s *blockingBackgroundStepLifecycle) Interrupt() error                     
 func (s *blockingBackgroundStepLifecycle) InterruptCurrent(func(*RunSnapshot)) (*RunSnapshot, error) {
 	return nil, nil
 }
-func (s *blockingBackgroundStepLifecycle) InterruptMatching(string, string, func(*RunSnapshot)) (*RunSnapshot, error) {
-	return nil, nil
-}
 func (s *blockingBackgroundStepLifecycle) IsBusy() bool { return false }
 func (s *blockingBackgroundStepLifecycle) Snapshot() *RunSnapshot {
 	return nil

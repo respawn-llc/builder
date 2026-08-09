@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"strings"
 
-	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -34,16 +33,16 @@ func workflowTaskListSortUsesColumn(sortSelectors []serverapi.WorkflowTaskListSo
 }
 
 type workflowTaskListQueryRequest struct {
-	projectID           string
-	narrowed            *workflowTaskListNarrowedQueryFacts
-	statusKinds         []serverapi.WorkflowTaskStatusKind
-	attentionKinds      []serverapi.WorkflowTaskAttentionKind
-	labelFilter         workflowTaskLabelFilterFacts
-	dependencyFilter    *bool
-	sortSelectors       []serverapi.WorkflowTaskListSort
-	lifecycleStateToken string
-	offset              int
-	limit               int
+	projectID          string
+	narrowed           *workflowTaskListNarrowedQueryFacts
+	statusKinds        []serverapi.WorkflowTaskStatusKind
+	attentionKinds     []serverapi.WorkflowTaskAttentionKind
+	labelFilter        workflowTaskLabelFilterFacts
+	dependencyFilter   *bool
+	sortSelectors      []serverapi.WorkflowTaskListSort
+	liveTaskStatesJSON string
+	offset             int
+	limit              int
 }
 
 type workflowTaskListNarrowedQueryFacts struct {
@@ -65,16 +64,9 @@ type workflowTaskListPageResult struct {
 	matchingWorkflowCount int
 }
 
-func (l *TaskList) queryRows(
-	ctx context.Context,
-	queries *sqlitegen.Queries,
-	req workflowTaskListQueryRequest,
-) (workflowTaskListPageResult, error) {
+func (l *TaskList) queryRows(ctx context.Context, req workflowTaskListQueryRequest) (workflowTaskListPageResult, error) {
 	if l == nil {
 		return workflowTaskListPageResult{}, errors.New("task list is required")
-	}
-	if queries == nil {
-		return workflowTaskListPageResult{}, errors.New("task list queries are required")
 	}
 	var workflowFilter *runtimeids.WorkflowID
 	visibleColumnsJSON := sql.NullString{}
@@ -114,15 +106,15 @@ func (l *TaskList) queryRows(
 	if err != nil {
 		return workflowTaskListPageResult{}, err
 	}
-	rows, err := queries.ListWorkflowTaskListRows(ctx, sqlitegen.ListWorkflowTaskListRowsParams{
+	rows, err := l.queries.ListWorkflowTaskListRows(ctx, sqlitegen.ListWorkflowTaskListRowsParams{
 		ProjectID:            req.projectID,
 		WorkflowID:           workflowFilter,
 		VisibleColumnsJson:   visibleColumnsJSON,
-		ColumnFilterSet:      metadata.SQLiteBoolInt64(columnFilterSet),
+		ColumnFilterSet:      boolInt64(columnFilterSet),
 		ColumnKeysJson:       columnKeysJSON,
-		StatusFilterSet:      metadata.SQLiteBoolInt64(len(req.statusKinds) > 0),
+		StatusFilterSet:      boolInt64(len(req.statusKinds) > 0),
 		StatusKindsJson:      string(statusKindsJSON),
-		AttentionFilterSet:   metadata.SQLiteBoolInt64(len(req.attentionKinds) > 0),
+		AttentionFilterSet:   boolInt64(len(req.attentionKinds) > 0),
 		AttentionKindsJson:   string(attentionKindsJSON),
 		LabelFilterKind:      labelFilterArgs.kind,
 		LabelFilterMode:      labelFilterArgs.mode,
@@ -145,7 +137,7 @@ func (l *TaskList) queryRows(
 		Sort6Desc:            workflowTaskListSortDescending(req.sortSelectors, 5),
 		Sort7Field:           string(workflowTaskListSortSelector(req.sortSelectors, 6).Field),
 		Sort7Desc:            workflowTaskListSortDescending(req.sortSelectors, 6),
-		LifecycleStateToken:  req.lifecycleStateToken,
+		LiveTaskStatesJson:   req.liveTaskStatesJSON,
 		LimitRows:            int64(req.limit),
 	})
 	if err != nil {
@@ -294,4 +286,11 @@ func workflowTaskListVisibleColumnsJSON(columns []serverapi.WorkflowBoardColumn)
 		return "", err
 	}
 	return string(raw), nil
+}
+
+func boolInt64(value bool) int64 {
+	if value {
+		return 1
+	}
+	return 0
 }

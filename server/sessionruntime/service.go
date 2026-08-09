@@ -24,23 +24,13 @@ type API struct {
 	recoveredWarningProvider func() (string, bool, error)
 	authority                *Authority
 	runtimeClientFactory     runtimewire.RuntimeClientFactory
-	retainedWorkflow         RetainedWorkflowSessionActivator
 	managedWorktreeBaseDir   string
 }
 
-type RetainedWorkflowSessionActivator interface {
-	ActivateOrAttachRetainedSession(
-		context.Context,
-		runtimeids.SessionID,
-		string,
-	) (RuntimeAttachment, bool, error)
-}
-
 type APIOptions struct {
-	RuntimeClientFactory       runtimewire.RuntimeClientFactory
-	RecoveredWarningProvider   func() (string, bool, error)
-	RetainedWorkflowActivation RetainedWorkflowSessionActivator
-	ManagedWorktreeBaseDir     string
+	RuntimeClientFactory     runtimewire.RuntimeClientFactory
+	RecoveredWarningProvider func() (string, bool, error)
+	ManagedWorktreeBaseDir   string
 }
 
 func NewAPI(metadataStore *metadata.Store, fastModeState *runtime.FastModeState, authority *Authority, options APIOptions) *API {
@@ -50,7 +40,6 @@ func NewAPI(metadataStore *metadata.Store, fastModeState *runtime.FastModeState,
 		recoveredWarningProvider: options.RecoveredWarningProvider,
 		authority:                authority,
 		runtimeClientFactory:     options.RuntimeClientFactory,
-		retainedWorkflow:         options.RetainedWorkflowActivation,
 		managedWorktreeBaseDir:   options.ManagedWorktreeBaseDir,
 	}
 }
@@ -96,21 +85,6 @@ func (s *API) ActivateSessionRuntime(ctx context.Context, req serverapi.SessionR
 	sessionID, err := runtimeids.ParseSessionID(strings.TrimSpace(req.SessionID))
 	if err != nil {
 		return serverapi.SessionRuntimeActivateResponse{}, err
-	}
-	if s.retainedWorkflow != nil {
-		attachment, handled, activationErr := s.retainedWorkflow.ActivateOrAttachRetainedSession(ctx, sessionID, ownerID)
-		if activationErr != nil {
-			return serverapi.SessionRuntimeActivateResponse{}, activationErr
-		}
-		if handled {
-			resource := attachment.Resource()
-			return serverapi.SessionRuntimeActivateResponse{
-				Attachment: serverapi.SessionRuntimeAttachment{
-					SessionID:  resource.SessionID().String(),
-					Generation: uint64(resource.Generation()),
-				},
-			}, nil
-		}
 	}
 	plan, err := s.interactiveRuntimePlan(ctx, req, sessionID.String())
 	if err != nil {

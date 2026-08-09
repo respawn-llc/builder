@@ -29,19 +29,3 @@ sql:
               import: "core/shared/runtimeids"
               type: "WorkflowID"
               pointer: true
-  - engine: "sqlite"
-    schema:
-      - "server/metadata/lifecycle_question_index.sql"
-    queries:
-      - "server/metadata/lifecycle_question_index.sql"
-    gen:
-      go:
-        package: "sqlitelifecyclegen"
-        out: "server/metadata/sqlitelifecyclegen"
-        sql_package: "database/sql"
-        emit_json_tags: false
-        emit_interface: false
-        rename:
-          lifecycle_question_index: "LifecycleQuestionRecord"
-          suggestions_json: "SuggestionsJSON"
-          approval_decisions_json: "ApprovalDecisionsJSON"

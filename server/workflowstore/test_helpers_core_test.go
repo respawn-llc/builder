@@ -104,7 +104,7 @@ func (f workflowDeletionFixture) preview(t *testing.T, workflowID runtimeids.Wor
 
 func (f workflowDeletionFixture) delete(t *testing.T, req WorkflowDeleteRequest) WorkflowDeleteResult {
 	t.Helper()
-	result, err := deleteWorkflowThroughLifecyclePublication(f.store, f.ctx, req)
+	result, err := f.store.DeleteWorkflow(f.ctx, req)
 	if err != nil {
 		t.Fatalf("DeleteWorkflow: %v", err)
 	}

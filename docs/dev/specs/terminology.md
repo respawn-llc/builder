@@ -176,15 +176,7 @@ Post-completion compaction of a retained Workflow Session before it becomes dorm
 
 ### Exact Execution Scope
 
-The immutable identity of one live Agent or Script execution for a Task's Current Node and, when applicable, its parallel branch. Resume creates a new Exact Execution Scope only after the previous scope stops. Only a matching Exact Execution Scope proves that execution is live. Saved Task state, transcript entries, timestamps, Goals, and client state do not prove liveness.
-
-### Run
-
-The process-local Workflow Execution owner for one executable Current Node accepted for admission. A Run is queued before a matching Exact Execution Scope actively executes. A queued Run waiting for capacity or a predecessor is not interruptible; once it begins potentially blocking preparation or launch, the Run itself authorizes Interrupt until Exact execution takes over that same authority. A fresh user Session activation, explicit attached Session operation that starts Agent execution, Task Resume, selected-existing-Session RunPrompt continuation, or healthy Workflow automation may create a Run; technical reattachment never does. Interactive clients and attached operations may wait for an existing Agent Run and use only its still-current Exact Execution Scope; an attachment is not another execution owner. A selected-existing-Session RunPrompt continuation remains idle-only and fails as already running instead of joining an existing Run. Durable interrupted or terminal Current Nodes have no Run. Runs are never persisted or reconstructed after restart.
-
-### Session Runtime Activation Operation
-
-The required typed reason for a Session Runtime activation request. User activation is a newly constructed client activation caused by a fresh user action and may create or join the same Run as Task Resume. Technical reattachment is automatic connection/runtime recovery and may attach to whichever matching Exact execution is live when Kent handles it, but cannot create, resume, join, or wait for a Run. It carries no prior-execution proof. A retry, reconnect, gateway owner, Session row, transcript, or durable Current Node never changes one operation into another.
+The immutable identity of one live agent or Script execution for a Task's Current Node and, when applicable, its parallel branch. Resume creates a new Exact Execution Scope only after the previous scope stops. Only a matching Exact Execution Scope proves that execution is live. Saved Task state, transcript entries, timestamps, Goals, and client state do not prove liveness.
 
 ### Resource Generation
 
@@ -244,7 +236,7 @@ The product authority that sequences Workflow lifecycle changes, starts eligible
 
 ### Automatic Intent
 
-A temporary description of eligible work that Workflow Execution may accept into a Run. Automatic Intents are lost on restart, are not reconstructed from saved Task state, and never prove Run ownership or liveness.
+A temporary request for Workflow Execution to start eligible work automatically. Automatic Intents are lost on restart and are not reconstructed from saved Task state.
 
 ### Immutable Live Snapshot
 
@@ -348,7 +340,7 @@ Recovery that erases the Mutable Band, reopens the Session, and appends the acti
 
 ### Active Session Runtime
 
-The shared live resource for one Session. Interactive clients, headless runs, and Workflow execution use the same resource as equal control surfaces. An available but idle Session is not a live execution. Attaching a retained Workflow client requires an atomic Authority check that its expected Exact Execution Scope and Resource Generation are still current; attachment never creates a replacement as fallback.
+The shared live resource for one Session. Interactive clients, headless runs, and Workflow execution use the same resource as equal control surfaces. An available but idle Session is not a live execution.
 
 ### RuntimeActivity
 

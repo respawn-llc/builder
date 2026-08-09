@@ -625,40 +625,19 @@ func (e *Engine) DiscardQueuedUserMessage(queueItemID string) bool {
 }
 
 func (e *Engine) Interrupt() error {
-	_, err := e.interruptObservedRun(nil)
-	return err
-}
-
-func (e *Engine) InterruptObservedRun(runID runtimeids.RunID, stepID runtimeids.StepID) (bool, error) {
-	if runID.IsZero() || stepID.IsZero() {
-		return false, errors.New("observed run and step identities are required")
-	}
-	observed := RunSnapshot{RunID: runID.String(), StepID: stepID.String()}
-	interrupted, err := e.interruptObservedRun(&observed)
-	return interrupted != nil, err
-}
-
-func (e *Engine) interruptObservedRun(observed *RunSnapshot) (*RunSnapshot, error) {
 	e.ensureOrchestrationCollaborators()
 	goalLoopInterruptPending := false
-	beforeCancel := func(snapshot *RunSnapshot) {
+	interrupted, err := e.stepLifecycle.InterruptCurrent(func(snapshot *RunSnapshot) {
 		if e.goalActive() && snapshot != nil && snapshot.ActiveKind == ActiveKindGoalLoop {
 			e.goalLoopState().MarkInterruptPending()
 			goalLoopInterruptPending = true
 		}
-	}
-	var interrupted *RunSnapshot
-	var err error
-	if observed == nil {
-		interrupted, err = e.stepLifecycle.InterruptCurrent(beforeCancel)
-	} else {
-		interrupted, err = e.stepLifecycle.InterruptMatching(observed.RunID, observed.StepID, beforeCancel)
-	}
+	})
 	if err != nil {
 		if goalLoopInterruptPending {
 			e.goalLoopState().ClearInterruptPending()
 		}
-		return nil, err
+		return err
 	}
 	if goalLoopInterruptPending {
 		if e.goalActive() && interrupted != nil && interrupted.ActiveKind == ActiveKindGoalLoop {
@@ -667,7 +646,7 @@ func (e *Engine) interruptObservedRun(observed *RunSnapshot) (*RunSnapshot, erro
 			e.goalLoopState().ClearInterruptPending()
 		}
 	}
-	return interrupted, nil
+	return nil
 }
 
 func (e *Engine) SubmitUserMessage(ctx context.Context, text string) (assistant llm.Message, err error) {

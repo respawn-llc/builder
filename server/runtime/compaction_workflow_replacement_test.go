@@ -240,18 +240,18 @@ func TestWorkflowPostCompletionCompactionPreCommitFailureDoesNotCreateBoundary(t
 	}
 }
 
-func TestWorkflowAssignmentEnsurePreservesPostCompletionBoundary(t *testing.T) {
+func TestWorkflowAssignmentSteeringPreservesPostCompletionBoundary(t *testing.T) {
 	t.Parallel()
 	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	mode := session.CompactionModeWorkflowPostCompletion
 	if err := engine.compactionRuntimeState().SetHistoryReplacementMode(&mode); err != nil {
 		t.Fatalf("set post-completion replacement mode: %v", err)
 	}
-	ensure, err := engine.EnsureWorkflowAssignment(workflowAssignmentForCommitReceiptTest())
+	steer, err := engine.SteerWorkflowAssignment(workflowAssignmentForCommitReceiptTest())
 	if err != nil {
-		t.Fatalf("ensure workflow assignment: %v", err)
+		t.Fatalf("steer workflow assignment: %v", err)
 	}
-	receipt, err := ensure.Wait(context.Background())
+	receipt, err := steer.Wait(context.Background())
 	if err != nil || !receipt.Committed {
 		t.Fatalf("workflow assignment receipt: %+v error=%v", receipt, err)
 	}

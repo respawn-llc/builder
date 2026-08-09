@@ -20,7 +20,7 @@ Ordered gates; each gate is skipped when its condition does not apply, never byp
 4. **Workspace resolution.** Startup begins from the current workspace. An unregistered current directory opens Project binding and is not registered automatically.
 5. **Session selection.** If no Sessions exist, startup opens new-Session setup directly.
 6. **Workspace-change prompt.** This prompt appears when the selected Session's available workspace root differs from the current root.
-7. **Open and handoff.** An ordinary Session remains lazy: Kent creates and initializes it only when the first user message or another Agent Turn trigger requires it. A fresh user-initiated open of a retained Workflow Session may Resume its interrupted Current Node or join the Run that already won before handoff, and opens only after the matching Exact Execution Scope is attachable. Technical reattachment never Resumes or waits for future execution.
+7. **Lazy open and handoff.** Kent creates and initializes the Session only when the first user message or another Agent Turn trigger requires it.
 
 - `Esc` on a startup surface navigates back one gate where a previous gate exists; on the first visible surface it exits the TUI cleanly. The session picker is an explicit exception: its `Esc` key is a no-op.
 

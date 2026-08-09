@@ -101,7 +101,7 @@ func (s *Starter) StartCurrentNode(
 	ctx context.Context,
 	reference workflow.CurrentNodeReference,
 	taskPromptDelivery workflowruntime.TaskPromptDelivery,
-	assignmentEnsure workflowexecution.CurrentNodeAssignmentEnsure,
+	assignmentSteer workflowexecution.CurrentNodeAssignmentSteer,
 	lease sessionruntime.WorkflowExecutionLease,
 	controller workflowruntime.Controller,
 ) error {
@@ -126,17 +126,16 @@ func (s *Starter) StartCurrentNode(
 		if err := s.validateRole(selection.Assignee); err != nil {
 			return err
 		}
-		return s.startCurrentNodeAgent(ctx, input, taskPromptDelivery, assignmentEnsure, lease, controller)
+		return s.startCurrentNodeAgent(ctx, input, taskPromptDelivery, assignmentSteer, lease, controller)
 	default:
 		return fmt.Errorf("current node %v is not executable", reference)
 	}
 }
 
-func (s *Starter) EnsureCurrentNodeAssignment(
+func (s *Starter) SteerCurrentNodeAssignment(
 	ctx context.Context,
 	reference workflow.CurrentNodeReference,
-	delivery workflowruntime.TaskPromptDelivery,
-) (workflowexecution.CurrentNodeAssignmentEnsure, error) {
+) (workflowexecution.CurrentNodeAssignmentSteer, error) {
 	if s.closed.Load() {
 		return nil, errors.New("workflow runtime starter closed")
 	}
@@ -145,7 +144,7 @@ func (s *Starter) EnsureCurrentNodeAssignment(
 		return nil, err
 	}
 	if input.Node.Kind == workflow.NodeKindScript {
-		return runtime.CompletedWorkflowAssignmentEnsure(session.CommitReceipt{Committed: true}, nil), nil
+		return runtime.CompletedWorkflowAssignmentSteer(session.CommitReceipt{Committed: true}, nil), nil
 	}
 	if input.Node.Kind != workflow.NodeKindAgent {
 		return nil, fmt.Errorf("current node %v is not executable", reference)
@@ -157,13 +156,7 @@ func (s *Starter) EnsureCurrentNodeAssignment(
 	if err := s.validateRole(selection.Assignee); err != nil {
 		return nil, err
 	}
-	prepared, err := s.prepareCurrentNodeAgentSession(
-		ctx,
-		input,
-		false,
-		delivery == workflowruntime.TaskPromptDeliveryResume &&
-			input.CurrentNode.SessionID != nil,
-	)
+	prepared, err := s.prepareCurrentNodeAgentSession(ctx, input, false, false)
 	if err != nil {
 		return nil, err
 	}
@@ -187,10 +180,10 @@ func (s *Starter) EnsureCurrentNodeAssignment(
 			TaskAwareness:          awareness,
 		},
 	}
-	var ensure runtime.WorkflowAssignmentEnsure
-	admission, ensureErr := s.runtimeAuthority.WithDormantSessionStore(ctx, prepared.plan.Descriptor, func(_ context.Context, store *session.Store) error {
+	var steer runtime.WorkflowAssignmentSteer
+	admission, steerErr := s.runtimeAuthority.WithDormantSessionStore(ctx, prepared.plan.Descriptor, func(_ context.Context, store *session.Store) error {
 		var err error
-		ensure, err = runtime.EnsurePersistedWorkflowAssignment(
+		steer, err = runtime.SteerPersistedWorkflowAssignment(
 			store,
 			assignment,
 			runtime.PersistedWorkflowAssignmentContext{
@@ -205,8 +198,8 @@ func (s *Starter) EnsureCurrentNodeAssignment(
 		)
 		return err
 	})
-	if ensureErr == nil && admission.RuntimeAvailable {
-		ensureErr = s.runtimeAuthority.WithCurrentRuntime(ctx, prepared.plan.Descriptor.SessionID(), func(_ context.Context, engine *runtime.Engine) error {
+	if steerErr == nil && admission.RuntimeAvailable {
+		steerErr = s.runtimeAuthority.WithCurrentRuntime(ctx, prepared.plan.Descriptor.SessionID(), func(_ context.Context, engine *runtime.Engine) error {
 			thinkingMutation := workflowThinkingMutationFor(input, selection)
 			switch thinkingMutation.Kind() {
 			case launch.WorkflowThinkingMutationSet:
@@ -219,36 +212,37 @@ func (s *Starter) EnsureCurrentNodeAssignment(
 				}
 			}
 			var err error
-			ensure, err = engine.EnsureWorkflowAssignment(assignment)
+			steer, err = engine.SteerWorkflowAssignment(assignment)
 			return err
 		})
 	}
-	if ensureErr != nil {
-		return nil, prepared.cleanup(ensureErr)
-	}
-	resource := sessionruntime.AgentResourceSelection(sessionruntime.ReplaceAgentResource{})
-	if delivery == workflowruntime.TaskPromptDeliveryResume && admission.RuntimeAvailable {
-		resource = sessionruntime.CurrentAgentResource{}
+	if steerErr != nil {
+		return nil, prepared.cleanup(steerErr)
 	}
 	prepared.cleanup = func(err error) error { return err }
-	return &currentNodeAgentAssignmentEnsure{
+	return &currentNodeAgentAssignmentSteer{
 		reference:  reference,
-		completion: ensure,
+		completion: steer,
 		prepared:   prepared,
-		resource:   resource,
+		retainSourceRuntime: admission.RuntimeAvailable &&
+			input.ContextMode == workflow.ContextModeContinueSession &&
+			!input.EnteringEdge.RequiresApproval &&
+			workflow.CanonicalContextSource(input.EnteringEdge.ContextSource).Kind == workflow.ContextSourceImmediateSource &&
+			input.SourceSessionID != nil &&
+			prepared.plan.Descriptor.SessionID() == *input.SourceSessionID,
 	}, nil
 }
 
-type currentNodeAgentAssignmentEnsure struct {
-	reference  workflow.CurrentNodeReference
-	completion runtime.WorkflowAssignmentEnsure
-	prepared   preparedCurrentNodeAgentSession
-	resource   sessionruntime.AgentResourceSelection
+type currentNodeAgentAssignmentSteer struct {
+	reference           workflow.CurrentNodeReference
+	completion          runtime.WorkflowAssignmentSteer
+	prepared            preparedCurrentNodeAgentSession
+	retainSourceRuntime bool
 }
 
-func (s *currentNodeAgentAssignmentEnsure) Wait(ctx context.Context) (session.CommitReceipt, error) {
+func (s *currentNodeAgentAssignmentSteer) Wait(ctx context.Context) (session.CommitReceipt, error) {
 	if s == nil {
-		return session.CommitReceipt{}, errors.New("current node agent assignment ensure is required")
+		return session.CommitReceipt{}, errors.New("current node agent assignment steer is required")
 	}
 	return s.completion.Wait(ctx)
 }
@@ -259,11 +253,6 @@ type preparedCurrentNodeAgentSession struct {
 	client  llm.Client
 	mode    workflowruntime.CompletionMode
 	cleanup func(error) error
-}
-
-type currentNodeAgentPostTurn struct {
-	sessionID runtimeids.SessionID
-	runtime   workflowruntime.PostCompletionRuntime
 }
 
 func (s *Starter) prepareCurrentNodeAgentSession(
@@ -354,11 +343,11 @@ func (s *Starter) startCurrentNodeAgent(
 	ctx context.Context,
 	input workflowstore.CurrentNodeStartContext,
 	taskPromptDelivery workflowruntime.TaskPromptDelivery,
-	assignmentEnsure workflowexecution.CurrentNodeAssignmentEnsure,
+	assignmentSteer workflowexecution.CurrentNodeAssignmentSteer,
 	lease sessionruntime.WorkflowExecutionLease,
 	controller workflowruntime.Controller,
 ) error {
-	prepared, resource, err := s.currentNodeAgentSessionForStart(ctx, input, assignmentEnsure)
+	prepared, resource, err := s.currentNodeAgentSessionForStart(ctx, input, assignmentSteer)
 	if err != nil {
 		return err
 	}
@@ -410,11 +399,8 @@ func (s *Starter) startCurrentNodeAgent(
 	if err != nil {
 		return prepared.cleanup(err)
 	}
-	var postTurn *currentNodeAgentPostTurn
 	_, err = s.runtimeAuthority.StartAgentExecution(ctx, sessionruntime.AgentExecutionRequest{
 		Descriptor: prepared.plan.Descriptor, Runtime: &runtimePlan, Workflow: &lease, Resource: resource,
-		PromptFeed:         currentNodeExecutionPromptFeed(controller),
-		RunningPublication: currentNodeRunningPublication(controller),
 		Ask: func(askCtx context.Context, scope sessionruntime.ExecutionScope, askReq askquestion.AskQuestionRequest) (askquestion.AskQuestionResolution, error) {
 			return s.handleCurrentNodeAsk(askCtx, executionPromptAwaiter{authority: s.runtimeAuthority, scope: scope}, input, prepared.plan.Descriptor.SessionID().String(), askReq)
 		},
@@ -433,39 +419,33 @@ func (s *Starter) startCurrentNodeAgent(
 				return nil
 			})
 			if turnErr == nil && turnEngine != nil {
-				sessionID, err := runtimeids.ParseSessionID(turnEngine.SessionID())
-				if err != nil {
-					return err
-				}
-				preCompactionTokens, err := turnEngine.WorkflowPreCompactionTokenLimit()
-				if err != nil {
-					return err
-				}
-				postTurn = &currentNodeAgentPostTurn{
-					sessionID: sessionID,
-					runtime: workflowruntime.PostCompletionRuntime{
+				if finalizer, ok := controller.(workflowruntime.PostTurnFinalizer); ok {
+					sessionID, err := runtimeids.ParseSessionID(turnEngine.SessionID())
+					if err != nil {
+						return err
+					}
+					preCompactionTokens, err := turnEngine.WorkflowPreCompactionTokenLimit()
+					if err != nil {
+						return err
+					}
+					turnErr = finalizer.FinalizeCurrentNodePostTurn(runCtx, scope.ID(), sessionID, workflowruntime.PostCompletionRuntime{
 						UsedTokens:          turnEngine.ContextUsage().UsedTokens,
 						PreCompactionTokens: preCompactionTokens,
 						CompactionMode:      turnEngine.CompactionMode(),
 						Compact: func(compactionCtx context.Context) workflowruntime.PostCompletionCompactionResult {
 							return turnEngine.CompactContextForWorkflowPostCompletion(compactionCtx)
 						},
-					},
+					})
 				}
 			}
 			if turnErr == nil {
 				return nil
 			}
-			return turnErr
-		},
-		Finalize: func(finalizeCtx context.Context, scope sessionruntime.ExecutionScope, runErr error) error {
-			return s.finalizeCurrentNodeAgentExecution(
-				finalizeCtx,
-				controller,
-				scope.ID(),
-				runErr,
-				postTurn,
-			)
+			reason := ReasonRuntimeFailed
+			if errors.Is(turnErr, context.Canceled) || context.Cause(runCtx) != nil {
+				reason = string(workflow.CurrentNodeInterruptionReasonRuntimeCanceled)
+			}
+			return errors.Join(turnErr, s.failCurrentNodeScope(context.WithoutCancel(runCtx), controller, scope, reason, turnErr))
 		},
 	})
 	if err != nil {
@@ -474,175 +454,26 @@ func (s *Starter) startCurrentNodeAgent(
 	return nil
 }
 
-func (s *Starter) finalizeCurrentNodeAgentExecution(
-	ctx context.Context,
-	controller workflowruntime.Controller,
-	scopeID runtimeids.ExecutionScopeID,
-	runErr error,
-	postTurn *currentNodeAgentPostTurn,
-) error {
-	resultErr := s.finalizeCurrentNodeAgent(ctx, controller, scopeID, runErr)
-	if resultErr != nil {
-		if !workflowruntime.IsCommittedCompletionDiagnostic(resultErr) ||
-			postTurn == nil {
-			return resultErr
-		}
-	}
-	if postTurn == nil {
-		return nil
-	}
-	finalizer, ok := controller.(workflowruntime.PostTurnFinalizer)
-	if !ok {
-		return errors.Join(
-			resultErr,
-			errors.New("workflow controller does not finalize Current Node post-turn state"),
-		)
-	}
-	postTurnCtx := ctx
-	postTurnRuntime := postTurn.runtime
-	if resultErr != nil && context.Cause(ctx) != nil {
-		postTurnCtx = context.WithoutCancel(ctx)
-		postTurnRuntime.Compact = nil
-	}
-	postTurnErr := finalizer.FinalizeCurrentNodePostTurn(
-		postTurnCtx,
-		scopeID,
-		postTurn.sessionID,
-		postTurnRuntime,
-	)
-	if postTurnErr == nil {
-		return resultErr
-	}
-	reason := ReasonRuntimeFailed
-	failureCtx := postTurnCtx
-	if errors.Is(postTurnErr, context.Canceled) || context.Cause(postTurnCtx) != nil {
-		reason = string(workflow.CurrentNodeInterruptionReasonRuntimeCanceled)
-		failureCtx = context.WithoutCancel(postTurnCtx)
-	}
-	return errors.Join(
-		resultErr,
-		postTurnErr,
-		s.failCurrentNodeScope(failureCtx, controller, scopeID, reason, postTurnErr),
-	)
-}
-
-func (s *Starter) finalizeCurrentNodeAgent(
-	ctx context.Context,
-	controller workflowruntime.Controller,
-	scopeID runtimeids.ExecutionScopeID,
-	runErr error,
-) error {
-	var publicationErr *sessionruntime.WorkflowRunningPublicationError
-	if errors.As(runErr, &publicationErr) && !publicationErr.Activated() {
-		failureCtx := ctx
-		if context.Cause(ctx) != nil {
-			failureCtx = context.WithoutCancel(ctx)
-		}
-		return s.failCurrentNodeScope(failureCtx, controller, scopeID, ReasonRuntimeFailed, runErr)
-	}
-	if cause := context.Cause(ctx); cause != nil {
-		return s.failCanceledCurrentNodeScope(ctx, controller, scopeID, runErr)
-	}
-	if err := publishCurrentNodeFinalizing(ctx, controller, scopeID); err != nil {
-		return s.failCurrentNodeFinalizingPublication(
-			ctx,
-			controller,
-			scopeID,
-			ReasonRuntimeFailed,
-			runErr,
-			err,
-		)
-	}
-	if runErr != nil {
-		reason := ReasonRuntimeFailed
-		failureCtx := ctx
-		if errors.Is(runErr, context.Canceled) || context.Cause(ctx) != nil {
-			reason = string(workflow.CurrentNodeInterruptionReasonRuntimeCanceled)
-			failureCtx = context.WithoutCancel(ctx)
-		}
-		return s.failCurrentNodeScope(failureCtx, controller, scopeID, reason, runErr)
-	}
-	finalizer, ok := controller.(workflowruntime.ResultFinalizer)
-	if !ok {
-		return errors.New("workflow controller does not finalize Current Node results")
-	}
-	err := finalizer.FinalizeCurrentNodeResult(ctx, scopeID, runErr)
-	if workflowruntime.IsCommittedCompletionDiagnostic(err) {
-		return err
-	}
-	if context.Cause(ctx) != nil {
-		return errors.Join(err, s.failCanceledCurrentNodeScope(ctx, controller, scopeID, runErr))
-	}
-	return err
-}
-
-func (s *Starter) failCanceledCurrentNodeScope(
-	ctx context.Context,
-	controller workflowruntime.Controller,
-	scopeID runtimeids.ExecutionScopeID,
-	runErr error,
-) error {
-	cause := context.Cause(ctx)
-	if cause == nil {
-		return errors.New("canceled Current Node cleanup requires a canceled context")
-	}
-	return s.failCurrentNodeScope(
-		context.WithoutCancel(ctx),
-		controller,
-		scopeID,
-		string(workflow.CurrentNodeInterruptionReasonRuntimeCanceled),
-		errors.Join(runErr, cause),
-	)
-}
-
-func currentNodeExecutionPromptFeed(
-	controller workflowruntime.Controller,
-) sessionruntime.ExecutionPromptFeed {
-	feed, _ := controller.(sessionruntime.ExecutionPromptFeed)
-	return feed
-}
-
-func currentNodeRunningPublication(
-	controller workflowruntime.Controller,
-) sessionruntime.WorkflowRunningPublication {
-	publication, _ := controller.(sessionruntime.WorkflowRunningPublication)
-	return publication
-}
-
-func publishCurrentNodeFinalizing(
-	ctx context.Context,
-	controller workflowruntime.Controller,
-	scopeID runtimeids.ExecutionScopeID,
-) error {
-	publisher, ok := controller.(interface {
-		PublishCurrentNodeExactFinalizing(context.Context, runtimeids.ExecutionScopeID) error
-	})
-	if !ok {
-		return errors.New("workflow controller does not publish Exact Execution finalization")
-	}
-	return publisher.PublishCurrentNodeExactFinalizing(ctx, scopeID)
-}
-
 func (s *Starter) currentNodeAgentSessionForStart(
 	ctx context.Context,
 	input workflowstore.CurrentNodeStartContext,
-	assignmentEnsure workflowexecution.CurrentNodeAssignmentEnsure,
+	assignmentSteer workflowexecution.CurrentNodeAssignmentSteer,
 ) (preparedCurrentNodeAgentSession, sessionruntime.AgentResourceSelection, error) {
-	if assignmentEnsure == nil {
+	if assignmentSteer == nil {
 		prepared, err := s.prepareCurrentNodeAgentSession(ctx, input, true, true)
 		return prepared, sessionruntime.OpenAgentResource{}, err
 	}
-	assignment, ok := assignmentEnsure.(*currentNodeAgentAssignmentEnsure)
+	assignment, ok := assignmentSteer.(*currentNodeAgentAssignmentSteer)
 	if !ok {
 		return preparedCurrentNodeAgentSession{}, nil, fmt.Errorf(
-			"current node %v received incompatible assignment ensure %T",
+			"current node %v received incompatible assignment steer %T",
 			input.CurrentNode.Reference,
-			assignmentEnsure,
+			assignmentSteer,
 		)
 	}
 	if !assignment.reference.Equal(input.CurrentNode.Reference) {
 		return preparedCurrentNodeAgentSession{}, nil, fmt.Errorf(
-			"current node assignment ensure %v does not match start %v",
+			"current node assignment steer %v does not match start %v",
 			assignment.reference,
 			input.CurrentNode.Reference,
 		)
@@ -654,10 +485,10 @@ func (s *Starter) currentNodeAgentSessionForStart(
 	if !receipt.Committed {
 		return preparedCurrentNodeAgentSession{}, nil, errors.New("current node assignment was not committed")
 	}
-	if assignment.resource == nil {
-		return preparedCurrentNodeAgentSession{}, nil, errors.New("current node assignment ensure has no Agent resource selection")
+	if assignment.retainSourceRuntime {
+		return assignment.prepared, sessionruntime.CurrentAgentResource{}, nil
 	}
-	return assignment.prepared, assignment.resource, nil
+	return assignment.prepared, sessionruntime.ReplaceAgentResource{}, nil
 }
 
 func (s *Starter) planCurrentNodeSession(

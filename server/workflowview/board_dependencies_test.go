@@ -1,7 +1,6 @@
 package workflowview
 
 import (
-	"core/internal/testharness/workflowtest"
 	"testing"
 
 	"core/server/workflowstore"
@@ -40,7 +39,7 @@ func TestBoardCardsProjectExactDependencyProgressFromThePagedQuery(t *testing.T)
 	if err != nil {
 		t.Fatalf("GetDefinition: %v", err)
 	}
-	if _, err := workflowtest.ManualMoveTask(fixture.store, fixture.ctx, workflowstore.ManualMoveRequest{
+	if _, err := fixture.store.ManualMoveTask(fixture.ctx, workflowstore.ManualMoveRequest{
 		TaskID:       blocker.ID,
 		TargetNodeID: terminalNodeID(t, definition),
 	}); err != nil {
