@@ -455,4 +455,18 @@ kent task move <task> <target-node-id> --execution-target none|head|default-bran
 
 These task actions never prompt. Their override applies only to an unlocked task and does not edit the workflow. If selection is required, rerun the same action with one concrete selector. `kent task show` reports the source workspace and, after lock, the durable target mode, requested revision, resolved revision, resolved commit, and recorded managed-worktree path when present. It also reports every exact current session and script target. Task detail does not perform live Git branch discovery; inspect the worktree when branch identity is needed.
 
+Managed task worktrees use the Task Short ID as the default branch name. Task Start, Manual Move, and Resume can override that name when the operation can create the task's first managed worktree:
+
+```bash
+kent task start KENT-123 --branch-name feature/KENT-123
+kent task move KENT-123 implement --branch-name feature/KENT-123
+kent task resume KENT-123 --branch-name feature/KENT-123
+```
+
+An explicit branch name is rejected when the effective Execution Target uses no managed worktree, or when a Manual Move is a no-op or does not prepare an Execution Target. Before worktree creation, another eligible Start, Manual Move, or Resume can replace the requested name. Worktree materialization uses the name recorded at its snapshot: a different replacement accepted after that point does not affect the in-flight creation and can be cleared when the created worktree binds.
+
+After a managed worktree exists, supplying its exact recorded branch name is an idempotent assertion; supplying a different name is rejected because these commands do not rename worktree branches. Worktree status owns branch identity after creation; task detail does not expose pending branch selection.
+
+Kent never reuses or overwrites an existing local branch for this operation. It rejects exact local collisions and exact remote-tracking branch collisions already known in the local repository for every configured remote; a same-named tag is allowed. The remote-tracking check does not fetch or contact remotes, so a matching remote-tracking ref that appears after the final check can coexist with the new local branch.
+
 More about worktrees on the [Worktree](../worktrees/) page.

@@ -292,6 +292,7 @@ func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 	fs := newCommandFlagSet(config.Command+" task start", stderr, taskStartUsage)
 	projectRef := fs.String("project", ".", "project ID or attached workspace path used to resolve a short ID")
 	executionTargetRaw := fs.String("execution-target", "", "task-local execution target: "+executionTargetSelectorHelp)
+	branchNameRaw := fs.String("branch-name", "", "branch name for the task's first managed worktree")
 	ignoreDependencies := fs.Bool("ignore-dependencies", false, "proceed despite current unsatisfied Task Dependencies")
 	jsonOut := fs.Bool("json", false, "write the typed start outcome as JSON")
 	positionals, flagArgs := takeLeadingPositionals(args, 1)
@@ -313,6 +314,11 @@ func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
+	branchName, err := parseExplicitBranchName(*branchNameRaw, flagExplicit(fs, "branch-name"))
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
 	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
 		taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, *projectRef, positionals[0])
 		if err != nil {
@@ -325,11 +331,13 @@ func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 				TaskID:                     taskID,
 				InvokingSessionID:          invokingSessionID,
 				ExecutionTarget:            executionTarget,
+				BranchName:                 branchName,
 				ProceedDespiteDependencies: *ignoreDependencies,
 			})
 		})
 		if err != nil {
 			if !writeWorkflowExecutionTargetError(stderr, err) &&
+				!writeWorkflowTaskInitialBranchError(stderr, err) &&
 				!writeWorkflowTaskMutationSelfTargetError(stderr, err) {
 				fmt.Fprintln(stderr, err)
 			}
@@ -378,6 +386,16 @@ func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 	})
 }
 
+func parseExplicitBranchName(raw string, provided bool) (*string, error) {
+	if !provided {
+		return nil, nil
+	}
+	if strings.TrimSpace(raw) == "" {
+		return nil, errors.New("--branch-name requires a non-blank branch name")
+	}
+	return &raw, nil
+}
+
 func writeWorkflowExecutionTargetSelectionRequired(stderr io.Writer, requirement *serverapi.WorkflowExecutionTargetSelectionRequirement) {
 	switch {
 	case requirement == nil:
@@ -424,6 +442,45 @@ func writeWorkflowExecutionTargetError(stderr io.Writer, err error) bool {
 	return false
 }
 
+func writeWorkflowTaskInitialBranchError(stderr io.Writer, err error) bool {
+	var branchErr *serverapi.WorkflowTaskInitialBranchError
+	if !errors.As(err, &branchErr) {
+		return false
+	}
+	if validationErr := branchErr.Validate(); validationErr != nil {
+		fmt.Fprintf(stderr, "Invalid workflow task branch error: %v.\n", validationErr)
+		return true
+	}
+	switch branchErr.Reason {
+	case serverapi.WorkflowTaskInitialBranchErrorReasonInvalidName:
+		fmt.Fprintf(stderr, "Branch name %q is not a valid Git branch name.\n", branchErr.BranchName)
+	case serverapi.WorkflowTaskInitialBranchErrorReasonLocalCollision:
+		fmt.Fprintf(stderr, "Branch %q already exists locally as %q.\n", branchErr.BranchName, *branchErr.Ref)
+	case serverapi.WorkflowTaskInitialBranchErrorReasonRemoteTrackingCollision:
+		fmt.Fprintf(
+			stderr,
+			"Branch %q conflicts with locally known remote-tracking branch %q on remote %q.\n",
+			branchErr.BranchName,
+			*branchErr.Ref,
+			*branchErr.Remote,
+		)
+	case serverapi.WorkflowTaskInitialBranchErrorReasonNoManagedTarget:
+		fmt.Fprintf(stderr, "Branch %q requires a managed-worktree execution target.\n", branchErr.BranchName)
+	case serverapi.WorkflowTaskInitialBranchErrorReasonOperationCannotCreateWorktree:
+		fmt.Fprintf(stderr, "Branch %q cannot be used because this operation cannot create the task's first managed worktree.\n", branchErr.BranchName)
+	case serverapi.WorkflowTaskInitialBranchErrorReasonPostCreationMismatch:
+		fmt.Fprintf(
+			stderr,
+			"Task worktree uses branch %q; requested branch %q cannot rename it.\n",
+			*branchErr.ExistingBranchName,
+			branchErr.BranchName,
+		)
+	default:
+		fmt.Fprintln(stderr, branchErr)
+	}
+	return true
+}
+
 func taskDeleteSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" task delete", stderr, taskDeleteUsage)
 	projectRef := fs.String("project", ".", "project ID or attached workspace path used to resolve a short ID")
@@ -466,6 +523,7 @@ func taskResumeSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 	fs := newCommandFlagSet(config.Command+" task resume", stderr, taskResumeUsage)
 	projectRef := fs.String("project", ".", "project ID or attached workspace path used to resolve a short ID")
 	executionTargetRaw := fs.String("execution-target", "", "task-local execution target: "+executionTargetSelectorHelp)
+	branchNameRaw := fs.String("branch-name", "", "branch name for the task's first managed worktree")
 	positionals, flagArgs := takeLeadingPositionals(args, 1)
 	if ok, exitCode := parseCommandFlags(fs, flagArgs); !ok {
 		return exitCode
@@ -485,6 +543,11 @@ func taskResumeSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
+	branchName, err := parseExplicitBranchName(*branchNameRaw, flagExplicit(fs, "branch-name"))
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
 	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
 		taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, *projectRef, positionals[0])
 		if err != nil {
@@ -497,10 +560,12 @@ func taskResumeSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 				InvokingSessionID: invokingSessionID,
 				SetupOperationID:  setupOperationID,
 				ExecutionTarget:   executionTarget,
+				BranchName:        branchName,
 			})
 		})
 		if err != nil {
 			if writeWorkflowExecutionTargetError(stderr, err) ||
+				writeWorkflowTaskInitialBranchError(stderr, err) ||
 				writeWorkflowTaskMutationSelfTargetError(stderr, err) {
 				return 1
 			}
@@ -640,6 +705,7 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	projectRef := fs.String("project", ".", "project ID or attached workspace path used to resolve a short ID")
 	commentary := fs.String("commentary", "", "note recorded with the workflow transition")
 	executionTargetRaw := fs.String("execution-target", "", "task-local execution target: "+executionTargetSelectorHelp)
+	branchNameRaw := fs.String("branch-name", "", "branch name for the task's first managed worktree")
 	ignoreDependencies := fs.Bool("ignore-dependencies", false, "proceed despite current unsatisfied Task Dependencies")
 	transition := fs.String("transition", "", "workflow Transition key")
 	valuesJSON := fs.String("values-json", "", "nested JSON values keyed by Node key and output name")
@@ -660,6 +726,11 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		return 1
 	}
 	executionTarget, err := parseOptionalTaskExecutionTarget(*executionTargetRaw, flagExplicit(fs, "execution-target"))
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
+	branchName, err := parseExplicitBranchName(*branchNameRaw, flagExplicit(fs, "branch-name"))
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 2
@@ -696,6 +767,10 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			return 1
 		}
 		if preview.Outcome == serverapi.WorkflowTaskMovePreviewOutcomeNoOp {
+			if branchName != nil {
+				fmt.Fprintln(stderr, "task move no-op does not accept --branch-name")
+				return 2
+			}
 			if flagExplicit(fs, "transition") || len(values) != 0 {
 				fmt.Fprintln(stderr, "task move no-op does not accept --transition or --values-json/--values-file")
 				return 2
@@ -762,11 +837,13 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 				Commentary:                 *commentary,
 				SetupOperationID:           setupOperationID,
 				ExecutionTarget:            executionTarget,
+				BranchName:                 branchName,
 				ProceedDespiteDependencies: *ignoreDependencies,
 			})
 		})
 		if err != nil {
 			if !writeWorkflowExecutionTargetError(stderr, err) &&
+				!writeWorkflowTaskInitialBranchError(stderr, err) &&
 				!writeWorkflowTaskMutationSelfTargetError(stderr, err) {
 				fmt.Fprintln(stderr, err)
 			}
