@@ -118,24 +118,70 @@ describe("VirtualizedInfiniteList pixel restoration", () => {
     expect(capturedScrollTop).toBe(240);
   });
 
-  it("keeps restored pixels after the first browser layout frame", async () => {
-    render(<List request={createVirtualizedPixelOffsetRequest("layout-frame", 240)} />);
+  it("preserves the restored anchor when a later layout resets the scroll element", () => {
+    const items = Array.from({ length: 20 }, (_value, index) => `item-${index.toString()}`);
+    virtualizer.getVirtualItems.mockReturnValue([
+      { end: 280, index: 6, key: "item-6", lane: 0, size: 40, start: 240 },
+    ]);
+    const view = render(<List items={items} request={createVirtualizedPixelOffsetRequest("layout-reset", 240)} />);
+    const list = screen.getByRole("list");
+    list.scrollTop = 0;
 
-    await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => {
-        resolve();
+    view.rerender(
+      <List items={items} request={createVirtualizedPixelOffsetRequest("layout-reset", 240)} />,
+    );
+
+    expect(list.scrollTop).toBe(240);
+  });
+
+  it("accepts a clamped retained offset without chasing later virtual-item changes", () => {
+    const items = Array.from({ length: 20 }, (_value, index) => `item-${index.toString()}`);
+    let scrollTop = 0;
+    const clampScrollElement = (element: HTMLDivElement | null) => {
+      if (element === null) return;
+      Object.defineProperty(element, "scrollTop", {
+        configurable: true,
+        get: () => scrollTop,
+        set: (value: number) => {
+          scrollTop = Math.min(value, 160);
+        },
       });
-    });
+    };
+    const view = render(
+      <List
+        items={items}
+        onScrollElementChange={clampScrollElement}
+        request={createVirtualizedPixelOffsetRequest("clamped", 640)}
+      />,
+    );
+    expect(screen.getByRole("list").scrollTop).toBe(160);
 
-    expect(screen.getByRole("list").scrollTop).toBe(240);
+    virtualizer.getVirtualItems.mockReturnValue([
+      { end: 40, index: 0, key: "item-0", lane: 0, size: 40, start: 0 },
+    ]);
+    view.rerender(
+      <List
+        items={items}
+        onScrollElementChange={clampScrollElement}
+        request={createVirtualizedPixelOffsetRequest("clamped", 640)}
+      />,
+    );
+
+    expect(screen.getByRole("list").scrollTop).toBe(160);
   });
 
   it("does not overwrite a user scroll after restoration", () => {
-    const view = render(<List request={createVirtualizedPixelOffsetRequest("user-scroll", 240)} />);
+    const items = Array.from({ length: 20 }, (_value, index) => `item-${index.toString()}`);
+    const view = render(
+      <List items={items} request={createVirtualizedPixelOffsetRequest("user-scroll", 240)} />,
+    );
     const list = screen.getByRole("list");
     list.scrollTop = 640;
+    fireEvent.scroll(list);
 
-    view.rerender(<List request={createVirtualizedPixelOffsetRequest("user-scroll", 240)} />);
+    view.rerender(
+      <List items={items} request={createVirtualizedPixelOffsetRequest("user-scroll", 240)} />,
+    );
 
     expect(list.scrollTop).toBe(640);
   });

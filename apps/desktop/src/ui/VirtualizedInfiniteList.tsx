@@ -8,12 +8,7 @@ import { resolveVirtualizedInitialScroll } from "./virtualizedInfiniteListInitia
 import { resolveLoadMore } from "./virtualizedInfiniteListLoadMore";
 import { pinnedVirtualRangeExtractor } from "./virtualizedPinnedRange";
 import { shouldAdjustScrollForVirtualizedResize } from "./virtualizedResizePolicy";
-import {
-  dataIndexForVirtualIndex,
-  headerIndex,
-  virtualIndexForDataIndex,
-  virtualizedListLayout,
-} from "./virtualizedInfiniteListLayout";
+import { dataIndexForVirtualIndex, headerIndex, virtualIndexForDataIndex, virtualizedListLayout } from "./virtualizedInfiniteListLayout";
 import {
   requireVirtualizedPixelOffsetRequest,
   type VirtualizedPixelOffsetRequest,
@@ -294,9 +289,9 @@ export function VirtualizedInfiniteList<TItem>({
       return;
     }
     scrollRef.current.scrollTop = validatedPixelOffsetRequest.offsetPx;
-    virtualizer.scrollToOffset(validatedPixelOffsetRequest.offsetPx, { behavior: "auto" });
-    if (scrollRef.current.scrollTop === validatedPixelOffsetRequest.offsetPx) lastPixelOffsetKeyRef.current = validatedPixelOffsetRequest.key;
-  }, [items.length, validatedPixelOffsetRequest, virtualItems, virtualizer]);
+    virtualizer.scrollToOffset(scrollRef.current.scrollTop, { behavior: "auto" });
+    lastPixelOffsetKeyRef.current = validatedPixelOffsetRequest.key;
+  }, [items.length, validatedPixelOffsetRequest, virtualizer]);
 
   useLayoutEffect(() => {
     const currentKeys = items.map(getItemKey);
@@ -306,17 +301,15 @@ export function VirtualizedInfiniteList<TItem>({
     if (previousKeys.length > 0 && anchor !== null && element !== null) {
       const previousIndex = previousKeys.indexOf(anchor.itemKey);
       const currentIndex = currentKeys.indexOf(anchor.itemKey);
-      if (previousIndex >= 0 && currentIndex >= 0 && previousIndex !== currentIndex) {
+      if (previousIndex >= 0 && currentIndex >= 0) {
         const virtualIndex = virtualIndexForDataIndex(itemStartIndex, currentIndex, previousBoundaryIndex);
         const measuredOffset = isFallbackRendering
           ? undefined
           : virtualizer.getOffsetForIndex(virtualIndex, "start")?.[0];
         const rowOffset = measuredOffset ?? paddingStart + virtualIndex * Math.max(1, estimateSize());
         const scrollOffset = rowOffset + anchor.inRowOffset;
-        element.scrollTop = scrollOffset;
-        if (!isFallbackRendering) {
-          virtualizer.scrollToOffset(scrollOffset, { behavior: "auto" });
-        }
+        if (element.scrollTop !== scrollOffset) element.scrollTop = scrollOffset;
+        if (!isFallbackRendering) virtualizer.scrollToOffset(element.scrollTop, { behavior: "auto" });
       }
     }
     previousItemKeysRef.current = currentKeys;
