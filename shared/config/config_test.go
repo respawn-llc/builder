@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -935,6 +936,29 @@ func TestLoadDerivesDefaultWorktreeBaseDirFromPersistenceRoot(t *testing.T) {
 	}
 	if got, want := cfg.Settings.Worktrees.BaseDir, filepath.Join(cfg.PersistenceRoot, "worktrees"); got != want {
 		t.Fatalf("worktrees.base_dir = %q, want %q", got, want)
+	}
+}
+
+func TestLoadGlobalWorktreeBaseDirReadsCurrentGlobalConfig(t *testing.T) {
+	root := t.TempDir()
+	first := filepath.Join(root, "first")
+	second := filepath.Join(root, "second")
+	writeBaseDir := func(baseDir string) {
+		t.Helper()
+		configText := "[worktrees]\nbase_dir = " + strconv.Quote(baseDir) + "\n"
+		if err := os.WriteFile(filepath.Join(root, "config.toml"), []byte(configText), 0o644); err != nil {
+			t.Fatalf("write config: %v", err)
+		}
+	}
+
+	writeBaseDir(first)
+	if got, err := LoadGlobalWorktreeBaseDir(root); err != nil || got != first {
+		t.Fatalf("first global Worktree base = %q, %v; want %q", got, err, first)
+	}
+
+	writeBaseDir(second)
+	if got, err := LoadGlobalWorktreeBaseDir(root); err != nil || got != second {
+		t.Fatalf("second global Worktree base = %q, %v; want %q", got, err, second)
 	}
 }
 

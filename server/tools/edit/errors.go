@@ -2,6 +2,7 @@ package edit
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -29,6 +30,9 @@ func failf(format string, args ...any) error {
 }
 
 func editErrorResult(c tools.Call, err error) tools.Result {
+	if errors.Is(err, tools.ErrForeignManagedWorktreeEditDenied) {
+		return tools.ErrorResult(c, tools.ForeignManagedWorktreeEditDeniedMessage)
+	}
 	message := "Edit failed."
 	if err != nil {
 		message = err.Error()

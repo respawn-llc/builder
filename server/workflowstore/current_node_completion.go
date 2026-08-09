@@ -153,12 +153,12 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 	}
 	nowTime := s.now().UTC()
 	now := nowTime.UnixMilli()
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := beginCurrentNodeCompletionTransaction(ctx, s.db)
 	if err != nil {
 		return CurrentNodeCompletionResult{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	q := s.queries.WithTx(tx)
+	q := tx.Queries()
 	currentSource, err := currentNodeForReference(ctx, q, prepared.Source)
 	if err != nil {
 		return CurrentNodeCompletionResult{}, err
@@ -199,7 +199,7 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 		if err := touchTaskUpdatedAt(ctx, q, string(prepared.Source.TaskID), now); err != nil {
 			return CurrentNodeCompletionResult{}, err
 		}
-		if err := tx.Commit(); err != nil {
+		if err := tx.Commit(ctx); err != nil {
 			return CurrentNodeCompletionResult{}, err
 		}
 		if len(result.Mutation.Removed) > 0 {
@@ -227,7 +227,7 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 		if err := touchTaskUpdatedAt(ctx, q, string(prepared.Source.TaskID), now); err != nil {
 			return CurrentNodeCompletionResult{}, err
 		}
-		if err := tx.Commit(); err != nil {
+		if err := tx.Commit(ctx); err != nil {
 			return CurrentNodeCompletionResult{}, err
 		}
 		result.SessionReuse = newSessionReuseAnalysisInput(definition, currentSource, []workflow.Edge{target.Edge})
@@ -278,7 +278,7 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 		if err := touchTaskUpdatedAt(ctx, q, string(prepared.Source.TaskID), now); err != nil {
 			return CurrentNodeCompletionResult{}, err
 		}
-		if err := tx.Commit(); err != nil {
+		if err := tx.Commit(ctx); err != nil {
 			return CurrentNodeCompletionResult{}, err
 		}
 		return CurrentNodeCompletionResult{
@@ -304,7 +304,7 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 	if err := touchTaskUpdatedAt(ctx, q, string(prepared.Source.TaskID), now); err != nil {
 		return CurrentNodeCompletionResult{}, err
 	}
-	if err := tx.Commit(); err != nil {
+	if err := tx.Commit(ctx); err != nil {
 		return CurrentNodeCompletionResult{}, err
 	}
 	result := CurrentNodeCompletionResult{

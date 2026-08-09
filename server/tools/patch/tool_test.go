@@ -71,6 +71,49 @@ func TestAbsoluteForeignManagedWorktreePatchIsDeniedBeforeMove(t *testing.T) {
 	}
 }
 
+func TestPatchDeniesSiblingCreatedAfterToolStartupBeforeApproval(t *testing.T) {
+	base := outsideNonTempDir(t)
+	managedParent := filepath.Join(base, "kent")
+	currentRoot := filepath.Join(managedParent, "current")
+	currentWorkspace := filepath.Join(currentRoot, "nested")
+	if err := os.MkdirAll(currentWorkspace, 0o755); err != nil {
+		t.Fatalf("mkdir current Workspace: %v", err)
+	}
+	pathContext, err := tools.NewManagedWorktreePathContext(base, &currentRoot, []string{currentRoot})
+	if err != nil {
+		t.Fatalf("managed worktree path context: %v", err)
+	}
+	approvalCalls := 0
+	tool := newPatchTestTool(
+		t,
+		currentWorkspace,
+		WithManagedWorktreePathContext(pathContext),
+		WithOutsideWorkspaceApprover(func(context.Context, OutsideWorkspaceRequest) (OutsideWorkspaceApproval, error) {
+			approvalCalls++
+			return OutsideWorkspaceApproval{Decision: OutsideWorkspaceDecisionAllowOnce}, nil
+		}),
+	)
+
+	siblingRoot := filepath.Join(managedParent, "created-later")
+	if err := os.MkdirAll(siblingRoot, 0o755); err != nil {
+		t.Fatalf("mkdir later sibling: %v", err)
+	}
+	siblingFile := filepath.Join(siblingRoot, "foreign.txt")
+	if err := os.WriteFile(siblingFile, []byte("before\n"), 0o644); err != nil {
+		t.Fatalf("write sibling file: %v", err)
+	}
+
+	result := callPatch(t, tool, "late-sibling", "*** Begin Patch\n*** Update File: "+siblingFile+"\n-before\n+after\n*** End Patch\n")
+
+	if !result.IsError || result.Summary == nil || *result.Summary != tools.ForeignManagedWorktreeEditDeniedMessage {
+		t.Fatalf("sibling worktree patch result = %+v", result)
+	}
+	if approvalCalls != 0 {
+		t.Fatalf("outside-workspace approval calls = %d, want 0", approvalCalls)
+	}
+	assertPatchFileContent(t, siblingFile, "before\n")
+}
+
 func TestPatchDeniesEveryForeignAbsoluteTargetKind(t *testing.T) {
 	base := t.TempDir()
 	currentRoot := filepath.Join(base, "current")

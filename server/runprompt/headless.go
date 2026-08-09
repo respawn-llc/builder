@@ -38,10 +38,11 @@ type promptHistoryStore interface {
 }
 
 type HeadlessBootstrap struct {
-	SessionLaunch    *sessionlaunch.Service
-	FastModeState    *runtime.FastModeState
-	PromptHistory    promptHistoryStore
-	RuntimeAuthority *sessionruntime.Authority
+	SessionLaunch                   *sessionlaunch.Service
+	FastModeState                   *runtime.FastModeState
+	PromptHistory                   promptHistoryStore
+	RuntimeAuthority                *sessionruntime.Authority
+	ManagedWorktreeBaseRootResolver askquestion.ManagedWorktreeBaseRootResolver
 	// ManagedWorktreeBaseDir is the server-owned managed Worktree namespace.
 	ManagedWorktreeBaseDir string
 }
@@ -182,7 +183,12 @@ func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch
 	}
 	var managedWorktreePathContext *askquestion.ManagedWorktreePathContext
 	if strings.TrimSpace(l.boot.ManagedWorktreeBaseDir) != "" {
-		managedWorktreePathContext, err = askquestion.NewManagedWorktreePathContext(l.boot.ManagedWorktreeBaseDir, currentWorktreeRoot, plan.ManagedWorktreeRoots)
+		managedWorktreePathContext, err = askquestion.NewManagedWorktreePathContext(
+			l.boot.ManagedWorktreeBaseDir,
+			currentWorktreeRoot,
+			plan.ManagedWorktreeRoots,
+			l.boot.ManagedWorktreeBaseRootResolver,
+		)
 		if err != nil {
 			return nil, err
 		}

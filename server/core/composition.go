@@ -155,8 +155,9 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	processService := processview.NewProcessViewService(runtimeSupport.Background)
 	processOutputService := processview.NewProcessOutputService(runtimeSupport.Background, runtimeSupport.Background)
 	sessionRuntimeAPI := sessionruntime.NewAPI(metadataStore, runtimeSupport.FastModeState, runtimeAuthority, sessionruntime.APIOptions{
-		RuntimeClientFactory:   opts.RuntimeClientFactory,
-		ManagedWorktreeBaseDir: cfg.Settings.Worktrees.BaseDir,
+		RuntimeClientFactory:            opts.RuntimeClientFactory,
+		ManagedWorktreeBaseDir:          cfg.Settings.Worktrees.BaseDir,
+		ManagedWorktreeBaseRootResolver: runtimewire.ManagedWorktreeBaseRootResolver(cfg.PersistenceRoot),
 		RecoveredWarningProvider: func() (string, bool, error) {
 			nonEmpty, err := prompts.RecoveredRootNonEmptyFor(cfg.PersistenceRoot)
 			if err != nil {

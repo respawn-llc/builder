@@ -19,28 +19,31 @@ import (
 )
 
 type API struct {
-	metadataStore            *metadata.Store
-	fastModeState            *runtime.FastModeState
-	recoveredWarningProvider func() (string, bool, error)
-	authority                *Authority
-	runtimeClientFactory     runtimewire.RuntimeClientFactory
-	managedWorktreeBaseDir   string
+	metadataStore                   *metadata.Store
+	fastModeState                   *runtime.FastModeState
+	recoveredWarningProvider        func() (string, bool, error)
+	authority                       *Authority
+	runtimeClientFactory            runtimewire.RuntimeClientFactory
+	managedWorktreeBaseDir          string
+	managedWorktreeBaseRootResolver tools.ManagedWorktreeBaseRootResolver
 }
 
 type APIOptions struct {
-	RuntimeClientFactory     runtimewire.RuntimeClientFactory
-	RecoveredWarningProvider func() (string, bool, error)
-	ManagedWorktreeBaseDir   string
+	RuntimeClientFactory            runtimewire.RuntimeClientFactory
+	RecoveredWarningProvider        func() (string, bool, error)
+	ManagedWorktreeBaseDir          string
+	ManagedWorktreeBaseRootResolver tools.ManagedWorktreeBaseRootResolver
 }
 
 func NewAPI(metadataStore *metadata.Store, fastModeState *runtime.FastModeState, authority *Authority, options APIOptions) *API {
 	return &API{
-		metadataStore:            metadataStore,
-		fastModeState:            fastModeState,
-		recoveredWarningProvider: options.RecoveredWarningProvider,
-		authority:                authority,
-		runtimeClientFactory:     options.RuntimeClientFactory,
-		managedWorktreeBaseDir:   options.ManagedWorktreeBaseDir,
+		metadataStore:                   metadataStore,
+		fastModeState:                   fastModeState,
+		recoveredWarningProvider:        options.RecoveredWarningProvider,
+		authority:                       authority,
+		runtimeClientFactory:            options.RuntimeClientFactory,
+		managedWorktreeBaseDir:          options.ManagedWorktreeBaseDir,
+		managedWorktreeBaseRootResolver: options.ManagedWorktreeBaseRootResolver,
 	}
 }
 
@@ -160,7 +163,12 @@ func (s *API) interactiveRuntimePlan(ctx context.Context, req serverapi.SessionR
 	}
 	var managedWorktreePathContext *tools.ManagedWorktreePathContext
 	if strings.TrimSpace(s.managedWorktreeBaseDir) != "" {
-		managedWorktreePathContext, err = tools.NewManagedWorktreePathContext(s.managedWorktreeBaseDir, currentWorktreeRoot, managedWorktreeRoots)
+		managedWorktreePathContext, err = tools.NewManagedWorktreePathContext(
+			s.managedWorktreeBaseDir,
+			currentWorktreeRoot,
+			managedWorktreeRoots,
+			s.managedWorktreeBaseRootResolver,
+		)
 		if err != nil {
 			return AgentRuntimePlan{}, err
 		}
