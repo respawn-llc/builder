@@ -6,6 +6,7 @@ import (
 
 	"core/shared/config"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 func ProviderFacts(providerID string, isOpenAIFirstParty bool, settings config.Settings) serverapi.AuthProviderFacts {
@@ -28,9 +29,9 @@ func ProviderFacts(providerID string, isOpenAIFirstParty bool, settings config.S
 
 func ProviderSelection(settings config.Settings) serverapi.AuthProviderSelection {
 	selection := serverapi.AuthProviderSelection{
-		Model:            optionalTrimmedString(settings.Model),
-		ProviderOverride: optionalTrimmedString(settings.ProviderOverride),
-		OpenAIBaseURL:    optionalTrimmedString(settings.OpenAIBaseURL),
+		Model:            textutil.OptionalTrimmedString(settings.Model),
+		ProviderOverride: textutil.OptionalTrimmedString(settings.ProviderOverride),
+		OpenAIBaseURL:    textutil.OptionalTrimmedString(settings.OpenAIBaseURL),
 	}
 	if providerID := strings.TrimSpace(settings.ProviderCapabilities.ProviderID); providerID != "" {
 		selection.ProviderCapabilities = &serverapi.AuthProviderCapabilitySelection{
@@ -110,12 +111,4 @@ func isOfficialSubscriptionBaseURL(raw string) bool {
 	default:
 		return false
 	}
-}
-
-func optionalTrimmedString(value string) *string {
-	trimmed := strings.TrimSpace(value)
-	if trimmed == "" {
-		return nil
-	}
-	return &trimmed
 }
