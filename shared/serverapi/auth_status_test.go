@@ -47,6 +47,20 @@ func TestAuthStatusResponseRejectsMethodPayloadMismatch(t *testing.T) {
 	}
 }
 
+func TestAuthStatusResponseAllowsFullyRedactedAPIKeyFacts(t *testing.T) {
+	response := AuthStatusResponse{
+		Resolution: KnownAuthStatusResolution(AuthStatusFacts{
+			Method:        AuthStatusMethodAPIKey,
+			Provider:      OpenAIAuthProviderFacts(),
+			EnvPreference: AuthStatusEnvPreferencePreferSaved,
+			APIKey:        &AuthAPIKeyFacts{},
+		}, nil),
+	}
+	if err := response.Validate(); err != nil {
+		t.Fatalf("fully redacted API-key facts: %v", err)
+	}
+}
+
 func TestAuthStatusResponseCarriesOnlyRedactedAPIKeyFacts(t *testing.T) {
 	suffix := "1234"
 	response := AuthStatusResponse{

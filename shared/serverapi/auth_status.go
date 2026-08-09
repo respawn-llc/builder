@@ -207,7 +207,10 @@ func (f AuthOAuthFacts) validate() error {
 }
 
 func (f AuthAPIKeyFacts) validate() error {
-	if err := validateOptionalAuthString("suffix", f.Suffix); err != nil || f.Suffix == nil {
+	if f.Suffix == nil {
+		return nil
+	}
+	if err := validateOptionalAuthString("suffix", f.Suffix); err != nil {
 		return err
 	}
 	if utf8.RuneCountInString(*f.Suffix) != 4 {
