@@ -137,7 +137,7 @@ func TestTUIDraftRecoveryOwnership(t *testing.T) {
 		{
 			name: "authoritative Queue Item delivery clears initiating local recovery",
 			arrange: func(model *uiModel) {
-				model.registerSteeredQueuedUserMessage(clientui.QueuedUserMessage{
+				model.registerOwnedSteeredQueuedUserMessage(clientui.QueuedUserMessage{
 					ID:   submittedQueueItemID.String(),
 					Text: submittedText,
 				})
@@ -152,7 +152,7 @@ func TestTUIDraftRecoveryOwnership(t *testing.T) {
 		{
 			name: "Queue Item not applied restores without overwriting newer text",
 			arrange: func(model *uiModel) {
-				model.registerSteeredQueuedUserMessage(clientui.QueuedUserMessage{
+				model.registerOwnedSteeredQueuedUserMessage(clientui.QueuedUserMessage{
 					ID:   submittedQueueItemID.String(),
 					Text: submittedText,
 				})
@@ -171,18 +171,41 @@ func TestTUIDraftRecoveryOwnership(t *testing.T) {
 		{
 			name: "another client transcript snapshot cannot clear or adopt recovery",
 			arrange: func(model *uiModel) {
-				model.registerSteeredQueuedUserMessage(clientui.QueuedUserMessage{
+				model.registerOwnedSteeredQueuedUserMessage(clientui.QueuedUserMessage{
 					ID:   submittedQueueItemID.String(),
 					Text: submittedText,
 				})
 			},
 			act: func(model *uiModel) {
-				model.reconcileTranscriptQueuedMessages([]clientui.TranscriptQueuedMessageState{{
+				model.applyTranscriptQueuedMessagesSnapshot([]clientui.TranscriptQueuedMessageState{{
 					QueueItemID: otherQueueItemID,
 					Status:      clientui.QueuedUserMessageAccepted,
 					Text:        &newerText,
 				}})
 			},
+			wantBuffers: []serverapi.SessionDraftRecoveryBuffer{{
+				Kind: serverapi.SessionDraftRecoveryBufferPendingInjectedInput,
+				Text: submittedText,
+			}},
+		},
+		{
+			name: "another client Queue Item failure cannot restore or clear recovery",
+			arrange: func(model *uiModel) {
+				model.registerOwnedSteeredQueuedUserMessage(clientui.QueuedUserMessage{
+					ID:   submittedQueueItemID.String(),
+					Text: submittedText,
+				})
+				model.mainEditor.Replace(newerText)
+			},
+			act: func(model *uiModel) {
+				_ = model.applyTranscriptQueuedMessageState(clientui.TranscriptQueuedMessageState{
+					QueueItemID:   otherQueueItemID,
+					Status:        clientui.QueuedUserMessageFailed,
+					FailureReason: &stopped,
+					Text:          &submittedText,
+				})
+			},
+			wantInput: newerText,
 			wantBuffers: []serverapi.SessionDraftRecoveryBuffer{{
 				Kind: serverapi.SessionDraftRecoveryBufferPendingInjectedInput,
 				Text: submittedText,
@@ -232,12 +255,13 @@ func TestTUIDraftRecoveryOwnership(t *testing.T) {
 func TestTUISubmitPersistsActiveRecoveryBeforeNetworkSend(t *testing.T) {
 	persistErr := errors.New("draft persistence failed")
 	tests := []struct {
-		name            string
-		persistErr      error
-		wantSubmitCalls int
+		name             string
+		persistErr       error
+		wantPersistCalls int
+		wantSubmitCalls  int
 	}{
-		{name: "persistence succeeds before send", wantSubmitCalls: 1},
-		{name: "persistence failure prevents send", persistErr: persistErr},
+		{name: "persistence succeeds before send", wantPersistCalls: 2, wantSubmitCalls: 1},
+		{name: "persistence failure prevents send", persistErr: persistErr, wantPersistCalls: 1},
 	}
 
 	for _, test := range tests {
@@ -261,8 +285,8 @@ func TestTUISubmitPersistsActiveRecoveryBeforeNetworkSend(t *testing.T) {
 			model = next.(*uiModel)
 			runDraftRecoveryCommands(t, model, cmd)
 
-			if lifecycle.persistCalls != 1 {
-				t.Fatalf("Draft Recovery persistence calls = %d, want 1", lifecycle.persistCalls)
+			if lifecycle.persistCalls != test.wantPersistCalls {
+				t.Fatalf("Draft Recovery persistence calls = %d, want %d", lifecycle.persistCalls, test.wantPersistCalls)
 			}
 			if runtimeClient.submitCalls != test.wantSubmitCalls {
 				t.Fatalf("runtime submit calls = %d, want %d", runtimeClient.submitCalls, test.wantSubmitCalls)
@@ -272,8 +296,8 @@ func TestTUISubmitPersistsActiveRecoveryBeforeNetworkSend(t *testing.T) {
 					Kind: serverapi.SessionDraftRecoveryBufferActiveSubmit,
 					Text: "send me",
 				}}
-				if !slices.Equal(lifecycle.lastRequest.RecoveryBuffers, want) {
-					t.Fatalf("persisted Draft Recovery = %+v, want %+v", lifecycle.lastRequest.RecoveryBuffers, want)
+				if len(lifecycle.requests) == 0 || !slices.Equal(lifecycle.requests[0].RecoveryBuffers, want) {
+					t.Fatalf("persisted Draft Recovery requests = %+v, want first recovery %+v", lifecycle.requests, want)
 				}
 			}
 		})
@@ -333,7 +357,7 @@ func (c *draftRecoveryRuntimeClient) SubmitRuntimeInput(_ context.Context, reque
 type draftRecoveryLifecycleClient struct {
 	apicontract.SessionLifecycleService
 	persistCalls int
-	lastRequest  serverapi.SessionPersistInputDraftRequest
+	requests     []serverapi.SessionPersistInputDraftRequest
 	persistErr   error
 }
 
@@ -342,7 +366,7 @@ func (c *draftRecoveryLifecycleClient) PersistInputDraft(
 	request serverapi.SessionPersistInputDraftRequest,
 ) (serverapi.SessionPersistInputDraftResponse, error) {
 	c.persistCalls++
-	c.lastRequest = request
+	c.requests = append(c.requests, request)
 	return serverapi.SessionPersistInputDraftResponse{}, c.persistErr
 }
 

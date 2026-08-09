@@ -6,14 +6,13 @@ import (
 
 	"core/cli/tui/ongoing"
 	"core/shared/clientui"
-	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
 func TestDelayedTranscriptRuntimeTupleCannotRollBackNewerUnaryState(t *testing.T) {
 	controls := newUnavailableRuntimeControlService()
 	runtimeClient := newTestSessionRuntimeClient(&countingSessionViewClient{}, controls)
-	v9 := runtimeTupleTestView(9, runtimeTupleTestIdleActivity(), runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationAccepted))
+	v9 := runtimeTupleTestView(9, runtimeTupleTestIdleActivity())
 	runtimeClient.storeMainView(v9)
 	m := newProjectedTestUIModel(runtimeClient)
 	controller := newOngoingTranscriptController(
@@ -22,14 +21,14 @@ func TestDelayedTranscriptRuntimeTupleCannotRollBackNewerUnaryState(t *testing.T
 		runtimeClient.admitTranscriptMessageState,
 		m.applyAdmittedTranscriptMessageState,
 	)
-	if _, _, err := controller.Accept(runtimeTupleTestHydration(9, runtimeTupleTestIdleActivity(), v9.InputReconciliation)); err != nil {
+	if _, _, err := controller.Accept(runtimeTupleTestHydration(9, runtimeTupleTestIdleActivity())); err != nil {
 		t.Fatalf("accept initial hydration: %v", err)
 	}
 
-	v11 := runtimeTupleTestView(11, runtimeTupleTestIdleActivity(), runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationCommitted))
+	v11 := runtimeTupleTestView(11, runtimeTupleTestIdleActivity())
 	canonical := runtimeClient.storeMainView(v11)
 	m.applyRuntimeMainViewState(canonical)
-	delayed := runtimeTupleTestUpdateMessage(2, 10, runtimeTupleTestRunningActivity(), runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationUnknown))
+	delayed := runtimeTupleTestUpdateMessage(2, 10, runtimeTupleTestRunningActivity())
 	if _, cmd, err := controller.Accept(delayed); err != nil {
 		t.Fatalf("accept delayed runtime update: %v", err)
 	} else if cmd != nil {
@@ -46,7 +45,7 @@ func TestDelayedTranscriptRuntimeTupleCannotRollBackNewerUnaryState(t *testing.T
 }
 
 func TestRuntimeMainViewRefreshCommitsOnlyWhenReducerHandlesCandidate(t *testing.T) {
-	v10 := runtimeTupleTestView(10, runtimeTupleTestIdleActivity(), runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationAccepted))
+	v10 := runtimeTupleTestView(10, runtimeTupleTestIdleActivity())
 	v10.Status = clientui.RuntimeStatus{
 		ReviewerFrequency: "edits",
 		ReviewerEnabled:   true,
@@ -62,7 +61,7 @@ func TestRuntimeMainViewRefreshCommitsOnlyWhenReducerHandlesCandidate(t *testing
 	}
 	reads := &countingSessionViewClient{view: v10}
 	runtimeClient := newTestSessionRuntimeClient(reads, newUnavailableRuntimeControlService())
-	v9 := runtimeTupleTestView(9, runtimeTupleTestIdleActivity(), runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationSubmitted))
+	v9 := runtimeTupleTestView(9, runtimeTupleTestIdleActivity())
 	runtimeClient.storeMainView(v9)
 	m := newProjectedTestUIModel(runtimeClient)
 	controller := newOngoingTranscriptController(
@@ -71,7 +70,7 @@ func TestRuntimeMainViewRefreshCommitsOnlyWhenReducerHandlesCandidate(t *testing
 		runtimeClient.admitTranscriptMessageState,
 		m.applyAdmittedTranscriptMessageState,
 	)
-	if _, _, err := controller.Accept(runtimeTupleTestHydration(9, v9.Activity, v9.InputReconciliation)); err != nil {
+	if _, _, err := controller.Accept(runtimeTupleTestHydration(9, v9.Activity)); err != nil {
 		t.Fatalf("accept initial hydration: %v", err)
 	}
 
@@ -88,8 +87,8 @@ func TestRuntimeMainViewRefreshCommitsOnlyWhenReducerHandlesCandidate(t *testing
 		t.Fatalf("UI projection changed before reducer: %+v", m.runtimeActivityProjection)
 	}
 
-	v11 := runtimeTupleTestView(11, runtimeTupleTestIdleActivity(), runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationCommitted))
-	if _, _, err := controller.Accept(runtimeTupleTestUpdateMessage(2, 11, v11.Activity, v11.InputReconciliation)); err != nil {
+	v11 := runtimeTupleTestView(11, runtimeTupleTestIdleActivity())
+	if _, _, err := controller.Accept(runtimeTupleTestUpdateMessage(2, 11, v11.Activity)); err != nil {
 		t.Fatalf("accept newer transcript update: %v", err)
 	}
 	m.handleRuntimeMainViewRefreshed(msg)
@@ -108,14 +107,14 @@ func TestRuntimeMainViewRefreshCommitsOnlyWhenReducerHandlesCandidate(t *testing
 }
 
 func TestRuntimeMainViewRefreshPreservesMetadataChangedAfterRequestStarted(t *testing.T) {
-	v10 := runtimeTupleTestView(10, runtimeTupleTestIdleActivity(), runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationAccepted))
+	v10 := runtimeTupleTestView(10, runtimeTupleTestIdleActivity())
 	v10.Status = clientui.RuntimeStatus{
 		ReviewerFrequency: "stale unary reviewer",
 		ThinkingLevel:     "stale unary thinking",
 	}
 	reads := &countingSessionViewClient{view: v10}
 	runtimeClient := newTestSessionRuntimeClient(reads, newUnavailableRuntimeControlService())
-	v9 := runtimeTupleTestView(9, runtimeTupleTestIdleActivity(), runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationSubmitted))
+	v9 := runtimeTupleTestView(9, runtimeTupleTestIdleActivity())
 	v9.Status = clientui.RuntimeStatus{ReviewerFrequency: "initial", ThinkingLevel: "initial"}
 	runtimeClient.storeMainView(v9)
 	m := newProjectedTestUIModel(runtimeClient)
@@ -152,27 +151,23 @@ func TestRuntimeMainViewRefreshPreservesMetadataChangedAfterRequestStarted(t *te
 func runtimeTupleTestView(
 	sequence uint64,
 	activity clientui.RuntimeActivity,
-	reconciliation clientui.RuntimeInputReconciliationSnapshot,
 ) clientui.RuntimeMainView {
 	return clientui.RuntimeMainView{
-		Version:             clientui.ReadModelVersion{Epoch: "runtime-tuple-test", Generation: 1, Sequence: sequence},
-		Session:             clientui.RuntimeSessionView{SessionID: "session-1"},
-		Activity:            activity,
-		InputReconciliation: reconciliation,
+		Version:  clientui.ReadModelVersion{Epoch: "runtime-tuple-test", Generation: 1, Sequence: sequence},
+		Session:  clientui.RuntimeSessionView{SessionID: "session-1"},
+		Activity: activity,
 	}
 }
 
 func runtimeTupleTestHydration(
 	sequence uint64,
 	activity clientui.RuntimeActivity,
-	reconciliation clientui.RuntimeInputReconciliationSnapshot,
 ) clientui.TranscriptMessage {
 	message := ongoingHydrationMessage(1)
 	payload := message.Payload().(clientui.TranscriptHydration)
 	payload.RuntimeReadModelUpdate = clientui.RuntimeReadModelUpdate{
-		Version:             clientui.ReadModelVersion{Epoch: "runtime-tuple-test", Generation: 1, Sequence: sequence},
-		Activity:            activity,
-		InputReconciliation: reconciliation,
+		Version:  clientui.ReadModelVersion{Epoch: "runtime-tuple-test", Generation: 1, Sequence: sequence},
+		Activity: activity,
 	}
 	message = clientui.NewTranscriptMessage(1, clientui.NewTranscriptEvent(payload))
 	return message
@@ -182,12 +177,10 @@ func runtimeTupleTestUpdateMessage(
 	deliverySequence uint64,
 	runtimeSequence uint64,
 	activity clientui.RuntimeActivity,
-	reconciliation clientui.RuntimeInputReconciliationSnapshot,
 ) clientui.TranscriptMessage {
 	return clientui.NewTranscriptMessage(deliverySequence, clientui.NewTranscriptEvent(clientui.RuntimeReadModelUpdate{
-		Version:             clientui.ReadModelVersion{Epoch: "runtime-tuple-test", Generation: 1, Sequence: runtimeSequence},
-		Activity:            activity,
-		InputReconciliation: reconciliation,
+		Version:  clientui.ReadModelVersion{Epoch: "runtime-tuple-test", Generation: 1, Sequence: runtimeSequence},
+		Activity: activity,
 	}))
 
 }
@@ -208,28 +201,15 @@ func runtimeTupleTestRunningActivity() clientui.RuntimeActivity {
 	}
 }
 
-func runtimeTupleTestReconciliation(state clientui.RuntimeInputReconciliationState) clientui.RuntimeInputReconciliationSnapshot {
-	return clientui.RuntimeInputReconciliationSnapshot{Operations: []clientui.RuntimeInputReconciliation{{
-		Operation: clientui.RuntimeOperationRef{
-			Kind:            clientui.RuntimeOperationKindSubmit,
-			ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
-		},
-		State: state,
-	}}}
-}
-
 func assertRuntimeTupleView(t *testing.T, got, want clientui.RuntimeMainView) {
 	t.Helper()
-	if got.Version != want.Version || !runtimeActivitiesEqual(got.Activity, want.Activity) ||
-		!runtimeInputReconciliationSnapshotsEqual(got.InputReconciliation, want.InputReconciliation) {
+	if got.Version != want.Version || !runtimeActivitiesEqual(got.Activity, want.Activity) {
 		t.Fatalf(
-			"runtime tuple = version=%+v activity=%+v reconciliation=%+v, want version=%+v activity=%+v reconciliation=%+v",
+			"runtime tuple = version=%+v activity=%+v, want version=%+v activity=%+v",
 			got.Version,
 			got.Activity,
-			got.InputReconciliation,
 			want.Version,
 			want.Activity,
-			want.InputReconciliation,
 		)
 	}
 }

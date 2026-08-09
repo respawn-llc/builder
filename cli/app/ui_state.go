@@ -77,6 +77,7 @@ type uiInputFeatureState struct {
 	submitToken                            uint64
 	activeSubmit                           activeSubmitState
 	recoveredDraftBuffers                  []serverapi.SessionDraftRecoveryBuffer
+	sessionDraftPersistence                apicontract.SessionLifecycleService
 
 	pendingInjected    []clientui.QueuedUserMessage
 	injectedQueue      []injectedRuntimeQueueItem

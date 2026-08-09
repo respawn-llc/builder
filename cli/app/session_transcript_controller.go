@@ -271,8 +271,7 @@ func (c *ongoingTranscriptController) applyAppOwnedMessage(message clientui.Tran
 		clientui.TranscriptMessageRuntimeReadModelUpdate:
 		// Canonical runtime state is represented by the app status line.
 	case clientui.TranscriptMessageUserMessageFlushed:
-		// The state observer owns input reconciliation. Re-render the client-local
-		// queue after it removes the flushed operation identities.
+		// The app owns submitted-text recovery independently from transcript rows.
 	case clientui.TranscriptMessageQueuedMessageState:
 		payload := message.Payload().(clientui.TranscriptQueuedMessageState)
 		c.liveReadModel.applyQueuedOrSteered(&payload)

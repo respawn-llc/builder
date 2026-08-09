@@ -2,12 +2,14 @@ package app
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"core/cli/app/commands"
 	"core/cli/app/internal/runtimeattach"
 	"core/shared/clientui"
 	"core/shared/runtimeinput"
+	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/google/uuid"
@@ -41,6 +43,7 @@ type injectedRuntimeQueueItem struct {
 	ServerID                 string
 	Text                     string
 	State                    injectedRuntimeQueueState
+	RecoveryOwned            bool
 	CreateToken              uint64
 	DiscardToken             uint64
 	ApprovalCommentaryAnswer *clientui.PromptAnswer
@@ -55,7 +58,7 @@ func newQueuedInputItem(text string) queuedInputItem {
 	return queuedInputItem{ID: uuid.NewString(), Text: text}
 }
 
-func (m *uiModel) registerSteeredQueuedUserMessage(queued clientui.QueuedUserMessage) {
+func (m *uiModel) registerOwnedSteeredQueuedUserMessage(queued clientui.QueuedUserMessage) {
 	serverID := strings.TrimSpace(queued.ID)
 	if serverID == "" {
 		return
@@ -66,12 +69,19 @@ func (m *uiModel) registerSteeredQueuedUserMessage(queued clientui.QueuedUserMes
 		item.ServerID = serverID
 		item.Text = queued.Text
 		item.State = injectedRuntimeQueueEnqueued
+		item.RecoveryOwned = true
 		m.injectedQueue[index] = item
 		m.replacePendingInjectedID(item.LocalID, queued)
 		return
 	}
 	m.pendingInjected = append(m.pendingInjected, clientui.QueuedUserMessage{ID: serverID, Text: queued.Text})
-	m.injectedQueue = append(m.injectedQueue, injectedRuntimeQueueItem{LocalID: serverID, ServerID: serverID, Text: queued.Text, State: injectedRuntimeQueueEnqueued})
+	m.injectedQueue = append(m.injectedQueue, injectedRuntimeQueueItem{
+		LocalID:       serverID,
+		ServerID:      serverID,
+		Text:          queued.Text,
+		State:         injectedRuntimeQueueEnqueued,
+		RecoveryOwned: true,
+	})
 }
 
 func (m *uiModel) enqueueInjectedInputWithApprovalAnswer(text string, answer *clientui.PromptAnswer) tea.Cmd {
@@ -83,7 +93,13 @@ func (m *uiModel) enqueueInjectedInputWithApprovalAnswer(text string, answer *cl
 	if !m.hasRuntimeClient() {
 		item := clientui.QueuedUserMessage{ID: localID, Text: trimmed}
 		m.pendingInjected = append(m.pendingInjected, item)
-		m.injectedQueue = append(m.injectedQueue, injectedRuntimeQueueItem{LocalID: localID, ServerID: localID, Text: trimmed, State: injectedRuntimeQueueEnqueued})
+		m.injectedQueue = append(m.injectedQueue, injectedRuntimeQueueItem{
+			LocalID:       localID,
+			ServerID:      localID,
+			Text:          trimmed,
+			State:         injectedRuntimeQueueEnqueued,
+			RecoveryOwned: true,
+		})
 		return nil
 	}
 	token := m.nextInjectedQueueToken()
@@ -97,21 +113,58 @@ func (m *uiModel) enqueueInjectedInputWithApprovalAnswer(text string, answer *cl
 		LocalID:                  localID,
 		Text:                     trimmed,
 		State:                    injectedRuntimeQueuePendingCreate,
+		RecoveryOwned:            true,
 		CreateToken:              token,
 		ApprovalCommentaryAnswer: approvalCommentaryAnswer,
 	})
+	return m.persistInjectedQueueDraftCmd(token, localID)
+}
+
+func (m *uiModel) persistInjectedQueueDraftCmd(token uint64, localID string) tea.Cmd {
+	persistence, request, err := m.sessionDraftRecoveryPersistence()
+	index := m.injectedQueueIndexByAnyID(localID)
+	if index < 0 {
+		return nil
+	}
+	item := m.injectedQueue[index]
 	client := m.runtimeClient()
 	return func() tea.Msg {
-		item, completed, err := submitRuntimeSteering(client, trimmed)
+		if err == nil {
+			_, err = persistence.PersistInputDraft(context.Background(), request)
+		}
+		if err != nil {
+			return injectedQueueDraftPersistedMsg{token: token, localID: localID, err: err}
+		}
+		queued, completed, err := submitRuntimeSteering(client, item.Text)
 		return injectedQueueCreateDoneMsg{
-			token:                    token,
-			localID:                  localID,
-			item:                     item,
+			token:                    item.CreateToken,
+			localID:                  item.LocalID,
+			item:                     queued,
 			completed:                completed,
-			approvalCommentaryAnswer: answer,
+			approvalCommentaryAnswer: item.ApprovalCommentaryAnswer,
 			err:                      err,
 		}
 	}
+}
+
+func (c uiInputController) handleInjectedQueueDraftPersisted(msg injectedQueueDraftPersistedMsg) (tea.Model, tea.Cmd) {
+	m := c.model
+	index := m.injectedQueueIndexByAnyID(msg.localID)
+	if index < 0 || m.injectedQueue[index].CreateToken != msg.token {
+		return m, nil
+	}
+	item := m.injectedQueue[index]
+	m.removePendingInjectedByID(item.LocalID)
+	m.removeInjectedQueueItemAt(index)
+	c.restoreInjectedTextIntoInput(item.Text)
+	m.layout().syncViewport()
+	return m, m.sendTransientStatusWithNoticeID(
+		"could not preserve submitted text: "+msg.err.Error(),
+		uiStatusNoticeError,
+		transientStatusDuration,
+		uiStatusNoticeReplace,
+		"",
+	)
 }
 
 func submitRuntimeSteering(client clientui.RuntimeClient, text string) (clientui.QueuedUserMessage, bool, error) {
@@ -152,7 +205,7 @@ func (c uiInputController) queueOrStartSubmission(text string) (tea.Model, tea.C
 		m.resetPromptHistoryNavigation()
 	}
 	if m.blocksRuntimeInput() {
-		return m, nil
+		return m, m.persistSessionDraftRecoveryCmd()
 	}
 	return c.flushQueuedInputs(queueDrainOne)
 }
@@ -493,15 +546,18 @@ func (c uiInputController) handleInjectedQueueCreateDone(msg injectedQueueCreate
 			detailErr := runtimeattach.FormatSubmissionError(msg.err)
 			statusCmd := m.sendTransientStatusWithNoticeID(detailErr, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 			m.logf("queue_create.error err=%q", detailErr)
-			m.removeInjectedQueueItemAt(index)
+			if errors.Is(msg.err, serverapi.ErrRuntimeOperationCanceled) {
+				m.removeInjectedQueueItemAt(index)
+			}
+			persistCmd := m.persistSessionDraftRecoveryCmd()
 			m.layout().syncViewport()
 			if approvalCommentaryAnswer != nil {
-				return m, batchCmds(statusCmd, m.answerQueuedApprovalCommentary(*approvalCommentaryAnswer))
+				return m, batchCmds(statusCmd, persistCmd, m.answerQueuedApprovalCommentary(*approvalCommentaryAnswer))
 			}
-			return m, statusCmd
+			return m, tea.Batch(statusCmd, persistCmd)
 		}
 		m.removeInjectedQueueItemAt(index)
-		return m, nil
+		return m, m.persistSessionDraftRecoveryCmd()
 	}
 	if msg.completed {
 		m.removePendingInjectedByID(item.LocalID)
@@ -511,9 +567,9 @@ func (c uiInputController) handleInjectedQueueCreateDone(msg injectedQueueCreate
 		}
 		m.rememberPromptHistoryLocally(item.Text)
 		if approvalCommentaryAnswer != nil {
-			return m, m.answerQueuedApprovalCommentary(*approvalCommentaryAnswer)
+			return m, tea.Batch(m.answerQueuedApprovalCommentary(*approvalCommentaryAnswer), m.persistSessionDraftRecoveryCmd())
 		}
-		return m, nil
+		return m, m.persistSessionDraftRecoveryCmd()
 	}
 	serverID := strings.TrimSpace(msg.item.ID)
 	if serverID == "" {
@@ -533,8 +589,12 @@ func (c uiInputController) handleInjectedQueueCreateDone(msg injectedQueueCreate
 		m.replacePendingInjectedID(item.LocalID, clientui.QueuedUserMessage{ID: serverID, Text: serverText})
 		m.rememberPromptHistoryLocally(serverText)
 		if approvalCommentaryAnswer != nil {
-			return m, m.answerQueuedApprovalCommentary(*approvalCommentaryAnswer)
+			return m, tea.Batch(m.answerQueuedApprovalCommentary(*approvalCommentaryAnswer), m.persistSessionDraftRecoveryCmd())
 		}
+		if !m.blocksRuntimeInput() && !m.injectedQueueBlocksDrain() {
+			return m, tea.Batch(c.resumeQueuedInputsAfterIdleRuntime(), m.persistSessionDraftRecoveryCmd())
+		}
+		return m, m.persistSessionDraftRecoveryCmd()
 	case injectedRuntimeQueueCanceledBeforeCreate:
 		token := m.nextInjectedQueueToken()
 		item.State = injectedRuntimeQueueDiscardPending
@@ -565,7 +625,10 @@ func (c uiInputController) handleInjectedQueueDiscardDone(msg injectedQueueDisca
 		m.removePendingInjectedByID(item.LocalID)
 		m.removePendingInjectedByID(item.ServerID)
 		m.removeInjectedQueueItemAt(index)
-		return m, c.resumeQueuedInputsAfterIdleRuntime()
+		if !m.blocksRuntimeInput() && !m.injectedQueueBlocksDrain() {
+			return m, tea.Batch(c.resumeQueuedInputsAfterIdleRuntime(), m.persistSessionDraftRecoveryCmd())
+		}
+		return m, m.persistSessionDraftRecoveryCmd()
 	}
 	item.State = injectedRuntimeQueueDiscardFailed
 	m.injectedQueue[index] = item
@@ -601,6 +664,10 @@ func (m *uiModel) replacePendingInjectedID(oldID string, next clientui.QueuedUse
 		return
 	}
 	m.pendingInjected = append(m.pendingInjected, next)
+}
+
+func (m *uiModel) upsertPendingInjected(next clientui.QueuedUserMessage) {
+	m.replacePendingInjectedID(next.ID, next)
 }
 
 func (m *uiModel) removePendingInjectedByID(id string) {

@@ -467,7 +467,6 @@ func ongoingHydrationMessage(sequence uint64) clientui.TranscriptMessage {
 				State:          clientui.RuntimeActivityRegisteredIdle,
 				QueueAccepting: true,
 			},
-			InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{},
 		},
 		CommittedRows: []clientui.TranscriptCommittedRow{},
 	}))
@@ -492,23 +491,17 @@ func ongoingTranscriptMessage(sequence uint64, kind clientui.TranscriptMessageKi
 				State:          clientui.RuntimeActivityRegisteredIdle,
 				QueueAccepting: true,
 			},
-			InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{},
 		})
 	case clientui.TranscriptMessageQueuedMessageState:
 		text := "queued prompt"
 		event = clientui.NewTranscriptEvent(clientui.TranscriptQueuedMessageState{
-			ClientRequestID: ongoingTestClientRequestID(),
-			QueueItemID:     ongoingTestQueueItemID(),
-			Status:          clientui.QueuedUserMessageAccepted,
-			Text:            &text,
+			QueueItemID: ongoingTestQueueItemID(),
+			Status:      clientui.QueuedUserMessageAccepted,
+			Text:        &text,
 		})
 	case clientui.TranscriptMessageUserMessageFlushed:
 		event = clientui.NewTranscriptEvent(clientui.TranscriptUserMessageFlushed{
 			StepID: ongoingTestStepID(),
-			Operations: []clientui.RuntimeOperationRef{{
-				Kind:            clientui.RuntimeOperationKindSubmit,
-				ClientRequestID: ongoingTestClientRequestID(),
-			}},
 		})
 	case clientui.TranscriptMessageSessionStatus:
 		event = clientui.NewTranscriptEvent(clientui.TranscriptSessionStatus{
@@ -596,14 +589,6 @@ func ongoingTestRunID() runtimeids.RunID {
 
 func ongoingTestStepID() runtimeids.StepID {
 	id, err := runtimeids.ParseStepID("cccccccc-cccc-4ccc-8ccc-cccccccccccc")
-	if err != nil {
-		panic(err)
-	}
-	return id
-}
-
-func ongoingTestClientRequestID() runtimeids.RuntimeClientRequestID {
-	id, err := runtimeids.ParseRuntimeClientRequestID("dddddddd-dddd-4ddd-8ddd-dddddddddddd")
 	if err != nil {
 		panic(err)
 	}

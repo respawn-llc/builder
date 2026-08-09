@@ -5,11 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"core/shared/apicontract"
 	"core/shared/clientui"
-	"core/shared/rpcwire"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/textutil"
@@ -18,14 +16,10 @@ import (
 	"github.com/google/uuid"
 )
 
-var transcriptPromptAnswerRetryDelays = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second}
-
 type transcriptPromptAnswerer struct {
 	ctx                   context.Context
 	control               apicontract.PromptControlService
 	connectionOutcomeSink func(error)
-	retryDelays           []time.Duration
-	retryWait             func(context.Context, time.Duration) error
 }
 
 type transcriptPromptKey struct {
@@ -51,8 +45,6 @@ func newTranscriptPromptAnswerer(ctx context.Context, control apicontract.Prompt
 	}
 	return &transcriptPromptAnswerer{
 		ctx: ctx, control: control,
-		retryDelays: transcriptPromptAnswerRetryDelays,
-		retryWait:   rpcwire.WaitForRetry,
 	}
 }
 
@@ -93,16 +85,14 @@ func (a *transcriptPromptAnswerer) delivery(
 		cancel()
 		return nil, nil, err
 	}
-	delays := append([]time.Duration(nil), a.retryDelays...)
-	wait := a.retryWait
 	return active, func() tea.Msg {
-		err := retryTranscriptPromptAnswer(deliveryCtx, delays, wait, func() error {
-			err := submit(deliveryCtx)
-			if a.connectionOutcomeSink != nil {
-				a.connectionOutcomeSink(err)
-			}
-			return err
-		})
+		err := deliveryCtx.Err()
+		if err == nil {
+			err = submit(deliveryCtx)
+		}
+		if a.connectionOutcomeSink != nil {
+			a.connectionOutcomeSink(err)
+		}
 		return promptAnswerDeliveryResultMsg{key: key, requestID: requestID, err: err}
 	}, nil
 }
@@ -192,42 +182,6 @@ func (d *activePromptAnswerDelivery) cancelPending() {
 
 func (d *activePromptAnswerDelivery) matches(key transcriptPromptKey, requestID uuid.UUID) bool {
 	return d != nil && d.key == key && d.requestID == requestID
-}
-
-func retryTranscriptPromptAnswer(
-	ctx context.Context,
-	delays []time.Duration,
-	wait func(context.Context, time.Duration) error,
-	submit func() error,
-) error {
-	submitIfActive := func() error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		return submit()
-	}
-	err := submitIfActive()
-	for _, delay := range delays {
-		if !shouldRetryTranscriptPromptAnswer(err) {
-			return err
-		}
-		if err := wait(ctx, delay); err != nil {
-			return err
-		}
-		err = submitIfActive()
-	}
-	return err
-}
-
-func shouldRetryTranscriptPromptAnswer(err error) bool {
-	if err == nil {
-		return false
-	}
-	return !errors.Is(err, context.Canceled) &&
-		!errors.Is(err, context.DeadlineExceeded) &&
-		!errors.Is(err, serverapi.ErrPromptNotFound) &&
-		!errors.Is(err, serverapi.ErrPromptAlreadyResolved) &&
-		!errors.Is(err, serverapi.ErrPromptUnsupported)
 }
 
 func clonePromptAnswer(answer clientui.PromptAnswer) clientui.PromptAnswer {

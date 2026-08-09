@@ -114,10 +114,10 @@ func TestBusyEnterDispatchesCompact(t *testing.T) {
 		t.Fatalf("compact dispatch = cmd %v, input %q, queued %+v, compacting %t", cmd, testMainInput(updated), updated.queued, updated.isCompacting())
 	}
 	testSetMainInput(updated, "/compact again")
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd = updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	updated = next.(*uiModel)
-	if refs := updated.pendingRuntimeOperationRefs(); len(refs) != 1 {
-		t.Fatalf("repeat compact pending refs = %+v, want one visible cancellable operation", refs)
+	if cmd != nil || !updated.isCompacting() {
+		t.Fatalf("repeat compact dispatch = cmd %v compacting %t, want existing compaction only", cmd, updated.isCompacting())
 	}
 }
 

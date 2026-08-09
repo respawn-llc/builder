@@ -113,8 +113,10 @@ func TestInjectedQueueCreateConnectionFailureRestoresDraftWithoutTranscriptEntry
 	if got, want := testMainInputRuneCursor(updated), len([]rune(wantInput)); got != want {
 		t.Fatalf("composer cursor = %d, want %d", got, want)
 	}
-	if len(updated.pendingInjected) != 0 || len(updated.injectedQueue) != 0 {
-		t.Fatalf("failed queue state = pending %d, queue %d; want no items", len(updated.pendingInjected), len(updated.injectedQueue))
+	if len(updated.pendingInjected) != 0 || len(updated.injectedQueue) != 1 ||
+		updated.injectedQueue[0].State != injectedRuntimeQueueCreateFailed ||
+		!updated.injectedQueue[0].RecoveryOwned {
+		t.Fatalf("failed queue recovery = pending %+v queue %+v, want one active recovery owner", updated.pendingInjected, updated.injectedQueue)
 	}
 	if updated.activity != beforeActivity {
 		t.Fatalf("activity = %v, want pre-failure activity %v", updated.activity, beforeActivity)
@@ -192,8 +194,10 @@ func TestAllowCommentaryQueueCreateConnectionFailureAnswersIndependently(t *test
 	if got, want := testMainInput(model), "failed commentary"; got != want {
 		t.Fatalf("restored commentary = %q, want %q", got, want)
 	}
-	if len(model.pendingInjected) != 0 || len(model.injectedQueue) != 0 {
-		t.Fatalf("failed queue state = pending %d, queue %d; want no items", len(model.pendingInjected), len(model.injectedQueue))
+	if len(model.pendingInjected) != 0 || len(model.injectedQueue) != 1 ||
+		model.injectedQueue[0].State != injectedRuntimeQueueCreateFailed ||
+		!model.injectedQueue[0].RecoveryOwned {
+		t.Fatalf("failed queue recovery = pending %+v queue %+v, want one active recovery owner", model.pendingInjected, model.injectedQueue)
 	}
 	if model.activity == uiActivityError {
 		t.Fatalf("activity = %v, want no failure-owned error label", model.activity)
@@ -235,8 +239,17 @@ func TestAllowCommentaryQueueCreateConnectionFailureAnswersIndependently(t *test
 		t.Fatalf("approval request = %+v, want Allow once with failed commentary", approvalRequest)
 	}
 
-	deliveryResult := <-results
-	model = updateUIModel(t, model, deliveryResult)
+	remainingResults := len(batch)
+	deliveryObserved := false
+	for remainingResults > 0 && !deliveryObserved {
+		result := <-results
+		remainingResults--
+		model = updateUIModel(t, model, result)
+		_, deliveryObserved = result.(promptAnswerDeliveryResultMsg)
+	}
+	if !deliveryObserved {
+		t.Fatal("approval delivery produced no result")
+	}
 	model = updateUIModel(t, model, <-model.runtimeConnectionEvents)
 	if model.runtimeDisconnectStatusVisible() {
 		t.Fatal("successful approval delivery did not clear the disconnect state")
@@ -246,7 +259,10 @@ func TestAllowCommentaryQueueCreateConnectionFailureAnswersIndependently(t *test
 	}
 
 	close(releaseExpiry)
-	model = updateUIModel(t, model, <-results)
+	for remainingResults > 0 {
+		model = updateUIModel(t, model, <-results)
+		remainingResults--
+	}
 	if got := ansi.Strip(model.layout().renderStatusNotice(statusLineUnboundedWidth)); got != "" {
 		t.Fatalf("status after transient expiry = %q, want empty", got)
 	}

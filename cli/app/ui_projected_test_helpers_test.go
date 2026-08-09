@@ -41,7 +41,22 @@ func waitForTestCondition(t *testing.T, timeout time.Duration, label string, con
 }
 
 func newProjectedTestUIModel(runtimeClient clientui.RuntimeClient, opts ...UIOption) *uiModel {
-	return NewProjectedUIModel(runtimeClient, opts...).(*uiModel)
+	defaults := []UIOption{
+		WithUISessionID("11111111-1111-4111-8111-111111111111"),
+		WithUISessionDraftPersistence(testSessionDraftPersistence{}),
+	}
+	return NewProjectedUIModel(runtimeClient, append(defaults, opts...)...).(*uiModel)
+}
+
+type testSessionDraftPersistence struct {
+	apicontract.SessionLifecycleService
+}
+
+func (testSessionDraftPersistence) PersistInputDraft(
+	context.Context,
+	serverapi.SessionPersistInputDraftRequest,
+) (serverapi.SessionPersistInputDraftResponse, error) {
+	return serverapi.SessionPersistInputDraftResponse{}, nil
 }
 
 func newProjectedClosedUIModel(runtimeClient clientui.RuntimeClient, opts ...UIOption) *uiModel {
@@ -222,7 +237,7 @@ func newProjectedAuthorityRuntime(
 	reads := sessionview.NewService(testSessionViewSessionResolver{store: store}, activity, authority, nil)
 	controls := runtimecontrol.NewService(authority).WithRuntimeActivityResolver(activity)
 	runtimeClient := newUIRuntimeClientWithReads(sessionID.String(), reads, controls).(*sessionRuntimeClient)
-	snapshot, err := activity.RuntimeReadModelSnapshot(context.Background(), sessionID.String(), nil)
+	snapshot, err := activity.RuntimeReadModelSnapshot(context.Background(), sessionID.String())
 	if err != nil {
 		t.Fatalf("projected runtime snapshot: %v", err)
 	}

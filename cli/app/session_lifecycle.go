@@ -297,6 +297,7 @@ func prepareSessionUIRun(
 		initialPromptHistoryRecorded: initialPromptHistoryRecorded,
 		initialInput:                 initialState.Input,
 		recoveryBuffers:              initialState.RecoveryBuffers,
+		sessionDraftPersistence:      server.SessionLifecycleClient(),
 		sessionTitle:                 textutil.Pointer(plan.SessionTitle),
 		modelContractLocked:          plan.ModelContractLocked,
 		configuredModelName:          plan.ConfiguredModelName,

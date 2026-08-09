@@ -24,8 +24,9 @@ import (
 	"core/shared/protocol"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
-
-	"github.com/google/uuid"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 )
 
 type configuredDaemonFixture struct {
@@ -471,10 +472,9 @@ func TestRemoteInteractiveRuntimeAnswersPromptsFromAnyAttachedClientAcrossWorksp
 	runtimeClientsB := fixture.serverB.RuntimeAttachmentClients()
 
 	if err := runtimeClientsB.PromptControl.AnswerAsk(context.Background(), serverapi.AskAnswerRequest{
-		ClientRequestID: uuid.NewString(),
-		SessionID:       fixture.planA.SessionID,
-		AskID:           "ask-race-1",
-		Answer:          "answer from client B",
+		SessionID: fixture.planA.SessionID,
+		AskID:     "ask-race-1",
+		Answer:    "answer from client B",
 	}); err != nil {
 		t.Fatalf("AnswerAsk from attached client B: %v", err)
 	}
@@ -486,11 +486,10 @@ func TestRemoteInteractiveRuntimeAnswersPromptsFromAnyAttachedClientAcrossWorksp
 
 	commentary := "approved by client B"
 	if err := runtimeClientsB.PromptControl.AnswerApproval(context.Background(), serverapi.ApprovalAnswerRequest{
-		ClientRequestID: uuid.NewString(),
-		SessionID:       fixture.planA.SessionID,
-		ApprovalID:      string(approvalPrompt.PromptID),
-		Decision:        clientui.ApprovalDecisionAllowOnce,
-		Commentary:      &commentary,
+		SessionID:  fixture.planA.SessionID,
+		ApprovalID: string(approvalPrompt.PromptID),
+		Decision:   clientui.ApprovalDecisionAllowOnce,
+		Commentary: &commentary,
 	}); err != nil {
 		t.Fatalf("AnswerApproval from attached client B: %v", err)
 	}

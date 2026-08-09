@@ -116,35 +116,21 @@ func isRecoverableRuntimeControlError(err error) bool {
 	return errors.Is(err, serverapi.ErrRuntimeUnavailable)
 }
 
-func runtimeControlCall[T any](c *sessionRuntimeClient, appendWarning bool, call func(ctx context.Context) (T, error)) (T, error) {
+func runtimeControlCall[T any](call func(ctx context.Context) (T, error)) (T, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), uiRuntimeControlTimeout)
 	defer cancel()
-	return runtimeRequestCall(ctx, c, appendWarning, call)
+	return runtimeRequestCall(ctx, call)
 }
 
-func runtimeRequestCall[T any](ctx context.Context, c *sessionRuntimeClient, appendWarning bool, call func(ctx context.Context) (T, error)) (T, error) {
-	return retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionWithWarning, appendWarning, func() (T, error) {
-		return call(ctx)
-	})
+func runtimeRequestCall[T any](ctx context.Context, call func(ctx context.Context) (T, error)) (T, error) {
+	return call(ctx)
 }
 
-func runtimeControlCallNoResult(c *sessionRuntimeClient, call func(ctx context.Context) error) error {
-	_, err := runtimeControlCall(c, true, func(ctx context.Context) (struct{}, error) {
+func runtimeControlCallNoResult(call func(ctx context.Context) error) error {
+	_, err := runtimeControlCall(func(ctx context.Context) (struct{}, error) {
 		return struct{}{}, call(ctx)
 	})
 	return err
-}
-
-func retryRuntimeUnavailableCall[T any](ctx context.Context, recoverRuntimeConnection func(context.Context, error, bool) error, appendRecoveryWarning bool, call func() (T, error)) (T, error) {
-	value, err := call()
-	if !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
-		return value, err
-	}
-	var zero T
-	if recoverErr := recoverRuntimeConnection(ctx, err, appendRecoveryWarning); recoverErr != nil {
-		return zero, recoverErr
-	}
-	return call()
 }
 
 func (c *sessionRuntimeClient) SetConnectionStateObserver(observer func(error)) {
@@ -214,7 +200,7 @@ func (c *sessionRuntimeClient) fetchMainView() (clientui.RuntimeMainView, error)
 func (c *sessionRuntimeClient) fetchMainViewSync(timeout time.Duration) (clientui.RuntimeMainView, error) {
 	ctx, cancel := c.readContext(timeout)
 	defer cancel()
-	resp, err := retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionPreservingContext, false, func() (serverapi.SessionMainViewResponse, error) {
+	resp, err := retryRuntimeUnavailableRead(ctx, c.recoverRuntimeConnectionPreservingContext, func() (serverapi.SessionMainViewResponse, error) {
 		return c.reads.GetSessionMainView(ctx, serverapi.SessionMainViewRequest{SessionID: c.sessionID})
 	})
 	c.notifyConnectionState(err)
@@ -229,6 +215,22 @@ func (c *sessionRuntimeClient) fetchMainViewSync(timeout time.Duration) (clientu
 		resp.MainView.Session.SessionID = c.sessionID
 	}
 	return resp.MainView, nil
+}
+
+func retryRuntimeUnavailableRead[T any](
+	ctx context.Context,
+	recoverRuntimeConnection func(context.Context, error, bool) error,
+	read func() (T, error),
+) (T, error) {
+	value, err := read()
+	if !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
+		return value, err
+	}
+	var zero T
+	if recoverErr := recoverRuntimeConnection(ctx, err, false); recoverErr != nil {
+		return zero, recoverErr
+	}
+	return read()
 }
 
 func (c *sessionRuntimeClient) notifyConnectionState(err error) {

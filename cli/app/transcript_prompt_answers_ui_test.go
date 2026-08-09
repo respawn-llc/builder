@@ -3,17 +3,15 @@ package app
 import (
 	"context"
 	"errors"
-	"io"
 	"sync"
 	"testing"
-	"time"
 
-	"core/server/runtime"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/google/uuid"
 )
 
 func approvalCommentary(request serverapi.ApprovalAnswerRequest) string {
@@ -47,7 +45,7 @@ func TestApprovalAnswerOmitsAbsentCommentary(t *testing.T) {
 		Approval: &clientui.ApprovalPromptAnswer{
 			Decision: clientui.ApprovalDecisionAllowOnce,
 		},
-	}, nil, runtimeids.NewRuntimeClientRequestID())
+	}, nil, uuid.New())
 	if err != nil {
 		t.Fatalf("submitter: %v", err)
 	}
@@ -236,9 +234,6 @@ func TestAskDeadlineKeepsEditedRetryDraftActionableUntilCanonicalResolution(t *t
 	if len(requests) != 2 {
 		t.Fatalf("ask requests = %d, want deadline attempt plus user resubmission", len(requests))
 	}
-	if requests[0].ClientRequestID == "" || requests[1].ClientRequestID == "" || requests[0].ClientRequestID == requests[1].ClientRequestID {
-		t.Fatalf("request IDs = %q, %q; want distinct non-empty IDs", requests[0].ClientRequestID, requests[1].ClientRequestID)
-	}
 	if requests[0].Answer != "original" || requests[0].FreeformAnswer != "original" {
 		t.Fatalf("first immutable request = %+v, want original draft", requests[0])
 	}
@@ -315,104 +310,6 @@ func TestAskDeliverySetupFailureKeepsQuestionActivity(t *testing.T) {
 	}
 }
 
-func TestAskRetryThenSuccessKeepsOneRequestIDUntilCanonicalResolution(t *testing.T) {
-	control := &scriptedAskPromptControl{results: []error{
-		errors.New("retryable one"),
-		errors.New("retryable two"),
-		nil,
-	}}
-	answerer := newTranscriptPromptAnswerer(context.Background(), control)
-	answerer.retryWait = func(context.Context, time.Duration) error { return nil }
-
-	model := newProjectedStaticUIModel()
-	model.promptAnswers = answerer
-	model = updateUIModel(t, model, askEventMsg{event: model.transcriptPromptEvent(
-		testQuestionPrompt("ask-retry-success", "Provide details"),
-	)})
-	model = updateUIModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("answer")})
-
-	next, delivery := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	model = runPromptDeliveryCommand(t, next.(*uiModel), delivery)
-	requests := control.requests()
-	if len(requests) != 3 {
-		t.Fatalf("ask requests = %d, want two retries then success", len(requests))
-	}
-	wantRequest := requests[0]
-	for index, request := range requests {
-		if request != wantRequest {
-			t.Fatalf("request %d = %+v, want immutable %+v", index, request, wantRequest)
-		}
-	}
-	if !testPromptAnswerDeliveryActive(model) || testActiveAsk(model) == nil {
-		t.Fatal("successful retry resolved the prompt before canonical transcript resolution")
-	}
-	resolveAnsweredTestAskThroughTranscript(t, model)
-	if testActiveAsk(model) != nil {
-		t.Fatal("prompt remained after canonical transcript resolution")
-	}
-}
-
-func TestAskRetryReportsDisconnectAndReachabilityBeforeFinalDelivery(t *testing.T) {
-	control := &scriptedAskPromptControl{results: []error{io.EOF, nil}}
-	waitStarted := make(chan struct{})
-	releaseWait := make(chan struct{})
-	answerer := newTranscriptPromptAnswerer(context.Background(), control)
-	answerer.retryWait = func(waitCtx context.Context, _ time.Duration) error {
-		close(waitStarted)
-		select {
-		case <-waitCtx.Done():
-			return waitCtx.Err()
-		case <-releaseWait:
-			return nil
-		}
-	}
-
-	model := newProjectedAuthorityUIModel(t, statusLineFakeClient{}, runtime.Config{ContextWindowTokens: 400_000})
-	if model.runtimeConnectionEvents == nil {
-		t.Fatal("projected runtime model did not create the global connection event channel")
-	}
-	model.promptAnswers = answerer.withConnectionOutcomeSink(func(err error) {
-		enqueueRuntimeConnectionStateChange(model.runtimeConnectionEvents, err)
-	})
-	model = updateUIModel(t, model, askEventMsg{event: model.transcriptPromptEvent(
-		testQuestionPrompt("ask-connection-retry", "Proceed?", "Yes", "No"),
-	)})
-
-	next, delivery := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	model = next.(*uiModel)
-	finalResult := make(chan tea.Msg, 1)
-	go func() {
-		finalResult <- delivery()
-	}()
-	<-waitStarted
-
-	model = updateUIModel(t, model, <-model.runtimeConnectionEvents)
-	if !model.runtimeDisconnectStatusVisible() {
-		t.Fatal("disconnect was not visible while prompt delivery remained in backoff")
-	}
-	if !testPromptAnswerDeliveryActive(model) {
-		t.Fatal("connection failure prematurely cleared active delivery")
-	}
-	if model.transientStatus != "" {
-		t.Fatalf("connection failure created prompt-local notice %q", model.transientStatus)
-	}
-
-	close(releaseWait)
-	model = updateUIModel(t, model, <-model.runtimeConnectionEvents)
-	if model.runtimeDisconnectStatusVisible() {
-		t.Fatal("reachable retry did not clear the global disconnect state")
-	}
-	model = updateUIModel(t, model, <-finalResult)
-	if !testPromptAnswerDeliveryActive(model) || testActiveAsk(model) == nil {
-		t.Fatal("successful delivery stopped awaiting canonical prompt resolution")
-	}
-	requests := control.requests()
-	if len(requests) != 2 || requests[0].ClientRequestID != requests[1].ClientRequestID {
-		t.Fatalf("retry requests = %+v, want two calls with one stable request ID", requests)
-	}
-	resolveAnsweredTestAskThroughTranscript(t, model)
-}
-
 func TestAskSameKeyRefreshPreservesActiveDeliveryDraftAndSelection(t *testing.T) {
 	control := newDeadlineThenSuccessPromptControl()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -458,100 +355,6 @@ func TestAskSameKeyRefreshPreservesActiveDeliveryDraftAndSelection(t *testing.T)
 	model = updateUIModel(t, model, <-result)
 	if testPromptAnswerDeliveryActive(model) {
 		t.Fatal("deadline result left refreshed delivery active")
-	}
-}
-
-func TestAskResolutionCancelsConnectionBackoffWithoutFabricatingReachability(t *testing.T) {
-	control := &scriptedAskPromptControl{results: []error{io.EOF}}
-	waitStarted := make(chan struct{})
-	answerer := newTranscriptPromptAnswerer(context.Background(), control)
-	answerer.retryWait = func(waitCtx context.Context, _ time.Duration) error {
-		close(waitStarted)
-		<-waitCtx.Done()
-		return waitCtx.Err()
-	}
-
-	model := newProjectedAuthorityUIModel(t, statusLineFakeClient{}, runtime.Config{ContextWindowTokens: 400_000})
-	model.promptAnswers = answerer.withConnectionOutcomeSink(func(err error) {
-		enqueueRuntimeConnectionStateChange(model.runtimeConnectionEvents, err)
-	})
-	first := testQuestionPrompt("ask-cancel-backoff", "First?", "Yes", "No")
-	second := testQuestionPrompt("ask-after-cancel", "Second?", "Continue", "Stop")
-	model = updateUIModel(t, model, askEventMsg{event: model.transcriptPromptEvent(first)})
-	model = updateUIModel(t, model, askEventMsg{event: model.transcriptPromptEvent(second)})
-
-	next, delivery := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	model = next.(*uiModel)
-	finalResult := make(chan tea.Msg, 1)
-	go func() {
-		finalResult <- delivery()
-	}()
-	<-waitStarted
-	model = updateUIModel(t, model, <-model.runtimeConnectionEvents)
-	if !model.runtimeDisconnectStatusVisible() {
-		t.Fatal("disconnect was not visible before cancellation")
-	}
-
-	resolveAnsweredTestAskThroughTranscript(t, model)
-	if active := testActiveAsk(model); active == nil || active.prompt.PromptID != second.PromptID {
-		t.Fatalf("authoritative resolution did not activate the next prompt: %+v", active)
-	}
-	model = updateUIModel(t, model, <-finalResult)
-	if active := testActiveAsk(model); active == nil || active.prompt.PromptID != second.PromptID {
-		t.Fatalf("stale canceled result changed the next prompt: %+v", active)
-	}
-	if len(control.requests()) != 1 {
-		t.Fatalf("service calls = %d, want no retry after cancellation", len(control.requests()))
-	}
-	select {
-	case outcome := <-model.runtimeConnectionEvents:
-		t.Fatalf("cancellation fabricated connection outcome %+v", outcome)
-	default:
-	}
-	if !model.runtimeDisconnectStatusVisible() {
-		t.Fatal("cancellation incorrectly cleared the global disconnect state")
-	}
-
-	enqueueRuntimeConnectionStateChange(model.runtimeConnectionEvents, nil)
-	model = updateUIModel(t, model, <-model.runtimeConnectionEvents)
-	if model.runtimeDisconnectStatusVisible() {
-		t.Fatal("a later real reachable outcome did not clear disconnect state")
-	}
-}
-
-func TestAskConnectionExhaustionUsesOnlyGlobalDisconnectNotice(t *testing.T) {
-	control := &scriptedAskPromptControl{results: []error{io.EOF, io.EOF, io.EOF, io.EOF, io.EOF, io.EOF}}
-	answerer := newTranscriptPromptAnswerer(context.Background(), control)
-	answerer.retryWait = func(context.Context, time.Duration) error { return nil }
-
-	model := newProjectedAuthorityUIModel(t, statusLineFakeClient{}, runtime.Config{ContextWindowTokens: 400_000})
-	model.promptAnswers = answerer.withConnectionOutcomeSink(func(err error) {
-		enqueueRuntimeConnectionStateChange(model.runtimeConnectionEvents, err)
-	})
-	model = updateUIModel(t, model, askEventMsg{event: model.transcriptPromptEvent(
-		testQuestionPrompt("ask-connection-exhausted", "Proceed?", "Yes", "No"),
-	)})
-
-	next, delivery := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	model = next.(*uiModel)
-	result := delivery()
-	model = updateUIModel(t, model, <-model.runtimeConnectionEvents)
-	model = updateUIModel(t, model, result)
-
-	if !model.runtimeDisconnectStatusVisible() {
-		t.Fatal("connection exhaustion did not leave the global disconnect visible")
-	}
-	if model.transientStatus != "" {
-		t.Fatalf("connection exhaustion created prompt-local notice %q", model.transientStatus)
-	}
-	if testPromptAnswerDeliveryActive(model) || testActiveAsk(model) == nil {
-		t.Fatal("connection exhaustion did not restore the unresolved prompt")
-	}
-	if model.activity != uiActivityQuestion {
-		t.Fatalf("connection exhaustion activity = %d, want question", model.activity)
-	}
-	if len(control.requests()) != 6 {
-		t.Fatalf("service calls = %d, want bounded six calls", len(control.requests()))
 	}
 }
 
@@ -757,9 +560,6 @@ func TestDenyCommentaryDeadlineKeepsEditedDraftActionableWithoutQueuedCopy(t *te
 	if approvalCommentary(requests[0]) != "original denial" || approvalCommentary(requests[1]) != "original denial edited" {
 		t.Fatalf("denial commentary = %q then %q, want immutable submission then edited retry", approvalCommentary(requests[0]), approvalCommentary(requests[1]))
 	}
-	if requests[0].ClientRequestID == requests[1].ClientRequestID {
-		t.Fatalf("denial resubmission reused request ID %q", requests[0].ClientRequestID)
-	}
 	if len(model.pendingInjected) != 0 {
 		t.Fatalf("denial commentary created a queued copy: %+v", model.pendingInjected)
 	}
@@ -798,6 +598,7 @@ func TestAllowCommentaryQueueUnlocksBeforeCancelableApprovalDelivery(t *testing.
 	if deliveryCommand == nil || model.ask.answerPending {
 		t.Fatal("completed queue stage did not unlock the prompt before approval delivery")
 	}
+	model, deliveryCommand = splitPromptDeliveryEffects(t, model, deliveryCommand)
 
 	firstResult := make(chan tea.Msg, 1)
 	go func() {
@@ -885,6 +686,7 @@ func TestAllowCommentaryAnswerDeadlineRestoresFreshQueueAndAnswerResubmission(t 
 	model = next.(*uiModel)
 	next, firstDelivery := model.Update(firstQueueCommand())
 	model = next.(*uiModel)
+	model, firstDelivery = splitPromptDeliveryEffects(t, model, firstDelivery)
 	firstResult := make(chan tea.Msg, 1)
 	go func() {
 		firstResult <- firstDelivery()
@@ -904,7 +706,8 @@ func TestAllowCommentaryAnswerDeadlineRestoresFreshQueueAndAnswerResubmission(t 
 	next, secondQueueCommand := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = next.(*uiModel)
 	next, secondDelivery := model.Update(secondQueueCommand())
-	model = runPromptDeliveryCommand(t, next.(*uiModel), secondDelivery)
+	model, secondDelivery = splitPromptDeliveryEffects(t, next.(*uiModel), secondDelivery)
+	model = runPromptDeliveryCommand(t, model, secondDelivery)
 
 	requests := control.requests()
 	if len(requests) != 2 {
@@ -912,9 +715,6 @@ func TestAllowCommentaryAnswerDeadlineRestoresFreshQueueAndAnswerResubmission(t 
 	}
 	if approvalCommentary(requests[0]) != "original allow" || approvalCommentary(requests[1]) != "original allow edited" {
 		t.Fatalf("allow commentary = %q then %q, want original then edited resubmission", approvalCommentary(requests[0]), approvalCommentary(requests[1]))
-	}
-	if requests[0].ClientRequestID == requests[1].ClientRequestID {
-		t.Fatalf("allow resubmission reused request ID %q", requests[0].ClientRequestID)
 	}
 	if runtimeClient.submitCalls != 2 {
 		t.Fatalf("allow commentary submit calls = %d, want one per user submission", runtimeClient.submitCalls)
@@ -927,4 +727,21 @@ func TestAllowCommentaryAnswerDeadlineRestoresFreshQueueAndAnswerResubmission(t 
 
 func testPromptAnswerDeliveryActive(model *uiModel) bool {
 	return model != nil && model.ask.activeDelivery != nil
+}
+
+func splitPromptDeliveryEffects(t *testing.T, model *uiModel, command tea.Cmd) (*uiModel, tea.Cmd) {
+	t.Helper()
+	message := command()
+	batch, ok := message.(tea.BatchMsg)
+	if !ok || len(batch) == 0 {
+		return model, func() tea.Msg { return message }
+	}
+	delivery := batch[0]
+	for _, effect := range batch[1:] {
+		if effect == nil {
+			continue
+		}
+		model = updateUIModel(t, model, effect())
+	}
+	return model, delivery
 }

@@ -34,6 +34,7 @@ type uiLoopRequest struct {
 	initialPromptHistoryRecorded bool
 	initialInput                 string
 	recoveryBuffers              []serverapi.SessionDraftRecoveryBuffer
+	sessionDraftPersistence      apicontract.SessionLifecycleService
 	sessionTitle                 *string
 	modelContractLocked          bool
 	configuredModelName          string
@@ -148,6 +149,7 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 		WithUIStartupSubmitPromptHistoryRecorded(request.initialPromptHistoryRecorded),
 		WithUIInitialInput(request.initialInput),
 		WithUIInitialRecoveryBuffers(request.recoveryBuffers),
+		WithUISessionDraftPersistence(request.sessionDraftPersistence),
 		WithUISessionID(sessionID),
 		WithUIStatusConfig(request.statusConfig),
 		WithUITerminalCursorState(terminalCursor),

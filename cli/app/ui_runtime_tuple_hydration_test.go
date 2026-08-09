@@ -4,13 +4,11 @@ import (
 	"fmt"
 	"reflect"
 	"strconv"
-	"sync"
 	"testing"
 
 	"core/cli/tui/ongoing"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
-	"core/shared/serverapi"
 	"core/shared/transcript"
 )
 
@@ -19,7 +17,7 @@ func TestStaleContentCompleteHydrationFailsBeforeAnySideEffect(t *testing.T) {
 		&countingSessionViewClient{},
 		newUnavailableRuntimeControlService(),
 	)
-	current := runtimeTupleTestView(11, runtimeTupleTestIdleActivity(), runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationCommitted))
+	current := runtimeTupleTestView(11, runtimeTupleTestIdleActivity())
 	current.Status.ThinkingLevel = "current"
 	current.Session.SessionName = "current"
 	runtimeClient.storeMainView(current)
@@ -72,7 +70,7 @@ func TestStaleHydrationDeveloperErrorPanicsInEveryModeBeforeSideEffects(t *testi
 				&countingSessionViewClient{},
 				newUnavailableRuntimeControlService(),
 			)
-			current := runtimeTupleTestView(11, runtimeTupleTestIdleActivity(), runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationCommitted))
+			current := runtimeTupleTestView(11, runtimeTupleTestIdleActivity())
 			runtimeClient.storeMainView(current)
 			m := sizedTestUIModel(newProjectedTestUIModel(runtimeClient, WithUIDebug(debugMode)), 93, 31)
 			m.queued = []queuedInputItem{{ID: "queued-1", Text: "do not flush"}}
@@ -132,7 +130,7 @@ func TestNonStaleContentCompleteHydrationAppliesWholeEvent(t *testing.T) {
 		&countingSessionViewClient{},
 		newUnavailableRuntimeControlService(),
 	)
-	current := runtimeTupleTestView(10, runtimeTupleTestIdleActivity(), runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationAccepted))
+	current := runtimeTupleTestView(10, runtimeTupleTestIdleActivity())
 	runtimeClient.storeMainView(current)
 	m := newProjectedTestUIModel(runtimeClient)
 	surface := &ongoingSurfaceSpy{}
@@ -152,7 +150,6 @@ func TestNonStaleContentCompleteHydrationAppliesWholeEvent(t *testing.T) {
 	assertRuntimeTupleView(t, runtimeClient.MainView(), runtimeTupleTestView(
 		11,
 		wantUpdate.Activity,
-		wantUpdate.InputReconciliation,
 	))
 	if !controller.hydrated || controller.lastSequence != 1 {
 		t.Fatalf("delivery state = hydrated=%t sequence=%d, want true/1", controller.hydrated, controller.lastSequence)
@@ -182,7 +179,7 @@ func TestHydrationReplacesStaleBackgroundProcessEntries(t *testing.T) {
 		&countingSessionViewClient{},
 		newUnavailableRuntimeControlService(),
 	)
-	current := runtimeTupleTestView(10, runtimeTupleTestRunningActivity(), runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationAccepted))
+	current := runtimeTupleTestView(10, runtimeTupleTestRunningActivity())
 	runtimeClient.storeMainView(current)
 	m := newProjectedTestUIModel(runtimeClient)
 	m.processList.entries = []clientui.BackgroundProcess{
@@ -221,7 +218,7 @@ func TestHydrationReplacesStaleCompletedCompactionCountWithoutActiveCompaction(t
 		&countingSessionViewClient{},
 		newUnavailableRuntimeControlService(),
 	)
-	current := runtimeTupleTestView(10, runtimeTupleTestIdleActivity(), runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationAccepted))
+	current := runtimeTupleTestView(10, runtimeTupleTestIdleActivity())
 	current.Status.CompactionCount = 9
 	runtimeClient.storeMainView(current)
 	m := newProjectedTestUIModel(runtimeClient)
@@ -247,13 +244,12 @@ func TestHydrationReplacesStaleCompletedCompactionCountWithoutActiveCompaction(t
 }
 
 func TestAcceptedHydrationDoesNotAdvanceCacheWithUnaryRead(t *testing.T) {
-	v12 := runtimeTupleTestView(12, runtimeTupleTestIdleActivity(), runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationAccepted))
+	v12 := runtimeTupleTestView(12, runtimeTupleTestIdleActivity())
 	reads := &countingSessionViewClient{view: v12}
 	runtimeClient := newTestSessionRuntimeClient(reads, newUnavailableRuntimeControlService())
 	runtimeClient.storeMainView(runtimeTupleTestView(
 		10,
 		runtimeTupleTestIdleActivity(),
-		runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationSubmitted),
 	))
 	m := newProjectedTestUIModel(runtimeClient)
 	surface := &ongoingSurfaceSpy{}
@@ -290,18 +286,16 @@ func TestAcceptedHydrationDoesNotAdvanceCacheWithUnaryRead(t *testing.T) {
 	assertRuntimeTupleView(t, runtimeClient.MainView(), runtimeTupleTestView(
 		11,
 		hydration.Payload().(clientui.TranscriptHydration).RuntimeReadModelUpdate.Activity,
-		hydration.Payload().(clientui.TranscriptHydration).RuntimeReadModelUpdate.InputReconciliation,
 	))
 }
 
 func TestRejectedDuplicateHydrationDoesNotStartUnaryRefresh(t *testing.T) {
-	v12 := runtimeTupleTestView(12, runtimeTupleTestIdleActivity(), runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationAccepted))
+	v12 := runtimeTupleTestView(12, runtimeTupleTestIdleActivity())
 	reads := &countingSessionViewClient{view: v12}
 	runtimeClient := newTestSessionRuntimeClient(reads, newUnavailableRuntimeControlService())
 	runtimeClient.storeMainView(runtimeTupleTestView(
 		10,
 		runtimeTupleTestIdleActivity(),
-		runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationSubmitted),
 	))
 	m := newProjectedTestUIModel(runtimeClient)
 	m.ongoingTranscript = newOngoingTranscriptController(
@@ -333,140 +327,10 @@ func TestRejectedDuplicateHydrationDoesNotStartUnaryRefresh(t *testing.T) {
 	}
 }
 
-func TestHydrationAdmissionSerializesUnaryAndInterruptTupleCommitsUntilWholeEventCompletes(t *testing.T) {
-	v12 := runtimeTupleTestView(12, runtimeTupleTestIdleActivity(), runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationAccepted))
-	v12.Session.SessionID = ongoingTestSessionID().String()
-	v12.Status.ThinkingLevel = "captured unary"
-	reads := &countingSessionViewClient{view: v12}
-	controls := &reconnectRetryRuntimeControlClient{interruptResp: serverapi.RuntimeInterruptResponse{
-		Version:             clientui.ReadModelVersion{Epoch: "runtime-tuple-test", Generation: 1, Sequence: 13},
-		Activity:            runtimeTupleTestIdleActivity(),
-		InputReconciliation: runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationCommitted),
-	}}
-	runtimeClient := newTestSessionRuntimeClient(reads, controls)
-	v10 := runtimeTupleTestView(10, runtimeTupleTestIdleActivity(), runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationSubmitted))
-	v10.Session.SessionID = ongoingTestSessionID().String()
-	runtimeClient.storeMainView(v10)
-	m := newProjectedTestUIModel(runtimeClient)
-	surface := newBlockingOngoingSurface()
-	controller := newOngoingTranscriptController(
-		surface,
-		m.ongoingFrameInput,
-		runtimeClient.admitTranscriptMessageState,
-		m.applyAdmittedTranscriptMessageState,
-	)
-	hydration := runtimeTupleTestRichHydration(11)
-	acceptDone := make(chan error, 1)
-	go func() {
-		_, _, err := controller.Accept(hydration)
-		acceptDone <- err
-	}()
-	<-surface.started
-
-	wantV11 := runtimeTupleTestView(
-		11,
-		hydration.Payload().(clientui.TranscriptHydration).RuntimeReadModelUpdate.Activity,
-		hydration.Payload().(clientui.TranscriptHydration).RuntimeReadModelUpdate.InputReconciliation,
-	)
-	assertRuntimeTupleView(t, runtimeClient.MainView(), wantV11)
-	if !m.runtimeActivityBusy() || controller.lastSequence != 1 || !controller.hydrated {
-		t.Fatalf(
-			"hydration admission was not coherent before terminal completion: busy=%t hydrated=%t sequence=%d",
-			m.runtimeActivityBusy(),
-			controller.hydrated,
-			controller.lastSequence,
-		)
-	}
-	if surface.completedApplyCount() != 0 {
-		t.Fatal("terminal hydration completed before release")
-	}
-
-	refresh := m.startRuntimeMainViewRefreshRequest(runtimeMainViewRefreshRequestForCause(runtimeMainViewRefreshCauseManual))
-	refreshMessage, ok := refresh.cmd().(runtimeMainViewRefreshedMsg)
-	if !ok {
-		t.Fatalf("refresh command returned an unexpected message")
-	}
-	if refreshMessage.view.Version != v12.Version {
-		t.Fatalf("refresh candidate version = %+v, want %+v", refreshMessage.view.Version, v12.Version)
-	}
-	assertRuntimeTupleView(t, runtimeClient.MainView(), wantV11)
-
-	interruptCommand := m.runtimeControlCommand(runtimeControlInterrupt, "", false, "")
-	interruptMessage, ok := interruptCommand().(runtimeControlDoneMsg)
-	if !ok {
-		t.Fatalf("interrupt command returned an unexpected message")
-	}
-	if interruptMessage.runtimeTuple == nil || interruptMessage.runtimeTuple.Version.Sequence != 13 {
-		t.Fatalf("interrupt candidate = %+v, want V13", interruptMessage.runtimeTuple)
-	}
-	assertRuntimeTupleView(t, runtimeClient.MainView(), wantV11)
-	if surface.completedApplyCount() != 0 {
-		t.Fatal("worker completion partially replaced terminal hydration")
-	}
-
-	close(surface.release)
-	if err := <-acceptDone; err != nil {
-		t.Fatalf("finish hydration: %v", err)
-	}
-	if surface.completedApplyCount() != 1 {
-		t.Fatalf("completed terminal hydration count = %d, want 1", surface.completedApplyCount())
-	}
-
-	next, _ := m.Update(refreshMessage)
-	m = next.(*uiModel)
-	assertRuntimeTupleView(t, runtimeClient.MainView(), v12)
-	next, _ = m.Update(interruptMessage)
-	m = next.(*uiModel)
-	wantV13 := runtimeTupleTestView(13, controls.interruptResp.Activity, controls.interruptResp.InputReconciliation)
-	assertRuntimeTupleView(t, runtimeClient.MainView(), wantV13)
-	if m.runtimeActivityBusy() || m.runtimeActivityBlocksInput() {
-		t.Fatalf("reduced monotonic candidates left runtime busy: %+v", m.runtimeActivityProjection)
-	}
-}
-
-type blockingOngoingSurface struct {
-	started   chan struct{}
-	release   chan struct{}
-	startOnce sync.Once
-	mu        sync.Mutex
-	applied   int
-}
-
-func newBlockingOngoingSurface() *blockingOngoingSurface {
-	return &blockingOngoingSurface{
-		started: make(chan struct{}),
-		release: make(chan struct{}),
-	}
-}
-
-func (s *blockingOngoingSurface) ApplyTerminalMessage(clientui.TranscriptMessage, ongoing.FrameInput) (ongoing.Result, error) {
-	s.startOnce.Do(func() { close(s.started) })
-	<-s.release
-	s.mu.Lock()
-	s.applied++
-	s.mu.Unlock()
-	return ongoing.Result{}, nil
-}
-
-func (s *blockingOngoingSurface) Render(ongoing.FrameInput) (ongoing.Result, error) {
-	return ongoing.Result{}, nil
-}
-
-func (s *blockingOngoingSurface) Resize(ongoing.Size, ongoing.FrameInput) (ongoing.Result, error) {
-	return ongoing.Result{}, nil
-}
-
-func (s *blockingOngoingSurface) completedApplyCount() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.applied
-}
-
 func runtimeTupleTestRichHydration(runtimeSequence uint64) clientui.TranscriptMessage {
 	message := runtimeTupleTestHydration(
 		runtimeSequence,
 		runtimeTupleTestRunningActivity(),
-		runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationSubmitted),
 	)
 	hydration := message.Payload().(clientui.TranscriptHydration)
 	stepID := ongoingTestStepID()
@@ -522,10 +386,9 @@ func runtimeTupleTestRichHydration(runtimeSequence uint64) clientui.TranscriptMe
 	}}
 	queuedText := "queued hydration"
 	hydration.QueuedMessages = []clientui.TranscriptQueuedMessageState{{
-		ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
-		QueueItemID:     runtimeids.NewQueueItemID(),
-		Status:          clientui.QueuedUserMessageAccepted,
-		Text:            &queuedText,
+		QueueItemID: runtimeids.NewQueueItemID(),
+		Status:      clientui.QueuedUserMessageAccepted,
+		Text:        &queuedText,
 	}}
 	hydration.PendingPrompts = []clientui.TranscriptPrompt{
 		testQuestionPrompt("prompt-1", "Approve hydration?", "yes"),

@@ -111,11 +111,38 @@ func (m *uiModel) reduceInputAsyncMessage(msg tea.Msg) uiFeatureUpdateResult {
 		nextModel := next.(*uiModel)
 		nextModel.layout().syncViewport()
 		return handledUIFeatureUpdate(nextModel, cmd)
+	case injectedQueueDraftPersistedMsg:
+		next, cmd := m.inputController().handleInjectedQueueDraftPersisted(msg)
+		nextModel := next.(*uiModel)
+		nextModel.layout().syncViewport()
+		return handledUIFeatureUpdate(nextModel, cmd)
 	case injectedQueueDiscardDoneMsg:
 		next, cmd := m.inputController().handleInjectedQueueDiscardDone(msg)
 		nextModel := next.(*uiModel)
 		nextModel.layout().syncViewport()
 		return handledUIFeatureUpdate(nextModel, cmd)
+	case queuedRuntimeWorkCheckDoneMsg:
+		next, cmd := m.inputController().handleQueuedRuntimeWorkCheckDone(msg)
+		nextModel := next.(*uiModel)
+		nextModel.layout().syncViewport()
+		return handledUIFeatureUpdate(nextModel, cmd)
+	case submitDraftPersistedMsg:
+		next, cmd := m.inputController().handleSubmitDraftPersisted(msg)
+		nextModel := next.(*uiModel)
+		nextModel.layout().syncViewport()
+		return handledUIFeatureUpdate(nextModel, cmd)
+	case draftRecoveryPersistedMsg:
+		if msg.err == nil {
+			return handledUIFeatureUpdate(m, nil)
+		}
+		m.logf("draft_recovery.persist_error err=%q", msg.err.Error())
+		return handledUIFeatureUpdate(m, m.sendTransientStatusWithNoticeID(
+			"Draft Recovery persistence failed: "+msg.err.Error(),
+			uiStatusNoticeError,
+			transientStatusDuration,
+			uiStatusNoticeReplace,
+			"",
+		))
 	case submitDoneMsg:
 		next, cmd := m.inputController().handleSubmitDone(msg)
 		nextModel := next.(*uiModel)

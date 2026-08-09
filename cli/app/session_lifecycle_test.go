@@ -189,6 +189,13 @@ func TestPersistSessionDraftIncludesStructuredRecoveryBuffers(t *testing.T) {
 	model := newUIModelDefaults(nil)
 	testSetMainInput(model, "visible draft")
 	model.pendingInjected = queuedUserMessagesForTest("  pending injected\n")
+	model.injectedQueue = []injectedRuntimeQueueItem{{
+		LocalID:       model.pendingInjected[0].ID,
+		ServerID:      model.pendingInjected[0].ID,
+		Text:          model.pendingInjected[0].Text,
+		State:         injectedRuntimeQueueEnqueued,
+		RecoveryOwned: true,
+	}}
 	model.queued = queuedInputsForTest("\tqueued later  ")
 
 	if err := persistSessionDraftToServer(context.Background(), narrowSessionLifecycleServer{lifecycle: client}, " session-1 ", model); err != nil {
@@ -216,14 +223,18 @@ func TestInitialRecoveryBuffersRestoreRetryAffordancesWithoutStartupSubmit(t *te
 		}),
 	).(*uiModel)
 
-	if got := testMainInput(model); got != "visible draft\n\npending steering\n\nqueued later" {
-		t.Fatalf("input = %q, want recovered visible retry input", got)
+	wantInput := "visible draft\n\nsubmitted before forced exit\n\npending steering\n\nqueued later"
+	if testMainInput(model) != wantInput {
+		t.Fatalf("input = %q, want recovered visible retry input", testMainInput(model))
 	}
 	if model.startupSubmit != "" || model.activeSubmit.text != "" || len(model.pendingInjected) != 0 || len(model.queued) != 0 {
 		t.Fatalf("recovery restored operational submission state: startup=%q active=%+v pending=%+v queued=%+v", model.startupSubmit, model.activeSubmit, model.pendingInjected, model.queued)
 	}
-	if len(model.recoveredDraftBuffers) != 2 || model.transientStatus != "" {
-		t.Fatalf("recovered buffers/status = %+v/%q", model.recoveredDraftBuffers, model.transientStatus)
+	if len(model.recoveredDraftBuffers) != 3 {
+		t.Fatalf("recovered buffers = %+v, want all non-operational recovery affordances", model.recoveredDraftBuffers)
+	}
+	if model.transientStatus != "" {
+		t.Fatalf("transient status = %q, want ordinary draft recovery to stay silent", model.transientStatus)
 	}
 }
 
