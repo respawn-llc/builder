@@ -1,16 +1,80 @@
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+import type { JsonValue } from "@/api";
+import { appI18n } from "@/i18n";
 import type { SidebarDestination } from "@/app-facade";
 import { createTestSidebarController, createTestSidebarNavigator } from "@/test-support/sidebar";
 import {
+  activityResponse,
   commentListResponse,
   emptyTaskAttentionResponse,
+  isJsonObject,
   mountTaskDetailSurface,
   taskDetailResponse,
 } from "@/test-support/task-detail";
 
 describe("Task Detail retained sidebar state", () => {
+  it("restores the selected Activity feed and pixel offset after visiting another Task", async () => {
+    const pageNavigator = createTestSidebarNavigator();
+    const taskB = taskDetailWithID("task-2", "Dependency target");
+    const services = mountTaskDetailSurface(taskDetailResponse, {
+      attention: emptyTaskAttentionResponse,
+      comments: commentListResponse,
+      navigator: pageNavigator,
+      routes: [
+        {
+          method: "workflow.task.get",
+          handler: (params) => (taskIDFromParams(params) === "task-2" ? taskB : taskDetailResponse),
+        },
+        {
+          method: "workflow.task.comment.list",
+          handler: (params) =>
+            taskIDFromParams(params) === "task-2" ? { items: [], next_offset: null } : commentListResponse,
+        },
+        {
+          method: "workflow.task.activity.list",
+          handler: (params) => activityPage(taskIDFromParams(params)),
+        },
+      ],
+    });
+    const user = userEvent.setup();
+
+    const activityTab = await screen.findByRole("tab", { name: appI18n.t("task.activity") });
+    await user.click(activityTab);
+    await waitFor(() => {
+      expect(activityTab).toHaveAttribute("aria-selected", "true");
+    });
+    const list = await screen.findByTestId("task-detail-island-stack");
+    list.scrollTop = 1200;
+    fireEvent.scroll(list);
+
+    await waitFor(() => {
+      expect(pageNavigator.registerCapture).toHaveBeenCalled();
+    });
+    const capture = vi.mocked(pageNavigator.registerCapture).mock.lastCall?.[0];
+    if (capture === undefined) throw new Error("Expected Task Detail retained-state capture.");
+    const retainedState = capture();
+    expect(retainedState).toEqual(
+      expect.objectContaining({
+        scrollOffsetPx: 1200,
+        selectedTab: "activity",
+      }),
+    );
+
+    services.rerenderTaskDetail("task-2");
+    await screen.findByDisplayValue("Dependency target");
+
+    services.rerenderTaskDetail("task-1", retainedState);
+    const restoredActivityTab = await screen.findByRole("tab", {
+      name: appI18n.t("task.activity"),
+    });
+    await waitFor(() => {
+      expect(restoredActivityTab).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByTestId("task-detail-island-stack").scrollTop).toBe(1200);
+    });
+  });
+
   it("layers retained unsaved interface state over refreshed Task data before capture", async () => {
     const pageNavigator = createTestSidebarNavigator();
     const retainedState = {
@@ -148,3 +212,49 @@ describe("Task Detail retained sidebar state", () => {
     ]);
   });
 });
+
+function taskDetailWithID(taskID: string, title: string): JsonValue {
+  return {
+    task: {
+      ...taskDetailResponse.task,
+      summary: {
+        ...taskDetailResponse.task.summary,
+        id: taskID,
+        short_id: taskID === "task-2" ? "T-2" : taskDetailResponse.task.summary.short_id,
+        title,
+      },
+    },
+  };
+}
+
+function taskIDFromParams(params: JsonValue): string {
+  if (!isJsonObject(params) || typeof params.task_id !== "string") {
+    throw new Error("Expected a Task-scoped RPC request.");
+  }
+  return params.task_id;
+}
+
+function activityPage(taskID: string) {
+  const baseActivity = activityResponse.items[0];
+  if (baseActivity === undefined) {
+    throw new Error("Expected an Activity fixture.");
+  }
+  return {
+    items: Array.from({ length: 50 }, (_value, index) => ({
+      ...baseActivity,
+      activity_id: `activity-${taskID}-${index.toString()}`,
+      task_id: taskID,
+      occurred_at_unix_ms: 1000 - index,
+      updated_at_unix_ms: 1000 - index,
+      comment: {
+        ...baseActivity.comment,
+        id: `comment-activity-${taskID}-${index.toString()}`,
+        task_id: taskID,
+        body: `Activity item ${index.toString()}`,
+        created_at_unix_ms: 1000 - index,
+        updated_at_unix_ms: 1000 - index,
+      },
+    })),
+    next_offset: null,
+  };
+}
