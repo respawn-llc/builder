@@ -1124,10 +1124,7 @@ func (s *Service) preflightInitialTaskBranch(
 	}
 	if targetContext.Task.ExecutionTarget != nil {
 		if requestedBranchName != nil {
-			return nil, &serverapi.WorkflowTaskInitialBranchError{
-				Reason:     serverapi.WorkflowTaskInitialBranchErrorReasonOperationCannotCreateWorktree,
-				BranchName: *requestedBranchName,
-			}
+			return nil, operationCannotCreateInitialWorktreeError(*requestedBranchName)
 		}
 		return nil, nil
 	}
@@ -1150,6 +1147,13 @@ func (s *Service) preflightInitialTaskBranch(
 		}
 	}
 	return requestedBranchName, nil
+}
+
+func operationCannotCreateInitialWorktreeError(branchName string) *serverapi.WorkflowTaskInitialBranchError {
+	return &serverapi.WorkflowTaskInitialBranchError{
+		Reason:     serverapi.WorkflowTaskInitialBranchErrorReasonOperationCannotCreateWorktree,
+		BranchName: branchName,
+	}
 }
 
 func (s *Service) initiatingActionTarget(ctx context.Context, taskID workflow.TaskID, setupOperationID serverapi.WorktreeSetupOperationID, preflight initiatingActionTargetPreflight) (initiatingActionTargetDecision, error) {
@@ -1496,6 +1500,14 @@ func (s *Service) resumeWorkflowTask(ctx context.Context, req serverapi.Workflow
 			})
 			return errors.Join(preparationErr, lockErr)
 		}
+	} else {
+		decision, err := s.initiatingActionTarget(ctx, taskID, req.SetupOperationID, target)
+		if err != nil {
+			return serverapi.WorkflowTaskResumeResponse{}, err
+		}
+		if decision.candidate != nil || decision.selectionRequired != nil {
+			return serverapi.WorkflowTaskResumeResponse{}, errors.New("locked Resume target returned an initial target decision")
+		}
 	}
 	var resumed []workflow.CurrentNode
 	if preparation == nil {
@@ -1690,6 +1702,9 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 	prepared, err := s.store.PrepareManualMove(ctx, moveRequest)
 	if err != nil {
 		return serverapi.WorkflowTaskMoveResponse{}, err
+	}
+	if req.BranchName != nil && (prepared.IsNoOp() || !prepared.RequiresExecutionTarget()) {
+		return serverapi.WorkflowTaskMoveResponse{}, operationCannotCreateInitialWorktreeError(*req.BranchName)
 	}
 	if prepared.IsNoOp() {
 		return serverapi.WorkflowTaskMoveResponse{
