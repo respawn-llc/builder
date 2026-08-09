@@ -893,16 +893,22 @@ func environmentContextMessage(workspaceRoot string, model string, now time.Time
 		return "", err
 	}
 
-	return strings.Join([]string{
+	rows := []string{
 		environmentInjectedHeader,
 		modelLine,
+	}
+	if cutoff, ok := llm.LookupModelKnowledgeCutoff(model); ok {
+		rows = append(rows, fmt.Sprintf("Knowledge cutoff: %02d-%04d", cutoff.Month, cutoff.Year))
+	}
+	rows = append(rows,
 		fmt.Sprintf("OS: %s", osName),
 		fmt.Sprintf("Current TZ: %s (UTC%s)", tzName, formatUTCOffset(tzOffset)),
 		fmt.Sprintf("Date/time: %s", now.Format(time.RFC3339)),
 		fmt.Sprintf("Shell: %s", shell),
 		fmt.Sprintf("CWD: %s", cwd),
 		fmt.Sprintf("CPU arch: %s", cpuArch),
-	}, "\n"), nil
+	)
+	return strings.Join(rows, "\n"), nil
 }
 
 // errEnvironmentContextModelRequired is returned when the environment context line is built without a model.
