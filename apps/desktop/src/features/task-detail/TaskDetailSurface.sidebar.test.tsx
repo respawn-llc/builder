@@ -1,11 +1,12 @@
 import { render, screen, waitFor } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 
 import { RpcError, rpcErrorCodes } from "@/api";
 import { createTestSidebarNavigator } from "@/test-support/sidebar";
 import { TaskDetailSurface } from "./TaskDetailSurface";
 
 const contentProps = vi.hoisted(() => vi.fn<(props: unknown) => void>());
+const contentMounts = vi.hoisted(() => vi.fn());
 const fixture = vi.hoisted<{ detail: unknown }>(() => ({
   detail: { isPending: true },
 }));
@@ -20,6 +21,9 @@ vi.mock("./useTaskDetailData", () => ({
 vi.mock("./TaskDetailContent", () => ({
   TaskDetailContent: (props: unknown) => {
     contentProps(props);
+    useEffect(() => {
+      contentMounts();
+    }, []);
     return <div data-testid="task-detail-content" />;
   },
 }));
@@ -43,6 +47,7 @@ vi.mock("@/ui", () => ({
 describe("TaskDetailSurface sidebar ownership", () => {
   beforeEach(() => {
     contentProps.mockClear();
+    contentMounts.mockClear();
     fixture.detail = { isPending: true };
   });
 
@@ -106,8 +111,41 @@ describe("TaskDetailSurface sidebar ownership", () => {
     );
 
     expect(screen.getByTestId("task-detail-content")).toBeInTheDocument();
-    expect(contentProps).toHaveBeenCalledWith(
-      expect.objectContaining({ initialFocus, retainedState }),
-    );
+    expect(contentProps).toHaveBeenCalledWith(expect.objectContaining({ initialFocus, retainedState }));
+  });
+
+  it("resets Task Detail local state when the loaded task changes", async () => {
+    const navigator = createTestSidebarNavigator();
+    fixture.detail = {
+      data: {
+        id: "task-1",
+        labelIDs: [],
+        projectID: "project-1",
+        workflowID: "workflow-1",
+      },
+      isError: false,
+      isPending: false,
+    };
+    const view = render(<TaskDetailSurface enabled navigator={navigator} taskId="task-1" />);
+
+    await waitFor(() => {
+      expect(contentMounts).toHaveBeenCalledOnce();
+    });
+
+    fixture.detail = {
+      data: {
+        id: "task-2",
+        labelIDs: [],
+        projectID: "project-1",
+        workflowID: "workflow-1",
+      },
+      isError: false,
+      isPending: false,
+    };
+    view.rerender(<TaskDetailSurface enabled navigator={navigator} taskId="task-2" />);
+
+    await waitFor(() => {
+      expect(contentMounts).toHaveBeenCalledTimes(2);
+    });
   });
 });

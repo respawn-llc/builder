@@ -40,6 +40,7 @@ function List({
   onLoadMore = () => undefined,
   hasPreviousPage = false,
   onLoadPrevious = () => undefined,
+  taskID,
   previousLoadItemKey,
   previousBoundary,
   nextBoundary,
@@ -52,6 +53,7 @@ function List({
   onLoadMore?: () => void;
   hasPreviousPage?: boolean;
   onLoadPrevious?: () => void;
+  taskID?: string;
   previousLoadItemKey?: string;
   previousBoundary?:
     | { state: "loading"; label: string }
@@ -66,6 +68,7 @@ function List({
 }>) {
   return (
     <VirtualizedInfiniteList
+      key={taskID}
       estimateSize={testEstimateSize}
       getItemKey={testGetItemKey}
       hasNextPage={hasNextPage}
@@ -134,6 +137,27 @@ describe("VirtualizedInfiniteList pixel restoration", () => {
     view.rerender(<List items={items} request={request} />);
 
     expect(list.scrollTop).toBe(240);
+  });
+
+  it("does not let a previous Task's fixed-row anchor overwrite restored pixels", () => {
+    virtualizer.getVirtualItems.mockReturnValue([
+      { end: 40, index: 0, key: "header", lane: 0, size: 40, start: 0 },
+      { end: 80, index: 1, key: "body", lane: 0, size: 40, start: 40 },
+    ]);
+    const view = render(<List items={["header", "body", "task-a-feed"]} taskID="task-a" />);
+    const list = screen.getByRole("list");
+    list.scrollTop = 0;
+    fireEvent.scroll(list);
+
+    view.rerender(
+      <List
+        items={["header", "body", "task-b-feed"]}
+        request={createVirtualizedPixelOffsetRequest("task-b-restore", 240)}
+        taskID="task-b"
+      />,
+    );
+
+    expect(screen.getByRole("list").scrollTop).toBe(240);
   });
 
   it("accepts a clamped retained offset without chasing later virtual-item changes", () => {
