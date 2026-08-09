@@ -270,6 +270,34 @@ describe("SidebarProvider stack", () => {
     expect(onBack).not.toHaveBeenCalled();
   });
 
+  it("does not invoke route Back from a predecessor after nested Back restores it", () => {
+    const { result } = renderHook(useHarness, { wrapper });
+    const onBack = vi.fn();
+    let root: SidebarRootHandle | undefined;
+
+    act(() => {
+      root = result.current.roots.open(destination("A"), onBack);
+    });
+    const a = requireNavigator(result.current);
+    act(() => {
+      a.registerCapture(() => ({ page: "A" }));
+      expect(root?.push(destination("B"))).toBe("accepted");
+    });
+    const b = requireNavigator(result.current);
+    act(() => {
+      b.registerCapture(() => ({ page: "B" }));
+      expect(b.push(destination("C"))).toBe("accepted");
+    });
+    const c = requireNavigator(result.current);
+    act(() => {
+      expect(c.back()).toBe("accepted");
+    });
+
+    expect(result.current.shell.activeDestination).toEqual(destination("B"));
+    expect(b.back()).toBe("stale");
+    expect(onBack).not.toHaveBeenCalled();
+  });
+
   it("rejects append Push without capture while leaving the page capability active", () => {
     const { result } = renderHook(useHarness, { wrapper });
 
