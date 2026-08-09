@@ -55,18 +55,23 @@ func TestOpenAIBlankFinalResponsePresence(t *testing.T) {
 
 func TestOpenAIBlankFinalClientPresence(t *testing.T) {
 	for _, test := range []struct {
-		name    string
-		content *string
+		name          string
+		content       *string
+		providerPhase *ProviderPhase
+		wantContent   *string
 	}{
-		{name: "present empty", content: textutil.Value("")},
-		{name: "present whitespace", content: textutil.Value(" \n\t")},
-		{name: "omitted", content: nil},
+		{name: "present empty final", content: textutil.Value(""), providerPhase: FinalProviderPhase(), wantContent: textutil.Value("")},
+		{name: "present whitespace final", content: textutil.Value(" \n\t"), providerPhase: FinalProviderPhase(), wantContent: textutil.Value(" \n\t")},
+		{name: "empty commentary", content: textutil.Value(""), providerPhase: CommentaryProviderPhase(), wantContent: nil},
+		{name: "whitespace commentary", content: textutil.Value(" \n\t"), providerPhase: CommentaryProviderPhase(), wantContent: nil},
+		{name: "phase omitted", content: textutil.Value(""), providerPhase: AbsentProviderPhase(), wantContent: nil},
+		{name: "omitted final", content: nil, providerPhase: FinalProviderPhase()},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			client := NewOpenAIClient(providerPhaseProjectionTransport{
 				response: OpenAIResponse{
 					AssistantText: test.content,
-					ProviderPhase: FinalProviderPhase(),
+					ProviderPhase: test.providerPhase,
 				},
 			})
 			response, err := client.Generate(context.Background(), Request{
@@ -76,8 +81,62 @@ func TestOpenAIBlankFinalClientPresence(t *testing.T) {
 			if err != nil {
 				t.Fatalf("generate: %v", err)
 			}
-			if !equalOptionalString(response.Assistant.Content, test.content) {
-				t.Fatalf("assistant content = %#v, want %#v", response.Assistant.Content, test.content)
+			if !equalOptionalString(response.Assistant.Content, test.wantContent) {
+				t.Fatalf("assistant content = %#v, want %#v", response.Assistant.Content, test.wantContent)
+			}
+			if expectedPhase := test.providerPhase.Value(); expectedPhase == nil {
+				if response.Assistant.Phase != nil {
+					t.Fatalf("assistant phase = %#v, want absent", response.Assistant.Phase)
+				}
+			} else if response.Assistant.Phase == nil || *response.Assistant.Phase != *expectedPhase {
+				t.Fatalf("assistant phase = %#v, want %q", response.Assistant.Phase, *expectedPhase)
+			}
+		})
+	}
+}
+
+func TestOpenAIBlankFinalStreamingAfterCommentary(t *testing.T) {
+	tests := []struct {
+		name          string
+		finalItem     string
+		finalResponse string
+		wantContent   *string
+	}{
+		{
+			name:          "empty",
+			finalItem:     `"content":[{"type":"output_text","text":""}],`,
+			finalResponse: `"content":[{"type":"output_text","text":""}],`,
+			wantContent:   textutil.Value(""),
+		},
+		{
+			name:          "whitespace",
+			finalItem:     `"content":[{"type":"output_text","text":" \n\t"}],`,
+			finalResponse: `"content":[{"type":"output_text","text":" \n\t"}],`,
+			wantContent:   textutil.Value(" \n\t"),
+		},
+		{
+			name:        "omitted",
+			wantContent: nil,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			transport := newOpenAIStreamTestTransport(t,
+				`{"type":"response.output_item.done","output_index":0,"item":{"id":"msg_commentary","type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"working"}]}}`,
+				`{"type":"response.output_text.delta","output_index":0,"delta":"working"}`,
+				`{"type":"response.output_item.done","output_index":1,"item":{"id":"msg_final","type":"message","role":"assistant","phase":"final_answer",`+test.finalItem+`"status":"completed"}}`,
+				`{"type":"response.completed","response":{"output":[{"id":"msg_commentary","type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"working"}]},{"id":"msg_final","type":"message","role":"assistant","phase":"final_answer",`+test.finalResponse+`"status":"completed"}]}}`,
+				`[DONE]`,
+			)
+			response, err := NewOpenAIClient(transport).GenerateStreamWithEvents(context.Background(), Request{
+				Model:          "gpt-5",
+				ToolChoiceMode: ToolChoiceModeAutomatic,
+			}, StreamCallbacks{})
+			if err != nil {
+				t.Fatalf("generate stream: %v", err)
+			}
+			if !equalOptionalString(response.Assistant.Content, test.wantContent) {
+				t.Fatalf("assistant content = %#v, want %#v", response.Assistant.Content, test.wantContent)
 			}
 			if response.Assistant.Phase == nil || *response.Assistant.Phase != MessagePhaseFinal {
 				t.Fatalf("assistant phase = %#v, want final", response.Assistant.Phase)

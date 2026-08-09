@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"core/shared/textutil"
 )
@@ -137,7 +138,7 @@ func responseFromOpenAI(providerResp OpenAIResponse) (Response, error) {
 	return Response{
 		Assistant: Message{
 			Role:           RoleAssistant,
-			Content:        cloneOptionalString(providerResp.AssistantText),
+			Content:        responseAssistantContent(providerResp),
 			Phase:          typedAssistantPhase,
 			ToolCalls:      append([]ToolCall(nil), providerResp.ToolCalls...),
 			ReasoningItems: append([]ReasoningItem(nil), providerResp.ReasoningItems...),
@@ -151,12 +152,15 @@ func responseFromOpenAI(providerResp OpenAIResponse) (Response, error) {
 	}, nil
 }
 
-func cloneOptionalString(value *string) *string {
-	if value == nil {
+func responseAssistantContent(providerResp OpenAIResponse) *string {
+	if providerResp.AssistantText == nil {
 		return nil
 	}
-	copy := *value
-	return &copy
+	if strings.TrimSpace(*providerResp.AssistantText) == "" &&
+		!providerResp.ProviderPhase.Is(MessagePhaseFinal) {
+		return nil
+	}
+	return textutil.Pointer(providerResp.AssistantText)
 }
 
 func (c *OpenAIClient) GenerateStream(ctx context.Context, request Request, onDelta func(text string)) (Response, error) {

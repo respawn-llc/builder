@@ -173,6 +173,7 @@ func (a *responseStreamAccumulator) consumeAssistantDelta(outputIndex int64, tex
 	if text == "" {
 		return
 	}
+	a.assistantMessages.AppendDelta(outputIndex, text)
 	a.emitAssistantDelta(AssistantDelta{Text: text, Phase: phase})
 	a.assistantStartedByOutput[outputIndex] = true
 }
@@ -266,24 +267,20 @@ func (a *responseStreamAccumulator) recordReasoningAccumulatorError() {
 
 func (a *responseStreamAccumulator) Response() (OpenAIResponse, error) {
 	usage := Usage{WindowTokens: a.windowTokens}
-	streamText, streamPhase, streamProviderPhase, streamOutputIndex, hasResolvedStream := a.assistantMessages.Resolve()
+	streamText, streamPhase, streamProviderPhase, streamOutputIndex, streamDeltaText, hasResolvedStream := a.assistantMessages.Resolve()
 	rawDeltaText := a.assistantText.String()
 	streamedDeltaText := ""
 	if a.callbacks.OnAssistantDelta != nil {
 		streamedDeltaText = rawDeltaText
 	}
-	finalText := streamText
-	finalTextPresent := streamText != nil
-	if rawDeltaText != "" {
+	finalText := textutil.Pointer(streamText)
+	finalTextPresent := hasResolvedStream && streamText != nil
+	if hasResolvedStream && streamText == nil && streamDeltaText != "" {
+		finalText = textutil.Value(streamDeltaText)
+		finalTextPresent = true
+	}
+	if !hasResolvedStream && rawDeltaText != "" {
 		finalText = textutil.Value(rawDeltaText)
-		finalTextPresent = true
-	}
-	if streamedDeltaText != "" {
-		finalText = textutil.Value(streamedDeltaText)
-		finalTextPresent = true
-	}
-	if streamText != nil && assistantResponseTextExtendsStream(streamedDeltaText, *streamText) {
-		finalText = cloneOptionalString(streamText)
 		finalTextPresent = true
 	}
 	finalPhase := streamPhase
@@ -316,16 +313,25 @@ func (a *responseStreamAccumulator) Response() (OpenAIResponse, error) {
 	if parsedText != nil {
 		parsedTextValue = *parsedText
 	}
-	reconciled := parsedText != nil && completedAssistantTextReconcilesStream(streamedDeltaText, parsedTextValue)
+	reconciliationText := streamDeltaText
+	if !hasResolvedStream {
+		reconciliationText = streamedDeltaText
+	}
+	if a.callbacks.OnAssistantDelta == nil && parsedText != nil {
+		reconciliationText = ""
+	}
+	reconciled := parsedText != nil && completedAssistantTextReconcilesStream(reconciliationText, parsedTextValue)
 	if reconciled {
-		finalText = textutil.Value(reconciledCompletedAssistantText(streamedDeltaText, parsedTextValue))
+		finalText = textutil.Value(reconciledCompletedAssistantText(reconciliationText, parsedTextValue))
 		finalTextPresent = true
-	} else if parsedText != nil && rawDeltaText == "" {
-		finalText = cloneOptionalString(parsedText)
+	} else if parsedText != nil && !hasResolvedStream && rawDeltaText == "" {
+		finalText = textutil.Pointer(parsedText)
 		finalTextPresent = true
 	}
+	streamDeltaConflict := streamDeltaText != "" &&
+		(parsedText == nil || !completedAssistantTextReconcilesStream(streamDeltaText, parsedTextValue))
 	if responseItemsContainAssistantMessage(parsedItems) && !reconciled &&
-		optionalStringsDiffer(finalText, parsedText) {
+		(optionalStringsDiffer(finalText, parsedText) || streamDeltaConflict) {
 		return OpenAIResponse{}, fmt.Errorf(
 			"completed assistant content conflicts with streamed assistant content: streamed bytes=%d completed bytes=%d",
 			lenOptionalString(finalText),
@@ -433,7 +439,7 @@ func repairAssistantOutputItems(items []ResponseItem, text *string, textPresent 
 			OutputIndex: outputIndex,
 			Role:        textutil.Value(RoleAssistant),
 			Phase:       optionalMessagePhase(phase),
-			Content:     cloneOptionalString(text),
+			Content:     textutil.Pointer(text),
 		}
 		if !hasResolvedStream {
 			return append([]ResponseItem{assistant}, repaired...)
@@ -462,7 +468,7 @@ func repairAssistantOutputItems(items []ResponseItem, text *string, textPresent 
 	if len(assistantIndexes) == 1 && textPresent && text != nil &&
 		(repaired[targetAssistantIdx].Content == nil ||
 			*repaired[targetAssistantIdx].Content != *text) {
-		repaired[targetAssistantIdx].Content = cloneOptionalString(text)
+		repaired[targetAssistantIdx].Content = textutil.Pointer(text)
 	}
 	if repaired[targetAssistantIdx].Phase == nil && phase != "" {
 		repaired[targetAssistantIdx].Phase = textutil.Value(phase)
@@ -479,6 +485,7 @@ type assistantAccumulatorItem struct {
 	message       ResponseItem
 	providerPhase *ProviderPhase
 	finalizedText *string
+	deltaText     string
 }
 
 func newAssistantMessageAccumulator() *assistantMessageAccumulator {
@@ -513,8 +520,29 @@ func (a *assistantMessageAccumulator) Upsert(item responses.ResponseOutputItemUn
 		message:       assistant,
 		providerPhase: providerPhase,
 		finalizedText: current.finalizedText,
+		deltaText:     current.deltaText,
 	}
 	return nil
+}
+
+func (a *assistantMessageAccumulator) AppendDelta(outputIndex int64, text string) {
+	if a == nil || text == "" {
+		return
+	}
+	item, exists := a.byIndex[outputIndex]
+	if !exists {
+		a.order = append(a.order, outputIndex)
+		item = assistantAccumulatorItem{
+			message: ResponseItem{
+				Type:        ResponseItemTypeMessage,
+				OutputIndex: outputIndex,
+				Role:        textutil.Value(RoleAssistant),
+			},
+			providerPhase: AbsentProviderPhase(),
+		}
+	}
+	item.deltaText += text
+	a.byIndex[outputIndex] = item
 }
 
 func (a *assistantMessageAccumulator) SetFinalizedText(outputIndex int64, text string) {
@@ -537,9 +565,9 @@ func (a *assistantMessageAccumulator) SetFinalizedText(outputIndex int64, text s
 	a.byIndex[outputIndex] = item
 }
 
-func (a *assistantMessageAccumulator) Resolve() (*string, MessagePhase, *ProviderPhase, int64, bool) {
+func (a *assistantMessageAccumulator) Resolve() (*string, MessagePhase, *ProviderPhase, int64, string, bool) {
 	if a == nil {
-		return nil, "", AbsentProviderPhase(), 0, false
+		return nil, "", AbsentProviderPhase(), 0, "", false
 	}
 	segments := make([]assistantOutputSegment, 0, len(a.order))
 	for _, outputIndex := range a.order {
@@ -550,17 +578,24 @@ func (a *assistantMessageAccumulator) Resolve() (*string, MessagePhase, *Provide
 			*item.message.Role != RoleAssistant {
 			continue
 		}
-		text := item.message.Content
-		if (text == nil || strings.TrimSpace(*text) == "") && item.finalizedText != nil {
-			text = item.finalizedText
-		}
 		phase := MessagePhase("")
 		if item.message.Phase != nil {
 			phase = *item.message.Phase
 		}
+		text := item.message.Content
+		if (text == nil || strings.TrimSpace(*text) == "") && item.finalizedText != nil {
+			text = item.finalizedText
+		}
+		if (text == nil || strings.TrimSpace(*text) == "") && item.deltaText != "" {
+			text = textutil.Value(item.deltaText)
+		}
+		if text != nil && strings.TrimSpace(*text) == "" && phase != MessagePhaseFinal {
+			text = nil
+		}
 		segments = append(segments, assistantOutputSegment{
 			Text:          optionalStringValue(text),
-			Content:       cloneOptionalString(text),
+			Content:       textutil.Pointer(text),
+			DeltaText:     item.deltaText,
 			Phase:         phase,
 			ProviderPhase: item.providerPhase,
 			OutputIndex:   outputIndex,
@@ -763,7 +798,7 @@ func buildOutputItemsFromStream(text *string, textPresent bool, phase MessagePha
 	if textPresent {
 		items = append(items, ResponseItem{
 			Type: ResponseItemTypeMessage, Role: textutil.Value(RoleAssistant),
-			Phase: optionalMessagePhase(phase), Content: cloneOptionalString(text),
+			Phase: optionalMessagePhase(phase), Content: textutil.Pointer(text),
 		})
 	}
 	for _, call := range toolCalls {

@@ -579,7 +579,7 @@ func TestGenerateStream_RejectsCompletedMessageThatConflictsWithDisplayedDeltas(
 	}
 }
 
-func TestGenerateStream_PreservesExplicitEmptyAssistantContentBeforeToolCall(t *testing.T) {
+func TestGenerateStream_OmitsNonFinalEmptyAssistantContentBeforeToolCall(t *testing.T) {
 	transport := newOpenAIStreamTestTransport(t,
 		`{"type":"response.output_item.added","output_index":1,"item":{"id":"msg_1","type":"message","role":"assistant","content":[]}}`,
 		`{"type":"response.output_text.delta","item_id":"msg_1","output_index":1,"content_index":0,"delta":"\n\n"}`,
@@ -605,8 +605,8 @@ func TestGenerateStream_PreservesExplicitEmptyAssistantContentBeforeToolCall(t *
 	if len(deltas) != 0 {
 		t.Fatalf("assistant deltas = %+v, want no semantic assistant output", deltas)
 	}
-	if resp.AssistantText == nil || *resp.AssistantText != "" {
-		t.Fatalf("assistant text = %#v, want present empty content", resp.AssistantText)
+	if resp.AssistantText != nil {
+		t.Fatalf("assistant text = %#v, want omitted non-final content", resp.AssistantText)
 	}
 	if len(resp.ToolCalls) != 1 || resp.ToolCalls[0].ID != "call_1" || resp.ToolCalls[0].Name != "shell" {
 		t.Fatalf("tool calls = %+v, want shell call_1", resp.ToolCalls)

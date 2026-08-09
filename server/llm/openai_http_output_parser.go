@@ -82,7 +82,7 @@ func parseOutputItems(items []responses.ResponseOutputItemUnion) ([]ResponseItem
 		reasoningItems = append(reasoningItems, contribution.ReasoningItems...)
 	}
 
-	assistantText, assistantPhase, providerPhase, _, _ := resolveAssistantOutput(assistantSegments)
+	assistantText, assistantPhase, providerPhase, _, _, _ := resolveAssistantOutput(assistantSegments)
 	return canonical, assistantText, assistantPhase, providerPhase, toolCalls, reasoning, reasoningItems, nil
 }
 
@@ -166,7 +166,10 @@ func (messageOutputItemParser) Parse(item responses.ResponseOutputItemUnion, pro
 	}
 	var content *string
 	if responseOutputItemHasField(item, "content") {
-		content = textutil.Value(text)
+		content = textutil.OptionalExactString(text)
+		if content == nil && role == RoleAssistant && phase == MessagePhaseFinal {
+			content = textutil.Value(text)
+		}
 	}
 	raw := json.RawMessage(item.RawJSON())
 	parsed := parsedResponseOutputItem{
@@ -182,7 +185,7 @@ func (messageOutputItemParser) Parse(item responses.ResponseOutputItemUnion, pro
 	if role == RoleAssistant {
 		parsed.AssistantSegments = append(parsed.AssistantSegments, assistantOutputSegment{
 			Text:          text,
-			Content:       cloneOptionalString(content),
+			Content:       textutil.Pointer(content),
 			Phase:         phase,
 			ProviderPhase: providerPhase,
 		})
@@ -321,14 +324,15 @@ func (compactionOutputItemParser) Parse(item responses.ResponseOutputItemUnion, 
 type assistantOutputSegment struct {
 	Text          string
 	Content       *string
+	DeltaText     string
 	Phase         MessagePhase
 	ProviderPhase *ProviderPhase
 	OutputIndex   int64
 }
 
-func resolveAssistantOutput(segments []assistantOutputSegment) (*string, MessagePhase, *ProviderPhase, int64, bool) {
+func resolveAssistantOutput(segments []assistantOutputSegment) (*string, MessagePhase, *ProviderPhase, int64, string, bool) {
 	if len(segments) == 0 {
-		return nil, "", AbsentProviderPhase(), 0, false
+		return nil, "", AbsentProviderPhase(), 0, "", false
 	}
 	sorted := append([]assistantOutputSegment(nil), segments...)
 	slices.SortFunc(sorted, func(a, b assistantOutputSegment) int {
@@ -336,7 +340,7 @@ func resolveAssistantOutput(segments []assistantOutputSegment) (*string, Message
 	})
 	last := len(sorted) - 1
 	if sorted[last].Phase == "" {
-		return cloneOptionalString(sorted[last].Content), "", sorted[last].ProviderPhase, sorted[last].OutputIndex, true
+		return textutil.Pointer(sorted[last].Content), "", sorted[last].ProviderPhase, sorted[last].OutputIndex, sorted[last].DeltaText, true
 	}
 	phase := sorted[last].Phase
 	start := last
@@ -347,13 +351,15 @@ func resolveAssistantOutput(segments []assistantOutputSegment) (*string, Message
 		start--
 	}
 	textParts := make([]string, 0, last-start+1)
+	deltaParts := make([]string, 0, last-start+1)
 	contentPresent := false
 	for i := start; i <= last; i++ {
 		textParts = append(textParts, sorted[i].Text)
+		deltaParts = append(deltaParts, sorted[i].DeltaText)
 		contentPresent = contentPresent || sorted[i].Content != nil
 	}
 	if !contentPresent {
-		return nil, phase, sorted[last].ProviderPhase, sorted[start].OutputIndex, true
+		return nil, phase, sorted[last].ProviderPhase, sorted[start].OutputIndex, strings.Join(deltaParts, ""), true
 	}
-	return textutil.Value(strings.Join(textParts, "")), phase, sorted[last].ProviderPhase, sorted[start].OutputIndex, true
+	return textutil.Value(strings.Join(textParts, "")), phase, sorted[last].ProviderPhase, sorted[start].OutputIndex, strings.Join(deltaParts, ""), true
 }
