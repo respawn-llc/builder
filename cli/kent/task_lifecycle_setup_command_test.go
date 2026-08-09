@@ -785,7 +785,7 @@ func TestMoveTargetPreparationFailurePresentsPreviousWorktreeWithoutPrimaryOrScr
 	if err != nil {
 		t.Fatalf("taskMovePreparationFailurePresentation: %v", err)
 	}
-	if presentation.Kind != taskLifecyclePresentationSetupRecovery ||
+	if presentation.Kind != taskLifecyclePresentationTargetPreparation ||
 		presentation.SetupScriptPath != nil ||
 		presentation.RetainedWorktree != nil ||
 		presentation.RetainedPreviousWorktree == nil ||
@@ -828,7 +828,7 @@ func TestTargetPreparationFailureDoesNotFabricateScriptOrWorktree(t *testing.T) 
 		t.Fatalf("projectTaskLifecycleSetupOutcome: %v", err)
 	}
 	if outcome.Success || outcome.Presentation == nil ||
-		outcome.Presentation.Kind != taskLifecyclePresentationSetupRecovery ||
+		outcome.Presentation.Kind != taskLifecyclePresentationTargetPreparation ||
 		outcome.Presentation.SetupScriptPath != nil ||
 		outcome.Presentation.RetainedWorktree != nil {
 		t.Fatalf("target-preparation outcome = %+v", outcome)

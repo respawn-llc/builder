@@ -23,6 +23,7 @@ type taskLifecyclePresentationKind string
 
 const (
 	taskLifecyclePresentationSetupRecovery       taskLifecyclePresentationKind = "setup_recovery"
+	taskLifecyclePresentationTargetPreparation   taskLifecyclePresentationKind = "target_preparation"
 	taskLifecyclePresentationSetupFailed         taskLifecyclePresentationKind = "setup_failed"
 	taskLifecyclePresentationObservationFailed   taskLifecyclePresentationKind = "observation_failed"
 	taskLifecyclePresentationObservationTimedOut taskLifecyclePresentationKind = "observation_timed_out"
@@ -202,6 +203,9 @@ func taskLifecyclePreparationFailurePresentation(
 			retainedWorktreeInspectionActions(presentation.RetainedPreviousWorktree)...,
 		)
 		return presentation, nil
+	}
+	if failed.Cause.Kind == serverapi.WorktreeSetupFailureTargetPreparation {
+		presentation.Kind = taskLifecyclePresentationTargetPreparation
 	}
 	switch operation {
 	case taskLifecycleOperationStart, taskLifecycleOperationResume:
@@ -454,12 +458,17 @@ func taskLifecycleObservationPresentation(
 
 func renderTaskLifecyclePresentation(stderr io.Writer, presentation taskLifecyclePresentation) {
 	switch presentation.Kind {
-	case taskLifecyclePresentationSetupRecovery:
-		fmt.Fprintf(stderr, "Worktree setup failed after one automatic retry during Task %s.\n", presentation.Operation)
-		if presentation.SetupScriptPath != nil {
-			fmt.Fprintf(stderr, "Setup script: %s\n", *presentation.SetupScriptPath)
+	case taskLifecyclePresentationSetupRecovery, taskLifecyclePresentationTargetPreparation:
+		if presentation.Kind == taskLifecyclePresentationSetupRecovery {
+			fmt.Fprintf(stderr, "Worktree setup failed after one automatic retry during Task %s.\n", presentation.Operation)
+			if presentation.SetupScriptPath != nil {
+				fmt.Fprintf(stderr, "Setup script: %s\n", *presentation.SetupScriptPath)
+			}
+			fmt.Fprintf(stderr, "Final setup diagnostic: %s\n", presentation.Diagnostic)
+		} else {
+			fmt.Fprintf(stderr, "Execution target preparation failed during Task %s.\n", presentation.Operation)
+			fmt.Fprintf(stderr, "Target preparation diagnostic: %s\n", presentation.Diagnostic)
 		}
-		fmt.Fprintf(stderr, "Final setup diagnostic: %s\n", presentation.Diagnostic)
 		if presentation.RetainedWorktree != nil {
 			fmt.Fprintf(stderr, "The retained worktree is at %s.\n", presentation.RetainedWorktree.Path)
 		}
