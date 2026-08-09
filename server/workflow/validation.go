@@ -1108,7 +1108,11 @@ func (s *validationState) canReachTerminal(start NodeID) bool {
 			continue
 		}
 		visited[nodeID] = true
-		if s.nodesByID[nodeID].Kind() == NodeKindTerminal {
+		node, exists := s.nodesByID[nodeID]
+		if !exists {
+			continue
+		}
+		if node.Kind() == NodeKindTerminal {
 			return true
 		}
 		for _, edge := range s.outgoingByNode[nodeID] {

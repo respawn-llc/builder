@@ -404,10 +404,15 @@ export type WorkflowGraphMetadata = Readonly<{
   executionTargetPolicy: WorkflowExecutionTargetPolicy;
 }>;
 
+export type WorkflowGraphEntityType = "edge" | "node" | "node_group" | "transition_group";
+export type WorkflowGraphEntityReference = Readonly<{ entityType: WorkflowGraphEntityType; entityID: string }>;
+
 export type WorkflowGraphSaveImpact = Readonly<{
+  removedNodeGroupCount: number;
   removedNodeCount: number;
   removedTransitionGroupCount: number;
   removedEdgeCount: number;
+  removedEntities: readonly WorkflowGraphEntityReference[];
   nodeTaskReferenceCount: number;
   edgeTaskReferenceCount: number;
   activeCurrentNodeCount: number;
@@ -421,9 +426,11 @@ export type WorkflowGraphSaveBlocker = Readonly<{
   code: string;
   message: string;
   count: number;
+  affectedEntities: readonly WorkflowGraphEntityReference[];
 }>;
 
 export type WorkflowGraphSavePreview = Readonly<{
+  changed: boolean;
   currentVersion: number;
   validationResults: WorkflowGraphValidationResults;
   impact: WorkflowGraphSaveImpact;
@@ -433,6 +440,7 @@ export type WorkflowGraphSavePreview = Readonly<{
 }>;
 
 export type WorkflowGraphSaveConfirmation = Readonly<{
+  expectedRemovedNodeGroupCount: number;
   expectedRemovedNodeCount: number;
   expectedRemovedTransitionGroupCount: number;
   expectedRemovedEdgeCount: number;

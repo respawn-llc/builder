@@ -3,6 +3,8 @@ Usage of kent workflow:
   kent workflow delete <uuid> [--confirm] [--json]
   kent workflow update <uuid> [--name <name>] [--description <text>] [--execution-target ask-on-first-execution|none|head|default-branch|ref:<revision>] [--json]
   kent workflow list [--project <path-or-id>] [--page-size <n>] [--page-token <token>] [--json]
+  kent workflow graph inspect <uuid>
+  kent workflow graph apply <path|-> [--confirm] [--json]
   kent workflow node add <uuid> --key <node-key> --kind start|agent|script|join|terminal [--display-name <name>] [--prompt <text>] [--agent <role>] [--completion-mode auto|structured_output|tool|shell_command|unstructured_output] [--script-path <path>] [--json]
   kent workflow node update <uuid> <node-key> [--key <node-key>] [--kind start|agent|script|join|terminal] [--display-name <name>] [--prompt <text>] [--agent <role>] [--completion-mode auto|structured_output|tool|shell_command|unstructured_output] [--script-path <path>] [--json]
   kent workflow edge add <uuid> --from <source-node-key> --transition <transition-key> --edge-key <edge-key> --to <target-node-key> --context new_session|continue_session|compact_and_continue_session [--assignee-selection configured|previous_node] [--thinking-selection configured|previous_node] [--target-assignee-param <key>=<description>] [--target-thinking-param <key>=<description>] [--requires-approval] [--context-source immediate_source|previous_target|previous_target_or_new|node:<node-key>] [--prompt <text>] [--transition-description <text>] [--param <key>=<description> ...] [--json]
@@ -29,5 +31,14 @@ Workflow references accept only a bare canonical UUIDv4.
 Project filters accept a project path or project ID. Project-filtered results show the
 default workflow first and include link metadata.
 Use `workflow inspect --summary` to read workflow metadata without loading its graph.
+Use `workflow graph inspect` to write a complete identity-bound editing document as JSON.
+Use `workflow graph apply <path>` to apply a document, or pass `-` to read standard input.
+Graph apply previews every change. Destructive impact requires a fresh `--confirm`;
+exact graph entity IDs appear in impact and blockers, while Task references remain counts.
+Graph editing documents belong to one Workflow and Workflow Version. They are not
+portable import/export bundles.
+With `workflow graph apply --json`, outcomes are `saved`, `unchanged`,
+`confirmation_required`, `blocked`, `invalid_document`, or `request_failed`.
+Exit status is 0 for `saved` or `unchanged`, 1 when no save occurs, and 2 for invalid usage.
 For edge updates, use either `--param` or `--clear-params`, not both.
 Use `--json` when consuming command output from scripts.

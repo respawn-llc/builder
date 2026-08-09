@@ -15,27 +15,54 @@ import (
 type workflowEdgeMutationRemote struct {
 	workflowSelectorInventoryRemote
 	definitionValue serverapi.WorkflowDefinition
-	addRequest      *serverapi.WorkflowEdgeAddRequest
-	updateRequest   *serverapi.WorkflowEdgeUpdateRequest
-	addError        error
-	updateError     error
+	previewResponse serverapi.WorkflowGraphSavePreviewResponse
+	saveResponse    serverapi.WorkflowGraphSaveResponse
+	previewRequest  *serverapi.WorkflowGraphSavePreviewRequest
+	saveRequest     *serverapi.WorkflowGraphSaveRequest
+	previewError    error
+	saveError       error
+	rowMutationCall string
+	calls           []string
 }
 
-func (r *workflowEdgeMutationRemote) GetWorkflow(context.Context, serverapi.WorkflowGetRequest) (serverapi.WorkflowGetResponse, error) {
-	r.record(r.expected)
+func (r *workflowEdgeMutationRemote) GetWorkflow(_ context.Context, req serverapi.WorkflowGetRequest) (serverapi.WorkflowGetResponse, error) {
+	r.calls = append(r.calls, "get")
+	r.record(req.WorkflowID)
 	return serverapi.WorkflowGetResponse{Definition: r.definitionValue}, nil
 }
 
 func (r *workflowEdgeMutationRemote) AddWorkflowEdge(_ context.Context, req serverapi.WorkflowEdgeAddRequest) (serverapi.WorkflowEdgeAddResponse, error) {
-	r.record(req.WorkflowID)
-	r.addRequest = &req
-	return serverapi.WorkflowEdgeAddResponse{Version: 2}, r.addError
+	r.rowMutationCall = "AddWorkflowEdge"
+	return serverapi.WorkflowEdgeAddResponse{}, nil
 }
 
 func (r *workflowEdgeMutationRemote) UpdateWorkflowEdge(_ context.Context, req serverapi.WorkflowEdgeUpdateRequest) (serverapi.WorkflowEdgeUpdateResponse, error) {
+	r.rowMutationCall = "UpdateWorkflowEdge"
+	return serverapi.WorkflowEdgeUpdateResponse{}, nil
+}
+
+func (r *workflowEdgeMutationRemote) AddWorkflowTransitionGroup(_ context.Context, req serverapi.WorkflowTransitionGroupAddRequest) (serverapi.WorkflowTransitionGroupAddResponse, error) {
+	r.rowMutationCall = "AddWorkflowTransitionGroup"
+	return serverapi.WorkflowTransitionGroupAddResponse{}, nil
+}
+
+func (r *workflowEdgeMutationRemote) UpdateWorkflowTransitionGroup(_ context.Context, req serverapi.WorkflowTransitionGroupUpdateRequest) (serverapi.WorkflowTransitionGroupUpdateResponse, error) {
+	r.rowMutationCall = "UpdateWorkflowTransitionGroup"
+	return serverapi.WorkflowTransitionGroupUpdateResponse{}, nil
+}
+
+func (r *workflowEdgeMutationRemote) PreviewWorkflowGraphSave(_ context.Context, req serverapi.WorkflowGraphSavePreviewRequest) (serverapi.WorkflowGraphSavePreviewResponse, error) {
+	r.calls = append(r.calls, "preview")
 	r.record(req.WorkflowID)
-	r.updateRequest = &req
-	return serverapi.WorkflowEdgeUpdateResponse{Version: 2}, r.updateError
+	r.previewRequest = &req
+	return r.previewResponse, r.previewError
+}
+
+func (r *workflowEdgeMutationRemote) SaveWorkflowGraph(_ context.Context, req serverapi.WorkflowGraphSaveRequest) (serverapi.WorkflowGraphSaveResponse, error) {
+	r.calls = append(r.calls, "save")
+	r.record(req.WorkflowID)
+	r.saveRequest = &req
+	return r.saveResponse, r.saveError
 }
 
 func workflowEdgeMutationDefinition(t *testing.T, edge serverapi.WorkflowEdge) workflowEdgeMutationRemote {
@@ -44,6 +71,8 @@ func workflowEdgeMutationDefinition(t *testing.T, edge serverapi.WorkflowEdge) w
 	edge.WorkflowID = workflowID
 	return workflowEdgeMutationRemote{
 		workflowSelectorInventoryRemote: workflowSelectorInventoryRemote{expected: workflowID},
+		previewResponse:                 workflowGraphSavePreviewForCommandTest(1, true),
+		saveResponse:                    workflowGraphSaveResponseForCommandTest(2, true),
 		definitionValue: serverapi.WorkflowDefinition{
 			Workflow: workflowRecordForTest(workflowID),
 			Nodes: []serverapi.WorkflowNode{
@@ -84,11 +113,12 @@ func TestWorkflowEdgeAddSelectionDefaultsToConfigured(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("exit code = %d, stderr = %q", exitCode, stderr)
 	}
-	if remote.addRequest == nil {
-		t.Fatal("AddWorkflowEdge was not called")
+	edge := workflowEdgeDraftByKey(t, remote.previewRequest, "new")
+	if remote.rowMutationCall != "" {
+		t.Fatalf("row mutation call = %q, want none", remote.rowMutationCall)
 	}
-	if remote.addRequest.AssigneeSelection != "configured" || remote.addRequest.ThinkingSelection != "configured" {
-		t.Fatalf("selection defaults = %q/%q, want configured/configured", remote.addRequest.AssigneeSelection, remote.addRequest.ThinkingSelection)
+	if edge.AssigneeSelection != "configured" || edge.ThinkingSelection != "configured" {
+		t.Fatalf("selection defaults = %q/%q, want configured/configured", edge.AssigneeSelection, edge.ThinkingSelection)
 	}
 }
 
@@ -129,24 +159,21 @@ func TestWorkflowEdgeAddMapsEnabledSelectorsAndBlankProtectedDescriptions(t *tes
 	if exitCode != 0 {
 		t.Fatalf("exit code = %d, stderr = %q", exitCode, stderr)
 	}
-	req := remote.addRequest
-	if req == nil {
-		t.Fatal("AddWorkflowEdge was not called")
+	edge := workflowEdgeDraftByKey(t, remote.previewRequest, "new")
+	if edge.AssigneeSelection != "previous_node" || edge.ThinkingSelection != "previous_node" {
+		t.Fatalf("selection = %q/%q", edge.AssigneeSelection, edge.ThinkingSelection)
 	}
-	if req.AssigneeSelection != "previous_node" || req.ThinkingSelection != "previous_node" {
-		t.Fatalf("selection = %q/%q", req.AssigneeSelection, req.ThinkingSelection)
+	if len(edge.Parameters) != 3 {
+		t.Fatalf("parameters = %+v, want three rows", edge.Parameters)
 	}
-	if len(req.Parameters) != 3 {
-		t.Fatalf("parameters = %+v, want three rows", req.Parameters)
+	if edge.Parameters[0] != (serverapi.WorkflowParameter{Key: "ordinary", Description: "ordinary value", Purpose: "ordinary"}) {
+		t.Fatalf("ordinary parameter = %+v", edge.Parameters[0])
 	}
-	if req.Parameters[0] != (serverapi.WorkflowParameter{Key: "ordinary", Description: "ordinary value", Purpose: "ordinary"}) {
-		t.Fatalf("ordinary parameter = %+v", req.Parameters[0])
+	if edge.Parameters[1] != (serverapi.WorkflowParameter{Key: "chosen_role", Purpose: "target_assignee"}) {
+		t.Fatalf("assignee parameter = %+v", edge.Parameters[1])
 	}
-	if req.Parameters[1] != (serverapi.WorkflowParameter{Key: "chosen_role", Purpose: "target_assignee"}) {
-		t.Fatalf("assignee parameter = %+v", req.Parameters[1])
-	}
-	if req.Parameters[2] != (serverapi.WorkflowParameter{Key: "chosen_thinking", Description: "pick a level", Purpose: "target_thinking"}) {
-		t.Fatalf("thinking parameter = %+v", req.Parameters[2])
+	if edge.Parameters[2] != (serverapi.WorkflowParameter{Key: "chosen_thinking", Description: "pick a level", Purpose: "target_thinking"}) {
+		t.Fatalf("thinking parameter = %+v", edge.Parameters[2])
 	}
 }
 
@@ -173,18 +200,15 @@ func TestWorkflowEdgeUpdateRetainsSelectorsAndProtectedRowsWhenReplacingOrdinary
 	if exitCode != 0 {
 		t.Fatalf("exit code = %d, stderr = %q", exitCode, stderr)
 	}
-	req := remote.updateRequest
-	if req == nil {
-		t.Fatal("UpdateWorkflowEdge was not called")
+	updated := workflowEdgeDraftByID(t, remote.previewRequest, "edge")
+	if updated.AssigneeSelection != "previous_node" || updated.ThinkingSelection != "previous_node" {
+		t.Fatalf("selectors = %q/%q", updated.AssigneeSelection, updated.ThinkingSelection)
 	}
-	if req.AssigneeSelection != "previous_node" || req.ThinkingSelection != "previous_node" {
-		t.Fatalf("selectors = %q/%q", req.AssigneeSelection, req.ThinkingSelection)
-	}
-	if len(req.Parameters) != 3 ||
-		req.Parameters[0].Key != "new" ||
-		req.Parameters[1] != edge.Parameters[1] ||
-		req.Parameters[2] != edge.Parameters[2] {
-		t.Fatalf("parameters = %+v, want ordinary replacement with protected rows retained", req.Parameters)
+	if len(updated.Parameters) != 3 ||
+		updated.Parameters[0].Key != "new" ||
+		updated.Parameters[1] != edge.Parameters[1] ||
+		updated.Parameters[2] != edge.Parameters[2] {
+		t.Fatalf("parameters = %+v, want ordinary replacement with protected rows retained", updated.Parameters)
 	}
 }
 
@@ -210,7 +234,7 @@ func TestWorkflowEdgeUpdateClearParamsRetainsDormantProtectedRows(t *testing.T) 
 	if exitCode != 0 {
 		t.Fatalf("exit code = %d, stderr = %q", exitCode, stderr)
 	}
-	if got := remote.updateRequest.Parameters; len(got) != 1 || got[0] != edge.Parameters[1] {
+	if got := workflowEdgeDraftByID(t, remote.previewRequest, "edge").Parameters; len(got) != 1 || got[0] != edge.Parameters[1] {
 		t.Fatalf("parameters = %+v, want dormant protected row", got)
 	}
 }
@@ -243,17 +267,15 @@ func TestWorkflowEdgeUpdateAllowsIndependentSelectorChanges(t *testing.T) {
 			if exitCode != 0 {
 				t.Fatalf("exit code = %d, stderr = %q", exitCode, stderr)
 			}
-			if remote.updateRequest == nil {
-				t.Fatal("UpdateWorkflowEdge was not called")
+			updated := workflowEdgeDraftByID(t, remote.previewRequest, "edge")
+			if test.name == "assignee" && (updated.AssigneeSelection != test.want || updated.ThinkingSelection != "configured") {
+				t.Fatalf("selectors = %q/%q", updated.AssigneeSelection, updated.ThinkingSelection)
 			}
-			if test.name == "assignee" && (remote.updateRequest.AssigneeSelection != test.want || remote.updateRequest.ThinkingSelection != "configured") {
-				t.Fatalf("selectors = %q/%q", remote.updateRequest.AssigneeSelection, remote.updateRequest.ThinkingSelection)
+			if test.name == "thinking" && (updated.AssigneeSelection != "configured" || updated.ThinkingSelection != test.want) {
+				t.Fatalf("selectors = %q/%q", updated.AssigneeSelection, updated.ThinkingSelection)
 			}
-			if test.name == "thinking" && (remote.updateRequest.AssigneeSelection != "configured" || remote.updateRequest.ThinkingSelection != test.want) {
-				t.Fatalf("selectors = %q/%q", remote.updateRequest.AssigneeSelection, remote.updateRequest.ThinkingSelection)
-			}
-			if len(remote.updateRequest.Parameters) != 1 || remote.updateRequest.Parameters[0].Purpose != test.purpose {
-				t.Fatalf("parameters = %+v, want initialized %s row", remote.updateRequest.Parameters, test.purpose)
+			if len(updated.Parameters) != 1 || updated.Parameters[0].Purpose != test.purpose {
+				t.Fatalf("parameters = %+v, want initialized %s row", updated.Parameters, test.purpose)
 			}
 		})
 	}
@@ -286,12 +308,12 @@ func TestWorkflowEdgeUpdateDisablesSelectorsIndependentlyAndRetainsProtectedRows
 			if exitCode != 0 {
 				t.Fatalf("exit code = %d, stderr = %q", exitCode, stderr)
 			}
-			req := remote.updateRequest
-			if req == nil || req.AssigneeSelection != test.wantAssignee || req.ThinkingSelection != test.wantThinking {
-				t.Fatalf("request = %+v, want independent selector disable", req)
+			updated := workflowEdgeDraftByID(t, remote.previewRequest, "edge")
+			if updated.AssigneeSelection != test.wantAssignee || updated.ThinkingSelection != test.wantThinking {
+				t.Fatalf("edge = %+v, want independent selector disable", updated)
 			}
-			if len(req.Parameters) != 2 || req.Parameters[0].Purpose != "target_assignee" || req.Parameters[1].Purpose != "target_thinking" {
-				t.Fatalf("parameters = %+v, want both protected rows retained; disabled purpose=%s", req.Parameters, test.wantPurpose)
+			if len(updated.Parameters) != 2 || updated.Parameters[0].Purpose != "target_assignee" || updated.Parameters[1].Purpose != "target_thinking" {
+				t.Fatalf("parameters = %+v, want both protected rows retained; disabled purpose=%s", updated.Parameters, test.wantPurpose)
 			}
 		})
 	}
@@ -312,14 +334,14 @@ func TestWorkflowEdgeUpdateProtectedCustomizationRequiresEnabledSelector(t *test
 	if !strings.Contains(stderr, "assignee selection") {
 		t.Fatalf("stderr = %q, want disabled selector diagnostic", stderr)
 	}
-	if remote.updateRequest != nil {
-		t.Fatal("UpdateWorkflowEdge called for disabled protected customization")
+	if remote.previewRequest != nil || remote.rowMutationCall != "" {
+		t.Fatal("Workflow graph mutation called for disabled protected customization")
 	}
 }
 
 func TestWorkflowEdgeAddForwardsInapplicableSelectionError(t *testing.T) {
 	remote := workflowEdgeMutationDefinition(t, serverapi.WorkflowEdge{})
-	remote.addError = errors.New("edge selector is inapplicable")
+	remote.previewError = errors.New("edge selector is inapplicable")
 	exitCode, _, stderr := runWorkflowEdgeCommand(t, &remote,
 		"edge", "add", remote.expected.String(),
 		"--from", "source", "--transition", "next", "--edge-key", "new", "--to", "target", "--context", "new_session",
@@ -341,8 +363,8 @@ func TestWorkflowEdgeCommandsRejectInvalidSelectionModes(t *testing.T) {
 		if exitCode != 2 || !strings.Contains(stderr, "must be configured or previous_node") {
 			t.Fatalf("exit code = %d, stderr = %q, want invalid add mode diagnostic", exitCode, stderr)
 		}
-		if remote.addRequest != nil {
-			t.Fatal("AddWorkflowEdge called for invalid selection mode")
+		if remote.previewRequest != nil || remote.rowMutationCall != "" {
+			t.Fatal("Workflow graph mutation called for invalid selection mode")
 		}
 	})
 	t.Run("update", func(t *testing.T) {
@@ -356,10 +378,38 @@ func TestWorkflowEdgeCommandsRejectInvalidSelectionModes(t *testing.T) {
 		if exitCode != 2 || !strings.Contains(stderr, "must be configured or previous_node") {
 			t.Fatalf("exit code = %d, stderr = %q, want invalid update mode diagnostic", exitCode, stderr)
 		}
-		if remote.updateRequest != nil {
-			t.Fatal("UpdateWorkflowEdge called for invalid selection mode")
+		if remote.previewRequest != nil || remote.rowMutationCall != "" {
+			t.Fatal("Workflow graph mutation called for invalid selection mode")
 		}
 	})
+}
+
+func workflowEdgeDraftByKey(t *testing.T, request *serverapi.WorkflowGraphSavePreviewRequest, key string) serverapi.WorkflowGraphDraftEdge {
+	t.Helper()
+	if request == nil {
+		t.Fatal("PreviewWorkflowGraphSave was not called")
+	}
+	for _, edge := range request.Graph.Edges {
+		if edge.Key == key {
+			return edge
+		}
+	}
+	t.Fatalf("edge key %q not found in graph %+v", key, request.Graph)
+	return serverapi.WorkflowGraphDraftEdge{}
+}
+
+func workflowEdgeDraftByID(t *testing.T, request *serverapi.WorkflowGraphSavePreviewRequest, id string) serverapi.WorkflowGraphDraftEdge {
+	t.Helper()
+	if request == nil {
+		t.Fatal("PreviewWorkflowGraphSave was not called")
+	}
+	for _, edge := range request.Graph.Edges {
+		if edge.ID == id {
+			return edge
+		}
+	}
+	t.Fatalf("edge ID %q not found in graph %+v", id, request.Graph)
+	return serverapi.WorkflowGraphDraftEdge{}
 }
 
 func TestWorkflowNodeCommandsDoNotAcceptEdgeSelectorFlags(t *testing.T) {

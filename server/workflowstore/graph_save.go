@@ -13,6 +13,7 @@ import (
 	"core/server/workflow"
 	"core/server/workflowscript"
 	"core/shared/runtimeids"
+	"core/shared/serverapi"
 )
 
 type WorkflowGraphSaveRequest struct {
@@ -20,6 +21,7 @@ type WorkflowGraphSaveRequest struct {
 	ExpectedVersion                     int64
 	Metadata                            *WorkflowGraphSaveMetadata
 	Confirmed                           bool
+	ExpectedRemovedNodeGroupCount       int64
 	ExpectedRemovedNodeCount            int64
 	ExpectedRemovedTransitionGroupCount int64
 	ExpectedRemovedEdgeCount            int64
@@ -38,18 +40,35 @@ type WorkflowGraphSaveMetadata struct {
 }
 
 type WorkflowGraphSaveImpact struct {
+	RemovedNodeGroupCount         int64
 	RemovedNodeCount              int64
 	RemovedTransitionGroupCount   int64
 	RemovedEdgeCount              int64
+	RemovedEntities               []WorkflowGraphEntityReference
 	NodeTaskReferenceCount        int64
 	CurrentNodeTaskReferenceCount int64
 	EdgeTaskReferenceCount        int64
 }
 
+type WorkflowGraphEntityType string
+
+const (
+	WorkflowGraphEntityTypeEdge            WorkflowGraphEntityType = "edge"
+	WorkflowGraphEntityTypeNode            WorkflowGraphEntityType = "node"
+	WorkflowGraphEntityTypeNodeGroup       WorkflowGraphEntityType = "node_group"
+	WorkflowGraphEntityTypeTransitionGroup WorkflowGraphEntityType = "transition_group"
+)
+
+type WorkflowGraphEntityReference struct {
+	EntityType WorkflowGraphEntityType
+	EntityID   string
+}
+
 type WorkflowGraphSaveBlocker struct {
-	Code    string
-	Message string
-	Count   int64
+	Code             string
+	Message          string
+	Count            int64
+	AffectedEntities []WorkflowGraphEntityReference
 }
 
 type WorkflowGraphSaveResult struct {
@@ -178,19 +197,24 @@ func (s *Store) planWorkflowGraphSave(ctx context.Context, q *sqlitegen.Queries,
 	}, s.roleResolver, nil)
 	validation := plan.ValidationResults[workflow.ValidationContextDraft]
 	plan.ValidationErrors = validation.Errors
-	if !graphChanged && !metadataChanged {
-		return plan, nil
-	}
 	if current.Version != req.ExpectedVersion {
 		plan.Blockers = workflowGraphSaveVersionChangedBlockers(current.Version)
 		return plan, nil
 	}
+	if !graphChanged && !metadataChanged {
+		return plan, nil
+	}
 	blockingValidationErrors := validation.BlockingErrors()
 	plan.ValidationErrors = validation.Errors
-	blockers := workflowGraphSaveBlockers(req, evaluation.Impact)
+	blockers := workflowGraphSaveBlockers(req, evaluation)
 	blockers = append(blockers, workflowGraphSaveBlockersFromEditPolicy(evaluation.EditPolicy.Blockers)...)
 	if len(blockingValidationErrors) > 0 {
-		blockers = append(blockers, WorkflowGraphSaveBlocker{Code: "validation_failed", Message: "Workflow graph has blocking validation errors.", Count: int64(len(blockingValidationErrors))})
+		blockers = append(blockers, WorkflowGraphSaveBlocker{
+			Code:             "validation_failed",
+			Message:          "Workflow graph has blocking validation errors.",
+			Count:            int64(len(blockingValidationErrors)),
+			AffectedEntities: workflowGraphEntityReferencesFromValidationErrors(blockingValidationErrors, prepared),
+		})
 	}
 	plan.Blockers = blockers
 	return plan, nil
@@ -250,7 +274,7 @@ func (s *Store) SaveWorkflowGraph(ctx context.Context, req WorkflowGraphSaveRequ
 	if err != nil {
 		return WorkflowGraphSaveResult{}, err
 	}
-	blockers := workflowGraphSaveBlockers(req, evaluation.Impact)
+	blockers := workflowGraphSaveBlockers(req, evaluation)
 	blockers = append(blockers, workflowGraphSaveBlockersFromEditPolicy(evaluation.EditPolicy.Blockers)...)
 	if len(blockers) > 0 {
 		plan.Removed = plan.Structural.Removed
@@ -530,30 +554,57 @@ func describeWorkflowGraphSave(current preparedWorkflowGraphSave, next preparedW
 	}
 }
 
-func workflowGraphSaveBlockers(req WorkflowGraphSaveRequest, impact WorkflowGraphSaveImpact) []WorkflowGraphSaveBlocker {
+func workflowGraphSaveBlockers(req WorkflowGraphSaveRequest, evaluation workflowGraphSaveDynamicImpact) []WorkflowGraphSaveBlocker {
+	impact := evaluation.Impact
 	blockers := []WorkflowGraphSaveBlocker{}
 	if impact.CurrentNodeTaskReferenceCount > 0 {
-		blockers = append(blockers, WorkflowGraphSaveBlocker{Code: "node_task_references", Message: "Removed workflow nodes are referenced by current task state.", Count: impact.CurrentNodeTaskReferenceCount})
+		blockers = append(blockers, WorkflowGraphSaveBlocker{
+			Code:             "node_task_references",
+			Message:          "Removed workflow nodes are referenced by current task state.",
+			Count:            impact.CurrentNodeTaskReferenceCount,
+			AffectedEntities: evaluation.RemovedNodeTaskReferenceEntities,
+		})
 	}
 	if impact.EdgeTaskReferenceCount > 0 {
-		blockers = append(blockers, WorkflowGraphSaveBlocker{Code: "edge_task_references", Message: "Removed workflow edges are referenced by existing tasks.", Count: impact.EdgeTaskReferenceCount})
+		blockers = append(blockers, WorkflowGraphSaveBlocker{
+			Code:             "edge_task_references",
+			Message:          "Removed workflow edges are referenced by existing tasks.",
+			Count:            impact.EdgeTaskReferenceCount,
+			AffectedEntities: evaluation.RemovedEdgeTaskReferenceEntities,
+		})
 	}
 	removedCount := impact.RemovedNodeCount + impact.RemovedTransitionGroupCount + impact.RemovedEdgeCount
 	if removedCount > 0 && !req.Confirmed {
-		blockers = append(blockers, WorkflowGraphSaveBlocker{Code: "confirmation_required", Message: "Workflow graph save removes graph rows. Confirm with the current impact before saving.", Count: removedCount})
+		blockers = append(blockers, WorkflowGraphSaveBlocker{
+			Code:             "confirmation_required",
+			Message:          "Workflow graph save removes graph rows. Confirm with the current impact before saving.",
+			Count:            removedCount,
+			AffectedEntities: workflowGraphSaveConfirmationEntities(impact.RemovedEntities),
+		})
 	}
 	if removedCount > 0 && req.Confirmed && !workflowGraphSaveConfirmationMatches(req, impact) {
-		blockers = append(blockers, WorkflowGraphSaveBlocker{Code: "impact_changed", Message: "Workflow graph save impact changed. Refresh the preview before saving.", Count: 1})
+		blockers = append(blockers, WorkflowGraphSaveBlocker{
+			Code:             "impact_changed",
+			Message:          "Workflow graph save impact changed. Refresh the preview before saving.",
+			Count:            1,
+			AffectedEntities: canonicalWorkflowGraphEntityReferences(impact.RemovedEntities),
+		})
 	}
 	return blockers
 }
 
 func workflowGraphSaveVersionChangedBlockers(version int64) []WorkflowGraphSaveBlocker {
-	return []WorkflowGraphSaveBlocker{{Code: "version_changed", Message: "Workflow changed. Refresh before saving.", Count: version}}
+	return []WorkflowGraphSaveBlocker{{
+		Code:             "version_changed",
+		Message:          "Workflow changed. Refresh before saving.",
+		Count:            version,
+		AffectedEntities: []WorkflowGraphEntityReference{},
+	}}
 }
 
 func workflowGraphSaveConfirmationMatches(req WorkflowGraphSaveRequest, impact WorkflowGraphSaveImpact) bool {
 	return req.Confirmed &&
+		req.ExpectedRemovedNodeGroupCount == impact.RemovedNodeGroupCount &&
 		req.ExpectedRemovedNodeCount == impact.RemovedNodeCount &&
 		req.ExpectedRemovedTransitionGroupCount == impact.RemovedTransitionGroupCount &&
 		req.ExpectedRemovedEdgeCount == impact.RemovedEdgeCount &&
@@ -576,9 +627,82 @@ func workflowGraphSaveBlockersFromEditPolicy(blockers []WorkflowGraphEditPolicyB
 	}
 	out := make([]WorkflowGraphSaveBlocker, 0, len(blockers))
 	for _, blocker := range blockers {
-		out = append(out, WorkflowGraphSaveBlocker{Code: blocker.Code, Message: blocker.Message, Count: blocker.Count})
+		out = append(out, WorkflowGraphSaveBlocker{
+			Code:             blocker.Code,
+			Message:          blocker.Message,
+			Count:            blocker.Count,
+			AffectedEntities: canonicalWorkflowGraphEntityReferences(blocker.AffectedEntities),
+		})
 	}
 	return out
+}
+
+func workflowGraphSaveConfirmationEntities(removed []WorkflowGraphEntityReference) []WorkflowGraphEntityReference {
+	entities := make([]WorkflowGraphEntityReference, 0, len(removed))
+	for _, entity := range removed {
+		if entity.EntityType != WorkflowGraphEntityTypeNodeGroup {
+			entities = append(entities, entity)
+		}
+	}
+	return canonicalWorkflowGraphEntityReferences(entities)
+}
+
+func canonicalWorkflowGraphEntityReferences(references []WorkflowGraphEntityReference) []WorkflowGraphEntityReference {
+	out := append([]WorkflowGraphEntityReference(nil), references...)
+	slices.SortFunc(out, compareStoreWorkflowGraphEntityReferences)
+	return slices.CompactFunc(out, func(left WorkflowGraphEntityReference, right WorkflowGraphEntityReference) bool {
+		return compareStoreWorkflowGraphEntityReferences(left, right) == 0
+	})
+}
+
+func compareStoreWorkflowGraphEntityReferences(left WorkflowGraphEntityReference, right WorkflowGraphEntityReference) int {
+	return serverapi.CompareWorkflowGraphEntityReferences(
+		serverapi.WorkflowGraphEntityReference{
+			EntityType: serverapi.WorkflowGraphEntityType(left.EntityType),
+			EntityID:   left.EntityID,
+		},
+		serverapi.WorkflowGraphEntityReference{
+			EntityType: serverapi.WorkflowGraphEntityType(right.EntityType),
+			EntityID:   right.EntityID,
+		},
+	)
+}
+
+func workflowGraphEntityReferencesFromValidationErrors(errors []workflow.ValidationError, prepared preparedWorkflowGraphSave) []WorkflowGraphEntityReference {
+	entities := make([]WorkflowGraphEntityReference, 0, len(errors))
+	knownNodeGroups := workflowGraphNodeGroupIDs(prepared.nodeGroups)
+	knownNodes := workflowGraphNodeIDs(prepared.nodes)
+	knownTransitionGroups := workflowGraphTransitionGroupIDs(prepared.transitionGroups)
+	knownEdges := workflowGraphEdgeIDs(prepared.edges)
+	for _, validationError := range errors {
+		if validationError.NodeID != "" {
+			entities = append(entities, WorkflowGraphEntityReference{EntityType: WorkflowGraphEntityTypeNode, EntityID: string(validationError.NodeID)})
+		}
+		if validationError.TransitionGroupID != "" {
+			entities = append(entities, WorkflowGraphEntityReference{EntityType: WorkflowGraphEntityTypeTransitionGroup, EntityID: string(validationError.TransitionGroupID)})
+		}
+		if validationError.EdgeID != "" {
+			entities = append(entities, WorkflowGraphEntityReference{EntityType: WorkflowGraphEntityTypeEdge, EntityID: string(validationError.EdgeID)})
+		}
+		if validationError.ProviderEdgeID != "" {
+			entities = append(entities, WorkflowGraphEntityReference{EntityType: WorkflowGraphEntityTypeEdge, EntityID: string(validationError.ProviderEdgeID)})
+		}
+		for _, relatedID := range validationError.RelatedIDs {
+			if knownNodeGroups[relatedID] {
+				entities = append(entities, WorkflowGraphEntityReference{EntityType: WorkflowGraphEntityTypeNodeGroup, EntityID: relatedID})
+			}
+			if knownNodes[workflow.NodeID(relatedID)] {
+				entities = append(entities, WorkflowGraphEntityReference{EntityType: WorkflowGraphEntityTypeNode, EntityID: relatedID})
+			}
+			if knownTransitionGroups[workflow.TransitionGroupID(relatedID)] {
+				entities = append(entities, WorkflowGraphEntityReference{EntityType: WorkflowGraphEntityTypeTransitionGroup, EntityID: relatedID})
+			}
+			if knownEdges[workflow.EdgeID(relatedID)] {
+				entities = append(entities, WorkflowGraphEntityReference{EntityType: WorkflowGraphEntityTypeEdge, EntityID: relatedID})
+			}
+		}
+	}
+	return canonicalWorkflowGraphEntityReferences(entities)
 }
 
 func workflowGraphSavePreparedEqual(left preparedWorkflowGraphSave, right preparedWorkflowGraphSave) bool {
@@ -602,7 +726,6 @@ type comparableWorkflowGraphSaveNodeGroup struct {
 	WorkflowID  runtimeids.WorkflowID
 	Key         workflow.ModelKey
 	DisplayName string
-	SortOrder   int64
 }
 
 type comparableWorkflowGraphSaveNode struct {
@@ -662,12 +785,8 @@ func workflowGraphSaveComparable(prepared preparedWorkflowGraphSave) comparableW
 		TransitionGroups: make([]comparableWorkflowGraphSaveTransitionGroup, 0, len(prepared.transitionGroups)),
 		Edges:            make([]comparableWorkflowGraphSaveEdge, 0, len(prepared.edges)),
 	}
-	for index, group := range prepared.nodeGroups {
-		sortOrder := group.SortOrder
-		if sortOrder == 0 {
-			sortOrder = int64(index * 100)
-		}
-		out.NodeGroups = append(out.NodeGroups, comparableWorkflowGraphSaveNodeGroup{ID: group.ID, WorkflowID: group.WorkflowID, Key: group.Key, DisplayName: strings.TrimSpace(group.DisplayName), SortOrder: sortOrder})
+	for _, group := range prepared.nodeGroups {
+		out.NodeGroups = append(out.NodeGroups, comparableWorkflowGraphSaveNodeGroup{ID: group.ID, WorkflowID: group.WorkflowID, Key: group.Key, DisplayName: strings.TrimSpace(group.DisplayName)})
 	}
 	for index, node := range prepared.nodes {
 		out.Nodes = append(out.Nodes, comparableWorkflowGraphSaveNode{ID: node.ID, WorkflowID: node.WorkflowID, Key: node.Key, Kind: node.Kind, DisplayName: strings.TrimSpace(node.DisplayName), GroupID: strings.TrimSpace(node.GroupID), SubagentRole: strings.TrimSpace(node.SubagentRole), CompletionMode: nodeCompletionMode(node), ScriptPath: strings.TrimSpace(node.ScriptPath), JoinInputProviders: node.JoinInputProviders, SortOrder: int64(index * 100)})

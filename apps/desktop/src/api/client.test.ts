@@ -626,10 +626,10 @@ describe("ApiClient", () => {
       {
         method: "workflow.graph.savePreview",
         result: {
-          current_version: 11,
+          changed: true, current_version: 11,
           validation_results: graphValidationResults,
           impact: workflowGraphSaveImpactResponse,
-          blockers: [{ code: "confirmation_required", message: "Confirm removal.", count: 1 }],
+          blockers: [{ code: "confirmation_required", message: "Confirm removal.", count: 1, affected_entities: [{ entity_type: "edge", entity_id: "edge-start" }] }],
           can_save: false,
           confirmation_required: true,
         },
@@ -637,11 +637,11 @@ describe("ApiClient", () => {
       {
         method: "workflow.graph.save",
         result: {
-          saved: true,
+          saved: true, changed: true,
           definition: workflowDefinitionResponse.definition,
           current_version: 12,
           validation_results: graphValidationResults,
-          impact: { ...workflowGraphSaveImpactResponse, removed_edge_count: 0 },
+          impact: { ...workflowGraphSaveImpactResponse, removed_node_group_count: 0, removed_edge_count: 0, removed_entities: [] },
           blockers: null,
           can_save: true,
           confirmation_required: false,
@@ -686,7 +686,7 @@ describe("ApiClient", () => {
         graph: workflowGraphDraft,
       }),
     ).resolves.toMatchObject({
-      currentVersion: 11,
+      changed: true, currentVersion: 11,
       confirmationRequired: true,
       impact: { removedEdgeCount: 1 },
       blockers: [{ code: "confirmation_required" }],
@@ -702,7 +702,7 @@ describe("ApiClient", () => {
         },
         graph: workflowGraphDraft,
         confirmation: {
-          expectedRemovedNodeCount: 0,
+          expectedRemovedNodeGroupCount: 1, expectedRemovedNodeCount: 0,
           expectedRemovedTransitionGroupCount: 0,
           expectedRemovedEdgeCount: 1,
           expectedNodeTaskReferenceCount: 0,
@@ -710,7 +710,7 @@ describe("ApiClient", () => {
         },
       }),
     ).resolves.toMatchObject({
-      saved: true,
+      saved: true, changed: true,
       currentVersion: 12,
       definition: { workflow: { id: "11111111-1111-4111-8111-111111111111" } },
       blockers: [],
@@ -774,7 +774,7 @@ describe("ApiClient", () => {
           execution_target_policy: { mode: "none" },
         },
         confirmation: {
-          expected_removed_edge_count: 1,
+          expected_removed_node_group_count: 1, expected_removed_edge_count: 1,
         },
       },
     });
@@ -1104,9 +1104,10 @@ const workflowDeleteResponse = {
 };
 
 const workflowGraphSaveImpactResponse = {
-  removed_node_count: 0,
+  removed_node_group_count: 1, removed_node_count: 0,
   removed_transition_group_count: 0,
   removed_edge_count: 1,
+  removed_entities: [{ entity_type: "edge", entity_id: "edge-start" }, { entity_type: "node_group", entity_id: "group-1" }],
   node_task_reference_count: 0,
   edge_task_reference_count: 0,
   active_current_node_count: 0,

@@ -22,9 +22,10 @@ type WorkflowGraphEditPolicyImpact struct {
 }
 
 type WorkflowGraphEditPolicyBlocker struct {
-	Code    string
-	Message string
-	Count   int64
+	Code             string
+	Message          string
+	Count            int64
+	AffectedEntities []WorkflowGraphEntityReference
 }
 
 type WorkflowGraphEditPolicyResult struct {
@@ -71,15 +72,17 @@ func workflowGraphEditPolicy(ctx context.Context, q *sqlitegen.Queries, workflow
 }
 
 type workflowGraphEditPolicyStructuralDescriptor struct {
-	StartNodeChangeCount    int64
-	LastTerminalChangeCount int64
-	NodeKindChanges         []workflow.NodeID
-	HistoryEdgeChanges      []workflow.EdgeID
+	StartNodeChanges    []workflow.NodeID
+	LastTerminalChanges []workflow.NodeID
+	NodeKindChanges     []workflow.NodeID
+	HistoryEdgeChanges  []workflow.EdgeID
 }
 
 type workflowGraphSaveDynamicImpact struct {
-	Impact     WorkflowGraphSaveImpact
-	EditPolicy WorkflowGraphEditPolicyResult
+	Impact                           WorkflowGraphSaveImpact
+	EditPolicy                       WorkflowGraphEditPolicyResult
+	RemovedNodeTaskReferenceEntities []WorkflowGraphEntityReference
+	RemovedEdgeTaskReferenceEntities []WorkflowGraphEntityReference
 }
 
 func describeWorkflowGraphEditPolicy(current preparedWorkflowGraphSave, next preparedWorkflowGraphSave) workflowGraphEditPolicyStructuralDescriptor {
@@ -92,21 +95,21 @@ func describeWorkflowGraphEditPolicy(current preparedWorkflowGraphSave, next pre
 		}
 	}
 	descriptor := workflowGraphEditPolicyStructuralDescriptor{}
-	currentTerminalCount := int64(0)
+	currentTerminalIDs := []workflow.NodeID{}
 	for _, currentNode := range current.nodes {
 		nextNode, exists := nextNodes[currentNode.ID]
 		if currentNode.Kind == workflow.NodeKindStart && (!exists || nextNode.Kind != workflow.NodeKindStart) {
-			descriptor.StartNodeChangeCount++
+			descriptor.StartNodeChanges = append(descriptor.StartNodeChanges, currentNode.ID)
 		}
 		if currentNode.Kind == workflow.NodeKindTerminal {
-			currentTerminalCount++
+			currentTerminalIDs = append(currentTerminalIDs, currentNode.ID)
 		}
 		if exists && currentNode.Kind != nextNode.Kind {
 			descriptor.NodeKindChanges = append(descriptor.NodeKindChanges, currentNode.ID)
 		}
 	}
-	if currentTerminalCount > 0 && nextTerminalCount == 0 {
-		descriptor.LastTerminalChangeCount = 1
+	if len(currentTerminalIDs) > 0 && nextTerminalCount == 0 {
+		descriptor.LastTerminalChanges = append(descriptor.LastTerminalChanges, currentTerminalIDs...)
 	}
 	transitionDescriptor := describeWorkflowGraphTransitionChanges(current, next)
 	descriptor.HistoryEdgeChanges = transitionDescriptor.HistoryEdgeChanges
@@ -147,11 +150,8 @@ func evaluateWorkflowGraphSaveDynamicImpact(ctx context.Context, q *sqlitegen.Qu
 }
 
 func evaluateWorkflowGraphSaveDynamicDecision(ctx context.Context, q *sqlitegen.Queries, structural workflowGraphSaveStructuralDescriptor) (workflowGraphSaveDynamicImpact, error) {
-	impact := WorkflowGraphSaveImpact{
-		RemovedNodeCount:            int64(len(structural.Removed.nodes)),
-		RemovedTransitionGroupCount: int64(len(structural.Removed.transitionGroups)),
-		RemovedEdgeCount:            int64(len(structural.Removed.edges)),
-	}
+	evaluation := workflowGraphSaveDynamicImpact{}
+	impact := workflowGraphSaveRemovedImpact(structural.Removed)
 	for _, nodeID := range structural.Removed.nodes {
 		count, err := q.CountTaskNodeReferences(ctx, string(nodeID))
 		if err != nil {
@@ -163,6 +163,12 @@ func evaluateWorkflowGraphSaveDynamicDecision(ctx context.Context, q *sqlitegen.
 			return workflowGraphSaveDynamicImpact{}, err
 		}
 		impact.CurrentNodeTaskReferenceCount += currentCount
+		if currentCount > 0 {
+			evaluation.RemovedNodeTaskReferenceEntities = append(evaluation.RemovedNodeTaskReferenceEntities, WorkflowGraphEntityReference{
+				EntityType: WorkflowGraphEntityTypeNode,
+				EntityID:   string(nodeID),
+			})
+		}
 	}
 	for _, edgeID := range structural.Removed.edges {
 		count, err := q.CountTaskEdgeReferences(ctx, sql.NullString{String: string(edgeID), Valid: true})
@@ -170,12 +176,19 @@ func evaluateWorkflowGraphSaveDynamicDecision(ctx context.Context, q *sqlitegen.
 			return workflowGraphSaveDynamicImpact{}, err
 		}
 		impact.EdgeTaskReferenceCount += count
+		if count > 0 {
+			evaluation.RemovedEdgeTaskReferenceEntities = append(evaluation.RemovedEdgeTaskReferenceEntities, WorkflowGraphEntityReference{
+				EntityType: WorkflowGraphEntityTypeEdge,
+				EntityID:   string(edgeID),
+			})
+		}
 	}
 
 	editPolicyImpact := WorkflowGraphEditPolicyImpact{
-		StartNodeChangeCount:    structural.EditPolicy.StartNodeChangeCount,
-		LastTerminalChangeCount: structural.EditPolicy.LastTerminalChangeCount,
+		StartNodeChangeCount:    int64(len(structural.EditPolicy.StartNodeChanges)),
+		LastTerminalChangeCount: int64(len(structural.EditPolicy.LastTerminalChanges)),
 	}
+	nodeKindChangeEntities := []WorkflowGraphEntityReference{}
 	for _, nodeID := range structural.EditPolicy.NodeKindChanges {
 		refCount, err := q.CountTaskNodeReferences(ctx, string(nodeID))
 		if err != nil {
@@ -184,8 +197,13 @@ func evaluateWorkflowGraphSaveDynamicDecision(ctx context.Context, q *sqlitegen.
 		if refCount > 0 {
 			editPolicyImpact.TaskReferencedNodeKindChangeCount++
 			editPolicyImpact.TaskReferencedNodeKindChangeRefCount += refCount
+			nodeKindChangeEntities = append(nodeKindChangeEntities, WorkflowGraphEntityReference{
+				EntityType: WorkflowGraphEntityTypeNode,
+				EntityID:   string(nodeID),
+			})
 		}
 	}
+	historyEdgeChangeEntities := []WorkflowGraphEntityReference{}
 	for _, edgeID := range structural.EditPolicy.HistoryEdgeChanges {
 		refCount, err := q.CountAllTaskEdgeReferences(ctx, sql.NullString{String: string(edgeID), Valid: true})
 		if err != nil {
@@ -194,13 +212,50 @@ func evaluateWorkflowGraphSaveDynamicDecision(ctx context.Context, q *sqlitegen.
 		if refCount > 0 {
 			editPolicyImpact.HistoryReinterpretingEdgeChangeCount++
 			editPolicyImpact.HistoryReinterpretingEdgeRefCount += refCount
+			historyEdgeChangeEntities = append(historyEdgeChangeEntities, WorkflowGraphEntityReference{
+				EntityType: WorkflowGraphEntityTypeEdge,
+				EntityID:   string(edgeID),
+			})
 		}
 	}
 	editPolicy := WorkflowGraphEditPolicyResult{
-		Impact:   editPolicyImpact,
-		Blockers: workflowGraphEditPolicyBlockers(editPolicyImpact),
+		Impact: editPolicyImpact,
+		Blockers: workflowGraphEditPolicyBlockers(
+			editPolicyImpact,
+			workflowGraphNodeEntityReferences(structural.EditPolicy.StartNodeChanges),
+			workflowGraphNodeEntityReferences(structural.EditPolicy.LastTerminalChanges),
+			nodeKindChangeEntities,
+			historyEdgeChangeEntities,
+		),
 	}
-	return workflowGraphSaveDynamicImpact{Impact: impact, EditPolicy: editPolicy}, nil
+	evaluation.Impact = impact
+	evaluation.EditPolicy = editPolicy
+	evaluation.RemovedNodeTaskReferenceEntities = canonicalWorkflowGraphEntityReferences(evaluation.RemovedNodeTaskReferenceEntities)
+	evaluation.RemovedEdgeTaskReferenceEntities = canonicalWorkflowGraphEntityReferences(evaluation.RemovedEdgeTaskReferenceEntities)
+	return evaluation, nil
+}
+
+func workflowGraphSaveRemovedImpact(removed removedWorkflowGraphRows) WorkflowGraphSaveImpact {
+	entities := make([]WorkflowGraphEntityReference, 0, len(removed.nodeGroups)+len(removed.nodes)+len(removed.transitionGroups)+len(removed.edges))
+	for _, id := range removed.nodeGroups {
+		entities = append(entities, WorkflowGraphEntityReference{EntityType: WorkflowGraphEntityTypeNodeGroup, EntityID: id})
+	}
+	for _, id := range removed.nodes {
+		entities = append(entities, WorkflowGraphEntityReference{EntityType: WorkflowGraphEntityTypeNode, EntityID: string(id)})
+	}
+	for _, id := range removed.transitionGroups {
+		entities = append(entities, WorkflowGraphEntityReference{EntityType: WorkflowGraphEntityTypeTransitionGroup, EntityID: string(id)})
+	}
+	for _, id := range removed.edges {
+		entities = append(entities, WorkflowGraphEntityReference{EntityType: WorkflowGraphEntityTypeEdge, EntityID: string(id)})
+	}
+	return WorkflowGraphSaveImpact{
+		RemovedNodeGroupCount:       int64(len(removed.nodeGroups)),
+		RemovedNodeCount:            int64(len(removed.nodes)),
+		RemovedTransitionGroupCount: int64(len(removed.transitionGroups)),
+		RemovedEdgeCount:            int64(len(removed.edges)),
+		RemovedEntities:             canonicalWorkflowGraphEntityReferences(entities),
+	}
 }
 
 func workflowEdgeHistoryReinterpretingChange(current EdgeRecord, next EdgeRecord) bool {
@@ -215,19 +270,36 @@ func workflowGraphEdgesByID(edges []EdgeRecord) map[workflow.EdgeID]EdgeRecord {
 	return out
 }
 
-func workflowGraphEditPolicyBlockers(impact WorkflowGraphEditPolicyImpact) []WorkflowGraphEditPolicyBlocker {
+func workflowGraphEditPolicyBlockers(
+	impact WorkflowGraphEditPolicyImpact,
+	startNodeChanges []WorkflowGraphEntityReference,
+	lastTerminalChanges []WorkflowGraphEntityReference,
+	nodeKindChanges []WorkflowGraphEntityReference,
+	historyEdgeChanges []WorkflowGraphEntityReference,
+) []WorkflowGraphEditPolicyBlocker {
 	blockers := []WorkflowGraphEditPolicyBlocker{}
 	if impact.StartNodeChangeCount > 0 {
-		blockers = append(blockers, WorkflowGraphEditPolicyBlocker{Code: "start_node_changed", Message: "The workflow start node cannot be removed, replaced, or changed to another kind.", Count: impact.StartNodeChangeCount})
+		blockers = append(blockers, WorkflowGraphEditPolicyBlocker{Code: "start_node_changed", Message: "The workflow start node cannot be removed, replaced, or changed to another kind.", Count: impact.StartNodeChangeCount, AffectedEntities: canonicalWorkflowGraphEntityReferences(startNodeChanges)})
 	}
 	if impact.LastTerminalChangeCount > 0 {
-		blockers = append(blockers, WorkflowGraphEditPolicyBlocker{Code: "last_terminal_changed", Message: "Workflow graph changes must leave at least one terminal node.", Count: impact.LastTerminalChangeCount})
+		blockers = append(blockers, WorkflowGraphEditPolicyBlocker{Code: "last_terminal_changed", Message: "Workflow graph changes must leave at least one terminal node.", Count: impact.LastTerminalChangeCount, AffectedEntities: canonicalWorkflowGraphEntityReferences(lastTerminalChanges)})
 	}
 	if impact.TaskReferencedNodeKindChangeCount > 0 {
-		blockers = append(blockers, WorkflowGraphEditPolicyBlocker{Code: "task_referenced_node_kind_changed", Message: "Workflow node kind changes are blocked for nodes referenced by existing tasks.", Count: impact.TaskReferencedNodeKindChangeRefCount})
+		blockers = append(blockers, WorkflowGraphEditPolicyBlocker{Code: "task_referenced_node_kind_changed", Message: "Workflow node kind changes are blocked for nodes referenced by existing tasks.", Count: impact.TaskReferencedNodeKindChangeRefCount, AffectedEntities: canonicalWorkflowGraphEntityReferences(nodeKindChanges)})
 	}
 	if impact.HistoryReinterpretingEdgeChangeCount > 0 {
-		blockers = append(blockers, WorkflowGraphEditPolicyBlocker{Code: "task_referenced_edge_group_changed", Message: "Transition branch group changes are blocked for branches referenced by existing tasks.", Count: impact.HistoryReinterpretingEdgeRefCount})
+		blockers = append(blockers, WorkflowGraphEditPolicyBlocker{Code: "task_referenced_edge_group_changed", Message: "Transition branch group changes are blocked for branches referenced by existing tasks.", Count: impact.HistoryReinterpretingEdgeRefCount, AffectedEntities: canonicalWorkflowGraphEntityReferences(historyEdgeChanges)})
 	}
 	return blockers
+}
+
+func workflowGraphNodeEntityReferences(nodeIDs []workflow.NodeID) []WorkflowGraphEntityReference {
+	entities := make([]WorkflowGraphEntityReference, 0, len(nodeIDs))
+	for _, nodeID := range nodeIDs {
+		entities = append(entities, WorkflowGraphEntityReference{
+			EntityType: WorkflowGraphEntityTypeNode,
+			EntityID:   string(nodeID),
+		})
+	}
+	return canonicalWorkflowGraphEntityReferences(entities)
 }

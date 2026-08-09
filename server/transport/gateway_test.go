@@ -614,8 +614,8 @@ func TestGatewayHandshakeAndProjectList(t *testing.T) {
 	defer func() { _ = conn.Close() }()
 
 	var handshake protocol.HandshakeResponse
-	callGateway(t, conn, "1", protocol.MethodHandshake, protocol.HandshakeRequest{ProtocolVersion: "101"}, &handshake)
-	if handshake.Identity.ProtocolVersion != "101" || handshake.Identity.ServerID != "server-1" {
+	callGateway(t, conn, "1", protocol.MethodHandshake, protocol.HandshakeRequest{ProtocolVersion: "102"}, &handshake)
+	if handshake.Identity.ProtocolVersion != "102" || handshake.Identity.ServerID != "server-1" {
 		t.Fatalf("unexpected handshake: %+v", handshake.Identity)
 	}
 

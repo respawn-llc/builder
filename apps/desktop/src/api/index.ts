@@ -140,6 +140,8 @@ export type {
   WorkflowManagedExecutionTarget,
   WorkflowNoManagedExecutionTarget,
   WorkflowGraphDraft,
+  WorkflowGraphEntityReference,
+  WorkflowGraphEntityType,
   WorkflowGraphMetadata,
   WorkflowGraphSaveConfirmation,
   WorkflowGraphSaveImpact,

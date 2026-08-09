@@ -88,6 +88,7 @@ export function workflowGraphSaveConfirmationPayload(
     return undefined;
   }
   return {
+    expected_removed_node_group_count: confirmation.expectedRemovedNodeGroupCount,
     expected_removed_node_count: confirmation.expectedRemovedNodeCount,
     expected_removed_transition_group_count: confirmation.expectedRemovedTransitionGroupCount,
     expected_removed_edge_count: confirmation.expectedRemovedEdgeCount,

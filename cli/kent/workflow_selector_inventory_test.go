@@ -52,6 +52,9 @@ func TestWorkflowSelectorInventoryRejectsPrefixedIDsBeforeOpeningRemote(t *testi
 		{"workflow inspect", func(stdout, stderr *bytes.Buffer) int {
 			return workflowSubcommand([]string{"inspect", prefixedWorkflowSelector}, stdout, stderr)
 		}},
+		{"workflow graph inspect", func(stdout, stderr *bytes.Buffer) int {
+			return workflowSubcommand([]string{"graph", "inspect", prefixedWorkflowSelector}, stdout, stderr)
+		}},
 		{"task create --workflow", func(stdout, stderr *bytes.Buffer) int {
 			return taskSubcommand([]string{"create", "--project", "project-1", "--title", "task", "--body", "body", "--workflow", prefixedWorkflowSelector}, stdout, stderr)
 		}},
@@ -98,7 +101,7 @@ func (r *workflowSelectorInventoryRemote) ResolveProjectPath(context.Context, se
 	return serverapi.ProjectResolvePathResponse{Binding: &serverapi.ProjectBinding{ProjectID: "project-1"}}, nil
 }
 func (r *workflowSelectorInventoryRemote) definition() serverapi.WorkflowDefinition {
-	return serverapi.WorkflowDefinition{Workflow: serverapi.WorkflowRecord{ID: r.expected, Name: "Workflow", Version: 1}, Nodes: []serverapi.WorkflowNode{{ID: "start", WorkflowID: r.expected, Key: "source", Kind: "agent", DisplayName: "Source"}, {ID: "target", WorkflowID: r.expected, Key: "target", Kind: "terminal", DisplayName: "Target"}}, TransitionGroups: []serverapi.WorkflowTransitionGroup{{ID: "group", WorkflowID: r.expected, SourceNodeID: "start", TransitionID: "next", DisplayName: "Next"}}, Edges: []serverapi.WorkflowEdge{{ID: "edge", WorkflowID: r.expected, TransitionGroupID: "group", Key: "edge", TargetNodeID: "target", ContextMode: "new_session"}}}
+	return serverapi.WorkflowDefinition{Workflow: serverapi.WorkflowRecord{ID: r.expected, Name: "Workflow", Version: 1}, Nodes: []serverapi.WorkflowNode{{ID: "start", WorkflowID: r.expected, Key: "source", Kind: "agent", DisplayName: "Source"}, {ID: "target", WorkflowID: r.expected, Key: "target", Kind: "terminal", DisplayName: "Target"}}, TransitionGroups: []serverapi.WorkflowTransitionGroup{{ID: "group", WorkflowID: r.expected, SourceNodeID: "start", TransitionID: "next", DisplayName: "Next"}}, Edges: []serverapi.WorkflowEdge{{ID: "edge", WorkflowID: r.expected, TransitionGroupID: "group", Key: "edge", TargetNodeID: "target", AssigneeSelection: "configured", ThinkingSelection: "configured", ContextMode: "new_session", ContextSource: serverapi.WorkflowContextSource{Kind: "immediate_source"}}}}
 }
 func (r *workflowSelectorInventoryRemote) GetWorkflow(context.Context, serverapi.WorkflowGetRequest) (serverapi.WorkflowGetResponse, error) {
 	r.record(r.expected)
@@ -112,7 +115,25 @@ func (r *workflowSelectorInventoryRemote) PreviewWorkflowDelete(_ context.Contex
 func (r *workflowSelectorInventoryRemote) SaveWorkflowGraph(_ context.Context, req serverapi.WorkflowGraphSaveRequest) (serverapi.WorkflowGraphSaveResponse, error) {
 	r.record(req.WorkflowID)
 	def := r.definition()
-	return serverapi.WorkflowGraphSaveResponse{Saved: true, Definition: &def, CurrentVersion: 2}, nil
+	return serverapi.WorkflowGraphSaveResponse{
+		Saved:          true,
+		Changed:        true,
+		Definition:     &def,
+		CurrentVersion: 2,
+		Impact:         serverapi.WorkflowGraphSaveImpact{RemovedEntities: []serverapi.WorkflowGraphEntityReference{}},
+		Blockers:       []serverapi.WorkflowGraphSaveBlocker{},
+		CanSave:        true,
+	}, nil
+}
+func (r *workflowSelectorInventoryRemote) PreviewWorkflowGraphSave(_ context.Context, req serverapi.WorkflowGraphSavePreviewRequest) (serverapi.WorkflowGraphSavePreviewResponse, error) {
+	r.record(req.WorkflowID)
+	return serverapi.WorkflowGraphSavePreviewResponse{
+		CurrentVersion: 1,
+		Changed:        true,
+		Impact:         serverapi.WorkflowGraphSaveImpact{RemovedEntities: []serverapi.WorkflowGraphEntityReference{}},
+		Blockers:       []serverapi.WorkflowGraphSaveBlocker{},
+		CanSave:        true,
+	}, nil
 }
 func (r *workflowSelectorInventoryRemote) AddWorkflowNode(_ context.Context, req serverapi.WorkflowNodeAddRequest) (serverapi.WorkflowNodeAddResponse, error) {
 	r.record(req.WorkflowID)
@@ -213,6 +234,9 @@ func TestWorkflowSelectorInventoryAcceptsCanonicalIDsAndForwardsTypedIdentity(t 
 		{"workflow validate", func(o, e *bytes.Buffer) int { return workflowSubcommand([]string{"validate", selector}, o, e) }},
 		{"workflow inspect", func(o, e *bytes.Buffer) int {
 			return workflowSubcommand([]string{"inspect", selector, "--summary"}, o, e)
+		}},
+		{"workflow graph inspect", func(o, e *bytes.Buffer) int {
+			return workflowSubcommand([]string{"graph", "inspect", selector}, o, e)
 		}},
 		{"task create --workflow", func(o, e *bytes.Buffer) int {
 			return taskSubcommand([]string{"create", "--project", "project-1", "--title", "Task", "--body", "body", "--workflow", selector}, o, e)

@@ -142,30 +142,52 @@ func writeHelpSection(w io.Writer, title string, lines ...string) {
 }
 
 var (
-	rootUsage               = commandUsage{helpFile: "root.txt", includeEmbeddedFlags: true}
-	runUsage                = commandUsage{helpFile: "run.txt", includeEmbeddedFlags: true}
-	sessionIDUsage          = commandUsage{helpFile: "session_id.txt"}
-	goalUsage               = commandUsage{helpFile: "goal.txt"}
-	goalShowUsage           = leafCommandUsage(config.Command+" goal show [--json] [--session <id>]", "Show a session's goal and status.")
-	goalSetUsage            = leafCommandUsage(config.Command+" goal set [--session <id>] <objective>", "Set the objective that guides a session.")
-	goalPauseUsage          = leafCommandUsage(config.Command+" goal pause [--session <id>]", "Pause an active session goal.", "", "User-only; unavailable inside Kent shell commands.")
-	goalResumeUsage         = leafCommandUsage(config.Command+" goal resume [--session <id>]", "Resume a paused session goal.", "", "User-only; unavailable inside Kent shell commands.")
-	goalCompleteUsage       = leafCommandUsage(config.Command+" goal complete [--session <id>] [--confirm]", "Mark a session goal complete.", "", "Agents must pass `--confirm`; user invocations do not require it.")
-	goalClearUsage          = leafCommandUsage(config.Command+" goal clear [--session <id>]", "Remove a session goal.", "", "User-only; unavailable inside Kent shell commands.")
-	questionUsage           = commandUsage{helpFile: "question.txt"}
-	questionShowUsage       = leafCommandUsage(config.Command+" question (--session <id>|--task <task>) [--project <project>]", "Show the first pending question selected by Session or Workflow Task.")
-	questionAnswerUsage     = leafCommandUsage(config.Command+" question answer (--session <id>|--task <task>) [--project <project>] [--option <number>] [--commentary <text>]", "Answer the first pending question selected by Session or Workflow Task.", "", "Provide --option, --commentary, or both.")
-	worktreeUsage           = leafCommandUsage(config.Command+" worktree <status|list|create|enter|leave|delete> ...", "Inspect workspace worktrees and manage a session's execution target.")
-	worktreeStatusUsage     = leafCommandUsage(config.Command+" worktree status [--session <id>] [--json]", "Inspect the selected session's recorded worktree target.")
-	worktreeListUsage       = leafCommandUsage(config.Command+" worktree list [--session <id>] [--json]", "List registered, external, and missing worktrees.")
-	worktreeCreateUsage     = leafCommandUsage(config.Command+" worktree create [--session <id>] [--base <ref>] [--json] <branch-or-ref> [path]", "Create and set up a worktree without entering it.")
-	worktreeEnterUsage      = leafCommandUsage(config.Command+" worktree enter [--session <id>] [--json] <selector>", "Schedule the session to enter a worktree.")
-	worktreeLeaveUsage      = leafCommandUsage(config.Command+" worktree leave [--session <id>] [--json]", "Schedule the session to return to the main workspace.")
-	worktreeDeleteUsage     = leafCommandUsage(config.Command+" worktree delete [--session <id>] [--force] [--delete-branch] [--force-delete-branch] [--json] <selector>", "Delete a worktree; agent shell commands always retain branches.")
-	workflowUsage           = commandUsage{helpFile: "workflow.txt"}
-	workflowCreateUsage     = leafCommandUsage(config.Command+" workflow create [--description <text>] [--json] <name>", "Create a workflow with `backlog` start and `done` terminal nodes.")
-	workflowDeleteUsage     = leafCommandUsage(config.Command+" workflow delete <uuid> [--confirm] [--json]", "Preview or permanently delete a workflow.", "", "Without `--confirm`, the command reports the deletion impact and makes no changes.")
-	workflowListUsage       = leafCommandUsage(config.Command+" workflow list [--project <path-or-id>] [--page-size <n>] [--page-token <token>] [--json]", "List workflow definitions.")
+	rootUsage           = commandUsage{helpFile: "root.txt", includeEmbeddedFlags: true}
+	runUsage            = commandUsage{helpFile: "run.txt", includeEmbeddedFlags: true}
+	sessionIDUsage      = commandUsage{helpFile: "session_id.txt"}
+	goalUsage           = commandUsage{helpFile: "goal.txt"}
+	goalShowUsage       = leafCommandUsage(config.Command+" goal show [--json] [--session <id>]", "Show a session's goal and status.")
+	goalSetUsage        = leafCommandUsage(config.Command+" goal set [--session <id>] <objective>", "Set the objective that guides a session.")
+	goalPauseUsage      = leafCommandUsage(config.Command+" goal pause [--session <id>]", "Pause an active session goal.", "", "User-only; unavailable inside Kent shell commands.")
+	goalResumeUsage     = leafCommandUsage(config.Command+" goal resume [--session <id>]", "Resume a paused session goal.", "", "User-only; unavailable inside Kent shell commands.")
+	goalCompleteUsage   = leafCommandUsage(config.Command+" goal complete [--session <id>] [--confirm]", "Mark a session goal complete.", "", "Agents must pass `--confirm`; user invocations do not require it.")
+	goalClearUsage      = leafCommandUsage(config.Command+" goal clear [--session <id>]", "Remove a session goal.", "", "User-only; unavailable inside Kent shell commands.")
+	questionUsage       = commandUsage{helpFile: "question.txt"}
+	questionShowUsage   = leafCommandUsage(config.Command+" question (--session <id>|--task <task>) [--project <project>]", "Show the first pending question selected by Session or Workflow Task.")
+	questionAnswerUsage = leafCommandUsage(config.Command+" question answer (--session <id>|--task <task>) [--project <project>] [--option <number>] [--commentary <text>]", "Answer the first pending question selected by Session or Workflow Task.", "", "Provide --option, --commentary, or both.")
+	worktreeUsage       = leafCommandUsage(config.Command+" worktree <status|list|create|enter|leave|delete> ...", "Inspect workspace worktrees and manage a session's execution target.")
+	worktreeStatusUsage = leafCommandUsage(config.Command+" worktree status [--session <id>] [--json]", "Inspect the selected session's recorded worktree target.")
+	worktreeListUsage   = leafCommandUsage(config.Command+" worktree list [--session <id>] [--json]", "List registered, external, and missing worktrees.")
+	worktreeCreateUsage = leafCommandUsage(config.Command+" worktree create [--session <id>] [--base <ref>] [--json] <branch-or-ref> [path]", "Create and set up a worktree without entering it.")
+	worktreeEnterUsage  = leafCommandUsage(config.Command+" worktree enter [--session <id>] [--json] <selector>", "Schedule the session to enter a worktree.")
+	worktreeLeaveUsage  = leafCommandUsage(config.Command+" worktree leave [--session <id>] [--json]", "Schedule the session to return to the main workspace.")
+	worktreeDeleteUsage = leafCommandUsage(config.Command+" worktree delete [--session <id>] [--force] [--delete-branch] [--force-delete-branch] [--json] <selector>", "Delete a worktree; agent shell commands always retain branches.")
+	workflowUsage       = commandUsage{helpFile: "workflow.txt"}
+	workflowCreateUsage = leafCommandUsage(config.Command+" workflow create [--description <text>] [--json] <name>", "Create a workflow with `backlog` start and `done` terminal nodes.")
+	workflowDeleteUsage = leafCommandUsage(config.Command+" workflow delete <uuid> [--confirm] [--json]", "Preview or permanently delete a workflow.", "", "Without `--confirm`, the command reports the deletion impact and makes no changes.")
+	workflowListUsage   = leafCommandUsage(config.Command+" workflow list [--project <path-or-id>] [--page-size <n>] [--page-token <token>] [--json]", "List workflow definitions.")
+	workflowGraphUsage  = leafCommandUsage(
+		config.Command+" workflow graph <inspect|apply> ...",
+		"Inspect or apply a complete identity-bound Workflow graph document.",
+		"",
+		"This editing document belongs to one existing Workflow and Workflow Version; it is not a portable import/export format.",
+	)
+	workflowGraphInspectUsage = leafCommandUsage(
+		config.Command+" workflow graph inspect <uuid>",
+		"Write the complete authored graph as identity-bound JSON.",
+		"",
+		"The document includes Workflow identity and expected Workflow Version. Output is always JSON.",
+	)
+	workflowGraphApplyUsage = leafCommandUsage(
+		config.Command+" workflow graph apply <path|-> [--confirm] [--json]",
+		"Preview and atomically apply a complete identity-bound Workflow graph document.",
+		"",
+		"Use - to read the document from standard input.",
+		"Without --confirm, destructive changes report fresh impact and make no changes.",
+		"Impact and blockers include exact affected graph entity IDs; Task references are aggregate counts.",
+		"With --json, outcomes are saved, unchanged, confirmation_required, blocked, invalid_document, or request_failed.",
+		"Exit status is 0 for saved or unchanged, 1 when no save occurs, and 2 for invalid command usage.",
+	)
 	workflowNodeUsage       = leafCommandUsage(config.Command+" workflow node <add|update> ...", "Add or change workflow nodes.")
 	workflowNodeAddUsage    = leafCommandUsage(config.Command+" workflow node add <uuid> --key <key> --kind <kind> [flags]", "Add a node to a workflow.")
 	workflowNodeUpdateUsage = leafCommandUsage(config.Command+" workflow node update <uuid> <node-key> [flags]", "Change a workflow node.")

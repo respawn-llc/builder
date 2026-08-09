@@ -176,7 +176,10 @@
 
 - Workflow definitions are globally reusable and linked to projects. Projects do not copy graph definitions.
 - Workflow validation uses Project context because available subagent roles and workspace configuration can differ by Project.
-- Kent has no stable Workflow graph import or export format.
+- Kent has no portable Workflow sharing import or export format.
+- The CLI can emit and apply non-portable graph editing JSON that is bound to one existing Workflow and Workflow Version.
+- Graph editing JSON contains the Workflow identity, expected Workflow Version, and complete authored graph. It excludes the Workflow name, description, Execution Target Policy, and derived wiring.
+- Graph editing JSON has no independent schema version. Its contract follows the installed Kent client/server protocol.
 - Product surfaces and the CLI can create and edit Workflow definitions.
 - Workflow definitions may be saved, linked, and made project default while semantic validation fails.
 - A saved Workflow Draft must have valid identifiers, valid references, supported values, unique keys, and exactly one Start Node.
@@ -661,7 +664,33 @@
 ## CLI Surface
 
 - The Workflow and Task CLI provides complete control for operators and agents.
-- Agents can build and edit complete Workflow definitions with high-level commands. Import and export are separate sharing features.
+- Agents can build and edit complete Workflow definitions through high-level commands and identity-bound graph inspect/apply. Portable import and export remain separate sharing features.
+- Every CLI topology mutation submits one complete Workflow Draft graph through the server's authoritative graph-save operation. Kent never persists a partial intermediate graph for one CLI mutation.
+- `kent workflow graph inspect <workflow>` always emits the identity-bound graph editing JSON. It has no `--json` flag.
+- Graph inspect orders Node Groups and Nodes by Key, Transition Groups by source Node identity and Transition Key, and Transition Branches by parent Transition identity and Branch Key. Persistent entity identity breaks ties.
+- `kent workflow graph apply <path-or-dash>` reads graph editing JSON from the selected file. A selector of `-` reads standard input.
+- Graph apply changes the complete authored Workflow graph, including graph-owned configuration. `kent workflow update` remains the CLI authority for Workflow name, description, and Execution Target Policy.
+- Graph apply requires canonical bare UUID v4 text for each new Node, Node Group, Transition Group, and Transition Branch. It rejects prefixed identities, other UUID versions, non-canonical spellings, and surrounding whitespace for additions. It preserves existing graph entity identities and never assigns temporary or persistent identities.
+- Node membership in graph editing JSON uses `group_id` only. Graph inspect never emits `group_key`, and graph apply rejects `group_key` rather than treating it as an alternate membership reference.
+- Graph apply ignores unknown JSON object fields. Unknown or misspelled authored fields are not preserved when Kent saves the complete submitted graph.
+- Graph apply rejects duplicate JSON object fields, trailing JSON values, and missing required fields before it contacts the server.
+- Graph apply loads the current Workflow and compares Workflow Version before it classifies graph entity identities. A mismatch returns `blocked` with `version_changed`, including when a legacy identity in the stale document no longer exists or now belongs to another entity type.
+- For a current-version document, graph apply preserves submitted identities that match existing graph entities of the same type and rejects additions without canonical bare UUID v4 identities before preview or save. A concurrent Workflow change after that read remains subject to preview/save stale-version rejection.
+- Graph apply requests a server preview before every save attempt. A non-destructive graph that has no blocker saves immediately.
+- When confirmation is required, an unconfirmed graph apply reports the preview and changes nothing. The caller reruns the same graph editing JSON with `--confirm`.
+- A confirmed graph apply recalculates impact and confirms the fresh aggregate counts in that invocation. An earlier unconfirmed preview is informational and is not a retained confirmation snapshot.
+- A dynamic impact change before the confirmed invocation may be adopted. A Workflow Version or impact-count change between the confirmed invocation's preview and save rejects the save and changes nothing.
+- Graph-save impact lists every removed graph entity by stable entity type and persistent identity. It reports Task references as aggregate counts and never materializes an unbounded Task-reference collection.
+- Graph-save blockers identify every affected graph entity by stable entity type and persistent identity.
+- Removed Node Groups appear in impact and aggregate counts. Removing a Node Group alone does not require confirmation.
+- Existing confirmation requirements for removed Nodes, Transition Groups, and Transition Branches remain unchanged.
+- Retained Sessions and completed Session-to-Node provenance do not own a deleted Node's lifetime. Current Node and Pending Approval references remain graph-edit blockers.
+- Graph apply rejects a stale expected Workflow Version even when the submitted graph equals the current graph. A metadata-only Workflow update makes an earlier graph editing document stale.
+- Applying a graph that equals the current authored graph returns `unchanged`, exits successfully, and does not increment Workflow Version.
+- In JSON mode, graph apply emits one outcome envelope with `saved`, `unchanged`, `confirmation_required`, `blocked`, `invalid_document`, or `request_failed`.
+- A stale Workflow Version uses outcome `blocked` and blocker code `version_changed`.
+- Graph apply exits `0` for `saved` or `unchanged`, `1` when no save occurs for a typed product or operational outcome, and `2` for invalid command usage.
+- Existing high-level Node and Edge commands use graph save for their non-destructive operations and preserve their success output contracts. When one requires destructive confirmation, it changes nothing and directs the caller to graph apply.
 - CLI command grouping is not a compatibility contract. The documented behavior, accepted data, and machine-readable output are compatibility contracts.
 - CLI output includes stable identifiers needed by later commands.
 - `kent task wait <task>` and `kent task watch <task>` resolve a Project-scoped Task and observe it through server-owned event notification. They never poll read commands or mutate the Task.
