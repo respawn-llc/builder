@@ -192,11 +192,10 @@ func TestSessionPickerIgnoresMouseSGRRunes(t *testing.T) {
 func TestSessionPickerHeaderLoadsGitBranchAsync(t *testing.T) {
 	repoRoot := initStatusLineGitRepo(t, "picker-branch")
 	m := newUninitializedTestSessionPickerModel(t, nil, sessionPickerHeaderInfo{
-		Version: "1.2.3",
+		Version:    "1.2.3",
+		ModelFacts: sessionPickerTestModelFacts("gpt-5", "high"),
 		StatusRequest: uiStatusRequest{
 			WorkspaceRoot: repoRoot,
-			ModelName:     "gpt-5",
-			ThinkingLevel: "high",
 			Settings:      config.Settings{Model: "gpt-5", ThinkingLevel: "high"},
 			AuthStatus:    &staticAuthStatusClient{response: authStatusResponse(serverapi.AuthStatusMethodNone)},
 		},
@@ -221,10 +220,9 @@ func TestSessionPickerHeaderInitialAsyncPaintUsesOnlyStaticShell(t *testing.T) {
 	m := newUninitializedTestSessionPickerModel(t, nil, sessionPickerHeaderInfo{
 		Version:       "1.2.3",
 		ServerAddress: "127.0.0.1:53082",
+		ModelFacts:    sessionPickerTestModelFacts("gpt-5", "high"),
 		StatusRequest: uiStatusRequest{
 			WorkspaceRoot: repoRoot,
-			ModelName:     "gpt-5",
-			ThinkingLevel: "high",
 			Settings:      config.Settings{Model: "gpt-5", ThinkingLevel: "high"},
 			AuthStatus:    &staticAuthStatusClient{response: authStatusResponse(serverapi.AuthStatusMethodNone)},
 		},
@@ -250,8 +248,6 @@ func TestSessionPickerHeaderLoadsRemoteAuthStatus(t *testing.T) {
 	m := newTestSessionPickerModel(t, nil, sessionPickerHeaderInfo{
 		Version: "1.2.3",
 		StatusRequest: uiStatusRequest{
-			Settings:   config.Settings{Model: "gpt-5"},
-			ModelName:  "gpt-5",
 			AuthStatus: &staticAuthStatusClient{response: authStatusResponse(serverapi.AuthStatusMethodOAuth)},
 		},
 	})
@@ -271,6 +267,11 @@ func TestSessionPickerHeaderLoadsRemoteAuthStatus(t *testing.T) {
 func TestSessionPickerStatusOmitsAbsentModel(t *testing.T) {
 	header := sessionPickerHeaderInfo{
 		StatusRequest: uiStatusRequest{
+			Settings: config.Settings{
+				Model:          "server-default",
+				ThinkingLevel:  "high",
+				ModelVerbosity: config.ModelVerbosity("high"),
+			},
 			AuthStatus: &staticAuthStatusClient{response: authStatusResponse(serverapi.AuthStatusMethodOAuth)},
 		},
 	}
@@ -305,8 +306,6 @@ func TestSessionPickerHeaderLoadsAuthStatusVariants(t *testing.T) {
 			m := newTestSessionPickerModel(t, nil, sessionPickerHeaderInfo{
 				Version: "1.2.3",
 				StatusRequest: uiStatusRequest{
-					Settings:   config.Settings{Model: "gpt-5"},
-					ModelName:  "gpt-5",
 					AuthStatus: &staticAuthStatusClient{response: authStatusResponse(tt.method)},
 				},
 			})
@@ -321,6 +320,13 @@ func TestSessionPickerHeaderLoadsAuthStatusVariants(t *testing.T) {
 				t.Fatalf("expected %q in header, got %q", tt.want, plain)
 			}
 		})
+	}
+}
+
+func sessionPickerTestModelFacts(name, thinkingLevel string) *sessionPickerModelFacts {
+	return &sessionPickerModelFacts{
+		Name:          &name,
+		ThinkingLevel: &thinkingLevel,
 	}
 }
 

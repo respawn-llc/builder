@@ -233,18 +233,10 @@ func (p *launchPlanner) selectSession(ctx context.Context, notice *startupPicker
 }
 
 func (p *launchPlanner) sessionPickerHeaderInfo(cfg config.App) sessionPickerHeaderInfo {
-	settings := cfg.Settings
-	// A configured server's persisted runtime settings are not client config
-	// state. The picker has no session plan yet, so omit those values until a
-	// server read model supplies them.
-	settings.Model = ""
-	settings.ThinkingLevel = ""
-	settings.ModelVerbosity = ""
-	settings.EnabledTools = nil
 	statusReq := populateStatusRequestCacheKeys(uiStatusRequest{
 		WorkspaceRoot:   strings.TrimSpace(cfg.WorkspaceRoot),
 		PersistenceRoot: strings.TrimSpace(cfg.PersistenceRoot),
-		Settings:        settings,
+		Settings:        cfg.Settings,
 		Source:          cfg.Source,
 		AuthStatus:      p.server.AuthStatusClient(),
 	})

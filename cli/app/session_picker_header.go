@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"core/shared/apicontract"
+	"core/shared/config"
 	"core/shared/serverapi"
 
 	"github.com/charmbracelet/lipgloss"
@@ -22,7 +23,14 @@ type sessionPickerHeaderInfo struct {
 	StatusRequest uiStatusRequest
 	ServerAddress string
 	Notice        *startupPickerNotice
+	ModelFacts    *sessionPickerModelFacts
 	updateStatus  apicontract.ServerStatusService
+}
+
+type sessionPickerModelFacts struct {
+	Name          *string
+	ThinkingLevel *string
+	Verbosity     *config.ModelVerbosity
 }
 
 type sessionPickerHeaderLine struct {

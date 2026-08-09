@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"core/cli/app/internal/status"
+	"core/server/llm"
 	"core/shared/textutil"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -19,12 +20,7 @@ type sessionPickerStatusMsg struct {
 
 func collectSessionPickerStatusCmd(header sessionPickerHeaderInfo) tea.Cmd {
 	req := populateStatusRequestCacheKeys(header.StatusRequest)
-	var model *string
-	if strings.TrimSpace(req.ModelName) != "" ||
-		strings.TrimSpace(req.ConfiguredModelName) != "" ||
-		strings.TrimSpace(req.Settings.Model) != "" {
-		model = textutil.OptionalTrimmedString(status.ModelSummary(req))
-	}
+	model := sessionPickerModelSummary(header.ModelFacts)
 	if strings.TrimSpace(req.WorkspaceRoot) == "" && model == nil && req.AuthStatus == nil {
 		return nil
 	}
@@ -49,4 +45,31 @@ func collectSessionPickerStatusCmd(header sessionPickerHeaderInfo) tea.Cmd {
 			model:  model,
 		}
 	}
+}
+
+func sessionPickerModelSummary(facts *sessionPickerModelFacts) *string {
+	if facts == nil {
+		return nil
+	}
+	if facts.Name == nil {
+		panic("session picker model facts require a model name")
+	}
+	name := strings.TrimSpace(*facts.Name)
+	if name == "" || name != *facts.Name {
+		panic("session picker model facts require a nonblank trimmed model name")
+	}
+	thinkingLevel := ""
+	if facts.ThinkingLevel != nil {
+		thinkingLevel = strings.TrimSpace(*facts.ThinkingLevel)
+		if thinkingLevel == "" || thinkingLevel != *facts.ThinkingLevel {
+			panic("session picker model facts require a nonblank trimmed thinking level")
+		}
+	}
+	if facts.Verbosity != nil {
+		verbosity := strings.TrimSpace(string(*facts.Verbosity))
+		if verbosity == "" || verbosity != string(*facts.Verbosity) {
+			panic("session picker model facts require nonblank trimmed verbosity")
+		}
+	}
+	return textutil.OptionalTrimmedString(llm.ModelDisplayLabel(name, thinkingLevel))
 }
