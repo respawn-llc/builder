@@ -2463,10 +2463,12 @@ func validateWorkflowGraphEntityReferences(references []WorkflowGraphEntityRefer
 
 // CompareWorkflowGraphEntityReferences defines the canonical graph entity ordering used by graph-save producers and consumers.
 func CompareWorkflowGraphEntityReferences(left WorkflowGraphEntityReference, right WorkflowGraphEntityReference) int {
-	if left.EntityType != right.EntityType {
-		return strings.Compare(string(left.EntityType), string(right.EntityType))
-	}
-	return strings.Compare(left.EntityID, right.EntityID)
+	return workflowcontract.CompareGraphEntityIdentity(
+		string(left.EntityType),
+		left.EntityID,
+		string(right.EntityType),
+		right.EntityID,
+	)
 }
 
 func validateWorkflowGraphMetadata(metadata *WorkflowGraphMetadata) error {

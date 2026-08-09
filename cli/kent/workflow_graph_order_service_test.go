@@ -29,6 +29,7 @@ const (
 
 type workflowGraphServiceRemote struct {
 	apicontract.WorkflowService
+	store           *workflowstore.Store
 	previewRequests []serverapi.WorkflowGraphSavePreviewRequest
 	saveRequests    []serverapi.WorkflowGraphSaveRequest
 }
@@ -95,6 +96,34 @@ func TestWorkflowGraphPreviewNormalizesPermutedDocumentToUnchangedWithoutSave(t 
 	}
 	requireWorkflowGraphDraftMatchesDefinitionOrder(t, preview.Graph, current)
 	requireWorkflowGraphDraftMatchesDefinitionOrder(t, remote.previewRequests[0].Graph, current)
+}
+
+func TestWorkflowGraphInspectApplyIsUnchangedWithPersistedDerivedEdgeWiring(t *testing.T) {
+	ctx, remote, workflowID := newWorkflowGraphServiceFixture(t)
+	seedWorkflowGraphDerivedEdgeWiring(t, ctx, remote.store, workflowID)
+	current := getWorkflowGraphDefinition(t, ctx, remote, workflowID)
+	if !slices.ContainsFunc(current.Edges, func(edge serverapi.WorkflowEdge) bool {
+		return len(edge.InputBindings) != 0 || len(edge.OutputRequirements) != 0
+	}) {
+		t.Fatal("fixture has no persisted derived Edge wiring")
+	}
+	document, err := workflowGraphDocumentFromDefinition(current)
+	if err != nil {
+		t.Fatalf("workflowGraphDocumentFromDefinition: %v", err)
+	}
+
+	outcome := runWorkflowGraphApply(ctx, remote, document, false)
+
+	if outcome.Outcome != workflowGraphApplyUnchanged {
+		t.Fatalf("graph apply outcome = %+v, want unchanged", outcome)
+	}
+	if len(remote.previewRequests) != 1 || len(remote.saveRequests) != 0 {
+		t.Fatalf("preview requests = %d, save requests = %d, want one/zero", len(remote.previewRequests), len(remote.saveRequests))
+	}
+	reloaded := getWorkflowGraphDefinition(t, ctx, remote, workflowID)
+	if reloaded.Workflow.Version != current.Workflow.Version {
+		t.Fatalf("Workflow Version = %d, want unchanged %d", reloaded.Workflow.Version, current.Workflow.Version)
+	}
 }
 
 func TestWorkflowGraphChangedPermutedDocumentPreservesIdentityBoundOrder(t *testing.T) {
@@ -191,7 +220,7 @@ func newWorkflowGraphServiceFixture(t *testing.T) (context.Context, *workflowGra
 	if err != nil {
 		t.Fatalf("workflowsvc.New: %v", err)
 	}
-	remote := &workflowGraphServiceRemote{WorkflowService: service}
+	remote := &workflowGraphServiceRemote{WorkflowService: service, store: store}
 	created, err := remote.CreateWorkflow(ctx, serverapi.WorkflowCreateRequest{Name: "CLI graph order"})
 	if err != nil {
 		t.Fatalf("CreateWorkflow: %v", err)
@@ -200,6 +229,44 @@ func newWorkflowGraphServiceFixture(t *testing.T) (context.Context, *workflowGra
 	remote.previewRequests = nil
 	remote.saveRequests = nil
 	return ctx, remote, created.Workflow.ID
+}
+
+func seedWorkflowGraphDerivedEdgeWiring(
+	t *testing.T,
+	ctx context.Context,
+	store *workflowstore.Store,
+	workflowID runtimeids.WorkflowID,
+) {
+	t.Helper()
+	definition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition before derived wiring seed: %v", err)
+	}
+	edge := definition.Edges[0]
+	edge.InputBindings = []workflow.InputBinding{{
+		Name:   "task_title",
+		Source: workflow.BindingSourceTask,
+		Field:  "title",
+	}}
+	edge.OutputRequirements = []workflow.OutputRequirement{{FieldName: "summary"}}
+	if _, err := store.UpdateEdge(ctx, workflowstore.EdgeRecord{
+		ID:                 edge.ID,
+		WorkflowID:         edge.WorkflowID,
+		TransitionGroupID:  edge.TransitionGroupID,
+		Key:                edge.Key,
+		TargetNodeID:       edge.TargetNodeID,
+		AssigneeSelection:  edge.AssigneeSelection,
+		ThinkingSelection:  edge.ThinkingSelection,
+		RequiresApproval:   edge.RequiresApproval,
+		ContextMode:        edge.ContextMode,
+		ContextSource:      edge.ContextSource,
+		InputBindings:      edge.InputBindings,
+		PromptTemplate:     edge.PromptTemplate,
+		Parameters:         edge.Parameters,
+		OutputRequirements: edge.OutputRequirements,
+	}); err != nil {
+		t.Fatalf("UpdateEdge with derived wiring: %v", err)
+	}
 }
 
 func seedWorkflowGraphOrderFixture(t *testing.T, ctx context.Context, remote apicontract.WorkflowService, workflowID runtimeids.WorkflowID) {

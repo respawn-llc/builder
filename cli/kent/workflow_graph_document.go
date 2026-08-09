@@ -70,6 +70,9 @@ const (
 	workflowGraphJSONContextSource
 	workflowGraphJSONParameters
 	workflowGraphJSONParameter
+	workflowGraphJSONString
+	workflowGraphJSONInteger
+	workflowGraphJSONBoolean
 )
 
 func (n *workflowGraphDocumentNode) UnmarshalJSON(data []byte) error {
@@ -186,6 +189,7 @@ func decodeWorkflowGraphDocument(data []byte) (workflowGraphDocument, error) {
 
 func validateWorkflowGraphDocumentJSON(data []byte) error {
 	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
 	if err := scanWorkflowGraphJSONValue(decoder, workflowGraphJSONDocument); err != nil {
 		return err
 	}
@@ -200,6 +204,9 @@ func validateWorkflowGraphDocumentJSON(data []byte) error {
 func scanWorkflowGraphJSONValue(decoder *json.Decoder, context workflowGraphJSONContext) error {
 	token, err := decoder.Token()
 	if err != nil {
+		return err
+	}
+	if err := validateWorkflowGraphJSONToken(context, token); err != nil {
 		return err
 	}
 	delimiter, isDelimiter := token.(json.Delim)
@@ -252,10 +259,58 @@ func scanWorkflowGraphJSONValue(decoder *json.Decoder, context workflowGraphJSON
 	}
 }
 
+func validateWorkflowGraphJSONToken(context workflowGraphJSONContext, token json.Token) error {
+	switch context {
+	case workflowGraphJSONDocument,
+		workflowGraphJSONGraph,
+		workflowGraphJSONNodeGroup,
+		workflowGraphJSONNode,
+		workflowGraphJSONJoinInputProvider,
+		workflowGraphJSONTransitionGroup,
+		workflowGraphJSONEdge,
+		workflowGraphJSONContextSource,
+		workflowGraphJSONParameter:
+		if delimiter, ok := token.(json.Delim); !ok || delimiter != '{' {
+			return errors.New("required JSON object has invalid value")
+		}
+	case workflowGraphJSONNodeGroups,
+		workflowGraphJSONNodes,
+		workflowGraphJSONJoinInputProviders,
+		workflowGraphJSONTransitionGroups,
+		workflowGraphJSONEdges,
+		workflowGraphJSONParameters:
+		if delimiter, ok := token.(json.Delim); !ok || delimiter != '[' {
+			return errors.New("required JSON array has invalid value")
+		}
+	case workflowGraphJSONString:
+		if _, ok := token.(string); !ok {
+			return errors.New("required JSON string has invalid value")
+		}
+	case workflowGraphJSONInteger:
+		number, ok := token.(json.Number)
+		if !ok {
+			return errors.New("required JSON integer has invalid value")
+		}
+		if _, err := number.Int64(); err != nil {
+			return errors.New("required JSON integer has invalid value")
+		}
+	case workflowGraphJSONBoolean:
+		if _, ok := token.(bool); !ok {
+			return errors.New("required JSON boolean has invalid value")
+		}
+	}
+	return nil
+}
+
 func workflowGraphJSONChildContext(context workflowGraphJSONContext, key string) workflowGraphJSONContext {
 	switch context {
 	case workflowGraphJSONDocument:
-		if key == "graph" {
+		switch key {
+		case "workflow_id":
+			return workflowGraphJSONString
+		case "expected_version":
+			return workflowGraphJSONInteger
+		case "graph":
 			return workflowGraphJSONGraph
 		}
 	case workflowGraphJSONGraph:
@@ -269,16 +324,47 @@ func workflowGraphJSONChildContext(context workflowGraphJSONContext, key string)
 		case "edges":
 			return workflowGraphJSONEdges
 		}
+	case workflowGraphJSONNodeGroup:
+		switch key {
+		case "id", "key", "display_name":
+			return workflowGraphJSONString
+		}
 	case workflowGraphJSONNode:
-		if key == "join_input_providers" {
+		switch key {
+		case "id", "key", "kind", "display_name":
+			return workflowGraphJSONString
+		case "join_input_providers":
 			return workflowGraphJSONJoinInputProviders
+		}
+	case workflowGraphJSONJoinInputProvider:
+		switch key {
+		case "input_name", "provider_edge_id":
+			return workflowGraphJSONString
+		}
+	case workflowGraphJSONTransitionGroup:
+		switch key {
+		case "id", "source_node_id", "transition_id", "display_name":
+			return workflowGraphJSONString
 		}
 	case workflowGraphJSONEdge:
 		switch key {
+		case "id", "transition_group_id", "key", "target_node_id", "assignee_selection", "thinking_selection", "context_mode":
+			return workflowGraphJSONString
+		case "requires_approval":
+			return workflowGraphJSONBoolean
 		case "context_source":
 			return workflowGraphJSONContextSource
 		case "parameters":
 			return workflowGraphJSONParameters
+		}
+	case workflowGraphJSONContextSource:
+		if key == "kind" {
+			return workflowGraphJSONString
+		}
+	case workflowGraphJSONParameter:
+		switch key {
+		case "key", "description", "purpose":
+			return workflowGraphJSONString
 		}
 	}
 	return workflowGraphJSONUnknown

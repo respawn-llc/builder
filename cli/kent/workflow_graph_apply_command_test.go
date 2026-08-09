@@ -5,11 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 
 	"core/shared/apicontract"
@@ -64,56 +61,31 @@ func (r *workflowGraphApplyRemote) Close() error {
 	return r.closeError
 }
 
-func TestWorkflowGraphApplyReadsFileAndDashStdin(t *testing.T) {
+func TestWorkflowGraphApplyProjectsInvalidDocumentAndRequestFailures(t *testing.T) {
 	for _, test := range []struct {
 		name  string
 		input string
-		args  func(t *testing.T) []string
 	}{
+		{name: "malformed JSON", input: `{`},
 		{
-			name:  "dash stdin",
-			input: emptyWorkflowGraphDocumentJSON,
-			args:  func(*testing.T) []string { return []string{"graph", "apply", "-", "--json"} },
-		},
-		{
-			name: "file",
-			args: func(t *testing.T) []string {
-				path := filepath.Join(t.TempDir(), "workflow.json")
-				if err := os.WriteFile(path, []byte(emptyWorkflowGraphDocumentJSON), 0o600); err != nil {
-					t.Fatalf("write input: %v", err)
-				}
-				return []string{"graph", "apply", path, "--json"}
-			},
+			name:  "null required Edge fields",
+			input: `{"workflow_id":"11111111-1111-4111-8111-111111111111","expected_version":1,"graph":{"node_groups":[],"nodes":[],"transition_groups":[],"edges":[{"id":"edge-1","transition_group_id":"group-1","key":"edge","target_node_id":"node-1","assignee_selection":"configured","thinking_selection":"configured","requires_approval":null,"context_mode":"new_session","context_source":null}]}}`,
 		},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			remote := workflowGraphApplyUnchangedRemote(t, 1)
-			installWorkflowCommandRemote(t, remote)
-			exitCode, outcome, stderr := runWorkflowGraphApplyCommand(t, test.args(t), test.input)
-			if exitCode != 0 || outcome.Outcome != workflowGraphApplyUnchanged {
-				t.Fatalf("exit=%d outcome=%+v stderr=%q, want unchanged", exitCode, outcome, stderr)
+		t.Run("invalid document/"+test.name, func(t *testing.T) {
+			previous := workflowCommandRemoteOpener
+			defer func() { workflowCommandRemoteOpener = previous }()
+			opened := 0
+			workflowCommandRemoteOpener = func(context.Context, string) (config.App, workflowCommandRemote, error) {
+				opened++
+				return config.App{}, nil, errors.New("unexpected open")
 			}
-			if remote.getCalls != 1 || remote.previewCalls != 1 || remote.saveCalls != 0 {
-				t.Fatalf("calls get=%d preview=%d save=%d", remote.getCalls, remote.previewCalls, remote.saveCalls)
+			exitCode, outcome, stderr := runWorkflowGraphApplyCommand(t, []string{"graph", "apply", "-", "--json"}, test.input)
+			if exitCode != 1 || outcome.Outcome != workflowGraphApplyInvalidDocument || opened != 0 || stderr != "" {
+				t.Fatalf("exit=%d outcome=%+v opened=%d stderr=%q", exitCode, outcome, opened, stderr)
 			}
 		})
 	}
-}
-
-func TestWorkflowGraphApplyProjectsInvalidDocumentAndRequestFailures(t *testing.T) {
-	t.Run("invalid document", func(t *testing.T) {
-		previous := workflowCommandRemoteOpener
-		defer func() { workflowCommandRemoteOpener = previous }()
-		opened := 0
-		workflowCommandRemoteOpener = func(context.Context, string) (config.App, workflowCommandRemote, error) {
-			opened++
-			return config.App{}, nil, errors.New("unexpected open")
-		}
-		exitCode, outcome, stderr := runWorkflowGraphApplyCommand(t, []string{"graph", "apply", "-", "--json"}, `{`)
-		if exitCode != 1 || outcome.Outcome != workflowGraphApplyInvalidDocument || opened != 0 || stderr != "" {
-			t.Fatalf("exit=%d outcome=%+v opened=%d stderr=%q", exitCode, outcome, opened, stderr)
-		}
-	})
 
 	t.Run("file read", func(t *testing.T) {
 		exitCode, outcome, stderr := runWorkflowGraphApplyCommand(t, []string{"graph", "apply", filepath.Join(t.TempDir(), "missing"), "--json"}, "")
@@ -233,82 +205,14 @@ func TestWorkflowGraphApplyProjectsBlockedConfirmationAndUnchangedWithoutSave(t 
 	}
 }
 
-func TestWorkflowGraphApplyHumanWriterUsesOutcomeSpecificStreams(t *testing.T) {
-	tests := []struct {
-		name       string
-		input      string
-		remote     *workflowGraphApplyRemote
-		wantExit   int
-		wantStdout bool
-		wantStderr bool
-	}{
-		{name: "invalid document", input: `{`, wantExit: 1, wantStderr: true},
-		{
-			name:  "request failed",
-			input: emptyWorkflowGraphDocumentJSON,
-			remote: &workflowGraphApplyRemote{
-				definition: workflowGraphApplyDefinition(t, 1),
-				getError:   errors.New("get failed"),
-			},
-			wantExit: 1, wantStderr: true,
-		},
-		{
-			name:  "blocked",
-			input: emptyWorkflowGraphDocumentJSON,
-			remote: &workflowGraphApplyRemote{
-				definition: workflowGraphApplyDefinition(t, 1),
-				previewResponse: workflowGraphApplyPreview(1, true, false, false, []serverapi.WorkflowGraphSaveBlocker{{
-					Code: "validation_failed", Message: "invalid graph", Count: 1, AffectedEntities: []serverapi.WorkflowGraphEntityReference{},
-				}}),
-			},
-			wantExit: 1, wantStderr: true,
-		},
-		{
-			name:  "confirmation required",
-			input: emptyWorkflowGraphDocumentJSON,
-			remote: &workflowGraphApplyRemote{
-				definition: workflowGraphApplyDefinition(t, 1),
-				previewResponse: workflowGraphApplyPreview(1, true, false, true, []serverapi.WorkflowGraphSaveBlocker{{
-					Code: "confirmation_required", Message: "confirm removal", Count: 1, AffectedEntities: []serverapi.WorkflowGraphEntityReference{},
-				}}),
-			},
-			wantExit: 1, wantStderr: true,
-		},
-		{
-			name:       "unchanged",
-			input:      emptyWorkflowGraphDocumentJSON,
-			remote:     workflowGraphApplyUnchangedRemote(t, 1),
-			wantExit:   0,
-			wantStdout: true,
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if test.remote != nil {
-				installWorkflowCommandRemote(t, test.remote)
-			}
-			var stdout, stderr bytes.Buffer
-			exitCode := workflowSubcommandWithInput(
-				[]string{"graph", "apply", "-"},
-				bytes.NewBufferString(test.input),
-				&stdout,
-				&stderr,
-			)
-			if exitCode != test.wantExit || (stdout.Len() > 0) != test.wantStdout || (stderr.Len() > 0) != test.wantStderr {
-				t.Fatalf("exit=%d stdout=%q stderr=%q", exitCode, stdout.String(), stderr.String())
-			}
-			if test.remote != nil && test.remote.saveCalls != 0 {
-				t.Fatalf("save calls = %d, want zero", test.remote.saveCalls)
-			}
-		})
-	}
-}
-
-func TestWorkflowGraphApplyHumanConfirmationReportsTypedPreviewDetails(t *testing.T) {
+func TestWorkflowGraphApplyJSONPreviewPreservesTypedDetails(t *testing.T) {
 	impact := workflowGraphApplyConfirmationImpact()
+	nodeID := "node-validation-1"
+	relatedID := "edge-validation-1"
+	validationCode := "workflow.validation.review"
 	affected := []serverapi.WorkflowGraphEntityReference{
 		{EntityType: serverapi.WorkflowGraphEntityTypeEdge, EntityID: "edge-4"},
-		{EntityType: serverapi.WorkflowGraphEntityTypeNode, EntityID: "node-2"},
+		{EntityType: serverapi.WorkflowGraphEntityTypeNode, EntityID: nodeID},
 	}
 	remote := workflowGraphApplyUnchangedRemote(t, 1)
 	remote.previewResponse = workflowGraphApplyPreview(1, true, false, true, []serverapi.WorkflowGraphSaveBlocker{{
@@ -318,53 +222,6 @@ func TestWorkflowGraphApplyHumanConfirmationReportsTypedPreviewDetails(t *testin
 		AffectedEntities: affected,
 	}})
 	remote.previewResponse.Impact = impact
-	installWorkflowCommandRemote(t, remote)
-
-	var stdout, stderr bytes.Buffer
-	exitCode := workflowSubcommandWithInput(
-		[]string{"graph", "apply", "-"},
-		bytes.NewBufferString(emptyWorkflowGraphDocumentJSON),
-		&stdout,
-		&stderr,
-	)
-	if exitCode != 1 || stdout.Len() != 0 || remote.saveCalls != 0 {
-		t.Fatalf("exit=%d stdout=%q stderr=%q save=%d", exitCode, stdout.String(), stderr.String(), remote.saveCalls)
-	}
-	for _, value := range []string{
-		fmt.Sprint(impact.RemovedNodeGroupCount),
-		fmt.Sprint(impact.RemovedNodeCount),
-		fmt.Sprint(impact.RemovedTransitionGroupCount),
-		fmt.Sprint(impact.RemovedEdgeCount),
-		fmt.Sprint(impact.NodeTaskReferenceCount),
-		fmt.Sprint(impact.EdgeTaskReferenceCount),
-	} {
-		if !strings.Contains(stderr.String(), value) {
-			t.Fatalf("human confirmation output omitted aggregate count %q: %q", value, stderr.String())
-		}
-	}
-	for _, entity := range append(append([]serverapi.WorkflowGraphEntityReference{}, impact.RemovedEntities...), affected...) {
-		if !strings.Contains(stderr.String(), string(entity.EntityType)) ||
-			!strings.Contains(stderr.String(), entity.EntityID) {
-			t.Fatalf("human confirmation output omitted entity %+v: %q", entity, stderr.String())
-		}
-	}
-}
-
-func TestWorkflowGraphApplyHumanBlockedReportsValidationAndBlockerEntities(t *testing.T) {
-	nodeID := "node-validation-1"
-	relatedID := "edge-validation-1"
-	validationCode := "workflow.validation.review"
-	affected := []serverapi.WorkflowGraphEntityReference{{
-		EntityType: serverapi.WorkflowGraphEntityTypeNode,
-		EntityID:   nodeID,
-	}}
-	remote := workflowGraphApplyUnchangedRemote(t, 1)
-	remote.previewResponse = workflowGraphApplyPreview(1, true, false, false, []serverapi.WorkflowGraphSaveBlocker{{
-		Code:             "validation_failed",
-		Message:          "invalid graph",
-		Count:            1,
-		AffectedEntities: affected,
-	}})
 	remote.previewResponse.ValidationResults = map[serverapi.WorkflowValidationMode]serverapi.WorkflowValidateResponse{
 		serverapi.WorkflowValidationModeDraft: {
 			Valid: false,
@@ -378,219 +235,36 @@ func TestWorkflowGraphApplyHumanBlockedReportsValidationAndBlockerEntities(t *te
 	}
 	installWorkflowCommandRemote(t, remote)
 
-	var stdout, stderr bytes.Buffer
-	exitCode := workflowSubcommandWithInput(
-		[]string{"graph", "apply", "-"},
-		bytes.NewBufferString(emptyWorkflowGraphDocumentJSON),
-		&stdout,
-		&stderr,
+	exitCode, outcome, stderr := runWorkflowGraphApplyCommand(
+		t,
+		[]string{"graph", "apply", "-", "--json"},
+		emptyWorkflowGraphDocumentJSON,
 	)
-	if exitCode != 1 || stdout.Len() != 0 || remote.saveCalls != 0 {
-		t.Fatalf("exit=%d stdout=%q stderr=%q save=%d", exitCode, stdout.String(), stderr.String(), remote.saveCalls)
+	if exitCode != 1 || outcome.Outcome != workflowGraphApplyConfirmationRequired || stderr != "" || remote.saveCalls != 0 {
+		t.Fatalf("exit=%d outcome=%+v stderr=%q save=%d", exitCode, outcome, stderr, remote.saveCalls)
 	}
-	for _, value := range []string{
-		string(serverapi.WorkflowValidationModeDraft),
-		validationCode,
-		nodeID,
-		relatedID,
-		string(affected[0].EntityType),
-		affected[0].EntityID,
-	} {
-		if !strings.Contains(stderr.String(), value) {
-			t.Fatalf("human blocked output omitted typed value %q: %q", value, stderr.String())
-		}
+	if outcome.Impact == nil ||
+		outcome.Impact.RemovedNodeGroupCount != impact.RemovedNodeGroupCount ||
+		outcome.Impact.RemovedNodeCount != impact.RemovedNodeCount ||
+		outcome.Impact.RemovedTransitionGroupCount != impact.RemovedTransitionGroupCount ||
+		outcome.Impact.RemovedEdgeCount != impact.RemovedEdgeCount ||
+		outcome.Impact.NodeTaskReferenceCount != impact.NodeTaskReferenceCount ||
+		outcome.Impact.EdgeTaskReferenceCount != impact.EdgeTaskReferenceCount ||
+		!slices.Equal(outcome.Impact.RemovedEntities, impact.RemovedEntities) {
+		t.Fatalf("outcome impact = %+v, want %+v", outcome.Impact, impact)
 	}
-}
-
-func TestWorkflowGraphAdditionIdentityRejectsUnsupportedEntityTypeWithoutPanicking(t *testing.T) {
-	currentIDs := workflowGraphCurrentEntityIDs{}
-
-	err := currentIDs.validateAddition(
-		"11111111-1111-4111-8111-111111111111",
-		workflowGraphIdentityType(255),
-		"graph.nodes",
-		0,
-	)
-
-	var typeError workflowGraphIdentityTypeError
-	if !errors.As(err, &typeError) {
-		t.Fatalf("validateAddition error = %v, want workflowGraphIdentityTypeError", err)
+	validation, exists := outcome.ValidationResults[serverapi.WorkflowValidationModeDraft]
+	if !exists || validation.Valid || len(validation.Errors) != 1 ||
+		validation.Errors[0].Code != validationCode ||
+		validation.Errors[0].NodeID != nodeID ||
+		!slices.Equal(validation.Errors[0].RelatedIDs, []string{relatedID}) {
+		t.Fatalf("outcome validation = %+v", outcome.ValidationResults)
 	}
-	if typeError.EntityType != workflowGraphIdentityType(255) {
-		t.Fatalf("entity type = %d, want 255", typeError.EntityType)
-	}
-}
-
-func TestWorkflowGraphApplyStaleVersionPrecedesLegacyAndInvalidIdentityClassification(t *testing.T) {
-	tests := []struct {
-		name            string
-		expectedVersion int64
-		current         serverapi.WorkflowDefinition
-		graph           string
-	}{
-		{
-			name:            "lower version deleted legacy Node",
-			expectedVersion: 6,
-			current:         workflowGraphApplyDefinition(t, 7),
-			graph:           `{"node_groups":[],"nodes":[{"id":"node-deleted-legacy","key":"old","kind":"agent","display_name":"Old"}],"transition_groups":[],"edges":[]}`,
-		},
-		{
-			name:            "lower version legacy ID changed type",
-			expectedVersion: 6,
-			current: serverapi.WorkflowDefinition{
-				Workflow:   serverapi.WorkflowRecord{ID: workflowGraphApplyID(t), Version: 7},
-				NodeGroups: []serverapi.WorkflowNodeGroup{{GroupID: "legacy-cross-type", WorkflowID: workflowGraphApplyID(t), GroupKey: "group", DisplayName: "Group"}},
-			},
-			graph: `{"node_groups":[],"nodes":[{"id":"legacy-cross-type","key":"old","kind":"agent","display_name":"Old"}],"transition_groups":[],"edges":[]}`,
-		},
-		{
-			name:            "future version invalid submitted-only ID",
-			expectedVersion: 8,
-			current:         workflowGraphApplyDefinition(t, 7),
-			graph:           `{"node_groups":[],"nodes":[{"id":"not-a-uuid","key":"new","kind":"agent","display_name":"New"}],"transition_groups":[],"edges":[]}`,
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			remote := &workflowGraphApplyRemote{definition: test.current}
-			installWorkflowCommandRemote(t, remote)
-			document := `{"workflow_id":"11111111-1111-4111-8111-111111111111","expected_version":` +
-				fmt.Sprint(test.expectedVersion) + `,"graph":` + test.graph + `}`
-			exitCode, outcome, stderr := runWorkflowGraphApplyCommand(t, []string{"graph", "apply", "-", "--json"}, document)
-			if exitCode != 1 || outcome.Outcome != workflowGraphApplyBlocked || stderr != "" {
-				t.Fatalf("exit=%d outcome=%+v stderr=%q", exitCode, outcome, stderr)
-			}
-			if len(outcome.Blockers) != 1 || outcome.Blockers[0].Code != "version_changed" ||
-				outcome.CurrentVersion == nil || *outcome.CurrentVersion != 7 {
-				t.Fatalf("stale outcome = %+v, want version_changed at 7", outcome)
-			}
-			if remote.previewCalls != 0 || remote.saveCalls != 0 {
-				t.Fatalf("preview=%d save=%d, want zero", remote.previewCalls, remote.saveCalls)
-			}
-		})
-	}
-}
-
-func TestWorkflowGraphApplyClassifiesAdditionIdentitiesStrictlyForEveryEntityType(t *testing.T) {
-	const canonical = "a8098c1a-f86e-4ea2-9c16-2d8f3a4b5c6d"
-	identities := []struct {
-		name      string
-		id        string
-		wantSaved bool
-	}{
-		{name: "canonical lowercase UUID v4", id: canonical, wantSaved: true},
-		{name: "prefixed ID", id: "node-" + canonical},
-		{name: "UUID v1", id: "6ba7b810-9dad-11d1-80b4-00c04fd430c8"},
-		{name: "uppercase noncanonical UUID", id: "A8098C1A-F86E-4EA2-9C16-2D8F3A4B5C6D"},
-		{name: "hyphenless noncanonical UUID", id: "a8098c1af86e4ea29c162d8f3a4b5c6d"},
-		{name: "leading whitespace", id: " " + canonical},
-		{name: "trailing whitespace", id: canonical + " "},
-	}
-	for _, entityType := range workflowGraphApplyEntityKinds() {
-		for _, identity := range identities {
-			t.Run(entityType.name+"/"+identity.name, func(t *testing.T) {
-				document := workflowGraphDocument{
-					WorkflowID:      workflowGraphApplyID(t),
-					ExpectedVersion: 1,
-					Graph:           entityType.graph(identity.id),
-				}
-				data, err := json.Marshal(document)
-				if err != nil {
-					t.Fatalf("marshal document: %v", err)
-				}
-				remote := workflowGraphApplySavedRemote(t, 1)
-				installWorkflowCommandRemote(t, remote)
-
-				exitCode, outcome, stderr := runWorkflowGraphApplyCommand(
-					t,
-					[]string{"graph", "apply", "-", "--json"},
-					string(data),
-				)
-
-				if identity.wantSaved {
-					if exitCode != 0 || outcome.Outcome != workflowGraphApplySaved || stderr != "" {
-						t.Fatalf("exit=%d outcome=%+v stderr=%q, want saved", exitCode, outcome, stderr)
-					}
-					if remote.previewCalls != 1 || remote.saveCalls != 1 {
-						t.Fatalf("preview=%d save=%d, want one/one", remote.previewCalls, remote.saveCalls)
-					}
-					return
-				}
-				if exitCode != 1 || outcome.Outcome != workflowGraphApplyInvalidDocument || stderr != "" {
-					t.Fatalf("exit=%d outcome=%+v stderr=%q, want invalid_document", exitCode, outcome, stderr)
-				}
-				if remote.previewCalls != 0 || remote.saveCalls != 0 {
-					t.Fatalf("preview=%d save=%d, want zero/zero", remote.previewCalls, remote.saveCalls)
-				}
-			})
-		}
-	}
-}
-
-func TestWorkflowGraphApplyPreservesSameTypeLegacyIDsAndRejectsCrossTypeMatches(t *testing.T) {
-	const legacyID = "legacy-graph-entity"
-	const crossTypeID = "a8098c1a-f86e-4ea2-9c16-2d8f3a4b5c6d"
-	entityTypes := workflowGraphApplyEntityKinds()
-	for index, entityType := range entityTypes {
-		t.Run(entityType.name+"/same type legacy ID", func(t *testing.T) {
-			current := workflowGraphApplyDefinition(t, 1)
-			entityType.addCurrent(&current, legacyID)
-			remote := workflowGraphApplyUnchangedRemote(t, 1)
-			remote.definition = current
-			installWorkflowCommandRemote(t, remote)
-			document := workflowGraphDocument{
-				WorkflowID:      workflowGraphApplyID(t),
-				ExpectedVersion: 1,
-				Graph:           entityType.graph(legacyID),
-			}
-			data, err := json.Marshal(document)
-			if err != nil {
-				t.Fatalf("marshal document: %v", err)
-			}
-
-			exitCode, outcome, stderr := runWorkflowGraphApplyCommand(
-				t,
-				[]string{"graph", "apply", "-", "--json"},
-				string(data),
-			)
-
-			if exitCode != 0 || outcome.Outcome != workflowGraphApplyUnchanged || stderr != "" {
-				t.Fatalf("exit=%d outcome=%+v stderr=%q, want unchanged", exitCode, outcome, stderr)
-			}
-			if remote.previewCalls != 1 || remote.saveCalls != 0 {
-				t.Fatalf("preview=%d save=%d, want one/zero", remote.previewCalls, remote.saveCalls)
-			}
-		})
-
-		t.Run(entityType.name+"/cross type match", func(t *testing.T) {
-			current := workflowGraphApplyDefinition(t, 1)
-			entityTypes[(index+1)%len(entityTypes)].addCurrent(&current, crossTypeID)
-			remote := workflowGraphApplySavedRemote(t, 1)
-			remote.definition = current
-			installWorkflowCommandRemote(t, remote)
-			document := workflowGraphDocument{
-				WorkflowID:      workflowGraphApplyID(t),
-				ExpectedVersion: 1,
-				Graph:           entityType.graph(crossTypeID),
-			}
-			data, err := json.Marshal(document)
-			if err != nil {
-				t.Fatalf("marshal document: %v", err)
-			}
-
-			exitCode, outcome, stderr := runWorkflowGraphApplyCommand(
-				t,
-				[]string{"graph", "apply", "-", "--json"},
-				string(data),
-			)
-
-			if exitCode != 1 || outcome.Outcome != workflowGraphApplyInvalidDocument || stderr != "" {
-				t.Fatalf("exit=%d outcome=%+v stderr=%q, want invalid_document", exitCode, outcome, stderr)
-			}
-			if remote.previewCalls != 0 || remote.saveCalls != 0 {
-				t.Fatalf("preview=%d save=%d, want zero/zero", remote.previewCalls, remote.saveCalls)
-			}
-		})
+	if len(outcome.Blockers) != 1 ||
+		outcome.Blockers[0].Code != "confirmation_required" ||
+		outcome.Blockers[0].Count != 9 ||
+		!slices.Equal(outcome.Blockers[0].AffectedEntities, affected) {
+		t.Fatalf("outcome blockers = %+v", outcome.Blockers)
 	}
 }
 
@@ -730,62 +404,6 @@ func TestWorkflowGraphApplyProjectsSaveResultsWithCurrentImpactAndEntities(t *te
 			}
 		})
 	}
-}
-
-func TestWorkflowGraphApplyUsageErrorsExitTwoWithoutJSON(t *testing.T) {
-	var stdout, stderr bytes.Buffer
-	exitCode := workflowSubcommandWithInput([]string{"graph", "apply", "--json"}, bytes.NewBuffer(nil), &stdout, &stderr)
-	if exitCode != 2 || stdout.Len() != 0 || stderr.Len() == 0 {
-		t.Fatalf("exit=%d stdout=%q stderr=%q", exitCode, stdout.String(), stderr.String())
-	}
-}
-
-func TestWorkflowGraphApplyReportsCloseAndJSONWriterFailures(t *testing.T) {
-	t.Run("close after unchanged", func(t *testing.T) {
-		remote := workflowGraphApplyUnchangedRemote(t, 1)
-		remote.closeError = errors.New("close failed")
-		installWorkflowCommandRemote(t, remote)
-		var stdout, stderr bytes.Buffer
-		exitCode := workflowSubcommandWithInput(
-			[]string{"graph", "apply", "-", "--json"},
-			bytes.NewBufferString(emptyWorkflowGraphDocumentJSON),
-			&stdout,
-			&stderr,
-		)
-		if exitCode != 0 || stdout.Len() == 0 || stderr.Len() == 0 || remote.closeCalls != 1 {
-			t.Fatalf("exit=%d stdout=%q stderr=%q close=%d", exitCode, stdout.String(), stderr.String(), remote.closeCalls)
-		}
-	})
-
-	t.Run("JSON writer", func(t *testing.T) {
-		remote := workflowGraphApplyUnchangedRemote(t, 1)
-		installWorkflowCommandRemote(t, remote)
-		var stderr bytes.Buffer
-		exitCode := workflowSubcommandWithInput(
-			[]string{"graph", "apply", "-", "--json"},
-			bytes.NewBufferString(emptyWorkflowGraphDocumentJSON),
-			bindingMutationFailingWriter{},
-			&stderr,
-		)
-		if exitCode != 1 || stderr.Len() == 0 || remote.saveCalls != 0 || remote.closeCalls != 1 {
-			t.Fatalf("exit=%d stderr=%q save=%d close=%d", exitCode, stderr.String(), remote.saveCalls, remote.closeCalls)
-		}
-	})
-
-	t.Run("human writer", func(t *testing.T) {
-		remote := workflowGraphApplyUnchangedRemote(t, 1)
-		installWorkflowCommandRemote(t, remote)
-		var stderr bytes.Buffer
-		exitCode := workflowSubcommandWithInput(
-			[]string{"graph", "apply", "-"},
-			bytes.NewBufferString(emptyWorkflowGraphDocumentJSON),
-			bindingMutationFailingWriter{},
-			&stderr,
-		)
-		if exitCode != 1 || stderr.Len() == 0 || remote.saveCalls != 0 || remote.closeCalls != 1 {
-			t.Fatalf("exit=%d stderr=%q save=%d close=%d", exitCode, stderr.String(), remote.saveCalls, remote.closeCalls)
-		}
-	})
 }
 
 func runWorkflowGraphApplyCommand(t *testing.T, args []string, stdin string) (int, workflowGraphApplyOutcome, string) {

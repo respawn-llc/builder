@@ -13,7 +13,7 @@ import (
 	"core/server/workflow"
 	"core/server/workflowscript"
 	"core/shared/runtimeids"
-	"core/shared/serverapi"
+	"core/shared/workflowcontract"
 )
 
 type WorkflowGraphSaveRequest struct {
@@ -656,15 +656,11 @@ func canonicalWorkflowGraphEntityReferences(references []WorkflowGraphEntityRefe
 }
 
 func compareStoreWorkflowGraphEntityReferences(left WorkflowGraphEntityReference, right WorkflowGraphEntityReference) int {
-	return serverapi.CompareWorkflowGraphEntityReferences(
-		serverapi.WorkflowGraphEntityReference{
-			EntityType: serverapi.WorkflowGraphEntityType(left.EntityType),
-			EntityID:   left.EntityID,
-		},
-		serverapi.WorkflowGraphEntityReference{
-			EntityType: serverapi.WorkflowGraphEntityType(right.EntityType),
-			EntityID:   right.EntityID,
-		},
+	return workflowcontract.CompareGraphEntityIdentity(
+		string(left.EntityType),
+		left.EntityID,
+		string(right.EntityType),
+		right.EntityID,
 	)
 }
 
@@ -753,21 +749,19 @@ type comparableWorkflowGraphSaveTransitionGroup struct {
 }
 
 type comparableWorkflowGraphSaveEdge struct {
-	ID                 workflow.EdgeID
-	WorkflowID         runtimeids.WorkflowID
-	TransitionGroupID  workflow.TransitionGroupID
-	Key                workflow.ModelKey
-	TargetNodeID       workflow.NodeID
-	AssigneeSelection  workflow.AssigneeSelection
-	ThinkingSelection  workflow.ThinkingSelection
-	RequiresApproval   bool
-	ContextMode        workflow.ContextMode
-	ContextSource      workflow.ContextSource
-	PromptTemplate     string
-	Parameters         []workflow.Parameter
-	InputBindings      []workflow.InputBinding
-	OutputRequirements []workflow.OutputRequirement
-	SortOrder          int64
+	ID                workflow.EdgeID
+	WorkflowID        runtimeids.WorkflowID
+	TransitionGroupID workflow.TransitionGroupID
+	Key               workflow.ModelKey
+	TargetNodeID      workflow.NodeID
+	AssigneeSelection workflow.AssigneeSelection
+	ThinkingSelection workflow.ThinkingSelection
+	RequiresApproval  bool
+	ContextMode       workflow.ContextMode
+	ContextSource     workflow.ContextSource
+	PromptTemplate    string
+	Parameters        []workflow.Parameter
+	SortOrder         int64
 }
 
 func comparableWorkflowGraphSaveNodesEqual(item comparableWorkflowGraphSaveNode, other comparableWorkflowGraphSaveNode) bool {
@@ -775,7 +769,7 @@ func comparableWorkflowGraphSaveNodesEqual(item comparableWorkflowGraphSaveNode,
 }
 
 func comparableWorkflowGraphSaveEdgesEqual(item comparableWorkflowGraphSaveEdge, other comparableWorkflowGraphSaveEdge) bool {
-	return item.ID == other.ID && item.WorkflowID == other.WorkflowID && item.TransitionGroupID == other.TransitionGroupID && item.Key == other.Key && item.TargetNodeID == other.TargetNodeID && item.AssigneeSelection == other.AssigneeSelection && item.ThinkingSelection == other.ThinkingSelection && item.RequiresApproval == other.RequiresApproval && item.ContextMode == other.ContextMode && item.ContextSource == other.ContextSource && item.PromptTemplate == other.PromptTemplate && item.SortOrder == other.SortOrder && slices.Equal(item.Parameters, other.Parameters) && slices.Equal(item.InputBindings, other.InputBindings) && slices.Equal(item.OutputRequirements, other.OutputRequirements)
+	return item.ID == other.ID && item.WorkflowID == other.WorkflowID && item.TransitionGroupID == other.TransitionGroupID && item.Key == other.Key && item.TargetNodeID == other.TargetNodeID && item.AssigneeSelection == other.AssigneeSelection && item.ThinkingSelection == other.ThinkingSelection && item.RequiresApproval == other.RequiresApproval && item.ContextMode == other.ContextMode && item.ContextSource == other.ContextSource && item.PromptTemplate == other.PromptTemplate && item.SortOrder == other.SortOrder && slices.Equal(item.Parameters, other.Parameters)
 }
 
 func workflowGraphSaveComparable(prepared preparedWorkflowGraphSave) comparableWorkflowGraphSave {
@@ -796,7 +790,7 @@ func workflowGraphSaveComparable(prepared preparedWorkflowGraphSave) comparableW
 	}
 	for index, edge := range prepared.edges {
 		contextSource := workflow.CanonicalContextSource(edge.ContextSource)
-		out.Edges = append(out.Edges, comparableWorkflowGraphSaveEdge{ID: edge.ID, WorkflowID: edge.WorkflowID, TransitionGroupID: edge.TransitionGroupID, Key: edge.Key, TargetNodeID: edge.TargetNodeID, AssigneeSelection: workflow.CanonicalAssigneeSelection(edge.AssigneeSelection), ThinkingSelection: workflow.CanonicalThinkingSelection(edge.ThinkingSelection), RequiresApproval: edge.RequiresApproval, ContextMode: edge.ContextMode, ContextSource: contextSource, PromptTemplate: strings.TrimSpace(edge.PromptTemplate), Parameters: edge.Parameters, InputBindings: edge.InputBindings, OutputRequirements: edge.OutputRequirements, SortOrder: int64(index * 100)})
+		out.Edges = append(out.Edges, comparableWorkflowGraphSaveEdge{ID: edge.ID, WorkflowID: edge.WorkflowID, TransitionGroupID: edge.TransitionGroupID, Key: edge.Key, TargetNodeID: edge.TargetNodeID, AssigneeSelection: workflow.CanonicalAssigneeSelection(edge.AssigneeSelection), ThinkingSelection: workflow.CanonicalThinkingSelection(edge.ThinkingSelection), RequiresApproval: edge.RequiresApproval, ContextMode: edge.ContextMode, ContextSource: contextSource, PromptTemplate: strings.TrimSpace(edge.PromptTemplate), Parameters: edge.Parameters, SortOrder: int64(index * 100)})
 	}
 	return out
 }
