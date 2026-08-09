@@ -174,6 +174,7 @@ describe("attentionItemSchema", () => {
           cause: "operational",
           diagnostic: "setup failed after retry",
           script_path: "/repo/setup.sh",
+          setup_requirement: "required",
           execution_target: { mode: "head" },
           retained_worktree: { worktree_id: "worktree-current", root: "/repo/current" },
           retained_previous_worktree: {
@@ -190,6 +191,7 @@ describe("attentionItemSchema", () => {
     expect(parsed.setupRecovery).toMatchObject({
       diagnostic: "setup failed after retry",
       scriptPath: "/repo/setup.sh",
+      setupRequirement: "required",
       retainedWorktree: { worktreeID: "worktree-current", root: "/repo/current" },
       retainedPreviousWorktree: {
         worktreeID: "worktree-previous",
@@ -208,6 +210,7 @@ describe("attentionItemSchema", () => {
         cause: "target_preparation",
         diagnostic: "target preparation failed",
         script_path: null,
+        setup_requirement: "required",
         execution_target: { mode: "default_branch" },
       },
     });
@@ -240,6 +243,7 @@ describe("attentionItemSchema", () => {
             cause: "target_preparation",
             diagnostic: "target preparation failed",
             script_path: null,
+            setup_requirement: "required",
             execution_target: { mode: "default_branch" },
           },
         }),

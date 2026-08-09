@@ -11,6 +11,7 @@ import (
 	"core/server/workflowsvc"
 	"core/server/worktree"
 	"core/shared/serverapi"
+	"core/shared/worktreecontract"
 )
 
 type taskExecutionRootServiceStub struct {
@@ -54,6 +55,7 @@ func TestTaskExecutionTargetInfrastructurePreparesUnmanagedRootAndCarriesPreviou
 			TaskID:              workflow.TaskID("task-id"),
 			SourceWorkspaceID:   root.SourceWorkspaceID,
 			SourceWorkspaceRoot: root.SourceWorkspaceRoot,
+			SetupRequirement:    worktreecontract.SetupRequirementRequired,
 		},
 	)
 	if err != nil {
@@ -104,6 +106,7 @@ func TestTaskExecutionTargetInfrastructureMapsManagedSnapshotAndPreservesFailure
 			TaskID:              workflow.TaskID("task-id"),
 			SourceWorkspaceID:   root.SourceWorkspaceID,
 			SourceWorkspaceRoot: root.SourceWorkspaceRoot,
+			SetupRequirement:    worktreecontract.SetupRequirementRequired,
 			ManagedSnapshot: &workflowstore.ExecutionTargetSnapshot{
 				Mode:         workflow.ExecutionTargetModeHead,
 				RequestedRef: &requestedRef,

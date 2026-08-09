@@ -38,6 +38,7 @@ func TestCurrentNodeInterruptionDetailCarriesTypedSetupRecovery(t *testing.T) {
 		Cause:            workflow.CurrentNodeSetupRecoveryCauseProcessExit,
 		Diagnostic:       "setup failed after retry",
 		ScriptPath:       &scriptPath,
+		SetupRequirement: workflow.CurrentNodeSetupRequirementRequired,
 		ExecutionTarget: workflow.ExecutionTargetSelection{
 			Mode: workflow.ExecutionTargetModeHead,
 		},
@@ -88,6 +89,7 @@ func TestCurrentNodeSetupRecoveryRequiresExecutionTargetSelection(t *testing.T) 
 		SetupOperationID: uuid.New(),
 		Cause:            workflow.CurrentNodeSetupRecoveryCauseTargetPreparation,
 		Diagnostic:       "target preparation failed",
+		SetupRequirement: workflow.CurrentNodeSetupRequirementRequired,
 	}
 	if err := recovery.Validate(); err == nil {
 		t.Fatal("setup recovery without the failed execution target selection validated")
@@ -100,6 +102,7 @@ func TestCurrentNodeSetupRecoveryAllowsTargetPreparationWithoutRetainedWorktree(
 		SetupOperationID: setupOperationID,
 		Cause:            workflow.CurrentNodeSetupRecoveryCauseTargetPreparation,
 		Diagnostic:       "target resolution failed",
+		SetupRequirement: workflow.CurrentNodeSetupRequirementRequired,
 		ExecutionTarget: workflow.ExecutionTargetSelection{
 			Mode: workflow.ExecutionTargetModeDefaultBranch,
 		},

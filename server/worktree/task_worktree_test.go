@@ -19,6 +19,7 @@ import (
 	"core/server/workflowstore"
 	"core/shared/config"
 	"core/shared/serverapi"
+	"core/shared/worktreecontract"
 )
 
 func taskWorktreeID(entry serverapi.WorktreeTopologyEntry) string {
@@ -77,6 +78,7 @@ func prepareManagedTaskExecutionRoot(
 		TaskID:           taskID,
 		SetupOperationID: setupOperationID,
 		ManagedTarget:    &resolvedTarget,
+		SetupRequirement: worktreecontract.SetupRequirementRequired,
 	})
 	if prepared.Materialization == nil {
 		return TaskWorktreeMaterialization{}, err
@@ -90,8 +92,9 @@ func TestPrepareTaskExecutionRootReusesProvisionalWorktreeForSameCommit(t *testi
 	target := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
 
 	first, err := env.service.PrepareTaskExecutionRoot(env.ctx, TaskExecutionRootPreparationRequest{
-		TaskID:        task.ID,
-		ManagedTarget: &target,
+		TaskID:           task.ID,
+		ManagedTarget:    &target,
+		SetupRequirement: worktreecontract.SetupRequirementRequired,
 	})
 	if err != nil {
 		t.Fatalf("PrepareTaskExecutionRoot first: %v", err)
@@ -99,8 +102,9 @@ func TestPrepareTaskExecutionRootReusesProvisionalWorktreeForSameCommit(t *testi
 	secondTarget := target
 	secondTarget.RequestedRef = "same-commit-selector"
 	second, err := env.service.PrepareTaskExecutionRoot(env.ctx, TaskExecutionRootPreparationRequest{
-		TaskID:        task.ID,
-		ManagedTarget: &secondTarget,
+		TaskID:           task.ID,
+		ManagedTarget:    &secondTarget,
+		SetupRequirement: worktreecontract.SetupRequirementRequired,
 	})
 	if err != nil {
 		t.Fatalf("PrepareTaskExecutionRoot second: %v", err)
@@ -121,8 +125,9 @@ func TestPrepareTaskExecutionRootReplacesDifferentCommitCleanWorktree(t *testing
 	task, _ := createTaskWorktreeTestTask(t, env)
 	firstTarget := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
 	first, err := env.service.PrepareTaskExecutionRoot(env.ctx, TaskExecutionRootPreparationRequest{
-		TaskID:        task.ID,
-		ManagedTarget: &firstTarget,
+		TaskID:           task.ID,
+		ManagedTarget:    &firstTarget,
+		SetupRequirement: worktreecontract.SetupRequirementRequired,
 	})
 	if err != nil {
 		t.Fatalf("PrepareTaskExecutionRoot first: %v", err)
@@ -135,8 +140,9 @@ func TestPrepareTaskExecutionRootReplacesDifferentCommitCleanWorktree(t *testing
 	nextTarget := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
 
 	replacement, err := env.service.PrepareTaskExecutionRoot(env.ctx, TaskExecutionRootPreparationRequest{
-		TaskID:        task.ID,
-		ManagedTarget: &nextTarget,
+		TaskID:           task.ID,
+		ManagedTarget:    &nextTarget,
+		SetupRequirement: worktreecontract.SetupRequirementRequired,
 	})
 	if err != nil {
 		t.Fatalf("PrepareTaskExecutionRoot replacement: %v", err)
@@ -187,15 +193,17 @@ func TestPrepareTaskExecutionRootReplacesCleanWorktreeFromUnmergedTargetCommit(t
 	replacementTarget := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
 
 	first, err := env.service.PrepareTaskExecutionRoot(env.ctx, TaskExecutionRootPreparationRequest{
-		TaskID:        task.ID,
-		ManagedTarget: &firstTarget,
+		TaskID:           task.ID,
+		ManagedTarget:    &firstTarget,
+		SetupRequirement: worktreecontract.SetupRequirementRequired,
 	})
 	if err != nil {
 		t.Fatalf("PrepareTaskExecutionRoot first: %v", err)
 	}
 	replacement, err := env.service.PrepareTaskExecutionRoot(env.ctx, TaskExecutionRootPreparationRequest{
-		TaskID:        task.ID,
-		ManagedTarget: &replacementTarget,
+		TaskID:           task.ID,
+		ManagedTarget:    &replacementTarget,
+		SetupRequirement: worktreecontract.SetupRequirementRequired,
 	})
 	if err != nil {
 		t.Fatalf("PrepareTaskExecutionRoot replacement: %v", err)
@@ -221,8 +229,9 @@ func TestPrepareTaskExecutionRootRetainsDifferentCommitCleanAdvancedWorktree(t *
 	task, _ := createTaskWorktreeTestTask(t, env)
 	firstTarget := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
 	first, err := env.service.PrepareTaskExecutionRoot(env.ctx, TaskExecutionRootPreparationRequest{
-		TaskID:        task.ID,
-		ManagedTarget: &firstTarget,
+		TaskID:           task.ID,
+		ManagedTarget:    &firstTarget,
+		SetupRequirement: worktreecontract.SetupRequirementRequired,
 	})
 	if err != nil {
 		t.Fatalf("PrepareTaskExecutionRoot first: %v", err)
@@ -240,8 +249,9 @@ func TestPrepareTaskExecutionRootRetainsDifferentCommitCleanAdvancedWorktree(t *
 	nextTarget := advanceTaskWorktreeTestTarget(t, env)
 
 	replacement, err := env.service.PrepareTaskExecutionRoot(env.ctx, TaskExecutionRootPreparationRequest{
-		TaskID:        task.ID,
-		ManagedTarget: &nextTarget,
+		TaskID:           task.ID,
+		ManagedTarget:    &nextTarget,
+		SetupRequirement: worktreecontract.SetupRequirementRequired,
 	})
 	if err != nil {
 		t.Fatalf("PrepareTaskExecutionRoot replacement: %v", err)
@@ -264,8 +274,9 @@ func TestPrepareTaskExecutionRootRetainsDifferentCommitCleanRenamedWorktree(t *t
 	task, _ := createTaskWorktreeTestTask(t, env)
 	firstTarget := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
 	first, err := env.service.PrepareTaskExecutionRoot(env.ctx, TaskExecutionRootPreparationRequest{
-		TaskID:        task.ID,
-		ManagedTarget: &firstTarget,
+		TaskID:           task.ID,
+		ManagedTarget:    &firstTarget,
+		SetupRequirement: worktreecontract.SetupRequirementRequired,
 	})
 	if err != nil {
 		t.Fatalf("PrepareTaskExecutionRoot first: %v", err)
@@ -278,8 +289,9 @@ func TestPrepareTaskExecutionRootRetainsDifferentCommitCleanRenamedWorktree(t *t
 	nextTarget := advanceTaskWorktreeTestTarget(t, env)
 
 	replacement, err := env.service.PrepareTaskExecutionRoot(env.ctx, TaskExecutionRootPreparationRequest{
-		TaskID:        task.ID,
-		ManagedTarget: &nextTarget,
+		TaskID:           task.ID,
+		ManagedTarget:    &nextTarget,
+		SetupRequirement: worktreecontract.SetupRequirementRequired,
 	})
 	if err != nil {
 		t.Fatalf("PrepareTaskExecutionRoot replacement: %v", err)
@@ -312,8 +324,9 @@ func TestPrepareTaskExecutionRootRetainsDifferentCommitCleanDetachedWorktree(t *
 	task, _ := createTaskWorktreeTestTask(t, env)
 	firstTarget := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
 	first, err := env.service.PrepareTaskExecutionRoot(env.ctx, TaskExecutionRootPreparationRequest{
-		TaskID:        task.ID,
-		ManagedTarget: &firstTarget,
+		TaskID:           task.ID,
+		ManagedTarget:    &firstTarget,
+		SetupRequirement: worktreecontract.SetupRequirementRequired,
 	})
 	if err != nil {
 		t.Fatalf("PrepareTaskExecutionRoot first: %v", err)
@@ -325,8 +338,9 @@ func TestPrepareTaskExecutionRootRetainsDifferentCommitCleanDetachedWorktree(t *
 	nextTarget := advanceTaskWorktreeTestTarget(t, env)
 
 	replacement, err := env.service.PrepareTaskExecutionRoot(env.ctx, TaskExecutionRootPreparationRequest{
-		TaskID:        task.ID,
-		ManagedTarget: &nextTarget,
+		TaskID:           task.ID,
+		ManagedTarget:    &nextTarget,
+		SetupRequirement: worktreecontract.SetupRequirementRequired,
 	})
 	if err != nil {
 		t.Fatalf("PrepareTaskExecutionRoot replacement: %v", err)
@@ -353,8 +367,9 @@ func TestPrepareTaskExecutionRootOrphansDifferentCommitChangedWorktree(t *testin
 	task, _ := createTaskWorktreeTestTask(t, env)
 	firstTarget := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
 	first, err := env.service.PrepareTaskExecutionRoot(env.ctx, TaskExecutionRootPreparationRequest{
-		TaskID:        task.ID,
-		ManagedTarget: &firstTarget,
+		TaskID:           task.ID,
+		ManagedTarget:    &firstTarget,
+		SetupRequirement: worktreecontract.SetupRequirementRequired,
 	})
 	if err != nil {
 		t.Fatalf("PrepareTaskExecutionRoot first: %v", err)
@@ -369,8 +384,9 @@ func TestPrepareTaskExecutionRootOrphansDifferentCommitChangedWorktree(t *testin
 	nextTarget := advanceTaskWorktreeTestTarget(t, env)
 
 	replacement, err := env.service.PrepareTaskExecutionRoot(env.ctx, TaskExecutionRootPreparationRequest{
-		TaskID:        task.ID,
-		ManagedTarget: &nextTarget,
+		TaskID:           task.ID,
+		ManagedTarget:    &nextTarget,
+		SetupRequirement: worktreecontract.SetupRequirementRequired,
 	})
 	if err != nil {
 		t.Fatalf("PrepareTaskExecutionRoot replacement: %v", err)
@@ -417,8 +433,9 @@ func TestPrepareTaskExecutionRootSwitchesToNoManagedWorktree(t *testing.T) {
 	task, _ := createTaskWorktreeTestTask(t, env)
 	target := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
 	first, err := env.service.PrepareTaskExecutionRoot(env.ctx, TaskExecutionRootPreparationRequest{
-		TaskID:        task.ID,
-		ManagedTarget: &target,
+		TaskID:           task.ID,
+		ManagedTarget:    &target,
+		SetupRequirement: worktreecontract.SetupRequirementRequired,
 	})
 	if err != nil {
 		t.Fatalf("PrepareTaskExecutionRoot managed: %v", err)
@@ -432,7 +449,8 @@ func TestPrepareTaskExecutionRootSwitchesToNoManagedWorktree(t *testing.T) {
 	}
 
 	unmanaged, err := env.service.PrepareTaskExecutionRoot(env.ctx, TaskExecutionRootPreparationRequest{
-		TaskID: task.ID,
+		TaskID:           task.ID,
+		SetupRequirement: worktreecontract.SetupRequirementRequired,
 	})
 	if err != nil {
 		t.Fatalf("PrepareTaskExecutionRoot none: %v", err)
@@ -459,8 +477,9 @@ func TestPrepareTaskExecutionRootFailedReplacementAfterCleanRemovalLeavesNoProvi
 	task, _ := createTaskWorktreeTestTask(t, env)
 	firstTarget := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
 	first, err := env.service.PrepareTaskExecutionRoot(env.ctx, TaskExecutionRootPreparationRequest{
-		TaskID:        task.ID,
-		ManagedTarget: &firstTarget,
+		TaskID:           task.ID,
+		ManagedTarget:    &firstTarget,
+		SetupRequirement: worktreecontract.SetupRequirementRequired,
 	})
 	if err != nil {
 		t.Fatalf("PrepareTaskExecutionRoot first: %v", err)
@@ -473,8 +492,9 @@ func TestPrepareTaskExecutionRootFailedReplacementAfterCleanRemovalLeavesNoProvi
 	})
 
 	prepared, err := env.service.PrepareTaskExecutionRoot(env.ctx, TaskExecutionRootPreparationRequest{
-		TaskID:        task.ID,
-		ManagedTarget: &nextTarget,
+		TaskID:           task.ID,
+		ManagedTarget:    &nextTarget,
+		SetupRequirement: worktreecontract.SetupRequirementRequired,
 	})
 	if !errors.Is(err, addErr) {
 		t.Fatalf("PrepareTaskExecutionRoot error = %v, want %v", err, addErr)
@@ -496,8 +516,9 @@ func TestPrepareTaskExecutionRootFailedReplacementAfterOrphaningKeepsOldWorktree
 	task, _ := createTaskWorktreeTestTask(t, env)
 	firstTarget := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
 	first, err := env.service.PrepareTaskExecutionRoot(env.ctx, TaskExecutionRootPreparationRequest{
-		TaskID:        task.ID,
-		ManagedTarget: &firstTarget,
+		TaskID:           task.ID,
+		ManagedTarget:    &firstTarget,
+		SetupRequirement: worktreecontract.SetupRequirementRequired,
 	})
 	if err != nil {
 		t.Fatalf("PrepareTaskExecutionRoot first: %v", err)
@@ -514,8 +535,9 @@ func TestPrepareTaskExecutionRootFailedReplacementAfterOrphaningKeepsOldWorktree
 	})
 
 	prepared, err := env.service.PrepareTaskExecutionRoot(env.ctx, TaskExecutionRootPreparationRequest{
-		TaskID:        task.ID,
-		ManagedTarget: &nextTarget,
+		TaskID:           task.ID,
+		ManagedTarget:    &nextTarget,
+		SetupRequirement: worktreecontract.SetupRequirementRequired,
 	})
 	if !errors.Is(err, addErr) {
 		t.Fatalf("PrepareTaskExecutionRoot error = %v, want %v", err, addErr)
@@ -542,8 +564,9 @@ func TestPrepareTaskExecutionRootReplacementSetupFailureRetainsNewAndPreviousWor
 	task, _ := createTaskWorktreeTestTask(t, env)
 	firstTarget := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
 	first, err := env.service.PrepareTaskExecutionRoot(env.ctx, TaskExecutionRootPreparationRequest{
-		TaskID:        task.ID,
-		ManagedTarget: &firstTarget,
+		TaskID:           task.ID,
+		ManagedTarget:    &firstTarget,
+		SetupRequirement: worktreecontract.SetupRequirementRequired,
 	})
 	if err != nil {
 		t.Fatalf("PrepareTaskExecutionRoot first: %v", err)
@@ -559,8 +582,9 @@ func TestPrepareTaskExecutionRootReplacementSetupFailureRetainsNewAndPreviousWor
 	env.service.setupScript = scriptRelpath
 
 	prepared, err := env.service.PrepareTaskExecutionRoot(env.ctx, TaskExecutionRootPreparationRequest{
-		TaskID:        task.ID,
-		ManagedTarget: &nextTarget,
+		TaskID:           task.ID,
+		ManagedTarget:    &nextTarget,
+		SetupRequirement: worktreecontract.SetupRequirementRequired,
 	})
 	var retained *serverapi.WorktreeSetupRetainedError
 	if !errors.As(err, &retained) || retained.Worktree.Registered == nil {
@@ -617,8 +641,9 @@ func TestPrepareTaskExecutionRootRollsBackReservationWhenGitCreationFails(t *tes
 	})
 
 	_, err := env.service.PrepareTaskExecutionRoot(env.ctx, TaskExecutionRootPreparationRequest{
-		TaskID:        task.ID,
-		ManagedTarget: &target,
+		TaskID:           task.ID,
+		ManagedTarget:    &target,
+		SetupRequirement: worktreecontract.SetupRequirementRequired,
 	})
 	if !errors.Is(err, addErr) {
 		t.Fatalf("PrepareTaskExecutionRoot error = %v, want %v", err, addErr)
@@ -636,8 +661,9 @@ func TestPrepareTaskExecutionRootReleasesReservationWhenSetupSettingsResolutionF
 	}
 
 	_, err := env.service.PrepareTaskExecutionRoot(env.ctx, TaskExecutionRootPreparationRequest{
-		TaskID:        task.ID,
-		ManagedTarget: &target,
+		TaskID:           task.ID,
+		ManagedTarget:    &target,
+		SetupRequirement: worktreecontract.SetupRequirementRequired,
 	})
 	if !errors.Is(err, settingsErr) {
 		t.Fatalf("PrepareTaskExecutionRoot error = %v, want %v", err, settingsErr)
@@ -650,8 +676,9 @@ func TestPrepareTaskExecutionRootSettingsFailureRetainsExistingProvisionalMateri
 	task, _ := createTaskWorktreeTestTask(t, env)
 	target := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
 	first, err := env.service.PrepareTaskExecutionRoot(env.ctx, TaskExecutionRootPreparationRequest{
-		TaskID:        task.ID,
-		ManagedTarget: &target,
+		TaskID:           task.ID,
+		ManagedTarget:    &target,
+		SetupRequirement: worktreecontract.SetupRequirementRequired,
 	})
 	if err != nil {
 		t.Fatalf("PrepareTaskExecutionRoot first: %v", err)
@@ -662,8 +689,9 @@ func TestPrepareTaskExecutionRootSettingsFailureRetainsExistingProvisionalMateri
 	}
 
 	prepared, err := env.service.PrepareTaskExecutionRoot(env.ctx, TaskExecutionRootPreparationRequest{
-		TaskID:        task.ID,
-		ManagedTarget: &target,
+		TaskID:           task.ID,
+		ManagedTarget:    &target,
+		SetupRequirement: worktreecontract.SetupRequirementRequired,
 	})
 	if !errors.Is(err, settingsErr) {
 		t.Fatalf("PrepareTaskExecutionRoot error = %v, want %v", err, settingsErr)
@@ -693,8 +721,9 @@ func TestPrepareTaskExecutionRootAllocatorFailureLeavesNoProvisionalState(t *tes
 	env.service.managedRoots = newManagedRootAllocator(env.baseDir, errorReader{err: reservationErr})
 
 	prepared, err := env.service.PrepareTaskExecutionRoot(env.ctx, TaskExecutionRootPreparationRequest{
-		TaskID:        task.ID,
-		ManagedTarget: &target,
+		TaskID:           task.ID,
+		ManagedTarget:    &target,
+		SetupRequirement: worktreecontract.SetupRequirementRequired,
 	})
 	if !errors.Is(err, reservationErr) {
 		t.Fatalf("PrepareTaskExecutionRoot error = %v, want %v", err, reservationErr)
@@ -742,8 +771,9 @@ END`); err != nil {
 	}
 
 	if _, err := env.service.PrepareTaskExecutionRoot(env.ctx, TaskExecutionRootPreparationRequest{
-		TaskID:        task.ID,
-		ManagedTarget: &target,
+		TaskID:           task.ID,
+		ManagedTarget:    &target,
+		SetupRequirement: worktreecontract.SetupRequirementRequired,
 	}); err == nil {
 		t.Fatal("PrepareTaskExecutionRoot succeeded, want registration failure")
 	}
@@ -765,8 +795,9 @@ END`); err != nil {
 	}
 
 	if _, err := env.service.PrepareTaskExecutionRoot(env.ctx, TaskExecutionRootPreparationRequest{
-		TaskID:        task.ID,
-		ManagedTarget: &target,
+		TaskID:           task.ID,
+		ManagedTarget:    &target,
+		SetupRequirement: worktreecontract.SetupRequirementRequired,
 	}); err == nil {
 		t.Fatal("PrepareTaskExecutionRoot succeeded, want binding failure")
 	}
@@ -810,12 +841,13 @@ func TestMaterializeInitialTaskWorktreeRejectsExistingOutsideNamespaceRoot(t *te
 		t.Fatalf("UpdateTaskManagedWorktree: %v", err)
 	}
 
-	_, err := env.service.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{
-		TaskID:         task.ID,
-		ResolvedTarget: resolved,
+	_, err := env.service.PrepareTaskExecutionRoot(env.ctx, TaskExecutionRootPreparationRequest{
+		TaskID:           task.ID,
+		ManagedTarget:    &resolved,
+		SetupRequirement: worktreecontract.SetupRequirementRequired,
 	})
 	if err == nil {
-		t.Fatal("MaterializeInitialTaskWorktree accepted an existing root outside the server namespace")
+		t.Fatal("PrepareTaskExecutionRoot accepted an existing root outside the server namespace")
 	}
 }
 
@@ -1073,6 +1105,43 @@ func TestPrepareTaskExecutionRootRetriesDetachedExistingCandidateInPlace(t *test
 		recordedCheckout.Branch == nil ||
 		recordedCheckout.Branch.Name() != task.ShortID {
 		t.Fatalf("recorded checkout = %+v, want original named branch %q", recordedCheckout, task.ShortID)
+	}
+}
+
+func TestPrepareTaskExecutionRootSkipsSetupForCompatibleRootAlreadyCompleted(t *testing.T) {
+	env := newServiceTestEnv(t)
+	task, _ := createTaskWorktreeTestTask(t, env)
+	resolved := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
+	countPath := filepath.Join(t.TempDir(), "setup-count")
+	setupScript := filepath.Join(t.TempDir(), "setup.sh")
+	writeExecutableFile(t, setupScript, fmt.Sprintf(
+		"#!/bin/sh\ncount=0\nif [ -f %q ]; then count=$(cat %q); fi\ncount=$((count + 1))\nprintf '%%s' \"$count\" > %q\n",
+		countPath,
+		countPath,
+		countPath,
+	))
+	env.service.setupScript = setupScript
+
+	first, err := prepareManagedTaskExecutionRoot(env.ctx, env.service, task.ID, nil, resolved)
+	if err != nil {
+		t.Fatalf("PrepareTaskExecutionRoot first: %v", err)
+	}
+	prepared, err := env.service.PrepareTaskExecutionRoot(env.ctx, TaskExecutionRootPreparationRequest{
+		TaskID:           task.ID,
+		ManagedTarget:    &resolved,
+		SetupRequirement: worktreecontract.SetupRequirementAlreadyCompleted,
+	})
+	if err != nil {
+		t.Fatalf("PrepareTaskExecutionRoot completed retry: %v", err)
+	}
+	if prepared.Materialization == nil ||
+		taskWorktreeID(prepared.Materialization.Worktree) != taskWorktreeID(first.Worktree) ||
+		prepared.SetupResult == nil ||
+		prepared.SetupResult.Completed == nil {
+		t.Fatalf("completed retry = %+v, want reused Worktree and completed setup result", prepared)
+	}
+	if got := waitForFileText(t, countPath); got != "1" {
+		t.Fatalf("setup execution count = %q, want one successful execution", got)
 	}
 }
 

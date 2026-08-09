@@ -1047,6 +1047,7 @@ func TestCurrentNodeControllerPreparationPersistenceFailureNeverAdvertisesCanoni
 				Cause:            workflow.CurrentNodeSetupRecoveryCauseOperational,
 				Diagnostic:       "setup failed twice",
 				ScriptPath:       &scriptPath,
+				SetupRequirement: workflow.CurrentNodeSetupRequirementRequired,
 				ExecutionTarget: workflow.ExecutionTargetSelection{
 					Mode: workflow.ExecutionTargetModeHead,
 				},
@@ -1119,6 +1120,7 @@ func TestCurrentNodeControllerPersistsCanonicalTargetPreparationRecoveryWithoutT
 				SetupOperationID: setupID,
 				Cause:            workflow.CurrentNodeSetupRecoveryCauseTargetPreparation,
 				Diagnostic:       "target resolution failed",
+				SetupRequirement: workflow.CurrentNodeSetupRequirementRequired,
 				ExecutionTarget: workflow.ExecutionTargetSelection{
 					Mode: workflow.ExecutionTargetModeDefaultBranch,
 				},
@@ -1292,6 +1294,7 @@ func TestCurrentNodeControllerDurableRecoverySnapshotWaitsForBatchRetirementBefo
 				Cause:            workflow.CurrentNodeSetupRecoveryCauseOperational,
 				Diagnostic:       "setup failed twice",
 				ScriptPath:       &scriptPath,
+				SetupRequirement: workflow.CurrentNodeSetupRequirementRequired,
 				ExecutionTarget: workflow.ExecutionTargetSelection{
 					Mode: workflow.ExecutionTargetModeHead,
 				},

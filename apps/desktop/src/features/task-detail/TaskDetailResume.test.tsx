@@ -183,6 +183,7 @@ it("gives only the exact canonical setup interruption a recoverable Resume contr
             cause: "operational",
             diagnostic: "setup failed after retry",
             script_path: "/repo/setup.sh",
+            setup_requirement: "required",
             execution_target: { mode: "custom_ref", custom_ref: "refs/heads/dev" },
             retained_worktree: { worktree_id: "worktree-current", root: "/repo/current" },
           },

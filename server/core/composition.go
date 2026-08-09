@@ -484,6 +484,7 @@ func (i taskExecutionTargetInfrastructure) PrepareTaskExecutionRoot(ctx context.
 		TaskID:           req.TaskID,
 		SetupOperationID: req.SetupOperationID,
 		ManagedTarget:    managedTarget,
+		SetupRequirement: req.SetupRequirement,
 	})
 	var retainedWorktree *serverapi.WorktreeTopologyEntry
 	if prepared.Materialization != nil {

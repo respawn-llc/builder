@@ -10,6 +10,7 @@ import (
 	"core/server/workflowexecution"
 	"core/server/worktree"
 	"core/shared/serverapi"
+	"core/shared/worktreecontract"
 	"github.com/google/uuid"
 )
 
@@ -254,6 +255,7 @@ func taskPreparationError(
 		Cause:                    workflow.CurrentNodeSetupRecoveryCause(failed.Cause.Kind),
 		Diagnostic:               failed.Diagnostic,
 		ScriptPath:               scriptPath,
+		SetupRequirement:         setupRequirementForPreparationFailure(result),
 		ExecutionTarget:          preflight.selection,
 		RetainedWorktree:         retained,
 		RetainedPreviousWorktree: previous,
@@ -262,6 +264,15 @@ func taskPreparationError(
 		return errors.Join(err, validationErr)
 	}
 	return workflowexecution.NewTaskStartPreparationError(err, detail)
+}
+
+func setupRequirementForPreparationFailure(
+	result *worktree.WorktreeSetupResult,
+) worktreecontract.SetupRequirement {
+	if result != nil && result.Completed != nil {
+		return worktreecontract.SetupRequirementAlreadyCompleted
+	}
+	return worktreecontract.SetupRequirementRequired
 }
 
 func setupFailureScriptPath(failed *serverapi.WorktreeSetupFailed, cause error) (*string, error) {

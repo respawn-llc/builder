@@ -26,6 +26,7 @@ func TestSetupRecoveryDetailOwnsCanonicalValidation(t *testing.T) {
 		Cause:            worktreecontract.SetupFailureProcessExit,
 		Diagnostic:       "setup failed",
 		ScriptPath:       stringPointer("scripts/setup.sh"),
+		SetupRequirement: worktreecontract.SetupRequirementRequired,
 		ExecutionTarget:  validSetupRecoveryTarget{},
 		RetainedWorktree: &RetainedWorktree{
 			WorktreeID: "worktree-1",
@@ -48,6 +49,11 @@ func TestSetupRecoveryDetailOwnsCanonicalValidation(t *testing.T) {
 		{name: "non-retry-ready cause", detail: func() SetupRecoveryDetail[uuid.UUID, validSetupRecoveryTarget] {
 			detail := valid
 			detail.Cause = worktreecontract.SetupFailureCanceled
+			return detail
+		}()},
+		{name: "invalid setup requirement", detail: func() SetupRecoveryDetail[uuid.UUID, validSetupRecoveryTarget] {
+			detail := valid
+			detail.SetupRequirement = worktreecontract.SetupRequirement("unknown")
 			return detail
 		}()},
 		{name: "blank diagnostic", detail: func() SetupRecoveryDetail[uuid.UUID, validSetupRecoveryTarget] {

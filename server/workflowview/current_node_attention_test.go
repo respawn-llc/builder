@@ -113,6 +113,7 @@ func TestAttentionProjectsTypedSetupRecoveryIdentity(t *testing.T) {
 				Cause:            workflow.CurrentNodeSetupRecoveryCauseOperational,
 				Diagnostic:       "setup failed after retry",
 				ScriptPath:       &scriptPath,
+				SetupRequirement: workflow.CurrentNodeSetupRequirementRequired,
 				ExecutionTarget: workflow.ExecutionTargetSelection{
 					Mode: workflow.ExecutionTargetModeHead,
 				},
@@ -139,6 +140,13 @@ func TestAttentionProjectsTypedSetupRecoveryIdentity(t *testing.T) {
 		response.Items[0].SetupOperationID == nil ||
 		*response.Items[0].SetupOperationID != setupOperationID {
 		t.Fatalf("setup recovery attention = %+v", response.Items)
+	}
+	detail, err := fixture.detail.GetTask(fixture.ctx, string(started.task.ID))
+	if err != nil {
+		t.Fatalf("TaskDetail.GetTask: %v", err)
+	}
+	if detail.Actions.CanResume {
+		t.Fatalf("setup recovery Task actions = %+v, want ordinary Resume suppressed", detail.Actions)
 	}
 }
 

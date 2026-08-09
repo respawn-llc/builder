@@ -26,6 +26,7 @@ import (
 	"core/shared/invariant"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/worktreecontract"
 	"github.com/google/uuid"
 )
 
@@ -169,6 +170,7 @@ type TaskExecutionRootPreparationRequest struct {
 	TaskID           workflow.TaskID
 	SetupOperationID *serverapi.WorktreeSetupOperationID
 	ManagedTarget    *GitRevision
+	SetupRequirement worktreecontract.SetupRequirement
 }
 
 type TaskExecutionRootPreparation struct {
@@ -435,6 +437,9 @@ func (s *Service) PrepareTaskExecutionRoot(ctx context.Context, req TaskExecutio
 	if task.ExecutionTargetMode.Valid {
 		return TaskExecutionRootPreparation{}, errors.New("task execution-root preparation requires an unlocked task")
 	}
+	if !worktreecontract.IsValidSetupRequirement(req.SetupRequirement) {
+		return TaskExecutionRootPreparation{}, errors.New("task execution-root preparation setup requirement is invalid")
+	}
 	root := workflowstore.ExecutionRoot{
 		SourceWorkspaceID:   workspace.WorkspaceID,
 		SourceWorkspaceRoot: workspace.RootPath,
@@ -468,6 +473,7 @@ func (s *Service) PrepareTaskExecutionRoot(ctx context.Context, req TaskExecutio
 		*target,
 		existingRecord,
 		replacement,
+		req.SetupRequirement,
 	)
 	prepared := taskExecutionRootPreparation(root, materialized, previous)
 	if err != nil {
@@ -488,6 +494,7 @@ func (s *Service) prepareManagedTaskWorktree(
 	resolvedTarget GitRevision,
 	existingRecord *metadata.WorktreeRecord,
 	replacement bool,
+	setupRequirement worktreecontract.SetupRequirement,
 ) (TaskWorktreeMaterialization, error) {
 	if existingRecord != nil {
 		record := *existingRecord
@@ -499,6 +506,12 @@ func (s *Service) prepareManagedTaskWorktree(
 			bound, err := s.reuseProvisionalManagedTaskWorktree(ctx, task, workspace, record, identity)
 			if err != nil {
 				return TaskWorktreeMaterialization{}, err
+			}
+			if setupRequirement == worktreecontract.SetupRequirementAlreadyCompleted {
+				bound.materialization.SetupResult = &WorktreeSetupResult{
+					Completed: &serverapi.WorktreeSetupCompleted{},
+				}
+				return bound.materialization, nil
 			}
 			return s.runManagedTaskWorktreeSetupRecovery(ctx, bound, setupOperationID, true)
 		}

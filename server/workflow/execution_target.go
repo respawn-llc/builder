@@ -85,6 +85,16 @@ func (s ExecutionTargetSelection) Validate() error {
 	return nil
 }
 
+func (s ExecutionTargetSelection) Equal(other ExecutionTargetSelection) bool {
+	if s.Mode != other.Mode {
+		return false
+	}
+	if s.CustomRef == nil || other.CustomRef == nil {
+		return s.CustomRef == nil && other.CustomRef == nil
+	}
+	return *s.CustomRef == *other.CustomRef
+}
+
 func validExecutionTargetPolicyMode(mode ExecutionTargetMode) bool {
 	switch mode {
 	case ExecutionTargetModeNone, ExecutionTargetModeHead, ExecutionTargetModeDefaultBranch, ExecutionTargetModeCustomRef, ExecutionTargetModeAskOnFirstExecution:

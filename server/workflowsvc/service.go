@@ -22,6 +22,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/textutil"
+	"core/shared/worktreecontract"
 )
 
 type Service struct {
@@ -128,6 +129,7 @@ type TaskExecutionRootPreparationRequest struct {
 	SourceWorkspaceID   string
 	SourceWorkspaceRoot string
 	ManagedSnapshot     *workflowstore.ExecutionTargetSnapshot
+	SetupRequirement    worktreecontract.SetupRequirement
 }
 
 type TaskExecutionRootPreparation struct {
@@ -1200,7 +1202,14 @@ func (s *Service) initiatingActionTarget(ctx context.Context, taskID workflow.Ta
 	if err != nil || selectionRequired != nil {
 		return initiatingActionTargetDecision{selectionRequired: selectionRequired}, err
 	}
-	prepared, err := s.materializeInitiatingActionTarget(ctx, taskID, setupOperationID, preflight, snapshot)
+	prepared, err := s.materializeInitiatingActionTarget(
+		ctx,
+		taskID,
+		setupOperationID,
+		preflight,
+		snapshot,
+		worktreecontract.SetupRequirementRequired,
+	)
 	return initiatingActionTargetDecision{
 		prepared: &prepared,
 	}, err
@@ -1264,6 +1273,7 @@ func (s *Service) materializeInitiatingActionTarget(
 	setupOperationID *serverapi.WorktreeSetupOperationID,
 	preflight initiatingActionTargetPreflight,
 	snapshot *workflowstore.ExecutionTargetSnapshot,
+	setupRequirement worktreecontract.SetupRequirement,
 ) (preparedInitiatingActionTarget, error) {
 	targetContext := preflight.context
 	prepared, preparationErr := s.executionTargets.PrepareTaskExecutionRoot(ctx, TaskExecutionRootPreparationRequest{
@@ -1272,6 +1282,7 @@ func (s *Service) materializeInitiatingActionTarget(
 		SourceWorkspaceID:   targetContext.SourceWorkspaceID,
 		SourceWorkspaceRoot: targetContext.SourceWorkspaceRoot,
 		ManagedSnapshot:     snapshot,
+		SetupRequirement:    setupRequirement,
 	})
 	if preparationErr != nil {
 		return preparedInitiatingActionTarget{
@@ -1490,11 +1501,11 @@ func (s *Service) resumeWorkflowTask(ctx context.Context, req serverapi.Workflow
 		return serverapi.WorkflowTaskResumeResponse{}, err
 	}
 	taskID := workflow.TaskID(req.TaskID)
+	interrupted, err := s.store.InterruptedExecutableCurrentNodes(ctx, taskID)
+	if err != nil {
+		return serverapi.WorkflowTaskResumeResponse{}, err
+	}
 	if req.ExecutionTarget == nil {
-		interrupted, err := s.store.InterruptedExecutableCurrentNodes(ctx, taskID)
-		if err != nil {
-			return serverapi.WorkflowTaskResumeResponse{}, err
-		}
 		selectionRequired, err := configuredTargetResumeSelection(interrupted)
 		if err != nil {
 			return serverapi.WorkflowTaskResumeResponse{}, err
@@ -1509,6 +1520,13 @@ func (s *Service) resumeWorkflowTask(ctx context.Context, req serverapi.Workflow
 	target, err := s.preflightInitiatingActionTarget(ctx, taskID, req.ExecutionTarget)
 	if err != nil {
 		return serverapi.WorkflowTaskResumeResponse{}, err
+	}
+	setupRequirement := worktreecontract.SetupRequirementRequired
+	if req.ExecutionTarget != nil {
+		setupRequirement, err = exactResumeSetupRequirement(interrupted, target.selection)
+		if err != nil {
+			return serverapi.WorkflowTaskResumeResponse{}, err
+		}
 	}
 	var preparation *workflowexecution.TaskStartPreparation
 	if target.context.Task.ExecutionTarget == nil {
@@ -1533,6 +1551,7 @@ func (s *Service) resumeWorkflowTask(ctx context.Context, req serverapi.Workflow
 					&req.SetupOperationID,
 					target,
 					snapshot,
+					setupRequirement,
 				)
 				if preparedTarget.candidate == nil {
 					preparationErr = taskPreparationError(
@@ -1590,6 +1609,32 @@ func (s *Service) resumeWorkflowTask(ctx context.Context, req serverapi.Workflow
 			CurrentNodes: workflowview.ProjectCurrentNodes(resumed),
 		},
 	}, nil
+}
+
+func exactResumeSetupRequirement(
+	nodes []workflow.CurrentNode,
+	selection workflow.ExecutionTargetSelection,
+) (worktreecontract.SetupRequirement, error) {
+	requirement := worktreecontract.SetupRequirementRequired
+	found := false
+	for _, node := range nodes {
+		if node.Scheduling == nil || node.Scheduling.Interruption == nil {
+			continue
+		}
+		recovery := node.Scheduling.Interruption.Detail.SetupRecovery
+		if recovery == nil || !recovery.ExecutionTarget.Equal(selection) {
+			continue
+		}
+		if err := recovery.Validate(); err != nil {
+			return "", fmt.Errorf("invalid setup recovery interruption: %w", err)
+		}
+		if found && requirement != recovery.SetupRequirement {
+			return "", errors.New("matching setup recovery interruptions disagree on setup requirement")
+		}
+		requirement = recovery.SetupRequirement
+		found = true
+	}
+	return requirement, nil
 }
 
 func (s *Service) ApproveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskApproveRequest) (serverapi.WorkflowTaskApproveResponse, error) {

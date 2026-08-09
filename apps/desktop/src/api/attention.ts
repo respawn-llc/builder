@@ -12,6 +12,7 @@ export type TaskSetupRecovery = Readonly<{
   cause: "process_exit" | "timeout" | "target_preparation" | "operational";
   diagnostic: string;
   scriptPath: string | null;
+  setupRequirement: "required" | "already_completed";
   executionTarget: WorkflowExecutionTargetSelection;
   retainedWorktree: TaskSetupRecoveryRetainedWorktree | null;
   retainedPreviousWorktree: TaskSetupRecoveryRetainedWorktree | null;

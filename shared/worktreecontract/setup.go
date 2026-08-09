@@ -2,6 +2,13 @@ package worktreecontract
 
 type SetupFailureKind string
 
+type SetupRequirement string
+
+const (
+	SetupRequirementRequired         SetupRequirement = "required"
+	SetupRequirementAlreadyCompleted SetupRequirement = "already_completed"
+)
+
 const (
 	SetupFailureProcessExit             SetupFailureKind = "process_exit"
 	SetupFailureTimeout                 SetupFailureKind = "timeout"
@@ -32,4 +39,13 @@ func IsNonRetryableSetupFailure(kind SetupFailureKind) bool {
 
 func HasFixedRetryReadiness(kind SetupFailureKind) bool {
 	return kind != SetupFailureOperational
+}
+
+func IsValidSetupRequirement(requirement SetupRequirement) bool {
+	switch requirement {
+	case SetupRequirementRequired, SetupRequirementAlreadyCompleted:
+		return true
+	default:
+		return false
+	}
 }

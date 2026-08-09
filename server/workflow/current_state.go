@@ -184,11 +184,15 @@ type CurrentNodeSetupRecoveryDetail = workflowcontract.SetupRecoveryDetail[uuid.
 
 type CurrentNodeSetupRecoveryCause = worktreecontract.SetupFailureKind
 
+type CurrentNodeSetupRequirement = worktreecontract.SetupRequirement
+
 const (
 	CurrentNodeSetupRecoveryCauseProcessExit       = worktreecontract.SetupFailureProcessExit
 	CurrentNodeSetupRecoveryCauseTimeout           = worktreecontract.SetupFailureTimeout
 	CurrentNodeSetupRecoveryCauseTargetPreparation = worktreecontract.SetupFailureTargetPreparation
 	CurrentNodeSetupRecoveryCauseOperational       = worktreecontract.SetupFailureOperational
+	CurrentNodeSetupRequirementRequired            = worktreecontract.SetupRequirementRequired
+	CurrentNodeSetupRequirementAlreadyCompleted    = worktreecontract.SetupRequirementAlreadyCompleted
 )
 
 type CurrentNodeRetainedWorktree = workflowcontract.RetainedWorktree
