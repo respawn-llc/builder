@@ -463,82 +463,6 @@ func (f *currentNodeRunnerFixture) waitForModelRequests(t *testing.T, count int)
 	return f.waitForModelRequestsWithin(t, count, currentNodeRunnerWait)
 }
 
-func (f *currentNodeRunnerFixture) waitForTaskModelRequests(
-	t *testing.T,
-	taskID workflow.TaskID,
-	count int,
-) []llm.Request {
-	t.Helper()
-	deadline := time.Now().Add(currentNodeRunnerWait)
-	for len(f.client.Requests()) < count && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
-	requests := f.client.Requests()
-	if len(requests) != count {
-		nodes, listErr := f.store.ListCurrentNodes(context.Background(), taskID)
-		nodeJSON, _ := json.Marshal(nodes)
-		replacementTail := make([]string, 0)
-		if len(nodes) == 1 && nodes[0].SessionID != nil {
-			if persisted, err := f.metadata.ResolvePersistedSession(context.Background(), nodes[0].SessionID.String()); err == nil {
-				if store, err := session.Open(persisted.SessionDir, f.metadata.AuthoritativeSessionStoreOptions()...); err == nil {
-					if eventLog, err := store.MaterializeEventLog(); err == nil {
-						if window, err := eventLog.ReadNewestSegmentBackward(func(record session.EventRecord) bool {
-							payload, err := record.Payload()
-							if err != nil {
-								return false
-							}
-							replacement, ok := payload.(session.HistoryReplacementRecord)
-							return ok && replacement.Mode == session.CompactionModeWorkflowPostCompletion
-						}); err == nil {
-							for _, record := range window.Records {
-								payload, _ := record.Payload()
-								switch typed := payload.(type) {
-								case session.MessageRecord:
-									messageType := "<nil>"
-									if typed.MessageType != nil {
-										messageType = string(*typed.MessageType)
-									}
-									sourcePath := "<nil>"
-									if typed.SourcePath != nil {
-										sourcePath = *typed.SourcePath
-									}
-									replacementTail = append(replacementTail, fmt.Sprintf(
-										"%d:message:role=%s:type=%s:source=%s",
-										record.Seq(),
-										typed.Role,
-										messageType,
-										sourcePath,
-									))
-								case session.ToolCompletionRecord:
-									replacementTail = append(replacementTail, fmt.Sprintf(
-										"%d:tool:name=%s:call=%s",
-										record.Seq(),
-										typed.Name,
-										typed.CallID,
-									))
-								default:
-									replacementTail = append(replacementTail, fmt.Sprintf("%d:%T", record.Seq(), payload))
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-		t.Fatalf(
-			"model requests = %d, want %d; Current Nodes = %s; list error = %v; replacement tail = %+v; runtime request count = %d; controller = %+v",
-			len(requests),
-			count,
-			nodeJSON,
-			listErr,
-			replacementTail,
-			len(f.runtimeRequests()),
-			f.controller.Snapshot(),
-		)
-	}
-	return requests
-}
-
 func (f *currentNodeRunnerFixture) waitForModelRequestsWithin(
 	t *testing.T,
 	count int,
@@ -1062,7 +986,7 @@ func TestWorkflowPostCompletionCompactionReachesCACTargetWithoutSecondSummary(t 
 	if _, err := f.controller.ApplyPendingApproval(context.Background(), approval.ID); err != nil {
 		t.Fatalf("apply CAC target Approval: %v", err)
 	}
-	requests := f.waitForTaskModelRequests(t, task.ID, 3)
+	requests := f.waitForModelRequests(t, 3)
 
 	compactions := client.CompactionCalls()
 	if len(compactions) != 1 {

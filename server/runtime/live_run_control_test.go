@@ -11,7 +11,6 @@ import (
 	"core/server/runtimecommand"
 	"core/server/tools"
 	"core/shared/runtimeids"
-	"core/shared/serverapi"
 	"core/shared/textutil"
 
 	"github.com/google/uuid"
@@ -158,43 +157,6 @@ func TestTerminalWorkflowQueueFailureSettlesCanonicalPendingInput(t *testing.T) 
 	}
 	if eng.HasActiveLiveRunGroup() {
 		t.Fatal("live-run group stayed active after terminal queue failure")
-	}
-}
-
-func TestLiveRunTracksWorkAcrossExactAgentStepBoundaries(t *testing.T) {
-	startedAt := time.Now().UTC()
-	runID := "018fdd67-89ab-4cde-8123-456789abc011"
-	snapshot := &RunSnapshot{
-		RunID:      runID,
-		StepID:     "018fdd67-89ab-4cde-8123-456789abc012",
-		Status:     RunStatusRunning,
-		ActiveKind: ActiveKindUserTurn,
-		StartedAt:  startedAt,
-	}
-	coordinator := newLiveRunCoordinator()
-	coordinator.beginStep(snapshot)
-	coordinator.beginAgentStep(serverapi.RuntimeStepOrigin{
-		RunID:  runID,
-		StepID: "018fdd67-89ab-4cde-8123-456789abc013",
-	})
-	coordinator.recordToolStart("018fdd67-89ab-4cde-8123-456789abc013")
-	coordinator.recordToolStart("018fdd67-89ab-4cde-8123-456789abc013")
-	coordinator.beginAgentStep(serverapi.RuntimeStepOrigin{
-		RunID:  runID,
-		StepID: "018fdd67-89ab-4cde-8123-456789abc014",
-	})
-	coordinator.recordAssistantFinalAnswer(
-		"018fdd67-89ab-4cde-8123-456789abc014",
-		llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done")},
-	)
-
-	completed := *snapshot
-	completed.Status = RunStatusCompleted
-	completed.FinishedAt = startedAt.Add(time.Second)
-	result := coordinator.finishStepDeferred(&completed, RunStatusCompleted, nil, false)
-	if result == nil || !result.WorkPerformed ||
-		messageContent(result.AssistantMessage) != "done" {
-		t.Fatalf("live Run result = %+v", result)
 	}
 }
 

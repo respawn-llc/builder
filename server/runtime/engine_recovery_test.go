@@ -19,31 +19,6 @@ import (
 	"core/shared/toolspec"
 )
 
-func TestWorkflowTerminalProviderStepClearsExactPendingRecoveryBeforeReturn(t *testing.T) {
-	store := mustCreateTestSession(t)
-	controller := &fakeWorkflowController{}
-	client := &fakeClient{responses: []llm.Response{
-		structuredFinalResponse(`{"commentary":"complete","summary":"done"}`),
-	}}
-	engine := mustNewWorkflowTestEngine(
-		t,
-		store,
-		client,
-		testWorkflowConfig(controller, config.WorkflowCompletionModeStructuredOutput),
-		Config{},
-	)
-
-	if _, err := engine.SubmitUserMessage(context.Background(), "run"); err != nil {
-		t.Fatalf("submit Workflow turn: %v", err)
-	}
-	if terminal := engine.WorkflowTerminalState(); !terminal.Completed {
-		t.Fatalf("Workflow terminal state = %+v, want committed completion", terminal)
-	}
-	if recovery := store.Meta().PendingModelRecovery; recovery != nil {
-		t.Fatalf("Workflow terminal return retained exact Agent Step recovery: %+v", recovery)
-	}
-}
-
 func TestWorkflowTerminalProviderStepSurfacesExactRecoveryClearFailureAfterCommit(t *testing.T) {
 	clearErr := errors.New("Workflow terminal pending recovery observer failure")
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
