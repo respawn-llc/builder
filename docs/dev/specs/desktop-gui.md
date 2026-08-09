@@ -245,11 +245,11 @@
 - Long descriptions start collapsed only when they overflow, at roughly half the available height and never fewer than about five or more than about ten rendered lines, with an expand action. Expansion lasts until that Task Detail closes, keeps the description top anchored, grows downward, and occurs automatically for editing.
 - A Markdown task-list item uses one product-styled checkbox in place of its list bullet.
 - Selecting a checkbox in an editable Task description updates the local Markdown body Draft without saving it. The existing Task Save action persists the changed body.
-- From an editable Task description with a valid title and a dirty Draft, the text-field submission shortcut submits the current Task title and body together.
-- From an editable Task description with a clean Draft, the text-field submission shortcut closes description editing without a Task mutation.
-- While a dirty Task Description Save is pending, editing remains active and the Draft remains complete.
-- A successful dirty Task Description Save closes editing after the server operation completes.
-- A failed dirty Task Description Save keeps editing active, preserves the complete Draft, and presents the mutation error.
+- From an editable Task description with a valid title and a dirty Draft, the text-field submission shortcut must submit the current Task title and body together.
+- From an editable Task description with a clean Draft, the text-field submission shortcut must close description editing without a Task mutation.
+- While a dirty Task Description Save is pending, editing must remain active and the Draft must remain complete.
+- A successful dirty Task Description Save must close editing after the server operation completes.
+- A failed dirty Task Description Save must keep editing active, preserve the complete Draft, and present the mutation error.
 - Task Detail begins with Inbox, which contains current blockers and answer, Approval, and Resume controls. Comments have composer, list, edit, delete, and count. There is no completed Workflow movement or execution-history view.
 - Task Detail shows Task Short ID, title, Markdown body, Project, Workflow, source workspace name and root, all Current Nodes and states, completion state, and available actions including Task Delete. When available, it also shows Execution Target, managed worktree, requested revision, resolved commit, branch, Agent role and execution state, Session identity, source URL, and assignee or column.
 - Source root and Execution Root are not separate facts. Unavailable expected facts are hidden; useful continuity facts may be empty or unassigned; unexpected meaningful absence is an unavailable or error state. Unavailable managed worktrees have no managed-worktree fact.
