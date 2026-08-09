@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strings"
 )
 
 type observationJSONTarget interface{ observationTarget() }
@@ -43,18 +42,26 @@ type observationJSONQuestion struct {
 }
 type observationJSONFinalAnswer struct {
 	observationJSONKind
-	Result   *string  `json:"result,omitempty"`
-	Warnings []string `json:"warnings,omitempty"`
+	Result      *string  `json:"result,omitempty"`
+	SessionName *string  `json:"session_name,omitempty"`
+	DurationMS  *int64   `json:"duration_ms,omitempty"`
+	Warnings    []string `json:"warnings,omitempty"`
 }
 type observationJSONExecutionError struct {
 	observationJSONKind
 	Reason     string  `json:"reason"`
 	Diagnostic *string `json:"diagnostic,omitempty"`
+	SessionID  *string `json:"session_id,omitempty"`
+	ScriptPath *string `json:"script_path,omitempty"`
+	NodeKey    *string `json:"node_key,omitempty"`
 }
 type observationJSONInterrupted struct {
 	observationJSONKind
 	Reason     string  `json:"reason"`
 	Diagnostic *string `json:"diagnostic,omitempty"`
+	SessionID  *string `json:"session_id,omitempty"`
+	ScriptPath *string `json:"script_path,omitempty"`
+	NodeKey    *string `json:"node_key,omitempty"`
 }
 type observationJSONTaskDone struct{ observationJSONKind }
 type observationJSONEnvelope struct {
@@ -65,10 +72,14 @@ type observationJSONEnvelope struct {
 	Warnings []string                 `json:"warnings,omitempty"`
 }
 
-const observationOperationRunWait = "run_wait"
-const observationOperationRunWatch = "run_watch"
-const observationOperationTaskWait = "task_wait"
-const observationOperationTaskWatch = "task_watch"
+type observationOperation uint8
+
+const (
+	observationOperationRunWait observationOperation = iota
+	observationOperationRunWatch
+	observationOperationTaskWait
+	observationOperationTaskWatch
+)
 
 func (observationJSONRunTarget) observationTarget()  {}
 func (observationJSONTaskTarget) observationTarget() {}
@@ -97,7 +108,7 @@ func observationTargetSession(id string) observationJSONTarget {
 func observationTargetTask(id string) observationJSONTarget {
 	return observationJSONTaskTarget{TaskID: id}
 }
-func projectObservationQuestion(question serverapi.ObservationQuestion, answerSessionID string, nodeKey *string) observationJSONOutcome {
+func projectObservationQuestion(question serverapi.ObservationQuestion, answerSessionID string, nodeKey *string) (observationJSONOutcome, error) {
 	var id, text string
 	var suggestions []string
 	var recommendation *int
@@ -111,37 +122,54 @@ func projectObservationQuestion(question serverapi.ObservationQuestion, answerSe
 			suggestions = append(suggestions, option.Label)
 		}
 	default:
-		panic("question outcome has no question payload")
+		return nil, errors.New("question outcome has no question payload")
 	}
 	return observationJSONQuestion{
 		observationJSONKind: observationJSONKind{Kind: "question"}, QuestionID: id, Text: text, Suggestions: suggestions,
 		RecommendedOptionIndex: recommendation,
 		AnswerTarget:           observationJSONAnswerTarget{SessionID: answerSessionID}, NodeKey: nodeKey,
-	}
+	}, nil
 }
-func projectRunWatchJSON(targetSessionID string, response serverapi.RuntimeLiveWatchResponse) (observationJSONEnvelope, int) {
+func projectRunWatchJSON(targetSessionID string, response serverapi.RuntimeLiveWatchResponse) (observationJSONEnvelope, int, error) {
 	target := observationTargetSession(targetSessionID)
 	switch response.Outcome.Kind {
 	case serverapi.RuntimeLiveWatchQuestion:
-		outcome := projectObservationQuestion(*response.Outcome.Question, targetSessionID, nil)
-		return observationJSONEnvelope{Status: "success", Target: target, Outcomes: []observationJSONOutcome{outcome}}, 0
+		if response.Outcome.Question == nil {
+			return observationJSONEnvelope{}, 1, errors.New("question outcome has no question payload")
+		}
+		outcome, err := projectObservationQuestion(*response.Outcome.Question, targetSessionID, nil)
+		if err != nil {
+			return observationJSONEnvelope{}, 1, err
+		}
+		return observationJSONEnvelope{Status: "success", Target: target, Outcomes: []observationJSONOutcome{outcome}}, 0, nil
 	case serverapi.RuntimeLiveWatchFinalAnswer:
+		if response.Outcome.FinalAnswer == nil {
+			return observationJSONEnvelope{}, 1, errors.New("final answer outcome has no final payload")
+		}
 		return observationJSONEnvelope{Status: "success", Target: target, Outcomes: []observationJSONOutcome{
-			observationJSONFinalAnswer{observationJSONKind: observationJSONKind{Kind: "final_answer"}, Result: response.Outcome.FinalAnswer.Result},
-		}}, 0
+			observationJSONFinalAnswer{
+				observationJSONKind: observationJSONKind{Kind: "final_answer"},
+				Result:              response.Outcome.FinalAnswer.Result,
+				SessionName:         jsonStringPointer(response.Outcome.FinalAnswer.SessionName),
+				DurationMS:          jsonInt64Pointer(response.Outcome.FinalAnswer.DurationMillis),
+			},
+		}}, 0, nil
 	case serverapi.RuntimeLiveWatchNoFinalResult:
 		return observationJSONEnvelope{Status: "success", Target: target, Outcomes: []observationJSONOutcome{
 			observationJSONFinalAnswer{observationJSONKind: observationJSONKind{Kind: "final_answer"}},
-		}}, 0
+		}}, 0, nil
 	case serverapi.RuntimeLiveWatchExecutionError, serverapi.RuntimeLiveWatchInterrupted:
-		interrupted := response.Outcome.Kind == serverapi.RuntimeLiveWatchInterrupted
-		outcome := projectFailure(interrupted, response.Outcome.Failure.Reason, response.Outcome.Failure.Diagnostic)
-		if interrupted {
-			return observationJSONEnvelope{Status: "interrupted", Target: target, Outcomes: []observationJSONOutcome{outcome}}, 130
+		if response.Outcome.Failure == nil {
+			return observationJSONEnvelope{}, 1, errors.New("failure outcome has no failure payload")
 		}
-		return observationJSONEnvelope{Status: "error", Target: target, Outcomes: []observationJSONOutcome{outcome}}, 1
+		interrupted := response.Outcome.Kind == serverapi.RuntimeLiveWatchInterrupted
+		outcome := projectFailure(interrupted, response.Outcome.Failure.Reason, response.Outcome.Failure.Diagnostic, nil, nil, nil)
+		if interrupted {
+			return observationJSONEnvelope{Status: "interrupted", Target: target, Outcomes: []observationJSONOutcome{outcome}}, 130, nil
+		}
+		return observationJSONEnvelope{Status: "error", Target: target, Outcomes: []observationJSONOutcome{outcome}}, 1, nil
 	default:
-		panic(fmt.Sprintf("unknown live watch outcome %q", response.Outcome.Kind))
+		return observationJSONEnvelope{}, 1, fmt.Errorf("unknown live watch outcome %q", response.Outcome.Kind)
 	}
 }
 func projectRunWaitJSON(targetSessionID string, result app.RunPromptResult, err error, caller context.Context) (observationJSONEnvelope, int) {
@@ -154,19 +182,29 @@ func projectRunWaitJSON(targetSessionID string, result app.RunPromptResult, err 
 				}},
 			}, 0
 		}
-		return projectObservationError(observationOperationRunWait, targetSessionID, caller, err)
+		return projectObservationError(observationOperationRunWait, observationTargetSession(targetSessionID), caller, err)
 	}
 	return observationJSONEnvelope{
 		Status: "success", Target: observationTargetSession(targetSessionID),
-		Outcomes: []observationJSONOutcome{observationJSONFinalAnswer{observationJSONKind: observationJSONKind{Kind: "final_answer"}, Result: jsonStringPointer(result.Result), Warnings: append([]string(nil), result.Warnings...)}},
+		Outcomes: []observationJSONOutcome{observationJSONFinalAnswer{
+			observationJSONKind: observationJSONKind{Kind: "final_answer"},
+			Result:              jsonStringPointer(result.Result),
+			SessionName:         jsonStringPointer(result.SessionName),
+			DurationMS:          jsonInt64Pointer(result.Duration.Milliseconds()),
+			Warnings:            append([]string(nil), result.Warnings...),
+		}},
 	}, 0
 }
-func emitRunWaitJSON(w io.Writer, target string, result app.RunPromptResult, err error, caller context.Context) int {
+func emitRunWaitJSON(w io.Writer, target string, result app.RunPromptResult, err error, caller context.Context, closeFn func() error) int {
 	envelope, code := projectRunWaitJSON(target, result, err, caller)
-	envelope.Warnings = append(envelope.Warnings, result.CleanupWarnings...)
+	if closeFn != nil {
+		if closeErr := closeFn(); closeErr != nil {
+			envelope.Warnings = append(envelope.Warnings, closeErr.Error())
+		}
+	}
 	return emitObservationJSON(w, envelope, code)
 }
-func projectTaskObservationJSON(targetTaskID string, response serverapi.WorkflowTaskObservationResponse) (observationJSONEnvelope, int) {
+func projectTaskObservationJSON(targetTaskID string, response serverapi.WorkflowTaskObservationResponse) (observationJSONEnvelope, int, error) {
 	outcomes := make([]observationJSONOutcome, 0, len(response.Outcomes))
 	status, exitCode := "success", 0
 	for _, observed := range response.Outcomes {
@@ -174,43 +212,44 @@ func projectTaskObservationJSON(targetTaskID string, response serverapi.Workflow
 		case serverapi.WorkflowTaskObservationDone:
 			outcomes = append(outcomes, observationJSONTaskDone{observationJSONKind: observationJSONKind{Kind: "task_done"}})
 		case serverapi.WorkflowTaskObservationQuestion:
+			if observed.Question == nil {
+				return observationJSONEnvelope{}, 1, errors.New("question outcome has no question payload")
+			}
 			sessionID := ""
 			if observed.Question.Ask != nil {
 				sessionID = observed.Question.Ask.SessionID
 			} else if observed.Question.Approval != nil {
 				sessionID = observed.Question.Approval.SessionID
 			}
-			outcome := projectObservationQuestion(*observed.Question, sessionID, observed.NodeKey)
+			outcome, err := projectObservationQuestion(*observed.Question, sessionID, observed.NodeKey)
+			if err != nil {
+				return observationJSONEnvelope{}, 1, err
+			}
 			outcomes = append(outcomes, outcome)
 		case serverapi.WorkflowTaskObservationExecutionError, serverapi.WorkflowTaskObservationInterrupted:
+			if observed.Failure == nil {
+				return observationJSONEnvelope{}, 1, errors.New("failure outcome has no failure payload")
+			}
 			interrupted := observed.Kind == serverapi.WorkflowTaskObservationInterrupted
-			outcomes = append(outcomes, projectFailure(interrupted, observed.Failure.Reason, observed.Failure.Diagnostic))
+			outcomes = append(outcomes, projectFailure(interrupted, observed.Failure.Reason, observed.Failure.Diagnostic, observed.SessionID, observed.ScriptPath, observed.NodeKey))
 			if !interrupted {
 				status, exitCode = "error", 1
 			} else if exitCode == 0 {
 				status, exitCode = "interrupted", 130
 			}
 		default:
-			panic(fmt.Sprintf("unknown task observation outcome %q", observed.Kind))
+			return observationJSONEnvelope{}, 1, fmt.Errorf("unknown task observation outcome %q", observed.Kind)
 		}
 	}
-	return observationJSONEnvelope{Status: status, Target: observationTargetTask(targetTaskID), Outcomes: outcomes}, exitCode
+	return observationJSONEnvelope{Status: status, Target: observationTargetTask(targetTaskID), Outcomes: outcomes}, exitCode, nil
 }
-func projectFailure(interrupted bool, reason string, diagnostic *string) observationJSONOutcome {
+func projectFailure(interrupted bool, reason string, diagnostic, sessionID, scriptPath, nodeKey *string) observationJSONOutcome {
 	if interrupted {
-		return observationJSONInterrupted{observationJSONKind: observationJSONKind{Kind: "interrupted"}, Reason: reason, Diagnostic: diagnostic}
+		return observationJSONInterrupted{observationJSONKind: observationJSONKind{Kind: "interrupted"}, Reason: reason, Diagnostic: diagnostic, SessionID: sessionID, ScriptPath: scriptPath, NodeKey: nodeKey}
 	}
-	return observationJSONExecutionError{observationJSONKind: observationJSONKind{Kind: "execution_error"}, Reason: reason, Diagnostic: diagnostic}
+	return observationJSONExecutionError{observationJSONKind: observationJSONKind{Kind: "execution_error"}, Reason: reason, Diagnostic: diagnostic, SessionID: sessionID, ScriptPath: scriptPath, NodeKey: nodeKey}
 }
-func projectObservationError(operation string, targetID string, caller context.Context, err error) (observationJSONEnvelope, int) {
-	var target observationJSONTarget
-	if strings.TrimSpace(targetID) != "" {
-		if operation == observationOperationTaskWait || operation == observationOperationTaskWatch {
-			target = observationTargetTask(targetID)
-		} else {
-			target = observationTargetSession(targetID)
-		}
-	}
+func projectObservationError(operation observationOperation, target observationJSONTarget, caller context.Context, err error) (observationJSONEnvelope, int) {
 	code := "runtime"
 	var invalidResponse *client.InvalidResponseError
 	switch {
@@ -245,9 +284,18 @@ func projectObservationError(operation string, targetID string, caller context.C
 		Error: &observationJSONError{Code: code, Message: runErrorMessage(err)},
 	}, exitCode
 }
-func emitObservationError(w io.Writer, operation string, target string, caller context.Context, err error, warnings []string) int {
+func emitObservationError(w io.Writer, operation observationOperation, target observationJSONTarget, caller context.Context, err error, warnings []string, closeFn func() error) int {
 	envelope, code := projectObservationError(operation, target, caller, err)
 	envelope.Warnings = append(envelope.Warnings, warnings...)
+	if cleanupErr := client.CleanupErrorOf(err); cleanupErr != nil {
+		envelope.Warnings = append(envelope.Warnings, cleanupErr.Error())
+	}
+	if closeFn != nil {
+		if closeErr := closeFn(); closeErr != nil {
+			envelope.Warnings = append(envelope.Warnings, closeErr.Error())
+		}
+	}
 	return emitObservationJSON(w, envelope, code)
 }
 func jsonStringPointer(value string) *string { return &value }
+func jsonInt64Pointer(value int64) *int64    { return &value }

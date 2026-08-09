@@ -16,12 +16,11 @@ import (
 const subagentSessionSuffix = "subagent"
 
 type RunPromptResult struct {
-	SessionID       string
-	SessionName     string
-	Result          string
-	Duration        time.Duration
-	Warnings        []string
-	CleanupWarnings []string
+	SessionID   string
+	SessionName string
+	Result      string
+	Duration    time.Duration
+	Warnings    []string
 }
 
 func runPrompt(ctx context.Context, client apicontract.RunPromptService, opts Options, caller startupconfig.CallerContext, initialSessionID, prompt string, timeout time.Duration, progress serverapi.RunPromptProgressSink) (RunPromptResult, error) {

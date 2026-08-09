@@ -24,6 +24,11 @@ type workflowTaskSelector struct {
 	value string
 }
 
+type workflowTaskNotFoundError struct{ message string }
+
+func (e workflowTaskNotFoundError) Error() string { return e.message }
+func (e workflowTaskNotFoundError) Unwrap() error { return serverapi.ErrWorkflowTaskNotFound }
+
 func classifyWorkflowTaskSelector(raw string) workflowTaskSelector {
 	if taskID, err := runtimeids.ParseCanonicalTaskID(raw); err == nil {
 		return workflowTaskSelector{kind: workflowTaskSelectorPersistentID, value: taskID}
@@ -54,7 +59,7 @@ func resolveWorkflowTask(ctx context.Context, cfg config.App, remote workflowCom
 	if selector.kind == workflowTaskSelectorPersistentID {
 		detail, err := getWorkflowTaskByID(ctx, remote, selector.value)
 		if err != nil && isWorkflowTaskNotFound(err) {
-			return serverapi.WorkflowTaskDetail{}, fmt.Errorf("%s: %w", err, serverapi.ErrWorkflowTaskNotFound)
+			return serverapi.WorkflowTaskDetail{}, workflowTaskNotFoundError{message: err.Error()}
 		}
 		return detail, err
 	}
@@ -65,7 +70,9 @@ func resolveWorkflowTask(ctx context.Context, cfg config.App, remote workflowCom
 	detail, err := getWorkflowTaskByProjectShortID(ctx, remote, projectID, trimmed)
 	if err != nil {
 		if errors.Is(err, serverapi.ErrWorkflowTaskNotFound) || errors.Is(err, sql.ErrNoRows) {
-			return serverapi.WorkflowTaskDetail{}, fmt.Errorf("task %q not found in project %s: %w", trimmed, projectID, serverapi.ErrWorkflowTaskNotFound)
+			return serverapi.WorkflowTaskDetail{}, workflowTaskNotFoundError{
+				message: fmt.Sprintf("task %q not found in project %s", trimmed, projectID),
+			}
 		}
 		return serverapi.WorkflowTaskDetail{}, err
 	}

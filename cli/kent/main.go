@@ -16,6 +16,7 @@ import (
 
 	"core/cli/app"
 	"core/prompts"
+	"core/shared/client"
 	"core/shared/config"
 	"core/shared/imagefileio"
 	"core/shared/runtimeids"
@@ -587,16 +588,20 @@ func runLiveWaitSubcommand(args []string) int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	runWait := runLiveWaitApp
+	var result app.RunPromptResult
+	var runErr error
+	var closeFn func() error
 	if outputMode == runOutputModeJSON {
-		runWait = runLiveWaitCleanupApp
+		observed := runLiveWaitCleanupApp(ctx, app.Options{ConfigRoot: strings.TrimSpace(*persistenceRoot)}, sessionID)
+		result, runErr, closeFn = observed.Result, observed.Error, observed.Close
+	} else {
+		result, runErr = runLiveWaitApp(ctx, app.Options{ConfigRoot: strings.TrimSpace(*persistenceRoot)}, sessionID)
 	}
-	result, runErr := runWait(ctx, app.Options{ConfigRoot: strings.TrimSpace(*persistenceRoot)}, sessionID)
 	continueRoot := continueCommandPersistenceRoot(*persistenceRoot)
 	continueHint := buildRunContinueHint(result.SessionID, continueRoot)
 	if runErr != nil {
 		if outputMode == runOutputModeJSON {
-			return emitRunWaitJSON(os.Stdout, sessionID.String(), result, runErr, ctx)
+			return emitRunWaitJSON(os.Stdout, sessionID.String(), result, runErr, ctx, closeFn)
 		} else {
 			fmt.Fprintln(os.Stderr, runErrorMessage(runErr))
 			if continueHint != "" {
@@ -610,7 +615,7 @@ func runLiveWaitSubcommand(args []string) int {
 		return 1
 	}
 	if outputMode == runOutputModeJSON {
-		return emitRunWaitJSON(os.Stdout, sessionID.String(), result, nil, ctx)
+		return emitRunWaitJSON(os.Stdout, sessionID.String(), result, nil, ctx, closeFn)
 	}
 	emitRunFinalText(os.Stdout, result.Warnings, result.Result, continueHint)
 	return 0
@@ -621,12 +626,12 @@ func runLiveWatchSubcommand(args []string) int {
 }
 
 type liveWatchRunner func(context.Context, app.Options, runtimeids.SessionID) (serverapi.RuntimeLiveWatchResponse, error)
-type liveWatchCleanupRunner func(context.Context, app.Options, runtimeids.SessionID) (app.RunLiveWatchResult, error)
+type liveWatchCleanupRunner func(context.Context, app.Options, runtimeids.SessionID) app.RunLiveWatchResult
 
 func runLiveWatchSubcommandWithRunner(args []string, run liveWatchRunner) int {
-	return runLiveWatchSubcommandWithCleanup(args, func(ctx context.Context, opts app.Options, sessionID runtimeids.SessionID) (app.RunLiveWatchResult, error) {
+	return runLiveWatchSubcommandWithCleanup(args, func(ctx context.Context, opts app.Options, sessionID runtimeids.SessionID) app.RunLiveWatchResult {
 		response, err := run(ctx, opts, sessionID)
-		return app.RunLiveWatchResult{Response: response}, err
+		return app.RunLiveWatchResult{Response: response, Error: err}
 	})
 }
 
@@ -654,28 +659,43 @@ func runLiveWatchSubcommandWithCleanup(args []string, runWithCleanup liveWatchCl
 	}
 	if err := publishPersistenceRootEnv(*persistenceRoot); err != nil {
 		if outputMode == runOutputModeJSON {
-			return emitObservationError(os.Stdout, observationOperationRunWatch, sessionID.String(), context.Background(), err, nil)
+			return emitObservationError(os.Stdout, observationOperationRunWatch, observationTargetSession(sessionID.String()), context.Background(), err, nil, nil)
 		}
 		return runLiveFlagError(err)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	result, err := runWithCleanup(ctx, app.Options{ConfigRoot: strings.TrimSpace(*persistenceRoot)}, sessionID)
-	response, warnings := result.Response, result.Warnings
-	if err != nil {
+	result := runWithCleanup(ctx, app.Options{ConfigRoot: strings.TrimSpace(*persistenceRoot)}, sessionID)
+	response := result.Response
+	if result.Error != nil {
 		if outputMode == runOutputModeJSON {
-			return emitObservationError(os.Stdout, observationOperationRunWatch, sessionID.String(), ctx, err, warnings)
+			return emitObservationError(os.Stdout, observationOperationRunWatch, observationTargetSession(sessionID.String()), ctx, result.Error, nil, result.Close)
 		}
-		fmt.Fprintln(os.Stderr, err)
-		if errors.Is(err, context.Canceled) {
+		if result.Close != nil {
+			_ = result.Close()
+		}
+		fmt.Fprintln(os.Stderr, result.Error)
+		if errors.Is(result.Error, context.Canceled) {
 			return 130
 		}
 		return 1
 	}
 	if outputMode == runOutputModeJSON {
-		envelope, exitCode := projectRunWatchJSON(sessionID.String(), response)
-		envelope.Warnings = append(envelope.Warnings, warnings...)
+		envelope, exitCode, projectionErr := projectRunWatchJSON(sessionID.String(), response)
+		if projectionErr != nil {
+			return emitObservationError(os.Stdout, observationOperationRunWatch, observationTargetSession(sessionID.String()), ctx, &client.InvalidResponseError{
+				Operation: "runtime live watch", Cause: projectionErr,
+			}, nil, result.Close)
+		}
+		if result.Close != nil {
+			if closeErr := result.Close(); closeErr != nil {
+				envelope.Warnings = append(envelope.Warnings, closeErr.Error())
+			}
+		}
 		return emitObservationJSON(os.Stdout, envelope, exitCode)
+	}
+	if result.Close != nil {
+		_ = result.Close()
 	}
 	return writeRunWatchResponse(os.Stdout, os.Stderr, response, buildRunContinueHint(response.SessionID, continueCommandPersistenceRoot(*persistenceRoot)))
 }

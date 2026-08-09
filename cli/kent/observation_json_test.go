@@ -11,6 +11,7 @@ import (
 
 	"core/cli/app"
 	"core/shared/apicontract"
+	"core/shared/client"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -105,6 +106,26 @@ func TestTaskObservationJSONMapsProjectUnavailable(t *testing.T) {
 	}
 }
 
+func TestObservationErrorPreservesStartupCleanupWarning(t *testing.T) {
+	var output bytes.Buffer
+	err := client.WithCleanupError(serverapi.ErrProjectUnavailable, errors.New("close failed"))
+	if code := emitObservationError(&output, observationOperationTaskWait, nil, context.Background(), err, nil, nil); code != 1 {
+		t.Fatalf("exit code = %d", code)
+	}
+	var envelope struct {
+		Warnings []string `json:"warnings"`
+		Error    struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(output.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Error.Code != "unavailable" || len(envelope.Warnings) != 1 || envelope.Warnings[0] != "close failed" {
+		t.Fatalf("envelope = %#v", envelope)
+	}
+}
+
 func TestTaskObservationJSONParseFailureEmitsOneUsageObjectWithoutRemote(t *testing.T) {
 	remote := &observationCommandRemote{}
 	installWorkflowCommandRemote(t, remote)
@@ -138,9 +159,9 @@ func TestProjectRunWatchJSONQuestionUsesAnswerTargetAndOrderedSuggestions(t *tes
 			}},
 		},
 	}
-	envelope, code := projectRunWatchJSON("requested-session", response)
-	if code != 0 {
-		t.Fatalf("projection = %#v, code=%d", envelope, code)
+	envelope, code, err := projectRunWatchJSON("requested-session", response)
+	if err != nil || code != 0 {
+		t.Fatalf("projection = %#v, code=%d, err=%v", envelope, code, err)
 	}
 	raw, err := json.Marshal(envelope)
 	if err != nil {
@@ -166,7 +187,7 @@ func TestProjectRunWatchJSONQuestionUsesAnswerTargetAndOrderedSuggestions(t *tes
 func TestProjectTaskObservationJSONPreservesQuestionNodeAndKeepsDoneEmpty(t *testing.T) {
 	sessionID := "question-session"
 	nodeKey := "build"
-	envelope, _ := projectTaskObservationJSON("task-id", serverapi.WorkflowTaskObservationResponse{
+	envelope, _, err := projectTaskObservationJSON("task-id", serverapi.WorkflowTaskObservationResponse{
 		TaskID: "response-task", TaskShortID: "T-1",
 		Outcomes: []serverapi.WorkflowTaskObservationOutcome{
 			{Kind: serverapi.WorkflowTaskObservationDone, SessionID: &sessionID, NodeKey: &nodeKey},
@@ -176,6 +197,9 @@ func TestProjectTaskObservationJSONPreservesQuestionNodeAndKeepsDoneEmpty(t *tes
 				}}},
 		},
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	raw, err := json.Marshal(envelope)
 	if err != nil {
 		t.Fatal(err)
@@ -198,7 +222,7 @@ func TestProjectTaskObservationJSONPreservesQuestionNodeAndKeepsDoneEmpty(t *tes
 }
 
 func TestProjectObservationJSONStatusPrecedenceAndNoFinalProjection(t *testing.T) {
-	noFinal, code := projectRunWatchJSON("session", serverapi.RuntimeLiveWatchResponse{
+	noFinal, code, err := projectRunWatchJSON("session", serverapi.RuntimeLiveWatchResponse{
 		SessionID: "session",
 		Outcome: serverapi.RuntimeLiveWatchOutcome{
 			Kind:    serverapi.RuntimeLiveWatchNoFinalResult,
@@ -206,14 +230,14 @@ func TestProjectObservationJSONStatusPrecedenceAndNoFinalProjection(t *testing.T
 		},
 	})
 	rawNoFinal, marshalErr := json.Marshal(noFinal)
-	if marshalErr != nil || code != 0 || noFinal.Status != "success" {
-		t.Fatalf("no-final projection = %#v, code=%d, err=%v", noFinal, code, marshalErr)
+	if err != nil || marshalErr != nil || code != 0 || noFinal.Status != "success" {
+		t.Fatalf("no-final projection = %#v, code=%d, err=%v", noFinal, code, err)
 	}
 	var noFinalJSON map[string]any
 	if err := json.Unmarshal(rawNoFinal, &noFinalJSON); err != nil || noFinalJSON["status"] != "success" {
 		t.Fatalf("no-final JSON = %s, err=%v", rawNoFinal, err)
 	}
-	task, code := projectTaskObservationJSON("task-id", serverapi.WorkflowTaskObservationResponse{
+	task, code, err := projectTaskObservationJSON("task-id", serverapi.WorkflowTaskObservationResponse{
 		TaskID:      "response-task",
 		TaskShortID: "T-1",
 		Outcomes: []serverapi.WorkflowTaskObservationOutcome{
@@ -221,15 +245,108 @@ func TestProjectObservationJSONStatusPrecedenceAndNoFinalProjection(t *testing.T
 			{Kind: serverapi.WorkflowTaskObservationExecutionError, Failure: &serverapi.RuntimeLiveWatchFailure{Reason: "failed"}},
 		},
 	})
-	if code != 1 || task.Status != "error" {
-		t.Fatalf("task precedence = %#v, code=%d", task, code)
+	if err != nil || code != 1 || task.Status != "error" {
+		t.Fatalf("task precedence = %#v, code=%d, err=%v", task, code, err)
+	}
+}
+
+func TestRunFinalJSONPreservesSessionNameAndDuration(t *testing.T) {
+	resultText := "done"
+	envelope, code, err := projectRunWatchJSON("session", serverapi.RuntimeLiveWatchResponse{
+		SessionID: "session",
+		Outcome: serverapi.RuntimeLiveWatchOutcome{
+			Kind: serverapi.RuntimeLiveWatchFinalAnswer,
+			FinalAnswer: &serverapi.RuntimeLiveWatchFinal{
+				Result: &resultText, SessionName: "live", DurationMillis: 2500,
+			},
+		},
+	})
+	if err != nil || code != 0 {
+		t.Fatalf("projection = %#v, code=%d, err=%v", envelope, code, err)
+	}
+	raw, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var generic map[string]any
+	if err := json.Unmarshal(raw, &generic); err != nil {
+		t.Fatal(err)
+	}
+	outcome := generic["outcomes"].([]any)[0].(map[string]any)
+	if outcome["session_name"] != "live" || outcome["duration_ms"] != float64(2500) {
+		t.Fatalf("final outcome = %#v", outcome)
+	}
+	wait, code := projectRunWaitJSON("session", app.RunPromptResult{
+		Result: "done", SessionName: "waited", Duration: 1500 * time.Millisecond,
+	}, nil, context.Background())
+	if code != 0 {
+		t.Fatalf("wait projection code = %d", code)
+	}
+	raw, err = json.Marshal(wait)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &generic); err != nil {
+		t.Fatal(err)
+	}
+	outcome = generic["outcomes"].([]any)[0].(map[string]any)
+	if outcome["session_name"] != "waited" || outcome["duration_ms"] != float64(1500) {
+		t.Fatalf("wait final outcome = %#v", outcome)
+	}
+}
+
+func TestTaskFailureJSONPreservesTypedDiscriminatorMetadata(t *testing.T) {
+	sessionID, scriptPath, nodeKey := "session", "script.sh", "build"
+	envelope, _, err := projectTaskObservationJSON("task", serverapi.WorkflowTaskObservationResponse{
+		TaskID: "task", TaskShortID: "T-1",
+		Outcomes: []serverapi.WorkflowTaskObservationOutcome{{
+			Kind:      serverapi.WorkflowTaskObservationExecutionError,
+			SessionID: &sessionID, ScriptPath: &scriptPath, NodeKey: &nodeKey,
+			Failure: &serverapi.RuntimeLiveWatchFailure{Reason: "failed"},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var generic map[string]any
+	if err := json.Unmarshal(raw, &generic); err != nil {
+		t.Fatal(err)
+	}
+	outcome := generic["outcomes"].([]any)[0].(map[string]any)
+	for key, want := range map[string]string{"session_id": sessionID, "script_path": scriptPath, "node_key": nodeKey} {
+		if outcome[key] != want {
+			t.Fatalf("outcome[%q] = %#v", key, outcome[key])
+		}
+	}
+}
+
+func TestMalformedObservationProjectionReturnsError(t *testing.T) {
+	if _, _, err := projectRunWatchJSON("session", serverapi.RuntimeLiveWatchResponse{
+		SessionID: "session",
+		Outcome:   serverapi.RuntimeLiveWatchOutcome{Kind: serverapi.RuntimeLiveWatchQuestion},
+	}); err == nil {
+		t.Fatal("Run malformed question unexpectedly projected successfully")
+	}
+	if _, _, err := projectTaskObservationJSON("task", serverapi.WorkflowTaskObservationResponse{
+		TaskID: "task", TaskShortID: "T-1",
+		Outcomes: []serverapi.WorkflowTaskObservationOutcome{{
+			Kind: serverapi.WorkflowTaskObservationExecutionError,
+		}},
+	}); err == nil {
+		t.Fatal("Task malformed failure unexpectedly projected successfully")
 	}
 }
 
 func TestRunWaitJSONSeparatesFinalAndCleanupWarnings(t *testing.T) {
 	var output bytes.Buffer
-	result := app.RunPromptResult{Result: "done", Warnings: []string{"final warning"}, CleanupWarnings: []string{"close warning"}}
-	if code := emitRunWaitJSON(&output, "session", result, nil, context.Background()); code != 0 {
+	result := app.RunPromptResult{Result: "done", Warnings: []string{"final warning"}}
+	if code := emitRunWaitJSON(&output, "session", result, nil, context.Background(), func() error {
+		return errors.New("close warning")
+	}); code != 0 {
 		t.Fatalf("exit code = %d", code)
 	}
 	var envelope struct {
@@ -264,7 +381,7 @@ func TestProjectObservationErrorCodes(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			envelope, code := projectObservationError(observationOperationTaskWait, "", context.Background(), test.err)
+			envelope, code := projectObservationError(observationOperationTaskWait, nil, context.Background(), test.err)
 			if envelope.Error == nil || envelope.Error.Code != test.code || code != test.exit {
 				t.Fatalf("projection = %#v, code=%d", envelope, code)
 			}
@@ -287,16 +404,16 @@ func TestObservationJSONWriteFailureIsReported(t *testing.T) {
 func TestObservationErrorCancellationPrecedence(t *testing.T) {
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
-	envelope, exitCode := projectObservationError(observationOperationTaskWait, "task-id", canceled, context.Canceled)
+	envelope, exitCode := projectObservationError(observationOperationTaskWait, observationTargetTask("task-id"), canceled, context.Canceled)
 	if envelope.Status != "error" || envelope.Error == nil || envelope.Error.Code != "interrupted" || exitCode != 130 || len(envelope.Outcomes) != 0 {
 		t.Fatalf("observer cancellation = %#v, code=%d", envelope, exitCode)
 	}
-	target, exitCode := projectObservationError(observationOperationRunWait, "session-id", context.Background(), context.Canceled)
+	target, exitCode := projectObservationError(observationOperationRunWait, observationTargetSession("session-id"), context.Background(), context.Canceled)
 	if target.Status != "interrupted" || target.Error != nil || len(target.Outcomes) != 1 || exitCode != 130 {
 		t.Fatalf("target interruption = %#v, code=%d", target, exitCode)
 	}
 	stream := errors.Join(serverapi.ErrStreamUnavailable, context.Canceled)
-	envelope, exitCode = projectObservationError(observationOperationRunWait, "session-id", context.Background(), stream)
+	envelope, exitCode = projectObservationError(observationOperationRunWait, observationTargetSession("session-id"), context.Background(), stream)
 	if envelope.Status != "error" || envelope.Error == nil || envelope.Error.Code != "unavailable" || exitCode != 1 {
 		t.Fatalf("stream cancellation = %#v, code=%d", envelope, exitCode)
 	}

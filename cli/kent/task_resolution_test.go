@@ -1,6 +1,11 @@
 package main
 
-import "testing"
+import (
+	"errors"
+	"testing"
+
+	"core/shared/serverapi"
+)
 
 func TestClassifyWorkflowTaskSelectorUsesFullCanonicalTaskID(t *testing.T) {
 	tests := []struct {
@@ -36,5 +41,12 @@ func TestClassifyWorkflowTaskSelectorUsesFullCanonicalTaskID(t *testing.T) {
 				t.Fatalf("selector kind = %v, want %v", got.kind, test.want)
 			}
 		})
+	}
+}
+
+func TestWorkflowTaskNotFoundErrorPreservesMessageAndTypedIdentity(t *testing.T) {
+	err := workflowTaskNotFoundError{message: `task "T-1" not found in project project`}
+	if err.Error() != `task "T-1" not found in project project` || !errors.Is(err, serverapi.ErrWorkflowTaskNotFound) {
+		t.Fatalf("error=%q, is_not_found=%v", err.Error(), errors.Is(err, serverapi.ErrWorkflowTaskNotFound))
 	}
 }

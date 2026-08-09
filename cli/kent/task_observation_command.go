@@ -11,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 
+	"core/shared/client"
 	"core/shared/config"
 	"core/shared/serverapi"
 )
@@ -78,22 +79,26 @@ func taskObservationJSON(ctx context.Context, stdout io.Writer, mode serverapi.W
 		operation = observationOperationTaskWatch
 	}
 	if err != nil {
-		envelope, code := projectObservationError(operation, "", ctx, err)
-		return emitObservationJSON(stdout, envelope, code)
+		return emitObservationError(stdout, operation, nil, ctx, err, nil, nil)
 	}
 	var envelope observationJSONEnvelope
 	exitCode := 0
 	detail, err := resolveWorkflowTask(ctx, cfg, remote, projectRef, ref)
 	if err != nil {
-		envelope, exitCode = projectObservationError(operation, "", ctx, err)
+		envelope, exitCode = projectObservationError(operation, nil, ctx, err)
 	} else {
 		response, observeErr := remote.ObserveWorkflowTask(ctx, serverapi.WorkflowTaskObservationRequest{
 			TaskID: detail.Summary.ID, ProjectID: detail.Summary.ProjectID, Mode: mode,
 		})
 		if observeErr != nil {
-			envelope, exitCode = projectObservationError(operation, detail.Summary.ID, ctx, observeErr)
+			envelope, exitCode = projectObservationError(operation, observationTargetTask(detail.Summary.ID), ctx, observeErr)
 		} else {
-			envelope, exitCode = projectTaskObservationJSON(detail.Summary.ID, response)
+			envelope, exitCode, err = projectTaskObservationJSON(detail.Summary.ID, response)
+			if err != nil {
+				envelope, exitCode = projectObservationError(operation, observationTargetTask(detail.Summary.ID), ctx, &client.InvalidResponseError{
+					Operation: "workflow task observation", Cause: err,
+				})
+			}
 		}
 	}
 	if closeErr := remote.Close(); closeErr != nil {

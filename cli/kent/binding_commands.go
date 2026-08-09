@@ -300,8 +300,7 @@ func openBindingCommandRemote(ctx context.Context, path string) (config.App, *cl
 	// never display or mutate a different instance reachable on the same TCP
 	// endpoint.
 	if err := remote.RequireRoot(config.ExplicitPersistenceRootID(cfg)); err != nil {
-		_ = remote.Close()
-		return config.App{}, nil, err
+		return config.App{}, nil, client.WithCleanupError(err, remote.Close())
 	}
 	return cfg, remote, nil
 }
