@@ -34,21 +34,6 @@
 - One ordered runtime authority owns all model-visible and transcript-visible changes for an Exact Execution Scope. Human input, workflow-completion intent, Goal changes, and technical input enter that authority. A question answer resolves only its matching live question.
 - `steer` applies submitted commands at the next step boundary. `queue` applies the same commands after the current model turn.
 - A human steer remains a user message. Pending human steers become one user message, with submissions separated by blank lines.
-- A `kent run steer` invoked from another Session emits each accepted submission as a separate developer-role `agent_steer` message in submission order.
-- A `kent run --continue` invoked from another Session that opens an existing Session uses the same `agent_steer` message. Prompts that create a Session retain their ordinary behavior.
-- A steer issued from another Session contains exactly:
-
-```text
-Agent from session <source-session-id> said:
-> <submitted steer text>
-
-To respond, run: kent run steer <source-session-id> "message"
-```
-
-- Kent inserts one literal `>` followed by one space immediately before the submitted steer text. It does not add quote markers to later lines.
-- The message includes the source Session ID and omits its name.
-- A present malformed `KENT_SESSION_ID` fails `kent run steer` before submission. An absent or blank value uses the human-steer behavior.
-- Prompt history stores the complete wrapped message.
 - Tool lifecycle effects, runtime notices, normal additions after history replacement, and all non-queued transcript/model-visible messages use the same ordered authority. The sole exception is line-by-line Markdown streaming of agent commentary and final answers.
 - A Kent-executed tool call is durable before Kent begins its execution. Provider-hosted work may already be complete when Kent receives its outcome; that outcome follows the same compatible Result Group durability as Kent-executed results. Kent commits compatible complete tool results from one Agent Step in one or more ordered Result Groups; an Agent Turn is never a Result Group. Each result keeps its completion, model-visible output, and attached operator diagnostic together, whether it reports success or error.
 - Result Groups preserve provider-required order and otherwise the Agent Step's stable result order. Clients and later model requests see no part of a Result Group before the complete Result Group is durable.
@@ -120,17 +105,6 @@ To respond, run: kent run steer <source-session-id> "message"
 - A successful batch response contains every submitted prompt identity exactly once and no other prompt identity. Each result is typed Resolved or Skipped. Result order has no meaning.
 - A declined ordinary Question produces the same canceled/error Ask Question outcome as terminal cancellation, with no completed answer or synthetic user message. A declined Approval creates no separate decision row.
 - Resolved-prompt updates carry prompt identity only. They never expose answer or decline content.
-- `kent question` shows the first pending ordinary Question or live internal access request. `kent questions` is an alias.
-- The Question CLI requires exactly one of `--session <session-id>` or `--task <task-id-or-short-id>`. A Task short ID uses `--project`, which defaults to the Project attached to the current workspace.
-- A Session selector cannot target the invoking agent's `KENT_SESSION_ID`.
-- A Task selector uses the live Workflow Question authority. If pending ordinary Questions or access requests belong to exactly one Session, the command selects that Session. If they belong to several Sessions, the command exits with failure, answers nothing, and lists each candidate Session name and ID.
-- A Task selector that selects the invoking agent's `KENT_SESSION_ID` is rejected.
-- The show command writes the Question or access-request text. When ordinary suggestions or access options exist, it follows with `Suggestions:` and a one-based numbered list. An ordinary recommended suggestion ends with ` (recommended)`. Access-option labels come from the authoritative internal Approval request.
-- The show command writes `No questions pending` and succeeds when no ordinary Question or access request is pending.
-- `kent question answer` requires `--option <one-based-number>`, non-blank `--commentary <text>`, or both.
-- An ordinary Question preserves the existing option and freeform answer behavior. In the Question CLI, a live internal access request requires `--option`; Kent maps that option through the authoritative ordered option object to its typed Approval decision and includes optional `--commentary` directly in the existing Approval answer. Commentary alone never implies an access decision.
-- `kent question answer` writes `No pending questions at the moment for that session` and exits with status `1` when no ordinary Question or access request is pending.
-- After Kent accepts an answer, the command reads the selected Session's authoritative pending Questions and access requests again. It writes `Next question: <question text>` followed by suggestions or access options when another prompt is pending in that Session. Otherwise it writes `Done, session resumed`.
 
 ## Sessions, Location, And Transcript Bounds
 
@@ -144,10 +118,7 @@ To respond, run: kent run steer <source-session-id> "message"
 - Absent session lineage is `null`; empty or whitespace-only lineage values are invalid. A Session has separate optional previous-session provenance for human navigation and derived sessions, and parent-agent provenance for model-spawned subagent ancestry. Provenance can cross Projects. Derived Sessions retain the source parent-agent ancestry and record the immediate source as previous-session provenance. Existing generic parent provenance is previous-session provenance, never model-spawned ancestry.
 - Kent atomically converts legacy empty parent values to `null`.
 - Interactive startup is workspace-first. An unregistered workspace enters an explicit binding flow. Server browsing opens existing Projects and Workspaces only. Headless startup in an unregistered workspace fails without creating hidden state.
-- `kent project [path]` inspects the Project bound to a path. `kent attach [path]` attaches a workspace to the Project bound to the current directory; `kent attach --project <project-id> [path]` selects the Project explicitly. Each omitted path means the current directory. Project, attach, and rebind commands use the configured daemon and never take local ownership of persistence.
-- `kent rebind <session-id> <path>` keeps a Session in its source Project. If the target belongs to both the source and other Projects, it selects the source binding. If it belongs only to other Projects, it fails without mutation, identifies the source Session and Project, and gives complete commands to attach it to the source Project or make an explicit cross-Project move.
-- `kent rebind --project <project-id> <session-id> <path>` is required for cross-Project movement. It may attach an unbound target path to the explicit Project and reports that attachment, but rejects a path already attached only to other Projects. Failed rebinds never change bindings or Session attachment. Sessions attached to Workflow Nodes cannot move across Projects.
-- Rebinding is explicit; Kent never infers it. It waits for the current step, prevents concurrent new execution and queued steering, and rejects rebind when the Session owns a background command. A cross-Project move either changes both Session location and artifact location or leaves both unchanged.
+- Rebinding is explicit; Kent never infers it.
 - A session selected for an interactive workspace prompts to rebind only when its attached workspace differs from the open workspace. Detached historical locations neither trigger nor supply a rebind. Attached location has one authority; a detached historical location is not an execution fallback.
 - Interactive Sessions are created lazily, at the first trigger that needs model work.
 - Immediately before a Session's first model request, and after every compaction at the same moment the cache key rotates, Kent locks the model/provider setup, generation parameters, effective tool declarations and enabled tool set, system and developer context, skills, workspace information, current model-facing date/time, and conversation context for that generation.
@@ -199,15 +170,12 @@ To respond, run: kent run steer <source-session-id> "message"
 
 ## Goals
 
-- Models may use normal shell commands `kent goal show`, `kent goal complete`, and first-time `kent goal set <objective>` for the current session, but other goal commands detect invocation by the agent and refuse it.
--  `goal set` by agents is allowed only when no active or paused goal exists. Completed goals do not block the next agent-set goal.
 - Goal inspection reads the durable session goal and does not require an Active Session Runtime. Running and dormant sessions return the same goal result; a valid session with no goal returns no goal, while unknown or inaccessible sessions remain errors.
 - Goal inspection excludes runtime-local goal-loop suspension. Live clients derive suspension from runtime status.
 - Successful goal mutations through an Active Session Runtime emit typed goal-status updates carrying the projected goal status state so frontends can update from goal SSOT instead of inferring status from transcript feedback or run lifecycle. Set, pause, resume, complete, and clear emit updates; show/read-only operations do not. A dormant mutation has no live feed: its command response and subsequent session/runtime snapshots project the durable goal state.
 - `/goal <objective>` (TUI slash command or GUI path) submits a Runtime Command that sets/replaces the session goal and starts or continues model work. It must be accepted while a model turn is running and ordered with other model-visible commands.
 - `/goal resume` on a completed goal reopens it as active.
 - `/goal resume` on an already-active goal is no-op and does not emit any model-facing messages.
-- Goal completion is explicit CLI state mutation, not natural-language inference.
 - Goal mode requires `ask_question` in the locked tool surface for active model loops. Validate parity at model-work startup and surface a normal runtime error if violated. This parity is enforced inside workflow-controlled Sessions too, so a Goal set there requires `ask_question` visibility as well.
 - Lock: `ask_question` visibility and `/questions` state are separate contracts. Missing `ask_question` from the locked tool surface blocks goal model loops; `/questions off` only makes `ask_question` calls return the questions-disabled tool result and must not stop, suspend, or block active goal execution.
 - A workflow-controlled Session does not restrict user Goal mutations. User and agent Goal mutations follow the ordinary Goal rules.
@@ -218,29 +186,16 @@ To respond, run: kent run steer <source-session-id> "message"
 - An effective set/replace, pause, resume/reopen, complete, or clear mutation persists one model-facing goal notice in both live and dormant sessions. A no-op mutation persists no notice.
 - On the dormant path, the durable goal update is authoritative and is persisted before its model-facing notice. If the later notice persistence fails, the goal update remains committed and the error is surfaced; no cross-resource transaction, rollback, automatic repair, retry, or extra admission lock is required.
 - Replaying the same client request after the durable goal update commits returns the original response/error and does not apply the goal transition or append the notice again.
-- Goal CLI never mutates session storage directly. It submits goal commands to the server, which selects the live Runtime Command path or dormant persistence path.
-- Any `kent service` commands that affect the server state (restart, stop, start it) detect invocation by kent itself and refuse to run, being human-only.
 - Ctrl+C during active goal work keeps persisted status `active` and creates runtime-local suspension only. The next user message auto-resumes the suspended goal loop after its turn completes (no `/goal resume` needed); an explicit `/goal pause` is still the hard pause. A user turn that is itself interrupted leaves the loop suspended.
 - The goal status-line indicator in TUI shows the animated spinner only while a goal run is executing; when the goal is `active` but idle (e.g. after Ctrl+C), it shows the idle status dot.
 
 ## Headless Mode And Shared Control
 
-- `kent run "prompt"` is the headless and subagent interface. It connects to an existing configured or discovered server and never starts one. If no server is reachable, it fails with guidance to use `kent serve` or `kent service install`.
-- `kent run --agent <role> "prompt"` selects a configured role. `--fast` selects the built-in fast role and cannot be combined with `--agent`. Roles are file-only `[subagents.<role>]` settings and inherit main settings unless overridden.
 - Model-originated delegation is limited by parent-agent ancestry. A root is depth `0`; with the default limit `2`, root to subagent to sub-subagent is permitted and the next launch is rejected before creating a Session. The limit applies across roles and Workflow-agent delegation; Workflow Node Sessions start at depth `0`. Opening or continuing a Session is not a child launch.
 - Ancestry checks inspect at most 30 parent-agent links. Missing older lineage means root; permission, I/O, corruption, or unavailable storage rejects the launch. Repeated lineage is rejected in production and fails fast with diagnostics in debug mode. A stale or missing immediate caller Session is invalid caller context and reports guidance to use a live Kent shell.
-- A blocked launch returns attempted depth and configured limit. Model-facing command output says: “You are already a subagent, so you shouldn't spawn more subagents to prevent overloading the machine and infinite recursion. Do not attempt to use subagents anymore and complete the task on your own”. JSON output uses `subagent_max_depth_exceeded` with numeric attempted depth and limit.
+- A blocked launch returns attempted depth and configured limit.
 - The role catalog remains visible regardless of depth policy. A role with `agent_callable=false` is hidden from model role context and cannot be launched as a Kent-session subagent, but humans can use it headlessly and Workflows can assign it. `fast` remains outside the custom-role catalog, bypasses Workflow-specific role controls, can use a faster first-party provider profile or user configuration, and obeys `agent_callable`.
 - `[workflow] subagents` is TOML-only and defaults to `false`. Workflow-agent use of custom roles requires `agent_callable=true`, `[workflow] subagents = true`, and effective `workflow_subagent=true`. `workflow_subagent=false` excludes a role only from Workflow-agent delegation, not human headless use or direct Workflow-node assignment.
-- Headless execution runs one non-interactive prompt with ordinary Session persistence. New unnamed Sessions are named `<session-id> subagent`. Timeout is unlimited unless `--timeout` is given.
-- Default progress mode is `--progress-mode=stderr`: committed assistant commentary and final text go to stdout; lifecycle notices go to stderr. New Sessions announce the actual configured launch command followed by `run steer <session-id> "prompt"` only after steering is available. Resumed Sessions do not announce it. Compaction-start and recoverable-failure notices remain visible; routine tool, reviewer, and completion status does not. `-q` and `--quiet` select final-result-only `--progress-mode=quiet`.
-- `kent run steer <session-id> <message...>` sends input to an active Session. It requires a Session ID, rejects attempts by a Session to target itself, prints `ok` when accepted, and makes the target print `Steered message: <full text>` with no later delivery notice. It never starts or queues work for an idle Session; instead it fails with the equivalent `kent run --continue <session-id> <message>` command.
-- `kent run stop <session-id>` interrupts an active Session regardless of client origin. It requires a Session ID, rejects attempts by a Session to target itself, prints `Stopped` when accepted, and prints `No active execution` as a successful no-op for idle or nonexistent Sessions. Accepted pending steering is not executed after stop; if it cannot resume before the runtime closes, Kent visibly reports it stopped or failed before dropping it.
-- `kent run wait <session-id>` waits for an active Session's final result. It requires a Session ID, rejects attempts by a Session to target itself, and fails without final-answer output if no execution is active. It stays blocked while a regular Question or access request is pending. It returns only for a final answer, execution error, or interruption. An explicit stop is an interruption. Final text includes the ordinary continue hint. `wait` emits no progress.
-- `kent run watch <session-id>` observes the selected Session's active execution once. It requires a Session ID and rejects attempts by a Session to target itself. It returns immediately for the first pending regular Question or access request, final answer, execution error, or interruption. Otherwise it waits for the next matching outcome in that active execution.
-- `kent task wait <task-id>` observes a Workflow Task without polling. It ignores pending Questions and access requests, but returns the next interruption, execution error, or terminal completion.
-- If `kent run watch` starts with no active execution and no pending Question or access request, it fails with the no-active-execution error. It does not return a historical result and does not wait for a later execution to start.
-- Run watch is Session-scoped. It does not target Script Nodes or follow a Session's Task into Script work.
 - A live internal access Approval, including an outside-workspace patch request, is an access-request Question for `kent question` and wait/watch presentation. Each authoritative ordered option carries its display label and typed allow-once, allow-session, or deny decision. A durable Workflow Transition Approval is a separate concept and is never a Question or wait/watch outcome.
 - `kent question --session|--task` shows the first pending ordinary Question or live internal access request. `kent question answer --session|--task` answers the same typed prompt. In the Question CLI, `--option` selects the corresponding typed access decision and optional `--commentary` is included directly in the existing Approval answer. Commentary without an option is invalid.
 - Run watch renders a Question through the same live-prompt presentation as `kent question --session`. It then prints a blank line and a directly targeted answer template.
@@ -253,10 +208,10 @@ To respond, run: kent run steer <source-session-id> "message"
 - All attached clients have equal full control of one active Session: transcript and status, steering and queued input, question and approval answers, and every control operate on the same live execution. A busy execution applies input at its next allowed boundary or returns the same retryable completion rejection described above. Clients report server-authoritative live activity and do not infer busy state locally; an attached idle runtime accepts idle operations.
 - A client does not consider a question or approval answered until the server accepts the answer and returns or publishes the resolved shared state.
 - A running Workflow Task is steerable from every attached client, including chat, queued input, Goal control, settings, compaction, worktree, and process controls. The model may not submit a structured final answer invalid for the current Node. Inability to reach active execution is a runtime-unavailable error.
-- Worktree controls are available from every client. List and status are reads. Creation and deletion that do not switch the calling Session execute immediately. `kent worktree list` resolves the workspace bound to the current directory without a Session; current Session context or `--session` adds that Session's current-worktree view. Without Session context, the list is markerless, and Kent never infers a Session from workspace history.
+- Worktree controls are available from every client. List and status are reads. Creation and deletion that do not switch the calling Session execute immediately.
 - Entering, leaving, or deleting a worktree when it switches the calling Session is scheduled for the next between-step idle point before queued user work. The command returns an accepted result without waiting for the current step. If no model step is active, the transition may apply immediately but retains its scheduled reminder behavior. At most one such transition can be pending per Exact Execution Scope; a matching retry returns the original result and a different transition is rejected.
-- Human-readable `worktree enter` and `worktree leave` confirm scheduling for the next agent step without an operation ID. `--json` includes the scheduled operation ID. Later failure does not alter the accepted command result; attached clients receive completion or failure, and the affected Session receives a failure notice when it can accept one. A successful target change becomes authoritative only when its ordinary worktree reminder arrives. Pending transitions are lost on restart rather than resumed.
-- Resuming a Session reapplies its recorded subagent role when available; a missing role does not block explicit continuation. JSON mode for every TUI command prints exactly one final JSON object to stdout and uses quiet progress behavior.
+- Later failure does not alter the accepted worktree command result; attached clients receive completion or failure, and the affected Session receives a failure notice when it can accept one. A successful target change becomes authoritative only when its ordinary worktree reminder arrives. Pending transitions are lost on restart rather than resumed.
+- Resuming a Session reapplies its recorded subagent role when available; a missing role does not block explicit continuation.
 
 ## Provider Stream Completion
 

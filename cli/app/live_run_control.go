@@ -23,20 +23,38 @@ type RunLiveStopResult struct {
 	Status serverapi.RuntimeLiveStopStatus
 }
 
+type RunLiveWatchResult struct {
+	Response serverapi.RuntimeLiveWatchResponse
+	Warnings []string
+}
+
 func RunLiveWatch(ctx context.Context, opts Options, targetSessionID runtimeids.SessionID) (serverapi.RuntimeLiveWatchResponse, error) {
+	result, err := runLiveWatch(ctx, opts, targetSessionID, false)
+	return result.Response, err
+}
+
+func RunLiveWatchWithCleanup(ctx context.Context, opts Options, targetSessionID runtimeids.SessionID) (RunLiveWatchResult, error) {
+	return runLiveWatch(ctx, opts, targetSessionID, true)
+}
+
+func runLiveWatch(ctx context.Context, opts Options, targetSessionID runtimeids.SessionID, includeCloseWarnings bool) (RunLiveWatchResult, error) {
 	liveClient, closeFn, err := startRuntimeLiveControlClient(ctx, opts)
 	if err != nil {
-		return serverapi.RuntimeLiveWatchResponse{}, err
+		return RunLiveWatchResult{}, err
 	}
-	defer func() { _ = closeFn() }()
 	response, err := liveClient.LiveWatch(ctx, serverapi.RuntimeLiveWatchRequest{SessionID: targetSessionID.String()})
+	if err == nil {
+		err = response.Validate()
+	}
+	closeErr := closeFn()
+	result := RunLiveWatchResult{Response: response}
+	if includeCloseWarnings && closeErr != nil {
+		result.Warnings = []string{closeErr.Error()}
+	}
 	if err != nil {
-		return serverapi.RuntimeLiveWatchResponse{}, err
+		return result, err
 	}
-	if err := response.Validate(); err != nil {
-		return serverapi.RuntimeLiveWatchResponse{}, err
-	}
-	return response, nil
+	return result, nil
 }
 
 func RunLiveSteer(ctx context.Context, opts Options, targetSessionID runtimeids.SessionID, text string) (RunLiveSteerResult, error) {
@@ -98,13 +116,24 @@ func RunLiveStop(ctx context.Context, opts Options, targetSessionID runtimeids.S
 }
 
 func RunLiveWait(ctx context.Context, opts Options, targetSessionID runtimeids.SessionID) (RunPromptResult, error) {
+	return runLiveWait(ctx, opts, targetSessionID, false)
+}
+
+func RunLiveWaitWithCleanup(ctx context.Context, opts Options, targetSessionID runtimeids.SessionID) (RunPromptResult, error) {
+	return runLiveWait(ctx, opts, targetSessionID, true)
+}
+
+func runLiveWait(ctx context.Context, opts Options, targetSessionID runtimeids.SessionID, includeCloseWarnings bool) (RunPromptResult, error) {
 	liveClient, closeFn, err := startRuntimeLiveControlClient(ctx, opts)
 	if err != nil {
 		return RunPromptResult{}, err
 	}
-	defer func() { _ = closeFn() }()
 	resp, err := liveClient.LiveWait(ctx, serverapi.RuntimeLiveWaitRequest{SessionID: targetSessionID.String()})
 	result := runtimeLiveWaitResult(targetSessionID, resp)
+	closeErr := closeFn()
+	if includeCloseWarnings && closeErr != nil {
+		result.CleanupWarnings = []string{closeErr.Error()}
+	}
 	if err != nil {
 		return result, err
 	}

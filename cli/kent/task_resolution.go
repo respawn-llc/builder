@@ -8,8 +8,28 @@ import (
 	"strings"
 
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
+
+type workflowTaskSelectorKind uint8
+
+const (
+	workflowTaskSelectorShortID workflowTaskSelectorKind = iota
+	workflowTaskSelectorPersistentID
+)
+
+type workflowTaskSelector struct {
+	kind  workflowTaskSelectorKind
+	value string
+}
+
+func classifyWorkflowTaskSelector(raw string) workflowTaskSelector {
+	if taskID, err := runtimeids.ParseCanonicalTaskID(raw); err == nil {
+		return workflowTaskSelector{kind: workflowTaskSelectorPersistentID, value: taskID}
+	}
+	return workflowTaskSelector{kind: workflowTaskSelectorShortID, value: raw}
+}
 
 func workflowTaskList(ctx context.Context, remote workflowCommandRemote, req serverapi.WorkflowTaskListRequest) (serverapi.WorkflowTaskListResponse, error) {
 	rpcCtx, cancel := context.WithTimeout(ctx, workflowCommandTimeout)
@@ -30,8 +50,13 @@ func resolveWorkflowTask(ctx context.Context, cfg config.App, remote workflowCom
 	if trimmed == "" {
 		return serverapi.WorkflowTaskDetail{}, errors.New("task id is required")
 	}
-	if strings.HasPrefix(trimmed, "task-") {
-		return getWorkflowTaskByID(ctx, remote, trimmed)
+	selector := classifyWorkflowTaskSelector(trimmed)
+	if selector.kind == workflowTaskSelectorPersistentID {
+		detail, err := getWorkflowTaskByID(ctx, remote, selector.value)
+		if err != nil && isWorkflowTaskNotFound(err) {
+			return serverapi.WorkflowTaskDetail{}, fmt.Errorf("%s: %w", err, serverapi.ErrWorkflowTaskNotFound)
+		}
+		return detail, err
 	}
 	projectID, err := resolveWorkflowProjectID(ctx, cfg, remote, projectRef)
 	if err != nil {
@@ -40,7 +65,7 @@ func resolveWorkflowTask(ctx context.Context, cfg config.App, remote workflowCom
 	detail, err := getWorkflowTaskByProjectShortID(ctx, remote, projectID, trimmed)
 	if err != nil {
 		if errors.Is(err, serverapi.ErrWorkflowTaskNotFound) || errors.Is(err, sql.ErrNoRows) {
-			return serverapi.WorkflowTaskDetail{}, fmt.Errorf("task %q not found in project %s", trimmed, projectID)
+			return serverapi.WorkflowTaskDetail{}, fmt.Errorf("task %q not found in project %s: %w", trimmed, projectID, serverapi.ErrWorkflowTaskNotFound)
 		}
 		return serverapi.WorkflowTaskDetail{}, err
 	}

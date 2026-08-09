@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -23,21 +24,33 @@ func taskWatchSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 }
 
 func taskObservationSubcommand(args []string, stdout io.Writer, stderr io.Writer, mode serverapi.WorkflowTaskObservationMode) int {
-	fs := newCommandFlagSet(config.Command+" task "+string(mode), stderr, leafCommandUsage(
+	var diagnostics bytes.Buffer
+	fs := newCommandFlagSet(config.Command+" task "+string(mode), &diagnostics, leafCommandUsage(
 		config.Command+" task "+string(mode)+" <task>",
 		"Wait for a Workflow Task outcome.",
 	))
 	project := fs.String("project", ".", "project path or ID")
+	jsonOut := fs.Bool("json", false, "write a stable JSON envelope")
 	positionals, ok, code := parseInterspersedPositionals(fs, args)
 	if !ok {
+		if *jsonOut {
+			return writeObservationUsage(stdout, strings.TrimSpace(diagnostics.String()))
+		}
+		_, _ = io.Copy(stderr, &diagnostics)
 		return code
 	}
 	if len(positionals) != 1 {
+		if *jsonOut {
+			return writeObservationUsage(stdout, "task reference is required")
+		}
 		fmt.Fprintln(stderr, "task reference is required")
 		return 2
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if *jsonOut {
+		return taskObservationJSON(ctx, stdout, mode, *project, positionals[0])
+	}
 	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
 		detail, err := resolveWorkflowTask(ctx, cfg, remote, *project, positionals[0])
 		if err != nil {
@@ -56,6 +69,37 @@ func taskObservationSubcommand(args []string, stdout io.Writer, stderr io.Writer
 		}
 		return writeTaskObservation(stdout, stderr, response, *project)
 	})
+}
+
+func taskObservationJSON(ctx context.Context, stdout io.Writer, mode serverapi.WorkflowTaskObservationMode, projectRef string, ref string) int {
+	cfg, remote, err := workflowCommandRemoteOpener(ctx, ".")
+	operation := observationOperationTaskWait
+	if mode == serverapi.WorkflowTaskObservationWatch {
+		operation = observationOperationTaskWatch
+	}
+	if err != nil {
+		envelope, code := projectObservationError(operation, "", ctx, err)
+		return emitObservationJSON(stdout, envelope, code)
+	}
+	var envelope observationJSONEnvelope
+	exitCode := 0
+	detail, err := resolveWorkflowTask(ctx, cfg, remote, projectRef, ref)
+	if err != nil {
+		envelope, exitCode = projectObservationError(operation, "", ctx, err)
+	} else {
+		response, observeErr := remote.ObserveWorkflowTask(ctx, serverapi.WorkflowTaskObservationRequest{
+			TaskID: detail.Summary.ID, ProjectID: detail.Summary.ProjectID, Mode: mode,
+		})
+		if observeErr != nil {
+			envelope, exitCode = projectObservationError(operation, detail.Summary.ID, ctx, observeErr)
+		} else {
+			envelope, exitCode = projectTaskObservationJSON(detail.Summary.ID, response)
+		}
+	}
+	if closeErr := remote.Close(); closeErr != nil {
+		envelope.Warnings = append(envelope.Warnings, closeErr.Error())
+	}
+	return emitObservationJSON(stdout, envelope, exitCode)
 }
 
 func writeTaskObservation(stdout io.Writer, stderr io.Writer, response serverapi.WorkflowTaskObservationResponse, projectRef string) int {

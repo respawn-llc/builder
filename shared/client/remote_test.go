@@ -582,8 +582,72 @@ func TestRemoteLiveWatchRejectsMalformedResponse(t *testing.T) {
 	defer func() { _ = remote.Close() }()
 
 	_, err = remote.LiveWatch(context.Background(), serverapi.RuntimeLiveWatchRequest{SessionID: "session-1"})
-	if err == nil || !strings.Contains(err.Error(), "validate runtime live watch response") {
+	var invalidResponse *InvalidResponseError
+	if err == nil || !strings.Contains(err.Error(), "validate runtime live watch response") || !errors.As(err, &invalidResponse) {
 		t.Fatalf("LiveWatch error = %v, want response validation error", err)
+	}
+}
+
+func TestRemoteLiveWaitRejectsMalformedResponse(t *testing.T) {
+	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
+		acceptRemoteHandshake(t, ws)
+		var request protocol.Request
+		if err := websocket.JSON.Receive(ws, &request); err != nil {
+			if errors.Is(err, io.EOF) {
+				return
+			}
+			t.Errorf("receive live wait request: %v", err)
+			return
+		}
+		if request.Method != protocol.MethodRuntimeLiveWait {
+			t.Errorf("method = %q, want %q", request.Method, protocol.MethodRuntimeLiveWait)
+			return
+		}
+		_ = websocket.JSON.Send(ws, protocol.NewSuccessResponse(request.ID, serverapi.RuntimeLiveWaitResponse{
+			SessionID: "not-a-session",
+		}))
+	})
+	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
+	if err != nil {
+		t.Fatalf("DialRemoteURL: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+
+	_, err = remote.LiveWait(context.Background(), serverapi.RuntimeLiveWaitRequest{
+		SessionID: "018fdd67-89ab-4cde-8123-456789abcdef",
+	})
+	var invalidResponse *InvalidResponseError
+	if err == nil || !errors.As(err, &invalidResponse) {
+		t.Fatalf("LiveWait error = %v, want InvalidResponseError", err)
+	}
+}
+
+func TestRemoteObserveWorkflowTaskRejectsMalformedResponseAsInvalidResponse(t *testing.T) {
+	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
+		acceptRemoteHandshake(t, ws)
+		var request protocol.Request
+		if err := websocket.JSON.Receive(ws, &request); err != nil {
+			t.Errorf("receive task observation request: %v", err)
+			return
+		}
+		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(request.ID, serverapi.WorkflowTaskObservationResponse{
+			TaskID: "task-1",
+		})); err != nil {
+			t.Errorf("send malformed task observation response: %v", err)
+		}
+	})
+	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
+	if err != nil {
+		t.Fatalf("DialRemoteURL: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+
+	_, err = remote.ObserveWorkflowTask(context.Background(), serverapi.WorkflowTaskObservationRequest{
+		TaskID: "task-1", ProjectID: "project-1", Mode: serverapi.WorkflowTaskObservationWait,
+	})
+	var invalidResponse *InvalidResponseError
+	if err == nil || !errors.As(err, &invalidResponse) {
+		t.Fatalf("ObserveWorkflowTask error = %v, want InvalidResponseError", err)
 	}
 }
 

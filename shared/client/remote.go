@@ -655,7 +655,7 @@ func (c *Remote) ObserveWorkflowTask(ctx context.Context, req serverapi.Workflow
 		return serverapi.WorkflowTaskObservationResponse{}, err
 	}
 	if err := response.Validate(); err != nil {
-		return serverapi.WorkflowTaskObservationResponse{}, fmt.Errorf("validate workflow task observation response: %w", err)
+		return serverapi.WorkflowTaskObservationResponse{}, invalidResponseError("workflow task observation", err)
 	}
 	return response, nil
 }
@@ -843,7 +843,14 @@ func (c *Remote) LiveStop(ctx context.Context, req serverapi.RuntimeLiveStopRequ
 }
 
 func (c *Remote) LiveWait(ctx context.Context, req serverapi.RuntimeLiveWaitRequest) (serverapi.RuntimeLiveWaitResponse, error) {
-	return callDedicatedRPC[serverapi.RuntimeLiveWaitRequest, serverapi.RuntimeLiveWaitResponse](c, ctx, "runtime-live-wait", protocol.MethodRuntimeLiveWait, req)
+	response, err := callDedicatedRPC[serverapi.RuntimeLiveWaitRequest, serverapi.RuntimeLiveWaitResponse](c, ctx, "runtime-live-wait", protocol.MethodRuntimeLiveWait, req)
+	if err != nil {
+		return serverapi.RuntimeLiveWaitResponse{}, err
+	}
+	if err := response.Validate(); err != nil {
+		return serverapi.RuntimeLiveWaitResponse{}, invalidResponseError("runtime live wait", err)
+	}
+	return response, nil
 }
 
 func (c *Remote) LiveWatch(ctx context.Context, req serverapi.RuntimeLiveWatchRequest) (serverapi.RuntimeLiveWatchResponse, error) {
@@ -852,7 +859,7 @@ func (c *Remote) LiveWatch(ctx context.Context, req serverapi.RuntimeLiveWatchRe
 		return serverapi.RuntimeLiveWatchResponse{}, err
 	}
 	if err := response.Validate(); err != nil {
-		return serverapi.RuntimeLiveWatchResponse{}, fmt.Errorf("validate runtime live watch response: %w", err)
+		return serverapi.RuntimeLiveWatchResponse{}, invalidResponseError("runtime live watch", err)
 	}
 	return response, nil
 }
