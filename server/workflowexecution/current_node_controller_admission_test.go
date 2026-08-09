@@ -127,6 +127,89 @@ func TestCurrentNodeControllerRunnerFailureInterruptsAdmittedCurrentNode(t *test
 	}, "runner failure did not publish interrupted Current Node attention")
 }
 
+func TestCurrentNodeControllerFinalizedWithoutOutcomeInterruptsAdmittedCurrentNode(t *testing.T) {
+	shellPath, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("sh executable unavailable: %v", err)
+	}
+	reference := currentNodeReferenceForControllerTest(t, "task-finalization-failure", "node-script")
+	store := &currentNodeControllerStore{}
+	attention := &currentNodeAttentionRecorder{}
+	var controller *CurrentNodeController
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
+			controller.ExecutionFinalized(scope)
+		}),
+	})
+	runner := &finalizerFailureScriptRunner{
+		authority:        authority,
+		shellPath:        shellPath,
+		finalizerEntered: make(chan struct{}),
+		releaseFinalizer: make(chan struct{}),
+		handle:           make(chan sessionruntime.ExecutionHandle, 1),
+	}
+	controller = newCurrentNodeControllerWithAttentionForTest(t, store, runner, authority, 1, attention)
+	var releaseOnce sync.Once
+	releaseFinalizer := func() {
+		releaseOnce.Do(func() {
+			close(runner.releaseFinalizer)
+		})
+	}
+	t.Cleanup(func() {
+		releaseFinalizer()
+		if err := controller.Close(); err != nil {
+			t.Errorf("close controller: %v", err)
+		}
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+
+	if err := startCurrentNodeForControllerTest(context.Background(), controller, store, reference); err != nil {
+		t.Fatalf("queue current node start: %v", err)
+	}
+	select {
+	case <-runner.finalizerEntered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Script did not reach completion finalization")
+	}
+	if !hasLiveCurrentNode(controller.Snapshot(), reference) {
+		t.Fatal("Script finalized before becoming the exact live Current Node")
+	}
+	releaseFinalizer()
+	handle := <-runner.handle
+	if _, err := handle.Wait(context.Background()); err == nil {
+		t.Fatal("Script finalization unexpectedly succeeded")
+	}
+
+	var interruption currentNodeInterruptionRecord
+	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+		var interrupted bool
+		interruption, interrupted = store.interruption(reference)
+		return interrupted
+	}, "outcome-less finalization did not interrupt the admitted current node")
+	if interruption.reason != reasonCurrentNodeRuntimeFinalizedWithoutOutcome {
+		t.Fatalf(
+			"interruption reason = %q, want %q",
+			interruption.reason,
+			reasonCurrentNodeRuntimeFinalizedWithoutOutcome,
+		)
+	}
+	if !workflow.IsActionableCurrentNodeInterruptionReason(interruption.reason) {
+		t.Fatalf("interruption reason = %q, want actionable runtime finalization failure", interruption.reason)
+	}
+	if interruption.detail.Code != string(reasonCurrentNodeRuntimeFinalizedWithoutOutcome) ||
+		interruption.detail.Diagnostic() == nil {
+		t.Fatalf("interruption detail = %+v, want typed runtime finalization diagnostic", interruption.detail)
+	}
+	if calls := store.interruptionCount(reference); calls != 1 {
+		t.Fatalf("outcome-less finalization interruption writes = %d, want 1", calls)
+	}
+	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+		return attention.pendingCount() == 1
+	}, "outcome-less finalization did not publish interrupted Current Node attention")
+}
+
 func TestCurrentNodeControllerResumeReturnsBeforeSetupAndStartsParallelBranchesIndependently(t *testing.T) {
 	shellPath, err := exec.LookPath("sh")
 	if err != nil {
@@ -198,6 +281,38 @@ func TestCurrentNodeControllerResumeReturnsBeforeSetupAndStartsParallelBranchesI
 		_, interrupted := store.interruption(first)
 		return interrupted
 	}, "failed resumed branch was not durably interrupted")
+}
+
+type finalizerFailureScriptRunner struct {
+	authority        *sessionruntime.Authority
+	shellPath        string
+	finalizerEntered chan struct{}
+	releaseFinalizer chan struct{}
+	handle           chan sessionruntime.ExecutionHandle
+}
+
+func (r *finalizerFailureScriptRunner) StartCurrentNode(
+	_ context.Context,
+	_ workflow.CurrentNodeReference,
+	_ workflowruntime.TaskPromptDelivery,
+	_ CurrentNodeAssignmentSteer,
+	lease sessionruntime.WorkflowExecutionLease,
+	_ workflowruntime.Controller,
+) error {
+	handle, err := r.authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
+		Workflow: &lease,
+		Command:  sessionruntime.ScriptCommand{Path: r.shellPath, Args: []string{"-c", "exit 0"}},
+		Finalize: func(context.Context, sessionruntime.ExecutionScope, sessionruntime.ScriptResult, error) error {
+			close(r.finalizerEntered)
+			<-r.releaseFinalizer
+			return errors.New("persist completion: database snapshot is busy")
+		},
+	})
+	if err != nil {
+		return err
+	}
+	r.handle <- handle
+	return nil
 }
 
 func TestCurrentNodeControllerPassesResumePromptDeliveryToRunner(t *testing.T) {
