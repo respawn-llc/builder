@@ -544,10 +544,14 @@ func (s *Starter) finalizeCurrentNodeAgent(
 		return s.failCanceledCurrentNodeScope(ctx, controller, scopeID, runErr)
 	}
 	if err := publishCurrentNodeFinalizing(ctx, controller, scopeID); err != nil {
-		if context.Cause(ctx) != nil {
-			return errors.Join(err, s.failCanceledCurrentNodeScope(ctx, controller, scopeID, runErr))
-		}
-		return err
+		return s.failCurrentNodeFinalizingPublication(
+			ctx,
+			controller,
+			scopeID,
+			ReasonRuntimeFailed,
+			runErr,
+			err,
+		)
 	}
 	if runErr != nil {
 		reason := ReasonRuntimeFailed

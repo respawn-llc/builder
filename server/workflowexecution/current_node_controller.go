@@ -773,7 +773,9 @@ func (c *CurrentNodeController) FinalizeCurrentNodePostTurn(
 		}
 	}
 
-	resolveErr := c.resolvePendingCurrentNodeAssignmentEnsures(ctx, phase.starts, phase.pending)
+	// Assignment outcomes belong to the successor Runs. Resolving their
+	// completions must not turn the already-committed source into a failure.
+	c.resolvePendingCurrentNodeAssignmentEnsures(ctx, phase.starts, phase.pending)
 	return c.lifecycle.Run(ctx, phase.reference.TaskID, func(context.Context) error {
 		c.mu.Lock()
 		defer c.mu.Unlock()
@@ -789,7 +791,7 @@ func (c *CurrentNodeController) FinalizeCurrentNodePostTurn(
 			return sessionruntime.ErrExecutionNoLongerLive
 		}
 		delete(c.postTurnFinalization, scopeID)
-		return resolveErr
+		return nil
 	})
 }
 

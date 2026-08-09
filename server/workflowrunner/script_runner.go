@@ -96,10 +96,14 @@ func (s *Starter) finalizeCurrentNodeScript(
 		return s.failCanceledCurrentNodeScope(ctx, controller, scopeID, runErr)
 	}
 	if err := publishCurrentNodeFinalizing(ctx, controller, scopeID); err != nil {
-		if context.Cause(ctx) != nil {
-			return errors.Join(err, s.failCanceledCurrentNodeScope(ctx, controller, scopeID, runErr))
-		}
-		return err
+		return s.failCurrentNodeFinalizingPublication(
+			ctx,
+			controller,
+			scopeID,
+			ReasonScriptExecutionFailed,
+			runErr,
+			err,
+		)
 	}
 	if runErr != nil || result.Canceled || result.StdoutOverflow {
 		failureCtx := ctx
@@ -194,4 +198,24 @@ func (s *Starter) failCurrentNodeScope(
 		return errors.New("workflow runtime controller cannot interrupt a failed current node")
 	}
 	return failureController.FailCurrentNodeScope(ctx, scopeID, workflow.CurrentNodeInterruptionReason(reason), cause)
+}
+
+func (s *Starter) failCurrentNodeFinalizingPublication(
+	ctx context.Context,
+	controller workflowruntime.Controller,
+	scopeID runtimeids.ExecutionScopeID,
+	reason string,
+	runErr error,
+	publicationErr error,
+) error {
+	if context.Cause(ctx) != nil {
+		return errors.Join(
+			publicationErr,
+			s.failCanceledCurrentNodeScope(ctx, controller, scopeID, runErr),
+		)
+	}
+	return errors.Join(
+		publicationErr,
+		s.failCurrentNodeScope(ctx, controller, scopeID, reason, publicationErr),
+	)
 }

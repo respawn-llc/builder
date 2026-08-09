@@ -116,6 +116,49 @@ func TestAgentFinalizerContinuesPostTurnAfterCommittedDiagnostic(t *testing.T) {
 	}
 }
 
+func TestFinalizingPublicationFailurePublishesTerminalDisposition(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		reason   workflow.CurrentNodeInterruptionReason
+		finalize func(*Starter, context.Context, workflowruntime.Controller, runtimeids.ExecutionScopeID) error
+	}{
+		{
+			name:   "Agent",
+			reason: ReasonRuntimeFailed,
+			finalize: func(starter *Starter, ctx context.Context, controller workflowruntime.Controller, scopeID runtimeids.ExecutionScopeID) error {
+				return starter.finalizeCurrentNodeAgent(ctx, controller, scopeID, nil)
+			},
+		},
+		{
+			name:   "Script",
+			reason: ReasonScriptExecutionFailed,
+			finalize: func(starter *Starter, ctx context.Context, controller workflowruntime.Controller, scopeID runtimeids.ExecutionScopeID) error {
+				return starter.finalizeCurrentNodeScript(
+					ctx,
+					workflowstore.CurrentNodeStartContext{},
+					controller,
+					scopeID,
+					sessionruntime.ScriptResult{},
+					nil,
+				)
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cause := errors.New("publish exact finalizing failed")
+			controller := newCanceledFinalizerController()
+			controller.finalizingErr = cause
+			scopeID := runtimeids.NewExecutionScopeID()
+
+			err := test.finalize(&Starter{}, context.Background(), controller, scopeID)
+			if !errors.Is(err, cause) {
+				t.Fatalf("finalizer error = %v, want publication failure %v", err, cause)
+			}
+			controller.assertFailure(t, scopeID, test.reason, cause)
+		})
+	}
+}
+
 type committedDiagnosticFinalizerController struct {
 	canceledFinalizerController
 	diagnostic            error
@@ -167,6 +210,7 @@ func (c *committedDiagnosticFinalizerController) FailCurrentNodeScope(
 type canceledFinalizerController struct {
 	finalizingEntered chan struct{}
 	finalizingOnce    sync.Once
+	finalizingErr     error
 
 	mu                  sync.Mutex
 	completions         int
@@ -190,6 +234,9 @@ func (c *canceledFinalizerController) PublishCurrentNodeExactFinalizing(
 	_ runtimeids.ExecutionScopeID,
 ) error {
 	c.finalizingOnce.Do(func() { close(c.finalizingEntered) })
+	if c.finalizingErr != nil {
+		return c.finalizingErr
+	}
 	<-ctx.Done()
 	return context.Cause(ctx)
 }
@@ -220,6 +267,33 @@ func (c *canceledFinalizerController) FinalizeCurrentNodeResult(
 	c.resultFinalizations++
 	c.mu.Unlock()
 	return nil
+}
+
+func (c *canceledFinalizerController) assertFailure(
+	t *testing.T,
+	scopeID runtimeids.ExecutionScopeID,
+	reason workflow.CurrentNodeInterruptionReason,
+	cause error,
+) {
+	t.Helper()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.failures) != 1 {
+		t.Fatalf("failure publications = %+v, want one", c.failures)
+	}
+	failure := c.failures[0]
+	if failure.scopeID != scopeID || failure.reason != reason || !errors.Is(failure.cause, cause) {
+		t.Fatalf(
+			"failure publication = %+v, want scope %s reason %q cause %v",
+			failure,
+			scopeID,
+			reason,
+			cause,
+		)
+	}
+	if failure.ctxErr != nil {
+		t.Fatalf("failure publication context error = %v, want nil", failure.ctxErr)
+	}
 }
 
 func (c *canceledFinalizerController) CompleteCurrentNode(

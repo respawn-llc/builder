@@ -250,6 +250,49 @@ func TestPostTurnFinalizationSurfacesInvalidThresholdAndCancellation(t *testing.
 	})
 }
 
+func TestPostTurnFinalizationLeavesSuccessorAssignmentFailureForRetirementRecovery(t *testing.T) {
+	controller, scopeID, sessionID := newPostTurnFinalizationControllerForTest(
+		t,
+		workflow.SessionReuseNone,
+	)
+	controller.mu.Lock()
+	phase := controller.postTurnFinalization[scopeID]
+	controller.mu.Unlock()
+	successor := currentNodeReferenceForControllerTest(t, string(phase.reference.TaskID), "node-successor")
+	starts, pending := pendingCurrentNodeAssignmentStarts([]currentNodeQueuedStart{
+		*newCurrentNodeRun(successor, workflow.NodeKindAgent, currentNodeAdmissionAutomaticAgent),
+	})
+	cause := errors.New("successor assignment failed")
+	ensurer := &recordingCurrentNodeAssignmentEnsurer{}
+	ensurer.setError(successor, cause)
+	controller.ensurer = ensurer
+	phase.starts = starts
+	phase.pending = pending
+	controller.mu.Lock()
+	controller.postTurnFinalization[scopeID] = phase
+	controller.mu.Unlock()
+
+	if err := controller.FinalizeCurrentNodePostTurn(
+		context.Background(),
+		scopeID,
+		sessionID,
+		workflowruntime.PostCompletionRuntime{CompactionMode: "none"},
+	); err != nil {
+		t.Fatalf("post-turn finalization surfaced successor assignment failure: %v", err)
+	}
+	outcome := waitCurrentNodeAssignmentEnsures(context.Background(), starts)
+	if len(outcome.failed) != 1 || !outcome.failed[0].reference.Equal(successor) ||
+		!errors.Is(outcome.err, cause) {
+		t.Fatalf("successor assignment outcome = %+v, want one failed successor with %v", outcome, cause)
+	}
+	controller.mu.Lock()
+	_, finalizing := controller.postTurnFinalization[scopeID]
+	controller.mu.Unlock()
+	if finalizing {
+		t.Fatal("successor assignment failure retained the completed source finalization fence")
+	}
+}
+
 func newPostTurnFinalizationControllerForTest(
 	t *testing.T,
 	classification workflow.SessionReuseClassification,
