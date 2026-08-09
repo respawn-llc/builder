@@ -988,11 +988,16 @@ type taskSetupAction struct {
 	Args []string
 }
 
-type taskSetupFraming struct{ AutomaticRetryExhausted, TaskInterrupted, AlreadyStarted, MoveNotApplied bool }
+type taskSetupOutcomeKind string
+
+const (
+	taskSetupOutcomeCompleted, taskSetupOutcomeObservedSetupFailure, taskSetupOutcomeObservationFailure taskSetupOutcomeKind = "completed", "observed_setup_failure", "observation_failure"
+	taskSetupOutcomeInterruptedSetupFailure, taskSetupOutcomeInterruptedTargetPreparationFailure        taskSetupOutcomeKind = "interrupted_setup_failure", "interrupted_target_preparation_failure"
+	taskSetupOutcomeAlreadyStartedConflict, taskSetupOutcomeMoveSetupFailure                            taskSetupOutcomeKind = "already_started_conflict", "move_setup_failure"
+)
 
 type taskSetupGuidance struct {
-	Success      bool
-	Framing      *taskSetupFraming
+	Outcome      taskSetupOutcomeKind
 	Diagnostic   *string
 	ScriptPath   *string
 	RetainedRoot *string
@@ -1009,7 +1014,7 @@ func projectTaskSetupGuidance(taskRef string, projectRef *string, terminal *serv
 	inspection := []taskSetupAction{{Kind: taskSetupActionInspect, Args: inspect}, {Kind: taskSetupActionListWorktrees, Args: []string{config.Command, "worktree", "list"}}}
 	if observationErr != nil {
 		diagnostic, err := taskSetupDiagnostic(observationErr.Error())
-		return taskSetupGuidance{Diagnostic: diagnostic, Actions: inspection}, err
+		return taskSetupGuidance{Outcome: taskSetupOutcomeObservationFailure, Diagnostic: diagnostic, Actions: inspection}, err
 	}
 	if terminal == nil {
 		return taskSetupGuidance{}, errors.New("Worktree Setup observation ended without a terminal result")
@@ -1026,7 +1031,7 @@ func projectTaskSetupGuidance(taskRef string, projectRef *string, terminal *serv
 		if err != nil {
 			return taskSetupGuidance{}, err
 		}
-		result := taskSetupGuidance{Diagnostic: diagnostic, ScriptPath: failed.ScriptPath}
+		result := taskSetupGuidance{Outcome: taskSetupOutcomeObservedSetupFailure, Diagnostic: diagnostic, ScriptPath: failed.ScriptPath}
 		if failed.RetainedWorktree != nil {
 			result.RetainedRoot = &failed.RetainedWorktree.Registered.Git.CanonicalRoot
 		}
@@ -1034,10 +1039,12 @@ func projectTaskSetupGuidance(taskRef string, projectRef *string, terminal *serv
 			result.Actions = inspection
 			return result, nil
 		}
-		framing := taskSetupFraming{AutomaticRetryExhausted: failed.ScriptPath != nil, TaskInterrupted: true}
-		result.Framing = &framing
 		if failed.ExecutionTarget == nil {
 			return taskSetupGuidance{}, errors.New("retry-ready Task setup failure requires execution target")
+		}
+		result.Outcome = taskSetupOutcomeInterruptedSetupFailure
+		if failed.Cause.Kind == serverapi.WorktreeSetupFailureTargetPreparation {
+			result.Outcome = taskSetupOutcomeInterruptedTargetPreparationFailure
 		}
 		selector, err := taskExecutionTargetSelector(*failed.ExecutionTarget)
 		if err != nil {
@@ -1048,7 +1055,7 @@ func projectTaskSetupGuidance(taskRef string, projectRef *string, terminal *serv
 	default:
 		return taskSetupGuidance{}, errors.New("Worktree Setup observation returned a non-terminal phase")
 	}
-	result := taskSetupGuidance{Success: true}
+	result := taskSetupGuidance{Outcome: taskSetupOutcomeCompleted}
 	if retained != nil {
 		result.RetainedRoot = &retained.Worktree.Registered.Git.CanonicalRoot
 		result.Actions = []taskSetupAction{{Kind: taskSetupActionListWorktrees, Args: []string{config.Command, "worktree", "list"}}}
@@ -1077,8 +1084,7 @@ func taskAlreadyStartedGuidance(taskRef string, project *string) taskSetupGuidan
 	if project != nil {
 		resume = append(resume, "--project", *project)
 	}
-	framing := taskSetupFraming{AlreadyStarted: true}
-	return taskSetupGuidance{Framing: &framing, Actions: []taskSetupAction{{Kind: taskSetupActionRetry, Args: resume}, {Kind: taskSetupActionMove, Args: []string{config.Command, "task", "move", taskRef, "<target-node-id>"}}}}
+	return taskSetupGuidance{Outcome: taskSetupOutcomeAlreadyStartedConflict, Actions: []taskSetupAction{{Kind: taskSetupActionRetry, Args: resume}, {Kind: taskSetupActionMove, Args: []string{config.Command, "task", "move", taskRef, "<target-node-id>"}}}}
 }
 
 func taskMoveRecoveryArgs(taskRef, targetNode string, project, commentary, transition *string, values map[string]map[string]string, ignore, jsonOutput bool) ([]string, error) {
@@ -1122,8 +1128,7 @@ func projectMoveSetupGuidance(base []string, target *serverapi.WorkflowExecution
 	root := setupErr.Worktree.Registered.Git.CanonicalRoot
 	script := setupErr.ScriptPath
 	diagnostic := setupErr.Diagnostic
-	framing := taskSetupFraming{AutomaticRetryExhausted: true, MoveNotApplied: true}
-	return taskSetupGuidance{Framing: &framing, Diagnostic: &diagnostic, ScriptPath: &script, RetainedRoot: &root, Actions: taskTargetActions(base, selector)}, nil
+	return taskSetupGuidance{Outcome: taskSetupOutcomeMoveSetupFailure, Diagnostic: &diagnostic, ScriptPath: &script, RetainedRoot: &root, Actions: taskTargetActions(base, selector)}, nil
 }
 
 func taskSetupStringPointer(value string) *string { return &value }
@@ -1241,7 +1246,7 @@ func finishObservedTaskSetup(stderr io.Writer, taskRef string, projectRef *strin
 		return false
 	}
 	renderTaskSetupGuidance(stderr, guidance)
-	return guidance.Success
+	return guidance.Outcome == taskSetupOutcomeCompleted
 }
 
 func writeTaskSetupObservationError(stderr io.Writer, taskRef string, projectRef *string, err error) bool {
@@ -1259,19 +1264,19 @@ func writeTaskSetupObservationError(stderr io.Writer, taskRef string, projectRef
 }
 
 func renderTaskSetupGuidance(stderr io.Writer, guidance taskSetupGuidance) {
-	if guidance.Framing != nil {
-		if guidance.Framing.AutomaticRetryExhausted {
-			fmt.Fprintln(stderr, "Worktree setup failed after one automatic retry.")
-		}
-		if guidance.Framing.TaskInterrupted {
-			fmt.Fprintln(stderr, "The Task was started and is now interrupted.")
-		}
-		if guidance.Framing.AlreadyStarted {
-			fmt.Fprintln(stderr, "The Task is already started. Resume it if interrupted; otherwise move it.")
-		}
-		if guidance.Framing.MoveNotApplied {
-			fmt.Fprintln(stderr, "The move was not applied.")
-		}
+	switch guidance.Outcome {
+	case taskSetupOutcomeCompleted, taskSetupOutcomeObservationFailure:
+	case taskSetupOutcomeInterruptedSetupFailure, taskSetupOutcomeInterruptedTargetPreparationFailure:
+		fmt.Fprintln(stderr, "The Task was started and is now interrupted.")
+	case taskSetupOutcomeObservedSetupFailure:
+		fmt.Fprintln(stderr, "Worktree setup failed.")
+	case taskSetupOutcomeAlreadyStartedConflict:
+		fmt.Fprintln(stderr, "The Task is already started. Resume it if interrupted; otherwise move it.")
+	case taskSetupOutcomeMoveSetupFailure:
+		fmt.Fprintln(stderr, "Worktree setup failed.")
+		fmt.Fprintln(stderr, "The move was not applied.")
+	default:
+		panic(fmt.Sprintf("render Task setup guidance with invalid outcome %q", guidance.Outcome))
 	}
 	if guidance.ScriptPath != nil {
 		fmt.Fprintln(stderr, *guidance.ScriptPath)
