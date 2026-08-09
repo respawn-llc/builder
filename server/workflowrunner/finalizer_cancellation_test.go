@@ -72,6 +72,7 @@ func TestAgentFinalizerContinuesPostTurnAfterCommittedDiagnostic(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			eventErr := errors.New("completion event delivery failed")
 			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
 			diagnostic := error(eventErr)
 			controller := &committedDiagnosticFinalizerController{diagnostic: diagnostic}
 			if test.cancelAfterCommit {
