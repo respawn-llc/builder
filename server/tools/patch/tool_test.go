@@ -779,6 +779,58 @@ func TestCommitStagedFilesRollsBackOnManagedWorktreeRevalidationFailure(t *testi
 	}
 }
 
+func TestCommitStagedFilesRollbackRetainsAuthorityAfterConfiguredRootChanges(t *testing.T) {
+	workspace := t.TempDir()
+	initialManagedBase := t.TempDir()
+	first := filepath.Join(workspace, "first.txt")
+	second := filepath.Join(workspace, "second.txt")
+	if err := os.WriteFile(first, []byte("original\n"), 0o644); err != nil {
+		t.Fatalf("seed first target: %v", err)
+	}
+	firstStage, err := createStagedFile(first, []byte("patched\n"), 0o644)
+	if err != nil {
+		t.Fatalf("stage first target: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(firstStage) })
+	secondStage, err := createStagedFile(second, []byte("blocked\n"), 0o644)
+	if err != nil {
+		t.Fatalf("stage second target: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(secondStage) })
+
+	pathContext, err := tools.NewManagedWorktreePathContext(
+		initialManagedBase,
+		nil,
+		nil,
+		func() (string, error) {
+			data, readErr := os.ReadFile(first)
+			if readErr != nil {
+				return "", readErr
+			}
+			if string(data) == "patched\n" {
+				return workspace, nil
+			}
+			return initialManagedBase, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("managed worktree path context: %v", err)
+	}
+	tool := newPatchTestTool(t, workspace, WithManagedWorktreePathContext(pathContext))
+
+	_, err = commitStagedFiles(tool, []*patchFileState{
+		{Exists: true, NewPath: first, Original: first, StagedPath: firstStage},
+		{Exists: true, NewPath: second, Original: second, StagedPath: secondStage},
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), tools.ForeignManagedWorktreeEditDeniedMessage) {
+		t.Fatalf("commit error = %v, want live configured-root denial", err)
+	}
+	assertPatchFileContent(t, first, "original\n")
+	if _, statErr := os.Stat(second); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("second target stat error = %v, want not exist", statErr)
+	}
+}
+
 func TestPrepareCommitStatesRevalidatesBeforeStagingForeignTargets(t *testing.T) {
 	base := t.TempDir()
 	currentRoot := filepath.Join(base, "current")
