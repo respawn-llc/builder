@@ -63,6 +63,14 @@ var workflowCommandRemoteOpener func(context.Context, string) (config.App, workf
 	return cfg, remote, err
 }
 
+var workflowObservationRemoteOpener = func(ctx context.Context, path string) (config.App, workflowCommandRemote, func() error, error) {
+	cfg, remote, err := openBindingCommandRemoteLifecycle(ctx, path)
+	if remote == nil {
+		return cfg, nil, nil, err
+	}
+	return cfg, remote, remote.Close, err
+}
+
 func runWorkflowCommandSession(stderr io.Writer, run func(config.App, workflowCommandRemote) int) int {
 	cfg, remote, err := workflowCommandRemoteOpener(context.Background(), ".")
 	if err != nil {

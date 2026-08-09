@@ -113,18 +113,18 @@ func RunLiveStop(ctx context.Context, opts Options, targetSessionID runtimeids.S
 	return RunLiveStopResult{Status: resp.Status}, nil
 }
 
+type RunLiveWaitResult struct {
+	Result RunPromptResult
+	Error  error
+	Close  func() error
+}
+
 func RunLiveWait(ctx context.Context, opts Options, targetSessionID runtimeids.SessionID) (RunPromptResult, error) {
 	result := RunLiveWaitWithCleanup(ctx, opts, targetSessionID)
 	if result.Close != nil {
 		_ = result.Close()
 	}
 	return result.Result, result.Error
-}
-
-type RunLiveWaitResult struct {
-	Result RunPromptResult
-	Error  error
-	Close  func() error
 }
 
 func RunLiveWaitWithCleanup(ctx context.Context, opts Options, targetSessionID runtimeids.SessionID) RunLiveWaitResult {

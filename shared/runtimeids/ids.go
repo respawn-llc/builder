@@ -49,15 +49,6 @@ func ParseCanonicalUUIDv4(raw string, field string) (uuid.UUID, error) {
 	return parsed, nil
 }
 
-func ParseCanonicalTaskID(raw string) (string, error) {
-	kind, uuidText, ok := strings.Cut(raw, "-")
-	parsed, err := ParseCanonicalUUIDv4(uuidText, "task ID")
-	if !ok || kind != "task" || err != nil || "task-"+parsed.String() != raw {
-		return "", fmt.Errorf("task ID must be task-<uuidv4>")
-	}
-	return raw, nil
-}
-
 func newUUIDv4Value() uuidv4Value {
 	return uuidv4Value{value: uuid.New()}
 }

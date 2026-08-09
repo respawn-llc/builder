@@ -11,7 +11,6 @@ import (
 
 	"core/cli/app"
 	"core/shared/apicontract"
-	"core/shared/client"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -108,8 +107,9 @@ func TestTaskObservationJSONMapsProjectUnavailable(t *testing.T) {
 
 func TestObservationErrorPreservesStartupCleanupWarning(t *testing.T) {
 	var output bytes.Buffer
-	err := client.WithCleanupError(serverapi.ErrProjectUnavailable, errors.New("close failed"))
-	if code := emitObservationError(&output, observationOperationTaskWait, nil, context.Background(), err, nil, nil); code != 1 {
+	if code := emitObservationError(&output, observationOperationObservation, nil, context.Background(), serverapi.ErrProjectUnavailable, nil, func() error {
+		return errors.New("close failed")
+	}); code != 1 {
 		t.Fatalf("exit code = %d", code)
 	}
 	var envelope struct {
@@ -381,7 +381,7 @@ func TestProjectObservationErrorCodes(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			envelope, code := projectObservationError(observationOperationTaskWait, nil, context.Background(), test.err)
+			envelope, code := projectObservationError(observationOperationObservation, nil, context.Background(), test.err)
 			if envelope.Error == nil || envelope.Error.Code != test.code || code != test.exit {
 				t.Fatalf("projection = %#v, code=%d", envelope, code)
 			}
@@ -404,16 +404,16 @@ func TestObservationJSONWriteFailureIsReported(t *testing.T) {
 func TestObservationErrorCancellationPrecedence(t *testing.T) {
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
-	envelope, exitCode := projectObservationError(observationOperationTaskWait, observationTargetTask("task-id"), canceled, context.Canceled)
+	envelope, exitCode := projectObservationError(observationOperationObservation, &observationJSONTarget{TaskID: jsonStringPointer("task-id")}, canceled, context.Canceled)
 	if envelope.Status != "error" || envelope.Error == nil || envelope.Error.Code != "interrupted" || exitCode != 130 || len(envelope.Outcomes) != 0 {
 		t.Fatalf("observer cancellation = %#v, code=%d", envelope, exitCode)
 	}
-	target, exitCode := projectObservationError(observationOperationRunWait, observationTargetSession("session-id"), context.Background(), context.Canceled)
+	target, exitCode := projectObservationError(observationOperationRunWait, &observationJSONTarget{SessionID: jsonStringPointer("session-id")}, context.Background(), context.Canceled)
 	if target.Status != "interrupted" || target.Error != nil || len(target.Outcomes) != 1 || exitCode != 130 {
 		t.Fatalf("target interruption = %#v, code=%d", target, exitCode)
 	}
 	stream := errors.Join(serverapi.ErrStreamUnavailable, context.Canceled)
-	envelope, exitCode = projectObservationError(observationOperationRunWait, observationTargetSession("session-id"), context.Background(), stream)
+	envelope, exitCode = projectObservationError(observationOperationRunWait, &observationJSONTarget{SessionID: jsonStringPointer("session-id")}, context.Background(), stream)
 	if envelope.Status != "error" || envelope.Error == nil || envelope.Error.Code != "unavailable" || exitCode != 1 {
 		t.Fatalf("stream cancellation = %#v, code=%d", envelope, exitCode)
 	}

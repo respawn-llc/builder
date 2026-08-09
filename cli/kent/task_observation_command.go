@@ -73,38 +73,28 @@ func taskObservationSubcommand(args []string, stdout io.Writer, stderr io.Writer
 }
 
 func taskObservationJSON(ctx context.Context, stdout io.Writer, mode serverapi.WorkflowTaskObservationMode, projectRef string, ref string) int {
-	cfg, remote, err := workflowCommandRemoteOpener(ctx, ".")
-	operation := observationOperationTaskWait
-	if mode == serverapi.WorkflowTaskObservationWatch {
-		operation = observationOperationTaskWatch
-	}
+	cfg, remote, closeFn, err := workflowObservationRemoteOpener(ctx, ".")
+	operation := observationOperationObservation
 	if err != nil {
-		return emitObservationError(stdout, operation, nil, ctx, err, nil, nil)
+		return emitObservationError(stdout, operation, nil, ctx, err, nil, closeFn)
 	}
-	var envelope observationJSONEnvelope
-	exitCode := 0
 	detail, err := resolveWorkflowTask(ctx, cfg, remote, projectRef, ref)
 	if err != nil {
-		envelope, exitCode = projectObservationError(operation, nil, ctx, err)
-	} else {
-		response, observeErr := remote.ObserveWorkflowTask(ctx, serverapi.WorkflowTaskObservationRequest{
-			TaskID: detail.Summary.ID, ProjectID: detail.Summary.ProjectID, Mode: mode,
-		})
-		if observeErr != nil {
-			envelope, exitCode = projectObservationError(operation, observationTargetTask(detail.Summary.ID), ctx, observeErr)
-		} else {
-			envelope, exitCode, err = projectTaskObservationJSON(detail.Summary.ID, response)
-			if err != nil {
-				envelope, exitCode = projectObservationError(operation, observationTargetTask(detail.Summary.ID), ctx, &client.InvalidResponseError{
-					Operation: "workflow task observation", Cause: err,
-				})
-			}
-		}
+		return emitObservationError(stdout, operation, nil, ctx, err, nil, closeFn)
 	}
-	if closeErr := remote.Close(); closeErr != nil {
-		envelope.Warnings = append(envelope.Warnings, closeErr.Error())
+	target := &observationJSONTarget{TaskID: jsonStringPointer(detail.Summary.ID)}
+	response, err := remote.ObserveWorkflowTask(ctx, serverapi.WorkflowTaskObservationRequest{
+		TaskID: detail.Summary.ID, ProjectID: detail.Summary.ProjectID, Mode: mode,
+	})
+	if err != nil {
+		return emitObservationError(stdout, operation, target, ctx, err, nil, closeFn)
 	}
-	return emitObservationJSON(stdout, envelope, exitCode)
+	envelope, exitCode, err := projectTaskObservationJSON(detail.Summary.ID, response)
+	if err != nil {
+		err = &client.InvalidResponseError{Operation: "workflow task observation", Cause: err}
+		envelope, exitCode = projectObservationError(operation, target, ctx, err)
+	}
+	return emitObservationJSONWithCleanup(stdout, envelope, exitCode, nil, closeFn)
 }
 
 func writeTaskObservation(stdout io.Writer, stderr io.Writer, response serverapi.WorkflowTaskObservationResponse, projectRef string) int {

@@ -12,28 +12,18 @@ import (
 	"core/shared/serverapi"
 )
 
-type workflowTaskSelectorKind uint8
+type workflowTaskNotFoundError struct{ error }
 
-const (
-	workflowTaskSelectorShortID workflowTaskSelectorKind = iota
-	workflowTaskSelectorPersistentID
-)
-
-type workflowTaskSelector struct {
-	kind  workflowTaskSelectorKind
-	value string
-}
-
-type workflowTaskNotFoundError struct{ message string }
-
-func (e workflowTaskNotFoundError) Error() string { return e.message }
 func (e workflowTaskNotFoundError) Unwrap() error { return serverapi.ErrWorkflowTaskNotFound }
 
-func classifyWorkflowTaskSelector(raw string) workflowTaskSelector {
-	if taskID, err := runtimeids.ParseCanonicalTaskID(raw); err == nil {
-		return workflowTaskSelector{kind: workflowTaskSelectorPersistentID, value: taskID}
+func isCanonicalWorkflowTaskID(raw string) bool {
+	kind, uuidText, ok := strings.Cut(raw, "-")
+	if ok && kind == "task" {
+		if parsed, err := runtimeids.ParseCanonicalUUIDv4(uuidText, "task ID"); err == nil && "task-"+parsed.String() == raw {
+			return true
+		}
 	}
-	return workflowTaskSelector{kind: workflowTaskSelectorShortID, value: raw}
+	return false
 }
 
 func workflowTaskList(ctx context.Context, remote workflowCommandRemote, req serverapi.WorkflowTaskListRequest) (serverapi.WorkflowTaskListResponse, error) {
@@ -55,11 +45,10 @@ func resolveWorkflowTask(ctx context.Context, cfg config.App, remote workflowCom
 	if trimmed == "" {
 		return serverapi.WorkflowTaskDetail{}, errors.New("task id is required")
 	}
-	selector := classifyWorkflowTaskSelector(trimmed)
-	if selector.kind == workflowTaskSelectorPersistentID {
-		detail, err := getWorkflowTaskByID(ctx, remote, selector.value)
+	if isCanonicalWorkflowTaskID(trimmed) {
+		detail, err := getWorkflowTaskByID(ctx, remote, trimmed)
 		if err != nil && isWorkflowTaskNotFound(err) {
-			return serverapi.WorkflowTaskDetail{}, workflowTaskNotFoundError{message: err.Error()}
+			return serverapi.WorkflowTaskDetail{}, workflowTaskNotFoundError{err}
 		}
 		return detail, err
 	}
@@ -70,9 +59,7 @@ func resolveWorkflowTask(ctx context.Context, cfg config.App, remote workflowCom
 	detail, err := getWorkflowTaskByProjectShortID(ctx, remote, projectID, trimmed)
 	if err != nil {
 		if errors.Is(err, serverapi.ErrWorkflowTaskNotFound) || errors.Is(err, sql.ErrNoRows) {
-			return serverapi.WorkflowTaskDetail{}, workflowTaskNotFoundError{
-				message: fmt.Sprintf("task %q not found in project %s", trimmed, projectID),
-			}
+			return serverapi.WorkflowTaskDetail{}, workflowTaskNotFoundError{fmt.Errorf("task %q not found in project %s", trimmed, projectID)}
 		}
 		return serverapi.WorkflowTaskDetail{}, err
 	}

@@ -285,6 +285,15 @@ func retargetSessionWorkspaceResponse(ctx context.Context, sessionID string, new
 }
 
 func openBindingCommandRemote(ctx context.Context, path string) (config.App, *client.Remote, error) {
+	cfg, remote, err := openBindingCommandRemoteLifecycle(ctx, path)
+	if err != nil && remote != nil {
+		_ = remote.Close()
+		return config.App{}, nil, err
+	}
+	return cfg, remote, err
+}
+
+func openBindingCommandRemoteLifecycle(ctx context.Context, path string) (config.App, *client.Remote, error) {
 	cfg, err := loadBindingCommandConfig(path)
 	if err != nil {
 		return config.App{}, nil, err
@@ -300,7 +309,7 @@ func openBindingCommandRemote(ctx context.Context, path string) (config.App, *cl
 	// never display or mutate a different instance reachable on the same TCP
 	// endpoint.
 	if err := remote.RequireRoot(config.ExplicitPersistenceRootID(cfg)); err != nil {
-		return config.App{}, nil, client.WithCleanupError(err, remote.Close())
+		return cfg, remote, err
 	}
 	return cfg, remote, nil
 }

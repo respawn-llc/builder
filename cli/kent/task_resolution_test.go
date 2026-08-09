@@ -11,42 +11,41 @@ func TestClassifyWorkflowTaskSelectorUsesFullCanonicalTaskID(t *testing.T) {
 	tests := []struct {
 		name string
 		raw  string
-		want workflowTaskSelectorKind
+		want bool
 	}{
 		{
 			name: "canonical persistent task id",
 			raw:  "task-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-			want: workflowTaskSelectorPersistentID,
+			want: true,
 		},
 		{
 			name: "ordinary short id",
 			raw:  "KENT-432",
-			want: workflowTaskSelectorShortID,
+			want: false,
 		},
 		{
 			name: "prefix-like noncanonical id",
 			raw:  "task-not-a-uuid",
-			want: workflowTaskSelectorShortID,
+			want: false,
 		},
 		{
 			name: "prefix-like legacy id",
 			raw:  "task-1",
-			want: workflowTaskSelectorShortID,
+			want: false,
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got := classifyWorkflowTaskSelector(test.raw)
-			if got.kind != test.want {
-				t.Fatalf("selector kind = %v, want %v", got.kind, test.want)
+			if got := isCanonicalWorkflowTaskID(test.raw); got != test.want {
+				t.Fatalf("canonical selector = %v, want %v", got, test.want)
 			}
 		})
 	}
 }
 
 func TestWorkflowTaskNotFoundErrorPreservesMessageAndTypedIdentity(t *testing.T) {
-	err := workflowTaskNotFoundError{message: `task "T-1" not found in project project`}
-	if err.Error() != `task "T-1" not found in project project` || !errors.Is(err, serverapi.ErrWorkflowTaskNotFound) {
-		t.Fatalf("error=%q, is_not_found=%v", err.Error(), errors.Is(err, serverapi.ErrWorkflowTaskNotFound))
+	err := workflowTaskNotFoundError{errors.New("not found")}
+	if !errors.Is(err, serverapi.ErrWorkflowTaskNotFound) {
+		t.Fatalf("error is not classified as workflow-task-not-found: %v", err)
 	}
 }
