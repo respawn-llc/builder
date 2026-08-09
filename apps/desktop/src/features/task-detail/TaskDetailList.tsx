@@ -673,11 +673,5 @@ function taskDetailListItemKey(item: TaskDetailListItem): string {
 }
 
 function isFeedItem(item: TaskDetailListItem): boolean {
-  return (
-    item.kind !== "header" &&
-    item.kind !== "body" &&
-    item.kind !== "dependencies" &&
-    item.kind !== "inbox" &&
-    item.kind !== "tabs"
-  );
+  return item.kind === "comment" || item.kind === "activity";
 }

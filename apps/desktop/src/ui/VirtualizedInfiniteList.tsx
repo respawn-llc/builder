@@ -5,7 +5,11 @@ import { cx } from "./classes";
 import { InfiniteListBoundary, type VirtualizedInfiniteListBoundaryState } from "./InfiniteListBoundary";
 import { Spinner } from "./Spinner";
 import { resolveVirtualizedInitialScroll } from "./virtualizedInfiniteListInitialScroll";
-import { resolveLoadMore } from "./virtualizedInfiniteListLoadMore";
+import {
+  resolveNextLoadEdge,
+  resolvePreviousLoadEdge,
+  useVirtualizedLoadMore,
+} from "./virtualizedInfiniteListLoadMore";
 import { pinnedVirtualRangeExtractor } from "./virtualizedPinnedRange";
 import { shouldAdjustScrollForVirtualizedResize } from "./virtualizedResizePolicy";
 import {
@@ -51,7 +55,45 @@ export type VirtualizedInfiniteListProps<TItem> = Readonly<{
   pixelOffsetRequest?: VirtualizedPixelOffsetRequest | undefined;
 }>;
 
-export function VirtualizedInfiniteList<TItem>({
+type VirtualizedInfiniteListResolvedProps<TItem> = Omit<
+  VirtualizedInfiniteListProps<TItem>,
+  | "role"
+  | "rowSpacing"
+  | "initialScrollAlign"
+  | "paddingEnd"
+  | "paddingStart"
+  | "hasPreviousPage"
+  | "isFetchingPreviousPage"
+> & {
+  role: "list" | "listbox";
+  rowSpacing: "default" | "compact" | "tight";
+  initialScrollAlign: "auto" | "start";
+  paddingEnd: number;
+  paddingStart: number;
+  hasPreviousPage: boolean;
+  isFetchingPreviousPage: boolean;
+};
+
+function resolveVirtualizedInfiniteListProps<TItem>(
+  props: VirtualizedInfiniteListProps<TItem>,
+): VirtualizedInfiniteListResolvedProps<TItem> {
+  return {
+    ...props,
+    role: props.role ?? "list",
+    rowSpacing: props.rowSpacing ?? "default",
+    initialScrollAlign: props.initialScrollAlign ?? "start",
+    paddingEnd: props.paddingEnd ?? 0,
+    paddingStart: props.paddingStart ?? 0,
+    hasPreviousPage: props.hasPreviousPage ?? false,
+    isFetchingPreviousPage: props.isFetchingPreviousPage ?? false,
+  };
+}
+
+export function VirtualizedInfiniteList<TItem>(props: VirtualizedInfiniteListProps<TItem>) {
+  return <VirtualizedInfiniteListContent {...resolveVirtualizedInfiniteListProps(props)} />;
+}
+
+function VirtualizedInfiniteListContent<TItem>({
   items,
   getItemKey,
   renderItem,
@@ -65,18 +107,18 @@ export function VirtualizedInfiniteList<TItem>({
   estimateSize,
   id,
   ariaLabel,
-  role = "list",
-  rowSpacing = "default",
+  role,
+  rowSpacing,
   testId,
   initialScrollKey,
   initialScrollRequestKey,
-  initialScrollAlign = "start",
-  paddingEnd = 0,
-  paddingStart = 0,
+  initialScrollAlign,
+  paddingEnd,
+  paddingStart,
   className,
   nonAdjustingResizeItemKey,
-  hasPreviousPage = false,
-  isFetchingPreviousPage = false,
+  hasPreviousPage,
+  isFetchingPreviousPage,
   previousLoadKey,
   previousLoadItemKey,
   onLoadPrevious,
@@ -85,7 +127,7 @@ export function VirtualizedInfiniteList<TItem>({
   onScrollElementChange,
   pinnedItemKeys,
   pixelOffsetRequest,
-}: VirtualizedInfiniteListProps<TItem>) {
+}: VirtualizedInfiniteListResolvedProps<TItem>) {
   const validatedPixelOffsetRequest = requireVirtualizedPixelOffsetRequest(pixelOffsetRequest);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const setScrollElement = useCallback(
@@ -137,25 +179,17 @@ export function VirtualizedInfiniteList<TItem>({
     // commands from layout effects. Do not re-enter React synchronously from
     // those lifecycle paths.
     useFlushSync: false,
-    getItemKey: (index) => {
-      if (previousBoundary !== undefined && index === 0) {
-        return "boundary-previous";
-      }
-      if (header !== undefined && index === previousBoundaryCount) {
-        return "header";
-      }
-      if (items.length === 0 && empty !== undefined && index === itemStartIndex) {
-        return "empty";
-      }
-      const item = items[index - itemStartIndex];
-      if (item !== undefined) {
-        return getItemKey(item);
-      }
-      if (nextBoundaryIndex === index) {
-        return "boundary-next";
-      }
-      return `placeholder-${index.toString()}`;
-    },
+    getItemKey: (index) =>
+      virtualRowKey({
+        emptyCount,
+        getItemKey,
+        headerCount,
+        index,
+        itemStartIndex,
+        items,
+        nextBoundaryIndex,
+        previousBoundaryCount,
+      }),
     overscan: 6,
     rangeExtractor: (range) => pinnedVirtualRangeExtractor(range, pinnedIndexes),
   });
@@ -307,72 +341,31 @@ export function VirtualizedInfiniteList<TItem>({
     virtualizer,
   ]);
 
-  useEffect(() => {
-    if (onLoadPrevious === undefined) {
-      return;
-    }
-    const firstVisibleIndex = visibleIndexes[0];
-    const atPreviousEdge =
-      previousLoadItemKey === undefined
-        ? firstVisibleIndex !== undefined && firstVisibleIndex <= itemStartIndex
-        : visibleIndexes.some((virtualIndex) => {
-            const item =
-              virtualIndex >= itemStartIndex && virtualIndex < itemStartIndex + items.length
-                ? items[virtualIndex - itemStartIndex]
-                : undefined;
-            return item !== undefined && getItemKey(item) === previousLoadItemKey;
-          });
-    const decision = resolveLoadMore({
-      atBottom: atPreviousEdge,
-      hasNextPage: hasPreviousPage,
-      isFetchingNextPage: isFetchingPreviousPage,
-      lastLoadMoreKey: lastLoadPreviousKeyRef.current,
-      loadMoreKey: previousLoadKey ?? items.length.toString(),
-      wasFetchingNextPage: wasFetchingPreviousPageRef.current,
-    });
-    wasFetchingPreviousPageRef.current = isFetchingPreviousPage;
-    lastLoadPreviousKeyRef.current = decision.lastLoadMoreKey;
-    if (decision.shouldLoad) {
-      onLoadPrevious();
-    }
-  }, [
-    hasPreviousPage,
-    getItemKey,
-    isFetchingPreviousPage,
-    itemStartIndex,
-    items,
-    items.length,
-    onLoadPrevious,
-    previousLoadItemKey,
-    previousLoadKey,
-    visibleIndexes,
-  ]);
+  useVirtualizedLoadMore({
+    atEdge: resolvePreviousLoadEdge({
+      getItemKey,
+      itemStartIndex,
+      items,
+      previousLoadItemKey,
+      visibleIndexes,
+    }),
+    hasNextPage: hasPreviousPage,
+    isFetchingNextPage: isFetchingPreviousPage,
+    lastLoadMoreKeyRef: lastLoadPreviousKeyRef,
+    loadMoreKey: previousLoadKey ?? items.length.toString(),
+    onLoadMore: onLoadPrevious,
+    wasFetchingNextPageRef: wasFetchingPreviousPageRef,
+  });
 
-  useEffect(() => {
-    const lastVisibleIndex = visibleIndexes.at(-1);
-    const lastDataIndex = itemStartIndex + items.length - 1;
-    const decision = resolveLoadMore({
-      atBottom: lastVisibleIndex !== undefined && lastVisibleIndex >= lastDataIndex,
-      hasNextPage,
-      isFetchingNextPage,
-      lastLoadMoreKey: lastLoadMoreKeyRef.current,
-      loadMoreKey: loadMoreKey ?? items.length.toString(),
-      wasFetchingNextPage: wasFetchingNextPageRef.current,
-    });
-    wasFetchingNextPageRef.current = isFetchingNextPage;
-    lastLoadMoreKeyRef.current = decision.lastLoadMoreKey;
-    if (decision.shouldLoad) {
-      onLoadMore();
-    }
-  }, [
+  useVirtualizedLoadMore({
+    atEdge: resolveNextLoadEdge(itemStartIndex, items.length, visibleIndexes),
     hasNextPage,
     isFetchingNextPage,
-    itemStartIndex,
-    items.length,
-    loadMoreKey,
+    lastLoadMoreKeyRef,
+    loadMoreKey: loadMoreKey ?? items.length.toString(),
     onLoadMore,
-    visibleIndexes,
-  ]);
+    wasFetchingNextPageRef,
+  });
 
   if (count > 0 && virtualItems.length === 0) {
     return (
@@ -388,7 +381,7 @@ export function VirtualizedInfiniteList<TItem>({
         {fallbackIndexes.map((index) => (
           <div
             className={virtualRowClassName({ count, index, rowSpacing, virtualized: false })}
-            key={fallbackRowKey({
+            key={virtualRowKey({
               emptyCount,
               getItemKey,
               headerCount,
@@ -488,7 +481,7 @@ function virtualRowClassName({
   return cx(virtualized ? index !== 0 && "pt-[var(--space-3)]" : "pt-[var(--space-3)] first:pt-0");
 }
 
-function fallbackRowKey<TItem>({
+function virtualRowKey<TItem>({
   emptyCount,
   getItemKey,
   headerCount,

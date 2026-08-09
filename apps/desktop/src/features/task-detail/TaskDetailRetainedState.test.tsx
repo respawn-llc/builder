@@ -1,6 +1,8 @@
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+import { z } from "zod";
+
 import type { JsonValue } from "@/api";
 import { appI18n } from "@/i18n";
 import type { SidebarDestination } from "@/app-facade";
@@ -9,7 +11,6 @@ import {
   activityResponse,
   commentListResponse,
   emptyTaskAttentionResponse,
-  isJsonObject,
   mountTaskDetailSurface,
   taskDetailResponse,
 } from "@/test-support/task-detail";
@@ -228,10 +229,11 @@ function taskDetailWithID(taskID: string, title: string): JsonValue {
 }
 
 function taskIDFromParams(params: JsonValue): string {
-  if (!isJsonObject(params) || typeof params.task_id !== "string") {
+  const result = z.object({ task_id: z.string() }).safeParse(params);
+  if (!result.success) {
     throw new Error("Expected a Task-scoped RPC request.");
   }
-  return params.task_id;
+  return result.data.task_id;
 }
 
 function activityPage(taskID: string) {
