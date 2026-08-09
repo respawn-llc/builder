@@ -62,16 +62,10 @@ type Service struct {
 	attention      servicecontract.AttentionNotificationService
 	operations     *runtimeops.Coordinator
 	sessionNames   *requestmemo.Memo[sessionStringMemoRequest, struct{}]
-	thinkingLevels *requestmemo.Memo[sessionStringMemoRequest, struct{}]
-	autoCompacts   *requestmemo.Memo[sessionBoolMemoRequest, serverapi.RuntimeSetAutoCompactionEnabledResponse]
 
 	queuedDiscards *requestmemo.Memo[queuedUserMessageMemoRequest, serverapi.RuntimeDiscardQueuedUserMessageResponse]
 	liveSteers     *requestmemo.Memo[liveSteerMemoRequest, serverapi.RuntimeLiveSteerResponse]
 	liveStops      *requestmemo.Memo[liveStopMemoRequest, serverapi.RuntimeLiveStopResponse]
-	promptHistory  *requestmemo.Memo[sessionTextMemoRequest, struct{}]
-	goals          *requestmemo.Memo[goalSetMemoRequest, committedGoalMutationResult]
-	goalStatuses   *requestmemo.Memo[goalStatusMemoRequest, committedGoalMutationResult]
-	goalClears     *requestmemo.Memo[goalClearMemoRequest, committedGoalMutationResult]
 }
 
 type committedRuntimeMutationResult[Resp any] struct {
@@ -79,19 +73,9 @@ type committedRuntimeMutationResult[Resp any] struct {
 	Err      error
 }
 
-type committedGoalMutationResult struct {
-	Response serverapi.RuntimeGoalShowResponse
-	Err      error
-}
-
 type sessionStringMemoRequest struct {
 	SessionID string
 	Value     string
-}
-
-type sessionBoolMemoRequest struct {
-	SessionID string
-	Enabled   bool
 }
 
 type sessionTextMemoRequest struct {
@@ -137,35 +121,6 @@ type runtimeInterruptMemoRequest struct {
 	PendingOperationRefs []clientui.RuntimeOperationRef
 }
 
-type localEntryMemoRequest struct {
-	SessionID  string
-	Role       string
-	Text       string
-	Visibility transcript.EntryVisibility
-	NoticeID   string
-}
-
-type goalSetMemoRequest struct {
-	SessionID string
-	Objective string
-	Actor     string
-	RunID     string
-	StepID    string
-}
-
-type goalStatusMemoRequest struct {
-	SessionID string
-	Status    string
-	Actor     string
-	RunID     string
-	StepID    string
-}
-
-type goalClearMemoRequest struct {
-	SessionID string
-	Actor     string
-}
-
 func NewService(authority *sessionruntime.Authority) *Service {
 	execution := NewExecutionAdapter(authority)
 	return NewServiceWithGoalCommands(
@@ -187,21 +142,15 @@ func NewServiceWithGoalCommands(
 		goalAuthority = NewGoalAuthority(authority, execution)
 	}
 	return &Service{
-		authority:      authority,
-		execution:      execution,
-		goalAuthority:  goalAuthority,
-		operations:     runtimeops.NewCoordinator(),
-		sessionNames:   requestmemo.New[sessionStringMemoRequest, struct{}](),
-		thinkingLevels: requestmemo.New[sessionStringMemoRequest, struct{}](),
-		autoCompacts:   requestmemo.New[sessionBoolMemoRequest, serverapi.RuntimeSetAutoCompactionEnabledResponse](),
+		authority:     authority,
+		execution:     execution,
+		goalAuthority: goalAuthority,
+		operations:    runtimeops.NewCoordinator(),
+		sessionNames:  requestmemo.New[sessionStringMemoRequest, struct{}](),
 
 		queuedDiscards: requestmemo.New[queuedUserMessageMemoRequest, serverapi.RuntimeDiscardQueuedUserMessageResponse](),
 		liveSteers:     requestmemo.New[liveSteerMemoRequest, serverapi.RuntimeLiveSteerResponse](),
 		liveStops:      requestmemo.New[liveStopMemoRequest, serverapi.RuntimeLiveStopResponse](),
-		promptHistory:  requestmemo.New[sessionTextMemoRequest, struct{}](),
-		goals:          requestmemo.New[goalSetMemoRequest, committedGoalMutationResult](),
-		goalStatuses:   requestmemo.New[goalStatusMemoRequest, committedGoalMutationResult](),
-		goalClears:     requestmemo.New[goalClearMemoRequest, committedGoalMutationResult](),
 	}
 }
 
@@ -332,16 +281,12 @@ func (s *Service) SetThinkingLevel(ctx context.Context, req serverapi.RuntimeSet
 	if err := req.Validate(); err != nil {
 		return err
 	}
-	memoReq := sessionStringMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Value: req.Level}
-	_, err := s.thinkingLevels.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionStringMemoRequest, func(ctx context.Context) (struct{}, error) {
-		return struct{}{}, s.withRuntime(ctx, req.SessionID, func(_ context.Context, engine *runtime.Engine) error {
-			if err := engine.SetThinkingLevel(req.Level); err != nil {
-				return err
-			}
-			return s.publishSessionStatus(req.SessionID)
-		})
+	return s.withRuntime(ctx, req.SessionID, func(_ context.Context, engine *runtime.Engine) error {
+		if err := engine.SetThinkingLevel(req.Level); err != nil {
+			return err
+		}
+		return s.publishSessionStatus(req.SessionID)
 	})
-	return err
 }
 
 func (s *Service) SetFastModeEnabled(ctx context.Context, req serverapi.RuntimeSetFastModeEnabledRequest) (serverapi.RuntimeSetFastModeEnabledResponse, error) {
@@ -372,24 +317,21 @@ func (s *Service) SetAutoCompactionEnabled(ctx context.Context, req serverapi.Ru
 	if err := req.Validate(); err != nil {
 		return serverapi.RuntimeSetAutoCompactionEnabledResponse{}, err
 	}
-	memoReq := sessionBoolMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Enabled: req.Enabled}
-	return s.autoCompacts.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionBoolMemoRequest, func(ctx context.Context) (serverapi.RuntimeSetAutoCompactionEnabledResponse, error) {
-		var resp serverapi.RuntimeSetAutoCompactionEnabledResponse
-		err := s.withRuntime(ctx, req.SessionID, func(_ context.Context, engine *runtime.Engine) error {
-			if !req.Enabled {
-				if err := s.rejectWorkflowAutoCompactionDisable(ctx, req.SessionID, engine); err != nil {
-					return err
-				}
-			}
-			changed, enabled, err := engine.SetAutoCompactionEnabled(req.Enabled)
-			if err != nil {
+	var resp serverapi.RuntimeSetAutoCompactionEnabledResponse
+	err := s.withRuntime(ctx, req.SessionID, func(_ context.Context, engine *runtime.Engine) error {
+		if !req.Enabled {
+			if err := s.rejectWorkflowAutoCompactionDisable(ctx, req.SessionID, engine); err != nil {
 				return err
 			}
-			resp = serverapi.RuntimeSetAutoCompactionEnabledResponse{Changed: changed, Enabled: enabled}
-			return s.publishSessionStatus(req.SessionID)
-		})
-		return resp, err
+		}
+		changed, enabled, err := engine.SetAutoCompactionEnabled(req.Enabled)
+		if err != nil {
+			return err
+		}
+		resp = serverapi.RuntimeSetAutoCompactionEnabledResponse{Changed: changed, Enabled: enabled}
+		return s.publishSessionStatus(req.SessionID)
 	})
+	return resp, err
 }
 
 func (s *Service) SetQuestionsEnabled(ctx context.Context, req serverapi.RuntimeSetQuestionsEnabledRequest) (serverapi.RuntimeSetQuestionsEnabledResponse, error) {
@@ -657,13 +599,12 @@ func (s *Service) RecordPromptHistory(ctx context.Context, req serverapi.Runtime
 	if err := req.Validate(); err != nil {
 		return err
 	}
-	memoReq := sessionTextMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Text: req.Text}
-	_, err := s.promptHistory.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionTextMemoRequest, func(ctx context.Context) (struct{}, error) {
-		return struct{}{}, s.withRuntime(ctx, req.SessionID, func(_ context.Context, _ *runtime.Engine) error {
-			_, _, err := s.recordPromptHistory(ctx, memoReq.SessionID, strings.TrimSpace(req.ClientRequestID), memoReq.Text)
-			return err
-		})
-	})
+	_, _, err := s.recordPromptHistory(
+		ctx,
+		strings.TrimSpace(req.SessionID),
+		strings.TrimSpace(req.ClientRequestID),
+		req.Text,
+	)
 	return err
 }
 
@@ -735,12 +676,7 @@ var (
 	sameLiveStopMemoRequest          = sameComparable[liveStopMemoRequest]
 	sameQueuedUserMessageMemoRequest = sameComparable[queuedUserMessageMemoRequest]
 	sameSessionStringMemoRequest     = sameComparable[sessionStringMemoRequest]
-	sameSessionBoolMemoRequest       = sameComparable[sessionBoolMemoRequest]
 	sameSessionCommandMemoRequest    = sameComparable[sessionCommandMemoRequest]
-	sameLocalEntryMemoRequest        = sameComparable[localEntryMemoRequest]
-	sameGoalSetMemoRequest           = sameComparable[goalSetMemoRequest]
-	sameGoalStatusMemoRequest        = sameComparable[goalStatusMemoRequest]
-	sameGoalClearMemoRequest         = sameComparable[goalClearMemoRequest]
 )
 
 func sameComparable[T comparable](a, b T) bool { return a == b }

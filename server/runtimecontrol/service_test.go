@@ -189,6 +189,12 @@ func (s *runtimeControlPromptHistoryStore) CountText(text string) int {
 	return count
 }
 
+func (s *runtimeControlPromptHistoryStore) RecordAttemptCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.recordInserted)
+}
+
 func waitForRuntimeControlPromptHistoryCount(t *testing.T, store *runtimeControlPromptHistoryStore, text string, want int) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
@@ -1380,7 +1386,7 @@ func TestServiceDurableWorkflowSessionRejectsAutoCompactionDisable(t *testing.T)
 	}
 }
 
-func TestServiceSetGoalMemoNormalizesObjectiveWhitespace(t *testing.T) {
+func TestServiceSetGoalTreatsRepeatedRequestAsNewNormalizedMutation(t *testing.T) {
 	store, _, service := newRuntimeControlTestService(t, &blockingRuntimeControlClient{}, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
 
 	req := serverapi.RuntimeGoalSetRequest{
@@ -1398,11 +1404,11 @@ func TestServiceSetGoalMemoNormalizesObjectiveWhitespace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SetGoal equivalent retry: %v", err)
 	}
-	if first.Goal == nil || second.Goal == nil || first.Goal.ID != second.Goal.ID {
-		t.Fatalf("retry goal = %+v, want same id as %+v", second.Goal, first.Goal)
+	if first.Goal == nil || first.Goal.Objective != "ship memo goal" {
+		t.Fatalf("first goal = %+v, want normalized objective", first.Goal)
 	}
-	if messages := runtimeControlGoalDeveloperMessages(t, store); len(messages) != 1 {
-		t.Fatalf("goal developer message count = %d, want 1", len(messages))
+	if second.Goal == nil || second.Goal.Objective != "ship memo goal" || second.Goal.ID == first.Goal.ID {
+		t.Fatalf("second goal = %+v, want a new normalized mutation after %+v", second.Goal, first.Goal)
 	}
 }
 

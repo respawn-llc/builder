@@ -40,8 +40,10 @@ func (r *sessionStatusCountingResolver) PublishSessionStatus(string) error {
 	return r.publishErr
 }
 
-func TestServiceSetThinkingLevelDedupesSuccessfulRetry(t *testing.T) {
+func TestServiceSetThinkingLevelTreatsRepeatedRequestAsNewMutation(t *testing.T) {
 	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{})
+	resolver := &sessionStatusCountingResolver{}
+	service.WithRuntimeActivityResolver(resolver)
 	req := serverapi.RuntimeSetThinkingLevelRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, Level: "high"}
 
 	if err := service.SetThinkingLevel(context.Background(), req); err != nil {
@@ -52,6 +54,35 @@ func TestServiceSetThinkingLevelDedupesSuccessfulRetry(t *testing.T) {
 	}
 	if got := engine.ThinkingLevel(); got != "high" {
 		t.Fatalf("thinking level = %q, want high", got)
+	}
+	if resolver.publishCount != 2 {
+		t.Fatalf("session status publish count = %d, want 2", resolver.publishCount)
+	}
+}
+
+func TestServiceSetAutoCompactionTreatsRepeatedRequestAsNewMutation(t *testing.T) {
+	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{})
+	resolver := &sessionStatusCountingResolver{}
+	service.WithRuntimeActivityResolver(resolver)
+	req := serverapi.RuntimeSetAutoCompactionEnabledRequest{
+		ClientRequestID: "req-1",
+		SessionID:       store.Meta().SessionID,
+		Enabled:         false,
+	}
+
+	first, err := service.SetAutoCompactionEnabled(context.Background(), req)
+	if err != nil {
+		t.Fatalf("SetAutoCompactionEnabled first: %v", err)
+	}
+	second, err := service.SetAutoCompactionEnabled(context.Background(), req)
+	if err != nil {
+		t.Fatalf("SetAutoCompactionEnabled replay: %v", err)
+	}
+	if !first.Changed || first.Enabled || second.Changed || second.Enabled || engine.AutoCompactionEnabled() {
+		t.Fatalf("responses = (%+v, %+v), auto-compaction = %t", first, second, engine.AutoCompactionEnabled())
+	}
+	if resolver.publishCount != 2 {
+		t.Fatalf("session status publish count = %d, want 2", resolver.publishCount)
 	}
 }
 
@@ -428,7 +459,7 @@ func TestServiceDiscardQueuedUserMessageDedupesSuccessfulRetry(t *testing.T) {
 	}
 }
 
-func TestServiceRecordPromptHistoryDedupesSuccessfulRetry(t *testing.T) {
+func TestServiceRecordPromptHistoryTreatsRepeatedRequestAsNewAppend(t *testing.T) {
 	store, _, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{})
 	history := newRuntimeControlPromptHistoryStore(store.Meta().SessionID)
 	service.WithPromptHistoryStore(history)
@@ -442,6 +473,9 @@ func TestServiceRecordPromptHistoryDedupesSuccessfulRetry(t *testing.T) {
 	}
 	if got := countPromptHistoryEvents(t, store, "/resume"); got != 1 {
 		t.Fatalf("prompt history count = %d, want 1", got)
+	}
+	if got := history.RecordAttemptCount(); got != 2 {
+		t.Fatalf("prompt history append attempts = %d, want 2", got)
 	}
 }
 

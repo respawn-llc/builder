@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"core/prompts"
-	"core/server/requestmemo"
 	"core/server/session"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -42,19 +41,12 @@ func (s *Service) SetGoal(ctx context.Context, req serverapi.RuntimeGoalSetReque
 	if err != nil {
 		return serverapi.RuntimeGoalShowResponse{}, err
 	}
-	memoReq := goalSetMemoRequest{
-		SessionID: sessionID.String(),
-		Objective: strings.TrimSpace(req.Objective),
-		Actor:     strings.TrimSpace(req.Actor),
-		RunID:     strings.TrimSpace(req.RunID),
-		StepID:    strings.TrimSpace(req.StepID),
-	}
-	return memoizedGoalMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq, s.goals, sameGoalSetMemoRequest, func(ctx context.Context) (GoalCommandResult, error) {
+	return goalMutation(s, ctx, func(ctx context.Context) (GoalCommandResult, error) {
 		return s.goalAuthority.Set(ctx, GoalSetCommand{
 			SessionID: sessionID,
-			Objective: memoReq.Objective,
-			Actor:     session.GoalActor(memoReq.Actor),
-			Execution: goalExecutionIdentity(memoReq.RunID, memoReq.StepID),
+			Objective: strings.TrimSpace(req.Objective),
+			Actor:     session.GoalActor(strings.TrimSpace(req.Actor)),
+			Execution: goalExecutionIdentity(req.RunID, req.StepID),
 		})
 	})
 }
@@ -79,19 +71,12 @@ func (s *Service) setGoalStatus(ctx context.Context, req serverapi.RuntimeGoalSt
 	if err != nil {
 		return serverapi.RuntimeGoalShowResponse{}, err
 	}
-	memoReq := goalStatusMemoRequest{
-		SessionID: sessionID.String(),
-		Status:    string(status),
-		Actor:     strings.TrimSpace(req.Actor),
-		RunID:     strings.TrimSpace(req.RunID),
-		StepID:    strings.TrimSpace(req.StepID),
-	}
-	return memoizedGoalMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq, s.goalStatuses, sameGoalStatusMemoRequest, func(ctx context.Context) (GoalCommandResult, error) {
+	return goalMutation(s, ctx, func(ctx context.Context) (GoalCommandResult, error) {
 		return s.goalAuthority.Status(ctx, GoalStatusCommand{
 			SessionID: sessionID,
 			Status:    status,
-			Actor:     session.GoalActor(memoReq.Actor),
-			Execution: goalExecutionIdentity(memoReq.RunID, memoReq.StepID),
+			Actor:     session.GoalActor(strings.TrimSpace(req.Actor)),
+			Execution: goalExecutionIdentity(req.RunID, req.StepID),
 		})
 	})
 }
@@ -119,45 +104,31 @@ func (s *Service) ClearGoal(ctx context.Context, req serverapi.RuntimeGoalClearR
 	if err != nil {
 		return serverapi.RuntimeGoalShowResponse{}, err
 	}
-	memoReq := goalClearMemoRequest{SessionID: sessionID.String(), Actor: strings.TrimSpace(req.Actor)}
-	return memoizedGoalMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq, s.goalClears, sameGoalClearMemoRequest, func(ctx context.Context) (GoalCommandResult, error) {
+	return goalMutation(s, ctx, func(ctx context.Context) (GoalCommandResult, error) {
 		return s.goalAuthority.Clear(ctx, GoalClearCommand{
 			SessionID: sessionID,
-			Actor:     session.GoalActor(memoReq.Actor),
+			Actor:     session.GoalActor(strings.TrimSpace(req.Actor)),
 		})
 	})
 }
 
-func memoizedGoalMutation[Req any](
+func goalMutation(
 	service *Service,
 	ctx context.Context,
-	requestID string,
-	req Req,
-	memo *requestmemo.Memo[Req, committedGoalMutationResult],
-	same func(Req, Req) bool,
 	run func(context.Context) (GoalCommandResult, error),
 ) (serverapi.RuntimeGoalShowResponse, error) {
 	if service == nil || service.goalAuthority == nil {
 		return serverapi.RuntimeGoalShowResponse{}, errors.New("goal command authority is required")
 	}
-	result, err := memo.Do(ctx, requestID, req, same, func(ctx context.Context) (committedGoalMutationResult, error) {
-		outcome, outerErr := run(ctx)
-		if outerErr != nil {
-			return committedGoalMutationResult{}, goalMutationError(outerErr)
-		}
-		response, responseErr := goalResponseFromCommand(outcome)
-		if responseErr != nil {
-			return committedGoalMutationResult{}, responseErr
-		}
-		return committedGoalMutationResult{
-			Response: response,
-			Err:      goalMutationError(outcome.Err),
-		}, nil
-	})
+	result, err := run(ctx)
 	if err != nil {
 		return serverapi.RuntimeGoalShowResponse{}, goalMutationError(err)
 	}
-	return result.Response, result.Err
+	response, err := goalResponseFromCommand(result)
+	if err != nil {
+		return serverapi.RuntimeGoalShowResponse{}, err
+	}
+	return response, goalMutationError(result.Err)
 }
 
 func goalResponseFromCommand(result GoalCommandResult) (serverapi.RuntimeGoalShowResponse, error) {
