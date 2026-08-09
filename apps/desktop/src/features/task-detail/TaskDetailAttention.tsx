@@ -1,7 +1,7 @@
 import { useTranslation } from "react-i18next";
 
 import type { ApprovalAttentionItem, ApprovalSnapshot, InterruptedCurrentNodeAttentionItem } from "@/api";
-import { errorMessage, parseTaskSetupRecoveryDetail } from "@/api";
+import { ContractError, errorMessage, parseTaskSetupRecoveryDetail } from "@/api";
 import { useAppServices } from "@/app-facade";
 import { writeClipboardText } from "@/shared/native-clipboard";
 import { WorkflowEdgeRouteGraphic } from "@/shared/workflow-edge";
@@ -98,7 +98,14 @@ export function InterruptedCurrentNodeBox({
   const { t } = useTranslation();
   const { nativeBridge } = useAppServices();
   const detailJSON = attention.detailJSON;
-  const recovery = parseTaskSetupRecoveryDetail(detailJSON);
+  let recovery = null;
+  let recoveryError: string | null = null;
+  try {
+    recovery = parseTaskSetupRecoveryDetail(detailJSON);
+  } catch (error) {
+    if (!(error instanceof ContractError)) throw error;
+    recoveryError = errorMessage(error);
+  }
   return (
     <Island
       aria-label={t("task.interrupted")}
@@ -111,6 +118,9 @@ export function InterruptedCurrentNodeBox({
       {attention.message !== null ? (
         <p className="m-0 text-sm text-[var(--color-muted)]">{attention.message}</p>
       ) : null}
+      {recoveryError === null ? null : (
+        <p className="m-0 text-sm text-[var(--color-error)]" role="alert">{recoveryError}</p>
+      )}
       {detailJSON !== null ? (
         <Button
           disabled={disabled}

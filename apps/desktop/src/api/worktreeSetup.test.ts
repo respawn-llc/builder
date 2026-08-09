@@ -40,6 +40,8 @@ describe("worktree setup API", () => {
       executionTarget: { mode: "head", customRef: null },
       retainedWorktree: null,
     });
+    expect(parseTaskSetupRecoveryDetail(JSON.stringify({ code: "user_interrupt" }))).toBeNull();
+    expect(() => parseTaskSetupRecoveryDetail('{"setup_recovery":{}}')).toThrow(ContractError);
   });
 
   it("rejects malformed setup operation ids before RPC submission can use them", () => {

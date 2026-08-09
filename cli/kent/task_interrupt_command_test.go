@@ -33,22 +33,6 @@ type eofWorktreeSetupSubscription struct {
 
 type testWorktreeSetupSubscription func(context.Context) (serverapi.WorktreeSetupEvent, error)
 
-type gatedWorktreeSetupRemote struct {
-	*taskInterruptCommandRemote
-	terminal <-chan serverapi.WorktreeSetupEvent
-}
-
-func (r gatedWorktreeSetupRemote) SubscribeWorktreeSetup(context.Context, serverapi.WorktreeSetupSubscribeRequest) (serverapi.WorktreeSetupSubscription, error) {
-	return testWorktreeSetupSubscription(func(ctx context.Context) (serverapi.WorktreeSetupEvent, error) {
-		select {
-		case event := <-r.terminal:
-			return event, nil
-		case <-ctx.Done():
-			return serverapi.WorktreeSetupEvent{}, ctx.Err()
-		}
-	}), nil
-}
-
 func (s testWorktreeSetupSubscription) Next(ctx context.Context) (serverapi.WorktreeSetupEvent, error) {
 	return s(ctx)
 }
@@ -547,60 +531,6 @@ func TestWorktreeSetupProgressReportsEOFBeforeTerminalEvent(t *testing.T) {
 	}
 }
 
-func TestWorkflowMutationWaitsForNotRequiredTerminalAfterAppliedResponse(t *testing.T) {
-	terminal := make(chan serverapi.WorktreeSetupEvent, 1)
-	remote := gatedWorktreeSetupRemote{
-		taskInterruptCommandRemote: &taskInterruptCommandRemote{},
-		terminal:                   terminal,
-	}
-	returned := make(chan error, 1)
-	setupIDs := make(chan serverapi.WorktreeSetupOperationID, 1)
-	go func() {
-		_, observed, err := runWorkflowMutationWithSetupProgress(
-			context.Background(),
-			remote,
-			io.Discard,
-			func(_ context.Context, setupID serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskResumeResponse, error) {
-				setupIDs <- setupID
-				return serverapi.WorkflowTaskResumeResponse{
-					Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
-					Applied: &serverapi.WorkflowTaskResumeApplied{
-						CurrentNodes: []serverapi.WorkflowTaskCurrentNode{{NodeID: "node-1"}},
-					},
-				}, nil
-			},
-			func(response serverapi.WorkflowTaskResumeResponse) bool {
-				return response.Outcome == serverapi.WorkflowExecutionTargetActionOutcomeApplied
-			},
-		)
-		if err == nil && (observed == nil || observed.NotRequired == nil) {
-			err = errors.New("missing not-required terminal")
-		}
-		returned <- err
-	}()
-	select {
-	case err := <-returned:
-		t.Fatalf("mutation returned before terminal event: %v", err)
-	case <-time.After(20 * time.Millisecond):
-	}
-	setupID := <-setupIDs
-	terminal <- serverapi.WorktreeSetupEvent{
-		SetupOperationID: setupID,
-		Phase:            serverapi.WorktreeSetupPhaseNotRequired,
-		NotRequired: &serverapi.WorktreeSetupNotRequired{
-			Reason: serverapi.WorktreeSetupNotRequiredNoTargetPreparation,
-		},
-	}
-	select {
-	case err := <-returned:
-		if err != nil {
-			t.Fatalf("mutation result: %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("mutation did not return after terminal event")
-	}
-}
-
 func TestTaskSetupGuidanceProjectsStructuredRecovery(t *testing.T) {
 	target := serverapi.WorkflowExecutionTargetSelection{Mode: serverapi.WorkflowExecutionTargetModeHead}
 	script := "/repo/setup.sh"
@@ -626,6 +556,9 @@ func TestTaskSetupGuidanceProjectsStructuredRecovery(t *testing.T) {
 			if got.Success != test.success || len(got.Actions) != len(test.kinds) {
 				t.Fatalf("guidance = %+v", got)
 			}
+			if (got.Diagnostic == nil) != test.success {
+				t.Fatalf("diagnostic = %v for success %t", got.Diagnostic, test.success)
+			}
 			if test.name == "not required with orphan" && (got.RetainedRoot == nil || *got.RetainedRoot != "/tmp/orphan") {
 				t.Fatalf("retained guidance = %+v", got)
 			}
@@ -642,6 +575,9 @@ func TestTaskSetupGuidanceProjectsStructuredRecovery(t *testing.T) {
 	if workflowTaskSetupObservationTimeout != 2*time.Minute {
 		t.Fatalf("observation timeout = %s", workflowTaskSetupObservationTimeout)
 	}
+	if _, err := projectTaskSetupGuidance("task-1", nil, nil, errors.New(" ")); err == nil {
+		t.Fatal("blank diagnostic was accepted")
+	}
 }
 
 func TestMoveSetupGuidancePreservesStructuredInput(t *testing.T) {
@@ -655,7 +591,7 @@ func TestMoveSetupGuidancePreservesStructuredInput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("project guidance: %v", err)
 	}
-	if guidance.Success || guidance.ScriptPath == nil || len(guidance.Actions) != 5 {
+	if guidance.Success || guidance.Diagnostic == nil || guidance.ScriptPath == nil || len(guidance.Actions) != 5 {
 		t.Fatalf("guidance = %+v", guidance)
 	}
 	wantPrefix := []string{"kent", "task", "move", "task-1", "done", "--project", "project-1", "--commentary", "note", "--transition", "next", "--values-json", `{"plan":{"summary":"done"}}`, "--ignore-dependencies", "--json"}

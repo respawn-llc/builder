@@ -45,7 +45,6 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
-	"core/shared/worktreecontract"
 )
 
 func New(cfg config.App, authSupport serverbootstrap.AuthSupport, runtimeSupport serverbootstrap.RuntimeSupport) (*Core, error) {
@@ -476,7 +475,7 @@ func (i taskExecutionTargetInfrastructure) MaterializeExecutionTarget(ctx contex
 			CommitOID:    *req.Snapshot.CommitOID,
 			CanonicalRef: req.Snapshot.ResolvedRef,
 		},
-		SetupRequirement: worktreecontract.SetupRequirementRequired,
+		SetupRequirement: req.SetupRequirement,
 	})
 	if prepared.Root.Managed == nil {
 		if err == nil {

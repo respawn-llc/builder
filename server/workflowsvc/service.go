@@ -22,6 +22,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/textutil"
+	"core/shared/worktreecontract"
 )
 
 type Service struct {
@@ -125,6 +126,7 @@ type ExecutionTargetMaterializeRequest struct {
 	TaskID           workflow.TaskID
 	SetupOperationID *serverapi.WorktreeSetupOperationID
 	Snapshot         workflowstore.ExecutionTargetSnapshot
+	SetupRequirement worktreecontract.SetupRequirement
 }
 
 type ExecutionTargetMaterialization struct {
@@ -1212,7 +1214,7 @@ func (s *Service) initiatingActionTarget(ctx context.Context, taskID workflow.Ta
 	if err != nil || selectionRequired != nil {
 		return initiatingActionTargetDecision{selectionRequired: selectionRequired}, err
 	}
-	prepared, err := s.materializeInitiatingActionTarget(ctx, taskID, setupOperationID, preflight, snapshot)
+	prepared, err := s.materializeInitiatingActionTarget(ctx, taskID, setupOperationID, preflight, snapshot, worktreecontract.SetupRequirementRequired)
 	return initiatingActionTargetDecision{prepared: &prepared}, err
 }
 
@@ -1262,6 +1264,7 @@ func (s *Service) materializeInitiatingActionTarget(
 	setupOperationID *serverapi.WorktreeSetupOperationID,
 	preflight initiatingActionTargetPreflight,
 	snapshot *workflowstore.ExecutionTargetSnapshot,
+	setupRequirement worktreecontract.SetupRequirement,
 ) (preparedInitiatingActionTarget, error) {
 	targetContext := preflight.context
 	if snapshot != nil {
@@ -1269,6 +1272,7 @@ func (s *Service) materializeInitiatingActionTarget(
 			TaskID:           taskID,
 			SetupOperationID: setupOperationID,
 			Snapshot:         *snapshot,
+			SetupRequirement: setupRequirement,
 		})
 		prepared := preparedInitiatingActionTarget{
 			retainedWorktree:         materialization.RetainedWorktree,
@@ -1394,6 +1398,25 @@ func configuredTargetResumeSelection(nodes []workflow.CurrentNode) (*serverapi.W
 	return nil, nil
 }
 
+func resumeSetupRequirement(nodes []workflow.CurrentNode, selection workflow.ExecutionTargetSelection) (worktreecontract.SetupRequirement, error) {
+	for _, node := range nodes {
+		if node.Scheduling == nil || node.Scheduling.Interruption == nil {
+			continue
+		}
+		recovery := node.Scheduling.Interruption.Detail.SetupRecovery
+		if recovery == nil {
+			continue
+		}
+		if err := recovery.Validate(); err != nil {
+			return worktreecontract.SetupRequirementRequired, fmt.Errorf("invalid setup recovery interruption: %w", err)
+		}
+		if recovery.ExecutionTarget.Equal(selection) {
+			return recovery.SetupRequirement, nil
+		}
+	}
+	return worktreecontract.SetupRequirementRequired, nil
+}
+
 func executionTargetUnavailableCause(err error) (workflow.ExecutionTargetUnavailableCause, bool) {
 	var revisionErr *worktree.GitRevisionResolutionError
 	if errors.As(err, &revisionErr) {
@@ -1495,11 +1518,11 @@ func (s *Service) resumeWorkflowTask(ctx context.Context, req serverapi.Workflow
 		return serverapi.WorkflowTaskResumeResponse{}, err
 	}
 	taskID := workflow.TaskID(req.TaskID)
+	interrupted, err := s.store.InterruptedExecutableCurrentNodes(ctx, taskID)
+	if err != nil {
+		return serverapi.WorkflowTaskResumeResponse{}, err
+	}
 	if req.ExecutionTarget == nil {
-		interrupted, err := s.store.InterruptedExecutableCurrentNodes(ctx, taskID)
-		if err != nil {
-			return serverapi.WorkflowTaskResumeResponse{}, err
-		}
 		selectionRequired, err := configuredTargetResumeSelection(interrupted)
 		if err != nil {
 			return serverapi.WorkflowTaskResumeResponse{}, err
@@ -1512,6 +1535,10 @@ func (s *Service) resumeWorkflowTask(ctx context.Context, req serverapi.Workflow
 		}
 	}
 	target, err := s.preflightInitiatingActionTarget(ctx, taskID, req.ExecutionTarget)
+	if err != nil {
+		return serverapi.WorkflowTaskResumeResponse{}, err
+	}
+	setupRequirement, err := resumeSetupRequirement(interrupted, target.selection)
 	if err != nil {
 		return serverapi.WorkflowTaskResumeResponse{}, err
 	}
@@ -1538,6 +1565,7 @@ func (s *Service) resumeWorkflowTask(ctx context.Context, req serverapi.Workflow
 					&req.SetupOperationID,
 					target,
 					snapshot,
+					setupRequirement,
 				)
 				if preparationErr != nil || preparedTarget.candidate == nil {
 					if preparationErr == nil {

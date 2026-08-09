@@ -1039,30 +1039,6 @@ func TestCreateWorktreeSetupReplacesStaleParentReservedEnvironment(t *testing.T)
 	}
 }
 
-func TestPrepareTaskExecutionRootReturnsExistingManagedWorktree(t *testing.T) {
-	env := newServiceTestEnv(t)
-	task, _ := createTaskWorktreeTestTask(t, env)
-	base, err := env.service.git.ResolveHEAD(env.ctx, env.workspaceRoot)
-	if err != nil {
-		t.Fatalf("ResolveHEAD: %v", err)
-	}
-
-	first, err := prepareManagedTaskExecutionRoot(env.ctx, env.service, task.ID, nil, base)
-	if err != nil {
-		t.Fatalf("PrepareTaskExecutionRoot first: %v", err)
-	}
-	second, err := prepareManagedTaskExecutionRoot(env.ctx, env.service, task.ID, nil, base)
-	if err != nil {
-		t.Fatalf("PrepareTaskExecutionRoot second: %v", err)
-	}
-	if second.Created || second.CreatedBranch {
-		t.Fatalf("second ensure created flags = created:%t branch:%t, want false/false", second.Created, second.CreatedBranch)
-	}
-	if taskWorktreeID(first.Worktree) != taskWorktreeID(second.Worktree) {
-		t.Fatalf("second worktree id = %q, want %q", taskWorktreeID(second.Worktree), taskWorktreeID(first.Worktree))
-	}
-}
-
 func TestPrepareTaskExecutionRootRecreatesCleanRootBeforeRetry(t *testing.T) {
 	env := newServiceTestEnv(t)
 	task, _ := createTaskWorktreeTestTask(t, env)

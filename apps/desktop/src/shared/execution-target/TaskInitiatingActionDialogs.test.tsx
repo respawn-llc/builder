@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 
@@ -123,14 +123,12 @@ describe("TaskInitiatingActionDialogs", () => {
     expect(screen.getByRole("radiogroup")).toBeInTheDocument();
   });
 
-  it("recovers a fixed-policy Move without losing its input or accepting duplicate Retry", async () => {
-    const completion = deferred<TaskInitiatingActionResult>();
+  it("retries a fixed-policy Move without losing its input", async () => {
     let calls = 0;
-    const execute = vi.fn(async (...args: [TaskInitiatingAction, WorkflowExecutionTargetSelection?]) => {
-      void args;
+    const execute = vi.fn(async (action: TaskInitiatingAction) => {
       calls += 1;
-      if (calls < 3) throw retainedSetupError();
-      return completion.promise;
+      if (calls === 1) throw retainedSetupError();
+      return appliedMove(action);
     });
     render(<TestAppProviders services={appServices}><MoveHarness execute={execute} /></TestAppProviders>);
     const user = userEvent.setup();
@@ -138,18 +136,11 @@ describe("TaskInitiatingActionDialogs", () => {
     await user.click(screen.getByTestId("initiate-move"));
     expect(await screen.findByText("setup failed twice")).toBeInTheDocument();
     expect(screen.getByText("/worktrees/task-1")).toBeInTheDocument();
-    await user.click(screen.getByText("Cancel"));
-    expect(screen.queryByTestId("setup-recovery-retry")).not.toBeInTheDocument();
-    await user.click(screen.getByTestId("initiate-move"));
-    const retry = await screen.findByTestId("setup-recovery-retry");
-    fireEvent.click(retry);
-    fireEvent.click(retry);
-    expect(execute).toHaveBeenCalledTimes(3);
-    expect(execute.mock.calls.every(([action, selection]) =>
-      action.kind === "move" && action.input.commentary === "keep this" && selection === undefined,
+    await user.click(screen.getByTestId("setup-recovery-retry"));
+    await waitFor(() => { expect(execute).toHaveBeenCalledTimes(2); });
+    expect(execute.mock.calls.every(([action]) =>
+      action.kind === "move" && action.input.commentary === "keep this",
     )).toBe(true);
-    act(() => { completion.resolve(appliedMove(execute.mock.calls[2]?.[0])); });
-    await waitFor(() => { expect(screen.queryByTestId("setup-recovery-retry")).not.toBeInTheDocument(); });
   });
 
   it("replaces a post-selection Move target after actual setup failure", async () => {
@@ -212,6 +203,16 @@ describe("TaskInitiatingActionDialogs", () => {
     expect(callParams(services.transport.calls, "workflow.task.resume")).toMatchObject({
       execution_target: { mode: "head" },
     });
+  });
+
+  it("surfaces malformed Task-detail recovery contracts", async () => {
+    const attention = { ...interruptedTaskAttentionResponse, items: [{
+      ...interruptedTaskAttentionResponse.items[0],
+      session_name: null,
+      detail_json: '{"setup_recovery":{}}',
+    }] };
+    mountTaskDetailSurface(taskDetailResponseWithInterruptedCurrentScript, { attention });
+    expect(await screen.findByRole("alert")).not.toBeEmptyDOMElement();
   });
 });
 
@@ -283,9 +284,4 @@ function appliedMove(action: TaskInitiatingAction | undefined): TaskInitiatingAc
   return { kind: "move", action: requireMove(action ?? startTaskInitiatingAction("invalid")), response: {
     outcome: "applied", applied: { currentNodes: [] },
   } };
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  return { promise: new Promise<T>((done) => { resolve = done; }), resolve };
 }

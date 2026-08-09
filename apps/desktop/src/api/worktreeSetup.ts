@@ -105,18 +105,26 @@ const taskSetupRecoverySchema: z.ZodType<TaskSetupRecovery> = z
     retainedWorktree: value.retained_worktree,
     retainedPreviousWorktree: value.retained_previous_worktree,
   }));
+const taskSetupRecoveryEnvelopeSchema = z
+  .object({ setup_recovery: taskSetupRecoverySchema.optional() })
+  .loose();
 
 export function parseTaskSetupRecoveryDetail(detailJSON: string | null): TaskSetupRecovery | null {
   if (detailJSON === null) return null;
+  let detail: unknown;
   try {
-    const envelope = z
-      .object({ setup_recovery: taskSetupRecoverySchema.optional() })
-      .loose()
-      .parse(JSON.parse(detailJSON));
-    return envelope.setup_recovery ?? null;
+    detail = JSON.parse(detailJSON);
   } catch {
-    return null;
+    throw new ContractError("Task setup recovery detail was not valid JSON.");
   }
+  const parsed = taskSetupRecoveryEnvelopeSchema.safeParse(detail);
+  if (!parsed.success) {
+    throw new ContractError(
+      "Task setup recovery detail did not match GUI contract.",
+      parsed.error.issues.map((issue) => ({ code: issue.code, path: issue.path.map(String) })),
+    );
+  }
+  return parsed.data.setup_recovery ?? null;
 }
 
 type WorktreeSetupFailureKind =

@@ -990,7 +990,7 @@ type taskSetupAction struct {
 
 type taskSetupGuidance struct {
 	Success      bool
-	Diagnostic   string
+	Diagnostic   *string
 	ScriptPath   *string
 	RetainedRoot *string
 	Actions      []taskSetupAction
@@ -1005,7 +1005,8 @@ func projectTaskSetupGuidance(taskRef string, projectRef *string, terminal *serv
 	}
 	inspection := []taskSetupAction{{Kind: taskSetupActionInspect, Args: inspect}, {Kind: taskSetupActionListWorktrees, Args: []string{config.Command, "worktree", "list"}}}
 	if observationErr != nil {
-		return taskSetupGuidance{Diagnostic: observationErr.Error(), Actions: inspection}, nil
+		diagnostic, err := taskSetupDiagnostic(observationErr.Error())
+		return taskSetupGuidance{Diagnostic: diagnostic, Actions: inspection}, err
 	}
 	if terminal == nil {
 		return taskSetupGuidance{}, errors.New("Worktree Setup observation ended without a terminal result")
@@ -1018,7 +1019,11 @@ func projectTaskSetupGuidance(taskRef string, projectRef *string, terminal *serv
 		retained = terminal.NotRequired.RetainedPreviousWorktree
 	case serverapi.WorktreeSetupPhaseFailed:
 		failed := terminal.Failed
-		result := taskSetupGuidance{Diagnostic: failed.Diagnostic, ScriptPath: failed.ScriptPath}
+		diagnostic, err := taskSetupDiagnostic(failed.Diagnostic)
+		if err != nil {
+			return taskSetupGuidance{}, err
+		}
+		result := taskSetupGuidance{Diagnostic: diagnostic, ScriptPath: failed.ScriptPath}
 		if failed.RetainedWorktree != nil {
 			result.RetainedRoot = &failed.RetainedWorktree.Registered.Git.CanonicalRoot
 		}
@@ -1110,10 +1115,18 @@ func projectMoveSetupGuidance(base []string, target *serverapi.WorkflowExecution
 	}
 	root := setupErr.Worktree.Registered.Git.CanonicalRoot
 	script := setupErr.ScriptPath
-	return taskSetupGuidance{Diagnostic: setupErr.Diagnostic, ScriptPath: &script, RetainedRoot: &root, Actions: taskTargetActions(base, selector)}, nil
+	diagnostic := setupErr.Diagnostic
+	return taskSetupGuidance{Diagnostic: &diagnostic, ScriptPath: &script, RetainedRoot: &root, Actions: taskTargetActions(base, selector)}, nil
 }
 
 func taskSetupStringPointer(value string) *string { return &value }
+
+func taskSetupDiagnostic(value string) (*string, error) {
+	if strings.TrimSpace(value) == "" {
+		return nil, errors.New("Task setup diagnostic must not be blank")
+	}
+	return &value, nil
+}
 
 func taskExecutionTargetSelector(target serverapi.WorkflowExecutionTargetSelection) (string, error) {
 	switch target.Mode {
@@ -1242,8 +1255,8 @@ func renderTaskSetupGuidance(stderr io.Writer, guidance taskSetupGuidance) {
 	if guidance.ScriptPath != nil {
 		fmt.Fprintln(stderr, *guidance.ScriptPath)
 	}
-	if guidance.Diagnostic != "" {
-		fmt.Fprintln(stderr, guidance.Diagnostic)
+	if guidance.Diagnostic != nil {
+		fmt.Fprintln(stderr, *guidance.Diagnostic)
 	}
 	if guidance.RetainedRoot != nil {
 		fmt.Fprintf(stderr, "Retained Worktree: %s\n", *guidance.RetainedRoot)
