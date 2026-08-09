@@ -624,8 +624,9 @@ func TestServiceManualMoveRevalidatesTaskQuiescenceBeforeDurableApply(t *testing
 	if err != nil {
 		t.Fatalf("GetTaskExecutionTargetContext: %v", err)
 	}
-	if targetContext.Task.ExecutionTarget != nil {
-		t.Fatalf("rejected move locked execution target = %+v", targetContext.Task.ExecutionTarget)
+	if targetContext.Task.ExecutionTarget == nil ||
+		targetContext.Task.ExecutionTarget.Mode != workflow.ExecutionTargetModeNone {
+		t.Fatalf("rejected move execution target = %+v, want prepared target locked before durable apply", targetContext.Task.ExecutionTarget)
 	}
 	if len(execution.quiescentTaskIDs) != 1 {
 		t.Fatalf("quiescence checks = %v, want durable revalidation only", execution.quiescentTaskIDs)
@@ -927,7 +928,7 @@ func TestServiceTaskStartMaterializesConfiguredHeadBeforeLockingTarget(t *testin
 	}
 }
 
-func TestServiceTaskStartLocksRetainedTargetWhenSetupFails(t *testing.T) {
+func TestServiceTaskStartLeavesRetainedTargetUnlockedWhenSetupFails(t *testing.T) {
 	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
 	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
@@ -973,17 +974,61 @@ func TestServiceTaskStartLocksRetainedTargetWhenSetupFails(t *testing.T) {
 	if err != nil || response.Applied == nil {
 		t.Fatalf("StartWorkflowTask = %+v, %v; want applied placement", response, err)
 	}
-	if err := (<-preparations)(ctx); !errors.Is(err, setupErr) {
+	if err := (<-preparations).Prepare(ctx); !errors.Is(err, setupErr) {
 		t.Fatalf("asynchronous preparation error = %v, want setup failure", err)
 	}
 	targetContext, err := service.store.GetTaskExecutionTargetContext(ctx, workflow.TaskID(task.Task.ID))
 	if err != nil {
 		t.Fatalf("GetTaskExecutionTargetContext: %v", err)
 	}
-	if targetContext.Task.ExecutionTarget == nil ||
-		targetContext.Task.ExecutionTarget.Mode != workflow.ExecutionTargetModeHead ||
+	if targetContext.Task.ExecutionTarget != nil ||
 		targetContext.Task.ManagedWorktreeID != worktreeID {
-		t.Fatalf("execution target = %+v, worktree = %q; want retained locked target", targetContext.Task.ExecutionTarget, targetContext.Task.ManagedWorktreeID)
+		t.Fatalf("execution target = %+v, worktree = %q; want retained unlocked target", targetContext.Task.ExecutionTarget, targetContext.Task.ManagedWorktreeID)
+	}
+}
+
+func TestTaskSetupObservationPublishesRetryReadyFailureOnlyAfterFinalization(t *testing.T) {
+	setupOperationID := serverapi.NewWorktreeSetupOperationID()
+	recorder := &workflowTaskSetupEventRecorder{}
+	observation, err := newTaskSetupObservation(setupOperationID, recorder)
+	if err != nil {
+		t.Fatalf("newTaskSetupObservation: %v", err)
+	}
+	preparationErr := taskPreparationError(
+		setupOperationID,
+		initiatingActionTargetPreflight{
+			selection: workflow.ExecutionTargetSelection{Mode: workflow.ExecutionTargetModeNone},
+			explicit:  true,
+		},
+		nil,
+		nil,
+		nil,
+		errors.New("target preparation failed"),
+	)
+	observation.record(nil, nil, nil, preparationErr)
+	if events := recorder.recordedEvents(); len(events) != 0 {
+		t.Fatalf("setup events before preparation finalization = %+v, want none", events)
+	}
+
+	observation.finalize(workflowexecution.TaskPreparationFinalization{
+		Kind:  workflowexecution.TaskPreparationFailed,
+		Cause: preparationErr,
+	})
+	events := recorder.recordedEvents()
+	if len(events) != 1 {
+		t.Fatalf("setup events after preparation finalization = %+v, want one", events)
+	}
+	event := events[0]
+	if err := event.Validate(); err != nil {
+		t.Fatalf("setup event validation: %v", err)
+	}
+	if event.Phase != serverapi.WorktreeSetupPhaseFailed ||
+		event.Failed == nil ||
+		event.Failed.RetryReadiness != serverapi.WorktreeSetupRetryReady ||
+		event.Failed.Cause.Kind != serverapi.WorktreeSetupFailureTargetPreparation ||
+		event.Failed.ExecutionTarget == nil ||
+		event.Failed.ExecutionTarget.Mode != serverapi.WorkflowExecutionTargetModeNone {
+		t.Fatalf("setup event = %+v, want retry-ready target preparation failure", event)
 	}
 }
 
@@ -1014,7 +1059,7 @@ func TestServiceTaskStartDefersConfiguredTargetResolutionFailure(t *testing.T) {
 		t.Fatalf("StartWorkflowTask = %+v, %v; want applied placement", response, err)
 	}
 	var resolutionErr *worktree.GitRevisionResolutionError
-	preparationErr := (<-preparations)(ctx)
+	preparationErr := (<-preparations).Prepare(ctx)
 	if !errors.As(preparationErr, &resolutionErr) {
 		t.Fatalf("asynchronous preparation error = %v, want revision failure", preparationErr)
 	}
@@ -1210,7 +1255,7 @@ func TestServiceTaskStartReturnsTypedErrorForInvalidExplicitCustomRef(t *testing
 		t.Fatalf("StartWorkflowTask = %+v, %v; want applied placement", response, err)
 	}
 	var resolutionErr *serverapi.WorkflowExecutionTargetResolutionError
-	if err := (<-preparations)(ctx); !errors.As(err, &resolutionErr) ||
+	if err := (<-preparations).Prepare(ctx); !errors.As(err, &resolutionErr) ||
 		resolutionErr.Code != serverapi.WorkflowExecutionTargetResolutionErrorInvalidRevision ||
 		resolutionErr.RequestedRef != customRef {
 		t.Fatalf("StartWorkflowTask error = %v, want typed invalid custom ref", err)
@@ -1690,6 +1735,23 @@ type workflowAttentionRecorder struct {
 	pending     []workflow.ApprovalID
 }
 
+type workflowTaskSetupEventRecorder struct {
+	mu     sync.Mutex
+	events []serverapi.WorktreeSetupEvent
+}
+
+func (r *workflowTaskSetupEventRecorder) PublishWorkflowTaskSetupEvent(event serverapi.WorktreeSetupEvent) {
+	r.mu.Lock()
+	r.events = append(r.events, event)
+	r.mu.Unlock()
+}
+
+func (r *workflowTaskSetupEventRecorder) recordedEvents() []serverapi.WorktreeSetupEvent {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]serverapi.WorktreeSetupEvent(nil), r.events...)
+}
+
 func (r *workflowAttentionRecorder) FinalizeTaskResolution(resolution workflowstore.TaskAttentionResolution) {
 	r.resolutions = append(r.resolutions, resolution)
 }
@@ -1718,8 +1780,9 @@ func (s *manualMoveExecutionStub) StartTask(
 	ctx context.Context,
 	taskID workflow.TaskID,
 	preparation workflowexecution.TaskStartPreparation,
+	finalizer workflowexecution.TaskPreparationFinalizer,
 ) (workflowstore.StartTaskResult, error) {
-	started, err := s.currentNodeCompletionExecutionStub.StartTask(ctx, taskID, preparation)
+	started, err := s.currentNodeCompletionExecutionStub.StartTask(ctx, taskID, preparation, finalizer)
 	if err == nil {
 		s.recordStarted(started.Mutation.Created)
 	}
@@ -2606,6 +2669,8 @@ func newWorkflowServiceTestServiceWithRoleResolver(t *testing.T, resolver workfl
 	if err != nil {
 		t.Fatalf("workflowsvc.New: %v", err)
 	}
+	service.executionTargets = &recordingExecutionTargetInfrastructure{}
+	service.setupEvents = &workflowTaskSetupEventRecorder{}
 	return service, binding, metadataStore
 }
 

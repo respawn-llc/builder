@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 
 	"core/server/sessionruntime"
 	"core/server/workflow"
@@ -26,7 +25,20 @@ const (
 
 var ErrManualMoveLifecycleConflict = errors.New("workflow task has a non-interruptible lifecycle conflict")
 
-type TaskStartPreparation func(context.Context) error
+type TaskStartPreparation struct {
+	Prepare func(context.Context) error
+	Commit  func(context.Context) error
+}
+
+func (p TaskStartPreparation) validate() error {
+	if p.Prepare == nil {
+		return errors.New("task preparation runner is required")
+	}
+	if p.Commit == nil {
+		return errors.New("task preparation commit is required")
+	}
+	return nil
+}
 
 func (c *CurrentNodeController) ManualMoveDisposition(taskID workflow.TaskID) (ManualMoveDisposition, error) {
 	if c == nil {
@@ -89,12 +101,16 @@ func (c *CurrentNodeController) StartTask(
 	ctx context.Context,
 	taskID workflow.TaskID,
 	preparation TaskStartPreparation,
+	finalizer TaskPreparationFinalizer,
 ) (workflowstore.StartTaskResult, error) {
 	if c == nil {
 		return workflowstore.StartTaskResult{}, errors.New("current node workflow controller is required")
 	}
-	if preparation == nil {
-		return workflowstore.StartTaskResult{}, errors.New("task start preparation is required")
+	if err := preparation.validate(); err != nil {
+		return workflowstore.StartTaskResult{}, err
+	}
+	if finalizer == nil {
+		return workflowstore.StartTaskResult{}, errors.New("task start preparation finalizer is required")
 	}
 	return RunMutation(ctx, c.permit, func(ctx context.Context) (workflowstore.StartTaskResult, error) {
 		c.mu.Lock()
@@ -115,11 +131,14 @@ func (c *CurrentNodeController) StartTask(
 		if err := c.ensureTaskAvailableLocked(taskID); err != nil {
 			return workflowstore.StartTaskResult{}, err
 		}
-		if err := c.queueExplicitStartLocked(currentNodeQueuedStart{
+		batch, err := newTaskPreparationBatch(c.workerContext, taskID, []currentNodeQueuedStart{{
 			reference:          started.Mutation.Created[0].Reference,
-			preparation:        preparation,
 			taskPromptDelivery: workflowruntime.TaskPromptDeliveryAssignment,
-		}); err != nil {
+		}}, preparation, finalizer)
+		if err != nil {
+			return workflowstore.StartTaskResult{}, err
+		}
+		if err := c.queueTaskPreparationBatchLocked(batch); err != nil {
 			return workflowstore.StartTaskResult{}, err
 		}
 		return started, nil
@@ -134,11 +153,15 @@ func (c *CurrentNodeController) ResumeTaskWithPreparation(
 	ctx context.Context,
 	taskID workflow.TaskID,
 	preparation TaskStartPreparation,
+	finalizer TaskPreparationFinalizer,
 ) ([]workflow.CurrentNode, error) {
-	if preparation == nil {
-		return nil, errors.New("task resume preparation is required")
+	if err := preparation.validate(); err != nil {
+		return nil, err
 	}
-	return c.resumeTask(ctx, taskID, preparation)
+	if finalizer == nil {
+		return nil, errors.New("task resume preparation finalizer is required")
+	}
+	return c.resumeTask(ctx, taskID, &preparation, finalizer)
 }
 
 type TaskResumeConflictError struct {
@@ -152,24 +175,14 @@ func (e *TaskResumeConflictError) Error() string {
 func (c *CurrentNodeController) resumeTask(
 	ctx context.Context,
 	taskID workflow.TaskID,
-	preparation TaskStartPreparation,
+	preparation *TaskStartPreparation,
+	finalizer ...TaskPreparationFinalizer,
 ) ([]workflow.CurrentNode, error) {
 	if c == nil {
 		return nil, errors.New("current node workflow controller is required")
 	}
-	if preparation != nil {
-		var once sync.Once
-		var preparationErr error
-		run := preparation
-		preparation = func(ctx context.Context) error {
-			once.Do(func() {
-				preparationErr = run(ctx)
-			})
-			return preparationErr
-		}
-	}
-	var resolution workflowstore.TaskAttentionResolution
 	resumed, err := RunMutation(ctx, c.permit, func(ctx context.Context) ([]workflow.CurrentNode, error) {
+		var resolution workflowstore.TaskAttentionResolution
 		c.mu.Lock()
 		if err := c.ensureTaskAvailableLocked(taskID); err != nil {
 			c.mu.Unlock()
@@ -183,14 +196,52 @@ func (c *CurrentNodeController) resumeTask(
 		if len(classifications) == 0 {
 			return nil, &TaskResumeConflictError{TaskID: taskID}
 		}
-		resumed := make([]workflow.CurrentNode, 0, len(classifications))
+		eligible := make([]workflow.CurrentNode, 0, len(classifications))
+		eligibleStarts := make([]currentNodeQueuedStart, 0, len(classifications))
 		var resumeErrs []error
+		seen := make(map[workflow.CurrentNodeReferenceKey]struct{}, len(classifications))
 		for _, classification := range classifications {
 			currentNode := classification.CurrentNode
 			if validationErr := classification.ValidationError(); validationErr != nil {
 				resumeErrs = append(resumeErrs, validationErr)
 				continue
 			}
+			key, keyErr := currentNode.Reference.Key()
+			if keyErr != nil {
+				resumeErrs = append(resumeErrs, keyErr)
+				continue
+			}
+			if _, duplicate := seen[key]; duplicate {
+				resumeErrs = append(resumeErrs, fmt.Errorf("resumable current node %v is duplicated", currentNode.Reference))
+				continue
+			}
+			seen[key] = struct{}{}
+			eligible = append(eligible, currentNode)
+			eligibleStarts = append(eligibleStarts, currentNodeQueuedStart{
+				reference:          currentNode.Reference,
+				taskPromptDelivery: workflowruntime.TaskPromptDeliveryResume,
+			})
+		}
+		c.mu.Lock()
+		if err := c.ensureTaskAvailableLocked(taskID); err != nil {
+			c.mu.Unlock()
+			return nil, errors.Join(errors.Join(resumeErrs...), err)
+		}
+		for _, start := range eligibleStarts {
+			key, _ := start.reference.Key()
+			if c.currentNodeOwnedLocked(key) {
+				c.mu.Unlock()
+				return nil, errors.Join(
+					errors.Join(resumeErrs...),
+					fmt.Errorf("current node %v cannot resume while controller ownership remains: %w", start.reference, ErrTaskExecutionNotQuiescent),
+				)
+			}
+		}
+		c.mu.Unlock()
+
+		resumed := make([]workflow.CurrentNode, 0, len(eligible))
+		starts := make([]currentNodeQueuedStart, 0, len(eligible))
+		for index, currentNode := range eligible {
 			projection, found, err := c.store.ResumeCurrentNode(ctx, currentNode.Reference)
 			if err != nil {
 				resumeErrs = append(resumeErrs, fmt.Errorf("resume current node %v: %w", currentNode.Reference, err))
@@ -199,22 +250,29 @@ func (c *CurrentNodeController) resumeTask(
 			if found {
 				resolution.InterruptedCurrentNodes = append(resolution.InterruptedCurrentNodes, projection)
 			}
-			c.mu.Lock()
-			queueErr := c.queueExplicitStartLocked(currentNodeQueuedStart{
-				reference:          currentNode.Reference,
-				preparation:        preparation,
-				taskPromptDelivery: workflowruntime.TaskPromptDeliveryResume,
-			})
-			c.mu.Unlock()
-			if queueErr != nil {
-				resumeErrs = append(resumeErrs, fmt.Errorf("queue resumed current node %v: %w", currentNode.Reference, queueErr))
-				continue
-			}
+			starts = append(starts, eligibleStarts[index])
 			resumed = append(resumed, currentNode)
 		}
+		c.finalizeTaskAttentionResolution(resolution)
+		c.mu.Lock()
+		if preparation == nil {
+			for _, start := range starts {
+				if queueErr := c.queueExplicitStartLocked(start); queueErr != nil {
+					resumeErrs = append(resumeErrs, fmt.Errorf("queue resumed current node %v: %w", start.reference, queueErr))
+				}
+			}
+		} else if len(starts) > 0 {
+			batch, batchErr := newTaskPreparationBatch(c.workerContext, taskID, starts, *preparation, finalizer[0])
+			if batchErr == nil {
+				batchErr = c.queueTaskPreparationBatchLocked(batch)
+			}
+			if batchErr != nil {
+				resumeErrs = append(resumeErrs, batchErr)
+			}
+		}
+		c.mu.Unlock()
 		return resumed, errors.Join(resumeErrs...)
 	})
-	c.finalizeTaskAttentionResolution(resolution)
 	return resumed, err
 }
 
@@ -410,6 +468,9 @@ func (c *CurrentNodeController) taskQuiescentLocked(taskID workflow.TaskID) (boo
 
 func (c *CurrentNodeController) taskExecutionQuiescentLocked(taskID workflow.TaskID) bool {
 	if c.interrupts.taskActive(taskID) {
+		return false
+	}
+	if c.queuedTaskPreparationLocked(taskID) != nil || c.runningTaskPreparationLocked(taskID) != nil {
 		return false
 	}
 	for _, gate := range c.gates {

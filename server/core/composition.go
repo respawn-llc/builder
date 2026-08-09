@@ -350,7 +350,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		Activity:         workflowActivity,
 		Attention:        workflowAttention,
 		Approvals:        approvalService,
-	}, workflowRoleResolver, workflowMutationPermit, workflowsvc.WithExecutionTargetInfrastructure(taskExecutionTargetInfrastructure{service: worktreeService, git: gitInspector}), workflowsvc.WithTaskWorktreeDeleter(taskWorktreeDeleter{service: worktreeService}), workflowsvc.WithCurrentNodeExecution(workflowController), workflowsvc.WithWorkflowAttentionFinalizer(workflowAttentionFinalizer))
+	}, workflowRoleResolver, workflowMutationPermit, workflowsvc.WithExecutionTargetInfrastructure(taskExecutionTargetInfrastructure{service: worktreeService, git: gitInspector}), workflowsvc.WithTaskWorktreeDeleter(taskWorktreeDeleter{service: worktreeService}), workflowsvc.WithCurrentNodeExecution(workflowController), workflowsvc.WithWorkflowAttentionFinalizer(workflowAttentionFinalizer), workflowsvc.WithWorkflowTaskSetupEventPublisher(worktreeService))
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: service: %w", err)
@@ -484,7 +484,16 @@ func (i taskExecutionTargetInfrastructure) MaterializeExecutionTarget(ctx contex
 		}
 		return workflowsvc.ExecutionTargetMaterialization{}, err
 	}
-	return workflowsvc.ExecutionTargetMaterialization{RetainedRoot: prepared.Root.Managed}, err
+	var retainedWorktree *serverapi.WorktreeTopologyEntry
+	if prepared.Materialization != nil {
+		retainedWorktree = &prepared.Materialization.Worktree
+	}
+	return workflowsvc.ExecutionTargetMaterialization{
+		RetainedRoot:             prepared.Root.Managed,
+		SetupResult:              prepared.SetupResult,
+		RetainedWorktree:         retainedWorktree,
+		RetainedPreviousWorktree: prepared.RetainedPreviousWorktree,
+	}, err
 }
 
 func (i taskExecutionTargetInfrastructure) RestoreExecutionTarget(ctx context.Context, req workflowsvc.ExecutionTargetRestoreRequest) error {

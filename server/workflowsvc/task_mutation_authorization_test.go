@@ -452,6 +452,7 @@ func (s *taskMutationAuthorizationExecutionStub) ResumeTaskWithPreparation(
 	_ context.Context,
 	taskID workflow.TaskID,
 	_ workflowexecution.TaskStartPreparation,
+	_ workflowexecution.TaskPreparationFinalizer,
 ) ([]workflow.CurrentNode, error) {
 	return s.ResumeTask(context.Background(), taskID)
 }

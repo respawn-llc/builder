@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -59,7 +60,7 @@ func TestCurrentNodeControllerRegistersGateBeforeRunnerAndReleasesLeaseAfterLive
 	}()
 	<-runner.entered
 
-	snapshot := controller.Snapshot()
+	snapshot := currentNodeControllerSnapshotForTest(controller)
 	if len(snapshot.Gates) != 1 || !snapshot.Gates[0].CurrentNode.Equal(reference) {
 		t.Fatalf("gate snapshot = %+v, want admitted gate for %v", snapshot.Gates, reference)
 	}
@@ -86,7 +87,7 @@ func TestCurrentNodeControllerRegistersGateBeforeRunnerAndReleasesLeaseAfterLive
 	if _, err := os.Stat(outputPath); err != nil {
 		t.Fatalf("script did not start after controller released lease: %v", err)
 	}
-	snapshot = controller.Snapshot()
+	snapshot = currentNodeControllerSnapshotForTest(controller)
 	if len(snapshot.Gates) != 0 || len(snapshot.LiveScopes) != 0 {
 		t.Fatalf("post-retirement snapshot = %+v, want no gate or live scope", snapshot)
 	}
@@ -229,10 +230,15 @@ func TestCurrentNodeControllerPassesResumePromptDeliveryToRunner(t *testing.T) {
 	})
 
 	prepared := make(chan struct{}, 1)
-	resumed, err := controller.ResumeTaskWithPreparation(context.Background(), reference.TaskID, func(context.Context) error {
-		prepared <- struct{}{}
-		return nil
-	})
+	resumed, err := controller.ResumeTaskWithPreparation(
+		context.Background(),
+		reference.TaskID,
+		testTaskPreparation(func(context.Context) error {
+			prepared <- struct{}{}
+			return nil
+		}),
+		noOpTaskPreparationFinalizer,
+	)
 	if err != nil {
 		t.Fatalf("ResumeTask: %v", err)
 	}
@@ -302,7 +308,7 @@ func TestCurrentNodeControllerBoundsExplicitAdmissionSetupWithoutBlockingSibling
 		}
 	}
 	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		snapshot := controller.Snapshot()
+		snapshot := currentNodeControllerSnapshotForTest(controller)
 		return len(snapshot.Gates) == explicitAdmissionConcurrency &&
 			len(snapshot.ExplicitStarts) == branchCount-explicitAdmissionConcurrency
 	}, "explicit admission setup did not stop at the bounded capacity")
@@ -314,7 +320,7 @@ func TestCurrentNodeControllerBoundsExplicitAdmissionSetupWithoutBlockingSibling
 		t.Fatal("releasing explicit admission capacity did not admit a queued sibling")
 	}
 	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		snapshot := controller.Snapshot()
+		snapshot := currentNodeControllerSnapshotForTest(controller)
 		return len(snapshot.Gates) == explicitAdmissionConcurrency &&
 			len(snapshot.ExplicitStarts) == branchCount-explicitAdmissionConcurrency-1
 	}, "queued explicit sibling did not replace released setup capacity")
@@ -376,7 +382,7 @@ func TestCurrentNodeControllerReservesAutomaticCapacityBeforeLaunchingAdmission(
 
 	releaseRunner()
 	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		return hasLiveCurrentNode(controller.Snapshot(), first)
+		return hasLiveCurrentNode(currentNodeControllerSnapshotForTest(controller), first)
 	}, "first automatic current node did not become live")
 	firstHandle, ok := authority.ExecutionByScope(singleLiveScope(t, controller, first))
 	if !ok {
@@ -465,11 +471,11 @@ func TestCurrentNodeControllerStartsScriptsWhileAgentCapacityIsSaturated(t *test
 		}
 	}
 	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		snapshot := controller.Snapshot()
+		snapshot := currentNodeControllerSnapshotForTest(controller)
 		return hasLiveCurrentNode(snapshot, firstScript) && hasLiveCurrentNode(snapshot, secondScript)
 	}, "both Script Nodes did not become live before Agent release")
-	if !hasAutomaticCurrentNodeIntent(controller.Snapshot(), queuedAgent) {
-		t.Fatalf("automatic queue = %+v, want queued Agent while scripts are live", controller.Snapshot().AutomaticIntents)
+	if !hasAutomaticCurrentNodeIntent(currentNodeControllerSnapshotForTest(controller), queuedAgent) {
+		t.Fatalf("automatic queue = %+v, want queued Agent while scripts are live", currentNodeControllerSnapshotForTest(controller).AutomaticIntents)
 	}
 
 	agentHandle, ok := authority.ExecutionByScope(singleLiveScope(t, controller, agent))
@@ -549,7 +555,7 @@ func TestCurrentNodeControllerCloseBroadcastsScriptStopsBeforeJoining(t *testing
 		waitForRunningCurrentNode(t, authority, reference)
 	}
 	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		snapshot := controller.Snapshot()
+		snapshot := currentNodeControllerSnapshotForTest(controller)
 		for _, reference := range references {
 			if !hasLiveCurrentNode(snapshot, reference) {
 				return false
@@ -611,7 +617,12 @@ func TestCurrentNodeControllerStartTaskPublishesAdmissionOwnershipBeforeDeleteCa
 
 	startDone := make(chan error, 1)
 	go func() {
-		_, err := controller.StartTask(context.Background(), taskID, func(context.Context) error { return nil })
+		_, err := controller.StartTask(
+			context.Background(),
+			taskID,
+			testTaskPreparation(func(context.Context) error { return nil }),
+			noOpTaskPreparationFinalizer,
+		)
 		startDone <- err
 	}()
 	select {
@@ -679,18 +690,30 @@ func TestCurrentNodeControllerStartTaskReturnsBeforePreparation(t *testing.T) {
 	})
 	preparationStarted := make(chan struct{})
 	preparationRelease := make(chan struct{})
+	preparationCommitted := make(chan struct{})
 
 	started := make(chan error, 1)
 	go func() {
-		_, err := controller.StartTask(context.Background(), reference.TaskID, func(ctx context.Context) error {
-			close(preparationStarted)
-			select {
-			case <-preparationRelease:
-				return nil
-			case <-ctx.Done():
-				return context.Cause(ctx)
-			}
-		})
+		_, err := controller.StartTask(
+			context.Background(),
+			reference.TaskID,
+			TaskStartPreparation{
+				Prepare: func(ctx context.Context) error {
+					close(preparationStarted)
+					select {
+					case <-preparationRelease:
+						return nil
+					case <-ctx.Done():
+						return context.Cause(ctx)
+					}
+				},
+				Commit: func(context.Context) error {
+					close(preparationCommitted)
+					return nil
+				},
+			},
+			noOpTaskPreparationFinalizer,
+		)
 		started <- err
 	}()
 	select {
@@ -714,7 +737,13 @@ func TestCurrentNodeControllerStartTaskReturnsBeforePreparation(t *testing.T) {
 	case <-time.After(250 * time.Millisecond):
 		t.Fatal("preparation blocked unrelated workflow mutations")
 	}
+	select {
+	case <-runner.entered:
+		t.Fatal("Current Node admission began before preparation commit")
+	default:
+	}
 	close(preparationRelease)
+	<-preparationCommitted
 	<-runner.entered
 	close(runner.release)
 }
@@ -729,16 +758,23 @@ func TestCurrentNodeControllerPreparationFailureInterruptsPlacedNode(t *testing.
 	}}}
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 	runner := &countingCurrentNodeRunner{}
-	controller := newCurrentNodeControllerForTest(t, store, runner, authority, 1)
+	attention := &currentNodeAttentionRecorder{}
+	controller := newCurrentNodeControllerWithAttentionForTest(t, store, runner, authority, 1, attention)
 	t.Cleanup(func() {
 		_ = controller.Close()
 		_ = authority.Close(context.Background())
 	})
 	cause := errors.New("worktree setup failed")
+	finalized := make(chan TaskPreparationFinalization, 1)
 
-	if _, err := controller.StartTask(context.Background(), reference.TaskID, func(context.Context) error {
-		return cause
-	}); err != nil {
+	if _, err := controller.StartTask(
+		context.Background(),
+		reference.TaskID,
+		testTaskPreparation(func(context.Context) error { return cause }),
+		func(finalization TaskPreparationFinalization) {
+			finalized <- finalization
+		},
+	); err != nil {
 		t.Fatalf("StartTask: %v", err)
 	}
 	deadline := time.Now().Add(3 * time.Second)
@@ -757,6 +793,135 @@ func TestCurrentNodeControllerPreparationFailureInterruptsPlacedNode(t *testing.
 	}
 	if runner.starts() != 0 {
 		t.Fatalf("runner starts = %d, want none", runner.starts())
+	}
+	select {
+	case finalization := <-finalized:
+		if finalization.Kind != TaskPreparationFailed || !errors.Is(finalization.Cause, cause) {
+			t.Fatalf("preparation finalization = %+v, want failed cause", finalization)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("preparation failure did not finalize")
+	}
+	if attention.pendingCount() != 1 {
+		t.Fatalf("pending interruption attention = %d, want one before retry", attention.pendingCount())
+	}
+	controller.mu.Lock()
+	ownedPreparations := len(controller.preparationQueue) + len(controller.preparationRunning)
+	controller.mu.Unlock()
+	if ownedPreparations != 0 {
+		t.Fatalf("failed preparation retained %d batch owners after attention", ownedPreparations)
+	}
+}
+
+func TestCurrentNodeControllerResumeSharesPreparationAndRetiresBeforeRetry(t *testing.T) {
+	canonical := currentNodeReferenceForControllerTest(t, "task-resume-preparation", "node-a")
+	sibling := currentNodeReferenceForControllerTest(t, "task-resume-preparation", "node-b")
+	store := &currentNodeControllerStore{interrupted: []workflow.CurrentNode{
+		{
+			Reference:  sibling,
+			Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingInterrupted},
+		},
+		{
+			Reference:  canonical,
+			Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingInterrupted},
+		},
+	}}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	runner := &countingCurrentNodeRunner{}
+	attention := &currentNodeAttentionRecorder{}
+	controller := newCurrentNodeControllerWithAttentionForTest(t, store, runner, authority, 2, attention)
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+
+	cause := NewTaskStartPreparationError(
+		errors.New("worktree setup failed"),
+		workflow.NewCurrentNodeInterruptionDetail("canonical_setup_failure", errors.New("worktree setup failed")),
+	)
+	var prepareCalls atomic.Int32
+	var commitCalls atomic.Int32
+	failed := make(chan TaskPreparationFinalization, 1)
+	resumed, err := controller.ResumeTaskWithPreparation(
+		context.Background(),
+		canonical.TaskID,
+		TaskStartPreparation{
+			Prepare: func(context.Context) error {
+				prepareCalls.Add(1)
+				return cause
+			},
+			Commit: func(context.Context) error {
+				commitCalls.Add(1)
+				return nil
+			},
+		},
+		func(finalization TaskPreparationFinalization) {
+			failed <- finalization
+		},
+	)
+	if err != nil {
+		t.Fatalf("ResumeTaskWithPreparation: %v", err)
+	}
+	if len(resumed) != 2 {
+		t.Fatalf("resumed Current Nodes = %+v, want complete two-node batch", resumed)
+	}
+	select {
+	case finalization := <-failed:
+		if finalization.Kind != TaskPreparationFailed || !errors.Is(finalization.Cause, cause) {
+			t.Fatalf("preparation finalization = %+v, want failed cause", finalization)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("shared preparation did not finalize")
+	}
+	if prepareCalls.Load() != 1 || commitCalls.Load() != 0 {
+		t.Fatalf("preparation calls = %d prepare, %d commit; want one shared failed prepare", prepareCalls.Load(), commitCalls.Load())
+	}
+	if interruption, ok := store.interruption(canonical); !ok || interruption.detail.Code != "canonical_setup_failure" {
+		t.Fatalf("canonical interruption = %+v, present = %t", interruption, ok)
+	}
+	if interruption, ok := store.interruption(sibling); !ok || interruption.detail.Code != string(reasonCurrentNodeRuntimeStartFailed) {
+		t.Fatalf("sibling interruption = %+v, present = %t", interruption, ok)
+	}
+	if attention.pendingCount() != 2 {
+		t.Fatalf("pending interruption attention = %d, want complete batch before retry", attention.pendingCount())
+	}
+
+	retryPrepared := make(chan struct{})
+	retryFinalized := make(chan TaskPreparationFinalization, 1)
+	if _, err := controller.ResumeTaskWithPreparation(
+		context.Background(),
+		canonical.TaskID,
+		TaskStartPreparation{
+			Prepare: func(context.Context) error {
+				close(retryPrepared)
+				return nil
+			},
+			Commit: func(context.Context) error {
+				commitCalls.Add(1)
+				return nil
+			},
+		},
+		func(finalization TaskPreparationFinalization) {
+			retryFinalized <- finalization
+		},
+	); err != nil {
+		t.Fatalf("immediate retry ResumeTaskWithPreparation: %v", err)
+	}
+	select {
+	case <-retryPrepared:
+	case <-time.After(3 * time.Second):
+		t.Fatal("immediate retry did not register a new preparation")
+	}
+	select {
+	case finalization := <-retryFinalized:
+		if finalization.Kind != TaskPreparationHandedOff {
+			t.Fatalf("retry finalization = %+v, want handed off", finalization)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("retry preparation did not hand off")
+	}
+	if commitCalls.Load() != 1 {
+		t.Fatalf("retry commits = %d, want one shared commit", commitCalls.Load())
 	}
 }
 
@@ -793,8 +958,8 @@ func TestCurrentNodeControllerReservationBlocksTaskQuiescence(t *testing.T) {
 	if quiescence[reference.TaskID] || !quiescence[otherTaskID] {
 		t.Fatalf("task quiescence = %+v, want reserved Task false and unrelated Task true", quiescence)
 	}
-	if !hasAutomaticCurrentNodeIntent(controller.Snapshot(), reference) {
-		t.Fatalf("reservation is absent from immutable live snapshot: %+v", controller.Snapshot())
+	if !hasAutomaticCurrentNodeIntent(currentNodeControllerSnapshotForTest(controller), reference) {
+		t.Fatalf("reservation is absent from immutable live snapshot: %+v", currentNodeControllerSnapshotForTest(controller))
 	}
 }
 
