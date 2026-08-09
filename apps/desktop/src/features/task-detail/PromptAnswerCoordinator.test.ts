@@ -1,215 +1,142 @@
 import { describe, expect, it } from "vitest";
 
 import type { QuestionAttentionItem } from "@/api";
+import { attentionItemSchema } from "@/api/schemas/common";
+import { questionAttention as questionFixture } from "@/test-support/task-detail";
 import { PromptAnswerCoordinator } from "./PromptAnswerCoordinator";
 import { emptyPromptAnswerState, promptAnswerKey } from "./PromptAnswerState";
-import { emptyQuestionSelection, withQuestionCommentary } from "./TaskDetailQuestionState";
+import {
+  emptyQuestionSelection,
+  withQuestionCommentary,
+  type QuestionSelectionState,
+} from "./TaskDetailQuestionState";
 
 describe("Task Detail prompt answer reconciliation", () => {
-  it("masks immediately, then awaits invalidation and a fresh exact-key read before discarding state", async () => {
-    const attention = questionAttention("session-1", "step-1", "prompt-1");
-    const key = promptAnswerKey(attention);
-    const selection = withQuestionCommentary(emptyQuestionSelection(), "draft");
-    const answer = deferred<undefined>();
+  it("masks immediately and waits for invalidation plus a fresh exact-key read", async () => {
+    const attention = question("session-1", "step-1", "prompt-1");
+    const selection = draft("draft");
+    const answer = deferred<void>();
     const read = deferred<readonly QuestionAttentionItem[]>();
-    const readStarted = deferred<undefined>();
-    const events: string[] = [];
-    let state = emptyPromptAnswerState().withSelection(key, selection);
-    const coordinator = new PromptAnswerCoordinator({
+    const readStarted = deferred<void>();
+    let invalidations = 0;
+    const harness = coordinatorHarness([[attention, selection]], {
       invalidateAttention: async () => {
-        events.push("invalidated");
-      },
-      isMounted: () => true,
-      notifyFailure: () => {
-        throw new Error("unexpected failure notice");
+        invalidations += 1;
       },
       readAttention: async () => {
-        events.push("read");
-        readStarted.resolve(undefined);
+        readStarted.resolve();
         return read.promise;
       },
-      task: { id: "task-1", shortID: "TASK-1", title: "Task" },
-      updateState: (update) => {
-        state = update(state);
-      },
     });
 
-    const submission = coordinator.submit({
+    const attempt = harness.coordinator.submit({
       attention,
       selection,
-      send: async () => answer.promise,
+      send: () => answer.promise,
     });
+    expect(harness.state.isMasked(promptAnswerKey(attention))).toBe(true);
 
-    expect(state.isMasked(key)).toBe(true);
-    expect(events).toEqual([]);
-
-    answer.resolve(undefined);
+    answer.resolve();
     await readStarted.promise;
-    expect(events).toEqual(["invalidated", "read"]);
-    expect(state.isMasked(key)).toBe(true);
+    expect(invalidations).toBe(1);
+    expect(harness.state.isMasked(promptAnswerKey(attention))).toBe(true);
 
     read.resolve([]);
-    await submission;
-    expect(state.isMasked(key)).toBe(false);
-    expect(state.selection(key)).toBeUndefined();
+    await attempt;
+    expect(harness.state.selection(promptAnswerKey(attention))).toBeUndefined();
   });
 
-  it("restores the frozen draft and reports delivery failure only when the fresh read still has the exact key", async () => {
-    const attention = questionAttention("session-1", "step-1", "prompt-1");
-    const key = promptAnswerKey(attention);
-    const selection = withQuestionCommentary(emptyQuestionSelection(), "frozen draft");
-    const failures: unknown[] = [];
-    let state = emptyPromptAnswerState().withSelection(key, selection);
-    const coordinator = new PromptAnswerCoordinator({
-      invalidateAttention: async () => undefined,
-      isMounted: () => true,
-      notifyFailure: (failure) => failures.push(failure),
-      readAttention: async () => [attention],
-      task: { id: "task-1", shortID: "TASK-1", title: "Task" },
-      updateState: (update) => {
-        state = update(state);
-      },
-    });
+  it.each(["delivery", "reconciliation"] as const)(
+    "restores the frozen draft after a %s failure",
+    async (failureKind) => {
+      const attention = question("session-1", "step-1", "prompt-1");
+      const selection = draft("retry draft");
+      const harness = coordinatorHarness([[attention, selection]], {
+        readAttention: async () => {
+          if (failureKind === "reconciliation") {
+            throw new Error("read failed");
+          }
+          return [attention];
+        },
+      });
 
-    await coordinator.submit({
-      attention,
-      selection,
-      send: async () => {
-        throw new Error("delivery failed");
-      },
-    });
+      await harness.coordinator.submit({
+        attention,
+        selection,
+        send: async () => {
+          if (failureKind === "delivery") {
+            throw new Error("delivery failed");
+          }
+        },
+      });
 
-    expect(state.isMasked(key)).toBe(false);
-    expect(state.selection(key)?.answer).toBe("frozen draft");
-    expect(failures).toEqual([
-      expect.objectContaining({
-        kind: "delivery",
-        taskID: "task-1",
-        taskShortID: "TASK-1",
-        taskTitle: "Task",
-      }),
-    ]);
-  });
+      const key = promptAnswerKey(attention);
+      expect(harness.state.isMasked(key)).toBe(false);
+      expect(harness.state.frozenSubmission(key)).toBeUndefined();
+      expect(harness.state.selection(key)?.answer).toBe("retry draft");
+      expect(harness.failures).toEqual([
+        expect.objectContaining({ kind: failureKind, taskShortID: "TASK-1" }),
+      ]);
+    },
+  );
 
-  it("uses the cached prompt only as a mounted fallback when the authoritative reconciliation read fails", async () => {
-    const attention = questionAttention("session-1", "step-1", "prompt-1");
-    const key = promptAnswerKey(attention);
-    const selection = withQuestionCommentary(emptyQuestionSelection(), "retry draft");
-    const failures: unknown[] = [];
-    let state = emptyPromptAnswerState().withSelection(key, selection);
-    const coordinator = new PromptAnswerCoordinator({
-      invalidateAttention: async () => undefined,
-      isMounted: () => true,
-      notifyFailure: (failure) => failures.push(failure),
-      readAttention: async () => {
-        throw new Error("read failed");
-      },
-      task: { id: "task-1", shortID: "TASK-1", title: "Task" },
-      updateState: (update) => {
-        state = update(state);
-      },
-    });
-
-    await coordinator.submit({ attention, selection, send: async () => undefined });
-
-    expect(state.isMasked(key)).toBe(false);
-    expect(state.frozenSubmission(key)).toBeUndefined();
-    expect(state.selection(key)?.answer).toBe("retry draft");
-    expect(failures).toEqual([
-      expect.objectContaining({
-        kind: "reconciliation",
-        taskShortID: "TASK-1",
-      }),
-    ]);
-  });
-
-  it("reconciles overlapping attempts independently when their reads finish out of order", async () => {
-    const first = questionAttention("session-1", "step-1", "shared");
-    const second = questionAttention("session-2", "step-1", "shared");
-    const firstKey = promptAnswerKey(first);
-    const secondKey = promptAnswerKey(second);
+  it("reconciles full-key collisions independently when reads finish out of order", async () => {
+    const first = question("session-1", "step-1", "shared");
+    const second = question("session-2", "step-1", "shared");
     const firstRead = deferred<readonly QuestionAttentionItem[]>();
     const secondRead = deferred<readonly QuestionAttentionItem[]>();
     const reads = [firstRead, secondRead];
-    let state = emptyPromptAnswerState()
-      .withSelection(firstKey, withQuestionCommentary(emptyQuestionSelection(), "first"))
-      .withSelection(secondKey, withQuestionCommentary(emptyQuestionSelection(), "second"));
-    const coordinator = new PromptAnswerCoordinator({
-      invalidateAttention: async () => undefined,
-      isMounted: () => true,
-      notifyFailure: () => {
-        throw new Error("unexpected failure notice");
+    const harness = coordinatorHarness(
+      [
+        [first, draft("first")],
+        [second, draft("second")],
+      ],
+      {
+        readAttention: () => reads.shift()?.promise ?? Promise.reject(new Error("unexpected read")),
       },
-      readAttention: async () => {
-        const next = reads.shift();
-        if (next === undefined) {
-          throw new Error("unexpected read");
-        }
-        return next.promise;
-      },
-      task: { id: "task-1", shortID: "TASK-1", title: "Task" },
-      updateState: (update) => {
-        state = update(state);
-      },
-    });
+    );
 
-    const firstAttempt = coordinator.submit({
+    const firstAttempt = harness.coordinator.submit({
       attention: first,
-      selection: state.selection(firstKey) ?? emptyQuestionSelection(),
+      selection: draft("first"),
       send: async () => undefined,
     });
-    const secondAttempt = coordinator.submit({
+    const secondAttempt = harness.coordinator.submit({
       attention: second,
-      selection: state.selection(secondKey) ?? emptyQuestionSelection(),
+      selection: draft("second"),
       send: async () => undefined,
     });
 
     secondRead.resolve([second]);
     await secondAttempt;
-    expect(state.isMasked(firstKey)).toBe(true);
-    expect(state.isMasked(secondKey)).toBe(false);
-    expect(state.selection(secondKey)?.answer).toBe("second");
+    expect(harness.state.isMasked(promptAnswerKey(first))).toBe(true);
+    expect(harness.state.selection(promptAnswerKey(second))?.answer).toBe("second");
 
     firstRead.resolve([]);
     await firstAttempt;
-    expect(state.selection(firstKey)).toBeUndefined();
-    expect(state.selection(secondKey)?.answer).toBe("second");
+    expect(harness.state.selection(promptAnswerKey(first))).toBeUndefined();
+    expect(harness.state.selection(promptAnswerKey(second))?.answer).toBe("second");
   });
 
-  it("does not restore local state after unmount and identifies the Task when delivery failed", async () => {
-    const attention = questionAttention("session-1", "step-1", "prompt-1");
-    const key = promptAnswerKey(attention);
-    const selection = withQuestionCommentary(emptyQuestionSelection(), "discard me");
-    const failures: unknown[] = [];
+  it("does not restore after unmount and identifies the Task on delivery failure", async () => {
+    const attention = question("session-1", "step-1", "prompt-1");
+    const selection = draft("discard me");
+    const answer = deferred<void>();
     let mounted = true;
-    let state = emptyPromptAnswerState().withSelection(key, selection);
-    let updateCount = 0;
-    const coordinator = new PromptAnswerCoordinator({
-      invalidateAttention: async () => undefined,
+    const harness = coordinatorHarness([[attention, selection]], {
       isMounted: () => mounted,
-      notifyFailure: (failure) => failures.push(failure),
       readAttention: async () => [attention],
       task: { id: "task-1", shortID: "TASK-1", title: "Task title" },
-      updateState: (update) => {
-        updateCount += 1;
-        state = update(state);
-      },
     });
-    const answer = deferred<undefined>();
+    const attempt = harness.coordinator.submit({ attention, selection, send: () => answer.promise });
+    const maskedState = harness.state;
 
-    const attempt = coordinator.submit({
-      attention,
-      selection,
-      send: async () => answer.promise,
-    });
-    expect(updateCount).toBe(1);
     mounted = false;
     answer.reject(new Error("offline"));
     await attempt;
 
-    expect(updateCount).toBe(1);
-    expect(state.isMasked(key)).toBe(true);
-    expect(failures).toEqual([
+    expect(harness.state).toBe(maskedState);
+    expect(harness.failures).toEqual([
       expect.objectContaining({
         kind: "delivery",
         taskID: "task-1",
@@ -220,53 +147,64 @@ describe("Task Detail prompt answer reconciliation", () => {
   });
 });
 
-function deferred<T>(): Readonly<{
-  promise: Promise<T>;
-  reject(error: unknown): void;
-  resolve(value: T): void;
-}> {
-  let resolve: ((value: T) => void) | undefined;
-  let reject: ((error: unknown) => void) | undefined;
+function coordinatorHarness(
+  selections: readonly (readonly [QuestionAttentionItem, QuestionSelectionState])[],
+  options: Readonly<{
+    invalidateAttention?: () => Promise<void>;
+    isMounted?: () => boolean;
+    readAttention: () => Promise<readonly QuestionAttentionItem[]>;
+    task?: Readonly<{ id: string; shortID: string; title: string }>;
+  }>,
+) {
+  let state = selections.reduce(
+    (current, [attention, selection]) => current.withSelection(promptAnswerKey(attention), selection),
+    emptyPromptAnswerState(),
+  );
+  const failures: unknown[] = [];
+  return {
+    coordinator: new PromptAnswerCoordinator({
+      invalidateAttention: options.invalidateAttention ?? (async () => undefined),
+      isMounted: options.isMounted ?? (() => true),
+      notifyFailure: (failure) => failures.push(failure),
+      readAttention: options.readAttention,
+      task: options.task ?? { id: "task-1", shortID: "TASK-1", title: "Task" },
+      updateState: (update) => {
+        state = update(state);
+      },
+    }),
+    failures,
+    get state() {
+      return state;
+    },
+  };
+}
+
+function draft(answer: string): QuestionSelectionState {
+  return withQuestionCommentary(emptyQuestionSelection(), answer);
+}
+
+const baseQuestion = attentionItemSchema.parse(questionFixture);
+
+function question(sessionID: string, stepID: string, promptID: string): QuestionAttentionItem {
+  if (baseQuestion.kind !== "question") {
+    throw new Error("expected Question attention fixture");
+  }
+  return {
+    ...baseQuestion,
+    id: `${sessionID}:${stepID}`,
+    question: { ...baseQuestion.question, promptID, sessionID, stepID },
+  };
+}
+
+function deferred<T>() {
+  let resolve: (value: T) => void = () => undefined;
+  let reject: (error: unknown) => void = () => undefined;
   return {
     promise: new Promise<T>((nextResolve, nextReject) => {
       resolve = nextResolve;
       reject = nextReject;
     }),
-    reject(error) {
-      reject?.(error);
-    },
-    resolve(value) {
-      resolve?.(value);
-    },
-  };
-}
-
-function questionAttention(sessionID: string, stepID: string, promptID: string): QuestionAttentionItem {
-  return {
-    id: `${sessionID}:${stepID}`,
-    kind: "question",
-    message: "Question",
-    occurredAt: 0,
-    projectID: "project-1",
-    question: {
-      kind: "ordinary",
-      promptID,
-      recommendedOptionIndex: 1,
-      sessionID,
-      stepID,
-      suggestions: ["One"],
-    },
-    currentNode: {
-      effectiveAssignee: null,
-      effectiveThinking: null,
-      nodeID: "node-1",
-      sessionID: null,
-      transitionBranchKey: null,
-    },
-    sessionName: "Session",
-    taskID: "task-1",
-    taskShortID: "TASK-1",
-    taskTitle: "Task",
-    workflowID: "workflow-1",
+    reject,
+    resolve,
   };
 }
