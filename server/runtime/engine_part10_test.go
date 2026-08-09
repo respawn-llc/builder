@@ -333,6 +333,29 @@ func TestEnvironmentContextMessageFallsBackToProcessCWDWhenWorkspaceRootMissing(
 	}
 }
 
+func TestEnvironmentContextMessageAddsOnlyKnownModelKnowledgeCutoffRow(t *testing.T) {
+	workspace := t.TempDir()
+	now := time.Unix(0, 0).UTC()
+
+	known, err := environmentContextMessage(workspace, "gpt-5.3-codex", now)
+	if err != nil {
+		t.Fatalf("known environmentContextMessage: %v", err)
+	}
+	unknown, err := environmentContextMessage(workspace, "custom-alias", now)
+	if err != nil {
+		t.Fatalf("unknown environmentContextMessage: %v", err)
+	}
+
+	knownRows := strings.Split(known, "\n")
+	unknownRows := strings.Split(unknown, "\n")
+	if len(knownRows) != len(unknownRows)+1 {
+		t.Fatalf("known environment rows = %d, unknown rows = %d; want exactly one additional row", len(knownRows), len(unknownRows))
+	}
+	if knownRows[3] != unknownRows[2] {
+		t.Fatalf("known rows after cutoff shifted incorrectly: known=%q unknown=%q", knownRows[3], unknownRows[2])
+	}
+}
+
 func TestEnvironmentContextMessageRejectsEmptyModel(t *testing.T) {
 	t.Parallel()
 	workspace := t.TempDir()

@@ -4,10 +4,16 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
 	"core/server/session"
 	"core/shared/config"
 )
+
+type ModelKnowledgeCutoff struct {
+	Month time.Month
+	Year  int
+}
 
 // capability_registry.go is the single source of truth for built-in provider
 // contracts. Each provider contract owns its client wiring, transport variants,
@@ -17,6 +23,8 @@ type ModelCapabilityContract struct {
 	Model                     string
 	ContextWindowTokens       int
 	LargeContextWindowTokens  int
+	KnowledgeCutoff           ModelKnowledgeCutoff
+	HasKnowledgeCutoff        bool
 	SupportsReasoningEffort   bool
 	SupportedReasoningEfforts []string
 	SupportsReasoningSummary  bool
@@ -44,6 +52,14 @@ func LookupModelCapabilityContract(model string) (ModelCapabilityContract, bool)
 		return ModelCapabilityContract{}, false
 	}
 	return registration.Contract, true
+}
+
+func LookupModelKnowledgeCutoff(model string) (ModelKnowledgeCutoff, bool) {
+	contract, ok := LookupModelCapabilityContract(model)
+	if !ok || !contract.HasKnowledgeCutoff {
+		return ModelKnowledgeCutoff{}, false
+	}
+	return contract.KnowledgeCutoff, true
 }
 
 func KnownModelCapabilityContracts() []ModelCapabilityContract {
