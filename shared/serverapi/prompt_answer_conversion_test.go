@@ -1,6 +1,7 @@
 package serverapi
 
 import (
+	"reflect"
 	"testing"
 
 	"core/shared/clientui"
@@ -12,9 +13,9 @@ func TestPromptAnswerBatchEntryFromTypedAnswer(t *testing.T) {
 	freeform := "details"
 	commentary := "approved"
 	tests := []struct {
-		name   string
-		answer PromptAnswer
-		assert func(*testing.T, PromptAnswerBatchEntry)
+		name     string
+		answer   PromptAnswer
+		expected PromptAnswerBatchEntry
 	}{
 		{
 			name: "question",
@@ -22,15 +23,12 @@ func TestPromptAnswerBatchEntryFromTypedAnswer(t *testing.T) {
 				SelectedOptionNumber: &selected,
 				Freeform:             &freeform,
 			}),
-			assert: func(t *testing.T, entry PromptAnswerBatchEntry) {
-				t.Helper()
-				if entry.QuestionAnswer == nil ||
-					entry.QuestionAnswer.SelectedOptionNumber == nil ||
-					*entry.QuestionAnswer.SelectedOptionNumber != selected ||
-					entry.QuestionAnswer.Freeform == nil ||
-					*entry.QuestionAnswer.Freeform != freeform {
-					t.Fatalf("question entry = %+v", entry)
-				}
+			expected: PromptAnswerBatchEntry{
+				PromptID: "prompt-1",
+				QuestionAnswer: &PromptQuestionAnswer{
+					SelectedOptionNumber: &selected,
+					Freeform:             &freeform,
+				},
 			},
 		},
 		{
@@ -39,49 +37,36 @@ func TestPromptAnswerBatchEntryFromTypedAnswer(t *testing.T) {
 				Decision:   clientui.ApprovalDecisionAllowOnce,
 				Commentary: &commentary,
 			}),
-			assert: func(t *testing.T, entry PromptAnswerBatchEntry) {
-				t.Helper()
-				if entry.ApprovalAnswer == nil ||
-					entry.ApprovalAnswer.Decision != clientui.ApprovalDecisionAllowOnce ||
-					entry.ApprovalAnswer.Commentary == nil ||
-					*entry.ApprovalAnswer.Commentary != commentary {
-					t.Fatalf("approval entry = %+v", entry)
-				}
+			expected: PromptAnswerBatchEntry{
+				PromptID: "prompt-1",
+				ApprovalAnswer: &PromptApprovalAnswer{
+					Decision:   clientui.ApprovalDecisionAllowOnce,
+					Commentary: &commentary,
+				},
 			},
 		},
 		{
-			name:   "declined",
-			answer: DeclinedPromptAnswer(),
-			assert: func(t *testing.T, entry PromptAnswerBatchEntry) {
-				t.Helper()
-				if entry.Declined == nil {
-					t.Fatalf("declined entry = %+v", entry)
-				}
-			},
+			name:     "declined",
+			answer:   DeclinedPromptAnswer(),
+			expected: PromptAnswerBatchEntry{PromptID: "prompt-1", Declined: &PromptDeclined{}},
 		},
 		{
 			name: "question absent optional text",
 			answer: QuestionPromptAnswer(PromptQuestionAnswer{
 				SelectedOptionNumber: textutil.Value(1),
 			}),
-			assert: func(t *testing.T, entry PromptAnswerBatchEntry) {
-				t.Helper()
-				if entry.QuestionAnswer == nil || entry.QuestionAnswer.Freeform != nil {
-					t.Fatalf("question entry = %+v", entry)
-				}
-			},
+			expected: PromptAnswerBatchEntry{PromptID: "prompt-1", QuestionAnswer: &PromptQuestionAnswer{
+				SelectedOptionNumber: textutil.Value(1),
+			}},
 		},
 		{
 			name: "approval absent optional text",
 			answer: ApprovalPromptAnswer(PromptApprovalAnswer{
 				Decision: clientui.ApprovalDecisionDeny,
 			}),
-			assert: func(t *testing.T, entry PromptAnswerBatchEntry) {
-				t.Helper()
-				if entry.ApprovalAnswer == nil || entry.ApprovalAnswer.Commentary != nil {
-					t.Fatalf("approval entry = %+v", entry)
-				}
-			},
+			expected: PromptAnswerBatchEntry{PromptID: "prompt-1", ApprovalAnswer: &PromptApprovalAnswer{
+				Decision: clientui.ApprovalDecisionDeny,
+			}},
 		},
 	}
 	for _, test := range tests {
@@ -93,7 +78,9 @@ func TestPromptAnswerBatchEntryFromTypedAnswer(t *testing.T) {
 			if err := entry.Validate(); err != nil {
 				t.Fatalf("validate entry: %v", err)
 			}
-			test.assert(t, entry)
+			if !reflect.DeepEqual(entry, test.expected) {
+				t.Fatalf("entry = %+v, want %+v", entry, test.expected)
+			}
 		})
 	}
 }
