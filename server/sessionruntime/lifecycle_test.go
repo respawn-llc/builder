@@ -1100,7 +1100,7 @@ func TestAuthorityMaintenanceRequiresEveryActiveBlockAuthorization(t *testing.T)
 	}
 }
 
-func TestAuthorityBlockingRuntimeActivityIncludesMaintenanceStep(t *testing.T) {
+func TestAuthorityBlockingRuntimeActivityIgnoresDirectMaintenance(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
 	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
@@ -1137,8 +1137,8 @@ func TestAuthorityBlockingRuntimeActivityIncludesMaintenanceStep(t *testing.T) {
 	if err != nil {
 		t.Fatalf("check blocking runtime activity: %v", err)
 	}
-	if !active {
-		t.Fatal("runtime maintenance was not reported as blocking activity")
+	if active {
+		t.Fatal("direct runtime maintenance was reported as blocking activity")
 	}
 
 	close(release)
@@ -1150,7 +1150,7 @@ func TestAuthorityBlockingRuntimeActivityIncludesMaintenanceStep(t *testing.T) {
 		t.Fatalf("check blocking runtime activity after maintenance: %v", err)
 	}
 	if active {
-		t.Fatal("completed runtime maintenance remained blocking")
+		t.Fatal("completed direct runtime maintenance was reported as blocking")
 	}
 }
 

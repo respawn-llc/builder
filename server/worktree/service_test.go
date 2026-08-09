@@ -29,14 +29,23 @@ func sessionTargetWorktreeID(target clientui.SessionExecutionTarget) string {
 }
 
 type serviceTestPublisher struct {
-	mu        sync.Mutex
-	outcomes  []clientui.WorktreeTransitionOutcome
-	ready     chan struct{}
-	err       error
-	onOutcome func(clientui.WorktreeTransitionOutcome)
+	mu                sync.Mutex
+	outcomes          []clientui.WorktreeTransitionOutcome
+	ready             chan struct{}
+	err               error
+	onOutcome         func(clientui.WorktreeTransitionOutcome)
+	identityCalls     []string
+	identityFailureAt int
+	identityErr       error
 }
 
-func (p *serviceTestPublisher) PublishSessionIdentity(string) error {
+func (p *serviceTestPublisher) PublishSessionIdentity(sessionID string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.identityCalls = append(p.identityCalls, sessionID)
+	if p.identityFailureAt > 0 && len(p.identityCalls) == p.identityFailureAt {
+		return p.identityErr
+	}
 	return nil
 }
 
