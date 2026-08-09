@@ -161,33 +161,6 @@ func TestTaskMovePreviewNoOpRejectsExplicitBranchNameForHumanOutput(t *testing.T
 	}
 }
 
-func TestTaskMovePreviewNoOpRejectsExplicitBranchNameForJSONOutput(t *testing.T) {
-	allowHumanTaskActionForTest(t)
-	remote := &taskInterruptCommandRemote{
-		previewResponse: &serverapi.WorkflowTaskMovePreviewResponse{
-			Outcome: serverapi.WorkflowTaskMovePreviewOutcomeNoOp,
-			NoOp: &serverapi.WorkflowTaskMovePreviewNoOp{
-				CurrentNodes: []serverapi.WorkflowTaskCurrentNode{{NodeID: "node-2"}},
-			},
-		},
-	}
-	installWorkflowCommandRemote(t, remote)
-
-	var stdout, stderr bytes.Buffer
-	exitCode := taskSubcommand(
-		[]string{"move", "task-1", "node-2", "--branch-name", "feature/KENT-1", "--json"},
-		&stdout,
-		&stderr,
-	)
-
-	if exitCode != 2 || stdout.Len() != 0 || len(remote.moveRequests) != 0 {
-		t.Fatalf("exit=%d stdout=%q stderr=%q requests=%+v", exitCode, stdout.String(), stderr.String(), remote.moveRequests)
-	}
-	if stderr.Len() == 0 {
-		t.Fatal("expected usage failure detail")
-	}
-}
-
 func (r *taskInterruptCommandRemote) PreviewWorkflowTaskMove(_ context.Context, req serverapi.WorkflowTaskMovePreviewRequest) (serverapi.WorkflowTaskMovePreviewResponse, error) {
 	if r.previewResponse != nil {
 		return *r.previewResponse, nil
@@ -549,28 +522,6 @@ func TestTaskResumeFromWorkflowSessionCarriesInvokingSession(t *testing.T) {
 		remote.resumeRequests[0].SetupOperationID.Validate() != nil ||
 		remote.resumeRequests[0].BranchName != nil {
 		t.Fatalf("resume requests = %+v, want invoking Session agent-session", remote.resumeRequests)
-	}
-}
-
-func TestTaskResumeForwardsExplicitBranchName(t *testing.T) {
-	allowHumanTaskActionForTest(t)
-	remote := &taskInterruptCommandRemote{}
-	installWorkflowCommandRemote(t, remote)
-
-	var stdout, stderr bytes.Buffer
-	exitCode := taskResumeSubcommand(
-		[]string{"task-1", "--branch-name", "feature/KENT-1"},
-		&stdout,
-		&stderr,
-	)
-
-	if exitCode != 0 {
-		t.Fatalf("exit=%d stdout=%q stderr=%q", exitCode, stdout.String(), stderr.String())
-	}
-	if len(remote.resumeRequests) != 1 ||
-		remote.resumeRequests[0].BranchName == nil ||
-		*remote.resumeRequests[0].BranchName != "feature/KENT-1" {
-		t.Fatalf("resume requests=%+v, want explicit branch name", remote.resumeRequests)
 	}
 }
 

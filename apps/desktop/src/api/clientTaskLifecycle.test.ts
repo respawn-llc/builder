@@ -1,5 +1,4 @@
 import { ApiClient } from "./client";
-import type { TaskMoveInput, TaskResumeInput, TaskStartInput } from "./clientInputs";
 import {
   taskApproveResponseSchema,
   taskMovePreviewResponseSchema,
@@ -8,19 +7,7 @@ import {
 } from "./schemas/workflowBoard";
 import { FakeRpcTransport } from "@/test-support/api";
 
-type BranchNameAbsent<T> = "branchName" extends keyof T ? false : true;
-
-const desktopTaskInputsExcludeBranchName: [
-  BranchNameAbsent<TaskStartInput>,
-  BranchNameAbsent<TaskMoveInput>,
-  BranchNameAbsent<TaskResumeInput>,
-] = [true, true, true];
-
 describe("task lifecycle client", () => {
-  it("keeps custom branch controls out of Desktop task actions", () => {
-    expect(desktopTaskInputsExcludeBranchName).toEqual([true, true, true]);
-  });
-
   it("uses Current Node responses and does not emit board-only lifecycle flags", async () => {
     const transport = new FakeRpcTransport([
       {

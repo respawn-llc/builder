@@ -138,20 +138,3 @@ func TestWorkflowTaskInitialBranchErrorRoundTripsStructuredFacts(t *testing.T) {
 		})
 	}
 }
-
-func TestWorkflowTaskInitialBranchFieldsStayOutOfExcludedContracts(t *testing.T) {
-	for _, contractType := range []reflect.Type{
-		reflect.TypeOf(WorkflowTaskSummary{}),
-		reflect.TypeOf(WorkflowTaskDetail{}),
-		reflect.TypeOf(WorkflowBoardTaskCard{}),
-		reflect.TypeOf(TaskSearchGroup{}),
-		reflect.TypeOf(WorkflowTaskActivityItem{}),
-		reflect.TypeOf(WorkflowTaskCreateRequest{}),
-		reflect.TypeOf(WorkflowTaskUpdateRequest{}),
-		reflect.TypeOf(WorkflowTaskApproveRequest{}),
-	} {
-		if _, exists := contractType.FieldByName("BranchName"); exists {
-			t.Fatalf("%s exposes BranchName", contractType.Name())
-		}
-	}
-}

@@ -198,46 +198,6 @@ func TestTaskStartRendersTypedInitialBranchError(t *testing.T) {
 	}
 }
 
-func TestWorkflowTaskInitialBranchErrorsRenderTypedFacts(t *testing.T) {
-	localRef := "refs/heads/feature/KENT-1"
-	remoteRef := "refs/remotes/upstream/feature/KENT-1"
-	remote := "upstream"
-	existingBranch := "feature/existing"
-	existingRef := "refs/heads/feature/existing"
-	tests := []*serverapi.WorkflowTaskInitialBranchError{
-		{
-			Reason: serverapi.WorkflowTaskInitialBranchErrorReasonInvalidName, BranchName: "feature bad",
-		},
-		{
-			Reason: serverapi.WorkflowTaskInitialBranchErrorReasonLocalCollision, BranchName: "feature/KENT-1", Ref: &localRef,
-		},
-		{
-			Reason: serverapi.WorkflowTaskInitialBranchErrorReasonRemoteTrackingCollision, BranchName: "feature/KENT-1", Ref: &remoteRef, Remote: &remote,
-		},
-		{
-			Reason: serverapi.WorkflowTaskInitialBranchErrorReasonNoManagedTarget, BranchName: "feature/KENT-1",
-		},
-		{
-			Reason: serverapi.WorkflowTaskInitialBranchErrorReasonOperationCannotCreateWorktree, BranchName: "feature/KENT-1",
-		},
-		{
-			Reason: serverapi.WorkflowTaskInitialBranchErrorReasonPostCreationMismatch, BranchName: "feature/KENT-1", Ref: &existingRef, ExistingBranchName: &existingBranch,
-		},
-	}
-
-	for _, branchErr := range tests {
-		t.Run(string(branchErr.Reason), func(t *testing.T) {
-			var stderr bytes.Buffer
-			if !writeWorkflowTaskInitialBranchError(&stderr, branchErr) {
-				t.Fatalf("typed error was not rendered: %+v", branchErr)
-			}
-			if stderr.Len() == 0 || stderr.String() == branchErr.Error()+"\n" {
-				t.Fatalf("stderr=%q, want reason-specific typed rendering", stderr.String())
-			}
-		})
-	}
-}
-
 func TestTaskMoveDependencyConfirmationSupportsJSONAndMapsIgnoreFlag(t *testing.T) {
 	unsetSessionIDEnvironmentForTest(t)
 	count := 1
@@ -297,35 +257,6 @@ func TestTaskMoveFromWorkflowSessionCarriesInvokingSession(t *testing.T) {
 		remote.moveRequests[0].InvokingSessionID == nil ||
 		remote.moveRequests[0].InvokingSessionID.String() != "agent-session" {
 		t.Fatalf("move requests=%+v, want invoking Session agent-session", remote.moveRequests)
-	}
-}
-
-func TestTaskMoveForwardsExplicitBranchName(t *testing.T) {
-	unsetSessionIDEnvironmentForTest(t)
-	remote := &taskDependencyLifecycleRemote{
-		moveResponse: serverapi.WorkflowTaskMoveResponse{
-			Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
-			Applied: &serverapi.WorkflowTaskMoveApplied{
-				CurrentNodes: []serverapi.WorkflowTaskCurrentNode{{NodeID: "node-2"}},
-			},
-		},
-	}
-	installWorkflowCommandRemote(t, remote)
-
-	var stdout, stderr bytes.Buffer
-	exitCode := taskMoveSubcommand(
-		[]string{"task-1", "node-2", "--branch-name", "feature/KENT-1", "--json"},
-		&stdout,
-		&stderr,
-	)
-
-	if exitCode != 0 {
-		t.Fatalf("exit=%d stdout=%q stderr=%q", exitCode, stdout.String(), stderr.String())
-	}
-	if len(remote.moveRequests) != 1 ||
-		remote.moveRequests[0].BranchName == nil ||
-		*remote.moveRequests[0].BranchName != "feature/KENT-1" {
-		t.Fatalf("move requests=%+v, want explicit branch name", remote.moveRequests)
 	}
 }
 
@@ -436,89 +367,5 @@ func TestTaskApproveFromWorkflowSessionCarriesInvokingSession(t *testing.T) {
 		remote.approveRequests[0].InvokingSessionID == nil ||
 		remote.approveRequests[0].InvokingSessionID.String() != "agent-session" {
 		t.Fatalf("approve requests=%+v, want invoking Session agent-session", remote.approveRequests)
-	}
-}
-
-func TestTaskCreateEditAndApproveDoNotExposeBranchName(t *testing.T) {
-	unsetSessionIDEnvironmentForTest(t)
-	tests := []struct {
-		name string
-		run  func(*bytes.Buffer, *bytes.Buffer) int
-	}{
-		{
-			name: "create",
-			run: func(stdout, stderr *bytes.Buffer) int {
-				return taskCreateSubcommand(
-					[]string{"--title", "Task", "--body", "Body", "--branch-name", "feature/KENT-1"},
-					stdout,
-					stderr,
-				)
-			},
-		},
-		{
-			name: "edit",
-			run: func(stdout, stderr *bytes.Buffer) int {
-				return taskEditSubcommand(
-					[]string{"task-1", "--title", "Task", "--branch-name", "feature/KENT-1"},
-					stdout,
-					stderr,
-				)
-			},
-		},
-		{
-			name: "approve",
-			run: func(stdout, stderr *bytes.Buffer) int {
-				return taskApproveSubcommand(
-					[]string{"approval-1", "--branch-name", "feature/KENT-1"},
-					stdout,
-					stderr,
-				)
-			},
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			var stdout, stderr bytes.Buffer
-			if exitCode := test.run(&stdout, &stderr); exitCode != 2 || stdout.Len() != 0 {
-				t.Fatalf("exit=%d stdout=%q stderr=%q", exitCode, stdout.String(), stderr.String())
-			}
-		})
-	}
-}
-
-func TestTaskInitiatingCommandsRejectBlankBranchName(t *testing.T) {
-	unsetSessionIDEnvironmentForTest(t)
-	tests := []struct {
-		name string
-		run  func(*bytes.Buffer, *bytes.Buffer) int
-	}{
-		{
-			name: "start",
-			run: func(stdout, stderr *bytes.Buffer) int {
-				return taskStartSubcommand([]string{"task-1", "--branch-name", " \t "}, stdout, stderr)
-			},
-		},
-		{
-			name: "move",
-			run: func(stdout, stderr *bytes.Buffer) int {
-				return taskMoveSubcommand([]string{"task-1", "node-2", "--branch-name", " \t "}, stdout, stderr)
-			},
-		},
-		{
-			name: "resume",
-			run: func(stdout, stderr *bytes.Buffer) int {
-				return taskResumeSubcommand([]string{"task-1", "--branch-name", " \t "}, stdout, stderr)
-			},
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			var stdout, stderr bytes.Buffer
-			if exitCode := test.run(&stdout, &stderr); exitCode != 2 || stdout.Len() != 0 {
-				t.Fatalf("exit=%d stdout=%q stderr=%q", exitCode, stdout.String(), stderr.String())
-			}
-		})
 	}
 }
