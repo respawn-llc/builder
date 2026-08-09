@@ -1,10 +1,14 @@
 import { z } from "zod";
 
 import { ApiClient } from "./client";
-import { ContractError } from "./errors";
+import { ContractError, RpcError } from "./errors";
 import { FakeRpcTransport, registeredWorktreeWire } from "@/test-support/api";
 import { newSetupOperationID, parseSetupOperationID, type SetupOperationID } from "./setupOperationID";
 import type { WorktreeSetupEvent } from "./worktreeSetup";
+import {
+  decodeWorktreeSetupRetainedError,
+  WorktreeSetupRetainedError,
+} from "./worktreeSetupFailure";
 
 const setupOperationIDWireSchema = z.string().transform((value, ctx): SetupOperationID => {
   try {
@@ -25,6 +29,29 @@ function parseSetupMutationParams(value: unknown): Readonly<{ setupOperationID: 
 }
 
 describe("worktree setup API", () => {
+  it("decodes the retained setup error used by synchronous Move recovery", () => {
+    const decoded = decodeWorktreeSetupRetainedError(
+      new RpcError({
+        code: -32039,
+        method: "workflow.task.move",
+        message: "human text is not the contract",
+        data: {
+          type: "worktree_setup_retained",
+          worktree: registeredWorktreeWire("/repo/current", "worktree-current"),
+          diagnostic: "setup failed after retry",
+          script_path: "/repo/setup.sh",
+          retained_previous_worktree: null,
+        },
+      }),
+    );
+    expect(decoded).toBeInstanceOf(WorktreeSetupRetainedError);
+    expect(decoded).toMatchObject({
+      diagnostic: "setup failed after retry",
+      scriptPath: "/repo/setup.sh",
+      worktree: { registered: { kent: { canonicalRoot: "/repo/current" } } },
+    });
+  });
+
   it("rejects malformed setup operation ids before RPC submission can use them", () => {
     expect(() => parseSetupOperationID("11111111-1111-1111-1111-111111111111")).toThrow(
       "Setup operation id must be a UUID v4.",

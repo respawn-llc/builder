@@ -1,5 +1,4 @@
 import {
-  decodeWorkflowTaskMovePreparationError,
   decodeWorkflowLabelError,
   decodeWorkflowTaskDependencyError,
   isProjectMissingError,
@@ -7,74 +6,10 @@ import {
   RpcError,
   WorkflowLabelError,
   WorkflowTaskDependencyError,
-  WorkflowTaskMovePreparationError,
 } from "./errors";
-import { registeredWorktreeWire } from "@/test-support/api";
 import { rpcErrorCodes } from "./rpcErrorCodes";
 
 const labelID = "f74ce532-9e6e-4cf6-b3c1-d67d5a3eedcf";
-
-describe("Workflow Task Move preparation RPC errors", () => {
-  it("decodes target preparation with only a retained previous Worktree", () => {
-    const decoded = decodeWorkflowTaskMovePreparationError(
-      new RpcError({
-        code: -32061,
-        method: "workflow.task.move",
-        message: "human text is not the contract",
-        data: {
-          type: "workflow_task_move_preparation",
-          failure: {
-            retry_readiness: "retry_ready",
-            cause: { kind: "target_preparation", target_preparation: {} },
-            diagnostic: "replacement creation failed",
-            script_path: null,
-            execution_target: null,
-            retained_worktree: null,
-            retained_previous_worktree: {
-              worktree: registeredWorktreeWire("/repo/previous", "worktree-previous"),
-            },
-          },
-        },
-      }),
-    );
-    expect(decoded).toBeInstanceOf(WorkflowTaskMovePreparationError);
-    expect(decoded).toMatchObject({
-      failure: {
-        cause: { kind: "target_preparation" },
-        diagnostic: "replacement creation failed",
-        scriptPath: null,
-        retainedWorktree: null,
-        retainedPreviousWorktree: {
-          worktree: { registered: { kent: { canonicalRoot: "/repo/previous" } } },
-        },
-      },
-    });
-  });
-
-  it("rejects setup-script failure without its script path", () => {
-    expect(
-      decodeWorkflowTaskMovePreparationError(
-        new RpcError({
-          code: -32061,
-          method: "workflow.task.move",
-          message: "setup failed",
-          data: {
-            type: "workflow_task_move_preparation",
-            failure: {
-              retry_readiness: "retry_ready",
-              cause: { kind: "operational", operational: {} },
-              diagnostic: "setup failed",
-              script_path: null,
-              execution_target: null,
-              retained_worktree: registeredWorktreeWire("/repo/current", "worktree-current"),
-              retained_previous_worktree: null,
-            },
-          },
-        }),
-      ),
-    ).toBeNull();
-  });
-});
 
 describe("sidebar missing-entity errors", () => {
   it("recognizes typed Task and Project missing errors without parsing messages", () => {

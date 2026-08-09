@@ -399,25 +399,20 @@ function moveCalls(services: TestAppServices) {
 
 function setupFailure(diagnostic: string, root: string, previousRoot?: string): RpcError {
   return new RpcError({
-    code: -32061,
+    code: -32039,
     method: "workflow.task.move",
-    message: "display-only preparation error",
+    message: "display-only setup error",
     data: {
-      type: "workflow_task_move_preparation",
-      failure: {
-        retry_readiness: "retry_ready",
-        cause: { kind: "operational", operational: {} },
-        diagnostic,
-        script_path: "/repo/setup.sh",
-        execution_target: null,
-        retained_worktree: registeredWorktreeWire(root, "worktree-current"),
-        retained_previous_worktree:
-          previousRoot === undefined
-            ? null
-            : {
-                worktree: registeredWorktreeWire(previousRoot, "worktree-previous"),
-              },
-      },
+      type: "worktree_setup_retained",
+      worktree: registeredWorktreeWire(root, "worktree-current"),
+      diagnostic,
+      script_path: "/repo/setup.sh",
+      retained_previous_worktree:
+        previousRoot === undefined
+          ? null
+          : {
+              worktree: registeredWorktreeWire(previousRoot, "worktree-previous"),
+            },
     },
   });
 }

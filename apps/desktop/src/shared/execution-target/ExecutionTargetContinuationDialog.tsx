@@ -73,11 +73,7 @@ function SetupRecoveryDialog({
       <div className="grid gap-[var(--space-4)]">
         <div className="grid gap-[var(--space-2)]">
           <p className="m-0 text-[var(--color-muted)]">
-            {t(
-              pending.failure.kind === "target_preparation"
-                ? "setupRecovery.targetPreparationBody"
-                : "setupRecovery.setupScriptBody",
-            )}
+            {t("setupRecovery.setupScriptBody")}
           </p>
           <p className="m-0 whitespace-pre-wrap font-mono text-sm text-[var(--color-error)]">
             {pending.failure.diagnostic}

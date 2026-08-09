@@ -5,7 +5,7 @@ import type {
   WorkflowExecutionTargetSelectionMode,
   WorkflowExecutionTargetSelectionRequirement,
 } from "@/api";
-import { decodeWorkflowTaskMovePreparationError } from "@/api";
+import { decodeWorktreeSetupRetainedError } from "@/api";
 import {
   initialExecutionTargetSelectionDraft,
   type ExecutionTargetSelectionDraft,
@@ -38,7 +38,7 @@ export type TaskExecutionTargetIntent =
   | Readonly<{ kind: "explicit_override"; selection: WorkflowExecutionTargetSelection }>;
 
 export type TaskSetupRecoveryFailure = Readonly<{
-  kind: "setup_script" | "target_preparation";
+  kind: "setup_script";
   diagnostic: string;
   scriptPath: string | null;
   retainedWorktree: Readonly<{ root: string }> | null;
@@ -131,8 +131,8 @@ export function useTaskInitiatingActionController({
             setPending((current) => (current?.kind === "setup_recovery" ? null : current));
             throw error;
           }
-          const preparationError = decodeWorkflowTaskMovePreparationError(error);
-          if (preparationError === null) {
+          const setupError = decodeWorktreeSetupRetainedError(error);
+          if (setupError === null) {
             setPending((current) => (current?.kind === "setup_recovery" ? null : current));
             throw error;
           }
@@ -140,24 +140,18 @@ export function useTaskInitiatingActionController({
             kind: "setup_recovery",
             action,
             failure: {
-              kind:
-                preparationError.failure.cause.kind === "target_preparation"
-                  ? "target_preparation"
-                  : "setup_script",
-              diagnostic: preparationError.failure.diagnostic,
-              scriptPath: preparationError.failure.scriptPath,
-              retainedWorktree:
-                preparationError.failure.retainedWorktree === null
-                  ? null
-                  : {
-                      root: preparationError.failure.retainedWorktree.registered.kent.canonicalRoot,
-                    },
+              kind: "setup_script",
+              diagnostic: setupError.diagnostic,
+              scriptPath: setupError.scriptPath,
+              retainedWorktree: {
+                root: setupError.worktree.registered.kent.canonicalRoot,
+              },
               retainedPreviousWorktree:
-                preparationError.failure.retainedPreviousWorktree === null
+                setupError.retainedPreviousWorktree === null
                   ? null
                   : {
                       root:
-                        preparationError.failure.retainedPreviousWorktree.worktree.registered.kent
+                        setupError.retainedPreviousWorktree.worktree.registered.kent
                           .canonicalRoot,
                     },
             },

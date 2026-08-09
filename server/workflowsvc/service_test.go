@@ -654,13 +654,13 @@ func TestServiceManualMoveSetupFailureLeavesActionUnappliedAndTargetUnlocked(t *
 			Mode: serverapi.WorkflowExecutionTargetModeHead,
 		},
 	})
-	var preparationError *serverapi.WorkflowTaskMovePreparationError
-	if !errors.As(err, &preparationError) ||
+	var retainedSetupError *serverapi.WorktreeSetupRetainedError
+	if err != setupErr ||
+		!errors.As(err, &retainedSetupError) ||
 		!errors.Is(err, setupCause) ||
-		preparationError.Failure.ScriptPath == nil ||
-		*preparationError.Failure.ScriptPath != "/repo/setup.sh" ||
-		preparationError.Failure.RetainedWorktree == nil ||
-		preparationError.Failure.RetainedPreviousWorktree != previous {
+		retainedSetupError.ScriptPath != "/repo/setup.sh" ||
+		retainedSetupError.Worktree.Registered == nil ||
+		retainedSetupError.RetainedPreviousWorktree != previous {
 		t.Fatalf("MoveWorkflowTask = %+v, %v; want setup failure", response, err)
 	}
 	after, err := service.store.ListCurrentNodes(ctx, workflow.TaskID(task.Task.ID))
@@ -682,65 +682,7 @@ func TestServiceManualMoveSetupFailureLeavesActionUnappliedAndTargetUnlocked(t *
 	}
 }
 
-func TestServiceManualMoveTargetPreparationFailureCarriesRetainedWorktrees(t *testing.T) {
-	ctx, service, binding := newWorkflowServiceTestContext(t)
-	workflowID := createWorkflowServiceChainedWorkflow(t, ctx, service)
-	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
-	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
-	definition, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
-	if err != nil {
-		t.Fatalf("GetWorkflow: %v", err)
-	}
-	targetNodeID := workflowServiceNodeIDByKey(t, definition.Definition, "plan")
-	retained := registeredWorktreeTopologyFixture("/repo/retained", "retained-worktree")
-	previous := retainedPreviousWorktreeFixture("/repo/previous", "previous-worktree")
-	creationErr := errors.New("replacement creation failed")
-	requestedRef := "HEAD"
-	commitOID := strings.Repeat("d", 40)
-	service.executionTargets = &recordingExecutionTargetInfrastructure{
-		resolution: workflowstore.ExecutionTargetSnapshot{
-			Mode:         workflow.ExecutionTargetModeHead,
-			RequestedRef: &requestedRef,
-			CommitOID:    &commitOID,
-			Provenance:   workflowstore.ExecutionTargetProvenanceResolved,
-		},
-		prepare: func(req TaskExecutionRootPreparationRequest) (TaskExecutionRootPreparation, error) {
-			return TaskExecutionRootPreparation{
-				Root: workflowstore.ExecutionRoot{
-					SourceWorkspaceID:   req.SourceWorkspaceID,
-					SourceWorkspaceRoot: req.SourceWorkspaceRoot,
-				},
-				RetainedWorktree:         &retained,
-				RetainedPreviousWorktree: previous,
-			}, creationErr
-		},
-	}
-	execution := newManualMoveExecutionStub(service)
-	service.currentNodeExecution = execution
-
-	response, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
-		TaskID:       task.Task.ID,
-		TargetNodeID: targetNodeID,
-		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
-			Mode: serverapi.WorkflowExecutionTargetModeHead,
-		},
-	})
-	var preparationError *serverapi.WorkflowTaskMovePreparationError
-	if !errors.As(err, &preparationError) ||
-		!errors.Is(err, creationErr) ||
-		preparationError.Failure.ScriptPath != nil ||
-		preparationError.Failure.Cause.Kind != serverapi.WorktreeSetupFailureTargetPreparation ||
-		preparationError.Failure.RetainedWorktree == nil ||
-		preparationError.Failure.RetainedWorktree.Registered.Kent.WorktreeID != "retained-worktree" ||
-		preparationError.Failure.RetainedPreviousWorktree != previous {
-		t.Fatalf("MoveWorkflowTask = %+v, %v; want target-preparation failure with retained Worktrees", response, err)
-	}
-	if len(execution.interruptTaskIDs) != 0 {
-		t.Fatalf("interruptions after failed target preparation = %v, want none", execution.interruptTaskIDs)
-	}
-}
-
-func TestServiceManualMoveResolutionFailureReturnsTopologyFreePreparationError(t *testing.T) {
+func TestServiceManualMoveResolutionFailureUsesExistingError(t *testing.T) {
 	for _, test := range []struct {
 		name       string
 		mode       serverapi.WorkflowExecutionTargetMode
@@ -783,15 +725,8 @@ func TestServiceManualMoveResolutionFailureReturnsTopologyFreePreparationError(t
 					Mode: test.mode,
 				},
 			})
-			var preparationError *serverapi.WorkflowTaskMovePreparationError
-			if !errors.As(err, &preparationError) ||
-				!errors.Is(err, test.resolveErr) ||
-				preparationError.Failure.RetryReadiness != serverapi.WorktreeSetupRetryReady ||
-				preparationError.Failure.Cause.Kind != serverapi.WorktreeSetupFailureTargetPreparation ||
-				preparationError.Failure.ScriptPath != nil ||
-				preparationError.Failure.RetainedWorktree != nil ||
-				preparationError.Failure.RetainedPreviousWorktree != nil {
-				t.Fatalf("MoveWorkflowTask = %+v, %T %v; want topology-free preparation failure", response, err, err)
+			if err != test.resolveErr {
+				t.Fatalf("MoveWorkflowTask = %+v, %T %v; want original resolution error", response, err, err)
 			}
 			if len(execution.interruptTaskIDs) != 0 {
 				t.Fatalf("interruptions after resolution failure = %v, want none", execution.interruptTaskIDs)
@@ -1136,11 +1071,8 @@ func TestServiceManualMoveRevalidatesTaskQuiescenceBeforeDurableApply(t *testing
 			Mode: serverapi.WorkflowExecutionTargetModeHead,
 		},
 	})
-	var retainedErr *serverapi.WorkflowTaskMoveRetainedWorktreeError
-	if !errors.As(err, &retainedErr) ||
-		!errors.Is(err, workflowexecution.ErrTaskExecutionNotQuiescent) ||
-		retainedErr.RetainedPreviousWorktree.Worktree.Registered.Kent.WorktreeID != "worktree-previous" {
-		t.Fatalf("MoveWorkflowTask quiescence error = %T %+v, want retained previous Worktree", err, err)
+	if !errors.Is(err, workflowexecution.ErrTaskExecutionNotQuiescent) {
+		t.Fatalf("MoveWorkflowTask quiescence error = %T %+v", err, err)
 	}
 	currentNodes, err := service.store.ListCurrentNodes(ctx, workflow.TaskID(task.Task.ID))
 	if err != nil {

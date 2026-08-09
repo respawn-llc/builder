@@ -299,8 +299,6 @@ export const englishResources = {
       title: "Worktree setup needs attention",
       setupScriptBody:
         "The setup script failed after one automatic retry. Retry this target or choose another execution target.",
-      targetPreparationBody:
-        "Kent could not prepare this execution target. Retry it or choose another execution target.",
       retry: "Retry setup",
       chooseTarget: "Choose another target",
       useTarget: "Use target",

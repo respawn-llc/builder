@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { RpcError } from "./errors";
 import { workflowExecutionTargetSelectionSchema } from "./schemas/workflowExecutionTarget";
 import type { WorkflowExecutionTargetSelection } from "./workflowExecutionTarget";
 import {
@@ -157,3 +158,59 @@ export const worktreeSetupFailureWireSchema = z
     retainedWorktree: value.retained_worktree,
     retainedPreviousWorktree: value.retained_previous_worktree,
   }));
+
+export class WorktreeSetupRetainedError extends RpcError {
+  readonly worktree: RegisteredWorktreeTopology;
+  readonly scriptPath: string;
+  readonly diagnostic: string;
+  readonly retainedPreviousWorktree: RetainedPreviousWorktree | null;
+
+  constructor(
+    rpcError: RpcError,
+    facts: Readonly<{
+      worktree: RegisteredWorktreeTopology;
+      scriptPath: string;
+      diagnostic: string;
+      retainedPreviousWorktree: RetainedPreviousWorktree | null;
+    }>,
+  ) {
+    super({
+      code: rpcError.code,
+      message: rpcError.message,
+      method: rpcError.method,
+      data: rpcError.data,
+    });
+    this.worktree = facts.worktree;
+    this.scriptPath = facts.scriptPath;
+    this.diagnostic = facts.diagnostic;
+    this.retainedPreviousWorktree = facts.retainedPreviousWorktree;
+  }
+}
+
+const worktreeSetupRetainedErrorDataSchema = z
+  .object({
+    type: z.literal("worktree_setup_retained"),
+    worktree: registeredWorktreeTopologySchema,
+    script_path: z.string().trim().min(1),
+    diagnostic: z.string().trim().min(1),
+    retained_previous_worktree: retainedPreviousWorktreeSchema.nullable(),
+  })
+  .strict();
+
+export function decodeWorktreeSetupRetainedError(
+  error: unknown,
+): WorktreeSetupRetainedError | null {
+  if (!(error instanceof RpcError) || error.code !== -32039) {
+    return null;
+  }
+  const parsed = worktreeSetupRetainedErrorDataSchema.safeParse(error.data);
+  if (!parsed.success) {
+    return null;
+  }
+  return new WorktreeSetupRetainedError(error, {
+    worktree: parsed.data.worktree,
+    scriptPath: parsed.data.script_path,
+    diagnostic: parsed.data.diagnostic,
+    retainedPreviousWorktree: parsed.data.retained_previous_worktree,
+  });
+}

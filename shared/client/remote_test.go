@@ -1959,56 +1959,6 @@ func TestProtocolErrorDecodesWorkflowExecutionTargetResolutionError(t *testing.T
 	}
 }
 
-func TestProtocolErrorDecodesWorkflowTaskMovePreparationError(t *testing.T) {
-	source, err := serverapi.NewWorkflowTaskMovePreparationError(
-		serverapi.WorktreeSetupFailed{
-			RetryReadiness: serverapi.WorktreeSetupRetryReady,
-			Cause: serverapi.WorktreeSetupFailureCause{
-				Kind:        serverapi.WorktreeSetupFailureTargetPreparation,
-				Preparation: &serverapi.WorktreeSetupPreparationFailure{},
-			},
-			Diagnostic: "replacement creation failed",
-			RetainedPreviousWorktree: &serverapi.RetainedPreviousWorktree{
-				Worktree: remoteTestMovePreparationWorktree(),
-			},
-		},
-		errors.New("replacement creation failed"),
-	)
-	if err != nil {
-		t.Fatalf("NewWorkflowTaskMovePreparationError: %v", err)
-	}
-	decoded := protocolError(&protocol.ResponseError{
-		Code:    source.RPCErrorCode(),
-		Message: source.Error(),
-		Data:    source.RPCErrorData(),
-	})
-	var preparation *serverapi.WorkflowTaskMovePreparationError
-	if !errors.As(decoded, &preparation) ||
-		preparation.Failure.Cause.Kind != serverapi.WorktreeSetupFailureTargetPreparation ||
-		preparation.Failure.RetainedPreviousWorktree == nil {
-		t.Fatalf("decoded Move preparation error = %+v (%v)", preparation, decoded)
-	}
-}
-
-func remoteTestMovePreparationWorktree() serverapi.WorktreeTopologyEntry {
-	return serverapi.WorktreeTopologyEntry{
-		Variant: serverapi.WorktreeTopologyVariantRegistered,
-		Registered: &serverapi.WorktreeRegisteredFacts{
-			Git: serverapi.WorktreeGitFacts{
-				CanonicalRoot: "/repo/previous",
-				HeadObject:    "abc123",
-				PathAvailable: true,
-			},
-			Kent: serverapi.WorktreeKentFacts{
-				WorktreeID:    "previous-worktree",
-				CanonicalRoot: "/repo/previous",
-				DisplayName:   "previous-worktree",
-				Managed:       true,
-			},
-		},
-	}
-}
-
 func TestProtocolErrorDecodesWorkflowLockedExecutionTargetError(t *testing.T) {
 	source := &serverapi.WorkflowLockedExecutionTargetError{
 		Cause: serverapi.WorkflowLockedExecutionTargetCauseMissingBranch,

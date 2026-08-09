@@ -333,20 +333,30 @@ func retainedWorktreeInspectionActions(retained *taskLifecycleWorktree) []taskLi
 	}
 }
 
-func taskMovePreparationFailurePresentation(
+func taskMoveSetupFailurePresentation(
 	command taskLifecycleCommandContext,
-	preparationErr *serverapi.WorkflowTaskMovePreparationError,
+	setupErr *serverapi.WorktreeSetupRetainedError,
 ) (taskLifecyclePresentation, error) {
-	if preparationErr == nil {
-		return taskLifecyclePresentation{}, errors.New("Move preparation error is required")
+	if setupErr == nil {
+		return taskLifecyclePresentation{}, errors.New("Move setup error is required")
 	}
-	if err := preparationErr.Validate(); err != nil {
-		return taskLifecyclePresentation{}, fmt.Errorf("invalid Move preparation error: %w", err)
+	if err := setupErr.Validate(); err != nil {
+		return taskLifecyclePresentation{}, fmt.Errorf("invalid Move setup error: %w", err)
 	}
 	return taskLifecyclePreparationFailurePresentation(
 		taskLifecycleOperationMove,
 		command,
-		preparationErr.Failure,
+		serverapi.WorktreeSetupFailed{
+			RetryReadiness: serverapi.WorktreeSetupRetryReady,
+			Cause: serverapi.WorktreeSetupFailureCause{
+				Kind:        serverapi.WorktreeSetupFailureOperational,
+				Operational: &serverapi.WorktreeSetupOperationalFailure{},
+			},
+			Diagnostic:               setupErr.Diagnostic,
+			ScriptPath:               &setupErr.ScriptPath,
+			RetainedWorktree:         &setupErr.Worktree,
+			RetainedPreviousWorktree: setupErr.RetainedPreviousWorktree,
+		},
 	)
 }
 

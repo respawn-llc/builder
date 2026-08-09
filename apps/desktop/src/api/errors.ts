@@ -3,7 +3,6 @@ import { z } from "zod";
 import type { JsonValue } from "./json";
 import { labelIDSchema } from "./schemas/workflowLabels";
 import { workflowLabelMaxIDs } from "./workflowLabelContract";
-import { worktreeSetupFailureWireSchema, type WorktreeSetupFailure } from "./worktreeSetupFailure";
 import { rpcErrorCodes } from "./rpcErrorCodes";
 
 export type RpcErrorInfo = Readonly<{
@@ -27,61 +26,6 @@ export class RpcError extends Error {
   }
 }
 
-export class WorkflowTaskMovePreparationError extends RpcError {
-  readonly failure: WorktreeSetupFailure;
-
-  constructor(
-    rpcError: RpcError,
-    facts: Readonly<{
-      failure: WorktreeSetupFailure;
-    }>,
-  ) {
-    super({
-      code: rpcError.code,
-      message: rpcError.message,
-      method: rpcError.method,
-      data: rpcError.data,
-    });
-    this.name = "WorkflowTaskMovePreparationError";
-    this.failure = facts.failure;
-  }
-}
-
-const workflowTaskMovePreparationErrorDataSchema = z
-  .object({
-    type: z.literal("workflow_task_move_preparation"),
-    failure: worktreeSetupFailureWireSchema,
-  })
-  .strict()
-  .superRefine((value, context) => {
-    if (value.failure.retryReadiness !== "retry_ready") {
-      context.addIssue({
-        code: "custom",
-        message: "Move preparation recovery requires retry-ready failure.",
-        path: ["failure", "retry_readiness"],
-      });
-    }
-  });
-
-export function decodeWorkflowTaskMovePreparationError(
-  error: unknown,
-): WorkflowTaskMovePreparationError | null {
-  if (
-    !(error instanceof RpcError) ||
-    error.code !== rpcErrorCodes.workflowTaskMovePreparation ||
-    error.method !== "workflow.task.move"
-  ) {
-    return null;
-  }
-  const parsed = workflowTaskMovePreparationErrorDataSchema.safeParse(error.data);
-  if (!parsed.success) {
-    return null;
-  }
-  return new WorkflowTaskMovePreparationError(error, {
-    failure: parsed.data.failure,
-  });
-}
-
 export function isTaskMissingError(error: unknown): boolean {
   return error instanceof RpcError && error.code === rpcErrorCodes.workflowTaskNotFound;
 }
@@ -90,7 +34,8 @@ const projectMissingDataSchema = z.looseObject({ reason: z.literal("project_not_
 export function isProjectMissingError(error: unknown): boolean {
   return (
     error instanceof RpcError &&
-    (error.code === rpcErrorCodes.projectNotFound || projectMissingDataSchema.safeParse(error.data).success)
+    (error.code === rpcErrorCodes.projectNotFound ||
+      projectMissingDataSchema.safeParse(error.data).success)
   );
 }
 

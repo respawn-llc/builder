@@ -676,22 +676,15 @@ func TestMoveSetupFailurePresentationReconstructsOriginalAndTargetOverrideAction
 		CurrentExecutionTarget:     &currentTarget,
 	}
 	retained := lifecycleSetupTestWorktree("/tmp/move-retained")
-	preparationErr := &serverapi.WorkflowTaskMovePreparationError{
-		Failure: serverapi.WorktreeSetupFailed{
-			RetryReadiness: serverapi.WorktreeSetupRetryReady,
-			Cause: serverapi.WorktreeSetupFailureCause{
-				Kind:        serverapi.WorktreeSetupFailureOperational,
-				Operational: &serverapi.WorktreeSetupOperationalFailure{},
-			},
-			Diagnostic:       "setup exited twice",
-			ScriptPath:       lifecycleStringPointer("/repo/setup.sh"),
-			RetainedWorktree: &retained,
-		},
+	setupErr := &serverapi.WorktreeSetupRetainedError{
+		Worktree:   retained,
+		Diagnostic: "setup exited twice",
+		ScriptPath: "/repo/setup.sh",
 	}
 
-	presentation, err := taskMovePreparationFailurePresentation(
+	presentation, err := taskMoveSetupFailurePresentation(
 		taskLifecycleCommandContext{TaskRef: "KENT-453", Move: &command},
-		preparationErr,
+		setupErr,
 	)
 	if err != nil {
 		t.Fatalf("taskMoveSetupFailurePresentation: %v", err)
@@ -726,78 +719,6 @@ func TestMoveSetupFailurePresentationReconstructsOriginalAndTargetOverrideAction
 	}
 	if got := presentation.Actions[4].Args[len(presentation.Actions[4].Args)-1]; got != "ref:<revision>" {
 		t.Fatalf("custom-ref action = %+v", presentation.Actions[4])
-	}
-}
-
-func TestMovePreparationFailurePresentationRejectsBlankScriptPath(t *testing.T) {
-	retained := lifecycleSetupTestWorktree("/tmp/move-retained")
-	_, err := taskMovePreparationFailurePresentation(
-		taskLifecycleCommandContext{
-			TaskRef: "KENT-453",
-			Move: &taskMoveRecoveryCommand{
-				TaskRef:      "KENT-453",
-				TargetNodeID: "implementation",
-			},
-		},
-		&serverapi.WorkflowTaskMovePreparationError{
-			Failure: serverapi.WorktreeSetupFailed{
-				RetryReadiness: serverapi.WorktreeSetupRetryReady,
-				Cause: serverapi.WorktreeSetupFailureCause{
-					Kind:        serverapi.WorktreeSetupFailureOperational,
-					Operational: &serverapi.WorktreeSetupOperationalFailure{},
-				},
-				Diagnostic:       "setup failed",
-				ScriptPath:       lifecycleStringPointer(" "),
-				RetainedWorktree: &retained,
-			},
-		},
-	)
-	if err == nil {
-		t.Fatal("taskMoveSetupFailurePresentation accepted a blank setup script path")
-	}
-}
-
-func TestMoveTargetPreparationFailurePresentsPreviousWorktreeWithoutPrimaryOrScript(t *testing.T) {
-	previous := &serverapi.RetainedPreviousWorktree{
-		Worktree: lifecycleSetupTestWorktree("/tmp/move-previous"),
-	}
-	presentation, err := taskMovePreparationFailurePresentation(
-		taskLifecycleCommandContext{
-			TaskRef: "KENT-453",
-			Move: &taskMoveRecoveryCommand{
-				TaskRef:                "KENT-453",
-				TargetNodeID:           "implementation",
-				CurrentExecutionTarget: lifecycleStringPointer("head"),
-			},
-		},
-		&serverapi.WorkflowTaskMovePreparationError{
-			Failure: serverapi.WorktreeSetupFailed{
-				RetryReadiness: serverapi.WorktreeSetupRetryReady,
-				Cause: serverapi.WorktreeSetupFailureCause{
-					Kind:        serverapi.WorktreeSetupFailureTargetPreparation,
-					Preparation: &serverapi.WorktreeSetupPreparationFailure{},
-				},
-				Diagnostic:               "replacement creation failed",
-				RetainedPreviousWorktree: previous,
-			},
-		},
-	)
-	if err != nil {
-		t.Fatalf("taskMovePreparationFailurePresentation: %v", err)
-	}
-	if presentation.Kind != taskLifecyclePresentationTargetPreparation ||
-		presentation.SetupScriptPath != nil ||
-		presentation.RetainedWorktree != nil ||
-		presentation.RetainedPreviousWorktree == nil ||
-		presentation.RetainedPreviousWorktree.Path != "/tmp/move-previous" {
-		t.Fatalf("target-preparation presentation = %+v", presentation)
-	}
-	if len(presentation.Actions) <= len(taskMoveRecoveryActions(taskMoveRecoveryCommand{
-		TaskRef:                "KENT-453",
-		TargetNodeID:           "implementation",
-		CurrentExecutionTarget: lifecycleStringPointer("head"),
-	})) {
-		t.Fatalf("target-preparation actions = %+v, want recovery and retained Worktree inspection", presentation.Actions)
 	}
 }
 
@@ -845,17 +766,10 @@ func TestTaskMoveTypedSetupFailureReturnsNonzeroWithoutSetupSubscription(t *test
 	unsetSessionIDEnvironmentForTest(t)
 	retained := lifecycleSetupTestWorktree("/tmp/move-primary")
 	remote := &taskInterruptCommandRemote{
-		moveError: &serverapi.WorkflowTaskMovePreparationError{
-			Failure: serverapi.WorktreeSetupFailed{
-				RetryReadiness: serverapi.WorktreeSetupRetryReady,
-				Cause: serverapi.WorktreeSetupFailureCause{
-					Kind:        serverapi.WorktreeSetupFailureOperational,
-					Operational: &serverapi.WorktreeSetupOperationalFailure{},
-				},
-				Diagnostic:       "setup failed after retry",
-				ScriptPath:       lifecycleStringPointer("/repo/setup.sh"),
-				RetainedWorktree: &retained,
-			},
+		moveError: &serverapi.WorktreeSetupRetainedError{
+			Worktree:   retained,
+			Diagnostic: "setup failed after retry",
+			ScriptPath: "/repo/setup.sh",
 		},
 	}
 	installWorkflowCommandRemote(t, remote)

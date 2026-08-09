@@ -816,14 +816,14 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			ProceedDespiteDependencies: *ignoreDependencies,
 		})
 		if err != nil {
-			var preparationErr *serverapi.WorkflowTaskMovePreparationError
-			if errors.As(err, &preparationErr) {
-				presentation, projectionErr := taskMovePreparationFailurePresentation(
+			var setupErr *serverapi.WorktreeSetupRetainedError
+			if errors.As(err, &setupErr) {
+				presentation, projectionErr := taskMoveSetupFailurePresentation(
 					taskLifecycleCommandContext{
 						TaskRef: positionals[0],
 						Move:    &moveRecoveryCommand,
 					},
-					preparationErr,
+					setupErr,
 				)
 				if projectionErr != nil {
 					fmt.Fprintln(stderr, projectionErr)
@@ -831,19 +831,6 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 				}
 				renderTaskLifecyclePresentation(stderr, presentation)
 				return 1
-			}
-			var retainedErr *serverapi.WorkflowTaskMoveRetainedWorktreeError
-			if errors.As(err, &retainedErr) {
-				presentation, projectionErr := taskLifecycleRetainedWorktreePresentation(
-					taskLifecycleOperationMove,
-					positionals[0],
-					&retainedErr.RetainedPreviousWorktree,
-				)
-				if projectionErr != nil {
-					fmt.Fprintln(stderr, projectionErr)
-					return 1
-				}
-				renderTaskLifecyclePresentation(stderr, presentation)
 			}
 			if !writeWorkflowExecutionTargetError(stderr, err) &&
 				!writeWorkflowTaskMutationSelfTargetError(stderr, err) {

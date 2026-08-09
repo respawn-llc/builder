@@ -53,9 +53,8 @@ type Service struct {
 }
 
 type initiatingActionTargetDecision struct {
-	prepared                  *preparedInitiatingActionTarget
-	selectionRequired         *serverapi.WorkflowExecutionTargetSelectionRequirement
-	preMaterializationFailure bool
+	prepared          *preparedInitiatingActionTarget
+	selectionRequired *serverapi.WorkflowExecutionTargetSelectionRequirement
 }
 
 type initiatingActionTargetPreflight struct {
@@ -84,7 +83,6 @@ type initiatingActionResult[T any] struct {
 	applied                  *T
 	selectionRequired        *serverapi.WorkflowExecutionTargetSelectionRequirement
 	retainedPreviousWorktree *serverapi.RetainedPreviousWorktree
-	preparationFailure       *serverapi.WorkflowTaskMovePreparationError
 }
 
 type preparedInitiatingActionTarget struct {
@@ -1109,18 +1107,12 @@ func coordinateInitiatingAction[T any](ctx context.Context, service *Service, re
 	if req.requiresExecutionTarget {
 		targetDecision, err := service.initiatingActionTarget(ctx, req.taskID, req.setupOperationID, req.targetPreflight)
 		if err != nil {
-			if targetDecision.prepared != nil || targetDecision.preMaterializationFailure {
-				prepared := preparedInitiatingActionTarget{}
-				if targetDecision.prepared != nil {
-					prepared = *targetDecision.prepared
-				}
-				preparationFailure, preparationFailureErr := movePreparationError(prepared, err)
-				if preparationFailureErr != nil {
-					return initiatingActionResult[T]{}, errors.Join(err, preparationFailureErr)
-				}
-				return initiatingActionResult[T]{preparationFailure: preparationFailure}, err
+			if targetDecision.prepared != nil {
+				retainedPreviousWorktree = targetDecision.prepared.retainedPreviousWorktree
 			}
-			return initiatingActionResult[T]{}, err
+			return initiatingActionResult[T]{
+				retainedPreviousWorktree: retainedPreviousWorktree,
+			}, err
 		}
 		if targetDecision.selectionRequired != nil {
 			return initiatingActionResult[T]{selectionRequired: targetDecision.selectionRequired}, nil
@@ -1130,13 +1122,8 @@ func coordinateInitiatingAction[T any](ctx context.Context, service *Service, re
 			retainedPreviousWorktree = targetDecision.prepared.retainedPreviousWorktree
 			if candidate != nil {
 				if err := service.store.LockTaskExecutionTarget(ctx, req.taskID, candidate); err != nil {
-					preparationFailure, preparationFailureErr := movePreparationError(*targetDecision.prepared, err)
-					if preparationFailureErr != nil {
-						return initiatingActionResult[T]{}, errors.Join(err, preparationFailureErr)
-					}
 					return initiatingActionResult[T]{
 						retainedPreviousWorktree: retainedPreviousWorktree,
-						preparationFailure:       preparationFailure,
 					}, err
 				}
 				candidate = nil
@@ -1218,10 +1205,7 @@ func (s *Service) initiatingActionTarget(ctx context.Context, taskID workflow.Ta
 	}
 	snapshot, selectionRequired, err := s.resolveInitiatingActionTarget(ctx, preflight)
 	if err != nil {
-		return initiatingActionTargetDecision{
-			preMaterializationFailure: !preflight.explicit ||
-				preflight.selection.Mode != workflow.ExecutionTargetModeCustomRef,
-		}, err
+		return initiatingActionTargetDecision{}, err
 	}
 	if selectionRequired != nil {
 		return initiatingActionTargetDecision{selectionRequired: selectionRequired}, err
@@ -1237,14 +1221,6 @@ func (s *Service) initiatingActionTarget(ctx context.Context, taskID workflow.Ta
 	return initiatingActionTargetDecision{
 		prepared: &prepared,
 	}, err
-}
-
-func movePreparationError(
-	prepared preparedInitiatingActionTarget,
-	cause error,
-) (*serverapi.WorkflowTaskMovePreparationError, error) {
-	failed := preparationFailurePayload(prepared.setupResult, prepared.retainedWorktree, prepared.retainedPreviousWorktree, cause)
-	return serverapi.NewWorkflowTaskMovePreparationError(*failed, cause)
 }
 
 func (s *Service) resolveInitiatingActionTarget(
@@ -1909,19 +1885,6 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 		}, nil
 	}
 	if err != nil && coordinated.applied == nil {
-		if coordinated.preparationFailure != nil {
-			return serverapi.WorkflowTaskMoveResponse{}, coordinated.preparationFailure
-		}
-		if coordinated.retainedPreviousWorktree != nil {
-			retainedErr, retainedErrCreation := serverapi.NewWorkflowTaskMoveRetainedWorktreeError(
-				*coordinated.retainedPreviousWorktree,
-				err,
-			)
-			if retainedErrCreation != nil {
-				return serverapi.WorkflowTaskMoveResponse{}, errors.Join(err, retainedErrCreation)
-			}
-			return serverapi.WorkflowTaskMoveResponse{}, retainedErr
-		}
 		return serverapi.WorkflowTaskMoveResponse{}, err
 	}
 	if coordinated.selectionRequired != nil {
