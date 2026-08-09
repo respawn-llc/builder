@@ -105,38 +105,17 @@ describe("VirtualizedInfiniteList pixel restoration", () => {
   });
 
   it("restores pixels before an owning layout effect can capture the initial anchor", () => {
-    const events: string[] = [];
-    virtualizer.scrollToOffset.mockImplementation(() => {
-      events.push("restore");
-    });
+    let capturedScrollTop: number | undefined;
     function LayoutOwner() {
       useLayoutEffect(() => {
-        events.push("capture");
+        capturedScrollTop = screen.getByRole("list").scrollTop;
       }, []);
       return <List request={createVirtualizedPixelOffsetRequest("layout-order", 240)} />;
     }
 
     render(<LayoutOwner />);
 
-    expect(events).toEqual(["restore", "capture"]);
-  });
-
-  it("writes the restored pixel offset to the scroll element", () => {
-    const scrollElement = { current: null as HTMLDivElement | null };
-    virtualizer.scrollToOffset.mockImplementationOnce(() => {
-      expect(scrollElement.current?.scrollTop).toBe(240);
-    });
-
-    render(
-      <List
-        onScrollElementChange={(element) => {
-          scrollElement.current = element;
-        }}
-        request={createVirtualizedPixelOffsetRequest("element-offset", 240)}
-      />,
-    );
-
-    expect(scrollElement.current?.scrollTop).toBe(240);
+    expect(capturedScrollTop).toBe(240);
   });
 
   it("accepts absence without issuing a restoration request", () => {
