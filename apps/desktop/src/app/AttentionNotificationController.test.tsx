@@ -340,6 +340,7 @@ function setupRecoveryTaskAttention(setupOperationID: string) {
         },
         session_id: null,
         session_name: null,
+        setup_operation_id: null,
         detail_json: JSON.stringify({ code: "workflow_runtime_failed", fields: {} }),
         occurred_at_unix_ms: 1,
       },

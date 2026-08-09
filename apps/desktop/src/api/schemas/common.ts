@@ -558,7 +558,7 @@ export const attentionItemSchema: z.ZodType<AttentionItem> = z.discriminatedUnio
       session_id: nullableNonBlankString,
       session_name: z.null(),
       detail_json: nullableNonBlankString,
-      setup_operation_id: setupOperationIDSchema.nullable().optional(),
+      setup_operation_id: setupOperationIDSchema.nullable(),
       message: nullableNonBlankString,
     })
     .strict()

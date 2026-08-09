@@ -236,6 +236,7 @@ export const interruptedTaskAttentionResponse = {
       current_node: { node_id: "node-script", transition_branch_key: null, session_id: null },
       session_id: null,
       session_name: null,
+      setup_operation_id: null,
       detail_json: '{"kind":"script_failure","stderr":"permission denied"}',
     },
   ],

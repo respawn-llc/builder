@@ -28,6 +28,24 @@ func TestWorkflowAttentionItemEncodesAbsentSessionNameAsNull(t *testing.T) {
 	}
 }
 
+func TestWorkflowAttentionItemEncodesAbsentSetupOperationIDAsNull(t *testing.T) {
+	encoded, err := json.Marshal(validWorkflowAttentionInterrupted())
+	if err != nil {
+		t.Fatalf("marshal attention item: %v", err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		t.Fatalf("decode attention item: %v", err)
+	}
+	setupOperationID, present := fields["setup_operation_id"]
+	if !present {
+		t.Fatal("setup_operation_id was omitted")
+	}
+	if string(setupOperationID) != "null" {
+		t.Fatalf("setup_operation_id = %s, want null", setupOperationID)
+	}
+}
+
 func TestWorkflowAttentionItemValidateEnforcesDiscriminatedVariants(t *testing.T) {
 	question := func(mutate func(*WorkflowAttentionItem)) WorkflowAttentionItem {
 		item := validWorkflowAttentionQuestion()

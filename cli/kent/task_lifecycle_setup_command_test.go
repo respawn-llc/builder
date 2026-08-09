@@ -362,6 +362,10 @@ func TestNotRequiredSetupResultSucceedsAndKeepsRetainedWorktreeWarning(t *testin
 	if !reflect.DeepEqual(outcome.Presentation.Actions, wantActions) {
 		t.Fatalf("successful warning actions = %+v, want %+v", outcome.Presentation.Actions, wantActions)
 	}
+	if len(outcome.Presentation.Actions) != 1 ||
+		outcome.Presentation.Actions[0].Kind != taskLifecycleActionListWorktrees {
+		t.Fatalf("successful warning actions = %+v, want only Worktree inspection", outcome.Presentation.Actions)
+	}
 }
 
 func TestTaskStartCompletedSetupPreservesJSONAppliedOutcome(t *testing.T) {
@@ -842,13 +846,16 @@ func TestAppliedMoveRetainedPreviousWorktreeProjectsTypedInspectionWarning(t *te
 	if err != nil {
 		t.Fatalf("taskLifecycleRetainedWorktreePresentation: %v", err)
 	}
-	if presentation.RetainedPreviousWorktree.Path != "/tmp/move-orphan" ||
-		presentation.RetainedPreviousWorktree.DeletionSelector != "worktree-1" {
+	if presentation.RetainedPreviousWorktree.Path != "/tmp/move-orphan" {
 		t.Fatalf("presentation = %+v", presentation)
 	}
 	wantActions := retainedWorktreeInspectionActions(presentation.RetainedPreviousWorktree)
 	if !reflect.DeepEqual(presentation.Actions, wantActions) {
 		t.Fatalf("actions = %+v, want %+v", presentation.Actions, wantActions)
+	}
+	if len(presentation.Actions) != 1 ||
+		presentation.Actions[0].Kind != taskLifecycleActionListWorktrees {
+		t.Fatalf("actions = %+v, want only Worktree inspection", presentation.Actions)
 	}
 }
 

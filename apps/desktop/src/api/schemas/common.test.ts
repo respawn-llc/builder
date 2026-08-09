@@ -50,6 +50,7 @@ const interruptedCurrentNodeAttentionItem = {
   current_node: { node_id: "node-1", transition_branch_key: null, session_id: null },
   session_id: null,
   session_name: null,
+  setup_operation_id: null,
   message: "Current Node interrupted",
   occurred_at_unix_ms: 1,
 };
@@ -132,6 +133,11 @@ describe("attentionItemSchema", () => {
       { ...interruptedCurrentNodeAttentionItem, question: { kind: "ordinary" } },
       { ...interruptedCurrentNodeAttentionItem, approval_id: "approval-1" },
       { ...interruptedCurrentNodeAttentionItem, approval_snapshot: approvalSnapshot },
+      (() => {
+        const item = { ...interruptedCurrentNodeAttentionItem };
+        Reflect.deleteProperty(item, "setup_operation_id");
+        return item;
+      })(),
       { ...baseAttentionItem, session_id: "" },
       { ...interruptedCurrentNodeAttentionItem, detail_json: "" },
       (() => {

@@ -1176,7 +1176,7 @@ type WorkflowAttentionItem struct {
 	SessionID              *string                            `json:"session_id,omitempty"`
 	SessionName            *string                            `json:"session_name"`
 	DetailJSON             *string                            `json:"detail_json,omitempty"`
-	SetupOperationID       *WorktreeSetupOperationID          `json:"setup_operation_id,omitempty"`
+	SetupOperationID       *WorktreeSetupOperationID          `json:"setup_operation_id"`
 	QuestionID             *string                            `json:"question_id,omitempty"`
 	Suggestions            []string                           `json:"suggestions,omitempty"`
 	RecommendedOptionIndex *int                               `json:"recommended_option_index,omitempty"`

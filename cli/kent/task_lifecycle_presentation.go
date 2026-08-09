@@ -40,7 +40,6 @@ const (
 	taskLifecycleActionChooseCustomRef     taskLifecycleActionKind = "choose_custom_ref"
 	taskLifecycleActionInspectTask         taskLifecycleActionKind = "inspect_task"
 	taskLifecycleActionListWorktrees       taskLifecycleActionKind = "list_worktrees"
-	taskLifecycleActionDeleteWorktree      taskLifecycleActionKind = "delete_worktree"
 )
 
 type taskLifecycleGuidanceKind string
@@ -53,8 +52,7 @@ type taskLifecycleAction struct {
 }
 
 type taskLifecycleWorktree struct {
-	Path             string
-	DeletionSelector string
+	Path string
 }
 
 type taskLifecycleCommandContext struct {
@@ -248,13 +246,8 @@ func taskLifecycleWorktreeFromTopology(topology *serverapi.WorktreeTopologyEntry
 	if topology.Variant != serverapi.WorktreeTopologyVariantRegistered || topology.Registered == nil {
 		return nil, errors.New("retained worktree must be registered")
 	}
-	selector, err := topology.DeletionSelector()
-	if err != nil {
-		return nil, fmt.Errorf("resolve retained worktree deletion selector: %w", err)
-	}
 	return &taskLifecycleWorktree{
-		Path:             topology.Registered.Git.CanonicalRoot,
-		DeletionSelector: selector,
+		Path: topology.Registered.Git.CanonicalRoot,
 	}, nil
 }
 
@@ -339,17 +332,6 @@ func retainedWorktreeInspectionActions(retained *taskLifecycleWorktree) []taskLi
 	}
 	return []taskLifecycleAction{
 		{Kind: taskLifecycleActionListWorktrees, Args: []string{config.Command, "worktree", "list"}},
-		{
-			Kind: taskLifecycleActionDeleteWorktree,
-			Args: []string{
-				config.Command,
-				"worktree",
-				"delete",
-				"--session",
-				"<session-id>",
-				retained.DeletionSelector,
-			},
-		},
 	}
 }
 
