@@ -1514,7 +1514,18 @@ func (s *Service) resumeWorkflowTask(ctx context.Context, req serverapi.Workflow
 	if err != nil {
 		return serverapi.WorkflowTaskResumeResponse{}, err
 	}
+	setupRecovery, err := canonicalResumeSetupRecovery(interrupted)
+	if err != nil {
+		return serverapi.WorkflowTaskResumeResponse{}, err
+	}
 	if req.ExecutionTarget == nil {
+		if setupRecovery != nil {
+			return serverapi.WorkflowTaskResumeResponse{}, serverapi.WorkflowRequestValidationError{
+				Code:    serverapi.WorkflowRequestErrorRequired,
+				Field:   "execution_target",
+				Message: "execution target is required for canonical setup recovery",
+			}
+		}
 		selectionRequired, err := configuredTargetResumeSelection(interrupted)
 		if err != nil {
 			return serverapi.WorkflowTaskResumeResponse{}, err
@@ -1531,11 +1542,8 @@ func (s *Service) resumeWorkflowTask(ctx context.Context, req serverapi.Workflow
 		return serverapi.WorkflowTaskResumeResponse{}, err
 	}
 	setupRequirement := worktreecontract.SetupRequirementRequired
-	if req.ExecutionTarget != nil {
-		setupRequirement, err = exactResumeSetupRequirement(interrupted, target.selection)
-		if err != nil {
-			return serverapi.WorkflowTaskResumeResponse{}, err
-		}
+	if setupRecovery != nil && setupRecovery.ExecutionTarget.Equal(target.selection) {
+		setupRequirement = setupRecovery.SetupRequirement
 	}
 	var preparation *workflowexecution.TaskStartPreparation
 	if target.context.Task.ExecutionTarget == nil {
@@ -1620,30 +1628,27 @@ func (s *Service) resumeWorkflowTask(ctx context.Context, req serverapi.Workflow
 	}, nil
 }
 
-func exactResumeSetupRequirement(
+func canonicalResumeSetupRecovery(
 	nodes []workflow.CurrentNode,
-	selection workflow.ExecutionTargetSelection,
-) (worktreecontract.SetupRequirement, error) {
-	requirement := worktreecontract.SetupRequirementRequired
-	found := false
+) (*workflow.CurrentNodeSetupRecoveryDetail, error) {
+	var canonical *workflow.CurrentNodeSetupRecoveryDetail
 	for _, node := range nodes {
 		if node.Scheduling == nil || node.Scheduling.Interruption == nil {
 			continue
 		}
 		recovery := node.Scheduling.Interruption.Detail.SetupRecovery
-		if recovery == nil || !recovery.ExecutionTarget.Equal(selection) {
+		if recovery == nil {
 			continue
 		}
 		if err := recovery.Validate(); err != nil {
-			return "", fmt.Errorf("invalid setup recovery interruption: %w", err)
+			return nil, fmt.Errorf("invalid setup recovery interruption: %w", err)
 		}
-		if found && requirement != recovery.SetupRequirement {
-			return "", errors.New("matching setup recovery interruptions disagree on setup requirement")
+		if canonical != nil {
+			return nil, errors.New("multiple canonical setup recovery interruptions")
 		}
-		requirement = recovery.SetupRequirement
-		found = true
+		canonical = recovery
 	}
-	return requirement, nil
+	return canonical, nil
 }
 
 func (s *Service) ApproveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskApproveRequest) (serverapi.WorkflowTaskApproveResponse, error) {

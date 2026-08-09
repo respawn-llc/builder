@@ -413,4 +413,111 @@ describe("worktree setup API", () => {
     expect(errors).toHaveLength(1);
     expect(errors[0]).toBeInstanceOf(ContractError);
   });
+
+  it("accepts explicit null and rejects omitted setup output streams", () => {
+    const transport = new FakeRpcTransport([]);
+    const client = new ApiClient(transport);
+    const setupOperationID = newSetupOperationID();
+    const events: WorktreeSetupEvent[] = [];
+    const errors: Error[] = [];
+    client.subscribeWorktreeSetup(setupOperationID, {
+      onEvent(event) {
+        events.push(event);
+      },
+      onComplete() {
+        return;
+      },
+      onError(error) {
+        errors.push(error);
+      },
+    });
+
+    const failure = {
+      retry_readiness: "retry_ready",
+      diagnostic: "setup failed",
+      script_path: "/src/setup.sh",
+      execution_target: { mode: "head" },
+      retained_worktree: registeredWorktreeWire("/worktree", "worktree-current"),
+      retained_previous_worktree: null,
+    } as const;
+    transport.emit("worktree.setup", {
+      event: {
+        setup_operation_id: setupOperationID.toJSONValue(),
+        phase: "failed",
+        failed: {
+          ...failure,
+          cause: {
+            kind: "process_exit",
+            process_exit: { exit_code: 1, stdout: null, stderr: null },
+          },
+        },
+      },
+    });
+    transport.emit("worktree.setup", {
+      event: {
+        setup_operation_id: setupOperationID.toJSONValue(),
+        phase: "failed",
+        failed: {
+          ...failure,
+          cause: {
+            kind: "timeout",
+            timeout: { stdout: null, stderr: null },
+          },
+        },
+      },
+    });
+    transport.emit("worktree.setup", {
+      event: {
+        setup_operation_id: setupOperationID.toJSONValue(),
+        phase: "failed",
+        failed: {
+          ...failure,
+          cause: {
+            kind: "process_exit",
+            process_exit: { exit_code: 1, stderr: null },
+          },
+        },
+      },
+    });
+    transport.emit("worktree.setup", {
+      event: {
+        setup_operation_id: setupOperationID.toJSONValue(),
+        phase: "failed",
+        failed: {
+          ...failure,
+          cause: {
+            kind: "timeout",
+            timeout: { stdout: null },
+          },
+        },
+      },
+    });
+
+    expect(events).toHaveLength(2);
+    expect(events).toMatchObject([
+      {
+        phase: "failed",
+        failed: {
+          cause: {
+            kind: "process_exit",
+            stdout: null,
+            stderr: null,
+          },
+        },
+      },
+      {
+        phase: "failed",
+        failed: {
+          cause: {
+            kind: "timeout",
+            stdout: null,
+            stderr: null,
+          },
+        },
+      },
+    ]);
+    expect(errors).toHaveLength(2);
+    expect(errors[0]).toBeInstanceOf(ContractError);
+    expect(errors[1]).toBeInstanceOf(ContractError);
+  });
 });

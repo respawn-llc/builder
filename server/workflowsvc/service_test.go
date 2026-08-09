@@ -2163,9 +2163,29 @@ func TestServiceSetupFailureRecoverySequenceKeepsTaskReadableAndLocksOnlyAfterRe
 	}
 
 	service.currentNodeExecution = &currentNodeCompletionExecutionStub{store: service.store}
+	setWorkflowServiceExecutionTargetPolicy(t, ctx, service, workflowID, serverapi.WorkflowExecutionTargetConfiguration{
+		Mode: serverapi.WorkflowExecutionTargetModeNone,
+	})
+	_, err = service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
+		TaskID:           task.Task.ID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	})
+	var validationErr serverapi.WorkflowRequestValidationError
+	if !errors.As(err, &validationErr) ||
+		validationErr.Code != serverapi.WorkflowRequestErrorRequired ||
+		validationErr.Field != "execution_target" {
+		t.Fatalf("policy-based ResumeWorkflowTask error = %T %v, want required exact execution target", err, err)
+	}
+	if prepareCalls != 1 {
+		t.Fatalf("execution-root preparation calls after rejected policy Resume = %d, want initial failure only", prepareCalls)
+	}
+
 	resumed, err := service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
 		TaskID:           task.Task.ID,
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
+			Mode: serverapi.WorkflowExecutionTargetModeHead,
+		},
 	})
 	if err != nil ||
 		resumed.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeApplied ||

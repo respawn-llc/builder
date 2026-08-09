@@ -298,8 +298,48 @@ func TestWorktreeSetupEventJSONKeepsInapplicableFactsAbsentAndNullableOutputPres
 	if err := json.Unmarshal(timeoutFields["stdout"], &stdout); err != nil || stdout != "" {
 		t.Fatalf("nullable stdout output was not preserved: %s", raw)
 	}
-	if _, exists := timeoutFields["stderr"]; exists {
-		t.Fatalf("nullable output presence was not preserved: %s", raw)
+	if got := string(timeoutFields["stderr"]); got != "null" {
+		t.Fatalf("timeout stderr = %s, want explicit null: %s", got, raw)
+	}
+
+	processExit := WorktreeSetupEvent{
+		SetupOperationID: id,
+		Phase:            WorktreeSetupPhaseFailed,
+		Failed: &WorktreeSetupFailed{
+			RetryReadiness: WorktreeSetupRetryReady,
+			Cause: WorktreeSetupFailureCause{
+				Kind:        WorktreeSetupFailureProcessExit,
+				ProcessExit: &WorktreeSetupProcessExit{ExitCode: 1},
+			},
+			Diagnostic:       "setup exited",
+			ScriptPath:       stringValuePointer("/source/scripts/setup.sh"),
+			RetainedWorktree: testRegisteredWorktreeTopology(),
+		},
+	}
+	raw, err = json.Marshal(processExit)
+	if err != nil {
+		t.Fatalf("marshal process-exit failure: %v", err)
+	}
+	eventFields = nil
+	if err := json.Unmarshal(raw, &eventFields); err != nil {
+		t.Fatalf("decode process-exit event fields: %v", err)
+	}
+	failedFields = nil
+	if err := json.Unmarshal(eventFields["failed"], &failedFields); err != nil {
+		t.Fatalf("decode process-exit failure fields: %v", err)
+	}
+	causeFields = nil
+	if err := json.Unmarshal(failedFields["cause"], &causeFields); err != nil {
+		t.Fatalf("decode process-exit cause fields: %v", err)
+	}
+	var processExitFields map[string]json.RawMessage
+	if err := json.Unmarshal(causeFields["process_exit"], &processExitFields); err != nil {
+		t.Fatalf("decode process-exit fields: %v", err)
+	}
+	for _, field := range []string{"stdout", "stderr"} {
+		if got := string(processExitFields[field]); got != "null" {
+			t.Fatalf("process-exit %s = %s, want explicit null: %s", field, got, raw)
+		}
 	}
 
 	targetPreparation := WorktreeSetupEvent{

@@ -40,8 +40,8 @@ const processExitCauseSchema = z
           .number()
           .int()
           .refine((value) => value !== 0),
-        stdout: z.string().nullable().optional(),
-        stderr: z.string().nullable().optional(),
+        stdout: z.string().nullable(),
+        stderr: z.string().nullable(),
       })
       .strict(),
   })
@@ -49,8 +49,8 @@ const processExitCauseSchema = z
   .transform((value): WorktreeSetupFailureCause => ({
     kind: value.kind,
     exitCode: value.process_exit.exit_code,
-    stdout: value.process_exit.stdout ?? null,
-    stderr: value.process_exit.stderr ?? null,
+    stdout: value.process_exit.stdout,
+    stderr: value.process_exit.stderr,
   }));
 
 const timeoutCauseSchema = z
@@ -58,16 +58,16 @@ const timeoutCauseSchema = z
     kind: z.literal("timeout"),
     timeout: z
       .object({
-        stdout: z.string().nullable().optional(),
-        stderr: z.string().nullable().optional(),
+        stdout: z.string().nullable(),
+        stderr: z.string().nullable(),
       })
       .strict(),
   })
   .strict()
   .transform((value): WorktreeSetupFailureCause => ({
     kind: value.kind,
-    stdout: value.timeout.stdout ?? null,
-    stderr: value.timeout.stderr ?? null,
+    stdout: value.timeout.stdout,
+    stderr: value.timeout.stderr,
   }));
 
 const markerCauseSchema = (

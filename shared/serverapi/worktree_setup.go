@@ -116,13 +116,13 @@ type WorktreeSetupNotRequired struct {
 
 type WorktreeSetupProcessExit struct {
 	ExitCode int     `json:"exit_code"`
-	Stdout   *string `json:"stdout,omitempty"`
-	Stderr   *string `json:"stderr,omitempty"`
+	Stdout   *string `json:"stdout"`
+	Stderr   *string `json:"stderr"`
 }
 
 type WorktreeSetupTimeout struct {
-	Stdout *string `json:"stdout,omitempty"`
-	Stderr *string `json:"stderr,omitempty"`
+	Stdout *string `json:"stdout"`
+	Stderr *string `json:"stderr"`
 }
 
 type WorktreeSetupPreparationFailure struct{}
