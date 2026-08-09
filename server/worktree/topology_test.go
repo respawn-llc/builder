@@ -319,7 +319,6 @@ func TestPreviewWorktreeDeleteDoesNotHoldMutationLane(t *testing.T) {
 	go func() {
 		response, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
 			SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-			ClientRequestID:  "req-create-preview-mutation-lane",
 			SessionID:        env.session.Meta().SessionID,
 			BaseRef:          "HEAD",
 			CreateBranch:     true,
@@ -464,7 +463,6 @@ func TestProjectTopologyRejectsDuplicateGitAndKentRoots(t *testing.T) {
 func TestCreateRegistersOnlyTheCreatedWorktreeWithoutReconcilingOtherTopology(t *testing.T) {
 	env := newServiceTestEnv(t)
 	response, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
-		ClientRequestID:  "create-without-reconcile",
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
 		SessionID:        env.session.Meta().SessionID,
 		BaseRef:          "HEAD",

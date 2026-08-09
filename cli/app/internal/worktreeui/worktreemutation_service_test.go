@@ -171,7 +171,7 @@ func TestCreateEnterDeletePopulateRequests(t *testing.T) {
 	if _, err := service.Delete(" wt-3 ", true, serverapi.WorktreeBranchCleanupModeDeleteSafe); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	if got := client.createRequests[0]; got.ClientRequestID != "request-1" || got.SessionID != "session-1" || got.BranchName != "feature/a" {
+	if got := client.createRequests[0]; got.SessionID != "session-1" || got.BranchName != "feature/a" {
 		t.Fatalf("create request = %+v", got)
 	}
 	if got := client.enterRequests[0]; got.OperationID != testWorktreeOperationID(t) || got.SessionID != "session-1" || got.Selector != "feature/a" {
@@ -269,8 +269,7 @@ func newTestService(client *testWorktreeClient) Service {
 			},
 			RecoverRuntimeConnection: func(context.Context, error, bool) error { return nil },
 		},
-		NewClientRequestID: func() string { return "request-1" },
-		NewOperationID:     func() serverapi.WorktreeOperationID { return testWorktreeOperationID(nil) },
+		NewOperationID: func() serverapi.WorktreeOperationID { return testWorktreeOperationID(nil) },
 	}
 }
 
