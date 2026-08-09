@@ -28,6 +28,8 @@ type Core struct {
 	closeErr  error
 }
 
+var workspaceChatDraftLanes = requestmemo.NewMutationLaneRegistry[string]()
+
 type unregisteredSessionLaunchClient struct{}
 
 func (unregisteredSessionLaunchClient) PlanSession(context.Context, serverapi.SessionPlanRequest) (serverapi.SessionPlanResponse, error) {
@@ -281,9 +283,6 @@ func (s *Core) sessionLaunchServiceForProjectContextLocked(projectCtx projectCon
 	if cached := s.safeBundles().Sessions.sessionServices[scopeKey]; cached != nil {
 		return cached
 	}
-	if s.safeBundles().Sessions.workspaceChatDraftLanes == nil {
-		s.safeBundles().Sessions.workspaceChatDraftLanes = requestmemo.NewMutationLaneRegistry[string]()
-	}
 	service := sessionlaunch.NewService(launch.Planner{
 		Config:                   projectCtx.config,
 		ContainerDir:             projectCtx.projectSession,
@@ -297,7 +296,7 @@ func (s *Core) sessionLaunchServiceForProjectContextLocked(projectCtx projectCon
 	}).
 		WithWorkspaceID(projectCtx.workspaceID).
 		WithFastModeState(s.safeBundles().Runtime.fastModeState).
-		WithWorkspaceChatDraftMutationLanes(s.safeBundles().Sessions.workspaceChatDraftLanes).
+		WithWorkspaceChatDraftMutationLanes(workspaceChatDraftLanes).
 		WithWorkspaceChatDraftStore(s.safeBundles().Persistence.metadataStore).
 		WithAuthStateReader(s.safeBundles().Auth.support.AuthManager).
 		WithPromptHistoryReader(s.safeBundles().Persistence.metadataStore).

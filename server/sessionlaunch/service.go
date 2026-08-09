@@ -84,84 +84,44 @@ func (s *Service) WithRuntimeAuthority(authority *sessionruntime.Authority) *Ser
 }
 
 func (s *Service) WithWorkspaceID(workspaceID string) *Service {
-	if s != nil {
-		s.workspaceID = strings.TrimSpace(workspaceID)
-	}
-	return s
+	if s != nil { s.workspaceID = strings.TrimSpace(workspaceID) }; return s
 }
 
 func (s *Service) WithFastModeState(state *runtime.FastModeState) *Service {
-	if s != nil {
-		s.fastModeState = state
-	}
-	return s
+	if s != nil { s.fastModeState = state }; return s
 }
 
 func (s *Service) WithWorkspaceChatDraftMutationLanes(lanes *requestmemo.MutationLaneRegistry[string]) *Service {
-	if s != nil {
-		s.draftLanes = lanes
-	}
-	return s
+	if s != nil { s.draftLanes = lanes }; return s
 }
 
 func (s *Service) WithWorkspaceChatDraftStore(store *metadata.Store) *Service {
-	if s == nil {
-		return nil
-	}
-	if store != nil {
-		s.draftOwner = NewWorkspaceChatDraftOwner(store, s.workspaceChatDraftResolverInput, s.draftLanes)
-	} else {
-		s.draftOwner = nil
-	}
-	return s
+	if s == nil { return nil }; if store != nil { s.draftOwner = NewWorkspaceChatDraftOwner(store, s.workspaceChatDraftResolverInput, s.draftLanes) } else { s.draftOwner = nil }; return s
 }
 
 func (s *Service) workspaceChatDraftResolverInput(ctx context.Context) (WorkspaceChatDraftResolverInput, error) {
 	planner := s.planner
 	if planner.ReloadConfig != nil {
-		snapshot, err := planner.ReloadConfig()
-		if err != nil {
-			return WorkspaceChatDraftResolverInput{}, err
-		}
-		planner.Config = snapshot
+		snapshot, err := planner.ReloadConfig(); if err != nil { return WorkspaceChatDraftResolverInput{}, err }; planner.Config = snapshot
 	}
 	authState := auth.EmptyState()
 	if s.authStates != nil {
-		var err error
-		authState, err = s.authStates.CurrentState(ctx)
-		if err != nil {
-			return WorkspaceChatDraftResolverInput{}, err
-		}
+		var err error; authState, err = s.authStates.CurrentState(ctx); if err != nil { return WorkspaceChatDraftResolverInput{}, err }
 	}
-	return WorkspaceChatDraftResolverInput{Settings: planner.Config.Settings, Source: planner.Config.Source, AuthState: authState,
-		FastModeState: s.fastModeState}, nil
+	return WorkspaceChatDraftResolverInput{Settings: planner.Config.Settings, Source: planner.Config.Source, AuthState: authState, FastModeState: s.fastModeState}, nil
 }
 
 func (s *Service) workspaceChatDraftOwner() (*WorkspaceChatDraftOwner, string, error) {
-	if s == nil || s.draftOwner == nil {
-		return nil, "", errors.New("workspace Chat draft service is required")
-	}
-	id := strings.TrimSpace(s.workspaceID)
-	if id == "" {
-		return nil, "", errors.New("workspace id is required")
-	}
-	return s.draftOwner, id, nil
+	if s == nil || s.draftOwner == nil { return nil, "", errors.New("workspace Chat draft service is required") }; id := strings.TrimSpace(s.workspaceID)
+	if id == "" { return nil, "", errors.New("workspace id is required") }; return s.draftOwner, id, nil
 }
 
 func (s *Service) ResolveWorkspaceChatDraftAggregate(ctx context.Context) (WorkspaceChatDraftResolution, error) {
-	owner, workspaceID, err := s.workspaceChatDraftOwner()
-	if err != nil {
-		return WorkspaceChatDraftResolution{}, err
-	}
-	return owner.ResolveWorkspaceChatDraft(ctx, workspaceID)
+	owner, workspaceID, err := s.workspaceChatDraftOwner(); if err != nil { return WorkspaceChatDraftResolution{}, err }; return owner.ResolveWorkspaceChatDraft(ctx, workspaceID)
 }
 
 func (s *Service) TransformWorkspaceChatDraftAggregate(ctx context.Context, transform WorkspaceChatDraftTransform) (WorkspaceChatDraft, error) {
-	owner, workspaceID, err := s.workspaceChatDraftOwner()
-	if err != nil {
-		return WorkspaceChatDraft{}, err
-	}
-	return owner.TransformWorkspaceChatDraft(ctx, workspaceID, transform)
+	owner, workspaceID, err := s.workspaceChatDraftOwner(); if err != nil { return WorkspaceChatDraft{}, err }; return owner.TransformWorkspaceChatDraft(ctx, workspaceID, transform)
 }
 
 func (s *Service) WorkspaceChatDraft(ctx context.Context, req serverapi.WorkspaceChatDraftRequest) (serverapi.WorkspaceChatDraftResponse, error) {
@@ -171,9 +131,7 @@ func (s *Service) WorkspaceChatDraft(ctx context.Context, req serverapi.Workspac
 	switch req.Operation.Kind {
 	case serverapi.WorkspaceChatDraftReadMessage:
 		resolved, err := s.ResolveWorkspaceChatDraftAggregate(ctx)
-		if err != nil {
-			return serverapi.WorkspaceChatDraftResponse{}, err
-		}
+		if err != nil { return serverapi.WorkspaceChatDraftResponse{}, err }
 		return serverapi.WorkspaceChatDraftResponse{Message: resolved.Draft.Message}, nil
 	case serverapi.WorkspaceChatDraftUpdateMessage:
 		message := *req.Operation.Message
@@ -182,18 +140,11 @@ func (s *Service) WorkspaceChatDraft(ctx context.Context, req serverapi.Workspac
 			next.Message = message
 			return next, nil
 		})
-		if err != nil {
-			return serverapi.WorkspaceChatDraftResponse{}, err
-		}
+		if err != nil { return serverapi.WorkspaceChatDraftResponse{}, err }
 		return serverapi.WorkspaceChatDraftResponse{Message: resolved.Message}, nil
 	case serverapi.WorkspaceChatDraftClear, serverapi.WorkspaceChatDraftConsume:
 		owner, workspaceID, err := s.workspaceChatDraftOwner()
-		if err != nil {
-			return serverapi.WorkspaceChatDraftResponse{}, err
-		}
-		if err := owner.ClearWorkspaceChatDraft(ctx, workspaceID); err != nil {
-			return serverapi.WorkspaceChatDraftResponse{}, err
-		}
+		if err != nil { return serverapi.WorkspaceChatDraftResponse{}, err }; if err := owner.ClearWorkspaceChatDraft(ctx, workspaceID); err != nil { return serverapi.WorkspaceChatDraftResponse{}, err }
 		return serverapi.WorkspaceChatDraftResponse{}, nil
 	default:
 		return serverapi.WorkspaceChatDraftResponse{}, fmt.Errorf("workspace Chat draft operation kind %q is invalid", req.Operation.Kind)
