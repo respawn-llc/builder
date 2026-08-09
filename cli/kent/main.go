@@ -648,10 +648,7 @@ func runLiveWatchSubcommandWithCleanup(args []string, runWithCleanup liveWatchCl
 		return runObservationUsage(outputMode, err.Error())
 	}
 	if err := publishPersistenceRootEnv(*persistenceRoot); err != nil {
-		if outputMode == runOutputModeJSON {
-			return emitObservationError(os.Stdout, observationOperationRunWatch, observationTargetSession(sessionID.String()), context.Background(), err, nil, nil)
-		}
-		return runLiveFlagError(err)
+		return runObservationUsage(outputMode, err.Error())
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
