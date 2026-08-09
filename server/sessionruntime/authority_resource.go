@@ -156,6 +156,31 @@ func (b AgentRuntimeBridge) WithEngine(ctx context.Context, callback func(contex
 	return b.authority.WithRuntime(ctx, b.resource, callback)
 }
 
+func (b AgentRuntimeBridge) WithRuntimeLifetime(callback func(context.Context) error) error {
+	if b.authority == nil {
+		return errors.New("agent runtime bridge is uninitialized")
+	}
+	if callback == nil {
+		return errors.New("agent runtime lifetime callback is required")
+	}
+	b.authority.mu.Lock()
+	resource := b.authority.resources[b.resource.SessionID()]
+	b.authority.mu.Unlock()
+	if resource == nil {
+		return runtimeUnavailableError(b.resource)
+	}
+	resource.mu.Lock()
+	if resource.ref != b.resource || resource.rejectsNewUseLocked() {
+		resource.mu.Unlock()
+		return runtimeUnavailableError(b.resource)
+	}
+	resourceCtx := resource.ctx
+	resource.mu.Unlock()
+	ctx, stop := MergeContexts(resourceCtx, b.authority.lifecycleCtx)
+	defer stop()
+	return callback(ctx)
+}
+
 type AgentRunner func(context.Context, ExecutionScope, AgentRuntimeBridge) error
 
 type ExecutionAskHandler func(context.Context, ExecutionScope, tools.AskQuestionRequest) (tools.AskQuestionResolution, error)
@@ -294,6 +319,23 @@ func (r *agentResource) withEngine(ctx context.Context, ref runtimeids.SessionRe
 	return r.withRuntimeEvents(ctx, ref, func(callbackCtx context.Context, target RuntimeEventTarget) error {
 		return callback(callbackCtx, target.Engine)
 	})
+}
+
+func (r *agentResource) withEngineUnderAdmission(ctx context.Context, callback func(context.Context, *runtime.Engine) error) error {
+	if callback == nil {
+		return errors.New("agent resource callback is required")
+	}
+	r.mu.Lock()
+	if r.rejectsNewUseLocked() || r.engine == nil {
+		r.mu.Unlock()
+		return runtimeUnavailableError(r.ref)
+	}
+	engine := r.engine
+	r.callbacks++
+	r.signalLocked()
+	r.mu.Unlock()
+	defer r.releaseCallbackCount()
+	return callback(ctx, engine)
 }
 
 // withStoreUnderAdmission runs while the caller owns the Session admission

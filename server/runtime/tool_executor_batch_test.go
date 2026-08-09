@@ -114,6 +114,95 @@ func TestCompleteNodeKeepsCommittedResultAfterCancelingSiblingTools(t *testing.T
 	}
 }
 
+func TestCompleteNodeTerminalBatchDoesNotReobserveWithCanceledExecution(t *testing.T) {
+	store := mustCreateTestSession(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	completionReady := make(chan struct{})
+	close(completionReady)
+	baseController := &fakeWorkflowController{}
+	controller := &cancelingCompletionController{
+		fakeWorkflowController: baseController,
+		siblingStarted:         completionReady,
+		cancel:                 cancel,
+	}
+	engine := mustNewWorkflowTestEngine(
+		t,
+		store,
+		&fakeClient{},
+		testWorkflowConfig(controller, config.WorkflowCompletionModeTool),
+		Config{},
+	)
+	origin := serverapi.RuntimeStepOrigin{
+		RunID:  uuid.NewString(),
+		StepID: uuid.NewString(),
+	}
+	engine.agentSteps.current = &activeAgentStep{
+		scopeID: engine.agentSteps.scopeID,
+		origin:  origin,
+		phase:   agentStepProviderRunning,
+	}
+	executor := &defaultStepExecutor{
+		engine: engine,
+		tools:  &defaultToolExecutor{engine: engine},
+	}
+
+	_, terminal, err := executor.executeLocalToolCallsAndAppendResults(ctx, origin.StepID, []llm.ToolCall{
+		completeNodeCall(
+			"complete-node",
+			json.RawMessage(`{"commentary":"complete","summary":"done"}`),
+		),
+	})
+	if err != nil {
+		t.Fatalf("handle committed complete_node batch: %v", err)
+	}
+	if !terminal {
+		t.Fatal("committed complete_node batch was not terminal")
+	}
+	if baseController.completed.Load() != 1 {
+		t.Fatalf("workflow completions = %d, want one", baseController.completed.Load())
+	}
+}
+
+func TestSubmitWorkflowTurnSkipsBoundaryAfterCommittedCompleteNodeCancellation(t *testing.T) {
+	store := mustCreateTestSession(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	completionReady := make(chan struct{})
+	close(completionReady)
+	baseController := &fakeWorkflowController{}
+	controller := &cancelingCompletionController{
+		fakeWorkflowController: baseController,
+		siblingStarted:         completionReady,
+		cancel:                 cancel,
+	}
+	engine := mustNewWorkflowTestEngine(
+		t,
+		store,
+		&fakeClient{responses: []llm.Response{
+			commentaryResponse(
+				"complete",
+				completeNodeCall(
+					"complete-node",
+					json.RawMessage(`{"commentary":"complete","summary":"done"}`),
+				),
+			),
+		}},
+		testWorkflowConfig(controller, config.WorkflowCompletionModeTool),
+		Config{},
+	)
+
+	if _, err := engine.SubmitWorkflowTurn(ctx); err != nil {
+		t.Fatalf("submit committed complete_node Workflow turn: %v", err)
+	}
+	if terminal := engine.WorkflowTerminalState(); !terminal.Completed {
+		t.Fatalf("Workflow terminal state = %+v, want committed completion", terminal)
+	}
+	if baseController.completed.Load() != 1 {
+		t.Fatalf("workflow completions = %d, want one", baseController.completed.Load())
+	}
+}
+
 type cancelingCompletionController struct {
 	*fakeWorkflowController
 	siblingStarted <-chan struct{}
@@ -134,6 +223,16 @@ func (c *cancelingCompletionController) CompleteCurrentNode(
 		c.cancel()
 	}
 	return result, err
+}
+
+func (c *cancelingCompletionController) ObserveCurrentNodeCompletion(
+	ctx context.Context,
+	request workflowruntime.CompletionObservationRequest,
+) (workflowruntime.CompletionObservationResult, error) {
+	if cause := context.Cause(ctx); cause != nil {
+		return workflowruntime.CompletionObservationResult{}, cause
+	}
+	return c.fakeWorkflowController.ObserveCurrentNodeCompletion(ctx, request)
 }
 
 type toolExecutionProbe struct {

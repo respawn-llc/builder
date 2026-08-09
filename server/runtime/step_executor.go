@@ -265,7 +265,7 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 			return result, err
 		}
 		if s.engine.WorkflowTerminalState().Completed {
-			return result, nil
+			return result, s.engine.completeWorkflowTerminalAgentStep()
 		}
 		decision, boundaryErr := s.engine.completeAgentProviderBoundary(ctx, false)
 		if boundaryErr != nil {
@@ -587,13 +587,13 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 		if err != nil {
 			return stepLoopResult{}, err
 		}
-		if err := s.completeAgentStepBoundary(ctx); err != nil {
-			return stepLoopResult{}, err
-		}
 		patchEditsApplied = patchEditsApplied || applied
 		if terminal {
 			e.cascadeCompleteActiveGoalOnWorkflowCompletion()
 			return stepLoopResult{ExecutedToolCall: true}, nil
+		}
+		if err := s.completeAgentStepBoundary(ctx); err != nil {
+			return stepLoopResult{}, err
 		}
 	}
 }
@@ -834,6 +834,13 @@ func (s *defaultStepExecutor) executeAcceptedToolCallsAndAppendResults(
 		if !result.IsError && (result.Name == toolspec.ToolPatch || result.Name == toolspec.ToolEdit) {
 			patchEditsApplied = true
 		}
+	}
+	if terminal {
+		return patchEditsApplied, true, nil
+	}
+	durableTerminal, err := s.engine.observeWorkflowDurableCompletion(ctx)
+	if err != nil {
+		return false, false, err
 	}
 	return patchEditsApplied, terminal || durableTerminal, nil
 }

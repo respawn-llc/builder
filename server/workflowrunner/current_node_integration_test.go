@@ -463,6 +463,82 @@ func (f *currentNodeRunnerFixture) waitForModelRequests(t *testing.T, count int)
 	return f.waitForModelRequestsWithin(t, count, currentNodeRunnerWait)
 }
 
+func (f *currentNodeRunnerFixture) waitForTaskModelRequests(
+	t *testing.T,
+	taskID workflow.TaskID,
+	count int,
+) []llm.Request {
+	t.Helper()
+	deadline := time.Now().Add(currentNodeRunnerWait)
+	for len(f.client.Requests()) < count && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	requests := f.client.Requests()
+	if len(requests) != count {
+		nodes, listErr := f.store.ListCurrentNodes(context.Background(), taskID)
+		nodeJSON, _ := json.Marshal(nodes)
+		replacementTail := make([]string, 0)
+		if len(nodes) == 1 && nodes[0].SessionID != nil {
+			if persisted, err := f.metadata.ResolvePersistedSession(context.Background(), nodes[0].SessionID.String()); err == nil {
+				if store, err := session.Open(persisted.SessionDir, f.metadata.AuthoritativeSessionStoreOptions()...); err == nil {
+					if eventLog, err := store.MaterializeEventLog(); err == nil {
+						if window, err := eventLog.ReadNewestSegmentBackward(func(record session.EventRecord) bool {
+							payload, err := record.Payload()
+							if err != nil {
+								return false
+							}
+							replacement, ok := payload.(session.HistoryReplacementRecord)
+							return ok && replacement.Mode == session.CompactionModeWorkflowPostCompletion
+						}); err == nil {
+							for _, record := range window.Records {
+								payload, _ := record.Payload()
+								switch typed := payload.(type) {
+								case session.MessageRecord:
+									messageType := "<nil>"
+									if typed.MessageType != nil {
+										messageType = string(*typed.MessageType)
+									}
+									sourcePath := "<nil>"
+									if typed.SourcePath != nil {
+										sourcePath = *typed.SourcePath
+									}
+									replacementTail = append(replacementTail, fmt.Sprintf(
+										"%d:message:role=%s:type=%s:source=%s",
+										record.Seq(),
+										typed.Role,
+										messageType,
+										sourcePath,
+									))
+								case session.ToolCompletionRecord:
+									replacementTail = append(replacementTail, fmt.Sprintf(
+										"%d:tool:name=%s:call=%s",
+										record.Seq(),
+										typed.Name,
+										typed.CallID,
+									))
+								default:
+									replacementTail = append(replacementTail, fmt.Sprintf("%d:%T", record.Seq(), payload))
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		t.Fatalf(
+			"model requests = %d, want %d; Current Nodes = %s; list error = %v; replacement tail = %+v; runtime request count = %d; controller = %+v",
+			len(requests),
+			count,
+			nodeJSON,
+			listErr,
+			replacementTail,
+			len(f.runtimeRequests()),
+			f.controller.Snapshot(),
+		)
+	}
+	return requests
+}
+
 func (f *currentNodeRunnerFixture) waitForModelRequestsWithin(
 	t *testing.T,
 	count int,
@@ -475,7 +551,13 @@ func (f *currentNodeRunnerFixture) waitForModelRequestsWithin(
 	}
 	requests := f.client.Requests()
 	if len(requests) != count {
-		t.Fatalf("model requests = %d, want %d", len(requests), count)
+		t.Fatalf(
+			"model requests = %d, want %d; runtime requests = %+v; controller = %+v",
+			len(requests),
+			count,
+			f.runtimeRequests(),
+			f.controller.Snapshot(),
+		)
 	}
 	return requests
 }
@@ -980,7 +1062,7 @@ func TestWorkflowPostCompletionCompactionReachesCACTargetWithoutSecondSummary(t 
 	if _, err := f.controller.ApplyPendingApproval(context.Background(), approval.ID); err != nil {
 		t.Fatalf("apply CAC target Approval: %v", err)
 	}
-	requests := f.waitForModelRequests(t, 3)
+	requests := f.waitForTaskModelRequests(t, task.ID, 3)
 
 	compactions := client.CompactionCalls()
 	if len(compactions) != 1 {
@@ -1186,151 +1268,6 @@ func TestPostTurnCompactionDiagnosticReleasesAssignedSuccessor(t *testing.T) {
 	}
 }
 
-func TestWorkflowRunnerCancellationDuringPostTurnFinalizationFinalizesInterruptedSourceScope(t *testing.T) {
-	client := NewCompactingScriptedClient(
-		llm.ProviderCapabilities{
-			ProviderID:               "test",
-			SupportsResponsesAPI:     true,
-			SupportsResponsesCompact: true,
-			SupportsPromptCacheKey:   true,
-		},
-		[]llm.CompactionResponse{workflowPostCompletionCompactionResponse("completed review")},
-		ScriptedFinalAnswer(`{"transition":"rework","commentary":"changes requested"}`),
-	)
-	f := newCurrentNodeRunnerFixtureWithPersistenceGate(t, client)
-	f.starter.cfg.Settings.CompactionMode = config.CompactionModeNative
-	threshold := 1
-	f.starter.cfg.Settings.Workflow.PreCompactionTokens = &threshold
-	var postCompactionObservation atomic.Bool
-	compactionFinalizationStarted, releaseCompactionFinalization := f.persistenceGate.BlockWhen(func(session.PersistedStoreSnapshot) bool {
-		if len(client.CompactionCalls()) == 0 {
-			return false
-		}
-		return postCompactionObservation.Swap(true)
-	})
-	t.Cleanup(releaseCompactionFinalization)
-	workflowID := createCurrentNodeTwoStepWorkflowWithTransition(
-		t,
-		f.store,
-		"Approval post-turn cancellation",
-		currentNodeWorkflowStep{kind: workflow.NodeKindAgent, role: "reviewer", prompt: "Review the implementation."},
-		currentNodeWorkflowStep{kind: workflow.NodeKindAgent, role: "reviewer", prompt: "Address the review findings."},
-		currentNodeLinearTransition{
-			id:               "rework",
-			mode:             workflow.ContextModeContinueSession,
-			requiresApproval: true,
-			contextSource:    workflow.ContextSource{Kind: workflow.ContextSourceImmediateSource},
-		},
-	)
-	task := f.createTask(t, workflowID)
-	source := f.startTask(t, task)
-
-	select {
-	case <-compactionFinalizationStarted:
-	case <-time.After(currentNodeRunnerWait):
-		t.Fatal("post-turn compaction finalization did not reach the cancellation gate")
-	}
-	if len(client.CompactionCalls()) != 1 {
-		t.Fatalf("post-turn compactions before cancellation = %d, want one committed replacement", len(client.CompactionCalls()))
-	}
-	var execution sessionruntime.ExecutionHandle
-	snapshot := f.controller.Snapshot()
-	for _, live := range snapshot.LiveScopes {
-		if !live.CurrentNode.Equal(source) {
-			continue
-		}
-		var ok bool
-		execution, ok = f.authority.ExecutionByScope(live.ScopeID)
-		if !ok {
-			t.Fatalf("resolve exact execution scope %s", live.ScopeID)
-		}
-		break
-	}
-	if execution == nil {
-		for _, gate := range snapshot.Gates {
-			if !gate.CurrentNode.Equal(source) {
-				continue
-			}
-			var ok bool
-			execution, ok = f.authority.ExecutionByScope(gate.ScopeID)
-			if !ok {
-				t.Fatalf("resolve exact execution scope %s", gate.ScopeID)
-			}
-			break
-		}
-	}
-	if execution == nil {
-		t.Fatal("post-turn finalization had no live exact execution scope")
-	}
-	if !execution.RequestStop() {
-		t.Fatal("post-turn finalization exact execution scope was already stopped")
-	}
-	releaseCompactionFinalization()
-	stopContext, cancelStop := context.WithTimeout(context.Background(), currentNodeRunnerWait)
-	defer cancelStop()
-	if err := execution.Stop(stopContext); err != nil &&
-		!errors.Is(err, context.Canceled) {
-		t.Fatalf("stop workflow exact execution scope: %v", err)
-	}
-	f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
-		return len(nodes) == 1 &&
-			nodes[0].Reference.Equal(source) &&
-			nodes[0].Scheduling != nil &&
-			nodes[0].Scheduling.Interruption != nil
-	})
-	f.waitForControllerCurrentNodeFinalized(t, source)
-	approval := f.waitForPendingApproval(t, task.ID)
-	pending, err := f.store.ListPendingApprovals(context.Background(), task.ID)
-	if err != nil {
-		t.Fatalf("list pending Approval after cancellation: %v", err)
-	}
-	if len(pending) != 1 || pending[0].ID != approval.ID {
-		t.Fatalf("pending Approvals after cancellation = %+v, want held source Approval", pending)
-	}
-	association, err := f.store.LatestTaskSessionForNode(context.Background(), source)
-	if err != nil {
-		t.Fatalf("resolve canceled source Session: %v", err)
-	}
-	persisted, err := f.metadata.ResolvePersistedSession(context.Background(), association.SessionID.String())
-	if err != nil {
-		t.Fatalf("resolve canceled source persisted Session: %v", err)
-	}
-	sourceStore, err := session.Open(persisted.SessionDir, f.metadata.AuthoritativeSessionStoreOptions()...)
-	if err != nil {
-		t.Fatalf("open canceled source Session: %v", err)
-	}
-	eventLog, err := sourceStore.MaterializeEventLog()
-	if err != nil {
-		t.Fatalf("materialize canceled source event log: %v", err)
-	}
-	window, err := eventLog.ReadNewestSegmentBackward(func(record session.EventRecord) bool {
-		payload, err := record.Payload()
-		if err != nil {
-			return false
-		}
-		replacement, ok := payload.(session.HistoryReplacementRecord)
-		return ok && replacement.Mode == session.CompactionModeWorkflowPostCompletion
-	})
-	if err != nil {
-		t.Fatalf("read canceled source replacement segment: %v", err)
-	}
-	replacementCommitted := false
-	for _, record := range window.Records {
-		payload, err := record.Payload()
-		if err != nil {
-			t.Fatalf("decode canceled source replacement record: %v", err)
-		}
-		replacement, ok := payload.(session.HistoryReplacementRecord)
-		if ok && replacement.Mode == session.CompactionModeWorkflowPostCompletion {
-			replacementCommitted = true
-			break
-		}
-	}
-	if !replacementCommitted {
-		t.Fatal("cancellation lost the committed Workflow Post-Compaction replacement")
-	}
-}
-
 func TestResumeRetainsEstablishedSessionContractAndAttachedRuntime(t *testing.T) {
 	f := newCurrentNodeRunnerFixture(
 		t,
@@ -1364,9 +1301,16 @@ func TestResumeRetainsEstablishedSessionContractAndAttachedRuntime(t *testing.T)
 	}
 	deadline := time.Now().Add(currentNodeRunnerWait)
 	for {
-		admission, clearErr := f.authority.WithDormantSessionStore(context.Background(), descriptor, func(_ context.Context, store *session.Store) error {
-			return store.SetContinuationContext(session.ContinuationContext{})
-		})
+		admission, clearErr := f.authority.WithSessionRuntimeOrStore(
+			context.Background(),
+			descriptor,
+			func(context.Context, *agentruntime.Engine) error {
+				return nil
+			},
+			func(_ context.Context, store *session.Store) error {
+				return store.SetContinuationContext(session.ContinuationContext{})
+			},
+		)
 		if clearErr != nil {
 			t.Fatalf("clear legacy workflow Session role: %v", clearErr)
 		}

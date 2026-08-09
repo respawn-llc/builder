@@ -14,9 +14,85 @@ import (
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/tools"
+	"core/shared/config"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 )
+
+func TestWorkflowTerminalProviderStepClearsExactPendingRecoveryBeforeReturn(t *testing.T) {
+	store := mustCreateTestSession(t)
+	controller := &fakeWorkflowController{}
+	client := &fakeClient{responses: []llm.Response{
+		structuredFinalResponse(`{"commentary":"complete","summary":"done"}`),
+	}}
+	engine := mustNewWorkflowTestEngine(
+		t,
+		store,
+		client,
+		testWorkflowConfig(controller, config.WorkflowCompletionModeStructuredOutput),
+		Config{},
+	)
+
+	if _, err := engine.SubmitUserMessage(context.Background(), "run"); err != nil {
+		t.Fatalf("submit Workflow turn: %v", err)
+	}
+	if terminal := engine.WorkflowTerminalState(); !terminal.Completed {
+		t.Fatalf("Workflow terminal state = %+v, want committed completion", terminal)
+	}
+	if recovery := store.Meta().PendingModelRecovery; recovery != nil {
+		t.Fatalf("Workflow terminal return retained exact Agent Step recovery: %+v", recovery)
+	}
+}
+
+func TestWorkflowTerminalProviderStepSurfacesExactRecoveryClearFailureAfterCommit(t *testing.T) {
+	clearErr := errors.New("Workflow terminal pending recovery observer failure")
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
+	var sawPendingRecovery atomic.Bool
+	gate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
+		if snapshot.Meta.PendingModelRecovery != nil {
+			sawPendingRecovery.Store(true)
+			return false
+		}
+		return sawPendingRecovery.Load()
+	}, clearErr)
+	var events []Event
+	controller := &fakeWorkflowController{}
+	client := &fakeClient{responses: []llm.Response{
+		structuredFinalResponse(`{"commentary":"complete","summary":"done"}`),
+	}}
+	engine := mustNewWorkflowTestEngine(
+		t,
+		store,
+		client,
+		testWorkflowConfig(controller, config.WorkflowCompletionModeStructuredOutput),
+		Config{OnEvent: func(event Event) {
+			events = append(events, event)
+		}},
+	)
+
+	if _, err := engine.SubmitUserMessage(context.Background(), "run"); !errors.Is(err, errPendingModelRecoveryClear) {
+		t.Fatalf("submit error = %v, want typed pending-recovery clear failure", err)
+	}
+	if terminal := engine.WorkflowTerminalState(); !terminal.Completed {
+		t.Fatalf("Workflow terminal state = %+v, want committed completion", terminal)
+	}
+	if got := controller.completed.Load(); got != 1 {
+		t.Fatalf("Workflow completion commits = %d, want one", got)
+	}
+	clearFailureEvents := 0
+	for _, event := range events {
+		if event.Kind == EventInFlightClearFailed {
+			clearFailureEvents++
+		}
+	}
+	if clearFailureEvents != 1 {
+		t.Fatalf("typed pending-recovery clear failures = %d, want one", clearFailureEvents)
+	}
+	if recovery := store.Meta().PendingModelRecovery; recovery != nil {
+		t.Fatalf("committed Workflow terminal clear retained pending recovery: %+v", recovery)
+	}
+}
 
 func TestSubmitUserMessageSurfacesInFlightClearFailure(t *testing.T) {
 	t.Parallel()

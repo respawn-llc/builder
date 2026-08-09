@@ -13,10 +13,11 @@ import (
 )
 
 type agentStepAdmissionState struct {
-	current      *activeAgentStep
-	boundary     *activeAgentStep
-	reducerGrant AgentStepReducerGrant
-	scopeID      runtimeids.ExecutionScopeID
+	current            *activeAgentStep
+	boundary           *activeAgentStep
+	reducerGrant       AgentStepReducerGrant
+	scopeID            runtimeids.ExecutionScopeID
+	terminalClosureErr error
 }
 
 type activeAgentStep struct {
@@ -213,17 +214,8 @@ func (e *Engine) applyAgentStepBoundary(
 	if current == nil {
 		return nil, nil
 	}
-	if clearErr := e.store.ClearPendingModelRecoveryForStep(current.origin.StepID); clearErr != nil {
-		wrapped := fmt.Errorf("%w: %w", errPendingModelRecoveryClear, clearErr)
-		eventErr := admission.applySteering(
-			current.origin.StepID,
-			steerEventIntent(Event{
-				Kind:   EventInFlightClearFailed,
-				StepID: current.origin.StepID,
-				Error:  wrapped.Error(),
-			}),
-		)
-		return nil, errors.Join(wrapped, eventErr)
+	if clearErr := e.clearPendingModelRecoveryForAgentStep(admission, current); clearErr != nil {
+		return nil, clearErr
 	}
 	e.agentSteps.current = nil
 	e.agentSteps.boundary = current
@@ -295,6 +287,68 @@ func (e *Engine) applyAgentStepBoundary(
 	default:
 		return nil, errors.New("Agent Step Boundary transfer is invalid")
 	}
+}
+
+func (e *Engine) clearPendingModelRecoveryForAgentStep(
+	admission runtimeEventAdmission,
+	current *activeAgentStep,
+) error {
+	if current == nil {
+		return nil
+	}
+	if clearErr := e.store.ClearPendingModelRecoveryForStep(current.origin.StepID); clearErr != nil {
+		wrapped := fmt.Errorf("%w: %w", errPendingModelRecoveryClear, clearErr)
+		eventErr := admission.applySteering(
+			current.origin.StepID,
+			steerEventIntent(Event{
+				Kind:   EventInFlightClearFailed,
+				StepID: current.origin.StepID,
+				Error:  wrapped.Error(),
+			}),
+		)
+		return errors.Join(wrapped, eventErr)
+	}
+	return nil
+}
+
+func (e *Engine) closeWorkflowTerminalAgentStep(
+	admission runtimeEventAdmission,
+	current *activeAgentStep,
+) {
+	if current == nil {
+		return
+	}
+	clearErr := e.clearPendingModelRecoveryForAgentStep(admission, current)
+	e.invalidateAgentStepScope(current.scopeID, errBoundaryScopeFinalized)
+	if clearErr == nil {
+		return
+	}
+	if e.agentSteps.terminalClosureErr != nil {
+		panic(fmt.Sprintf(
+			"Workflow terminal Agent Step closure already has an unsettled error: existing=%v next=%v",
+			e.agentSteps.terminalClosureErr,
+			clearErr,
+		))
+	}
+	e.agentSteps.terminalClosureErr = clearErr
+}
+
+func (e *Engine) completeWorkflowTerminalAgentStep() error {
+	_, err := submitRuntimeEventWithContext(
+		e.lifecycleCtx,
+		e.lifecycleCtx,
+		e,
+		struct{}{},
+		func(admission runtimeEventAdmission, _ struct{}) (struct{}, error) {
+			if current := e.agentSteps.current; current != nil {
+				e.closeWorkflowTerminalAgentStep(admission, current)
+			}
+			closureErr := e.agentSteps.terminalClosureErr
+			e.agentSteps.terminalClosureErr = nil
+			return struct{}{}, closureErr
+		},
+	)
+	return err
 }
 
 func (e *Engine) resumeReducerBoundaryGrant(

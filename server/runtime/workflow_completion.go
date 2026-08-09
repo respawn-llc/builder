@@ -153,6 +153,7 @@ func (e *Engine) AcceptWorkflowCompletion(
 			accepted workflowruntime.CompletionRequest,
 			complete func(workflowruntime.CompletionResult, error),
 		) error {
+			admission := runtimeEventAdmission{engine: e, command: command}
 			current := e.agentSteps.current
 			if current == nil ||
 				current.scopeID != accepted.ScopeID ||
@@ -162,11 +163,11 @@ func (e *Engine) AcceptWorkflowCompletion(
 				return nil
 			}
 			result, completionErr := execution.Controller.CompleteCurrentNode(
-				runtimeEventAdmission{engine: e, command: command}.Context(),
+				admission.Context(),
 				accepted,
 			)
 			if completionErr == nil {
-				e.invalidateAgentStepScope(accepted.ScopeID, errBoundaryScopeFinalized)
+				e.closeWorkflowTerminalAgentStep(admission, current)
 			}
 			complete(result, completionErr)
 			return nil

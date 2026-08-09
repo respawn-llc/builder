@@ -2253,7 +2253,7 @@ func TestDormantSessionStoreCallbacksAreSerialized(t *testing.T) {
 	}
 }
 
-func TestAuthorityWithDormantSessionStoreAdmitsExactlyOnePath(t *testing.T) {
+func TestAuthorityWithSessionRuntimeOrStoreAdmitsExactlyOnePath(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
 	if err != nil {
@@ -2273,20 +2273,25 @@ func TestAuthorityWithDormantSessionStoreAdmitsExactlyOnePath(t *testing.T) {
 		t.Fatalf("new open session descriptor: %v", err)
 	}
 
-	callbackCalled := false
-	admission, err := authority.WithDormantSessionStore(
+	runtimeCalled := false
+	storeCalled := false
+	admission, err := authority.WithSessionRuntimeOrStore(
 		context.Background(),
 		descriptor,
+		func(context.Context, *runtime.Engine) error {
+			runtimeCalled = true
+			return nil
+		},
 		func(context.Context, *session.Store) error {
-			callbackCalled = true
+			storeCalled = true
 			return nil
 		},
 	)
 	if err != nil {
 		t.Fatalf("admit dormant Store callback: %v", err)
 	}
-	if admission.RuntimeAvailable || !callbackCalled {
-		t.Fatalf("dormant admission = %+v callback=%t, want callback-only path", admission, callbackCalled)
+	if admission.RuntimeAvailable || runtimeCalled || !storeCalled {
+		t.Fatalf("dormant admission = %+v runtime=%t store=%t, want Store-only path", admission, runtimeCalled, storeCalled)
 	}
 
 	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
@@ -2296,24 +2301,29 @@ func TestAuthorityWithDormantSessionStoreAdmitsExactlyOnePath(t *testing.T) {
 			t.Errorf("release runtime: %v", releaseErr)
 		}
 	}()
-	callbackCalled = false
-	admission, err = authority.WithDormantSessionStore(
+	runtimeCalled = false
+	storeCalled = false
+	admission, err = authority.WithSessionRuntimeOrStore(
 		context.Background(),
 		descriptor,
+		func(context.Context, *runtime.Engine) error {
+			runtimeCalled = true
+			return nil
+		},
 		func(context.Context, *session.Store) error {
-			callbackCalled = true
+			storeCalled = true
 			return nil
 		},
 	)
 	if err != nil {
 		t.Fatalf("admit live resource: %v", err)
 	}
-	if !admission.RuntimeAvailable || callbackCalled {
-		t.Fatalf("live admission = %+v callback=%t, want runtime-only path", admission, callbackCalled)
+	if !admission.RuntimeAvailable || !runtimeCalled || storeCalled {
+		t.Fatalf("live admission = %+v runtime=%t store=%t, want Runtime-only path", admission, runtimeCalled, storeCalled)
 	}
 }
 
-func TestAuthorityWithDormantSessionStoreRejectsBlockedAndClosedAdmission(t *testing.T) {
+func TestAuthorityWithSessionRuntimeOrStoreRejectsBlockedAndClosedAdmission(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
 	descriptor, err := session.NewOpenSessionDescriptor(sessionID)
@@ -2346,9 +2356,13 @@ func TestAuthorityWithDormantSessionStoreRejectsBlockedAndClosedAdmission(t *tes
 		})
 
 		callbackCalled := false
-		_, admissionErr := authority.WithDormantSessionStore(
+		_, admissionErr := authority.WithSessionRuntimeOrStore(
 			context.Background(),
 			descriptor,
+			func(context.Context, *runtime.Engine) error {
+				callbackCalled = true
+				return nil
+			},
 			func(context.Context, *session.Store) error {
 				callbackCalled = true
 				return nil
@@ -2372,9 +2386,13 @@ func TestAuthorityWithDormantSessionStoreRejectsBlockedAndClosedAdmission(t *tes
 		}
 
 		callbackCalled := false
-		_, admissionErr := authority.WithDormantSessionStore(
+		_, admissionErr := authority.WithSessionRuntimeOrStore(
 			context.Background(),
 			descriptor,
+			func(context.Context, *runtime.Engine) error {
+				callbackCalled = true
+				return nil
+			},
 			func(context.Context, *session.Store) error {
 				callbackCalled = true
 				return nil
@@ -2389,66 +2407,7 @@ func TestAuthorityWithDormantSessionStoreRejectsBlockedAndClosedAdmission(t *tes
 	})
 }
 
-func TestAuthorityWithDormantSessionStoreSelectsLiveForEveryRegisteredResourceState(t *testing.T) {
-	fixture := newSessionRuntimeFixture(t)
-	sessionID := lifecycleSessionID(t, fixture)
-	feed := make(authorityPromptFeed, 1)
-	authority := NewAuthority(AuthorityOptions{
-		PersistenceRoot: fixture.config.PersistenceRoot,
-		StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
-		PromptFeed:      feed,
-	})
-	t.Cleanup(func() {
-		if closeErr := authority.Close(context.Background()); closeErr != nil {
-			t.Errorf("close authority: %v", closeErr)
-		}
-	})
-	descriptor, err := session.NewOpenSessionDescriptor(sessionID)
-	if err != nil {
-		t.Fatalf("new open session descriptor: %v", err)
-	}
-
-	tests := []struct {
-		name     string
-		resource *agentResource
-	}{
-		{name: "building", resource: &agentResource{state: AgentResourceBuilding}},
-		{name: "ownerless", resource: &agentResource{state: AgentResourceReady, owners: map[string]struct{}{}}},
-		{name: "ready", resource: &agentResource{state: AgentResourceReady, owners: map[string]struct{}{"owner-a": {}}}},
-		{name: "active", resource: &agentResource{state: AgentResourceReady, current: &execution{}}},
-		{name: "draining", resource: &agentResource{state: AgentResourceDraining}},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			authority.mu.Lock()
-			authority.resources[sessionID] = test.resource
-			authority.mu.Unlock()
-			defer func() {
-				authority.mu.Lock()
-				delete(authority.resources, sessionID)
-				authority.mu.Unlock()
-			}()
-
-			callbackCalled := false
-			admission, admissionErr := authority.WithDormantSessionStore(
-				context.Background(),
-				descriptor,
-				func(context.Context, *session.Store) error {
-					callbackCalled = true
-					return nil
-				},
-			)
-			if admissionErr != nil {
-				t.Fatalf("admit %s resource: %v", test.name, admissionErr)
-			}
-			if !admission.RuntimeAvailable || callbackCalled {
-				t.Fatalf("%s admission = %+v callback=%t, want live path only", test.name, admission, callbackCalled)
-			}
-		})
-	}
-}
-
-func TestAuthorityWithDormantSessionStoreBlocksRuntimeRegistrationUntilCallbackReturns(t *testing.T) {
+func TestAuthorityWithSessionRuntimeOrStoreBlocksRuntimeRegistrationUntilCallbackReturns(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
 	authority := NewAuthority(AuthorityOptions{
@@ -2468,9 +2427,12 @@ func TestAuthorityWithDormantSessionStoreBlocksRuntimeRegistrationUntilCallbackR
 	release := make(chan struct{})
 	dormantDone := make(chan error, 1)
 	go func() {
-		_, callbackErr := authority.WithDormantSessionStore(
+		_, callbackErr := authority.WithSessionRuntimeOrStore(
 			context.Background(),
 			descriptor,
+			func(context.Context, *runtime.Engine) error {
+				return errors.New("unexpected Runtime callback")
+			},
 			func(context.Context, *session.Store) error {
 				close(entered)
 				<-release
@@ -2515,6 +2477,108 @@ func TestAuthorityWithDormantSessionStoreBlocksRuntimeRegistrationUntilCallbackR
 	}
 	if _, releaseErr := result.attachment.Release(context.Background(), RuntimeReleaseClose); releaseErr != nil {
 		t.Fatalf("release opened runtime: %v", releaseErr)
+	}
+}
+
+func TestSessionStoreAdmissionsContinueAfterRegisteredResourceCloses(t *testing.T) {
+	tests := []struct {
+		name  string
+		admit func(
+			context.Context,
+			*Authority,
+			session.SessionDescriptor,
+			func(context.Context, *session.Store) error,
+		) error
+	}{
+		{
+			name: "store",
+			admit: func(
+				ctx context.Context,
+				authority *Authority,
+				descriptor session.SessionDescriptor,
+				storeCallback func(context.Context, *session.Store) error,
+			) error {
+				return authority.WithSessionStore(ctx, descriptor, storeCallback)
+			},
+		},
+		{
+			name: "runtime-or-store",
+			admit: func(
+				ctx context.Context,
+				authority *Authority,
+				descriptor session.SessionDescriptor,
+				storeCallback func(context.Context, *session.Store) error,
+			) error {
+				_, err := authority.WithSessionRuntimeOrStore(
+					ctx,
+					descriptor,
+					func(context.Context, *runtime.Engine) error {
+						return errors.New("unexpected Runtime callback")
+					},
+					storeCallback,
+				)
+				return err
+			},
+		},
+	}
+	states := []struct {
+		name       string
+		initial    AgentResourceState
+		closeAfter time.Duration
+	}{
+		{name: "already-closed", initial: AgentResourceClosed},
+		{name: "draining-then-closed", initial: AgentResourceDraining, closeAfter: 50 * time.Millisecond},
+	}
+
+	for _, test := range tests {
+		for _, state := range states {
+			t.Run(test.name+"/"+state.name, func(t *testing.T) {
+				fixture := newSessionRuntimeFixture(t)
+				sessionID := lifecycleSessionID(t, fixture)
+				descriptor := mustOpenSessionDescriptor(t, sessionID)
+				resourceRef, err := runtimeids.NewSessionResourceRef(sessionID, 1)
+				if err != nil {
+					t.Fatalf("new Session Resource ref: %v", err)
+				}
+				resource := &agentResource{
+					ref:     resourceRef,
+					state:   state.initial,
+					changed: make(chan struct{}),
+				}
+				fixture.authority.mu.Lock()
+				fixture.authority.resources[sessionID] = resource
+				fixture.authority.mu.Unlock()
+
+				if state.closeAfter != 0 {
+					go func() {
+						time.Sleep(state.closeAfter)
+						resource.mu.Lock()
+						resource.state = AgentResourceClosed
+						resource.signalLocked()
+						resource.mu.Unlock()
+					}()
+				}
+
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				storeCalled := false
+				if err := test.admit(ctx, fixture.authority, descriptor, func(context.Context, *session.Store) error {
+					storeCalled = true
+					return nil
+				}); err != nil {
+					t.Fatalf("admit Store after resource close: %v", err)
+				}
+				if !storeCalled {
+					t.Fatal("Store callback was not called after resource close")
+				}
+				fixture.authority.mu.Lock()
+				registered := fixture.authority.resources[sessionID]
+				fixture.authority.mu.Unlock()
+				if registered == resource {
+					t.Fatal("closed Resource Generation remained registered")
+				}
+			})
+		}
 	}
 }
 

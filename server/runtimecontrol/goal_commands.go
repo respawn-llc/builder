@@ -162,55 +162,28 @@ func (s *Service) withDormantGoalAdmission(
 		return GoalCommandResult{}, err
 	}
 	var result GoalCommandResult
-	admission, err := s.authority.WithDormantSessionStore(ctx, descriptor, func(_ context.Context, store *session.Store) error {
-		applied, applyErr := dormant(store)
+	apply := func(applied GoalCommandResult, applyErr error) error {
 		result = applied
 		if result.Accepted() {
 			result.Err = applyErr
 			return nil
 		}
 		return applyErr
-	})
+	}
+	_, err = s.authority.WithSessionRuntimeOrStore(
+		ctx,
+		descriptor,
+		func(_ context.Context, engine *runtime.Engine) error {
+			return apply(live(engine))
+		},
+		func(_ context.Context, store *session.Store) error {
+			return apply(dormant(store))
+		},
+	)
 	if err != nil {
 		return GoalCommandResult{}, err
 	}
-	if !admission.RuntimeAvailable {
-		return result, nil
-	}
-	return s.withLiveGoal(ctx, sessionID, live)
-}
-
-func (s *Service) withLiveGoal(
-	ctx context.Context,
-	sessionID runtimeids.SessionID,
-	mutate func(*runtime.Engine) (GoalCommandResult, error),
-) (GoalCommandResult, error) {
-	if s == nil || s.authority == nil {
-		return GoalCommandResult{}, errors.New("session runtime authority is required")
-	}
-	var result GoalCommandResult
-	err := s.runAgentExecution(ctx, sessionID.String(), func(_ context.Context, engine *runtime.Engine) error {
-		applied, applyErr := mutate(engine)
-		result = applied
-		return applyErr
-	})
-	if result.Accepted() {
-		result.Err = err
-		return result, nil
-	}
-	if !errors.Is(err, serverapi.ErrSessionRunStarting) {
-		return GoalCommandResult{}, err
-	}
-	err = s.withLiveExecutionRuntime(ctx, sessionID, func(_ context.Context, engine *runtime.Engine) error {
-		applied, applyErr := mutate(engine)
-		result = applied
-		return applyErr
-	})
-	if result.Accepted() {
-		result.Err = err
-		return result, nil
-	}
-	return GoalCommandResult{}, err
+	return result, nil
 }
 
 func (s *Service) withExactLiveGoal(

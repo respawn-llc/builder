@@ -143,6 +143,17 @@ func (s *pendingCurrentNodeAssignmentSteer) Wait(ctx context.Context) (session.C
 	return steer.Wait(ctx)
 }
 
+func (s *pendingCurrentNodeAssignmentSteer) RetainsSourceRuntime() bool {
+	<-s.ready
+	if s.err != nil {
+		panic(fmt.Sprintf("failed current node assignment steer has no runtime retention: %v", s.err))
+	}
+	if s.steer == nil {
+		panic("resolved current node assignment steer is absent")
+	}
+	return s.steer.RetainsSourceRuntime()
+}
+
 func (s *pendingCurrentNodeAssignmentSteer) resolved(ctx context.Context) (CurrentNodeAssignmentSteer, error) {
 	if ctx == nil {
 		ctx = context.Background()

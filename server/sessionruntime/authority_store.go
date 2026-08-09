@@ -7,6 +7,7 @@ import (
 	"sort"
 	"sync"
 
+	"core/server/runtime"
 	"core/server/session"
 	"core/shared/runtimeids"
 )
@@ -305,78 +306,126 @@ func (a *Authority) WithSessionStore(ctx context.Context, descriptor session.Ses
 		return errors.New("session store callback is required")
 	}
 	gate := a.gateFor(sessionID)
-	var resource *agentResource
-	callbackErr := func() error {
-		gate.lock.Lock()
-		defer gate.lock.Unlock()
+	for {
+		if err := gate.lock.LockContext(ctx); err != nil {
+			return err
+		}
 		if err := context.Cause(ctx); err != nil {
+			gate.lock.Unlock()
 			return err
 		}
 		a.mu.Lock()
-		resource = a.resources[sessionID]
+		resource := a.resources[sessionID]
 		a.mu.Unlock()
-		if resource != nil {
-			return resource.withStoreUnderAdmission(ctx, callback)
-		}
-		store, err := session.MaterializeSessionDescriptor(a.options.persistenceRoot, descriptor, a.options.storeOptions...)
-		if err != nil {
+		if resource == nil {
+			store, err := session.MaterializeSessionDescriptor(a.options.persistenceRoot, descriptor, a.options.storeOptions...)
+			if err == nil {
+				err = callback(ctx, store)
+			}
+			gate.lock.Unlock()
 			return err
 		}
-		return callback(ctx, store)
-	}()
-	if resource == nil {
-		return callbackErr
+		resource.mu.Lock()
+		state := resource.state
+		changed := resource.changed
+		resource.mu.Unlock()
+		switch state {
+		case AgentResourceReady:
+			callbackErr := resource.withStoreUnderAdmission(ctx, callback)
+			gate.lock.Unlock()
+			return errors.Join(callbackErr, a.closeRetiringResource(context.Background(), resource))
+		case AgentResourceClosed:
+			a.removeObservedClosedResource(sessionID, resource)
+			gate.lock.Unlock()
+			continue
+		}
+		gate.lock.Unlock()
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		}
 	}
-	return errors.Join(callbackErr, a.closeRetiringResource(context.Background(), resource))
 }
 
-type DormantSessionStoreAdmission struct {
+type SessionRuntimeOrStoreAdmission struct {
 	RuntimeAvailable bool
 }
 
-func (a *Authority) WithDormantSessionStore(
+func (a *Authority) WithSessionRuntimeOrStore(
 	ctx context.Context,
 	descriptor session.SessionDescriptor,
-	callback func(context.Context, *session.Store) error,
-) (DormantSessionStoreAdmission, error) {
+	runtimeCallback func(context.Context, *runtime.Engine) error,
+	storeCallback func(context.Context, *session.Store) error,
+) (SessionRuntimeOrStoreAdmission, error) {
 	if a == nil {
-		return DormantSessionStoreAdmission{}, errors.New("session runtime authority is required")
+		return SessionRuntimeOrStoreAdmission{}, errors.New("session runtime authority is required")
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := context.Cause(ctx); err != nil {
-		return DormantSessionStoreAdmission{}, err
+		return SessionRuntimeOrStoreAdmission{}, err
 	}
 	sessionID := descriptor.SessionID()
 	if sessionID.IsZero() {
-		return DormantSessionStoreAdmission{}, errors.New("session id is required")
+		return SessionRuntimeOrStoreAdmission{}, errors.New("session id is required")
 	}
-	if callback == nil {
-		return DormantSessionStoreAdmission{}, errors.New("session store callback is required")
+	if runtimeCallback == nil || storeCallback == nil {
+		return SessionRuntimeOrStoreAdmission{}, errors.New("session runtime and store callbacks are required")
 	}
 	gate := a.gateFor(sessionID)
-	gate.lock.Lock()
-	defer gate.lock.Unlock()
-	if len(gate.blocks) != 0 {
-		return DormantSessionStoreAdmission{}, sessionStartsBlockedError(sessionID)
-	}
-	a.mu.Lock()
-	if a.closed {
+	for {
+		if err := gate.lock.LockContext(ctx); err != nil {
+			return SessionRuntimeOrStoreAdmission{}, err
+		}
+		if len(gate.blocks) != 0 {
+			gate.lock.Unlock()
+			return SessionRuntimeOrStoreAdmission{}, sessionStartsBlockedError(sessionID)
+		}
+		a.mu.Lock()
+		if a.closed {
+			a.mu.Unlock()
+			gate.lock.Unlock()
+			return SessionRuntimeOrStoreAdmission{}, ErrAuthorityClosed
+		}
+		resource := a.resources[sessionID]
 		a.mu.Unlock()
-		return DormantSessionStoreAdmission{}, ErrAuthorityClosed
+		if resource == nil {
+			store, err := session.MaterializeSessionDescriptor(a.options.persistenceRoot, descriptor, a.options.storeOptions...)
+			if err == nil {
+				err = storeCallback(ctx, store)
+			}
+			gate.lock.Unlock()
+			return SessionRuntimeOrStoreAdmission{}, err
+		}
+		resource.mu.Lock()
+		state := resource.state
+		changed := resource.changed
+		resource.mu.Unlock()
+		switch state {
+		case AgentResourceReady:
+			err := resource.withEngineUnderAdmission(ctx, runtimeCallback)
+			gate.lock.Unlock()
+			return SessionRuntimeOrStoreAdmission{RuntimeAvailable: true}, err
+		case AgentResourceClosed:
+			a.removeObservedClosedResource(sessionID, resource)
+			gate.lock.Unlock()
+			continue
+		}
+		gate.lock.Unlock()
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			return SessionRuntimeOrStoreAdmission{}, context.Cause(ctx)
+		}
 	}
-	resource := a.resources[sessionID]
+}
+
+func (a *Authority) removeObservedClosedResource(sessionID runtimeids.SessionID, resource *agentResource) {
+	a.mu.Lock()
+	if a.resources[sessionID] == resource {
+		delete(a.resources, sessionID)
+	}
 	a.mu.Unlock()
-	if resource != nil {
-		return DormantSessionStoreAdmission{RuntimeAvailable: true}, nil
-	}
-	store, err := session.MaterializeSessionDescriptor(a.options.persistenceRoot, descriptor, a.options.storeOptions...)
-	if err != nil {
-		return DormantSessionStoreAdmission{}, err
-	}
-	if err := callback(ctx, store); err != nil {
-		return DormantSessionStoreAdmission{}, err
-	}
-	return DormantSessionStoreAdmission{}, nil
 }

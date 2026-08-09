@@ -129,7 +129,8 @@ func (s *defaultExclusiveStepLifecycle) finishStep(stepID string, options exclus
 			return wrapped
 		},
 	)
-	if !errors.Is(err, errPendingModelRecoveryClear) {
+	if !errors.Is(err, errPendingModelRecoveryClear) &&
+		!s.engine.WorkflowTerminalState().Completed {
 		if status == RunStatusCompleted && snapshot != nil && snapshot.ActiveKind == ActiveKindUserTurn {
 			s.engine.resumeSuspendedGoalAfterSuccessfulUserTurn()
 		}

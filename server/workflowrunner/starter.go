@@ -144,7 +144,9 @@ func (s *Starter) SteerCurrentNodeAssignment(
 		return nil, err
 	}
 	if input.Node.Kind == workflow.NodeKindScript {
-		return runtime.CompletedWorkflowAssignmentSteer(session.CommitReceipt{Committed: true}, nil), nil
+		return currentNodeScriptAssignmentSteer{
+			completion: runtime.CompletedWorkflowAssignmentSteer(session.CommitReceipt{Committed: true}, nil),
+		}, nil
 	}
 	if input.Node.Kind != workflow.NodeKindAgent {
 		return nil, fmt.Errorf("current node %v is not executable", reference)
@@ -181,7 +183,7 @@ func (s *Starter) SteerCurrentNodeAssignment(
 		},
 	}
 	var steer runtime.WorkflowAssignmentSteer
-	admission, steerErr := s.runtimeAuthority.WithDormantSessionStore(ctx, prepared.plan.Descriptor, func(_ context.Context, store *session.Store) error {
+	persistAssignment := func(_ context.Context, store *session.Store) error {
 		var err error
 		steer, err = runtime.SteerPersistedWorkflowAssignment(
 			store,
@@ -197,39 +199,52 @@ func (s *Starter) SteerCurrentNodeAssignment(
 			},
 		)
 		return err
-	})
-	if steerErr == nil && admission.RuntimeAvailable {
-		steerErr = s.runtimeAuthority.WithCurrentRuntime(ctx, prepared.plan.Descriptor.SessionID(), func(_ context.Context, engine *runtime.Engine) error {
-			thinkingMutation := workflowThinkingMutationFor(input, selection)
-			switch thinkingMutation.Kind() {
-			case launch.WorkflowThinkingMutationSet:
-				if err := engine.SetWorkflowThinkingValue(thinkingMutation.Value()); err != nil {
-					return err
-				}
-			case launch.WorkflowThinkingMutationClear:
-				if err := engine.ClearWorkflowThinkingValue(); err != nil {
-					return err
-				}
-			}
-			var err error
-			steer, err = engine.SteerWorkflowAssignment(assignment)
-			return err
-		})
 	}
-	if steerErr != nil {
-		return nil, prepared.cleanup(steerErr)
-	}
-	resource := workflowAssignmentResourceOpen
-	if admission.RuntimeAvailable {
-		resource = workflowAssignmentResourceReplace
-		source := input.SourceSessionID
-		contextSource := workflow.CanonicalContextSource(input.EnteringEdge.ContextSource)
-		if input.ContextMode == workflow.ContextModeContinueSession &&
-			!input.EnteringEdge.RequiresApproval &&
-			contextSource.Kind == workflow.ContextSourceImmediateSource &&
-			source != nil &&
-			prepared.plan.Descriptor.SessionID() == *source {
+	source := input.SourceSessionID
+	contextSource := workflow.CanonicalContextSource(input.EnteringEdge.ContextSource)
+	retainSourceRuntime := input.ContextMode == workflow.ContextModeContinueSession &&
+		!input.EnteringEdge.RequiresApproval &&
+		contextSource.Kind == workflow.ContextSourceImmediateSource &&
+		source != nil &&
+		prepared.plan.Descriptor.SessionID() == *source
+	resource := workflowAssignmentResourceReplace
+	if retainSourceRuntime {
+		admission, steerErr := s.runtimeAuthority.WithSessionRuntimeOrStore(
+			ctx,
+			prepared.plan.Descriptor,
+			func(_ context.Context, engine *runtime.Engine) error {
+				thinkingMutation := workflowThinkingMutationFor(input, selection)
+				switch thinkingMutation.Kind() {
+				case launch.WorkflowThinkingMutationSet:
+					if err := engine.SetWorkflowThinkingValue(thinkingMutation.Value()); err != nil {
+						return err
+					}
+				case launch.WorkflowThinkingMutationClear:
+					if err := engine.ClearWorkflowThinkingValue(); err != nil {
+						return err
+					}
+				}
+				var err error
+				steer, err = engine.SteerWorkflowAssignment(assignment)
+				return err
+			},
+			persistAssignment,
+		)
+		if steerErr != nil {
+			return nil, prepared.cleanup(steerErr)
+		}
+		resource = workflowAssignmentResourceOpen
+		if admission.RuntimeAvailable {
 			resource = workflowAssignmentResourceRetain
+		}
+	} else {
+		steerErr := s.runtimeAuthority.WithSessionStore(
+			ctx,
+			prepared.plan.Descriptor,
+			persistAssignment,
+		)
+		if steerErr != nil {
+			return nil, prepared.cleanup(steerErr)
 		}
 	}
 	prepared.cleanup = func(err error) error { return err }
@@ -249,6 +264,18 @@ const (
 	workflowAssignmentResourceReplace
 )
 
+type currentNodeScriptAssignmentSteer struct {
+	completion runtime.WorkflowAssignmentSteer
+}
+
+func (s currentNodeScriptAssignmentSteer) Wait(ctx context.Context) (session.CommitReceipt, error) {
+	return s.completion.Wait(ctx)
+}
+
+func (currentNodeScriptAssignmentSteer) RetainsSourceRuntime() bool {
+	return false
+}
+
 type currentNodeAgentAssignmentSteer struct {
 	reference  workflow.CurrentNodeReference
 	completion runtime.WorkflowAssignmentSteer
@@ -261,6 +288,10 @@ func (s *currentNodeAgentAssignmentSteer) Wait(ctx context.Context) (session.Com
 		return session.CommitReceipt{}, errors.New("current node agent assignment steer is required")
 	}
 	return s.completion.Wait(ctx)
+}
+
+func (s *currentNodeAgentAssignmentSteer) RetainsSourceRuntime() bool {
+	return s != nil && s.resource == workflowAssignmentResourceRetain
 }
 
 type preparedCurrentNodeAgentSession struct {
@@ -444,13 +475,15 @@ func (s *Starter) startCurrentNodeAgent(
 					if err != nil {
 						return err
 					}
-					turnErr = finalizer.FinalizeCurrentNodePostTurn(runCtx, scope.ID(), sessionID, workflowruntime.PostCompletionRuntime{
-						UsedTokens:          turnEngine.ContextUsage().UsedTokens,
-						PreCompactionTokens: preCompactionTokens,
-						CompactionMode:      turnEngine.CompactionMode(),
-						Compact: func(compactionCtx context.Context) workflowruntime.PostCompletionCompactionResult {
-							return turnEngine.CompactContextForWorkflowPostCompletion(compactionCtx)
-						},
+					turnErr = bridge.WithRuntimeLifetime(func(runtimeCtx context.Context) error {
+						return finalizer.FinalizeCurrentNodePostTurn(runtimeCtx, scope.ID(), sessionID, workflowruntime.PostCompletionRuntime{
+							UsedTokens:          turnEngine.ContextUsage().UsedTokens,
+							PreCompactionTokens: preCompactionTokens,
+							CompactionMode:      turnEngine.CompactionMode(),
+							Compact: func(compactionCtx context.Context) workflowruntime.PostCompletionCompactionResult {
+								return turnEngine.CompactContextForWorkflowPostCompletion(compactionCtx)
+							},
+						})
 					})
 				}
 			}

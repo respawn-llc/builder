@@ -44,6 +44,7 @@ type CurrentNodeAssignmentSteerer interface {
 
 type CurrentNodeAssignmentSteer interface {
 	Wait(context.Context) (session.CommitReceipt, error)
+	RetainsSourceRuntime() bool
 }
 
 type CurrentNodeControllerConfig struct {
@@ -894,6 +895,9 @@ func (c *CurrentNodeController) ExecutionFinalized(scope sessionruntime.Executio
 	}
 	c.enqueueStarts(starts)
 	for _, start := range starts {
+		if !start.assignmentSteer.RetainsSourceRuntime() {
+			continue
+		}
 		select {
 		case <-start.done:
 		case <-waitCtx.Done():

@@ -63,12 +63,17 @@ func (noOpCurrentNodeAssignmentSteerer) SteerCurrentNodeAssignment(context.Conte
 }
 
 type completedCurrentNodeAssignmentSteer struct {
-	receipt session.CommitReceipt
-	err     error
+	receipt              session.CommitReceipt
+	err                  error
+	retainsSourceRuntime bool
 }
 
 func (s completedCurrentNodeAssignmentSteer) Wait(context.Context) (session.CommitReceipt, error) {
 	return s.receipt, s.err
+}
+
+func (s completedCurrentNodeAssignmentSteer) RetainsSourceRuntime() bool {
+	return s.retainsSourceRuntime
 }
 
 type deadlineRecordingCurrentNodeAssignmentSteerer struct {
@@ -109,6 +114,10 @@ func (s *deadlineRecordingCurrentNodeAssignmentSteer) Wait(ctx context.Context) 
 	return session.CommitReceipt{Committed: true}, nil
 }
 
+func (*deadlineRecordingCurrentNodeAssignmentSteer) RetainsSourceRuntime() bool {
+	return true
+}
+
 type lateCommitCurrentNodeAssignmentSteerer struct {
 	release <-chan struct{}
 	started chan struct{}
@@ -138,6 +147,10 @@ func (s *lateCommitCurrentNodeAssignmentSteer) Wait(ctx context.Context) (sessio
 	case <-ctx.Done():
 		return session.CommitReceipt{}, context.Cause(ctx)
 	}
+}
+
+func (*lateCommitCurrentNodeAssignmentSteer) RetainsSourceRuntime() bool {
+	return false
 }
 
 type blockingCurrentNodeAssignmentPreparation struct {
