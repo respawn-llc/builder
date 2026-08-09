@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"core/shared/config"
 	"core/shared/serverapi"
 )
 
@@ -28,13 +29,13 @@ func TestAuthStageFromResponseProjectsTypedMethods(t *testing.T) {
 		APIKey:        &serverapi.AuthAPIKeyFacts{Suffix: &longSuffix},
 	}, nil)
 
-	short := AuthStageFromResponse(shortKey)
+	short := AuthStageFromResponse(shortKey, nil)
 	if short.Auth.Summary != "API Key" ||
 		AuthDisplayLabel(short.Auth) != "OpenAI API Key" ||
 		!reflect.DeepEqual(short.Auth.Details, []string{"OpenAI", "OPENAI_API_KEY preferred"}) {
 		t.Fatalf("short key projection = %+v", short)
 	}
-	long := AuthStageFromResponse(longKey)
+	long := AuthStageFromResponse(longKey, nil)
 	if long.Auth.Summary != "API Key ...1234" ||
 		!reflect.DeepEqual(long.Auth.Details, []string{"OpenAI", "saved auth preferred"}) {
 		t.Fatalf("long key projection = %+v", long)
@@ -44,7 +45,7 @@ func TestAuthStageFromResponseProjectsTypedMethods(t *testing.T) {
 func TestAuthStageFromResponseProjectsUnavailableAndRetainedOAuth(t *testing.T) {
 	unavailable := AuthStageFromResponse(serverapi.AuthStatusResponse{
 		Resolution: serverapi.UnavailableAuthStatusResolution(serverapi.AuthStatusFailure{Cause: "permission denied"}),
-	})
+	}, nil)
 	if unavailable.Auth.Summary != "Auth unavailable" ||
 		!unavailable.Auth.Unavailable ||
 		unavailable.Warning != "auth: permission denied" {
@@ -64,7 +65,7 @@ func TestAuthStageFromResponseProjectsUnavailableAndRetainedOAuth(t *testing.T) 
 			Applicable: true,
 			Failure:    &refreshFailure,
 		},
-	})
+	}, nil)
 	if retained.Auth.Summary != email ||
 		AuthDisplayLabel(retained.Auth) != "OpenAI Subscription" ||
 		!reflect.DeepEqual(retained.Auth.Details, []string{"refresh failed"}) ||
@@ -92,7 +93,7 @@ func TestAuthStageFromResponseProjectsCredentialFreeProviderOrigin(t *testing.T)
 			APIKey:        &serverapi.AuthAPIKeyFacts{},
 		}, nil),
 	}
-	projected := AuthStageFromResponse(response)
+	projected := AuthStageFromResponse(response, nil)
 	origin := "https://example.com:8443"
 	if projected.Auth.Provider != origin ||
 		AuthDisplayLabel(projected.Auth) != origin+" API Key" ||
@@ -139,7 +140,7 @@ func TestSubscriptionProjectionPreservesDurationAndDuplicateBuckets(t *testing.T
 			},
 		},
 	}
-	projected := AuthStageFromResponse(response).Subscription
+	projected := AuthStageFromResponse(response, nil).Subscription
 	if projected.Summary != "Pro subscription" || len(projected.Windows) != 4 {
 		t.Fatalf("subscription = %+v", projected)
 	}
@@ -152,6 +153,30 @@ func TestSubscriptionProjectionPreservesDurationAndDuplicateBuckets(t *testing.T
 	want := []string{"5h:", "5h:vision / images", "5h:vision / images #2", "90d:"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("window projections = %v, want %v", got, want)
+	}
+}
+
+func TestAuthStageFromResponseUsesEffectiveSessionProviderSettings(t *testing.T) {
+	plan := "pro"
+	response := serverapi.AuthStatusResponse{
+		Resolution: serverapi.KnownAuthStatusResolution(serverapi.AuthStatusFacts{
+			Method:        serverapi.AuthStatusMethodOAuth,
+			Provider:      serverapi.OpenAIAuthProviderFacts(),
+			EnvPreference: serverapi.AuthStatusEnvPreferencePreferSaved,
+			OAuth:         &serverapi.AuthOAuthFacts{},
+		}, nil),
+		Subscription: serverapi.AuthSubscriptionFacts{
+			Applicable: true,
+			Plan:       &plan,
+		},
+	}
+	effectiveSettings := config.Settings{OpenAIBaseURL: "https://session.example/v1"}
+
+	projected := AuthStageFromResponse(response, &effectiveSettings)
+
+	if projected.Auth.Provider != "https://session.example" ||
+		projected.Subscription.Applicable {
+		t.Fatalf("session-scoped auth projection = %+v", projected)
 	}
 }
 

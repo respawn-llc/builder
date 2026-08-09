@@ -46,6 +46,7 @@ type Request struct {
 	Source                config.SourceReport
 	CacheKeys             CacheKeys
 	AuthStatus            apicontract.AuthStatusService
+	AuthProviderSettings  *config.Settings
 	SessionName           string
 	SessionID             string
 	AgentRole             *string

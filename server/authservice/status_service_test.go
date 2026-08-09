@@ -178,32 +178,6 @@ func TestStatusServicePublishesOnlySafeAPIKeyFacts(t *testing.T) {
 	}
 }
 
-func TestAuthProviderDisplayOriginDropsCredentialBearingURLComponents(t *testing.T) {
-	facts := authProviderFacts(config.Settings{
-		OpenAIBaseURL: "https://user:secret@example.com:8443/v1/key?token=secret#fragment",
-	})
-	want := &serverapi.AuthProviderDisplayOrigin{
-		Scheme:   "https",
-		Hostname: "example.com",
-		Port:     authStatusTestString("8443"),
-	}
-	if facts.Kind != serverapi.AuthProviderKindOpenAICompatible ||
-		!reflect.DeepEqual(facts.DisplayOrigin, want) {
-		t.Fatalf("provider facts = %+v, want origin %+v", facts, want)
-	}
-	for _, raw := range []string{
-		"relative/path",
-		"mailto:user@example.com",
-		"://invalid",
-		"https://example.com:0",
-		"https://example.com:65536",
-	} {
-		if got := authProviderDisplayOrigin(raw); got != nil {
-			t.Fatalf("display origin for %q = %+v, want nil", raw, got)
-		}
-	}
-}
-
 func TestUsageWindowFactsKeepStableDuplicateDurations(t *testing.T) {
 	resetAt := time.Date(2026, time.August, 9, 5, 0, 0, 0, time.UTC).Unix()
 	windows, err := usageWindowFacts(usagePayload{

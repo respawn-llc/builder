@@ -159,6 +159,7 @@ func (p *launchPlanner) PlanSession(ctx context.Context, req sessionLaunchReques
 		}
 	}
 	cfg := p.server.Config()
+	activeSettings := resp.Plan.ActiveSettings
 	sessionTitle, err := validateLaunchSessionTitle(resp.Plan.SessionName)
 	if err != nil {
 		return sessionLaunchPlan{}, err
@@ -166,20 +167,21 @@ func (p *launchPlanner) PlanSession(ctx context.Context, req sessionLaunchReques
 	return sessionLaunchPlan{
 		Mode:                req.Mode,
 		SessionID:           resp.Plan.SessionID,
-		ActiveSettings:      resp.Plan.ActiveSettings,
+		ActiveSettings:      activeSettings,
 		EnabledTools:        enabledTools,
 		ConfiguredModelName: resp.Plan.ConfiguredModelName,
 		SessionTitle:        sessionTitle,
 		PromptHistory:       append([]string(nil), resp.Plan.PromptHistory...),
 		ModelContractLocked: resp.Plan.ModelContractLocked,
 		StatusConfig: uiStatusConfig{
-			WorkspaceRoot:   executionTarget.EffectiveWorkdir,
-			ExecutionTarget: executionTarget,
-			PersistenceRoot: cfg.PersistenceRoot,
-			SessionViews:    p.server.SessionViewClient(),
-			Settings:        resp.Plan.ActiveSettings,
-			Source:          resp.Plan.Source,
-			AuthStatus:      p.server.AuthStatusClient(),
+			WorkspaceRoot:        executionTarget.EffectiveWorkdir,
+			ExecutionTarget:      executionTarget,
+			PersistenceRoot:      cfg.PersistenceRoot,
+			SessionViews:         p.server.SessionViewClient(),
+			Settings:             activeSettings,
+			AuthProviderSettings: &activeSettings,
+			Source:               resp.Plan.Source,
+			AuthStatus:           p.server.AuthStatusClient(),
 		},
 		ExecutionTarget: executionTarget,
 		Source:          resp.Plan.Source,

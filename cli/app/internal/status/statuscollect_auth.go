@@ -7,10 +7,12 @@ import (
 	"net/url"
 	"strings"
 
+	"core/shared/authstatus"
+	"core/shared/config"
 	"core/shared/serverapi"
 )
 
-func AuthStageFromResponse(response serverapi.AuthStatusResponse) AuthStageResult {
+func AuthStageFromResponse(response serverapi.AuthStatusResponse, effectiveSettings *config.Settings) AuthStageResult {
 	if err := response.Validate(); err != nil {
 		return UnavailableAuthStage(err)
 	}
@@ -19,16 +21,19 @@ func AuthStageFromResponse(response serverapi.AuthStatusResponse) AuthStageResul
 		return UnavailableAuthStage(fmt.Errorf("%s", resolution.Failure.Cause))
 	}
 	facts := *resolution.Facts
-	failureCause := ""
-	if resolution.Failure != nil {
-		failureCause = strings.TrimSpace(resolution.Failure.Cause)
+	subscription := response.Subscription
+	if effectiveSettings != nil {
+		facts.Provider = authstatus.ProviderFacts(*effectiveSettings)
+		if !authstatus.SupportsSubscriptionUsage(*effectiveSettings) {
+			subscription = serverapi.AuthSubscriptionFacts{}
+		}
 	}
 	result := AuthStageResult{
-		Auth:         authInfoFromFacts(facts, failureCause),
-		Subscription: subscriptionInfoFromFacts(response.Subscription),
+		Auth:         authInfoFromFacts(facts, resolution.Failure),
+		Subscription: subscriptionInfoFromFacts(subscription),
 	}
-	if failureCause != "" {
-		result.Warning = "auth: " + failureCause
+	if resolution.Failure != nil {
+		result.Warning = "auth: " + strings.TrimSpace(resolution.Failure.Cause)
 	}
 	return result
 }
@@ -51,7 +56,7 @@ func UnavailableAuthStage(err error) AuthStageResult {
 	}
 }
 
-func authInfoFromFacts(facts serverapi.AuthStatusFacts, failureCause string) AuthInfo {
+func authInfoFromFacts(facts serverapi.AuthStatusFacts, failure *serverapi.AuthStatusFailure) AuthInfo {
 	provider := authProviderStatusLabel(facts.Provider)
 	details := make([]string, 0, 4)
 	if facts.Provider.Kind == serverapi.AuthProviderKindOpenAICompatible {
@@ -84,8 +89,8 @@ func authInfoFromFacts(facts serverapi.AuthStatusFacts, failureCause string) Aut
 	default:
 		info.Summary = "No Auth"
 	}
-	if failureCause != "" {
-		details = append(details, failureCause)
+	if failure != nil {
+		details = append(details, strings.TrimSpace(failure.Cause))
 	}
 	info.Details = details
 	return info

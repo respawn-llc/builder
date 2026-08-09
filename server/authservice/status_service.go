@@ -6,13 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"sort"
 	"strings"
 	"time"
 
 	"core/server/auth"
 	servicecontract "core/shared/apicontract"
+	"core/shared/authstatus"
 	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/textutil"
@@ -70,7 +70,7 @@ func validatedAuthStatusResponse(response serverapi.AuthStatusResponse) (servera
 func authFacts(state auth.State, settings config.Settings) serverapi.AuthStatusFacts {
 	facts := serverapi.AuthStatusFacts{
 		Method:        authStatusMethod(state.Method.Type),
-		Provider:      authProviderFacts(settings),
+		Provider:      authstatus.ProviderFacts(settings),
 		EnvPreference: authStatusEnvPreference(state.EnvAPIKeyPreference),
 	}
 	switch state.Method.Type {
@@ -122,47 +122,6 @@ func apiKeyFacts(method *auth.APIKeyMethod) *serverapi.AuthAPIKeyFacts {
 	return facts
 }
 
-func authProviderFacts(settings config.Settings) serverapi.AuthProviderFacts {
-	if identifier := strings.TrimSpace(settings.ProviderOverride); identifier != "" {
-		return serverapi.AuthProviderFacts{
-			Kind:       serverapi.AuthProviderKindConfiguredProvider,
-			Identifier: identifier,
-		}
-	}
-	baseURL := strings.TrimSpace(settings.OpenAIBaseURL)
-	if baseURL == "" || isOfficialChatGPTBaseURL(baseURL) {
-		return serverapi.OpenAIAuthProviderFacts()
-	}
-	return serverapi.AuthProviderFacts{
-		Kind:          serverapi.AuthProviderKindOpenAICompatible,
-		Identifier:    "openai-compatible",
-		DisplayOrigin: authProviderDisplayOrigin(baseURL),
-	}
-}
-
-func authProviderDisplayOrigin(raw string) *serverapi.AuthProviderDisplayOrigin {
-	parsed, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || !parsed.IsAbs() || parsed.Opaque != "" {
-		return nil
-	}
-	scheme := strings.ToLower(strings.TrimSpace(parsed.Scheme))
-	if scheme != "http" && scheme != "https" {
-		return nil
-	}
-	hostname := strings.TrimSpace(parsed.Hostname())
-	if hostname == "" {
-		return nil
-	}
-	origin := &serverapi.AuthProviderDisplayOrigin{Scheme: scheme, Hostname: hostname}
-	if port := strings.TrimSpace(parsed.Port()); port != "" {
-		origin.Port = &port
-	}
-	if err := origin.Validate(); err != nil {
-		return nil
-	}
-	return origin
-}
-
 func subscriptionStatus(
 	ctx context.Context,
 	settings config.Settings,
@@ -196,20 +155,10 @@ func subscriptionStatus(
 func shouldFetchSubscriptionUsage(settings config.Settings, state auth.State) bool {
 	if state.Method.Type != auth.MethodOAuth ||
 		state.Method.OAuth == nil ||
-		strings.TrimSpace(settings.ProviderOverride) != "" {
+		!authstatus.SupportsSubscriptionUsage(settings) {
 		return false
 	}
-	baseURL := strings.TrimSpace(settings.OpenAIBaseURL)
-	return baseURL == "" || isOfficialChatGPTBaseURL(baseURL)
-}
-
-func isOfficialChatGPTBaseURL(raw string) bool {
-	parsed, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil {
-		return false
-	}
-	hostname := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
-	return hostname == "chatgpt.com" || hostname == "chat.openai.com"
+	return true
 }
 
 type usagePayload struct {
