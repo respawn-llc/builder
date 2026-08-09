@@ -689,44 +689,91 @@ func (e *Engine) currentTokenUsage() int {
 	return e.estimatedCurrentTokenUsage()
 }
 
+type compactionWorkRequest struct {
+	stepID                      string
+	mode                        compactionMode
+	instructions                compactionInstructionsInput
+	includePreservedUserMessage bool
+}
+
+type compactionWorkResult struct {
+	prepared preparedCompactionWork
+	err      error
+}
+
+type compactionWorkOutcome struct {
+	result  compactionResult
+	receipt session.CommitReceipt
+}
+
+type compactionWorkApplication struct {
+	receipt session.CommitReceipt
+	err     error
+}
+
 func (e *Engine) compactNow(ctx context.Context, stepID string, mode compactionMode, instructionsInput compactionInstructionsInput, includePreservedUserMessage bool) (compactionResult, session.CommitReceipt, error) {
-	prepared, workErr := e.prepareCompactionWork(
-		ctx,
-		stepID,
-		mode,
-		instructionsInput,
-		includePreservedUserMessage,
-	)
-	type applyResult struct {
-		receipt session.CommitReceipt
-		err     error
+	request := compactionWorkRequest{
+		stepID:                      stepID,
+		mode:                        mode,
+		instructions:                instructionsInput,
+		includePreservedUserMessage: includePreservedUserMessage,
 	}
-	applied, submitErr := submitRuntimeEventWithContext(
-		e.lifecycleCtx,
+	outcome, err := submitRuntimeEventWork(
 		ctx,
+		ctx,
+		e.lifecycleCtx,
 		e,
-		struct {
-			prepared preparedCompactionWork
-			err      error
-		}{prepared: prepared, err: workErr},
+		request,
+		nil,
+		func(
+			workCtx context.Context,
+			accepted compactionWorkRequest,
+		) compactionWorkResult {
+			prepared, workErr := e.prepareCompactionWork(
+				workCtx,
+				accepted.stepID,
+				accepted.mode,
+				accepted.instructions,
+				accepted.includePreservedUserMessage,
+			)
+			return compactionWorkResult{
+				prepared: prepared,
+				err:      workErr,
+			}
+		},
 		func(
 			admission runtimeEventAdmission,
-			result struct {
-				prepared preparedCompactionWork
-				err      error
-			},
-		) (applyResult, error) {
-			receipt, err := e.applyPreparedCompactionWork(
+			accepted compactionWorkRequest,
+			terminal compactionWorkResult,
+		) (compactionWorkApplication, error) {
+			receipt, applyErr := e.applyPreparedCompactionWork(
 				admission,
-				stepID,
-				mode,
-				result.prepared,
-				result.err,
+				accepted.stepID,
+				accepted.mode,
+				terminal.prepared,
+				terminal.err,
 			)
-			return applyResult{receipt: receipt, err: err}, nil
+			return compactionWorkApplication{
+				receipt: receipt,
+				err:     applyErr,
+			}, nil
+		},
+		func(
+			terminal compactionWorkResult,
+			applied compactionWorkApplication,
+			resultErr error,
+		) (compactionWorkOutcome, error) {
+			return compactionWorkOutcome{
+					result:  terminal.prepared.result,
+					receipt: applied.receipt,
+				}, errors.Join(
+					terminal.err,
+					applied.err,
+					resultErr,
+				)
 		},
 	)
-	return prepared.result, applied.receipt, errors.Join(workErr, applied.err, submitErr)
+	return outcome.result, outcome.receipt, err
 }
 
 func lastVisibleUserMessageSinceLatestCompaction(items []llm.ResponseItem) string {

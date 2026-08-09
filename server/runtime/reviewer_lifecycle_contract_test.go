@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"core/server/llm"
 	"core/server/session"
@@ -12,6 +13,113 @@ import (
 	"core/shared/textutil"
 	"core/shared/transcript"
 )
+
+func TestReviewerWorkUsesRuntimeEventStartAndResultBoundaries(t *testing.T) {
+	stepID := "11111111-1111-4111-8111-111111111111"
+	reviewer := newScriptedGoalLoopClient()
+	var events []Event
+	engine := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		&fakeClient{},
+		tools.NewRegistry(),
+		Config{
+			Model:    "gpt-5",
+			Reviewer: ReviewerConfig{Model: "gpt-5"},
+			OnEvent: func(event Event) {
+				events = append(events, event)
+			},
+		},
+	)
+
+	releaseStartAdmission := blockRuntimeEventAdmission(t, engine.runtimeEvents)
+	startBlocked := true
+	defer func() {
+		if startBlocked {
+			releaseStartAdmission()
+		}
+	}()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := engine.runReviewerFollowUp(
+			context.Background(),
+			stepID,
+			llm.Message{
+				Role:    llm.RoleAssistant,
+				Content: textutil.Value("original"),
+			},
+			0,
+			false,
+			reviewer,
+		)
+		done <- err
+	}()
+	reviewer.assertNotStarted(t, 1)
+
+	releaseStartAdmission()
+	startBlocked = false
+	reviewer.waitStarted(t, 1)
+
+	unrelatedApplied := make(chan struct{})
+	if _, err := submitRuntimeEvent(
+		engine,
+		struct{}{},
+		func(runtimeEventAdmission, struct{}) (struct{}, error) {
+			close(unrelatedApplied)
+			return struct{}{}, nil
+		},
+	); err != nil {
+		t.Fatalf("apply unrelated Runtime Event while Reviewer is held: %v", err)
+	}
+	select {
+	case <-unrelatedApplied:
+	case <-time.After(3 * time.Second):
+		t.Fatal("held Reviewer work blocked unrelated Runtime Event admission")
+	}
+
+	releaseResultAdmission := blockRuntimeEventAdmission(t, engine.runtimeEvents)
+	resultBlocked := true
+	defer func() {
+		if resultBlocked {
+			releaseResultAdmission()
+		}
+	}()
+	reviewer.releaseCall(1)
+	select {
+	case err := <-done:
+		t.Fatalf("Reviewer settled before its terminal result event: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	releaseResultAdmission()
+	resultBlocked = false
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("run Reviewer follow-up: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Reviewer did not settle after its terminal result event")
+	}
+
+	started, completed := 0, 0
+	for _, event := range events {
+		switch event.Kind {
+		case EventReviewerStarted:
+			started++
+		case EventReviewerCompleted:
+			completed++
+		}
+	}
+	if started != 1 || completed != 1 {
+		t.Fatalf(
+			"Reviewer lifecycle events = started:%d completed:%d, want one each",
+			started,
+			completed,
+		)
+	}
+}
 
 func TestDefaultStepExecutorOwnsReviewerLifecycleAndPropagatesFatalError(t *testing.T) {
 	fatalErr := errors.New("reviewer application failed")
@@ -134,8 +242,13 @@ func TestReviewerCompletionPublicationFailureClearsState(t *testing.T) {
 		t.Fatalf("publish Reviewer start: %v", err)
 	}
 	engine.eventLog = session.MaterializedEventLog{}
-	executor := &defaultStepExecutor{engine: engine}
-	if err := executor.terminalizeReviewerLifecycle(stepID, nil); err == nil {
+	if err := engine.steer(
+		stepID,
+		steerEventIntent(Event{
+			Kind:   EventReviewerCompleted,
+			StepID: stepID,
+		}),
+	); err == nil {
 		t.Fatal("completion publication unexpectedly succeeded")
 	}
 	if active := engine.reviewerRuntimeState().ActiveStepSnapshot(); active != nil {

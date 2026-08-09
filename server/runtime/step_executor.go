@@ -531,10 +531,6 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 				effectiveReviewerFrequency, effectiveReviewerClient = e.reviewerTurnConfigSnapshot()
 			}
 			if s.reviewer.ShouldRunTurn(effectiveReviewerFrequency, effectiveReviewerClient, patchEditsApplied) {
-				startErr := e.steer(stepID, steerEventIntent(Event{Kind: EventReviewerStarted, StepID: stepID}))
-				if startErr != nil {
-					return stepLoopResult{}, fmt.Errorf("start Reviewer lifecycle: %w", startErr)
-				}
 				if !assistantEventEmitted {
 					// The answer is already committed before supervisor entries are appended.
 					// Publish it first so live clients never see supervisor entries as a gap
@@ -543,7 +539,15 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 					assistantEventEmitted = true
 				}
 				preReviewMessage := resolved
-				reviewed, err := s.reviewer.RunFollowUp(ctx, stepID, resolved, resolvedCommittedStart, resolvedCommittedStartSet, effectiveReviewerClient)
+				reviewed, err := e.runReviewerFollowUpAsRuntimeWork(
+					ctx,
+					stepID,
+					resolved,
+					resolvedCommittedStart,
+					resolvedCommittedStartSet,
+					effectiveReviewerClient,
+					s.reviewer,
+				)
 				if err == nil {
 					resolved = reviewed.Message
 					reviewerCompletion = reviewed.Completion
@@ -554,12 +558,8 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 				} else {
 					assistantEventEmitted = assistantEventEmitted && sameVisibleAssistantMessage(preReviewMessage, resolved)
 				}
-				terminalizationErr := s.terminalizeReviewerLifecycle(stepID, reviewerCompletion)
 				if err != nil {
-					return stepLoopResult{}, errors.Join(err, terminalizationErr)
-				}
-				if terminalizationErr != nil {
-					return stepLoopResult{}, terminalizationErr
+					return stepLoopResult{}, err
 				}
 			}
 			if !assistantEventEmitted {
@@ -587,18 +587,6 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 			return stepLoopResult{ExecutedToolCall: true}, nil
 		}
 	}
-}
-
-func (s *defaultStepExecutor) terminalizeReviewerLifecycle(stepID string, status *ReviewerStatus) error {
-	if s == nil || s.engine == nil {
-		return errors.New("Reviewer lifecycle terminalizer requires an engine")
-	}
-	err := s.engine.steer(stepID, steerEventIntent(Event{
-		Kind:     EventReviewerCompleted,
-		StepID:   stepID,
-		Reviewer: status,
-	}))
-	return err
 }
 
 func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, stepID string, resp llm.Response) (preparedCompletedResponse, error) {

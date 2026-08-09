@@ -90,3 +90,73 @@ func submitRuntimeEventWithContext[Payload, Result any](
 	result, err := deferred.Await(waitContext)
 	return result, runtimeSteeringError(err)
 }
+
+func submitRuntimeEventWork[Request, WorkResult, Application, Result any](
+	admissionContext context.Context,
+	workContext context.Context,
+	waitContext context.Context,
+	engine *Engine,
+	request Request,
+	start func(runtimeEventAdmission, Request) error,
+	run func(context.Context, Request) WorkResult,
+	apply func(runtimeEventAdmission, Request, WorkResult) (Application, error),
+	settle func(WorkResult, Application, error) (Result, error),
+) (Result, error) {
+	var zero Result
+	if engine == nil {
+		return zero, errors.New("runtime engine is required")
+	}
+	deferred, err := runtimecommand.Submit(
+		admissionContext,
+		engine.runtimeEvents,
+		request,
+		func(
+			command runtimecommand.Admission,
+			accepted Request,
+			complete func(Result, error),
+		) error {
+			admission := runtimeEventAdmission{engine: engine, command: command}
+			if start != nil {
+				if startErr := start(admission, accepted); startErr != nil {
+					return startErr
+				}
+			}
+			return admission.startWork(func(runtimeContext context.Context) {
+				runContext, cancelRun := context.WithCancelCause(runtimeContext)
+				stopWorkCancellation := context.AfterFunc(workContext, func() {
+					cancelRun(context.Cause(workContext))
+				})
+				if cause := context.Cause(workContext); cause != nil {
+					cancelRun(cause)
+				}
+				defer stopWorkCancellation()
+				defer cancelRun(nil)
+
+				workResult := run(runContext, accepted)
+				application, resultErr := submitRuntimeEventWithContext(
+					engine.lifecycleCtx,
+					engine.lifecycleCtx,
+					engine,
+					workResult,
+					func(
+						resultAdmission runtimeEventAdmission,
+						completed WorkResult,
+					) (Application, error) {
+						return apply(resultAdmission, accepted, completed)
+					},
+				)
+				result, settleErr := settle(
+					workResult,
+					application,
+					resultErr,
+				)
+				complete(result, settleErr)
+			})
+		},
+	)
+	if err != nil {
+		return zero, runtimeSteeringError(err)
+	}
+	result, err := deferred.Await(waitContext)
+	return result, runtimeSteeringError(err)
+}

@@ -841,7 +841,15 @@ func (e *Engine) runStepLoopWithQueuedUserFlushObserver(ctx context.Context, ste
 
 func (e *Engine) runReviewerFollowUp(ctx context.Context, stepID string, original llm.Message, originalCommittedStart int, originalCommittedStartSet bool, reviewerClient llm.Client) (reviewerFollowUpResult, error) {
 	e.ensureOrchestrationCollaborators()
-	return e.reviewerFlow.RunFollowUp(ctx, stepID, original, originalCommittedStart, originalCommittedStartSet, reviewerClient)
+	return e.runReviewerFollowUpAsRuntimeWork(
+		ctx,
+		stepID,
+		original,
+		originalCommittedStart,
+		originalCommittedStartSet,
+		reviewerClient,
+		e.reviewerFlow,
+	)
 }
 
 func (e *Engine) ensureLocked() (session.LockedContract, error) {
