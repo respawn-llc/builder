@@ -4,45 +4,57 @@ import (
 	"errors"
 	"testing"
 
-	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
 func TestClassifyWorkflowTaskSelectorUsesFullCanonicalTaskID(t *testing.T) {
 	tests := []struct {
-		name string
-		raw  string
-		want bool
+		name  string
+		raw   string
+		kind  workflowTaskSelectorKind
+		value string
 	}{
 		{
-			name: "canonical persistent task id",
-			raw:  "task-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-			want: true,
+			name:  "canonical persistent task id",
+			raw:   "task-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+			kind:  workflowTaskSelectorTaskID,
+			value: "task-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
 		},
 		{
-			name: "ordinary short id",
-			raw:  "KENT-432",
-			want: false,
+			name:  "ordinary short id",
+			raw:   "KENT-432",
+			kind:  workflowTaskSelectorShortID,
+			value: "KENT-432",
 		},
 		{
-			name: "prefix-like noncanonical id",
-			raw:  "task-not-a-uuid",
-			want: false,
+			name:  "prefix-like noncanonical id",
+			raw:   "task-not-a-uuid",
+			kind:  workflowTaskSelectorShortID,
+			value: "task-not-a-uuid",
 		},
 		{
-			name: "prefix-like legacy id",
-			raw:  "task-1",
-			want: false,
+			name:  "prefix-like legacy id",
+			raw:   "task-1",
+			kind:  workflowTaskSelectorShortID,
+			value: "task-1",
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := runtimeids.ParseCanonicalTaskID(test.raw)
-			got := err == nil
-			if got != test.want {
-				t.Fatalf("canonical selector = %v, want %v", got, test.want)
+			got, err := classifyWorkflowTaskSelector(test.raw)
+			if err != nil {
+				t.Fatalf("classify selector: %v", err)
+			}
+			if got.kind != test.kind || got.value != test.value {
+				t.Fatalf("selector = %+v, want kind=%d value=%q", got, test.kind, test.value)
 			}
 		})
+	}
+}
+
+func TestClassifyWorkflowTaskSelectorRejectsEmptyInput(t *testing.T) {
+	if _, err := classifyWorkflowTaskSelector(" \t"); err == nil {
+		t.Fatal("empty task selector unexpectedly accepted")
 	}
 }
 

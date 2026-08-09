@@ -143,6 +143,16 @@ func TestTaskObservationJSONParseFailureEmitsOneUsageObjectWithoutRemote(t *test
 	}
 }
 
+func TestTaskObservationHelpReturnsSuccessWithoutJSONEnvelope(t *testing.T) {
+	var stdout, stderr strings.Builder
+	if code := taskWaitSubcommand([]string{"--json", "--help"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit code = %d, stdout=%q, stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if stdout.Len() != 0 || stderr.Len() == 0 {
+		t.Fatalf("stdout=%q stderr=%q, want human help on stderr only", stdout.String(), stderr.String())
+	}
+}
+
 func TestProjectRunWatchJSONQuestionUsesAnswerTargetAndOrderedSuggestions(t *testing.T) {
 	recommended := 2
 	response := serverapi.RuntimeLiveWatchResponse{
@@ -214,6 +224,10 @@ func TestProjectTaskObservationJSONPreservesQuestionNodeAndKeepsDoneEmpty(t *tes
 	}
 	if decoded.Outcomes[1]["node_key"] != nodeKey {
 		t.Fatalf("question node_key = %#v", decoded.Outcomes[1])
+	}
+	suggestions, ok := decoded.Outcomes[1]["suggestions"].([]any)
+	if !ok || suggestions == nil || len(suggestions) != 0 {
+		t.Fatalf("question suggestions = %#v, want empty array", decoded.Outcomes[1]["suggestions"])
 	}
 }
 

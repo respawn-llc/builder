@@ -120,11 +120,11 @@ func observationTargetTask(id string) observationJSONTarget {
 }
 func projectObservationQuestion(question serverapi.ObservationQuestion, answerSessionID string, nodeKey *string) (observationJSONOutcome, error) {
 	var id, text string
-	var suggestions []string
+	suggestions := make([]string, 0)
 	var recommendation *int
 	switch {
 	case question.Ask != nil:
-		id, text, suggestions, recommendation = question.Ask.AskID, question.Ask.Question, append([]string(nil), question.Ask.Suggestions...), question.Ask.RecommendedOptionIndex
+		id, text, suggestions, recommendation = question.Ask.AskID, question.Ask.Question, append(suggestions, question.Ask.Suggestions...), question.Ask.RecommendedOptionIndex
 	case question.Approval != nil:
 		id, text = question.Approval.ApprovalID, question.Approval.Question
 		suggestions = make([]string, 0, len(question.Approval.Options))

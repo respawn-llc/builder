@@ -45,6 +45,10 @@ func taskObservationSubcommandWithOpener(args []string, stdout io.Writer, stderr
 	jsonOut := fs.Bool("json", false, "write a stable JSON envelope")
 	positionals, ok, code := parseInterspersedPositionals(fs, args)
 	if !ok {
+		if code == 0 {
+			_, _ = io.Copy(stderr, &diagnostics)
+			return 0
+		}
 		if *jsonOut {
 			return writeObservationUsage(stdout, strings.TrimSpace(diagnostics.String()))
 		}
