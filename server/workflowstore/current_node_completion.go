@@ -152,17 +152,21 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 	if err != nil {
 		return CurrentNodeCompletionResult{}, err
 	}
-	nowTime := s.now().UTC()
-	now := nowTime.UnixMilli()
 	connection, err := s.db.Conn(ctx)
 	if err != nil {
 		return CurrentNodeCompletionResult{}, err
 	}
 	defer func() { _ = connection.Close() }()
 	lifecycle := sqlitelifecyclegen.New(connection)
+	if err := lifecycle.SetBusyTimeout15Seconds(ctx); err != nil {
+		return CurrentNodeCompletionResult{}, err
+	}
+	defer func() { _ = lifecycle.SetBusyTimeout5Seconds(context.Background()) }()
 	if err := lifecycle.BeginImmediate(ctx); err != nil {
 		return CurrentNodeCompletionResult{}, err
 	}
+	nowTime := s.now().UTC()
+	now := nowTime.UnixMilli()
 	committed := false
 	defer func() {
 		if !committed {
