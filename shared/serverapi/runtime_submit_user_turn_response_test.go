@@ -45,6 +45,21 @@ func TestRuntimeSubmitUserTurnResponseValidatesTypedOutcome(t *testing.T) {
 			},
 		},
 		{
+			name: "assistant final requires message",
+			response: RuntimeSubmitUserTurnResponse{
+				ResultKind: clientui.UserTurnResultKindAssistantFinal,
+			},
+			wantErr: true,
+		},
+		{
+			name: "assistant final rejects blank message",
+			response: RuntimeSubmitUserTurnResponse{
+				ResultKind: clientui.UserTurnResultKindAssistantFinal,
+				Message:    textutil.Value(" \n\t "),
+			},
+			wantErr: true,
+		},
+		{
 			name: "valid no final",
 			response: RuntimeSubmitUserTurnResponse{
 				ResultKind: clientui.UserTurnResultKindNoFinal,

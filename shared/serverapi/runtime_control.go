@@ -130,6 +130,9 @@ func (r RuntimeSubmitUserTurnResponse) Validate() error {
 		if r.Steered || strings.TrimSpace(r.QueueItemID) != "" {
 			return errors.New("assistant_final result must not include queue state")
 		}
+		if r.Message == nil || strings.TrimSpace(*r.Message) == "" {
+			return errors.New("assistant_final result requires a present nonblank message")
+		}
 	case clientui.UserTurnResultKindSilentFinal:
 		if r.Steered || strings.TrimSpace(r.QueueItemID) != "" {
 			return errors.New("silent_final result must not include queue state")
