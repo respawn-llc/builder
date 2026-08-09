@@ -93,7 +93,6 @@ const (
 	RuntimeOperationKindUserShell        RuntimeOperationKind = "user_shell"
 	RuntimeOperationKindCompact          RuntimeOperationKind = "compact"
 	RuntimeOperationKindPreSubmitCompact RuntimeOperationKind = "pre_submit_compact"
-	RuntimeOperationKindSubmitQueued     RuntimeOperationKind = "submit_queued"
 )
 
 func (k RuntimeOperationKind) Validate() error {
@@ -102,8 +101,7 @@ func (k RuntimeOperationKind) Validate() error {
 		RuntimeOperationKindQueuedMessage,
 		RuntimeOperationKindUserShell,
 		RuntimeOperationKindCompact,
-		RuntimeOperationKindPreSubmitCompact,
-		RuntimeOperationKindSubmitQueued:
+		RuntimeOperationKindPreSubmitCompact:
 		return nil
 	default:
 		return fmt.Errorf("unknown runtime operation kind %q", k)
@@ -196,14 +194,6 @@ type RuntimeCompactRequest struct {
 
 func (r RuntimeCompactRequest) Validate() error {
 	return validateOperationRefKind(r.OperationRef, RuntimeOperationKindCompact)
-}
-
-type RuntimeSubmitQueuedRequest struct {
-	OperationRef RuntimeOperationRef
-}
-
-func (r RuntimeSubmitQueuedRequest) Validate() error {
-	return validateOperationRefKind(r.OperationRef, RuntimeOperationKindSubmitQueued)
 }
 
 func validateOperationRefKind(ref RuntimeOperationRef, kind RuntimeOperationKind) error {

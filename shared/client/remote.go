@@ -830,18 +830,6 @@ func (c *Remote) CompactContext(ctx context.Context, req serverapi.RuntimeCompac
 	return c.callDedicated(ctx, "runtime-compact-context", protocol.MethodRuntimeCompactContext, req, nil)
 }
 
-func (c *Remote) CompactContextForPreSubmit(ctx context.Context, req serverapi.RuntimeCompactContextForPreSubmitRequest) error {
-	return c.callDedicated(ctx, "runtime-compact-context-pre-submit", protocol.MethodRuntimeCompactContextForPreSubmit, req, nil)
-}
-
-func (c *Remote) HasQueuedUserWork(ctx context.Context, req serverapi.RuntimeHasQueuedUserWorkRequest) (serverapi.RuntimeHasQueuedUserWorkResponse, error) {
-	return callControlRPC[serverapi.RuntimeHasQueuedUserWorkRequest, serverapi.RuntimeHasQueuedUserWorkResponse](c, ctx, protocol.MethodRuntimeHasQueuedUserWork, req)
-}
-
-func (c *Remote) SubmitQueuedUserMessages(ctx context.Context, req serverapi.RuntimeSubmitQueuedUserMessagesRequest) (serverapi.RuntimeSubmitQueuedUserMessagesResponse, error) {
-	return callDedicatedRPC[serverapi.RuntimeSubmitQueuedUserMessagesRequest, serverapi.RuntimeSubmitQueuedUserMessagesResponse](c, ctx, "runtime-submit-queued-user-messages", protocol.MethodRuntimeSubmitQueuedUserMessages, req)
-}
-
 func (c *Remote) Interrupt(ctx context.Context, req serverapi.RuntimeInterruptRequest) (serverapi.RuntimeInterruptResponse, error) {
 	return callDedicatedRPC[serverapi.RuntimeInterruptRequest, serverapi.RuntimeInterruptResponse](c, ctx, "runtime-interrupt", protocol.MethodRuntimeInterrupt, req)
 }

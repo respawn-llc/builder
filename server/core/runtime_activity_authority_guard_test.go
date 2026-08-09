@@ -7,6 +7,7 @@ import (
 	"go/types"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -143,6 +144,54 @@ func TestRuntimeClientInputIdentityBoundaryStaysRequestShaped(t *testing.T) {
 	assertSessionRuntimeClientDoesNotSynthesizeInputIdentity(t, testharness.PackageByPath(t, pkgs, "core/cli/app"), repoRoot)
 }
 
+func TestRuntimeQueueKickAndStandalonePreSubmitSurfacesStayDeleted(t *testing.T) {
+	repoRoot := findRepoRoot(t)
+	forbiddenNames := make(map[string]struct{})
+	for _, name := range strings.Fields(`
+		RuntimeOperationKindSubmitQueued RuntimeSubmitQueuedRequest RuntimeCompactContextForPreSubmitRequest
+		RuntimeHasQueuedUserWorkRequest RuntimeHasQueuedUserWorkResponse RuntimeSubmitQueuedUserMessagesRequest
+		RuntimeSubmitQueuedUserMessagesResponse MethodRuntimeCompactContextForPreSubmit MethodRuntimeHasQueuedUserWork
+		MethodRuntimeSubmitQueuedUserMessages SubmitRuntimeQueued HasQueuedUserWork SubmitQueuedUserMessages
+		CompactContextForPreSubmit`) {
+		forbiddenNames[name] = struct{}{}
+	}
+	forbiddenWire := map[string]struct{}{
+		"runtime." + "compactContextForPreSubmit": {}, "runtime." + "hasQueuedUserWork": {},
+		"runtime." + "submitQueuedUserMessages": {}, "runtime-compact-context-" + "pre-submit": {},
+		"runtime-submit-queued-user-" + "messages": {},
+	}
+	var findings []string
+	walkRepositoryGoSources(t, repoRoot, repositoryGoSourceScan{
+		Operation: "scan removed runtime orchestration", Root: ".", Recursive: true,
+		IncludeTests: true, Mode: parser.SkipObjectResolution, Selection: allRepositoryGoSources{},
+	}, func(source parsedGoSource) {
+		ast.Inspect(source.File, func(node ast.Node) bool {
+			switch typed := node.(type) {
+			case *ast.Ident:
+				if _, forbidden := forbiddenNames[typed.Name]; !forbidden {
+					break
+				}
+				relPath := filepath.ToSlash(source.RelPath)
+				runtimeInternal := strings.HasPrefix(relPath, "server/runtime/") && (typed.Name == "HasQueuedUserWork" || typed.Name == "SubmitQueuedUserMessages" || typed.Name == "CompactContextForPreSubmit")
+				retainedEngineRead := typed.Name == "HasQueuedUserWork" && (relPath == "server/sessionruntime/authority_resource.go" || relPath == "server/runtimecontrol/service_test.go")
+				if !runtimeInternal && !retainedEngineRead {
+					findings = append(findings, relPath+":"+strconv.Itoa(source.FileSet.Position(typed.Pos()).Line)+" still uses "+typed.Name)
+				}
+			case *ast.BasicLit:
+				value, err := strconv.Unquote(typed.Value)
+				if _, forbidden := forbiddenWire[value]; err == nil && forbidden {
+					findings = append(findings, source.RelPath+":"+strconv.Itoa(source.FileSet.Position(typed.Pos()).Line)+" still contains removed wire method")
+				}
+			}
+			return true
+		})
+	})
+	if len(findings) > 0 {
+		sort.Strings(findings)
+		t.Fatalf("removed runtime queue-kick or standalone pre-submit surfaces restored:\n%s", strings.Join(findings, "\n"))
+	}
+}
+
 func TestRuntimeViewDoesNotExportGlobalLivenessMainViewHelper(t *testing.T) {
 	repoRoot := findRepoRoot(t)
 	pkg := testharness.PackageByPath(t, testharness.LoadTypedPackages(t, repoRoot, false, "./server/runtimeview"), "core/server/runtimeview")
@@ -196,8 +245,6 @@ func legacyRuntimeClientInputSignature(method *types.Func) bool {
 	switch method.Name() {
 	case "SubmitUserMessage", "SubmitUserShellCommand", "CompactContext":
 		return signatureHasContextAndSingleString(signature)
-	case "SubmitQueuedUserMessages":
-		return signatureHasContextOnly(signature)
 	case "QueueUserMessage":
 		return signatureHasSingleString(signature)
 	default:
@@ -209,10 +256,6 @@ func signatureHasContextAndSingleString(signature *types.Signature) bool {
 	return signature.Params().Len() == 2 &&
 		isContextType(signature.Params().At(0).Type()) &&
 		isStringType(signature.Params().At(1).Type())
-}
-
-func signatureHasContextOnly(signature *types.Signature) bool {
-	return signature.Params().Len() == 1 && isContextType(signature.Params().At(0).Type())
 }
 
 func signatureHasSingleString(signature *types.Signature) bool {
@@ -243,7 +286,7 @@ func assertSessionRuntimeClientDoesNotSynthesizeInputIdentity(t *testing.T, pkg 
 				continue
 			}
 			switch function.Name.Name {
-			case "SubmitUserMessage", "SubmitUserShellCommand", "CompactContext", "SubmitQueuedUserMessages", "QueueUserMessage", "QueueUserMessageWithClientRequestID":
+			case "SubmitUserMessage", "SubmitUserShellCommand", "CompactContext", "QueueUserMessage", "QueueUserMessageWithClientRequestID":
 				t.Fatalf("sessionRuntimeClient must not synthesize hidden input operation refs, found %s", function.Name.Name)
 			}
 		}

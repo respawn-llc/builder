@@ -116,11 +116,6 @@ func (m *uiModel) reduceInputAsyncMessage(msg tea.Msg) uiFeatureUpdateResult {
 		nextModel := next.(*uiModel)
 		nextModel.layout().syncViewport()
 		return handledUIFeatureUpdate(nextModel, cmd)
-	case queuedRuntimeWorkCheckDoneMsg:
-		next, cmd := m.inputController().handleQueuedRuntimeWorkCheckDone(msg)
-		nextModel := next.(*uiModel)
-		nextModel.layout().syncViewport()
-		return handledUIFeatureUpdate(nextModel, cmd)
 	case submitDoneMsg:
 		next, cmd := m.inputController().handleSubmitDone(msg)
 		nextModel := next.(*uiModel)

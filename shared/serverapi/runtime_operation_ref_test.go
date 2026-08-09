@@ -13,7 +13,6 @@ func TestInputBearingRuntimeRequestsRequireMatchingOperationRefs(t *testing.T) {
 	preCompactID := runtimeids.NewRuntimeClientRequestID()
 	shellID := runtimeids.NewRuntimeClientRequestID()
 	compactID := runtimeids.NewRuntimeClientRequestID()
-	submitQueuedID := runtimeids.NewRuntimeClientRequestID()
 	for name, err := range map[string]error{
 		"submit": (RuntimeSubmitUserTurnRequest{
 			ClientRequestID:                 submitID.String(),
@@ -33,16 +32,6 @@ func TestInputBearingRuntimeRequestsRequireMatchingOperationRefs(t *testing.T) {
 			SessionID:       "session-1",
 			Args:            "notes",
 			OperationRef:    clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindCompact, ClientRequestID: compactID},
-		}).Validate(),
-		"pre-submit compact": (RuntimeCompactContextForPreSubmitRequest{
-			ClientRequestID: preCompactID.String(),
-			SessionID:       "session-1",
-			OperationRef:    clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindPreSubmitCompact, ClientRequestID: preCompactID},
-		}).Validate(),
-		"submit queued": (RuntimeSubmitQueuedUserMessagesRequest{
-			ClientRequestID: submitQueuedID.String(),
-			SessionID:       "session-1",
-			OperationRef:    clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmitQueued, ClientRequestID: submitQueuedID},
 		}).Validate(),
 	} {
 		if err != nil {

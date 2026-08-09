@@ -50,24 +50,6 @@ func applyFirstInjectedQueueCreateDoneForTest(t *testing.T, m *uiModel, cmd tea.
 	return m
 }
 
-func applyQueuedRuntimeWorkCheckForTest(t *testing.T, m *uiModel, cmd tea.Cmd) (*uiModel, tea.Cmd) {
-	t.Helper()
-	if cmd == nil {
-		return m, nil
-	}
-	for _, msg := range collectCmdMessages(t, cmd) {
-		if typed, ok := msg.(queuedRuntimeWorkCheckDoneMsg); ok {
-			next, nextCmd := m.Update(typed)
-			updated, ok := next.(*uiModel)
-			if !ok {
-				t.Fatalf("updated model = %T, want *uiModel", next)
-			}
-			return updated, nextCmd
-		}
-	}
-	return m, cmd
-}
-
 func TestBusyEnterUsesAuthoritativeSubmitPath(t *testing.T) {
 	client := &runtimeControlFakeClient{submitQueuedID: "busy-submit-queue"}
 	model := newProjectedTestUIModel(client)
@@ -276,79 +258,58 @@ func TestAllowCommentaryQueueCreateConnectionFailureAnswersIndependently(t *test
 	}
 }
 
-func TestQueuedSubmitFailurePreservesActivityWithoutQueueID(t *testing.T) {
+func TestTranscriptQueuedStateOwnsRestorationAndLocalQueueAdmission(t *testing.T) {
 	disableTransientStatusClearForTest(t)
+	text := "server queued text"
+	for _, test := range []struct {
+		status       clientui.QueuedUserMessageStatus
+		wantQueued   int
+		wantComposer string
+	}{
+		{status: clientui.QueuedUserMessageAccepted, wantQueued: 1, wantComposer: "existing draft"},
+		{status: clientui.QueuedUserMessageSubmitted, wantComposer: "existing draft"},
+		{status: clientui.QueuedUserMessageFailed, wantComposer: "existing draft\n\nserver queued text"},
+		{status: clientui.QueuedUserMessageDiscarded, wantComposer: "existing draft"},
+	} {
+		t.Run(string(test.status), func(t *testing.T) {
+			client := &runtimeControlFakeClient{}
+			model := newProjectedTestUIModel(client)
+			testSetMainInput(model, "existing draft")
+			requestID := ongoingTestClientRequestID()
+			queueID := ongoingTestQueueItemID()
+			model.registerSteeredQueuedUserMessage(clientui.QueuedUserMessage{
+				ID: queueID.String(), Text: text, ClientRequestID: requestID.String(),
+			})
+			if test.status == clientui.QueuedUserMessageSubmitted {
+				model.queued = []queuedInputItem{{ID: "local-draft", Text: "local draft"}}
+				if cmd := model.inputController().resumeQueuedInputsAfterIdleRuntime(); cmd != nil || len(model.queued) != 1 {
+					t.Fatal("local draft advanced before accepted server work reached a terminal state")
+				}
+			}
 
-	model := newProjectedTestUIModel(&runtimeControlFakeClient{})
-	model.setRuntimeActivityBusyForTest(true)
-	beforeActivity := model.activity
-	if cmd := model.inputController().dispatchQueuedInput(queuedInputItem{ID: "queued-shell-id", Text: "$ echo queued"}); cmd == nil {
-		t.Fatal("queued shell dispatch produced no submit command")
-	}
-	if model.activeSubmit.origin != activeSubmitOriginQueued {
-		t.Fatalf("submit origin = %d, want queued", model.activeSubmit.origin)
-	}
+			cmd := model.applyTranscriptQueuedMessageState(clientui.TranscriptQueuedMessageState{
+				ClientRequestID: requestID,
+				QueueItemID:     queueID,
+				Status:          test.status,
+				Text:            &text,
+			})
+			if test.status == clientui.QueuedUserMessageSubmitted {
+				cmd = tea.Batch(cmd, model.inputController().resumeQueuedInputsAfterIdleRuntime())
+			}
+			for _, msg := range collectCmdMessages(t, cmd) {
+				model = updateUIModel(t, model, msg)
+			}
 
-	next, cmd := model.Update(submitDoneMsg{
-		token:         model.activeSubmit.token,
-		submittedText: "$ echo queued",
-		err:           io.EOF,
-	})
-	updated := next.(*uiModel)
-	for _, msg := range collectCmdMessages(t, cmd) {
-		updated = updateUIModel(t, updated, msg)
-	}
-
-	if updated.activity != beforeActivity {
-		t.Fatalf("activity = %v, want pre-failure activity %v", updated.activity, beforeActivity)
-	}
-	if got, want := testMainInput(updated), "$ echo queued"; got != want {
-		t.Fatalf("restored queued text = %q, want %q", got, want)
-	}
-	if got, want := updated.transientStatus, runtimeattach.FormatSubmissionError(io.EOF); got != want {
-		t.Fatalf("transient status = %q, want %q", got, want)
-	}
-}
-
-func TestQueuedRuntimeSubmitFailureKeepsAcceptedSteerPending(t *testing.T) {
-	disableTransientStatusClearForTest(t)
-
-	client := &runtimeControlFakeClient{}
-	model := newProjectedTestUIModel(client)
-	model.setRuntimeActivityBusyForTest(true)
-	model.pendingInjected = []clientui.QueuedUserMessage{{ID: "steer-1", Text: "queued steer"}}
-	model.injectedQueue = []injectedRuntimeQueueItem{{
-		LocalID:  "steer-1",
-		ServerID: "steer-1",
-		Text:     "queued steer",
-		State:    injectedRuntimeQueueEnqueued,
-	}}
-	model.activeSubmit = activeSubmitState{token: 1, origin: activeSubmitOriginQueued}
-	beforeActivity := model.activity
-
-	next, cmd := model.Update(submitDoneMsg{token: 1, err: io.EOF})
-	updated := next.(*uiModel)
-	for _, msg := range collectCmdMessages(t, cmd) {
-		updated = updateUIModel(t, updated, msg)
-	}
-
-	if got := testMainInput(updated); got != "" {
-		t.Fatalf("accepted steer composer text = %q, want empty", got)
-	}
-	if len(updated.pendingInjected) != 1 || len(updated.injectedQueue) != 1 {
-		t.Fatalf("accepted steer queue state = pending %d, queue %d; want one item", len(updated.pendingInjected), len(updated.injectedQueue))
-	}
-	if updated.injectedQueue[0].State != injectedRuntimeQueueEnqueued {
-		t.Fatalf("accepted steer state = %q, want enqueued", updated.injectedQueue[0].State)
-	}
-	if client.discardQueuedCalls != 0 {
-		t.Fatalf("discard calls = %d, want 0", client.discardQueuedCalls)
-	}
-	if client.appendCalls != 0 {
-		t.Fatalf("committed-entry calls = %d, want 0", client.appendCalls)
-	}
-	if updated.activity != beforeActivity {
-		t.Fatalf("activity = %v, want pre-failure activity %v", updated.activity, beforeActivity)
+			if len(model.pendingInjected) != test.wantQueued || len(model.injectedQueue) != test.wantQueued {
+				t.Fatalf("queued state = pending:%d injected:%d, want %d", len(model.pendingInjected), len(model.injectedQueue), test.wantQueued)
+			}
+			if got := testMainInput(model); got != test.wantComposer {
+				t.Fatalf("composer = %q, want %q", got, test.wantComposer)
+			}
+			if test.status == clientui.QueuedUserMessageSubmitted && client.submitCalls != 1 {
+				t.Fatalf("local submit calls = %d, want 1", client.submitCalls)
+			}
+		})
 	}
 }
 
