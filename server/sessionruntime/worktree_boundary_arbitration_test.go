@@ -209,6 +209,65 @@ func TestOwnerlessIdleReducerRetryPreservesPendingWorktreeClaim(t *testing.T) {
 	if err := claim.Cancel(errors.New("test complete")); err != nil {
 		t.Fatalf("cancel Worktree claim: %v", err)
 	}
+	assertRuntimeUnavailable(
+		t,
+		fixture.authority,
+		resource.ref,
+		"active-idle Worktree cancellation",
+	)
+}
+
+func TestOwnerlessPendingWorktreeCancellationRetriesRetirement(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
+	attachment := openLifecycleRuntime(
+		t,
+		fixture.authority,
+		sessionID,
+		"owner-a",
+		&plan,
+	)
+	fixture.authority.mu.Lock()
+	resource := fixture.authority.resources[sessionID]
+	fixture.authority.mu.Unlock()
+	if resource == nil {
+		t.Fatal("active resource is unavailable")
+	}
+	grant, acquired, err := resource.TryAcquireIdleBoundary(context.Background())
+	if err != nil || !acquired {
+		t.Fatalf("acquire idle reducer Boundary = (%T, %t, %v)", grant, acquired, err)
+	}
+	claim, err := fixture.authority.ClaimWorktreeBoundary(
+		resource.ref,
+		serverapi.NewWorktreeOperationID(),
+	)
+	if err != nil {
+		t.Fatalf("claim pending Worktree Boundary: %v", err)
+	}
+	retry, err := grant.Release()
+	if err != nil || !retry {
+		t.Fatalf("release reducer after pending Worktree claim = (%t, %v), want retry", retry, err)
+	}
+	release, err := attachment.Release(
+		context.Background(),
+		RuntimeReleaseCloseIfIdle,
+	)
+	if err != nil {
+		t.Fatalf("mark pending-claim runtime for ownerless retirement: %v", err)
+	}
+	if !release.Active || release.Released {
+		t.Fatalf("ownerless release = %+v, want active pending retirement", release)
+	}
+	if err := claim.Cancel(errors.New("test complete")); err != nil {
+		t.Fatalf("cancel pending Worktree claim: %v", err)
+	}
+	assertRuntimeUnavailable(
+		t,
+		fixture.authority,
+		resource.ref,
+		"pending Worktree cancellation",
+	)
 }
 
 func worktreeBoundaryArbitrationFixture(

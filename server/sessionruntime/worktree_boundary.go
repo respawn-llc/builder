@@ -605,8 +605,8 @@ func (c *WorktreeBoundaryClaim) Cancel(cause error) error {
 		return runtimeUnavailableError(c.resource)
 	}
 	resource.mu.Lock()
-	defer resource.mu.Unlock()
 	if resource.ref != c.resource || resource.worktreeBoundary != c.record {
+		resource.mu.Unlock()
 		return runtimeUnavailableError(c.resource)
 	}
 	switch c.record.phase {
@@ -616,8 +616,10 @@ func (c *WorktreeBoundaryClaim) Cancel(cause error) error {
 		resource.worktreeBoundary = nil
 		close(c.record.settled)
 		resource.signalLocked()
-		return nil
+		resource.mu.Unlock()
+		return c.authority.closeRetiringResource(context.Background(), resource)
 	default:
+		resource.mu.Unlock()
 		return runtimeUnavailableError(c.resource)
 	}
 }
