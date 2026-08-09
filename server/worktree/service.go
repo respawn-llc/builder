@@ -174,6 +174,7 @@ type InitialTaskWorktreeMaterializationRequest struct {
 type LockedTaskWorktreeRestoreRequest struct {
 	TaskID           workflow.TaskID
 	SetupOperationID serverapi.WorktreeSetupOperationID
+	BranchName       *string
 }
 
 type LockedTaskWorktreeCause string
@@ -371,6 +372,13 @@ func (s *Service) MaterializeInitialTaskWorktree(ctx context.Context, req Initia
 	)
 }
 
+func (s *Service) InspectProspectiveInitialTaskBranch(ctx context.Context, sourceWorkspaceRoot string, branchName string) error {
+	if s == nil || s.git == nil {
+		return errors.New("worktree service is required")
+	}
+	return workflowTaskInitialBranchError(s.git.InspectProspectiveInitialTaskBranch(ctx, sourceWorkspaceRoot, branchName))
+}
+
 func (s *Service) materializeInitialTaskWorktree(
 	ctx context.Context,
 	taskID string,
@@ -529,11 +537,24 @@ func (s *Service) RestoreLockedTaskWorktree(ctx context.Context, req LockedTaskW
 		return TaskWorktreeMaterialization{}, errors.New("task does not have a locked managed execution target")
 	}
 	if !task.ManagedWorktreeID.Valid || strings.TrimSpace(task.ManagedWorktreeID.String) == "" {
+		if req.BranchName != nil {
+			return TaskWorktreeMaterialization{}, &serverapi.WorkflowTaskInitialBranchError{
+				Reason:     serverapi.WorkflowTaskInitialBranchErrorReasonOperationCannotCreateWorktree,
+				BranchName: *req.BranchName,
+			}
+		}
 		return s.restoreUnboundLockedTaskWorktree(task, workspace)
 	}
 	worktreeID := strings.TrimSpace(task.ManagedWorktreeID.String)
 	record, err := s.metadata.GetWorktreeRecordByID(ctx, worktreeID)
 	if err != nil {
+		return TaskWorktreeMaterialization{}, err
+	}
+	persistedBranch, err := persistedTaskWorktreeBranch(record)
+	if err != nil {
+		return TaskWorktreeMaterialization{}, err
+	}
+	if err := validateInitialTaskBranchAssertion(req.BranchName, persistedBranch); err != nil {
 		return TaskWorktreeMaterialization{}, err
 	}
 	identity, err := s.git.ValidateManagedWorktreeIdentity(ctx, ManagedWorktreeIdentitySpec{

@@ -161,6 +161,71 @@ func TestRestoreLockedTaskWorktreeRejectsExplicitRootOverlappingSourceWorkspace(
 	}
 }
 
+func TestRestoreLockedTaskWorktreeValidatesInitialBranchAssertionBeforeLifecycle(t *testing.T) {
+	env := newServiceTestEnv(t)
+	task, materialized, _ := materializeAndLockTaskWorktree(t, env)
+	branchA := taskWorktreeBranch(materialized.Worktree)
+
+	if _, err := env.service.RestoreLockedTaskWorktree(env.ctx, LockedTaskWorktreeRestoreRequest{
+		TaskID: task.ID, BranchName: &branchA,
+	}); err != nil {
+		t.Fatalf("RestoreLockedTaskWorktree exact assertion: %v", err)
+	}
+	before, err := env.service.git.List(env.ctx, env.workspaceRoot)
+	if err != nil {
+		t.Fatalf("git.List before mismatch: %v", err)
+	}
+	branchB := "feature/post-creation-rename"
+	_, err = env.service.RestoreLockedTaskWorktree(env.ctx, LockedTaskWorktreeRestoreRequest{
+		TaskID: task.ID, BranchName: &branchB,
+	})
+	var mismatch *serverapi.WorkflowTaskInitialBranchError
+	if !errors.As(err, &mismatch) ||
+		mismatch.Reason != serverapi.WorkflowTaskInitialBranchErrorReasonPostCreationMismatch ||
+		mismatch.BranchName != branchB ||
+		mismatch.ExistingBranchName == nil ||
+		*mismatch.ExistingBranchName != branchA {
+		t.Fatalf("RestoreLockedTaskWorktree mismatch = %T %+v, want %q versus %q", err, err, branchB, branchA)
+	}
+	after, err := env.service.git.List(env.ctx, env.workspaceRoot)
+	if err != nil {
+		t.Fatalf("git.List after mismatch: %v", err)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("Git Worktrees after mismatch = %d, want unchanged %d", len(after), len(before))
+	}
+	exists, err := env.service.git.BranchExists(env.ctx, env.workspaceRoot, branchB)
+	if err != nil {
+		t.Fatalf("BranchExists(%q): %v", branchB, err)
+	}
+	if exists {
+		t.Fatalf("mismatched branch %q was created", branchB)
+	}
+}
+
+func TestRestoreLockedTaskWorktreeRejectsBranchAssertionWithoutWorktreeAuthority(t *testing.T) {
+	env := newServiceTestEnv(t)
+	task, _, _ := materializeAndLockTaskWorktree(t, env)
+	updated, err := env.store.Queries().UpdateTaskManagedWorktree(env.ctx, sqlitegen.UpdateTaskManagedWorktreeParams{
+		ManagedWorktreeID: sql.NullString{},
+		UpdatedAtUnixMs:   time.Now().UTC().UnixMilli(),
+		ID:                string(task.ID),
+	})
+	if err != nil || updated != 1 {
+		t.Fatalf("clear managed Worktree = %d, %v", updated, err)
+	}
+	branchName := "feature/cannot-assert-without-authority"
+
+	_, err = env.service.RestoreLockedTaskWorktree(env.ctx, LockedTaskWorktreeRestoreRequest{
+		TaskID: task.ID, BranchName: &branchName,
+	})
+	var branchErr *serverapi.WorkflowTaskInitialBranchError
+	if !errors.As(err, &branchErr) ||
+		branchErr.Reason != serverapi.WorkflowTaskInitialBranchErrorReasonOperationCannotCreateWorktree {
+		t.Fatalf("RestoreLockedTaskWorktree error = %T %v, want operation-cannot-create-Worktree", err, err)
+	}
+}
+
 func TestRestoreLockedTaskWorktreeRejectsExistingOutsideNamespaceRoot(t *testing.T) {
 	env := newServiceTestEnv(t)
 	task, materialized, _ := materializeAndLockTaskWorktree(t, env)
