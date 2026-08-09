@@ -90,11 +90,10 @@ func mustQueueRuntimeControlMessage(t *testing.T, engine *runtime.Engine, text s
 }
 
 type runtimeControlPromptHistoryStore struct {
-	mu             sync.Mutex
-	records        []metadata.PromptHistoryRecord
-	recordInserted []bool
-	recordErr      error
-	recordCtxErr   error
+	mu           sync.Mutex
+	records      []metadata.PromptHistoryRecord
+	recordErr    error
+	recordCtxErr error
 }
 
 type blockingRuntimeControlPromptHistoryStore struct {
@@ -113,21 +112,20 @@ func newBlockingRuntimeControlPromptHistoryStore() *blockingRuntimeControlPrompt
 func (s *blockingRuntimeControlPromptHistoryStore) RecordPromptHistoryEntry(
 	ctx context.Context,
 	entry metadata.PromptHistoryEntry,
-) (metadata.PromptHistoryRecord, bool, error) {
+) (metadata.PromptHistoryRecord, error) {
 	s.once.Do(func() {
 		close(s.started)
 	})
 	select {
 	case <-ctx.Done():
-		return metadata.PromptHistoryRecord{}, false, ctx.Err()
+		return metadata.PromptHistoryRecord{}, ctx.Err()
 	case <-s.release:
 		return metadata.PromptHistoryRecord{
 			Sequence:  1,
 			SessionID: entry.SessionID,
-			SourceID:  entry.SourceID,
 			Text:      entry.Text,
 			CreatedAt: entry.CreatedAt,
-		}, true, nil
+		}, nil
 	}
 }
 
@@ -137,34 +135,23 @@ func newRuntimeControlPromptHistoryStore(sessionID string) *runtimeControlPrompt
 	return store
 }
 
-func (s *runtimeControlPromptHistoryStore) RecordPromptHistoryEntry(ctx context.Context, entry metadata.PromptHistoryEntry) (metadata.PromptHistoryRecord, bool, error) {
+func (s *runtimeControlPromptHistoryStore) RecordPromptHistoryEntry(ctx context.Context, entry metadata.PromptHistoryEntry) (metadata.PromptHistoryRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.recordErr != nil {
-		return metadata.PromptHistoryRecord{}, false, s.recordErr
+		return metadata.PromptHistoryRecord{}, s.recordErr
 	}
 	if s.recordCtxErr != nil && ctx.Err() != nil {
-		return metadata.PromptHistoryRecord{}, false, s.recordCtxErr
-	}
-	for _, record := range s.records {
-		if record.SessionID == entry.SessionID && record.SourceID == entry.SourceID {
-			if record.Text != entry.Text {
-				return metadata.PromptHistoryRecord{}, false, metadata.ErrPromptHistoryConflict
-			}
-			s.recordInserted = append(s.recordInserted, false)
-			return record, false, nil
-		}
+		return metadata.PromptHistoryRecord{}, s.recordCtxErr
 	}
 	record := metadata.PromptHistoryRecord{
 		Sequence:  int64(len(s.records) + 1),
 		SessionID: entry.SessionID,
-		SourceID:  entry.SourceID,
 		Text:      entry.Text,
 		CreatedAt: entry.CreatedAt,
 	}
 	s.records = append(s.records, record)
-	s.recordInserted = append(s.recordInserted, true)
-	return record, true, nil
+	return record, nil
 }
 
 func (s *runtimeControlPromptHistoryStore) SetRecordError(err error) {
@@ -189,12 +176,6 @@ func (s *runtimeControlPromptHistoryStore) CountText(text string) int {
 		}
 	}
 	return count
-}
-
-func (s *runtimeControlPromptHistoryStore) RecordAttemptCount() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return len(s.recordInserted)
 }
 
 func waitForRuntimeControlPromptHistoryCount(t *testing.T, store *runtimeControlPromptHistoryStore, text string, want int) {

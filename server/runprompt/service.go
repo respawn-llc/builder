@@ -9,8 +9,6 @@ import (
 	"core/server/metadata"
 	servicecontract "core/shared/apicontract"
 	"core/shared/serverapi"
-
-	"github.com/google/uuid"
 )
 
 type inProcessRunPromptService struct {
@@ -47,9 +45,8 @@ func (s *inProcessRunPromptService) runPrompt(ctx context.Context, req serverapi
 
 	startedAt := time.Now()
 	if history := s.launcher.boot.PromptHistory; history != nil {
-		_, _, err := history.RecordPromptHistoryEntry(runCtx, metadata.PromptHistoryEntry{
+		_, err := history.RecordPromptHistoryEntry(runCtx, metadata.PromptHistoryEntry{
 			SessionID: runtimeHandle.plan.sessionID,
-			SourceID:  uuid.NewString(),
 			Text:      runtimeHandle.plan.PromptHistoryText(req.Prompt),
 		})
 		if err != nil {

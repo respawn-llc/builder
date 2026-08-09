@@ -1794,38 +1794,6 @@ func (q *Queries) GetSessionExecutionTargetByID(ctx context.Context, sessionID s
 	return i, err
 }
 
-const getSessionPromptHistoryEntryBySourceID = `-- name: GetSessionPromptHistoryEntryBySourceID :one
-SELECT
-    sequence,
-    session_id,
-    source_id,
-    text,
-    created_at_unix_ms
-FROM session_prompt_history_entries
-WHERE session_id = ?1
-  AND source_id = ?2
-LIMIT 1
-`
-
-type GetSessionPromptHistoryEntryBySourceIDParams struct {
-	SessionID string
-	SourceID  string
-}
-
-func (q *Queries) GetSessionPromptHistoryEntryBySourceID(ctx context.Context, arg GetSessionPromptHistoryEntryBySourceIDParams) (SessionPromptHistoryEntry, error) {
-	row := q.db.QueryRowContext(ctx, getSessionPromptHistoryEntryBySourceID, arg.SessionID, arg.SourceID)
-	var i SessionPromptHistoryEntry
-	err := recordQueryError(ctx, row.Scan(
-		&i.Sequence,
-		&i.SessionID,
-		&i.SourceID,
-		&i.Text,
-		&i.CreatedAtUnixMs,
-	), getSessionPromptHistoryEntryBySourceID, 2)
-
-	return i, err
-}
-
 const getSessionRecordByID = `-- name: GetSessionRecordByID :one
 SELECT
     s.id,
@@ -2939,41 +2907,40 @@ func (q *Queries) InsertProjectWorkflowLink(ctx context.Context, arg InsertProje
 	return err
 }
 
-const insertSessionPromptHistoryEntry = `-- name: InsertSessionPromptHistoryEntry :execrows
+const insertSessionPromptHistoryEntry = `-- name: InsertSessionPromptHistoryEntry :one
 INSERT INTO session_prompt_history_entries (
     session_id,
-    source_id,
     text,
     created_at_unix_ms
 ) VALUES (
     ?1,
     ?2,
-    ?3,
-    ?4
+    ?3
 )
-ON CONFLICT DO NOTHING
+RETURNING
+    sequence,
+    session_id,
+    text,
+    created_at_unix_ms
 `
 
 type InsertSessionPromptHistoryEntryParams struct {
 	SessionID       string
-	SourceID        string
 	Text            string
 	CreatedAtUnixMs int64
 }
 
-func (q *Queries) InsertSessionPromptHistoryEntry(ctx context.Context, arg InsertSessionPromptHistoryEntryParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, insertSessionPromptHistoryEntry,
-		arg.SessionID,
-		arg.SourceID,
-		arg.Text,
-		arg.CreatedAtUnixMs,
-	)
-	err = recordQueryError(ctx, err, insertSessionPromptHistoryEntry, 4)
+func (q *Queries) InsertSessionPromptHistoryEntry(ctx context.Context, arg InsertSessionPromptHistoryEntryParams) (SessionPromptHistoryEntry, error) {
+	row := q.db.QueryRowContext(ctx, insertSessionPromptHistoryEntry, arg.SessionID, arg.Text, arg.CreatedAtUnixMs)
+	var i SessionPromptHistoryEntry
+	err := recordQueryError(ctx, row.Scan(
+		&i.Sequence,
+		&i.SessionID,
+		&i.Text,
+		&i.CreatedAtUnixMs,
+	), insertSessionPromptHistoryEntry, 3)
 
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
+	return i, err
 }
 
 const insertTask = `-- name: InsertTask :exec

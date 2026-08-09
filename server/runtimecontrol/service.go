@@ -16,8 +16,6 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/transcript"
-
-	"github.com/google/uuid"
 )
 
 type RuntimeActivityResolver interface {
@@ -33,7 +31,7 @@ type sessionStatusPublisher interface {
 }
 
 type PromptHistoryStore interface {
-	RecordPromptHistoryEntry(ctx context.Context, entry metadata.PromptHistoryEntry) (metadata.PromptHistoryRecord, bool, error)
+	RecordPromptHistoryEntry(ctx context.Context, entry metadata.PromptHistoryEntry) (metadata.PromptHistoryRecord, error)
 }
 
 type PromptCommandResolver interface {
@@ -433,7 +431,7 @@ func (s *Service) RecordPromptHistory(ctx context.Context, req serverapi.Runtime
 	if err := req.Validate(); err != nil {
 		return err
 	}
-	_, _, err := s.recordPromptHistory(
+	_, err := s.recordPromptHistory(
 		ctx,
 		strings.TrimSpace(req.SessionID),
 		req.Text,
@@ -441,13 +439,12 @@ func (s *Service) RecordPromptHistory(ctx context.Context, req serverapi.Runtime
 	return err
 }
 
-func (s *Service) recordPromptHistory(ctx context.Context, sessionID string, text string) (metadata.PromptHistoryRecord, bool, error) {
+func (s *Service) recordPromptHistory(ctx context.Context, sessionID string, text string) (metadata.PromptHistoryRecord, error) {
 	if s == nil || s.promptStore == nil {
-		return metadata.PromptHistoryRecord{}, false, nil
+		return metadata.PromptHistoryRecord{}, nil
 	}
 	return s.promptStore.RecordPromptHistoryEntry(ctx, metadata.PromptHistoryEntry{
 		SessionID: strings.TrimSpace(sessionID),
-		SourceID:  uuid.NewString(),
 		Text:      text,
 	})
 }
@@ -461,7 +458,7 @@ func (s *Service) launchPromptHistoryAppend(
 		return
 	}
 	_ = engine.LaunchPromptHistoryAppend(func(ctx context.Context) error {
-		_, _, err := s.recordPromptHistory(
+		_, err := s.recordPromptHistory(
 			ctx,
 			sessionID,
 			text,
