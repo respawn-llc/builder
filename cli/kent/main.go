@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -555,13 +556,14 @@ func runLiveStopSubcommand(args []string) int {
 }
 
 func runLiveWaitSubcommand(args []string) int {
-	fs := newCommandFlagSet(config.Command+" run wait", os.Stderr, leafCommandUsage(
+	var diagnostics bytes.Buffer
+	fs := newCommandFlagSet(config.Command+" run wait", &diagnostics, leafCommandUsage(
 		config.Command+" run wait [--output-mode <mode>] [--persistence-root <root>] <session-id>",
 		"Wait for an active run and print its final result.",
 	))
 	persistenceRoot := fs.String("persistence-root", "", persistenceRootFlagUsage)
 	outputModeRaw := fs.String("output-mode", string(runOutputModeFinalText), "result format: final-text|json")
-	outputMode, ok, code := parseObservationFlags(fs, args, outputModeRaw)
+	outputMode, ok, code := parseObservationFlags(fs, args, outputModeRaw, &diagnostics)
 	if !ok {
 		return code
 	}
@@ -624,13 +626,14 @@ func runLiveWatchSubcommand(args []string) int {
 type liveWatchCleanupRunner func(context.Context, app.Options, runtimeids.SessionID) app.RunLiveWatchResult
 
 func runLiveWatchSubcommandWithCleanup(args []string, runWithCleanup liveWatchCleanupRunner) int {
-	fs := newCommandFlagSet(config.Command+" run watch", os.Stderr, leafCommandUsage(
+	var diagnostics bytes.Buffer
+	fs := newCommandFlagSet(config.Command+" run watch", &diagnostics, leafCommandUsage(
 		config.Command+" run watch [--output-mode <mode>] [--persistence-root <root>] <session-id>",
 		"Watch the next active run outcome.",
 	))
 	persistenceRoot := fs.String("persistence-root", "", persistenceRootFlagUsage)
 	outputModeRaw := fs.String("output-mode", string(runOutputModeFinalText), "result format: final-text|json")
-	outputMode, ok, code := parseObservationFlags(fs, args, outputModeRaw)
+	outputMode, ok, code := parseObservationFlags(fs, args, outputModeRaw, &diagnostics)
 	if !ok {
 		return code
 	}
@@ -646,7 +649,7 @@ func runLiveWatchSubcommandWithCleanup(args []string, runWithCleanup liveWatchCl
 	}
 	if err := publishPersistenceRootEnv(*persistenceRoot); err != nil {
 		if outputMode == runOutputModeJSON {
-			return emitObservationError(os.Stdout, observationOperationObservation, &observationJSONTarget{SessionID: jsonStringPointer(sessionID.String())}, context.Background(), err, nil, nil)
+			return emitObservationError(os.Stdout, observationOperationRunWatch, observationTargetSession(sessionID.String()), context.Background(), err, nil, nil)
 		}
 		return runLiveFlagError(err)
 	}
@@ -656,7 +659,7 @@ func runLiveWatchSubcommandWithCleanup(args []string, runWithCleanup liveWatchCl
 	response := result.Response
 	if result.Error != nil {
 		if outputMode == runOutputModeJSON {
-			return emitObservationError(os.Stdout, observationOperationObservation, &observationJSONTarget{SessionID: jsonStringPointer(sessionID.String())}, ctx, result.Error, nil, result.Close)
+			return emitObservationError(os.Stdout, observationOperationRunWatch, observationTargetSession(sessionID.String()), ctx, result.Error, nil, result.Close)
 		}
 		if result.Close != nil {
 			_ = result.Close()
@@ -670,7 +673,7 @@ func runLiveWatchSubcommandWithCleanup(args []string, runWithCleanup liveWatchCl
 	if outputMode == runOutputModeJSON {
 		envelope, exitCode, projectionErr := projectRunWatchJSON(sessionID.String(), response)
 		if projectionErr != nil {
-			return emitObservationError(os.Stdout, observationOperationObservation, &observationJSONTarget{SessionID: jsonStringPointer(sessionID.String())}, ctx, &client.InvalidResponseError{
+			return emitObservationError(os.Stdout, observationOperationRunWatch, observationTargetSession(sessionID.String()), ctx, &client.InvalidResponseError{
 				Operation: "runtime live watch", Cause: projectionErr,
 			}, nil, result.Close)
 		}
@@ -698,18 +701,17 @@ func runObservationUsage(mode runOutputMode, message string) int {
 	return 2
 }
 
-func parseObservationFlags(fs *flag.FlagSet, args []string, raw *string) (runOutputMode, bool, int) {
-	modeHint := inferRunOutputMode(args)
-	if modeHint == runOutputModeJSON {
-		fs.SetOutput(io.Discard)
-	}
+func parseObservationFlags(fs *flag.FlagSet, args []string, raw *string, diagnostics *bytes.Buffer) (runOutputMode, bool, int) {
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
+			_, _ = io.Copy(os.Stderr, diagnostics)
 			return "", false, 0
 		}
-		if modeHint == runOutputModeJSON {
+		mode, modeErr := parseRunOutputMode(*raw)
+		if modeErr == nil && mode == runOutputModeJSON {
 			return "", false, writeObservationUsage(os.Stdout, err.Error())
 		}
+		_, _ = io.Copy(os.Stderr, diagnostics)
 		return "", false, 2
 	}
 	mode, err := parseRunOutputMode(*raw)

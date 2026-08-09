@@ -16,16 +16,6 @@ type workflowTaskNotFoundError struct{ error }
 
 func (e workflowTaskNotFoundError) Unwrap() error { return serverapi.ErrWorkflowTaskNotFound }
 
-func isCanonicalWorkflowTaskID(raw string) bool {
-	kind, uuidText, ok := strings.Cut(raw, "-")
-	if ok && kind == "task" {
-		if parsed, err := runtimeids.ParseCanonicalUUIDv4(uuidText, "task ID"); err == nil && "task-"+parsed.String() == raw {
-			return true
-		}
-	}
-	return false
-}
-
 func workflowTaskList(ctx context.Context, remote workflowCommandRemote, req serverapi.WorkflowTaskListRequest) (serverapi.WorkflowTaskListResponse, error) {
 	rpcCtx, cancel := context.WithTimeout(ctx, workflowCommandTimeout)
 	defer cancel()
@@ -45,8 +35,8 @@ func resolveWorkflowTask(ctx context.Context, cfg config.App, remote workflowCom
 	if trimmed == "" {
 		return serverapi.WorkflowTaskDetail{}, errors.New("task id is required")
 	}
-	if isCanonicalWorkflowTaskID(trimmed) {
-		detail, err := getWorkflowTaskByID(ctx, remote, trimmed)
+	if taskID, err := runtimeids.ParseCanonicalTaskID(trimmed); err == nil {
+		detail, err := getWorkflowTaskByID(ctx, remote, taskID)
 		if err != nil && isWorkflowTaskNotFound(err) {
 			return serverapi.WorkflowTaskDetail{}, workflowTaskNotFoundError{err}
 		}

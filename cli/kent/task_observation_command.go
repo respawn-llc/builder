@@ -73,8 +73,15 @@ func taskObservationSubcommand(args []string, stdout io.Writer, stderr io.Writer
 }
 
 func taskObservationJSON(ctx context.Context, stdout io.Writer, mode serverapi.WorkflowTaskObservationMode, projectRef string, ref string) int {
-	cfg, remote, closeFn, err := workflowObservationRemoteOpener(ctx, ".")
-	operation := observationOperationObservation
+	cfg, remote, err := workflowCommandRemoteOpener(ctx, ".")
+	var closeFn func() error
+	if remote != nil {
+		closeFn = remote.Close
+	}
+	operation := observationOperationTaskWait
+	if mode == serverapi.WorkflowTaskObservationWatch {
+		operation = observationOperationTaskWatch
+	}
 	if err != nil {
 		return emitObservationError(stdout, operation, nil, ctx, err, nil, closeFn)
 	}
@@ -82,7 +89,7 @@ func taskObservationJSON(ctx context.Context, stdout io.Writer, mode serverapi.W
 	if err != nil {
 		return emitObservationError(stdout, operation, nil, ctx, err, nil, closeFn)
 	}
-	target := &observationJSONTarget{TaskID: jsonStringPointer(detail.Summary.ID)}
+	target := observationTargetTask(detail.Summary.ID)
 	response, err := remote.ObserveWorkflowTask(ctx, serverapi.WorkflowTaskObservationRequest{
 		TaskID: detail.Summary.ID, ProjectID: detail.Summary.ProjectID, Mode: mode,
 	})

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -36,7 +37,9 @@ func TestClassifyWorkflowTaskSelectorUsesFullCanonicalTaskID(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if got := isCanonicalWorkflowTaskID(test.raw); got != test.want {
+			_, err := runtimeids.ParseCanonicalTaskID(test.raw)
+			got := err == nil
+			if got != test.want {
 				t.Fatalf("canonical selector = %v, want %v", got, test.want)
 			}
 		})
