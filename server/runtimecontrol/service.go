@@ -4,21 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 
 	"core/server/metadata"
-	"core/server/requestmemo"
 	"core/server/runtime"
 	"core/server/runtimeactivity"
-	"core/server/runtimeops"
 	"core/server/session"
 	"core/server/sessionruntime"
 	servicecontract "core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
-	"core/shared/textutil"
 	"core/shared/transcript"
 )
 
@@ -58,11 +54,6 @@ type Service struct {
 	askViews       servicecontract.AskViewService
 	approvalViews  servicecontract.ApprovalViewService
 	attention      servicecontract.AttentionNotificationService
-	operations     *runtimeops.Coordinator
-	sessionNames   *requestmemo.Memo[sessionStringMemoRequest, struct{}]
-
-	queuedDiscards *requestmemo.Memo[queuedUserMessageMemoRequest, serverapi.RuntimeDiscardQueuedUserMessageResponse]
-	liveSteers     *requestmemo.Memo[liveSteerMemoRequest, serverapi.RuntimeLiveSteerResponse]
 }
 
 type committedRuntimeMutationResult[Resp any] struct {
@@ -70,59 +61,8 @@ type committedRuntimeMutationResult[Resp any] struct {
 	Err      error
 }
 
-type sessionStringMemoRequest struct {
-	SessionID string
-	Value     string
-}
-
-type sessionTextMemoRequest struct {
-	SessionID string
-	Text      string
-}
-
-type sessionUserTurnMemoRequest struct {
-	SessionID string
-	Kind      serverapi.RuntimeUserTurnInputKind
-	Text      string
-	Name      string
-	Arguments string
-}
-
-type liveSteerMemoRequest struct {
-	SessionID       runtimeids.SessionID
-	CallerSessionID serverapi.OptionalStringKey
-	Text            string
-}
-
-type queuedUserMessageMemoRequest struct {
-	SessionID   string
-	QueueItemID string
-}
-
-type sessionCommandMemoRequest struct {
-	SessionID string
-	Command   string
-}
-
-type sessionOnlyMemoRequest struct {
-	SessionID string
-}
-
-type runtimeInterruptMemoRequest struct {
-	SessionID            string
-	TargetOperationRef   *clientui.RuntimeOperationRef
-	PendingOperationRefs []clientui.RuntimeOperationRef
-}
-
 func NewService(authority *sessionruntime.Authority) *Service {
-	return &Service{
-		authority:    authority,
-		operations:   runtimeops.NewCoordinator(),
-		sessionNames: requestmemo.New[sessionStringMemoRequest, struct{}](),
-
-		queuedDiscards: requestmemo.New[queuedUserMessageMemoRequest, serverapi.RuntimeDiscardQueuedUserMessageResponse](),
-		liveSteers:     requestmemo.New[liveSteerMemoRequest, serverapi.RuntimeLiveSteerResponse](),
-	}
+	return &Service{authority: authority}
 }
 
 func (s *Service) runAgentExecution(
@@ -156,17 +96,6 @@ func (s *Service) WithRuntimeActivityResolver(resolver RuntimeActivityResolver) 
 		return nil
 	}
 	s.activity = resolver
-	return s
-}
-
-func (s *Service) WithOperationCoordinator(coordinator *runtimeops.Coordinator) *Service {
-	if s == nil {
-		return nil
-	}
-	if coordinator == nil {
-		coordinator = runtimeops.NewCoordinator()
-	}
-	s.operations = coordinator
 	return s
 }
 
@@ -224,43 +153,19 @@ func mergeOperationContexts(contexts ...context.Context) (context.Context, func(
 	return sessionruntime.MergeContexts(contexts...)
 }
 
-func (s *Service) operationAttemptCanceled(err error, attempt runtimeops.Attempt) bool {
-	return err != nil && attempt.Context().Err() != nil
-}
-
-func (s *Service) recordRuntimeAccessFailureOrCancellation(sessionID string, ref clientui.RuntimeOperationRef, err error, attempt runtimeops.Attempt) {
-	if s.operationAttemptCanceled(err, attempt) {
-		s.operations.RecordCanceledNotCommitted(sessionID, ref)
-		return
-	}
-	s.operations.RecordRuntimeAccessFailure(sessionID, ref)
-}
-
-func (s *Service) recordOperationCompletion(sessionID string, ref clientui.RuntimeOperationRef, receipt session.CommitReceipt, err error, attempt runtimeops.Attempt, record func(string, clientui.RuntimeOperationRef, session.CommitReceipt, error)) {
-	if !receipt.Committed && s.operationAttemptCanceled(err, attempt) {
-		s.operations.RecordCanceledNotCommitted(sessionID, ref)
-	} else {
-		record(sessionID, ref, receipt, err)
-	}
-}
-
 func (s *Service) SetSessionName(ctx context.Context, req serverapi.RuntimeSetSessionNameRequest) error {
 	if err := req.Validate(); err != nil {
 		return err
 	}
-	memoReq := sessionStringMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Value: req.Name}
-	_, err := s.sessionNames.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionStringMemoRequest, func(ctx context.Context) (struct{}, error) {
-		return struct{}{}, s.withRuntime(ctx, req.SessionID, func(_ context.Context, engine *runtime.Engine) error {
-			if err := engine.SetSessionName(req.Name); err != nil {
-				return err
-			}
-			if publisher, ok := s.activity.(sessionIdentityPublisher); ok {
-				return publisher.PublishSessionIdentity(req.SessionID)
-			}
-			return nil
-		})
+	return s.withRuntime(ctx, req.SessionID, func(_ context.Context, engine *runtime.Engine) error {
+		if err := engine.SetSessionName(req.Name); err != nil {
+			return err
+		}
+		if publisher, ok := s.activity.(sessionIdentityPublisher); ok {
+			return publisher.PublishSessionIdentity(req.SessionID)
+		}
+		return nil
 	})
-	return err
 }
 
 func (s *Service) SetThinkingLevel(ctx context.Context, req serverapi.RuntimeSetThinkingLevelRequest) error {
@@ -416,42 +321,60 @@ func (s *Service) SubmitUserShellCommand(ctx context.Context, req serverapi.Runt
 	if err := req.Validate(); err != nil {
 		return err
 	}
-	memoReq := sessionCommandMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Command: req.Command}
-	_, err := runtimeops.Do(s.operations, ctx, memoReq.SessionID, req.OperationRef, memoReq, sameSessionCommandMemoRequest, func(ctx context.Context, attempt runtimeops.Attempt) (struct{}, error) {
-		err := s.runAgentExecution(attempt.Context(), req.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
-			_, err := engine.SubmitUserShellCommandWithActiveHook(runCtx, memoReq.Command, func() {
-				s.operations.MarkOperationActive(memoReq.SessionID, req.OperationRef)
-			})
-			return err
-		})
-		if s.operationAttemptCanceled(err, attempt) {
-			s.operations.RecordCanceledNotCommitted(memoReq.SessionID, req.OperationRef)
-			return struct{}{}, err
-		}
-		s.operations.RecordShellCompletion(memoReq.SessionID, req.OperationRef, err)
-		return struct{}{}, err
+	return s.runAgentExecution(ctx, req.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
+		_, err := engine.SubmitUserShellCommandWithActiveHook(runCtx, req.Command, nil)
+		return err
 	})
-	return err
 }
 
 func (s *Service) CompactContext(ctx context.Context, req serverapi.RuntimeCompactContextRequest) error {
 	if err := req.Validate(); err != nil {
 		return err
 	}
-	memoReq := sessionStringMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Value: req.Args}
-	_, err := runtimeops.Do(s.operations, ctx, memoReq.SessionID, req.OperationRef, memoReq, sameSessionStringMemoRequest, func(ctx context.Context, attempt runtimeops.Attempt) (struct{}, error) {
-		var receipt session.CommitReceipt
-		err := s.runAgentExecution(attempt.Context(), req.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
-			compactReceipt, compactErr := engine.CompactContextWithActiveHook(runCtx, req.Args, func() {
-				s.operations.MarkOperationActive(memoReq.SessionID, req.OperationRef)
-			})
-			receipt = compactReceipt
-			return compactErr
-		})
-		s.recordOperationCompletion(memoReq.SessionID, req.OperationRef, receipt, err, attempt, s.operations.RecordCompactCompletion)
-		return struct{}{}, err
+	return s.runAgentExecution(ctx, req.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
+		_, err := engine.CompactContextWithActiveHook(runCtx, req.Args, nil)
+		return err
 	})
-	return err
+}
+
+func (s *Service) CompactContextForPreSubmit(ctx context.Context, req serverapi.RuntimeCompactContextForPreSubmitRequest) error {
+	if err := req.Validate(); err != nil {
+		return err
+	}
+	return s.runAgentExecution(ctx, req.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
+		_, err := engine.CompactContextForPreSubmitWithActiveHook(runCtx, nil)
+		return err
+	})
+}
+
+func (s *Service) HasQueuedUserWork(ctx context.Context, req serverapi.RuntimeHasQueuedUserWorkRequest) (serverapi.RuntimeHasQueuedUserWorkResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.RuntimeHasQueuedUserWorkResponse{}, err
+	}
+	var hasQueuedUserWork bool
+	err := s.withRuntime(ctx, req.SessionID, func(_ context.Context, engine *runtime.Engine) error {
+		hasQueuedUserWork = engine.HasQueuedUserWork()
+		return nil
+	})
+	if err != nil {
+		return serverapi.RuntimeHasQueuedUserWorkResponse{}, err
+	}
+	return serverapi.RuntimeHasQueuedUserWorkResponse{HasQueuedUserWork: hasQueuedUserWork}, nil
+}
+
+func (s *Service) SubmitQueuedUserMessages(ctx context.Context, req serverapi.RuntimeSubmitQueuedUserMessagesRequest) (serverapi.RuntimeSubmitQueuedUserMessagesResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.RuntimeSubmitQueuedUserMessagesResponse{}, err
+	}
+	var resp serverapi.RuntimeSubmitQueuedUserMessagesResponse
+	err := s.runAgentExecution(ctx, req.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
+		msg, _, err := engine.SubmitQueuedUserMessagesWithActiveHook(runCtx, nil)
+		if msg.Content != nil {
+			resp.Message = *msg.Content
+		}
+		return err
+	})
+	return resp, err
 }
 
 func (s *Service) Interrupt(ctx context.Context, req serverapi.RuntimeInterruptRequest) (serverapi.RuntimeInterruptResponse, error) {
@@ -462,70 +385,19 @@ func (s *Service) Interrupt(ctx context.Context, req serverapi.RuntimeInterruptR
 		return serverapi.RuntimeInterruptResponse{}, errors.New("session runtime authority is required")
 	}
 	sessionID := strings.TrimSpace(req.SessionID)
-	reqData := runtimeInterruptMemoRequest{
-		SessionID:            sessionID,
-		TargetOperationRef:   textutil.Pointer(req.TargetOperationRef),
-		PendingOperationRefs: append([]clientui.RuntimeOperationRef(nil), req.PendingOperationRefs...),
-	}
-	return s.interrupt(ctx, reqData)
-}
-
-func (s *Service) interrupt(ctx context.Context, req runtimeInterruptMemoRequest) (serverapi.RuntimeInterruptResponse, error) {
-	sessionID := strings.TrimSpace(req.SessionID)
-	pendingRefs := append([]clientui.RuntimeOperationRef(nil), req.PendingOperationRefs...)
-	interruptActive := req.TargetOperationRef == nil
-	targetQueuedMessage := false
-	var cancelResult runtimeops.CancellationResult
-	if req.TargetOperationRef != nil {
-		targetQueuedMessage = req.TargetOperationRef.Kind == clientui.RuntimeOperationKindQueuedMessage
-		var err error
-		cancelResult, err = s.operations.CancelOperationTarget(sessionID, *req.TargetOperationRef)
-		if err != nil {
-			return serverapi.RuntimeInterruptResponse{}, err
-		}
-		interruptActive = !targetQueuedMessage && cancelResult.InterruptActive && s.runtimeActivityActiveForControl(ctx, sessionID, pendingRefs)
-		if !slices.Contains(pendingRefs, *req.TargetOperationRef) {
-			pendingRefs = append([]clientui.RuntimeOperationRef{*req.TargetOperationRef}, pendingRefs...)
-		}
-	}
 	err := s.withRuntime(ctx, sessionID, func(_ context.Context, engine *runtime.Engine) error {
-		for _, ref := range pendingRefs {
+		for _, ref := range req.PendingOperationRefs {
 			if ref.Kind != clientui.RuntimeOperationKindQueuedMessage || ref.QueueItemID == nil {
 				continue
 			}
-			if !engine.DiscardQueuedUserMessage(ref.QueueItemID.String()) {
-				continue
-			}
-			if err := s.operations.RecordQueuedMessageStatus(
-				sessionID,
-				ref,
-				clientui.RuntimeInputReconciliationCanceledNotCommitted,
-			); err != nil {
-				return err
-			}
+			engine.DiscardQueuedUserMessage(ref.QueueItemID.String())
 		}
-		if interruptActive {
-			if err := engine.Interrupt(); err != nil {
-				return err
-			}
-		}
-		return nil
+		return engine.Interrupt()
 	})
 	if err != nil && !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
 		return serverapi.RuntimeInterruptResponse{}, err
 	}
-	if req.TargetOperationRef != nil {
-		cancelResult.CancelOperationAttempt()
-	}
-	return s.runtimeInterruptResponse(sessionID, pendingRefs)
-}
-
-func (s *Service) runtimeActivityActiveForControl(ctx context.Context, sessionID string, refs []clientui.RuntimeOperationRef) bool {
-	if s == nil || s.activity == nil {
-		return false
-	}
-	snapshot, err := s.activity.RuntimeReadModelSnapshot(ctx, sessionID, refs)
-	return err == nil && snapshot.Activity.ActiveForControl()
+	return s.runtimeInterruptResponse(sessionID, req.PendingOperationRefs)
 }
 
 func (s *Service) runtimeInterruptResponse(sessionID string, refs []clientui.RuntimeOperationRef) (serverapi.RuntimeInterruptResponse, error) {
@@ -538,47 +410,29 @@ func (s *Service) runtimeInterruptResponse(sessionID string, refs []clientui.Run
 	}
 	if err != nil {
 		version := runtimeactivity.NextReadModelVersion(sessionID)
-		reconciliation, reconciliationErr := s.operations.FeedSnapshot(sessionID, refs)
-		if reconciliationErr != nil {
-			return serverapi.RuntimeInterruptResponse{}, reconciliationErr
-		}
 		return serverapi.RuntimeInterruptResponse{
 			Version:             version,
 			Activity:            clientui.RuntimeActivity{State: clientui.RuntimeActivityUnavailable, DiagnosticRecovery: true},
-			InputReconciliation: reconciliation,
+			InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{},
 		}, nil
-	}
-	reconciliation, err := s.interruptInputReconciliation(sessionID, snapshot, refs)
-	if err != nil {
-		return serverapi.RuntimeInterruptResponse{}, err
 	}
 	return serverapi.RuntimeInterruptResponse{
 		Version:             snapshot.Version,
 		Activity:            snapshot.Activity,
-		InputReconciliation: reconciliation,
+		InputReconciliation: snapshot.InputReconciliation,
 	}, nil
-}
-
-func (s *Service) interruptInputReconciliation(sessionID string, snapshot runtimeactivity.ResponseSnapshot, refs []clientui.RuntimeOperationRef) (clientui.RuntimeInputReconciliationSnapshot, error) {
-	if len(refs) == 0 || len(snapshot.InputReconciliation.Operations) > 0 {
-		return snapshot.InputReconciliation, nil
-	}
-	return s.operations.FeedSnapshot(sessionID, refs)
 }
 
 func (s *Service) DiscardQueuedUserMessage(ctx context.Context, req serverapi.RuntimeDiscardQueuedUserMessageRequest) (serverapi.RuntimeDiscardQueuedUserMessageResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.RuntimeDiscardQueuedUserMessageResponse{}, err
 	}
-	memoReq := queuedUserMessageMemoRequest{SessionID: strings.TrimSpace(req.SessionID), QueueItemID: strings.TrimSpace(req.QueueItemID)}
-	return s.queuedDiscards.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameQueuedUserMessageMemoRequest, func(ctx context.Context) (serverapi.RuntimeDiscardQueuedUserMessageResponse, error) {
-		var resp serverapi.RuntimeDiscardQueuedUserMessageResponse
-		err := s.withRuntime(ctx, req.SessionID, func(_ context.Context, engine *runtime.Engine) error {
-			resp.Discarded = engine.DiscardQueuedUserMessage(memoReq.QueueItemID)
-			return nil
-		})
-		return resp, err
+	var resp serverapi.RuntimeDiscardQueuedUserMessageResponse
+	err := s.withRuntime(ctx, req.SessionID, func(_ context.Context, engine *runtime.Engine) error {
+		resp.Discarded = engine.DiscardQueuedUserMessage(strings.TrimSpace(req.QueueItemID))
+		return nil
 	})
+	return resp, err
 }
 
 func (s *Service) RecordPromptHistory(ctx context.Context, req serverapi.RuntimeRecordPromptHistoryRequest) error {
@@ -655,15 +509,5 @@ func (s *Service) workflowTaskSession(ctx context.Context, sessionID string, eng
 	}
 	return false, nil
 }
-
-var (
-	sameSessionTextMemoRequest       = sameComparable[sessionTextMemoRequest]
-	sameLiveSteerMemoRequest         = sameComparable[liveSteerMemoRequest]
-	sameQueuedUserMessageMemoRequest = sameComparable[queuedUserMessageMemoRequest]
-	sameSessionStringMemoRequest     = sameComparable[sessionStringMemoRequest]
-	sameSessionCommandMemoRequest    = sameComparable[sessionCommandMemoRequest]
-)
-
-func sameComparable[T comparable](a, b T) bool { return a == b }
 
 var _ servicecontract.RuntimeControlService = (*Service)(nil)

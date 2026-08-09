@@ -3,13 +3,11 @@ package processview
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"core/internal/testharness/testsetup"
-	"core/server/requestmemo"
 	"core/server/tools"
 	shelltool "core/server/tools/shell"
 	"core/shared/serverapi"
@@ -177,38 +175,6 @@ func TestServiceKillProcessHonorsCanceledContext(t *testing.T) {
 	}
 	if source.killCalls != 0 {
 		t.Fatalf("kill call count = %d, want 0", source.killCalls)
-	}
-}
-
-func TestServiceKillProcessDedupesSuccessfulRetry(t *testing.T) {
-	source := &stubKillProcessSource{}
-	svc := NewProcessViewService(source)
-	req := serverapi.ProcessKillRequest{ClientRequestID: "req-kill-1", ProcessID: "1000"}
-
-	if _, err := svc.KillProcess(context.Background(), req); err != nil {
-		t.Fatalf("KillProcess first: %v", err)
-	}
-	source.killErr = context.DeadlineExceeded
-	if _, err := svc.KillProcess(context.Background(), req); err != nil {
-		t.Fatalf("KillProcess replay: %v", err)
-	}
-	if source.killCalls != 1 {
-		t.Fatalf("kill call count = %d, want 1", source.killCalls)
-	}
-}
-
-func TestServiceKillProcessRejectsRequestIDPayloadMismatch(t *testing.T) {
-	source := &stubKillProcessSource{}
-	svc := NewProcessViewService(source)
-
-	if _, err := svc.KillProcess(context.Background(), serverapi.ProcessKillRequest{ClientRequestID: "req-kill-1", ProcessID: "1000"}); err != nil {
-		t.Fatalf("KillProcess first: %v", err)
-	}
-	if _, err := svc.KillProcess(context.Background(), serverapi.ProcessKillRequest{ClientRequestID: "req-kill-1", ProcessID: "2000"}); !errors.Is(err, requestmemo.ErrClientRequestIDReused) {
-		t.Fatalf("KillProcess mismatch error = %v, want reused with different parameters", err)
-	}
-	if source.killCalls != 1 {
-		t.Fatalf("kill call count = %d, want 1", source.killCalls)
 	}
 }
 

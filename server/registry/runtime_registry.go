@@ -12,7 +12,6 @@ import (
 	"core/server/attentionnotify"
 	"core/server/runtime"
 	"core/server/runtimeactivity"
-	"core/server/runtimeops"
 	"core/server/runtimeview"
 	"core/server/sessionruntime"
 	askquestion "core/server/tools"
@@ -30,7 +29,6 @@ type RuntimeRegistry struct {
 	sleepObserver              func(active bool)
 	runStateMu                 sync.Mutex
 	blockingActivitySessions   map[string]bool
-	operations                 *runtimeops.Coordinator
 	readModels                 *runtimeactivity.CoordinatorCache
 	pendingPrompts             *pendingPromptStore
 	attentionBroker            *attentionnotify.Broker
@@ -282,14 +280,6 @@ func (e *authorityRuntimeEntry) releaseSubscription(id uint64) error {
 	return retention.Close()
 }
 
-func (r *RuntimeRegistry) WithOperationCoordinator(coordinator *runtimeops.Coordinator) *RuntimeRegistry {
-	if r == nil {
-		return nil
-	}
-	r.operations = coordinator
-	return r
-}
-
 func (r *RuntimeRegistry) WithExecutionTargetResolver(resolver func(context.Context, string) (*clientui.SessionExecutionTarget, error)) *RuntimeRegistry {
 	if r == nil {
 		return nil
@@ -357,16 +347,9 @@ func (r *RuntimeRegistry) runtimeReadModelFeedSnapshot(ctx context.Context, sess
 		if err != nil {
 			return runtimeactivity.SnapshotInput{}, err
 		}
-		reconciliation := clientui.RuntimeInputReconciliationSnapshot{}
-		if r.operations != nil {
-			reconciliation, err = r.operations.FeedSnapshot(id, refs)
-			if err != nil {
-				return runtimeactivity.SnapshotInput{}, err
-			}
-		}
 		return runtimeactivity.SnapshotInput{
 			Resolver:            resolver,
-			InputReconciliation: reconciliation,
+			InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{},
 		}, nil
 	})
 }

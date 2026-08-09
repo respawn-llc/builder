@@ -213,7 +213,7 @@ func TestServicePlanSessionReturnsPlanWithoutRegisteringStore(t *testing.T) {
 	}
 }
 
-func TestServicePlanSessionDedupesForceNewSessionRequestID(t *testing.T) {
+func TestServicePlanSessionTreatsRepeatedCreateAsNewOperation(t *testing.T) {
 	persistenceRoot := t.TempDir()
 	containerDir := t.TempDir()
 	service := newSessionLaunchTestService(config.App{
@@ -234,8 +234,8 @@ func TestServicePlanSessionDedupesForceNewSessionRequestID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PlanSession second: %v", err)
 	}
-	if first.Plan.SessionID != second.Plan.SessionID {
-		t.Fatalf("session ids = %q and %q, want stable replay", first.Plan.SessionID, second.Plan.SessionID)
+	if first.Plan.SessionID == second.Plan.SessionID {
+		t.Fatalf("repeated create reused session %q", first.Plan.SessionID)
 	}
 }
 
@@ -335,24 +335,6 @@ func TestPlanLaunchSessionRejectsInvalidPreparedNamedTargetBeforeCreatingSession
 	}
 	if len(entries) != 0 {
 		t.Fatalf("invalid prepared target created session artifacts: %+v", entries)
-	}
-}
-
-func TestSessionPlanMemoRequestUsesCanonicalNullableValues(t *testing.T) {
-	base := sessionPlanMemoRequest{
-		Mode:   serverapi.SessionLaunchModeHeadless,
-		Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
-	}
-	if !sameSessionPlanMemoRequest(base, base) {
-		t.Fatal("identical canonical request must match")
-	}
-	explicitDefault := base
-	role := config.DefaultSubagentRole
-	explicitDefault.Overrides = serverapi.RunPromptOverridesKey{
-		AgentRole: serverapi.OptionalStringKey{Present: true, Value: role},
-	}
-	if sameSessionPlanMemoRequest(base, explicitDefault) {
-		t.Fatal("omitted and explicit default selectors must not share a memo entry")
 	}
 }
 

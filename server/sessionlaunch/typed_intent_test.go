@@ -14,7 +14,7 @@ import (
 	"core/shared/sessioncontract"
 )
 
-func TestServiceMapsTypedLaunchIntentsAndMemoizesByTypedIntent(t *testing.T) {
+func TestServiceMapsEveryTypedLaunchIntentAsNewOperation(t *testing.T) {
 	containerDir := t.TempDir()
 	persistenceRoot := t.TempDir()
 	persistence := sessiontest.NewPersistence()
@@ -64,12 +64,12 @@ func TestServiceMapsTypedLaunchIntentsAndMemoizesByTypedIntent(t *testing.T) {
 		t.Fatalf("plan create-new session: %v", err)
 	}
 
-	replayed, err := service.PlanSession(context.Background(), createRequest)
+	repeated, err := service.PlanSession(context.Background(), createRequest)
 	if err != nil {
-		t.Fatalf("replay create-new session: %v", err)
+		t.Fatalf("repeat create-new session: %v", err)
 	}
-	if replayed.Plan.SessionID != created.Plan.SessionID {
-		t.Fatalf("replayed session ID = %q, want %q", replayed.Plan.SessionID, created.Plan.SessionID)
+	if repeated.Plan.SessionID == created.Plan.SessionID {
+		t.Fatalf("repeated create reused session %q", created.Plan.SessionID)
 	}
 
 	openRequest := serverapi.SessionPlanRequest{
@@ -77,8 +77,8 @@ func TestServiceMapsTypedLaunchIntentsAndMemoizesByTypedIntent(t *testing.T) {
 		Mode:            serverapi.SessionLaunchModeInteractive,
 		Intent:          serverapi.OpenExistingSessionLaunchIntent(targetID),
 	}
-	if _, err := service.PlanSession(context.Background(), openRequest); err == nil {
-		t.Fatal("different typed intent reused the same client request ID")
+	if _, err := service.PlanSession(context.Background(), openRequest); err != nil {
+		t.Fatalf("open existing after create with same request ID: %v", err)
 	}
 }
 

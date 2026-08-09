@@ -23,7 +23,6 @@ import (
 	"core/server/launch"
 	"core/server/llm"
 	"core/server/metadata"
-	"core/server/requestmemo"
 	"core/server/runtime"
 	"core/server/session"
 	"core/server/session/sessiontest"
@@ -1133,12 +1132,6 @@ func TestInProcessRunPromptClientUsesSelectedSessionContinuationContext(t *testi
 	}
 
 	var providerCalls atomic.Int32
-	concurrentStarted := make(chan struct{})
-	concurrentRelease := make(chan struct{})
-	var concurrentReleaseOnce sync.Once
-	releaseConcurrent := func() {
-		concurrentReleaseOnce.Do(func() { close(concurrentRelease) })
-	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if modelstub.HandleInputTokenCount(w, r, 1) {
 			return
@@ -1149,19 +1142,10 @@ func TestInProcessRunPromptClientUsesSelectedSessionContinuationContext(t *testi
 		if got := r.Header.Get("Authorization"); got == "" {
 			t.Fatal("expected authorization header")
 		}
-		call := providerCalls.Add(1)
-		if call == 2 {
-			close(concurrentStarted)
-			<-concurrentRelease
-			modelstub.WriteCompletedResponseStream(w, "concurrent replay", 1, 1)
-			return
-		}
+		providerCalls.Add(1)
 		modelstub.WriteCompletedResponseStream(w, "from persisted continuation", 1, 1)
 	}))
-	defer func() {
-		releaseConcurrent()
-		server.Close()
-	}()
+	defer server.Close()
 
 	if err := store.SetContinuationContext(session.ContinuationContext{OpenAIBaseURL: server.URL}); err != nil {
 		t.Fatalf("set continuation context: %v", err)
@@ -1219,46 +1203,19 @@ func TestInProcessRunPromptClientUsesSelectedSessionContinuationContext(t *testi
 	if err != nil {
 		t.Fatalf("replayed RunPrompt: %v", err)
 	}
-	if replayed.SessionID != response.SessionID || replayed.Result != response.Result || providerCalls.Load() != 1 {
-		t.Fatalf("replayed response=%+v provider calls=%d, want memoized %+v/1", replayed, providerCalls.Load(), response)
+	if replayed.SessionID != response.SessionID || replayed.Result != response.Result || providerCalls.Load() != 2 {
+		t.Fatalf("repeated response=%+v provider calls=%d, want a second direct operation", replayed, providerCalls.Load())
 	}
-	if len(history.entries) != 1 || history.entries[0].SourceID != "continuation-direct-1" || history.entries[0].Text != "hello" {
-		t.Fatalf("prompt history = %+v, want one normalized entry", history.entries)
+	if len(history.entries) != 2 {
+		t.Fatalf("prompt history = %+v, want one entry per direct operation", history.entries)
 	}
 	mismatch := request
 	mismatch.Prompt = "different"
-	if _, err := client.RunPrompt(context.Background(), mismatch, nil); !errors.Is(err, requestmemo.ErrClientRequestIDReused) {
-		t.Fatalf("mismatched replay error = %v, want request-id conflict", err)
+	if _, err := client.RunPrompt(context.Background(), mismatch, nil); err != nil {
+		t.Fatalf("repeated request with changed input: %v", err)
 	}
-
-	concurrent := request
-	concurrent.ClientRequestID = "concurrent-request"
-	concurrent.Prompt = "concurrent"
-	results := make(chan serverapi.RunPromptResponse, 2)
-	errs := make(chan error, 2)
-	for range 2 {
-		go func() {
-			got, err := client.RunPrompt(context.Background(), concurrent, nil)
-			results <- got
-			errs <- err
-		}()
-	}
-	select {
-	case <-concurrentStarted:
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for concurrent provider request")
-	}
-	releaseConcurrent()
-	for range 2 {
-		if err := <-errs; err != nil {
-			t.Fatalf("concurrent replay: %v", err)
-		}
-		if got := <-results; got.Result != "concurrent replay" {
-			t.Fatalf("concurrent response = %+v", got)
-		}
-	}
-	if providerCalls.Load() != 2 {
-		t.Fatalf("provider calls = %d, want one initial and one concurrent call", providerCalls.Load())
+	if providerCalls.Load() != 3 {
+		t.Fatalf("provider calls = %d, want three explicit operations", providerCalls.Load())
 	}
 }
 

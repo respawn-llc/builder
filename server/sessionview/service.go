@@ -11,7 +11,6 @@ import (
 	"core/server/launch"
 	"core/server/llm"
 	"core/server/runtime"
-	"core/server/runtimeops"
 	"core/server/session"
 	"core/server/sessionruntime"
 	"core/server/worktree"
@@ -34,7 +33,6 @@ type Service struct {
 	sessions         SessionStoreResolver
 	snapshots        *resolvedSessionSnapshotSource
 	targets          ExecutionTargetResolver
-	operations       *runtimeops.Coordinator
 	app              config.App
 	auth             servicecontract.AuthStatusService
 	git              *worktree.GitInspector
@@ -73,21 +71,9 @@ func NewService(
 		sessions:         sessions,
 		targets:          targets,
 		cacheWarningMode: config.CacheWarningModeDefault,
-		operations:       runtimeops.NewCoordinator(),
 	}
 	svc.snapshots = newResolvedSessionSnapshotSource(sessions, activity, authority, svc.cacheWarningModeValue)
 	return svc
-}
-
-func (s *Service) WithOperationCoordinator(coordinator *runtimeops.Coordinator) *Service {
-	if s == nil {
-		return nil
-	}
-	if coordinator == nil {
-		coordinator = runtimeops.NewCoordinator()
-	}
-	s.operations = coordinator
-	return s
 }
 
 func (s *Service) WithCacheWarningMode(mode config.CacheWarningMode) *Service {
@@ -145,13 +131,6 @@ func (s *Service) GetSessionMainView(ctx context.Context, req serverapi.SessionM
 			return serverapi.SessionMainViewResponse{}, err
 		}
 		view.Session.ExecutionTarget = target
-	}
-	if len(view.InputReconciliation.Operations) == 0 && len(req.PendingOperationRefs) > 0 {
-		reconciliation, err := s.operations.FeedSnapshot(strings.TrimSpace(req.SessionID), req.PendingOperationRefs)
-		if err != nil {
-			return serverapi.SessionMainViewResponse{}, err
-		}
-		view.InputReconciliation = reconciliation
 	}
 	return serverapi.SessionMainViewResponse{MainView: view}, nil
 }

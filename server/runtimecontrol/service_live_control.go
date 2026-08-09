@@ -35,58 +35,53 @@ func (s *Service) LiveSteer(ctx context.Context, req serverapi.RuntimeLiveSteerR
 	if err != nil {
 		return serverapi.RuntimeLiveSteerResponse{}, err
 	}
-	memoReq := liveSteerMemoRequest{
-		SessionID:       sessionID,
-		CallerSessionID: serverapi.CanonicalOptionalString(req.CallerSessionID),
-		Text:            strings.TrimSpace(req.Text),
-	}
-	return s.liveSteers.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameLiveSteerMemoRequest, func(ctx context.Context) (serverapi.RuntimeLiveSteerResponse, error) {
-		var resp serverapi.RuntimeLiveSteerResponse
-		err := s.withLiveExecutionRuntime(ctx, memoReq.SessionID, func(callbackCtx context.Context, engine *runtime.Engine) error {
-			queueText := memoReq.Text
-			var agentSteer runtime.AgentSteer
-			if memoReq.CallerSessionID.Present {
-				callerID, parseErr := runtimeids.ParseSessionID(memoReq.CallerSessionID.Value)
-				if parseErr != nil {
-					return parseErr
-				}
-				agentSteer, err = runtime.NewAgentSteer(callerID, memoReq.Text)
-				if err != nil {
-					return err
-				}
-				queueText = *agentSteer.Message().Content
+	callerSessionID := serverapi.CanonicalOptionalString(req.CallerSessionID)
+	text := strings.TrimSpace(req.Text)
+	var resp serverapi.RuntimeLiveSteerResponse
+	err = s.withLiveExecutionRuntime(ctx, sessionID, func(callbackCtx context.Context, engine *runtime.Engine) error {
+		queueText := text
+		var agentSteer runtime.AgentSteer
+		if callerSessionID.Present {
+			callerID, parseErr := runtimeids.ParseSessionID(callerSessionID.Value)
+			if parseErr != nil {
+				return parseErr
 			}
-			var item runtime.QueuedUserMessage
-			var accepted bool
-			if memoReq.CallerSessionID.Present {
-				item, accepted, err = engine.QueueAgentSteerForActiveRun(callbackCtx, agentSteer, clientRequestID, nil)
-			} else {
-				item, accepted, err = engine.QueueUserMessageForActiveRun(callbackCtx, queueText, clientRequestID, nil)
-			}
-			if errors.Is(err, runtime.ErrNoActiveLiveRun) {
-				return serverapi.ErrRuntimeNoActiveRun
-			}
+			agentSteer, err = runtime.NewAgentSteer(callerID, text)
 			if err != nil {
 				return err
 			}
-			if !accepted {
-				return serverapi.ErrRuntimeNoActiveRun
-			}
-			displayText, displayErr := item.DisplayText()
-			if displayErr != nil {
-				return displayErr
-			}
-			resp = serverapi.RuntimeLiveSteerResponse{QueueItemID: item.ID, Text: displayText, ClientRequestID: item.ClientRequestID}
-			s.launchPromptHistoryAppend(
-				engine,
-				memoReq.SessionID.String(),
-				clientRequestID.String(),
-				queueText,
-			)
-			return nil
-		})
-		return resp, err
+			queueText = *agentSteer.Message().Content
+		}
+		var item runtime.QueuedUserMessage
+		var accepted bool
+		if callerSessionID.Present {
+			item, accepted, err = engine.QueueAgentSteerForActiveRun(callbackCtx, agentSteer, clientRequestID, nil)
+		} else {
+			item, accepted, err = engine.QueueUserMessageForActiveRun(callbackCtx, queueText, clientRequestID, nil)
+		}
+		if errors.Is(err, runtime.ErrNoActiveLiveRun) {
+			return serverapi.ErrRuntimeNoActiveRun
+		}
+		if err != nil {
+			return err
+		}
+		if !accepted {
+			return serverapi.ErrRuntimeNoActiveRun
+		}
+		displayText, displayErr := item.DisplayText()
+		if displayErr != nil {
+			return displayErr
+		}
+		resp = serverapi.RuntimeLiveSteerResponse{QueueItemID: item.ID, Text: displayText, ClientRequestID: item.ClientRequestID}
+		s.launchPromptHistoryAppend(
+			engine,
+			sessionID.String(),
+			clientRequestID.String(),
+			queueText,
+		)
+		return nil
 	})
+	return resp, err
 }
 
 func (s *Service) LiveStop(ctx context.Context, req serverapi.RuntimeLiveStopRequest) (serverapi.RuntimeLiveStopResponse, error) {

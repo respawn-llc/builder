@@ -9,7 +9,6 @@ import (
 	"core/server/launch"
 	"core/server/llm"
 	"core/server/metadata"
-	"core/server/requestmemo"
 	"core/server/runlog"
 	"core/server/runtime"
 	"core/server/runtimewire"
@@ -48,10 +47,7 @@ type HeadlessBootstrap struct {
 
 func NewInProcessRunPromptClient(boot HeadlessBootstrap) apicontract.RunPromptService {
 	launcher := &headlessPromptLauncher{boot: boot}
-	return &inProcessRunPromptService{
-		launcher: launcher,
-		runs:     requestmemo.New[runPromptMemoRequest, serverapi.RunPromptResponse](),
-	}
+	return &inProcessRunPromptService{launcher: launcher}
 }
 
 type headlessPromptLauncher struct {

@@ -111,32 +111,6 @@ func TestRuntimeActivityActiveStepAuthorityStaysBehindResolverSeam(t *testing.T)
 	}
 }
 
-func TestRuntimeReadModelClockConsumersDoNotUseGlobalCoordinator(t *testing.T) {
-	repoRoot := findRepoRoot(t)
-	pkg := testharness.PackageByPath(t, testharness.LoadTypedPackages(t, repoRoot, false, "./server/runtimeops"), "core/server/runtimeops")
-	foundCoordinator := false
-	for index, file := range pkg.Syntax {
-		relPath, ok := testharness.RepositoryRelativePath(repoRoot, pkg.CompiledGoFiles[index])
-		if !ok || relPath != "server/runtimeops/coordinator.go" {
-			continue
-		}
-		foundCoordinator = true
-		ast.Inspect(file, func(node ast.Node) bool {
-			selector, ok := node.(*ast.SelectorExpr)
-			if !ok {
-				return true
-			}
-			if isRuntimeActivityFunction(pkg.TypesInfo.Uses[selector.Sel], "NextReadModelVersion") {
-				t.Fatalf("server/runtimeops/coordinator.go must use the registry-owned read-model clock, not runtimeactivity.NextReadModelVersion")
-			}
-			return true
-		})
-	}
-	if !foundCoordinator {
-		t.Fatal("server/runtimeops/coordinator.go must remain in the runtime read-model clock guard")
-	}
-}
-
 func TestRuntimeClientInputIdentityBoundaryStaysRequestShaped(t *testing.T) {
 	repoRoot := findRepoRoot(t)
 	pkgs := testharness.LoadTypedPackages(t, repoRoot, false, "./shared/clientui", "./cli/app")

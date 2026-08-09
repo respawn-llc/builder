@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"core/server/metadata"
-	"core/server/requestmemo"
+	"core/server/mutationlane"
 	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowexecution"
@@ -25,7 +25,7 @@ type Service struct {
 	metadata          *metadata.Store
 	projectID         string
 	runtimeGuard      runtimeSessionGuard
-	projectMutations  *requestmemo.MutationLaneRegistry[string]
+	projectMutations  *mutationlane.MutationLaneRegistry[string]
 	mutationPermit    *workflowexecution.MutationPermit
 	workflowExecution interface {
 		EnsureTaskQuiescent(workflow.TaskID) error
@@ -106,7 +106,7 @@ func NewMetadataService(metadataStore *metadata.Store, projectID string) (*Servi
 	return &Service{
 		metadata:         metadataStore,
 		projectID:        strings.TrimSpace(projectID),
-		projectMutations: requestmemo.NewMutationLaneRegistry[string](),
+		projectMutations: mutationlane.NewMutationLaneRegistry[string](),
 	}, nil
 }
 
@@ -860,7 +860,7 @@ func (s *Service) requireProjectID(projectID string) error {
 	return nil
 }
 
-func (s *Service) acquireProjectMutationLease(ctx context.Context, projectID string) (*requestmemo.MutationLaneLease[string], error) {
+func (s *Service) acquireProjectMutationLease(ctx context.Context, projectID string) (*mutationlane.MutationLaneLease[string], error) {
 	if s == nil || s.projectMutations == nil {
 		return nil, errors.New("project mutation lanes are required")
 	}

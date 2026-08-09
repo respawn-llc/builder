@@ -13,7 +13,6 @@ import (
 
 	"core/server/auth"
 	"core/server/metadata"
-	"core/server/requestmemo"
 	"core/server/runlog"
 	"core/server/session"
 	"core/server/session/sessiontest"
@@ -474,62 +473,6 @@ func TestServiceRetargetSessionWorkspaceRequiresRetargeter(t *testing.T) {
 	})
 	if !errors.Is(err, errSessionWorkspaceRetargeterRequired) {
 		t.Fatalf("RetargetSessionWorkspace error = %v, want missing retargeter", err)
-	}
-}
-
-func TestServicePersistInputDraftPersistsAndDedupes(t *testing.T) {
-	_, containerDir, store := createPersistedSession(t)
-	if err := store.SetName("session name"); err != nil {
-		t.Fatalf("set session name: %v", err)
-	}
-	service := newTestSessionLifecycleService(containerDir, nil)
-	req := serverapi.SessionPersistInputDraftRequest{
-		ClientRequestID: "req-1",
-		SessionID:       store.Meta().SessionID,
-		Input:           "saved by service",
-	}
-
-	if _, err := service.PersistInputDraft(context.Background(), req); err != nil {
-		t.Fatalf("PersistInputDraft first: %v", err)
-	}
-	if _, err := service.PersistInputDraft(context.Background(), req); err != nil {
-		t.Fatalf("PersistInputDraft replay: %v", err)
-	}
-	reopened, err := session.Open(store.Dir(), sessionServiceTestPersistence.Options()...)
-	if err != nil {
-		t.Fatalf("reopen session store: %v", err)
-	}
-	if reopened.Meta().InputDraft != "saved by service" {
-		t.Fatalf("input draft = %q, want %q", reopened.Meta().InputDraft, "saved by service")
-	}
-}
-
-func TestServicePersistInputDraftRejectsClientRequestIDPayloadMismatch(t *testing.T) {
-	_, containerDir, store := createPersistedSession(t)
-	if err := store.SetName("session name"); err != nil {
-		t.Fatalf("set session name: %v", err)
-	}
-	service := newTestSessionLifecycleService(containerDir, nil)
-	first := serverapi.SessionPersistInputDraftRequest{
-		ClientRequestID: "req-1",
-		SessionID:       store.Meta().SessionID,
-		Input:           "saved by service",
-	}
-
-	if _, err := service.PersistInputDraft(context.Background(), first); err != nil {
-		t.Fatalf("PersistInputDraft first: %v", err)
-	}
-	second := first
-	second.Input = "different draft"
-	if _, err := service.PersistInputDraft(context.Background(), second); err == nil || !errors.Is(err, requestmemo.ErrClientRequestIDReused) {
-		t.Fatalf("PersistInputDraft mismatch error = %v, want request id payload mismatch", err)
-	}
-	reopened, err := session.Open(store.Dir(), sessionServiceTestPersistence.Options()...)
-	if err != nil {
-		t.Fatalf("reopen session store: %v", err)
-	}
-	if reopened.Meta().InputDraft != "saved by service" {
-		t.Fatalf("input draft = %q, want %q", reopened.Meta().InputDraft, "saved by service")
 	}
 }
 
@@ -1022,34 +965,4 @@ func TestServiceResolveTransitionRequiresClientRequestID(t *testing.T) {
 	if !errors.Is(err, serverapi.ErrClientRequestIDRequired) {
 		t.Fatalf("expected missing client_request_id error, got %v", err)
 	}
-}
-
-func TestServiceResolveTransitionLogoutDedupesSuccessfulRetry(t *testing.T) {
-	mgr := auth.NewManager(auth.NewMemoryStore(auth.State{
-		Scope: auth.ScopeGlobal,
-		Method: auth.Method{
-			Type:   auth.MethodAPIKey,
-			APIKey: &auth.APIKeyMethod{Key: "sk-before"},
-		},
-	}), nil, time.Now)
-	service := newTestSessionLifecycleService(t.TempDir(), mgr)
-	req := serverapi.SessionResolveTransitionRequest{
-		ClientRequestID: "dup-lease",
-		SessionID:       "session-42",
-		Transition:      serverapi.SessionTransition{Action: "logout"},
-	}
-
-	firstResp, err := service.ResolveTransition(context.Background(), req)
-	if err != nil {
-		t.Fatalf("ResolveTransition first: %v", err)
-	}
-	secondResp, err := service.ResolveTransition(context.Background(), req)
-	if err != nil {
-		t.Fatalf("ResolveTransition second replay: %v", err)
-	}
-	_, preparation := requireSessionLifecycleLaunch(t, firstResp)
-	if preparation.AuthPreparation() != serverapi.SessionAuthPreparationReauthenticate {
-		t.Fatalf("auth preparation = %q, want reauthenticate", preparation.AuthPreparation())
-	}
-	requireSessionDirectiveWireEqual(t, secondResp, firstResp)
 }
