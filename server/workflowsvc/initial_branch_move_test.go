@@ -51,6 +51,57 @@ func TestServiceManualMoveNoOpRejectsExplicitBranchWithoutPendingMutation(t *tes
 	}
 }
 
+func TestServiceManualMoveNonExecutableRejectsExplicitBranchWithoutPendingMutation(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceChainedWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	taskID := workflow.TaskID(task.Task.ID)
+	execution := newManualMoveExecutionStub(service)
+	service.currentNodeExecution = execution
+	definition, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow: %v", err)
+	}
+	targetNodeID := workflowServiceNodeIDByKind(t, definition.Definition, "terminal")
+	before, err := service.store.ListCurrentNodes(ctx, taskID)
+	if err != nil {
+		t.Fatalf("ListCurrentNodes: %v", err)
+	}
+	branchName := "feature/non-executable-move"
+
+	_, err = service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
+		TaskID:       task.Task.ID,
+		TargetNodeID: targetNodeID,
+		BranchName:   &branchName,
+	})
+
+	var branchErr *serverapi.WorkflowTaskInitialBranchError
+	if !errors.As(err, &branchErr) ||
+		branchErr.Reason != serverapi.WorkflowTaskInitialBranchErrorReasonOperationCannotCreateWorktree ||
+		branchErr.BranchName != branchName {
+		t.Fatalf("MoveWorkflowTask error = %T %v, want operation-cannot-create-Worktree for %q", err, err, branchName)
+	}
+	targetContext, err := service.store.GetTaskExecutionTargetContext(ctx, taskID)
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetContext: %v", err)
+	}
+	if targetContext.Task.PendingInitialManagedBranchName == nil ||
+		*targetContext.Task.PendingInitialManagedBranchName != task.Task.ShortID {
+		t.Fatalf("pending branch = %v, want unchanged %q", targetContext.Task.PendingInitialManagedBranchName, task.Task.ShortID)
+	}
+	after, err := service.store.ListCurrentNodes(ctx, taskID)
+	if err != nil {
+		t.Fatalf("ListCurrentNodes after rejected move: %v", err)
+	}
+	if len(after) != len(before) || len(after) != 1 || after[0].Reference != before[0].Reference {
+		t.Fatalf("Current Nodes after rejected move = %+v, want unchanged %+v", after, before)
+	}
+	if len(execution.interruptTaskIDs) != 0 || len(execution.started) != 0 {
+		t.Fatalf("execution mutations after rejected move: interrupts=%v starts=%v", execution.interruptTaskIDs, execution.started)
+	}
+}
+
 func TestServiceManualMoveCarriesBranchAssertionAndDoesNotApplyOnMismatch(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceChainedWorkflow(t, ctx, service)

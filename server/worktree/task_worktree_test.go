@@ -744,6 +744,36 @@ func TestMaterializeInitialTaskWorktreeCreatesShortIDBranchWithoutControllerLeas
 	}
 }
 
+func TestMaterializeInitialTaskWorktreeCreatesPendingCustomBranchAtShortIDRoot(t *testing.T) {
+	env := newServiceTestEnv(t)
+	task, workflowStore := createTaskWorktreeTestTask(t, env)
+	const branchName = "feature/MBL-742"
+	if err := workflowStore.ReplacePendingInitialManagedBranchName(env.ctx, task.ID, branchName); err != nil {
+		t.Fatalf("ReplacePendingInitialManagedBranchName: %v", err)
+	}
+
+	resp, err := env.service.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{
+		TaskID:         task.ID,
+		ResolvedTarget: resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot),
+	})
+	if err != nil {
+		t.Fatalf("MaterializeInitialTaskWorktree: %v", err)
+	}
+	if got := taskWorktreeBranch(resp.Worktree); got != branchName {
+		t.Fatalf("materialized branch = %q, want %q", got, branchName)
+	}
+	if got := filepath.Base(taskWorktreeRoot(resp.Worktree)); got != task.ShortID {
+		t.Fatalf("automatic root basename = %q, want Task Short ID %q", got, task.ShortID)
+	}
+	row, err := env.store.Queries().GetTask(env.ctx, string(task.ID))
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if row.PendingInitialManagedBranchName.Valid {
+		t.Fatalf("bound pending initial managed branch = %+v, want absent", row.PendingInitialManagedBranchName)
+	}
+}
+
 func TestMaterializeInitialTaskWorktreeUsesLeasedPendingBranchSnapshot(t *testing.T) {
 	env := newServiceTestEnv(t)
 	task, workflowStore := createTaskWorktreeTestTask(t, env)
@@ -820,6 +850,56 @@ func TestMaterializeInitialTaskWorktreeUsesLeasedPendingBranchSnapshot(t *testin
 	}
 	if row.PendingInitialManagedBranchName.Valid {
 		t.Fatalf("post-snapshot pending branch survived bind: %+v", row.PendingInitialManagedBranchName)
+	}
+}
+
+func TestMaterializeInitialTaskWorktreeAllowsRemoteTrackingRefCreatedAfterFinalInspection(t *testing.T) {
+	env := newServiceTestEnv(t)
+	task, workflowStore := createTaskWorktreeTestTask(t, env)
+	const branchName = "feature/remote-race"
+	if err := workflowStore.ReplacePendingInitialManagedBranchName(env.ctx, task.ID, branchName); err != nil {
+		t.Fatalf("ReplacePendingInitialManagedBranchName: %v", err)
+	}
+	runGit(t, env.workspaceRoot, "remote", "add", "origin", "https://example.invalid/origin.git")
+	var mutateOnce sync.Once
+	env.service.git = NewGitInspector(&taskWorktreeGitCommandInterceptor{
+		base: execGitCommandRunner{},
+		beforeOutput: func(ctx context.Context, dir string, args []string) error {
+			if len(args) < 4 || !slices.Equal(args[:4], []string{"worktree", "add", "-b", branchName}) {
+				return nil
+			}
+			var err error
+			mutateOnce.Do(func() {
+				_, err = execGitCommandRunner{}.Output(
+					ctx,
+					dir,
+					"update-ref",
+					"refs/remotes/origin/"+branchName,
+					"HEAD",
+				)
+			})
+			return err
+		},
+	})
+
+	materialized, err := env.service.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{
+		TaskID:         task.ID,
+		ResolvedTarget: resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot),
+	})
+	if err != nil {
+		t.Fatalf("MaterializeInitialTaskWorktree: %v", err)
+	}
+	if got := taskWorktreeBranch(materialized.Worktree); got != branchName {
+		t.Fatalf("materialized branch = %q, want %q", got, branchName)
+	}
+	for _, ref := range []string{"refs/heads/" + branchName, "refs/remotes/origin/" + branchName} {
+		exists, err := env.service.git.RefExists(env.ctx, env.workspaceRoot, ref)
+		if err != nil {
+			t.Fatalf("RefExists(%q): %v", ref, err)
+		}
+		if !exists {
+			t.Fatalf("expected coexisting ref %q", ref)
+		}
 	}
 }
 
