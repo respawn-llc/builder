@@ -475,6 +475,34 @@ func TestDecodeAndHandlePreservesWorkflowTaskCreateConflictError(t *testing.T) {
 	}
 }
 
+func TestDecodeAndHandlePreservesWorkflowTaskInitialBranchError(t *testing.T) {
+	ref := "refs/remotes/upstream/feature/MBL-742"
+	remote := "upstream"
+	source := &serverapi.WorkflowTaskInitialBranchError{
+		Reason:     serverapi.WorkflowTaskInitialBranchErrorReasonRemoteTrackingCollision,
+		BranchName: "feature/MBL-742",
+		Ref:        &ref,
+		Remote:     &remote,
+	}
+	response := decodeAndHandle[serverapi.WorkflowTaskStartRequest, struct{}](
+		protocol.Request{ID: "initial-branch-error", Params: mustJSON(t, serverapi.WorkflowTaskStartRequest{
+			TaskID:           "task-1",
+			SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+			BranchName:       &source.BranchName,
+		})},
+		func(serverapi.WorkflowTaskStartRequest) (struct{}, error) {
+			return struct{}{}, source
+		},
+	)
+	if response.Error == nil || response.Error.Code != protocol.ErrCodeWorkflowTaskInitialBranch {
+		t.Fatalf("response error = %+v, want initial-branch code", response.Error)
+	}
+	decoded, ok := serverapi.DecodeWorkflowTaskInitialBranchError(response.Error.Data, response.Error.Message).(*serverapi.WorkflowTaskInitialBranchError)
+	if !ok || !reflect.DeepEqual(decoded, source) {
+		t.Fatalf("decoded initial branch error = %+v, want %+v", decoded, source)
+	}
+}
+
 func TestDecodeAndHandlePreservesWorkflowLabelError(t *testing.T) {
 	projectID := "project-1"
 	source := &serverapi.WorkflowLabelError{

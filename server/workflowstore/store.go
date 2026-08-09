@@ -259,18 +259,19 @@ type ProjectWorkflowUnlinkTaskReference struct {
 }
 
 type TaskRecord struct {
-	ID                workflow.TaskID
-	ProjectID         string
-	WorkflowID        runtimeids.WorkflowID
-	LinkID            string
-	ShortID           string
-	Title             string
-	Body              string
-	SourceURL         string
-	SourceWorkspaceID string
-	ManagedWorktreeID string
-	ExecutionTarget   *ExecutionTargetSnapshot
-	Version           int64
+	ID                              workflow.TaskID
+	ProjectID                       string
+	WorkflowID                      runtimeids.WorkflowID
+	LinkID                          string
+	ShortID                         string
+	Title                           string
+	Body                            string
+	SourceURL                       string
+	SourceWorkspaceID               string
+	ManagedWorktreeID               string
+	PendingInitialManagedBranchName *string
+	ExecutionTarget                 *ExecutionTargetSnapshot
+	Version                         int64
 }
 
 // CurrentNodeStartContext is the live execution contract derived from one

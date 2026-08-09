@@ -654,6 +654,19 @@ func TestGatewayHandshakeRejectsPreviousProtocolGeneration(t *testing.T) {
 	}
 }
 
+func TestGatewayHandshakeRejectsPreInitialBranchProtocolVersion(t *testing.T) {
+	_, server := newGatewayTestServer(t)
+	defer server.Close()
+
+	conn := dialGateway(t, server)
+	defer func() { _ = conn.Close() }()
+
+	respErr := callGatewayExpectError(t, conn, "1", protocol.MethodHandshake, protocol.HandshakeRequest{ProtocolVersion: "101"})
+	if respErr.Code != protocol.ErrCodeProtocolVersionMismatch {
+		t.Fatalf("expected protocol version 101 rejection, got %+v", respErr)
+	}
+}
+
 func TestGatewayTaskSearchDispatchesIndexedResponseAndTypedValidationError(t *testing.T) {
 	appCore, server := newGatewayTestServer(t)
 	defer func() { _ = appCore.Close() }()
