@@ -149,6 +149,39 @@ func (e *TaskResumeConflictError) Error() string {
 	return fmt.Sprintf("task %q has no interrupted executable Current Nodes to resume", e.TaskID)
 }
 
+func (c *CurrentNodeController) EnsureTaskResumeEligible(
+	ctx context.Context,
+	taskID workflow.TaskID,
+) error {
+	if c == nil {
+		return errors.New("current node workflow controller is required")
+	}
+	return c.permit.Run(ctx, func(ctx context.Context) error {
+		c.mu.Lock()
+		if err := c.ensureTaskAvailableLocked(taskID); err != nil {
+			c.mu.Unlock()
+			return err
+		}
+		c.mu.Unlock()
+		classifications, err := c.store.PreflightTaskResume(ctx, taskID)
+		if err != nil {
+			return err
+		}
+		if len(classifications) == 0 {
+			return &TaskResumeConflictError{TaskID: taskID}
+		}
+		var validationErrs []error
+		for _, classification := range classifications {
+			if validationErr := classification.ValidationError(); validationErr == nil {
+				return nil
+			} else {
+				validationErrs = append(validationErrs, validationErr)
+			}
+		}
+		return errors.Join(validationErrs...)
+	})
+}
+
 func (c *CurrentNodeController) resumeTask(
 	ctx context.Context,
 	taskID workflow.TaskID,

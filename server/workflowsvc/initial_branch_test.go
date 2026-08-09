@@ -100,6 +100,118 @@ func TestServiceTaskStartPersistsExplicitBranchBeforeConfiguredTargetResolution(
 	}
 }
 
+func TestServiceTaskResumeEligibilityRejectsExplicitBranchBeforePendingMutation(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	setWorkflowServiceExecutionTargetPolicy(t, ctx, service, workflowID, serverapi.WorkflowExecutionTargetConfiguration{
+		Mode: serverapi.WorkflowExecutionTargetModeHead,
+	})
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	taskID := workflow.TaskID(task.Task.ID)
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller, err := workflowexecution.NewCurrentNodeController(
+		service.store,
+		initialBranchControllerRunner{},
+		authority,
+		service.mutationPermit,
+		workflowexecution.CurrentNodeControllerConfig{
+			AgentConcurrency:  1,
+			AssignmentSteerer: initialBranchControllerSteerer{},
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewCurrentNodeController: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := controller.Close(); err != nil {
+			t.Errorf("close CurrentNodeController: %v", err)
+		}
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close session runtime authority: %v", err)
+		}
+	})
+	service.currentNodeExecution = controller
+	targets := &recordingExecutionTargetInfrastructure{}
+	service.executionTargets = targets
+	branchName := "feature/ineligible-resume"
+
+	_, err = service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
+		TaskID:           task.Task.ID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		BranchName:       &branchName,
+	})
+
+	var conflict *workflowexecution.TaskResumeConflictError
+	if !errors.As(err, &conflict) || conflict.TaskID != taskID {
+		t.Fatalf("ResumeWorkflowTask error = %T %v, want typed conflict", err, err)
+	}
+	targetContext, err := service.store.GetTaskExecutionTargetContext(ctx, taskID)
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetContext: %v", err)
+	}
+	if targetContext.Task.PendingInitialManagedBranchName == nil ||
+		*targetContext.Task.PendingInitialManagedBranchName != task.Task.ShortID {
+		t.Fatalf("pending branch = %v, want unchanged %q", targetContext.Task.PendingInitialManagedBranchName, task.Task.ShortID)
+	}
+	if targets.initialBranchInspections != 0 || targets.materializeRequest.TaskID != "" {
+		t.Fatalf("Execution Target infrastructure used before Resume eligibility: %+v", targets)
+	}
+}
+
+func TestServiceTaskResumeEligibilityReturnsAllInvalidErrorBeforeBranchPreflight(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	setWorkflowServiceExecutionTargetPolicy(t, ctx, service, workflowID, serverapi.WorkflowExecutionTargetConfiguration{
+		Mode: serverapi.WorkflowExecutionTargetModeHead,
+	})
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	taskID := workflow.TaskID(task.Task.ID)
+	reference, err := workflow.NewCurrentNodeReference(taskID, workflow.NodeID("node-invalid"), nil)
+	if err != nil {
+		t.Fatalf("NewCurrentNodeReference: %v", err)
+	}
+	validationErr := &workflowstore.CurrentNodeResumeValidationError{
+		Diagnostics: []workflowstore.CurrentNodeResumeValidationDiagnostic{{
+			Code:           workflowstore.CurrentNodeResumeParameterNotMaterializedCode,
+			CurrentNode:    reference,
+			EnteringEdgeID: workflow.EdgeID("edge-invalid"),
+			ParameterKey:   "reviewer",
+		}},
+	}
+	execution := &currentNodeCompletionExecutionStub{
+		store:                service.store,
+		resumeEligibilityErr: validationErr,
+	}
+	service.currentNodeExecution = execution
+	targets := &recordingExecutionTargetInfrastructure{}
+	service.executionTargets = targets
+	branchName := "feature/all-invalid-resume"
+
+	_, err = service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
+		TaskID:           task.Task.ID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		BranchName:       &branchName,
+	})
+
+	var typed *workflowstore.CurrentNodeResumeValidationError
+	if !errors.As(err, &typed) || len(typed.Diagnostics) != 1 {
+		t.Fatalf("ResumeWorkflowTask error = %T %v, want typed Resume validation error", err, err)
+	}
+	targetContext, err := service.store.GetTaskExecutionTargetContext(ctx, taskID)
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetContext: %v", err)
+	}
+	if targetContext.Task.PendingInitialManagedBranchName == nil ||
+		*targetContext.Task.PendingInitialManagedBranchName != task.Task.ShortID {
+		t.Fatalf("pending branch = %v, want unchanged %q", targetContext.Task.PendingInitialManagedBranchName, task.Task.ShortID)
+	}
+	if targets.initialBranchInspections != 0 || targets.materializeRequest.TaskID != "" {
+		t.Fatalf("Execution Target infrastructure used before Resume eligibility: %+v", targets)
+	}
+}
+
 func TestServiceTaskStartReusesDefaultPendingBranch(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
