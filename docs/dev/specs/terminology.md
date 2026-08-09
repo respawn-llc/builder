@@ -176,11 +176,15 @@ Post-completion compaction of a retained Workflow Session before it becomes dorm
 
 ### Exact Execution Scope
 
-The immutable identity of one live Agent or Script execution for a Task's Current Node and, when applicable, its parallel branch. The scope includes mandatory result finalization after the Agent loop or Script process returns. It remains live and interruptible until that finalizer publishes successors or interruption. Resume creates a new Exact Execution Scope only after the previous scope stops. Only a matching Exact Execution Scope proves that execution is live. Saved Task state, transcript entries, timestamps, Goals, and client state do not prove liveness.
+The immutable identity of one live Agent or Script execution for a Task's Current Node and, when applicable, its parallel branch. Resume creates a new Exact Execution Scope only after the previous scope stops. Only a matching Exact Execution Scope proves that execution is live. Saved Task state, transcript entries, timestamps, Goals, and client state do not prove liveness.
 
 ### Run
 
-The process-local Workflow Execution owner for one executable Current Node. A Run is queued before a matching Exact Execution Scope actively executes and running while that scope executes, including mandatory result finalization. Interactive clients may attach to the same Agent Run and Exact Execution Scope; an attachment is not another execution owner. A Run may remain stopped by live blocking attention. Durable interrupted or terminal Current Nodes have no Run. Runs are never persisted or reconstructed after restart. A Run without active exact execution does not authorize Interrupt.
+The process-local Workflow Execution owner for one executable Current Node accepted for admission. A Run is queued before a matching Exact Execution Scope actively executes. A queued Run waiting for capacity or a predecessor is not interruptible; once it begins potentially blocking preparation or launch, the Run itself authorizes Interrupt until Exact execution takes over that same authority. A fresh user Session activation, explicit attached Session operation that starts Agent execution, Task Resume, selected-existing-Session RunPrompt continuation, or healthy Workflow automation may create a Run; technical reattachment never does. Interactive clients and attached operations may wait for an existing Agent Run and use only its still-current Exact Execution Scope; an attachment is not another execution owner. A selected-existing-Session RunPrompt continuation remains idle-only and fails as already running instead of joining an existing Run. Durable interrupted or terminal Current Nodes have no Run. Runs are never persisted or reconstructed after restart.
+
+### Session Runtime Activation Operation
+
+The required typed reason for a Session Runtime activation request. User activation is a newly constructed client activation caused by a fresh user action and may create or join the same Run as Task Resume. Technical reattachment is automatic connection/runtime recovery and may attach to whichever matching Exact execution is live when Kent handles it, but cannot create, resume, join, or wait for a Run. It carries no prior-execution proof. A retry, reconnect, gateway owner, Session row, transcript, or durable Current Node never changes one operation into another.
 
 ### Resource Generation
 
@@ -245,10 +249,6 @@ A temporary description of eligible work that Workflow Execution may accept into
 ### Immutable Live Snapshot
 
 A read-only view of live Workflow activity at one point in time. The view can become stale. Each operation checks the authoritative live state again before it changes a Task.
-
-### Lifecycle Publication
-
-The owner that makes one complete observable Workflow lifecycle view visible from compatible stopped, queued, blocking, and exact-running facts. Readers see one published view at a time and never a mixture of facts from the prior and next views. Lifecycle Publication never derives queued or running authority from secondary signals.
 
 ### Task Comment
 
@@ -348,7 +348,7 @@ Recovery that erases the Mutable Band, reopens the Session, and appends the acti
 
 ### Active Session Runtime
 
-The shared live resource for one Session. Interactive clients, headless runs, and Workflow execution use the same resource as equal control surfaces. An available but idle Session is not a live execution.
+The shared live resource for one Session. Interactive clients, headless runs, and Workflow execution use the same resource as equal control surfaces. An available but idle Session is not a live execution. Attaching a retained Workflow client requires an atomic Authority check that its expected Exact Execution Scope and Resource Generation are still current; attachment never creates a replacement as fallback.
 
 ### RuntimeActivity
 
@@ -368,7 +368,7 @@ A temporary guard that blocks conflicting changes while Workflow Execution chang
 
 ### Append Certainty
 
-The result that tells Kent whether a Session change became durable. If a change did not commit, Kent can retry it and must not show it as applied. If a change committed, Kent applies it exactly once and must not retry it, even when later notification fails.
+The result that tells Kent whether a Session change became durable. Kent never shows an uncommitted change as applied; the owning operation determines whether retry is permitted. Kent applies a committed change exactly once and never retries it, even when later notification fails.
 
 ### ReadModelVersion
 
@@ -393,6 +393,10 @@ The second-`Ctrl+C` exit path while an interrupt is pending. The TUI exits and d
 ### Agent Step
 
 One provider request/response iteration in the runtime loop, including returned tool calls and their committed results. A user steer ends the current Agent Step and starts a new Agent Step within the same Agent Turn.
+
+### Result Group
+
+An atomic ordered durable unit containing one or more compatible complete tool results from one Agent Step. Each result keeps its completion, model-visible output, and associated operator diagnostic together. One Agent Step may commit several Result Groups when an intermediate Question, Approval, or another durability-dependent operation requires already-complete results to become durable before the Step ends. The remaining results become durable before the next provider request or Step completion. A Result Group never spans Agent Steps or Agent Turns and becomes visible only after the whole group is durable.
 
 ### Agent Turn
 

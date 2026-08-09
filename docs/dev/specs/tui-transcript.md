@@ -38,7 +38,7 @@
 - **Tool completion appends exactly one final committed line in Kent commit order. Ongoing Mode never changes an earlier tool line.**
 - A pending whole-file deletion keeps its path visible without a removal-count badge while the count is unavailable. In ongoing and detail, a failed whole-file deletion remains path-only, while a successful whole-file deletion uses the existing compact removal badge to show its logical removed-line count, including a known count of zero.
 - **A shell invocation that moves to the background renders both its committed tool row and volatile background-activity row with a secondary `$`, faint foreground command, and `· backgrounded` suffix. The command truncates before the suffix so the complete suffix remains visible whenever the terminal can fit it; these rows never label the state as `running`.**
-- **Parallel tool calls commit in server emission order with no ordering guarantee among concurrent calls.**
+- **Parallel tool calls commit in canonical server order: provider-required order when present, otherwise the Agent Step's stable result order. Execution-completion races do not change that order. Clients consume server emission order and never reorder tool rows.**
 - **In main-input mode, `Up`/`Down` are reserved for prompt-history recall at whole-buffer boundaries or multiline cursor movement. They do not scroll ongoing transcript.**
 - `PgUp`/`PgDn` also do not scroll ongoing transcript state.
 - **Ongoing mouse capture is disabled to preserve native text selection.**
@@ -200,8 +200,17 @@
 - Multiple queued human steering messages flushed at one boundary coalesce into one user message separated by blank lines. Each queued steer issued from another Session remains a separate message.
 - Pending queues have no fixed count limit and are lost on process exit.
 - A mid-turn message becomes durable only when Kent delivers it.
-- [TUI Chat Core](tui-chat-core.md#interrupts-and-exit) owns ordinary and retained Workflow Session interrupt and exit behavior.
-- After a crash during an Agent Step, recovery follows interruption behavior. Otherwise Kent restores normal state.
+- In an ordinary Session, Ctrl+C interrupts only an active Agent Turn: stop the current model step and active tool process and keep the app/session alive. It does not cancel a submission before its Agent Turn starts; a submission already sent to the server may start or continue after the client detaches.
+- Retained Workflow user activation does not open a transcript while its Run is queued or launching. It returns the ordinary ready Session attachment only after Authority atomically verifies and attaches to the expected still-current Exact Execution Scope and Resource Generation; opening failure surfaces the activation error without a pre-Exact transcript.
+- Automatic transcript/control recovery uses technical reattachment. It never creates or joins a Workflow Run or waits for future execution. It attaches to the matching Exact execution live when Kent handles the request, or returns unavailable, leaves the Current Node unchanged, and creates no transcript when none is live.
+- In an opened retained Workflow Session, Ctrl+C targets that matching Exact Execution Scope through Workflow Execution. If durable interruption fails, the client surfaces the failure and Exact execution remains active.
+- If the Exact ends while the retained Workflow transcript remains attached, the next explicit message, user shell, or compaction operation creates or joins the Current-Node Run and uses its Workflow-owned Exact scope. The transcript does not need to close and reopen, and no ordinary Session execution is created.
+- If that explicit operation created an interruptible launching Run, Ctrl+C targets the creator operation and restores its text only after Workflow Execution durably interrupts the Current Node and Runtime Command reports canceled-not-committed. A failed interruption leaves the operation and Run unchanged.
+- Transcript opening and reconnection retain the ordinary hydration-first subscription contract and existing Resource Generation ownership.
+- Interrupt injects detail-only developer-role control message `User interrupted you`.
+- Post-interrupt state returns idle with input ready.
+- Resume after ordinary Session interruption requires explicit user text. A retained Workflow Current Node may Resume through any fresh user-initiated Session activation or an explicit attached message, user-shell, or compaction operation that starts Agent execution; automatic technical reattachment never Resumes it.
+- Session reopening after a crash or durability-failure retirement follows the fresh-resource recovery contract in `core-runtime-tools.md`. The TUI does not expose a stale tool call as live; otherwise it restores normal state.
 - Failed prompt-history navigation emits plain terminal BEL with no transient UI notification.
 
 ## Worktree Management
