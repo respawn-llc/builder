@@ -24,7 +24,7 @@ func TestWorkflowGraphDocumentRequiresPublicShape(t *testing.T) {
 		}
 	}
 
-	document, err := decodeWorkflowGraphDocument([]byte(`{"workflow_id":"11111111-1111-4111-8111-111111111111","expected_version":1,"future":true,"graph":{"node_groups":[{"id":"group","key":"group","display_name":"Group"}],"nodes":[{"id":"node","key":"node","kind":"agent","display_name":"Node","group_id":"group"}],"transition_groups":[],"edges":[],"future":[]}}`))
+	document, err := decodeWorkflowGraphDocument([]byte(`{"workflow_id":"11111111-1111-4111-8111-111111111111","expected_version":1,"future":{"":true},"graph":{"node_groups":[{"id":"group","key":"group","display_name":"Group"}],"nodes":[{"id":"node","key":"node","kind":"agent","display_name":"Node","group_id":"group"}],"transition_groups":[],"edges":[],"future":[]}}`))
 	if err != nil {
 		t.Fatalf("valid document: %v", err)
 	}

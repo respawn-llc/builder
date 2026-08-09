@@ -14,22 +14,21 @@ type workflowGraphDraftMutation[T any] func(serverapi.WorkflowGraphDraft) (serve
 
 type workflowGraphMutationResult struct{ Version int64 }
 
-type workflowGraphMutationBlockedError struct {
-	WorkflowID   runtimeids.WorkflowID
-	BlockerCodes []string
-}
-
-func (e workflowGraphMutationBlockedError) Error() string {
-	if len(e.BlockerCodes) == 0 {
-		return fmt.Sprintf(
+func workflowGraphMutationBlocked(workflowID runtimeids.WorkflowID, blockers []serverapi.WorkflowGraphSaveBlocker) error {
+	if len(blockers) == 0 {
+		return fmt.Errorf(
 			"Workflow %s graph mutation cannot be saved by this high-level command; use `kent workflow graph apply`",
-			e.WorkflowID,
+			workflowID,
 		)
 	}
-	return fmt.Sprintf(
+	codes := make([]string, 0, len(blockers))
+	for _, blocker := range blockers {
+		codes = append(codes, blocker.Code)
+	}
+	return fmt.Errorf(
 		"Workflow %s graph mutation was blocked (%s); use `kent workflow graph apply`",
-		e.WorkflowID,
-		strings.Join(e.BlockerCodes, ", "),
+		workflowID,
+		strings.Join(codes, ", "),
 	)
 }
 
@@ -40,12 +39,6 @@ func runWorkflowGraphMutation[T any](
 	mutate workflowGraphDraftMutation[T],
 ) (T, workflowGraphMutationResult, error) {
 	var zero T
-	if remote == nil {
-		return zero, workflowGraphMutationResult{}, errors.New("workflow service is required")
-	}
-	if mutate == nil {
-		return zero, workflowGraphMutationResult{}, errors.New("Workflow graph mutation is required")
-	}
 	current, err := resolveWorkflowDefinition(ctx, remote, workflowID)
 	if err != nil {
 		return zero, workflowGraphMutationResult{}, err
@@ -62,7 +55,7 @@ func runWorkflowGraphMutation[T any](
 		return zero, workflowGraphMutationResult{}, fmt.Errorf("validate Workflow graph save preview: %w", err)
 	}
 	if preview.Response.ConfirmationRequired || len(preview.Response.Blockers) != 0 || !preview.Response.CanSave {
-		return zero, workflowGraphMutationResult{}, newWorkflowGraphMutationBlockedError(workflowID, preview.Response.Blockers)
+		return zero, workflowGraphMutationResult{}, workflowGraphMutationBlocked(workflowID, preview.Response.Blockers)
 	}
 	if !preview.Response.Changed {
 		return value, workflowGraphMutationResult{Version: preview.Response.CurrentVersion}, nil
@@ -79,20 +72,9 @@ func runWorkflowGraphMutation[T any](
 		return zero, workflowGraphMutationResult{}, fmt.Errorf("validate Workflow graph save response: %w", err)
 	}
 	if !response.Saved || response.ConfirmationRequired || len(response.Blockers) != 0 || !response.CanSave {
-		return zero, workflowGraphMutationResult{}, newWorkflowGraphMutationBlockedError(workflowID, response.Blockers)
+		return zero, workflowGraphMutationResult{}, workflowGraphMutationBlocked(workflowID, response.Blockers)
 	}
 	return value, workflowGraphMutationResult{Version: response.CurrentVersion}, nil
-}
-
-func newWorkflowGraphMutationBlockedError(workflowID runtimeids.WorkflowID, blockers []serverapi.WorkflowGraphSaveBlocker) error {
-	codes := make([]string, 0, len(blockers))
-	for _, blocker := range blockers {
-		codes = append(codes, blocker.Code)
-	}
-	return workflowGraphMutationBlockedError{
-		WorkflowID:   workflowID,
-		BlockerCodes: codes,
-	}
 }
 
 type workflowNodeUpdateDraftMutation struct {
@@ -125,6 +107,12 @@ func (e workflowGraphMutationUsageError) Error() string {
 
 func (e workflowGraphMutationUsageError) Unwrap() error {
 	return e.err
+}
+
+func applyWorkflowGraphMutationValue[T any](target *T, value *T) {
+	if value != nil {
+		*target = *value
+	}
 }
 
 type workflowEdgeDraftMutationResult struct {
@@ -174,15 +162,9 @@ func updateWorkflowNodeDraftMutation(update workflowNodeUpdateDraftMutation) wor
 			if graph.Nodes[index].Key != nodeKey {
 				continue
 			}
-			if update.Key != nil {
-				graph.Nodes[index].Key = *update.Key
-			}
-			if update.Kind != nil {
-				graph.Nodes[index].Kind = *update.Kind
-			}
-			if update.DisplayName != nil {
-				graph.Nodes[index].DisplayName = *update.DisplayName
-			}
+			applyWorkflowGraphMutationValue(&graph.Nodes[index].Key, update.Key)
+			applyWorkflowGraphMutationValue(&graph.Nodes[index].Kind, update.Kind)
+			applyWorkflowGraphMutationValue(&graph.Nodes[index].DisplayName, update.DisplayName)
 			if update.SubagentRole.Set {
 				graph.Nodes[index].SubagentRole = update.SubagentRole.Value
 			}
@@ -282,12 +264,8 @@ func updateWorkflowEdgeDraftMutation(update workflowEdgeUpdateDraftMutation) wor
 		}
 
 		edge := &graph.Edges[edgeIndex]
-		if update.AssigneeSelection != nil {
-			edge.AssigneeSelection = *update.AssigneeSelection
-		}
-		if update.ThinkingSelection != nil {
-			edge.ThinkingSelection = *update.ThinkingSelection
-		}
+		applyWorkflowGraphMutationValue(&edge.AssigneeSelection, update.AssigneeSelection)
+		applyWorkflowGraphMutationValue(&edge.ThinkingSelection, update.ThinkingSelection)
 		if update.TargetAssigneeParameter != nil && edge.AssigneeSelection != "previous_node" {
 			return serverapi.WorkflowGraphDraft{}, workflowEdgeDraftMutationResult{}, workflowGraphMutationUsageError{
 				err: errors.New("target-assignee-param requires assignee selection previous_node"),
@@ -311,9 +289,7 @@ func updateWorkflowEdgeDraftMutation(update workflowEdgeUpdateDraftMutation) wor
 			return serverapi.WorkflowGraphDraft{}, workflowEdgeDraftMutationResult{}, workflowGraphMutationUsageError{err: err}
 		}
 		edge.Parameters = parameters
-		if update.EdgeKey != nil {
-			edge.Key = *update.EdgeKey
-		}
+		applyWorkflowGraphMutationValue(&edge.Key, update.EdgeKey)
 		targetNodeKey := ""
 		if update.TargetNodeKey != nil {
 			target, err := findWorkflowGraphDraftNodeByKey(graph, *update.TargetNodeKey)
@@ -329,15 +305,9 @@ func updateWorkflowEdgeDraftMutation(update workflowEdgeUpdateDraftMutation) wor
 			}
 			targetNodeKey = target.Key
 		}
-		if update.ContextMode != nil {
-			edge.ContextMode = *update.ContextMode
-		}
-		if update.ContextSource != nil {
-			edge.ContextSource = *update.ContextSource
-		}
-		if update.RequiresApproval != nil {
-			edge.RequiresApproval = *update.RequiresApproval
-		}
+		applyWorkflowGraphMutationValue(&edge.ContextMode, update.ContextMode)
+		applyWorkflowGraphMutationValue(&edge.ContextSource, update.ContextSource)
+		applyWorkflowGraphMutationValue(&edge.RequiresApproval, update.RequiresApproval)
 		if update.PromptTemplate.Set {
 			edge.PromptTemplate = update.PromptTemplate.Value
 		}

@@ -218,26 +218,10 @@ func decodeWorkflowGraphDocument(data []byte) (workflowGraphDocument, error) {
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		return workflowGraphDocument{}, err
 	}
-	if decoded.WorkflowID == nil {
-		return workflowGraphDocument{}, errors.New("workflow_id is required")
-	}
-	if decoded.ExpectedVersion == nil {
-		return workflowGraphDocument{}, errors.New("expected_version is required")
-	}
-	if decoded.Graph == nil {
-		return workflowGraphDocument{}, errors.New("graph is required")
-	}
-	if decoded.Graph.NodeGroups == nil {
-		return workflowGraphDocument{}, errors.New("graph.node_groups is required")
-	}
-	if decoded.Graph.Nodes == nil {
-		return workflowGraphDocument{}, errors.New("graph.nodes is required")
-	}
-	if decoded.Graph.TransitionGroups == nil {
-		return workflowGraphDocument{}, errors.New("graph.transition_groups is required")
-	}
-	if decoded.Graph.Edges == nil {
-		return workflowGraphDocument{}, errors.New("graph.edges is required")
+	if decoded.WorkflowID == nil || decoded.ExpectedVersion == nil || decoded.Graph == nil ||
+		decoded.Graph.NodeGroups == nil || decoded.Graph.Nodes == nil ||
+		decoded.Graph.TransitionGroups == nil || decoded.Graph.Edges == nil {
+		return workflowGraphDocument{}, errors.New("Workflow graph document requires workflow_id, expected_version, graph, and all graph collections")
 	}
 	document := workflowGraphDocument{
 		WorkflowID:      *decoded.WorkflowID,
@@ -297,7 +281,7 @@ func scanWorkflowGraphJSONValue(decoder *json.Decoder, context workflowGraphJSON
 			if seen[key] {
 				return fmt.Errorf("duplicate JSON field %q", key)
 			}
-			if key == schema.forbidden {
+			if schema.forbidden != "" && key == schema.forbidden {
 				return fmt.Errorf("%s is not allowed", key)
 			}
 			seen[key] = true

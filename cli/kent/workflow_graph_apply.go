@@ -2,11 +2,12 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
+	"slices"
 	"strings"
 
 	"core/shared/config"
@@ -386,18 +387,85 @@ func writeWorkflowGraphApplyHumanOutcome(stdout io.Writer, stderr io.Writer, out
 }
 
 func writeWorkflowGraphApplyPreviewDetails(stderr io.Writer, outcome workflowGraphApplyOutcome) error {
-	details := struct {
-		ValidationResults map[serverapi.WorkflowValidationMode]serverapi.WorkflowValidateResponse `json:"validation_results,omitempty"`
-		Impact            *serverapi.WorkflowGraphSaveImpact                                      `json:"impact,omitempty"`
-		Blockers          []serverapi.WorkflowGraphSaveBlocker                                    `json:"blockers,omitempty"`
-	}{
-		ValidationResults: outcome.ValidationResults,
-		Impact:            outcome.Impact,
-		Blockers:          outcome.Blockers,
+	write := func(format string, args ...any) error {
+		_, err := fmt.Fprintf(stderr, format, args...)
+		return err
 	}
-	encoder := json.NewEncoder(stderr)
-	encoder.SetIndent("", "  ")
-	return encoder.Encode(details)
+	if len(outcome.ValidationResults) > 0 {
+		if err := write("Validation:\n"); err != nil {
+			return err
+		}
+		for _, mode := range slices.Sorted(maps.Keys(outcome.ValidationResults)) {
+			result := outcome.ValidationResults[mode]
+			if err := write("- %s: valid=%t\n", mode, result.Valid); err != nil {
+				return err
+			}
+			for _, validationError := range result.Errors {
+				if err := write("  - [%s] %s\n", validationError.Code, validationError.Message); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	if outcome.Impact != nil {
+		impact := *outcome.Impact
+		if err := write("Impact:\n"); err != nil {
+			return err
+		}
+		for _, count := range []struct {
+			name  string
+			value int64
+		}{
+			{"removed_node_groups", impact.RemovedNodeGroupCount},
+			{"removed_nodes", impact.RemovedNodeCount},
+			{"removed_transition_groups", impact.RemovedTransitionGroupCount},
+			{"removed_edges", impact.RemovedEdgeCount},
+			{"node_task_references", impact.NodeTaskReferenceCount},
+			{"edge_task_references", impact.EdgeTaskReferenceCount},
+			{"active_current_nodes", impact.ActiveCurrentNodeCount},
+			{"pending_approvals", impact.PendingApprovalCount},
+			{"start_node_changes", impact.StartNodeChangeCount},
+			{"last_terminal_changes", impact.LastTerminalChangeCount},
+			{"task_referenced_node_kind_changes", impact.TaskReferencedNodeKindChangeCount},
+		} {
+			if err := write("- %s: %d\n", count.name, count.value); err != nil {
+				return err
+			}
+		}
+		if err := writeWorkflowGraphEntityReferences(stderr, "Removed entities", impact.RemovedEntities); err != nil {
+			return err
+		}
+	}
+	if len(outcome.Blockers) > 0 {
+		if err := write("Blockers:\n"); err != nil {
+			return err
+		}
+		for _, blocker := range outcome.Blockers {
+			if err := write("- [%s] %s (count=%d)\n", blocker.Code, blocker.Message, blocker.Count); err != nil {
+				return err
+			}
+			if err := writeWorkflowGraphEntityReferences(stderr, "  Affected entities", blocker.AffectedEntities); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func writeWorkflowGraphEntityReferences(stderr io.Writer, label string, entities []serverapi.WorkflowGraphEntityReference) error {
+	write := func(format string, args ...any) error {
+		_, err := fmt.Fprintf(stderr, format, args...)
+		return err
+	}
+	if err := write("%s:\n", label); err != nil {
+		return err
+	}
+	for _, entity := range entities {
+		if err := write("  - %s %s\n", entity.EntityType, entity.EntityID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (outcome workflowGraphApplyOutcome) Validate() error {
@@ -431,16 +499,6 @@ func (outcome workflowGraphApplyOutcome) Validate() error {
 	}
 	if outcome.CurrentVersion != nil && *outcome.CurrentVersion < 0 {
 		return errors.New("Workflow graph apply current version must be non-negative")
-	}
-	if outcome.Impact != nil {
-		if err := outcome.Impact.Validate(); err != nil {
-			return fmt.Errorf("Workflow graph apply impact: %w", err)
-		}
-	}
-	for index, blocker := range outcome.Blockers {
-		if err := blocker.Validate(); err != nil {
-			return fmt.Errorf("Workflow graph apply blocker %d: %w", index, err)
-		}
 	}
 	if outcome.Message != nil && strings.TrimSpace(*outcome.Message) == "" {
 		return errors.New("Workflow graph apply message must not be blank")
