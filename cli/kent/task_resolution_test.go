@@ -7,7 +7,7 @@ import (
 	"core/shared/serverapi"
 )
 
-func TestClassifyWorkflowTaskSelectorUsesFullCanonicalTaskID(t *testing.T) {
+func TestClassifyWorkflowTaskSelectorPreservesPersistentTaskIDs(t *testing.T) {
 	tests := []struct {
 		name  string
 		raw   string
@@ -29,13 +29,13 @@ func TestClassifyWorkflowTaskSelectorUsesFullCanonicalTaskID(t *testing.T) {
 		{
 			name:  "prefix-like noncanonical id",
 			raw:   "task-not-a-uuid",
-			kind:  workflowTaskSelectorShortID,
+			kind:  workflowTaskSelectorTaskID,
 			value: "task-not-a-uuid",
 		},
 		{
 			name:  "prefix-like legacy id",
 			raw:   "task-1",
-			kind:  workflowTaskSelectorShortID,
+			kind:  workflowTaskSelectorTaskID,
 			value: "task-1",
 		},
 	}
