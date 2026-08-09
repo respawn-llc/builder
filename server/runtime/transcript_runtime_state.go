@@ -429,19 +429,16 @@ func (s *transcriptRuntimeState) StreamingSnapshot() (string, string, *Assistant
 	return "", "", nil
 }
 
-func (s *transcriptRuntimeState) LastCommittedAssistantFinalAnswer() string {
+func (s *transcriptRuntimeState) LastCommittedAssistantFinalAnswer() *string {
 	if chat := s.chatProjection(); chat != nil {
 		return chat.cachedLastCommittedAssistantFinalAnswer()
 	}
-	return ""
+	return nil
 }
 
-func (s *transcriptRuntimeState) SeedLastCommittedAssistantFinalAnswerIfEmpty(answer string) {
-	if strings.TrimSpace(answer) == "" {
-		return
-	}
+func (s *transcriptRuntimeState) SeedLastCommittedAssistantFinalAnswerIfAbsent(answer *string) {
 	if chat := s.chatProjection(); chat != nil {
-		chat.seedLastCommittedAssistantFinalAnswerIfEmpty(answer)
+		chat.seedLastCommittedAssistantFinalAnswerIfAbsent(answer)
 	}
 }
 

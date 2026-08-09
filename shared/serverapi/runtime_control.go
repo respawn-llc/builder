@@ -103,11 +103,44 @@ type RuntimePromptCommandInput = runtimeinput.PromptCommand
 type RuntimeUserTurnInput = runtimeinput.Input
 
 type RuntimeSubmitUserTurnResponse struct {
-	Message     *string                      `json:"message,omitempty"`
-	ResultKind  *clientui.UserTurnResultKind `json:"result_kind,omitempty"`
-	Compacted   bool                         `json:"compacted,omitempty"`
-	Steered     bool                         `json:"steered,omitempty"`
-	QueueItemID string                       `json:"queue_item_id,omitempty"`
+	Message     *string                     `json:"message,omitempty"`
+	ResultKind  clientui.UserTurnResultKind `json:"result_kind"`
+	Compacted   bool                        `json:"compacted,omitempty"`
+	Steered     bool                        `json:"steered,omitempty"`
+	QueueItemID string                      `json:"queue_item_id,omitempty"`
+}
+
+func (r RuntimeSubmitUserTurnResponse) Validate() error {
+	switch r.ResultKind {
+	case clientui.UserTurnResultKindQueued:
+		if !r.Steered {
+			return errors.New("queued result must be steered")
+		}
+		if strings.TrimSpace(r.QueueItemID) == "" {
+			return errors.New("queued result requires queue_item_id")
+		}
+		if r.Message != nil {
+			return errors.New("queued result must not include message")
+		}
+	case clientui.UserTurnResultKindNoFinal:
+		if r.Steered || strings.TrimSpace(r.QueueItemID) != "" || r.Message != nil {
+			return errors.New("no_final result must not include message or queue state")
+		}
+	case clientui.UserTurnResultKindAssistantFinal:
+		if r.Steered || strings.TrimSpace(r.QueueItemID) != "" {
+			return errors.New("assistant_final result must not include queue state")
+		}
+	case clientui.UserTurnResultKindSilentFinal:
+		if r.Steered || strings.TrimSpace(r.QueueItemID) != "" {
+			return errors.New("silent_final result must not include queue state")
+		}
+		if r.Message == nil || *r.Message != "" {
+			return errors.New("silent_final result requires a present empty message")
+		}
+	default:
+		return errors.New("result_kind must be queued, no_final, assistant_final, or silent_final")
+	}
+	return nil
 }
 
 type RuntimeSubmitUserShellCommandRequest struct {

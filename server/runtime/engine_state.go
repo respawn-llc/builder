@@ -35,7 +35,7 @@ type TranscriptSegmentPage struct {
 	NewerCursor                       int64
 	HasMoreBelow                      bool
 	LatestRollbackCandidate           *rollbacktarget.CandidateLocator
-	LastCommittedAssistantFinalAnswer string
+	LastCommittedAssistantFinalAnswer *string
 }
 
 func TranscriptSegmentPageFromEventLog(eventLog session.MaterializedEventLog, cursor int64, cacheWarningMode config.CacheWarningMode) (TranscriptSegmentPage, error) {
@@ -179,9 +179,9 @@ func (e *Engine) ApplyForActiveStep(stepID string, apply func() error) error {
 	return e.stepLifecycle.ApplyForActiveStep(stepID, apply)
 }
 
-func (e *Engine) LastCommittedAssistantFinalAnswer() string {
+func (e *Engine) LastCommittedAssistantFinalAnswer() *string {
 	if e == nil {
-		return ""
+		return nil
 	}
 	return e.transcriptRuntimeState().LastCommittedAssistantFinalAnswer()
 }

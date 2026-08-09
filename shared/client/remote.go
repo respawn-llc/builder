@@ -819,7 +819,14 @@ func (c *Remote) ShouldCompactBeforeUserMessage(ctx context.Context, req servera
 }
 
 func (c *Remote) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmitUserTurnRequest) (serverapi.RuntimeSubmitUserTurnResponse, error) {
-	return callDedicatedRPC[serverapi.RuntimeSubmitUserTurnRequest, serverapi.RuntimeSubmitUserTurnResponse](c, ctx, "runtime-submit-user-turn", protocol.MethodRuntimeSubmitUserTurn, req)
+	response, err := callDedicatedRPC[serverapi.RuntimeSubmitUserTurnRequest, serverapi.RuntimeSubmitUserTurnResponse](c, ctx, "runtime-submit-user-turn", protocol.MethodRuntimeSubmitUserTurn, req)
+	if err != nil {
+		return serverapi.RuntimeSubmitUserTurnResponse{}, err
+	}
+	if err := response.Validate(); err != nil {
+		return serverapi.RuntimeSubmitUserTurnResponse{}, fmt.Errorf("validate runtime submit user turn response: %w", err)
+	}
+	return response, nil
 }
 
 func (c *Remote) SubmitUserShellCommand(ctx context.Context, req serverapi.RuntimeSubmitUserShellCommandRequest) error {

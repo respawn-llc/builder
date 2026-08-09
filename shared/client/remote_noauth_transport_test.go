@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"core/shared/clientui"
 	"core/shared/protocol"
 	"core/shared/rpcwire"
 	"core/shared/serverapi"
@@ -67,7 +68,10 @@ func TestRemoteNoAuthAcknowledgementPropagatesToFreshConnectionStrategies(t *tes
 					reportHandlerError(handlerErrs, "submit before project attach")
 					return
 				}
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, serverapi.RuntimeSubmitUserTurnResponse{Message: textutil.Value("ok")}))); err != nil {
+				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, serverapi.RuntimeSubmitUserTurnResponse{
+					Message:    textutil.Value("ok"),
+					ResultKind: clientui.UserTurnResultKindAssistantFinal,
+				}))); err != nil {
 					reportHandlerError(handlerErrs, "send submit response: %w", err)
 				}
 				return
@@ -159,7 +163,10 @@ func TestRemoteNoAuthAcknowledgementDisabledWhenServerReportsRealAuthReady(t *te
 					return
 				}
 			case protocol.MethodRuntimeSubmitUserTurn:
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, serverapi.RuntimeSubmitUserTurnResponse{Message: textutil.Value("ok")}))); err != nil {
+				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, serverapi.RuntimeSubmitUserTurnResponse{
+					Message:    textutil.Value("ok"),
+					ResultKind: clientui.UserTurnResultKindAssistantFinal,
+				}))); err != nil {
 					reportHandlerError(handlerErrs, "send submit response: %w", err)
 				}
 				return
@@ -235,7 +242,10 @@ func TestRemoteRealAuthCompletionDisablesNoAuthAcknowledgementPolicy(t *testing.
 					return
 				}
 			case protocol.MethodRuntimeSubmitUserTurn:
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, serverapi.RuntimeSubmitUserTurnResponse{Message: textutil.Value("ok")}))); err != nil {
+				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, serverapi.RuntimeSubmitUserTurnResponse{
+					Message:    textutil.Value("ok"),
+					ResultKind: clientui.UserTurnResultKindAssistantFinal,
+				}))); err != nil {
 					reportHandlerError(handlerErrs, "send submit response: %w", err)
 				}
 				return
@@ -301,7 +311,10 @@ func TestRemoteDoesNotAcknowledgeNoAuthWhenPolicyDisabled(t *testing.T) {
 				reportHandlerError(handlerErrs, "unexpected no-auth acknowledgement while policy disabled")
 				return
 			case protocol.MethodRuntimeSubmitUserTurn:
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, serverapi.RuntimeSubmitUserTurnResponse{Message: textutil.Value("ok")}))); err != nil {
+				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, serverapi.RuntimeSubmitUserTurnResponse{
+					Message:    textutil.Value("ok"),
+					ResultKind: clientui.UserTurnResultKindAssistantFinal,
+				}))); err != nil {
 					reportHandlerError(handlerErrs, "send submit response: %w", err)
 				}
 				return

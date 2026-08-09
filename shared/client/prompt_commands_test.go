@@ -206,7 +206,10 @@ func TestRemotePromptCommandImportCatalogAndInvocationUseServerRoots(t *testing.
 					return
 				}
 				resolvedContent <- content
-				if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.RuntimeSubmitUserTurnResponse{Message: textutil.Value("accepted")})); err != nil {
+				if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.RuntimeSubmitUserTurnResponse{
+					Message:    textutil.Value("accepted"),
+					ResultKind: clientui.UserTurnResultKindAssistantFinal,
+				})); err != nil {
 					t.Errorf("send submit response: %v", err)
 				}
 				return

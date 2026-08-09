@@ -37,7 +37,7 @@ type streamingTranscriptScan struct {
 
 	turn turnBuffer
 
-	lastCommittedAssistantFinalAnswer string
+	lastCommittedAssistantFinalAnswer *string
 }
 
 type turnBuffer struct {
@@ -193,11 +193,7 @@ func (s *streamingTranscriptScan) ApplyPersistedEvent(record session.EventRecord
 		for _, entry := range assignHistoryReplacementEntryProvenance(entries, &provenance) {
 			s.scan.appendEntry(entry)
 		}
-		if replacement.LastCommittedAssistantFinalAnswer != nil {
-			if answer := strings.TrimSpace(*replacement.LastCommittedAssistantFinalAnswer); answer != "" {
-				s.lastCommittedAssistantFinalAnswer = *replacement.LastCommittedAssistantFinalAnswer
-			}
-		}
+		s.lastCommittedAssistantFinalAnswer = textutil.Pointer(replacement.LastCommittedAssistantFinalAnswer)
 	}
 	return nil
 }
@@ -365,9 +361,9 @@ func (s *streamingTranscriptScan) TotalEntries() int {
 	return s.scan.totalEntries
 }
 
-func (s *streamingTranscriptScan) LastCommittedAssistantFinalAnswer() string {
+func (s *streamingTranscriptScan) LastCommittedAssistantFinalAnswer() *string {
 	s.closeTurn()
-	return s.lastCommittedAssistantFinalAnswer
+	return textutil.Pointer(s.lastCommittedAssistantFinalAnswer)
 }
 
 // reconstructPersistedMessages round-trips a persisted message through the same

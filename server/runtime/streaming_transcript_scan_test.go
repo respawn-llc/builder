@@ -158,8 +158,8 @@ func TestStreamingTranscriptScanSeedsLastFinalAnswerFromCompactionBoundary(t *te
 	}
 	scan := newStreamingTranscriptScan(inMemoryTranscriptScanRequest{Offset: 0, Limit: 0}, config.CacheWarningModeDefault)
 	applyEventsToStreaming(t, scan, events)
-	if got, want := scan.LastCommittedAssistantFinalAnswer(), "retained final answer"; got != want {
-		t.Fatalf("scan last final answer = %q, want boundary-seeded %q", got, want)
+	if got, want := scan.LastCommittedAssistantFinalAnswer(), "retained final answer"; got == nil || *got != want {
+		t.Fatalf("scan last final answer = %v, want boundary-seeded %q", got, want)
 	}
 }
 
@@ -231,8 +231,8 @@ func TestStreamingTranscriptScanBoundarySeedOverriddenByLaterFinalAnswer(t *test
 	}
 	scan := newStreamingTranscriptScan(inMemoryTranscriptScanRequest{Offset: 0, Limit: 0}, config.CacheWarningModeDefault)
 	applyEventsToStreaming(t, scan, events)
-	if got, want := scan.LastCommittedAssistantFinalAnswer(), "newer final answer"; got != want {
-		t.Fatalf("scan last final answer = %q, want later final %q", got, want)
+	if got, want := scan.LastCommittedAssistantFinalAnswer(), "newer final answer"; got == nil || *got != want {
+		t.Fatalf("scan last final answer = %v, want later final %q", got, want)
 	}
 }
 
@@ -504,8 +504,8 @@ func TestStreamingTranscriptScanMetadata(t *testing.T) {
 	if got := scan.TotalEntries(); got != len(full) {
 		t.Fatalf("total entries: got %d want %d", got, len(full))
 	}
-	if got, want := scan.LastCommittedAssistantFinalAnswer(), "final answer"; got != want {
-		t.Fatalf("last committed final answer: got %q want %q", got, want)
+	if got, want := scan.LastCommittedAssistantFinalAnswer(), "final answer"; got == nil || *got != want {
+		t.Fatalf("last committed final answer: got %v want %q", got, want)
 	}
 }
 

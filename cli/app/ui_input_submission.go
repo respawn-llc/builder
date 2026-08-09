@@ -105,8 +105,7 @@ func (c uiInputController) submitCmd(text string, input runtimeinput.Input, queu
 		done := newSubmitDoneMsg(token, message, text, nil)
 		done.queued = submission.Queued
 		done.silentFinal = done.queued.ID == "" &&
-			submission.ResultKind != nil &&
-			*submission.ResultKind == clientui.UserTurnResultKindSilentFinal
+			submission.ResultKind == clientui.UserTurnResultKindSilentFinal
 		return done
 	}
 }

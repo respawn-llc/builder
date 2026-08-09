@@ -426,8 +426,8 @@ func TestLastCommittedAssistantFinalAnswerSkipsTrailingReminderEntries(t *testin
 		t.Fatalf("append reminder: %v", err)
 	}
 
-	if got := eng.LastCommittedAssistantFinalAnswer(); got != "final handoff" {
-		t.Fatalf("LastCommittedAssistantFinalAnswer() = %q, want %q", got, "final handoff")
+	if got := eng.LastCommittedAssistantFinalAnswer(); got == nil || *got != "final handoff" {
+		t.Fatalf("LastCommittedAssistantFinalAnswer() = %v, want %q", got, "final handoff")
 	}
 }
 
@@ -445,8 +445,8 @@ func TestLastCommittedAssistantFinalAnswerClearsAtBlankFinal(t *testing.T) {
 		}
 	}
 
-	if got := eng.LastCommittedAssistantFinalAnswer(); got != "" {
-		t.Fatalf("LastCommittedAssistantFinalAnswer() = %q, want absence after blank final", got)
+	if got := eng.LastCommittedAssistantFinalAnswer(); got != nil {
+		t.Fatalf("LastCommittedAssistantFinalAnswer() = %v, want absence after blank final", got)
 	}
 }
 
@@ -462,8 +462,8 @@ func TestLastCommittedAssistantFinalAnswerSkipsTrailingErrorFeedback(t *testing.
 		t.Fatalf("append warning: %v", err)
 	}
 
-	if got := eng.LastCommittedAssistantFinalAnswer(); got != "final handoff" {
-		t.Fatalf("LastCommittedAssistantFinalAnswer() = %q, want %q", got, "final handoff")
+	if got := eng.LastCommittedAssistantFinalAnswer(); got == nil || *got != "final handoff" {
+		t.Fatalf("LastCommittedAssistantFinalAnswer() = %v, want %q", got, "final handoff")
 	}
 }
 
@@ -479,8 +479,8 @@ func TestLastCommittedAssistantFinalAnswerSkipsTrailingHandoffFutureMessage(t *t
 		t.Fatalf("append handoff future message: %v", err)
 	}
 
-	if got := eng.LastCommittedAssistantFinalAnswer(); got != "final handoff" {
-		t.Fatalf("LastCommittedAssistantFinalAnswer() = %q, want %q", got, "final handoff")
+	if got := eng.LastCommittedAssistantFinalAnswer(); got == nil || *got != "final handoff" {
+		t.Fatalf("LastCommittedAssistantFinalAnswer() = %v, want %q", got, "final handoff")
 	}
 }
 
@@ -496,8 +496,8 @@ func TestLastCommittedAssistantFinalAnswerSkipsTrailingReviewerFeedback(t *testi
 		t.Fatalf("append reviewer feedback: %v", err)
 	}
 
-	if got := eng.LastCommittedAssistantFinalAnswer(); got != "final handoff" {
-		t.Fatalf("LastCommittedAssistantFinalAnswer() = %q, want %q", got, "final handoff")
+	if got := eng.LastCommittedAssistantFinalAnswer(); got == nil || *got != "final handoff" {
+		t.Fatalf("LastCommittedAssistantFinalAnswer() = %v, want %q", got, "final handoff")
 	}
 }
 
@@ -513,8 +513,8 @@ func TestLastCommittedAssistantFinalAnswerSkipsTrailingGoalFeedback(t *testing.T
 		t.Fatalf("append goal feedback: %v", err)
 	}
 
-	if got := eng.LastCommittedAssistantFinalAnswer(); got != "final handoff" {
-		t.Fatalf("LastCommittedAssistantFinalAnswer() = %q, want %q", got, "final handoff")
+	if got := eng.LastCommittedAssistantFinalAnswer(); got == nil || *got != "final handoff" {
+		t.Fatalf("LastCommittedAssistantFinalAnswer() = %v, want %q", got, "final handoff")
 	}
 }
 
@@ -530,8 +530,8 @@ func TestLastCommittedAssistantFinalAnswerDoesNotSkipTrailingUntypedDeveloperMes
 		t.Fatalf("append developer message: %v", err)
 	}
 
-	if got := eng.LastCommittedAssistantFinalAnswer(); got != "" {
-		t.Fatalf("LastCommittedAssistantFinalAnswer() = %q, want empty", got)
+	if got := eng.LastCommittedAssistantFinalAnswer(); got != nil {
+		t.Fatalf("LastCommittedAssistantFinalAnswer() = %v, want absence", got)
 	}
 }
 

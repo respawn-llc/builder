@@ -72,8 +72,8 @@ func TestPersistedTranscriptScanReconstructsPersistedTranscript(t *testing.T) {
 	if snapshot.Entries[3].Role != "system" || snapshot.Entries[3].Text != "persisted note" {
 		t.Fatalf("unexpected local entry: %+v", snapshot.Entries[3])
 	}
-	if got := scan.LastCommittedAssistantFinalAnswer(); got != "final answer" {
-		t.Fatalf("LastCommittedAssistantFinalAnswer() = %q, want final answer", got)
+	if got := scan.LastCommittedAssistantFinalAnswer(); got == nil || *got != "final answer" {
+		t.Fatalf("LastCommittedAssistantFinalAnswer() = %v, want final answer", got)
 	}
 }
 
@@ -95,8 +95,8 @@ func TestPersistedTranscriptScanBlankFinalClearsLastCommittedAnswer(t *testing.T
 	scan := NewPersistedTranscriptScan(PersistedTranscriptScanRequest{})
 	applyPersistedTranscriptRecords(t, scan, records)
 
-	if got := scan.LastCommittedAssistantFinalAnswer(); got != "" {
-		t.Fatalf("LastCommittedAssistantFinalAnswer() = %q, want absence after blank final", got)
+	if got := scan.LastCommittedAssistantFinalAnswer(); got != nil {
+		t.Fatalf("LastCommittedAssistantFinalAnswer() = %v, want absence after blank final", got)
 	}
 }
 
