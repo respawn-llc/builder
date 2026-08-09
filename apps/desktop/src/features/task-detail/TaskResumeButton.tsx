@@ -8,7 +8,6 @@ import {
   resumeTaskInitiatingAction,
   startTaskInitiatingAction,
   TaskInitiatingActionDialogs,
-  TaskSetupRecoveryDialog,
   type TaskInitiatingAction,
   useTaskInitiatingActionController,
 } from "@/shared/execution-target";
@@ -94,20 +93,20 @@ export function TaskInitiatingActionProvider({
             run(result.action, result.selection);
           }
         }}
+        setupRecovery={
+          recovery === null
+            ? undefined
+            : {
+                onClose: () => {
+                  setRecovery(null);
+                },
+                onSubmit: (selection) => {
+                  run(resumeTaskInitiatingAction(taskID), selection);
+                },
+                recovery,
+              }
+        }
       />
-      {recovery === null ? null : (
-        <TaskSetupRecoveryDialog
-          onClose={() => {
-            setRecovery(null);
-          }}
-          onSubmit={(selection) => {
-            run(resumeTaskInitiatingAction(taskID), selection);
-          }}
-          open
-          recovery={recovery}
-          running={continuation.running}
-        />
-      )}
     </TaskInitiatingActionContext.Provider>
   );
 }

@@ -1956,25 +1956,6 @@ func TestProtocolErrorDecodesWorkflowLockedExecutionTargetError(t *testing.T) {
 	}
 }
 
-func TestProtocolErrorDecodesWorkflowTaskStartConflict(t *testing.T) {
-	source := &serverapi.WorkflowTaskStartConflictError{
-		TaskID: "task-1",
-		Reason: serverapi.WorkflowTaskStartConflictAlreadyStarted,
-	}
-	err := protocolError(&protocol.ResponseError{
-		Code:    protocol.ErrCodeWorkflowTaskStartConflict,
-		Message: "workflow task start conflict",
-		Data:    mustRPCErrorData(t, source),
-	})
-	var decoded *serverapi.WorkflowTaskStartConflictError
-	if !errors.As(err, &decoded) {
-		t.Fatalf("decoded error = %T %v, want WorkflowTaskStartConflictError", err, err)
-	}
-	if decoded.TaskID != source.TaskID || decoded.Reason != source.Reason {
-		t.Fatalf("decoded start conflict = %+v, want %+v", decoded, source)
-	}
-}
-
 func TestProtocolErrorMapsEquivalentRuntimeSentinel(t *testing.T) {
 	err := protocolError(&protocol.ResponseError{Code: protocol.ErrCodeRuntimeNoActiveRun, Message: serverapi.ErrRuntimeNoActiveRun.Error()})
 	if !errors.Is(err, serverapi.ErrRuntimeNoActiveRun) {

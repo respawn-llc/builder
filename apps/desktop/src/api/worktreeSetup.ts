@@ -64,10 +64,8 @@ const retainedPreviousWorktreeSchema: z.ZodType<RetainedPreviousWorktree> = z
   .strict();
 
 export type TaskSetupRecovery = Readonly<{
-  setupOperationID: SetupOperationID;
-  cause: "process_exit" | "timeout" | "target_preparation" | "operational";
-  diagnostic: string;
-  scriptPath: string | null;
+  setupOperationID: SetupOperationID; cause: "process_exit" | "timeout" | "target_preparation" | "operational";
+  diagnostic: string; scriptPath: string | null;
   executionTarget: WorkflowExecutionTargetSelection;
   retainedWorktree: Readonly<{ worktreeID: string; root: string }> | null;
   retainedPreviousWorktree: Readonly<{ worktreeID: string; root: string }> | null;
@@ -140,10 +138,8 @@ const failureKindSchema = z.enum([
 ]);
 export type WorktreeSetupFailureCause = Readonly<{ kind: WorktreeSetupFailureKind }>;
 export type WorktreeSetupFailure = Readonly<{
-  retryReadiness: "retry_ready" | "non_retryable";
-  cause: WorktreeSetupFailureCause;
-  diagnostic: string;
-  scriptPath: string | null;
+  retryReadiness: "retry_ready" | "non_retryable"; cause: WorktreeSetupFailureCause;
+  diagnostic: string; scriptPath: string | null;
   executionTarget: WorkflowExecutionTargetSelection | null;
   retainedWorktree: RegisteredWorktreeTopology | null;
   retainedPreviousWorktree: RetainedPreviousWorktree | null;
@@ -205,15 +201,11 @@ const worktreeSetupFailureWireSchema: z.ZodType<WorktreeSetupFailure> = z
   }));
 
 export class WorktreeSetupRetainedError extends RpcError {
-  readonly worktree: RegisteredWorktreeTopology;
-  readonly scriptPath: string;
-  readonly diagnostic: string;
+  readonly worktree: RegisteredWorktreeTopology; readonly scriptPath: string; readonly diagnostic: string;
   readonly retainedPreviousWorktree: RetainedPreviousWorktree | null;
 
   constructor(rpcError: RpcError, facts: Readonly<{
-    worktree: RegisteredWorktreeTopology;
-    scriptPath: string;
-    diagnostic: string;
+    worktree: RegisteredWorktreeTopology; scriptPath: string; diagnostic: string;
     retainedPreviousWorktree: RetainedPreviousWorktree | null;
   }>) {
     super(rpcError);
@@ -252,20 +244,14 @@ type SetupEvent<Phase extends WorktreeSetupPhase, Payload> = Readonly<
   { setupOperationID: SetupOperationID; phase: Phase } & Payload
 >;
 export type WorktreeSetupEvent =
-  | SetupEvent<
-      "started",
-      { started: Readonly<{ sourceWorkspaceRoot: string; worktreeRoot: string; scriptPath: string }> }
-    >
+  | SetupEvent<"started", { started: Readonly<{
+      sourceWorkspaceRoot: string; worktreeRoot: string; scriptPath: string;
+    }> }>
   | SetupEvent<"completed", { completed: Readonly<{ retainedPreviousWorktree: RetainedPreviousWorktree | null }> }>
-  | SetupEvent<
-      "not_required",
-      {
-        notRequired: Readonly<{
-          reason: "no_target_preparation" | "no_configured_script";
-          retainedPreviousWorktree: RetainedPreviousWorktree | null;
-        }>;
-      }
-    >
+  | SetupEvent<"not_required", { notRequired: Readonly<{
+      reason: "no_target_preparation" | "no_configured_script";
+      retainedPreviousWorktree: RetainedPreviousWorktree | null;
+    }> }>
   | SetupEvent<"failed", { failed: WorktreeSetupFailure }>;
 
 const setupEventWireSchema = z
@@ -336,10 +322,8 @@ const setupEventWireSchema = z
   });
 
 export type WorktreeSetupEventHandler = Readonly<{
-  onOpen?(): void;
-  onEvent(event: WorktreeSetupEvent): void;
-  onComplete(code: number, message: string): void;
-  onError(error: Error): void;
+  onOpen?(): void; onEvent(event: WorktreeSetupEvent): void;
+  onComplete(code: number, message: string): void; onError(error: Error): void;
 }>;
 export const worktreeSetupEventParamsSchema = z.object({ event: setupEventWireSchema }).strict();
 export function worktreeSetupRpcHandler(handler: WorktreeSetupEventHandler): RpcEventHandler {

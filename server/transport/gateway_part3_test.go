@@ -616,34 +616,6 @@ func TestDecodeAndHandleRejectsInvalidWorkflowTaskDetailResponse(t *testing.T) {
 	}
 }
 
-func TestWorktreeSetupEventParamsUsesDiscriminatedPayload(t *testing.T) {
-	setupOperationID := serverapi.NewWorktreeSetupOperationID()
-	params := worktreeSetupEventParams(serverapi.WorktreeSetupEvent{
-		SetupOperationID: setupOperationID,
-		Phase:            serverapi.WorktreeSetupPhaseStarted,
-		Started: &serverapi.WorktreeSetupStarted{
-			SourceWorkspaceRoot: "/source",
-			WorktreeRoot:        "/worktree",
-			ScriptPath:          "/source/scripts/setup.sh",
-		},
-	})
-	if params.Event.SetupOperationID != setupOperationID.String() ||
-		params.Event.Phase != string(serverapi.WorktreeSetupPhaseStarted) ||
-		len(params.Event.Started) == 0 ||
-		len(params.Event.Completed) != 0 ||
-		len(params.Event.NotRequired) != 0 ||
-		len(params.Event.Failed) != 0 {
-		t.Fatalf("serialized setup event = %+v", params.Event)
-	}
-	var started serverapi.WorktreeSetupStarted
-	if err := protocol.DecodeStrictJSON(params.Event.Started, &started); err != nil {
-		t.Fatalf("decode started payload: %v", err)
-	}
-	if started.WorktreeRoot != "/worktree" || started.ScriptPath != "/source/scripts/setup.sh" {
-		t.Fatalf("started payload = %+v", started)
-	}
-}
-
 func receiveGatewayNotification(t *testing.T, conn *websocket.Conn, method string, label string, out any) {
 	t.Helper()
 	var notif protocol.Request

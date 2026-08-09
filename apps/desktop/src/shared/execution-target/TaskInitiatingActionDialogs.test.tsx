@@ -1,11 +1,16 @@
-import { render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 
-import type { TaskStartResponse, WorkflowExecutionTargetSelection } from "@/api";
+import {
+  RpcError,
+  type TaskStartResponse,
+  type WorkflowExecutionTargetSelection,
+} from "@/api";
 import { TestAppProviders, createTestServices } from "@/test-support/app-services";
 import {
   startTaskInitiatingAction,
+  moveTaskInitiatingAction,
   TaskInitiatingActionDialogs,
   type TaskInitiatingAction,
   type TaskInitiatingActionDialogResult,
@@ -110,6 +115,66 @@ describe("TaskInitiatingActionDialogs", () => {
     expect(execute).toHaveBeenCalledOnce();
     expect(screen.getByRole("radiogroup")).toBeInTheDocument();
   });
+
+  it("recovers a fixed-policy Move without losing its input or accepting duplicate Retry", async () => {
+    const completion = deferred<TaskInitiatingActionResult>();
+    let calls = 0;
+    const execute = vi.fn(async (...args: [TaskInitiatingAction, WorkflowExecutionTargetSelection?]) => {
+      void args;
+      calls += 1;
+      if (calls < 3) throw retainedSetupError();
+      return completion.promise;
+    });
+    render(<TestAppProviders services={appServices}><MoveHarness execute={execute} /></TestAppProviders>);
+    const user = userEvent.setup();
+
+    await user.click(screen.getByTestId("initiate-move"));
+    expect(await screen.findByText("setup failed twice")).toBeInTheDocument();
+    expect(screen.getByText("/worktrees/task-1")).toBeInTheDocument();
+    await user.click(screen.getByText("Cancel"));
+    expect(screen.queryByTestId("setup-recovery-retry")).not.toBeInTheDocument();
+    await user.click(screen.getByTestId("initiate-move"));
+    const retry = await screen.findByTestId("setup-recovery-retry");
+    fireEvent.click(retry);
+    fireEvent.click(retry);
+    expect(execute).toHaveBeenCalledTimes(3);
+    expect(execute.mock.calls.every(([action, selection]) =>
+      action.kind === "move" && action.input.commentary === "keep this" && selection === undefined,
+    )).toBe(true);
+    act(() => { completion.resolve(appliedMove(execute.mock.calls[2]?.[0])); });
+    await waitFor(() => { expect(screen.queryByTestId("setup-recovery-retry")).not.toBeInTheDocument(); });
+  });
+
+  it("replaces a post-selection Move target after actual setup failure", async () => {
+    let calls = 0;
+    const execute = vi.fn(async (
+      action: TaskInitiatingAction,
+      _selection?: WorkflowExecutionTargetSelection,
+    ): Promise<TaskInitiatingActionResult> => {
+      void _selection;
+      calls += 1;
+      if (calls === 1) return { kind: "move", action: requireMove(action), response: {
+        outcome: "selection_required", selectionRequired: { reason: "policy_requires_selection" },
+      } };
+      if (calls === 2) throw retainedSetupError();
+      return appliedMove(action);
+    });
+    render(<TestAppProviders services={appServices}><MoveHarness execute={execute} /></TestAppProviders>);
+    const user = userEvent.setup();
+
+    await user.click(screen.getByTestId("initiate-move"));
+    await user.click(await screen.findByTestId("execution-target-submit"));
+    await user.click(await screen.findByTestId("setup-recovery-choose"));
+    await user.click(screen.getByRole("button", { name: "Execution target" }));
+    await user.click(screen.getByRole("menuitemradio", { name: "Current source HEAD" }));
+    await user.click(screen.getByTestId("setup-recovery-target-submit"));
+
+    await waitFor(() => { expect(execute).toHaveBeenCalledTimes(3); });
+    expect(execute.mock.calls[1]?.[1]).toEqual({ mode: "default_branch", customRef: null });
+    expect(execute.mock.calls[2]?.[1]).toEqual({ mode: "head", customRef: null });
+    expect(execute.mock.calls[2]?.[0]).toEqual(execute.mock.calls[0]?.[0]);
+    expect(screen.queryByTestId("setup-recovery-retry")).not.toBeInTheDocument();
+  });
 });
 
 function Harness({
@@ -142,4 +207,47 @@ function Harness({
       <TaskInitiatingActionDialogs continuation={controller} onResult={onResult} />
     </>
   );
+}
+
+function MoveHarness({ execute }: Readonly<{
+  execute(action: TaskInitiatingAction, selection?: WorkflowExecutionTargetSelection): Promise<TaskInitiatingActionResult>;
+}>) {
+  const controller = useTaskInitiatingActionController({ execute, onApplied: vi.fn(), onAppliedError: vi.fn() });
+  const action = moveTaskInitiatingAction({
+    taskID: "task-1", targetNodeID: "node-2", commentary: "keep this",
+    transitionKey: "next", values: { plan: { summary: "done" } }, proceedDespiteDependencies: true,
+  });
+  return <>
+    <button data-testid="initiate-move" onClick={() => void controller.run(action)} type="button" />
+    <TaskInitiatingActionDialogs continuation={controller} onResult={(result) => {
+      if (result.kind === "continue") void controller.run(result.action, result.selection);
+    }} />
+  </>;
+}
+
+function retainedSetupError() {
+  const root = "/worktrees/task-1";
+  return new RpcError({ code: -32039, message: "setup failed", method: "workflow.task.move", data: {
+    type: "worktree_setup_retained", script_path: "/repo/setup.sh", diagnostic: "setup failed twice",
+    retained_previous_worktree: null, worktree: { variant: "registered", registered: {
+      git: { canonical_root: root, head_object: "abc", branch_ref: null, branch_name: null, detached: false, bare: false, locked_reason: null, prunable_reason: null, is_main: false, path_available: true },
+      kent: { worktree_id: "worktree-1", canonical_root: root, display_name: "KENT-453", managed: true, created_branch: true, origin_session_id: null },
+    } },
+  } });
+}
+
+function requireMove(action: TaskInitiatingAction): Extract<TaskInitiatingAction, { kind: "move" }> {
+  if (action.kind !== "move") throw new Error("Expected Move action.");
+  return action;
+}
+
+function appliedMove(action: TaskInitiatingAction | undefined): TaskInitiatingActionResult {
+  return { kind: "move", action: requireMove(action ?? startTaskInitiatingAction("invalid")), response: {
+    outcome: "applied", applied: { currentNodes: [] },
+  } };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  return { promise: new Promise<T>((done) => { resolve = done; }), resolve };
 }

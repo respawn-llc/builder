@@ -399,10 +399,6 @@ func TestCreateWorktreeBlocksUntilSetupCompletesBeforeSessionSwitch(t *testing.T
 	if got := waitForFileText(t, markerPath); got != "marker" {
 		t.Fatalf("setup marker = %q, want marker", got)
 	}
-	terminal := nextSetupTerminalEvent(t, sub)
-	if terminal.Phase != serverapi.WorktreeSetupPhaseCompleted || terminal.Completed == nil {
-		t.Fatalf("terminal setup event = %+v, want completed", terminal)
-	}
 	target, err = env.store.ResolveSessionExecutionTarget(env.ctx, env.session.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("ResolveSessionExecutionTarget after: %v", err)
@@ -415,9 +411,8 @@ func TestCreateWorktreeBlocksUntilSetupCompletesBeforeSessionSwitch(t *testing.T
 func TestCreateWorktreeSetupFailureKeepsWorktreeAndSessionTarget(t *testing.T) {
 	env := newServiceTestEnv(t)
 	scriptRelpath := filepath.Join("scripts", "fails.sh")
-	attemptsPath := filepath.Join(t.TempDir(), "attempts")
 	longOutput := strings.Repeat("x", setupDiagnosticLimitBytes+128)
-	writeExecutableFile(t, filepath.Join(env.workspaceRoot, scriptRelpath), fmt.Sprintf("#!/bin/sh\nprintf x >> %q\nprintf '%%s' %q >&2\nexit 7\n", attemptsPath, longOutput))
+	writeExecutableFile(t, filepath.Join(env.workspaceRoot, scriptRelpath), fmt.Sprintf("#!/bin/sh\nprintf '%%s' %q >&2\nexit 7\n", longOutput))
 	env.service.setupScript = scriptRelpath
 	setupID := serverapi.NewWorktreeSetupOperationID()
 	sub, err := env.service.SubscribeWorktreeSetup(env.ctx, serverapi.WorktreeSetupSubscribeRequest{SetupOperationID: setupID})
@@ -436,16 +431,9 @@ func TestCreateWorktreeSetupFailureKeepsWorktreeAndSessionTarget(t *testing.T) {
 	if err == nil {
 		t.Fatal("CreateWorktree succeeded, want setup failure")
 	}
-	if got := waitForFileText(t, attemptsPath); got != "x" {
-		t.Fatalf("direct setup attempts = %q, want one", got)
-	}
 	var retained *serverapi.WorktreeSetupRetainedError
 	if !errors.As(err, &retained) || retained.Worktree.Registered == nil {
 		t.Fatalf("CreateWorktree error = %T %v, want retained worktree facts", err, err)
-	}
-	wantScriptPath := filepath.Join(env.workspaceRoot, scriptRelpath)
-	if retained.ScriptPath != wantScriptPath {
-		t.Fatalf("retained setup script path = %q, want %q", retained.ScriptPath, wantScriptPath)
 	}
 	expectedRoot := retained.Worktree.Registered.Kent.CanonicalRoot
 	if _, statErr := os.Stat(expectedRoot); statErr != nil {

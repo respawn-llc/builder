@@ -27,12 +27,14 @@ export function TaskSetupRecoveryDialog({
   onSubmit,
   open,
   recovery,
+  retrySelection,
   running,
 }: Readonly<{
   onClose(): void;
-  onSubmit(selection: WorkflowExecutionTargetSelection): void;
+  onSubmit(selection?: WorkflowExecutionTargetSelection): void;
   open: boolean;
-  recovery: TaskSetupRecovery;
+  recovery: Pick<TaskSetupRecovery, "diagnostic" | "scriptPath" | "retainedWorktree" | "retainedPreviousWorktree">;
+  retrySelection?: WorkflowExecutionTargetSelection;
   running: boolean;
 }>) {
   const { t } = useTranslation();
@@ -53,7 +55,7 @@ export function TaskSetupRecoveryDialog({
         <p className="m-0 whitespace-pre-wrap font-mono text-sm text-[var(--color-error)]">
           {recovery.diagnostic}
         </p>
-        {[recovery.scriptPath, recovery.retainedWorktree?.root].map((value) =>
+        {[recovery.scriptPath, recovery.retainedWorktree?.root, recovery.retainedPreviousWorktree?.root].map((value) =>
           value == null ? null : <p className="m-0 break-all font-mono text-sm" key={value}>{value}</p>,
         )}
         {mode === null ? (
@@ -65,7 +67,7 @@ export function TaskSetupRecoveryDialog({
               {t("executionTargetContinuation.title")}
             </Button>
             <Button data-testid="setup-recovery-retry" disabled={running} onClick={() => {
-              onSubmit(recovery.executionTarget);
+              onSubmit(retrySelection);
             }} variant="primary">
               {t("board.resume")}
             </Button>
@@ -112,13 +114,43 @@ export type TaskInitiatingActionDialogResult =
 export function TaskInitiatingActionDialogs({
   continuation,
   onResult,
+  setupRecovery,
 }: Readonly<{
   continuation: TaskInitiatingActionController;
   onResult(result: TaskInitiatingActionDialogResult): void;
+  setupRecovery?: Readonly<{
+    onClose(): void;
+    onSubmit(selection: WorkflowExecutionTargetSelection): void;
+    recovery: TaskSetupRecovery;
+  }> | undefined;
 }>) {
+  if (setupRecovery !== undefined) {
+    return (
+      <TaskSetupRecoveryDialog
+        {...setupRecovery}
+        open
+        retrySelection={setupRecovery.recovery.executionTarget}
+        running={continuation.running}
+      />
+    );
+  }
   const pending = continuation.pending;
   if (pending?.kind === "dependency_confirmation") {
     return <DependencyConfirmationDialog continuation={continuation} onResult={onResult} pending={pending} />;
+  }
+  if (pending?.kind === "setup_recovery") {
+    const { failure } = pending;
+    return <TaskSetupRecoveryDialog onClose={continuation.close} onSubmit={(selection) => {
+      onResult({ kind: "continue", action: pending.action, ...(selection === undefined ? {} : { selection }) });
+    }} open recovery={{
+      diagnostic: failure.diagnostic, scriptPath: failure.scriptPath,
+      retainedWorktree: { root: failure.worktree.registered.kent.canonicalRoot, worktreeID: failure.worktree.registered.kent.worktreeID },
+      retainedPreviousWorktree: failure.retainedPreviousWorktree === null ? null : {
+        root: failure.retainedPreviousWorktree.worktree.registered.kent.canonicalRoot,
+        worktreeID: failure.retainedPreviousWorktree.worktree.registered.kent.worktreeID,
+      },
+    }} {...(pending.retrySelection === undefined ? {} : { retrySelection: pending.retrySelection })}
+      running={continuation.running} />;
   }
   return (
     <ExecutionTargetDialog

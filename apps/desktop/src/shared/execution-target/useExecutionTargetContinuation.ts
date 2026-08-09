@@ -1,10 +1,12 @@
 import { useCallback, useRef, useState } from "react";
 
 import type {
+  WorktreeSetupRetainedError,
   WorkflowExecutionTargetSelection,
   WorkflowExecutionTargetSelectionMode,
   WorkflowExecutionTargetSelectionRequirement,
 } from "@/api";
+import { decodeWorktreeSetupRetainedError } from "@/api";
 import {
   initialExecutionTargetSelectionDraft,
   type ExecutionTargetSelectionDraft,
@@ -23,6 +25,10 @@ export type PendingTaskInitiatingAction =
       action: TaskInitiatingAction;
       requirement: WorkflowExecutionTargetSelectionRequirement;
       selection: ExecutionTargetSelectionDraft;
+    }>
+  | Readonly<{
+      kind: "setup_recovery"; action: Extract<TaskInitiatingAction, { kind: "move" }>;
+      failure: WorktreeSetupRetainedError; retrySelection?: WorkflowExecutionTargetSelection;
     }>;
 
 export type TaskInitiatingActionController = Readonly<{
@@ -87,8 +93,15 @@ export function useTaskInitiatingActionController({
       }
       setRunning(true);
       const operation = (async () => {
-        const result = await execute(action, selection);
-        await handleResult(result);
+        try {
+          await handleResult(await execute(action, selection));
+        } catch (error) {
+          if (action.kind !== "move") throw error;
+          const failure = decodeWorktreeSetupRetainedError(error);
+          if (failure === null) throw error;
+          setPending({ kind: "setup_recovery", action, failure,
+            ...(selection === undefined ? {} : { retrySelection: selection }) });
+        }
       })();
       initialRunRef.current = operation;
       const settle = () => {

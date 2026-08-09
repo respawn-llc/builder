@@ -28,22 +28,15 @@ function parseSetupMutationParams(value: unknown): Readonly<{ setupOperationID: 
 describe("worktree setup API", () => {
   it("decodes canonical Task setup recovery without fabricating topology", () => {
     const recovery = parseTaskSetupRecoveryDetail(JSON.stringify({
-      code: "workflow_task_setup_failed",
-      fields: {},
       setup_recovery: {
         setup_operation_id: "55555555-5555-4555-8555-555555555555",
-        cause: "target_preparation",
-        diagnostic: "target failed",
-        script_path: null,
-        setup_requirement: "required",
+        cause: "target_preparation", diagnostic: "target failed", script_path: null,
+        setup_requirement: "required", retained_worktree: null, retained_previous_worktree: null,
         execution_target: { mode: "head" },
-        retained_worktree: null,
-        retained_previous_worktree: null,
       },
     }));
     expect(recovery).toMatchObject({
-      cause: "target_preparation",
-      diagnostic: "target failed",
+      cause: "target_preparation", diagnostic: "target failed",
       executionTarget: { mode: "head", customRef: null },
       retainedWorktree: null,
     });
