@@ -44,11 +44,7 @@ export function createSidebarStack(policy: SidebarDestinationPolicy, publish: (v
       emit(view.entries, view.phase, view.transitionDirection);
     }
   };
-  const createEntry = (
-    destination: SidebarDestination,
-    retainedState?: unknown,
-    rootBack?: () => void,
-  ): SidebarStackEntry => {
+  const createEntry = (destination: SidebarDestination, retainedState?: unknown, rootBack?: () => void): SidebarStackEntry => {
     const capability: Capability = { active: true, availability: null, capture: null, rootBack };
     const Boundary = ({ children }: Readonly<{ children: ReactNode }>) => createElement(Fragment, null, children);
     const navigator: SidebarPageNavigator = {

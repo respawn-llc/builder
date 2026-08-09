@@ -43,6 +43,7 @@ function List({
   items = ["a", "b", "c"],
   ready = true,
   request,
+  onScrollElementChange,
 }: Readonly<{
   hasNextPage?: boolean;
   onLoadMore?: () => void;
@@ -58,6 +59,7 @@ function List({
   items?: readonly string[];
   ready?: boolean;
   request?: VirtualizedPixelOffsetRequest | undefined;
+  onScrollElementChange?: (element: HTMLDivElement | null) => void;
 }>) {
   return (
     <VirtualizedInfiniteList
@@ -72,6 +74,7 @@ function List({
       nextBoundary={nextBoundary}
       onLoadMore={onLoadMore}
       onLoadPrevious={onLoadPrevious}
+      onScrollElementChange={onScrollElementChange}
       previousBoundary={previousBoundary}
       previousLoadItemKey={previousLoadItemKey}
       pixelOffsetRequest={ready ? request : undefined}
@@ -116,6 +119,24 @@ describe("VirtualizedInfiniteList pixel restoration", () => {
     render(<LayoutOwner />);
 
     expect(events).toEqual(["restore", "capture"]);
+  });
+
+  it("writes the restored pixel offset to the scroll element", () => {
+    const scrollElement = { current: null as HTMLDivElement | null };
+    virtualizer.scrollToOffset.mockImplementationOnce(() => {
+      expect(scrollElement.current?.scrollTop).toBe(240);
+    });
+
+    render(
+      <List
+        onScrollElementChange={(element) => {
+          scrollElement.current = element;
+        }}
+        request={createVirtualizedPixelOffsetRequest("element-offset", 240)}
+      />,
+    );
+
+    expect(scrollElement.current?.scrollTop).toBe(240);
   });
 
   it("accepts absence without issuing a restoration request", () => {
