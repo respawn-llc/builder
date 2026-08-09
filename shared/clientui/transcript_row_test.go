@@ -129,6 +129,24 @@ func TestTranscriptNoticeRowCarriesTypedCompactionFacts(t *testing.T) {
 	}
 }
 
+func TestTranscriptNoticeRowCarriesTypedToolOutputRepairFacts(t *testing.T) {
+	notice := TranscriptNoticeRow{
+		Reason:   TranscriptNoticeToolOutputRepair,
+		Severity: TranscriptNoticeWarning,
+		ToolOutputRepair: &transcript.ToolOutputRepairNotice{
+			Kind:  transcript.ToolOutputRepairFreshResource,
+			Count: 2,
+		},
+	}
+	if err := notice.Validate(); err != nil {
+		t.Fatalf("validate typed tool-output repair notice: %v", err)
+	}
+	notice.ToolOutputRepair.Count = 0
+	if err := notice.Validate(); err == nil {
+		t.Fatal("accepted zero repaired-call count")
+	}
+}
+
 func TestTranscriptCacheWarningAcceptsAbsentLossAndRejectsPresentZero(t *testing.T) {
 	warning := TranscriptCacheWarning{
 		Scope:      "conversation",
@@ -158,6 +176,10 @@ func TestTranscriptNoticeRowRejectsReasonPayloadMismatch(t *testing.T) {
 		{
 			Reason:   TranscriptNoticeCompaction,
 			Severity: TranscriptNoticeInfo,
+		},
+		{
+			Reason:   TranscriptNoticeToolOutputRepair,
+			Severity: TranscriptNoticeWarning,
 		},
 		{
 			Reason:   TranscriptNoticeLegacyUntypedNotice,

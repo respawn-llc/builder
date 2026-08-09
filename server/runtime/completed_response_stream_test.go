@@ -217,6 +217,60 @@ func TestCompletedResponseWorkflowPreflightAbortsBeforeContinuation(t *testing.T
 	}
 }
 
+func TestCompletedResponsePersistsOnlyPlannedAcceptedCalls(t *testing.T) {
+	t.Parallel()
+	const phantomCallID = "assistant-only-phantom"
+	store := mustCreateTestSession(t)
+	client := &fakeClient{responses: []llm.Response{
+		{
+			Assistant: llm.Message{
+				Role:    llm.RoleAssistant,
+				Content: textutil.Value("working"),
+				Phase:   textutil.Value(llm.MessagePhaseCommentary),
+				ToolCalls: []llm.ToolCall{{
+					ID:    phantomCallID,
+					Name:  string(toolspec.ToolExecCommand),
+					Input: json.RawMessage(`{"cmd":"true"}`),
+				}},
+			},
+			Usage: llm.Usage{WindowTokens: 200000},
+		},
+		{
+			Assistant: llm.Message{
+				Role:    llm.RoleAssistant,
+				Content: textutil.Value("done"),
+				Phase:   textutil.Value(llm.MessagePhaseFinal),
+			},
+			Usage: llm.Usage{WindowTokens: 200000},
+		},
+	}}
+	engine := mustNewExecTestEngine(t, store, client, Config{Model: "gpt-5"})
+
+	if _, err := engine.SubmitUserMessage(context.Background(), "turn"); err != nil {
+		t.Fatalf("submit user turn: %v", err)
+	}
+
+	window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(32)
+	if err != nil {
+		t.Fatalf("read persisted response records: %v", err)
+	}
+	for _, record := range window.Records {
+		messageRecord, ok := mustSessionEventPayload(record).(session.MessageRecord)
+		if !ok {
+			continue
+		}
+		message, err := llmMessageFromSessionRecord(messageRecord)
+		if err != nil {
+			t.Fatalf("restore persisted response message: %v", err)
+		}
+		for _, call := range message.ToolCalls {
+			if call.ID == phantomCallID {
+				t.Fatalf("unplanned assistant-only call became durable: %+v", message)
+			}
+		}
+	}
+}
+
 func TestCompletedResponseReasoningOnlyAbortsBeforeContinuation(t *testing.T) {
 	t.Parallel()
 	reasoning := scriptedllm.Step{

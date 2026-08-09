@@ -20,8 +20,6 @@ var ErrEngineClosed = errors.New("runtime engine is closed")
 
 var ErrExclusiveStepReservationPending = errors.New("manual compaction is already pending")
 
-// errPendingModelRecoveryClear wraps failures to clear the recovery marker at
-// step end after terminal transcript state has already been published.
 var errPendingModelRecoveryClear = errors.New("clear pending model recovery")
 
 type defaultExclusiveStepLifecycle struct {
@@ -176,6 +174,9 @@ func (s *defaultExclusiveStepLifecycle) run(ctx context.Context, options exclusi
 
 func (s *defaultExclusiveStepLifecycle) finishStep(stepID string, options exclusiveStepOptions, err error) error {
 	s.closeActiveStepQueue(stepID)
+	if fatal, ok := resultGroupFatalFromError(err); ok {
+		return s.finishRuntimeAbort(stepID, options, fatal)
+	}
 	if clearReasoningErr := s.engine.steer(stepID, steerClearReasoningStateIntent()); clearReasoningErr != nil {
 		err = errors.Join(err, fmt.Errorf("clear reasoning state at agent step termination: %w", clearReasoningErr))
 	}
@@ -193,35 +194,26 @@ func (s *defaultExclusiveStepLifecycle) finishStep(stepID string, options exclus
 			err = errors.Join(err, fmt.Errorf("reset failed-step streaming state: %w", cleanupErr))
 		}
 	}
-	s.beginTerminalPublication()
-	if options.EmitRunState {
-		state := &RunState{Lifecycle: IdleRunLifecycle()}
-		if snapshot != nil {
-			mode := runModeFromActiveKind(snapshot.ActiveKind)
-			state.Lifecycle = FinishedRunLifecycle(mode)
-			state.RunID = snapshot.RunID
-			state.ActiveKind = snapshot.ActiveKind
-			state.Status = snapshot.Status
-			state.StartedAt = snapshot.StartedAt
-			state.FinishedAt = snapshot.FinishedAt
-		}
-		_ = s.engine.steer(stepID, steerEventIntent(Event{Kind: EventRunStateChanged, StepID: stepID, RunState: state}))
-	}
-	if snapshot != nil && s.engine.cfg.StepLifecycle != nil {
-		if publishErr := s.engine.cfg.StepLifecycle.StepEnded(context.Background(), stepLifecycleSnapshot(s.engine.SessionID(), StepLifecycleTransitionEnded, *snapshot)); publishErr != nil {
-			err = errors.Join(err, fmt.Errorf("publish step ended: %w", publishErr))
-		}
-	}
-	if clearErr := s.engine.store.ClearPendingModelRecoveryForStep(stepID); clearErr != nil {
-		wrapped := fmt.Errorf("%w: %w", errPendingModelRecoveryClear, clearErr)
-		_ = s.engine.steer(stepID, steerEventIntent(Event{Kind: EventInFlightClearFailed, StepID: stepID, Error: wrapped.Error()}))
-		err = errors.Join(err, wrapped)
-	}
-	var publishLiveRunFinished func()
-	if options.EmitRunState {
-		publishLiveRunFinished = s.engine.finishLiveRunStep(snapshot, status, err)
-	}
-	s.finishTerminalPublication()
+	err, _, publishLiveRunFinished := s.publishTerminalStep(
+		stepID,
+		options,
+		snapshot,
+		status,
+		err,
+		func() error {
+			clearErr := s.engine.store.ClearPendingModelRecoveryForStep(stepID)
+			if clearErr == nil {
+				return nil
+			}
+			wrapped := fmt.Errorf("%w: %w", errPendingModelRecoveryClear, clearErr)
+			_ = s.engine.steer(stepID, steerEventIntent(Event{
+				Kind:   EventInFlightClearFailed,
+				StepID: stepID,
+				Error:  wrapped.Error(),
+			}))
+			return wrapped
+		},
+	)
 	if !errors.Is(err, errPendingModelRecoveryClear) {
 		if status == RunStatusCompleted && snapshot != nil && snapshot.ActiveKind == ActiveKindUserTurn {
 			s.engine.resumeSuspendedGoalAfterSuccessfulUserTurn()
@@ -234,6 +226,87 @@ func (s *defaultExclusiveStepLifecycle) finishStep(stepID string, options exclus
 		publishLiveRunFinished()
 	}
 	return err
+}
+
+func (s *defaultExclusiveStepLifecycle) finishRuntimeAbort(
+	stepID string,
+	options exclusiveStepOptions,
+	fatal *resultGroupFatal,
+) error {
+	liveErr := error(fatal)
+	var ancillaryErr error
+	if resetErr := s.engine.resetReasoningAndClearStreamingState(stepID); resetErr != nil {
+		ancillaryErr = fmt.Errorf("reset failed-step streaming state: %w", resetErr)
+		liveErr = errors.Join(liveErr, ancillaryErr)
+	}
+	finishedAt := time.Now().UTC()
+	status := RunStatusFailed
+	snapshot := s.snapshotWithFinishedAt(finishedAt, status)
+	_, publicationErr, publishLiveRunFinished := s.publishTerminalStep(
+		stepID,
+		options,
+		snapshot,
+		status,
+		liveErr,
+		nil,
+	)
+	if publishLiveRunFinished != nil {
+		publishLiveRunFinished()
+	}
+	s.engine.surfaceRunError(errors.Join(ancillaryErr, publicationErr))
+	s.engine.SetStreamingError(runtimeAbortFeedbackMessage(fatal))
+	s.engine.closeAdmissionAfterRuntimeAbort()
+	return &resultGroupRuntimeAbort{
+		fatal:     fatal,
+		ancillary: errors.Join(ancillaryErr, publicationErr),
+	}
+}
+
+func (s *defaultExclusiveStepLifecycle) publishTerminalStep(
+	stepID string,
+	options exclusiveStepOptions,
+	snapshot *RunSnapshot,
+	status RunStatus,
+	err error,
+	beforeLiveRun func() error,
+) (error, error, func()) {
+	s.beginTerminalPublication()
+	if options.EmitRunState {
+		state := &RunState{Lifecycle: IdleRunLifecycle()}
+		if snapshot != nil {
+			mode := runModeFromActiveKind(snapshot.ActiveKind)
+			state.Lifecycle = FinishedRunLifecycle(mode)
+			state.RunID = snapshot.RunID
+			state.ActiveKind = snapshot.ActiveKind
+			state.Status = snapshot.Status
+			state.StartedAt = snapshot.StartedAt
+			state.FinishedAt = snapshot.FinishedAt
+		}
+		_ = s.engine.steer(stepID, steerEventIntent(Event{
+			Kind:     EventRunStateChanged,
+			StepID:   stepID,
+			RunState: state,
+		}))
+	}
+	var publicationErr error
+	if snapshot != nil && s.engine.cfg.StepLifecycle != nil {
+		if publishErr := s.engine.cfg.StepLifecycle.StepEnded(
+			context.Background(),
+			stepLifecycleSnapshot(s.engine.SessionID(), StepLifecycleTransitionEnded, *snapshot),
+		); publishErr != nil {
+			publicationErr = fmt.Errorf("publish step ended: %w", publishErr)
+			err = errors.Join(err, publicationErr)
+		}
+	}
+	if beforeLiveRun != nil {
+		err = errors.Join(err, beforeLiveRun())
+	}
+	var publishLiveRunFinished func()
+	if options.EmitRunState {
+		publishLiveRunFinished = s.engine.finishLiveRunStep(snapshot, status, err)
+	}
+	s.finishTerminalPublication()
+	return err, publicationErr, publishLiveRunFinished
 }
 
 func (s *defaultExclusiveStepLifecycle) Interrupt() error {

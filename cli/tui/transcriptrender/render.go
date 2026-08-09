@@ -708,6 +708,9 @@ func noticeRoleAndText(row *clientui.TranscriptNoticeRow, visibility clientui.En
 		}
 		return noticeStyleRoleForMode(row, mode), text
 	}
+	if row.Reason == clientui.TranscriptNoticeToolOutputRepair && row.ToolOutputRepair != nil {
+		return StyleRoleWarning, toolOutputRepairNoticeText(row.ToolOutputRepair)
+	}
 	if text, ok := worktreeNoticeText(row, mode); ok {
 		return noticeStyleRole(row), text
 	}
@@ -725,6 +728,21 @@ func noticeRoleAndText(row *clientui.TranscriptNoticeRow, visibility clientui.En
 		text = firstNonEmpty(row.Diagnostic.Detail, string(row.Diagnostic.Code), text)
 	}
 	return noticeStyleRoleForMode(row, mode), text
+}
+
+func toolOutputRepairNoticeText(repair *transcript.ToolOutputRepairNotice) string {
+	callNoun := "tool calls"
+	if repair.Count == 1 {
+		callNoun = "tool call"
+	}
+	switch repair.Kind {
+	case transcript.ToolOutputRepairFreshResource:
+		return fmt.Sprintf("Closed %d %s with no committed output while restoring the session", repair.Count, callNoun)
+	case transcript.ToolOutputRepairLiveProviderRejection:
+		return fmt.Sprintf("Closed %d interrupted %s with a synthetic result to repair the transcript after a provider error", repair.Count, callNoun)
+	default:
+		panic(fmt.Sprintf("unsupported tool-output repair kind %q", repair.Kind))
+	}
 }
 
 func compactionNoticeText(count *int) string {

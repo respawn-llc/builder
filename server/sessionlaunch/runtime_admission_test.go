@@ -188,7 +188,7 @@ func TestServiceOpenExistingPlanningOwnsRuntimeAdmission(t *testing.T) {
 		_, receipt, appendErr := eventLog.AppendRecord(nil, session.LocalEntryRecord{
 			Visibility: session.EntryVisibilityHidden,
 			Role:       "runtime",
-			Text:       eventText,
+			Text:       &eventText,
 		})
 		if appendErr != nil {
 			return appendErr
@@ -227,7 +227,8 @@ func TestServiceOpenExistingPlanningOwnsRuntimeAdmission(t *testing.T) {
 			t.Fatalf("read reopened event payload: %v", payloadErr)
 		}
 		entry, ok := payload.(session.LocalEntryRecord)
-		if ok && entry.Role == "runtime" && entry.Text == eventText {
+		if ok && entry.Role == "runtime" &&
+			entry.Text != nil && *entry.Text == eventText {
 			foundRuntimeEvent = true
 		}
 	}

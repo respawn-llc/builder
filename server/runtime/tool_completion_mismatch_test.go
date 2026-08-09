@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -144,6 +145,56 @@ func TestToolCompletionDeletionMismatchAppliesCommittedFallbackAfterObserverErro
 	}
 }
 
+type mismatchedDeletionTool struct{}
+
+func (mismatchedDeletionTool) Call(_ context.Context, call tools.Call) (tools.Result, error) {
+	return mismatchedDeletionResult(call.ID), nil
+}
+
+func TestExecuteToolCallsCommitsCompletionDiagnosticInResultGroup(t *testing.T) {
+	observer := &toolDurabilityObservationRecorder{}
+	store := mustCreateTestSessionAt(
+		t,
+		t.TempDir(),
+		session.WithDurabilityObserver(observer),
+	)
+	engine := mustNewTestEngine(
+		t,
+		store,
+		&fakeClient{},
+		tools.NewRegistry(tools.HandlerRegistration{
+			ID:      toolspec.ToolPatch,
+			Handler: mismatchedDeletionTool{},
+		}),
+		Config{Model: "gpt-5"},
+	)
+	call := llm.ToolCall{
+		ID:          "deletion-call",
+		Name:        string(toolspec.ToolPatch),
+		Custom:      true,
+		CustomInput: textutil.Value("*** Begin Patch\n*** Delete File: target.txt\n*** End Patch\n"),
+	}
+
+	results, err := engine.executeToolCalls(t.Context(), "step-delete", []llm.ToolCall{call})
+	if err != nil {
+		t.Fatalf("execute mismatched deletion tool: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("mismatched deletion results = %+v, want one", results)
+	}
+	assertDeletionMismatchFallback(t, engine, store, results[0])
+	appends, syncs := observer.snapshot()
+	if len(appends) != 1 ||
+		appends[0].RecordCount != 3 ||
+		len(syncs) != 1 {
+		t.Fatalf(
+			"diagnostic group durability = appends:%+v syncs:%+v, want one three-record append and sync",
+			appends,
+			syncs,
+		)
+	}
+}
+
 func mismatchedDeletionCompletion(t *testing.T, engine *Engine) tools.Result {
 	t.Helper()
 	call := llm.ToolCall{
@@ -170,10 +221,14 @@ func mismatchedDeletionCompletion(t *testing.T, engine *Engine) tools.Result {
 	if err := engine.transcriptRuntimeState().RecordLiveToolStart("step-delete", normalized); err != nil {
 		t.Fatalf("record live deletion call: %v", err)
 	}
+	return mismatchedDeletionResult(call.ID)
+}
+
+func mismatchedDeletionResult(callID string) tools.Result {
 	received := patchformat.WholeFileDeletionOperationID{HunkOrdinal: 9}
 	group := patchformat.WholeFileDeletionGroupID{FirstOperation: received}
 	return tools.Result{
-		CallID: call.ID,
+		CallID: callID,
 		Name:   toolspec.ToolPatch,
 		Output: json.RawMessage(`{"ok":true}`),
 		PresentationDelta: &transcript.ToolResultPresentationDelta{

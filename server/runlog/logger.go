@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"core/server/runtime"
+	"core/server/session"
 	"core/shared/transcriptdiag"
 )
 
@@ -33,6 +34,93 @@ type RunLoggerDiagnostic struct {
 	Kind    string
 	Message string
 	Err     error
+}
+
+type DurabilityObserver struct {
+	mu      sync.Mutex
+	logger  *RunLogger
+	pending []string
+}
+
+func NewDurabilityObserver() *DurabilityObserver {
+	return &DurabilityObserver{}
+}
+
+func (o *DurabilityObserver) Attach(logger *RunLogger) {
+	if o == nil {
+		return
+	}
+	o.mu.Lock()
+	o.logger = logger
+	pending := append([]string(nil), o.pending...)
+	o.pending = nil
+	o.mu.Unlock()
+	for _, line := range pending {
+		logger.Logf("%s", line)
+	}
+}
+
+func (o *DurabilityObserver) ObserveEventLogAppend(observation session.EventLogAppendObservation) {
+	if o == nil {
+		return
+	}
+	line := fmt.Sprintf(
+		"durability.event_log.append records=%d latency=%s succeeded=%t",
+		observation.RecordCount,
+		observation.Latency,
+		observation.Succeeded,
+	)
+	o.mu.Lock()
+	logger := o.recordLineLocked(line)
+	o.mu.Unlock()
+	if logger != nil {
+		logger.Logf("%s", line)
+	}
+}
+
+func (o *DurabilityObserver) ObserveEventLogSync(observation session.EventLogSyncObservation) {
+	if o == nil {
+		return
+	}
+	line := fmt.Sprintf(
+		"durability.event_log.sync latency=%s succeeded=%t",
+		observation.Latency,
+		observation.Succeeded,
+	)
+	o.mu.Lock()
+	logger := o.recordLineLocked(line)
+	o.mu.Unlock()
+	if logger != nil {
+		logger.Logf("%s", line)
+	}
+}
+
+func (o *DurabilityObserver) ObserveResultGroupFlush(observation runtime.ResultGroupFlushObservation) {
+	if o == nil {
+		return
+	}
+	line := fmt.Sprintf(
+		"durability.result_group.flush reason=%s results=%d records=%d latency=%s succeeded=%t",
+		observation.Reason,
+		observation.ResultCount,
+		observation.RecordCount,
+		observation.Latency,
+		observation.Succeeded,
+	)
+	o.mu.Lock()
+	logger := o.recordLineLocked(line)
+	o.mu.Unlock()
+	if logger != nil {
+		logger.Logf("%s", line)
+	}
+}
+
+func (o *DurabilityObserver) recordLineLocked(line string) *RunLogger {
+	if o.logger == nil {
+		o.pending = append(o.pending, line)
+		return nil
+	}
+	return o.logger
 }
 
 func NewRunLogger(sessionDir string, onDiagnostic func(RunLoggerDiagnostic)) (*RunLogger, error) {

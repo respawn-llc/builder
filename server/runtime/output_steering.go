@@ -43,6 +43,10 @@ type steeringItem struct {
 	reviewerError               *steeringReviewerError
 	historyReplace              *steeringHistoryReplacement
 	toolCompletion              *tools.Result
+	resultGroupReport           *steeringResultGroupReport
+	resultGroupFlush            *steeringResultGroupFlush
+	resultGroupClose            *steeringResultGroupClose
+	missingToolOutputRepair     *steeringMissingToolOutputRepair
 	queuedFlush                 *steeringQueuedUserMessageFlush
 	queuedRestore               *steeringQueuedUserMessageRestore
 	event                       *Event
@@ -139,6 +143,24 @@ type steeringCompletedResponseResolution struct {
 type steeringHistoryReplacement struct {
 	payload          historyReplacementPayload
 	projectedEntries []ChatEntry
+}
+
+type steeringResultGroupReport struct {
+	collector          *resultGroupCollector
+	callID             string
+	unit               *resultGroupUnit
+	operationalFailure error
+	outcome            **resultGroupReportOutcome
+}
+
+type steeringResultGroupFlush struct {
+	collector *resultGroupCollector
+	reason    ResultGroupFlushReason
+	committed bool
+}
+
+type steeringResultGroupClose struct {
+	collector *resultGroupCollector
 }
 
 type steeringStreamingOutput struct {
@@ -282,6 +304,59 @@ func steerToolCompletionIntent(result tools.Result) steeringIntent {
 	return steeringIntent{
 		priority: steeringPriorityNormal,
 		items:    []steeringItem{{toolCompletion: &copyResult}},
+	}
+}
+
+func steerResultGroupReportIntent(
+	collector *resultGroupCollector,
+	callID string,
+	unit resultGroupUnit,
+	outcome **resultGroupReportOutcome,
+) steeringIntent {
+	copyUnit := cloneResultGroupUnit(unit)
+	return steeringIntent{
+		priority: steeringPriorityNormal,
+		items: []steeringItem{{resultGroupReport: &steeringResultGroupReport{
+			collector: collector,
+			callID:    callID,
+			unit:      &copyUnit,
+			outcome:   outcome,
+		}}},
+	}
+}
+
+func steerResultGroupOperationalFailureIntent(
+	collector *resultGroupCollector,
+	cause error,
+) steeringIntent {
+	return steeringIntent{
+		priority: steeringPriorityNormal,
+		items: []steeringItem{{resultGroupReport: &steeringResultGroupReport{
+			collector:          collector,
+			operationalFailure: cause,
+		}}},
+	}
+}
+
+func steerResultGroupFlushIntent(
+	collector *resultGroupCollector,
+	reason ResultGroupFlushReason,
+) steeringIntent {
+	return steeringIntent{
+		priority: steeringPriorityNormal,
+		items: []steeringItem{{resultGroupFlush: &steeringResultGroupFlush{
+			collector: collector,
+			reason:    reason,
+		}}},
+	}
+}
+
+func steerResultGroupCloseIntent(collector *resultGroupCollector) steeringIntent {
+	return steeringIntent{
+		priority: steeringPriorityNormal,
+		items: []steeringItem{{resultGroupClose: &steeringResultGroupClose{
+			collector: collector,
+		}}},
 	}
 }
 
@@ -532,6 +607,8 @@ func workflowPostCompletionActivityForSteeringItem(item steeringItem) workflowPo
 		item.reviewerFeedback != nil ||
 		item.reviewerError != nil ||
 		item.toolCompletion != nil ||
+		(item.resultGroupFlush != nil && item.resultGroupFlush.committed) ||
+		(item.missingToolOutputRepair != nil && item.missingToolOutputRepair.repaired > 0) ||
 		item.queuedFlush != nil {
 		return workflowPostCompletionDurableActivity
 	}
@@ -550,6 +627,69 @@ func (e *Engine) resolveCompletedResponseStream(stepID string, instruction compl
 }
 
 func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
+	if item.missingToolOutputRepair != nil {
+		repair := item.missingToolOutputRepair
+		repaired, err := e.repairMissingToolOutputsByAppendingRaw(repair.repairStepID, repair.disposition)
+		repair.repaired = repaired
+		return err
+	}
+	if item.resultGroupReport != nil {
+		report := item.resultGroupReport
+		if report.collector == nil {
+			return errors.New("result group report requires collector")
+		}
+		if report.operationalFailure != nil {
+			if report.unit != nil || report.outcome != nil {
+				return errors.New(
+					"result group operational failure cannot include a completed result",
+				)
+			}
+			fatal, err := report.collector.abortOperational(
+				report.operationalFailure,
+			)
+			if err != nil {
+				return err
+			}
+			return fatal
+		}
+		if report.unit == nil || report.outcome == nil {
+			return errors.New(
+				"result group completed report requires unit and outcome destination",
+			)
+		}
+		outcome, err := report.collector.report(report.callID, *report.unit)
+		if err != nil {
+			if report.collector.state == resultGroupCollectorActive {
+				fatal, abortErr := report.collector.abortOperational(
+					fmt.Errorf(
+						"report result group call %q: %w",
+						report.callID,
+						err,
+					),
+				)
+				if abortErr != nil {
+					return errors.Join(err, abortErr)
+				}
+				return fatal
+			}
+			return err
+		}
+		*report.outcome = outcome
+		return nil
+	}
+	if item.resultGroupFlush != nil {
+		flush := item.resultGroupFlush
+		if flush.collector == nil {
+			return e.flushResultGroup(stepID, nil, flush.reason)
+		}
+		cursor := flush.collector.cursor
+		err := e.flushResultGroup(stepID, flush.collector, flush.reason)
+		flush.committed = err == nil && flush.collector.cursor > cursor
+		return err
+	}
+	if item.resultGroupClose != nil {
+		return e.closeResultGroup(stepID, item.resultGroupClose.collector)
+	}
 	if item.assistantCommit != nil {
 		commit := item.assistantCommit
 		if commit.result == nil {
@@ -703,19 +843,13 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 		receipt, provenance, feedbackProvenance, err := e.persistFinalizedToolCompletionRaw(stepID, completion)
 		item.recordCommitReceipt(receipt)
 		if receipt.Committed {
-			result := cloneToolResult(completion.Result)
-			e.transcriptRuntimeState().CompleteLiveTool(result.CallID)
-			err = errors.Join(err, e.emitRaw(Event{Kind: EventToolCallCompleted, StepID: stepID, ToolResult: &result, CommittedTranscriptChanged: true, CommittedProvenance: cloneTranscriptCommittedRowProvenance(provenance)}))
-			if completion.OperatorFeedback != nil {
-				entry := localEntryChatEntryForStep(*completion.OperatorFeedback, stepID)
-				err = errors.Join(err, e.emitRaw(Event{
-					Kind:                       EventLocalEntryAdded,
-					StepID:                     stepID,
-					LocalEntry:                 entry,
-					CommittedTranscriptChanged: true,
-					CommittedProvenance:        cloneTranscriptCommittedRowProvenance(feedbackProvenance),
-				}))
-			}
+			err = errors.Join(err, e.publishCommittedFinalizedToolCompletion(
+				stepID,
+				textutil.OptionalExactString(stepID),
+				completion,
+				provenance,
+				feedbackProvenance,
+			))
 		}
 		return err
 	}
@@ -997,4 +1131,8 @@ func cloneToolResult(result tools.Result) tools.Result {
 	copyResult.Output = append(json.RawMessage(nil), result.Output...)
 	copyResult.Presentation = clonePersistedToolCallMeta(result.Presentation)
 	return copyResult
+}
+
+func (e *Engine) emitResultGroupProjectionEvent(event Event) error {
+	return e.emitRaw(event)
 }

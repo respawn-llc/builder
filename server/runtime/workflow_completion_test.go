@@ -788,10 +788,17 @@ func TestWorkflowTerminalCompleteNodePersistsHostedToolResults(t *testing.T) {
 		ToolCalls: []llm.ToolCall{
 			completeNodeCall("call_complete", json.RawMessage(`{"commentary":"complete","summary":"done"}`)),
 		},
-		OutputItems: []llm.ResponseItem{{
-			Type: llm.ResponseItemTypeOther,
-			Raw:  json.RawMessage(`{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search","query":"kent cli"}}`),
-		}},
+		OutputItems: []llm.ResponseItem{
+			{
+				Type:   llm.ResponseItemTypeFunctionCall,
+				ID:     textutil.Value("call_complete"),
+				CallID: textutil.Value("call_complete"),
+			},
+			{
+				Type: llm.ResponseItemTypeOther,
+				Raw:  json.RawMessage(`{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search","query":"kent cli"}}`),
+			},
+		},
 		Usage: llm.Usage{WindowTokens: 200000},
 	}}}
 	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeTool), Config{
@@ -851,6 +858,41 @@ func TestWorkflowDuplicateCompleteNodePreflightSkipsSideEffects(t *testing.T) {
 	}
 	if got := controller.violations.Load(); got != 1 {
 		t.Fatalf("violations = %d, want 1", got)
+	}
+	records, err := collectTestEventRecords(store)
+	if err != nil {
+		t.Fatalf("read workflow records: %v", err)
+	}
+	persistedCalls := make(map[string]bool)
+	persistedResults := make(map[string]bool)
+	for _, record := range records {
+		if record.Kind != "message" {
+			continue
+		}
+		message := persistedMessageForTest(t, record)
+		for _, call := range message.ToolCalls {
+			persistedCalls[call.ID] = true
+		}
+		if message.Role == llm.RoleTool && message.ToolCallID != nil {
+			persistedResults[*message.ToolCallID] = true
+		}
+	}
+	for _, rejectedID := range []string{"call_complete_1", "call_complete_2"} {
+		if persistedCalls[rejectedID] || persistedResults[rejectedID] {
+			t.Fatalf(
+				"preflight-rejected call %q persisted intent/result: calls=%v results=%v",
+				rejectedID,
+				persistedCalls,
+				persistedResults,
+			)
+		}
+	}
+	if !persistedCalls["call_complete_3"] || !persistedResults["call_complete_3"] {
+		t.Fatalf(
+			"accepted call intent/result missing: calls=%v results=%v",
+			persistedCalls,
+			persistedResults,
+		)
 	}
 }
 

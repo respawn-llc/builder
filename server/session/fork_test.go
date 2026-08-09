@@ -61,7 +61,7 @@ func appendForkTestRecords(
 			if _, _, err := log.AppendRecord(forkStringPointer("step"), LocalEntryRecord{
 				Visibility: EntryVisibilityHidden,
 				Role:       "test",
-				Text:       "filler",
+				Text:       forkStringPointer("filler"),
 			}); err != nil {
 				t.Fatalf("append filler %d/%d: %v", i, f, err)
 			}
@@ -285,7 +285,7 @@ func TestCloneSessionFlushesAtCountAndByteBudgets(t *testing.T) {
 					payloads[index] = LocalEntryRecord{
 						Visibility: EntryVisibilityHidden,
 						Role:       "test",
-						Text:       "count bounded",
+						Text:       forkStringPointer("count bounded"),
 					}
 				}
 				return payloads
@@ -408,7 +408,7 @@ func largeForkLocalEntry() LocalEntryRecord {
 	return LocalEntryRecord{
 		Visibility: EntryVisibilityHidden,
 		Role:       "test",
-		Text:       strings.Repeat("x", forkReplayFlushByteBudget*3/5),
+		Text:       forkStringPointer(strings.Repeat("x", forkReplayFlushByteBudget*3/5)),
 	}
 }
 
@@ -511,13 +511,13 @@ func TestForkRebasesLatestCandidateAcrossMultipleCandidatesAndFiller(t *testing.
 		LocalEntryRecord{
 			Visibility: EntryVisibilityHidden,
 			Role:       "test",
-			Text:       "after first",
+			Text:       forkStringPointer("after first"),
 		},
 		forkUserMessageRecord("latest candidate"),
 		LocalEntryRecord{
 			Visibility: EntryVisibilityHidden,
 			Role:       "test",
-			Text:       "after latest",
+			Text:       forkStringPointer("after latest"),
 		},
 		HistoryReplacementRecord{
 			Engine: "local",

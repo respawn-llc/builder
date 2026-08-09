@@ -23,7 +23,8 @@ func recoveredWarningEntryCount(t *testing.T, store *session.Store, warning stri
 			t.Fatalf("read event payload: %v", payloadErr)
 		}
 		entry, ok := payload.(session.LocalEntryRecord)
-		if ok && entry.Role == "warning" && entry.Text == warning {
+		if ok && entry.Role == "warning" &&
+			entry.Text != nil && *entry.Text == warning {
 			count++
 		}
 	}

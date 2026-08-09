@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"core/prompts"
@@ -19,7 +20,6 @@ type defaultStepExecutor struct {
 	phase    phaseProtocolEnforcer
 	reviewer reviewerPipeline
 	messages messageLifecycle
-	tools    toolExecutor
 }
 
 type completedResponseNext uint8
@@ -41,8 +41,7 @@ type preparedCompletedResponse struct {
 	assistantProvenance          *TranscriptCommittedRowProvenance
 	resolutionOutcome            completedResponseResolutionOutcome
 	resolutionResolved           bool
-	localToolCalls               []llm.ToolCall
-	hostedToolExecutions         []hostedToolExecution
+	acceptedCalls                acceptedResponseCalls
 	noopFinalAnswer              bool
 	assistantCommittedCoordinate *committedAssistantCoordinate
 	executedToolCall             bool
@@ -52,6 +51,203 @@ type preparedCompletedResponse struct {
 
 type completedResponsePreflightRejection struct {
 	cause error
+}
+
+type acceptedResponseCalls struct {
+	local  []llm.ToolCall
+	hosted []hostedToolExecution
+	order  []acceptedResponseCallRef
+}
+
+type acceptedResponseCallSource uint8
+
+const (
+	acceptedResponseCallLocal acceptedResponseCallSource = iota + 1
+	acceptedResponseCallHosted
+)
+
+type acceptedResponseCallRef struct {
+	source acceptedResponseCallSource
+	index  int
+}
+
+func planAcceptedResponseCalls(
+	workflowActive bool,
+	phaseTurn *phaseProtocolTurn,
+	outputItems []llm.ResponseItem,
+) (acceptedResponseCalls, *completedResponsePreflightRejection, error) {
+	calls := acceptedResponseCalls{
+		local:  append([]llm.ToolCall(nil), phaseTurn.LocalToolCalls...),
+		hosted: append([]hostedToolExecution(nil), phaseTurn.HostedToolExecutions...),
+	}
+	phaseTurn.LocalToolCalls = nil
+	phaseTurn.HostedToolExecutions = nil
+	if rejection := classifyCompletedResponsePreflightRejection(
+		workflowActive,
+		calls,
+	); rejection != nil {
+		return acceptedResponseCalls{}, rejection, nil
+	}
+	if err := calls.establishCanonicalOrder(outputItems); err != nil {
+		return acceptedResponseCalls{}, nil, err
+	}
+	return calls, nil, nil
+}
+
+func (c acceptedResponseCalls) hasCalls() bool {
+	return len(c.local) > 0 || len(c.hosted) > 0
+}
+
+func (c acceptedResponseCalls) toolCalls() []llm.ToolCall {
+	result := make([]llm.ToolCall, 0, len(c.order))
+	for _, ref := range c.order {
+		switch ref.source {
+		case acceptedResponseCallLocal:
+			result = append(result, c.local[ref.index])
+		case acceptedResponseCallHosted:
+			result = append(result, c.hosted[ref.index].Call)
+		default:
+			panic(fmt.Sprintf(
+				"accepted response call order contains unknown source %d at index %d",
+				ref.source,
+				ref.index,
+			))
+		}
+	}
+	return result
+}
+
+func (c *acceptedResponseCalls) establishCanonicalOrder(outputItems []llm.ResponseItem) error {
+	seenIDs := make(map[string]struct{}, len(c.local)+len(c.hosted))
+	for _, call := range c.local {
+		if err := registerAcceptedCallID(seenIDs, call.ID); err != nil {
+			return err
+		}
+	}
+	for _, hosted := range c.hosted {
+		if err := registerAcceptedCallID(seenIDs, hosted.Call.ID); err != nil {
+			return err
+		}
+	}
+
+	if len(c.hosted) == 0 {
+		c.order = make([]acceptedResponseCallRef, len(c.local))
+		for index := range c.local {
+			c.order[index] = acceptedResponseCallRef{
+				source: acceptedResponseCallLocal,
+				index:  index,
+			}
+		}
+		return nil
+	}
+	if len(c.local) == 0 {
+		c.order = make([]acceptedResponseCallRef, len(c.hosted))
+		for index := range c.hosted {
+			c.order[index] = acceptedResponseCallRef{
+				source: acceptedResponseCallHosted,
+				index:  index,
+			}
+		}
+		return nil
+	}
+
+	type positionedCall struct {
+		position int
+		ref      acceptedResponseCallRef
+	}
+	positioned := make([]positionedCall, 0, len(c.local)+len(c.hosted))
+	seenPositions := make(map[int]string, len(c.local)+len(c.hosted))
+	for index, call := range c.local {
+		positions := outputPositionsForLocalCall(outputItems, call.ID)
+		if len(positions) != 1 {
+			return fmt.Errorf(
+				"mixed accepted local tool call %q has %d canonical output positions, want 1",
+				call.ID,
+				len(positions),
+			)
+		}
+		if err := registerAcceptedOutputPosition(seenPositions, positions[0], call.ID); err != nil {
+			return err
+		}
+		positioned = append(positioned, positionedCall{
+			position: positions[0],
+			ref: acceptedResponseCallRef{
+				source: acceptedResponseCallLocal,
+				index:  index,
+			},
+		})
+	}
+	for index, hosted := range c.hosted {
+		if err := registerAcceptedOutputPosition(
+			seenPositions,
+			hosted.outputPosition,
+			hosted.Call.ID,
+		); err != nil {
+			return err
+		}
+		positioned = append(positioned, positionedCall{
+			position: hosted.outputPosition,
+			ref: acceptedResponseCallRef{
+				source: acceptedResponseCallHosted,
+				index:  index,
+			},
+		})
+	}
+	sort.Slice(positioned, func(left, right int) bool {
+		return positioned[left].position < positioned[right].position
+	})
+	c.order = make([]acceptedResponseCallRef, len(positioned))
+	for index, call := range positioned {
+		c.order[index] = call.ref
+	}
+	return nil
+}
+
+func registerAcceptedCallID(seen map[string]struct{}, callID string) error {
+	callID = strings.TrimSpace(callID)
+	if callID == "" {
+		return errors.New("accepted tool call ID is required")
+	}
+	if _, exists := seen[callID]; exists {
+		return fmt.Errorf("accepted tool call ID %q is duplicated", callID)
+	}
+	seen[callID] = struct{}{}
+	return nil
+}
+
+func outputPositionsForLocalCall(items []llm.ResponseItem, callID string) []int {
+	callID = strings.TrimSpace(callID)
+	var positions []int
+	for position, item := range items {
+		switch item.Type {
+		case llm.ResponseItemTypeFunctionCall, llm.ResponseItemTypeCustomToolCall:
+		default:
+			continue
+		}
+		itemID, hasItemID := textutil.OptionalTrimmed(item.ID)
+		itemCallID, hasItemCallID := textutil.OptionalTrimmed(item.CallID)
+		if hasItemID && itemID == callID || hasItemCallID && itemCallID == callID {
+			positions = append(positions, position)
+		}
+	}
+	return positions
+}
+
+func registerAcceptedOutputPosition(
+	seen map[int]string,
+	position int,
+	callID string,
+) error {
+	if previousCallID, exists := seen[position]; exists {
+		return fmt.Errorf(
+			"accepted tool calls %q and %q share canonical output position %d",
+			previousCallID,
+			callID,
+			position,
+		)
+	}
+	seen[position] = callID
+	return nil
 }
 
 func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID string, options stepLoopOptions) (stepLoopResult, error) {
@@ -172,8 +368,9 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 		resp = prepared.response
 		phaseTurn := prepared.phaseTurn
 		assistantMsg := prepared.assistant
-		localToolCalls := prepared.localToolCalls
-		hostedToolExecutions := prepared.hostedToolExecutions
+		acceptedCalls := prepared.acceptedCalls
+		localToolCalls := acceptedCalls.local
+		hostedToolExecutions := acceptedCalls.hosted
 		noopFinalAnswer := prepared.noopFinalAnswer
 		assistantCommittedCoordinate := prepared.assistantCommittedCoordinate
 		assistantProvenance := cloneTranscriptCommittedRowProvenance(prepared.assistantProvenance)
@@ -186,13 +383,27 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 				}
 			}
 		}
-		if err := s.appendHostedToolExecutionResults(stepID, hostedToolExecutions); err != nil {
-			return stepLoopResult{}, err
-		}
-		if len(hostedToolExecutions) > 0 && len(localToolCalls) == 0 {
+		if acceptedCalls.hasCalls() {
+			applied, terminal, err := s.executeAcceptedToolCallsAndAppendResults(
+				ctx,
+				stepID,
+				acceptedCalls,
+			)
+			if err != nil {
+				return stepLoopResult{}, err
+			}
 			if err := s.completeAgentStepBoundary(ctx); err != nil {
 				return stepLoopResult{}, err
 			}
+			patchEditsApplied = patchEditsApplied || applied
+			if terminal {
+				e.cascadeCompleteActiveGoalOnWorkflowCompletion()
+				return stepLoopResult{ExecutedToolCall: true}, nil
+			}
+			if _, err := s.flushPendingUserInjections(stepID, options); err != nil {
+				return stepLoopResult{}, err
+			}
+			continue
 		}
 
 		if responseOutputIsReasoningOnly(resp.OutputItems) {
@@ -202,9 +413,7 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 			continue
 		}
 
-		if len(localToolCalls) == 0 &&
-			len(hostedToolExecutions) == 0 &&
-			phaseTurn.EffectivePhase.Is(llm.MessagePhaseFinal) &&
+		if phaseTurn.EffectivePhase.Is(llm.MessagePhaseFinal) &&
 			assistantMsg.Content != nil &&
 			strings.TrimSpace(*assistantMsg.Content) != "" {
 			handled, terminal, err := s.handleWorkflowCompletionSubmission(ctx, stepID, *assistantMsg.Content)
@@ -221,9 +430,6 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 
 		if len(localToolCalls) == 0 {
 			if phaseTurn.MissingAssistantPhase {
-				if len(hostedToolExecutions) > 0 {
-					_ = e.steer(stepID, steerEventIntent(Event{Kind: EventConversationUpdated, StepID: stepID, CommittedTranscriptChanged: true}))
-				}
 				if _, err := s.flushPendingUserInjections(stepID, options); err != nil {
 					return stepLoopResult{}, err
 				}
@@ -380,21 +586,6 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 			return stepLoopResult{FinalAnswer: textutil.Value(resolved), ExecutedToolCall: executedToolCall, AssistantCommittedStart: resolvedCommittedStart, AssistantCommittedStartSet: resolvedCommittedStartSet}, nil
 		}
 
-		applied, terminal, err := s.executeLocalToolCallsAndAppendResults(ctx, stepID, localToolCalls)
-		if err != nil {
-			return stepLoopResult{}, err
-		}
-		if err := s.completeAgentStepBoundary(ctx); err != nil {
-			return stepLoopResult{}, err
-		}
-		patchEditsApplied = patchEditsApplied || applied
-		if terminal {
-			e.cascadeCompleteActiveGoalOnWorkflowCompletion()
-			return stepLoopResult{ExecutedToolCall: true}, nil
-		}
-		if _, err := s.flushPendingUserInjections(stepID, options); err != nil {
-			return stepLoopResult{}, err
-		}
 	}
 }
 
@@ -458,36 +649,42 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 		return preparedCompletedResponse{}, err
 	}
 	assistantMsg := phaseTurn.Assistant
-	localToolCalls = phaseTurn.LocalToolCalls
-	hostedToolExecutions = phaseTurn.HostedToolExecutions
-	executedToolCall := len(localToolCalls) > 0 || len(hostedToolExecutions) > 0
+	acceptedCalls, rejection, err := planAcceptedResponseCalls(
+		e.currentNodeExecutionActive(),
+		&phaseTurn,
+		resp.OutputItems,
+	)
+	if err != nil {
+		return preparedCompletedResponse{}, err
+	}
+	executedToolCall := acceptedCalls.hasCalls()
 	noopFinalAnswer := isNoopFinalAnswer(assistantMsg)
 
-	if rejection := classifyCompletedResponsePreflightRejection(e.currentNodeExecutionActive(), localToolCalls, hostedToolExecutions); rejection != nil {
+	if rejection != nil {
 		return preparedCompletedResponse{
-			next:                 completedResponseNextWorkflowPreflightRejected,
-			resolution:           completedResponseAbortInstruction(),
-			response:             resp,
-			phaseTurn:            phaseTurn,
-			assistant:            assistantMsg,
-			localToolCalls:       localToolCalls,
-			hostedToolExecutions: hostedToolExecutions,
-			noopFinalAnswer:      noopFinalAnswer,
-			executedToolCall:     executedToolCall,
-			preflightRejection:   rejection,
+			next:               completedResponseNextWorkflowPreflightRejected,
+			resolution:         completedResponseAbortInstruction(),
+			response:           resp,
+			phaseTurn:          phaseTurn,
+			assistant:          assistantMsg,
+			noopFinalAnswer:    noopFinalAnswer,
+			executedToolCall:   executedToolCall,
+			preflightRejection: rejection,
 		}, nil
 	}
+	assistantMsg.ToolCalls = acceptedCalls.toolCalls()
+	phaseTurn.Assistant = assistantMsg
 
 	finalAnswerWithToolCalls := messagePhaseIs(assistantMsg, llm.MessagePhaseFinal) &&
 		assistantMsg.Content != nil &&
 		strings.TrimSpace(*assistantMsg.Content) != "" &&
-		executedToolCall
+		acceptedCalls.hasCalls()
 	patchEditsApplied := false
 	if finalAnswerWithToolCalls {
 		if err := e.markProviderVisibleModelRecovery(stepID); err != nil {
 			return preparedCompletedResponse{}, err
 		}
-		applied, terminal, err := s.materializeFinalAnswerToolCalls(ctx, stepID, localToolCalls, hostedToolExecutions)
+		applied, terminal, err := s.materializeFinalAnswerToolCalls(ctx, stepID, acceptedCalls)
 		if err != nil {
 			return preparedCompletedResponse{}, err
 		}
@@ -505,11 +702,8 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 			}, nil
 		}
 		assistantMsg.ToolCalls = nil
-		localToolCalls = nil
-		hostedToolExecutions = nil
+		acceptedCalls = acceptedResponseCalls{}
 		phaseTurn.Assistant = assistantMsg
-		phaseTurn.LocalToolCalls = nil
-		phaseTurn.HostedToolExecutions = nil
 		if err := e.steer(stepID, steerEventIntent(Event{Kind: EventConversationUpdated, StepID: stepID, CommittedTranscriptChanged: true})); err != nil {
 			return preparedCompletedResponse{}, err
 		}
@@ -540,8 +734,8 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 			return preparedCompletedResponse{}, err
 		}
 	}
-	executableCallIDs := make(map[string]struct{}, len(localToolCalls))
-	for _, call := range localToolCalls {
+	executableCallIDs := make(map[string]struct{}, len(acceptedCalls.local))
+	for _, call := range acceptedCalls.local {
 		if callID := strings.TrimSpace(call.ID); callID != "" {
 			executableCallIDs[callID] = struct{}{}
 		}
@@ -555,7 +749,7 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 	}
 	assistantCommittedCoordinate := assistantCommitResult.coordinate
 	assistantProvenance := assistantCommitResult.provenance
-	if len(localToolCalls) == 0 && len(hostedToolExecutions) == 0 {
+	if !acceptedCalls.hasCalls() {
 		e.compactionRuntimeState().SetManualCompactionEligible(true)
 	}
 	return preparedCompletedResponse{
@@ -567,8 +761,7 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 		phaseTurn:                    phaseTurn,
 		assistant:                    assistantMsg,
 		assistantProvenance:          cloneTranscriptCommittedRowProvenance(assistantProvenance),
-		localToolCalls:               localToolCalls,
-		hostedToolExecutions:         hostedToolExecutions,
+		acceptedCalls:                acceptedCalls,
 		noopFinalAnswer:              noopFinalAnswer,
 		assistantCommittedCoordinate: assistantCommittedCoordinate,
 		executedToolCall:             executedToolCall,
@@ -576,30 +769,27 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 	}, nil
 }
 
-func classifyCompletedResponsePreflightRejection(workflowActive bool, localToolCalls []llm.ToolCall, hostedToolExecutions []hostedToolExecution) *completedResponsePreflightRejection {
-	err := workflowPreflightError(workflowActive, localToolCalls, hostedToolExecutions)
+func classifyCompletedResponsePreflightRejection(workflowActive bool, calls acceptedResponseCalls) *completedResponsePreflightRejection {
+	err := workflowPreflightError(workflowActive, calls.local, calls.hosted)
 	if err == nil {
 		return nil
 	}
 	return &completedResponsePreflightRejection{cause: err}
 }
 
-func (s *defaultStepExecutor) materializeFinalAnswerToolCalls(ctx context.Context, stepID string, localToolCalls []llm.ToolCall, hostedToolExecutions []hostedToolExecution) (bool, bool, error) {
+func (s *defaultStepExecutor) materializeFinalAnswerToolCalls(ctx context.Context, stepID string, calls acceptedResponseCalls) (bool, bool, error) {
 	e := s.engine
 	toolCallMessage := llm.Message{
 		Role:      llm.RoleAssistant,
 		Phase:     textutil.Value(llm.MessagePhaseCommentary),
-		ToolCalls: append([]llm.ToolCall(nil), localToolCalls...),
-	}
-	for _, hosted := range hostedToolExecutions {
-		toolCallMessage.ToolCalls = append(toolCallMessage.ToolCalls, hosted.Call)
+		ToolCalls: calls.toolCalls(),
 	}
 	if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{toolCallMessage})); err != nil {
 		return false, false, err
 	}
 
-	executableCallIDs := make(map[string]struct{}, len(localToolCalls))
-	for _, call := range localToolCalls {
+	executableCallIDs := make(map[string]struct{}, len(calls.local))
+	for _, call := range calls.local {
 		if callID := strings.TrimSpace(call.ID); callID != "" {
 			executableCallIDs[callID] = struct{}{}
 		}
@@ -621,23 +811,15 @@ func (s *defaultStepExecutor) materializeFinalAnswerToolCalls(ctx context.Contex
 		}
 	}
 
-	patchEditsApplied, terminal, err := s.executeLocalToolCallsAndAppendResults(ctx, stepID, localToolCalls)
+	patchEditsApplied, terminal, err := s.executeAcceptedToolCallsAndAppendResults(
+		ctx,
+		stepID,
+		calls,
+	)
 	if err != nil {
 		return false, false, err
 	}
-	if terminal {
-		if err := s.appendHostedToolExecutionResults(stepID, hostedToolExecutions); err != nil {
-			return false, false, err
-		}
-		if err := s.completeAgentStepBoundary(ctx); err != nil {
-			return false, false, err
-		}
-		return patchEditsApplied, true, nil
-	}
-	if err := s.appendHostedToolExecutionResults(stepID, hostedToolExecutions); err != nil {
-		return false, false, err
-	}
-	if len(localToolCalls) > 0 || len(hostedToolExecutions) > 0 {
+	if calls.hasCalls() {
 		if err := s.completeAgentStepBoundary(ctx); err != nil {
 			return false, false, err
 		}
@@ -650,34 +832,29 @@ func (s *defaultStepExecutor) completeAgentStepBoundary(ctx context.Context) err
 	return s.engine.stepLifecycle.DrainAgentStepBoundary(ctx)
 }
 
-func (s *defaultStepExecutor) executeLocalToolCallsAndAppendResults(ctx context.Context, stepID string, localToolCalls []llm.ToolCall) (bool, bool, error) {
-	if len(localToolCalls) == 0 {
+func (s *defaultStepExecutor) executeAcceptedToolCallsAndAppendResults(
+	ctx context.Context,
+	stepID string,
+	calls acceptedResponseCalls,
+) (bool, bool, error) {
+	if !calls.hasCalls() {
 		return false, false, nil
 	}
 	e := s.engine
-	results, err := s.tools.ExecuteToolCalls(ctx, stepID, localToolCalls)
+	results, durableTerminal, err := e.executeAcceptedToolCallsCoordinated(
+		ctx,
+		stepID,
+		calls,
+	)
 	if err != nil {
 		return false, false, err
 	}
 	patchEditsApplied := false
 	terminal := hasWorkflowTerminalResult(results)
-	customToolCalls := customToolCallIDs(localToolCalls)
 	for _, result := range results {
 		if !result.IsError && (result.Name == toolspec.ToolPatch || result.Name == toolspec.ToolEdit) {
 			patchEditsApplied = true
 		}
-		msg := llm.Message{
-			Role: llm.RoleTool, Content: textutil.Value(string(result.Output)),
-			ToolCallID: textutil.Value(result.CallID), Name: textutil.Value(string(result.Name)),
-		}
-		msg.MessageType = llm.ToolOutputMessageType(customToolCalls[result.CallID])
-		if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{msg})); err != nil {
-			return false, false, err
-		}
-	}
-	durableTerminal, err := s.engine.observeWorkflowDurableCompletion(ctx)
-	if err != nil {
-		return false, false, err
 	}
 	return patchEditsApplied, terminal || durableTerminal, nil
 }
@@ -691,37 +868,6 @@ func (s *defaultStepExecutor) workflowDurableCompletionTerminal(ctx context.Cont
 		return false, err
 	}
 	return true, nil
-}
-
-func (s *defaultStepExecutor) appendHostedToolExecutionResults(stepID string, hostedToolExecutions []hostedToolExecution) error {
-	e := s.engine
-	for _, hosted := range hostedToolExecutions {
-		if err := s.publishHostedToolStart(stepID, hosted.Call); err != nil {
-			return err
-		}
-		if err := e.steer(stepID, steerToolCompletionIntent(hosted.Result)); err != nil {
-			return err
-		}
-		msg := llm.Message{
-			Role: llm.RoleTool, Content: textutil.Value(string(hosted.Result.Output)),
-			ToolCallID: textutil.Value(hosted.Result.CallID),
-			Name:       textutil.Value(string(hosted.Result.Name)),
-		}
-		if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{msg})); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *defaultStepExecutor) publishHostedToolStart(stepID string, call llm.ToolCall) error {
-	normalized := normalizeToolCallForTranscript(call, s.engine.transcriptWorkingDir())
-	return s.engine.steer(stepID, steerEventIntent(Event{
-		Kind:                       EventToolCallStarted,
-		StepID:                     stepID,
-		ToolCall:                   &normalized,
-		CommittedTranscriptChanged: true,
-	}))
 }
 
 func (s *defaultStepExecutor) handleWorkflowCompletionSubmission(ctx context.Context, stepID string, content string) (bool, bool, error) {
@@ -817,19 +963,6 @@ func (e *Engine) currentWorkflowCompletionInstructions(ctx context.Context) (str
 		return "", err
 	}
 	return workflowCompletionInstructionsFragment(mode, execution.Instructions.WorkflowID, execution.Contract)
-}
-
-func customToolCallIDs(calls []llm.ToolCall) map[string]bool {
-	if len(calls) == 0 {
-		return nil
-	}
-	out := make(map[string]bool, len(calls))
-	for _, call := range calls {
-		if call.Custom && strings.TrimSpace(call.ID) != "" {
-			out[call.ID] = true
-		}
-	}
-	return out
 }
 
 func (s *defaultStepExecutor) prepareModelTurn(ctx context.Context, stepID string) error {

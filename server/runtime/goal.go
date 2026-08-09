@@ -575,9 +575,9 @@ func (e *Engine) startGoalLoop(firstTurnAlreadyPrompted bool) error {
 }
 
 func (e *Engine) launchGoalLoopTask(firstTurnAlreadyPrompted bool) {
-	launched := e.launchLifecycleTask(func(ctx context.Context) {
+	launched := e.launchLifecycleTask(func(ctx context.Context) *resultGroupFatal {
 		defer e.finishGoalLoop()
-		e.runGoalLoop(ctx, firstTurnAlreadyPrompted)
+		return e.runGoalLoop(ctx, firstTurnAlreadyPrompted)
 	})
 	if !launched {
 		e.finishGoalLoop()
@@ -592,21 +592,24 @@ func (e *Engine) finishGoalLoop() {
 	e.finishLiveRunGoalLoop()
 }
 
-func (e *Engine) runGoalLoop(ctx context.Context, firstTurnAlreadyPrompted bool) {
+func (e *Engine) runGoalLoop(ctx context.Context, firstTurnAlreadyPrompted bool) *resultGroupFatal {
 	appendNudge := !firstTurnAlreadyPrompted
 	for {
 		if !e.shouldContinueGoalLoop(ctx) {
-			return
+			return nil
 		}
 		if _, err := e.runGoalTurn(ctx, appendNudge); err != nil {
 			if errors.Is(err, ErrAgentBusy) {
 				if !e.waitBeforeGoalLoopBusyRetry(ctx) {
-					return
+					return nil
 				}
 				continue
 			}
+			if fatal, abort := resultGroupFatalFromError(err); abort {
+				return fatal
+			}
 			e.surfaceRunError(err)
-			return
+			return nil
 		}
 		appendNudge = true
 	}
@@ -649,6 +652,9 @@ func (e *Engine) waitBeforeGoalLoopBusyRetry(ctx context.Context) bool {
 }
 
 func (e *Engine) surfaceRunError(err error) {
+	if _, fatal := resultGroupFatalFromError(err); fatal {
+		return
+	}
 	if err == nil ||
 		errors.Is(err, context.Canceled) ||
 		errors.Is(err, ErrAgentBusy) ||
@@ -668,6 +674,20 @@ func (e *Engine) surfaceRunError(err error) {
 		}))
 	}
 	e.SetStreamingError(message)
+}
+
+func runtimeAbortFeedbackMessage(fatal *resultGroupFatal) string {
+	if fatal == nil {
+		return ""
+	}
+	message := strings.TrimSpace(llm.UserFacingError(fatal.Cause))
+	if message == "" && fatal.Cause != nil {
+		message = fatal.Cause.Error()
+	}
+	if message == "" {
+		message = fatal.Error()
+	}
+	return message
 }
 
 func (e *Engine) steerRuntimeErrorFeedback(err error) (string, error) {

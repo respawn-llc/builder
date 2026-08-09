@@ -438,10 +438,17 @@ func TestSubmitUserMessageDoesNotRetainPendingToolStartForHostedExecutions(t *te
 				Phase:   textutil.Value(llm.MessagePhaseCommentary),
 			},
 			ToolCalls: []llm.ToolCall{{ID: "call_shell_1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}},
-			OutputItems: []llm.ResponseItem{{
-				Type: llm.ResponseItemTypeOther,
-				Raw:  json.RawMessage(`{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search","query":"kent cli"}}`),
-			}},
+			OutputItems: []llm.ResponseItem{
+				{
+					Type:   llm.ResponseItemTypeFunctionCall,
+					ID:     textutil.Value("call_shell_1"),
+					CallID: textutil.Value("call_shell_1"),
+				},
+				{
+					Type: llm.ResponseItemTypeOther,
+					Raw:  json.RawMessage(`{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search","query":"kent cli"}}`),
+				},
+			},
 			Usage: llm.Usage{WindowTokens: 200000},
 		},
 		{

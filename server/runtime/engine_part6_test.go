@@ -531,12 +531,16 @@ func TestRestoreMessagesKeepsStoredToolCallPresentationPayload(t *testing.T) {
 
 	restored := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
 	snapshot := restored.ChatSnapshot()
-	if len(snapshot.Entries) != 2 {
-		t.Fatalf("expected assistant and tool call entries, got %+v", snapshot.Entries)
+	var toolEntry *ChatEntry
+	for index := range snapshot.Entries {
+		if snapshot.Entries[index].Role == "tool_call" &&
+			snapshot.Entries[index].ToolCallID == "call_1" {
+			toolEntry = &snapshot.Entries[index]
+			break
+		}
 	}
-	toolEntry := snapshot.Entries[1]
-	if toolEntry.Role != "tool_call" {
-		t.Fatalf("expected tool_call entry, got %+v", toolEntry)
+	if toolEntry == nil {
+		t.Fatalf("expected restored tool_call entry, got %+v", snapshot.Entries)
 	}
 	if toolEntry.ToolCall == nil || !toolEntry.ToolCall.IsShell {
 		t.Fatalf("expected restored shell tool metadata, got %+v", toolEntry.ToolCall)
