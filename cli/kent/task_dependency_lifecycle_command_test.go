@@ -52,8 +52,8 @@ func (r *taskDependencyLifecycleRemote) ApproveWorkflowTask(_ context.Context, r
 	return r.approveResponse, nil
 }
 
-func (r *taskDependencyLifecycleRemote) SubscribeWorktreeSetup(context.Context, serverapi.WorktreeSetupSubscribeRequest) (serverapi.WorktreeSetupSubscription, error) {
-	return canceledWorktreeSetupSubscription{}, nil
+func (r *taskDependencyLifecycleRemote) SubscribeWorktreeSetup(_ context.Context, req serverapi.WorktreeSetupSubscribeRequest) (serverapi.WorktreeSetupSubscription, error) {
+	return terminalWorktreeSetupSubscription{event: serverapi.WorktreeSetupEvent{SetupOperationID: req.SetupOperationID, Phase: serverapi.WorktreeSetupPhaseNotRequired, NotRequired: &serverapi.WorktreeSetupNotRequired{Reason: serverapi.WorktreeSetupNotRequiredNoTargetPreparation}}}, nil
 }
 
 func (r *taskDependencyLifecycleRemote) ResolveProjectPath(context.Context, serverapi.ProjectResolvePathRequest) (serverapi.ProjectResolvePathResponse, error) {
