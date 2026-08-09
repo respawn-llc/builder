@@ -180,9 +180,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	if runtimeSupport.Background != nil {
 		runtimeRegistry.WithBackgroundProcessSnapshots(runtimeSupport.Background.List)
 	}
-	runtimeCommandExecution := runtimecontrol.NewExecutionAdapter(runtimeAuthority)
-	runtimeGoalAuthority := runtimecontrol.NewGoalAuthority(runtimeAuthority, runtimeCommandExecution)
-	runtimeControlService := runtimecontrol.NewServiceWithGoalCommands(runtimeAuthority, runtimeCommandExecution, runtimeGoalAuthority).
+	runtimeControlService := runtimecontrol.NewService(runtimeAuthority).
 		WithRuntimeActivityResolver(runtimeRegistry).
 		WithOperationCoordinator(runtimeOperations).
 		WithPromptHistoryStore(metadataStore).

@@ -50,8 +50,6 @@ var errWorkflowTaskSessionAutoCompactionDisable = errors.New("auto-compaction ca
 
 type Service struct {
 	authority      *sessionruntime.Authority
-	execution      *ExecutionAdapter
-	goalAuthority  *GoalAuthority
 	activity       RuntimeActivityResolver
 	promptStore    PromptHistoryStore
 	promptCommands PromptCommandResolver
@@ -117,31 +115,10 @@ type runtimeInterruptMemoRequest struct {
 }
 
 func NewService(authority *sessionruntime.Authority) *Service {
-	execution := NewExecutionAdapter(authority)
-	return NewServiceWithGoalCommands(
-		authority,
-		execution,
-		NewGoalAuthority(authority, execution),
-	)
-}
-
-func NewServiceWithGoalCommands(
-	authority *sessionruntime.Authority,
-	execution *ExecutionAdapter,
-	goalAuthority *GoalAuthority,
-) *Service {
-	if execution == nil {
-		execution = NewExecutionAdapter(authority)
-	}
-	if goalAuthority == nil {
-		goalAuthority = NewGoalAuthority(authority, execution)
-	}
 	return &Service{
-		authority:     authority,
-		execution:     execution,
-		goalAuthority: goalAuthority,
-		operations:    runtimeops.NewCoordinator(),
-		sessionNames:  requestmemo.New[sessionStringMemoRequest, struct{}](),
+		authority:    authority,
+		operations:   runtimeops.NewCoordinator(),
+		sessionNames: requestmemo.New[sessionStringMemoRequest, struct{}](),
 
 		queuedDiscards: requestmemo.New[queuedUserMessageMemoRequest, serverapi.RuntimeDiscardQueuedUserMessageResponse](),
 		liveSteers:     requestmemo.New[liveSteerMemoRequest, serverapi.RuntimeLiveSteerResponse](),
@@ -153,10 +130,25 @@ func (s *Service) runAgentExecution(
 	sessionID string,
 	run func(context.Context, *runtime.Engine) error,
 ) error {
-	if s == nil || s.execution == nil {
+	if s == nil || s.authority == nil {
 		return errors.New("session runtime authority is required")
 	}
-	return s.execution.RunAgentExecution(ctx, sessionID, run)
+	id, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
+	if err != nil {
+		return err
+	}
+	descriptor, err := session.NewOpenSessionDescriptor(id)
+	if err != nil {
+		return err
+	}
+	err = s.authority.RunCurrentAgentExecution(ctx, descriptor, run)
+	if errors.Is(err, sessionruntime.ErrSessionStartsBlocked) {
+		return errors.Join(serverapi.ErrSessionWorktreeDeleting, err)
+	}
+	if errors.Is(err, sessionruntime.ErrSessionRunActive) {
+		return errors.Join(serverapi.ErrSessionRunStarting, err)
+	}
+	return err
 }
 
 func (s *Service) WithRuntimeActivityResolver(resolver RuntimeActivityResolver) *Service {

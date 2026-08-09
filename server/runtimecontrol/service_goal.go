@@ -42,7 +42,7 @@ func (s *Service) SetGoal(ctx context.Context, req serverapi.RuntimeGoalSetReque
 		return serverapi.RuntimeGoalShowResponse{}, err
 	}
 	return goalMutation(s, ctx, func(ctx context.Context) (GoalCommandResult, error) {
-		return s.goalAuthority.Set(ctx, GoalSetCommand{
+		return s.setGoalCommand(ctx, GoalSetCommand{
 			SessionID: sessionID,
 			Objective: strings.TrimSpace(req.Objective),
 			Actor:     session.GoalActor(strings.TrimSpace(req.Actor)),
@@ -72,7 +72,7 @@ func (s *Service) setGoalStatus(ctx context.Context, req serverapi.RuntimeGoalSt
 		return serverapi.RuntimeGoalShowResponse{}, err
 	}
 	return goalMutation(s, ctx, func(ctx context.Context) (GoalCommandResult, error) {
-		return s.goalAuthority.Status(ctx, GoalStatusCommand{
+		return s.statusGoalCommand(ctx, GoalStatusCommand{
 			SessionID: sessionID,
 			Status:    status,
 			Actor:     session.GoalActor(strings.TrimSpace(req.Actor)),
@@ -105,7 +105,7 @@ func (s *Service) ClearGoal(ctx context.Context, req serverapi.RuntimeGoalClearR
 		return serverapi.RuntimeGoalShowResponse{}, err
 	}
 	return goalMutation(s, ctx, func(ctx context.Context) (GoalCommandResult, error) {
-		return s.goalAuthority.Clear(ctx, GoalClearCommand{
+		return s.clearGoalCommand(ctx, GoalClearCommand{
 			SessionID: sessionID,
 			Actor:     session.GoalActor(strings.TrimSpace(req.Actor)),
 		})
@@ -117,8 +117,8 @@ func goalMutation(
 	ctx context.Context,
 	run func(context.Context) (GoalCommandResult, error),
 ) (serverapi.RuntimeGoalShowResponse, error) {
-	if service == nil || service.goalAuthority == nil {
-		return serverapi.RuntimeGoalShowResponse{}, errors.New("goal command authority is required")
+	if service == nil || service.authority == nil {
+		return serverapi.RuntimeGoalShowResponse{}, errors.New("session runtime authority is required")
 	}
 	result, err := run(ctx)
 	if err != nil {
