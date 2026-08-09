@@ -210,7 +210,7 @@ const moveAppliedResponseSchema = z
     applied: z
       .object({
         current_nodes: z.array(currentNodeSchema).min(1),
-        retained_previous_worktree: retainedPreviousWorktreeSchema.nullable().optional(),
+        retained_previous_worktree: retainedPreviousWorktreeSchema.nullable(),
       })
       .strict(),
   })
@@ -221,7 +221,7 @@ const moveAppliedResponseSchema = z
         outcome: value.outcome,
         applied: {
           currentNodes: value.applied.current_nodes,
-          retainedPreviousWorktree: value.applied.retained_previous_worktree ?? null,
+          retainedPreviousWorktree: value.applied.retained_previous_worktree,
         },
       }) as const,
   );
@@ -243,7 +243,7 @@ const taskMoveActionNoOpResponseSchema = z
     no_op: z
       .object({
         current_nodes: z.array(currentNodeSchema).min(1),
-        retained_previous_worktree: retainedPreviousWorktreeSchema.nullable().optional(),
+        retained_previous_worktree: retainedPreviousWorktreeSchema.nullable(),
       })
       .strict(),
   })
@@ -252,7 +252,7 @@ const taskMoveActionNoOpResponseSchema = z
     outcome: value.outcome,
     noOp: {
       currentNodes: value.no_op.current_nodes,
-      retainedPreviousWorktree: value.no_op.retained_previous_worktree ?? null,
+      retainedPreviousWorktree: value.no_op.retained_previous_worktree,
     },
   }));
 

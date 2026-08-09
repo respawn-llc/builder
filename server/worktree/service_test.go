@@ -558,6 +558,31 @@ func TestRunSetupRecoveryRetriesTransientScriptPreparationFailure(t *testing.T) 
 	}
 }
 
+func TestRunSetupRecoveryReturnsRecreationFailureWithoutLosingPriorAttempt(t *testing.T) {
+	env := newServiceTestEnv(t)
+	sourceRoot := t.TempDir()
+	worktreeRoot := t.TempDir()
+	writeExecutableFile(t, filepath.Join(sourceRoot, "setup.sh"), "#!/bin/sh\nexit 1\n")
+	settings := config.WorktreeSettings{SetupScript: "setup.sh"}
+
+	recovery, err := env.service.runSetupRecovery(env.ctx, setupRecoveryRequest{
+		Attempt: setupExecutionRequest{
+			SourceWorkspaceRoot: sourceRoot,
+			BranchName:          "feature/recreation-failure",
+			WorktreeRoot:        worktreeRoot,
+			ResolvedSettings:    &settings,
+		},
+		Observer: setupAttemptObserverFunc(func(serverapi.WorktreeSetupStarted) {}),
+		Recreate: func(context.Context) (setupExecutionRequest, error) {
+			t.Fatal("recreation callback called without recorded checkout topology")
+			return setupExecutionRequest{}, nil
+		},
+	})
+	if err == nil {
+		t.Fatalf("runSetupRecovery = %+v, nil; want recreation failure", recovery)
+	}
+}
+
 func TestCreateWorktreeSetupCancellationKeepsWorktreeAndSessionTarget(t *testing.T) {
 	env := newServiceTestEnv(t)
 	startedPath := filepath.Join(t.TempDir(), "started")

@@ -246,7 +246,7 @@ describe("attention notification API", () => {
             workflow_id: "11111111-1111-4111-8111-111111111111",
             task_id: "task-1",
             current_node_id: "node-1",
-            focus: { kind: "interrupted_current_node" },
+            focus: { kind: "interrupted_current_node", setup_operation_id: null },
           },
         },
       },
@@ -320,6 +320,47 @@ describe("attention notification API", () => {
       throw new Error("Expected interrupted Current Node focus.");
     }
     expect(focus.setupOperationID?.toJSONValue()).toBe(setupOperationID);
+  });
+
+  it("rejects omitted interrupted-current-node setup identity", () => {
+    const transport = new FakeRpcTransport([]);
+    const client = new ApiClient(transport);
+    const errors: Error[] = [];
+    client.subscribeAttentionNotifications({
+      onEvent() {
+        throw new Error("Malformed attention notification must not reach the UI.");
+      },
+      onComplete() {
+        return;
+      },
+      onError(error) {
+        errors.push(error);
+      },
+    });
+
+    transport.emit("attention.notification", {
+      event: {
+        type: "pending",
+        sequence: 1,
+        source: "live",
+        pending: {
+          id: { kind: "interrupted_current_node", uuid: "ordinary-interruption" },
+          kind: "interrupted_current_node",
+          occurred_at: "2026-08-09T07:30:00Z",
+          revision: 1,
+          interrupted_current_node: { message: "Interrupted" },
+          target: {
+            kind: "workflow_task",
+            workflow_id: "11111111-1111-4111-8111-111111111111",
+            task_id: "task-1",
+            focus: { kind: "interrupted_current_node" },
+          },
+        },
+      },
+    });
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toBeInstanceOf(ContractError);
   });
 
   it("rejects incoherent attention payloads and targets", () => {

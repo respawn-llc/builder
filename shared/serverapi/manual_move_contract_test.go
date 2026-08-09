@@ -190,3 +190,42 @@ func TestWorkflowTaskMoveAppliedValidatesOptionalRetainedPreviousWorktree(t *tes
 		t.Fatal("move applied accepted malformed retained previous worktree")
 	}
 }
+
+func TestWorkflowTaskMoveResponsesEmitExplicitNullRetainedPreviousWorktree(t *testing.T) {
+	for name, response := range map[string]WorkflowTaskMoveResponse{
+		"applied": {
+			Outcome: WorkflowExecutionTargetActionOutcomeApplied,
+			Applied: &WorkflowTaskMoveApplied{
+				CurrentNodes: []WorkflowTaskCurrentNode{{NodeID: "node"}},
+			},
+		},
+		"no op": {
+			Outcome: WorkflowExecutionTargetActionOutcomeNoOp,
+			NoOp: &WorkflowTaskMoveNoOp{
+				CurrentNodes: []WorkflowTaskCurrentNode{{NodeID: "node"}},
+			},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			raw, err := json.Marshal(response)
+			if err != nil {
+				t.Fatalf("marshal Move response: %v", err)
+			}
+			var envelope map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &envelope); err != nil {
+				t.Fatalf("decode Move response: %v", err)
+			}
+			payloadName := "applied"
+			if response.Outcome == WorkflowExecutionTargetActionOutcomeNoOp {
+				payloadName = "no_op"
+			}
+			var payload map[string]json.RawMessage
+			if err := json.Unmarshal(envelope[payloadName], &payload); err != nil {
+				t.Fatalf("decode %s payload: %v", payloadName, err)
+			}
+			if got := string(payload["retained_previous_worktree"]); got != "null" {
+				t.Fatalf("retained_previous_worktree = %s, want explicit null: %s", got, raw)
+			}
+		})
+	}
+}

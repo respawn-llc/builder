@@ -286,9 +286,10 @@ func approvalNotification(projection ApprovalProjection) clientui.AttentionNotif
 }
 
 func interruptedCurrentNodeNotification(projection InterruptedCurrentNodeProjection) clientui.AttentionNotification {
+	setupOperationID := projection.SetupOperationID
 	focus := &clientui.AttentionNotificationTaskDetailFocus{
 		Kind:             clientui.AttentionNotificationFocusInterruptedCurrentNode,
-		SetupOperationID: projection.SetupOperationID,
+		SetupOperationID: &setupOperationID,
 	}
 	return clientui.AttentionNotification{
 		ID:         interruptedCurrentNodeNotificationID(projection.CurrentNode),

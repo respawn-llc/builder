@@ -285,6 +285,11 @@ func TestWorktreeSetupEventJSONKeepsInapplicableFactsAbsentAndNullableOutputPres
 		scriptPath != "/source/scripts/setup.sh" {
 		t.Fatalf("failed setup script path was not preserved: %s", raw)
 	}
+	for _, field := range []string{"execution_target", "retained_worktree", "retained_previous_worktree"} {
+		if got := string(failedFields[field]); got != "null" {
+			t.Fatalf("failed setup %s = %s, want explicit null: %s", field, got, raw)
+		}
+	}
 	var timeoutFields map[string]json.RawMessage
 	if err := json.Unmarshal(causeFields["timeout"], &timeoutFields); err != nil {
 		t.Fatalf("decode timeout fields: %v", err)

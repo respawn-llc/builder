@@ -186,6 +186,28 @@ describe("task lifecycle client", () => {
     });
   });
 
+  it("accepts explicit null and rejects omitted Move retained topology", () => {
+    expect(
+      taskMoveResponseSchema.parse({
+        outcome: "applied",
+        applied: {
+          current_nodes: [{ node_id: "node-1", transition_branch_key: null, session_id: null }],
+          retained_previous_worktree: null,
+        },
+      }),
+    ).toMatchObject({
+      applied: { retainedPreviousWorktree: null },
+    });
+    expect(() =>
+      taskMoveResponseSchema.parse({
+        outcome: "no_op",
+        no_op: {
+          current_nodes: [{ node_id: "node-1", transition_branch_key: null, session_id: null }],
+        },
+      }),
+    ).toThrow();
+  });
+
   it("parses every Manual Move preview outcome and same-current no-op", () => {
     expect(
       taskMovePreviewResponseSchema.parse({

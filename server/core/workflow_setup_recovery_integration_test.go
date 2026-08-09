@@ -369,7 +369,8 @@ func nextCoreSetupRecoveryAttention(
 			event.Pending.Target.TaskID != taskID ||
 			event.Pending.Target.Focus == nil ||
 			event.Pending.Target.Focus.SetupOperationID == nil ||
-			*event.Pending.Target.Focus.SetupOperationID != setupID.String() {
+			*event.Pending.Target.Focus.SetupOperationID == nil ||
+			**event.Pending.Target.Focus.SetupOperationID != setupID.String() {
 			continue
 		}
 		return event

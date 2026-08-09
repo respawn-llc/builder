@@ -21,7 +21,7 @@ const approvalFocusSchema = z.object({ kind: z.literal("approval"), approval_id:
 const interruptedFocusSchema = z
   .object({
     kind: z.literal("interrupted_current_node"),
-    setup_operation_id: setupOperationIDSchema.optional(),
+    setup_operation_id: setupOperationIDSchema.nullable(),
   })
   .strict();
 const focusSchema = z.discriminatedUnion("kind", [
@@ -37,7 +37,7 @@ function focus(value: z.infer<typeof focusSchema>): AttentionNotificationTaskDet
     case "approval":
       return { kind: value.kind, approvalID: value.approval_id };
     case "interrupted_current_node":
-      return { kind: value.kind, setupOperationID: value.setup_operation_id ?? null };
+      return { kind: value.kind, setupOperationID: value.setup_operation_id };
   }
 }
 

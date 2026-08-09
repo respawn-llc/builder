@@ -39,6 +39,8 @@ describe("Workflow Task Move preparation RPC errors", () => {
             cause: { kind: "target_preparation", target_preparation: {} },
             diagnostic: "replacement creation failed",
             script_path: null,
+            execution_target: null,
+            retained_worktree: null,
             retained_previous_worktree: {
               worktree: registeredWorktreeWire("/repo/previous", "worktree-previous"),
             },
@@ -74,7 +76,9 @@ describe("Workflow Task Move preparation RPC errors", () => {
               cause: { kind: "operational", operational: {} },
               diagnostic: "setup failed",
               script_path: null,
+              execution_target: null,
               retained_worktree: registeredWorktreeWire("/repo/current", "worktree-current"),
+              retained_previous_worktree: null,
             },
           },
         }),

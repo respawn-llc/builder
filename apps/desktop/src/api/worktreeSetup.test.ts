@@ -49,6 +49,7 @@ describe("worktree setup API", () => {
           outcome: "applied",
           applied: {
             current_nodes: [{ node_id: "node-1", transition_branch_key: null, session_id: null }],
+            retained_previous_worktree: null,
           },
         },
       },
@@ -217,6 +218,7 @@ describe("worktree setup API", () => {
           script_path: "/src/setup.sh",
           execution_target: { mode: "custom_ref", custom_ref: "refs/heads/recovery" },
           retained_worktree: registeredWorktreeWire("/worktree", "worktree-current"),
+          retained_previous_worktree: null,
         },
       },
     });
@@ -243,6 +245,9 @@ describe("worktree setup API", () => {
           },
           diagnostic: "preparation canceled",
           script_path: null,
+          execution_target: null,
+          retained_worktree: null,
+          retained_previous_worktree: null,
         },
       },
     });
@@ -371,5 +376,41 @@ describe("worktree setup API", () => {
     expect(errors).toHaveLength(2);
     expect(errors[0]).toBeInstanceOf(ContractError);
     expect(errors[1]).toBeInstanceOf(ContractError);
+  });
+
+  it("rejects omitted nullable setup-failure facts", () => {
+    const transport = new FakeRpcTransport([]);
+    const client = new ApiClient(transport);
+    const setupOperationID = newSetupOperationID();
+    const events: WorktreeSetupEvent[] = [];
+    const errors: Error[] = [];
+    client.subscribeWorktreeSetup(setupOperationID, {
+      onEvent(event) {
+        events.push(event);
+      },
+      onComplete() {
+        return;
+      },
+      onError(error) {
+        errors.push(error);
+      },
+    });
+
+    transport.emit("worktree.setup", {
+      event: {
+        setup_operation_id: setupOperationID.toJSONValue(),
+        phase: "failed",
+        failed: {
+          retry_readiness: "non_retryable",
+          cause: { kind: "canceled", canceled: {} },
+          diagnostic: "canceled",
+          script_path: null,
+        },
+      },
+    });
+
+    expect(events).toHaveLength(0);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toBeInstanceOf(ContractError);
   });
 });

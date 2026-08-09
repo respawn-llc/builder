@@ -236,7 +236,8 @@ func TestInterruptedCurrentNodeNotificationPreservesCanonicalSetupFocusIdentity(
 	target := publisher.pending[0].Target
 	if target.CurrentNodeID == nil || *target.CurrentNodeID != string(currentNode.NodeID) ||
 		target.Focus == nil || target.Focus.SetupOperationID == nil ||
-		*target.Focus.SetupOperationID != setupOperationID {
+		*target.Focus.SetupOperationID == nil ||
+		**target.Focus.SetupOperationID != setupOperationID {
 		t.Fatalf("canonical setup focus = %+v", target)
 	}
 }

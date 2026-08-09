@@ -241,8 +241,11 @@ func validateApprovalAttentionFocus(focus clientui.AttentionNotificationTaskDeta
 }
 
 func validateInterruptedCurrentNodeAttentionFocus(focus clientui.AttentionNotificationTaskDetailFocus) error {
-	if focus.SetupOperationID != nil {
-		if _, err := ParseWorktreeSetupOperationID(*focus.SetupOperationID); err != nil {
+	if focus.SetupOperationID == nil {
+		return errors.New("interrupted current node attention notification focus requires nullable setup_operation_id")
+	}
+	if *focus.SetupOperationID != nil {
+		if _, err := ParseWorktreeSetupOperationID(**focus.SetupOperationID); err != nil {
 			return err
 		}
 	}

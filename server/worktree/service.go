@@ -2012,9 +2012,10 @@ func (s *Service) runSetupRecovery(ctx context.Context, req setupRecoveryRequest
 			Err:    firstErr,
 		}, nil
 	}
+	previousAttempt := attempt
 	attempt, _, err = s.recreateSetupAttemptIfClean(ctx, attempt, req.Recreate, false)
 	if err != nil {
-		if result, identified := setupPreparationFailureResult(err, attempt.retained); identified {
+		if result, identified := setupPreparationFailureResult(err, previousAttempt.retained); identified {
 			return result, nil
 		}
 		return setupRecoveryResult{}, err

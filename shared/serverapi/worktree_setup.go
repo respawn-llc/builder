@@ -147,9 +147,9 @@ type WorktreeSetupFailed struct {
 	Cause                    WorktreeSetupFailureCause         `json:"cause"`
 	Diagnostic               string                            `json:"diagnostic"`
 	ScriptPath               *string                           `json:"script_path"`
-	ExecutionTarget          *WorkflowExecutionTargetSelection `json:"execution_target,omitempty"`
-	RetainedWorktree         *WorktreeTopologyEntry            `json:"retained_worktree,omitempty"`
-	RetainedPreviousWorktree *RetainedPreviousWorktree         `json:"retained_previous_worktree,omitempty"`
+	ExecutionTarget          *WorkflowExecutionTargetSelection `json:"execution_target"`
+	RetainedWorktree         *WorktreeTopologyEntry            `json:"retained_worktree"`
+	RetainedPreviousWorktree *RetainedPreviousWorktree         `json:"retained_previous_worktree"`
 }
 
 type WorktreeSetupEvent struct {

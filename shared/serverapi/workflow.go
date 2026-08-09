@@ -1056,12 +1056,12 @@ type WorkflowTaskMoveResponse struct {
 
 type WorkflowTaskMoveNoOp struct {
 	CurrentNodes             []WorkflowTaskCurrentNode `json:"current_nodes"`
-	RetainedPreviousWorktree *RetainedPreviousWorktree `json:"retained_previous_worktree,omitempty"`
+	RetainedPreviousWorktree *RetainedPreviousWorktree `json:"retained_previous_worktree"`
 }
 
 type WorkflowTaskMoveApplied struct {
 	CurrentNodes             []WorkflowTaskCurrentNode `json:"current_nodes"`
-	RetainedPreviousWorktree *RetainedPreviousWorktree `json:"retained_previous_worktree,omitempty"`
+	RetainedPreviousWorktree *RetainedPreviousWorktree `json:"retained_previous_worktree"`
 }
 
 const (

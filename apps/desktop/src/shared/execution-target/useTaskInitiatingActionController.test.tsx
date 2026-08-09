@@ -445,14 +445,14 @@ function setupFailure(diagnostic: string, root: string, previousRoot?: string): 
         cause: { kind: "operational", operational: {} },
         diagnostic,
         script_path: "/repo/setup.sh",
+        execution_target: null,
         retained_worktree: registeredWorktreeWire(root, "worktree-current"),
-        ...(previousRoot === undefined
-          ? {}
-          : {
-              retained_previous_worktree: {
+        retained_previous_worktree:
+          previousRoot === undefined
+            ? null
+            : {
                 worktree: registeredWorktreeWire(previousRoot, "worktree-previous"),
               },
-            }),
       },
     },
   });
@@ -470,6 +470,8 @@ function targetPreparationFailure(diagnostic: string, previousRoot: string): Rpc
         cause: { kind: "target_preparation", target_preparation: {} },
         diagnostic,
         script_path: null,
+        execution_target: null,
+        retained_worktree: null,
         retained_previous_worktree: {
           worktree: registeredWorktreeWire(previousRoot, "worktree-previous"),
         },

@@ -216,6 +216,7 @@ func (s *blockingWorkflowAttentionNotificationSnapshot) Next(ctx context.Context
 }
 
 func registryWorkflowInterruptionNotification(id string, taskID string, nodeID string) clientui.AttentionNotification {
+	var setupOperationID *string
 	return clientui.AttentionNotification{
 		ID:         clientui.AttentionNotificationID{Kind: clientui.AttentionNotificationKindInterruptedCurrentNode, UUID: id},
 		Kind:       clientui.AttentionNotificationKindInterruptedCurrentNode,
@@ -230,7 +231,8 @@ func registryWorkflowInterruptionNotification(id string, taskID string, nodeID s
 			TaskID:        taskID,
 			CurrentNodeID: &nodeID,
 			Focus: &clientui.AttentionNotificationTaskDetailFocus{
-				Kind: clientui.AttentionNotificationFocusInterruptedCurrentNode,
+				Kind:             clientui.AttentionNotificationFocusInterruptedCurrentNode,
+				SetupOperationID: &setupOperationID,
 			},
 		},
 	}

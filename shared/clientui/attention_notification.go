@@ -115,5 +115,5 @@ type AttentionNotificationTaskDetailFocus struct {
 	Kind             AttentionNotificationFocusKind `json:"kind"`
 	AskIDs           []string                       `json:"ask_ids,omitempty"`
 	ApprovalID       string                         `json:"approval_id,omitempty"`
-	SetupOperationID *string                        `json:"setup_operation_id,omitempty"`
+	SetupOperationID **string                       `json:"setup_operation_id,omitempty"`
 }

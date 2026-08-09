@@ -376,13 +376,32 @@ func TestWorktreeSetupRetainedErrorKeepsExistingWireIdentity(t *testing.T) {
 		t.Fatalf("decoded script path = %q, want %q", retained.ScriptPath, source.ScriptPath)
 	}
 
+	withoutPrevious := *source
+	withoutPrevious.RetainedPreviousWorktree = nil
+	var absentPayload map[string]json.RawMessage
+	if err := json.Unmarshal(withoutPrevious.RPCErrorData(), &absentPayload); err != nil {
+		t.Fatalf("decode absent retained previous worktree payload: %v", err)
+	}
+	if got := string(absentPayload["retained_previous_worktree"]); got != "null" {
+		t.Fatalf("retained_previous_worktree = %s, want explicit null", got)
+	}
+	delete(absentPayload, "retained_previous_worktree")
+	missing, err := json.Marshal(absentPayload)
+	if err != nil {
+		t.Fatalf("encode missing retained previous worktree payload: %v", err)
+	}
+	decodedMissing := DecodeWorktreeRPCError(missing, "remote setup failed")
+	if errors.As(decodedMissing, &retained) {
+		t.Fatalf("missing retained_previous_worktree decoded as typed error: %+v", retained)
+	}
+
 	malformed := source.RPCErrorData()
 	var payload map[string]any
 	if err := json.Unmarshal(malformed, &payload); err != nil {
 		t.Fatalf("decode error payload: %v", err)
 	}
 	payload["diagnostic"] = " "
-	malformed, err := json.Marshal(payload)
+	malformed, err = json.Marshal(payload)
 	if err != nil {
 		t.Fatalf("encode malformed payload: %v", err)
 	}

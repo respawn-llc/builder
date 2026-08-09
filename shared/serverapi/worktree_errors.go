@@ -221,7 +221,7 @@ type WorktreeSetupRetainedError struct {
 	Worktree                 WorktreeTopologyEntry     `json:"worktree"`
 	ScriptPath               string                    `json:"script_path"`
 	Diagnostic               string                    `json:"diagnostic"`
-	RetainedPreviousWorktree *RetainedPreviousWorktree `json:"retained_previous_worktree,omitempty"`
+	RetainedPreviousWorktree *RetainedPreviousWorktree `json:"retained_previous_worktree"`
 	cause                    error
 }
 
@@ -274,7 +274,7 @@ func (e *WorktreeSetupRetainedError) RPCErrorData() json.RawMessage {
 		Worktree                 WorktreeTopologyEntry     `json:"worktree"`
 		ScriptPath               string                    `json:"script_path"`
 		Diagnostic               string                    `json:"diagnostic"`
-		RetainedPreviousWorktree *RetainedPreviousWorktree `json:"retained_previous_worktree,omitempty"`
+		RetainedPreviousWorktree *RetainedPreviousWorktree `json:"retained_previous_worktree"`
 	}{
 		Type:                     "worktree_setup_retained",
 		Worktree:                 e.Worktree,
@@ -419,20 +419,28 @@ func DecodeWorktreeRPCError(data json.RawMessage, message string) error {
 		return &result
 	case "worktree_setup_retained":
 		var payload struct {
-			Type                     string                    `json:"type"`
-			Worktree                 WorktreeTopologyEntry     `json:"worktree"`
-			ScriptPath               string                    `json:"script_path"`
-			Diagnostic               string                    `json:"diagnostic"`
-			RetainedPreviousWorktree *RetainedPreviousWorktree `json:"retained_previous_worktree,omitempty"`
+			Type                     string                `json:"type"`
+			Worktree                 WorktreeTopologyEntry `json:"worktree"`
+			ScriptPath               string                `json:"script_path"`
+			Diagnostic               string                `json:"diagnostic"`
+			RetainedPreviousWorktree json.RawMessage       `json:"retained_previous_worktree"`
 		}
-		if err := json.Unmarshal(data, &payload); err != nil {
+		if err := protocol.DecodeStrictJSON(data, &payload); err != nil ||
+			len(payload.RetainedPreviousWorktree) == 0 {
+			return fallbackWorktreeRPCError(message)
+		}
+		var retainedPreviousWorktree *RetainedPreviousWorktree
+		if err := protocol.DecodeStrictJSON(
+			payload.RetainedPreviousWorktree,
+			&retainedPreviousWorktree,
+		); err != nil {
 			return fallbackWorktreeRPCError(message)
 		}
 		result := &WorktreeSetupRetainedError{
 			Worktree:                 payload.Worktree,
 			ScriptPath:               payload.ScriptPath,
 			Diagnostic:               payload.Diagnostic,
-			RetainedPreviousWorktree: payload.RetainedPreviousWorktree,
+			RetainedPreviousWorktree: retainedPreviousWorktree,
 		}
 		if err := result.Validate(); err != nil {
 			return fallbackWorktreeRPCError(message)

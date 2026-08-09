@@ -98,9 +98,9 @@ export const worktreeSetupFailureWireSchema = z
     cause: failureCauseSchema,
     diagnostic: z.string().trim().min(1),
     script_path: z.string().trim().min(1).nullable(),
-    execution_target: workflowExecutionTargetSelectionSchema.optional(),
-    retained_worktree: registeredWorktreeTopologySchema.nullable().optional(),
-    retained_previous_worktree: retainedPreviousWorktreeSchema.nullable().optional(),
+    execution_target: workflowExecutionTargetSelectionSchema.nullable(),
+    retained_worktree: registeredWorktreeTopologySchema.nullable(),
+    retained_previous_worktree: retainedPreviousWorktreeSchema.nullable(),
   })
   .strict()
   .superRefine((value, context) => {
@@ -153,7 +153,7 @@ export const worktreeSetupFailureWireSchema = z
     cause: value.cause,
     diagnostic: value.diagnostic,
     scriptPath: value.script_path,
-    executionTarget: value.execution_target ?? null,
-    retainedWorktree: value.retained_worktree ?? null,
-    retainedPreviousWorktree: value.retained_previous_worktree ?? null,
+    executionTarget: value.execution_target,
+    retainedWorktree: value.retained_worktree,
+    retainedPreviousWorktree: value.retained_previous_worktree,
   }));

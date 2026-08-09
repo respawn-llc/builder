@@ -264,6 +264,7 @@ describe("TaskInitiatingActionDialogs", () => {
                 outcome: "no_op",
                 no_op: {
                   current_nodes: [{ node_id: "node-2", transition_branch_key: null, session_id: null }],
+                  retained_previous_worktree: null,
                 },
               };
           }
@@ -408,14 +409,14 @@ function setupFailure(diagnostic: string, root: string, previousRoot?: string): 
         cause: { kind: "operational", operational: {} },
         diagnostic,
         script_path: "/repo/setup.sh",
+        execution_target: null,
         retained_worktree: registeredWorktreeWire(root, "worktree-current"),
-        ...(previousRoot === undefined
-          ? {}
-          : {
-              retained_previous_worktree: {
+        retained_previous_worktree:
+          previousRoot === undefined
+            ? null
+            : {
                 worktree: registeredWorktreeWire(previousRoot, "worktree-previous"),
               },
-            }),
       },
     },
   });
