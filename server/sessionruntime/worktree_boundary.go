@@ -63,6 +63,12 @@ type reducerBoundaryGrant struct {
 	record    *reducerBoundaryRecord
 }
 
+type idleReducerBoundaryGrant struct {
+	authority *Authority
+	resource  runtimeids.SessionResourceRef
+	record    *reducerBoundaryRecord
+}
+
 func (a *Authority) ClaimWorktreeBoundary(
 	resourceRef runtimeids.SessionResourceRef,
 	operationID serverapi.WorktreeOperationID,
@@ -185,6 +191,51 @@ func (r *agentResource) CurrentAgentExecutionScope(
 	return r.current.scope.ID(), true
 }
 
+func (r *agentResource) TryAcquireIdleBoundary(
+	ctx context.Context,
+) (runtime.IdleBoundaryReducerGrant, bool, error) {
+	if err := context.Cause(ctx); err != nil {
+		return nil, false, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.rejectsNewUseLocked() {
+		return nil, false, runtimeUnavailableError(r.ref)
+	}
+	if r.current != nil || r.reducerBoundary != nil {
+		return nil, false, nil
+	}
+	if worktree := r.worktreeBoundary; worktree != nil {
+		switch worktree.phase {
+		case worktreeBoundaryPending:
+			worktree.phase = worktreeBoundaryActiveIdle
+			close(worktree.granted)
+			r.signalLocked()
+		case worktreeBoundaryActiveIdle:
+		case worktreeBoundaryActiveStepWait:
+			panic(fmt.Sprintf(
+				"resource %s generation %d retained an active Step Worktree boundary while idle",
+				r.ref.SessionID(),
+				r.ref.Generation(),
+			))
+		default:
+			panic(fmt.Sprintf(
+				"resource %s generation %d retained settled Worktree boundary phase %d",
+				r.ref.SessionID(),
+				r.ref.Generation(),
+				worktree.phase,
+			))
+		}
+		return nil, false, nil
+	}
+	record := r.newReducerBoundaryRecordLocked()
+	return &idleReducerBoundaryGrant{
+		authority: r.authority,
+		resource:  r.ref,
+		record:    record,
+	}, true, nil
+}
+
 func (r *agentResource) AgentStepBoundary(
 	_ context.Context,
 	origin serverapi.RuntimeStepOrigin,
@@ -269,6 +320,15 @@ func clearCompletionOriginLocked(
 }
 
 func (r *agentResource) newReducerBoundaryGrantLocked() runtime.AgentStepReducerGrant {
+	record := r.newReducerBoundaryRecordLocked()
+	return &reducerBoundaryGrant{
+		authority: r.authority,
+		resource:  r.ref,
+		record:    record,
+	}
+}
+
+func (r *agentResource) newReducerBoundaryRecordLocked() *reducerBoundaryRecord {
 	if r.reducerBoundary != nil {
 		panic(fmt.Sprintf(
 			"resource %s generation %d attempted to duplicate reducer Boundary ownership",
@@ -278,11 +338,7 @@ func (r *agentResource) newReducerBoundaryGrantLocked() runtime.AgentStepReducer
 	}
 	record := &reducerBoundaryRecord{phase: reducerBoundaryActive}
 	r.reducerBoundary = record
-	return &reducerBoundaryGrant{
-		authority: r.authority,
-		resource:  r.ref,
-		record:    record,
-	}
+	return record
 }
 
 func (g *reducerBoundaryGrant) RegisterNext(
@@ -312,9 +368,9 @@ func (g *reducerBoundaryGrant) RegisterNext(
 		return runtimeids.ExecutionScopeID{}, err
 	}
 	scopeID := resource.current.scope.ID()
-	g.record.phase = reducerBoundaryReleased
-	resource.reducerBoundary = nil
-	resource.signalLocked()
+	if _, err := resource.releaseReducerBoundaryLocked(g.record); err != nil {
+		return runtimeids.ExecutionScopeID{}, err
+	}
 	return scopeID, nil
 }
 
@@ -328,14 +384,37 @@ func (g *reducerBoundaryGrant) Release() error {
 	}
 	resource.mu.Lock()
 	defer resource.mu.Unlock()
-	if resource.reducerBoundary != g.record ||
-		g.record.phase != reducerBoundaryActive {
-		return runtimeUnavailableError(g.resource)
+	_, err = resource.releaseReducerBoundaryLocked(g.record)
+	return err
+}
+
+func (g *idleReducerBoundaryGrant) Release() (bool, error) {
+	if g == nil || g.authority == nil || g.record == nil {
+		return false, serverapi.ErrRuntimeUnavailable
 	}
-	g.record.phase = reducerBoundaryReleased
-	resource.reducerBoundary = nil
-	resource.signalLocked()
-	return nil
+	resource, err := g.authority.resourceForBoundary(g.resource)
+	if err != nil {
+		return false, err
+	}
+	resource.mu.Lock()
+	defer resource.mu.Unlock()
+	return resource.releaseReducerBoundaryLocked(g.record)
+}
+
+func (r *agentResource) releaseReducerBoundaryLocked(
+	record *reducerBoundaryRecord,
+) (bool, error) {
+	if r.reducerBoundary != record ||
+		record.phase != reducerBoundaryActive {
+		return false, runtimeUnavailableError(r.ref)
+	}
+	record.phase = reducerBoundaryReleased
+	r.reducerBoundary = nil
+	retry := r.current == nil &&
+		r.worktreeBoundary != nil &&
+		r.worktreeBoundary.phase == worktreeBoundaryPending
+	r.signalLocked()
+	return retry, nil
 }
 
 func (w worktreeBoundaryWait) Await(

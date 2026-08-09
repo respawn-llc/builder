@@ -65,6 +65,14 @@ type AgentStepScopeLifecycle interface {
 	CurrentAgentExecutionScope(context.Context) (runtimeids.ExecutionScopeID, bool)
 }
 
+type IdleBoundaryReducerLifecycle interface {
+	TryAcquireIdleBoundary(context.Context) (IdleBoundaryReducerGrant, bool, error)
+}
+
+type IdleBoundaryReducerGrant interface {
+	Release() (bool, error)
+}
+
 type AgentStepReducerGrant interface {
 	RegisterNext(context.Context, serverapi.RuntimeStepOrigin) (runtimeids.ExecutionScopeID, error)
 	Release() error

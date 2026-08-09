@@ -242,6 +242,61 @@ func TestIdleManualCompactionSurvivesCallerCancellation(t *testing.T) {
 	}
 }
 
+func TestIdleManualCompactionWaitsForIdleBoundaryOwnership(t *testing.T) {
+	client := newScriptedGoalLoopClient()
+	boundary := &manualCompactionIdleBoundaryLifecycle{}
+	engine := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		client,
+		tools.NewRegistry(),
+		Config{
+			Model:          "gpt-5",
+			CompactionMode: "local",
+			StepLifecycle:  boundary,
+		},
+	)
+	if err := engine.steer(
+		"seed",
+		steerMessagesWithPersistenceIntent(
+			steeringPriorityNormal,
+			steeringMessageEventNone,
+			true,
+			[]llm.Message{{
+				Role:    llm.RoleUser,
+				Content: textutil.Value("compact me"),
+			}},
+		),
+	); err != nil {
+		t.Fatalf("seed transcript: %v", err)
+	}
+	engine.compactionRuntimeState().SetManualCompactionEligible(true)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- engine.CompactContext(context.Background(), "")
+	}()
+	client.assertNotStarted(t, 1)
+	if pending := engine.boundaryAgenda.pending(); len(pending) != 1 {
+		t.Fatalf("pending compaction items = %d, want one", len(pending))
+	}
+
+	boundary.allow()
+	if err := engine.AgentExecutionScopeReleased(runtimeids.NewExecutionScopeID()); err != nil {
+		t.Fatalf("trigger idle reduction: %v", err)
+	}
+	client.waitStarted(t, 1)
+	client.releaseCall(1)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("manual compaction: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("manual compaction did not finish after idle Boundary grant")
+	}
+}
+
 func TestSelectedManualCompactionRuntimeCloseSettlesBoundaryOnce(t *testing.T) {
 	engine := mustNewTestEngine(
 		t,
@@ -319,6 +374,48 @@ func TestSelectedManualCompactionRuntimeCloseSettlesBoundaryOnce(t *testing.T) {
 type manualCompactionTestGrant struct {
 	mu       sync.Mutex
 	releases int
+}
+
+type manualCompactionIdleBoundaryLifecycle struct {
+	mu      sync.Mutex
+	allowed bool
+}
+
+func (*manualCompactionIdleBoundaryLifecycle) StepBegan(
+	context.Context,
+	StepLifecycleSnapshot,
+) error {
+	return nil
+}
+
+func (*manualCompactionIdleBoundaryLifecycle) StepEnded(
+	context.Context,
+	StepLifecycleSnapshot,
+) error {
+	return nil
+}
+
+func (l *manualCompactionIdleBoundaryLifecycle) TryAcquireIdleBoundary(
+	context.Context,
+) (IdleBoundaryReducerGrant, bool, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if !l.allowed {
+		return nil, false, nil
+	}
+	return manualCompactionIdleBoundaryGrant{}, true, nil
+}
+
+func (l *manualCompactionIdleBoundaryLifecycle) allow() {
+	l.mu.Lock()
+	l.allowed = true
+	l.mu.Unlock()
+}
+
+type manualCompactionIdleBoundaryGrant struct{}
+
+func (manualCompactionIdleBoundaryGrant) Release() (bool, error) {
+	return false, nil
 }
 
 func (*manualCompactionTestGrant) RegisterNext(

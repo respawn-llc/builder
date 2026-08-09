@@ -26,9 +26,28 @@ type boundaryLongOrchestrator struct {
 	selected boundaryLongWork
 }
 
-func (e *Engine) reduceIdleBoundary(admission runtimeEventAdmission) error {
+func (e *Engine) reduceIdleBoundary(admission runtimeEventAdmission) (resultErr error) {
 	if e == nil || !e.idleBoundaryReductionEligible() {
 		return nil
+	}
+	var grant IdleBoundaryReducerGrant
+	if lifecycle, ok := e.cfg.StepLifecycle.(IdleBoundaryReducerLifecycle); ok {
+		acquiredGrant, acquired, err := lifecycle.TryAcquireIdleBoundary(admission.Context())
+		if err != nil || !acquired {
+			return err
+		}
+		grant = acquiredGrant
+		if grant == nil {
+			return errors.New("idle Boundary reducer acquisition returned no grant")
+		}
+		defer func() {
+			selectedLongWork := e.longBoundary.selected != nil
+			retry, releaseErr := grant.Release()
+			resultErr = errors.Join(resultErr, releaseErr)
+			if retry && !selectedLongWork && resultErr == nil {
+				resultErr = e.reduceIdleBoundary(admission)
+			}
+		}()
 	}
 	for {
 		next := e.boundaryAgenda.peekNext(idleBoundarySelection())

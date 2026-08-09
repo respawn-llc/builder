@@ -187,7 +187,7 @@ func (b *defaultBackgroundAgendaAdapter) acceptNotice(
 		return err
 	}
 	if b.engine.idleBoundaryReductionEligible() {
-		return b.engine.startNextBackgroundLongWork(admission)
+		return b.engine.reduceIdleBoundary(admission)
 	}
 	return nil
 }

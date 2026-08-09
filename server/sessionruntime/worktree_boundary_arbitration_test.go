@@ -138,6 +138,133 @@ func TestWorktreeBoundaryArbitratesClaimAndReducerOrder(t *testing.T) {
 	}
 }
 
+func TestIdleBoundaryArbitratesWorktreeClaimAndReducerOrder(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(*testing.T, *sessionRuntimeFixture, *agentResource) error
+	}{
+		{
+			name: "claim before idle reduction grants Worktree",
+			run: func(
+				t *testing.T,
+				fixture *sessionRuntimeFixture,
+				resource *agentResource,
+			) error {
+				claim, err := fixture.authority.ClaimWorktreeBoundary(
+					resource.ref,
+					serverapi.NewWorktreeOperationID(),
+				)
+				if err != nil {
+					return err
+				}
+				if err := claim.AwaitGrant(context.Background()); err != nil {
+					return err
+				}
+				grant, acquired, err := resource.TryAcquireIdleBoundary(context.Background())
+				if err != nil {
+					return err
+				}
+				if acquired || grant != nil {
+					t.Fatalf("idle reducer acquisition = %t, %T; want Worktree ownership", acquired, grant)
+				}
+				reducer, err := claim.Release()
+				if err != nil {
+					return err
+				}
+				if reducer == nil {
+					t.Fatal("idle Worktree release returned no reducer grant")
+				}
+				return reducer.Release()
+			},
+		},
+		{
+			name: "idle reduction before claim defers Worktree until reducer re-entry",
+			run: func(
+				t *testing.T,
+				fixture *sessionRuntimeFixture,
+				resource *agentResource,
+			) error {
+				grant, acquired, err := resource.TryAcquireIdleBoundary(context.Background())
+				if err != nil {
+					return err
+				}
+				if !acquired || grant == nil {
+					t.Fatalf("idle reducer acquisition = %t, %T; want grant", acquired, grant)
+				}
+				claim, err := fixture.authority.ClaimWorktreeBoundary(
+					resource.ref,
+					serverapi.NewWorktreeOperationID(),
+				)
+				if err != nil {
+					return err
+				}
+				waitCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+				defer cancel()
+				if err := claim.AwaitGrant(waitCtx); !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatalf("claim grant during reducer ownership = %v, want deadline", err)
+				}
+				retry, err := grant.Release()
+				if err != nil {
+					return err
+				}
+				if !retry {
+					t.Fatal("idle reducer release did not request arbitration re-entry")
+				}
+				waitCtx, cancel = context.WithTimeout(context.Background(), 20*time.Millisecond)
+				defer cancel()
+				if err := claim.AwaitGrant(waitCtx); !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatalf("claim grant before reducer re-entry = %v, want deadline", err)
+				}
+				next, acquired, err := resource.TryAcquireIdleBoundary(context.Background())
+				if err != nil {
+					return err
+				}
+				if acquired || next != nil {
+					t.Fatalf("re-entry acquisition = %t, %T; want Worktree transfer", acquired, next)
+				}
+				if err := claim.AwaitGrant(context.Background()); err != nil {
+					return err
+				}
+				reducer, err := claim.Release()
+				if err != nil {
+					return err
+				}
+				if reducer == nil {
+					t.Fatal("idle Worktree release returned no reducer grant")
+				}
+				return reducer.Release()
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newSessionRuntimeFixture(t)
+			sessionID := lifecycleSessionID(t, fixture)
+			plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
+			attachment := openLifecycleRuntime(
+				t,
+				fixture.authority,
+				sessionID,
+				"idle-worktree-boundary-arbitration",
+				&plan,
+			)
+			fixture.authority.mu.Lock()
+			resource := fixture.authority.resources[sessionID]
+			fixture.authority.mu.Unlock()
+			if resource == nil {
+				t.Fatal("active resource is unavailable")
+			}
+			if err := test.run(t, &fixture, resource); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := attachment.Release(context.Background(), RuntimeReleaseClose); err != nil {
+				t.Fatalf("close runtime: %v", err)
+			}
+		})
+	}
+}
+
 func worktreeBoundaryArbitrationFixture(
 	t *testing.T,
 ) (*sessionRuntimeFixture, *agentResource, func()) {

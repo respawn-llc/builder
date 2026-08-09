@@ -206,7 +206,7 @@ func (e *Engine) admitManualCompaction(
 		return nil, err
 	}
 	if item.eligibility == boundaryEligibilityIdle {
-		if err := e.startNextManualCompactionLongWork(admission); err != nil {
+		if err := e.reduceIdleBoundary(admission); err != nil {
 			if !e.boundaryAgenda.discard(item.id, err) {
 				resolver.settle(session.CommitReceipt{}, err)
 			}
