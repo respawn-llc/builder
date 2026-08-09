@@ -369,65 +369,49 @@ func (f *currentNodeRunnerFixture) waitForCurrentNode(t *testing.T, taskID workf
 	return nil
 }
 
-func (f *currentNodeRunnerFixture) waitForControllerCurrentNode(t *testing.T, reference workflow.CurrentNodeReference) {
+func (f *currentNodeRunnerFixture) waitForWorkflowExecution(t *testing.T, reference workflow.CurrentNodeReference) {
 	t.Helper()
 	deadline := time.Now().Add(currentNodeRunnerWait)
 	for time.Now().Before(deadline) {
-		snapshot := f.controller.Snapshot()
-		for _, gate := range snapshot.Gates {
-			if gate.CurrentNode.Equal(reference) {
-				return
-			}
+		owned, err := f.workflowExecutionOwned(reference)
+		if err != nil {
+			t.Fatalf("inspect Workflow execution: %v", err)
 		}
-		for _, live := range snapshot.LiveScopes {
-			if live.CurrentNode.Equal(reference) {
-				return
-			}
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("Current Node %v never reached controller admission or live state", reference)
-}
-
-func (f *currentNodeRunnerFixture) waitForControllerCurrentNodeFinalized(t *testing.T, reference workflow.CurrentNodeReference) {
-	t.Helper()
-	deadline := time.Now().Add(currentNodeRunnerWait)
-	for time.Now().Before(deadline) {
-		if !controllerSnapshotOwnsCurrentNode(f.controller.Snapshot(), reference) {
+		if owned {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("Current Node %v remained owned by the controller after execution finalization", reference)
+	t.Fatalf("Current Node %v never reached Workflow execution authority", reference)
 }
 
-func controllerSnapshotOwnsCurrentNode(snapshot workflowexecution.CurrentNodeExecutionSnapshot, reference workflow.CurrentNodeReference) bool {
-	for _, intent := range snapshot.AutomaticIntents {
-		if intent.CurrentNode.Equal(reference) {
-			return true
+func (f *currentNodeRunnerFixture) waitForTaskQuiescence(t *testing.T, taskID workflow.TaskID) {
+	t.Helper()
+	deadline := time.Now().Add(currentNodeRunnerWait)
+	for time.Now().Before(deadline) {
+		quiescence, err := f.controller.CurrentTaskQuiescence([]workflow.TaskID{taskID})
+		if err != nil {
+			t.Fatalf("inspect Task quiescence: %v", err)
+		}
+		if quiescence[taskID] {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("Task %s did not reach Workflow execution quiescence", taskID)
+}
+
+func (f *currentNodeRunnerFixture) workflowExecutionOwned(reference workflow.CurrentNodeReference) (bool, error) {
+	snapshots, err := f.authority.CurrentWorkflowTaskExecutionSnapshots()
+	if err != nil {
+		return false, err
+	}
+	for _, execution := range snapshots[reference.TaskID].Executions {
+		if execution.Ref.CurrentNode.Equal(reference) {
+			return true, nil
 		}
 	}
-	for _, start := range snapshot.ExplicitStarts {
-		if start.CurrentNode.Equal(reference) {
-			return true
-		}
-	}
-	for _, intent := range snapshot.HeldIntents {
-		if intent.CurrentNode.Equal(reference) {
-			return true
-		}
-	}
-	for _, gate := range snapshot.Gates {
-		if gate.CurrentNode.Equal(reference) {
-			return true
-		}
-	}
-	for _, live := range snapshot.LiveScopes {
-		if live.CurrentNode.Equal(reference) {
-			return true
-		}
-	}
-	return false
+	return false, nil
 }
 
 func (f *currentNodeRunnerFixture) waitForPath(t *testing.T, path string) {
@@ -680,7 +664,7 @@ func TestCurrentNodeAgentWritesToSiblingWorkspaceThroughCreatedRuntime(t *testin
 	workflowID := createCurrentNodeAgentWorkflowWithCompletionMode(t, f.store, string(config.WorkflowCompletionModeTool))
 	task := f.createTask(t, workflowID)
 	currentNode := f.startTask(t, task)
-	f.waitForControllerCurrentNodeFinalized(t, currentNode)
+	f.waitForTaskQuiescence(t, currentNode.TaskID)
 	if data, err := os.ReadFile(target); err != nil || string(data) != "workflow sibling\n" {
 		t.Fatalf("workflow sibling file = %q, error = %v", data, err)
 	}
@@ -761,7 +745,7 @@ func TestApprovalTransitionSteersPreviousTargetSessionExactlyOnceAfterSourceReti
 	implementation := f.startTask(t, task)
 
 	approval := f.waitForPendingApproval(t, task.ID)
-	f.waitForControllerCurrentNodeFinalized(t, approval.Source)
+	f.waitForTaskQuiescence(t, approval.Source.TaskID)
 	implementationSession, err := f.store.LatestTaskSessionForNode(context.Background(), implementation)
 	if err != nil {
 		t.Fatalf("resolve previous target Session: %v", err)
@@ -862,7 +846,7 @@ func TestWorkflowPostCompletionDiagnosticPreservesApprovalCACBoundary(t *testing
 	if len(pending) != 1 || pending[0].ID != approval.ID {
 		t.Fatalf("pending Approvals after finalization diagnostic = %+v, want original Approval", pending)
 	}
-	f.waitForControllerCurrentNodeFinalized(t, approval.Source)
+	f.waitForTaskQuiescence(t, approval.Source.TaskID)
 	deadline := time.Now().Add(currentNodeRunnerWait)
 	for {
 		_, err := f.controller.ApplyPendingApproval(context.Background(), approval.ID)
@@ -986,7 +970,7 @@ func TestWorkflowPostCompletionCompactionReachesCACTargetWithoutSecondSummary(t 
 	task := f.createTask(t, workflowID)
 	f.startTask(t, task)
 	approval := f.waitForPendingApproval(t, task.ID)
-	f.waitForControllerCurrentNodeFinalized(t, approval.Source)
+	f.waitForTaskQuiescence(t, approval.Source.TaskID)
 	if _, err := f.controller.ApplyPendingApproval(context.Background(), approval.ID); err != nil {
 		t.Fatalf("apply CAC target Approval: %v", err)
 	}
@@ -1068,7 +1052,7 @@ func TestDisabledCACRetriesExistingTargetOnResumeAfterConfigurationChange(t *tes
 	task := f.createTask(t, workflowID)
 	f.startTask(t, task)
 	approval := f.waitForPendingApproval(t, task.ID)
-	f.waitForControllerCurrentNodeFinalized(t, approval.Source)
+	f.waitForTaskQuiescence(t, approval.Source.TaskID)
 	if _, err := f.controller.ApplyPendingApproval(context.Background(), approval.ID); err != nil {
 		t.Fatalf("apply CAC target Approval: %v", err)
 	}
@@ -1080,7 +1064,7 @@ func TestDisabledCACRetriesExistingTargetOnResumeAfterConfigurationChange(t *tes
 	if interrupted.SessionID == nil {
 		t.Fatal("disabled CAC target lost its assigned Session")
 	}
-	f.waitForControllerCurrentNodeFinalized(t, interrupted.Reference)
+	f.waitForTaskQuiescence(t, interrupted.Reference.TaskID)
 	f.starter.cfg.Settings.CompactionMode = config.CompactionModeNative
 	if _, err := f.controller.ResumeTask(context.Background(), task.ID); err != nil {
 		t.Fatalf("resume disabled CAC target: %v", err)
@@ -1148,7 +1132,7 @@ func TestWorkflowPostCompletionCompactionPreservesOrdinaryContinueReplacementKey
 	task := f.createTask(t, workflowID)
 	f.startTask(t, task)
 	approval := f.waitForPendingApproval(t, task.ID)
-	f.waitForControllerCurrentNodeFinalized(t, approval.Source)
+	f.waitForTaskQuiescence(t, approval.Source.TaskID)
 	if _, err := f.controller.ApplyPendingApproval(context.Background(), approval.ID); err != nil {
 		t.Fatalf("apply ordinary continuation Approval: %v", err)
 	}
@@ -1190,7 +1174,7 @@ func TestPostTurnCompactionDiagnosticReleasesAssignedSuccessor(t *testing.T) {
 		return len(nodes) == 1 &&
 			!nodes[0].Reference.Equal(source)
 	})[0].Reference
-	f.waitForControllerCurrentNodeFinalized(t, source)
+	f.waitForTaskQuiescence(t, source.TaskID)
 	if target.NodeID == source.NodeID {
 		t.Fatalf("successor reference = %v, want a distinct target", target)
 	}
@@ -1243,33 +1227,12 @@ func TestWorkflowRunnerCancellationDuringPostTurnFinalizationFinalizesInterrupte
 	if len(client.CompactionCalls()) != 1 {
 		t.Fatalf("post-turn compactions before cancellation = %d, want one committed replacement", len(client.CompactionCalls()))
 	}
-	var execution sessionruntime.ExecutionHandle
-	snapshot := f.controller.Snapshot()
-	for _, live := range snapshot.LiveScopes {
-		if !live.CurrentNode.Equal(source) {
-			continue
-		}
-		var ok bool
-		execution, ok = f.authority.ExecutionByScope(live.ScopeID)
-		if !ok {
-			t.Fatalf("resolve exact execution scope %s", live.ScopeID)
-		}
-		break
-	}
-	if execution == nil {
-		for _, gate := range snapshot.Gates {
-			if !gate.CurrentNode.Equal(source) {
-				continue
-			}
-			var ok bool
-			execution, ok = f.authority.ExecutionByScope(gate.ScopeID)
-			if !ok {
-				t.Fatalf("resolve exact execution scope %s", gate.ScopeID)
-			}
-			break
-		}
-	}
-	if execution == nil {
+	execution, exists := f.authority.ExecutionByWorkflow(sessionruntime.WorkflowExecutionRef{
+		ProjectID:   f.projectID,
+		WorkflowID:  workflowID,
+		CurrentNode: source,
+	})
+	if !exists {
 		t.Fatal("post-turn finalization had no live exact execution scope")
 	}
 	if !execution.RequestStop() {
@@ -1288,7 +1251,7 @@ func TestWorkflowRunnerCancellationDuringPostTurnFinalizationFinalizesInterrupte
 			nodes[0].Scheduling != nil &&
 			nodes[0].Scheduling.Interruption != nil
 	})
-	f.waitForControllerCurrentNodeFinalized(t, source)
+	f.waitForTaskQuiescence(t, source.TaskID)
 	approval := f.waitForPendingApproval(t, task.ID)
 	pending, err := f.store.ListPendingApprovals(context.Background(), task.ID)
 	if err != nil {
@@ -1361,7 +1324,7 @@ func TestResumeRetainsEstablishedSessionContractAndAttachedRuntime(t *testing.T)
 			nodes[0].Scheduling.Interruption != nil &&
 			len(f.client.Requests()) == 1
 	})
-	f.waitForControllerCurrentNodeFinalized(t, currentNode)
+	f.waitForTaskQuiescence(t, currentNode.TaskID)
 
 	meta := f.onlyProjectSessionMeta(t)
 	sessionID, err := runtimeids.ParseSessionID(meta.SessionID)
@@ -1502,7 +1465,7 @@ func TestResumeRetainsEstablishedSessionContractAndAttachedRuntime(t *testing.T)
 			nodes[0].Scheduling.Interruption != nil &&
 			len(f.client.Requests()) == 2
 	})
-	f.waitForControllerCurrentNodeFinalized(t, currentNode)
+	f.waitForTaskQuiescence(t, currentNode.TaskID)
 	if err := f.authority.WithRuntime(context.Background(), attachment.Resource(), func(_ context.Context, engine *agentruntime.Engine) error {
 		if !engine.CurrentNodeExecutionConfigured() {
 			t.Fatal("finalized workflow execution discarded the retained Session contract")
@@ -1753,7 +1716,7 @@ func TestWorkflowPostCompletionCompactsFanoutSourceBeforeBranchClones(t *testing
 	source := f.startTask(t, task)
 
 	approval := f.waitForPendingApproval(t, task.ID)
-	f.waitForControllerCurrentNodeFinalized(t, source)
+	f.waitForTaskQuiescence(t, source.TaskID)
 	if len(client.CompactionCalls()) != 1 {
 		t.Fatalf("fan-out source post-completion compactions = %d, want one", len(client.CompactionCalls()))
 	}
@@ -1963,7 +1926,7 @@ func TestCurrentNodeContinuationWithActiveTranscriptSubscriberDoesNotBlockLaterA
 		return len(nodes) == 1 && !nodes[0].Reference.Equal(source)
 	})
 	successor := successorNodes[0].Reference
-	f.waitForControllerCurrentNode(t, successor)
+	f.waitForWorkflowExecution(t, successor)
 	select {
 	case <-successorResponseStarted:
 	case <-time.After(currentNodeRunnerWait):

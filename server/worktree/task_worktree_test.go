@@ -1771,6 +1771,42 @@ func TestPrepareTaskExecutionRootReturnsExistingManagedWorktree(t *testing.T) {
 	}
 }
 
+func TestPrepareTaskExecutionRootReturnsBoundWorktreeWhenSetupRecreationRemovalFails(t *testing.T) {
+	env := newServiceTestEnv(t)
+	task, _ := createTaskWorktreeTestTask(t, env)
+	target := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
+	first, err := prepareManagedTaskExecutionRoot(env.ctx, env.service, task.ID, nil, target)
+	if err != nil {
+		t.Fatalf("initial PrepareTaskExecutionRoot: %v", err)
+	}
+	scriptRelpath := filepath.Join("scripts", "setup.sh")
+	writeExecutableFile(t, filepath.Join(env.workspaceRoot, scriptRelpath), "#!/bin/sh\nexit 1\n")
+	env.service.setupScript = scriptRelpath
+	removeErr := errors.New("remove provisional worktree")
+	env.service.git = NewGitInspector(&recordingGitCommandRunner{
+		delegate:           execGitCommandRunner{},
+		failWorktreeRemove: removeErr,
+	})
+
+	prepared, err := env.service.PrepareTaskExecutionRoot(env.ctx, TaskExecutionRootPreparationRequest{
+		TaskID:           task.ID,
+		SetupOperationID: newWorktreeSetupOperationIDPointer(),
+		ManagedTarget:    &target,
+		SetupRequirement: worktreecontract.SetupRequirementRequired,
+	})
+	if !errors.Is(err, removeErr) {
+		t.Fatalf("PrepareTaskExecutionRoot error = %v, want remove failure", err)
+	}
+	if prepared.Materialization == nil ||
+		taskWorktreeID(prepared.Materialization.Worktree) != taskWorktreeID(first.Worktree) ||
+		taskWorktreeRoot(prepared.Materialization.Worktree) != taskWorktreeRoot(first.Worktree) {
+		t.Fatalf("prepared root = %+v, want retained bound materialization %+v", prepared, first)
+	}
+	if _, err := os.Stat(taskWorktreeRoot(first.Worktree)); err != nil {
+		t.Fatalf("retained bound worktree is unavailable: %v", err)
+	}
+}
+
 func TestPrepareTaskExecutionRootRetriesIgnoredSetupChangesInPlace(t *testing.T) {
 	env := newServiceTestEnv(t)
 	task, _ := createTaskWorktreeTestTask(t, env)

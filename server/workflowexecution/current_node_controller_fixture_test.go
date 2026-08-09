@@ -235,7 +235,7 @@ func currentNodeReferenceForControllerTest(t *testing.T, taskID string, nodeID s
 
 func singleLiveScope(t *testing.T, controller *CurrentNodeController, reference workflow.CurrentNodeReference) runtimeids.ExecutionScopeID {
 	t.Helper()
-	snapshot := controller.Snapshot()
+	snapshot := currentNodeControllerSnapshotForTest(controller)
 	for _, scope := range snapshot.LiveScopes {
 		if scope.CurrentNode.Equal(reference) {
 			return scope.ScopeID
@@ -245,7 +245,7 @@ func singleLiveScope(t *testing.T, controller *CurrentNodeController, reference 
 	return runtimeids.ExecutionScopeID{}
 }
 
-func hasLiveCurrentNode(snapshot CurrentNodeExecutionSnapshot, reference workflow.CurrentNodeReference) bool {
+func hasLiveCurrentNode(snapshot currentNodeExecutionSnapshot, reference workflow.CurrentNodeReference) bool {
 	for _, live := range snapshot.LiveScopes {
 		if live.CurrentNode.Equal(reference) {
 			return true
@@ -276,7 +276,7 @@ func waitForRunningCurrentNode(
 	}, "current node %v did not begin running", reference)
 }
 
-func hasAutomaticCurrentNodeIntent(snapshot CurrentNodeExecutionSnapshot, reference workflow.CurrentNodeReference) bool {
+func hasAutomaticCurrentNodeIntent(snapshot currentNodeExecutionSnapshot, reference workflow.CurrentNodeReference) bool {
 	for _, intent := range snapshot.AutomaticIntents {
 		if intent.CurrentNode.Equal(reference) {
 			return true

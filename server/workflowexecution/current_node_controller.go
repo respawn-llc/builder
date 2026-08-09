@@ -57,10 +57,6 @@ type CurrentNodeAttentionLifecycle interface {
 // natural reference rather than a replacement execution identity.
 type CurrentNodeAutomaticIntent = workflowstore.CurrentNodeAutomaticIntent
 
-type CurrentNodeExplicitStart struct {
-	CurrentNode workflow.CurrentNodeReference
-}
-
 type currentNodePostTurnFinalization struct {
 	sessionID      *runtimeids.SessionID
 	classification workflow.SessionReuseClassification

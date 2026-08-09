@@ -60,7 +60,7 @@ func TestCurrentNodeControllerRegistersGateBeforeRunnerAndReleasesLeaseAfterLive
 	}()
 	<-runner.entered
 
-	snapshot := controller.Snapshot()
+	snapshot := currentNodeControllerSnapshotForTest(controller)
 	if len(snapshot.Gates) != 1 || !snapshot.Gates[0].CurrentNode.Equal(reference) {
 		t.Fatalf("gate snapshot = %+v, want admitted gate for %v", snapshot.Gates, reference)
 	}
@@ -87,7 +87,7 @@ func TestCurrentNodeControllerRegistersGateBeforeRunnerAndReleasesLeaseAfterLive
 	if _, err := os.Stat(outputPath); err != nil {
 		t.Fatalf("script did not start after controller released lease: %v", err)
 	}
-	snapshot = controller.Snapshot()
+	snapshot = currentNodeControllerSnapshotForTest(controller)
 	if len(snapshot.Gates) != 0 || len(snapshot.LiveScopes) != 0 {
 		t.Fatalf("post-retirement snapshot = %+v, want no gate or live scope", snapshot)
 	}
@@ -450,7 +450,7 @@ func TestCurrentNodeControllerPreparesMultiCurrentNodeResumeOnceBeforeAdmission(
 		len(preparationBatches[0].CurrentNodes) != 2 {
 		t.Fatalf("preparation snapshot = %+v, want one running two-Current-Node batch", preparationBatches)
 	}
-	snapshot := controller.Snapshot()
+	snapshot := currentNodeControllerSnapshotForTest(controller)
 	if len(snapshot.ExplicitStarts) != 0 || len(snapshot.Gates) != 0 ||
 		len(snapshot.LiveScopes) != 0 || runner.starts() != 0 || targetCommitted.Load() {
 		t.Fatalf("preparation leaked into ordinary admission before handoff: snapshot=%+v starts=%d", snapshot, runner.starts())
@@ -531,7 +531,7 @@ func TestCurrentNodeControllerBoundsExplicitAdmissionSetupWithoutBlockingSibling
 		}
 	}
 	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		snapshot := controller.Snapshot()
+		snapshot := currentNodeControllerSnapshotForTest(controller)
 		return len(snapshot.Gates) == explicitAdmissionConcurrency &&
 			len(snapshot.ExplicitStarts) == branchCount-explicitAdmissionConcurrency
 	}, "explicit admission setup did not stop at the bounded capacity")
@@ -543,7 +543,7 @@ func TestCurrentNodeControllerBoundsExplicitAdmissionSetupWithoutBlockingSibling
 		t.Fatal("releasing explicit admission capacity did not admit a queued sibling")
 	}
 	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		snapshot := controller.Snapshot()
+		snapshot := currentNodeControllerSnapshotForTest(controller)
 		return len(snapshot.Gates) == explicitAdmissionConcurrency &&
 			len(snapshot.ExplicitStarts) == branchCount-explicitAdmissionConcurrency-1
 	}, "queued explicit sibling did not replace released setup capacity")
@@ -605,7 +605,7 @@ func TestCurrentNodeControllerReservesAutomaticCapacityBeforeLaunchingAdmission(
 
 	releaseRunner()
 	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		return hasLiveCurrentNode(controller.Snapshot(), first)
+		return hasLiveCurrentNode(currentNodeControllerSnapshotForTest(controller), first)
 	}, "first automatic current node did not become live")
 	firstHandle, ok := authority.ExecutionByScope(singleLiveScope(t, controller, first))
 	if !ok {
@@ -694,11 +694,11 @@ func TestCurrentNodeControllerStartsScriptsWhileAgentCapacityIsSaturated(t *test
 		}
 	}
 	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		snapshot := controller.Snapshot()
+		snapshot := currentNodeControllerSnapshotForTest(controller)
 		return hasLiveCurrentNode(snapshot, firstScript) && hasLiveCurrentNode(snapshot, secondScript)
 	}, "both Script Nodes did not become live before Agent release")
-	if !hasAutomaticCurrentNodeIntent(controller.Snapshot(), queuedAgent) {
-		t.Fatalf("automatic queue = %+v, want queued Agent while scripts are live", controller.Snapshot().AutomaticIntents)
+	if !hasAutomaticCurrentNodeIntent(currentNodeControllerSnapshotForTest(controller), queuedAgent) {
+		t.Fatalf("automatic queue = %+v, want queued Agent while scripts are live", currentNodeControllerSnapshotForTest(controller).AutomaticIntents)
 	}
 
 	agentHandle, ok := authority.ExecutionByScope(singleLiveScope(t, controller, agent))
@@ -778,7 +778,7 @@ func TestCurrentNodeControllerCloseBroadcastsScriptStopsBeforeJoining(t *testing
 		waitForRunningCurrentNode(t, authority, reference)
 	}
 	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		snapshot := controller.Snapshot()
+		snapshot := currentNodeControllerSnapshotForTest(controller)
 		for _, reference := range references {
 			if !hasLiveCurrentNode(snapshot, reference) {
 				return false
@@ -1464,8 +1464,8 @@ func TestCurrentNodeControllerReservationBlocksTaskQuiescence(t *testing.T) {
 	if quiescence[reference.TaskID] || !quiescence[otherTaskID] {
 		t.Fatalf("task quiescence = %+v, want reserved Task false and unrelated Task true", quiescence)
 	}
-	if !hasAutomaticCurrentNodeIntent(controller.Snapshot(), reference) {
-		t.Fatalf("reservation is absent from immutable live snapshot: %+v", controller.Snapshot())
+	if !hasAutomaticCurrentNodeIntent(currentNodeControllerSnapshotForTest(controller), reference) {
+		t.Fatalf("reservation is absent from immutable live snapshot: %+v", currentNodeControllerSnapshotForTest(controller))
 	}
 }
 

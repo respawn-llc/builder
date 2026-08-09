@@ -5,46 +5,48 @@ import (
 	"core/shared/runtimeids"
 )
 
-type CurrentNodeAdmissionGateSnapshot struct {
+type currentNodeAdmissionGateSnapshot struct {
 	CurrentNode workflow.CurrentNodeReference
 	ScopeID     runtimeids.ExecutionScopeID
 	Automatic   bool
 }
 
-type CurrentNodeLiveScopeSnapshot struct {
+type currentNodeLiveScopeSnapshot struct {
 	CurrentNode workflow.CurrentNodeReference
 	ScopeID     runtimeids.ExecutionScopeID
 	Automatic   bool
 }
 
-type CurrentNodeHeldIntentSnapshot struct {
+type currentNodeHeldIntentSnapshot struct {
 	CurrentNode workflow.CurrentNodeReference
 	SourceScope runtimeids.ExecutionScopeID
 	Automatic   bool
 }
 
-// CurrentNodeExecutionSnapshot is immutable live controller state. Durable
-// Current Node scheduling rows are intentionally not inferred from this view.
-type CurrentNodeExecutionSnapshot struct {
+type currentNodeExplicitStartSnapshot struct {
+	CurrentNode workflow.CurrentNodeReference
+}
+
+type currentNodeExecutionSnapshot struct {
 	AutomaticIntents  []CurrentNodeAutomaticIntent
-	ExplicitStarts    []CurrentNodeExplicitStart
-	HeldIntents       []CurrentNodeHeldIntentSnapshot
-	Gates             []CurrentNodeAdmissionGateSnapshot
-	LiveScopes        []CurrentNodeLiveScopeSnapshot
+	ExplicitStarts    []currentNodeExplicitStartSnapshot
+	HeldIntents       []currentNodeHeldIntentSnapshot
+	Gates             []currentNodeAdmissionGateSnapshot
+	LiveScopes        []currentNodeLiveScopeSnapshot
 	InterruptingTasks []workflow.TaskID
 }
 
-func (c *CurrentNodeController) Snapshot() CurrentNodeExecutionSnapshot {
+func currentNodeControllerSnapshotForTest(c *CurrentNodeController) currentNodeExecutionSnapshot {
 	if c == nil {
-		return CurrentNodeExecutionSnapshot{}
+		return currentNodeExecutionSnapshot{}
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	snapshot := CurrentNodeExecutionSnapshot{
+	snapshot := currentNodeExecutionSnapshot{
 		AutomaticIntents: make([]CurrentNodeAutomaticIntent, 0, c.automaticQueue.len()+len(c.automaticReservations)),
-		ExplicitStarts:   make([]CurrentNodeExplicitStart, 0, len(c.explicitQueue)+len(c.explicitReservations)),
-		Gates:            make([]CurrentNodeAdmissionGateSnapshot, 0, len(c.gates)),
-		LiveScopes:       make([]CurrentNodeLiveScopeSnapshot, 0, len(c.live)),
+		ExplicitStarts:   make([]currentNodeExplicitStartSnapshot, 0, len(c.explicitQueue)+len(c.explicitReservations)),
+		Gates:            make([]currentNodeAdmissionGateSnapshot, 0, len(c.gates)),
+		LiveScopes:       make([]currentNodeLiveScopeSnapshot, 0, len(c.live)),
 	}
 	for entry := c.automaticQueue.first; entry != nil; entry = entry.globalNext {
 		start := entry.start
@@ -62,24 +64,24 @@ func (c *CurrentNodeController) Snapshot() CurrentNodeExecutionSnapshot {
 	for _, start := range c.explicitQueue {
 		snapshot.ExplicitStarts = append(
 			snapshot.ExplicitStarts,
-			CurrentNodeExplicitStart{CurrentNode: start.reference},
+			currentNodeExplicitStartSnapshot{CurrentNode: start.reference},
 		)
 	}
 	for _, start := range c.explicitReservations {
 		snapshot.ExplicitStarts = append(
 			snapshot.ExplicitStarts,
-			CurrentNodeExplicitStart{CurrentNode: start.reference},
+			currentNodeExplicitStartSnapshot{CurrentNode: start.reference},
 		)
 	}
 	for _, gate := range c.gates {
-		snapshot.Gates = append(snapshot.Gates, CurrentNodeAdmissionGateSnapshot{
+		snapshot.Gates = append(snapshot.Gates, currentNodeAdmissionGateSnapshot{
 			CurrentNode: gate.reference,
 			ScopeID:     gate.lease.ScopeID(),
 			Automatic:   gate.policy.isAutomatic(),
 		})
 	}
 	for scopeID, live := range c.live {
-		snapshot.LiveScopes = append(snapshot.LiveScopes, CurrentNodeLiveScopeSnapshot{
+		snapshot.LiveScopes = append(snapshot.LiveScopes, currentNodeLiveScopeSnapshot{
 			CurrentNode: live.reference,
 			ScopeID:     scopeID,
 			Automatic:   live.policy.isAutomatic(),
@@ -87,7 +89,7 @@ func (c *CurrentNodeController) Snapshot() CurrentNodeExecutionSnapshot {
 	}
 	for sourceScope, starts := range c.heldStarts {
 		for _, start := range starts {
-			snapshot.HeldIntents = append(snapshot.HeldIntents, CurrentNodeHeldIntentSnapshot{
+			snapshot.HeldIntents = append(snapshot.HeldIntents, currentNodeHeldIntentSnapshot{
 				CurrentNode: start.reference,
 				SourceScope: sourceScope,
 				Automatic:   start.policy.isAutomatic(),

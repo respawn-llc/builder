@@ -1061,26 +1061,36 @@ func (s *Service) runManagedTaskWorktreeSetupRecoveryWithSettings(
 ) (TaskWorktreeMaterialization, error) {
 	observer, err := s.taskSetupAttemptObserver(setupOperationID)
 	if err != nil {
-		return TaskWorktreeMaterialization{}, err
+		return bound.materialization, err
 	}
 	attempt, err := bound.setupExecution(&settings)
 	if err != nil {
 		return bound.materialization, err
 	}
+	retainedMaterialization := bound.materialization
+	hasRetainedMaterialization := true
 	result, err := s.runSetupRecovery(ctx, setupRecoveryRequest{
 		Attempt:                    attempt,
 		Observer:                   observer,
 		RecreateBeforeFirstAttempt: recreateBeforeFirstAttempt,
 		Recreate: func(ctx context.Context) (setupExecutionRequest, error) {
-			recreated, err := s.recreateBoundManagedTaskWorktree(ctx, bound)
+			recreated, removed, err := s.recreateBoundManagedTaskWorktree(ctx, bound)
+			if removed {
+				hasRetainedMaterialization = false
+			}
 			if err != nil {
 				return setupExecutionRequest{}, err
 			}
 			bound = recreated
+			retainedMaterialization = bound.materialization
+			hasRetainedMaterialization = true
 			return bound.setupExecution(&settings)
 		},
 	})
 	if err != nil {
+		if hasRetainedMaterialization {
+			return retainedMaterialization, err
+		}
 		return TaskWorktreeMaterialization{}, err
 	}
 	if err := result.Result.Validate(); err != nil {
@@ -1109,12 +1119,15 @@ func (s *Service) runManagedTaskWorktreeSetupRecoveryWithSettings(
 	return bound.materialization, nil
 }
 
-func (s *Service) recreateBoundManagedTaskWorktree(ctx context.Context, bound boundManagedTaskWorktree) (boundManagedTaskWorktree, error) {
+func (s *Service) recreateBoundManagedTaskWorktree(
+	ctx context.Context,
+	bound boundManagedTaskWorktree,
+) (boundManagedTaskWorktree, bool, error) {
 	if err := s.git.Remove(ctx, bound.workspace.RootPath, bound.record.CanonicalRoot, false); err != nil {
-		return boundManagedTaskWorktree{}, err
+		return boundManagedTaskWorktree{}, false, err
 	}
 	root := bound.record.CanonicalRoot
-	return s.createAndBindManagedTaskWorktree(ctx, managedTaskWorktreeCreationRequest{
+	recreated, err := s.createAndBindManagedTaskWorktree(ctx, managedTaskWorktreeCreationRequest{
 		Task:             bound.task,
 		Workspace:        bound.workspace,
 		CreateSpec:       CreateSpec{BaseRef: bound.branchName},
@@ -1123,6 +1136,7 @@ func (s *Service) recreateBoundManagedTaskWorktree(ctx context.Context, bound bo
 		CreationBaseOID:  bound.record.CreationBaseCommitOID,
 		SetupOperationID: nil,
 	})
+	return recreated, true, err
 }
 
 func lockedTaskWorktreeIdentityError(err error) error {
