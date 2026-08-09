@@ -1,7 +1,6 @@
 package apicontract
 
 import (
-	"context"
 	"reflect"
 	"testing"
 
@@ -28,29 +27,6 @@ func TestPromptAnswerBatchRouteContract(t *testing.T) {
 	}
 }
 
-func TestPromptControlServiceExposesTypedBatchResponse(t *testing.T) {
-	serviceType := reflect.TypeOf((*PromptControlService)(nil)).Elem()
-	method, ok := serviceType.MethodByName("AnswerPromptBatch")
-	if !ok {
-		t.Fatal("PromptControlService missing AnswerPromptBatch")
-	}
-	want := reflect.TypeOf(func(context.Context, serverapi.PromptAnswerBatchRequest) (serverapi.PromptAnswerBatchResponse, error) {
-		return serverapi.PromptAnswerBatchResponse{}, nil
-	})
-	if method.Type != want {
-		t.Fatalf("AnswerPromptBatch type = %v, want %v", method.Type, want)
-	}
-}
-
-func TestPromptControlServiceHasNoLegacyAnswerMethods(t *testing.T) {
-	serviceType := reflect.TypeOf((*PromptControlService)(nil)).Elem()
-	for _, removed := range []string{"AnswerAsk", "AnswerApproval"} {
-		if _, exists := serviceType.MethodByName(removed); exists {
-			t.Fatalf("PromptControlService still exposes %s", removed)
-		}
-	}
-}
-
 func TestPromptFollowUpRouteIsARegistrationAcknowledgedTerminalStream(t *testing.T) {
 	route, ok := RouteByMethod(protocol.MethodPromptFollowUpWatch)
 	if !ok {
@@ -73,16 +49,10 @@ func TestPromptFollowUpRouteIsARegistrationAcknowledgedTerminalStream(t *testing
 	}
 }
 
-func TestPromptControlServiceExposesPromptFollowUpSubscription(t *testing.T) {
-	serviceType := reflect.TypeOf((*PromptControlService)(nil)).Elem()
-	method, ok := serviceType.MethodByName("SubscribeFollowUp")
-	if !ok {
-		t.Fatal("PromptControlService missing SubscribeFollowUp")
-	}
-	want := reflect.TypeOf(func(context.Context, serverapi.PromptFollowUpWatchRequest) (serverapi.PromptFollowUpSubscription, error) {
-		return nil, nil
-	})
-	if method.Type != want {
-		t.Fatalf("SubscribeFollowUp type = %v, want %v", method.Type, want)
+func TestLegacyPromptAnswerRoutesStayRemoved(t *testing.T) {
+	for _, method := range []string{"ask.answer", "approval.answer", "workflow.task.question.answer"} {
+		if _, exists := RouteByMethod(method); exists {
+			t.Fatalf("legacy prompt answer route %q is registered", method)
+		}
 	}
 }

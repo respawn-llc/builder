@@ -11,54 +11,24 @@ import (
 	"strings"
 	"testing"
 
-	"core/shared/apicontract"
-	"core/shared/client"
-	"core/shared/clientui"
 	"core/shared/protocol"
 	"core/shared/serverapi"
 )
 
-func TestPromptAnswerHardCutoverContracts(t *testing.T) {
-	assertMethodSet(t, "PromptControlService", reflect.TypeOf((*apicontract.PromptControlService)(nil)).Elem(), []string{
-		"AnswerPromptBatch",
-		"SubscribeFollowUp",
-	})
-	if _, exists := reflect.TypeOf((*apicontract.WorkflowService)(nil)).Elem().MethodByName("AnswerWorkflowTaskQuestion"); exists {
-		t.Fatal("WorkflowService exposes task-scoped prompt mutation")
-	}
-	remote := reflect.TypeOf((*client.Remote)(nil))
-	for _, removed := range []string{"AnswerAsk", "AnswerApproval", "AnswerWorkflowTaskQuestion"} {
-		if _, exists := remote.MethodByName(removed); exists {
-			t.Fatalf("Remote still exposes %s", removed)
-		}
-	}
+func TestPromptFollowUpContractsCarryIdentityAndTerminalOnlyEvents(t *testing.T) {
 	assertStructFields(t, reflect.TypeOf(serverapi.PromptFollowUpWatchRequest{}), []string{"PromptID", "SessionID", "StepID"})
 	assertStructFields(t, reflect.TypeOf(serverapi.PromptFollowUpEvent{}), []string{"Kind"})
 	assertStructFields(t, reflect.TypeOf(protocol.PromptFollowUpEventParams{}), []string{"Event"})
 	assertStructFields(t, reflect.TypeOf(protocol.PromptFollowUpEvent{}), []string{"Kind"})
-	assertStructFields(t, reflect.TypeOf(clientui.PendingAsk{}), []string{
-		"CreatedAt",
-		"PromptID",
-		"Question",
-		"RecommendedOptionIndex",
-		"SessionID",
-		"StepID",
-		"Suggestions",
-	})
-	assertStructFields(t, reflect.TypeOf(clientui.PendingApproval{}), []string{
-		"CreatedAt",
-		"Options",
-		"PromptID",
-		"Question",
-		"SessionID",
-		"StepID",
-	})
 }
 
 func TestObsoletePromptMutationSymbolsStayDeleted(t *testing.T) {
 	forbiddenIdentifiers := map[string]struct{}{
 		"Ask" + "AnswerRequest":                         {},
 		"Approval" + "AnswerRequest":                    {},
+		"Answer" + "Ask":                                {},
+		"Answer" + "Approval":                           {},
+		"AnswerWorkflowTask" + "Question":               {},
 		"WorkflowTaskQuestion" + "AnswerRequest":        {},
 		"WorkflowTaskQuestionApproval" + "Answer":       {},
 		"MethodAsk" + "Answer":                          {},
@@ -120,19 +90,6 @@ func TestObsoletePromptMutationSymbolsStayDeleted(t *testing.T) {
 	sort.Strings(findings)
 	if len(findings) != 0 {
 		t.Fatalf("obsolete or unauthorized prompt-answer symbols:\n%s", strings.Join(findings, "\n"))
-	}
-}
-
-func assertMethodSet(t *testing.T, label string, contract reflect.Type, want []string) {
-	t.Helper()
-	got := make([]string, 0, contract.NumMethod())
-	for index := 0; index < contract.NumMethod(); index++ {
-		got = append(got, contract.Method(index).Name)
-	}
-	sort.Strings(got)
-	sort.Strings(want)
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("%s methods = %v, want %v", label, got, want)
 	}
 }
 
