@@ -99,12 +99,11 @@ export type SidebarPageNavigator = Readonly<{
 
 export type SidebarRootHandle = Readonly<{
   lifecycle: Promise<SidebarRootOutcome>;
-  push(destination: SidebarDestination): SidebarNavigationOutcome;
   release(): void;
 }>;
 
 export type SidebarRootController = Readonly<{
-  open(destination: SidebarDestination, onBack?: () => void): SidebarRootHandle;
+  open(destination: SidebarDestination): SidebarRootHandle;
 }>;
 
 export type SidebarShellController = Readonly<{
@@ -144,8 +143,8 @@ export function SidebarRootOwner({ children }: Readonly<{ children: ReactNode }>
   const roots = useSidebarRoots();
   const [handles] = useState(() => new Set<SidebarRootHandle>());
   const open = useCallback(
-    (destination: SidebarDestination, onBack?: () => void) => {
-      const handle = roots.open(destination, onBack);
+    (destination: SidebarDestination) => {
+      const handle = roots.open(destination);
       handles.add(handle);
       void handle.lifecycle.finally(() => {
         handles.delete(handle);

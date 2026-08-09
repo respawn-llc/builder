@@ -38,7 +38,6 @@ import type { PendingBoardCardMove } from "./BoardCardMotionModel";
 import { ManualMoveDialog } from "./ManualMoveDialog";
 import { useBoardInitiatingActionController } from "./useBoardInitiatingActionController";
 import { useBoardResumeAction } from "./useBoardResumeAction";
-import { useBoardTaskDetailSidebar } from "./useBoardTaskDetailSidebar";
 import { useManualMoveController } from "./useManualMoveController";
 import "./board.css";
 import { BoardFilterGenerationProvider } from "./BoardFilterGenerationContext";
@@ -331,14 +330,37 @@ function BoardContent({
     },
     [reportActionError, t],
   );
-  useBoardTaskDetailSidebar({
+
+  useEffect(() => {
+    if (selectedTaskId.length === 0) {
+      return;
+    }
+    let active = true;
+    const root = open({
+      kind: "taskDetail",
+      mode: "overlay",
+      onMutated: undefined,
+      taskID: selectedTaskId,
+    });
+    void root.lifecycle.then((outcome) => {
+      if (active && outcome === "closed") {
+        void navigation
+          .closeProjectTask(board.projectID, board.selectedWorkflow.id)
+          .catch(reportNavigationError);
+      }
+    });
+    return () => {
+      active = false;
+      root.release();
+    };
+  }, [
+    board.projectID,
+    board.selectedWorkflow.id,
     navigation,
-    onNavigationError: reportNavigationError,
-    openSidebar: open,
-    projectID: board.projectID,
-    selectedTaskID: selectedTaskId,
-    workflowID: board.selectedWorkflow.id,
-  });
+    open,
+    reportNavigationError,
+    selectedTaskId,
+  ]);
 
   useEffect(() => {
     const handleDocumentDrop = (event: Event): void => {

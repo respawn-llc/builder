@@ -26,11 +26,7 @@ export function createTestSidebarController(
   return {
     open(destination) {
       onOpen(destination);
-      return {
-        lifecycle: Promise.resolve("closed"),
-        push: vi.fn(() => "accepted" as const),
-        release: () => undefined,
-      };
+      return { lifecycle: Promise.resolve("closed"), release: () => undefined };
     },
   };
 }

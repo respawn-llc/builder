@@ -11,8 +11,10 @@ import {
   autoLoadAvailable,
   directionalBoundary,
   ErrorState,
+  InfiniteListBoundary,
   LoadingState,
   VirtualizedInfiniteList,
+  type VirtualizedInfiniteListBoundaryState,
   type VirtualizedPixelOffsetRequest,
 } from "@/ui";
 import { ActivityRow, CommentComposer, CommentRow } from "./TaskDetailActivity";
@@ -229,7 +231,6 @@ export function TaskDetailList({
       pixelOffsetRequest={feedOffsetRequest}
       rowSpacing="compact"
       nextBoundary={nextBoundary}
-      previousBoundary={previousBoundary}
       previousLoadItemKey={firstFeedItemKey}
       previousLoadKey={paging.previousLoadKey}
       renderItem={(item) => (
@@ -266,6 +267,11 @@ export function TaskDetailList({
           relationshipNavigationAvailable={relationshipNavigationAvailable}
           selectedTab={selectedTab}
           setTab={setTab}
+          previousBoundary={
+            (item.kind === "comment" || item.kind === "activity") && item.presentationKey === firstFeedItemKey
+              ? previousBoundary
+              : undefined
+          }
           updateError={updateError}
           updatePending={updatePending}
         />
@@ -308,6 +314,7 @@ type TaskDetailListRowProps = Readonly<{
   relationshipNavigationAvailable: boolean;
   selectedTab: DetailTab;
   setTab: (tab: DetailTab) => void;
+  previousBoundary?: VirtualizedInfiniteListBoundaryState | undefined;
   updateError: unknown;
   updatePending: boolean;
 }>;
@@ -336,6 +343,9 @@ function TaskDetailListRow(props: TaskDetailListRowProps): ReactNode {
   }
   return (
     <div className="task-detail-feed-row" data-task-detail-feed-tab={props.selectedTab}>
+      {props.previousBoundary === undefined ? null : (
+        <InfiniteListBoundary direction="previous" state={props.previousBoundary} />
+      )}
       {row}
     </div>
   );

@@ -204,7 +204,6 @@ const shortIDSearchResponse = {
 
 const openSidebarRoot = vi.fn<SidebarRootController["open"]>(() => ({
   lifecycle: Promise.resolve("closed" as const),
-  push: vi.fn(() => "accepted" as const),
   release: vi.fn(),
 }));
 const testSidebarRoots: SidebarRootController = {
@@ -305,7 +304,7 @@ describe("Board Task Search", () => {
     fireEvent.keyDown(input, { key: "Enter" });
 
     await waitFor(() => {
-      expect(openSidebarRoot.mock.calls[0]?.[0]).toEqual({
+      expect(openSidebarRoot).toHaveBeenCalledWith({
         kind: "taskDetail",
         mode: "overlay",
         taskID: "task-1",

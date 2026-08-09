@@ -2,7 +2,7 @@ import { createElement, Fragment, type ComponentType, type ReactNode } from "rea
 import type { SidebarDestination, SidebarDestinationPolicy, SidebarNavigationOutcome, SidebarPageNavigator, SidebarPhase, SidebarRootHandle, SidebarRootOutcome, SidebarTransitionDirection } from "@/app-facade";
 const stackLimit = 50;
 const exitAnimationMs = 140;
-interface Capability { active: boolean; availability: Readonly<{ back: boolean; close: boolean }> | null; capture: Readonly<{ read: () => unknown }> | null; rootBack: (() => void) | undefined }
+interface Capability { active: boolean; availability: Readonly<{ back: boolean; close: boolean }> | null; capture: Readonly<{ read: () => unknown }> | null }
 interface PendingRoot { resolve(outcome: SidebarRootOutcome): void; settled: boolean }
 export interface SidebarStackEntry { readonly Boundary: ComponentType<Readonly<{ children: ReactNode }>>; readonly capability: Capability; readonly destination: SidebarDestination; readonly navigator: SidebarPageNavigator; readonly retainedState?: unknown }
 export interface SidebarStackView { readonly entries: readonly SidebarStackEntry[]; readonly phase: SidebarPhase; readonly transitionDirection: SidebarTransitionDirection | null }
@@ -44,18 +44,11 @@ export function createSidebarStack(policy: SidebarDestinationPolicy, publish: (v
       emit(view.entries, view.phase, view.transitionDirection);
     }
   };
-  const createEntry = (destination: SidebarDestination, retainedState?: unknown, rootBack?: () => void): SidebarStackEntry => {
-    const capability: Capability = { active: true, availability: null, capture: null, rootBack };
+  const createEntry = (destination: SidebarDestination, retainedState?: unknown): SidebarStackEntry => {
+    const capability: Capability = { active: true, availability: null, capture: null };
     const Boundary = ({ children }: Readonly<{ children: ReactNode }>) => createElement(Fragment, null, children);
     const navigator: SidebarPageNavigator = {
-      back: () => {
-        if (!capability.active || (capability.rootBack !== undefined && current()?.capability !== capability)) return "stale";
-        if (capability.rootBack !== undefined) {
-          capability.rootBack();
-          return "accepted";
-        }
-        return back(capability);
-      },
+      back: () => back(capability),
       close: () => close(capability),
       push: (next) => push(capability, next),
       replace: (next) => replace(capability, next),
@@ -114,10 +107,7 @@ export function createSidebarStack(policy: SidebarDestinationPolicy, publish: (v
       throw new Error("Sidebar Back requires a previous page.");
     }
     emit(
-      [
-        ...view.entries.slice(0, -2),
-        createEntry(previous.destination, previous.retainedState, previous.capability.rootBack),
-      ],
+      [...view.entries.slice(0, -2), createEntry(previous.destination, previous.retainedState)],
       "open",
       "back",
     );
@@ -131,11 +121,7 @@ export function createSidebarStack(policy: SidebarDestinationPolicy, publish: (v
     emit([...view.entries.slice(0, -1), createEntry(destination)], "open", "replace");
     return "accepted";
   };
-  const push = (
-    capability: Capability,
-    destination: SidebarDestination,
-    rootBack?: () => void,
-  ): SidebarNavigationOutcome => {
+  const push = (capability: Capability, destination: SidebarDestination): SidebarNavigationOutcome => {
     if (!capability.active) {
       return "stale";
     }
@@ -145,7 +131,7 @@ export function createSidebarStack(policy: SidebarDestinationPolicy, publish: (v
       emit(
         [
           ...view.entries.slice(0, retained.index),
-          createEntry(retained.entry.destination, retained.entry.retainedState, rootBack),
+          createEntry(retained.entry.destination, retained.entry.retainedState),
         ],
         "open",
         "back",
@@ -164,7 +150,7 @@ export function createSidebarStack(policy: SidebarDestinationPolicy, publish: (v
     const appended = [
       ...view.entries.slice(0, -1),
       { ...currentEntry, retainedState },
-      createEntry(destination, undefined, rootBack),
+      createEntry(destination),
     ];
     const rootEntry = appended[0];
     if (rootEntry === undefined) {
@@ -173,7 +159,7 @@ export function createSidebarStack(policy: SidebarDestinationPolicy, publish: (v
     emit(appended.length <= stackLimit ? appended : [rootEntry, ...appended.slice(-(stackLimit - 1))], "open", "push");
     return "accepted";
   };
-  const open = (destination: SidebarDestination, onBack?: () => void): SidebarRootHandle => {
+  const open = (destination: SidebarDestination): SidebarRootHandle => {
     clearCloseTimeout();
     revokeCurrent();
     if (root !== undefined) {
@@ -186,16 +172,9 @@ export function createSidebarStack(policy: SidebarDestinationPolicy, publish: (v
     }
     const ownedRoot: PendingRoot = { resolve: resolveLifecycle, settled: false };
     root = ownedRoot;
-    emit([createEntry(destination, undefined, onBack)], "open", "replace");
+    emit([createEntry(destination)], "open", "replace");
     return {
       lifecycle,
-      push: (next) => {
-        if (ownedRoot.settled || root !== ownedRoot) {
-          return "stale";
-        }
-        const entry = current();
-        return entry === undefined ? "stale" : push(entry.capability, next, onBack);
-      },
       release: () => {
         if (ownedRoot.settled || root !== ownedRoot) {
           return;

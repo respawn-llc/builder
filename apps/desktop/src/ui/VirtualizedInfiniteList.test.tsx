@@ -181,9 +181,7 @@ describe("VirtualizedInfiniteList pixel restoration", () => {
     list.scrollTop = 640;
     fireEvent.scroll(list);
 
-    view.rerender(
-      <List items={items} request={createVirtualizedPixelOffsetRequest("user-scroll", 240)} />,
-    );
+    view.rerender(<List items={items} request={createVirtualizedPixelOffsetRequest("user-scroll", 240)} />);
 
     expect(list.scrollTop).toBe(640);
   });
@@ -222,27 +220,14 @@ describe("VirtualizedInfiniteList pixel restoration", () => {
     expect(onLoadMore).toHaveBeenCalledOnce();
   });
 
-  it("uses the optional first item key for newer loading and boundary placement", () => {
+  it("keeps a supplied newer boundary at list start while loading from the first item key", () => {
     const onLoadPrevious = vi.fn();
-    virtualizer.getVirtualItems.mockReturnValue([
-      { end: 40, index: 0, key: "a", lane: 0, size: 40, start: 0 },
-    ]);
-    const view = render(
-      <List
-        hasPreviousPage
-        onLoadPrevious={onLoadPrevious}
-        previousBoundary={{ state: "loading", label: "Loading" }}
-        previousLoadItemKey="b"
-      />,
-    );
-    expect(onLoadPrevious).not.toHaveBeenCalled();
-
     virtualizer.getVirtualItems.mockReturnValue([
       { end: 40, index: 0, key: "a", lane: 0, size: 40, start: 0 },
       { end: 80, index: 1, key: "boundary-previous", lane: 0, size: 40, start: 40 },
       { end: 120, index: 2, key: "b", lane: 0, size: 40, start: 80 },
     ]);
-    view.rerender(
+    render(
       <List
         hasPreviousPage
         onLoadPrevious={onLoadPrevious}
@@ -251,7 +236,41 @@ describe("VirtualizedInfiniteList pixel restoration", () => {
       />,
     );
     expect(onLoadPrevious).toHaveBeenCalledOnce();
-    expect(screen.getByTestId("virtual-boundary-previous")).toBeInTheDocument();
+    const boundary = screen.getByTestId("virtual-boundary-previous");
+    const rows = screen.getAllByRole("listitem");
+    expect(rows[0]).toContainElement(boundary);
+    expect(rows[1]).toHaveTextContent("a");
+  });
+
+  it("triggers newer loading only when the first feed item is visible", () => {
+    const onLoadPrevious = vi.fn();
+    virtualizer.getVirtualItems.mockReturnValue([
+      { end: 40, index: 0, key: "fixed", lane: 0, size: 40, start: 0 },
+    ]);
+    const view = render(
+      <List
+        hasPreviousPage
+        items={["fixed", "feed"]}
+        onLoadPrevious={onLoadPrevious}
+        previousLoadItemKey="feed"
+      />,
+    );
+    expect(onLoadPrevious).not.toHaveBeenCalled();
+
+    virtualizer.getVirtualItems.mockReturnValue([
+      { end: 40, index: 0, key: "fixed", lane: 0, size: 40, start: 0 },
+      { end: 80, index: 1, key: "feed", lane: 0, size: 40, start: 40 },
+    ]);
+    view.rerender(
+      <List
+        hasPreviousPage
+        items={["fixed", "feed"]}
+        onLoadPrevious={onLoadPrevious}
+        previousLoadItemKey="feed"
+      />,
+    );
+    expect(onLoadPrevious).toHaveBeenCalledOnce();
+    expect(screen.queryByTestId("virtual-boundary-previous")).not.toBeInTheDocument();
   });
 
   it("keeps rows visible and stops automatic older retries until the boundary is retried", () => {
@@ -291,36 +310,5 @@ describe("VirtualizedInfiniteList pixel restoration", () => {
     );
     expect(screen.getByText("d")).toBeInTheDocument();
     expect(onLoadMore).not.toHaveBeenCalled();
-  });
-
-  it("places the newer failure below fixed rows and retries without hiding them", () => {
-    const onRetry = vi.fn();
-    virtualizer.getVirtualItems.mockReturnValue([
-      { end: 40, index: 0, key: "fixed-header", lane: 0, size: 40, start: 0 },
-      { end: 80, index: 1, key: "fixed-body", lane: 0, size: 40, start: 40 },
-      { end: 120, index: 2, key: "boundary-previous", lane: 0, size: 40, start: 80 },
-      { end: 160, index: 3, key: "feed-1", lane: 0, size: 40, start: 120 },
-    ]);
-    render(
-      <List
-        hasPreviousPage
-        items={["fixed-header", "fixed-body", "feed-1"]}
-        previousBoundary={{
-          state: "error",
-          message: "page failed",
-          onRetry,
-          retryLabel: "Retry",
-        }}
-        previousLoadItemKey="feed-1"
-        onLoadPrevious={vi.fn()}
-      />,
-    );
-
-    expect(screen.getByText("fixed-header")).toBeInTheDocument();
-    expect(screen.getByText("fixed-body")).toBeInTheDocument();
-    expect(screen.getByText("feed-1")).toBeInTheDocument();
-    expect(screen.getByTestId("virtual-boundary-previous")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    expect(onRetry).toHaveBeenCalledOnce();
   });
 });

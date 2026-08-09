@@ -493,6 +493,8 @@
 - Core Task detail includes an unresolved-attention count but not the attention items. It does not scan transcript history.
 - The Task-specific attention feed can read the newest active transcript segment to recover unresolved Question content. Desktop Task detail loads this feed independently so it does not delay core Task detail.
 - Task Activity is a server-paginated projection of durable Comments and retained Session creation. It contains no workflow movement, Node completion, interruption, attempt, or diagnostic history. Clients render Session creation as localized `Session started` activity.
+- Task Activity follows the shared non-Search offset pagination contract.
+- Task Activity orders items by occurrence time descending, then Activity ID descending. A Comment occurrence uses the Comment's latest update time. A Session-start occurrence uses the Session's creation time.
 - Task detail reports the total retained Session count. It provides direct Open and Interrupt actions only for agent Sessions with live Exact Execution Scopes; non-live Sessions remain available through the Session picker.
 - Desktop shows Task-wide Interrupt when several Exact Execution Scopes are live or a Script Node is live.
 - Task status is structured and independent of a specific client. Each client renders and localizes it.
@@ -516,15 +518,6 @@
 - [CLI Commands](cli-commands.md) owns the complete Task Search command contract.
 - Search returns Task status from the server-owned Task-status projection.
 - Each response is point-in-time consistent for matching text, counts, filters, and Task metadata. It combines that durable view with one separately captured Immutable Live Snapshot. A Workflow lifecycle change between the views may briefly combine durable and live facts from different moments.
-
-## Workflow And Task API Pagination
-
-- Paginated Workflow and Task API requests may omit both `offset` and `limit`.
-- An omitted offset starts at the beginning, and an explicit offset of zero is valid.
-- An omitted limit defaults to 100. Supplied limits must be from 1 through 100.
-- The API represents omitted numeric values as absent or null rather than as zero.
-- The server keeps pagination memory bounded by the requested limit.
-- The server does not retain page contents or pagination state between requests and does not persist pagination state.
 
 ## Execution Targets And Worktrees
 
@@ -581,6 +574,7 @@
 - There are no model-callable comment tools.
 - Comments record the author or source agent when available.
 - Comments belong to the Task and are not files in its worktree.
+- Comment lists order by creation time descending, then Comment ID descending.
 - Deleting a Task Comment removes it completely. Kent cannot list or restore deleted Comments.
 
 ## Durable Workflow State
@@ -640,3 +634,117 @@
 - Task Comments retain their author identity when available.
 - Session listings retain the first prompt preview.
 - Sessions retain unsent input drafts for recovery.
+
+## CLI Surface
+
+- The Workflow and Task CLI provides complete control for operators and agents.
+- Agents can build and edit complete Workflow definitions with high-level commands. Import and export are separate sharing features.
+- CLI output includes stable identifiers needed by later commands.
+- `kent task wait <task>` and `kent task watch <task>` resolve a Project-scoped Task and observe it through server-owned event notification. They never poll read commands or mutate the Task.
+- Task wait ignores Questions, access requests, transition approvals, and successful intermediate node completion. It returns for a current-work interruption, a current Session or Script execution error, or Task `done`.
+- Task watch returns for a Task Question or access request, current-work interruption, current Session or Script execution error, or Task `done`. It ignores Workflow Transition Approvals and successful intermediate completion.
+- Task Search pagination is defined exclusively by the owning Task Search specification.
+- Every other paginated Workflow and Task CLI command uses zero-based `--offset` and `--limit`. It exposes neither page tokens nor page numbers.
+- An omitted offset starts at the beginning. Any non-negative offset is accepted. A negative offset is invalid.
+- `--limit` defaults to `100` and accepts values from `1` through `100`.
+- Callers may change the limit between requests. An offset at or beyond the current end succeeds with the command's existing empty-result output and no next offset.
+- When more results exist, `next_offset` equals the request offset plus the number of results returned.
+- Human output writes ``Next offset: `<n>` `` to stderr only when more results exist. Machine-readable request contracts use `offset` and `limit`; responses use optional `next_offset`. An absent next offset is omitted or null and is never zero.
+- Affected shared API requests may omit both `offset` and `limit`. An omitted offset starts at the beginning, an explicit offset of zero is valid, and an omitted limit defaults to `100`. Supplied limits must be from `1` through `100`. The API represents omitted numeric values as absent or null rather than as zero.
+- Each request applies its offset to the current results for that request's Project, Workflow, selectors, filters, and sorting. Callers repeat those query choices when continuing. Kent does not bind an offset to a previous query.
+- If items are inserted, removed, or reordered between offset requests, later results may repeat or skip items.
+- The server keeps pagination memory bounded by the requested limit. It does not retain page contents or pagination state between requests and does not persist pagination state.
+- `kent workflow delete <workflow>` reports the deletion impact and makes no changes unless `--confirm` is present. A confirmed deletion submits the previewed Workflow Version and affected Project, Project Workflow Link, and Task counts; if the impact changes or deletion has blockers, Kent deletes nothing and reports the blockers.
+- The plain-text `kent task complete` acknowledgement omits identifiers. JSON completion output remains machine-readable.
+- Project label catalog and task-assignment commands live under `kent task label`; there is no top-level label command. Catalog commands create, list, rename, and delete labels in the selected Project. Human catalog output includes readable names and stable UUIDs.
+- Label selectors use repeatable `--label <name-or-uuid>`. Task-list negative Label conditions use repeatable `--not-label <name-or-uuid>` with the same selector resolution. Canonical UUID v4 text selects by identity; every other value is trimmed and matched against the complete Project Label name with the Label catalog's case-insensitive Unicode comparison. Label selector values are literal and are never comma-split.
+- `kent task label add <task>` and `kent task label remove <task>` require one or more label selectors and apply all resolved membership changes atomically with idempotent add/remove behavior. Label names resolve against the Task's actual Project; `--project` scopes project-short-ID lookup. Task creation accepts the same repeatable selector and atomically assigns existing labels.
+- Every catalog and assignment command accepts `--json`. Catalog JSON returns label records for create, rename, and list, and the deleted label ID for delete. Assignment JSON returns the task ID and authoritative resulting label IDs. Human assignment output is a short acknowledgement.
+- `kent workflow edge add|update` accepts `--assignee-selection configured|previous_node` and `--thinking-selection configured|previous_node` for one Edge. Omission on add means `configured`; `previous_node` initializes a missing default protected Parameter, while `configured` retains an existing protected Parameter dormant.
+- `kent workflow edge add|update` accepts `--target-assignee-param <key>=<description>` and `--target-thinking-param <key>=<description>` to create or edit the corresponding protected Parameter while enabling it in the same command or while it is already enabled. An empty description after `=` is valid.
+- Repeatable `--param <key>=<description>` and `--clear-params` mutate ordinary Parameters only and never delete or convert protected Parameters.
+- Workflow Node CLI mutation keeps the Agent Node's configured Assignee required, uses the existing `--agent` flag, and does not enable selection for incoming Edges.
+- Workflow inspection identifies protected Parameter purposes. Human and JSON `kent task show` expose effective Assignee and thinking for Agent Current Nodes and omit them for non-Agent Current Nodes.
+- Human task show/list output adds one `Labels:` line only for assigned labels and quotes every name. Task show/list JSON exposes one `label_ids` field and does not duplicate assignments as named objects.
+- Task-list Label filtering uses repeatable literal `--label` selectors for included conditions and repeatable literal `--not-label` selectors for excluded conditions. `--label-match any|all` combines every included and excluded condition and defaults to `any`. `--unlabeled` selects Tasks with no assignments and is mutually exclusive with both selector flags and an explicitly supplied match mode. An explicit match mode without either selector flag is invalid.
+- Every selector in one command must resolve before task creation, assignment, or listing proceeds. Selector-resolution failure reports every unresolved selector and never ignores or partially applies the input.
+- `kent task list` exposes one typed task status. `--status` filters primary status, `--attention` filters typed attention, and `--column` filters workflow node keys.
+- `kent task list --unblocked` includes Tasks with zero unsatisfied direct Task Dependencies. `kent task list --blocked` includes Tasks with one or more unsatisfied direct Task Dependencies. The two flags are mutually exclusive.
+- `kent task list` filters and sorts before pagination. Multiple values for one filter are ORed. Different filter types are ANDed. A Task with several Current Nodes exposes all matching column keys in Workflow order.
+- `kent task list` default ordering is `status:asc,updated:desc`, where `status` uses primary typed-status precedence and `updated` is newest-first. Custom `--sort` accepts up to seven ordered `field:direction` selectors for `created`, `updated`, `status`, `column`, `title`, `labels`, and `short_id`; selectors can be comma-separated in one flag and may be supplied by repeated flags.
+- `kent task complete` accepts dynamic parameter flags, repeatable `--param name=value`, and `--json`/`--json-file` completion payload input. JSON input modes print JSON responses.
+- Plain-text `kent task complete` output is a model-facing handoff acknowledgement: `Completion scheduled. The transition <source display name> → <destination display name> will execute now. Your next agent turn will begin with the next workflow instructions.`
+- The acknowledgement uses the target node display name for an ordinary transition. A fan-out uses its shared target node-group display name when present and otherwise its transition display name.
+- The same acknowledgement is used for agent-session and forced human completion. It always promises a next agent turn regardless of context-preservation mode or whether another turn occurs, and it does not expose approval or transition state.
+- JSON completion output retains its existing field set and does not include the plain-text acknowledgement.
+- `kent task edit <task>` changes a Task's title, body, or source workspace. It requires at least one of `--title`, `--body`, `--body-file`, or `--source-workspace`. It preserves the current title when `--title` is absent. Agents can use it. `--json` prints the result.
+- `kent task create` and `kent task edit` accept `--source-workspace` as either a workspace id or a path; a path is resolved through its project binding. An omitted source workspace leaves it unchanged on edit.
+- Workflow/task CLI commands report remote-close failures to stderr after command work finishes. A close failure does not change a successful exit code, and an operation failure keeps its existing nonzero exit code.
+- Task dependency commands use canonical group `kent task dep`.
+- `kent task deps`, `kent task dependency`, and `kent task dependencies` invoke
+  the same command group but are not shown in help or documentation.
+- `kent task dep add --blocker <task> --blocked <task>` adds one directed
+  relationship.
+- `kent task dep remove --blocker <task> --blocked <task>` removes one directed
+  relationship.
+- `kent task dep list <task>` inspects both direct relationship directions.
+- `kent task dep list <task> --direction blocks|blocked-by` inspects one
+  direction.
+- Every dependency command accepts `--project` for Task Short ID resolution and
+  `--json` for machine-readable output.
+- Dependency add and remove resolve both Task selectors before mutation.
+- Plain dependency add and remove output is exactly `done`.
+- Dependency add JSON returns Blocker Task ID and Short ID, Blocked Task ID and
+  Short ID, and typed outcome `added` or `already_present`.
+- Dependency remove JSON returns the same identities and typed outcome `removed`
+  or `already_absent`.
+- Dependency mutation JSON uses `outcome`, `blocker_task_id`,
+  `blocker_short_id`, `blocked_task_id`, and `blocked_short_id`.
+- Dependency list JSON uses top-level `task_id`, `short_id`, and `directions`.
+- Each dependency direction object uses `direction`, `total_count`, and
+  `items`.
+- A compact dependency Task item uses `task_id`, `short_id`, `title`,
+  `workflow_id`, and canonical typed `status`.
+- A `blocked-by` direction also uses `unsatisfied_count`.
+- Each `blocked-by` item also uses typed `satisfaction`.
+- Empty directions are omitted. A Task with no relationships returns
+  `directions: []`.
+- The cardinality limit makes every returned direction complete. Dependency
+  list output has no continuation token and the command accepts no page token.
+- Human dependency-list output omits empty directions and uses this shape:
+
+  ```text
+  Blocks <count> tasks:
+  <short-id>: <title> (<status>)
+  ...
+  Blocked by:
+  <short-id>: <title> (<status>)
+  ...
+  ```
+
+- Human `kent task show` uses the same dependency sections and shows every
+  relationship permitted by the cardinality limits.
+- Human dependency sections order unfinished related Tasks first and then Task
+  Short ID.
+- Human `kent task show` omits dependency output when both directions are empty.
+- `kent task show --json` never embeds dependency Task items.
+- When at least one relationship exists, `kent task show --json` includes only
+  direct Blocker Task count, direct unsatisfied Blocker Task count, and directly
+  blocked Task count.
+- The JSON field is `dependencies` with `blocker_count`,
+  `unsatisfied_blocker_count`, and `blocked_task_count`.
+- `kent task show --json` omits dependency summary when all three counts are
+  zero.
+- `kent task start` and `kent task move` accept `--ignore-dependencies`.
+- Without that flag, an otherwise valid Start or executable Manual Move with
+  unsatisfied dependencies returns a typed `dependency_confirmation_required`
+  outcome containing only the unsatisfied count.
+- Dependency-confirmation JSON uses `outcome` and
+  `unsatisfied_dependency_count`.
+- Human dependency-confirmation output identifies the count, directs the
+  operator to `kent task show <task>`, and gives the
+  `--ignore-dependencies` rerun.
+- Human and JSON dependency-confirmation outcomes exit nonzero because the
+  requested action was not applied.
+- `--ignore-dependencies` applies only to that command invocation and does not
+  remove relationships or suppress later Workflow dependency awareness.
