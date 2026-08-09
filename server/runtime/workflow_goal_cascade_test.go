@@ -106,6 +106,7 @@ func TestWorkflowToolModeCascadeEmitsGoalCompletionAfterHostedToolResult(t *test
 			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal), ToolCalls: []llm.ToolCall{completeNodeCall("call_complete", completion)}},
 			ToolCalls: []llm.ToolCall{completeNodeCall("call_complete", completion)},
 			OutputItems: []llm.ResponseItem{
+				{Type: llm.ResponseItemTypeFunctionCall, ID: textutil.Value("call_complete"), CallID: textutil.Value("call_complete")},
 				{Type: llm.ResponseItemTypeOther, Raw: json.RawMessage(`{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search","query":"kent cli"}}`)},
 				{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleAssistant), Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("done")},
 			},

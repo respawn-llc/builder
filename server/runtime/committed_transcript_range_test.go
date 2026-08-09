@@ -115,7 +115,6 @@ func TestFinalAnswerToolMaterializationPublishesToolCallBeforeLocalEntry(t *test
 	)
 	executor := defaultStepExecutor{
 		engine: engine,
-		tools:  &defaultToolExecutor{engine: engine},
 	}
 	call := llm.ToolCall{
 		ID:    "call-1",
@@ -125,8 +124,13 @@ func TestFinalAnswerToolMaterializationPublishesToolCallBeforeLocalEntry(t *test
 	if _, _, err := executor.materializeFinalAnswerToolCalls(
 		context.Background(),
 		"step",
-		[]llm.ToolCall{call},
-		nil,
+		acceptedResponseCalls{
+			local: []llm.ToolCall{call},
+			order: []acceptedResponseCallRef{{
+				source: acceptedResponseCallLocal,
+				index:  0,
+			}},
+		},
 	); err != nil {
 		t.Fatalf("materialize final-answer tool call: %v", err)
 	}

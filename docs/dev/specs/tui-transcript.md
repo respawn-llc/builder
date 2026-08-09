@@ -38,7 +38,7 @@
 - **Tool completion appends exactly one final committed line in Kent commit order. Ongoing Mode never changes an earlier tool line.**
 - A pending whole-file deletion keeps its path visible without a removal-count badge while the count is unavailable. In ongoing and detail, a failed whole-file deletion remains path-only, while a successful whole-file deletion uses the existing compact removal badge to show its logical removed-line count, including a known count of zero.
 - **A shell invocation that moves to the background renders both its committed tool row and volatile background-activity row with a secondary `$`, faint foreground command, and `· backgrounded` suffix. The command truncates before the suffix so the complete suffix remains visible whenever the terminal can fit it; these rows never label the state as `running`.**
-- **Parallel tool calls commit in server emission order with no ordering guarantee among concurrent calls.**
+- **Parallel tool calls commit in canonical server order: provider-required order when present, otherwise the Agent Step's stable result order. Execution-completion races do not change that order. Clients consume server emission order and never reorder tool rows.**
 - **In main-input mode, `Up`/`Down` are reserved for prompt-history recall at whole-buffer boundaries or multiline cursor movement. They do not scroll ongoing transcript.**
 - `PgUp`/`PgDn` also do not scroll ongoing transcript state.
 - **Ongoing mouse capture is disabled to preserve native text selection.**
@@ -204,7 +204,7 @@
 - Interrupt injects detail-only developer-role control message `User interrupted you`.
 - Post-interrupt state returns idle with input ready.
 - Resume after interrupt requires explicit user text.
-- After a crash during an Agent Step, recovery follows interruption behavior. Otherwise Kent restores normal state.
+- Session reopening after a crash or durability-failure retirement follows the fresh-resource recovery contract in `core-runtime-tools.md`. The TUI does not expose a stale tool call as live; otherwise it restores normal state.
 - Failed prompt-history navigation emits plain terminal BEL with no transient UI notification.
 
 ## Worktree Management

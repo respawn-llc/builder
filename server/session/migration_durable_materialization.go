@@ -84,6 +84,7 @@ func (s *Store) issueCurrentEventLogCapabilityWithMutationHeld() (
 			err,
 		)
 	}
+	log.durabilityObserver = s.options.durabilityObserver
 	if log.lastSequence != expectedRevision {
 		return MaterializedEventLog{}, wrapEventLogMaterializationError(
 			EventLogMaterializationStageReconciliation,

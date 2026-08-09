@@ -13,9 +13,9 @@ type recordAppendOutcome struct {
 	endByteCursor *int64
 }
 
-type recordAppendInput struct {
-	stepID  *string
-	payload EventRecordPayload
+type EventRecordAppendInput struct {
+	StepID  *string
+	Payload EventRecordPayload
 }
 
 type recordMetadataTransition func(*Meta) (bool, error)
@@ -30,8 +30,8 @@ func (c MaterializedEventLog) AppendRecord(
 	stepID *string,
 	payload EventRecordPayload,
 ) (EventRecord, CommitReceipt, error) {
-	outcome, err := c.appendRecordInputsAtomic([]recordAppendInput{{
-		stepID: stepID, payload: payload,
+	outcome, err := c.appendRecordInputsAtomic([]EventRecordAppendInput{{
+		StepID: stepID, Payload: payload,
 	}}, nil)
 	if len(outcome.records) != 1 {
 		return EventRecord{}, CommitReceipt{Committed: outcome.committed}, errors.Join(
@@ -49,10 +49,14 @@ func (c MaterializedEventLog) AppendRecordsAtomic(
 	stepID *string,
 	payloads []EventRecordPayload,
 ) ([]EventRecord, CommitReceipt, error) {
-	inputs := make([]recordAppendInput, len(payloads))
+	inputs := make([]EventRecordAppendInput, len(payloads))
 	for index, payload := range payloads {
-		inputs[index] = recordAppendInput{stepID: stepID, payload: payload}
+		inputs[index] = EventRecordAppendInput{StepID: stepID, Payload: payload}
 	}
+	return c.AppendRecordBatchAtomic(inputs)
+}
+
+func (c MaterializedEventLog) AppendRecordBatchAtomic(inputs []EventRecordAppendInput) ([]EventRecord, CommitReceipt, error) {
 	outcome, err := c.appendRecordInputsAtomic(inputs, nil)
 	return outcome.records, CommitReceipt{Committed: outcome.committed}, err
 }
@@ -79,7 +83,7 @@ func (c MaterializedEventLog) appendReplayRecords(
 			"materialized event log owning Store is required",
 		)
 	}
-	inputs := make([]recordAppendInput, len(records))
+	inputs := make([]EventRecordAppendInput, len(records))
 	for index, record := range records {
 		payload, err := record.Payload()
 		if err != nil {
@@ -89,9 +93,9 @@ func (c MaterializedEventLog) appendReplayRecords(
 				err,
 			)
 		}
-		inputs[index] = recordAppendInput{
-			stepID:  record.StepID(),
-			payload: payload,
+		inputs[index] = EventRecordAppendInput{
+			StepID:  record.StepID(),
+			Payload: payload,
 		}
 	}
 	outcome, err := c.appendRecordInputsAtomic(inputs, nil)
@@ -108,8 +112,8 @@ func (c MaterializedEventLog) AppendCompactionHistoryReplacement(
 	stepID *string,
 	record HistoryReplacementRecord,
 ) (EventRecord, CommitReceipt, error) {
-	outcome, err := c.appendRecordInputsAtomic([]recordAppendInput{{
-		stepID: stepID, payload: record,
+	outcome, err := c.appendRecordInputsAtomic([]EventRecordAppendInput{{
+		StepID: stepID, Payload: record,
 	}}, func(meta *Meta) (bool, error) {
 		meta.UsageState = nil
 		return true, nil
@@ -129,8 +133,8 @@ func (c MaterializedEventLog) AppendCompactionHistoryReplacement(
 func (c MaterializedEventLog) AppendGeneratedRecoveredWarning(
 	record LocalEntryRecord,
 ) (CommitReceipt, error) {
-	outcome, err := c.appendRecordInputsAtomic([]recordAppendInput{{
-		payload: record,
+	outcome, err := c.appendRecordInputsAtomic([]EventRecordAppendInput{{
+		Payload: record,
 	}}, func(meta *Meta) (bool, error) {
 		if meta.GeneratedRecoveredWarningIssued {
 			return false, nil
@@ -164,8 +168,8 @@ func (c MaterializedEventLog) AppendRecordWithEndByteCursor(
 			"materialized event log owning Store is required",
 		)
 	}
-	outcome, err := c.appendRecordInputsAtomic([]recordAppendInput{{
-		stepID: stepID, payload: payload,
+	outcome, err := c.appendRecordInputsAtomic([]EventRecordAppendInput{{
+		StepID: stepID, Payload: payload,
 	}}, nil)
 	result := EventRecordAppendResult{
 		CommitReceipt: CommitReceipt{Committed: outcome.committed},
@@ -188,7 +192,7 @@ func (c MaterializedEventLog) AppendRecordWithEndByteCursor(
 }
 
 func (c MaterializedEventLog) appendRecordInputsAtomic(
-	inputs []recordAppendInput,
+	inputs []EventRecordAppendInput,
 	transition recordMetadataTransition,
 ) (outcome recordAppendOutcome, resultErr error) {
 	if c.store == nil {
@@ -227,7 +231,7 @@ func (c MaterializedEventLog) appendRecordInputsAtomic(
 	sequence := log.lastSequence
 	for index, input := range inputs {
 		sequence++
-		record, err := NewEventRecord(sequence, input.stepID, input.payload)
+		record, err := NewEventRecord(sequence, input.StepID, input.Payload)
 		if err != nil {
 			s.mu.Unlock()
 			return recordAppendOutcome{}, fmt.Errorf(

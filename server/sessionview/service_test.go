@@ -336,7 +336,7 @@ func TestServiceSessionTranscriptTailEntriesKeepsDormantPersistedCompactionSumma
 	appendSessionViewRecord(t, store, "step-1", session.LocalEntryRecord{
 		Visibility: session.EntryVisibilityAuto,
 		Role:       "compaction_summary",
-		Text:       "condensed summary",
+		Text:       sessionViewStringPointer("condensed summary"),
 	})
 	appendSessionViewMessage(t, store, "step-1", session.MessageRoleDeveloper, "Last user message before handoff\n\ncarry this forward", nil, sessionViewMessageTypePointer(session.MessageTypeCompactionPreservedUserMessage))
 	svc := NewService(newTestSessionResolver(store), nil, nil, nil)

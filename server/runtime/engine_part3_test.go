@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"core/server/llm"
+	"core/server/session"
 	"core/server/tools"
 	"core/shared/textutil"
 	"core/shared/toolspec"
@@ -338,6 +340,357 @@ func TestSubmitUserMessageContinuesAfterHostedToolOnlyTurn(t *testing.T) {
 	}
 	if !foundHostedOutput {
 		t.Fatalf("expected hosted tool output item in follow-up request, got %+v", secondReq.Items)
+	}
+}
+
+func TestMixedAcceptedCallsPersistInProviderOutputOrder(t *testing.T) {
+	t.Parallel()
+	store := mustCreateTestSession(t)
+	var startedCallIDs []string
+	localOne := llm.ToolCall{
+		ID:    "local-one",
+		Name:  string(toolspec.ToolExecCommand),
+		Input: json.RawMessage(`{"cmd":"true"}`),
+	}
+	localTwo := llm.ToolCall{
+		ID:    "local-two",
+		Name:  string(toolspec.ToolExecCommand),
+		Input: json.RawMessage(`{"cmd":"true"}`),
+	}
+	client := &fakeClient{
+		caps: openAIFirstPartyNativeWebSearchCaps(),
+		responses: []llm.Response{
+			{
+				Assistant: llm.Message{
+					Role:    llm.RoleAssistant,
+					Content: textutil.Value("working"),
+					Phase:   textutil.Value(llm.MessagePhaseCommentary),
+				},
+				ToolCalls: []llm.ToolCall{localOne, localTwo},
+				OutputItems: []llm.ResponseItem{
+					{
+						Type:   llm.ResponseItemTypeFunctionCall,
+						ID:     textutil.Value(localOne.ID),
+						CallID: textutil.Value(localOne.ID),
+					},
+					{
+						Type: llm.ResponseItemTypeOther,
+						ID:   textutil.Value("hosted-middle"),
+						Raw:  json.RawMessage(`{"type":"web_search_call","id":"hosted-middle","status":"completed","action":{"type":"search","query":"kent cli"}}`),
+					},
+					{
+						Type:   llm.ResponseItemTypeFunctionCall,
+						ID:     textutil.Value(localTwo.ID),
+						CallID: textutil.Value(localTwo.ID),
+					},
+				},
+				Usage: llm.Usage{WindowTokens: 200000},
+			},
+			{
+				Assistant: llm.Message{
+					Role:    llm.RoleAssistant,
+					Content: textutil.Value("done"),
+					Phase:   textutil.Value(llm.MessagePhaseFinal),
+				},
+				Usage: llm.Usage{WindowTokens: 200000},
+			},
+		},
+	}
+	engine := mustNewTestEngine(
+		t,
+		store,
+		client,
+		tools.NewRegistry(tools.HandlerRegistration{
+			ID:      toolspec.ToolExecCommand,
+			Handler: fakeTool{name: toolspec.ToolExecCommand},
+		}),
+		Config{
+			Model:         "gpt-5",
+			WebSearchMode: "native",
+			EnabledTools:  []toolspec.ID{toolspec.ToolExecCommand, toolspec.ToolWebSearch},
+			OnEvent: func(event Event) {
+				if event.Kind == EventToolCallStarted && event.ToolCall != nil {
+					startedCallIDs = append(startedCallIDs, event.ToolCall.ID)
+				}
+			},
+		},
+	)
+
+	if _, err := engine.SubmitUserMessage(context.Background(), "run mixed tools"); err != nil {
+		t.Fatalf("submit mixed tools: %v", err)
+	}
+
+	window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(32)
+	if err != nil {
+		t.Fatalf("read mixed-tool records: %v", err)
+	}
+	want := []string{"local-one", "hosted-middle", "local-two"}
+	var persistedResults []string
+	foundIntent := false
+	for _, record := range window.Records {
+		messageRecord, ok := mustSessionEventPayload(record).(session.MessageRecord)
+		if !ok {
+			continue
+		}
+		message, err := llmMessageFromSessionRecord(messageRecord)
+		if err != nil {
+			t.Fatalf("restore mixed-tool assistant message: %v", err)
+		}
+		if message.Role != llm.RoleAssistant || len(message.ToolCalls) != len(want) {
+			if message.Role == llm.RoleTool && message.ToolCallID != nil {
+				persistedResults = append(persistedResults, *message.ToolCallID)
+			}
+			continue
+		}
+		got := make([]string, len(message.ToolCalls))
+		for index, call := range message.ToolCalls {
+			got[index] = call.ID
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("mixed-tool persisted order = %v, want %v", got, want)
+		}
+		foundIntent = true
+	}
+	if !foundIntent {
+		t.Fatal("mixed-tool assistant intent was not persisted")
+	}
+	if !reflect.DeepEqual(persistedResults, want) {
+		t.Fatalf("mixed-tool result order = %v, want %v", persistedResults, want)
+	}
+	if len(startedCallIDs) < len(want) || startedCallIDs[0] != "hosted-middle" {
+		t.Fatalf(
+			"mixed-tool start order = %v, want hosted outcome materialized before local starts",
+			startedCallIDs,
+		)
+	}
+}
+
+func TestInvalidMixedAcceptedCallPositionsFailBeforeToolEffects(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name        string
+		localCallID string
+		outputItems []llm.ResponseItem
+	}{
+		{
+			name:        "missing local position",
+			localCallID: "local-missing",
+			outputItems: []llm.ResponseItem{{
+				Type: llm.ResponseItemTypeOther,
+				ID:   textutil.Value("hosted"),
+				Raw:  json.RawMessage(`{"type":"web_search_call","id":"hosted","status":"completed","action":{"type":"search","query":"kent"}}`),
+			}},
+		},
+		{
+			name:        "duplicate accepted ID",
+			localCallID: "duplicate",
+			outputItems: []llm.ResponseItem{
+				{
+					Type:   llm.ResponseItemTypeFunctionCall,
+					ID:     textutil.Value("duplicate"),
+					CallID: textutil.Value("duplicate"),
+				},
+				{
+					Type: llm.ResponseItemTypeOther,
+					ID:   textutil.Value("duplicate"),
+					Raw:  json.RawMessage(`{"type":"web_search_call","id":"duplicate","status":"completed","action":{"type":"search","query":"kent"}}`),
+				},
+			},
+		},
+		{
+			name:        "ambiguous local position",
+			localCallID: "local-ambiguous",
+			outputItems: []llm.ResponseItem{
+				{
+					Type:   llm.ResponseItemTypeFunctionCall,
+					ID:     textutil.Value("local-ambiguous"),
+					CallID: textutil.Value("local-ambiguous"),
+				},
+				{
+					Type: llm.ResponseItemTypeOther,
+					ID:   textutil.Value("hosted"),
+					Raw:  json.RawMessage(`{"type":"web_search_call","id":"hosted","status":"completed","action":{"type":"search","query":"kent"}}`),
+				},
+				{
+					Type:   llm.ResponseItemTypeFunctionCall,
+					ID:     textutil.Value("local-ambiguous"),
+					CallID: textutil.Value("local-ambiguous"),
+				},
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := mustCreateTestSession(t)
+			probe := &toolExecutionProbe{}
+			client := &fakeClient{
+				caps: openAIFirstPartyNativeWebSearchCaps(),
+				responses: []llm.Response{{
+					Assistant: llm.Message{
+						Role:    llm.RoleAssistant,
+						Content: textutil.Value("working"),
+						Phase:   textutil.Value(llm.MessagePhaseCommentary),
+					},
+					ToolCalls: []llm.ToolCall{{
+						ID:    test.localCallID,
+						Name:  string(toolspec.ToolExecCommand),
+						Input: json.RawMessage(`{"cmd":"true"}`),
+					}},
+					OutputItems: test.outputItems,
+					Usage:       llm.Usage{WindowTokens: 200000},
+				}},
+			}
+			engine := mustNewTestEngine(
+				t,
+				store,
+				client,
+				tools.NewRegistry(tools.HandlerRegistration{
+					ID:      toolspec.ToolExecCommand,
+					Handler: probe,
+				}),
+				Config{
+					Model:         "gpt-5",
+					WebSearchMode: "native",
+					EnabledTools:  []toolspec.ID{toolspec.ToolExecCommand, toolspec.ToolWebSearch},
+				},
+			)
+
+			if _, err := engine.SubmitUserMessage(context.Background(), "run invalid mixed tools"); err == nil {
+				t.Fatal("invalid mixed tool response succeeded")
+			}
+			if probe.calls.Load() != 0 {
+				t.Fatalf("invalid mixed response executed %d local tools", probe.calls.Load())
+			}
+			window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
+			if err != nil {
+				t.Fatalf("read invalid mixed records: %v", err)
+			}
+			for _, record := range window.Records {
+				messageRecord, ok := mustSessionEventPayload(record).(session.MessageRecord)
+				if !ok {
+					continue
+				}
+				message, err := llmMessageFromSessionRecord(messageRecord)
+				if err != nil {
+					t.Fatalf("restore invalid mixed message: %v", err)
+				}
+				if len(message.ToolCalls) > 0 {
+					t.Fatalf("invalid mixed response persisted tool intent: %+v", message.ToolCalls)
+				}
+			}
+		})
+	}
+}
+
+func TestHostedOnlyAcceptedCallsPersistInOutputOrder(t *testing.T) {
+	t.Parallel()
+	durability := &toolDurabilityObservationRecorder{}
+	store := mustCreateTestSessionAt(
+		t,
+		t.TempDir(),
+		session.WithDurabilityObserver(durability),
+	)
+	client := &fakeClient{
+		caps: openAIFirstPartyNativeWebSearchCaps(),
+		responses: []llm.Response{
+			{
+				Assistant: llm.Message{Role: llm.RoleAssistant},
+				OutputItems: []llm.ResponseItem{
+					{
+						Type: llm.ResponseItemTypeOther,
+						ID:   textutil.Value("hosted-one"),
+						Raw:  json.RawMessage(`{"type":"web_search_call","id":"hosted-one","status":"completed","action":{"type":"search","query":"one"}}`),
+					},
+					{
+						Type: llm.ResponseItemTypeOther,
+						ID:   textutil.Value("hosted-two"),
+						Raw:  json.RawMessage(`{"type":"web_search_call","id":"hosted-two","status":"completed","action":{"type":"search","query":"two"}}`),
+					},
+				},
+				Usage: llm.Usage{WindowTokens: 200000},
+			},
+			{
+				Assistant: llm.Message{
+					Role:    llm.RoleAssistant,
+					Content: textutil.Value("done"),
+					Phase:   textutil.Value(llm.MessagePhaseFinal),
+				},
+				Usage: llm.Usage{WindowTokens: 200000},
+			},
+		},
+	}
+	engine := mustNewTestEngine(
+		t,
+		store,
+		client,
+		tools.NewRegistry(),
+		Config{
+			Model:         "gpt-5",
+			WebSearchMode: "native",
+			EnabledTools:  []toolspec.ID{toolspec.ToolWebSearch},
+		},
+	)
+
+	if _, err := engine.SubmitUserMessage(context.Background(), "run hosted tools"); err != nil {
+		t.Fatalf("submit hosted tools: %v", err)
+	}
+	window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(24)
+	if err != nil {
+		t.Fatalf("read hosted-only records: %v", err)
+	}
+	want := []string{"hosted-one", "hosted-two"}
+	var persistedResults []string
+	foundIntent := false
+	for _, record := range window.Records {
+		messageRecord, ok := mustSessionEventPayload(record).(session.MessageRecord)
+		if !ok {
+			continue
+		}
+		message, err := llmMessageFromSessionRecord(messageRecord)
+		if err != nil {
+			t.Fatalf("restore hosted-only message: %v", err)
+		}
+		if message.Role != llm.RoleAssistant || len(message.ToolCalls) != len(want) {
+			if message.Role == llm.RoleTool && message.ToolCallID != nil {
+				persistedResults = append(persistedResults, *message.ToolCallID)
+			}
+			continue
+		}
+		got := []string{message.ToolCalls[0].ID, message.ToolCalls[1].ID}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("hosted-only persisted order = %v, want %v", got, want)
+		}
+		foundIntent = true
+	}
+	if !foundIntent {
+		t.Fatal("hosted-only assistant intent was not persisted")
+	}
+	if !reflect.DeepEqual(persistedResults, want) {
+		t.Fatalf("hosted-only result order = %v, want %v", persistedResults, want)
+	}
+	appends, _ := durability.snapshot()
+	groupAppends := 0
+	for _, observation := range appends {
+		if observation.RecordCount == len(want)*2 {
+			groupAppends++
+		}
+	}
+	if groupAppends != 1 {
+		t.Fatalf("hosted result-group appends = %d, want one: %+v", groupAppends, appends)
+	}
+	reopened := mustOpenTestSession(t, store.Dir())
+	restored := mustNewTestEngine(
+		t,
+		reopened,
+		&fakeClient{},
+		tools.NewRegistry(),
+		Config{Model: "gpt-5"},
+	)
+	snapshot := mustTranscriptHydrationSnapshot(t, restored)
+	for _, callID := range want {
+		if rows := countHydratedToolRows(snapshot, callID); rows != 1 {
+			t.Fatalf("reopened hosted rows for %s = %d, want 1", callID, rows)
+		}
 	}
 }
 

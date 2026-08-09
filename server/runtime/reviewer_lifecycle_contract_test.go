@@ -44,7 +44,6 @@ func TestDefaultStepExecutorOwnsReviewerLifecycleAndPropagatesFatalError(t *test
 		phase:    engine.phaseProtocol,
 		reviewer: reviewer,
 		messages: engine.messageFlow,
-		tools:    engine.toolFlow,
 	}
 
 	_, err := engine.runStepLoopWithOptions(
@@ -212,7 +211,7 @@ func TestReviewerFactCommitFenceRunsThroughCallerLifecycle(t *testing.T) {
 					}
 					engine.stepFlow = &defaultStepExecutor{
 						engine: engine, phase: engine.phaseProtocol, reviewer: pipeline,
-						messages: engine.messageFlow, tools: engine.toolFlow,
+						messages: engine.messageFlow,
 					}
 					_, runErr := engine.runStepLoopWithOptions(context.Background(), "11111111-1111-4111-8111-111111111111", "all", &fakeClient{}, false)
 					if blocker != nil {

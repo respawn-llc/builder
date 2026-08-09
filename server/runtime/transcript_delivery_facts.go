@@ -89,6 +89,7 @@ type TranscriptNoticeRowFact struct {
 	DiagnosticDetail     string
 	CacheWarning         *TranscriptCacheWarningFact
 	Compaction           *TranscriptCompactionNoticeFact
+	ToolOutputRepair     *transcript.ToolOutputRepairNotice
 }
 
 type TranscriptReviewerFeedbackRowFact struct {
@@ -605,6 +606,12 @@ func transcriptToolEntryHasRecoverableText(entry ChatEntry) bool {
 }
 
 func transcriptNoticeEntryIntegrity(entry ChatEntry) transcript.RowIntegrity {
+	if entry.ToolOutputRepair != nil {
+		if entry.ToolOutputRepair.Valid() {
+			return transcript.RowIntegrityValid
+		}
+		return transcript.RowIntegrityUnrecoverableMalformed
+	}
 	if firstNonBlankTranscriptValue(entry.Text, entry.CondensedText, entry.CompactLabel, entry.SourcePath) == "" {
 		return transcript.RowIntegrityUnrecoverableMalformed
 	}
@@ -703,6 +710,17 @@ func firstNonBlankTranscriptValue(values ...string) string {
 }
 
 func localEntryNoticeFact(entry ChatEntry) TranscriptCommittedRowFact {
+	if entry.ToolOutputRepair != nil {
+		return TranscriptCommittedRowFact{
+			Kind:       TranscriptCommittedRowFactNotice,
+			Visibility: normalizeRuntimeEntryVisibility(entry.Visibility),
+			Notice: &TranscriptNoticeRowFact{
+				Reason:           transcript.NoticeReasonToolOutputRepair,
+				Severity:         transcript.NoticeSeverityWarning,
+				ToolOutputRepair: textutil.Pointer(entry.ToolOutputRepair),
+			},
+		}
+	}
 	if strings.TrimSpace(entry.Role) == "" {
 		return legacyUntypedNoticeFactFromLocalEntry(entry)
 	}
