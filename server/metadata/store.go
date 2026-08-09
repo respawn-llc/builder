@@ -588,6 +588,68 @@ func (s *Store) DeleteWorktreeRecordByID(ctx context.Context, worktreeID string)
 	return nil
 }
 
+func (s *Store) ReleaseTaskManagedWorktree(
+	ctx context.Context,
+	taskID string,
+	worktreeID string,
+	updatedAt time.Time,
+) error {
+	if s == nil || s.queries == nil {
+		return errors.New("metadata store is required")
+	}
+	trimmedTaskID := strings.TrimSpace(taskID)
+	if trimmedTaskID == "" {
+		return errors.New("task id is required")
+	}
+	trimmedWorktreeID := strings.TrimSpace(worktreeID)
+	if trimmedWorktreeID == "" {
+		return ErrWorktreeIDRequired
+	}
+	if updatedAt.IsZero() {
+		return errors.New("Task managed Worktree release timestamp is required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin Task managed Worktree release tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	q := s.queries.WithTx(tx)
+	task, err := q.GetTask(ctx, trimmedTaskID)
+	if err != nil {
+		return fmt.Errorf("get Task for managed Worktree release: %w", err)
+	}
+	if !task.ManagedWorktreeID.Valid ||
+		strings.TrimSpace(task.ManagedWorktreeID.String) != trimmedWorktreeID {
+		return fmt.Errorf(
+			"Task %q is not bound to managed Worktree %q",
+			trimmedTaskID,
+			trimmedWorktreeID,
+		)
+	}
+	updated, err := q.UpdateTaskManagedWorktree(ctx, sqlitegen.UpdateTaskManagedWorktreeParams{
+		ID:                trimmedTaskID,
+		ManagedWorktreeID: sql.NullString{},
+		UpdatedAtUnixMs:   updatedAt.UTC().UnixMilli(),
+	})
+	if err != nil {
+		return fmt.Errorf("unbind Task managed Worktree: %w", err)
+	}
+	if updated != 1 {
+		return sql.ErrNoRows
+	}
+	deleted, err := q.DeleteWorktreeByID(ctx, trimmedWorktreeID)
+	if err != nil {
+		return fmt.Errorf("delete released Worktree record: %w", err)
+	}
+	if deleted != 1 {
+		return sql.ErrNoRows
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit Task managed Worktree release tx: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) UpdateSessionExecutionTarget(ctx context.Context, update SessionExecutionTargetUpdate) error {
 	if s == nil || s.queries == nil {
 		return errors.New("metadata store is required")
