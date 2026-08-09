@@ -66,6 +66,7 @@ func TestWorktreeSetupEventValidationUsesPhaseDiscriminatedPayloads(t *testing.T
 				},
 			},
 			Diagnostic:               "setup exited with status 7",
+			ScriptPath:               stringValuePointer("/source/scripts/setup.sh"),
 			RetainedWorktree:         testRegisteredWorktreeTopology(),
 			RetainedPreviousWorktree: testRetainedPreviousWorktree(),
 		},
@@ -223,6 +224,7 @@ func TestWorktreeSetupEventJSONKeepsInapplicableFactsAbsentAndNullableOutputPres
 				},
 			},
 			Diagnostic: "setup timed out",
+			ScriptPath: stringValuePointer("/source/scripts/setup.sh"),
 		},
 	}
 	raw, err = json.Marshal(failed)
@@ -241,6 +243,11 @@ func TestWorktreeSetupEventJSONKeepsInapplicableFactsAbsentAndNullableOutputPres
 	if err := json.Unmarshal(failedFields["cause"], &causeFields); err != nil {
 		t.Fatalf("decode failure cause fields: %v", err)
 	}
+	var scriptPath string
+	if err := json.Unmarshal(failedFields["script_path"], &scriptPath); err != nil ||
+		scriptPath != "/source/scripts/setup.sh" {
+		t.Fatalf("failed setup script path was not preserved: %s", raw)
+	}
 	var timeoutFields map[string]json.RawMessage
 	if err := json.Unmarshal(causeFields["timeout"], &timeoutFields); err != nil {
 		t.Fatalf("decode timeout fields: %v", err)
@@ -251,6 +258,34 @@ func TestWorktreeSetupEventJSONKeepsInapplicableFactsAbsentAndNullableOutputPres
 	}
 	if _, exists := timeoutFields["stderr"]; exists {
 		t.Fatalf("nullable output presence was not preserved: %s", raw)
+	}
+
+	targetPreparation := WorktreeSetupEvent{
+		SetupOperationID: id,
+		Phase:            WorktreeSetupPhaseFailed,
+		Failed: &WorktreeSetupFailed{
+			RetryReadiness: WorktreeSetupRetryReady,
+			Cause: WorktreeSetupFailureCause{
+				Kind:        WorktreeSetupFailureTargetPreparation,
+				Preparation: &WorktreeSetupPreparationFailure{},
+			},
+			Diagnostic: "target preparation failed",
+		},
+	}
+	raw, err = json.Marshal(targetPreparation)
+	if err != nil {
+		t.Fatalf("marshal target-preparation failure: %v", err)
+	}
+	eventFields = nil
+	if err := json.Unmarshal(raw, &eventFields); err != nil {
+		t.Fatalf("decode target-preparation event fields: %v", err)
+	}
+	failedFields = nil
+	if err := json.Unmarshal(eventFields["failed"], &failedFields); err != nil {
+		t.Fatalf("decode target-preparation failure fields: %v", err)
+	}
+	if got := string(failedFields["script_path"]); got != "null" {
+		t.Fatalf("target-preparation script_path = %s, want explicit null: %s", got, raw)
 	}
 }
 

@@ -145,7 +145,7 @@ export function useTaskInitiatingActionController({
                   ? "target_preparation"
                   : "setup_script",
               diagnostic: preparationError.failure.diagnostic,
-              scriptPath: preparationError.setupScriptPath,
+              scriptPath: preparationError.failure.scriptPath,
               retainedWorktree:
                 preparationError.failure.retainedWorktree === null
                   ? null

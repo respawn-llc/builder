@@ -444,6 +444,7 @@ function setupFailure(diagnostic: string, root: string, previousRoot?: string): 
         retry_readiness: "retry_ready",
         cause: { kind: "operational", operational: {} },
         diagnostic,
+        script_path: "/repo/setup.sh",
         retained_worktree: registeredWorktreeWire(root, "worktree-current"),
         ...(previousRoot === undefined
           ? {}
@@ -453,7 +454,6 @@ function setupFailure(diagnostic: string, root: string, previousRoot?: string): 
               },
             }),
       },
-      setup_script_path: "/repo/setup.sh",
     },
   });
 }
@@ -469,6 +469,7 @@ function targetPreparationFailure(diagnostic: string, previousRoot: string): Rpc
         retry_readiness: "retry_ready",
         cause: { kind: "target_preparation", target_preparation: {} },
         diagnostic,
+        script_path: null,
         retained_previous_worktree: {
           worktree: registeredWorktreeWire(previousRoot, "worktree-previous"),
         },

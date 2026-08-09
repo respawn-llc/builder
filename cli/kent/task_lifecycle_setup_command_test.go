@@ -154,7 +154,7 @@ func TestWorkflowMutationWaitsForBufferedSetupTerminalAfterAppliedResponse(t *te
 	}
 }
 
-func TestWorkflowMutationRetainsLatestStartedPayloadForFailurePresentation(t *testing.T) {
+func TestWorkflowMutationUsesTerminalFailureScriptPath(t *testing.T) {
 	events := make(chan serverapi.WorktreeSetupEvent, 3)
 	remote := lifecycleSetupTestRemote{subscription: gatedSetupSubscription{terminal: events}}
 	results := make(chan *worktreeSetupTerminalObservation, 1)
@@ -182,17 +182,6 @@ func TestWorkflowMutationRetainsLatestStartedPayloadForFailurePresentation(t *te
 	}()
 
 	id := <-setupIDs
-	for _, scriptPath := range []string{"/repo/setup-first.sh", "/repo/setup-retry.sh"} {
-		events <- serverapi.WorktreeSetupEvent{
-			SetupOperationID: id,
-			Phase:            serverapi.WorktreeSetupPhaseStarted,
-			Started: &serverapi.WorktreeSetupStarted{
-				SourceWorkspaceRoot: "/repo",
-				WorktreeRoot:        "/tmp/worktree",
-				ScriptPath:          scriptPath,
-			},
-		}
-	}
 	retained := lifecycleSetupTestWorktree("/tmp/worktree")
 	events <- serverapi.WorktreeSetupEvent{
 		SetupOperationID: id,
@@ -204,14 +193,16 @@ func TestWorkflowMutationRetainsLatestStartedPayloadForFailurePresentation(t *te
 				Timeout: &serverapi.WorktreeSetupTimeout{},
 			},
 			Diagnostic:       "setup retry timed out",
+			ScriptPath:       lifecycleStringPointer("/repo/setup-retry.sh"),
 			ExecutionTarget:  lifecycleSetupExecutionTarget(serverapi.WorkflowExecutionTargetModeHead),
 			RetainedWorktree: &retained,
 		},
 	}
 
 	terminal := <-results
-	if terminal == nil || terminal.LastStarted == nil ||
-		terminal.LastStarted.ScriptPath != "/repo/setup-retry.sh" {
+	if terminal == nil || terminal.Event.Failed == nil ||
+		terminal.Event.Failed.ScriptPath == nil ||
+		*terminal.Event.Failed.ScriptPath != "/repo/setup-retry.sh" {
 		t.Fatalf("terminal observation = %+v", terminal)
 	}
 }
@@ -230,6 +221,7 @@ func TestStartSetupFailurePresentationProvidesTypedResumeActions(t *testing.T) {
 				},
 			},
 			Diagnostic: "setup exited with status 7",
+			ScriptPath: lifecycleStringPointer("/repo/.kent/setup.sh"),
 			ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
 				Mode:      serverapi.WorkflowExecutionTargetModeCustomRef,
 				CustomRef: lifecycleStringPointer("refs/heads/dev"),
@@ -241,14 +233,7 @@ func TestStartSetupFailurePresentationProvidesTypedResumeActions(t *testing.T) {
 	presentation, err := taskLifecycleSetupPresentation(
 		taskLifecycleOperationStart,
 		taskLifecycleCommandContext{TaskRef: "KENT-453"},
-		worktreeSetupTerminalObservation{
-			Event: event,
-			LastStarted: &serverapi.WorktreeSetupStarted{
-				SourceWorkspaceRoot: "/repo",
-				WorktreeRoot:        "/tmp/KENT-453",
-				ScriptPath:          "/repo/.kent/setup.sh",
-			},
-		},
+		worktreeSetupTerminalObservation{Event: event},
 	)
 	if err != nil {
 		t.Fatalf("taskLifecycleSetupPresentation: %v", err)
@@ -424,6 +409,7 @@ func TestTaskResumeFailedSetupReturnsNonzeroAfterAppliedMutation(t *testing.T) {
 						},
 					},
 					Diagnostic:       "setup exited with status 2",
+					ScriptPath:       lifecycleStringPointer("/repo/setup.sh"),
 					ExecutionTarget:  lifecycleSetupExecutionTarget(serverapi.WorkflowExecutionTargetModeHead),
 					RetainedWorktree: &retained,
 				},
@@ -464,6 +450,7 @@ func TestTaskStartFailedSetupReturnsNonzeroAfterAppliedMutation(t *testing.T) {
 						Timeout: &serverapi.WorktreeSetupTimeout{},
 					},
 					Diagnostic:       "setup timed out twice",
+					ScriptPath:       lifecycleStringPointer("/repo/setup.sh"),
 					ExecutionTarget:  lifecycleSetupExecutionTarget(serverapi.WorkflowExecutionTargetModeDefaultBranch),
 					RetainedWorktree: &retained,
 				},
@@ -614,7 +601,6 @@ func TestMoveSetupFailurePresentationReconstructsOriginalAndTargetOverrideAction
 		CurrentExecutionTarget:     &currentTarget,
 	}
 	retained := lifecycleSetupTestWorktree("/tmp/move-retained")
-	setupScriptPath := "/repo/setup.sh"
 	preparationErr := &serverapi.WorkflowTaskMovePreparationError{
 		Failure: serverapi.WorktreeSetupFailed{
 			RetryReadiness: serverapi.WorktreeSetupRetryReady,
@@ -623,9 +609,9 @@ func TestMoveSetupFailurePresentationReconstructsOriginalAndTargetOverrideAction
 				Operational: &serverapi.WorktreeSetupOperationalFailure{},
 			},
 			Diagnostic:       "setup exited twice",
+			ScriptPath:       lifecycleStringPointer("/repo/setup.sh"),
 			RetainedWorktree: &retained,
 		},
-		SetupScriptPath: &setupScriptPath,
 	}
 
 	presentation, err := taskMovePreparationFailurePresentation(
@@ -670,7 +656,6 @@ func TestMoveSetupFailurePresentationReconstructsOriginalAndTargetOverrideAction
 
 func TestMovePreparationFailurePresentationRejectsBlankScriptPath(t *testing.T) {
 	retained := lifecycleSetupTestWorktree("/tmp/move-retained")
-	blankScriptPath := " "
 	_, err := taskMovePreparationFailurePresentation(
 		taskLifecycleCommandContext{
 			TaskRef: "KENT-453",
@@ -687,9 +672,9 @@ func TestMovePreparationFailurePresentationRejectsBlankScriptPath(t *testing.T) 
 					Operational: &serverapi.WorktreeSetupOperationalFailure{},
 				},
 				Diagnostic:       "setup failed",
+				ScriptPath:       lifecycleStringPointer(" "),
 				RetainedWorktree: &retained,
 			},
-			SetupScriptPath: &blankScriptPath,
 		},
 	)
 	if err == nil {
@@ -784,7 +769,6 @@ func lifecycleSetupExecutionTarget(
 func TestTaskMoveTypedSetupFailureReturnsNonzeroWithoutSetupSubscription(t *testing.T) {
 	unsetSessionIDEnvironmentForTest(t)
 	retained := lifecycleSetupTestWorktree("/tmp/move-primary")
-	setupScriptPath := "/repo/setup.sh"
 	remote := &taskInterruptCommandRemote{
 		moveError: &serverapi.WorkflowTaskMovePreparationError{
 			Failure: serverapi.WorktreeSetupFailed{
@@ -794,9 +778,9 @@ func TestTaskMoveTypedSetupFailureReturnsNonzeroWithoutSetupSubscription(t *test
 					Operational: &serverapi.WorktreeSetupOperationalFailure{},
 				},
 				Diagnostic:       "setup failed after retry",
+				ScriptPath:       lifecycleStringPointer("/repo/setup.sh"),
 				RetainedWorktree: &retained,
 			},
-			SetupScriptPath: &setupScriptPath,
 		},
 	}
 	installWorkflowCommandRemote(t, remote)

@@ -110,9 +110,8 @@ type WorkflowLockedExecutionTargetError struct {
 }
 
 type WorkflowTaskMovePreparationError struct {
-	Failure         WorktreeSetupFailed `json:"failure"`
-	SetupScriptPath *string             `json:"setup_script_path,omitempty"`
-	cause           error
+	Failure WorktreeSetupFailed `json:"failure"`
+	cause   error
 }
 
 type WorkflowTaskMoveRetainedWorktreeError struct {
@@ -193,13 +192,11 @@ func DecodeWorkflowTaskMoveRetainedWorktreeError(data json.RawMessage, message s
 
 func NewWorkflowTaskMovePreparationError(
 	failure WorktreeSetupFailed,
-	setupScriptPath *string,
 	cause error,
 ) (*WorkflowTaskMovePreparationError, error) {
 	result := &WorkflowTaskMovePreparationError{
-		Failure:         failure,
-		SetupScriptPath: setupScriptPath,
-		cause:           cause,
+		Failure: failure,
+		cause:   cause,
 	}
 	if err := result.Validate(); err != nil {
 		return nil, err
@@ -230,13 +227,11 @@ func (e *WorkflowTaskMovePreparationError) RPCErrorData() json.RawMessage {
 		return nil
 	}
 	return marshalRPCErrorData(struct {
-		Type            string              `json:"type"`
-		Failure         WorktreeSetupFailed `json:"failure"`
-		SetupScriptPath *string             `json:"setup_script_path,omitempty"`
+		Type    string              `json:"type"`
+		Failure WorktreeSetupFailed `json:"failure"`
 	}{
-		Type:            "workflow_task_move_preparation",
-		Failure:         e.Failure,
-		SetupScriptPath: e.SetupScriptPath,
+		Type:    "workflow_task_move_preparation",
+		Failure: e.Failure,
 	})
 }
 
@@ -250,32 +245,21 @@ func (e *WorkflowTaskMovePreparationError) Validate() error {
 	if e.Failure.RetryReadiness != WorktreeSetupRetryReady {
 		return errors.New("Workflow Task Move preparation failure must be retry-ready")
 	}
-	if e.Failure.Cause.Kind == WorktreeSetupFailureTargetPreparation {
-		if e.SetupScriptPath != nil {
-			return errors.New("target-preparation failure cannot include a setup script")
-		}
-		return nil
-	}
-	if e.SetupScriptPath == nil || strings.TrimSpace(*e.SetupScriptPath) == "" {
-		return errors.New("setup-script failure requires setup_script_path")
-	}
 	return nil
 }
 
 func DecodeWorkflowTaskMovePreparationError(data json.RawMessage, message string) error {
 	var envelope struct {
-		Type            string              `json:"type"`
-		Failure         WorktreeSetupFailed `json:"failure"`
-		SetupScriptPath *string             `json:"setup_script_path,omitempty"`
+		Type    string              `json:"type"`
+		Failure WorktreeSetupFailed `json:"failure"`
 	}
 	if err := protocol.DecodeStrictJSON(data, &envelope); err != nil ||
 		envelope.Type != "workflow_task_move_preparation" {
 		return errors.New(strings.TrimSpace(message))
 	}
 	result := &WorkflowTaskMovePreparationError{
-		Failure:         envelope.Failure,
-		SetupScriptPath: envelope.SetupScriptPath,
-		cause:           errors.New(strings.TrimSpace(message)),
+		Failure: envelope.Failure,
+		cause:   errors.New(strings.TrimSpace(message)),
 	}
 	if err := result.Validate(); err != nil {
 		return errors.New(strings.TrimSpace(message))

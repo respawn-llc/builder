@@ -1233,11 +1233,7 @@ func movePreparationError(
 	cause error,
 ) (*serverapi.WorkflowTaskMovePreparationError, error) {
 	failed := preparationFailurePayload(prepared.setupResult, prepared.retainedWorktree, prepared.retainedPreviousWorktree, cause)
-	setupScriptPath, err := setupFailureScriptPath(failed, cause)
-	if err != nil {
-		return nil, err
-	}
-	return serverapi.NewWorkflowTaskMovePreparationError(*failed, setupScriptPath, cause)
+	return serverapi.NewWorkflowTaskMovePreparationError(*failed, cause)
 }
 
 func (s *Service) resolveInitiatingActionTarget(

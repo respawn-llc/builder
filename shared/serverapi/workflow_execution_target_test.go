@@ -162,7 +162,6 @@ func TestWorkflowTaskMovePreparationErrorRoundTripsTargetFailureWithOnlyPrevious
 			Diagnostic:               "replacement creation failed",
 			RetainedPreviousWorktree: previous,
 		},
-		nil,
 		errors.New("replacement creation failed"),
 	)
 	if err != nil {
@@ -193,11 +192,37 @@ func TestWorkflowTaskMovePreparationErrorRequiresSetupScriptForScriptFailure(t *
 			Diagnostic:       "setup failed",
 			RetainedWorktree: testRegisteredWorktreeTopology(),
 		},
-		nil,
 		errors.New("setup failed"),
 	)
 	if err == nil {
 		t.Fatal("script failure without setup script validated")
+	}
+}
+
+func TestWorkflowTaskMovePreparationErrorRoundTripsScriptPathInsideFailure(t *testing.T) {
+	scriptPath := "/repo/setup.sh"
+	source, err := NewWorkflowTaskMovePreparationError(
+		WorktreeSetupFailed{
+			RetryReadiness: WorktreeSetupRetryReady,
+			Cause: WorktreeSetupFailureCause{
+				Kind:        WorktreeSetupFailureOperational,
+				Operational: &WorktreeSetupOperationalFailure{},
+			},
+			Diagnostic:       "setup failed",
+			ScriptPath:       &scriptPath,
+			RetainedWorktree: testRegisteredWorktreeTopology(),
+		},
+		errors.New("setup failed"),
+	)
+	if err != nil {
+		t.Fatalf("NewWorkflowTaskMovePreparationError: %v", err)
+	}
+	decoded := DecodeWorkflowTaskMovePreparationError(source.RPCErrorData(), source.Error())
+	var preparation *WorkflowTaskMovePreparationError
+	if !errors.As(decoded, &preparation) ||
+		preparation.Failure.ScriptPath == nil ||
+		*preparation.Failure.ScriptPath != scriptPath {
+		t.Fatalf("decoded preparation error = %+v (%v)", preparation, decoded)
 	}
 }
 

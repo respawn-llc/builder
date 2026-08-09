@@ -2117,6 +2117,14 @@ func TestPrepareTaskExecutionRootMissingConfiguredScriptReturnsTypedRetainedErro
 	if materialized.SetupResult == nil || materialized.SetupResult.Failed == nil {
 		t.Fatalf("materialized setup result = %+v, want typed failure", materialized.SetupResult)
 	}
+	if materialized.SetupResult.Failed.ScriptPath == nil ||
+		*materialized.SetupResult.Failed.ScriptPath != wantScriptPath {
+		t.Fatalf(
+			"materialized setup script path = %v, want %q",
+			materialized.SetupResult.Failed.ScriptPath,
+			wantScriptPath,
+		)
+	}
 }
 
 func TestPrepareTaskExecutionRootWithoutProgressObserverEmitsNoSetupEvents(t *testing.T) {

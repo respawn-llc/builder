@@ -28,8 +28,7 @@ type worktreeSetupObservationResult struct {
 }
 
 type worktreeSetupTerminalObservation struct {
-	Event       serverapi.WorktreeSetupEvent
-	LastStarted *serverapi.WorktreeSetupStarted
+	Event serverapi.WorktreeSetupEvent
 }
 
 type worktreeSetupObservationError struct {
@@ -134,7 +133,6 @@ func subscribeWorktreeSetupProgress(
 	go func() {
 		defer cancel()
 		defer func() { _ = subscription.Close() }()
-		var lastStarted *serverapi.WorktreeSetupStarted
 		for {
 			event, err := subscription.Next(observationCtx)
 			if err != nil {
@@ -161,16 +159,14 @@ func subscribeWorktreeSetupProgress(
 			}
 			writeWorktreeSetupProgress(stderr, event)
 			if event.Phase == serverapi.WorktreeSetupPhaseStarted {
-				started := *event.Started
-				lastStarted = &started
+				continue
 			}
 			if event.Phase == serverapi.WorktreeSetupPhaseCompleted ||
 				event.Phase == serverapi.WorktreeSetupPhaseNotRequired ||
 				event.Phase == serverapi.WorktreeSetupPhaseFailed {
 				done <- worktreeSetupObservationResult{
 					terminal: &worktreeSetupTerminalObservation{
-						Event:       event,
-						LastStarted: lastStarted,
+						Event: event,
 					},
 				}
 				return

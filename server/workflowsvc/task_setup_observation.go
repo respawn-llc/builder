@@ -230,10 +230,6 @@ func taskPreparationError(
 	if failed.RetryReadiness != serverapi.WorktreeSetupRetryReady {
 		return err
 	}
-	scriptPath, scriptPathErr := setupFailureScriptPath(failed, err)
-	if scriptPathErr != nil {
-		return errors.Join(err, scriptPathErr)
-	}
 	var retained *workflow.CurrentNodeRetainedWorktree
 	var retainedErr error
 	if failed.RetainedWorktree != nil {
@@ -254,7 +250,7 @@ func taskPreparationError(
 		SetupOperationID:         uuid.UUID(setupOperationID),
 		Cause:                    workflow.CurrentNodeSetupRecoveryCause(failed.Cause.Kind),
 		Diagnostic:               failed.Diagnostic,
-		ScriptPath:               scriptPath,
+		ScriptPath:               failed.ScriptPath,
 		SetupRequirement:         setupRequirementForPreparationFailure(result),
 		ExecutionTarget:          preflight.selection,
 		RetainedWorktree:         retained,
@@ -273,21 +269,6 @@ func setupRequirementForPreparationFailure(
 		return worktreecontract.SetupRequirementAlreadyCompleted
 	}
 	return worktreecontract.SetupRequirementRequired
-}
-
-func setupFailureScriptPath(failed *serverapi.WorktreeSetupFailed, cause error) (*string, error) {
-	if failed == nil {
-		return nil, errors.New("setup failure is required")
-	}
-	if failed.Cause.Kind == serverapi.WorktreeSetupFailureTargetPreparation {
-		return nil, nil
-	}
-	var retained *serverapi.WorktreeSetupRetainedError
-	if !errors.As(cause, &retained) {
-		return nil, errors.New("setup-script failure requires retained setup error facts")
-	}
-	scriptPath := retained.ScriptPath
-	return &scriptPath, nil
 }
 
 const reasonWorkflowTaskSetupFailed workflow.CurrentNodeInterruptionReason = "workflow_task_setup_failed"

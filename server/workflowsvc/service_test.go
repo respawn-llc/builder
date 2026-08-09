@@ -636,6 +636,7 @@ func TestServiceManualMoveSetupFailureLeavesActionUnappliedAndTargetUnlocked(t *
 							Operational: &serverapi.WorktreeSetupOperationalFailure{},
 						},
 						Diagnostic:       setupErr.Diagnostic,
+						ScriptPath:       &setupErr.ScriptPath,
 						RetainedWorktree: &setupErr.Worktree,
 					},
 				},
@@ -656,8 +657,8 @@ func TestServiceManualMoveSetupFailureLeavesActionUnappliedAndTargetUnlocked(t *
 	var preparationError *serverapi.WorkflowTaskMovePreparationError
 	if !errors.As(err, &preparationError) ||
 		!errors.Is(err, setupCause) ||
-		preparationError.SetupScriptPath == nil ||
-		*preparationError.SetupScriptPath != "/repo/setup.sh" ||
+		preparationError.Failure.ScriptPath == nil ||
+		*preparationError.Failure.ScriptPath != "/repo/setup.sh" ||
 		preparationError.Failure.RetainedWorktree == nil ||
 		preparationError.Failure.RetainedPreviousWorktree != previous {
 		t.Fatalf("MoveWorkflowTask = %+v, %v; want setup failure", response, err)
@@ -727,7 +728,7 @@ func TestServiceManualMoveTargetPreparationFailureCarriesRetainedWorktrees(t *te
 	var preparationError *serverapi.WorkflowTaskMovePreparationError
 	if !errors.As(err, &preparationError) ||
 		!errors.Is(err, creationErr) ||
-		preparationError.SetupScriptPath != nil ||
+		preparationError.Failure.ScriptPath != nil ||
 		preparationError.Failure.Cause.Kind != serverapi.WorktreeSetupFailureTargetPreparation ||
 		preparationError.Failure.RetainedWorktree == nil ||
 		preparationError.Failure.RetainedWorktree.Registered.Kent.WorktreeID != "retained-worktree" ||
@@ -1667,6 +1668,7 @@ func TestServiceTaskStartPublishesRetryReadyRetainedSetupFailureAfterAppliedResp
 							Operational: &serverapi.WorktreeSetupOperationalFailure{},
 						},
 						Diagnostic:       setupErr.Diagnostic,
+						ScriptPath:       &setupErr.ScriptPath,
 						RetainedWorktree: &retained,
 					},
 				},
@@ -2060,6 +2062,7 @@ func TestServiceSetupFailureRecoverySequenceKeepsTaskReadableAndLocksOnlyAfterRe
 								ProcessExit: &serverapi.WorktreeSetupProcessExit{ExitCode: 1},
 							},
 							Diagnostic:       setupErr.Diagnostic,
+							ScriptPath:       &scriptPath,
 							RetainedWorktree: &retained,
 						},
 					},

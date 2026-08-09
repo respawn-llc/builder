@@ -2198,6 +2198,9 @@ func setupFailureFromError(err error, retained *serverapi.WorktreeTopologyEntry)
 		Diagnostic:       err.Error(),
 		RetainedWorktree: retained,
 	}
+	if scriptPath, identified := setupScriptPathFromError(err); identified {
+		failed.ScriptPath = &scriptPath
+	}
 	var setupErr *setupScriptError
 	if !errors.As(err, &setupErr) {
 		return failed

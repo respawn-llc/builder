@@ -165,19 +165,13 @@ func taskLifecycleSetupPresentation(
 	if event.Phase != serverapi.WorktreeSetupPhaseFailed || event.Failed == nil {
 		return taskLifecyclePresentation{}, errors.New("setup recovery presentation requires a failed setup event")
 	}
-	var setupScriptPath *string
-	if terminal.LastStarted != nil {
-		scriptPath := terminal.LastStarted.ScriptPath
-		setupScriptPath = &scriptPath
-	}
-	return taskLifecyclePreparationFailurePresentation(operation, command, *event.Failed, setupScriptPath)
+	return taskLifecyclePreparationFailurePresentation(operation, command, *event.Failed)
 }
 
 func taskLifecyclePreparationFailurePresentation(
 	operation taskLifecycleOperation,
 	command taskLifecycleCommandContext,
 	failed serverapi.WorktreeSetupFailed,
-	setupScriptPath *string,
 ) (taskLifecyclePresentation, error) {
 	if err := failed.Validate(); err != nil {
 		return taskLifecyclePresentation{}, fmt.Errorf("invalid Worktree Setup failure: %w", err)
@@ -188,7 +182,7 @@ func taskLifecyclePreparationFailurePresentation(
 		TaskRef:    command.TaskRef,
 		Diagnostic: failed.Diagnostic,
 	}
-	presentation.SetupScriptPath = setupScriptPath
+	presentation.SetupScriptPath = failed.ScriptPath
 	var err error
 	presentation.RetainedWorktree, err = taskLifecycleWorktreeFromTopology(failed.RetainedWorktree)
 	if err != nil {
@@ -349,7 +343,6 @@ func taskMovePreparationFailurePresentation(
 		taskLifecycleOperationMove,
 		command,
 		preparationErr.Failure,
-		preparationErr.SetupScriptPath,
 	)
 }
 

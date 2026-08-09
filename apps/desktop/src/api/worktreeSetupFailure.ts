@@ -25,6 +25,7 @@ export type WorktreeSetupFailure = Readonly<{
   retryReadiness: "retry_ready" | "non_retryable";
   cause: WorktreeSetupFailureCause;
   diagnostic: string;
+  scriptPath: string | null;
   executionTarget: WorkflowExecutionTargetSelection | null;
   retainedWorktree: RegisteredWorktreeTopology | null;
   retainedPreviousWorktree: RetainedPreviousWorktree | null;
@@ -96,6 +97,7 @@ export const worktreeSetupFailureWireSchema = z
     retry_readiness: z.enum(["retry_ready", "non_retryable"]),
     cause: failureCauseSchema,
     diagnostic: z.string().trim().min(1),
+    script_path: z.string().trim().min(1).nullable(),
     execution_target: workflowExecutionTargetSelectionSchema.optional(),
     retained_worktree: registeredWorktreeTopologySchema.nullable().optional(),
     retained_previous_worktree: retainedPreviousWorktreeSchema.nullable().optional(),
@@ -132,10 +134,25 @@ export const worktreeSetupFailureWireSchema = z
       });
     }
   })
+  .refine(
+    (value) =>
+      value.retry_readiness !== "retry_ready" ||
+      value.cause.kind === "target_preparation" ||
+      value.script_path !== null,
+    {
+      message: "Retry-ready setup-script failure requires its script path.",
+      path: ["script_path"],
+    },
+  )
+  .refine((value) => value.cause.kind !== "target_preparation" || value.script_path === null, {
+    message: "Target-preparation failure cannot include a setup script.",
+    path: ["script_path"],
+  })
   .transform((value): WorktreeSetupFailure => ({
     retryReadiness: value.retry_readiness,
     cause: value.cause,
     diagnostic: value.diagnostic,
+    scriptPath: value.script_path,
     executionTarget: value.execution_target ?? null,
     retainedWorktree: value.retained_worktree ?? null,
     retainedPreviousWorktree: value.retained_previous_worktree ?? null,

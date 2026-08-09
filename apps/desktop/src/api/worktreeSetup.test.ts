@@ -214,6 +214,7 @@ describe("worktree setup API", () => {
             process_exit: { exit_code: 7, stdout: "", stderr: null },
           },
           diagnostic: "setup exited",
+          script_path: "/src/setup.sh",
           execution_target: { mode: "custom_ref", custom_ref: "refs/heads/recovery" },
           retained_worktree: registeredWorktreeWire("/worktree", "worktree-current"),
         },
@@ -238,6 +239,7 @@ describe("worktree setup API", () => {
             canceled: {},
           },
           diagnostic: "preparation canceled",
+          script_path: null,
         },
       },
     });
@@ -284,6 +286,7 @@ describe("worktree setup API", () => {
           retryReadiness: "retry_ready",
           cause: { kind: "process_exit", exitCode: 7, stdout: "", stderr: null },
           diagnostic: "setup exited",
+          scriptPath: "/src/setup.sh",
           executionTarget: { mode: "custom_ref", customRef: "refs/heads/recovery" },
           retainedWorktree: {
             registered: {

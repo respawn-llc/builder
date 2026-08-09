@@ -1972,7 +1972,6 @@ func TestProtocolErrorDecodesWorkflowTaskMovePreparationError(t *testing.T) {
 				Worktree: remoteTestMovePreparationWorktree(),
 			},
 		},
-		nil,
 		errors.New("replacement creation failed"),
 	)
 	if err != nil {

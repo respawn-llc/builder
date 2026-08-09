@@ -42,13 +42,11 @@ export function isProjectMissingError(error: unknown): boolean {
 
 export class WorkflowTaskMovePreparationError extends RpcError {
   readonly failure: WorktreeSetupFailure;
-  readonly setupScriptPath: string | null;
 
   constructor(
     rpcError: RpcError,
     facts: Readonly<{
       failure: WorktreeSetupFailure;
-      setupScriptPath: string | null;
     }>,
   ) {
     super({
@@ -59,7 +57,6 @@ export class WorkflowTaskMovePreparationError extends RpcError {
     });
     this.name = "WorkflowTaskMovePreparationError";
     this.failure = facts.failure;
-    this.setupScriptPath = facts.setupScriptPath;
   }
 }
 
@@ -67,10 +64,6 @@ const workflowTaskMovePreparationErrorDataSchema = z
   .object({
     type: z.literal("workflow_task_move_preparation"),
     failure: worktreeSetupFailureWireSchema,
-    setup_script_path: z
-      .string()
-      .refine((value) => value.trim().length > 0)
-      .optional(),
   })
   .strict()
   .superRefine((value, context) => {
@@ -79,20 +72,6 @@ const workflowTaskMovePreparationErrorDataSchema = z
         code: "custom",
         message: "Move preparation recovery requires retry-ready failure.",
         path: ["failure", "retry_readiness"],
-      });
-    }
-    if (value.failure.cause.kind === "target_preparation" && value.setup_script_path !== undefined) {
-      context.addIssue({
-        code: "custom",
-        message: "Target-preparation failure cannot include a setup script.",
-        path: ["setup_script_path"],
-      });
-    }
-    if (value.failure.cause.kind !== "target_preparation" && value.setup_script_path === undefined) {
-      context.addIssue({
-        code: "custom",
-        message: "Setup-script failure requires its script path.",
-        path: ["setup_script_path"],
       });
     }
   });
@@ -113,7 +92,6 @@ export function decodeWorkflowTaskMovePreparationError(
   }
   return new WorkflowTaskMovePreparationError(error, {
     failure: parsed.data.failure,
-    setupScriptPath: parsed.data.setup_script_path ?? null,
   });
 }
 

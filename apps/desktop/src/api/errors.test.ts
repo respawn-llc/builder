@@ -38,6 +38,7 @@ describe("Workflow Task Move preparation RPC errors", () => {
             retry_readiness: "retry_ready",
             cause: { kind: "target_preparation", target_preparation: {} },
             diagnostic: "replacement creation failed",
+            script_path: null,
             retained_previous_worktree: {
               worktree: registeredWorktreeWire("/repo/previous", "worktree-previous"),
             },
@@ -47,10 +48,10 @@ describe("Workflow Task Move preparation RPC errors", () => {
     );
     expect(decoded).toBeInstanceOf(WorkflowTaskMovePreparationError);
     expect(decoded).toMatchObject({
-      setupScriptPath: null,
       failure: {
         cause: { kind: "target_preparation" },
         diagnostic: "replacement creation failed",
+        scriptPath: null,
         retainedWorktree: null,
         retainedPreviousWorktree: {
           worktree: { registered: { kent: { canonicalRoot: "/repo/previous" } } },
@@ -72,6 +73,7 @@ describe("Workflow Task Move preparation RPC errors", () => {
               retry_readiness: "retry_ready",
               cause: { kind: "operational", operational: {} },
               diagnostic: "setup failed",
+              script_path: null,
               retained_worktree: registeredWorktreeWire("/repo/current", "worktree-current"),
             },
           },

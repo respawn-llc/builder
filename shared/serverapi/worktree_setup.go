@@ -146,6 +146,7 @@ type WorktreeSetupFailed struct {
 	RetryReadiness           WorktreeSetupRetryReadiness       `json:"retry_readiness"`
 	Cause                    WorktreeSetupFailureCause         `json:"cause"`
 	Diagnostic               string                            `json:"diagnostic"`
+	ScriptPath               *string                           `json:"script_path"`
 	ExecutionTarget          *WorkflowExecutionTargetSelection `json:"execution_target,omitempty"`
 	RetainedWorktree         *WorktreeTopologyEntry            `json:"retained_worktree,omitempty"`
 	RetainedPreviousWorktree *RetainedPreviousWorktree         `json:"retained_previous_worktree,omitempty"`
@@ -255,6 +256,17 @@ func (p WorktreeSetupFailed) Validate() error {
 	}
 	if strings.TrimSpace(p.Diagnostic) == "" {
 		return errors.New("failed setup event diagnostic is required")
+	}
+	if p.ScriptPath != nil && strings.TrimSpace(*p.ScriptPath) == "" {
+		return errors.New("failed setup event script_path must be non-blank when present")
+	}
+	if p.Cause.Kind == WorktreeSetupFailureTargetPreparation && p.ScriptPath != nil {
+		return errors.New("target-preparation setup failure cannot include script_path")
+	}
+	if p.RetryReadiness == WorktreeSetupRetryReady &&
+		p.Cause.Kind != WorktreeSetupFailureTargetPreparation &&
+		p.ScriptPath == nil {
+		return errors.New("retry-ready setup-script failure requires script_path")
 	}
 	if p.ExecutionTarget != nil {
 		if err := p.ExecutionTarget.Validate(); err != nil {
