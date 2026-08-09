@@ -43,9 +43,6 @@ func RunLiveWatchWithCleanup(ctx context.Context, opts Options, targetSessionID 
 		return RunLiveWatchResult{Error: err, Close: closeFn}
 	}
 	response, err := liveClient.LiveWatch(ctx, serverapi.RuntimeLiveWatchRequest{SessionID: targetSessionID.String()})
-	if err == nil {
-		err = response.Validate()
-	}
 	return RunLiveWatchResult{Response: response, Error: err, Close: closeFn}
 }
 

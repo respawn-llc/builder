@@ -111,6 +111,14 @@ func taskObservationJSON(ctx context.Context, stdout io.Writer, mode serverapi.W
 	if err != nil {
 		return emitObservationError(stdout, operation, target, ctx, err, nil, closeFn)
 	}
+	if response.TaskID != detail.Summary.ID {
+		err := &client.InvalidResponseError{
+			Operation: "workflow task observation",
+			Cause:     fmt.Errorf("response task ID %q does not match requested task %q", response.TaskID, detail.Summary.ID),
+		}
+		envelope, exitCode := projectObservationError(operation, target, ctx, err)
+		return emitObservationJSONWithCleanup(stdout, envelope, exitCode, nil, closeFn)
+	}
 	envelope, exitCode, err := projectTaskObservationJSON(detail.Summary.ID, response)
 	if err != nil {
 		err = &client.InvalidResponseError{Operation: "workflow task observation", Cause: err}

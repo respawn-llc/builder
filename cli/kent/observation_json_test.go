@@ -18,9 +18,10 @@ import (
 
 type observationCommandRemote struct {
 	apicontract.WorkflowService
-	closed     bool
-	closeErr   error
-	projectErr error
+	closed         bool
+	closeErr       error
+	projectErr     error
+	responseTaskID *string
 }
 
 func (r *observationCommandRemote) Close() error {
@@ -42,8 +43,12 @@ func (r *observationCommandRemote) GetWorkflowTask(context.Context, serverapi.Wo
 }
 
 func (r *observationCommandRemote) ObserveWorkflowTask(context.Context, serverapi.WorkflowTaskObservationRequest) (serverapi.WorkflowTaskObservationResponse, error) {
+	taskID := "task-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	if r.responseTaskID != nil {
+		taskID = *r.responseTaskID
+	}
 	return serverapi.WorkflowTaskObservationResponse{
-		TaskID:      "task-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+		TaskID:      taskID,
 		TaskShortID: "T-1",
 		Outcomes:    []serverapi.WorkflowTaskObservationOutcome{{Kind: serverapi.WorkflowTaskObservationDone}},
 	}, nil
@@ -98,6 +103,27 @@ func TestTaskObservationJSONMapsProjectUnavailable(t *testing.T) {
 		t.Fatal(err)
 	}
 	if envelope.Status != "error" || envelope.Error.Code != "unavailable" || stderr.Len() != 0 || !remote.closed {
+		t.Fatalf("envelope=%#v stderr=%q closed=%v", envelope, stderr.String(), remote.closed)
+	}
+}
+
+func TestTaskObservationJSONRejectsResponseForDifferentTask(t *testing.T) {
+	responseTaskID := "task-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+	remote := &observationCommandRemote{responseTaskID: &responseTaskID}
+	var stdout, stderr strings.Builder
+	if code := taskWaitWithRemote([]string{"task-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "--json"}, &stdout, &stderr, remote); code != 1 {
+		t.Fatalf("exit code = %d, stdout=%q, stderr=%q", code, stdout.String(), stderr.String())
+	}
+	var envelope struct {
+		Status string `json:"status"`
+		Error  struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(stdout.String()), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Status != "error" || envelope.Error.Code != "invalid_response" || stderr.Len() != 0 || !remote.closed {
 		t.Fatalf("envelope=%#v stderr=%q closed=%v", envelope, stderr.String(), remote.closed)
 	}
 }
