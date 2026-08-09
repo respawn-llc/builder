@@ -51,9 +51,8 @@ func (r *observationCommandRemote) ObserveWorkflowTask(context.Context, serverap
 
 func TestTaskObservationJSONUsesTrailingFlagAndClosesRemoteOnce(t *testing.T) {
 	remote := &observationCommandRemote{}
-	installWorkflowCommandRemote(t, remote)
 	var stdout, stderr strings.Builder
-	if code := taskWaitSubcommand([]string{"task-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "--json"}, &stdout, &stderr); code != 0 {
+	if code := taskWaitWithRemote([]string{"task-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "--json"}, &stdout, &stderr, remote); code != 0 {
 		t.Fatalf("exit code = %d, stdout=%q, stderr=%q", code, stdout.String(), stderr.String())
 	}
 	if !remote.closed || stderr.Len() != 0 {
@@ -70,9 +69,8 @@ func TestTaskObservationJSONUsesTrailingFlagAndClosesRemoteOnce(t *testing.T) {
 
 func TestTaskObservationJSONPreservesPrimaryResultWithCloseWarning(t *testing.T) {
 	remote := &observationCommandRemote{closeErr: errors.New("close failed")}
-	installWorkflowCommandRemote(t, remote)
 	var stdout, stderr strings.Builder
-	if code := taskWaitSubcommand([]string{"--json", "task-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}, &stdout, &stderr); code != 0 {
+	if code := taskWaitWithRemote([]string{"--json", "task-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}, &stdout, &stderr, remote); code != 0 {
 		t.Fatalf("exit code = %d, stdout=%q, stderr=%q", code, stdout.String(), stderr.String())
 	}
 	var envelope map[string]any
@@ -86,9 +84,8 @@ func TestTaskObservationJSONPreservesPrimaryResultWithCloseWarning(t *testing.T)
 
 func TestTaskObservationJSONMapsProjectUnavailable(t *testing.T) {
 	remote := &observationCommandRemote{projectErr: serverapi.ErrProjectUnavailable}
-	installWorkflowCommandRemote(t, remote)
 	var stdout, stderr strings.Builder
-	if code := taskWaitSubcommand([]string{"--project", "/project", "short-id", "--json"}, &stdout, &stderr); code != 1 {
+	if code := taskWaitWithRemote([]string{"--project", "/project", "short-id", "--json"}, &stdout, &stderr, remote); code != 1 {
 		t.Fatalf("exit code = %d, stdout=%q, stderr=%q", code, stdout.String(), stderr.String())
 	}
 	var envelope struct {
@@ -128,9 +125,8 @@ func TestObservationErrorPreservesStartupCleanupWarning(t *testing.T) {
 
 func TestTaskObservationJSONParseFailureEmitsOneUsageObjectWithoutRemote(t *testing.T) {
 	remote := &observationCommandRemote{}
-	installWorkflowCommandRemote(t, remote)
 	var stdout, stderr strings.Builder
-	if code := taskWaitSubcommand([]string{"--json", "--unknown", "task-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}, &stdout, &stderr); code != 2 {
+	if code := taskWaitWithRemote([]string{"--json", "--unknown", "task-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}, &stdout, &stderr, remote); code != 2 {
 		t.Fatalf("exit code = %d, stdout=%q, stderr=%q", code, stdout.String(), stderr.String())
 	}
 	var envelope struct {

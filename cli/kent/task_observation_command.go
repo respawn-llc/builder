@@ -25,6 +25,17 @@ func taskWatchSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 }
 
 func taskObservationSubcommand(args []string, stdout io.Writer, stderr io.Writer, mode serverapi.WorkflowTaskObservationMode) int {
+	return taskObservationSubcommandWithOpener(args, stdout, stderr, mode, openWorkflowObservationRemote)
+}
+
+type workflowObservationOpener func(context.Context, string) (config.App, workflowCommandRemote, error)
+
+func openWorkflowObservationRemote(ctx context.Context, path string) (config.App, workflowCommandRemote, error) {
+	cfg, remote, err := openBindingCommandRemoteLifecycle(ctx, path)
+	return cfg, remote, err
+}
+
+func taskObservationSubcommandWithOpener(args []string, stdout io.Writer, stderr io.Writer, mode serverapi.WorkflowTaskObservationMode, open workflowObservationOpener) int {
 	var diagnostics bytes.Buffer
 	fs := newCommandFlagSet(config.Command+" task "+string(mode), &diagnostics, leafCommandUsage(
 		config.Command+" task "+string(mode)+" <task>",
@@ -50,7 +61,7 @@ func taskObservationSubcommand(args []string, stdout io.Writer, stderr io.Writer
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if *jsonOut {
-		return taskObservationJSON(ctx, stdout, mode, *project, positionals[0])
+		return taskObservationJSON(ctx, stdout, mode, *project, positionals[0], open)
 	}
 	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
 		detail, err := resolveWorkflowTask(ctx, cfg, remote, *project, positionals[0])
@@ -72,8 +83,8 @@ func taskObservationSubcommand(args []string, stdout io.Writer, stderr io.Writer
 	})
 }
 
-func taskObservationJSON(ctx context.Context, stdout io.Writer, mode serverapi.WorkflowTaskObservationMode, projectRef string, ref string) int {
-	cfg, remote, err := workflowCommandRemoteOpener(ctx, ".")
+func taskObservationJSON(ctx context.Context, stdout io.Writer, mode serverapi.WorkflowTaskObservationMode, projectRef string, ref string, open workflowObservationOpener) int {
+	cfg, remote, err := open(ctx, ".")
 	var closeFn func() error
 	if remote != nil {
 		closeFn = remote.Close

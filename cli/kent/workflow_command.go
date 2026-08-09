@@ -59,18 +59,13 @@ type workflowCommandRemote interface {
 }
 
 var workflowCommandRemoteOpener func(context.Context, string) (config.App, workflowCommandRemote, error) = func(ctx context.Context, path string) (config.App, workflowCommandRemote, error) {
-	cfg, remote, err := openBindingCommandRemoteLifecycle(ctx, path)
+	cfg, remote, err := bindingCommandRemoteOpener(ctx, path)
 	return cfg, remote, err
 }
 
 func runWorkflowCommandSession(stderr io.Writer, run func(config.App, workflowCommandRemote) int) int {
 	cfg, remote, err := workflowCommandRemoteOpener(context.Background(), ".")
 	if err != nil {
-		if remote != nil {
-			if closeErr := remote.Close(); closeErr != nil {
-				fmt.Fprintf(stderr, "close workflow command session: %v\n", closeErr)
-			}
-		}
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
