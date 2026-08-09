@@ -255,10 +255,16 @@ func TestBlankFinalProjectionIsInvisibleAndSkipsReviewer(t *testing.T) {
 	}
 
 	snapshot := eng.ChatSnapshot()
-	for _, entry := range snapshot.Entries {
-		if strings.Contains(entry.Text, "NO_OP") {
-			t.Fatalf("noop token leaked into chat snapshot: %+v", snapshot.Entries)
+	visibleFinalRows := 0
+	for _, fact := range TranscriptCommittedRowFactsFromSnapshot(snapshot) {
+		if fact.Kind == TranscriptCommittedRowFactAssistant &&
+			fact.Assistant != nil &&
+			fact.Assistant.Phase == llm.MessagePhaseFinal {
+			visibleFinalRows++
 		}
+	}
+	if visibleFinalRows != 0 {
+		t.Fatalf("blank final projected as %d visible assistant final rows: %+v", visibleFinalRows, snapshot.Entries)
 	}
 
 	mu.Lock()
