@@ -12,6 +12,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 type userTurnProjection struct {
@@ -122,7 +123,7 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 				resp = serverapi.RuntimeSubmitUserTurnResponse{Compacted: compacted, Steered: true, QueueItemID: queued.ID}
 				return nil
 			}
-			msg, queued, err := engine.SubmitUserMessageOrSteerWithHooks(runCtx, projection.ExecutionText, strings.TrimSpace(req.ClientRequestID), func() {
+			outcome, queued, err := engine.SubmitUserMessageOrSteerWithOutcomeHooks(runCtx, projection.ExecutionText, strings.TrimSpace(req.ClientRequestID), func() {
 				s.operations.MarkOperationActive(memoReq.SessionID, req.OperationRef)
 			}, recordAccepted)
 			if err != nil {
@@ -133,8 +134,13 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 				return nil
 			}
 			resp = serverapi.RuntimeSubmitUserTurnResponse{Compacted: compacted}
-			if msg.Content != nil {
-				resp.Message = msg.Content
+			switch outcome.Kind {
+			case runtime.UserTurnResultAssistantFinal:
+				if outcome.FinalAnswer != nil && outcome.FinalAnswer.Content != nil {
+					resp.Message = outcome.FinalAnswer.Content
+				}
+			case runtime.UserTurnResultSilentFinal:
+				resp.Message = textutil.Value("")
 			}
 			return nil
 		})

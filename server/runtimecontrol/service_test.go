@@ -555,6 +555,26 @@ func finalResponseRuntimeControlClient() *runtimeControlFakeClient {
 	}}}
 }
 
+func TestServiceSubmitUserTurnPreservesBlankFinalPresence(t *testing.T) {
+	client := &runtimeControlFakeClient{responses: []llm.Response{{
+		Assistant: llm.Message{
+			Role:    llm.RoleAssistant,
+			Content: textutil.Value(""),
+			Phase:   textutil.Value(llm.MessagePhaseFinal),
+		},
+		Usage: llm.Usage{WindowTokens: 200000},
+	}}}
+	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{Model: "gpt-5"})
+
+	resp, err := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "blank-final", "finish silently"))
+	if err != nil {
+		t.Fatalf("SubmitUserTurn: %v", err)
+	}
+	if resp.Message == nil || *resp.Message != "" {
+		t.Fatalf("blank final response message = %v, want present empty message", resp.Message)
+	}
+}
+
 func (c *runtimeControlFakeClient) Generate(context.Context, llm.Request) (llm.Response, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

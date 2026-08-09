@@ -659,6 +659,10 @@ func (e *Engine) SubmitUserMessageWithHooks(ctx context.Context, text string, on
 	return e.submitUserMessage(ctx, text, onActive, onFlushed)
 }
 
+func (e *Engine) SubmitUserMessageWithOutcomeWithHooks(ctx context.Context, text string, onActive func(), onFlushed func()) (UserTurnResult, error) {
+	return e.submitUserMessageWithOutcome(ctx, text, onActive, onFlushed)
+}
+
 func (e *Engine) SubmitAgentSteerWithHooks(ctx context.Context, steer AgentSteer, onActive func(), onFlushed func()) (assistant llm.Message, err error) {
 	if e.closed.Load() {
 		return llm.Message{}, ErrEngineClosed
@@ -686,11 +690,19 @@ func (e *Engine) SubmitAgentSteerWithHooks(ctx context.Context, steer AgentSteer
 }
 
 func (e *Engine) submitUserMessage(ctx context.Context, text string, onActive func(), onFlushed func()) (assistant llm.Message, err error) {
+	outcome, err := e.submitUserMessageWithOutcome(ctx, text, onActive, onFlushed)
+	if outcome.FinalAnswer != nil {
+		assistant = *outcome.FinalAnswer
+	}
+	return assistant, err
+}
+
+func (e *Engine) submitUserMessageWithOutcome(ctx context.Context, text string, onActive func(), onFlushed func()) (outcome UserTurnResult, err error) {
 	if text == "" {
-		return llm.Message{}, errors.New("empty message")
+		return UserTurnResult{}, errors.New("empty message")
 	}
 	if e.closed.Load() {
-		return llm.Message{}, ErrEngineClosed
+		return UserTurnResult{}, ErrEngineClosed
 	}
 
 	e.ensureOrchestrationCollaborators()
@@ -708,12 +720,12 @@ func (e *Engine) submitUserMessage(ctx context.Context, text string, onActive fu
 		if onFlushed != nil {
 			onFlushed()
 		}
-		msg, runErr := e.runStepLoop(stepCtx, stepID)
-		assistant = msg
+		result, runErr := e.runStepLoopWithPendingUserInjectionOutcomeObserver(stepCtx, stepID, nil)
+		outcome = userTurnResultFromStepLoop(result)
 		return runErr
 	})
 	e.surfaceRunError(err)
-	return assistant, err
+	return outcome, err
 }
 
 func (e *Engine) SubmitWorkflowTurn(ctx context.Context) (assistant llm.Message, err error) {
@@ -790,15 +802,21 @@ func (e *Engine) runStepLoop(ctx context.Context, stepID string) (llm.Message, e
 }
 
 func (e *Engine) runStepLoopWithPendingUserInjectionObserver(ctx context.Context, stepID string, onQueuedUserFlushCommitted func(session.CommitReceipt)) (llm.Message, error) {
-	reviewerFrequency := e.ReviewerFrequency()
-	reviewerClient := e.reviewerRuntimeState().Client()
-	result, err := e.runStepLoopWithQueuedUserFlushObserver(ctx, stepID, reviewerFrequency, reviewerClient, true, onQueuedUserFlushCommitted)
+	result, err := e.runStepLoopWithPendingUserInjectionOutcomeObserver(ctx, stepID, onQueuedUserFlushCommitted)
 	if result.FinalAnswer == nil {
 		return llm.Message{}, err
 	}
-	finalAnswer := *result.FinalAnswer
-	e.recordLiveRunAssistantFinalAnswer(stepID, finalAnswer)
-	return finalAnswer, err
+	return *result.FinalAnswer, err
+}
+
+func (e *Engine) runStepLoopWithPendingUserInjectionOutcomeObserver(ctx context.Context, stepID string, onQueuedUserFlushCommitted func(session.CommitReceipt)) (stepLoopResult, error) {
+	reviewerFrequency := e.ReviewerFrequency()
+	reviewerClient := e.reviewerRuntimeState().Client()
+	result, err := e.runStepLoopWithQueuedUserFlushObserver(ctx, stepID, reviewerFrequency, reviewerClient, true, onQueuedUserFlushCommitted)
+	if result.FinalAnswer != nil {
+		e.recordLiveRunAssistantFinalAnswer(stepID, *result.FinalAnswer)
+	}
+	return result, err
 }
 
 // runStepLoopWithOptions executes a single assistant/tool loop.
