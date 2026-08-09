@@ -79,7 +79,7 @@ describe("ManualMoveDialog", () => {
     });
   });
 
-  it("omits the hint element when a required value has no description", async () => {
+  it("omits the hint element when a required value has no description", () => {
     renderDialog({
       outcome: "transition",
       transition: {
@@ -93,7 +93,7 @@ describe("ManualMoveDialog", () => {
         ],
       },
     });
-    expect(screen.queryByText("", { selector: 'span[id$="-hint"]' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("summary")).not.toHaveAccessibleDescription();
   });
 
   it("auto-selects a sole choice, preserves prefills, and supports cancellation", async () => {
