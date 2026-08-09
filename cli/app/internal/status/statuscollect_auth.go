@@ -14,11 +14,11 @@ import (
 
 func AuthStageFromResponse(response serverapi.AuthStatusResponse, effectiveSettings *config.Settings) AuthStageResult {
 	if err := response.Validate(); err != nil {
-		return UnavailableAuthStage(err)
+		return UnavailableAuthStage(err, effectiveSettings)
 	}
 	resolution := response.Resolution
 	if resolution.Kind == serverapi.AuthStatusResolutionUnavailable {
-		return UnavailableAuthStage(fmt.Errorf("%s", resolution.Failure.Cause))
+		return UnavailableAuthStage(fmt.Errorf("%s", resolution.Failure.Cause), effectiveSettings)
 	}
 	facts := *resolution.Facts
 	subscription := response.Subscription
@@ -38,22 +38,25 @@ func AuthStageFromResponse(response serverapi.AuthStatusResponse, effectiveSetti
 	return result
 }
 
-func UnavailableAuthStage(err error) AuthStageResult {
+func UnavailableAuthStage(err error, effectiveSettings *config.Settings) AuthStageResult {
 	cause := strings.TrimSpace(err.Error())
-	return AuthStageResult{
+	result := AuthStageResult{
 		Auth: AuthInfo{
 			Summary:     "Auth unavailable",
 			Details:     []string{cause},
 			Visible:     true,
 			Unavailable: true,
 		},
-		Subscription: SubscriptionInfo{
+		Warning: "auth: " + cause,
+	}
+	if effectiveSettings == nil || authstatus.SupportsSubscriptionUsage(*effectiveSettings) {
+		result.Subscription = SubscriptionInfo{
 			Applicable: true,
 			Summary:    "Subscription unavailable: " + cause,
 			Error:      cause,
-		},
-		Warning: "auth: " + cause,
+		}
 	}
+	return result
 }
 
 func authInfoFromFacts(facts serverapi.AuthStatusFacts, failure *serverapi.AuthStatusFailure) AuthInfo {

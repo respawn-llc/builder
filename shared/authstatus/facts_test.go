@@ -42,8 +42,14 @@ func TestSupportsSubscriptionUsageUsesEffectiveProviderSettings(t *testing.T) {
 	}{
 		{name: "default", want: true},
 		{name: "ChatGPT", settings: config.Settings{OpenAIBaseURL: "https://chatgpt.com/backend-api"}, want: true},
+		{name: "ChatGPT root", settings: config.Settings{OpenAIBaseURL: "https://chat.openai.com/"}, want: true},
 		{name: "configured provider", settings: config.Settings{ProviderOverride: "anthropic"}},
 		{name: "compatible endpoint", settings: config.Settings{OpenAIBaseURL: "https://example.com/v1"}},
+		{name: "insecure ChatGPT transport", settings: config.Settings{OpenAIBaseURL: "http://chatgpt.com/backend-api"}},
+		{name: "custom ChatGPT port", settings: config.Settings{OpenAIBaseURL: "https://chatgpt.com:8443/backend-api"}},
+		{name: "custom ChatGPT path", settings: config.Settings{OpenAIBaseURL: "https://chatgpt.com/v1"}},
+		{name: "credential-bearing ChatGPT URL", settings: config.Settings{OpenAIBaseURL: "https://user@chatgpt.com/backend-api"}},
+		{name: "query-bearing ChatGPT URL", settings: config.Settings{OpenAIBaseURL: "https://chatgpt.com/backend-api?token=secret"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

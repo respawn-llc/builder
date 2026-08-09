@@ -59,9 +59,19 @@ func providerDisplayOrigin(raw string) *serverapi.AuthProviderDisplayOrigin {
 
 func isOfficialChatGPTBaseURL(raw string) bool {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil {
+	if err != nil ||
+		!parsed.IsAbs() ||
+		parsed.Opaque != "" ||
+		parsed.Scheme != "https" ||
+		parsed.User != nil ||
+		parsed.Port() != "" ||
+		parsed.RawQuery != "" ||
+		parsed.Fragment != "" {
 		return false
 	}
 	hostname := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
-	return hostname == "chatgpt.com" || hostname == "chat.openai.com"
+	if hostname != "chatgpt.com" && hostname != "chat.openai.com" {
+		return false
+	}
+	return parsed.Path == "" || parsed.Path == "/" || parsed.Path == "/backend-api"
 }

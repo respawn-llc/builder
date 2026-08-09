@@ -181,9 +181,17 @@ func TestAuthStageFromResponseUsesEffectiveSessionProviderSettings(t *testing.T)
 }
 
 func TestUnavailableAuthStageSurfacesRPCFailure(t *testing.T) {
-	result := UnavailableAuthStage(errors.New("connection lost"))
+	result := UnavailableAuthStage(errors.New("connection lost"), nil)
 	if result.Subscription.Summary != "Subscription unavailable: connection lost" ||
 		result.Subscription.Error != "connection lost" {
 		t.Fatalf("RPC failure projection = %+v", result)
+	}
+}
+
+func TestUnavailableAuthStageKeepsCustomProviderSubscriptionInapplicable(t *testing.T) {
+	effectiveSettings := config.Settings{ProviderOverride: "anthropic"}
+	result := UnavailableAuthStage(errors.New("connection lost"), &effectiveSettings)
+	if result.Subscription.Applicable || result.Subscription.Summary != "" {
+		t.Fatalf("custom-provider RPC failure projection = %+v", result)
 	}
 }

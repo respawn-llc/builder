@@ -156,7 +156,7 @@ func (c Collector) CollectAuth(ctx context.Context, req Request, _ Snapshot) Aut
 	}
 	response, err := req.AuthStatus.GetAuthStatus(ctx, serverapi.AuthStatusRequest{})
 	if err != nil {
-		return UnavailableAuthStage(err)
+		return UnavailableAuthStage(err, req.AuthProviderSettings)
 	}
 	return AuthStageFromResponse(response, req.AuthProviderSettings)
 }
