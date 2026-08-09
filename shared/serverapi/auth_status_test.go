@@ -2,7 +2,6 @@ package serverapi
 
 import (
 	"encoding/json"
-	"strings"
 	"testing"
 	"time"
 )
@@ -65,8 +64,16 @@ func TestAuthStatusResponseCarriesOnlyRedactedAPIKeyFacts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal response: %v", err)
 	}
-	if strings.Contains(string(body), "secret") || !strings.Contains(string(body), `"suffix":"1234"`) {
-		t.Fatalf("unexpected API-key wire facts: %s", body)
+	wire := decodeAuthStatusWireProjection(t, body)
+	if wire.Resolution.Facts == nil {
+		t.Fatal("known resolution omitted facts")
+	}
+	apiKey := wire.Resolution.Facts.APIKey
+	if len(apiKey) != 1 {
+		t.Fatalf("API-key wire fields = %v, want only suffix", apiKey)
+	}
+	if got := decodeAuthStatusWireField[string](t, apiKey, "suffix"); got != suffix {
+		t.Fatalf("API-key suffix = %q, want %q", got, suffix)
 	}
 }
 
@@ -94,10 +101,22 @@ func TestAuthStatusProviderDisplayOriginIsStructural(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal response: %v", err)
 	}
-	for _, secretComponent := range []string{"userinfo", "secret", "query", "fragment", "/v1"} {
-		if strings.Contains(string(body), secretComponent) {
-			t.Fatalf("display origin leaked %q: %s", secretComponent, body)
-		}
+	wire := decodeAuthStatusWireProjection(t, body)
+	if wire.Resolution.Facts == nil {
+		t.Fatal("known resolution omitted facts")
+	}
+	displayOrigin := wire.Resolution.Facts.Provider.DisplayOrigin
+	if len(displayOrigin) != 3 {
+		t.Fatalf("display-origin wire fields = %v, want scheme, hostname, and port", displayOrigin)
+	}
+	if got := decodeAuthStatusWireField[string](t, displayOrigin, "scheme"); got != "https" {
+		t.Fatalf("display-origin scheme = %q, want https", got)
+	}
+	if got := decodeAuthStatusWireField[string](t, displayOrigin, "hostname"); got != "example.com" {
+		t.Fatalf("display-origin hostname = %q, want example.com", got)
+	}
+	if got := decodeAuthStatusWireField[string](t, displayOrigin, "port"); got != port {
+		t.Fatalf("display-origin port = %q, want %q", got, port)
 	}
 }
 
@@ -163,6 +182,39 @@ func TestAuthStatusSubscriptionFactsValidateWindowShape(t *testing.T) {
 
 func authStatusStringPointer(value string) *string {
 	return &value
+}
+
+type authStatusWireProjection struct {
+	Resolution struct {
+		Facts *struct {
+			APIKey   map[string]json.RawMessage `json:"api_key"`
+			Provider struct {
+				DisplayOrigin map[string]json.RawMessage `json:"display_origin"`
+			} `json:"provider"`
+		} `json:"facts"`
+	} `json:"resolution"`
+}
+
+func decodeAuthStatusWireProjection(t *testing.T, body []byte) authStatusWireProjection {
+	t.Helper()
+	var wire authStatusWireProjection
+	if err := json.Unmarshal(body, &wire); err != nil {
+		t.Fatalf("decode auth-status JSON: %v", err)
+	}
+	return wire
+}
+
+func decodeAuthStatusWireField[T any](t *testing.T, object map[string]json.RawMessage, name string) T {
+	t.Helper()
+	raw, ok := object[name]
+	if !ok {
+		t.Fatalf("auth-status JSON omitted %q", name)
+	}
+	var value T
+	if err := json.Unmarshal(raw, &value); err != nil {
+		t.Fatalf("decode auth-status JSON field %q: %v", name, err)
+	}
+	return value
 }
 
 func authStatusResponseWithDisplayHostname(hostname string) AuthStatusResponse {
