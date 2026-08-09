@@ -655,6 +655,12 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 	silentFinalAnswer := isBlankFinalAnswer(assistantMsg) &&
 		!e.goalActive() &&
 		!e.currentNodeExecutionActive()
+	if silentFinalAnswer && acceptedCalls.hasCalls() {
+		return preparedCompletedResponse{}, fmt.Errorf(
+			"provider returned a blank final answer with %d accepted tool calls",
+			len(acceptedCalls.order),
+		)
+	}
 
 	if rejection != nil {
 		return preparedCompletedResponse{
