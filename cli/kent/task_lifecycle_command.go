@@ -988,8 +988,11 @@ type taskSetupAction struct {
 	Args []string
 }
 
+type taskSetupFraming struct{ AutomaticRetryExhausted, TaskInterrupted, AlreadyStarted, MoveNotApplied bool }
+
 type taskSetupGuidance struct {
 	Success      bool
+	Framing      *taskSetupFraming
 	Diagnostic   *string
 	ScriptPath   *string
 	RetainedRoot *string
@@ -1031,6 +1034,8 @@ func projectTaskSetupGuidance(taskRef string, projectRef *string, terminal *serv
 			result.Actions = inspection
 			return result, nil
 		}
+		framing := taskSetupFraming{AutomaticRetryExhausted: failed.ScriptPath != nil, TaskInterrupted: true}
+		result.Framing = &framing
 		if failed.ExecutionTarget == nil {
 			return taskSetupGuidance{}, errors.New("retry-ready Task setup failure requires execution target")
 		}
@@ -1072,7 +1077,8 @@ func taskAlreadyStartedGuidance(taskRef string, project *string) taskSetupGuidan
 	if project != nil {
 		resume = append(resume, "--project", *project)
 	}
-	return taskSetupGuidance{Actions: []taskSetupAction{{Kind: taskSetupActionRetry, Args: resume}, {Kind: taskSetupActionMove, Args: []string{config.Command, "task", "move", taskRef, "<target-node-id>"}}}}
+	framing := taskSetupFraming{AlreadyStarted: true}
+	return taskSetupGuidance{Framing: &framing, Actions: []taskSetupAction{{Kind: taskSetupActionRetry, Args: resume}, {Kind: taskSetupActionMove, Args: []string{config.Command, "task", "move", taskRef, "<target-node-id>"}}}}
 }
 
 func taskMoveRecoveryArgs(taskRef, targetNode string, project, commentary, transition *string, values map[string]map[string]string, ignore, jsonOutput bool) ([]string, error) {
@@ -1116,7 +1122,8 @@ func projectMoveSetupGuidance(base []string, target *serverapi.WorkflowExecution
 	root := setupErr.Worktree.Registered.Git.CanonicalRoot
 	script := setupErr.ScriptPath
 	diagnostic := setupErr.Diagnostic
-	return taskSetupGuidance{Diagnostic: &diagnostic, ScriptPath: &script, RetainedRoot: &root, Actions: taskTargetActions(base, selector)}, nil
+	framing := taskSetupFraming{AutomaticRetryExhausted: true, MoveNotApplied: true}
+	return taskSetupGuidance{Framing: &framing, Diagnostic: &diagnostic, ScriptPath: &script, RetainedRoot: &root, Actions: taskTargetActions(base, selector)}, nil
 }
 
 func taskSetupStringPointer(value string) *string { return &value }
@@ -1252,6 +1259,20 @@ func writeTaskSetupObservationError(stderr io.Writer, taskRef string, projectRef
 }
 
 func renderTaskSetupGuidance(stderr io.Writer, guidance taskSetupGuidance) {
+	if guidance.Framing != nil {
+		if guidance.Framing.AutomaticRetryExhausted {
+			fmt.Fprintln(stderr, "Worktree setup failed after one automatic retry.")
+		}
+		if guidance.Framing.TaskInterrupted {
+			fmt.Fprintln(stderr, "The Task was started and is now interrupted.")
+		}
+		if guidance.Framing.AlreadyStarted {
+			fmt.Fprintln(stderr, "The Task is already started. Resume it if interrupted; otherwise move it.")
+		}
+		if guidance.Framing.MoveNotApplied {
+			fmt.Fprintln(stderr, "The move was not applied.")
+		}
+	}
 	if guidance.ScriptPath != nil {
 		fmt.Fprintln(stderr, *guidance.ScriptPath)
 	}

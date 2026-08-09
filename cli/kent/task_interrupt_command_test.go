@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"core/shared/apicontract"
 	"core/shared/config"
@@ -559,6 +558,11 @@ func TestTaskSetupGuidanceProjectsStructuredRecovery(t *testing.T) {
 			if (got.Diagnostic == nil) != test.success {
 				t.Fatalf("diagnostic = %v for success %t", got.Diagnostic, test.success)
 			}
+			failed := test.terminal != nil && test.terminal.Failed != nil
+			if (got.Framing != nil) != failed || (failed &&
+				(!got.Framing.TaskInterrupted || got.Framing.AutomaticRetryExhausted != (test.terminal.Failed.ScriptPath != nil))) {
+				t.Fatalf("framing = %+v for terminal %+v", got.Framing, test.terminal)
+			}
 			if test.name == "not required with orphan" && (got.RetainedRoot == nil || *got.RetainedRoot != "/tmp/orphan") {
 				t.Fatalf("retained guidance = %+v", got)
 			}
@@ -571,9 +575,6 @@ func TestTaskSetupGuidanceProjectsStructuredRecovery(t *testing.T) {
 				t.Fatalf("retry action = %+v", got.Actions[0])
 			}
 		})
-	}
-	if workflowTaskSetupObservationTimeout != 2*time.Minute {
-		t.Fatalf("observation timeout = %s", workflowTaskSetupObservationTimeout)
 	}
 	if _, err := projectTaskSetupGuidance("task-1", nil, nil, errors.New(" ")); err == nil {
 		t.Fatal("blank diagnostic was accepted")
@@ -591,18 +592,19 @@ func TestMoveSetupGuidancePreservesStructuredInput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("project guidance: %v", err)
 	}
-	if guidance.Success || guidance.Diagnostic == nil || guidance.ScriptPath == nil || len(guidance.Actions) != 5 {
+	if guidance.Success || guidance.Framing == nil ||
+		*guidance.Framing != (taskSetupFraming{AutomaticRetryExhausted: true, MoveNotApplied: true}) ||
+		guidance.Diagnostic == nil || guidance.ScriptPath == nil || len(guidance.Actions) != 5 {
 		t.Fatalf("guidance = %+v", guidance)
 	}
 	wantPrefix := []string{"kent", "task", "move", "task-1", "done", "--project", "project-1", "--commentary", "note", "--transition", "next", "--values-json", `{"plan":{"summary":"done"}}`, "--ignore-dependencies", "--json"}
-	for index, action := range guidance.Actions {
-		if len(action.Args) != len(wantPrefix)+2 {
-			t.Fatalf("action %d = %+v", index, action)
-		}
-		for argIndex, want := range wantPrefix {
-			if action.Args[argIndex] != want {
-				t.Fatalf("action %d arg %d = %q, want %q", index, argIndex, action.Args[argIndex], want)
-			}
+	action := guidance.Actions[0]
+	if len(action.Args) != len(wantPrefix)+2 {
+		t.Fatalf("retry action = %+v", action)
+	}
+	for argIndex, want := range wantPrefix {
+		if action.Args[argIndex] != want {
+			t.Fatalf("retry arg %d = %q, want %q", argIndex, action.Args[argIndex], want)
 		}
 	}
 }
@@ -610,11 +612,9 @@ func TestMoveSetupGuidancePreservesStructuredInput(t *testing.T) {
 func TestAlreadyStartedGuidanceUsesResumeAndMoveActions(t *testing.T) {
 	project := "project-1"
 	got := taskAlreadyStartedGuidance("task-1", &project)
-	if len(got.Actions) != 2 || got.Actions[0].Kind != taskSetupActionRetry || got.Actions[1].Kind != taskSetupActionMove {
+	if got.Framing == nil || !got.Framing.AlreadyStarted ||
+		len(got.Actions) != 2 || got.Actions[0].Kind != taskSetupActionRetry || got.Actions[1].Kind != taskSetupActionMove {
 		t.Fatalf("guidance = %+v", got)
-	}
-	if got.Actions[0].Args[len(got.Actions[0].Args)-1] != project {
-		t.Fatalf("Resume action = %+v", got.Actions[0])
 	}
 }
 

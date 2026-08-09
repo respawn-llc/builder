@@ -1000,6 +1000,10 @@ func TestServiceTaskResumeDoesNotRepeatCompletedSetupAfterTargetLockFailure(t *t
 		Kind:  workflowexecution.TaskPreparationFailed,
 		Cause: preparationErr,
 	})
+	attention, err := service.ListWorkflowTaskAttention(ctx, serverapi.WorkflowTaskAttentionListRequest{TaskID: task.Task.ID})
+	if err != nil || len(attention.Items) != 1 || attention.Items[0].DetailJSON == nil {
+		t.Fatalf("setup recovery attention = %+v, %v; want one typed interruption", attention, err)
+	}
 
 	service.currentNodeExecution = &currentNodeCompletionExecutionStub{store: service.store}
 	resumed, err := service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{

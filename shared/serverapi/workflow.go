@@ -1176,7 +1176,6 @@ type WorkflowAttentionItem struct {
 	SessionID              *string                            `json:"session_id,omitempty"`
 	SessionName            *string                            `json:"session_name"`
 	DetailJSON             *string                            `json:"detail_json,omitempty"`
-	SetupOperationID       *WorktreeSetupOperationID          `json:"setup_operation_id"`
 	QuestionID             *string                            `json:"question_id,omitempty"`
 	Suggestions            []string                           `json:"suggestions,omitempty"`
 	RecommendedOptionIndex *int                               `json:"recommended_option_index,omitempty"`
@@ -2662,7 +2661,6 @@ func (r WorkflowAttentionItem) Validate() error {
 			workflowAttentionFieldPresence{name: "approval_id", present: r.ApprovalID != nil},
 			workflowAttentionFieldPresence{name: "approval_snapshot", present: r.ApprovalSnapshot != nil},
 			workflowAttentionFieldPresence{name: "detail_json", present: r.DetailJSON != nil},
-			workflowAttentionFieldPresence{name: "setup_operation_id", present: r.SetupOperationID != nil},
 		)
 	case "approval":
 		if err := validateOptionalAttentionString("message", r.Message); err != nil {
@@ -2686,7 +2684,6 @@ func (r WorkflowAttentionItem) Validate() error {
 			workflowAttentionFieldPresence{name: "suggestions", present: r.Suggestions != nil},
 			workflowAttentionFieldPresence{name: "recommended_option_index", present: r.RecommendedOptionIndex != nil},
 			workflowAttentionFieldPresence{name: "detail_json", present: r.DetailJSON != nil},
-			workflowAttentionFieldPresence{name: "setup_operation_id", present: r.SetupOperationID != nil},
 		)
 	case "interrupted_current_node":
 		if err := validateOptionalAttentionString("message", r.Message); err != nil {
@@ -2703,26 +2700,6 @@ func (r WorkflowAttentionItem) Validate() error {
 		}
 		if err := validateOptionalAttentionInterruptionDetailJSON("detail_json", r.DetailJSON); err != nil {
 			return err
-		}
-		var detailSetupOperationID *WorktreeSetupOperationID
-		if r.DetailJSON != nil {
-			var detail workflowAttentionInterruptionDetailSchema
-			if err := protocol.DecodeStrictJSON([]byte(*r.DetailJSON), &detail); err != nil {
-				return workflowRequestError(WorkflowRequestErrorInvalidValue, "detail_json", "detail_json must match the current Node interruption detail schema")
-			}
-			if detail.SetupRecovery != nil {
-				value := detail.SetupRecovery.SetupOperationID
-				detailSetupOperationID = &value
-			}
-		}
-		if r.SetupOperationID != nil {
-			if err := r.SetupOperationID.Validate(); err != nil {
-				return workflowRequestError(WorkflowRequestErrorInvalidValue, "setup_operation_id", "setup_operation_id is invalid")
-			}
-		}
-		if (r.SetupOperationID == nil) != (detailSetupOperationID == nil) ||
-			(r.SetupOperationID != nil && *r.SetupOperationID != *detailSetupOperationID) {
-			return workflowRequestError(WorkflowRequestErrorInvalidValue, "setup_operation_id", "setup_operation_id must match setup recovery detail")
 		}
 		return validateWorkflowAttentionFieldsAbsent(r.Kind,
 			workflowAttentionFieldPresence{name: "approval_id", present: r.ApprovalID != nil},
