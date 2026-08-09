@@ -224,7 +224,10 @@ describe("worktree setup API", () => {
       event: {
         setup_operation_id: setupOperationID.toJSONValue(),
         phase: "not_required",
-        not_required: { reason: "no_configured_script" },
+        not_required: {
+          reason: "no_configured_script",
+          retained_previous_worktree: null,
+        },
         script_path: "",
       },
     });
@@ -300,5 +303,73 @@ describe("worktree setup API", () => {
     ]);
     expect(errors).toHaveLength(2);
     expect(errors[0]).toBeInstanceOf(ContractError);
+  });
+
+  it("accepts explicit null and rejects omitted nullable retained Worktree facts", () => {
+    const transport = new FakeRpcTransport([]);
+    const client = new ApiClient(transport);
+    const setupOperationID = newSetupOperationID();
+    const events: WorktreeSetupEvent[] = [];
+    const errors: Error[] = [];
+    client.subscribeWorktreeSetup(setupOperationID, {
+      onEvent(event) {
+        events.push(event);
+      },
+      onComplete() {
+        return;
+      },
+      onError(error) {
+        errors.push(error);
+      },
+    });
+
+    transport.emit("worktree.setup", {
+      event: {
+        setup_operation_id: setupOperationID.toJSONValue(),
+        phase: "completed",
+        completed: { retained_previous_worktree: null },
+      },
+    });
+    transport.emit("worktree.setup", {
+      event: {
+        setup_operation_id: setupOperationID.toJSONValue(),
+        phase: "not_required",
+        not_required: {
+          reason: "no_configured_script",
+          retained_previous_worktree: null,
+        },
+      },
+    });
+    transport.emit("worktree.setup", {
+      event: {
+        setup_operation_id: setupOperationID.toJSONValue(),
+        phase: "completed",
+        completed: {},
+      },
+    });
+    transport.emit("worktree.setup", {
+      event: {
+        setup_operation_id: setupOperationID.toJSONValue(),
+        phase: "not_required",
+        not_required: { reason: "no_configured_script" },
+      },
+    });
+
+    expect(events).toMatchObject([
+      {
+        phase: "completed",
+        completed: { retainedPreviousWorktree: null },
+      },
+      {
+        phase: "not_required",
+        notRequired: {
+          reason: "no_configured_script",
+          retainedPreviousWorktree: null,
+        },
+      },
+    ]);
+    expect(errors).toHaveLength(2);
+    expect(errors[0]).toBeInstanceOf(ContractError);
+    expect(errors[1]).toBeInstanceOf(ContractError);
   });
 });

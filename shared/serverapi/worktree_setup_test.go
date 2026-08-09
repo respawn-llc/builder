@@ -212,6 +212,43 @@ func TestWorktreeSetupEventJSONKeepsInapplicableFactsAbsentAndNullableOutputPres
 		t.Fatalf("not-required event omitted retained previous worktree: %s", raw)
 	}
 
+	for name, event := range map[string]WorktreeSetupEvent{
+		"completed": {
+			SetupOperationID: id,
+			Phase:            WorktreeSetupPhaseCompleted,
+			Completed:        &WorktreeSetupCompleted{},
+		},
+		"not required": {
+			SetupOperationID: id,
+			Phase:            WorktreeSetupPhaseNotRequired,
+			NotRequired: &WorktreeSetupNotRequired{
+				Reason: WorktreeSetupNotRequiredNoConfiguredScript,
+			},
+		},
+	} {
+		t.Run(name+" emits explicit null retained previous worktree", func(t *testing.T) {
+			raw, err := json.Marshal(event)
+			if err != nil {
+				t.Fatalf("marshal event: %v", err)
+			}
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &fields); err != nil {
+				t.Fatalf("decode event fields: %v", err)
+			}
+			payloadField := "completed"
+			if event.Phase == WorktreeSetupPhaseNotRequired {
+				payloadField = "not_required"
+			}
+			var payload map[string]json.RawMessage
+			if err := json.Unmarshal(fields[payloadField], &payload); err != nil {
+				t.Fatalf("decode %s payload fields: %v", payloadField, err)
+			}
+			if got := string(payload["retained_previous_worktree"]); got != "null" {
+				t.Fatalf("retained_previous_worktree = %s, want explicit null: %s", got, raw)
+			}
+		})
+	}
+
 	failed := WorktreeSetupEvent{
 		SetupOperationID: id,
 		Phase:            WorktreeSetupPhaseFailed,

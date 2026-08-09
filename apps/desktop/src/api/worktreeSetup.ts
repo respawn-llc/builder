@@ -77,7 +77,7 @@ const setupEventWireSchema = z.discriminatedUnion("phase", [
       phase: z.literal("completed"),
       completed: z
         .object({
-          retained_previous_worktree: retainedPreviousWorktreeSchema.nullable().optional(),
+          retained_previous_worktree: retainedPreviousWorktreeSchema.nullable(),
         })
         .strict(),
     })
@@ -86,7 +86,7 @@ const setupEventWireSchema = z.discriminatedUnion("phase", [
       setupOperationID: value.setup_operation_id,
       phase: value.phase,
       completed: {
-        retainedPreviousWorktree: value.completed.retained_previous_worktree ?? null,
+        retainedPreviousWorktree: value.completed.retained_previous_worktree,
       },
     })),
   z
@@ -96,7 +96,7 @@ const setupEventWireSchema = z.discriminatedUnion("phase", [
       not_required: z
         .object({
           reason: z.enum(["no_target_preparation", "no_configured_script"]),
-          retained_previous_worktree: retainedPreviousWorktreeSchema.nullable().optional(),
+          retained_previous_worktree: retainedPreviousWorktreeSchema.nullable(),
         })
         .strict(),
     })
@@ -106,7 +106,7 @@ const setupEventWireSchema = z.discriminatedUnion("phase", [
       phase: value.phase,
       notRequired: {
         reason: value.not_required.reason,
-        retainedPreviousWorktree: value.not_required.retained_previous_worktree ?? null,
+        retainedPreviousWorktree: value.not_required.retained_previous_worktree,
       },
     })),
   z

@@ -106,12 +106,12 @@ type WorktreeSetupStarted struct {
 }
 
 type WorktreeSetupCompleted struct {
-	RetainedPreviousWorktree *RetainedPreviousWorktree `json:"retained_previous_worktree,omitempty"`
+	RetainedPreviousWorktree *RetainedPreviousWorktree `json:"retained_previous_worktree"`
 }
 
 type WorktreeSetupNotRequired struct {
 	Reason                   WorktreeSetupNotRequiredReason `json:"reason"`
-	RetainedPreviousWorktree *RetainedPreviousWorktree      `json:"retained_previous_worktree,omitempty"`
+	RetainedPreviousWorktree *RetainedPreviousWorktree      `json:"retained_previous_worktree"`
 }
 
 type WorktreeSetupProcessExit struct {
