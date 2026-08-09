@@ -386,16 +386,6 @@ func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 	})
 }
 
-func parseExplicitBranchName(raw string, provided bool) (*string, error) {
-	if !provided {
-		return nil, nil
-	}
-	if strings.TrimSpace(raw) == "" {
-		return nil, errors.New("--branch-name requires a non-blank branch name")
-	}
-	return &raw, nil
-}
-
 func writeWorkflowExecutionTargetSelectionRequired(stderr io.Writer, requirement *serverapi.WorkflowExecutionTargetSelectionRequirement) {
 	switch {
 	case requirement == nil:
@@ -440,45 +430,6 @@ func writeWorkflowExecutionTargetError(stderr io.Writer, err error) bool {
 		return true
 	}
 	return false
-}
-
-func writeWorkflowTaskInitialBranchError(stderr io.Writer, err error) bool {
-	var branchErr *serverapi.WorkflowTaskInitialBranchError
-	if !errors.As(err, &branchErr) {
-		return false
-	}
-	if validationErr := branchErr.Validate(); validationErr != nil {
-		fmt.Fprintf(stderr, "Invalid workflow task branch error: %v.\n", validationErr)
-		return true
-	}
-	switch branchErr.Reason {
-	case serverapi.WorkflowTaskInitialBranchErrorReasonInvalidName:
-		fmt.Fprintf(stderr, "Branch name %q is not a valid Git branch name.\n", branchErr.BranchName)
-	case serverapi.WorkflowTaskInitialBranchErrorReasonLocalCollision:
-		fmt.Fprintf(stderr, "Branch %q already exists locally as %q.\n", branchErr.BranchName, *branchErr.Ref)
-	case serverapi.WorkflowTaskInitialBranchErrorReasonRemoteTrackingCollision:
-		fmt.Fprintf(
-			stderr,
-			"Branch %q conflicts with locally known remote-tracking branch %q on remote %q.\n",
-			branchErr.BranchName,
-			*branchErr.Ref,
-			*branchErr.Remote,
-		)
-	case serverapi.WorkflowTaskInitialBranchErrorReasonNoManagedTarget:
-		fmt.Fprintf(stderr, "Branch %q requires a managed-worktree execution target.\n", branchErr.BranchName)
-	case serverapi.WorkflowTaskInitialBranchErrorReasonOperationCannotCreateWorktree:
-		fmt.Fprintf(stderr, "Branch %q cannot be used because this operation cannot create the task's first managed worktree.\n", branchErr.BranchName)
-	case serverapi.WorkflowTaskInitialBranchErrorReasonPostCreationMismatch:
-		fmt.Fprintf(
-			stderr,
-			"Task worktree uses branch %q; requested branch %q cannot rename it.\n",
-			*branchErr.ExistingBranchName,
-			branchErr.BranchName,
-		)
-	default:
-		fmt.Fprintln(stderr, branchErr)
-	}
-	return true
 }
 
 func taskDeleteSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -973,71 +924,6 @@ func requireAppliedExecutionTargetAction[T any](outcome serverapi.WorkflowExecut
 		return nil, errors.New("workflow action requires execution target selection")
 	}
 	return applied, nil
-}
-
-type worktreeSetupProgressSubscriber interface {
-	SubscribeWorktreeSetup(context.Context, serverapi.WorktreeSetupSubscribeRequest) (serverapi.WorktreeSetupSubscription, error)
-}
-
-func runWorkflowMutationWithSetupProgress[T any](ctx context.Context, remote workflowCommandRemote, stderr io.Writer, mutate func(context.Context, serverapi.WorktreeSetupOperationID) (T, error)) (T, error) {
-	setupOperationID := serverapi.NewWorktreeSetupOperationID()
-	stopSetupProgress, err := subscribeWorktreeSetupProgress(ctx, remote, setupOperationID, stderr)
-	if err != nil {
-		fmt.Fprintf(stderr, "warning: worktree setup progress subscription unavailable: %v\n", err)
-		stopSetupProgress = func() error { return nil }
-	}
-	resp, mutateErr := mutate(ctx, setupOperationID)
-	if setupProgressErr := stopSetupProgress(); setupProgressErr != nil {
-		fmt.Fprintf(stderr, "warning: worktree setup progress stream ended unexpectedly: %v\n", setupProgressErr)
-	}
-	return resp, mutateErr
-}
-
-func subscribeWorktreeSetupProgress(ctx context.Context, remote workflowCommandRemote, setupOperationID serverapi.WorktreeSetupOperationID, stderr io.Writer) (func() error, error) {
-	subscriber, ok := remote.(worktreeSetupProgressSubscriber)
-	if !ok {
-		return nil, errors.New("worktree setup progress subscription is unavailable")
-	}
-	subscription, err := subscriber.SubscribeWorktreeSetup(ctx, serverapi.WorktreeSetupSubscribeRequest{SetupOperationID: setupOperationID})
-	if err != nil {
-		return nil, err
-	}
-	progressCtx, cancel := context.WithCancel(ctx)
-	done := make(chan error, 1)
-	go func() {
-		defer func() { _ = subscription.Close() }()
-		for {
-			event, err := subscription.Next(progressCtx)
-			if err != nil {
-				if errors.Is(err, io.EOF) {
-					done <- io.ErrUnexpectedEOF
-					return
-				}
-				if errors.Is(err, context.Canceled) || errors.Is(progressCtx.Err(), context.Canceled) {
-					done <- nil
-					return
-				}
-				done <- err
-				return
-			}
-			writeWorktreeSetupProgress(stderr, event)
-			if event.Phase == serverapi.WorktreeSetupPhaseCompleted || event.Phase == serverapi.WorktreeSetupPhaseFailed {
-				done <- nil
-				return
-			}
-		}
-	}()
-	return func() error {
-		cancel()
-		return <-done
-	}, nil
-}
-
-func writeWorktreeSetupProgress(stderr io.Writer, event serverapi.WorktreeSetupEvent) {
-	if event.Phase != serverapi.WorktreeSetupPhaseStarted {
-		return
-	}
-	fmt.Fprintf(stderr, "Waiting for worktree setup script %s in %s.\n", event.ScriptPath, event.WorktreeRoot)
 }
 
 func waitForWorkflowTaskRunSession(ctx context.Context, remote workflowCommandRemote, taskID string, _ string, timeout time.Duration, interval time.Duration) (serverapi.WorkflowTaskDetail, error) {

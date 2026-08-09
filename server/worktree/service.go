@@ -423,9 +423,6 @@ func (s *Service) materializeInitialTaskWorktree(
 		if err := validateInitialTaskBranchAssertion(requestedBranchName, persistedBranch); err != nil {
 			return TaskWorktreeMaterialization{}, err
 		}
-		if task.ExecutionTargetMode.Valid {
-			return TaskWorktreeMaterialization{}, errors.New("initial task worktree materialization requires an unlocked task")
-		}
 		if !sameCreationBaseCommit(record.CreationBaseCommitOID, resolvedTarget.CommitOID) {
 			return TaskWorktreeMaterialization{}, &TaskWorktreeBaseCommitMismatchError{
 				WorktreeID:            record.ID,
@@ -833,6 +830,14 @@ func (s *Service) createManagedTaskWorktree(ctx context.Context, req managedTask
 	}()
 	createdBranch, err := s.addManagedWorktree(ctx, req.Workspace.RootPath, worktreeRoot, createSpec, rootKind)
 	if err != nil {
+		if createSpec.CreateBranch {
+			return TaskWorktreeMaterialization{}, s.classifyInitialTaskBranchAddFailure(
+				ctx,
+				req.Workspace.RootPath,
+				createSpec.BranchName,
+				err,
+			)
+		}
 		return TaskWorktreeMaterialization{}, err
 	}
 	cleanup.active = true
@@ -915,6 +920,34 @@ func (s *Service) createManagedTaskWorktree(ctx context.Context, req managedTask
 		Created:       true,
 		CreatedBranch: createdBranch,
 	}, nil
+}
+
+func (s *Service) classifyInitialTaskBranchAddFailure(
+	ctx context.Context,
+	workspaceRoot string,
+	branchName string,
+	addErr error,
+) error {
+	exists, err := s.git.BranchExists(ctx, workspaceRoot, branchName)
+	if err != nil {
+		return errors.Join(
+			addErr,
+			fmt.Errorf("inspect local branch %q after failed task worktree add: %w", branchName, err),
+		)
+	}
+	if !exists {
+		return addErr
+	}
+	branch, err := newLocalBranchName(branchName)
+	if err != nil {
+		return errors.Join(addErr, err)
+	}
+	ref := branch.Ref()
+	return workflowTaskInitialBranchError(&InitialTaskBranchError{
+		Kind:       InitialTaskBranchErrorLocalCollision,
+		BranchName: branch.Name(),
+		Ref:        &ref,
+	})
 }
 
 func lockedTaskWorktreeIdentityError(err error) error {

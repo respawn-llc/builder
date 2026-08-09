@@ -89,6 +89,31 @@ func TestTaskExecutionTargetInfrastructureCarriesPostCreationBranchAssertion(t *
 	}); err != nil {
 		t.Fatalf("LockTaskExecutionTarget: %v", err)
 	}
+	exact, err := infrastructure.MaterializeExecutionTarget(ctx, workflowsvc.ExecutionTargetMaterializeRequest{
+		TaskID: taskID, Snapshot: snapshot, InitialBranchAssertion: &branchA,
+	})
+	if err != nil {
+		t.Fatalf("MaterializeExecutionTarget exact assertion reuse: %v", err)
+	}
+	if exact.RetainedRoot == nil ||
+		exact.RetainedRoot.WorktreeID != materialized.Worktree.Registered.Kent.WorktreeID ||
+		exact.RetainedRoot.Root != materialized.Worktree.Registered.Git.CanonicalRoot {
+		t.Fatalf("exact assertion reuse = %+v, want original managed Worktree", exact)
+	}
+	if err := git.Remove(ctx, workspace, materialized.Worktree.Registered.Git.CanonicalRoot, true); err != nil {
+		t.Fatalf("remove managed Worktree before exact recreation: %v", err)
+	}
+	recreated, err := infrastructure.MaterializeExecutionTarget(ctx, workflowsvc.ExecutionTargetMaterializeRequest{
+		TaskID: taskID, Snapshot: snapshot, InitialBranchAssertion: &branchA,
+	})
+	if err != nil {
+		t.Fatalf("MaterializeExecutionTarget exact assertion recreation: %v", err)
+	}
+	if recreated.RetainedRoot == nil ||
+		recreated.RetainedRoot.WorktreeID != materialized.Worktree.Registered.Kent.WorktreeID ||
+		recreated.RetainedRoot.Root != materialized.Worktree.Registered.Git.CanonicalRoot {
+		t.Fatalf("exact assertion recreation = %+v, want original managed Worktree identity", recreated)
+	}
 	before, err := git.List(ctx, workspace)
 	if err != nil {
 		t.Fatalf("git.List before assertion: %v", err)

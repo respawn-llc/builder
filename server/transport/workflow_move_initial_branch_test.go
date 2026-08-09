@@ -71,3 +71,39 @@ func TestWorkflowTaskMoveRPCPreservesNonExecutableBranchRejection(t *testing.T) 
 		t.Fatalf("decoded error = %T %v, want non-executable branch rejection", decoded, decoded)
 	}
 }
+
+func TestWorkflowTaskMoveRPCPreservesFinalLocalBranchCollisionFacts(t *testing.T) {
+	branchName := "feature/rpc-local-race"
+	ref := "refs/heads/" + branchName
+	response := decodeAndHandle[serverapi.WorkflowTaskMoveRequest, serverapi.WorkflowTaskMoveResponse](
+		protocol.Request{ID: "move-local-branch-race", Params: mustJSON(t, serverapi.WorkflowTaskMoveRequest{
+			TaskID:           "task-rpc-local-race",
+			TargetNodeID:     "node-agent",
+			SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+			BranchName:       &branchName,
+		})},
+		func(request serverapi.WorkflowTaskMoveRequest) (serverapi.WorkflowTaskMoveResponse, error) {
+			if request.BranchName == nil || *request.BranchName != branchName {
+				t.Fatalf("Move request branch = %v, want %q", request.BranchName, branchName)
+			}
+			return serverapi.WorkflowTaskMoveResponse{}, &serverapi.WorkflowTaskInitialBranchError{
+				Reason:     serverapi.WorkflowTaskInitialBranchErrorReasonLocalCollision,
+				BranchName: branchName,
+				Ref:        &ref,
+			}
+		},
+	)
+
+	if response.Error == nil || response.Error.Code != protocol.ErrCodeWorkflowTaskInitialBranch {
+		t.Fatalf("Move RPC response = %+v, want initial-branch error", response)
+	}
+	decoded := serverapi.DecodeWorkflowTaskInitialBranchError(response.Error.Data, response.Error.Message)
+	var branchErr *serverapi.WorkflowTaskInitialBranchError
+	if !errors.As(decoded, &branchErr) ||
+		branchErr.Reason != serverapi.WorkflowTaskInitialBranchErrorReasonLocalCollision ||
+		branchErr.BranchName != branchName ||
+		branchErr.Ref == nil ||
+		*branchErr.Ref != ref {
+		t.Fatalf("decoded error = %T %+v, want local collision for %q", decoded, decoded, ref)
+	}
+}
