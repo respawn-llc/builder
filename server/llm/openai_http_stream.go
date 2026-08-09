@@ -320,7 +320,13 @@ func (a *responseStreamAccumulator) Response() (OpenAIResponse, error) {
 	if a.callbacks.OnAssistantDelta == nil && parsedText != nil {
 		reconciliationText = ""
 	}
-	reconciled := parsedText != nil && completedAssistantTextReconcilesStream(reconciliationText, parsedTextValue)
+	// A done-only stream can resolve an explicit empty text item before the
+	// completed payload supplies its authoritative final phase. Preserve that
+	// presence only for a fully resolved stream; pending unmatched deltas must
+	// continue to fail reconciliation.
+	reconciled := parsedText != nil &&
+		(completedAssistantTextReconcilesStream(reconciliationText, parsedTextValue) ||
+			(hasResolvedStream && reconciliationText == "" && parsedTextValue == ""))
 	if reconciled {
 		finalText = textutil.Value(reconciledCompletedAssistantText(reconciliationText, parsedTextValue))
 		finalTextPresent = true

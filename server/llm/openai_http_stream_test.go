@@ -791,6 +791,28 @@ func TestGenerateStream_PreservesPendingOutputIndexAfterFinalizedOutput(t *testi
 	}
 }
 
+func TestGenerateStreamAcceptsCompletedEmptyFinalAfterDoneOnlyStream(t *testing.T) {
+	transport := newOpenAIStreamTestTransport(t,
+		`{"type":"response.output_text.done","output_index":0,"text":""}`,
+		`{"type":"response.completed","response":{"output":[{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":""}]}]}}`,
+		`[DONE]`,
+	)
+
+	resp, err := NewOpenAIClient(transport).GenerateStreamWithEvents(context.Background(), Request{
+		Model:          "gpt-5",
+		ToolChoiceMode: ToolChoiceModeAutomatic,
+	}, StreamCallbacks{})
+	if err != nil {
+		t.Fatalf("generate stream: %v", err)
+	}
+	if resp.Assistant.Content == nil || *resp.Assistant.Content != "" {
+		t.Fatalf("assistant content = %#v, want present empty content", resp.Assistant.Content)
+	}
+	if resp.Assistant.Phase == nil || *resp.Assistant.Phase != MessagePhaseFinal {
+		t.Fatalf("assistant phase = %#v, want final", resp.Assistant.Phase)
+	}
+}
+
 func TestGenerateStream_PreservesWhitespaceBetweenAssistantContent(t *testing.T) {
 	transport := newOpenAIStreamTestTransport(t,
 		`{"type":"response.output_item.added","output_index":0,"item":{"id":"msg_1","type":"message","role":"assistant","phase":"final_answer","content":[]}}`,
