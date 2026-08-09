@@ -605,7 +605,11 @@ func (e *Engine) runGoalLoop(ctx context.Context, firstTurnAlreadyPrompted bool)
 				}
 				continue
 			}
-			return e.lifecycleRuntimeAbort(err)
+			if fatal, abort := resultGroupFatalFromError(err); abort {
+				return fatal
+			}
+			e.surfaceRunError(err)
+			return nil
 		}
 		appendNudge = true
 	}
@@ -670,15 +674,6 @@ func (e *Engine) surfaceRunError(err error) {
 		}))
 	}
 	e.SetStreamingError(message)
-}
-
-func (e *Engine) lifecycleRuntimeAbort(err error) *resultGroupFatal {
-	fatal, abort := resultGroupFatalFromError(err)
-	if !abort {
-		e.surfaceRunError(err)
-		return nil
-	}
-	return fatal
 }
 
 func runtimeAbortFeedbackMessage(fatal *resultGroupFatal) string {

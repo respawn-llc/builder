@@ -499,6 +499,8 @@ func (e *Engine) launchLifecycleTask(task func(context.Context) *resultGroupFata
 	go func(ctx context.Context) {
 		var runtimeAbort *resultGroupFatal
 		defer func() {
+			// Retirement may synchronously close this Engine and wait for lifecycle
+			// tasks, so this task must leave the wait group before callbacks run.
 			e.lifecycleWG.Done()
 			if e.cfg.LifecycleTaskFinished != nil {
 				e.surfaceRunError(e.cfg.LifecycleTaskFinished())

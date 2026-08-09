@@ -12,6 +12,7 @@ import (
 	"core/server/tools"
 	"core/shared/textutil"
 	"core/shared/toolspec"
+	"core/shared/transcript"
 
 	"github.com/google/uuid"
 )
@@ -774,6 +775,15 @@ func TestExclusiveStepRuntimeAbortPreservesRecoveryAndSkipsIdleWork(t *testing.T
 	)
 	if !errors.Is(err, fatal) || !errors.Is(err, lifecycleErr) {
 		t.Fatalf("runtime abort error = %v, want fatal and step-ended failure", err)
+	}
+	diagnostics := 0
+	for _, entry := range eng.ChatSnapshot().Entries {
+		if entry.Role == string(transcript.EntryRoleDeveloperErrorFeedback) {
+			diagnostics++
+		}
+	}
+	if diagnostics != 1 {
+		t.Fatalf("runtime abort terminal-publication diagnostics = %d, want one", diagnostics)
 	}
 	if marker := store.Meta().PendingModelRecovery; marker == nil {
 		t.Fatal("runtime abort cleared PendingModelRecovery")

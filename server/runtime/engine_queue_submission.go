@@ -261,12 +261,20 @@ func (e *Engine) processQueuedUserWork(ctx context.Context) (runtimeAbort *resul
 		}
 	}()
 	if err := e.waitQueuedUserAutoDrainAllowed(ctx); err != nil {
-		return e.lifecycleRuntimeAbort(err)
+		if fatal, abort := resultGroupFatalFromError(err); abort {
+			return fatal
+		}
+		e.surfaceRunError(err)
+		return nil
 	}
 	ids := e.queuedUserAutoDrainIDSnapshot()
 	_, _, consumedQueueItemIDs, err := e.submitQueuedUserMessages(ctx, ids, nil)
 	if err != nil {
-		return e.lifecycleRuntimeAbort(err)
+		if fatal, abort := resultGroupFatalFromError(err); abort {
+			return fatal
+		}
+		e.surfaceRunError(err)
+		return nil
 	}
 	e.completeLiveRunQueueItems(consumedQueueItemIDs)
 	completed = true

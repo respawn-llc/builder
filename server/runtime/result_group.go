@@ -86,6 +86,22 @@ type resultGroupFatal struct {
 	Cause     error
 }
 
+type resultGroupRuntimeAbort struct {
+	fatal     *resultGroupFatal
+	ancillary error
+}
+
+func (e *resultGroupRuntimeAbort) Error() string {
+	return errors.Join(e.fatal, e.ancillary).Error()
+}
+
+func (e *resultGroupRuntimeAbort) Unwrap() []error {
+	if e.ancillary == nil {
+		return []error{e.fatal}
+	}
+	return []error{e.fatal, e.ancillary}
+}
+
 func (f resultGroupFatal) Error() string {
 	if f.Cause == nil {
 		return fmt.Sprintf("result group durability failed (committed=%t)", f.Committed)

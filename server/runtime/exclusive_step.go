@@ -194,7 +194,7 @@ func (s *defaultExclusiveStepLifecycle) finishStep(stepID string, options exclus
 			err = errors.Join(err, fmt.Errorf("reset failed-step streaming state: %w", cleanupErr))
 		}
 	}
-	err, publishLiveRunFinished := s.publishTerminalStep(
+	err, _, publishLiveRunFinished := s.publishTerminalStep(
 		stepID,
 		options,
 		snapshot,
@@ -234,13 +234,15 @@ func (s *defaultExclusiveStepLifecycle) finishRuntimeAbort(
 	fatal *resultGroupFatal,
 ) error {
 	liveErr := error(fatal)
+	var ancillaryErr error
 	if resetErr := s.engine.resetReasoningAndClearStreamingState(stepID); resetErr != nil {
-		liveErr = errors.Join(liveErr, fmt.Errorf("reset failed-step streaming state: %w", resetErr))
+		ancillaryErr = fmt.Errorf("reset failed-step streaming state: %w", resetErr)
+		liveErr = errors.Join(liveErr, ancillaryErr)
 	}
 	finishedAt := time.Now().UTC()
 	status := RunStatusFailed
 	snapshot := s.snapshotWithFinishedAt(finishedAt, status)
-	terminalErr, publishLiveRunFinished := s.publishTerminalStep(
+	_, publicationErr, publishLiveRunFinished := s.publishTerminalStep(
 		stepID,
 		options,
 		snapshot,
@@ -251,9 +253,13 @@ func (s *defaultExclusiveStepLifecycle) finishRuntimeAbort(
 	if publishLiveRunFinished != nil {
 		publishLiveRunFinished()
 	}
+	s.engine.surfaceRunError(errors.Join(ancillaryErr, publicationErr))
 	s.engine.SetStreamingError(runtimeAbortFeedbackMessage(fatal))
 	s.engine.closeAdmissionAfterRuntimeAbort()
-	return terminalErr
+	return &resultGroupRuntimeAbort{
+		fatal:     fatal,
+		ancillary: errors.Join(ancillaryErr, publicationErr),
+	}
 }
 
 func (s *defaultExclusiveStepLifecycle) publishTerminalStep(
@@ -263,7 +269,7 @@ func (s *defaultExclusiveStepLifecycle) publishTerminalStep(
 	status RunStatus,
 	err error,
 	beforeLiveRun func() error,
-) (error, func()) {
+) (error, error, func()) {
 	s.beginTerminalPublication()
 	if options.EmitRunState {
 		state := &RunState{Lifecycle: IdleRunLifecycle()}
@@ -282,12 +288,14 @@ func (s *defaultExclusiveStepLifecycle) publishTerminalStep(
 			RunState: state,
 		}))
 	}
+	var publicationErr error
 	if snapshot != nil && s.engine.cfg.StepLifecycle != nil {
 		if publishErr := s.engine.cfg.StepLifecycle.StepEnded(
 			context.Background(),
 			stepLifecycleSnapshot(s.engine.SessionID(), StepLifecycleTransitionEnded, *snapshot),
 		); publishErr != nil {
-			err = errors.Join(err, fmt.Errorf("publish step ended: %w", publishErr))
+			publicationErr = fmt.Errorf("publish step ended: %w", publishErr)
+			err = errors.Join(err, publicationErr)
 		}
 	}
 	if beforeLiveRun != nil {
@@ -298,7 +306,7 @@ func (s *defaultExclusiveStepLifecycle) publishTerminalStep(
 		publishLiveRunFinished = s.engine.finishLiveRunStep(snapshot, status, err)
 	}
 	s.finishTerminalPublication()
-	return err, publishLiveRunFinished
+	return err, publicationErr, publishLiveRunFinished
 }
 
 func (s *defaultExclusiveStepLifecycle) Interrupt() error {

@@ -273,7 +273,7 @@ func (b *defaultBackgroundNoticeScheduler) processQueuedNotices(ctx context.Cont
 		if errors.Is(err, context.Canceled) {
 			return nil
 		}
-		if fatal := b.engine.lifecycleRuntimeAbort(err); fatal != nil {
+		if fatal, abort := resultGroupFatalFromError(err); abort {
 			return fatal
 		}
 		if steerErr := b.engine.SteerBackgroundContinuationFailure(err); steerErr != nil {
