@@ -175,8 +175,9 @@
 
 - Workflow definitions are globally reusable and linked to projects. Projects do not copy graph definitions.
 - Workflow validation uses Project context because available subagent roles and workspace configuration can differ by Project.
-- Kent has no stable Workflow graph import or export format.
-- Product surfaces can create and edit Workflow definitions.
+- The CLI emits and applies complete graph editing JSON bound to one Workflow and Workflow Version.
+- Graph editing JSON contains Workflow identity, expected Workflow Version, and the authored graph.
+- Product surfaces and the CLI can create and edit Workflow definitions.
 - Workflow definitions may be saved, linked, and made project default while semantic validation fails.
 - A saved Workflow Draft must have valid identifiers, valid references, supported values, unique keys, and exactly one Start Node.
 - Users can create Backlog Tasks for an invalid linked or default Workflow while they fix it.

@@ -723,7 +723,11 @@ func (s *Service) PreviewWorkflowGraphSave(ctx context.Context, req serverapi.Wo
 	if err != nil {
 		return serverapi.WorkflowGraphSavePreviewResponse{}, err
 	}
-	return workflowGraphSavePreviewResponse(result, workflowGraphSaveValidationResponses(result)), nil
+	resp := workflowGraphSavePreviewResponse(result, workflowGraphSaveValidationResponses(result))
+	if err := resp.Validate(); err != nil {
+		return serverapi.WorkflowGraphSavePreviewResponse{}, fmt.Errorf("project workflow graph save preview response: %w", err)
+	}
+	return resp, nil
 }
 
 func (s *Service) SaveWorkflowGraph(ctx context.Context, req serverapi.WorkflowGraphSaveRequest) (serverapi.WorkflowGraphSaveResponse, error) {
@@ -737,14 +741,16 @@ func (s *Service) SaveWorkflowGraph(ctx context.Context, req serverapi.WorkflowG
 		return serverapi.WorkflowGraphSaveResponse{}, err
 	}
 	resp := workflowGraphSaveResponse(result, workflowGraphSaveValidationResponses(result))
-	if !result.Saved {
-		return resp, nil
+	if result.Saved {
+		definition, _ := workflowview.ProjectDefinition(result.Definition, result.Record, s.roleResolver)
+		resp.Definition = &definition
+		resp.CurrentVersion = result.Record.Version
+		if result.Changed {
+			s.publishLinkedWorkflowEvent(ctx, req.WorkflowID, serverapi.WorkflowProjectEventResourceWorkflow, serverapi.WorkflowProjectEventActionGraphSaved, req.WorkflowID.String())
+		}
 	}
-	definition, _ := workflowview.ProjectDefinition(result.Definition, result.Record, s.roleResolver)
-	resp.Definition = &definition
-	resp.CurrentVersion = result.Record.Version
-	if result.Changed {
-		s.publishLinkedWorkflowEvent(ctx, req.WorkflowID, serverapi.WorkflowProjectEventResourceWorkflow, serverapi.WorkflowProjectEventActionGraphSaved, req.WorkflowID.String())
+	if err := resp.Validate(); err != nil {
+		return serverapi.WorkflowGraphSaveResponse{}, fmt.Errorf("project workflow graph save response: %w", err)
 	}
 	return resp, nil
 }
@@ -2284,8 +2290,9 @@ func (s *Service) workflowGraphDraftDefinition(ctx context.Context, workflowID r
 		})
 	}
 	for _, node := range graph.Nodes {
-		if strings.TrimSpace(node.GroupID) != "" {
-			groupMemberIDs[node.GroupID] = append(groupMemberIDs[node.GroupID], workflow.NodeID(node.ID))
+		groupID := optionalStringValue(node.GroupID)
+		if groupID != "" {
+			groupMemberIDs[groupID] = append(groupMemberIDs[groupID], workflow.NodeID(node.ID))
 		}
 		workflowNode, err := workflow.NewNode(
 			workflow.NodeIdentity{
@@ -2293,7 +2300,7 @@ func (s *Service) workflowGraphDraftDefinition(ctx context.Context, workflowID r
 				ID:          workflow.NodeID(node.ID),
 				Key:         workflow.ModelKey(node.Key),
 				DisplayName: node.DisplayName,
-				GroupID:     node.GroupID,
+				GroupID:     groupID,
 			},
 			workflow.NodeKind(node.Kind),
 			workflow.NodeFields{
@@ -2375,6 +2382,7 @@ func workflowGraphStoreSaveRequest(workflowID runtimeids.WorkflowID, expectedVer
 	}
 	if confirmation != nil {
 		req.Confirmed = true
+		req.ExpectedRemovedNodeGroupCount = confirmation.ExpectedRemovedNodeGroupCount
 		req.ExpectedRemovedNodeCount = confirmation.ExpectedRemovedNodeCount
 		req.ExpectedRemovedTransitionGroupCount = confirmation.ExpectedRemovedTransitionGroupCount
 		req.ExpectedRemovedEdgeCount = confirmation.ExpectedRemovedEdgeCount
@@ -2385,7 +2393,7 @@ func workflowGraphStoreSaveRequest(workflowID runtimeids.WorkflowID, expectedVer
 		req.NodeGroups = append(req.NodeGroups, workflowstore.NodeGroupRecord{ID: group.ID, WorkflowID: workflowID, Key: workflow.ModelKey(group.Key), DisplayName: group.DisplayName})
 	}
 	for _, node := range graph.Nodes {
-		req.Nodes = append(req.Nodes, workflowstore.NodeRecord{ID: workflow.NodeID(node.ID), WorkflowID: workflowID, Key: workflow.ModelKey(node.Key), Kind: workflow.NodeKind(node.Kind), DisplayName: node.DisplayName, GroupID: node.GroupID, GroupKey: node.GroupKey, SubagentRole: node.SubagentRole, CompletionMode: node.CompletionMode, ScriptPath: optionalStringValue(node.ScriptPath), JoinInputProviders: joinInputProviders(node.JoinInputProviders)})
+		req.Nodes = append(req.Nodes, workflowstore.NodeRecord{ID: workflow.NodeID(node.ID), WorkflowID: workflowID, Key: workflow.ModelKey(node.Key), Kind: workflow.NodeKind(node.Kind), DisplayName: node.DisplayName, GroupID: optionalStringValue(node.GroupID), GroupKey: node.GroupKey, SubagentRole: node.SubagentRole, CompletionMode: node.CompletionMode, ScriptPath: optionalStringValue(node.ScriptPath), JoinInputProviders: joinInputProviders(node.JoinInputProviders)})
 	}
 	for _, group := range graph.TransitionGroups {
 		req.TransitionGroups = append(req.TransitionGroups, workflowstore.TransitionGroupRecord{ID: workflow.TransitionGroupID(group.ID), WorkflowID: workflowID, SourceNodeID: workflow.NodeID(group.SourceNodeID), TransitionID: workflow.TransitionID(group.TransitionID), DisplayName: group.DisplayName, Description: group.Description})
@@ -2424,6 +2432,7 @@ func workflowExecutionTargetPolicyFromAPI(policy serverapi.WorkflowExecutionTarg
 func workflowGraphSavePreviewResponse(result workflowstore.WorkflowGraphSaveResult, validationResults map[serverapi.WorkflowValidationMode]serverapi.WorkflowValidateResponse) serverapi.WorkflowGraphSavePreviewResponse {
 	return serverapi.WorkflowGraphSavePreviewResponse{
 		CurrentVersion:       result.Version,
+		Changed:              result.Changed,
 		ValidationResults:    validationResults,
 		Impact:               workflowGraphSaveImpact(result),
 		Blockers:             workflowGraphSaveBlockers(result.Blockers),
@@ -2435,6 +2444,7 @@ func workflowGraphSavePreviewResponse(result workflowstore.WorkflowGraphSaveResu
 func workflowGraphSaveResponse(result workflowstore.WorkflowGraphSaveResult, validationResults map[serverapi.WorkflowValidationMode]serverapi.WorkflowValidateResponse) serverapi.WorkflowGraphSaveResponse {
 	return serverapi.WorkflowGraphSaveResponse{
 		Saved:                result.Saved,
+		Changed:              result.Changed,
 		CurrentVersion:       result.Version,
 		ValidationResults:    validationResults,
 		Impact:               workflowGraphSaveImpact(result),
@@ -2446,9 +2456,11 @@ func workflowGraphSaveResponse(result workflowstore.WorkflowGraphSaveResult, val
 
 func workflowGraphSaveImpact(result workflowstore.WorkflowGraphSaveResult) serverapi.WorkflowGraphSaveImpact {
 	return serverapi.WorkflowGraphSaveImpact{
+		RemovedNodeGroupCount:             result.Impact.RemovedNodeGroupCount,
 		RemovedNodeCount:                  result.Impact.RemovedNodeCount,
 		RemovedTransitionGroupCount:       result.Impact.RemovedTransitionGroupCount,
 		RemovedEdgeCount:                  result.Impact.RemovedEdgeCount,
+		RemovedEntities:                   workflowGraphEntityReferences(result.Impact.RemovedEntities),
 		NodeTaskReferenceCount:            result.Impact.NodeTaskReferenceCount,
 		EdgeTaskReferenceCount:            result.Impact.EdgeTaskReferenceCount,
 		ActiveCurrentNodeCount:            result.EditPolicyImpact.ActiveCurrentNodeCount,
@@ -2462,9 +2474,18 @@ func workflowGraphSaveImpact(result workflowstore.WorkflowGraphSaveResult) serve
 func workflowGraphSaveBlockers(blockers []workflowstore.WorkflowGraphSaveBlocker) []serverapi.WorkflowGraphSaveBlocker {
 	out := make([]serverapi.WorkflowGraphSaveBlocker, 0, len(blockers))
 	for _, blocker := range blockers {
-		out = append(out, serverapi.WorkflowGraphSaveBlocker{Code: blocker.Code, Message: blocker.Message, Count: blocker.Count})
+		out = append(out, serverapi.WorkflowGraphSaveBlocker{
+			Code:             blocker.Code,
+			Message:          blocker.Message,
+			Count:            blocker.Count,
+			AffectedEntities: workflowGraphEntityReferences(blocker.AffectedEntities),
+		})
 	}
 	return out
+}
+
+func workflowGraphEntityReferences(references []workflowstore.WorkflowGraphEntityReference) []serverapi.WorkflowGraphEntityReference {
+	return append([]serverapi.WorkflowGraphEntityReference{}, references...)
 }
 
 func commentRecord(row workflowstore.CommentRecord) serverapi.WorkflowTaskComment {
