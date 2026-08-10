@@ -180,7 +180,12 @@ describe("TaskInitiatingActionDialogs", () => {
 
   it("recovers the canonical Task-detail interruption with its recorded target", async () => {
     const attention = { ...interruptedTaskAttentionResponse, items: [
-      { ...interruptedTaskAttentionResponse.items[0], id: "attention-sibling", session_name: null },
+      {
+        ...interruptedTaskAttentionResponse.items[0],
+        id: "attention-sibling",
+        session_name: null,
+        detail_json: '{"setup_recovery":{}}',
+      },
       {
       ...interruptedTaskAttentionResponse.items[0],
       session_name: null,
@@ -221,8 +226,11 @@ describe("TaskInitiatingActionDialogs", () => {
       session_name: null,
       detail_json: '{"setup_recovery":{}}',
     }] };
-    mountTaskDetailSurface(taskDetailResponseWithInterruptedCurrentScript, { attention });
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: scrollIntoView });
+    mountTaskDetailSurface(taskDetailResponseWithInterruptedCurrentScript, { attention, initialFocus: { kind: "interrupted_current_node" } });
     expect(await screen.findByRole("alert")).not.toBeEmptyDOMElement();
+    await waitFor(() => { expect(scrollIntoView).toHaveBeenCalled(); });
   });
 });
 
