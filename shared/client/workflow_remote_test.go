@@ -675,12 +675,14 @@ func TestRemoteWorkflowAttentionAndActivityRejectMalformedResponses(t *testing.T
 
 	t.Run("activity unsupported type", func(t *testing.T) {
 		remote := newWorkflowResponseRemote(t, protocol.MethodWorkflowTaskActivityList, serverapi.WorkflowTaskActivityListResponse{
-			Items: []serverapi.WorkflowTaskActivityItem{{
-				Type:   "unsupported",
-				TaskID: "task-requested",
-			}},
+			WorkflowOffsetPage: serverapi.WorkflowOffsetPage[serverapi.WorkflowTaskActivityItem]{
+				Items: []serverapi.WorkflowTaskActivityItem{{
+					Type:   "unsupported",
+					TaskID: "task-requested",
+				}},
+			},
 		})
-		if _, err := remote.ListWorkflowTaskActivity(context.Background(), serverapi.WorkflowTaskActivityListRequest{TaskID: "task-requested"}); err == nil {
+		if _, err := remote.ListWorkflowTaskActivity(context.Background(), serverapi.WorkflowTaskOffsetPageRequest{TaskID: "task-requested"}); err == nil {
 			t.Fatal("ListWorkflowTaskActivity accepted an unsupported type")
 		}
 	})

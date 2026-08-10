@@ -106,8 +106,6 @@ describe("TaskDetailSurface sidebar ownership", () => {
     );
 
     expect(screen.getByTestId("task-detail-content")).toBeInTheDocument();
-    expect(contentProps).toHaveBeenCalledWith(
-      expect.objectContaining({ initialFocus, retainedState }),
-    );
+    expect(contentProps).toHaveBeenCalledWith(expect.objectContaining({ initialFocus, retainedState }));
   });
 });

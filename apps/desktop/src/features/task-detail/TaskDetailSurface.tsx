@@ -85,6 +85,7 @@ export function TaskDetailSurface({
     <ProjectLabelsProvider onBackgroundError={reportLabelError} projectID={detail.data.projectID}>
       <TaskDetailAssignmentScope detail={detail.data}>
         <TaskDetailContent
+          key={detail.data.id}
           activity={activity}
           attention={attention}
           comments={comments}

@@ -5,6 +5,7 @@ export * from "./nativeHooks";
 export * from "./navigation";
 export * from "./navigationTransitions";
 export * from "./projectDeletionEvents";
+export * from "./projectCatalogQueries";
 export * from "./projectRoutePersistence";
 export * from "./queryKeys";
 export * from "./services";

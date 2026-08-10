@@ -61,7 +61,7 @@ type WorkflowTaskMovePreviewTransitionChoice struct {
 type WorkflowTaskMoveRequiredValue struct {
 	NodeKey       string  `json:"node_key"`
 	OutputName    string  `json:"output_name"`
-	Description   string  `json:"description"`
+	Description   *string `json:"description"`
 	ResolvedValue *string `json:"resolved_value,omitempty"`
 }
 
@@ -177,11 +177,13 @@ func (v WorkflowTaskMoveRequiredValue) Validate() error {
 	for field, value := range map[string]string{
 		"node_key":    v.NodeKey,
 		"output_name": v.OutputName,
-		"description": v.Description,
 	} {
 		if strings.TrimSpace(value) == "" {
 			return fmt.Errorf("%s is required", field)
 		}
+	}
+	if v.Description != nil && strings.TrimSpace(*v.Description) == "" {
+		return errors.New("description must be non-blank when present")
 	}
 	if v.ResolvedValue != nil && strings.TrimSpace(*v.ResolvedValue) == "" {
 		return errors.New("resolved_value must be non-blank when present")
