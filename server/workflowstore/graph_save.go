@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"core/server/metadata/sqlitegen"
 	"core/server/metadata/sqlitelifecyclegen"
 	"core/server/workflow"
@@ -85,6 +87,7 @@ type WorkflowGraphSavePlan struct {
 	WorkflowID        runtimeids.WorkflowID
 	Version           int64
 	Prepared          preparedWorkflowGraphSave
+	current           preparedWorkflowGraphSave
 	Metadata          *WorkflowGraphSaveMetadata
 	GraphChanged      bool
 	MetadataChanged   bool
@@ -165,6 +168,7 @@ func (s *Store) planWorkflowGraphSave(ctx context.Context, q *sqlitegen.Queries,
 		WorkflowID:      workflowID,
 		Version:         current.Version,
 		Prepared:        prepared,
+		current:         currentGraph,
 		Metadata:        metadata,
 		GraphChanged:    graphChanged,
 		MetadataChanged: metadataChanged,
@@ -281,7 +285,7 @@ func (s *Store) SaveWorkflowGraph(ctx context.Context, req WorkflowGraphSaveRequ
 
 	version := plan.Version
 	if plan.GraphChanged {
-		if err := applyWorkflowGraphSave(ctx, q, plan.WorkflowID, plan.Prepared, plan.Removed); err != nil {
+		if err := applyWorkflowGraphSave(ctx, q, plan.WorkflowID, plan.current, plan.Prepared, plan.Removed); err != nil {
 			return WorkflowGraphSaveResult{}, err
 		}
 		revision, err := s.incrementWorkflowVersion(ctx, q, plan.WorkflowID)
@@ -780,7 +784,10 @@ func workflowGraphSaveComparable(prepared preparedWorkflowGraphSave) comparableW
 	return out
 }
 
-func applyWorkflowGraphSave(ctx context.Context, q *sqlitegen.Queries, workflowID runtimeids.WorkflowID, prepared preparedWorkflowGraphSave, removed removedWorkflowGraphRows) error {
+func applyWorkflowGraphSave(ctx context.Context, q *sqlitegen.Queries, workflowID runtimeids.WorkflowID, current preparedWorkflowGraphSave, prepared preparedWorkflowGraphSave, removed removedWorkflowGraphRows) error {
+	if err := stageWorkflowGraphSaveKeyChanges(ctx, q, current, prepared); err != nil {
+		return err
+	}
 	for _, edgeID := range removed.edges {
 		if deleted, err := q.DeleteWorkflowEdge(ctx, string(edgeID)); err != nil {
 			return fmt.Errorf("delete removed workflow edge: %w", err)
@@ -826,6 +833,36 @@ func applyWorkflowGraphSave(ctx context.Context, q *sqlitegen.Queries, workflowI
 	}
 	for index, edge := range prepared.edges {
 		if err := upsertWorkflowEdge(ctx, q, edge, int64(index*100), "save workflow edge"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func stageWorkflowGraphSaveKeyChanges(ctx context.Context, q *sqlitegen.Queries, current preparedWorkflowGraphSave, prepared preparedWorkflowGraphSave) error {
+	groupKeys := make(map[string]workflow.ModelKey, len(prepared.nodeGroups))
+	for _, group := range prepared.nodeGroups {
+		groupKeys[group.ID] = group.Key
+	}
+	for _, group := range current.nodeGroups {
+		if key, exists := groupKeys[group.ID]; !exists || key == group.Key {
+			continue
+		}
+		group.Key = workflow.ModelKey(uuid.NewString())
+		if err := upsertWorkflowNodeGroup(ctx, q, group, "stage workflow node group key"); err != nil {
+			return err
+		}
+	}
+	nodeKeys := make(map[workflow.NodeID]workflow.ModelKey, len(prepared.nodes))
+	for _, node := range prepared.nodes {
+		nodeKeys[node.ID] = node.Key
+	}
+	for _, node := range current.nodes {
+		if key, exists := nodeKeys[node.ID]; !exists || key == node.Key {
+			continue
+		}
+		node.Key = workflow.ModelKey(uuid.NewString())
+		if err := upsertWorkflowNode(ctx, q, node, node.SortOrder, "stage workflow node key"); err != nil {
 			return err
 		}
 	}

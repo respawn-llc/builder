@@ -164,6 +164,9 @@ func decodeWorkflowGraphDocument(data []byte) (workflowGraphDocument, error) {
 		decoded.Graph.TransitionGroups == nil || decoded.Graph.Edges == nil {
 		return workflowGraphDocument{}, errors.New("Workflow graph document requires workflow_id, expected_version, graph, and all graph collections")
 	}
+	if *decoded.ExpectedVersion < 0 {
+		return workflowGraphDocument{}, errors.New("Workflow graph document expected_version must be non-negative")
+	}
 	document := workflowGraphDocument{
 		WorkflowID:      *decoded.WorkflowID,
 		ExpectedVersion: *decoded.ExpectedVersion,

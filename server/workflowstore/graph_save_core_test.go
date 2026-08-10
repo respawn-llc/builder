@@ -1498,6 +1498,44 @@ func TestWorkflowGraphSaveDerivesNodeGroupSortOrderFromAuthoredCollection(t *tes
 	}
 }
 
+func TestApplyWorkflowGraphSaveSupportsNodeAndNodeGroupKeySwaps(t *testing.T) {
+	f := newGraphSaveFixture(t, createValidWorkflow)
+	for _, group := range []NodeGroupRecord{
+		{ID: "group-first-" + f.workflowID.String(), WorkflowID: f.workflowID, Key: "first", DisplayName: "First", SortOrder: 50},
+		{ID: "group-second-" + f.workflowID.String(), WorkflowID: f.workflowID, Key: "second", DisplayName: "Second", SortOrder: 150},
+	} {
+		if _, _, err := f.store.AddNodeGroup(f.ctx, group); err != nil {
+			t.Fatalf("AddNodeGroup %q: %v", group.ID, err)
+		}
+	}
+	current, err := currentWorkflowGraphSavePrepared(f.ctx, f.store.queries, f.workflowID)
+	if err != nil {
+		t.Fatalf("currentWorkflowGraphSavePrepared: %v", err)
+	}
+	prepared := clonePreparedWorkflowGraphSave(current)
+	prepared.nodeGroups[0].Key, prepared.nodeGroups[1].Key = prepared.nodeGroups[1].Key, prepared.nodeGroups[0].Key
+	prepared.nodes[0].Key, prepared.nodes[1].Key = prepared.nodes[1].Key, prepared.nodes[0].Key
+	tx, err := f.store.db.BeginTx(f.ctx, nil)
+	if err != nil {
+		t.Fatalf("BeginTx: %v", err)
+	}
+	if err := applyWorkflowGraphSave(f.ctx, f.store.queries.WithTx(tx), f.workflowID, current, prepared, removedWorkflowGraphRows{}); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("applyWorkflowGraphSave: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	reloaded, err := currentWorkflowGraphSavePrepared(f.ctx, f.store.queries, f.workflowID)
+	if err != nil {
+		t.Fatalf("reload graph: %v", err)
+	}
+	if reloaded.nodeGroups[0].Key != prepared.nodeGroups[0].Key || reloaded.nodeGroups[1].Key != prepared.nodeGroups[1].Key ||
+		reloaded.nodes[0].Key != prepared.nodes[0].Key || reloaded.nodes[1].Key != prepared.nodes[1].Key {
+		t.Fatalf("reloaded keys = groups %v nodes %v, want swapped", reloaded.nodeGroups, reloaded.nodes)
+	}
+}
+
 func TestWorkflowGraphSaveRejectsStaleVersion(t *testing.T) {
 	f := newGraphSaveFixture(t, createValidWorkflow)
 	if err := f.store.UpdateWorkflowInfo(f.ctx, f.workflowID, "Remote rename", "Remote description"); err != nil {

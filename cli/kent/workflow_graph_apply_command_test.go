@@ -119,10 +119,15 @@ func TestWorkflowGraphApplyRejectsMissingEntityFieldBeforeOpeningRemote(t *testi
 		opened++
 		return config.App{}, remote, nil
 	}
-	input := `{"workflow_id":"11111111-1111-4111-8111-111111111111","expected_version":1,"graph":{"node_groups":[],"nodes":[{"id":"11111111-1111-4111-8111-111111111112","kind":"agent","display_name":"Node","group_id":null}],"transition_groups":[],"edges":[]}}`
-	exit, outcome, _ := runWorkflowGraphApplyCommand(t, []string{"graph", "apply", "-", "--json"}, input)
-	if exit != 1 || outcome.Outcome != workflowGraphApplyInvalidDocument || opened != 0 {
-		t.Fatalf("exit=%d outcome=%+v opened=%d", exit, outcome, opened)
+	inputs := []string{
+		`{"workflow_id":"11111111-1111-4111-8111-111111111111","expected_version":1,"graph":{"node_groups":[],"nodes":[{"id":"11111111-1111-4111-8111-111111111112","kind":"agent","display_name":"Node","group_id":null}],"transition_groups":[],"edges":[]}}`,
+		`{"workflow_id":"11111111-1111-4111-8111-111111111111","expected_version":-1,"graph":{"node_groups":[],"nodes":[],"transition_groups":[],"edges":[]}}`,
+	}
+	for _, input := range inputs {
+		exit, outcome, _ := runWorkflowGraphApplyCommand(t, []string{"graph", "apply", "-", "--json"}, input)
+		if exit != 1 || outcome.Outcome != workflowGraphApplyInvalidDocument || opened != 0 {
+			t.Fatalf("exit=%d outcome=%+v opened=%d", exit, outcome, opened)
+		}
 	}
 }
 
