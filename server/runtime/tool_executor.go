@@ -438,23 +438,57 @@ func executorInputForCustomTool(toolID toolspec.ID, input string) json.RawMessag
 }
 
 func activeRunIDForStep(engine *Engine, stepID string) string {
-	if engine == nil {
+	origin, ok := activeAgentStepOriginForStep(engine, stepID)
+	if !ok {
 		return ""
+	}
+	return origin.RunID
+}
+
+func activeAgentStepOriginForStep(engine *Engine, stepID string) (serverapi.RuntimeStepOrigin, bool) {
+	if engine == nil {
+		return serverapi.RuntimeStepOrigin{}, false
 	}
 	snapshot := engine.ActiveRun()
 	if snapshot != nil && snapshot.StepID == stepID {
-		return snapshot.RunID
+		return serverapi.RuntimeStepOrigin{RunID: snapshot.RunID, StepID: stepID}, true
 	}
-	if engine.agentSteps.current != nil &&
-		engine.agentSteps.current.origin.StepID == stepID {
-		return engine.agentSteps.current.origin.RunID
+	if engine.runtimeEvents == nil {
+		if engine.agentSteps.current != nil &&
+			engine.agentSteps.current.origin.StepID == stepID {
+			return engine.agentSteps.current.origin, true
+		}
+		return serverapi.RuntimeStepOrigin{}, false
 	}
-	return ""
+	origin, err := submitRuntimeEventWithContext(
+		engine.lifecycleCtx,
+		engine.lifecycleCtx,
+		engine,
+		stepID,
+		func(_ runtimeEventAdmission, requestedStepID string) (serverapi.RuntimeStepOrigin, error) {
+			if engine.agentSteps.current == nil ||
+				engine.agentSteps.current.origin.StepID != requestedStepID {
+				return serverapi.RuntimeStepOrigin{}, nil
+			}
+			return engine.agentSteps.current.origin, nil
+		},
+	)
+	if err != nil || origin.RunID == "" || origin.StepID == "" {
+		return serverapi.RuntimeStepOrigin{}, false
+	}
+	return origin, true
 }
 
 func workflowCompletionOriginForStep(engine *Engine, stepID string) serverapi.RuntimeStepOrigin {
-	return serverapi.RuntimeStepOrigin{
-		RunID:  activeRunIDForStep(engine, stepID),
-		StepID: stepID,
+	origin, _ := activeAgentStepOriginForStep(engine, stepID)
+	if origin.StepID == "" {
+		origin.StepID = stepID
 	}
+	return origin
+	/*
+		return serverapi.RuntimeStepOrigin{
+			RunID:  activeRunIDForStep(engine, stepID),
+			StepID: stepID,
+		}
+	*/
 }
