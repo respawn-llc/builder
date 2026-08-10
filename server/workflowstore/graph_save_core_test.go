@@ -332,16 +332,13 @@ func TestWorkflowGraphSaveValidationBlockerCanonicalizesAffectedEntities(t *test
 	f := newGraphSaveFixture(t, createValidWorkflow)
 	agentID := workflow.NodeID("node-agent-" + f.workflowID.String())
 	req := f.request(f.record.Version, false, f.def)
-	for _, node := range req.Nodes {
-		if node.ID == agentID {
-			req.Nodes = append(req.Nodes, node, node)
-			break
-		}
-	}
+	duplicate := *workflowGraphSaveNodeRecord(t, req.Nodes, agentID)
+	duplicate.ID, duplicate.Kind, duplicate.SubagentRole = workflow.NodeID("node-second-start-"+f.workflowID.String()), workflow.NodeKindStart, ""
+	req.Nodes = append(req.Nodes, duplicate)
 
 	preview := f.preview(t, req)
 
-	want := []WorkflowGraphEntityReference{{EntityType: WorkflowGraphEntityTypeNode, EntityID: string(agentID)}}
+	want := canonicalWorkflowGraphEntityReferences([]WorkflowGraphEntityReference{{EntityType: WorkflowGraphEntityTypeNode, EntityID: string(workflow.NodeIDOf(nodeByKind(t, f.def, workflow.NodeKindStart)))}, {EntityType: WorkflowGraphEntityTypeNode, EntityID: string(agentID)}, {EntityType: WorkflowGraphEntityTypeNode, EntityID: string(duplicate.ID)}})
 	if got := workflowGraphSaveBlockerEntities(preview.Blockers, "validation_failed"); !slices.Equal(got, want) {
 		t.Fatalf("validation_failed affected entities = %+v, want canonical deduplicated %+v", got, want)
 	}

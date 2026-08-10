@@ -120,6 +120,7 @@ func (s *validationState) indexNodeGroups() {
 		if key == "" || !workflowkey.Valid(string(key)) {
 			s.addHard(CodeInvalidNodeGroup, "node group key is invalid", ref)
 		} else if previousID, exists := seenKeys[key]; exists && previousID != id {
+			ref.RelatedIDs = append(ref.RelatedIDs, previousID)
 			s.addHard(CodeInvalidNodeGroup, "node group key must be unique", ref)
 		} else {
 			seenKeys[key] = id
@@ -180,7 +181,8 @@ func (s *validationState) indexTransitionGroups() {
 		} else if !workflowkey.Valid(transitionID) {
 			s.addHard(CodeInvalidTransitionID, "transition id must "+workflowkey.Description, ref)
 		} else {
-			if _, exists := seenTransitions[transitionID]; exists {
+			if previousID, exists := seenTransitions[transitionID]; exists {
+				ref.RelatedIDs = append(ref.RelatedIDs, string(previousID))
 				s.addHard(CodeDuplicateTransitionID, "transition id must be unique across the Workflow", ref)
 			}
 			seenTransitions[transitionID] = group.ID
@@ -225,6 +227,7 @@ func (s *validationState) validateNodes() {
 		} else if !workflowkey.Valid(string(NodeKey(node))) {
 			s.addHard(CodeInvalidNodeKey, "node key must "+workflowkey.Description, ref)
 		} else if previousNodeID, exists := s.nodeKeys[NodeKey(node)]; exists && previousNodeID != NodeIDOf(node) {
+			ref.RelatedIDs = append(ref.RelatedIDs, string(previousNodeID))
 			s.addHard(CodeDuplicateNodeKey, "node key must be unique", ref)
 		} else {
 			s.nodeKeys[NodeKey(node)] = NodeIDOf(node)
@@ -247,7 +250,11 @@ func (s *validationState) validateNodes() {
 		s.addHard(CodeMissingStartNode, "workflow must contain exactly one start node", ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID)})
 	}
 	if len(s.startNodes) > 1 {
-		s.addHard(CodeMultipleStartNodes, "workflow must contain exactly one start node", ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID)})
+		ref := ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID)}
+		for _, node := range s.startNodes {
+			ref.RelatedIDs = append(ref.RelatedIDs, string(NodeIDOf(node)))
+		}
+		s.addHard(CodeMultipleStartNodes, "workflow must contain exactly one start node", ref)
 	}
 }
 
@@ -443,7 +450,7 @@ func (s *validationState) validateTransitionGroups() {
 				continue
 			}
 			if previousID, exists := seenEdgeKeys[edge.Key]; exists && previousID != edge.ID {
-				s.addHard(CodeDuplicateEdgeKey, "edge key must be unique per transition group", ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID), EdgeID: edge.ID, TransitionGroupID: edge.TransitionGroupID})
+				s.addHard(CodeDuplicateEdgeKey, "edge key must be unique per transition group", ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID), EdgeID: edge.ID, TransitionGroupID: edge.TransitionGroupID, RelatedIDs: []string{string(previousID)}})
 			}
 			seenEdgeKeys[edge.Key] = edge.ID
 		}
