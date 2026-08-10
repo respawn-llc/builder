@@ -273,28 +273,26 @@ func TestCurrentNodeControllerFinalizedGateReleasesAgentCapacity(t *testing.T) {
 	}
 }
 
-func TestExecutionFinalizationDoesNotMakeUnassignedHeldSuccessorResumable(t *testing.T) {
+func TestSuccessorAssignmentFailureInterruptsCommittedBranchAfterPredecessorRetires(t *testing.T) {
 	shellPath, err := exec.LookPath("sh")
 	if err != nil {
 		t.Skipf("sh executable unavailable: %v", err)
 	}
 	source := currentNodeReferenceForControllerTest(t, "task-successor-steer-failure", "node-source")
 	successor := currentNodeReferenceForControllerTest(t, "task-successor-steer-failure", "node-successor")
-	queuedAgent := currentNodeReferenceForControllerTest(t, "task-unrelated-agent", "node-agent")
 	queuedScript := currentNodeReferenceForControllerTest(t, "task-unrelated-script", "node-script")
 	store := &currentNodeControllerStore{
 		completion: workflowstore.CurrentNodeCompletionResult{
 			AutomaticIntents: []workflowstore.CurrentNodeAutomaticIntent{{CurrentNode: successor, NodeKind: workflow.NodeKindAgent}},
 		},
 	}
-	steerer := &recordingCurrentNodeAssignmentSteerer{}
 	var controller *CurrentNodeController
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
 		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
 			controller.ExecutionFinalized(scope)
 		}),
 	})
-	runner := &recordingScriptRunner{
+	baseRunner := &recordingScriptRunner{
 		authority: authority,
 		command: sessionruntime.ScriptCommand{
 			Path: shellPath,
@@ -302,9 +300,15 @@ func TestExecutionFinalizationDoesNotMakeUnassignedHeldSuccessorResumable(t *tes
 		},
 		started: make(chan workflow.CurrentNodeReference, 4),
 	}
+	cause := errors.New("successor preparation failed")
+	runner := selectiveFailingCurrentNodeRunner{
+		target: successor,
+		cause:  cause,
+		next:   baseRunner,
+	}
 	controller, err = NewCurrentNodeController(store, runner, authority, NewTaskMutationCoordinator(), CurrentNodeControllerConfig{
 		AgentConcurrency:      1,
-		AssignmentSteerer:     steerer,
+		AssignmentSteerer:     noOpCurrentNodeAssignmentSteerer{},
 		LifecycleAvailability: NewLifecycleFatalAvailability(),
 	})
 	if err != nil {
@@ -320,19 +324,13 @@ func TestExecutionFinalizationDoesNotMakeUnassignedHeldSuccessorResumable(t *tes
 	})
 
 	controller.enqueueAutomaticIntents([]CurrentNodeAutomaticIntent{{CurrentNode: source, NodeKind: workflow.NodeKindAgent}})
-	<-runner.started
+	<-baseRunner.started
 	waitForRunningCurrentNode(t, authority, source)
 	controller.enqueueAutomaticIntents([]CurrentNodeAutomaticIntent{
-		{CurrentNode: queuedAgent, NodeKind: workflow.NodeKindAgent},
 		{CurrentNode: queuedScript, NodeKind: workflow.NodeKindScript},
 	})
-	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		return hasAutomaticCurrentNodeIntent(controller.Snapshot(), queuedAgent)
-	}, "unrelated Agent did not remain queued while source occupied capacity")
 	sourceScope := singleLiveScope(t, controller, source)
 	sessionID := runtimeids.NewSessionID()
-	cause := errors.New("assignment persistence failed")
-	steerer.setWaitError(cause)
 	if _, err := controller.CompleteCurrentNode(context.Background(), workflowruntime.CompletionRequest{
 		ScopeID:      sourceScope,
 		SessionID:    &sessionID,
@@ -348,22 +346,27 @@ func TestExecutionFinalizationDoesNotMakeUnassignedHeldSuccessorResumable(t *tes
 		t.Fatalf("stop source: %v", err)
 	}
 
-	interruption, interrupted := store.interruption(successor)
+	var interruption currentNodeInterruptionRecord
+	var interrupted bool
+	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+		interruption, interrupted = store.interruption(successor)
+		return interrupted
+	}, "committed successor assignment failure was not interrupted")
 	if !interrupted || interruption.reason != reasonCurrentNodeRuntimeStartFailed {
-		t.Fatalf("unassigned committed successor interruption = %+v, interrupted = %t", interruption, interrupted)
+		t.Fatalf("committed successor assignment failure interruption = %+v, interrupted = %t", interruption, interrupted)
 	}
 	if err := controller.EnsureTaskQuiescent(source.TaskID); err != nil {
 		t.Fatalf("uncommitted assignment failure latched controller failure: %v", err)
 	}
-	started := make(map[workflow.CurrentNodeReferenceKey]struct{}, 2)
+	started := make(map[workflow.CurrentNodeReferenceKey]struct{}, 1)
 	deadline := time.After(3 * time.Second)
-	for len(started) < 2 {
+	for len(started) < 1 {
 		select {
-		case currentNode := <-runner.started:
+		case currentNode := <-baseRunner.started:
 			if currentNode.Equal(successor) {
-				t.Fatalf("unassigned held successor started after assignment failure")
+				t.Fatalf("committed successor started after assignment failure")
 			}
-			if !currentNode.Equal(queuedAgent) && !currentNode.Equal(queuedScript) {
+			if !currentNode.Equal(queuedScript) {
 				t.Fatalf("unexpected start after assignment failure: %v", currentNode)
 			}
 			currentNodeKey, err := currentNode.Key()
@@ -375,4 +378,24 @@ func TestExecutionFinalizationDoesNotMakeUnassignedHeldSuccessorResumable(t *tes
 			t.Fatalf("queued work did not start after source capacity was released: %+v", started)
 		}
 	}
+}
+
+type selectiveFailingCurrentNodeRunner struct {
+	target workflow.CurrentNodeReference
+	cause  error
+	next   CurrentNodeRunner
+}
+
+func (r selectiveFailingCurrentNodeRunner) StartCurrentNode(
+	ctx context.Context,
+	reference workflow.CurrentNodeReference,
+	delivery workflowruntime.TaskPromptDelivery,
+	assignment CurrentNodeAssignmentSteer,
+	lease sessionruntime.WorkflowExecutionLease,
+	controller workflowruntime.Controller,
+) error {
+	if reference.Equal(r.target) {
+		return r.cause
+	}
+	return r.next.StartCurrentNode(ctx, reference, delivery, assignment, lease, controller)
 }

@@ -3262,6 +3262,30 @@ func TestCurrentNodeScriptFailureSurfacesStderr(t *testing.T) {
 	}
 }
 
+func TestCurrentNodeScriptInvalidCompletionInterruptsSource(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fixture is a POSIX shell script")
+	}
+	f := newCurrentNodeRunnerFixture(t)
+	scriptPath := filepath.Join(f.workspace, "invalid-completion.sh")
+	script := "#!/bin/sh\nprintf '%s' 'not-json'\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	workflowID := createCurrentNodeScriptWorkflow(t, f.store, scriptPath)
+	task := f.createTask(t, workflowID)
+	source := f.startTask(t, task)
+	nodes := f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+		return len(nodes) == 1 &&
+			nodes[0].Reference.Equal(source) &&
+			nodes[0].Scheduling != nil &&
+			nodes[0].Scheduling.Interruption != nil
+	})
+	if reason := nodes[0].Scheduling.Interruption.Reason; reason != ReasonScriptCompletionFailed {
+		t.Fatalf("invalid Script completion interruption reason = %q, want %q", reason, ReasonScriptCompletionFailed)
+	}
+}
+
 func createCurrentNodeAgentWorkflow(t *testing.T, store *workflowstore.Store) runtimeids.WorkflowID {
 	t.Helper()
 	return createCurrentNodeAgentWorkflowWithCompletionMode(t, store, "")

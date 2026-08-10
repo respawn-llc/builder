@@ -8,6 +8,7 @@ import (
 	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowruntime"
+	"core/server/workflowstore"
 	"core/shared/runtimeids"
 )
 
@@ -71,6 +72,7 @@ type currentNodeRun struct {
 	key                      workflow.CurrentNodeReferenceKey
 	policy                   currentNodeAdmissionPolicy
 	phase                    currentNodeRunPhase
+	expectedScheduling       workflow.CurrentNodeSchedulingState
 	preparation              TaskStartPreparation
 	taskPromptDelivery       workflowruntime.TaskPromptDelivery
 	assignmentSteer          CurrentNodeAssignmentSteer
@@ -143,6 +145,7 @@ func (c *CurrentNodeController) allocateRunLocked(start currentNodeQueuedStart) 
 		key:                key,
 		policy:             start.policy,
 		phase:              currentNodeRunStaged,
+		expectedScheduling: workflow.CurrentNodeSchedulingReady,
 		preparation:        start.preparation,
 		taskPromptDelivery: start.taskPromptDelivery,
 		assignmentSteer:    start.assignmentSteer,
@@ -246,6 +249,7 @@ func (c *CurrentNodeController) stageSuccessorRunLocked(
 		key:                key,
 		policy:             start.policy,
 		phase:              currentNodeRunStaged,
+		expectedScheduling: workflow.CurrentNodeSchedulingReady,
 		preparation:        start.preparation,
 		taskPromptDelivery: start.taskPromptDelivery,
 		assignmentSteer:    start.assignmentSteer,
@@ -254,6 +258,98 @@ func (c *CurrentNodeController) stageSuccessorRunLocked(
 	}
 	c.runs[run.id] = run
 	return run, nil
+}
+
+func (c *CurrentNodeController) prepareSuccessorRunsLocked(
+	starts []currentNodeQueuedStart,
+	predecessorID currentNodeRunID,
+) ([]currentNodeRunID, error) {
+	ids := make([]currentNodeRunID, 0, len(starts))
+	seen := make(map[workflow.CurrentNodeReferenceKey]struct{}, len(starts))
+	for _, start := range starts {
+		key, err := start.reference.Key()
+		if err != nil {
+			c.discardStagedRunsLocked(ids)
+			return nil, err
+		}
+		if _, duplicate := seen[key]; duplicate {
+			c.discardStagedRunsLocked(ids)
+			return nil, fmt.Errorf("prepared successor Current Node %v is duplicated", start.reference)
+		}
+		seen[key] = struct{}{}
+		run, err := c.stageSuccessorRunLocked(start, predecessorID)
+		if err != nil {
+			c.discardStagedRunsLocked(ids)
+			return nil, err
+		}
+		ids = append(ids, run.id)
+	}
+	return ids, nil
+}
+
+func (c *CurrentNodeController) validatePreparedSuccessorRunsLocked(
+	predecessorID currentNodeRunID,
+	ids []currentNodeRunID,
+) error {
+	predecessor := c.runs[predecessorID]
+	if predecessor == nil {
+		return errors.New("prepared completion predecessor Run is absent")
+	}
+	if current, exists := c.currentRuns[predecessor.key]; !exists || current != predecessorID {
+		return fmt.Errorf(
+			"prepared completion predecessor Run %d lost current-generation ownership",
+			predecessorID.sequence,
+		)
+	}
+	for _, id := range ids {
+		run := c.runs[id]
+		if run == nil || run.phase != currentNodeRunStaged || run.predecessor == nil || *run.predecessor != predecessorID {
+			return fmt.Errorf("prepared successor Run %d is not staged for predecessor %d", id.sequence, predecessorID.sequence)
+		}
+		current, exists := c.currentRuns[run.key]
+		if run.key == predecessor.key {
+			if !exists || current != predecessorID {
+				return fmt.Errorf("prepared self-loop successor Run %d lost predecessor ownership", id.sequence)
+			}
+			continue
+		}
+		if exists {
+			return fmt.Errorf("prepared successor Run %d conflicts with current generation %d", id.sequence, current.sequence)
+		}
+	}
+	return nil
+}
+
+func (c *CurrentNodeController) installPreparedSuccessorRunsLocked(
+	predecessorID currentNodeRunID,
+	ids []currentNodeRunID,
+	sourceRetained bool,
+	phase currentNodeRunPhase,
+) {
+	predecessor := c.runs[predecessorID]
+	if predecessor == nil {
+		panic(fmt.Sprintf("install successors for absent predecessor Run %d", predecessorID.sequence))
+	}
+	if err := c.validatePreparedSuccessorRunsLocked(predecessorID, ids); err != nil {
+		panic(err)
+	}
+	if !sourceRetained {
+		if current, exists := c.currentRuns[predecessor.key]; exists && current == predecessorID {
+			delete(c.currentRuns, predecessor.key)
+		}
+	}
+	for _, id := range ids {
+		run := c.runs[id]
+		c.currentRuns[run.key] = id
+		run.transition(phase)
+		if phase == currentNodeRunQueued {
+			if run.policy.isAutomatic() {
+				c.automaticQueue.append(run)
+			} else {
+				c.explicitQueue = append(c.explicitQueue, id)
+			}
+		}
+	}
 }
 
 func (c *CurrentNodeController) activateRunLocked(run *currentNodeRun, phase currentNodeRunPhase) error {
@@ -414,4 +510,33 @@ func (c *CurrentNodeController) removeSuccessorsLocked(predecessor *currentNodeR
 		c.removeRunLocked(id)
 	}
 	predecessor.successors = nil
+}
+
+func (c *CurrentNodeController) successorSchedulingTargetsLocked(
+	predecessor *currentNodeRun,
+) []workflowstore.CurrentNodeSchedulingTarget {
+	if predecessor == nil {
+		panic("successor scheduling targets require a predecessor Run")
+	}
+	targets := make([]workflowstore.CurrentNodeSchedulingTarget, 0, len(predecessor.successors))
+	for _, id := range predecessor.successors {
+		successor := c.runs[id]
+		if successor == nil || successor.predecessor == nil || *successor.predecessor != predecessor.id {
+			panic(fmt.Sprintf("predecessor Run %d lost successor Run %d", predecessor.id.sequence, id.sequence))
+		}
+		switch successor.expectedScheduling {
+		case workflow.CurrentNodeSchedulingReady, workflow.CurrentNodeSchedulingAdmitted:
+		default:
+			panic(fmt.Sprintf(
+				"successor Run %d has invalid expected scheduling %q",
+				id.sequence,
+				successor.expectedScheduling,
+			))
+		}
+		targets = append(targets, workflowstore.CurrentNodeSchedulingTarget{
+			Reference: successor.reference,
+			Expected:  successor.expectedScheduling,
+		})
+	}
+	return targets
 }

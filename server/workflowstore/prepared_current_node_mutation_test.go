@@ -188,6 +188,36 @@ func TestPreparedTaskResumeCancellationBeforeCommitLeavesEveryBranchInterrupted(
 	}
 }
 
+func TestPreparedCurrentNodeCompletionRollbackLeavesSourceCurrent(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+
+	prepared, err := store.PrepareCurrentNodeCompletion(ctx, CurrentNodeCompletionRequest{
+		Source: source.Reference,
+	})
+	if err != nil {
+		t.Fatalf("PrepareCurrentNodeCompletion: %v", err)
+	}
+	result := prepared.Result()
+	if len(result.Mutation.Removed) != 1 ||
+		len(result.Mutation.Created) != 1 {
+		t.Fatalf("prepared completion result = %+v, want one source replacement", result)
+	}
+	if err := prepared.Rollback(); err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+
+	currentNodes, err := store.ListCurrentNodes(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListCurrentNodes: %v", err)
+	}
+	if len(currentNodes) != 1 || !currentNodes[0].Reference.Equal(source.Reference) {
+		t.Fatalf("Current Nodes after completion rollback = %+v, want source %v", currentNodes, source.Reference)
+	}
+}
+
 func preparedResumeBranchFixture(t *testing.T) (context.Context, *Store, workflow.TaskID, []workflow.CurrentNode) {
 	t.Helper()
 	ctx, store, binding := newTestStoreContext(t)

@@ -336,9 +336,9 @@ func TestCurrentNodeControllerTaskInterruptFencesFinalizingSiblingBeforeReturn(t
 	case <-time.After(3 * time.Second):
 		t.Fatal("Task Interrupt did not begin durable cleanup")
 	}
-	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		return !hasLiveCurrentNode(controller.Snapshot(), running)
-	}, "running sibling did not retire while interrupt persistence was blocked")
+	if !hasLiveCurrentNode(controller.Snapshot(), running) {
+		t.Fatal("Task Interrupt stopped the running sibling before durable interruption committed")
+	}
 
 	releaseFinalizer()
 	releaseInterrupt()
@@ -357,6 +357,9 @@ func TestCurrentNodeControllerTaskInterruptFencesFinalizingSiblingBeforeReturn(t
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("Task Interrupt did not join the finalizing sibling")
+	}
+	if hasLiveCurrentNode(controller.Snapshot(), running) {
+		t.Fatal("running sibling remained live after durable Task Interrupt cleanup")
 	}
 	if calls := store.completionCount(); calls != 0 {
 		t.Fatalf("finalizing sibling durable completions = %d, want 0", calls)

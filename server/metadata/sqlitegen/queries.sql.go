@@ -3681,6 +3681,44 @@ func (q *Queries) InterruptBranchCurrentNode(ctx context.Context, arg InterruptB
 	return result.RowsAffected()
 }
 
+const interruptBranchReadyCurrentNode = `-- name: InterruptBranchReadyCurrentNode :execrows
+UPDATE task_current_nodes
+SET scheduling_state = 'interrupted',
+    interruption_reason = ?1,
+    interruption_detail_json = ?2,
+    interrupted_at_unix_ms = ?3
+WHERE task_id = ?4
+  AND node_id = ?5
+  AND transition_branch_key = ?6
+  AND scheduling_state = 'ready'
+`
+
+type InterruptBranchReadyCurrentNodeParams struct {
+	InterruptionReason     sql.NullString
+	InterruptionDetailJson sql.NullString
+	InterruptedAtUnixMs    sql.NullInt64
+	TaskID                 string
+	NodeID                 string
+	TransitionBranchKey    sql.NullString
+}
+
+func (q *Queries) InterruptBranchReadyCurrentNode(ctx context.Context, arg InterruptBranchReadyCurrentNodeParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, interruptBranchReadyCurrentNode,
+		arg.InterruptionReason,
+		arg.InterruptionDetailJson,
+		arg.InterruptedAtUnixMs,
+		arg.TaskID,
+		arg.NodeID,
+		arg.TransitionBranchKey,
+	)
+	err = recordQueryError(ctx, err, interruptBranchReadyCurrentNode, 6)
+
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const interruptSerialAdmittedCurrentNode = `-- name: InterruptSerialAdmittedCurrentNode :execrows
 UPDATE task_current_nodes
 SET scheduling_state = 'interrupted',
@@ -3746,6 +3784,42 @@ func (q *Queries) InterruptSerialCurrentNode(ctx context.Context, arg InterruptS
 		arg.NodeID,
 	)
 	err = recordQueryError(ctx, err, interruptSerialCurrentNode, 5)
+
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const interruptSerialReadyCurrentNode = `-- name: InterruptSerialReadyCurrentNode :execrows
+UPDATE task_current_nodes
+SET scheduling_state = 'interrupted',
+    interruption_reason = ?1,
+    interruption_detail_json = ?2,
+    interrupted_at_unix_ms = ?3
+WHERE task_id = ?4
+  AND node_id = ?5
+  AND transition_branch_key IS NULL
+  AND scheduling_state = 'ready'
+`
+
+type InterruptSerialReadyCurrentNodeParams struct {
+	InterruptionReason     sql.NullString
+	InterruptionDetailJson sql.NullString
+	InterruptedAtUnixMs    sql.NullInt64
+	TaskID                 string
+	NodeID                 string
+}
+
+func (q *Queries) InterruptSerialReadyCurrentNode(ctx context.Context, arg InterruptSerialReadyCurrentNodeParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, interruptSerialReadyCurrentNode,
+		arg.InterruptionReason,
+		arg.InterruptionDetailJson,
+		arg.InterruptedAtUnixMs,
+		arg.TaskID,
+		arg.NodeID,
+	)
+	err = recordQueryError(ctx, err, interruptSerialReadyCurrentNode, 5)
 
 	if err != nil {
 		return 0, err

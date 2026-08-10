@@ -5,11 +5,13 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
 	"core/server/sessionruntime"
 	"core/server/workflow"
+	"core/server/workflowstore"
 )
 
 const interruptCleanupTimeout = 300 * time.Second
@@ -24,6 +26,7 @@ type currentNodeInterruptCleanupState struct {
 	stopHandles    []sessionruntime.ExecutionHandle
 	waitHandles    []sessionruntime.ExecutionHandle
 	references     []workflow.CurrentNodeReference
+	selectedRuns   []currentNodeRunID
 	launchRuns     []currentNodeRunID
 	admissionWaits []currentNodeAdmissionWait
 	taskFence      *currentNodeInterruptFence
@@ -46,9 +49,6 @@ func (c *CurrentNodeController) cleanupInterrupt(state currentNodeInterruptClean
 		}
 	}
 	c.mu.Unlock()
-	for _, handle := range exactHandles {
-		handle.RequestStop()
-	}
 	var persistenceErr error
 	if !state.persisted {
 		persistenceErr = c.taskMutations.Run(cleanupCtx, state.taskID, func(ctx context.Context) error {
@@ -57,9 +57,16 @@ func (c *CurrentNodeController) cleanupInterrupt(state currentNodeInterruptClean
 	}
 	if persistenceErr != nil {
 		c.mu.Lock()
-		c.rollbackTaskInterruptLocked(state.taskFence)
+		if state.taskFence != nil {
+			c.rollbackTaskInterruptLocked(state.taskFence)
+		} else {
+			c.rollbackSelectedInterruptLocked(state.selectedRuns)
+		}
 		c.mu.Unlock()
 		return persistenceErr
+	}
+	for _, handle := range exactHandles {
+		handle.RequestStop()
 	}
 	c.mu.Lock()
 	for _, runID := range state.launchRuns {
@@ -129,6 +136,7 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 		stopHandles    []sessionruntime.ExecutionHandle
 		waitHandles    []sessionruntime.ExecutionHandle
 		references     []workflow.CurrentNodeReference
+		selectedRuns   []currentNodeRunID
 		launchRuns     []currentNodeRunID
 		admissionWaits []currentNodeAdmissionWait
 		taskFence      *currentNodeInterruptFence
@@ -192,6 +200,7 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 				if !exists {
 					return errors.New("selected workflow execution has no Run generation")
 				}
+				selectedRuns = append(selectedRuns, run.id)
 				if taskFence != nil {
 					c.fenceRunLocked(run, taskFence)
 				} else {
@@ -210,7 +219,7 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 				}
 				stopHandles = append(stopHandles, handle)
 				waitHandles = append(waitHandles, handle)
-				if !run.completion.committed() || run.completionSourceRetained || taskFence != nil {
+				if !run.completion.committed() || run.completionSourceRetained {
 					references = append(references, scopeRef.CurrentNode)
 				}
 			}
@@ -225,18 +234,16 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 				}
 				c.fenceRunLocked(run, taskFence)
 				waitHandles = append(waitHandles, handle)
-				references = append(references, scopeRef.CurrentNode)
+				if !run.completion.committed() || run.completionSourceRetained {
+					references = append(references, scopeRef.CurrentNode)
+				}
 			}
 
 			if err := drainTaskControllerWorkLocked(c, selector.TaskID, taskFence, &references, &admissionWaits, &launchRuns); err != nil {
 				return err
 			}
 			if !selectedExact && len(selection.Finalizing) == 0 && len(launchRuns) != 0 {
-				if err := c.persistUserInterrupt(ctx, references); err != nil {
-					c.rollbackTaskInterruptLocked(taskFence)
-					return err
-				}
-				persisted = true
+				return nil
 			}
 			return nil
 		})
@@ -263,11 +270,6 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 				c.rollbackTaskInterruptLocked(taskFence)
 				return err
 			}
-			if err := c.persistUserInterrupt(ctx, references); err != nil {
-				c.rollbackTaskInterruptLocked(taskFence)
-				return err
-			}
-			persisted = true
 			return nil
 		}
 		if err != nil {
@@ -282,6 +284,7 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 		stopHandles:    stopHandles,
 		waitHandles:    waitHandles,
 		references:     references,
+		selectedRuns:   selectedRuns,
 		launchRuns:     launchRuns,
 		admissionWaits: admissionWaits,
 		taskFence:      taskFence,
@@ -289,19 +292,89 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 	})
 }
 
+func (c *CurrentNodeController) rollbackSelectedInterruptLocked(runIDs []currentNodeRunID) {
+	for _, runID := range runIDs {
+		run := c.runs[runID]
+		if run == nil {
+			continue
+		}
+		run.stop = currentNodeRunStopNone
+		for _, successorID := range run.successors {
+			if successor := c.runs[successorID]; successor != nil {
+				successor.stop = currentNodeRunStopNone
+			}
+		}
+	}
+}
+
 func (c *CurrentNodeController) persistUserInterrupt(
 	ctx context.Context,
 	references []workflow.CurrentNodeReference,
 ) error {
+	if len(references) == 0 {
+		return nil
+	}
 	detail := workflow.NewCurrentNodeInterruptionDetail(string(workflow.CurrentNodeInterruptionReasonUserInterrupt), nil)
-	_, err := interruptCurrentNodeReferences(
+	c.mu.Lock()
+	targets, err := c.currentSchedulingTargetsLocked(references)
+	c.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	result, err := c.store.InterruptCurrentNodeSchedulingSet(
 		ctx,
-		c.store.InterruptCurrentNode,
-		references,
+		references[0].TaskID,
+		targets,
 		workflow.CurrentNodeInterruptionReasonUserInterrupt,
 		detail,
 	)
+	if result.NotificationError != nil {
+		slog.Warn(
+			"publish workflow Current-Node interruption event failed",
+			"task_id", references[0].TaskID,
+			"error", result.NotificationError,
+		)
+	}
 	return err
+}
+
+func (c *CurrentNodeController) currentSchedulingTargetsLocked(
+	references []workflow.CurrentNodeReference,
+) ([]workflowstore.CurrentNodeSchedulingTarget, error) {
+	if len(references) == 0 {
+		return nil, errors.New("workflow interruption requires Current-Node references")
+	}
+	targets := make([]workflowstore.CurrentNodeSchedulingTarget, 0, len(references))
+	seen := make(map[workflow.CurrentNodeReferenceKey]struct{}, len(references))
+	for _, reference := range references {
+		key, err := reference.Key()
+		if err != nil {
+			return nil, err
+		}
+		if _, duplicate := seen[key]; duplicate {
+			continue
+		}
+		seen[key] = struct{}{}
+		run, exists := c.currentRunLocked(key)
+		if !exists || !run.reference.Equal(reference) {
+			return nil, fmt.Errorf("Current Node %v has no current Run generation", reference)
+		}
+		switch run.expectedScheduling {
+		case workflow.CurrentNodeSchedulingReady, workflow.CurrentNodeSchedulingAdmitted:
+		default:
+			return nil, fmt.Errorf(
+				"Current Node %v Run %d has invalid expected scheduling %q",
+				reference,
+				run.id.sequence,
+				run.expectedScheduling,
+			)
+		}
+		targets = append(targets, workflowstore.CurrentNodeSchedulingTarget{
+			Reference: reference,
+			Expected:  run.expectedScheduling,
+		})
+	}
+	return targets, nil
 }
 
 func (c *CurrentNodeController) rollbackTaskInterruptLocked(fence *currentNodeInterruptFence) {

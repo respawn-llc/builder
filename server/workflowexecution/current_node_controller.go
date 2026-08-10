@@ -108,9 +108,12 @@ type CurrentNodeController struct {
 		ApplyManualMove(context.Context, workflowstore.ManualMovePreparation, *workflowstore.ExecutionTargetCandidate) (workflowstore.ManualMoveResult, error)
 		InterruptAdmittedCurrentNode(context.Context, workflow.CurrentNodeReference, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) error
 		InterruptCurrentNode(context.Context, workflow.CurrentNodeReference, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) error
+		InterruptCurrentNodeSchedulingSet(context.Context, workflow.TaskID, []workflowstore.CurrentNodeSchedulingTarget, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) (workflowstore.CurrentNodeSchedulingInterruptionResult, error)
 		RecoverExecutableCurrentNodes(context.Context, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) ([]workflow.CurrentNodeReference, error)
 		ResolveIdleExecutableCurrentNode(context.Context, workflowstore.IdleCurrentNodeSelector) (workflow.CurrentNode, error)
 		CompleteCurrentNode(context.Context, workflowstore.CurrentNodeCompletionRequest) (workflowstore.CurrentNodeCompletionResult, error)
+		PrepareCurrentNodeCompletion(context.Context, workflowstore.CurrentNodeCompletionRequest) (workflowstore.PreparedCurrentNodeCompletion, error)
+		PublishCurrentNodeCompletion(context.Context, workflow.TaskID, workflowstore.CurrentNodeCompletionResult) error
 		ValidateCurrentNodeSessionBinding(context.Context, runtimeids.SessionID, workflow.CurrentNodeReference) error
 		TaskExecutionScope(context.Context, workflow.TaskID) (workflowstore.TaskExecutionScope, error)
 	}
@@ -151,9 +154,12 @@ func NewCurrentNodeController(
 		ApplyManualMove(context.Context, workflowstore.ManualMovePreparation, *workflowstore.ExecutionTargetCandidate) (workflowstore.ManualMoveResult, error)
 		InterruptAdmittedCurrentNode(context.Context, workflow.CurrentNodeReference, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) error
 		InterruptCurrentNode(context.Context, workflow.CurrentNodeReference, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) error
+		InterruptCurrentNodeSchedulingSet(context.Context, workflow.TaskID, []workflowstore.CurrentNodeSchedulingTarget, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) (workflowstore.CurrentNodeSchedulingInterruptionResult, error)
 		RecoverExecutableCurrentNodes(context.Context, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) ([]workflow.CurrentNodeReference, error)
 		ResolveIdleExecutableCurrentNode(context.Context, workflowstore.IdleCurrentNodeSelector) (workflow.CurrentNode, error)
 		CompleteCurrentNode(context.Context, workflowstore.CurrentNodeCompletionRequest) (workflowstore.CurrentNodeCompletionResult, error)
+		PrepareCurrentNodeCompletion(context.Context, workflowstore.CurrentNodeCompletionRequest) (workflowstore.PreparedCurrentNodeCompletion, error)
+		PublishCurrentNodeCompletion(context.Context, workflow.TaskID, workflowstore.CurrentNodeCompletionResult) error
 		ValidateCurrentNodeSessionBinding(context.Context, runtimeids.SessionID, workflow.CurrentNodeReference) error
 		TaskExecutionScope(context.Context, workflow.TaskID) (workflowstore.TaskExecutionScope, error)
 	},
@@ -319,8 +325,6 @@ func (c *CurrentNodeController) AcceptWorkflowQuestion(
 
 func (c *CurrentNodeController) completeLiveCurrentNode(ctx context.Context, req workflowruntime.CompletionRequest) (workflowstore.CurrentNodeCompletionResult, error) {
 	var completed workflowstore.CurrentNodeCompletionResult
-	var starts []currentNodeQueuedStart
-	var pending []*pendingCurrentNodeAssignmentSteer
 	c.mu.Lock()
 	initial, exists := c.runByScopeLocked(req.ScopeID)
 	c.mu.Unlock()
@@ -369,8 +373,7 @@ func (c *CurrentNodeController) completeLiveCurrentNode(ctx context.Context, req
 				return err
 			}
 			c.mu.Unlock()
-			var completionErr error
-			completed, completionErr = c.store.CompleteCurrentNode(ctx, workflowstore.CurrentNodeCompletionRequest{
+			prepared, completionErr := c.store.PrepareCurrentNodeCompletion(ctx, workflowstore.CurrentNodeCompletionRequest{
 				Source:       exact.reference,
 				TransitionID: req.TransitionID,
 				OutputValues: req.OutputValues,
@@ -379,30 +382,16 @@ func (c *CurrentNodeController) completeLiveCurrentNode(ctx context.Context, req
 			if completionErr != nil {
 				return completionErr
 			}
+			completed = prepared.Result()
 			intents, intentErr := currentNodeAutomaticIntents(completed.AutomaticIntents)
 			if intentErr != nil {
-				return intentErr
+				return errors.Join(intentErr, prepared.Rollback())
 			}
-			starts = automaticQueuedStarts(intents)
-			c.mu.Lock()
-			successorRuns, stageErr := c.stageSuccessorRunsLocked(starts, exact.id, currentNodeRunHeld)
-			if stageErr == nil {
-				exact.successors = append([]currentNodeRunID(nil), successorRuns...)
-				exact.completionSourceRetained = completed.PendingApproval != nil
-				agentCompletion := req.SessionID != nil ||
-					exact.policy == currentNodeAdmissionAutomaticAgent
-				if agentCompletion && completed.PostCompletionEligible {
-					exact.completion = currentNodeRunCompletionAgentPostTurnPending
-				} else if agentCompletion {
-					exact.completion = currentNodeRunCompletionAgentPostTurnSucceeded
-				} else {
-					exact.completion = currentNodeRunCompletionScriptSucceeded
-				}
-			}
-			c.mu.Unlock()
-			if stageErr != nil {
-				return stageErr
-			}
+			starts := automaticQueuedStarts(intents)
+			agentCompletion := completed.PostCompletionEligible ||
+				req.SessionID != nil ||
+				exact.policy == currentNodeAdmissionAutomaticAgent
+			var postTurn *currentNodeRunPostTurn
 			if completed.PostCompletionEligible {
 				analysis := workflow.SessionReuseAnalysisInput{}
 				if completed.SessionReuse != nil {
@@ -415,49 +404,67 @@ func (c *CurrentNodeController) completeLiveCurrentNode(ctx context.Context, req
 					value := *analysis.CompletedCurrentNode.SessionID
 					sourceSessionID = &value
 				}
-				c.mu.Lock()
-				exact.postTurn = &currentNodeRunPostTurn{
+				postTurn = &currentNodeRunPostTurn{
 					sessionID:      sourceSessionID,
 					classification: classification,
 				}
-				c.mu.Unlock()
-				return nil
 			}
-			if exact.completion == currentNodeRunCompletionScriptSucceeded {
-				steered, steerErr := c.steerStartsAssignments(ctx, starts)
-				if steerErr != nil {
-					return steerErr
-				}
-				outcome := waitCurrentNodeAssignmentSteers(ctx, steered)
-				if outcome.err != nil {
-					return outcome.err
-				}
-				c.mu.Lock()
-				for index, id := range successorRuns {
-					c.queueRunLocked(id, steered[index].assignmentSteer)
-				}
-				c.mu.Unlock()
-				starts = nil
-				return nil
-			}
-			starts, pending = pendingCurrentNodeAssignmentStarts(starts)
 			c.mu.Lock()
-			for index, id := range successorRuns {
-				if run := c.runs[id]; run != nil {
-					run.assignmentSteer = starts[index].assignmentSteer
-				}
+			current, stillLive := c.runByScopeLocked(req.ScopeID)
+			if !stillLive || current.id != exact.id || current.stopping() {
+				c.mu.Unlock()
+				return errors.Join(sessionruntime.ErrExecutionNoLongerLive, prepared.Rollback())
 			}
+			successorRuns, stageErr := c.prepareSuccessorRunsLocked(starts, exact.id)
+			if stageErr != nil {
+				c.mu.Unlock()
+				return errors.Join(stageErr, prepared.Rollback())
+			}
+			if err := c.validatePreparedSuccessorRunsLocked(exact.id, successorRuns); err != nil {
+				c.discardStagedRunsLocked(successorRuns)
+				c.mu.Unlock()
+				return errors.Join(err, prepared.Rollback())
+			}
+			if err := prepared.Commit(); err != nil {
+				c.discardStagedRunsLocked(successorRuns)
+				c.mu.Unlock()
+				return err
+			}
+			exact.successors = append([]currentNodeRunID(nil), successorRuns...)
+			exact.completionSourceRetained = completed.PendingApproval != nil
+			exact.postTurn = postTurn
+			successorPhase := currentNodeRunHeld
+			if agentCompletion && completed.PostCompletionEligible {
+				exact.completion = currentNodeRunCompletionAgentPostTurnPending
+			} else if agentCompletion {
+				exact.completion = currentNodeRunCompletionAgentPostTurnSucceeded
+			} else {
+				exact.completion = currentNodeRunCompletionScriptSucceeded
+				successorPhase = currentNodeRunQueued
+			}
+			c.installPreparedSuccessorRunsLocked(
+				exact.id,
+				successorRuns,
+				exact.completionSourceRetained,
+				successorPhase,
+			)
 			c.mu.Unlock()
+			if err := c.store.PublishCurrentNodeCompletion(ctx, exact.reference.TaskID, completed); err != nil {
+				slog.Warn(
+					"publish workflow Current-Node completion event failed",
+					"task_id", exact.reference.TaskID,
+					"node_id", exact.reference.NodeID,
+					"error", err,
+				)
+			}
+			if successorPhase == currentNodeRunQueued {
+				c.wakeAdmissionWorker()
+			}
 			return nil
 		}); err != nil {
-			exactErr := err
-			resolveErr := c.resolvePendingCurrentNodeAssignmentSteers(ctx, starts, pending)
-			return errors.Join(exactErr, resolveErr)
+			return err
 		}
-		if completed.PostCompletionEligible {
-			return nil
-		}
-		return c.resolvePendingCurrentNodeAssignmentSteers(ctx, starts, pending)
+		return nil
 	})
 	if err != nil {
 		return workflowstore.CurrentNodeCompletionResult{}, err
@@ -823,6 +830,10 @@ func (c *CurrentNodeController) FailCurrentNodeScope(
 			c.mu.Unlock()
 			return errors.New("current node workflow controller is closed")
 		}
+		if err := c.ensureTaskAvailableLocked(live.reference.TaskID); err != nil {
+			c.mu.Unlock()
+			return err
+		}
 		if c.taskInterruptActiveLocked(live.reference.TaskID) {
 			c.mu.Unlock()
 			return ErrTaskExecutionNotQuiescent
@@ -834,25 +845,23 @@ func (c *CurrentNodeController) FailCurrentNodeScope(
 		lease = *live.lease
 		if live.completion.committed() {
 			sourceRetained := live.completionSourceRetained
-			references := make([]workflow.CurrentNodeReference, 0, len(live.successors))
-			for _, id := range live.successors {
-				if successor := c.runs[id]; successor != nil {
-					references = append(references, successor.reference)
-				}
+			var targets []workflowstore.CurrentNodeSchedulingTarget
+			if sourceRetained {
+				targets = []workflowstore.CurrentNodeSchedulingTarget{{
+					Reference: live.reference,
+					Expected:  live.expectedScheduling,
+				}}
+			} else {
+				targets = c.successorSchedulingTargetsLocked(live)
 			}
 			c.mu.Unlock()
-			var interrupted []workflow.CurrentNodeReference
+			var result workflowstore.CurrentNodeSchedulingInterruptionResult
 			var err error
-			if sourceRetained {
-				err = c.store.InterruptAdmittedCurrentNode(ctx, live.reference, reason, detail)
-				if err == nil {
-					interrupted = []workflow.CurrentNodeReference{live.reference}
-				}
-			} else {
-				interrupted, err = interruptCurrentNodeReferences(
+			if len(targets) != 0 {
+				result, err = c.store.InterruptCurrentNodeSchedulingSet(
 					ctx,
-					c.store.InterruptCurrentNode,
-					references,
+					live.reference.TaskID,
+					targets,
 					reason,
 					detail,
 				)
@@ -865,6 +874,13 @@ func (c *CurrentNodeController) FailCurrentNodeScope(
 				c.mu.Unlock()
 				return err
 			}
+			if result.NotificationError != nil {
+				slog.Warn(
+					"publish workflow Current-Node interruption event failed",
+					"task_id", live.reference.TaskID,
+					"error", result.NotificationError,
+				)
+			}
 			c.mu.Lock()
 			current, stillLive := c.runByScopeLocked(scopeID)
 			if !stillLive || current.id != live.id {
@@ -874,7 +890,7 @@ func (c *CurrentNodeController) FailCurrentNodeScope(
 			c.removeSuccessorsLocked(current)
 			current.stop = currentNodeRunStopInterrupted
 			c.mu.Unlock()
-			for _, reference := range interrupted {
+			for _, reference := range result.Interrupted {
 				c.publishPendingInterruptedCurrentNode(ctx, reference, reason)
 			}
 			return nil
@@ -926,13 +942,18 @@ func (c *CurrentNodeController) ExecutionFinalized(scope sessionruntime.Executio
 	var completion currentNodeRunCompletion
 	var successorRuns []currentNodeRunID
 	stopping := false
+	fatal := false
 	if isLive {
 		completion = live.completion
 		successorRuns = append([]currentNodeRunID(nil), live.successors...)
 		stopping = live.stopping()
+		fatal = live.callbackErr != nil
 	}
 	closed := c.closed
 	c.mu.Unlock()
+	if fatal {
+		return
+	}
 	if !closed {
 		c.wakeAdmissionWorker()
 	}
@@ -998,54 +1019,22 @@ func (c *CurrentNodeController) finalizeAgentSuccessors(
 	predecessorID currentNodeRunID,
 	successorRuns []currentNodeRunID,
 ) {
-	waitCtx, cancel := context.WithTimeout(context.Background(), interruptCleanupTimeout)
-	defer cancel()
-	for _, id := range successorRuns {
-		c.mu.Lock()
-		run := c.runs[id]
-		if run == nil {
-			c.mu.Unlock()
-			continue
-		}
-		start := currentNodeQueuedStart{
-			reference:          run.reference,
-			preparation:        run.preparation,
-			taskPromptDelivery: run.taskPromptDelivery,
-			assignmentSteer:    run.assignmentSteer,
-			policy:             run.policy,
-		}
-		c.mu.Unlock()
-
-		assignment := start.assignmentSteer
-		var err error
-		if assignment == nil {
-			assignment, err = c.steerAssignment(waitCtx, start.reference)
-		}
-		if err == nil {
-			assignment, err = resolvedCurrentNodeAssignmentSteer(waitCtx, assignment)
-		}
-		if err != nil {
-			recoveryErr := c.recoverCurrentNodeStartFailures(waitCtx, []currentNodeQueuedStart{start}, false, err)
-			c.mu.Lock()
-			predecessor := c.runs[predecessorID]
-			if predecessor == nil {
-				c.mu.Unlock()
-				return
-			}
-			if recoveryErr != nil {
-				c.recordLifecycleFatalLocked(predecessor, errors.Join(err, recoveryErr))
-				c.mu.Unlock()
-				return
-			}
-			c.removeRunLocked(id)
-			c.mu.Unlock()
-			continue
-		}
-		c.mu.Lock()
-		c.queueRunLocked(id, assignment)
-		c.mu.Unlock()
-	}
 	c.mu.Lock()
+	predecessor := c.runs[predecessorID]
+	if predecessor == nil {
+		c.mu.Unlock()
+		return
+	}
+	for _, id := range successorRuns {
+		run := c.runs[id]
+		if run == nil || run.predecessor == nil || *run.predecessor != predecessorID {
+			panic(fmt.Sprintf("Agent predecessor Run %d lost successor Run %d", predecessorID.sequence, id.sequence))
+		}
+		if run.phase != currentNodeRunHeld {
+			panic(fmt.Sprintf("Agent successor Run %d has phase %d, want held", id.sequence, run.phase))
+		}
+		c.queueRunLocked(id, run.assignmentSteer)
+	}
 	c.removeRunLocked(predecessorID)
 	c.mu.Unlock()
 	c.wakeAdmissionWorker()
@@ -1064,36 +1053,36 @@ func (c *CurrentNodeController) interruptCommittedSuccessors(
 		c.mu.Unlock()
 		return sessionruntime.ErrExecutionNoLongerLive
 	}
-	references := make([]workflow.CurrentNodeReference, 0, len(predecessor.successors))
-	for _, id := range predecessor.successors {
-		if successor := c.runs[id]; successor != nil {
-			references = append(references, successor.reference)
-		}
-	}
 	sourceRetained := predecessor.completionSourceRetained
 	sourceReference := predecessor.reference
 	taskID := predecessor.reference.TaskID
+	targets := c.successorSchedulingTargetsLocked(predecessor)
+	if sourceRetained {
+		targets = []workflowstore.CurrentNodeSchedulingTarget{{
+			Reference: sourceReference,
+			Expected:  predecessor.expectedScheduling,
+		}}
+	}
 	c.mu.Unlock()
 	interrupted, err := RunTaskMutation(ctx, c.taskMutations, taskID, func(ctx context.Context) ([]workflow.CurrentNodeReference, error) {
-		if sourceRetained {
-			err := c.store.InterruptAdmittedCurrentNode(
-				ctx,
-				sourceReference,
-				reason,
-				workflow.NewCurrentNodeInterruptionDetail(string(reason), cause),
-			)
-			if err != nil {
-				return nil, err
-			}
-			return []workflow.CurrentNodeReference{sourceReference}, nil
+		if len(targets) == 0 {
+			return nil, nil
 		}
-		return interruptCurrentNodeReferences(
+		result, err := c.store.InterruptCurrentNodeSchedulingSet(
 			ctx,
-			c.store.InterruptCurrentNode,
-			references,
+			taskID,
+			targets,
 			reason,
 			workflow.NewCurrentNodeInterruptionDetail(string(reason), cause),
 		)
+		if result.NotificationError != nil {
+			slog.Warn(
+				"publish workflow Current-Node interruption event failed",
+				"task_id", taskID,
+				"error", result.NotificationError,
+			)
+		}
+		return result.Interrupted, err
 	})
 	if err != nil {
 		return err

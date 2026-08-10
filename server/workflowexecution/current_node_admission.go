@@ -243,6 +243,15 @@ retryAdmission:
 			c.cancelLaunchingLease(runID, next.ScopeID())
 			return err
 		}
+		c.mu.Lock()
+		run = c.runs[runID]
+		if run == nil || !run.launching() || run.lease == nil || run.lease.ScopeID() != next.ScopeID() {
+			c.mu.Unlock()
+			next.Cancel()
+			return sessionruntime.ErrExecutionNoLongerLive
+		}
+		run.expectedScheduling = workflow.CurrentNodeSchedulingAdmitted
+		c.mu.Unlock()
 		lease = next
 		return nil
 	}); err != nil {

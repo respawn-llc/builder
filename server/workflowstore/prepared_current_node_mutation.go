@@ -4,9 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"log/slog"
 	"sync"
 
 	"core/server/metadata/sqlitegen"
+	"core/server/metadata/sqlitelifecyclegen"
 	"core/server/workflow"
 )
 
@@ -27,12 +29,27 @@ type PreparedCurrentNodeMutation interface {
 	Rollback() error
 }
 
+type PreparedCurrentNodeCompletion interface {
+	Result() CurrentNodeCompletionResult
+	Commit() error
+	Rollback() error
+}
+
 type preparedCurrentNodeMutation struct {
 	mu       sync.Mutex
 	ctx      context.Context
 	tx       *sql.Tx
 	result   PreparedCurrentNodeMutationResult
 	consumed bool
+}
+
+type preparedCurrentNodeCompletion struct {
+	mu         sync.Mutex
+	ctx        context.Context
+	connection *sql.Conn
+	lifecycle  *sqlitelifecyclegen.Queries
+	result     CurrentNodeCompletionResult
+	consumed   bool
 }
 
 func (s *Store) prepareCurrentNodeMutation(
@@ -81,6 +98,20 @@ func newPreparedCurrentNodeMutation(
 	}
 }
 
+func newPreparedCurrentNodeCompletion(
+	ctx context.Context,
+	connection *sql.Conn,
+	lifecycle *sqlitelifecyclegen.Queries,
+	result CurrentNodeCompletionResult,
+) PreparedCurrentNodeCompletion {
+	return &preparedCurrentNodeCompletion{
+		ctx:        ctx,
+		connection: connection,
+		lifecycle:  lifecycle,
+		result:     cloneCurrentNodeCompletionResult(result),
+	}
+}
+
 func (m *preparedCurrentNodeMutation) Result() PreparedCurrentNodeMutationResult {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -110,6 +141,54 @@ func (m *preparedCurrentNodeMutation) Rollback() error {
 	return m.tx.Rollback()
 }
 
+func (m *preparedCurrentNodeCompletion) Result() CurrentNodeCompletionResult {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return cloneCurrentNodeCompletionResult(m.result)
+}
+
+func (m *preparedCurrentNodeCompletion) Commit() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.consumed {
+		return ErrPreparedCurrentNodeMutationConsumed
+	}
+	m.consumed = true
+	if err := context.Cause(m.ctx); err != nil {
+		return errors.Join(err, m.rollbackAndClose())
+	}
+	if err := m.lifecycle.Commit(m.ctx); err != nil {
+		return errors.Join(err, m.rollbackAndClose())
+	}
+	m.restoreAndClose()
+	return nil
+}
+
+func (m *preparedCurrentNodeCompletion) Rollback() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.consumed {
+		return ErrPreparedCurrentNodeMutationConsumed
+	}
+	m.consumed = true
+	return m.rollbackAndClose()
+}
+
+func (m *preparedCurrentNodeCompletion) rollbackAndClose() error {
+	err := m.lifecycle.Rollback(context.Background())
+	m.restoreAndClose()
+	return err
+}
+
+func (m *preparedCurrentNodeCompletion) restoreAndClose() {
+	if err := m.lifecycle.SetBusyTimeout5Seconds(context.Background()); err != nil {
+		slog.Error("restore workflow completion SQLite busy timeout", "error", err)
+	}
+	if err := m.connection.Close(); err != nil {
+		slog.Error("close workflow completion SQLite connection", "error", err)
+	}
+}
+
 func clonePreparedCurrentNodeMutationResult(result PreparedCurrentNodeMutationResult) PreparedCurrentNodeMutationResult {
 	return PreparedCurrentNodeMutationResult{
 		Mutation:                      cloneCurrentNodeMutationResult(result.Mutation),
@@ -122,6 +201,68 @@ func clonePreparedCurrentNodeMutationResult(result PreparedCurrentNodeMutationRe
 			),
 		},
 	}
+}
+
+func cloneCurrentNodeCompletionResult(result CurrentNodeCompletionResult) CurrentNodeCompletionResult {
+	cloned := result
+	cloned.Mutation = cloneCurrentNodeMutationResult(result.Mutation)
+	cloned.AutomaticIntents = append([]CurrentNodeAutomaticIntent(nil), result.AutomaticIntents...)
+	if result.PendingApproval != nil {
+		approval := *result.PendingApproval
+		approval.SourceSessionID = clonePendingApprovalSessionID(result.PendingApproval.SourceSessionID)
+		approval.OutputValues = cloneCurrentNodeOutputValues(result.PendingApproval.OutputValues)
+		approval.Branches = make([]workflow.PendingApprovalBranch, 0, len(result.PendingApproval.Branches))
+		for _, branch := range result.PendingApproval.Branches {
+			clonedBranch := branch
+			clonedBranch.Target.CurrentNode = cloneCurrentNodes([]workflow.CurrentNode{branch.Target.CurrentNode})[0]
+			clonedBranch.EffectiveEdge = branch.EffectiveEdge.Canonical()
+			clonedBranch.ContextSourceResolution.SessionID = clonePendingApprovalSessionID(
+				branch.ContextSourceResolution.SessionID,
+			)
+			approval.Branches = append(approval.Branches, clonedBranch)
+		}
+		cloned.PendingApproval = &approval
+	}
+	if result.SessionReuse != nil {
+		reuse := *result.SessionReuse
+		reuse.Workflow = cloneWorkflowDefinition(result.SessionReuse.Workflow)
+		reuse.AcceptedBranches = make([]workflow.Edge, 0, len(result.SessionReuse.AcceptedBranches))
+		for _, edge := range result.SessionReuse.AcceptedBranches {
+			reuse.AcceptedBranches = append(reuse.AcceptedBranches, edge.Canonical())
+		}
+		reuse.RetainedAssociations = append([]workflow.SessionReuseAssociation(nil), result.SessionReuse.RetainedAssociations...)
+		reuse.CompletedCurrentNode = cloneCurrentNodes([]workflow.CurrentNode{result.SessionReuse.CompletedCurrentNode})[0]
+		cloned.SessionReuse = &reuse
+	}
+	return cloned
+}
+
+func cloneWorkflowDefinition(definition workflow.Definition) workflow.Definition {
+	cloned := definition
+	cloned.NodeGroups = make([]workflow.NodeGroup, 0, len(definition.NodeGroups))
+	for _, group := range definition.NodeGroups {
+		group.MemberNodeIDs = append([]workflow.NodeID(nil), group.MemberNodeIDs...)
+		cloned.NodeGroups = append(cloned.NodeGroups, group)
+	}
+	cloned.Nodes = make([]workflow.Node, 0, len(definition.Nodes))
+	for _, node := range definition.Nodes {
+		value, err := workflow.NewNode(node.Identity(), node.Kind(), workflow.NodeFields{
+			SubagentRole:       workflow.NodeSubagentRole(node),
+			CompletionMode:     workflow.NodeCompletionMode(node),
+			JoinInputProviders: workflow.NodeJoinInputProviders(node),
+			ScriptPath:         workflow.NodeScriptPath(node),
+		})
+		if err != nil {
+			panic(err)
+		}
+		cloned.Nodes = append(cloned.Nodes, value)
+	}
+	cloned.TransitionGroups = append([]workflow.TransitionGroup(nil), definition.TransitionGroups...)
+	cloned.Edges = make([]workflow.Edge, 0, len(definition.Edges))
+	for _, edge := range definition.Edges {
+		cloned.Edges = append(cloned.Edges, edge.Canonical())
+	}
+	return cloned
 }
 
 func cloneCurrentNodeMutationResult(result workflow.CurrentNodeMutationResult) workflow.CurrentNodeMutationResult {

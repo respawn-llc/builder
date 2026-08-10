@@ -3358,6 +3358,28 @@ WHERE task_id = sqlc.arg(task_id)
   AND transition_branch_key = sqlc.arg(transition_branch_key)
   AND scheduling_state = 'admitted';
 
+-- name: InterruptSerialReadyCurrentNode :execrows
+UPDATE task_current_nodes
+SET scheduling_state = 'interrupted',
+    interruption_reason = sqlc.arg(interruption_reason),
+    interruption_detail_json = sqlc.arg(interruption_detail_json),
+    interrupted_at_unix_ms = sqlc.arg(interrupted_at_unix_ms)
+WHERE task_id = sqlc.arg(task_id)
+  AND node_id = sqlc.arg(node_id)
+  AND transition_branch_key IS NULL
+  AND scheduling_state = 'ready';
+
+-- name: InterruptBranchReadyCurrentNode :execrows
+UPDATE task_current_nodes
+SET scheduling_state = 'interrupted',
+    interruption_reason = sqlc.arg(interruption_reason),
+    interruption_detail_json = sqlc.arg(interruption_detail_json),
+    interrupted_at_unix_ms = sqlc.arg(interrupted_at_unix_ms)
+WHERE task_id = sqlc.arg(task_id)
+  AND node_id = sqlc.arg(node_id)
+  AND transition_branch_key = sqlc.arg(transition_branch_key)
+  AND scheduling_state = 'ready';
+
 -- name: InterruptSerialCurrentNode :execrows
 UPDATE task_current_nodes
 SET scheduling_state = 'interrupted',

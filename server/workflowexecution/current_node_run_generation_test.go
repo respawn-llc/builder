@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"os/exec"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -448,6 +447,266 @@ func TestCurrentNodeControllerSelfLoopSuccessorCoexistsWithExactPredecessor(t *t
 	}
 }
 
+func TestCurrentNodeControllerCompletionCommitFailurePreservesExactPredecessor(t *testing.T) {
+	shellPath, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("sh executable unavailable: %v", err)
+	}
+	source := currentNodeReferenceForControllerTest(t, "task-completion-commit-failure", "node-source")
+	successor := currentNodeReferenceForControllerTest(t, "task-completion-commit-failure", "node-successor")
+	commitErr := errors.New("injected completion commit failure")
+	store := &currentNodeControllerStore{
+		completion: workflowstore.CurrentNodeCompletionResult{
+			Mutation: workflow.CurrentNodeMutationResult{
+				Removed: []workflow.CurrentNodeReference{source},
+				Created: []workflow.CurrentNode{{
+					Reference:  successor,
+					Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
+				}},
+			},
+			AutomaticIntents: []workflowstore.CurrentNodeAutomaticIntent{{
+				CurrentNode: successor,
+				NodeKind:    workflow.NodeKindAgent,
+			}},
+		},
+		completionCommitErr: commitErr,
+	}
+	var controller *CurrentNodeController
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
+			controller.ExecutionFinalized(scope)
+		}),
+	})
+	runner := &recordingScriptRunner{
+		authority: authority,
+		command: sessionruntime.ScriptCommand{
+			Path: shellPath,
+			Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
+		},
+		started: make(chan workflow.CurrentNodeReference, 2),
+	}
+	controller = newCurrentNodeControllerForTest(t, store, runner, authority, 1)
+	t.Cleanup(func() {
+		if err := controller.Close(); err != nil {
+			t.Errorf("close controller: %v", err)
+		}
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+
+	if err := startCurrentNodeForControllerTest(context.Background(), controller, store, source); err != nil {
+		t.Fatalf("start predecessor: %v", err)
+	}
+	<-runner.started
+	waitForRunningCurrentNode(t, authority, source)
+	scopeID := singleLiveScope(t, controller, source)
+	_, err = controller.CompleteCurrentNode(context.Background(), workflowruntime.CompletionRequest{
+		ScopeID:      scopeID,
+		TransitionID: "next",
+	})
+	if !errors.Is(err, commitErr) {
+		t.Fatalf("completion error = %v, want %v", err, commitErr)
+	}
+	snapshot := controller.Snapshot()
+	if !hasLiveCurrentNode(snapshot, source) || len(snapshot.HeldIntents) != 0 {
+		t.Fatalf("completion commit failure ownership = %+v, want exact predecessor and no successor", snapshot)
+	}
+}
+
+func TestCurrentNodeControllerScriptSelfLoopQueuesFreshGenerationBeforePredecessorCleanup(t *testing.T) {
+	shellPath, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("sh executable unavailable: %v", err)
+	}
+	tests := []struct {
+		name      string
+		branchKey *workflow.TransitionBranchKey
+	}{
+		{name: "serial"},
+		{name: "branch", branchKey: func() *workflow.TransitionBranchKey {
+			value := workflow.TransitionBranchKey("branch-a")
+			return &value
+		}()},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			reference, err := workflow.NewCurrentNodeReference(
+				workflow.TaskID("task-script-self-loop-"+test.name),
+				workflow.NodeID("node-script"),
+				test.branchKey,
+			)
+			if err != nil {
+				t.Fatalf("NewCurrentNodeReference: %v", err)
+			}
+			store := &currentNodeControllerStore{completion: workflowstore.CurrentNodeCompletionResult{
+				Mutation: workflow.CurrentNodeMutationResult{
+					Removed: []workflow.CurrentNodeReference{reference},
+					Created: []workflow.CurrentNode{{
+						Reference:  reference,
+						Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
+					}},
+				},
+				AutomaticIntents: []workflowstore.CurrentNodeAutomaticIntent{{
+					CurrentNode: reference,
+					NodeKind:    workflow.NodeKindScript,
+				}},
+			}}
+			var controller *CurrentNodeController
+			authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+				ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
+					controller.ExecutionFinalized(scope)
+				}),
+			})
+			runner := &recordingScriptRunner{
+				authority: authority,
+				command: sessionruntime.ScriptCommand{
+					Path: shellPath,
+					Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
+				},
+				started: make(chan workflow.CurrentNodeReference, 2),
+			}
+			controller = newCurrentNodeControllerForTest(t, store, runner, authority, 1)
+			t.Cleanup(func() {
+				if err := controller.Close(); err != nil {
+					t.Errorf("close controller: %v", err)
+				}
+				if err := authority.Close(context.Background()); err != nil {
+					t.Errorf("close authority: %v", err)
+				}
+			})
+
+			if err := startCurrentNodeForControllerTest(context.Background(), controller, store, reference); err != nil {
+				t.Fatalf("start predecessor: %v", err)
+			}
+			<-runner.started
+			waitForRunningCurrentNode(t, authority, reference)
+			scopeID := singleLiveScope(t, controller, reference)
+			if _, err := controller.CompleteCurrentNode(context.Background(), workflowruntime.CompletionRequest{
+				ScopeID:      scopeID,
+				TransitionID: "loop",
+			}); err != nil {
+				t.Fatalf("complete predecessor: %v", err)
+			}
+			snapshot := controller.Snapshot()
+			if !hasLiveCurrentNode(snapshot, reference) ||
+				!hasAutomaticCurrentNodeIntent(snapshot, reference) {
+				t.Fatalf("Script self-loop ownership = %+v, want exact predecessor and queued successor", snapshot)
+			}
+			select {
+			case started := <-runner.started:
+				t.Fatalf("Script self-loop successor %v started before predecessor cleanup", started)
+			case <-time.After(50 * time.Millisecond):
+			}
+			handle, live := authority.ExecutionByScope(scopeID)
+			if !live {
+				t.Fatal("Script self-loop predecessor retired before explicit cleanup")
+			}
+			if err := handle.Stop(context.Background()); err != nil {
+				t.Fatalf("stop predecessor: %v", err)
+			}
+			select {
+			case started := <-runner.started:
+				if !started.Equal(reference) {
+					t.Fatalf("Script self-loop successor = %v, want %v", started, reference)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("Script self-loop successor did not start after predecessor cleanup")
+			}
+		})
+	}
+}
+
+func TestCurrentNodeControllerSelfLoopCommitFailurePreservesPredecessorGeneration(t *testing.T) {
+	tests := []struct {
+		name      string
+		branchKey *workflow.TransitionBranchKey
+	}{
+		{name: "serial"},
+		{name: "branch", branchKey: func() *workflow.TransitionBranchKey {
+			value := workflow.TransitionBranchKey("branch-a")
+			return &value
+		}()},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			reference, err := workflow.NewCurrentNodeReference(
+				workflow.TaskID("task-self-loop-rollback-"+test.name),
+				workflow.NodeID("node-agent"),
+				test.branchKey,
+			)
+			if err != nil {
+				t.Fatalf("NewCurrentNodeReference: %v", err)
+			}
+			commitErr := errors.New("injected self-loop commit failure")
+			store := &currentNodeControllerStore{
+				completion: workflowstore.CurrentNodeCompletionResult{
+					Mutation: workflow.CurrentNodeMutationResult{
+						Removed: []workflow.CurrentNodeReference{reference},
+						Created: []workflow.CurrentNode{{
+							Reference:  reference,
+							Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
+						}},
+					},
+					AutomaticIntents: []workflowstore.CurrentNodeAutomaticIntent{{
+						CurrentNode: reference,
+						NodeKind:    workflow.NodeKindAgent,
+					}},
+					PostCompletionEligible: true,
+				},
+				completionCommitErr: commitErr,
+			}
+			shellPath, err := exec.LookPath("sh")
+			if err != nil {
+				t.Skipf("sh executable unavailable: %v", err)
+			}
+			var controller *CurrentNodeController
+			authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+				ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
+					controller.ExecutionFinalized(scope)
+				}),
+			})
+			runner := &recordingScriptRunner{
+				authority: authority,
+				command: sessionruntime.ScriptCommand{
+					Path: shellPath,
+					Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
+				},
+				started: make(chan workflow.CurrentNodeReference, 2),
+			}
+			controller = newCurrentNodeControllerForTest(t, store, runner, authority, 1)
+			t.Cleanup(func() {
+				if err := controller.Close(); err != nil {
+					t.Errorf("close controller: %v", err)
+				}
+				if err := authority.Close(context.Background()); err != nil {
+					t.Errorf("close authority: %v", err)
+				}
+			})
+			if err := startCurrentNodeForControllerTest(context.Background(), controller, store, reference); err != nil {
+				t.Fatalf("start predecessor: %v", err)
+			}
+			<-runner.started
+			waitForRunningCurrentNode(t, authority, reference)
+			scopeID := singleLiveScope(t, controller, reference)
+			_, err = controller.CompleteCurrentNode(context.Background(), workflowruntime.CompletionRequest{
+				ScopeID:      scopeID,
+				SessionID:    func() *runtimeids.SessionID { value := runtimeids.NewSessionID(); return &value }(),
+				TransitionID: "loop",
+			})
+			if !errors.Is(err, commitErr) {
+				t.Fatalf("completion error = %v, want %v", err, commitErr)
+			}
+			snapshot := controller.Snapshot()
+			if !hasLiveCurrentNode(snapshot, reference) ||
+				len(snapshot.HeldIntents) != 0 ||
+				hasAutomaticCurrentNodeIntent(snapshot, reference) {
+				t.Fatalf("self-loop commit failure ownership = %+v, want predecessor only", snapshot)
+			}
+		})
+	}
+}
+
 func TestCurrentNodeControllerFailedSuccessorStagingPreservesExistingGenerations(t *testing.T) {
 	shellPath, err := exec.LookPath("sh")
 	if err != nil {
@@ -545,7 +804,7 @@ func TestCurrentNodeControllerFailedSuccessorStagingPreservesExistingGenerations
 	}
 }
 
-func TestCurrentNodeControllerKeepsAgentCapacityThroughRetiringWhileScriptsProgress(t *testing.T) {
+func TestCurrentNodeControllerKeepsAgentCapacityUntilPredecessorRetiresWhileScriptsProgress(t *testing.T) {
 	shellPath, err := exec.LookPath("sh")
 	if err != nil {
 		t.Skipf("sh executable unavailable: %v", err)
@@ -562,13 +821,6 @@ func TestCurrentNodeControllerKeepsAgentCapacityThroughRetiringWhileScriptsProgr
 			NodeKind:    workflow.NodeKindAgent,
 		}},
 	}}
-	assignmentStarted := make(chan struct{})
-	assignmentRelease := make(chan struct{})
-	steerer := selectiveLateCommitSteerer{
-		target:  successor,
-		started: assignmentStarted,
-		release: assignmentRelease,
-	}
 	var controller *CurrentNodeController
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
 		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
@@ -585,18 +837,13 @@ func TestCurrentNodeControllerKeepsAgentCapacityThroughRetiringWhileScriptsProgr
 	}
 	controller, err = NewCurrentNodeController(store, runner, authority, NewTaskMutationCoordinator(), CurrentNodeControllerConfig{
 		AgentConcurrency:      1,
-		AssignmentSteerer:     steerer,
+		AssignmentSteerer:     noOpCurrentNodeAssignmentSteerer{},
 		LifecycleAvailability: NewLifecycleFatalAvailability(),
 	})
 	if err != nil {
 		t.Fatalf("new controller: %v", err)
 	}
-	var releaseOnce sync.Once
-	releaseAssignment := func() {
-		releaseOnce.Do(func() { close(assignmentRelease) })
-	}
 	t.Cleanup(func() {
-		releaseAssignment()
 		if err := controller.Close(); err != nil {
 			t.Errorf("close controller: %v", err)
 		}
@@ -683,14 +930,6 @@ func TestCurrentNodeControllerKeepsAgentCapacityThroughRetiringWhileScriptsProgr
 		t.Fatal("secondary seed retired before stop")
 	}
 
-	stopDone := make(chan error, 1)
-	go func() { stopDone <- handle.Stop(context.Background()) }()
-	select {
-	case <-assignmentStarted:
-	case <-time.After(3 * time.Second):
-		t.Fatal("source did not enter retiring assignment wait")
-	}
-
 	if err := secondaryHandle.Stop(context.Background()); err != nil {
 		t.Fatalf("stop secondary seed: %v", err)
 	}
@@ -703,25 +942,18 @@ func TestCurrentNodeControllerKeepsAgentCapacityThroughRetiringWhileScriptsProgr
 		t.Fatal("Script did not bypass Agent capacity during retirement")
 	}
 	if !hasAutomaticCurrentNodeIntent(controller.Snapshot(), queuedAgent) {
-		t.Fatalf("Agent started before retiring owner released capacity: %+v", controller.Snapshot())
+		t.Fatalf("Agent started before predecessor retirement released capacity: %+v", controller.Snapshot())
 	}
-
-	releaseAssignment()
-	select {
-	case err := <-stopDone:
-		if err != nil && !errors.Is(err, context.Canceled) {
-			t.Fatalf("stop retiring source: %v", err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("retiring source did not finalize")
+	if err := handle.Stop(context.Background()); err != nil {
+		t.Fatalf("stop source predecessor: %v", err)
 	}
 	select {
 	case started := <-runner.started:
-		if !started.Equal(queuedAgent) {
-			t.Fatalf("first Agent after retirement = %v, want oldest eligible Agent %v", started, queuedAgent)
+		if !started.Equal(queuedAgent) && !started.Equal(successor) {
+			t.Fatalf("first Agent after predecessor retirement = %v, want queued Agent %v or successor %v", started, queuedAgent, successor)
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("queued Agent did not start after capacity release")
+		t.Fatal("an eligible Agent did not start after predecessor retirement released capacity")
 	}
 }
 

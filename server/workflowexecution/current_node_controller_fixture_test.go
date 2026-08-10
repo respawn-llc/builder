@@ -307,6 +307,8 @@ type currentNodeControllerStore struct {
 	completionStarted     chan struct{}
 	completionRelease     chan struct{}
 	completionOnce        sync.Once
+	completionPrepareErr  error
+	completionCommitErr   error
 	bindingErr            error
 	bindings              []currentNodeSessionBindingCall
 	interruptStarted      chan struct{}
@@ -631,6 +633,49 @@ func (s *currentNodeControllerStore) InterruptCurrentNodes(ctx context.Context, 
 	return interrupted, nil
 }
 
+func (s *currentNodeControllerStore) InterruptCurrentNodeSchedulingSet(
+	ctx context.Context,
+	_ workflow.TaskID,
+	targets []workflowstore.CurrentNodeSchedulingTarget,
+	reason workflow.CurrentNodeInterruptionReason,
+	detail workflow.CurrentNodeInterruptionDetail,
+) (workflowstore.CurrentNodeSchedulingInterruptionResult, error) {
+	if s.interruptStarted != nil {
+		s.interruptOnce.Do(func() {
+			close(s.interruptStarted)
+		})
+	}
+	if s.interruptRelease != nil {
+		select {
+		case <-s.interruptRelease:
+		case <-ctx.Done():
+			return workflowstore.CurrentNodeSchedulingInterruptionResult{}, context.Cause(ctx)
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.interruptErr != nil {
+		return workflowstore.CurrentNodeSchedulingInterruptionResult{}, s.interruptErr
+	}
+	if s.interruptions == nil {
+		s.interruptions = make(map[workflow.CurrentNodeReferenceKey]currentNodeInterruptionRecord)
+	}
+	if s.interruptionCalls == nil {
+		s.interruptionCalls = make(map[workflow.CurrentNodeReferenceKey]int)
+	}
+	references := make([]workflow.CurrentNodeReference, 0, len(targets))
+	for _, target := range targets {
+		key, err := target.Reference.Key()
+		if err != nil {
+			return workflowstore.CurrentNodeSchedulingInterruptionResult{}, err
+		}
+		s.interruptions[key] = currentNodeInterruptionRecord{reason: reason, detail: detail}
+		s.interruptionCalls[key]++
+		references = append(references, target.Reference)
+	}
+	return workflowstore.CurrentNodeSchedulingInterruptionResult{Interrupted: references}, nil
+}
+
 func (s *currentNodeControllerStore) RecoverExecutableCurrentNodes(context.Context, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) ([]workflow.CurrentNodeReference, error) {
 	return append([]workflow.CurrentNodeReference(nil), s.recovered...), nil
 }
@@ -643,6 +688,21 @@ func (s *currentNodeControllerStore) ResolveIdleExecutableCurrentNode(context.Co
 }
 
 func (s *currentNodeControllerStore) CompleteCurrentNode(ctx context.Context, _ workflowstore.CurrentNodeCompletionRequest) (workflowstore.CurrentNodeCompletionResult, error) {
+	prepared, err := s.PrepareCurrentNodeCompletion(ctx, workflowstore.CurrentNodeCompletionRequest{})
+	if err != nil {
+		return workflowstore.CurrentNodeCompletionResult{}, err
+	}
+	result := prepared.Result()
+	if err := prepared.Commit(); err != nil {
+		return workflowstore.CurrentNodeCompletionResult{}, err
+	}
+	return result, nil
+}
+
+func (s *currentNodeControllerStore) PrepareCurrentNodeCompletion(
+	ctx context.Context,
+	_ workflowstore.CurrentNodeCompletionRequest,
+) (workflowstore.PreparedCurrentNodeCompletion, error) {
 	if s.completionStarted != nil {
 		s.completionOnce.Do(func() {
 			close(s.completionStarted)
@@ -652,13 +712,66 @@ func (s *currentNodeControllerStore) CompleteCurrentNode(ctx context.Context, _ 
 		select {
 		case <-s.completionRelease:
 		case <-ctx.Done():
-			return workflowstore.CurrentNodeCompletionResult{}, context.Cause(ctx)
+			return nil, context.Cause(ctx)
 		}
 	}
 	s.mu.Lock()
 	s.completions++
+	prepareErr := s.completionPrepareErr
+	commitErr := s.completionCommitErr
+	result := s.completion
 	s.mu.Unlock()
-	return s.completion, nil
+	if prepareErr != nil {
+		return nil, prepareErr
+	}
+	return &controllerPreparedCurrentNodeCompletion{
+		result: result,
+		commit: func() error {
+			return commitErr
+		},
+	}, nil
+}
+
+func (*currentNodeControllerStore) PublishCurrentNodeCompletion(
+	context.Context,
+	workflow.TaskID,
+	workflowstore.CurrentNodeCompletionResult,
+) error {
+	return nil
+}
+
+type controllerPreparedCurrentNodeCompletion struct {
+	mu       sync.Mutex
+	result   workflowstore.CurrentNodeCompletionResult
+	commit   func() error
+	consumed bool
+}
+
+func (m *controllerPreparedCurrentNodeCompletion) Result() workflowstore.CurrentNodeCompletionResult {
+	return m.result
+}
+
+func (m *controllerPreparedCurrentNodeCompletion) Commit() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.consumed {
+		return workflowstore.ErrPreparedCurrentNodeMutationConsumed
+	}
+	m.consumed = true
+	if m.commit != nil {
+		return m.commit()
+	}
+	return nil
+}
+
+func (m *controllerPreparedCurrentNodeCompletion) Rollback() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.consumed {
+		return workflowstore.ErrPreparedCurrentNodeMutationConsumed
+	}
+	m.consumed = true
+	return nil
 }
 
 func (s *currentNodeControllerStore) ValidateCurrentNodeSessionBinding(_ context.Context, sessionID runtimeids.SessionID, reference workflow.CurrentNodeReference) error {
@@ -910,14 +1023,15 @@ func installExactRunForTest(
 	controller.nextRunSequence++
 	id := currentNodeRunID{sequence: controller.nextRunSequence}
 	run := &currentNodeRun{
-		id:           id,
-		reference:    reference,
-		key:          key,
-		policy:       policy,
-		phase:        currentNodeRunExact,
-		phaseChanged: make(chan struct{}),
-		lease:        lease,
-		exactScopeID: &scopeID,
+		id:                 id,
+		reference:          reference,
+		key:                key,
+		policy:             policy,
+		phase:              currentNodeRunExact,
+		expectedScheduling: workflow.CurrentNodeSchedulingAdmitted,
+		phaseChanged:       make(chan struct{}),
+		lease:              lease,
+		exactScopeID:       &scopeID,
 	}
 	controller.runs[id] = run
 	controller.currentRuns[key] = id
