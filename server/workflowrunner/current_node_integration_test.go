@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -56,6 +57,30 @@ type currentNodeRunnerFixture struct {
 	mu             sync.Mutex
 	clientRequests []runtimewire.RuntimeClientRequest
 	clientErr      error
+}
+
+type workflowRunnerLifecycleFatalReporter struct {
+	mu    sync.Mutex
+	cause error
+}
+
+func (r *workflowRunnerLifecycleFatalReporter) ReportFatal(
+	diagnostic workflowexecution.LifecycleFatalDiagnostic,
+) workflowexecution.LifecycleFatalReportResult {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	accepted := r.cause == nil
+	r.cause = errors.Join(r.cause, diagnostic)
+	return workflowexecution.LifecycleFatalReportResult{ShutdownAccepted: accepted}
+}
+
+func (r *workflowRunnerLifecycleFatalReporter) Available() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.cause == nil {
+		return nil
+	}
+	return workflowexecution.LifecycleUnavailableError{Cause: r.cause}
 }
 
 type currentNodeRunnerClient interface {
@@ -277,9 +302,9 @@ func newCurrentNodeRunnerFixtureWithRunner(
 		runner = decorate(runner)
 	}
 	controller, err = workflowexecution.NewCurrentNodeController(store, runner, fixture.authority, taskMutations, workflowexecution.CurrentNodeControllerConfig{
-		AgentConcurrency:      1,
-		AssignmentSteerer:     starter,
-		LifecycleAvailability: workflowexecution.NewLifecycleFatalAvailability(),
+		AgentConcurrency:  1,
+		AssignmentSteerer: starter,
+		LifecycleReporter: &workflowRunnerLifecycleFatalReporter{},
 	})
 	if err != nil {
 		t.Fatalf("new current node controller: %v", err)
@@ -306,6 +331,71 @@ type barrierCurrentNodeRunner struct {
 	delegate workflowexecution.CurrentNodeRunner
 	entered  chan workflow.CurrentNodeReference
 	release  <-chan struct{}
+}
+
+type outcomeLessCurrentNodeRunner struct {
+	authority *sessionruntime.Authority
+	command   sessionruntime.ScriptCommand
+	handle    chan<- sessionruntime.ExecutionHandle
+}
+
+func (r outcomeLessCurrentNodeRunner) StartCurrentNode(
+	ctx context.Context,
+	_ workflow.CurrentNodeReference,
+	_ workflowruntime.TaskPromptDelivery,
+	_ workflowexecution.CurrentNodeAssignmentSteer,
+	lease sessionruntime.WorkflowExecutionLease,
+	_ workflowruntime.Controller,
+) error {
+	handle, err := r.authority.StartScriptExecution(ctx, sessionruntime.ScriptExecutionRequest{
+		Workflow: &lease,
+		Command:  r.command,
+	})
+	if err == nil {
+		r.handle <- handle
+	}
+	return err
+}
+
+func newOutcomeLessCurrentNodeRunnerFixture(
+	t *testing.T,
+) (*currentNodeRunnerFixture, <-chan sessionruntime.ExecutionHandle, func()) {
+	t.Helper()
+	shellPath, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("sh executable unavailable: %v", err)
+	}
+	releasePath := filepath.Join(t.TempDir(), "release")
+	handles := make(chan sessionruntime.ExecutionHandle, 1)
+	fixture := newCurrentNodeRunnerFixtureWithRunner(
+		t,
+		NewScriptedClient(llm.ProviderCapabilities{ProviderID: "test", SupportsResponsesAPI: true}),
+		false,
+		func(runner workflowexecution.CurrentNodeRunner) workflowexecution.CurrentNodeRunner {
+			starter, ok := runner.(*Starter)
+			if !ok {
+				t.Fatalf("outcome-less fixture runner = %T, want *Starter", runner)
+			}
+			return outcomeLessCurrentNodeRunner{
+				authority: starter.runtimeAuthority,
+				command: sessionruntime.ScriptCommand{
+					Path: shellPath,
+					Args: []string{"-c", `while [ ! -f "$1" ]; do sleep 0.01; done`, "sh", releasePath},
+				},
+				handle: handles,
+			}
+		},
+	)
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() {
+			if err := os.WriteFile(releasePath, []byte("release"), 0o600); err != nil {
+				t.Errorf("release outcome-less execution: %v", err)
+			}
+		})
+	}
+	t.Cleanup(release)
+	return fixture, handles, release
 }
 
 func (r barrierCurrentNodeRunner) StartCurrentNode(
@@ -2918,45 +3008,22 @@ func findTaskSearchGroup(groups []serverapi.TaskSearchGroup, taskID workflow.Tas
 }
 
 func TestOrdinaryOutcomeLessFinalizationKeepsAuthorityUntilFailedDurableDispositionAndStartupRecovery(t *testing.T) {
-	started := make(chan struct{})
-	release := make(chan struct{})
-	var releaseOnce sync.Once
-	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
-	f := newCurrentNodeRunnerFixture(
-		t,
-		ScriptedRuntimeStep{
-			BeforeResponse: func(ctx context.Context) error {
-				close(started)
-				select {
-				case <-release:
-					return nil
-				case <-ctx.Done():
-					return context.Cause(ctx)
-				}
-			},
-			Response: ScriptedFinalAnswer(`{"commentary":"returned without completing the Current Node"}`).Response,
-		},
-	)
+	f, handles, release := newOutcomeLessCurrentNodeRunnerFixture(t)
 	workflowID := createCurrentNodeAgentWorkflow(t, f.store)
 	task := f.createTask(t, workflowID)
 	currentNode := f.startTask(t, task)
+	var expectedExecution sessionruntime.ExecutionHandle
 	select {
-	case <-started:
+	case expectedExecution = <-handles:
 	case <-time.After(currentNodeRunnerWait):
 		t.Fatal("ordinary Workflow Agent did not reach its Exact execution")
 	}
-	nodes := f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+	f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
 		return len(nodes) == 1 &&
 			nodes[0].Reference.Equal(currentNode) &&
-			nodes[0].SessionID != nil &&
 			nodes[0].Scheduling != nil &&
 			nodes[0].Scheduling.State == workflow.CurrentNodeSchedulingAdmitted
 	})
-	sessionID := *nodes[0].SessionID
-	expectedExecution, live := f.authority.SessionExecution(sessionID)
-	if !live {
-		t.Fatal("ordinary Workflow Agent lost Exact authority before finalization")
-	}
 	expectedScopeID := expectedExecution.Scope().ID()
 	if _, err := f.metadata.DB().ExecContext(
 		context.Background(),
@@ -2969,7 +3036,10 @@ END`,
 	); err != nil {
 		t.Fatalf("install ordinary outcome-less persistence failure: %v", err)
 	}
-	releaseOnce.Do(func() { close(release) })
+	release()
+	if _, err := expectedExecution.Wait(context.Background()); err != nil {
+		t.Fatalf("wait for ordinary outcome-less Authority finalization: %v", err)
+	}
 	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
 		nodes, err := f.store.ListCurrentNodes(context.Background(), task.ID)
 		return err == nil &&
@@ -2980,9 +3050,8 @@ END`,
 	if _, err := f.controller.ObserveWorkflowTaskExecutions([]workflow.TaskID{task.ID}); err == nil {
 		t.Fatal("ordinary outcome-less persistence failure allowed lifecycle reads before fatal unavailability")
 	}
-	if execution, live := f.authority.SessionExecution(sessionID); !live ||
-		execution.Scope().ID() != expectedScopeID {
-		t.Fatal("ordinary outcome-less persistence failure released Exact authority before durable disposition")
+	if _, live := f.authority.ExecutionByScope(expectedScopeID); live {
+		t.Fatal("completed outcome-less Exact remained live after Authority finalization")
 	}
 
 	if _, err := f.metadata.DB().ExecContext(
@@ -2991,8 +3060,8 @@ END`,
 	); err != nil {
 		t.Fatalf("remove ordinary outcome-less persistence failure: %v", err)
 	}
-	if err := f.controller.Close(); err != nil {
-		t.Fatalf("close failed controller before startup recovery: %v", err)
+	if err := f.controller.Close(); err == nil {
+		t.Fatal("fatal outcome-less controller Close returned nil")
 	}
 	restarted, err := workflowexecution.NewCurrentNodeController(
 		f.store,
@@ -3000,9 +3069,9 @@ END`,
 		f.authority,
 		workflowexecution.NewTaskMutationCoordinator(),
 		workflowexecution.CurrentNodeControllerConfig{
-			AgentConcurrency:      1,
-			AssignmentSteerer:     f.starter,
-			LifecycleAvailability: workflowexecution.NewLifecycleFatalAvailability(),
+			AgentConcurrency:  1,
+			AssignmentSteerer: f.starter,
+			LifecycleReporter: &workflowRunnerLifecycleFatalReporter{},
 		},
 	)
 	if err != nil {
@@ -3024,41 +3093,22 @@ END`,
 }
 
 func TestOutcomeLessAdmittedSchedulingMismatchMakesLifecycleUnavailable(t *testing.T) {
-	started := make(chan struct{})
-	release := make(chan struct{})
-	var releaseOnce sync.Once
-	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
-	f := newCurrentNodeRunnerFixture(
-		t,
-		ScriptedRuntimeStep{
-			BeforeResponse: func(ctx context.Context) error {
-				close(started)
-				select {
-				case <-release:
-					return nil
-				case <-ctx.Done():
-					return context.Cause(ctx)
-				}
-			},
-			Response: ScriptedFinalAnswer(`{"commentary":"returned without completing the Current Node"}`).Response,
-		},
-	)
+	f, handles, release := newOutcomeLessCurrentNodeRunnerFixture(t)
 	workflowID := createCurrentNodeAgentWorkflow(t, f.store)
 	task := f.createTask(t, workflowID)
 	currentNode := f.startTask(t, task)
+	var expectedExecution sessionruntime.ExecutionHandle
 	select {
-	case <-started:
+	case expectedExecution = <-handles:
 	case <-time.After(currentNodeRunnerWait):
 		t.Fatal("ordinary Workflow Agent did not reach its Exact execution")
 	}
-	nodes := f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+	f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
 		return len(nodes) == 1 &&
 			nodes[0].Reference.Equal(currentNode) &&
-			nodes[0].SessionID != nil &&
 			nodes[0].Scheduling != nil &&
 			nodes[0].Scheduling.State == workflow.CurrentNodeSchedulingAdmitted
 	})
-	sessionID := *nodes[0].SessionID
 	if _, err := f.metadata.DB().ExecContext(
 		context.Background(),
 		`UPDATE task_current_nodes
@@ -3069,14 +3119,17 @@ WHERE task_id = ? AND node_id = ?`,
 	); err != nil {
 		t.Fatalf("create real SQLite admitted scheduling mismatch: %v", err)
 	}
-	releaseOnce.Do(func() { close(release) })
-	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		_, live := f.authority.SessionExecution(sessionID)
-		return !live
-	}, "outcome-less Exact did not finalize after scheduling mismatch")
+	release()
+	if _, err := expectedExecution.Wait(context.Background()); err != nil {
+		t.Fatalf("wait for mismatched outcome-less Authority finalization: %v", err)
+	}
 	if _, err := f.controller.ObserveWorkflowTaskExecutions([]workflow.TaskID{task.ID}); err == nil {
 		t.Fatal("scheduling-specific admitted mismatch was treated as successful cleanup instead of fatal unavailability")
 	}
+	if err := f.controller.Close(); err == nil {
+		t.Fatal("fatal scheduling-mismatch controller Close returned nil")
+	}
+	f.controller = nil
 }
 
 func TestCurrentNodeContinuationWithActiveTranscriptSubscriberDoesNotBlockLaterAutomaticScript(t *testing.T) {

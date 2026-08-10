@@ -52,8 +52,19 @@ func (c *CurrentNodeController) ObserveWorkflowTaskExecutions(taskIDs []workflow
 		if c.closed {
 			return errors.New("current node workflow controller is closed")
 		}
-		if err := c.lifecycleAvailability.Available(); err != nil {
+		if err := c.lifecycleFatalReporter.Available(); err != nil {
 			return err
+		}
+		for _, run := range c.runs {
+			if run.phase == currentNodeRunRetiring &&
+				run.completion == currentNodeRunCompletionNone &&
+				run.callbackErr == nil {
+				return LifecycleDispositionPendingError{
+					TaskID:      run.reference.TaskID,
+					CurrentNode: run.reference,
+					RunID:       run.id.sequence,
+				}
+			}
 		}
 		observation.Executions = executions
 		for _, run := range c.runs {

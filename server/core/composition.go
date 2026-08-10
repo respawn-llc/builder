@@ -64,6 +64,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	lifecycleFatal := newLifecycleFatalState(ctx)
 	rootLease := opts.RootLease
 	ownsIncomingRootLease := rootLease != nil
 	if rootLease == nil {
@@ -285,17 +286,17 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: runtime starter: %w", err)
 	}
-	workflowLifecycleAvailability := workflowexecution.NewLifecycleFatalAvailability()
 	workflowController, err = workflowexecution.NewCurrentNodeController(
 		workflowStore,
 		workflowRuntimeStarter,
 		runtimeAuthority,
 		workflowTaskMutations,
 		workflowexecution.CurrentNodeControllerConfig{
-			AgentConcurrency:      cfg.Settings.Workflow.Concurrency,
-			Attention:             workflowAttentionFinalizer,
-			AssignmentSteerer:     workflowRuntimeStarter,
-			LifecycleAvailability: workflowLifecycleAvailability,
+			AgentConcurrency:  cfg.Settings.Workflow.Concurrency,
+			Attention:         workflowAttentionFinalizer,
+			AssignmentSteerer: workflowRuntimeStarter,
+			LifecycleReporter: lifecycleFatal,
+			LifecycleContext:  lifecycleFatal.Context(),
 		},
 	)
 	if err != nil {
@@ -357,7 +358,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: service: %w", err)
 	}
-	core := &Core{bundles: composeBundles(bundleCompositionInput{
+	core := &Core{fatalLifecycle: lifecycleFatal, bundles: composeBundles(bundleCompositionInput{
 		cfg:                     cfg,
 		authSupport:             authSupport,
 		capabilityFactsService:  capabilityFactsService,

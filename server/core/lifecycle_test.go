@@ -1,14 +1,94 @@
 package core
 
 import (
+	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	"core/server/auth"
 	serverbootstrap "core/server/bootstrap"
+	"core/server/workflow"
+	"core/server/workflowexecution"
 	"core/shared/config"
+	"core/shared/runtimeids"
 )
+
+func TestLifecycleFatalReporterInstallsUnavailableGateAndSignalsShutdownWithoutClosingCore(t *testing.T) {
+	state := newLifecycleFatalState(context.Background())
+	appCore := &Core{fatalLifecycle: state}
+	persistenceErr := errors.New("persist admitted interruption")
+	scopeID := runtimeids.NewExecutionScopeID()
+	diagnostic := workflowexecution.LifecycleFatalDiagnostic{
+		Operation:          workflowexecution.LifecycleFatalOperationOutcomeLessFinalization,
+		TaskID:             "KENT-438",
+		CurrentNode:        workflow.CurrentNodeReference{TaskID: "KENT-438", NodeID: "agent"},
+		RunID:              7,
+		RunPhase:           workflowexecution.LifecycleFatalRunPhaseRetiring,
+		ExpectedScheduling: workflow.CurrentNodeSchedulingAdmitted,
+		ScopeID:            &scopeID,
+		OriginalOutcome:    errors.New("exact returned without outcome"),
+		PersistenceFailure: persistenceErr,
+	}
+
+	reported := make(chan workflowexecution.LifecycleFatalReportResult, 1)
+	go func() {
+		reported <- state.ReportFatal(diagnostic)
+	}()
+	select {
+	case result := <-reported:
+		if !result.ShutdownAccepted {
+			t.Fatal("first fatal report did not accept shutdown")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("fatal reporting blocked on Core shutdown")
+	}
+	if err := appCore.RouteDependencyAvailable(""); !errors.Is(err, persistenceErr) {
+		t.Fatalf("Core availability error = %v, want persistence failure", err)
+	}
+	select {
+	case <-appCore.LifecycleFatalShutdown():
+	default:
+		t.Fatal("fatal report did not signal the ServeServer owner")
+	}
+	if err := appCore.Close(); err != nil {
+		t.Fatalf("close Core after report: %v", err)
+	}
+}
+
+func TestLifecycleFatalReporterJoinsLaterDiagnosticsWithoutSecondShutdown(t *testing.T) {
+	state := newLifecycleFatalState(context.Background())
+	first := state.ReportFatal(workflowexecution.LifecycleFatalDiagnostic{
+		Operation:          workflowexecution.LifecycleFatalOperationExactRuntimeFailure,
+		TaskID:             "task",
+		CurrentNode:        workflow.CurrentNodeReference{TaskID: "task", NodeID: "first"},
+		RunID:              1,
+		RunPhase:           workflowexecution.LifecycleFatalRunPhaseExact,
+		ExpectedScheduling: workflow.CurrentNodeSchedulingAdmitted,
+		OriginalOutcome:    errors.New("runner failed"),
+		PersistenceFailure: errors.New("first persistence failure"),
+	})
+	second := state.ReportFatal(workflowexecution.LifecycleFatalDiagnostic{
+		Operation:          workflowexecution.LifecycleFatalOperationControllerClose,
+		TaskID:             "task",
+		CurrentNode:        workflow.CurrentNodeReference{TaskID: "task", NodeID: "second"},
+		RunID:              2,
+		RunPhase:           workflowexecution.LifecycleFatalRunPhaseLaunching,
+		ExpectedScheduling: workflow.CurrentNodeSchedulingReady,
+		OriginalOutcome:    errors.New("controller closed"),
+		PersistenceFailure: errors.New("second persistence failure"),
+	})
+
+	if !first.ShutdownAccepted || second.ShutdownAccepted {
+		t.Fatalf("shutdown acceptance = first %t, second %t; want true then false", first.ShutdownAccepted, second.ShutdownAccepted)
+	}
+	err := state.Available()
+	if err == nil || !strings.Contains(err.Error(), "first persistence failure") || !strings.Contains(err.Error(), "second persistence failure") {
+		t.Fatalf("joined fatal diagnostics = %v", err)
+	}
+}
 
 func TestCoreCloseClosesResourcesOnceInReverseRegistrationOrder(t *testing.T) {
 	var calls []string

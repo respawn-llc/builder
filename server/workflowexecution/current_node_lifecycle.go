@@ -528,6 +528,9 @@ func (c *CurrentNodeController) ensureTaskAvailableLocked(taskID workflow.TaskID
 	if c.closed {
 		return errors.New("current node workflow controller is closed")
 	}
+	if err := c.lifecycleFatalReporter.Available(); err != nil {
+		return err
+	}
 	for _, run := range c.runs {
 		if run.reference.TaskID == taskID && run.callbackErr != nil {
 			return fmt.Errorf("workflow execution lifecycle failed for Run %d: %w", run.id.sequence, run.callbackErr)

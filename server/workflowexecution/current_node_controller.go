@@ -46,10 +46,11 @@ type CurrentNodeAssignmentSteer interface {
 }
 
 type CurrentNodeControllerConfig struct {
-	AgentConcurrency      int
-	Attention             CurrentNodeAttentionLifecycle
-	AssignmentSteerer     CurrentNodeAssignmentSteerer
-	LifecycleAvailability *LifecycleFatalAvailability
+	AgentConcurrency  int
+	Attention         CurrentNodeAttentionLifecycle
+	AssignmentSteerer CurrentNodeAssignmentSteerer
+	LifecycleReporter LifecycleFatalReporter
+	LifecycleContext  context.Context
 }
 
 type CurrentNodeAttentionLifecycle interface {
@@ -116,12 +117,12 @@ type CurrentNodeController struct {
 		ValidateCurrentNodeSessionBinding(context.Context, runtimeids.SessionID, workflow.CurrentNodeReference) error
 		TaskExecutionScope(context.Context, workflow.TaskID) (workflowstore.TaskExecutionScope, error)
 	}
-	runner                CurrentNodeRunner
-	steerer               CurrentNodeAssignmentSteerer
-	authority             *sessionruntime.Authority
-	taskMutations         *TaskMutationCoordinator
-	attention             CurrentNodeAttentionLifecycle
-	lifecycleAvailability *LifecycleFatalAvailability
+	runner                 CurrentNodeRunner
+	steerer                CurrentNodeAssignmentSteerer
+	authority              *sessionruntime.Authority
+	taskMutations          *TaskMutationCoordinator
+	attention              CurrentNodeAttentionLifecycle
+	lifecycleFatalReporter LifecycleFatalReporter
 
 	agentConcurrency int
 	workerContext    context.Context
@@ -184,26 +185,30 @@ func NewCurrentNodeController(
 	if cfg.AgentConcurrency <= 0 {
 		return nil, errors.New("workflow agent concurrency must be positive")
 	}
-	if cfg.LifecycleAvailability == nil {
-		return nil, errors.New("workflow lifecycle fatal availability is required")
+	if cfg.LifecycleReporter == nil {
+		return nil, errors.New("workflow lifecycle fatal reporter is required")
 	}
-	workerContext, workerCancel := context.WithCancel(context.Background())
+	lifecycleContext := cfg.LifecycleContext
+	if lifecycleContext == nil {
+		lifecycleContext = context.Background()
+	}
+	workerContext, workerCancel := context.WithCancel(lifecycleContext)
 	controller := &CurrentNodeController{
-		store:                 store,
-		runner:                runner,
-		steerer:               cfg.AssignmentSteerer,
-		authority:             authority,
-		taskMutations:         taskMutations,
-		attention:             cfg.Attention,
-		lifecycleAvailability: cfg.LifecycleAvailability,
-		agentConcurrency:      cfg.AgentConcurrency,
-		workerContext:         workerContext,
-		workerCancel:          workerCancel,
-		workerWake:            make(chan struct{}, 1),
-		runs:                  make(map[currentNodeRunID]*currentNodeRun),
-		currentRuns:           make(map[workflow.CurrentNodeReferenceKey]currentNodeRunID),
-		exactRuns:             make(map[runtimeids.ExecutionScopeID]currentNodeRunID),
-		violations:            make(map[runtimeids.ExecutionScopeID]int64),
+		store:                  store,
+		runner:                 runner,
+		steerer:                cfg.AssignmentSteerer,
+		authority:              authority,
+		taskMutations:          taskMutations,
+		attention:              cfg.Attention,
+		lifecycleFatalReporter: cfg.LifecycleReporter,
+		agentConcurrency:       cfg.AgentConcurrency,
+		workerContext:          workerContext,
+		workerCancel:           workerCancel,
+		workerWake:             make(chan struct{}, 1),
+		runs:                   make(map[currentNodeRunID]*currentNodeRun),
+		currentRuns:            make(map[workflow.CurrentNodeReferenceKey]currentNodeRunID),
+		exactRuns:              make(map[runtimeids.ExecutionScopeID]currentNodeRunID),
+		violations:             make(map[runtimeids.ExecutionScopeID]int64),
 	}
 	controller.workerWG.Add(1)
 	go controller.runAdmissions()
@@ -895,7 +900,18 @@ func (c *CurrentNodeController) FailCurrentNodeScope(
 			if err != nil {
 				c.mu.Lock()
 				if current, stillLive := c.runByScopeLocked(scopeID); stillLive {
-					c.recordInterruptionPersistenceFailureLocked(current, reason, err)
+					if reason != workflow.CurrentNodeInterruptionReasonUserInterrupt {
+						operation := lifecycleFatalOperationForInterruptionReason(reason)
+						if current.completion.committed() {
+							operation = LifecycleFatalOperationSuccessorDisposition
+						}
+						c.recordLifecycleFatalLocked(
+							current,
+							operation,
+							cause,
+							err,
+						)
+					}
 				}
 				c.mu.Unlock()
 				return err
@@ -922,13 +938,49 @@ func (c *CurrentNodeController) FailCurrentNodeScope(
 			return nil
 		}
 		c.mu.Unlock()
-		if err := c.store.InterruptAdmittedCurrentNode(ctx, lease.Workflow().CurrentNode, reason, detail); err != nil {
+		result, err := c.store.InterruptCurrentNodeSchedulingSet(
+			ctx,
+			live.reference.TaskID,
+			[]workflowstore.CurrentNodeSchedulingTarget{{
+				Reference: live.reference,
+				Expected:  live.expectedScheduling,
+			}},
+			reason,
+			detail,
+		)
+		if err != nil {
 			c.mu.Lock()
 			if current, stillLive := c.runByScopeLocked(scopeID); stillLive {
-				c.recordInterruptionPersistenceFailureLocked(current, reason, err)
+				if reason != workflow.CurrentNodeInterruptionReasonUserInterrupt {
+					c.recordLifecycleFatalLocked(
+						current,
+						lifecycleFatalOperationForInterruptionReason(reason),
+						cause,
+						err,
+					)
+				}
 			}
 			c.mu.Unlock()
 			return err
+		}
+		if len(result.Interrupted) != 1 || !result.Interrupted[0].Equal(live.reference) {
+			panic(fmt.Sprintf(
+				"exact runtime interruption committed mismatched Current Nodes: task_id=%s current_node=%v run_id=%d run_phase=%s expected_scheduling=%s exact_scope=%s interrupted=%v",
+				live.reference.TaskID,
+				live.reference,
+				live.id.sequence,
+				lifecycleFatalRunPhase(live.phase),
+				live.expectedScheduling,
+				scopeID,
+				result.Interrupted,
+			))
+		}
+		if result.NotificationError != nil {
+			slog.Warn(
+				"publish workflow Current-Node interruption event failed",
+				"task_id", live.reference.TaskID,
+				"error", result.NotificationError,
+			)
 		}
 		c.mu.Lock()
 		if current, stillLive := c.runByScopeLocked(scopeID); stillLive {
@@ -998,8 +1050,13 @@ func (c *CurrentNodeController) ExecutionFinalized(scope sessionruntime.Executio
 	case currentNodeRunCompletionNone:
 		if err := c.interruptOutcomeLessFinalization(live.id); err != nil {
 			c.mu.Lock()
-			if current := c.runs[live.id]; current != nil {
-				c.recordLifecycleFatalLocked(current, err)
+			if current := c.runs[live.id]; current != nil && c.lifecycleFatalReporter.Available() == nil {
+				c.recordLifecycleFatalLocked(
+					current,
+					LifecycleFatalOperationOutcomeLessFinalization,
+					errors.New("exact workflow execution finalized without a durable completion or interruption outcome"),
+					err,
+				)
 			}
 			c.mu.Unlock()
 			return
@@ -1024,7 +1081,12 @@ func (c *CurrentNodeController) ExecutionFinalized(scope sessionruntime.Executio
 		if err != nil {
 			c.mu.Lock()
 			if current := c.runs[live.id]; current != nil {
-				c.recordLifecycleFatalLocked(current, err)
+				c.recordLifecycleFatalLocked(
+					current,
+					LifecycleFatalOperationSuccessorDisposition,
+					errors.New("Agent workflow execution finalized before post-turn disposition"),
+					err,
+				)
 			}
 			c.mu.Unlock()
 			return
@@ -1148,9 +1210,13 @@ func (c *CurrentNodeController) interruptOutcomeLessFinalization(runID currentNo
 			return false, sessionruntime.ErrExecutionNoLongerLive
 		}
 		diagnostic := errors.New("exact workflow execution finalized without a durable completion or interruption outcome")
-		err := c.store.InterruptAdmittedCurrentNode(
+		result, err := c.store.InterruptCurrentNodeSchedulingSet(
 			ctx,
-			reference,
+			reference.TaskID,
+			[]workflowstore.CurrentNodeSchedulingTarget{{
+				Reference: reference,
+				Expected:  workflow.CurrentNodeSchedulingAdmitted,
+			}},
 			reasonCurrentNodeRuntimeFinalizedWithoutOutcome,
 			workflow.NewCurrentNodeInterruptionDetail(
 				string(reasonCurrentNodeRuntimeFinalizedWithoutOutcome),
@@ -1158,7 +1224,30 @@ func (c *CurrentNodeController) interruptOutcomeLessFinalization(runID currentNo
 			),
 		)
 		if err != nil {
-			return false, fmt.Errorf("interrupt outcome-less finalized Current Node %v: %w", reference, err)
+			persistenceFailure := fmt.Errorf("interrupt outcome-less finalized Current Node %v: %w", reference, err)
+			c.mu.Lock()
+			if current := c.runs[runID]; current != nil {
+				c.recordLifecycleFatalLocked(
+					current,
+					LifecycleFatalOperationOutcomeLessFinalization,
+					diagnostic,
+					persistenceFailure,
+				)
+			}
+			c.mu.Unlock()
+			return false, persistenceFailure
+		}
+		if len(result.Interrupted) != 1 || !result.Interrupted[0].Equal(reference) {
+			panic(fmt.Sprintf(
+				"outcome-less finalization interruption committed mismatched Current Nodes: task_id=%s current_node=%v run_id=%d run_phase=%s expected_scheduling=%s exact_scope=%v interrupted=%v",
+				reference.TaskID,
+				reference,
+				runID.sequence,
+				LifecycleFatalRunPhaseRetiring,
+				workflow.CurrentNodeSchedulingAdmitted,
+				run.exactScopeID,
+				result.Interrupted,
+			))
 		}
 		return true, nil
 	})
@@ -1299,6 +1388,13 @@ func (c *CurrentNodeController) Close() error {
 	var callbackErrs []error
 	for _, run := range c.runs {
 		callbackErrs = append(callbackErrs, run.callbackErr)
+	}
+	runIDs := make([]currentNodeRunID, 0, len(c.runs))
+	for runID := range c.runs {
+		runIDs = append(runIDs, runID)
+	}
+	for _, runID := range runIDs {
+		c.removeRunLocked(runID)
 	}
 	c.mu.Unlock()
 	return errors.Join(errors.Join(stopErrs...), errors.Join(callbackErrs...))

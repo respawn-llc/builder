@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 
 	"core/server/session"
@@ -273,12 +274,41 @@ retryAdmission:
 		goto retryAdmission
 	}
 	if err := c.runner.StartCurrentNode(ctx, reference, delivery, assignmentSteer, lease, c); err != nil {
+		if _, live := c.authority.ExecutionByScope(lease.ScopeID()); live {
+			if correlateErr := c.correlateExactRun(ctx, runID, reference, lease); correlateErr == nil {
+				_ = c.FailCurrentNodeScope(
+					context.WithoutCancel(ctx),
+					lease.ScopeID(),
+					reasonCurrentNodeRuntimeStartFailed,
+					err,
+				)
+				return sessionruntime.ErrExecutionNoLongerLive
+			}
+		}
+		return currentNodeAdmissionError{
+			cause:    err,
+			admitted: true,
+		}
+	}
+	if err := c.correlateExactRun(ctx, runID, reference, lease); err != nil {
 		return currentNodeAdmissionError{
 			cause:    c.discardAdmission(runID, lease, err),
 			admitted: true,
 		}
 	}
-	if err := c.taskMutations.Run(ctx, reference.TaskID, func(context.Context) error {
+	if !policy.isAutomatic() {
+		c.wakeAdmissionWorker()
+	}
+	return nil
+}
+
+func (c *CurrentNodeController) correlateExactRun(
+	ctx context.Context,
+	runID currentNodeRunID,
+	reference workflow.CurrentNodeReference,
+	lease sessionruntime.WorkflowExecutionLease,
+) error {
+	return c.taskMutations.Run(ctx, reference.TaskID, func(context.Context) error {
 		handle, ok := c.authority.ExecutionByScope(lease.ScopeID())
 		if !ok {
 			return errors.New("current node runner returned without its exact live scope")
@@ -309,16 +339,7 @@ retryAdmission:
 		run.transition(currentNodeRunExact)
 		lease.Release()
 		return nil
-	}); err != nil {
-		return currentNodeAdmissionError{
-			cause:    c.discardAdmission(runID, lease, err),
-			admitted: true,
-		}
-	}
-	if !policy.isAutomatic() {
-		c.wakeAdmissionWorker()
-	}
-	return nil
+	})
 }
 
 func (c *CurrentNodeController) cancelLaunchingLease(runID currentNodeRunID, scopeID runtimeids.ExecutionScopeID) {
@@ -785,10 +806,29 @@ func (c *CurrentNodeController) handleAdmissionFailure(
 	if err := c.handleCurrentNodeStartFailures([]currentNodeQueuedStart{{reference: reference}}, admitted, cause); err != nil {
 		c.mu.Lock()
 		if run := c.runs[runID]; run != nil {
-			c.recordLifecycleFatalLocked(run, errors.Join(cause, err))
+			operation := LifecycleFatalOperationReadyPreparationFailure
+			if admitted {
+				operation = LifecycleFatalOperationAdmittedLaunchFailure
+			}
+			c.recordLifecycleFatalLocked(run, operation, cause, err)
 			run.transition(currentNodeRunRetiring)
 		}
 		c.mu.Unlock()
+		return
+	}
+	if admitted {
+		c.mu.Lock()
+		run := c.runs[runID]
+		var lease *sessionruntime.WorkflowExecutionLease
+		if run != nil && run.lease != nil {
+			copy := *run.lease
+			lease = &copy
+			run.stop = currentNodeRunStopInterrupted
+		}
+		c.mu.Unlock()
+		if lease != nil {
+			lease.Cancel()
+		}
 	}
 }
 
@@ -831,13 +871,19 @@ func (c *CurrentNodeController) interruptCurrentNodeStartFailures(
 	admitted bool,
 	cause error,
 ) error {
-	references := make([]workflow.CurrentNodeReference, 0, len(starts))
-	for _, start := range starts {
-		references = append(references, start.reference)
+	if len(starts) == 0 {
+		return nil
 	}
-	interrupt := c.store.InterruptCurrentNode
+	expected := workflow.CurrentNodeSchedulingReady
 	if admitted {
-		interrupt = c.store.InterruptAdmittedCurrentNode
+		expected = workflow.CurrentNodeSchedulingAdmitted
+	}
+	targets := make([]workflowstore.CurrentNodeSchedulingTarget, 0, len(starts))
+	for _, start := range starts {
+		targets = append(targets, workflowstore.CurrentNodeSchedulingTarget{
+			Reference: start.reference,
+			Expected:  expected,
+		})
 	}
 	detail := workflow.CurrentNodeInterruptionDetail{
 		Code:   string(reasonCurrentNodeRuntimeStartFailed),
@@ -847,14 +893,21 @@ func (c *CurrentNodeController) interruptCurrentNodeStartFailures(
 	if errors.As(cause, &preparationErr) {
 		detail = preparationErr.InterruptionDetail()
 	}
-	interrupted, err := interruptCurrentNodeReferences(
+	result, err := c.store.InterruptCurrentNodeSchedulingSet(
 		ctx,
-		interrupt,
-		references,
+		starts[0].reference.TaskID,
+		targets,
 		reasonCurrentNodeRuntimeStartFailed,
 		detail,
 	)
-	for _, reference := range interrupted {
+	if result.NotificationError != nil {
+		slog.Warn(
+			"publish workflow Current-Node interruption event failed",
+			"task_id", starts[0].reference.TaskID,
+			"error", result.NotificationError,
+		)
+	}
+	for _, reference := range result.Interrupted {
 		c.publishPendingInterruptedCurrentNode(ctx, reference, reasonCurrentNodeRuntimeStartFailed)
 	}
 	return err

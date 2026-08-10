@@ -26,8 +26,9 @@ func TestPostTurnCompactionReleasesMutationPermitWhileApprovalFenceIsActive(t *t
 		store: &currentNodeControllerStore{
 			pendingApproval: workflow.PendingApproval{Source: source},
 		},
-		taskMutations: NewTaskMutationCoordinator(),
-		authority:     sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}),
+		taskMutations:          NewTaskMutationCoordinator(),
+		authority:              sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}),
+		lifecycleFatalReporter: newRecordingLifecycleFatalReporter(),
 	}
 	installExactRunForTest(t, controller, source, currentNodeAdmissionExplicitOverride, nil, scopeID)
 	controller.mu.Lock()
@@ -220,8 +221,9 @@ func newPostTurnFinalizationControllerForTest(
 	sessionID := runtimeids.NewSessionID()
 	scopeID := runtimeids.NewExecutionScopeID()
 	controller := &CurrentNodeController{
-		taskMutations: NewTaskMutationCoordinator(),
-		authority:     sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}),
+		taskMutations:          NewTaskMutationCoordinator(),
+		authority:              sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}),
+		lifecycleFatalReporter: newRecordingLifecycleFatalReporter(),
 	}
 	installExactRunForTest(t, controller, source, currentNodeAdmissionExplicitOverride, nil, scopeID)
 	controller.mu.Lock()
@@ -364,9 +366,9 @@ func TestCurrentNodeControllerSteersApprovalTargetBeforeStartingIt(t *testing.T)
 	runner := &countingCurrentNodeRunner{}
 	steerer := &recordingCurrentNodeAssignmentSteerer{}
 	controller, err := NewCurrentNodeController(store, runner, authority, NewTaskMutationCoordinator(), CurrentNodeControllerConfig{
-		AgentConcurrency:      1,
-		AssignmentSteerer:     steerer,
-		LifecycleAvailability: NewLifecycleFatalAvailability(),
+		AgentConcurrency:  1,
+		AssignmentSteerer: steerer,
+		LifecycleReporter: newRecordingLifecycleFatalReporter(),
 	})
 	if err != nil {
 		t.Fatalf("new current node controller: %v", err)
@@ -411,9 +413,9 @@ func TestCurrentNodeControllerInterruptsUnassignedApprovalTarget(t *testing.T) {
 	runner := &countingCurrentNodeRunner{}
 	cause := errors.New("assignment append failed")
 	controller, err := NewCurrentNodeController(store, runner, authority, NewTaskMutationCoordinator(), CurrentNodeControllerConfig{
-		AgentConcurrency:      1,
-		AssignmentSteerer:     &recordingCurrentNodeAssignmentSteerer{err: cause},
-		LifecycleAvailability: NewLifecycleFatalAvailability(),
+		AgentConcurrency:  1,
+		AssignmentSteerer: &recordingCurrentNodeAssignmentSteerer{err: cause},
+		LifecycleReporter: newRecordingLifecycleFatalReporter(),
 	})
 	if err != nil {
 		t.Fatalf("new current node controller: %v", err)
@@ -487,8 +489,8 @@ func TestCompleteIdleCurrentNodeRecoversSuccessorByAssignmentCommit(t *testing.T
 			authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 			runner := &countingCurrentNodeRunner{}
 			controller, err := NewCurrentNodeController(store, runner, authority, NewTaskMutationCoordinator(), CurrentNodeControllerConfig{
-				AgentConcurrency:      1,
-				LifecycleAvailability: NewLifecycleFatalAvailability(),
+				AgentConcurrency:  1,
+				LifecycleReporter: newRecordingLifecycleFatalReporter(),
 				AssignmentSteerer: &recordingCurrentNodeAssignmentSteerer{
 					outcomes: tc.outcomes,
 				},
@@ -565,8 +567,8 @@ func TestCompleteIdleCurrentNodeRetainsLateAssignmentAfterCallerCancellation(t *
 		started: make(chan workflow.CurrentNodeReference, 1),
 	}
 	controller, err := NewCurrentNodeController(store, runner, authority, NewTaskMutationCoordinator(), CurrentNodeControllerConfig{
-		AgentConcurrency:      1,
-		LifecycleAvailability: NewLifecycleFatalAvailability(),
+		AgentConcurrency:  1,
+		LifecycleReporter: newRecordingLifecycleFatalReporter(),
 		AssignmentSteerer: lateCommitCurrentNodeAssignmentSteerer{
 			release: release,
 			started: waitStarted,
@@ -784,9 +786,9 @@ func TestCurrentNodeControllerHoldsSuccessorUntilSourceScopeRetires(t *testing.T
 		started: make(chan workflow.CurrentNodeReference, 4),
 	}
 	controller, err = NewCurrentNodeController(store, runner, authority, NewTaskMutationCoordinator(), CurrentNodeControllerConfig{
-		AgentConcurrency:      1,
-		LifecycleAvailability: NewLifecycleFatalAvailability(),
-		AssignmentSteerer:     noOpCurrentNodeAssignmentSteerer{},
+		AgentConcurrency:  1,
+		LifecycleReporter: newRecordingLifecycleFatalReporter(),
+		AssignmentSteerer: noOpCurrentNodeAssignmentSteerer{},
 	})
 	if err != nil {
 		t.Fatalf("new current node controller: %v", err)

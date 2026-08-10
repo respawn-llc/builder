@@ -44,10 +44,10 @@ func newCurrentNodeControllerWithAttentionForTest(
 ) *CurrentNodeController {
 	t.Helper()
 	controller, err := NewCurrentNodeController(store, runner, authority, NewTaskMutationCoordinator(), CurrentNodeControllerConfig{
-		AgentConcurrency:      concurrency,
-		Attention:             attention,
-		AssignmentSteerer:     noOpCurrentNodeAssignmentSteerer{},
-		LifecycleAvailability: NewLifecycleFatalAvailability(),
+		AgentConcurrency:  concurrency,
+		Attention:         attention,
+		AssignmentSteerer: noOpCurrentNodeAssignmentSteerer{},
+		LifecycleReporter: newRecordingLifecycleFatalReporter(),
 	})
 	if err != nil {
 		t.Fatalf("new current node controller: %v", err)
@@ -314,6 +314,11 @@ type currentNodeControllerStore struct {
 	interruptStarted      chan struct{}
 	interruptRelease      chan struct{}
 	interruptOnce         sync.Once
+	interruptCommitted    chan struct{}
+	interruptCommitOnce   sync.Once
+	interruptCleanupStart chan struct{}
+	interruptCleanupOnce  sync.Once
+	interruptAfterCommit  chan struct{}
 	interruptErr          error
 	idleResolved          *workflow.CurrentNode
 }
@@ -716,6 +721,14 @@ func (s *currentNodeControllerStore) InterruptCurrentNodeSchedulingSet(
 		s.interruptionCalls[key]++
 		references = append(references, target.Reference)
 	}
+	if s.interruptCommitted != nil {
+		s.interruptCommitOnce.Do(func() {
+			close(s.interruptCommitted)
+		})
+	}
+	if s.interruptAfterCommit != nil {
+		<-s.interruptAfterCommit
+	}
 	return workflowstore.CurrentNodeSchedulingInterruptionResult{Interrupted: references}, nil
 }
 
@@ -1086,6 +1099,7 @@ type controlledScriptRunner struct {
 	registered  chan struct{}
 	returnStart chan struct{}
 	handles     chan sessionruntime.ExecutionHandle
+	returnErr   error
 }
 
 func (r *controlledScriptRunner) StartCurrentNode(_ context.Context, _ workflow.CurrentNodeReference, _ workflowruntime.TaskPromptDelivery, _ CurrentNodeAssignmentSteer, lease sessionruntime.WorkflowExecutionLease, _ workflowruntime.Controller) error {
@@ -1101,7 +1115,7 @@ func (r *controlledScriptRunner) StartCurrentNode(_ context.Context, _ workflow.
 	r.handles <- handle
 	close(r.registered)
 	<-r.returnStart
-	return nil
+	return r.returnErr
 }
 
 type failingCurrentNodeRunner struct {

@@ -47,6 +47,30 @@ import (
 	"core/shared/toolspec"
 )
 
+type runPromptLifecycleFatalReporter struct {
+	mu    sync.Mutex
+	cause error
+}
+
+func (r *runPromptLifecycleFatalReporter) ReportFatal(
+	diagnostic workflowexecution.LifecycleFatalDiagnostic,
+) workflowexecution.LifecycleFatalReportResult {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	accepted := r.cause == nil
+	r.cause = errors.Join(r.cause, diagnostic)
+	return workflowexecution.LifecycleFatalReportResult{ShutdownAccepted: accepted}
+}
+
+func (r *runPromptLifecycleFatalReporter) Available() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.cause == nil {
+		return nil
+	}
+	return workflowexecution.LifecycleUnavailableError{Cause: r.cause}
+}
+
 type recordingPromptHistoryStore struct {
 	entries []metadata.PromptHistoryEntry
 }
@@ -549,9 +573,9 @@ func newRetainedSelectedRunPromptFixture(
 		authority,
 		workflowexecution.NewTaskMutationCoordinator(),
 		workflowexecution.CurrentNodeControllerConfig{
-			AgentConcurrency:      1,
-			AssignmentSteerer:     retainedRunPromptAssignmentSteerer{},
-			LifecycleAvailability: workflowexecution.NewLifecycleFatalAvailability(),
+			AgentConcurrency:  1,
+			AssignmentSteerer: retainedRunPromptAssignmentSteerer{},
+			LifecycleReporter: &runPromptLifecycleFatalReporter{},
 		},
 	)
 	if err != nil {

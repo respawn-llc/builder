@@ -19,6 +19,160 @@ import (
 	"github.com/google/uuid"
 )
 
+type recordingLifecycleFatalReporter struct {
+	diagnostics chan LifecycleFatalDiagnostic
+	mu          sync.Mutex
+	cause       error
+}
+
+func newRecordingLifecycleFatalReporter() *recordingLifecycleFatalReporter {
+	return &recordingLifecycleFatalReporter{diagnostics: make(chan LifecycleFatalDiagnostic, 8)}
+}
+
+func (r *recordingLifecycleFatalReporter) ReportFatal(diagnostic LifecycleFatalDiagnostic) LifecycleFatalReportResult {
+	r.mu.Lock()
+	accepted := r.cause == nil
+	r.cause = errors.Join(r.cause, diagnostic)
+	r.mu.Unlock()
+	r.diagnostics <- diagnostic
+	return LifecycleFatalReportResult{ShutdownAccepted: accepted}
+}
+
+func (r *recordingLifecycleFatalReporter) Available() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.cause == nil {
+		return nil
+	}
+	return LifecycleUnavailableError{Cause: r.cause}
+}
+
+func TestCurrentNodeControllerReadyPreparationPersistenceFailureReportsTypedFatalDiagnostic(t *testing.T) {
+	reference := currentNodeReferenceForControllerTest(t, "task-ready-fatal", "node-agent")
+	preparationErr := errors.New("prepare execution target")
+	persistenceErr := errors.New("persist ready interruption")
+	store := &currentNodeControllerStore{interruptErr: persistenceErr}
+	store.started = workflowstore.StartTaskResult{Mutation: workflow.CurrentNodeMutationResult{
+		Created: []workflow.CurrentNode{{
+			Reference:  reference,
+			Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
+		}},
+	}}
+	reporter := newRecordingLifecycleFatalReporter()
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller, err := NewCurrentNodeController(
+		store,
+		&countingCurrentNodeRunner{},
+		authority,
+		NewTaskMutationCoordinator(),
+		CurrentNodeControllerConfig{
+			AgentConcurrency:  1,
+			AssignmentSteerer: noOpCurrentNodeAssignmentSteerer{},
+			LifecycleReporter: reporter,
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewCurrentNodeController: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := controller.Close(); err != nil && !errors.Is(err, persistenceErr) {
+			t.Errorf("close controller: %v", err)
+		}
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+
+	if _, err := controller.StartTask(context.Background(), reference.TaskID, func(context.Context) error {
+		return preparationErr
+	}); err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	var diagnostic LifecycleFatalDiagnostic
+	select {
+	case diagnostic = <-reporter.diagnostics:
+	case <-time.After(3 * time.Second):
+		t.Fatal("ready preparation persistence failure did not report fatal lifecycle state")
+	}
+	if diagnostic.Operation != LifecycleFatalOperationReadyPreparationFailure ||
+		diagnostic.TaskID != reference.TaskID ||
+		!diagnostic.CurrentNode.Equal(reference) ||
+		diagnostic.RunID == 0 ||
+		diagnostic.RunPhase != LifecycleFatalRunPhaseLaunching ||
+		diagnostic.ExpectedScheduling != workflow.CurrentNodeSchedulingReady ||
+		diagnostic.ScopeID != nil ||
+		!errors.Is(diagnostic.OriginalOutcome, preparationErr) ||
+		!errors.Is(diagnostic.PersistenceFailure, persistenceErr) {
+		t.Fatalf("ready fatal diagnostic = %+v", diagnostic)
+	}
+	if _, err := controller.ObserveWorkflowTaskExecutions([]workflow.TaskID{reference.TaskID}); !errors.Is(err, persistenceErr) {
+		t.Fatalf("lifecycle read after fatal report = %v, want persistence failure", err)
+	}
+}
+
+func TestCurrentNodeControllerAdmittedLaunchPersistenceFailureReportsTypedFatalDiagnostic(t *testing.T) {
+	reference := currentNodeReferenceForControllerTest(t, "task-admitted-fatal", "node-agent")
+	launchErr := errors.New("launch runtime")
+	persistenceErr := errors.New("persist admitted interruption")
+	store := &currentNodeControllerStore{
+		interruptErr: persistenceErr,
+		started: workflowstore.StartTaskResult{Mutation: workflow.CurrentNodeMutationResult{
+			Created: []workflow.CurrentNode{{
+				Reference:  reference,
+				Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
+			}},
+		}},
+	}
+	reporter := newRecordingLifecycleFatalReporter()
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller, err := NewCurrentNodeController(
+		store,
+		failingCurrentNodeRunner{cause: launchErr},
+		authority,
+		NewTaskMutationCoordinator(),
+		CurrentNodeControllerConfig{
+			AgentConcurrency:  1,
+			AssignmentSteerer: noOpCurrentNodeAssignmentSteerer{},
+			LifecycleReporter: reporter,
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewCurrentNodeController: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := controller.Close(); err != nil && !errors.Is(err, persistenceErr) {
+			t.Errorf("close controller: %v", err)
+		}
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+
+	if _, err := controller.StartTask(context.Background(), reference.TaskID, func(context.Context) error { return nil }); err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	var diagnostic LifecycleFatalDiagnostic
+	select {
+	case diagnostic = <-reporter.diagnostics:
+	case <-time.After(3 * time.Second):
+		t.Fatal("admitted launch persistence failure did not report fatal lifecycle state")
+	}
+	if diagnostic.Operation != LifecycleFatalOperationAdmittedLaunchFailure ||
+		diagnostic.TaskID != reference.TaskID ||
+		!diagnostic.CurrentNode.Equal(reference) ||
+		diagnostic.RunID == 0 ||
+		diagnostic.RunPhase != LifecycleFatalRunPhaseLaunching ||
+		diagnostic.ExpectedScheduling != workflow.CurrentNodeSchedulingAdmitted ||
+		diagnostic.ScopeID != nil ||
+		!errors.Is(diagnostic.OriginalOutcome, launchErr) ||
+		!errors.Is(diagnostic.PersistenceFailure, persistenceErr) {
+		t.Fatalf("admitted fatal diagnostic = %+v", diagnostic)
+	}
+	if _, err := controller.ObserveWorkflowTaskExecutions([]workflow.TaskID{reference.TaskID}); !errors.Is(err, persistenceErr) {
+		t.Fatalf("lifecycle read after admitted fatal report = %v, want persistence failure", err)
+	}
+}
+
 func TestCurrentNodeControllerRegistersGateBeforeRunnerAndReleasesLeaseAfterLiveSwap(t *testing.T) {
 	shellPath, err := exec.LookPath("sh")
 	if err != nil {
@@ -134,6 +288,72 @@ func TestCurrentNodeControllerRunnerFailureInterruptsAdmittedCurrentNode(t *test
 	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
 		return attention.pendingCount() == 1
 	}, "runner failure did not publish interrupted Current Node attention")
+}
+
+func TestCurrentNodeControllerRunnerFailureAfterExactRegistrationUsesExactRuntimeDisposition(t *testing.T) {
+	shellPath, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("sh executable unavailable: %v", err)
+	}
+	reference := currentNodeReferenceForControllerTest(t, "task-immediate-exact-failure", "node-agent")
+	store := &currentNodeControllerStore{
+		interruptStarted: make(chan struct{}),
+		interruptRelease: make(chan struct{}),
+	}
+	var controller *CurrentNodeController
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
+			controller.ExecutionFinalized(scope)
+		}),
+	})
+	runnerErr := errors.New("runner returned after exact registration")
+	runner := &controlledScriptRunner{
+		authority:   authority,
+		command:     sessionruntime.ScriptCommand{Path: shellPath, Args: []string{"-c", "while :; do sleep 1; done"}},
+		entered:     make(chan struct{}),
+		startRunner: make(chan struct{}),
+		registered:  make(chan struct{}),
+		returnStart: make(chan struct{}),
+		handles:     make(chan sessionruntime.ExecutionHandle, 1),
+		returnErr:   runnerErr,
+	}
+	controller = newCurrentNodeControllerForTest(t, store, runner, authority, 1)
+	t.Cleanup(func() {
+		select {
+		case <-store.interruptRelease:
+		default:
+			close(store.interruptRelease)
+		}
+		if err := controller.Close(); err != nil {
+			t.Errorf("close controller: %v", err)
+		}
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+
+	if err := startCurrentNodeForControllerTest(context.Background(), controller, store, reference); err != nil {
+		t.Fatalf("start current node: %v", err)
+	}
+	<-runner.entered
+	close(runner.startRunner)
+	<-runner.registered
+	close(runner.returnStart)
+	select {
+	case <-store.interruptStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("immediate runner failure did not begin Exact-runtime disposition")
+	}
+	if !hasLiveCurrentNode(controller.Snapshot(), reference) {
+		t.Fatalf("runner failure removed Exact Run before durable disposition: %+v", controller.Snapshot())
+	}
+	close(store.interruptRelease)
+	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+		interruption, interrupted := store.interruption(reference)
+		return interrupted &&
+			interruption.reason == reasonCurrentNodeRuntimeStartFailed &&
+			interruption.detail.Fields["error"] == runnerErr.Error()
+	}, "immediate runner failure did not durably interrupt its Exact generation")
 }
 
 func TestCurrentNodeControllerFinalizedWithoutOutcomeInterruptsAdmittedCurrentNode(t *testing.T) {
@@ -335,8 +555,8 @@ func TestCurrentNodeControllerPassesResumePromptDeliveryToRunner(t *testing.T) {
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 	runner := &countingCurrentNodeRunner{}
 	controller, err := NewCurrentNodeController(store, runner, authority, NewTaskMutationCoordinator(), CurrentNodeControllerConfig{
-		AgentConcurrency:      1,
-		LifecycleAvailability: NewLifecycleFatalAvailability(),
+		AgentConcurrency:  1,
+		LifecycleReporter: newRecordingLifecycleFatalReporter(),
 		AssignmentSteerer: &recordingCurrentNodeAssignmentSteerer{
 			err: errors.New("Resume must not steer an assignment"),
 		},
@@ -690,6 +910,15 @@ func TestCurrentNodeControllerCloseBroadcastsScriptStopsBeforeJoining(t *testing
 	if elapsed := time.Since(closeStarted); elapsed >= 2*grace {
 		t.Fatalf("controller Close took %s for %d Script grace windows, want overlapping shutdown", elapsed, scriptCount)
 	}
+	snapshot := controller.Snapshot()
+	if len(snapshot.AutomaticIntents) != 0 ||
+		len(snapshot.ExplicitStarts) != 0 ||
+		len(snapshot.HeldIntents) != 0 ||
+		len(snapshot.Gates) != 0 ||
+		len(snapshot.LiveScopes) != 0 ||
+		len(snapshot.InterruptingTasks) != 0 {
+		t.Fatalf("controller Close retained Workflow Run ownership: %+v", snapshot)
+	}
 }
 
 func TestCurrentNodeControllerStartTaskPublishesAdmissionOwnershipBeforeDeleteCanObserveQuiescence(t *testing.T) {
@@ -712,9 +941,9 @@ func TestCurrentNodeControllerStartTaskPublishesAdmissionOwnershipBeforeDeleteCa
 	}
 	taskMutations := NewTaskMutationCoordinator()
 	controller, err := NewCurrentNodeController(store, runner, authority, taskMutations, CurrentNodeControllerConfig{
-		AgentConcurrency:      1,
-		AssignmentSteerer:     noOpCurrentNodeAssignmentSteerer{},
-		LifecycleAvailability: NewLifecycleFatalAvailability(),
+		AgentConcurrency:  1,
+		AssignmentSteerer: noOpCurrentNodeAssignmentSteerer{},
+		LifecycleReporter: newRecordingLifecycleFatalReporter(),
 	})
 	if err != nil {
 		t.Fatalf("NewCurrentNodeController: %v", err)
@@ -793,9 +1022,9 @@ func TestCurrentNodeControllerStartTaskReturnsBeforePreparation(t *testing.T) {
 	runner := &blockingCurrentNodeRunner{entered: make(chan struct{}), release: make(chan struct{})}
 	taskMutations := NewTaskMutationCoordinator()
 	controller, err := NewCurrentNodeController(store, runner, authority, taskMutations, CurrentNodeControllerConfig{
-		AgentConcurrency:      1,
-		AssignmentSteerer:     noOpCurrentNodeAssignmentSteerer{},
-		LifecycleAvailability: NewLifecycleFatalAvailability(),
+		AgentConcurrency:  1,
+		AssignmentSteerer: noOpCurrentNodeAssignmentSteerer{},
+		LifecycleReporter: newRecordingLifecycleFatalReporter(),
 	})
 	if err != nil {
 		t.Fatalf("NewCurrentNodeController: %v", err)

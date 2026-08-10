@@ -15,7 +15,7 @@ import (
 	"core/server/workflowstore"
 )
 
-func TestCurrentNodeControllerInterruptPersistsAfterCallerDeadline(t *testing.T) {
+func TestCurrentNodeControllerInterruptCancellationBeforeCommitLeavesExactAuthorityUnchanged(t *testing.T) {
 	shellPath, err := exec.LookPath("sh")
 	if err != nil {
 		t.Skipf("sh executable unavailable: %v", err)
@@ -66,15 +66,89 @@ func TestCurrentNodeControllerInterruptPersistsAfterCallerDeadline(t *testing.T)
 		t.Fatal("interrupt did not begin its durable cleanup")
 	}
 	<-ctx.Done()
-	close(store.interruptRelease)
-	if err := <-result; err != nil {
-		t.Fatalf("interrupt current node after caller deadline: %v", err)
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("interrupt before commit error = %v, want deadline exceeded", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("pre-commit cancellation did not return")
 	}
-	if interruption, interrupted := store.interruption(reference); !interrupted || interruption.reason != workflow.CurrentNodeInterruptionReasonUserInterrupt {
-		t.Fatalf("interruption = %+v, interrupted = %t, want durable user interruption", interruption, interrupted)
+	if interruption, interrupted := store.interruption(reference); interrupted {
+		t.Fatalf("pre-commit cancellation persisted interruption: %+v", interruption)
+	}
+	if !hasLiveCurrentNode(controller.Snapshot(), reference) {
+		t.Fatalf("pre-commit cancellation removed exact authority: %+v", controller.Snapshot())
+	}
+	close(store.interruptRelease)
+}
+
+func TestCurrentNodeControllerInterruptCancellationAfterCommitCannotPreventExactCleanup(t *testing.T) {
+	shellPath, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("sh executable unavailable: %v", err)
+	}
+	reference := currentNodeReferenceForControllerTest(t, "task-interrupt-post-commit", "node-agent")
+	store := &currentNodeControllerStore{
+		interruptCommitted:   make(chan struct{}),
+		interruptAfterCommit: make(chan struct{}),
+	}
+	var controller *CurrentNodeController
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
+			controller.ExecutionFinalized(scope)
+		}),
+	})
+	runner := &recordingScriptRunner{
+		authority: authority,
+		command: sessionruntime.ScriptCommand{
+			Path: shellPath,
+			Args: []string{"-c", "while :; do sleep 1; done"},
+		},
+		started: make(chan workflow.CurrentNodeReference, 1),
+	}
+	controller = newCurrentNodeControllerForTest(t, store, runner, authority, 1)
+	t.Cleanup(func() {
+		select {
+		case <-store.interruptAfterCommit:
+		default:
+			close(store.interruptAfterCommit)
+		}
+		if err := controller.Close(); err != nil {
+			t.Errorf("close controller: %v", err)
+		}
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+
+	if err := startCurrentNodeForControllerTest(context.Background(), controller, store, reference); err != nil {
+		t.Fatalf("start current node: %v", err)
+	}
+	<-runner.started
+	waitForRunningCurrentNode(t, authority, reference)
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		result <- controller.Interrupt(ctx, InterruptSelector{TaskID: reference.TaskID})
+	}()
+	select {
+	case <-store.interruptCommitted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("interrupt did not commit its durable disposition")
+	}
+	cancel()
+	close(store.interruptAfterCommit)
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("post-commit interrupt cleanup: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("post-commit caller cancellation prevented cleanup")
 	}
 	if hasLiveCurrentNode(controller.Snapshot(), reference) {
-		t.Fatalf("interrupted current node remains live: %+v", controller.Snapshot())
+		t.Fatalf("post-commit cleanup retained exact authority: %+v", controller.Snapshot())
 	}
 }
 
@@ -147,6 +221,15 @@ func TestCurrentNodeControllerTaskInterruptFenceRejectsLifecycleMutationsUntilRe
 	if err := controller.EnsureTaskQuiescent(source.TaskID); !errors.Is(err, ErrTaskExecutionNotQuiescent) {
 		t.Fatalf("quiescence during Task Interrupt = %v, want %v", err, ErrTaskExecutionNotQuiescent)
 	}
+	duplicateDone := make(chan error, 1)
+	go func() {
+		duplicateDone <- controller.Interrupt(context.Background(), InterruptSelector{TaskID: source.TaskID})
+	}()
+	select {
+	case err := <-duplicateDone:
+		t.Fatalf("duplicate Task Interrupt did not join stop-pending completion: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
 
 	close(releaseFinalization)
 	select {
@@ -156,6 +239,14 @@ func TestCurrentNodeControllerTaskInterruptFenceRejectsLifecycleMutationsUntilRe
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("Task Interrupt fence did not clear after retirement")
+	}
+	select {
+	case err := <-duplicateDone:
+		if err != nil {
+			t.Fatalf("duplicate Task Interrupt completion: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("duplicate Task Interrupt did not observe shared cleanup completion")
 	}
 }
 

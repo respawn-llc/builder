@@ -22,15 +22,16 @@ type currentNodeAdmissionWait struct {
 }
 
 type currentNodeInterruptCleanupState struct {
-	taskID         workflow.TaskID
-	stopHandles    []sessionruntime.ExecutionHandle
-	waitHandles    []sessionruntime.ExecutionHandle
-	references     []workflow.CurrentNodeReference
-	selectedRuns   []currentNodeRunID
-	launchRuns     []currentNodeRunID
-	admissionWaits []currentNodeAdmissionWait
-	taskFence      *currentNodeInterruptFence
-	persisted      bool
+	taskID          workflow.TaskID
+	stopHandles     []sessionruntime.ExecutionHandle
+	waitHandles     []sessionruntime.ExecutionHandle
+	references      []workflow.CurrentNodeReference
+	selectedRuns    []currentNodeRunID
+	launchRuns      []currentNodeRunID
+	admissionWaits  []currentNodeAdmissionWait
+	taskFence       *currentNodeInterruptFence
+	persisted       bool
+	fatalDiagnostic LifecycleFatalDiagnostic
 }
 
 func (c *CurrentNodeController) cleanupInterrupt(state currentNodeInterruptCleanupState) error {
@@ -88,10 +89,7 @@ func (c *CurrentNodeController) cleanupInterrupt(state currentNodeInterruptClean
 	}
 	var waitErrs []error
 	for _, handle := range state.waitHandles {
-		if _, err := handle.Wait(cleanupCtx); err != nil &&
-			!errors.Is(err, context.Canceled) &&
-			!errors.Is(err, sessionruntime.ErrExecutionNoLongerLive) &&
-			!errors.Is(err, ErrTaskExecutionNotQuiescent) {
+		if err := handle.Stop(cleanupCtx); err != nil {
 			waitErrs = append(waitErrs, err)
 		}
 	}
@@ -131,6 +129,23 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 	}
 	if err := selector.Validate(); err != nil {
 		return err
+	}
+	if selector.SessionID == nil {
+		c.mu.Lock()
+		existingFence := c.taskInterruptFenceLocked(selector.TaskID)
+		var existingCompletion <-chan struct{}
+		if existingFence != nil {
+			existingCompletion = existingFence.done
+		}
+		c.mu.Unlock()
+		if existingCompletion != nil {
+			select {
+			case <-existingCompletion:
+				return nil
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			}
+		}
 	}
 	var (
 		stopHandles    []sessionruntime.ExecutionHandle
@@ -232,6 +247,7 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 				if !exists {
 					return errors.New("finalizing workflow execution has no Run generation")
 				}
+				selectedRuns = append(selectedRuns, run.id)
 				c.fenceRunLocked(run, taskFence)
 				waitHandles = append(waitHandles, handle)
 				if !run.completion.committed() || run.completionSourceRetained {
@@ -275,11 +291,22 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 		if err != nil {
 			return err
 		}
+		if err := c.persistUserInterrupt(ctx, references); err != nil {
+			c.mu.Lock()
+			if taskFence != nil {
+				c.rollbackTaskInterruptLocked(taskFence)
+			} else {
+				c.rollbackSelectedInterruptLocked(selectedRuns)
+			}
+			c.mu.Unlock()
+			return err
+		}
+		persisted = true
 		return nil
 	}); err != nil {
 		return err
 	}
-	return c.cleanupInterrupt(currentNodeInterruptCleanupState{
+	state := currentNodeInterruptCleanupState{
 		taskID:         selector.TaskID,
 		stopHandles:    stopHandles,
 		waitHandles:    waitHandles,
@@ -289,7 +316,55 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 		admissionWaits: admissionWaits,
 		taskFence:      taskFence,
 		persisted:      persisted,
-	})
+	}
+	if persisted {
+		c.mu.Lock()
+		state.fatalDiagnostic = c.interruptCleanupDiagnosticLocked(state)
+		c.mu.Unlock()
+	}
+	err := c.cleanupInterrupt(state)
+	if err != nil && persisted {
+		state.fatalDiagnostic.CleanupFailure = err
+		result := c.lifecycleFatalReporter.ReportFatal(state.fatalDiagnostic)
+		c.mu.Lock()
+		if run := c.runs[currentNodeRunID{sequence: state.fatalDiagnostic.RunID}]; run != nil {
+			run.recordCallbackError(fmt.Errorf(
+				"%s shutdown_accepted=%t: %w",
+				state.fatalDiagnostic.Error(),
+				result.ShutdownAccepted,
+				err,
+			))
+		}
+		c.mu.Unlock()
+	}
+	return err
+}
+
+func (c *CurrentNodeController) interruptCleanupDiagnosticLocked(
+	state currentNodeInterruptCleanupState,
+) LifecycleFatalDiagnostic {
+	runIDs := append([]currentNodeRunID(nil), state.selectedRuns...)
+	runIDs = append(runIDs, state.launchRuns...)
+	for _, wait := range state.admissionWaits {
+		runIDs = append(runIDs, wait.runID)
+	}
+	for _, runID := range runIDs {
+		if run := c.runs[runID]; run != nil {
+			return lifecycleFatalDiagnosticForRun(
+				run,
+				LifecycleFatalOperationInterruptCleanup,
+				errors.New("durable user interruption committed before bounded stop cleanup"),
+				nil,
+			)
+		}
+	}
+	panic(fmt.Sprintf(
+		"committed workflow interruption has no cleanup Run: task_id=%s references=%v selected_runs=%v launch_runs=%v",
+		state.taskID,
+		state.references,
+		state.selectedRuns,
+		state.launchRuns,
+	))
 }
 
 func (c *CurrentNodeController) rollbackSelectedInterruptLocked(runIDs []currentNodeRunID) {

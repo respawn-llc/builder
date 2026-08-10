@@ -22,9 +22,10 @@ import (
 )
 
 type Core struct {
-	bundles   *Bundles
-	closeOnce sync.Once
-	closeErr  error
+	bundles        *Bundles
+	fatalLifecycle *lifecycleFatalState
+	closeOnce      sync.Once
+	closeErr       error
 }
 
 type unregisteredSessionLaunchClient struct{}

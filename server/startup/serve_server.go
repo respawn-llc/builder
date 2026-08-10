@@ -29,8 +29,14 @@ import (
 
 type ServeServer struct {
 	*core.Core
-	deps *startupGatewayDependencies
-	cfg  config.App
+	deps           *startupGatewayDependencies
+	cfg            config.App
+	lifecycleFatal lifecycleFatalSource
+}
+
+type lifecycleFatalSource interface {
+	LifecycleFatalShutdown() <-chan struct{}
+	LifecycleFatalCause() error
 }
 
 func (s *ServeServer) Config() config.App {
@@ -64,7 +70,7 @@ func StartServeServer(ctx context.Context, req Request, authHandler AuthHandler,
 		if err != nil {
 			return nil, err
 		}
-		return &ServeServer{Core: appCore, cfg: appCore.Config()}, nil
+		return &ServeServer{Core: appCore, cfg: appCore.Config(), lifecycleFatal: appCore}, nil
 	}
 	if onboardingHandler != nil {
 		onboardingCfg, completed, err := runStartupOnboardingHandler(ctx, cfg, bootstrapReq, authHandler, onboardingHandler)
@@ -76,7 +82,7 @@ func StartServeServer(ctx context.Context, req Request, authHandler AuthHandler,
 			if err != nil {
 				return nil, err
 			}
-			return &ServeServer{Core: appCore, cfg: appCore.Config()}, nil
+			return &ServeServer{Core: appCore, cfg: appCore.Config(), lifecycleFatal: appCore}, nil
 		}
 	}
 	cfg, deps, err := buildStartupControlSurface(ctx, bootstrapReq, authHandler)
@@ -86,7 +92,7 @@ func StartServeServer(ctx context.Context, req Request, authHandler AuthHandler,
 			if coreErr != nil {
 				return nil, coreErr
 			}
-			return &ServeServer{Core: appCore, cfg: appCore.Config()}, nil
+			return &ServeServer{Core: appCore, cfg: appCore.Config(), lifecycleFatal: appCore}, nil
 		}
 		return nil, err
 	}
@@ -175,6 +181,10 @@ func (s *ServeServer) Serve(ctx context.Context) error {
 		return err
 	}
 	defer s.close()
+	var fatalShutdown <-chan struct{}
+	if s.lifecycleFatal != nil {
+		fatalShutdown = s.lifecycleFatal.LifecycleFatalShutdown()
+	}
 	select {
 	case <-ctx.Done():
 		rpc.shutdown()
@@ -184,6 +194,14 @@ func (s *ServeServer) Serve(ctx context.Context) error {
 		rpc.shutdown()
 		rpc.waitRemaining()
 		return serveErr
+	case <-fatalShutdown:
+		rpc.shutdown()
+		rpc.wait()
+		fatalCause := s.lifecycleFatal.LifecycleFatalCause()
+		if fatalCause == nil {
+			fatalCause = errors.New("server lifecycle reported fatal shutdown without a cause")
+		}
+		return errors.Join(fatalCause, s.Close())
 	}
 }
 
