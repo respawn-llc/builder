@@ -265,6 +265,10 @@ type sessionStatusCountingResolver struct {
 	publishErr   error
 }
 
+func (*sessionStatusCountingResolver) RuntimeActivity(string) (clientui.RuntimeActivity, error) {
+	return clientui.RuntimeActivity{State: clientui.RuntimeActivityUnavailable}, nil
+}
+
 func (r *sessionStatusCountingResolver) RuntimeReadModelSnapshot(context.Context, string, []clientui.RuntimeOperationRef) (runtimeactivity.ResponseSnapshot, error) {
 	return runtimeactivity.ResponseSnapshot{}, nil
 }
@@ -322,6 +326,14 @@ func TestServiceCommittedRuntimeMutationReturnsAndCachesSessionStatusPublishErro
 type sequenceRuntimeActivityResolver struct {
 	snapshots []runtimeactivity.ResponseSnapshot
 	calls     int
+}
+
+func (r *sequenceRuntimeActivityResolver) RuntimeActivity(string) (clientui.RuntimeActivity, error) {
+	if len(r.snapshots) == 0 {
+		return clientui.RuntimeActivity{State: clientui.RuntimeActivityUnavailable}, nil
+	}
+	index := min(r.calls, len(r.snapshots)-1)
+	return r.snapshots[index].Activity, nil
 }
 
 func (r *sequenceRuntimeActivityResolver) RuntimeReadModelSnapshot(context.Context, string, []clientui.RuntimeOperationRef) (runtimeactivity.ResponseSnapshot, error) {

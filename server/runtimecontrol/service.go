@@ -24,6 +24,7 @@ import (
 )
 
 type RuntimeActivityResolver interface {
+	RuntimeActivity(sessionID string) (clientui.RuntimeActivity, error)
 	RuntimeReadModelSnapshot(ctx context.Context, sessionID string, refs []clientui.RuntimeOperationRef) (runtimeactivity.ResponseSnapshot, error)
 }
 
@@ -762,12 +763,14 @@ func (s *Service) prepareInterrupt(
 }
 
 func (s *Service) ordinaryRuntimeInterruptible(ctx context.Context, sessionID string) bool {
-	active := false
-	err := s.withRuntime(ctx, sessionID, func(_ context.Context, engine *runtime.Engine) error {
-		active = engine.ActiveStepSnapshot() != nil
-		return nil
-	})
-	return err == nil && active
+	if s == nil || s.activity == nil {
+		return false
+	}
+	if err := context.Cause(ctx); err != nil {
+		return false
+	}
+	activity, err := s.activity.RuntimeActivity(sessionID)
+	return err == nil && activity.ActiveStep != nil
 }
 
 func queuedInterruptRefs(req runtimeInterruptMemoRequest) []clientui.RuntimeOperationRef {

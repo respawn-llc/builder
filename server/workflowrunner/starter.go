@@ -447,20 +447,6 @@ func (s *Starter) preparePlannedCurrentNodeAgentSession(
 	if err := s.applyCurrentNodeSessionMetadata(ctx, input, &plan); err != nil {
 		return preparedCurrentNodeAgentSession{}, cleanup(err)
 	}
-	var (
-		client llm.Client
-		err    error
-	)
-	if requireRuntimeClient {
-		client, err = s.newWorkflowProviderClient(ctx, plan)
-		if err != nil {
-			return preparedCurrentNodeAgentSession{}, cleanup(err)
-		}
-	}
-	mode, client, err := s.resolveCurrentNodeCompletionMode(ctx, input, plan, client)
-	if err != nil {
-		return preparedCurrentNodeAgentSession{}, cleanup(err)
-	}
 	if sessionPrepared {
 		if err := s.store.ValidateCurrentNodeSessionBinding(
 			ctx,
@@ -481,6 +467,23 @@ func (s *Starter) preparePlannedCurrentNodeAgentSession(
 			return preparedCurrentNodeAgentSession{}, cleanup(err)
 		}
 		sessionBound = true
+		if input.CurrentNode.SessionID == nil {
+			disposable = false
+		}
+	}
+	var (
+		client llm.Client
+		err    error
+	)
+	if requireRuntimeClient {
+		client, err = s.newWorkflowProviderClient(ctx, plan)
+		if err != nil {
+			return preparedCurrentNodeAgentSession{}, cleanup(err)
+		}
+	}
+	mode, client, err := s.resolveCurrentNodeCompletionMode(ctx, input, plan, client)
+	if err != nil {
+		return preparedCurrentNodeAgentSession{}, cleanup(err)
 	}
 	return preparedCurrentNodeAgentSession{
 		root:    root,
