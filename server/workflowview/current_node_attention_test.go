@@ -80,8 +80,7 @@ func TestAttentionProjectsPendingApprovalAndInterruptedCurrentNode(t *testing.T)
 		*interrupted.SessionID != interruptedSessionID.String() ||
 		interrupted.DetailJSON == nil ||
 		strings.TrimSpace(*interrupted.DetailJSON) == "" ||
-		interrupted.ApprovalID != nil ||
-		interrupted.QuestionID != nil {
+		interrupted.ApprovalID != nil {
 		t.Fatalf("interrupted attention item = %+v, want Current Node identity", interrupted)
 	}
 	requireAttentionMessageOmitted(t, interrupted)
@@ -227,13 +226,12 @@ func TestAttentionAndDetailProjectLiveQuestionFromExactScope(t *testing.T) {
 			PromptID:               clientui.PromptID(question.request.ID),
 			SessionID:              question.sessionID,
 			StepID:                 mustWorkflowViewStepID(t, question.request.StepID),
-			ID:                     question.request.ID,
 			CreatedAt:              time.UnixMilli(4_000).UTC(),
 			Question:               question.request.Question,
 			Suggestions:            question.request.Suggestions,
 			RecommendedOptionIndex: intPointer(question.request.RecommendedOptionIndex),
 		}, {
-			ID:                "unrelated-approval",
+			PromptID:          clientui.PromptID("unrelated-approval"),
 			CreatedAt:         time.UnixMilli(4_001).UTC(),
 			Question:          "Approve unrelated action?",
 			Approval:          true,
@@ -257,7 +255,6 @@ func TestAttentionAndDetailProjectLiveQuestionFromExactScope(t *testing.T) {
 	}
 	if len(taskAttention.Items) != 1 ||
 		taskAttention.Items[0].Kind != "question" ||
-		taskAttention.Items[0].QuestionID != nil ||
 		taskAttention.Items[0].Message == nil ||
 		*taskAttention.Items[0].Message != question.request.Question ||
 		taskAttention.Items[0].SessionID != nil ||
@@ -315,7 +312,6 @@ func TestAttentionProjectsLiveSessionApprovalFromExactScope(t *testing.T) {
 			PromptID:          clientui.PromptID(request.ID),
 			SessionID:         prompt.sessionID,
 			StepID:            mustWorkflowViewStepID(t, request.StepID),
-			ID:                request.ID,
 			CreatedAt:         time.UnixMilli(4_000).UTC(),
 			Question:          request.Question,
 			Approval:          true,
@@ -342,7 +338,6 @@ func TestAttentionProjectsLiveSessionApprovalFromExactScope(t *testing.T) {
 	}
 	item := response.Items[0]
 	if item.Kind != "question" ||
-		item.QuestionID != nil ||
 		item.SessionID != nil ||
 		item.Question == nil ||
 		item.Question.PromptID != clientui.PromptID(request.ID) ||

@@ -1,7 +1,5 @@
 import { describe, expect, it } from "vitest";
-
 import { questionAnswerBatchInput } from "./TaskDetailQuestionAnswer";
-
 describe("questionAnswerBatchInput", () => {
   it("encodes whitespace-only optional text as absent while preserving commentary", () => {
     expect(

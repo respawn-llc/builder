@@ -667,7 +667,6 @@ func (s workflowViewPendingPromptSource) ListPendingPrompts(sessionID string) ([
 			PromptID:               promptID,
 			SessionID:              typedSessionID,
 			StepID:                 stepID,
-			ID:                     item.Request.ID,
 			CreatedAt:              item.CreatedAt,
 			Question:               item.Request.Question,
 			Suggestions:            append([]string(nil), item.Request.Suggestions...),

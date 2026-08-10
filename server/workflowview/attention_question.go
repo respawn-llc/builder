@@ -21,7 +21,6 @@ type PendingPromptSnapshot struct {
 	PromptID               clientui.PromptID
 	SessionID              runtimeids.SessionID
 	StepID                 runtimeids.StepID
-	ID                     string
 	CreatedAt              time.Time
 	Question               string
 	Suggestions            []string
@@ -104,7 +103,7 @@ func (r *pendingQuestionResolver) questionFromPendingPrompt(sessionID string, as
 		return pendingQuestion{}, false, fmt.Errorf("load pending prompts for session %q: %w", sessionID, err)
 	}
 	for _, snapshot := range snapshots {
-		if strings.TrimSpace(snapshot.ID) != askID {
+		if string(snapshot.PromptID) != askID {
 			continue
 		}
 		return pendingQuestionFromPrompt(snapshot)
@@ -122,20 +121,17 @@ func pendingQuestionFromPrompt(snapshot PendingPromptSnapshot) (pendingQuestion,
 	if snapshot.StepID.IsZero() {
 		return pendingQuestion{}, true, fmt.Errorf("pending prompt %q has no step identity", snapshot.PromptID)
 	}
-	if string(snapshot.PromptID) != strings.TrimSpace(snapshot.ID) {
-		return pendingQuestion{}, true, fmt.Errorf("pending prompt identity %q does not match request identity %q", snapshot.PromptID, snapshot.ID)
-	}
 	if snapshot.Approval {
 		decisions := append([]clientui.ApprovalDecision(nil), snapshot.ApprovalDecisions...)
 		for _, decision := range decisions {
 			switch decision {
 			case clientui.ApprovalDecisionAllowOnce, clientui.ApprovalDecisionAllowSession, clientui.ApprovalDecisionDeny:
 			default:
-				return pendingQuestion{}, true, fmt.Errorf("pending approval question %q has invalid decision %q", snapshot.ID, decision)
+				return pendingQuestion{}, true, fmt.Errorf("pending approval question %q has invalid decision %q", snapshot.PromptID, decision)
 			}
 		}
 		if len(decisions) == 0 {
-			return pendingQuestion{}, true, fmt.Errorf("pending approval question %q has no approval decisions", snapshot.ID)
+			return pendingQuestion{}, true, fmt.Errorf("pending approval question %q has no approval decisions", snapshot.PromptID)
 		}
 		return pendingQuestion{
 			message: strings.TrimSpace(snapshot.Question),
@@ -151,7 +147,7 @@ func pendingQuestionFromPrompt(snapshot PendingPromptSnapshot) (pendingQuestion,
 	suggestions := normalizedPendingQuestionSuggestions(snapshot.Suggestions)
 	recommended, err := validatePendingQuestionRecommendation(snapshot.RecommendedOptionIndex, len(suggestions))
 	if err != nil {
-		return pendingQuestion{}, true, fmt.Errorf("pending question %q: %w", snapshot.ID, err)
+		return pendingQuestion{}, true, fmt.Errorf("pending question %q: %w", snapshot.PromptID, err)
 	}
 	return pendingQuestion{
 		message:                strings.TrimSpace(snapshot.Question),

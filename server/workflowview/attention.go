@@ -316,23 +316,22 @@ func (a *Attention) liveQuestionCandidates(ctx context.Context, taskFilter *stri
 			if err != nil {
 				return nil, err
 			}
-			promptsByID := make(map[string]PendingPromptSnapshot, len(prompts))
+			promptsByID := make(map[clientui.PromptID]PendingPromptSnapshot, len(prompts))
 			for _, prompt := range prompts {
-				promptID := strings.TrimSpace(prompt.ID)
-				if promptID == "" {
-					return nil, fmt.Errorf("task %q session %q has a pending prompt without question identity", taskID, execution.Agent.SessionID)
+				if err := prompt.PromptID.Validate(); err != nil {
+					return nil, fmt.Errorf("task %q session %q pending prompt identity: %w", taskID, execution.Agent.SessionID, err)
 				}
-				if _, duplicate := promptsByID[promptID]; duplicate {
-					return nil, fmt.Errorf("task %q session %q has duplicate pending prompt %q", taskID, execution.Agent.SessionID, promptID)
+				if _, duplicate := promptsByID[prompt.PromptID]; duplicate {
+					return nil, fmt.Errorf("task %q session %q has duplicate pending prompt %q", taskID, execution.Agent.SessionID, prompt.PromptID)
 				}
-				promptsByID[promptID] = prompt
+				promptsByID[prompt.PromptID] = prompt
 			}
 			for _, promptReference := range execution.PendingPrompts {
 				if promptReference.Kind != sessionruntime.PendingPromptKindQuestion &&
 					promptReference.Kind != sessionruntime.PendingPromptKindSessionApproval {
 					continue
 				}
-				prompt, present := promptsByID[promptReference.ID]
+				prompt, present := promptsByID[clientui.PromptID(promptReference.ID)]
 				if !present {
 					continue
 				}

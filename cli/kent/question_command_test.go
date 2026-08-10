@@ -825,42 +825,6 @@ func TestTaskQuestionCandidatesIgnoreWorkflowTransitionApprovals(t *testing.T) {
 	}
 }
 
-func TestQuestionTaskStaleLiveApprovalIsOmittedForShowAndAnswer(t *testing.T) {
-	sessionID := "00000000-0000-4000-8000-000000000001"
-	questionID := "approval-1"
-	prompt := serverapi.WorkflowAttentionQuestionPrompt{Kind: serverapi.WorkflowAttentionQuestionKindApproval}
-	item := serverapi.WorkflowAttentionItem{
-		Kind:       string(serverapi.WorkflowTaskAttentionKindQuestion),
-		SessionID:  &sessionID,
-		QuestionID: &questionID,
-		Question:   &prompt,
-	}
-	for _, test := range []struct {
-		name string
-		args []string
-		want int
-	}{
-		{name: "show", args: []string{"--task", "KENT-335"}, want: 0},
-		{name: "answer", args: []string{"answer", "--task", "KENT-335", "--commentary", "allow"}, want: 1},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			unsetSessionIDEnvironmentForTest(t)
-			remote := &stubQuestionTaskRemote{
-				stubQuestionCommandRemote: &stubQuestionCommandRemote{},
-				task: serverapi.WorkflowTaskDetail{
-					Summary: serverapi.WorkflowTaskSummary{ID: "task-1", ShortID: "KENT-335"},
-				},
-				attentionResponses: []serverapi.WorkflowTaskAttentionListResponse{{Items: []serverapi.WorkflowAttentionItem{item}}},
-			}
-			command := installQuestionTaskRemote(t, remote)
-			var stdout, stderr bytes.Buffer
-			if got := command.run(test.args, &stdout, &stderr); got != test.want {
-				t.Fatalf("exit=%d, stdout=%q, stderr=%q", got, stdout.String(), stderr.String())
-			}
-		})
-	}
-}
-
 func TestQuestionByTaskResolvesProjectScopedShortID(t *testing.T) {
 	unsetSessionIDEnvironmentForTest(t)
 	remote := &stubQuestionTaskRemote{

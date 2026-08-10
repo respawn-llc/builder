@@ -1083,25 +1083,22 @@ type WorkflowTaskAttentionListResponse struct {
 }
 
 type WorkflowAttentionItem struct {
-	ID                     string                             `json:"id"`
-	Kind                   string                             `json:"kind"`
-	ProjectID              string                             `json:"project_id"`
-	WorkflowID             runtimeids.WorkflowID              `json:"workflow_id"`
-	TaskID                 string                             `json:"task_id"`
-	TaskShortID            string                             `json:"task_short_id"`
-	TaskTitle              string                             `json:"task_title"`
-	Message                *string                            `json:"message,omitempty"`
-	ApprovalID             *string                            `json:"approval_id,omitempty"`
-	CurrentNode            *WorkflowTaskCurrentNode           `json:"current_node,omitempty"`
-	SessionID              *string                            `json:"session_id,omitempty"`
-	SessionName            *string                            `json:"session_name"`
-	DetailJSON             *string                            `json:"detail_json,omitempty"`
-	QuestionID             *string                            `json:"question_id,omitempty"`
-	Suggestions            []string                           `json:"suggestions,omitempty"`
-	RecommendedOptionIndex *int                               `json:"recommended_option_index,omitempty"`
-	Question               *WorkflowAttentionQuestionPrompt   `json:"question,omitempty"`
-	ApprovalSnapshot       *WorkflowAttentionApprovalSnapshot `json:"approval_snapshot,omitempty"`
-	OccurredAtUnixMs       int64                              `json:"occurred_at_unix_ms"`
+	ID               string                             `json:"id"`
+	Kind             string                             `json:"kind"`
+	ProjectID        string                             `json:"project_id"`
+	WorkflowID       runtimeids.WorkflowID              `json:"workflow_id"`
+	TaskID           string                             `json:"task_id"`
+	TaskShortID      string                             `json:"task_short_id"`
+	TaskTitle        string                             `json:"task_title"`
+	Message          *string                            `json:"message,omitempty"`
+	ApprovalID       *string                            `json:"approval_id,omitempty"`
+	CurrentNode      *WorkflowTaskCurrentNode           `json:"current_node,omitempty"`
+	SessionID        *string                            `json:"session_id,omitempty"`
+	SessionName      *string                            `json:"session_name"`
+	DetailJSON       *string                            `json:"detail_json,omitempty"`
+	Question         *WorkflowAttentionQuestionPrompt   `json:"question,omitempty"`
+	ApprovalSnapshot *WorkflowAttentionApprovalSnapshot `json:"approval_snapshot,omitempty"`
+	OccurredAtUnixMs int64                              `json:"occurred_at_unix_ms"`
 }
 
 type WorkflowAttentionApprovalSnapshot struct {
@@ -2562,9 +2559,6 @@ func (r WorkflowAttentionItem) Validate() error {
 			workflowAttentionFieldPresence{name: "approval_snapshot", present: r.ApprovalSnapshot != nil},
 			workflowAttentionFieldPresence{name: "detail_json", present: r.DetailJSON != nil},
 			workflowAttentionFieldPresence{name: "session_id", present: r.SessionID != nil},
-			workflowAttentionFieldPresence{name: "question_id", present: r.QuestionID != nil},
-			workflowAttentionFieldPresence{name: "suggestions", present: r.Suggestions != nil},
-			workflowAttentionFieldPresence{name: "recommended_option_index", present: r.RecommendedOptionIndex != nil},
 		)
 	case "approval":
 		if err := validateOptionalAttentionString("message", r.Message); err != nil {
@@ -2582,11 +2576,8 @@ func (r WorkflowAttentionItem) Validate() error {
 		return validateWorkflowAttentionFieldsAbsent(r.Kind,
 			workflowAttentionFieldPresence{name: "session_id", present: r.SessionID != nil},
 			workflowAttentionFieldPresence{name: "session_name", present: r.SessionName != nil},
-			workflowAttentionFieldPresence{name: "question_id", present: r.QuestionID != nil},
 			workflowAttentionFieldPresence{name: "current_node", present: r.CurrentNode != nil},
 			workflowAttentionFieldPresence{name: "question", present: r.Question != nil},
-			workflowAttentionFieldPresence{name: "suggestions", present: r.Suggestions != nil},
-			workflowAttentionFieldPresence{name: "recommended_option_index", present: r.RecommendedOptionIndex != nil},
 			workflowAttentionFieldPresence{name: "detail_json", present: r.DetailJSON != nil},
 		)
 	case "interrupted_current_node":
@@ -2608,11 +2599,8 @@ func (r WorkflowAttentionItem) Validate() error {
 		return validateWorkflowAttentionFieldsAbsent(r.Kind,
 			workflowAttentionFieldPresence{name: "approval_id", present: r.ApprovalID != nil},
 			workflowAttentionFieldPresence{name: "session_name", present: r.SessionName != nil},
-			workflowAttentionFieldPresence{name: "question_id", present: r.QuestionID != nil},
 			workflowAttentionFieldPresence{name: "question", present: r.Question != nil},
 			workflowAttentionFieldPresence{name: "approval_snapshot", present: r.ApprovalSnapshot != nil},
-			workflowAttentionFieldPresence{name: "suggestions", present: r.Suggestions != nil},
-			workflowAttentionFieldPresence{name: "recommended_option_index", present: r.RecommendedOptionIndex != nil},
 		)
 	default:
 		return workflowRequestError(WorkflowRequestErrorInvalidMode, "kind", "kind must be question, approval, or interrupted_current_node")

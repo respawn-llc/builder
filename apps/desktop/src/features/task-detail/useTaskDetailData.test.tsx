@@ -99,7 +99,6 @@ describe("Task Detail live refresh", () => {
     await waitFor(() => {
       expect(screen.getAllByRole("radio")).toHaveLength(6);
     });
-
     const submits = screen.getAllByRole("button", { name: appI18n.t("task.submitAnswer") });
     await user.click(requiredElement(submits, 1));
     await waitFor(() => {
@@ -109,7 +108,6 @@ describe("Task Detail live refresh", () => {
     await user.click(
       requiredElement(screen.getAllByRole("button", { name: appI18n.t("task.submitAnswer") }), 0),
     );
-
     await waitFor(() => {
       expect(screen.getByText("ask-3")).toBeInTheDocument();
       expect(screen.getAllByRole("radio")[0]).toHaveFocus();
