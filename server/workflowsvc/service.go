@@ -2289,8 +2289,9 @@ func (s *Service) workflowGraphDraftDefinition(ctx context.Context, workflowID r
 		})
 	}
 	for _, node := range graph.Nodes {
-		if strings.TrimSpace(node.GroupID) != "" {
-			groupMemberIDs[node.GroupID] = append(groupMemberIDs[node.GroupID], workflow.NodeID(node.ID))
+		groupID := optionalStringValue(node.GroupID)
+		if groupID != "" {
+			groupMemberIDs[groupID] = append(groupMemberIDs[groupID], workflow.NodeID(node.ID))
 		}
 		workflowNode, err := workflow.NewNode(
 			workflow.NodeIdentity{
@@ -2298,7 +2299,7 @@ func (s *Service) workflowGraphDraftDefinition(ctx context.Context, workflowID r
 				ID:          workflow.NodeID(node.ID),
 				Key:         workflow.ModelKey(node.Key),
 				DisplayName: node.DisplayName,
-				GroupID:     node.GroupID,
+				GroupID:     groupID,
 			},
 			workflow.NodeKind(node.Kind),
 			workflow.NodeFields{
@@ -2391,7 +2392,7 @@ func workflowGraphStoreSaveRequest(workflowID runtimeids.WorkflowID, expectedVer
 		req.NodeGroups = append(req.NodeGroups, workflowstore.NodeGroupRecord{ID: group.ID, WorkflowID: workflowID, Key: workflow.ModelKey(group.Key), DisplayName: group.DisplayName})
 	}
 	for _, node := range graph.Nodes {
-		req.Nodes = append(req.Nodes, workflowstore.NodeRecord{ID: workflow.NodeID(node.ID), WorkflowID: workflowID, Key: workflow.ModelKey(node.Key), Kind: workflow.NodeKind(node.Kind), DisplayName: node.DisplayName, GroupID: node.GroupID, GroupKey: node.GroupKey, SubagentRole: node.SubagentRole, CompletionMode: node.CompletionMode, ScriptPath: optionalStringValue(node.ScriptPath), JoinInputProviders: joinInputProviders(node.JoinInputProviders)})
+		req.Nodes = append(req.Nodes, workflowstore.NodeRecord{ID: workflow.NodeID(node.ID), WorkflowID: workflowID, Key: workflow.ModelKey(node.Key), Kind: workflow.NodeKind(node.Kind), DisplayName: node.DisplayName, GroupID: optionalStringValue(node.GroupID), GroupKey: node.GroupKey, SubagentRole: node.SubagentRole, CompletionMode: node.CompletionMode, ScriptPath: optionalStringValue(node.ScriptPath), JoinInputProviders: joinInputProviders(node.JoinInputProviders)})
 	}
 	for _, group := range graph.TransitionGroups {
 		req.TransitionGroups = append(req.TransitionGroups, workflowstore.TransitionGroupRecord{ID: workflow.TransitionGroupID(group.ID), WorkflowID: workflowID, SourceNodeID: workflow.NodeID(group.SourceNodeID), TransitionID: workflow.TransitionID(group.TransitionID), DisplayName: group.DisplayName, Description: group.Description})
@@ -2483,14 +2484,7 @@ func workflowGraphSaveBlockers(blockers []workflowstore.WorkflowGraphSaveBlocker
 }
 
 func workflowGraphEntityReferences(references []workflowstore.WorkflowGraphEntityReference) []serverapi.WorkflowGraphEntityReference {
-	out := make([]serverapi.WorkflowGraphEntityReference, 0, len(references))
-	for _, reference := range references {
-		out = append(out, serverapi.WorkflowGraphEntityReference{
-			EntityType: serverapi.WorkflowGraphEntityType(reference.EntityType),
-			EntityID:   reference.EntityID,
-		})
-	}
-	return out
+	return append([]serverapi.WorkflowGraphEntityReference{}, references...)
 }
 
 func commentRecord(row workflowstore.CommentRecord) serverapi.WorkflowTaskComment {

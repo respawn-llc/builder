@@ -32,7 +32,7 @@ func TestWorkflowGraphDocumentRequiresPublicShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("draft: %v", err)
 	}
-	if len(graph.Nodes) != 1 || graph.Nodes[0].GroupID != "group" || graph.Nodes[0].GroupKey != "" {
+	if len(graph.Nodes) != 1 || graph.Nodes[0].GroupID == nil || *graph.Nodes[0].GroupID != "group" || graph.Nodes[0].GroupKey != "" {
 		t.Fatalf("Node membership = %+v", graph.Nodes)
 	}
 }
@@ -58,6 +58,7 @@ func TestWorkflowGraphDocumentEmitsExplicitArraysAndPreservesNestedOrder(t *test
 	if len(decoded.Graph.NodeGroups) != 0 || decoded.Graph.NodeGroups == nil ||
 		len(decoded.Graph.TransitionGroups) != 0 || decoded.Graph.TransitionGroups == nil ||
 		len(decoded.Graph.Edges) != 0 || decoded.Graph.Edges == nil ||
+		decoded.Graph.Nodes[0].GroupID != nil ||
 		decoded.Graph.Nodes[0].JoinInputProviders[0].InputName != "second" {
 		t.Fatalf("round trip = %+v", decoded.Graph)
 	}

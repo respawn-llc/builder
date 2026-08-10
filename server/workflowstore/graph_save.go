@@ -50,19 +50,14 @@ type WorkflowGraphSaveImpact struct {
 	EdgeTaskReferenceCount        int64
 }
 
-type WorkflowGraphEntityType string
-
 const (
-	WorkflowGraphEntityTypeEdge            WorkflowGraphEntityType = "edge"
-	WorkflowGraphEntityTypeNode            WorkflowGraphEntityType = "node"
-	WorkflowGraphEntityTypeNodeGroup       WorkflowGraphEntityType = "node_group"
-	WorkflowGraphEntityTypeTransitionGroup WorkflowGraphEntityType = "transition_group"
+	WorkflowGraphEntityTypeEdge            = workflowcontract.WorkflowGraphEntityTypeEdge
+	WorkflowGraphEntityTypeNode            = workflowcontract.WorkflowGraphEntityTypeNode
+	WorkflowGraphEntityTypeNodeGroup       = workflowcontract.WorkflowGraphEntityTypeNodeGroup
+	WorkflowGraphEntityTypeTransitionGroup = workflowcontract.WorkflowGraphEntityTypeTransitionGroup
 )
 
-type WorkflowGraphEntityReference struct {
-	EntityType WorkflowGraphEntityType
-	EntityID   string
-}
+type WorkflowGraphEntityReference = workflowcontract.WorkflowGraphEntityReference
 
 type WorkflowGraphSaveBlocker struct {
 	Code             string
@@ -649,19 +644,10 @@ func workflowGraphSaveConfirmationEntities(removed []WorkflowGraphEntityReferenc
 
 func canonicalWorkflowGraphEntityReferences(references []WorkflowGraphEntityReference) []WorkflowGraphEntityReference {
 	out := append([]WorkflowGraphEntityReference(nil), references...)
-	slices.SortFunc(out, compareStoreWorkflowGraphEntityReferences)
+	slices.SortFunc(out, workflowcontract.CompareWorkflowGraphEntityReferences)
 	return slices.CompactFunc(out, func(left WorkflowGraphEntityReference, right WorkflowGraphEntityReference) bool {
-		return compareStoreWorkflowGraphEntityReferences(left, right) == 0
+		return workflowcontract.CompareWorkflowGraphEntityReferences(left, right) == 0
 	})
-}
-
-func compareStoreWorkflowGraphEntityReferences(left WorkflowGraphEntityReference, right WorkflowGraphEntityReference) int {
-	return workflowcontract.CompareGraphEntityIdentity(
-		string(left.EntityType),
-		left.EntityID,
-		string(right.EntityType),
-		right.EntityID,
-	)
 }
 
 func workflowGraphEntityReferencesFromValidationErrors(errors []workflow.ValidationError, prepared preparedWorkflowGraphSave) []WorkflowGraphEntityReference {

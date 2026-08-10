@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 type workflowGraphPreview struct {
@@ -29,7 +30,7 @@ func workflowGraphDraftFromDefinition(def serverapi.WorkflowDefinition) serverap
 	for _, node := range def.Nodes {
 		graph.Nodes = append(graph.Nodes, serverapi.WorkflowGraphDraftNode{
 			ID: node.ID, Key: node.Key, Kind: node.Kind, DisplayName: node.DisplayName,
-			GroupID: node.GroupID, GroupKey: node.GroupKey, SubagentRole: node.SubagentRole,
+			GroupID: textutil.OptionalExactString(node.GroupID), GroupKey: node.GroupKey, SubagentRole: node.SubagentRole,
 			CompletionMode: node.CompletionMode, ScriptPath: node.ScriptPath,
 			JoinInputProviders: node.JoinInputProviders,
 		})

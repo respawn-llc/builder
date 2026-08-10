@@ -176,17 +176,12 @@ func workflowGraphDocumentFromDraft(
 		},
 	}
 	for _, node := range graph.Nodes {
-		var groupID *string
-		if node.GroupID != "" {
-			value := node.GroupID
-			groupID = &value
-		}
 		document.Graph.Nodes = append(document.Graph.Nodes, workflowGraphDocumentNode{
 			ID:                 node.ID,
 			Key:                node.Key,
 			Kind:               node.Kind,
 			DisplayName:        node.DisplayName,
-			GroupID:            groupID,
+			GroupID:            node.GroupID,
 			SubagentRole:       node.SubagentRole,
 			CompletionMode:     node.CompletionMode,
 			ScriptPath:         node.ScriptPath,
@@ -387,16 +382,12 @@ func (d workflowGraphDocument) WorkflowGraphDraft() (serverapi.WorkflowGraphDraf
 		Edges:            d.Graph.Edges,
 	}
 	for _, node := range d.Graph.Nodes {
-		var groupID string
-		if node.GroupID != nil {
-			groupID = *node.GroupID
-		}
 		graph.Nodes = append(graph.Nodes, serverapi.WorkflowGraphDraftNode{
 			ID:                 node.ID,
 			Key:                node.Key,
 			Kind:               node.Kind,
 			DisplayName:        node.DisplayName,
-			GroupID:            groupID,
+			GroupID:            node.GroupID,
 			SubagentRole:       node.SubagentRole,
 			CompletionMode:     node.CompletionMode,
 			ScriptPath:         node.ScriptPath,

@@ -734,6 +734,7 @@ describe("ApiClient", () => {
               key: "backlog",
               kind: "start",
               display_name: "Backlog",
+              group_id: null,
               join_input_providers: [],
             },
           ],

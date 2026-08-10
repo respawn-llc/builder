@@ -292,7 +292,7 @@ type WorkflowGraphDraftNode struct {
 	Key                string                      `json:"key"`
 	Kind               string                      `json:"kind"`
 	DisplayName        string                      `json:"display_name"`
-	GroupID            string                      `json:"group_id,omitempty"`
+	GroupID            *string                     `json:"group_id"`
 	GroupKey           string                      `json:"group_key,omitempty"`
 	SubagentRole       string                      `json:"subagent_role,omitempty"`
 	CompletionMode     string                      `json:"completion_mode,omitempty"`
@@ -414,19 +414,15 @@ type WorkflowGraphSaveImpact struct {
 	TaskReferencedNodeKindChangeCount int64                          `json:"task_referenced_node_kind_change_count"`
 }
 
-type WorkflowGraphEntityType string
-
 const (
-	WorkflowGraphEntityTypeEdge            WorkflowGraphEntityType = "edge"
-	WorkflowGraphEntityTypeNode            WorkflowGraphEntityType = "node"
-	WorkflowGraphEntityTypeNodeGroup       WorkflowGraphEntityType = "node_group"
-	WorkflowGraphEntityTypeTransitionGroup WorkflowGraphEntityType = "transition_group"
+	WorkflowGraphEntityTypeEdge            = workflowcontract.WorkflowGraphEntityTypeEdge
+	WorkflowGraphEntityTypeNode            = workflowcontract.WorkflowGraphEntityTypeNode
+	WorkflowGraphEntityTypeNodeGroup       = workflowcontract.WorkflowGraphEntityTypeNodeGroup
+	WorkflowGraphEntityTypeTransitionGroup = workflowcontract.WorkflowGraphEntityTypeTransitionGroup
 )
 
-type WorkflowGraphEntityReference struct {
-	EntityType WorkflowGraphEntityType `json:"entity_type"`
-	EntityID   string                  `json:"entity_id"`
-}
+type WorkflowGraphEntityType = workflowcontract.WorkflowGraphEntityType
+type WorkflowGraphEntityReference = workflowcontract.WorkflowGraphEntityReference
 
 type WorkflowGraphSaveBlocker struct {
 	Code             string                         `json:"code"`
@@ -2407,7 +2403,7 @@ func (i WorkflowGraphSaveImpact) Validate() error {
 	return nil
 }
 
-func (r WorkflowGraphEntityReference) Validate() error {
+func validateWorkflowGraphEntityReference(r WorkflowGraphEntityReference) error {
 	switch r.EntityType {
 	case WorkflowGraphEntityTypeEdge,
 		WorkflowGraphEntityTypeNode,
@@ -2446,7 +2442,7 @@ func validateWorkflowGraphEntityReferences(references []WorkflowGraphEntityRefer
 		return fmt.Errorf("%s must be present", field)
 	}
 	for index, reference := range references {
-		if err := reference.Validate(); err != nil {
+		if err := validateWorkflowGraphEntityReference(reference); err != nil {
 			return fmt.Errorf("%s[%d]: %w", field, index, err)
 		}
 	}
@@ -2463,12 +2459,7 @@ func validateWorkflowGraphEntityReferences(references []WorkflowGraphEntityRefer
 
 // CompareWorkflowGraphEntityReferences defines the canonical graph entity ordering used by graph-save producers and consumers.
 func CompareWorkflowGraphEntityReferences(left WorkflowGraphEntityReference, right WorkflowGraphEntityReference) int {
-	return workflowcontract.CompareGraphEntityIdentity(
-		string(left.EntityType),
-		left.EntityID,
-		string(right.EntityType),
-		right.EntityID,
-	)
+	return workflowcontract.CompareWorkflowGraphEntityReferences(left, right)
 }
 
 func validateWorkflowGraphMetadata(metadata *WorkflowGraphMetadata) error {
@@ -2526,6 +2517,9 @@ func validateWorkflowGraphDraftEnvelope(graph WorkflowGraphDraft) error {
 		}
 	}
 	for _, node := range graph.Nodes {
+		if node.GroupID != nil && strings.TrimSpace(*node.GroupID) == "" {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "graph.nodes.group_id", "group_id must be non-blank when present")
+		}
 		if err := validateWorkflowNodeCompletionMode(node.Kind, node.CompletionMode); err != nil {
 			return workflowRequestError(WorkflowRequestErrorInvalidValue, "graph.nodes.completion_mode", err.Error())
 		}
