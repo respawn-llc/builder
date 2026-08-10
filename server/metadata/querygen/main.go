@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"core/server/metadata/querysource"
+	"core/server/metadata"
 )
 
 const (
@@ -54,7 +54,7 @@ func generateMetadataQueriesCommand(args []string) (err error) {
 	if err != nil {
 		return err
 	}
-	renderer, err := querysource.Load(filepath.Join(repositoryRoot, metadataQuerySourceDirectory))
+	renderer, err := metadata.LoadQuerySourceRenderer(filepath.Join(repositoryRoot, metadataQuerySourceDirectory))
 	if err != nil {
 		return err
 	}

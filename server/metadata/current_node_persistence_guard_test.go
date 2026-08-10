@@ -7,7 +7,6 @@ import (
 
 	"core/internal/testharness/testsetup"
 	"core/server/metadata"
-	"core/server/metadata/querysource"
 )
 
 func TestCurrentNodePersistenceGraphHasOneAuthority(t *testing.T) {
@@ -68,7 +67,7 @@ func TestCurrentNodeGeneratedQueriesMatchPersistenceGraph(t *testing.T) {
 }
 
 func renderCanonicalMetadataQueries() ([]byte, error) {
-	renderer, err := querysource.Load("querysrc")
+	renderer, err := metadata.LoadQuerySourceRenderer("querysrc")
 	if err != nil {
 		return nil, err
 	}

@@ -1,4 +1,4 @@
-package querysource
+package metadata
 
 import (
 	"bytes"
@@ -19,14 +19,14 @@ const (
 	taskStatusProjectionFilename = "task_status_projection.sql.tmpl"
 )
 
-type Renderer struct {
+type QuerySourceRenderer struct {
 	queries              []byte
 	taskLabelFilter      []byte
 	taskDependencyFilter []byte
 	taskStatusProjection []byte
 }
 
-func Load(directory string) (Renderer, error) {
+func LoadQuerySourceRenderer(directory string) (QuerySourceRenderer, error) {
 	read := func(filename string) ([]byte, error) {
 		path := filepath.Join(directory, filename)
 		source, err := os.ReadFile(path)
@@ -37,21 +37,21 @@ func Load(directory string) (Renderer, error) {
 	}
 	queries, err := read(queriesFilename)
 	if err != nil {
-		return Renderer{}, err
+		return QuerySourceRenderer{}, err
 	}
 	labelFilter, err := read(taskLabelFilterFilename)
 	if err != nil {
-		return Renderer{}, err
+		return QuerySourceRenderer{}, err
 	}
 	dependencyFilter, err := read(taskDependencyFilterFilename)
 	if err != nil {
-		return Renderer{}, err
+		return QuerySourceRenderer{}, err
 	}
 	statusProjection, err := read(taskStatusProjectionFilename)
 	if err != nil {
-		return Renderer{}, err
+		return QuerySourceRenderer{}, err
 	}
-	return Renderer{
+	return QuerySourceRenderer{
 		queries:              queries,
 		taskLabelFilter:      labelFilter,
 		taskDependencyFilter: dependencyFilter,
@@ -59,7 +59,7 @@ func Load(directory string) (Renderer, error) {
 	}, nil
 }
 
-func (r Renderer) Render() ([]byte, error) {
+func (r QuerySourceRenderer) Render() ([]byte, error) {
 	queryTemplate, err := r.parse()
 	if err != nil {
 		return nil, err
@@ -73,11 +73,11 @@ func (r Renderer) Render() ([]byte, error) {
 	return append(bytes.TrimRight(generated.Bytes(), "\n"), '\n'), nil
 }
 
-func (r Renderer) RenderTaskSearchPageDescriptors() ([]byte, error) {
+func (r QuerySourceRenderer) RenderTaskSearchPageDescriptors() ([]byte, error) {
 	return r.renderTaskSearchQuery("taskSearchPageDescriptors", true)
 }
 
-func (r Renderer) RenderTaskSearchSchemaContract() ([]byte, error) {
+func (r QuerySourceRenderer) RenderTaskSearchSchemaContract() ([]byte, error) {
 	return r.renderTaskSearchQuery("taskSearchSchemaContract", false)
 }
 
@@ -123,7 +123,7 @@ func taskListSortSlots() []taskListSortSlotTemplateData {
 	return slots
 }
 
-func (r Renderer) renderTaskSearchQuery(templateName string, includePageDescriptors bool) ([]byte, error) {
+func (r QuerySourceRenderer) renderTaskSearchQuery(templateName string, includePageDescriptors bool) ([]byte, error) {
 	queryTemplate, err := r.parse()
 	if err != nil {
 		return nil, err
@@ -141,7 +141,7 @@ func (r Renderer) renderTaskSearchQuery(templateName string, includePageDescript
 	return rendered.Bytes(), nil
 }
 
-func (r Renderer) parse() (*template.Template, error) {
+func (r QuerySourceRenderer) parse() (*template.Template, error) {
 	filterTemplate, err := template.New("task_label_filter").
 		Option("missingkey=error").
 		Parse(string(r.taskLabelFilter))
