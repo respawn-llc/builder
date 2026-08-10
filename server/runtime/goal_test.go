@@ -61,16 +61,18 @@ func TestGoalSetEmitsCommittedGoalFeedbackEvent(t *testing.T) {
 	}
 }
 
-func TestGoalSetCarriesMissingAskQuestionCapability(t *testing.T) {
-	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
-	if err := store.MarkModelDispatchLocked(session.LockedContract{EnabledTools: []string{string(toolspec.ToolExecCommand)}}); err != nil {
-		t.Fatal(err)
-	}
-	events := []Event{}
-	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{OnEvent: func(evt Event) { events = append(events, evt) }})
-	if _, err := engine.SetGoal("ship goal mode", session.GoalActorUser); err != nil || len(events) != 2 || events[1].GoalStatus == nil || events[1].GoalStatus.Availability != clientui.GoalAvailabilityAgentCapabilityMissing {
-		t.Fatalf("goal events=%+v err=%v", events, err)
-	}
+func TestGoalLifecycleCarriesMissingAskQuestionCapability(t *testing.T) {
+	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x"); if err := store.MarkModelDispatchLocked(session.LockedContract{EnabledTools: []string{string(toolspec.ToolExecCommand)}}); err != nil { t.Fatal(err) }
+	events := []Event{}; engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{OnEvent: func(evt Event) { events = append(events, evt) }}); assertMissing := func(name string) { update := events[len(events)-1].GoalStatus; if update == nil || update.Availability != clientui.GoalAvailabilityAgentCapabilityMissing { t.Fatalf("goal %s update = %+v", name, update) } }
+	if _, err := engine.SetGoal("goal", session.GoalActorUser); err != nil { t.Fatal(err) }; assertMissing("set")
+	for _, status := range []session.GoalStatus{session.GoalStatusPaused, session.GoalStatusActive, session.GoalStatusComplete} { if _, err := engine.SetGoalStatusWithoutGoalLoopStart(status, session.GoalActorUser); err != nil { t.Fatal(err) }; assertMissing(string(status)) }
+	if _, err := engine.ClearGoal(session.GoalActorUser); err != nil { t.Fatal(err) }; assertMissing("clear")
+}
+
+func TestGoalNoticeFailureDoesNotEmitStatus(t *testing.T) {
+	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x"); events := []Event{}; engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{OnEvent: func(evt Event) { events = append(events, evt) }}); mustBlockTestEventLogAppends(t, store)
+	result := GoalCommandResult{}; err := engine.finishGoalOutput("", llm.Message{Role: llm.RoleDeveloper, Content: textutil.Value("goal")}, &result, GoalStatusUpdate{})
+	if err == nil || result.NoticeReceipt.Committed || len(events) != 0 { t.Fatalf("notice failure err=%v receipt=%+v events=%+v", err, result.NoticeReceipt, events) }
 }
 
 func TestQueuedAgentShellGoalSetDrainsAfterToolCompletion(t *testing.T) {

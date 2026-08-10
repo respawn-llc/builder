@@ -4,7 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+
+	"core/shared/clientui"
 )
+
+func TestGoalResponseEnvelopesRequireAvailability(t *testing.T) {
+	if (RuntimeGoalShowResponse{}).Validate() == nil || (WorkspaceChatDraftResponse{}).Validate() == nil || (RuntimeGoalShowResponse{Availability: clientui.GoalAvailabilityAvailable, Goal: &clientui.Goal{}}).Validate() == nil { t.Fatal("Goal response envelopes accepted invalid fields") }
+}
 
 const (
 	validLiveSessionID       = "9b9447ad-04e7-4c70-b4b0-f0eb1a53b47d"

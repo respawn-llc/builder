@@ -181,7 +181,7 @@ func (a *GoalAuthority) withDormantAdmission(
 		applied, applyErr := dormant(store)
 		result = applied
 		if result.Accepted() {
-			result = withStoreAvailability(store, result)
+			result = withAvailability(store, result)
 			availabilityErr := result.Err
 			result.Err = applyErr
 			if result.Err == nil {
@@ -218,7 +218,7 @@ func (a *GoalAuthority) withLive(
 	})
 	if result.Accepted() {
 		if result.Disposition != runtime.GoalCommandApplied {
-			result = withEngineAvailability(liveEngine, result)
+			result = withAvailability(liveEngine, result)
 		}
 		if err != nil {
 			result.Err = err
@@ -249,7 +249,7 @@ func (a *GoalAuthority) withLive(
 	})
 	if result.Accepted() {
 		if result.Disposition != runtime.GoalCommandApplied {
-			result = withEngineAvailability(liveEngine, result)
+			result = withAvailability(liveEngine, result)
 		}
 		if err != nil {
 			result.Err = err
@@ -278,7 +278,7 @@ func (a *GoalAuthority) withExactLive(
 		applied, applyErr := mutate(engine)
 		result = applied
 		if result.Accepted() && result.Disposition != runtime.GoalCommandApplied {
-			result = withEngineAvailability(engine, result)
+			result = withAvailability(engine, result)
 		}
 		return applyErr
 	})
@@ -499,17 +499,12 @@ func storedGoalResult(
 	}
 }
 
-func withEngineAvailability(engine *runtime.Engine, result GoalCommandResult) GoalCommandResult {
-	availability, err := engine.GoalAvailability()
-	result.Availability = availability
-	if result.Err == nil {
-		result.Err = err
-	}
-	return result
+type goalAvailabilityOwner interface {
+	GoalAvailability() (clientui.GoalAvailability, error)
 }
 
-func withStoreAvailability(store *session.Store, result GoalCommandResult) GoalCommandResult {
-	availability, err := store.GoalAvailability()
+func withAvailability(owner goalAvailabilityOwner, result GoalCommandResult) GoalCommandResult {
+	availability, err := owner.GoalAvailability()
 	result.Availability = availability
 	if result.Err == nil {
 		result.Err = err

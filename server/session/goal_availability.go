@@ -10,33 +10,21 @@ import (
 	"core/shared/toolspec"
 )
 func GoalCoreFromState(goal *GoalState) *clientui.Goal {
-	if goal == nil {
-		return nil
-	}
+	if goal == nil { return nil }
 	return &clientui.Goal{ID: strings.TrimSpace(goal.ID), Objective: goal.Objective, Status: clientui.RuntimeGoalStatus(strings.TrimSpace(string(goal.Status))), CreatedAt: goal.CreatedAt, UpdatedAt: goal.UpdatedAt}
 }
 func (s *Store) GoalAvailability() (clientui.GoalAvailability, error) {
-	if s == nil {
-		return "", errors.New("session store is required")
-	}
+	if s == nil { return "", errors.New("session store is required") }
 	return GoalAvailabilityFromMeta(s.Meta())
 }
 func GoalAvailabilityFromMeta(meta Meta) (clientui.GoalAvailability, error) {
-	if meta.Locked == nil {
-		return clientui.GoalAvailabilityAvailable, nil
-	}
-	if !meta.Locked.HasEnabledTools {
-		return "", malformedGoalContract(meta, errors.New("enabled tool snapshot is absent"))
-	}
+	if meta.Locked == nil { return clientui.GoalAvailabilityAvailable, nil }
+	if !meta.Locked.HasEnabledTools { return "", malformedGoalContract(meta, errors.New("enabled tool snapshot is absent")) }
 	availability := clientui.GoalAvailabilityAgentCapabilityMissing
 	for _, raw := range meta.Locked.EnabledTools {
 		tool, ok := toolspec.ParseID(raw)
-		if !ok {
-			return "", malformedGoalContract(meta, fmt.Errorf("enabled tool %q is invalid", raw))
-		}
-		if tool == toolspec.ToolAskQuestion {
-			availability = clientui.GoalAvailabilityAvailable
-		}
+		if !ok { return "", malformedGoalContract(meta, fmt.Errorf("enabled tool %q is invalid", raw)) }
+		if tool == toolspec.ToolAskQuestion { availability = clientui.GoalAvailabilityAvailable }
 	}
 	return availability, nil
 }
