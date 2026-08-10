@@ -8,6 +8,7 @@ import (
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/toolspec"
+	"core/shared/workflowcontract"
 	"core/shared/workflowkey"
 )
 
@@ -101,7 +102,7 @@ func (s *validationState) validateExecutionTargetPolicy() {
 func (s *validationState) indexNodeGroups() {
 	seenKeys := map[ModelKey]string{}
 	for _, group := range s.def.NodeGroups {
-		ref := ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID), RelatedIDs: []string{group.ID}}
+		ref := (ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID)}).withRelatedEntity(workflowcontract.WorkflowGraphEntityTypeNodeGroup, group.ID)
 		if group.WorkflowID.IsZero() {
 			s.addHard(CodeMissingWorkflowID, "node group workflow id is required", ref)
 		} else if group.WorkflowID != s.def.ID {
@@ -120,7 +121,7 @@ func (s *validationState) indexNodeGroups() {
 		if key == "" || !workflowkey.Valid(string(key)) {
 			s.addHard(CodeInvalidNodeGroup, "node group key is invalid", ref)
 		} else if previousID, exists := seenKeys[key]; exists && previousID != id {
-			s.addHard(CodeInvalidNodeGroup, "node group key must be unique", ref)
+			s.addHard(CodeInvalidNodeGroup, "node group key must be unique", ref.withRelatedEntity(workflowcontract.WorkflowGraphEntityTypeNodeGroup, previousID))
 		} else {
 			seenKeys[key] = id
 		}
@@ -180,8 +181,8 @@ func (s *validationState) indexTransitionGroups() {
 		} else if !workflowkey.Valid(transitionID) {
 			s.addHard(CodeInvalidTransitionID, "transition id must "+workflowkey.Description, ref)
 		} else {
-			if _, exists := seenTransitions[transitionID]; exists {
-				s.addHard(CodeDuplicateTransitionID, "transition id must be unique across the Workflow", ref)
+			if previousID, exists := seenTransitions[transitionID]; exists {
+				s.addHard(CodeDuplicateTransitionID, "transition id must be unique across the Workflow", ref.withRelatedEntity(workflowcontract.WorkflowGraphEntityTypeTransitionGroup, string(previousID)))
 			}
 			seenTransitions[transitionID] = group.ID
 		}
@@ -225,7 +226,7 @@ func (s *validationState) validateNodes() {
 		} else if !workflowkey.Valid(string(NodeKey(node))) {
 			s.addHard(CodeInvalidNodeKey, "node key must "+workflowkey.Description, ref)
 		} else if previousNodeID, exists := s.nodeKeys[NodeKey(node)]; exists && previousNodeID != NodeIDOf(node) {
-			s.addHard(CodeDuplicateNodeKey, "node key must be unique", ref)
+			s.addHard(CodeDuplicateNodeKey, "node key must be unique", ref.withRelatedEntity(workflowcontract.WorkflowGraphEntityTypeNode, string(previousNodeID)))
 		} else {
 			s.nodeKeys[NodeKey(node)] = NodeIDOf(node)
 		}
@@ -247,13 +248,17 @@ func (s *validationState) validateNodes() {
 		s.addHard(CodeMissingStartNode, "workflow must contain exactly one start node", ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID)})
 	}
 	if len(s.startNodes) > 1 {
-		s.addHard(CodeMultipleStartNodes, "workflow must contain exactly one start node", ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID)})
+		ref := ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID)}
+		for _, node := range s.startNodes {
+			ref = ref.withRelatedEntity(workflowcontract.WorkflowGraphEntityTypeNode, string(NodeIDOf(node)))
+		}
+		s.addHard(CodeMultipleStartNodes, "workflow must contain exactly one start node", ref)
 	}
 }
 
 func (s *validationState) validateNodeGroups() {
 	for _, group := range s.def.NodeGroups {
-		ref := ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID), RelatedIDs: []string{group.ID}}
+		ref := (ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID)}).withRelatedEntity(workflowcontract.WorkflowGraphEntityTypeNodeGroup, group.ID)
 		members := s.nodeGroupMembers(group)
 		branchIDs := map[NodeID]bool{}
 		joinIDs := []NodeID{}
@@ -443,7 +448,7 @@ func (s *validationState) validateTransitionGroups() {
 				continue
 			}
 			if previousID, exists := seenEdgeKeys[edge.Key]; exists && previousID != edge.ID {
-				s.addHard(CodeDuplicateEdgeKey, "edge key must be unique per transition group", ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID), EdgeID: edge.ID, TransitionGroupID: edge.TransitionGroupID})
+				s.addHard(CodeDuplicateEdgeKey, "edge key must be unique per transition group", (ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID), EdgeID: edge.ID, TransitionGroupID: edge.TransitionGroupID}).withRelatedEntity(workflowcontract.WorkflowGraphEntityTypeEdge, string(previousID)))
 			}
 			seenEdgeKeys[edge.Key] = edge.ID
 		}
@@ -1108,7 +1113,11 @@ func (s *validationState) canReachTerminal(start NodeID) bool {
 			continue
 		}
 		visited[nodeID] = true
-		if s.nodesByID[nodeID].Kind() == NodeKindTerminal {
+		node, exists := s.nodesByID[nodeID]
+		if !exists {
+			continue
+		}
+		if node.Kind() == NodeKindTerminal {
 			return true
 		}
 		for _, edge := range s.outgoingByNode[nodeID] {

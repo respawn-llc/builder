@@ -33,6 +33,10 @@ func (unregisteredSessionLaunchClient) PlanSession(context.Context, serverapi.Se
 	return serverapi.SessionPlanResponse{}, serverapi.ErrWorkspaceNotRegistered
 }
 
+func (unregisteredSessionLaunchClient) WorkspaceChatDraft(context.Context, serverapi.WorkspaceChatDraftRequest) (serverapi.WorkspaceChatDraftResponse, error) {
+	return serverapi.WorkspaceChatDraftResponse{}, serverapi.ErrWorkspaceNotRegistered
+}
+
 type unregisteredRunPromptClient struct{}
 
 func (unregisteredRunPromptClient) RunPrompt(context.Context, serverapi.RunPromptRequest, serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error) {
@@ -52,6 +56,7 @@ func (unavailableAttentionNotificationClient) SubscribeSessionAttentionNotificat
 type projectContext struct {
 	config         config.App
 	projectID      string
+	workspaceID    string
 	projectRoot    string
 	projectSession string
 }
@@ -164,6 +169,7 @@ func (s *Core) resolveProjectContext(ctx context.Context, projectID string, work
 		return projectContext{
 			config:         projectCfg,
 			projectID:      trimmedProjectID,
+			workspaceID:    binding.WorkspaceID,
 			projectRoot:    binding.CanonicalRoot,
 			projectSession: filepath.Join(filepath.Join(projectCfg.PersistenceRoot, "projects"), trimmedProjectID, "sessions"),
 		}, nil
@@ -182,6 +188,7 @@ func (s *Core) resolveProjectContext(ctx context.Context, projectID string, work
 			return projectContext{
 				config:         projectCfg,
 				projectID:      trimmedProjectID,
+				workspaceID:    binding.WorkspaceID,
 				projectRoot:    binding.CanonicalRoot,
 				projectSession: filepath.Join(filepath.Join(projectCfg.PersistenceRoot, "projects"), trimmedProjectID, "sessions"),
 			}, nil
@@ -209,9 +216,14 @@ func (s *Core) resolveProjectContext(ctx context.Context, projectID string, work
 	if err != nil {
 		return projectContext{}, err
 	}
+	primaryWorkspace, err := s.safeBundles().Persistence.metadataStore.ResolveProjectSourceWorkspace(ctx, trimmedProjectID)
+	if err != nil {
+		return projectContext{}, err
+	}
 	return projectContext{
 		config:         projectCfg,
 		projectID:      trimmedProjectID,
+		workspaceID:    primaryWorkspace.ID,
 		projectRoot:    overview.Project.RootPath,
 		projectSession: filepath.Join(filepath.Join(projectCfg.PersistenceRoot, "projects"), trimmedProjectID, "sessions"),
 	}, nil
@@ -279,6 +291,7 @@ func (s *Core) sessionLaunchServiceForProjectContextLocked(projectCtx projectCon
 			return s.configForWorkspace(projectCtx.projectRoot)
 		},
 	}).
+		WithWorkspaceChatDraft(s.safeBundles().Sessions.draftOwner, projectCtx.workspaceID, s.safeBundles().Runtime.fastModeState).
 		WithAuthStateReader(s.safeBundles().Auth.support.AuthManager).
 		WithPromptHistoryReader(s.safeBundles().Persistence.metadataStore).
 		WithRuntimeAuthority(s.safeBundles().Runtime.runtimeAuthority)
@@ -308,7 +321,7 @@ func (s *Core) runPromptClientForProjectContext(projectCtx projectContext) apico
 }
 
 func projectWorkspaceScopeKey(projectCtx projectContext) string {
-	return strings.TrimSpace(projectCtx.projectID) + "\n" + strings.TrimSpace(projectCtx.config.WorkspaceRoot)
+	return strings.TrimSpace(projectCtx.projectID) + "\n" + strings.TrimSpace(projectCtx.config.WorkspaceRoot) + "\n" + strings.TrimSpace(projectCtx.workspaceID)
 }
 
 func (s *Core) Close() error {

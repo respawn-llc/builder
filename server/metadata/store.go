@@ -441,6 +441,63 @@ func (s *Store) GetWorkspaceByID(ctx context.Context, workspaceID string) (sqlit
 	return row, nil
 }
 
+func (s *Store) ReadWorkspaceChatDraft(ctx context.Context, workspaceID string) (*WorkspaceChatDraftDocument, error) {
+	if s == nil || s.queries == nil {
+		return nil, errors.New("metadata store is required")
+	}
+	trimmedWorkspaceID := strings.TrimSpace(workspaceID)
+	if trimmedWorkspaceID == "" {
+		return nil, errors.New("workspace id is required")
+	}
+	document, err := s.queries.GetWorkspaceChatDraft(ctx, trimmedWorkspaceID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("%w: %q", serverapi.ErrWorkspaceNotRegistered, trimmedWorkspaceID)
+		}
+		return nil, fmt.Errorf("get workspace Chat draft: %w", err)
+	}
+	if !document.Valid {
+		return nil, nil
+	}
+	var draft WorkspaceChatDraftDocument
+	if err := json.Unmarshal([]byte(document.String), &draft); err != nil {
+		return nil, fmt.Errorf("decode workspace Chat draft: %w", err)
+	}
+	return &draft, nil
+}
+
+func (s *Store) ReplaceWorkspaceChatDraft(ctx context.Context, workspaceID string, draft *WorkspaceChatDraftDocument) error {
+	if s == nil || s.queries == nil {
+		return errors.New("metadata store is required")
+	}
+	trimmedWorkspaceID := strings.TrimSpace(workspaceID)
+	if trimmedWorkspaceID == "" {
+		return errors.New("workspace id is required")
+	}
+	value := sql.NullString{}
+	if draft != nil {
+		if err := draft.Validate(); err != nil {
+			return err
+		}
+		encoded, err := json.Marshal(draft)
+		if err != nil {
+			return fmt.Errorf("encode workspace Chat draft: %w", err)
+		}
+		value = sql.NullString{String: string(encoded), Valid: true}
+	}
+	rows, err := s.queries.ReplaceWorkspaceChatDraft(ctx, sqlitegen.ReplaceWorkspaceChatDraftParams{
+		ChatDraftJson: value,
+		ID:            trimmedWorkspaceID,
+	})
+	if err != nil {
+		return fmt.Errorf("replace workspace Chat draft: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("%w: %q", serverapi.ErrWorkspaceNotRegistered, trimmedWorkspaceID)
+	}
+	return nil
+}
+
 func (s *Store) ResolveProjectSourceWorkspace(ctx context.Context, projectID string) (sqlitegen.Workspace, error) {
 	if s == nil || s.queries == nil {
 		return sqlitegen.Workspace{}, errors.New("metadata store is required")
