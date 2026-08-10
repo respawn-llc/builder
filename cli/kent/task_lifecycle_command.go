@@ -1007,11 +1007,12 @@ const (
 )
 
 type taskSetupGuidance struct {
-	Outcome      taskSetupOutcomeKind
-	Diagnostic   *string
-	ScriptPath   *string
-	RetainedRoot *string
-	Actions      []taskSetupAction
+	Outcome                  taskSetupOutcomeKind
+	Diagnostic               *string
+	ScriptPath               *string
+	RetainedRoot             *string
+	RetainedPreviousWorktree *serverapi.RetainedPreviousWorktree
+	Actions                  []taskSetupAction
 }
 
 func projectTaskSetupGuidance(action taskSetupObservedActionKind, taskRef string, projectRef *string, terminal *serverapi.WorktreeSetupEvent, observationErr error) (taskSetupGuidance, error) {
@@ -1048,6 +1049,9 @@ func projectTaskSetupGuidance(action taskSetupObservedActionKind, taskRef string
 		if failed.RetainedWorktree != nil {
 			result.RetainedRoot = &failed.RetainedWorktree.Registered.Git.CanonicalRoot
 		}
+		if failed.RetainedPreviousWorktree != nil {
+			result.RetainedPreviousWorktree = failed.RetainedPreviousWorktree
+		}
 		if failed.RetryReadiness != serverapi.WorktreeSetupRetryReady {
 			result.Actions = inspection
 			return result, nil
@@ -1076,7 +1080,7 @@ func projectTaskSetupGuidance(action taskSetupObservedActionKind, taskRef string
 	}
 	result := taskSetupGuidance{Outcome: taskSetupOutcomeCompleted}
 	if retained != nil {
-		result.RetainedRoot = &retained.Worktree.Registered.Git.CanonicalRoot
+		result.RetainedPreviousWorktree = retained
 		result.Actions = []taskSetupAction{{Kind: taskSetupActionListWorktrees, Args: []string{config.Command, "worktree", "list"}}}
 	}
 	return result, nil
@@ -1146,10 +1150,9 @@ func projectMoveSetupGuidance(base []string, target *serverapi.WorkflowExecution
 		}
 		selector = &value
 	}
-	root := setupErr.Worktree.Registered.Git.CanonicalRoot
 	script := setupErr.ScriptPath
 	diagnostic := setupErr.Diagnostic
-	return taskSetupGuidance{Outcome: taskSetupOutcomeMoveSetupFailure, Diagnostic: &diagnostic, ScriptPath: &script, RetainedRoot: &root, Actions: taskTargetActions(base, selector)}, nil
+	return taskSetupGuidance{Outcome: taskSetupOutcomeMoveSetupFailure, Diagnostic: &diagnostic, ScriptPath: &script, RetainedRoot: &setupErr.Worktree.Registered.Git.CanonicalRoot, RetainedPreviousWorktree: setupErr.RetainedPreviousWorktree, Actions: taskTargetActions(base, selector)}, nil
 }
 
 func taskSetupStringPointer(value string) *string { return &value }
@@ -1311,6 +1314,7 @@ func renderTaskSetupGuidance(stderr io.Writer, guidance taskSetupGuidance) {
 	if guidance.RetainedRoot != nil {
 		fmt.Fprintf(stderr, "Retained Worktree: %s\n", *guidance.RetainedRoot)
 	}
+	renderRetainedWorktreeGuidance(stderr, guidance.RetainedPreviousWorktree)
 	for _, action := range guidance.Actions {
 		fmt.Fprintf(stderr, "  %s\n", commandString(action.Args))
 	}

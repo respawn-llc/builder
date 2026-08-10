@@ -1,14 +1,22 @@
 package workflowstore
 
 import (
+	"database/sql"
 	"errors"
 	"testing"
 
 	"core/internal/testharness/testsetup"
 	"core/server/metadata"
+	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
 	"core/shared/toolspec"
 )
+
+func TestCurrentNodeSchedulingUsesStrictInterruptionDecoder(t *testing.T) {
+	if _, err := currentNodeSchedulingFromRow(sqlitegen.ListTaskCurrentNodesRow{SchedulingState: sql.NullString{String: string(workflow.CurrentNodeSchedulingInterrupted), Valid: true}, InterruptionDetailJson: sql.NullString{String: `{"code":"interrupted","unknown":true}`, Valid: true}}); err == nil {
+		t.Fatal("unknown persisted interruption detail field was accepted")
+	}
+}
 
 func TestStartTaskRejectsUnsafeWorkflowWithoutMutation(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
@@ -66,9 +74,7 @@ func TestRepeatedStartAfterRoleToolDriftSkipsInitialExecutionPreflight(t *testin
 		t.Fatalf("repeated StartTask returned post-start role-tool validation: %+v", validationErr.Diagnostics)
 	}
 	var conflict TaskStartConflictError
-	if !errors.As(err, &conflict) ||
-		conflict.TaskID != task.ID ||
-		conflict.Reason != TaskStartConflictAlreadyStarted {
+	if !errors.As(err, &conflict) || conflict.TaskID != task.ID || conflict.Reason != TaskStartConflictAlreadyStarted {
 		t.Fatalf("repeated StartTask error = %T %+v, want already-started conflict", err, err)
 	}
 }

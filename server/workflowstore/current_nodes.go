@@ -304,9 +304,9 @@ func currentNodeSchedulingFromRow(row sqlitegen.ListTaskCurrentNodesRow) (*workf
 	if scheduling.State != workflow.CurrentNodeSchedulingInterrupted {
 		return scheduling, nil
 	}
-	var detail workflow.CurrentNodeInterruptionDetail
-	if err := json.Unmarshal([]byte(row.InterruptionDetailJson.String), &detail); err != nil {
-		return nil, fmt.Errorf("decode current node interruption detail: %w", err)
+	detail, err := workflow.DecodeCurrentNodeInterruptionDetail(row.InterruptionDetailJson.String)
+	if err != nil {
+		return nil, err
 	}
 	scheduling.Interruption = &workflow.CurrentNodeInterruption{
 		Reason:     workflow.CurrentNodeInterruptionReason(row.InterruptionReason.String),

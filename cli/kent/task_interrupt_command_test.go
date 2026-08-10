@@ -549,15 +549,16 @@ func TestTaskSetupGuidanceProjectsStructuredRecovery(t *testing.T) {
 	target := serverapi.WorkflowExecutionTargetSelection{Mode: serverapi.WorkflowExecutionTargetModeHead}
 	script := "/repo/setup.sh"
 	tests := []struct {
-		name     string
-		terminal *serverapi.WorktreeSetupEvent
-		err      error
-		outcome  taskSetupOutcomeKind
-		kinds    []taskSetupActionKind
+		name           string
+		terminal       *serverapi.WorktreeSetupEvent
+		err            error
+		outcome        taskSetupOutcomeKind
+		kinds          []taskSetupActionKind
+		root, previous *string
 	}{
 		{name: "completed", terminal: &serverapi.WorktreeSetupEvent{Phase: serverapi.WorktreeSetupPhaseCompleted, Completed: &serverapi.WorktreeSetupCompleted{}}, outcome: taskSetupOutcomeCompleted},
-		{name: "not required with orphan", terminal: &serverapi.WorktreeSetupEvent{Phase: serverapi.WorktreeSetupPhaseNotRequired, NotRequired: &serverapi.WorktreeSetupNotRequired{Reason: serverapi.WorktreeSetupNotRequiredNoConfiguredScript, RetainedPreviousWorktree: &serverapi.RetainedPreviousWorktree{Worktree: setupGuidanceWorktree("/tmp/orphan")}}}, outcome: taskSetupOutcomeCompleted, kinds: []taskSetupActionKind{taskSetupActionListWorktrees}},
-		{name: "retained setup failure", terminal: &serverapi.WorktreeSetupEvent{Phase: serverapi.WorktreeSetupPhaseFailed, Failed: &serverapi.WorktreeSetupFailed{RetryReadiness: serverapi.WorktreeSetupRetryReady, Cause: serverapi.WorktreeSetupFailureCause{Kind: serverapi.WorktreeSetupFailureProcessExit, ProcessExit: &serverapi.WorktreeSetupProcessExit{ExitCode: 1}}, Diagnostic: "failed twice", ScriptPath: &script, ExecutionTarget: &target}}, outcome: taskSetupOutcomeStartInterruptedSetupFailure, kinds: []taskSetupActionKind{taskSetupActionRetry, taskSetupActionChooseNone, taskSetupActionChooseHead, taskSetupActionChooseDefault, taskSetupActionChooseRef}},
+		{name: "not required with orphan", terminal: &serverapi.WorktreeSetupEvent{Phase: serverapi.WorktreeSetupPhaseNotRequired, NotRequired: &serverapi.WorktreeSetupNotRequired{Reason: serverapi.WorktreeSetupNotRequiredNoConfiguredScript, RetainedPreviousWorktree: &serverapi.RetainedPreviousWorktree{Worktree: *setupGuidanceWorktree("/tmp/orphan")}}}, outcome: taskSetupOutcomeCompleted, kinds: []taskSetupActionKind{taskSetupActionListWorktrees}, previous: taskSetupStringPointer("/tmp/orphan")},
+		{name: "retained setup failure", terminal: &serverapi.WorktreeSetupEvent{Phase: serverapi.WorktreeSetupPhaseFailed, Failed: &serverapi.WorktreeSetupFailed{RetryReadiness: serverapi.WorktreeSetupRetryReady, Cause: serverapi.WorktreeSetupFailureCause{Kind: serverapi.WorktreeSetupFailureProcessExit, ProcessExit: &serverapi.WorktreeSetupProcessExit{ExitCode: 1}}, Diagnostic: "failed twice", ScriptPath: &script, ExecutionTarget: &target, RetainedWorktree: setupGuidanceWorktree("/tmp/retained"), RetainedPreviousWorktree: &serverapi.RetainedPreviousWorktree{Worktree: *setupGuidanceWorktree("/tmp/previous")}}}, outcome: taskSetupOutcomeStartInterruptedSetupFailure, kinds: []taskSetupActionKind{taskSetupActionRetry, taskSetupActionChooseNone, taskSetupActionChooseHead, taskSetupActionChooseDefault, taskSetupActionChooseRef}, root: taskSetupStringPointer("/tmp/retained"), previous: taskSetupStringPointer("/tmp/previous")},
 		{name: "topology-free target failure", terminal: &serverapi.WorktreeSetupEvent{Phase: serverapi.WorktreeSetupPhaseFailed, Failed: &serverapi.WorktreeSetupFailed{RetryReadiness: serverapi.WorktreeSetupRetryReady, Cause: serverapi.WorktreeSetupFailureCause{Kind: serverapi.WorktreeSetupFailureTargetPreparation, Preparation: &serverapi.WorktreeSetupPreparationFailure{}}, Diagnostic: "target failed", ExecutionTarget: &target}}, outcome: taskSetupOutcomeStartInterruptedTargetPreparationFailure, kinds: []taskSetupActionKind{taskSetupActionRetry, taskSetupActionChooseNone, taskSetupActionChooseHead, taskSetupActionChooseDefault, taskSetupActionChooseRef}},
 		{name: "non-retryable failure", terminal: &serverapi.WorktreeSetupEvent{Phase: serverapi.WorktreeSetupPhaseFailed, Failed: &serverapi.WorktreeSetupFailed{RetryReadiness: serverapi.WorktreeSetupNonRetryable, Cause: serverapi.WorktreeSetupFailureCause{Kind: serverapi.WorktreeSetupFailureCanceled, Canceled: &serverapi.WorktreeSetupCanceled{}}, Diagnostic: "canceled"}}, outcome: taskSetupOutcomeObservedSetupFailure, kinds: []taskSetupActionKind{taskSetupActionInspect, taskSetupActionListWorktrees}},
 		{name: "timeout", err: context.DeadlineExceeded, outcome: taskSetupOutcomeObservationFailure, kinds: []taskSetupActionKind{taskSetupActionInspect, taskSetupActionListWorktrees}},
@@ -565,22 +566,16 @@ func TestTaskSetupGuidanceProjectsStructuredRecovery(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			got, err := projectTaskSetupGuidance(taskSetupObservedActionStart, "task-1", nil, test.terminal, test.err)
-			if err != nil {
-				t.Fatalf("project guidance: %v", err)
+			if err != nil || got.Outcome != test.outcome || len(got.Actions) != len(test.kinds) || (got.Diagnostic == nil) != (test.outcome == taskSetupOutcomeCompleted) {
+				t.Fatalf("guidance = %+v, error = %v", got, err)
 			}
-			if got.Outcome != test.outcome || len(got.Actions) != len(test.kinds) {
-				t.Fatalf("guidance = %+v", got)
-			}
-			if (got.Diagnostic == nil) != (test.outcome == taskSetupOutcomeCompleted) {
-				t.Fatalf("diagnostic = %v for outcome %s", got.Diagnostic, test.outcome)
-			}
-			if test.name == "not required with orphan" && (got.RetainedRoot == nil || *got.RetainedRoot != "/tmp/orphan") {
+			if (got.RetainedRoot == nil) != (test.root == nil) || got.RetainedRoot != nil && *got.RetainedRoot != *test.root || (got.RetainedPreviousWorktree == nil) != (test.previous == nil) || got.RetainedPreviousWorktree != nil && got.RetainedPreviousWorktree.Worktree.Registered.Git.CanonicalRoot != *test.previous {
 				t.Fatalf("retained guidance = %+v", got)
 			}
-			for index, kind := range test.kinds {
-				if got.Actions[index].Kind != kind {
-					t.Fatalf("action %d = %+v, want %s", index, got.Actions[index], kind)
-				}
+			if !slices.EqualFunc(got.Actions, test.kinds, func(action taskSetupAction, kind taskSetupActionKind) bool {
+				return action.Kind == kind
+			}) {
+				t.Fatalf("actions = %+v, want %v", got.Actions, test.kinds)
 			}
 			if len(got.Actions) == 5 && got.Actions[0].Args[len(got.Actions[0].Args)-1] != "head" {
 				t.Fatalf("retry action = %+v", got.Actions[0])
@@ -612,23 +607,15 @@ func TestMoveSetupGuidancePreservesStructuredInput(t *testing.T) {
 		t.Fatalf("recovery args: %v", err)
 	}
 	target := serverapi.WorkflowExecutionTargetSelection{Mode: serverapi.WorkflowExecutionTargetModeHead}
-	guidance, err := projectMoveSetupGuidance(base, &target, &serverapi.WorktreeSetupRetainedError{Worktree: setupGuidanceWorktree("/tmp/retained"), Diagnostic: "failed twice", ScriptPath: "/repo/setup.sh"})
-	if err != nil {
-		t.Fatalf("project guidance: %v", err)
-	}
-	if guidance.Outcome != taskSetupOutcomeMoveSetupFailure ||
-		guidance.Diagnostic == nil || guidance.ScriptPath == nil || len(guidance.Actions) != 5 {
-		t.Fatalf("guidance = %+v", guidance)
+	guidance, err := projectMoveSetupGuidance(base, &target, &serverapi.WorktreeSetupRetainedError{Worktree: *setupGuidanceWorktree("/tmp/retained"), Diagnostic: "failed twice", ScriptPath: "/repo/setup.sh", RetainedPreviousWorktree: &serverapi.RetainedPreviousWorktree{Worktree: *setupGuidanceWorktree("/tmp/previous")}})
+	if err != nil || guidance.Outcome != taskSetupOutcomeMoveSetupFailure || guidance.Diagnostic == nil || guidance.ScriptPath == nil ||
+		guidance.RetainedRoot == nil || *guidance.RetainedRoot != "/tmp/retained" || guidance.RetainedPreviousWorktree == nil || guidance.RetainedPreviousWorktree.Worktree.Registered.Git.CanonicalRoot != "/tmp/previous" || len(guidance.Actions) != 5 {
+		t.Fatalf("guidance = %+v, error = %v", guidance, err)
 	}
 	wantPrefix := []string{"kent", "task", "move", "task-1", "done", "--project", "project-1", "--commentary", "note", "--transition", "next", "--values-json", `{"plan":{"summary":"done"}}`, "--ignore-dependencies", "--json"}
 	action := guidance.Actions[0]
-	if len(action.Args) != len(wantPrefix)+2 {
+	if len(action.Args) != len(wantPrefix)+2 || !slices.Equal(action.Args[:len(wantPrefix)], wantPrefix) {
 		t.Fatalf("retry action = %+v", action)
-	}
-	for argIndex, want := range wantPrefix {
-		if action.Args[argIndex] != want {
-			t.Fatalf("retry arg %d = %q, want %q", argIndex, action.Args[argIndex], want)
-		}
 	}
 }
 
@@ -642,8 +629,8 @@ func TestAlreadyStartedGuidanceUsesResumeAndMoveActions(t *testing.T) {
 	}
 }
 
-func setupGuidanceWorktree(root string) serverapi.WorktreeTopologyEntry {
-	return serverapi.WorktreeTopologyEntry{
+func setupGuidanceWorktree(root string) *serverapi.WorktreeTopologyEntry {
+	return &serverapi.WorktreeTopologyEntry{
 		Variant: serverapi.WorktreeTopologyVariantRegistered,
 		Registered: &serverapi.WorktreeRegisteredFacts{
 			Git:  serverapi.WorktreeGitFacts{CanonicalRoot: root, HeadObject: "0123456789abcdef"},
