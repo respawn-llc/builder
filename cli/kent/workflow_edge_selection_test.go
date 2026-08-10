@@ -108,7 +108,7 @@ func TestWorkflowEdgeAddSelectionDefaultsToConfigured(t *testing.T) {
 	remote := workflowEdgeMutationDefinition(t, serverapi.WorkflowEdge{})
 	exitCode, _, stderr := runWorkflowEdgeCommand(t, &remote,
 		"edge", "add", remote.expected.String(),
-		"--from", "source", "--transition", "next", "--edge-key", "new", "--to", "target", "--context", "new_session",
+		"--from", "source", "--transition", " fresh ", "--edge-key", "new", "--to", "target", "--context", "new_session",
 	)
 	if exitCode != 0 {
 		t.Fatalf("exit code = %d, stderr = %q", exitCode, stderr)
@@ -117,8 +117,8 @@ func TestWorkflowEdgeAddSelectionDefaultsToConfigured(t *testing.T) {
 	if remote.rowMutationCall != "" {
 		t.Fatalf("row mutation call = %q, want none", remote.rowMutationCall)
 	}
-	if edge.AssigneeSelection != "configured" || edge.ThinkingSelection != "configured" {
-		t.Fatalf("selection defaults = %q/%q, want configured/configured", edge.AssigneeSelection, edge.ThinkingSelection)
+	if edge.AssigneeSelection != "configured" || edge.ThinkingSelection != "configured" || len(remote.previewRequest.Graph.TransitionGroups) != 2 || remote.previewRequest.Graph.TransitionGroups[1].TransitionID != "fresh" {
+		t.Fatalf("edge = %+v, groups = %+v", edge, remote.previewRequest.Graph.TransitionGroups)
 	}
 }
 

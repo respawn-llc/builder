@@ -9,8 +9,6 @@ export const workflowGraphDraft: WorkflowGraphDraft = {
       kind: "start",
       name: "Backlog",
       groupID: null,
-      groupKey: "",
-      subagentRole: "",
       joinInputProviders: [],
     },
   ],

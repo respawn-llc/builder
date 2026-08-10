@@ -1537,10 +1537,7 @@ func TestApplyWorkflowGraphSaveSupportsAllUniquenessKeySwaps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reload graph: %v", err)
 	}
-	if reloaded.nodeGroups[0].Key != prepared.nodeGroups[0].Key || reloaded.nodeGroups[1].Key != prepared.nodeGroups[1].Key ||
-		reloaded.nodes[0].Key != prepared.nodes[0].Key || reloaded.nodes[1].Key != prepared.nodes[1].Key ||
-		reloaded.transitionGroups[0].TransitionID != prepared.transitionGroups[0].TransitionID ||
-		reloaded.edges[0].Key != prepared.edges[0].Key {
+	if reloaded.nodeGroups[0].Key != prepared.nodeGroups[0].Key || reloaded.nodeGroups[1].Key != prepared.nodeGroups[1].Key || reloaded.nodes[0].Key != prepared.nodes[0].Key || reloaded.nodes[1].Key != prepared.nodes[1].Key || reloaded.transitionGroups[0].TransitionID != prepared.transitionGroups[0].TransitionID || reloaded.transitionGroups[1].TransitionID != prepared.transitionGroups[1].TransitionID || reloaded.edges[0].Key != prepared.edges[0].Key || reloaded.edges[1].Key != prepared.edges[1].Key {
 		t.Fatal("reloaded graph uniqueness keys do not match the swapped graph")
 	}
 }

@@ -445,7 +445,6 @@ export function workflowEditorDraftGraph(state: WorkflowEditorDraftState): Workf
     nodeGroups: definition.nodeGroups.map((group) => ({ id: group.id, key: group.key, name: group.name })),
     nodes: definition.nodes.map((node) => ({
       groupID: node.groupID.length > 0 ? node.groupID : null,
-      groupKey: node.groupKey,
       id: node.id,
       key: node.key,
       kind: node.kind,
@@ -453,7 +452,7 @@ export function workflowEditorDraftGraph(state: WorkflowEditorDraftState): Workf
       completionMode: node.completionMode,
       scriptPath: node.scriptPath,
       joinInputProviders: node.joinInputProviders,
-      subagentRole: node.subagentRole,
+      ...(node.subagentRole ? { subagentRole: node.subagentRole } : {}),
     })),
     transitionGroups: definition.transitionGroups.map((group) => ({
       description: group.description,

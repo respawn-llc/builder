@@ -203,8 +203,8 @@ func addWorkflowEdgeDraftMutation(add workflowEdgeAddDraftMutation) workflowGrap
 			graph.TransitionGroups = append(graph.TransitionGroups, serverapi.WorkflowGraphDraftTransitionGroup{
 				ID:           add.NewTransitionGroupID,
 				SourceNodeID: source.ID,
-				TransitionID: add.TransitionID,
-				DisplayName:  workflowDisplayNameFromKey(add.TransitionID),
+				TransitionID: transitionID,
+				DisplayName:  workflowDisplayNameFromKey(transitionID),
 				Description:  add.TransitionDescription.Value,
 			})
 			groupIndex = len(graph.TransitionGroups) - 1
