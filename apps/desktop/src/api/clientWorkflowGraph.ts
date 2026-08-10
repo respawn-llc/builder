@@ -1,5 +1,6 @@
 import { compactJsonObject, type JsonObject } from "./json";
-import type { WorkflowGraphDraft, WorkflowGraphMetadata, WorkflowGraphSaveConfirmation } from "./models";
+import type { WorkflowGraphMetadata, WorkflowGraphSaveConfirmation } from "./models";
+import type { WorkflowGraphDraft } from "./workflowGraphModels";
 
 export function workflowGraphDraftPayload(graph: WorkflowGraphDraft): JsonObject {
   return {

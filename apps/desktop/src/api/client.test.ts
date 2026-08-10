@@ -5,6 +5,7 @@ import { ContractError } from "./errors";
 import { FakeRpcTransport } from "@/test-support/api";
 import { protocolVersion } from "./jsonRpcSocket";
 import { canonicalBoardFilter } from "./workflowBoardFilters";
+import { workflowGraphDraft } from "./clientWorkflowGraph.testFixtures";
 
 const startTaskParamsSchema = z.object({
   task_id: z.literal("task-1"),
@@ -631,10 +632,18 @@ describe("ApiClient", () => {
       {
         method: "workflow.graph.savePreview",
         result: {
-          changed: true, current_version: 11,
+          changed: true,
+          current_version: 11,
           validation_results: graphValidationResults,
           impact: workflowGraphSaveImpactResponse,
-          blockers: [{ code: "confirmation_required", message: "Confirm removal.", count: 1, affected_entities: [{ entity_type: "edge", entity_id: "edge-start" }] }],
+          blockers: [
+            {
+              code: "confirmation_required",
+              message: "Confirm removal.",
+              count: 1,
+              affected_entities: [{ entity_type: "edge", entity_id: "edge-start" }],
+            },
+          ],
           can_save: false,
           confirmation_required: true,
         },
@@ -642,11 +651,17 @@ describe("ApiClient", () => {
       {
         method: "workflow.graph.save",
         result: {
-          saved: true, changed: true,
+          saved: true,
+          changed: true,
           definition: workflowDefinitionResponse.definition,
           current_version: 12,
           validation_results: graphValidationResults,
-          impact: { ...workflowGraphSaveImpactResponse, removed_node_group_count: 0, removed_edge_count: 0, removed_entities: [] },
+          impact: {
+            ...workflowGraphSaveImpactResponse,
+            removed_node_group_count: 0,
+            removed_edge_count: 0,
+            removed_entities: [],
+          },
           blockers: null,
           can_save: true,
           confirmation_required: false,
@@ -691,7 +706,8 @@ describe("ApiClient", () => {
         graph: workflowGraphDraft,
       }),
     ).resolves.toMatchObject({
-      changed: true, currentVersion: 11,
+      changed: true,
+      currentVersion: 11,
       confirmationRequired: true,
       impact: { removedEdgeCount: 1 },
       blockers: [{ code: "confirmation_required" }],
@@ -707,7 +723,8 @@ describe("ApiClient", () => {
         },
         graph: workflowGraphDraft,
         confirmation: {
-          expectedRemovedNodeGroupCount: 1, expectedRemovedNodeCount: 0,
+          expectedRemovedNodeGroupCount: 1,
+          expectedRemovedNodeCount: 0,
           expectedRemovedTransitionGroupCount: 0,
           expectedRemovedEdgeCount: 1,
           expectedNodeTaskReferenceCount: 0,
@@ -715,7 +732,8 @@ describe("ApiClient", () => {
         },
       }),
     ).resolves.toMatchObject({
-      saved: true, changed: true,
+      saved: true,
+      changed: true,
       currentVersion: 12,
       definition: { workflow: { id: "11111111-1111-4111-8111-111111111111" } },
       blockers: [],
@@ -780,7 +798,8 @@ describe("ApiClient", () => {
           execution_target_policy: { mode: "none" },
         },
         confirmation: {
-          expected_removed_node_group_count: 1, expected_removed_edge_count: 1,
+          expected_removed_node_group_count: 1,
+          expected_removed_edge_count: 1,
         },
       },
     });
@@ -1101,10 +1120,14 @@ const workflowDeleteResponse = {
 };
 
 const workflowGraphSaveImpactResponse = {
-  removed_node_group_count: 1, removed_node_count: 0,
+  removed_node_group_count: 1,
+  removed_node_count: 0,
   removed_transition_group_count: 0,
   removed_edge_count: 1,
-  removed_entities: [{ entity_type: "edge", entity_id: "edge-start" }, { entity_type: "node_group", entity_id: "group-1" }],
+  removed_entities: [
+    { entity_type: "edge", entity_id: "edge-start" },
+    { entity_type: "node_group", entity_id: "group-1" },
+  ],
   node_task_reference_count: 0,
   edge_task_reference_count: 0,
   active_current_node_count: 0,
@@ -1112,44 +1135,4 @@ const workflowGraphSaveImpactResponse = {
   start_node_change_count: 0,
   last_terminal_change_count: 0,
   task_referenced_node_kind_change_count: 0,
-};
-
-const workflowGraphDraft = {
-  nodeGroups: [],
-  nodes: [
-    {
-      id: "node-start",
-      key: "backlog",
-      kind: "start",
-      name: "Backlog",
-      groupID: "",
-      groupKey: "",
-      subagentRole: "",
-      joinInputProviders: [],
-    },
-  ],
-  transitionGroups: [
-    {
-      id: "group-start",
-      sourceNodeID: "node-start",
-      transitionID: "start",
-      name: "Start",
-      description: "Start the workflow.",
-    },
-  ],
-  edges: [
-    {
-      id: "edge-start",
-      transitionGroupID: "group-start",
-      key: "start",
-      targetNodeID: "node-agent",
-      assigneeSelection: "configured" as const,
-      thinkingSelection: "configured" as const,
-      requiresApproval: false,
-      contextMode: "new_session",
-      contextSource: { kind: "immediate_source", nodeKey: "" },
-      promptTemplate: "Start from {{.TaskTitle}}.",
-      parameters: [{ key: "brief", description: "Brief", purpose: "ordinary" as const }],
-    },
-  ],
 };

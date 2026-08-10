@@ -22,10 +22,7 @@ import {
 } from "./workflowEditorGraphMutations";
 import { workflowGraphsEqual } from "./workflowDraftEquality";
 import { draftParameterRowID, reorderDraftRows } from "./workflowEditorDraftRows";
-import {
-  isProtectedWorkflowParameter,
-  setWorkflowEdgeSelector,
-} from "./workflowEditorEdgeSelection";
+import { isProtectedWorkflowParameter, setWorkflowEdgeSelector } from "./workflowEditorEdgeSelection";
 import { workflowEditorTopologyMutation } from "./workflowEditorTopologyReducer";
 import type {
   DraftWorkflowDefinition,
@@ -71,9 +68,7 @@ export type WorkflowEditorDraftAction =
   | Readonly<{
       type: "editAgentNode";
       nodeID: string;
-      patch: Partial<
-        Pick<WorkflowNode, "key" | "name" | "subagentRole" | "completionMode">
-      >;
+      patch: Partial<Pick<WorkflowNode, "key" | "name" | "subagentRole" | "completionMode">>;
     }>
   | Readonly<{
       type: "editScriptNode";
@@ -148,11 +143,7 @@ type LifecycleAction = Extract<
 type NodeFieldAction = Extract<
   WorkflowEditorDraftAction,
   {
-    type:
-      | "editNodeIdentity"
-      | "editAgentNode"
-      | "editScriptNode"
-      | "assignJoinInputProvider";
+    type: "editNodeIdentity" | "editAgentNode" | "editScriptNode" | "assignJoinInputProvider";
   }
 >;
 
@@ -383,8 +374,7 @@ function reduceEdgeFieldAction(
       return editDraftEdge(state, action.edgeID, false, (edge) => ({
         ...edge,
         parameters: edge.parameters.filter(
-          (parameter) =>
-            parameter.rowID !== action.parameterRowID || isProtectedWorkflowParameter(parameter),
+          (parameter) => parameter.rowID !== action.parameterRowID || isProtectedWorkflowParameter(parameter),
         ),
       }));
     case "reorderEdgeParameter":
