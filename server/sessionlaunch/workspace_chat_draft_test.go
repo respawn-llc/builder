@@ -53,7 +53,7 @@ func TestWorkspaceChatDraftResolution(t *testing.T) {
 	worker.Sources["tools.exec_command"] = "file"
 	base.Subagents["worker"] = worker
 	workerDraft, err := ResolveWorkspaceChatDraft(draftInput(base), &WorkspaceChatDraft{
-		Message: "keep", Agent: "worker", Supervisor: "all", Thinking: "high",
+		Message: "keep", Agent: "worker", Supervisor: "all", Thinking: "high", Questions: false,
 	})
 	if err != nil || workerDraft.GoalAvailability != clientui.GoalAvailabilityAgentCapabilityMissing {
 		t.Fatalf("worker availability=%q err=%v", workerDraft.GoalAvailability, err)

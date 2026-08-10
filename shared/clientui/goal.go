@@ -26,7 +26,6 @@ func (g Goal) validate(requireID bool) error {
 	if (requireID && strings.TrimSpace(g.ID) == "") || strings.TrimSpace(g.Objective) == "" || (g.Status != RuntimeGoalStatusActive && g.Status != RuntimeGoalStatusPaused && g.Status != RuntimeGoalStatusComplete) || g.CreatedAt.IsZero() || g.UpdatedAt.IsZero() { return fmt.Errorf("invalid goal fields") }
 	return nil
 }
-
 type GoalEnvelope struct { Goal *Goal `json:"goal,omitempty"`; Availability GoalAvailability `json:"availability"`; Queued bool `json:"queued,omitempty"` }
 func ProjectGoal(goal *Goal, availability GoalAvailability) GoalEnvelope { return GoalEnvelope{Goal: goal, Availability: availability} }
 func RuntimeGoalFromEnvelope(e GoalEnvelope, suspended bool) RuntimeGoal { return RuntimeGoal{Goal: e.Goal, Availability: e.Availability, Suspended: suspended} }

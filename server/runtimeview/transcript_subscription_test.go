@@ -251,7 +251,7 @@ func TestTranscriptHydrationProjectsRuntimeOwnedFacts(t *testing.T) {
 	}
 	if hydration.ContextUsage == nil || hydration.ContextUsage.CacheHitPercent == nil ||
 		*hydration.ContextUsage.CacheHitPercent != 25 || hydration.GoalStatus == nil ||
-		hydration.GoalStatus.Goal == nil || !hydration.GoalStatus.Goal.Suspended {
+		hydration.GoalStatus.Availability != clientui.GoalAvailabilityAvailable || hydration.GoalStatus.Goal == nil || hydration.GoalStatus.Goal.Goal == nil || hydration.GoalStatus.Goal.Goal.CreatedAt.IsZero() || hydration.GoalStatus.Goal.Goal.UpdatedAt.IsZero() || !hydration.GoalStatus.Goal.Suspended {
 		t.Fatalf("usage/goal = usage %+v goal %+v", hydration.ContextUsage, hydration.GoalStatus)
 	}
 }

@@ -227,14 +227,14 @@ func TestRuntimeClientShowGoalDoesNotOverwriteAcceptedPendingGoal(t *testing.T) 
 
 func runtimeGoalFixture(id, objective string, status clientui.RuntimeGoalStatus, suspended bool) *clientui.RuntimeGoal {
 	return &clientui.RuntimeGoal{
-		Goal:         &clientui.Goal{ID: id, Objective: objective, Status: status},
+		Goal:         &clientui.Goal{ID: id, Objective: objective, Status: status, CreatedAt: time.Unix(1, 0), UpdatedAt: time.Unix(1, 0)},
 		Availability: clientui.GoalAvailabilityAvailable,
 		Suspended:    suspended,
 	}
 }
 
 func transcriptGoalFixture(id, objective string, status clientui.RuntimeGoalStatus) *clientui.TranscriptGoal {
-	return &clientui.TranscriptGoal{Goal: &clientui.Goal{ID: id, Objective: objective, Status: status}}
+	return &clientui.TranscriptGoal{Goal: &clientui.Goal{ID: id, Objective: objective, Status: status, CreatedAt: time.Unix(1, 0), UpdatedAt: time.Unix(1, 0)}}
 }
 
 func goalResponseFixture(goal *serverapi.RuntimeGoal) serverapi.RuntimeGoalShowResponse {
@@ -423,7 +423,7 @@ func assertRuntimeGoalConversionDropsAPITimestamps(t *testing.T, got *clientui.R
 	if source == nil || source.CreatedAt.IsZero() || source.UpdatedAt.IsZero() {
 		t.Fatal("test source goal must include timestamps")
 	}
-	if got == nil || got.ID != source.ID || got.Objective != source.Objective || got.Status != source.Status {
+	if got == nil || got.ID != source.ID || got.Objective != source.Objective || got.Status != source.Status || !got.CreatedAt.Equal(source.CreatedAt) || !got.UpdatedAt.Equal(source.UpdatedAt) {
 		t.Fatalf("converted goal = %+v, source = %+v", got, source)
 	}
 }
