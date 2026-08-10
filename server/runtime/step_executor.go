@@ -402,7 +402,7 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 			continue
 		}
 
-		if assistantMsg.Content == nil && responseContainsThinking(resp) {
+		if assistantMsg.Content == nil && responseContainsProgress(resp) {
 			if err := s.completeAgentStepBoundary(ctx); err != nil {
 				return stepLoopResult{}, err
 			}

@@ -542,6 +542,44 @@ func TestSubmitUserMessageFinalAnswerWithoutContentFailsProviderContract(t *test
 	}
 }
 
+func TestSubmitUserMessageCommentaryBeforeMissingFinalContinues(t *testing.T) {
+	t.Parallel()
+	store := mustCreateTestSession(t)
+	client := &fakeClient{responses: []llm.Response{
+		{
+			Assistant: llm.Message{
+				Role:  llm.RoleAssistant,
+				Phase: textutil.Value(llm.MessagePhaseFinal),
+			},
+			OutputItems: []llm.ResponseItem{
+				{
+					Type:    llm.ResponseItemTypeMessage,
+					Role:    textutil.Value(llm.RoleAssistant),
+					Phase:   textutil.Value(llm.MessagePhaseCommentary),
+					Content: textutil.Value("still working"),
+				},
+				{
+					Type:  llm.ResponseItemTypeMessage,
+					Role:  textutil.Value(llm.RoleAssistant),
+					Phase: textutil.Value(llm.MessagePhaseFinal),
+				},
+			},
+			Usage: llm.Usage{WindowTokens: 200000},
+		},
+		finalTextResponse("done"),
+	}}
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
+
+	msg, err := eng.SubmitUserMessage(context.Background(), "continue")
+	if err != nil {
+		t.Fatalf("submit user turn: %v", err)
+	}
+	if got := messageContent(msg); got != "done" {
+		t.Fatalf("final content = %q, want done", got)
+	}
+	assertModelCallCount(t, client, 2)
+}
+
 func TestSubmitUserMessagePhaseOnlyCommentaryWithoutContentFailsProviderContract(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
