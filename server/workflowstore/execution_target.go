@@ -27,18 +27,6 @@ type ExecutionTargetSnapshot struct {
 	Provenance   ExecutionTargetProvenance
 }
 
-func (s ExecutionTargetSnapshot) MatchesSelection(selection workflow.ExecutionTargetSelection) bool {
-	if s.Validate() != nil || selection.Validate() != nil || s.Mode != selection.Mode {
-		return false
-	}
-	if selection.Mode != workflow.ExecutionTargetModeCustomRef {
-		return true
-	}
-	return s.RequestedRef != nil &&
-		selection.CustomRef != nil &&
-		*s.RequestedRef == *selection.CustomRef
-}
-
 type ExecutionTargetCandidate struct {
 	Snapshot ExecutionTargetSnapshot
 	Root     ExecutionRoot

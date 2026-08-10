@@ -1,8 +1,7 @@
 import { useTranslation } from "react-i18next";
 
 import type { ApprovalAttentionItem, ApprovalSnapshot, InterruptedCurrentNodeAttentionItem } from "@/api";
-import { ContractError, errorMessage } from "@/api";
-import { parseTaskSetupRecoveryDetail } from "@/api/worktreeSetup";
+import { ContractError, errorMessage, parseTaskSetupRecoveryDetail } from "@/api";
 import { useAppServices } from "@/app-facade";
 import { writeClipboardText } from "@/shared/native-clipboard";
 import { WorkflowEdgeRouteGraphic } from "@/shared/workflow-edge";

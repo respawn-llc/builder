@@ -8,7 +8,7 @@ import type {
 import {
   decodeWorktreeSetupRetainedError,
   type WorktreeSetupRetainedError,
-} from "@/api/worktreeSetup";
+} from "@/api";
 import {
   initialExecutionTargetSelectionDraft,
   type ExecutionTargetSelectionDraft,

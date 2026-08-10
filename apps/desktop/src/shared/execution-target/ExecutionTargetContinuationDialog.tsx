@@ -5,8 +5,8 @@ import type {
   WorkflowExecutionTargetSelection,
   WorkflowExecutionTargetSelectionMode,
   WorkflowExecutionTargetSelectionRequirement,
+  TaskSetupRecovery,
 } from "@/api";
-import type { TaskSetupRecovery } from "@/api/worktreeSetup";
 import { useTextFieldSubmitShortcut } from "@/app-facade";
 import { Button, compactDialogWidth, Dialog, RadioGroup, RadioGroupItem, TextInput } from "@/ui";
 import {

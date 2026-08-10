@@ -5,10 +5,10 @@ import { vi } from "vitest";
 import {
   parseSetupOperationID,
   RpcError,
+  type TaskSetupRecovery,
   type TaskStartResponse,
   type WorkflowExecutionTargetSelection,
 } from "@/api";
-import type { TaskSetupRecovery } from "@/api/worktreeSetup";
 import { TestAppProviders, createTestServices } from "@/test-support/app-services";
 import {
   callParams,

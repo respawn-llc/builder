@@ -1,6 +1,5 @@
 import { useEffect, useRef } from "react";
-import { ContractError, type AttentionItem, type TaskDetail } from "@/api";
-import { parseTaskSetupRecoveryDetail } from "@/api/worktreeSetup";
+import { ContractError, parseTaskSetupRecoveryDetail, type AttentionItem, type TaskDetail } from "@/api";
 import type { TaskDetailInitialFocus } from "@/app-facade";
 import { sameTaskDetailInitialFocus } from "@/app-facade";
 import { useAppServices } from "@/app-facade";

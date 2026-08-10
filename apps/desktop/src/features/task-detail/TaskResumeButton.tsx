@@ -1,8 +1,7 @@
 import { createContext, useCallback, useContext, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
-import { errorMessage, type WorkflowExecutionTargetSelection } from "@/api";
-import type { TaskSetupRecovery } from "@/api/worktreeSetup";
+import { errorMessage, type TaskSetupRecovery, type WorkflowExecutionTargetSelection } from "@/api";
 import { useAppServices, useStatusController } from "@/app-facade";
 import {
   executeTaskInitiatingAction,

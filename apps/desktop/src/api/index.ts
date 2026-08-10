@@ -63,7 +63,15 @@ export type { JsonArray, JsonObject, JsonPrimitive, JsonValue } from "./json";
 export { newSetupOperationID, parseSetupOperationID, SetupOperationID } from "./setupOperationID";
 export { rpcErrorCodes } from "./rpcErrorCodes";
 export { workflowIDSchema } from "./schemas/workflowID";
-export type { WorktreeSetupEvent, WorktreeSetupEventHandler, WorktreeSetupPhase } from "./worktreeSetup";
+export {
+  decodeWorktreeSetupRetainedError,
+  parseTaskSetupRecoveryDetail,
+  type TaskSetupRecovery,
+  type WorktreeSetupEvent,
+  type WorktreeSetupEventHandler,
+  type WorktreeSetupPhase,
+  type WorktreeSetupRetainedError,
+} from "./worktreeSetup";
 export type { WorkflowProjectEvent, WorkflowProjectEventHandler } from "./workflowProjectEvents";
 export { workflowLabelMaxIDs } from "./workflowLabelContract";
 export type { ConnectionPhase, ConnectionSnapshot } from "./connectionStore";
