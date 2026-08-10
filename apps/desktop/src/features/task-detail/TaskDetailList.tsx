@@ -26,6 +26,7 @@ import { TaskDependenciesArea } from "./TaskDependenciesArea";
 import type { QuestionSelectionState } from "./TaskDetailQuestionState";
 import { feedPixelOffsetRequest, selectedFeed, taskDetailPaging } from "./taskDetailPaging";
 import type {
+  TaskDetailFeedPage,
   useTaskActivity,
   useTaskAttention,
   useTaskComments,
@@ -119,21 +120,11 @@ export function TaskDetailList({
   const draftDirty = draft.title !== detail.title || draft.body !== detail.body;
   const canSaveDraft = draftDirty && !disabled && !updatePending && draft.title.trim().length > 0;
   const activityItems = useMemo(
-    () =>
-      withPresentationKeys(
-        activity.data?.pages.flatMap((page) => page.items) ?? [],
-        "activity",
-        (item) => item.id,
-      ),
+    () => withPresentationKeys(activity.data?.pages ?? [], "activity"),
     [activity.data],
   );
   const commentItems = useMemo(
-    () =>
-      withPresentationKeys(
-        comments.data?.pages.flatMap((page) => page.items) ?? [],
-        "comment",
-        (comment) => comment.id,
-      ),
+    () => withPresentationKeys(comments.data?.pages ?? [], "comment"),
     [comments.data],
   );
   const attentionItems = useMemo(() => attention.data?.items ?? [], [attention.data]);
@@ -541,20 +532,15 @@ function ActivityItemRow({ item }: TaskDetailListRowProps): ReactNode {
 }
 
 function withPresentationKeys<T>(
-  items: readonly T[],
+  pages: readonly TaskDetailFeedPage<T>[],
   prefix: string,
-  identity: (item: T) => string,
 ): readonly TaskDetailFeedRow<T>[] {
-  const ordinals = new Map<string, number>();
-  return items.map((item) => {
-    const itemIdentity = identity(item);
-    const ordinal = ordinals.get(itemIdentity) ?? 0;
-    ordinals.set(itemIdentity, ordinal + 1);
-    return {
+  return pages.flatMap((page) =>
+    page.items.map((item, index) => ({
       item,
-      presentationKey: `${prefix}:${itemIdentity}:${ordinal.toString()}`,
-    };
-  });
+      presentationKey: `${prefix}:offset:${page.offset.toString()}:item:${index.toString()}`,
+    })),
+  );
 }
 
 function taskDetailListItems({

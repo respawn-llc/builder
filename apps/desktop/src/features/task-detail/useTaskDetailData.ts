@@ -110,7 +110,7 @@ export function useTaskAttention(taskID: string, enabled: boolean) {
 const taskDetailFeedPageSize = 50;
 const taskDetailFeedMaxPages = 10;
 
-type TaskDetailFeedPage<T> = OffsetPage<T> & Readonly<{ offset: number }>;
+export type TaskDetailFeedPage<T> = OffsetPage<T> & Readonly<{ offset: number }>;
 
 function taskDetailFeedOptions<T>(
   queryKey: readonly unknown[],
