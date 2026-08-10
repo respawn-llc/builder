@@ -84,8 +84,9 @@ func TestWorkflowEmptyFinalResponseUsesGenericEmptyFinalFeedback(t *testing.T) {
 	client := &fakeClient{responses: []llm.Response{
 		{
 			Assistant: llm.Message{
-				Role:  llm.RoleAssistant,
-				Phase: textutil.Value(llm.MessagePhaseFinal),
+				Role:    llm.RoleAssistant,
+				Phase:   textutil.Value(llm.MessagePhaseFinal),
+				Content: textutil.Value(""),
 			},
 			OutputItems: []llm.ResponseItem{{
 				Type:    llm.ResponseItemTypeMessage,

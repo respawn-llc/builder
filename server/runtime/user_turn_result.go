@@ -5,7 +5,8 @@ import "core/server/llm"
 type UserTurnResultKind uint8
 
 const (
-	UserTurnResultNoFinal UserTurnResultKind = iota
+	UserTurnResultInvalid UserTurnResultKind = iota
+	UserTurnResultNoFinal
 	UserTurnResultAssistantFinal
 	UserTurnResultSilentFinal
 )
@@ -20,7 +21,7 @@ func userTurnResultFromStepLoop(result stepLoopResult) UserTurnResult {
 		return UserTurnResult{Kind: UserTurnResultSilentFinal}
 	}
 	if result.FinalAnswer != nil {
-		if isBlankFinalAnswer(*result.FinalAnswer) {
+		if result.FinalAnswer.Content == nil || isBlankFinalAnswer(*result.FinalAnswer) {
 			return UserTurnResult{Kind: UserTurnResultNoFinal}
 		}
 		return UserTurnResult{

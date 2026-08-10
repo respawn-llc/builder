@@ -100,7 +100,9 @@
 - Transcript visibility is defined by one product matrix, not ad hoc filters.
 - Visibility changes presentation only. It does not change Session history.
 - Outside an active Goal and Workflow Mode, an explicitly present empty or whitespace-only assistant final answer ends work silently. It creates no visible assistant row, completion notification, or terminal bell.
-- Omitted final-answer text is not a silent final answer and keeps its existing missing-output handling.
+- A response with omitted assistant final content and actual tool calls executes those calls without a missing-content warning and continues.
+- A response with omitted assistant final content and reasoning or nonempty commentary content continues without a missing-content warning.
+- A response with omitted assistant final content and no tool calls, reasoning, nonempty commentary content, or final content fails as a provider-contract error.
 - During an active Goal or Workflow Mode, a blank final answer follows that mode's ordinary incomplete-output behavior and does not silently stop.
 - Visibility values are `O` full ongoing+detail, `OC` collapsed/short ongoing plus full detail, `D` detail-only, and `X` hidden.
 - Unknown/malformed entries with recoverable text are `O`; empty unknown/malformed entries are `D` diagnostics.

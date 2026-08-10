@@ -286,7 +286,7 @@ func compatiblePhaseAbsentResponse(content string) llm.Response {
 
 func compatibleFinalResponse(content string) llm.Response {
 	return llm.Response{
-		Assistant:     llm.Message{Role: llm.RoleAssistant, Content: textutil.OptionalTrimmedString(content), Phase: textutil.Value(llm.MessagePhaseFinal)},
+		Assistant:     llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(content), Phase: textutil.Value(llm.MessagePhaseFinal)},
 		ProviderPhase: llm.FinalProviderPhase(),
 		Usage:         llm.Usage{WindowTokens: 200000},
 	}
@@ -1373,8 +1373,6 @@ func TestWorkflowBlankFinalUsesNormalIncompleteOutputHandling(t *testing.T) {
 		response func(string) llm.Response
 		content  string
 	}{
-		{name: "absent empty", response: compatiblePhaseAbsentResponse, content: ""},
-		{name: "absent whitespace", response: compatiblePhaseAbsentResponse, content: " \n\t "},
 		{name: "final empty", response: compatibleFinalResponse, content: ""},
 		{name: "final whitespace", response: compatibleFinalResponse, content: " \n\t "},
 	}

@@ -402,11 +402,16 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 			continue
 		}
 
-		if responseOutputIsReasoningOnly(resp.OutputItems) {
+		if assistantMsg.Content == nil && responseContainsThinking(resp) {
 			if err := s.completeAgentStepBoundary(ctx); err != nil {
 				return stepLoopResult{}, err
 			}
 			continue
+		}
+		if assistantMsg.Content == nil {
+			return stepLoopResult{}, errors.New(
+				"provider contract violation: response contained no final content, tool calls, reasoning, or commentary",
+			)
 		}
 
 		if phaseTurn.EffectivePhase.Is(llm.MessagePhaseFinal) &&
@@ -440,16 +445,6 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 				}
 				continue
 			}
-			if !e.currentNodeExecutionActive() && phaseTurn.EnforcePhaseProtocol && messagePhaseIs(assistantMsg, llm.MessagePhaseFinal) && assistantMsg.Content == nil && !silentFinalAnswer {
-				if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeErrorFeedback), Content: textutil.Value(finalWithoutContentWarning)}})); err != nil {
-					return stepLoopResult{}, err
-				}
-				if _, err := s.flushPendingUserInjections(stepID, options); err != nil {
-					return stepLoopResult{}, err
-				}
-				continue
-			}
-
 			flushed, err := s.flushPendingUserInjections(stepID, options)
 			if err != nil {
 				return stepLoopResult{}, err
@@ -471,7 +466,7 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 				if assistantMsg.Content != nil {
 					content = strings.TrimSpace(*assistantMsg.Content)
 				}
-				if content == "" && !silentFinalAnswer {
+				if assistantMsg.Content != nil && content == "" && !silentFinalAnswer {
 					if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeErrorFeedback), Content: textutil.Value(workflowFinalWithoutContentWarning)}})); err != nil {
 						return stepLoopResult{}, err
 					}

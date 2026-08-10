@@ -13,3 +13,9 @@ func responseOutputIsReasoningOnly(items []llm.ResponseItem) bool {
 	}
 	return true
 }
+
+func responseContainsThinking(response llm.Response) bool {
+	return len(response.Reasoning) > 0 ||
+		len(response.ReasoningItems) > 0 ||
+		responseOutputIsReasoningOnly(response.OutputItems)
+}
