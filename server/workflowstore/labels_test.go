@@ -848,7 +848,7 @@ func TestTaskLabelAssignmentSupportsEveryTaskLifecycleState(t *testing.T) {
 	}
 }
 
-func openConcurrentWorkflowStores(t *testing.T, cfg config.App) (*Store, *Store) {
+func openConcurrentWorkflowStores(t *testing.T, cfg config.App, opts ...Option) (*Store, *Store) {
 	t.Helper()
 	open := func() *Store {
 		metadataStore, err := metadata.Open(cfg.PersistenceRoot)
@@ -860,7 +860,7 @@ func openConcurrentWorkflowStores(t *testing.T, cfg config.App) (*Store, *Store)
 				t.Errorf("close concurrent metadata store: %v", err)
 			}
 		})
-		store, err := New(metadataStore)
+		store, err := New(metadataStore, opts...)
 		if err != nil {
 			t.Fatalf("workflowstore.New concurrent store: %v", err)
 		}

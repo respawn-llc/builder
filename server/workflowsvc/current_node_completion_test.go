@@ -520,19 +520,18 @@ func (s *currentNodeCompletionExecutionStub) ResumeTaskWithPreparation(
 	if preparation == nil {
 		return nil, errors.New("task resume preparation is required")
 	}
-	selected, err := s.store.InterruptedExecutableCurrentNodes(ctx, taskID)
+	prepared, err := s.store.PrepareTaskResume(ctx, taskID)
 	if err != nil {
+		return nil, err
+	}
+	result := prepared.Result()
+	if err := prepared.Commit(); err != nil {
 		return nil, err
 	}
 	if err := preparation(ctx); err != nil {
 		return nil, err
 	}
-	for _, currentNode := range selected {
-		if _, _, err := s.store.ResumeCurrentNode(ctx, currentNode.Reference); err != nil {
-			return nil, err
-		}
-	}
-	return selected, nil
+	return result.CreatedExecutableCurrentNodes, nil
 }
 
 func (s *currentNodeCompletionExecutionStub) ApplyPendingApproval(ctx context.Context, approvalID workflow.ApprovalID) (workflowstore.PendingApprovalApplyResult, error) {

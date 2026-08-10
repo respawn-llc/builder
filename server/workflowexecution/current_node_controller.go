@@ -99,11 +99,10 @@ type CurrentNodeExecutionSnapshot struct {
 // lifecycle, admission, interruption, and completion operations.
 type CurrentNodeController struct {
 	store interface {
-		StartTask(context.Context, workflow.TaskID) (workflowstore.StartTaskResult, error)
+		PrepareTaskStart(context.Context, workflow.TaskID) (workflowstore.PreparedCurrentNodeMutation, error)
+		PrepareTaskResume(context.Context, workflow.TaskID) (workflowstore.PreparedCurrentNodeMutation, error)
 		InterruptedExecutableCurrentNodes(context.Context, workflow.TaskID) ([]workflow.CurrentNode, error)
-		PreflightTaskResume(context.Context, workflow.TaskID) ([]workflowstore.CurrentNodeResumeClassification, error)
 		AdmitCurrentNode(context.Context, workflow.CurrentNodeReference) error
-		ResumeCurrentNode(context.Context, workflow.CurrentNodeReference) (workflowstore.InterruptedCurrentNodeAttentionProjection, bool, error)
 		PendingApproval(context.Context, workflow.ApprovalID) (workflow.PendingApproval, error)
 		ApplyPendingApproval(context.Context, workflow.ApprovalID) (workflowstore.PendingApprovalApplyResult, error)
 		ApplyManualMove(context.Context, workflowstore.ManualMovePreparation, *workflowstore.ExecutionTargetCandidate) (workflowstore.ManualMoveResult, error)
@@ -142,11 +141,10 @@ type CurrentNodeController struct {
 
 func NewCurrentNodeController(
 	store interface {
-		StartTask(context.Context, workflow.TaskID) (workflowstore.StartTaskResult, error)
+		PrepareTaskStart(context.Context, workflow.TaskID) (workflowstore.PreparedCurrentNodeMutation, error)
+		PrepareTaskResume(context.Context, workflow.TaskID) (workflowstore.PreparedCurrentNodeMutation, error)
 		InterruptedExecutableCurrentNodes(context.Context, workflow.TaskID) ([]workflow.CurrentNode, error)
-		PreflightTaskResume(context.Context, workflow.TaskID) ([]workflowstore.CurrentNodeResumeClassification, error)
 		AdmitCurrentNode(context.Context, workflow.CurrentNodeReference) error
-		ResumeCurrentNode(context.Context, workflow.CurrentNodeReference) (workflowstore.InterruptedCurrentNodeAttentionProjection, bool, error)
 		PendingApproval(context.Context, workflow.ApprovalID) (workflow.PendingApproval, error)
 		ApplyPendingApproval(context.Context, workflow.ApprovalID) (workflowstore.PendingApprovalApplyResult, error)
 		ApplyManualMove(context.Context, workflowstore.ManualMovePreparation, *workflowstore.ExecutionTargetCandidate) (workflowstore.ManualMoveResult, error)

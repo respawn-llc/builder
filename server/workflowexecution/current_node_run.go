@@ -153,6 +153,74 @@ func (c *CurrentNodeController) allocateRunLocked(start currentNodeQueuedStart) 
 	return run, true, nil
 }
 
+func (c *CurrentNodeController) stageExplicitRunsLocked(
+	nodes []workflow.CurrentNode,
+	preparation TaskStartPreparation,
+	delivery workflowruntime.TaskPromptDelivery,
+) ([]currentNodeRunID, error) {
+	ids := make([]currentNodeRunID, 0, len(nodes))
+	discard := func() {
+		c.discardStagedRunsLocked(ids)
+	}
+	for index, node := range nodes {
+		if node.Scheduling == nil || node.Scheduling.State != workflow.CurrentNodeSchedulingReady {
+			discard()
+			return nil, fmt.Errorf("prepared executable Current Node at index %d is not ready", index)
+		}
+		run, created, err := c.allocateRunLocked(currentNodeQueuedStart{
+			reference:          node.Reference,
+			preparation:        preparation,
+			taskPromptDelivery: delivery,
+		})
+		if err != nil {
+			discard()
+			return nil, err
+		}
+		if !created {
+			discard()
+			return nil, fmt.Errorf("prepared executable Current Node %v already has a Run generation", node.Reference)
+		}
+		ids = append(ids, run.id)
+	}
+	return ids, nil
+}
+
+func (c *CurrentNodeController) validateStagedRunsLocked(ids []currentNodeRunID) error {
+	for _, id := range ids {
+		run := c.runs[id]
+		if run == nil || run.phase != currentNodeRunStaged {
+			return fmt.Errorf("prepared Current-Node Run %d is not staged", id.sequence)
+		}
+		if current, exists := c.currentRuns[run.key]; !exists || current != id {
+			return fmt.Errorf("prepared Current-Node Run %d lost current-generation ownership", id.sequence)
+		}
+	}
+	return nil
+}
+
+func (c *CurrentNodeController) discardStagedRunsLocked(ids []currentNodeRunID) {
+	for _, id := range ids {
+		run := c.runs[id]
+		if run == nil {
+			continue
+		}
+		if run.phase != currentNodeRunStaged {
+			panic(fmt.Sprintf("discard non-staged Current-Node Run %d in phase %d", id.sequence, run.phase))
+		}
+		c.removeRunLocked(id)
+	}
+}
+
+func (c *CurrentNodeController) installStagedRunsLocked(ids []currentNodeRunID) {
+	for _, id := range ids {
+		run := c.runs[id]
+		if run == nil || run.phase != currentNodeRunStaged || c.currentRuns[run.key] != id {
+			panic(fmt.Sprintf("install invalid staged Current-Node Run %d", id.sequence))
+		}
+		c.queueRunLocked(id, nil)
+	}
+}
+
 func (c *CurrentNodeController) stageSuccessorRunLocked(
 	start currentNodeQueuedStart,
 	predecessorID currentNodeRunID,

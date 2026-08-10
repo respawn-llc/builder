@@ -298,6 +298,11 @@ type currentNodeControllerStore struct {
 	startTaskStarted      chan struct{}
 	startTaskRelease      chan struct{}
 	startTaskOnce         sync.Once
+	preparedCommitStarted chan struct{}
+	preparedCommitRelease chan struct{}
+	preparedCommitOnce    sync.Once
+	preparedCommitErr     error
+	preparedCommits       int
 	completionStarted     chan struct{}
 	completionRelease     chan struct{}
 	completionOnce        sync.Once
@@ -367,6 +372,157 @@ func (s *currentNodeControllerStore) StartTask(ctx context.Context, _ workflow.T
 	return started, nil
 }
 
+func (s *currentNodeControllerStore) PrepareTaskStart(
+	ctx context.Context,
+	taskID workflow.TaskID,
+) (workflowstore.PreparedCurrentNodeMutation, error) {
+	started, err := s.StartTask(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	return &controllerPreparedCurrentNodeMutation{
+		ctx: ctx,
+		result: workflowstore.PreparedCurrentNodeMutationResult{
+			Mutation:                      started.Mutation,
+			CreatedExecutableCurrentNodes: append([]workflow.CurrentNode(nil), started.Mutation.Created...),
+		},
+		commit: func() error {
+			return s.commitPreparedCurrentNodeMutation(ctx)
+		},
+	}, nil
+}
+
+func (s *currentNodeControllerStore) PrepareTaskResume(
+	ctx context.Context,
+	taskID workflow.TaskID,
+) (workflowstore.PreparedCurrentNodeMutation, error) {
+	classifications, err := s.PreflightTaskResume(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	var validationErrors []error
+	for _, classification := range classifications {
+		if err := classification.ValidationError(); err != nil {
+			validationErrors = append(validationErrors, err)
+		}
+	}
+	if err := errors.Join(validationErrors...); err != nil {
+		return nil, err
+	}
+	nodes := make([]workflow.CurrentNode, 0, len(classifications))
+	resolution := workflowstore.TaskAttentionResolution{}
+	for _, classification := range classifications {
+		node := classification.CurrentNode
+		node.Scheduling = &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady}
+		nodes = append(nodes, node)
+		resolution.InterruptedCurrentNodes = append(
+			resolution.InterruptedCurrentNodes,
+			workflowstore.InterruptedCurrentNodeAttentionProjection{
+				CurrentNode:        node.Reference,
+				ProjectID:          "project-test",
+				WorkflowID:         currentNodeControllerTestWorkflowID,
+				InterruptionReason: "workflow_test_interruption",
+				OccurredAtUnixMs:   1,
+			},
+		)
+	}
+	return &controllerPreparedCurrentNodeMutation{
+		ctx: ctx,
+		result: workflowstore.PreparedCurrentNodeMutationResult{
+			Mutation: workflow.CurrentNodeMutationResult{
+				Updated: append([]workflow.CurrentNode(nil), nodes...),
+			},
+			CreatedExecutableCurrentNodes: nodes,
+			TaskAttentionResolution:       resolution,
+		},
+		commit: func() error {
+			if err := s.commitPreparedCurrentNodeMutation(ctx); err != nil {
+				return err
+			}
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			for _, node := range nodes {
+				key, err := node.Reference.Key()
+				if err != nil {
+					return err
+				}
+				if err := s.resumeErrors[key]; err != nil {
+					return err
+				}
+			}
+			for _, node := range nodes {
+				s.resumed = append(s.resumed, node.Reference)
+			}
+			s.interrupted = nil
+			s.resumeClassifications = nil
+			return nil
+		},
+	}, nil
+}
+
+func (s *currentNodeControllerStore) commitPreparedCurrentNodeMutation(ctx context.Context) error {
+	if s.preparedCommitStarted != nil {
+		s.preparedCommitOnce.Do(func() {
+			close(s.preparedCommitStarted)
+		})
+	}
+	if s.preparedCommitRelease != nil {
+		select {
+		case <-s.preparedCommitRelease:
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		}
+	}
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.preparedCommitErr != nil {
+		return s.preparedCommitErr
+	}
+	s.preparedCommits++
+	return nil
+}
+
+type controllerPreparedCurrentNodeMutation struct {
+	mu       sync.Mutex
+	ctx      context.Context
+	result   workflowstore.PreparedCurrentNodeMutationResult
+	commit   func() error
+	consumed bool
+}
+
+func (m *controllerPreparedCurrentNodeMutation) Result() workflowstore.PreparedCurrentNodeMutationResult {
+	return m.result
+}
+
+func (m *controllerPreparedCurrentNodeMutation) Commit() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.consumed {
+		return workflowstore.ErrPreparedCurrentNodeMutationConsumed
+	}
+	m.consumed = true
+	if err := context.Cause(m.ctx); err != nil {
+		return err
+	}
+	if m.commit != nil {
+		return m.commit()
+	}
+	return nil
+}
+
+func (m *controllerPreparedCurrentNodeMutation) Rollback() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.consumed {
+		return workflowstore.ErrPreparedCurrentNodeMutationConsumed
+	}
+	m.consumed = true
+	return nil
+}
+
 func (s *currentNodeControllerStore) InterruptedExecutableCurrentNodes(context.Context, workflow.TaskID) ([]workflow.CurrentNode, error) {
 	return append([]workflow.CurrentNode(nil), s.interrupted...), nil
 }
@@ -418,28 +574,6 @@ func (s *currentNodeControllerStore) AdmitCurrentNode(_ context.Context, referen
 	defer s.mu.Unlock()
 	s.admitted = append(s.admitted, reference)
 	return nil
-}
-
-func (s *currentNodeControllerStore) ResumeCurrentNode(_ context.Context, reference workflow.CurrentNodeReference) (workflowstore.InterruptedCurrentNodeAttentionProjection, bool, error) {
-	s.mu.Lock()
-	key, keyErr := reference.Key()
-	if keyErr != nil {
-		s.mu.Unlock()
-		return workflowstore.InterruptedCurrentNodeAttentionProjection{}, false, keyErr
-	}
-	if err := s.resumeErrors[key]; err != nil {
-		s.mu.Unlock()
-		return workflowstore.InterruptedCurrentNodeAttentionProjection{}, false, err
-	}
-	s.resumed = append(s.resumed, reference)
-	s.mu.Unlock()
-	return workflowstore.InterruptedCurrentNodeAttentionProjection{
-		CurrentNode:        reference,
-		ProjectID:          "project-test",
-		WorkflowID:         currentNodeControllerTestWorkflowID,
-		InterruptionReason: "workflow_test_interruption",
-		OccurredAtUnixMs:   1,
-	}, true, nil
 }
 
 func (s *currentNodeControllerStore) InterruptAdmittedCurrentNode(_ context.Context, reference workflow.CurrentNodeReference, reason workflow.CurrentNodeInterruptionReason, detail workflow.CurrentNodeInterruptionDetail) error {

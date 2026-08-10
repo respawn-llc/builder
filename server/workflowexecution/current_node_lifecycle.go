@@ -102,26 +102,44 @@ func (c *CurrentNodeController) StartTask(
 			return workflowstore.StartTaskResult{}, err
 		}
 		c.mu.Unlock()
-		started, err := c.store.StartTask(ctx, taskID)
+		prepared, err := c.store.PrepareTaskStart(ctx, taskID)
 		if err != nil {
 			return workflowstore.StartTaskResult{}, err
 		}
-		if len(started.Mutation.Created) != 1 || started.Mutation.Created[0].Scheduling == nil {
+		result := prepared.Result()
+		if len(result.Mutation.Created) != 1 || len(result.CreatedExecutableCurrentNodes) != 1 {
+			_ = prepared.Rollback()
 			return workflowstore.StartTaskResult{}, errors.New("task start did not create exactly one executable current node")
 		}
 		c.mu.Lock()
-		defer c.mu.Unlock()
 		if err := c.ensureTaskAvailableLocked(taskID); err != nil {
+			c.mu.Unlock()
+			_ = prepared.Rollback()
 			return workflowstore.StartTaskResult{}, err
 		}
-		if err := c.queueExplicitStartLocked(currentNodeQueuedStart{
-			reference:          started.Mutation.Created[0].Reference,
-			preparation:        preparation,
-			taskPromptDelivery: workflowruntime.TaskPromptDeliveryAssignment,
-		}); err != nil {
+		runIDs, err := c.stageExplicitRunsLocked(
+			result.CreatedExecutableCurrentNodes,
+			preparation,
+			workflowruntime.TaskPromptDeliveryAssignment,
+		)
+		if err != nil {
+			c.mu.Unlock()
+			return workflowstore.StartTaskResult{}, errors.Join(err, prepared.Rollback())
+		}
+		if err := c.validateStagedRunsLocked(runIDs); err != nil {
+			c.discardStagedRunsLocked(runIDs)
+			c.mu.Unlock()
+			return workflowstore.StartTaskResult{}, errors.Join(err, prepared.Rollback())
+		}
+		if err := prepared.Commit(); err != nil {
+			c.discardStagedRunsLocked(runIDs)
+			c.mu.Unlock()
 			return workflowstore.StartTaskResult{}, err
 		}
-		return started, nil
+		c.installStagedRunsLocked(runIDs)
+		c.mu.Unlock()
+		c.wakeAdmissionWorker()
+		return workflowstore.StartTaskResult{Mutation: result.Mutation}, nil
 	})
 }
 
@@ -175,46 +193,75 @@ func (c *CurrentNodeController) resumeTask(
 			return nil, err
 		}
 		c.mu.Unlock()
-		classifications, err := c.store.PreflightTaskResume(ctx, taskID)
+		prepared, err := c.store.PrepareTaskResume(ctx, taskID)
 		if err != nil {
 			return nil, err
 		}
-		if len(classifications) == 0 {
+		result := prepared.Result()
+		if len(result.CreatedExecutableCurrentNodes) == 0 {
+			_ = prepared.Rollback()
+			c.mu.Lock()
+			existing := c.currentTaskRunNodesLocked(taskID)
+			c.mu.Unlock()
+			if len(existing) != 0 {
+				return existing, nil
+			}
 			return nil, &TaskResumeConflictError{TaskID: taskID}
 		}
-		resumed := make([]workflow.CurrentNode, 0, len(classifications))
-		var resumeErrs []error
-		for _, classification := range classifications {
-			currentNode := classification.CurrentNode
-			if validationErr := classification.ValidationError(); validationErr != nil {
-				resumeErrs = append(resumeErrs, validationErr)
-				continue
-			}
-			projection, found, err := c.store.ResumeCurrentNode(ctx, currentNode.Reference)
-			if err != nil {
-				resumeErrs = append(resumeErrs, fmt.Errorf("resume current node %v: %w", currentNode.Reference, err))
-				continue
-			}
-			if found {
-				resolution.InterruptedCurrentNodes = append(resolution.InterruptedCurrentNodes, projection)
-			}
-			c.mu.Lock()
-			queueErr := c.queueExplicitStartLocked(currentNodeQueuedStart{
-				reference:          currentNode.Reference,
-				preparation:        preparation,
-				taskPromptDelivery: workflowruntime.TaskPromptDeliveryResume,
-			})
+		c.mu.Lock()
+		if err := c.ensureTaskAvailableLocked(taskID); err != nil {
 			c.mu.Unlock()
-			if queueErr != nil {
-				resumeErrs = append(resumeErrs, fmt.Errorf("queue resumed current node %v: %w", currentNode.Reference, queueErr))
-				continue
-			}
-			resumed = append(resumed, currentNode)
+			return nil, errors.Join(err, prepared.Rollback())
 		}
-		return resumed, errors.Join(resumeErrs...)
+		runIDs, err := c.stageExplicitRunsLocked(
+			result.CreatedExecutableCurrentNodes,
+			preparation,
+			workflowruntime.TaskPromptDeliveryResume,
+		)
+		if err != nil {
+			c.mu.Unlock()
+			return nil, errors.Join(err, prepared.Rollback())
+		}
+		if err := c.validateStagedRunsLocked(runIDs); err != nil {
+			c.discardStagedRunsLocked(runIDs)
+			c.mu.Unlock()
+			return nil, errors.Join(err, prepared.Rollback())
+		}
+		if err := prepared.Commit(); err != nil {
+			c.discardStagedRunsLocked(runIDs)
+			c.mu.Unlock()
+			return nil, err
+		}
+		c.installStagedRunsLocked(runIDs)
+		c.mu.Unlock()
+		c.wakeAdmissionWorker()
+		resolution = result.TaskAttentionResolution
+		return result.CreatedExecutableCurrentNodes, nil
 	})
 	c.finalizeTaskAttentionResolution(resolution)
 	return resumed, err
+}
+
+func (c *CurrentNodeController) currentTaskRunNodesLocked(taskID workflow.TaskID) []workflow.CurrentNode {
+	var nodes []workflow.CurrentNode
+	for _, run := range c.runs {
+		if run.reference.TaskID != taskID ||
+			(run.phase != currentNodeRunStaged &&
+				run.phase != currentNodeRunQueued &&
+				run.phase != currentNodeRunLaunching) {
+			continue
+		}
+		node, err := workflow.NewCurrentNode(
+			run.reference,
+			nil,
+			&workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
+		)
+		if err != nil {
+			panic(err)
+		}
+		nodes = append(nodes, node)
+	}
+	return nodes
 }
 
 func (c *CurrentNodeController) ApplyPendingApproval(

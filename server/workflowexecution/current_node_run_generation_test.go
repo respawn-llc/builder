@@ -97,6 +97,149 @@ func TestCurrentNodeControllerConcurrentResumeCreatesOneExecution(t *testing.T) 
 	}
 }
 
+func TestCurrentNodeControllerStartCommitFailureDiscardsStagedRun(t *testing.T) {
+	reference := currentNodeReferenceForControllerTest(t, "task-start-commit-failure", "node-agent")
+	commitErr := errors.New("commit prepared Start")
+	store := &currentNodeControllerStore{
+		started: workflowstore.StartTaskResult{Mutation: workflow.CurrentNodeMutationResult{
+			Created: []workflow.CurrentNode{{
+				Reference:  reference,
+				Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
+			}},
+		}},
+		preparedCommitErr: commitErr,
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller := newCurrentNodeControllerForTest(t, store, &countingCurrentNodeRunner{}, authority, 1)
+	t.Cleanup(func() {
+		if err := controller.Close(); err != nil {
+			t.Errorf("close controller: %v", err)
+		}
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+
+	_, err := controller.StartTask(context.Background(), reference.TaskID, func(context.Context) error { return nil })
+	if !errors.Is(err, commitErr) {
+		t.Fatalf("StartTask error = %v, want prepared commit failure", err)
+	}
+	snapshot := controller.Snapshot()
+	if len(snapshot.ExplicitStarts) != 0 ||
+		len(snapshot.Gates) != 0 ||
+		len(snapshot.LiveScopes) != 0 {
+		t.Fatalf("controller state after failed commit = %+v, want no Run ownership", snapshot)
+	}
+}
+
+func TestCurrentNodeControllerStartCancellationBeforeCommitDiscardsStagedRun(t *testing.T) {
+	reference := currentNodeReferenceForControllerTest(t, "task-start-commit-cancellation", "node-agent")
+	store := &currentNodeControllerStore{
+		started: workflowstore.StartTaskResult{Mutation: workflow.CurrentNodeMutationResult{
+			Created: []workflow.CurrentNode{{
+				Reference:  reference,
+				Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
+			}},
+		}},
+		preparedCommitStarted: make(chan struct{}),
+		preparedCommitRelease: make(chan struct{}),
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller := newCurrentNodeControllerForTest(t, store, &countingCurrentNodeRunner{}, authority, 1)
+	t.Cleanup(func() {
+		select {
+		case <-store.preparedCommitRelease:
+		default:
+			close(store.preparedCommitRelease)
+		}
+		if err := controller.Close(); err != nil {
+			t.Errorf("close controller: %v", err)
+		}
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := controller.StartTask(ctx, reference.TaskID, func(context.Context) error { return nil })
+		result <- err
+	}()
+	select {
+	case <-store.preparedCommitStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("prepared Start did not reach Commit")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("StartTask cancellation error = %v, want context canceled", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("StartTask did not return after request cancellation")
+	}
+	snapshot := controller.Snapshot()
+	if len(snapshot.ExplicitStarts) != 0 ||
+		len(snapshot.Gates) != 0 ||
+		len(snapshot.LiveScopes) != 0 {
+		t.Fatalf("controller state after canceled commit = %+v, want no Run ownership", snapshot)
+	}
+}
+
+func TestCurrentNodeControllerResumeCommitFailureDiscardsEveryStagedRunAndKeepsAttention(t *testing.T) {
+	taskID := workflow.TaskID("task-resume-commit-failure")
+	first := currentNodeReferenceForControllerTest(t, string(taskID), "node-first")
+	second := currentNodeReferenceForControllerTest(t, string(taskID), "node-second")
+	commitErr := errors.New("commit prepared Resume")
+	store := &currentNodeControllerStore{
+		interrupted: []workflow.CurrentNode{
+			{Reference: first, Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingInterrupted}},
+			{Reference: second, Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingInterrupted}},
+		},
+		preparedCommitErr: commitErr,
+	}
+	attention := &currentNodeAttentionRecorder{}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller := newCurrentNodeControllerWithAttentionForTest(
+		t,
+		store,
+		&countingCurrentNodeRunner{},
+		authority,
+		1,
+		attention,
+	)
+	t.Cleanup(func() {
+		if err := controller.Close(); err != nil {
+			t.Errorf("close controller: %v", err)
+		}
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+
+	_, err := controller.ResumeTask(context.Background(), taskID)
+	if !errors.Is(err, commitErr) {
+		t.Fatalf("ResumeTask error = %v, want prepared commit failure", err)
+	}
+	snapshot := controller.Snapshot()
+	if len(snapshot.ExplicitStarts) != 0 ||
+		len(snapshot.Gates) != 0 ||
+		len(snapshot.LiveScopes) != 0 {
+		t.Fatalf("controller state after failed Resume commit = %+v, want no Run ownership", snapshot)
+	}
+	if resolved := attention.resolvedInterruptions(); len(resolved) != 0 {
+		t.Fatalf("attention finalized after failed Resume commit: %+v", resolved)
+	}
+	store.mu.Lock()
+	resumedCount := len(store.resumed)
+	store.mu.Unlock()
+	if resumedCount != 0 {
+		t.Fatalf("durable Resume count after failed commit = %d, want 0", resumedCount)
+	}
+}
+
 func TestCurrentNodeControllerPrioritizesExplicitResumeOverBlockedAutomaticRun(t *testing.T) {
 	shellPath, err := exec.LookPath("sh")
 	if err != nil {

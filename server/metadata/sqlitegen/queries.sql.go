@@ -13,33 +13,6 @@ import (
 	"core/shared/runtimeids"
 )
 
-const acquireCurrentNodeResumeWriteLock = `-- name: AcquireCurrentNodeResumeWriteLock :execrows
-UPDATE task_current_nodes
-SET scheduling_state = scheduling_state
-WHERE task_id = ?1
-  AND node_id = ?2
-  AND (
-      (transition_branch_key IS NULL AND ?3 IS NULL)
-      OR transition_branch_key = ?3
-  )
-  AND scheduling_state = 'interrupted'
-`
-
-type AcquireCurrentNodeResumeWriteLockParams struct {
-	TaskID              string
-	NodeID              string
-	TransitionBranchKey interface{}
-}
-
-func (q *Queries) AcquireCurrentNodeResumeWriteLock(ctx context.Context, arg AcquireCurrentNodeResumeWriteLockParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, acquireCurrentNodeResumeWriteLock, arg.TaskID, arg.NodeID, arg.TransitionBranchKey)
-	err = recordQueryError(ctx, err, acquireCurrentNodeResumeWriteLock, 3)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 const acquireManualMoveTaskWriteLock = `-- name: AcquireManualMoveTaskWriteLock :execrows
 UPDATE tasks
 SET updated_at_unix_ms = updated_at_unix_ms
