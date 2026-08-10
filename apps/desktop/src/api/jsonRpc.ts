@@ -83,12 +83,7 @@ class JsonRpcWebSocketTransport implements RpcTransport {
       throw new TransportError("Session attachment requires a Session ID.");
     }
     return this.#withDedicatedSocket(options, async (socket, requestOptions) => {
-      await sendSocketRequest(
-        socket,
-        "session.attach",
-        { session_id: attachedSessionID },
-        requestOptions,
-      );
+      await sendSocketRequest(socket, "session.attach", { session_id: attachedSessionID }, requestOptions);
       return sendSocketRequest(socket, method, params, requestOptions);
     });
   }

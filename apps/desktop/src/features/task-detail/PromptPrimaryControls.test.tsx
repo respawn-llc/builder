@@ -6,14 +6,14 @@ import type { QuestionAttentionItem } from "@/api";
 import { AppServicesProvider } from "@/app-facade";
 import { appI18n, initializeI18n } from "@/i18n";
 import { createTestServices } from "@/test-support/app-services";
-import { questionAttention } from "@/test-support/task-detail";
+import { parsedQuestionAttention } from "@/test-support/task-detail";
 import { PromptPrimaryControlRegistry, type PromptPrimaryControl } from "./PromptPrimaryControlRegistry";
 import type { PromptAnswerKey } from "./PromptAnswerState";
 import { questionPresentation, emptyQuestionSelection } from "./TaskDetailQuestionState";
 import { QuestionFormView } from "./TaskDetailQuestionFormView";
 
 const services = createTestServices([], undefined, { platform: "macos" });
-const baseQuestion = questionAttention as unknown as QuestionAttentionItem;
+const baseQuestion = parsedQuestionAttention();
 
 beforeAll(async () => {
   await initializeI18n();

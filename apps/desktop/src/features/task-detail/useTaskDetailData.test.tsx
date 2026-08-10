@@ -47,7 +47,8 @@ describe("Task Detail live refresh", () => {
     });
     const list = screen.getByTestId("task-detail-island-stack");
     list.scrollTop = 241;
-    await user.click(screen.getAllByRole("button", { name: appI18n.t("task.submitAnswer") })[0]!);
+    const submits = screen.getAllByRole("button", { name: appI18n.t("task.submitAnswer") });
+    await user.click(submits.reduce((first) => first));
 
     await waitFor(() => {
       expect(screen.queryByText("ask-1")).not.toBeInTheDocument();
@@ -57,7 +58,9 @@ describe("Task Detail live refresh", () => {
     });
     await user.click(screen.getByRole("button", { name: appI18n.t("task.submitAnswer") }));
     expect(answerCount).toBe(2);
-    await waitFor(() => expect(screen.queryAllByRole("radio")).toHaveLength(0));
+    await waitFor(() => {
+      expect(screen.queryAllByRole("radio")).toHaveLength(0);
+    });
 
     second.resolve(undefined);
     first.resolve(undefined);

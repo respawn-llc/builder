@@ -19,7 +19,7 @@ const batchRequest = {
     },
     { kind: "declined" as const, promptID: "declined-1" },
   ],
-};
+} as const;
 
 describe("ApiClient prompt answer batches", () => {
   it("encodes Question, Approval, and Declined entries and parses identity-keyed outcomes", async () => {

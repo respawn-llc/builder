@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { QuestionAttentionItem } from "@/api";
-import { questionAttention } from "@/test-support/task-detail";
+import { parsedQuestionAttention } from "@/test-support/task-detail";
 import { PromptAnswerCoordinator } from "./PromptAnswerCoordinator";
 import { emptyPromptAnswerState, promptAnswerKey, samePromptAnswerKey } from "./PromptAnswerState";
 import { taskDetailAttentionRowKey } from "./TaskDetailAttentionRowKey";
@@ -18,7 +18,7 @@ describe("Task Detail prompt answer reconciliation", () => {
       invalidateAttention: async () => {
         invalidations += 1;
       },
-      readAttention: () => read.promise,
+      readAttention: async () => read.promise,
     });
 
     const attempt = submit(harness.coordinator, attention, "draft", async () => undefined);
@@ -28,7 +28,6 @@ describe("Task Detail prompt answer reconciliation", () => {
     expect(invalidations).toBe(1);
     expect(harness.state.selection(promptAnswerKey(attention))).toBeUndefined();
   });
-
   it.each(["delivery", "reconciliation"] as const)(
     "restores a frozen draft after %s failure",
     async (kind) => {
@@ -49,7 +48,6 @@ describe("Task Detail prompt answer reconciliation", () => {
       expect(harness.failures).toEqual([expect.objectContaining({ kind, taskShortID: "TASK-1" })]);
     },
   );
-
   it("isolates full-key collisions when overlapping reads finish out of order", async () => {
     const first = question("step-1", "shared");
     const second = question("step-2", "shared");
@@ -66,7 +64,7 @@ describe("Task Detail prompt answer reconciliation", () => {
         [first, draft("first")],
         [second, draft("second")],
       ],
-      { readAttention: () => reads.shift()?.promise ?? Promise.reject(new Error("unexpected read")) },
+      { readAttention: async () => reads.shift()?.promise ?? Promise.reject(new Error("unexpected read")) },
     );
 
     const firstAttempt = submit(harness.coordinator, first, "first", async () => undefined);
@@ -82,14 +80,14 @@ describe("Task Detail prompt answer reconciliation", () => {
 
   it("discards state after unmount and identifies the Task on failure", async () => {
     const attention = question("step-1", "prompt-1");
-    const answer = deferred<void>();
+    const answer = deferred<undefined>();
     let mounted = true;
     const harness = coordinatorHarness([[attention, draft("discard")]], {
       isMounted: () => mounted,
       readAttention: async () => [attention],
       task: { id: "task-1", shortID: "TASK-1", title: "Task title" },
     });
-    const attempt = submit(harness.coordinator, attention, "discard", () => answer.promise);
+    const attempt = submit(harness.coordinator, attention, "discard", async () => answer.promise);
     const maskedState = harness.state;
     mounted = false;
     answer.reject(new Error("offline"));
@@ -132,7 +130,7 @@ function draft(answer: string) {
   return withQuestionCommentary(emptyQuestionSelection(), answer);
 }
 
-function submit(
+async function submit(
   coordinator: PromptAnswerCoordinator,
   attention: QuestionAttentionItem,
   answer: string,
@@ -141,7 +139,7 @@ function submit(
   return coordinator.submit({ attention, selection: draft(answer), send });
 }
 
-const baseQuestion = questionAttention as unknown as QuestionAttentionItem;
+const baseQuestion = parsedQuestionAttention();
 
 function question(stepID: string, promptID: string): QuestionAttentionItem {
   return {

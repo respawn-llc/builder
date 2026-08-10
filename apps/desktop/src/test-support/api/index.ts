@@ -62,9 +62,7 @@ export class FakeRpcTransport implements RpcTransport {
     options?: RpcDedicatedCallOptions,
   ): Promise<unknown> {
     this.attachedSessionCalls.push(
-      options === undefined
-        ? { sessionID, method, params }
-        : { sessionID, method, params, options },
+      options === undefined ? { sessionID, method, params } : { sessionID, method, params, options },
     );
     return this.#dispatch(method, params);
   }
