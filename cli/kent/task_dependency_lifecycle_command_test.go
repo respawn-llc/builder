@@ -15,6 +15,7 @@ type taskDependencyLifecycleRemote struct {
 	apicontract.WorkflowService
 
 	startResponse   serverapi.WorkflowTaskStartResponse
+	startError      error
 	moveResponse    serverapi.WorkflowTaskMoveResponse
 	approveResponse serverapi.WorkflowTaskApproveResponse
 	startRequests   []serverapi.WorkflowTaskStartRequest
@@ -32,7 +33,7 @@ func (r *taskDependencyLifecycleRemote) GetWorkflowTask(_ context.Context, req s
 
 func (r *taskDependencyLifecycleRemote) StartWorkflowTask(_ context.Context, req serverapi.WorkflowTaskStartRequest) (serverapi.WorkflowTaskStartResponse, error) {
 	r.startRequests = append(r.startRequests, req)
-	return r.startResponse, nil
+	return r.startResponse, r.startError
 }
 
 func (r *taskDependencyLifecycleRemote) MoveWorkflowTask(_ context.Context, req serverapi.WorkflowTaskMoveRequest) (serverapi.WorkflowTaskMoveResponse, error) {
@@ -101,6 +102,9 @@ func TestTaskStartDependencyConfirmationIsNoninteractiveAndMapsIgnoreFlag(t *tes
 			if remote.startRequests[0].ProceedDespiteDependencies != tt.wantIgnore {
 				t.Fatalf("proceed_despite_dependencies=%t", remote.startRequests[0].ProceedDespiteDependencies)
 			}
+			if remote.startRequests[0].BranchName != nil {
+				t.Fatalf("branch_name=%q, want omission", *remote.startRequests[0].BranchName)
+			}
 			if tt.json {
 				if stderr.Len() != 0 {
 					t.Fatalf("JSON stderr=%q", stderr.String())
@@ -147,6 +151,53 @@ func TestTaskStartFromWorkflowSessionCarriesInvokingSession(t *testing.T) {
 	}
 }
 
+func TestTaskStartForwardsExplicitBranchName(t *testing.T) {
+	unsetSessionIDEnvironmentForTest(t)
+	branchName := " feature/KENT-1 "
+	remote := &taskDependencyLifecycleRemote{
+		startResponse: serverapi.WorkflowTaskStartResponse{
+			Outcome: serverapi.WorkflowTaskActionOutcomeApplied,
+			Applied: &serverapi.WorkflowTaskStartApplied{
+				CurrentNodes: []serverapi.WorkflowTaskCurrentNode{{NodeID: "node-1"}},
+			},
+		},
+	}
+	installWorkflowCommandRemote(t, remote)
+
+	var stdout, stderr bytes.Buffer
+	exitCode := taskStartSubcommand([]string{"task-1", "--branch-name", branchName, "--json"}, &stdout, &stderr)
+
+	if exitCode != 0 {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", exitCode, stdout.String(), stderr.String())
+	}
+	if len(remote.startRequests) != 1 ||
+		remote.startRequests[0].BranchName == nil ||
+		*remote.startRequests[0].BranchName != branchName {
+		t.Fatalf("start requests=%+v, want explicit branch name", remote.startRequests)
+	}
+}
+
+func TestTaskStartRendersTypedInitialBranchError(t *testing.T) {
+	unsetSessionIDEnvironmentForTest(t)
+	remote := &taskDependencyLifecycleRemote{
+		startError: &serverapi.WorkflowTaskInitialBranchError{
+			Reason:     serverapi.WorkflowTaskInitialBranchErrorReasonInvalidName,
+			BranchName: "feature bad",
+		},
+	}
+	installWorkflowCommandRemote(t, remote)
+
+	var stdout, stderr bytes.Buffer
+	exitCode := taskStartSubcommand([]string{"task-1", "--branch-name", "feature bad"}, &stdout, &stderr)
+
+	if exitCode != 1 || stdout.Len() != 0 || len(remote.startRequests) != 1 {
+		t.Fatalf("exit=%d stdout=%q stderr=%q requests=%+v", exitCode, stdout.String(), stderr.String(), remote.startRequests)
+	}
+	if stderr.Len() == 0 || stderr.String() == remote.startError.Error()+"\n" {
+		t.Fatalf("stderr=%q, want typed branch rendering instead of the generic error", stderr.String())
+	}
+}
+
 func TestTaskMoveDependencyConfirmationSupportsJSONAndMapsIgnoreFlag(t *testing.T) {
 	unsetSessionIDEnvironmentForTest(t)
 	count := 1
@@ -170,6 +221,9 @@ func TestTaskMoveDependencyConfirmationSupportsJSONAndMapsIgnoreFlag(t *testing.
 	}
 	if !remote.moveRequests[0].ProceedDespiteDependencies {
 		t.Fatalf("move request=%+v", remote.moveRequests[0])
+	}
+	if remote.moveRequests[0].BranchName != nil {
+		t.Fatalf("branch_name=%q, want omission", *remote.moveRequests[0].BranchName)
 	}
 	var output serverapi.WorkflowTaskMoveResponse
 	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {

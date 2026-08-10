@@ -404,6 +404,7 @@ func attachManagedWorktree(t *testing.T, ctx context.Context, store *Store, work
 UPDATE tasks
 SET source_workspace_id = ?,
     managed_worktree_id = ?,
+    pending_initial_managed_branch_name = NULL,
     execution_target_mode = ?,
     execution_target_requested_ref = ?,
     execution_target_commit_oid = ?,
