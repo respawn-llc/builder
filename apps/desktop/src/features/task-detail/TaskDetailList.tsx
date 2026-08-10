@@ -19,7 +19,7 @@ import {
 } from "@/ui";
 import { ActivityRow, CommentComposer, CommentRow } from "./TaskDetailActivity";
 import type { DescriptionPresentationState } from "./TaskDetailDescriptionPresentation";
-import { TaskInbox } from "./TaskDetailInbox";
+import { TaskDetailInboxRow } from "./TaskDetailInboxRow";
 import { DescriptionIsland, PropertiesIsland, TaskHeaderIsland, type TaskDraft } from "./TaskDetailRows";
 import { TaskTabs, type DetailTab } from "./TaskDetailTabs";
 import { TaskDependenciesArea } from "./TaskDependenciesArea";
@@ -334,7 +334,7 @@ const rowRenderers: Record<TaskDetailListItem["kind"], (props: TaskDetailListRow
   header: HeaderRow,
   body: BodyRow,
   dependencies: DependenciesRow,
-  inbox: InboxRow,
+  inbox: TaskDetailInboxRow,
   tabs: TabsRow,
   "comment-composer": CommentComposerRow,
   "comments-loading": LoadingRow,
@@ -442,37 +442,6 @@ function DependenciesRow({
       onRemove={onRemoveDependency}
       onSelectTask={onSelectDependencyTask}
       taskID={detail.id}
-    />
-  );
-}
-
-function InboxRow({
-  answerQuestion,
-  attentionItems,
-  attentionPending,
-  detail,
-  disabled,
-  initialFocus,
-  mutations,
-  onQuestionSelectionChange,
-  primaryFocusRequest,
-  promptAnswerState,
-}: TaskDetailListRowProps): ReactNode {
-  if (attentionPending) {
-    return <LoadingState appearanceDelayMs={0} fullPage={false} reveal={false} title={undefined} />;
-  }
-  return (
-    <TaskInbox
-      attentionItems={attentionItems}
-      answerQuestion={answerQuestion}
-      currentVersion={detail.workflowVersion}
-      detail={detail}
-      disabled={disabled}
-      initialFocus={initialFocus}
-      mutations={mutations}
-      onQuestionSelectionChange={onQuestionSelectionChange}
-      primaryFocusRequest={primaryFocusRequest}
-      promptAnswerState={promptAnswerState}
     />
   );
 }

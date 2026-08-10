@@ -334,12 +334,13 @@ function VirtualizedInfiniteListContent<TItem>({
       occurrenceKey: getItemOccurrenceKeyForItem(item),
     }));
     const previousEntries = previousAnchorEntriesRef.current;
-    const anchor = leadingAnchorRef.current;
+    const anchor = recoverableLeadingAnchor(
+      leadingAnchorRef.current,
+      pixelOffsetAppliedKeyRef.current,
+      validatedPixelOffsetRequest,
+    );
     const element = scrollRef.current;
-    const pixelOffsetApplied =
-      validatedPixelOffsetRequest !== undefined &&
-      pixelOffsetAppliedKeyRef.current === validatedPixelOffsetRequest.key;
-    if (!pixelOffsetApplied && previousEntries.length > 0 && anchor !== null && element !== null) {
+    if (previousEntries.length > 0 && anchor !== null && element !== null) {
       const resolvedPreviousIndex = resolveAnchorEntryIndex(previousEntries, anchor);
       const resolvedCurrentIndex = resolveAnchorEntryIndex(currentEntries, anchor);
       if (resolvedPreviousIndex >= 0 && resolvedCurrentIndex >= 0) {
@@ -626,6 +627,14 @@ type VirtualizedLeadingAnchor = Readonly<{
   occurrenceKey: string;
   inRowOffset: number;
 }>;
+
+function recoverableLeadingAnchor(
+  anchor: VirtualizedLeadingAnchor | null,
+  appliedPixelOffsetKey: string | null,
+  request: VirtualizedPixelOffsetRequest | undefined,
+): VirtualizedLeadingAnchor | null {
+  return appliedPixelOffsetKey === request?.key ? null : anchor;
+}
 
 type VirtualizedAnchorEntry = Readonly<{
   anchorKey: string;
