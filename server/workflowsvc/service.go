@@ -940,7 +940,12 @@ func (s *Service) UpdateWorkflowTask(ctx context.Context, req serverapi.Workflow
 }
 
 func (s *Service) StartWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskStartRequest) (serverapi.WorkflowTaskStartResponse, error) {
-	return s.startWorkflowTask(ctx, req)
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowTaskStartResponse{}, err
+	}
+	return workflowexecution.RunTaskMutation(ctx, s.taskMutations, workflow.TaskID(req.TaskID), func(ctx context.Context) (serverapi.WorkflowTaskStartResponse, error) {
+		return s.startWorkflowTask(ctx, req)
+	})
 }
 
 func (s *Service) startWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskStartRequest) (serverapi.WorkflowTaskStartResponse, error) {
@@ -1348,6 +1353,12 @@ func (s *Service) InterruptWorkflowTask(ctx context.Context, req serverapi.Workf
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowTaskInterruptResponse{}, err
 	}
+	return workflowexecution.RunTaskMutation(ctx, s.taskMutations, workflow.TaskID(req.TaskID), func(ctx context.Context) (serverapi.WorkflowTaskInterruptResponse, error) {
+		return s.interruptWorkflowTask(ctx, req)
+	})
+}
+
+func (s *Service) interruptWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskInterruptRequest) (serverapi.WorkflowTaskInterruptResponse, error) {
 	if err := s.authorizeWorkflowTaskMutation(ctx, workflow.TaskID(req.TaskID), req.InvokingSessionID); err != nil {
 		return serverapi.WorkflowTaskInterruptResponse{}, err
 	}
@@ -1369,7 +1380,12 @@ func (s *Service) InterruptWorkflowTask(ctx context.Context, req serverapi.Workf
 }
 
 func (s *Service) ResumeWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskResumeRequest) (serverapi.WorkflowTaskResumeResponse, error) {
-	return s.resumeWorkflowTask(ctx, req)
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowTaskResumeResponse{}, err
+	}
+	return workflowexecution.RunTaskMutation(ctx, s.taskMutations, workflow.TaskID(req.TaskID), func(ctx context.Context) (serverapi.WorkflowTaskResumeResponse, error) {
+		return s.resumeWorkflowTask(ctx, req)
+	})
 }
 
 func (s *Service) resumeWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskResumeRequest) (serverapi.WorkflowTaskResumeResponse, error) {
@@ -1499,7 +1515,12 @@ func (s *Service) approveWorkflowTask(ctx context.Context, req serverapi.Workflo
 }
 
 func (s *Service) MoveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskMoveRequest) (serverapi.WorkflowTaskMoveResponse, error) {
-	return s.moveWorkflowTask(ctx, req)
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowTaskMoveResponse{}, err
+	}
+	return workflowexecution.RunTaskMutation(ctx, s.taskMutations, workflow.TaskID(req.TaskID), func(ctx context.Context) (serverapi.WorkflowTaskMoveResponse, error) {
+		return s.moveWorkflowTask(ctx, req)
+	})
 }
 
 func (s *Service) PreviewWorkflowTaskMove(ctx context.Context, req serverapi.WorkflowTaskMovePreviewRequest) (serverapi.WorkflowTaskMovePreviewResponse, error) {
