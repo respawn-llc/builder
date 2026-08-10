@@ -94,7 +94,7 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 			}
 			return nil
 		}
-		msg, queued, err := engine.SubmitUserMessageOrSteerWithHooks(runCtx, projection.ExecutionText, nil, recordAccepted)
+		result, queued, err := engine.SubmitUserMessageOrSteerWithOutcomeHooks(runCtx, projection.ExecutionText, nil, recordAccepted)
 		if err != nil {
 			return err
 		}
@@ -111,9 +111,13 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 			Compacted:  compacted,
 			ResultKind: clientui.UserTurnResultKindNoFinal,
 		}
-		if msg.Content != nil {
-			resp.Message = msg.Content
-			if strings.TrimSpace(*msg.Content) == "" {
+		if result.Kind == runtime.UserTurnResultSilentFinal {
+			emptyMessage := ""
+			resp.Message = &emptyMessage
+			resp.ResultKind = clientui.UserTurnResultKindSilentFinal
+		} else if result.FinalAnswer != nil && result.FinalAnswer.Content != nil {
+			resp.Message = result.FinalAnswer.Content
+			if strings.TrimSpace(*result.FinalAnswer.Content) == "" {
 				resp.ResultKind = clientui.UserTurnResultKindSilentFinal
 			} else {
 				resp.ResultKind = clientui.UserTurnResultKindAssistantFinal
