@@ -1,14 +1,11 @@
 import { describe, expect, it } from "vitest";
-
 import type { QuestionAttentionItem } from "@/api";
 import { parsedQuestionAttention } from "@/test-support/task-detail";
 import { PromptAnswerCoordinator } from "./PromptAnswerCoordinator";
 import { emptyPromptAnswerState, promptAnswerKey, samePromptAnswerKey } from "./PromptAnswerState";
 import { taskDetailAttentionRowKey } from "./TaskDetailAttentionRowKey";
 import { emptyQuestionSelection, withQuestionCommentary } from "./TaskDetailQuestionState";
-
 type CoordinatorOptions = ConstructorParameters<typeof PromptAnswerCoordinator>[0];
-
 describe("Task Detail prompt answer reconciliation", () => {
   it("masks until invalidation and a fresh exact-key read settle", async () => {
     const attention = question("step-1", "prompt-1");

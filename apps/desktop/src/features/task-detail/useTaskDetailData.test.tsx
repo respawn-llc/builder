@@ -67,11 +67,7 @@ describe("Task Detail live refresh", () => {
   });
 
   it("does not jump focus or scroll when the intended next prompt disappears and the earlier prompt restores", async () => {
-    let attention = taskAttentionMany([
-      ["ask-1", 1],
-      ["ask-2", 1],
-      ["ask-3", 1],
-    ]);
+    let attention = taskAttentionWithOneOption("ask-1", "ask-2", "ask-3");
     const answer = deferred<undefined>();
     mountTaskDetailSurface(taskDetailResponse, {
       routes: [
@@ -80,7 +76,6 @@ describe("Task Detail live refresh", () => {
       ],
     });
     const user = userEvent.setup();
-
     await waitFor(() => {
       expect(screen.getAllByRole("radio")).toHaveLength(6);
     });
@@ -94,12 +89,8 @@ describe("Task Detail live refresh", () => {
       expect(screen.getAllByRole("radio")[0]).toHaveFocus();
       expect(list.scrollTop).toBe(241);
     });
-
     list.scrollTop = 317;
-    attention = taskAttentionMany([
-      ["ask-1", 1],
-      ["ask-3", 1],
-    ]);
+    attention = taskAttentionWithOneOption("ask-1", "ask-3");
     answer.reject(new Error("delivery failed"));
     await waitFor(() => {
       expect(screen.getByText("ask-1")).toBeInTheDocument();
@@ -210,6 +201,9 @@ function taskAttentionMany(prompts: readonly (readonly [string, number])[]) {
     generated_at_unix_ms: 3,
   };
 }
+
+const taskAttentionWithOneOption = (...askIDs: readonly string[]) =>
+  taskAttentionMany(askIDs.map((askID) => [askID, 1] as const));
 
 function projectSubscriptionStartCount(
   subscriptions: readonly Readonly<{ method: string; params: unknown }>[],

@@ -1,6 +1,5 @@
 import { ApiClient } from "./client";
 import { FakeRpcTransport } from "@/test-support/api";
-
 const sessionID = "session-1";
 const stepID = "22222222-2222-4222-8222-222222222222";
 const batchRequest = {
@@ -12,19 +11,15 @@ const batchRequest = {
     { kind: "declined" as const, promptID: "d" },
   ],
 } as const;
-
+const resolvedQuestion = { prompt_id: "q", outcome: "resolved" } as const;
+const skippedApproval = { prompt_id: "a", outcome: "skipped" };
+const resolvedDeclined = { prompt_id: "d", outcome: "resolved" };
+const results = [resolvedQuestion, skippedApproval, resolvedDeclined];
 describe("ApiClient prompt answer batches", () => {
   it("encodes Question, Approval, and Declined entries and parses identity-keyed outcomes", async () => {
-    const results = [
-      { prompt_id: "q", outcome: "resolved" },
-      { prompt_id: "a", outcome: "skipped" },
-      { prompt_id: "d", outcome: "resolved" },
-    ];
     const transport = new FakeRpcTransport([{ method: "prompt.answerBatch", result: { results } }]);
     const client = new ApiClient(transport);
-
     const response = await client.answerPromptBatch(batchRequest);
-
     expect(transport.calls).toEqual([]);
     expect(transport.attachedSessionCalls).toEqual([
       {
@@ -47,16 +42,10 @@ describe("ApiClient prompt answer batches", () => {
       { promptID: "d", outcome: "resolved" },
     ]);
   });
-
   it.each([
     { results: [] },
     { results: [{ prompt_id: "foreign", outcome: "resolved" }] },
-    {
-      results: [
-        { prompt_id: "q", outcome: "resolved" },
-        { prompt_id: "q", outcome: "skipped" },
-      ],
-    },
+    { results: [resolvedQuestion, { ...resolvedQuestion, outcome: "skipped" }] },
   ])("rejects malformed result identity sets", async (result) => {
     const client = new ApiClient(new FakeRpcTransport([{ method: "prompt.answerBatch", result }]));
     await expect(client.answerPromptBatch(batchRequest)).rejects.toThrow();
