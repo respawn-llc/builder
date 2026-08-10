@@ -24,9 +24,6 @@ import (
 	"core/shared/protocol"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
-	"net/http"
-	"net/http/httptest"
-	"sync/atomic"
 )
 
 type configuredDaemonFixture struct {

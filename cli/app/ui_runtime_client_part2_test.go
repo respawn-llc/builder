@@ -564,35 +564,3 @@ func TestRuntimeClientShowGoalSurfacesRuntimeUnavailableWithoutReplay(t *testing
 		t.Fatalf("did not expect visible recovery warning during goal read, got %+v", entries)
 	}
 }
-
-func TestRuntimeClientHasQueuedUserWorkSurfacesRuntimeUnavailableWithoutReplay(t *testing.T) {
-	controls := &reconnectRetryRuntimeControlClient{
-		queuedWorkErr: serverapi.ErrRuntimeUnavailable,
-		queuedWork:    true,
-	}
-	runtimeClient := newTestSessionRuntimeClientWithControls(controls)
-	reactivator := newRuntimeReactivator()
-	recoveryCalls := 0
-	reactivator.SetReactivateFunc(func(context.Context) error {
-		recoveryCalls++
-		return nil
-	})
-	runtimeClient.SetRuntimeReactivator(reactivator)
-
-	hasWork, err := runtimeClient.HasQueuedUserWork()
-	if !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
-		t.Fatalf("HasQueuedUserWork error = %v, want runtime unavailable", err)
-	}
-	if hasWork {
-		t.Fatal("HasQueuedUserWork = true, want no replayed result")
-	}
-	if recoveryCalls != 0 {
-		t.Fatalf("recovery call count = %d, want 0", recoveryCalls)
-	}
-	if controls.queuedWorkCalls != 1 {
-		t.Fatalf("queued-work call count = %d, want 1", controls.queuedWorkCalls)
-	}
-	if entries := controls.appendedLocalEntries(); len(entries) != 0 {
-		t.Fatalf("did not expect visible recovery warning during queued-work read, got %+v", entries)
-	}
-}

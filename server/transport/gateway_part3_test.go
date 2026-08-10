@@ -6,6 +6,7 @@ import (
 	serverbootstrap "core/server/bootstrap"
 	"core/server/core"
 	"core/server/session"
+	"core/shared/apicontract"
 	remoteclient "core/shared/client"
 	"core/shared/protocol"
 	"core/shared/runtimeids"
@@ -583,6 +584,69 @@ func TestDecodeAndHandlePreservesWorktreeCreateOwnership(t *testing.T) {
 	}
 	if !reflect.DeepEqual(response.Error.Data, source.RPCErrorData()) {
 		t.Fatalf("response data = %s, want %s", response.Error.Data, source.RPCErrorData())
+	}
+}
+
+type countingWorktreeCreateGatewayDependencies struct {
+	*core.Core
+	worktrees apicontract.WorktreeService
+}
+
+func (d countingWorktreeCreateGatewayDependencies) WorktreeClient() apicontract.WorktreeService {
+	return d.worktrees
+}
+
+type countingWorktreeCreateService struct {
+	apicontract.WorktreeService
+	requests []serverapi.WorktreeCreateRequest
+}
+
+func (s *countingWorktreeCreateService) CreateWorktree(
+	_ context.Context,
+	request serverapi.WorktreeCreateRequest,
+) (serverapi.WorktreeCreateResponse, error) {
+	s.requests = append(s.requests, request)
+	return serverapi.WorktreeCreateResponse{}, nil
+}
+
+func TestGatewayWorktreeCreateMakesOneDownstreamCall(t *testing.T) {
+	appCore, _ := newGatewayTestCore(t, true, true)
+	sessionStore := createGatewayAuthoritativeSession(t, appCore)
+	service := &countingWorktreeCreateService{
+		WorktreeService: appCore.WorktreeClient(),
+	}
+	gateway, err := NewGateway(
+		countingWorktreeCreateGatewayDependencies{
+			Core:      appCore,
+			worktrees: service,
+		},
+		protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"},
+	)
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	server := httptest.NewServer(gateway.Handler())
+	defer server.Close()
+	remote, err := remoteclient.DialRemoteURLForSession(
+		context.Background(),
+		"ws"+server.URL[len("http"):],
+		sessionStore.Meta().SessionID,
+	)
+	if err != nil {
+		t.Fatalf("DialRemoteURLForSession: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+	setupID := serverapi.NewWorktreeSetupOperationID()
+	if _, err := remote.CreateWorktree(context.Background(), serverapi.WorktreeCreateRequest{
+		SetupOperationID: setupID,
+		SessionID:        sessionStore.Meta().SessionID,
+		BaseRef:          "HEAD",
+	}); err != nil {
+		t.Fatalf("CreateWorktree: %v", err)
+	}
+	if len(service.requests) != 1 ||
+		service.requests[0].SetupOperationID != setupID {
+		t.Fatalf("downstream create requests = %+v, want one", service.requests)
 	}
 }
 

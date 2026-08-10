@@ -16,7 +16,12 @@ import (
 )
 
 type PendingPromptResponder interface {
-	AcceptPromptResponse(sessionID string, resp askquestion.AskQuestionResponse, err error) (PromptResponseAcceptance, error)
+	AcceptPromptResolution(
+		sessionID string,
+		promptID string,
+		resolution askquestion.AskQuestionResolution,
+		err error,
+	) (PromptResponseAcceptance, error)
 	ResolvePromptBatch(
 		context.Context,
 		runtimeids.SessionID,
@@ -47,18 +52,23 @@ func (s *PromptControlService) AnswerAsk(ctx context.Context, req serverapi.AskA
 	var acceptance PromptResponseAcceptance
 	var err error
 	if req.ErrorMessage != "" {
-		acceptance, err = s.prompts.AcceptPromptResponse(
+		acceptance, err = s.prompts.AcceptPromptResolution(
 			req.SessionID,
-			askquestion.AskQuestionResponse{RequestID: req.AskID},
+			req.AskID,
+			nil,
 			errors.New(req.ErrorMessage),
 		)
 	} else {
-		acceptance, err = s.prompts.AcceptPromptResponse(req.SessionID, askquestion.AskQuestionResponse{
-			RequestID:            req.AskID,
-			Answer:               req.Answer,
-			SelectedOptionNumber: textutil.Pointer(req.SelectedOptionNumber),
-			FreeformAnswer:       req.FreeformAnswer,
-		}, nil)
+		acceptance, err = s.prompts.AcceptPromptResolution(
+			req.SessionID,
+			req.AskID,
+			askquestion.AskQuestionAnswerFromLegacyFields(
+				textutil.Pointer(req.SelectedOptionNumber),
+				textutil.OptionalExactString(req.Answer),
+				textutil.OptionalExactString(req.FreeformAnswer),
+			),
+			nil,
+		)
 	}
 	if err != nil {
 		return err
@@ -73,25 +83,24 @@ func (s *PromptControlService) AnswerApproval(ctx context.Context, req serverapi
 	if s == nil || s.prompts == nil {
 		return errors.New("prompt responder is required")
 	}
-	commentary := ""
-	if req.Commentary != nil {
-		commentary = *req.Commentary
-	}
 	if req.ErrorMessage != "" {
-		_, err := s.prompts.AcceptPromptResponse(
+		_, err := s.prompts.AcceptPromptResolution(
 			req.SessionID,
-			askquestion.AskQuestionResponse{RequestID: req.ApprovalID},
+			req.ApprovalID,
+			nil,
 			errors.New(req.ErrorMessage),
 		)
 		return err
 	}
-	_, err := s.prompts.AcceptPromptResponse(req.SessionID, askquestion.AskQuestionResponse{
-		RequestID: req.ApprovalID,
-		Approval: &askquestion.AskQuestionApprovalPayload{
+	_, err := s.prompts.AcceptPromptResolution(
+		req.SessionID,
+		req.ApprovalID,
+		askquestion.AskQuestionApproval{
 			Decision:   askquestion.AskQuestionApprovalDecision(req.Decision),
-			Commentary: commentary,
+			Commentary: textutil.Pointer(req.Commentary),
 		},
-	}, nil)
+		nil,
+	)
 	return err
 }
 

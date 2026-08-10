@@ -2,6 +2,7 @@ package worktreeui
 
 import (
 	"context"
+	"errors"
 	"io"
 	"testing"
 	"time"
@@ -155,6 +156,49 @@ func TestMutationRetriesAfterRecoverableError(t *testing.T) {
 	}
 	if len(client.enterRequests) != 2 || client.enterRequests[0] != client.enterRequests[1] {
 		t.Fatalf("enter requests = %+v, want identical retry", client.enterRequests)
+	}
+}
+
+func TestCreateRetriesAtMostOnceWithSameSetupOperation(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		secondErr error
+	}{
+		{name: "recovery succeeds"},
+		{name: "retry remains unavailable", secondErr: serverapi.ErrRuntimeUnavailable},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &testWorktreeClient{
+				errs: []error{serverapi.ErrRuntimeUnavailable, test.secondErr, nil},
+			}
+			recoverCalls := 0
+			service := newTestService(client)
+			service.Runtime.RecoverRuntimeConnection = func(context.Context, error, bool) error {
+				recoverCalls++
+				return nil
+			}
+			setupID := serverapi.NewWorktreeSetupOperationID()
+			_, err := service.Create(serverapi.WorktreeCreateRequest{
+				SetupOperationID: setupID,
+				BaseRef:          "HEAD",
+				CreateBranch:     true,
+				BranchName:       "feature/create",
+			})
+			if !errors.Is(err, test.secondErr) {
+				t.Fatalf("Create error = %v, want %v", err, test.secondErr)
+			}
+			if recoverCalls != 1 || len(client.createRequests) != 2 {
+				t.Fatalf(
+					"create recovery = recover:%d sends:%d, want one recovery and two sends",
+					recoverCalls,
+					len(client.createRequests),
+				)
+			}
+			if client.createRequests[0] != client.createRequests[1] ||
+				client.createRequests[0].SetupOperationID != setupID {
+				t.Fatalf("create retry changed request: %+v", client.createRequests)
+			}
+		})
 	}
 }
 

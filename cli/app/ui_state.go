@@ -72,8 +72,6 @@ type uiInputFeatureState struct {
 	queued                                 []queuedInputItem
 	compactionOrigin                       uiCompactionOrigin
 	queuedRuntimeWorkCheckCompactionOrigin uiCompactionOrigin
-	pendingQueuedDrainAfterHydration       bool
-	queuedDrainReadyAfterHydration         bool
 	submitToken                            uint64
 	activeSubmit                           activeSubmitState
 	recoveredDraftBuffers                  []serverapi.SessionDraftRecoveryBuffer

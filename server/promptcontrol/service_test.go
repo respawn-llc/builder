@@ -6,19 +6,22 @@ import (
 	"sync"
 	"testing"
 
+	"core/server/sessionruntime"
 	askquestion "core/server/tools"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/textutil"
 )
 
 type stubPromptResponder struct {
-	calls     int
-	awaits    int
-	sessionID string
-	response  askquestion.AskQuestionResponse
-	err       error
-	submitErr error
+	calls      int
+	awaits     int
+	sessionID  string
+	promptID   string
+	resolution askquestion.AskQuestionResolution
+	err        error
+	submitErr  error
 }
 
 type stubPromptAcceptance struct {
@@ -30,19 +33,30 @@ func (a stubPromptAcceptance) AwaitSuccessor(context.Context) error {
 	return nil
 }
 
-func (s *stubPromptResponder) AcceptPromptResponse(
+func (s *stubPromptResponder) AcceptPromptResolution(
 	sessionID string,
-	resp askquestion.AskQuestionResponse,
+	promptID string,
+	resolution askquestion.AskQuestionResolution,
 	err error,
 ) (PromptResponseAcceptance, error) {
 	s.calls++
 	s.sessionID = sessionID
-	s.response = resp
+	s.promptID = promptID
+	s.resolution = resolution
 	s.err = err
 	if s.submitErr != nil {
 		return nil, s.submitErr
 	}
 	return stubPromptAcceptance{responder: s}, nil
+}
+
+func (*stubPromptResponder) ResolvePromptBatch(
+	context.Context,
+	runtimeids.SessionID,
+	runtimeids.StepID,
+	[]sessionruntime.PromptAnswerCommand,
+) ([]sessionruntime.PromptAnswerResult, error) {
+	panic("unexpected batch resolution")
 }
 
 type cancellationAfterAcceptanceResponder struct {
@@ -65,9 +79,10 @@ func (a cancellationAfterAcceptance) AwaitSuccessor(ctx context.Context) error {
 	}
 }
 
-func (r *cancellationAfterAcceptanceResponder) AcceptPromptResponse(
+func (r *cancellationAfterAcceptanceResponder) AcceptPromptResolution(
 	_ string,
-	_ askquestion.AskQuestionResponse,
+	_ string,
+	_ askquestion.AskQuestionResolution,
 	_ error,
 ) (PromptResponseAcceptance, error) {
 	r.mu.Lock()
@@ -75,6 +90,15 @@ func (r *cancellationAfterAcceptanceResponder) AcceptPromptResponse(
 	r.mu.Unlock()
 	r.accepted <- struct{}{}
 	return cancellationAfterAcceptance{successor: r.successor}, nil
+}
+
+func (*cancellationAfterAcceptanceResponder) ResolvePromptBatch(
+	context.Context,
+	runtimeids.SessionID,
+	runtimeids.StepID,
+	[]sessionruntime.PromptAnswerCommand,
+) ([]sessionruntime.PromptAnswerResult, error) {
+	panic("unexpected batch resolution")
 }
 
 func (r *cancellationAfterAcceptanceResponder) callCount() int {
@@ -121,8 +145,15 @@ func TestServiceAnswerAskSubmitsResponse(t *testing.T) {
 	if responder.awaits != 1 {
 		t.Fatalf("successor-aware responder call count = %d, want 1", responder.awaits)
 	}
-	if responder.sessionID != "session-1" || responder.response.RequestID != "ask-1" || responder.response.Answer != "hello" {
-		t.Fatalf("unexpected stored response: session=%q response=%+v", responder.sessionID, responder.response)
+	answer, ok := responder.resolution.(askquestion.AskQuestionAnswer)
+	if responder.sessionID != "session-1" || responder.promptID != "ask-1" ||
+		!ok || answer.Freeform == nil || *answer.Freeform != "hello" {
+		t.Fatalf(
+			"unexpected stored resolution: session=%q prompt=%q resolution=%+v",
+			responder.sessionID,
+			responder.promptID,
+			responder.resolution,
+		)
 	}
 }
 
@@ -134,8 +165,9 @@ func TestServiceAnswerAskPreservesAbsentSelectedOption(t *testing.T) {
 	if err := service.AnswerAsk(context.Background(), req); err != nil {
 		t.Fatalf("AnswerAsk: %v", err)
 	}
-	if responder.response.SelectedOptionNumber != nil {
-		t.Fatalf("selected option = %v, want nil", *responder.response.SelectedOptionNumber)
+	answer := responder.resolution.(askquestion.AskQuestionAnswer)
+	if answer.SelectedOptionNumber != nil {
+		t.Fatalf("selected option = %v, want nil", *answer.SelectedOptionNumber)
 	}
 }
 
@@ -166,9 +198,10 @@ func TestServiceAnswerAskTreatsChangedSelectedOptionAsNewAnswer(t *testing.T) {
 	if err := service.AnswerAsk(context.Background(), request); err != nil {
 		t.Fatalf("AnswerAsk present selection: %v", err)
 	}
-	if responder.calls != 2 || responder.response.SelectedOptionNumber == nil ||
-		*responder.response.SelectedOptionNumber != 1 {
-		t.Fatalf("responder = calls:%d response:%+v", responder.calls, responder.response)
+	answer := responder.resolution.(askquestion.AskQuestionAnswer)
+	if responder.calls != 2 || answer.SelectedOptionNumber == nil ||
+		*answer.SelectedOptionNumber != 1 {
+		t.Fatalf("responder = calls:%d resolution:%+v", responder.calls, responder.resolution)
 	}
 }
 
@@ -229,8 +262,9 @@ func TestServiceAnswerAskTreatsChangedPayloadAsNewAnswer(t *testing.T) {
 	if err := service.AnswerAsk(context.Background(), request); err != nil {
 		t.Fatalf("AnswerAsk changed payload: %v", err)
 	}
-	if responder.calls != 2 || responder.response.Answer != "different" {
-		t.Fatalf("responder call count/response = %d/%+v", responder.calls, responder.response)
+	answer := responder.resolution.(askquestion.AskQuestionAnswer)
+	if responder.calls != 2 || answer.Freeform == nil || *answer.Freeform != "different" {
+		t.Fatalf("responder call count/resolution = %d/%+v", responder.calls, responder.resolution)
 	}
 }
 
@@ -247,14 +281,14 @@ func TestServiceAnswerApprovalSubmitsPromptError(t *testing.T) {
 	if responder.calls != 1 {
 		t.Fatalf("responder call count = %d, want 1", responder.calls)
 	}
-	if responder.response.RequestID != "approval-1" {
-		t.Fatalf("unexpected response: %+v", responder.response)
+	if responder.promptID != "approval-1" {
+		t.Fatalf("unexpected prompt ID: %q", responder.promptID)
 	}
 	if responder.err == nil || responder.err.Error() != serverapi.ErrPromptAlreadyResolved.Error() {
 		t.Fatalf("unexpected prompt error: %v", responder.err)
 	}
-	if responder.response.Approval != nil {
-		t.Fatalf("unexpected approval payload for prompt error: %+v", responder.response.Approval)
+	if responder.resolution != nil {
+		t.Fatalf("unexpected approval resolution for prompt error: %+v", responder.resolution)
 	}
 }
 

@@ -274,61 +274,6 @@ func TestAllowCommentaryQueueCreateConnectionFailureAnswersIndependently(t *test
 	}
 }
 
-func TestTranscriptQueuedStateOwnsRestorationAndLocalQueueAdmission(t *testing.T) {
-	disableTransientStatusClearForTest(t)
-	text := "server queued text"
-	for _, test := range []struct {
-		status       clientui.QueuedUserMessageStatus
-		wantQueued   int
-		wantComposer string
-	}{
-		{status: clientui.QueuedUserMessageAccepted, wantQueued: 1, wantComposer: "existing draft"},
-		{status: clientui.QueuedUserMessageSubmitted, wantComposer: "existing draft"},
-		{status: clientui.QueuedUserMessageFailed, wantComposer: "existing draft\n\nserver queued text"},
-		{status: clientui.QueuedUserMessageDiscarded, wantComposer: "existing draft"},
-	} {
-		t.Run(string(test.status), func(t *testing.T) {
-			client := &runtimeControlFakeClient{}
-			model := newProjectedTestUIModel(client)
-			testSetMainInput(model, "existing draft")
-			requestID := ongoingTestClientRequestID()
-			queueID := ongoingTestQueueItemID()
-			model.registerSteeredQueuedUserMessage(clientui.QueuedUserMessage{
-				ID: queueID.String(), Text: text, ClientRequestID: requestID.String(),
-			})
-			if test.status == clientui.QueuedUserMessageSubmitted {
-				model.queued = []queuedInputItem{{ID: "local-draft", Text: "local draft"}}
-				if cmd := model.inputController().resumeQueuedInputsAfterIdleRuntime(); cmd != nil || len(model.queued) != 1 {
-					t.Fatal("local draft advanced before accepted server work reached a terminal state")
-				}
-			}
-
-			cmd := model.applyTranscriptQueuedMessageState(clientui.TranscriptQueuedMessageState{
-				ClientRequestID: requestID,
-				QueueItemID:     queueID,
-				Status:          test.status,
-				Text:            &text,
-			})
-			if test.status == clientui.QueuedUserMessageSubmitted {
-				cmd = tea.Batch(cmd, model.inputController().resumeQueuedInputsAfterIdleRuntime())
-			}
-			for _, msg := range collectCmdMessages(t, cmd) {
-				model = updateUIModel(t, model, msg)
-			}
-
-			if len(model.pendingInjected) != test.wantQueued || len(model.injectedQueue) != test.wantQueued {
-				t.Fatalf("queued state = pending:%d injected:%d, want %d", len(model.pendingInjected), len(model.injectedQueue), test.wantQueued)
-			}
-			if got := testMainInput(model); got != test.wantComposer {
-				t.Fatalf("composer = %q, want %q", got, test.wantComposer)
-			}
-			if test.status == clientui.QueuedUserMessageSubmitted && client.submitCalls != 1 {
-				t.Fatalf("local submit calls = %d, want 1", client.submitCalls)
-			}
-		})
-	}
-}
-
 func TestDisconnectedQueuedFlushRestoresTextWithTransientStatus(t *testing.T) {
 	disableTransientStatusClearForTest(t)
 

@@ -409,16 +409,6 @@ func TestRuntimeControlHelpersFallbackWithoutRuntimeClient(t *testing.T) {
 	if err := m.compactRuntimeContext(context.Background(), "--force"); err != nil {
 		t.Fatalf("compact runtime context without client: %v", err)
 	}
-	queuedWork, err := m.hasQueuedRuntimeUserWork()
-	if err != nil {
-		t.Fatalf("has queued runtime user work without client: %v", err)
-	}
-	if queuedWork {
-		t.Fatal("did not expect queued runtime user work without client")
-	}
-	if message, err := m.submitQueuedRuntimeUserMessages(context.Background()); message != "" || err != nil {
-		t.Fatalf("submit queued runtime user messages without client = (%q, %v), want (empty, nil)", message, err)
-	}
 	if err := m.interruptRuntime(); err != nil {
 		t.Fatalf("interrupt runtime without client: %v", err)
 	}

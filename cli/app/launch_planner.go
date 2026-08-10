@@ -139,10 +139,9 @@ func (p *launchPlanner) PlanSession(ctx context.Context, req sessionLaunchReques
 		return sessionLaunchPlan{}, err
 	}
 	resp, err := p.server.SessionLaunchClient().PlanSession(ctx, serverapi.SessionPlanRequest{
-		ClientRequestID: uuid.NewString(),
-		Mode:            serverapi.SessionLaunchMode(req.Mode),
-		Intent:          req.Intent,
-		Overrides:       mergeSessionPlanOverrides(sessionPlanOverridesFromConfig(p.server.Config()), req.Overrides),
+		Mode:      serverapi.SessionLaunchMode(req.Mode),
+		Intent:    req.Intent,
+		Overrides: mergeSessionPlanOverrides(sessionPlanOverridesFromConfig(p.server.Config()), req.Overrides),
 	})
 	if err != nil {
 		return sessionLaunchPlan{}, err
@@ -208,19 +207,6 @@ func (p *launchPlanner) PrepareRuntime(ctx context.Context, plan sessionLaunchPl
 		return nil, errors.New("runtime attachment server is required")
 	}
 	return prepareSharedRuntime(ctx, runtimeServer, plan, diagnosticWriter, startLogLine)
-}
-
-func (p *launchPlanner) resolvePlanRequest(ctx context.Context, req sessionLaunchRequest) (resolvedSessionPlanRequest, error) {
-	overrides := sessionPlanOverridesFromConfig(p.server.Config())
-	overrides = mergeSessionPlanOverrides(overrides, req.Overrides)
-	if err := req.Intent.Validate(); err != nil {
-		return resolvedSessionPlanRequest{}, err
-	}
-	return resolvedSessionPlanRequest{request: serverapi.SessionPlanRequest{
-		Mode:      serverapi.SessionLaunchMode(req.Mode),
-		Intent:    req.Intent,
-		Overrides: overrides,
-	}}, nil
 }
 
 func (p *launchPlanner) selectSession(ctx context.Context, notice *startupPickerNotice) (sessionPickerResult, error) {

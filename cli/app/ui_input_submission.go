@@ -295,12 +295,6 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 	m.logf("step.done assistant_chars=%d", len(msg.message))
 	m.clearActiveAssistantStreamSource()
 	if len(m.queued) > 0 {
-		if m.hasRuntimeClient() && c.queuedDrainRequiresHydration() {
-			m.pendingQueuedDrainAfterHydration = true
-			m.queuedDrainReadyAfterHydration = false
-			m.layout().syncViewport()
-			return m, tea.Batch(m.requestRuntimeQueuedDrainAfterHydration(), m.persistSessionDraftRecoveryCmd())
-		}
 		next, drainCmd := c.flushQueuedInputs(queueDrainAuto)
 		c.notifyTurnQueueDrainedIfIdle()
 		return next, tea.Batch(drainCmd, m.persistSessionDraftRecoveryCmd())

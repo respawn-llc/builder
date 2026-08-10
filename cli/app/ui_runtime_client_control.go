@@ -227,26 +227,6 @@ func (c *sessionRuntimeClient) CompactRuntime(ctx context.Context, req clientui.
 	return err
 }
 
-func (c *sessionRuntimeClient) HasQueuedUserWork() (bool, error) {
-	resp, err := runtimeControlCall(func(ctx context.Context) (serverapi.RuntimeHasQueuedUserWorkResponse, error) {
-		return c.controls.HasQueuedUserWork(ctx, serverapi.RuntimeHasQueuedUserWorkRequest{SessionID: c.sessionID})
-	})
-	if err != nil {
-		return false, err
-	}
-	return resp.HasQueuedUserWork, nil
-}
-
-func (c *sessionRuntimeClient) SubmitRuntimeQueued(ctx context.Context, req clientui.RuntimeSubmitQueuedRequest) (string, error) {
-	if err := req.Validate(); err != nil {
-		return "", err
-	}
-	resp, err := runtimeRequestCall(ctx, func(ctx context.Context) (serverapi.RuntimeSubmitQueuedUserMessagesResponse, error) {
-		return c.controls.SubmitQueuedUserMessages(ctx, serverapi.RuntimeSubmitQueuedUserMessagesRequest{SessionID: c.sessionID})
-	})
-	return resp.Message, err
-}
-
 func (c *sessionRuntimeClient) Interrupt() error {
 	resp, err := runtimeControlCall(func(ctx context.Context) (serverapi.RuntimeInterruptResponse, error) {
 		return c.controls.Interrupt(ctx, serverapi.RuntimeInterruptRequest{SessionID: c.sessionID})

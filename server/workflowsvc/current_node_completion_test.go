@@ -194,10 +194,12 @@ func TestAnswerWorkflowTaskQuestionRoutesOnlyTaskAndAskToCurrentNodeExecution(t 
 	}
 	if execution.questionTaskID != workflow.TaskID(request.TaskID) ||
 		execution.questionAskID != request.AskID ||
-		execution.questionResponse.RequestID != request.AskID ||
-		execution.questionResponse.Answer != request.Answer ||
 		execution.questionSubmitErr != nil {
 		t.Fatalf("question dispatch = %+v, want task-scoped exact answer", execution)
+	}
+	answer, ok := execution.questionResolution.(askquestion.AskQuestionAnswer)
+	if !ok || answer.Freeform == nil || *answer.Freeform != request.Answer {
+		t.Fatalf("question resolution = %+v, want exact answer", execution.questionResolution)
 	}
 }
 
@@ -293,7 +295,7 @@ type currentNodeCompletionExecutionStub struct {
 	idleErr             error
 	questionTaskID      workflow.TaskID
 	questionAskID       string
-	questionResponse    askquestion.AskQuestionResponse
+	questionResolution  askquestion.AskQuestionResolution
 	questionSubmitErr   error
 	questionErr         error
 	questionAcceptance  workflowexecution.WorkflowQuestionAcceptance
@@ -393,13 +395,13 @@ func (s *currentNodeCompletionExecutionStub) AcceptWorkflowQuestion(
 	_ context.Context,
 	taskID workflow.TaskID,
 	askID string,
-	response askquestion.AskQuestionResponse,
+	resolution askquestion.AskQuestionResolution,
 	submitErr error,
 ) (workflowexecution.WorkflowQuestionAcceptance, error) {
 	s.questionAcceptCalls++
 	s.questionTaskID = taskID
 	s.questionAskID = askID
-	s.questionResponse = response
+	s.questionResolution = resolution
 	s.questionSubmitErr = submitErr
 	if s.questionErr != nil {
 		return nil, s.questionErr

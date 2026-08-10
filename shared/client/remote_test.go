@@ -1388,6 +1388,50 @@ func TestRemoteResolveWorktreeCreateTargetCarriesMethodAndPayload(t *testing.T) 
 	}
 }
 
+func TestRemoteCreateWorktreeSendsOneDomainIdentityRequest(t *testing.T) {
+	setupID := serverapi.NewWorktreeSetupOperationID()
+	requests := 0
+	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
+		req := acceptRemoteHandshake(t, ws)
+		if err := websocket.JSON.Receive(ws, &req); err != nil {
+			t.Fatalf("receive worktree create: %v", err)
+		}
+		requests++
+		if req.Method != protocol.MethodWorktreeCreate {
+			t.Fatalf("method = %q, want %q", req.Method, protocol.MethodWorktreeCreate)
+		}
+		var params serverapi.WorktreeCreateRequest
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			t.Fatalf("unmarshal create params: %v", err)
+		}
+		if params.SetupOperationID != setupID || params.SessionID != "session-1" {
+			t.Fatalf("create params = %+v", params)
+		}
+		if err := websocket.JSON.Send(
+			ws,
+			protocol.NewSuccessResponse(req.ID, serverapi.WorktreeCreateResponse{}),
+		); err != nil {
+			t.Fatalf("send create response: %v", err)
+		}
+	})
+
+	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
+	if err != nil {
+		t.Fatalf("DialRemote: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+	if _, err := remote.CreateWorktree(context.Background(), serverapi.WorktreeCreateRequest{
+		SetupOperationID: setupID,
+		SessionID:        "session-1",
+		BaseRef:          "HEAD",
+	}); err != nil {
+		t.Fatalf("CreateWorktree: %v", err)
+	}
+	if requests != 1 {
+		t.Fatalf("worktree create requests = %d, want one", requests)
+	}
+}
+
 func TestRemoteProcessOutputSubscriptionAttachesProjectBeforeSubscribe(t *testing.T) {
 	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
 		var req protocol.Request
