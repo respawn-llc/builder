@@ -736,16 +736,20 @@ func (s *currentNodeControllerStore) CompleteCurrentNode(ctx context.Context, _ 
 		return workflowstore.CurrentNodeCompletionResult{}, err
 	}
 	result := prepared.Result()
+	if result.CurrentNodeCompletion == nil {
+		_ = prepared.Rollback()
+		return workflowstore.CurrentNodeCompletionResult{}, errors.New("prepared Current-Node completion result is absent")
+	}
 	if err := prepared.Commit(); err != nil {
 		return workflowstore.CurrentNodeCompletionResult{}, err
 	}
-	return result, nil
+	return *result.CurrentNodeCompletion, nil
 }
 
 func (s *currentNodeControllerStore) PrepareCurrentNodeCompletion(
 	ctx context.Context,
 	_ workflowstore.CurrentNodeCompletionRequest,
-) (workflowstore.PreparedCurrentNodeCompletion, error) {
+) (workflowstore.PreparedCurrentNodeMutation, error) {
 	if s.completionStarted != nil {
 		s.completionOnce.Do(func() {
 			close(s.completionStarted)
@@ -767,8 +771,19 @@ func (s *currentNodeControllerStore) PrepareCurrentNodeCompletion(
 	if prepareErr != nil {
 		return nil, prepareErr
 	}
-	return &controllerPreparedCurrentNodeCompletion{
-		result: result,
+	executable := make([]workflow.CurrentNode, 0, len(result.Mutation.Created))
+	for _, currentNode := range result.Mutation.Created {
+		if currentNode.Scheduling != nil {
+			executable = append(executable, currentNode)
+		}
+	}
+	return &controllerPreparedCurrentNodeMutation{
+		ctx: ctx,
+		result: workflowstore.PreparedCurrentNodeMutationResult{
+			Mutation:                      result.Mutation,
+			CreatedExecutableCurrentNodes: executable,
+			CurrentNodeCompletion:         &result,
+		},
 		commit: func() error {
 			return commitErr
 		},
@@ -780,40 +795,6 @@ func (*currentNodeControllerStore) PublishCurrentNodeCompletion(
 	workflow.TaskID,
 	workflowstore.CurrentNodeCompletionResult,
 ) error {
-	return nil
-}
-
-type controllerPreparedCurrentNodeCompletion struct {
-	mu       sync.Mutex
-	result   workflowstore.CurrentNodeCompletionResult
-	commit   func() error
-	consumed bool
-}
-
-func (m *controllerPreparedCurrentNodeCompletion) Result() workflowstore.CurrentNodeCompletionResult {
-	return m.result
-}
-
-func (m *controllerPreparedCurrentNodeCompletion) Commit() error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.consumed {
-		return workflowstore.ErrPreparedCurrentNodeMutationConsumed
-	}
-	m.consumed = true
-	if m.commit != nil {
-		return m.commit()
-	}
-	return nil
-}
-
-func (m *controllerPreparedCurrentNodeCompletion) Rollback() error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.consumed {
-		return workflowstore.ErrPreparedCurrentNodeMutationConsumed
-	}
-	m.consumed = true
 	return nil
 }
 

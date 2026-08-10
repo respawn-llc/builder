@@ -111,7 +111,7 @@ type CurrentNodeController struct {
 		InterruptCurrentNodeSchedulingSet(context.Context, workflow.TaskID, []workflowstore.CurrentNodeSchedulingTarget, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) (workflowstore.CurrentNodeSchedulingInterruptionResult, error)
 		RecoverExecutableCurrentNodes(context.Context, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) ([]workflow.CurrentNodeReference, error)
 		ResolveIdleExecutableCurrentNode(context.Context, workflowstore.IdleCurrentNodeSelector) (workflow.CurrentNode, error)
-		PrepareCurrentNodeCompletion(context.Context, workflowstore.CurrentNodeCompletionRequest) (workflowstore.PreparedCurrentNodeCompletion, error)
+		PrepareCurrentNodeCompletion(context.Context, workflowstore.CurrentNodeCompletionRequest) (workflowstore.PreparedCurrentNodeMutation, error)
 		PublishCurrentNodeCompletion(context.Context, workflow.TaskID, workflowstore.CurrentNodeCompletionResult) error
 		ValidateCurrentNodeSessionBinding(context.Context, runtimeids.SessionID, workflow.CurrentNodeReference) error
 		TaskExecutionScope(context.Context, workflow.TaskID) (workflowstore.TaskExecutionScope, error)
@@ -156,7 +156,7 @@ func NewCurrentNodeController(
 		InterruptCurrentNodeSchedulingSet(context.Context, workflow.TaskID, []workflowstore.CurrentNodeSchedulingTarget, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) (workflowstore.CurrentNodeSchedulingInterruptionResult, error)
 		RecoverExecutableCurrentNodes(context.Context, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) ([]workflow.CurrentNodeReference, error)
 		ResolveIdleExecutableCurrentNode(context.Context, workflowstore.IdleCurrentNodeSelector) (workflow.CurrentNode, error)
-		PrepareCurrentNodeCompletion(context.Context, workflowstore.CurrentNodeCompletionRequest) (workflowstore.PreparedCurrentNodeCompletion, error)
+		PrepareCurrentNodeCompletion(context.Context, workflowstore.CurrentNodeCompletionRequest) (workflowstore.PreparedCurrentNodeMutation, error)
 		PublishCurrentNodeCompletion(context.Context, workflow.TaskID, workflowstore.CurrentNodeCompletionResult) error
 		ValidateCurrentNodeSessionBinding(context.Context, runtimeids.SessionID, workflow.CurrentNodeReference) error
 		TaskExecutionScope(context.Context, workflow.TaskID) (workflowstore.TaskExecutionScope, error)
@@ -380,7 +380,14 @@ func (c *CurrentNodeController) completeLiveCurrentNode(ctx context.Context, req
 			if completionErr != nil {
 				return completionErr
 			}
-			completed = prepared.Result()
+			preparedResult := prepared.Result()
+			if preparedResult.CurrentNodeCompletion == nil {
+				return errors.Join(
+					errors.New("prepared Current-Node completion result is absent"),
+					prepared.Rollback(),
+				)
+			}
+			completed = *preparedResult.CurrentNodeCompletion
 			intents, intentErr := currentNodeAutomaticIntents(completed.AutomaticIntents)
 			if intentErr != nil {
 				return errors.Join(intentErr, prepared.Rollback())
@@ -622,7 +629,14 @@ func (c *CurrentNodeController) CompleteIdleCurrentNode(
 		if completionErr != nil {
 			return workflowstore.CurrentNodeCompletionResult{}, completionErr
 		}
-		completed := prepared.Result()
+		preparedResult := prepared.Result()
+		if preparedResult.CurrentNodeCompletion == nil {
+			return workflowstore.CurrentNodeCompletionResult{}, errors.Join(
+				errors.New("prepared Current-Node completion result is absent"),
+				prepared.Rollback(),
+			)
+		}
+		completed := *preparedResult.CurrentNodeCompletion
 		intents, intentErr := currentNodeAutomaticIntents(completed.AutomaticIntents)
 		if intentErr != nil {
 			return workflowstore.CurrentNodeCompletionResult{}, errors.Join(intentErr, prepared.Rollback())

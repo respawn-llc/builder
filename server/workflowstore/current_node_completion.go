@@ -130,7 +130,12 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 	if err != nil {
 		return CurrentNodeCompletionResult{}, err
 	}
-	result := prepared.Result()
+	preparedResult := prepared.Result()
+	if preparedResult.CurrentNodeCompletion == nil {
+		_ = prepared.Rollback()
+		return CurrentNodeCompletionResult{}, errors.New("prepared Current-Node completion result is absent")
+	}
+	result := *preparedResult.CurrentNodeCompletion
 	if err := prepared.Commit(); err != nil {
 		return CurrentNodeCompletionResult{}, err
 	}
@@ -143,7 +148,7 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 func (s *Store) PrepareCurrentNodeCompletion(
 	ctx context.Context,
 	req CurrentNodeCompletionRequest,
-) (PreparedCurrentNodeCompletion, error) {
+) (PreparedCurrentNodeMutation, error) {
 	prepared, err := prepareCurrentNodeCompletionRequest(req)
 	if err != nil {
 		return nil, err

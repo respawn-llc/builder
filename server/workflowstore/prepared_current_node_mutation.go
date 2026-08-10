@@ -20,6 +20,7 @@ type PreparedCurrentNodeMutationResult struct {
 	TaskAttentionResolution       TaskAttentionResolution
 	PendingApprovalApply          *PendingApprovalApplyResult
 	ManualMove                    *ManualMoveResult
+	CurrentNodeCompletion         *CurrentNodeCompletionResult
 }
 
 // PreparedCurrentNodeMutation owns one uncommitted Current-Node transaction.
@@ -27,12 +28,6 @@ type PreparedCurrentNodeMutationResult struct {
 // inspect immutable mutation facts and resolve it exactly once.
 type PreparedCurrentNodeMutation interface {
 	Result() PreparedCurrentNodeMutationResult
-	Commit() error
-	Rollback() error
-}
-
-type PreparedCurrentNodeCompletion interface {
-	Result() CurrentNodeCompletionResult
 	Commit() error
 	Rollback() error
 }
@@ -50,7 +45,7 @@ type preparedCurrentNodeCompletion struct {
 	ctx        context.Context
 	connection *sql.Conn
 	lifecycle  *sqlitelifecyclegen.Queries
-	result     CurrentNodeCompletionResult
+	result     PreparedCurrentNodeMutationResult
 	consumed   bool
 }
 
@@ -105,12 +100,22 @@ func newPreparedCurrentNodeCompletion(
 	connection *sql.Conn,
 	lifecycle *sqlitelifecyclegen.Queries,
 	result CurrentNodeCompletionResult,
-) PreparedCurrentNodeCompletion {
+) PreparedCurrentNodeMutation {
+	executable := make([]workflow.CurrentNode, 0, len(result.Mutation.Created))
+	for _, currentNode := range result.Mutation.Created {
+		if currentNode.Scheduling != nil {
+			executable = append(executable, currentNode)
+		}
+	}
 	return &preparedCurrentNodeCompletion{
 		ctx:        ctx,
 		connection: connection,
 		lifecycle:  lifecycle,
-		result:     cloneCurrentNodeCompletionResult(result),
+		result: clonePreparedCurrentNodeMutationResult(PreparedCurrentNodeMutationResult{
+			Mutation:                      result.Mutation,
+			CreatedExecutableCurrentNodes: executable,
+			CurrentNodeCompletion:         &result,
+		}),
 	}
 }
 
@@ -143,10 +148,10 @@ func (m *preparedCurrentNodeMutation) Rollback() error {
 	return m.tx.Rollback()
 }
 
-func (m *preparedCurrentNodeCompletion) Result() CurrentNodeCompletionResult {
+func (m *preparedCurrentNodeCompletion) Result() PreparedCurrentNodeMutationResult {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return cloneCurrentNodeCompletionResult(m.result)
+	return clonePreparedCurrentNodeMutationResult(m.result)
 }
 
 func (m *preparedCurrentNodeCompletion) Commit() error {
@@ -204,6 +209,10 @@ func clonePreparedCurrentNodeMutationResult(result PreparedCurrentNodeMutationRe
 	if result.ManualMove != nil {
 		move := cloneManualMoveResult(*result.ManualMove)
 		cloned.ManualMove = &move
+	}
+	if result.CurrentNodeCompletion != nil {
+		completion := cloneCurrentNodeCompletionResult(*result.CurrentNodeCompletion)
+		cloned.CurrentNodeCompletion = &completion
 	}
 	return cloned
 }

@@ -201,9 +201,19 @@ func TestPreparedCurrentNodeCompletionRollbackLeavesSourceCurrent(t *testing.T) 
 		t.Fatalf("PrepareCurrentNodeCompletion: %v", err)
 	}
 	result := prepared.Result()
-	if len(result.Mutation.Removed) != 1 ||
-		len(result.Mutation.Created) != 1 {
+	if result.CurrentNodeCompletion == nil {
+		t.Fatal("prepared mutation omitted completion result")
+	}
+	completed := *result.CurrentNodeCompletion
+	if len(completed.Mutation.Removed) != 1 ||
+		len(completed.Mutation.Created) != 1 {
 		t.Fatalf("prepared completion result = %+v, want one source replacement", result)
+	}
+	result.CurrentNodeCompletion.Mutation.Created = nil
+	immutable := prepared.Result()
+	if immutable.CurrentNodeCompletion == nil ||
+		len(immutable.CurrentNodeCompletion.Mutation.Created) != 1 {
+		t.Fatalf("prepared completion changed through caller-owned result: %+v", immutable)
 	}
 	if err := prepared.Rollback(); err != nil {
 		t.Fatalf("Rollback: %v", err)
