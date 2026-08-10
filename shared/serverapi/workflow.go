@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"core/shared/clientui"
@@ -291,7 +292,7 @@ type WorkflowGraphDraftNode struct {
 	Key                string                      `json:"key"`
 	Kind               string                      `json:"kind"`
 	DisplayName        string                      `json:"display_name"`
-	GroupID            string                      `json:"group_id,omitempty"`
+	GroupID            *string                     `json:"group_id"`
 	GroupKey           string                      `json:"group_key,omitempty"`
 	SubagentRole       string                      `json:"subagent_role,omitempty"`
 	CompletionMode     string                      `json:"completion_mode,omitempty"`
@@ -360,6 +361,7 @@ type WorkflowGraphMetadata struct {
 }
 
 type WorkflowGraphSaveConfirmation struct {
+	ExpectedRemovedNodeGroupCount       int64 `json:"expected_removed_node_group_count"`
 	ExpectedRemovedNodeCount            int64 `json:"expected_removed_node_count"`
 	ExpectedRemovedTransitionGroupCount int64 `json:"expected_removed_transition_group_count"`
 	ExpectedRemovedEdgeCount            int64 `json:"expected_removed_edge_count"`
@@ -377,6 +379,7 @@ type WorkflowGraphSaveRequest struct {
 
 type WorkflowGraphSavePreviewResponse struct {
 	CurrentVersion       int64                                               `json:"current_version"`
+	Changed              bool                                                `json:"changed"`
 	ValidationResults    map[WorkflowValidationMode]WorkflowValidateResponse `json:"validation_results"`
 	Impact               WorkflowGraphSaveImpact                             `json:"impact"`
 	Blockers             []WorkflowGraphSaveBlocker                          `json:"blockers,omitempty"`
@@ -386,6 +389,7 @@ type WorkflowGraphSavePreviewResponse struct {
 
 type WorkflowGraphSaveResponse struct {
 	Saved                bool                                                `json:"saved"`
+	Changed              bool                                                `json:"changed"`
 	Definition           *WorkflowDefinition                                 `json:"definition,omitempty"`
 	CurrentVersion       int64                                               `json:"current_version"`
 	ValidationResults    map[WorkflowValidationMode]WorkflowValidateResponse `json:"validation_results"`
@@ -396,22 +400,35 @@ type WorkflowGraphSaveResponse struct {
 }
 
 type WorkflowGraphSaveImpact struct {
-	RemovedNodeCount                  int64 `json:"removed_node_count"`
-	RemovedTransitionGroupCount       int64 `json:"removed_transition_group_count"`
-	RemovedEdgeCount                  int64 `json:"removed_edge_count"`
-	NodeTaskReferenceCount            int64 `json:"node_task_reference_count"`
-	EdgeTaskReferenceCount            int64 `json:"edge_task_reference_count"`
-	ActiveCurrentNodeCount            int64 `json:"active_current_node_count"`
-	PendingApprovalCount              int64 `json:"pending_approval_count"`
-	StartNodeChangeCount              int64 `json:"start_node_change_count"`
-	LastTerminalChangeCount           int64 `json:"last_terminal_change_count"`
-	TaskReferencedNodeKindChangeCount int64 `json:"task_referenced_node_kind_change_count"`
+	RemovedNodeGroupCount             int64                          `json:"removed_node_group_count"`
+	RemovedNodeCount                  int64                          `json:"removed_node_count"`
+	RemovedTransitionGroupCount       int64                          `json:"removed_transition_group_count"`
+	RemovedEdgeCount                  int64                          `json:"removed_edge_count"`
+	RemovedEntities                   []WorkflowGraphEntityReference `json:"removed_entities"`
+	NodeTaskReferenceCount            int64                          `json:"node_task_reference_count"`
+	EdgeTaskReferenceCount            int64                          `json:"edge_task_reference_count"`
+	ActiveCurrentNodeCount            int64                          `json:"active_current_node_count"`
+	PendingApprovalCount              int64                          `json:"pending_approval_count"`
+	StartNodeChangeCount              int64                          `json:"start_node_change_count"`
+	LastTerminalChangeCount           int64                          `json:"last_terminal_change_count"`
+	TaskReferencedNodeKindChangeCount int64                          `json:"task_referenced_node_kind_change_count"`
 }
 
+const (
+	WorkflowGraphEntityTypeEdge            = workflowcontract.WorkflowGraphEntityTypeEdge
+	WorkflowGraphEntityTypeNode            = workflowcontract.WorkflowGraphEntityTypeNode
+	WorkflowGraphEntityTypeNodeGroup       = workflowcontract.WorkflowGraphEntityTypeNodeGroup
+	WorkflowGraphEntityTypeTransitionGroup = workflowcontract.WorkflowGraphEntityTypeTransitionGroup
+)
+
+type WorkflowGraphEntityType = workflowcontract.WorkflowGraphEntityType
+type WorkflowGraphEntityReference = workflowcontract.WorkflowGraphEntityReference
+
 type WorkflowGraphSaveBlocker struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-	Count   int64  `json:"count"`
+	Code             string                         `json:"code"`
+	Message          string                         `json:"message"`
+	Count            int64                          `json:"count"`
+	AffectedEntities []WorkflowGraphEntityReference `json:"affected_entities"`
 }
 
 type WorkflowCreateRequest struct {
@@ -2294,6 +2311,7 @@ func (r WorkflowGraphSaveRequest) Validate() error {
 		name  string
 		value int64
 	}{
+		{"expected_removed_node_group_count", r.Confirmation.ExpectedRemovedNodeGroupCount},
 		{"expected_removed_node_count", r.Confirmation.ExpectedRemovedNodeCount},
 		{"expected_removed_transition_group_count", r.Confirmation.ExpectedRemovedTransitionGroupCount},
 		{"expected_removed_edge_count", r.Confirmation.ExpectedRemovedEdgeCount},
@@ -2305,6 +2323,127 @@ func (r WorkflowGraphSaveRequest) Validate() error {
 		}
 	}
 	return nil
+}
+
+func (r WorkflowGraphSavePreviewResponse) Validate() error {
+	return validateWorkflowGraphSaveResponse(r.CurrentVersion, r.Impact, r.Blockers)
+}
+
+func (r WorkflowGraphSaveResponse) Validate() error {
+	return validateWorkflowGraphSaveResponse(r.CurrentVersion, r.Impact, r.Blockers)
+}
+
+func validateWorkflowGraphSaveResponse(currentVersion int64, impact WorkflowGraphSaveImpact, blockers []WorkflowGraphSaveBlocker) error {
+	if currentVersion < 0 {
+		return errors.New("current_version must be non-negative")
+	}
+	if err := impact.Validate(); err != nil {
+		return fmt.Errorf("impact: %w", err)
+	}
+	return validateWorkflowGraphSaveBlockers(blockers)
+}
+
+func (i WorkflowGraphSaveImpact) Validate() error {
+	for _, field := range []struct {
+		name  string
+		value int64
+	}{
+		{"removed_node_group_count", i.RemovedNodeGroupCount},
+		{"removed_node_count", i.RemovedNodeCount},
+		{"removed_transition_group_count", i.RemovedTransitionGroupCount},
+		{"removed_edge_count", i.RemovedEdgeCount},
+		{"node_task_reference_count", i.NodeTaskReferenceCount},
+		{"edge_task_reference_count", i.EdgeTaskReferenceCount},
+		{"active_current_node_count", i.ActiveCurrentNodeCount},
+		{"pending_approval_count", i.PendingApprovalCount},
+		{"start_node_change_count", i.StartNodeChangeCount},
+		{"last_terminal_change_count", i.LastTerminalChangeCount},
+		{"task_referenced_node_kind_change_count", i.TaskReferencedNodeKindChangeCount},
+	} {
+		if field.value < 0 {
+			return fmt.Errorf("%s must be non-negative", field.name)
+		}
+	}
+	if err := validateWorkflowGraphEntityReferences(i.RemovedEntities, "removed_entities"); err != nil {
+		return err
+	}
+	counts := map[WorkflowGraphEntityType]int64{}
+	for _, entity := range i.RemovedEntities {
+		counts[entity.EntityType]++
+	}
+	for _, expected := range []struct {
+		entityType WorkflowGraphEntityType
+		count      int64
+	}{
+		{WorkflowGraphEntityTypeNodeGroup, i.RemovedNodeGroupCount},
+		{WorkflowGraphEntityTypeNode, i.RemovedNodeCount},
+		{WorkflowGraphEntityTypeTransitionGroup, i.RemovedTransitionGroupCount},
+		{WorkflowGraphEntityTypeEdge, i.RemovedEdgeCount},
+	} {
+		if counts[expected.entityType] != expected.count {
+			return fmt.Errorf("removed_entities %s count = %d, want %d", expected.entityType, counts[expected.entityType], expected.count)
+		}
+	}
+	return nil
+}
+
+func validateWorkflowGraphEntityReference(r WorkflowGraphEntityReference) error {
+	switch r.EntityType {
+	case WorkflowGraphEntityTypeEdge,
+		WorkflowGraphEntityTypeNode,
+		WorkflowGraphEntityTypeNodeGroup,
+		WorkflowGraphEntityTypeTransitionGroup:
+	default:
+		return errors.New("entity_type is invalid")
+	}
+	return validateRequired("entity_id", r.EntityID)
+}
+
+func (b WorkflowGraphSaveBlocker) Validate() error {
+	if err := validateRequired("code", b.Code); err != nil {
+		return err
+	}
+	if err := validateRequired("message", b.Message); err != nil {
+		return err
+	}
+	if b.Count < 0 {
+		return workflowRequestError(WorkflowRequestErrorInvalidValue, "count", "count must be non-negative")
+	}
+	return validateWorkflowGraphEntityReferences(b.AffectedEntities, "affected_entities")
+}
+
+func validateWorkflowGraphSaveBlockers(blockers []WorkflowGraphSaveBlocker) error {
+	for index, blocker := range blockers {
+		if err := blocker.Validate(); err != nil {
+			return fmt.Errorf("blockers[%d]: %w", index, err)
+		}
+	}
+	return nil
+}
+
+func validateWorkflowGraphEntityReferences(references []WorkflowGraphEntityReference, field string) error {
+	if references == nil {
+		return fmt.Errorf("%s must be present", field)
+	}
+	for index, reference := range references {
+		if err := validateWorkflowGraphEntityReference(reference); err != nil {
+			return fmt.Errorf("%s[%d]: %w", field, index, err)
+		}
+	}
+	if !slices.IsSortedFunc(references, CompareWorkflowGraphEntityReferences) {
+		return fmt.Errorf("%s must use canonical entity_type and entity_id order", field)
+	}
+	for index := 1; index < len(references); index++ {
+		if CompareWorkflowGraphEntityReferences(references[index-1], references[index]) == 0 {
+			return fmt.Errorf("%s contains duplicate entity reference", field)
+		}
+	}
+	return nil
+}
+
+// CompareWorkflowGraphEntityReferences defines the canonical graph entity ordering used by graph-save producers and consumers.
+func CompareWorkflowGraphEntityReferences(left WorkflowGraphEntityReference, right WorkflowGraphEntityReference) int {
+	return workflowcontract.CompareWorkflowGraphEntityReferences(left, right)
 }
 
 func validateWorkflowGraphMetadata(metadata *WorkflowGraphMetadata) error {
@@ -2362,6 +2501,12 @@ func validateWorkflowGraphDraftEnvelope(graph WorkflowGraphDraft) error {
 		}
 	}
 	for _, node := range graph.Nodes {
+		if kind := WorkflowNodeKind(strings.TrimSpace(node.Kind)); !slices.Contains([]WorkflowNodeKind{WorkflowNodeKindStart, WorkflowNodeKindAgent, WorkflowNodeKindScript, WorkflowNodeKindJoin, WorkflowNodeKindTerminal}, kind) {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "graph.nodes.kind", "node kind is invalid")
+		}
+		if node.GroupID != nil && strings.TrimSpace(*node.GroupID) == "" {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "graph.nodes.group_id", "group_id must be non-blank when present")
+		}
 		if err := validateWorkflowNodeCompletionMode(node.Kind, node.CompletionMode); err != nil {
 			return workflowRequestError(WorkflowRequestErrorInvalidValue, "graph.nodes.completion_mode", err.Error())
 		}

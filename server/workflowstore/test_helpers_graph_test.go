@@ -40,6 +40,15 @@ func workflowGraphSaveBlockerCount(blockers []WorkflowGraphSaveBlocker, code str
 	return 0
 }
 
+func workflowGraphSaveBlockerEntities(blockers []WorkflowGraphSaveBlocker, code string) []WorkflowGraphEntityReference {
+	for _, blocker := range blockers {
+		if blocker.Code == code {
+			return blocker.AffectedEntities
+		}
+	}
+	return nil
+}
+
 func nodeByID(t *testing.T, def workflow.Definition, nodeID workflow.NodeID) workflow.Node {
 	t.Helper()
 	for _, node := range def.Nodes {

@@ -429,11 +429,23 @@ export const workflowGraphDeriveWiringSchema: z.ZodType<WorkflowDerivedWiring> =
   })
   .transform((value) => value.derived_wiring);
 
+const workflowGraphEntityReferenceSchema = z
+  .object({
+    entity_type: z.enum(["edge", "node", "node_group", "transition_group"]),
+    entity_id: z.string(),
+  })
+  .transform((value) => ({
+    entityType: value.entity_type,
+    entityID: value.entity_id,
+  }));
+
 const workflowGraphSaveImpactSchema: z.ZodType<WorkflowGraphSaveImpact> = z
   .object({
+    removed_node_group_count: z.number(),
     removed_node_count: z.number(),
     removed_transition_group_count: z.number(),
     removed_edge_count: z.number(),
+    removed_entities: z.array(workflowGraphEntityReferenceSchema),
     node_task_reference_count: z.number(),
     edge_task_reference_count: z.number(),
     active_current_node_count: z.number(),
@@ -443,9 +455,11 @@ const workflowGraphSaveImpactSchema: z.ZodType<WorkflowGraphSaveImpact> = z
     task_referenced_node_kind_change_count: z.number(),
   })
   .transform((value) => ({
+    removedNodeGroupCount: value.removed_node_group_count,
     removedNodeCount: value.removed_node_count,
     removedTransitionGroupCount: value.removed_transition_group_count,
     removedEdgeCount: value.removed_edge_count,
+    removedEntities: value.removed_entities,
     nodeTaskReferenceCount: value.node_task_reference_count,
     edgeTaskReferenceCount: value.edge_task_reference_count,
     activeCurrentNodeCount: value.active_current_node_count,
@@ -461,13 +475,23 @@ const workflowGraphSaveBlockersSchema = z
       code: z.string(),
       message: z.string(),
       count: z.number(),
+      affected_entities: z.array(workflowGraphEntityReferenceSchema),
     }),
   )
   .nullish()
-  .transform(emptyArray);
+  .transform(emptyArray)
+  .transform((blockers) =>
+    blockers.map((blocker) => ({
+      code: blocker.code,
+      message: blocker.message,
+      count: blocker.count,
+      affectedEntities: blocker.affected_entities,
+    })),
+  );
 
 export const workflowGraphSavePreviewSchema: z.ZodType<WorkflowGraphSavePreview> = z
   .object({
+    changed: z.boolean(),
     current_version: z.number(),
     validation_results: workflowGraphValidationResultsSchema,
     impact: workflowGraphSaveImpactSchema,
@@ -476,6 +500,7 @@ export const workflowGraphSavePreviewSchema: z.ZodType<WorkflowGraphSavePreview>
     confirmation_required: z.boolean(),
   })
   .transform((value) => ({
+    changed: value.changed,
     currentVersion: value.current_version,
     validationResults: value.validation_results,
     impact: value.impact,
@@ -487,6 +512,7 @@ export const workflowGraphSavePreviewSchema: z.ZodType<WorkflowGraphSavePreview>
 export const workflowGraphSaveSchema: z.ZodType<WorkflowGraphSaveResult> = z
   .object({
     saved: z.boolean(),
+    changed: z.boolean(),
     definition: workflowDefinitionValueSchema.nullish().transform((value) => value ?? null),
     current_version: z.number(),
     validation_results: workflowGraphValidationResultsSchema,
@@ -497,6 +523,7 @@ export const workflowGraphSaveSchema: z.ZodType<WorkflowGraphSaveResult> = z
   })
   .transform((value) => ({
     saved: value.saved,
+    changed: value.changed,
     definition: value.definition,
     currentVersion: value.current_version,
     validationResults: value.validation_results,

@@ -78,6 +78,10 @@ func runWorkflowCommandSession(stderr io.Writer, run func(config.App, workflowCo
 }
 
 func workflowSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
+	return workflowSubcommandWithInput(args, os.Stdin, stdout, stderr)
+}
+
+func workflowSubcommandWithInput(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int {
 	if stdout == nil {
 		stdout = io.Discard
 	}
@@ -101,6 +105,8 @@ func workflowSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		return workflowUpdateSubcommand(args[1:], stdout, stderr)
 	case "list":
 		return workflowListSubcommand(args[1:], stdout, stderr)
+	case "graph":
+		return workflowGraphSubcommand(args[1:], stdin, stdout, stderr)
 	case "node":
 		return workflowNodeSubcommand(args[1:], stdout, stderr)
 	case "edge":
@@ -121,6 +127,46 @@ func workflowSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		workflowUsage.write(fs)
 		return 2
 	}
+}
+
+func workflowGraphSubcommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int {
+	return dispatchCommandGroup(args, stdout, stderr, commandGroup{
+		path:  "workflow graph",
+		usage: workflowGraphUsage,
+		routes: map[string]commandHandler{
+			"inspect": workflowGraphInspectSubcommand,
+			"apply": func(args []string, stdout io.Writer, stderr io.Writer) int {
+				return workflowGraphApplySubcommand(args, stdin, stdout, stderr)
+			},
+		},
+	})
+}
+
+func workflowGraphInspectSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
+	fs := newCommandFlagSet(config.Command+" workflow graph inspect", stderr, workflowGraphInspectUsage)
+	_ = fs.Bool("json", false, "write the graph document as JSON")
+	positionals, ok, exitCode := parseWorkflowPositionals(fs, args, 1, stderr, "workflow graph inspect requires <uuid>")
+	if !ok {
+		return exitCode
+	}
+	selector, err := parseWorkflowSelector(positionals[0])
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
+	return runWorkflowCommandSession(stderr, func(_ config.App, remote workflowCommandRemote) int {
+		definition, err := resolveWorkflowDefinition(context.Background(), remote, selector)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		document, err := workflowGraphDocumentFromDefinition(definition)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		return writeCommandJSON(stdout, stderr, document)
+	})
 }
 
 func workflowUpdateSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -377,21 +423,28 @@ func workflowNodeAddSubcommand(args []string, stdout io.Writer, stderr io.Writer
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	nodeID := "node-" + uuid.NewString()
+	nodeID := uuid.NewString()
 	return runWorkflowCommandSession(stderr, func(_ config.App, remote workflowCommandRemote) int {
-		workflowID := selector
 		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
 		defer cancel()
-		req := serverapi.WorkflowNodeAddRequest{WorkflowID: workflowID, NodeID: nodeID, Key: *key, Kind: *kind, DisplayName: *displayName, SubagentRole: *agent, CompletionMode: *completionMode, ScriptPath: workflowScriptPathFlagValue(fs, "script-path", *scriptPath)}
-		resp, err := remote.AddWorkflowNode(ctx, req)
+		node := serverapi.WorkflowGraphDraftNode{
+			ID:             nodeID,
+			Key:            *key,
+			Kind:           *kind,
+			DisplayName:    *displayName,
+			SubagentRole:   *agent,
+			CompletionMode: *completionMode,
+			ScriptPath:     workflowScriptPathFlagValue(fs, "script-path", *scriptPath),
+		}
+		added, result, err := runWorkflowGraphMutation(ctx, remote, selector, addWorkflowNodeDraftMutation(node))
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
 		if *jsonOut {
-			return writeCommandJSON(stdout, stderr, workflowNodeOutput{WorkflowID: selector, NodeID: nodeID, Key: *key, Kind: *kind, ScriptPath: req.ScriptPath, Version: resp.Version})
+			return writeCommandJSON(stdout, stderr, workflowNodeOutput{WorkflowID: selector, NodeID: added.ID, Key: added.Key, Kind: added.Kind, ScriptPath: added.ScriptPath, Version: result.Version})
 		}
-		fmt.Fprintf(stdout, "Added %s node `%s` (%s).\n", *kind, *key, nodeID)
+		fmt.Fprintf(stdout, "Added %s node `%s` (%s).\n", added.Kind, added.Key, added.ID)
 		return 0
 	})
 }
@@ -415,55 +468,40 @@ func workflowNodeUpdateSubcommand(args []string, stdout io.Writer, stderr io.Wri
 		return 2
 	}
 	return runWorkflowCommandSession(stderr, func(_ config.App, remote workflowCommandRemote) int {
-		def, err := resolveWorkflowDefinition(context.Background(), remote, selector)
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		node, err := workflowNodeByKey(def, positionals[1])
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		updated := node
+		update := workflowNodeUpdateDraftMutation{NodeKey: positionals[1]}
 		if strings.TrimSpace(*key) != "" {
-			updated.Key = strings.TrimSpace(*key)
+			value := strings.TrimSpace(*key)
+			update.Key = &value
 		}
 		if strings.TrimSpace(*kind) != "" {
-			updated.Kind = strings.TrimSpace(*kind)
+			value := strings.TrimSpace(*kind)
+			update.Kind = &value
 		}
 		if strings.TrimSpace(*displayName) != "" {
-			updated.DisplayName = strings.TrimSpace(*displayName)
+			value := strings.TrimSpace(*displayName)
+			update.DisplayName = &value
 		}
 		if fs.Lookup("agent") != nil && flagExplicit(fs, "agent") {
-			updated.SubagentRole = *agent
+			update.SubagentRole = workflowStringMutation{Set: true, Value: *agent}
 		}
 		if flagExplicit(fs, "completion-mode") {
-			updated.CompletionMode = strings.TrimSpace(*completionMode)
+			update.CompletionMode = workflowStringMutation{Set: true, Value: strings.TrimSpace(*completionMode)}
 		}
 		if flagExplicit(fs, "script-path") {
-			updated.ScriptPath = workflowScriptPathFlagValue(fs, "script-path", *scriptPath)
+			update.ScriptPath = workflowOptionalStringMutation{
+				Set:   true,
+				Value: workflowScriptPathFlagValue(fs, "script-path", *scriptPath),
+			}
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
 		defer cancel()
-		resp, err := remote.UpdateWorkflowNode(ctx, serverapi.WorkflowNodeUpdateRequest{
-			WorkflowID:         def.Workflow.ID,
-			NodeID:             updated.ID,
-			Key:                updated.Key,
-			Kind:               updated.Kind,
-			DisplayName:        updated.DisplayName,
-			GroupKey:           updated.GroupKey,
-			SubagentRole:       updated.SubagentRole,
-			CompletionMode:     updated.CompletionMode,
-			ScriptPath:         updated.ScriptPath,
-			JoinInputProviders: updated.JoinInputProviders,
-		})
+		updated, result, err := runWorkflowGraphMutation(ctx, remote, selector, updateWorkflowNodeDraftMutation(update))
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
 		if *jsonOut {
-			return writeCommandJSON(stdout, stderr, workflowNodeOutput{WorkflowID: selector, NodeID: updated.ID, Key: updated.Key, Kind: updated.Kind, ScriptPath: updated.ScriptPath, Version: resp.Version})
+			return writeCommandJSON(stdout, stderr, workflowNodeOutput{WorkflowID: selector, NodeID: updated.ID, Key: updated.Key, Kind: updated.Kind, ScriptPath: updated.ScriptPath, Version: result.Version})
 		}
 		fmt.Fprintf(stdout, "Updated node `%s`.\n", updated.Key)
 		return 0
@@ -567,79 +605,40 @@ func workflowEdgeAddSubcommand(args []string, stdout io.Writer, stderr io.Writer
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
+	edgeID := uuid.NewString()
+	newTransitionGroupID := uuid.NewString()
 	return runWorkflowCommandSession(stderr, func(_ config.App, remote workflowCommandRemote) int {
-		def, err := resolveWorkflowDefinition(context.Background(), remote, selector)
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		source, err := workflowNodeByKey(def, *fromKey)
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		target, err := workflowNodeByKey(def, *toKey)
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		groupID := ""
-		var existingGroup *serverapi.WorkflowTransitionGroup
-		for i := range def.TransitionGroups {
-			group := def.TransitionGroups[i]
-			if group.SourceNodeID == source.ID && group.TransitionID == strings.TrimSpace(*transitionID) {
-				groupID = group.ID
-				existingGroup = &group
-				break
-			}
-		}
-		trimmedDescription := strings.TrimSpace(*transitionDescription)
-		if groupID == "" {
-			groupID = "group-" + uuid.NewString()
-			ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
-			resp, addErr := remote.AddWorkflowTransitionGroup(ctx, serverapi.WorkflowTransitionGroupAddRequest{WorkflowID: def.Workflow.ID, GroupID: groupID, SourceNodeID: source.ID, TransitionID: *transitionID, DisplayName: workflowDisplayNameFromKey(*transitionID), Description: trimmedDescription})
-			cancel()
-			if addErr != nil {
-				fmt.Fprintln(stderr, addErr)
-				return 1
-			}
-			_ = resp
-		}
-		descriptionRollback := func() {}
-		if groupID != "" && flagExplicit(fs, "transition-description") && existingGroup != nil {
-			previousGroup := *existingGroup
-			ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
-			resp, updateErr := remote.UpdateWorkflowTransitionGroup(ctx, serverapi.WorkflowTransitionGroupUpdateRequest{WorkflowID: def.Workflow.ID, GroupID: existingGroup.ID, SourceNodeID: existingGroup.SourceNodeID, TransitionID: existingGroup.TransitionID, DisplayName: existingGroup.DisplayName, Description: trimmedDescription})
-			cancel()
-			if updateErr != nil {
-				fmt.Fprintln(stderr, updateErr)
-				return 1
-			}
-			_ = resp
-			// Restore the prior description if a later step fails so a non-zero exit
-			// never leaves the transition group description partially mutated.
-			descriptionRollback = func() {
-				rbCtx, rbCancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
-				_, rbErr := remote.UpdateWorkflowTransitionGroup(rbCtx, serverapi.WorkflowTransitionGroupUpdateRequest{WorkflowID: def.Workflow.ID, GroupID: previousGroup.ID, SourceNodeID: previousGroup.SourceNodeID, TransitionID: previousGroup.TransitionID, DisplayName: previousGroup.DisplayName, Description: previousGroup.Description})
-				rbCancel()
-				if rbErr != nil {
-					fmt.Fprintf(stderr, "rollback transition group %s description failed: %v\n", previousGroup.ID, rbErr)
-				}
-			}
-		}
-		edgeID := "edge-" + uuid.NewString()
 		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
-		resp, err := remote.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{WorkflowID: def.Workflow.ID, EdgeID: edgeID, TransitionGroupID: groupID, Key: *edgeKey, TargetNodeID: target.ID, AssigneeSelection: parsedAssigneeSelection, ThinkingSelection: parsedThinkingSelection, ContextMode: *contextMode, ContextSource: parsedContextSource, RequiresApproval: *requiresApproval, PromptTemplate: *prompt, Parameters: parsedParameters})
-		cancel()
+		defer cancel()
+		added, result, err := runWorkflowGraphMutation(ctx, remote, selector, addWorkflowEdgeDraftMutation(workflowEdgeAddDraftMutation{
+			SourceNodeKey:        *fromKey,
+			TransitionID:         *transitionID,
+			NewTransitionGroupID: newTransitionGroupID,
+			TransitionDescription: workflowStringMutation{
+				Set:   flagExplicit(fs, "transition-description"),
+				Value: strings.TrimSpace(*transitionDescription),
+			},
+			TargetNodeKey: *toKey,
+			Edge: serverapi.WorkflowGraphDraftEdge{
+				ID:                edgeID,
+				Key:               *edgeKey,
+				AssigneeSelection: parsedAssigneeSelection,
+				ThinkingSelection: parsedThinkingSelection,
+				ContextMode:       *contextMode,
+				ContextSource:     parsedContextSource,
+				RequiresApproval:  *requiresApproval,
+				PromptTemplate:    *prompt,
+				Parameters:        parsedParameters,
+			},
+		}))
 		if err != nil {
-			descriptionRollback()
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
 		if *jsonOut {
-			return writeCommandJSON(stdout, stderr, workflowEdgeOutput{WorkflowID: selector, EdgeID: edgeID, TransitionGroupID: groupID, Key: *edgeKey, TransitionID: *transitionID, Version: resp.Version})
+			return writeCommandJSON(stdout, stderr, workflowEdgeOutput{WorkflowID: selector, EdgeID: added.Edge.ID, TransitionGroupID: added.Group.ID, Key: added.Edge.Key, TransitionID: added.Group.TransitionID, Version: result.Version})
 		}
-		fmt.Fprintf(stdout, "Added edge `%s` (%s) on transition `%s`: `%s` → `%s` (%s).\n", *edgeKey, edgeID, *transitionID, *fromKey, *toKey, workflowEdgeContextDetail(*contextMode, *requiresApproval, parsedContextSource))
+		fmt.Fprintf(stdout, "Added edge `%s` (%s) on transition `%s`: `%s` → `%s` (%s).\n", added.Edge.Key, added.Edge.ID, added.Group.TransitionID, *fromKey, *toKey, workflowEdgeContextDetail(added.Edge.ContextMode, added.Edge.RequiresApproval, added.Edge.ContextSource))
 		return 0
 	})
 }
@@ -672,181 +671,114 @@ func workflowEdgeUpdateSubcommand(args []string, stdout io.Writer, stderr io.Wri
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
+	var parsedAssigneeSelection *string
+	if flagExplicit(fs, "assignee-selection") {
+		value, err := parseWorkflowSelectionMode("assignee-selection", *assigneeSelection)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 2
+		}
+		parsedAssigneeSelection = &value
+	}
+	var parsedThinkingSelection *string
+	if flagExplicit(fs, "thinking-selection") {
+		value, err := parseWorkflowSelectionMode("thinking-selection", *thinkingSelection)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 2
+		}
+		parsedThinkingSelection = &value
+	}
+	assigneeParam, err := parseWorkflowProtectedParameterFlag(fs, "target-assignee-param", *targetAssigneeParam, "target_assignee")
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
+	thinkingParam, err := parseWorkflowProtectedParameterFlag(fs, "target-thinking-param", *targetThinkingParam, "target_thinking")
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
+	if *clearParams && flagExplicit(fs, "param") {
+		fmt.Fprintln(stderr, "use either --param or --clear-params, not both")
+		return 2
+	}
+	var ordinaryParameters *[]serverapi.WorkflowParameter
+	if *clearParams {
+		values := []serverapi.WorkflowParameter{}
+		ordinaryParameters = &values
+	} else if flagExplicit(fs, "param") {
+		values, err := parseWorkflowParameters(params)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 2
+		}
+		ordinaryParameters = &values
+	}
+	var parsedContextSource *serverapi.WorkflowContextSource
+	if strings.TrimSpace(*contextSource) != "" {
+		value, err := parseWorkflowContextSourceSelector(*contextSource)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 2
+		}
+		parsedContextSource = &value
+	}
+	update := workflowEdgeUpdateDraftMutation{
+		EdgeID:                  positionals[1],
+		AssigneeSelection:       parsedAssigneeSelection,
+		ThinkingSelection:       parsedThinkingSelection,
+		TargetAssigneeParameter: assigneeParam,
+		TargetThinkingParameter: thinkingParam,
+		OrdinaryParameters:      ordinaryParameters,
+	}
+	if strings.TrimSpace(*transitionID) != "" {
+		value := strings.TrimSpace(*transitionID)
+		update.TransitionID = &value
+	}
+	if strings.TrimSpace(*transitionDisplayName) != "" {
+		value := strings.TrimSpace(*transitionDisplayName)
+		update.TransitionDisplayName = &value
+	}
+	if flagExplicit(fs, "transition-description") {
+		update.TransitionDescription = workflowStringMutation{Set: true, Value: strings.TrimSpace(*transitionDescription)}
+	}
+	if strings.TrimSpace(*edgeKey) != "" {
+		value := strings.TrimSpace(*edgeKey)
+		update.EdgeKey = &value
+	}
+	if strings.TrimSpace(*toKey) != "" {
+		value := strings.TrimSpace(*toKey)
+		update.TargetNodeKey = &value
+	}
+	if strings.TrimSpace(*contextMode) != "" {
+		value := strings.TrimSpace(*contextMode)
+		update.ContextMode = &value
+	}
+	update.ContextSource = parsedContextSource
+	if flagExplicit(fs, "requires-approval") {
+		update.RequiresApproval = requiresApproval
+	}
+	if flagExplicit(fs, "prompt") {
+		update.PromptTemplate = workflowStringMutation{Set: true, Value: *prompt}
+	}
 	return runWorkflowCommandSession(stderr, func(_ config.App, remote workflowCommandRemote) int {
-		def, err := resolveWorkflowDefinition(context.Background(), remote, selector)
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		edge, err := workflowEdgeByID(def, positionals[1])
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		group, err := workflowTransitionGroupByID(def, edge.TransitionGroupID)
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		updatedGroup := group
-		if strings.TrimSpace(*transitionID) != "" {
-			updatedGroup.TransitionID = strings.TrimSpace(*transitionID)
-		}
-		if strings.TrimSpace(*transitionDisplayName) != "" {
-			updatedGroup.DisplayName = strings.TrimSpace(*transitionDisplayName)
-		} else if strings.TrimSpace(*transitionID) != "" {
-			updatedGroup.DisplayName = workflowDisplayNameFromKey(*transitionID)
-		}
-		if flagExplicit(fs, "transition-description") {
-			updatedGroup.Description = strings.TrimSpace(*transitionDescription)
-		}
-		updatedEdge := edge
-		updatedEdge.AssigneeSelection = edge.AssigneeSelection
-		updatedEdge.ThinkingSelection = edge.ThinkingSelection
-		if flagExplicit(fs, "assignee-selection") {
-			updatedEdge.AssigneeSelection, err = parseWorkflowSelectionMode("assignee-selection", *assigneeSelection)
-			if err != nil {
-				fmt.Fprintln(stderr, err)
-				return 2
-			}
-		}
-		if flagExplicit(fs, "thinking-selection") {
-			updatedEdge.ThinkingSelection, err = parseWorkflowSelectionMode("thinking-selection", *thinkingSelection)
-			if err != nil {
-				fmt.Fprintln(stderr, err)
-				return 2
-			}
-		}
-		assigneeParam, paramErr := parseWorkflowProtectedParameterFlag(fs, "target-assignee-param", *targetAssigneeParam, "target_assignee")
-		if paramErr != nil {
-			fmt.Fprintln(stderr, paramErr)
-			return 2
-		}
-		thinkingParam, paramErr := parseWorkflowProtectedParameterFlag(fs, "target-thinking-param", *targetThinkingParam, "target_thinking")
-		if paramErr != nil {
-			fmt.Fprintln(stderr, paramErr)
-			return 2
-		}
-		if assigneeParam != nil && updatedEdge.AssigneeSelection != "previous_node" {
-			fmt.Fprintln(stderr, "target-assignee-param requires assignee selection previous_node")
-			return 2
-		}
-		if thinkingParam != nil && updatedEdge.ThinkingSelection != "previous_node" {
-			fmt.Fprintln(stderr, "target-thinking-param requires thinking selection previous_node")
-			return 2
-		}
-		updatedEdge.Parameters, err = workflowEdgeParametersForUpdate(
-			edge.Parameters,
-			updatedEdge.AssigneeSelection,
-			updatedEdge.ThinkingSelection,
-			assigneeParam,
-			thinkingParam,
-			nil,
-			false,
-		)
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 2
-		}
-		if strings.TrimSpace(*edgeKey) != "" {
-			updatedEdge.Key = strings.TrimSpace(*edgeKey)
-		}
-		if strings.TrimSpace(*toKey) != "" {
-			target, targetErr := workflowNodeByKey(def, *toKey)
-			if targetErr != nil {
-				fmt.Fprintln(stderr, targetErr)
-				return 1
-			}
-			updatedEdge.TargetNodeID = target.ID
-		}
-		if strings.TrimSpace(*contextMode) != "" {
-			updatedEdge.ContextMode = strings.TrimSpace(*contextMode)
-		}
-		if strings.TrimSpace(*contextSource) != "" {
-			parsedContextSource, parseErr := parseWorkflowContextSourceSelector(*contextSource)
-			if parseErr != nil {
-				fmt.Fprintln(stderr, parseErr)
-				return 2
-			}
-			updatedEdge.ContextSource = parsedContextSource
-		}
-		if flagExplicit(fs, "requires-approval") {
-			updatedEdge.RequiresApproval = *requiresApproval
-		}
-		if flagExplicit(fs, "prompt") {
-			updatedEdge.PromptTemplate = *prompt
-		}
-		if *clearParams && flagExplicit(fs, "param") {
-			fmt.Fprintln(stderr, "use either --param or --clear-params, not both")
-			return 2
-		}
-		if *clearParams {
-			updatedEdge.Parameters, err = workflowEdgeParametersForUpdate(
-				updatedEdge.Parameters,
-				updatedEdge.AssigneeSelection,
-				updatedEdge.ThinkingSelection,
-				nil,
-				nil,
-				nil,
-				true,
-			)
-			if err != nil {
-				fmt.Fprintln(stderr, err)
-				return 2
-			}
-		} else if flagExplicit(fs, "param") {
-			parsedParameters, parseErr := parseWorkflowParameters(params)
-			if parseErr != nil {
-				fmt.Fprintln(stderr, parseErr)
-				return 2
-			}
-			updatedEdge.Parameters, err = workflowEdgeParametersForUpdate(
-				updatedEdge.Parameters,
-				updatedEdge.AssigneeSelection,
-				updatedEdge.ThinkingSelection,
-				nil,
-				nil,
-				parsedParameters,
-				false,
-			)
-			if err != nil {
-				fmt.Fprintln(stderr, err)
-				return 2
-			}
-		}
-		// Commit the transition group change only after every edge flag has parsed, so
-		// a malformed --param or --context-source can never leave the group mutated
-		// while the command exits non-zero before touching the edge.
-		if updatedGroup != group {
-			groupCtx, groupCancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
-			groupResp, updateErr := remote.UpdateWorkflowTransitionGroup(groupCtx, serverapi.WorkflowTransitionGroupUpdateRequest{WorkflowID: def.Workflow.ID, GroupID: updatedGroup.ID, SourceNodeID: updatedGroup.SourceNodeID, TransitionID: updatedGroup.TransitionID, DisplayName: updatedGroup.DisplayName, Description: updatedGroup.Description})
-			groupCancel()
-			if updateErr != nil {
-				fmt.Fprintln(stderr, updateErr)
-				return 1
-			}
-			_ = groupResp
-		}
 		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
 		defer cancel()
-		resp, err := remote.UpdateWorkflowEdge(ctx, serverapi.WorkflowEdgeUpdateRequest{WorkflowID: def.Workflow.ID, EdgeID: updatedEdge.ID, TransitionGroupID: updatedEdge.TransitionGroupID, Key: updatedEdge.Key, TargetNodeID: updatedEdge.TargetNodeID, AssigneeSelection: updatedEdge.AssigneeSelection, ThinkingSelection: updatedEdge.ThinkingSelection, ContextMode: updatedEdge.ContextMode, ContextSource: updatedEdge.ContextSource, RequiresApproval: updatedEdge.RequiresApproval, PromptTemplate: updatedEdge.PromptTemplate, Parameters: updatedEdge.Parameters})
+		updated, result, err := runWorkflowGraphMutation(ctx, remote, selector, updateWorkflowEdgeDraftMutation(update))
 		if err != nil {
-			if updatedGroup != group {
-				rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
-				_, rollbackErr := remote.UpdateWorkflowTransitionGroup(rollbackCtx, serverapi.WorkflowTransitionGroupUpdateRequest{WorkflowID: def.Workflow.ID, GroupID: group.ID, SourceNodeID: group.SourceNodeID, TransitionID: group.TransitionID, DisplayName: group.DisplayName, Description: group.Description})
-				rollbackCancel()
-				if rollbackErr != nil {
-					fmt.Fprintf(stderr, "%v; rollback transition group %s failed: %v\n", err, group.ID, rollbackErr)
-					return 1
-				}
+			var usageErr workflowGraphMutationUsageError
+			if errors.As(err, &usageErr) {
+				fmt.Fprintln(stderr, usageErr)
+				return 2
 			}
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
 		if *jsonOut {
-			return writeCommandJSON(stdout, stderr, workflowEdgeOutput{WorkflowID: selector, EdgeID: updatedEdge.ID, TransitionGroupID: updatedEdge.TransitionGroupID, Key: updatedEdge.Key, TransitionID: updatedGroup.TransitionID, Version: resp.Version})
+			return writeCommandJSON(stdout, stderr, workflowEdgeOutput{WorkflowID: selector, EdgeID: updated.Edge.ID, TransitionGroupID: updated.Group.ID, Key: updated.Edge.Key, TransitionID: updated.Group.TransitionID, Version: result.Version})
 		}
-		fmt.Fprintf(stdout, "Updated edge `%s`: `%s` → `%s` (%s).\n", updatedEdge.Key, updatedGroup.TransitionID, workflowNodeKeyOrID(workflowNodeKeyByID(def), updatedEdge.TargetNodeID), workflowEdgeContextDetail(updatedEdge.ContextMode, updatedEdge.RequiresApproval, updatedEdge.ContextSource))
+		fmt.Fprintf(stdout, "Updated edge `%s`: `%s` → `%s` (%s).\n", updated.Edge.Key, updated.Group.TransitionID, updated.TargetNodeKey, workflowEdgeContextDetail(updated.Edge.ContextMode, updated.Edge.RequiresApproval, updated.Edge.ContextSource))
 		return 0
 	})
 }
@@ -1148,61 +1080,6 @@ func writeWorkflowSummary(stdout io.Writer, workflow serverapi.WorkflowRecord) {
 		fmt.Fprintf(stdout, "Description: %s\n", description)
 	}
 	fmt.Fprintf(stdout, "Execution target: %s\n", workflowExecutionTargetPolicySelector(workflow.ExecutionTargetPolicy))
-}
-
-func workflowGraphDraftFromDefinition(def serverapi.WorkflowDefinition) serverapi.WorkflowGraphDraft {
-	graph := serverapi.WorkflowGraphDraft{
-		NodeGroups:       make([]serverapi.WorkflowGraphDraftNodeGroup, 0, len(def.NodeGroups)),
-		Nodes:            make([]serverapi.WorkflowGraphDraftNode, 0, len(def.Nodes)),
-		TransitionGroups: make([]serverapi.WorkflowGraphDraftTransitionGroup, 0, len(def.TransitionGroups)),
-		Edges:            make([]serverapi.WorkflowGraphDraftEdge, 0, len(def.Edges)),
-	}
-	for _, group := range def.NodeGroups {
-		graph.NodeGroups = append(graph.NodeGroups, serverapi.WorkflowGraphDraftNodeGroup{
-			ID:          group.GroupID,
-			Key:         group.GroupKey,
-			DisplayName: group.DisplayName,
-		})
-	}
-	for _, node := range def.Nodes {
-		graph.Nodes = append(graph.Nodes, serverapi.WorkflowGraphDraftNode{
-			ID:                 node.ID,
-			Key:                node.Key,
-			Kind:               node.Kind,
-			DisplayName:        node.DisplayName,
-			GroupID:            node.GroupID,
-			GroupKey:           node.GroupKey,
-			SubagentRole:       node.SubagentRole,
-			CompletionMode:     node.CompletionMode,
-			ScriptPath:         node.ScriptPath,
-			JoinInputProviders: node.JoinInputProviders,
-		})
-	}
-	for _, group := range def.TransitionGroups {
-		graph.TransitionGroups = append(graph.TransitionGroups, serverapi.WorkflowGraphDraftTransitionGroup{
-			ID:           group.ID,
-			SourceNodeID: group.SourceNodeID,
-			TransitionID: group.TransitionID,
-			DisplayName:  group.DisplayName,
-			Description:  group.Description,
-		})
-	}
-	for _, edge := range def.Edges {
-		graph.Edges = append(graph.Edges, serverapi.WorkflowGraphDraftEdge{
-			ID:                edge.ID,
-			TransitionGroupID: edge.TransitionGroupID,
-			Key:               edge.Key,
-			TargetNodeID:      edge.TargetNodeID,
-			AssigneeSelection: edge.AssigneeSelection,
-			ThinkingSelection: edge.ThinkingSelection,
-			RequiresApproval:  edge.RequiresApproval,
-			ContextMode:       edge.ContextMode,
-			ContextSource:     edge.ContextSource,
-			PromptTemplate:    edge.PromptTemplate,
-			Parameters:        cloneWorkflowParameters(edge.Parameters),
-		})
-	}
-	return graph
 }
 
 func writeWorkflowDefinitionNodes(stdout io.Writer, nodes []serverapi.WorkflowNode) {
@@ -1533,36 +1410,6 @@ func listWorkflowPage(ctx context.Context, remote workflowCommandRemote, req ser
 		return serverapi.WorkflowListResponse{}, err
 	}
 	return resp, nil
-}
-
-func workflowNodeByKey(def serverapi.WorkflowDefinition, key string) (serverapi.WorkflowNode, error) {
-	trimmed := strings.TrimSpace(key)
-	for _, node := range def.Nodes {
-		if node.Key == trimmed {
-			return node, nil
-		}
-	}
-	return serverapi.WorkflowNode{}, fmt.Errorf("workflow node key %q not found", trimmed)
-}
-
-func workflowEdgeByID(def serverapi.WorkflowDefinition, edgeID string) (serverapi.WorkflowEdge, error) {
-	trimmed := strings.TrimSpace(edgeID)
-	for _, edge := range def.Edges {
-		if edge.ID == trimmed {
-			return edge, nil
-		}
-	}
-	return serverapi.WorkflowEdge{}, fmt.Errorf("workflow edge id %q not found", trimmed)
-}
-
-func workflowTransitionGroupByID(def serverapi.WorkflowDefinition, groupID string) (serverapi.WorkflowTransitionGroup, error) {
-	trimmed := strings.TrimSpace(groupID)
-	for _, group := range def.TransitionGroups {
-		if group.ID == trimmed {
-			return group, nil
-		}
-	}
-	return serverapi.WorkflowTransitionGroup{}, fmt.Errorf("workflow transition group id %q not found", trimmed)
 }
 
 func resolveWorkflowProjectID(ctx context.Context, cfg config.App, remote workflowCommandRemote, ref string) (string, error) {

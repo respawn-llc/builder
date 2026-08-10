@@ -51,16 +51,12 @@ function propertyName(member: ts.TypeElement): string | undefined {
   if (!ts.isPropertySignature(member)) {
     return undefined;
   }
-  return ts.isIdentifier(member.name) || ts.isStringLiteral(member.name)
-    ? member.name.text
-    : undefined;
+  return ts.isIdentifier(member.name) || ts.isStringLiteral(member.name) ? member.name.text : undefined;
 }
 
 function typeNames(type: ts.TypeNode): string[] {
   if (ts.isTypeLiteralNode(type)) {
-    return type.members
-      .map(propertyName)
-      .filter((name): name is string => name !== undefined);
+    return type.members.map(propertyName).filter((name): name is string => name !== undefined);
   }
   if (ts.isIntersectionTypeNode(type)) {
     return type.types.flatMap(typeNames);
@@ -134,8 +130,11 @@ function findNodePayload(sourceFile: ts.SourceFile): ts.ObjectLiteralExpression 
 
 describe("workflow Node contract ownership", () => {
   it("removes legacy fields from canonical Node and draft types", () => {
-    const models = source(canonicalPath("./models.ts"));
-    for (const name of ["WorkflowNode", "WorkflowGraphDraftNode"]) {
+    const canonicalTypes = [
+      [source(canonicalPath("./models.ts")), "WorkflowNode"],
+      [source(canonicalPath("./workflowGraphModels.ts")), "WorkflowGraphDraftNode"],
+    ] as const;
+    for (const [models, name] of canonicalTypes) {
       const members = typeLiteralMembers(typeAlias(models, name).type);
       expect(members.map(propertyName).filter((name): name is string => name !== undefined)).not.toEqual(
         expect.arrayContaining([...legacyTypeNames]),
