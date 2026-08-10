@@ -186,7 +186,12 @@ func TestPersistSessionDraftIncludesOnlyComposerInput(t *testing.T) {
 	}
 	model := newUIModelDefaults(nil)
 	testSetMainInput(model, "visible draft")
-	model.pendingInjected = queuedUserMessagesForTest("  pending injected\n")
+	model.injectedQueue = []injectedRuntimeQueueItem{{
+		LocalID:         "pending-injected",
+		Text:            "  pending injected\n",
+		State:           injectedRuntimeQueuePendingCreate,
+		submissionOrder: 1,
+	}}
 	model.queued = queuedInputsForTest("\tqueued later  ")
 
 	if err := persistSessionDraftToServer(context.Background(), narrowSessionLifecycleServer{lifecycle: client}, " session-1 ", model); err != nil {

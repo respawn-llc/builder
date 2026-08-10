@@ -102,8 +102,8 @@ func TestPathReferenceAcceptanceSkipsUnsafeCandidate(t *testing.T) {
 			if updated.isBusy() {
 				t.Fatal("did not expect completion to start submission")
 			}
-			if len(updated.queued) != 0 || len(updated.pendingInjected) != 0 {
-				t.Fatalf("did not expect completion to queue input: queued=%+v pending=%+v", updated.queued, updated.pendingInjected)
+			if len(updated.queued) != 0 || len(updated.injectedQueue) != 0 {
+				t.Fatalf("did not expect completion to queue input: queued=%+v injected=%+v", updated.queued, updated.injectedQueue)
 			}
 			if updated.transientStatus != "" {
 				t.Fatalf("unexpected status UI %q", updated.transientStatus)

@@ -12,7 +12,6 @@ import (
 	"core/server/auth"
 	serverbootstrap "core/server/bootstrap"
 	"core/server/metadata"
-	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
@@ -39,19 +38,10 @@ func TestSecondClientLiveControlsActiveRun(t *testing.T) {
 	t.Run("runtime control submit user turn", func(t *testing.T) {
 		runSecondClientLiveControlsActiveRun(t, "steered final answer", func(t *testing.T, appCore *Core, sessionID string) {
 			clientRequestID := uuid.NewString()
-			operationID, err := runtimeids.ParseRuntimeClientRequestID(clientRequestID)
-			if err != nil {
-				t.Fatalf("parse client request id: %v", err)
-			}
 			submitResp, err := appCore.RuntimeControlClient().SubmitUserTurn(context.Background(), serverapi.RuntimeSubmitUserTurnRequest{
 				ClientRequestID: clientRequestID,
 				SessionID:       sessionID,
-				OperationRef:    clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: operationID},
-				PreSubmitCompactionOperationRef: clientui.RuntimeOperationRef{
-					Kind:            clientui.RuntimeOperationKindPreSubmitCompact,
-					ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
-				},
-				Input: runtimeinput.Text("steer me"),
+				Input:           runtimeinput.Text("steer me"),
 			})
 			if err != nil {
 				t.Fatalf("SubmitUserTurn during active run: %v", err)

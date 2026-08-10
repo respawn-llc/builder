@@ -9,7 +9,6 @@ import (
 	"core/shared/protocol"
 )
 
-var ErrRuntimeOperationCanceled = errors.New("runtime operation canceled before execution")
 var ErrRuntimeCommandNotAccepted = errors.New("runtime command was not accepted")
 
 type RuntimeCommandNotAcceptedError struct {
@@ -49,7 +48,7 @@ func (e *RuntimeCommandNotAcceptedError) RPCErrorData() json.RawMessage {
 			cause.Message = ErrRuntimeCommandNotAccepted.Error()
 		}
 		var structured protocol.StructuredRPCError
-		if errors.Is(e.Cause, context.Canceled) || errors.Is(e.Cause, ErrRuntimeOperationCanceled) {
+		if errors.Is(e.Cause, context.Canceled) {
 			cause.Code = protocol.ErrCodeRequestCanceled
 		} else if errors.As(e.Cause, &structured) {
 			cause.Code = structured.RPCErrorCode()

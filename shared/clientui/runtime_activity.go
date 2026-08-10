@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 )
 
@@ -85,102 +86,23 @@ func (k RuntimeActivityActiveKind) Validate() error {
 	}
 }
 
-type RuntimeOperationKind string
-
-const (
-	RuntimeOperationKindSubmit           RuntimeOperationKind = "submit"
-	RuntimeOperationKindQueuedMessage    RuntimeOperationKind = "queued_message"
-	RuntimeOperationKindUserShell        RuntimeOperationKind = "user_shell"
-	RuntimeOperationKindCompact          RuntimeOperationKind = "compact"
-	RuntimeOperationKindPreSubmitCompact RuntimeOperationKind = "pre_submit_compact"
-)
-
-func (k RuntimeOperationKind) Validate() error {
-	switch k {
-	case RuntimeOperationKindSubmit,
-		RuntimeOperationKindQueuedMessage,
-		RuntimeOperationKindUserShell,
-		RuntimeOperationKindCompact,
-		RuntimeOperationKindPreSubmitCompact:
-		return nil
-	default:
-		return fmt.Errorf("unknown runtime operation kind %q", k)
-	}
-}
-
-func (r RuntimeOperationRef) Key() string {
-	if err := r.Validate(); err != nil {
-		return ""
-	}
-	if r.Kind == RuntimeOperationKindQueuedMessage {
-		if r.QueueItemID != nil {
-			return string(r.Kind) + ":queue_item:" + r.QueueItemID.String()
-		}
-		return string(r.Kind) + ":client_request:" + r.ClientRequestID.String()
-	}
-	return string(r.Kind) + ":" + r.ClientRequestID.String()
-}
-
-type RuntimeInputReconciliationState string
-
-const (
-	RuntimeInputReconciliationCommitted            RuntimeInputReconciliationState = "committed"
-	RuntimeInputReconciliationAccepted             RuntimeInputReconciliationState = "accepted"
-	RuntimeInputReconciliationSubmitted            RuntimeInputReconciliationState = "submitted"
-	RuntimeInputReconciliationCanceledNotCommitted RuntimeInputReconciliationState = "canceled_not_committed"
-	RuntimeInputReconciliationFailedWithRestore    RuntimeInputReconciliationState = "failed_with_restore"
-	RuntimeInputReconciliationUnknown              RuntimeInputReconciliationState = "unknown"
-	RuntimeInputReconciliationEvicted              RuntimeInputReconciliationState = "evicted"
-)
-
-func (s RuntimeInputReconciliationState) Validate() error {
-	switch s {
-	case RuntimeInputReconciliationCommitted,
-		RuntimeInputReconciliationAccepted,
-		RuntimeInputReconciliationSubmitted,
-		RuntimeInputReconciliationCanceledNotCommitted,
-		RuntimeInputReconciliationFailedWithRestore,
-		RuntimeInputReconciliationUnknown,
-		RuntimeInputReconciliationEvicted:
-		return nil
-	default:
-		return fmt.Errorf("unknown runtime input reconciliation state %q", s)
-	}
-}
-
-func (r RuntimeInputReconciliation) RestoreRecommended() bool {
-	return r.State == RuntimeInputReconciliationCanceledNotCommitted || r.State == RuntimeInputReconciliationFailedWithRestore
-}
-
-func (r RuntimeInputReconciliation) Ambiguous() bool {
-	return r.State == RuntimeInputReconciliationUnknown || r.State == RuntimeInputReconciliationEvicted
-}
-
 type RuntimeSubmitRequest struct {
-	OperationRef                    RuntimeOperationRef
-	PreSubmitCompactionOperationRef RuntimeOperationRef
-	Input                           runtimeinput.Input
+	ClientRequestID runtimeids.RuntimeClientRequestID
+	Input           runtimeinput.Input
 }
 
 func (r RuntimeSubmitRequest) Validate() error {
-	if err := validateOperationRefKind(r.OperationRef, RuntimeOperationKindSubmit); err != nil {
-		return err
-	}
-	if err := validateOperationRefKind(r.PreSubmitCompactionOperationRef, RuntimeOperationKindPreSubmitCompact); err != nil {
-		return err
+	if r.ClientRequestID.IsZero() {
+		return fmt.Errorf("runtime submit requires client request id")
 	}
 	return r.Input.Validate()
 }
 
 type RuntimeShellRequest struct {
-	OperationRef RuntimeOperationRef
-	Command      string
+	Command string
 }
 
 func (r RuntimeShellRequest) Validate() error {
-	if err := validateOperationRefKind(r.OperationRef, RuntimeOperationKindUserShell); err != nil {
-		return err
-	}
 	if strings.TrimSpace(r.Command) == "" {
 		return fmt.Errorf("shell command is required")
 	}
@@ -188,20 +110,9 @@ func (r RuntimeShellRequest) Validate() error {
 }
 
 type RuntimeCompactRequest struct {
-	OperationRef RuntimeOperationRef
-	Args         string
+	Args string
 }
 
 func (r RuntimeCompactRequest) Validate() error {
-	return validateOperationRefKind(r.OperationRef, RuntimeOperationKindCompact)
-}
-
-func validateOperationRefKind(ref RuntimeOperationRef, kind RuntimeOperationKind) error {
-	if err := ref.Validate(); err != nil {
-		return err
-	}
-	if ref.Kind != kind {
-		return fmt.Errorf("runtime operation ref kind = %q, want %q", ref.Kind, kind)
-	}
 	return nil
 }

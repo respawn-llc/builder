@@ -7,7 +7,6 @@ import (
 
 	"core/server/runtime"
 	"core/server/runtimeactivity"
-	"core/server/runtimeops"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
@@ -78,25 +77,13 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 		if err != nil {
 			return serverapi.RuntimeSubmitUserTurnResponse{}, false, err
 		}
-		accepted := false
-		response, commandErr := runtimeops.Track(s.operations, ctx, memoReq.SessionID, req.OperationRef, func(ctx context.Context, tracked runtimeops.Attempt) (serverapi.RuntimeSubmitUserTurnResponse, error) {
-			runCtx, stopRunCtx := mergeOperationContexts(ctx, tracked.Context())
-			defer stopRunCtx()
-			attempt := newRuntimeCommandAttempt(runCtx)
-			defer attempt.Finish()
-			response, err := s.submitUserTurn(attempt, clientRequestID, memoReq, projection, req)
-			accepted = attempt.Accepted()
-			if !accepted {
-				s.recordRuntimeAccessFailureOrCancellation(memoReq.SessionID, req.OperationRef, err, tracked)
-			} else if response.Steered {
-				s.operations.RecordQueuedMessageSubmitted(memoReq.SessionID, req.OperationRef)
-			}
-			if err == nil {
-				err = response.Validate()
-			}
-			return response, err
-		})
-		return response, accepted, commandErr
+		attempt := newRuntimeCommandAttempt(ctx)
+		defer attempt.Finish()
+		response, commandErr := s.submitUserTurn(attempt, clientRequestID, memoReq, projection, req)
+		if commandErr == nil {
+			commandErr = response.Validate()
+		}
+		return response, attempt.Accepted(), commandErr
 	})
 }
 
@@ -129,7 +116,6 @@ func (s *Service) submitUserTurn(
 				attempt.Context(),
 				clientRequestID.String(),
 				memoReq.SessionID,
-				req.PreSubmitCompactionOperationRef,
 				engine,
 			)
 			if compactionAccepted {
@@ -146,7 +132,7 @@ func (s *Service) submitUserTurn(
 			queued, queueErr := engine.QueueUserMessageForAutoDrainWithAcceptance(
 				projection.ExecutionText,
 				clientRequestID.String(),
-				s.runtimeOperationAcceptance(attempt, memoReq.SessionID, req.OperationRef),
+				attempt.Accept,
 			)
 			if queueErr != nil {
 				return errors.Join(acceptedCompactionErr, queueErr)
@@ -158,8 +144,7 @@ func (s *Service) submitUserTurn(
 			runCtx,
 			projection.ExecutionText,
 			clientRequestID.String(),
-			func() { s.operations.MarkOperationActive(memoReq.SessionID, req.OperationRef) },
-			s.runtimeOperationAcceptance(attempt, memoReq.SessionID, req.OperationRef),
+			attempt.Accept,
 		)
 		if err != nil {
 			return errors.Join(acceptedCompactionErr, err)
@@ -220,12 +205,11 @@ func (s *Service) trySubmitUserTurnAsActiveExecution(
 		return serverapi.RuntimeSubmitUserTurnResponse{}, false, errors.New("session runtime authority is required")
 	}
 	err = s.withLiveExecutionRuntime(attempt.Context(), sessionID, func(callbackCtx context.Context, engine *runtime.Engine) error {
-		item, accepted, err := engine.QueueUserMessageForActiveRunWithHooks(
+		item, accepted, err := engine.QueueUserMessageForActiveRunWithAcceptance(
 			callbackCtx,
 			projection.ExecutionText,
 			clientRequestID,
-			func() { s.operations.MarkOperationActive(memoReq.SessionID, req.OperationRef) },
-			s.runtimeOperationAcceptance(attempt, memoReq.SessionID, req.OperationRef),
+			attempt.Accept,
 		)
 		if errors.Is(err, runtime.ErrNoActiveLiveRun) {
 			if !activeExecutionAllowsUserTurnAutoDrain(runtimeactivity.ActiveStepFromProvider(engine)) {
@@ -234,7 +218,7 @@ func (s *Service) trySubmitUserTurnAsActiveExecution(
 			item, err = engine.QueueUserMessageForAutoDrainWithAcceptance(
 				projection.ExecutionText,
 				clientRequestID.String(),
-				s.runtimeOperationAcceptance(attempt, memoReq.SessionID, req.OperationRef),
+				attempt.Accept,
 			)
 			accepted = err == nil
 		}
@@ -273,28 +257,14 @@ func (s *Service) runPreSubmitCompaction(
 	ctx context.Context,
 	requestID string,
 	sessionID string,
-	ref clientui.RuntimeOperationRef,
 	engine *runtime.Engine,
 ) (bool, error) {
 	memoReq := sessionOnlyMemoRequest{SessionID: strings.TrimSpace(sessionID)}
 	return memoizedRuntimeCommand(ctx, requestID, memoReq, s.preSubmitCompactions, sameComparable[sessionOnlyMemoRequest], func(ctx context.Context) (bool, bool, error) {
-		accepted := false
-		_, commandErr := runtimeops.Track(s.operations, ctx, sessionID, ref, func(ctx context.Context, tracked runtimeops.Attempt) (struct{}, error) {
-			runCtx, stopRunCtx := mergeOperationContexts(ctx, tracked.Context())
-			defer stopRunCtx()
-			attempt := newRuntimeCommandAttempt(runCtx)
-			defer attempt.Finish()
-			_, compactErr := engine.CompactContextForPreSubmitWithAcceptance(
-				attempt.Context(),
-				func() { s.operations.MarkOperationActive(sessionID, ref) },
-				s.runtimeOperationAcceptance(attempt, sessionID, ref),
-			)
-			accepted = attempt.Accepted()
-			if !accepted {
-				s.recordRuntimeAccessFailureOrCancellation(sessionID, ref, compactErr, tracked)
-			}
-			return struct{}{}, compactErr
-		})
+		attempt := newRuntimeCommandAttempt(ctx)
+		defer attempt.Finish()
+		_, commandErr := engine.CompactContextForPreSubmitWithAcceptance(attempt.Context(), attempt.Accept)
+		accepted := attempt.Accepted()
 		return accepted, accepted, commandErr
 	})
 }

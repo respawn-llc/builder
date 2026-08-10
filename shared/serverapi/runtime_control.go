@@ -85,11 +85,9 @@ type RuntimeShouldCompactBeforeUserMessageResponse struct {
 }
 
 type RuntimeSubmitUserTurnRequest struct {
-	ClientRequestID                 string                       `json:"client_request_id"`
-	SessionID                       string                       `json:"session_id"`
-	Input                           RuntimeUserTurnInput         `json:"input"`
-	OperationRef                    clientui.RuntimeOperationRef `json:"operation_ref"`
-	PreSubmitCompactionOperationRef clientui.RuntimeOperationRef `json:"pre_submit_compaction_operation_ref,omitempty"`
+	ClientRequestID string               `json:"client_request_id"`
+	SessionID       string               `json:"session_id"`
+	Input           RuntimeUserTurnInput `json:"input"`
 }
 
 type RuntimeUserTurnInputKind = runtimeinput.Kind
@@ -147,30 +145,25 @@ func (r RuntimeSubmitUserTurnResponse) Validate() error {
 }
 
 type RuntimeSubmitUserShellCommandRequest struct {
-	ClientRequestID string                       `json:"client_request_id"`
-	SessionID       string                       `json:"session_id"`
-	Command         string                       `json:"command"`
-	OperationRef    clientui.RuntimeOperationRef `json:"operation_ref"`
+	ClientRequestID string `json:"client_request_id"`
+	SessionID       string `json:"session_id"`
+	Command         string `json:"command"`
 }
 
 type RuntimeCompactContextRequest struct {
-	ClientRequestID string                       `json:"client_request_id"`
-	SessionID       string                       `json:"session_id"`
-	Args            string                       `json:"args"`
-	OperationRef    clientui.RuntimeOperationRef `json:"operation_ref"`
+	ClientRequestID string `json:"client_request_id"`
+	SessionID       string `json:"session_id"`
+	Args            string `json:"args"`
 }
 
 type RuntimeInterruptRequest struct {
-	ClientRequestID      string                         `json:"client_request_id"`
-	SessionID            string                         `json:"session_id"`
-	TargetOperationRef   *clientui.RuntimeOperationRef  `json:"target_operation_ref,omitempty"`
-	PendingOperationRefs []clientui.RuntimeOperationRef `json:"pending_operation_refs,omitempty"`
+	ClientRequestID string `json:"client_request_id"`
+	SessionID       string `json:"session_id"`
 }
 
 type RuntimeInterruptResponse struct {
-	Version             clientui.ReadModelVersion                   `json:"version"`
-	Activity            clientui.RuntimeActivity                    `json:"activity"`
-	InputReconciliation clientui.RuntimeInputReconciliationSnapshot `json:"input_reconciliation"`
+	Version  clientui.ReadModelVersion `json:"version"`
+	Activity clientui.RuntimeActivity  `json:"activity"`
 }
 
 type RuntimeLiveSteerRequest struct {
@@ -315,19 +308,6 @@ func validateRuntimeControlRequest(clientRequestID string, sessionID string) err
 	return validateRequiredSessionID(sessionID)
 }
 
-func validateRuntimeOperationRef(ref clientui.RuntimeOperationRef, kind clientui.RuntimeOperationKind, clientRequestID string) error {
-	if err := ref.Validate(); err != nil {
-		return err
-	}
-	if ref.Kind != kind {
-		return errors.New("operation_ref kind does not match request")
-	}
-	if ref.ClientRequestID.String() != strings.TrimSpace(clientRequestID) {
-		return errors.New("operation_ref client_request_id must match request client_request_id")
-	}
-	return nil
-}
-
 func (r RuntimeSetSessionNameRequest) Validate() error {
 	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)
 }
@@ -364,41 +344,16 @@ func (r RuntimeSubmitUserTurnRequest) Validate() error {
 	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID); err != nil {
 		return err
 	}
-	if err := r.Input.Validate(); err != nil {
-		return err
-	}
-	if err := validateRuntimeOperationRef(r.OperationRef, clientui.RuntimeOperationKindSubmit, r.ClientRequestID); err != nil {
-		return err
-	}
-	return validateRuntimeOperationRef(r.PreSubmitCompactionOperationRef, clientui.RuntimeOperationKindPreSubmitCompact, r.PreSubmitCompactionOperationRef.ClientRequestID.String())
+	return r.Input.Validate()
 }
 func (r RuntimeSubmitUserShellCommandRequest) Validate() error {
-	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID); err != nil {
-		return err
-	}
-	return validateRuntimeOperationRef(r.OperationRef, clientui.RuntimeOperationKindUserShell, r.ClientRequestID)
+	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)
 }
 func (r RuntimeCompactContextRequest) Validate() error {
-	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID); err != nil {
-		return err
-	}
-	return validateRuntimeOperationRef(r.OperationRef, clientui.RuntimeOperationKindCompact, r.ClientRequestID)
+	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)
 }
 func (r RuntimeInterruptRequest) Validate() error {
-	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID); err != nil {
-		return err
-	}
-	if r.TargetOperationRef != nil {
-		if err := r.TargetOperationRef.Validate(); err != nil {
-			return err
-		}
-	}
-	for _, ref := range r.PendingOperationRefs {
-		if err := ref.Validate(); err != nil {
-			return err
-		}
-	}
-	return nil
+	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)
 }
 func (r RuntimeLiveSteerRequest) Validate() error {
 	if err := validateRuntimeLiveControlRequest(r.ClientRequestID, r.SessionID); err != nil {

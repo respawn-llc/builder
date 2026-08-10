@@ -24,23 +24,19 @@ type sessionSnapshot interface {
 }
 
 type runtimeReadModelSnapshotProvider interface {
-	RuntimeReadModelSnapshot(ctx context.Context, sessionID string, refs []clientui.RuntimeOperationRef) (runtimeactivity.ResponseSnapshot, error)
+	RuntimeReadModelSnapshot(ctx context.Context, sessionID string) (runtimeactivity.ResponseSnapshot, error)
 }
 
 func resolveRuntimeActivitySnapshot(
 	ctx context.Context,
 	activity runtimeReadModelSnapshotProvider,
 	sessionID string,
-	refs []clientui.RuntimeOperationRef,
 ) (runtimeactivity.ResponseSnapshot, error) {
 	if activity != nil {
-		return activity.RuntimeReadModelSnapshot(ctx, sessionID, refs)
+		return activity.RuntimeReadModelSnapshot(ctx, sessionID)
 	}
-	return runtimeactivity.BuildSnapshot(sessionID, func() (runtimeactivity.SnapshotInput, error) {
-		return runtimeactivity.SnapshotInput{
-			Resolver:            runtimeactivity.ResolverSnapshot{},
-			InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{},
-		}, nil
+	return runtimeactivity.BuildSnapshot(sessionID, func() (runtimeactivity.ResolverSnapshot, error) {
+		return runtimeactivity.ResolverSnapshot{}, nil
 	})
 }
 
@@ -110,11 +106,11 @@ func newResolvedSessionSnapshotSource(
 	}
 }
 
-func (s *resolvedSessionSnapshotSource) resolveSessionSnapshot(ctx context.Context, sessionID string, refs []clientui.RuntimeOperationRef) (sessionSnapshot, error) {
+func (s *resolvedSessionSnapshotSource) resolveSessionSnapshot(ctx context.Context, sessionID string) (sessionSnapshot, error) {
 	if s == nil {
 		return nil, errSessionStoreResolverRequired
 	}
-	readModelSnapshot, err := resolveRuntimeActivitySnapshot(ctx, s.activity, sessionID, refs)
+	readModelSnapshot, err := resolveRuntimeActivitySnapshot(ctx, s.activity, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -164,7 +160,6 @@ func (s liveRuntimeSessionSnapshot) MainView(ctx context.Context) (clientui.Runt
 		if err != nil {
 			return clientui.RuntimeMainView{}, err
 		}
-		view.InputReconciliation = s.snapshot.InputReconciliation
 		return view, nil
 	})
 }
@@ -242,7 +237,6 @@ func (s dormantSessionSnapshot) MainView(ctx context.Context) (clientui.RuntimeM
 		},
 	)
 	view.Version = s.activity.Version
-	view.InputReconciliation = s.activity.InputReconciliation
 	return resultWithContext(ctx, view)
 }
 

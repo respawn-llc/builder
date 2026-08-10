@@ -18,6 +18,15 @@ func (c uiInputController) applyCommandResultWithPreSubmitQueuePosition(commandR
 }
 
 func (c uiInputController) applyCommandResultWithPreSubmitQueuePositionAndOrigin(commandResult commands.Result, queuePosition preSubmitQueuePosition, origin activeSubmitOrigin) (tea.Model, tea.Cmd) {
+	return c.applyCommandResultWithPreSubmitQueuePositionAndOriginAndOrder(commandResult, queuePosition, origin, 0)
+}
+
+func (c uiInputController) applyCommandResultWithPreSubmitQueuePositionAndOriginAndOrder(
+	commandResult commands.Result,
+	queuePosition preSubmitQueuePosition,
+	origin activeSubmitOrigin,
+	submissionOrder uint64,
+) (tea.Model, tea.Cmd) {
 	m := c.model
 	if commandResult.PromptCommand != nil {
 		invocation := commandResult.PromptCommand
@@ -44,12 +53,13 @@ func (c uiInputController) applyCommandResultWithPreSubmitQueuePositionAndOrigin
 			return m, tea.Quit
 		}
 		m.rememberPromptCommandHistoryLocally(history)
-		return m, c.startTypedSubmissionWithPreSubmitQueuePosition(
+		return m, c.startTypedSubmissionWithPreSubmitQueuePositionAndOrder(
 			canonical,
 			runtimeinput.Input{Kind: runtimeinput.KindPromptCommand, PromptCommand: invocation},
 			queuePosition,
 			"",
 			origin,
+			submissionOrder,
 		)
 	}
 	if commandResult.SubmitUser {
@@ -69,7 +79,13 @@ func (c uiInputController) applyCommandResultWithPreSubmitQueuePositionAndOrigin
 		return m, tea.Quit
 	}
 	if commandResult.SubmitUser {
-		return m, c.startSubmissionWithPreSubmitQueuePositionAndOrigin(commandResult.User, queuePosition, "", origin)
+		return m, c.startSubmissionWithPreSubmitQueuePositionAndOriginAndOrder(
+			commandResult.User,
+			queuePosition,
+			"",
+			origin,
+			submissionOrder,
+		)
 	}
 	prefixCmd := tea.Cmd(nil)
 	if commandResult.Text != "" {

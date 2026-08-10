@@ -123,11 +123,18 @@ func TestAdmittedAssistantFinalFlushesWhenQueueAbortsIdle(t *testing.T) {
 	}
 }
 
-func TestAdmittedAssistantFinalWaitsForInjectedQueuedPromptDrain(t *testing.T) {
+func TestAdmittedAssistantFinalWaitsForLocallyOwnedQueuedPromptDrain(t *testing.T) {
 	completions := &recordingTaskCompletionSink{}
 	hooks := newTurnQueueHooks(newUnfocusedBellHooks(&countRinger{}), completions)
 	model := newTurnQueueHookTestModel(hooks)
 	model.activeSubmit = activeSubmitState{token: 1, text: "current turn"}
+	model.injectedQueue = []injectedRuntimeQueueItem{{
+		LocalID:         "local-queued-prompt",
+		Text:            "queued prompt",
+		ClientRequestID: ongoingTestClientRequestID().String(),
+		State:           injectedRuntimeQueuePendingCreate,
+		submissionOrder: 1,
+	}}
 
 	for _, message := range []clientui.TranscriptMessage{
 		ongoingHydrationMessage(1),

@@ -4,14 +4,12 @@ import (
 	"testing"
 )
 
-func TestTranscriptUserFlushCarriesTypedOperationIdentity(t *testing.T) {
-	queueItemID := transcriptTestQueueItemID(t)
+func TestTranscriptUserFlushCarriesTypedQueuedMessageIdentity(t *testing.T) {
 	flushed := TranscriptUserMessageFlushed{
 		StepID: transcriptTestStepID(t),
-		Operations: []RuntimeOperationRef{{
-			Kind:            RuntimeOperationKindQueuedMessage,
+		Messages: []QueuedUserMessageIdentity{{
 			ClientRequestID: transcriptTestClientRequestID(t),
-			QueueItemID:     &queueItemID,
+			QueueItemID:     transcriptTestQueueItemID(t),
 		}},
 	}
 	if err := flushed.Validate(); err != nil {
@@ -40,26 +38,23 @@ func TestTranscriptQueuedMessageStateUsesTypedTerminalFields(t *testing.T) {
 	}
 }
 
-func TestTranscriptInputFactsRejectMissingOrDuplicateOperationIdentity(t *testing.T) {
-	queueItemID := transcriptTestQueueItemID(t)
-	operation := RuntimeOperationRef{
-		Kind:            RuntimeOperationKindQueuedMessage,
+func TestTranscriptInputFactsRejectMissingOrDuplicateQueuedMessageIdentity(t *testing.T) {
+	identity := QueuedUserMessageIdentity{
 		ClientRequestID: transcriptTestClientRequestID(t),
-		QueueItemID:     &queueItemID,
+		QueueItemID:     transcriptTestQueueItemID(t),
 	}
 	tests := []TranscriptUserMessageFlushed{
 		{StepID: transcriptTestStepID(t)},
 		{
 			StepID: transcriptTestStepID(t),
-			Operations: []RuntimeOperationRef{
-				operation,
-				operation,
+			Messages: []QueuedUserMessageIdentity{
+				identity,
+				identity,
 			},
 		},
 		{
 			StepID: transcriptTestStepID(t),
-			Operations: []RuntimeOperationRef{{
-				Kind:            RuntimeOperationKindQueuedMessage,
+			Messages: []QueuedUserMessageIdentity{{
 				ClientRequestID: transcriptTestClientRequestID(t),
 			}},
 		},

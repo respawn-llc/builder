@@ -78,17 +78,18 @@ func (c uiInputController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	if isQueueSubmissionKey(msg) {
-		text := strings.TrimSpace(m.mainEditor.Text())
-		if text == "" {
+		submittedText := m.mainEditor.Text()
+		trimmedText := strings.TrimSpace(submittedText)
+		if trimmedText == "" {
 			return m, nil
 		}
-		if errText, blocked := m.slashCommandInputBlocked(text); blocked {
+		if errText, blocked := m.slashCommandInputBlocked(trimmedText); blocked {
 			return m, c.model.sendTransientStatusWithNoticeID(errText, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 		}
-		if handled, next, cmd := c.handleQueuedSlashCommandInput(text); handled {
+		if handled, next, cmd := c.handleQueuedSlashCommandInput(trimmedText); handled {
 			return next, cmd
 		}
-		return c.queueOrStartSubmission(text)
+		return c.queueOrStartSubmission(submittedText)
 	}
 	if !msg.Alt {
 		switch msg.Type {
@@ -146,54 +147,55 @@ func (c uiInputController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return c.handleIdleRollbackEsc()
 	case tea.KeyEnter:
 		c.normalizePendingCSIShiftEnterOnEnter()
-		text := strings.TrimSpace(m.mainEditor.Text())
-		if text == "" {
+		submittedText := m.mainEditor.Text()
+		trimmedText := strings.TrimSpace(submittedText)
+		if trimmedText == "" {
 			if !m.blocksRuntimeInput() && len(m.queued) > 0 {
 				return c.flushQueuedInputs(queueDrainOne)
 			}
 			return m, nil
 		}
-		if errText, blocked := m.slashCommandInputBlocked(text); blocked {
+		if errText, blocked := m.slashCommandInputBlocked(trimmedText); blocked {
 			return m, c.model.sendTransientStatusWithNoticeID(errText, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 		}
 		if m.blocksRuntimeInput() {
-			if handled, next, cmd := c.handleEnteredSlashCommandInput(text); handled {
+			if handled, next, cmd := c.handleEnteredSlashCommandInput(trimmedText); handled {
 				return next, cmd
 			}
 		}
 		if blocked, disconnectCmd := c.blockDisconnectedSubmission(false, ""); blocked {
 			return m, disconnectCmd
 		}
-		_, isUserShell := parseUserShellCommand(text)
+		_, isUserShell := parseUserShellCommand(trimmedText)
 		draft := m.capturePromptHistoryDraftForReuse()
 		if m.blocksRuntimeInput() {
 			if isUserShell {
-				m.queueInput(text)
+				m.queueInput(submittedText)
 				m.restoreCapturedPromptHistoryDraft(draft)
 				return m, nil
 			}
-			cmd := m.queueInjectedInput(text)
+			cmd := m.queueInjectedInput(submittedText)
 			m.restoreCapturedPromptHistoryDraft(draft)
 			return m, cmd
 		}
 		if len(m.queued) > 0 {
-			m.queueInput(text)
+			m.queueInput(submittedText)
 			m.restoreCapturedPromptHistoryDraft(draft)
 			return c.flushQueuedInputs(queueDrainOne)
 		}
-		if handled, next, cmd := c.handleEnteredSlashCommandInput(text); handled {
+		if handled, next, cmd := c.handleEnteredSlashCommandInput(trimmedText); handled {
 			return next, cmd
 		}
-		if commandResult := m.commandRegistry.Execute(text); commandResult.Handled {
-			command, _ := m.commandRegistry.Command(text)
-			recordCmd := m.recordPromptHistory(text)
+		if commandResult := m.commandRegistry.Execute(trimmedText); commandResult.Handled {
+			command, _ := m.commandRegistry.Command(trimmedText)
+			recordCmd := m.recordPromptHistory(trimmedText)
 			m.clearCommandInput(command, draft)
 			next, cmd := c.applyCommandResultWithPreSubmitQueuePosition(commandResult, preSubmitQueueBack)
 			return next, finalizeSlashCommandCmd(commandResult.Action, cmd, recordCmd)
 		}
 		m.clearInput()
 		m.restoreCapturedPromptHistoryDraft(draft)
-		return m, c.startSubmissionWithPromptHistoryAndQueuePositionAndID(text, preSubmitQueueBack, "")
+		return m, c.startSubmissionWithPromptHistoryAndQueuePositionAndID(submittedText, preSubmitQueueBack, "")
 	case tea.KeyCtrlJ, keyTypeShiftEnterCSI:
 		m.insertInputRunes([]rune{'\n'})
 		if msg.Type == keyTypeShiftEnterCSI {

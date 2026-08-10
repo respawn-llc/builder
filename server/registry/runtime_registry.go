@@ -12,7 +12,6 @@ import (
 	"core/server/attentionnotify"
 	"core/server/runtime"
 	"core/server/runtimeactivity"
-	"core/server/runtimeops"
 	"core/server/runtimeview"
 	"core/server/sessionruntime"
 	askquestion "core/server/tools"
@@ -30,7 +29,6 @@ type RuntimeRegistry struct {
 	sleepObserver              func(active bool)
 	runStateMu                 sync.Mutex
 	blockingActivitySessions   map[string]bool
-	operations                 *runtimeops.Coordinator
 	readModels                 *runtimeactivity.CoordinatorCache
 	pendingPrompts             *pendingPromptStore
 	attentionBroker            *attentionnotify.Broker
@@ -282,14 +280,6 @@ func (e *authorityRuntimeEntry) releaseSubscription(id uint64) error {
 	return retention.Close()
 }
 
-func (r *RuntimeRegistry) WithOperationCoordinator(coordinator *runtimeops.Coordinator) *RuntimeRegistry {
-	if r == nil {
-		return nil
-	}
-	r.operations = coordinator
-	return r
-}
-
 func (r *RuntimeRegistry) WithExecutionTargetResolver(resolver func(context.Context, string) (*clientui.SessionExecutionTarget, error)) *RuntimeRegistry {
 	if r == nil {
 		return nil
@@ -319,55 +309,41 @@ func (r *RuntimeRegistry) RuntimeActivity(sessionID string) (clientui.RuntimeAct
 	if r == nil || id == "" {
 		return clientui.RuntimeActivity{State: clientui.RuntimeActivityUnavailable}, nil
 	}
-	snapshot, err := r.RuntimeReadModelSnapshot(context.Background(), id, nil)
+	snapshot, err := r.RuntimeReadModelSnapshot(context.Background(), id)
 	if err != nil {
 		return clientui.RuntimeActivity{}, err
 	}
 	return snapshot.Activity, nil
 }
 
-func (r *RuntimeRegistry) RuntimeReadModelSnapshot(ctx context.Context, sessionID string, refs []clientui.RuntimeOperationRef) (runtimeactivity.ResponseSnapshot, error) {
-	update, err := r.runtimeReadModelFeedSnapshot(ctx, sessionID, refs)
+func (r *RuntimeRegistry) RuntimeReadModelSnapshot(ctx context.Context, sessionID string) (runtimeactivity.ResponseSnapshot, error) {
+	update, err := r.runtimeReadModelFeedSnapshot(ctx, sessionID)
 	if err != nil {
 		return runtimeactivity.ResponseSnapshot{}, err
 	}
 	return runtimeactivity.ResponseSnapshot{
-		Version:             update.Version,
-		Activity:            update.Activity,
-		InputReconciliation: update.InputReconciliation,
+		Version:  update.Version,
+		Activity: update.Activity,
 	}, nil
 }
 
-func (r *RuntimeRegistry) RuntimeReadModelFeedSnapshot(ctx context.Context, sessionID string, refs []clientui.RuntimeOperationRef) (clientui.RuntimeReadModelUpdate, error) {
-	return r.runtimeReadModelFeedSnapshot(ctx, sessionID, refs)
+func (r *RuntimeRegistry) RuntimeReadModelFeedSnapshot(ctx context.Context, sessionID string) (clientui.RuntimeReadModelUpdate, error) {
+	return r.runtimeReadModelFeedSnapshot(ctx, sessionID)
 }
 
-func (r *RuntimeRegistry) runtimeReadModelFeedSnapshot(ctx context.Context, sessionID string, refs []clientui.RuntimeOperationRef) (clientui.RuntimeReadModelUpdate, error) {
+func (r *RuntimeRegistry) runtimeReadModelFeedSnapshot(ctx context.Context, sessionID string) (clientui.RuntimeReadModelUpdate, error) {
 	id := strings.TrimSpace(sessionID)
 	if r == nil || id == "" {
-		return runtimeactivity.BuildFeedSnapshot(id, func() (runtimeactivity.SnapshotInput, error) {
-			return runtimeactivity.SnapshotInput{
-				Resolver:            runtimeactivity.ResolverSnapshot{},
-				InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{},
-			}, nil
+		return runtimeactivity.BuildFeedSnapshot(id, func() (runtimeactivity.ResolverSnapshot, error) {
+			return runtimeactivity.ResolverSnapshot{}, nil
 		})
 	}
-	return r.readModelFeedSnapshot(id, func() (runtimeactivity.SnapshotInput, error) {
+	return r.readModelFeedSnapshot(id, func() (runtimeactivity.ResolverSnapshot, error) {
 		resolver, err := r.runtimeActivityResolverSnapshot(ctx, id)
 		if err != nil {
-			return runtimeactivity.SnapshotInput{}, err
+			return runtimeactivity.ResolverSnapshot{}, err
 		}
-		reconciliation := clientui.RuntimeInputReconciliationSnapshot{}
-		if r.operations != nil {
-			reconciliation, err = r.operations.FeedSnapshot(id, refs)
-			if err != nil {
-				return runtimeactivity.SnapshotInput{}, err
-			}
-		}
-		return runtimeactivity.SnapshotInput{
-			Resolver:            resolver,
-			InputReconciliation: reconciliation,
-		}, nil
+		return resolver, nil
 	})
 }
 
@@ -380,11 +356,8 @@ func (r *RuntimeRegistry) readModelFeedSnapshot(sessionID string, build runtimea
 
 func (r *RuntimeRegistry) unavailableRuntimeReadModelFeedSnapshot(sessionID string) (clientui.RuntimeReadModelUpdate, error) {
 	id := strings.TrimSpace(sessionID)
-	return r.readModelFeedSnapshot(id, func() (runtimeactivity.SnapshotInput, error) {
-		return runtimeactivity.SnapshotInput{
-			Resolver:            runtimeactivity.ResolverSnapshot{},
-			InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{},
-		}, nil
+	return r.readModelFeedSnapshot(id, func() (runtimeactivity.ResolverSnapshot, error) {
+		return runtimeactivity.ResolverSnapshot{}, nil
 	})
 }
 
@@ -448,7 +421,7 @@ func (r *RuntimeRegistry) publishCurrentRuntimeActivity(sessionID string) error 
 		return nil
 	}
 	id := strings.TrimSpace(sessionID)
-	update, err := r.runtimeReadModelFeedSnapshot(context.Background(), id, nil)
+	update, err := r.runtimeReadModelFeedSnapshot(context.Background(), id)
 	if err != nil {
 		return err
 	}
@@ -505,7 +478,6 @@ func (r *RuntimeRegistry) publishRuntimeEvent(entry *authorityRuntimeEntry, evt 
 			return err
 		}
 	}
-	r.recordQueuedMessageOperationStatus(evt)
 	return nil
 }
 
@@ -573,43 +545,6 @@ func runtimeEventShouldPublishSessionStatus(evt runtime.Event) bool {
 
 func transcriptEventRequiresVisibleSubscriber(evt runtime.Event) bool {
 	return evt.Kind == runtime.EventAssistantDelta || evt.Kind == runtime.EventAssistantDeltaReset
-}
-
-func (r *RuntimeRegistry) recordQueuedMessageOperationStatus(evt runtime.Event) {
-	if r == nil || r.operations == nil || evt.Kind != runtime.EventQueuedUserMessageStatus || evt.QueuedUserMessageStatus == nil {
-		return
-	}
-	status := evt.QueuedUserMessageStatus
-	clientRequestID, err := runtimeids.ParseRuntimeClientRequestID(status.ClientRequestID)
-	if err != nil {
-		panic(fmt.Sprintf("record queued-message runtime status with invalid client request id for session %q queue item %q: %v", strings.TrimSpace(status.SessionID), strings.TrimSpace(status.QueueItemID), err))
-	}
-	queueItemID, err := runtimeids.ParseQueueItemID(status.QueueItemID)
-	if err != nil {
-		panic(fmt.Sprintf("record queued-message runtime status with invalid queue item id for session %q client request %q: %v", strings.TrimSpace(status.SessionID), strings.TrimSpace(status.ClientRequestID), err))
-	}
-	ref := clientui.RuntimeOperationRef{
-		Kind:            clientui.RuntimeOperationKindQueuedMessage,
-		ClientRequestID: clientRequestID,
-		QueueItemID:     &queueItemID,
-	}
-	var state clientui.RuntimeInputReconciliationState
-	switch status.Status {
-	case runtime.QueuedUserMessageAccepted:
-		state = clientui.RuntimeInputReconciliationAccepted
-	case runtime.QueuedUserMessageSubmitted:
-		state = clientui.RuntimeInputReconciliationSubmitted
-	case runtime.QueuedUserMessageFailed:
-		state = clientui.RuntimeInputReconciliationFailedWithRestore
-	case runtime.QueuedUserMessageDiscarded:
-		state = clientui.RuntimeInputReconciliationCanceledNotCommitted
-	default:
-		return
-	}
-	recordErr := r.operations.RecordQueuedMessageStatus(status.SessionID, ref, state)
-	if recordErr != nil {
-		panic(fmt.Sprintf("record queued-message runtime status for session %q client request %q queue item %q: %v", strings.TrimSpace(status.SessionID), clientRequestID.String(), queueItemID.String(), recordErr))
-	}
 }
 
 func (r *RuntimeRegistry) PublishRuntimeReadModelUpdate(sessionID string, update clientui.RuntimeReadModelUpdate) {

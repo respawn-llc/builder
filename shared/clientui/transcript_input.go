@@ -26,8 +26,13 @@ const (
 )
 
 type TranscriptUserMessageFlushed struct {
-	StepID     runtimeids.StepID
-	Operations []RuntimeOperationRef
+	StepID   runtimeids.StepID
+	Messages []QueuedUserMessageIdentity
+}
+
+type QueuedUserMessageIdentity struct {
+	ClientRequestID runtimeids.RuntimeClientRequestID
+	QueueItemID     runtimeids.QueueItemID
 }
 
 type TranscriptQueuedMessageState struct {
@@ -42,21 +47,21 @@ func (f TranscriptUserMessageFlushed) Validate() error {
 	if f.StepID.IsZero() {
 		return fmt.Errorf("user-message flush step id is required")
 	}
-	if len(f.Operations) == 0 {
-		return fmt.Errorf("user-message flush requires operation identities")
+	if len(f.Messages) == 0 {
+		return fmt.Errorf("user-message flush requires queued-message identities")
 	}
-	seen := make(map[runtimeids.RuntimeClientRequestID]struct{}, len(f.Operations))
-	for index, operation := range f.Operations {
-		if err := operation.Validate(); err != nil {
-			return fmt.Errorf("validate user-message flush operation %d: %w", index, err)
+	seen := make(map[runtimeids.RuntimeClientRequestID]struct{}, len(f.Messages))
+	for index, message := range f.Messages {
+		if message.ClientRequestID.IsZero() {
+			return fmt.Errorf("user-message flush identity %d requires client request id", index)
 		}
-		if operation.Kind == RuntimeOperationKindQueuedMessage && operation.QueueItemID == nil {
-			return fmt.Errorf("user-message flush queued operation %d requires queue item id", index)
+		if message.QueueItemID.IsZero() {
+			return fmt.Errorf("user-message flush identity %d requires queue item id", index)
 		}
-		if _, exists := seen[operation.ClientRequestID]; exists {
-			return fmt.Errorf("user-message flush repeats client request id %q", operation.ClientRequestID.String())
+		if _, exists := seen[message.ClientRequestID]; exists {
+			return fmt.Errorf("user-message flush repeats client request id %q", message.ClientRequestID.String())
 		}
-		seen[operation.ClientRequestID] = struct{}{}
+		seen[message.ClientRequestID] = struct{}{}
 	}
 	return nil
 }

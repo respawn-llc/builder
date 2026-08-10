@@ -85,9 +85,9 @@ func (e *Engine) CompactContextWithActiveHook(ctx context.Context, args string, 
 	return e.compactionFlow.CompactContextWithAcceptance(ctx, args, onActive, nil)
 }
 
-func (e *Engine) CompactContextWithAcceptance(ctx context.Context, args string, onActive func(), accept CommandAcceptance) (session.CommitReceipt, error) {
+func (e *Engine) CompactContextWithAcceptance(ctx context.Context, args string, accept CommandAcceptance) (session.CommitReceipt, error) {
 	e.ensureOrchestrationCollaborators()
-	return e.compactionFlow.CompactContextWithAcceptance(ctx, args, onActive, accept)
+	return e.compactionFlow.CompactContextWithAcceptance(ctx, args, nil, accept)
 }
 
 func (e *Engine) CompactContextForPreSubmit(ctx context.Context) error {
@@ -143,9 +143,9 @@ func (e *Engine) CompactContextForPreSubmitWithActiveHook(ctx context.Context, o
 	return e.compactionFlow.CompactContextForPreSubmitWithAcceptance(ctx, onActive, nil)
 }
 
-func (e *Engine) CompactContextForPreSubmitWithAcceptance(ctx context.Context, onActive func(), accept CommandAcceptance) (session.CommitReceipt, error) {
+func (e *Engine) CompactContextForPreSubmitWithAcceptance(ctx context.Context, accept CommandAcceptance) (session.CommitReceipt, error) {
 	e.ensureOrchestrationCollaborators()
-	return e.compactionFlow.CompactContextForPreSubmitWithAcceptance(ctx, onActive, accept)
+	return e.compactionFlow.CompactContextForPreSubmitWithAcceptance(ctx, nil, accept)
 }
 
 func (e *Engine) TriggerHandoff(ctx context.Context, stepID string, activeCall llm.ToolCall, summarizerPrompt string, futureAgentMessage string) (string, bool, error) {

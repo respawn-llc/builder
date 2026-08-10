@@ -39,9 +39,8 @@ func transcriptBrokerHydration(t *testing.T) clientui.TranscriptEvent {
 			CompactionMode:    "auto",
 		},
 		RuntimeReadModelUpdate: clientui.RuntimeReadModelUpdate{
-			Version:             version,
-			Activity:            clientui.RuntimeActivity{State: clientui.RuntimeActivityUnavailable},
-			InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{},
+			Version:  version,
+			Activity: clientui.RuntimeActivity{State: clientui.RuntimeActivityUnavailable},
 		},
 		CommittedRows: []clientui.TranscriptCommittedRow{},
 	}

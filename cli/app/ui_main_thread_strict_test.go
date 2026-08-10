@@ -80,7 +80,7 @@ func (c *strictRuntimeClient) SubmitRuntimeInput(_ context.Context, request clie
 		Queued: clientui.QueuedUserMessage{
 			ID:              c.submitQueuedID,
 			Text:            runtimeSubmitInputText(request),
-			ClientRequestID: request.OperationRef.ClientRequestID.String(),
+			ClientRequestID: request.ClientRequestID.String(),
 		},
 	}, nil
 }
@@ -110,8 +110,8 @@ func TestTUIStrictIOBusyEnterQueuesInjectedInputAsCommand(t *testing.T) {
 	if client.submitCalls != 1 {
 		t.Fatalf("SubmitRuntimeInput calls after command = %d, want 1", client.submitCalls)
 	}
-	if len(updated.pendingInjected) != 1 || updated.pendingInjected[0].ID != "server-queue-1" {
-		t.Fatalf("expected server queue item after command, got %+v", updated.pendingInjected)
+	if len(updated.injectedQueue) != 1 || updated.injectedQueue[0].ServerID != "server-queue-1" {
+		t.Fatalf("expected server queue item after command, got %+v", updated.injectedQueue)
 	}
 }
 

@@ -222,7 +222,7 @@ func newProjectedAuthorityRuntime(
 	reads := sessionview.NewService(testSessionViewSessionResolver{store: store}, activity, authority, nil)
 	controls := runtimecontrol.NewService(authority).WithRuntimeActivityResolver(activity)
 	runtimeClient := newUIRuntimeClientWithReads(sessionID.String(), reads, controls).(*sessionRuntimeClient)
-	snapshot, err := activity.RuntimeReadModelSnapshot(context.Background(), sessionID.String(), nil)
+	snapshot, err := activity.RuntimeReadModelSnapshot(context.Background(), sessionID.String())
 	if err != nil {
 		t.Fatalf("projected runtime snapshot: %v", err)
 	}
