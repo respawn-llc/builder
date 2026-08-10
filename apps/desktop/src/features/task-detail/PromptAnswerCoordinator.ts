@@ -37,10 +37,12 @@ export class PromptAnswerCoordinator {
       state.withSelection(key, selection).beginSubmission(key, attention),
     );
 
+    let deliveryFailed = false;
     let deliveryFailure: unknown;
     try {
       await send();
     } catch (error: unknown) {
+      deliveryFailed = true;
       deliveryFailure = error;
     }
 
@@ -48,14 +50,14 @@ export class PromptAnswerCoordinator {
       await this.dependencies.invalidateAttention();
       const freshAttention = await this.dependencies.readAttention();
       if (!this.dependencies.isMounted()) {
-        if (deliveryFailure !== undefined) {
+        if (deliveryFailed) {
           this.notify("delivery", deliveryFailure, key);
         }
         return;
       }
       if (freshAttention.some((item) => samePromptAnswerKey(promptAnswerKey(item), key))) {
         this.dependencies.updateState((state) => state.restoreSubmission(key));
-        if (deliveryFailure !== undefined) {
+        if (deliveryFailed) {
           this.notify("delivery", deliveryFailure, key);
         }
         return;

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { QuestionAttentionItem } from "@/api";
 import { parsedQuestionAttention } from "@/test-support/task-detail";
 import { PromptAnswerCoordinator } from "./PromptAnswerCoordinator";
@@ -43,6 +43,16 @@ describe("Task Detail prompt answer reconciliation", () => {
       expect(harness.failures).toEqual([expect.objectContaining({ kind, taskShortID: "TASK-1" })]);
     },
   );
+  it("reports delivery rejection even when the rejection value is undefined", async () => {
+    const attention = question("step-1", "prompt-1");
+    const harness = coordinatorHarness([[attention, draft("retry")]], {
+      readAttention: async () => [attention],
+    });
+    const send = vi.fn<() => Promise<void>>().mockRejectedValue(undefined);
+    await submit(harness.coordinator, attention, "retry", send);
+    expect(harness.state.selection(promptAnswerKey(attention))?.answer).toBe("retry");
+    expect(harness.failures).toEqual([expect.objectContaining({ cause: undefined, kind: "delivery" })]);
+  });
   it.each([
     ["step-2", "session-1"],
     ["step-1", "session-2"],
