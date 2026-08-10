@@ -21,13 +21,14 @@ var ErrOperationCanceled = serverapi.ErrRuntimeOperationCanceled
 
 type CancellationResult struct {
 	InterruptActive bool
-	cancel          context.CancelFunc
+	commit          func() error
 }
 
-func (r CancellationResult) CancelOperationAttempt() {
-	if r.cancel != nil {
-		r.cancel()
+func (r CancellationResult) Commit() error {
+	if r.commit != nil {
+		return r.commit()
 	}
+	return nil
 }
 
 type CoordinatorOption func(*Coordinator)
@@ -183,6 +184,10 @@ func Track[Resp any](
 }
 
 func (c *Coordinator) CancelOperationTarget(sessionID string, ref clientui.RuntimeOperationRef) (CancellationResult, error) {
+	return c.cancelOperationTarget(sessionID, ref, false)
+}
+
+func (c *Coordinator) cancelOperationTarget(sessionID string, ref clientui.RuntimeOperationRef, commitActive bool) (CancellationResult, error) {
 	if c == nil {
 		return CancellationResult{}, nil
 	}
@@ -207,8 +212,13 @@ func (c *Coordinator) CancelOperationTarget(sessionID string, ref clientui.Runti
 			case clientui.RuntimeInputReconciliationCommitted, clientui.RuntimeInputReconciliationSubmitted:
 				if entry := ledger.operations[key]; entry != nil && !entry.completed && entry.active && operationCancellationInterruptsActive(ref) {
 					cancel = entry.cancel
+					if !commitActive {
+						c.mu.Unlock()
+						return c.deferredActiveCancellation(sessionID, ref), nil
+					}
 					c.mu.Unlock()
-					return CancellationResult{InterruptActive: true, cancel: cancel}, nil
+					cancel()
+					return CancellationResult{}, nil
 				}
 				c.mu.Unlock()
 				return CancellationResult{}, nil
@@ -224,6 +234,10 @@ func (c *Coordinator) CancelOperationTarget(sessionID string, ref clientui.Runti
 				interruptActive = entry.active && operationCancellationInterruptsActive(ref)
 			}
 		}
+		if interruptActive && !commitActive {
+			c.mu.Unlock()
+			return c.deferredActiveCancellation(sessionID, ref), nil
+		}
 		if _, exists := ledger.tombstones[key]; !exists && len(ledger.tombstones) >= c.limit {
 			c.mu.Unlock()
 			return CancellationResult{}, fmt.Errorf("runtime operation cancellation tombstone capacity exceeded for session %q", sessionKey(sessionID))
@@ -233,12 +247,19 @@ func (c *Coordinator) CancelOperationTarget(sessionID string, ref clientui.Runti
 		c.recordLocked(ledger, ref, clientui.RuntimeInputReconciliationCanceledNotCommitted, false, c.now())
 		c.mu.Unlock()
 		if cancel != nil {
-			if interruptActive {
-				return CancellationResult{InterruptActive: true, cancel: cancel}, nil
-			}
 			cancel()
 		}
 		return CancellationResult{}, nil
+	}
+}
+
+func (c *Coordinator) deferredActiveCancellation(sessionID string, ref clientui.RuntimeOperationRef) CancellationResult {
+	return CancellationResult{
+		InterruptActive: true,
+		commit: func() error {
+			_, err := c.cancelOperationTarget(sessionID, ref, true)
+			return err
+		},
 	}
 }
 

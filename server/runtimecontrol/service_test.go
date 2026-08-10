@@ -643,7 +643,7 @@ func TestServiceSubmitUserTurnStillCancelsOnExplicitInterrupt(t *testing.T) {
 	}
 }
 
-func TestServiceCanceledAskQuestionTurnReleasesExecutionForNextUserTurn(t *testing.T) {
+func TestServicePendingQuestionRejectsInterruptAndReleasesAfterResolution(t *testing.T) {
 	toolStarted := make(chan struct{})
 	client := &runtimeControlFakeClient{responses: []llm.Response{
 		{
@@ -653,6 +653,14 @@ func TestServiceCanceledAskQuestionTurnReleasesExecutionForNextUserTurn(t *testi
 				Name:  string(toolspec.ToolAskQuestion),
 				Input: json.RawMessage(`{"question":"Continue?"}`),
 			},
+			},
+			Usage: llm.Usage{WindowTokens: 200000},
+		},
+		{
+			Assistant: llm.Message{
+				Role:    llm.RoleAssistant,
+				Content: textutil.Value("question turn completed"),
+				Phase:   textutil.Value(llm.MessagePhaseFinal),
 			},
 			Usage: llm.Usage{WindowTokens: 200000},
 		},
@@ -692,38 +700,66 @@ func TestServiceCanceledAskQuestionTurnReleasesExecutionForNextUserTurn(t *testi
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for ask_question to start")
 	}
+	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("parse session id: %v", err)
+	}
+	promptNotPending := errors.New("prompt not pending")
+	for deadline := time.Now().Add(3 * time.Second); ; {
+		err = service.authority.WithInterruptibleAgentTurn(context.Background(), sessionID, nil, func(context.Context, *runtime.Engine) error {
+			return promptNotPending
+		})
+		if errors.Is(err, sessionruntime.ErrExecutionPromptPending) {
+			break
+		}
+		if !errors.Is(err, promptNotPending) {
+			t.Fatalf("wait for pending question: %v", err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for pending question")
+		}
+		time.Sleep(time.Millisecond)
+	}
 	if _, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
 		ClientRequestID:    "interrupt-ask-cancel",
 		SessionID:          store.Meta().SessionID,
 		TargetOperationRef: &firstRequest.OperationRef,
-	}); err != nil {
-		t.Fatalf("interrupt canceled ask_question turn: %v", err)
+	}); !errors.Is(err, serverapi.ErrRuntimeCommandNotAccepted) || !errors.Is(err, sessionruntime.ErrExecutionPromptPending) {
+		t.Fatalf("pending-question Interrupt error = %v, want typed pending-prompt rejection", err)
+	}
+	if err := service.authority.SubmitPromptResolution(
+		sessionID,
+		"ask-cancel",
+		tools.AskQuestionAnswer{Freeform: textutil.Value("continue")},
+		nil,
+	); err != nil {
+		t.Fatalf("resolve pending question: %v", err)
 	}
 	select {
 	case err := <-firstDone:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("canceled ask_question turn error = %v, want context canceled", err)
+		if err != nil {
+			t.Fatalf("resolved ask_question turn: %v", err)
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("canceled ask_question turn retained its execution")
+		t.Fatal("resolved ask_question turn retained its execution")
 	}
 	if _, err := service.LiveSteer(context.Background(), serverapi.RuntimeLiveSteerRequest{
 		ClientRequestID: "b8349273-19d6-4a4b-94fb-895b48103d02",
 		SessionID:       store.Meta().SessionID,
 		Text:            "must not join the canceled execution",
 	}); !errors.Is(err, serverapi.ErrRuntimeNoActiveRun) {
-		t.Fatalf("live steer after canceled ask_question error = %v, want no active run", err)
+		t.Fatalf("live steer after resolved ask_question error = %v, want no active run", err)
 	}
 
 	next, err := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "after-ask-cancel", "next user message"))
 	if err != nil {
-		t.Fatalf("submit next user turn after canceled ask_question: %v", err)
+		t.Fatalf("submit next user turn after resolved ask_question: %v", err)
 	}
 	if next.Message == nil || *next.Message != "next turn completed" {
 		t.Fatalf("next user turn response = %+v, want completed response", next)
 	}
 	if engine.HasActiveLiveRunGroup() {
-		t.Fatal("canceled ask_question turn retained live-run ownership after next user turn")
+		t.Fatal("resolved ask_question turn retained live-run ownership after next user turn")
 	}
 	nextUserMessageCommitted := false
 	if err := engine.WithTranscriptHydrationSnapshot(func(snapshot runtime.TranscriptHydrationSnapshot) error {
@@ -1756,7 +1792,9 @@ func TestServiceSubmitUserTurnOperationTombstonePreventsPreActiveBegin(t *testin
 	if err != nil {
 		t.Fatalf("CancelOperationTarget: %v", err)
 	}
-	cancellation.CancelOperationAttempt()
+	if err := cancellation.Commit(); err != nil {
+		t.Fatalf("commit cancellation: %v", err)
+	}
 
 	if _, err := service.SubmitUserTurn(context.Background(), req); !errors.Is(err, runtimeops.ErrOperationCanceled) {
 		t.Fatalf("SubmitUserTurn after tombstone error = %v, want operation canceled", err)
@@ -2258,10 +2296,11 @@ func TestServiceSubmitUserTurnQueuesWhileCompactionOwnsSessionExecution(t *testi
 	}
 
 	if _, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
-		ClientRequestID: "interrupt-compaction",
-		SessionID:       store.Meta().SessionID,
+		ClientRequestID:    "interrupt-compaction",
+		SessionID:          store.Meta().SessionID,
+		TargetOperationRef: &compactRef,
 	}); !errors.Is(err, serverapi.ErrRuntimeCommandNotAccepted) {
-		t.Fatalf("Interrupt while compacting error = %v, want Runtime Command not accepted", err)
+		t.Fatalf("targeted Interrupt while compacting error = %v, want Runtime Command not accepted", err)
 	}
 	select {
 	case err := <-compactDone:
@@ -2285,6 +2324,7 @@ func TestServiceSubmitUserTurnQueuesWhileCompactionOwnsSessionExecution(t *testi
 	if err := <-compactDone; err != nil {
 		t.Fatalf("CompactContext: %v", err)
 	}
+	assertRuntimeControlReconciliation(t, service.operations, store.Meta().SessionID, compactRef, clientui.RuntimeInputReconciliationCommitted)
 	deadline := time.Now().Add(3 * time.Second)
 	for engine.HasQueuedUserWork() {
 		if time.Now().After(deadline) {
@@ -2393,6 +2433,72 @@ func TestServiceInterruptDiscardsPendingSteeringBeforeStoppingActiveRun(t *testi
 		}
 	case <-time.After(time.Second):
 		t.Fatal("active submit did not stop after interrupt")
+	}
+}
+
+func TestServiceInterruptPersistenceFailurePreservesPendingQueue(t *testing.T) {
+	observerErr := errors.New("interruption persistence failed")
+	gate := sessiontest.NewPersistenceGate(runtimeControlTestSessionPersistence)
+	client := newCancelObservingRuntimeControlClient()
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(client.release) }) }
+	defer release()
+	store, engine, service := newRuntimeControlTestService(
+		t,
+		client,
+		nil,
+		runtime.Config{},
+		session.WithPersistenceObserver(gate),
+	)
+	submitDone := make(chan error, 1)
+	go func() {
+		_, err := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "active-before-failed-interrupt", "keep running"))
+		submitDone <- err
+	}()
+	select {
+	case <-client.started:
+	case <-time.After(time.Second):
+		t.Fatal("active turn did not reach model thinking")
+	}
+	clientRequestID := runtimeids.NewRuntimeClientRequestID()
+	item, accepted, err := engine.QueueUserMessageForActiveRun(context.Background(), "keep queued", clientRequestID, nil)
+	if err != nil || !accepted {
+		t.Fatalf("QueueUserMessageForActiveRun accepted=%t err=%v", accepted, err)
+	}
+	queueItemID := mustRuntimeControlQueueItemID(t, item.ID)
+	ref := clientui.RuntimeOperationRef{
+		Kind:            clientui.RuntimeOperationKindQueuedMessage,
+		ClientRequestID: clientRequestID,
+		QueueItemID:     &queueItemID,
+	}
+	if err := service.operations.RecordQueuedMessageStatus(store.Meta().SessionID, ref, clientui.RuntimeInputReconciliationSubmitted); err != nil {
+		t.Fatalf("record queued message: %v", err)
+	}
+	gate.FailNext(observerErr)
+
+	if _, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
+		ClientRequestID:      "failed-interrupt",
+		SessionID:            store.Meta().SessionID,
+		PendingOperationRefs: []clientui.RuntimeOperationRef{ref},
+	}); !errors.Is(err, observerErr) {
+		t.Fatalf("Interrupt error = %v, want persistence failure", err)
+	}
+	if !engine.HasQueuedUserWork() {
+		t.Fatal("failed Interrupt discarded pending Queue work")
+	}
+	assertRuntimeControlReconciliation(t, service.operations, store.Meta().SessionID, ref, clientui.RuntimeInputReconciliationSubmitted)
+	select {
+	case <-client.ctxCanceled:
+		t.Fatal("failed Interrupt canceled active Agent Turn")
+	default:
+	}
+
+	if !engine.DiscardQueuedUserMessage(item.ID) {
+		t.Fatal("cleanup could not discard preserved Queue item")
+	}
+	release()
+	if err := <-submitDone; err != nil {
+		t.Fatalf("active turn after failed Interrupt: %v", err)
 	}
 }
 

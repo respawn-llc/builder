@@ -97,7 +97,9 @@ func TestTrackRejectsTargetCanceledBeforeAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CancelOperationTarget: %v", err)
 	}
-	result.CancelOperationAttempt()
+	if err := result.Commit(); err != nil {
+		t.Fatalf("commit cancellation: %v", err)
+	}
 
 	ran := false
 	_, err = Track(coord, context.Background(), "session-1", ref, func(context.Context, Attempt) (struct{}, error) {
@@ -116,6 +118,7 @@ func TestCoordinatorCancelInFlightAttempt(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		_, err := Track(coord, context.Background(), "session-1", ref, func(_ context.Context, attempt Attempt) (struct{}, error) {
+			coord.MarkOperationActive("session-1", ref)
 			close(started)
 			<-attempt.Context().Done()
 			return struct{}{}, attempt.Context().Err()
@@ -128,7 +131,23 @@ func TestCoordinatorCancelInFlightAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CancelOperationTarget: %v", err)
 	}
-	result.CancelOperationAttempt()
+	if !result.InterruptActive {
+		t.Fatal("active cancellation did not require exact Agent-Turn interruption")
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("active attempt canceled before interrupt acceptance: %v", err)
+	default:
+	}
+	assertState(
+		t,
+		mustFeedSnapshot(t, coord, "session-1", []clientui.RuntimeOperationRef{ref}),
+		ref,
+		clientui.RuntimeInputReconciliationAccepted,
+	)
+	if err := result.Commit(); err != nil {
+		t.Fatalf("commit active cancellation: %v", err)
+	}
 	select {
 	case err := <-done:
 		if !errors.Is(err, context.Canceled) {
@@ -247,7 +266,9 @@ func TestCoordinatorCommittedActiveAttemptCanRequestInterrupt(t *testing.T) {
 	if !result.InterruptActive {
 		t.Fatal("committed active attempt did not request active interrupt")
 	}
-	result.CancelOperationAttempt()
+	if err := result.Commit(); err != nil {
+		t.Fatalf("commit active cancellation: %v", err)
+	}
 	close(release)
 	if err := <-done; err != nil {
 		t.Fatalf("Track completion: %v", err)

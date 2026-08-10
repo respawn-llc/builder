@@ -72,7 +72,7 @@ type Service struct {
 	userTurns            *requestmemo.Memo[sessionUserTurnMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSubmitUserTurnResponse]]
 	userShells           *requestmemo.Memo[sessionCommandMemoRequest, committedRuntimeMutationResult[struct{}]]
 	compactions          *requestmemo.Memo[sessionStringMemoRequest, committedRuntimeMutationResult[struct{}]]
-	preSubmitCompactions *requestmemo.Memo[sessionOnlyMemoRequest, committedRuntimeMutationResult[struct{}]]
+	preSubmitCompactions *requestmemo.Memo[sessionOnlyMemoRequest, committedRuntimeMutationResult[bool]]
 
 	localEntries   *requestmemo.Memo[localEntryMemoRequest, struct{}]
 	queuedDiscards *requestmemo.Memo[queuedUserMessageMemoRequest, serverapi.RuntimeDiscardQueuedUserMessageResponse]
@@ -210,7 +210,7 @@ func NewServiceWithGoalCommands(
 		userTurns:            requestmemo.New[sessionUserTurnMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSubmitUserTurnResponse]](),
 		userShells:           requestmemo.New[sessionCommandMemoRequest, committedRuntimeMutationResult[struct{}]](),
 		compactions:          requestmemo.New[sessionStringMemoRequest, committedRuntimeMutationResult[struct{}]](),
-		preSubmitCompactions: requestmemo.New[sessionOnlyMemoRequest, committedRuntimeMutationResult[struct{}]](),
+		preSubmitCompactions: requestmemo.New[sessionOnlyMemoRequest, committedRuntimeMutationResult[bool]](),
 
 		localEntries:   requestmemo.New[localEntryMemoRequest, struct{}](),
 		queuedDiscards: requestmemo.New[queuedUserMessageMemoRequest, serverapi.RuntimeDiscardQueuedUserMessageResponse](),
@@ -742,6 +742,15 @@ func (s *Service) interrupt(ctx context.Context, req runtimeInterruptMemoRequest
 		return err
 	}
 	mutateRuntime := func(_ context.Context, engine *runtime.Engine) error {
+		if interruptActive {
+			interrupted, err := engine.TryInterruptActiveAgentTurn()
+			if err != nil {
+				return err
+			}
+			if !interrupted {
+				return serverapi.NewRuntimeCommandNotAcceptedError(errors.New("no active Agent Turn"))
+			}
+		}
 		for _, ref := range pendingRefs {
 			if ref.Kind != clientui.RuntimeOperationKindQueuedMessage || ref.QueueItemID == nil {
 				continue
@@ -755,15 +764,6 @@ func (s *Service) interrupt(ctx context.Context, req runtimeInterruptMemoRequest
 				clientui.RuntimeInputReconciliationCanceledNotCommitted,
 			); err != nil {
 				return err
-			}
-		}
-		if interruptActive {
-			interrupted, err := engine.TryInterruptActiveAgentTurn()
-			if err != nil {
-				return err
-			}
-			if !interrupted {
-				return serverapi.NewRuntimeCommandNotAcceptedError(errors.New("no active Agent Turn"))
 			}
 		}
 		return nil
@@ -784,7 +784,15 @@ func (s *Service) interrupt(ctx context.Context, req runtimeInterruptMemoRequest
 		}
 		var withoutExecution func() error
 		if req.TargetOperationRef != nil {
-			withoutExecution = cancelTarget
+			withoutExecution = func() error {
+				if err := cancelTarget(); err != nil {
+					return err
+				}
+				if cancelResult.InterruptActive {
+					return sessionruntime.ErrExecutionNoLongerLive
+				}
+				return cancelResult.Commit()
+			}
 		}
 		err = s.authority.WithInterruptibleAgentTurn(ctx, id, withoutExecution, func(ctx context.Context, engine *runtime.Engine) error {
 			if err := cancelTarget(); err != nil {
@@ -793,7 +801,9 @@ func (s *Service) interrupt(ctx context.Context, req runtimeInterruptMemoRequest
 			if err := mutateRuntime(ctx, engine); err != nil {
 				return err
 			}
-			cancelResult.CancelOperationAttempt()
+			if err := cancelResult.Commit(); err != nil {
+				return err
+			}
 			attemptCanceled = true
 			return nil
 		})
@@ -810,7 +820,9 @@ func (s *Service) interrupt(ctx context.Context, req runtimeInterruptMemoRequest
 		return serverapi.RuntimeInterruptResponse{}, err
 	}
 	if req.TargetOperationRef != nil && !attemptCanceled {
-		cancelResult.CancelOperationAttempt()
+		if err := cancelResult.Commit(); err != nil {
+			return serverapi.RuntimeInterruptResponse{}, err
+		}
 	}
 	return s.runtimeInterruptResponse(sessionID, pendingRefs)
 }

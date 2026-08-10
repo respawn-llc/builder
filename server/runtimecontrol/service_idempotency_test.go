@@ -378,14 +378,21 @@ func TestServiceCompactionSerializesTargetCancellationWithHistoryCommit(t *testi
 	assertRuntimeControlReconciliation(t, operations, request.SessionID, ref, clientui.RuntimeInputReconciliationCommitted)
 }
 
-func TestServiceSubmitUserTurnRunsParentOwnedPreSubmitCompaction(t *testing.T) {
-	store, engine, client, service := newRuntimeControlCompactionFixture(t)
+func TestServiceSubmitUserTurnContinuesAfterAcceptedPreSubmitCompactionError(t *testing.T) {
+	observerErr := errors.New("pre-submit history replacement observer failed")
+	gate := sessiontest.NewPersistenceGate(runtimeControlTestSessionPersistence)
+	store, engine, client, service := newRuntimeControlCompactionFixture(t, session.WithPersistenceObserver(gate))
 	if shouldCompact, compactErr := engine.ShouldCompactBeforeUserMessage(context.Background(), "after compaction"); !shouldCompact || compactErr != nil {
 		t.Fatalf("pre-submit compaction precondition = (%t, %v), usage=%+v", shouldCompact, compactErr, engine.ContextUsage())
 	}
-	resp, err := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "parent-compaction", "after compaction"))
-	if err != nil || !resp.Compacted || resp.Message == nil || *resp.Message != "done" {
-		t.Fatalf("SubmitUserTurn = (%+v, %v), usage=%+v, want compacted assistant response", resp, err, engine.ContextUsage())
+	request := runtimeControlUserTurnRequest(store, "parent-compaction", "after compaction")
+	gate.FailNext(observerErr)
+	for attempt := 0; attempt < 2; attempt++ {
+		resp, err := service.SubmitUserTurn(context.Background(), request)
+		if !errors.Is(err, observerErr) || errors.Is(err, serverapi.ErrRuntimeCommandNotAccepted) ||
+			!resp.Compacted || resp.Message == nil || *resp.Message != "done" {
+			t.Fatalf("SubmitUserTurn attempt %d = (%+v, %v), want accepted compacted response and observer error", attempt+1, resp, err)
+		}
 	}
 	if client.compactionCalls != 1 ||
 		countEventsByKind(t, store, "history_replaced") != 1 ||

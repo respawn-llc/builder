@@ -119,21 +119,23 @@ func (s *Service) submitUserTurn(
 		}
 		compacted := false
 		compactionBusy := false
+		var acceptedCompactionErr error
 		if shouldCompact {
-			compactErr := s.runPreSubmitCompaction(
+			compactionAccepted, compactErr := s.runPreSubmitCompaction(
 				attempt.Context(),
 				clientRequestID.String(),
 				memoReq.SessionID,
 				req.PreSubmitCompactionOperationRef,
 				engine,
 			)
-			if compactErr != nil {
+			if compactionAccepted {
+				compacted = true
+				acceptedCompactionErr = compactErr
+			} else if compactErr != nil {
 				if !errors.Is(compactErr, runtime.ErrAgentBusy) {
 					return compactErr
 				}
 				compactionBusy = true
-			} else {
-				compacted = true
 			}
 		}
 		if compactionBusy {
@@ -143,7 +145,7 @@ func (s *Service) submitUserTurn(
 				s.runtimeOperationAcceptance(attempt, memoReq.SessionID, req.OperationRef),
 			)
 			if queueErr != nil {
-				return queueErr
+				return errors.Join(acceptedCompactionErr, queueErr)
 			}
 			response = serverapi.RuntimeSubmitUserTurnResponse{
 				Compacted:   compacted,
@@ -151,7 +153,7 @@ func (s *Service) submitUserTurn(
 				Steered:     true,
 				QueueItemID: queued.ID,
 			}
-			return nil
+			return acceptedCompactionErr
 		}
 		outcome, queued, err := engine.SubmitUserMessageOrSteerWithAcceptance(
 			runCtx,
@@ -161,7 +163,7 @@ func (s *Service) submitUserTurn(
 			s.runtimeOperationAcceptance(attempt, memoReq.SessionID, req.OperationRef),
 		)
 		if err != nil {
-			return err
+			return errors.Join(acceptedCompactionErr, err)
 		}
 		if queued != nil {
 			response = serverapi.RuntimeSubmitUserTurnResponse{
@@ -170,7 +172,7 @@ func (s *Service) submitUserTurn(
 				Steered:     true,
 				QueueItemID: queued.ID,
 			}
-			return nil
+			return acceptedCompactionErr
 		}
 		response = serverapi.RuntimeSubmitUserTurnResponse{
 			Compacted:  compacted,
@@ -186,7 +188,7 @@ func (s *Service) submitUserTurn(
 			response.ResultKind = clientui.UserTurnResultKindSilentFinal
 			response.Message = textutil.Value("")
 		}
-		return nil
+		return acceptedCompactionErr
 	})
 	if err == nil || attempt.Accepted() || !errors.Is(err, serverapi.ErrSessionRunStarting) {
 		return response, err
@@ -283,9 +285,9 @@ func (s *Service) runPreSubmitCompaction(
 	sessionID string,
 	ref clientui.RuntimeOperationRef,
 	engine *runtime.Engine,
-) error {
+) (bool, error) {
 	memoReq := sessionOnlyMemoRequest{SessionID: strings.TrimSpace(sessionID)}
-	_, err := memoizedRuntimeCommand(ctx, requestID, memoReq, s.preSubmitCompactions, sameComparable[sessionOnlyMemoRequest], func(ctx context.Context) (struct{}, bool, error) {
+	return memoizedRuntimeCommand(ctx, requestID, memoReq, s.preSubmitCompactions, sameComparable[sessionOnlyMemoRequest], func(ctx context.Context) (bool, bool, error) {
 		accepted := false
 		_, commandErr := runtimeops.Track(s.operations, ctx, sessionID, ref, func(ctx context.Context, tracked runtimeops.Attempt) (struct{}, error) {
 			runCtx, stopRunCtx := mergeOperationContexts(ctx, tracked.Context())
@@ -303,7 +305,6 @@ func (s *Service) runPreSubmitCompaction(
 			}
 			return struct{}{}, compactErr
 		})
-		return struct{}{}, accepted, commandErr
+		return accepted, accepted, commandErr
 	})
-	return err
 }
