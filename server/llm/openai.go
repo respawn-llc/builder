@@ -3,8 +3,10 @@ package llm
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"core/shared/textutil"
+	"core/shared/transcript"
 )
 
 type OpenAIRequest struct {
@@ -48,7 +50,7 @@ func RequestAsOpenAI(request Request) OpenAIRequest {
 }
 
 type OpenAIResponse struct {
-	AssistantText  string
+	AssistantText  *string
 	ProviderPhase  *ProviderPhase
 	ToolCalls      []ToolCall
 	Reasoning      []ReasoningEntry
@@ -137,7 +139,7 @@ func responseFromOpenAI(providerResp OpenAIResponse) (Response, error) {
 	return Response{
 		Assistant: Message{
 			Role:           RoleAssistant,
-			Content:        textutil.OptionalExactString(providerResp.AssistantText),
+			Content:        resolveAssistantContent(RoleAssistant, assistantPhase, providerResp.AssistantText),
 			Phase:          typedAssistantPhase,
 			ToolCalls:      append([]ToolCall(nil), providerResp.ToolCalls...),
 			ReasoningItems: append([]ReasoningItem(nil), providerResp.ReasoningItems...),
@@ -149,6 +151,21 @@ func responseFromOpenAI(providerResp OpenAIResponse) (Response, error) {
 		OutputItems:    CloneResponseItems(providerResp.OutputItems),
 		Usage:          providerResp.Usage,
 	}, nil
+}
+
+func resolveAssistantContent(role Role, phase MessagePhase, content *string) *string {
+	if content == nil {
+		return nil
+	}
+	if strings.TrimSpace(*content) == "" &&
+		!transcript.IsBlankAssistantFinal(transcript.AssistantFinalCandidate{
+			IsAssistant: role == RoleAssistant,
+			IsFinal:     phase == MessagePhaseFinal,
+			Content:     content,
+		}) {
+		return nil
+	}
+	return textutil.Pointer(content)
 }
 
 func (c *OpenAIClient) GenerateStream(ctx context.Context, request Request, onDelta func(text string)) (Response, error) {

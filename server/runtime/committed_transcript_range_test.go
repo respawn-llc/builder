@@ -464,7 +464,7 @@ func TestReopenedCompactionPublishesVisibleTranscriptCoordinates(t *testing.T) {
 			compactionModeAuto,
 			1,
 			"",
-			"",
+			nil,
 			llm.ItemsFromMessages([]llm.Message{{
 				Role:        llm.RoleUser,
 				MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
@@ -539,7 +539,7 @@ func TestHistoryReplacementPublishesPreservedUserMessageBeforeFollowingLocalEntr
 			compactionModeManual,
 			1,
 			"",
-			"",
+			nil,
 			llm.ItemsFromMessages([]llm.Message{
 				{
 					Role:        llm.RoleUser,
