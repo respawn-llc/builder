@@ -6,8 +6,8 @@ import (
 )
 
 func TestProtocolVersionIncludesCompleteGenericIdentityCut(t *testing.T) {
-	if Version != "102" {
-		t.Fatalf("Version = %q, want 102", Version)
+	if Version != "106" {
+		t.Fatalf("Version = %q, want 106 after merging main's protocol 105", Version)
 	}
 }
 

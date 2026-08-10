@@ -18,9 +18,9 @@ func (a runtimeEventAdmission) applySteering(stepID string, intents ...steeringI
 
 func (a runtimeEventAdmission) applySteeringOptional(stepID *string, intents ...steeringIntent) error {
 	if stepID == nil {
-		return a.engine.applySteeringBatch("", intents...)
+		return a.applySteering("", intents...)
 	}
-	return a.engine.applySteeringBatch(*stepID, intents...)
+	return a.applySteering(*stepID, intents...)
 }
 
 func (a runtimeEventAdmission) Context() context.Context {
