@@ -10,11 +10,12 @@ func TestSubmitDoneBlankFinalAbortsTurnQueueNotificationState(t *testing.T) {
 	hook := &submitDoneTurnQueueHook{}
 	model := newProjectedStaticUIModel(WithUITurnQueueHook(hook))
 	model.activeSubmit = activeSubmitState{token: 1, text: "turn"}
+	resultKind := clientui.UserTurnResultKindSilentFinal
 
 	next, _ := model.Update(submitDoneMsg{
-		token:       1,
-		message:     "",
-		silentFinal: true,
+		token:      1,
+		message:    "",
+		resultKind: &resultKind,
 	})
 	if next == nil {
 		t.Fatal("submit completion returned nil model")
@@ -28,11 +29,13 @@ func TestSubmitDoneQueuedBlankFinalDoesNotAbortQueueNotificationState(t *testing
 	hook := &submitDoneTurnQueueHook{}
 	model := newProjectedStaticUIModel(WithUITurnQueueHook(hook))
 	model.activeSubmit = activeSubmitState{token: 1, text: "turn"}
+	resultKind := clientui.UserTurnResultKindQueued
 
 	next, _ := model.Update(submitDoneMsg{
-		token:   1,
-		message: "",
-		queued:  clientui.QueuedUserMessage{ID: "queued-1"},
+		token:      1,
+		message:    "",
+		queued:     clientui.QueuedUserMessage{ID: "queued-1"},
+		resultKind: &resultKind,
 	})
 	if next == nil {
 		t.Fatal("submit completion returned nil model")
