@@ -2259,28 +2259,6 @@ func TestServiceSubmitUserTurnQueuesWhileCompactionOwnsSessionExecution(t *testi
 	}
 }
 
-func TestActiveExecutionAllowsUserTurnAutoDrainOnlyForCompaction(t *testing.T) {
-	for _, test := range []struct {
-		name     string
-		snapshot *runtimeactivity.ActiveStepSnapshot
-		want     bool
-	}{
-		{name: "no active step"},
-		{name: "user turn", snapshot: &runtimeactivity.ActiveStepSnapshot{ActiveKind: clientui.RuntimeActivityActiveKindUserTurn}},
-		{name: "workflow turn", snapshot: &runtimeactivity.ActiveStepSnapshot{ActiveKind: clientui.RuntimeActivityActiveKindWorkflowTurn}},
-		{name: "goal loop", snapshot: &runtimeactivity.ActiveStepSnapshot{ActiveKind: clientui.RuntimeActivityActiveKindGoalLoop}},
-		{name: "runtime maintenance", snapshot: &runtimeactivity.ActiveStepSnapshot{ActiveKind: clientui.RuntimeActivityActiveKindRuntimeMaintenance}},
-		{name: "compaction", snapshot: &runtimeactivity.ActiveStepSnapshot{ActiveKind: clientui.RuntimeActivityActiveKindCompaction}, want: true},
-		{name: "pre-submit compaction", snapshot: &runtimeactivity.ActiveStepSnapshot{ActiveKind: clientui.RuntimeActivityActiveKindPreSubmitCompaction}, want: true},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			if got := activeExecutionAllowsUserTurnAutoDrain(test.snapshot); got != test.want {
-				t.Fatalf("activeExecutionAllowsUserTurnAutoDrain(%+v) = %t, want %t", test.snapshot, got, test.want)
-			}
-		})
-	}
-}
-
 func TestServiceInterruptDiscardsPendingSteeringBeforeStoppingActiveRun(t *testing.T) {
 	client := newSteeringDrainRuntimeControlClient()
 	defer close(client.releaseFirst)
@@ -2425,6 +2403,71 @@ func TestServiceInterruptTargetQueuedServerMessageDiscardsRuntimeWork(t *testing
 		t.Fatal("queued runtime work remained after interrupt targeted server queue item")
 	}
 	assertRuntimeControlReconciliation(t, service.operations, sessionStore.Meta().SessionID, target, clientui.RuntimeInputReconciliationCanceledNotCommitted)
+}
+
+func TestServiceDiscardingQueuedTurnPreservesActiveParentSubmit(t *testing.T) {
+	client := newCancelObservingRuntimeControlClient()
+	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
+	parent := runtimeControlUserTurnRequest(store, "parent-submit", "keep running")
+	parentDone := make(chan error, 1)
+	go func() {
+		_, err := service.SubmitUserTurn(context.Background(), parent)
+		parentDone <- err
+	}()
+	select {
+	case <-client.started:
+	case <-time.After(time.Second):
+		t.Fatal("parent submit did not become active")
+	}
+
+	child := runtimeControlUserTurnRequest(store, "queued-child", "discard only me")
+	queued, err := service.SubmitUserTurn(context.Background(), child)
+	if err != nil {
+		t.Fatalf("queue child turn: %v", err)
+	}
+	queueItemID := mustRuntimeControlQueueItemID(t, queued.QueueItemID)
+	queuedRef := clientui.RuntimeOperationRef{
+		Kind:            clientui.RuntimeOperationKindQueuedMessage,
+		ClientRequestID: child.OperationRef.ClientRequestID,
+		QueueItemID:     &queueItemID,
+	}
+
+	if _, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
+		ClientRequestID:    "discard-queued-child",
+		SessionID:          store.Meta().SessionID,
+		TargetOperationRef: &queuedRef,
+	}); err != nil {
+		t.Fatalf("discard queued child: %v", err)
+	}
+	select {
+	case <-client.ctxCanceled:
+		t.Fatal("discarding a queued child interrupted its active parent")
+	case <-time.After(50 * time.Millisecond):
+	}
+	assertRuntimeControlReconciliation(
+		t,
+		service.operations,
+		store.Meta().SessionID,
+		queuedRef,
+		clientui.RuntimeInputReconciliationCanceledNotCommitted,
+	)
+	assertRuntimeControlReconciliation(
+		t,
+		service.operations,
+		store.Meta().SessionID,
+		parent.OperationRef,
+		clientui.RuntimeInputReconciliationCommitted,
+	)
+
+	close(client.release)
+	select {
+	case err := <-parentDone:
+		if err != nil {
+			t.Fatalf("parent submit after queued discard: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("parent submit did not finish after release")
+	}
 }
 
 func countDirectShellCommandMessages(t *testing.T, store *session.Store, command string) int {

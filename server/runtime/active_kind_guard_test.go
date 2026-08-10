@@ -32,7 +32,7 @@ func TestExclusiveStepCallSitesDeclareActiveKind(t *testing.T) {
 		"server/runtime/engine.go:SubmitAgentSteerWithHooks": {
 			activeKind: "ActiveKindUserTurn", spinnerPolicy: "model-turn", statusPolicy: "user-turn", interruptPolicy: "interruptible", goalSuspension: "never", goalAutoResume: "after-success-only",
 		},
-		"server/runtime/engine.go:SubmitWorkflowTurn": {
+		"server/runtime/engine.go:SubmitWorkflowTurnWithActiveHook": {
 			activeKind: "ActiveKindWorkflowTurn", spinnerPolicy: "workflow-turn", statusPolicy: "workflow-turn", interruptPolicy: "interruptible", goalSuspension: "never", goalAutoResume: "never",
 		},
 		"server/runtime/engine.go:submitUserShellCommand": {

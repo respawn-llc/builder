@@ -107,6 +107,13 @@ func (e *Engine) CompactContextForWorkflowPostCompletion(ctx context.Context) wo
 // turn succeeds. A failed target attempt therefore preserves the boundary for
 // the existing Resume path.
 func (e *Engine) SubmitWorkflowContinuationTurn(ctx context.Context) (llm.Message, error) {
+	return e.SubmitWorkflowContinuationTurnWithActiveHook(ctx, nil)
+}
+
+func (e *Engine) SubmitWorkflowContinuationTurnWithActiveHook(
+	ctx context.Context,
+	onActive func(),
+) (llm.Message, error) {
 	if e == nil {
 		return llm.Message{}, errors.New("runtime engine is required")
 	}
@@ -115,7 +122,7 @@ func (e *Engine) SubmitWorkflowContinuationTurn(ctx context.Context) (llm.Messag
 			return llm.Message{}, err
 		}
 	}
-	assistant, err := e.SubmitWorkflowTurn(ctx)
+	assistant, err := e.SubmitWorkflowTurnWithActiveHook(ctx, onActive)
 	if err != nil {
 		return llm.Message{}, err
 	}

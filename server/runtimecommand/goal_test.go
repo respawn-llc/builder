@@ -29,13 +29,15 @@ type goalAuthorityPersistenceObserver struct {
 
 	mu        sync.Mutex
 	snapshots []session.PersistedStoreSnapshot
+	err       error
 }
 
 func (o *goalAuthorityPersistenceObserver) ObservePersistedStore(ctx context.Context, snapshot session.PersistedStoreSnapshot) error {
 	o.mu.Lock()
 	o.snapshots = append(o.snapshots, snapshot)
+	observerErr := o.err
 	o.mu.Unlock()
-	return o.persistence.ObservePersistedStore(ctx, snapshot)
+	return errors.Join(o.persistence.ObservePersistedStore(ctx, snapshot), observerErr)
 }
 
 func (o *goalAuthorityPersistenceObserver) ObserveEventLogReconciliation(ctx context.Context, reconciliation session.PersistedEventLogReconciliation) error {
@@ -46,6 +48,12 @@ func (o *goalAuthorityPersistenceObserver) resetSnapshots() {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.snapshots = nil
+}
+
+func (o *goalAuthorityPersistenceObserver) setError(err error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.err = err
 }
 
 func (o *goalAuthorityPersistenceObserver) recordedSnapshots() []session.PersistedStoreSnapshot {
@@ -263,6 +271,7 @@ func TestGoalAuthorityLiveSetUsesRuntimeCommand(t *testing.T) {
 func newGoalAuthorityFixture(
 	t *testing.T,
 	eventFeed sessionruntime.AgentResourceEventFeed,
+	stepLifecycles ...sessionruntime.AgentResourceStepLifecycle,
 ) (*session.Store, *sessionruntime.Authority, *GoalAuthority, *goalAuthorityPersistenceObserver) {
 	t.Helper()
 	persistence := sessiontest.NewPersistence()
@@ -284,11 +293,15 @@ func newGoalAuthorityFixture(
 	if err := store.EnsureDurable(); err != nil {
 		t.Fatalf("ensure session durable: %v", err)
 	}
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+	authorityOptions := sessionruntime.AuthorityOptions{
 		PersistenceRoot: t.TempDir(),
 		StoreOptions:    options,
 		EventFeed:       eventFeed,
-	})
+	}
+	if len(stepLifecycles) > 0 {
+		authorityOptions.StepLifecycle = stepLifecycles[0]
+	}
+	authority := sessionruntime.NewAuthority(authorityOptions)
 	t.Cleanup(func() {
 		if err := authority.Close(context.Background()); err != nil {
 			t.Errorf("close authority: %v", err)
@@ -303,13 +316,37 @@ func workflowGoalAuthorityPlan(t *testing.T, workdir string) sessionruntime.Agen
 	if err != nil {
 		t.Fatalf("create goal-authority Current Node reference: %v", err)
 	}
+	return goalAuthorityPlan(t, workdir, goalAuthorityClient{}, &workflowruntime.CurrentNodeExecutionConfig{
+		ScopeID: runtimeids.NewExecutionScopeID(),
+		Instructions: workflowruntime.TaskInstructions{
+			CurrentNode: reference,
+		},
+	})
+}
+
+func ordinaryGoalAuthorityPlan(t *testing.T, workdir string, clients ...llm.Client) sessionruntime.AgentRuntimePlan {
+	t.Helper()
+	var client llm.Client = goalAuthorityClient{}
+	if len(clients) > 0 {
+		client = clients[0]
+	}
+	return goalAuthorityPlan(t, workdir, client, nil)
+}
+
+func goalAuthorityPlan(
+	t *testing.T,
+	workdir string,
+	client llm.Client,
+	currentNodeExecution *workflowruntime.CurrentNodeExecutionConfig,
+) sessionruntime.AgentRuntimePlan {
+	t.Helper()
 	settings := config.DefaultOnboardingSettings()
 	settings.ProviderOverride = "openai"
 	settings.Model = "gpt-5"
 	settings.Reviewer.Frequency = "off"
 	plan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
 		Settings:     settings,
-		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
+		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion, toolspec.ToolExecCommand},
 		FilesystemContext: func() tools.FilesystemContext {
 			context, err := runtimewire.NewFilesystemContext(workdir, workdir, metadata.ProjectWorkspaceBoundary{ProjectID: "test"})
 			if err != nil {
@@ -317,13 +354,8 @@ func workflowGoalAuthorityPlan(t *testing.T, workdir string) sessionruntime.Agen
 			}
 			return context
 		}(),
-		Client: goalAuthorityClient{},
-		CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
-			ScopeID: runtimeids.NewExecutionScopeID(),
-			Instructions: workflowruntime.TaskInstructions{
-				CurrentNode: reference,
-			},
-		},
+		Client:               client,
+		CurrentNodeExecution: currentNodeExecution,
 	})
 	if err != nil {
 		t.Fatalf("new runtime plan: %v", err)

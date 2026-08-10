@@ -719,6 +719,13 @@ func (e *Engine) submitUserMessage(ctx context.Context, text string, onActive fu
 }
 
 func (e *Engine) SubmitWorkflowTurn(ctx context.Context) (assistant llm.Message, err error) {
+	return e.SubmitWorkflowTurnWithActiveHook(ctx, nil)
+}
+
+func (e *Engine) SubmitWorkflowTurnWithActiveHook(
+	ctx context.Context,
+	onActive func(),
+) (assistant llm.Message, err error) {
 	if !e.currentNodeExecutionActive() {
 		return llm.Message{}, errors.New("workflow turn requires an active Current Node execution")
 	}
@@ -728,6 +735,9 @@ func (e *Engine) SubmitWorkflowTurn(ctx context.Context) (assistant llm.Message,
 
 	e.ensureOrchestrationCollaborators()
 	err = e.stepLifecycle.RunNext(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindWorkflowTurn}, func(stepCtx context.Context, stepID string) error {
+		if onActive != nil {
+			onActive()
+		}
 		if err := e.ensureMetaContextForRequest(stepCtx, stepID); err != nil {
 			return err
 		}

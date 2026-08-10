@@ -214,15 +214,15 @@ func NewServiceWithGoalCommands(
 	}
 }
 
-func (s *Service) runAgentExecution(
+func (s *Service) runAgentOperation(
 	ctx context.Context,
 	sessionID string,
-	run func(context.Context, *runtime.Engine) error,
-) error {
+	driver runtimecommand.SessionAgentOperationDriver,
+) (runtimecommand.SessionAgentOperationOutcome, error) {
 	if s == nil || s.execution == nil {
-		return errors.New("session runtime authority is required")
+		return nil, errors.New("session runtime authority is required")
 	}
-	return s.execution.RunAgentExecution(ctx, sessionID, run)
+	return s.execution.RunAgentOperation(ctx, sessionID, driver)
 }
 
 func (s *Service) WithRuntimeActivityResolver(resolver RuntimeActivityResolver) *Service {
@@ -308,14 +308,6 @@ func (s *Service) recordRuntimeAccessFailureOrCancellation(sessionID string, ref
 		return
 	}
 	s.operations.RecordRuntimeAccessFailure(sessionID, ref)
-}
-
-func (s *Service) recordOperationCompletion(sessionID string, ref clientui.RuntimeOperationRef, receipt session.CommitReceipt, err error, attempt runtimeops.Attempt, record func(string, clientui.RuntimeOperationRef, session.CommitReceipt, error)) {
-	if !receipt.Committed && s.operationAttemptCanceled(err, attempt) {
-		s.operations.RecordCanceledNotCommitted(sessionID, ref)
-	} else {
-		record(sessionID, ref, receipt, err)
-	}
 }
 
 func (s *Service) SetSessionName(ctx context.Context, req serverapi.RuntimeSetSessionNameRequest) error {
@@ -510,18 +502,24 @@ func (s *Service) SubmitUserShellCommand(ctx context.Context, req serverapi.Runt
 	}
 	memoReq := sessionCommandMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Command: req.Command}
 	_, err := runtimeops.Do(s.operations, ctx, memoReq.SessionID, req.OperationRef, memoReq, sameSessionCommandMemoRequest, func(ctx context.Context, attempt runtimeops.Attempt) (struct{}, error) {
-		err := s.runAgentExecution(attempt.Context(), req.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
-			_, err := engine.SubmitUserShellCommandWithActiveHook(runCtx, memoReq.Command, func() {
-				s.operations.MarkOperationActive(memoReq.SessionID, req.OperationRef)
-			})
-			return err
-		})
-		if s.operationAttemptCanceled(err, attempt) {
-			s.operations.RecordCanceledNotCommitted(memoReq.SessionID, req.OperationRef)
-			return struct{}{}, err
+		sessionID, parseErr := runtimeids.ParseSessionID(memoReq.SessionID)
+		if parseErr != nil {
+			s.recordRuntimeAccessFailureOrCancellation(memoReq.SessionID, req.OperationRef, parseErr, attempt)
+			return struct{}{}, parseErr
 		}
-		s.operations.RecordShellCompletion(memoReq.SessionID, req.OperationRef, err)
-		return struct{}{}, err
+		driver, driverErr := runtimecommand.NewUserShellDriver(runtimecommand.UserShellDriverOptions{
+			SessionID:      sessionID,
+			Command:        memoReq.Command,
+			OperationRef:   req.OperationRef,
+			Operations:     s.operations,
+			AttemptContext: attempt.Context(),
+		})
+		if driverErr != nil {
+			s.recordRuntimeAccessFailureOrCancellation(memoReq.SessionID, req.OperationRef, driverErr, attempt)
+			return struct{}{}, driverErr
+		}
+		_, runErr := s.runAgentOperation(attempt.Context(), req.SessionID, driver)
+		return struct{}{}, runErr
 	})
 	return err
 }
@@ -532,16 +530,24 @@ func (s *Service) CompactContext(ctx context.Context, req serverapi.RuntimeCompa
 	}
 	memoReq := sessionStringMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Value: req.Args}
 	_, err := runtimeops.Do(s.operations, ctx, memoReq.SessionID, req.OperationRef, memoReq, sameSessionStringMemoRequest, func(ctx context.Context, attempt runtimeops.Attempt) (struct{}, error) {
-		var receipt session.CommitReceipt
-		err := s.runAgentExecution(attempt.Context(), req.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
-			compactReceipt, compactErr := engine.CompactContextWithActiveHook(runCtx, req.Args, func() {
-				s.operations.MarkOperationActive(memoReq.SessionID, req.OperationRef)
-			})
-			receipt = compactReceipt
-			return compactErr
+		sessionID, parseErr := runtimeids.ParseSessionID(memoReq.SessionID)
+		if parseErr != nil {
+			s.recordRuntimeAccessFailureOrCancellation(memoReq.SessionID, req.OperationRef, parseErr, attempt)
+			return struct{}{}, parseErr
+		}
+		driver, driverErr := runtimecommand.NewManualCompactionDriver(runtimecommand.ManualCompactionDriverOptions{
+			SessionID:      sessionID,
+			Arguments:      req.Args,
+			OperationRef:   req.OperationRef,
+			Operations:     s.operations,
+			AttemptContext: attempt.Context(),
 		})
-		s.recordOperationCompletion(memoReq.SessionID, req.OperationRef, receipt, err, attempt, s.operations.RecordCompactCompletion)
-		return struct{}{}, err
+		if driverErr != nil {
+			s.recordRuntimeAccessFailureOrCancellation(memoReq.SessionID, req.OperationRef, driverErr, attempt)
+			return struct{}{}, driverErr
+		}
+		_, runErr := s.runAgentOperation(attempt.Context(), req.SessionID, driver)
+		return struct{}{}, runErr
 	})
 	return err
 }
