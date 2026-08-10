@@ -276,7 +276,7 @@ func (e *Engine) applySelectedBackgroundNotice(
 				e.longBoundary.selected.longWorkID() != work.longWorkID() {
 				return struct{}{}, errors.New("selected background work is no longer owned")
 			}
-			_, applyErr := applyBackgroundNoticeMessage(admission, stepID, work.message)
+			_, applyErr := applyBackgroundNoticeMessage(admission, &stepID, work.message)
 			return struct{}{}, applyErr
 		},
 	)
@@ -285,7 +285,7 @@ func (e *Engine) applySelectedBackgroundNotice(
 
 func (e *Engine) applyBackgroundNoticeBoundary(
 	admission runtimeEventAdmission,
-	stepID string,
+	stepID *string,
 	selection boundarySelection,
 ) (int, error) {
 	selected := e.boundaryAgenda.selectNext(selection)
@@ -306,7 +306,7 @@ func (e *Engine) applyBackgroundNoticeBoundary(
 
 func applyBackgroundNoticeMessage(
 	admission runtimeEventAdmission,
-	stepID string,
+	stepID *string,
 	message llm.Message,
 ) (session.CommitReceipt, error) {
 	receipt := session.CommitReceipt{}
@@ -317,7 +317,7 @@ func applyBackgroundNoticeMessage(
 		[]llm.Message{message},
 	)
 	intent.items[0].commitReceipt = &receipt
-	err := admission.applySteering(stepID, intent)
+	err := admission.applySteeringOptional(stepID, intent)
 	if err == nil && !receipt.Committed {
 		err = errors.New("background notice message was not committed")
 	}

@@ -70,7 +70,7 @@ func (e *Engine) reduceIdleBoundary(admission runtimeEventAdmission) (resultErr 
 		case *workflowAssignmentAgendaItem:
 			applied, err := e.applyWorkflowAssignmentBoundary(
 				admission,
-				"",
+				nil,
 				idleBoundarySelection(),
 			)
 			if err != nil || applied == 0 {

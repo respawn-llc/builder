@@ -80,9 +80,10 @@ func TestBackgroundNoticeAppendCertaintyDoesNotReinsertAfterCommittedPublication
 		engine,
 		struct{}{},
 		func(admission runtimeEventAdmission, _ struct{}) (struct{}, error) {
+			stepID := origin.StepID
 			_, applyErr := engine.applyBackgroundNoticeBoundary(
 				admission,
-				origin.StepID,
+				&stepID,
 				stepBoundarySelection(scopeID, origin),
 			)
 			return struct{}{}, applyErr

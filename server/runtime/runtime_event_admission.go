@@ -16,6 +16,13 @@ func (a runtimeEventAdmission) applySteering(stepID string, intents ...steeringI
 	return a.engine.applySteeringBatch(stepID, intents...)
 }
 
+func (a runtimeEventAdmission) applySteeringOptional(stepID *string, intents ...steeringIntent) error {
+	if stepID == nil {
+		return a.engine.applySteeringBatch("", intents...)
+	}
+	return a.engine.applySteeringBatch(*stepID, intents...)
+}
+
 func (a runtimeEventAdmission) Context() context.Context {
 	if a.command.Context() != nil {
 		return a.command.Context()

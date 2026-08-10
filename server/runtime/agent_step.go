@@ -517,10 +517,7 @@ func (e *Engine) reduceAgentStepBoundary(
 	admission runtimeEventAdmission,
 	reduction agentStepReduction,
 ) (agentStepBoundaryDecision, error) {
-	stepID := ""
-	if reduction.stepID != nil {
-		stepID = *reduction.stepID
-	}
+	stepID := reduction.stepID
 	appliedHuman := 0
 	assignmentsApplied := 0
 	backgroundApplied := 0

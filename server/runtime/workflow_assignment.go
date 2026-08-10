@@ -182,7 +182,7 @@ func (e *Engine) workflowAssignmentIdleEligible() bool {
 
 func (e *Engine) applyWorkflowAssignmentBoundary(
 	admission runtimeEventAdmission,
-	stepID string,
+	stepID *string,
 	selection boundarySelection,
 ) (int, error) {
 	applied := 0
@@ -215,7 +215,7 @@ func (e *Engine) applyWorkflowAssignmentBoundary(
 		}
 		receipt := session.CommitReceipt{}
 		assignment.intent.items[0].commitReceipt = &receipt
-		err := admission.applySteering(stepID, assignment.intent)
+		err := admission.applySteeringOptional(stepID, assignment.intent)
 		if err == nil && !receipt.Committed {
 			err = errors.New("workflow assignment message was not committed")
 		}

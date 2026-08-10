@@ -218,14 +218,14 @@ func (e *Engine) applyHumanBoundary(
 	}
 	return e.applyHumanBoundaryItems(
 		admission,
-		stepID,
+		&stepID,
 		e.boundaryAgenda.selectHumanItems(selection),
 	)
 }
 
 func (e *Engine) applyHumanBoundaryPrefix(
 	admission runtimeEventAdmission,
-	stepID string,
+	stepID *string,
 	selection boundarySelection,
 ) (humanBoundaryApplyResult, error) {
 	if !e.humanBoundarySelectionLive(selection) {
@@ -256,7 +256,7 @@ func (e *Engine) humanBoundarySelectionLive(selection boundarySelection) bool {
 
 func (e *Engine) applyHumanBoundaryItems(
 	admission runtimeEventAdmission,
-	stepID string,
+	stepID *string,
 	selected []*humanBoundaryAgendaItem,
 ) (humanBoundaryApplyResult, error) {
 	if len(selected) == 0 {
@@ -276,7 +276,7 @@ func (e *Engine) applyHumanBoundaryItems(
 		receipt := session.CommitReceipt{}
 		intent := steerQueuedUserMessageFlushIntent(group.message, group.batch, group.queueItems)
 		intent.items[0].commitReceipt = &receipt
-		applyErr := admission.applySteering(stepID, intent)
+		applyErr := admission.applySteeringOptional(stepID, intent)
 		if receipt.Committed {
 			result.receipt = receipt
 		}
