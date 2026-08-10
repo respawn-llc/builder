@@ -15,6 +15,9 @@ export function directionalBoundary(
     retryLabel: string;
   }>,
 ): VirtualizedInfiniteListBoundaryState | undefined {
+  if (input.loading) {
+    return { state: "loading", label: input.loadingLabel };
+  }
   if (input.failed) {
     return {
       state: "error",
@@ -22,9 +25,6 @@ export function directionalBoundary(
       retryLabel: input.retryLabel,
       onRetry: input.onRetry,
     };
-  }
-  if (input.loading) {
-    return { state: "loading", label: input.loadingLabel };
   }
   return undefined;
 }

@@ -14,6 +14,17 @@ describe("InfiniteListBoundary directional state", () => {
       }),
     ).toEqual({ state: "loading", label: "Loading" });
 
+    expect(
+      directionalBoundary({
+        message: "formatted failure",
+        failed: true,
+        loading: true,
+        loadingLabel: "Loading",
+        onRetry,
+        retryLabel: "Retry",
+      }),
+    ).toEqual({ state: "loading", label: "Loading" });
+
     const errorState = directionalBoundary({
       message: "formatted failure",
       failed: true,

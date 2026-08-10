@@ -580,6 +580,7 @@
 - Comment lists order by creation time descending, then Comment ID descending.
 - Comment listing accepts an optional zero-based, non-negative offset and an optional limit. Omitted offset starts at zero; omitted limit defaults to 100; the maximum limit is 100.
 - Each Comment list request is independent and stateless. The server bounds the response by the requested limit and retains no page contents or pagination state.
+- A Comment list response includes `next_offset` only when another offset request may return more items; terminal responses omit it.
 - Insertions, removals, or reordering between independent Comment list requests may cause later results to repeat or skip items.
 - Deleting a Task Comment removes it completely. Kent cannot list or restore deleted Comments.
 
