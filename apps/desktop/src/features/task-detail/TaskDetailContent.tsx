@@ -61,6 +61,40 @@ type TaskDraftState = Readonly<{
   draft: TaskDraft;
 }>;
 
+interface PromptAttentionReconciliationIdentity {
+  readonly generatedAt: number;
+  readonly requestSequence: number;
+}
+
+function newPromptAttentionReconciliationOrder() {
+  let nextRequestSequence = 0;
+  let lastAccepted: PromptAttentionReconciliationIdentity | undefined;
+  return {
+    accept(
+      candidate: PromptAttentionReconciliationIdentity,
+      currentGeneratedAt: number | undefined,
+    ): boolean {
+      const olderThanAccepted =
+        lastAccepted !== undefined &&
+        (candidate.generatedAt < lastAccepted.generatedAt ||
+          (candidate.generatedAt === lastAccepted.generatedAt &&
+            candidate.requestSequence < lastAccepted.requestSequence));
+      if (
+        olderThanAccepted ||
+        (currentGeneratedAt !== undefined && currentGeneratedAt > candidate.generatedAt)
+      ) {
+        return false;
+      }
+      lastAccepted = candidate;
+      return true;
+    },
+    nextRequest(): number {
+      nextRequestSequence += 1;
+      return nextRequestSequence;
+    },
+  };
+}
+
 export function TaskDetailContent({
   activity,
   attention,
@@ -294,48 +328,57 @@ function useTaskPromptAnswers({
     },
     [taskScope],
   );
-  const coordinator = useMemo(
-    () =>
-      new PromptAnswerCoordinator({
-        invalidateAttention: async () => {
-          await queryClient.invalidateQueries({
-            queryKey: queryKeys.taskAttention(detail.id),
-            refetchType: "none",
-          });
-        },
-        isMounted: () => taskScope.mounted,
-        notifyFailure: (failure) => {
-          push({
-            body: `${failure.taskShortID} · ${failure.taskTitle}\n${errorMessage(failure.cause)}`,
-            durationMs: Infinity,
-            id: [
-              "task-prompt-answer",
-              failure.kind,
-              failure.taskID,
-              failure.promptKey.sessionID,
-              failure.promptKey.stepID,
-              failure.promptKey.promptID,
-            ].join(":"),
-            title: t("states.error"),
-            tone: "danger",
-          });
-        },
-        readAttention: async () => {
-          const fresh = await api.listTaskAttention(detail.id);
-          const accepted =
-            queryClient.setQueryData<TaskAttention>(queryKeys.taskAttention(detail.id), (current) =>
-              current !== undefined && current.generatedAt > fresh.generatedAt ? current : fresh,
-            ) ?? fresh;
-          return accepted.items.filter(
-            (item): item is Extract<(typeof accepted.items)[number], { kind: "question" }> =>
-              item.kind === "question",
-          );
-        },
-        task: { id: detail.id, shortID: detail.shortID, title: detail.title },
-        updateState: setState,
-      }),
-    [api, detail.id, detail.shortID, detail.title, push, queryClient, t, taskScope],
-  );
+  const coordinator = useMemo(() => {
+    const reconciliationOrder = newPromptAttentionReconciliationOrder();
+    return new PromptAnswerCoordinator({
+      invalidateAttention: async () => {
+        await queryClient.invalidateQueries({
+          queryKey: queryKeys.taskAttention(detail.id),
+          refetchType: "none",
+        });
+      },
+      isMounted: () => taskScope.mounted,
+      notifyFailure: (failure) => {
+        push({
+          body: `${failure.taskShortID} · ${failure.taskTitle}\n${errorMessage(failure.cause)}`,
+          durationMs: Infinity,
+          id: [
+            "task-prompt-answer",
+            failure.kind,
+            failure.taskID,
+            failure.promptKey.sessionID,
+            failure.promptKey.stepID,
+            failure.promptKey.promptID,
+          ].join(":"),
+          title: t("states.error"),
+          tone: "danger",
+        });
+      },
+      readAttention: async () => {
+        const requestSequence = reconciliationOrder.nextRequest();
+        const fresh = await api.listTaskAttention(detail.id);
+        const accepted = queryClient.setQueryData<TaskAttention>(
+          queryKeys.taskAttention(detail.id),
+          (current) =>
+            reconciliationOrder.accept(
+              { generatedAt: fresh.generatedAt, requestSequence },
+              current?.generatedAt,
+            )
+              ? fresh
+              : current,
+        );
+        if (accepted === undefined) {
+          throw new Error("accepted Task attention reconciliation snapshot is unavailable");
+        }
+        return accepted.items.filter(
+          (item): item is Extract<(typeof accepted.items)[number], { kind: "question" }> =>
+            item.kind === "question",
+        );
+      },
+      task: { id: detail.id, shortID: detail.shortID, title: detail.title },
+      updateState: setState,
+    });
+  }, [api, detail.id, detail.shortID, detail.title, push, queryClient, t, taskScope]);
   const answerQuestion = useMemo<QuestionAnswerMutation>(
     () => ({
       isPending: false,

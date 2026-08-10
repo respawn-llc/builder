@@ -10,13 +10,14 @@ import {
 } from "@/test-support/task-detail";
 
 describe("Task Detail live refresh", () => {
-  it("preserves position, focuses, and submits the next prompt while the earlier answer is in flight", async () => {
+  it("preserves progression and rejects an equal-timestamp older overlapping reconciliation", async () => {
     let attention = taskAttentionMany([
       ["ask-1", 1],
       ["ask-2", 1],
     ]);
     const first = deferred<undefined>();
     const second = deferred<undefined>();
+    const staleAttention = { ...taskAttention("ask-2", 1), generated_at_unix_ms: 5 };
     const staleRead = deferred<ReturnType<typeof taskAttention>>();
     let answerCount = 0;
     let attentionReadCount = 0;
@@ -26,7 +27,7 @@ describe("Task Detail live refresh", () => {
           method: "workflow.task.attention.list",
           handler: (): ReturnType<typeof taskAttention> | Promise<ReturnType<typeof taskAttention>> => {
             attentionReadCount += 1;
-            return attentionReadCount === 3 ? staleRead.promise : attention;
+            return attentionReadCount === 2 ? staleRead.promise : attention;
           },
         },
         {
@@ -35,7 +36,7 @@ describe("Task Detail live refresh", () => {
             answerCount += 1;
             if (answerCount === 1) {
               await first.promise;
-              attention = taskAttention("ask-2", 1);
+              attention = staleAttention;
               return { results: [{ prompt_id: "ask-1", outcome: "resolved" }] };
             }
             await second.promise;
@@ -67,16 +68,16 @@ describe("Task Detail live refresh", () => {
       expect(screen.queryAllByRole("radio")).toHaveLength(0);
     });
 
-    second.resolve(undefined);
+    first.resolve(undefined);
     await waitFor(() => {
       expect(attentionReadCount).toBe(2);
     });
-    first.resolve(undefined);
+    second.resolve(undefined);
     await waitFor(() => {
       expect(attentionReadCount).toBe(3);
     });
     await act(async () => {
-      staleRead.resolve(taskAttention("ask-2", 1));
+      staleRead.resolve(staleAttention);
     });
     expect(screen.queryAllByRole("radio")).toHaveLength(0);
   });
