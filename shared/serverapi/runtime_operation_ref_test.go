@@ -71,3 +71,16 @@ func TestRuntimeInputRequestsUseRequestIdentityWithoutOperationRefs(t *testing.T
 		})
 	}
 }
+
+func TestRuntimeSubmitUserShellCommandRequestRejectsBlankCommand(t *testing.T) {
+	request := RuntimeSubmitUserShellCommandRequest{
+		ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
+		SessionID:       "session-1",
+	}
+	for _, command := range []string{"", " \t\n"} {
+		request.Command = command
+		if err := request.Validate(); err == nil {
+			t.Fatalf("accepted blank shell command %q", command)
+		}
+	}
+}

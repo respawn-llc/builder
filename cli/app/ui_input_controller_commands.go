@@ -18,14 +18,14 @@ func (c uiInputController) applyCommandResultWithPreSubmitQueuePosition(commandR
 }
 
 func (c uiInputController) applyCommandResultWithPreSubmitQueuePositionAndOrigin(commandResult commands.Result, queuePosition preSubmitQueuePosition, origin activeSubmitOrigin) (tea.Model, tea.Cmd) {
-	return c.applyCommandResultWithPreSubmitQueuePositionAndOriginAndOrder(commandResult, queuePosition, origin, 0)
+	return c.applyCommandResultWithPreSubmitQueuePositionAndOriginAndOrder(commandResult, queuePosition, origin, nil)
 }
 
 func (c uiInputController) applyCommandResultWithPreSubmitQueuePositionAndOriginAndOrder(
 	commandResult commands.Result,
 	queuePosition preSubmitQueuePosition,
 	origin activeSubmitOrigin,
-	submissionOrder uint64,
+	submissionOrder *inputSubmissionOrder,
 ) (tea.Model, tea.Cmd) {
 	m := c.model
 	if commandResult.PromptCommand != nil {

@@ -2,6 +2,8 @@ package clientui
 
 import (
 	"testing"
+
+	"core/shared/runtimeids"
 )
 
 func TestTranscriptUserFlushCarriesTypedQueuedMessageIdentity(t *testing.T) {
@@ -50,6 +52,16 @@ func TestTranscriptInputFactsRejectMissingOrDuplicateQueuedMessageIdentity(t *te
 			Messages: []QueuedUserMessageIdentity{
 				identity,
 				identity,
+			},
+		},
+		{
+			StepID: transcriptTestStepID(t),
+			Messages: []QueuedUserMessageIdentity{
+				identity,
+				{
+					ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
+					QueueItemID:     identity.QueueItemID,
+				},
 			},
 		},
 		{

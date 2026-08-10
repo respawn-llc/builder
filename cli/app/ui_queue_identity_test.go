@@ -25,7 +25,7 @@ func queuedInputsForTest(texts ...string) []queuedInputItem {
 		items = append(items, queuedInputItem{
 			ID:              fmt.Sprintf("input-queue-test-%d", index),
 			Text:            text,
-			submissionOrder: uint64(index + 1),
+			submissionOrder: inputSubmissionOrder{sequence: uint64(index + 1)},
 		})
 	}
 	return items
@@ -283,7 +283,7 @@ func TestTranscriptQueuedStateOnlyMutatesMatchingLocalRestorationOwnership(t *te
 				Text:            localText,
 				ClientRequestID: requestID.String(),
 				State:           injectedRuntimeQueuePendingCreate,
-				submissionOrder: 1,
+				submissionOrder: inputSubmissionOrder{sequence: 1},
 			}}
 			model.registerSteeredQueuedUserMessage(clientui.QueuedUserMessage{
 				ID: queueID.String(), Text: serverText, ClientRequestID: requestID.String(),
@@ -392,11 +392,11 @@ func TestAcceptedQueuedSubmissionKeepsOriginalOrderForInterruptRestoration(t *te
 	if len(model.injectedQueue) != 1 || len(model.queued) != 1 {
 		t.Fatalf("accepted queue state = injected=%+v queued=%+v", model.injectedQueue, model.queued)
 	}
-	if model.injectedQueue[0].submissionOrder >= model.queued[0].submissionOrder {
+	if model.injectedQueue[0].submissionOrder.sequence >= model.queued[0].submissionOrder.sequence {
 		t.Fatalf(
 			"accepted Queue item lost original order: accepted=%d queued=%d",
-			model.injectedQueue[0].submissionOrder,
-			model.queued[0].submissionOrder,
+			model.injectedQueue[0].submissionOrder.sequence,
+			model.queued[0].submissionOrder.sequence,
 		)
 	}
 
@@ -440,7 +440,7 @@ func TestDisconnectedQueuedFlushRestoresTextWithTransientStatus(t *testing.T) {
 		ServerID:        "steer-1",
 		Text:            "accepted steer",
 		State:           injectedRuntimeQueueEnqueued,
-		submissionOrder: 1,
+		submissionOrder: inputSubmissionOrder{sequence: 1},
 	}}
 	beforeActivity := model.activity
 

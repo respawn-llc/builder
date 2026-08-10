@@ -190,7 +190,7 @@ func TestPersistSessionDraftIncludesOnlyComposerInput(t *testing.T) {
 		LocalID:         "pending-injected",
 		Text:            "  pending injected\n",
 		State:           injectedRuntimeQueuePendingCreate,
-		submissionOrder: 1,
+		submissionOrder: inputSubmissionOrder{sequence: 1},
 	}}
 	model.queued = queuedInputsForTest("\tqueued later  ")
 

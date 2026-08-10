@@ -25,7 +25,11 @@ const (
 type queuedInputItem struct {
 	ID              string
 	Text            string
-	submissionOrder uint64
+	submissionOrder inputSubmissionOrder
+}
+
+type inputSubmissionOrder struct {
+	sequence uint64
 }
 
 type injectedRuntimeQueueState string
@@ -48,7 +52,7 @@ type injectedRuntimeQueueItem struct {
 	CreateToken              uint64
 	DiscardToken             uint64
 	ApprovalCommentaryAnswer *clientui.PromptAnswer
-	submissionOrder          uint64
+	submissionOrder          inputSubmissionOrder
 }
 
 func (m *uiModel) queueInput(text string) {
@@ -60,12 +64,12 @@ func (m *uiModel) queueInput(text string) {
 	m.clearInput()
 }
 
-func (m *uiModel) nextPendingInputSubmissionOrder() uint64 {
+func (m *uiModel) nextPendingInputSubmissionOrder() inputSubmissionOrder {
 	m.pendingInputSubmissionOrder++
 	if m.pendingInputSubmissionOrder == 0 {
 		panic("pending input submission order overflow")
 	}
-	return m.pendingInputSubmissionOrder
+	return inputSubmissionOrder{sequence: m.pendingInputSubmissionOrder}
 }
 
 func (m *uiModel) registerSteeredQueuedUserMessage(queued clientui.QueuedUserMessage) bool {
@@ -246,27 +250,23 @@ func (c uiInputController) restoreQueuedMessagesIntoInput() {
 	}
 	joined := strings.Join(queuedInputTexts(m.queued), "\n\n")
 	m.queued = nil
-	newInput := joined
-	current := m.mainEditor.Text()
-	if strings.TrimSpace(current) == "" {
-		newInput = joined
-	} else {
-		newInput = strings.TrimRight(current, "\n") + "\n\n" + joined
-	}
-	m.replaceMainInputAtEnd(newInput)
+	c.appendRestoredInputToComposer(joined)
 }
 
 func (c uiInputController) restoreSubmittedTextIntoInput(text string) {
-	m := c.model
+	c.appendRestoredInputToComposer(text)
+}
+
+func (c uiInputController) appendRestoredInputToComposer(text string) {
 	if strings.TrimSpace(text) == "" {
 		return
 	}
-	newInput := text
+	m := c.model
 	current := m.mainEditor.Text()
 	if strings.TrimSpace(current) != "" {
-		newInput = strings.TrimRight(current, "\n") + "\n\n" + text
+		text = strings.TrimRight(current, "\n") + "\n\n" + text
 	}
-	m.replaceMainInputAtEnd(newInput)
+	m.replaceMainInputAtEnd(text)
 }
 
 func (c uiInputController) restoreInjectedInputsIntoComposer() tea.Cmd {
@@ -285,15 +285,7 @@ func (c uiInputController) restoreInjectedInputsIntoComposer() tea.Cmd {
 	for _, item := range pending {
 		texts = append(texts, item.Text)
 	}
-	joined := strings.Join(texts, "\n\n")
-	newInput := joined
-	current := m.mainEditor.Text()
-	if strings.TrimSpace(current) == "" {
-		newInput = joined
-	} else {
-		newInput = strings.TrimRight(current, "\n") + "\n\n" + joined
-	}
-	m.replaceMainInputAtEnd(newInput)
+	c.appendRestoredInputToComposer(strings.Join(texts, "\n\n"))
 	return tea.Batch(cmds...)
 }
 
@@ -309,13 +301,13 @@ func (m *uiModel) restorableInjectedQueueItems() []injectedRuntimeQueueItem {
 		}
 	}
 	sort.SliceStable(items, func(i, j int) bool {
-		return items[i].submissionOrder < items[j].submissionOrder
+		return items[i].submissionOrder.sequence < items[j].submissionOrder.sequence
 	})
 	return items
 }
 
 type interruptedInputDraftPart struct {
-	submissionOrder uint64
+	submissionOrder inputSubmissionOrder
 	text            string
 }
 
@@ -328,22 +320,16 @@ func (c uiInputController) restoreInterruptedInputsIntoComposer() tea.Cmd {
 	parts := make([]interruptedInputDraftPart, 0, len(m.injectedQueue)+len(m.queued))
 	var approvalCmd tea.Cmd
 	for _, item := range m.restorableInjectedQueueItems() {
-		if item.submissionOrder == 0 {
-			panic("injected input has no submission order during interrupt restoration")
-		}
 		parts = append(parts, interruptedInputDraftPart{submissionOrder: item.submissionOrder, text: item.Text})
 		if item.ApprovalCommentaryAnswer != nil {
 			approvalCmd = tea.Batch(approvalCmd, m.answerQueuedApprovalCommentary(*item.ApprovalCommentaryAnswer))
 		}
 	}
 	for _, queued := range m.queued {
-		if queued.submissionOrder == 0 {
-			panic("queued input has no submission order during interrupt restoration")
-		}
 		parts = append(parts, interruptedInputDraftPart{submissionOrder: queued.submissionOrder, text: queued.Text})
 	}
 	sort.SliceStable(parts, func(i, j int) bool {
-		return parts[i].submissionOrder < parts[j].submissionOrder
+		return parts[i].submissionOrder.sequence < parts[j].submissionOrder.sequence
 	})
 	texts := make([]string, 0, len(parts)+1)
 	for _, part := range parts {
@@ -413,7 +399,7 @@ func (c uiInputController) dispatchQueuedInput(item queuedInputItem) tea.Cmd {
 					commandResult,
 					preSubmitQueueFront,
 					activeSubmitOriginQueued,
-					item.submissionOrder,
+					&item.submissionOrder,
 				)
 				var recordCmd tea.Cmd
 				if commandResult.PromptCommand == nil {
@@ -432,7 +418,7 @@ func (c uiInputController) dispatchQueuedInput(item queuedInputItem) tea.Cmd {
 		preSubmitQueueFront,
 		item.ID,
 		activeSubmitOriginQueued,
-		item.submissionOrder,
+		&item.submissionOrder,
 	)
 }
 
@@ -669,16 +655,7 @@ func (c uiInputController) handleInjectedQueueDiscardDone(msg injectedQueueDisca
 }
 
 func (c uiInputController) restoreInjectedTextIntoInput(text string) {
-	m := c.model
-	if strings.TrimSpace(text) == "" {
-		return
-	}
-	current := m.mainEditor.Text()
-	if strings.TrimSpace(current) == "" {
-		m.replaceMainInputAtEnd(text)
-		return
-	}
-	m.replaceMainInputAtEnd(strings.TrimRight(current, "\n") + "\n\n" + text)
+	c.appendRestoredInputToComposer(text)
 }
 
 func (m *uiModel) removeInjectedQueueItemAt(index int) {

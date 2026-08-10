@@ -50,7 +50,8 @@ func (f TranscriptUserMessageFlushed) Validate() error {
 	if len(f.Messages) == 0 {
 		return fmt.Errorf("user-message flush requires queued-message identities")
 	}
-	seen := make(map[runtimeids.RuntimeClientRequestID]struct{}, len(f.Messages))
+	seenClientRequests := make(map[runtimeids.RuntimeClientRequestID]struct{}, len(f.Messages))
+	seenQueueItems := make(map[runtimeids.QueueItemID]struct{}, len(f.Messages))
 	for index, message := range f.Messages {
 		if message.ClientRequestID.IsZero() {
 			return fmt.Errorf("user-message flush identity %d requires client request id", index)
@@ -58,10 +59,14 @@ func (f TranscriptUserMessageFlushed) Validate() error {
 		if message.QueueItemID.IsZero() {
 			return fmt.Errorf("user-message flush identity %d requires queue item id", index)
 		}
-		if _, exists := seen[message.ClientRequestID]; exists {
+		if _, exists := seenClientRequests[message.ClientRequestID]; exists {
 			return fmt.Errorf("user-message flush repeats client request id %q", message.ClientRequestID.String())
 		}
-		seen[message.ClientRequestID] = struct{}{}
+		if _, exists := seenQueueItems[message.QueueItemID]; exists {
+			return fmt.Errorf("user-message flush repeats queue item id %q", message.QueueItemID.String())
+		}
+		seenClientRequests[message.ClientRequestID] = struct{}{}
+		seenQueueItems[message.QueueItemID] = struct{}{}
 	}
 	return nil
 }

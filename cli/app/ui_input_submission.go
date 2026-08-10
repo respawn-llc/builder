@@ -30,7 +30,7 @@ func (c uiInputController) startSubmissionWithPreSubmitQueuePosition(text string
 }
 
 func (c uiInputController) startSubmissionWithPreSubmitQueuePositionAndOrigin(text string, queuePosition preSubmitQueuePosition, queuedID string, origin activeSubmitOrigin) tea.Cmd {
-	return c.startSubmissionWithPreSubmitQueuePositionAndOriginAndOrder(text, queuePosition, queuedID, origin, 0)
+	return c.startSubmissionWithPreSubmitQueuePositionAndOriginAndOrder(text, queuePosition, queuedID, origin, nil)
 }
 
 func (c uiInputController) startSubmissionWithPreSubmitQueuePositionAndOriginAndOrder(
@@ -38,7 +38,7 @@ func (c uiInputController) startSubmissionWithPreSubmitQueuePositionAndOriginAnd
 	queuePosition preSubmitQueuePosition,
 	queuedID string,
 	origin activeSubmitOrigin,
-	submissionOrder uint64,
+	submissionOrder *inputSubmissionOrder,
 ) tea.Cmd {
 	return c.startTypedSubmissionWithPreSubmitQueuePositionAndOrder(
 		text,
@@ -51,7 +51,7 @@ func (c uiInputController) startSubmissionWithPreSubmitQueuePositionAndOriginAnd
 }
 
 func (c uiInputController) startTypedSubmissionWithPreSubmitQueuePosition(text string, input runtimeinput.Input, queuePosition preSubmitQueuePosition, queuedID string, origin activeSubmitOrigin) tea.Cmd {
-	return c.startTypedSubmissionWithPreSubmitQueuePositionAndOrder(text, input, queuePosition, queuedID, origin, 0)
+	return c.startTypedSubmissionWithPreSubmitQueuePositionAndOrder(text, input, queuePosition, queuedID, origin, nil)
 }
 
 func (c uiInputController) startTypedSubmissionWithPreSubmitQueuePositionAndOrder(
@@ -60,7 +60,7 @@ func (c uiInputController) startTypedSubmissionWithPreSubmitQueuePositionAndOrde
 	queuePosition preSubmitQueuePosition,
 	queuedID string,
 	origin activeSubmitOrigin,
-	submissionOrder uint64,
+	submissionOrder *inputSubmissionOrder,
 ) tea.Cmd {
 	m := c.model
 	if blocked, disconnectCmd := c.blockDisconnectedSubmission(true, text); blocked {
@@ -101,7 +101,7 @@ func (c uiInputController) startSubmissionWithPromptHistoryAndQueuePositionAndID
 	return c.startSubmissionWithPreSubmitQueuePositionAndOrigin(text, queuePosition, queuedID, activeSubmitOriginDirect)
 }
 
-func (c uiInputController) submitCmd(text string, input runtimeinput.Input, queuedID string, origin activeSubmitOrigin, submissionOrder uint64) tea.Cmd {
+func (c uiInputController) submitCmd(text string, input runtimeinput.Input, queuedID string, origin activeSubmitOrigin, submissionOrder *inputSubmissionOrder) tea.Cmd {
 	m := c.model
 	clientRequestID := runtimeids.NewRuntimeClientRequestID()
 	token := m.beginSubmitAttempt(text, queuedID, origin, clientRequestID, submissionOrder)
@@ -132,7 +132,7 @@ func (c uiInputController) submitCmd(text string, input runtimeinput.Input, queu
 	}
 }
 
-func (c uiInputController) submitUserShellCmd(originalText, command string, origin activeSubmitOrigin, submissionOrder uint64) tea.Cmd {
+func (c uiInputController) submitUserShellCmd(originalText, command string, origin activeSubmitOrigin, submissionOrder *inputSubmissionOrder) tea.Cmd {
 	m := c.model
 	token := m.beginSubmitAttempt(originalText, "", origin, runtimeids.RuntimeClientRequestID{}, submissionOrder)
 	client := m.runtimeClient()
@@ -156,7 +156,7 @@ func (m *uiModel) beginSubmitAttempt(
 	queuedID string,
 	origin activeSubmitOrigin,
 	clientRequestID runtimeids.RuntimeClientRequestID,
-	submissionOrder uint64,
+	submissionOrder *inputSubmissionOrder,
 ) uint64 {
 	if m == nil {
 		return 0
@@ -165,8 +165,11 @@ func (m *uiModel) beginSubmitAttempt(
 	if m.submitToken == 0 {
 		m.submitToken++
 	}
-	if submissionOrder == 0 {
-		submissionOrder = m.nextPendingInputSubmissionOrder()
+	var order inputSubmissionOrder
+	if submissionOrder == nil {
+		order = m.nextPendingInputSubmissionOrder()
+	} else {
+		order = *submissionOrder
 	}
 	m.activeSubmit = activeSubmitState{
 		token:           m.submitToken,
@@ -174,7 +177,7 @@ func (m *uiModel) beginSubmitAttempt(
 		queuedID:        queuedID,
 		origin:          origin,
 		clientRequestID: clientRequestID,
-		submissionOrder: submissionOrder,
+		submissionOrder: order,
 	}
 	return m.submitToken
 }

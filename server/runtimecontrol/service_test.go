@@ -800,10 +800,12 @@ func TestServiceInterruptWithoutEngineIsNotAccepted(t *testing.T) {
 }
 
 type failingRuntimeActivityResolver struct {
-	err error
+	err             error
+	observedContext context.Context
 }
 
-func (r failingRuntimeActivityResolver) RuntimeReadModelSnapshot(context.Context, string) (runtimeactivity.ResponseSnapshot, error) {
+func (r *failingRuntimeActivityResolver) RuntimeReadModelSnapshot(ctx context.Context, _ string) (runtimeactivity.ResponseSnapshot, error) {
+	r.observedContext = ctx
 	return runtimeactivity.ResponseSnapshot{}, r.err
 }
 
@@ -814,7 +816,8 @@ func TestServiceInterruptReturnsDiagnosticActivityWhenPostInterruptSnapshotFails
 	defer release()
 	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
 	snapshotErr := errors.New("activity snapshot failed")
-	service.WithRuntimeActivityResolver(failingRuntimeActivityResolver{err: snapshotErr})
+	resolver := &failingRuntimeActivityResolver{err: snapshotErr}
+	service.WithRuntimeActivityResolver(resolver)
 
 	submitDone := make(chan error, 1)
 	go func() {
@@ -827,7 +830,9 @@ func TestServiceInterruptReturnsDiagnosticActivityWhenPostInterruptSnapshotFails
 		t.Fatal("active turn did not reach model thinking")
 	}
 
-	resp, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
+	type interruptContextKey struct{}
+	interruptCtx := context.WithValue(context.Background(), interruptContextKey{}, "interrupt-context")
+	resp, err := service.Interrupt(interruptCtx, serverapi.RuntimeInterruptRequest{
 		ClientRequestID: "interrupt-snapshot-failure",
 		SessionID:       store.Meta().SessionID,
 	})
@@ -839,6 +844,9 @@ func TestServiceInterruptReturnsDiagnosticActivityWhenPostInterruptSnapshotFails
 	}
 	if resp.Activity.State != clientui.RuntimeActivityUnavailable || !resp.Activity.DiagnosticRecovery {
 		t.Fatalf("fallback activity = %+v, want diagnostic unavailable", resp.Activity)
+	}
+	if resolver.observedContext == nil || resolver.observedContext.Value(interruptContextKey{}) != "interrupt-context" {
+		t.Fatal("post-interrupt snapshot did not receive the caller context")
 	}
 	release()
 	select {

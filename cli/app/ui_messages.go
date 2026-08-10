@@ -137,7 +137,7 @@ type activeSubmitState struct {
 	queuedID        string
 	origin          activeSubmitOrigin
 	clientRequestID runtimeids.RuntimeClientRequestID
-	submissionOrder uint64
+	submissionOrder inputSubmissionOrder
 }
 
 type spinnerTickMsg struct {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 
@@ -663,18 +664,19 @@ func (s *Service) interrupt(ctx context.Context, req runtimeInterruptMemoRequest
 	if err != nil {
 		return serverapi.RuntimeInterruptResponse{}, err
 	}
-	return s.runtimeInterruptResponse(sessionID)
+	return s.runtimeInterruptResponse(ctx, sessionID)
 }
 
-func (s *Service) runtimeInterruptResponse(sessionID string) (serverapi.RuntimeInterruptResponse, error) {
+func (s *Service) runtimeInterruptResponse(ctx context.Context, sessionID string) (serverapi.RuntimeInterruptResponse, error) {
 	var snapshot runtimeactivity.ResponseSnapshot
 	var err error
 	if s.activity != nil {
-		snapshot, err = s.activity.RuntimeReadModelSnapshot(context.Background(), sessionID)
+		snapshot, err = s.activity.RuntimeReadModelSnapshot(ctx, sessionID)
 	} else {
 		err = errors.New("runtime activity resolver is unavailable")
 	}
 	if err != nil {
+		slog.WarnContext(ctx, "runtime interrupt activity snapshot unavailable", "session_id", sessionID, "error", err)
 		version := runtimeactivity.NextReadModelVersion(sessionID)
 		return serverapi.RuntimeInterruptResponse{
 			Version:  version,

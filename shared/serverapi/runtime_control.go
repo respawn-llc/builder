@@ -347,7 +347,13 @@ func (r RuntimeSubmitUserTurnRequest) Validate() error {
 	return r.Input.Validate()
 }
 func (r RuntimeSubmitUserShellCommandRequest) Validate() error {
-	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)
+	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID); err != nil {
+		return err
+	}
+	if strings.TrimSpace(r.Command) == "" {
+		return errors.New("shell command is required")
+	}
+	return nil
 }
 func (r RuntimeCompactContextRequest) Validate() error {
 	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)

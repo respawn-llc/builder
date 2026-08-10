@@ -133,7 +133,7 @@ func TestAdmittedAssistantFinalWaitsForLocallyOwnedQueuedPromptDrain(t *testing.
 		Text:            "queued prompt",
 		ClientRequestID: ongoingTestClientRequestID().String(),
 		State:           injectedRuntimeQueuePendingCreate,
-		submissionOrder: 1,
+		submissionOrder: inputSubmissionOrder{sequence: 1},
 	}}
 
 	for _, message := range []clientui.TranscriptMessage{
