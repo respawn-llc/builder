@@ -80,6 +80,7 @@ type sessionLedger struct {
 	queuedByQueueItemID     map[runtimeids.QueueItemID]*queuedOperationIdentity
 	queuedByOperationKey    map[string]*queuedOperationIdentity
 	commitBarriers          map[string]*operationCommitBarrier
+	cancellationFences      map[string]*operationCancellationFence
 }
 
 type queuedOperationIdentity struct {
@@ -103,6 +104,10 @@ type operationEntry struct {
 }
 
 type operationCommitBarrier struct {
+	done chan struct{}
+}
+
+type operationCancellationFence struct {
 	done chan struct{}
 }
 
@@ -232,66 +237,6 @@ func Do[Req any, Resp any](
 		close(entry.done)
 		coord.mu.Unlock()
 		return resp, err
-	}
-}
-
-func (c *Coordinator) CancelOperationTarget(sessionID string, ref clientui.RuntimeOperationRef) (CancellationResult, error) {
-	if c == nil {
-		return CancellationResult{}, nil
-	}
-	if err := ref.Validate(); err != nil {
-		return CancellationResult{}, err
-	}
-	for {
-		var cancel context.CancelFunc
-		interruptActive := false
-		c.mu.Lock()
-		ledger := c.ledgerLocked(sessionID)
-		ledger.pruneLocked(c.limit, c.ttl, c.now())
-		key := ledger.operationKey(ref)
-		if barrier := ledger.commitBarriers[key]; barrier != nil {
-			done := barrier.done
-			c.mu.Unlock()
-			<-done
-			continue
-		}
-		if record, ok := ledger.records[key]; ok {
-			switch record.State {
-			case clientui.RuntimeInputReconciliationCommitted, clientui.RuntimeInputReconciliationSubmitted:
-				if entry := ledger.operations[key]; entry != nil && !entry.completed && entry.active && operationCancellationInterruptsActive(ref) {
-					cancel = entry.cancel
-					c.mu.Unlock()
-					return CancellationResult{InterruptActive: true, cancel: cancel}, nil
-				}
-				c.mu.Unlock()
-				return CancellationResult{}, nil
-			}
-		}
-		if entry := ledger.operations[key]; entry != nil {
-			if entry.successful {
-				c.mu.Unlock()
-				return CancellationResult{}, nil
-			}
-			if !entry.completed {
-				cancel = entry.cancel
-				interruptActive = entry.active && operationCancellationInterruptsActive(ref)
-			}
-		}
-		if _, exists := ledger.tombstones[key]; !exists && len(ledger.tombstones) >= c.limit {
-			c.mu.Unlock()
-			return CancellationResult{}, fmt.Errorf("runtime operation cancellation tombstone capacity exceeded for session %q", sessionKey(sessionID))
-		}
-		ledger.tombstones[key] = ref
-		ledger.tombstoneAt[key] = c.now()
-		c.recordLocked(ledger, ref, clientui.RuntimeInputReconciliationCanceledNotCommitted, false, c.now())
-		c.mu.Unlock()
-		if cancel != nil {
-			if interruptActive {
-				return CancellationResult{InterruptActive: true, cancel: cancel}, nil
-			}
-			cancel()
-		}
-		return CancellationResult{}, nil
 	}
 }
 
@@ -495,6 +440,7 @@ func (c *Coordinator) ledgerLocked(sessionID string) *sessionLedger {
 		queuedByQueueItemID:     make(map[runtimeids.QueueItemID]*queuedOperationIdentity),
 		queuedByOperationKey:    make(map[string]*queuedOperationIdentity),
 		commitBarriers:          make(map[string]*operationCommitBarrier),
+		cancellationFences:      make(map[string]*operationCancellationFence),
 	}
 	c.sessions[key] = ledger
 	return ledger

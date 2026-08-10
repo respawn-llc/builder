@@ -44,10 +44,7 @@ func TestCoordinatorCancelTerminalOperationDoesNotInterruptActiveRuntime(t *test
 		coord.RecordSubmitted,
 	} {
 		record("session-1", ref)
-		result, err := coord.CancelOperationTarget("session-1", ref)
-		if err != nil {
-			t.Fatalf("CancelOperationTarget: %v", err)
-		}
+		result := commitCancellation(t, coord, "session-1", ref)
 		if result.InterruptActive {
 			t.Fatalf("terminal operation %s requested active interrupt", ref.Key())
 		}
@@ -123,6 +120,16 @@ func TestCoordinatorRecordsQueuedMessageSubmittedByServerQueueItemID(t *testing.
 		*operation.Operation.QueueItemID != queueItemID ||
 		operation.State != clientui.RuntimeInputReconciliationSubmitted {
 		t.Fatalf("canonical queued reconciliation = %+v, want both identities and submitted state", operation)
+	}
+	preparation, err := coord.PrepareOperationCancellation(context.Background(), "session-1", serverQueued)
+	if err != nil {
+		t.Fatalf("PrepareOperationCancellation: %v", err)
+	}
+	if preparation.Target() != CancellationTargetQueuedMessage {
+		t.Fatalf("submitted queued target = %v, want queued-message", preparation.Target())
+	}
+	if err := preparation.Release(); err != nil {
+		t.Fatalf("Release cancellation preparation: %v", err)
 	}
 }
 
@@ -226,8 +233,13 @@ func TestCoordinatorCancellationWaitsForCommitMutation(t *testing.T) {
 
 	cancelDone := make(chan error, 1)
 	go func() {
-		_, cancelErr := coord.CancelOperationTarget(sessionID, ref)
-		cancelDone <- cancelErr
+		preparation, prepareErr := coord.PrepareOperationCancellation(context.Background(), sessionID, ref)
+		if prepareErr != nil {
+			cancelDone <- prepareErr
+			return
+		}
+		_, commitErr := preparation.Commit()
+		cancelDone <- commitErr
 	}()
 	select {
 	case cancelErr := <-cancelDone:
@@ -260,6 +272,141 @@ func TestCoordinatorCancellationWaitsForCommitMutation(t *testing.T) {
 	)
 }
 
+func TestCoordinatorCancellationPreparationCanceledBehindCommitBarrierLeavesOperationUnchanged(t *testing.T) {
+	coord := NewCoordinator()
+	sessionID := "session-cancelable-preparation"
+	ref := testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit)
+	mutationStarted := make(chan struct{})
+	releaseMutation := make(chan struct{})
+	mutationErr := errors.New("commit mutation rejected")
+	operationDone := make(chan error, 1)
+	go func() {
+		_, runErr := Do(
+			coord,
+			context.Background(),
+			sessionID,
+			ref,
+			"submit request",
+			func(left, right string) bool { return left == right },
+			func(context.Context, Attempt) (struct{}, error) {
+				_, commitErr := coord.TryCommitOperationMutation(sessionID, ref, func() error {
+					close(mutationStarted)
+					<-releaseMutation
+					return mutationErr
+				})
+				return struct{}{}, commitErr
+			},
+		)
+		operationDone <- runErr
+	}()
+	<-mutationStarted
+
+	prepareCtx, cancelPrepare := context.WithCancel(context.Background())
+	prepareDone := make(chan error, 1)
+	go func() {
+		_, err := coord.PrepareOperationCancellation(prepareCtx, sessionID, ref)
+		prepareDone <- err
+	}()
+	cancelPrepare()
+	select {
+	case err := <-prepareDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("PrepareOperationCancellation error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("canceled cancellation preparation remained blocked behind commit mutation")
+	}
+
+	close(releaseMutation)
+	select {
+	case err := <-operationDone:
+		if !errors.Is(err, mutationErr) {
+			t.Fatalf("operation error = %v, want rejected commit mutation", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("operation did not finish after releasing commit mutation")
+	}
+
+	preparation, err := coord.PrepareOperationCancellation(context.Background(), sessionID, ref)
+	if err != nil {
+		t.Fatalf("retry PrepareOperationCancellation: %v", err)
+	}
+	if preparation.Target() != CancellationTargetNonActive {
+		t.Fatalf("retry cancellation target = %v, want non-active", preparation.Target())
+	}
+	if _, err := preparation.Commit(); err != nil {
+		t.Fatalf("Commit cancellation: %v", err)
+	}
+	assertState(
+		t,
+		mustFeedSnapshot(t, coord, sessionID, []clientui.RuntimeOperationRef{ref}),
+		ref,
+		clientui.RuntimeInputReconciliationCanceledNotCommitted,
+	)
+}
+
+func TestCoordinatorCancellationPreparationReleaseRestoresUnchangedCommitPath(t *testing.T) {
+	coord := NewCoordinator()
+	sessionID := "session-release-preparation"
+	ref := testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit)
+	attemptReady := make(chan struct{})
+	startCommit := make(chan struct{})
+	commitDone := make(chan bool, 1)
+	operationDone := make(chan error, 1)
+	go func() {
+		_, err := Do(
+			coord,
+			context.Background(),
+			sessionID,
+			ref,
+			"submit request",
+			func(left, right string) bool { return left == right },
+			func(context.Context, Attempt) (struct{}, error) {
+				close(attemptReady)
+				<-startCommit
+				commitDone <- coord.TryCommitOperation(sessionID, ref)
+				return struct{}{}, nil
+			},
+		)
+		operationDone <- err
+	}()
+	<-attemptReady
+
+	preparation, err := coord.PrepareOperationCancellation(context.Background(), sessionID, ref)
+	if err != nil {
+		t.Fatalf("PrepareOperationCancellation: %v", err)
+	}
+	if preparation.Target() != CancellationTargetNonActive {
+		t.Fatalf("cancellation target = %v, want non-active", preparation.Target())
+	}
+	close(startCommit)
+	select {
+	case committed := <-commitDone:
+		t.Fatalf("target commit crossed cancellation preparation: committed=%t", committed)
+	case <-time.After(20 * time.Millisecond):
+	}
+	if err := preparation.Release(); err != nil {
+		t.Fatalf("Release cancellation preparation: %v", err)
+	}
+	select {
+	case committed := <-commitDone:
+		if !committed {
+			t.Fatal("released cancellation preparation changed target commit outcome")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("released cancellation preparation did not wake target commit")
+	}
+	if err := <-operationDone; err != nil {
+		t.Fatalf("target operation: %v", err)
+	}
+	assertState(
+		t,
+		mustFeedSnapshot(t, coord, sessionID, []clientui.RuntimeOperationRef{ref}),
+		ref,
+		clientui.RuntimeInputReconciliationCommitted,
+	)
+}
+
 func TestCoordinatorCommitMutationPanicReleasesCancellationBarrier(t *testing.T) {
 	coord := NewCoordinator()
 	sessionID := "session-commit-panic"
@@ -277,8 +424,13 @@ func TestCoordinatorCommitMutationPanicReleasesCancellationBarrier(t *testing.T)
 
 	done := make(chan error, 1)
 	go func() {
-		_, cancelErr := coord.CancelOperationTarget(sessionID, ref)
-		done <- cancelErr
+		preparation, prepareErr := coord.PrepareOperationCancellation(context.Background(), sessionID, ref)
+		if prepareErr != nil {
+			done <- prepareErr
+			return
+		}
+		_, commitErr := preparation.Commit()
+		done <- commitErr
 	}()
 	select {
 	case cancelErr := <-done:
@@ -475,59 +627,6 @@ func TestCoordinatorPrunesSuccessfulMemoResponsesWithTerminalRecord(t *testing.T
 	}
 }
 
-func TestCoordinatorTombstoneExpiresAndAllowsLateOperationAfterTTL(t *testing.T) {
-	now := time.Date(2026, 6, 30, 14, 0, 0, 0, time.UTC)
-	coord := NewCoordinator(WithTTL(time.Minute), WithNow(func() time.Time { return now }))
-	ref := testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit)
-	if err := coord.CancelOperation("session-1", ref); err != nil {
-		t.Fatalf("CancelOperation: %v", err)
-	}
-	now = now.Add(2 * time.Minute)
-	coord.RecordCommitted("session-1", testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit))
-	ran := false
-	_, err := Do(coord, context.Background(), "session-1", ref, "same", func(a string, b string) bool { return a == b }, func(context.Context, Attempt) (struct{}, error) {
-		ran = true
-		return struct{}{}, nil
-	})
-	if err != nil {
-		t.Fatalf("operation after tombstone TTL: %v", err)
-	}
-	if !ran {
-		t.Fatal("operation did not run after tombstone TTL")
-	}
-}
-
-func TestCoordinatorTombstoneRemainsTerminalUntilTTL(t *testing.T) {
-	coord := NewCoordinator(WithLimit(1))
-	canceled := testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit)
-	if err := coord.CancelOperation("session-1", canceled); err != nil {
-		t.Fatalf("CancelOperation: %v", err)
-	}
-	for i := 0; i < 2; i++ {
-		_, err := Do(coord, context.Background(), "session-1", canceled, "same", func(a string, b string) bool { return a == b }, func(context.Context, Attempt) (struct{}, error) {
-			t.Fatal("consumed tombstone operation must not run")
-			return struct{}{}, nil
-		})
-		if !errors.Is(err, ErrOperationCanceled) {
-			t.Fatalf("late operation attempt %d error = %v, want canceled", i+1, err)
-		}
-	}
-	for range 2 {
-		coord.RecordCommitted("session-1", testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit))
-	}
-	assertState(t, mustFeedSnapshot(t, coord, "session-1", []clientui.RuntimeOperationRef{canceled}), canceled, clientui.RuntimeInputReconciliationCanceledNotCommitted)
-}
-
-func TestCoordinatorTombstonePreventsLateSuccessfulRecorderOverwrite(t *testing.T) {
-	coord := NewCoordinator()
-	ref := testRuntimeOperationRef(clientui.RuntimeOperationKindQueuedMessage)
-	if err := coord.CancelOperation("session-1", ref); err != nil {
-		t.Fatalf("CancelOperation: %v", err)
-	}
-	coord.RecordCommitted("session-1", ref)
-	assertState(t, mustFeedSnapshot(t, coord, "session-1", []clientui.RuntimeOperationRef{ref}), ref, clientui.RuntimeInputReconciliationCanceledNotCommitted)
-}
-
 func TestCoordinatorTombstonedSuccessfulAttemptDoesNotReplayAfterTTL(t *testing.T) {
 	now := time.Date(2026, 6, 30, 15, 30, 0, 0, time.UTC)
 	coord := NewCoordinator(WithTTL(time.Minute), WithNow(func() time.Time { return now }))
@@ -535,9 +634,7 @@ func TestCoordinatorTombstonedSuccessfulAttemptDoesNotReplayAfterTTL(t *testing.
 	calls := atomic.Int32{}
 	resp, err := Do(coord, context.Background(), "session-1", ref, "same", func(a string, b string) bool { return a == b }, func(context.Context, Attempt) (string, error) {
 		calls.Add(1)
-		if err := coord.CancelOperation("session-1", ref); err != nil {
-			t.Fatalf("CancelOperation: %v", err)
-		}
+		commitCancellation(t, coord, "session-1", ref).CancelOperationAttempt()
 		return "stale-success", nil
 	})
 	if !errors.Is(err, ErrOperationCanceled) || resp != "" {
@@ -572,10 +669,7 @@ func TestCoordinatorQueuedMessageCommitBarrierPreventsLateCancelTombstone(t *tes
 		if !committed {
 			t.Fatal("TryCommitOperationMutation rejected uncanceled queued message")
 		}
-		result, err := coord.CancelOperationTarget("session-1", ref)
-		if err != nil {
-			t.Fatalf("CancelOperationTarget: %v", err)
-		}
+		result := commitCancellation(t, coord, "session-1", ref)
 		if result.InterruptActive {
 			t.Fatal("queued-message create after commit barrier must not request active interrupt")
 		}
@@ -586,42 +680,6 @@ func TestCoordinatorQueuedMessageCommitBarrierPreventsLateCancelTombstone(t *tes
 	}
 	if !created {
 		t.Fatal("queued create mutation did not run")
-	}
-	assertState(t, mustFeedSnapshot(t, coord, "session-1", []clientui.RuntimeOperationRef{ref}), ref, clientui.RuntimeInputReconciliationCommitted)
-}
-
-func TestCoordinatorQueuedMessageCommitMutationPreventsPreCommitCreate(t *testing.T) {
-	coord := NewCoordinator()
-	ref := testRuntimeOperationRef(clientui.RuntimeOperationKindQueuedMessage)
-	created := false
-	if err := coord.CancelOperation("session-1", ref); err != nil {
-		t.Fatalf("CancelOperation: %v", err)
-	}
-	committed, err := coord.TryCommitOperationMutation("session-1", ref, func() error {
-		created = true
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("TryCommitOperationMutation: %v", err)
-	}
-	if committed || created {
-		t.Fatalf("committed=%t created=%t, want canceled before queued mutation", committed, created)
-	}
-	assertState(t, mustFeedSnapshot(t, coord, "session-1", []clientui.RuntimeOperationRef{ref}), ref, clientui.RuntimeInputReconciliationCanceledNotCommitted)
-}
-
-func TestCoordinatorCommittedRuntimeAcceptanceWinsLateCancel(t *testing.T) {
-	coord := NewCoordinator()
-	ref := testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit)
-	resp, err := Do(coord, context.Background(), "session-1", ref, "same", func(a string, b string) bool { return a == b }, func(context.Context, Attempt) (string, error) {
-		if err := coord.CancelOperation("session-1", ref); err != nil {
-			t.Fatalf("CancelOperation: %v", err)
-		}
-		coord.RecordUserMessageFlushed("session-1", ref)
-		return "accepted", nil
-	})
-	if err != nil || resp != "accepted" {
-		t.Fatalf("accepted operation = (%q, %v), want success despite late cancel", resp, err)
 	}
 	assertState(t, mustFeedSnapshot(t, coord, "session-1", []clientui.RuntimeOperationRef{ref}), ref, clientui.RuntimeInputReconciliationCommitted)
 }
@@ -706,22 +764,6 @@ func TestCoordinatorPrunesSubmittedAttemptErrorByCapacity(t *testing.T) {
 	}
 }
 
-func TestCoordinatorPrunesExpiredTombstonesBeforeCapacityCheck(t *testing.T) {
-	now := time.Date(2026, 6, 30, 15, 0, 0, 0, time.UTC)
-	coord := NewCoordinator(WithLimit(1), WithTTL(time.Minute), WithNow(func() time.Time { return now }))
-	old := testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit)
-	if err := coord.CancelOperation("session-1", old); err != nil {
-		t.Fatalf("old CancelOperation: %v", err)
-	}
-	now = now.Add(2 * time.Minute)
-	newRef := testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit)
-	if err := coord.CancelOperation("session-1", newRef); err != nil {
-		t.Fatalf("new CancelOperation after old TTL: %v", err)
-	}
-	assertState(t, mustFeedSnapshot(t, coord, "session-1", []clientui.RuntimeOperationRef{old, newRef}), old, clientui.RuntimeInputReconciliationEvicted)
-	assertState(t, mustFeedSnapshot(t, coord, "session-1", []clientui.RuntimeOperationRef{newRef}), newRef, clientui.RuntimeInputReconciliationCanceledNotCommitted)
-}
-
 func TestCoordinatorBoundsEvictedMarkers(t *testing.T) {
 	coord := NewCoordinator(WithLimit(1), WithTTL(time.Hour))
 	evictedA := testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit)
@@ -765,27 +807,6 @@ func TestCoordinatorFailedAttemptCanRetryWithSameOperationRecord(t *testing.T) {
 	assertState(t, mustFeedSnapshot(t, coord, "session-1", []clientui.RuntimeOperationRef{ref}), ref, clientui.RuntimeInputReconciliationCommitted)
 }
 
-func TestCoordinatorCancelBeforeRegisterCreatesNonEvictableTombstone(t *testing.T) {
-	coord := NewCoordinator(WithLimit(1))
-	canceled := testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit)
-	if err := coord.CancelOperation("session-1", canceled); err != nil {
-		t.Fatalf("CancelOperation: %v", err)
-	}
-	_, err := Do(coord, context.Background(), "session-1", canceled, "same", func(a string, b string) bool { return a == b }, func(context.Context, Attempt) (struct{}, error) {
-		t.Fatal("late original operation must not run after tombstone")
-		return struct{}{}, nil
-	})
-	if !errors.Is(err, ErrOperationCanceled) {
-		t.Fatalf("late original error = %v, want operation canceled", err)
-	}
-	assertState(t, mustFeedSnapshot(t, coord, "session-1", []clientui.RuntimeOperationRef{canceled}), canceled, clientui.RuntimeInputReconciliationCanceledNotCommitted)
-	for range 3 {
-		ref := testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit)
-		coord.RecordCommitted("session-1", ref)
-	}
-	assertState(t, mustFeedSnapshot(t, coord, "session-1", []clientui.RuntimeOperationRef{canceled}), canceled, clientui.RuntimeInputReconciliationCanceledNotCommitted)
-}
-
 func TestCoordinatorCancelInFlightCancelsAttemptContext(t *testing.T) {
 	coord := NewCoordinator()
 	ref := testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit)
@@ -800,9 +821,7 @@ func TestCoordinatorCancelInFlightCancelsAttemptContext(t *testing.T) {
 		done <- err
 	}()
 	<-started
-	if err := coord.CancelOperation("session-1", ref); err != nil {
-		t.Fatalf("CancelOperation: %v", err)
-	}
+	commitCancellation(t, coord, "session-1", ref).CancelOperationAttempt()
 	select {
 	case err := <-done:
 		if !errors.Is(err, context.Canceled) {
@@ -812,22 +831,6 @@ func TestCoordinatorCancelInFlightCancelsAttemptContext(t *testing.T) {
 		t.Fatal("timed out waiting for in-flight operation cancellation")
 	}
 	assertState(t, mustFeedSnapshot(t, coord, "session-1", []clientui.RuntimeOperationRef{ref}), ref, clientui.RuntimeInputReconciliationCanceledNotCommitted)
-}
-
-func TestCoordinatorTerminalTTLMarksEvictedButKeepsUnexpiredTombstones(t *testing.T) {
-	now := time.Date(2026, 6, 30, 12, 0, 0, 0, time.UTC)
-	coord := NewCoordinator(WithLimit(1), WithTTL(time.Hour), WithNow(func() time.Time { return now }))
-	terminal := testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit)
-	tombstone := testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit)
-	coord.RecordCommitted("session-1", terminal)
-	if err := coord.CancelOperation("session-1", tombstone); err != nil {
-		t.Fatalf("CancelOperation: %v", err)
-	}
-	now = now.Add(2 * time.Minute)
-	coord.RecordCommitted("session-1", testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit))
-	snapshot := mustFeedSnapshot(t, coord, "session-1", []clientui.RuntimeOperationRef{terminal, tombstone})
-	assertState(t, snapshot, terminal, clientui.RuntimeInputReconciliationEvicted)
-	assertState(t, snapshot, tombstone, clientui.RuntimeInputReconciliationCanceledNotCommitted)
 }
 
 func assertState(t *testing.T, snapshot clientui.RuntimeInputReconciliationSnapshot, ref clientui.RuntimeOperationRef, want clientui.RuntimeInputReconciliationState) {
@@ -850,6 +853,24 @@ func mustFeedSnapshot(t *testing.T, coord *Coordinator, sessionID string, refs [
 		t.Fatalf("FeedSnapshot: %v", err)
 	}
 	return snapshot
+}
+
+func commitCancellation(
+	t *testing.T,
+	coord *Coordinator,
+	sessionID string,
+	ref clientui.RuntimeOperationRef,
+) CancellationResult {
+	t.Helper()
+	preparation, err := coord.PrepareOperationCancellation(context.Background(), sessionID, ref)
+	if err != nil {
+		t.Fatalf("PrepareOperationCancellation: %v", err)
+	}
+	result, err := preparation.Commit()
+	if err != nil {
+		t.Fatalf("Commit cancellation: %v", err)
+	}
+	return result
 }
 
 func testRuntimeOperationRef(kind clientui.RuntimeOperationKind) clientui.RuntimeOperationRef {

@@ -9,8 +9,9 @@ import (
 )
 
 type InterruptSelector struct {
-	TaskID    workflow.TaskID
-	SessionID *runtimeids.SessionID
+	TaskID      workflow.TaskID
+	SessionID   *runtimeids.SessionID
+	CurrentNode *workflow.CurrentNodeReference
 }
 
 func (s InterruptSelector) Validate() error {
@@ -19,6 +20,12 @@ func (s InterruptSelector) Validate() error {
 	}
 	if s.SessionID != nil && s.SessionID.IsZero() {
 		return errors.New("workflow interrupt session id is invalid")
+	}
+	if s.CurrentNode != nil && s.CurrentNode.TaskID != s.TaskID {
+		return errors.New("workflow interrupt Current Node belongs to a different Task")
+	}
+	if s.CurrentNode != nil && s.SessionID == nil {
+		return errors.New("workflow interrupt Current Node requires a Session selector")
 	}
 	return nil
 }

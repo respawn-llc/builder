@@ -1727,25 +1727,6 @@ func TestServiceSubmitUserTurnPromptCommandRetryDoesNotRereadOrDuplicateHistory(
 	}
 }
 
-func TestServiceSubmitUserTurnOperationTombstonePreventsPreActiveBegin(t *testing.T) {
-	client := finalResponseRuntimeControlClient()
-	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
-	operations := runtimeops.NewCoordinator()
-	service.WithOperationCoordinator(operations)
-	req := runtimeControlUserTurnRequest(store, "req-canceled", "hello")
-	if err := operations.CancelOperation(store.Meta().SessionID, req.OperationRef); err != nil {
-		t.Fatalf("CancelOperation: %v", err)
-	}
-
-	if _, err := service.SubmitUserTurn(context.Background(), req); !errors.Is(err, runtimeops.ErrOperationCanceled) {
-		t.Fatalf("SubmitUserTurn after tombstone error = %v, want operation canceled", err)
-	}
-	if client.calls != 0 {
-		t.Fatalf("generate call count = %d, want 0", client.calls)
-	}
-	assertRuntimeControlReconciliation(t, operations, store.Meta().SessionID, req.OperationRef, clientui.RuntimeInputReconciliationCanceledNotCommitted)
-}
-
 func TestServiceSubmitUserTurnRecordsCommittedAtFlushBeforeAssistantCompletion(t *testing.T) {
 	client := newCancelObservingRuntimeControlClient()
 	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
@@ -1793,68 +1774,6 @@ func TestServiceSubmitUserTurnRecordsCommittedAtFlushBeforeAssistantCompletion(t
 	assertRuntimeControlReconciliation(t, service.operations, req.SessionID, ref, clientui.RuntimeInputReconciliationCommitted)
 }
 
-func TestServiceInterruptWithTargetRecordsCancellationTombstoneWithoutRuntime(t *testing.T) {
-	operations := runtimeops.NewCoordinator()
-	service := NewService(sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})).WithOperationCoordinator(operations)
-	ref := runtimeControlOperationRef(clientui.RuntimeOperationKindSubmit)
-	sessionID := "018fdd67-89ab-4cde-8123-456789abcdef"
-	resp, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
-		ClientRequestID:    "interrupt-target",
-		SessionID:          sessionID,
-		TargetOperationRef: &ref,
-	})
-	if err != nil {
-		t.Fatalf("Interrupt: %v", err)
-	}
-	if resp.Activity.State != clientui.RuntimeActivityUnavailable {
-		t.Fatalf("activity = %+v, want unavailable", resp.Activity)
-	}
-	assertRuntimeControlReconciliation(t, operations, sessionID, ref, clientui.RuntimeInputReconciliationCanceledNotCommitted)
-	if len(resp.InputReconciliation.Operations) != 1 || resp.InputReconciliation.Operations[0].Operation != ref || resp.InputReconciliation.Operations[0].State != clientui.RuntimeInputReconciliationCanceledNotCommitted {
-		t.Fatalf("response reconciliation = %+v, want canceled target", resp.InputReconciliation)
-	}
-}
-
-func TestServiceTargetedPreActiveInterruptDoesNotInterruptUnrelatedActiveRun(t *testing.T) {
-	client := newCancelObservingRuntimeControlClient()
-	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
-	activeDone := make(chan error, 1)
-	go func() {
-		_, err := engine.SubmitUserMessage(context.Background(), "active unrelated turn")
-		activeDone <- err
-	}()
-	select {
-	case <-client.started:
-	case <-time.After(time.Second):
-		t.Fatal("active run did not start")
-	}
-	operations := runtimeops.NewCoordinator()
-	service.WithOperationCoordinator(operations)
-	target := runtimeControlOperationRef(clientui.RuntimeOperationKindSubmit)
-	if _, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
-		ClientRequestID:    "interrupt-pre-active-target",
-		SessionID:          store.Meta().SessionID,
-		TargetOperationRef: &target,
-	}); err != nil {
-		t.Fatalf("Interrupt targeted pre-active: %v", err)
-	}
-	select {
-	case <-client.ctxCanceled:
-		t.Fatal("targeted pre-active cancellation interrupted unrelated active run")
-	case <-time.After(50 * time.Millisecond):
-	}
-	close(client.release)
-	select {
-	case err := <-activeDone:
-		if err != nil {
-			t.Fatalf("active run after release: %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("active run did not finish after release")
-	}
-	assertRuntimeControlReconciliation(t, operations, store.Meta().SessionID, target, clientui.RuntimeInputReconciliationCanceledNotCommitted)
-}
-
 func TestServiceTargetedTerminalOperationDoesNotInterruptUnrelatedActiveRun(t *testing.T) {
 	client := newCancelObservingRuntimeControlClient()
 	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
@@ -1894,6 +1813,186 @@ func TestServiceTargetedTerminalOperationDoesNotInterruptUnrelatedActiveRun(t *t
 		t.Fatal("active run did not finish after release")
 	}
 	assertRuntimeControlReconciliation(t, operations, store.Meta().SessionID, target, clientui.RuntimeInputReconciliationCommitted)
+}
+
+func TestServiceTerminalTargetWithQueuedItemDrainsOnceAndPreservesTarget(t *testing.T) {
+	store, engine, service := newRuntimeControlTestService(
+		t,
+		finalResponseRuntimeControlClient(),
+		nil,
+		runtime.Config{},
+	)
+	target := runtimeControlOperationRef(clientui.RuntimeOperationKindSubmit)
+	service.operations.RecordCommitted(store.Meta().SessionID, target)
+	pending := runtimeControlOperationRef(clientui.RuntimeOperationKindQueuedMessage)
+	queued := mustQueueRuntimeControlMessageWithClientRequestID(
+		t,
+		engine,
+		"discard terminal target pending item",
+		pending.ClientRequestID.String(),
+	)
+	queueItemID := mustRuntimeControlQueueItemID(t, queued.ID)
+	pending.QueueItemID = &queueItemID
+	if err := service.operations.RecordQueuedMessageStatus(
+		store.Meta().SessionID,
+		pending,
+		clientui.RuntimeInputReconciliationAccepted,
+	); err != nil {
+		t.Fatalf("record queued item: %v", err)
+	}
+	request := serverapi.RuntimeInterruptRequest{
+		ClientRequestID:      runtimeids.NewRuntimeClientRequestID().String(),
+		SessionID:            store.Meta().SessionID,
+		TargetOperationRef:   &target,
+		PendingOperationRefs: []clientui.RuntimeOperationRef{pending},
+	}
+	if _, err := service.Interrupt(context.Background(), request); err != nil {
+		t.Fatalf("Interrupt terminal target with queued item: %v", err)
+	}
+	if engine.HasQueuedUserWork() {
+		t.Fatal("terminal target Interrupt left its independently pending queue item")
+	}
+	assertRuntimeControlReconciliation(
+		t,
+		service.operations,
+		store.Meta().SessionID,
+		target,
+		clientui.RuntimeInputReconciliationCommitted,
+	)
+
+	later := mustQueueRuntimeControlMessageWithClientRequestID(
+		t,
+		engine,
+		"later queue item",
+		runtimeids.NewRuntimeClientRequestID().String(),
+	)
+	if _, err := service.Interrupt(context.Background(), request); err != nil {
+		t.Fatalf("replay terminal target Interrupt: %v", err)
+	}
+	if !engine.HasQueuedUserWork() {
+		t.Fatalf("replayed Interrupt discarded later queue item %q", later.ID)
+	}
+}
+
+func TestServiceNonActiveTargetWithQueuedItemCancelsOnlyTargetAndDrainsQueue(t *testing.T) {
+	store, engine, service := newRuntimeControlTestService(
+		t,
+		finalResponseRuntimeControlClient(),
+		nil,
+		runtime.Config{},
+	)
+	target := runtimeControlOperationRef(clientui.RuntimeOperationKindSubmit)
+	targetStarted := make(chan runtimeops.Attempt, 1)
+	targetDone := make(chan error, 1)
+	go func() {
+		_, err := runtimeops.Do(
+			service.operations,
+			context.Background(),
+			store.Meta().SessionID,
+			target,
+			"joiner",
+			func(left, right string) bool { return left == right },
+			func(_ context.Context, attempt runtimeops.Attempt) (struct{}, error) {
+				targetStarted <- attempt
+				<-attempt.Context().Done()
+				return struct{}{}, context.Cause(attempt.Context())
+			},
+		)
+		targetDone <- err
+	}()
+	<-targetStarted
+
+	pending := runtimeControlOperationRef(clientui.RuntimeOperationKindQueuedMessage)
+	queued := mustQueueRuntimeControlMessageWithClientRequestID(
+		t,
+		engine,
+		"discard alongside joiner",
+		pending.ClientRequestID.String(),
+	)
+	queueItemID := mustRuntimeControlQueueItemID(t, queued.ID)
+	pending.QueueItemID = &queueItemID
+	if err := service.operations.RecordQueuedMessageStatus(
+		store.Meta().SessionID,
+		pending,
+		clientui.RuntimeInputReconciliationAccepted,
+	); err != nil {
+		t.Fatalf("record queued item: %v", err)
+	}
+	if _, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
+		ClientRequestID:      runtimeids.NewRuntimeClientRequestID().String(),
+		SessionID:            store.Meta().SessionID,
+		TargetOperationRef:   &target,
+		PendingOperationRefs: []clientui.RuntimeOperationRef{pending},
+	}); err != nil {
+		t.Fatalf("Interrupt non-active target with queued item: %v", err)
+	}
+	if err := <-targetDone; !errors.Is(err, context.Canceled) &&
+		!errors.Is(err, runtimeops.ErrOperationCanceled) {
+		t.Fatalf("non-active target result = %v, want canceled", err)
+	}
+	if engine.HasQueuedUserWork() {
+		t.Fatal("non-active target Interrupt left independently pending queue item")
+	}
+	assertRuntimeControlReconciliation(
+		t,
+		service.operations,
+		store.Meta().SessionID,
+		target,
+		clientui.RuntimeInputReconciliationCanceledNotCommitted,
+	)
+}
+
+type notRetainedWorkflowInterruptor struct{}
+
+func (notRetainedWorkflowInterruptor) InterruptWorkflowSession(
+	context.Context,
+	sessionruntime.WorkflowSessionInterruptRequest,
+	func(sessionruntime.WorkflowCommittedInterruptCleanup) error,
+) (sessionruntime.WorkflowSessionInterruptOutcome, error) {
+	return sessionruntime.WorkflowSessionInterruptNotRetained, nil
+}
+
+func TestServiceStaleRetainedInterruptCachesWithoutDiscardingQueuedItem(t *testing.T) {
+	store, engine, service := newRuntimeControlTestService(
+		t,
+		finalResponseRuntimeControlClient(),
+		nil,
+		runtime.Config{},
+	)
+	service.WithWorkflowSessionInterruptor(notRetainedWorkflowInterruptor{})
+	pending := runtimeControlOperationRef(clientui.RuntimeOperationKindQueuedMessage)
+	queued := mustQueueRuntimeControlMessageWithClientRequestID(
+		t,
+		engine,
+		"stale retained queue item",
+		pending.ClientRequestID.String(),
+	)
+	queueItemID := mustRuntimeControlQueueItemID(t, queued.ID)
+	pending.QueueItemID = &queueItemID
+	if err := service.operations.RecordQueuedMessageStatus(
+		store.Meta().SessionID,
+		pending,
+		clientui.RuntimeInputReconciliationSubmitted,
+	); err != nil {
+		t.Fatalf("record queued item: %v", err)
+	}
+	request := serverapi.RuntimeInterruptRequest{
+		ClientRequestID:      runtimeids.NewRuntimeClientRequestID().String(),
+		SessionID:            store.Meta().SessionID,
+		PendingOperationRefs: []clientui.RuntimeOperationRef{pending},
+	}
+	if _, err := service.Interrupt(context.Background(), request); err != nil {
+		t.Fatalf("stale retained Interrupt: %v", err)
+	}
+	if !engine.HasQueuedUserWork() {
+		t.Fatal("stale retained Interrupt discarded queued item")
+	}
+	if _, err := service.Interrupt(context.Background(), request); err != nil {
+		t.Fatalf("stale retained Interrupt replay: %v", err)
+	}
+	if !engine.HasQueuedUserWork() {
+		t.Fatal("stale retained Interrupt replay discarded queued item")
+	}
 }
 
 func assertRuntimeControlReconciliation(t *testing.T, operations *runtimeops.Coordinator, sessionID string, ref clientui.RuntimeOperationRef, want clientui.RuntimeInputReconciliationState) {

@@ -34,14 +34,15 @@ type currentNodeInterruptCleanupState struct {
 	fatalDiagnostic LifecycleFatalDiagnostic
 }
 
-func (c *CurrentNodeController) cleanupInterrupt(state currentNodeInterruptCleanupState) error {
+func (c *CurrentNodeController) cleanupInterrupt(
+	cleanupCtx context.Context,
+	state currentNodeInterruptCleanupState,
+) error {
 	if len(state.stopHandles) == 0 &&
 		len(state.launchRuns) == 0 &&
 		len(state.admissionWaits) == 0 {
 		return nil
 	}
-	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), interruptCleanupTimeout)
-	defer cleanupCancel()
 	c.mu.Lock()
 	exactHandles := make([]sessionruntime.ExecutionHandle, 0, len(state.stopHandles))
 	for _, handle := range state.stopHandles {
@@ -124,6 +125,14 @@ func (c *CurrentNodeController) cleanupInterrupt(state currentNodeInterruptClean
 // Task-wide interrupt also drains controller-owned automatic work for that
 // Task so a successor cannot start after the interrupt returns.
 func (c *CurrentNodeController) Interrupt(ctx context.Context, selector InterruptSelector) error {
+	return c.interrupt(ctx, selector, nil)
+}
+
+func (c *CurrentNodeController) interrupt(
+	ctx context.Context,
+	selector InterruptSelector,
+	onCommitted func(func(func(context.Context) error) error) error,
+) error {
 	if c == nil {
 		return errors.New("current node workflow controller is required")
 	}
@@ -265,7 +274,40 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 		})
 		if errors.Is(err, sessionruntime.ErrExecutionNoLongerLive) {
 			if selector.SessionID != nil {
-				return ErrNoInterruptibleExecution
+				if selector.CurrentNode == nil {
+					return ErrNoInterruptibleExecution
+				}
+				key, keyErr := selector.CurrentNode.Key()
+				if keyErr != nil {
+					return keyErr
+				}
+				c.mu.Lock()
+				if c.closed {
+					c.mu.Unlock()
+					return errors.New("current node workflow controller is closed")
+				}
+				run, exists := c.currentRunLocked(key)
+				if !exists ||
+					!run.reference.Equal(*selector.CurrentNode) ||
+					!run.launching() ||
+					run.stopping() {
+					c.mu.Unlock()
+					return ErrNoInterruptibleExecution
+				}
+				run.stop = currentNodeRunStopInterrupting
+				selectedRuns = append(selectedRuns, run.id)
+				launchRuns = append(launchRuns, run.id)
+				references = append(references, run.reference)
+				admissionWaits = appendAdmissionWait(admissionWaits, run.id, run.admissionDone)
+				c.mu.Unlock()
+				if err := c.persistUserInterrupt(ctx, references); err != nil {
+					c.mu.Lock()
+					c.rollbackSelectedInterruptLocked(selectedRuns)
+					c.mu.Unlock()
+					return err
+				}
+				persisted = true
+				return nil
 			}
 			c.mu.Lock()
 			defer c.mu.Unlock()
@@ -322,8 +364,31 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 		state.fatalDiagnostic = c.interruptCleanupDiagnosticLocked(state)
 		c.mu.Unlock()
 	}
-	err := c.cleanupInterrupt(state)
-	if err != nil && persisted {
+	cleanup := func(beforeStop func(context.Context) error) error {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), interruptCleanupTimeout)
+		defer cleanupCancel()
+		var beforeErr error
+		if beforeStop != nil {
+			beforeErr = beforeStop(cleanupCtx)
+		}
+		stopErr := c.cleanupInterrupt(cleanupCtx, state)
+		return c.finishInterruptCleanup(state, errors.Join(beforeErr, stopErr))
+	}
+	if persisted && onCommitted != nil {
+		if err := onCommitted(cleanup); err == nil {
+			return nil
+		} else {
+			return errors.Join(err, cleanup(nil))
+		}
+	}
+	return cleanup(nil)
+}
+
+func (c *CurrentNodeController) finishInterruptCleanup(
+	state currentNodeInterruptCleanupState,
+	err error,
+) error {
+	if err != nil && state.persisted {
 		state.fatalDiagnostic.CleanupFailure = err
 		result := c.lifecycleFatalReporter.ReportFatal(state.fatalDiagnostic)
 		c.mu.Lock()
@@ -596,7 +661,9 @@ func (c *CurrentNodeController) InterruptForManualMove(
 		}
 		return err
 	}
-	return c.cleanupInterrupt(currentNodeInterruptCleanupState{
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), interruptCleanupTimeout)
+	defer cleanupCancel()
+	return c.cleanupInterrupt(cleanupCtx, currentNodeInterruptCleanupState{
 		taskID:         taskID,
 		stopHandles:    stopHandles,
 		waitHandles:    waitHandles,

@@ -50,24 +50,25 @@ type WorkflowTaskSessionResolver interface {
 var errWorkflowTaskSessionAutoCompactionDisable = errors.New("auto-compaction cannot be disabled for workflow task sessions")
 
 type Service struct {
-	authority      *sessionruntime.Authority
-	execution      *runtimecommand.ExecutionAdapter
-	goalAuthority  *runtimecommand.GoalAuthority
-	activity       RuntimeActivityResolver
-	promptStore    PromptHistoryStore
-	promptCommands PromptCommandResolver
-	workflowTasks  WorkflowTaskSessionResolver
-	persisted      session.PersistedSessionResolver
-	askViews       servicecontract.AskViewService
-	approvalViews  servicecontract.ApprovalViewService
-	attention      servicecontract.AttentionNotificationService
-	operations     *runtimeops.Coordinator
-	sessionNames   *requestmemo.Memo[sessionStringMemoRequest, struct{}]
-	thinkingLevels *requestmemo.Memo[sessionStringMemoRequest, struct{}]
-	fastModes      *requestmemo.Memo[sessionBoolMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSetFastModeEnabledResponse]]
-	reviewers      *requestmemo.Memo[sessionBoolMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSetReviewerEnabledResponse]]
-	autoCompacts   *requestmemo.Memo[sessionBoolMemoRequest, serverapi.RuntimeSetAutoCompactionEnabledResponse]
-	questions      *requestmemo.Memo[sessionBoolMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSetQuestionsEnabledResponse]]
+	authority           *sessionruntime.Authority
+	execution           *runtimecommand.ExecutionAdapter
+	goalAuthority       *runtimecommand.GoalAuthority
+	activity            RuntimeActivityResolver
+	promptStore         PromptHistoryStore
+	promptCommands      PromptCommandResolver
+	workflowTasks       WorkflowTaskSessionResolver
+	workflowInterruptor sessionruntime.WorkflowSessionInterruptor
+	persisted           session.PersistedSessionResolver
+	askViews            servicecontract.AskViewService
+	approvalViews       servicecontract.ApprovalViewService
+	attention           servicecontract.AttentionNotificationService
+	operations          *runtimeops.Coordinator
+	sessionNames        *requestmemo.Memo[sessionStringMemoRequest, struct{}]
+	thinkingLevels      *requestmemo.Memo[sessionStringMemoRequest, struct{}]
+	fastModes           *requestmemo.Memo[sessionBoolMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSetFastModeEnabledResponse]]
+	reviewers           *requestmemo.Memo[sessionBoolMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSetReviewerEnabledResponse]]
+	autoCompacts        *requestmemo.Memo[sessionBoolMemoRequest, serverapi.RuntimeSetAutoCompactionEnabledResponse]
+	questions           *requestmemo.Memo[sessionBoolMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSetQuestionsEnabledResponse]]
 
 	localEntries   *requestmemo.Memo[localEntryMemoRequest, struct{}]
 	queuedDiscards *requestmemo.Memo[queuedUserMessageMemoRequest, serverapi.RuntimeDiscardQueuedUserMessageResponse]
@@ -77,6 +78,8 @@ type Service struct {
 	goals          *requestmemo.Memo[goalSetMemoRequest, committedGoalMutationResult]
 	goalStatuses   *requestmemo.Memo[goalStatusMemoRequest, committedGoalMutationResult]
 	goalClears     *requestmemo.Memo[goalClearMemoRequest, committedGoalMutationResult]
+	interrupts     *requestmemo.Memo[runtimeInterruptMemoRequest, runtimeInterruptMemoResult]
+	lifecycleCtx   context.Context
 }
 
 type committedRuntimeMutationResult[Resp any] struct {
@@ -140,6 +143,10 @@ type runtimeInterruptMemoRequest struct {
 	SessionID            string
 	TargetOperationRef   *clientui.RuntimeOperationRef
 	PendingOperationRefs []clientui.RuntimeOperationRef
+}
+
+type runtimeInterruptMemoResult struct {
+	ReconciliationRefs []clientui.RuntimeOperationRef
 }
 
 type localEntryMemoRequest struct {
@@ -211,6 +218,8 @@ func NewServiceWithGoalCommands(
 		goals:          requestmemo.New[goalSetMemoRequest, committedGoalMutationResult](),
 		goalStatuses:   requestmemo.New[goalStatusMemoRequest, committedGoalMutationResult](),
 		goalClears:     requestmemo.New[goalClearMemoRequest, committedGoalMutationResult](),
+		interrupts:     requestmemo.New[runtimeInterruptMemoRequest, runtimeInterruptMemoResult](),
+		lifecycleCtx:   context.Background(),
 	}
 }
 
@@ -244,6 +253,17 @@ func (s *Service) WithOperationCoordinator(coordinator *runtimeops.Coordinator) 
 	return s
 }
 
+func (s *Service) WithLifecycleContext(ctx context.Context) *Service {
+	if s == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	s.lifecycleCtx = ctx
+	return s
+}
+
 func (s *Service) WithPromptHistoryStore(store PromptHistoryStore) *Service {
 	if s == nil {
 		return nil
@@ -265,6 +285,14 @@ func (s *Service) WithWorkflowTaskSessionResolver(resolver WorkflowTaskSessionRe
 		return nil
 	}
 	s.workflowTasks = resolver
+	return s
+}
+
+func (s *Service) WithWorkflowSessionInterruptor(interruptor sessionruntime.WorkflowSessionInterruptor) *Service {
+	if s == nil {
+		return nil
+	}
+	s.workflowInterruptor = interruptor
 	return s
 }
 
@@ -565,32 +593,197 @@ func (s *Service) Interrupt(ctx context.Context, req serverapi.RuntimeInterruptR
 		TargetOperationRef:   textutil.Pointer(req.TargetOperationRef),
 		PendingOperationRefs: append([]clientui.RuntimeOperationRef(nil), req.PendingOperationRefs...),
 	}
-	return s.interrupt(ctx, reqData)
+	result, err := s.interrupts.DoAdmitted(
+		ctx,
+		strings.TrimSpace(req.ClientRequestID),
+		reqData,
+		sameRuntimeInterruptMemoRequest,
+		func(prepareCtx context.Context, admission *requestmemo.Admission[runtimeInterruptMemoResult]) {
+			s.prepareInterrupt(prepareCtx, reqData, admission)
+		},
+	)
+	if err != nil {
+		return serverapi.RuntimeInterruptResponse{}, err
+	}
+	return s.runtimeInterruptResponse(sessionID, result.ReconciliationRefs)
 }
 
-func (s *Service) interrupt(ctx context.Context, req runtimeInterruptMemoRequest) (serverapi.RuntimeInterruptResponse, error) {
+func (s *Service) prepareInterrupt(
+	ctx context.Context,
+	req runtimeInterruptMemoRequest,
+	admission *requestmemo.Admission[runtimeInterruptMemoResult],
+) {
 	sessionID := strings.TrimSpace(req.SessionID)
-	pendingRefs := append([]clientui.RuntimeOperationRef(nil), req.PendingOperationRefs...)
-	interruptActive := req.TargetOperationRef == nil
-	targetQueuedMessage := false
-	var cancelResult runtimeops.CancellationResult
+	reconciliationRefs := append([]clientui.RuntimeOperationRef(nil), req.PendingOperationRefs...)
+	var preparation *runtimeops.CancellationPreparation
 	if req.TargetOperationRef != nil {
-		targetQueuedMessage = req.TargetOperationRef.Kind == clientui.RuntimeOperationKindQueuedMessage
 		var err error
-		cancelResult, err = s.operations.CancelOperationTarget(sessionID, *req.TargetOperationRef)
+		preparation, err = s.operations.PrepareOperationCancellation(ctx, sessionID, *req.TargetOperationRef)
 		if err != nil {
-			return serverapi.RuntimeInterruptResponse{}, err
+			_ = admission.Reject(err)
+			return
 		}
-		interruptActive = !targetQueuedMessage && cancelResult.InterruptActive && s.runtimeActivityActiveForControl(ctx, sessionID, pendingRefs)
-		if !slices.Contains(pendingRefs, *req.TargetOperationRef) {
-			pendingRefs = append([]clientui.RuntimeOperationRef{*req.TargetOperationRef}, pendingRefs...)
+		if !slices.Contains(reconciliationRefs, *req.TargetOperationRef) {
+			reconciliationRefs = append([]clientui.RuntimeOperationRef{*req.TargetOperationRef}, reconciliationRefs...)
 		}
 	}
-	err := s.withRuntime(ctx, sessionID, func(_ context.Context, engine *runtime.Engine) error {
-		for _, ref := range pendingRefs {
-			if ref.Kind != clientui.RuntimeOperationKindQueuedMessage || ref.QueueItemID == nil {
-				continue
+	queueRefs := queuedInterruptRefs(req)
+	target := runtimeops.CancellationTargetAbsentOrTerminal
+	if preparation != nil {
+		target = preparation.Target()
+	}
+	if target != runtimeops.CancellationTargetQueuedMessage && s.workflowInterruptor != nil {
+		parsedSessionID, err := runtimeids.ParseSessionID(sessionID)
+		if err != nil {
+			if preparation != nil {
+				_ = preparation.Release()
 			}
+			_ = admission.Reject(err)
+			return
+		}
+		outcome, err := s.workflowInterruptor.InterruptWorkflowSession(
+			ctx,
+			sessionruntime.WorkflowSessionInterruptRequest{
+				SessionID:          parsedSessionID,
+				TargetOperationRef: req.TargetOperationRef,
+				Target:             target,
+			},
+			func(cleanup sessionruntime.WorkflowCommittedInterruptCleanup) error {
+				work, admitErr := admission.Admit()
+				if admitErr != nil {
+					return admitErr
+				}
+				go func() {
+					result := runtimeInterruptMemoResult{ReconciliationRefs: reconciliationRefs}
+					cleanupErr := cleanup(func(cleanupCtx context.Context) error {
+						_, effectErr := s.runLocalInterrupt(
+							cleanupCtx,
+							sessionID,
+							preparation,
+							queueRefs,
+							false,
+							true,
+						)
+						return effectErr
+					})
+					_ = work.Complete(result, cleanupErr)
+				}()
+				return nil
+			},
+		)
+		if err != nil {
+			if preparation != nil {
+				_ = preparation.Release()
+			}
+			_ = admission.Reject(err)
+			return
+		}
+		switch outcome {
+		case sessionruntime.WorkflowSessionInterruptCommitted:
+			return
+		case sessionruntime.WorkflowSessionInterruptNotRetained:
+			if preparation != nil {
+				_ = preparation.Release()
+			}
+			_ = admission.Complete(runtimeInterruptMemoResult{
+				ReconciliationRefs: reconciliationRefs,
+			}, nil)
+			return
+		case sessionruntime.WorkflowSessionInterruptUnhandled, sessionruntime.WorkflowSessionInterruptNoLongerLive:
+		default:
+			if preparation != nil {
+				_ = preparation.Release()
+			}
+			_ = admission.Reject(errors.New("workflow Session interrupt returned an invalid outcome"))
+			return
+		}
+	}
+	interruptActive := req.TargetOperationRef == nil && s.ordinaryRuntimeInterruptible(ctx, sessionID)
+	hasLocalEffect := len(queueRefs) != 0 ||
+		target == runtimeops.CancellationTargetQueuedMessage ||
+		target == runtimeops.CancellationTargetNonActive ||
+		target == runtimeops.CancellationTargetActiveInterruptible ||
+		interruptActive
+	if !hasLocalEffect {
+		if preparation != nil {
+			_ = preparation.Release()
+		}
+		_ = admission.Complete(runtimeInterruptMemoResult{
+			ReconciliationRefs: reconciliationRefs,
+		}, nil)
+		return
+	}
+	work, err := admission.Admit()
+	if err != nil {
+		if preparation != nil {
+			_ = preparation.Release()
+		}
+		_ = admission.Reject(err)
+		return
+	}
+	go func() {
+		result := runtimeInterruptMemoResult{ReconciliationRefs: reconciliationRefs}
+		_, err := s.runLocalInterrupt(
+			s.lifecycleCtx,
+			sessionID,
+			preparation,
+			queueRefs,
+			interruptActive,
+			false,
+		)
+		_ = work.Complete(result, err)
+	}()
+}
+
+func (s *Service) ordinaryRuntimeInterruptible(ctx context.Context, sessionID string) bool {
+	active := false
+	err := s.withRuntime(ctx, sessionID, func(_ context.Context, engine *runtime.Engine) error {
+		active = engine.ActiveStepSnapshot() != nil
+		return nil
+	})
+	return err == nil && active
+}
+
+func queuedInterruptRefs(req runtimeInterruptMemoRequest) []clientui.RuntimeOperationRef {
+	refs := make([]clientui.RuntimeOperationRef, 0, len(req.PendingOperationRefs)+1)
+	appendQueued := func(ref clientui.RuntimeOperationRef) {
+		if ref.Kind != clientui.RuntimeOperationKindQueuedMessage || ref.QueueItemID == nil || slices.Contains(refs, ref) {
+			return
+		}
+		refs = append(refs, ref)
+	}
+	if req.TargetOperationRef != nil {
+		appendQueued(*req.TargetOperationRef)
+	}
+	for _, ref := range req.PendingOperationRefs {
+		appendQueued(ref)
+	}
+	return refs
+}
+
+func (s *Service) runLocalInterrupt(
+	ctx context.Context,
+	sessionID string,
+	preparation *runtimeops.CancellationPreparation,
+	queueRefs []clientui.RuntimeOperationRef,
+	interruptActive bool,
+	workflowStop bool,
+) (runtimeops.CancellationResult, error) {
+	var cancelResult runtimeops.CancellationResult
+	if preparation != nil {
+		var err error
+		cancelResult, err = preparation.Commit()
+		if err != nil {
+			return runtimeops.CancellationResult{}, err
+		}
+	}
+	cancelResult.CancelOperationAttempt()
+	interruptPreparedTarget := cancelResult.InterruptActive && !workflowStop
+	if len(queueRefs) == 0 && !interruptActive && !interruptPreparedTarget {
+		return cancelResult, nil
+	}
+	err := s.withRuntime(ctx, sessionID, func(_ context.Context, engine *runtime.Engine) error {
+		for _, ref := range queueRefs {
 			if !engine.DiscardQueuedUserMessage(ref.QueueItemID.String()) {
 				continue
 			}
@@ -602,28 +795,28 @@ func (s *Service) interrupt(ctx context.Context, req runtimeInterruptMemoRequest
 				return err
 			}
 		}
-		if interruptActive {
-			if err := engine.Interrupt(); err != nil {
-				return err
-			}
+		if interruptActive || interruptPreparedTarget {
+			return engine.Interrupt()
 		}
 		return nil
 	})
 	if err != nil && !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
-		return serverapi.RuntimeInterruptResponse{}, err
+		return cancelResult, err
 	}
-	if req.TargetOperationRef != nil {
-		cancelResult.CancelOperationAttempt()
-	}
-	return s.runtimeInterruptResponse(sessionID, pendingRefs)
+	return cancelResult, nil
 }
 
-func (s *Service) runtimeActivityActiveForControl(ctx context.Context, sessionID string, refs []clientui.RuntimeOperationRef) bool {
-	if s == nil || s.activity == nil {
+func sameRuntimeInterruptMemoRequest(left, right runtimeInterruptMemoRequest) bool {
+	if left.SessionID != right.SessionID {
 		return false
 	}
-	snapshot, err := s.activity.RuntimeReadModelSnapshot(ctx, sessionID, refs)
-	return err == nil && snapshot.Activity.ActiveForControl()
+	if (left.TargetOperationRef == nil) != (right.TargetOperationRef == nil) {
+		return false
+	}
+	if left.TargetOperationRef != nil && *left.TargetOperationRef != *right.TargetOperationRef {
+		return false
+	}
+	return slices.Equal(left.PendingOperationRefs, right.PendingOperationRefs)
 }
 
 func (s *Service) runtimeInterruptResponse(sessionID string, refs []clientui.RuntimeOperationRef) (serverapi.RuntimeInterruptResponse, error) {

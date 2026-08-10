@@ -21,6 +21,7 @@ import (
 // later; ordinary Sessions execute it directly through ExecutionAdapter.
 type SessionAgentOperationDriver interface {
 	sessionAgentOperationDriver()
+	RuntimeOperationRef() (clientui.RuntimeOperationRef, bool)
 	StartOwner(context.Context, *runtime.Engine, SessionAgentOperationOwnerOrderingNotifier) (SessionAgentOperationOutcome, error)
 	JoinLive(context.Context, *runtime.Engine) (SessionAgentOperationOutcome, error)
 }
@@ -106,6 +107,10 @@ func NewUserTurnDriver(options UserTurnDriverOptions) (SessionAgentOperationDriv
 }
 
 func (UserTurnDriver) sessionAgentOperationDriver() {}
+
+func (d UserTurnDriver) RuntimeOperationRef() (clientui.RuntimeOperationRef, bool) {
+	return d.options.OperationRef, true
+}
 
 func (d UserTurnDriver) StartOwner(
 	ctx context.Context,
@@ -317,6 +322,10 @@ func NewUserShellDriver(options UserShellDriverOptions) (SessionAgentOperationDr
 
 func (UserShellDriver) sessionAgentOperationDriver() {}
 
+func (d UserShellDriver) RuntimeOperationRef() (clientui.RuntimeOperationRef, bool) {
+	return d.options.OperationRef, true
+}
+
 func (d UserShellDriver) StartOwner(ctx context.Context, engine *runtime.Engine, ordering SessionAgentOperationOwnerOrderingNotifier) (SessionAgentOperationOutcome, error) {
 	return d.run(ctx, engine, ordering.Complete)
 }
@@ -377,6 +386,10 @@ func NewManualCompactionDriver(options ManualCompactionDriverOptions) (SessionAg
 
 func (ManualCompactionDriver) sessionAgentOperationDriver() {}
 
+func (d ManualCompactionDriver) RuntimeOperationRef() (clientui.RuntimeOperationRef, bool) {
+	return d.options.OperationRef, true
+}
+
 func (d ManualCompactionDriver) StartOwner(ctx context.Context, engine *runtime.Engine, ordering SessionAgentOperationOwnerOrderingNotifier) (SessionAgentOperationOutcome, error) {
 	return d.run(ctx, engine, ordering.Complete)
 }
@@ -419,6 +432,10 @@ func NewGoalMutationDriver(command GoalCommand) (SessionAgentOperationDriver, er
 }
 
 func (GoalMutationDriver) sessionAgentOperationDriver() {}
+
+func (GoalMutationDriver) RuntimeOperationRef() (clientui.RuntimeOperationRef, bool) {
+	return clientui.RuntimeOperationRef{}, false
+}
 
 func (d GoalMutationDriver) StartOwner(ctx context.Context, engine *runtime.Engine, ordering SessionAgentOperationOwnerOrderingNotifier) (SessionAgentOperationOutcome, error) {
 	outcome, err := d.run(engine)

@@ -13,6 +13,7 @@ import (
 	"core/server/metadata"
 	"core/server/runtime"
 	"core/server/runtimecommand"
+	"core/server/runtimeops"
 	"core/server/runtimewire"
 	"core/server/session"
 	"core/server/sessionruntime"
@@ -253,6 +254,284 @@ func TestRetainedWorkflowExactDoesNotAdmitJoinerBeforeOwnerOrdering(t *testing.T
 	}
 }
 
+func TestRetainedWorkflowCreatorCancellationPersistsBeforeStoppingExact(t *testing.T) {
+	fixture := newRuntimeControlRetainedWorkflowFixture(t)
+	exactEntered := make(chan struct{}, 1)
+	ownerBlocked := make(chan struct{})
+	fixture.runner.exact = exactEntered
+	fixture.runner.owner = ownerBlocked
+
+	target := runtimeControlOperationRef(clientui.RuntimeOperationKindSubmit)
+	submitDone := make(chan error, 1)
+	go func() {
+		_, err := fixture.service.SubmitUserTurn(context.Background(), serverapi.RuntimeSubmitUserTurnRequest{
+			ClientRequestID: target.ClientRequestID.String(),
+			SessionID:       fixture.session.Meta().SessionID,
+			Input:           runtimeinput.Text("cancel retained creator before owner ordering"),
+			OperationRef:    target,
+			PreSubmitCompactionOperationRef: runtimeControlOperationRef(
+				clientui.RuntimeOperationKindPreSubmitCompact,
+			),
+		})
+		submitDone <- err
+	}()
+	select {
+	case <-exactEntered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("retained creator did not reach Exact-before-ordering barrier")
+	}
+
+	response, err := fixture.service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
+		ClientRequestID:    runtimeids.NewRuntimeClientRequestID().String(),
+		SessionID:          fixture.session.Meta().SessionID,
+		TargetOperationRef: &target,
+	})
+	if err != nil {
+		t.Fatalf("Interrupt retained creator: %v", err)
+	}
+	for _, record := range response.InputReconciliation.Operations {
+		if record.Operation == target &&
+			record.State == clientui.RuntimeInputReconciliationCanceledNotCommitted {
+			goto reconciled
+		}
+	}
+	t.Fatalf("retained creator reconciliation = %+v, want canceled_not_committed", response.InputReconciliation)
+
+reconciled:
+	select {
+	case err := <-submitDone:
+		if !errors.Is(err, context.Canceled) && !errors.Is(err, runtimeops.ErrOperationCanceled) {
+			t.Fatalf("retained creator result = %v, want canceled", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("retained creator did not finish after committed Interrupt cleanup")
+	}
+	if execution, live := fixture.authority.SessionExecution(fixture.sessionID); live {
+		t.Fatalf("retained creator Exact remained live after Interrupt: %+v", execution.Scope())
+	}
+}
+
+func TestRetainedWorkflowCreatorCancellationPersistsBeforeCancelingLaunch(t *testing.T) {
+	fixture := newRuntimeControlRetainedWorkflowFixture(t)
+	launchingEntered := make(chan struct{}, 1)
+	launchBlocked := make(chan struct{})
+	fixture.runner.launching = launchingEntered
+	fixture.runner.launch = launchBlocked
+
+	target := runtimeControlOperationRef(clientui.RuntimeOperationKindUserShell)
+	submitDone := make(chan error, 1)
+	go func() {
+		submitDone <- fixture.service.SubmitUserShellCommand(
+			context.Background(),
+			serverapi.RuntimeSubmitUserShellCommandRequest{
+				ClientRequestID: target.ClientRequestID.String(),
+				SessionID:       fixture.session.Meta().SessionID,
+				Command:         "echo never-started",
+				OperationRef:    target,
+			},
+		)
+	}()
+	select {
+	case <-launchingEntered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("retained creator did not reach launching barrier")
+	}
+
+	response, err := fixture.service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
+		ClientRequestID:    runtimeids.NewRuntimeClientRequestID().String(),
+		SessionID:          fixture.session.Meta().SessionID,
+		TargetOperationRef: &target,
+	})
+	if err != nil {
+		t.Fatalf("Interrupt retained launching creator: %v", err)
+	}
+	for _, record := range response.InputReconciliation.Operations {
+		if record.Operation == target &&
+			record.State == clientui.RuntimeInputReconciliationCanceledNotCommitted {
+			goto reconciled
+		}
+	}
+	t.Fatalf("retained launching creator reconciliation = %+v, want canceled_not_committed", response.InputReconciliation)
+
+reconciled:
+	select {
+	case err := <-submitDone:
+		if !errors.Is(err, context.Canceled) && !errors.Is(err, runtimeops.ErrOperationCanceled) {
+			t.Fatalf("retained launching creator result = %v, want canceled", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("retained launching creator did not finish after committed Interrupt cleanup")
+	}
+	if execution, live := fixture.authority.SessionExecution(fixture.sessionID); live {
+		t.Fatalf("retained launching cancellation created a live Exact: %+v", execution.Scope())
+	}
+}
+
+func TestRetainedWorkflowCreatorPersistenceFailureLeavesTargetAndQueueUnchanged(t *testing.T) {
+	fixture := newRuntimeControlRetainedWorkflowFixture(t)
+	launchingEntered := make(chan struct{}, 1)
+	launchBlocked := make(chan struct{})
+	fixture.runner.launching = launchingEntered
+	fixture.runner.launch = launchBlocked
+
+	target := runtimeControlOperationRef(clientui.RuntimeOperationKindUserShell)
+	submitDone := make(chan error, 1)
+	go func() {
+		submitDone <- fixture.service.SubmitUserShellCommand(
+			context.Background(),
+			serverapi.RuntimeSubmitUserShellCommandRequest{
+				ClientRequestID: target.ClientRequestID.String(),
+				SessionID:       fixture.session.Meta().SessionID,
+				Command:         "echo persist-first",
+				OperationRef:    target,
+			},
+		)
+	}()
+	select {
+	case <-launchingEntered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("retained creator did not reach launching barrier")
+	}
+	pending := runtimeControlOperationRef(clientui.RuntimeOperationKindQueuedMessage)
+	queued := mustQueueRuntimeControlMessageWithClientRequestID(
+		t,
+		fixture.engine,
+		"preserve until durable interruption",
+		pending.ClientRequestID.String(),
+	)
+	queueItemID := mustRuntimeControlQueueItemID(t, queued.ID)
+	pending.QueueItemID = &queueItemID
+	if err := fixture.service.operations.RecordQueuedMessageStatus(
+		fixture.session.Meta().SessionID,
+		pending,
+		clientui.RuntimeInputReconciliationSubmitted,
+	); err != nil {
+		t.Fatalf("record pending queue item: %v", err)
+	}
+
+	persistenceErr := errors.New("interrupt persistence failed")
+	fixture.store.FailNextInterrupt(persistenceErr)
+	request := serverapi.RuntimeInterruptRequest{
+		ClientRequestID:      runtimeids.NewRuntimeClientRequestID().String(),
+		SessionID:            fixture.session.Meta().SessionID,
+		TargetOperationRef:   &target,
+		PendingOperationRefs: []clientui.RuntimeOperationRef{pending},
+	}
+	if _, err := fixture.service.Interrupt(context.Background(), request); !errors.Is(err, persistenceErr) {
+		t.Fatalf("Interrupt persistence error = %v, want injected failure", err)
+	}
+	if !fixture.engine.HasQueuedUserWork() {
+		t.Fatal("pre-commit persistence failure discarded pending queue item")
+	}
+	select {
+	case err := <-submitDone:
+		t.Fatalf("pre-commit persistence failure canceled launching target: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if _, err := fixture.service.Interrupt(context.Background(), request); err != nil {
+		t.Fatalf("retry retained creator Interrupt: %v", err)
+	}
+	if fixture.engine.HasQueuedUserWork() {
+		t.Fatal("committed retry left pending queue item")
+	}
+	select {
+	case err := <-submitDone:
+		if !errors.Is(err, context.Canceled) && !errors.Is(err, runtimeops.ErrOperationCanceled) {
+			t.Fatalf("retried retained creator result = %v, want canceled", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("retried retained creator did not finish")
+	}
+}
+
+func TestRetainedWorkflowCommittedCleanupOutlivesCallerAndSameIDJoins(t *testing.T) {
+	fixture := newRuntimeControlRetainedWorkflowFixture(t)
+	exactEntered := make(chan struct{}, 1)
+	ownerBlocked := make(chan struct{})
+	stopping := make(chan struct{}, 1)
+	releaseStop := make(chan struct{})
+	fixture.runner.exact = exactEntered
+	fixture.runner.owner = ownerBlocked
+	fixture.runner.stopping = stopping
+	fixture.runner.stop = releaseStop
+
+	target := runtimeControlOperationRef(clientui.RuntimeOperationKindSubmit)
+	submitDone := make(chan error, 1)
+	go func() {
+		_, err := fixture.service.SubmitUserTurn(context.Background(), serverapi.RuntimeSubmitUserTurnRequest{
+			ClientRequestID: target.ClientRequestID.String(),
+			SessionID:       fixture.session.Meta().SessionID,
+			Input:           runtimeinput.Text("hold committed cleanup"),
+			OperationRef:    target,
+			PreSubmitCompactionOperationRef: runtimeControlOperationRef(
+				clientui.RuntimeOperationKindPreSubmitCompact,
+			),
+		})
+		submitDone <- err
+	}()
+	select {
+	case <-exactEntered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("retained creator did not reach Exact-before-ordering barrier")
+	}
+
+	request := serverapi.RuntimeInterruptRequest{
+		ClientRequestID:    runtimeids.NewRuntimeClientRequestID().String(),
+		SessionID:          fixture.session.Meta().SessionID,
+		TargetOperationRef: &target,
+	}
+	firstCtx, cancelFirst := context.WithCancel(context.Background())
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := fixture.service.Interrupt(firstCtx, request)
+		firstDone <- err
+	}()
+	select {
+	case <-stopping:
+	case <-time.After(3 * time.Second):
+		t.Fatal("retained Interrupt did not reach committed stop cleanup")
+	}
+	cancelFirst()
+	select {
+	case err := <-firstDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("lost caller error = %v, want context canceled", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("lost caller remained bound to committed cleanup")
+	}
+
+	duplicateDone := make(chan error, 1)
+	go func() {
+		_, err := fixture.service.Interrupt(context.Background(), request)
+		duplicateDone <- err
+	}()
+	select {
+	case err := <-duplicateDone:
+		t.Fatalf("same-ID duplicate returned before shared cleanup finished: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(releaseStop)
+	select {
+	case err := <-duplicateDone:
+		if err != nil {
+			t.Fatalf("same-ID duplicate after cleanup: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("same-ID duplicate did not finish with shared cleanup")
+	}
+	select {
+	case err := <-submitDone:
+		if !errors.Is(err, context.Canceled) && !errors.Is(err, runtimeops.ErrOperationCanceled) {
+			t.Fatalf("retained creator result = %v, want canceled", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("retained creator did not finish after cleanup release")
+	}
+}
+
 func TestRetainedWorkflowLaunchingJoinUsesTheSameExact(t *testing.T) {
 	fixture := newRuntimeControlRetainedWorkflowFixture(t)
 	fixture.client.blockGenerate()
@@ -335,6 +614,36 @@ type runtimeControlRetainedWorkflowFixture struct {
 	client      *runtimeControlAuthorityProbeClient
 	background  *shelltool.Manager
 	runner      *runtimeControlAttachedOperationRunner
+	store       *runtimeControlInterruptStore
+}
+
+type runtimeControlInterruptStore struct {
+	*workflowstore.Store
+	mu            sync.Mutex
+	nextInterrupt error
+}
+
+func (s *runtimeControlInterruptStore) FailNextInterrupt(err error) {
+	s.mu.Lock()
+	s.nextInterrupt = err
+	s.mu.Unlock()
+}
+
+func (s *runtimeControlInterruptStore) InterruptCurrentNodeSchedulingSet(
+	ctx context.Context,
+	taskID workflow.TaskID,
+	targets []workflowstore.CurrentNodeSchedulingTarget,
+	reason workflow.CurrentNodeInterruptionReason,
+	detail workflow.CurrentNodeInterruptionDetail,
+) (workflowstore.CurrentNodeSchedulingInterruptionResult, error) {
+	s.mu.Lock()
+	err := s.nextInterrupt
+	s.nextInterrupt = nil
+	s.mu.Unlock()
+	if err != nil {
+		return workflowstore.CurrentNodeSchedulingInterruptionResult{}, err
+	}
+	return s.Store.InterruptCurrentNodeSchedulingSet(ctx, taskID, targets, reason, detail)
 }
 
 type runtimeControlWorkflowAssignmentEnsurer struct{}
@@ -370,6 +679,8 @@ type runtimeControlAttachedOperationRunner struct {
 	launch     <-chan struct{}
 	exact      chan struct{}
 	owner      <-chan struct{}
+	stopping   chan struct{}
+	stop       <-chan struct{}
 }
 
 func (r runtimeControlAttachedOperationRunner) StartCurrentNode(
@@ -417,7 +728,7 @@ func (r runtimeControlAttachedOperationRunner) StartCurrentNodeWithProfile(
 				select {
 				case <-r.owner:
 				case <-runCtx.Done():
-					return context.Cause(runCtx)
+					return r.waitForStopRelease(runCtx)
 				}
 			}
 			return bridge.WithEngine(runCtx, func(engineCtx context.Context, engine *runtime.Engine) error {
@@ -428,11 +739,24 @@ func (r runtimeControlAttachedOperationRunner) StartCurrentNodeWithProfile(
 				if runErr == nil && engine.GoalLoopRunning() {
 					return engine.WaitForGoalLoop(runCtx)
 				}
+				if runErr != nil && runCtx.Err() != nil {
+					return r.waitForStopRelease(runCtx)
+				}
 				return runErr
 			})
 		},
 	})
 	return err
+}
+
+func (r runtimeControlAttachedOperationRunner) waitForStopRelease(ctx context.Context) error {
+	if r.stopping != nil {
+		r.stopping <- struct{}{}
+	}
+	if r.stop != nil {
+		<-r.stop
+	}
+	return context.Cause(ctx)
 }
 
 type runtimeControlAuthorityProbeClient struct {
@@ -735,8 +1059,9 @@ func newRuntimeControlRetainedWorkflowFixture(t *testing.T) *runtimeControlRetai
 	}
 	taskMutations := workflowexecution.NewTaskMutationCoordinator()
 	attachedRunner := &runtimeControlAttachedOperationRunner{authority: authority, descriptor: descriptor}
+	interruptStore := &runtimeControlInterruptStore{Store: workflowStore}
 	controller, err = workflowexecution.NewCurrentNodeController(
-		workflowStore,
+		interruptStore,
 		attachedRunner,
 		authority,
 		taskMutations,
@@ -763,6 +1088,7 @@ func newRuntimeControlRetainedWorkflowFixture(t *testing.T) *runtimeControlRetai
 	).
 		WithPersistedSessionResolver(metadataStore).
 		WithWorkflowTaskSessionResolver(metadataStore).
+		WithWorkflowSessionInterruptor(controller).
 		WithPromptHistoryStore(metadataStore)
 	return &runtimeControlRetainedWorkflowFixture{
 		service:     service,
@@ -774,6 +1100,7 @@ func newRuntimeControlRetainedWorkflowFixture(t *testing.T) *runtimeControlRetai
 		client:      client,
 		background:  background,
 		runner:      attachedRunner,
+		store:       interruptStore,
 	}
 }
 

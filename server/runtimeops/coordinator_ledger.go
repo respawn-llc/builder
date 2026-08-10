@@ -72,6 +72,9 @@ func (l *sessionLedger) nonEvictableLocked(key string) bool {
 	if l.commitBarriers[key] != nil {
 		return true
 	}
+	if l.cancellationFences[key] != nil {
+		return true
+	}
 	return false
 }
 

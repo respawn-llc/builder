@@ -294,8 +294,10 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	runtimeControlService := runtimecontrol.NewServiceWithGoalCommands(runtimeAuthority, runtimeCommandExecution, runtimeGoalAuthority).
 		WithRuntimeActivityResolver(runtimeRegistry).
 		WithOperationCoordinator(runtimeOperations).
+		WithLifecycleContext(lifecycleFatal.Context()).
 		WithPromptHistoryStore(metadataStore).
 		WithWorkflowTaskSessionResolver(metadataStore).
+		WithWorkflowSessionInterruptor(workflowController).
 		WithPersistedSessionResolver(metadataStore).
 		WithLiveWatchPromptSources(askService, approvalService, runtimeRegistry)
 	runtimeControlService.WithPromptCommandResolver(promptCommandRuntimeResolver{

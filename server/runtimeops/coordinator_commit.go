@@ -6,12 +6,6 @@ import (
 	"core/shared/clientui"
 )
 
-func (c *Coordinator) CancelOperation(sessionID string, ref clientui.RuntimeOperationRef) error {
-	result, err := c.CancelOperationTarget(sessionID, ref)
-	result.CancelOperationAttempt()
-	return err
-}
-
 func (c *Coordinator) TryCommitOperation(sessionID string, ref clientui.RuntimeOperationRef) bool {
 	if c == nil {
 		return true
@@ -26,6 +20,12 @@ func (c *Coordinator) TryCommitOperation(sessionID string, ref clientui.RuntimeO
 		ledger.pruneLocked(c.limit, c.ttl, c.now())
 		if barrier := ledger.commitBarriers[key]; barrier != nil {
 			done := barrier.done
+			c.mu.Unlock()
+			<-done
+			continue
+		}
+		if fence := ledger.cancellationFences[key]; fence != nil {
+			done := fence.done
 			c.mu.Unlock()
 			<-done
 			continue
@@ -63,6 +63,12 @@ func (c *Coordinator) TryCommitOperationMutation(sessionID string, ref clientui.
 		ledger.pruneLocked(c.limit, c.ttl, c.now())
 		if existing := ledger.commitBarriers[key]; existing != nil {
 			done := existing.done
+			c.mu.Unlock()
+			<-done
+			continue
+		}
+		if fence := ledger.cancellationFences[key]; fence != nil {
+			done := fence.done
 			c.mu.Unlock()
 			<-done
 			continue

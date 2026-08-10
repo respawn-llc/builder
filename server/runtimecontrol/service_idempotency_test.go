@@ -382,6 +382,240 @@ func TestServiceInterruptRetryReturnsFreshActivitySnapshot(t *testing.T) {
 	}
 }
 
+func TestServiceInterruptCachedAbsentTargetDoesNotCancelLaterOperation(t *testing.T) {
+	operations := runtimeops.NewCoordinator()
+	service := NewService(sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})).
+		WithOperationCoordinator(operations)
+	sessionID := "018fdd67-89ab-4cde-8123-456789abcdef"
+	target := runtimeControlOperationRef(clientui.RuntimeOperationKindSubmit)
+	request := serverapi.RuntimeInterruptRequest{
+		ClientRequestID:    "018fdd67-89ab-4cde-8123-456789abcdea",
+		SessionID:          sessionID,
+		TargetOperationRef: &target,
+	}
+	if _, err := service.Interrupt(context.Background(), request); err != nil {
+		t.Fatalf("Interrupt absent target: %v", err)
+	}
+
+	attemptReady := make(chan runtimeops.Attempt, 1)
+	release := make(chan struct{})
+	operationDone := make(chan error, 1)
+	go func() {
+		_, err := runtimeops.Do(
+			operations,
+			context.Background(),
+			sessionID,
+			target,
+			"later operation",
+			func(left, right string) bool { return left == right },
+			func(_ context.Context, attempt runtimeops.Attempt) (struct{}, error) {
+				attemptReady <- attempt
+				<-release
+				return struct{}{}, nil
+			},
+		)
+		operationDone <- err
+	}()
+	attempt := <-attemptReady
+
+	if _, err := service.Interrupt(context.Background(), request); err != nil {
+		t.Fatalf("Interrupt replay: %v", err)
+	}
+	select {
+	case <-attempt.Context().Done():
+		t.Fatal("cached absent-target Interrupt canceled a later operation")
+	default:
+	}
+	close(release)
+	if err := <-operationDone; err != nil {
+		t.Fatalf("later operation: %v", err)
+	}
+}
+
+func TestServiceInterruptCanceledBehindOperationCommitBarrierIsRetryable(t *testing.T) {
+	operations := runtimeops.NewCoordinator()
+	service := NewService(sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})).
+		WithOperationCoordinator(operations)
+	sessionID := "018fdd67-89ab-4cde-8123-456789abcdef"
+	target := runtimeControlOperationRef(clientui.RuntimeOperationKindSubmit)
+	mutationStarted := make(chan struct{})
+	releaseMutation := make(chan struct{})
+	mutationErr := errors.New("target commit rejected")
+	operationDone := make(chan error, 1)
+	go func() {
+		_, err := runtimeops.Do(
+			operations,
+			context.Background(),
+			sessionID,
+			target,
+			"target operation",
+			func(left, right string) bool { return left == right },
+			func(context.Context, runtimeops.Attempt) (struct{}, error) {
+				_, commitErr := operations.TryCommitOperationMutation(sessionID, target, func() error {
+					close(mutationStarted)
+					<-releaseMutation
+					return mutationErr
+				})
+				return struct{}{}, commitErr
+			},
+		)
+		operationDone <- err
+	}()
+	<-mutationStarted
+
+	request := serverapi.RuntimeInterruptRequest{
+		ClientRequestID:    runtimeids.NewRuntimeClientRequestID().String(),
+		SessionID:          sessionID,
+		TargetOperationRef: &target,
+	}
+	interruptCtx, cancelInterrupt := context.WithCancel(context.Background())
+	interruptDone := make(chan error, 1)
+	go func() {
+		_, err := service.Interrupt(interruptCtx, request)
+		interruptDone <- err
+	}()
+	cancelInterrupt()
+	select {
+	case err := <-interruptDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled Interrupt error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("canceled Interrupt remained blocked behind target commit barrier")
+	}
+
+	close(releaseMutation)
+	if err := <-operationDone; !errors.Is(err, mutationErr) {
+		t.Fatalf("target operation error = %v, want rejected commit", err)
+	}
+	response, err := service.Interrupt(context.Background(), request)
+	if err != nil {
+		t.Fatalf("retry Interrupt: %v", err)
+	}
+	for _, record := range response.InputReconciliation.Operations {
+		if record.Operation == target &&
+			record.State == clientui.RuntimeInputReconciliationCanceledNotCommitted {
+			return
+		}
+	}
+	t.Fatalf("retry reconciliation = %+v, want canceled target", response.InputReconciliation)
+}
+
+type saturatingWorkflowInterruptor struct {
+	entered chan chan struct{}
+}
+
+func (i *saturatingWorkflowInterruptor) InterruptWorkflowSession(
+	ctx context.Context,
+	_ sessionruntime.WorkflowSessionInterruptRequest,
+	_ func(sessionruntime.WorkflowCommittedInterruptCleanup) error,
+) (sessionruntime.WorkflowSessionInterruptOutcome, error) {
+	release := make(chan struct{})
+	select {
+	case i.entered <- release:
+	case <-ctx.Done():
+		return sessionruntime.WorkflowSessionInterruptUnhandled, context.Cause(ctx)
+	}
+	select {
+	case <-release:
+		return sessionruntime.WorkflowSessionInterruptUnhandled, nil
+	case <-ctx.Done():
+		return sessionruntime.WorkflowSessionInterruptUnhandled, context.Cause(ctx)
+	}
+}
+
+func TestServiceInterruptSaturationPreservesDuplicatePrecedenceAndReclaimsCompletion(t *testing.T) {
+	interruptor := &saturatingWorkflowInterruptor{entered: make(chan chan struct{})}
+	service := NewService(sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})).
+		WithWorkflowSessionInterruptor(interruptor)
+	sessionID := "018fdd67-89ab-4cde-8123-456789abcdef"
+	type heldInterrupt struct {
+		request serverapi.RuntimeInterruptRequest
+		release chan struct{}
+		done    chan error
+	}
+	held := make([]heldInterrupt, 0)
+	var saturated serverapi.RuntimeInterruptRequest
+	for {
+		request := serverapi.RuntimeInterruptRequest{
+			ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
+			SessionID:       sessionID,
+		}
+		done := make(chan error, 1)
+		go func() {
+			_, err := service.Interrupt(context.Background(), request)
+			done <- err
+		}()
+		select {
+		case release := <-interruptor.entered:
+			held = append(held, heldInterrupt{request: request, release: release, done: done})
+		case err := <-done:
+			if !errors.Is(err, requestmemo.ErrCapacityUnavailable) {
+				t.Fatalf("new Interrupt at saturation error = %v, want capacity unavailable", err)
+			}
+			saturated = request
+		}
+		if saturated.ClientRequestID != "" {
+			break
+		}
+	}
+	defer func() {
+		for _, item := range held {
+			select {
+			case <-item.release:
+			default:
+				close(item.release)
+			}
+			select {
+			case <-item.done:
+			case <-time.After(3 * time.Second):
+				t.Errorf("held Interrupt did not finish during cleanup")
+			}
+		}
+	}()
+
+	duplicateCtx, cancelDuplicate := context.WithCancel(context.Background())
+	cancelDuplicate()
+	if _, err := service.Interrupt(duplicateCtx, held[0].request); !errors.Is(err, context.Canceled) {
+		t.Fatalf("matching duplicate at saturation error = %v, want canceled waiter", err)
+	}
+	mismatch := held[0].request
+	mismatch.PendingOperationRefs = []clientui.RuntimeOperationRef{
+		runtimeControlOperationRef(clientui.RuntimeOperationKindSubmit),
+	}
+	if _, err := service.Interrupt(context.Background(), mismatch); !errors.Is(err, requestmemo.ErrClientRequestIDReused) {
+		t.Fatalf("mismatched duplicate at saturation error = %v, want request ID reuse", err)
+	}
+
+	close(held[0].release)
+	if err := <-held[0].done; err != nil {
+		t.Fatalf("completed held Interrupt: %v", err)
+	}
+	held = held[1:]
+
+	reclaimed := serverapi.RuntimeInterruptRequest{
+		ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
+		SessionID:       sessionID,
+	}
+	reclaimedDone := make(chan error, 1)
+	go func() {
+		_, err := service.Interrupt(context.Background(), reclaimed)
+		reclaimedDone <- err
+	}()
+	var reclaimedRelease chan struct{}
+	select {
+	case reclaimedRelease = <-interruptor.entered:
+	case err := <-reclaimedDone:
+		t.Fatalf("new Interrupt after completion was not admitted: %v", err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("new Interrupt after completion neither admitted nor returned")
+	}
+	close(reclaimedRelease)
+	if err := <-reclaimedDone; err != nil {
+		t.Fatalf("reclaimed Interrupt: %v", err)
+	}
+}
+
 func TestServiceCommittedControlObserverErrorIsMemoized(t *testing.T) {
 	type controlResult struct {
 		changed bool
