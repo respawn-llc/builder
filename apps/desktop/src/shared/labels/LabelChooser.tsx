@@ -14,7 +14,11 @@ import { useTranslation } from "react-i18next";
 
 import { ReorderableList, type ReorderableListItemRenderProps } from "@app/ui-kit";
 import { workflowLabelMaxIDs, type ProjectLabel } from "@/api";
-import { useAppServices, useStatusController } from "@/app-facade";
+import {
+  textFieldSubmitShortcutPolicyForPlatform,
+  useAppServices,
+  useStatusController,
+} from "@/app-facade";
 import {
   Button,
   IconTooltipButton,
@@ -277,7 +281,7 @@ export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
               event,
               highlightedIndex: keyboardHighlightedIndex,
               invocation,
-              platform: nativeBridge.capabilities.platform,
+              policy: textFieldSubmitShortcutPolicyForPlatform(nativeBridge.capabilities.platform),
               choices,
               setHighlightedIndex: setKeyboardHighlightedIndex,
             });

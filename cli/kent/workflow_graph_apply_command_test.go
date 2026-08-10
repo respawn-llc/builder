@@ -120,6 +120,7 @@ func TestWorkflowGraphAdditionIdentityContract(t *testing.T) {
 		{"prefixed Transition Group", serverapi.WorkflowDefinition{}, serverapi.WorkflowGraphDraft{TransitionGroups: []serverapi.WorkflowGraphDraftTransitionGroup{{ID: "group-" + canonical}}}, false},
 		{"prefixed Transition Branch", serverapi.WorkflowDefinition{}, serverapi.WorkflowGraphDraft{Edges: []serverapi.WorkflowGraphDraftEdge{{ID: "edge-" + canonical}}}, false},
 		{"same-type legacy", serverapi.WorkflowDefinition{NodeGroups: []serverapi.WorkflowNodeGroup{{GroupID: "legacy"}}}, serverapi.WorkflowGraphDraft{NodeGroups: []serverapi.WorkflowGraphDraftNodeGroup{{ID: "legacy"}}}, true},
+		{"same legacy ID across types", serverapi.WorkflowDefinition{NodeGroups: []serverapi.WorkflowNodeGroup{{GroupID: "legacy"}}, Nodes: []serverapi.WorkflowNode{{ID: "legacy"}}}, serverapi.WorkflowGraphDraft{NodeGroups: []serverapi.WorkflowGraphDraftNodeGroup{{ID: "legacy"}}, Nodes: []serverapi.WorkflowGraphDraftNode{{ID: "legacy"}}}, true},
 		{"cross-type legacy", serverapi.WorkflowDefinition{NodeGroups: []serverapi.WorkflowNodeGroup{{GroupID: "legacy"}}}, serverapi.WorkflowGraphDraft{Nodes: []serverapi.WorkflowGraphDraftNode{{ID: "legacy"}}}, false},
 	}
 	for _, test := range tests {

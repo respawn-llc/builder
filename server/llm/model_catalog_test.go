@@ -2,9 +2,51 @@ package llm
 
 import (
 	"testing"
+	"time"
 
 	"core/server/session"
 )
+
+func TestLookupModelKnowledgeCutoff(t *testing.T) {
+	tests := []struct {
+		model string
+		month time.Month
+		year  int
+	}{
+		{model: "gpt-5.6-sol", month: time.February, year: 2026},
+		{model: "gpt-5.6-terra", month: time.February, year: 2026},
+		{model: "gpt-5.6-luna", month: time.February, year: 2026},
+		{model: "gpt-5.4", month: time.August, year: 2025},
+		{model: "gpt-5.4-mini", month: time.August, year: 2025},
+		{model: "gpt-5.4-nano", month: time.August, year: 2025},
+		{model: "gpt-5.3-codex", month: time.August, year: 2025},
+		{model: "gpt-5.3-codex-spark", month: time.August, year: 2025},
+		{model: "gpt-5", month: time.September, year: 2024},
+	}
+
+	for _, test := range tests {
+		cutoff, ok := LookupModelKnowledgeCutoff(test.model)
+		if !ok {
+			t.Fatalf("expected knowledge cutoff for %q", test.model)
+		}
+		if cutoff.Month != test.month || cutoff.Year != test.year {
+			t.Fatalf("knowledge cutoff for %q = %+v, want month %d year %d", test.model, cutoff, test.month, test.year)
+		}
+	}
+}
+
+func TestLookupModelKnowledgeCutoffNormalizesModelAndOmitsUnknown(t *testing.T) {
+	cutoff, ok := LookupModelKnowledgeCutoff(" GPT-5.3-CODEX ")
+	if !ok {
+		t.Fatal("expected normalized model knowledge cutoff")
+	}
+	if cutoff.Month != time.August || cutoff.Year != 2025 {
+		t.Fatalf("normalized knowledge cutoff = %+v, want month %d year %d", cutoff, time.August, 2025)
+	}
+	if _, ok := LookupModelKnowledgeCutoff("custom-alias"); ok {
+		t.Fatal("expected unknown model to have no knowledge cutoff")
+	}
+}
 
 func requireModelMetadata(t *testing.T, model string) ModelMetadata {
 	t.Helper()
@@ -128,7 +170,7 @@ func TestSupportsVisionInputsModel(t *testing.T) {
 		{model: "gpt-5.6-sol", want: true},
 		{model: "gpt-5.3-codex", want: true},
 		{model: "gpt-5.3-codex-spark", want: false},
-		{model: " GPT-4.1 ", want: true},
+		{model: " GPT-4.1 ", want: false},
 		{model: "gpt-5.4-mini", want: true},
 		{model: "gpt-5.4-nano", want: false},
 		{model: "claude-3-7-sonnet", want: false},
@@ -170,8 +212,8 @@ func TestVerbositySupportForModelAndProvider(t *testing.T) {
 	if support := VerbositySupportForModelAndProvider("gpt-5-preview", providerDisabled); support.Supported || support.Source != ModelVerbositySupportSourceProviderDefault {
 		t.Fatalf("unknown provider-disabled support = %+v, want provider default unsupported", support)
 	}
-	if support := VerbositySupportForModelAndProvider("gpt-4.1", providerEnabled); support.Supported || support.Source != ModelVerbositySupportSourceModelCatalog {
-		t.Fatalf("known unsupported support = %+v, want model catalog unsupported", support)
+	if support := VerbositySupportForModelAndProvider("gpt-4.1", providerEnabled); !support.Supported || support.Source != ModelVerbositySupportSourceProviderDefault {
+		t.Fatalf("unknown provider-enabled support = %+v, want provider default support", support)
 	}
 	if support := VerbositySupportForModelAndProvider("gpt-5", providerDisabled); !support.Supported || support.Source != ModelVerbositySupportSourceModelCatalog {
 		t.Fatalf("known supported support = %+v, want model catalog support", support)

@@ -85,16 +85,13 @@ func startRuntimeLiveControlClient(ctx context.Context, opts Options) (apicontra
 		return nil, nil, fmt.Errorf("%w: %v", errRunRequiresServer, err)
 	}
 	if err := remote.RequireRoot(config.ExplicitPersistenceRootID(cfg)); err != nil {
-		_ = remote.Close()
-		return nil, nil, errRunServerRootMismatch
+		return nil, remote.Close, errRunServerRootMismatch
 	}
 	if !remoteattach.SupportsRuntimeLiveControl(remote.Identity().Capabilities) {
-		_ = remote.Close()
-		return nil, nil, errRunServerIncompatible
+		return nil, remote.Close, errRunServerIncompatible
 	}
 	if err := ensureRemoteAuthReady(ctx, remote, cfg.Settings, newHeadlessAuthInteractor(), false); err != nil {
-		_ = remote.Close()
-		return nil, nil, err
+		return nil, remote.Close, err
 	}
 	return remote, remote.Close, nil
 }

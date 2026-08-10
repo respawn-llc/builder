@@ -46,7 +46,6 @@ func workflowGraphApplySubcommand(args []string, stdin io.Reader, stdout io.Writ
 	if !ok {
 		return exitCode
 	}
-
 	data, err := loadWorkflowGraphApplyInput(positionals[0], stdin)
 	if err != nil {
 		return writeWorkflowGraphApplyOutcome(stdout, stderr, workflowGraphApplyFailure(workflowGraphApplyRequestFailed, nil, nil, err), *jsonOut)
@@ -55,7 +54,6 @@ func workflowGraphApplySubcommand(args []string, stdin io.Reader, stdout io.Writ
 	if err != nil {
 		return writeWorkflowGraphApplyOutcome(stdout, stderr, workflowGraphApplyFailure(workflowGraphApplyInvalidDocument, nil, nil, err), *jsonOut)
 	}
-
 	_, remote, err := workflowCommandRemoteOpener(context.Background(), ".")
 	if err != nil {
 		return writeWorkflowGraphApplyOutcome(stdout, stderr, workflowGraphApplyFailure(
@@ -118,7 +116,6 @@ func runWorkflowGraphApply(
 			}},
 		}
 	}
-
 	graph, err := document.WorkflowGraphDraft()
 	if err != nil {
 		return workflowGraphApplyFailure(workflowGraphApplyInvalidDocument, workflowID, currentVersion, err)
@@ -183,10 +180,13 @@ func validateWorkflowGraphAdditionIdentities(
 	current serverapi.WorkflowDefinition,
 	submitted serverapi.WorkflowGraphDraft,
 ) error {
-	currentTypes := make(map[string]serverapi.WorkflowGraphEntityType)
+	currentTypes := make(map[string]map[serverapi.WorkflowGraphEntityType]bool)
 	indexCurrent := func(entityType serverapi.WorkflowGraphEntityType, ids []string) {
 		for _, id := range ids {
-			currentTypes[id] = entityType
+			if currentTypes[id] == nil {
+				currentTypes[id] = make(map[serverapi.WorkflowGraphEntityType]bool)
+			}
+			currentTypes[id][entityType] = true
 		}
 	}
 	indexCurrent(serverapi.WorkflowGraphEntityTypeNodeGroup, workflowGraphEntityIDs(current.NodeGroups, func(group serverapi.WorkflowNodeGroup) string { return group.GroupID }))
@@ -205,11 +205,11 @@ func validateWorkflowGraphAdditionIdentities(
 	}
 	for _, collection := range collections {
 		for index, id := range collection.ids {
-			if currentType, exists := currentTypes[id]; exists {
-				if currentType != collection.entityType {
-					return fmt.Errorf("%s[%d].id %q matches a current entity of another type", collection.name, index, id)
-				}
+			if currentTypes[id][collection.entityType] {
 				continue
+			}
+			if len(currentTypes[id]) != 0 {
+				return fmt.Errorf("%s[%d].id %q matches a current entity of another type", collection.name, index, id)
 			}
 			if _, err := runtimeids.ParseCanonicalUUIDv4(id, fmt.Sprintf("%s[%d].id", collection.name, index)); err != nil {
 				return err

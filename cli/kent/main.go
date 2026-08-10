@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -15,6 +16,7 @@ import (
 
 	"core/cli/app"
 	"core/prompts"
+	"core/shared/client"
 	"core/shared/config"
 	"core/shared/imagefileio"
 	"core/shared/runtimeids"
@@ -232,13 +234,14 @@ func publishPersistenceRootEnv(flagValue string) error {
 }
 
 func runSubcommand(args []string) int {
+	if len(args) > 0 && args[0] == "wait" {
+		return runLiveWaitSubcommand(args[1:])
+	}
 	switch liveControlSubcommand(args) {
 	case "steer":
 		return runLiveSteerSubcommand(args[1:])
 	case "stop":
 		return runLiveStopSubcommand(args[1:])
-	case "wait":
-		return runLiveWaitSubcommand(args[1:])
 	case "watch":
 		return runLiveWatchSubcommand(args[1:])
 	}
@@ -407,7 +410,7 @@ func liveControlSubcommand(args []string) string {
 	}
 	verb := args[0]
 	switch verb {
-	case "steer", "stop", "wait", "watch":
+	case "steer", "stop", "watch":
 	default:
 		return ""
 	}
@@ -427,7 +430,7 @@ func liveControlSubcommand(args []string) string {
 		if len(positionals) >= 2 {
 			return verb
 		}
-	case "stop", "wait":
+	case "stop":
 		if len(positionals) == 1 {
 			return verb
 		}
@@ -553,52 +556,50 @@ func runLiveStopSubcommand(args []string) int {
 }
 
 func runLiveWaitSubcommand(args []string) int {
-	fs := newCommandFlagSet(config.Command+" run wait", os.Stderr, leafCommandUsage(
+	var diagnostics bytes.Buffer
+	fs := newCommandFlagSet(config.Command+" run wait", &diagnostics, leafCommandUsage(
 		config.Command+" run wait [--output-mode <mode>] [--persistence-root <root>] <session-id>",
 		"Wait for an active run and print its final result.",
 	))
 	persistenceRoot := fs.String("persistence-root", "", persistenceRootFlagUsage)
 	outputModeRaw := fs.String("output-mode", string(runOutputModeFinalText), "result format: final-text|json")
-	usageOutputMode := inferRunOutputMode(args)
-	if err := fs.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return 0
-		}
-		emitRunUsageError(usageOutputMode, err.Error())
-		return 2
-	}
-	outputMode, err := parseRunOutputMode(*outputModeRaw)
-	if err != nil {
-		emitRunUsageError(usageOutputMode, err.Error())
-		return 2
+	outputMode, ok, code := parseObservationFlags(fs, args, outputModeRaw, &diagnostics)
+	if !ok {
+		return code
 	}
 	remaining := fs.Args()
 	if len(remaining) != 1 {
-		emitRunUsageError(outputMode, "usage: kent run wait <session-id>")
-		return 2
+		return runObservationUsage(outputMode, "usage: kent run wait <session-id>")
 	}
 	sessionID, err := parseCLILiveSessionID(remaining[0])
 	if err != nil {
-		emitRunUsageError(outputMode, err.Error())
-		return 2
+		return runObservationUsage(outputMode, err.Error())
+	}
+	if !sessionID.IsCanonicalUUIDv4() {
+		return runObservationUsage(outputMode, "session ID must be a canonical UUIDv4")
 	}
 	if err := rejectSelfTarget(sessionID, "kent run wait "+strings.Join(args, " ")); err != nil {
-		emitRunUsageError(outputMode, err.Error())
-		return 2
+		return runObservationUsage(outputMode, err.Error())
 	}
 	if err := publishPersistenceRootEnv(*persistenceRoot); err != nil {
-		emitRunUsageError(outputMode, err.Error())
-		return 2
+		return runObservationUsage(outputMode, err.Error())
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	result, runErr := runLiveWaitApp(ctx, app.Options{ConfigRoot: strings.TrimSpace(*persistenceRoot)}, sessionID)
+	var result app.RunPromptResult
+	var runErr error
+	var closeFn func() error
+	if outputMode == runOutputModeJSON {
+		observed := app.RunLiveWaitWithCleanup(ctx, app.Options{ConfigRoot: strings.TrimSpace(*persistenceRoot)}, sessionID)
+		result, runErr, closeFn = observed.Result, observed.Error, observed.Close
+	} else {
+		result, runErr = runLiveWaitApp(ctx, app.Options{ConfigRoot: strings.TrimSpace(*persistenceRoot)}, sessionID)
+	}
 	continueRoot := continueCommandPersistenceRoot(*persistenceRoot)
 	continueHint := buildRunContinueHint(result.SessionID, continueRoot)
-	continueCmd := prompts.ContinueRunCommandWithRoot(result.SessionID, continueRoot)
 	if runErr != nil {
 		if outputMode == runOutputModeJSON {
-			emitRunJSON(runJSONResult{Status: "error", SessionID: result.SessionID, SessionName: result.SessionName, ContinueID: result.SessionID, ContinueCmd: continueCmd, DurationMS: result.Duration.Milliseconds(), Error: newRunJSONError(runErr)})
+			return emitRunWaitJSON(os.Stdout, sessionID.String(), result, runErr, ctx, closeFn)
 		} else {
 			fmt.Fprintln(os.Stderr, runErrorMessage(runErr))
 			if continueHint != "" {
@@ -612,50 +613,71 @@ func runLiveWaitSubcommand(args []string) int {
 		return 1
 	}
 	if outputMode == runOutputModeJSON {
-		emitRunJSON(runJSONResult{Status: "ok", Result: result.Result, SessionID: result.SessionID, SessionName: result.SessionName, ContinueID: result.SessionID, ContinueCmd: continueCmd, DurationMS: result.Duration.Milliseconds()})
-		return 0
+		return emitRunWaitJSON(os.Stdout, sessionID.String(), result, nil, ctx, closeFn)
 	}
 	emitRunFinalText(os.Stdout, result.Warnings, result.Result, continueHint)
 	return 0
 }
 
 func runLiveWatchSubcommand(args []string) int {
-	return runLiveWatchSubcommandWithRunner(args, app.RunLiveWatch)
+	return runLiveWatchSubcommandWithCleanup(args, app.RunLiveWatchWithCleanup)
 }
 
-type liveWatchRunner func(context.Context, app.Options, runtimeids.SessionID) (serverapi.RuntimeLiveWatchResponse, error)
+type liveWatchCleanupRunner func(context.Context, app.Options, runtimeids.SessionID) app.RunLiveWatchResult
 
-func runLiveWatchSubcommandWithRunner(args []string, run liveWatchRunner) int {
-	fs := newCommandFlagSet(config.Command+" run watch", os.Stderr, leafCommandUsage(
-		config.Command+" run watch [--persistence-root <root>] <session-id>",
+func runLiveWatchSubcommandWithCleanup(args []string, runWithCleanup liveWatchCleanupRunner) int {
+	var diagnostics bytes.Buffer
+	fs := newCommandFlagSet(config.Command+" run watch", &diagnostics, leafCommandUsage(
+		config.Command+" run watch [--output-mode <mode>] [--persistence-root <root>] <session-id>",
 		"Watch the next active run outcome.",
 	))
 	persistenceRoot := fs.String("persistence-root", "", persistenceRootFlagUsage)
-	if err := fs.Parse(args); err != nil {
-		return runLiveFlagError(err)
+	outputModeRaw := fs.String("output-mode", string(runOutputModeFinalText), "result format: final-text|json")
+	outputMode, ok, code := parseObservationFlags(fs, args, outputModeRaw, &diagnostics)
+	if !ok {
+		return code
 	}
 	if len(fs.Args()) != 1 {
-		return runLiveFlagError(errors.New("usage: kent run watch <session-id>"))
+		return runObservationUsage(outputMode, "usage: kent run watch <session-id>")
 	}
 	sessionID, err := parseCLILiveSessionID(fs.Args()[0])
 	if err != nil {
-		return runLiveFlagError(err)
+		return runObservationUsage(outputMode, err.Error())
 	}
 	if err := rejectSelfTarget(sessionID, "kent run watch "+strings.Join(args, " ")); err != nil {
-		return runLiveFlagError(err)
+		return runObservationUsage(outputMode, err.Error())
 	}
 	if err := publishPersistenceRootEnv(*persistenceRoot); err != nil {
-		return runLiveFlagError(err)
+		return runObservationUsage(outputMode, err.Error())
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	response, err := run(ctx, app.Options{ConfigRoot: strings.TrimSpace(*persistenceRoot)}, sessionID)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		if errors.Is(err, context.Canceled) {
+	result := runWithCleanup(ctx, app.Options{ConfigRoot: strings.TrimSpace(*persistenceRoot)}, sessionID)
+	response := result.Response
+	if result.Error != nil {
+		if outputMode == runOutputModeJSON {
+			return emitObservationError(os.Stdout, observationOperationRunWatch, observationTargetSession(sessionID.String()), ctx, result.Error, nil, result.Close)
+		}
+		if result.Close != nil {
+			_ = result.Close()
+		}
+		fmt.Fprintln(os.Stderr, result.Error)
+		if errors.Is(result.Error, context.Canceled) {
 			return 130
 		}
 		return 1
+	}
+	if outputMode == runOutputModeJSON {
+		envelope, exitCode, projectionErr := projectRunWatchJSON(sessionID.String(), response)
+		if projectionErr != nil {
+			return emitObservationError(os.Stdout, observationOperationRunWatch, observationTargetSession(sessionID.String()), ctx, &client.InvalidResponseError{
+				Operation: "runtime live watch", Cause: projectionErr,
+			}, nil, result.Close)
+		}
+		return emitObservationJSONWithCleanup(os.Stdout, envelope, exitCode, nil, result.Close)
+	}
+	if result.Close != nil {
+		_ = result.Close()
 	}
 	return writeRunWatchResponse(os.Stdout, os.Stderr, response, buildRunContinueHint(response.SessionID, continueCommandPersistenceRoot(*persistenceRoot)))
 }
@@ -666,6 +688,35 @@ func runLiveFlagError(err error) int {
 	}
 	emitRunUsageError(runOutputModeFinalText, err.Error())
 	return 2
+}
+
+func runObservationUsage(mode runOutputMode, message string) int {
+	if mode == runOutputModeJSON {
+		return writeObservationUsage(os.Stdout, message)
+	}
+	emitRunUsageError(mode, message)
+	return 2
+}
+
+func parseObservationFlags(fs *flag.FlagSet, args []string, raw *string, diagnostics *bytes.Buffer) (runOutputMode, bool, int) {
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			_, _ = io.Copy(os.Stderr, diagnostics)
+			return "", false, 0
+		}
+		mode, modeErr := parseRunOutputMode(*raw)
+		if modeErr == nil && mode == runOutputModeJSON {
+			return "", false, writeObservationUsage(os.Stdout, err.Error())
+		}
+		_, _ = io.Copy(os.Stderr, diagnostics)
+		return "", false, 2
+	}
+	mode, err := parseRunOutputMode(*raw)
+	if err != nil {
+		emitRunUsageError(runOutputModeFinalText, err.Error())
+		return "", false, 2
+	}
+	return mode, true, 0
 }
 
 func parseCLILiveSessionID(raw string) (runtimeids.SessionID, error) {
