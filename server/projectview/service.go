@@ -27,6 +27,7 @@ type Service struct {
 	runtimeGuard      runtimeSessionGuard
 	projectMutations  *requestmemo.MutationLaneRegistry[string]
 	mutationPermit    *workflowexecution.MutationPermit
+	taskMutations     *workflowexecution.TaskMutationCoordinator
 	workflowExecution interface {
 		EnsureTaskQuiescent(workflow.TaskID) error
 	}
@@ -122,13 +123,14 @@ func (s *Service) WithRuntimeAuthority(authority *sessionruntime.Authority) *Ser
 	return s
 }
 
-func (s *Service) WithWorkflowExecution(permit *workflowexecution.MutationPermit, execution interface {
+func (s *Service) WithWorkflowExecution(permit *workflowexecution.MutationPermit, taskMutations *workflowexecution.TaskMutationCoordinator, execution interface {
 	EnsureTaskQuiescent(workflow.TaskID) error
 }, store *workflowstore.Store) *Service {
 	if s == nil {
 		return nil
 	}
 	s.mutationPermit = permit
+	s.taskMutations = taskMutations
 	s.workflowExecution = execution
 	s.workflowStore = store
 	return s
@@ -376,7 +378,7 @@ func (s *Service) DeleteProject(ctx context.Context, req serverapi.ProjectDelete
 		return serverapi.ProjectDeleteResponse{}, err
 	}
 	defer lease.Release()
-	if s.mutationPermit == nil || s.workflowExecution == nil {
+	if s.mutationPermit == nil || s.taskMutations == nil || s.workflowExecution == nil {
 		return serverapi.ProjectDeleteResponse{}, errors.New("workflow execution is required for project deletion")
 	}
 
@@ -407,9 +409,11 @@ func (s *Service) DeleteProject(ctx context.Context, req serverapi.ProjectDelete
 	}
 	var blockers []serverapi.ProjectDeleteBlocker
 	err = s.mutationPermit.Run(ctx, func(ctx context.Context) error {
-		var runErr error
-		blockers, runErr = deleteProject(ctx)
-		return runErr
+		return s.taskMutations.Freeze(ctx, func(ctx context.Context) error {
+			var runErr error
+			blockers, runErr = deleteProject(ctx)
+			return runErr
+		})
 	})
 	if err != nil {
 		return serverapi.ProjectDeleteResponse{}, err

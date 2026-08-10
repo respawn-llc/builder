@@ -238,14 +238,14 @@ func newCurrentNodeRunnerFixtureWithClientAndPersistence(
 			t.Errorf("close runtime authority: %v", err)
 		}
 	})
-	permit := workflowexecution.NewMutationPermit()
+	taskMutations := workflowexecution.NewTaskMutationCoordinator()
 	dependencyCounter, err := workflowview.NewTaskDependencyCounter(metadataStore)
 	if err != nil {
 		t.Fatalf("new Task dependency counter: %v", err)
 	}
 	starter, err := NewStarter(cfg, metadataStore, store, nil, nil, StarterOptions{
 		RuntimeAuthority: fixture.authority,
-		MutationPermit:   permit,
+		TaskMutations:    taskMutations,
 		TaskDependencies: dependencyCounter,
 		RuntimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(_ context.Context, request runtimewire.RuntimeClientRequest) (llm.Client, error) {
 			fixture.mu.Lock()
@@ -262,7 +262,7 @@ func newCurrentNodeRunnerFixtureWithClientAndPersistence(
 		t.Fatalf("new starter: %v", err)
 	}
 	fixture.starter = starter
-	controller, err = workflowexecution.NewCurrentNodeController(store, starter, fixture.authority, permit, workflowexecution.CurrentNodeControllerConfig{
+	controller, err = workflowexecution.NewCurrentNodeController(store, starter, fixture.authority, taskMutations, workflowexecution.CurrentNodeControllerConfig{
 		AgentConcurrency:  1,
 		AssignmentSteerer: starter,
 	})
@@ -2469,7 +2469,7 @@ END`,
 		f.store,
 		f.starter,
 		f.authority,
-		workflowexecution.NewMutationPermit(),
+		workflowexecution.NewTaskMutationCoordinator(),
 		workflowexecution.CurrentNodeControllerConfig{
 			AgentConcurrency:  1,
 			AssignmentSteerer: f.starter,

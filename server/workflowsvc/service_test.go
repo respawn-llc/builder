@@ -807,19 +807,78 @@ func TestServiceGraphSaveAndWorkflowDeleteWaitForConcurrentWorkflowMutation(t *t
 	})
 }
 
-func TestServiceWorkflowTaskDeleteWaitsForConcurrentWorkflowMutation(t *testing.T) {
+func TestServiceWorkflowTaskDeleteWaitsForConcurrentTaskLifecycleMutation(t *testing.T) {
 	ctx, service, _, _, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
-
-	waitForWorkflowMutationPermit(t, service, func() error {
-		return service.DeleteWorkflowTask(ctx, serverapi.WorkflowTaskDeleteRequest{TaskID: taskID})
-	}, func() {
-		if _, err := service.GetWorkflowTask(ctx, serverapi.WorkflowTaskGetRequest{TaskID: taskID}); err != nil {
-			t.Fatalf("GetWorkflowTask while delete waits: %v", err)
-		}
-	})
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	writerDone := make(chan error, 1)
+	go func() {
+		writerDone <- service.taskMutations.Run(ctx, workflow.TaskID(taskID), func(context.Context) error {
+			close(entered)
+			<-release
+			return nil
+		})
+	}()
+	<-entered
+	deleteDone := make(chan error, 1)
+	go func() {
+		deleteDone <- service.DeleteWorkflowTask(ctx, serverapi.WorkflowTaskDeleteRequest{TaskID: taskID})
+	}()
+	select {
+	case err := <-deleteDone:
+		t.Fatalf("Task Delete crossed active lifecycle writer: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(release)
+	if err := <-writerDone; err != nil {
+		t.Fatalf("lifecycle writer: %v", err)
+	}
+	if err := <-deleteDone; err != nil {
+		t.Fatalf("DeleteWorkflowTask: %v", err)
+	}
 
 	if _, err := service.GetWorkflowTask(ctx, serverapi.WorkflowTaskGetRequest{TaskID: taskID}); err == nil {
-		t.Fatal("deleted workflow task remains readable after permit release")
+		t.Fatal("deleted workflow task remains readable after writer release")
+	}
+}
+
+func TestServiceWorkflowDeleteFreezeWaitsForTaskLifecycleMutation(t *testing.T) {
+	ctx, service, _, workflowID, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
+	preview, err := service.PreviewWorkflowDelete(ctx, serverapi.WorkflowDeletePreviewRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("PreviewWorkflowDelete: %v", err)
+	}
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	writerDone := make(chan error, 1)
+	go func() {
+		writerDone <- service.taskMutations.Run(ctx, workflow.TaskID(taskID), func(context.Context) error {
+			close(entered)
+			<-release
+			return nil
+		})
+	}()
+	<-entered
+	deleteDone := make(chan error, 1)
+	go func() {
+		_, err := service.DeleteWorkflow(ctx, serverapi.WorkflowDeleteRequest{
+			WorkflowID: workflowID, Confirmed: true, ExpectedVersion: preview.Impact.Version,
+			ExpectedProjectCount: preview.Impact.ProjectCount, ExpectedLinkCount: preview.Impact.LinkCount,
+			ExpectedTaskCount: preview.Impact.TaskCount,
+		})
+		deleteDone <- err
+	}()
+	select {
+	case err := <-deleteDone:
+		t.Fatalf("Workflow Delete crossed active lifecycle writer: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(release)
+	if err := <-writerDone; err != nil {
+		t.Fatalf("lifecycle writer: %v", err)
+	}
+	if err := <-deleteDone; err != nil {
+		t.Fatalf("DeleteWorkflow: %v", err)
 	}
 }
 
@@ -2571,7 +2630,7 @@ func TestNewRejectsEveryMissingReadModelCapability(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, err := New(service.store, tt.readModels, service.roleResolver, workflowexecution.NewMutationPermit()); err == nil {
+			if _, err := New(service.store, tt.readModels, service.roleResolver, workflowexecution.NewMutationPermit(), workflowexecution.NewTaskMutationCoordinator()); err == nil {
 				t.Fatal("New accepted a missing read-model capability")
 			}
 		})
@@ -2605,7 +2664,7 @@ func newWorkflowServiceTestServiceWithRoleResolver(t *testing.T, resolver workfl
 		t.Fatalf("workflowstore.New: %v", err)
 	}
 	readModels := newWorkflowServiceReadModels(t, metadataStore, store, resolver, nil, nil)
-	service, err := New(store, readModels, resolver, workflowexecution.NewMutationPermit(), WithCurrentNodeExecution(&currentNodeCompletionExecutionStub{store: store}))
+	service, err := New(store, readModels, resolver, workflowexecution.NewMutationPermit(), workflowexecution.NewTaskMutationCoordinator(), WithCurrentNodeExecution(&currentNodeCompletionExecutionStub{store: store}))
 	if err != nil {
 		t.Fatalf("workflowsvc.New: %v", err)
 	}

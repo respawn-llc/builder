@@ -34,6 +34,7 @@ type Service struct {
 	attentionFinalizer   workflowAttentionFinalizer
 	questionMemo         *requestmemo.Memo[taskQuestionAnswerMemoRequest, workflowexecution.WorkflowQuestionAcceptance]
 	mutationPermit       *workflowexecution.MutationPermit
+	taskMutations        *workflowexecution.TaskMutationCoordinator
 	currentNodeExecution interface {
 		StartTask(context.Context, workflow.TaskID, workflowexecution.TaskStartPreparation) (workflowstore.StartTaskResult, error)
 		ResumeTask(context.Context, workflow.TaskID) ([]workflow.CurrentNode, error)
@@ -193,19 +194,29 @@ func WithWorkflowAttentionFinalizer(finalizer workflowAttentionFinalizer) Option
 	}
 }
 
-func New(store *workflowstore.Store, readModels ReadModels, roleResolver workflow.RoleResolver, mutationPermit *workflowexecution.MutationPermit, opts ...Option) (*Service, error) {
+func New(
+	store *workflowstore.Store,
+	readModels ReadModels,
+	roleResolver workflow.RoleResolver,
+	mutationPermit *workflowexecution.MutationPermit,
+	taskMutations *workflowexecution.TaskMutationCoordinator,
+	opts ...Option,
+) (*Service, error) {
 	if store == nil {
 		return nil, errors.New("workflow store is required")
 	}
 	if mutationPermit == nil {
 		return nil, errors.New("workflow mutation permit is required")
 	}
+	if taskMutations == nil {
+		return nil, errors.New("task mutation coordinator is required")
+	}
 	if err := readModels.validate(); err != nil {
 		return nil, err
 	}
 	events := newWorkflowProjectEventBroker()
 	store.SetWorkflowEventPublisher(events)
-	service := &Service{store: store, readModels: readModels, roleResolver: roleResolver, events: events, questionMemo: requestmemo.New[taskQuestionAnswerMemoRequest, workflowexecution.WorkflowQuestionAcceptance](), mutationPermit: mutationPermit}
+	service := &Service{store: store, readModels: readModels, roleResolver: roleResolver, events: events, questionMemo: requestmemo.New[taskQuestionAnswerMemoRequest, workflowexecution.WorkflowQuestionAcceptance](), mutationPermit: mutationPermit, taskMutations: taskMutations}
 	for _, opt := range opts {
 		opt(service)
 	}
@@ -583,10 +594,16 @@ func (s *Service) PreviewWorkflowDelete(ctx context.Context, req serverapi.Workf
 
 func (s *Service) DeleteWorkflow(ctx context.Context, req serverapi.WorkflowDeleteRequest) (serverapi.WorkflowDeleteResponse, error) {
 	return workflowexecution.RunMutation(ctx, s.mutationPermit, func(ctx context.Context) (serverapi.WorkflowDeleteResponse, error) {
-		if err := s.ensureWorkflowTasksQuiescent(ctx, req.WorkflowID); err != nil {
-			return serverapi.WorkflowDeleteResponse{}, err
-		}
-		return s.deleteWorkflow(ctx, req)
+		var response serverapi.WorkflowDeleteResponse
+		err := s.taskMutations.Freeze(ctx, func(ctx context.Context) error {
+			if err := s.ensureWorkflowTasksQuiescent(ctx, req.WorkflowID); err != nil {
+				return err
+			}
+			var err error
+			response, err = s.deleteWorkflow(ctx, req)
+			return err
+		})
+		return response, err
 	})
 }
 
@@ -933,8 +950,8 @@ func (s *Service) startWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 	if err := s.authorizeWorkflowTaskMutation(ctx, workflow.TaskID(req.TaskID), req.InvokingSessionID); err != nil {
 		return serverapi.WorkflowTaskStartResponse{}, err
 	}
-	preflight, err := workflowexecution.RunMutation(ctx, s.mutationPermit, func(ctx context.Context) (initiatingActionPreflight, error) {
-		taskID := workflow.TaskID(req.TaskID)
+	taskID := workflow.TaskID(req.TaskID)
+	preflight, err := workflowexecution.RunTaskMutation(ctx, s.taskMutations, taskID, func(ctx context.Context) (initiatingActionPreflight, error) {
 		if err := s.currentNodeExecution.EnsureTaskQuiescent(taskID); err != nil {
 			return initiatingActionPreflight{}, err
 		}
@@ -980,7 +997,7 @@ func (s *Service) startWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 		if decision.candidate == nil {
 			return configuredTargetPreparationError(target, preparationErr)
 		}
-		lockErr := s.mutationPermit.Run(preparationCtx, func(ctx context.Context) error {
+		lockErr := s.taskMutations.Run(preparationCtx, taskID, func(ctx context.Context) error {
 			return s.store.LockTaskExecutionTarget(ctx, workflow.TaskID(req.TaskID), decision.candidate)
 		})
 		return errors.Join(preparationErr, lockErr)
@@ -1410,7 +1427,7 @@ func (s *Service) resumeWorkflowTask(ctx context.Context, req serverapi.Workflow
 			if candidate == nil {
 				return configuredTargetPreparationError(target, preparationErr)
 			}
-			lockErr := s.mutationPermit.Run(preparationCtx, func(ctx context.Context) error {
+			lockErr := s.taskMutations.Run(preparationCtx, taskID, func(ctx context.Context) error {
 				return s.store.LockTaskExecutionTarget(ctx, taskID, candidate)
 			})
 			return errors.Join(preparationErr, lockErr)
@@ -1846,24 +1863,26 @@ func (s *Service) DeleteWorkflowTask(ctx context.Context, req serverapi.Workflow
 		}
 	}
 	return s.mutationPermit.Run(ctx, func(ctx context.Context) error {
-		if s.currentNodeExecution == nil {
-			return errors.New("current node workflow execution is required")
-		}
-		if err := s.currentNodeExecution.EnsureTaskQuiescent(workflow.TaskID(req.TaskID)); err != nil {
-			return err
-		}
-		if s.taskWorktreeCleanup != nil {
-			if err := s.taskWorktreeCleanup.DeleteTaskWorktree(ctx, req.TaskID); err != nil {
+		return s.taskMutations.Run(ctx, workflow.TaskID(req.TaskID), func(ctx context.Context) error {
+			if s.currentNodeExecution == nil {
+				return errors.New("current node workflow execution is required")
+			}
+			if err := s.currentNodeExecution.EnsureTaskQuiescent(workflow.TaskID(req.TaskID)); err != nil {
 				return err
 			}
-		}
-		result, err := s.store.DeleteTask(ctx, workflow.TaskID(req.TaskID))
-		if err != nil {
-			return err
-		}
-		s.finalizeTaskAttentionResolution(result.TaskAttentionResolution)
-		s.publishProjectWorkflowEvent(ctx, result.ProjectID, result.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionDeleted, req.TaskID)
-		return nil
+			if s.taskWorktreeCleanup != nil {
+				if err := s.taskWorktreeCleanup.DeleteTaskWorktree(ctx, req.TaskID); err != nil {
+					return err
+				}
+			}
+			result, err := s.store.DeleteTask(ctx, workflow.TaskID(req.TaskID))
+			if err != nil {
+				return err
+			}
+			s.finalizeTaskAttentionResolution(result.TaskAttentionResolution)
+			s.publishProjectWorkflowEvent(ctx, result.ProjectID, result.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionDeleted, req.TaskID)
+			return nil
+		})
 	})
 }
 

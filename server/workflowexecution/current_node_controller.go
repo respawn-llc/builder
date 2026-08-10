@@ -102,7 +102,7 @@ type CurrentNodeExecutionSnapshot struct {
 }
 
 // CurrentNodeController is the sole workflowruntime.Controller. Its mutex,
-// mutation permit, and Authority operations define the ordering for all
+// Task mutation coordinator, and Authority operations define the ordering for all
 // lifecycle, admission, interruption, and completion operations.
 type CurrentNodeController struct {
 	store interface {
@@ -122,11 +122,11 @@ type CurrentNodeController struct {
 		ValidateCurrentNodeSessionBinding(context.Context, runtimeids.SessionID, workflow.CurrentNodeReference) error
 		TaskExecutionScope(context.Context, workflow.TaskID) (workflowstore.TaskExecutionScope, error)
 	}
-	runner    CurrentNodeRunner
-	steerer   CurrentNodeAssignmentSteerer
-	authority *sessionruntime.Authority
-	permit    *MutationPermit
-	attention CurrentNodeAttentionLifecycle
+	runner        CurrentNodeRunner
+	steerer       CurrentNodeAssignmentSteerer
+	authority     *sessionruntime.Authority
+	taskMutations *TaskMutationCoordinator
+	attention     CurrentNodeAttentionLifecycle
 
 	agentConcurrency int
 	workerContext    context.Context
@@ -178,7 +178,7 @@ func NewCurrentNodeController(
 	},
 	runner CurrentNodeRunner,
 	authority *sessionruntime.Authority,
-	permit *MutationPermit,
+	taskMutations *TaskMutationCoordinator,
 	cfg CurrentNodeControllerConfig,
 ) (*CurrentNodeController, error) {
 	if store == nil {
@@ -193,8 +193,8 @@ func NewCurrentNodeController(
 	if authority == nil {
 		return nil, errors.New("session runtime authority is required")
 	}
-	if permit == nil {
-		return nil, errors.New("workflow mutation permit is required")
+	if taskMutations == nil {
+		return nil, errors.New("task mutation coordinator is required")
 	}
 	if cfg.AgentConcurrency <= 0 {
 		return nil, errors.New("workflow agent concurrency must be positive")
@@ -205,7 +205,7 @@ func NewCurrentNodeController(
 		runner:                runner,
 		steerer:               cfg.AssignmentSteerer,
 		authority:             authority,
-		permit:                permit,
+		taskMutations:         taskMutations,
 		attention:             cfg.Attention,
 		agentConcurrency:      cfg.AgentConcurrency,
 		workerContext:         workerContext,
@@ -311,7 +311,7 @@ func (c *CurrentNodeController) AcceptWorkflowQuestion(
 		return nil, errors.New("workflow ask id is required")
 	}
 	var acceptance sessionruntime.PromptResponseAcceptance
-	err := c.permit.Run(ctx, func(ctx context.Context) error {
+	err := c.taskMutations.Run(ctx, taskID, func(ctx context.Context) error {
 		resolution, err := c.authority.ResolvePendingWorkflowPrompt(taskID, askID)
 		if err != nil {
 			return err
@@ -346,7 +346,13 @@ func (c *CurrentNodeController) completeLiveCurrentNode(ctx context.Context, req
 	var completed workflowstore.CurrentNodeCompletionResult
 	var starts []currentNodeQueuedStart
 	var pending []*pendingCurrentNodeAssignmentSteer
-	err := c.permit.Run(ctx, func(ctx context.Context) error {
+	c.mu.Lock()
+	initial, exists := c.live[req.ScopeID]
+	c.mu.Unlock()
+	if !exists {
+		return workflowstore.CurrentNodeCompletionResult{}, sessionruntime.ErrExecutionNoLongerLive
+	}
+	err := c.taskMutations.Run(ctx, initial.reference.TaskID, func(ctx context.Context) error {
 		c.mu.Lock()
 		live, exists := c.live[req.ScopeID]
 		if !exists {
@@ -482,7 +488,13 @@ func (c *CurrentNodeController) FinalizeCurrentNodePostTurn(
 	}
 	var phase currentNodePostTurnFinalization
 	var phaseExists bool
-	if err := c.permit.Run(ctx, func(context.Context) error {
+	c.mu.Lock()
+	initial, exists := c.postTurnFinalization[scopeID]
+	c.mu.Unlock()
+	if !exists {
+		return nil
+	}
+	if err := c.taskMutations.Run(ctx, initial.reference.TaskID, func(context.Context) error {
 		c.mu.Lock()
 		current, exists := c.postTurnFinalization[scopeID]
 		if !exists {
@@ -539,7 +551,7 @@ func (c *CurrentNodeController) FinalizeCurrentNodePostTurn(
 		}
 	}
 
-	return c.permit.Run(ctx, func(context.Context) error {
+	return c.taskMutations.Run(ctx, phase.reference.TaskID, func(context.Context) error {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		current, stillFinalizing := c.postTurnFinalization[scopeID]
@@ -575,7 +587,11 @@ func (c *CurrentNodeController) CompleteIdleCurrentNode(
 	if c == nil {
 		return workflowstore.CurrentNodeCompletionResult{}, errors.New("current node workflow controller is required")
 	}
-	return RunMutation(ctx, c.permit, func(ctx context.Context) (workflowstore.CurrentNodeCompletionResult, error) {
+	source, err := c.store.ResolveIdleExecutableCurrentNode(ctx, selector)
+	if err != nil {
+		return workflowstore.CurrentNodeCompletionResult{}, err
+	}
+	return RunTaskMutation(ctx, c.taskMutations, source.Reference.TaskID, func(ctx context.Context) (workflowstore.CurrentNodeCompletionResult, error) {
 		source, err := c.resolveQuiescentIdleCurrentNode(ctx, selector)
 		if err != nil {
 			return workflowstore.CurrentNodeCompletionResult{}, err
@@ -635,10 +651,12 @@ func (c *CurrentNodeController) recordIdleCurrentNodeProtocolViolation(
 	req workflowruntime.ViolationRequest,
 ) (workflowruntime.ViolationResult, error) {
 	var interruptedReference *workflow.CurrentNodeReference
-	result, err := RunMutation(ctx, c.permit, func(ctx context.Context) (workflowruntime.ViolationResult, error) {
-		source, err := c.resolveQuiescentIdleCurrentNode(ctx, workflowstore.IdleCurrentNodeSelector{
-			SessionID: req.SessionID,
-		})
+	source, err := c.store.ResolveIdleExecutableCurrentNode(ctx, workflowstore.IdleCurrentNodeSelector{SessionID: req.SessionID})
+	if err != nil {
+		return workflowruntime.ViolationResult{}, err
+	}
+	result, err := RunTaskMutation(ctx, c.taskMutations, source.Reference.TaskID, func(ctx context.Context) (workflowruntime.ViolationResult, error) {
+		source, err := c.resolveQuiescentIdleCurrentNode(ctx, workflowstore.IdleCurrentNodeSelector{SessionID: req.SessionID})
 		if err != nil {
 			return workflowruntime.ViolationResult{}, err
 		}
@@ -729,10 +747,12 @@ func (c *CurrentNodeController) ResetProtocolViolationBudget(ctx context.Context
 		if !errors.Is(err, sessionruntime.ErrExecutionNoLongerLive) || req.SessionID == nil {
 			return err
 		}
-		_, err = RunMutation(ctx, c.permit, func(ctx context.Context) (workflow.CurrentNode, error) {
-			source, err := c.resolveQuiescentIdleCurrentNode(ctx, workflowstore.IdleCurrentNodeSelector{
-				SessionID: req.SessionID,
-			})
+		source, resolveErr := c.store.ResolveIdleExecutableCurrentNode(ctx, workflowstore.IdleCurrentNodeSelector{SessionID: req.SessionID})
+		if resolveErr != nil {
+			return resolveErr
+		}
+		_, err = RunTaskMutation(ctx, c.taskMutations, source.Reference.TaskID, func(ctx context.Context) (workflow.CurrentNode, error) {
+			source, err := c.resolveQuiescentIdleCurrentNode(ctx, workflowstore.IdleCurrentNodeSelector{SessionID: req.SessionID})
 			if err == nil {
 				c.clearProtocolViolations(req.ScopeID)
 			}
@@ -762,7 +782,13 @@ func (c *CurrentNodeController) FailCurrentNodeScope(
 ) error {
 	detail := workflow.NewCurrentNodeInterruptionDetail(string(reason), cause)
 	var lease sessionruntime.WorkflowExecutionLease
-	if err := c.permit.Run(ctx, func(ctx context.Context) error {
+	c.mu.Lock()
+	initial, exists := c.live[scopeID]
+	c.mu.Unlock()
+	if !exists {
+		return sessionruntime.ErrExecutionNoLongerLive
+	}
+	if err := c.taskMutations.Run(ctx, initial.reference.TaskID, func(ctx context.Context) error {
 		c.mu.Lock()
 		if _, stopping := c.stopping[scopeID]; stopping {
 			c.mu.Unlock()
@@ -879,7 +905,7 @@ func (c *CurrentNodeController) ExecutionFinalized(scope sessionruntime.Executio
 func (c *CurrentNodeController) interruptOutcomeLessFinalization(reference workflow.CurrentNodeReference) error {
 	ctx, cancel := context.WithTimeout(context.Background(), interruptCleanupTimeout)
 	defer cancel()
-	interrupted, err := RunMutation(ctx, c.permit, func(ctx context.Context) (bool, error) {
+	interrupted, err := RunTaskMutation(ctx, c.taskMutations, reference.TaskID, func(ctx context.Context) (bool, error) {
 		c.mu.Lock()
 		closed := c.closed
 		c.mu.Unlock()

@@ -325,7 +325,7 @@ func TestCurrentNodeControllerPassesResumePromptDeliveryToRunner(t *testing.T) {
 	}}}
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 	runner := &countingCurrentNodeRunner{}
-	controller, err := NewCurrentNodeController(store, runner, authority, NewMutationPermit(), CurrentNodeControllerConfig{
+	controller, err := NewCurrentNodeController(store, runner, authority, NewTaskMutationCoordinator(), CurrentNodeControllerConfig{
 		AgentConcurrency: 1,
 		AssignmentSteerer: &recordingCurrentNodeAssignmentSteerer{
 			err: errors.New("Resume must not steer an assignment"),
@@ -700,8 +700,8 @@ func TestCurrentNodeControllerStartTaskPublishesAdmissionOwnershipBeforeDeleteCa
 		entered: make(chan struct{}),
 		release: make(chan struct{}),
 	}
-	permit := NewMutationPermit()
-	controller, err := NewCurrentNodeController(store, runner, authority, permit, CurrentNodeControllerConfig{
+	taskMutations := NewTaskMutationCoordinator()
+	controller, err := NewCurrentNodeController(store, runner, authority, taskMutations, CurrentNodeControllerConfig{
 		AgentConcurrency:  1,
 		AssignmentSteerer: noOpCurrentNodeAssignmentSteerer{},
 	})
@@ -736,7 +736,7 @@ func TestCurrentNodeControllerStartTaskPublishesAdmissionOwnershipBeforeDeleteCa
 	}
 	deleteCheck := make(chan error, 1)
 	go func() {
-		deleteCheck <- permit.Run(context.Background(), func(context.Context) error {
+		deleteCheck <- taskMutations.Run(context.Background(), taskID, func(context.Context) error {
 			return controller.EnsureTaskQuiescent(taskID)
 		})
 	}()
@@ -780,8 +780,8 @@ func TestCurrentNodeControllerStartTaskReturnsBeforePreparation(t *testing.T) {
 	}}}
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 	runner := &blockingCurrentNodeRunner{entered: make(chan struct{}), release: make(chan struct{})}
-	permit := NewMutationPermit()
-	controller, err := NewCurrentNodeController(store, runner, authority, permit, CurrentNodeControllerConfig{
+	taskMutations := NewTaskMutationCoordinator()
+	controller, err := NewCurrentNodeController(store, runner, authority, taskMutations, CurrentNodeControllerConfig{
 		AgentConcurrency:  1,
 		AssignmentSteerer: noOpCurrentNodeAssignmentSteerer{},
 	})
@@ -819,7 +819,7 @@ func TestCurrentNodeControllerStartTaskReturnsBeforePreparation(t *testing.T) {
 	<-preparationStarted
 	permitAvailable := make(chan error, 1)
 	go func() {
-		permitAvailable <- permit.Run(context.Background(), func(context.Context) error { return nil })
+		permitAvailable <- taskMutations.Run(context.Background(), "unrelated-task", func(context.Context) error { return nil })
 	}()
 	select {
 	case err := <-permitAvailable:

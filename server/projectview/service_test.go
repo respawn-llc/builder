@@ -183,6 +183,39 @@ func TestServiceProjectDeleteWaitsForConcurrentWorkflowMutation(t *testing.T) {
 	}
 }
 
+func TestServiceProjectDeleteFreezeWaitsForTaskLifecycleMutation(t *testing.T) {
+	store, _, binding := newProjectViewMetadataStore(t)
+	svc := newProjectViewMetadataService(t, store, binding.ProjectID)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	writerDone := make(chan error, 1)
+	go func() {
+		writerDone <- svc.taskMutations.Run(context.Background(), "task-lifecycle", func(context.Context) error {
+			close(entered)
+			<-release
+			return nil
+		})
+	}()
+	<-entered
+	deleteDone := make(chan error, 1)
+	go func() {
+		_, err := svc.DeleteProject(context.Background(), serverapi.ProjectDeleteRequest{ProjectID: binding.ProjectID})
+		deleteDone <- err
+	}()
+	select {
+	case err := <-deleteDone:
+		t.Fatalf("Project Delete crossed active lifecycle writer: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(release)
+	if err := <-writerDone; err != nil {
+		t.Fatalf("lifecycle writer: %v", err)
+	}
+	if err := <-deleteDone; err != nil {
+		t.Fatalf("DeleteProject: %v", err)
+	}
+}
+
 func TestServiceDeleteProjectBlocksActiveSession(t *testing.T) {
 	store, cfg, binding := newProjectViewMetadataStore(t)
 	sessionDir := filepath.Join(filepath.Join(cfg.PersistenceRoot, "projects"), binding.ProjectID, "sessions")
@@ -1326,7 +1359,12 @@ func newProjectViewMetadataService(t testing.TB, store *metadata.Store, projectI
 	if err != nil {
 		t.Fatalf("workflowstore.New: %v", err)
 	}
-	return svc.WithWorkflowExecution(workflowexecution.NewMutationPermit(), projectViewQuiescentExecution{}, workflowStore)
+	return svc.WithWorkflowExecution(
+		workflowexecution.NewMutationPermit(),
+		workflowexecution.NewTaskMutationCoordinator(),
+		projectViewQuiescentExecution{},
+		workflowStore,
+	)
 }
 
 type projectViewQuiescentExecution struct {

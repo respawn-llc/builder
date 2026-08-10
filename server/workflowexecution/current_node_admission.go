@@ -228,7 +228,7 @@ func (c *CurrentNodeController) admit(ctx context.Context, start currentNodeQueu
 
 	var lease sessionruntime.WorkflowExecutionLease
 retryAdmission:
-	if err := c.permit.Run(ctx, func(ctx context.Context) error {
+	if err := c.taskMutations.Run(ctx, reference.TaskID, func(ctx context.Context) error {
 		c.mu.Lock()
 		if err := c.ensureTaskAvailableLocked(reference.TaskID); err != nil {
 			c.mu.Unlock()
@@ -325,7 +325,7 @@ retryAdmission:
 			admitted: true,
 		}
 	}
-	if err := c.permit.Run(ctx, func(context.Context) error {
+	if err := c.taskMutations.Run(ctx, reference.TaskID, func(context.Context) error {
 		handle, ok := c.authority.ExecutionByScope(lease.ScopeID())
 		if !ok {
 			return errors.New("current node runner returned without its exact live scope")
@@ -884,9 +884,14 @@ func (c *CurrentNodeController) recoverCurrentNodeStartFailures(
 	admitted bool,
 	cause error,
 ) error {
-	return c.permit.Run(ctx, func(ctx context.Context) error {
-		return c.interruptCurrentNodeStartFailures(ctx, starts, admitted, cause)
-	})
+	var errs []error
+	for _, start := range starts {
+		start := start
+		errs = append(errs, c.taskMutations.Run(ctx, start.reference.TaskID, func(ctx context.Context) error {
+			return c.interruptCurrentNodeStartFailures(ctx, []currentNodeQueuedStart{start}, admitted, cause)
+		}))
+	}
+	return errors.Join(errs...)
 }
 
 func (c *CurrentNodeController) interruptCurrentNodeStartFailures(

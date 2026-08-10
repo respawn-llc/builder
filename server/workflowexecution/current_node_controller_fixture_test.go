@@ -43,7 +43,7 @@ func newCurrentNodeControllerWithAttentionForTest(
 	attention CurrentNodeAttentionLifecycle,
 ) *CurrentNodeController {
 	t.Helper()
-	controller, err := NewCurrentNodeController(store, runner, authority, NewMutationPermit(), CurrentNodeControllerConfig{
+	controller, err := NewCurrentNodeController(store, runner, authority, NewTaskMutationCoordinator(), CurrentNodeControllerConfig{
 		AgentConcurrency:  concurrency,
 		Attention:         attention,
 		AssignmentSteerer: noOpCurrentNodeAssignmentSteerer{},

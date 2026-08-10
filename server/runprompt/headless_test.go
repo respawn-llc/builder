@@ -547,7 +547,7 @@ func newRetainedSelectedRunPromptFixture(
 		store,
 		runner,
 		authority,
-		workflowexecution.NewMutationPermit(),
+		workflowexecution.NewTaskMutationCoordinator(),
 		workflowexecution.CurrentNodeControllerConfig{
 			AgentConcurrency:  1,
 			AssignmentSteerer: retainedRunPromptAssignmentSteerer{},
