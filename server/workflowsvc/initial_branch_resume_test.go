@@ -2,16 +2,21 @@ package workflowsvc
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"core/internal/testharness/testsetup"
+	"core/server/metadata"
+	"core/server/metadata/sqlitegen"
 	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowexecution"
 	"core/server/workflowstore"
+	"core/server/worktree"
 	"core/shared/serverapi"
 )
 
@@ -167,9 +172,136 @@ func TestServiceTaskResumeReturnsAppliedBeforeFinalBranchCollisionInterruptsCurr
 		t.Fatalf("GetTaskExecutionTargetContext: %v", err)
 	}
 	if targetContext.Task.ExecutionTarget != nil ||
-		targetContext.Task.ManagedWorktreeID != "" ||
+		targetContext.Task.ManagedWorktreeID != nil ||
 		targetContext.Task.PendingInitialManagedBranchName == nil ||
 		*targetContext.Task.PendingInitialManagedBranchName != branchName {
 		t.Fatalf("target context after Resume collision = %+v, want unlocked without Worktree and pending %q", targetContext.Task, branchName)
 	}
+}
+
+func TestServiceTaskResumeQueuesBeforeLockedTargetRestoration(t *testing.T) {
+	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	setWorkflowServiceExecutionTargetPolicy(t, ctx, service, workflowID, serverapi.WorkflowExecutionTargetConfiguration{
+		Mode: serverapi.WorkflowExecutionTargetModeHead,
+	})
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	taskID := workflow.TaskID(task.Task.ID)
+	started, err := service.store.StartTask(ctx, taskID)
+	if err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	reference := started.Mutation.Created[0].Reference
+	if err := service.store.InterruptCurrentNode(
+		ctx,
+		reference,
+		workflow.CurrentNodeInterruptionReason("test_resume"),
+		workflow.CurrentNodeInterruptionDetail{Code: "test_resume"},
+	); err != nil {
+		t.Fatalf("InterruptCurrentNode: %v", err)
+	}
+	worktreeID := "worktree-" + task.Task.ID
+	worktreeRoot := filepath.Join(t.TempDir(), "task-worktree")
+	if err := metadataStore.UpsertWorktreeRecord(ctx, metadata.WorktreeRecord{
+		ID: worktreeID, WorkspaceID: binding.WorkspaceID,
+		CanonicalRoot: worktreeRoot, Managed: true,
+	}); err != nil {
+		t.Fatalf("UpsertWorktreeRecord: %v", err)
+	}
+	updated, err := metadataStore.Queries().BindInitialTaskManagedWorktree(ctx, sqlitegen.BindInitialTaskManagedWorktreeParams{
+		ManagedWorktreeID: sql.NullString{String: worktreeID, Valid: true},
+		UpdatedAtUnixMs:   time.Now().UTC().UnixMilli(),
+		TaskID:            task.Task.ID,
+	})
+	if err != nil {
+		t.Fatalf("BindInitialTaskManagedWorktree: %v", err)
+	}
+	if updated != 1 {
+		t.Fatalf("BindInitialTaskManagedWorktree updated %d rows, want 1", updated)
+	}
+	targetContext, err := service.store.GetTaskExecutionTargetContext(ctx, taskID)
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetContext: %v", err)
+	}
+	requestedRef := "HEAD"
+	commitOID := strings.Repeat("8", 40)
+	if err := service.store.LockTaskExecutionTarget(ctx, taskID, &workflowstore.ExecutionTargetCandidate{
+		Snapshot: workflowstore.ExecutionTargetSnapshot{
+			Mode: workflow.ExecutionTargetModeHead, RequestedRef: &requestedRef,
+			CommitOID: &commitOID, Provenance: workflowstore.ExecutionTargetProvenanceResolved,
+		},
+		Root: workflowstore.ExecutionRoot{
+			SourceWorkspaceID:   targetContext.SourceWorkspaceID,
+			SourceWorkspaceRoot: targetContext.SourceWorkspaceRoot,
+			Managed: &workflowstore.ManagedExecutionRoot{
+				WorktreeID: worktreeID,
+				Root:       worktreeRoot,
+			},
+		},
+	}); err != nil {
+		t.Fatalf("LockTaskExecutionTarget: %v", err)
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller, err := workflowexecution.NewCurrentNodeController(
+		service.store,
+		initialBranchControllerRunner{},
+		authority,
+		service.mutationPermit,
+		workflowexecution.CurrentNodeControllerConfig{
+			AgentConcurrency:  1,
+			AssignmentSteerer: initialBranchControllerSteerer{},
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewCurrentNodeController: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := controller.Close(); err != nil {
+			t.Errorf("close CurrentNodeController: %v", err)
+		}
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close session runtime authority: %v", err)
+		}
+	})
+	service.currentNodeExecution = controller
+	restoreRequests := make(chan ExecutionTargetRestoreRequest, 1)
+	targets := &recordingExecutionTargetInfrastructure{
+		restoreRequests: restoreRequests,
+		restoreErr: &worktree.LockedTaskWorktreeError{
+			Cause: worktree.LockedTaskWorktreeCauseMissingBranch,
+		},
+	}
+	service.executionTargets = targets
+
+	response, err := service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
+		TaskID:           task.Task.ID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	})
+	if err != nil {
+		t.Fatalf("ResumeWorkflowTask: %v", err)
+	}
+	if response.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeApplied ||
+		response.Applied == nil ||
+		len(response.Applied.CurrentNodes) != 1 ||
+		response.Applied.CurrentNodes[0].NodeID != string(reference.NodeID) {
+		t.Fatalf("Resume response = %+v, want applied before restoration", response)
+	}
+	select {
+	case restored := <-restoreRequests:
+		if restored.TaskID != taskID {
+			t.Fatalf("restored Task = %q, want %q", restored.TaskID, taskID)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("locked-target restoration was not queued")
+	}
+	var currentNodes []workflow.CurrentNode
+	testsetup.RequireUntil(t, time.Now().Add(5*time.Second), 20*time.Millisecond, func() bool {
+		var listErr error
+		currentNodes, listErr = service.store.ListCurrentNodes(ctx, taskID)
+		return listErr == nil &&
+			len(currentNodes) == 1 &&
+			currentNodes[0].Scheduling != nil &&
+			currentNodes[0].Scheduling.State == workflow.CurrentNodeSchedulingInterrupted
+	}, "locked-target restoration failure did not interrupt the requeued Current Node")
 }

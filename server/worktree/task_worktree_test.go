@@ -313,6 +313,24 @@ func TestRestoreLockedTaskWorktreeReusesDetachedHeadWithoutRunningSetup(t *testi
 	if _, err := os.Stat(setupMarker); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("restore ran setup for reused detached worktree: %v", err)
 	}
+
+	repeated, err := env.service.RestoreLockedTaskWorktree(env.ctx, LockedTaskWorktreeRestoreRequest{
+		TaskID:           task.ID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	})
+	if err != nil {
+		t.Fatalf("RestoreLockedTaskWorktree repeated: %v", err)
+	}
+	if repeated.Created ||
+		taskWorktreeID(repeated.Worktree) != worktreeID ||
+		taskWorktreeRoot(repeated.Worktree) != worktreeRoot ||
+		repeated.Worktree.Registered == nil ||
+		!repeated.Worktree.Registered.Git.Detached {
+		t.Fatalf("repeated restored worktree = %+v, want detached reuse of %q", repeated, worktreeID)
+	}
+	if _, err := os.Stat(setupMarker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("repeated restore ran setup for reused detached worktree: %v", err)
+	}
 }
 
 func TestMaterializeInitialTaskWorktreeRejectsDetachedExistingCandidate(t *testing.T) {

@@ -547,12 +547,14 @@ func (s *Service) RestoreLockedTaskWorktree(ctx context.Context, req LockedTaskW
 	if err != nil {
 		return TaskWorktreeMaterialization{}, err
 	}
-	persistedBranch, err := persistedTaskWorktreeBranch(record)
-	if err != nil {
-		return TaskWorktreeMaterialization{}, err
-	}
-	if err := validateInitialTaskBranchAssertion(req.BranchName, persistedBranch); err != nil {
-		return TaskWorktreeMaterialization{}, err
+	if req.BranchName != nil {
+		persistedBranch, err := persistedTaskWorktreeBranch(record)
+		if err != nil {
+			return TaskWorktreeMaterialization{}, err
+		}
+		if err := validateInitialTaskBranchAssertion(req.BranchName, persistedBranch); err != nil {
+			return TaskWorktreeMaterialization{}, err
+		}
 	}
 	identity, err := s.git.ValidateManagedWorktreeIdentity(ctx, ManagedWorktreeIdentitySpec{
 		SourceWorkspaceRoot:  workspace.RootPath,

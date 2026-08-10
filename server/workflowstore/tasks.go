@@ -603,11 +603,15 @@ func taskRecordFromTask(row sqlitegen.TaskRecord) (TaskRecord, error) {
 	if err != nil {
 		return TaskRecord{}, err
 	}
+	managedWorktreeID := metadata.OptionalString(row.ManagedWorktreeID)
+	if managedWorktreeID != nil && strings.TrimSpace(*managedWorktreeID) == "" {
+		return TaskRecord{}, fmt.Errorf("task %q has a present blank managed Worktree ID", row.ID)
+	}
 	return TaskRecord{
 		ID: workflow.TaskID(row.ID), ProjectID: row.ProjectID, WorkflowID: row.WorkflowID,
 		LinkID: row.ProjectWorkflowLinkID, ShortID: row.ShortID, Title: row.Title, Body: row.Body,
 		SourceURL: row.SourceUrl, SourceWorkspaceID: strings.TrimSpace(row.SourceWorkspaceID.String),
-		ManagedWorktreeID:               strings.TrimSpace(row.ManagedWorktreeID.String),
+		ManagedWorktreeID:               managedWorktreeID,
 		PendingInitialManagedBranchName: metadata.OptionalString(row.PendingInitialManagedBranchName),
 		ExecutionTarget:                 target,
 		Version:                         row.WorkflowRevisionSeen,

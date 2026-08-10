@@ -1125,7 +1125,7 @@ func (s *Service) preflightInitialTaskBranch(
 		}
 		return nil, false, nil
 	}
-	if targetContext.Task.ManagedWorktreeID != "" {
+	if targetContext.Task.ManagedWorktreeID != nil {
 		return requestedBranchName, false, nil
 	}
 	if targetContext.Task.ExecutionTarget != nil {
@@ -1507,13 +1507,21 @@ func (s *Service) resumeWorkflowTask(ctx context.Context, req serverapi.Workflow
 			})
 			return errors.Join(preparationErr, lockErr)
 		}
-	} else {
-		decision, err := s.initiatingActionTarget(ctx, taskID, req.SetupOperationID, target)
-		if err != nil {
-			return serverapi.WorkflowTaskResumeResponse{}, err
-		}
-		if decision.candidate != nil || decision.selectionRequired != nil {
-			return serverapi.WorkflowTaskResumeResponse{}, errors.New("locked Resume target returned an initial target decision")
+	} else if target.context.Task.ExecutionTarget.Mode != workflow.ExecutionTargetModeNone {
+		preparation = func(preparationCtx context.Context) error {
+			decision, preparationErr := s.initiatingActionTarget(
+				preparationCtx,
+				taskID,
+				req.SetupOperationID,
+				target,
+			)
+			if preparationErr != nil {
+				return preparationErr
+			}
+			if decision.candidate != nil || decision.selectionRequired != nil {
+				return errors.New("locked Resume target returned an initial target decision")
+			}
+			return nil
 		}
 	}
 	var resumed []workflow.CurrentNode

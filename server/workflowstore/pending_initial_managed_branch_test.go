@@ -23,6 +23,15 @@ func TestCreateTaskInitializesPendingManagedBranchFromShortID(t *testing.T) {
 	}
 }
 
+func TestTaskRecordProjectionRejectsPresentBlankManagedWorktreeID(t *testing.T) {
+	_, err := taskRecordFromTask(sqlitegen.TaskRecord{
+		ManagedWorktreeID: sql.NullString{Valid: true},
+	})
+	if err == nil {
+		t.Fatal("taskRecordFromTask accepted a present blank managed Worktree ID")
+	}
+}
+
 func TestBindInitialTaskManagedWorktreeClearsCurrentPendingBranch(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
@@ -64,8 +73,8 @@ func TestBindInitialTaskManagedWorktreeClearsCurrentPendingBranch(t *testing.T) 
 	if err != nil {
 		t.Fatalf("GetTaskExecutionTargetContext bound: %v", err)
 	}
-	if bound.Task.ManagedWorktreeID != worktreeID {
-		t.Fatalf("bound managed Worktree = %q, want %q", bound.Task.ManagedWorktreeID, worktreeID)
+	if bound.Task.ManagedWorktreeID == nil || *bound.Task.ManagedWorktreeID != worktreeID {
+		t.Fatalf("bound managed Worktree = %v, want %q", bound.Task.ManagedWorktreeID, worktreeID)
 	}
 	if bound.Task.PendingInitialManagedBranchName != nil {
 		t.Fatalf("bound pending initial managed branch = %q, want absent", *bound.Task.PendingInitialManagedBranchName)

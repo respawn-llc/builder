@@ -848,9 +848,9 @@ func TestServiceTaskStartAppliesExplicitNoneSelectionAndLocksTarget(t *testing.T
 	}
 	if targetContext.Task.ExecutionTarget == nil ||
 		targetContext.Task.ExecutionTarget.Mode != workflow.ExecutionTargetModeNone ||
-		targetContext.Task.ManagedWorktreeID != "" ||
+		targetContext.Task.ManagedWorktreeID != nil ||
 		targetContext.Task.PendingInitialManagedBranchName != nil {
-		t.Fatalf("locked target = %+v, managed worktree = %q, want none", targetContext.Task.ExecutionTarget, targetContext.Task.ManagedWorktreeID)
+		t.Fatalf("locked target = %+v, managed worktree = %v, want none", targetContext.Task.ExecutionTarget, targetContext.Task.ManagedWorktreeID)
 	}
 }
 
@@ -926,8 +926,9 @@ func TestServiceTaskStartMaterializesConfiguredHeadBeforeLockingTarget(t *testin
 		targetContext.Task.ExecutionTarget.Mode != workflow.ExecutionTargetModeHead ||
 		targetContext.Task.ExecutionTarget.CommitOID == nil ||
 		*targetContext.Task.ExecutionTarget.CommitOID != commitOID ||
-		targetContext.Task.ManagedWorktreeID != worktreeID {
-		t.Fatalf("locked target = %+v, managed worktree = %q", targetContext.Task.ExecutionTarget, targetContext.Task.ManagedWorktreeID)
+		targetContext.Task.ManagedWorktreeID == nil ||
+		*targetContext.Task.ManagedWorktreeID != worktreeID {
+		t.Fatalf("locked target = %+v, managed worktree = %v", targetContext.Task.ExecutionTarget, targetContext.Task.ManagedWorktreeID)
 	}
 }
 
@@ -986,8 +987,9 @@ func TestServiceTaskStartLocksRetainedTargetWhenSetupFails(t *testing.T) {
 	}
 	if targetContext.Task.ExecutionTarget == nil ||
 		targetContext.Task.ExecutionTarget.Mode != workflow.ExecutionTargetModeHead ||
-		targetContext.Task.ManagedWorktreeID != worktreeID {
-		t.Fatalf("execution target = %+v, worktree = %q; want retained locked target", targetContext.Task.ExecutionTarget, targetContext.Task.ManagedWorktreeID)
+		targetContext.Task.ManagedWorktreeID == nil ||
+		*targetContext.Task.ManagedWorktreeID != worktreeID {
+		t.Fatalf("execution target = %+v, worktree = %v; want retained locked target", targetContext.Task.ExecutionTarget, targetContext.Task.ManagedWorktreeID)
 	}
 }
 
@@ -1689,6 +1691,7 @@ type recordingExecutionTargetInfrastructure struct {
 	materializeRequest       ExecutionTargetMaterializeRequest
 	restoreTaskID            workflow.TaskID
 	restoreRequest           ExecutionTargetRestoreRequest
+	restoreRequests          chan<- ExecutionTargetRestoreRequest
 	setupOperationID         serverapi.WorktreeSetupOperationID
 	materialize              func(workflow.TaskID) (ExecutionTargetMaterialization, error)
 	resolveErr               error
@@ -1853,6 +1856,9 @@ func (i *recordingExecutionTargetInfrastructure) RestoreExecutionTarget(_ contex
 	i.restoreTaskID = req.TaskID
 	i.restoreRequest = req
 	i.setupOperationID = req.SetupOperationID
+	if i.restoreRequests != nil {
+		i.restoreRequests <- req
+	}
 	return i.restoreErr
 }
 

@@ -268,7 +268,8 @@ func TestServiceManualMoveAcceptedBranchReturnsConflictWhenFinalRevalidationBeco
 		t.Fatalf("GetTaskExecutionTargetContext: %v", err)
 	}
 	if targetContext.Task.PendingInitialManagedBranchName != nil ||
-		targetContext.Task.ManagedWorktreeID != worktreeID ||
+		targetContext.Task.ManagedWorktreeID == nil ||
+		*targetContext.Task.ManagedWorktreeID != worktreeID ||
 		targetContext.Task.ExecutionTarget == nil {
 		t.Fatalf("target context after concurrent move = %+v, want accepted branch lifecycle consumed by applied move", targetContext.Task)
 	}
