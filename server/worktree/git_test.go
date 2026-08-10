@@ -514,6 +514,32 @@ func TestGitInspectorInspectProspectiveInitialTaskBranchRejectsCheckoutShorthand
 	}
 }
 
+func TestGitInspectorInspectProspectiveInitialTaskBranchRejectsUncreatableNames(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	initGitRepo(t, workspaceRoot)
+
+	for _, branchName := range []string{"HEAD", "-leading-dash"} {
+		t.Run(branchName, func(t *testing.T) {
+			err := NewGitInspector(nil).InspectProspectiveInitialTaskBranch(
+				context.Background(),
+				workspaceRoot,
+				branchName,
+			)
+
+			var branchErr *InitialTaskBranchError
+			if !errors.As(err, &branchErr) {
+				t.Fatalf("error = %T %v, want InitialTaskBranchError", err, err)
+			}
+			if branchErr.Kind != InitialTaskBranchErrorInvalidName ||
+				branchErr.BranchName != branchName ||
+				branchErr.Ref != nil ||
+				branchErr.Remote != nil {
+				t.Fatalf("initial Task branch error = %+v", branchErr)
+			}
+		})
+	}
+}
+
 func TestGitInspectorInspectProspectiveInitialTaskBranchFindsExactCollisions(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	initGitRepo(t, workspaceRoot)
