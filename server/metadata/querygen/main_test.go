@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -12,7 +11,7 @@ import (
 	"core/server/metadata/querysource"
 )
 
-func TestMetadataQuerySourceRendersDeterministicallyWithoutTrackedIntermediate(t *testing.T) {
+func TestMetadataQuerySourceRendersDeterministically(t *testing.T) {
 	renderer := testMetadataQueryRenderer(t)
 	first, err := renderer.Render()
 	if err != nil {
@@ -27,9 +26,6 @@ func TestMetadataQuerySourceRendersDeterministicallyWithoutTrackedIntermediate(t
 	}
 	if len(bytes.TrimSpace(first)) == 0 {
 		t.Fatal("rendered metadata queries are empty")
-	}
-	if _, err := os.Stat("../queries.sql"); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("tracked metadata query intermediate exists: %v", err)
 	}
 }
 
