@@ -61,6 +61,18 @@ func TestGoalSetEmitsCommittedGoalFeedbackEvent(t *testing.T) {
 	}
 }
 
+func TestGoalSetCarriesMissingAskQuestionCapability(t *testing.T) {
+	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
+	if err := store.MarkModelDispatchLocked(session.LockedContract{EnabledTools: []string{string(toolspec.ToolExecCommand)}}); err != nil {
+		t.Fatal(err)
+	}
+	events := []Event{}
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{OnEvent: func(evt Event) { events = append(events, evt) }})
+	if _, err := engine.SetGoal("ship goal mode", session.GoalActorUser); err != nil || len(events) != 2 || events[1].GoalStatus == nil || events[1].GoalStatus.Availability != clientui.GoalAvailabilityAgentCapabilityMissing {
+		t.Fatalf("goal events=%+v err=%v", events, err)
+	}
+}
+
 func TestQueuedAgentShellGoalSetDrainsAfterToolCompletion(t *testing.T) {
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
