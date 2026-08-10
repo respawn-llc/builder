@@ -31,7 +31,9 @@ describe("Task Detail retained sidebar state", () => {
         {
           method: "workflow.task.comment.list",
           handler: (params) =>
-            taskIDFromParams(params) === "task-2" ? { items: [], next_offset: null } : commentListResponse,
+            taskIDFromParams(params) === "task-2"
+              ? { items: [], next_offset: null, total_count: 0 }
+              : commentListResponse,
         },
         {
           method: "workflow.task.activity.list",

@@ -1176,6 +1176,7 @@ type WorkflowTaskCommentAddResponse struct {
 
 type WorkflowTaskCommentListResponse struct {
 	WorkflowOffsetPage[WorkflowTaskComment]
+	TotalCount int64 `json:"total_count"`
 }
 
 type WorkflowTaskCommentReplaceRequest struct {

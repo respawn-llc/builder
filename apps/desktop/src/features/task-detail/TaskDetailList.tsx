@@ -127,6 +127,7 @@ export function TaskDetailList({
     () => withPresentationKeys(comments.data?.pages ?? [], "comment"),
     [comments.data],
   );
+  const commentCount = commentCountFromData(comments.data);
   const attentionItems = useMemo(() => attention.data?.items ?? [], [attention.data]);
   const listItems = useMemo(
     () =>
@@ -202,6 +203,7 @@ export function TaskDetailList({
       estimateSize={() => 160}
       getItemAnchorKey={taskDetailListItemAnchorKey}
       getItemKey={taskDetailListItemKey}
+      getItemOccurrenceKey={taskDetailListItemKey}
       hasNextPage={autoLoadAvailable(paging.hasNextPage, nextBoundary)}
       hasPreviousPage={autoLoadAvailable(paging.hasPreviousPage, previousBoundary)}
       initialScrollKey={initialScrollKey}
@@ -230,7 +232,7 @@ export function TaskDetailList({
           activityCount={activityItems.length}
           attentionItems={attentionItems}
           attentionPending={attention.isPending}
-          commentCount={commentItems.length}
+          commentCount={commentCount}
           canSaveDraft={canSaveDraft}
           draftDirty={draftDirty}
           detail={detail}
@@ -542,6 +544,12 @@ function withPresentationKeys<T>(
       presentationKey: `${prefix}:offset:${page.offset.toString()}:item:${index.toString()}`,
     })),
   );
+}
+
+function commentCountFromData<T>(
+  data: Readonly<{ pages: readonly TaskDetailFeedPage<T>[] }> | undefined,
+): number {
+  return data?.pages[0]?.totalCount ?? 0;
 }
 
 function taskDetailListItems({

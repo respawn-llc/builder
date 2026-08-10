@@ -2017,6 +2017,10 @@ func (s *Service) ListWorkflowTaskComments(ctx context.Context, req serverapi.Wo
 	if err != nil {
 		return serverapi.WorkflowTaskCommentListResponse{}, err
 	}
+	totalCount, err := s.store.CountTaskComments(ctx, workflow.TaskID(req.TaskID))
+	if err != nil {
+		return serverapi.WorkflowTaskCommentListResponse{}, err
+	}
 	comments, err := s.store.ListCommentsPage(ctx, workflow.TaskID(req.TaskID), window.Offset, window.Limit+1)
 	if err != nil {
 		return serverapi.WorkflowTaskCommentListResponse{}, err
@@ -2027,6 +2031,7 @@ func (s *Service) ListWorkflowTaskComments(ctx context.Context, req serverapi.Wo
 	}
 	return serverapi.WorkflowTaskCommentListResponse{
 		WorkflowOffsetPage: serverapi.FinalizeWorkflowOffsetPage(window, out),
+		TotalCount:         totalCount,
 	}, nil
 }
 

@@ -338,6 +338,7 @@ export const commentListResponse = {
     },
   ],
   next_offset: null,
+  total_count: 1,
 };
 
 export const firstCommentListResponse = {
@@ -352,6 +353,7 @@ export const firstCommentListResponse = {
     },
   ],
   next_offset: 50,
+  total_count: 2,
 };
 
 export const secondCommentListResponse = {
@@ -366,6 +368,7 @@ export const secondCommentListResponse = {
     },
   ],
   next_offset: null,
+  total_count: 2,
 };
 
 export const taskUpdateResponse = {

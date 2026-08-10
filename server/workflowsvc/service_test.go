@@ -217,7 +217,7 @@ func TestServiceTaskCommentListPaginatesOffsetWindows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListWorkflowTaskComments first page: %v", err)
 	}
-	if len(first.Items) != 2 || first.NextOffset == nil || *first.NextOffset != 2 {
+	if len(first.Items) != 2 || first.NextOffset == nil || *first.NextOffset != 2 || first.TotalCount != 3 {
 		t.Fatalf("first comment page = %+v", first)
 	}
 	second, err := service.ListWorkflowTaskComments(ctx, serverapi.WorkflowTaskOffsetPageRequest{
@@ -228,7 +228,7 @@ func TestServiceTaskCommentListPaginatesOffsetWindows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListWorkflowTaskComments continued page: %v", err)
 	}
-	if len(second.Items) != 1 || second.NextOffset != nil {
+	if len(second.Items) != 1 || second.NextOffset != nil || second.TotalCount != 3 {
 		t.Fatalf("continued comment page = %+v", second)
 	}
 	beyondEnd := 3
@@ -240,7 +240,7 @@ func TestServiceTaskCommentListPaginatesOffsetWindows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListWorkflowTaskComments beyond end: %v", err)
 	}
-	if len(empty.Items) != 0 || empty.NextOffset != nil {
+	if len(empty.Items) != 0 || empty.NextOffset != nil || empty.TotalCount != 3 {
 		t.Fatalf("beyond-end comment page = %+v", empty)
 	}
 	negativeOffset := -1

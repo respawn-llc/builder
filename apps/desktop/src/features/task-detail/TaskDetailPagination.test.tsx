@@ -40,6 +40,7 @@ describe("Task Detail feed presentation", () => {
           },
         ],
         next_offset: null,
+        total_count: 2,
       },
     });
 
@@ -48,6 +49,31 @@ describe("Task Detail feed presentation", () => {
       expect(screen.getByText("Second occurrence")).toBeInTheDocument();
     });
     expect(screen.getAllByRole("article")).toHaveLength(2);
+  });
+
+  it("uses the authoritative Comment total for the tab badge", async () => {
+    mountTaskDetailSurface(taskDetailResponse, {
+      attention: emptyTaskAttentionResponse,
+      comments: {
+        items: [
+          {
+            id: "comment-window-item",
+            task_id: "task-1",
+            body: "Only retained window item",
+            author: "user",
+            created_at_unix_ms: 2,
+            updated_at_unix_ms: 2,
+          },
+        ],
+        next_offset: null,
+        total_count: 501,
+      },
+    });
+
+    const commentsTab = await screen.findByRole("tab", {
+      name: new RegExp(appI18n.t("task.comments")),
+    });
+    expect(commentsTab).toHaveTextContent("501");
   });
 
   it("refetches the retained newest page on a live update without clearing visible rows", async () => {
@@ -109,5 +135,6 @@ function commentPage(body: string) {
       },
     ],
     next_offset: null,
+    total_count: 1,
   };
 }

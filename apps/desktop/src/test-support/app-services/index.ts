@@ -151,6 +151,7 @@ export const startupRoutes: readonly FakeRoute[] = [
     result: {
       items: [],
       next_offset: null,
+      total_count: 0,
     },
   },
   {

@@ -84,6 +84,7 @@ describe("ApiClient Task Comment pagination", () => {
             },
           ],
           next_offset: 40,
+          total_count: 41,
         },
       },
     ]);
@@ -92,6 +93,7 @@ describe("ApiClient Task Comment pagination", () => {
     await expect(client.listTaskComments("task-1", 0)).resolves.toMatchObject({
       items: [{ id: "comment-1", body: "Existing comment", authorKind: "user", authorID: "Nek-12" }],
       nextOffset: 40,
+      totalCount: 41,
     });
     expect(transport.calls).toContainEqual({
       method: "workflow.task.comment.list",

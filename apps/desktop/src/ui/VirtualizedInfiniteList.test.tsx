@@ -186,6 +186,56 @@ describe("VirtualizedInfiniteList pixel restoration", () => {
     expect(list.scrollTop).toBe(80);
   });
 
+  it("uses occurrence identity before falling back to a duplicate row anchor", () => {
+    const initialItems = [
+      { anchor: "row", slot: "slot-a" },
+      { anchor: "row", slot: "slot-b" },
+    ];
+    const refreshedItems = [{ anchor: "row-new", slot: "slot-new" }, ...initialItems];
+    virtualizer.getOffsetForIndex.mockImplementation((index: number) => [index * 40]);
+    virtualizer.getVirtualItems.mockReturnValue([
+      { end: 80, index: 1, key: "slot-b", lane: 0, size: 40, start: 40 },
+    ]);
+    const view = render(
+      <VirtualizedInfiniteList
+        estimateSize={testEstimateSize}
+        getItemAnchorKey={(item) => item.anchor}
+        getItemKey={(item) => item.slot}
+        getItemOccurrenceKey={(item) => item.slot}
+        hasNextPage={false}
+        isFetchingNextPage={false}
+        items={initialItems}
+        loadingLabel="Loading"
+        onLoadMore={() => undefined}
+        renderItem={(item) => item.slot}
+      />,
+    );
+    const list = screen.getByRole("list");
+    list.scrollTop = 40;
+    fireEvent.scroll(list);
+
+    virtualizer.getVirtualItems.mockReturnValue([
+      { end: 120, index: 2, key: "slot-b", lane: 0, size: 40, start: 80 },
+    ]);
+    view.rerender(
+      <VirtualizedInfiniteList
+        estimateSize={testEstimateSize}
+        getItemAnchorKey={(item) => item.anchor}
+        getItemKey={(item) => item.slot}
+        getItemOccurrenceKey={(item) => item.slot}
+        hasNextPage={false}
+        isFetchingNextPage={false}
+        items={refreshedItems}
+        loadingLabel="Loading"
+        onLoadMore={() => undefined}
+        renderItem={(item) => item.slot}
+      />,
+    );
+
+    expect(virtualizer.getOffsetForIndex).toHaveBeenCalledWith(2, "start");
+    expect(list.scrollTop).toBe(80);
+  });
+
   it("ignores a stale virtual row that starts after the restored offset", () => {
     const items = Array.from({ length: 20 }, (_value, index) => `item-${index.toString()}`);
     const request = createVirtualizedPixelOffsetRequest("stale-range", 240);

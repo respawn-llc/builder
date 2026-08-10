@@ -734,6 +734,9 @@ export type OffsetPage<T> = Readonly<{
   nextOffset: number | null;
 }>;
 
-export type CommentPage = OffsetPage<TaskComment>;
+export type CommentPage = OffsetPage<TaskComment> &
+  Readonly<{
+    totalCount: number;
+  }>;
 
 export type ActivityPage = OffsetPage<ActivityItem>;

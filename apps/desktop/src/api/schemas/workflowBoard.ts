@@ -65,12 +65,15 @@ const workflowPickerSchema = z
   .nullish()
   .transform((value) => value ?? []);
 
+function offsetPageObjectSchema<T>(itemSchema: z.ZodType<T>) {
+  return z.object({
+    items: z.array(itemSchema),
+    next_offset: z.number().int().positive().nullable().optional(),
+  });
+}
+
 function offsetPageSchema<T>(itemSchema: z.ZodType<T>): z.ZodType<OffsetPage<T>> {
-  return z
-    .object({
-      items: z.array(itemSchema),
-      next_offset: z.number().int().positive().nullable().optional(),
-    })
+  return offsetPageObjectSchema(itemSchema)
     .strict()
     .transform((value) => ({
       items: value.items,
@@ -633,4 +636,13 @@ export const taskCreateResponseSchema = taskSummaryResponseSchema;
 export const taskUpdateResponseSchema = taskSummaryResponseSchema;
 export const commentAddResponseSchema = z.object({ comment: commentSchema });
 
-export const commentPageSchema: z.ZodType<CommentPage> = offsetPageSchema(commentSchema);
+export const commentPageSchema: z.ZodType<CommentPage> = offsetPageObjectSchema(commentSchema)
+  .extend({
+    total_count: z.number().int().nonnegative(),
+  })
+  .strict()
+  .transform((value) => ({
+    items: value.items,
+    nextOffset: value.next_offset ?? null,
+    totalCount: value.total_count,
+  }));

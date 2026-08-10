@@ -116,12 +116,16 @@ func TestWorkflowTaskOffsetPageJSONContractUsesItemsAndNextOffset(t *testing.T) 
 		WorkflowOffsetPage: WorkflowOffsetPage[WorkflowTaskComment]{
 			Items: []WorkflowTaskComment{{ID: "comment-1"}},
 		},
+		TotalCount: 1,
 	})
 	if _, exists := commentResponseShape["comments"]; exists {
 		t.Fatalf("comment response retains old collection key: %s", commentResponseJSON)
 	}
 	if len(commentResponseShape["items"].([]any)) != 1 {
 		t.Fatalf("comment response = %s", commentResponseJSON)
+	}
+	if commentResponseShape["total_count"] != float64(1) {
+		t.Fatalf("comment response total count = %s", commentResponseJSON)
 	}
 
 	activityResponseJSON, activityResponseShape := marshalWorkflowJSON[map[string]any](t, WorkflowTaskActivityListResponse{
