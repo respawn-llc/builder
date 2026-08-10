@@ -179,7 +179,7 @@ func TestServiceTaskResumeReturnsAppliedBeforeFinalBranchCollisionInterruptsCurr
 	}
 }
 
-func TestServiceTaskResumeQueuesBeforeLockedTargetRestoration(t *testing.T) {
+func TestServiceTaskResumePreflightsLockedBranchBeforeAsynchronousRestoration(t *testing.T) {
 	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
 	setWorkflowServiceExecutionTargetPolicy(t, ctx, service, workflowID, serverapi.WorkflowExecutionTargetConfiguration{
@@ -274,7 +274,53 @@ func TestServiceTaskResumeQueuesBeforeLockedTargetRestoration(t *testing.T) {
 	}
 	service.executionTargets = targets
 
+	existingBranchName := task.Task.ShortID
+	requestedBranchName := "feature/attempted-rename"
+	existingBranchRef := "refs/heads/" + existingBranchName
+	targets.initialBranchAssertionErr = &serverapi.WorkflowTaskInitialBranchError{
+		Reason:             serverapi.WorkflowTaskInitialBranchErrorReasonPostCreationMismatch,
+		BranchName:         requestedBranchName,
+		Ref:                &existingBranchRef,
+		ExistingBranchName: &existingBranchName,
+	}
 	response, err := service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
+		TaskID:           task.Task.ID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		BranchName:       &requestedBranchName,
+	})
+	var mismatch *serverapi.WorkflowTaskInitialBranchError
+	if !errors.As(err, &mismatch) ||
+		mismatch.Reason != serverapi.WorkflowTaskInitialBranchErrorReasonPostCreationMismatch ||
+		mismatch.BranchName != requestedBranchName ||
+		mismatch.ExistingBranchName == nil ||
+		*mismatch.ExistingBranchName != existingBranchName {
+		t.Fatalf("ResumeWorkflowTask mismatch error = %T %+v, want %q versus %q mismatch", err, err, requestedBranchName, existingBranchName)
+	}
+	if response.Outcome != "" || response.Applied != nil {
+		t.Fatalf("Resume response = %+v, want unapplied branch mismatch", response)
+	}
+	if targets.initialBranchAssertions != 1 ||
+		targets.initialBranchAssertion.TaskID != taskID ||
+		targets.initialBranchAssertion.BranchName != requestedBranchName {
+		t.Fatalf("initial branch assertions = %d %+v, want one preflight assertion", targets.initialBranchAssertions, targets.initialBranchAssertion)
+	}
+	select {
+	case restored := <-restoreRequests:
+		t.Fatalf("locked-target restoration queued before branch mismatch rejection: %+v", restored)
+	default:
+	}
+	interruptedNodes, err := service.store.ListCurrentNodes(ctx, taskID)
+	if err != nil {
+		t.Fatalf("ListCurrentNodes after mismatch: %v", err)
+	}
+	if len(interruptedNodes) != 1 ||
+		interruptedNodes[0].Scheduling == nil ||
+		interruptedNodes[0].Scheduling.State != workflow.CurrentNodeSchedulingInterrupted {
+		t.Fatalf("Current Nodes after mismatch = %+v, want original interruption", interruptedNodes)
+	}
+
+	targets.initialBranchAssertionErr = nil
+	response, err = service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
 		TaskID:           task.Task.ID,
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
 	})

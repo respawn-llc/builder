@@ -106,6 +106,7 @@ func (e *manualMoveNoOpBeforeInterruptError) Error() string {
 
 type executionTargetInfrastructure interface {
 	InspectProspectiveInitialTaskBranch(context.Context, InitialTaskBranchInspectionRequest) error
+	AssertInitialTaskBranch(context.Context, InitialTaskBranchAssertionRequest) error
 	ResolveExecutionTarget(context.Context, ExecutionTargetResolveRequest) (workflowstore.ExecutionTargetSnapshot, error)
 	MaterializeExecutionTarget(context.Context, ExecutionTargetMaterializeRequest) (ExecutionTargetMaterialization, error)
 	RestoreExecutionTarget(context.Context, ExecutionTargetRestoreRequest) error
@@ -114,6 +115,11 @@ type executionTargetInfrastructure interface {
 type InitialTaskBranchInspectionRequest struct {
 	SourceWorkspaceRoot string
 	BranchName          string
+}
+
+type InitialTaskBranchAssertionRequest struct {
+	TaskID     workflow.TaskID
+	BranchName string
 }
 
 type ExecutionTargetResolveRequest struct {
@@ -1126,6 +1132,14 @@ func (s *Service) preflightInitialTaskBranch(
 		return nil, false, nil
 	}
 	if targetContext.Task.ManagedWorktreeID != nil {
+		if requestedBranchName != nil {
+			if err := s.executionTargets.AssertInitialTaskBranch(ctx, InitialTaskBranchAssertionRequest{
+				TaskID:     targetContext.Task.ID,
+				BranchName: *requestedBranchName,
+			}); err != nil {
+				return nil, false, err
+			}
+		}
 		return requestedBranchName, false, nil
 	}
 	if targetContext.Task.ExecutionTarget != nil {

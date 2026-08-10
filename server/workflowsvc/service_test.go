@@ -1682,21 +1682,24 @@ func TestServiceMapsWorkflowTaskLabelScopeFailures(t *testing.T) {
 }
 
 type recordingExecutionTargetInfrastructure struct {
-	resolution               workflowstore.ExecutionTargetSnapshot
-	resolveSelection         workflow.ExecutionTargetSelection
-	initialBranchInspection  InitialTaskBranchInspectionRequest
-	initialBranchInspections int
-	initialBranchErr         error
-	materializeTaskID        workflow.TaskID
-	materializeRequest       ExecutionTargetMaterializeRequest
-	restoreTaskID            workflow.TaskID
-	restoreRequest           ExecutionTargetRestoreRequest
-	restoreRequests          chan<- ExecutionTargetRestoreRequest
-	setupOperationID         serverapi.WorktreeSetupOperationID
-	materialize              func(workflow.TaskID) (ExecutionTargetMaterialization, error)
-	resolveErr               error
-	materializeErr           error
-	restoreErr               error
+	resolution                workflowstore.ExecutionTargetSnapshot
+	resolveSelection          workflow.ExecutionTargetSelection
+	initialBranchInspection   InitialTaskBranchInspectionRequest
+	initialBranchInspections  int
+	initialBranchErr          error
+	initialBranchAssertion    InitialTaskBranchAssertionRequest
+	initialBranchAssertions   int
+	initialBranchAssertionErr error
+	materializeTaskID         workflow.TaskID
+	materializeRequest        ExecutionTargetMaterializeRequest
+	restoreTaskID             workflow.TaskID
+	restoreRequest            ExecutionTargetRestoreRequest
+	restoreRequests           chan<- ExecutionTargetRestoreRequest
+	setupOperationID          serverapi.WorktreeSetupOperationID
+	materialize               func(workflow.TaskID) (ExecutionTargetMaterialization, error)
+	resolveErr                error
+	materializeErr            error
+	restoreErr                error
 }
 
 type manualMoveExecutionStub struct {
@@ -1874,6 +1877,12 @@ func (i *recordingExecutionTargetInfrastructure) InspectProspectiveInitialTaskBr
 	i.initialBranchInspection = req
 	i.initialBranchInspections++
 	return i.initialBranchErr
+}
+
+func (i *recordingExecutionTargetInfrastructure) AssertInitialTaskBranch(_ context.Context, req InitialTaskBranchAssertionRequest) error {
+	i.initialBranchAssertion = req
+	i.initialBranchAssertions++
+	return i.initialBranchAssertionErr
 }
 
 func (i *recordingExecutionTargetInfrastructure) MaterializeExecutionTarget(_ context.Context, req ExecutionTargetMaterializeRequest) (ExecutionTargetMaterialization, error) {

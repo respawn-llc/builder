@@ -379,6 +379,32 @@ func (s *Service) InspectProspectiveInitialTaskBranch(ctx context.Context, sourc
 	return workflowTaskInitialBranchError(s.git.InspectProspectiveInitialTaskBranch(ctx, sourceWorkspaceRoot, branchName))
 }
 
+func (s *Service) AssertInitialTaskBranch(ctx context.Context, taskID workflow.TaskID, branchName string) error {
+	if s == nil || s.metadata == nil {
+		return errors.New("worktree service is required")
+	}
+	rawTaskID := strings.TrimSpace(string(taskID))
+	if rawTaskID == "" {
+		return errors.New("task_id is required")
+	}
+	task, err := s.metadata.Queries().GetTask(ctx, rawTaskID)
+	if err != nil {
+		return err
+	}
+	if !task.ManagedWorktreeID.Valid || strings.TrimSpace(task.ManagedWorktreeID.String) == "" {
+		return fmt.Errorf("task %q has no managed Worktree for branch assertion", rawTaskID)
+	}
+	record, err := s.metadata.GetWorktreeRecordByID(ctx, strings.TrimSpace(task.ManagedWorktreeID.String))
+	if err != nil {
+		return err
+	}
+	persistedBranch, err := persistedTaskWorktreeBranch(record)
+	if err != nil {
+		return err
+	}
+	return validateInitialTaskBranchAssertion(&branchName, persistedBranch)
+}
+
 func (s *Service) materializeInitialTaskWorktree(
 	ctx context.Context,
 	taskID string,

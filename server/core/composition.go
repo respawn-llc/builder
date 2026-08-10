@@ -424,6 +424,13 @@ func (i taskExecutionTargetInfrastructure) InspectProspectiveInitialTaskBranch(c
 	return i.service.InspectProspectiveInitialTaskBranch(ctx, req.SourceWorkspaceRoot, req.BranchName)
 }
 
+func (i taskExecutionTargetInfrastructure) AssertInitialTaskBranch(ctx context.Context, req workflowsvc.InitialTaskBranchAssertionRequest) error {
+	if i.service == nil {
+		return errors.New("worktree service is required")
+	}
+	return i.service.AssertInitialTaskBranch(ctx, req.TaskID, req.BranchName)
+}
+
 func (i taskExecutionTargetInfrastructure) ResolveExecutionTarget(ctx context.Context, req workflowsvc.ExecutionTargetResolveRequest) (workflowstore.ExecutionTargetSnapshot, error) {
 	if i.git == nil {
 		return workflowstore.ExecutionTargetSnapshot{}, errors.New("git inspector is required")

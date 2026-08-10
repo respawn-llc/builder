@@ -82,6 +82,23 @@ func TestTaskExecutionTargetInfrastructureCarriesPostCreationBranchAssertion(t *
 	}); err != nil {
 		t.Fatalf("LockTaskExecutionTarget: %v", err)
 	}
+	if err := infrastructure.AssertInitialTaskBranch(ctx, workflowsvc.InitialTaskBranchAssertionRequest{
+		TaskID: taskID, BranchName: branchA,
+	}); err != nil {
+		t.Fatalf("AssertInitialTaskBranch exact assertion: %v", err)
+	}
+	branchB := "feature/other-branch"
+	err = infrastructure.AssertInitialTaskBranch(ctx, workflowsvc.InitialTaskBranchAssertionRequest{
+		TaskID: taskID, BranchName: branchB,
+	})
+	var mismatch *serverapi.WorkflowTaskInitialBranchError
+	if !errors.As(err, &mismatch) ||
+		mismatch.Reason != serverapi.WorkflowTaskInitialBranchErrorReasonPostCreationMismatch ||
+		mismatch.BranchName != branchB ||
+		mismatch.ExistingBranchName == nil ||
+		*mismatch.ExistingBranchName != branchA {
+		t.Fatalf("AssertInitialTaskBranch error = %T %+v, want %q versus %q mismatch", err, err, branchB, branchA)
+	}
 	exact, err := infrastructure.MaterializeExecutionTarget(ctx, workflowsvc.ExecutionTargetMaterializeRequest{
 		TaskID: taskID, Snapshot: snapshot, InitialBranchAssertion: &branchA,
 	})
@@ -93,11 +110,10 @@ func TestTaskExecutionTargetInfrastructureCarriesPostCreationBranchAssertion(t *
 		exact.RetainedRoot.Root != materialized.Worktree.Registered.Git.CanonicalRoot {
 		t.Fatalf("exact assertion reuse = %+v, want original managed Worktree", exact)
 	}
-	branchB := "feature/other-branch"
 	_, err = infrastructure.MaterializeExecutionTarget(ctx, workflowsvc.ExecutionTargetMaterializeRequest{
 		TaskID: taskID, Snapshot: snapshot, InitialBranchAssertion: &branchB,
 	})
-	var mismatch *serverapi.WorkflowTaskInitialBranchError
+	mismatch = nil
 	if !errors.As(err, &mismatch) ||
 		mismatch.Reason != serverapi.WorkflowTaskInitialBranchErrorReasonPostCreationMismatch ||
 		mismatch.BranchName != branchB ||
