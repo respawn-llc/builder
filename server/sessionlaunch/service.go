@@ -8,7 +8,6 @@ import (
 
 	"core/server/auth"
 	"core/server/launch"
-	"core/server/metadata"
 	"core/server/requestmemo"
 	"core/server/runtime"
 	"core/server/session"
@@ -38,7 +37,6 @@ type Service struct {
 	workspaceID   string
 	fastModeState *runtime.FastModeState
 	draftOwner    *WorkspaceChatDraftOwner
-	draftLanes    *requestmemo.MutationLaneRegistry[string]
 }
 
 var ErrExistingSessionAuthorityRequired = errors.New("session runtime authority is required for existing-session planning")
@@ -95,27 +93,9 @@ func (s *Service) WithFastModeState(state *runtime.FastModeState) *Service {
 	}
 	return s
 }
-func (s *Service) WithWorkspaceChatDraftMutationLanes(lanes *requestmemo.MutationLaneRegistry[string]) *Service {
+func (s *Service) WithWorkspaceChatDraftOwner(owner *WorkspaceChatDraftOwner) *Service {
 	if s != nil {
-		s.draftLanes = lanes
-	}
-	return s
-}
-
-func (s *Service) RequireWorkspaceChatDraftMutationLanes(expected *requestmemo.MutationLaneRegistry[string]) *Service {
-	if s.draftLanes != expected {
-		panic(fmt.Sprintf("workspace Chat draft mutation lane ownership invariant violated: got=%p want=%p", s.draftLanes, expected))
-	}
-	return s
-}
-func (s *Service) WithWorkspaceChatDraftStore(store *metadata.Store) *Service {
-	if s == nil {
-		return nil
-	}
-	if store != nil {
-		s.draftOwner = NewWorkspaceChatDraftOwner(store, s.workspaceChatDraftResolverInput, s.draftLanes)
-	} else {
-		s.draftOwner = nil
+		s.draftOwner = owner
 	}
 	return s
 }
@@ -156,7 +136,7 @@ func (s *Service) ResolveWorkspaceChatDraftAggregate(ctx context.Context) (Works
 	if err != nil {
 		return WorkspaceChatDraftResolution{}, err
 	}
-	return owner.ResolveWorkspaceChatDraft(ctx, workspaceID)
+	return owner.ResolveWorkspaceChatDraft(ctx, workspaceID, s.workspaceChatDraftResolverInput)
 }
 
 func (s *Service) TransformWorkspaceChatDraftAggregate(ctx context.Context, transform WorkspaceChatDraftTransform) (WorkspaceChatDraft, error) {
@@ -164,7 +144,7 @@ func (s *Service) TransformWorkspaceChatDraftAggregate(ctx context.Context, tran
 	if err != nil {
 		return WorkspaceChatDraft{}, err
 	}
-	return owner.TransformWorkspaceChatDraft(ctx, workspaceID, transform)
+	return owner.TransformWorkspaceChatDraft(ctx, workspaceID, s.workspaceChatDraftResolverInput, transform)
 }
 
 func (s *Service) WorkspaceChatDraft(ctx context.Context, req serverapi.WorkspaceChatDraftRequest) (serverapi.WorkspaceChatDraftResponse, error) {

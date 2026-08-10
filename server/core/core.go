@@ -293,8 +293,7 @@ func (s *Core) sessionLaunchServiceForProjectContextLocked(projectCtx projectCon
 	}).
 		WithWorkspaceID(projectCtx.workspaceID).
 		WithFastModeState(s.safeBundles().Runtime.fastModeState).
-		WithWorkspaceChatDraftMutationLanes(s.safeBundles().Sessions.workspaceChatDraftLanes).
-		WithWorkspaceChatDraftStore(s.safeBundles().Persistence.metadataStore).RequireWorkspaceChatDraftMutationLanes(s.safeBundles().Sessions.workspaceChatDraftLanes).
+		WithWorkspaceChatDraftOwner(s.safeBundles().Sessions.workspaceChatDraftOwner).
 		WithAuthStateReader(s.safeBundles().Auth.support.AuthManager).
 		WithPromptHistoryReader(s.safeBundles().Persistence.metadataStore).
 		WithRuntimeAuthority(s.safeBundles().Runtime.runtimeAuthority)

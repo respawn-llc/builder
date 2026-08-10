@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"core/server/auth"
-	"core/server/requestmemo"
 	"core/server/runtime"
 	"core/shared/config"
 	"core/shared/toolspec"
@@ -58,9 +57,10 @@ func TestWorkspaceChatDraftOwnerTransformsClearAndSerializes(t *testing.T) {
 	s.ProviderOverride = "openai"
 	addWorker(&s, "low")
 	p := &draftPersistence{draft: &WorkspaceChatDraft{Message: "latest", Agent: "default", Supervisor: "off", Thinking: "high", Fast: true}}
-	o := NewWorkspaceChatDraftOwner(p, func(context.Context) (WorkspaceChatDraftResolverInput, error) { return draftInput(s), nil }, requestmemo.NewMutationLaneRegistry[string]())
-	o2 := NewWorkspaceChatDraftOwner(p, func(context.Context) (WorkspaceChatDraftResolverInput, error) { return draftInput(s), nil }, o.lanes)
-	got, err := o.TransformWorkspaceChatDraft(context.Background(), "w", func(r WorkspaceChatDraftResolution) (WorkspaceChatDraft, error) { d := r.Baselines["worker"]; d.Message = r.Draft.Message; return d, nil })
+	resolve := func(context.Context) (WorkspaceChatDraftResolverInput, error) { return draftInput(s), nil }
+	o := NewWorkspaceChatDraftOwner(p)
+	o2 := o
+	got, err := o.TransformWorkspaceChatDraft(context.Background(), "w", resolve, func(r WorkspaceChatDraftResolution) (WorkspaceChatDraft, error) { d := r.Baselines["worker"]; d.Message = r.Draft.Message; return d, nil })
 	if err != nil || got.Agent != "worker" || got.Message != "latest" || got.Supervisor != "all" || got.Thinking != "low" || got.Fast || !got.Questions || !got.AutoCompaction {
 		t.Fatalf("transform=%+v err=%v", got, err)
 	}
@@ -68,13 +68,13 @@ func TestWorkspaceChatDraftOwnerTransformsClearAndSerializes(t *testing.T) {
 	p.draft = &WorkspaceChatDraft{Message: "old", Agent: "default", Supervisor: "edits", Thinking: "medium"}
 	entered, release := make(chan struct{}), make(chan struct{})
 	first, second := make(chan error, 1), make(chan error, 1)
-	go func() { _, e := o.TransformWorkspaceChatDraft(context.Background(), "w", func(r WorkspaceChatDraftResolution) (WorkspaceChatDraft, error) { close(entered); <-release; r.Draft.Message = "new"; return r.Draft, nil }); first <- e }()
+	go func() { _, e := o.TransformWorkspaceChatDraft(context.Background(), "w", resolve, func(r WorkspaceChatDraftResolution) (WorkspaceChatDraft, error) { close(entered); <-release; r.Draft.Message = "new"; return r.Draft, nil }); first <- e }()
 	<-entered
-	go func() { _, e := o2.TransformWorkspaceChatDraft(context.Background(), "w", func(r WorkspaceChatDraftResolution) (WorkspaceChatDraft, error) { r.Draft.Fast = true; return r.Draft, nil }); second <- e }()
+	go func() { _, e := o2.TransformWorkspaceChatDraft(context.Background(), "w", resolve, func(r WorkspaceChatDraftResolution) (WorkspaceChatDraft, error) { r.Draft.Fast = true; return r.Draft, nil }); second <- e }()
 	select { case e := <-second: t.Fatalf("ran early: %v", e); default: }
 	close(release)
 	if err := <-first; err != nil { t.Fatal(err) }
 	if err := <-second; err != nil || p.draft.Message != "new" || !p.draft.Fast { t.Fatalf("serialized=%+v err=%v", p.draft, err) }
 	p.draft = &WorkspaceChatDraft{Message: "   ", Agent: "default", Supervisor: "edits", Thinking: "medium", Questions: true, AutoCompaction: true}
-	if _, err := o.TransformWorkspaceChatDraft(context.Background(), "w", func(r WorkspaceChatDraftResolution) (WorkspaceChatDraft, error) { return r.Draft, nil }); err != nil || p.draft != nil { t.Fatalf("blank default=%+v err=%v", p.draft, err) }
+	if _, err := o.TransformWorkspaceChatDraft(context.Background(), "w", resolve, func(r WorkspaceChatDraftResolution) (WorkspaceChatDraft, error) { return r.Draft, nil }); err != nil || p.draft != nil { t.Fatalf("blank default=%+v err=%v", p.draft, err) }
 }
