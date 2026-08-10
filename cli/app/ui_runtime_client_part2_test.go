@@ -14,6 +14,8 @@ import (
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
 	"core/shared/textutil"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestRuntimeClientMainViewDoesNotRefreshCachedSnapshotBehindUIBack(t *testing.T) {
@@ -537,23 +539,13 @@ func TestRuntimeClientSubmitTurnRecoveryContinuesFirstPrompt(t *testing.T) {
 	runtimeClient.SetRuntimeReactivator(reactivator)
 	model := newProjectedClosedUIModel(runtimeClient)
 	model.startupCmds = nil
-	model.sessionID = "session-1"
-	model.sessionDrafts = &recordingSessionLifecycleClient{
-		persistInputDraft: func(context.Context, serverapi.SessionPersistInputDraftRequest) (serverapi.SessionPersistInputDraftResponse, error) {
-			return serverapi.SessionPersistInputDraftResponse{}, nil
-		},
-	}
 
-	prepareCmd := model.inputController().startSubmissionWithPromptHistoryAndQueuePositionAndID("hello after restart", preSubmitQueueBack, "")
-	if prepareCmd == nil {
-		t.Fatal("expected draft preparation command")
-	}
-	prepared := findSubmitDraftPreparedMessage(t, prepareCmd)
-	next, submitCmd := model.Update(prepared)
-	updated := next.(*uiModel)
+	submitCmd := model.inputController().startSubmissionWithPromptHistoryAndQueuePositionAndID("hello after restart", preSubmitQueueBack, "")
 	if submitCmd == nil {
-		t.Fatal("expected submit command after draft persistence")
+		t.Fatal("expected submit command")
 	}
+	next := tea.Model(model)
+	updated := next.(*uiModel)
 	submitMsgs := collectCmdMessages(t, submitCmd)
 	var done submitDoneMsg
 	foundDone := false

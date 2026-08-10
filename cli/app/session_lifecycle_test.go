@@ -2,11 +2,9 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
-	"reflect"
 	"testing"
 
 	"core/server/metadata"
@@ -17,8 +15,6 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
-
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 func sessionLifecycleStringPtr(value string) *string { return &value }
@@ -180,7 +176,7 @@ func TestResolveSessionActionPreservesInitialPromptHistoryRecorded(t *testing.T)
 	}
 }
 
-func TestPersistSessionDraftIncludesStructuredRecoveryBuffers(t *testing.T) {
+func TestPersistSessionDraftIncludesOnlyComposerInput(t *testing.T) {
 	var captured serverapi.SessionPersistInputDraftRequest
 	client := &recordingSessionLifecycleClient{
 		persistInputDraft: func(_ context.Context, req serverapi.SessionPersistInputDraftRequest) (serverapi.SessionPersistInputDraftResponse, error) {
@@ -190,204 +186,15 @@ func TestPersistSessionDraftIncludesStructuredRecoveryBuffers(t *testing.T) {
 	}
 	model := newUIModelDefaults(nil)
 	testSetMainInput(model, "visible draft")
-	model.activeSubmit = activeSubmitState{token: 1, text: "submitting now"}
 	model.pendingInjected = queuedUserMessagesForTest("  pending injected\n")
 	model.queued = queuedInputsForTest("\tqueued later  ")
 
 	if err := persistSessionDraftToServer(context.Background(), narrowSessionLifecycleServer{lifecycle: client}, " session-1 ", model); err != nil {
 		t.Fatalf("persistSessionDraftToServer: %v", err)
 	}
-	want := []serverapi.SessionDraftRecoveryBuffer{
-		{Kind: serverapi.SessionDraftRecoveryBufferActiveSubmit, Text: "submitting now"},
-		{Kind: serverapi.SessionDraftRecoveryBufferPendingInjectedInput, Text: "  pending injected\n"},
-		{Kind: serverapi.SessionDraftRecoveryBufferQueuedInput, Text: "\tqueued later  "},
+	if captured.Input != "visible draft" || captured.SessionID != "session-1" {
+		t.Fatalf("captured draft request = %+v, want composer input only", captured)
 	}
-	if captured.Input != "visible draft" || captured.SessionID != "session-1" || !reflect.DeepEqual(captured.RecoveryBuffers, want) {
-		t.Fatalf("captured draft request = %+v, want buffers %+v", captured, want)
-	}
-	if _, err := json.Marshal(captured); err != nil {
-		t.Fatalf("marshal captured draft request: %v", err)
-	}
-}
-
-func TestInitialRecoveryBuffersRestoreRetryAffordancesWithoutStartupSubmit(t *testing.T) {
-	model := NewProjectedUIModel(nil,
-		WithUIInitialInput("visible draft"),
-		WithUIInitialRecoveryBuffers([]serverapi.SessionDraftRecoveryBuffer{
-			{Kind: serverapi.SessionDraftRecoveryBufferActiveSubmit, Text: "submitted before forced exit"},
-			{Kind: serverapi.SessionDraftRecoveryBufferPendingInjectedInput, Text: "pending steering"},
-			{Kind: serverapi.SessionDraftRecoveryBufferQueuedInput, Text: "queued later"},
-		}),
-	).(*uiModel)
-
-	if got := testMainInput(model); got != "visible draft\n\nsubmitted before forced exit\n\npending steering\n\nqueued later" {
-		t.Fatalf("input = %q, want recovered visible retry input", got)
-	}
-	if model.startupSubmit != "" || model.activeSubmit.text != "" || len(model.pendingInjected) != 0 || len(model.queued) != 0 {
-		t.Fatalf("recovery restored operational submission state: startup=%q active=%+v pending=%+v queued=%+v", model.startupSubmit, model.activeSubmit, model.pendingInjected, model.queued)
-	}
-	if len(model.recoveredDraftBuffers) != 3 || model.transientStatus != "" {
-		t.Fatalf("recovered buffers/status = %+v/%q", model.recoveredDraftBuffers, model.transientStatus)
-	}
-}
-
-func TestSubmissionPersistsActiveDraftBeforeRuntimeDispatch(t *testing.T) {
-	for _, test := range []struct {
-		name      string
-		text      string
-		wantShell bool
-	}{
-		{name: "user turn", text: "submit me"},
-		{name: "shell", text: "$ echo hello", wantShell: true},
-	} {
-		test := test
-		t.Run(test.name, func(t *testing.T) {
-			runtimeClient := &runtimeControlFakeClient{}
-			model := newProjectedClosedUIModel(runtimeClient)
-			model.sessionID = "session-1"
-			var captured serverapi.SessionPersistInputDraftRequest
-			model.sessionDrafts = &recordingSessionLifecycleClient{
-				persistInputDraft: func(_ context.Context, req serverapi.SessionPersistInputDraftRequest) (serverapi.SessionPersistInputDraftResponse, error) {
-					if runtimeClient.submitCalls != 0 || runtimeClient.shellCalls != 0 {
-						t.Fatal("RuntimeControl dispatch ran before active draft persistence")
-					}
-					captured = req
-					return serverapi.SessionPersistInputDraftResponse{}, nil
-				},
-			}
-			testSetMainInput(model, test.text)
-			model.clearInput()
-
-			prepareCmd := model.inputController().startSubmissionWithPromptHistoryAndQueuePositionAndID(test.text, preSubmitQueueBack, "")
-			if got := testMainInput(model); got != test.text {
-				t.Fatalf("input while active draft persists = %q, want %q", got, test.text)
-			}
-			prepared := findSubmitDraftPreparedMessage(t, prepareCmd)
-			wantRecovery := []serverapi.SessionDraftRecoveryBuffer{{
-				Kind: serverapi.SessionDraftRecoveryBufferActiveSubmit,
-				Text: test.text,
-			}}
-			if captured.Input != "" || !reflect.DeepEqual(captured.RecoveryBuffers, wantRecovery) {
-				t.Fatalf("persisted active draft = %+v, want input empty and recovery %+v", captured, wantRecovery)
-			}
-			if runtimeClient.submitCalls != 0 || runtimeClient.shellCalls != 0 {
-				t.Fatal("RuntimeControl dispatch ran before draft-prepared message was reduced")
-			}
-
-			next, dispatchCmd := model.Update(prepared)
-			updated := next.(*uiModel)
-			if got := testMainInput(updated); got != "" {
-				t.Fatalf("input after active draft persisted = %q, want cleared", got)
-			}
-			collectCmdMessages(t, dispatchCmd)
-			if test.wantShell {
-				if runtimeClient.shellCalls != 1 || runtimeClient.submitCalls != 0 {
-					t.Fatalf("runtime calls after shell preparation = submit:%d shell:%d", runtimeClient.submitCalls, runtimeClient.shellCalls)
-				}
-			} else if runtimeClient.submitCalls != 1 || runtimeClient.shellCalls != 0 {
-				t.Fatalf("runtime calls after turn preparation = submit:%d shell:%d", runtimeClient.submitCalls, runtimeClient.shellCalls)
-			}
-		})
-	}
-}
-
-func TestSubmissionDraftPersistenceFailureKeepsTextEditableWithoutRuntimeDispatch(t *testing.T) {
-	persistErr := errors.New("draft persistence failed")
-	for _, text := range []string{"submit me", "$ echo hello"} {
-		t.Run(text, func(t *testing.T) {
-			runtimeClient := &runtimeControlFakeClient{}
-			model := newProjectedClosedUIModel(runtimeClient)
-			model.sessionID = "session-1"
-			model.sessionDrafts = &recordingSessionLifecycleClient{
-				persistInputDraft: func(context.Context, serverapi.SessionPersistInputDraftRequest) (serverapi.SessionPersistInputDraftResponse, error) {
-					return serverapi.SessionPersistInputDraftResponse{}, persistErr
-				},
-			}
-			testSetMainInput(model, text)
-			model.clearInput()
-
-			prepared := findSubmitDraftPreparedMessage(t, model.inputController().startSubmissionWithPromptHistoryAndQueuePositionAndID(text, preSubmitQueueBack, ""))
-			next, cmd := model.Update(prepared)
-			updated := next.(*uiModel)
-			collectCmdMessages(t, cmd)
-
-			if runtimeClient.submitCalls != 0 || runtimeClient.shellCalls != 0 {
-				t.Fatalf("RuntimeControl calls after draft failure = submit:%d shell:%d", runtimeClient.submitCalls, runtimeClient.shellCalls)
-			}
-			if got := testMainInput(updated); got != text {
-				t.Fatalf("editable input after draft failure = %q, want %q", got, text)
-			}
-			if updated.activeSubmit.token != 0 {
-				t.Fatalf("active submit remained after draft failure: %+v", updated.activeSubmit)
-			}
-			if updated.activity != uiActivityError {
-				t.Fatalf("activity after draft failure = %v, want error", updated.activity)
-			}
-		})
-	}
-}
-
-func TestSubmissionDraftCompletionPreservesConcurrentComposerEdit(t *testing.T) {
-	persistErr := errors.New("draft persistence failed")
-	for _, test := range []struct {
-		name           string
-		persistErr     error
-		wantDispatches int
-	}{
-		{name: "success", wantDispatches: 1},
-		{name: "failure", persistErr: persistErr},
-	} {
-		test := test
-		t.Run(test.name, func(t *testing.T) {
-			runtimeClient := &runtimeControlFakeClient{}
-			model := newProjectedClosedUIModel(runtimeClient)
-			model.sessionID = "session-1"
-			var persisted []serverapi.SessionPersistInputDraftRequest
-			model.sessionDrafts = &recordingSessionLifecycleClient{
-				persistInputDraft: func(_ context.Context, req serverapi.SessionPersistInputDraftRequest) (serverapi.SessionPersistInputDraftResponse, error) {
-					persisted = append(persisted, req)
-					return serverapi.SessionPersistInputDraftResponse{}, test.persistErr
-				},
-			}
-			testSetMainInput(model, "submit me")
-			model.clearInput()
-
-			prepared := findSubmitDraftPreparedMessage(t, model.inputController().startSubmissionWithPromptHistoryAndQueuePositionAndID("submit me", preSubmitQueueBack, ""))
-			model.replaceMainInputAtEnd("edited while waiting")
-			next, cmd := model.Update(prepared)
-			updated := next.(*uiModel)
-			if test.persistErr == nil {
-				if runtimeClient.submitCalls != 0 {
-					t.Fatal("RuntimeControl dispatched before the concurrent edit was persisted")
-				}
-				reconciled := findSubmitDraftPreparedMessage(t, cmd)
-				if len(persisted) != 2 || persisted[1].Input != "edited while waiting" {
-					t.Fatalf("reconciled draft requests = %+v, want second request with concurrent edit", persisted)
-				}
-				next, cmd = updated.Update(reconciled)
-				updated = next.(*uiModel)
-			}
-			collectCmdMessages(t, cmd)
-
-			if got := testMainInput(updated); got != "edited while waiting" {
-				t.Fatalf("composer after draft completion = %q, want concurrent edit", got)
-			}
-			if got := runtimeClient.submitCalls; got != test.wantDispatches {
-				t.Fatalf("RuntimeControl dispatch count = %d, want %d", got, test.wantDispatches)
-			}
-		})
-	}
-}
-
-func findSubmitDraftPreparedMessage(t *testing.T, cmd tea.Cmd) submitDoneMsg {
-	t.Helper()
-	for _, msg := range collectCmdMessages(t, cmd) {
-		if prepared, ok := msg.(submitDoneMsg); ok && prepared.phase == submitPhaseDraftPrepared {
-			return prepared
-		}
-	}
-	t.Fatal("submit command did not produce a draft-prepared message")
-	return submitDoneMsg{}
 }
 
 func TestRuntimeReleaseUsesFinalModelPolicyAndPreservesErrors(t *testing.T) {

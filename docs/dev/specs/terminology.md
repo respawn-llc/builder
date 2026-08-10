@@ -370,14 +370,6 @@ The increasing Session value that orders live status, prompts, main-view updates
 
 Saved recovery information for a model-visible step that was interrupted or crashed. Pending Model Recovery can identify unfinished tool calls for later repair. It never proves that execution is live or makes a client show the Session as busy.
 
-### DraftRecoveryBuffer
-
-An ordered collection of local input that the TUI preserves after an early exit. Opening the Session restores eligible text to the composer. It never sends or resumes that work automatically.
-
-### DraftInputBuffer
-
-One preserved text entry and its recovery category. Categories distinguish submitted text, queued text, pending or locked injected input, and reviewer input. A Draft Input has no delivery state and remains separate from the visible composer text.
-
 ### Forced Local Detach
 
 The second-`Ctrl+C` exit path while an interrupt is pending. The TUI exits and detaches without force-closing the shared Active Session Runtime.

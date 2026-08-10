@@ -69,17 +69,16 @@ type Store struct {
 }
 
 type sessionMetadataDocument struct {
-	WorkspaceRoot                   string                             `json:"workspace_root"`
-	WorkspaceContainer              string                             `json:"workspace_container"`
-	InputDraftRecoveryBuffers       []session.InputDraftRecoveryBuffer `json:"input_draft_recovery_buffers"`
-	ConversationEstablished         bool                               `json:"conversation_established"`
-	PromptCacheLineageGeneration    int                                `json:"prompt_cache_lineage_generation"`
-	HeadlessActive                  bool                               `json:"headless_active"`
-	CompactionSoonReminderIssued    bool                               `json:"compaction_soon_reminder_issued"`
-	GeneratedRecoveredWarningIssued bool                               `json:"generated_recovered_warning_issued"`
-	PendingModelRecovery            *session.PendingModelRecovery      `json:"pending_model_recovery"`
-	WorktreeReminder                *session.WorktreeReminderState     `json:"worktree_reminder"`
-	Goal                            *session.GoalState                 `json:"goal"`
+	WorkspaceRoot                   string                         `json:"workspace_root"`
+	WorkspaceContainer              string                         `json:"workspace_container"`
+	ConversationEstablished         bool                           `json:"conversation_established"`
+	PromptCacheLineageGeneration    int                            `json:"prompt_cache_lineage_generation"`
+	HeadlessActive                  bool                           `json:"headless_active"`
+	CompactionSoonReminderIssued    bool                           `json:"compaction_soon_reminder_issued"`
+	GeneratedRecoveredWarningIssued bool                           `json:"generated_recovered_warning_issued"`
+	PendingModelRecovery            *session.PendingModelRecovery  `json:"pending_model_recovery"`
+	WorktreeReminder                *session.WorktreeReminderState `json:"worktree_reminder"`
+	Goal                            *session.GoalState             `json:"goal"`
 }
 
 var (
@@ -2490,7 +2489,6 @@ func (s *Store) upsertSessionSnapshot(ctx context.Context, snapshot session.Pers
 	metadataJSON, err := marshalJSON(sessionMetadataDocument{
 		WorkspaceRoot:                   workspaceRoot,
 		WorkspaceContainer:              workspaceContainer,
-		InputDraftRecoveryBuffers:       snapshot.Meta.InputDraftRecoveryBuffers,
 		ConversationEstablished:         snapshot.Meta.ConversationEstablished,
 		PromptCacheLineageGeneration:    snapshot.Meta.PromptCacheLineageGeneration,
 		HeadlessActive:                  snapshot.Meta.HeadlessActive,
@@ -2677,7 +2675,6 @@ func sessionMetaFromRecordRow(row sqlitegen.GetSessionRecordByIDRow) (session.Me
 		Name:                            row.Name,
 		FirstPromptPreview:              row.FirstPromptPreview,
 		InputDraft:                      row.InputDraft,
-		InputDraftRecoveryBuffers:       metadataPayload.InputDraftRecoveryBuffers,
 		PreviousSessionID:               previousSessionID,
 		ParentAgentSessionID:            parentAgentSessionID,
 		WorkspaceRoot:                   workspaceRoot,

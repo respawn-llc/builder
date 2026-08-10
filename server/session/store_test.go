@@ -200,7 +200,7 @@ func TestAppendTypedRecordMonotonicSequence(t *testing.T) {
 	}
 }
 
-func TestInputDraftAndRecoveryPersistAcrossReopenAndClearTogether(t *testing.T) {
+func TestInputDraftPersistsAcrossReopenAndCanBeCleared(t *testing.T) {
 	store := newSessionTestLazyStore(t)
 	want := "draft line one\nline two"
 	if err := store.SetInputDraft(want); err != nil {
@@ -211,26 +211,12 @@ func TestInputDraftAndRecoveryPersistAcrossReopenAndClearTogether(t *testing.T) 
 		t.Fatalf("expected persisted draft %q, got %q", want, reopened.Meta().InputDraft)
 	}
 
-	if err := reopened.SetInputDraftRecovery("visible", []InputDraftRecoveryBuffer{{
-		Kind: "active_submit",
-		Text: "submitted before forced exit",
-	}}); err != nil {
-		t.Fatalf("set input draft recovery: %v", err)
-	}
-	recovered := mustOpenSessionTestStore(t, store)
-	if recovered.Meta().InputDraft != "visible" || len(recovered.Meta().InputDraftRecoveryBuffers) != 1 {
-		t.Fatalf("reopened draft metadata = %+v", recovered.Meta())
-	}
-	wantBuffer := InputDraftRecoveryBuffer{Kind: "active_submit", Text: "submitted before forced exit"}
-	if recovered.Meta().InputDraftRecoveryBuffers[0] != wantBuffer {
-		t.Fatalf("recovery buffer = %+v, want %+v", recovered.Meta().InputDraftRecoveryBuffers[0], wantBuffer)
-	}
-	if err := recovered.SetInputDraft(""); err != nil {
+	if err := reopened.SetInputDraft(""); err != nil {
 		t.Fatalf("clear input draft: %v", err)
 	}
 	cleared := mustOpenSessionTestStore(t, store)
-	if cleared.Meta().InputDraft != "" || len(cleared.Meta().InputDraftRecoveryBuffers) != 0 {
-		t.Fatalf("cleared draft metadata = %+v, want no draft recovery", cleared.Meta())
+	if cleared.Meta().InputDraft != "" {
+		t.Fatalf("cleared input draft = %q, want empty", cleared.Meta().InputDraft)
 	}
 }
 

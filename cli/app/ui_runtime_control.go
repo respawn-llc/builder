@@ -597,9 +597,6 @@ func (m *uiModel) applyRuntimeControlDone(msg runtimeControlDoneMsg) tea.Cmd {
 				m.activity = uiActivityError
 				return tea.Batch(followUpCmd, m.sendTransientStatusWithNoticeID("invalid runtime activity: "+err.Error(), uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, ""))
 			}
-			if m.pendingInterruptMissingInputReconciliation(view) {
-				return tea.Batch(followUpCmd, m.requestInputReconciliationRefresh())
-			}
 			return tea.Batch(followUpCmd, m.acknowledgePendingInterrupt())
 		}
 		return followUpCmd

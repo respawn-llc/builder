@@ -293,13 +293,11 @@ func prepareSessionUIRun(
 	return runtimePlan, uiLoopRequest{
 		ctx:                          ctx,
 		wiring:                       runtimePlan.Wiring,
-		sessionDrafts:                server.SessionLifecycleClient(),
 		active:                       plan.ActiveSettings,
 		commandRegistry:              commandRegistry,
 		initialPrompt:                initialPrompt,
 		initialPromptHistoryRecorded: initialPromptHistoryRecorded,
 		initialInput:                 initialState.Input,
-		recoveryBuffers:              initialState.RecoveryBuffers,
 		sessionTitle:                 textutil.Pointer(plan.SessionTitle),
 		modelContractLocked:          plan.ModelContractLocked,
 		configuredModelName:          plan.ConfiguredModelName,
@@ -339,8 +337,7 @@ func shouldCloseReboundServer(original, rebound interactiveSessionServer) bool {
 }
 
 type sessionLaunchInitialState struct {
-	Input           string
-	RecoveryBuffers []serverapi.SessionDraftRecoveryBuffer
+	Input string
 }
 
 func sessionLaunchInitialStateFromServer(
@@ -361,7 +358,7 @@ func sessionLaunchInitialStateFromServer(
 	if err != nil {
 		return sessionLaunchInitialState{}, err
 	}
-	return sessionLaunchInitialState{Input: resp.Input, RecoveryBuffers: resp.RecoveryBuffers}, nil
+	return sessionLaunchInitialState{Input: resp.Input}, nil
 }
 
 func persistSessionDraftToServer(ctx context.Context, server sessionLifecycleClientProvider, sessionID string, model any) error {
@@ -375,28 +372,10 @@ func persistSessionDraftToServer(ctx context.Context, server sessionLifecycleCli
 	if server == nil || server.SessionLifecycleClient() == nil {
 		return nil
 	}
-	return persistSessionDraft(ctx, server.SessionLifecycleClient(), sessionID, ui.sessionDraftInput(), ui.sessionDraftRecoveryBuffers())
-}
-
-func persistSessionDraft(
-	ctx context.Context,
-	client apicontract.SessionLifecycleService,
-	sessionID string,
-	input string,
-	recoveryBuffers []serverapi.SessionDraftRecoveryBuffer,
-) error {
-	sessionID = strings.TrimSpace(sessionID)
-	if sessionID == "" {
-		return nil
-	}
-	if client == nil {
-		return errors.New("session lifecycle client is required")
-	}
-	_, err := client.PersistInputDraft(ctx, serverapi.SessionPersistInputDraftRequest{
+	_, err := server.SessionLifecycleClient().PersistInputDraft(ctx, serverapi.SessionPersistInputDraftRequest{
 		ClientRequestID: uuid.NewString(),
-		SessionID:       sessionID,
-		Input:           input,
-		RecoveryBuffers: recoveryBuffers,
+		SessionID:       strings.TrimSpace(sessionID),
+		Input:           ui.mainEditor.Text(),
 	})
 	return err
 }

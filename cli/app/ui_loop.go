@@ -12,7 +12,6 @@ import (
 	"core/cli/tui/ongoing"
 	"core/shared/apicontract"
 	"core/shared/config"
-	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -28,13 +27,11 @@ type uiProgramComposition struct {
 type uiLoopRequest struct {
 	ctx                          context.Context
 	wiring                       *runtimeWiring
-	sessionDrafts                apicontract.SessionLifecycleService
 	active                       config.Settings
 	commandRegistry              *commands.Registry
 	initialPrompt                string
 	initialPromptHistoryRecorded bool
 	initialInput                 string
-	recoveryBuffers              []serverapi.SessionDraftRecoveryBuffer
 	sessionTitle                 *string
 	modelContractLocked          bool
 	configuredModelName          string
@@ -148,7 +145,6 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 		WithUIStartupSubmit(request.initialPrompt),
 		WithUIStartupSubmitPromptHistoryRecorded(request.initialPromptHistoryRecorded),
 		WithUIInitialInput(request.initialInput),
-		WithUIInitialRecoveryBuffers(request.recoveryBuffers),
 		WithUISessionID(sessionID),
 		WithUIStatusConfig(request.statusConfig),
 		WithUITerminalCursorState(terminalCursor),
@@ -170,7 +166,6 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 		}
 		return nil, errors.New("projected UI model has unexpected type")
 	}
-	model.sessionDrafts = request.sessionDrafts
 	if request.initialTransientStatus != nil {
 		model.startupCmds = append(model.startupCmds, model.showTransientStatusNotice(uiStatusNotice{
 			Text:     *request.initialTransientStatus,

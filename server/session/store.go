@@ -771,7 +771,7 @@ func (s *Store) SetInputDraft(inputDraft string) error {
 	defer s.mutationMu.Unlock()
 	s.mu.Lock()
 
-	if s.meta.InputDraft == inputDraft && len(s.meta.InputDraftRecoveryBuffers) == 0 && (!s.persisted || s.hasDurableMetadataLocked()) {
+	if s.meta.InputDraft == inputDraft && (!s.persisted || s.hasDurableMetadataLocked()) {
 		s.mu.Unlock()
 		return nil
 	}
@@ -780,48 +780,12 @@ func (s *Store) SetInputDraft(inputDraft string) error {
 		return err
 	}
 	s.meta.InputDraft = inputDraft
-	s.meta.InputDraftRecoveryBuffers = nil
 	s.meta.UpdatedAt = time.Now().UTC()
 	if !s.persisted && inputDraft == "" {
 		s.mu.Unlock()
 		return nil
 	}
 	return s.unlockAndObservePersistence(s.persistMetaAfterRecoveryVerifiedLocked())
-}
-
-func (s *Store) SetInputDraftRecovery(inputDraft string, buffers []InputDraftRecoveryBuffer) error {
-	s.mutationMu.Lock()
-	defer s.mutationMu.Unlock()
-	s.mu.Lock()
-	nextBuffers := append([]InputDraftRecoveryBuffer(nil), buffers...)
-	if s.meta.InputDraft == inputDraft && inputDraftRecoveryBuffersEqual(s.meta.InputDraftRecoveryBuffers, nextBuffers) && (!s.persisted || s.hasDurableMetadataLocked()) {
-		s.mu.Unlock()
-		return nil
-	}
-	if err := s.requireMetadataPersistenceLocked(); err != nil {
-		s.mu.Unlock()
-		return err
-	}
-	s.meta.InputDraft = inputDraft
-	s.meta.InputDraftRecoveryBuffers = nextBuffers
-	s.meta.UpdatedAt = time.Now().UTC()
-	if !s.persisted && inputDraft == "" && len(nextBuffers) == 0 {
-		s.mu.Unlock()
-		return nil
-	}
-	return s.unlockAndObservePersistence(s.persistMetaAfterRecoveryVerifiedLocked())
-}
-
-func inputDraftRecoveryBuffersEqual(a, b []InputDraftRecoveryBuffer) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 func (s *Store) SetHeadlessActive(active bool) error {

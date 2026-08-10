@@ -146,11 +146,7 @@ func (m *uiModel) applyTranscriptRuntimeReadModelUpdate(admission runtimeTupleMe
 	}
 	var cmd tea.Cmd
 	if m.hasPendingInterrupt() {
-		if m.pendingInterruptMissingInputReconciliation(m.cachedRuntimeMainView()) {
-			cmd = m.requestInputReconciliationRefresh()
-		} else {
-			cmd = m.acknowledgePendingInterrupt()
-		}
+		cmd = m.acknowledgePendingInterrupt()
 	}
 	return tea.Batch(cmd, m.releaseDeferredRuntimeSyncs())
 }

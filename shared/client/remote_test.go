@@ -762,7 +762,7 @@ func acceptRemoteHandshake(t *testing.T, ws *websocket.Conn) protocol.Request {
 	return req
 }
 
-func TestRemotePersistInputDraftSendsInertRecoveryBuffers(t *testing.T) {
+func TestRemotePersistInputDraftSendsComposerInput(t *testing.T) {
 	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
 		acceptRemoteHandshake(t, ws)
 		var request protocol.Request
@@ -779,12 +779,8 @@ func TestRemotePersistInputDraftSendsInertRecoveryBuffers(t *testing.T) {
 		if err := json.Unmarshal(request.Params, &decoded); err != nil {
 			t.Fatalf("decode persist input draft: %v", err)
 		}
-		want := []serverapi.SessionDraftRecoveryBuffer{{
-			Kind: serverapi.SessionDraftRecoveryBufferPendingInjectedInput,
-			Text: "pending steering",
-		}}
-		if !reflect.DeepEqual(decoded.RecoveryBuffers, want) {
-			t.Fatalf("recovery buffers = %+v, want %+v", decoded.RecoveryBuffers, want)
+		if decoded.Input != "visible draft" {
+			t.Fatalf("input = %q, want visible draft", decoded.Input)
 		}
 		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(request.ID, serverapi.SessionPersistInputDraftResponse{})); err != nil {
 			t.Fatalf("send persist input draft response: %v", err)
@@ -799,10 +795,6 @@ func TestRemotePersistInputDraftSendsInertRecoveryBuffers(t *testing.T) {
 		ClientRequestID: "draft-1",
 		SessionID:       "session-1",
 		Input:           "visible draft",
-		RecoveryBuffers: []serverapi.SessionDraftRecoveryBuffer{{
-			Kind: serverapi.SessionDraftRecoveryBufferPendingInjectedInput,
-			Text: "pending steering",
-		}},
 	})
 	if err != nil {
 		t.Fatalf("PersistInputDraft: %v", err)
@@ -2244,6 +2236,13 @@ func TestProtocolErrorRejectsMalformedRuntimeCommandNotAcceptedCause(t *testing.
 			Code:    protocol.ErrCodePromptCommands,
 			Message: "invalid prompt cause",
 			Data:    json.RawMessage(`{}`),
+		}}),
+		mustJSON(t, struct {
+			Cause protocol.ResponseError `json:"cause"`
+		}{Cause: protocol.ResponseError{
+			Code:    protocol.ErrCodeManualCompactionTooSoon,
+			Message: "invalid manual compaction cause",
+			Data:    json.RawMessage(`{"reason":"active"}`),
 		}}),
 	} {
 		err := protocolError(&protocol.ResponseError{

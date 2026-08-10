@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"sort"
 	"strings"
 
 	"core/cli/app/commands"
@@ -22,8 +23,9 @@ const (
 )
 
 type queuedInputItem struct {
-	ID   string
-	Text string
+	ID              string
+	Text            string
+	submissionOrder uint64
 }
 
 type injectedRuntimeQueueState string
@@ -46,15 +48,24 @@ type injectedRuntimeQueueItem struct {
 	CreateToken              uint64
 	DiscardToken             uint64
 	ApprovalCommentaryAnswer *clientui.PromptAnswer
+	submissionOrder          uint64
 }
 
 func (m *uiModel) queueInput(text string) {
-	m.queued = append(m.queued, newQueuedInputItem(text))
+	m.queued = append(m.queued, queuedInputItem{
+		ID:              uuid.NewString(),
+		Text:            text,
+		submissionOrder: m.nextPendingInputSubmissionOrder(),
+	})
 	m.clearInput()
 }
 
-func newQueuedInputItem(text string) queuedInputItem {
-	return queuedInputItem{ID: uuid.NewString(), Text: text}
+func (m *uiModel) nextPendingInputSubmissionOrder() uint64 {
+	m.pendingInputSubmissionOrder++
+	if m.pendingInputSubmissionOrder == 0 {
+		panic("pending input submission order overflow")
+	}
+	return m.pendingInputSubmissionOrder
 }
 
 func (m *uiModel) registerSteeredQueuedUserMessage(queued clientui.QueuedUserMessage) {
@@ -76,8 +87,16 @@ func (m *uiModel) registerSteeredQueuedUserMessage(queued clientui.QueuedUserMes
 		m.replacePendingInjectedID(item.LocalID, queued)
 		return
 	}
+	submissionOrder := m.nextPendingInputSubmissionOrder()
 	m.pendingInjected = append(m.pendingInjected, clientui.QueuedUserMessage{ID: serverID, Text: queued.Text, ClientRequestID: queued.ClientRequestID})
-	m.injectedQueue = append(m.injectedQueue, injectedRuntimeQueueItem{LocalID: serverID, ServerID: serverID, Text: queued.Text, ClientRequestID: queued.ClientRequestID, State: injectedRuntimeQueueEnqueued})
+	m.injectedQueue = append(m.injectedQueue, injectedRuntimeQueueItem{
+		LocalID:         serverID,
+		ServerID:        serverID,
+		Text:            queued.Text,
+		ClientRequestID: queued.ClientRequestID,
+		State:           injectedRuntimeQueueEnqueued,
+		submissionOrder: submissionOrder,
+	})
 }
 
 func (m *uiModel) enqueueInjectedInputWithApprovalAnswer(text string, answer *clientui.PromptAnswer) tea.Cmd {
@@ -86,10 +105,17 @@ func (m *uiModel) enqueueInjectedInputWithApprovalAnswer(text string, answer *cl
 		return nil
 	}
 	localID := uuid.NewString()
+	submissionOrder := m.nextPendingInputSubmissionOrder()
 	if !m.hasRuntimeClient() {
 		item := clientui.QueuedUserMessage{ID: localID, Text: trimmed}
 		m.pendingInjected = append(m.pendingInjected, item)
-		m.injectedQueue = append(m.injectedQueue, injectedRuntimeQueueItem{LocalID: localID, ServerID: localID, Text: trimmed, State: injectedRuntimeQueueEnqueued})
+		m.injectedQueue = append(m.injectedQueue, injectedRuntimeQueueItem{
+			LocalID:         localID,
+			ServerID:        localID,
+			Text:            trimmed,
+			State:           injectedRuntimeQueueEnqueued,
+			submissionOrder: submissionOrder,
+		})
 		return nil
 	}
 	token := m.nextInjectedQueueToken()
@@ -107,6 +133,7 @@ func (m *uiModel) enqueueInjectedInputWithApprovalAnswer(text string, answer *cl
 		State:                    injectedRuntimeQueuePendingCreate,
 		CreateToken:              token,
 		ApprovalCommentaryAnswer: approvalCommentaryAnswer,
+		submissionOrder:          submissionOrder,
 	})
 	client := m.runtimeClient()
 	return func() tea.Msg {
@@ -275,6 +302,58 @@ func (c uiInputController) restorePendingInjectedIntoInput() tea.Cmd {
 	}
 	m.replaceMainInputAtEnd(newInput)
 	return tea.Batch(cmds...)
+}
+
+type interruptedInputDraftPart struct {
+	submissionOrder uint64
+	text            string
+}
+
+func (c uiInputController) restoreInterruptedInputsIntoComposer() {
+	m := c.model
+	if m == nil {
+		return
+	}
+	draft := m.mainEditor.Text()
+	parts := make([]interruptedInputDraftPart, 0, len(m.pendingInjected)+len(m.queued))
+	for _, pending := range m.pendingInjected {
+		index := m.injectedQueueIndexByAnyID(pending.ID)
+		if index < 0 {
+			index = m.injectedQueueIndexByAnyID(pending.ClientRequestID)
+		}
+		if index < 0 {
+			panic("pending injected input has no local queue record during interrupt restoration")
+		}
+		submissionOrder := m.injectedQueue[index].submissionOrder
+		if submissionOrder == 0 {
+			panic("pending injected input has no submission order during interrupt restoration")
+		}
+		parts = append(parts, interruptedInputDraftPart{submissionOrder: submissionOrder, text: pending.Text})
+	}
+	for _, queued := range m.queued {
+		if queued.submissionOrder == 0 {
+			panic("queued input has no submission order during interrupt restoration")
+		}
+		parts = append(parts, interruptedInputDraftPart{submissionOrder: queued.submissionOrder, text: queued.Text})
+	}
+	sort.SliceStable(parts, func(i, j int) bool {
+		return parts[i].submissionOrder < parts[j].submissionOrder
+	})
+	texts := make([]string, 0, len(parts)+1)
+	for _, part := range parts {
+		texts = append(texts, part.text)
+	}
+	if draft != "" {
+		texts = append(texts, draft)
+	}
+	m.pendingInjected = nil
+	m.injectedQueue = nil
+	m.queued = nil
+	if len(texts) == 0 {
+		return
+	}
+	m.replaceMainInputAtEnd(strings.Join(texts, "\n\n"))
+	m.logf("interrupt.restore pending_inputs=%d draft=%t", len(parts), draft != "")
 }
 
 func (c uiInputController) flushQueuedInputs(mode queueDrainMode) (tea.Model, tea.Cmd) {

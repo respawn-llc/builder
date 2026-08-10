@@ -37,7 +37,6 @@ type runtimeControlFakeClient struct {
 	appendedText          string
 	submitText            string
 	submitCalls           int
-	shellCalls            int
 	submitOperationRef    clientui.RuntimeOperationRef
 	preSubmitOperationRef clientui.RuntimeOperationRef
 	submitResult          string
@@ -207,7 +206,6 @@ func (f *runtimeControlFakeClient) SubmitRuntimeInput(ctx context.Context, req c
 	return submission, err
 }
 func (f *runtimeControlFakeClient) submitUserShellCommand(_ context.Context, command string) error {
-	f.shellCalls++
 	return f.err
 }
 func (f *runtimeControlFakeClient) RunUserShell(ctx context.Context, req clientui.RuntimeShellRequest) error {
@@ -285,6 +283,29 @@ func TestRuntimeInterruptNotAcceptedClearsPendingAttempt(t *testing.T) {
 	}
 	if updated.activeSubmit.token != 1 || updated.activeSubmit.text != "keep me" {
 		t.Fatalf("not-accepted interrupt changed active submit: %+v", updated.activeSubmit)
+	}
+}
+
+func TestRuntimeInterruptRestoresPendingInputsBeforeComposerDraftInSubmissionOrder(t *testing.T) {
+	m := newProjectedClosedUIModel(&runtimeControlFakeClient{})
+	_ = m.queueInjectedInput("steer one")
+	m.queueInput("queue two")
+	_ = m.queueInjectedInput("steer three")
+	m.queueInput("queue four")
+	testSetMainInput(m, "existing draft")
+	m.setPendingInterrupt(true)
+
+	m.acknowledgePendingInterrupt()
+
+	want := "steer one\n\nqueue two\n\nsteer three\n\nqueue four\n\nexisting draft"
+	if got := testMainInput(m); got != want {
+		t.Fatalf("restored composer = %q, want %q", got, want)
+	}
+	if len(m.pendingInjected) != 0 || len(m.injectedQueue) != 0 || len(m.queued) != 0 {
+		t.Fatalf("pending input state remained after restoration: pending=%+v injected=%+v queued=%+v", m.pendingInjected, m.injectedQueue, m.queued)
+	}
+	if m.hasPendingInterrupt() {
+		t.Fatal("interrupt remained pending after local restoration")
 	}
 }
 

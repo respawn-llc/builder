@@ -627,11 +627,11 @@ func protocolError(resp *protocol.ResponseError) error {
 	case protocol.ErrCodeRuntimeNoFinalAnswer:
 		return protocol.NewSentinelErrorWithRendering(serverapi.ErrRuntimeNoFinalAnswer, message, protocol.SentinelErrorJoined)
 	case protocol.ErrCodeManualCompactionTooSoon:
-		return serverapi.ErrManualCompactionTooSoon
+		return serverapi.DecodeManualCompactionError(resp.Code, resp.Data)
 	case protocol.ErrCodeManualCompactionDisabled:
-		return serverapi.ErrManualCompactionDisabled
+		return serverapi.DecodeManualCompactionError(resp.Code, resp.Data)
 	case protocol.ErrCodeManualCompactionActive:
-		return serverapi.ErrManualCompactionActive
+		return serverapi.DecodeManualCompactionError(resp.Code, resp.Data)
 	case protocol.ErrCodeStreamUnavailable:
 		return errors.Join(serverapi.ErrStreamUnavailable, errors.New(message))
 	case protocol.ErrCodeStreamFailed:
