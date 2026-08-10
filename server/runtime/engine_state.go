@@ -608,7 +608,7 @@ func conversationPromptCacheKey(sessionID string, compactionCount int) string {
 
 // stablePromptCacheContractVersion namespaces provider cache entries by the
 // stable prompt prefix that precedes the conversation transcript.
-const stablePromptCacheContractVersion = 2
+const stablePromptCacheContractVersion = 3
 
 func conversationPromptCacheKeyForLineage(sessionID string, lineageGeneration, compactionCount int) string {
 	trimmed := strings.TrimSpace(sessionID)
