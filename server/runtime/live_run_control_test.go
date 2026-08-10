@@ -7,9 +7,12 @@ import (
 	"time"
 
 	"core/server/llm"
+	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/server/tools"
 	"core/shared/runtimeids"
 	"core/shared/textutil"
+	"core/shared/toolspec"
 
 	"github.com/google/uuid"
 )
@@ -601,6 +604,149 @@ func TestTryInterruptActiveRunCancelsActiveStepAndWaiters(t *testing.T) {
 	}
 	if err := <-waitDone; !errors.Is(err, context.Canceled) {
 		t.Fatalf("wait error = %v, want context canceled", err)
+	}
+}
+
+func TestTryInterruptActiveAgentTurnCancelsActiveStepAndRestoresTaggedQueue(t *testing.T) {
+	store := mustCreateTestSession(t)
+	var statuses []QueuedUserMessageStatusEvent
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+		Model: "gpt-5",
+		OnEvent: func(evt Event) {
+			if evt.QueuedUserMessageStatus != nil {
+				statuses = append(statuses, *evt.QueuedUserMessageStatus)
+			}
+		},
+	})
+	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
+	eng.stepLifecycle = lifecycle
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- lifecycle.Run(context.Background(), exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserTurn}, func(stepCtx context.Context, stepID string) error {
+			close(started)
+			<-stepCtx.Done()
+			return stepCtx.Err()
+		})
+	}()
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for active Agent Turn")
+	}
+
+	item, accepted, err := eng.QueueUserMessageForActiveRun(context.Background(), "restore me", liveRunTestRequestID(t), nil)
+	if err != nil || !accepted {
+		t.Fatalf("QueueUserMessageForActiveRun accepted=%t err=%v", accepted, err)
+	}
+	stopped, err := eng.TryInterruptActiveAgentTurn()
+	if err != nil || !stopped {
+		t.Fatalf("TryInterruptActiveAgentTurn stopped=%t err=%v, want active stop", stopped, err)
+	}
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("active Agent Turn error = %v, want context canceled", err)
+	}
+	if eng.HasQueuedUserWork() {
+		t.Fatal("stopped tagged Queue item remained queued")
+	}
+	assertStoppedQueuedStatus(t, statuses, item.ID)
+	for _, status := range statuses {
+		if status.QueueItemID == item.ID && status.Status == QueuedUserMessageFailed {
+			if status.RestoreText != "restore me" {
+				t.Fatalf("stopped tagged Queue restore text = %q, want exact message", status.RestoreText)
+			}
+			return
+		}
+	}
+	t.Fatalf("missing failed status for stopped tagged Queue item %q", item.ID)
+}
+
+func TestTryInterruptActiveAgentTurnPersistenceFailurePreservesLiveRunAndQueue(t *testing.T) {
+	persistErr := errors.New("interruption persistence failed")
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
+	var statuses []QueuedUserMessageStatusEvent
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+		Model: "gpt-5",
+		OnEvent: func(evt Event) {
+			if evt.QueuedUserMessageStatus != nil {
+				statuses = append(statuses, *evt.QueuedUserMessageStatus)
+			}
+		},
+	})
+	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
+	eng.stepLifecycle = lifecycle
+	started := make(chan context.Context, 1)
+	release := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- lifecycle.Run(context.Background(), exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserTurn}, func(stepCtx context.Context, stepID string) error {
+			started <- stepCtx
+			<-release
+			return nil
+		})
+	}()
+	var stepCtx context.Context
+	select {
+	case stepCtx = <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for active Agent Turn")
+	}
+	item, accepted, err := eng.QueueUserMessageForActiveRun(context.Background(), "keep queued", liveRunTestRequestID(t), nil)
+	if err != nil || !accepted {
+		t.Fatalf("QueueUserMessageForActiveRun accepted=%t err=%v", accepted, err)
+	}
+	gate.FailNext(persistErr)
+
+	stopped, err := eng.TryInterruptActiveAgentTurn()
+	if stopped || !errors.Is(err, persistErr) {
+		t.Fatalf("TryInterruptActiveAgentTurn = (%t, %v), want uncommitted persistence failure", stopped, err)
+	}
+	select {
+	case <-stepCtx.Done():
+		t.Fatal("persistence failure canceled the live Agent Turn")
+	default:
+	}
+	if !eng.HasQueuedUserWork() {
+		t.Fatal("persistence failure discarded accepted queued work")
+	}
+	for _, status := range statuses {
+		if status.QueueItemID == item.ID && status.Status == QueuedUserMessageFailed {
+			t.Fatalf("persistence failure published queued failure: %+v", status)
+		}
+	}
+
+	if !eng.DiscardQueuedUserMessage(item.ID) {
+		t.Fatal("cleanup could not discard preserved queue item")
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("active Agent Turn after release: %v", err)
+	}
+}
+
+func TestTryInterruptActiveAgentTurnPreservesGoalLoopInterruptBookkeeping(t *testing.T) {
+	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
+	client := newScriptedGoalLoopClient()
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
+	if _, err := eng.SetGoal("interrupt ordinary goal Agent Turn", session.GoalActorUser); err != nil {
+		t.Fatalf("SetGoal: %v", err)
+	}
+	if err := eng.StartGoalLoop(); err != nil {
+		t.Fatalf("StartGoalLoop: %v", err)
+	}
+	client.waitStarted(t, 1)
+
+	stopped, err := eng.TryInterruptActiveAgentTurn()
+	if err != nil || !stopped {
+		t.Fatalf("TryInterruptActiveAgentTurn stopped=%t err=%v, want active goal stop", stopped, err)
+	}
+	waitGoalLoopRunning(t, eng, false)
+	if !eng.GoalLoopSuspended() {
+		t.Fatal("ordinary Agent-Turn interrupt did not suspend the active goal loop")
+	}
+	if got := client.callCount(); got != 1 {
+		t.Fatalf("model calls after goal interrupt = %d, want 1", got)
 	}
 }
 
