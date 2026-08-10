@@ -66,8 +66,8 @@ func TestWorkflowNodeAddUsesAtomicGraphSaveWithCanonicalID(t *testing.T) {
 			TransitionGroups: []serverapi.WorkflowTransitionGroup{},
 			Edges:            []serverapi.WorkflowEdge{},
 		},
-		previewResponse: workflowGraphSavePreviewForCommandTest(7, true),
-		saveResponse:    workflowGraphSaveResponseForCommandTest(8, true),
+		previewResponse: workflowGraphSavePreviewForCommandTest(7, false),
+		saveResponse:    workflowGraphSaveResponseForCommandTest(7, false),
 	}
 	installWorkflowCommandRemote(t, remote)
 	var stdout, stderr bytes.Buffer

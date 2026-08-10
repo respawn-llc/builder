@@ -57,9 +57,6 @@ func runWorkflowGraphMutation[T any](
 	if preview.Response.ConfirmationRequired || len(preview.Response.Blockers) != 0 || !preview.Response.CanSave {
 		return zero, workflowGraphMutationResult{}, workflowGraphMutationBlocked(workflowID, preview.Response.Blockers)
 	}
-	if !preview.Response.Changed {
-		return value, workflowGraphMutationResult{Version: preview.Response.CurrentVersion}, nil
-	}
 	response, err := remote.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
 		WorkflowID:      current.Workflow.ID,
 		ExpectedVersion: current.Workflow.Version,
