@@ -8,16 +8,9 @@ func TestPromptFollowUpContractCarriesOnlyFullIdentityAndTerminalOutcome(t *test
 	}).Validate(); err != nil {
 		t.Fatalf("validate request: %v", err)
 	}
-	for _, kind := range []PromptFollowUpEventKind{
-		PromptFollowUpSuccessorReady,
-		PromptFollowUpNoPreparedSuccessor,
-		PromptFollowUpExecutionClosed,
-	} {
-		if err := (PromptFollowUpEvent{Kind: kind}).Validate(); err != nil {
-			t.Fatalf("validate %q: %v", kind, err)
+	for _, event := range []PromptFollowUpEvent{{Kind: PromptFollowUpSuccessorReady}, {Kind: PromptFollowUpNoPreparedSuccessor}, {Kind: PromptFollowUpExecutionClosed}, {}} {
+		if err := event.Validate(); (err == nil) != (event.Kind != "") {
+			t.Fatalf("validate %q: %v", event.Kind, err)
 		}
-	}
-	if err := (PromptFollowUpEvent{}).Validate(); err == nil {
-		t.Fatal("missing terminal outcome unexpectedly validated")
 	}
 }

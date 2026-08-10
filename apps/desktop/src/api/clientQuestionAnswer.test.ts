@@ -1,59 +1,43 @@
 import { ApiClient } from "./client";
 import { FakeRpcTransport } from "@/test-support/api";
 
+const sessionID = "session-1";
+const stepID = "22222222-2222-4222-8222-222222222222";
 const batchRequest = {
-  sessionID: "session-1",
-  stepID: "22222222-2222-4222-8222-222222222222",
+  sessionID,
+  stepID,
   entries: [
     {
       kind: "question" as const,
       promptID: "question-1",
-      selectedOptionNumber: 1,
-      freeform: null,
+      selectedOptionNumber: 2,
+      freeform: "because",
     },
-    {
-      kind: "approval" as const,
-      promptID: "approval-1",
-      decision: "allow_once" as const,
-      commentary: null,
-    },
+    { kind: "approval" as const, promptID: "approval-1", decision: "allow_once" as const, commentary: null },
     { kind: "declined" as const, promptID: "declined-1" },
   ],
 } as const;
 
 describe("ApiClient prompt answer batches", () => {
   it("encodes Question, Approval, and Declined entries and parses identity-keyed outcomes", async () => {
-    const transport = new FakeRpcTransport([
-      {
-        method: "prompt.answerBatch",
-        result: {
-          results: [
-            { prompt_id: "question-1", outcome: "resolved" },
-            { prompt_id: "approval-1", outcome: "skipped" },
-            { prompt_id: "declined-1", outcome: "resolved" },
-          ],
-        },
-      },
-    ]);
+    const results = [
+      { prompt_id: "question-1", outcome: "resolved" },
+      { prompt_id: "approval-1", outcome: "skipped" },
+      { prompt_id: "declined-1", outcome: "resolved" },
+    ];
+    const transport = new FakeRpcTransport([{ method: "prompt.answerBatch", result: { results } }]);
     const client = new ApiClient(transport);
 
-    const response = await client.answerPromptBatch({
-      ...batchRequest,
-      entries: [
-        { ...batchRequest.entries[0], selectedOptionNumber: 2, freeform: "because" },
-        batchRequest.entries[1],
-        batchRequest.entries[2],
-      ],
-    });
+    const response = await client.answerPromptBatch(batchRequest);
 
     expect(transport.calls).toEqual([]);
     expect(transport.attachedSessionCalls).toEqual([
       {
-        sessionID: "session-1",
+        sessionID,
         method: "prompt.answerBatch",
         params: {
-          session_id: "session-1",
-          step_id: "22222222-2222-4222-8222-222222222222",
+          session_id: sessionID,
+          step_id: stepID,
           entries: [
             {
               prompt_id: "question-1",

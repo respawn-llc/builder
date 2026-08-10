@@ -30,7 +30,7 @@ func TestWorkflowAttentionItemEncodesAbsentSessionNameAsNull(t *testing.T) {
 
 func TestWorkflowAttentionItemValidateEnforcesDiscriminatedVariants(t *testing.T) {
 	question := func(mutate func(*WorkflowAttentionItem)) WorkflowAttentionItem {
-		item := validWorkflowAttentionQuestion()
+		item := validWorkflowAttentionQuestion(t)
 		mutate(&item)
 		return item
 	}
@@ -49,8 +49,8 @@ func TestWorkflowAttentionItemValidateEnforcesDiscriminatedVariants(t *testing.T
 		item WorkflowAttentionItem
 		want bool
 	}{
-		{name: "question", item: validWorkflowAttentionQuestion(), want: true},
-		{name: "runtime approval question", item: validWorkflowAttentionRuntimeApproval(), want: true},
+		{name: "question", item: validWorkflowAttentionQuestion(t), want: true},
+		{name: "runtime approval question", item: validWorkflowAttentionRuntimeApproval(t), want: true},
 		{name: "approval", item: validWorkflowAttentionApproval(), want: true},
 		{name: "interrupted current node", item: validWorkflowAttentionInterrupted(), want: true},
 		{name: "unknown kind", item: question(func(item *WorkflowAttentionItem) { item.Kind = "unknown" }), want: false},
@@ -110,15 +110,12 @@ func TestWorkflowAttentionItemValidateEnforcesDiscriminatedVariants(t *testing.T
 	}
 }
 
-func validWorkflowAttentionRuntimeApproval() WorkflowAttentionItem {
-	item := validWorkflowAttentionQuestion()
+func validWorkflowAttentionRuntimeApproval(t *testing.T) WorkflowAttentionItem {
+	item := validWorkflowAttentionQuestion(t)
 	item.Question.Kind = WorkflowAttentionQuestionKindApproval
 	item.Question.Suggestions = nil
 	item.Question.RecommendedOptionIndex = nil
-	item.Question.ApprovalDecisions = []clientui.ApprovalDecision{
-		clientui.ApprovalDecisionAllowOnce,
-		clientui.ApprovalDecisionDeny,
-	}
+	item.Question.ApprovalDecisions = []clientui.ApprovalDecision{clientui.ApprovalDecisionAllowOnce, clientui.ApprovalDecisionDeny}
 	return item
 }
 
@@ -165,7 +162,7 @@ func TestWorkflowAttentionApprovalSnapshotValidateRejectsMalformedContents(t *te
 
 func TestWorkflowAttentionResponseValidationPrefixesItemErrorsAndBindsTaskResponses(t *testing.T) {
 	global := WorkflowAttentionListResponse{Items: []WorkflowAttentionItem{
-		validWorkflowAttentionQuestion(),
+		validWorkflowAttentionQuestion(t),
 		func() WorkflowAttentionItem {
 			item := validWorkflowAttentionApproval()
 			item.TaskID = "task-2"
@@ -175,7 +172,7 @@ func TestWorkflowAttentionResponseValidationPrefixesItemErrorsAndBindsTaskRespon
 	}}
 	requireWorkflowAttentionIndexedError(t, global.Validate(), "items[1].approval_id")
 
-	taskResponse := WorkflowTaskAttentionListResponse{Items: []WorkflowAttentionItem{validWorkflowAttentionQuestion()}}
+	taskResponse := WorkflowTaskAttentionListResponse{Items: []WorkflowAttentionItem{validWorkflowAttentionQuestion(t)}}
 	if err := taskResponse.Validate(); err != nil {
 		t.Fatalf("task attention response rejected a valid item: %v", err)
 	}
@@ -235,17 +232,9 @@ func TestWorkflowTaskActivityResponseValidationOnlyAcceptsDurableActivity(t *tes
 	}
 }
 
-func validWorkflowAttentionQuestion() WorkflowAttentionItem {
+func validWorkflowAttentionQuestion(t *testing.T) WorkflowAttentionItem {
 	sessionName := "Session one"
 	recommended := 1
-	sessionID, err := runtimeids.ParseSessionID("session-1")
-	if err != nil {
-		panic(err)
-	}
-	stepID, err := runtimeids.ParseStepID("44444444-4444-4444-8444-444444444444")
-	if err != nil {
-		panic(err)
-	}
 	return WorkflowAttentionItem{
 		ID:          "question:task-1:node-1:session-1:question-1",
 		ProjectID:   "project-1",
@@ -258,8 +247,8 @@ func validWorkflowAttentionQuestion() WorkflowAttentionItem {
 		CurrentNode: &WorkflowTaskCurrentNode{NodeID: "node-1"},
 		SessionName: &sessionName,
 		Question: &WorkflowAttentionQuestionPrompt{
-			SessionID:              sessionID,
-			StepID:                 stepID,
+			SessionID:              mustPromptBatchSessionID(t),
+			StepID:                 mustPromptBatchStepID(t),
 			PromptID:               clientui.PromptID("question-1"),
 			Kind:                   WorkflowAttentionQuestionKindOrdinary,
 			Suggestions:            []string{"Continue"},

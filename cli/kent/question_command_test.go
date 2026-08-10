@@ -111,10 +111,7 @@ func (r *stubQuestionCommandRemote) AnswerPromptBatch(_ context.Context, req ser
 	if outcome == "" {
 		outcome = serverapi.PromptAnswerBatchOutcomeResolved
 	}
-	return serverapi.PromptAnswerBatchResponse{Results: []serverapi.PromptAnswerBatchResult{{
-		PromptID: req.Entries[0].PromptID,
-		Outcome:  outcome,
-	}}}, nil
+	return serverapi.PromptAnswerBatchResponse{Results: []serverapi.PromptAnswerBatchResult{{PromptID: req.Entries[0].PromptID, Outcome: outcome}}}, nil
 }
 
 func (r *stubQuestionCommandRemote) ListPendingApprovalsBySession(
@@ -148,9 +145,7 @@ func (r *stubQuestionCommandRemote) Close() error {
 	return nil
 }
 
-func (r *stubQuestionTaskRemote) Close() error {
-	return nil
-}
+func (r *stubQuestionTaskRemote) Close() error { return nil }
 
 func (s *stubPromptFollowUpSubscription) Next(ctx context.Context) (serverapi.PromptFollowUpEvent, error) {
 	r := s.remote
@@ -163,10 +158,7 @@ func (s *stubPromptFollowUpSubscription) Next(ctx context.Context) (serverapi.Pr
 	return serverapi.PromptFollowUpEvent{Kind: r.followUpKind}, r.followUpErr
 }
 
-func (s *stubPromptFollowUpSubscription) Close() error {
-	s.closed = true
-	return nil
-}
+func (s *stubPromptFollowUpSubscription) Close() error { s.closed = true; return nil }
 
 func requireQuestionBatchEntry(t *testing.T, request serverapi.PromptAnswerBatchRequest) serverapi.PromptAnswerBatchEntry {
 	t.Helper()

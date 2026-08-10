@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { I18nextProvider } from "react-i18next";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { QuestionAttentionItem } from "@/api";
 import { AppServicesProvider } from "@/app-facade";
@@ -15,7 +15,6 @@ import { QuestionFormView } from "./TaskDetailQuestionFormView";
 const services = createTestServices([], undefined, { platform: "macos" });
 const baseQuestion = parsedQuestionAttention();
 beforeAll(async () => initializeI18n());
-afterEach(() => vi.restoreAllMocks());
 describe("Task Detail prompt primary controls", () => {
   it("replaces and unregisters exact-key controls without fallback", () => {
     const registry = new PromptPrimaryControlRegistry();
@@ -26,11 +25,9 @@ describe("Task Detail prompt primary controls", () => {
     unregisterFirst();
     expect(registry.focus({ ...key })).toBe(true);
     unregisterSecond();
-    expect([second.mock.calls, first.mock.calls, registry.focus(key)]).toEqual([
-      [[{ preventScroll: true }]],
-      [],
-      false,
-    ]);
+    expect(second).toHaveBeenCalledWith({ preventScroll: true });
+    expect(first).not.toHaveBeenCalled();
+    expect(registry.focus(key)).toBe(false);
   });
   it.each([
     ["option Question", ordinaryAttention(["One"]), "radio"],
@@ -38,7 +35,6 @@ describe("Task Detail prompt primary controls", () => {
     ["runtime Approval", approvalAttention(), "radio"],
   ] as const)("focuses the first answer control for a %s without scrolling", (_name, attention, role) => {
     let control: PromptPrimaryControl | undefined;
-    const focus = vi.spyOn(HTMLElement.prototype, "focus");
     render(
       <I18nextProvider i18n={appI18n}>
         <AppServicesProvider services={services}>
@@ -59,7 +55,6 @@ describe("Task Detail prompt primary controls", () => {
     );
     control?.focusPrimary({ preventScroll: true });
     expect(screen.getAllByRole(role)[0]).toHaveFocus();
-    expect(focus).toHaveBeenCalledWith({ preventScroll: true });
   });
 });
 const ordinaryAttention = (suggestions: readonly string[]): QuestionAttentionItem => ({

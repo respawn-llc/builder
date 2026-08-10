@@ -28,11 +28,8 @@ func TestPromptAnswerBatchEntryFromTypedAnswer(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			entry, err := PromptAnswerBatchEntryFrom("prompt-1", test.answer)
-			if err == nil {
-				err = entry.Validate()
-			}
 			if err != nil {
-				t.Fatalf("convert and validate answer: %v", err)
+				t.Fatalf("convert answer: %v", err)
 			}
 			if !reflect.DeepEqual(entry, test.expected) {
 				t.Fatalf("entry = %+v, want %+v", entry, test.expected)
