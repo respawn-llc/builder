@@ -493,7 +493,10 @@
 - Core Task detail includes an unresolved-attention count but not the attention items. It does not scan transcript history.
 - The Task-specific attention feed can read the newest active transcript segment to recover unresolved Question content. Desktop Task detail loads this feed independently so it does not delay core Task detail.
 - Task Activity is a server-paginated projection of durable Comments and retained Session creation. It contains no workflow movement, Node completion, interruption, attempt, or diagnostic history. Clients render Session creation as localized `Session started` activity.
-- Task Activity follows the shared non-Search offset pagination contract.
+- Task Activity uses the offset pagination contract defined below.
+- Task Activity requests may omit offset and limit. An omitted offset starts at zero, offsets are zero-based and non-negative, and an omitted limit defaults to 100 with a maximum of 100.
+- Task Activity pagination is stateless between requests. The server bounds each response by the requested limit and does not retain page contents or pagination state.
+- Insertions, removals, or reordering between independent Task Activity requests may cause later results to repeat or skip items.
 - Task Activity orders items by occurrence time descending, then Activity ID descending. A Comment occurrence uses the Comment's latest update time. A Session-start occurrence uses the Session's creation time.
 - Task detail reports the total retained Session count. It provides direct Open and Interrupt actions only for agent Sessions with live Exact Execution Scopes; non-live Sessions remain available through the Session picker.
 - Desktop shows Task-wide Interrupt when several Exact Execution Scopes are live or a Script Node is live.

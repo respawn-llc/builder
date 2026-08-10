@@ -200,6 +200,7 @@ export function TaskDetailList({
       ariaLabel={t("task.title")}
       className="task-detail-island-stack h-full min-h-0 overflow-auto hide-scrollbar p-[var(--space-3)]"
       estimateSize={() => 160}
+      getItemAnchorKey={taskDetailListItemAnchorKey}
       getItemKey={taskDetailListItemKey}
       hasNextPage={autoLoadAvailable(paging.hasNextPage, nextBoundary)}
       hasPreviousPage={autoLoadAvailable(paging.hasPreviousPage, previousBoundary)}
@@ -656,6 +657,16 @@ function taskDetailListItemKey(item: TaskDetailListItem): string {
     return item.presentationKey;
   }
   return item.kind;
+}
+
+function taskDetailListItemAnchorKey(item: TaskDetailListItem): string {
+  if (item.kind === "comment") {
+    return `comment:${item.comment.id}`;
+  }
+  if (item.kind === "activity") {
+    return `activity:${item.item.id}`;
+  }
+  return taskDetailListItemKey(item);
 }
 
 function isFeedItem(item: TaskDetailListItem): boolean {

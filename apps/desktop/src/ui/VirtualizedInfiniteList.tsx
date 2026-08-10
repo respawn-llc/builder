@@ -22,6 +22,7 @@ export type { VirtualizedInfiniteListBoundaryState } from "./InfiniteListBoundar
 export type VirtualizedInfiniteListProps<TItem> = Readonly<{
   items: readonly TItem[];
   getItemKey: (item: TItem) => string;
+  getItemAnchorKey?: ((item: TItem) => string) | undefined;
   renderItem: (item: TItem, itemIndex: number) => ReactNode;
   header?: ReactNode | undefined;
   empty?: ReactNode | undefined;
@@ -96,6 +97,7 @@ export function VirtualizedInfiniteList<TItem>(props: VirtualizedInfiniteListPro
 function VirtualizedInfiniteListContent<TItem>({
   items,
   getItemKey,
+  getItemAnchorKey,
   renderItem,
   header,
   empty,
@@ -128,6 +130,7 @@ function VirtualizedInfiniteListContent<TItem>({
   pinnedItemKeys,
   pixelOffsetRequest,
 }: VirtualizedInfiniteListResolvedProps<TItem>) {
+  const getItemAnchorKeyForItem = getItemAnchorKey ?? getItemKey;
   const validatedPixelOffsetRequest = requireVirtualizedPixelOffsetRequest(pixelOffsetRequest);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const setScrollElement = useCallback(
@@ -144,7 +147,7 @@ function VirtualizedInfiniteListContent<TItem>({
   const wasFetchingPreviousPageRef = useRef(false);
   const wasFetchingNextPageRef = useRef(false);
   const leadingAnchorRef = useRef<VirtualizedLeadingAnchor | null>(null);
-  const previousItemKeysRef = useRef<readonly string[]>([]);
+  const previousAnchorKeysRef = useRef<readonly string[]>([]);
   const previousBoundaryCount = Number(previousBoundary !== undefined);
   const headerCount = Number(header !== undefined);
   const emptyCount = Number(items.length === 0 && empty !== undefined);
@@ -245,7 +248,9 @@ function VirtualizedInfiniteListContent<TItem>({
     if (virtualItem !== undefined) {
       const item = items[virtualItem.index - itemStartIndex];
       leadingAnchorRef.current =
-        item === undefined ? null : { itemKey: getItemKey(item), inRowOffset: scrollTop - virtualItem.start };
+        item === undefined
+          ? null
+          : { anchorKey: getItemAnchorKeyForItem(item), inRowOffset: scrollTop - virtualItem.start };
       return;
     }
     const estimatedSize = Math.max(1, estimateSize());
@@ -259,10 +264,10 @@ function VirtualizedInfiniteListContent<TItem>({
       item === undefined
         ? null
         : {
-            itemKey: getItemKey(item),
+            anchorKey: getItemAnchorKeyForItem(item),
             inRowOffset: scrollTop - (paddingStart + estimatedVirtualIndex * estimatedSize),
           };
-  }, [estimateSize, getItemKey, itemStartIndex, items, paddingStart, virtualizer]);
+  }, [estimateSize, getItemAnchorKeyForItem, itemStartIndex, items, paddingStart, virtualizer]);
 
   useEffect(() => {
     if (initialScrollKey === undefined) {
@@ -306,13 +311,13 @@ function VirtualizedInfiniteListContent<TItem>({
   }, [items.length, validatedPixelOffsetRequest, virtualizer]);
 
   useLayoutEffect(() => {
-    const currentKeys = items.map(getItemKey);
-    const previousKeys = previousItemKeysRef.current;
+    const currentKeys = items.map(getItemAnchorKeyForItem);
+    const previousKeys = previousAnchorKeysRef.current;
     const anchor = leadingAnchorRef.current;
     const element = scrollRef.current;
     if (previousKeys.length > 0 && anchor !== null && element !== null) {
-      const previousIndex = previousKeys.indexOf(anchor.itemKey);
-      const currentIndex = currentKeys.indexOf(anchor.itemKey);
+      const previousIndex = previousKeys.indexOf(anchor.anchorKey);
+      const currentIndex = currentKeys.indexOf(anchor.anchorKey);
       if (previousIndex >= 0 && currentIndex >= 0) {
         const virtualIndex = itemStartIndex + currentIndex;
         const measuredOffset = isFallbackRendering
@@ -327,12 +332,12 @@ function VirtualizedInfiniteListContent<TItem>({
         }
       }
     }
-    previousItemKeysRef.current = currentKeys;
+    previousAnchorKeysRef.current = currentKeys;
     captureLeadingAnchor();
   }, [
     captureLeadingAnchor,
     estimateSize,
-    getItemKey,
+    getItemAnchorKeyForItem,
     isFallbackRendering,
     itemStartIndex,
     items,
@@ -590,7 +595,7 @@ function VirtualizedPlaceholder({
 }
 
 type VirtualizedLeadingAnchor = Readonly<{
-  itemKey: string;
+  anchorKey: string;
   inRowOffset: number;
 }>;
 
