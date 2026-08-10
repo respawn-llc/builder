@@ -68,17 +68,14 @@ type uiInputFeatureState struct {
 	// UI-side post-turn input queue. It may contain slash commands, shell
 	// commands, and other client-only actions; server queues only runtime
 	// injected user work.
-	queued                   []queuedInputItem
-	compactionOrigin         uiCompactionOrigin
-	pendingRuntimeOperations []clientui.RuntimeOperationRef
-	submitToken              uint64
-	activeSubmit             activeSubmitState
+	queued           []queuedInputItem
+	compactionOrigin uiCompactionOrigin
+	submitToken      uint64
+	activeSubmit     activeSubmitState
 
-	pendingInjected             []clientui.QueuedUserMessage
 	injectedQueue               []injectedRuntimeQueueItem
 	injectedQueueToken          uint64
 	pendingInputSubmissionOrder uint64
-	interruptedQueueEventIDs    map[string]struct{}
 	interruptLifecycle          uiInterruptLifecycle
 	currentRunID                string
 	currentStepID               string

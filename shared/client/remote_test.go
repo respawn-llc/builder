@@ -2199,11 +2199,6 @@ func TestProtocolErrorDecodesRuntimeCommandNotAcceptedCauses(t *testing.T) {
 				t.Fatalf("decoded cause = %v, want manual compaction active", err)
 			}
 		}},
-		{name: "operation canceled", cause: serverapi.ErrRuntimeOperationCanceled, check: func(t *testing.T, err error) {
-			if !errors.Is(err, context.Canceled) {
-				t.Fatalf("decoded cause = %v, want context canceled", err)
-			}
-		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			source := serverapi.NewRuntimeCommandNotAcceptedError(test.cause)

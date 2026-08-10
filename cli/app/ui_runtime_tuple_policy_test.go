@@ -42,7 +42,6 @@ func TestHydrationRuntimeTupleAdmissionMapping(t *testing.T) {
 	current := runtimeTupleTestView(
 		11,
 		runtimeTupleTestIdleActivity(),
-		runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationCommitted),
 	)
 	tests := []struct {
 		name        string
@@ -53,36 +52,32 @@ func TestHydrationRuntimeTupleAdmissionMapping(t *testing.T) {
 		{
 			name: "exact current tuple is accepted",
 			incoming: clientui.RuntimeReadModelUpdate{
-				Version:             current.Version,
-				Activity:            current.Activity,
-				InputReconciliation: current.InputReconciliation,
+				Version:  current.Version,
+				Activity: current.Activity,
 			},
 			wantProject: true,
 		},
 		{
 			name: "lower sequence is developer error",
 			incoming: clientui.RuntimeReadModelUpdate{
-				Version:             clientui.ReadModelVersion{Epoch: current.Version.Epoch, Generation: current.Version.Generation, Sequence: 10},
-				Activity:            current.Activity,
-				InputReconciliation: current.InputReconciliation,
+				Version:  clientui.ReadModelVersion{Epoch: current.Version.Epoch, Generation: current.Version.Generation, Sequence: 10},
+				Activity: current.Activity,
 			},
 			wantErr: true,
 		},
 		{
 			name: "older generation is developer error",
 			incoming: clientui.RuntimeReadModelUpdate{
-				Version:             clientui.ReadModelVersion{Epoch: current.Version.Epoch, Generation: current.Version.Generation - 1, Sequence: 99},
-				Activity:            current.Activity,
-				InputReconciliation: current.InputReconciliation,
+				Version:  clientui.ReadModelVersion{Epoch: current.Version.Epoch, Generation: current.Version.Generation - 1, Sequence: 99},
+				Activity: current.Activity,
 			},
 			wantErr: true,
 		},
 		{
 			name: "same version conflict is developer error",
 			incoming: clientui.RuntimeReadModelUpdate{
-				Version:             current.Version,
-				Activity:            runtimeTupleTestRunningActivity(),
-				InputReconciliation: current.InputReconciliation,
+				Version:  current.Version,
+				Activity: runtimeTupleTestRunningActivity(),
 			},
 			wantErr: true,
 		},

@@ -7,6 +7,7 @@ import (
 
 	"core/cli/app/commands"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 
 	"github.com/google/uuid"
 )
@@ -131,14 +132,12 @@ const (
 // Active submit is the in-flight turn only. uiModel.queued stores future work;
 // never mirror active submit there or it can run again after completion.
 type activeSubmitState struct {
-	token              uint64
-	stepID             string
-	text               string
-	queuedID           string
-	origin             activeSubmitOrigin
-	operationRef       clientui.RuntimeOperationRef
-	restoreOnInterrupt bool
-	flushed            bool
+	token           uint64
+	text            string
+	queuedID        string
+	origin          activeSubmitOrigin
+	clientRequestID runtimeids.RuntimeClientRequestID
+	submissionOrder inputSubmissionOrder
 }
 
 type spinnerTickMsg struct {

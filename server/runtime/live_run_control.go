@@ -231,11 +231,7 @@ func (e *Engine) QueueUserMessageForActiveRun(ctx context.Context, text string, 
 }
 
 func (e *Engine) QueueUserMessageForActiveRunWithAcceptance(ctx context.Context, text string, clientRequestID runtimeids.RuntimeClientRequestID, accept CommandAcceptance) (QueuedUserMessage, bool, error) {
-	return e.QueueUserMessageForActiveRunWithHooks(ctx, text, clientRequestID, nil, accept)
-}
-
-func (e *Engine) QueueUserMessageForActiveRunWithHooks(ctx context.Context, text string, clientRequestID runtimeids.RuntimeClientRequestID, onActive func(), accept CommandAcceptance) (QueuedUserMessage, bool, error) {
-	return e.queueMessageForActiveRun(ctx, llm.Message{Role: llm.RoleUser, Content: textutil.Value(text)}, clientRequestID, onActive, nil, accept)
+	return e.queueMessageForActiveRun(ctx, llm.Message{Role: llm.RoleUser, Content: textutil.Value(text)}, clientRequestID, nil, nil, accept)
 }
 
 func (e *Engine) QueueAgentSteerForActiveRun(ctx context.Context, steer AgentSteer, clientRequestID runtimeids.RuntimeClientRequestID, beforeQueue func() error) (QueuedUserMessage, bool, error) {

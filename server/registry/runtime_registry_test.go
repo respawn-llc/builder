@@ -235,7 +235,7 @@ func TestRuntimeReadModelPublicationWaitsForHydrationAdmission(t *testing.T) {
 	registry := NewRuntimeRegistry()
 	engine := newRegistryTestRuntime(t, nil)
 	registerReady(t, registry, engine.SessionID(), engine)
-	update, err := registry.RuntimeReadModelFeedSnapshot(context.Background(), engine.SessionID(), nil)
+	update, err := registry.RuntimeReadModelFeedSnapshot(context.Background(), engine.SessionID())
 	if err != nil {
 		t.Fatalf("read runtime model: %v", err)
 	}
@@ -906,8 +906,7 @@ func publishRunState(registry *RuntimeRegistry, sessionID string, running bool) 
 		}
 	}
 	registry.PublishRuntimeReadModelUpdate(sessionID, clientui.RuntimeReadModelUpdate{
-		Version:             runtimeactivity.NextReadModelVersion(sessionID),
-		Activity:            activity,
-		InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{},
+		Version:  runtimeactivity.NextReadModelVersion(sessionID),
+		Activity: activity,
 	})
 }

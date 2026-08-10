@@ -3,20 +3,12 @@ package serverapi
 import (
 	"errors"
 	"testing"
-
-	"core/shared/clientui"
-	"core/shared/runtimeids"
 )
 
-func TestSessionMainViewRequestCarriesPendingOperationRefs(t *testing.T) {
-	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: runtimeids.NewRuntimeClientRequestID()}
-	req := SessionMainViewRequest{SessionID: "session-1", PendingOperationRefs: []clientui.RuntimeOperationRef{ref}}
-
+func TestSessionMainViewRequestUsesSessionIdentityOnly(t *testing.T) {
+	req := SessionMainViewRequest{SessionID: "session-1"}
 	if err := req.Validate(); err != nil {
 		t.Fatalf("Validate: %v", err)
-	}
-	if len(req.PendingOperationRefs) != 1 || req.PendingOperationRefs[0] != ref {
-		t.Fatalf("pending refs = %+v, want %+v", req.PendingOperationRefs, ref)
 	}
 }
 
@@ -38,18 +30,6 @@ func TestSessionTranscriptPageRequestRejectsZeroCursor(t *testing.T) {
 	req := SessionTranscriptPageRequest{SessionID: "session-1", Cursor: &cursor}
 	if err := req.Validate(); !errors.Is(err, ErrTranscriptCursorInvalid) {
 		t.Fatalf("Validate error = %v, want invalid cursor", err)
-	}
-}
-
-func TestSessionMainViewRequestRejectsInvalidPendingOperationRefs(t *testing.T) {
-	req := SessionMainViewRequest{
-		SessionID: "session-1",
-		PendingOperationRefs: []clientui.RuntimeOperationRef{
-			{Kind: clientui.RuntimeOperationKindSubmit},
-		},
-	}
-	if err := req.Validate(); err == nil {
-		t.Fatal("expected invalid pending ref to be rejected")
 	}
 }
 

@@ -38,12 +38,8 @@ type runtimeControlFakeClient struct {
 	appendedText          string
 	submitText            string
 	submitCalls           int
-	submitOperationRef    clientui.RuntimeOperationRef
-	preSubmitOperationRef clientui.RuntimeOperationRef
 	submitResult          string
 	interruptCalls        int
-	interruptPendingRefs  []clientui.RuntimeOperationRef
-	interruptTargetRef    *clientui.RuntimeOperationRef
 	submitQueuedID        string
 	discardQueuedID       string
 	discardQueuedCalls    int
@@ -193,15 +189,13 @@ func (f *runtimeControlFakeClient) submitUserMessage(_ context.Context, text str
 }
 func (f *runtimeControlFakeClient) SubmitRuntimeInput(ctx context.Context, req clientui.RuntimeSubmitRequest) (clientui.UserTurnSubmission, error) {
 	f.submitCalls++
-	f.submitOperationRef = req.OperationRef
-	f.preSubmitOperationRef = req.PreSubmitCompactionOperationRef
 	text := runtimeSubmitInputText(req)
 	submission, err := f.submitUserMessage(ctx, text)
 	if err == nil && strings.TrimSpace(f.submitQueuedID) != "" {
 		submission.Queued = clientui.QueuedUserMessage{
 			ID:              strings.TrimSpace(f.submitQueuedID),
 			Text:            text,
-			ClientRequestID: req.OperationRef.ClientRequestID.String(),
+			ClientRequestID: req.ClientRequestID.String(),
 		}
 	}
 	return submission, err
@@ -221,24 +215,6 @@ func (f *runtimeControlFakeClient) CompactRuntime(ctx context.Context, req clien
 }
 func (f *runtimeControlFakeClient) Interrupt() error {
 	f.interruptCalls++
-	if f.interruptErr != nil {
-		return f.interruptErr
-	}
-	return f.err
-}
-func (f *runtimeControlFakeClient) InterruptWithPendingRefs(refs []clientui.RuntimeOperationRef) error {
-	f.interruptCalls++
-	f.interruptPendingRefs = append([]clientui.RuntimeOperationRef(nil), refs...)
-	f.interruptTargetRef = nil
-	if f.interruptErr != nil {
-		return f.interruptErr
-	}
-	return f.err
-}
-func (f *runtimeControlFakeClient) InterruptWithTarget(target clientui.RuntimeOperationRef, refs []clientui.RuntimeOperationRef) error {
-	f.interruptCalls++
-	f.interruptPendingRefs = append([]clientui.RuntimeOperationRef(nil), refs...)
-	f.interruptTargetRef = &target
 	if f.interruptErr != nil {
 		return f.interruptErr
 	}
@@ -265,10 +241,8 @@ func TestRuntimeInterruptNotAcceptedClearsPendingAttempt(t *testing.T) {
 	m.sessionID = "session-1"
 	m.setRuntimeActivityBusyForTest(true)
 	m.activeSubmit = activeSubmitState{
-		token:              1,
-		text:               "keep me",
-		operationRef:       newRuntimeOperationRef(clientui.RuntimeOperationKindSubmit),
-		restoreOnInterrupt: true,
+		token: 1,
+		text:  "keep me",
 	}
 
 	cmd := m.inputController().interruptBusyRuntime()
@@ -290,10 +264,15 @@ func TestRuntimeInterruptNotAcceptedClearsPendingAttempt(t *testing.T) {
 func TestRuntimeInterruptRestoresPendingInputsBeforeComposerDraftInSubmissionOrder(t *testing.T) {
 	client := &runtimeControlFakeClient{}
 	m := newProjectedClosedUIModel(client)
-	_ = m.queueInjectedInput("steer one")
-	m.queueInput("queue two")
-	_ = m.queueInjectedInput("steer three")
-	m.queueInput("queue four")
+	steerOne := "  steer one\nline\t "
+	queueTwo := "\tqueue two  "
+	steerThree := "steer  three\n\ninside"
+	queueFour := " queue four "
+	draft := "  existing draft\t"
+	_ = m.queueInjectedInput(steerOne)
+	m.queueInput(queueTwo)
+	_ = m.queueInjectedInput(steerThree)
+	m.queueInput(queueFour)
 	stopped := clientui.QueuedUserMessageFailureStopped
 	bindSteer := func(index int) clientui.TranscriptQueuedMessageState {
 		t.Helper()
@@ -318,12 +297,12 @@ func TestRuntimeInterruptRestoresPendingInputsBeforeComposerDraftInSubmissionOrd
 	}
 	firstFailure := bindSteer(0)
 	secondFailure := bindSteer(1)
-	testSetMainInput(m, "existing draft")
+	testSetMainInput(m, draft)
 	activeText := "active turn already visible in the transcript"
 	m.activeSubmit = activeSubmitState{
-		token:        1,
-		text:         activeText,
-		operationRef: newRuntimeOperationRef(clientui.RuntimeOperationKindSubmit),
+		token:  1,
+		text:   activeText,
+		origin: activeSubmitOriginQueued,
 	}
 	m.setPendingInterrupt(true)
 
@@ -332,11 +311,11 @@ func TestRuntimeInterruptRestoresPendingInputsBeforeComposerDraftInSubmissionOrd
 	for _, msg := range collectCmdMessages(t, interruptedCmd) {
 		m = updateUIModel(t, m, msg)
 	}
-	if got := testMainInput(m); got != "existing draft" {
+	if got := testMainInput(m); got != draft {
 		t.Fatalf("interrupted active Submit changed composer before interrupt response = %q", got)
 	}
-	if len(m.pendingInjected) != 2 || len(m.injectedQueue) != 2 || len(m.queued) != 2 {
-		t.Fatalf("interrupted active Submit consumed pending inputs before response: pending=%d injected=%d queued=%d", len(m.pendingInjected), len(m.injectedQueue), len(m.queued))
+	if len(m.injectedQueue) != 2 || len(m.queued) != 2 {
+		t.Fatalf("interrupted active Submit consumed pending inputs before response: injected=%d queued=%d", len(m.injectedQueue), len(m.queued))
 	}
 	if client.discardQueuedCalls != 0 {
 		t.Fatalf("interrupted active Submit dispatched %d queued-message discards before response", client.discardQueuedCalls)
@@ -349,12 +328,12 @@ func TestRuntimeInterruptRestoresPendingInputsBeforeComposerDraftInSubmissionOrd
 		m = updateUIModel(t, m, msg)
 	}
 
-	want := "steer one\n\nqueue two\n\nsteer three\n\nqueue four\n\nexisting draft"
+	want := strings.Join([]string{steerOne, queueTwo, steerThree, queueFour, draft}, "\n\n")
 	if got := testMainInput(m); got != want {
 		t.Fatalf("restored composer = %q, want %q", got, want)
 	}
-	if len(m.pendingInjected) != 0 || len(m.injectedQueue) != 0 || len(m.queued) != 0 {
-		t.Fatalf("pending input state remained after restoration: pending=%+v injected=%+v queued=%+v", m.pendingInjected, m.injectedQueue, m.queued)
+	if len(m.injectedQueue) != 0 || len(m.queued) != 0 {
+		t.Fatalf("pending input state remained after restoration: injected=%+v queued=%+v", m.injectedQueue, m.queued)
 	}
 	if m.hasPendingInterrupt() {
 		t.Fatal("interrupt remained pending after local restoration")
@@ -367,8 +346,8 @@ func TestRuntimeInterruptRestoresPendingInputsBeforeComposerDraftInSubmissionOrd
 	if got := testMainInput(m); got != want {
 		t.Fatalf("late queue events duplicated restored composer = %q, want %q", got, want)
 	}
-	if len(m.pendingInjected) != 0 || len(m.injectedQueue) != 0 {
-		t.Fatalf("late queue events recreated interrupted state: pending=%+v injected=%+v", m.pendingInjected, m.injectedQueue)
+	if len(m.injectedQueue) != 0 {
+		t.Fatalf("late queue events recreated interrupted state: injected=%+v", m.injectedQueue)
 	}
 }
 
@@ -524,7 +503,7 @@ func TestSubmitErrorShowsTransientStatusWithoutPersisting(t *testing.T) {
 	m := newProjectedStaticUIModel()
 	m.engine = client
 	m.setRuntimeActivityBusyForTest(true)
-	m.activeSubmit = activeSubmitState{token: 1, text: "prompt", stepID: "step-1"}
+	m.activeSubmit = activeSubmitState{token: 1, text: "prompt"}
 
 	next, cmd := m.Update(submitDoneMsg{token: 1, submittedText: "prompt", err: errors.New("submit failed")})
 	updated := next.(*uiModel)

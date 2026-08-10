@@ -177,8 +177,8 @@ func (e *Engine) SubmitUserMessageOrSteerWithOutcomeHooks(ctx context.Context, t
 	return e.submitUserMessageOrSteerWithOutcome(ctx, text, clientRequestID, onActive, onAccepted, nil)
 }
 
-func (e *Engine) SubmitUserMessageOrSteerWithAcceptance(ctx context.Context, text string, clientRequestID string, onActive func(), accept CommandAcceptance) (result UserTurnResult, queued *QueuedUserMessage, err error) {
-	return e.submitUserMessageOrSteerWithOutcome(ctx, text, clientRequestID, onActive, nil, accept)
+func (e *Engine) SubmitUserMessageOrSteerWithAcceptance(ctx context.Context, text string, clientRequestID string, accept CommandAcceptance) (result UserTurnResult, queued *QueuedUserMessage, err error) {
+	return e.submitUserMessageOrSteerWithOutcome(ctx, text, clientRequestID, nil, nil, accept)
 }
 
 func (e *Engine) submitUserMessageOrSteerWithOutcome(ctx context.Context, text string, clientRequestID string, onActive func(), onAccepted func(queued bool), accept CommandAcceptance) (result UserTurnResult, queued *QueuedUserMessage, err error) {
