@@ -543,14 +543,14 @@ func TestTaskSetupGuidanceProjectsStructuredRecovery(t *testing.T) {
 	}{
 		{name: "completed", terminal: &serverapi.WorktreeSetupEvent{Phase: serverapi.WorktreeSetupPhaseCompleted, Completed: &serverapi.WorktreeSetupCompleted{}}, outcome: taskSetupOutcomeCompleted},
 		{name: "not required with orphan", terminal: &serverapi.WorktreeSetupEvent{Phase: serverapi.WorktreeSetupPhaseNotRequired, NotRequired: &serverapi.WorktreeSetupNotRequired{Reason: serverapi.WorktreeSetupNotRequiredNoConfiguredScript, RetainedPreviousWorktree: &serverapi.RetainedPreviousWorktree{Worktree: setupGuidanceWorktree("/tmp/orphan")}}}, outcome: taskSetupOutcomeCompleted, kinds: []taskSetupActionKind{taskSetupActionListWorktrees}},
-		{name: "retained setup failure", terminal: &serverapi.WorktreeSetupEvent{Phase: serverapi.WorktreeSetupPhaseFailed, Failed: &serverapi.WorktreeSetupFailed{RetryReadiness: serverapi.WorktreeSetupRetryReady, Cause: serverapi.WorktreeSetupFailureCause{Kind: serverapi.WorktreeSetupFailureProcessExit, ProcessExit: &serverapi.WorktreeSetupProcessExit{ExitCode: 1}}, Diagnostic: "failed twice", ScriptPath: &script, ExecutionTarget: &target}}, outcome: taskSetupOutcomeInterruptedSetupFailure, kinds: []taskSetupActionKind{taskSetupActionRetry, taskSetupActionChooseNone, taskSetupActionChooseHead, taskSetupActionChooseDefault, taskSetupActionChooseRef}},
-		{name: "topology-free target failure", terminal: &serverapi.WorktreeSetupEvent{Phase: serverapi.WorktreeSetupPhaseFailed, Failed: &serverapi.WorktreeSetupFailed{RetryReadiness: serverapi.WorktreeSetupRetryReady, Cause: serverapi.WorktreeSetupFailureCause{Kind: serverapi.WorktreeSetupFailureTargetPreparation, Preparation: &serverapi.WorktreeSetupPreparationFailure{}}, Diagnostic: "target failed", ExecutionTarget: &target}}, outcome: taskSetupOutcomeInterruptedTargetPreparationFailure, kinds: []taskSetupActionKind{taskSetupActionRetry, taskSetupActionChooseNone, taskSetupActionChooseHead, taskSetupActionChooseDefault, taskSetupActionChooseRef}},
+		{name: "retained setup failure", terminal: &serverapi.WorktreeSetupEvent{Phase: serverapi.WorktreeSetupPhaseFailed, Failed: &serverapi.WorktreeSetupFailed{RetryReadiness: serverapi.WorktreeSetupRetryReady, Cause: serverapi.WorktreeSetupFailureCause{Kind: serverapi.WorktreeSetupFailureProcessExit, ProcessExit: &serverapi.WorktreeSetupProcessExit{ExitCode: 1}}, Diagnostic: "failed twice", ScriptPath: &script, ExecutionTarget: &target}}, outcome: taskSetupOutcomeStartInterruptedSetupFailure, kinds: []taskSetupActionKind{taskSetupActionRetry, taskSetupActionChooseNone, taskSetupActionChooseHead, taskSetupActionChooseDefault, taskSetupActionChooseRef}},
+		{name: "topology-free target failure", terminal: &serverapi.WorktreeSetupEvent{Phase: serverapi.WorktreeSetupPhaseFailed, Failed: &serverapi.WorktreeSetupFailed{RetryReadiness: serverapi.WorktreeSetupRetryReady, Cause: serverapi.WorktreeSetupFailureCause{Kind: serverapi.WorktreeSetupFailureTargetPreparation, Preparation: &serverapi.WorktreeSetupPreparationFailure{}}, Diagnostic: "target failed", ExecutionTarget: &target}}, outcome: taskSetupOutcomeStartInterruptedTargetPreparationFailure, kinds: []taskSetupActionKind{taskSetupActionRetry, taskSetupActionChooseNone, taskSetupActionChooseHead, taskSetupActionChooseDefault, taskSetupActionChooseRef}},
 		{name: "non-retryable failure", terminal: &serverapi.WorktreeSetupEvent{Phase: serverapi.WorktreeSetupPhaseFailed, Failed: &serverapi.WorktreeSetupFailed{RetryReadiness: serverapi.WorktreeSetupNonRetryable, Cause: serverapi.WorktreeSetupFailureCause{Kind: serverapi.WorktreeSetupFailureCanceled, Canceled: &serverapi.WorktreeSetupCanceled{}}, Diagnostic: "canceled"}}, outcome: taskSetupOutcomeObservedSetupFailure, kinds: []taskSetupActionKind{taskSetupActionInspect, taskSetupActionListWorktrees}},
 		{name: "timeout", err: context.DeadlineExceeded, outcome: taskSetupOutcomeObservationFailure, kinds: []taskSetupActionKind{taskSetupActionInspect, taskSetupActionListWorktrees}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := projectTaskSetupGuidance("task-1", nil, test.terminal, test.err)
+			got, err := projectTaskSetupGuidance(taskSetupObservedActionStart, "task-1", nil, test.terminal, test.err)
 			if err != nil {
 				t.Fatalf("project guidance: %v", err)
 			}
@@ -573,8 +573,18 @@ func TestTaskSetupGuidanceProjectsStructuredRecovery(t *testing.T) {
 			}
 		})
 	}
-	if _, err := projectTaskSetupGuidance("task-1", nil, nil, errors.New(" ")); err == nil {
+	if _, err := projectTaskSetupGuidance(taskSetupObservedActionStart, "task-1", nil, nil, errors.New(" ")); err == nil {
 		t.Fatal("blank diagnostic was accepted")
+	}
+}
+
+func TestTaskSetupGuidanceDistinguishesResumeFromStart(t *testing.T) {
+	target := serverapi.WorkflowExecutionTargetSelection{Mode: serverapi.WorkflowExecutionTargetModeHead}
+	terminal := &serverapi.WorktreeSetupEvent{Phase: serverapi.WorktreeSetupPhaseFailed, Failed: &serverapi.WorktreeSetupFailed{RetryReadiness: serverapi.WorktreeSetupRetryReady, Cause: serverapi.WorktreeSetupFailureCause{Kind: serverapi.WorktreeSetupFailureTargetPreparation, Preparation: &serverapi.WorktreeSetupPreparationFailure{}}, Diagnostic: "target failed", ExecutionTarget: &target}}
+	start, startErr := projectTaskSetupGuidance(taskSetupObservedActionStart, "task-1", nil, terminal, nil)
+	resume, resumeErr := projectTaskSetupGuidance(taskSetupObservedActionResume, "task-1", nil, terminal, nil)
+	if startErr != nil || resumeErr != nil || start.Outcome == resume.Outcome {
+		t.Fatalf("Start=%+v/%v Resume=%+v/%v, want distinct outcomes", start, startErr, resume, resumeErr)
 	}
 }
 

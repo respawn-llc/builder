@@ -335,7 +335,7 @@ func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 			return response.Outcome == serverapi.WorkflowTaskActionOutcomeApplied
 		})
 		if err != nil {
-			if writeTaskSetupObservationError(stderr, positionals[0], recoveryProject, err) {
+			if writeTaskSetupObservationError(taskSetupObservedActionStart, stderr, positionals[0], recoveryProject, err) {
 				return 1
 			}
 			var conflict *serverapi.WorkflowTaskStartConflictError
@@ -374,7 +374,7 @@ func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		if !finishObservedTaskSetup(stderr, positionals[0], recoveryProject, terminal) {
+		if !finishObservedTaskSetup(taskSetupObservedActionStart, stderr, positionals[0], recoveryProject, terminal) {
 			if *jsonOut {
 				_ = writeCommandJSON(stdout, stderr, resp)
 			}
@@ -526,7 +526,7 @@ func taskResumeSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 			return response.Outcome == serverapi.WorkflowExecutionTargetActionOutcomeApplied
 		})
 		if err != nil {
-			if writeTaskSetupObservationError(stderr, positionals[0], recoveryProject, err) {
+			if writeTaskSetupObservationError(taskSetupObservedActionResume, stderr, positionals[0], recoveryProject, err) {
 				return 1
 			}
 			if writeWorkflowExecutionTargetError(stderr, err) ||
@@ -549,7 +549,7 @@ func taskResumeSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		if !finishObservedTaskSetup(stderr, positionals[0], recoveryProject, terminal) {
+		if !finishObservedTaskSetup(taskSetupObservedActionResume, stderr, positionals[0], recoveryProject, terminal) {
 			return 1
 		}
 		detail, err := getWorkflowTaskByID(context.Background(), remote, taskID)
@@ -993,10 +993,14 @@ type taskSetupAction struct {
 
 type taskSetupOutcomeKind string
 
+type taskSetupObservedActionKind string
+
 const (
-	taskSetupOutcomeCompleted, taskSetupOutcomeObservedSetupFailure, taskSetupOutcomeObservationFailure taskSetupOutcomeKind = "completed", "observed_setup_failure", "observation_failure"
-	taskSetupOutcomeInterruptedSetupFailure, taskSetupOutcomeInterruptedTargetPreparationFailure        taskSetupOutcomeKind = "interrupted_setup_failure", "interrupted_target_preparation_failure"
-	taskSetupOutcomeAlreadyStartedConflict, taskSetupOutcomeMoveSetupFailure                            taskSetupOutcomeKind = "already_started_conflict", "move_setup_failure"
+	taskSetupOutcomeCompleted, taskSetupOutcomeObservedSetupFailure, taskSetupOutcomeObservationFailure      taskSetupOutcomeKind        = "completed", "observed_setup_failure", "observation_failure"
+	taskSetupOutcomeStartInterruptedSetupFailure, taskSetupOutcomeStartInterruptedTargetPreparationFailure   taskSetupOutcomeKind        = "start_interrupted_setup_failure", "start_interrupted_target_preparation_failure"
+	taskSetupOutcomeResumeInterruptedSetupFailure, taskSetupOutcomeResumeInterruptedTargetPreparationFailure taskSetupOutcomeKind        = "resume_interrupted_setup_failure", "resume_interrupted_target_preparation_failure"
+	taskSetupOutcomeAlreadyStartedConflict, taskSetupOutcomeMoveSetupFailure                                 taskSetupOutcomeKind        = "already_started_conflict", "move_setup_failure"
+	taskSetupObservedActionStart, taskSetupObservedActionResume                                              taskSetupObservedActionKind = "start", "resume"
 )
 
 type taskSetupGuidance struct {
@@ -1007,7 +1011,10 @@ type taskSetupGuidance struct {
 	Actions      []taskSetupAction
 }
 
-func projectTaskSetupGuidance(taskRef string, projectRef *string, terminal *serverapi.WorktreeSetupEvent, observationErr error) (taskSetupGuidance, error) {
+func projectTaskSetupGuidance(action taskSetupObservedActionKind, taskRef string, projectRef *string, terminal *serverapi.WorktreeSetupEvent, observationErr error) (taskSetupGuidance, error) {
+	if action != taskSetupObservedActionStart && action != taskSetupObservedActionResume {
+		return taskSetupGuidance{}, fmt.Errorf("invalid observed Task setup action %q", action)
+	}
 	base := []string{config.Command, "task", "resume", taskRef}
 	inspect := []string{config.Command, "task", "show", taskRef}
 	if projectRef != nil {
@@ -1045,9 +1052,15 @@ func projectTaskSetupGuidance(taskRef string, projectRef *string, terminal *serv
 		if failed.ExecutionTarget == nil {
 			return taskSetupGuidance{}, errors.New("retry-ready Task setup failure requires execution target")
 		}
-		result.Outcome = taskSetupOutcomeInterruptedSetupFailure
+		result.Outcome = taskSetupOutcomeStartInterruptedSetupFailure
+		if action == taskSetupObservedActionResume {
+			result.Outcome = taskSetupOutcomeResumeInterruptedSetupFailure
+		}
 		if failed.Cause.Kind == serverapi.WorktreeSetupFailureTargetPreparation {
-			result.Outcome = taskSetupOutcomeInterruptedTargetPreparationFailure
+			result.Outcome = taskSetupOutcomeStartInterruptedTargetPreparationFailure
+			if action == taskSetupObservedActionResume {
+				result.Outcome = taskSetupOutcomeResumeInterruptedTargetPreparationFailure
+			}
 		}
 		selector, err := taskExecutionTargetSelector(*failed.ExecutionTarget)
 		if err != nil {
@@ -1245,8 +1258,8 @@ func subscribeWorktreeSetupProgress(ctx context.Context, remote workflowCommandR
 	return worktreeSetupObservation{cancel: cancel, done: done}, nil
 }
 
-func finishObservedTaskSetup(stderr io.Writer, taskRef string, projectRef *string, terminal *serverapi.WorktreeSetupEvent) bool {
-	guidance, err := projectTaskSetupGuidance(taskRef, projectRef, terminal, nil)
+func finishObservedTaskSetup(action taskSetupObservedActionKind, stderr io.Writer, taskRef string, projectRef *string, terminal *serverapi.WorktreeSetupEvent) bool {
+	guidance, err := projectTaskSetupGuidance(action, taskRef, projectRef, terminal, nil)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return false
@@ -1255,12 +1268,12 @@ func finishObservedTaskSetup(stderr io.Writer, taskRef string, projectRef *strin
 	return guidance.Outcome == taskSetupOutcomeCompleted
 }
 
-func writeTaskSetupObservationError(stderr io.Writer, taskRef string, projectRef *string, err error) bool {
+func writeTaskSetupObservationError(action taskSetupObservedActionKind, stderr io.Writer, taskRef string, projectRef *string, err error) bool {
 	var observationErr *worktreeSetupObservationError
 	if !errors.As(err, &observationErr) {
 		return false
 	}
-	guidance, projectionErr := projectTaskSetupGuidance(taskRef, projectRef, nil, observationErr)
+	guidance, projectionErr := projectTaskSetupGuidance(action, taskRef, projectRef, nil, observationErr)
 	if projectionErr != nil {
 		fmt.Fprintln(stderr, projectionErr)
 		return true
@@ -1272,8 +1285,10 @@ func writeTaskSetupObservationError(stderr io.Writer, taskRef string, projectRef
 func renderTaskSetupGuidance(stderr io.Writer, guidance taskSetupGuidance) {
 	switch guidance.Outcome {
 	case taskSetupOutcomeCompleted, taskSetupOutcomeObservationFailure:
-	case taskSetupOutcomeInterruptedSetupFailure, taskSetupOutcomeInterruptedTargetPreparationFailure:
+	case taskSetupOutcomeStartInterruptedSetupFailure, taskSetupOutcomeStartInterruptedTargetPreparationFailure:
 		fmt.Fprintln(stderr, "The Task was started and is now interrupted.")
+	case taskSetupOutcomeResumeInterruptedSetupFailure, taskSetupOutcomeResumeInterruptedTargetPreparationFailure:
+		fmt.Fprintln(stderr, "The Task was resumed and is now interrupted.")
 	case taskSetupOutcomeObservedSetupFailure:
 		fmt.Fprintln(stderr, "Worktree setup failed.")
 	case taskSetupOutcomeAlreadyStartedConflict:
