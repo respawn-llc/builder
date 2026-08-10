@@ -1,3 +1,5 @@
+import type { z } from "zod";
+
 import type { AttentionNotificationEventHandler } from "./attentionNotifications";
 import { attentionNotificationRpcHandler } from "./attentionNotificationSubscription";
 import type { ApiConnectionSource, ApiService, ApiSubscription } from "./apiService";
@@ -48,6 +50,9 @@ import type {
   ProjectMutationResponse,
   ProjectPage,
   ServerReadiness,
+  SessionCatalogPage,
+  SessionCategory,
+  SessionPagePosition,
   TaskAttention,
   TaskComment,
   TaskDetail,
@@ -85,6 +90,14 @@ import {
   workspaceListSchema,
   workspaceUnlinkResponseSchema,
 } from "./schemas/project";
+import {
+  canonicalProjectIDSchema,
+  sessionCategorySchema,
+  sessionPagePositionSchema,
+  sessionPageResponseSchema,
+  workspacePageTokenSchema,
+} from "./schemas/catalog";
+import { CatalogContractError, ContractError } from "./errors";
 import { readinessSchema } from "./schemas/status";
 import { workflowIDSchema } from "./schemas/workflowID";
 import {
@@ -113,6 +126,25 @@ import { workflowProjectEventRpcHandler } from "./workflowProjectEvents";
 import * as workflowBoard from "./clientWorkflowBoard";
 import * as workflowLabels from "./clientWorkflowLabels";
 
+function parseCatalogInput<T>(operation: string, schema: z.ZodType<T>, value: unknown): T {
+  const result = schema.safeParse(value);
+  if (result.success) return result.data;
+  throw new ContractError(`${operation} did not match the catalog contract.`, result.error.issues.map((issue) => ({
+    code: issue.code,
+    path: issue.path.map(String),
+  })));
+}
+
+function parseCatalogResponse<T>(method: string, schema: z.ZodType<T>, value: unknown): T {
+  try { return parse(method, schema, value); } catch (error) {
+    throw error instanceof ContractError ? CatalogContractError.malformedResponse(method, error) : error;
+  }
+}
+
+function requireCatalogProject(method: string, expected: string, actual: string): void {
+  if (actual !== expected) throw CatalogContractError.projectMismatch(method, expected, actual);
+}
+
 export const guiTaskCommentAuthor = "user";
 
 export class ApiClient implements ApiService {
@@ -140,16 +172,48 @@ export class ApiClient implements ApiService {
     );
   }
 
-  async listWorkspaces(projectID: string, pageToken = ""): Promise<WorkspaceList> {
-    return parse(
-      "project.workspace.list",
-      workspaceListSchema,
-      await this.#transport.call("project.workspace.list", {
-        project_id: projectID,
+  async listSessionPage(
+    projectID: string,
+    category: SessionCategory,
+    position: SessionPagePosition,
+  ): Promise<SessionCatalogPage> {
+    const validatedProjectID = parseCatalogInput("session.page project ID", canonicalProjectIDSchema, projectID);
+    const validatedCategory = parseCatalogInput("session.page category", sessionCategorySchema, category);
+    const validatedPosition = parseCatalogInput("session.page position", sessionPagePositionSchema, position);
+    const response = parseCatalogResponse(
+      "session.page",
+      sessionPageResponseSchema,
+      await this.#transport.call("session.page", {
+        project_id: validatedProjectID,
+        category: validatedCategory,
         page_size: 100,
-        page_token: pageToken,
+        position: validatedPosition,
       }),
     );
+    requireCatalogProject("session.page", validatedProjectID, response.projectID);
+    if (response.category !== validatedCategory) {
+      throw CatalogContractError.sessionCategoryMismatch(validatedCategory, response.category);
+    }
+    return response;
+  }
+
+  async listWorkspaces(projectID: string, pageToken?: string): Promise<WorkspaceList> {
+    const validatedProjectID = parseCatalogInput("project.workspace.list project ID", canonicalProjectIDSchema, projectID);
+    const validatedPageToken =
+      pageToken === undefined
+        ? undefined
+        : parseCatalogInput("project.workspace.list page token", workspacePageTokenSchema, pageToken);
+    const request =
+      validatedPageToken === undefined
+        ? { project_id: validatedProjectID, page_size: 100 }
+        : { project_id: validatedProjectID, page_size: 100, page_token: validatedPageToken };
+    const response = parseCatalogResponse(
+      "project.workspace.list",
+      workspaceListSchema,
+      await this.#transport.call("project.workspace.list", request),
+    );
+    requireCatalogProject("project.workspace.list", validatedProjectID, response.projectID);
+    return response;
   }
 
   async getProjectEdit(projectID: string, pageToken = ""): Promise<ProjectEdit> {
@@ -588,8 +652,8 @@ export class ApiClient implements ApiService {
     return taskDetail.getTask(this.#transport, taskID);
   }
 
-  async listTaskActivity(taskID: string, pageToken: string): Promise<ActivityPage> {
-    return taskDetail.listTaskActivity(this.#transport, taskID, pageToken);
+  async listTaskActivity(taskID: string, offset: number): Promise<ActivityPage> {
+    return taskDetail.listTaskActivity(this.#transport, taskID, offset);
   }
 
   async listTaskComments(taskID: string, offset: number): Promise<CommentPage> {

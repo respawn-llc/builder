@@ -69,8 +69,8 @@ func TestRemoteNoAuthUnregisteredWorkspaceBindingCanPrepareRuntime(t *testing.T)
 	if err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
 	}
-	if submission.Message != "rebound no-auth reply" {
-		t.Fatalf("assistant message = %q, want rebound no-auth reply", submission.Message)
+	if submission.Message == nil || *submission.Message != "rebound no-auth reply" {
+		t.Fatalf("assistant message = %v, want rebound no-auth reply", submission.Message)
 	}
 	runtimePlan.Close()
 	if hits.Load() != 1 {
@@ -118,7 +118,10 @@ func TestStartSessionServerUsesInvocationOverridesWhenAttachingToDiscoveredDaemo
 	}
 
 	submission, err := submitRuntimeClientForTest(t, runtimePlan.Wiring.runtimeClient, "hello through interactive override")
-	message := submission.Message
+	message := ""
+	if submission.Message != nil {
+		message = *submission.Message
+	}
 	if err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
 	}
@@ -184,8 +187,8 @@ func TestStartSessionServerUsesConfiguredDaemonForPromptRoundTrip(t *testing.T) 
 		if result.err != nil {
 			t.Fatalf("SubmitUserMessage: %v", result.err)
 		}
-		if result.submission.Message != "prompt round trip complete" {
-			t.Fatalf("assistant message = %q", result.submission.Message)
+		if result.submission.Message == nil || *result.submission.Message != "prompt round trip complete" {
+			t.Fatalf("assistant message = %v", result.submission.Message)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for prompt round trip")

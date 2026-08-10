@@ -3,6 +3,7 @@ import {
   defaultBoardNodeCardsSort,
   type BoardFilterInput,
   type BoardNodeCardsSort,
+  type SessionCategory,
 } from "@/api";
 
 const attentionKey = ["attention"] as const;
@@ -38,6 +39,16 @@ export const queryKeys = {
   projects: ["projects"],
   allProjectEdits: ["project-edit"],
   projectEdit: (projectID: string) => ["project-edit", projectID],
+  allProjectCatalogs: ["project-catalog"],
+  projectCatalog: (projectID: string) => ["project-catalog", projectID],
+  projectSessionCatalogs: (projectID: string) => ["project-catalog", projectID, "sessions"],
+  projectSessionCatalog: (projectID: string, category: SessionCategory) => [
+    "project-catalog",
+    projectID,
+    "sessions",
+    category,
+  ],
+  projectWorkspaceCatalog: (projectID: string) => ["project-catalog", projectID, "workspaces"],
   attention: attentionKey,
   allWorkspaces: ["workspaces"],
   workspaces: (projectID: string) => ["workspaces", projectID],

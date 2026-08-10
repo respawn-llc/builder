@@ -93,7 +93,7 @@ func (e manualMoveValueEnvironment) resolved(nodeKey workflow.ModelKey, outputNa
 type ManualMoveRequiredValue struct {
 	NodeKey       workflow.ModelKey
 	OutputName    string
-	Description   string
+	Description   *string
 	ResolvedValue *string
 }
 
@@ -392,7 +392,7 @@ func manualMoveRequiredValues(
 		) {
 			identity := manualMoveValueIdentity{NodeKey: required.NodeKey, OutputName: required.OutputName}
 			if existing, exists := merged[identity]; exists {
-				if existing.Description == "" {
+				if existing.Description == nil {
 					existing.Description = required.Description
 				}
 				if existing.ResolvedValue == nil {
@@ -442,7 +442,7 @@ func manualMoveRequiredValuesForTarget(
 		values = append(values, ManualMoveRequiredValue{
 			NodeKey:       nodeKey,
 			OutputName:    name,
-			Description:   field.Description,
+			Description:   manualMoveOptionalDescription(field.Description),
 			ResolvedValue: manualMoveSubmittedOrResolved(nodeKey, name, environment, submitted),
 		})
 	}
@@ -530,7 +530,7 @@ func manualMovePriorParameterDescription(
 	definition workflow.Definition,
 	derived workflow.DerivedWiring,
 	requirement workflow.PriorTransitionParameterRequirement,
-) string {
+) *string {
 	for _, group := range definition.TransitionGroups {
 		if workflow.ModelKey(group.TransitionID) != requirement.TransitionKey {
 			continue
@@ -542,7 +542,7 @@ func manualMovePriorParameterDescription(
 		if source.Kind() == workflow.NodeKindJoin {
 			for _, field := range derived.JoinOutputFieldsForNode(group.SourceNodeID) {
 				if field.Name == requirement.ParameterName {
-					return field.Description
+					return manualMoveOptionalDescription(field.Description)
 				}
 			}
 			continue
@@ -553,12 +553,19 @@ func manualMovePriorParameterDescription(
 			}
 			for _, parameter := range edge.Parameters {
 				if parameter.Key == requirement.ParameterName {
-					return parameter.Description
+					return manualMoveOptionalDescription(parameter.Description)
 				}
 			}
 		}
 	}
-	return ""
+	return nil
+}
+
+func manualMoveOptionalDescription(description string) *string {
+	if strings.TrimSpace(description) == "" {
+		return nil
+	}
+	return &description
 }
 
 func manualMoveSubmittedOrResolved(

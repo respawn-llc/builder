@@ -564,7 +564,7 @@ func TestOpenAITransport_UsesExpectedSessionHeadersAndPromptCacheKeysAcrossConve
 	if got, want := mainBefore.sessionID, store.Meta().SessionID; got != want {
 		t.Fatalf("main before session_id header = %q, want %q", got, want)
 	}
-	if got, want := stringValue(mainBefore.payload["prompt_cache_key"]), store.Meta().SessionID; got != want {
+	if got, want := stringValue(mainBefore.payload["prompt_cache_key"]), conversationPromptCacheKey(store.Meta().SessionID, 0); got != want {
 		t.Fatalf("main before prompt_cache_key = %q, want %q", got, want)
 	}
 

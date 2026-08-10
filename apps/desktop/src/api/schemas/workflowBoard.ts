@@ -7,6 +7,7 @@ import type {
   BoardGroup,
   BoardNodeCardsPage,
   CommentPage,
+  OffsetPage,
   PendingAsk,
   TaskDetail,
   TaskAttention,
@@ -63,6 +64,22 @@ const workflowPickerSchema = z
   .array(workflowPickerItemSchema)
   .nullish()
   .transform((value) => value ?? []);
+
+function offsetPageObjectSchema<T>(itemSchema: z.ZodType<T>) {
+  return z.object({
+    items: z.array(itemSchema),
+    next_offset: z.number().int().positive().nullable().optional(),
+  });
+}
+
+function offsetPageSchema<T>(itemSchema: z.ZodType<T>): z.ZodType<OffsetPage<T>> {
+  return offsetPageObjectSchema(itemSchema)
+    .strict()
+    .transform((value) => ({
+      items: value.items,
+      nextOffset: value.next_offset ?? null,
+    }));
+}
 
 export const taskListPageSchema: z.ZodType<TaskListPage> = z
   .object({
@@ -249,7 +266,7 @@ const manualMoveRequiredValueSchema = z
   .object({
     node_key: z.string().trim().min(1),
     output_name: z.string().trim().min(1),
-    description: z.string(),
+    description: nonBlankPreservingString.nullable(),
     resolved_value: nonBlankPreservingString.nullable().optional(),
   })
   .strict()
@@ -572,17 +589,7 @@ const activityItemSchema = z.discriminatedUnion("type", [
     })),
 ]);
 
-export const activityPageSchema: z.ZodType<ActivityPage> = z
-  .object({
-    items: z.array(activityItemSchema),
-    next_page_token: z.string().optional().default(""),
-    generated_at_unix_ms: z.number(),
-  })
-  .transform((value) => ({
-    items: value.items,
-    nextPageToken: value.next_page_token,
-    generatedAt: value.generated_at_unix_ms,
-  }));
+export const activityPageSchema: z.ZodType<ActivityPage> = offsetPageSchema(activityItemSchema);
 
 export const pendingAskListSchema = z
   .object({
@@ -629,12 +636,13 @@ export const taskCreateResponseSchema = taskSummaryResponseSchema;
 export const taskUpdateResponseSchema = taskSummaryResponseSchema;
 export const commentAddResponseSchema = z.object({ comment: commentSchema });
 
-export const commentPageSchema: z.ZodType<CommentPage> = z
-  .object({
-    comments: z.array(commentSchema).nullish().transform(emptyArray),
-    next_offset: z.number().int().positive().nullable().optional(),
+export const commentPageSchema: z.ZodType<CommentPage> = offsetPageObjectSchema(commentSchema)
+  .extend({
+    total_count: z.number().int().nonnegative(),
   })
+  .strict()
   .transform((value) => ({
-    comments: value.comments,
+    items: value.items,
     nextOffset: value.next_offset ?? null,
+    totalCount: value.total_count,
   }));

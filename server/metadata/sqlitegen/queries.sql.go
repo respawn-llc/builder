@@ -7072,58 +7072,36 @@ func (q *Queries) ListWorkflowRecordsPage(ctx context.Context, arg ListWorkflowR
 }
 
 const listWorkflowTaskActivityRows = `-- name: ListWorkflowTaskActivityRows :many
-WITH activity(
-    activity_id,
-    kind,
-    source_id,
-    occurred_at_unix_ms,
-    updated_at_unix_ms,
-    session_name
-) AS (
-    SELECT
-        CAST('comment:' || c.id AS TEXT) AS activity_id,
-        'comment' AS kind,
-        c.id AS source_id,
-        c.updated_at_unix_ms AS occurred_at_unix_ms,
-        c.updated_at_unix_ms AS updated_at_unix_ms,
-        CAST(NULL AS TEXT) AS session_name
-    FROM task_comments c
-    WHERE c.task_id = ?2
-      AND (
-          ?3 = 0
-          OR c.updated_at_unix_ms < ?4
-          OR (c.updated_at_unix_ms = ?4 AND ('comment:' || c.id) < ?5)
-      )
+SELECT
+    CAST('comment:' || c.id AS TEXT) AS activity_id,
+    'comment' AS kind,
+    c.id AS source_id,
+    c.updated_at_unix_ms AS occurred_at_unix_ms,
+    c.updated_at_unix_ms AS updated_at_unix_ms,
+    CAST(NULL AS TEXT) AS session_name
+FROM task_comments c
+WHERE c.task_id = ?3
 
-    UNION ALL
+UNION ALL
 
-    SELECT
-        CAST('session_started:' || s.id AS TEXT) AS activity_id,
-        'session_started' AS kind,
-        s.id AS source_id,
-        s.created_at_unix_ms AS occurred_at_unix_ms,
-        s.created_at_unix_ms AS updated_at_unix_ms,
-        s.name AS session_name
-    FROM sessions s
-    WHERE s.task_id = ?2
-      AND (
-          ?3 = 0
-          OR s.created_at_unix_ms < ?4
-          OR (s.created_at_unix_ms = ?4 AND ('session_started:' || s.id) < ?5)
-      )
-)
-SELECT activity_id, kind, source_id, occurred_at_unix_ms, updated_at_unix_ms, session_name
-FROM activity
+SELECT
+    CAST('session_started:' || s.id AS TEXT) AS activity_id,
+    'session_started' AS kind,
+    s.id AS source_id,
+    s.created_at_unix_ms AS occurred_at_unix_ms,
+    s.created_at_unix_ms AS updated_at_unix_ms,
+    s.name AS session_name
+FROM sessions s
+WHERE s.task_id = ?3
 ORDER BY occurred_at_unix_ms DESC, activity_id DESC
-LIMIT ?1
+LIMIT ?2
+OFFSET ?1
 `
 
 type ListWorkflowTaskActivityRowsParams struct {
-	PageLimit              int64
-	TaskID                 string
-	CursorActive           interface{}
-	CursorOccurredAtUnixMs int64
-	CursorActivityID       string
+	PageOffset int64
+	PageLimit  int64
+	TaskID     string
 }
 
 type ListWorkflowTaskActivityRowsRow struct {
@@ -7136,15 +7114,8 @@ type ListWorkflowTaskActivityRowsRow struct {
 }
 
 func (q *Queries) ListWorkflowTaskActivityRows(ctx context.Context, arg ListWorkflowTaskActivityRowsParams) ([]ListWorkflowTaskActivityRowsRow, error) {
-	rows, err := q.db.QueryContext(ctx, listWorkflowTaskActivityRows,
-		arg.PageLimit,
-		arg.TaskID,
-		arg.CursorActive,
-		arg.CursorOccurredAtUnixMs,
-		arg.CursorActivityID,
-	)
-	err = recordQueryError(ctx, err, listWorkflowTaskActivityRows, 5)
-
+	rows, err := q.db.QueryContext(ctx, listWorkflowTaskActivityRows, arg.PageOffset, arg.PageLimit, arg.TaskID)
+	err = recordQueryError(ctx, err, listWorkflowTaskActivityRows, 3)
 	if err != nil {
 		return nil, err
 	}
@@ -7159,15 +7130,15 @@ func (q *Queries) ListWorkflowTaskActivityRows(ctx context.Context, arg ListWork
 			&i.OccurredAtUnixMs,
 			&i.UpdatedAtUnixMs,
 			&i.SessionName,
-		), listWorkflowTaskActivityRows, 5); err != nil {
+		), listWorkflowTaskActivityRows, 3); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listWorkflowTaskActivityRows, 5); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listWorkflowTaskActivityRows, 3); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listWorkflowTaskActivityRows, 5); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listWorkflowTaskActivityRows, 3); err != nil {
 		return nil, err
 	}
 	return items, nil

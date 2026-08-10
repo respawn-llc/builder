@@ -4,7 +4,11 @@ import { useTranslation } from "react-i18next";
 import { boardFiltersEqual, errorMessage, type BoardColumn, type SelectedWorkflowBoard } from "@/api";
 import { useAppServices } from "@/app-facade";
 import { useProjectLabelCatalog } from "@/shared/labels";
-import { useStableCallback, type VirtualizedInfiniteListBoundaryState } from "@/ui";
+import {
+  directionalBoundary,
+  useStableCallback,
+  type VirtualizedInfiniteListBoundaryState,
+} from "@/ui";
 import { cardBelongsToColumn } from "./BoardCardMotionModel";
 import { toKanbanCardVM, type KanbanCardVM } from "./BoardColumnViewModel";
 import { useBoardFilterGeneration } from "./BoardFilterGenerationRuntime";
@@ -157,7 +161,7 @@ export function BoardColumnDataOwner({
   const previousBoundary = useMemo(
     () =>
       directionalBoundary({
-        error,
+        message: errorMessage(error),
         failed: isFetchPreviousPageError,
         loading: isFetchingPreviousPage,
         loadingLabel: t("app.loadingMore"),
@@ -169,7 +173,7 @@ export function BoardColumnDataOwner({
   const nextBoundary = useMemo(
     () =>
       directionalBoundary({
-        error,
+        message: errorMessage(error),
         failed: isFetchNextPageError,
         loading: isFetchingNextPage,
         loadingLabel: t("app.loadingMore"),
@@ -291,28 +295,4 @@ export function BoardColumnDataOwner({
   }, [column.id, stableOnDataViewRelease, stableOnReportColumnSnapshot]);
 
   return null;
-}
-
-function directionalBoundary(
-  input: Readonly<{
-    error: unknown;
-    failed: boolean;
-    loading: boolean;
-    loadingLabel: string;
-    onRetry: () => void;
-    retryLabel: string;
-  }>,
-): VirtualizedInfiniteListBoundaryState | undefined {
-  if (input.failed) {
-    return {
-      state: "error",
-      message: errorMessage(input.error),
-      retryLabel: input.retryLabel,
-      onRetry: input.onRetry,
-    };
-  }
-  if (input.loading) {
-    return { state: "loading", label: input.loadingLabel };
-  }
-  return undefined;
 }

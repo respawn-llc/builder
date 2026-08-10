@@ -626,7 +626,7 @@ func TestStreamingIgnoresAsyncLateDeltasAfterGenerateReturns(t *testing.T) {
 	}
 }
 
-func TestStreamingNoopFinalClearsLiveAssistantDelta(t *testing.T) {
+func TestStreamingBlankFinalClearsLiveAssistantDelta(t *testing.T) {
 	store := mustCreateTestSession(t)
 
 	var (
@@ -642,7 +642,7 @@ func TestStreamingNoopFinalClearsLiveAssistantDelta(t *testing.T) {
 		},
 	})
 
-	msg, err := eng.SubmitUserMessage(context.Background(), "stream noop")
+	msg, err := eng.SubmitUserMessage(context.Background(), "stream blank")
 	if err != nil {
 		t.Fatalf("submit: %v", err)
 	}
@@ -662,9 +662,7 @@ func TestStreamingNoopFinalClearsLiveAssistantDelta(t *testing.T) {
 	for _, evt := range events {
 		switch evt.Kind {
 		case EventAssistantDelta:
-			if evt.AssistantDelta == reviewerNoopToken {
-				hasDelta = true
-			}
+			hasDelta = true
 		case EventAssistantDeltaReset:
 			hasReset = true
 		case EventAssistantMessage:
@@ -673,17 +671,17 @@ func TestStreamingNoopFinalClearsLiveAssistantDelta(t *testing.T) {
 			hasModelResponse = true
 		}
 	}
-	if !hasDelta {
-		t.Fatalf("expected streamed noop delta event, got %+v", events)
+	if hasDelta {
+		t.Fatalf("did not expect streamed blank delta event, got %+v", events)
 	}
-	if !hasReset {
-		t.Fatalf("expected assistant delta reset for noop final, got %+v", events)
+	if hasReset {
+		t.Fatalf("did not expect assistant delta reset for blank final, got %+v", events)
 	}
 	if hasAssistantMessage {
-		t.Fatalf("did not expect assistant_message event for noop final, got %+v", events)
+		t.Fatalf("did not expect assistant_message event for blank final, got %+v", events)
 	}
 	if hasModelResponse {
-		t.Fatalf("did not expect model_response_received event for noop final, got %+v", events)
+		t.Fatalf("did not expect model_response_received event for blank final, got %+v", events)
 	}
 }
 

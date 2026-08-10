@@ -104,7 +104,7 @@ type chatStore struct {
 	streaming                         *assistantStreamingState
 	streamingError                    string
 	cwd                               string
-	lastCommittedAssistantFinalAnswer string
+	lastCommittedAssistantFinalAnswer *string
 	transcriptEntryCount              int
 
 	providerTokenEstimate      int
@@ -595,17 +595,20 @@ func (s *chatStore) committedEntryCount() int {
 	return s.transcriptEntryCount
 }
 
-func (s *chatStore) cachedLastCommittedAssistantFinalAnswer() string {
+func (s *chatStore) cachedLastCommittedAssistantFinalAnswer() *string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.lastCommittedAssistantFinalAnswer
+	return textutil.Pointer(s.lastCommittedAssistantFinalAnswer)
 }
 
-func (s *chatStore) seedLastCommittedAssistantFinalAnswerIfEmpty(answer string) {
+func (s *chatStore) seedLastCommittedAssistantFinalAnswerIfAbsent(answer *string) {
+	if answer == nil {
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if strings.TrimSpace(s.lastCommittedAssistantFinalAnswer) == "" {
-		s.lastCommittedAssistantFinalAnswer = answer
+	if s.lastCommittedAssistantFinalAnswer == nil {
+		s.lastCommittedAssistantFinalAnswer = textutil.Pointer(answer)
 	}
 }
 
@@ -873,21 +876,21 @@ func (s *chatStore) applyLastCommittedAssistantFinalAnswerLocked(msg llm.Message
 	s.lastCommittedAssistantFinalAnswer = applyLastCommittedAssistantFinalAnswer(s.lastCommittedAssistantFinalAnswer, msg)
 }
 
-func applyLastCommittedAssistantFinalAnswer(current string, msg llm.Message) string {
+func applyLastCommittedAssistantFinalAnswer(current *string, msg llm.Message) *string {
 	if messagePreservesLastCommittedAssistantFinalAnswer(msg) {
-		return current
+		return textutil.Pointer(current)
 	}
-	if isNoopFinalAnswer(msg) {
-		return current
+	if isBlankFinalAnswer(msg) {
+		return nil
 	}
 	if msg.Role == llm.RoleAssistant &&
 		msg.Phase != nil &&
 		*msg.Phase == llm.MessagePhaseFinal &&
 		msg.Content != nil &&
 		strings.TrimSpace(*msg.Content) != "" {
-		return *msg.Content
+		return textutil.Pointer(msg.Content)
 	}
-	return ""
+	return nil
 }
 
 type transcriptDeliverySnapshot struct {
