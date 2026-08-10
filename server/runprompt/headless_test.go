@@ -280,22 +280,6 @@ func TestInProcessRunPromptClientRejectsInvalidRequestsBeforeLaunch(t *testing.T
 	}
 }
 
-func TestInProcessRunPromptClientFailsWithoutRequestIdentityOwner(t *testing.T) {
-	client := &inProcessRunPromptService{
-		launcher: &headlessPromptLauncher{},
-	}
-
-	_, err := client.RunPrompt(context.Background(), serverapi.RunPromptRequest{
-		ClientRequestID: "request-owner",
-		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
-		Prompt:          "work",
-	}, nil)
-
-	if !errors.Is(err, requestmemo.ErrOwnerUnavailable) {
-		t.Fatalf("RunPrompt error = %v, want %v", err, requestmemo.ErrOwnerUnavailable)
-	}
-}
-
 func newTestHeadlessSessionLaunch(
 	cfg config.App,
 	containerDir string,

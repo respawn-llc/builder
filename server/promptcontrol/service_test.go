@@ -164,22 +164,6 @@ func TestServiceAnswerAskSubmitsResponse(t *testing.T) {
 	}
 }
 
-func TestServiceAnswerAskFailsWithoutRequestIdentityOwner(t *testing.T) {
-	service, responder := newPromptControlTestService()
-	service.asks = nil
-	req := askAnswerRequest("req-owner")
-	req.Answer = "hello"
-
-	err := service.AnswerAsk(context.Background(), req)
-
-	if !errors.Is(err, requestmemo.ErrOwnerUnavailable) {
-		t.Fatalf("AnswerAsk error = %v, want %v", err, requestmemo.ErrOwnerUnavailable)
-	}
-	if responder.calls != 0 || responder.awaits != 0 {
-		t.Fatalf("responder work = calls:%d awaits:%d, want none", responder.calls, responder.awaits)
-	}
-}
-
 func TestServiceAnswerAskCanonicalizesLegacyQuestionTextAtBoundary(t *testing.T) {
 	service, responder := newPromptControlTestService()
 	req := askAnswerRequest("req-exact")

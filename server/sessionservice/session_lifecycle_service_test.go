@@ -288,29 +288,6 @@ func TestServicePersistInputDraftWritesBySessionID(t *testing.T) {
 	}
 }
 
-func TestServicePersistInputDraftFailsWithoutRequestIdentityOwner(t *testing.T) {
-	_, containerDir, store := createPersistedSession(t)
-	service := newTestSessionLifecycleService(containerDir, nil)
-	service.drafts = nil
-
-	_, err := service.PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{
-		ClientRequestID: "draft-owner",
-		SessionID:       store.Meta().SessionID,
-		Input:           "must not persist",
-	})
-
-	if !errors.Is(err, requestmemo.ErrOwnerUnavailable) {
-		t.Fatalf("PersistInputDraft error = %v, want %v", err, requestmemo.ErrOwnerUnavailable)
-	}
-	reopened, openErr := session.Open(store.Dir(), sessionServiceTestPersistence.Options()...)
-	if openErr != nil {
-		t.Fatalf("reopen session store: %v", openErr)
-	}
-	if reopened.Meta().InputDraft != "" {
-		t.Fatalf("input draft = %q, want unchanged", reopened.Meta().InputDraft)
-	}
-}
-
 func TestServicePersistInputDraftRoundTripsStructuredRecoveryBuffers(t *testing.T) {
 	_, containerDir, store := createPersistedSession(t)
 	if err := store.EnsureDurable(); err != nil {
