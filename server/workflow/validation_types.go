@@ -6,6 +6,7 @@ import (
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/toolspec"
+	"core/shared/workflowcontract"
 )
 
 type ValidationContext string
@@ -144,9 +145,16 @@ type ValidationError struct {
 	Placeholder       string
 	ProviderEdgeID    EdgeID
 	RelatedIDs        []string
+	RelatedEntities   []workflowcontract.WorkflowGraphEntityReference
 	AgentRole         *string
 	RequiredTool      *toolspec.ID
 	BlocksContext     bool
+}
+
+func (e ValidationError) withRelatedEntity(entityType workflowcontract.WorkflowGraphEntityType, entityID string) ValidationError {
+	e.RelatedIDs = append(e.RelatedIDs, entityID)
+	e.RelatedEntities = append(e.RelatedEntities, workflowcontract.WorkflowGraphEntityReference{EntityType: entityType, EntityID: entityID})
+	return e
 }
 
 type RuntimeSupportEdge struct {

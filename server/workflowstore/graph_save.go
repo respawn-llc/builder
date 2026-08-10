@@ -212,7 +212,7 @@ func (s *Store) planWorkflowGraphSave(ctx context.Context, q *sqlitegen.Queries,
 			Code:             "validation_failed",
 			Message:          "Workflow graph has blocking validation errors.",
 			Count:            int64(len(blockingValidationErrors)),
-			AffectedEntities: workflowGraphEntityReferencesFromValidationErrors(blockingValidationErrors, prepared),
+			AffectedEntities: workflowGraphEntityReferencesFromValidationErrors(blockingValidationErrors),
 		})
 	}
 	plan.Blockers = blockers
@@ -652,12 +652,8 @@ func canonicalWorkflowGraphEntityReferences(references []WorkflowGraphEntityRefe
 	})
 }
 
-func workflowGraphEntityReferencesFromValidationErrors(errors []workflow.ValidationError, prepared preparedWorkflowGraphSave) []WorkflowGraphEntityReference {
+func workflowGraphEntityReferencesFromValidationErrors(errors []workflow.ValidationError) []WorkflowGraphEntityReference {
 	entities := make([]WorkflowGraphEntityReference, 0, len(errors))
-	knownNodeGroups := workflowGraphNodeGroupIDs(prepared.nodeGroups)
-	knownNodes := workflowGraphNodeIDs(prepared.nodes)
-	knownTransitionGroups := workflowGraphTransitionGroupIDs(prepared.transitionGroups)
-	knownEdges := workflowGraphEdgeIDs(prepared.edges)
 	for _, validationError := range errors {
 		if validationError.NodeID != "" {
 			entities = append(entities, WorkflowGraphEntityReference{EntityType: WorkflowGraphEntityTypeNode, EntityID: string(validationError.NodeID)})
@@ -671,20 +667,7 @@ func workflowGraphEntityReferencesFromValidationErrors(errors []workflow.Validat
 		if validationError.ProviderEdgeID != "" {
 			entities = append(entities, WorkflowGraphEntityReference{EntityType: WorkflowGraphEntityTypeEdge, EntityID: string(validationError.ProviderEdgeID)})
 		}
-		for _, relatedID := range validationError.RelatedIDs {
-			if knownNodeGroups[relatedID] {
-				entities = append(entities, WorkflowGraphEntityReference{EntityType: WorkflowGraphEntityTypeNodeGroup, EntityID: relatedID})
-			}
-			if knownNodes[workflow.NodeID(relatedID)] {
-				entities = append(entities, WorkflowGraphEntityReference{EntityType: WorkflowGraphEntityTypeNode, EntityID: relatedID})
-			}
-			if knownTransitionGroups[workflow.TransitionGroupID(relatedID)] {
-				entities = append(entities, WorkflowGraphEntityReference{EntityType: WorkflowGraphEntityTypeTransitionGroup, EntityID: relatedID})
-			}
-			if knownEdges[workflow.EdgeID(relatedID)] {
-				entities = append(entities, WorkflowGraphEntityReference{EntityType: WorkflowGraphEntityTypeEdge, EntityID: relatedID})
-			}
-		}
+		entities = append(entities, validationError.RelatedEntities...)
 	}
 	return canonicalWorkflowGraphEntityReferences(entities)
 }
