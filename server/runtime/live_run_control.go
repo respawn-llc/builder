@@ -169,6 +169,38 @@ func (e *Engine) TryInterruptActiveRun() (bool, error) {
 	return true, nil
 }
 
+func (e *Engine) TryInterruptActiveAgentTurn() (bool, error) {
+	if e == nil {
+		return false, nil
+	}
+	e.ensureOrchestrationCollaborators()
+	var (
+		liveRunInterrupted bool
+		taggedQueueItems   map[runtimeids.QueueItemID]struct{}
+		goalLoop           bool
+	)
+	tracker := goalLoopInterruptTracker{engine: e}
+	interruptedSnapshot, err := e.stepLifecycle.InterruptCurrentAgentTurn(func(snapshot *RunSnapshot) {
+		liveRunInterrupted, taggedQueueItems, goalLoop = e.liveRun.interruptMatchingStep(snapshot)
+		tracker.match = !liveRunInterrupted || goalLoop
+		tracker.onSnapshot(snapshot)
+	})
+	tracker.resolve(err, interruptedSnapshot)
+	if liveRunInterrupted {
+		e.failStoppedLiveRunQueueItems(taggedQueueItems)
+	}
+	if interruptedSnapshot == nil {
+		return liveRunInterrupted, err
+	}
+	if err != nil {
+		return true, err
+	}
+	if goalLoop && !tracker.pending && e.goalActive() {
+		e.goalLoopState().Suspend()
+	}
+	return true, nil
+}
+
 type goalLoopInterruptTracker struct {
 	engine  *Engine
 	match   bool
@@ -195,14 +227,22 @@ func (t *goalLoopInterruptTracker) resolve(err error, snapshot *RunSnapshot) {
 }
 
 func (e *Engine) QueueUserMessageForActiveRun(ctx context.Context, text string, clientRequestID runtimeids.RuntimeClientRequestID, beforeQueue func() error) (QueuedUserMessage, bool, error) {
-	return e.queueMessageForActiveRun(ctx, llm.Message{Role: llm.RoleUser, Content: textutil.Value(text)}, clientRequestID, beforeQueue)
+	return e.queueMessageForActiveRun(ctx, llm.Message{Role: llm.RoleUser, Content: textutil.Value(text)}, clientRequestID, nil, beforeQueue, nil)
+}
+
+func (e *Engine) QueueUserMessageForActiveRunWithAcceptance(ctx context.Context, text string, clientRequestID runtimeids.RuntimeClientRequestID, accept CommandAcceptance) (QueuedUserMessage, bool, error) {
+	return e.QueueUserMessageForActiveRunWithHooks(ctx, text, clientRequestID, nil, accept)
+}
+
+func (e *Engine) QueueUserMessageForActiveRunWithHooks(ctx context.Context, text string, clientRequestID runtimeids.RuntimeClientRequestID, onActive func(), accept CommandAcceptance) (QueuedUserMessage, bool, error) {
+	return e.queueMessageForActiveRun(ctx, llm.Message{Role: llm.RoleUser, Content: textutil.Value(text)}, clientRequestID, onActive, nil, accept)
 }
 
 func (e *Engine) QueueAgentSteerForActiveRun(ctx context.Context, steer AgentSteer, clientRequestID runtimeids.RuntimeClientRequestID, beforeQueue func() error) (QueuedUserMessage, bool, error) {
-	return e.queueMessageForActiveRun(ctx, steer.Message(), clientRequestID, beforeQueue)
+	return e.queueMessageForActiveRun(ctx, steer.Message(), clientRequestID, nil, beforeQueue, nil)
 }
 
-func (e *Engine) queueMessageForActiveRun(ctx context.Context, message llm.Message, clientRequestID runtimeids.RuntimeClientRequestID, beforeQueue func() error) (QueuedUserMessage, bool, error) {
+func (e *Engine) queueMessageForActiveRun(ctx context.Context, message llm.Message, clientRequestID runtimeids.RuntimeClientRequestID, onActive func(), beforeQueue func() error, accept CommandAcceptance) (QueuedUserMessage, bool, error) {
 	if e == nil {
 		return QueuedUserMessage{}, false, ErrNoActiveLiveRun
 	}
@@ -220,41 +260,53 @@ func (e *Engine) queueMessageForActiveRun(ctx context.Context, message llm.Messa
 	if !admitted {
 		return QueuedUserMessage{}, false, ErrNoActiveLiveRun
 	}
+	if onActive != nil {
+		onActive()
+	}
 	committed := false
 	defer func() {
 		if !committed {
 			e.liveRun.rollbackAdmission(admission)
 		}
 	}()
-	if beforeQueue != nil {
-		if err := beforeQueue(); err != nil {
-			return QueuedUserMessage{}, false, err
-		}
-	}
 	if err := ctx.Err(); err != nil {
 		return QueuedUserMessage{}, false, err
 	}
 	item := QueuedUserMessage{ID: runtimeids.NewQueueItemID().String(), ClientRequestID: clientRequestID.String(), Message: message}
-	finalized := e.liveRun.finishAdmission(admission, mustQueueItemID(item.ID), func(queueItemID string) {
-		e.markQueuedUserInjectionForAutoDrain(queueItemID)
-	})
-	if !finalized {
-		return QueuedUserMessage{}, false, context.Canceled
-	}
-	committed = true
-	e.outputMutationMu.Lock()
-	queuedItem, queueErr := e.messageFlow.QueueUserMessageWithID(item)
-	if queueErr != nil {
+	accepted, err := runCommandAcceptance(accept, func() (bool, error) {
+		if beforeQueue != nil {
+			if err := beforeQueue(); err != nil {
+				return false, err
+			}
+		}
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		finalized := e.liveRun.finishAdmission(admission, mustQueueItemID(item.ID), func(queueItemID string) {
+			e.markQueuedUserInjectionForAutoDrain(queueItemID)
+		})
+		if !finalized {
+			return false, context.Canceled
+		}
+		committed = true
+		e.outputMutationMu.Lock()
+		queuedItem, queueErr := e.messageFlow.QueueUserMessageWithID(item)
+		if queueErr != nil {
+			e.outputMutationMu.Unlock()
+			queueItemID := mustQueueItemID(item.ID)
+			e.liveRun.finishQueueItemPublication(queueItemID)
+			e.unmarkQueuedUserInjectionForAutoDrain(item.ID)
+			e.completeLiveRunQueueItems(map[string]struct{}{item.ID: {}})
+			return false, queueErr
+		}
+		item = queuedItem
+		e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
 		e.outputMutationMu.Unlock()
-		queueItemID := mustQueueItemID(item.ID)
-		e.liveRun.finishQueueItemPublication(queueItemID)
-		e.unmarkQueuedUserInjectionForAutoDrain(item.ID)
-		e.completeLiveRunQueueItems(map[string]struct{}{item.ID: {}})
-		return QueuedUserMessage{}, false, queueErr
+		return true, nil
+	})
+	if err := commandAcceptanceResult(accepted, err); err != nil {
+		return QueuedUserMessage{}, false, err
 	}
-	item = queuedItem
-	e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
-	e.outputMutationMu.Unlock()
 	queueItemID := mustQueueItemID(item.ID)
 	if e.liveRun.finishQueueItemPublication(queueItemID) {
 		e.failStoppedLiveRunQueueItems(map[runtimeids.QueueItemID]struct{}{queueItemID: {}})
@@ -660,11 +712,28 @@ func (c *liveRunCoordinator) completeQueueItems(ids map[runtimeids.QueueItemID]s
 }
 
 func (c *liveRunCoordinator) interrupt() (bool, map[runtimeids.QueueItemID]struct{}, bool) {
+	return c.interruptWhere(func(*liveRunGroup) bool {
+		return true
+	})
+}
+
+func (c *liveRunCoordinator) interruptMatchingStep(snapshot *RunSnapshot) (bool, map[runtimeids.QueueItemID]struct{}, bool) {
+	if snapshot == nil {
+		return false, nil, false
+	}
+	runID := mustRunID(snapshot.RunID)
+	stepID := mustStepID(snapshot.StepID)
+	return c.interruptWhere(func(group *liveRunGroup) bool {
+		return group.runID == runID && group.stepID == stepID
+	})
+}
+
+func (c *liveRunCoordinator) interruptWhere(matches func(*liveRunGroup) bool) (bool, map[runtimeids.QueueItemID]struct{}, bool) {
 	c.queueFlushCommitMu.Lock()
 	defer c.queueFlushCommitMu.Unlock()
 	c.mu.Lock()
 	group := c.current
-	if group == nil {
+	if group == nil || !matches(group) {
 		c.mu.Unlock()
 		return false, nil, false
 	}

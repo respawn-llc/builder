@@ -110,12 +110,12 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		Background:      runtimeSupport.Background,
 		StoreOptions:    storeOptions,
 		PromptFeed:      runtimeRegistry,
-		EventFeed: func(resource sessionruntime.AgentResourceDescriptor, event runtime.Event) {
-			if err := runtimeRegistry.PublishAuthorityRuntimeEvent(resource.Ref, event); err != nil {
+		EventFeed: func(resource runtimeids.SessionResourceRef, event runtime.Event) {
+			if err := runtimeRegistry.PublishAuthorityRuntimeEvent(resource, event); err != nil {
 				if cfg.Settings.Debug {
-					panic(fmt.Sprintf("publish runtime event for session resource %v: %v", resource.Ref, err))
+					panic(fmt.Sprintf("publish runtime event for session resource %v: %v", resource, err))
 				}
-				fmt.Fprintf(os.Stderr, "publish runtime event for session resource %v: %v\n", resource.Ref, err)
+				fmt.Fprintf(os.Stderr, "publish runtime event for session resource %v: %v\n", resource, err)
 			}
 		},
 		ResourceLifecycle: runtimeRegistry,

@@ -146,11 +146,7 @@ func (m *uiModel) applyTranscriptRuntimeReadModelUpdate(admission runtimeTupleMe
 	}
 	var cmd tea.Cmd
 	if m.hasPendingInterrupt() {
-		if m.pendingInterruptMissingInputReconciliation(m.cachedRuntimeMainView()) {
-			cmd = m.requestInputReconciliationRefresh()
-		} else {
-			cmd = m.acknowledgePendingInterrupt()
-		}
+		cmd = m.acknowledgePendingInterrupt()
 	}
 	return tea.Batch(cmd, m.releaseDeferredRuntimeSyncs())
 }
@@ -219,6 +215,7 @@ func (m *uiModel) applyTranscriptSessionIdentity(identity clientui.TranscriptSes
 	if previousSessionID == "" || previousSessionID == nextSessionID {
 		return titleCmd
 	}
+	m.interruptedQueueEventIDs = nil
 	promptCmd := m.reconcileTranscriptPrompts(nil)
 	rollbackCmd := m.discardRollbackStateForSessionReplacement()
 	cancelCmd := m.cancelPendingDetailTranscriptRequest()
@@ -254,10 +251,20 @@ func (m *uiModel) applyTranscriptUserMessageFlushed(flushed clientui.TranscriptU
 }
 
 func (m *uiModel) applyTranscriptQueuedMessageState(state clientui.TranscriptQueuedMessageState) tea.Cmd {
+	if state.Status == clientui.QueuedUserMessageFailed &&
+		state.FailureReason != nil &&
+		*state.FailureReason == clientui.QueuedUserMessageFailureStopped &&
+		m.hasPendingInterrupt() {
+		return m.acknowledgePendingInterrupt()
+	}
+	if m.consumeInterruptedQueueEvent(state) {
+		return nil
+	}
+	queueItemID := state.QueueItemID
 	ids := runtimeOperationIdentityStrings([]clientui.RuntimeOperationRef{{
 		Kind:            clientui.RuntimeOperationKindQueuedMessage,
 		ClientRequestID: state.ClientRequestID,
-		QueueItemID:     &state.QueueItemID,
+		QueueItemID:     &queueItemID,
 	}})
 	if state.Status == clientui.QueuedUserMessageAccepted {
 		m.registerSteeredQueuedUserMessage(clientui.QueuedUserMessage{
@@ -285,6 +292,22 @@ func (m *uiModel) applyTranscriptQueuedMessageState(state clientui.TranscriptQue
 		uiStatusNoticeReplace,
 		"",
 	))
+}
+
+func (m *uiModel) consumeInterruptedQueueEvent(state clientui.TranscriptQueuedMessageState) bool {
+	if m == nil || len(m.interruptedQueueEventIDs) == 0 {
+		return false
+	}
+	clientRequestID := state.ClientRequestID.String()
+	queueItemID := state.QueueItemID.String()
+	_, clientMatch := m.interruptedQueueEventIDs[clientRequestID]
+	_, queueMatch := m.interruptedQueueEventIDs[queueItemID]
+	if !clientMatch && !queueMatch {
+		return false
+	}
+	m.rememberInterruptedQueueEventID(clientRequestID)
+	m.rememberInterruptedQueueEventID(queueItemID)
+	return true
 }
 
 func (m *uiModel) reconcileTranscriptQueuedMessages(states []clientui.TranscriptQueuedMessageState) {
@@ -320,12 +343,12 @@ func (m *uiModel) reconcileTranscriptQueuedMessages(states []clientui.Transcript
 	}
 }
 
-func runtimeOperationIdentityStrings(operations []clientui.RuntimeOperationRef) []string {
-	ids := make([]string, 0, len(operations)*2)
-	for _, operation := range operations {
-		ids = append(ids, operation.ClientRequestID.String())
-		if operation.QueueItemID != nil {
-			ids = append(ids, operation.QueueItemID.String())
+func runtimeOperationIdentityStrings(refs []clientui.RuntimeOperationRef) []string {
+	ids := make([]string, 0, len(refs)*2)
+	for _, ref := range refs {
+		ids = append(ids, ref.ClientRequestID.String())
+		if ref.QueueItemID != nil {
+			ids = append(ids, ref.QueueItemID.String())
 		}
 	}
 	return ids

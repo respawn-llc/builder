@@ -14,7 +14,6 @@ func TestSessionMetadataDocumentRoundTripsWorkflowNeutralFields(t *testing.T) {
 	document := sessionMetadataDocument{
 		WorkspaceRoot:                   "/workspace",
 		WorkspaceContainer:              "workspace",
-		InputDraftRecoveryBuffers:       []session.InputDraftRecoveryBuffer{{Kind: "user", Text: "draft"}},
 		ConversationEstablished:         true,
 		PromptCacheLineageGeneration:    7,
 		HeadlessActive:                  true,

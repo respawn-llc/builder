@@ -41,23 +41,20 @@
 - Pending messages have no fixed count limit and survive only until delivery or process exit.
 - Pending messages render as a visible pane between transcript and input until drained. The pane shows both queued post-turn messages and pending steering messages, each in FIFO order; queued messages render above steering messages.
 - There is no standalone per-item removal or reordering affordance. The only user-facing removal is the busy `Ctrl+C` interrupt, which drains both pending queues into the main input (see Interrupts And Exit).
+- When the live TUI observes an interrupt, it best-effort restores pending Queue and Steer messages to the composer in submission order, followed by any existing composer draft.
+- Pending Queue and Steer messages are not persisted for restoration. Process exit before the TUI observes the interrupt loses them.
 - The following creation-failure behavior applies to every queued message or Steer, including Allow commentary.
 - If Kent cannot create the queued message or Steer, the failed message returns to the composer and requires an explicit user action to send again. The failed message does not remain pending or retry automatically.
 - The restored text is the exact message Kent attempted to submit. If the composer already contains a newer draft, Kent keeps that draft first, inserts one blank line, appends the failed message, and places the cursor at the end.
 - The failure appears as a transient status-line error using the ordinary submission failure detail. It does not change the activity indicator. The TUI does not create a transcript feedback row for this failure.
 - If the failed message is Allow commentary, Kent delivers the Approval answer independently while the transient notice is active. Successful Allow commentary creation still precedes the Approval answer.
-- Across interrupt recovery and a late creation result, Kent must not lose message content. Duplicate editable text is allowed.
 
 ## Interrupts And Exit
 
 - `Ctrl+C` interrupts only an active Agent Turn. It stops the current Agent Step and active tool, keeps the Session available, adds the Detail Mode control message `User interrupted you`, returns to idle with input ready, and requires explicit user text to resume.
 - `Ctrl+C` does not cancel a submission before its Agent Turn starts.
-- The interrupt also drains pending messages: queued and steering queue contents populate the main input, so nothing typed is lost and the user can edit or resend.
+- The interrupt also drains pending messages into the main input so the user can edit or resend them.
 - `Ctrl+C` without an active `Agent Turn` exits the TUI. A submission already sent to the server may start or continue after the client detaches.
-- Draft recovery does not depend on a graceful shutdown callback. Closing the terminal window or otherwise losing the TUI process preserves the current main-input draft; opening the session later seeds the input from that draft verbatim.
-- Structured draft-recovery entries preserve only their recovery category and text. They carry no runtime operation, request, or queue identity.
-- Recovered entries return as editable composer text and are never reconstructed into operational queues, resumed, or replayed automatically; sending them again requires an explicit user action.
-- Older recovery metadata that contains operation or queue identity remains readable. Kent ignores the obsolete identity while preserving the recovery category and text, without an upgrade warning.
 - Graceful exit through `Ctrl+C` or `/exit` saves the current composer draft before releasing the Session attachment.
 - `/exit` detaches the client and does not interrupt the Active Session Runtime. Active work continues after this TUI releases its attachment.
 - Session-navigation commands persist the outgoing draft, resolve the typed transition, release the originating attachment, and only then plan or attach the destination. A release failure aborts navigation before destination attachment; an `/exit` release failure is reported after terminal teardown and exits nonzero.

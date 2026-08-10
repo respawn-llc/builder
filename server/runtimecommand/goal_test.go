@@ -66,7 +66,7 @@ func (goalAuthorityClient) ProviderCapabilities(context.Context) (llm.ProviderCa
 
 func TestGoalAuthorityDormantSetPersistsMetadataBeforeOneNoticeWithoutRuntime(t *testing.T) {
 	var liveEvents int
-	store, authority, goalAuthority, observer := newGoalAuthorityFixture(t, func(sessionruntime.AgentResourceDescriptor, runtime.Event) {
+	store, authority, goalAuthority, observer := newGoalAuthorityFixture(t, func(runtimeids.SessionResourceRef, runtime.Event) {
 		liveEvents++
 	})
 	observer.resetSnapshots()
@@ -201,7 +201,7 @@ func TestGoalAuthorityLiveSetUsesRuntimeCommand(t *testing.T) {
 	var eventMu sync.Mutex
 	var goalFeedbackEvents int
 	var goalStatusEvents int
-	store, authority, goalAuthority, observer := newGoalAuthorityFixture(t, func(_ sessionruntime.AgentResourceDescriptor, event runtime.Event) {
+	store, authority, goalAuthority, observer := newGoalAuthorityFixture(t, func(_ runtimeids.SessionResourceRef, event runtime.Event) {
 		eventMu.Lock()
 		defer eventMu.Unlock()
 		if event.Kind == runtime.EventGoalStatusUpdated && event.GoalStatus != nil {

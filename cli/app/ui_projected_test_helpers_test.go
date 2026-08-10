@@ -203,8 +203,8 @@ func newProjectedAuthorityRuntime(
 		PersistenceRoot:   t.TempDir(),
 		StoreOptions:      persistence.Options(),
 		ResourceLifecycle: activity,
-		EventFeed: func(resource sessionruntime.AgentResourceDescriptor, event runtime.Event) {
-			activity.PublishAuthorityRuntimeEvent(resource.Ref, event)
+		EventFeed: func(resource runtimeids.SessionResourceRef, event runtime.Event) {
+			activity.PublishAuthorityRuntimeEvent(resource, event)
 		},
 	})
 	if _, err := authority.OpenRuntime(t.Context(), sessionruntime.RuntimeOpenRequest{

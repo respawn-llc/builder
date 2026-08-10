@@ -12,7 +12,6 @@ import (
 	"core/cli/tui/ongoing"
 	"core/shared/apicontract"
 	"core/shared/config"
-	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -33,7 +32,6 @@ type uiLoopRequest struct {
 	initialPrompt                string
 	initialPromptHistoryRecorded bool
 	initialInput                 string
-	recoveryBuffers              []serverapi.SessionDraftRecoveryBuffer
 	sessionTitle                 *string
 	modelContractLocked          bool
 	configuredModelName          string
@@ -147,7 +145,6 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 		WithUIStartupSubmit(request.initialPrompt),
 		WithUIStartupSubmitPromptHistoryRecorded(request.initialPromptHistoryRecorded),
 		WithUIInitialInput(request.initialInput),
-		WithUIInitialRecoveryBuffers(request.recoveryBuffers),
 		WithUISessionID(sessionID),
 		WithUIStatusConfig(request.statusConfig),
 		WithUITerminalCursorState(terminalCursor),

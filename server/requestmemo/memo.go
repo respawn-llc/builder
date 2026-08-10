@@ -18,6 +18,11 @@ const (
 // with errors.Is rather than comparing message text.
 var ErrClientRequestIDReused = errors.New("client_request_id was reused with different parameters")
 
+// ErrCapacityExceeded is returned before execution when every bounded memo
+// entry is still in flight. Executing outside the memo would violate replay
+// ownership and allow duplicate effects.
+var ErrCapacityExceeded = errors.New("request memo capacity is exhausted by in-flight requests")
+
 type Memo[Req any, Resp any] struct {
 	mu         sync.Mutex
 	entries    map[string]*entry[Req, Resp]
@@ -71,7 +76,7 @@ func (m *Memo[Req, Resp]) Do(ctx context.Context, requestID string, req Req, sam
 		}
 		if !m.ensureCapacityForInsertLocked() {
 			m.mu.Unlock()
-			return run(ctx)
+			return zero, ErrCapacityExceeded
 		}
 		now := m.now()
 		e := &entry[Req, Resp]{req: req, done: make(chan struct{}), createdAt: now}
