@@ -108,9 +108,26 @@ func (c *CurrentNodeController) admit(runID currentNodeRunID) (err error) {
 	preparation := run.preparation
 	delivery := run.taskPromptDelivery
 	policy := run.policy
+	c.mu.Unlock()
+	if preparation != nil {
+		if err := preparation(ctx); err != nil {
+			return err
+		}
+	}
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return errors.New("current node workflow controller is closed")
+	}
+	run = c.runs[runID]
+	if run == nil || !run.launching() || c.currentRuns[run.key] != runID {
+		c.mu.Unlock()
+		return sessionruntime.ErrExecutionNoLongerLive
+	}
 	profile := CurrentNodeAgentLaunchProfile{
 		Operation:     run.operation,
 		OwnerOrdering: run.ownerOrdering,
+		RunPrompt:     run.runPromptProfile,
 	}
 	if run.operationResult != nil {
 		profile.Complete = func(outcome runtimecommand.SessionAgentOperationOutcome, err error) {
@@ -118,21 +135,10 @@ func (c *CurrentNodeController) admit(runID currentNodeRunID) (err error) {
 		}
 	}
 	c.mu.Unlock()
-	if preparation != nil {
-		if err := preparation(ctx); err != nil {
-			return err
-		}
-	}
-	assignment, err := c.ensureAssignment(ctx, reference, delivery)
+	assignment, err := c.ensureAssignment(ctx, reference, delivery, profile)
 	if err != nil {
 		return err
 	}
-	c.mu.Lock()
-	if c.closed {
-		c.mu.Unlock()
-		return errors.New("current node workflow controller is closed")
-	}
-	c.mu.Unlock()
 
 	var lease sessionruntime.WorkflowExecutionLease
 retryAdmission:
@@ -311,8 +317,24 @@ func (c *CurrentNodeController) ensureAssignment(
 	ctx context.Context,
 	reference workflow.CurrentNodeReference,
 	delivery workflowruntime.TaskPromptDelivery,
+	profile CurrentNodeAgentLaunchProfile,
 ) (CurrentNodeAssignmentEnsure, error) {
-	assignment, err := c.assignmentEnsurer.EnsureCurrentNodeAssignment(ctx, reference, delivery)
+	var assignment CurrentNodeAssignmentEnsure
+	var err error
+	if profile.RunPrompt != nil {
+		profileAware, ok := c.assignmentEnsurer.(CurrentNodeProfileAssignmentEnsurer)
+		if !ok {
+			return nil, errors.New("current node assignment ensurer does not support RunPrompt profiles")
+		}
+		assignment, err = profileAware.EnsureCurrentNodeAssignmentWithProfile(
+			ctx,
+			reference,
+			delivery,
+			profile,
+		)
+	} else {
+		assignment, err = c.assignmentEnsurer.EnsureCurrentNodeAssignment(ctx, reference, delivery)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("ensure current node assignment %v: %w", reference, err)
 	}
@@ -450,6 +472,9 @@ func (c *CurrentNodeController) runAdmission(runID currentNodeRunID) {
 	if err := c.admit(runID); err != nil {
 		c.mu.Lock()
 		current := c.runs[runID]
+		if current != nil {
+			current.admissionErr = err
+		}
 		interrupted := current != nil && current.stopping()
 		c.mu.Unlock()
 		if errors.Is(err, context.Canceled) ||

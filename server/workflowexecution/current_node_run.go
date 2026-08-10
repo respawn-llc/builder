@@ -81,6 +81,7 @@ type currentNodeRun struct {
 	launchContext            context.Context
 	launchCancel             context.CancelFunc
 	admissionDone            chan struct{}
+	admissionErr             error
 	lease                    *sessionruntime.WorkflowExecutionLease
 	exactScopeID             *runtimeids.ExecutionScopeID
 	agentCapacity            bool
@@ -96,6 +97,8 @@ type currentNodeRun struct {
 	operation                runtimecommand.SessionAgentOperationDriver
 	operationResult          chan currentNodeOperationResult
 	operationCompleted       bool
+	runPromptProfile         *WorkflowRunPromptProfile
+	runPromptProfileReady    chan struct{}
 }
 
 type currentNodeOperationResult struct {

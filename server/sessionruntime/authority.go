@@ -374,6 +374,26 @@ func (a *Authority) SessionExecution(sessionID runtimeids.SessionID) (ExecutionH
 	return resource.currentExecution()
 }
 
+// SessionHasActiveOrRetiringExecution reports whether the Session still has an
+// Exact execution or a resource retirement caused by one. It is an admission
+// check only; it does not expose either state as a new execution authority.
+func (a *Authority) SessionHasActiveOrRetiringExecution(sessionID runtimeids.SessionID) bool {
+	if a == nil || sessionID.IsZero() {
+		return false
+	}
+	a.mu.Lock()
+	resource := a.resources[sessionID]
+	a.mu.Unlock()
+	if resource == nil {
+		return false
+	}
+	resource.mu.Lock()
+	defer resource.mu.Unlock()
+	return resource.current != nil ||
+		resource.state == AgentResourceDraining ||
+		resource.ownerlessDisposition == agentResourceRetireWhenIdle
+}
+
 func (a *Authority) StopWorkflowExecutions(ctx context.Context) error {
 	if a == nil {
 		return nil

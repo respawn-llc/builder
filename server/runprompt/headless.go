@@ -16,6 +16,7 @@ import (
 	"core/server/sessionlaunch"
 	"core/server/sessionruntime"
 	askquestion "core/server/tools"
+	"core/server/workflowexecution"
 	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
@@ -38,12 +39,17 @@ type promptHistoryStore interface {
 }
 
 type HeadlessBootstrap struct {
-	SessionLaunch    *sessionlaunch.Service
-	FastModeState    *runtime.FastModeState
-	PromptHistory    promptHistoryStore
-	RuntimeAuthority *sessionruntime.Authority
+	SessionLaunch           *sessionlaunch.Service
+	FastModeState           *runtime.FastModeState
+	PromptHistory           promptHistoryStore
+	RuntimeAuthority        *sessionruntime.Authority
+	WorkflowSessionPrompter WorkflowSessionRunPrompter
 	// ManagedWorktreeBaseDir is the server-owned managed Worktree namespace.
 	ManagedWorktreeBaseDir string
+}
+
+type WorkflowSessionRunPrompter interface {
+	Begin(context.Context, runtimeids.SessionID) (workflowexecution.WorkflowRunPromptBeginResult, error)
 }
 
 func NewInProcessRunPromptClient(boot HeadlessBootstrap) apicontract.RunPromptService {
@@ -58,16 +64,46 @@ type headlessPromptLauncher struct {
 	boot HeadlessBootstrap
 }
 
-func (l *headlessPromptLauncher) prepareHeadlessPrompt(ctx context.Context, req serverapi.RunPromptRequest, progress serverapi.RunPromptProgressSink) (*headlessPromptRuntime, error) {
+func (l *headlessPromptLauncher) prepareHeadlessPrompt(
+	ctx context.Context,
+	req serverapi.RunPromptRequest,
+	progress serverapi.RunPromptProgressSink,
+) (preparedRuntime *headlessPromptRuntime, err error) {
 	if l.boot.SessionLaunch == nil {
 		return nil, errors.New("headless session launch service is required")
 	}
 	selectedSessionID, openingExisting := req.Intent.SessionID()
 	if openingExisting && l.boot.RuntimeAuthority != nil {
-		if _, active := l.boot.RuntimeAuthority.SessionExecution(selectedSessionID); active {
+		if l.boot.RuntimeAuthority.SessionHasActiveOrRetiringExecution(selectedSessionID) {
 			return nil, ErrSessionRunning
 		}
 	}
+	var workflowPreparation workflowexecution.WorkflowRunPromptPreparation
+	if openingExisting && l.boot.WorkflowSessionPrompter != nil {
+		begin, err := l.boot.WorkflowSessionPrompter.Begin(ctx, selectedSessionID)
+		if err != nil {
+			if errors.Is(err, workflowexecution.ErrWorkflowRunPromptSessionRunning) {
+				return nil, ErrSessionRunning
+			}
+			return nil, err
+		}
+		if begin.Handled {
+			if begin.Preparation == nil {
+				return nil, errors.New("workflow RunPrompt begin returned no preparation")
+			}
+			workflowPreparation = begin.Preparation
+		}
+	}
+	preparationComplete := false
+	defer func() {
+		if !preparationComplete && workflowPreparation != nil {
+			err = errors.Join(
+				err,
+				workflowPreparation.Stop(context.Background()),
+				workflowPreparation.Close(context.Background()),
+			)
+		}
+	}()
 	launchReq := serverapi.SessionPlanRequest{
 		ClientRequestID: req.ClientRequestID,
 		Mode:            serverapi.SessionLaunchModeHeadless,
@@ -87,7 +123,7 @@ func (l *headlessPromptLauncher) prepareHeadlessPrompt(ctx context.Context, req 
 	if err != nil {
 		return nil, err
 	}
-	runtimePlan, err := l.prepareRuntime(ctx, plan, progress, agentSteer)
+	runtimePlan, err := l.prepareRuntime(ctx, plan, progress, agentSteer, workflowPreparation)
 	if err != nil {
 		return nil, err
 	}
@@ -100,6 +136,7 @@ func (l *headlessPromptLauncher) prepareHeadlessPrompt(ctx context.Context, req 
 		}
 		sessionStarted = &serverapi.RunPromptSessionStarted{SessionID: sessionID}
 	}
+	preparationComplete = true
 	return &headlessPromptRuntime{
 		plan:           runtimePlan,
 		warnings:       result.Warnings,
@@ -124,18 +161,19 @@ func agentSteerForRunPrompt(req serverapi.RunPromptRequest, openingExisting bool
 }
 
 type headlessRuntimePlan struct {
-	handle     sessionruntime.ExecutionHandle
+	handle     runPromptExecutionHandle
 	sessionID  string
-	submission chan headlessPromptSubmission
+	submission chan workflowexecution.WorkflowRunPromptSubmission
 	content    string
 	name       string
 	onActive   func()
 	agentSteer *runtime.AgentSteer
 }
 
-type headlessPromptSubmission struct {
-	prompt string
-	steer  *runtime.AgentSteer
+type runPromptExecutionHandle interface {
+	Stop(context.Context) error
+	Wait(context.Context) (sessionruntime.ExecutionResult, error)
+	Close(context.Context) error
 }
 
 func (p *headlessRuntimePlan) PromptHistoryText(fallback string) string {
@@ -156,7 +194,13 @@ func (p *headlessRuntimePlan) CloseWithFailure(failed bool) error {
 	return errors.Join(stopErr, p.handle.Close(context.Background()))
 }
 
-func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch.SessionPlan, progress serverapi.RunPromptProgressSink, agentSteer *runtime.AgentSteer) (*headlessRuntimePlan, error) {
+func (l *headlessPromptLauncher) prepareRuntime(
+	ctx context.Context,
+	plan launch.SessionPlan,
+	progress serverapi.RunPromptProgressSink,
+	agentSteer *runtime.AgentSteer,
+	workflowPreparation workflowexecution.WorkflowRunPromptPreparation,
+) (*headlessRuntimePlan, error) {
 	if l.boot.RuntimeAuthority == nil {
 		return nil, errors.New("headless run prompt requires a session runtime authority")
 	}
@@ -194,7 +238,7 @@ func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch
 	for _, line := range runlog.FormatConfigSourceLines(plan.Source.Sources) {
 		startLogLines = append(startLogLines, "config.source "+line)
 	}
-	runtimePlan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
+	runtimeOptions := sessionruntime.AgentRuntimePlanOptions{
 		Settings:          plan.ActiveSettings,
 		EnabledTools:      plan.EnabledTools,
 		FilesystemContext: askquestion.FilesystemContext{Access: filesystemContext.Access, ManagedWorktree: managedWorktreePathContext},
@@ -213,14 +257,39 @@ func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch
 		OnEvent: func(evt runtime.Event) {
 			PublishRunPromptProgress(progress, evt)
 		},
-	})
-	if err != nil {
-		return nil, err
 	}
 	prepared := &headlessRuntimePlan{
 		sessionID:  sessionID.String(),
-		submission: make(chan headlessPromptSubmission),
+		submission: make(chan workflowexecution.WorkflowRunPromptSubmission),
 		agentSteer: agentSteer,
+	}
+	if workflowPreparation != nil {
+		err := workflowPreparation.Start(ctx, workflowexecution.WorkflowRunPromptProfile{
+			Plan:           plan,
+			RuntimeOptions: runtimeOptions,
+			Submission:     prepared.submission,
+			Ask: func(_ context.Context, _ sessionruntime.ExecutionScope, req askquestion.AskQuestionRequest) (askquestion.AskQuestionResolution, error) {
+				return RunPromptAskHandler(req)
+			},
+			OnActive: func() {
+				if prepared.onActive != nil {
+					prepared.onActive()
+				}
+			},
+			RecordResult: func(name string, assistant llm.Message) {
+				prepared.name = name
+				prepared.content = preservePresentAssistantContent(prepared.content, assistant)
+			},
+		})
+		if err != nil {
+			return nil, err
+		}
+		prepared.handle = workflowPreparation
+		return prepared, nil
+	}
+	runtimePlan, err := sessionruntime.NewAgentRuntimePlan(runtimeOptions)
+	if err != nil {
+		return nil, err
 	}
 	handle, err := l.boot.RuntimeAuthority.StartAgentExecution(ctx, sessionruntime.AgentExecutionRequest{
 		Descriptor: plan.Descriptor,
@@ -230,7 +299,7 @@ func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch
 			return RunPromptAskHandler(req)
 		},
 		Runner: func(runCtx context.Context, _ sessionruntime.ExecutionScope, bridge sessionruntime.AgentRuntimeBridge) error {
-			var submission headlessPromptSubmission
+			var submission workflowexecution.WorkflowRunPromptSubmission
 			select {
 			case submission = <-prepared.submission:
 			case <-runCtx.Done():
@@ -246,10 +315,10 @@ func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch
 							prepared.onActive()
 						}
 					}
-					if submission.steer != nil {
-						return engine.SubmitAgentSteerWithHooks(engineCtx, *submission.steer, onActive, nil)
+					if submission.AgentSteer != nil {
+						return engine.SubmitAgentSteerWithHooks(engineCtx, *submission.AgentSteer, onActive, nil)
 					}
-					return engine.SubmitUserMessageWithHooks(engineCtx, submission.prompt, onActive, nil)
+					return engine.SubmitUserMessageWithHooks(engineCtx, submission.Prompt, onActive, nil)
 				}
 				assistant, submitErr := submit()
 				prepared.content = preservePresentAssistantContent(
@@ -304,7 +373,10 @@ func (r *headlessPromptRuntime) submitUserMessage(ctx context.Context, prompt st
 	}
 	r.plan.onActive = r.publishSessionStarted
 	select {
-	case r.plan.submission <- headlessPromptSubmission{prompt: prompt, steer: r.plan.agentSteer}:
+	case r.plan.submission <- workflowexecution.WorkflowRunPromptSubmission{
+		Prompt:     prompt,
+		AgentSteer: r.plan.agentSteer,
+	}:
 	case <-ctx.Done():
 		return serverapi.RunPromptResponse{}, context.Cause(ctx)
 	}

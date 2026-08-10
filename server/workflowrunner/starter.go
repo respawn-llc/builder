@@ -141,8 +141,8 @@ func (s *Starter) startCurrentNode(
 	}
 	switch input.Node.Kind {
 	case workflow.NodeKindScript:
-		if profile.Operation != nil {
-			return errors.New("attached Session operation cannot own a Script Current Node")
+		if profile.Operation != nil || profile.RunPrompt != nil {
+			return errors.New("Agent launch profile cannot own a Script Current Node")
 		}
 		return s.startCurrentNodeScript(ctx, input, lease, controller)
 	case workflow.NodeKindAgent:
@@ -163,6 +163,24 @@ func (s *Starter) EnsureCurrentNodeAssignment(
 	ctx context.Context,
 	reference workflow.CurrentNodeReference,
 	delivery workflowruntime.TaskPromptDelivery,
+) (workflowexecution.CurrentNodeAssignmentEnsure, error) {
+	return s.ensureCurrentNodeAssignment(ctx, reference, delivery, nil)
+}
+
+func (s *Starter) EnsureCurrentNodeAssignmentWithProfile(
+	ctx context.Context,
+	reference workflow.CurrentNodeReference,
+	delivery workflowruntime.TaskPromptDelivery,
+	profile workflowexecution.CurrentNodeAgentLaunchProfile,
+) (workflowexecution.CurrentNodeAssignmentEnsure, error) {
+	return s.ensureCurrentNodeAssignment(ctx, reference, delivery, profile.RunPrompt)
+}
+
+func (s *Starter) ensureCurrentNodeAssignment(
+	ctx context.Context,
+	reference workflow.CurrentNodeReference,
+	delivery workflowruntime.TaskPromptDelivery,
+	runPrompt *workflowexecution.WorkflowRunPromptProfile,
 ) (workflowexecution.CurrentNodeAssignmentEnsure, error) {
 	if s.closed.Load() {
 		return nil, errors.New("workflow runtime starter closed")
@@ -186,12 +204,17 @@ func (s *Starter) EnsureCurrentNodeAssignment(
 	if err := s.validateRole(selection.Assignee); err != nil {
 		return nil, err
 	}
-	prepared, err := s.prepareCurrentNodeAgentSession(
-		ctx,
-		input,
-		true,
-		delivery == workflowruntime.TaskPromptDeliveryResume,
-	)
+	var prepared preparedCurrentNodeAgentSession
+	if runPrompt != nil {
+		prepared, err = s.prepareRunPromptCurrentNodeAgentSession(ctx, input, runPrompt.Plan)
+	} else {
+		prepared, err = s.prepareCurrentNodeAgentSession(
+			ctx,
+			input,
+			true,
+			delivery == workflowruntime.TaskPromptDeliveryResume,
+		)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -245,6 +268,28 @@ func (s *Starter) EnsureCurrentNodeAssignment(
 		prepared:  prepared,
 		resource:  resource,
 	}, nil
+}
+
+func (s *Starter) prepareRunPromptCurrentNodeAgentSession(
+	ctx context.Context,
+	input workflowstore.CurrentNodeStartContext,
+	plan launch.SessionPlan,
+) (preparedCurrentNodeAgentSession, error) {
+	root, err := requireCurrentNodeExecutionRoot(input)
+	if err != nil {
+		return preparedCurrentNodeAgentSession{}, err
+	}
+	if input.CurrentNode.SessionID == nil {
+		return preparedCurrentNodeAgentSession{}, errors.New("RunPrompt Current Node has no retained Session")
+	}
+	if plan.Descriptor.SessionID() != *input.CurrentNode.SessionID {
+		return preparedCurrentNodeAgentSession{}, fmt.Errorf(
+			"RunPrompt Session %s does not match Current Node Session %s",
+			plan.Descriptor.SessionID(),
+			*input.CurrentNode.SessionID,
+		)
+	}
+	return s.preparePlannedCurrentNodeAgentSession(ctx, input, root, plan, false, true, true)
 }
 
 func (s *Starter) ensureCurrentNodeAgentAssignment(
@@ -353,6 +398,26 @@ func (s *Starter) prepareCurrentNodeAgentSession(
 	if err != nil {
 		return preparedCurrentNodeAgentSession{}, err
 	}
+	return s.preparePlannedCurrentNodeAgentSession(
+		ctx,
+		input,
+		root,
+		plan,
+		disposable,
+		requireRuntimeClient,
+		sessionPrepared,
+	)
+}
+
+func (s *Starter) preparePlannedCurrentNodeAgentSession(
+	ctx context.Context,
+	input workflowstore.CurrentNodeStartContext,
+	root workflowstore.ExecutionRoot,
+	plan launch.SessionPlan,
+	disposable bool,
+	requireRuntimeClient bool,
+	sessionPrepared bool,
+) (preparedCurrentNodeAgentSession, error) {
 	sessionBound := false
 	cleanup := func(err error) error {
 		if !disposable {
@@ -382,7 +447,10 @@ func (s *Starter) prepareCurrentNodeAgentSession(
 	if err := s.applyCurrentNodeSessionMetadata(ctx, input, &plan); err != nil {
 		return preparedCurrentNodeAgentSession{}, cleanup(err)
 	}
-	var client llm.Client
+	var (
+		client llm.Client
+		err    error
+	)
 	if requireRuntimeClient {
 		client, err = s.newWorkflowProviderClient(ctx, plan)
 		if err != nil {
@@ -436,6 +504,18 @@ func (s *Starter) startCurrentNodeAgent(
 	if err != nil {
 		return err
 	}
+	if profile.RunPrompt != nil {
+		if profile.Operation != nil {
+			return prepared.cleanup(errors.New("Current Node Agent launch cannot combine attached-operation and RunPrompt profiles"))
+		}
+		if profile.RunPrompt.Plan.Descriptor.SessionID() != prepared.plan.Descriptor.SessionID() {
+			return prepared.cleanup(fmt.Errorf(
+				"RunPrompt Session %s does not match Current Node Session %s",
+				profile.RunPrompt.Plan.Descriptor.SessionID(),
+				prepared.plan.Descriptor.SessionID(),
+			))
+		}
+	}
 	if err := s.applyCurrentNodeSessionExecutionTarget(ctx, input, prepared.plan.Descriptor); err != nil {
 		return prepared.cleanup(err)
 	}
@@ -467,7 +547,7 @@ func (s *Starter) startCurrentNodeAgent(
 	if err != nil {
 		return prepared.cleanup(err)
 	}
-	runtimePlan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
+	runtimeOptions := sessionruntime.AgentRuntimePlanOptions{
 		Settings: prepared.plan.ActiveSettings, EnabledTools: workflowRuntimeEnabledTools(prepared.plan.EnabledTools),
 		FilesystemContext: askquestion.FilesystemContext{Access: filesystemContext.Access, ManagedWorktree: pathContext}, Sources: prepared.plan.Source.Sources, Headless: true, Client: prepared.client,
 		ReviewerClientFactory: s.runtimeClientFactory, CurrentNodeExecution: runtimeConfig,
@@ -480,20 +560,76 @@ func (s *Starter) startCurrentNodeAgent(
 				slog.Warn("prepare skipped current-node workflow question batch failed", "task_id", input.Task.ID, "node_id", input.Node.ID, "error", err)
 			}
 		},
-	})
+	}
+	if profile.RunPrompt != nil {
+		runtimeOptions = profile.RunPrompt.RuntimeOptions
+		runtimeOptions.Client = prepared.client
+		runtimeOptions.CurrentNodeExecution = runtimeConfig
+	}
+	runtimePlan, err := sessionruntime.NewAgentRuntimePlan(runtimeOptions)
 	if err != nil {
 		return prepared.cleanup(err)
 	}
 	_, err = s.runtimeAuthority.StartAgentExecution(ctx, sessionruntime.AgentExecutionRequest{
 		Descriptor: prepared.plan.Descriptor, Runtime: &runtimePlan, Workflow: &lease, Resource: resource,
-		Ask: func(askCtx context.Context, scope sessionruntime.ExecutionScope, askReq askquestion.AskQuestionRequest) (askquestion.AskQuestionResolution, error) {
-			return s.handleCurrentNodeAsk(askCtx, executionPromptAwaiter{authority: s.runtimeAuthority, scope: scope}, input, prepared.plan.Descriptor.SessionID().String(), askReq)
-		},
+		Ask: currentNodeAgentAskHandler(s, input, prepared.plan.Descriptor.SessionID().String(), profile),
 		Runner: func(runCtx context.Context, scope sessionruntime.ExecutionScope, bridge sessionruntime.AgentRuntimeBridge) error {
 			var turnEngine *runtime.Engine
 			operationCompleted := false
 			turnErr := bridge.WithEngine(runCtx, func(engineCtx context.Context, engine *runtime.Engine) error {
-				if profile.Operation != nil {
+				if profile.RunPrompt != nil {
+					submission, err := awaitWorkflowRunPromptSubmission(engineCtx, profile.RunPrompt.Submission)
+					if err != nil {
+						return err
+					}
+					var waitHandle *runtime.LiveRunWaitHandle
+					var waitStartErr error
+					onActive := func() {
+						waitHandle, waitStartErr = engine.CaptureActiveRunResult(engineCtx)
+						if waitStartErr == nil {
+							profile.OwnerOrdering.Complete()
+							if profile.RunPrompt.OnActive != nil {
+								profile.RunPrompt.OnActive()
+							}
+						}
+					}
+					var assistant llm.Message
+					var submitErr error
+					if submission.AgentSteer != nil {
+						assistant, submitErr = engine.SubmitAgentSteerWithHooks(
+							engineCtx,
+							*submission.AgentSteer,
+							onActive,
+							nil,
+						)
+					} else {
+						assistant, submitErr = engine.SubmitUserMessageWithHooks(
+							engineCtx,
+							submission.Prompt,
+							onActive,
+							nil,
+						)
+					}
+					if profile.RunPrompt.RecordResult != nil {
+						profile.RunPrompt.RecordResult(engine.SessionName(), assistant)
+					}
+					if waitHandle != nil {
+						result, waitErr := waitHandle.Wait()
+						if waitErr == nil {
+							if profile.RunPrompt.RecordResult != nil {
+								profile.RunPrompt.RecordResult(engine.SessionName(), result.AssistantMessage)
+							}
+						} else if submitErr == nil && !errors.Is(waitErr, runtime.ErrLiveRunNoFinalAnswer) {
+							submitErr = waitErr
+						}
+					} else if waitStartErr != nil && submitErr == nil {
+						submitErr = waitStartErr
+					}
+					if submitErr != nil {
+						return submitErr
+					}
+					turnEngine = engine
+				} else if profile.Operation != nil {
 					outcome, operationErr := profile.Operation.StartOwner(engineCtx, engine, profile.OwnerOrdering)
 					operationCompleted = true
 					if profile.Complete != nil {
@@ -559,6 +695,45 @@ func (s *Starter) startCurrentNodeAgent(
 		return prepared.cleanup(err)
 	}
 	return nil
+}
+
+func currentNodeAgentAskHandler(
+	starter *Starter,
+	input workflowstore.CurrentNodeStartContext,
+	sessionID string,
+	profile workflowexecution.CurrentNodeAgentLaunchProfile,
+) sessionruntime.ExecutionAskHandler {
+	if profile.RunPrompt != nil {
+		return profile.RunPrompt.Ask
+	}
+	return func(
+		askCtx context.Context,
+		scope sessionruntime.ExecutionScope,
+		askReq askquestion.AskQuestionRequest,
+	) (askquestion.AskQuestionResolution, error) {
+		return starter.handleCurrentNodeAsk(
+			askCtx,
+			executionPromptAwaiter{authority: starter.runtimeAuthority, scope: scope},
+			input,
+			sessionID,
+			askReq,
+		)
+	}
+}
+
+func awaitWorkflowRunPromptSubmission(
+	ctx context.Context,
+	submissions <-chan workflowexecution.WorkflowRunPromptSubmission,
+) (workflowexecution.WorkflowRunPromptSubmission, error) {
+	if submissions == nil {
+		return workflowexecution.WorkflowRunPromptSubmission{}, errors.New("RunPrompt submission channel is required")
+	}
+	select {
+	case submission := <-submissions:
+		return submission, nil
+	case <-ctx.Done():
+		return workflowexecution.WorkflowRunPromptSubmission{}, context.Cause(ctx)
+	}
 }
 
 func (s *Starter) currentNodeAgentSessionForStart(

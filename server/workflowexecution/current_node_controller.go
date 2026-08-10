@@ -42,6 +42,7 @@ type CurrentNodeAgentLaunchProfile struct {
 	Operation     runtimecommand.SessionAgentOperationDriver
 	OwnerOrdering runtimecommand.SessionAgentOperationOwnerOrderingNotifier
 	Complete      func(runtimecommand.SessionAgentOperationOutcome, error)
+	RunPrompt     *WorkflowRunPromptProfile
 }
 
 type CurrentNodeProfileRunner interface {
@@ -61,6 +62,15 @@ type CurrentNodeAssignmentEnsurer interface {
 		context.Context,
 		workflow.CurrentNodeReference,
 		workflowruntime.TaskPromptDelivery,
+	) (CurrentNodeAssignmentEnsure, error)
+}
+
+type CurrentNodeProfileAssignmentEnsurer interface {
+	EnsureCurrentNodeAssignmentWithProfile(
+		context.Context,
+		workflow.CurrentNodeReference,
+		workflowruntime.TaskPromptDelivery,
+		CurrentNodeAgentLaunchProfile,
 	) (CurrentNodeAssignmentEnsure, error)
 }
 
