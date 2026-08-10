@@ -354,7 +354,8 @@ To respond, run: kent run steer <source-session-id> "message"
 - Task creation has no target override.
 - Execution Target selection uses `--execution-target none|head|default-branch|ref:<revision>`.
 - Custom Git revisions require the explicit `ref:` namespace.
-- Task start, resume, and move never prompt interactively.
+- Task start, move, and resume accept `--branch-name <name>` for initial managed-branch selection or an exact assertion against an existing managed Worktree. The flag is rejected when the operation selects no managed Worktree or when Manual Move is a no-op or does not require Execution Target preparation.
+- Task start, resume, approve, and move never prompt interactively.
 - Selection-required output identifies the reason and concrete rerun flags.
 - Task start exposes the same typed outcome in JSON.
 - `kent task edit <task>` changes a Task's title, body, or source workspace.

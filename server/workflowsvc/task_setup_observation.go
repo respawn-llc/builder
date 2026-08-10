@@ -16,43 +16,39 @@ import (
 
 type taskSetupObservation struct {
 	setupOperationID serverapi.WorktreeSetupOperationID
+	executionTarget  serverapi.WorkflowExecutionTargetSelection
 	publisher        workflowTaskSetupEventPublisher
 
-	mu                       sync.Mutex
-	setupResult              *worktree.WorktreeSetupResult
-	retainedWorktree         *serverapi.WorktreeTopologyEntry
-	retainedPreviousWorktree *serverapi.RetainedPreviousWorktree
-	preparationErr           error
-	finalized                bool
+	mu             sync.Mutex
+	prepared       preparedInitiatingActionTarget
+	preparationErr error
+	finalized      bool
 }
 
-func newTaskSetupObservation(
-	setupOperationID serverapi.WorktreeSetupOperationID,
-	publisher workflowTaskSetupEventPublisher,
-) (*taskSetupObservation, error) {
+func newTaskSetupObservation(setupOperationID serverapi.WorktreeSetupOperationID, executionTarget workflow.ExecutionTargetSelection, publisher workflowTaskSetupEventPublisher) (*taskSetupObservation, error) {
 	if err := setupOperationID.Validate(); err != nil {
 		return nil, err
 	}
 	if publisher == nil {
 		return nil, errors.New("Workflow Task setup event publisher is required")
 	}
+	target := serverapi.WorkflowExecutionTargetSelection{
+		Mode: serverapi.WorkflowExecutionTargetMode(executionTarget.Mode), CustomRef: executionTarget.CustomRef,
+	}
+	if err := target.Validate(); err != nil {
+		return nil, err
+	}
 	return &taskSetupObservation{
 		setupOperationID: setupOperationID,
+		executionTarget:  target,
 		publisher:        publisher,
 	}, nil
 }
 
-func (o *taskSetupObservation) record(
-	result *worktree.WorktreeSetupResult,
-	retainedWorktree *serverapi.WorktreeTopologyEntry,
-	retainedPreviousWorktree *serverapi.RetainedPreviousWorktree,
-	err error,
-) {
+func (o *taskSetupObservation) record(prepared preparedInitiatingActionTarget, err error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	o.setupResult = result
-	o.retainedWorktree = retainedWorktree
-	o.retainedPreviousWorktree = retainedPreviousWorktree
+	o.prepared = prepared
 	o.preparationErr = err
 }
 
@@ -63,9 +59,7 @@ func (o *taskSetupObservation) finalize(finalization workflowexecution.TaskPrepa
 		panic("Workflow Task setup observation was finalized more than once")
 	}
 	o.finalized = true
-	result := o.setupResult
-	retainedWorktree := o.retainedWorktree
-	retainedPreviousWorktree := o.retainedPreviousWorktree
+	prepared := o.prepared
 	preparationErr := o.preparationErr
 	o.mu.Unlock()
 
@@ -73,23 +67,23 @@ func (o *taskSetupObservation) finalize(finalization workflowexecution.TaskPrepa
 	switch finalization.Kind {
 	case workflowexecution.TaskPreparationHandedOff:
 		switch {
-		case result == nil:
+		case prepared.setupResult == nil:
 			event.Phase = serverapi.WorktreeSetupPhaseNotRequired
 			event.NotRequired = &serverapi.WorktreeSetupNotRequired{
 				Reason:                   serverapi.WorktreeSetupNotRequiredNoTargetPreparation,
-				RetainedPreviousWorktree: retainedPreviousWorktree,
+				RetainedPreviousWorktree: prepared.retainedPreviousWorktree,
 			}
-		case result.Completed != nil:
-			completed := *result.Completed
-			if retainedPreviousWorktree != nil {
-				completed.RetainedPreviousWorktree = retainedPreviousWorktree
+		case prepared.setupResult.Completed != nil:
+			completed := *prepared.setupResult.Completed
+			if prepared.retainedPreviousWorktree != nil {
+				completed.RetainedPreviousWorktree = prepared.retainedPreviousWorktree
 			}
 			event.Phase = serverapi.WorktreeSetupPhaseCompleted
 			event.Completed = &completed
-		case result.NotRequired != nil:
-			notRequired := *result.NotRequired
-			if retainedPreviousWorktree != nil {
-				notRequired.RetainedPreviousWorktree = retainedPreviousWorktree
+		case prepared.setupResult.NotRequired != nil:
+			notRequired := *prepared.setupResult.NotRequired
+			if prepared.retainedPreviousWorktree != nil {
+				notRequired.RetainedPreviousWorktree = prepared.retainedPreviousWorktree
 			}
 			event.Phase = serverapi.WorktreeSetupPhaseNotRequired
 			event.NotRequired = &notRequired
@@ -98,18 +92,14 @@ func (o *taskSetupObservation) finalize(finalization workflowexecution.TaskPrepa
 		}
 	case workflowexecution.TaskPreparationFailed:
 		event.Phase = serverapi.WorktreeSetupPhaseFailed
-		event.Failed = preparationFailurePayload(result, retainedWorktree, retainedPreviousWorktree, errors.Join(preparationErr, finalization.Cause))
-		executionTarget, err := taskSetupRecoveryExecutionTarget(preparationErr)
-		if err != nil {
-			panic(fmt.Sprintf("project Workflow Task setup recovery execution target: %v", err))
-		}
-		event.Failed.ExecutionTarget = &executionTarget
+		event.Failed = preparationFailurePayload(prepared.setupResult, prepared.retainedWorktree, prepared.retainedPreviousWorktree, errors.Join(preparationErr, finalization.Cause))
+		event.Failed.ExecutionTarget = &o.executionTarget
 	case workflowexecution.TaskPreparationInterruptionFailed:
 		event.Phase = serverapi.WorktreeSetupPhaseFailed
 		event.Failed = interruptionPersistenceFailurePayload(
-			result,
-			retainedWorktree,
-			retainedPreviousWorktree,
+			prepared.setupResult,
+			prepared.retainedWorktree,
+			prepared.retainedPreviousWorktree,
 			preparationErr,
 			finalization.Cause,
 		)
@@ -131,12 +121,7 @@ func (o *taskSetupObservation) finalize(finalization workflowexecution.TaskPrepa
 	o.publisher.PublishWorkflowTaskSetupEvent(event)
 }
 
-func preparationFailurePayload(
-	result *worktree.WorktreeSetupResult,
-	retainedWorktree *serverapi.WorktreeTopologyEntry,
-	retainedPreviousWorktree *serverapi.RetainedPreviousWorktree,
-	cause error,
-) *serverapi.WorktreeSetupFailed {
+func preparationFailurePayload(result *worktree.WorktreeSetupResult, retainedWorktree *serverapi.WorktreeTopologyEntry, retainedPreviousWorktree *serverapi.RetainedPreviousWorktree, cause error) *serverapi.WorktreeSetupFailed {
 	if result != nil && result.Failed != nil {
 		failed := *result.Failed
 		if failed.RetainedWorktree == nil && retainedWorktree != nil {
@@ -159,10 +144,7 @@ func preparationFailurePayload(
 	}
 }
 
-func nonRetryablePreparationFailure(
-	kind serverapi.WorktreeSetupFailureKind,
-	cause error,
-) *serverapi.WorktreeSetupFailed {
+func nonRetryablePreparationFailure(kind serverapi.WorktreeSetupFailureKind, cause error) *serverapi.WorktreeSetupFailed {
 	failureCause := serverapi.WorktreeSetupFailureCause{Kind: kind}
 	switch kind {
 	case serverapi.WorktreeSetupFailureCanceled:
@@ -179,13 +161,7 @@ func nonRetryablePreparationFailure(
 	}
 }
 
-func interruptionPersistenceFailurePayload(
-	result *worktree.WorktreeSetupResult,
-	retainedWorktree *serverapi.WorktreeTopologyEntry,
-	retainedPreviousWorktree *serverapi.RetainedPreviousWorktree,
-	preparationErr error,
-	persistenceErr error,
-) *serverapi.WorktreeSetupFailed {
+func interruptionPersistenceFailurePayload(result *worktree.WorktreeSetupResult, retainedWorktree *serverapi.WorktreeTopologyEntry, retainedPreviousWorktree *serverapi.RetainedPreviousWorktree, preparationErr error, persistenceErr error) *serverapi.WorktreeSetupFailed {
 	failed := preparationFailurePayload(
 		result,
 		retainedWorktree,
@@ -206,25 +182,6 @@ func preparationDiagnostic(err error) string {
 		return "Workflow Task preparation failed"
 	}
 	return err.Error()
-}
-
-func taskSetupRecoveryExecutionTarget(err error) (serverapi.WorkflowExecutionTargetSelection, error) {
-	var typed *workflowexecution.TaskStartPreparationError
-	if !errors.As(err, &typed) {
-		return serverapi.WorkflowExecutionTargetSelection{}, errors.New("Task preparation failure is missing typed setup recovery")
-	}
-	recovery := typed.InterruptionDetail().SetupRecovery
-	if recovery == nil {
-		return serverapi.WorkflowExecutionTargetSelection{}, errors.New("Task preparation failure is missing setup recovery detail")
-	}
-	selection := serverapi.WorkflowExecutionTargetSelection{
-		Mode:      serverapi.WorkflowExecutionTargetMode(recovery.ExecutionTarget.Mode),
-		CustomRef: recovery.ExecutionTarget.CustomRef,
-	}
-	if err := selection.Validate(); err != nil {
-		return serverapi.WorkflowExecutionTargetSelection{}, err
-	}
-	return selection, nil
 }
 
 func taskPreparationError(
@@ -285,9 +242,7 @@ func taskPreparationError(
 	return workflowexecution.NewTaskStartPreparationError(err, detail)
 }
 
-func setupRequirementForPreparationFailure(
-	result *worktree.WorktreeSetupResult,
-) worktreecontract.SetupRequirement {
+func setupRequirementForPreparationFailure(result *worktree.WorktreeSetupResult) worktreecontract.SetupRequirement {
 	if result != nil && result.Completed != nil {
 		return worktreecontract.SetupRequirementAlreadyCompleted
 	}

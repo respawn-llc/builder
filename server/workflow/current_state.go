@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -8,7 +9,6 @@ import (
 
 	"core/shared/protocol"
 	"core/shared/runtimeids"
-	"core/shared/workflowcontract"
 	"core/shared/worktreecontract"
 	"github.com/google/uuid"
 )
@@ -140,13 +140,20 @@ type CurrentNodeInterruptionDetail struct {
 
 func DecodeCurrentNodeInterruptionDetail(raw string) (CurrentNodeInterruptionDetail, error) {
 	var detail CurrentNodeInterruptionDetail
-	if err := protocol.DecodeStrictJSON([]byte(raw), &detail); err != nil {
+	if err := json.Unmarshal([]byte(raw), &detail); err != nil {
 		return CurrentNodeInterruptionDetail{}, fmt.Errorf("decode current node interruption detail: %w", err)
 	}
-	if err := detail.Validate(); err != nil {
-		return CurrentNodeInterruptionDetail{}, err
-	}
 	return detail, nil
+}
+
+func (d *CurrentNodeInterruptionDetail) UnmarshalJSON(data []byte) error {
+	type wire CurrentNodeInterruptionDetail
+	var decoded wire
+	if err := protocol.DecodeStrictJSON(data, &decoded); err != nil {
+		return err
+	}
+	*d = CurrentNodeInterruptionDetail(decoded)
+	return d.Validate()
 }
 
 func (d CurrentNodeInterruptionDetail) Validate() error {
@@ -180,7 +187,7 @@ func (d CurrentNodeInterruptionDetail) SetupOperationID() (*uuid.UUID, error) {
 	return &value, nil
 }
 
-type CurrentNodeSetupRecoveryDetail = workflowcontract.SetupRecoveryDetail[uuid.UUID, ExecutionTargetSelection]
+type CurrentNodeSetupRecoveryDetail = worktreecontract.SetupRecoveryDetail[uuid.UUID, ExecutionTargetSelection]
 
 type CurrentNodeSetupRecoveryCause = worktreecontract.SetupFailureKind
 
@@ -195,7 +202,7 @@ const (
 	CurrentNodeSetupRequirementAlreadyCompleted    = worktreecontract.SetupRequirementAlreadyCompleted
 )
 
-type CurrentNodeRetainedWorktree = workflowcontract.RetainedWorktree
+type CurrentNodeRetainedWorktree = worktreecontract.RetainedWorktree
 
 const CurrentNodeInterruptionDiagnosticField = "error"
 

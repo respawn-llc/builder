@@ -351,15 +351,12 @@ func TestDeleteTaskWorktreeRejectsInFlightStartUnchanged(t *testing.T) {
 	env := newServiceTestEnvWithResourceLifecycle(t, lifecycle)
 	defer lifecycle.Unblock()
 	task, _ := createTaskWorktreeTestTask(t, env)
-	materialized, err := prepareManagedTaskExecutionRoot(
-		env.ctx,
-		env.service,
-		task.ID,
-		nil,
-		resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot),
-	)
+	materialized, err := env.service.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{
+		TaskID:         task.ID,
+		ResolvedTarget: resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot),
+	})
 	if err != nil {
-		t.Fatalf("PrepareTaskExecutionRoot: %v", err)
+		t.Fatalf("MaterializeInitialTaskWorktree: %v", err)
 	}
 	busy := serviceTestWorktree{
 		WorktreeID:    taskWorktreeID(materialized.Worktree),

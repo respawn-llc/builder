@@ -11,7 +11,8 @@ import (
 )
 
 type countingTaskDependencyReadModel struct {
-	count int
+	count              int
+	unsatisfiedBlocker *int
 }
 
 func (r *countingTaskDependencyReadModel) GetTaskDependencies(context.Context, string) (serverapi.WorkflowTaskDependencies, error) {
@@ -21,6 +22,9 @@ func (r *countingTaskDependencyReadModel) GetTaskDependencies(context.Context, s
 
 func (r *countingTaskDependencyReadModel) CountUnsatisfiedBlockers(context.Context, string) (int, error) {
 	r.count++
+	if r.unsatisfiedBlocker != nil {
+		return *r.unsatisfiedBlocker, nil
+	}
 	return 0, errors.New("unexpected dependency count")
 }
 
@@ -50,10 +54,12 @@ func TestStartDependencyPreflightWarnsBeforeExecutionTargetWorkAndProceedSkipsRe
 	}
 	targets := &recordingExecutionTargetInfrastructure{}
 	service.executionTargets = targets
+	branchName := "feature/dependency-warning"
 
 	warning, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
 		TaskID:           blocked.Task.ID,
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		BranchName:       &branchName,
 	})
 	if err != nil {
 		t.Fatalf("start warning: %v", err)
@@ -67,6 +73,14 @@ func TestStartDependencyPreflightWarnsBeforeExecutionTargetWorkAndProceedSkipsRe
 	}
 	if targets.resolveSelection != (workflow.ExecutionTargetSelection{}) || targets.materializeTaskID != "" || targets.restoreTaskID != "" {
 		t.Fatalf("target infrastructure used during warning: %+v", targets)
+	}
+	targetContext, err := service.store.GetTaskExecutionTargetContext(ctx, workflow.TaskID(blocked.Task.ID))
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetContext: %v", err)
+	}
+	if targetContext.Task.PendingInitialManagedBranchName == nil ||
+		*targetContext.Task.PendingInitialManagedBranchName != blocked.Task.ShortID {
+		t.Fatalf("pending branch after dependency warning = %v, want unchanged %q", targetContext.Task.PendingInitialManagedBranchName, blocked.Task.ShortID)
 	}
 
 	proceeded, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
@@ -94,9 +108,10 @@ func TestStartRequestValidationReturnsBeforeDependencyReader(t *testing.T) {
 	}
 }
 
-func TestStartTargetInfrastructurePreflightReturnsBeforeDependencyReader(t *testing.T) {
+func TestStartDependencyPreflightReturnsBeforeTargetInfrastructure(t *testing.T) {
 	ctx, service, _, _, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
-	reader := &countingTaskDependencyReadModel{}
+	unsatisfied := 1
+	reader := &countingTaskDependencyReadModel{unsatisfiedBlocker: &unsatisfied}
 	service.readModels.TaskDependencies = reader
 	service.executionTargets = nil
 
@@ -107,11 +122,11 @@ func TestStartTargetInfrastructurePreflightReturnsBeforeDependencyReader(t *test
 			Mode: serverapi.WorkflowExecutionTargetModeHead,
 		},
 	})
-	if !errors.Is(err, errExecutionTargetInfrastructureRequired) {
-		t.Fatalf("StartWorkflowTask error = %v, want required target infrastructure", err)
+	if err != nil {
+		t.Fatalf("StartWorkflowTask: %v", err)
 	}
-	if reader.count != 0 {
-		t.Fatalf("dependency reader count = %d, want 0", reader.count)
+	if reader.count != 1 {
+		t.Fatalf("dependency reader count = %d, want 1", reader.count)
 	}
 }
 

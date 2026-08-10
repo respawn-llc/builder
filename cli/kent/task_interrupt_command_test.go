@@ -147,6 +147,33 @@ func TestTaskMoveJSONWritesPreviewNoOpTypedOutcome(t *testing.T) {
 	}
 }
 
+func TestTaskMovePreviewNoOpRejectsExplicitBranchNameForHumanOutput(t *testing.T) {
+	allowHumanTaskActionForTest(t)
+	remote := &taskInterruptCommandRemote{
+		previewResponse: &serverapi.WorkflowTaskMovePreviewResponse{
+			Outcome: serverapi.WorkflowTaskMovePreviewOutcomeNoOp,
+			NoOp: &serverapi.WorkflowTaskMovePreviewNoOp{
+				CurrentNodes: []serverapi.WorkflowTaskCurrentNode{{NodeID: "node-2"}},
+			},
+		},
+	}
+	installWorkflowCommandRemote(t, remote)
+
+	var stdout, stderr bytes.Buffer
+	exitCode := taskSubcommand(
+		[]string{"move", "task-1", "node-2", "--branch-name", "feature/KENT-1"},
+		&stdout,
+		&stderr,
+	)
+
+	if exitCode != 2 || stdout.Len() != 0 || len(remote.moveRequests) != 0 {
+		t.Fatalf("exit=%d stdout=%q stderr=%q requests=%+v", exitCode, stdout.String(), stderr.String(), remote.moveRequests)
+	}
+	if stderr.Len() == 0 {
+		t.Fatal("expected usage failure detail")
+	}
+}
+
 func (r *taskInterruptCommandRemote) PreviewWorkflowTaskMove(_ context.Context, req serverapi.WorkflowTaskMovePreviewRequest) (serverapi.WorkflowTaskMovePreviewResponse, error) {
 	if r.previewResponse != nil {
 		return *r.previewResponse, nil
@@ -519,7 +546,8 @@ func TestTaskResumeFromWorkflowSessionCarriesInvokingSession(t *testing.T) {
 	if len(remote.resumeRequests) != 1 ||
 		remote.resumeRequests[0].InvokingSessionID == nil ||
 		remote.resumeRequests[0].InvokingSessionID.String() != "agent-session" ||
-		remote.resumeRequests[0].SetupOperationID.Validate() != nil {
+		remote.resumeRequests[0].SetupOperationID.Validate() != nil ||
+		remote.resumeRequests[0].BranchName != nil {
 		t.Fatalf("resume requests = %+v, want invoking Session agent-session", remote.resumeRequests)
 	}
 }

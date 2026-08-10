@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"testing"
 
-	"core/shared/workflowcontract"
 	"core/shared/worktreecontract"
 )
 
@@ -71,7 +70,7 @@ func TestWorktreeSetupEventValidation(t *testing.T) {
 }
 
 func TestSetupRecoveryDetailValidationAtAPIContract(t *testing.T) {
-	valid := workflowcontract.SetupRecoveryDetail[WorktreeSetupOperationID, WorkflowExecutionTargetSelection]{
+	valid := worktreecontract.SetupRecoveryDetail[WorktreeSetupOperationID, WorkflowExecutionTargetSelection]{
 		SetupOperationID: NewWorktreeSetupOperationID(), Cause: worktreecontract.SetupFailureTargetPreparation,
 		Diagnostic: "target failed", SetupRequirement: worktreecontract.SetupRequirementRequired,
 		ExecutionTarget: WorkflowExecutionTargetSelection{Mode: WorkflowExecutionTargetModeHead},
@@ -80,7 +79,7 @@ func TestSetupRecoveryDetailValidationAtAPIContract(t *testing.T) {
 		t.Fatalf("Validate target-preparation recovery: %v", err)
 	}
 	script, setup := "scripts/setup.sh", valid
-	setup.Cause, setup.ScriptPath, setup.RetainedWorktree = worktreecontract.SetupFailureProcessExit, &script, &workflowcontract.RetainedWorktree{WorktreeID: "worktree-1", Root: "/worktree"}
+	setup.Cause, setup.ScriptPath, setup.RetainedWorktree = worktreecontract.SetupFailureProcessExit, &script, &worktreecontract.RetainedWorktree{WorktreeID: "worktree-1", Root: "/worktree"}
 	if err := setup.Validate(); err != nil {
 		t.Fatalf("Validate setup-script recovery: %v", err)
 	}

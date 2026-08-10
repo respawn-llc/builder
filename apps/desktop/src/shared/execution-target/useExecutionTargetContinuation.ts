@@ -1,12 +1,14 @@
 import { useCallback, useRef, useState } from "react";
 
 import type {
-  WorktreeSetupRetainedError,
   WorkflowExecutionTargetSelection,
   WorkflowExecutionTargetSelectionMode,
   WorkflowExecutionTargetSelectionRequirement,
 } from "@/api";
-import { decodeWorktreeSetupRetainedError } from "@/api";
+import {
+  decodeWorktreeSetupRetainedError,
+  type WorktreeSetupRetainedError,
+} from "@/api/worktreeSetup";
 import {
   initialExecutionTargetSelectionDraft,
   type ExecutionTargetSelectionDraft,

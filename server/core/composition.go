@@ -417,6 +417,20 @@ type taskExecutionTargetInfrastructure struct {
 	git     *worktree.GitInspector
 }
 
+func (i taskExecutionTargetInfrastructure) InspectProspectiveInitialTaskBranch(ctx context.Context, req workflowsvc.InitialTaskBranchInspectionRequest) error {
+	if i.service == nil {
+		return errors.New("worktree service is required")
+	}
+	return i.service.InspectProspectiveInitialTaskBranch(ctx, req.SourceWorkspaceRoot, req.BranchName)
+}
+
+func (i taskExecutionTargetInfrastructure) AssertInitialTaskBranch(ctx context.Context, req workflowsvc.InitialTaskBranchAssertionRequest) error {
+	if i.service == nil {
+		return errors.New("worktree service is required")
+	}
+	return i.service.AssertInitialTaskBranch(ctx, req.TaskID, req.BranchName)
+}
+
 func (i taskExecutionTargetInfrastructure) ResolveExecutionTarget(ctx context.Context, req workflowsvc.ExecutionTargetResolveRequest) (workflowstore.ExecutionTargetSnapshot, error) {
 	if i.git == nil {
 		return workflowstore.ExecutionTargetSnapshot{}, errors.New("git inspector is required")
@@ -476,6 +490,7 @@ func (i taskExecutionTargetInfrastructure) MaterializeExecutionTarget(ctx contex
 	prepared, err := i.service.PrepareTaskExecutionRoot(ctx, worktree.TaskExecutionRootPreparationRequest{
 		TaskID:           req.TaskID,
 		SetupOperationID: req.SetupOperationID,
+		BranchName:       req.InitialBranchAssertion,
 		ManagedTarget: &worktree.GitRevision{
 			RequestedRef: *req.Snapshot.RequestedRef,
 			CommitOID:    *req.Snapshot.CommitOID,
@@ -508,6 +523,7 @@ func (i taskExecutionTargetInfrastructure) RestoreExecutionTarget(ctx context.Co
 	_, err := i.service.RestoreLockedTaskWorktree(ctx, worktree.LockedTaskWorktreeRestoreRequest{
 		TaskID:           req.TaskID,
 		SetupOperationID: req.SetupOperationID,
+		BranchName:       req.InitialBranchAssertion,
 	})
 	return err
 }

@@ -55,7 +55,7 @@ func TestStartTaskRejectsUnsafeWorkflowWithoutMutation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if target.Task.ExecutionTarget != nil || target.Task.ManagedWorktreeID != "" {
+	if target.Task.ExecutionTarget != nil || target.Task.ManagedWorktreeID != nil {
 		t.Fatalf("rejected start mutated task: task=%+v", target.Task)
 	}
 }

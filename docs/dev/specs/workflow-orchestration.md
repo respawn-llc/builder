@@ -538,7 +538,7 @@
 - A Task locks target-selection provenance only after preparation establishes a usable Execution Root and any required setup succeeds. Setup failure leaves the Task unlocked.
 - A Task with historical managed-worktree facts but no locked execution-target provenance does not infer an execution root from its recorded `HEAD`; it remains readable but requires an explicit target selection before execution.
 - An unlocked Task follows its configured Workflow execution-target policy. Kent does not use historical managed-worktree facts as a source-`HEAD` fallback.
-- Managed targets use the same creation, setup, and collision behavior as other Kent-managed worktrees. Before Kent schedules the first executable Current Node, it loads worktree setup settings from the Task's source workspace. A configured setup script must succeed for a worktree created by that operation.
+- Managed targets use ordinary Kent-managed Worktree creation and setup behavior, with Task-specific initial branch selection and collision behavior defined below. Before Kent schedules the first executable Current Node, it loads worktree setup settings from the Task's source workspace. A configured setup script must succeed for a worktree created by that operation.
 - Every Kent-managed Worktree root must remain inside the server-configured Worktree base namespace and outside its source Workspace. An explicit managed Worktree root that violates either condition is rejected before Worktree creation.
 - A persisted managed Worktree root outside the server-configured namespace causes Session activation and Worktree restoration to fail. Kent does not migrate that root automatically.
 - During execution-root preparation, Workflow Task Start, Resume, and Move retry failed managed-worktree setup once before producing a terminal preparation outcome. Task Start and Resume still acknowledge durable placement or requeue before preparation completes; CLI observes the terminal outcome as described below. Kent discards or recreates only an empty provisional root or one unchanged from its original checkout. Kent preserves operator and setup changes and otherwise reruns setup in place. Setup scripts must tolerate repeated execution. Loading setup settings is preparation for the operation, not a setup attempt; a settings-load failure is surfaced without automatic retry.
@@ -566,13 +566,23 @@
 - Task detail always shows the source workspace. An unlocked Task remains readable and does not show a provisional worktree as its Task worktree. After target lock, Task detail also shows the recorded target provenance and managed-worktree path when present. Task detail does not inspect live path availability or the current Git branch; Worktree status owns those live facts.
 - An unlocked Task that remains at the Start Node may carry a provisional managed Worktree from an earlier setup failure. That relation does not mean the Task was started: ordinary Task Start, including an explicit concrete target selection, may reuse or safely recreate the provisional root and locks target facts only after setup succeeds.
 - Human task detail shortens the resolved commit for readability. Structured JSON retains the full commit value.
-- Initial managed worktree creation uses the task short ID as the branch name.
-- Task worktree creation uses the same branch and root collision behavior as ordinary worktree creation.
+- An unlocked Task without a managed Worktree has a pending initial managed branch name initialized from its Task Short ID.
+- Task Start, Manual Move, and Resume may replace the pending initial managed branch name when the operation can create the Task's first managed Worktree and the Task is not yet bound to one.
+- Pending branch selection is Task-scoped last-write-wins state until fresh Worktree materialization reloads the pending value under the source-Workspace materialization lease. That snapshot fixes the branch for the in-flight creation. A replacement accepted after the snapshot does not alter that creation and may be cleared without being materialized when the Worktree binds.
+- Manual Move rejects an explicit branch name before returning a no-op or a result that does not require Execution Target preparation. It does not change the Task or its pending branch in either case.
+- An operation selecting no managed worktree rejects an explicit branch name. Locking that Execution Target consumes the pending branch choice.
+- Before an initiating operation changes Task state, Kent validates the pending branch with Git branch-name rules and rejects an exact matching local branch or locally available remote-tracking branch on any configured remote. Kent does not contact or fetch remotes for collision detection, and a same-named tag is not a branch collision.
+- Kent repeats the point-in-time collision check immediately before Worktree creation. Git branch creation rejects a matching local branch created after that check. Task Start leaves its placement applied and interrupts the placed Current Node. Manual Move remains unapplied. Resume returns applied after queueing its Current Nodes, then interrupts them when asynchronous preparation reports the collision. A matching remote-tracking ref created after the final check may coexist with the new local Task branch and does not fail or roll back creation.
+- A later initiating operation may replace the pending branch while no managed Worktree is bound. Successful binding consumes the then-current pending choice, including a replacement accepted after the materialization snapshot, and makes managed Worktree metadata the sole branch authority.
+- After creation, an initiating request may repeat the exact branch recorded in managed Worktree metadata as an idempotent assertion. A different branch is rejected as an attempted rename. This assertion also applies when an overlapping request supplied a post-snapshot replacement before the Worktree bound and encounters that Worktree afterward.
+- A custom branch name does not change automatic managed Worktree root naming, which remains based on the Task Short ID.
+- Task Worktree creation uses ordinary managed-root collision behavior; its initial branch follows the Task-specific collision rules above.
 - Worktree deletion/retargeting treats non-terminal tasks referencing a managed worktree as blockers.
 - Worktree deletion fails immediately if another Session targeting the worktree is running or has begun to start. It does not wait for that work.
 - After deletion starts, new work for every Session that targets the worktree is rejected until retargeting and Git removal finish.
 - A rejected deletion leaves Session targets, worktree information, Git state, and branch state unchanged.
-- Task worktree creation and conservative restoration have the same setup and collision behavior.
+- Task Worktree creation and conservative restoration use the same setup behavior.
+- Creation follows the Task-specific collision rules above. Restoration follows the existing named-branch and root rules above.
 - CLI target overrides, interaction, structured outcomes, and already-started guidance follow [CLI Commands](cli-commands.md#workflow-and-task-mutation).
 
 ## Project Keys And Task IDs
@@ -641,6 +651,7 @@
 
 ## Compatibility Data
 
+- Existing unlocked Tasks without a managed Worktree initialize their pending managed branch from their Task Short ID. Tasks with a managed Worktree and Tasks locked to no managed Worktree have no pending branch choice.
 - A legacy canceled Task moves to terminal Node `done` when that Node exists.
 - If that Workflow has terminal Nodes but no `done` Node, Kent preserves the
   Task's unique valid active terminal when one exists. Otherwise Kent chooses
