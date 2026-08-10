@@ -191,11 +191,13 @@ func EnsurePersistedWorkflowAssignment(
 			return WorkflowAssignmentEnsure{}, err
 		}
 	} else {
-		items, err := activePersistedMetaContextItems(engine.eventLog)
-		if err != nil {
+		// Dormant assignment inspection reuses the runtime's authoritative
+		// active-working-set restoration. Assignment delivery must not grow a
+		// second transcript traversal or meta-context projection.
+		if err := engine.restoreMessages(); err != nil {
 			return WorkflowAssignmentEnsure{}, err
 		}
-		if latestActiveMetaContextMatches(items, message) {
+		if latestActiveMetaContextMatches(engine.transcriptRuntimeState().SnapshotItems(), message) {
 			return WorkflowAssignmentEnsure{
 				Receipt: session.CommitReceipt{Committed: true},
 			}, nil
@@ -207,39 +209,6 @@ func EnsurePersistedWorkflowAssignment(
 		return WorkflowAssignmentEnsure{Receipt: receipt, Appended: receipt.Committed}, err
 	}
 	return WorkflowAssignmentEnsure{Receipt: receipt, Appended: true}, nil
-}
-
-func activePersistedMetaContextItems(eventLog session.MaterializedEventLog) ([]llm.ResponseItem, error) {
-	var matchErr error
-	window, err := eventLog.ReadNewestSegmentBackward(compactionBoundaryMatcher(&matchErr))
-	if err != nil {
-		return nil, err
-	}
-	if matchErr != nil {
-		return nil, matchErr
-	}
-	items := make([]llm.ResponseItem, 0, len(window.Records))
-	for _, record := range window.Records {
-		payload, err := record.Payload()
-		if err != nil {
-			return nil, err
-		}
-		switch payload := payload.(type) {
-		case session.MessageRecord:
-			restored, err := llmMessageFromSessionRecord(payload)
-			if err != nil {
-				return nil, err
-			}
-			items = append(items, llm.ItemsFromMessages([]llm.Message{restored})...)
-		case session.HistoryReplacementRecord:
-			replacement, err := historyReplacementPayloadFromSessionRecord(payload)
-			if err != nil {
-				return nil, err
-			}
-			items = append(items[:0], replacement.Items...)
-		}
-	}
-	return items, nil
 }
 
 func completePersistedWorkflowAssignment(engine *Engine, message llm.Message) WorkflowAssignmentSteer {

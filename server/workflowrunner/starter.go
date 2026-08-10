@@ -208,7 +208,8 @@ func (s *Starter) EnsureCurrentNodeAssignment(
 		workflow.CanonicalContextSource(input.EnteringEdge.ContextSource).Kind == workflow.ContextSourceImmediateSource &&
 		input.SourceSessionID != nil &&
 		prepared.plan.Descriptor.SessionID() == *input.SourceSessionID
-	if runtimeAvailable && (!ensured.Appended || directContinuation) {
+	if runtimeAvailable &&
+		(delivery == workflowruntime.TaskPromptDeliveryResume || directContinuation) {
 		resource = sessionruntime.CurrentAgentResource{}
 	}
 	return &currentNodeAssignmentEnsure{

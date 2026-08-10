@@ -88,6 +88,41 @@ type currentNodeRunnerClient interface {
 	Requests() []llm.Request
 }
 
+type restartResumeClient struct {
+	mu       sync.Mutex
+	requests []llm.Request
+	resumed  atomic.Bool
+	started  chan struct{}
+	release  <-chan struct{}
+	once     sync.Once
+}
+
+func (c *restartResumeClient) Generate(ctx context.Context, request llm.Request) (llm.Response, error) {
+	c.mu.Lock()
+	c.requests = append(c.requests, request)
+	c.mu.Unlock()
+	if !c.resumed.Load() {
+		return llm.Response{}, ErrScriptedRuntime
+	}
+	c.once.Do(func() { close(c.started) })
+	select {
+	case <-c.release:
+		return llm.Response{}, ErrScriptedRuntime
+	case <-ctx.Done():
+		return llm.Response{}, context.Cause(ctx)
+	}
+}
+
+func (c *restartResumeClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
+	return llm.ProviderCapabilities{ProviderID: "test", SupportsResponsesAPI: true}, nil
+}
+
+func (c *restartResumeClient) Requests() []llm.Request {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]llm.Request(nil), c.requests...)
+}
+
 func workflowPostCompletionCompactionResponse(summary string) llm.CompactionResponse {
 	return llm.CompactionResponse{
 		OutputItems: []llm.ResponseItem{
@@ -244,20 +279,6 @@ func newCurrentNodeRunnerFixtureWithRunner(
 		}
 	}
 	fixture.runtimes = registry.NewRuntimeRegistry()
-	var controller *workflowexecution.CurrentNodeController
-	fixture.authority = sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		PersistenceRoot: cfg.PersistenceRoot,
-		StoreOptions:    storeOptions,
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
-		}),
-		PromptFeed: fixture.runtimes,
-		EventFeed: func(resource sessionruntime.AgentResourceDescriptor, event agentruntime.Event) {
-			fixture.runtimes.PublishAuthorityRuntimeEvent(resource.Ref, event)
-		},
-		ResourceLifecycle: fixture.runtimes,
-		StepLifecycle:     currentNodeRunnerStepLifecycle{runtimes: fixture.runtimes},
-	})
 	t.Cleanup(func() {
 		if fixture.controller != nil {
 			if err := fixture.controller.Close(); err != nil {
@@ -273,48 +294,12 @@ func newCurrentNodeRunnerFixtureWithRunner(
 			t.Errorf("close runtime authority: %v", err)
 		}
 	})
-	taskMutations := workflowexecution.NewTaskMutationCoordinator()
-	dependencyCounter, err := workflowview.NewTaskDependencyCounter(metadataStore)
-	if err != nil {
-		t.Fatalf("new Task dependency counter: %v", err)
-	}
-	starter, err := NewStarter(cfg, metadataStore, store, nil, nil, StarterOptions{
-		RuntimeAuthority: fixture.authority,
-		TaskMutations:    taskMutations,
-		TaskDependencies: dependencyCounter,
-		RuntimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(_ context.Context, request runtimewire.RuntimeClientRequest) (llm.Client, error) {
-			fixture.mu.Lock()
-			fixture.clientRequests = append(fixture.clientRequests, request)
-			err := fixture.clientErr
-			fixture.mu.Unlock()
-			if err != nil {
-				return nil, err
-			}
-			return fixture.client, nil
-		}),
-	})
-	if err != nil {
-		t.Fatalf("new starter: %v", err)
-	}
-	fixture.starter = starter
-	var runner workflowexecution.CurrentNodeRunner = starter
-	if decorate != nil {
-		runner = decorate(runner)
-	}
-	controller, err = workflowexecution.NewCurrentNodeController(store, runner, fixture.authority, taskMutations, workflowexecution.CurrentNodeControllerConfig{
-		AgentConcurrency:  1,
-		AssignmentEnsurer: starter,
-		LifecycleReporter: &workflowRunnerLifecycleFatalReporter{},
-	})
-	if err != nil {
-		t.Fatalf("new current node controller: %v", err)
-	}
-	fixture.controller = controller
+	dependencyCounter := fixture.installCurrentNodeRuntime(t, storeOptions, decorate)
 	projection, err := workflowview.NewTaskStatusProjection(
 		metadataStore,
 		store,
 		workflowview.NewTaskProjector(),
-		controller,
+		fixture.controller,
 	)
 	if err != nil {
 		t.Fatalf("new Task status projection: %v", err)
@@ -325,6 +310,77 @@ func newCurrentNodeRunnerFixtureWithRunner(
 	}
 	fixture.dependencies = dependencies
 	return fixture
+}
+
+func (f *currentNodeRunnerFixture) installCurrentNodeRuntime(
+	t *testing.T,
+	storeOptions []session.StoreOption,
+	decorate func(workflowexecution.CurrentNodeRunner) workflowexecution.CurrentNodeRunner,
+) *workflowview.TaskDependencyCounter {
+	t.Helper()
+	var controller *workflowexecution.CurrentNodeController
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		PersistenceRoot: f.cfg.PersistenceRoot,
+		StoreOptions:    storeOptions,
+		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
+			controller.ExecutionFinalized(scope)
+		}),
+		PromptFeed: f.runtimes,
+		EventFeed: func(resource sessionruntime.AgentResourceDescriptor, event agentruntime.Event) {
+			f.runtimes.PublishAuthorityRuntimeEvent(resource.Ref, event)
+		},
+		ResourceLifecycle: f.runtimes,
+		StepLifecycle:     currentNodeRunnerStepLifecycle{runtimes: f.runtimes},
+	})
+	taskMutations := workflowexecution.NewTaskMutationCoordinator()
+	dependencyCounter, err := workflowview.NewTaskDependencyCounter(f.metadata)
+	if err != nil {
+		_ = authority.Close(context.Background())
+		t.Fatalf("new Task dependency counter: %v", err)
+	}
+	starter, err := NewStarter(f.cfg, f.metadata, f.store, nil, nil, StarterOptions{
+		RuntimeAuthority: authority,
+		TaskMutations:    taskMutations,
+		TaskDependencies: dependencyCounter,
+		RuntimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(_ context.Context, request runtimewire.RuntimeClientRequest) (llm.Client, error) {
+			f.mu.Lock()
+			f.clientRequests = append(f.clientRequests, request)
+			clientErr := f.clientErr
+			f.mu.Unlock()
+			if clientErr != nil {
+				return nil, clientErr
+			}
+			return f.client, nil
+		}),
+	})
+	if err != nil {
+		_ = authority.Close(context.Background())
+		t.Fatalf("new workflow starter: %v", err)
+	}
+	var runner workflowexecution.CurrentNodeRunner = starter
+	if decorate != nil {
+		runner = decorate(runner)
+	}
+	controller, err = workflowexecution.NewCurrentNodeController(
+		f.store,
+		runner,
+		authority,
+		taskMutations,
+		workflowexecution.CurrentNodeControllerConfig{
+			AgentConcurrency:  1,
+			AssignmentEnsurer: starter,
+			LifecycleReporter: &workflowRunnerLifecycleFatalReporter{},
+		},
+	)
+	if err != nil {
+		_ = starter.Close()
+		_ = authority.Close(context.Background())
+		t.Fatalf("new current node controller: %v", err)
+	}
+	f.authority = authority
+	f.starter = starter
+	f.controller = controller
+	return dependencyCounter
 }
 
 type barrierCurrentNodeRunner struct {
@@ -428,6 +484,23 @@ func (f *currentNodeRunnerFixture) createTask(t *testing.T, workflowID runtimeid
 		t.Fatalf("create task: %v", err)
 	}
 	return task
+}
+
+func (f *currentNodeRunnerFixture) restartCurrentNodeRuntime(t *testing.T) {
+	t.Helper()
+	if err := f.controller.Close(); err != nil {
+		t.Fatalf("close pre-restart current node controller: %v", err)
+	}
+	if err := f.starter.Close(); err != nil {
+		t.Fatalf("close pre-restart workflow starter: %v", err)
+	}
+	if err := f.authority.Close(context.Background()); err != nil {
+		t.Fatalf("close pre-restart runtime authority: %v", err)
+	}
+	f.installCurrentNodeRuntime(t, f.metadata.AuthoritativeSessionStoreOptions(), nil)
+	if _, err := f.controller.Recover(context.Background()); err != nil {
+		t.Fatalf("recover post-restart current node controller: %v", err)
+	}
 }
 
 func (f *currentNodeRunnerFixture) startTask(t *testing.T, task workflowstore.TaskRecord) workflow.CurrentNodeReference {
@@ -1702,6 +1775,78 @@ func TestRepeatedResumeReusesPersistedCurrentNodeAssignment(t *testing.T) {
 			t.Fatalf("request %d assignment identity = %q, want %q", index+1, assignments[0].sourcePath, identity)
 		}
 	}
+}
+
+func TestRestartRecoveryResumeReusesPersistedCurrentNodeAssignment(t *testing.T) {
+	resumedStarted := make(chan struct{})
+	releaseResumed := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseResumed) }) })
+	client := &restartResumeClient{started: resumedStarted, release: releaseResumed}
+	f := newCurrentNodeRunnerFixtureWithClient(t, client)
+	workflowID := createCurrentNodeAgentWorkflow(t, f.store)
+	task := f.createTask(t, workflowID)
+	currentNode := f.startTask(t, task)
+	f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+		return len(nodes) == 1 &&
+			nodes[0].Reference.Equal(currentNode) &&
+			nodes[0].Scheduling != nil &&
+			nodes[0].Scheduling.Interruption != nil &&
+			len(f.client.Requests()) > 0
+	})
+	f.waitForControllerCurrentNodeFinalized(t, currentNode)
+	preRestartRequests := f.client.Requests()
+	initialAssignments := workflowAssignments(preRestartRequests[0])
+	if len(initialAssignments) != 1 {
+		t.Fatalf("initial workflow assignments = %+v, want one", initialAssignments)
+	}
+	for index, request := range preRestartRequests {
+		assignments := workflowAssignments(request)
+		if len(assignments) != 1 || assignments[0].sourcePath != initialAssignments[0].sourcePath {
+			t.Fatalf("pre-restart request %d assignments = %+v, want one unchanged assignment", index+1, assignments)
+		}
+	}
+
+	f.restartCurrentNodeRuntime(t)
+	client.resumed.Store(true)
+	if _, err := f.controller.ResumeTask(context.Background(), task.ID); err != nil {
+		t.Fatalf("Resume after process restart recovery: %v", err)
+	}
+	select {
+	case <-resumedStarted:
+	case <-time.After(currentNodeRunnerWait):
+		t.Fatal("resumed Current Node did not start after process restart recovery")
+	}
+	resumedNodes := f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+		return len(nodes) == 1 &&
+			nodes[0].Reference.Equal(currentNode) &&
+			nodes[0].SessionID != nil &&
+			len(f.client.Requests()) == len(preRestartRequests)+1
+	})
+	execution, live := f.authority.SessionExecution(*resumedNodes[0].SessionID)
+	if !live {
+		t.Fatal("Resume after restart did not open an Exact Execution Scope")
+	}
+	if _, hasResource := execution.Scope().Resource(); !hasResource {
+		t.Fatal("Resume after restart did not open an Active Session Runtime")
+	}
+	resumedAssignments := workflowAssignments(f.client.Requests()[len(preRestartRequests)])
+	if len(resumedAssignments) != 1 ||
+		resumedAssignments[0].sourcePath != initialAssignments[0].sourcePath {
+		t.Fatalf(
+			"workflow assignments before/after restart Resume = %+v / %+v, want one unchanged assignment",
+			initialAssignments,
+			resumedAssignments,
+		)
+	}
+	releaseOnce.Do(func() { close(releaseResumed) })
+	f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+		return len(nodes) == 1 &&
+			nodes[0].Reference.Equal(currentNode) &&
+			nodes[0].Scheduling != nil &&
+			nodes[0].Scheduling.Interruption != nil
+	})
+	f.waitForControllerCurrentNodeFinalized(t, currentNode)
 }
 
 func requestAdvertisesTool(request llm.Request, id toolspec.ID) bool {
@@ -4051,6 +4196,114 @@ func TestIneligibleImmediateSourceContinuationReplacesActiveRuntimeGeneration(t 
 			sourceResource,
 		)
 	}
+}
+
+func TestIneligiblePreviousTargetContinuationReplacesMatchingAssignmentRuntime(t *testing.T) {
+	implementationStarted := make(chan struct{}, 2)
+	releaseInitial := make(chan struct{})
+	releaseReturned := make(chan struct{})
+	var implementationRun atomic.Int32
+	f := newCurrentNodeRunnerFixture(
+		t,
+		ScriptedRuntimeStep{
+			BeforeResponse: func(ctx context.Context) error {
+				run := implementationRun.Add(1)
+				implementationStarted <- struct{}{}
+				release := releaseInitial
+				if run == 2 {
+					release = releaseReturned
+				}
+				select {
+				case <-release:
+					return nil
+				case <-ctx.Done():
+					return context.Cause(ctx)
+				}
+			},
+			Response: ScriptedFinalAnswer(`{"transition":"review","commentary":"implementation complete"}`).Response,
+		},
+		ScriptedFinalAnswer(`{"transition":"rework","commentary":"changes requested"}`),
+		ScriptedRuntimeStep{
+			BeforeResponse: func(ctx context.Context) error {
+				implementationRun.Add(1)
+				implementationStarted <- struct{}{}
+				select {
+				case <-releaseReturned:
+					return nil
+				case <-ctx.Done():
+					return context.Cause(ctx)
+				}
+			},
+			Response: ScriptedRuntimeError(ErrScriptedRuntime).Response,
+		},
+	)
+	t.Cleanup(func() {
+		select {
+		case <-releaseInitial:
+		default:
+			close(releaseInitial)
+		}
+		select {
+		case <-releaseReturned:
+		default:
+			close(releaseReturned)
+		}
+	})
+	workflowID := createCurrentNodeApprovalLoopWorkflow(t, f.store)
+	task := f.createTask(t, workflowID)
+	implementation := f.startTask(t, task)
+	select {
+	case <-implementationStarted:
+	case <-time.After(currentNodeRunnerWait):
+		t.Fatal("initial implementation did not start")
+	}
+	initialNodes := f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+		return len(nodes) == 1 && nodes[0].Reference.Equal(implementation) && nodes[0].SessionID != nil
+	})
+	sessionID := *initialNodes[0].SessionID
+	initialExecution, live := f.authority.SessionExecution(sessionID)
+	if !live {
+		t.Fatal("initial implementation has no Exact Execution Scope")
+	}
+	initialResource, ok := initialExecution.Scope().Resource()
+	if !ok {
+		t.Fatal("initial implementation has no Active Session Runtime")
+	}
+	close(releaseInitial)
+	approval := f.waitForPendingApproval(t, task.ID)
+	f.waitForControllerCurrentNodeFinalized(t, approval.Source)
+	if _, err := f.controller.ApplyPendingApproval(context.Background(), approval.ID); err != nil {
+		t.Fatalf("apply previous-target continuation Approval: %v", err)
+	}
+	select {
+	case <-implementationStarted:
+	case <-time.After(currentNodeRunnerWait):
+		t.Fatal("returned implementation did not start")
+	}
+	returnedExecution, live := f.authority.SessionExecution(sessionID)
+	if !live {
+		t.Fatal("returned implementation has no Exact Execution Scope")
+	}
+	returnedResource, ok := returnedExecution.Scope().Resource()
+	if !ok || returnedResource == initialResource {
+		t.Fatalf(
+			"ineligible matching-assignment Resource = %+v, want replacement of %+v",
+			returnedResource,
+			initialResource,
+		)
+	}
+	requests := f.waitForModelRequests(t, 3)
+	initialAssignments := workflowAssignments(requests[0])
+	returnedAssignments := workflowAssignments(requests[2])
+	if len(initialAssignments) != 1 || len(returnedAssignments) != 1 ||
+		returnedAssignments[0].sourcePath != initialAssignments[0].sourcePath {
+		t.Fatalf(
+			"matching assignment before/after ineligible continuation = %+v / %+v",
+			initialAssignments,
+			returnedAssignments,
+		)
+	}
+	close(releaseReturned)
 }
 
 func workflowRunnerShellQuote(value string) string {
