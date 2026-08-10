@@ -37,7 +37,7 @@ export type TaskInitiatingActionController = Readonly<{
   run(action: TaskInitiatingAction, selection?: WorkflowExecutionTargetSelection): Promise<void>;
   close(): void;
   selectMode(mode: WorkflowExecutionTargetSelectionMode): void;
-  setCustomRef(customRef: string): void;
+  setCustomRef(customRef: string | null): void;
 }>;
 
 export function useTaskInitiatingActionController({
@@ -131,7 +131,7 @@ export function useTaskInitiatingActionController({
     );
   }, []);
 
-  const setCustomRef = useCallback((customRef: string) => {
+  const setCustomRef = useCallback((customRef: string | null) => {
     setPending((current) =>
       current?.kind !== "execution_target"
         ? current

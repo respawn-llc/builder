@@ -8,10 +8,11 @@ import type {
   TaskSetupRecovery,
 } from "@/api";
 import { useTextFieldSubmitShortcut } from "@/app-facade";
-import { Button, compactDialogWidth, Dialog, RadioGroup, RadioGroupItem, SelectField, TextInput } from "@/ui";
+import { Button, compactDialogWidth, Dialog, RadioGroup, RadioGroupItem, TextInput } from "@/ui";
 import {
   executionTargetSelectionFromDraft,
   proceedWithTaskInitiatingAction,
+  type ExecutionTargetSelectionDraft,
   type TaskInitiatingAction,
 } from "./executionTargetContinuation";
 import type {
@@ -38,17 +39,9 @@ export function TaskSetupRecoveryDialog({
   running: boolean;
 }>) {
   const { t } = useTranslation();
-  const [mode, setMode] = useState<WorkflowExecutionTargetSelectionMode | null>(null);
-  const [customRef, setCustomRef] = useState("");
-  const close = () => {
-    setMode(null);
-    setCustomRef("");
-    onClose();
-  };
-  const selection =
-    mode === null || (mode === "custom_ref" && customRef.trim().length === 0)
-      ? null
-      : { mode, customRef: mode === "custom_ref" ? customRef.trim() : null };
+  const [selectionDraft, setSelectionDraft] = useState<ExecutionTargetSelectionDraft | null>(null);
+  const close = () => { setSelectionDraft(null); onClose(); };
+  const selection = selectionDraft === null ? null : executionTargetSelectionFromDraft(selectionDraft);
   return (
     <Dialog closeLabel={t("app.close")} onClose={close} open={open} title={t("task.interrupted")}>
       <div className="grid gap-[var(--space-3)]">
@@ -58,11 +51,11 @@ export function TaskSetupRecoveryDialog({
         {[recovery.scriptPath, recovery.retainedWorktree?.root, recovery.retainedPreviousWorktree?.root].map((value) =>
           value == null ? null : <p className="m-0 break-all font-mono text-sm" key={value}>{value}</p>,
         )}
-        {mode === null ? (
+        {selectionDraft === null ? (
           <div className="flex justify-end gap-[var(--space-2)]">
             <Button onClick={close}>{t("app.cancel")}</Button>
             <Button data-testid="setup-recovery-choose" onClick={() => {
-              setMode("default_branch");
+              setSelectionDraft({ mode: "default_branch", customRef: null });
             }}>
               {t("executionTargetContinuation.title")}
             </Button>
@@ -74,17 +67,13 @@ export function TaskSetupRecoveryDialog({
           </div>
         ) : (
           <>
-            <SelectField
-              label={t("executionTargetContinuation.choice")}
-              onValueChange={(value) => {
-                if (isConcreteMode(value)) setMode(value);
+            <ExecutionTargetChoices
+              continuation={{
+                selectMode(mode) { setSelectionDraft({ ...selectionDraft, mode }); },
+                setCustomRef(customRef) { setSelectionDraft({ ...selectionDraft, customRef }); },
               }}
-              options={concreteModes.map((value) => ({ label: t(`executionTargetContinuation.mode_${value}`), value }))}
-              value={mode}
+              pending={{ selection: selectionDraft }}
             />
-            {mode === "custom_ref" ? <TextInput label={t("executionTargetContinuation.customRef")} onChange={(event) => {
-              setCustomRef(event.currentTarget.value);
-            }} value={customRef} /> : null}
             <div className="flex justify-end gap-[var(--space-2)]">
               <Button onClick={close}>{t("app.cancel")}</Button>
               <Button data-testid="setup-recovery-target-submit" disabled={selection === null || running} onClick={() => {
@@ -288,8 +277,8 @@ function ExecutionTargetChoices({
   continuation,
   pending,
 }: Readonly<{
-  continuation: TaskInitiatingActionController;
-  pending: ExecutionTargetPending;
+  continuation: Pick<TaskInitiatingActionController, "selectMode" | "setCustomRef">;
+  pending: Pick<ExecutionTargetPending, "selection">;
 }>) {
   const { t } = useTranslation();
   return (
@@ -322,10 +311,10 @@ function ExecutionTargetChoices({
         <TextInput
           label={t("executionTargetContinuation.customRef")}
           onChange={(event) => {
-            continuation.setCustomRef(event.currentTarget.value);
+            continuation.setCustomRef(event.currentTarget.value.trim().length === 0 ? null : event.currentTarget.value);
           }}
           required
-          value={pending.selection.customRef}
+          value={pending.selection.customRef ?? ""}
         />
       ) : null}
     </>

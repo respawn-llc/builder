@@ -46,7 +46,7 @@ export type TaskInitiatingActionResult =
 
 export type ExecutionTargetSelectionDraft = Readonly<{
   mode: WorkflowExecutionTargetSelectionMode;
-  customRef: string;
+  customRef: string | null;
 }>;
 
 export function startTaskInitiatingAction(
@@ -93,10 +93,10 @@ export function initialExecutionTargetSelectionDraft(
   if (requirement.reason === "configured_target_unavailable") {
     return {
       mode: requirement.configuredTarget.mode,
-      customRef: requirement.configuredTarget.requestedRef ?? "",
+      customRef: requirement.configuredTarget.requestedRef,
     };
   }
-  return { mode: "default_branch", customRef: "" };
+  return { mode: "default_branch", customRef: null };
 }
 
 export function executionTargetSelectionFromDraft(
@@ -105,8 +105,8 @@ export function executionTargetSelectionFromDraft(
   if (draft.mode !== "custom_ref") {
     return { mode: draft.mode, customRef: null };
   }
-  const customRef = draft.customRef.trim();
-  return customRef.length === 0 ? null : { mode: draft.mode, customRef };
+  const customRef = draft.customRef?.trim();
+  return customRef == null || customRef.length === 0 ? null : { mode: draft.mode, customRef };
 }
 
 export async function executeTaskInitiatingAction(

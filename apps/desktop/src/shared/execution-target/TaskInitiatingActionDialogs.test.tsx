@@ -167,8 +167,8 @@ describe("TaskInitiatingActionDialogs", () => {
     await user.click(screen.getByTestId("initiate-move"));
     await user.click(await screen.findByTestId("execution-target-submit"));
     await user.click(await screen.findByTestId("setup-recovery-choose"));
-    await user.click(screen.getByRole("button", { name: "Execution target" }));
-    await user.click(screen.getByRole("menuitemradio", { name: "Current source HEAD" }));
+    expect(screen.getByRole("radiogroup")).toBeInTheDocument();
+    await user.click(screen.getByText("Current source HEAD"));
     await user.click(screen.getByTestId("setup-recovery-target-submit"));
 
     await waitFor(() => { expect(execute).toHaveBeenCalledTimes(3); });
