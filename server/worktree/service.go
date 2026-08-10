@@ -2198,30 +2198,27 @@ func (s *Service) inspectSafeWorktreeRecreation(
 	if err != nil {
 		return GitWorktree{}, false, err
 	}
-	live := GitWorktree{
-		Root:     root,
-		HeadOID:  revision.CommitOID,
-		Branch:   identity.branch,
-		Detached: identity.branch == nil,
-	}
+	live := GitWorktree{Root: root, HeadOID: revision.CommitOID, Branch: identity.branch, Detached: identity.branch == nil}
 	creationBase, err := normalizeOptionalCommitOID(creationBaseCommitOID)
 	if err != nil {
 		return GitWorktree{}, false, err
 	}
 	if creationBase == nil ||
-		revision.CommitOID != *creationBase ||
-		recordedCheckout.Detached ||
-		recordedCheckout.Branch == nil ||
-		live.Detached ||
-		live.Branch == nil ||
+		revision.CommitOID != *creationBase || recordedCheckout.Detached ||
+		recordedCheckout.Branch == nil || live.Detached || live.Branch == nil ||
 		recordedCheckout.Branch.Ref() != live.Branch.Ref() {
 		return live, false, nil
 	}
-	dirtyState, err := s.git.ProbeDirtyState(ctx, root)
+	unchanged, err := s.git.probeRecreationUnchanged(ctx, root)
 	if err != nil {
 		return GitWorktree{}, false, err
 	}
-	return live, dirtyState.Kind == clientui.WorktreeDirtyStateClean, nil
+	return live, unchanged, nil
+}
+
+func (i *GitInspector) probeRecreationUnchanged(ctx context.Context, root string) (bool, error) {
+	output, err := i.runner.Output(ctx, root, "status", "--porcelain=v1", "-z", "--ignored=matching")
+	return countPorcelainStatusEntries(output) == 0, err
 }
 
 func (s *Service) executeSetupAttempt(ctx context.Context, attempt preparedSetupAttempt, observer setupAttemptObserver) error {

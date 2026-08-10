@@ -1056,14 +1056,14 @@ func TestPrepareTaskExecutionRootRecreatesCleanRootBeforeRetry(t *testing.T) {
 	}
 }
 
-func TestPrepareTaskExecutionRootRetriesChangedRootInPlace(t *testing.T) {
+func TestPrepareTaskExecutionRootRetriesIgnoredChangedRootInPlace(t *testing.T) {
 	env := newServiceTestEnv(t)
 	task, _ := createTaskWorktreeTestTask(t, env)
 	base := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
 	countPath := filepath.Join(t.TempDir(), "count")
 	scriptRelpath := filepath.Join("scripts", "retry-in-place.sh")
 	writeExecutableFile(t, filepath.Join(env.workspaceRoot, scriptRelpath), fmt.Sprintf(
-		"#!/bin/sh\ncount=0\nif [ -f %q ]; then count=$(cat %q); fi\ncount=$((count + 1))\nprintf '%%s' \"$count\" > %q\nif [ \"$count\" = \"1\" ]; then printf changed > \"$PWD/setup-change.txt\"; exit 3; fi\nif [ ! -f \"$PWD/setup-change.txt\" ]; then exit 9; fi\n",
+		"#!/bin/sh\ncount=0\nif [ -f %q ]; then count=$(cat %q); fi\ncount=$((count + 1))\nprintf '%%s' \"$count\" > %q\nif [ \"$count\" = \"1\" ]; then printf 'setup-change.txt\\n' >> \"$(git rev-parse --git-path info/exclude)\"; printf changed > \"$PWD/setup-change.txt\"; exit 3; fi\nif [ ! -f \"$PWD/setup-change.txt\" ]; then exit 9; fi\n",
 		countPath,
 		countPath,
 		countPath,

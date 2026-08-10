@@ -1130,9 +1130,6 @@ func coordinateInitiatingAction[T any](ctx context.Context, service *Service, re
 	}
 	applied, err := apply(candidate)
 	if err != nil {
-		// A mutation may commit before its post-commit lifecycle work fails.
-		// Preserve that result so the operation owner can publish and finalize
-		// the durable mutation instead of reporting it as unapplied.
 		if applied != nil {
 			return initiatingActionResult[T]{applied: applied, retainedPreviousWorktree: retainedPreviousWorktree}, err
 		}
