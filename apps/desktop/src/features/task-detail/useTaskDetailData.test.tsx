@@ -17,12 +17,17 @@ describe("Task Detail live refresh", () => {
     ]);
     const first = deferred<undefined>();
     const second = deferred<undefined>();
+    const staleRead = deferred<ReturnType<typeof taskAttention>>();
     let answerCount = 0;
+    let attentionReadCount = 0;
     mountTaskDetailSurface(taskDetailResponse, {
       routes: [
         {
           method: "workflow.task.attention.list",
-          handler: () => attention,
+          handler: (): ReturnType<typeof taskAttention> | Promise<ReturnType<typeof taskAttention>> => {
+            attentionReadCount += 1;
+            return attentionReadCount === 3 ? staleRead.promise : attention;
+          },
         },
         {
           method: "prompt.answerBatch",
@@ -63,7 +68,17 @@ describe("Task Detail live refresh", () => {
     });
 
     second.resolve(undefined);
+    await waitFor(() => {
+      expect(attentionReadCount).toBe(2);
+    });
     first.resolve(undefined);
+    await waitFor(() => {
+      expect(attentionReadCount).toBe(3);
+    });
+    await act(async () => {
+      staleRead.resolve(taskAttention("ask-2", 1));
+    });
+    expect(screen.queryAllByRole("radio")).toHaveLength(0);
   });
 
   it("does not jump focus or scroll when the intended next prompt disappears and the earlier prompt restores", async () => {

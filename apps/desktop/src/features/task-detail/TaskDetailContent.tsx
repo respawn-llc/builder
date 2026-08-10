@@ -3,7 +3,13 @@ import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { z } from "zod";
 
-import { errorMessage, type QuestionAnswerInput, type TaskDependencyDirection, type TaskDetail } from "@/api";
+import {
+  errorMessage,
+  type QuestionAnswerInput,
+  type TaskAttention,
+  type TaskDependencyDirection,
+  type TaskDetail,
+} from "@/api";
 import type {
   SidebarPageNavigator,
   SidebarMode,
@@ -316,9 +322,12 @@ function useTaskPromptAnswers({
         },
         readAttention: async () => {
           const fresh = await api.listTaskAttention(detail.id);
-          queryClient.setQueryData(queryKeys.taskAttention(detail.id), fresh);
-          return fresh.items.filter(
-            (item): item is Extract<(typeof fresh.items)[number], { kind: "question" }> =>
+          const accepted =
+            queryClient.setQueryData<TaskAttention>(queryKeys.taskAttention(detail.id), (current) =>
+              current !== undefined && current.generatedAt > fresh.generatedAt ? current : fresh,
+            ) ?? fresh;
+          return accepted.items.filter(
+            (item): item is Extract<(typeof accepted.items)[number], { kind: "question" }> =>
               item.kind === "question",
           );
         },
