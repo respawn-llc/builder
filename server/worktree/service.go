@@ -2218,7 +2218,22 @@ func (s *Service) inspectSafeWorktreeRecreation(
 
 func (i *GitInspector) probeRecreationUnchanged(ctx context.Context, root string) (bool, error) {
 	output, err := i.runner.Output(ctx, root, "status", "--porcelain=v1", "-z", "--ignored=matching")
-	return countPorcelainStatusEntries(output) == 0, err
+	if err != nil || countPorcelainStatusEntries(output) != 0 {
+		return false, err
+	}
+	empty := false
+	err = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || path == root || !entry.IsDir() {
+			return err
+		}
+		entries, err := os.ReadDir(path)
+		if err == nil && len(entries) == 0 {
+			empty = true
+			return filepath.SkipDir
+		}
+		return err
+	})
+	return !empty, err
 }
 
 func (s *Service) executeSetupAttempt(ctx context.Context, attempt preparedSetupAttempt, observer setupAttemptObserver) error {

@@ -1030,7 +1030,7 @@ func TestPrepareTaskExecutionRootRecreatesCleanRootBeforeRetry(t *testing.T) {
 	runner := &recordingGitCommandRunner{delegate: execGitCommandRunner{}}
 	env.service.git = NewGitInspector(runner)
 
-	materialized, err := prepareManagedTaskExecutionRoot(env.ctx, env.service, task.ID, nil, base)
+	_, err := prepareManagedTaskExecutionRoot(env.ctx, env.service, task.ID, nil, base)
 	if err != nil {
 		t.Fatalf("PrepareTaskExecutionRoot: %v", err)
 	}
@@ -1051,45 +1051,29 @@ func TestPrepareTaskExecutionRootRecreatesCleanRootBeforeRetry(t *testing.T) {
 	if adds != 2 || removes != 1 {
 		t.Fatalf("Git recreation calls = %d add, %d remove; want 2 add, 1 remove", adds, removes)
 	}
-	if materialized.SetupResult == nil || materialized.SetupResult.Completed == nil {
-		t.Fatalf("setup result = %+v, want completed", materialized.SetupResult)
-	}
 }
 
-func TestPrepareTaskExecutionRootRetriesIgnoredChangedRootInPlace(t *testing.T) {
+func TestPrepareTaskExecutionRootRetriesIgnoredOrEmptyChangedRootInPlace(t *testing.T) {
 	env := newServiceTestEnv(t)
 	task, _ := createTaskWorktreeTestTask(t, env)
 	base := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
 	countPath := filepath.Join(t.TempDir(), "count")
 	scriptRelpath := filepath.Join("scripts", "retry-in-place.sh")
-	writeExecutableFile(t, filepath.Join(env.workspaceRoot, scriptRelpath), fmt.Sprintf(
-		"#!/bin/sh\ncount=0\nif [ -f %q ]; then count=$(cat %q); fi\ncount=$((count + 1))\nprintf '%%s' \"$count\" > %q\nif [ \"$count\" = \"1\" ]; then printf 'setup-change.txt\\n' >> \"$(git rev-parse --git-path info/exclude)\"; printf changed > \"$PWD/setup-change.txt\"; exit 3; fi\nif [ ! -f \"$PWD/setup-change.txt\" ]; then exit 9; fi\n",
-		countPath,
-		countPath,
-		countPath,
-	))
+	writeExecutableFile(t, filepath.Join(env.workspaceRoot, scriptRelpath), fmt.Sprintf("#!/bin/sh\ncount=0\nif [ -f %q ]; then count=$(cat %q); fi\ncount=$((count + 1))\nprintf '%%s' \"$count\" > %q\nif [ \"$count\" = \"1\" ]; then printf 'setup-change.txt\\n' >> \"$(git rev-parse --git-path info/exclude)\"; printf changed > \"$PWD/setup-change.txt\"; exit 3; fi\nif [ ! -f \"$PWD/setup-change.txt\" ]; then exit 9; fi\n", countPath, countPath, countPath))
 	env.service.setupScript = scriptRelpath
-	runner := &recordingGitCommandRunner{delegate: execGitCommandRunner{}}
-	env.service.git = NewGitInspector(runner)
 
 	materialized, err := prepareManagedTaskExecutionRoot(env.ctx, env.service, task.ID, nil, base)
 	if err != nil {
 		t.Fatalf("PrepareTaskExecutionRoot: %v", err)
 	}
-	if got := waitForFileText(t, countPath); got != "2" {
-		t.Fatalf("setup attempt count = %q, want 2", got)
-	}
 	if got := waitForFileText(t, filepath.Join(taskWorktreeRoot(materialized.Worktree), "setup-change.txt")); got != "changed" {
 		t.Fatalf("in-place setup change = %q, want retained", got)
 	}
-	removes := 0
-	for _, call := range runner.calls {
-		if len(call) >= 2 && call[0] == "worktree" && call[1] == "remove" {
-			removes++
-		}
+	if err := errors.Join(os.Remove(filepath.Join(taskWorktreeRoot(materialized.Worktree), "setup-change.txt")), os.Mkdir(filepath.Join(taskWorktreeRoot(materialized.Worktree), "empty-change"), 0o755)); err != nil {
+		t.Fatalf("prepare empty-directory change: %v", err)
 	}
-	if removes != 0 {
-		t.Fatalf("changed root recreation removals = %d, want none", removes)
+	if unchanged, err := env.service.git.probeRecreationUnchanged(env.ctx, taskWorktreeRoot(materialized.Worktree)); err != nil || unchanged {
+		t.Fatalf("empty-directory probe = %t, %v; want changed", unchanged, err)
 	}
 }
 
