@@ -6,50 +6,25 @@ import (
 	"core/shared/clientui"
 )
 
-func (c *Coordinator) CancelOperation(sessionID string, ref clientui.RuntimeOperationRef) error {
-	result, err := c.CancelOperationTarget(sessionID, ref)
-	result.CancelOperationAttempt()
-	return err
-}
-
-func (c *Coordinator) TryCommitOperation(sessionID string, ref clientui.RuntimeOperationRef) bool {
-	if c == nil {
-		return true
-	}
-	if err := ref.Validate(); err != nil {
-		return false
-	}
-	for {
-		c.mu.Lock()
-		ledger := c.ledgerLocked(sessionID)
-		key := ledger.operationKey(ref)
-		ledger.pruneLocked(c.limit, c.ttl, c.now())
-		if barrier := ledger.commitBarriers[key]; barrier != nil {
-			done := barrier.done
-			c.mu.Unlock()
-			<-done
-			continue
-		}
-		if _, canceled := ledger.tombstones[key]; canceled {
-			c.recordLocked(ledger, ref, clientui.RuntimeInputReconciliationCanceledNotCommitted, false, c.now())
-			c.mu.Unlock()
-			return false
-		}
-		c.recordLocked(ledger, ref, clientui.RuntimeInputReconciliationCommitted, !ledger.nonEvictableLocked(key), c.now())
-		c.mu.Unlock()
-		return true
-	}
-}
-
-func (c *Coordinator) TryCommitOperationMutation(sessionID string, ref clientui.RuntimeOperationRef, mutate func() error) (bool, error) {
+func (c *Coordinator) TryRecordOperationMutation(
+	sessionID string,
+	ref clientui.RuntimeOperationRef,
+	state clientui.RuntimeInputReconciliationState,
+	mutate func() (bool, error),
+) (bool, error) {
 	if c == nil {
 		if mutate == nil {
-			return true, nil
+			return false, nil
 		}
-		return true, mutate()
+		return mutate()
 	}
 	if err := ref.Validate(); err != nil {
 		return false, err
+	}
+	switch state {
+	case clientui.RuntimeInputReconciliationCommitted, clientui.RuntimeInputReconciliationSubmitted:
+	default:
+		return false, fmt.Errorf("runtime operation mutation cannot record reconciliation state %q", state)
 	}
 	var (
 		ledger  *sessionLedger
@@ -78,7 +53,7 @@ func (c *Coordinator) TryCommitOperationMutation(sessionID string, ref clientui.
 		break
 	}
 
-	mutationErr, panicValue := invokeOperationMutation(mutate)
+	committed, mutationErr, panicValue := invokeOperationMutation(mutate)
 
 	c.mu.Lock()
 	if ledger.commitBarriers[key] != barrier {
@@ -90,26 +65,23 @@ func (c *Coordinator) TryCommitOperationMutation(sessionID string, ref clientui.
 		))
 	}
 	delete(ledger.commitBarriers, key)
-	if mutationErr == nil {
-		c.recordLocked(ledger, ref, clientui.RuntimeInputReconciliationCommitted, !ledger.nonEvictableLocked(key), c.now())
+	if committed {
+		c.recordLocked(ledger, ref, state, !ledger.nonEvictableLocked(key), c.now())
 	}
 	close(barrier.done)
 	c.mu.Unlock()
 	if panicValue != nil {
 		panic(panicValue)
 	}
-	if mutationErr != nil {
-		return false, mutationErr
-	}
-	return true, nil
+	return committed, mutationErr
 }
 
-func invokeOperationMutation(mutate func() error) (err error, panicValue any) {
+func invokeOperationMutation(mutate func() (bool, error)) (committed bool, err error, panicValue any) {
 	defer func() {
 		panicValue = recover()
 	}()
 	if mutate != nil {
-		err = mutate()
+		committed, err = mutate()
 	}
 	return
 }

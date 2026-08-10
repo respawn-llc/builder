@@ -79,8 +79,8 @@ func (c uiInputController) startSubmissionWithPromptHistoryAndQueuePositionAndID
 func (c uiInputController) submitCmd(text string, input runtimeinput.Input, queuedID string, origin activeSubmitOrigin) tea.Cmd {
 	m := c.model
 	operationRef := newRuntimeOperationRef(clientui.RuntimeOperationKindSubmit)
-	preSubmitCompactionRef := newRuntimeOperationRef(clientui.RuntimeOperationKindPreSubmitCompact)
-	m.addPendingRuntimeOperation(preSubmitCompactionRef)
+	preSubmitCompactionOperationRef := newRuntimeOperationRef(clientui.RuntimeOperationKindPreSubmitCompact)
+	m.addPendingRuntimeOperation(preSubmitCompactionOperationRef)
 	token := m.beginSubmitAttempt(text, queuedID, operationRef, origin)
 	client := m.runtimeClient()
 	return func() tea.Msg {
@@ -89,7 +89,7 @@ func (c uiInputController) submitCmd(text string, input runtimeinput.Input, queu
 		}
 		submission, err := m.submitRuntimeInput(context.Background(), clientui.RuntimeSubmitRequest{
 			OperationRef:                    operationRef,
-			PreSubmitCompactionOperationRef: preSubmitCompactionRef,
+			PreSubmitCompactionOperationRef: preSubmitCompactionOperationRef,
 			Input:                           input,
 		})
 		if err != nil {
@@ -220,10 +220,6 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 	submitOrigin := m.activeSubmit.origin
 	m.observeRuntimeRequestResult(msg.err)
 	restoreSubmittedText := msg.err != nil && (submitOrigin == activeSubmitOriginQueued || msg.token == 0 || m.shouldRestoreSubmittedTextOnSubmitError(msg.err))
-	if msg.token != 0 && msg.err != nil && isRuntimeOperationInterrupted(msg.err) && m.activeSubmit.restoreOnInterrupt {
-		restore, _ := m.shouldRestoreActiveSubmitAfterInterrupt()
-		restoreSubmittedText = restore
-	}
 	activeQueuedID := m.activeSubmit.queuedID
 	m.activeSubmit = activeSubmitState{}
 	m.clearPendingRuntimeOperations(clientui.RuntimeOperationKindPreSubmitCompact)
@@ -235,6 +231,12 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 	if msg.err != nil {
 		if m.turnQueueHook != nil {
 			m.turnQueueHook.OnTurnQueueAborted()
+		}
+		if isRuntimeOperationInterrupted(msg.err) && m.hasPendingInterrupt() {
+			m.activity = uiActivityInterrupted
+			m.logf("step.interrupted")
+			m.layout().syncViewport()
+			return m, m.interruptedStatusNoticeCmd()
 		}
 		restoreInjectedCmd := tea.Cmd(nil)
 		if submitOrigin != activeSubmitOriginQueued {
@@ -378,6 +380,9 @@ func (m *uiModel) shouldRestoreSubmittedTextOnSubmitError(err error) bool {
 		return false
 	}
 	if isRuntimeOperationInterrupted(err) {
+		return true
+	}
+	if errors.Is(err, serverapi.ErrRuntimeCommandNotAccepted) {
 		return true
 	}
 	if !m.hasRuntimeClient() {

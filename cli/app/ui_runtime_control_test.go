@@ -11,6 +11,7 @@ import (
 
 	"core/server/llm"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/textutil"
 )
@@ -254,6 +255,121 @@ func (f *runtimeControlFakeClient) DiscardQueuedUserMessage(queueItemID string) 
 func (f *runtimeControlFakeClient) RecordPromptHistory(text string) error {
 	f.recordedPromptHistory = text
 	return f.err
+}
+
+func TestRuntimeInterruptNotAcceptedClearsPendingAttempt(t *testing.T) {
+	client := &runtimeControlFakeClient{
+		interruptErr: serverapi.NewRuntimeCommandNotAcceptedError(errors.New("no active Agent Turn")),
+	}
+	m := newProjectedClosedUIModel(client)
+	m.sessionID = "session-1"
+	m.setRuntimeActivityBusyForTest(true)
+	m.activeSubmit = activeSubmitState{
+		token:              1,
+		text:               "keep me",
+		operationRef:       newRuntimeOperationRef(clientui.RuntimeOperationKindSubmit),
+		restoreOnInterrupt: true,
+	}
+
+	cmd := m.inputController().interruptBusyRuntime()
+	if !m.hasPendingInterrupt() {
+		t.Fatal("interrupt attempt was not marked pending")
+	}
+	done := cmd().(runtimeControlDoneMsg)
+	next, _ := m.Update(done)
+	updated := next.(*uiModel)
+
+	if updated.hasPendingInterrupt() {
+		t.Fatal("not-accepted interrupt remained pending")
+	}
+	if updated.activeSubmit.token != 1 || updated.activeSubmit.text != "keep me" {
+		t.Fatalf("not-accepted interrupt changed active submit: %+v", updated.activeSubmit)
+	}
+}
+
+func TestRuntimeInterruptRestoresPendingInputsBeforeComposerDraftInSubmissionOrder(t *testing.T) {
+	client := &runtimeControlFakeClient{}
+	m := newProjectedClosedUIModel(client)
+	_ = m.queueInjectedInput("steer one")
+	m.queueInput("queue two")
+	_ = m.queueInjectedInput("steer three")
+	m.queueInput("queue four")
+	stopped := clientui.QueuedUserMessageFailureStopped
+	bindSteer := func(index int) clientui.TranscriptQueuedMessageState {
+		t.Helper()
+		requestID, err := runtimeids.ParseRuntimeClientRequestID(m.injectedQueue[index].ClientRequestID)
+		if err != nil {
+			t.Fatalf("parse queued client request id: %v", err)
+		}
+		queueID := runtimeids.NewQueueItemID()
+		text := m.injectedQueue[index].Text
+		m.registerSteeredQueuedUserMessage(clientui.QueuedUserMessage{
+			ID:              queueID.String(),
+			Text:            text,
+			ClientRequestID: requestID.String(),
+		})
+		return clientui.TranscriptQueuedMessageState{
+			ClientRequestID: requestID,
+			QueueItemID:     queueID,
+			Status:          clientui.QueuedUserMessageFailed,
+			FailureReason:   &stopped,
+			Text:            &text,
+		}
+	}
+	firstFailure := bindSteer(0)
+	secondFailure := bindSteer(1)
+	testSetMainInput(m, "existing draft")
+	activeText := "active turn already visible in the transcript"
+	m.activeSubmit = activeSubmitState{
+		token:        1,
+		text:         activeText,
+		operationRef: newRuntimeOperationRef(clientui.RuntimeOperationKindSubmit),
+	}
+	m.setPendingInterrupt(true)
+
+	next, interruptedCmd := m.inputController().handleSubmitDone(newSubmitDoneMsg(1, "", activeText, context.Canceled))
+	m = next.(*uiModel)
+	for _, msg := range collectCmdMessages(t, interruptedCmd) {
+		m = updateUIModel(t, m, msg)
+	}
+	if got := testMainInput(m); got != "existing draft" {
+		t.Fatalf("interrupted active Submit changed composer before interrupt response = %q", got)
+	}
+	if len(m.pendingInjected) != 2 || len(m.injectedQueue) != 2 || len(m.queued) != 2 {
+		t.Fatalf("interrupted active Submit consumed pending inputs before response: pending=%d injected=%d queued=%d", len(m.pendingInjected), len(m.injectedQueue), len(m.queued))
+	}
+	if client.discardQueuedCalls != 0 {
+		t.Fatalf("interrupted active Submit dispatched %d queued-message discards before response", client.discardQueuedCalls)
+	}
+	stoppedCmd := m.applyTranscriptQueuedMessageState(firstFailure)
+	if stoppedCmd == nil {
+		t.Fatal("stopped queue event did not acknowledge the observed interruption")
+	}
+	for _, msg := range collectCmdMessages(t, stoppedCmd) {
+		m = updateUIModel(t, m, msg)
+	}
+
+	want := "steer one\n\nqueue two\n\nsteer three\n\nqueue four\n\nexisting draft"
+	if got := testMainInput(m); got != want {
+		t.Fatalf("restored composer = %q, want %q", got, want)
+	}
+	if len(m.pendingInjected) != 0 || len(m.injectedQueue) != 0 || len(m.queued) != 0 {
+		t.Fatalf("pending input state remained after restoration: pending=%+v injected=%+v queued=%+v", m.pendingInjected, m.injectedQueue, m.queued)
+	}
+	if m.hasPendingInterrupt() {
+		t.Fatal("interrupt remained pending after local restoration")
+	}
+	accepted := secondFailure
+	accepted.Status = clientui.QueuedUserMessageAccepted
+	accepted.FailureReason = nil
+	m.applyTranscriptQueuedMessageState(accepted)
+	m.applyTranscriptQueuedMessageState(secondFailure)
+	if got := testMainInput(m); got != want {
+		t.Fatalf("late queue events duplicated restored composer = %q, want %q", got, want)
+	}
+	if len(m.pendingInjected) != 0 || len(m.injectedQueue) != 0 {
+		t.Fatalf("late queue events recreated interrupted state: pending=%+v injected=%+v", m.pendingInjected, m.injectedQueue)
+	}
 }
 
 func TestThinkingQueryUsesStatusOnly(t *testing.T) {

@@ -1184,12 +1184,8 @@ func TestResolvePersistedSessionRoundTripsRequiredStructuredMetadata(t *testing.
 	if err != nil {
 		t.Fatalf("SetGoal: %v", err)
 	}
-	buffers := []session.InputDraftRecoveryBuffer{{
-		Kind: "queued_input",
-		Text: "recover this draft",
-	}}
-	if err := sess.SetInputDraftRecovery("draft", buffers); err != nil {
-		t.Fatalf("SetInputDraftRecovery: %v", err)
+	if err := sess.SetInputDraft("draft"); err != nil {
+		t.Fatalf("SetInputDraft: %v", err)
 	}
 	recovery := session.PendingModelRecovery{
 		RecoveryID:             "recovery-1",
@@ -1220,8 +1216,8 @@ func TestResolvePersistedSessionRoundTripsRequiredStructuredMetadata(t *testing.
 	if meta.Goal == nil || *meta.Goal != goal {
 		t.Fatalf("goal = %+v, want %+v", meta.Goal, goal)
 	}
-	if len(meta.InputDraftRecoveryBuffers) != 1 || meta.InputDraftRecoveryBuffers[0] != buffers[0] {
-		t.Fatalf("recovery buffers = %+v, want %+v", meta.InputDraftRecoveryBuffers, buffers)
+	if meta.InputDraft != "draft" {
+		t.Fatalf("input draft = %q, want draft", meta.InputDraft)
 	}
 	persistedRecovery := meta.PendingModelRecovery
 	if persistedRecovery == nil {

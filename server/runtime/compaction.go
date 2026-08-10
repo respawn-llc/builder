@@ -76,18 +76,23 @@ type defaultContextCompactor struct {
 
 func (e *Engine) CompactContext(ctx context.Context, args string) error {
 	e.ensureOrchestrationCollaborators()
-	_, err := e.compactionFlow.CompactContextWithActiveHook(ctx, args, nil)
+	_, err := e.compactionFlow.CompactContextWithAcceptance(ctx, args, nil, nil)
 	return err
 }
 
 func (e *Engine) CompactContextWithActiveHook(ctx context.Context, args string, onActive func()) (session.CommitReceipt, error) {
 	e.ensureOrchestrationCollaborators()
-	return e.compactionFlow.CompactContextWithActiveHook(ctx, args, onActive)
+	return e.compactionFlow.CompactContextWithAcceptance(ctx, args, onActive, nil)
+}
+
+func (e *Engine) CompactContextWithAcceptance(ctx context.Context, args string, onActive func(), accept CommandAcceptance) (session.CommitReceipt, error) {
+	e.ensureOrchestrationCollaborators()
+	return e.compactionFlow.CompactContextWithAcceptance(ctx, args, onActive, accept)
 }
 
 func (e *Engine) CompactContextForPreSubmit(ctx context.Context) error {
 	e.ensureOrchestrationCollaborators()
-	_, err := e.compactionFlow.CompactContextForPreSubmitWithActiveHook(ctx, nil)
+	_, err := e.compactionFlow.CompactContextForPreSubmitWithAcceptance(ctx, nil, nil)
 	return err
 }
 
@@ -135,7 +140,12 @@ func (e *Engine) WorkflowPreCompactionTokenLimit() (int, error) {
 
 func (e *Engine) CompactContextForPreSubmitWithActiveHook(ctx context.Context, onActive func()) (session.CommitReceipt, error) {
 	e.ensureOrchestrationCollaborators()
-	return e.compactionFlow.CompactContextForPreSubmitWithActiveHook(ctx, onActive)
+	return e.compactionFlow.CompactContextForPreSubmitWithAcceptance(ctx, onActive, nil)
+}
+
+func (e *Engine) CompactContextForPreSubmitWithAcceptance(ctx context.Context, onActive func(), accept CommandAcceptance) (session.CommitReceipt, error) {
+	e.ensureOrchestrationCollaborators()
+	return e.compactionFlow.CompactContextForPreSubmitWithAcceptance(ctx, onActive, accept)
 }
 
 func (e *Engine) TriggerHandoff(ctx context.Context, stepID string, activeCall llm.ToolCall, summarizerPrompt string, futureAgentMessage string) (string, bool, error) {
@@ -143,16 +153,16 @@ func (e *Engine) TriggerHandoff(ctx context.Context, stepID string, activeCall l
 	return e.compactionFlow.TriggerHandoff(ctx, stepID, activeCall, summarizerPrompt, futureAgentMessage)
 }
 
-func (c *defaultContextCompactor) CompactContextWithActiveHook(ctx context.Context, args string, onActive func()) (session.CommitReceipt, error) {
+func (c *defaultContextCompactor) CompactContextWithAcceptance(ctx context.Context, args string, onActive func(), accept CommandAcceptance) (session.CommitReceipt, error) {
 	instructions, err := newCompactionInstructionsInput(args)
 	if err != nil {
 		return session.CommitReceipt{}, err
 	}
-	return c.compactManualContext(ctx, instructions, onActive, true)
+	return c.compactManualContext(ctx, instructions, onActive, accept, true)
 }
 
 func (c *defaultContextCompactor) CompactContextForWorkflowContinuation(ctx context.Context) (session.CommitReceipt, error) {
-	return c.compactManualContext(ctx, compactionInstructionsInput{}, nil, false)
+	return c.compactManualContext(ctx, compactionInstructionsInput{}, nil, nil, false)
 }
 
 func (c *defaultContextCompactor) CompactContextForWorkflowPostCompletion(ctx context.Context) workflowruntime.PostCompletionCompactionResult {
@@ -163,6 +173,7 @@ func (c *defaultContextCompactor) CompactContextForWorkflowPostCompletion(ctx co
 		false,
 		nil,
 		nil,
+		nil,
 		false,
 	)
 	return workflowruntime.PostCompletionCompactionResult{
@@ -171,7 +182,7 @@ func (c *defaultContextCompactor) CompactContextForWorkflowPostCompletion(ctx co
 	}
 }
 
-func (c *defaultContextCompactor) compactManualContext(ctx context.Context, instructions compactionInstructionsInput, onActive func(), requireEligibility bool) (session.CommitReceipt, error) {
+func (c *defaultContextCompactor) compactManualContext(ctx context.Context, instructions compactionInstructionsInput, onActive func(), accept CommandAcceptance, requireEligibility bool) (session.CommitReceipt, error) {
 	if requireEligibility {
 		if snapshot := c.steps.Snapshot(); snapshot != nil &&
 			(snapshot.ActiveKind == ActiveKindCompaction || snapshot.ActiveKind == ActiveKindPreSubmitCompaction) {
@@ -186,11 +197,11 @@ func (c *defaultContextCompactor) compactManualContext(ctx context.Context, inst
 		return session.CommitReceipt{}, err
 	}
 	defer c.steps.ReleaseReservation(reservation)
-	return c.compactContext(ctx, compactionModeManual, instructions, true, reservation, onActive, requireEligibility)
+	return c.compactContext(ctx, compactionModeManual, instructions, true, reservation, onActive, accept, requireEligibility)
 }
 
-func (c *defaultContextCompactor) CompactContextForPreSubmitWithActiveHook(ctx context.Context, onActive func()) (session.CommitReceipt, error) {
-	return c.compactContext(ctx, compactionModeManual, compactionInstructionsInput{}, false, nil, onActive, false)
+func (c *defaultContextCompactor) CompactContextForPreSubmitWithAcceptance(ctx context.Context, onActive func(), accept CommandAcceptance) (session.CommitReceipt, error) {
+	return c.compactContext(ctx, compactionModeManual, compactionInstructionsInput{}, false, nil, onActive, accept, false)
 }
 
 func isAgentStepCapable(kind ActiveKind) bool {
@@ -225,7 +236,7 @@ func (c *defaultContextCompactor) TriggerHandoff(ctx context.Context, stepID str
 	return summary, appended, nil
 }
 
-func (c *defaultContextCompactor) compactContext(ctx context.Context, mode compactionMode, instructions compactionInstructionsInput, includePreservedUserMessage bool, reservation *exclusiveStepReservation, onActive func(), requireEligibility bool) (session.CommitReceipt, error) {
+func (c *defaultContextCompactor) compactContext(ctx context.Context, mode compactionMode, instructions compactionInstructionsInput, includePreservedUserMessage bool, reservation *exclusiveStepReservation, onActive func(), accept CommandAcceptance, requireEligibility bool) (session.CommitReceipt, error) {
 	e := c.engine
 	activeKind := ActiveKindPreSubmitCompaction
 	if includePreservedUserMessage {
@@ -250,7 +261,7 @@ func (c *defaultContextCompactor) compactContext(ctx context.Context, mode compa
 		if err := e.ensureMetaContextForCompaction(stepCtx, stepID); err != nil {
 			return err
 		}
-		_, compactReceipt, err := e.compactNow(stepCtx, stepID, mode, instructions, includePreservedUserMessage)
+		_, compactReceipt, err := e.compactNowWithAcceptance(stepCtx, stepID, mode, instructions, includePreservedUserMessage, accept)
 		receipt = compactReceipt
 		if err == nil || receipt.Committed {
 			e.handoffRuntimeState().ClearRequest()
@@ -682,6 +693,10 @@ func (e *Engine) currentTokenUsage() int {
 }
 
 func (e *Engine) compactNow(ctx context.Context, stepID string, mode compactionMode, instructionsInput compactionInstructionsInput, includePreservedUserMessage bool) (compactionResult, session.CommitReceipt, error) {
+	return e.compactNowWithAcceptance(ctx, stepID, mode, instructionsInput, includePreservedUserMessage, nil)
+}
+
+func (e *Engine) compactNowWithAcceptance(ctx context.Context, stepID string, mode compactionMode, instructionsInput compactionInstructionsInput, includePreservedUserMessage bool, accept CommandAcceptance) (compactionResult, session.CommitReceipt, error) {
 	planningSnapshot := e.compactionPlanningSnapshot()
 	planner := e.compactionPlannerState()
 	if planner.mode(planningSnapshot.compactionMode) == "none" {
@@ -707,8 +722,17 @@ func (e *Engine) compactNow(ctx context.Context, stepID string, mode compactionM
 		providerID = "unknown"
 	}
 
-	if err := newCompactionPersistence(e).emitStatus(stepID, EventCompactionStarted, mode, "selector", providerID, nil, 0, ""); err != nil {
-		return compactionResult{}, session.CommitReceipt{}, err
+	persistence := newCompactionPersistence(e)
+	if accept == nil {
+		if err := persistence.emitStatus(stepID, EventCompactionStarted, mode, "selector", providerID, nil, 0, ""); err != nil {
+			return compactionResult{}, session.CommitReceipt{}, err
+		}
+	}
+	compactionFailure := func(result compactionResult, err error) error {
+		if accept != nil {
+			return err
+		}
+		return errors.Join(err, persistence.emitStatus(stepID, EventCompactionFailed, mode, result.engine, providerID, result.trimmedItemsCount, 0, err.Error()))
 	}
 
 	instructions := compactionInstructionsForMode(mode, instructionsInput)
@@ -727,21 +751,18 @@ func (e *Engine) compactNow(ctx context.Context, stepID string, mode compactionM
 		result, err = e.compactLocal(ctx, stepID, input, providerID, instructions, mode)
 	}
 	if err != nil {
-		statusErr := newCompactionPersistence(e).emitStatus(stepID, EventCompactionFailed, mode, result.engine, providerID, result.trimmedItemsCount, 0, err.Error())
-		return compactionResult{}, session.CommitReceipt{}, errors.Join(err, statusErr)
+		return compactionResult{}, session.CommitReceipt{}, compactionFailure(result, err)
 	}
 
 	if len(result.items) == 0 {
 		err := errors.New("compaction returned empty replacement history")
-		statusErr := newCompactionPersistence(e).emitStatus(stepID, EventCompactionFailed, mode, result.engine, providerID, result.trimmedItemsCount, 0, err.Error())
-		return compactionResult{}, session.CommitReceipt{}, errors.Join(err, statusErr)
+		return compactionResult{}, session.CommitReceipt{}, compactionFailure(result, err)
 	}
 
 	compactionNumber := e.compactionRuntimeState().Count() + 1
 	postReplacementMeta, err := e.compactionReinjectedMetaMessagesForMode(ctx, mode)
 	if err != nil {
-		statusErr := newCompactionPersistence(e).emitStatus(stepID, EventCompactionFailed, mode, result.engine, providerID, result.trimmedItemsCount, 0, err.Error())
-		return compactionResult{}, session.CommitReceipt{}, errors.Join(err, statusErr)
+		return compactionResult{}, session.CommitReceipt{}, compactionFailure(result, err)
 	}
 	// Reinject canonical generation context as part of the single
 	// history_replaced commit. The rebuilt active list is born with all runtime
@@ -753,13 +774,20 @@ func (e *Engine) compactNow(ctx context.Context, stepID string, mode compactionM
 			replacementItems = append(replacementItems, llm.ItemsFromMessages([]llm.Message{preservedMessage})...)
 		}
 	}
-	replacementReceipt, replacementErr := newCompactionPersistence(e).replaceHistory(stepID, result.engine, mode, replacementItems)
+	var replacementReceipt session.CommitReceipt
+	committed, replacementErr := runCommandAcceptance(accept, func() (bool, error) {
+		var err error
+		replacementReceipt, err = persistence.replaceHistory(stepID, result.engine, mode, replacementItems)
+		return replacementReceipt.Committed, err
+	})
+	if accept != nil {
+		replacementErr = commandAcceptanceResult(committed, replacementErr)
+	}
 	if !replacementReceipt.Committed {
 		if replacementErr == nil {
 			replacementErr = errors.New("history replacement returned an uncommitted receipt without an error")
 		}
-		statusErr := newCompactionPersistence(e).emitStatus(stepID, EventCompactionFailed, mode, result.engine, providerID, result.trimmedItemsCount, 0, replacementErr.Error())
-		return compactionResult{}, replacementReceipt, errors.Join(replacementErr, statusErr)
+		return compactionResult{}, replacementReceipt, compactionFailure(result, replacementErr)
 	}
 	e.compactionRuntimeState().SetManualCompactionEligible(false)
 	finalizationErr := replacementErr
@@ -807,7 +835,7 @@ func (e *Engine) compactNow(ctx context.Context, stepID string, mode compactionM
 		finalizationErr = errors.Join(finalizationErr, staleErr)
 	}
 
-	if err := newCompactionPersistence(e).emitStatus(stepID, EventCompactionCompleted, mode, result.engine, providerID, result.trimmedItemsCount, compactionNumber, ""); err != nil {
+	if err := persistence.emitStatus(stepID, EventCompactionCompleted, mode, result.engine, providerID, result.trimmedItemsCount, compactionNumber, ""); err != nil {
 		finalizationErr = errors.Join(finalizationErr, err)
 	}
 	return result, replacementReceipt, finalizationErr
