@@ -24,22 +24,33 @@ type currentNodeInterruptCleanupState struct {
 	stopHandles    []sessionruntime.ExecutionHandle
 	waitHandles    []sessionruntime.ExecutionHandle
 	references     []workflow.CurrentNodeReference
-	drainedGates   []currentNodeAdmissionGate
+	launchRuns     []currentNodeRunID
 	admissionWaits []currentNodeAdmissionWait
 	taskFence      *currentNodeInterruptFence
 }
 
 func (c *CurrentNodeController) cleanupInterrupt(state currentNodeInterruptCleanupState) error {
 	if len(state.stopHandles) == 0 &&
-		len(state.drainedGates) == 0 &&
+		len(state.launchRuns) == 0 &&
 		len(state.admissionWaits) == 0 {
 		return nil
 	}
 	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), interruptCleanupTimeout)
 	defer cleanupCancel()
-	for _, gate := range state.drainedGates {
-		gate.lease.Cancel()
+	c.mu.Lock()
+	for _, runID := range state.launchRuns {
+		run := c.runs[runID]
+		if run == nil || !run.launching() || c.currentRuns[run.key] != runID {
+			continue
+		}
+		if run.launchCancel != nil {
+			run.launchCancel()
+		}
+		if run.lease != nil {
+			run.lease.Cancel()
+		}
 	}
+	c.mu.Unlock()
 	c.wakeAdmissionWorker()
 	for _, handle := range state.stopHandles {
 		handle.RequestStop()
@@ -73,7 +84,7 @@ func (c *CurrentNodeController) cleanupInterrupt(state currentNodeInterruptClean
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		for _, handle := range state.waitHandles {
-			if _, live := c.live[handle.Scope().ID()]; live {
+			if _, live := c.runByScopeLocked(handle.Scope().ID()); live {
 				return errors.New("workflow interruption left an affected exact execution scope")
 			}
 		}
@@ -99,7 +110,7 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 		stopHandles    []sessionruntime.ExecutionHandle
 		waitHandles    []sessionruntime.ExecutionHandle
 		references     []workflow.CurrentNodeReference
-		drainedGates   []currentNodeAdmissionGate
+		launchRuns     []currentNodeRunID
 		admissionWaits []currentNodeAdmissionWait
 		taskFence      *currentNodeInterruptFence
 	)
@@ -130,18 +141,14 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 				if !workflowScoped {
 					return errors.New("authority interrupt selection is not workflow scoped")
 				}
-				if live, exists := c.live[scopeID]; exists {
+				if live, exists := c.runByScopeLocked(scopeID); exists {
 					if !scopeRef.CurrentNode.Equal(live.reference) {
 						return errors.New("authority interrupt selection does not match live workflow execution ownership")
 					}
 					continue
 				}
-				key, keyErr := scopeRef.CurrentNode.Key()
-				if keyErr != nil {
-					return keyErr
-				}
-				gate, gated := c.gates[key]
-				if !gated || gate.lease.ScopeID() != scopeID {
+				run, launching := c.launchingRunByScopeLocked(scopeID)
+				if !launching || !run.reference.Equal(scopeRef.CurrentNode) {
 					return errors.New("authority interrupt selection does not match workflow execution ownership")
 				}
 			}
@@ -177,7 +184,7 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 				references = append(references, scopeRef.CurrentNode)
 			}
 
-			return drainTaskControllerWorkLocked(c, selector.TaskID, taskFence, &references, &admissionWaits, &drainedGates)
+			return drainTaskControllerWorkLocked(c, selector.TaskID, taskFence, &references, &admissionWaits, &launchRuns)
 		})
 		if errors.Is(err, sessionruntime.ErrExecutionNoLongerLive) {
 			return ErrNoInterruptibleExecution
@@ -194,7 +201,7 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 		stopHandles:    stopHandles,
 		waitHandles:    waitHandles,
 		references:     references,
-		drainedGates:   drainedGates,
+		launchRuns:     launchRuns,
 		admissionWaits: admissionWaits,
 		taskFence:      taskFence,
 	})
@@ -219,7 +226,7 @@ func (c *CurrentNodeController) InterruptForManualMove(
 		stopHandles    []sessionruntime.ExecutionHandle
 		waitHandles    []sessionruntime.ExecutionHandle
 		references     []workflow.CurrentNodeReference
-		drainedGates   []currentNodeAdmissionGate
+		launchRuns     []currentNodeRunID
 		admissionWaits []currentNodeAdmissionWait
 		taskFence      *currentNodeInterruptFence
 	)
@@ -251,51 +258,40 @@ func (c *CurrentNodeController) InterruptForManualMove(
 				if !workflowScoped || scopeRef.CurrentNode.TaskID != taskID {
 					return errors.New("manual move interruption selection is not workflow scoped")
 				}
-				live, exists := c.live[scopeID]
+				live, exists := c.runByScopeLocked(scopeID)
 				if !exists || !live.reference.Equal(scopeRef.CurrentNode) {
 					return errors.New("manual move interruption selection does not match controller ownership")
 				}
 			}
 			for entry := c.automaticQueue.first; entry != nil; entry = entry.globalNext {
-				if entry.start.reference.TaskID == taskID {
-					if _, err := entry.start.reference.Key(); err != nil {
+				run := c.runs[entry.runID]
+				if run != nil && run.reference.TaskID == taskID {
+					if _, err := run.reference.Key(); err != nil {
 						return err
 					}
 				}
 			}
-			for _, start := range c.explicitQueue {
-				if start.reference.TaskID == taskID {
-					if _, err := start.reference.Key(); err != nil {
+			for _, id := range c.explicitQueue {
+				run := c.runs[id]
+				if run != nil && run.reference.TaskID == taskID {
+					if _, err := run.reference.Key(); err != nil {
 						return err
 					}
 				}
 			}
-			for _, starts := range c.heldStarts {
-				for _, start := range starts {
-					if start.reference.TaskID == taskID {
-						if _, err := start.reference.Key(); err != nil {
+			for _, runs := range c.heldStarts {
+				for _, id := range runs {
+					run := c.runs[id]
+					if run != nil && run.reference.TaskID == taskID {
+						if _, err := run.reference.Key(); err != nil {
 							return err
 						}
 					}
 				}
 			}
-			for _, start := range c.explicitReservations {
-				if start.reference.TaskID == taskID {
-					if err := start.reference.Validate(); err != nil {
-						return err
-					}
-				}
-			}
-			for _, start := range c.automaticReservations {
-				if start.reference.TaskID == taskID {
-					if err := start.reference.Validate(); err != nil {
-						return err
-					}
-				}
-			}
-			for _, gate := range c.gates {
-				if gate.reference.TaskID == taskID {
-					if err := gate.reference.Validate(); err != nil {
+			for _, run := range c.runs {
+				if run.reference.TaskID == taskID {
+					if err := run.reference.Validate(); err != nil {
 						return err
 					}
 				}
@@ -324,7 +320,7 @@ func (c *CurrentNodeController) InterruptForManualMove(
 				references = append(references, scopeRef.CurrentNode)
 			}
 			if taskFence != nil {
-				if err := drainTaskControllerWorkLocked(c, taskID, taskFence, &references, &admissionWaits, &drainedGates); err != nil {
+				if err := drainTaskControllerWorkLocked(c, taskID, taskFence, &references, &admissionWaits, &launchRuns); err != nil {
 					return err
 				}
 			}
@@ -344,7 +340,7 @@ func (c *CurrentNodeController) InterruptForManualMove(
 		stopHandles:    stopHandles,
 		waitHandles:    waitHandles,
 		references:     references,
-		drainedGates:   drainedGates,
+		launchRuns:     launchRuns,
 		admissionWaits: admissionWaits,
 		taskFence:      taskFence,
 	})
@@ -359,40 +355,11 @@ func appendAdmissionWait(
 }
 
 func taskHasControllerQueuedWorkLocked(c *CurrentNodeController, taskID workflow.TaskID) bool {
-	for entry := c.automaticQueue.first; entry != nil; entry = entry.globalNext {
-		if entry.start.reference.TaskID == taskID {
-			return true
-		}
-	}
-	for _, start := range c.explicitQueue {
-		if start.reference.TaskID == taskID {
-			return true
-		}
-	}
-	for _, starts := range c.heldStarts {
-		for _, start := range starts {
-			if start.reference.TaskID == taskID {
-				return true
-			}
-		}
-	}
-	for _, start := range c.automaticReservations {
-		if start.reference.TaskID == taskID {
-			return true
-		}
-	}
-	for _, start := range c.explicitReservations {
-		if start.reference.TaskID == taskID {
-			return true
-		}
-	}
-	for _, gate := range c.gates {
-		if gate.reference.TaskID == taskID {
-			return true
-		}
-	}
-	for _, start := range c.admissionWorkers {
-		if start.reference.TaskID == taskID {
+	for _, run := range c.runs {
+		if run.reference.TaskID == taskID &&
+			(run.phase == currentNodeRunQueued ||
+				run.phase == currentNodeRunHeld ||
+				run.phase == currentNodeRunLaunching) {
 			return true
 		}
 	}
@@ -400,54 +367,10 @@ func taskHasControllerQueuedWorkLocked(c *CurrentNodeController, taskID workflow
 }
 
 func validateTaskControllerWorkLocked(c *CurrentNodeController, taskID workflow.TaskID) error {
-	for entry := c.automaticQueue.first; entry != nil; entry = entry.globalNext {
-		if entry.start.reference.TaskID == taskID {
-			if _, err := entry.start.reference.Key(); err != nil {
-				return fmt.Errorf("validate automatic queue for task %s: %w", taskID, err)
-			}
-		}
-	}
-	for _, start := range c.explicitQueue {
-		if start.reference.TaskID == taskID {
-			if _, err := start.reference.Key(); err != nil {
-				return fmt.Errorf("validate explicit queue for task %s: %w", taskID, err)
-			}
-		}
-	}
-	for _, starts := range c.heldStarts {
-		for _, start := range starts {
-			if start.reference.TaskID == taskID {
-				if _, err := start.reference.Key(); err != nil {
-					return fmt.Errorf("validate held start for task %s: %w", taskID, err)
-				}
-			}
-		}
-	}
-	for _, start := range c.explicitReservations {
-		if start.reference.TaskID == taskID {
-			if err := start.reference.Validate(); err != nil {
-				return fmt.Errorf("validate explicit reservation for task %s: %w", taskID, err)
-			}
-		}
-	}
-	for _, start := range c.automaticReservations {
-		if start.reference.TaskID == taskID {
-			if err := start.reference.Validate(); err != nil {
-				return fmt.Errorf("validate automatic reservation for task %s: %w", taskID, err)
-			}
-		}
-	}
-	for _, gate := range c.gates {
-		if gate.reference.TaskID == taskID {
-			if err := gate.reference.Validate(); err != nil {
-				return fmt.Errorf("validate admission gate for task %s: %w", taskID, err)
-			}
-		}
-	}
-	for _, start := range c.admissionWorkers {
-		if start.reference.TaskID == taskID {
-			if err := start.reference.Validate(); err != nil {
-				return fmt.Errorf("validate admission worker for task %s: %w", taskID, err)
+	for _, run := range c.runs {
+		if run.reference.TaskID == taskID {
+			if err := run.reference.Validate(); err != nil {
+				return fmt.Errorf("validate Run generation for task %s: %w", taskID, err)
 			}
 		}
 	}
@@ -460,57 +383,60 @@ func drainTaskControllerWorkLocked(
 	fence *currentNodeInterruptFence,
 	references *[]workflow.CurrentNodeReference,
 	admissionWaits *[]currentNodeAdmissionWait,
-	drainedGates *[]currentNodeAdmissionGate,
+	launchRuns *[]currentNodeRunID,
 ) error {
 	explicitQueue := c.explicitQueue[:0]
-	for _, start := range c.explicitQueue {
-		if start.reference.TaskID != taskID {
-			explicitQueue = append(explicitQueue, start)
+	for _, runID := range c.explicitQueue {
+		run := c.runs[runID]
+		if run == nil {
 			continue
 		}
-		key, err := start.reference.Key()
-		if err != nil {
-			return fmt.Errorf("drain explicit queue for task %s: %w", taskID, err)
+		if run.reference.TaskID != taskID {
+			explicitQueue = append(explicitQueue, runID)
+			continue
 		}
-		delete(c.explicitQueued, key)
-		c.interrupts.addCurrentNode(fence, key)
-		*references = append(*references, start.reference)
-		*admissionWaits = appendAdmissionWait(*admissionWaits, key, nil)
+		c.interrupts.addCurrentNode(fence, run.key)
+		*references = append(*references, run.reference)
+		*admissionWaits = appendAdmissionWait(*admissionWaits, run.key, nil)
+		c.removeRunLocked(runID)
 	}
 	c.explicitQueue = explicitQueue
 
 	for entry := c.automaticQueue.first; entry != nil; {
 		next := entry.globalNext
-		if entry.start.reference.TaskID != taskID {
+		run := c.runs[entry.runID]
+		if run == nil {
+			c.automaticQueue.remove(entry)
 			entry = next
 			continue
 		}
-		start := c.automaticQueue.remove(entry)
-		key, err := start.reference.Key()
-		if err != nil {
-			return fmt.Errorf("drain automatic queue for task %s: %w", taskID, err)
+		if run.reference.TaskID != taskID {
+			entry = next
+			continue
 		}
-		delete(c.queued, key)
-		c.interrupts.addCurrentNode(fence, key)
-		*references = append(*references, start.reference)
-		*admissionWaits = appendAdmissionWait(*admissionWaits, key, nil)
+		runID := c.automaticQueue.remove(entry)
+		c.interrupts.addCurrentNode(fence, run.key)
+		*references = append(*references, run.reference)
+		*admissionWaits = appendAdmissionWait(*admissionWaits, run.key, nil)
+		c.removeRunLocked(runID)
 		entry = next
 	}
 
-	for sourceScope, starts := range c.heldStarts {
-		kept := starts[:0]
-		for _, start := range starts {
-			if start.reference.TaskID != taskID {
-				kept = append(kept, start)
+	for sourceScope, runs := range c.heldStarts {
+		kept := runs[:0]
+		for _, runID := range runs {
+			run := c.runs[runID]
+			if run == nil {
 				continue
 			}
-			key, err := start.reference.Key()
-			if err != nil {
-				return fmt.Errorf("drain held start for task %s: %w", taskID, err)
+			if run.reference.TaskID != taskID {
+				kept = append(kept, runID)
+				continue
 			}
-			c.interrupts.addCurrentNode(fence, key)
-			*references = append(*references, start.reference)
-			*admissionWaits = appendAdmissionWait(*admissionWaits, key, nil)
+			c.interrupts.addCurrentNode(fence, run.key)
+			*references = append(*references, run.reference)
+			*admissionWaits = appendAdmissionWait(*admissionWaits, run.key, nil)
+			c.removeRunLocked(runID)
 		}
 		if len(kept) == 0 {
 			delete(c.heldStarts, sourceScope)
@@ -519,40 +445,17 @@ func drainTaskControllerWorkLocked(
 		}
 	}
 
-	for key, start := range c.explicitReservations {
-		if start.reference.TaskID != taskID {
+	for runID, run := range c.runs {
+		if run.reference.TaskID != taskID || !run.launching() {
 			continue
 		}
-		if _, preparing := c.admissionWorkers[key]; preparing {
-			continue
+		if run.lease != nil {
+			c.stopping[run.lease.ScopeID()] = struct{}{}
 		}
-		delete(c.explicitReservations, key)
-		c.interrupts.addCurrentNode(fence, key)
-		*references = append(*references, start.reference)
-		*admissionWaits = appendAdmissionWait(*admissionWaits, key, start.done)
-	}
-	for key, start := range c.automaticReservations {
-		if start.reference.TaskID != taskID {
-			continue
-		}
-		if _, preparing := c.admissionWorkers[key]; preparing {
-			continue
-		}
-		delete(c.automaticReservations, key)
-		c.releaseAgentCapacityLocked(start.agentCapacityLease)
-		c.interrupts.addCurrentNode(fence, key)
-		*references = append(*references, start.reference)
-		*admissionWaits = appendAdmissionWait(*admissionWaits, key, start.done)
-	}
-	for key, gate := range c.gates {
-		if gate.reference.TaskID != taskID {
-			continue
-		}
-		c.stopping[gate.lease.ScopeID()] = struct{}{}
-		c.interrupts.addCurrentNode(fence, key)
-		*drainedGates = append(*drainedGates, gate)
-		*references = append(*references, gate.reference)
-		*admissionWaits = appendAdmissionWait(*admissionWaits, key, gate.done)
+		c.interrupts.addCurrentNode(fence, run.key)
+		*launchRuns = append(*launchRuns, runID)
+		*references = append(*references, run.reference)
+		*admissionWaits = appendAdmissionWait(*admissionWaits, run.key, run.admissionDone)
 	}
 	return nil
 }

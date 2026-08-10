@@ -486,8 +486,11 @@ func currentNodeControllerFindings(index currentNodeTypeIndex) []currentNodeStru
 	canonicalController := index.named["core/server/workflowexecution.CurrentNodeController"]
 	referenceKey := index.named["core/server/workflow.CurrentNodeReferenceKey"]
 	scopeID := index.named["core/shared/runtimeids.ExecutionScopeID"]
+	runID := index.named["core/server/workflowexecution.currentNodeRunID"]
+	runType := index.named["core/server/workflowexecution.currentNodeRun"]
 	taskMutations := index.named["core/server/workflowexecution.TaskMutationCoordinator"]
-	if controllerInterface == nil || canonicalController == nil || referenceKey == nil || scopeID == nil || taskMutations == nil {
+	if controllerInterface == nil || canonicalController == nil || referenceKey == nil || scopeID == nil ||
+		runID == nil || runType == nil || taskMutations == nil {
 		return []currentNodeStructureFinding{{kind: findingControllerComposition, position: "canonical controller structure is missing"}}
 	}
 	interfaceType, ok := controllerInterface.Underlying().(*types.Interface)
@@ -527,18 +530,52 @@ func currentNodeControllerFindings(index currentNodeTypeIndex) []currentNodeStru
 		})
 	}
 	if ok {
+		var (
+			hasRunRegistry  bool
+			hasCurrentIndex bool
+			hasExactIndex   bool
+		)
 		for fieldIndex := 0; fieldIndex < controllerStruct.NumFields(); fieldIndex++ {
-			mapType, isMap := types.Unalias(controllerStruct.Field(fieldIndex).Type()).(*types.Map)
+			field := controllerStruct.Field(fieldIndex)
+			mapType, isMap := types.Unalias(field.Type()).(*types.Map)
 			if !isMap {
 				continue
 			}
 			key := types.Unalias(mapType.Key())
-			if types.Identical(key, referenceKey) || types.Identical(key, scopeID) {
+			element := types.Unalias(mapType.Elem())
+			if types.Identical(key, runID) &&
+				field.Name() == "runs" &&
+				types.Identical(element, types.NewPointer(runType)) {
+				hasRunRegistry = true
+				continue
+			}
+			if types.Identical(key, referenceKey) {
+				if field.Name() == "currentRuns" && types.Identical(element, runID) {
+					hasCurrentIndex = true
+				}
+				continue
+			}
+			if types.Identical(key, scopeID) {
+				if field.Name() == "exactRuns" && types.Identical(element, runID) {
+					hasExactIndex = true
+				}
 				continue
 			}
 			findings = append(findings, currentNodeStructureFinding{
 				kind:     findingForeignControllerMapIdentity,
-				position: namedTypePosition(index, canonicalController) + "." + controllerStruct.Field(fieldIndex).Name(),
+				position: namedTypePosition(index, canonicalController) + "." + field.Name(),
+			})
+		}
+		if !hasRunRegistry || !hasCurrentIndex || !hasExactIndex {
+			findings = append(findings, currentNodeStructureFinding{
+				kind: findingControllerComposition,
+				position: fmt.Sprintf(
+					"%s: generation registry=%t Current-Node index=%t Exact-Scope index=%t",
+					namedTypePosition(index, canonicalController),
+					hasRunRegistry,
+					hasCurrentIndex,
+					hasExactIndex,
+				),
 			})
 		}
 	}
@@ -1072,10 +1109,14 @@ import (
 
 type TaskMutationCoordinator struct{}
 
+type currentNodeRunID struct{ sequence uint64 }
+type currentNodeRun struct{}
+
 type CurrentNodeController struct {
 	taskMutations *TaskMutationCoordinator
-	gates map[workflow.CurrentNodeReferenceKey]struct{}
-	live map[runtimeids.ExecutionScopeID]struct{}
+	runs map[currentNodeRunID]*currentNodeRun
+	currentRuns map[workflow.CurrentNodeReferenceKey]currentNodeRunID
+	exactRuns map[runtimeids.ExecutionScopeID]currentNodeRunID
 	` + extraField + `
 }
 

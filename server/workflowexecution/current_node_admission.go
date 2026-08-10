@@ -46,42 +46,12 @@ func (p currentNodeAdmissionPolicy) nodeKind() workflow.NodeKind {
 	}
 }
 
-type currentNodeAgentCapacityOwner uint8
-
-const (
-	currentNodeAgentCapacityReservation currentNodeAgentCapacityOwner = iota
-	currentNodeAgentCapacityGate
-	currentNodeAgentCapacityLive
-	currentNodeAgentCapacityReleased
-)
-
-type currentNodeAgentCapacityLease struct {
-	owner currentNodeAgentCapacityOwner
-}
-
 type currentNodeQueuedStart struct {
 	reference          workflow.CurrentNodeReference
 	preparation        TaskStartPreparation
 	taskPromptDelivery workflowruntime.TaskPromptDelivery
 	assignmentSteer    CurrentNodeAssignmentSteer
 	policy             currentNodeAdmissionPolicy
-	done               chan struct{}
-	agentCapacityLease *currentNodeAgentCapacityLease
-}
-
-type currentNodeAdmissionGate struct {
-	reference          workflow.CurrentNodeReference
-	lease              sessionruntime.WorkflowExecutionLease
-	policy             currentNodeAdmissionPolicy
-	done               <-chan struct{}
-	agentCapacityLease *currentNodeAgentCapacityLease
-}
-
-type currentNodeLiveScope struct {
-	reference          workflow.CurrentNodeReference
-	lease              sessionruntime.WorkflowExecutionLease
-	policy             currentNodeAdmissionPolicy
-	agentCapacityLease *currentNodeAgentCapacityLease
 }
 
 type currentNodeAdmissionError struct {
@@ -190,32 +160,36 @@ func (e currentNodeAdmissionError) Unwrap() error {
 	return e.cause
 }
 
-func (c *CurrentNodeController) admit(ctx context.Context, start currentNodeQueuedStart) (err error) {
+func (c *CurrentNodeController) admit(runID currentNodeRunID) (err error) {
 	if c == nil {
 		return errors.New("current node workflow controller is required")
 	}
-	reference := start.reference
-	if err := reference.Validate(); err != nil {
-		return err
+	c.mu.Lock()
+	run := c.runs[runID]
+	if run == nil || !run.launching() {
+		c.mu.Unlock()
+		return sessionruntime.ErrExecutionNoLongerLive
 	}
-	key, err := reference.Key()
-	if err != nil {
-		return err
-	}
-	defer c.releaseReservation(key, start.policy, start.agentCapacityLease)
-	if start.preparation != nil {
-		if err := start.preparation(ctx); err != nil {
+	reference := run.reference
+	ctx := run.launchContext
+	preparation := run.preparation
+	delivery := run.taskPromptDelivery
+	assignmentSteer := run.assignmentSteer
+	policy := run.policy
+	c.mu.Unlock()
+	if preparation != nil {
+		if err := preparation(ctx); err != nil {
 			return err
 		}
-		if start.taskPromptDelivery == workflowruntime.TaskPromptDeliveryAssignment {
+		if delivery == workflowruntime.TaskPromptDeliveryAssignment {
 			assignment, err := c.steerAssignment(ctx, reference)
 			if err != nil {
 				return err
 			}
-			start.assignmentSteer = assignment
+			assignmentSteer = assignment
 		}
 	}
-	assignmentSteer, err := resolvedCurrentNodeAssignmentSteer(ctx, start.assignmentSteer)
+	assignmentSteer, err = resolvedCurrentNodeAssignmentSteer(ctx, assignmentSteer)
 	if err != nil {
 		return err
 	}
@@ -234,8 +208,8 @@ retryAdmission:
 			c.mu.Unlock()
 			return err
 		}
-		reservation, reserved := c.admissionReservationLocked(key, start.policy)
-		if !reserved || reservation.done != start.done {
+		run := c.runs[runID]
+		if run == nil || !run.launching() || c.currentRuns[run.key] != runID {
 			c.mu.Unlock()
 			return sessionruntime.ErrExecutionNoLongerLive
 		}
@@ -256,47 +230,22 @@ retryAdmission:
 			next.Cancel()
 			return errors.New("current node workflow controller is closed")
 		}
-		if _, exists := c.gates[key]; exists {
-			c.mu.Unlock()
-			next.Cancel()
-			return fmt.Errorf("current node %v is already being admitted", reference)
-		}
-		if _, exists := c.liveByNode[key]; exists {
-			c.mu.Unlock()
-			next.Cancel()
-			return fmt.Errorf("current node %v already has a live execution scope", reference)
-		}
 		if _, stopping := c.stopping[next.ScopeID()]; stopping {
 			c.mu.Unlock()
 			next.Cancel()
 			return sessionruntime.ErrExecutionNoLongerLive
 		}
-		reservation, reserved = c.admissionReservationLocked(key, start.policy)
-		if !reserved || reservation.done != start.done {
+		run = c.runs[runID]
+		if run == nil || !run.launching() || c.currentRuns[run.key] != runID {
 			c.mu.Unlock()
 			next.Cancel()
 			return sessionruntime.ErrExecutionNoLongerLive
 		}
-		c.deleteAdmissionReservationLocked(key, start.policy)
-		c.transitionAgentCapacityLocked(
-			start.agentCapacityLease,
-			currentNodeAgentCapacityReservation,
-			currentNodeAgentCapacityGate,
-		)
-		// The gate precedes the durable restart marker, so any conflicting
-		// lifecycle mutation sees admission before slow runner preparation.
-		c.gates[key] = currentNodeAdmissionGate{
-			reference:          reference,
-			lease:              next,
-			policy:             start.policy,
-			done:               start.done,
-			agentCapacityLease: start.agentCapacityLease,
-		}
+		run.lease = &next
 		c.mu.Unlock()
 
 		if err := c.store.AdmitCurrentNode(ctx, reference); err != nil {
-			c.removeGate(key, next.ScopeID())
-			next.Cancel()
+			c.cancelLaunchingLease(runID, next.ScopeID())
 			return err
 		}
 		lease = next
@@ -307,7 +256,7 @@ retryAdmission:
 		}
 		c.mu.Lock()
 		fence := c.interrupts.taskFence(reference.TaskID)
-		selected := c.interrupts.currentNodeFenced(key)
+		selected := c.interrupts.currentNodeFenced(run.key)
 		c.mu.Unlock()
 		if fence == nil || selected {
 			return currentNodeAdmissionError{cause: err}
@@ -319,9 +268,9 @@ retryAdmission:
 		}
 		goto retryAdmission
 	}
-	if err := c.runner.StartCurrentNode(ctx, reference, start.taskPromptDelivery, assignmentSteer, lease, c); err != nil {
+	if err := c.runner.StartCurrentNode(ctx, reference, delivery, assignmentSteer, lease, c); err != nil {
 		return currentNodeAdmissionError{
-			cause:    c.discardAdmission(reference, key, lease, err),
+			cause:    c.discardAdmission(runID, lease, err),
 			admitted: true,
 		}
 	}
@@ -336,9 +285,13 @@ retryAdmission:
 		}
 		c.mu.Lock()
 		defer c.mu.Unlock()
-		gate, exists := c.gates[key]
-		if !exists || gate.lease.ScopeID() != lease.ScopeID() {
-			return errors.New("current node admission gate was replaced before live scope registration")
+		run := c.runs[runID]
+		if run == nil ||
+			!run.launching() ||
+			run.lease == nil ||
+			run.lease.ScopeID() != lease.ScopeID() ||
+			c.currentRuns[run.key] != runID {
+			return errors.New("current node Run was replaced before exact scope registration")
 		}
 		if err := c.ensureTaskAvailableLocked(reference.TaskID); err != nil {
 			return err
@@ -346,57 +299,38 @@ retryAdmission:
 		if _, stopping := c.stopping[lease.ScopeID()]; stopping {
 			return sessionruntime.ErrExecutionNoLongerLive
 		}
-		delete(c.gates, key)
-		c.transitionAgentCapacityLocked(
-			gate.agentCapacityLease,
-			currentNodeAgentCapacityGate,
-			currentNodeAgentCapacityLive,
-		)
-		c.live[lease.ScopeID()] = currentNodeLiveScope{
-			reference:          reference,
-			lease:              lease,
-			policy:             gate.policy,
-			agentCapacityLease: gate.agentCapacityLease,
-		}
-		c.liveByNode[key] = lease.ScopeID()
+		scopeID := lease.ScopeID()
+		run.exactScopeID = &scopeID
+		c.exactRuns[scopeID] = runID
+		run.transition(currentNodeRunExact)
 		lease.Release()
 		return nil
 	}); err != nil {
 		return currentNodeAdmissionError{
-			cause:    c.discardAdmission(reference, key, lease, err),
+			cause:    c.discardAdmission(runID, lease, err),
 			admitted: true,
 		}
 	}
-	if !start.policy.isAutomatic() {
+	if !policy.isAutomatic() {
 		c.wakeAdmissionWorker()
 	}
 	return nil
 }
 
-func (c *CurrentNodeController) removeGate(key workflow.CurrentNodeReferenceKey, scopeID runtimeids.ExecutionScopeID) {
+func (c *CurrentNodeController) cancelLaunchingLease(runID currentNodeRunID, scopeID runtimeids.ExecutionScopeID) {
 	c.mu.Lock()
-	wake := false
-	if gate, exists := c.gates[key]; exists && gate.lease.ScopeID() == scopeID {
-		delete(c.gates, key)
-		delete(c.stopping, scopeID)
-		c.releaseAgentCapacityLocked(gate.agentCapacityLease)
-		wake = true
+	run := c.runs[runID]
+	if run != nil && run.launching() && run.lease != nil && run.lease.ScopeID() == scopeID {
+		run.lease = nil
 	}
 	c.mu.Unlock()
-	if wake {
-		c.wakeAdmissionWorker()
-	}
 }
 
-func (c *CurrentNodeController) discardAdmission(reference workflow.CurrentNodeReference, key workflow.CurrentNodeReferenceKey, lease sessionruntime.WorkflowExecutionLease, cause error) error {
-	c.removeGate(key, lease.ScopeID())
+func (c *CurrentNodeController) discardAdmission(runID currentNodeRunID, lease sessionruntime.WorkflowExecutionLease, cause error) error {
 	c.mu.Lock()
-	if live, exists := c.live[lease.ScopeID()]; exists {
-		c.releaseAgentCapacityLocked(live.agentCapacityLease)
-		delete(c.live, lease.ScopeID())
-	}
-	if current, exists := c.liveByNode[key]; exists && current == lease.ScopeID() {
-		delete(c.liveByNode, key)
+	run := c.runs[runID]
+	if run != nil {
+		c.removeRunLocked(runID)
 	}
 	c.mu.Unlock()
 	lease.Cancel()
@@ -463,6 +397,16 @@ func (c *CurrentNodeController) resolvePendingCurrentNodeAssignmentSteers(
 	starts []currentNodeQueuedStart,
 	pending []*pendingCurrentNodeAssignmentSteer,
 ) error {
+	if len(pending) == 0 {
+		return nil
+	}
+	if len(pending) != len(starts) {
+		return fmt.Errorf(
+			"pending current node assignment count %d does not match start count %d",
+			len(pending),
+			len(starts),
+		)
+	}
 	for index, start := range starts {
 		assignment, err := c.steerAssignment(ctx, start.reference)
 		pending[index].resolve(assignment, err)
@@ -594,15 +538,25 @@ func (c *CurrentNodeController) queueExplicitStartLocked(start currentNodeQueued
 	if start.policy != currentNodeAdmissionExplicitOverride {
 		return errors.New("explicit current node start cannot be automatic")
 	}
-	key, err := start.reference.Key()
+	run, created, err := c.allocateRunLocked(start)
 	if err != nil {
 		return err
 	}
-	if c.currentNodeOwnedLocked(key) {
+	if !created {
+		if run.phase == currentNodeRunHeld {
+			run.preparation = start.preparation
+			run.taskPromptDelivery = start.taskPromptDelivery
+			run.assignmentSteer = start.assignmentSteer
+			run.transition(currentNodeRunQueued)
+			c.explicitQueue = append(c.explicitQueue, run.id)
+		}
 		return nil
 	}
-	c.explicitQueue = append(c.explicitQueue, start)
-	c.explicitQueued[key] = struct{}{}
+	if err := c.activateRunLocked(run, currentNodeRunQueued); err != nil {
+		c.removeRunLocked(run.id)
+		return err
+	}
+	c.explicitQueue = append(c.explicitQueue, run.id)
 	c.wakeAdmissionWorker()
 	return nil
 }
@@ -611,37 +565,32 @@ func (c *CurrentNodeController) queueAutomaticStartLocked(start currentNodeQueue
 	if !start.policy.isAutomatic() {
 		return errors.New("automatic current node start requires an automatic admission policy")
 	}
-	key, err := start.reference.Key()
+	run, created, err := c.allocateRunLocked(start)
 	if err != nil {
 		return err
 	}
-	if c.currentNodeOwnedLocked(key) {
+	if !created {
+		if run.phase == currentNodeRunHeld {
+			run.preparation = start.preparation
+			run.taskPromptDelivery = start.taskPromptDelivery
+			run.assignmentSteer = start.assignmentSteer
+			run.transition(currentNodeRunQueued)
+			c.automaticQueue.append(run)
+		}
 		return nil
 	}
-	c.automaticQueue.append(start)
-	c.queued[key] = struct{}{}
+	if err := c.activateRunLocked(run, currentNodeRunQueued); err != nil {
+		c.removeRunLocked(run.id)
+		return err
+	}
+	c.automaticQueue.append(run)
 	c.wakeAdmissionWorker()
 	return nil
 }
 
 func (c *CurrentNodeController) currentNodeOwnedLocked(key workflow.CurrentNodeReferenceKey) bool {
-	if _, queued := c.explicitQueued[key]; queued {
-		return true
-	}
-	if _, reserved := c.explicitReservations[key]; reserved {
-		return true
-	}
-	if _, queued := c.queued[key]; queued {
-		return true
-	}
-	if _, reserved := c.automaticReservations[key]; reserved {
-		return true
-	}
-	if _, gated := c.gates[key]; gated {
-		return true
-	}
-	_, live := c.liveByNode[key]
-	return live
+	_, exists := c.currentRunLocked(key)
+	return exists
 }
 
 func (c *CurrentNodeController) wakeAdmissionWorker() {
@@ -660,28 +609,34 @@ func (c *CurrentNodeController) runAdmissions() {
 		case <-c.workerWake:
 		}
 		for {
-			start, ok := c.takeExplicitStart()
+			runID, ok := c.takeExplicitStart()
 			if !ok {
-				start, ok = c.takeAutomaticIntent()
+				runID, ok = c.takeAutomaticIntent()
 				if !ok {
 					break
 				}
 			}
-			go c.runAdmission(start)
+			go c.runAdmission(runID)
 		}
 	}
 }
 
-func (c *CurrentNodeController) runAdmission(start currentNodeQueuedStart) {
+func (c *CurrentNodeController) runAdmission(runID currentNodeRunID) {
 	defer c.admissionWG.Done()
-	defer close(start.done)
-	defer c.finishTaskInterruptAdmission(start.reference)
-	defer c.finishAdmissionWorker(start)
-	if err := c.admit(c.workerContext, start); err != nil {
-		key, keyErr := start.reference.Key()
-		if keyErr != nil {
-			panic(fmt.Sprintf("inspect failed current node admission: %v", keyErr))
-		}
+	c.mu.Lock()
+	run := c.runs[runID]
+	if run == nil {
+		c.mu.Unlock()
+		return
+	}
+	reference := run.reference
+	key := run.key
+	done := run.admissionDone
+	c.mu.Unlock()
+	defer close(done)
+	defer c.finishTaskInterruptAdmission(reference)
+	defer c.finishAdmissionWorker(runID)
+	if err := c.admit(runID); err != nil {
 		c.mu.Lock()
 		interrupted := c.interrupts.currentNodeFenced(key)
 		c.mu.Unlock()
@@ -695,156 +650,89 @@ func (c *CurrentNodeController) runAdmission(start currentNodeQueuedStart) {
 		if !errors.As(err, &failure) {
 			failure = currentNodeAdmissionError{cause: err}
 		}
-		c.handleAdmissionFailure(start.reference, failure.admitted, failure.cause)
+		c.handleAdmissionFailure(reference, failure.admitted, failure.cause)
 	}
 }
 
-func (c *CurrentNodeController) takeExplicitStart() (currentNodeQueuedStart, bool) {
+func (c *CurrentNodeController) takeExplicitStart() (currentNodeRunID, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed || c.inFlightAdmissionCountLocked(currentNodeAdmissionExplicitOverride) >= explicitAdmissionConcurrency || len(c.explicitQueue) == 0 {
-		return currentNodeQueuedStart{}, false
+		return currentNodeRunID{}, false
 	}
-	start := c.explicitQueue[0]
-	c.explicitQueue = c.explicitQueue[1:]
-	reference := start.reference
-	key, err := reference.Key()
-	if err != nil {
-		panic(fmt.Sprintf("take explicit current node start: %v", err))
+	index := -1
+	for candidateIndex, candidateID := range c.explicitQueue {
+		run := c.runs[candidateID]
+		if run != nil && !c.runPredecessorActiveLocked(run) {
+			index = candidateIndex
+			break
+		}
 	}
-	delete(c.explicitQueued, key)
-	start.done = make(chan struct{})
-	c.explicitReservations[key] = start
-	c.admissionWorkers[key] = start
+	if index < 0 {
+		return currentNodeRunID{}, false
+	}
+	runID := c.explicitQueue[index]
+	c.explicitQueue = append(c.explicitQueue[:index], c.explicitQueue[index+1:]...)
+	run := c.runs[runID]
+	if run == nil || run.phase != currentNodeRunQueued {
+		panic("explicit queue points to absent or non-queued Run")
+	}
+	run.launchContext, run.launchCancel = context.WithCancel(c.workerContext)
+	run.admissionDone = make(chan struct{})
+	run.transition(currentNodeRunLaunching)
 	c.admissionWG.Add(1)
-	return start, true
+	return runID, true
 }
 
-func (c *CurrentNodeController) takeAutomaticIntent() (currentNodeQueuedStart, bool) {
+func (c *CurrentNodeController) takeAutomaticIntent() (currentNodeRunID, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed || c.automaticQueue.len() == 0 {
-		return currentNodeQueuedStart{}, false
+		return currentNodeRunID{}, false
 	}
 	agentAvailable := c.agentCapacityActive < c.agentConcurrency
-	entry, ok := c.automaticQueue.selectEntry(c.lastAutomaticTask, agentAvailable)
+	entry, ok := c.automaticQueue.selectEntry(c.lastAutomaticTask, agentAvailable, func(runID currentNodeRunID) bool {
+		run := c.runs[runID]
+		return run != nil && !c.runPredecessorActiveLocked(run)
+	})
 	if !ok {
-		return currentNodeQueuedStart{}, false
+		return currentNodeRunID{}, false
 	}
-	start := c.automaticQueue.remove(entry)
-	key, err := start.reference.Key()
-	if err != nil {
-		panic(fmt.Sprintf("take automatic current node intent: %v", err))
+	runID := c.automaticQueue.remove(entry)
+	run := c.runs[runID]
+	if run == nil || run.phase != currentNodeRunQueued {
+		panic("automatic queue points to absent or non-queued Run")
 	}
-	delete(c.queued, key)
-	start.taskPromptDelivery = workflowruntime.TaskPromptDeliveryResume
-	start.done = make(chan struct{})
-	if start.policy.countsAgentCapacity() {
-		start.agentCapacityLease = &currentNodeAgentCapacityLease{
-			owner: currentNodeAgentCapacityReservation,
-		}
+	run.taskPromptDelivery = workflowruntime.TaskPromptDeliveryResume
+	run.launchContext, run.launchCancel = context.WithCancel(c.workerContext)
+	run.admissionDone = make(chan struct{})
+	run.transition(currentNodeRunLaunching)
+	if run.policy.countsAgentCapacity() {
+		run.agentCapacity = true
 		c.agentCapacityActive++
 	}
-	c.automaticReservations[key] = start
-	c.admissionWorkers[key] = start
 	c.admissionWG.Add(1)
-	taskID := start.reference.TaskID
+	taskID := run.reference.TaskID
 	c.lastAutomaticTask = &taskID
-	return start, true
-}
-
-func (c *CurrentNodeController) transitionAgentCapacityLocked(
-	lease *currentNodeAgentCapacityLease,
-	from currentNodeAgentCapacityOwner,
-	to currentNodeAgentCapacityOwner,
-) {
-	if lease == nil {
-		return
-	}
-	if lease.owner != from {
-		panic(fmt.Sprintf("automatic Agent capacity owner transition %d -> %d from %d", from, to, lease.owner))
-	}
-	lease.owner = to
-}
-
-func (c *CurrentNodeController) releaseAgentCapacityLocked(lease *currentNodeAgentCapacityLease) {
-	if lease == nil || lease.owner == currentNodeAgentCapacityReleased {
-		return
-	}
-	switch lease.owner {
-	case currentNodeAgentCapacityReservation, currentNodeAgentCapacityGate, currentNodeAgentCapacityLive:
-		lease.owner = currentNodeAgentCapacityReleased
-	default:
-		panic(fmt.Sprintf("automatic Agent capacity has invalid owner %d", lease.owner))
-	}
-	if c.agentCapacityActive <= 0 {
-		panic("automatic Agent capacity released without an active reservation, gate, or live scope")
-	}
-	c.agentCapacityActive--
+	return runID, true
 }
 
 func (c *CurrentNodeController) inFlightAdmissionCountLocked(policy currentNodeAdmissionPolicy) int {
 	count := 0
-	for key, start := range c.admissionWorkers {
-		if start.policy == policy {
-			if policy.countsAgentCapacity() {
-				if _, live := c.liveByNode[key]; live {
-					continue
-				}
-			}
+	for _, run := range c.runs {
+		if run.policy == policy && run.phase == currentNodeRunLaunching {
 			count++
 		}
 	}
 	return count
 }
 
-func (c *CurrentNodeController) admissionReservationLocked(key workflow.CurrentNodeReferenceKey, policy currentNodeAdmissionPolicy) (currentNodeQueuedStart, bool) {
-	if policy.isAutomatic() {
-		start, exists := c.automaticReservations[key]
-		return start, exists
-	}
-	start, exists := c.explicitReservations[key]
-	return start, exists
-}
-
-func (c *CurrentNodeController) deleteAdmissionReservationLocked(key workflow.CurrentNodeReferenceKey, policy currentNodeAdmissionPolicy) {
-	if policy.isAutomatic() {
-		delete(c.automaticReservations, key)
-		return
-	}
-	delete(c.explicitReservations, key)
-}
-
-func (c *CurrentNodeController) releaseReservation(
-	key workflow.CurrentNodeReferenceKey,
-	policy currentNodeAdmissionPolicy,
-	capacityLease *currentNodeAgentCapacityLease,
-) {
+func (c *CurrentNodeController) finishAdmissionWorker(runID currentNodeRunID) {
 	c.mu.Lock()
-	_, reserved := c.admissionReservationLocked(key, policy)
-	c.deleteAdmissionReservationLocked(key, policy)
-	if capacityLease != nil && capacityLease.owner == currentNodeAgentCapacityReservation {
-		c.releaseAgentCapacityLocked(capacityLease)
+	run := c.runs[runID]
+	if run != nil && run.phase == currentNodeRunLaunching {
+		c.removeRunLocked(runID)
 	}
-	closed := c.closed
-	c.mu.Unlock()
-	if (reserved || policy.isAutomatic()) && !closed {
-		c.wakeAdmissionWorker()
-	}
-}
-
-func (c *CurrentNodeController) finishAdmissionWorker(start currentNodeQueuedStart) {
-	key, err := start.reference.Key()
-	if err != nil {
-		panic(fmt.Sprintf("finish current node admission worker: %v", err))
-	}
-	c.mu.Lock()
-	current, exists := c.admissionWorkers[key]
-	if !exists || current.done != start.done || current.policy != start.policy {
-		c.mu.Unlock()
-		panic("current node admission worker ownership was replaced before completion")
-	}
-	delete(c.admissionWorkers, key)
 	closed := c.closed
 	c.mu.Unlock()
 	if !closed {

@@ -2174,37 +2174,6 @@ func TestAutomaticAgentCapacityRemainsLeasedForTheFullExactLifetime(t *testing.T
 			Response: ScriptedFinalAnswer(`{"commentary":"second done"}`).Response,
 		},
 	)
-	workflowID := createCurrentNodeAgentWorkflow(t, f.store)
-	firstTask := f.createTask(t, workflowID)
-	secondTask := f.createTask(t, workflowID)
-	f.startTask(t, firstTask)
-	select {
-	case <-firstStarted:
-	case <-time.After(currentNodeRunnerWait):
-		t.Fatal("first Agent did not reach its Exact execution")
-	}
-	firstNodes := f.waitForCurrentNode(t, firstTask.ID, func(nodes []workflow.CurrentNode) bool {
-		return len(nodes) == 1 && nodes[0].SessionID != nil
-	})
-	transcript, err := f.runtimes.SubscribeSessionTranscript(
-		context.Background(),
-		serverapi.TranscriptSubscribeRequest{SessionID: firstNodes[0].SessionID.String()},
-	)
-	if err != nil {
-		t.Fatalf("retain first Agent resource through transcript subscription: %v", err)
-	}
-	t.Cleanup(func() { _ = transcript.Close() })
-	hydrationCtx, cancelHydration := context.WithTimeout(context.Background(), currentNodeRunnerWait)
-	if _, err := transcript.Next(hydrationCtx); err != nil {
-		cancelHydration()
-		t.Fatalf("hydrate retained first Agent transcript: %v", err)
-	}
-	cancelHydration()
-	releaseFirstOnce.Do(func() { close(releaseFirst) })
-	f.waitForCurrentNode(t, firstTask.ID, func(nodes []workflow.CurrentNode) bool {
-		return len(nodes) == 1 && nodes[0].Scheduling == nil
-	})
-	f.startTask(t, secondTask)
 	if runtime.GOOS == "windows" {
 		t.Skip("capacity scheduler barrier uses a POSIX shell script")
 	}
@@ -2219,6 +2188,16 @@ func TestAutomaticAgentCapacityRemainsLeasedForTheFullExactLifetime(t *testing.T
 	}
 	scriptWorkflowID := createCurrentNodeScriptWorkflow(t, f.store, scriptPath)
 	scriptTask := f.createTask(t, scriptWorkflowID)
+	workflowID := createCurrentNodeAgentWorkflow(t, f.store)
+	firstTask := f.createTask(t, workflowID)
+	secondTask := f.createTask(t, workflowID)
+	f.startTask(t, firstTask)
+	select {
+	case <-firstStarted:
+	case <-time.After(currentNodeRunnerWait):
+		t.Fatal("first Agent did not reach its Exact execution")
+	}
+	f.startTask(t, secondTask)
 	f.startTask(t, scriptTask)
 	f.waitForPath(t, scriptMarker)
 	f.waitForCurrentNode(t, scriptTask.ID, func(nodes []workflow.CurrentNode) bool {
@@ -2226,8 +2205,14 @@ func TestAutomaticAgentCapacityRemainsLeasedForTheFullExactLifetime(t *testing.T
 	})
 	select {
 	case <-secondStarted:
-		t.Fatal("second Agent entered Exact execution while the first Agent still owned full-lifetime capacity")
+		t.Fatal("second Agent entered Exact execution while the first Agent was exact")
 	case <-time.After(3 * time.Second):
+	}
+	releaseFirstOnce.Do(func() { close(releaseFirst) })
+	select {
+	case <-secondStarted:
+	case <-time.After(currentNodeRunnerWait):
+		t.Fatal("second Agent did not start after first Exact finalized")
 	}
 }
 

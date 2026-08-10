@@ -37,10 +37,6 @@ func TestPostTurnCompactionReleasesMutationPermitWhileApprovalFenceIsActive(t *t
 	source := currentNodeReferenceForControllerTest(t, "task-post-turn-fence", "node-source")
 	sessionID := runtimeids.NewSessionID()
 	scopeID := runtimeids.NewExecutionScopeID()
-	key, err := source.Key()
-	if err != nil {
-		t.Fatalf("source key: %v", err)
-	}
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	controller := &CurrentNodeController{
@@ -49,13 +45,7 @@ func TestPostTurnCompactionReleasesMutationPermitWhileApprovalFenceIsActive(t *t
 		},
 		taskMutations: NewTaskMutationCoordinator(),
 		authority:     sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}),
-		liveByNode: map[workflow.CurrentNodeReferenceKey]runtimeids.ExecutionScopeID{
-			key: scopeID,
-		},
-		live: map[runtimeids.ExecutionScopeID]currentNodeLiveScope{
-			scopeID: {reference: source},
-		},
-		completed: map[runtimeids.ExecutionScopeID]struct{}{scopeID: {}},
+		completed:     map[runtimeids.ExecutionScopeID]struct{}{scopeID: {}},
 		postTurnFinalization: map[runtimeids.ExecutionScopeID]currentNodePostTurnFinalization{
 			scopeID: {
 				sessionID:      &sessionID,
@@ -63,8 +53,9 @@ func TestPostTurnCompactionReleasesMutationPermitWhileApprovalFenceIsActive(t *t
 				reference:      source,
 			},
 		},
-		heldStarts: make(map[runtimeids.ExecutionScopeID][]currentNodeQueuedStart),
+		heldStarts: make(map[runtimeids.ExecutionScopeID][]currentNodeRunID),
 	}
+	installExactRunForTest(t, controller, source, currentNodeAdmissionExplicitOverride, nil, scopeID)
 	t.Cleanup(func() { _ = controller.authority.Close(context.Background()) })
 
 	finalizationDone := make(chan error, 1)
@@ -83,7 +74,7 @@ func TestPostTurnCompactionReleasesMutationPermitWhileApprovalFenceIsActive(t *t
 	case <-time.After(time.Second):
 		t.Fatal("post-turn compaction did not start")
 	}
-	_, err = controller.ApplyPendingApproval(context.Background(), "approval")
+	_, err := controller.ApplyPendingApproval(context.Background(), "approval")
 	if !errors.Is(err, ErrTaskExecutionNotQuiescent) {
 		t.Fatalf("approval apply while post-turn compaction = %v, want %v", err, ErrTaskExecutionNotQuiescent)
 	}
@@ -239,20 +230,10 @@ func newPostTurnFinalizationControllerForTest(
 	source := currentNodeReferenceForControllerTest(t, "task-post-turn-matrix", "node-source")
 	sessionID := runtimeids.NewSessionID()
 	scopeID := runtimeids.NewExecutionScopeID()
-	key, err := source.Key()
-	if err != nil {
-		t.Fatalf("source key: %v", err)
-	}
 	controller := &CurrentNodeController{
 		taskMutations: NewTaskMutationCoordinator(),
 		authority:     sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}),
-		liveByNode: map[workflow.CurrentNodeReferenceKey]runtimeids.ExecutionScopeID{
-			key: scopeID,
-		},
-		live: map[runtimeids.ExecutionScopeID]currentNodeLiveScope{
-			scopeID: {reference: source},
-		},
-		completed: map[runtimeids.ExecutionScopeID]struct{}{scopeID: {}},
+		completed:     map[runtimeids.ExecutionScopeID]struct{}{scopeID: {}},
 		postTurnFinalization: map[runtimeids.ExecutionScopeID]currentNodePostTurnFinalization{
 			scopeID: {
 				sessionID:      &sessionID,
@@ -260,8 +241,9 @@ func newPostTurnFinalizationControllerForTest(
 				reference:      source,
 			},
 		},
-		heldStarts: make(map[runtimeids.ExecutionScopeID][]currentNodeQueuedStart),
+		heldStarts: make(map[runtimeids.ExecutionScopeID][]currentNodeRunID),
 	}
+	installExactRunForTest(t, controller, source, currentNodeAdmissionExplicitOverride, nil, scopeID)
 	t.Cleanup(func() { _ = controller.authority.Close(context.Background()) })
 	return controller, scopeID, sessionID
 }

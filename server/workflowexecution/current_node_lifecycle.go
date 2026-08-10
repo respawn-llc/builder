@@ -11,6 +11,7 @@ import (
 	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
+	"core/shared/runtimeids"
 )
 
 const ReasonCurrentNodeStartupRecovery workflow.CurrentNodeInterruptionReason = "workflow_startup_recovery"
@@ -241,8 +242,11 @@ func (c *CurrentNodeController) ApplyPendingApproval(
 			c.mu.Unlock()
 			return workflowstore.PendingApprovalApplyResult{}, err
 		}
-		sourceScopeID, sourceLive := c.liveByNode[sourceKey]
+		sourceRun, sourceLive := c.currentRunLocked(sourceKey)
+		sourceLive = sourceLive && sourceRun.exact()
+		var sourceScopeID runtimeids.ExecutionScopeID
 		if sourceLive {
+			sourceScopeID = *sourceRun.exactScopeID
 			if _, completed := c.completed[sourceScopeID]; !completed {
 				c.mu.Unlock()
 				return workflowstore.PendingApprovalApplyResult{}, errors.New("pending approval source scope has not completed")
@@ -302,9 +306,12 @@ func (c *CurrentNodeController) ApplyPendingApproval(
 			}
 			starts, pending = pendingCurrentNodeAssignmentStarts(starts)
 			c.mu.Lock()
-			c.heldStarts[sourceScopeID] = append(c.heldStarts[sourceScopeID], starts...)
+			runIDs, stageErr := c.stageSuccessorRunsLocked(starts, sourceRun.id, currentNodeRunHeld)
+			if stageErr == nil {
+				c.heldStarts[sourceScopeID] = append(c.heldStarts[sourceScopeID], runIDs...)
+			}
 			c.mu.Unlock()
-			return applyErr
+			return stageErr
 		})
 		if err != nil {
 			return workflowstore.PendingApprovalApplyResult{}, err
@@ -413,47 +420,9 @@ func (c *CurrentNodeController) taskExecutionQuiescentLocked(taskID workflow.Tas
 	if c.interrupts.taskActive(taskID) {
 		return false
 	}
-	for _, gate := range c.gates {
-		if gate.reference.TaskID == taskID {
+	for _, run := range c.runs {
+		if run.reference.TaskID == taskID {
 			return false
-		}
-	}
-	for _, live := range c.live {
-		if live.reference.TaskID == taskID {
-			return false
-		}
-	}
-	for entry := c.automaticQueue.first; entry != nil; entry = entry.globalNext {
-		start := entry.start
-		if start.reference.TaskID == taskID {
-			return false
-		}
-	}
-	for _, intent := range c.automaticReservations {
-		if intent.reference.TaskID == taskID {
-			return false
-		}
-	}
-	for _, start := range c.explicitQueue {
-		if start.reference.TaskID == taskID {
-			return false
-		}
-	}
-	for _, start := range c.explicitReservations {
-		if start.reference.TaskID == taskID {
-			return false
-		}
-	}
-	for _, start := range c.admissionWorkers {
-		if start.reference.TaskID == taskID {
-			return false
-		}
-	}
-	for _, starts := range c.heldStarts {
-		for _, start := range starts {
-			if start.reference.TaskID == taskID {
-				return false
-			}
 		}
 	}
 	return true

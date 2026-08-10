@@ -55,14 +55,7 @@ func TestCurrentNodeControllerTaskInterruptLeavesWaitingQuestionScopeNonQuiescen
 	if err != nil {
 		t.Fatalf("StartScriptExecution: %v", err)
 	}
-	runningKey, err := running.Key()
-	if err != nil {
-		t.Fatalf("running Current Node key: %v", err)
-	}
-	fixture.controller.mu.Lock()
-	fixture.controller.live[lease.ScopeID()] = currentNodeLiveScope{reference: running, lease: lease}
-	fixture.controller.liveByNode[runningKey] = lease.ScopeID()
-	fixture.controller.mu.Unlock()
+	installExactRunForTest(t, fixture.controller, running, currentNodeAdmissionExplicitOverride, &lease, lease.ScopeID())
 	waitForRunningCurrentNode(t, fixture.authority, running)
 
 	if err := fixture.controller.Interrupt(context.Background(), InterruptSelector{TaskID: running.TaskID}); err != nil {
@@ -123,14 +116,7 @@ func TestCurrentNodeControllerManualMoveRejectsWaitingQuestionWithoutStoppingSib
 	if err != nil {
 		t.Fatalf("StartScriptExecution: %v", err)
 	}
-	key, err := running.Key()
-	if err != nil {
-		t.Fatalf("running Current Node key: %v", err)
-	}
-	fixture.controller.mu.Lock()
-	fixture.controller.live[lease.ScopeID()] = currentNodeLiveScope{reference: running, lease: lease}
-	fixture.controller.liveByNode[key] = lease.ScopeID()
-	fixture.controller.mu.Unlock()
+	installExactRunForTest(t, fixture.controller, running, currentNodeAdmissionExplicitOverride, &lease, lease.ScopeID())
 	waitForRunningCurrentNode(t, fixture.authority, running)
 
 	if err := fixture.controller.InterruptForManualMove(context.Background(), running.TaskID, nil); !errors.Is(err, sessionruntime.ErrWorkflowQuestionPending) {

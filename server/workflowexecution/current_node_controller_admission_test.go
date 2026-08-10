@@ -15,7 +15,6 @@ import (
 	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
-	"core/shared/runtimeids"
 
 	"github.com/google/uuid"
 )
@@ -872,120 +871,5 @@ func TestCurrentNodeControllerPreparationFailureInterruptsPlacedNode(t *testing.
 	}
 	if runner.starts() != 0 {
 		t.Fatalf("runner starts = %d, want none", runner.starts())
-	}
-}
-
-func TestCurrentNodeControllerReservationBlocksTaskQuiescence(t *testing.T) {
-	reference := currentNodeReferenceForControllerTest(t, "task-reservation-quiescence", "node-agent")
-	store := &currentNodeControllerStore{}
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
-	controller := newCurrentNodeControllerForTest(t, store, &countingCurrentNodeRunner{}, authority, 1)
-	t.Cleanup(func() {
-		if err := controller.Close(); err != nil {
-			t.Errorf("close controller: %v", err)
-		}
-		if err := authority.Close(context.Background()); err != nil {
-			t.Errorf("close authority: %v", err)
-		}
-	})
-
-	key, err := reference.Key()
-	if err != nil {
-		t.Fatalf("reference key: %v", err)
-	}
-	controller.mu.Lock()
-	controller.automaticReservations[key] = currentNodeQueuedStart{reference: reference, policy: currentNodeAdmissionAutomaticAgent}
-	controller.mu.Unlock()
-
-	if err := controller.EnsureTaskQuiescent(reference.TaskID); !errors.Is(err, ErrTaskExecutionNotQuiescent) {
-		t.Fatalf("EnsureTaskQuiescent error = %v, want %v", err, ErrTaskExecutionNotQuiescent)
-	}
-	otherTaskID := workflow.TaskID("task-quiescent")
-	quiescence, err := controller.CurrentTaskQuiescence([]workflow.TaskID{reference.TaskID, otherTaskID})
-	if err != nil {
-		t.Fatalf("CurrentTaskQuiescence: %v", err)
-	}
-	if quiescence[reference.TaskID] || !quiescence[otherTaskID] {
-		t.Fatalf("task quiescence = %+v, want reserved Task false and unrelated Task true", quiescence)
-	}
-	if !hasAutomaticCurrentNodeIntent(controller.Snapshot(), reference) {
-		t.Fatalf("reservation is absent from immutable live snapshot: %+v", controller.Snapshot())
-	}
-}
-
-func TestCurrentNodeControllerTaskQuiescenceRejectsEveryControllerOwnedWorkState(t *testing.T) {
-	reference := currentNodeReferenceForControllerTest(t, "task-quiescence-states", "node-agent")
-	tests := []struct {
-		name  string
-		apply func(*CurrentNodeController)
-	}{
-		{
-			name: "automatic queue",
-			apply: func(controller *CurrentNodeController) {
-				controller.automaticQueue.append(currentNodeQueuedStart{
-					reference: reference,
-					policy:    currentNodeAdmissionAutomaticAgent,
-				})
-			},
-		},
-		{
-			name: "automatic reservation",
-			apply: func(controller *CurrentNodeController) {
-				key, err := reference.Key()
-				if err != nil {
-					t.Fatalf("reference key: %v", err)
-				}
-				controller.automaticReservations[key] = currentNodeQueuedStart{reference: reference, policy: currentNodeAdmissionAutomaticAgent}
-			},
-		},
-		{
-			name: "retirement held intent",
-			apply: func(controller *CurrentNodeController) {
-				controller.heldStarts[runtimeids.NewExecutionScopeID()] = []currentNodeQueuedStart{{reference: reference, policy: currentNodeAdmissionAutomaticAgent}}
-			},
-		},
-		{
-			name: "admission gate",
-			apply: func(controller *CurrentNodeController) {
-				key, err := reference.Key()
-				if err != nil {
-					t.Fatalf("reference key: %v", err)
-				}
-				controller.gates[key] = currentNodeAdmissionGate{reference: reference}
-			},
-		},
-		{
-			name: "live scope",
-			apply: func(controller *CurrentNodeController) {
-				scopeID := runtimeids.NewExecutionScopeID()
-				key, err := reference.Key()
-				if err != nil {
-					t.Fatalf("reference key: %v", err)
-				}
-				controller.live[scopeID] = currentNodeLiveScope{reference: reference}
-				controller.liveByNode[key] = scopeID
-			},
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			store := &currentNodeControllerStore{}
-			authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
-			controller := newCurrentNodeControllerForTest(t, store, &countingCurrentNodeRunner{}, authority, 1)
-			t.Cleanup(func() {
-				if err := controller.Close(); err != nil {
-					t.Errorf("close controller: %v", err)
-				}
-				if err := authority.Close(context.Background()); err != nil {
-					t.Errorf("close authority: %v", err)
-				}
-			})
-			controller.mu.Lock()
-			test.apply(controller)
-			controller.mu.Unlock()
-			if err := controller.EnsureTaskQuiescent(reference.TaskID); !errors.Is(err, ErrTaskExecutionNotQuiescent) {
-				t.Fatalf("EnsureTaskQuiescent error = %v, want %v", err, ErrTaskExecutionNotQuiescent)
-			}
-		})
 	}
 }

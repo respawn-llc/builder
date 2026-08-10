@@ -159,7 +159,7 @@ func TestCurrentNodeControllerTaskInterruptFenceRejectsLifecycleMutationsUntilRe
 	}
 }
 
-func TestCurrentNodeControllerTaskInterruptPreservesSiblingPreparation(t *testing.T) {
+func TestCurrentNodeControllerTaskInterruptCancelsSiblingLaunchPreparation(t *testing.T) {
 	shellPath, err := exec.LookPath("sh")
 	if err != nil {
 		t.Skipf("sh executable unavailable: %v", err)
@@ -244,20 +244,17 @@ func TestCurrentNodeControllerTaskInterruptPreservesSiblingPreparation(t *testin
 			t.Fatalf("interrupt running sibling: %v", err)
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("Task Interrupt waited for non-selected sibling preparation")
+		t.Fatal("Task Interrupt did not cancel sibling launch preparation")
 	}
-	if interruption, interrupted := store.interruption(preparing); interrupted {
-		t.Fatalf("preparing sibling was interrupted: %+v", interruption)
+	if interruption, interrupted := store.interruption(preparing); !interrupted ||
+		interruption.reason != workflow.CurrentNodeInterruptionReasonUserInterrupt {
+		t.Fatalf("preparing sibling interruption = %+v, interrupted = %t", interruption, interrupted)
 	}
 
-	close(preparationRelease)
 	select {
 	case started := <-runner.started:
-		if !started.Equal(preparing) {
-			t.Fatalf("started Current Node = %v, want preserved sibling %v", started, preparing)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("preserved sibling did not start after Task Interrupt")
+		t.Fatalf("interrupted launch preparation started Current Node %v", started)
+	case <-time.After(100 * time.Millisecond):
 	}
 }
 
@@ -500,13 +497,8 @@ func TestCurrentNodeControllerScopeFailurePersistsDespiteUnrelatedWorkerError(t 
 		t.Fatalf("NewWorkflowExecutionLease: %v", err)
 	}
 	t.Cleanup(lease.Cancel)
-	key, err := reference.Key()
-	if err != nil {
-		t.Fatalf("Current Node key: %v", err)
-	}
+	installExactRunForTest(t, controller, reference, currentNodeAdmissionExplicitOverride, &lease, lease.ScopeID())
 	controller.mu.Lock()
-	controller.live[lease.ScopeID()] = currentNodeLiveScope{reference: reference, lease: lease}
-	controller.liveByNode[key] = lease.ScopeID()
 	controller.workerErr = errors.New("unrelated admission persistence failed")
 	controller.mu.Unlock()
 
@@ -590,25 +582,19 @@ func TestCurrentNodeControllerTaskInterruptDrainsReservationOnlyAlongsideLiveSco
 		}
 	})
 
-	if err := startCurrentNodeForControllerTest(context.Background(), controller, store, live); err != nil {
-		t.Fatalf("start live current node: %v", err)
-	}
+	controller.enqueueAutomaticIntents([]CurrentNodeAutomaticIntent{{
+		CurrentNode: live,
+		NodeKind:    workflow.NodeKindAgent,
+	}})
 	<-runner.started
 	waitForRunningCurrentNode(t, authority, live)
-	reservedKey, err := reserved.Key()
-	if err != nil {
-		t.Fatalf("reserved key: %v", err)
-	}
-	controller.mu.Lock()
-	controller.agentCapacityActive = 1
-	controller.automaticReservations[reservedKey] = currentNodeQueuedStart{
-		reference: reserved,
-		policy:    currentNodeAdmissionAutomaticAgent,
-		agentCapacityLease: &currentNodeAgentCapacityLease{
-			owner: currentNodeAgentCapacityReservation,
-		},
-	}
-	controller.mu.Unlock()
+	controller.enqueueAutomaticIntents([]CurrentNodeAutomaticIntent{{
+		CurrentNode: reserved,
+		NodeKind:    workflow.NodeKindAgent,
+	}})
+	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+		return hasAutomaticCurrentNodeIntent(controller.Snapshot(), reserved)
+	}, "successor did not remain queued behind occupied Agent capacity")
 
 	if err := controller.Interrupt(context.Background(), InterruptSelector{TaskID: live.TaskID}); err != nil {
 		t.Fatalf("task interrupt: %v", err)
@@ -820,9 +806,23 @@ func TestCurrentNodeControllerTaskInterruptDrainsAuthorityQueuedGateAlongsideRun
 
 func TestCurrentNodeControllerReservationDoesNotAuthorizeTaskInterrupt(t *testing.T) {
 	reference := currentNodeReferenceForControllerTest(t, "task-reservation-no-live", "node-agent")
+	occupying := currentNodeReferenceForControllerTest(t, "task-reservation-capacity-owner", "node-agent")
 	store := &currentNodeControllerStore{}
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
-	controller := newCurrentNodeControllerForTest(t, store, &countingCurrentNodeRunner{}, authority, 1)
+	var controller *CurrentNodeController
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
+			controller.ExecutionFinalized(scope)
+		}),
+	})
+	runner := &recordingScriptRunner{
+		authority: authority,
+		command: sessionruntime.ScriptCommand{
+			Path: "/bin/sh",
+			Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
+		},
+		started: make(chan workflow.CurrentNodeReference, 1),
+	}
+	controller = newCurrentNodeControllerForTest(t, store, runner, authority, 1)
 	t.Cleanup(func() {
 		if err := controller.Close(); err != nil {
 			t.Errorf("close controller: %v", err)
@@ -832,13 +832,23 @@ func TestCurrentNodeControllerReservationDoesNotAuthorizeTaskInterrupt(t *testin
 		}
 	})
 
-	key, err := reference.Key()
-	if err != nil {
-		t.Fatalf("reference key: %v", err)
+	controller.enqueueAutomaticIntents([]CurrentNodeAutomaticIntent{{
+		CurrentNode: occupying,
+		NodeKind:    workflow.NodeKindAgent,
+	}})
+	select {
+	case <-runner.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("capacity owner did not start")
 	}
-	controller.mu.Lock()
-	controller.automaticReservations[key] = currentNodeQueuedStart{reference: reference, policy: currentNodeAdmissionAutomaticAgent}
-	controller.mu.Unlock()
+	waitForRunningCurrentNode(t, authority, occupying)
+	controller.enqueueAutomaticIntents([]CurrentNodeAutomaticIntent{{
+		CurrentNode: reference,
+		NodeKind:    workflow.NodeKindAgent,
+	}})
+	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+		return hasAutomaticCurrentNodeIntent(controller.Snapshot(), reference)
+	}, "Run did not remain queued behind unrelated Agent capacity")
 
 	if err := controller.Interrupt(context.Background(), InterruptSelector{TaskID: reference.TaskID}); !errors.Is(err, ErrNoInterruptibleExecution) {
 		t.Fatalf("reservation-only task interrupt error = %v, want %v", err, ErrNoInterruptibleExecution)

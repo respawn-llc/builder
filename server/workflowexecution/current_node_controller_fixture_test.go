@@ -734,15 +734,49 @@ func (f currentNodeQuestionFixture) startQuestionExecution(
 	if err != nil {
 		t.Fatalf("StartAgentExecution: %v", err)
 	}
+	installExactRunForTest(t, f.controller, reference, currentNodeAdmissionExplicitOverride, &lease, lease.ScopeID())
+	return handle, sessionID
+}
+
+func installExactRunForTest(
+	t *testing.T,
+	controller *CurrentNodeController,
+	reference workflow.CurrentNodeReference,
+	policy currentNodeAdmissionPolicy,
+	lease *sessionruntime.WorkflowExecutionLease,
+	scopeID runtimeids.ExecutionScopeID,
+) {
+	t.Helper()
 	key, err := reference.Key()
 	if err != nil {
 		t.Fatalf("current node key: %v", err)
 	}
-	f.controller.mu.Lock()
-	f.controller.live[lease.ScopeID()] = currentNodeLiveScope{reference: reference, lease: lease}
-	f.controller.liveByNode[key] = lease.ScopeID()
-	f.controller.mu.Unlock()
-	return handle, sessionID
+	controller.mu.Lock()
+	defer controller.mu.Unlock()
+	if controller.runs == nil {
+		controller.runs = make(map[currentNodeRunID]*currentNodeRun)
+	}
+	if controller.currentRuns == nil {
+		controller.currentRuns = make(map[workflow.CurrentNodeReferenceKey]currentNodeRunID)
+	}
+	if controller.exactRuns == nil {
+		controller.exactRuns = make(map[runtimeids.ExecutionScopeID]currentNodeRunID)
+	}
+	controller.nextRunSequence++
+	id := currentNodeRunID{sequence: controller.nextRunSequence}
+	run := &currentNodeRun{
+		id:           id,
+		reference:    reference,
+		key:          key,
+		policy:       policy,
+		phase:        currentNodeRunExact,
+		phaseChanged: make(chan struct{}),
+		lease:        lease,
+		exactScopeID: &scopeID,
+	}
+	controller.runs[id] = run
+	controller.currentRuns[key] = id
+	controller.exactRuns[scopeID] = id
 }
 
 func (f currentNodeQuestionFixture) waitForPendingPrompt(t *testing.T, taskID workflow.TaskID, askID string) {
