@@ -335,6 +335,9 @@ func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 			return response.Outcome == serverapi.WorkflowTaskActionOutcomeApplied
 		})
 		if err != nil {
+			if *jsonOut && resp.Outcome == serverapi.WorkflowTaskActionOutcomeApplied && resp.Validate() == nil {
+				_ = writeCommandJSON(stdout, stderr, resp)
+			}
 			if writeTaskSetupObservationError(taskSetupObservedActionStart, stderr, positionals[0], recoveryProject, err) {
 				return 1
 			}

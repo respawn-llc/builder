@@ -17,7 +17,6 @@ type taskDependencyLifecycleRemote struct {
 	startResponse   serverapi.WorkflowTaskStartResponse
 	moveResponse    serverapi.WorkflowTaskMoveResponse
 	approveResponse serverapi.WorkflowTaskApproveResponse
-	setupFailure    *serverapi.WorktreeSetupFailed
 	startRequests   []serverapi.WorkflowTaskStartRequest
 	moveRequests    []serverapi.WorkflowTaskMoveRequest
 	approveRequests []serverapi.WorkflowTaskApproveRequest
@@ -54,11 +53,7 @@ func (r *taskDependencyLifecycleRemote) ApproveWorkflowTask(_ context.Context, r
 }
 
 func (r *taskDependencyLifecycleRemote) SubscribeWorktreeSetup(_ context.Context, req serverapi.WorktreeSetupSubscribeRequest) (serverapi.WorktreeSetupSubscription, error) {
-	event := serverapi.WorktreeSetupEvent{SetupOperationID: req.SetupOperationID, Phase: serverapi.WorktreeSetupPhaseNotRequired, NotRequired: &serverapi.WorktreeSetupNotRequired{Reason: serverapi.WorktreeSetupNotRequiredNoTargetPreparation}}
-	if r.setupFailure != nil {
-		event.Phase, event.NotRequired, event.Failed = serverapi.WorktreeSetupPhaseFailed, nil, r.setupFailure
-	}
-	return testWorktreeSetupSubscription(func(context.Context) (serverapi.WorktreeSetupEvent, error) { return event, nil }), nil
+	return eofWorktreeSetupSubscription{returned: make(chan struct{})}, nil
 }
 
 func (r *taskDependencyLifecycleRemote) ResolveProjectPath(context.Context, serverapi.ProjectResolvePathRequest) (serverapi.ProjectResolvePathResponse, error) {
@@ -127,11 +122,9 @@ func TestTaskStartDependencyConfirmationIsNoninteractiveAndMapsIgnoreFlag(t *tes
 	}
 }
 
-func TestTaskStartFailedSetupWritesAppliedJSONAndCarriesInvokingSession(t *testing.T) {
+func TestTaskStartObservationFailureWritesAppliedJSONAndCarriesInvokingSession(t *testing.T) {
 	t.Setenv(sessionenv.SessionIDEnv, "agent-session")
-	target := serverapi.WorkflowExecutionTargetSelection{Mode: serverapi.WorkflowExecutionTargetModeHead}
 	remote := &taskDependencyLifecycleRemote{
-		setupFailure: &serverapi.WorktreeSetupFailed{RetryReadiness: serverapi.WorktreeSetupRetryReady, Cause: serverapi.WorktreeSetupFailureCause{Kind: serverapi.WorktreeSetupFailureTargetPreparation, Preparation: &serverapi.WorktreeSetupPreparationFailure{}}, Diagnostic: "target failed", ExecutionTarget: &target},
 		startResponse: serverapi.WorkflowTaskStartResponse{
 			Outcome: serverapi.WorkflowTaskActionOutcomeApplied,
 			Applied: &serverapi.WorkflowTaskStartApplied{

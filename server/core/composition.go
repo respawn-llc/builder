@@ -487,7 +487,7 @@ func (i taskExecutionTargetInfrastructure) MaterializeExecutionTarget(ctx contex
 		if err == nil {
 			return workflowsvc.ExecutionTargetMaterialization{}, errors.New("prepared task execution root is not managed")
 		}
-		return workflowsvc.ExecutionTargetMaterialization{}, err
+		return workflowsvc.ExecutionTargetMaterialization{RetainedPreviousWorktree: prepared.RetainedPreviousWorktree}, err
 	}
 	var retainedWorktree *serverapi.WorktreeTopologyEntry
 	if prepared.Materialization != nil {
