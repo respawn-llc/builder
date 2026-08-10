@@ -185,7 +185,8 @@ func TestManualMovePreviewDescribesPriorJoinParameterRequirement(t *testing.T) {
 	required := preview.Choices[0].RequiredValues[0]
 	if required.NodeKey != "join" ||
 		required.OutputName != "joined" ||
-		required.Description != "Joined branch summary." {
+		required.Description == nil ||
+		*required.Description != "Joined branch summary." {
 		t.Fatalf("required value = %+v, want described prior Join parameter", required)
 	}
 }
@@ -780,7 +781,8 @@ func TestManualMovePreviewPrefillsAndOverridesPendingApprovalValues(t *testing.T
 	}
 	required := preview.Choices[0].RequiredValues[0]
 	if required.NodeKey != "plan" || required.OutputName != "prior_summary" ||
-		required.Description != "Prior summary." ||
+		required.Description == nil ||
+		*required.Description != "Prior summary." ||
 		required.ResolvedValue == nil || *required.ResolvedValue != "approved plan" {
 		t.Fatalf("required value = %+v, want pending Approval prefill", required)
 	}

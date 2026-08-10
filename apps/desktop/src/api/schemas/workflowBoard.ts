@@ -266,7 +266,7 @@ const manualMoveRequiredValueSchema = z
   .object({
     node_key: z.string().trim().min(1),
     output_name: z.string().trim().min(1),
-    description: z.string(),
+    description: nonBlankPreservingString.nullable(),
     resolved_value: nonBlankPreservingString.nullable().optional(),
   })
   .strict()
