@@ -679,6 +679,51 @@ WHERE session_id = ? AND node_id = ? AND transition_branch_key IS NULL`,
 	}
 }
 
+func TestEnsureCurrentNodeSessionAssociationRejectsAbsentTaskOwnershipWithoutChanges(t *testing.T) {
+	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
+	workflowID := createValidWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	currentNode := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	sessionID, err := runtimeids.ParseSessionID(createTestSession(t, ctx, store, binding, cfg))
+	if err != nil {
+		t.Fatalf("ParseSessionID: %v", err)
+	}
+	if _, err := store.db.ExecContext(
+		ctx,
+		`UPDATE task_current_nodes SET session_id = ?
+WHERE task_id = ? AND node_id = ? AND transition_branch_key IS NULL`,
+		sessionID.String(),
+		task.ID,
+		currentNode.Reference.NodeID,
+	); err != nil {
+		t.Fatalf("seed Current Node Session without Task ownership: %v", err)
+	}
+
+	if _, err := store.EnsureCurrentNodeSessionAssociation(ctx, sessionID); err == nil {
+		t.Fatal("EnsureCurrentNodeSessionAssociation accepted absent Task ownership")
+	}
+	owner, err := store.TaskIDForSession(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("TaskIDForSession: %v", err)
+	}
+	if owner != nil {
+		t.Fatalf("Session owner after rejection = %q, want absent", *owner)
+	}
+	currentNodes, err := store.ListCurrentNodes(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListCurrentNodes: %v", err)
+	}
+	if len(currentNodes) != 1 ||
+		currentNodes[0].SessionID == nil ||
+		*currentNodes[0].SessionID != sessionID {
+		t.Fatalf("Current Node changed after absent-owner rejection: %+v", currentNodes)
+	}
+	if _, err := store.LatestTaskSessionForNode(ctx, currentNode.Reference); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("Session provenance after rejection = %v, want absent", err)
+	}
+}
+
 func TestEnsureCurrentNodeSessionAssociationRejectsCrossTaskOwnershipWithoutChanges(t *testing.T) {
 	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
 	workflowID := createValidWorkflow(t, ctx, store)
