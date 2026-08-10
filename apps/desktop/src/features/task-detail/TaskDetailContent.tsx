@@ -66,31 +66,50 @@ interface PromptAttentionReconciliationIdentity {
   readonly requestSequence: number;
 }
 
+interface PromptAttentionReconciliationRequest {
+  readonly cacheAtStart: TaskAttention | undefined;
+  readonly requestSequence: number;
+}
+
+interface AcceptedPromptAttentionReconciliation extends PromptAttentionReconciliationIdentity {
+  readonly snapshot: TaskAttention;
+}
+
 function newPromptAttentionReconciliationOrder() {
   let nextRequestSequence = 0;
-  let lastAccepted: PromptAttentionReconciliationIdentity | undefined;
+  let lastAccepted: AcceptedPromptAttentionReconciliation | undefined;
   return {
     accept(
-      candidate: PromptAttentionReconciliationIdentity,
-      currentGeneratedAt: number | undefined,
+      request: PromptAttentionReconciliationRequest,
+      candidate: TaskAttention,
+      current: TaskAttention | undefined,
     ): boolean {
       const olderThanAccepted =
         lastAccepted !== undefined &&
         (candidate.generatedAt < lastAccepted.generatedAt ||
           (candidate.generatedAt === lastAccepted.generatedAt &&
-            candidate.requestSequence < lastAccepted.requestSequence));
+            request.requestSequence < lastAccepted.requestSequence));
+      const unsequencedEqualTimestampWrite =
+        current?.generatedAt === candidate.generatedAt &&
+        current !== request.cacheAtStart &&
+        current !== lastAccepted?.snapshot;
       if (
         olderThanAccepted ||
-        (currentGeneratedAt !== undefined && currentGeneratedAt > candidate.generatedAt)
+        unsequencedEqualTimestampWrite ||
+        (current !== undefined && current.generatedAt > candidate.generatedAt)
       ) {
         return false;
       }
-      lastAccepted = candidate;
+      lastAccepted = {
+        generatedAt: candidate.generatedAt,
+        requestSequence: request.requestSequence,
+        snapshot: candidate,
+      };
       return true;
     },
-    nextRequest(): number {
+    beginRequest(cacheAtStart: TaskAttention | undefined): PromptAttentionReconciliationRequest {
       nextRequestSequence += 1;
-      return nextRequestSequence;
+      return { cacheAtStart, requestSequence: nextRequestSequence };
     },
   };
 }
@@ -355,17 +374,13 @@ function useTaskPromptAnswers({
         });
       },
       readAttention: async () => {
-        const requestSequence = reconciliationOrder.nextRequest();
+        const attentionKey = queryKeys.taskAttention(detail.id);
+        const request = reconciliationOrder.beginRequest(
+          queryClient.getQueryData<TaskAttention>(attentionKey),
+        );
         const fresh = await api.listTaskAttention(detail.id);
-        const accepted = queryClient.setQueryData<TaskAttention>(
-          queryKeys.taskAttention(detail.id),
-          (current) =>
-            reconciliationOrder.accept(
-              { generatedAt: fresh.generatedAt, requestSequence },
-              current?.generatedAt,
-            )
-              ? fresh
-              : current,
+        const accepted = queryClient.setQueryData<TaskAttention>(attentionKey, (current) =>
+          reconciliationOrder.accept(request, fresh, current) ? fresh : current,
         );
         if (accepted === undefined) {
           throw new Error("accepted Task attention reconciliation snapshot is unavailable");
