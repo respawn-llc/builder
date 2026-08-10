@@ -193,10 +193,7 @@ func TestServiceWorkflowGraphSaveAllowsCompletedSessionProvenanceDeletion(t *tes
 	if preview.Impact.ActiveCurrentNodeCount != 0 || preview.Impact.PendingApprovalCount != 0 {
 		t.Fatalf("completed Session preview = %+v", preview)
 	}
-	saved := saveWorkflowGraphAtomicPreview(t, ctx, service, before, graph, preview)
-	if !saved.Saved || !saved.Changed {
-		t.Fatalf("completed Session save = %+v", saved)
-	}
+	assertWorkflowGraphAtomicChangedSave(t, ctx, service, before, graph)
 	if owner, err := service.store.TaskIDForSession(ctx, sessionID); err != nil || owner == nil || *owner != taskID {
 		t.Fatalf("retained Session owner = %v, err = %v", owner, err)
 	}
