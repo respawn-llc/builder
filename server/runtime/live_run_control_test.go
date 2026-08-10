@@ -140,7 +140,9 @@ func TestTerminalWorkflowQueueFailureSettlesCanonicalPendingInput(t *testing.T) 
 	completed := *snapshot
 	completed.Status = RunStatusCompleted
 	completed.FinishedAt = startedAt.Add(time.Second)
-	eng.liveRun.finishStep(&completed, RunStatusCompleted, nil, false)
+	if result := eng.liveRun.finishStepDeferred(&completed, RunStatusCompleted, nil, false); result != nil {
+		eng.liveRun.publishCompleted(*result)
+	}
 	eng.mu.Lock()
 	eng.workflowTerminal = WorkflowTerminalState{
 		Completed:   true,

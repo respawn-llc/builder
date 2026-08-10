@@ -41,7 +41,7 @@ func TestExclusiveStepCallSitesDeclareActiveKind(t *testing.T) {
 		"server/runtime/engine_queue_submission.go:runExclusiveStepWhenIdle": {
 			activeKind: "caller-provided", spinnerPolicy: "caller-provided", statusPolicy: "caller-provided", interruptPolicy: "caller-provided", goalSuspension: "caller-provided", goalAutoResume: "caller-provided",
 		},
-		"server/runtime/engine_queue_submission.go:SubmitQueuedUserMessagesWithActiveHook": {
+		"server/runtime/engine_queue_submission.go:submitQueuedUserMessagesWithActiveHook": {
 			activeKind: "ActiveKindUserTurn", spinnerPolicy: "model-turn", statusPolicy: "user-turn", interruptPolicy: "interruptible", goalSuspension: "never", goalAutoResume: "after-success-only",
 		},
 		"server/runtime/goal.go:runGoalTurn": {
@@ -113,7 +113,7 @@ func TestExclusiveStepCallSitesDeclareActiveKind(t *testing.T) {
 func TestRunWhenIdleHelpersRequireExplicitActiveKind(t *testing.T) {
 	t.Parallel()
 	file := parseRuntimeSource(t, "server/runtime/engine_queue_submission.go")
-	for _, name := range []string{"RunWhenIdle"} {
+	for _, name := range []string{"runExclusiveStepWhenIdle"} {
 		fn := findRuntimeFunc(t, file, name)
 		if !functionHasActiveKindParameter(fn) {
 			t.Fatalf("%s must require an explicit ActiveKind parameter", name)

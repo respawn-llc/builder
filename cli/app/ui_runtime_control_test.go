@@ -188,20 +188,6 @@ func (f *runtimeControlFakeClient) compactContext(_ context.Context, args string
 func (f *runtimeControlFakeClient) CompactRuntime(ctx context.Context, req clientui.RuntimeCompactRequest) error {
 	return f.compactContext(ctx, req.Args)
 }
-func (f *runtimeControlFakeClient) HasQueuedUserWork() (bool, error) {
-	f.hasQueuedUserWorkCalls++
-	if f.hasQueuedUserWorkErr != nil {
-		return f.hasQueuedUserWork, f.hasQueuedUserWorkErr
-	}
-	return f.hasQueuedUserWork, f.err
-}
-func (f *runtimeControlFakeClient) submitQueuedUserMessages(context.Context) (string, error) {
-	f.submitQueuedCalls++
-	return f.submitQueuedResult, f.err
-}
-func (f *runtimeControlFakeClient) SubmitRuntimeQueued(ctx context.Context, req clientui.RuntimeSubmitQueuedRequest) (string, error) {
-	return f.submitQueuedUserMessages(ctx)
-}
 func (f *runtimeControlFakeClient) Interrupt() error {
 	f.interruptCalls++
 	if f.interruptErr != nil {

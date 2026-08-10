@@ -209,7 +209,7 @@ func TestRunReviewerFollowUpReturnsCompletionWhenReviewerInstructionAppendFails(
 	}
 	t.Cleanup(func() { _ = os.Chmod(eventsPath, info.Mode()) })
 
-	_, err = eng.runReviewerFollowUp(context.Background(), "step-1", llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("original final")}, -1, false, reviewerClient)
+	_, err = eng.runReviewerFollowUpAsRuntimeWork(context.Background(), "step-1", llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("original final")}, -1, false, reviewerClient, eng.reviewerFlow)
 	if err == nil {
 		t.Fatal("expected Reviewer instruction append failure")
 	}

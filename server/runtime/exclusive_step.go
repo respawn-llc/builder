@@ -349,7 +349,6 @@ func (s *defaultExclusiveStepLifecycle) beginNext(ctx context.Context, options e
 	if err := validateExclusiveStepStart(ctx, options); err != nil {
 		return nil, "", err
 	}
-
 	s.mu.Lock()
 	if s.active == nil && !s.terminalPublishing && len(s.nextWaiters) == 0 {
 		stepCtx, stepID := s.activateLocked(ctx, options)
@@ -359,7 +358,6 @@ func (s *defaultExclusiveStepLifecycle) beginNext(ctx context.Context, options e
 	waiter := &exclusiveStepWaiter{ready: make(chan struct{})}
 	s.nextWaiters = append(s.nextWaiters, waiter)
 	s.mu.Unlock()
-
 	select {
 	case <-ctx.Done():
 	case <-waiter.ready:
@@ -371,7 +369,6 @@ func (s *defaultExclusiveStepLifecycle) beginNext(ctx context.Context, options e
 		}
 		return nil, "", err
 	}
-
 	s.mu.Lock()
 	if len(s.nextWaiters) == 0 || s.nextWaiters[0] != waiter ||
 		s.active != nil || s.terminalPublishing {
@@ -444,6 +441,13 @@ func (s *defaultExclusiveStepLifecycle) publishStepBegan(options exclusiveStepOp
 	return stepCtx, stepID, nil
 }
 
+func (s *defaultExclusiveStepLifecycle) end() {
+	s.mu.Lock()
+	s.active = nil
+	s.notifyNextWaiterLocked()
+	s.mu.Unlock()
+}
+
 func (s *defaultExclusiveStepLifecycle) cancelNextWaiter(waiter *exclusiveStepWaiter) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -465,13 +469,6 @@ func (s *defaultExclusiveStepLifecycle) notifyNextWaiterLocked() {
 	default:
 		close(s.nextWaiters[0].ready)
 	}
-}
-
-func (s *defaultExclusiveStepLifecycle) end() {
-	s.mu.Lock()
-	s.active = nil
-	s.notifyNextWaiterLocked()
-	s.mu.Unlock()
 }
 
 func (s *defaultExclusiveStepLifecycle) beginTerminalPublication() {

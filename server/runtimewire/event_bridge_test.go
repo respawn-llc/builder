@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"core/server/runtime"
+	"core/server/runtimecommand"
 	"core/server/session"
 	"core/server/tools"
 	"core/shared/toolspec"
@@ -126,7 +127,10 @@ func TestEventBridgeDropSignalsGapAndHydrationRestoresAtomicResultGroup(t *testi
 			materializedRuntimeWireEventLog(t, store),
 			&runtimewireCaptureClient{},
 			tools.NewRegistry(),
-			runtime.Config{Model: "gpt-5"},
+			runtime.Config{
+				Model:         "gpt-5",
+				RuntimeEvents: runtimecommand.NewQueue(t.Context()),
+			},
 		)
 		if err != nil {
 			t.Fatalf("new hydrated runtime: %v", err)

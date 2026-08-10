@@ -186,16 +186,16 @@ func TestHumanBoundaryAgendaPreservesSteerAndQueueEligibility(t *testing.T) {
 		t.Fatalf("pending human projection = %+v", projected)
 	}
 
-	selectedSteer := agenda.selectHuman(stepBoundarySelection(scopeID, origin))
-	if len(selectedSteer) != 1 || selectedSteer[0].ID != steer.ID {
+	selectedSteer := agenda.selectHumanItems(stepBoundarySelection(scopeID, origin))
+	if len(selectedSteer) != 1 || selectedSteer[0].message.ID != steer.ID {
 		t.Fatalf("Step Boundary selected = %+v, want Steer only", selectedSteer)
 	}
 	if projected := agenda.pendingHuman(); len(projected) != 1 || projected[0].ID != queue.ID {
 		t.Fatalf("pending after Step Boundary = %+v, want Queue", projected)
 	}
 
-	selectedQueue := agenda.selectHuman(turnBoundarySelection(scopeID, origin))
-	if len(selectedQueue) != 1 || selectedQueue[0].ID != queue.ID {
+	selectedQueue := agenda.selectHumanItems(turnBoundarySelection(scopeID, origin))
+	if len(selectedQueue) != 1 || selectedQueue[0].message.ID != queue.ID {
 		t.Fatalf("Turn Boundary selected = %+v, want Queue", selectedQueue)
 	}
 	if projected := agenda.pendingHuman(); len(projected) != 0 {

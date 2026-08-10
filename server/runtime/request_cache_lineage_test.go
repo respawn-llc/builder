@@ -135,7 +135,7 @@ func TestCacheWarningSteeringUsesCacheWarningModeVisibility(t *testing.T) {
 					events = append(events, evt)
 				},
 			})
-			if err := eng.steer("cache-step", steerCacheWarningIntent(transcript.CacheWarning{Scope: transcript.CacheWarningScopeConversation, Reason: transcript.CacheWarningReasonReuseDropped}, cacheWarningEntryVisibility(tt.mode), true)); err != nil {
+			if err := eng.steer("cache-step", testCacheWarningIntent(transcript.CacheWarning{Scope: transcript.CacheWarningScopeConversation, Reason: transcript.CacheWarningReasonReuseDropped}, cacheWarningEntryVisibility(tt.mode), true)); err != nil {
 				t.Fatalf("steer cache warning: %v", err)
 			}
 			snapshot := eng.ChatSnapshot()
@@ -152,6 +152,13 @@ func TestCacheWarningSteeringUsesCacheWarningModeVisibility(t *testing.T) {
 				t.Fatalf("cache warning event visibility = %q, want %q", events[0].CacheWarningVisibility, tt.want)
 			}
 		})
+	}
+}
+
+func testCacheWarningIntent(warning transcript.CacheWarning, visibility transcript.EntryVisibility, emit bool) steeringIntent {
+	return steeringIntent{
+		priority: steeringPriorityRuntimeEvent,
+		items:    []steeringItem{{cacheWarning: &steeringCacheWarning{warning: warning, visibility: normalizeRuntimeEntryVisibility(visibility), emit: emit}}},
 	}
 }
 
@@ -458,7 +465,7 @@ func TestLocalCompactionSummary_UsesMainConversationRequestIdentityAndPrompt(t *
 	if err != nil {
 		t.Fatalf("build compaction instructions input: %v", err)
 	}
-	if _, err := eng.localCompactionSummary(context.Background(), input, compactionInstructions(instructionsInput), compactionModeManual); err != nil {
+	if _, _, err := eng.localCompactionSummaryWithRepair(context.Background(), nil, input, compactionInstructions(instructionsInput), compactionModeManual); err != nil {
 		t.Fatalf("local compaction summary: %v", err)
 	}
 	if len(client.calls) != 1 {

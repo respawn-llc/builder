@@ -424,33 +424,6 @@ func (a *boundaryAgenda) hasHumanScope(scopeID runtimeids.ExecutionScopeID) bool
 	return false
 }
 
-func (a *boundaryAgenda) hasEligibleHuman(selection boundarySelection) bool {
-	if a == nil {
-		return false
-	}
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	if a.closed {
-		return false
-	}
-	for _, entry := range a.entries {
-		human, ok := entry.(*humanBoundaryAgendaItem)
-		if ok && boundaryAgendaItemEligible(human, selection) {
-			return true
-		}
-	}
-	return false
-}
-
-func (a *boundaryAgenda) selectHuman(selection boundarySelection) []QueuedUserMessage {
-	selected := a.selectHumanItems(selection)
-	messages := make([]QueuedUserMessage, 0, len(selected))
-	for _, item := range selected {
-		messages = append(messages, item.message)
-	}
-	return messages
-}
-
 func (a *boundaryAgenda) selectHumanItems(selection boundarySelection) []*humanBoundaryAgendaItem {
 	if a == nil {
 		return nil
@@ -562,28 +535,6 @@ func (a *boundaryAgenda) takeHuman(id runtimeids.QueueItemID) (*humanBoundaryAge
 		return human, true
 	}
 	return nil, false
-}
-
-func (a *boundaryAgenda) takeHumanIDs(ids map[string]struct{}) []*humanBoundaryAgendaItem {
-	if a == nil || len(ids) == 0 {
-		return nil
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	selected := make([]*humanBoundaryAgendaItem, 0, len(ids))
-	remaining := a.entries[:0]
-	for _, entry := range a.entries {
-		human, ok := entry.(*humanBoundaryAgendaItem)
-		if ok {
-			if _, selectedID := ids[human.message.ID]; selectedID {
-				selected = append(selected, human)
-				continue
-			}
-		}
-		remaining = append(remaining, entry)
-	}
-	a.entries = remaining
-	return selected
 }
 
 func (a *boundaryAgenda) takeHumanScope(scopeID runtimeids.ExecutionScopeID) []*humanBoundaryAgendaItem {

@@ -125,24 +125,6 @@ func (c *reconnectRetryRuntimeControlClient) CompactContext(context.Context, ser
 	return nil
 }
 
-func (c *reconnectRetryRuntimeControlClient) CompactContextForPreSubmit(context.Context, serverapi.RuntimeCompactContextForPreSubmitRequest) error {
-	return nil
-}
-
-func (c *reconnectRetryRuntimeControlClient) HasQueuedUserWork(context.Context, serverapi.RuntimeHasQueuedUserWorkRequest) (serverapi.RuntimeHasQueuedUserWorkResponse, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.queuedWorkCalls++
-	if c.queuedWorkCalls == 1 && c.queuedWorkErr != nil {
-		return serverapi.RuntimeHasQueuedUserWorkResponse{}, c.queuedWorkErr
-	}
-	return serverapi.RuntimeHasQueuedUserWorkResponse{HasQueuedUserWork: c.queuedWork}, nil
-}
-
-func (c *reconnectRetryRuntimeControlClient) SubmitQueuedUserMessages(context.Context, serverapi.RuntimeSubmitQueuedUserMessagesRequest) (serverapi.RuntimeSubmitQueuedUserMessagesResponse, error) {
-	return serverapi.RuntimeSubmitQueuedUserMessagesResponse{}, nil
-}
-
 func (c *reconnectRetryRuntimeControlClient) Interrupt(_ context.Context, req serverapi.RuntimeInterruptRequest) (serverapi.RuntimeInterruptResponse, error) {
 	c.mu.Lock()
 	c.interruptReq = req

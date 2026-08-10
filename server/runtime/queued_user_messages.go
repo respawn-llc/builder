@@ -109,7 +109,7 @@ func (e *Engine) startRuntimeBoundHumanExecution(admission runtimeEventAdmission
 	err := launcher.LaunchRuntimeBoundExecution(
 		admission.command,
 		func(ctx context.Context, engine *Engine) error {
-			_, runErr := engine.SubmitQueuedUserMessages(ctx)
+			_, runErr := engine.submitQueuedUserMessages(ctx)
 			return runErr
 		},
 		e.abortRuntimeBoundHumanExecution,

@@ -80,7 +80,3 @@ func (s RunLifecycle) Validate() error {
 func (s RunLifecycle) IsRunning() bool {
 	return s.Phase == RunLifecycleRunning
 }
-
-func (s RunLifecycle) IsGoalLoopRunning() bool {
-	return s.Phase == RunLifecycleRunning && s.Mode == RunModeGoalLoop
-}

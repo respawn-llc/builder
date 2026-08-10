@@ -1961,7 +1961,7 @@ func TestServiceSubmitUserTurnQueuesWhileCompactionOwnsSessionExecution(t *testi
 		started: make(chan struct{}),
 		release: make(chan struct{}),
 	}
-	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{
+	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{
 		Model:                         "gpt-5",
 		ContextWindowTokens:           40_000,
 		AutoCompactTokenLimit:         30_000,
@@ -2008,13 +2008,7 @@ func TestServiceSubmitUserTurnQueuesWhileCompactionOwnsSessionExecution(t *testi
 	if !resp.Steered || resp.QueueItemID == "" {
 		t.Fatalf("SubmitUserTurn while compacting = %+v, want queued response", resp)
 	}
-	hasQueued, err := service.HasQueuedUserWork(context.Background(), serverapi.RuntimeHasQueuedUserWorkRequest{
-		SessionID: store.Meta().SessionID,
-	})
-	if err != nil {
-		t.Fatalf("HasQueuedUserWork while compacting: %v", err)
-	}
-	if !hasQueued.HasQueuedUserWork {
+	if !engine.HasQueuedUserWork() {
 		t.Fatal("queued turn was not retained while compaction was active")
 	}
 
@@ -2025,13 +2019,7 @@ func TestServiceSubmitUserTurnQueuesWhileCompactionOwnsSessionExecution(t *testi
 	}
 	deadline := time.Now().Add(3 * time.Second)
 	for {
-		hasQueued, err = service.HasQueuedUserWork(context.Background(), serverapi.RuntimeHasQueuedUserWorkRequest{
-			SessionID: store.Meta().SessionID,
-		})
-		if err != nil {
-			t.Fatalf("HasQueuedUserWork after compaction: %v", err)
-		}
-		if !hasQueued.HasQueuedUserWork {
+		if !engine.HasQueuedUserWork() {
 			break
 		}
 		if time.Now().After(deadline) {

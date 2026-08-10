@@ -179,7 +179,7 @@ func TestReopenedSessionRestoresCompactionSoonReminderIssuedState(t *testing.T) 
 	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
-	if err := eng.steer("step-1", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeCompactionSoonReminder), Content: textutil.Value(prompts.RenderCompactionSoonReminderPrompt(false, eng.estimatedToolCallsUntilForcedHandoff()))}})); err != nil {
+	if err := eng.steer("step-1", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeCompactionSoonReminder), Content: textutil.Value(prompts.RenderCompactionSoonReminderPrompt(false, eng.compactionPlannerState().estimatedToolCallsUntilForcedHandoff(eng.compactionPlanningSnapshot())))}})); err != nil {
 		t.Fatalf("append reminder: %v", err)
 	}
 

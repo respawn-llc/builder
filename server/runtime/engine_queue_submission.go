@@ -3,22 +3,11 @@ package runtime
 import (
 	"context"
 	"errors"
-	"maps"
 	"strings"
 
 	"core/server/llm"
 	"core/server/session"
 )
-
-func (e *Engine) RunWhenIdle(ctx context.Context, activeKind ActiveKind, fn func() error) error {
-	if fn == nil {
-		return nil
-	}
-	e.ensureOrchestrationCollaborators()
-	return runExclusiveStepWhenIdle(ctx, e.stepLifecycle, activeKind, func(context.Context, string) error {
-		return fn()
-	})
-}
 
 func runExclusiveStepWhenIdle(
 	ctx context.Context,
@@ -35,13 +24,13 @@ func runExclusiveStepWhenIdle(
 	return steps.RunNext(ctx, exclusiveStepOptions{ActiveKind: activeKind}, fn)
 }
 
-func (e *Engine) SubmitQueuedUserMessages(ctx context.Context) (assistant llm.Message, err error) {
-	assistant, _, err = e.SubmitQueuedUserMessagesWithActiveHook(ctx, nil)
+func (e *Engine) submitQueuedUserMessages(ctx context.Context) (assistant llm.Message, err error) {
+	assistant, _, err = e.submitQueuedUserMessagesWithActiveHook(ctx, nil)
 	e.surfaceRunError(err)
 	return assistant, err
 }
 
-func (e *Engine) SubmitQueuedUserMessagesWithActiveHook(
+func (e *Engine) submitQueuedUserMessagesWithActiveHook(
 	ctx context.Context,
 	onActive func(),
 ) (assistant llm.Message, receipt session.CommitReceipt, err error) {
@@ -147,13 +136,6 @@ func (e *Engine) SubmitUserMessageOrSteerWithHooks(
 func (e *Engine) HasQueuedUserWork() bool {
 	e.ensureOrchestrationCollaborators()
 	return len(e.boundaryAgenda.pendingHuman()) > 0
-}
-
-func cloneMapIfNonEmpty[M ~map[K]V, K comparable, V any](in M) M {
-	if len(in) == 0 {
-		return nil
-	}
-	return maps.Clone(in)
 }
 
 func (e *Engine) activeStepWasInterrupted() bool {

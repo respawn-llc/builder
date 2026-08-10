@@ -494,18 +494,6 @@ func steerResetReasoningStateIntent() steeringIntent {
 	}
 }
 
-func steerCacheWarningIntent(warning transcript.CacheWarning, visibility transcript.EntryVisibility, emit bool) steeringIntent {
-	copyWarning := warning
-	return steeringIntent{
-		priority: steeringPriorityRuntimeEvent,
-		items: []steeringItem{{cacheWarning: &steeringCacheWarning{
-			warning:    copyWarning,
-			visibility: normalizeRuntimeEntryVisibility(visibility),
-			emit:       emit,
-		}}},
-	}
-}
-
 func steerCacheObservationIntent(records []session.EventRecordPayload, response persistedCacheResponseObserved, warning *transcript.CacheWarning, visibility transcript.EntryVisibility, emit bool) steeringIntent {
 	copyRecords := append([]session.EventRecordPayload(nil), records...)
 	var copyWarning transcript.CacheWarning

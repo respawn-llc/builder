@@ -608,26 +608,6 @@ func (e *Engine) QueueUserMessage(text string) (QueuedUserMessage, error) {
 	return e.acceptHumanAgendaItem(item, boundaryEligibilityTurn, false)
 }
 
-func (e *Engine) waitingForLiveRunStepStart() bool {
-	if e == nil || e.stepLifecycle == nil {
-		return false
-	}
-	snapshot := e.stepLifecycle.Snapshot()
-	if snapshot == nil {
-		return false
-	}
-	return activeKindUsesLiveRun(snapshot.ActiveKind)
-}
-
-func activeKindUsesLiveRun(kind ActiveKind) bool {
-	switch kind {
-	case ActiveKindCompaction, ActiveKindPreSubmitCompaction, ActiveKindRuntimeMaintenance:
-		return false
-	default:
-		return true
-	}
-}
-
 func activeKindInterruptibleByLiveStop(kind ActiveKind) bool {
 	return kind.Valid() && kind != ActiveKindRuntimeMaintenance
 }
@@ -853,19 +833,6 @@ func (e *Engine) runStepLoopWithQueuedUserFlushObserver(ctx context.Context, ste
 		RefreshReviewerConfigOnResolve: refreshReviewerConfigOnResolve,
 		OnQueuedUserFlushCommitted:     onQueuedUserFlushCommitted,
 	})
-}
-
-func (e *Engine) runReviewerFollowUp(ctx context.Context, stepID string, original llm.Message, originalCommittedStart int, originalCommittedStartSet bool, reviewerClient llm.Client) (reviewerFollowUpResult, error) {
-	e.ensureOrchestrationCollaborators()
-	return e.runReviewerFollowUpAsRuntimeWork(
-		ctx,
-		stepID,
-		original,
-		originalCommittedStart,
-		originalCommittedStartSet,
-		reviewerClient,
-		e.reviewerFlow,
-	)
 }
 
 func (e *Engine) ensureLocked() (session.LockedContract, error) {

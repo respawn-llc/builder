@@ -46,12 +46,6 @@ type stepLoopOptions struct {
 	OnQueuedUserFlushCommitted     func(session.CommitReceipt)
 }
 
-func observeQueuedUserFlushCommit(options stepLoopOptions, receipt session.CommitReceipt) {
-	if receipt.Committed && options.OnQueuedUserFlushCommitted != nil {
-		options.OnQueuedUserFlushCommitted(receipt)
-	}
-}
-
 type userInjectionFlushDisposition uint8
 
 const (

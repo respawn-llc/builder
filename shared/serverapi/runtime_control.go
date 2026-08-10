@@ -109,26 +109,6 @@ type RuntimeCompactContextRequest struct {
 	Args      string `json:"args"`
 }
 
-type RuntimeCompactContextForPreSubmitRequest struct {
-	SessionID string `json:"session_id"`
-}
-
-type RuntimeHasQueuedUserWorkRequest struct {
-	SessionID string `json:"session_id"`
-}
-
-type RuntimeHasQueuedUserWorkResponse struct {
-	HasQueuedUserWork bool `json:"has_queued_user_work"`
-}
-
-type RuntimeSubmitQueuedUserMessagesRequest struct {
-	SessionID string `json:"session_id"`
-}
-
-type RuntimeSubmitQueuedUserMessagesResponse struct {
-	Message string `json:"message"`
-}
-
 type RuntimeInterruptRequest struct {
 	SessionID string `json:"session_id"`
 }
@@ -301,15 +281,6 @@ func (r RuntimeSubmitUserShellCommandRequest) Validate() error {
 	return validateRuntimeControlRequest(r.SessionID)
 }
 func (r RuntimeCompactContextRequest) Validate() error {
-	return validateRuntimeControlRequest(r.SessionID)
-}
-func (r RuntimeCompactContextForPreSubmitRequest) Validate() error {
-	return validateRuntimeControlRequest(r.SessionID)
-}
-func (r RuntimeHasQueuedUserWorkRequest) Validate() error {
-	return validateRequiredSessionID(r.SessionID)
-}
-func (r RuntimeSubmitQueuedUserMessagesRequest) Validate() error {
 	return validateRuntimeControlRequest(r.SessionID)
 }
 func (r RuntimeInterruptRequest) Validate() error {

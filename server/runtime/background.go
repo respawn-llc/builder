@@ -153,15 +153,6 @@ func (b *defaultBackgroundAgendaAdapter) HandleBackgroundShellUpdate(
 	return err
 }
 
-func (b *defaultBackgroundAgendaAdapter) QueueBackgroundShellContinuation(
-	evt BackgroundShellEvent,
-) error {
-	if !evt.Type.IsTerminal() {
-		return nil
-	}
-	return b.QueueDeveloperNotice(backgroundShellDeveloperNotice(evt))
-}
-
 func (b *defaultBackgroundAgendaAdapter) QueueDeveloperNotice(msg llm.Message) error {
 	item, err := newBackgroundNoticeAgendaItem(msg)
 	if err != nil {

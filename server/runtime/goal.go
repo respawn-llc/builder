@@ -635,21 +635,6 @@ func goalStatusClearUpdate() GoalStatusUpdate {
 	return GoalStatusUpdate{Cleared: true}
 }
 
-func steerGoalStatusUpdateIntent(update GoalStatusUpdate) steeringIntent {
-	return steerEventIntent(Event{Kind: EventGoalStatusUpdated, GoalStatus: &update})
-}
-
-func (e *Engine) steerGoalNoticeAndStatus(
-	stepID string,
-	message llm.Message,
-	update GoalStatusUpdate,
-) (session.CommitReceipt, error) {
-	if e == nil || e.closed.Load() {
-		return session.CommitReceipt{}, ErrEngineClosed
-	}
-	return e.steerWithCommitReceipt(stepID, steerGoalNoticeAndStatusIntent(message, update))
-}
-
 func (e *Engine) applyGoalNoticeAndStatus(
 	admission runtimeEventAdmission,
 	stepID string,

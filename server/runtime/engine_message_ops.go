@@ -134,14 +134,6 @@ func (e *Engine) publishCommittedFinalizedToolCompletion(
 	return errors.Join(err, e.emitRaw(Event{Kind: EventLocalEntryAdded, StepID: resolvedFeedbackStepID, LocalEntry: entry, CommittedTranscriptChanged: true, CommittedProvenance: cloneTranscriptCommittedRowProvenance(feedbackProvenance)}))
 }
 
-func (e *Engine) persistToolCompletionRaw(stepID string, result tools.Result) (session.CommitReceipt, *TranscriptCommittedRowProvenance, error) {
-	receipt, provenance, _, err := e.persistFinalizedToolCompletionRaw(
-		stepID,
-		finalizedToolCompletion{Result: result},
-	)
-	return receipt, provenance, err
-}
-
 func (e *Engine) persistFinalizedToolCompletionRaw(
 	stepID string,
 	completion finalizedToolCompletion,
@@ -609,20 +601,6 @@ func queuedUserMessageIdentities(items []QueuedUserMessage) []QueuedUserMessageI
 		})
 	}
 	return identities
-}
-
-func queuedUserMessageIDSet(items []QueuedUserMessage) map[string]struct{} {
-	if len(items) == 0 {
-		return nil
-	}
-	ids := make(map[string]struct{}, len(items))
-	for _, item := range items {
-		id := strings.TrimSpace(item.ID)
-		if id != "" {
-			ids[id] = struct{}{}
-		}
-	}
-	return ids
 }
 
 func (e *Engine) emitQueuedUserMessageStatus(

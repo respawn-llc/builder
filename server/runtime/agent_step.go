@@ -676,10 +676,3 @@ func (g localAgentStepReducerGrant) RegisterNext(
 func (localAgentStepReducerGrant) Release() error {
 	return nil
 }
-
-func boundaryDecision(continueTurn bool) agentStepBoundaryDecision {
-	if continueTurn {
-		return prepareNextAgentStepDecision{}
-	}
-	return finishAgentTurnDecision{}
-}

@@ -337,46 +337,6 @@ func (s *Service) CompactContext(ctx context.Context, req serverapi.RuntimeCompa
 	})
 }
 
-func (s *Service) CompactContextForPreSubmit(ctx context.Context, req serverapi.RuntimeCompactContextForPreSubmitRequest) error {
-	if err := req.Validate(); err != nil {
-		return err
-	}
-	return s.runAgentExecution(ctx, req.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
-		_, err := engine.CompactContextForPreSubmitWithActiveHook(runCtx, nil)
-		return err
-	})
-}
-
-func (s *Service) HasQueuedUserWork(ctx context.Context, req serverapi.RuntimeHasQueuedUserWorkRequest) (serverapi.RuntimeHasQueuedUserWorkResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.RuntimeHasQueuedUserWorkResponse{}, err
-	}
-	var hasQueuedUserWork bool
-	err := s.withRuntime(ctx, req.SessionID, func(_ context.Context, engine *runtime.Engine) error {
-		hasQueuedUserWork = engine.HasQueuedUserWork()
-		return nil
-	})
-	if err != nil {
-		return serverapi.RuntimeHasQueuedUserWorkResponse{}, err
-	}
-	return serverapi.RuntimeHasQueuedUserWorkResponse{HasQueuedUserWork: hasQueuedUserWork}, nil
-}
-
-func (s *Service) SubmitQueuedUserMessages(ctx context.Context, req serverapi.RuntimeSubmitQueuedUserMessagesRequest) (serverapi.RuntimeSubmitQueuedUserMessagesResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.RuntimeSubmitQueuedUserMessagesResponse{}, err
-	}
-	var resp serverapi.RuntimeSubmitQueuedUserMessagesResponse
-	err := s.runAgentExecution(ctx, req.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
-		msg, _, err := engine.SubmitQueuedUserMessagesWithActiveHook(runCtx, nil)
-		if msg.Content != nil {
-			resp.Message = *msg.Content
-		}
-		return err
-	})
-	return resp, err
-}
-
 func (s *Service) Interrupt(ctx context.Context, req serverapi.RuntimeInterruptRequest) (serverapi.RuntimeInterruptResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.RuntimeInterruptResponse{}, err

@@ -875,7 +875,7 @@ func TestCacheWarningSteeringPropagatesCommittedAppendError(t *testing.T) {
 	}
 
 	observer.armed = true
-	err := eng.steer("step-1", steerCacheWarningIntent(transcript.CacheWarning{
+	err := eng.steer("step-1", testCacheWarningIntent(transcript.CacheWarning{
 		Scope:  transcript.CacheWarningScopeConversation,
 		Reason: transcript.CacheWarningReasonCompaction,
 	}, transcript.EntryVisibilityAuto, false))

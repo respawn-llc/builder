@@ -120,12 +120,6 @@ func (RuntimeCompactRequest) Validate() error {
 	return nil
 }
 
-type RuntimeSubmitQueuedRequest struct{}
-
-func (RuntimeSubmitQueuedRequest) Validate() error {
-	return nil
-}
-
 type SessionExecutionTarget struct {
 	WorkspaceID           string
 	WorkspaceName         string

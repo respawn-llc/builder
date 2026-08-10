@@ -158,14 +158,6 @@ func TestWorkflowPostCompletionCompactionRestoresBoundaryAndLazyContinuationCons
 	}
 	reopenedStore := mustOpenTestSession(t, fixture.store.Dir())
 	reopened := mustNewTestEngine(t, reopenedStore, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
-	mode, present := reopened.compactionRuntimeState().HistoryReplacementMode()
-	if !present || mode == nil || *mode != session.CompactionModeWorkflowPostCompletion {
-		t.Fatalf(
-			"restored history replacement mode = %v, want %q",
-			mode,
-			compactionModeWorkflowPostCompletion,
-		)
-	}
 	if !reopened.compactionRuntimeState().WorkflowPostCompletionBoundary() {
 		t.Fatal("unconsumed post-completion boundary was not restored from active segment")
 	}
@@ -189,10 +181,6 @@ func TestWorkflowPostCompletionCompactionRestoresBoundaryAndLazyContinuationCons
 	}
 	if reopened.compactionRuntimeState().WorkflowPostCompletionBoundary() {
 		t.Fatal("ordinary replacement restored a stale post-completion boundary")
-	}
-	mode, present = reopened.compactionRuntimeState().HistoryReplacementMode()
-	if !present || mode == nil || *mode != session.CompactionModeManual {
-		t.Fatalf("latest replacement mode = %v, want %q", mode, compactionModeManual)
 	}
 }
 

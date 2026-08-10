@@ -16,7 +16,6 @@ import (
 	"core/server/workflowruntime"
 	"core/shared/serverapi"
 	"core/shared/textutil"
-	"core/shared/transcript"
 )
 
 type compactionMode string
@@ -84,12 +83,6 @@ func (e *Engine) CompactContext(ctx context.Context, args string) error {
 func (e *Engine) CompactContextWithActiveHook(ctx context.Context, args string, onActive func()) (session.CommitReceipt, error) {
 	e.ensureOrchestrationCollaborators()
 	return e.compactionFlow.CompactContextWithActiveHook(ctx, args, onActive)
-}
-
-func (e *Engine) CompactContextForPreSubmit(ctx context.Context) error {
-	e.ensureOrchestrationCollaborators()
-	_, err := e.compactionFlow.CompactContextForPreSubmitWithActiveHook(ctx, nil)
-	return err
 }
 
 func (e *Engine) CompactContextForWorkflowContinuation(ctx context.Context) error {
@@ -436,58 +429,6 @@ func (e *Engine) currentInputTokensPrecisely(ctx context.Context) (int, bool) {
 		return 0, false
 	}
 	return e.requestInputTokensPreciselyTracked(ctx, req, true)
-}
-
-func (e *Engine) currentInputTokensPreciselyWithoutPromptRefresh(ctx context.Context) (int, bool) {
-	req, err := e.buildRequestWithoutPromptRefresh(ctx)
-	if err != nil {
-		return 0, false
-	}
-	return e.requestInputTokensPreciselyTracked(ctx, req, true)
-}
-
-func (e *Engine) buildRequestWithoutPromptRefresh(ctx context.Context) (llm.Request, error) {
-	locked, err := e.ensureLocked()
-	if err != nil {
-		return llm.Request{}, err
-	}
-	workflowMode, err := e.workflowCompletionMode(ctx)
-	if err != nil {
-		return llm.Request{}, err
-	}
-	requestTools, err := e.requestTools(ctx, workflowMode)
-	if err != nil {
-		return llm.Request{}, err
-	}
-	systemPrompt, err := e.systemPromptWithoutBackfill(locked)
-	if err != nil {
-		return llm.Request{}, err
-	}
-	nativeWebSearch, nativeErr := e.enableNativeWebSearch(ctx)
-	if nativeErr != nil {
-		return llm.Request{}, nativeErr
-	}
-	toolChoiceMode := toolChoiceModeForWorkflowCompletion(workflowMode, e.workflowUseRequiredToolCalls())
-	req, err := llm.RequestFromLockedContract(locked, systemPrompt, e.transcriptRuntimeState().SnapshotItems(), requestTools, llm.ToolControls{
-		ChoiceMode:            toolChoiceMode,
-		EnableNativeWebSearch: nativeWebSearch,
-	})
-	if err != nil {
-		return llm.Request{}, err
-	}
-	req.ReasoningEffort = e.ThinkingLevel()
-	req.FastMode = e.FastModeEnabled()
-	req.SessionID = e.SessionID()
-	if e.supportsPromptCacheKey(ctx) {
-		if cacheKey := e.conversationPromptCacheKey(e.SessionID()); cacheKey != "" {
-			req.PromptCacheKey = cacheKey
-			req.PromptCacheScope = transcript.CacheWarningScopeConversation
-		}
-	}
-	if err := e.validateToolChoiceSupport(ctx, toolChoiceMode); err != nil {
-		return llm.Request{}, err
-	}
-	return req, nil
 }
 
 func (e *Engine) currentInputTokensPreciselyIfDueWithPriority(ctx context.Context, limit int, critical bool) (int, bool) {

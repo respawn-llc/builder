@@ -51,23 +51,35 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 	cmd.Dir = spec.Dir
 
 	started := time.Now()
-	ptmx, err := creackpty.StartWithSize(cmd, &creackpty.Winsize{Rows: uint16(spec.Dimensions.Rows), Cols: uint16(spec.Dimensions.Cols)})
+	ptmx, tty, err := creackpty.Open()
 	if err != nil {
 		return analyzer.Capture{}, errors.Join(
-			fmt.Errorf("start pty command path=%s args=%v dimensions=%+v: %w", spec.Path, spec.Args, spec.Dimensions, err),
+			fmt.Errorf("open pty command path=%s args=%v dimensions=%+v: %w", spec.Path, spec.Args, spec.Dimensions, err),
 			readiness.Close(),
 		)
 	}
 	defer func() {
 		_ = ptmx.Close()
 	}()
+	defer func() {
+		_ = tty.Close()
+	}()
+	if err := creackpty.Setsize(ptmx, &creackpty.Winsize{Rows: uint16(spec.Dimensions.Rows), Cols: uint16(spec.Dimensions.Cols)}); err != nil {
+		return analyzer.Capture{}, errors.Join(
+			fmt.Errorf("size pty command path=%s args=%v dimensions=%+v: %w", spec.Path, spec.Args, spec.Dimensions, err),
+			readiness.Close(),
+		)
+	}
+	cmd.Stdin = tty
+	cmd.Stdout = tty
+	cmd.Stderr = tty
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.Setsid = true
+	cmd.SysProcAttr.Setctty = true
 	waitDone := make(chan error, 1)
 	var processExited atomic.Bool
-	go func() {
-		waitErr := cmd.Wait()
-		processExited.Store(true)
-		waitDone <- waitErr
-	}()
 
 	var mu sync.Mutex
 	var eventWG sync.WaitGroup
@@ -268,6 +280,21 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 			}
 		}
 	}()
+	if err := cmd.Start(); err != nil {
+		_ = tty.Close()
+		_ = ptmx.Close()
+		<-readDone
+		return analyzer.Capture{}, errors.Join(
+			fmt.Errorf("start pty command path=%s args=%v dimensions=%+v: %w", spec.Path, spec.Args, spec.Dimensions, err),
+			readiness.Close(),
+		)
+	}
+	_ = tty.Close()
+	go func() {
+		waitErr := cmd.Wait()
+		processExited.Store(true)
+		waitDone <- waitErr
+	}()
 
 	analysisDone := make(chan struct{})
 	go func() {
@@ -382,7 +409,9 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 		_ = ptmx.Close()
 		<-readDone
 	}
-	eventErrors.Add(signalProcessGroup(cmd.Process.Pid, syscall.SIGKILL))
+	if err := signalProcessGroup(cmd.Process.Pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.EPERM) {
+		eventErrors.Add(err)
+	}
 	_ = ptmx.Close()
 	<-analysisDone
 	readinessErr := readiness.Close()

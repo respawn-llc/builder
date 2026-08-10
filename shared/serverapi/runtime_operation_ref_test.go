@@ -12,8 +12,6 @@ func TestRuntimeRequestsUseOnlyCommandSpecificInputs(t *testing.T) {
 		RuntimeSubmitUserTurnRequest{SessionID: "session-1", Input: runtimeinput.Text("hello")},
 		RuntimeSubmitUserShellCommandRequest{SessionID: "session-1", Command: "pwd"},
 		RuntimeCompactContextRequest{SessionID: "session-1", Args: "notes"},
-		RuntimeCompactContextForPreSubmitRequest{SessionID: "session-1"},
-		RuntimeSubmitQueuedUserMessagesRequest{SessionID: "session-1"},
 		RuntimeInterruptRequest{SessionID: "session-1"},
 	}
 	for _, request := range requests {

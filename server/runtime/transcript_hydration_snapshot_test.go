@@ -131,7 +131,7 @@ func TestFailedQueueFlushRetainsSingleAcceptedStatusAcrossHydrationRace(t *testi
 	blocker := mustBlockTestEventLogAppends(t, store)
 	flushDone := make(chan error, 1)
 	go func() {
-		_, _, err := engine.SubmitQueuedUserMessagesWithActiveHook(context.Background(), nil)
+		_, _, err := engine.submitQueuedUserMessagesWithActiveHook(context.Background(), nil)
 		flushDone <- err
 	}()
 	var duringFlush TranscriptHydrationSnapshot

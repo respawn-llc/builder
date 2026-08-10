@@ -375,13 +375,6 @@ func (c *liveRunCoordinator) beginAgentStep(origin serverapi.RuntimeStepOrigin) 
 	c.current.stepToolStarts = liveStepToolStartsNone
 }
 
-func (c *liveRunCoordinator) finishStep(snapshot *RunSnapshot, status RunStatus, err error, holdGoalLoop bool) {
-	result := c.finishStepDeferred(snapshot, status, err, holdGoalLoop)
-	if result != nil {
-		c.publishCompleted(*result)
-	}
-}
-
 func (c *liveRunCoordinator) finishStepDeferred(snapshot *RunSnapshot, status RunStatus, err error, holdGoalLoop bool) *LiveRunResult {
 	c.mu.Lock()
 	group := c.current
@@ -608,36 +601,6 @@ func mustStepID(raw string) runtimeids.StepID {
 		panic(fmt.Sprintf("runtime generated invalid step id %q: %v", raw, err))
 	}
 	return id
-}
-
-func mustQueueItemID(raw string) runtimeids.QueueItemID {
-	id, err := runtimeids.ParseQueueItemID(raw)
-	if err != nil {
-		panic(fmt.Sprintf("runtime generated invalid queue item id %q: %v", raw, err))
-	}
-	return id
-}
-
-func typedQueueItemIDSet(ids map[string]struct{}) map[runtimeids.QueueItemID]struct{} {
-	if len(ids) == 0 {
-		return nil
-	}
-	typed := make(map[runtimeids.QueueItemID]struct{}, len(ids))
-	for raw := range ids {
-		typed[mustQueueItemID(raw)] = struct{}{}
-	}
-	return typed
-}
-
-func stringQueueItemIDSet(ids map[runtimeids.QueueItemID]struct{}) map[string]struct{} {
-	if len(ids) == 0 {
-		return nil
-	}
-	out := make(map[string]struct{}, len(ids))
-	for id := range ids {
-		out[id.String()] = struct{}{}
-	}
-	return out
 }
 
 func liveRunResultError(group *liveRunGroup) error {

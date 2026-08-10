@@ -166,7 +166,7 @@ func TestQueuedUserSubmissionUpdatesLatestRollbackCandidateLocator(t *testing.T)
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{})
 
 	mustQueueUserMessage(t, eng, "queued rollback candidate")
-	if _, err := eng.SubmitQueuedUserMessages(context.Background()); err != nil {
+	if _, err := eng.submitQueuedUserMessages(context.Background()); err != nil {
 		t.Fatalf("submit queued user message: %v", err)
 	}
 

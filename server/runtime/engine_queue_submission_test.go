@@ -43,7 +43,7 @@ func TestIdleHumanBoundaryAppliesBeforeInitialProviderOriginIsExposed(t *testing
 	if _, err := engine.QueueUserMessage("idle input"); err != nil {
 		t.Fatalf("QueueUserMessage: %v", err)
 	}
-	if _, err := engine.SubmitQueuedUserMessages(context.Background()); err != nil {
+	if _, err := engine.submitQueuedUserMessages(context.Background()); err != nil {
 		t.Fatalf("SubmitQueuedUserMessages: %v", err)
 	}
 	if originExposedDuringApply.Load() {
@@ -71,7 +71,7 @@ func TestSubmitQueuedUserMessagesPreservesCommittedFlushReceiptOnRunError(t *tes
 	)
 	engine.QueueUserMessage("queued input")
 
-	_, receipt, err := engine.SubmitQueuedUserMessagesWithActiveHook(context.Background(), nil)
+	_, receipt, err := engine.submitQueuedUserMessagesWithActiveHook(context.Background(), nil)
 	if !receipt.Committed || !errors.Is(err, providerErr) {
 		t.Fatalf("queued submission receipt=%+v error=%v, want committed provider failure", receipt, err)
 	}
@@ -101,7 +101,7 @@ func TestSubmitQueuedUserMessagesPreservesCommittedFlushReceiptOnTerminalResult(
 	)
 	engine.QueueUserMessage("queued input")
 
-	assistant, receipt, err := engine.SubmitQueuedUserMessagesWithActiveHook(context.Background(), nil)
+	assistant, receipt, err := engine.submitQueuedUserMessagesWithActiveHook(context.Background(), nil)
 	if !receipt.Committed || err != nil || messageContent(assistant) != "completed" {
 		t.Fatalf("queued submission receipt=%+v error=%v", receipt, err)
 	}

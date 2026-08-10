@@ -42,10 +42,10 @@ func TestBackgroundAgendaAdapterRejectsDuplicateDomainIdentity(t *testing.T) {
 		State:      "completed",
 	}
 	adapter := &defaultBackgroundAgendaAdapter{engine: engine}
-	if err := adapter.QueueBackgroundShellContinuation(event); err != nil {
+	if err := adapter.QueueDeveloperNotice(backgroundShellDeveloperNotice(event)); err != nil {
 		t.Fatalf("accept first terminal notice: %v", err)
 	}
-	if err := adapter.QueueBackgroundShellContinuation(event); err == nil {
+	if err := adapter.QueueDeveloperNotice(backgroundShellDeveloperNotice(event)); err == nil {
 		t.Fatal("duplicate terminal notice identity was accepted")
 	}
 	if pending := pendingBackgroundNotices(engine.boundaryAgenda); len(pending) != 1 {
@@ -129,14 +129,17 @@ func TestWriteStdinCompletionConsumesCanonicalBackgroundAgendaItem(t *testing.T)
 			presentation := transcript.NormalizeToolCallMeta(transcript.ToolCallMeta{
 				ToolName: string(toolspec.ToolWriteStdin),
 			})
-			_, _, err := engine.persistToolCompletionRaw("step", tools.Result{
-				CallID: "write-stdin-call",
-				Name:   toolspec.ToolWriteStdin,
-				Output: json.RawMessage(
-					`{"background_session_id":42,"background_running":false,"backgrounded":true}`,
-				),
-				Presentation: &presentation,
-			})
+			_, _, _, err := engine.persistFinalizedToolCompletionRaw(
+				"step",
+				finalizedToolCompletion{Result: tools.Result{
+					CallID: "write-stdin-call",
+					Name:   toolspec.ToolWriteStdin,
+					Output: json.RawMessage(
+						`{"background_session_id":42,"background_running":false,"backgrounded":true}`,
+					),
+					Presentation: &presentation,
+				}},
+			)
 			if tt.blockAppend && err == nil {
 				t.Fatal("uncommitted completion did not fail")
 			}
