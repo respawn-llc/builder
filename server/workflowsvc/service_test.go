@@ -3,10 +3,12 @@ package workflowsvc
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -25,6 +27,7 @@ import (
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 	"core/shared/worktreecontract"
 )
 
@@ -2172,7 +2175,7 @@ func TestServiceWorkflowGraphValidatePreviewAndSave(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PreviewWorkflowGraphSave: %v", err)
 	}
-	if !preview.CanSave || preview.ConfirmationRequired || len(preview.Blockers) != 0 {
+	if !preview.Changed || !preview.CanSave || preview.ConfirmationRequired || len(preview.Blockers) != 0 {
 		t.Fatalf("preview graph save = %+v, want savable preview without blockers", preview)
 	}
 	afterPreview, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
@@ -2213,7 +2216,7 @@ func TestServiceWorkflowGraphValidatePreviewAndSave(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SaveWorkflowGraph: %v", err)
 	}
-	if !saved.Saved || saved.Definition == nil || saved.CurrentVersion != source.Definition.Workflow.Version+1 {
+	if !saved.Saved || !saved.Changed || saved.Definition == nil || saved.CurrentVersion != source.Definition.Workflow.Version+1 {
 		t.Fatalf("saved graph = %+v, want saved canonical definition with incremented version", saved)
 	}
 	if saved.Definition.Workflow.Name != "Saved Workflow" || saved.Definition.Workflow.Description != "Saved metadata" {
@@ -2420,6 +2423,318 @@ func TestServiceWorkflowGraphValidationParityForUnavailableAssigneeAndInvalidScr
 		!workflowValidationHasCode(savedExecution.Errors, string(workflow.CodeAgentRoleMissing)) ||
 		!workflowValidationHasCode(savedExecution.Errors, workflowscript.CodeMissingPath) {
 		t.Fatalf("saved validation = draft=%+v execution=%+v, want unavailable assignee in both and missing script path only in execution", savedDraft, savedExecution)
+	}
+}
+
+func TestServiceWorkflowGraphSaveProjectsRemovedTransitionBranchImpactDeterministically(t *testing.T) {
+	ctx, service, _ := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	current, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow current: %v", err)
+	}
+	graph := workflowGraphDraftFromDefinition(current.Definition)
+	spareNodeID := "node-spare-done-" + workflowID.String()
+	removedEdgeID := "edge-spare-done-" + workflowID.String()
+	graph.Nodes = append(graph.Nodes, serverapi.WorkflowGraphDraftNode{
+		ID:          spareNodeID,
+		Key:         "spare_done",
+		Kind:        "terminal",
+		DisplayName: "Spare Done",
+	})
+	graph.Edges = append(graph.Edges, serverapi.WorkflowGraphDraftEdge{
+		ID:                removedEdgeID,
+		TransitionGroupID: "group-done-" + workflowID.String(),
+		Key:               "spare_done",
+		TargetNodeID:      spareNodeID,
+		AssigneeSelection: "configured",
+		ThinkingSelection: "configured",
+		ContextMode:       "new_session",
+		ContextSource:     serverapi.WorkflowContextSource{Kind: "immediate_source"},
+	})
+	added, err := service.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
+		WorkflowID:      workflowID,
+		ExpectedVersion: current.Definition.Workflow.Version,
+		Graph:           graph,
+	})
+	if err != nil {
+		t.Fatalf("SaveWorkflowGraph add Transition Branch: %v", err)
+	}
+	if !added.Saved {
+		t.Fatalf("add Transition Branch response = %+v, want saved", added)
+	}
+	removedGroupID := "group-empty-" + workflowID.String()
+	if _, err := service.AddWorkflowNodeGroup(ctx, serverapi.WorkflowNodeGroupAddRequest{
+		WorkflowID:  workflowID,
+		GroupID:     removedGroupID,
+		GroupKey:    "empty",
+		DisplayName: "Empty",
+	}); err != nil {
+		t.Fatalf("AddWorkflowNodeGroup: %v", err)
+	}
+	current, err = service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow with removable entities: %v", err)
+	}
+	graph = workflowGraphDraftFromDefinition(current.Definition)
+	graph.Edges = slices.DeleteFunc(graph.Edges, func(edge serverapi.WorkflowGraphDraftEdge) bool {
+		return edge.ID == removedEdgeID
+	})
+	graph.NodeGroups = slices.DeleteFunc(graph.NodeGroups, func(group serverapi.WorkflowGraphDraftNodeGroup) bool {
+		return group.ID == removedGroupID
+	})
+	preview, err := service.PreviewWorkflowGraphSave(ctx, serverapi.WorkflowGraphSavePreviewRequest{
+		WorkflowID:      workflowID,
+		ExpectedVersion: current.Definition.Workflow.Version,
+		Graph:           graph,
+	})
+	if err != nil {
+		t.Fatalf("PreviewWorkflowGraphSave remove Transition Branch: %v", err)
+	}
+	wantRemoved := []serverapi.WorkflowGraphEntityReference{
+		{
+			EntityType: serverapi.WorkflowGraphEntityTypeEdge,
+			EntityID:   removedEdgeID,
+		},
+		{
+			EntityType: serverapi.WorkflowGraphEntityTypeNodeGroup,
+			EntityID:   removedGroupID,
+		},
+	}
+	if !preview.Changed ||
+		preview.Impact.RemovedNodeGroupCount != 1 ||
+		preview.Impact.RemovedEdgeCount != 1 ||
+		!slices.Equal(preview.Impact.RemovedEntities, wantRemoved) ||
+		preview.Impact.NodeTaskReferenceCount != 0 ||
+		preview.Impact.EdgeTaskReferenceCount != 0 {
+		t.Fatalf("removed Transition Branch preview = %+v, want changed exact impact %+v with unchanged Task-reference counts", preview, wantRemoved)
+	}
+	wantConfirmationEntities := []serverapi.WorkflowGraphEntityReference{{
+		EntityType: serverapi.WorkflowGraphEntityTypeEdge,
+		EntityID:   removedEdgeID,
+	}}
+	if got := workflowServiceGraphSaveBlockerEntities(preview.Blockers, "confirmation_required"); !slices.Equal(got, wantConfirmationEntities) {
+		t.Fatalf("confirmation_required affected entities = %+v, want %+v", got, wantConfirmationEntities)
+	}
+	if err := preview.Validate(); err != nil {
+		t.Fatalf("preview response validation: %v", err)
+	}
+	first, err := json.Marshal(preview)
+	if err != nil {
+		t.Fatalf("marshal first preview: %v", err)
+	}
+	var roundTrip serverapi.WorkflowGraphSavePreviewResponse
+	if err := json.Unmarshal(first, &roundTrip); err != nil {
+		t.Fatalf("unmarshal preview: %v", err)
+	}
+	if !slices.Equal(roundTrip.Impact.RemovedEntities, wantRemoved) {
+		t.Fatalf("round-trip removed entities = %+v, want canonical order %+v", roundTrip.Impact.RemovedEntities, wantRemoved)
+	}
+	second, err := json.Marshal(preview)
+	if err != nil {
+		t.Fatalf("marshal second preview: %v", err)
+	}
+	if string(first) != string(second) {
+		t.Fatalf("preview JSON is not deterministic:\nfirst:  %s\nsecond: %s", first, second)
+	}
+	saved, err := service.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
+		WorkflowID:      workflowID,
+		ExpectedVersion: current.Definition.Workflow.Version,
+		Graph:           graph,
+		Confirmation: &serverapi.WorkflowGraphSaveConfirmation{
+			ExpectedRemovedNodeGroupCount:       preview.Impact.RemovedNodeGroupCount,
+			ExpectedRemovedNodeCount:            preview.Impact.RemovedNodeCount,
+			ExpectedRemovedTransitionGroupCount: preview.Impact.RemovedTransitionGroupCount,
+			ExpectedRemovedEdgeCount:            preview.Impact.RemovedEdgeCount,
+			ExpectedNodeTaskReferenceCount:      preview.Impact.NodeTaskReferenceCount,
+			ExpectedEdgeTaskReferenceCount:      preview.Impact.EdgeTaskReferenceCount,
+		},
+	})
+	if err != nil {
+		t.Fatalf("SaveWorkflowGraph confirmed removal: %v", err)
+	}
+	if !saved.Saved || !saved.Changed {
+		t.Fatalf("confirmed removal = %+v, want changed save", saved)
+	}
+}
+
+func TestServiceWorkflowGraphSaveRejectsStaleNoop(t *testing.T) {
+	ctx, service, _ := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	original, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow original: %v", err)
+	}
+	if _, err := service.UpdateWorkflow(ctx, serverapi.WorkflowUpdateRequest{
+		WorkflowID:  workflowID,
+		Name:        "Remote rename",
+		Description: "Remote description",
+	}); err != nil {
+		t.Fatalf("UpdateWorkflow: %v", err)
+	}
+	current, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow current: %v", err)
+	}
+	req := serverapi.WorkflowGraphSavePreviewRequest{
+		WorkflowID:      workflowID,
+		ExpectedVersion: original.Definition.Workflow.Version,
+		Graph:           workflowGraphDraftFromDefinition(original.Definition),
+	}
+	preview, err := service.PreviewWorkflowGraphSave(ctx, req)
+	if err != nil {
+		t.Fatalf("PreviewWorkflowGraphSave stale no-op: %v", err)
+	}
+	if preview.Changed || preview.CanSave {
+		t.Fatalf("stale no-op preview = %+v, want unchanged blocked response", preview)
+	}
+	if got := workflowServiceGraphSaveBlockerEntities(preview.Blockers, "version_changed"); got == nil || len(got) != 0 {
+		t.Fatalf("version_changed affected entities = %+v, want present empty collection", got)
+	}
+
+	saved, err := service.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
+		WorkflowID:      req.WorkflowID,
+		ExpectedVersion: req.ExpectedVersion,
+		Graph:           req.Graph,
+	})
+	if err != nil {
+		t.Fatalf("SaveWorkflowGraph stale no-op: %v", err)
+	}
+	if saved.Saved || saved.CanSave {
+		t.Fatalf("stale no-op save = %+v, want blocked response", saved)
+	}
+	if got := workflowServiceGraphSaveBlockerEntities(saved.Blockers, "version_changed"); got == nil || len(got) != 0 {
+		t.Fatalf("save version_changed affected entities = %+v, want present empty collection", got)
+	}
+	after, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow after stale no-op: %v", err)
+	}
+	if after.Definition.Workflow.Version != current.Definition.Workflow.Version ||
+		after.Definition.Workflow.Name != current.Definition.Workflow.Name {
+		t.Fatalf("workflow after stale no-op = %+v, want unchanged current workflow %+v", after.Definition.Workflow, current.Definition.Workflow)
+	}
+}
+
+func TestServiceWorkflowGraphSaveAllowsRemovingNodeGroupWithoutConfirmation(t *testing.T) {
+	ctx, service, _ := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	removedGroupID := "group-empty-" + workflowID.String()
+	if _, err := service.AddWorkflowNodeGroup(ctx, serverapi.WorkflowNodeGroupAddRequest{
+		WorkflowID:  workflowID,
+		GroupID:     removedGroupID,
+		GroupKey:    "empty",
+		DisplayName: "Empty",
+	}); err != nil {
+		t.Fatalf("AddWorkflowNodeGroup: %v", err)
+	}
+	current, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow current: %v", err)
+	}
+	graph := workflowGraphDraftFromDefinition(current.Definition)
+	graph.NodeGroups = slices.DeleteFunc(graph.NodeGroups, func(group serverapi.WorkflowGraphDraftNodeGroup) bool {
+		return group.ID == removedGroupID
+	})
+
+	preview, err := service.PreviewWorkflowGraphSave(ctx, serverapi.WorkflowGraphSavePreviewRequest{
+		WorkflowID:      workflowID,
+		ExpectedVersion: current.Definition.Workflow.Version,
+		Graph:           graph,
+	})
+	if err != nil {
+		t.Fatalf("PreviewWorkflowGraphSave remove Node Group: %v", err)
+	}
+	wantRemoved := []serverapi.WorkflowGraphEntityReference{{
+		EntityType: serverapi.WorkflowGraphEntityTypeNodeGroup,
+		EntityID:   removedGroupID,
+	}}
+	if !preview.Changed ||
+		preview.Impact.RemovedNodeGroupCount != 1 ||
+		!slices.Equal(preview.Impact.RemovedEntities, wantRemoved) {
+		t.Fatalf("removed Node Group preview = %+v, want changed exact impact %+v", preview, wantRemoved)
+	}
+	if !preview.CanSave || preview.ConfirmationRequired {
+		t.Fatalf("removed Node Group preview = %+v, want saveable without confirmation", preview)
+	}
+
+	saved, err := service.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
+		WorkflowID:      workflowID,
+		ExpectedVersion: current.Definition.Workflow.Version,
+		Graph:           graph,
+	})
+	if err != nil {
+		t.Fatalf("SaveWorkflowGraph remove Node Group: %v", err)
+	}
+	if !saved.Saved || !saved.Changed || saved.ConfirmationRequired {
+		t.Fatalf("removed Node Group save = %+v, want changed save without confirmation", saved)
+	}
+}
+
+func TestServiceWorkflowGraphSaveIgnoresNodeGroupNumericSortSpacing(t *testing.T) {
+	ctx, service, _ := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	groupIDs := []string{
+		"group-first-" + workflowID.String(),
+		"group-second-" + workflowID.String(),
+	}
+	for index, groupID := range groupIDs {
+		if _, err := service.AddWorkflowNodeGroup(ctx, serverapi.WorkflowNodeGroupAddRequest{
+			WorkflowID:  workflowID,
+			GroupID:     groupID,
+			GroupKey:    fmt.Sprintf("group_%d", index+1),
+			DisplayName: fmt.Sprintf("Group %d", index+1),
+			SortOrder:   50 + index*100,
+		}); err != nil {
+			t.Fatalf("AddWorkflowNodeGroup %q: %v", groupID, err)
+		}
+	}
+	current, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow current: %v", err)
+	}
+	if len(current.Definition.NodeGroups) != len(groupIDs) {
+		t.Fatalf("Node Groups = %+v, want %v", current.Definition.NodeGroups, groupIDs)
+	}
+	for index, groupID := range groupIDs {
+		if current.Definition.NodeGroups[index].GroupID != groupID {
+			t.Fatalf("Node Group order = %+v, want %v", current.Definition.NodeGroups, groupIDs)
+		}
+	}
+	graph := workflowGraphDraftFromDefinition(current.Definition)
+	preview, err := service.PreviewWorkflowGraphSave(ctx, serverapi.WorkflowGraphSavePreviewRequest{
+		WorkflowID:      workflowID,
+		ExpectedVersion: current.Definition.Workflow.Version,
+		Graph:           graph,
+	})
+	if err != nil {
+		t.Fatalf("PreviewWorkflowGraphSave: %v", err)
+	}
+	if preview.Changed || !preview.CanSave || len(preview.Blockers) != 0 {
+		t.Fatalf("preview = %+v, want unchanged saveable graph", preview)
+	}
+	saved, err := service.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
+		WorkflowID:      workflowID,
+		ExpectedVersion: current.Definition.Workflow.Version,
+		Graph:           graph,
+	})
+	if err != nil {
+		t.Fatalf("SaveWorkflowGraph: %v", err)
+	}
+	if !saved.Saved || saved.Changed || saved.CurrentVersion != current.Definition.Workflow.Version {
+		t.Fatalf("save = %+v, want unchanged version %d", saved, current.Definition.Workflow.Version)
+	}
+	reloaded, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow reloaded: %v", err)
+	}
+	if reloaded.Definition.Workflow.Version != current.Definition.Workflow.Version {
+		t.Fatalf("reloaded version = %d, want %d", reloaded.Definition.Workflow.Version, current.Definition.Workflow.Version)
+	}
+	for index, groupID := range groupIDs {
+		if reloaded.Definition.NodeGroups[index].GroupID != groupID {
+			t.Fatalf("reloaded Node Group order = %+v, want %v", reloaded.Definition.NodeGroups, groupIDs)
+		}
 	}
 }
 
@@ -3095,6 +3410,15 @@ func workflowServiceTransitionGroupByID(t *testing.T, def serverapi.WorkflowDefi
 	return serverapi.WorkflowTransitionGroup{}
 }
 
+func workflowServiceGraphSaveBlockerEntities(blockers []serverapi.WorkflowGraphSaveBlocker, code string) []serverapi.WorkflowGraphEntityReference {
+	for _, blocker := range blockers {
+		if blocker.Code == code {
+			return blocker.AffectedEntities
+		}
+	}
+	return nil
+}
+
 func workflowGraphDraftFromDefinition(def serverapi.WorkflowDefinition) serverapi.WorkflowGraphDraft {
 	graph := serverapi.WorkflowGraphDraft{
 		NodeGroups:       make([]serverapi.WorkflowGraphDraftNodeGroup, 0, len(def.NodeGroups)),
@@ -3106,7 +3430,7 @@ func workflowGraphDraftFromDefinition(def serverapi.WorkflowDefinition) serverap
 		graph.NodeGroups = append(graph.NodeGroups, serverapi.WorkflowGraphDraftNodeGroup{ID: group.GroupID, Key: group.GroupKey, DisplayName: group.DisplayName})
 	}
 	for _, node := range def.Nodes {
-		graph.Nodes = append(graph.Nodes, serverapi.WorkflowGraphDraftNode{ID: node.ID, Key: node.Key, Kind: node.Kind, DisplayName: node.DisplayName, GroupID: node.GroupID, GroupKey: node.GroupKey, SubagentRole: node.SubagentRole, CompletionMode: node.CompletionMode, ScriptPath: node.ScriptPath, JoinInputProviders: node.JoinInputProviders})
+		graph.Nodes = append(graph.Nodes, serverapi.WorkflowGraphDraftNode{ID: node.ID, Key: node.Key, Kind: node.Kind, DisplayName: node.DisplayName, GroupID: textutil.OptionalExactString(node.GroupID), GroupKey: node.GroupKey, SubagentRole: node.SubagentRole, CompletionMode: node.CompletionMode, ScriptPath: node.ScriptPath, JoinInputProviders: node.JoinInputProviders})
 	}
 	for _, group := range def.TransitionGroups {
 		graph.TransitionGroups = append(graph.TransitionGroups, serverapi.WorkflowGraphDraftTransitionGroup{ID: group.ID, SourceNodeID: group.SourceNodeID, TransitionID: group.TransitionID, DisplayName: group.DisplayName, Description: group.Description})

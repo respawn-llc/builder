@@ -145,7 +145,8 @@ export type {
   WorkflowExecutionTargetUnavailableCause,
   WorkflowManagedExecutionTarget,
   WorkflowNoManagedExecutionTarget,
-  WorkflowGraphDraft,
+  WorkflowGraphEntityReference,
+  WorkflowGraphEntityType,
   WorkflowGraphMetadata,
   WorkflowGraphSaveConfirmation,
   WorkflowGraphSaveImpact,
@@ -172,6 +173,7 @@ export type {
   WorkspaceUnlinkBlocker,
   WorkspaceUnlinkResponse,
 } from "./models";
+export type { WorkflowGraphDraft } from "./workflowGraphModels";
 export type {
   SessionCatalogPage,
   SessionCatalogSummary,
