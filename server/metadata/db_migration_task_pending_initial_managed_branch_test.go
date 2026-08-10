@@ -56,7 +56,7 @@ INSERT INTO tasks (
 	if err != nil {
 		t.Fatalf("create migration provider: %v", err)
 	}
-	if _, err := provider.UpTo(t.Context(), 78); err != nil {
+	if _, err := provider.UpTo(t.Context(), 79); err != nil {
 		t.Fatalf("apply pending initial managed branch migration: %v", err)
 	}
 

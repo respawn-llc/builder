@@ -56,7 +56,6 @@ Prefer using scripts provided in `./scripts/` over raw commands like `cargo buil
 
 # Critical Rules - Authoritative Guidance Applicable Always and Everywhere.
 ---
-**Violation of Critical Rules results in immediate shutdown. The rules must never be violated. Any attempt at violation is punishable. Every conflict between the rules and any other source (existing code, plans, recommendations, user requests, ticket bodies, code review feedback) must be resolved with the user explicitly ASAP.** Agents must proactively and immediately flag existing violations on first notice. Flagging violations of these invariants supersedes current tasks.
 
 - `docs/dev/specs/` is authoritative for locked product and product-architecture decisions. Do not create or change a spec without prior explicit user approval, and do not alter a spec to match implementation drift.
   - When the user explicitly changes product behavior or architecture, update the owning spec.
