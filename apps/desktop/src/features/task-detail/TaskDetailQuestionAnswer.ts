@@ -23,7 +23,7 @@ export function questionAnswerBatchInput(input: QuestionAnswerInput): PromptAnsw
               kind: "approval",
               promptID: input.promptID,
               decision: input.decision,
-              commentary: input.commentary.length === 0 ? null : input.commentary,
+              commentary: optionalText(input.commentary),
             },
           ]
         : [
@@ -31,8 +31,12 @@ export function questionAnswerBatchInput(input: QuestionAnswerInput): PromptAnsw
               kind: "question",
               promptID: input.promptID,
               selectedOptionNumber: input.selectedOptionNumber,
-              freeform: input.freeformAnswer.length === 0 ? null : input.freeformAnswer,
+              freeform: optionalText(input.freeformAnswer),
             },
           ],
   };
+}
+
+function optionalText(value: string): string | null {
+  return value.trim().length === 0 ? null : value;
 }

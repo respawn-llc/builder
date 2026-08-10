@@ -408,7 +408,9 @@ function useTaskPromptAnswers({
       ): Promise<void> {
         requestSequence.value += 1;
         const handoff = promptSubmissionHandoff({
-          attentionItems: attention.data?.items ?? [],
+          attentionItems: (attention.data?.items ?? []).filter(
+            (item) => item.kind !== "question" || !state.isMasked(promptAnswerKey(item)),
+          ),
           requestID: requestSequence.value,
           scrollOffsetPx: scrollElement?.scrollTop ?? 0,
           submittedKey: promptAnswerKey(attempt.attention),
@@ -422,7 +424,7 @@ function useTaskPromptAnswers({
         });
       },
     }),
-    [api, attention.data?.items, coordinator, requestSequence, scrollElement],
+    [api, attention.data?.items, coordinator, requestSequence, scrollElement, state],
   );
   const projectedState =
     attention.data === undefined

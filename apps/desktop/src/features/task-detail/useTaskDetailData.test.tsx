@@ -82,6 +82,40 @@ describe("Task Detail live refresh", () => {
     expect(screen.queryAllByRole("radio")).toHaveLength(0);
   });
 
+  it("skips a masked prompt when handing focus to the next actionable question", async () => {
+    mountTaskDetailSurface(taskDetailResponse, {
+      routes: [
+        {
+          method: "workflow.task.attention.list",
+          handler: () => taskAttentionWithOneOption("ask-1", "ask-2", "ask-3"),
+        },
+        {
+          method: "prompt.answerBatch",
+          handler: async () => new Promise(() => undefined),
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    await waitFor(() => {
+      expect(screen.getAllByRole("radio")).toHaveLength(6);
+    });
+
+    const submits = screen.getAllByRole("button", { name: appI18n.t("task.submitAnswer") });
+    await user.click(requiredElement(submits, 1));
+    await waitFor(() => {
+      expect(screen.queryByText("ask-2")).not.toBeInTheDocument();
+    });
+    await user.click(requiredElement(screen.getAllByRole("radio", { name: "option-1 (Recommended)" }), 0));
+    await user.click(
+      requiredElement(screen.getAllByRole("button", { name: appI18n.t("task.submitAnswer") }), 0),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("ask-3")).toBeInTheDocument();
+      expect(screen.getAllByRole("radio")[0]).toHaveFocus();
+    });
+  });
+
   it("preserves an equal-timestamp background refresh over an earlier reconciliation", async () => {
     let attention = taskAttention("ask-1", 1);
     const delivery = deferred<undefined>();
@@ -365,4 +399,10 @@ function deferred<T>() {
     [resolve, reject] = [nextResolve, nextReject];
   });
   return { promise, reject, resolve };
+}
+
+function requiredElement(elements: readonly HTMLElement[], index: number): HTMLElement {
+  const element = elements[index];
+  if (element === undefined) throw new Error(`Required test element ${index.toString()} is unavailable`);
+  return element;
 }
