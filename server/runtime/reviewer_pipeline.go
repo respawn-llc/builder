@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"core/server/llm"
+	"core/shared/serverapi"
 	"core/shared/textutil"
 	"core/shared/transcript"
 )
@@ -50,8 +51,22 @@ func (r *defaultReviewerPipeline) RunFollowUp(ctx context.Context, stepID string
 		status := ReviewerStatus{Outcome: "no_suggestions"}
 		return reviewerFollowUpResult{Message: original, Completion: &status, AssistantCommittedStart: originalCommittedStart, AssistantCommittedStartSet: originalCommittedStartSet}, nil
 	}
-	if _, err := e.completeAgentProviderBoundary(ctx, true); err != nil {
+	decision, err := e.completeAgentProviderBoundary(ctx, true)
+	if err != nil {
 		return reviewerFollowUpResult{}, fmt.Errorf("reduce Reviewer follow-up Step Boundary: %w", err)
+	}
+	decision, err = e.resolveAgentStepBoundaryDecision(
+		decision,
+		agentStepBoundaryModeStep,
+	)
+	if err != nil {
+		return reviewerFollowUpResult{}, fmt.Errorf("resolve Reviewer follow-up Step Boundary: %w", err)
+	}
+	switch decision.(type) {
+	case finishAgentTurnDecision:
+		return reviewerFollowUpResult{}, &queuedUserFlushStoppedError{}
+	case retireAgentTurnDecision:
+		return reviewerFollowUpResult{}, serverapi.ErrRuntimeUnavailable
 	}
 	instruction := formatReviewerDeveloperInstruction(suggestions)
 	if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeReviewerFeedback), Content: textutil.Value(instruction)}})); err != nil {

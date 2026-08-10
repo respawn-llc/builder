@@ -695,60 +695,6 @@ func TestBuildReviewerTranscriptMessagesIncludesConversationAndToolCalls(t *test
 	}
 }
 
-func TestReviewerStatusTextIncludesReviewerCacheHitMetadata(t *testing.T) {
-	text := reviewerStatusText(ReviewerStatus{
-		Outcome:               "applied",
-		SuggestionsCount:      2,
-		CacheHitPercent:       85,
-		HasCacheHitPercentage: true,
-	}, []string{"one", "two"})
-	if strings.Contains(text, "Supervisor suggested:") || strings.Contains(text, "1. one") {
-		t.Fatalf("expected reviewer status text to stay concise even when suggestions are provided, got %q", text)
-	}
-	if !strings.Contains(text, "85% cache hit") {
-		t.Fatalf("expected reviewer cache hit metadata in reviewer status text, got %q", text)
-	}
-
-	text = reviewerStatusText(ReviewerStatus{
-		Outcome:               "applied",
-		SuggestionsCount:      2,
-		CacheHitPercent:       85,
-		HasCacheHitPercentage: true,
-	}, nil)
-	if !strings.Contains(text, "85% cache hit") {
-		t.Fatalf("expected reviewer cache hit metadata even without suggestions, got %q", text)
-	}
-
-	text = reviewerStatusText(ReviewerStatus{
-		Outcome:          "followup_failed",
-		SuggestionsCount: 2,
-		Error:            "tool crashed",
-	}, []string{"one", "two"})
-	if text != "Supervisor ran: 2 suggestions, but follow-up failed: tool crashed" {
-		t.Fatalf("expected concise follow-up failure status, got %q", text)
-	}
-}
-
-func TestReviewerStatusEntryRoleMarksErrors(t *testing.T) {
-	cases := []struct {
-		outcome string
-		want    string
-	}{
-		{outcome: "failed", want: string(transcript.EntryRoleReviewerError)},
-		{outcome: "followup_failed", want: string(transcript.EntryRoleReviewerError)},
-		{outcome: "applied", want: string(transcript.EntryRoleReviewerStatus)},
-		{outcome: "no_suggestions", want: string(transcript.EntryRoleReviewerStatus)},
-	}
-
-	for _, tt := range cases {
-		t.Run(tt.outcome, func(t *testing.T) {
-			if got := reviewerStatusEntryRole(ReviewerStatus{Outcome: tt.outcome}); got != tt.want {
-				t.Fatalf("reviewerStatusEntryRole = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestBuildReviewerTranscriptMessagesIncludesSupervisorControlDeveloperMessage(t *testing.T) {
 	messages := []llm.Message{
 		{Role: llm.RoleDeveloper, Content: textutil.Value("Supervisor agent gave you suggestions:\n1. run tests")},

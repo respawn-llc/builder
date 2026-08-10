@@ -142,6 +142,97 @@ func TestActiveManualCompactionUsesFreshReducerHandoff(t *testing.T) {
 	}
 }
 
+func TestReviewerFollowUpSettlesManualCompactionBeforeLaunchingFreshStep(t *testing.T) {
+	scopeID := runtimeids.NewExecutionScopeID()
+	lifecycle := &manualCompactionRunnerLifecycle{scopeID: scopeID}
+	engine := newActiveManualCompactionRunnerEngine(
+		t,
+		scopeID,
+		lifecycle,
+		&fakeCompactionClient{responses: []llm.Response{{
+			Assistant: llm.Message{
+				Role:    llm.RoleAssistant,
+				Content: textutil.Value("compacted context"),
+			},
+		}}},
+	)
+	engine.cfg.Reviewer = ReviewerConfig{Model: "gpt-5", ThinkingLevel: "low"}
+	compactionStarted := make(chan struct{})
+	releaseCompaction := make(chan struct{})
+	manualDeferred := submitManualCompactionRunnerCommand(t, engine, func() {
+		close(compactionStarted)
+		<-releaseCompaction
+	})
+	followUpStarted := make(chan struct{}, 1)
+	pipeline := &defaultReviewerPipeline{
+		engine: engine,
+		stepRunner: reviewerStepRunnerFunc(func(
+			context.Context,
+			string,
+			stepLoopOptions,
+		) (stepLoopResult, error) {
+			if got := lifecycle.freshAcquisitions.Load(); got != 1 {
+				return stepLoopResult{}, errors.New("Reviewer follow-up launched before fresh reducer acquisition")
+			}
+			if _, err := manualDeferred.Await(context.Background()); err != nil {
+				return stepLoopResult{}, err
+			}
+			followUpStarted <- struct{}{}
+			return stepLoopResult{
+				FinalAnswer: &llm.Message{
+					Role:    llm.RoleAssistant,
+					Phase:   textutil.Value(llm.MessagePhaseFinal),
+					Content: textutil.Value("reviewed answer"),
+				},
+			}, nil
+		}),
+	}
+	reviewerClient := &fakeClient{responses: []llm.Response{{
+		Assistant: llm.Message{
+			Role:    llm.RoleAssistant,
+			Content: textutil.Value(`{"suggestions":["apply correction"]}`),
+		},
+	}}}
+	done := make(chan error, 1)
+	go func() {
+		_, err := pipeline.RunFollowUp(
+			context.Background(),
+			engine.agentSteps.current.origin.StepID,
+			llm.Message{
+				Role:    llm.RoleAssistant,
+				Phase:   textutil.Value(llm.MessagePhaseFinal),
+				Content: textutil.Value("original answer"),
+			},
+			0,
+			true,
+			reviewerClient,
+		)
+		done <- err
+	}()
+	select {
+	case <-compactionStarted:
+	case err := <-done:
+		t.Fatalf("Reviewer follow-up returned before manual compaction selection: %v", err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("manual compaction did not start at Reviewer Step Boundary")
+	}
+	close(releaseCompaction)
+	if err := <-done; err != nil {
+		t.Fatalf("Reviewer follow-up: %v", err)
+	}
+	if _, err := manualDeferred.Await(context.Background()); err != nil {
+		t.Fatalf("manual compaction result: %v", err)
+	}
+	select {
+	case <-followUpStarted:
+	default:
+		t.Fatal("Reviewer follow-up did not launch after manual compaction settled")
+	}
+	if got := lifecycle.freshAcquisitions.Load(); got != 1 {
+		t.Fatalf("fresh reducer acquisitions = %d, want one", got)
+	}
+}
+
 func TestSelectedManualCompactionRuntimeCloseSettlesCommandAndRetiresRunner(t *testing.T) {
 	scopeID := runtimeids.NewExecutionScopeID()
 	lifecycle := &manualCompactionRunnerLifecycle{scopeID: scopeID}
@@ -368,6 +459,20 @@ func TestAcceptedFreshManualCompactionReducerRacingCloseSettlesUnavailable(t *te
 	if err := engine.ApplyRuntimeCloseUnderAdmission(); err != nil {
 		t.Fatalf("settle runtime state after Queue close: %v", err)
 	}
+}
+
+type reviewerStepRunnerFunc func(
+	context.Context,
+	string,
+	stepLoopOptions,
+) (stepLoopResult, error)
+
+func (f reviewerStepRunnerFunc) RunStepLoopWithOptions(
+	ctx context.Context,
+	stepID string,
+	options stepLoopOptions,
+) (stepLoopResult, error) {
+	return f(ctx, stepID, options)
 }
 
 func newActiveManualCompactionRunnerEngine(

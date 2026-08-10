@@ -363,63 +363,6 @@ func formatReviewerDeveloperInstruction(suggestions []string) string {
 	return b.String()
 }
 
-func reviewerStatusText(status ReviewerStatus, _ []string) string {
-	statusText := ""
-	suggestionCountLabel := pluralizeEnglish(status.SuggestionsCount, "suggestion", "suggestions")
-	switch strings.TrimSpace(status.Outcome) {
-	case "failed":
-		if strings.TrimSpace(status.Error) == "" {
-			statusText = "Supervisor ran: failed to generate suggestions."
-			break
-		}
-		statusText = fmt.Sprintf("Supervisor ran: failed to generate suggestions: %s", status.Error)
-	case "no_suggestions":
-		statusText = "Supervisor ran: no suggestions."
-	case "followup_failed":
-		if strings.TrimSpace(status.Error) == "" {
-			statusText = fmt.Sprintf("Supervisor ran: %s, but follow-up failed.", suggestionCountLabel)
-			break
-		}
-		statusText = fmt.Sprintf("Supervisor ran: %s, but follow-up failed: %s", suggestionCountLabel, status.Error)
-	case "noop":
-		statusText = fmt.Sprintf("Supervisor ran: %s, no changes applied.", suggestionCountLabel)
-	case "applied":
-		statusText = fmt.Sprintf("Supervisor ran: %s, applied.", suggestionCountLabel)
-	default:
-		statusText = "Supervisor ran."
-	}
-	if status.HasCacheHitPercentage {
-		return statusText + "\n\n" + fmt.Sprintf("%d%% cache hit", status.CacheHitPercent)
-	}
-	return statusText
-}
-
-func reviewerStatusEntryRole(status ReviewerStatus) string {
-	switch strings.TrimSpace(status.Outcome) {
-	case "failed", "followup_failed":
-		return string(transcript.EntryRoleReviewerError)
-	default:
-		return string(transcript.EntryRoleReviewerStatus)
-	}
-}
-
-func reviewerSuggestionsText(suggestions []string) string {
-	if len(suggestions) == 0 {
-		return ""
-	}
-	b := strings.Builder{}
-	b.WriteString("Supervisor suggested:\n")
-	for idx, suggestion := range suggestions {
-		b.WriteString(strconv.Itoa(idx + 1))
-		b.WriteString(". ")
-		b.WriteString(strings.TrimSpace(suggestion))
-		if idx < len(suggestions)-1 {
-			b.WriteString("\n")
-		}
-	}
-	return b.String()
-}
-
 func reviewerSessionID(sessionID string) string {
 	trimmed := strings.TrimSpace(sessionID)
 	if trimmed == "" {
@@ -442,11 +385,4 @@ func filterReviewerMetaMessages(messages []llm.Message) []llm.Message {
 		out = append(out, message)
 	}
 	return out
-}
-
-func pluralizeEnglish(count int, singular, plural string) string {
-	if count == 1 {
-		return fmt.Sprintf("%d %s", count, singular)
-	}
-	return fmt.Sprintf("%d %s", count, plural)
 }
