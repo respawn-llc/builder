@@ -13,10 +13,15 @@ const (
 	defaultMaxEntries = 1024
 )
 
-// ErrClientRequestIDReused is returned when a client_request_id is reused with
-// parameters that differ from the original request. Callers should match it
-// with errors.Is rather than comparing message text.
-var ErrClientRequestIDReused = errors.New("client_request_id was reused with different parameters")
+var (
+	// ErrOwnerUnavailable is returned when request identity has no configured owner.
+	ErrOwnerUnavailable = errors.New("request identity owner is unavailable")
+	// ErrClientRequestIDReused is returned when a client_request_id is reused with
+	// parameters that differ from the original request.
+	ErrClientRequestIDReused = errors.New("client_request_id was reused with different parameters")
+	// ErrCapacityUnavailable is returned when a new request identity cannot be retained.
+	ErrCapacityUnavailable = errors.New("request identity capacity is unavailable")
+)
 
 type Memo[Req any, Resp any] struct {
 	mu         sync.Mutex
@@ -47,7 +52,7 @@ func New[Req any, Resp any]() *Memo[Req, Resp] {
 func (m *Memo[Req, Resp]) Do(ctx context.Context, requestID string, req Req, same func(Req, Req) bool, run func(context.Context) (Resp, error)) (Resp, error) {
 	var zero Resp
 	if m == nil {
-		return run(ctx)
+		return zero, ErrOwnerUnavailable
 	}
 	for {
 		m.mu.Lock()
@@ -71,7 +76,7 @@ func (m *Memo[Req, Resp]) Do(ctx context.Context, requestID string, req Req, sam
 		}
 		if !m.ensureCapacityForInsertLocked() {
 			m.mu.Unlock()
-			return run(ctx)
+			return zero, ErrCapacityUnavailable
 		}
 		now := m.now()
 		e := &entry[Req, Resp]{req: req, done: make(chan struct{}), createdAt: now}
@@ -107,16 +112,6 @@ func (m *Memo[Req, Resp]) pruneLocked() {
 		if !item.completedAt.IsZero() && now.Sub(item.completedAt) >= m.ttl {
 			delete(m.entries, key)
 		}
-	}
-	if m.maxEntries <= 0 {
-		return
-	}
-	for len(m.entries) >= m.maxEntries {
-		oldestKey, found := oldestCompletedEntryKey(m.entries)
-		if !found {
-			return
-		}
-		delete(m.entries, oldestKey)
 	}
 }
 

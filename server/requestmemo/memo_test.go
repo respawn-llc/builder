@@ -59,6 +59,28 @@ func TestMemoDoesNotReplayCanceledOrDeadlineExceededOutcome(t *testing.T) {
 	}
 }
 
+func TestMemoRequiresConfiguredOwner(t *testing.T) {
+	var memo *Memo[string, string]
+	runCalls := 0
+
+	resp, err := memo.Do(context.Background(), "req-1", "same", func(a string, b string) bool {
+		return a == b
+	}, func(context.Context) (string, error) {
+		runCalls++
+		return "unexpected", nil
+	})
+
+	if !errors.Is(err, ErrOwnerUnavailable) {
+		t.Fatalf("error = %v, want %v", err, ErrOwnerUnavailable)
+	}
+	if resp != "" {
+		t.Fatalf("response = %q, want empty", resp)
+	}
+	if runCalls != 0 {
+		t.Fatalf("run calls = %d, want 0", runCalls)
+	}
+}
+
 func TestMemoDoesNotReplayGenericErrorOutcome(t *testing.T) {
 	memo := New[string, string]()
 	calls := 0
@@ -191,7 +213,7 @@ func TestMemoPrunesExpiredEntriesBelowCapacity(t *testing.T) {
 	}
 }
 
-func TestMemoDoesNotGrowPastCapacityWhenOnlyInflightEntriesExist(t *testing.T) {
+func TestMemoRejectsNewIdentityAtCapacityWithoutRunning(t *testing.T) {
 	memo := New[string, string]()
 	base := time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC)
 	memo.now = func() time.Time { return base }
@@ -206,6 +228,114 @@ func TestMemoDoesNotGrowPastCapacityWhenOnlyInflightEntriesExist(t *testing.T) {
 		runCalls++
 		return "fresh", nil
 	})
+	if !errors.Is(err, ErrCapacityUnavailable) {
+		t.Fatalf("error = %v, want %v", err, ErrCapacityUnavailable)
+	}
+	if resp != "" {
+		t.Fatalf("response = %q, want empty", resp)
+	}
+	if runCalls != 0 {
+		t.Fatalf("run calls = %d, want 0", runCalls)
+	}
+	if got := len(memo.entries); got != 2 {
+		t.Fatalf("memo size = %d, want 2", got)
+	}
+	if _, ok := memo.entries["req-3"]; ok {
+		t.Fatalf("did not expect req-3 to be memoized at capacity, entries=%+v", memo.entries)
+	}
+}
+
+func TestMemoReplaysExistingIdentityBeforeCapacityAdmission(t *testing.T) {
+	memo := New[string, string]()
+	base := time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC)
+	done := make(chan struct{})
+	close(done)
+	memo.now = func() time.Time { return base.Add(time.Minute) }
+	memo.maxEntries = 1
+	memo.entries["req-1"] = &entry[string, string]{
+		req:         "same",
+		resp:        "retained",
+		done:        done,
+		completedAt: base,
+		createdAt:   base,
+	}
+
+	runCalls := 0
+	resp, err := memo.Do(context.Background(), "req-1", "same", func(a string, b string) bool {
+		return a == b
+	}, func(context.Context) (string, error) {
+		runCalls++
+		return "unexpected", nil
+	})
+
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	if resp != "retained" {
+		t.Fatalf("response = %q, want retained", resp)
+	}
+	if runCalls != 0 {
+		t.Fatalf("run calls = %d, want 0", runCalls)
+	}
+}
+
+func TestMemoRejectsExistingIdentityPayloadMismatchBeforeCapacityAdmission(t *testing.T) {
+	memo := New[string, string]()
+	base := time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC)
+	done := make(chan struct{})
+	close(done)
+	memo.now = func() time.Time { return base.Add(time.Minute) }
+	memo.maxEntries = 1
+	memo.entries["req-1"] = &entry[string, string]{
+		req:         "original",
+		resp:        "retained",
+		done:        done,
+		completedAt: base,
+		createdAt:   base,
+	}
+
+	runCalls := 0
+	resp, err := memo.Do(context.Background(), "req-1", "changed", func(a string, b string) bool {
+		return a == b
+	}, func(context.Context) (string, error) {
+		runCalls++
+		return "unexpected", nil
+	})
+
+	if !errors.Is(err, ErrClientRequestIDReused) {
+		t.Fatalf("error = %v, want %v", err, ErrClientRequestIDReused)
+	}
+	if resp != "" {
+		t.Fatalf("response = %q, want empty", resp)
+	}
+	if runCalls != 0 {
+		t.Fatalf("run calls = %d, want 0", runCalls)
+	}
+}
+
+func TestMemoEvictsCompletedIdentityForNewAdmission(t *testing.T) {
+	memo := New[string, string]()
+	base := time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC)
+	done := make(chan struct{})
+	close(done)
+	memo.now = func() time.Time { return base.Add(time.Minute) }
+	memo.maxEntries = 1
+	memo.entries["req-1"] = &entry[string, string]{
+		req:         "old",
+		resp:        "retained",
+		done:        done,
+		completedAt: base,
+		createdAt:   base,
+	}
+
+	runCalls := 0
+	resp, err := memo.Do(context.Background(), "req-2", "new", func(a string, b string) bool {
+		return a == b
+	}, func(context.Context) (string, error) {
+		runCalls++
+		return "fresh", nil
+	})
+
 	if err != nil {
 		t.Fatalf("Do: %v", err)
 	}
@@ -215,26 +345,7 @@ func TestMemoDoesNotGrowPastCapacityWhenOnlyInflightEntriesExist(t *testing.T) {
 	if runCalls != 1 {
 		t.Fatalf("run calls = %d, want 1", runCalls)
 	}
-	if got := len(memo.entries); got != 2 {
-		t.Fatalf("memo size = %d, want 2", got)
-	}
-	if _, ok := memo.entries["req-3"]; ok {
-		t.Fatalf("did not expect req-3 to be memoized at capacity, entries=%+v", memo.entries)
-	}
-
-	resp, err = memo.Do(context.Background(), "req-3", "c", func(a string, b string) bool {
-		return a == b
-	}, func(context.Context) (string, error) {
-		runCalls++
-		return "fresh-again", nil
-	})
-	if err != nil {
-		t.Fatalf("second Do: %v", err)
-	}
-	if resp != "fresh-again" {
-		t.Fatalf("second response = %q, want fresh-again", resp)
-	}
-	if runCalls != 2 {
-		t.Fatalf("run calls after second request = %d, want 2", runCalls)
+	if _, ok := memo.entries["req-1"]; ok {
+		t.Fatal("completed request identity was not evicted")
 	}
 }
