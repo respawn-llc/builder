@@ -21,6 +21,7 @@ import (
 	"core/server/workflow"
 	"core/server/workflowexecution"
 	"core/server/workflowstore"
+	"core/server/workflowsvc"
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -193,22 +194,52 @@ func TestServiceProjectDeleteFreezeWaitsForTaskLifecycleMutation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("workflowstore.New: %v", err)
 	}
+	workflowRecord, err := workflowStore.CreateWorkflow(context.Background(), workflowstore.CreateWorkflowRequest{Name: "Lifecycle Delete"})
+	if err != nil {
+		t.Fatalf("CreateWorkflow: %v", err)
+	}
+	if _, err := workflowStore.LinkWorkflow(context.Background(), binding.ProjectID, workflowRecord.ID, true); err != nil {
+		t.Fatalf("LinkWorkflow: %v", err)
+	}
+	task, err := workflowStore.CreateTask(context.Background(), workflowstore.CreateTaskRequest{
+		ProjectID: binding.ProjectID,
+		Title:     "Concurrent lifecycle",
+		Body:      "Body",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
 	taskMutations := workflowexecution.NewTaskMutationCoordinator()
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	execution := &projectDeleteLifecycleExecution{
+		taskMutations: taskMutations,
+		entered:       entered,
+		release:       release,
+	}
 	svc.WithWorkflowExecution(
 		workflowexecution.NewMutationPermit(),
 		taskMutations,
-		projectViewQuiescentExecution{},
+		execution,
 		workflowStore,
 	)
-	entered := make(chan struct{})
-	release := make(chan struct{})
-	writerDone := make(chan error, 1)
+	workflowService, err := workflowsvc.New(
+		workflowStore,
+		projectDeleteWorkflowReadModels(),
+		nil,
+		workflowexecution.NewMutationPermit(),
+		taskMutations,
+		workflowsvc.WithCurrentNodeExecution(execution),
+	)
+	if err != nil {
+		t.Fatalf("workflowsvc.New: %v", err)
+	}
+	lifecycleDone := make(chan error, 1)
 	go func() {
-		writerDone <- taskMutations.Run(context.Background(), "task-lifecycle", func(context.Context) error {
-			close(entered)
-			<-release
-			return nil
+		_, err := workflowService.InterruptWorkflowTask(context.Background(), serverapi.WorkflowTaskInterruptRequest{
+			TaskID: string(task.ID),
 		})
+		lifecycleDone <- err
 	}()
 	<-entered
 	deleteDone := make(chan error, 1)
@@ -222,12 +253,163 @@ func TestServiceProjectDeleteFreezeWaitsForTaskLifecycleMutation(t *testing.T) {
 	case <-time.After(25 * time.Millisecond):
 	}
 	close(release)
-	if err := <-writerDone; err != nil {
-		t.Fatalf("lifecycle writer: %v", err)
+	if err := <-lifecycleDone; err != nil {
+		t.Fatalf("InterruptWorkflowTask: %v", err)
 	}
-	if err := <-deleteDone; err != nil {
-		t.Fatalf("DeleteProject: %v", err)
+	if err := <-deleteDone; !errors.Is(err, workflowexecution.ErrTaskExecutionNotQuiescent) {
+		t.Fatalf("DeleteProject after lifecycle = %v, want non-quiescent", err)
 	}
+}
+
+type projectDeleteLifecycleExecution struct {
+	taskMutations *workflowexecution.TaskMutationCoordinator
+	entered       chan struct{}
+	release       <-chan struct{}
+	active        bool
+}
+
+func (e *projectDeleteLifecycleExecution) StartTask(context.Context, workflow.TaskID, workflowexecution.TaskStartPreparation) (workflowstore.StartTaskResult, error) {
+	return workflowstore.StartTaskResult{}, nil
+}
+
+func (e *projectDeleteLifecycleExecution) ResumeTask(context.Context, workflow.TaskID) ([]workflow.CurrentNode, error) {
+	return nil, nil
+}
+
+func (e *projectDeleteLifecycleExecution) ResumeTaskWithPreparation(context.Context, workflow.TaskID, workflowexecution.TaskStartPreparation) ([]workflow.CurrentNode, error) {
+	return nil, nil
+}
+
+func (e *projectDeleteLifecycleExecution) ApplyPendingApproval(context.Context, workflow.ApprovalID) (workflowstore.PendingApprovalApplyResult, error) {
+	return workflowstore.PendingApprovalApplyResult{}, nil
+}
+
+func (e *projectDeleteLifecycleExecution) ApplyManualMove(context.Context, workflowstore.ManualMovePreparation, *workflowstore.ExecutionTargetCandidate) (workflowstore.ManualMoveResult, error) {
+	return workflowstore.ManualMoveResult{}, nil
+}
+
+func (e *projectDeleteLifecycleExecution) ManualMoveDisposition(workflow.TaskID) (workflowexecution.ManualMoveDisposition, error) {
+	return workflowexecution.ManualMoveDispositionQuiescent, nil
+}
+
+func (e *projectDeleteLifecycleExecution) InterruptForManualMove(context.Context, workflow.TaskID, func() error) error {
+	return nil
+}
+
+func (e *projectDeleteLifecycleExecution) Interrupt(ctx context.Context, selector workflowexecution.InterruptSelector) error {
+	return e.taskMutations.Run(ctx, selector.TaskID, func(context.Context) error {
+		close(e.entered)
+		<-e.release
+		e.active = true
+		return nil
+	})
+}
+
+func (e *projectDeleteLifecycleExecution) EnsureTaskQuiescent(workflow.TaskID) error {
+	if e.active {
+		return workflowexecution.ErrTaskExecutionNotQuiescent
+	}
+	return nil
+}
+
+func (e *projectDeleteLifecycleExecution) CompleteSessionCurrentNode(context.Context, runtimeids.SessionID, string, map[string]string, string) (workflowstore.CurrentNodeCompletionResult, error) {
+	return workflowstore.CurrentNodeCompletionResult{}, nil
+}
+
+func (e *projectDeleteLifecycleExecution) CompleteIdleCurrentNode(context.Context, workflowstore.IdleCurrentNodeSelector, string, map[string]string, string) (workflowstore.CurrentNodeCompletionResult, error) {
+	return workflowstore.CurrentNodeCompletionResult{}, nil
+}
+
+func (e *projectDeleteLifecycleExecution) AcceptWorkflowQuestion(context.Context, workflow.TaskID, string, tools.AskQuestionResolution, error) (workflowexecution.WorkflowQuestionAcceptance, error) {
+	return nil, nil
+}
+
+type projectDeleteDefinitionReadModel struct{}
+type projectDeleteBoardReadModel struct{}
+type projectDeleteTaskListReadModel struct{}
+type projectDeleteTaskSearchReadModel struct{}
+type projectDeleteTaskDetailReadModel struct{}
+type projectDeleteTaskDependenciesReadModel struct{}
+type projectDeleteActivityReadModel struct{}
+type projectDeleteAttentionReadModel struct{}
+type projectDeleteApprovalReadModel struct{}
+
+func projectDeleteWorkflowReadModels() workflowsvc.ReadModels {
+	return workflowsvc.ReadModels{
+		Definitions:      projectDeleteDefinitionReadModel{},
+		Board:            projectDeleteBoardReadModel{},
+		TaskList:         projectDeleteTaskListReadModel{},
+		TaskSearch:       projectDeleteTaskSearchReadModel{},
+		TaskDetail:       projectDeleteTaskDetailReadModel{},
+		TaskDependencies: projectDeleteTaskDependenciesReadModel{},
+		Activity:         projectDeleteActivityReadModel{},
+		Attention:        projectDeleteAttentionReadModel{},
+		Approvals:        projectDeleteApprovalReadModel{},
+	}
+}
+
+func (projectDeleteDefinitionReadModel) GetDefinition(context.Context, runtimeids.WorkflowID) (serverapi.WorkflowDefinition, map[string]workflow.NodeKind, error) {
+	return serverapi.WorkflowDefinition{}, nil, nil
+}
+
+func (projectDeleteBoardReadModel) Get(context.Context, serverapi.WorkflowBoardRequest) (serverapi.WorkflowBoard, error) {
+	return serverapi.WorkflowBoard{}, nil
+}
+
+func (projectDeleteBoardReadModel) ListNodeCards(context.Context, serverapi.WorkflowBoardNodeCardsListRequest) (serverapi.WorkflowBoardNodeCardsListResponse, error) {
+	return serverapi.WorkflowBoardNodeCardsListResponse{}, nil
+}
+
+func (projectDeleteTaskListReadModel) List(context.Context, serverapi.WorkflowTaskListRequest) (serverapi.WorkflowTaskListResponse, error) {
+	return serverapi.WorkflowTaskListResponse{}, nil
+}
+
+func (projectDeleteTaskSearchReadModel) Search(context.Context, serverapi.TaskSearchRequest) (serverapi.TaskSearchResponse, error) {
+	return serverapi.TaskSearchResponse{}, nil
+}
+
+func (projectDeleteTaskDetailReadModel) GetTask(context.Context, string) (serverapi.WorkflowTaskDetail, error) {
+	return serverapi.WorkflowTaskDetail{}, nil
+}
+
+func (projectDeleteTaskDetailReadModel) GetTaskByProjectShortID(context.Context, string, string) (serverapi.WorkflowTaskDetail, error) {
+	return serverapi.WorkflowTaskDetail{}, nil
+}
+
+func (projectDeleteTaskDetailReadModel) GetTaskByShortID(context.Context, string) (serverapi.WorkflowTaskDetail, error) {
+	return serverapi.WorkflowTaskDetail{}, nil
+}
+
+func (projectDeleteTaskDetailReadModel) ListCurrentNodes(context.Context, string) ([]workflow.CurrentNode, error) {
+	return nil, nil
+}
+
+func (projectDeleteTaskDependenciesReadModel) GetTaskDependencies(context.Context, string) (serverapi.WorkflowTaskDependencies, error) {
+	return serverapi.WorkflowTaskDependencies{}, nil
+}
+
+func (projectDeleteTaskDependenciesReadModel) CountUnsatisfiedBlockers(context.Context, string) (int, error) {
+	return 0, nil
+}
+
+func (projectDeleteTaskDependenciesReadModel) ListTaskDependencies(context.Context, string, *serverapi.WorkflowTaskDependencyDirection) (serverapi.WorkflowTaskDependencyListResponse, error) {
+	return serverapi.WorkflowTaskDependencyListResponse{}, nil
+}
+
+func (projectDeleteActivityReadModel) List(context.Context, serverapi.WorkflowTaskActivityListRequest) (serverapi.WorkflowTaskActivityListResponse, error) {
+	return serverapi.WorkflowTaskActivityListResponse{}, nil
+}
+
+func (projectDeleteAttentionReadModel) List(context.Context, serverapi.WorkflowAttentionListRequest) (serverapi.WorkflowAttentionListResponse, error) {
+	return serverapi.WorkflowAttentionListResponse{}, nil
+}
+
+func (projectDeleteAttentionReadModel) ListTask(context.Context, serverapi.WorkflowTaskAttentionListRequest) (serverapi.WorkflowTaskAttentionListResponse, error) {
+	return serverapi.WorkflowTaskAttentionListResponse{}, nil
+}
+
+func (projectDeleteApprovalReadModel) ListPendingApprovalsBySession(context.Context, serverapi.ApprovalListPendingBySessionRequest) (serverapi.ApprovalListPendingBySessionResponse, error) {
+	return serverapi.ApprovalListPendingBySessionResponse{}, nil
 }
 
 func TestServiceDeleteProjectBlocksActiveSession(t *testing.T) {
