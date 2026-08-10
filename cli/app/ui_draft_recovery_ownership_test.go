@@ -53,7 +53,7 @@ func TestTUIDraftRecoveryOwnership(t *testing.T) {
 			},
 		},
 		{
-			name: "lost direct send result preserves possible duplicate recovery",
+			name: "lost direct send result restores possible duplicate as editable draft",
 			arrange: func(model *uiModel) {
 				model.beginSubmitAttempt(submittedText, "", activeSubmitOriginDirect)
 				model.mainEditor.Replace(newerText)
@@ -66,13 +66,9 @@ func TestTUIDraftRecoveryOwnership(t *testing.T) {
 				})
 			},
 			wantInput: newerText + "\n\n" + submittedText,
-			wantBuffers: []serverapi.SessionDraftRecoveryBuffer{{
-				Kind: serverapi.SessionDraftRecoveryBufferActiveSubmit,
-				Text: submittedText,
-			}},
 		},
 		{
-			name: "direct send error preserves possible duplicate recovery",
+			name: "direct send error restores possible duplicate as editable draft",
 			arrange: func(model *uiModel) {
 				model.beginSubmitAttempt(submittedText, "", activeSubmitOriginDirect)
 				model.mainEditor.Replace(newerText)
@@ -85,10 +81,6 @@ func TestTUIDraftRecoveryOwnership(t *testing.T) {
 				})
 			},
 			wantInput: newerText + "\n\n" + submittedText,
-			wantBuffers: []serverapi.SessionDraftRecoveryBuffer{{
-				Kind: serverapi.SessionDraftRecoveryBufferActiveSubmit,
-				Text: submittedText,
-			}},
 		},
 		{
 			name: "typed not applied restores without overwriting newer text",
@@ -250,6 +242,29 @@ func TestTUIDraftRecoveryOwnership(t *testing.T) {
 				t.Fatalf("Draft Recovery = %+v, want %+v", got, test.wantBuffers)
 			}
 		})
+	}
+}
+
+func TestTUISubmitErrorReleasesLocalDispatchWhileRestoringDraft(t *testing.T) {
+	model := NewProjectedUIModel(&draftRecoveryRuntimeClient{}).(*uiModel)
+	model.startupCmds = nil
+	model.beginSubmitAttempt("submitted text", "", activeSubmitOriginDirect)
+	model.mainEditor.Replace("newer draft")
+
+	_, _ = model.inputController().handleSubmitDone(submitDoneMsg{
+		token:         model.activeSubmit.token,
+		submittedText: "submitted text",
+		err:           io.EOF,
+	})
+
+	if model.activeSubmit.token != 0 {
+		t.Fatalf("active submit token = %d, want cleared after terminal error", model.activeSubmit.token)
+	}
+	if got, want := model.mainEditor.Text(), "newer draft\n\nsubmitted text"; got != want {
+		t.Fatalf("editable draft = %q, want %q", got, want)
+	}
+	if got := model.sessionDraftRecoveryBuffers(); len(got) != 0 {
+		t.Fatalf("Draft Recovery buffers = %+v, want no duplicate owner", got)
 	}
 }
 

@@ -543,6 +543,10 @@ func (c uiInputController) handleInjectedQueueCreateDone(msg injectedQueueCreate
 		m.removePendingInjectedByID(item.LocalID)
 		if item.State == injectedRuntimeQueuePendingCreate {
 			c.restoreInjectedTextIntoInput(item.Text)
+			// Once the text is restored to the editor, the editable draft is
+			// its sole durable owner. Retaining this item would persist the
+			// same text again as an active recovery buffer.
+			m.removeInjectedQueueItemAt(index)
 			detailErr := runtimeattach.FormatSubmissionError(msg.err)
 			statusCmd := m.sendTransientStatusWithNoticeID(detailErr, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 			m.logf("queue_create.error err=%q", detailErr)

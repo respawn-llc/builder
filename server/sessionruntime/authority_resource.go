@@ -1088,12 +1088,13 @@ func (a *Authority) RunCurrentAgentExecution(
 	if run == nil {
 		return errors.New("agent runtime callback is required")
 	}
+	detachedRequestContext := context.WithoutCancel(ctx)
 	handle, err := a.StartAgentExecution(ctx, AgentExecutionRequest{
 		Descriptor: descriptor,
 		Resource:   CurrentAgentResource{},
 		Runner: func(executionCtx context.Context, _ ExecutionScope, bridge AgentRuntimeBridge) error {
 			return bridge.WithEngine(executionCtx, func(_ context.Context, engine *runtime.Engine) error {
-				runCtx, stop := MergeContexts(executionCtx, ctx)
+				runCtx, stop := MergeContexts(executionCtx, detachedRequestContext)
 				err := run(runCtx, engine)
 				stop()
 				return err

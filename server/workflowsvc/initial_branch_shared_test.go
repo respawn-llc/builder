@@ -38,3 +38,7 @@ type initialBranchControllerSteer struct{}
 func (initialBranchControllerSteer) Wait(context.Context) (session.CommitReceipt, error) {
 	return session.CommitReceipt{Committed: true}, nil
 }
+
+func (initialBranchControllerSteer) RetainsSourceRuntime() bool {
+	return false
+}

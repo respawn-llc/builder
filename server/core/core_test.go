@@ -11,7 +11,6 @@ import (
 	"core/server/auth"
 	serverbootstrap "core/server/bootstrap"
 	"core/server/metadata"
-	"core/server/sessionlaunch"
 	"core/shared/clientui"
 	brand "core/shared/config"
 	"core/shared/protocol"

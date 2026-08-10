@@ -113,10 +113,11 @@ func TestInjectedQueueCreateConnectionFailureRestoresDraftWithoutTranscriptEntry
 	if got, want := testMainInputRuneCursor(updated), len([]rune(wantInput)); got != want {
 		t.Fatalf("composer cursor = %d, want %d", got, want)
 	}
-	if len(updated.pendingInjected) != 0 || len(updated.injectedQueue) != 1 ||
-		updated.injectedQueue[0].State != injectedRuntimeQueueCreateFailed ||
-		!updated.injectedQueue[0].RecoveryOwned {
-		t.Fatalf("failed queue recovery = pending %+v queue %+v, want one active recovery owner", updated.pendingInjected, updated.injectedQueue)
+	if len(updated.pendingInjected) != 0 || len(updated.injectedQueue) != 0 {
+		t.Fatalf("failed queue recovery = pending %+v queue %+v, want editable draft as sole owner", updated.pendingInjected, updated.injectedQueue)
+	}
+	if got := updated.sessionDraftRecoveryBuffers(); len(got) != 0 {
+		t.Fatalf("failed queue Draft Recovery = %+v, want no duplicate owner", got)
 	}
 	if updated.activity != beforeActivity {
 		t.Fatalf("activity = %v, want pre-failure activity %v", updated.activity, beforeActivity)
@@ -194,10 +195,11 @@ func TestAllowCommentaryQueueCreateConnectionFailureAnswersIndependently(t *test
 	if got, want := testMainInput(model), "failed commentary"; got != want {
 		t.Fatalf("restored commentary = %q, want %q", got, want)
 	}
-	if len(model.pendingInjected) != 0 || len(model.injectedQueue) != 1 ||
-		model.injectedQueue[0].State != injectedRuntimeQueueCreateFailed ||
-		!model.injectedQueue[0].RecoveryOwned {
-		t.Fatalf("failed queue recovery = pending %+v queue %+v, want one active recovery owner", model.pendingInjected, model.injectedQueue)
+	if len(model.pendingInjected) != 0 || len(model.injectedQueue) != 0 {
+		t.Fatalf("failed queue recovery = pending %+v queue %+v, want editable draft as sole owner", model.pendingInjected, model.injectedQueue)
+	}
+	if got := model.sessionDraftRecoveryBuffers(); len(got) != 0 {
+		t.Fatalf("failed queue Draft Recovery = %+v, want no duplicate owner", got)
 	}
 	if model.activity == uiActivityError {
 		t.Fatalf("activity = %v, want no failure-owned error label", model.activity)

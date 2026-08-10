@@ -251,10 +251,11 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 	}
 	m.discardQueuedInput(activeQueuedID)
 	if msg.err != nil {
-		definitelyNotApplied := errors.Is(msg.err, serverapi.ErrRuntimeOperationCanceled)
-		if definitelyNotApplied {
-			m.activeSubmit = activeSubmitState{}
-		}
+		// The command has finished once its direct result arrives, regardless
+		// of whether the server can prove that it was applied. Keep the text
+		// in the editable draft below; do not leave a completed dispatch as
+		// local input authority.
+		m.activeSubmit = activeSubmitState{}
 		if m.turnQueueHook != nil {
 			m.turnQueueHook.OnTurnSubmissionAborted()
 		}

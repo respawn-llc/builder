@@ -516,6 +516,13 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 				}
 			}
 
+			// A queued human turn supersedes this provider final. Let the
+			// provider-boundary reducer admit it before running reviewer work
+			// for an answer the next turn may replace with a silent final.
+			if e.HasQueuedUserWork() {
+				return stepLoopResult{}, nil
+			}
+
 			resolved := assistantMsg
 			resolvedSilentFinalAnswer := silentFinalAnswer
 			resolvedCommittedCoordinate := cloneCommittedAssistantCoordinate(assistantCommittedCoordinate)

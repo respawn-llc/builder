@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"core/server/sessionruntime"
 	askquestion "core/server/tools"
@@ -51,7 +52,7 @@ func (s *PromptControlService) AnswerAsk(ctx context.Context, req serverapi.AskA
 	}
 	var acceptance PromptResponseAcceptance
 	var err error
-	if req.ErrorMessage != "" {
+	if strings.TrimSpace(req.ErrorMessage) != "" {
 		acceptance, err = s.prompts.AcceptPromptResolution(
 			req.SessionID,
 			req.AskID,
@@ -83,7 +84,7 @@ func (s *PromptControlService) AnswerApproval(ctx context.Context, req serverapi
 	if s == nil || s.prompts == nil {
 		return errors.New("prompt responder is required")
 	}
-	if req.ErrorMessage != "" {
+	if strings.TrimSpace(req.ErrorMessage) != "" {
 		_, err := s.prompts.AcceptPromptResolution(
 			req.SessionID,
 			req.ApprovalID,

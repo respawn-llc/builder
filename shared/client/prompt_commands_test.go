@@ -10,6 +10,7 @@ import (
 
 	"core/server/onboarding"
 	"core/server/promptcommands"
+	"core/shared/clientui"
 	"core/shared/protocol"
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"

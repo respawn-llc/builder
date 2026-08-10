@@ -111,6 +111,10 @@ func (e *Engine) SubmitUserMessageOrSteerWithHooks(
 	if strings.TrimSpace(text) == "" {
 		return llm.Message{}, nil, errors.New("empty message")
 	}
+	result, queued, err := e.SubmitUserMessageOrSteerWithOutcomeHooks(ctx, text, onActive, onAccepted)
+	if result.FinalAnswer != nil {
+		assistant = *result.FinalAnswer
+	}
 	return assistant, queued, err
 }
 
