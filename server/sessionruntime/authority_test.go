@@ -3149,6 +3149,69 @@ func releasedWorkflowLeaseForTest(t *testing.T, authority *Authority, ref Workfl
 	return &lease
 }
 
+func TestAttachWorkflowRuntimeRequiresTheExpectedLiveExactGeneration(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID := lifecycleSessionID(t, fixture)
+	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
+	workflowRef := workflowExecutionRefForTest(
+		t,
+		workflow.TaskID(uuid.NewString()),
+		workflow.NodeID(uuid.NewString()),
+		nil,
+	)
+	release := make(chan struct{})
+	handle, err := fixture.authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+		Descriptor: mustOpenSessionDescriptor(t, sessionID),
+		Runtime:    &plan,
+		Workflow:   releasedWorkflowLeaseForTest(t, fixture.authority, workflowRef),
+		Resource:   OpenAgentResource{},
+		Runner: func(ctx context.Context, _ ExecutionScope, _ AgentRuntimeBridge) error {
+			select {
+			case <-release:
+				return nil
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartAgentExecution: %v", err)
+	}
+	scope := handle.Scope()
+	resource, ok := scope.Resource()
+	if !ok {
+		t.Fatal("workflow Agent Exact has no Session Resource")
+	}
+	expected := WorkflowRuntimeAttachmentExpectation{
+		SessionID:          sessionID,
+		ScopeID:            scope.ID(),
+		CurrentNode:        workflowRef.CurrentNode,
+		ResourceGeneration: resource.Generation(),
+	}
+	attachment, err := fixture.authority.AttachWorkflowRuntime(context.Background(), expected, "interactive-owner")
+	if err != nil {
+		t.Fatalf("AttachWorkflowRuntime: %v", err)
+	}
+	if attachment.Resource() != resource {
+		t.Fatalf("attached resource = %v, want %v", attachment.Resource(), resource)
+	}
+	if _, err := attachment.Release(context.Background(), RuntimeReleaseDetach); err != nil {
+		t.Fatalf("release attached owner: %v", err)
+	}
+
+	close(release)
+	if _, err := handle.Wait(context.Background()); err != nil {
+		t.Fatalf("wait workflow Exact retirement: %v", err)
+	}
+	if _, err := fixture.authority.AttachWorkflowRuntime(
+		context.Background(),
+		expected,
+		"late-owner",
+	); !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
+		t.Fatalf("attach after exact retirement error = %v, want runtime unavailable", err)
+	}
+}
+
 func workflowExecutionRefForTestPointer(
 	t *testing.T,
 	taskID workflow.TaskID,

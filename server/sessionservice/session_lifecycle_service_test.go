@@ -857,6 +857,7 @@ func TestServiceResolveTransitionForkRollbackActivatesChildInPreservedWorktree(t
 		ClientRequestID: "activate-1",
 		SessionID:       forkID.String(),
 		OwnerID:         "test-owner",
+		Operation:       serverapi.SessionRuntimeActivationUserActivation,
 		ActiveSettings:  activateSettings,
 		Source:          config.SourceReport{},
 	})

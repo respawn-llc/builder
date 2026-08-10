@@ -132,6 +132,7 @@ func TestRemotePromptCommandStartupCatalogAndInvocationUseImportedServerContent(
 	attachment, err := remote.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
 		ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
 		SessionID:       plan.Plan.SessionID,
+		Operation:       serverapi.SessionRuntimeActivationUserActivation,
 		ActiveSettings:  plan.Plan.ActiveSettings,
 		EnabledToolIDs:  plan.Plan.EnabledToolIDs,
 		Source:          plan.Plan.Source,

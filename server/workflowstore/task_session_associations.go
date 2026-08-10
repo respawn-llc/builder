@@ -32,10 +32,65 @@ type TaskSessionAssociation struct {
 	AssociatedAt time.Time
 }
 
+type DirectSessionCurrentNodeBinding struct {
+	TaskID      workflow.TaskID
+	CurrentNode workflow.CurrentNodeReference
+}
+
 // ErrSessionNotCurrentWorkflowNode means that a retained Task-owned Session is
 // not the Session of a currently executable workflow node. It is an ordinary
 // retained-session state, not a data-integrity failure.
 var ErrSessionNotCurrentWorkflowNode = errors.New("session is not bound to a current workflow node")
+
+// ResolveDirectSessionCurrentNodeBinding identifies direct durable ownership
+// without requiring retained provenance to exist yet.
+func (s *Store) ResolveDirectSessionCurrentNodeBinding(
+	ctx context.Context,
+	sessionID runtimeids.SessionID,
+) (DirectSessionCurrentNodeBinding, bool, error) {
+	if sessionID.IsZero() {
+		return DirectSessionCurrentNodeBinding{}, false, errors.New("session id is required")
+	}
+	taskID, err := s.taskIDForSessionOwnership(ctx, sessionID)
+	if err != nil {
+		return DirectSessionCurrentNodeBinding{}, false, err
+	}
+	if taskID == nil {
+		return DirectSessionCurrentNodeBinding{}, false, nil
+	}
+	currentNodes, err := s.ListCurrentNodes(ctx, *taskID)
+	if err != nil {
+		return DirectSessionCurrentNodeBinding{}, false, err
+	}
+	var matched *workflow.CurrentNode
+	for i := range currentNodes {
+		if currentNodes[i].SessionID == nil || *currentNodes[i].SessionID != sessionID {
+			continue
+		}
+		if matched != nil {
+			return DirectSessionCurrentNodeBinding{}, false, fmt.Errorf(
+				"session %q is bound to multiple Current Nodes for Task %q",
+				sessionID,
+				*taskID,
+			)
+		}
+		matched = &currentNodes[i]
+	}
+	if matched == nil {
+		return DirectSessionCurrentNodeBinding{}, false, nil
+	}
+	if matched.Scheduling == nil || matched.AgentExecutionSelection == nil {
+		return DirectSessionCurrentNodeBinding{}, false, fmt.Errorf(
+			"session %q is bound to non-executable Current Node %v",
+			sessionID,
+			matched.Reference,
+		)
+	}
+	return DirectSessionCurrentNodeBinding{
+		TaskID:      *taskID,
+		CurrentNode: matched.Reference,
+	}, true, nil
+}
 
 // EnsureCurrentNodeSessionAssociation repairs exact retained provenance only
 // when direct Session Task ownership and the sole Current Node binding agree.
@@ -482,6 +537,32 @@ func (s *Store) ValidateCurrentNodeSessionBinding(
 		return err
 	}
 	if taskID == nil || *taskID != reference.TaskID {
+		return ErrSessionNotCurrentWorkflowNode
+	}
+	rows, err := s.queries.ListCurrentNodeReferencesBySessionID(
+		ctx,
+		sql.NullString{String: sessionID.String(), Valid: true},
+	)
+	if err != nil {
+		return err
+	}
+	if len(rows) != 1 {
+		return ErrSessionNotCurrentWorkflowNode
+	}
+	var rowBranchKey *workflow.TransitionBranchKey
+	if rows[0].TransitionBranchKey.Valid {
+		value := workflow.TransitionBranchKey(rows[0].TransitionBranchKey.String)
+		rowBranchKey = &value
+	}
+	rowReference, err := workflow.NewCurrentNodeReference(
+		workflow.TaskID(rows[0].TaskID),
+		workflow.NodeID(rows[0].NodeID),
+		rowBranchKey,
+	)
+	if err != nil {
+		return err
+	}
+	if !rowReference.Equal(reference) {
 		return ErrSessionNotCurrentWorkflowNode
 	}
 	currentNode, err := currentNodeForReference(ctx, s.queries, reference)

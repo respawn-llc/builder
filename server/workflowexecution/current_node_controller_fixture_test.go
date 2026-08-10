@@ -740,6 +740,27 @@ func (*currentNodeControllerStore) PublishCurrentNodeCompletion(
 	return nil
 }
 
+func (*currentNodeControllerStore) ResolveDirectSessionCurrentNodeBinding(
+	context.Context,
+	runtimeids.SessionID,
+) (workflowstore.DirectSessionCurrentNodeBinding, bool, error) {
+	return workflowstore.DirectSessionCurrentNodeBinding{}, false, nil
+}
+
+func (*currentNodeControllerStore) TaskIDForSession(
+	context.Context,
+	runtimeids.SessionID,
+) (*workflow.TaskID, error) {
+	return nil, nil
+}
+
+func (*currentNodeControllerStore) EnsureCurrentNodeSessionAssociation(
+	context.Context,
+	runtimeids.SessionID,
+) (workflowstore.TaskSessionAssociation, error) {
+	return workflowstore.TaskSessionAssociation{}, workflowstore.ErrSessionNotCurrentWorkflowNode
+}
+
 func (s *currentNodeControllerStore) ValidateCurrentNodeSessionBinding(_ context.Context, sessionID runtimeids.SessionID, reference workflow.CurrentNodeReference) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

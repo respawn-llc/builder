@@ -2036,30 +2036,112 @@ func TestTechnicalReattachmentLeavesInterruptedRetainedWorkflowWithoutStartingWo
 	}
 }
 
+func TestConcurrentRetainedUserActivationsAttachOneWorkflowExact(t *testing.T) {
+	f, _, sessionID := newInterruptedRetainedActivationFixture(t)
+	api := newCurrentNodeActivationAPI(t, f)
+	type activationResult struct {
+		response serverapi.SessionRuntimeActivateResponse
+		err      error
+	}
+	results := make(chan activationResult, 2)
+	for index := 0; index < 2; index++ {
+		index := index
+		go func() {
+			request := currentNodeActivationRequest(t, sessionID, "user_activation")
+			request.ClientRequestID = fmt.Sprintf("concurrent-activation-%d", index)
+			request.OwnerID = fmt.Sprintf("concurrent-owner-%d", index)
+			response, err := api.ActivateSessionRuntime(context.Background(), request)
+			results <- activationResult{response: response, err: err}
+		}()
+	}
+	first := <-results
+	second := <-results
+	if first.err != nil || second.err != nil {
+		t.Fatalf("concurrent activation errors = %v, %v", first.err, second.err)
+	}
+	if first.response.Attachment.Generation != second.response.Attachment.Generation {
+		t.Fatalf(
+			"concurrent activation generations = %d, %d; want one Exact Resource Generation",
+			first.response.Attachment.Generation,
+			second.response.Attachment.Generation,
+		)
+	}
+	if _, live := f.authority.SessionExecution(sessionID); !live {
+		t.Fatal("concurrent activations returned without one live Workflow Exact")
+	}
+}
+
+func TestTechnicalReattachmentFollowsIndependentlyResumedCurrentExact(t *testing.T) {
+	f, task, sessionID := newInterruptedRetainedActivationFixture(t)
+	if _, err := f.controller.ResumeTask(context.Background(), task.ID); err != nil {
+		t.Fatalf("ResumeTask: %v", err)
+	}
+	deadline := time.Now().Add(currentNodeRunnerWait)
+	var exact sessionruntime.ExecutionHandle
+	for {
+		if handle, live := f.authority.SessionExecution(sessionID); live {
+			exact = handle
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("independent Task Resume did not register its Exact")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	resource, ok := exact.Scope().Resource()
+	if !ok {
+		t.Fatal("independently resumed Exact has no Session Resource")
+	}
+	request := currentNodeActivationRequest(t, sessionID, "technical_reattachment")
+	request.OwnerID = "technical-follow-owner"
+	response, err := newCurrentNodeActivationAPI(t, f).ActivateSessionRuntime(context.Background(), request)
+	if err != nil {
+		t.Fatalf("technical reattachment after independent Task Resume: %v", err)
+	}
+	if response.Attachment.Generation != uint64(resource.Generation()) {
+		t.Fatalf(
+			"technical reattachment generation = %d, want current Exact generation %d",
+			response.Attachment.Generation,
+			resource.Generation(),
+		)
+	}
+}
+
 func newInterruptedRetainedActivationFixture(
 	t *testing.T,
 ) (*currentNodeRunnerFixture, workflowstore.TaskRecord, runtimeids.SessionID) {
 	t.Helper()
-	f := newCurrentNodeRunnerFixture(t)
+	release := make(chan struct{})
+	client := &restartResumeClient{
+		started: make(chan struct{}),
+		release: release,
+	}
+	client.resumed.Store(true)
+	t.Cleanup(func() { close(release) })
+	f := newCurrentNodeRunnerFixtureWithClient(t, client)
 	workflowID := createCurrentNodeAgentWorkflow(t, f.store)
 	task := f.createTask(t, workflowID)
-	f.starter.cfg.Settings.ProviderCapabilities = config.ProviderCapabilitiesOverride{
-		ProviderID:           "test",
-		SupportsResponsesAPI: true,
-	}
-	f.mu.Lock()
-	f.clientErr = errors.New("provider unavailable")
-	f.mu.Unlock()
 	f.startTask(t, task)
 	nodes := f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
 		return len(nodes) == 1 &&
 			nodes[0].SessionID != nil &&
 			nodes[0].Scheduling != nil &&
+			nodes[0].Scheduling.State == workflow.CurrentNodeSchedulingAdmitted
+	})
+	select {
+	case <-client.started:
+	case <-time.After(currentNodeRunnerWait):
+		t.Fatal("initial retained Workflow execution did not reach the model")
+	}
+	if err := f.controller.Interrupt(context.Background(), workflowexecution.InterruptSelector{TaskID: task.ID}); err != nil {
+		t.Fatalf("interrupt initial retained Workflow execution: %v", err)
+	}
+	nodes = f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+		return len(nodes) == 1 &&
+			nodes[0].SessionID != nil &&
+			nodes[0].Scheduling != nil &&
 			nodes[0].Scheduling.State == workflow.CurrentNodeSchedulingInterrupted
 	})
-	f.mu.Lock()
-	f.clientErr = nil
-	f.mu.Unlock()
 	return f, task, *nodes[0].SessionID
 }
 
@@ -2068,7 +2150,7 @@ func newCurrentNodeActivationAPI(
 	f *currentNodeRunnerFixture,
 ) *sessionruntime.API {
 	t.Helper()
-	return sessionruntime.NewAPI(f.metadata, nil, f.authority, sessionruntime.APIOptions{
+	api := sessionruntime.NewAPI(f.metadata, nil, f.authority, sessionruntime.APIOptions{
 		RuntimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(
 			context.Context,
 			runtimewire.RuntimeClientRequest,
@@ -2080,6 +2162,8 @@ func newCurrentNodeActivationAPI(
 			return client, nil
 		}),
 	})
+	api.WithWorkflowSessionActivator(f.controller)
+	return api
 }
 
 func currentNodeActivationRequest(
@@ -2092,6 +2176,7 @@ func currentNodeActivationRequest(
 		ClientRequestID: "activation-request",
 		SessionID:       sessionID.String(),
 		OwnerID:         "activation-owner",
+		Operation:       serverapi.SessionRuntimeActivationOperation(operation),
 		ActiveSettings: config.Settings{
 			Model:              "gpt-5",
 			ModelContextWindow: 200000,
@@ -2102,22 +2187,6 @@ func currentNodeActivationRequest(
 			},
 		},
 		Source: config.SourceReport{Sources: map[string]string{}},
-	}
-	encoded, err := json.Marshal(request)
-	if err != nil {
-		t.Fatalf("marshal activation request: %v", err)
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(encoded, &payload); err != nil {
-		t.Fatalf("decode activation request: %v", err)
-	}
-	payload["operation"] = operation
-	encoded, err = json.Marshal(payload)
-	if err != nil {
-		t.Fatalf("marshal typed activation request: %v", err)
-	}
-	if err := json.Unmarshal(encoded, &request); err != nil {
-		t.Fatalf("decode typed activation request: %v", err)
 	}
 	return request
 }

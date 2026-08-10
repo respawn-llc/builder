@@ -826,6 +826,7 @@ func TestFreshUserActivationRacingTaskResumeWaitsForTheWinningWorkflowExact(t *t
 	t.Cleanup(server.Close)
 	fixture := newRetainedSelectedRunPromptFixture(t, server.URL, runner, nil)
 	api := sessionruntime.NewAPI(fixture.metadata, nil, fixture.authority, sessionruntime.APIOptions{})
+	api.WithWorkflowSessionActivator(fixture.controller)
 	activationDone := make(chan error, 1)
 	resumeDone := make(chan error, 1)
 	go func() {
@@ -857,6 +858,65 @@ func TestFreshUserActivationRacingTaskResumeWaitsForTheWinningWorkflowExact(t *t
 	case err := <-activationDone:
 		t.Fatalf("fresh activation returned before the racing Task Resume registered its Exact: %v", err)
 	case <-time.After(150 * time.Millisecond):
+	}
+}
+
+func TestCanceledRetainedUserActivationLeavesLaunchingRunUnchanged(t *testing.T) {
+	runner := &retainedRunPromptBlockingRunner{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	defer close(runner.release)
+	fixture := newRetainedSelectedRunPromptFixture(t, "", runner, nil)
+	api := sessionruntime.NewAPI(fixture.metadata, nil, fixture.authority, sessionruntime.APIOptions{})
+	api.WithWorkflowSessionActivator(fixture.controller)
+	ctx, cancel := context.WithCancel(context.Background())
+	activationDone := make(chan error, 1)
+	go func() {
+		_, err := api.ActivateSessionRuntime(
+			ctx,
+			retainedRunPromptActivationRequest(t, fixture.sessionID, "", "user_activation"),
+		)
+		activationDone <- err
+	}()
+	select {
+	case <-runner.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("retained activation did not reach launching")
+	}
+	cancel()
+	select {
+	case err := <-activationDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled retained activation error = %v, want context canceled", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("canceled retained activation did not return")
+	}
+	if _, err := fixture.controller.ResumeTask(context.Background(), fixture.taskID); err != nil {
+		t.Fatalf("ResumeTask did not join the unchanged launching Run: %v", err)
+	}
+}
+
+func TestRetainedUserActivationLaunchFailureReturnsAfterDurableInterruption(t *testing.T) {
+	fixture := newRetainedSelectedRunPromptFixture(t, "", retainedRunPromptFailingRunner{}, nil)
+	api := sessionruntime.NewAPI(fixture.metadata, nil, fixture.authority, sessionruntime.APIOptions{})
+	api.WithWorkflowSessionActivator(fixture.controller)
+	_, err := api.ActivateSessionRuntime(
+		context.Background(),
+		retainedRunPromptActivationRequest(t, fixture.sessionID, "", "user_activation"),
+	)
+	if !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
+		t.Fatalf("retained launch failure error = %v, want typed runtime unavailable", err)
+	}
+	nodes, listErr := fixture.store.ListCurrentNodes(context.Background(), fixture.taskID)
+	if listErr != nil {
+		t.Fatalf("ListCurrentNodes: %v", listErr)
+	}
+	if len(nodes) != 1 ||
+		nodes[0].Scheduling == nil ||
+		nodes[0].Scheduling.State != workflow.CurrentNodeSchedulingInterrupted {
+		t.Fatalf("retained launch failure returned before durable interruption: %+v", nodes)
 	}
 }
 
@@ -1087,6 +1147,7 @@ func retainedRunPromptActivationRequest(
 		ClientRequestID: "retained-runprompt-activation",
 		SessionID:       sessionID.String(),
 		OwnerID:         "tui-owner",
+		Operation:       serverapi.SessionRuntimeActivationOperation(operation),
 		ActiveSettings: config.Settings{
 			Model:              "gpt-5",
 			ModelContextWindow: 200000,
@@ -1096,22 +1157,6 @@ func retainedRunPromptActivationRequest(
 			Shell:              config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},
 		},
 		Source: config.SourceReport{Sources: map[string]string{}},
-	}
-	encoded, err := json.Marshal(request)
-	if err != nil {
-		t.Fatalf("marshal activation request: %v", err)
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(encoded, &payload); err != nil {
-		t.Fatalf("decode activation request: %v", err)
-	}
-	payload["operation"] = operation
-	encoded, err = json.Marshal(payload)
-	if err != nil {
-		t.Fatalf("marshal typed activation request: %v", err)
-	}
-	if err := json.Unmarshal(encoded, &request); err != nil {
-		t.Fatalf("decode typed activation request: %v", err)
 	}
 	return request
 }

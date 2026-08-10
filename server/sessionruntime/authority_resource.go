@@ -105,8 +105,78 @@ type RuntimeAttachment struct {
 	ownerID   string
 }
 
+type WorkflowRuntimeAttachmentExpectation struct {
+	SessionID          runtimeids.SessionID
+	ScopeID            runtimeids.ExecutionScopeID
+	CurrentNode        workflow.CurrentNodeReference
+	ResourceGeneration runtimeids.ResourceGeneration
+}
+
 func (a RuntimeAttachment) Resource() runtimeids.SessionResourceRef {
 	return a.resource
+}
+
+func (a *Authority) AttachWorkflowRuntime(
+	ctx context.Context,
+	expected WorkflowRuntimeAttachmentExpectation,
+	ownerID string,
+) (RuntimeAttachment, error) {
+	if a == nil {
+		return RuntimeAttachment{}, errors.New("session runtime authority is required")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := context.Cause(ctx); err != nil {
+		return RuntimeAttachment{}, err
+	}
+	if expected.SessionID.IsZero() || expected.ScopeID.IsZero() {
+		return RuntimeAttachment{}, errors.New("workflow runtime attachment expectation is incomplete")
+	}
+	if err := expected.CurrentNode.Validate(); err != nil {
+		return RuntimeAttachment{}, err
+	}
+	if err := expected.ResourceGeneration.Validate(); err != nil {
+		return RuntimeAttachment{}, err
+	}
+	ownerID = strings.TrimSpace(ownerID)
+	if ownerID == "" {
+		return RuntimeAttachment{}, errors.New("runtime owner id is required")
+	}
+	gate := a.gateFor(expected.SessionID)
+	if err := gate.lock.LockContext(ctx); err != nil {
+		return RuntimeAttachment{}, err
+	}
+	defer gate.lock.Unlock()
+
+	a.mu.Lock()
+	execution := a.byScope[expected.ScopeID]
+	resource := a.resources[expected.SessionID]
+	if execution == nil || resource == nil || execution.resource != resource {
+		a.mu.Unlock()
+		return RuntimeAttachment{}, runtimeUnavailableErr(expected.SessionID.String())
+	}
+	workflowRef, workflowOwned := execution.scope.Workflow()
+	resource.mu.Lock()
+	matches := workflowOwned &&
+		workflowRef.CurrentNode.Equal(expected.CurrentNode) &&
+		execution.scope.ResourceGeneration() == expected.ResourceGeneration &&
+		resource.ref.Generation() == expected.ResourceGeneration &&
+		resource.current == execution &&
+		resource.state == AgentResourceReady &&
+		(execution.phase == executionPhaseQueued || execution.phase == executionPhaseRunning)
+	if !matches {
+		resource.mu.Unlock()
+		a.mu.Unlock()
+		return RuntimeAttachment{}, runtimeUnavailableErr(expected.SessionID.String())
+	}
+	resource.owners[ownerID] = struct{}{}
+	resource.ownerlessDisposition = agentResourceRemainAvailable
+	resource.signalLocked()
+	ref := resource.ref
+	resource.mu.Unlock()
+	a.mu.Unlock()
+	return RuntimeAttachment{authority: a, resource: ref, ownerID: ownerID}, nil
 }
 
 func (a RuntimeAttachment) Release(ctx context.Context, policy RuntimeReleasePolicy) (RuntimeReleaseResult, error) {
