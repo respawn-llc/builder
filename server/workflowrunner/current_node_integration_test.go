@@ -20,6 +20,7 @@ import (
 	"core/server/metadata"
 	"core/server/registry"
 	agentruntime "core/server/runtime"
+	"core/server/runtimecommand"
 	"core/server/runtimewire"
 	"core/server/session"
 	"core/server/session/sessiontest"
@@ -1630,6 +1631,187 @@ func TestCurrentNodeRuntimePreparationFailureRetainsAssignedFreshSession(t *test
 	if count, err := f.store.CountTaskSessions(context.Background(), task.ID); err != nil || count != 1 {
 		t.Fatalf("retained Session count after runtime preparation failure = %d, %v; want assigned Session", count, err)
 	}
+}
+
+func TestFreshRetainedUserActivationOwnsTheSameWorkflowExecutionAsTaskResume(t *testing.T) {
+	f, task, sessionID := newInterruptedRetainedActivationFixture(t)
+	api := newCurrentNodeActivationAPI(t, f)
+
+	if _, err := api.ActivateSessionRuntime(
+		context.Background(),
+		currentNodeActivationRequest(t, sessionID, "user_activation"),
+	); err != nil {
+		t.Fatalf("fresh retained user activation: %v", err)
+	}
+	if _, live := f.authority.SessionExecution(sessionID); !live {
+		t.Fatal("fresh retained user activation returned without creating or joining the Task Resume Workflow execution")
+	}
+	nodes, err := f.store.ListCurrentNodes(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("ListCurrentNodes: %v", err)
+	}
+	if len(nodes) != 1 ||
+		nodes[0].Scheduling == nil ||
+		nodes[0].Scheduling.State == workflow.CurrentNodeSchedulingInterrupted {
+		t.Fatalf("fresh retained user activation left Task Resume authority untouched: %+v", nodes)
+	}
+}
+
+func TestTechnicalReattachmentLeavesInterruptedRetainedWorkflowWithoutStartingWork(t *testing.T) {
+	f, task, sessionID := newInterruptedRetainedActivationFixture(t)
+	api := newCurrentNodeActivationAPI(t, f)
+
+	_, err := api.ActivateSessionRuntime(
+		context.Background(),
+		currentNodeActivationRequest(t, sessionID, "technical_reattachment"),
+	)
+	if err == nil {
+		t.Fatal("technical reattachment created an ordinary Runtime for an interrupted retained Workflow Session")
+	}
+	nodes, listErr := f.store.ListCurrentNodes(context.Background(), task.ID)
+	if listErr != nil {
+		t.Fatalf("ListCurrentNodes: %v", listErr)
+	}
+	if len(nodes) != 1 ||
+		nodes[0].Scheduling == nil ||
+		nodes[0].Scheduling.State != workflow.CurrentNodeSchedulingInterrupted {
+		t.Fatalf("technical reattachment changed interrupted Current Node state: %+v", nodes)
+	}
+	if _, live := f.authority.SessionExecution(sessionID); live {
+		t.Fatal("technical reattachment created an Exact Workflow execution")
+	}
+}
+
+func TestStillOpenRetainedAttachmentRoutesEveryAgentStartingOperationThroughWorkflowAuthority(t *testing.T) {
+	f, _, sessionID := newInterruptedRetainedActivationFixture(t)
+	api := newCurrentNodeActivationAPI(t, f)
+	activation, err := api.ActivateSessionRuntime(
+		context.Background(),
+		currentNodeActivationRequest(t, sessionID, "user_activation"),
+	)
+	if err != nil {
+		t.Fatalf("activate retained Session: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = api.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
+			ClientRequestID: "release-retained-attachment",
+			Attachment:      activation.Attachment,
+			OwnerID:         "activation-owner",
+			DropOwner:       true,
+			ClosePolicy:     serverapi.SessionRuntimeReleaseClosePolicyDetachOnly,
+		})
+	})
+	adapter := runtimecommand.NewExecutionAdapter(f.authority)
+
+	for _, operation := range []string{"attached user turn", "user shell", "manual compact", "Goal mutation"} {
+		t.Run(operation, func(t *testing.T) {
+			workflowOwned := false
+			err := adapter.RunAgentExecution(
+				context.Background(),
+				sessionID.String(),
+				func(context.Context, *agentruntime.Engine) error {
+					execution, live := f.authority.SessionExecution(sessionID)
+					if !live {
+						return errors.New("attached operation has no exact execution")
+					}
+					_, workflowOwned = execution.Scope().Workflow()
+					return nil
+				},
+			)
+			if err != nil {
+				t.Fatalf("%s: %v", operation, err)
+			}
+			if !workflowOwned {
+				t.Fatalf("%s started a lease-less ordinary Exact scope for a directly retained Session", operation)
+			}
+		})
+	}
+}
+
+func newInterruptedRetainedActivationFixture(
+	t *testing.T,
+) (*currentNodeRunnerFixture, workflowstore.TaskRecord, runtimeids.SessionID) {
+	t.Helper()
+	f := newCurrentNodeRunnerFixture(t)
+	workflowID := createCurrentNodeAgentWorkflow(t, f.store)
+	task := f.createTask(t, workflowID)
+	f.starter.cfg.Settings.ProviderCapabilities = config.ProviderCapabilitiesOverride{
+		ProviderID:           "test",
+		SupportsResponsesAPI: true,
+	}
+	f.mu.Lock()
+	f.clientErr = errors.New("provider unavailable")
+	f.mu.Unlock()
+	f.startTask(t, task)
+	nodes := f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+		return len(nodes) == 1 &&
+			nodes[0].SessionID != nil &&
+			nodes[0].Scheduling != nil &&
+			nodes[0].Scheduling.State == workflow.CurrentNodeSchedulingInterrupted
+	})
+	f.mu.Lock()
+	f.clientErr = nil
+	f.mu.Unlock()
+	return f, task, *nodes[0].SessionID
+}
+
+func newCurrentNodeActivationAPI(
+	t *testing.T,
+	f *currentNodeRunnerFixture,
+) *sessionruntime.API {
+	t.Helper()
+	return sessionruntime.NewAPI(f.metadata, nil, f.authority, sessionruntime.APIOptions{
+		RuntimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(
+			context.Context,
+			runtimewire.RuntimeClientRequest,
+		) (llm.Client, error) {
+			client, ok := f.client.(llm.Client)
+			if !ok {
+				return nil, fmt.Errorf("fixture client %T does not implement llm.Client", f.client)
+			}
+			return client, nil
+		}),
+	})
+}
+
+func currentNodeActivationRequest(
+	t *testing.T,
+	sessionID runtimeids.SessionID,
+	operation string,
+) serverapi.SessionRuntimeActivateRequest {
+	t.Helper()
+	request := serverapi.SessionRuntimeActivateRequest{
+		ClientRequestID: "activation-request",
+		SessionID:       sessionID.String(),
+		OwnerID:         "activation-owner",
+		ActiveSettings: config.Settings{
+			Model:              "gpt-5",
+			ModelContextWindow: 200000,
+			Reviewer:           config.ReviewerSettings{Frequency: "off"},
+			Timeouts:           config.Timeouts{ModelRequestSeconds: 1},
+			Shell: config.ShellSettings{
+				PostprocessingMode: config.ShellPostprocessingModeBuiltin,
+			},
+		},
+		Source: config.SourceReport{Sources: map[string]string{}},
+	}
+	encoded, err := json.Marshal(request)
+	if err != nil {
+		t.Fatalf("marshal activation request: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(encoded, &payload); err != nil {
+		t.Fatalf("decode activation request: %v", err)
+	}
+	payload["operation"] = operation
+	encoded, err = json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal typed activation request: %v", err)
+	}
+	if err := json.Unmarshal(encoded, &request); err != nil {
+		t.Fatalf("decode typed activation request: %v", err)
+	}
+	return request
 }
 
 func TestCurrentNodeContinuationModesReuseTheRetainedSession(t *testing.T) {

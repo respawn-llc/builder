@@ -2,6 +2,7 @@ package runtimeattach
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"testing"
@@ -72,6 +73,47 @@ func TestActivateBuildsRequest(t *testing.T) {
 	if req.ActiveSettings.Model != "gpt-test" || req.Source.SettingsPath != "/config.toml" {
 		t.Fatalf("request config = %+v source = %+v", req.ActiveSettings, req.Source)
 	}
+}
+
+func TestFreshUserActivationCarriesUserActivationAuthority(t *testing.T) {
+	service := &fakeRuntimeService{}
+	if _, err := Activate(context.Background(), service, Request{SessionID: "session-1"}); err != nil {
+		t.Fatalf("Activate: %v", err)
+	}
+	if got := runtimeActivationOperation(t, service.activateRequests[0]); got != "user_activation" {
+		t.Fatalf("fresh user activation operation = %q, want user_activation", got)
+	}
+}
+
+func TestTechnicalReattachmentCannotMasqueradeAsFreshUserActivation(t *testing.T) {
+	service := &fakeRuntimeService{}
+	lease, err := Activate(context.Background(), service, Request{SessionID: "session-1"})
+	if err != nil {
+		t.Fatalf("Activate: %v", err)
+	}
+	if err := lease.Reactivate(context.Background()); err != nil {
+		t.Fatalf("Reactivate: %v", err)
+	}
+	if got := runtimeActivationOperation(t, service.activateRequests[0]); got != "user_activation" {
+		t.Fatalf("initial activation operation = %q, want user_activation", got)
+	}
+	if got := runtimeActivationOperation(t, service.activateRequests[1]); got != "technical_reattachment" {
+		t.Fatalf("automatic reattachment operation = %q, want technical_reattachment", got)
+	}
+}
+
+func runtimeActivationOperation(t *testing.T, request serverapi.SessionRuntimeActivateRequest) string {
+	t.Helper()
+	encoded, err := json.Marshal(request)
+	if err != nil {
+		t.Fatalf("marshal activation request: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(encoded, &payload); err != nil {
+		t.Fatalf("decode activation request: %v", err)
+	}
+	operation, _ := payload["operation"].(string)
+	return operation
 }
 
 func TestActivateReactivatesRuntimeWithFreshRequestID(t *testing.T) {

@@ -2,6 +2,7 @@ package workflowexecution
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -208,6 +209,163 @@ func TestCurrentNodeControllerFinalizedWithoutOutcomeInterruptsAdmittedCurrentNo
 	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
 		return attention.pendingCount() == 1
 	}, "outcome-less finalization did not publish interrupted Current Node attention")
+}
+
+type blockedOutcomeLessFinalizationFixture struct {
+	controller  *CurrentNodeController
+	authority   *sessionruntime.Authority
+	store       *currentNodeControllerStore
+	source      workflow.CurrentNodeReference
+	nextAgent   workflow.CurrentNodeReference
+	started     chan workflow.CurrentNodeReference
+	stopDone    chan error
+	releaseOnce sync.Once
+}
+
+func newBlockedOutcomeLessFinalizationFixture(
+	t *testing.T,
+	interruptionErr error,
+) *blockedOutcomeLessFinalizationFixture {
+	t.Helper()
+	shellPath, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("sh executable unavailable: %v", err)
+	}
+	source := currentNodeReferenceForControllerTest(t, "task-outcome-less-owner", "node-source")
+	nextAgent := currentNodeReferenceForControllerTest(t, "task-outcome-less-next", "node-next-agent")
+	script := currentNodeReferenceForControllerTest(t, "task-outcome-less-script", "node-script")
+	store := &currentNodeControllerStore{
+		admittedInterruptStarted: make(chan struct{}),
+		admittedInterruptRelease: make(chan struct{}),
+		admittedInterruptErr:     interruptionErr,
+	}
+	var controller *CurrentNodeController
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
+			controller.ExecutionFinalized(scope)
+		}),
+	})
+	started := make(chan workflow.CurrentNodeReference, 4)
+	runner := &recordingScriptRunner{
+		authority: authority,
+		command: sessionruntime.ScriptCommand{
+			Path: shellPath,
+			Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
+		},
+		started: started,
+	}
+	controller = newCurrentNodeControllerForTest(t, store, runner, authority, 1)
+	fixture := &blockedOutcomeLessFinalizationFixture{
+		controller: controller,
+		authority:  authority,
+		store:      store,
+		source:     source,
+		nextAgent:  nextAgent,
+		started:    started,
+		stopDone:   make(chan error, 1),
+	}
+	t.Cleanup(func() {
+		fixture.releaseInterruption()
+		<-fixture.stopDone
+		if err := controller.Close(); err != nil {
+			t.Errorf("close controller: %v", err)
+		}
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+
+	controller.enqueueAutomaticIntents([]CurrentNodeAutomaticIntent{{
+		CurrentNode: source,
+		NodeKind:    workflow.NodeKindAgent,
+	}})
+	select {
+	case got := <-started:
+		if !got.Equal(source) {
+			t.Fatalf("first automatic start = %v, want %v", got, source)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("source Agent did not start")
+	}
+	waitForRunningCurrentNode(t, authority, source)
+
+	controller.enqueueAutomaticIntents([]CurrentNodeAutomaticIntent{
+		{CurrentNode: nextAgent, NodeKind: workflow.NodeKindAgent},
+		{CurrentNode: script, NodeKind: workflow.NodeKindScript},
+	})
+	select {
+	case got := <-started:
+		if !got.Equal(script) {
+			t.Fatalf("start while Agent capacity occupied = %v, want Script %v", got, script)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Script did not progress while Agent capacity was occupied")
+	}
+
+	handle, ok := authority.ExecutionByScope(singleLiveScope(t, controller, source))
+	if !ok {
+		t.Fatal("source Agent has no exact execution")
+	}
+	go func() {
+		fixture.stopDone <- handle.Stop(context.Background())
+	}()
+	select {
+	case <-store.admittedInterruptStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("outcome-less finalization did not reach durable interruption")
+	}
+	return fixture
+}
+
+func (f *blockedOutcomeLessFinalizationFixture) releaseInterruption() {
+	f.releaseOnce.Do(func() {
+		close(f.store.admittedInterruptRelease)
+	})
+}
+
+func TestOutcomeLessFinalizationRetainsOrdinaryWorkflowAuthorityAndAgentCapacityUntilDurableDisposition(t *testing.T) {
+	fixture := newBlockedOutcomeLessFinalizationFixture(t, nil)
+
+	if !hasLiveCurrentNode(fixture.controller.Snapshot(), fixture.source) {
+		t.Fatal("outcome-less finalization removed ordinary Workflow authority before durable interruption")
+	}
+	if !hasAutomaticCurrentNodeIntent(fixture.controller.Snapshot(), fixture.nextAgent) {
+		t.Fatal("outcome-less finalization transferred Agent capacity before durable disposition")
+	}
+}
+
+func TestOutcomeLessPersistenceFailureMakesLifecycleReadsUnavailableBeforeCleanup(t *testing.T) {
+	fixture := newBlockedOutcomeLessFinalizationFixture(t, errors.New("persist admitted interruption"))
+	fixture.releaseInterruption()
+	select {
+	case err := <-fixture.stopDone:
+		fixture.stopDone <- err
+	case <-time.After(3 * time.Second):
+		t.Fatal("outcome-less finalization did not return after persistence failure")
+	}
+
+	if _, err := fixture.controller.ObserveWorkflowTaskExecutions(
+		[]workflow.TaskID{fixture.source.TaskID},
+	); err == nil {
+		t.Fatal("fatal outcome-less persistence failure still allowed lifecycle reads")
+	}
+}
+
+func TestOutcomeLessSchedulingMismatchIsFatalInsteadOfSuccessfulCleanup(t *testing.T) {
+	fixture := newBlockedOutcomeLessFinalizationFixture(t, sql.ErrNoRows)
+	fixture.releaseInterruption()
+	select {
+	case err := <-fixture.stopDone:
+		fixture.stopDone <- err
+	case <-time.After(3 * time.Second):
+		t.Fatal("outcome-less scheduling mismatch did not finish")
+	}
+
+	if _, err := fixture.controller.ObserveWorkflowTaskExecutions(
+		[]workflow.TaskID{fixture.source.TaskID},
+	); err == nil {
+		t.Fatal("scheduling-specific outcome-less failure was treated as successful cleanup")
+	}
 }
 
 func TestCurrentNodeControllerResumeReturnsBeforeSetupAndStartsParallelBranchesIndependently(t *testing.T) {

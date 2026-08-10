@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -31,6 +32,10 @@ import (
 	"core/server/sessionruntime"
 	shelltool "core/server/tools/shell"
 	"core/server/tools/shell/postprocess"
+	"core/server/workflow"
+	"core/server/workflowexecution"
+	"core/server/workflowruntime"
+	"core/server/workflowstore"
 	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/config"
@@ -373,6 +378,684 @@ type selectedRunPromptFixture struct {
 	store     *session.Store
 	authority *sessionruntime.Authority
 	client    apicontract.RunPromptService
+}
+
+type retainedSelectedRunPromptFixture struct {
+	metadata    *metadata.Store
+	store       *workflowstore.Store
+	authority   *sessionruntime.Authority
+	controller  *workflowexecution.CurrentNodeController
+	client      apicontract.RunPromptService
+	sessionID   runtimeids.SessionID
+	taskID      workflow.TaskID
+	currentNode workflow.CurrentNodeReference
+}
+
+type retainedRunPromptAssignmentSteerer struct{}
+
+func (retainedRunPromptAssignmentSteerer) SteerCurrentNodeAssignment(
+	context.Context,
+	workflow.CurrentNodeReference,
+) (workflowexecution.CurrentNodeAssignmentSteer, error) {
+	return retainedRunPromptAssignmentSteer{}, nil
+}
+
+type retainedRunPromptAssignmentSteer struct{}
+
+func (retainedRunPromptAssignmentSteer) Wait(context.Context) (session.CommitReceipt, error) {
+	return session.CommitReceipt{Committed: true}, nil
+}
+
+type retainedRunPromptBlockingRunner struct {
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (r *retainedRunPromptBlockingRunner) StartCurrentNode(
+	context.Context,
+	workflow.CurrentNodeReference,
+	workflowruntime.TaskPromptDelivery,
+	workflowexecution.CurrentNodeAssignmentSteer,
+	sessionruntime.WorkflowExecutionLease,
+	workflowruntime.Controller,
+) error {
+	r.once.Do(func() { close(r.entered) })
+	<-r.release
+	return errors.New("release retained Task Resume preparation")
+}
+
+type retainedRunPromptFailingRunner struct{}
+
+func (retainedRunPromptFailingRunner) StartCurrentNode(
+	context.Context,
+	workflow.CurrentNodeReference,
+	workflowruntime.TaskPromptDelivery,
+	workflowexecution.CurrentNodeAssignmentSteer,
+	sessionruntime.WorkflowExecutionLease,
+	workflowruntime.Controller,
+) error {
+	return errors.New("unexpected retained Current Node launch")
+}
+
+func newRetainedSelectedRunPromptFixture(
+	t *testing.T,
+	providerURL string,
+	runner workflowexecution.CurrentNodeRunner,
+	lifecycle sessionruntime.AgentResourceLifecycle,
+) retainedSelectedRunPromptFixture {
+	t.Helper()
+	ctx := context.Background()
+	root := t.TempDir()
+	workspace := t.TempDir()
+	meta, err := metadata.Open(root)
+	if err != nil {
+		t.Fatalf("metadata.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = meta.Close() })
+	binding, err := meta.RegisterWorkspaceBinding(ctx, workspace)
+	if err != nil {
+		t.Fatalf("RegisterWorkspaceBinding: %v", err)
+	}
+	store, err := workflowstore.New(meta, workflowstore.WithRoleResolver(testsetup.QuestionsEnabled("coder")))
+	if err != nil {
+		t.Fatalf("workflowstore.New: %v", err)
+	}
+	workflowID := createRetainedRunPromptWorkflow(t, store)
+	if _, err := store.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
+		t.Fatalf("LinkWorkflow: %v", err)
+	}
+	task, err := store.CreateTask(ctx, workflowstore.CreateTaskRequest{
+		ProjectID:         binding.ProjectID,
+		WorkflowID:        &workflowID,
+		Title:             "Retained RunPrompt",
+		Body:              "Exercise selected retained Session authority.",
+		SourceWorkspaceID: binding.WorkspaceID,
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	started, err := store.StartTaskWithExecutionTarget(ctx, task.ID, &workflowstore.ExecutionTargetCandidate{
+		Snapshot: workflowstore.ExecutionTargetSnapshot{
+			Mode:       workflow.ExecutionTargetModeNone,
+			Provenance: workflowstore.ExecutionTargetProvenanceResolved,
+		},
+		Root: workflowstore.ExecutionRoot{
+			SourceWorkspaceID:   binding.WorkspaceID,
+			SourceWorkspaceRoot: binding.CanonicalRoot,
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartTaskWithExecutionTarget: %v", err)
+	}
+	if len(started.Mutation.Created) != 1 {
+		t.Fatalf("started Current Nodes = %+v, want one", started.Mutation.Created)
+	}
+	currentNode := started.Mutation.Created[0].Reference
+	containerDir := filepath.Join(root, "projects", binding.ProjectID, "sessions")
+	sessionStore, err := session.Create(
+		containerDir,
+		binding.WorkspaceID,
+		binding.CanonicalRoot,
+		sessioncontract.SessionCategorySubagent,
+		meta.AuthoritativeSessionStoreOptions()...,
+	)
+	if err != nil {
+		t.Fatalf("session.Create: %v", err)
+	}
+	sessionID, err := runtimeids.ParseSessionID(sessionStore.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ParseSessionID: %v", err)
+	}
+	if err := sessionStore.SetContinuationContext(session.ContinuationContext{OpenAIBaseURL: providerURL}); err != nil {
+		t.Fatalf("SetContinuationContext: %v", err)
+	}
+	if _, err := store.BindSessionToCurrentNode(ctx, workflowstore.CurrentNodeSessionBindingRequest{
+		Association: workflowstore.TaskSessionAssociationRequest{
+			SessionID:    sessionID,
+			CurrentNode:  currentNode,
+			AssociatedAt: time.Now().UTC(),
+		},
+	}); err != nil {
+		t.Fatalf("BindSessionToCurrentNode: %v", err)
+	}
+	if err := store.InterruptCurrentNode(
+		ctx,
+		currentNode,
+		"test_retained_runprompt",
+		workflow.NewCurrentNodeInterruptionDetail("test_retained_runprompt", nil),
+	); err != nil {
+		t.Fatalf("InterruptCurrentNode: %v", err)
+	}
+	authManager := auth.NewManager(auth.NewMemoryStore(auth.State{
+		Method: auth.Method{Type: auth.MethodAPIKey, APIKey: &auth.APIKeyMethod{Key: "test-key"}},
+	}), nil, time.Now)
+	var controller *workflowexecution.CurrentNodeController
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		PersistenceRoot:   root,
+		AuthManager:       authManager,
+		StoreOptions:      meta.AuthoritativeSessionStoreOptions(),
+		ResourceLifecycle: lifecycle,
+		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
+			controller.ExecutionFinalized(scope)
+		}),
+	})
+	if runner == nil {
+		runner = retainedRunPromptFailingRunner{}
+	}
+	controller, err = workflowexecution.NewCurrentNodeController(
+		store,
+		runner,
+		authority,
+		workflowexecution.NewMutationPermit(),
+		workflowexecution.CurrentNodeControllerConfig{
+			AgentConcurrency:  1,
+			AssignmentSteerer: retainedRunPromptAssignmentSteerer{},
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewCurrentNodeController: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+	cfg := config.App{
+		WorkspaceRoot:   binding.CanonicalRoot,
+		PersistenceRoot: root,
+		Settings: config.Settings{
+			Model:         "gpt-5",
+			ThinkingLevel: "medium",
+			OpenAIBaseURL: providerURL,
+			Shell:         config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},
+		},
+	}
+	sessionLaunch := sessionlaunch.NewService(launch.Planner{
+		Config:                   cfg,
+		ContainerDir:             containerDir,
+		StoreOptions:             meta.AuthoritativeSessionStoreOptions(),
+		PersistedSessions:        meta,
+		ExecutionTargets:         meta,
+		ProjectWorkspaceBoundary: meta,
+	}).WithAuthStateReader(authManager).WithRuntimeAuthority(authority)
+	return retainedSelectedRunPromptFixture{
+		metadata:   meta,
+		store:      store,
+		authority:  authority,
+		controller: controller,
+		client: NewInProcessRunPromptClient(HeadlessBootstrap{
+			SessionLaunch:    sessionLaunch,
+			RuntimeAuthority: authority,
+		}),
+		sessionID:   sessionID,
+		taskID:      task.ID,
+		currentNode: currentNode,
+	}
+}
+
+func TestSelectedRetainedRunPromptUsesWorkflowAuthorityForKentTaskComplete(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if modelstub.HandleInputTokenCount(w, r, 1) {
+			return
+		}
+		close(started)
+		<-release
+		modelstub.WriteCompletedResponseStream(w, "done", 1, 1)
+	}))
+	t.Cleanup(server.Close)
+	fixture := newRetainedSelectedRunPromptFixture(t, server.URL, nil, nil)
+	runDone := make(chan error, 1)
+	go func() {
+		_, err := fixture.client.RunPrompt(context.Background(), serverapi.RunPromptRequest{
+			ClientRequestID: "retained-runprompt-complete",
+			Intent:          serverapi.OpenExistingSessionLaunchIntent(fixture.sessionID),
+			Prompt:          "continue",
+		}, nil)
+		runDone <- err
+	}()
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(release) })
+		<-runDone
+	})
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("selected retained RunPrompt did not reach its model turn")
+	}
+
+	if _, err := fixture.controller.CompleteSessionCurrentNode(
+		context.Background(),
+		fixture.sessionID,
+		"done",
+		nil,
+		"completed from kent task complete",
+	); err != nil {
+		t.Fatalf("kent task complete could not resolve selected retained RunPrompt Workflow authority: %v", err)
+	}
+}
+
+func TestTaskResumeFirstMakesSelectedRetainedRunPromptFailIdleCheck(t *testing.T) {
+	runner := &retainedRunPromptBlockingRunner{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	defer close(runner.release)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if modelstub.HandleInputTokenCount(w, r, 1) {
+			return
+		}
+		modelstub.WriteCompletedResponseStream(w, "ordinary split", 1, 1)
+	}))
+	t.Cleanup(server.Close)
+	fixture := newRetainedSelectedRunPromptFixture(t, server.URL, runner, nil)
+	if _, err := fixture.controller.ResumeTask(context.Background(), fixture.taskID); err != nil {
+		t.Fatalf("ResumeTask: %v", err)
+	}
+	select {
+	case <-runner.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Task Resume did not enter pre-Exact preparation")
+	}
+
+	_, err := fixture.client.RunPrompt(context.Background(), serverapi.RunPromptRequest{
+		ClientRequestID: "retained-runprompt-task-first",
+		Intent:          serverapi.OpenExistingSessionLaunchIntent(fixture.sessionID),
+		Prompt:          "continue",
+	}, nil)
+	if !errors.Is(err, ErrSessionRunning) {
+		t.Fatalf("Task Resume-first RunPrompt error = %v, want ErrSessionRunning before planning/input", err)
+	}
+}
+
+func TestTUIActivationFirstMakesSelectedRetainedRunPromptFailIdleCheck(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if modelstub.HandleInputTokenCount(w, r, 1) {
+			return
+		}
+		modelstub.WriteCompletedResponseStream(w, "ordinary split", 1, 1)
+	}))
+	t.Cleanup(server.Close)
+	fixture := newRetainedSelectedRunPromptFixture(t, server.URL, nil, nil)
+	api := sessionruntime.NewAPI(fixture.metadata, nil, fixture.authority, sessionruntime.APIOptions{})
+	activation, err := api.ActivateSessionRuntime(
+		context.Background(),
+		retainedRunPromptActivationRequest(t, fixture.sessionID, server.URL, "user_activation"),
+	)
+	if err != nil {
+		t.Fatalf("TUI activation: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = api.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
+			ClientRequestID: "release-tui-first",
+			Attachment:      activation.Attachment,
+			OwnerID:         "tui-owner",
+			DropOwner:       true,
+			ClosePolicy:     serverapi.SessionRuntimeReleaseClosePolicyDetachOnly,
+		})
+	})
+
+	_, err = fixture.client.RunPrompt(context.Background(), serverapi.RunPromptRequest{
+		ClientRequestID: "retained-runprompt-tui-first",
+		Intent:          serverapi.OpenExistingSessionLaunchIntent(fixture.sessionID),
+		Prompt:          "continue",
+	}, nil)
+	if !errors.Is(err, ErrSessionRunning) {
+		t.Fatalf("TUI activation-first RunPrompt error = %v, want ErrSessionRunning before planning/input", err)
+	}
+}
+
+func TestFreshUserActivationRacingTaskResumeWaitsForTheWinningWorkflowExact(t *testing.T) {
+	runner := &retainedRunPromptBlockingRunner{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	defer close(runner.release)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if modelstub.HandleInputTokenCount(w, r, 1) {
+			return
+		}
+		modelstub.WriteCompletedResponseStream(w, "done", 1, 1)
+	}))
+	t.Cleanup(server.Close)
+	fixture := newRetainedSelectedRunPromptFixture(t, server.URL, runner, nil)
+	api := sessionruntime.NewAPI(fixture.metadata, nil, fixture.authority, sessionruntime.APIOptions{})
+	begin := make(chan struct{})
+	activationDone := make(chan error, 1)
+	resumeDone := make(chan error, 1)
+	go func() {
+		<-begin
+		_, err := api.ActivateSessionRuntime(
+			context.Background(),
+			retainedRunPromptActivationRequest(t, fixture.sessionID, server.URL, "user_activation"),
+		)
+		activationDone <- err
+	}()
+	go func() {
+		<-begin
+		_, err := fixture.controller.ResumeTask(context.Background(), fixture.taskID)
+		resumeDone <- err
+	}()
+	close(begin)
+	select {
+	case err := <-resumeDone:
+		if err != nil {
+			t.Fatalf("Task Resume: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Task Resume did not return after queueing its winning Run")
+	}
+	select {
+	case <-runner.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Task Resume did not reach pre-Exact preparation")
+	}
+
+	select {
+	case err := <-activationDone:
+		t.Fatalf("fresh activation returned before the racing Task Resume registered its Exact: %v", err)
+	case <-time.After(150 * time.Millisecond):
+	}
+}
+
+type retainedRunPromptLifecycleProbe struct {
+	ready        chan io.Closer
+	draining     chan struct{}
+	drainingOnce sync.Once
+}
+
+func (p *retainedRunPromptLifecycleProbe) ResourceReady(
+	_ context.Context,
+	_ sessionruntime.AgentResourceDescriptor,
+	_ *runtime.Engine,
+	retain sessionruntime.AgentResourceRetainer,
+) error {
+	closer, err := retain()
+	if err != nil {
+		return err
+	}
+	p.ready <- closer
+	return nil
+}
+
+func (p *retainedRunPromptLifecycleProbe) ResourceDraining(
+	context.Context,
+	sessionruntime.AgentResourceDescriptor,
+) error {
+	p.drainingOnce.Do(func() { close(p.draining) })
+	return nil
+}
+
+func TestRetiringPredecessorMakesSelectedRetainedRunPromptFailIdleCheck(t *testing.T) {
+	probe := &retainedRunPromptLifecycleProbe{
+		ready:    make(chan io.Closer, 1),
+		draining: make(chan struct{}),
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if modelstub.HandleInputTokenCount(w, r, 1) {
+			return
+		}
+		modelstub.WriteCompletedResponseStream(w, "ordinary split", 1, 1)
+	}))
+	t.Cleanup(server.Close)
+	fixture := newRetainedSelectedRunPromptFixture(t, server.URL, nil, probe)
+	api := sessionruntime.NewAPI(fixture.metadata, nil, fixture.authority, sessionruntime.APIOptions{})
+	activation, err := api.ActivateSessionRuntime(
+		context.Background(),
+		retainedRunPromptActivationRequest(t, fixture.sessionID, server.URL, "user_activation"),
+	)
+	if err != nil {
+		t.Fatalf("open predecessor Runtime: %v", err)
+	}
+	retention := <-probe.ready
+	scope, err := fixture.store.TaskExecutionScope(context.Background(), fixture.taskID)
+	if err != nil {
+		t.Fatalf("TaskExecutionScope: %v", err)
+	}
+	lease, err := fixture.authority.NewWorkflowExecutionLease(sessionruntime.WorkflowExecutionRef{
+		ProjectID:   scope.ProjectID,
+		WorkflowID:  scope.WorkflowID,
+		CurrentNode: fixture.currentNode,
+	})
+	if err != nil {
+		t.Fatalf("NewWorkflowExecutionLease: %v", err)
+	}
+	lease.Release()
+	descriptor, err := session.NewOpenSessionDescriptor(fixture.sessionID)
+	if err != nil {
+		t.Fatalf("NewOpenSessionDescriptor: %v", err)
+	}
+	predecessor, err := fixture.authority.StartAgentExecution(context.Background(), sessionruntime.AgentExecutionRequest{
+		Descriptor: descriptor,
+		Workflow:   &lease,
+		Resource:   sessionruntime.CurrentAgentResource{},
+		Runner: func(context.Context, sessionruntime.ExecutionScope, sessionruntime.AgentRuntimeBridge) error {
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("start predecessor Exact: %v", err)
+	}
+	if _, err := predecessor.Wait(context.Background()); err != nil {
+		t.Fatalf("wait predecessor Exact: %v", err)
+	}
+	resource, err := runtimeids.NewSessionResourceRef(
+		fixture.sessionID,
+		runtimeids.ResourceGeneration(activation.Attachment.Generation),
+	)
+	if err != nil {
+		t.Fatalf("NewSessionResourceRef: %v", err)
+	}
+	releaseDone := make(chan error, 1)
+	go func() {
+		_, releaseErr := fixture.authority.ReleaseRuntime(context.Background(), sessionruntime.RuntimeReleaseRequest{
+			Resource:  resource,
+			OwnerID:   "tui-owner",
+			DropOwner: true,
+			Policy:    sessionruntime.RuntimeReleaseClose,
+		})
+		releaseDone <- releaseErr
+	}()
+	select {
+	case <-probe.draining:
+	case <-time.After(3 * time.Second):
+		t.Fatal("predecessor resource did not enter retiring")
+	}
+	runDone := make(chan error, 1)
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	go func() {
+		_, runErr := fixture.client.RunPrompt(runCtx, serverapi.RunPromptRequest{
+			ClientRequestID: "retained-runprompt-retiring-first",
+			Intent:          serverapi.OpenExistingSessionLaunchIntent(fixture.sessionID),
+			Prompt:          "continue",
+		}, nil)
+		runDone <- runErr
+	}()
+	t.Cleanup(func() {
+		cancelRun()
+		_ = retention.Close()
+		select {
+		case <-releaseDone:
+		case <-time.After(3 * time.Second):
+			t.Errorf("retiring predecessor release did not finish")
+		}
+		select {
+		case <-runDone:
+		case <-time.After(3 * time.Second):
+			t.Errorf("retiring predecessor RunPrompt did not finish")
+		}
+	})
+
+	select {
+	case err := <-runDone:
+		runDone <- err
+		if !errors.Is(err, ErrSessionRunning) {
+			t.Fatalf("retiring predecessor RunPrompt error = %v, want ErrSessionRunning", err)
+		}
+	case <-time.After(150 * time.Millisecond):
+		t.Fatal("selected retained RunPrompt waited behind a retiring predecessor instead of failing the idle check")
+	}
+}
+
+func TestSelectedRetainedRunPromptOutcomeLessFinalizationDurablyInterruptsBeforeCleanup(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if modelstub.HandleInputTokenCount(w, r, 1) {
+			return
+		}
+		modelstub.WriteCompletedResponseStream(w, "done without task completion", 1, 1)
+	}))
+	t.Cleanup(server.Close)
+	fixture := newRetainedSelectedRunPromptFixture(t, server.URL, nil, nil)
+	if _, err := fixture.metadata.DB().ExecContext(
+		context.Background(),
+		`CREATE TRIGGER fail_retained_runprompt_outcome_less
+BEFORE UPDATE OF scheduling_state ON task_current_nodes
+WHEN OLD.scheduling_state = 'admitted' AND NEW.scheduling_state = 'interrupted'
+BEGIN
+    SELECT RAISE(ABORT, 'injected outcome-less interruption failure');
+END`,
+	); err != nil {
+		t.Fatalf("install outcome-less persistence failure: %v", err)
+	}
+	_, _ = fixture.client.RunPrompt(context.Background(), serverapi.RunPromptRequest{
+		ClientRequestID: "retained-runprompt-outcome-less",
+		Intent:          serverapi.OpenExistingSessionLaunchIntent(fixture.sessionID),
+		Prompt:          "continue",
+	}, nil)
+	nodes, err := fixture.store.ListCurrentNodes(context.Background(), fixture.taskID)
+	if err != nil {
+		t.Fatalf("ListCurrentNodes: %v", err)
+	}
+	if len(nodes) != 1 ||
+		nodes[0].Scheduling == nil ||
+		nodes[0].Scheduling.State != workflow.CurrentNodeSchedulingAdmitted {
+		t.Fatalf("outcome-less retained RunPrompt cleaned up before its failed durable disposition: %+v", nodes)
+	}
+	if _, err := fixture.controller.ObserveWorkflowTaskExecutions(
+		[]workflow.TaskID{fixture.taskID},
+	); err == nil {
+		t.Fatal("outcome-less retained RunPrompt persistence failure still allowed lifecycle reads")
+	}
+	if _, live := fixture.authority.SessionExecution(fixture.sessionID); !live {
+		t.Fatal("outcome-less retained RunPrompt persistence failure released Exact authority")
+	}
+}
+
+func retainedRunPromptActivationRequest(
+	t *testing.T,
+	sessionID runtimeids.SessionID,
+	providerURL string,
+	operation string,
+) serverapi.SessionRuntimeActivateRequest {
+	t.Helper()
+	request := serverapi.SessionRuntimeActivateRequest{
+		ClientRequestID: "retained-runprompt-activation",
+		SessionID:       sessionID.String(),
+		OwnerID:         "tui-owner",
+		ActiveSettings: config.Settings{
+			Model:              "gpt-5",
+			ModelContextWindow: 200000,
+			OpenAIBaseURL:      providerURL,
+			Reviewer:           config.ReviewerSettings{Frequency: "off"},
+			Timeouts:           config.Timeouts{ModelRequestSeconds: 1},
+			Shell:              config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},
+		},
+		Source: config.SourceReport{Sources: map[string]string{}},
+	}
+	encoded, err := json.Marshal(request)
+	if err != nil {
+		t.Fatalf("marshal activation request: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(encoded, &payload); err != nil {
+		t.Fatalf("decode activation request: %v", err)
+	}
+	payload["operation"] = operation
+	encoded, err = json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal typed activation request: %v", err)
+	}
+	if err := json.Unmarshal(encoded, &request); err != nil {
+		t.Fatalf("decode typed activation request: %v", err)
+	}
+	return request
+}
+
+func createRetainedRunPromptWorkflow(
+	t *testing.T,
+	store *workflowstore.Store,
+) runtimeids.WorkflowID {
+	t.Helper()
+	ctx := context.Background()
+	created, err := store.CreateWorkflow(ctx, workflowstore.CreateWorkflowRequest{Name: "Retained RunPrompt"})
+	if err != nil {
+		t.Fatalf("CreateWorkflow: %v", err)
+	}
+	definition, _, err := store.GetDefinition(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	var startID, terminalID workflow.NodeID
+	for _, node := range definition.Nodes {
+		switch node.Kind() {
+		case workflow.NodeKindStart:
+			startID = workflow.NodeIDOf(node)
+		case workflow.NodeKindTerminal:
+			terminalID = workflow.NodeIDOf(node)
+		}
+	}
+	agentID := workflow.NodeID("node-agent-" + created.ID.String())
+	if _, err := store.AddNode(ctx, workflowstore.NodeRecord{
+		ID:           agentID,
+		WorkflowID:   created.ID,
+		Key:          "agent",
+		Kind:         workflow.NodeKindAgent,
+		DisplayName:  "Agent",
+		SubagentRole: "coder",
+	}); err != nil {
+		t.Fatalf("AddNode: %v", err)
+	}
+	startGroup := workflow.TransitionGroupID("group-start-" + created.ID.String())
+	doneGroup := workflow.TransitionGroupID("group-done-" + created.ID.String())
+	for _, group := range []workflowstore.TransitionGroupRecord{
+		{ID: startGroup, WorkflowID: created.ID, SourceNodeID: startID, TransitionID: "start", DisplayName: "Start"},
+		{ID: doneGroup, WorkflowID: created.ID, SourceNodeID: agentID, TransitionID: "done", DisplayName: "Done"},
+	} {
+		if _, err := store.AddTransitionGroup(ctx, group); err != nil {
+			t.Fatalf("AddTransitionGroup: %v", err)
+		}
+	}
+	for _, edge := range []workflowstore.EdgeRecord{
+		{
+			ID:                workflow.EdgeID("edge-start-" + created.ID.String()),
+			WorkflowID:        created.ID,
+			TransitionGroupID: startGroup,
+			Key:               "start",
+			TargetNodeID:      agentID,
+			ContextMode:       workflow.ContextModeNewSession,
+			PromptTemplate:    "Continue the task.",
+			AssigneeSelection: workflow.AssigneeSelectionConfigured,
+			ThinkingSelection: workflow.ThinkingSelectionConfigured,
+		},
+		{
+			ID:                workflow.EdgeID("edge-done-" + created.ID.String()),
+			WorkflowID:        created.ID,
+			TransitionGroupID: doneGroup,
+			Key:               "done",
+			TargetNodeID:      terminalID,
+			ContextMode:       workflow.ContextModeNewSession,
+			AssigneeSelection: workflow.AssigneeSelectionConfigured,
+			ThinkingSelection: workflow.ThinkingSelectionConfigured,
+		},
+	} {
+		if _, err := store.AddEdge(ctx, edge); err != nil {
+			t.Fatalf("AddEdge: %v", err)
+		}
+	}
+	return created.ID
 }
 
 func newSelectedRunPromptFixture(t *testing.T, providerURL string, history promptHistoryStore) selectedRunPromptFixture {

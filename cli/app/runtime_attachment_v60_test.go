@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"path/filepath"
 	"testing"
@@ -198,4 +199,49 @@ func TestRuntimeAttachmentReactivationUsesActivation(t *testing.T) {
 	if released.SessionID != "session-recover" || released.Generation != 2 {
 		t.Fatalf("released attachment = %+v, want reactivated generation 2", released)
 	}
+}
+
+func TestFreshCLITUILifecycleEntrypointsCarryUserActivationAuthority(t *testing.T) {
+	for _, entrypoint := range []string{
+		"new ordinary lifecycle",
+		"--session",
+		"picker selection",
+		"in-app navigation",
+	} {
+		t.Run(entrypoint, func(t *testing.T) {
+			var request serverapi.SessionRuntimeActivateRequest
+			client := &recordingSessionRuntimeClient{
+				activate: func(_ context.Context, req serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
+					request = req
+					return sessionRuntimeActivateResponse(req.SessionID, 1), nil
+				},
+			}
+			_, lease, err := activateSharedRuntime(
+				context.Background(),
+				runtimeAttachmentClients{SessionRuntime: client},
+				sessionLaunchPlan{SessionID: "session-entrypoint"},
+			)
+			if err != nil {
+				t.Fatalf("activateSharedRuntime: %v", err)
+			}
+			t.Cleanup(func() { _ = lease.Release() })
+			if got := appRuntimeActivationOperation(t, request); got != "user_activation" {
+				t.Fatalf("%s activation operation = %q, want user_activation", entrypoint, got)
+			}
+		})
+	}
+}
+
+func appRuntimeActivationOperation(t *testing.T, request serverapi.SessionRuntimeActivateRequest) string {
+	t.Helper()
+	encoded, err := json.Marshal(request)
+	if err != nil {
+		t.Fatalf("marshal activation request: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(encoded, &payload); err != nil {
+		t.Fatalf("decode activation request: %v", err)
+	}
+	operation, _ := payload["operation"].(string)
+	return operation
 }

@@ -723,6 +723,36 @@ func TestCompleteCurrentNodeContinueSessionUsesImmediateSourceSession(t *testing
 	}
 }
 
+func TestCompleteCurrentNodeRetainedSuccessorCommitsExactSessionProvenance(t *testing.T) {
+	fixture := newImmediateContextCompletionFixture(t, workflow.ContextModeContinueSession)
+
+	completed, err := fixture.store.CompleteCurrentNode(fixture.ctx, CurrentNodeCompletionRequest{
+		Source:       fixture.source.Reference,
+		TransitionID: "review",
+		OutputValues: map[string]string{"summary": "plan complete"},
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode: %v", err)
+	}
+	if len(completed.Mutation.Created) != 1 {
+		t.Fatalf("created Current Nodes = %+v, want one retained successor", completed.Mutation.Created)
+	}
+	successor := completed.Mutation.Created[0]
+	if successor.SessionID == nil || *successor.SessionID != fixture.sessionID {
+		t.Fatalf("retained successor = %+v, want Session %q", successor, fixture.sessionID)
+	}
+	if err := fixture.store.ValidateCurrentNodeSessionBinding(
+		fixture.ctx,
+		fixture.sessionID,
+		successor.Reference,
+	); err != nil {
+		t.Fatalf(
+			"retained successor committed without exact Session provenance: %v",
+			err,
+		)
+	}
+}
+
 func TestCompleteCurrentNodeCompactAndContinueSessionUsesImmediateSourceSession(t *testing.T) {
 	fixture := newImmediateContextCompletionFixture(t, workflow.ContextModeCompactAndContinueSession)
 
