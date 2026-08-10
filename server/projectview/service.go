@@ -396,14 +396,17 @@ func (s *Service) DeleteProject(ctx context.Context, req serverapi.ProjectDelete
 		if s.workflowStore == nil {
 			return nil, errors.New("workflow store is required for project deletion")
 		}
-		return s.workflowStore.DeleteProject(ctx, workflowstore.ProjectDeleteRequest{
+		blockers, err := s.workflowStore.DeleteProject(ctx, workflowstore.ProjectDeleteRequest{
 			ProjectID:      projectID,
 			RuntimeBlocker: runtimeBlocker,
-			Artifacts: projectSessionDeleteArtifacts{
-				persistenceRoot: s.metadata.PersistenceRoot(),
-				projectID:       projectID,
-			},
 		})
+		if err != nil || len(blockers) > 0 {
+			return blockers, err
+		}
+		if err := deleteProjectSessionArtifacts(s.metadata.PersistenceRoot(), projectID); err != nil {
+			return nil, err
+		}
+		return nil, nil
 	}
 	var blockers []serverapi.ProjectDeleteBlocker
 	err = s.mutationPermit.Run(ctx, func(ctx context.Context) error {
@@ -480,168 +483,23 @@ func (s *Service) countBlockingRuntimeActivity(ctx context.Context, sessionIDs [
 	return s.runtimeGuard.CountBlockingRuntimeActivity(ctx, sessionIDs)
 }
 
-type projectSessionDeleteArtifacts struct {
-	persistenceRoot string
-	projectID       string
-}
-
-func (a projectSessionDeleteArtifacts) Recover(state workflowstore.ProjectDeleteArtifactRecovery) (bool, error) {
-	sessionsRoot, tombstoneRoot, err := a.paths()
-	if err != nil {
-		return false, err
-	}
-	sessionsExists, err := pathExists(sessionsRoot)
-	if err != nil {
-		return false, err
-	}
-	tombstoneExists, err := pathExists(tombstoneRoot)
-	if err != nil {
-		return false, err
-	}
-	switch state {
-	case workflowstore.ProjectDeleteArtifactRecoveryProjectPresent:
-		if !tombstoneExists {
-			return false, nil
-		}
-		if sessionsExists {
-			return false, fmt.Errorf("project sessions root and delete tombstone both exist")
-		}
-		if err := os.Rename(tombstoneRoot, sessionsRoot); err != nil {
-			return false, fmt.Errorf("restore project sessions tombstone: %w", err)
-		}
-		return true, nil
-	case workflowstore.ProjectDeleteArtifactRecoveryProjectAbsent:
-		if !tombstoneExists {
-			return false, nil
-		}
-		if sessionsExists {
-			return false, fmt.Errorf("deleted project sessions root and delete tombstone both exist")
-		}
-		if err := os.RemoveAll(tombstoneRoot); err != nil {
-			return false, fmt.Errorf("finalize project sessions tombstone: %w", err)
-		}
-		return true, nil
-	default:
-		return false, fmt.Errorf("unknown project delete artifact recovery state %d", state)
-	}
-}
-
-func (a projectSessionDeleteArtifacts) Validate(artifact workflowstore.ProjectSessionArtifact) error {
-	if strings.TrimSpace(artifact.SessionID) == "" {
-		return errors.New("session artifact id is required")
-	}
-	sessionsRoot, target, err := a.artifactPath(artifact.ArtifactRelpath)
+func deleteProjectSessionArtifacts(persistenceRoot string, projectID string) error {
+	root, err := persistenceRootPath(persistenceRoot)
 	if err != nil {
 		return err
 	}
-	if err := rejectSymlinkComponents(sessionsRoot, target); err != nil {
-		return fmt.Errorf("validate session artifact path %q: %w", artifact.ArtifactRelpath, err)
-	}
-	return nil
-}
-
-func (a projectSessionDeleteArtifacts) Stage() error {
-	sessionsRoot, tombstoneRoot, err := a.paths()
-	if err != nil {
-		return err
-	}
-	if exists, err := pathExists(tombstoneRoot); err != nil {
-		return err
-	} else if exists {
-		return errors.New("project sessions delete tombstone already exists")
-	}
-	exists, err := pathExists(sessionsRoot)
-	if err != nil {
-		return err
-	}
-	if !exists {
-		return nil
-	}
-	if err := os.Rename(sessionsRoot, tombstoneRoot); err != nil {
-		return fmt.Errorf("stage project sessions root: %w", err)
-	}
-	return nil
-}
-
-func (a projectSessionDeleteArtifacts) Restore() error {
-	sessionsRoot, tombstoneRoot, err := a.paths()
-	if err != nil {
-		return err
-	}
-	tombstoneExists, err := pathExists(tombstoneRoot)
-	if err != nil {
-		return err
-	}
-	if !tombstoneExists {
-		return nil
-	}
-	if sessionsExists, err := pathExists(sessionsRoot); err != nil {
-		return err
-	} else if sessionsExists {
-		return errors.New("project sessions root exists while restoring delete tombstone")
-	}
-	if err := os.Rename(tombstoneRoot, sessionsRoot); err != nil {
-		return fmt.Errorf("restore staged project sessions root: %w", err)
-	}
-	return nil
-}
-
-func (a projectSessionDeleteArtifacts) Finalize() error {
-	_, tombstoneRoot, err := a.paths()
-	if err != nil {
-		return err
-	}
-	if err := os.RemoveAll(tombstoneRoot); err != nil {
-		return fmt.Errorf("remove staged project sessions root: %w", err)
-	}
-	return nil
-}
-
-func (a projectSessionDeleteArtifacts) paths() (string, string, error) {
-	root, err := persistenceRootPath(a.persistenceRoot)
-	if err != nil {
-		return "", "", err
-	}
-	projectID := strings.TrimSpace(a.projectID)
+	projectID = strings.TrimSpace(projectID)
 	if projectID == "" || filepath.Base(projectID) != projectID {
-		return "", "", fmt.Errorf("invalid project id %q", a.projectID)
+		return fmt.Errorf("invalid project id %q", projectID)
 	}
 	sessionsRoot := filepath.Join(root, "projects", projectID, "sessions")
-	tombstoneRoot := sessionsRoot + ".deleting"
 	if err := rejectSymlinkComponents(root, sessionsRoot); err != nil {
-		return "", "", fmt.Errorf("validate project sessions root: %w", err)
+		return fmt.Errorf("validate project sessions root: %w", err)
 	}
-	if err := rejectSymlinkComponents(root, tombstoneRoot); err != nil {
-		return "", "", fmt.Errorf("validate project sessions tombstone: %w", err)
+	if err := os.RemoveAll(sessionsRoot); err != nil {
+		return fmt.Errorf("remove project sessions root: %w", err)
 	}
-	return sessionsRoot, tombstoneRoot, nil
-}
-
-func (a projectSessionDeleteArtifacts) artifactPath(relpath string) (string, string, error) {
-	cleanRelpath := filepath.Clean(strings.TrimSpace(relpath))
-	if cleanRelpath == "." || filepath.IsAbs(cleanRelpath) || cleanRelpath == ".." || strings.HasPrefix(cleanRelpath, ".."+string(filepath.Separator)) {
-		return "", "", fmt.Errorf("invalid session artifact path %q", relpath)
-	}
-	sessionsRoot, _, err := a.paths()
-	if err != nil {
-		return "", "", err
-	}
-	root, err := persistenceRootPath(a.persistenceRoot)
-	if err != nil {
-		return "", "", err
-	}
-	target, err := filepath.Abs(filepath.Join(root, cleanRelpath))
-	if err != nil {
-		return "", "", fmt.Errorf("resolve session artifact path: %w", err)
-	}
-	inside, err := filepath.Rel(sessionsRoot, target)
-	if err != nil {
-		return "", "", fmt.Errorf("validate session artifact path: %w", err)
-	}
-	if inside == ".." || strings.HasPrefix(inside, ".."+string(filepath.Separator)) {
-		return "", "", fmt.Errorf("session artifact path %q escapes project sessions root: %w", relpath, ErrSessionArtifactEscapesRoot)
-	}
-	return sessionsRoot, target, nil
+	return nil
 }
 
 func persistenceRootPath(persistenceRoot string) (string, error) {
@@ -654,17 +512,6 @@ func persistenceRootPath(persistenceRoot string) (string, error) {
 		return "", fmt.Errorf("resolve persistence root symlinks: %w", err)
 	}
 	return root, nil
-}
-
-func pathExists(path string) (bool, error) {
-	_, err := os.Lstat(path)
-	if err == nil {
-		return true, nil
-	}
-	if errors.Is(err, os.ErrNotExist) {
-		return false, nil
-	}
-	return false, fmt.Errorf("inspect project session artifact path %q: %w", path, err)
 }
 
 func rejectSymlinkComponents(root string, target string) error {

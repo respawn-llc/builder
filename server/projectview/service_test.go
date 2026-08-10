@@ -68,9 +68,6 @@ func TestServiceDeletesProjectMetadataAndSessionArtifacts(t *testing.T) {
 	if _, err := os.Stat(created.Dir()); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("session dir stat = %v, want not exists", err)
 	}
-	if _, err := os.Stat(sessionDir + ".deleting"); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("session tombstone stat = %v, want not exists", err)
-	}
 	if _, err := svc.GetProjectOverview(context.Background(), serverapi.ProjectGetOverviewRequest{ProjectID: binding.ProjectID}); err == nil {
 		t.Fatal("expected deleted project lookup to fail")
 	}
@@ -356,75 +353,31 @@ func TestServiceProjectStartBlockExcludesRuntimeMaintenance(t *testing.T) {
 	}
 }
 
-func TestProjectSessionDeleteArtifactsRejectsSymlinkEscape(t *testing.T) {
-	root := t.TempDir()
+func TestServiceProjectDeleteSurfacesArtifactCleanupFailureAfterCommit(t *testing.T) {
+	store, cfg, binding := newProjectViewMetadataStore(t)
 	outside := t.TempDir()
 	if err := os.WriteFile(filepath.Join(outside, "keep"), []byte("keep"), 0o644); err != nil {
 		t.Fatalf("write outside file: %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(root, "projects", "project-1"), 0o755); err != nil {
+	projectRoot := filepath.Join(cfg.PersistenceRoot, "projects", binding.ProjectID)
+	if err := os.MkdirAll(projectRoot, 0o755); err != nil {
 		t.Fatalf("create project dir: %v", err)
 	}
-	if err := os.Symlink(outside, filepath.Join(root, "projects", "project-1", "sessions")); err != nil {
+	if err := os.Symlink(outside, filepath.Join(projectRoot, "sessions")); err != nil {
 		t.Fatalf("create symlink: %v", err)
 	}
+	svc := newProjectViewMetadataService(t, store, binding.ProjectID)
 
-	err := (projectSessionDeleteArtifacts{
-		persistenceRoot: root,
-		projectID:       "project-1",
-	}).Validate(workflowstore.ProjectSessionArtifact{
-		SessionID:       "session-1",
-		ArtifactRelpath: filepath.Join("projects", "project-1", "sessions", "keep"),
-	})
+	_, err := svc.DeleteProject(context.Background(), serverapi.ProjectDeleteRequest{ProjectID: binding.ProjectID})
 
 	if err == nil || !errors.Is(err, ErrSessionArtifactEscapesRoot) {
-		t.Fatalf("Validate error = %v, want escape rejection", err)
+		t.Fatalf("DeleteProject error = %v, want cleanup escape rejection", err)
+	}
+	if _, err := svc.GetProjectOverview(context.Background(), serverapi.ProjectGetOverviewRequest{ProjectID: binding.ProjectID}); err == nil {
+		t.Fatal("project metadata remained after post-commit cleanup failure")
 	}
 	if _, err := os.Stat(filepath.Join(outside, "keep")); err != nil {
 		t.Fatalf("outside file should remain: %v", err)
-	}
-}
-
-func TestProjectSessionDeleteArtifactsRecoversDeterministically(t *testing.T) {
-	root := t.TempDir()
-	artifacts := projectSessionDeleteArtifacts{
-		persistenceRoot: root,
-		projectID:       "project-1",
-	}
-	sessionsRoot := filepath.Join(root, "projects", "project-1", "sessions")
-	if err := os.MkdirAll(sessionsRoot, 0o755); err != nil {
-		t.Fatalf("create sessions root: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(sessionsRoot, "artifact"), []byte("retain"), 0o644); err != nil {
-		t.Fatalf("write session artifact: %v", err)
-	}
-
-	if err := artifacts.Stage(); err != nil {
-		t.Fatalf("stage artifacts: %v", err)
-	}
-	recovered, err := artifacts.Recover(workflowstore.ProjectDeleteArtifactRecoveryProjectPresent)
-	if err != nil {
-		t.Fatalf("recover existing project artifacts: %v", err)
-	}
-	if !recovered {
-		t.Fatal("existing project tombstone was not restored")
-	}
-	if _, err := os.Stat(filepath.Join(sessionsRoot, "artifact")); err != nil {
-		t.Fatalf("restored artifact stat: %v", err)
-	}
-
-	if err := artifacts.Stage(); err != nil {
-		t.Fatalf("stage artifacts for deleted project: %v", err)
-	}
-	recovered, err = artifacts.Recover(workflowstore.ProjectDeleteArtifactRecoveryProjectAbsent)
-	if err != nil {
-		t.Fatalf("recover deleted project artifacts: %v", err)
-	}
-	if !recovered {
-		t.Fatal("deleted project tombstone was not finalized")
-	}
-	if _, err := os.Stat(sessionsRoot + ".deleting"); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("tombstone stat = %v, want not exists", err)
 	}
 }
 

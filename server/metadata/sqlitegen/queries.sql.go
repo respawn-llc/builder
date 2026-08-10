@@ -4827,45 +4827,6 @@ func (q *Queries) ListProjectLabelsByIDs(ctx context.Context, labelIds []string)
 	return items, nil
 }
 
-const listProjectSessionArtifacts = `-- name: ListProjectSessionArtifacts :many
-SELECT
-    id,
-    artifact_relpath
-FROM sessions
-WHERE project_id = ?1
-  AND trim(artifact_relpath) != ''
-ORDER BY rowid ASC
-`
-
-type ListProjectSessionArtifactsRow struct {
-	ID              string
-	ArtifactRelpath string
-}
-
-func (q *Queries) ListProjectSessionArtifacts(ctx context.Context, projectID string) ([]ListProjectSessionArtifactsRow, error) {
-	rows, err := q.db.QueryContext(ctx, listProjectSessionArtifacts, projectID)
-	err = recordQueryError(ctx, err, listProjectSessionArtifacts, 1)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListProjectSessionArtifactsRow
-	for rows.Next() {
-		var i ListProjectSessionArtifactsRow
-		if err := recordQueryError(ctx, rows.Scan(&i.ID, &i.ArtifactRelpath), listProjectSessionArtifacts, 1); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := recordQueryError(ctx, rows.Close(), listProjectSessionArtifacts, 1); err != nil {
-		return nil, err
-	}
-	if err := recordQueryError(ctx, rows.Err(), listProjectSessionArtifacts, 1); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listProjectSessionIDs = `-- name: ListProjectSessionIDs :many
 SELECT id
 FROM sessions

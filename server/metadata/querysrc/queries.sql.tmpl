@@ -2383,15 +2383,6 @@ FROM sessions
 WHERE project_id = sqlc.arg(project_id)
 ORDER BY rowid ASC;
 
--- name: ListProjectSessionArtifacts :many
-SELECT
-    id,
-    artifact_relpath
-FROM sessions
-WHERE project_id = sqlc.arg(project_id)
-  AND trim(artifact_relpath) != ''
-ORDER BY rowid ASC;
-
 -- name: GetProjectDeleteBlockerCounts :one
 SELECT
     CAST((
