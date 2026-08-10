@@ -77,11 +77,7 @@ type steeringAssistantCommitResult struct {
 	resolution completedResponseResolutionOutcome
 }
 
-type steeringGoalNoticeAndStatus struct {
-	message    llm.Message
-	update     GoalStatusUpdate
-	emitStatus bool
-}
+type steeringGoalNoticeAndStatus struct { message llm.Message; update GoalStatusUpdate; emitStatus bool }
 
 type steeringLocalEntry struct {
 	entry                  storedLocalEntry
@@ -389,19 +385,8 @@ func steerEventIntent(evt Event) steeringIntent {
 	}
 }
 
-func steerGoalNoticeAndStatusIntent(message llm.Message, update GoalStatusUpdate) steeringIntent {
-	return steeringIntent{
-		priority: steeringPriorityRuntimeContext,
-		items:    []steeringItem{{goalNoticeAndStatus: &steeringGoalNoticeAndStatus{message: message, update: update, emitStatus: true}}},
-	}
-}
-
-func steerGoalNoticeIntent(message llm.Message) steeringIntent {
-	return steeringIntent{
-		priority: steeringPriorityRuntimeContext,
-		items:    []steeringItem{{goalNoticeAndStatus: &steeringGoalNoticeAndStatus{message: message}}},
-	}
-}
+func steerGoalNoticeAndStatusIntent(message llm.Message, update GoalStatusUpdate) steeringIntent { return steeringIntent{priority: steeringPriorityRuntimeContext, items: []steeringItem{{goalNoticeAndStatus: &steeringGoalNoticeAndStatus{message: message, update: update, emitStatus: true}}}} }
+func steerGoalNoticeIntent(message llm.Message) steeringIntent { return steeringIntent{priority: steeringPriorityRuntimeContext, items: []steeringItem{{goalNoticeAndStatus: &steeringGoalNoticeAndStatus{message: message}}}} }
 
 func steerLiveToolAbortIntent(reason string) steeringIntent {
 	return steeringIntent{

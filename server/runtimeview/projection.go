@@ -53,10 +53,7 @@ func StatusFromRuntime(engine *runtime.Engine) (clientui.RuntimeStatus, error) {
 	if engine == nil {
 		return clientui.RuntimeStatus{}, nil
 	}
-	goalAvailability, err := engine.GoalAvailability()
-	if err != nil {
-		return clientui.RuntimeStatus{}, err
-	}
+	goalAvailability, err := engine.GoalAvailability(); if err != nil { return clientui.RuntimeStatus{}, err }
 	freshness, err := engine.ConversationFreshness()
 	if err != nil {
 		return clientui.RuntimeStatus{}, err

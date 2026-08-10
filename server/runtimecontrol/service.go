@@ -87,7 +87,7 @@ type committedRuntimeMutationResult[Resp any] struct {
 }
 
 type committedGoalMutationResult struct {
-	Response serverapi.RuntimeGoalShowResponse
+	Response serverapi.RuntimeGoalMutationResponse
 	Err      error
 }
 

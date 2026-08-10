@@ -109,13 +109,13 @@ func (c *sessionRuntimeClient) ShowGoal() (*clientui.RuntimeGoal, error) {
 }
 
 func (c *sessionRuntimeClient) SetGoal(objective string) (*clientui.RuntimeGoal, error) {
-	resp, err := runtimeControlCall(c, true, func(ctx context.Context, requestID string) (serverapi.RuntimeGoalShowResponse, error) {
+	resp, err := runtimeControlCall(c, true, func(ctx context.Context, requestID string) (serverapi.RuntimeGoalMutationResponse, error) {
 		return c.controls.SetGoal(ctx, serverapi.RuntimeGoalSetRequest{ClientRequestID: requestID, SessionID: c.sessionID, Objective: objective, Actor: "user"})
 	})
 	if err != nil {
 		return nil, err
 	}
-	return c.applyGoalResponse(resp), nil
+	return c.applyGoalMutationResponse(resp), nil
 }
 
 func (c *sessionRuntimeClient) PauseGoal() (*clientui.RuntimeGoal, error) {
@@ -143,7 +143,7 @@ func (c *sessionRuntimeClient) ClearGoal() (*clientui.RuntimeGoal, error) {
 	if err != nil {
 		return nil, err
 	}
-	return c.applyGoalResponse(resp), nil
+	return c.applyGoalMutationResponse(serverapi.RuntimeGoalMutationResponse{Goal: resp.Goal, Availability: resp.Availability}), nil
 }
 
 func (c *sessionRuntimeClient) setGoalStatus(call func(context.Context, serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalShowResponse, error)) (*clientui.RuntimeGoal, error) {
@@ -153,11 +153,11 @@ func (c *sessionRuntimeClient) setGoalStatus(call func(context.Context, serverap
 	if err != nil {
 		return nil, err
 	}
-	return c.applyGoalResponse(resp), nil
+	return c.applyGoalMutationResponse(serverapi.RuntimeGoalMutationResponse{Goal: resp.Goal, Availability: resp.Availability}), nil
 }
 
-func (c *sessionRuntimeClient) applyGoalResponse(resp serverapi.RuntimeGoalShowResponse) *clientui.RuntimeGoal {
-	goal := runtimeGoalFromResponse(resp)
+func (c *sessionRuntimeClient) applyGoalMutationResponse(resp serverapi.RuntimeGoalMutationResponse) *clientui.RuntimeGoal {
+	goal := runtimeGoalFromMutationResponse(resp)
 	c.patchMainView(func(view *clientui.RuntimeMainView) {
 		view.Status.Goal = cloneRuntimeGoal(goal)
 	})
@@ -165,7 +165,10 @@ func (c *sessionRuntimeClient) applyGoalResponse(resp serverapi.RuntimeGoalShowR
 }
 
 func runtimeGoalFromResponse(resp serverapi.RuntimeGoalShowResponse) *clientui.RuntimeGoal {
-	goal := clientui.RuntimeGoalFromEnvelope(resp, false); return &goal
+	goal := clientui.RuntimeGoalFromEnvelope(clientui.GoalEnvelope{Goal: resp.Goal, Availability: resp.Availability}, false); return &goal
+}
+func runtimeGoalFromMutationResponse(resp serverapi.RuntimeGoalMutationResponse) *clientui.RuntimeGoal {
+	goal := clientui.RuntimeGoalFromMutationResponse(resp.Goal, resp.Pending, resp.Availability, false); return &goal
 }
 
 func cloneRuntimeGoal(goal *clientui.RuntimeGoal) *clientui.RuntimeGoal {
@@ -176,6 +179,10 @@ func cloneRuntimeGoal(goal *clientui.RuntimeGoal) *clientui.RuntimeGoal {
 	if goal.Goal != nil {
 		core := *goal.Goal
 		cloned.Goal = &core
+	}
+	if goal.Pending != nil {
+		pending := *goal.Pending
+		cloned.Pending = &pending
 	}
 	return &cloned
 }

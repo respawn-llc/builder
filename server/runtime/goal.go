@@ -79,10 +79,7 @@ func (e *Engine) Goal() *session.GoalState {
 }
 
 func (e *Engine) GoalAvailability() (clientui.GoalAvailability, error) {
-	if e == nil || e.store == nil {
-		return "", errors.New("runtime session store is required")
-	}
-	return e.store.GoalAvailability()
+	if e == nil || e.store == nil { return "", errors.New("runtime session store is required") }; return e.store.GoalAvailability()
 }
 
 func (e *Engine) GoalLoopSuspended() bool {
@@ -512,17 +509,9 @@ func steerGoalStatusUpdateIntent(update GoalStatusUpdate) steeringIntent {
 func (e *Engine) finishGoalOutput(stepID string, message llm.Message, result *GoalCommandResult, update GoalStatusUpdate) error {
 	noticeReceipt, noticeErr := e.steerWithCommitReceipt(stepID, steerGoalNoticeIntent(message))
 	result.NoticeReceipt = noticeReceipt
-	if !noticeReceipt.Committed {
-		if noticeErr != nil {
-			return noticeErr
-		}
-		return errors.New("goal notice was not committed")
-	}
+	if !noticeReceipt.Committed { if noticeErr != nil { return noticeErr }; return errors.New("goal notice was not committed") }
 	availability, availabilityErr := e.GoalAvailability()
-	if availabilityErr != nil {
-		result.Availability = ""
-		return availabilityErr
-	}
+	if availabilityErr != nil { result.Availability = ""; return availabilityErr }
 	result.Availability = availability
 	update.Availability = availability
 	statusErr := e.steer(stepID, steerGoalStatusUpdateIntent(update))

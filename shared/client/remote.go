@@ -266,10 +266,11 @@ func callControlRPC[Req any, Resp any](c *Remote, ctx context.Context, method st
 	if err := c.call(ctx, method, req, &resp); err != nil {
 		return resp, err
 	}
-	if goal, ok := any(resp).(serverapi.RuntimeGoalShowResponse); ok {
-		if err := goal.Validate(); err != nil {
-			return resp, invalidResponseError(method, err)
-		}
+	switch goal := any(resp).(type) {
+	case serverapi.RuntimeGoalShowResponse:
+		if err := goal.Validate(); err != nil { return resp, invalidResponseError(method, err) }
+	case serverapi.RuntimeGoalMutationResponse:
+		if err := goal.Validate(); err != nil { return resp, invalidResponseError(method, err) }
 	}
 	return resp, nil
 }
@@ -671,9 +672,7 @@ func (c *Remote) WorkspaceChatDraft(ctx context.Context, req serverapi.Workspace
 	if err := c.call(ctx, protocol.MethodSessionWorkspaceChatDraft, req, &resp); err != nil {
 		return resp, err
 	}
-	if err := resp.Validate(); err != nil {
-		return serverapi.WorkspaceChatDraftResponse{}, invalidResponseError("workspace Chat draft", err)
-	}
+	if err := resp.Validate(); err != nil { return serverapi.WorkspaceChatDraftResponse{}, invalidResponseError("workspace Chat draft", err) }
 	return resp, nil
 }
 
@@ -887,8 +886,8 @@ func (c *Remote) ShowGoal(ctx context.Context, req serverapi.RuntimeGoalShowRequ
 	return callControlRPC[serverapi.RuntimeGoalShowRequest, serverapi.RuntimeGoalShowResponse](c, ctx, protocol.MethodRuntimeGoalShow, req)
 }
 
-func (c *Remote) SetGoal(ctx context.Context, req serverapi.RuntimeGoalSetRequest) (serverapi.RuntimeGoalShowResponse, error) {
-	return callControlRPC[serverapi.RuntimeGoalSetRequest, serverapi.RuntimeGoalShowResponse](c, ctx, protocol.MethodRuntimeGoalSet, req)
+func (c *Remote) SetGoal(ctx context.Context, req serverapi.RuntimeGoalSetRequest) (serverapi.RuntimeGoalMutationResponse, error) {
+	return callControlRPC[serverapi.RuntimeGoalSetRequest, serverapi.RuntimeGoalMutationResponse](c, ctx, protocol.MethodRuntimeGoalSet, req)
 }
 
 func (c *Remote) PauseGoal(ctx context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalShowResponse, error) {

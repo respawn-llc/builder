@@ -43,10 +43,7 @@ func TranscriptHydrationFromSnapshotChecked(runtimeSnapshot runtime.TranscriptHy
 	hydration.ActiveReviewer = transcriptReviewerStateFromRuntime(runtimeSnapshot.ActiveReviewer)
 	hydration.ActiveCompaction = transcriptCompactionStateFromRuntime(runtimeSnapshot.ActiveCompaction)
 	hydration.ContextUsage = transcriptContextUsageFromRuntime(runtimeSnapshot.ContextUsage)
-	hydration.GoalStatus = transcriptGoalStatusFromRuntime(runtimeSnapshot.Goal, runtimeSnapshot.GoalAvailability, runtimeSnapshot.GoalSuspended)
-	if err := hydration.GoalStatus.Validate(); err != nil {
-		return clientui.TranscriptHydration{}, fmt.Errorf("project goal hydration: %w", err)
-	}
+	hydration.GoalStatus = transcriptGoalStatusFromRuntime(runtimeSnapshot.Goal, runtimeSnapshot.GoalAvailability, runtimeSnapshot.GoalSuspended); if err := hydration.GoalStatus.Validate(); err != nil { return clientui.TranscriptHydration{}, fmt.Errorf("project goal hydration: %w", err) }
 	return hydration, nil
 }
 

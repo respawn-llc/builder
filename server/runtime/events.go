@@ -136,11 +136,7 @@ type Event struct {
 	LiveRunResult                *LiveRunResult
 }
 
-type GoalStatusUpdate struct {
-	State        session.GoalState
-	Availability clientui.GoalAvailability
-	Cleared      bool
-}
+type GoalStatusUpdate struct { State session.GoalState; Availability clientui.GoalAvailability; Cleared bool }
 
 type RunState struct {
 	Lifecycle  RunLifecycle

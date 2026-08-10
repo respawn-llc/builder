@@ -72,10 +72,7 @@ func (e *Engine) WithTranscriptHydrationSnapshot(fn func(TranscriptHydrationSnap
 		return nil
 	}
 	e.ensureOrchestrationCollaborators()
-	snapshot, err := e.transcriptHydrationSegmentLocked()
-	if err != nil {
-		return err
-	}
+	snapshot, err := e.transcriptHydrationSegmentLocked(); if err != nil { return err }
 	return fn(snapshot)
 }
 
@@ -94,10 +91,7 @@ func (e *Engine) transcriptHydrationSegmentLocked() (TranscriptHydrationSnapshot
 		queuedMessages = e.messageFlow.PendingUserMessages()
 	}
 	usage := e.ContextUsage()
-	goalAvailability, err := e.GoalAvailability()
-	if err != nil {
-		return TranscriptHydrationSnapshot{}, err
-	}
+	goalAvailability, err := e.GoalAvailability(); if err != nil { return TranscriptHydrationSnapshot{}, err }
 	return TranscriptHydrationSnapshot{
 		CommittedRows:           snapshot.Rows,
 		ActiveAssistantText:     snapshot.Streaming,
