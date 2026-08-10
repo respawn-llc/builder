@@ -807,17 +807,23 @@ func TestServiceGraphSaveAndWorkflowDeleteWaitForConcurrentWorkflowMutation(t *t
 	})
 }
 
-func TestServiceWorkflowTaskDeleteWaitsForConcurrentTaskLifecycleMutation(t *testing.T) {
+func TestServiceTaskDeleteWaitsForPublicStartAndObservesStartedWork(t *testing.T) {
 	ctx, service, _, _, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
 	entered := make(chan struct{})
 	release := make(chan struct{})
-	writerDone := make(chan error, 1)
+	execution := newManualMoveExecutionStub(service)
+	execution.startEntered = entered
+	execution.startRelease = release
+	execution.quiescentErrors = []error{nil, workflowexecution.ErrTaskExecutionNotQuiescent}
+	service.currentNodeExecution = execution
+
+	startDone := make(chan error, 1)
 	go func() {
-		writerDone <- service.taskMutations.Run(ctx, workflow.TaskID(taskID), func(context.Context) error {
-			close(entered)
-			<-release
-			return nil
+		_, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
+			TaskID: taskID, SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+			ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{Mode: serverapi.WorkflowExecutionTargetModeNone},
 		})
+		startDone <- err
 	}()
 	<-entered
 	deleteDone := make(chan error, 1)
@@ -826,23 +832,71 @@ func TestServiceWorkflowTaskDeleteWaitsForConcurrentTaskLifecycleMutation(t *tes
 	}()
 	select {
 	case err := <-deleteDone:
-		t.Fatalf("Task Delete crossed active lifecycle writer: %v", err)
+		t.Fatalf("Task Delete crossed public Start: %v", err)
 	case <-time.After(25 * time.Millisecond):
 	}
 	close(release)
-	if err := <-writerDone; err != nil {
-		t.Fatalf("lifecycle writer: %v", err)
+	if err := <-startDone; err != nil {
+		t.Fatalf("StartWorkflowTask: %v", err)
 	}
-	if err := <-deleteDone; err != nil {
-		t.Fatalf("DeleteWorkflowTask: %v", err)
-	}
-
-	if _, err := service.GetWorkflowTask(ctx, serverapi.WorkflowTaskGetRequest{TaskID: taskID}); err == nil {
-		t.Fatal("deleted workflow task remains readable after writer release")
+	if err := <-deleteDone; !errors.Is(err, workflowexecution.ErrTaskExecutionNotQuiescent) {
+		t.Fatalf("Task Delete after Start = %v, want non-quiescent", err)
 	}
 }
 
-func TestServiceWorkflowDeleteFreezeWaitsForTaskLifecycleMutation(t *testing.T) {
+func TestServiceTaskDeleteWaitsForPublicResumeAndObservesResumedWork(t *testing.T) {
+	ctx, service, _, _, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
+	started, err := service.store.StartTask(ctx, workflow.TaskID(taskID))
+	if err != nil {
+		t.Fatalf("StartTask fixture: %v", err)
+	}
+	reference := started.Mutation.Created[0].Reference
+	if err := service.store.InterruptCurrentNode(
+		ctx,
+		reference,
+		"test_interruption",
+		workflow.NewCurrentNodeInterruptionDetail("test_interruption", nil),
+	); err != nil {
+		t.Fatalf("InterruptCurrentNode fixture: %v", err)
+	}
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	execution := newManualMoveExecutionStub(service)
+	execution.resumeEntered = entered
+	execution.resumeRelease = release
+	execution.quiescentErr = workflowexecution.ErrTaskExecutionNotQuiescent
+	service.currentNodeExecution = execution
+
+	resumeDone := make(chan error, 1)
+	go func() {
+		_, err := service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
+			TaskID: taskID, SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+			ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
+				Mode: serverapi.WorkflowExecutionTargetModeNone,
+			},
+		})
+		resumeDone <- err
+	}()
+	<-entered
+	deleteDone := make(chan error, 1)
+	go func() {
+		deleteDone <- service.DeleteWorkflowTask(ctx, serverapi.WorkflowTaskDeleteRequest{TaskID: taskID})
+	}()
+	select {
+	case err := <-deleteDone:
+		t.Fatalf("Task Delete crossed public Resume: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(release)
+	if err := <-resumeDone; err != nil {
+		t.Fatalf("ResumeWorkflowTask: %v", err)
+	}
+	if err := <-deleteDone; !errors.Is(err, workflowexecution.ErrTaskExecutionNotQuiescent) {
+		t.Fatalf("Task Delete after Resume = %v, want non-quiescent", err)
+	}
+}
+
+func TestServiceWorkflowDeleteFreezeWaitsForPublicStart(t *testing.T) {
 	ctx, service, _, workflowID, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
 	preview, err := service.PreviewWorkflowDelete(ctx, serverapi.WorkflowDeletePreviewRequest{WorkflowID: workflowID})
 	if err != nil {
@@ -850,13 +904,19 @@ func TestServiceWorkflowDeleteFreezeWaitsForTaskLifecycleMutation(t *testing.T) 
 	}
 	entered := make(chan struct{})
 	release := make(chan struct{})
-	writerDone := make(chan error, 1)
+	execution := newManualMoveExecutionStub(service)
+	execution.startEntered = entered
+	execution.startRelease = release
+	execution.quiescentErrors = []error{nil, workflowexecution.ErrTaskExecutionNotQuiescent}
+	service.currentNodeExecution = execution
+
+	startDone := make(chan error, 1)
 	go func() {
-		writerDone <- service.taskMutations.Run(ctx, workflow.TaskID(taskID), func(context.Context) error {
-			close(entered)
-			<-release
-			return nil
+		_, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
+			TaskID: taskID, SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+			ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{Mode: serverapi.WorkflowExecutionTargetModeNone},
 		})
+		startDone <- err
 	}()
 	<-entered
 	deleteDone := make(chan error, 1)
@@ -870,15 +930,15 @@ func TestServiceWorkflowDeleteFreezeWaitsForTaskLifecycleMutation(t *testing.T) 
 	}()
 	select {
 	case err := <-deleteDone:
-		t.Fatalf("Workflow Delete crossed active lifecycle writer: %v", err)
+		t.Fatalf("Workflow Delete crossed public Start: %v", err)
 	case <-time.After(25 * time.Millisecond):
 	}
 	close(release)
-	if err := <-writerDone; err != nil {
-		t.Fatalf("lifecycle writer: %v", err)
+	if err := <-startDone; err != nil {
+		t.Fatalf("StartWorkflowTask: %v", err)
 	}
-	if err := <-deleteDone; err != nil {
-		t.Fatalf("DeleteWorkflow: %v", err)
+	if err := <-deleteDone; !errors.Is(err, workflowexecution.ErrTaskExecutionNotQuiescent) {
+		t.Fatalf("Workflow Delete after Start = %v, want non-quiescent", err)
 	}
 }
 
@@ -1735,6 +1795,10 @@ type recordingExecutionTargetInfrastructure struct {
 
 type manualMoveExecutionStub struct {
 	currentNodeCompletionExecutionStub
+	startEntered     chan struct{}
+	startRelease     <-chan struct{}
+	resumeEntered    chan struct{}
+	resumeRelease    <-chan struct{}
 	started          []workflow.CurrentNodeReference
 	quiescentErr     error
 	quiescentErrors  []error
@@ -1781,11 +1845,48 @@ func (s *manualMoveExecutionStub) StartTask(
 	taskID workflow.TaskID,
 	preparation workflowexecution.TaskStartPreparation,
 ) (workflowstore.StartTaskResult, error) {
+	if s.startEntered != nil {
+		close(s.startEntered)
+	}
+	if s.startRelease != nil {
+		select {
+		case <-s.startRelease:
+		case <-ctx.Done():
+			return workflowstore.StartTaskResult{}, context.Cause(ctx)
+		}
+	}
 	started, err := s.currentNodeCompletionExecutionStub.StartTask(ctx, taskID, preparation)
 	if err == nil {
 		s.recordStarted(started.Mutation.Created)
 	}
 	return started, err
+}
+
+func (s *manualMoveExecutionStub) ResumeTask(ctx context.Context, taskID workflow.TaskID) ([]workflow.CurrentNode, error) {
+	if s.resumeEntered != nil {
+		close(s.resumeEntered)
+	}
+	if s.resumeRelease != nil {
+		select {
+		case <-s.resumeRelease:
+		case <-ctx.Done():
+			return nil, context.Cause(ctx)
+		}
+	}
+	return s.currentNodeCompletionExecutionStub.ResumeTask(ctx, taskID)
+}
+
+func (s *manualMoveExecutionStub) ResumeTaskWithPreparation(
+	ctx context.Context,
+	taskID workflow.TaskID,
+	preparation workflowexecution.TaskStartPreparation,
+) ([]workflow.CurrentNode, error) {
+	if preparation != nil {
+		if err := preparation(ctx); err != nil {
+			return nil, err
+		}
+	}
+	return s.ResumeTask(ctx, taskID)
 }
 
 func (s *manualMoveExecutionStub) ApplyPendingApproval(ctx context.Context, approvalID workflow.ApprovalID) (workflowstore.PendingApprovalApplyResult, error) {

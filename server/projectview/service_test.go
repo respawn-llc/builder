@@ -185,12 +185,26 @@ func TestServiceProjectDeleteWaitsForConcurrentWorkflowMutation(t *testing.T) {
 
 func TestServiceProjectDeleteFreezeWaitsForTaskLifecycleMutation(t *testing.T) {
 	store, _, binding := newProjectViewMetadataStore(t)
-	svc := newProjectViewMetadataService(t, store, binding.ProjectID)
+	svc, err := NewMetadataService(store, binding.ProjectID)
+	if err != nil {
+		t.Fatalf("NewMetadataService: %v", err)
+	}
+	workflowStore, err := workflowstore.New(store)
+	if err != nil {
+		t.Fatalf("workflowstore.New: %v", err)
+	}
+	taskMutations := workflowexecution.NewTaskMutationCoordinator()
+	svc.WithWorkflowExecution(
+		workflowexecution.NewMutationPermit(),
+		taskMutations,
+		projectViewQuiescentExecution{},
+		workflowStore,
+	)
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	writerDone := make(chan error, 1)
 	go func() {
-		writerDone <- svc.taskMutations.Run(context.Background(), "task-lifecycle", func(context.Context) error {
+		writerDone <- taskMutations.Run(context.Background(), "task-lifecycle", func(context.Context) error {
 			close(entered)
 			<-release
 			return nil
