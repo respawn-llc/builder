@@ -239,6 +239,151 @@ func TestCurrentNodeControllerResumeCommitFailureDiscardsEveryStagedRunAndKeepsA
 	}
 }
 
+func TestCurrentNodeControllerApprovalCommitFailurePreservesNoRunOwnership(t *testing.T) {
+	source := currentNodeReferenceForControllerTest(t, "task-approval-commit-failure", "node-source")
+	target := currentNodeReferenceForControllerTest(t, "task-approval-commit-failure", "node-target")
+	approval := workflow.PendingApproval{ID: workflow.NewApprovalID(), Source: source}
+	commitErr := errors.New("commit prepared Approval")
+	store := &currentNodeControllerStore{
+		pendingApproval: approval,
+		approvalApplied: workflowstore.PendingApprovalApplyResult{
+			Mutation: workflow.CurrentNodeMutationResult{
+				Removed: []workflow.CurrentNodeReference{source},
+				Created: []workflow.CurrentNode{{
+					Reference:  target,
+					Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
+				}},
+			},
+			ResolvedApproval: approval,
+		},
+		preparedCommitErr: commitErr,
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller := newCurrentNodeControllerForTest(t, store, &countingCurrentNodeRunner{}, authority, 1)
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+
+	if _, err := controller.ApplyPendingApproval(context.Background(), approval.ID); !errors.Is(err, commitErr) {
+		t.Fatalf("ApplyPendingApproval error = %v, want %v", err, commitErr)
+	}
+	snapshot := controller.Snapshot()
+	if len(snapshot.ExplicitStarts) != 0 ||
+		len(snapshot.HeldIntents) != 0 ||
+		len(snapshot.Gates) != 0 ||
+		len(snapshot.LiveScopes) != 0 {
+		t.Fatalf("controller state after failed Approval commit = %+v, want no Run ownership", snapshot)
+	}
+}
+
+func TestCurrentNodeControllerIdleCompletionCommitFailurePreservesNoRunOwnership(t *testing.T) {
+	source := currentNodeReferenceForControllerTest(t, "task-idle-completion-commit-failure", "node-source")
+	target := currentNodeReferenceForControllerTest(t, "task-idle-completion-commit-failure", "node-target")
+	commitErr := errors.New("commit prepared idle completion")
+	store := &currentNodeControllerStore{
+		idleResolved: &workflow.CurrentNode{
+			Reference:  source,
+			Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
+		},
+		completion: workflowstore.CurrentNodeCompletionResult{
+			Mutation: workflow.CurrentNodeMutationResult{
+				Removed: []workflow.CurrentNodeReference{source},
+				Created: []workflow.CurrentNode{{
+					Reference:  target,
+					Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
+				}},
+			},
+			AutomaticIntents: []workflowstore.CurrentNodeAutomaticIntent{{
+				CurrentNode: target,
+				NodeKind:    workflow.NodeKindAgent,
+			}},
+		},
+		completionCommitErr: commitErr,
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller := newCurrentNodeControllerForTest(t, store, &countingCurrentNodeRunner{}, authority, 1)
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+
+	taskID := source.TaskID
+	if _, err := controller.CompleteIdleCurrentNode(
+		context.Background(),
+		workflowstore.IdleCurrentNodeSelector{TaskID: &taskID},
+		"next",
+		nil,
+		"forced",
+	); !errors.Is(err, commitErr) {
+		t.Fatalf("CompleteIdleCurrentNode error = %v, want %v", err, commitErr)
+	}
+	snapshot := controller.Snapshot()
+	if len(snapshot.AutomaticIntents) != 0 ||
+		len(snapshot.ExplicitStarts) != 0 ||
+		len(snapshot.Gates) != 0 ||
+		len(snapshot.LiveScopes) != 0 {
+		t.Fatalf("controller state after failed idle completion commit = %+v, want no Run ownership", snapshot)
+	}
+}
+
+func TestCurrentNodeControllerIdleCompletionWithoutExecutableSuccessorCreatesNoRun(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		mutation workflow.CurrentNodeMutationResult
+	}{
+		{
+			name: "terminal",
+			mutation: workflow.CurrentNodeMutationResult{
+				Created: []workflow.CurrentNode{{
+					Reference: currentNodeReferenceForControllerTest(t, "task-idle-no-run-terminal", "node-terminal"),
+				}},
+			},
+		},
+		{
+			name:     "blocked join",
+			mutation: workflow.CurrentNodeMutationResult{},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			source := currentNodeReferenceForControllerTest(t, "task-idle-no-run-"+test.name, "node-source")
+			test.mutation.Removed = []workflow.CurrentNodeReference{source}
+			store := &currentNodeControllerStore{
+				idleResolved: &workflow.CurrentNode{
+					Reference:  source,
+					Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
+				},
+				completion: workflowstore.CurrentNodeCompletionResult{Mutation: test.mutation},
+			}
+			authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+			controller := newCurrentNodeControllerForTest(t, store, &countingCurrentNodeRunner{}, authority, 1)
+			t.Cleanup(func() {
+				_ = controller.Close()
+				_ = authority.Close(context.Background())
+			})
+
+			taskID := source.TaskID
+			if _, err := controller.CompleteIdleCurrentNode(
+				context.Background(),
+				workflowstore.IdleCurrentNodeSelector{TaskID: &taskID},
+				"next",
+				nil,
+				"forced",
+			); err != nil {
+				t.Fatalf("CompleteIdleCurrentNode: %v", err)
+			}
+			snapshot := controller.Snapshot()
+			if len(snapshot.AutomaticIntents) != 0 ||
+				len(snapshot.ExplicitStarts) != 0 ||
+				len(snapshot.HeldIntents) != 0 ||
+				len(snapshot.Gates) != 0 ||
+				len(snapshot.LiveScopes) != 0 {
+				t.Fatalf("controller state after %s completion = %+v, want no Run", test.name, snapshot)
+			}
+		})
+	}
+}
+
 func TestCurrentNodeControllerPrioritizesExplicitResumeOverBlockedAutomaticRun(t *testing.T) {
 	shellPath, err := exec.LookPath("sh")
 	if err != nil {

@@ -554,12 +554,55 @@ func (s *currentNodeControllerStore) PendingApproval(context.Context, workflow.A
 	return s.pendingApproval, nil
 }
 
-func (s *currentNodeControllerStore) ApplyPendingApproval(context.Context, workflow.ApprovalID) (workflowstore.PendingApprovalApplyResult, error) {
-	return s.approvalApplied, nil
+func (s *currentNodeControllerStore) PreparePendingApprovalApply(
+	ctx context.Context,
+	_ workflow.ApprovalID,
+) (workflowstore.PreparedCurrentNodeMutation, error) {
+	result := s.approvalApplied
+	executable := make([]workflow.CurrentNode, 0, len(result.Mutation.Created))
+	for _, node := range result.Mutation.Created {
+		if node.Scheduling != nil {
+			executable = append(executable, node)
+		}
+	}
+	return &controllerPreparedCurrentNodeMutation{
+		ctx: ctx,
+		result: workflowstore.PreparedCurrentNodeMutationResult{
+			Mutation:                      result.Mutation,
+			CreatedExecutableCurrentNodes: executable,
+			TaskAttentionResolution:       result.TaskAttentionResolution,
+			PendingApprovalApply:          &result,
+		},
+		commit: func() error {
+			return s.commitPreparedCurrentNodeMutation(ctx)
+		},
+	}, nil
 }
 
-func (s *currentNodeControllerStore) ApplyManualMove(context.Context, workflowstore.ManualMovePreparation, *workflowstore.ExecutionTargetCandidate) (workflowstore.ManualMoveResult, error) {
-	return s.manualMoved, nil
+func (s *currentNodeControllerStore) PrepareManualMoveApply(
+	ctx context.Context,
+	_ workflowstore.ManualMovePreparation,
+	_ *workflowstore.ExecutionTargetCandidate,
+) (workflowstore.PreparedCurrentNodeMutation, error) {
+	result := s.manualMoved
+	executable := make([]workflow.CurrentNode, 0, len(result.Mutation.Created))
+	for _, node := range result.Mutation.Created {
+		if node.Scheduling != nil {
+			executable = append(executable, node)
+		}
+	}
+	return &controllerPreparedCurrentNodeMutation{
+		ctx: ctx,
+		result: workflowstore.PreparedCurrentNodeMutationResult{
+			Mutation:                      result.Mutation,
+			CreatedExecutableCurrentNodes: executable,
+			TaskAttentionResolution:       result.TaskAttentionResolution,
+			ManualMove:                    &result,
+		},
+		commit: func() error {
+			return s.commitPreparedCurrentNodeMutation(ctx)
+		},
+	}, nil
 }
 
 type currentNodeInterruptionRecord struct {

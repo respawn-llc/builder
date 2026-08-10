@@ -357,35 +357,6 @@ func (c *CurrentNodeController) steerStartsAssignments(ctx context.Context, star
 	return steered, nil
 }
 
-func (c *CurrentNodeController) steerAndWaitStarts(
-	ctx context.Context,
-	starts []currentNodeQueuedStart,
-	recovery currentNodeStartFailureRecovery,
-) ([]currentNodeQueuedStart, error) {
-	steered, steerErr := c.steerStartsAssignments(ctx, starts)
-	outcome := waitCurrentNodeAssignmentSteers(ctx, steered)
-	cause := errors.Join(steerErr, outcome.err)
-	if cause != nil {
-		if len(outcome.pending) != 0 {
-			c.continueCurrentNodeAssignmentStarts(steered, steerErr)
-			return nil, cause
-		}
-		recoveryStarts := outcome.committed
-		if recovery == recoverAllCurrentNodeStarts {
-			recoveryStarts = starts
-		}
-		return nil, errors.Join(cause, c.recoverCurrentNodeStartFailures(ctx, recoveryStarts, false, cause))
-	}
-	return steered, nil
-}
-
-type currentNodeStartFailureRecovery uint8
-
-const (
-	recoverCommittedCurrentNodeStarts currentNodeStartFailureRecovery = iota
-	recoverAllCurrentNodeStarts
-)
-
 func pendingCurrentNodeAssignmentStarts(starts []currentNodeQueuedStart) ([]currentNodeQueuedStart, []*pendingCurrentNodeAssignmentSteer) {
 	pendingStarts := append([]currentNodeQueuedStart(nil), starts...)
 	pending := make([]*pendingCurrentNodeAssignmentSteer, len(pendingStarts))
@@ -422,6 +393,70 @@ func (c *CurrentNodeController) resolvePendingCurrentNodeAssignmentSteers(
 		}
 	}
 	return nil
+}
+
+func (c *CurrentNodeController) resolvePreparedCurrentNodeStarts(
+	ctx context.Context,
+	starts []currentNodeQueuedStart,
+	pending []*pendingCurrentNodeAssignmentSteer,
+	runIDs []currentNodeRunID,
+	wake bool,
+) error {
+	resolveErr := c.resolvePendingCurrentNodeAssignmentSteers(ctx, starts, pending)
+	outcome := waitCurrentNodeAssignmentSteers(ctx, starts)
+	cause := errors.Join(resolveErr, outcome.err)
+	if cause == nil {
+		if wake && len(runIDs) != 0 {
+			c.wakeAdmissionWorker()
+		}
+		return nil
+	}
+	if len(outcome.pending) != 0 {
+		c.continuePreparedCurrentNodeStarts(starts, runIDs, wake, resolveErr)
+		return cause
+	}
+	recoveryErr := c.recoverCurrentNodeStartFailures(ctx, starts, false, cause)
+	if recoveryErr == nil {
+		c.mu.Lock()
+		c.removePreparedCurrentNodeRunsLocked(runIDs)
+		c.mu.Unlock()
+	}
+	return errors.Join(cause, recoveryErr)
+}
+
+func (c *CurrentNodeController) continuePreparedCurrentNodeStarts(
+	starts []currentNodeQueuedStart,
+	runIDs []currentNodeRunID,
+	wake bool,
+	priorErr error,
+) {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return
+	}
+	c.workerWG.Add(1)
+	c.mu.Unlock()
+	go func() {
+		defer c.workerWG.Done()
+		outcome := waitCurrentNodeAssignmentSteers(c.workerContext, starts)
+		if context.Cause(c.workerContext) != nil {
+			return
+		}
+		cause := errors.Join(priorErr, outcome.err)
+		if cause == nil {
+			if wake && len(runIDs) != 0 {
+				c.wakeAdmissionWorker()
+			}
+			return
+		}
+		if err := c.recoverCurrentNodeStartFailures(c.workerContext, starts, false, cause); err != nil {
+			return
+		}
+		c.mu.Lock()
+		c.removePreparedCurrentNodeRunsLocked(runIDs)
+		c.mu.Unlock()
+	}()
 }
 
 func (c *CurrentNodeController) steerAssignment(

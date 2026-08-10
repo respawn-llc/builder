@@ -415,7 +415,7 @@ func TestManualMoveFanoutTransitionReplacesTaskWithEveryBranch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareManualMove: %v", err)
 	}
-	moved, err := store.ApplyManualMove(ctx, prepared, &ExecutionTargetCandidate{
+	mutation, err := store.PrepareManualMoveApply(ctx, prepared, &ExecutionTargetCandidate{
 		Snapshot: ExecutionTargetSnapshot{
 			Mode:       workflow.ExecutionTargetModeNone,
 			Provenance: ExecutionTargetProvenanceResolved,
@@ -426,8 +426,16 @@ func TestManualMoveFanoutTransitionReplacesTaskWithEveryBranch(t *testing.T) {
 		},
 	})
 	if err != nil {
-		t.Fatalf("ApplyManualMove: %v", err)
+		t.Fatalf("PrepareManualMoveApply: %v", err)
 	}
+	result := mutation.Result()
+	if result.ManualMove == nil || len(result.CreatedExecutableCurrentNodes) != 2 {
+		t.Fatalf("prepared fan-out Manual Move = %+v, want two executable branches", result)
+	}
+	if err := mutation.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	moved := *result.ManualMove
 	if moved.Outcome != ManualMoveResultOutcomeApplied ||
 		len(moved.Mutation.Removed) != 1 ||
 		!moved.Mutation.Removed[0].Equal(source.Reference) ||

@@ -112,152 +112,169 @@ func currentNodeDefinitionNodeFromTask(ctx context.Context, q *sqlitegen.Queries
 }
 
 func (s *Store) ApplyManualMove(ctx context.Context, prepared ManualMovePreparation, executionTarget *ExecutionTargetCandidate) (ManualMoveResult, error) {
+	mutation, err := s.PrepareManualMoveApply(ctx, prepared, executionTarget)
+	if err != nil {
+		return ManualMoveResult{}, err
+	}
+	result := mutation.Result()
+	if result.ManualMove == nil {
+		_ = mutation.Rollback()
+		return ManualMoveResult{}, errors.New("prepared Manual Move result is absent")
+	}
+	moved := *result.ManualMove
+	if err := mutation.Commit(); err != nil {
+		return ManualMoveResult{}, err
+	}
+	return moved, nil
+}
+
+func (s *Store) PrepareManualMoveApply(
+	ctx context.Context,
+	prepared ManualMovePreparation,
+	executionTarget *ExecutionTargetCandidate,
+) (PreparedCurrentNodeMutation, error) {
 	if strings.TrimSpace(string(prepared.request.TaskID)) == "" || (!prepared.noOp && prepared.target == nil) {
-		return ManualMoveResult{}, errors.New("manual move preparation is invalid")
+		return nil, errors.New("manual move preparation is invalid")
 	}
 	executionTargetPreparation, err := s.prepareManualMoveExecutionTarget(ctx, prepared, executionTarget)
 	if err != nil {
-		return ManualMoveResult{}, err
+		return nil, err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return ManualMoveResult{}, err
-	}
-	defer func() { _ = tx.Rollback() }()
-	q := s.queries.WithTx(tx)
-	locked, err := q.AcquireManualMoveTaskWriteLock(ctx, string(prepared.request.TaskID))
-	if err != nil {
-		return ManualMoveResult{}, err
-	}
-	if locked != 1 {
-		return ManualMoveResult{}, sql.ErrNoRows
-	}
-	task, err := q.GetTask(ctx, string(prepared.request.TaskID))
-	if err != nil {
-		return ManualMoveResult{}, err
-	}
-	currentNodes, err := listTaskCurrentNodes(ctx, q, prepared.request.TaskID)
-	if err != nil {
-		return ManualMoveResult{}, err
-	}
-	for _, currentNode := range currentNodes {
-		if currentNode.Reference.NodeID == prepared.request.TargetNodeID {
-			return ManualMoveResult{
+	return s.prepareCurrentNodeMutation(ctx, prepared.request.TaskID, func(ctx context.Context, q *sqlitegen.Queries) (PreparedCurrentNodeMutationResult, error) {
+		task, err := q.GetTask(ctx, string(prepared.request.TaskID))
+		if err != nil {
+			return PreparedCurrentNodeMutationResult{}, err
+		}
+		currentNodes, err := listTaskCurrentNodes(ctx, q, prepared.request.TaskID)
+		if err != nil {
+			return PreparedCurrentNodeMutationResult{}, err
+		}
+		noOpResult := func(nodes []workflow.CurrentNode) PreparedCurrentNodeMutationResult {
+			moved := ManualMoveResult{
 				Outcome:      ManualMoveResultOutcomeNoOp,
-				CurrentNodes: append([]workflow.CurrentNode(nil), currentNodes...),
-			}, nil
-		}
-	}
-	preview, err := s.resolveManualMove(ctx, q, prepared.request)
-	if err != nil {
-		return ManualMoveResult{}, err
-	}
-	if preview.Outcome == ManualMovePreviewOutcomeNoOp {
-		return ManualMoveResult{
-			Outcome:      ManualMoveResultOutcomeNoOp,
-			CurrentNodes: append([]workflow.CurrentNode(nil), preview.CurrentNodes...),
-		}, nil
-	}
-	if preview.Outcome == ManualMovePreviewOutcomeBlocked {
-		return ManualMoveResult{}, manualMovePreviewBlockerError(preview.Blocker)
-	}
-	definition, _, err := workflowDefinitionFromQueries(ctx, q, runtimeids.WorkflowID(task.WorkflowID))
-	if err != nil {
-		return ManualMoveResult{}, err
-	}
-	targetDefinition, err := currentNodeDefinitionNode(definition, prepared.request.TargetNodeID)
-	if err != nil {
-		return ManualMoveResult{}, err
-	}
-	if targetDefinition.Kind() != prepared.target.Kind() {
-		return ManualMoveResult{}, errManualMoveTargetShapeChanged
-	}
-	var targets []workflow.CurrentNode
-	if executableNodeKind(targetDefinition.Kind()) {
-		if len(preview.Choices) != 1 {
-			return ManualMoveResult{}, ErrManualMoveTransitionSelectionRequired
-		}
-		choice := preview.Choices[0]
-		if err := validatePreparedManualMoveTargetShape(definition, choice, executionTargetPreparation.targetShape); err != nil {
-			return ManualMoveResult{}, err
-		}
-		valueEnvironment, err := s.manualMoveValueEnvironment(ctx, q, definition, prepared.request.TaskID, currentNodes)
-		if err != nil {
-			return ManualMoveResult{}, err
-		}
-		if err := validateManualMoveValues(choice, prepared.request.Values, valueEnvironment); err != nil {
-			return ManualMoveResult{}, err
-		}
-		targets, err = s.materializeManualMoveTargets(ctx, q, definition, choice, currentNodes, valueEnvironment, prepared.request.Values)
-		if err != nil {
-			return ManualMoveResult{}, err
-		}
-		if err := applyPreparedExecutionTargetMutation(ctx, q, task, executionTargetPreparation.mutation, s.now().UnixMilli()); err != nil {
-			return ManualMoveResult{}, err
-		}
-	} else {
-		targets = []workflow.CurrentNode{{
-			Reference: workflow.CurrentNodeReference{},
-		}}
-		targets[0], err = newNonExecutableCurrentNode(prepared.request.TaskID, workflow.NodeIDOf(targetDefinition))
-		if err != nil {
-			return ManualMoveResult{}, err
-		}
-	}
-	if commentary := prepared.request.Commentary; commentary != "" {
-		for index := range targets {
-			if targets[index].CurrentInputValues == nil {
-				targets[index].CurrentInputValues = make(map[string]string)
+				CurrentNodes: append([]workflow.CurrentNode(nil), nodes...),
 			}
-			targets[index].CurrentInputValues[workflow.RuntimePromptParameterCommentary] = commentary
+			return PreparedCurrentNodeMutationResult{ManualMove: &moved}
 		}
-	}
-	attentionResolution, err := taskApprovalAttentionResolution(ctx, q, prepared.request.TaskID)
-	if err != nil {
-		return ManualMoveResult{}, err
-	}
-	if _, err := q.DeleteTaskPendingApprovalsByTask(ctx, string(prepared.request.TaskID)); err != nil {
-		return ManualMoveResult{}, err
-	}
-	removed, err := q.DeleteTaskCurrentNodes(ctx, string(prepared.request.TaskID))
-	if err != nil {
-		return ManualMoveResult{}, err
-	}
-	if removed != int64(len(currentNodes)) {
-		return ManualMoveResult{}, sql.ErrNoRows
-	}
-	if _, err := q.DeleteTaskActiveFanout(ctx, string(prepared.request.TaskID)); err != nil {
-		return ManualMoveResult{}, err
-	}
-	if len(targets) == 1 {
-		if err := insertTaskCurrentNode(ctx, q, targets[0]); err != nil {
-			return ManualMoveResult{}, err
+		for _, currentNode := range currentNodes {
+			if currentNode.Reference.NodeID == prepared.request.TargetNodeID {
+				return noOpResult(currentNodes), nil
+			}
 		}
-	} else if err := insertTaskFanoutTargets(ctx, q, prepared.request.TaskID, targets); err != nil {
-		return ManualMoveResult{}, err
-	}
-	if err := touchTaskUpdatedAt(ctx, q, string(prepared.request.TaskID), s.now().UnixMilli()); err != nil {
-		return ManualMoveResult{}, err
-	}
-	if err := tx.Commit(); err != nil {
-		return ManualMoveResult{}, err
-	}
-	removedReferences := make([]workflow.CurrentNodeReference, 0, len(currentNodes))
-	for _, currentNode := range currentNodes {
-		removedReferences = append(removedReferences, currentNode.Reference)
-	}
-	result := ManualMoveResult{
-		Outcome: ManualMoveResultOutcomeApplied,
-		Mutation: workflow.CurrentNodeMutationResult{
-			Removed: removedReferences,
-			Created: append([]workflow.CurrentNode(nil), targets...),
-		},
-		TaskAttentionResolution: attentionResolution,
-	}
-	if err := result.Validate(); err != nil {
-		return ManualMoveResult{}, err
-	}
-	return result, nil
+		preview, err := s.resolveManualMove(ctx, q, prepared.request)
+		if err != nil {
+			return PreparedCurrentNodeMutationResult{}, err
+		}
+		if preview.Outcome == ManualMovePreviewOutcomeNoOp {
+			return noOpResult(preview.CurrentNodes), nil
+		}
+		if preview.Outcome == ManualMovePreviewOutcomeBlocked {
+			return PreparedCurrentNodeMutationResult{}, manualMovePreviewBlockerError(preview.Blocker)
+		}
+		definition, _, err := workflowDefinitionFromQueries(ctx, q, runtimeids.WorkflowID(task.WorkflowID))
+		if err != nil {
+			return PreparedCurrentNodeMutationResult{}, err
+		}
+		targetDefinition, err := currentNodeDefinitionNode(definition, prepared.request.TargetNodeID)
+		if err != nil {
+			return PreparedCurrentNodeMutationResult{}, err
+		}
+		if targetDefinition.Kind() != prepared.target.Kind() {
+			return PreparedCurrentNodeMutationResult{}, errManualMoveTargetShapeChanged
+		}
+		var targets []workflow.CurrentNode
+		if executableNodeKind(targetDefinition.Kind()) {
+			if len(preview.Choices) != 1 {
+				return PreparedCurrentNodeMutationResult{}, ErrManualMoveTransitionSelectionRequired
+			}
+			choice := preview.Choices[0]
+			if err := validatePreparedManualMoveTargetShape(definition, choice, executionTargetPreparation.targetShape); err != nil {
+				return PreparedCurrentNodeMutationResult{}, err
+			}
+			valueEnvironment, err := s.manualMoveValueEnvironment(ctx, q, definition, prepared.request.TaskID, currentNodes)
+			if err != nil {
+				return PreparedCurrentNodeMutationResult{}, err
+			}
+			if err := validateManualMoveValues(choice, prepared.request.Values, valueEnvironment); err != nil {
+				return PreparedCurrentNodeMutationResult{}, err
+			}
+			targets, err = s.materializeManualMoveTargets(ctx, q, definition, choice, currentNodes, valueEnvironment, prepared.request.Values)
+			if err != nil {
+				return PreparedCurrentNodeMutationResult{}, err
+			}
+			if err := applyPreparedExecutionTargetMutation(ctx, q, task, executionTargetPreparation.mutation, s.now().UnixMilli()); err != nil {
+				return PreparedCurrentNodeMutationResult{}, err
+			}
+		} else {
+			targets = []workflow.CurrentNode{{Reference: workflow.CurrentNodeReference{}}}
+			targets[0], err = newNonExecutableCurrentNode(prepared.request.TaskID, workflow.NodeIDOf(targetDefinition))
+			if err != nil {
+				return PreparedCurrentNodeMutationResult{}, err
+			}
+		}
+		if commentary := prepared.request.Commentary; commentary != "" {
+			for index := range targets {
+				if targets[index].CurrentInputValues == nil {
+					targets[index].CurrentInputValues = make(map[string]string)
+				}
+				targets[index].CurrentInputValues[workflow.RuntimePromptParameterCommentary] = commentary
+			}
+		}
+		attentionResolution, err := taskApprovalAttentionResolution(ctx, q, prepared.request.TaskID)
+		if err != nil {
+			return PreparedCurrentNodeMutationResult{}, err
+		}
+		if _, err := q.DeleteTaskPendingApprovalsByTask(ctx, string(prepared.request.TaskID)); err != nil {
+			return PreparedCurrentNodeMutationResult{}, err
+		}
+		removed, err := q.DeleteTaskCurrentNodes(ctx, string(prepared.request.TaskID))
+		if err != nil {
+			return PreparedCurrentNodeMutationResult{}, err
+		}
+		if removed != int64(len(currentNodes)) {
+			return PreparedCurrentNodeMutationResult{}, sql.ErrNoRows
+		}
+		if _, err := q.DeleteTaskActiveFanout(ctx, string(prepared.request.TaskID)); err != nil {
+			return PreparedCurrentNodeMutationResult{}, err
+		}
+		if len(targets) == 1 {
+			if err := insertTaskCurrentNode(ctx, q, targets[0]); err != nil {
+				return PreparedCurrentNodeMutationResult{}, err
+			}
+		} else if err := insertTaskFanoutTargets(ctx, q, prepared.request.TaskID, targets); err != nil {
+			return PreparedCurrentNodeMutationResult{}, err
+		}
+		if err := touchTaskUpdatedAt(ctx, q, string(prepared.request.TaskID), s.now().UnixMilli()); err != nil {
+			return PreparedCurrentNodeMutationResult{}, err
+		}
+		removedReferences := make([]workflow.CurrentNodeReference, 0, len(currentNodes))
+		for _, currentNode := range currentNodes {
+			removedReferences = append(removedReferences, currentNode.Reference)
+		}
+		moved := ManualMoveResult{
+			Outcome: ManualMoveResultOutcomeApplied,
+			Mutation: workflow.CurrentNodeMutationResult{
+				Removed: removedReferences,
+				Created: append([]workflow.CurrentNode(nil), targets...),
+			},
+			TaskAttentionResolution: attentionResolution,
+		}
+		if err := moved.Validate(); err != nil {
+			return PreparedCurrentNodeMutationResult{}, err
+		}
+		var executable []workflow.CurrentNode
+		for _, target := range targets {
+			if target.Scheduling != nil {
+				executable = append(executable, target)
+			}
+		}
+		return PreparedCurrentNodeMutationResult{
+			Mutation:                      moved.Mutation,
+			CreatedExecutableCurrentNodes: executable,
+			TaskAttentionResolution:       attentionResolution,
+			ManualMove:                    &moved,
+		}, nil
+	})
 }
 
 func (s *Store) prepareManualMoveExecutionTarget(

@@ -104,14 +104,13 @@ type CurrentNodeController struct {
 		InterruptedExecutableCurrentNodes(context.Context, workflow.TaskID) ([]workflow.CurrentNode, error)
 		AdmitCurrentNode(context.Context, workflow.CurrentNodeReference) error
 		PendingApproval(context.Context, workflow.ApprovalID) (workflow.PendingApproval, error)
-		ApplyPendingApproval(context.Context, workflow.ApprovalID) (workflowstore.PendingApprovalApplyResult, error)
-		ApplyManualMove(context.Context, workflowstore.ManualMovePreparation, *workflowstore.ExecutionTargetCandidate) (workflowstore.ManualMoveResult, error)
+		PreparePendingApprovalApply(context.Context, workflow.ApprovalID) (workflowstore.PreparedCurrentNodeMutation, error)
+		PrepareManualMoveApply(context.Context, workflowstore.ManualMovePreparation, *workflowstore.ExecutionTargetCandidate) (workflowstore.PreparedCurrentNodeMutation, error)
 		InterruptAdmittedCurrentNode(context.Context, workflow.CurrentNodeReference, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) error
 		InterruptCurrentNode(context.Context, workflow.CurrentNodeReference, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) error
 		InterruptCurrentNodeSchedulingSet(context.Context, workflow.TaskID, []workflowstore.CurrentNodeSchedulingTarget, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) (workflowstore.CurrentNodeSchedulingInterruptionResult, error)
 		RecoverExecutableCurrentNodes(context.Context, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) ([]workflow.CurrentNodeReference, error)
 		ResolveIdleExecutableCurrentNode(context.Context, workflowstore.IdleCurrentNodeSelector) (workflow.CurrentNode, error)
-		CompleteCurrentNode(context.Context, workflowstore.CurrentNodeCompletionRequest) (workflowstore.CurrentNodeCompletionResult, error)
 		PrepareCurrentNodeCompletion(context.Context, workflowstore.CurrentNodeCompletionRequest) (workflowstore.PreparedCurrentNodeCompletion, error)
 		PublishCurrentNodeCompletion(context.Context, workflow.TaskID, workflowstore.CurrentNodeCompletionResult) error
 		ValidateCurrentNodeSessionBinding(context.Context, runtimeids.SessionID, workflow.CurrentNodeReference) error
@@ -150,14 +149,13 @@ func NewCurrentNodeController(
 		InterruptedExecutableCurrentNodes(context.Context, workflow.TaskID) ([]workflow.CurrentNode, error)
 		AdmitCurrentNode(context.Context, workflow.CurrentNodeReference) error
 		PendingApproval(context.Context, workflow.ApprovalID) (workflow.PendingApproval, error)
-		ApplyPendingApproval(context.Context, workflow.ApprovalID) (workflowstore.PendingApprovalApplyResult, error)
-		ApplyManualMove(context.Context, workflowstore.ManualMovePreparation, *workflowstore.ExecutionTargetCandidate) (workflowstore.ManualMoveResult, error)
+		PreparePendingApprovalApply(context.Context, workflow.ApprovalID) (workflowstore.PreparedCurrentNodeMutation, error)
+		PrepareManualMoveApply(context.Context, workflowstore.ManualMovePreparation, *workflowstore.ExecutionTargetCandidate) (workflowstore.PreparedCurrentNodeMutation, error)
 		InterruptAdmittedCurrentNode(context.Context, workflow.CurrentNodeReference, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) error
 		InterruptCurrentNode(context.Context, workflow.CurrentNodeReference, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) error
 		InterruptCurrentNodeSchedulingSet(context.Context, workflow.TaskID, []workflowstore.CurrentNodeSchedulingTarget, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) (workflowstore.CurrentNodeSchedulingInterruptionResult, error)
 		RecoverExecutableCurrentNodes(context.Context, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) ([]workflow.CurrentNodeReference, error)
 		ResolveIdleExecutableCurrentNode(context.Context, workflowstore.IdleCurrentNodeSelector) (workflow.CurrentNode, error)
-		CompleteCurrentNode(context.Context, workflowstore.CurrentNodeCompletionRequest) (workflowstore.CurrentNodeCompletionResult, error)
 		PrepareCurrentNodeCompletion(context.Context, workflowstore.CurrentNodeCompletionRequest) (workflowstore.PreparedCurrentNodeCompletion, error)
 		PublishCurrentNodeCompletion(context.Context, workflow.TaskID, workflowstore.CurrentNodeCompletionResult) error
 		ValidateCurrentNodeSessionBinding(context.Context, runtimeids.SessionID, workflow.CurrentNodeReference) error
@@ -420,19 +418,6 @@ func (c *CurrentNodeController) completeLiveCurrentNode(ctx context.Context, req
 				c.mu.Unlock()
 				return errors.Join(stageErr, prepared.Rollback())
 			}
-			if err := c.validatePreparedSuccessorRunsLocked(exact.id, successorRuns); err != nil {
-				c.discardStagedRunsLocked(successorRuns)
-				c.mu.Unlock()
-				return errors.Join(err, prepared.Rollback())
-			}
-			if err := prepared.Commit(); err != nil {
-				c.discardStagedRunsLocked(successorRuns)
-				c.mu.Unlock()
-				return err
-			}
-			exact.successors = append([]currentNodeRunID(nil), successorRuns...)
-			exact.completionSourceRetained = completed.PendingApproval != nil
-			exact.postTurn = postTurn
 			successorPhase := currentNodeRunHeld
 			if agentCompletion && completed.PostCompletionEligible {
 				exact.completion = currentNodeRunCompletionAgentPostTurnPending
@@ -442,12 +427,21 @@ func (c *CurrentNodeController) completeLiveCurrentNode(ctx context.Context, req
 				exact.completion = currentNodeRunCompletionScriptSucceeded
 				successorPhase = currentNodeRunQueued
 			}
-			c.installPreparedSuccessorRunsLocked(
+			sourceRetained := completed.PendingApproval != nil
+			if err := c.commitSuccessorRunsLocked(
+				prepared,
 				exact.id,
 				successorRuns,
-				exact.completionSourceRetained,
+				sourceRetained,
 				successorPhase,
-			)
+			); err != nil {
+				exact.completion = currentNodeRunCompletionNone
+				c.mu.Unlock()
+				return err
+			}
+			exact.successors = append([]currentNodeRunID(nil), successorRuns...)
+			exact.completionSourceRetained = sourceRetained
+			exact.postTurn = postTurn
 			c.mu.Unlock()
 			if err := c.store.PublishCurrentNodeCompletion(ctx, exact.reference.TaskID, completed); err != nil {
 				slog.Warn(
@@ -619,7 +613,7 @@ func (c *CurrentNodeController) CompleteIdleCurrentNode(
 		if err != nil {
 			return workflowstore.CurrentNodeCompletionResult{}, err
 		}
-		completed, completionErr := c.store.CompleteCurrentNode(ctx, workflowstore.CurrentNodeCompletionRequest{
+		prepared, completionErr := c.store.PrepareCurrentNodeCompletion(ctx, workflowstore.CurrentNodeCompletionRequest{
 			Source:       source.Reference,
 			TransitionID: transitionID,
 			OutputValues: outputValues,
@@ -628,20 +622,38 @@ func (c *CurrentNodeController) CompleteIdleCurrentNode(
 		if completionErr != nil {
 			return workflowstore.CurrentNodeCompletionResult{}, completionErr
 		}
+		completed := prepared.Result()
 		intents, intentErr := currentNodeAutomaticIntents(completed.AutomaticIntents)
 		if intentErr != nil {
-			return workflowstore.CurrentNodeCompletionResult{}, intentErr
+			return workflowstore.CurrentNodeCompletionResult{}, errors.Join(intentErr, prepared.Rollback())
 		}
-		starts, startErr := c.steerAndWaitStarts(ctx, automaticQueuedStarts(intents), recoverCommittedCurrentNodeStarts)
-		if startErr != nil {
-			return workflowstore.CurrentNodeCompletionResult{}, startErr
-		}
+		starts := automaticQueuedStarts(intents)
+		starts, pending := pendingCurrentNodeAssignmentStarts(starts)
 		c.mu.Lock()
-		defer c.mu.Unlock()
-		for _, start := range starts {
-			if err := c.queueAutomaticStartLocked(start); err != nil {
-				return workflowstore.CurrentNodeCompletionResult{}, err
-			}
+		if err := c.ensureTaskAvailableLocked(source.Reference.TaskID); err != nil {
+			c.mu.Unlock()
+			return workflowstore.CurrentNodeCompletionResult{}, errors.Join(err, prepared.Rollback())
+		}
+		runIDs, startErr := c.stageRunsLocked(starts)
+		if startErr != nil {
+			c.mu.Unlock()
+			return workflowstore.CurrentNodeCompletionResult{}, errors.Join(startErr, prepared.Rollback())
+		}
+		if err := c.commitStagedRunsLocked(prepared, runIDs); err != nil {
+			c.mu.Unlock()
+			return workflowstore.CurrentNodeCompletionResult{}, err
+		}
+		c.mu.Unlock()
+		if err := c.store.PublishCurrentNodeCompletion(ctx, source.Reference.TaskID, completed); err != nil {
+			slog.Warn(
+				"publish forced workflow Current-Node completion event failed",
+				"task_id", source.Reference.TaskID,
+				"node_id", source.Reference.NodeID,
+				"error", err,
+			)
+		}
+		if err := c.resolvePreparedCurrentNodeStarts(ctx, starts, pending, runIDs, true); err != nil {
+			return completed, err
 		}
 		return completed, nil
 	})

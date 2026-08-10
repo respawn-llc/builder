@@ -105,98 +105,122 @@ func (s *Store) IsCurrentNodeExecutionEligible(ctx context.Context, reference wo
 }
 
 func (s *Store) ApplyPendingApproval(ctx context.Context, approvalID workflow.ApprovalID) (PendingApprovalApplyResult, error) {
-	normalizedID, err := normalizeApprovalID(approvalID)
+	prepared, err := s.PreparePendingApprovalApply(ctx, approvalID)
 	if err != nil {
 		return PendingApprovalApplyResult{}, err
+	}
+	result := prepared.Result()
+	if result.PendingApprovalApply == nil {
+		_ = prepared.Rollback()
+		return PendingApprovalApplyResult{}, errors.New("prepared pending Approval apply result is absent")
+	}
+	applied := *result.PendingApprovalApply
+	if err := prepared.Commit(); err != nil {
+		return PendingApprovalApplyResult{}, err
+	}
+	return applied, nil
+}
+
+func (s *Store) PreparePendingApprovalApply(
+	ctx context.Context,
+	approvalID workflow.ApprovalID,
+) (PreparedCurrentNodeMutation, error) {
+	normalizedID, err := normalizeApprovalID(approvalID)
+	if err != nil {
+		return nil, err
 	}
 	select {
 	case s.approvalGate <- struct{}{}:
 		defer func() { <-s.approvalGate }()
 	case <-ctx.Done():
-		return PendingApprovalApplyResult{}, ctx.Err()
+		return nil, ctx.Err()
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	approval, err := s.PendingApproval(ctx, normalizedID)
 	if err != nil {
-		return PendingApprovalApplyResult{}, err
+		return nil, err
 	}
-	defer func() { _ = tx.Rollback() }()
-	q := s.queries.WithTx(tx)
-	approval, err := pendingApprovalByID(ctx, q, normalizedID)
-	if err != nil {
-		return PendingApprovalApplyResult{}, err
-	}
-	approvalAttention, found, err := pendingApprovalAttentionProjection(ctx, q, normalizedID)
-	if err != nil {
-		return PendingApprovalApplyResult{}, err
-	}
-	if !found {
-		return PendingApprovalApplyResult{}, fmt.Errorf("pending approval %q disappeared during attention resolution", normalizedID)
-	}
-	if _, err := currentNodeForReference(ctx, q, approval.Source); err != nil {
-		return PendingApprovalApplyResult{}, err
-	}
-	targets := make([]workflow.CurrentNode, 0, len(approval.Branches))
-	for _, branch := range approval.Branches {
-		targets = append(targets, branch.Target.CurrentNode)
-	}
-	if len(targets) == 0 {
-		return PendingApprovalApplyResult{}, errors.New("pending approval has no target branches")
-	}
-	var fanoutTargets []currentNodeFanoutTarget
-	if len(targets) == 1 {
-		if err := validatePendingApprovalSequentialTarget(approval.Source, targets[0].Reference); err != nil {
-			return PendingApprovalApplyResult{}, err
-		}
-	} else {
-		fanoutTargets, err = pendingApprovalFanoutTargets(approval.Source, approval.Branches)
+	return s.prepareCurrentNodeMutation(ctx, approval.Source.TaskID, func(ctx context.Context, q *sqlitegen.Queries) (PreparedCurrentNodeMutationResult, error) {
+		approval, err := pendingApprovalByID(ctx, q, normalizedID)
 		if err != nil {
-			return PendingApprovalApplyResult{}, err
+			return PreparedCurrentNodeMutationResult{}, err
 		}
-	}
-	removedApproval, err := q.DeleteTaskPendingApproval(ctx, normalizedID.String())
-	if err != nil {
-		return PendingApprovalApplyResult{}, err
-	}
-	if removedApproval != 1 {
-		return PendingApprovalApplyResult{}, sql.ErrNoRows
-	}
-	if len(targets) == 1 {
-		removedCurrentNode, err := deleteTaskCurrentNode(ctx, q, approval.Source)
+		approvalAttention, found, err := pendingApprovalAttentionProjection(ctx, q, normalizedID)
 		if err != nil {
-			return PendingApprovalApplyResult{}, err
+			return PreparedCurrentNodeMutationResult{}, err
 		}
-		if removedCurrentNode != 1 {
-			return PendingApprovalApplyResult{}, sql.ErrNoRows
+		if !found {
+			return PreparedCurrentNodeMutationResult{}, fmt.Errorf("pending approval %q disappeared during attention resolution", normalizedID)
 		}
-		if err := insertTaskCurrentNodeWithKind(ctx, q, targets[0], approval.Branches[0].Target.NodeKind); err != nil {
-			return PendingApprovalApplyResult{}, err
+		if _, err := currentNodeForReference(ctx, q, approval.Source); err != nil {
+			return PreparedCurrentNodeMutationResult{}, err
 		}
-	} else if err := replaceCurrentNodeWithFanout(ctx, q, approval.Source, fanoutTargets); err != nil {
-		return PendingApprovalApplyResult{}, err
-	}
-	if err := touchTaskUpdatedAt(ctx, q, string(approval.Source.TaskID), s.now().UnixMilli()); err != nil {
-		return PendingApprovalApplyResult{}, err
-	}
-	if err := tx.Commit(); err != nil {
-		return PendingApprovalApplyResult{}, err
-	}
-	result := PendingApprovalApplyResult{
-		Mutation: workflow.CurrentNodeMutationResult{
-			Removed: []workflow.CurrentNodeReference{approval.Source},
-			Created: targets,
-		},
-		ResolvedApproval: approval,
-		Handoff:          pendingApprovalHandoff(approval),
-		TaskAttentionResolution: TaskAttentionResolution{
-			Approvals: []ApprovalAttentionProjection{approvalAttention},
-		},
-	}
-	for _, target := range targets {
-		if target.Scheduling != nil {
-			result.AutomaticIntents = append(result.AutomaticIntents, target.Reference)
+		targets := make([]workflow.CurrentNode, 0, len(approval.Branches))
+		for _, branch := range approval.Branches {
+			targets = append(targets, branch.Target.CurrentNode)
 		}
-	}
-	return result, nil
+		if len(targets) == 0 {
+			return PreparedCurrentNodeMutationResult{}, errors.New("pending approval has no target branches")
+		}
+		var fanoutTargets []currentNodeFanoutTarget
+		if len(targets) == 1 {
+			if err := validatePendingApprovalSequentialTarget(approval.Source, targets[0].Reference); err != nil {
+				return PreparedCurrentNodeMutationResult{}, err
+			}
+		} else {
+			fanoutTargets, err = pendingApprovalFanoutTargets(approval.Source, approval.Branches)
+			if err != nil {
+				return PreparedCurrentNodeMutationResult{}, err
+			}
+		}
+		removedApproval, err := q.DeleteTaskPendingApproval(ctx, normalizedID.String())
+		if err != nil {
+			return PreparedCurrentNodeMutationResult{}, err
+		}
+		if removedApproval != 1 {
+			return PreparedCurrentNodeMutationResult{}, sql.ErrNoRows
+		}
+		if len(targets) == 1 {
+			removedCurrentNode, err := deleteTaskCurrentNode(ctx, q, approval.Source)
+			if err != nil {
+				return PreparedCurrentNodeMutationResult{}, err
+			}
+			if removedCurrentNode != 1 {
+				return PreparedCurrentNodeMutationResult{}, sql.ErrNoRows
+			}
+			if err := insertTaskCurrentNodeWithKind(ctx, q, targets[0], approval.Branches[0].Target.NodeKind); err != nil {
+				return PreparedCurrentNodeMutationResult{}, err
+			}
+		} else if err := replaceCurrentNodeWithFanout(ctx, q, approval.Source, fanoutTargets); err != nil {
+			return PreparedCurrentNodeMutationResult{}, err
+		}
+		if err := touchTaskUpdatedAt(ctx, q, string(approval.Source.TaskID), s.now().UnixMilli()); err != nil {
+			return PreparedCurrentNodeMutationResult{}, err
+		}
+		applied := PendingApprovalApplyResult{
+			Mutation: workflow.CurrentNodeMutationResult{
+				Removed: []workflow.CurrentNodeReference{approval.Source},
+				Created: targets,
+			},
+			ResolvedApproval: approval,
+			Handoff:          pendingApprovalHandoff(approval),
+			TaskAttentionResolution: TaskAttentionResolution{
+				Approvals: []ApprovalAttentionProjection{approvalAttention},
+			},
+		}
+		var executable []workflow.CurrentNode
+		for _, target := range targets {
+			if target.Scheduling != nil {
+				applied.AutomaticIntents = append(applied.AutomaticIntents, target.Reference)
+				executable = append(executable, target)
+			}
+		}
+		return PreparedCurrentNodeMutationResult{
+			Mutation:                      applied.Mutation,
+			CreatedExecutableCurrentNodes: executable,
+			TaskAttentionResolution:       applied.TaskAttentionResolution,
+			PendingApprovalApply:          &applied,
+		}, nil
+	})
 }
 
 func pendingApprovalByID(

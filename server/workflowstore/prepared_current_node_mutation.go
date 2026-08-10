@@ -18,6 +18,8 @@ type PreparedCurrentNodeMutationResult struct {
 	Mutation                      workflow.CurrentNodeMutationResult
 	CreatedExecutableCurrentNodes []workflow.CurrentNode
 	TaskAttentionResolution       TaskAttentionResolution
+	PendingApprovalApply          *PendingApprovalApplyResult
+	ManualMove                    *ManualMoveResult
 }
 
 // PreparedCurrentNodeMutation owns one uncommitted Current-Node transaction.
@@ -190,17 +192,64 @@ func (m *preparedCurrentNodeCompletion) restoreAndClose() {
 }
 
 func clonePreparedCurrentNodeMutationResult(result PreparedCurrentNodeMutationResult) PreparedCurrentNodeMutationResult {
-	return PreparedCurrentNodeMutationResult{
+	cloned := PreparedCurrentNodeMutationResult{
 		Mutation:                      cloneCurrentNodeMutationResult(result.Mutation),
 		CreatedExecutableCurrentNodes: cloneCurrentNodes(result.CreatedExecutableCurrentNodes),
-		TaskAttentionResolution: TaskAttentionResolution{
-			Approvals: append([]ApprovalAttentionProjection(nil), result.TaskAttentionResolution.Approvals...),
-			InterruptedCurrentNodes: append(
-				[]InterruptedCurrentNodeAttentionProjection(nil),
-				result.TaskAttentionResolution.InterruptedCurrentNodes...,
-			),
-		},
+		TaskAttentionResolution:       cloneTaskAttentionResolution(result.TaskAttentionResolution),
 	}
+	if result.PendingApprovalApply != nil {
+		approval := clonePendingApprovalApplyResult(*result.PendingApprovalApply)
+		cloned.PendingApprovalApply = &approval
+	}
+	if result.ManualMove != nil {
+		move := cloneManualMoveResult(*result.ManualMove)
+		cloned.ManualMove = &move
+	}
+	return cloned
+}
+
+func clonePendingApprovalApplyResult(result PendingApprovalApplyResult) PendingApprovalApplyResult {
+	cloned := result
+	cloned.Mutation = cloneCurrentNodeMutationResult(result.Mutation)
+	cloned.ResolvedApproval = clonePendingApproval(result.ResolvedApproval)
+	cloned.AutomaticIntents = append([]workflow.CurrentNodeReference(nil), result.AutomaticIntents...)
+	cloned.TaskAttentionResolution = cloneTaskAttentionResolution(result.TaskAttentionResolution)
+	return cloned
+}
+
+func cloneManualMoveResult(result ManualMoveResult) ManualMoveResult {
+	cloned := result
+	cloned.CurrentNodes = cloneCurrentNodes(result.CurrentNodes)
+	cloned.Mutation = cloneCurrentNodeMutationResult(result.Mutation)
+	cloned.TaskAttentionResolution = cloneTaskAttentionResolution(result.TaskAttentionResolution)
+	return cloned
+}
+
+func cloneTaskAttentionResolution(result TaskAttentionResolution) TaskAttentionResolution {
+	return TaskAttentionResolution{
+		Approvals: append([]ApprovalAttentionProjection(nil), result.Approvals...),
+		InterruptedCurrentNodes: append(
+			[]InterruptedCurrentNodeAttentionProjection(nil),
+			result.InterruptedCurrentNodes...,
+		),
+	}
+}
+
+func clonePendingApproval(approval workflow.PendingApproval) workflow.PendingApproval {
+	cloned := approval
+	cloned.SourceSessionID = clonePendingApprovalSessionID(approval.SourceSessionID)
+	cloned.OutputValues = cloneCurrentNodeOutputValues(approval.OutputValues)
+	cloned.Branches = make([]workflow.PendingApprovalBranch, 0, len(approval.Branches))
+	for _, branch := range approval.Branches {
+		clonedBranch := branch
+		clonedBranch.Target.CurrentNode = cloneCurrentNodes([]workflow.CurrentNode{branch.Target.CurrentNode})[0]
+		clonedBranch.EffectiveEdge = branch.EffectiveEdge.Canonical()
+		clonedBranch.ContextSourceResolution.SessionID = clonePendingApprovalSessionID(
+			branch.ContextSourceResolution.SessionID,
+		)
+		cloned.Branches = append(cloned.Branches, clonedBranch)
+	}
+	return cloned
 }
 
 func cloneCurrentNodeCompletionResult(result CurrentNodeCompletionResult) CurrentNodeCompletionResult {
@@ -208,19 +257,7 @@ func cloneCurrentNodeCompletionResult(result CurrentNodeCompletionResult) Curren
 	cloned.Mutation = cloneCurrentNodeMutationResult(result.Mutation)
 	cloned.AutomaticIntents = append([]CurrentNodeAutomaticIntent(nil), result.AutomaticIntents...)
 	if result.PendingApproval != nil {
-		approval := *result.PendingApproval
-		approval.SourceSessionID = clonePendingApprovalSessionID(result.PendingApproval.SourceSessionID)
-		approval.OutputValues = cloneCurrentNodeOutputValues(result.PendingApproval.OutputValues)
-		approval.Branches = make([]workflow.PendingApprovalBranch, 0, len(result.PendingApproval.Branches))
-		for _, branch := range result.PendingApproval.Branches {
-			clonedBranch := branch
-			clonedBranch.Target.CurrentNode = cloneCurrentNodes([]workflow.CurrentNode{branch.Target.CurrentNode})[0]
-			clonedBranch.EffectiveEdge = branch.EffectiveEdge.Canonical()
-			clonedBranch.ContextSourceResolution.SessionID = clonePendingApprovalSessionID(
-				branch.ContextSourceResolution.SessionID,
-			)
-			approval.Branches = append(approval.Branches, clonedBranch)
-		}
+		approval := clonePendingApproval(*result.PendingApproval)
 		cloned.PendingApproval = &approval
 	}
 	if result.SessionReuse != nil {

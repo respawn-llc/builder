@@ -218,6 +218,210 @@ func TestPreparedCurrentNodeCompletionRollbackLeavesSourceCurrent(t *testing.T) 
 	}
 }
 
+func TestPreparedPendingApprovalRollbackKeepsFrozenApprovalAndSource(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
+	requireApprovalOnWorkflowEdge(t, ctx, store, workflowID, "next")
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	completed, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       source.Reference,
+		TransitionID: "next",
+		OutputValues: map[string]string{"prior_summary": "prepared approval"},
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode: %v", err)
+	}
+	if completed.PendingApproval == nil {
+		t.Fatal("completion did not create a pending Approval")
+	}
+
+	prepared, err := store.PreparePendingApprovalApply(ctx, completed.PendingApproval.ID)
+	if err != nil {
+		t.Fatalf("PreparePendingApprovalApply: %v", err)
+	}
+	result := prepared.Result()
+	if result.PendingApprovalApply == nil ||
+		len(result.CreatedExecutableCurrentNodes) != 1 {
+		t.Fatalf("prepared Approval result = %+v, want one executable target", result)
+	}
+	if err := prepared.Rollback(); err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+
+	currentNodes, err := store.ListCurrentNodes(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListCurrentNodes: %v", err)
+	}
+	approvals, err := store.ListPendingApprovals(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListPendingApprovals: %v", err)
+	}
+	if len(currentNodes) != 1 || !currentNodes[0].Reference.Equal(source.Reference) ||
+		len(approvals) != 1 || approvals[0].ID != completed.PendingApproval.ID {
+		t.Fatalf("rollback state: current=%+v approvals=%+v, want frozen source Approval", currentNodes, approvals)
+	}
+}
+
+func TestPreparedExecutableManualMoveRollbackKeepsCurrentNodeAndExecutionTarget(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	definition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	target := nodeByKey(t, definition, "implement")
+	move, err := store.PrepareManualMove(ctx, ManualMoveRequest{
+		TaskID:       task.ID,
+		TargetNodeID: workflow.NodeIDOf(target),
+		Values:       map[workflow.ModelKey]map[string]string{"plan": {"prior_summary": "manual plan"}},
+	})
+	if err != nil {
+		t.Fatalf("PrepareManualMove: %v", err)
+	}
+	prepared, err := store.PrepareManualMoveApply(ctx, move, &ExecutionTargetCandidate{
+		Snapshot: ExecutionTargetSnapshot{
+			Mode:       workflow.ExecutionTargetModeNone,
+			Provenance: ExecutionTargetProvenanceResolved,
+		},
+		Root: ExecutionRoot{
+			SourceWorkspaceID:   binding.WorkspaceID,
+			SourceWorkspaceRoot: binding.CanonicalRoot,
+		},
+	})
+	if err != nil {
+		t.Fatalf("PrepareManualMoveApply: %v", err)
+	}
+	result := prepared.Result()
+	if result.ManualMove == nil ||
+		result.ManualMove.Outcome != ManualMoveResultOutcomeApplied ||
+		len(result.CreatedExecutableCurrentNodes) != 1 {
+		t.Fatalf("prepared Manual Move result = %+v, want one executable target", result)
+	}
+	if err := prepared.Rollback(); err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+
+	currentNodes, err := store.ListCurrentNodes(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListCurrentNodes: %v", err)
+	}
+	targetContext, err := store.GetTaskExecutionTargetContext(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetContext: %v", err)
+	}
+	if len(currentNodes) != 1 || !currentNodes[0].Reference.Equal(source.Reference) ||
+		targetContext.Task.ExecutionTarget != nil {
+		t.Fatalf("rollback state: current=%+v target=%+v, want unchanged source and unlocked target", currentNodes, targetContext.Task.ExecutionTarget)
+	}
+}
+
+func TestExecutableManualMoveTargetSelectionFailureKeepsCurrentNodeAndExecutionTarget(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	definition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	target := nodeByKey(t, definition, "implement")
+	move, err := store.PrepareManualMove(ctx, ManualMoveRequest{
+		TaskID:       task.ID,
+		TargetNodeID: workflow.NodeIDOf(target),
+		Values:       map[workflow.ModelKey]map[string]string{"plan": {"prior_summary": "manual plan"}},
+	})
+	if err != nil {
+		t.Fatalf("PrepareManualMove: %v", err)
+	}
+	if _, err := store.PrepareManualMoveApply(ctx, move, nil); !errors.Is(err, ErrExecutionTargetRequired) {
+		t.Fatalf("PrepareManualMoveApply error = %v, want %v", err, ErrExecutionTargetRequired)
+	}
+
+	currentNodes, err := store.ListCurrentNodes(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListCurrentNodes: %v", err)
+	}
+	targetContext, err := store.GetTaskExecutionTargetContext(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetContext: %v", err)
+	}
+	if len(currentNodes) != 1 || !currentNodes[0].Reference.Equal(source.Reference) ||
+		targetContext.Task.ExecutionTarget != nil {
+		t.Fatalf("selection failure state: current=%+v target=%+v, want unchanged source and unlocked target", currentNodes, targetContext.Task.ExecutionTarget)
+	}
+}
+
+func TestPreparedNoOpManualMoveCommitsWithoutCreatingExecutableWork(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	move, err := store.PrepareManualMove(ctx, ManualMoveRequest{
+		TaskID:       task.ID,
+		TargetNodeID: source.Reference.NodeID,
+	})
+	if err != nil {
+		t.Fatalf("PrepareManualMove: %v", err)
+	}
+	prepared, err := store.PrepareManualMoveApply(ctx, move, nil)
+	if err != nil {
+		t.Fatalf("PrepareManualMoveApply: %v", err)
+	}
+	result := prepared.Result()
+	if result.ManualMove == nil ||
+		result.ManualMove.Outcome != ManualMoveResultOutcomeNoOp ||
+		len(result.CreatedExecutableCurrentNodes) != 0 {
+		t.Fatalf("prepared no-op Manual Move = %+v", result)
+	}
+	if err := prepared.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	currentNodes, err := store.ListCurrentNodes(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListCurrentNodes: %v", err)
+	}
+	if len(currentNodes) != 1 || !currentNodes[0].Reference.Equal(source.Reference) {
+		t.Fatalf("Current Nodes after no-op = %+v, want source", currentNodes)
+	}
+}
+
+func TestPreparedTerminalApprovalCreatesNoExecutableWork(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	requireApprovalOnWorkflowEdge(t, ctx, store, workflowID, "done")
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	completed, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source: source.Reference,
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode: %v", err)
+	}
+	if completed.PendingApproval == nil {
+		t.Fatal("completion did not create terminal Approval")
+	}
+	prepared, err := store.PreparePendingApprovalApply(ctx, completed.PendingApproval.ID)
+	if err != nil {
+		t.Fatalf("PreparePendingApprovalApply: %v", err)
+	}
+	result := prepared.Result()
+	if result.PendingApprovalApply == nil ||
+		len(result.PendingApprovalApply.Mutation.Created) != 1 ||
+		result.PendingApprovalApply.Mutation.Created[0].Scheduling != nil ||
+		len(result.CreatedExecutableCurrentNodes) != 0 {
+		t.Fatalf("prepared terminal Approval = %+v, want non-executable target only", result)
+	}
+	if err := prepared.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+}
+
 func preparedResumeBranchFixture(t *testing.T) (context.Context, *Store, workflow.TaskID, []workflow.CurrentNode) {
 	t.Helper()
 	ctx, store, binding := newTestStoreContext(t)

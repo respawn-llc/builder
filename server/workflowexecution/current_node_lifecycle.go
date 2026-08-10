@@ -126,17 +126,10 @@ func (c *CurrentNodeController) StartTask(
 			c.mu.Unlock()
 			return workflowstore.StartTaskResult{}, errors.Join(err, prepared.Rollback())
 		}
-		if err := c.validateStagedRunsLocked(runIDs); err != nil {
-			c.discardStagedRunsLocked(runIDs)
-			c.mu.Unlock()
-			return workflowstore.StartTaskResult{}, errors.Join(err, prepared.Rollback())
-		}
-		if err := prepared.Commit(); err != nil {
-			c.discardStagedRunsLocked(runIDs)
+		if err := c.commitStagedRunsLocked(prepared, runIDs); err != nil {
 			c.mu.Unlock()
 			return workflowstore.StartTaskResult{}, err
 		}
-		c.installStagedRunsLocked(runIDs)
 		c.mu.Unlock()
 		c.wakeAdmissionWorker()
 		return workflowstore.StartTaskResult{Mutation: result.Mutation}, nil
@@ -222,17 +215,10 @@ func (c *CurrentNodeController) resumeTask(
 			c.mu.Unlock()
 			return nil, errors.Join(err, prepared.Rollback())
 		}
-		if err := c.validateStagedRunsLocked(runIDs); err != nil {
-			c.discardStagedRunsLocked(runIDs)
-			c.mu.Unlock()
-			return nil, errors.Join(err, prepared.Rollback())
-		}
-		if err := prepared.Commit(); err != nil {
-			c.discardStagedRunsLocked(runIDs)
+		if err := c.commitStagedRunsLocked(prepared, runIDs); err != nil {
 			c.mu.Unlock()
 			return nil, err
 		}
-		c.installStagedRunsLocked(runIDs)
 		c.mu.Unlock()
 		c.wakeAdmissionWorker()
 		resolution = result.TaskAttentionResolution
@@ -309,32 +295,54 @@ func (c *CurrentNodeController) ApplyPendingApproval(
 		}
 		c.mu.Unlock()
 
-		apply := func() (workflowstore.PendingApprovalApplyResult, []currentNodeQueuedStart, error) {
-			applied, err := c.store.ApplyPendingApproval(ctx, approvalID)
+		prepare := func() (
+			workflowstore.PreparedCurrentNodeMutation,
+			workflowstore.PendingApprovalApplyResult,
+			[]currentNodeQueuedStart,
+			[]*pendingCurrentNodeAssignmentSteer,
+			error,
+		) {
+			prepared, err := c.store.PreparePendingApprovalApply(ctx, approvalID)
 			if err != nil {
-				return workflowstore.PendingApprovalApplyResult{}, nil, err
+				return nil, workflowstore.PendingApprovalApplyResult{}, nil, nil, err
 			}
-			starts, err := currentNodeExplicitStarts(applied.Mutation.Created)
+			result := prepared.Result()
+			if result.PendingApprovalApply == nil {
+				return nil, workflowstore.PendingApprovalApplyResult{}, nil, nil, errors.Join(
+					errors.New("prepared pending Approval apply result is absent"),
+					prepared.Rollback(),
+				)
+			}
+			starts, err := currentNodeExplicitStarts(result.CreatedExecutableCurrentNodes)
 			if err != nil {
-				return workflowstore.PendingApprovalApplyResult{}, nil, err
+				return nil, workflowstore.PendingApprovalApplyResult{}, nil, nil, errors.Join(err, prepared.Rollback())
 			}
-			return applied, starts, nil
+			starts, pending := pendingCurrentNodeAssignmentStarts(starts)
+			return prepared, *result.PendingApprovalApply, starts, pending, nil
 		}
 		if !sourceLive {
-			applied, starts, err := apply()
-			if err != nil {
-				return workflowstore.PendingApprovalApplyResult{}, err
-			}
-			starts, err = c.steerAndWaitStarts(ctx, starts, recoverCommittedCurrentNodeStarts)
+			prepared, applied, starts, pending, err := prepare()
 			if err != nil {
 				return workflowstore.PendingApprovalApplyResult{}, err
 			}
 			c.mu.Lock()
-			defer c.mu.Unlock()
-			for _, start := range starts {
-				if err := c.queueExplicitStartLocked(start); err != nil {
-					return workflowstore.PendingApprovalApplyResult{}, err
-				}
+			if err := c.ensureTaskAvailableLocked(approval.Source.TaskID); err != nil {
+				c.mu.Unlock()
+				return workflowstore.PendingApprovalApplyResult{}, errors.Join(err, prepared.Rollback())
+			}
+			runIDs, err := c.stageRunsLocked(starts)
+			if err != nil {
+				c.mu.Unlock()
+				return workflowstore.PendingApprovalApplyResult{}, errors.Join(err, prepared.Rollback())
+			}
+			if err := c.commitStagedRunsLocked(prepared, runIDs); err != nil {
+				c.mu.Unlock()
+				return workflowstore.PendingApprovalApplyResult{}, err
+			}
+			c.mu.Unlock()
+			c.finalizeTaskAttentionResolution(applied.TaskAttentionResolution)
+			if err := c.resolvePreparedCurrentNodeStarts(ctx, starts, pending, runIDs, true); err != nil {
+				return applied, err
 			}
 			return applied, nil
 		}
@@ -347,14 +355,29 @@ func (c *CurrentNodeController) ApplyPendingApproval(
 		var pending []*pendingCurrentNodeAssignmentSteer
 		var successorRunIDs []currentNodeRunID
 		err = c.authority.WithExactExecutions([]sessionruntime.ExecutionHandle{handle}, func() error {
-			var applyErr error
-			applied, starts, applyErr = apply()
+			prepared, preparedApplied, preparedStarts, preparedPending, applyErr := prepare()
 			if applyErr != nil {
 				return applyErr
 			}
-			starts, pending = pendingCurrentNodeAssignmentStarts(starts)
+			applied = preparedApplied
+			starts = preparedStarts
+			pending = preparedPending
 			c.mu.Lock()
-			runIDs, stageErr := c.stageSuccessorRunsLocked(starts, sourceRun.id, currentNodeRunHeld)
+			current, stillLive := c.runByScopeLocked(sourceScopeID)
+			if !stillLive || current.id != sourceRun.id || current.stopping() {
+				c.mu.Unlock()
+				return errors.Join(sessionruntime.ErrExecutionNoLongerLive, prepared.Rollback())
+			}
+			runIDs, stageErr := c.prepareSuccessorRunsLocked(starts, sourceRun.id)
+			if stageErr != nil {
+				c.mu.Unlock()
+				return errors.Join(stageErr, prepared.Rollback())
+			}
+			phase := currentNodeRunHeld
+			if sourceRun.completion == currentNodeRunCompletionScriptSucceeded {
+				phase = currentNodeRunQueued
+			}
+			stageErr = c.commitSuccessorRunsLocked(prepared, sourceRun.id, runIDs, false, phase)
 			if stageErr == nil {
 				successorRunIDs = append([]currentNodeRunID(nil), runIDs...)
 				sourceRun.successors = append(sourceRun.successors, runIDs...)
@@ -365,16 +388,15 @@ func (c *CurrentNodeController) ApplyPendingApproval(
 		if err != nil {
 			return workflowstore.PendingApprovalApplyResult{}, err
 		}
-		if err := c.resolvePendingCurrentNodeAssignmentSteers(ctx, starts, pending); err != nil {
-			return workflowstore.PendingApprovalApplyResult{}, err
-		}
-		if sourceRun.completion == currentNodeRunCompletionScriptSucceeded {
-			c.mu.Lock()
-			for index, id := range successorRunIDs {
-				c.queueRunLocked(id, starts[index].assignmentSteer)
-			}
-			c.mu.Unlock()
-			c.wakeAdmissionWorker()
+		c.finalizeTaskAttentionResolution(applied.TaskAttentionResolution)
+		if err := c.resolvePreparedCurrentNodeStarts(
+			ctx,
+			starts,
+			pending,
+			successorRunIDs,
+			sourceRun.completion == currentNodeRunCompletionScriptSucceeded,
+		); err != nil {
+			return applied, err
 		}
 		return applied, nil
 	})
@@ -396,27 +418,41 @@ func (c *CurrentNodeController) ApplyManualMove(
 			return workflowstore.ManualMoveResult{}, err
 		}
 		c.mu.Unlock()
-		moved, err := c.store.ApplyManualMove(ctx, prepared, candidate)
+		mutation, err := c.store.PrepareManualMoveApply(ctx, prepared, candidate)
 		if err != nil {
 			return workflowstore.ManualMoveResult{}, err
 		}
-		if moved.Outcome == workflowstore.ManualMoveResultOutcomeNoOp {
-			return moved, nil
+		result := mutation.Result()
+		if result.ManualMove == nil {
+			return workflowstore.ManualMoveResult{}, errors.Join(
+				errors.New("prepared Manual Move result is absent"),
+				mutation.Rollback(),
+			)
 		}
-		starts, err := currentNodeExplicitStarts(moved.Mutation.Created)
+		moved := *result.ManualMove
+		starts, err := currentNodeExplicitStarts(result.CreatedExecutableCurrentNodes)
 		if err != nil {
-			return moved, err
+			return workflowstore.ManualMoveResult{}, errors.Join(err, mutation.Rollback())
 		}
-		starts, err = c.steerAndWaitStarts(ctx, starts, recoverAllCurrentNodeStarts)
-		if err != nil {
-			return moved, err
-		}
+		starts, pending := pendingCurrentNodeAssignmentStarts(starts)
 		c.mu.Lock()
-		defer c.mu.Unlock()
-		for _, start := range starts {
-			if err := c.queueExplicitStartLocked(start); err != nil {
-				return moved, err
-			}
+		if err := c.ensureTaskAvailableLocked(taskID); err != nil {
+			c.mu.Unlock()
+			return workflowstore.ManualMoveResult{}, errors.Join(err, mutation.Rollback())
+		}
+		runIDs, err := c.stageRunsLocked(starts)
+		if err != nil {
+			c.mu.Unlock()
+			return workflowstore.ManualMoveResult{}, errors.Join(err, mutation.Rollback())
+		}
+		if err := c.commitStagedRunsLocked(mutation, runIDs); err != nil {
+			c.mu.Unlock()
+			return workflowstore.ManualMoveResult{}, err
+		}
+		c.mu.Unlock()
+		c.finalizeTaskAttentionResolution(moved.TaskAttentionResolution)
+		if err := c.resolvePreparedCurrentNodeStarts(ctx, starts, pending, runIDs, true); err != nil {
+			return moved, err
 		}
 		return moved, nil
 	})

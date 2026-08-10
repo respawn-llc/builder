@@ -161,19 +161,32 @@ func (c *CurrentNodeController) stageExplicitRunsLocked(
 	preparation TaskStartPreparation,
 	delivery workflowruntime.TaskPromptDelivery,
 ) ([]currentNodeRunID, error) {
-	ids := make([]currentNodeRunID, 0, len(nodes))
-	discard := func() {
-		c.discardStagedRunsLocked(ids)
-	}
+	starts := make([]currentNodeQueuedStart, 0, len(nodes))
 	for index, node := range nodes {
 		if node.Scheduling == nil || node.Scheduling.State != workflow.CurrentNodeSchedulingReady {
-			discard()
 			return nil, fmt.Errorf("prepared executable Current Node at index %d is not ready", index)
 		}
-		run, created, err := c.allocateRunLocked(currentNodeQueuedStart{
+		starts = append(starts, currentNodeQueuedStart{
 			reference:          node.Reference,
 			preparation:        preparation,
 			taskPromptDelivery: delivery,
+		})
+	}
+	return c.stageRunsLocked(starts)
+}
+
+func (c *CurrentNodeController) stageRunsLocked(starts []currentNodeQueuedStart) ([]currentNodeRunID, error) {
+	ids := make([]currentNodeRunID, 0, len(starts))
+	discard := func() {
+		c.discardStagedRunsLocked(ids)
+	}
+	for _, start := range starts {
+		run, created, err := c.allocateRunLocked(currentNodeQueuedStart{
+			reference:          start.reference,
+			preparation:        start.preparation,
+			taskPromptDelivery: start.taskPromptDelivery,
+			assignmentSteer:    start.assignmentSteer,
+			policy:             start.policy,
 		})
 		if err != nil {
 			discard()
@@ -181,11 +194,51 @@ func (c *CurrentNodeController) stageExplicitRunsLocked(
 		}
 		if !created {
 			discard()
-			return nil, fmt.Errorf("prepared executable Current Node %v already has a Run generation", node.Reference)
+			return nil, fmt.Errorf("prepared executable Current Node %v already has a Run generation", start.reference)
 		}
 		ids = append(ids, run.id)
 	}
 	return ids, nil
+}
+
+type preparedRunMutation interface {
+	Commit() error
+	Rollback() error
+}
+
+func (c *CurrentNodeController) commitStagedRunsLocked(
+	prepared preparedRunMutation,
+	runIDs []currentNodeRunID,
+) error {
+	if err := c.validateStagedRunsLocked(runIDs); err != nil {
+		c.discardStagedRunsLocked(runIDs)
+		return errors.Join(err, prepared.Rollback())
+	}
+	if err := prepared.Commit(); err != nil {
+		c.discardStagedRunsLocked(runIDs)
+		return err
+	}
+	c.installStagedRunsLocked(runIDs)
+	return nil
+}
+
+func (c *CurrentNodeController) commitSuccessorRunsLocked(
+	prepared preparedRunMutation,
+	predecessorID currentNodeRunID,
+	runIDs []currentNodeRunID,
+	sourceRetained bool,
+	phase currentNodeRunPhase,
+) error {
+	if err := c.validatePreparedSuccessorRunsLocked(predecessorID, runIDs); err != nil {
+		c.discardStagedRunsLocked(runIDs)
+		return errors.Join(err, prepared.Rollback())
+	}
+	if err := prepared.Commit(); err != nil {
+		c.discardStagedRunsLocked(runIDs)
+		return err
+	}
+	c.installPreparedSuccessorRunsLocked(predecessorID, runIDs, sourceRetained, phase)
+	return nil
 }
 
 func (c *CurrentNodeController) validateStagedRunsLocked(ids []currentNodeRunID) error {
@@ -371,46 +424,6 @@ func (c *CurrentNodeController) activateRunLocked(run *currentNodeRun, phase cur
 	return nil
 }
 
-func (c *CurrentNodeController) stageSuccessorRunsLocked(
-	starts []currentNodeQueuedStart,
-	predecessorID currentNodeRunID,
-	phase currentNodeRunPhase,
-) ([]currentNodeRunID, error) {
-	ids := make([]currentNodeRunID, 0, len(starts))
-	rollback := func() {
-		predecessor := c.runs[predecessorID]
-		for _, id := range ids {
-			run := c.runs[id]
-			sameReference := predecessor != nil && run != nil && run.key == predecessor.key
-			c.removeRunLocked(id)
-			if sameReference {
-				c.currentRuns[predecessor.key] = predecessorID
-			}
-		}
-	}
-	for _, start := range starts {
-		run, err := c.stageSuccessorRunLocked(start, predecessorID)
-		if err != nil {
-			rollback()
-			return nil, err
-		}
-		ids = append(ids, run.id)
-		if err := c.activateRunLocked(run, phase); err != nil {
-			rollback()
-			return nil, err
-		}
-	}
-	if len(ids) != 0 {
-		predecessor := c.runs[predecessorID]
-		if predecessor != nil {
-			if current, exists := c.currentRuns[predecessor.key]; exists && current == predecessorID {
-				delete(c.currentRuns, predecessor.key)
-			}
-		}
-	}
-	return ids, nil
-}
-
 func errorsNewCurrentNodeRunAbsent() error {
 	return fmt.Errorf("current node Run generation is absent")
 }
@@ -445,6 +458,29 @@ func (c *CurrentNodeController) removeRunLocked(id currentNodeRunID) {
 	close(run.phaseChanged)
 	delete(c.runs, id)
 	c.finishInterruptFenceLocked(fence)
+}
+
+func (c *CurrentNodeController) removePreparedCurrentNodeRunsLocked(ids []currentNodeRunID) {
+	if len(ids) == 0 {
+		return
+	}
+	removed := make(map[currentNodeRunID]struct{}, len(ids))
+	for _, id := range ids {
+		removed[id] = struct{}{}
+		c.removeRunLocked(id)
+	}
+	for _, run := range c.runs {
+		if len(run.successors) == 0 {
+			continue
+		}
+		retained := run.successors[:0]
+		for _, successorID := range run.successors {
+			if _, wasRemoved := removed[successorID]; !wasRemoved {
+				retained = append(retained, successorID)
+			}
+		}
+		run.successors = retained
+	}
 }
 
 func (c *CurrentNodeController) runByScopeLocked(scopeID runtimeids.ExecutionScopeID) (*currentNodeRun, bool) {

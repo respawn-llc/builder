@@ -391,7 +391,7 @@ func TestCurrentNodeControllerSteersApprovalTargetBeforeStartingIt(t *testing.T)
 	}
 }
 
-func TestCurrentNodeControllerDoesNotMakeUnassignedApprovalTargetResumable(t *testing.T) {
+func TestCurrentNodeControllerInterruptsUnassignedApprovalTarget(t *testing.T) {
 	target := currentNodeReferenceForControllerTest(t, "task-approval-steer-failure", "node-target")
 	approval := workflow.PendingApproval{
 		ID:     workflow.NewApprovalID(),
@@ -430,8 +430,9 @@ func TestCurrentNodeControllerDoesNotMakeUnassignedApprovalTargetResumable(t *te
 	if starts := runner.starts(); starts != 0 {
 		t.Fatalf("runner starts = %d, want none after steering failure", starts)
 	}
-	if interruption, interrupted := store.interruption(target); interrupted {
-		t.Fatalf("unassigned approval target was made resumable: %+v", interruption)
+	if interruption, interrupted := store.interruption(target); !interrupted ||
+		interruption.reason != reasonCurrentNodeRuntimeStartFailed {
+		t.Fatalf("unassigned approval target interruption = %+v, %t, want runtime start failure", interruption, interrupted)
 	}
 }
 
@@ -447,7 +448,7 @@ func TestCompleteIdleCurrentNodeRecoversSuccessorByAssignmentCommit(t *testing.T
 			outcomes: []currentNodeAssignmentSteerOutcome{{
 				waitErr: cause,
 			}},
-			wantInterrupted: []bool{false},
+			wantInterrupted: []bool{true},
 		},
 		{
 			name: "committed assignment with observer failure",
@@ -463,7 +464,7 @@ func TestCompleteIdleCurrentNodeRecoversSuccessorByAssignmentCommit(t *testing.T
 				{receipt: session.CommitReceipt{Committed: true}},
 				{steerErr: cause},
 			},
-			wantInterrupted: []bool{true, false},
+			wantInterrupted: []bool{true, true},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
