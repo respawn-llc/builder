@@ -205,6 +205,15 @@ func (o *boundaryLongOrchestrator) selectNext(
 }
 
 func (o *boundaryLongOrchestrator) settle(result boundaryLongWorkResult) (boundaryLongWork, error) {
+	selected, err := o.release(result)
+	if err != nil {
+		return nil, err
+	}
+	selected.settleLongWork(result.err)
+	return selected, nil
+}
+
+func (o *boundaryLongOrchestrator) release(result boundaryLongWorkResult) (boundaryLongWork, error) {
 	if o == nil || o.selected == nil {
 		return nil, errors.New("long Boundary Agenda result has no selected work")
 	}
@@ -217,7 +226,6 @@ func (o *boundaryLongOrchestrator) settle(result boundaryLongWorkResult) (bounda
 	}
 	selected := o.selected
 	o.selected = nil
-	selected.settleLongWork(result.err)
 	return selected, nil
 }
 

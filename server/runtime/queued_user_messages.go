@@ -176,6 +176,16 @@ func (e *Engine) humanAgendaBinding(
 		}
 		return scopeBoundaryBinding(current.scopeID, current.origin), eligibility, nil
 	}
+	if selected, ok := e.longBoundary.selected.(*manualCompactionSelection); ok &&
+		!selected.scopeID.IsZero() {
+		if requireActiveScope {
+			if lifecycle, ok := e.cfg.StepLifecycle.(AgentStepScopeLifecycle); ok &&
+				!lifecycle.AgentStepScopeLive(e.lifecycleCtx, selected.scopeID) {
+				return nil, 0, ErrNoActiveLiveRun
+			}
+		}
+		return continuationScopeBoundaryBinding(selected.scopeID), eligibility, nil
+	}
 	if requireActiveScope {
 		return nil, 0, ErrNoActiveLiveRun
 	}
@@ -234,6 +244,8 @@ func (e *Engine) humanBoundarySelectionLive(selection boundarySelection) bool {
 	case scopeStepBoundarySelection:
 		scopeID = selected.scopeID
 	case scopeTurnBoundarySelection:
+		scopeID = selected.scopeID
+	case scopeContinuationBoundarySelection:
 		scopeID = selected.scopeID
 	default:
 		return true

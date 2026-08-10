@@ -244,6 +244,26 @@ type Deferred[Result interface{}] struct {
 	queue     *Queue
 }
 
+type DeferredView[Result interface{}] struct {
+	deferred *Deferred[Result]
+}
+
+func (v DeferredView[Result]) Await(ctx context.Context) (Result, error) {
+	return v.deferred.Await(ctx)
+}
+
+type CompletionBinding[Result interface{}] struct {
+	deferred *Deferred[Result]
+}
+
+func (b CompletionBinding[Result]) Deferred() DeferredView[Result] {
+	return DeferredView[Result]{deferred: b.deferred}
+}
+
+func (b CompletionBinding[Result]) Complete(value Result, err error) {
+	b.deferred.complete(value, err)
+}
+
 func newDeferred[Result interface{}](queue *Queue) *Deferred[Result] {
 	return &Deferred[Result]{done: make(chan struct{}), queue: queue}
 }
@@ -310,12 +330,16 @@ func (d *Deferred[Result]) settle(err error) {
 
 type eventEnvelope[Payload, Result interface{}] struct {
 	payload  Payload
-	handler  func(Admission, Payload, func(Result, error)) error
+	handler  func(Admission, Payload, CompletionBinding[Result]) error
 	deferred *Deferred[Result]
 }
 
 func (e *eventEnvelope[Payload, Result]) handle(admission Admission) error {
-	return e.handler(admission, e.payload, e.deferred.complete)
+	return e.handler(
+		admission,
+		e.payload,
+		CompletionBinding[Result]{deferred: e.deferred},
+	)
 }
 
 func (e *eventEnvelope[Payload, Result]) settle(err error) {
@@ -331,6 +355,29 @@ func Submit[Payload, Result interface{}](
 	queue *Queue,
 	payload Payload,
 	handler func(Admission, Payload, func(Result, error)) error,
+) (*Deferred[Result], error) {
+	if handler == nil {
+		return nil, errors.New("runtime event handler is required")
+	}
+	return SubmitBound(
+		ctx,
+		queue,
+		payload,
+		func(
+			admission Admission,
+			accepted Payload,
+			binding CompletionBinding[Result],
+		) error {
+			return handler(admission, accepted, binding.Complete)
+		},
+	)
+}
+
+func SubmitBound[Payload, Result interface{}](
+	ctx context.Context,
+	queue *Queue,
+	payload Payload,
+	handler func(Admission, Payload, CompletionBinding[Result]) error,
 ) (*Deferred[Result], error) {
 	if queue == nil || queue.ctx.Err() != nil {
 		return nil, ErrUnavailable

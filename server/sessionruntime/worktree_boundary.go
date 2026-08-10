@@ -286,6 +286,45 @@ func (r *agentResource) AgentStepBoundary(
 	return runtime.AgentStepReducerBoundary{Grant: grant}, nil
 }
 
+func (r *agentResource) TryAcquireAgentStepReducerBoundary(
+	_ context.Context,
+	scopeID runtimeids.ExecutionScopeID,
+) (runtime.AgentStepReducerGrant, bool, error) {
+	if scopeID.IsZero() {
+		return nil, false, errors.New("execution scope id is required")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.rejectsNewStepLocked() ||
+		r.current == nil ||
+		r.current.scope.ID() != scopeID ||
+		r.current.phase != executionPhaseRunning ||
+		r.current.ctx.Err() != nil {
+		return nil, false, runtimeUnavailableError(r.ref)
+	}
+	r.current.exactMu.Lock()
+	defer r.current.exactMu.Unlock()
+	if r.current.completionOrigin != nil {
+		panic(fmt.Sprintf(
+			"resource %s generation %d attempted fresh reducer acquisition while completion origin %+v remains live",
+			r.ref.SessionID(),
+			r.ref.Generation(),
+			*r.current.completionOrigin,
+		))
+	}
+	if r.reducerBoundary != nil {
+		panic(fmt.Sprintf(
+			"resource %s generation %d attempted duplicate fresh reducer acquisition",
+			r.ref.SessionID(),
+			r.ref.Generation(),
+		))
+	}
+	if r.worktreeBoundary != nil {
+		return nil, false, nil
+	}
+	return r.newReducerBoundaryGrantLocked(), true, nil
+}
+
 func setCompletionOriginLocked(
 	execution *execution,
 	origin serverapi.RuntimeStepOrigin,

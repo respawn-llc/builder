@@ -1235,6 +1235,9 @@ func (e *Engine) executeAcceptedToolCallsCoordinated(
 	if err != nil {
 		return postJoin.results, false, err
 	}
+	if hasWorkflowTerminalResult(postJoin.results) {
+		return postJoin.results, true, postJoin.semanticErr
+	}
 	durableTerminal, observeErr := e.observeWorkflowDurableCompletion(ctx)
 	return postJoin.results, durableTerminal, errors.Join(postJoin.semanticErr, observeErr)
 }

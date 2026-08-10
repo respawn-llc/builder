@@ -5,52 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 
 	"core/server/llm"
+	"core/server/runtimecommand"
 	"core/server/session"
+	"core/shared/runtimeids"
 	"core/shared/textutil"
 	"core/shared/transcript"
 
 	"github.com/google/uuid"
 )
-
-type manualCompactionResolver struct {
-	done    chan struct{}
-	once    sync.Once
-	receipt session.CommitReceipt
-	err     error
-}
-
-func newManualCompactionResolver() *manualCompactionResolver {
-	return &manualCompactionResolver{done: make(chan struct{})}
-}
-
-func (r *manualCompactionResolver) settle(receipt session.CommitReceipt, err error) {
-	if r == nil {
-		return
-	}
-	r.once.Do(func() {
-		r.receipt = receipt
-		r.err = err
-		close(r.done)
-	})
-}
-
-func (r *manualCompactionResolver) wait(ctx context.Context) (session.CommitReceipt, error) {
-	if r == nil {
-		return session.CommitReceipt{}, errors.New("manual compaction resolver is required")
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	select {
-	case <-r.done:
-		return r.receipt, r.err
-	case <-ctx.Done():
-		return session.CommitReceipt{}, context.Cause(ctx)
-	}
-}
 
 type manualCompactionAgendaItem struct {
 	id           boundaryAgendaItemID
@@ -59,8 +23,7 @@ type manualCompactionAgendaItem struct {
 	eligibility  boundaryEligibility
 	instructions compactionInstructionsInput
 	onActive     func()
-	resolver     *manualCompactionResolver
-	boundary     *manualCompactionBoundaryContinuation
+	completion   runtimecommand.CompletionBinding[session.CommitReceipt]
 	order        uint64
 }
 
@@ -85,17 +48,21 @@ func (i *manualCompactionAgendaItem) setAgendaOrder(order uint64) {
 }
 
 func (i *manualCompactionAgendaItem) settleBoundaryAgenda(err error) {
-	i.resolver.settle(session.CommitReceipt{}, err)
+	i.completion.Complete(
+		session.CommitReceipt{},
+		manualCompactionSettlementError(err),
+	)
 }
 
 func (i *manualCompactionAgendaItem) selectLongWork() boundaryLongWork {
+	scopeID, _ := boundaryAgendaBindingScope(i.binding)
 	return &manualCompactionSelection{
 		id:           i.id,
 		stepID:       i.stepID,
 		instructions: i.instructions,
 		onActive:     i.onActive,
-		resolver:     i.resolver,
-		boundary:     i.boundary,
+		completion:   i.completion,
+		scopeID:      scopeID,
 	}
 }
 
@@ -104,8 +71,8 @@ type manualCompactionSelection struct {
 	stepID       string
 	instructions compactionInstructionsInput
 	onActive     func()
-	resolver     *manualCompactionResolver
-	boundary     *manualCompactionBoundaryContinuation
+	completion   runtimecommand.CompletionBinding[session.CommitReceipt]
+	scopeID      runtimeids.ExecutionScopeID
 }
 
 func (s *manualCompactionSelection) longWorkID() boundaryAgendaItemID {
@@ -117,43 +84,17 @@ func (s *manualCompactionSelection) runLongWork(ctx context.Context, engine *Eng
 }
 
 func (s *manualCompactionSelection) settleLongWork(err error) {
-	s.resolver.settle(session.CommitReceipt{}, err)
-	s.boundary.settleForced(err)
+	s.completion.Complete(
+		session.CommitReceipt{},
+		manualCompactionSettlementError(err),
+	)
 }
 
-type manualCompactionBoundaryContinuation struct {
-	engine       *Engine
-	grant        AgentStepReducerGrant
-	continueTurn bool
-	step         activeAgentStep
-	complete     func(agentStepBoundaryDecision, error)
-	settled      sync.Once
-}
-
-func (c *manualCompactionBoundaryContinuation) claimResult() bool {
-	if c == nil {
-		return true
+func manualCompactionSettlementError(err error) error {
+	if errors.Is(err, errBoundaryRuntimeClosed) {
+		return runtimecommand.ErrUnavailable
 	}
-	claimed := false
-	c.settled.Do(func() {
-		claimed = true
-	})
-	return claimed
-}
-
-func (c *manualCompactionBoundaryContinuation) settleForced(err error) {
-	if c == nil {
-		return
-	}
-	c.settled.Do(func() {
-		if c.engine != nil &&
-			c.engine.agentSteps.boundary != nil &&
-			*c.engine.agentSteps.boundary == c.step {
-			c.engine.agentSteps.boundary = nil
-		}
-		releaseErr := c.grant.Release()
-		c.complete(nil, errors.Join(err, releaseErr))
-	})
+	return err
 }
 
 type preparedCompactionWork struct {
@@ -175,20 +116,20 @@ func (e *Engine) admitManualCompaction(
 	admission runtimeEventAdmission,
 	instructions compactionInstructionsInput,
 	onActive func(),
-) (*manualCompactionResolver, error) {
+	completion runtimecommand.CompletionBinding[session.CommitReceipt],
+) error {
 	planningSnapshot := e.compactionPlanningSnapshot()
 	if e.compactionPlannerState().mode(planningSnapshot.compactionMode) == "none" {
-		return nil, errCompactionDisabledModeNone
+		return errCompactionDisabledModeNone
 	}
 	if e.manualCompactionActive() {
-		return nil, ErrManualCompactionActive
+		return ErrManualCompactionActive
 	}
 	current := e.agentSteps.current
 	activeProviderStep := current != nil && current.phase == agentStepProviderRunning
 	if !e.compactionRuntimeState().ManualCompactionEligible() && !activeProviderStep {
-		return nil, ErrManualCompactionTooSoon
+		return ErrManualCompactionTooSoon
 	}
-	resolver := newManualCompactionResolver()
 	item := &manualCompactionAgendaItem{
 		id:           boundaryAgendaItemID("manual-compaction:" + uuid.NewString()),
 		stepID:       uuid.NewString(),
@@ -196,23 +137,23 @@ func (e *Engine) admitManualCompaction(
 		eligibility:  boundaryEligibilityIdle,
 		instructions: instructions,
 		onActive:     onActive,
-		resolver:     resolver,
+		completion:   completion,
 	}
 	if activeProviderStep {
 		item.binding = scopeBoundaryBinding(current.scopeID, current.origin)
 		item.eligibility = boundaryEligibilityStep
 	}
 	if err := e.boundaryAgenda.accept(item); err != nil {
-		return nil, err
+		return err
 	}
 	if item.eligibility == boundaryEligibilityIdle {
 		if err := e.reduceIdleBoundary(admission); err != nil {
 			if !e.boundaryAgenda.discard(item.id, err) {
-				resolver.settle(session.CommitReceipt{}, err)
+				completion.Complete(session.CommitReceipt{}, err)
 			}
 		}
 	}
-	return resolver, nil
+	return nil
 }
 
 func (e *Engine) manualCompactionActive() bool {
@@ -260,29 +201,7 @@ func (e *Engine) launchManualCompactionSelection(
 	selected *manualCompactionSelection,
 ) error {
 	return e.transferBoundaryLongWork(admission, selected, func(workCtx context.Context) {
-		runCtx := workCtx
-		var cancel context.CancelCauseFunc
-		var stop func() bool
-		if selected.boundary != nil {
-			if source, ok := e.stepLifecycle.(*defaultExclusiveStepLifecycle); ok {
-				if activeCtx := source.activeContext(); activeCtx != nil {
-					runCtx, cancel = context.WithCancelCause(workCtx)
-					stop = context.AfterFunc(activeCtx, func() {
-						cancel(context.Cause(activeCtx))
-					})
-					if cause := context.Cause(activeCtx); cause != nil {
-						cancel(cause)
-					}
-				}
-			}
-		}
-		if stop != nil {
-			defer stop()
-		}
-		if cancel != nil {
-			defer cancel(nil)
-		}
-		_ = selected.runLongWork(runCtx, e)
+		_ = selected.runLongWork(workCtx, e)
 	})
 }
 
@@ -477,33 +396,17 @@ func (e *Engine) applyManualCompactionRuntimeResult(
 		runtimeResult.err,
 	)
 	finalErr := errors.Join(runtimeResult.err, applyErr)
-	continuation := selected.boundary
-	if !continuation.claimResult() {
-		return struct{}{}, errors.New(
-			"manual compaction Boundary was already terminally settled",
-		)
-	}
-	selected.resolver.settle(receipt, finalErr)
-	if _, err := e.longBoundary.settle(boundaryLongWorkResult{
+	if _, err := e.longBoundary.release(boundaryLongWorkResult{
 		id:  runtimeResult.id,
 		err: finalErr,
 	}); err != nil {
 		return struct{}{}, err
 	}
-	if continuation != nil {
-		decision, err := e.acceptReducerBoundaryGrantWithResolver(
-			admission,
-			continuation.grant,
-			continuation.continueTurn,
-			continuation.step,
-			continuation.complete,
-		)
-		if err != nil || decision != nil {
-			continuation.complete(decision, err)
-		}
-		return struct{}{}, nil
+	selected.completion.Complete(receipt, finalErr)
+	if selected.scopeID.IsZero() {
+		return struct{}{}, e.reduceIdleBoundary(admission)
 	}
-	return struct{}{}, e.reduceIdleBoundary(admission)
+	return struct{}{}, nil
 }
 
 func (e *Engine) applyPreparedCompactionWork(

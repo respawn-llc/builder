@@ -488,18 +488,6 @@ func (s *defaultExclusiveStepLifecycle) finishTerminalPublication() {
 	s.mu.Unlock()
 }
 
-func (s *defaultExclusiveStepLifecycle) activeContext() context.Context {
-	if s == nil {
-		return nil
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.active == nil {
-		return nil
-	}
-	return s.active.ctx
-}
-
 func (s *defaultExclusiveStepLifecycle) snapshotLocked() *RunSnapshot {
 	active := s.active
 	if active == nil || active.runID == "" {

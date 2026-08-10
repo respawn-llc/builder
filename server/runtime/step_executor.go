@@ -11,6 +11,7 @@ import (
 	"core/server/llm"
 	"core/server/tools"
 	"core/server/workflowruntime"
+	"core/shared/serverapi"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 )
@@ -277,6 +278,16 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 			}
 			return result, boundaryErr
 		}
+		decision, boundaryErr = s.engine.resolveAgentStepBoundaryDecision(
+			decision,
+			agentStepBoundaryModeTurn,
+		)
+		if boundaryErr != nil {
+			return result, boundaryErr
+		}
+		if _, retire := decision.(retireAgentTurnDecision); retire {
+			return result, serverapi.ErrRuntimeUnavailable
+		}
 		if _, continueAgent := decision.(prepareNextAgentStepDecision); continueAgent {
 			continue
 		}
@@ -417,13 +428,13 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 			if err != nil {
 				return stepLoopResult{}, err
 			}
-			if err := s.completeAgentStepBoundary(ctx); err != nil {
-				return stepLoopResult{}, err
-			}
 			patchEditsApplied = patchEditsApplied || applied
 			if terminal {
 				e.cascadeCompleteActiveGoalOnWorkflowCompletion()
 				return stepLoopResult{ExecutedToolCall: true}, nil
+			}
+			if err := s.completeAgentStepBoundary(ctx); err != nil {
+				return stepLoopResult{}, err
 			}
 			continue
 		}
@@ -790,10 +801,25 @@ func (s *defaultStepExecutor) materializeFinalAnswerToolCalls(ctx context.Contex
 
 func (s *defaultStepExecutor) completeAgentStepBoundary(ctx context.Context) error {
 	s.engine.compactionRuntimeState().SetManualCompactionEligible(true)
-	if _, err := s.engine.completeAgentProviderBoundary(ctx, true); err != nil {
+	decision, err := s.engine.completeAgentProviderBoundary(ctx, true)
+	if err != nil {
 		return err
 	}
-	return nil
+	decision, err = s.engine.resolveAgentStepBoundaryDecision(
+		decision,
+		agentStepBoundaryModeStep,
+	)
+	if err != nil {
+		return err
+	}
+	switch decision.(type) {
+	case finishAgentTurnDecision:
+		return &queuedUserFlushStoppedError{}
+	case retireAgentTurnDecision:
+		return serverapi.ErrRuntimeUnavailable
+	default:
+		return nil
+	}
 }
 
 func (s *defaultStepExecutor) executeAcceptedToolCallsAndAppendResults(

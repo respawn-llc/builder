@@ -217,6 +217,51 @@ func TestOwnerlessIdleReducerRetryPreservesPendingWorktreeClaim(t *testing.T) {
 	)
 }
 
+func TestFreshAgentStepReducerAcquisitionYieldsToCurrentWorktreeClaim(t *testing.T) {
+	fixture, resource, release := worktreeBoundaryArbitrationFixture(t)
+	defer release()
+	origin := serverapi.RuntimeStepOrigin{
+		RunID:  uuid.NewString(),
+		StepID: uuid.NewString(),
+	}
+	scopeID, err := resource.AgentStepBegan(context.Background(), origin)
+	if err != nil {
+		t.Fatalf("AgentStepBegan: %v", err)
+	}
+	transfer, err := resource.AgentStepBoundary(context.Background(), origin)
+	if err != nil {
+		t.Fatalf("AgentStepBoundary: %v", err)
+	}
+	reducer, ok := transfer.(runtimepkg.AgentStepReducerBoundary)
+	if !ok {
+		t.Fatalf("transfer = %T, want reducer", transfer)
+	}
+	if err := reducer.Grant.Release(); err != nil {
+		t.Fatalf("release original reducer grant: %v", err)
+	}
+	claim, err := fixture.authority.ClaimWorktreeBoundary(
+		resource.ref,
+		serverapi.NewWorktreeOperationID(),
+	)
+	if err != nil {
+		t.Fatalf("claim Worktree Boundary: %v", err)
+	}
+	if grant, acquired, err := resource.TryAcquireAgentStepReducerBoundary(
+		context.Background(),
+		scopeID,
+	); err != nil || acquired || grant != nil {
+		t.Fatalf(
+			"fresh reducer with current Worktree claim = (%T, %t, %v), want finish",
+			grant,
+			acquired,
+			err,
+		)
+	}
+	if err := claim.Cancel(errors.New("test complete")); err != nil {
+		t.Fatalf("cancel Worktree claim: %v", err)
+	}
+}
+
 func TestOwnerlessPendingWorktreeCancellationRetriesRetirement(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)

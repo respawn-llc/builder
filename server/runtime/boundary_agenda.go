@@ -46,6 +46,21 @@ func scopeBoundaryBinding(
 
 func (scopeAgendaBinding) boundaryAgendaBinding() {}
 
+type continuationScopeAgendaBinding struct {
+	scopeID runtimeids.ExecutionScopeID
+}
+
+func continuationScopeBoundaryBinding(
+	scopeID runtimeids.ExecutionScopeID,
+) boundaryAgendaBinding {
+	if scopeID.IsZero() {
+		panic("continuation scope Boundary Agenda item requires an Exact Execution Scope")
+	}
+	return continuationScopeAgendaBinding{scopeID: scopeID}
+}
+
+func (continuationScopeAgendaBinding) boundaryAgendaBinding() {}
+
 type runtimeAgendaBinding struct{}
 
 func runtimeBoundaryBinding() boundaryAgendaBinding {
@@ -100,6 +115,23 @@ func turnBoundarySelection(
 }
 
 func (scopeTurnBoundarySelection) boundarySelection() {}
+
+type scopeContinuationBoundarySelection struct {
+	scopeID     runtimeids.ExecutionScopeID
+	includeTurn bool
+}
+
+func continuationBoundarySelection(
+	scopeID runtimeids.ExecutionScopeID,
+	includeTurn bool,
+) boundarySelection {
+	return scopeContinuationBoundarySelection{
+		scopeID:     scopeID,
+		includeTurn: includeTurn,
+	}
+}
+
+func (scopeContinuationBoundarySelection) boundarySelection() {}
 
 type idleAgendaSelection struct{}
 
@@ -255,8 +287,8 @@ func (a *boundaryAgenda) finalizeScope(scopeID runtimeids.ExecutionScopeID, err 
 	remaining := a.entries[:0]
 	var settled []boundaryAgendaItem
 	for _, item := range a.entries {
-		binding, scopeBound := item.agendaBinding().(scopeAgendaBinding)
-		if scopeBound && binding.scopeID == scopeID {
+		boundScopeID, scopeBound := boundaryAgendaBindingScope(item.agendaBinding())
+		if scopeBound && boundScopeID == scopeID {
 			settled = append(settled, item)
 			continue
 		}
@@ -384,8 +416,8 @@ func (a *boundaryAgenda) hasHumanScope(scopeID runtimeids.ExecutionScopeID) bool
 		if !ok {
 			continue
 		}
-		binding, scopeBound := human.binding.(scopeAgendaBinding)
-		if scopeBound && binding.scopeID == scopeID {
+		boundScopeID, scopeBound := boundaryAgendaBindingScope(human.binding)
+		if scopeBound && boundScopeID == scopeID {
 			return true
 		}
 	}
@@ -565,8 +597,8 @@ func (a *boundaryAgenda) takeHumanScope(scopeID runtimeids.ExecutionScopeID) []*
 	for _, entry := range a.entries {
 		human, ok := entry.(*humanBoundaryAgendaItem)
 		if ok {
-			binding, scopeBound := human.binding.(scopeAgendaBinding)
-			if scopeBound && binding.scopeID == scopeID {
+			boundScopeID, scopeBound := boundaryAgendaBindingScope(human.binding)
+			if scopeBound && boundScopeID == scopeID {
 				selected = append(selected, human)
 				continue
 			}
@@ -608,6 +640,11 @@ func validateBoundaryAgendaBinding(binding boundaryAgendaBinding) error {
 		}
 		if err := typed.origin.Validate(); err != nil {
 			return fmt.Errorf("scope-bound Boundary Agenda item origin: %w", err)
+		}
+		return nil
+	case continuationScopeAgendaBinding:
+		if typed.scopeID.IsZero() {
+			return errors.New("continuation scope Boundary Agenda item requires an Exact Execution Scope")
 		}
 		return nil
 	case runtimeAgendaBinding:
@@ -654,6 +691,16 @@ func boundaryAgendaItemEligible(item boundaryAgendaItem, selection boundarySelec
 				item.agendaEligibility() == boundaryEligibilityTurn) &&
 			scope.scopeID == selected.scopeID &&
 			scope.origin == selected.origin
+	case scopeContinuationBoundarySelection:
+		if _, runtimeBound := binding.(runtimeAgendaBinding); runtimeBound {
+			return item.agendaEligibility() == boundaryEligibilitySafe
+		}
+		scopeID, scopeBound := boundaryAgendaBindingScope(binding)
+		return scopeBound &&
+			scopeID == selected.scopeID &&
+			(item.agendaEligibility() == boundaryEligibilityStep ||
+				(selected.includeTurn &&
+					item.agendaEligibility() == boundaryEligibilityTurn))
 	case idleAgendaSelection:
 		_, runtimeBound := binding.(runtimeAgendaBinding)
 		return runtimeBound &&
@@ -661,5 +708,18 @@ func boundaryAgendaItemEligible(item boundaryAgendaItem, selection boundarySelec
 				item.agendaEligibility() == boundaryEligibilitySafe)
 	default:
 		return false
+	}
+}
+
+func boundaryAgendaBindingScope(
+	binding boundaryAgendaBinding,
+) (runtimeids.ExecutionScopeID, bool) {
+	switch typed := binding.(type) {
+	case scopeAgendaBinding:
+		return typed.scopeID, true
+	case continuationScopeAgendaBinding:
+		return typed.scopeID, true
+	default:
+		return runtimeids.ExecutionScopeID{}, false
 	}
 }

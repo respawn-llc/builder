@@ -11,6 +11,7 @@ import (
 
 	"core/prompts"
 	"core/server/llm"
+	"core/server/runtimecommand"
 	"core/server/session"
 	"core/server/workflowruntime"
 	"core/shared/serverapi"
@@ -171,30 +172,36 @@ func (c *defaultContextCompactor) CompactContextForWorkflowPostCompletion(ctx co
 
 func (c *defaultContextCompactor) compactManualContext(ctx context.Context, instructions compactionInstructionsInput, onActive func(), requireEligibility bool) (session.CommitReceipt, error) {
 	if requireEligibility {
-		resolver, err := submitRuntimeEvent(
-			c.engine,
+		if c.engine == nil || c.engine.runtimeEvents == nil {
+			return session.CommitReceipt{}, ErrEngineClosed
+		}
+		deferred, err := runtimecommand.SubmitBound(
+			c.engine.lifecycleCtx,
+			c.engine.runtimeEvents,
 			struct {
 				instructions compactionInstructionsInput
 				onActive     func()
 			}{instructions: instructions, onActive: onActive},
 			func(
-				admission runtimeEventAdmission,
+				command runtimecommand.Admission,
 				request struct {
 					instructions compactionInstructionsInput
 					onActive     func()
 				},
-			) (*manualCompactionResolver, error) {
+				completion runtimecommand.CompletionBinding[session.CommitReceipt],
+			) error {
 				return c.engine.admitManualCompaction(
-					admission,
+					runtimeEventAdmission{engine: c.engine, command: command},
 					request.instructions,
 					request.onActive,
+					completion,
 				)
 			},
 		)
 		if err != nil {
 			return session.CommitReceipt{}, err
 		}
-		return resolver.wait(ctx)
+		return deferred.Await(ctx)
 	}
 	return c.compactContext(
 		ctx,

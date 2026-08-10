@@ -25,6 +25,7 @@ func TestQueueContract(t *testing.T) {
 		{name: "receives later events while the current handler is open", run: testQueueReceiptWhileHandlerOpen},
 		{name: "uses separate admission and result wait contexts", run: testQueueContextOwnership},
 		{name: "supports synchronous and result-event completion", run: testQueueTypedCompletion},
+		{name: "binds one read-only view to the Queue-owned result", run: testQueueCompletionBinding},
 		{name: "does not couple independent queues", run: testIndependentQueues},
 		{name: "distinguishes cancellation before and after admission", run: testQueueCancellationBoundaries},
 		{name: "settles close races without panicking senders", run: testQueueCloseSettlement},
@@ -33,6 +34,36 @@ func TestQueueContract(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, test.run)
+	}
+}
+
+func testQueueCompletionBinding(t *testing.T) {
+	queue := runtimecommand.NewQueue(context.Background())
+	t.Cleanup(queue.Close)
+
+	viewReady := make(chan runtimecommand.DeferredView[int], 1)
+	deferred, err := runtimecommand.SubmitBound(
+		context.Background(),
+		queue,
+		21,
+		func(
+			_ runtimecommand.Admission,
+			value int,
+			binding runtimecommand.CompletionBinding[int],
+		) error {
+			viewReady <- binding.Deferred()
+			binding.Complete(value*2, nil)
+			binding.Complete(0, errors.New("duplicate completion"))
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("submit bound event: %v", err)
+	}
+	view := receive(t, viewReady)
+	awaitValue(t, deferred, 42)
+	if value, err := view.Await(context.Background()); err != nil || value != 42 {
+		t.Fatalf("bound Deferred view = (%d, %v), want (42, nil)", value, err)
 	}
 }
 
