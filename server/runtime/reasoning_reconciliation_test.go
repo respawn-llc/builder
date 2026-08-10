@@ -538,7 +538,7 @@ func TestRunStepLoopNoopAcceptanceCommitsReasoning(t *testing.T) {
 		Assistant: llm.Message{
 			Role:    llm.RoleAssistant,
 			Phase:   textutil.Value(llm.MessagePhaseFinal),
-			Content: textutil.Value(transcript.NoopFinalToken),
+			Content: textutil.Value(""),
 		},
 		Reasoning: []llm.ReasoningEntry{{
 			Role: textPointer(string(transcript.EntryRoleReasoning)), Text: "noop reasoning",

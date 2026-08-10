@@ -185,7 +185,7 @@ func TestServiceCommentMutationsUpdateActivityAndPublishInvalidations(t *testing
 	if err := service.ReplaceWorkflowTaskComment(ctx, serverapi.WorkflowTaskCommentReplaceRequest{CommentID: added.Comment.ID, Body: "updated"}); err != nil {
 		t.Fatalf("ReplaceWorkflowTaskComment: %v", err)
 	}
-	activity, err := service.ListWorkflowTaskActivity(ctx, serverapi.WorkflowTaskActivityListRequest{TaskID: taskID})
+	activity, err := service.ListWorkflowTaskActivity(ctx, serverapi.WorkflowTaskOffsetPageRequest{TaskID: taskID})
 	if err != nil {
 		t.Fatalf("ListWorkflowTaskActivity: %v", err)
 	}
@@ -195,7 +195,7 @@ func TestServiceCommentMutationsUpdateActivityAndPublishInvalidations(t *testing
 	if err := service.DeleteWorkflowTaskComment(ctx, serverapi.WorkflowTaskCommentDeleteRequest{CommentID: added.Comment.ID}); err != nil {
 		t.Fatalf("DeleteWorkflowTaskComment: %v", err)
 	}
-	activity, err = service.ListWorkflowTaskActivity(ctx, serverapi.WorkflowTaskActivityListRequest{TaskID: taskID})
+	activity, err = service.ListWorkflowTaskActivity(ctx, serverapi.WorkflowTaskOffsetPageRequest{TaskID: taskID})
 	if err != nil {
 		t.Fatalf("ListWorkflowTaskActivity after delete: %v", err)
 	}
@@ -220,7 +220,7 @@ func TestServiceTaskCommentListPaginatesOffsetWindows(t *testing.T) {
 	}
 	offset := 0
 	limit := 2
-	first, err := service.ListWorkflowTaskComments(ctx, serverapi.WorkflowTaskCommentListRequest{
+	first, err := service.ListWorkflowTaskComments(ctx, serverapi.WorkflowTaskOffsetPageRequest{
 		TaskID: taskID,
 		Offset: &offset,
 		Limit:  &limit,
@@ -228,10 +228,10 @@ func TestServiceTaskCommentListPaginatesOffsetWindows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListWorkflowTaskComments first page: %v", err)
 	}
-	if len(first.Comments) != 2 || first.NextOffset == nil || *first.NextOffset != 2 {
+	if len(first.Items) != 2 || first.NextOffset == nil || *first.NextOffset != 2 || first.TotalCount != 3 {
 		t.Fatalf("first comment page = %+v", first)
 	}
-	second, err := service.ListWorkflowTaskComments(ctx, serverapi.WorkflowTaskCommentListRequest{
+	second, err := service.ListWorkflowTaskComments(ctx, serverapi.WorkflowTaskOffsetPageRequest{
 		TaskID: taskID,
 		Offset: first.NextOffset,
 		Limit:  &limit,
@@ -239,11 +239,11 @@ func TestServiceTaskCommentListPaginatesOffsetWindows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListWorkflowTaskComments continued page: %v", err)
 	}
-	if len(second.Comments) != 1 || second.NextOffset != nil {
+	if len(second.Items) != 1 || second.NextOffset != nil || second.TotalCount != 3 {
 		t.Fatalf("continued comment page = %+v", second)
 	}
 	beyondEnd := 3
-	empty, err := service.ListWorkflowTaskComments(ctx, serverapi.WorkflowTaskCommentListRequest{
+	empty, err := service.ListWorkflowTaskComments(ctx, serverapi.WorkflowTaskOffsetPageRequest{
 		TaskID: taskID,
 		Offset: &beyondEnd,
 		Limit:  &limit,
@@ -251,7 +251,7 @@ func TestServiceTaskCommentListPaginatesOffsetWindows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListWorkflowTaskComments beyond end: %v", err)
 	}
-	if len(empty.Comments) != 0 || empty.NextOffset != nil {
+	if len(empty.Items) != 0 || empty.NextOffset != nil || empty.TotalCount != 3 {
 		t.Fatalf("beyond-end comment page = %+v", empty)
 	}
 	negativeOffset := -1
@@ -268,7 +268,7 @@ func TestServiceTaskCommentListPaginatesOffsetWindows(t *testing.T) {
 		{name: "limit above maximum", offset: &offset, limit: &aboveLimit, field: "limit"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := service.ListWorkflowTaskComments(ctx, serverapi.WorkflowTaskCommentListRequest{
+			_, err := service.ListWorkflowTaskComments(ctx, serverapi.WorkflowTaskOffsetPageRequest{
 				TaskID: taskID,
 				Offset: tt.offset,
 				Limit:  tt.limit,

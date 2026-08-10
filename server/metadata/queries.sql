@@ -3106,50 +3106,30 @@ LIMIT CASE
 END;
 
 -- name: ListWorkflowTaskActivityRows :many
-WITH activity(
-    activity_id,
-    kind,
-    source_id,
-    occurred_at_unix_ms,
-    updated_at_unix_ms,
-    session_name
-) AS (
-    SELECT
-        CAST('comment:' || c.id AS TEXT) AS activity_id,
-        'comment' AS kind,
-        c.id AS source_id,
-        c.updated_at_unix_ms AS occurred_at_unix_ms,
-        c.updated_at_unix_ms AS updated_at_unix_ms,
-        CAST(NULL AS TEXT) AS session_name
-    FROM task_comments c
-    WHERE c.task_id = sqlc.arg(task_id)
-      AND (
-          sqlc.arg(cursor_active) = 0
-          OR c.updated_at_unix_ms < sqlc.arg(cursor_occurred_at_unix_ms)
-          OR (c.updated_at_unix_ms = sqlc.arg(cursor_occurred_at_unix_ms) AND ('comment:' || c.id) < sqlc.arg(cursor_activity_id))
-      )
+SELECT
+    CAST('comment:' || c.id AS TEXT) AS activity_id,
+    'comment' AS kind,
+    c.id AS source_id,
+    c.updated_at_unix_ms AS occurred_at_unix_ms,
+    c.updated_at_unix_ms AS updated_at_unix_ms,
+    CAST(NULL AS TEXT) AS session_name
+FROM task_comments c
+WHERE c.task_id = sqlc.arg(task_id)
 
-    UNION ALL
+UNION ALL
 
-    SELECT
-        CAST('session_started:' || s.id AS TEXT) AS activity_id,
-        'session_started' AS kind,
-        s.id AS source_id,
-        s.created_at_unix_ms AS occurred_at_unix_ms,
-        s.created_at_unix_ms AS updated_at_unix_ms,
-        s.name AS session_name
-    FROM sessions s
-    WHERE s.task_id = sqlc.arg(task_id)
-      AND (
-          sqlc.arg(cursor_active) = 0
-          OR s.created_at_unix_ms < sqlc.arg(cursor_occurred_at_unix_ms)
-          OR (s.created_at_unix_ms = sqlc.arg(cursor_occurred_at_unix_ms) AND ('session_started:' || s.id) < sqlc.arg(cursor_activity_id))
-      )
-)
-SELECT activity_id, kind, source_id, occurred_at_unix_ms, updated_at_unix_ms, session_name
-FROM activity
+SELECT
+    CAST('session_started:' || s.id AS TEXT) AS activity_id,
+    'session_started' AS kind,
+    s.id AS source_id,
+    s.created_at_unix_ms AS occurred_at_unix_ms,
+    s.created_at_unix_ms AS updated_at_unix_ms,
+    s.name AS session_name
+FROM sessions s
+WHERE s.task_id = sqlc.arg(task_id)
 ORDER BY occurred_at_unix_ms DESC, activity_id DESC
-LIMIT sqlc.arg(page_limit);
+LIMIT sqlc.arg(page_limit)
+OFFSET sqlc.arg(page_offset);
 
 -- name: ListTaskCommentsByIDs :many
 SELECT

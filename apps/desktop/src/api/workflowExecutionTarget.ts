@@ -106,7 +106,7 @@ export type TaskMovePreviewBlocker =
 export type TaskMoveRequiredValue = Readonly<{
   nodeKey: string;
   outputName: string;
-  description: string;
+  description: string | null;
   resolvedValue: string | null;
 }>;
 

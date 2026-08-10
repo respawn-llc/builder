@@ -187,7 +187,7 @@ func TestTaskMoveValidatesStructuredValuesAgainstPreview(t *testing.T) {
 					RequiredValues: []serverapi.WorkflowTaskMoveRequiredValue{{
 						NodeKey:     "plan",
 						OutputName:  "summary",
-						Description: "Summary",
+						Description: nil,
 					}},
 				}},
 			},
@@ -202,15 +202,29 @@ func TestTaskMoveValidatesStructuredValuesAgainstPreview(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	exitCode := taskSubcommand([]string{
-		"move", "task-1", "implement",
+		"move", "task-1", "implement", "--json",
 		"--transition", "next",
 		"--values-json", `{"plan":{"summary":"done"}}`,
 	}, &stdout, &stderr)
-	if exitCode != 0 || len(remote.moveRequests) != 1 {
+	if exitCode != 0 {
 		t.Fatalf("exit code = %d, move requests = %+v, stderr=%q", exitCode, remote.moveRequests, stderr.String())
 	}
-	if got := remote.moveRequests[0].Values["plan"]["summary"]; got != "done" {
-		t.Fatalf("structured values = %+v, want plan.summary=done", remote.moveRequests[0].Values)
+	if len(remote.moveRequests) == 0 {
+		t.Fatalf("move requests = %+v, want an applied move request", remote.moveRequests)
+	}
+	request := remote.moveRequests[len(remote.moveRequests)-1]
+	if request.TransitionKey == nil || *request.TransitionKey != "next" {
+		t.Fatalf("transition key = %v, want next", request.TransitionKey)
+	}
+	if got := request.Values["plan"]["summary"]; got != "done" {
+		t.Fatalf("structured values = %+v, want plan.summary=done", request.Values)
+	}
+	var response serverapi.WorkflowTaskMoveResponse
+	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
+		t.Fatalf("decode move response: %v (stdout=%q)", err, stdout.String())
+	}
+	if response.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeApplied || response.Applied == nil {
+		t.Fatalf("move response = %+v, want public Applied outcome", response)
 	}
 }
 
@@ -312,7 +326,7 @@ func TestTaskMoveForwardsNullValueNodeToServerValidation(t *testing.T) {
 					RequiredValues: []serverapi.WorkflowTaskMoveRequiredValue{{
 						NodeKey:       "plan",
 						OutputName:    "summary",
-						Description:   "Summary",
+						Description:   nil,
 						ResolvedValue: &resolved,
 					}},
 				}},

@@ -5,7 +5,11 @@ import { cx } from "./classes";
 import { InfiniteListBoundary, type VirtualizedInfiniteListBoundaryState } from "./InfiniteListBoundary";
 import { Spinner } from "./Spinner";
 import { resolveVirtualizedInitialScroll } from "./virtualizedInfiniteListInitialScroll";
-import { resolveLoadMore } from "./virtualizedInfiniteListLoadMore";
+import {
+  resolveNextLoadEdge,
+  resolvePreviousLoadEdge,
+  useVirtualizedLoadMore,
+} from "./virtualizedInfiniteListLoadMore";
 import { pinnedVirtualRangeExtractor } from "./virtualizedPinnedRange";
 import { shouldAdjustScrollForVirtualizedResize } from "./virtualizedResizePolicy";
 import {
@@ -18,6 +22,8 @@ export type { VirtualizedInfiniteListBoundaryState } from "./InfiniteListBoundar
 export type VirtualizedInfiniteListProps<TItem> = Readonly<{
   items: readonly TItem[];
   getItemKey: (item: TItem) => string;
+  getItemAnchorKey?: ((item: TItem) => string) | undefined;
+  getItemOccurrenceKey?: ((item: TItem) => string) | undefined;
   renderItem: (item: TItem, itemIndex: number) => ReactNode;
   header?: ReactNode | undefined;
   empty?: ReactNode | undefined;
@@ -42,6 +48,7 @@ export type VirtualizedInfiniteListProps<TItem> = Readonly<{
   hasPreviousPage?: boolean | undefined;
   isFetchingPreviousPage?: boolean | undefined;
   previousLoadKey?: string | undefined;
+  previousLoadItemKey?: string | undefined;
   onLoadPrevious?: (() => void) | undefined;
   previousBoundary?: VirtualizedInfiniteListBoundaryState | undefined;
   nextBoundary?: VirtualizedInfiniteListBoundaryState | undefined;
@@ -50,9 +57,49 @@ export type VirtualizedInfiniteListProps<TItem> = Readonly<{
   pixelOffsetRequest?: VirtualizedPixelOffsetRequest | undefined;
 }>;
 
-export function VirtualizedInfiniteList<TItem>({
+type VirtualizedInfiniteListResolvedProps<TItem> = Omit<
+  VirtualizedInfiniteListProps<TItem>,
+  | "role"
+  | "rowSpacing"
+  | "initialScrollAlign"
+  | "paddingEnd"
+  | "paddingStart"
+  | "hasPreviousPage"
+  | "isFetchingPreviousPage"
+> & {
+  role: "list" | "listbox";
+  rowSpacing: "default" | "compact" | "tight";
+  initialScrollAlign: "auto" | "start";
+  paddingEnd: number;
+  paddingStart: number;
+  hasPreviousPage: boolean;
+  isFetchingPreviousPage: boolean;
+};
+
+function resolveVirtualizedInfiniteListProps<TItem>(
+  props: VirtualizedInfiniteListProps<TItem>,
+): VirtualizedInfiniteListResolvedProps<TItem> {
+  return {
+    ...props,
+    role: props.role ?? "list",
+    rowSpacing: props.rowSpacing ?? "default",
+    initialScrollAlign: props.initialScrollAlign ?? "start",
+    paddingEnd: props.paddingEnd ?? 0,
+    paddingStart: props.paddingStart ?? 0,
+    hasPreviousPage: props.hasPreviousPage ?? false,
+    isFetchingPreviousPage: props.isFetchingPreviousPage ?? false,
+  };
+}
+
+export function VirtualizedInfiniteList<TItem>(props: VirtualizedInfiniteListProps<TItem>) {
+  return <VirtualizedInfiniteListContent {...resolveVirtualizedInfiniteListProps(props)} />;
+}
+
+function VirtualizedInfiniteListContent<TItem>({
   items,
   getItemKey,
+  getItemAnchorKey,
+  getItemOccurrenceKey,
   renderItem,
   header,
   empty,
@@ -64,26 +111,29 @@ export function VirtualizedInfiniteList<TItem>({
   estimateSize,
   id,
   ariaLabel,
-  role = "list",
-  rowSpacing = "default",
+  role,
+  rowSpacing,
   testId,
   initialScrollKey,
   initialScrollRequestKey,
-  initialScrollAlign = "start",
-  paddingEnd = 0,
-  paddingStart = 0,
+  initialScrollAlign,
+  paddingEnd,
+  paddingStart,
   className,
   nonAdjustingResizeItemKey,
-  hasPreviousPage = false,
-  isFetchingPreviousPage = false,
+  hasPreviousPage,
+  isFetchingPreviousPage,
   previousLoadKey,
+  previousLoadItemKey,
   onLoadPrevious,
   previousBoundary,
   nextBoundary,
   onScrollElementChange,
   pinnedItemKeys,
   pixelOffsetRequest,
-}: VirtualizedInfiniteListProps<TItem>) {
+}: VirtualizedInfiniteListResolvedProps<TItem>) {
+  const getItemAnchorKeyForItem = getItemAnchorKey ?? getItemKey;
+  const getItemOccurrenceKeyForItem = getItemOccurrenceKey ?? getItemKey;
   const validatedPixelOffsetRequest = requireVirtualizedPixelOffsetRequest(pixelOffsetRequest);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const setScrollElement = useCallback(
@@ -100,23 +150,16 @@ export function VirtualizedInfiniteList<TItem>({
   const wasFetchingPreviousPageRef = useRef(false);
   const wasFetchingNextPageRef = useRef(false);
   const leadingAnchorRef = useRef<VirtualizedLeadingAnchor | null>(null);
-  const previousItemKeysRef = useRef<readonly string[]>([]);
-  const {
-    count,
-    emptyCount,
-    headerCount,
-    itemStartIndex,
-    legacyPlaceholderIndex,
-    nextBoundaryIndex,
-    previousBoundaryCount,
-  } = virtualizedListLayout({
-    empty,
-    hasHeader: header !== undefined,
-    hasNextPage,
-    itemCount: items.length,
-    nextBoundary,
-    previousBoundary,
-  });
+  const previousAnchorEntriesRef = useRef<readonly VirtualizedAnchorEntry[]>([]);
+  const previousBoundaryCount = Number(previousBoundary !== undefined);
+  const headerCount = Number(header !== undefined);
+  const emptyCount = Number(items.length === 0 && empty !== undefined);
+  const itemStartIndex = previousBoundaryCount + headerCount;
+  const contentCount = Math.max(items.length, emptyCount);
+  const nextBoundaryIndex = itemStartIndex + contentCount;
+  const legacyPlaceholderIndex = nextBoundary === undefined && hasNextPage ? nextBoundaryIndex : null;
+  const count =
+    nextBoundaryIndex + Number(nextBoundary !== undefined) + Number(legacyPlaceholderIndex !== null);
   const pinnedIndexes = useMemo(() => {
     if (pinnedItemKeys === undefined || pinnedItemKeys.size === 0) {
       return new Set<number>();
@@ -138,25 +181,21 @@ export function VirtualizedInfiniteList<TItem>({
     initialRect: { width: 800, height: 600 },
     paddingEnd,
     paddingStart,
-    getItemKey: (index) => {
-      if (previousBoundary !== undefined && index === 0) {
-        return "boundary-previous";
-      }
-      if (header !== undefined && index === previousBoundaryCount) {
-        return "header";
-      }
-      if (items.length === 0 && empty !== undefined && index === itemStartIndex) {
-        return "empty";
-      }
-      const item = items[index - itemStartIndex];
-      if (item !== undefined) {
-        return getItemKey(item);
-      }
-      if (nextBoundaryIndex === index) {
-        return "boundary-next";
-      }
-      return `placeholder-${index.toString()}`;
-    },
+    // Pixel restoration and leading-anchor recovery issue absolute scroll
+    // commands from layout effects. Do not re-enter React synchronously from
+    // those lifecycle paths.
+    useFlushSync: false,
+    getItemKey: (index) =>
+      virtualRowKey({
+        emptyCount,
+        getItemKey,
+        headerCount,
+        index,
+        itemStartIndex,
+        items,
+        nextBoundaryIndex,
+        previousBoundaryCount,
+      }),
     overscan: 6,
     rangeExtractor: (range) => pinnedVirtualRangeExtractor(range, pinnedIndexes),
   });
@@ -180,6 +219,7 @@ export function VirtualizedInfiniteList<TItem>({
       empty,
       emptyCount,
       header,
+      headerIndex: previousBoundaryCount,
       itemStartIndex,
       isFetchingNextPage,
       item: items[virtualIndex - itemStartIndex],
@@ -203,12 +243,21 @@ export function VirtualizedInfiniteList<TItem>({
       .getVirtualItems()
       .find(
         (item) =>
-          item.index >= itemStartIndex && item.index < itemStartIndex + items.length && item.end > scrollTop,
+          item.index >= itemStartIndex &&
+          item.index < itemStartIndex + items.length &&
+          item.start <= scrollTop &&
+          item.end > scrollTop,
       );
     if (virtualItem !== undefined) {
       const item = items[virtualItem.index - itemStartIndex];
       leadingAnchorRef.current =
-        item === undefined ? null : { itemKey: getItemKey(item), inRowOffset: scrollTop - virtualItem.start };
+        item === undefined
+          ? null
+          : {
+              anchorKey: getItemAnchorKeyForItem(item),
+              occurrenceKey: getItemOccurrenceKeyForItem(item),
+              inRowOffset: scrollTop - virtualItem.start,
+            };
       return;
     }
     const estimatedSize = Math.max(1, estimateSize());
@@ -222,10 +271,19 @@ export function VirtualizedInfiniteList<TItem>({
       item === undefined
         ? null
         : {
-            itemKey: getItemKey(item),
+            anchorKey: getItemAnchorKeyForItem(item),
+            occurrenceKey: getItemOccurrenceKeyForItem(item),
             inRowOffset: scrollTop - (paddingStart + estimatedVirtualIndex * estimatedSize),
           };
-  }, [estimateSize, getItemKey, itemStartIndex, items, paddingStart, virtualizer]);
+  }, [
+    estimateSize,
+    getItemAnchorKeyForItem,
+    getItemOccurrenceKeyForItem,
+    itemStartIndex,
+    items,
+    paddingStart,
+    virtualizer,
+  ]);
 
   useEffect(() => {
     if (initialScrollKey === undefined) {
@@ -254,7 +312,7 @@ export function VirtualizedInfiniteList<TItem>({
     virtualizer,
   ]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (
       validatedPixelOffsetRequest === undefined ||
       items.length === 0 ||
@@ -263,97 +321,76 @@ export function VirtualizedInfiniteList<TItem>({
     ) {
       return;
     }
+    scrollRef.current.scrollTop = validatedPixelOffsetRequest.offsetPx;
+    virtualizer.scrollToOffset(scrollRef.current.scrollTop, { behavior: "auto" });
     lastPixelOffsetKeyRef.current = validatedPixelOffsetRequest.key;
-    virtualizer.scrollToOffset(validatedPixelOffsetRequest.offsetPx, { behavior: "auto" });
   }, [items.length, validatedPixelOffsetRequest, virtualizer]);
 
   useLayoutEffect(() => {
-    const currentKeys = items.map(getItemKey);
-    const previousKeys = previousItemKeysRef.current;
+    const currentEntries = items.map((item) => ({
+      anchorKey: getItemAnchorKeyForItem(item),
+      occurrenceKey: getItemOccurrenceKeyForItem(item),
+    }));
+    const previousEntries = previousAnchorEntriesRef.current;
     const anchor = leadingAnchorRef.current;
     const element = scrollRef.current;
-    if (previousKeys.length > 0 && anchor !== null && element !== null) {
-      const previousIndex = previousKeys.indexOf(anchor.itemKey);
-      const currentIndex = currentKeys.indexOf(anchor.itemKey);
-      if (previousIndex >= 0 && currentIndex >= 0 && previousIndex !== currentIndex) {
-        const virtualIndex = itemStartIndex + currentIndex;
+    if (previousEntries.length > 0 && anchor !== null && element !== null) {
+      const resolvedPreviousIndex = resolveAnchorEntryIndex(previousEntries, anchor);
+      const resolvedCurrentIndex = resolveAnchorEntryIndex(currentEntries, anchor);
+      if (resolvedPreviousIndex >= 0 && resolvedCurrentIndex >= 0) {
+        const virtualIndex = itemStartIndex + resolvedCurrentIndex;
         const measuredOffset = isFallbackRendering
           ? undefined
           : virtualizer.getOffsetForIndex(virtualIndex, "start")?.[0];
         const rowOffset = measuredOffset ?? paddingStart + virtualIndex * Math.max(1, estimateSize());
         const scrollOffset = rowOffset + anchor.inRowOffset;
-        element.scrollTop = scrollOffset;
-        if (!isFallbackRendering) {
+        const scrollOffsetChanged = element.scrollTop !== scrollOffset;
+        if (scrollOffsetChanged) element.scrollTop = scrollOffset;
+        if (scrollOffsetChanged && !isFallbackRendering) {
           virtualizer.scrollToOffset(scrollOffset, { behavior: "auto" });
         }
       }
     }
-    previousItemKeysRef.current = currentKeys;
+    previousAnchorEntriesRef.current = currentEntries;
     captureLeadingAnchor();
   }, [
     captureLeadingAnchor,
     estimateSize,
-    getItemKey,
+    getItemAnchorKeyForItem,
+    getItemOccurrenceKeyForItem,
     isFallbackRendering,
     itemStartIndex,
     items,
     paddingStart,
+    virtualItems,
     virtualizer,
   ]);
 
-  useEffect(() => {
-    if (onLoadPrevious === undefined) {
-      return;
-    }
-    const firstVisibleIndex = visibleIndexes[0];
-    const decision = resolveLoadMore({
-      atBottom: firstVisibleIndex !== undefined && firstVisibleIndex <= itemStartIndex,
-      hasNextPage: hasPreviousPage,
-      isFetchingNextPage: isFetchingPreviousPage,
-      lastLoadMoreKey: lastLoadPreviousKeyRef.current,
-      loadMoreKey: previousLoadKey ?? items.length.toString(),
-      wasFetchingNextPage: wasFetchingPreviousPageRef.current,
-    });
-    wasFetchingPreviousPageRef.current = isFetchingPreviousPage;
-    lastLoadPreviousKeyRef.current = decision.lastLoadMoreKey;
-    if (decision.shouldLoad) {
-      onLoadPrevious();
-    }
-  }, [
-    hasPreviousPage,
-    isFetchingPreviousPage,
-    itemStartIndex,
-    items.length,
-    onLoadPrevious,
-    previousLoadKey,
-    visibleIndexes,
-  ]);
+  useVirtualizedLoadMore({
+    atEdge: resolvePreviousLoadEdge({
+      getItemKey,
+      itemStartIndex,
+      items,
+      previousLoadItemKey,
+      visibleIndexes,
+    }),
+    hasNextPage: hasPreviousPage,
+    isFetchingNextPage: isFetchingPreviousPage,
+    lastLoadMoreKeyRef: lastLoadPreviousKeyRef,
+    loadMoreKey: previousLoadKey ?? items.length.toString(),
+    onLoadMore: onLoadPrevious,
+    wasFetchingNextPageRef: wasFetchingPreviousPageRef,
+  });
 
-  useEffect(() => {
-    const lastVisibleIndex = visibleIndexes.at(-1);
-    const lastDataIndex = itemStartIndex + items.length - 1;
-    const decision = resolveLoadMore({
-      atBottom: lastVisibleIndex !== undefined && lastVisibleIndex >= lastDataIndex,
-      hasNextPage,
-      isFetchingNextPage,
-      lastLoadMoreKey: lastLoadMoreKeyRef.current,
-      loadMoreKey: loadMoreKey ?? items.length.toString(),
-      wasFetchingNextPage: wasFetchingNextPageRef.current,
-    });
-    wasFetchingNextPageRef.current = isFetchingNextPage;
-    lastLoadMoreKeyRef.current = decision.lastLoadMoreKey;
-    if (decision.shouldLoad) {
-      onLoadMore();
-    }
-  }, [
+  useVirtualizedLoadMore({
+    atEdge: resolveNextLoadEdge(itemStartIndex, items.length, visibleIndexes),
     hasNextPage,
     isFetchingNextPage,
-    itemStartIndex,
-    items.length,
-    loadMoreKey,
+    lastLoadMoreKeyRef,
+    loadMoreKey: loadMoreKey ?? items.length.toString(),
     onLoadMore,
-    visibleIndexes,
-  ]);
+    wasFetchingNextPageRef,
+  });
 
   if (count > 0 && virtualItems.length === 0) {
     return (
@@ -369,7 +406,7 @@ export function VirtualizedInfiniteList<TItem>({
         {fallbackIndexes.map((index) => (
           <div
             className={virtualRowClassName({ count, index, rowSpacing, virtualized: false })}
-            key={fallbackRowKey({
+            key={virtualRowKey({
               emptyCount,
               getItemKey,
               headerCount,
@@ -469,7 +506,7 @@ function virtualRowClassName({
   return cx(virtualized ? index !== 0 && "pt-[var(--space-3)]" : "pt-[var(--space-3)] first:pt-0");
 }
 
-function fallbackRowKey<TItem>({
+function virtualRowKey<TItem>({
   emptyCount,
   getItemKey,
   headerCount,
@@ -485,7 +522,7 @@ function fallbackRowKey<TItem>({
   index: number;
   itemStartIndex: number;
   items: readonly TItem[];
-  nextBoundaryIndex: number | null;
+  nextBoundaryIndex: number;
   previousBoundaryCount: number;
 }>): string {
   if (previousBoundaryCount > 0 && index === 0) {
@@ -508,9 +545,10 @@ function renderVirtualRow<TItem>({
   empty,
   emptyCount,
   header,
-  itemStartIndex,
+  headerIndex,
   isFetchingNextPage,
   item,
+  itemStartIndex,
   legacyPlaceholderIndex,
   loadingLabel,
   nextBoundary,
@@ -522,9 +560,10 @@ function renderVirtualRow<TItem>({
   empty: ReactNode | undefined;
   emptyCount: number;
   header: ReactNode | undefined;
-  itemStartIndex: number;
+  headerIndex: number;
   isFetchingNextPage: boolean;
   item: TItem | undefined;
+  itemStartIndex: number;
   legacyPlaceholderIndex: number | null;
   loadingLabel: string;
   nextBoundary: VirtualizedInfiniteListBoundaryState | undefined;
@@ -536,7 +575,7 @@ function renderVirtualRow<TItem>({
   if (previousBoundary !== undefined && virtualIndex === 0) {
     return <InfiniteListBoundary direction="previous" state={previousBoundary} />;
   }
-  if (header !== undefined && virtualIndex === (previousBoundary === undefined ? 0 : 1)) {
+  if (header !== undefined && virtualIndex === headerIndex) {
     return header;
   }
   if (emptyCount > 0 && virtualIndex === itemStartIndex) {
@@ -576,42 +615,34 @@ function VirtualizedPlaceholder({
 }
 
 type VirtualizedLeadingAnchor = Readonly<{
-  itemKey: string;
+  anchorKey: string;
+  occurrenceKey: string;
   inRowOffset: number;
 }>;
 
-function virtualizedListLayout({
-  empty,
-  hasHeader,
-  hasNextPage,
-  itemCount,
-  nextBoundary,
-  previousBoundary,
-}: Readonly<{
-  empty: ReactNode | undefined;
-  hasHeader: boolean;
-  hasNextPage: boolean;
-  itemCount: number;
-  nextBoundary: VirtualizedInfiniteListBoundaryState | undefined;
-  previousBoundary: VirtualizedInfiniteListBoundaryState | undefined;
-}>) {
-  const previousBoundaryCount = previousBoundary === undefined ? 0 : 1;
-  const headerCount = hasHeader ? 1 : 0;
-  const emptyCount = itemCount === 0 && empty !== undefined ? 1 : 0;
-  const itemStartIndex = previousBoundaryCount + headerCount;
-  const contentCount = Math.max(itemCount, emptyCount);
-  const nextBoundaryCount = nextBoundary === undefined ? 0 : 1;
-  const placeholderCount = nextBoundary === undefined && hasNextPage ? 1 : 0;
-  return {
-    contentCount,
-    count: itemStartIndex + contentCount + nextBoundaryCount + placeholderCount,
-    emptyCount,
-    headerCount,
-    itemStartIndex,
-    legacyPlaceholderIndex: nextBoundary === undefined && hasNextPage ? itemStartIndex + contentCount : null,
-    nextBoundaryIndex: nextBoundary === undefined ? null : itemStartIndex + contentCount,
-    previousBoundaryCount,
-  };
+type VirtualizedAnchorEntry = Readonly<{
+  anchorKey: string;
+  occurrenceKey: string;
+}>;
+
+function findAnchorEntryIndex(
+  entries: readonly VirtualizedAnchorEntry[],
+  anchor: VirtualizedLeadingAnchor,
+  includeOccurrence: boolean,
+): number {
+  return entries.findIndex(
+    (entry) =>
+      entry.anchorKey === anchor.anchorKey &&
+      (!includeOccurrence || entry.occurrenceKey === anchor.occurrenceKey),
+  );
+}
+
+function resolveAnchorEntryIndex(
+  entries: readonly VirtualizedAnchorEntry[],
+  anchor: VirtualizedLeadingAnchor,
+): number {
+  const occurrenceIndex = findAnchorEntryIndex(entries, anchor, true);
+  return occurrenceIndex >= 0 ? occurrenceIndex : findAnchorEntryIndex(entries, anchor, false);
 }
 
 function fallbackVirtualIndexes({
