@@ -22,6 +22,7 @@ func TestGoalAvailabilityLifecycleAndCapability(t *testing.T) {
 
 func TestGoalAvailabilityRejectsMalformedLockedSnapshot(t *testing.T) {
 	t.Setenv("KENT_INVARIANT_MODE", "diagnostic")
+	if _, err := GoalAvailabilityFromMeta(Meta{Locked: &LockedContract{}}); err == nil { t.Fatal("missing locked tool snapshot returned availability") }
 	_, err := GoalAvailabilityFromMeta(Meta{SessionID: "session-1", PromptCacheLineageGeneration: 7, Locked: &LockedContract{HasEnabledTools: true, EnabledTools: []string{string(toolspec.ToolAskQuestion), "unknown"}}})
 	if err == nil || !strings.Contains(err.Error(), "generation 7") { t.Fatalf("malformed availability error = %v", err) }
 }

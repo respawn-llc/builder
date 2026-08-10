@@ -65,6 +65,7 @@ func TestGoalLifecycleCarriesMissingAskQuestionCapability(t *testing.T) {
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x"); if err := store.MarkModelDispatchLocked(session.LockedContract{EnabledTools: []string{string(toolspec.ToolExecCommand)}}); err != nil { t.Fatal(err) }
 	events := []Event{}; engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{OnEvent: func(evt Event) { events = append(events, evt) }}); assertMissing := func(name string) { update := events[len(events)-1].GoalStatus; if update == nil || update.Availability != clientui.GoalAvailabilityAgentCapabilityMissing { t.Fatalf("goal %s update = %+v", name, update) } }
 	if _, err := engine.SetGoal("goal", session.GoalActorUser); err != nil { t.Fatal(err) }; assertMissing("set")
+	if _, err := engine.SetGoal("replacement", session.GoalActorUser); err != nil { t.Fatal(err) }; assertMissing("replace")
 	for _, status := range []session.GoalStatus{session.GoalStatusPaused, session.GoalStatusActive, session.GoalStatusComplete} { if _, err := engine.SetGoalStatusWithoutGoalLoopStart(status, session.GoalActorUser); err != nil { t.Fatal(err) }; assertMissing(string(status)) }
 	if _, err := engine.ClearGoal(session.GoalActorUser); err != nil { t.Fatal(err) }; assertMissing("clear")
 }
