@@ -39,42 +39,10 @@ func initialSessionInput(store *session.Store, transitionInput string) string {
 }
 
 func persistSessionInputDraft(store *session.Store, input string) error {
-	return persistSessionInputDraftRecovery(store, input, nil)
-}
-
-func persistSessionInputDraftRecovery(store *session.Store, input string, buffers []serverapi.SessionDraftRecoveryBuffer) error {
 	if store == nil {
 		return nil
 	}
-	return store.SetInputDraftRecovery(input, sessionRecoveryBuffersFromAPI(buffers))
-}
-
-func sessionRecoveryBuffersFromAPI(buffers []serverapi.SessionDraftRecoveryBuffer) []session.InputDraftRecoveryBuffer {
-	if len(buffers) == 0 {
-		return nil
-	}
-	out := make([]session.InputDraftRecoveryBuffer, 0, len(buffers))
-	for _, buffer := range buffers {
-		out = append(out, session.InputDraftRecoveryBuffer{
-			Kind: string(buffer.Kind),
-			Text: buffer.Text,
-		})
-	}
-	return out
-}
-
-func sessionRecoveryBuffersToAPI(buffers []session.InputDraftRecoveryBuffer) []serverapi.SessionDraftRecoveryBuffer {
-	if len(buffers) == 0 {
-		return nil
-	}
-	out := make([]serverapi.SessionDraftRecoveryBuffer, 0, len(buffers))
-	for _, buffer := range buffers {
-		out = append(out, serverapi.SessionDraftRecoveryBuffer{
-			Kind: serverapi.SessionDraftRecoveryBufferKind(buffer.Kind),
-			Text: buffer.Text,
-		})
-	}
-	return out
+	return store.SetInputDraft(input)
 }
 
 func resolveSessionTransition(_ context.Context, req sessionTransitionResolveRequest) (serverapi.SessionDirective, error) {

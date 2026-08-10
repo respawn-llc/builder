@@ -27,7 +27,11 @@ func queuedUserMessagesForTest(texts ...string) []clientui.QueuedUserMessage {
 func queuedInputsForTest(texts ...string) []queuedInputItem {
 	items := make([]queuedInputItem, 0, len(texts))
 	for index, text := range texts {
-		items = append(items, queuedInputItem{ID: fmt.Sprintf("input-queue-test-%d", index), Text: text})
+		items = append(items, queuedInputItem{
+			ID:              fmt.Sprintf("input-queue-test-%d", index),
+			Text:            text,
+			submissionOrder: uint64(index + 1),
+		})
 	}
 	return items
 }

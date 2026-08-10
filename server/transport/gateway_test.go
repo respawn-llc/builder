@@ -143,6 +143,33 @@ func TestResponseForErrorMapsJoinedWorktreeBlocked(t *testing.T) {
 	}
 }
 
+func TestResponseForErrorPreservesRuntimeCommandNotAcceptedCause(t *testing.T) {
+	command := "prompt:review"
+	cause := &serverapi.PromptCommandError{
+		Kind:    serverapi.PromptCommandErrorKindCommandNotFound,
+		Command: &command,
+	}
+	source := serverapi.NewRuntimeCommandNotAcceptedError(cause)
+	response := responseForError("runtime-command", source)
+	if response.Error == nil || response.Error.Code != protocol.ErrCodeRuntimeCommandNotAccepted {
+		t.Fatalf("runtime command response = %+v, want structured not-accepted error", response.Error)
+	}
+	var payload struct {
+		Cause protocol.ResponseError `json:"cause"`
+	}
+	if err := json.Unmarshal(response.Error.Data, &payload); err != nil {
+		t.Fatalf("decode nested cause: %v", err)
+	}
+	if payload.Cause.Code != protocol.ErrCodePromptCommands {
+		t.Fatalf("nested cause code = %d, want %d", payload.Cause.Code, protocol.ErrCodePromptCommands)
+	}
+	decoded := serverapi.DecodePromptCommandError(payload.Cause.Data, payload.Cause.Message)
+	var promptErr *serverapi.PromptCommandError
+	if !errors.As(decoded, &promptErr) || promptErr.Kind != cause.Kind || promptErr.Command == nil || *promptErr.Command != command {
+		t.Fatalf("nested cause = %T %+v, want %+v", decoded, promptErr, cause)
+	}
+}
+
 func TestResponseForErrorMapsProjectWorkspaceTypedFailures(t *testing.T) {
 	tests := []struct {
 		name string
@@ -1444,7 +1471,7 @@ func TestGatewayAllowsOptionalSessionLifecycleRequestsWithoutSessionID(t *testin
 	}
 }
 
-func TestGatewayDraftRecoveryRoundTripKeepsServerAvailable(t *testing.T) {
+func TestGatewayComposerDraftRoundTripKeepsServerAvailable(t *testing.T) {
 	appCore, server := newGatewayTestServer(t)
 	store := createGatewayAuthoritativeSession(t, appCore)
 
@@ -1458,15 +1485,10 @@ func TestGatewayDraftRecoveryRoundTripKeepsServerAvailable(t *testing.T) {
 	}
 	defer func() { _ = remote.Close() }()
 
-	wantRecovery := []serverapi.SessionDraftRecoveryBuffer{
-		{Kind: serverapi.SessionDraftRecoveryBufferPendingInjectedInput, Text: "  pending steering\n"},
-		{Kind: serverapi.SessionDraftRecoveryBufferQueuedInput, Text: "\tqueued later  "},
-	}
 	if _, err := remote.PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{
-		ClientRequestID: "gateway-draft-recovery",
+		ClientRequestID: "gateway-composer-draft",
 		SessionID:       store.Meta().SessionID,
 		Input:           "visible draft",
-		RecoveryBuffers: wantRecovery,
 	}); err != nil {
 		t.Fatalf("PersistInputDraft: %v", err)
 	}
@@ -1476,11 +1498,8 @@ func TestGatewayDraftRecoveryRoundTripKeepsServerAvailable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetInitialInput: %v", err)
 	}
-	if initialInput.Input != "visible draft" ||
-		len(initialInput.RecoveryBuffers) != len(wantRecovery) ||
-		initialInput.RecoveryBuffers[0] != wantRecovery[0] ||
-		initialInput.RecoveryBuffers[1] != wantRecovery[1] {
-		t.Fatalf("initial input = %+v, want visible draft and ordered byte-preserved recovery %+v", initialInput, wantRecovery)
+	if initialInput.Input != "visible draft" {
+		t.Fatalf("initial input = %+v, want visible draft", initialInput)
 	}
 	projects, err := remote.ListProjects(context.Background(), serverapi.ProjectListRequest{})
 	if err != nil {

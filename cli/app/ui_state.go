@@ -11,7 +11,6 @@ import (
 	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
-	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/google/uuid"
@@ -74,19 +73,20 @@ type uiInputFeatureState struct {
 	pendingRuntimeOperations []clientui.RuntimeOperationRef
 	submitToken              uint64
 	activeSubmit             activeSubmitState
-	recoveredDraftBuffers    []serverapi.SessionDraftRecoveryBuffer
 
-	pendingInjected    []clientui.QueuedUserMessage
-	injectedQueue      []injectedRuntimeQueueItem
-	injectedQueueToken uint64
-	interruptLifecycle uiInterruptLifecycle
-	currentRunID       string
-	currentStepID      string
-	interruptRunID     string
-	interruptStepID    string
-	interruptPreActive bool
-	completedRunID     string
-	completedStepID    string
+	pendingInjected             []clientui.QueuedUserMessage
+	injectedQueue               []injectedRuntimeQueueItem
+	injectedQueueToken          uint64
+	pendingInputSubmissionOrder uint64
+	interruptedQueueEventIDs    map[string]struct{}
+	interruptLifecycle          uiInterruptLifecycle
+	currentRunID                string
+	currentStepID               string
+	interruptRunID              string
+	interruptStepID             string
+	interruptPreActive          bool
+	completedRunID              string
+	completedStepID             string
 
 	modelName                 string
 	configuredModelName       string

@@ -522,6 +522,10 @@ func (m *uiModel) applyRuntimeControlDone(msg runtimeControlDoneMsg) tea.Cmd {
 	m.observeRuntimeRequestResult(msg.err)
 	if msg.err != nil {
 		m.clearRuntimeControlPending(msg.operation)
+		if msg.operation == runtimeControlInterrupt {
+			m.setPendingInterrupt(false)
+			m.interruptPreActive = false
+		}
 		errText := runtimeattach.FormatSubmissionError(msg.err)
 		return sequenceCmds(
 			m.appendLocalEntryWithNoticeID("error", errText, ""),
@@ -592,9 +596,6 @@ func (m *uiModel) applyRuntimeControlDone(msg runtimeControlDoneMsg) tea.Cmd {
 			if err := m.applyRuntimeActivityProjection(view.Activity); err != nil {
 				m.activity = uiActivityError
 				return tea.Batch(followUpCmd, m.sendTransientStatusWithNoticeID("invalid runtime activity: "+err.Error(), uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, ""))
-			}
-			if m.pendingInterruptMissingInputReconciliation(view) {
-				return tea.Batch(followUpCmd, m.requestInputReconciliationRefresh())
 			}
 			return tea.Batch(followUpCmd, m.acknowledgePendingInterrupt())
 		}

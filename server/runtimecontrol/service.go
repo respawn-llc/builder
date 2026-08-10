@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 
 	"core/server/metadata"
 	"core/server/requestmemo"
@@ -50,24 +51,28 @@ type WorkflowTaskSessionResolver interface {
 var errWorkflowTaskSessionAutoCompactionDisable = errors.New("auto-compaction cannot be disabled for workflow task sessions")
 
 type Service struct {
-	authority      *sessionruntime.Authority
-	execution      *runtimecommand.ExecutionAdapter
-	goalAuthority  *runtimecommand.GoalAuthority
-	activity       RuntimeActivityResolver
-	promptStore    PromptHistoryStore
-	promptCommands PromptCommandResolver
-	workflowTasks  WorkflowTaskSessionResolver
-	persisted      session.PersistedSessionResolver
-	askViews       servicecontract.AskViewService
-	approvalViews  servicecontract.ApprovalViewService
-	attention      servicecontract.AttentionNotificationService
-	operations     *runtimeops.Coordinator
-	sessionNames   *requestmemo.Memo[sessionStringMemoRequest, struct{}]
-	thinkingLevels *requestmemo.Memo[sessionStringMemoRequest, struct{}]
-	fastModes      *requestmemo.Memo[sessionBoolMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSetFastModeEnabledResponse]]
-	reviewers      *requestmemo.Memo[sessionBoolMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSetReviewerEnabledResponse]]
-	autoCompacts   *requestmemo.Memo[sessionBoolMemoRequest, serverapi.RuntimeSetAutoCompactionEnabledResponse]
-	questions      *requestmemo.Memo[sessionBoolMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSetQuestionsEnabledResponse]]
+	authority            *sessionruntime.Authority
+	execution            *runtimecommand.ExecutionAdapter
+	goalAuthority        *runtimecommand.GoalAuthority
+	activity             RuntimeActivityResolver
+	promptStore          PromptHistoryStore
+	promptCommands       PromptCommandResolver
+	workflowTasks        WorkflowTaskSessionResolver
+	persisted            session.PersistedSessionResolver
+	askViews             servicecontract.AskViewService
+	approvalViews        servicecontract.ApprovalViewService
+	attention            servicecontract.AttentionNotificationService
+	operations           *runtimeops.Coordinator
+	sessionNames         *requestmemo.Memo[sessionStringMemoRequest, struct{}]
+	thinkingLevels       *requestmemo.Memo[sessionStringMemoRequest, struct{}]
+	fastModes            *requestmemo.Memo[sessionBoolMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSetFastModeEnabledResponse]]
+	reviewers            *requestmemo.Memo[sessionBoolMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSetReviewerEnabledResponse]]
+	autoCompacts         *requestmemo.Memo[sessionBoolMemoRequest, serverapi.RuntimeSetAutoCompactionEnabledResponse]
+	questions            *requestmemo.Memo[sessionBoolMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSetQuestionsEnabledResponse]]
+	userTurns            *requestmemo.Memo[sessionUserTurnMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSubmitUserTurnResponse]]
+	userShells           *requestmemo.Memo[sessionCommandMemoRequest, committedRuntimeMutationResult[struct{}]]
+	compactions          *requestmemo.Memo[sessionStringMemoRequest, committedRuntimeMutationResult[struct{}]]
+	preSubmitCompactions *requestmemo.Memo[sessionOnlyMemoRequest, committedRuntimeMutationResult[bool]]
 
 	localEntries   *requestmemo.Memo[localEntryMemoRequest, struct{}]
 	queuedDiscards *requestmemo.Memo[queuedUserMessageMemoRequest, serverapi.RuntimeDiscardQueuedUserMessageResponse]
@@ -192,16 +197,20 @@ func NewServiceWithGoalCommands(
 		goalAuthority = runtimecommand.NewGoalAuthority(authority, execution)
 	}
 	return &Service{
-		authority:      authority,
-		execution:      execution,
-		goalAuthority:  goalAuthority,
-		operations:     runtimeops.NewCoordinator(),
-		sessionNames:   requestmemo.New[sessionStringMemoRequest, struct{}](),
-		thinkingLevels: requestmemo.New[sessionStringMemoRequest, struct{}](),
-		fastModes:      requestmemo.New[sessionBoolMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSetFastModeEnabledResponse]](),
-		reviewers:      requestmemo.New[sessionBoolMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSetReviewerEnabledResponse]](),
-		autoCompacts:   requestmemo.New[sessionBoolMemoRequest, serverapi.RuntimeSetAutoCompactionEnabledResponse](),
-		questions:      requestmemo.New[sessionBoolMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSetQuestionsEnabledResponse]](),
+		authority:            authority,
+		execution:            execution,
+		goalAuthority:        goalAuthority,
+		operations:           runtimeops.NewCoordinator(),
+		sessionNames:         requestmemo.New[sessionStringMemoRequest, struct{}](),
+		thinkingLevels:       requestmemo.New[sessionStringMemoRequest, struct{}](),
+		fastModes:            requestmemo.New[sessionBoolMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSetFastModeEnabledResponse]](),
+		reviewers:            requestmemo.New[sessionBoolMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSetReviewerEnabledResponse]](),
+		autoCompacts:         requestmemo.New[sessionBoolMemoRequest, serverapi.RuntimeSetAutoCompactionEnabledResponse](),
+		questions:            requestmemo.New[sessionBoolMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSetQuestionsEnabledResponse]](),
+		userTurns:            requestmemo.New[sessionUserTurnMemoRequest, committedRuntimeMutationResult[serverapi.RuntimeSubmitUserTurnResponse]](),
+		userShells:           requestmemo.New[sessionCommandMemoRequest, committedRuntimeMutationResult[struct{}]](),
+		compactions:          requestmemo.New[sessionStringMemoRequest, committedRuntimeMutationResult[struct{}]](),
+		preSubmitCompactions: requestmemo.New[sessionOnlyMemoRequest, committedRuntimeMutationResult[bool]](),
 
 		localEntries:   requestmemo.New[localEntryMemoRequest, struct{}](),
 		queuedDiscards: requestmemo.New[queuedUserMessageMemoRequest, serverapi.RuntimeDiscardQueuedUserMessageResponse](),
@@ -298,6 +307,111 @@ func mergeOperationContexts(contexts ...context.Context) (context.Context, func(
 	return sessionruntime.MergeContexts(contexts...)
 }
 
+type runtimeCommandAttempt struct {
+	caller     context.Context
+	ctx        context.Context
+	cancel     context.CancelCauseFunc
+	stopCaller func() bool
+
+	mu       sync.Mutex
+	accepted bool
+	finished bool
+}
+
+func newRuntimeCommandAttempt(caller context.Context) *runtimeCommandAttempt {
+	if caller == nil {
+		caller = context.Background()
+	}
+	ctx, cancel := context.WithCancelCause(context.WithoutCancel(caller))
+	attempt := &runtimeCommandAttempt{caller: caller, ctx: ctx, cancel: cancel}
+	attempt.stopCaller = context.AfterFunc(caller, func() {
+		attempt.mu.Lock()
+		defer attempt.mu.Unlock()
+		if !attempt.accepted && !attempt.finished {
+			attempt.cancel(context.Cause(caller))
+		}
+	})
+	if cause := context.Cause(caller); cause != nil {
+		attempt.cancel(cause)
+	}
+	return attempt
+}
+
+func (a *runtimeCommandAttempt) Context() context.Context {
+	if a == nil {
+		return context.Background()
+	}
+	return a.ctx
+}
+
+func (a *runtimeCommandAttempt) Accept(commit func() (bool, error)) (bool, error) {
+	if a == nil {
+		return false, errors.New("runtime command attempt is required")
+	}
+	if commit == nil {
+		return false, errors.New("runtime command acceptance mutation is required")
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.finished {
+		return false, errors.New("runtime command attempt already finished")
+	}
+	if a.accepted {
+		return false, errors.New("runtime command was accepted more than once")
+	}
+	if cause := context.Cause(a.caller); cause != nil {
+		a.cancel(cause)
+		return false, cause
+	}
+	committed, err := commit()
+	if committed {
+		a.accepted = true
+		if a.stopCaller != nil {
+			a.stopCaller()
+		}
+	}
+	return committed, err
+}
+
+func (a *runtimeCommandAttempt) Accepted() bool {
+	if a == nil {
+		return false
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.accepted
+}
+
+func (a *runtimeCommandAttempt) Finish() {
+	if a == nil {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.finished = true
+	if a.stopCaller != nil {
+		a.stopCaller()
+	}
+	a.cancel(context.Canceled)
+}
+
+func (s *Service) runtimeOperationAcceptance(
+	attempt *runtimeCommandAttempt,
+	sessionID string,
+	ref clientui.RuntimeOperationRef,
+) runtime.CommandAcceptance {
+	return func(commit func() (bool, error)) (bool, error) {
+		return attempt.Accept(func() (bool, error) {
+			return s.operations.TryRecordOperationMutation(
+				sessionID,
+				ref,
+				clientui.RuntimeInputReconciliationCommitted,
+				commit,
+			)
+		})
+	}
+}
+
 func (s *Service) operationAttemptCanceled(err error, attempt runtimeops.Attempt) bool {
 	return err != nil && attempt.Context().Err() != nil
 }
@@ -308,14 +422,6 @@ func (s *Service) recordRuntimeAccessFailureOrCancellation(sessionID string, ref
 		return
 	}
 	s.operations.RecordRuntimeAccessFailure(sessionID, ref)
-}
-
-func (s *Service) recordOperationCompletion(sessionID string, ref clientui.RuntimeOperationRef, receipt session.CommitReceipt, err error, attempt runtimeops.Attempt, record func(string, clientui.RuntimeOperationRef, session.CommitReceipt, error)) {
-	if !receipt.Committed && s.operationAttemptCanceled(err, attempt) {
-		s.operations.RecordCanceledNotCommitted(sessionID, ref)
-	} else {
-		record(sessionID, ref, receipt, err)
-	}
 }
 
 func (s *Service) SetSessionName(ctx context.Context, req serverapi.RuntimeSetSessionNameRequest) error {
@@ -443,6 +549,38 @@ func memoizedCommittedRuntimeMutation[Req any, Resp any](
 	return result.Response, result.Err
 }
 
+func memoizedRuntimeCommand[Req any, Resp any](
+	ctx context.Context,
+	requestID string,
+	req Req,
+	memo *requestmemo.Memo[Req, committedRuntimeMutationResult[Resp]],
+	same func(Req, Req) bool,
+	run func(context.Context) (Resp, bool, error),
+) (Resp, error) {
+	var zero Resp
+	result, err := memo.Do(ctx, requestID, req, same, func(ctx context.Context) (committedRuntimeMutationResult[Resp], error) {
+		response, accepted, commandErr := run(ctx)
+		if !accepted {
+			return committedRuntimeMutationResult[Resp]{}, runtimeCommandNotAccepted(commandErr)
+		}
+		return committedRuntimeMutationResult[Resp]{Response: response, Err: commandErr}, nil
+	})
+	if err != nil {
+		return zero, runtimeCommandNotAccepted(err)
+	}
+	return result.Response, result.Err
+}
+
+func runtimeCommandNotAccepted(cause error) error {
+	if errors.Is(cause, serverapi.ErrRuntimeCommandNotAccepted) {
+		return cause
+	}
+	if cause == nil {
+		cause = errors.New("runtime command completed without accepting a mutation")
+	}
+	return serverapi.NewRuntimeCommandNotAcceptedError(cause)
+}
+
 func (s *Service) publishSessionStatus(sessionID string) error {
 	if publisher, ok := s.activity.(sessionStatusPublisher); ok {
 		return publisher.PublishSessionStatus(sessionID)
@@ -509,19 +647,29 @@ func (s *Service) SubmitUserShellCommand(ctx context.Context, req serverapi.Runt
 		return err
 	}
 	memoReq := sessionCommandMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Command: req.Command}
-	_, err := runtimeops.Do(s.operations, ctx, memoReq.SessionID, req.OperationRef, memoReq, sameSessionCommandMemoRequest, func(ctx context.Context, attempt runtimeops.Attempt) (struct{}, error) {
-		err := s.runAgentExecution(attempt.Context(), req.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
-			_, err := engine.SubmitUserShellCommandWithActiveHook(runCtx, memoReq.Command, func() {
-				s.operations.MarkOperationActive(memoReq.SessionID, req.OperationRef)
+	_, err := memoizedRuntimeCommand(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, s.userShells, sameSessionCommandMemoRequest, func(ctx context.Context) (struct{}, bool, error) {
+		accepted := false
+		_, commandErr := runtimeops.Track(s.operations, ctx, memoReq.SessionID, req.OperationRef, func(ctx context.Context, tracked runtimeops.Attempt) (struct{}, error) {
+			runCtx, stopRunCtx := mergeOperationContexts(ctx, tracked.Context())
+			defer stopRunCtx()
+			attempt := newRuntimeCommandAttempt(runCtx)
+			defer attempt.Finish()
+			err := s.runAgentExecution(attempt.Context(), req.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
+				_, err := engine.SubmitUserShellCommandWithAcceptance(
+					runCtx,
+					memoReq.Command,
+					func() { s.operations.MarkOperationActive(memoReq.SessionID, req.OperationRef) },
+					s.runtimeOperationAcceptance(attempt, memoReq.SessionID, req.OperationRef),
+				)
+				return err
 			})
-			return err
-		})
-		if s.operationAttemptCanceled(err, attempt) {
-			s.operations.RecordCanceledNotCommitted(memoReq.SessionID, req.OperationRef)
+			accepted = attempt.Accepted()
+			if !accepted {
+				s.recordRuntimeAccessFailureOrCancellation(memoReq.SessionID, req.OperationRef, err, tracked)
+			}
 			return struct{}{}, err
-		}
-		s.operations.RecordShellCompletion(memoReq.SessionID, req.OperationRef, err)
-		return struct{}{}, err
+		})
+		return struct{}{}, accepted, commandErr
 	})
 	return err
 }
@@ -531,17 +679,29 @@ func (s *Service) CompactContext(ctx context.Context, req serverapi.RuntimeCompa
 		return err
 	}
 	memoReq := sessionStringMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Value: req.Args}
-	_, err := runtimeops.Do(s.operations, ctx, memoReq.SessionID, req.OperationRef, memoReq, sameSessionStringMemoRequest, func(ctx context.Context, attempt runtimeops.Attempt) (struct{}, error) {
-		var receipt session.CommitReceipt
-		err := s.runAgentExecution(attempt.Context(), req.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
-			compactReceipt, compactErr := engine.CompactContextWithActiveHook(runCtx, req.Args, func() {
-				s.operations.MarkOperationActive(memoReq.SessionID, req.OperationRef)
+	_, err := memoizedRuntimeCommand(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, s.compactions, sameSessionStringMemoRequest, func(ctx context.Context) (struct{}, bool, error) {
+		accepted := false
+		_, commandErr := runtimeops.Track(s.operations, ctx, memoReq.SessionID, req.OperationRef, func(ctx context.Context, tracked runtimeops.Attempt) (struct{}, error) {
+			runCtx, stopRunCtx := mergeOperationContexts(ctx, tracked.Context())
+			defer stopRunCtx()
+			attempt := newRuntimeCommandAttempt(runCtx)
+			defer attempt.Finish()
+			err := s.runAgentExecution(attempt.Context(), req.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
+				_, compactErr := engine.CompactContextWithAcceptance(
+					runCtx,
+					req.Args,
+					func() { s.operations.MarkOperationActive(memoReq.SessionID, req.OperationRef) },
+					s.runtimeOperationAcceptance(attempt, memoReq.SessionID, req.OperationRef),
+				)
+				return compactErr
 			})
-			receipt = compactReceipt
-			return compactErr
+			accepted = attempt.Accepted()
+			if !accepted {
+				s.recordRuntimeAccessFailureOrCancellation(memoReq.SessionID, req.OperationRef, err, tracked)
+			}
+			return struct{}{}, err
 		})
-		s.recordOperationCompletion(memoReq.SessionID, req.OperationRef, receipt, err, attempt, s.operations.RecordCompactCompletion)
-		return struct{}{}, err
+		return struct{}{}, accepted, commandErr
 	})
 	return err
 }
@@ -566,21 +726,30 @@ func (s *Service) interrupt(ctx context.Context, req runtimeInterruptMemoRequest
 	sessionID := strings.TrimSpace(req.SessionID)
 	pendingRefs := append([]clientui.RuntimeOperationRef(nil), req.PendingOperationRefs...)
 	interruptActive := req.TargetOperationRef == nil
-	targetQueuedMessage := false
-	var cancelResult runtimeops.CancellationResult
-	if req.TargetOperationRef != nil {
-		targetQueuedMessage = req.TargetOperationRef.Kind == clientui.RuntimeOperationKindQueuedMessage
-		var err error
-		cancelResult, err = s.operations.CancelOperationTarget(sessionID, *req.TargetOperationRef)
-		if err != nil {
-			return serverapi.RuntimeInterruptResponse{}, err
-		}
-		interruptActive = !targetQueuedMessage && cancelResult.InterruptActive && s.runtimeActivityActiveForControl(ctx, sessionID, pendingRefs)
-		if !slices.Contains(pendingRefs, *req.TargetOperationRef) {
-			pendingRefs = append([]clientui.RuntimeOperationRef{*req.TargetOperationRef}, pendingRefs...)
-		}
+	targetQueuedMessage := req.TargetOperationRef != nil && req.TargetOperationRef.Kind == clientui.RuntimeOperationKindQueuedMessage
+	if req.TargetOperationRef != nil && !slices.Contains(pendingRefs, *req.TargetOperationRef) {
+		pendingRefs = append([]clientui.RuntimeOperationRef{*req.TargetOperationRef}, pendingRefs...)
 	}
-	err := s.withRuntime(ctx, sessionID, func(_ context.Context, engine *runtime.Engine) error {
+	var cancelResult runtimeops.CancellationResult
+	cancelTarget := func() error {
+		if req.TargetOperationRef == nil {
+			return nil
+		}
+		result, err := s.operations.CancelOperationTarget(sessionID, *req.TargetOperationRef)
+		cancelResult = result
+		interruptActive = !targetQueuedMessage && cancelResult.InterruptActive
+		return err
+	}
+	mutateRuntime := func(_ context.Context, engine *runtime.Engine) error {
+		if interruptActive {
+			interrupted, err := engine.TryInterruptActiveAgentTurn()
+			if err != nil {
+				return err
+			}
+			if !interrupted {
+				return serverapi.NewRuntimeCommandNotAcceptedError(errors.New("no active Agent Turn"))
+			}
+		}
 		for _, ref := range pendingRefs {
 			if ref.Kind != clientui.RuntimeOperationKindQueuedMessage || ref.QueueItemID == nil {
 				continue
@@ -596,28 +765,59 @@ func (s *Service) interrupt(ctx context.Context, req runtimeInterruptMemoRequest
 				return err
 			}
 		}
-		if interruptActive {
-			if err := engine.Interrupt(); err != nil {
-				return err
+		return nil
+	}
+	var err error
+	if targetQueuedMessage {
+		err = cancelTarget()
+		if err == nil {
+			err = s.withRuntime(ctx, sessionID, mutateRuntime)
+		}
+		if errors.Is(err, serverapi.ErrRuntimeUnavailable) {
+			err = nil
+		}
+	} else {
+		id, parseErr := runtimeids.ParseSessionID(sessionID)
+		if parseErr != nil {
+			return serverapi.RuntimeInterruptResponse{}, parseErr
+		}
+		var withoutExecution func() error
+		if req.TargetOperationRef != nil {
+			withoutExecution = func() error {
+				if err := cancelTarget(); err != nil {
+					return err
+				}
+				if cancelResult.InterruptActive {
+					return sessionruntime.ErrExecutionNoLongerLive
+				}
+				return cancelResult.Commit()
 			}
 		}
-		return nil
-	})
-	if err != nil && !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
+		err = s.authority.WithInterruptibleAgentTurn(ctx, id, withoutExecution, func(ctx context.Context, engine *runtime.Engine) error {
+			if err := cancelTarget(); err != nil {
+				return err
+			}
+			if err := mutateRuntime(ctx, engine); err != nil {
+				return err
+			}
+			if err := cancelResult.Commit(); err != nil {
+				return err
+			}
+			return nil
+		})
+		switch {
+		case errors.Is(err, sessionruntime.ErrExecutionPromptPending):
+			err = serverapi.NewRuntimeCommandNotAcceptedError(err)
+		case errors.Is(err, sessionruntime.ErrExecutionNoLongerLive):
+			err = serverapi.NewRuntimeCommandNotAcceptedError(errors.New("no active Agent Turn"))
+		case errors.Is(err, serverapi.ErrRuntimeUnavailable):
+			err = serverapi.NewRuntimeCommandNotAcceptedError(err)
+		}
+	}
+	if err != nil {
 		return serverapi.RuntimeInterruptResponse{}, err
 	}
-	if req.TargetOperationRef != nil {
-		cancelResult.CancelOperationAttempt()
-	}
 	return s.runtimeInterruptResponse(sessionID, pendingRefs)
-}
-
-func (s *Service) runtimeActivityActiveForControl(ctx context.Context, sessionID string, refs []clientui.RuntimeOperationRef) bool {
-	if s == nil || s.activity == nil {
-		return false
-	}
-	snapshot, err := s.activity.RuntimeReadModelSnapshot(ctx, sessionID, refs)
-	return err == nil && snapshot.Activity.ActiveForControl()
 }
 
 func (s *Service) runtimeInterruptResponse(sessionID string, refs []clientui.RuntimeOperationRef) (serverapi.RuntimeInterruptResponse, error) {
