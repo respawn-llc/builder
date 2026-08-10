@@ -14,7 +14,7 @@ export function workflowGraphDraftPayload(graph: WorkflowGraphDraft): JsonObject
         key: node.key,
         kind: node.kind,
         display_name: node.name,
-        group_id: node.groupID.length > 0 ? node.groupID : null,
+        group_id: node.groupID,
         group_key: node.groupKey.length > 0 ? node.groupKey : undefined,
         subagent_role: node.subagentRole.length > 0 ? node.subagentRole : undefined,
         completion_mode:

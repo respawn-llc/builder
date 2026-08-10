@@ -352,7 +352,7 @@ export type WorkflowGraphDraftNode = Readonly<{
   key: string;
   kind: string;
   name: string;
-  groupID: string;
+  groupID: string | null;
   groupKey: string;
   subagentRole: string;
   completionMode?: string | undefined;

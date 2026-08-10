@@ -2340,23 +2340,21 @@ func (r WorkflowGraphSaveRequest) Validate() error {
 }
 
 func (r WorkflowGraphSavePreviewResponse) Validate() error {
-	if r.CurrentVersion < 0 {
-		return errors.New("current_version must be non-negative")
-	}
-	if err := r.Impact.Validate(); err != nil {
-		return fmt.Errorf("impact: %w", err)
-	}
-	return validateWorkflowGraphSaveBlockers(r.Blockers)
+	return validateWorkflowGraphSaveResponse(r.CurrentVersion, r.Impact, r.Blockers)
 }
 
 func (r WorkflowGraphSaveResponse) Validate() error {
-	if r.CurrentVersion < 0 {
+	return validateWorkflowGraphSaveResponse(r.CurrentVersion, r.Impact, r.Blockers)
+}
+
+func validateWorkflowGraphSaveResponse(currentVersion int64, impact WorkflowGraphSaveImpact, blockers []WorkflowGraphSaveBlocker) error {
+	if currentVersion < 0 {
 		return errors.New("current_version must be non-negative")
 	}
-	if err := r.Impact.Validate(); err != nil {
+	if err := impact.Validate(); err != nil {
 		return fmt.Errorf("impact: %w", err)
 	}
-	return validateWorkflowGraphSaveBlockers(r.Blockers)
+	return validateWorkflowGraphSaveBlockers(blockers)
 }
 
 func (i WorkflowGraphSaveImpact) Validate() error {
