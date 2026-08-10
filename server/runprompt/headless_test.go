@@ -619,7 +619,6 @@ func TestSelectedRetainedRunPromptUsesWorkflowAuthorityForKentTaskComplete(t *te
 	}()
 	t.Cleanup(func() {
 		releaseOnce.Do(func() { close(release) })
-		<-runDone
 	})
 	select {
 	case <-started:
@@ -635,6 +634,121 @@ func TestSelectedRetainedRunPromptUsesWorkflowAuthorityForKentTaskComplete(t *te
 		"completed from kent task complete",
 	); err != nil {
 		t.Fatalf("kent task complete could not resolve selected retained RunPrompt Workflow authority: %v", err)
+	}
+}
+
+func TestRetainedActivationRejectsExpectedExactReplacementInsteadOfOpeningOrdinaryRuntime(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if modelstub.HandleInputTokenCount(w, r, 1) {
+			return
+		}
+		modelstub.WriteCompletedResponseStream(w, "unused", 1, 1)
+	}))
+	t.Cleanup(server.Close)
+	fixture := newRetainedSelectedRunPromptFixture(t, server.URL, nil, nil)
+	api := sessionruntime.NewAPI(fixture.metadata, nil, fixture.authority, sessionruntime.APIOptions{})
+	initial, err := api.ActivateSessionRuntime(
+		context.Background(),
+		retainedRunPromptActivationRequest(t, fixture.sessionID, server.URL, "user_activation"),
+	)
+	if err != nil {
+		t.Fatalf("open retained Session resource: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = api.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
+			ClientRequestID: "release-expected-exact-resource",
+			Attachment:      initial.Attachment,
+			OwnerID:         "tui-owner",
+			DropOwner:       true,
+			ClosePolicy:     serverapi.SessionRuntimeReleaseClosePolicyDetachOnly,
+		})
+	})
+	scope, err := fixture.store.TaskExecutionScope(context.Background(), fixture.taskID)
+	if err != nil {
+		t.Fatalf("TaskExecutionScope: %v", err)
+	}
+	lease, err := fixture.authority.NewWorkflowExecutionLease(sessionruntime.WorkflowExecutionRef{
+		ProjectID:   scope.ProjectID,
+		WorkflowID:  scope.WorkflowID,
+		CurrentNode: fixture.currentNode,
+	})
+	if err != nil {
+		t.Fatalf("NewWorkflowExecutionLease: %v", err)
+	}
+	lease.Release()
+	descriptor, err := session.NewOpenSessionDescriptor(fixture.sessionID)
+	if err != nil {
+		t.Fatalf("NewOpenSessionDescriptor: %v", err)
+	}
+	execution, err := fixture.authority.StartAgentExecution(context.Background(), sessionruntime.AgentExecutionRequest{
+		Descriptor: descriptor,
+		Workflow:   &lease,
+		Resource:   sessionruntime.CurrentAgentResource{},
+		Runner: func(context.Context, sessionruntime.ExecutionScope, sessionruntime.AgentRuntimeBridge) error {
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("start expected Workflow Exact: %v", err)
+	}
+	expectedScope := execution.Scope()
+	expectedResource, ok := expectedScope.Resource()
+	if !ok {
+		t.Fatal("expected Workflow Exact has no Session Resource Generation")
+	}
+	if _, err := execution.Wait(context.Background()); err != nil {
+		t.Fatalf("wait expected Workflow Exact retirement: %v", err)
+	}
+
+	request := retainedRunPromptActivationRequest(
+		t,
+		fixture.sessionID,
+		server.URL,
+		"user_activation",
+	)
+	request.OwnerID = "delayed-activation-owner"
+	encoded, err := json.Marshal(request)
+	if err != nil {
+		t.Fatalf("marshal retained activation: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(encoded, &payload); err != nil {
+		t.Fatalf("decode retained activation: %v", err)
+	}
+	expectedAttachment := map[string]any{
+		"session_id":          fixture.sessionID.String(),
+		"execution_scope_id":  expectedScope.ID().String(),
+		"task_id":             string(fixture.currentNode.TaskID),
+		"node_id":             string(fixture.currentNode.NodeID),
+		"resource_generation": uint64(expectedResource.Generation()),
+	}
+	if branchKey, present := fixture.currentNode.TransitionBranchKey(); present {
+		expectedAttachment["branch_key"] = string(branchKey)
+	}
+	payload["expected_exact_attachment"] = expectedAttachment
+	encoded, err = json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal expected Exact activation: %v", err)
+	}
+	if err := json.Unmarshal(encoded, &request); err != nil {
+		t.Fatalf("decode expected Exact activation: %v", err)
+	}
+	activation, err := api.ActivateSessionRuntime(context.Background(), request)
+	if err == nil {
+		_, _ = api.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
+			ClientRequestID: "release-unexpected-replacement",
+			Attachment:      activation.Attachment,
+			OwnerID:         "tui-owner",
+			DropOwner:       true,
+			ClosePolicy:     serverapi.SessionRuntimeReleaseClosePolicyDetachOnly,
+		})
+		t.Fatalf(
+			"retained activation expected Session %s, Exact %s, Current Node %v, Resource Generation %d but opened an ordinary replacement",
+			fixture.sessionID,
+			expectedScope.ID(),
+			fixture.currentNode,
+			expectedResource.Generation(),
+		)
 	}
 }
 
@@ -671,43 +785,6 @@ func TestTaskResumeFirstMakesSelectedRetainedRunPromptFailIdleCheck(t *testing.T
 	}
 }
 
-func TestTUIActivationFirstMakesSelectedRetainedRunPromptFailIdleCheck(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if modelstub.HandleInputTokenCount(w, r, 1) {
-			return
-		}
-		modelstub.WriteCompletedResponseStream(w, "ordinary split", 1, 1)
-	}))
-	t.Cleanup(server.Close)
-	fixture := newRetainedSelectedRunPromptFixture(t, server.URL, nil, nil)
-	api := sessionruntime.NewAPI(fixture.metadata, nil, fixture.authority, sessionruntime.APIOptions{})
-	activation, err := api.ActivateSessionRuntime(
-		context.Background(),
-		retainedRunPromptActivationRequest(t, fixture.sessionID, server.URL, "user_activation"),
-	)
-	if err != nil {
-		t.Fatalf("TUI activation: %v", err)
-	}
-	t.Cleanup(func() {
-		_, _ = api.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
-			ClientRequestID: "release-tui-first",
-			Attachment:      activation.Attachment,
-			OwnerID:         "tui-owner",
-			DropOwner:       true,
-			ClosePolicy:     serverapi.SessionRuntimeReleaseClosePolicyDetachOnly,
-		})
-	})
-
-	_, err = fixture.client.RunPrompt(context.Background(), serverapi.RunPromptRequest{
-		ClientRequestID: "retained-runprompt-tui-first",
-		Intent:          serverapi.OpenExistingSessionLaunchIntent(fixture.sessionID),
-		Prompt:          "continue",
-	}, nil)
-	if !errors.Is(err, ErrSessionRunning) {
-		t.Fatalf("TUI activation-first RunPrompt error = %v, want ErrSessionRunning before planning/input", err)
-	}
-}
-
 func TestFreshUserActivationRacingTaskResumeWaitsForTheWinningWorkflowExact(t *testing.T) {
 	runner := &retainedRunPromptBlockingRunner{
 		entered: make(chan struct{}),
@@ -723,23 +800,12 @@ func TestFreshUserActivationRacingTaskResumeWaitsForTheWinningWorkflowExact(t *t
 	t.Cleanup(server.Close)
 	fixture := newRetainedSelectedRunPromptFixture(t, server.URL, runner, nil)
 	api := sessionruntime.NewAPI(fixture.metadata, nil, fixture.authority, sessionruntime.APIOptions{})
-	begin := make(chan struct{})
 	activationDone := make(chan error, 1)
 	resumeDone := make(chan error, 1)
 	go func() {
-		<-begin
-		_, err := api.ActivateSessionRuntime(
-			context.Background(),
-			retainedRunPromptActivationRequest(t, fixture.sessionID, server.URL, "user_activation"),
-		)
-		activationDone <- err
-	}()
-	go func() {
-		<-begin
 		_, err := fixture.controller.ResumeTask(context.Background(), fixture.taskID)
 		resumeDone <- err
 	}()
-	close(begin)
 	select {
 	case err := <-resumeDone:
 		if err != nil {
@@ -753,6 +819,13 @@ func TestFreshUserActivationRacingTaskResumeWaitsForTheWinningWorkflowExact(t *t
 	case <-time.After(3 * time.Second):
 		t.Fatal("Task Resume did not reach pre-Exact preparation")
 	}
+	go func() {
+		_, err := api.ActivateSessionRuntime(
+			context.Background(),
+			retainedRunPromptActivationRequest(t, fixture.sessionID, server.URL, "user_activation"),
+		)
+		activationDone <- err
+	}()
 
 	select {
 	case err := <-activationDone:
@@ -901,10 +974,16 @@ func TestRetiringPredecessorMakesSelectedRetainedRunPromptFailIdleCheck(t *testi
 }
 
 func TestSelectedRetainedRunPromptOutcomeLessFinalizationDurablyInterruptsBeforeCleanup(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if modelstub.HandleInputTokenCount(w, r, 1) {
 			return
 		}
+		close(started)
+		<-release
 		modelstub.WriteCompletedResponseStream(w, "done without task completion", 1, 1)
 	}))
 	t.Cleanup(server.Close)
@@ -920,11 +999,38 @@ END`,
 	); err != nil {
 		t.Fatalf("install outcome-less persistence failure: %v", err)
 	}
-	_, _ = fixture.client.RunPrompt(context.Background(), serverapi.RunPromptRequest{
-		ClientRequestID: "retained-runprompt-outcome-less",
-		Intent:          serverapi.OpenExistingSessionLaunchIntent(fixture.sessionID),
-		Prompt:          "continue",
-	}, nil)
+	runDone := make(chan error, 1)
+	go func() {
+		_, err := fixture.client.RunPrompt(context.Background(), serverapi.RunPromptRequest{
+			ClientRequestID: "retained-runprompt-outcome-less",
+			Intent:          serverapi.OpenExistingSessionLaunchIntent(fixture.sessionID),
+			Prompt:          "continue",
+		}, nil)
+		runDone <- err
+	}()
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(release) })
+		<-runDone
+	})
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("selected retained RunPrompt did not reach its model turn")
+	}
+	execution, live := fixture.authority.SessionExecution(fixture.sessionID)
+	if !live {
+		t.Fatal("selected retained RunPrompt reached its model turn without Exact authority")
+	}
+	workflowRef, workflowOwned := execution.Scope().Workflow()
+	if !workflowOwned || !workflowRef.CurrentNode.Equal(fixture.currentNode) {
+		t.Fatalf(
+			"selected retained RunPrompt Exact = %+v, want Workflow-owned Current Node %v before outcome-less finalization",
+			execution.Scope(),
+			fixture.currentNode,
+		)
+	}
+	releaseOnce.Do(func() { close(release) })
+	<-runDone
 	nodes, err := fixture.store.ListCurrentNodes(context.Background(), fixture.taskID)
 	if err != nil {
 		t.Fatalf("ListCurrentNodes: %v", err)

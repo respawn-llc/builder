@@ -1563,50 +1563,6 @@ func TestStaleRuntimeAttachmentReleaseCannotAffectReplacement(t *testing.T) {
 	}
 }
 
-func TestExpectedExactWorkflowAttachmentRejectsRetiredExecutionInsteadOfOpeningDormantRuntime(t *testing.T) {
-	fixture := newSessionRuntimeFixture(t)
-	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("parse session id: %v", err)
-	}
-	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
-	workflowRef := workflowExecutionRefForTest(
-		t,
-		workflow.TaskID(uuid.NewString()),
-		workflow.NodeID(uuid.NewString()),
-		nil,
-	)
-	handle, err := fixture.authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
-		Descriptor: mustOpenSessionDescriptor(t, sessionID),
-		Runtime:    &plan,
-		Workflow:   releasedWorkflowLeaseForTest(t, fixture.authority, workflowRef),
-		Resource:   OpenAgentResource{},
-		Runner: func(context.Context, ExecutionScope, AgentRuntimeBridge) error {
-			return nil
-		},
-	})
-	if err != nil {
-		t.Fatalf("start expected Workflow execution: %v", err)
-	}
-	expectedScope := handle.Scope().ID()
-	if _, err := handle.Wait(context.Background()); err != nil {
-		t.Fatalf("wait expected Workflow execution: %v", err)
-	}
-
-	attachment, err := fixture.authority.OpenRuntime(context.Background(), RuntimeOpenRequest{
-		SessionID: sessionID,
-		OwnerID:   "delayed-activation-owner",
-		Runtime:   &plan,
-	})
-	if err == nil {
-		_, _ = attachment.Release(context.Background(), RuntimeReleaseClose)
-		t.Fatalf(
-			"delayed expected-Exact attachment for retired scope %q opened a dormant ordinary Runtime",
-			expectedScope,
-		)
-	}
-}
-
 func TestResourceReplacementWaitsForRetainedGenerationToDrain(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
