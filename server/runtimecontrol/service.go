@@ -731,7 +731,6 @@ func (s *Service) interrupt(ctx context.Context, req runtimeInterruptMemoRequest
 		pendingRefs = append([]clientui.RuntimeOperationRef{*req.TargetOperationRef}, pendingRefs...)
 	}
 	var cancelResult runtimeops.CancellationResult
-	attemptCanceled := false
 	cancelTarget := func() error {
 		if req.TargetOperationRef == nil {
 			return nil
@@ -804,7 +803,6 @@ func (s *Service) interrupt(ctx context.Context, req runtimeInterruptMemoRequest
 			if err := cancelResult.Commit(); err != nil {
 				return err
 			}
-			attemptCanceled = true
 			return nil
 		})
 		switch {
@@ -818,11 +816,6 @@ func (s *Service) interrupt(ctx context.Context, req runtimeInterruptMemoRequest
 	}
 	if err != nil {
 		return serverapi.RuntimeInterruptResponse{}, err
-	}
-	if req.TargetOperationRef != nil && !attemptCanceled {
-		if err := cancelResult.Commit(); err != nil {
-			return serverapi.RuntimeInterruptResponse{}, err
-		}
 	}
 	return s.runtimeInterruptResponse(sessionID, pendingRefs)
 }

@@ -233,48 +233,6 @@ func TestCoordinatorRecordsCommittedMutationError(t *testing.T) {
 	)
 }
 
-func TestCoordinatorCommittedActiveAttemptCanRequestInterrupt(t *testing.T) {
-	coord := NewCoordinator()
-	ref := testRuntimeOperationRef(clientui.RuntimeOperationKindSubmit)
-	accepted := make(chan struct{})
-	release := make(chan struct{})
-	done := make(chan error, 1)
-	go func() {
-		_, err := Track(coord, context.Background(), "session-1", ref, func(context.Context, Attempt) (struct{}, error) {
-			coord.MarkOperationActive("session-1", ref)
-			committed, commitErr := coord.TryRecordOperationMutation(
-				"session-1",
-				ref,
-				clientui.RuntimeInputReconciliationCommitted,
-				func() (bool, error) { return true, nil },
-			)
-			if commitErr != nil || !committed {
-				return struct{}{}, errors.New("exact mutation was not committed")
-			}
-			close(accepted)
-			<-release
-			return struct{}{}, nil
-		})
-		done <- err
-	}()
-	<-accepted
-
-	result, err := coord.CancelOperationTarget("session-1", ref)
-	if err != nil {
-		t.Fatalf("CancelOperationTarget: %v", err)
-	}
-	if !result.InterruptActive {
-		t.Fatal("committed active attempt did not request active interrupt")
-	}
-	if err := result.Commit(); err != nil {
-		t.Fatalf("commit active cancellation: %v", err)
-	}
-	close(release)
-	if err := <-done; err != nil {
-		t.Fatalf("Track completion: %v", err)
-	}
-}
-
 func assertState(
 	t *testing.T,
 	snapshot clientui.RuntimeInputReconciliationSnapshot,

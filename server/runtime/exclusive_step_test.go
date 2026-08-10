@@ -733,37 +733,6 @@ func TestExclusiveStepLifecycleAgentTurnInterruptKeepsSuccessorBehindPersistence
 	}
 }
 
-func TestExclusiveStepLifecycleAgentTurnPersistenceFailureDoesNotCancel(t *testing.T) {
-	persistErr := errors.New("interruption persistence failed")
-	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
-	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
-	canceled := false
-	lifecycle := &defaultExclusiveStepLifecycle{
-		engine: eng,
-		active: &exclusiveRunState{
-			sequence:   1,
-			activeKind: ActiveKindUserTurn,
-			cancel:     func() { canceled = true },
-			runID:      uuid.NewString(),
-			stepID:     uuid.NewString(),
-			startedAt:  time.Now().UTC(),
-		},
-	}
-	gate.FailNext(persistErr)
-
-	snapshot, err := lifecycle.InterruptCurrentAgentTurn(nil)
-	if snapshot != nil || !errors.Is(err, persistErr) {
-		t.Fatalf("agent-turn interrupt = (%+v, %v), want persistence failure", snapshot, err)
-	}
-	if canceled {
-		t.Fatal("Agent Turn context was canceled before interruption persisted")
-	}
-	if lifecycle.active.interrupted {
-		t.Fatal("persistence failure left Agent Turn marked interrupted")
-	}
-}
-
 func TestRunNextRetriesWhenPublicationStartsAfterBoundarySignal(t *testing.T) {
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})

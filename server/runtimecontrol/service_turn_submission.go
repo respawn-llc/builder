@@ -20,6 +20,10 @@ type userTurnProjection struct {
 	HistoryText   string
 }
 
+func queuedUserTurnResponse(compacted bool, queueItemID string) serverapi.RuntimeSubmitUserTurnResponse {
+	return serverapi.RuntimeSubmitUserTurnResponse{Compacted: compacted, ResultKind: clientui.UserTurnResultKindQueued, Steered: true, QueueItemID: queueItemID}
+}
+
 func userTurnMemoRequest(req serverapi.RuntimeSubmitUserTurnRequest) sessionUserTurnMemoRequest {
 	memo := sessionUserTurnMemoRequest{
 		SessionID: strings.TrimSpace(req.SessionID),
@@ -147,12 +151,7 @@ func (s *Service) submitUserTurn(
 			if queueErr != nil {
 				return errors.Join(acceptedCompactionErr, queueErr)
 			}
-			response = serverapi.RuntimeSubmitUserTurnResponse{
-				Compacted:   compacted,
-				ResultKind:  clientui.UserTurnResultKindQueued,
-				Steered:     true,
-				QueueItemID: queued.ID,
-			}
+			response = queuedUserTurnResponse(compacted, queued.ID)
 			return acceptedCompactionErr
 		}
 		outcome, queued, err := engine.SubmitUserMessageOrSteerWithAcceptance(
@@ -166,12 +165,7 @@ func (s *Service) submitUserTurn(
 			return errors.Join(acceptedCompactionErr, err)
 		}
 		if queued != nil {
-			response = serverapi.RuntimeSubmitUserTurnResponse{
-				Compacted:   compacted,
-				ResultKind:  clientui.UserTurnResultKindQueued,
-				Steered:     true,
-				QueueItemID: queued.ID,
-			}
+			response = queuedUserTurnResponse(compacted, queued.ID)
 			return acceptedCompactionErr
 		}
 		response = serverapi.RuntimeSubmitUserTurnResponse{
@@ -250,11 +244,7 @@ func (s *Service) trySubmitUserTurnAsActiveExecution(
 		if !accepted {
 			return serverapi.ErrSessionRunStarting
 		}
-		response = serverapi.RuntimeSubmitUserTurnResponse{
-			ResultKind:  clientui.UserTurnResultKindQueued,
-			Steered:     true,
-			QueueItemID: item.ID,
-		}
+		response = queuedUserTurnResponse(false, item.ID)
 		steered = true
 		if _, _, err := s.recordPromptHistory(context.Background(), memoReq.SessionID, clientRequestID.String(), projection.HistoryText); err != nil {
 			engine.ReportPromptHistoryPersistError(err.Error())

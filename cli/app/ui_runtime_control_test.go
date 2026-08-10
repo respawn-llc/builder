@@ -276,12 +276,7 @@ func TestRuntimeInterruptNotAcceptedClearsPendingAttempt(t *testing.T) {
 	if !m.hasPendingInterrupt() {
 		t.Fatal("interrupt attempt was not marked pending")
 	}
-	var done runtimeControlDoneMsg
-	for _, msg := range collectCmdMessages(t, cmd) {
-		if typed, ok := msg.(runtimeControlDoneMsg); ok {
-			done = typed
-		}
-	}
+	done := cmd().(runtimeControlDoneMsg)
 	next, _ := m.Update(done)
 	updated := next.(*uiModel)
 

@@ -13,8 +13,7 @@ import (
 
 const queuedUserSubmissionBusyRetryDelay = 25 * time.Millisecond
 
-// CommandAcceptance serializes caller cancellation with one candidate mutation.
-// Each candidate may be offered once and reports whether it committed.
+// CommandAcceptance serializes caller cancellation with a candidate mutation that reports whether it committed.
 type CommandAcceptance func(commit func() (bool, error)) (bool, error)
 
 func runCommandAcceptance(accept CommandAcceptance, commit func() (bool, error)) (bool, error) {
