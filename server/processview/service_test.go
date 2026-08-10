@@ -180,6 +180,24 @@ func TestServiceKillProcessHonorsCanceledContext(t *testing.T) {
 	}
 }
 
+func TestServiceKillProcessFailsWithoutRequestIdentityOwner(t *testing.T) {
+	source := &stubKillProcessSource{}
+	svc := NewProcessViewService(source)
+	svc.kills = nil
+
+	_, err := svc.KillProcess(context.Background(), serverapi.ProcessKillRequest{
+		ClientRequestID: "req-kill-owner",
+		ProcessID:       "1000",
+	})
+
+	if !errors.Is(err, requestmemo.ErrOwnerUnavailable) {
+		t.Fatalf("KillProcess error = %v, want %v", err, requestmemo.ErrOwnerUnavailable)
+	}
+	if source.killCalls != 0 {
+		t.Fatalf("kill call count = %d, want 0", source.killCalls)
+	}
+}
+
 func TestServiceKillProcessDedupesSuccessfulRetry(t *testing.T) {
 	source := &stubKillProcessSource{}
 	svc := NewProcessViewService(source)

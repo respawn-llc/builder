@@ -1616,6 +1616,27 @@ func TestServiceSetSessionNameDedupesSuccessfulRetry(t *testing.T) {
 	}
 }
 
+func TestServiceSetSessionNameFailsWithoutRequestIdentityOwner(t *testing.T) {
+	store, _, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{})
+	if err := store.SetName("before"); err != nil {
+		t.Fatalf("persist initial session name: %v", err)
+	}
+	service.sessionNames = nil
+
+	err := service.SetSessionName(context.Background(), serverapi.RuntimeSetSessionNameRequest{
+		ClientRequestID: "session-name-owner",
+		SessionID:       store.Meta().SessionID,
+		Name:            "after",
+	})
+
+	if !errors.Is(err, requestmemo.ErrOwnerUnavailable) {
+		t.Fatalf("SetSessionName error = %v, want %v", err, requestmemo.ErrOwnerUnavailable)
+	}
+	if got := store.Meta().Name; got != "before" {
+		t.Fatalf("session name = %q, want unchanged", got)
+	}
+}
+
 func TestServiceSubmitUserTurnDedupesSuccessfulRetry(t *testing.T) {
 	client := finalResponseRuntimeControlClient()
 	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})

@@ -197,6 +197,26 @@ func TestAnswerWorkflowTaskQuestionRoutesOnlyTaskAndAskToCurrentNodeExecution(t 
 	}
 }
 
+func TestAnswerWorkflowTaskQuestionFailsWithoutRequestIdentityOwner(t *testing.T) {
+	execution := &currentNodeCompletionExecutionStub{}
+	service := currentNodeCompletionService(execution)
+	service.questionMemo = nil
+
+	err := service.AnswerWorkflowTaskQuestion(context.Background(), serverapi.WorkflowTaskQuestionAnswerRequest{
+		ClientRequestID: "question-owner",
+		TaskID:          "task-question",
+		AskID:           "ask-question",
+		Answer:          "continue",
+	})
+
+	if !errors.Is(err, requestmemo.ErrOwnerUnavailable) {
+		t.Fatalf("AnswerWorkflowTaskQuestion error = %v, want %v", err, requestmemo.ErrOwnerUnavailable)
+	}
+	if execution.questionAcceptCalls != 0 {
+		t.Fatalf("question accept calls = %d, want 0", execution.questionAcceptCalls)
+	}
+}
+
 func TestAnswerWorkflowTaskApprovalNormalizesAbsentCommentary(t *testing.T) {
 	execution := &currentNodeCompletionExecutionStub{}
 	service := currentNodeCompletionService(execution)

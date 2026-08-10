@@ -14,6 +14,7 @@ import (
 	"core/server/auth"
 	"core/server/launch"
 	"core/server/metadata"
+	"core/server/requestmemo"
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/sessionruntime"
@@ -210,6 +211,30 @@ func TestServicePlanSessionReturnsPlanWithoutRegisteringStore(t *testing.T) {
 	}
 	if resp.Plan.ActiveSettings.OpenAIBaseURL != "http://config.local/v1" {
 		t.Fatalf("active OpenAI base URL = %q, want http://config.local/v1", resp.Plan.ActiveSettings.OpenAIBaseURL)
+	}
+}
+
+func TestServicePlanSessionFailsWithoutRequestIdentityOwner(t *testing.T) {
+	reloads := 0
+	service := NewService(launch.Planner{
+		ReloadConfig: func() (config.App, error) {
+			reloads++
+			return config.App{}, nil
+		},
+	})
+	service.plans = nil
+
+	_, err := service.PlanLaunchSession(context.Background(), serverapi.SessionPlanRequest{
+		ClientRequestID: "plan-owner",
+		Mode:            serverapi.SessionLaunchModeInteractive,
+		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+	})
+
+	if !errors.Is(err, requestmemo.ErrOwnerUnavailable) {
+		t.Fatalf("PlanLaunchSession error = %v, want %v", err, requestmemo.ErrOwnerUnavailable)
+	}
+	if reloads != 0 {
+		t.Fatalf("config reloads = %d, want 0", reloads)
 	}
 }
 
