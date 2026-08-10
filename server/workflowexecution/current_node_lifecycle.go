@@ -149,6 +149,66 @@ func (e *TaskResumeConflictError) Error() string {
 	return fmt.Sprintf("task %q has no interrupted executable Current Nodes to resume", e.TaskID)
 }
 
+func (c *CurrentNodeController) EnsureTaskResumeEligible(
+	ctx context.Context,
+	taskID workflow.TaskID,
+) error {
+	if c == nil {
+		return errors.New("current node workflow controller is required")
+	}
+	return c.permit.Run(ctx, func(ctx context.Context) error {
+		classification, err := c.classifyTaskResume(ctx, taskID)
+		if err != nil {
+			return err
+		}
+		return classification.eligibilityError()
+	})
+}
+
+type taskResumeClassification struct {
+	resumable     []workflow.CurrentNode
+	validationErr error
+}
+
+func (c *CurrentNodeController) classifyTaskResume(
+	ctx context.Context,
+	taskID workflow.TaskID,
+) (taskResumeClassification, error) {
+	c.mu.Lock()
+	if err := c.ensureTaskAvailableLocked(taskID); err != nil {
+		c.mu.Unlock()
+		return taskResumeClassification{}, err
+	}
+	c.mu.Unlock()
+	classifications, err := c.store.PreflightTaskResume(ctx, taskID)
+	if err != nil {
+		return taskResumeClassification{}, err
+	}
+	if len(classifications) == 0 {
+		return taskResumeClassification{}, &TaskResumeConflictError{TaskID: taskID}
+	}
+	result := taskResumeClassification{
+		resumable: make([]workflow.CurrentNode, 0, len(classifications)),
+	}
+	var validationErrs []error
+	for _, classification := range classifications {
+		if validationErr := classification.ValidationError(); validationErr != nil {
+			validationErrs = append(validationErrs, validationErr)
+			continue
+		}
+		result.resumable = append(result.resumable, classification.CurrentNode)
+	}
+	result.validationErr = errors.Join(validationErrs...)
+	return result, nil
+}
+
+func (c taskResumeClassification) eligibilityError() error {
+	if len(c.resumable) != 0 {
+		return nil
+	}
+	return c.validationErr
+}
+
 func (c *CurrentNodeController) resumeTask(
 	ctx context.Context,
 	taskID workflow.TaskID,
@@ -170,27 +230,16 @@ func (c *CurrentNodeController) resumeTask(
 	}
 	var resolution workflowstore.TaskAttentionResolution
 	resumed, err := RunMutation(ctx, c.permit, func(ctx context.Context) ([]workflow.CurrentNode, error) {
-		c.mu.Lock()
-		if err := c.ensureTaskAvailableLocked(taskID); err != nil {
-			c.mu.Unlock()
-			return nil, err
-		}
-		c.mu.Unlock()
-		classifications, err := c.store.PreflightTaskResume(ctx, taskID)
+		classification, err := c.classifyTaskResume(ctx, taskID)
 		if err != nil {
 			return nil, err
 		}
-		if len(classifications) == 0 {
-			return nil, &TaskResumeConflictError{TaskID: taskID}
-		}
-		resumed := make([]workflow.CurrentNode, 0, len(classifications))
 		var resumeErrs []error
-		for _, classification := range classifications {
-			currentNode := classification.CurrentNode
-			if validationErr := classification.ValidationError(); validationErr != nil {
-				resumeErrs = append(resumeErrs, validationErr)
-				continue
-			}
+		if classification.validationErr != nil {
+			resumeErrs = append(resumeErrs, classification.validationErr)
+		}
+		resumed := make([]workflow.CurrentNode, 0, len(classification.resumable))
+		for _, currentNode := range classification.resumable {
 			projection, found, err := c.store.ResumeCurrentNode(ctx, currentNode.Reference)
 			if err != nil {
 				resumeErrs = append(resumeErrs, fmt.Errorf("resume current node %v: %w", currentNode.Reference, err))

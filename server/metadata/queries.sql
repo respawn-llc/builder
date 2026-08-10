@@ -1199,6 +1199,7 @@ INSERT INTO tasks (
     source_url,
     source_workspace_id,
     managed_worktree_id,
+    pending_initial_managed_branch_name,
     created_at_unix_ms,
     updated_at_unix_ms,
     metadata_json
@@ -1213,6 +1214,7 @@ INSERT INTO tasks (
     sqlc.arg(source_url),
     sqlc.narg(source_workspace_id),
     sqlc.narg(managed_worktree_id),
+    sqlc.narg(pending_initial_managed_branch_name),
     sqlc.arg(created_at_unix_ms),
     sqlc.arg(updated_at_unix_ms),
     sqlc.arg(metadata_json)
@@ -1232,6 +1234,7 @@ SELECT
     source_url,
     source_workspace_id,
     managed_worktree_id,
+    pending_initial_managed_branch_name,
     execution_target_mode,
     execution_target_requested_ref,
     execution_target_resolved_ref,
@@ -1258,6 +1261,7 @@ SELECT
     source_url,
     source_workspace_id,
     managed_worktree_id,
+    pending_initial_managed_branch_name,
     execution_target_mode,
     execution_target_requested_ref,
     execution_target_resolved_ref,
@@ -1381,6 +1385,7 @@ SELECT
     source_url,
     source_workspace_id,
     managed_worktree_id,
+    pending_initial_managed_branch_name,
     execution_target_mode,
     execution_target_requested_ref,
     execution_target_resolved_ref,
@@ -1422,6 +1427,26 @@ SET
     updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
 WHERE id = sqlc.arg(id);
 
+-- name: ReplacePendingInitialManagedBranchName :execrows
+UPDATE tasks
+SET
+    pending_initial_managed_branch_name = sqlc.arg(pending_initial_managed_branch_name),
+    updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
+WHERE id = sqlc.arg(task_id)
+  AND execution_target_mode IS NULL
+  AND managed_worktree_id IS NULL;
+
+-- name: BindInitialTaskManagedWorktree :execrows
+UPDATE tasks
+SET
+    managed_worktree_id = sqlc.arg(managed_worktree_id),
+    pending_initial_managed_branch_name = NULL,
+    updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
+WHERE id = sqlc.arg(task_id)
+  AND execution_target_mode IS NULL
+  AND managed_worktree_id IS NULL
+  AND pending_initial_managed_branch_name IS NOT NULL;
+
 -- name: ListTasksByProject :many
 SELECT
     id,
@@ -1436,6 +1461,7 @@ SELECT
     source_url,
     source_workspace_id,
     managed_worktree_id,
+    pending_initial_managed_branch_name,
     execution_target_mode,
     execution_target_requested_ref,
     execution_target_resolved_ref,
@@ -3156,6 +3182,7 @@ WHERE id IN (sqlc.slice('ids'));
 UPDATE tasks
 SET
     managed_worktree_id = sqlc.narg(managed_worktree_id),
+    pending_initial_managed_branch_name = NULL,
     execution_target_mode = sqlc.narg(execution_target_mode),
     execution_target_requested_ref = sqlc.narg(execution_target_requested_ref),
     execution_target_resolved_ref = sqlc.narg(execution_target_resolved_ref),

@@ -237,8 +237,10 @@ func createTaskWithQueries(ctx context.Context, q *sqlitegen.Queries, prepared p
 		ID: prepared.taskID, ProjectWorkflowLinkID: link.ID, WorkflowRevisionSeen: record.Version,
 		TaskSeq: sequence, ShortID: shortID, Title: prepared.title, Body: prepared.body,
 		SourceUrl: prepared.sourceURL, SourceWorkspaceID: nullableString(sourceWorkspaceID),
-		ManagedWorktreeID: sql.NullString{}, CreatedAtUnixMs: prepared.nowUnixMs,
-		UpdatedAtUnixMs: prepared.nowUnixMs, MetadataJson: metadataJSON,
+		ManagedWorktreeID:               sql.NullString{},
+		PendingInitialManagedBranchName: nullableString(shortID),
+		CreatedAtUnixMs:                 prepared.nowUnixMs,
+		UpdatedAtUnixMs:                 prepared.nowUnixMs, MetadataJson: metadataJSON,
 	}); err != nil {
 		return TaskRecord{}, fmt.Errorf("insert task: %w", err)
 	}
@@ -278,7 +280,9 @@ func createTaskWithQueries(ctx context.Context, q *sqlitegen.Queries, prepared p
 	return TaskRecord{
 		ID: workflow.TaskID(prepared.taskID), ProjectID: prepared.projectID, WorkflowID: link.WorkflowID,
 		LinkID: link.ID, ShortID: shortID, Title: prepared.title, Body: prepared.body,
-		SourceURL: prepared.sourceURL, SourceWorkspaceID: sourceWorkspaceID, Version: record.Version,
+		SourceURL: prepared.sourceURL, SourceWorkspaceID: sourceWorkspaceID,
+		PendingInitialManagedBranchName: metadata.OptionalString(nullableString(shortID)),
+		Version:                         record.Version,
 	}, nil
 }
 
@@ -599,12 +603,18 @@ func taskRecordFromTask(row sqlitegen.TaskRecord) (TaskRecord, error) {
 	if err != nil {
 		return TaskRecord{}, err
 	}
+	managedWorktreeID := metadata.OptionalString(row.ManagedWorktreeID)
+	if managedWorktreeID != nil && strings.TrimSpace(*managedWorktreeID) == "" {
+		return TaskRecord{}, fmt.Errorf("task %q has a present blank managed Worktree ID", row.ID)
+	}
 	return TaskRecord{
 		ID: workflow.TaskID(row.ID), ProjectID: row.ProjectID, WorkflowID: row.WorkflowID,
 		LinkID: row.ProjectWorkflowLinkID, ShortID: row.ShortID, Title: row.Title, Body: row.Body,
 		SourceURL: row.SourceUrl, SourceWorkspaceID: strings.TrimSpace(row.SourceWorkspaceID.String),
-		ManagedWorktreeID: strings.TrimSpace(row.ManagedWorktreeID.String), ExecutionTarget: target,
-		Version: row.WorkflowRevisionSeen,
+		ManagedWorktreeID:               managedWorktreeID,
+		PendingInitialManagedBranchName: metadata.OptionalString(row.PendingInitialManagedBranchName),
+		ExecutionTarget:                 target,
+		Version:                         row.WorkflowRevisionSeen,
 	}, nil
 }
 
