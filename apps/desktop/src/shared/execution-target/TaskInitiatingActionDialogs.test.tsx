@@ -1,9 +1,11 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 
 import {
+  parseSetupOperationID,
   RpcError,
+  type TaskSetupRecovery,
   type TaskStartResponse,
   type WorkflowExecutionTargetSelection,
 } from "@/api";
@@ -31,6 +33,8 @@ type ExecuteStub = (
 ) => Promise<Readonly<{ kind: "start"; response: TaskStartResponse }>>;
 
 const appServices = createTestServices([], undefined, { platform: "macos" });
+const setupRecovery = { setupOperationID: parseSetupOperationID("55555555-5555-4555-8555-555555555555"), cause: "target_preparation",
+  diagnostic: "failed", scriptPath: null, executionTarget: { mode: "head", customRef: null }, retainedWorktree: null, retainedPreviousWorktree: null } satisfies TaskSetupRecovery;
 
 describe("TaskInitiatingActionDialogs", () => {
   it("closes dependency confirmation and returns approval without executing it", async () => {
@@ -44,7 +48,7 @@ describe("TaskInitiatingActionDialogs", () => {
     const onResult = vi.fn<(result: TaskInitiatingActionDialogResult) => void>();
     render(
       <TestAppProviders services={appServices}>
-        <Harness execute={execute} onResult={onResult} />
+        <Harness execute={execute} onResult={onResult} setupRecovery={setupRecovery} />
       </TestAppProviders>,
     );
     const user = userEvent.setup();
@@ -175,7 +179,9 @@ describe("TaskInitiatingActionDialogs", () => {
   });
 
   it("recovers the canonical Task-detail interruption with its recorded target", async () => {
-    const attention = { ...interruptedTaskAttentionResponse, items: [{
+    const attention = { ...interruptedTaskAttentionResponse, items: [
+      { ...interruptedTaskAttentionResponse.items[0], id: "attention-sibling", session_name: null },
+      {
       ...interruptedTaskAttentionResponse.items[0],
       session_name: null,
       detail_json: JSON.stringify({ setup_recovery: {
@@ -186,17 +192,21 @@ describe("TaskInitiatingActionDialogs", () => {
         retained_previous_worktree: null,
       } }),
     }] };
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: scrollIntoView });
     const services = mountTaskDetailSurface(taskDetailResponseWithInterruptedCurrentScript, {
       attention,
+      initialFocus: { kind: "interrupted_current_node" },
       routes: [{ method: "workflow.task.resume", result: {
         outcome: "applied", applied: { current_nodes: [] },
       } }],
     });
     const user = userEvent.setup();
 
-    const [resume] = (await screen.findAllByTestId("task-detail-resume")).reverse();
-    if (resume === undefined) throw new Error("Expected setup recovery Resume.");
-    await user.click(resume);
+    await waitFor(() => { expect(scrollIntoView).toHaveBeenCalled(); });
+    const focused = scrollIntoView.mock.contexts[0];
+    if (!(focused instanceof HTMLElement)) throw new Error("Expected focused attention row.");
+    await user.click(within(focused).getByTestId("task-detail-resume"));
     expect(await screen.findByText("task setup failed")).toBeInTheDocument();
     await user.click(screen.getByTestId("setup-recovery-retry"));
     await waitFor(() => { expect(getCallCount(services.transport.calls, "workflow.task.resume")).toBe(1); });
@@ -219,9 +229,11 @@ describe("TaskInitiatingActionDialogs", () => {
 function Harness({
   execute,
   onResult,
+  setupRecovery,
 }: Readonly<{
   execute: ExecuteStub;
   onResult: (result: TaskInitiatingActionDialogResult) => void;
+  setupRecovery?: TaskSetupRecovery;
 }>) {
   const controller = useTaskInitiatingActionController({
     execute: async (action, selection) => {
@@ -243,7 +255,7 @@ function Harness({
         }}
         type="button"
       />
-      <TaskInitiatingActionDialogs continuation={controller} onResult={onResult} />
+      <TaskInitiatingActionDialogs continuation={controller} onResult={onResult} setupRecovery={setupRecovery === undefined ? undefined : { onClose: vi.fn(), onSubmit: vi.fn(), recovery: setupRecovery }} />
     </>
   );
 }

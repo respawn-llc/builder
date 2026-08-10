@@ -2291,7 +2291,8 @@ func (s *Service) runSetupForWorktree(ctx context.Context, operationID serverapi
 					Kind:        serverapi.WorktreeSetupFailureOperational,
 					Operational: &serverapi.WorktreeSetupOperationalFailure{},
 				},
-				Diagnostic: err.Error(),
+				Diagnostic:       err.Error(),
+				RetainedWorktree: req.RetainedWorktree,
 			},
 		})
 		return err

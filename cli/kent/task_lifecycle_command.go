@@ -1081,10 +1081,12 @@ func taskTargetActions(base []string, current *string) []taskSetupAction {
 
 func taskAlreadyStartedGuidance(taskRef string, project *string) taskSetupGuidance {
 	resume := []string{config.Command, "task", "resume", taskRef}
+	move := []string{config.Command, "task", "move", taskRef, "<target-node-id>"}
 	if project != nil {
 		resume = append(resume, "--project", *project)
+		move = append(move, "--project", *project)
 	}
-	return taskSetupGuidance{Outcome: taskSetupOutcomeAlreadyStartedConflict, Actions: []taskSetupAction{{Kind: taskSetupActionRetry, Args: resume}, {Kind: taskSetupActionMove, Args: []string{config.Command, "task", "move", taskRef, "<target-node-id>"}}}}
+	return taskSetupGuidance{Outcome: taskSetupOutcomeAlreadyStartedConflict, Actions: []taskSetupAction{{Kind: taskSetupActionRetry, Args: resume}, {Kind: taskSetupActionMove, Args: move}}}
 }
 
 func taskMoveRecoveryArgs(taskRef, targetNode string, project, commentary, transition *string, values map[string]map[string]string, ignore, jsonOutput bool) ([]string, error) {
@@ -1097,7 +1099,7 @@ func taskMoveRecoveryArgs(taskRef, targetNode string, project, commentary, trans
 			args = append(args, option.flag, *option.value)
 		}
 	}
-	if values != nil {
+	if len(values) != 0 {
 		encoded, err := json.Marshal(values)
 		if err != nil {
 			return nil, err
@@ -1169,6 +1171,7 @@ func runWorkflowMutationWithSetupProgress[T any](
 		var zero T
 		return zero, nil, &worktreeSetupObservationError{cause: fmt.Errorf("subscribe to Worktree Setup operation: %w", err)}
 	}
+	defer observation.cancel(context.Canceled)
 	resp, mutateErr := mutate(ctx, setupOperationID)
 	if mutateErr != nil || !shouldWait(resp) {
 		observation.cancel(context.Canceled)

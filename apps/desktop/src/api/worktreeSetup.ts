@@ -232,66 +232,27 @@ export type WorktreeSetupEvent =
 
 const setupEventWireSchema = z
   .discriminatedUnion("phase", [
-    z
-      .object({
-        setup_operation_id: setupOperationIDSchema,
-        phase: z.literal("started"),
-        started: z
-          .object({ source_workspace_root: nonBlank, worktree_root: nonBlank, script_path: nonBlank })
-          .strict(),
-      })
-      .strict(),
-    z
-      .object({
-        setup_operation_id: setupOperationIDSchema,
-        phase: z.literal("completed"),
-        completed: z.object({ retained_previous_worktree: retainedPreviousWorktreeSchema.nullable() }).strict(),
-      })
-      .strict(),
-    z
-      .object({
-        setup_operation_id: setupOperationIDSchema,
-        phase: z.literal("not_required"),
-        not_required: z
-          .object({
-            reason: z.enum(["no_target_preparation", "no_configured_script"]),
-            retained_previous_worktree: retainedPreviousWorktreeSchema.nullable(),
-          })
-          .strict(),
-      })
-      .strict(),
-    z
-      .object({ setup_operation_id: setupOperationIDSchema, phase: z.literal("failed"), failed: worktreeSetupFailureWireSchema })
-      .strict(),
+    z.object({ setup_operation_id: setupOperationIDSchema, phase: z.literal("started"),
+      started: z.object({ source_workspace_root: nonBlank, worktree_root: nonBlank, script_path: nonBlank }).strict() }).strict(),
+    z.object({ setup_operation_id: setupOperationIDSchema, phase: z.literal("completed"),
+      completed: z.object({ retained_previous_worktree: retainedPreviousWorktreeSchema.nullable() }).strict() }).strict(),
+    z.object({ setup_operation_id: setupOperationIDSchema, phase: z.literal("not_required"),
+      not_required: z.object({ reason: z.enum(["no_target_preparation", "no_configured_script"]),
+        retained_previous_worktree: retainedPreviousWorktreeSchema.nullable() }).strict() }).strict(),
+    z.object({ setup_operation_id: setupOperationIDSchema, phase: z.literal("failed"),
+      failed: worktreeSetupFailureWireSchema }).strict(),
   ])
   .transform((value): WorktreeSetupEvent => {
     const setupOperationID = value.setup_operation_id;
     switch (value.phase) {
       case "started":
-        return {
-          setupOperationID,
-          phase: value.phase,
-          started: {
-            sourceWorkspaceRoot: value.started.source_workspace_root,
-            worktreeRoot: value.started.worktree_root,
-            scriptPath: value.started.script_path,
-          },
-        };
+        return { setupOperationID, phase: value.phase, started: { sourceWorkspaceRoot: value.started.source_workspace_root,
+          worktreeRoot: value.started.worktree_root, scriptPath: value.started.script_path } };
       case "completed":
-        return {
-          setupOperationID,
-          phase: value.phase,
-          completed: { retainedPreviousWorktree: value.completed.retained_previous_worktree },
-        };
+        return { setupOperationID, phase: value.phase, completed: { retainedPreviousWorktree: value.completed.retained_previous_worktree } };
       case "not_required":
-        return {
-          setupOperationID,
-          phase: value.phase,
-          notRequired: {
-            reason: value.not_required.reason,
-            retainedPreviousWorktree: value.not_required.retained_previous_worktree,
-          },
-        };
+        return { setupOperationID, phase: value.phase, notRequired: { reason: value.not_required.reason,
+          retainedPreviousWorktree: value.not_required.retained_previous_worktree } };
       case "failed":
         return { setupOperationID, phase: value.phase, failed: value.failed };
     }

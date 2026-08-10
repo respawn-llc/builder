@@ -357,7 +357,7 @@ func TestRestoreLockedTaskWorktreeReusesDetachedHeadWithoutRunningSetup(t *testi
 	}
 }
 
-func TestPrepareTaskExecutionRootTargetChangeRetainsModifiedRootWithoutSetup(t *testing.T) {
+func TestPrepareTaskExecutionRootNoneTargetRetainsModifiedRoot(t *testing.T) {
 	env := newServiceTestEnv(t)
 	task, _ := createTaskWorktreeTestTask(t, env)
 	firstTarget := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
@@ -376,50 +376,30 @@ func TestPrepareTaskExecutionRootTargetChangeRetainsModifiedRootWithoutSetup(t *
 	if err := os.WriteFile(changedPath, []byte("keep me\n"), 0o644); err != nil {
 		t.Fatalf("change provisional worktree: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(env.workspaceRoot, "next-target.txt"), []byte("next\n"), 0o644); err != nil {
-		t.Fatalf("write next target: %v", err)
-	}
-	runGit(t, env.workspaceRoot, "add", "next-target.txt")
-	runGit(t, env.workspaceRoot, "commit", "-q", "-m", "next target")
-	nextTarget := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
-
 	replacement, err := env.service.PrepareTaskExecutionRoot(env.ctx, TaskExecutionRootPreparationRequest{
 		TaskID:           task.ID,
-		ManagedTarget:    &nextTarget,
 		SetupRequirement: worktreecontract.SetupRequirementRequired,
 	})
 	if err != nil {
 		t.Fatalf("PrepareTaskExecutionRoot replacement: %v", err)
 	}
-	if replacement.Root.Managed == nil ||
-		replacement.Root.Managed.WorktreeID == first.Root.Managed.WorktreeID {
-		t.Fatalf("replacement roots = first:%+v replacement:%+v", first.Root, replacement.Root)
+	if replacement.Root.Managed != nil {
+		t.Fatalf("replacement root = %+v, want source workspace", replacement.Root)
 	}
 	if replacement.RetainedPreviousWorktree == nil ||
 		replacement.RetainedPreviousWorktree.Worktree.Registered == nil ||
 		replacement.RetainedPreviousWorktree.Worktree.Registered.Kent.WorktreeID != first.Root.Managed.WorktreeID {
 		t.Fatalf("retained previous worktree = %+v, want %q", replacement.RetainedPreviousWorktree, first.Root.Managed.WorktreeID)
 	}
-	if replacement.SetupResult == nil ||
-		replacement.SetupResult.NotRequired == nil ||
-		replacement.SetupResult.NotRequired.Reason != serverapi.WorktreeSetupNotRequiredNoConfiguredScript ||
-		replacement.SetupResult.NotRequired.RetainedPreviousWorktree == nil ||
-		replacement.SetupResult.NotRequired.RetainedPreviousWorktree.Worktree.Registered == nil ||
-		replacement.SetupResult.NotRequired.RetainedPreviousWorktree.Worktree.Registered.Kent.WorktreeID != first.Root.Managed.WorktreeID {
-		t.Fatalf("no-setup result = %+v, want retained previous worktree %q", replacement.SetupResult, first.Root.Managed.WorktreeID)
-	}
 	if got := waitForFileText(t, changedPath); got != "keep me" {
 		t.Fatalf("retained worktree change = %q, want preserved", got)
-	}
-	if _, err := env.store.GetWorktreeRecordByID(env.ctx, first.Root.Managed.WorktreeID); err != nil {
-		t.Fatalf("retained worktree record: %v", err)
 	}
 	row, err := env.store.Queries().GetTask(env.ctx, string(task.ID))
 	if err != nil {
 		t.Fatalf("GetTask: %v", err)
 	}
-	if !row.ManagedWorktreeID.Valid || row.ManagedWorktreeID.String != replacement.Root.Managed.WorktreeID {
-		t.Fatalf("task managed worktree = %+v, want %q", row.ManagedWorktreeID, replacement.Root.Managed.WorktreeID)
+	if row.ManagedWorktreeID.Valid {
+		t.Fatalf("task managed worktree = %+v, want unbound", row.ManagedWorktreeID)
 	}
 }
 

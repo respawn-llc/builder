@@ -120,11 +120,12 @@ export function TaskInitiatingActionDialogs({
   onResult(result: TaskInitiatingActionDialogResult): void;
   setupRecovery?: Readonly<{
     onClose(): void;
-    onSubmit(selection: WorkflowExecutionTargetSelection): void;
+    onSubmit(selection?: WorkflowExecutionTargetSelection): void;
     recovery: TaskSetupRecovery;
   }> | undefined;
 }>) {
-  if (setupRecovery !== undefined) {
+  const pending = continuation.pending;
+  if (setupRecovery !== undefined && pending === null) {
     return (
       <TaskSetupRecoveryDialog
         {...setupRecovery}
@@ -134,7 +135,6 @@ export function TaskInitiatingActionDialogs({
       />
     );
   }
-  const pending = continuation.pending;
   if (pending?.kind === "dependency_confirmation") {
     return <DependencyConfirmationDialog continuation={continuation} onResult={onResult} pending={pending} />;
   }

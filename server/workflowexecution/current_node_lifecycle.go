@@ -146,7 +146,7 @@ func (c *CurrentNodeController) StartTask(
 }
 
 func (c *CurrentNodeController) ResumeTask(ctx context.Context, taskID workflow.TaskID) ([]workflow.CurrentNode, error) {
-	return c.resumeTask(ctx, taskID, nil)
+	return c.resumeTask(ctx, taskID, nil, nil)
 }
 
 func (c *CurrentNodeController) ResumeTaskWithPreparation(
@@ -176,10 +176,13 @@ func (c *CurrentNodeController) resumeTask(
 	ctx context.Context,
 	taskID workflow.TaskID,
 	preparation *TaskStartPreparation,
-	finalizer ...TaskPreparationFinalizer,
+	finalizer TaskPreparationFinalizer,
 ) ([]workflow.CurrentNode, error) {
 	if c == nil {
 		return nil, errors.New("current node workflow controller is required")
+	}
+	if preparation != nil && finalizer == nil {
+		return nil, errors.New("task resume preparation finalizer is required")
 	}
 	resumed, err := RunMutation(ctx, c.permit, func(ctx context.Context) ([]workflow.CurrentNode, error) {
 		var resolution workflowstore.TaskAttentionResolution
@@ -262,7 +265,7 @@ func (c *CurrentNodeController) resumeTask(
 				}
 			}
 		} else if len(starts) > 0 {
-			batch, batchErr := newTaskPreparationBatch(c.workerContext, taskID, starts, *preparation, finalizer[0])
+			batch, batchErr := newTaskPreparationBatch(c.workerContext, taskID, starts, *preparation, finalizer)
 			if batchErr == nil {
 				batchErr = c.queueTaskPreparationBatchLocked(batch)
 			}

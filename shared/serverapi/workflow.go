@@ -948,6 +948,11 @@ func (e *WorkflowTaskStartConflictError) Validate() error {
 }
 
 func DecodeWorkflowTaskStartConflictError(data json.RawMessage, message string) error {
+	fallbackMessage := strings.TrimSpace(message)
+	if fallbackMessage == "" {
+		fallbackMessage = "workflow task start conflict"
+	}
+	fallback := errors.New(fallbackMessage)
 	var payload struct {
 		Type   string                          `json:"type"`
 		TaskID string                          `json:"task_id"`
@@ -955,11 +960,11 @@ func DecodeWorkflowTaskStartConflictError(data json.RawMessage, message string) 
 	}
 	if err := protocol.DecodeStrictJSON(data, &payload); err != nil ||
 		payload.Type != "workflow_task_start_conflict" {
-		return errors.New(strings.TrimSpace(message))
+		return fallback
 	}
 	result := &WorkflowTaskStartConflictError{TaskID: payload.TaskID, Reason: payload.Reason}
 	if err := result.Validate(); err != nil {
-		return errors.New(strings.TrimSpace(message))
+		return fallback
 	}
 	return result
 }

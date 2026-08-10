@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import type { AttentionItem, TaskDetail } from "@/api";
+import { parseTaskSetupRecoveryDetail, type AttentionItem, type TaskDetail } from "@/api";
 import type { TaskDetailInitialFocus } from "@/app-facade";
 import { sameTaskDetailInitialFocus } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
@@ -99,7 +99,10 @@ function focusedAttentionItemID(
       (item) => item.kind === "approval" && item.approvalID === initialFocus.approvalID,
     )?.id;
   }
-  return attentionItems.find((item) => item.kind === "interrupted_current_node")?.id;
+  return attentionItems.find((item) =>
+    item.kind === "interrupted_current_node" &&
+    parseTaskSetupRecoveryDetail(item.detailJSON) !== null,
+  )?.id ?? attentionItems.find((item) => item.kind === "interrupted_current_node")?.id;
 }
 
 function InboxItem({

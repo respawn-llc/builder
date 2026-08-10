@@ -1177,7 +1177,7 @@ func (s *Service) preflightInitiatingActionTarget(ctx context.Context, taskID wo
 			CustomRef: explicit.CustomRef,
 		}
 	}
-	if selection.Mode != workflow.ExecutionTargetModeNone {
+	if selection.Mode != workflow.ExecutionTargetModeNone || targetContext.Task.ManagedWorktreeID != "" {
 		if s.executionTargets == nil {
 			return initiatingActionTargetPreflight{}, errExecutionTargetInfrastructureRequired
 		}
@@ -1222,7 +1222,12 @@ func (s *Service) resolveInitiatingActionTarget(
 	}
 	selection := preflight.selection
 	if selection.Mode == workflow.ExecutionTargetModeNone {
-		return nil, nil, nil
+		if targetContext.Task.ManagedWorktreeID == "" {
+			return nil, nil, nil
+		}
+		return &workflowstore.ExecutionTargetSnapshot{
+			Mode: selection.Mode, Provenance: workflowstore.ExecutionTargetProvenanceResolved,
+		}, nil, nil
 	}
 	snapshot, err := s.executionTargets.ResolveExecutionTarget(ctx, ExecutionTargetResolveRequest{
 		SourceWorkspaceRoot: targetContext.SourceWorkspaceRoot,
@@ -1270,6 +1275,13 @@ func (s *Service) materializeInitiatingActionTarget(
 			retainedWorktree:         materialization.RetainedWorktree,
 			retainedPreviousWorktree: materialization.RetainedPreviousWorktree,
 			setupResult:              materialization.SetupResult,
+		}
+		if snapshot.Mode == workflow.ExecutionTargetModeNone {
+			prepared.candidate = &workflowstore.ExecutionTargetCandidate{
+				Snapshot: *snapshot,
+				Root:     workflowstore.ExecutionRoot{SourceWorkspaceID: targetContext.SourceWorkspaceID, SourceWorkspaceRoot: targetContext.SourceWorkspaceRoot},
+			}
+			return prepared, materializationErr
 		}
 		if materialization.RetainedRoot == nil {
 			if materializationErr == nil {

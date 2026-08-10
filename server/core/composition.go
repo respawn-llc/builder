@@ -464,6 +464,12 @@ func (i taskExecutionTargetInfrastructure) MaterializeExecutionTarget(ctx contex
 	if err := req.Snapshot.Validate(); err != nil {
 		return workflowsvc.ExecutionTargetMaterialization{}, err
 	}
+	if req.Snapshot.Mode == workflow.ExecutionTargetModeNone {
+		prepared, err := i.service.PrepareTaskExecutionRoot(ctx, worktree.TaskExecutionRootPreparationRequest{
+			TaskID: req.TaskID, SetupOperationID: req.SetupOperationID, SetupRequirement: req.SetupRequirement,
+		})
+		return workflowsvc.ExecutionTargetMaterialization{RetainedPreviousWorktree: prepared.RetainedPreviousWorktree}, err
+	}
 	if req.Snapshot.RequestedRef == nil || req.Snapshot.CommitOID == nil {
 		return workflowsvc.ExecutionTargetMaterialization{}, errors.New("managed execution target snapshot is incomplete")
 	}

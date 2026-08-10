@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"core/shared/apicontract"
@@ -579,6 +580,9 @@ func TestTaskSetupGuidanceProjectsStructuredRecovery(t *testing.T) {
 
 func TestMoveSetupGuidancePreservesStructuredInput(t *testing.T) {
 	project, commentary, transition := "project-1", "note", "next"
+	if empty, err := taskMoveRecoveryArgs("task-1", "done", nil, nil, nil, map[string]map[string]string{}, false, false); err != nil || slices.Contains(empty, "--values-json") {
+		t.Fatalf("empty recovery args = %v, error = %v", empty, err)
+	}
 	base, err := taskMoveRecoveryArgs("task-1", "done", &project, &commentary, &transition, map[string]map[string]string{"plan": {"summary": "done"}}, true, true)
 	if err != nil {
 		t.Fatalf("recovery args: %v", err)
@@ -608,7 +612,8 @@ func TestAlreadyStartedGuidanceUsesResumeAndMoveActions(t *testing.T) {
 	project := "project-1"
 	got := taskAlreadyStartedGuidance("task-1", &project)
 	if got.Outcome != taskSetupOutcomeAlreadyStartedConflict ||
-		len(got.Actions) != 2 || got.Actions[0].Kind != taskSetupActionRetry || got.Actions[1].Kind != taskSetupActionMove {
+		len(got.Actions) != 2 || got.Actions[0].Kind != taskSetupActionRetry || got.Actions[1].Kind != taskSetupActionMove ||
+		!slices.Equal(got.Actions[1].Args, []string{config.Command, "task", "move", "task-1", "<target-node-id>", "--project", project}) {
 		t.Fatalf("guidance = %+v", got)
 	}
 }
