@@ -30,6 +30,7 @@ type workflowGraphApplyRemote struct {
 	closeCalls      int
 	previewRequest  serverapi.WorkflowGraphSavePreviewRequest
 	saveRequest     serverapi.WorkflowGraphSaveRequest
+	saveResponses   []serverapi.WorkflowGraphSaveResponse
 }
 
 func (r *workflowGraphApplyRemote) GetWorkflow(context.Context, serverapi.WorkflowGetRequest) (serverapi.WorkflowGetResponse, error) {
@@ -43,6 +44,11 @@ func (r *workflowGraphApplyRemote) PreviewWorkflowGraphSave(_ context.Context, r
 func (r *workflowGraphApplyRemote) SaveWorkflowGraph(_ context.Context, req serverapi.WorkflowGraphSaveRequest) (serverapi.WorkflowGraphSaveResponse, error) {
 	r.saveCalls++
 	r.saveRequest = req
+	if len(r.saveResponses) > 0 {
+		response := r.saveResponses[0]
+		r.saveResponses = r.saveResponses[1:]
+		return response, r.saveError
+	}
 	return r.saveResponse, r.saveError
 }
 func (*workflowGraphApplyRemote) ResolveProjectPath(context.Context, serverapi.ProjectResolvePathRequest) (serverapi.ProjectResolvePathResponse, error) {
@@ -57,23 +63,21 @@ func TestWorkflowGraphApplyProjectsTypedOutcomes(t *testing.T) {
 	}
 	for _, test := range []struct {
 		name      string
-		preview   serverapi.WorkflowGraphSavePreviewResponse
-		save      serverapi.WorkflowGraphSaveResponse
+		saves     []serverapi.WorkflowGraphSaveResponse
 		confirm   bool
 		want      workflowGraphApplyOutcomeKind
 		wantExit  int
 		wantSaves int
 	}{
-		{"unchanged", graphApplyPreview(1, false, true, false, nil), serverapi.WorkflowGraphSaveResponse{}, false, workflowGraphApplyUnchanged, 0, 0},
-		{"blocked", graphApplyPreview(1, true, false, false, []serverapi.WorkflowGraphSaveBlocker{{Code: "validation_failed", Message: "invalid", Count: 1, AffectedEntities: []serverapi.WorkflowGraphEntityReference{}}}), serverapi.WorkflowGraphSaveResponse{}, false, workflowGraphApplyBlocked, 1, 0},
-		{"confirmation", graphApplyPreview(1, true, false, true, []serverapi.WorkflowGraphSaveBlocker{blocker}), serverapi.WorkflowGraphSaveResponse{}, false, workflowGraphApplyConfirmationRequired, 1, 0},
-		{"saved", graphApplyPreview(1, true, false, true, []serverapi.WorkflowGraphSaveBlocker{blocker}), graphApplySavedResponse(t), true, workflowGraphApplySaved, 0, 1},
+		{"unchanged", []serverapi.WorkflowGraphSaveResponse{graphApplySaveResponse(1, false, true, false, nil)}, false, workflowGraphApplyUnchanged, 0, 1},
+		{"blocked", []serverapi.WorkflowGraphSaveResponse{graphApplySaveResponse(1, true, false, false, []serverapi.WorkflowGraphSaveBlocker{{Code: "validation_failed", Message: "invalid", Count: 1, AffectedEntities: []serverapi.WorkflowGraphEntityReference{}}})}, false, workflowGraphApplyBlocked, 1, 1},
+		{"confirmation", []serverapi.WorkflowGraphSaveResponse{graphApplySaveResponse(1, true, false, true, []serverapi.WorkflowGraphSaveBlocker{blocker})}, false, workflowGraphApplyConfirmationRequired, 1, 1},
+		{"saved", []serverapi.WorkflowGraphSaveResponse{graphApplySaveResponse(1, true, false, true, []serverapi.WorkflowGraphSaveBlocker{blocker}), graphApplySavedResponse(t)}, true, workflowGraphApplySaved, 0, 2},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			remote := &workflowGraphApplyRemote{
-				definition:      serverapi.WorkflowDefinition{Workflow: serverapi.WorkflowRecord{ID: workflowGraphApplyID(t), Version: 1}},
-				previewResponse: test.preview,
-				saveResponse:    test.save,
+				definition:    serverapi.WorkflowDefinition{Workflow: serverapi.WorkflowRecord{ID: workflowGraphApplyID(t), Version: 1}},
+				saveResponses: slices.Clone(test.saves),
 			}
 			installWorkflowCommandRemote(t, remote)
 			args := []string{"graph", "apply", "-", "--json"}
@@ -81,8 +85,8 @@ func TestWorkflowGraphApplyProjectsTypedOutcomes(t *testing.T) {
 				args = append(args, "--confirm")
 			}
 			exit, outcome, _ := runWorkflowGraphApplyCommand(t, args, emptyWorkflowGraphDocumentJSON)
-			if exit != test.wantExit || outcome.Outcome != test.want || remote.saveCalls != test.wantSaves {
-				t.Fatalf("exit=%d outcome=%+v saves=%d", exit, outcome, remote.saveCalls)
+			if exit != test.wantExit || outcome.Outcome != test.want || remote.previewCalls != 0 || remote.saveCalls != test.wantSaves {
+				t.Fatalf("exit=%d outcome=%+v previews=%d saves=%d", exit, outcome, remote.previewCalls, remote.saveCalls)
 			}
 			if test.confirm && (remote.saveRequest.Confirmation == nil || remote.saveRequest.Confirmation.ExpectedRemovedEdgeCount != 1) {
 				t.Fatalf("confirmation = %+v", remote.saveRequest.Confirmation)
@@ -138,9 +142,9 @@ func TestWorkflowGraphApplyFileOperationalCloseAndSaveBlockerPaths(t *testing.T)
 		t.Fatalf("write graph: %v", err)
 	}
 	remote := &workflowGraphApplyRemote{
-		definition:      serverapi.WorkflowDefinition{Workflow: serverapi.WorkflowRecord{ID: workflowGraphApplyID(t), Version: 1}},
-		previewResponse: graphApplyPreview(1, false, true, false, nil),
-		closeError:      errors.New("close"),
+		definition:   serverapi.WorkflowDefinition{Workflow: serverapi.WorkflowRecord{ID: workflowGraphApplyID(t), Version: 1}},
+		saveResponse: graphApplySaveResponse(1, false, true, false, nil),
+		closeError:   errors.New("close"),
 	}
 	installWorkflowCommandRemote(t, remote)
 	exit, outcome, stderr := runWorkflowGraphApplyCommand(t, []string{"graph", "apply", path, "--json"}, "")
@@ -149,8 +153,7 @@ func TestWorkflowGraphApplyFileOperationalCloseAndSaveBlockerPaths(t *testing.T)
 	}
 
 	remote = &workflowGraphApplyRemote{
-		definition:      serverapi.WorkflowDefinition{Workflow: serverapi.WorkflowRecord{ID: workflowGraphApplyID(t), Version: 1}},
-		previewResponse: graphApplyPreview(1, true, true, false, nil),
+		definition: serverapi.WorkflowDefinition{Workflow: serverapi.WorkflowRecord{ID: workflowGraphApplyID(t), Version: 1}},
 		saveResponse: serverapi.WorkflowGraphSaveResponse{
 			CurrentVersion: 2,
 			Impact:         serverapi.WorkflowGraphSaveImpact{RemovedEntities: []serverapi.WorkflowGraphEntityReference{}},
@@ -179,6 +182,7 @@ func TestWorkflowGraphApplyFileOperationalCloseAndSaveBlockerPaths(t *testing.T)
 func TestWorkflowGraphApplyHumanDetailsWriteAllTypedSections(t *testing.T) {
 	workflowID := workflowGraphApplyID(t)
 	base := workflowGraphApplyOutcome{
+		Outcome: workflowGraphApplyConfirmationRequired,
 		ValidationResults: map[serverapi.WorkflowValidationMode]serverapi.WorkflowValidateResponse{
 			serverapi.WorkflowValidationModeDraft: {
 				Errors: []serverapi.WorkflowValidationError{{
@@ -202,7 +206,7 @@ func TestWorkflowGraphApplyHumanDetailsWriteAllTypedSections(t *testing.T) {
 	}
 	render := func(outcome workflowGraphApplyOutcome) []byte {
 		var output bytes.Buffer
-		if err := writeWorkflowGraphApplyPreviewDetails(&output, outcome); err != nil {
+		if err := writeWorkflowGraphApplyDetails(&output, outcome); err != nil {
 			t.Fatalf("write details: %v", err)
 		}
 		return output.Bytes()
@@ -246,7 +250,7 @@ func TestWorkflowGraphApplyHumanDetailsWriteAllTypedSections(t *testing.T) {
 	}
 }
 
-func graphApplyPreview(version int64, changed, canSave, confirmation bool, blockers []serverapi.WorkflowGraphSaveBlocker) serverapi.WorkflowGraphSavePreviewResponse {
+func graphApplySaveResponse(version int64, changed, canSave, confirmation bool, blockers []serverapi.WorkflowGraphSaveBlocker) serverapi.WorkflowGraphSaveResponse {
 	if blockers == nil {
 		blockers = []serverapi.WorkflowGraphSaveBlocker{}
 	}
@@ -255,7 +259,8 @@ func graphApplyPreview(version int64, changed, canSave, confirmation bool, block
 		impact.RemovedEdgeCount = 1
 		impact.RemovedEntities = []serverapi.WorkflowGraphEntityReference{{EntityType: serverapi.WorkflowGraphEntityTypeEdge, EntityID: "edge"}}
 	}
-	return serverapi.WorkflowGraphSavePreviewResponse{
+	return serverapi.WorkflowGraphSaveResponse{
+		Saved:          !confirmation && canSave,
 		CurrentVersion: version, Changed: changed, CanSave: canSave, ConfirmationRequired: confirmation,
 		ValidationResults: map[serverapi.WorkflowValidationMode]serverapi.WorkflowValidateResponse{},
 		Impact:            impact, Blockers: blockers,

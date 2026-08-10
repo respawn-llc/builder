@@ -168,25 +168,18 @@ var (
 	workflowListUsage   = leafCommandUsage(config.Command+" workflow list [--project <path-or-id>] [--page-size <n>] [--page-token <token>] [--json]", "List workflow definitions.")
 	workflowGraphUsage  = leafCommandUsage(
 		config.Command+" workflow graph <inspect|apply> ...",
-		"Inspect or apply a complete identity-bound Workflow graph document.",
-		"",
-		"This editing document belongs to one existing Workflow and Workflow Version; it is not a portable import/export format.",
+		"Inspect or apply a complete Workflow graph.",
 	)
 	workflowGraphInspectUsage = leafCommandUsage(
-		config.Command+" workflow graph inspect <uuid>",
-		"Write the complete authored graph as identity-bound JSON.",
-		"",
-		"The document includes Workflow identity and expected Workflow Version. Output is always JSON.",
+		config.Command+" workflow graph inspect <uuid> [--json]",
+		"Write the complete authored graph as JSON.",
 	)
 	workflowGraphApplyUsage = leafCommandUsage(
 		config.Command+" workflow graph apply <path|-> [--confirm] [--json]",
-		"Preview and atomically apply a complete identity-bound Workflow graph document.",
+		"Atomically apply a complete Workflow graph document.",
 		"",
 		"Use - to read the document from standard input.",
 		"Without --confirm, destructive changes report fresh impact and make no changes.",
-		"Impact and blockers include exact affected graph entity IDs; Task references are aggregate counts.",
-		"With --json, outcomes are saved, unchanged, confirmation_required, blocked, invalid_document, or request_failed.",
-		"Exit status is 0 for saved or unchanged, 1 when no save occurs, and 2 for invalid command usage.",
 	)
 	workflowNodeUsage       = leafCommandUsage(config.Command+" workflow node <add|update> ...", "Add or change workflow nodes.")
 	workflowNodeAddUsage    = leafCommandUsage(config.Command+" workflow node add <uuid> --key <key> --kind <kind> [flags]", "Add a node to a workflow.")

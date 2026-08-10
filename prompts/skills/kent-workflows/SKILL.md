@@ -47,15 +47,10 @@ For validation modes, use `draft` while authoring, `task_creation` before creati
 To understand what `--agent` roles are available (the reminder in your memory might not list all of them), inspect the repo-local and user global `config.toml` files. More info in the `kent-dogfooding` skill.
 
 Important CLI behavior:
-- Most `workflow` commands support verbose `--json` for scripting. `workflow graph inspect` always emits JSON and has no `--json` flag.
+- Workflow commands support `--json` for scripting. `workflow graph inspect` accepts the flag and always emits JSON.
 - `workflow create` auto-creates the initial backlog/start and done/terminal shape; inspect after create before adding duplicate start or terminal nodes.
 - `workflow list --project <path-or-id>` discovers linked workflows with the default first. `workflow inspect <uuid> --summary` reads metadata without loading the graph.
-- `workflow graph inspect <uuid>` emits a complete editing document bound to that Workflow identity and Workflow Version. It is not a portable import/export bundle.
-- `workflow graph apply <path>` reads that document from a file; `workflow graph apply -` reads standard input.
-- Graph apply previews every change. Without `--confirm`, destructive impact returns `confirmation_required` and saves nothing. A confirmed invocation previews again and confirms its fresh impact.
-- `workflow graph apply --json` emits one outcome: `saved`, `unchanged`, `confirmation_required`, `blocked`, `invalid_document`, or `request_failed`. Exit `0` means saved or unchanged, exit `1` means no save occurred, and exit `2` means invalid command usage.
-- Graph impact and blockers include exact affected Node Group, Node, Transition Group, and Transition Branch IDs. Task references are aggregate counts, not Task ID lists.
-- Graph apply edits the authored graph only. Use `workflow update` for name, description, and Execution Target Policy. New graph entities in the document require canonical bare UUID v4 IDs.
+- Use `workflow graph inspect <uuid>` and `workflow graph apply <path|->` for complete graph edits. Pass `--confirm` when accepting destructive changes.
 - Agent-targeting edges require `--prompt <text>`. Omit `--prompt` for edges targeting `start`, `join`, or `terminal` nodes, as there's nobody to prompt.
 - Script nodes use `--kind script --script-path <path>` and can appear anywhere an agent node can appear. Absolute paths resolve on the Kent server; relative paths resolve against the task managed worktree when the script runs.
 - Link, unlink, and set project defaults with `kent workflow link`, `kent workflow unlink`, and `kent workflow default`. This sets up bindings between a project (repo, workspace) and a workflow, and enables reuse of workflows.
@@ -100,7 +95,7 @@ Relative script paths cannot be fully checked until the task-managed worktree ex
 
 ## Edit Existing Workflows
 
-Use node and edge commands for focused non-destructive changes:
+Use node and edge commands for focused changes:
 
 ```sh
 kent workflow node update "$workflow_uuid" implement --agent <implementer-role>
@@ -116,7 +111,7 @@ kent workflow graph apply workflow-graph.json --json
 kent workflow graph apply - --json < workflow-graph.json
 ```
 
-Node update flags are partial: omitted scalar fields keep current values. Edge update flags are partial; provided `--prompt` replaces the branch prompt. Graph apply saves the complete authored graph atomically and is the CLI path for deletion and source rewiring. Validate the workflow with `kent workflow validate` after each meaningful graph change.
+Validate the workflow with `kent workflow validate` after each meaningful graph change.
 
 ## Context And Approval
 Each edge requires a context mode:
@@ -196,6 +191,6 @@ Use parameters together with prompt placeholders to build dynamic task prompts, 
 For workflow authoring requests:
 
 1. Inspect existing workflows and project links with `kent workflow list`, `kent workflow inspect`, and the current project context.
-2. Create or add focused graph pieces with node and edge commands; use graph inspect/apply for complete-graph edits.
+2. Create or edit nodes and edges.
 3. Validate in the strictest mode that matches the user's intent.
 4. Link the workflow to the project and set it as default when the user wants new tasks to use it.

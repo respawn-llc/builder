@@ -316,25 +316,6 @@ workflow_uuid="<uuid-from-workflow-list>"
 kent workflow inspect "$workflow_uuid" --summary
 ```
 
-#### Edit The Complete Graph
-
-Use graph inspect/apply for deletion, rewiring, or several related edits that must be saved together. Inspect emits a complete JSON editing document bound to one existing Workflow and its expected Workflow Version; it is not a portable import/export bundle and does not include the Workflow name, description, or Execution Target Policy.
-
-```bash
-kent workflow graph inspect "$workflow_uuid" > workflow-graph.json
-# Edit workflow-graph.json.
-kent workflow graph apply workflow-graph.json --json
-kent workflow graph apply - --json < workflow-graph.json
-```
-
-Graph apply previews the complete submitted graph before saving. A non-destructive valid change saves immediately. If the preview requires confirmation, the command returns `confirmation_required` without saving; rerun the document with `--confirm` to preview again and confirm that invocation's impact. A changed Workflow Version or impact between preview and save blocks the operation.
-
-JSON mode emits one outcome: `saved`, `unchanged`, `confirmation_required`, `blocked`, `invalid_document`, or `request_failed`. Exit status is `0` for `saved` and `unchanged`, `1` when no save occurs for a product or operational reason, and `2` for invalid command usage.
-
-Impact and blockers identify affected Node Groups, Nodes, Transition Groups, and Transition Branches by exact persistent ID. Task references are aggregate counts; the output does not enumerate Task IDs.
-
-The document is for identity-bound editing, so existing entity IDs and `expected_version` must match the selected Workflow. New graph entities require canonical bare UUID v4 IDs. Use `kent workflow update` for the Workflow name, description, and Execution Target Policy.
-
 #### Transition selector controls
 
 Edge creation and updates expose independent target Assignee and thinking selectors. Enabling a selector initializes its Protected Parameter when needed; `--target-assignee-param` and `--target-thinking-param` customize the protected key and description, including an empty description.

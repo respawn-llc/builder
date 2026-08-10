@@ -309,22 +309,21 @@ To respond, run: kent run steer <source-session-id> "message"
 
 ### Workflow and Task mutation
 
-- Agents can build and edit complete Workflow definitions through high-level commands and identity-bound graph inspect/apply. Portable import and export remain separate sharing features.
+- Agents can build and edit complete Workflow definitions through high-level commands and graph inspect/apply.
 - Every CLI topology mutation submits one complete Workflow Draft graph through the server's authoritative graph-save operation. Kent never persists a partial intermediate graph for one CLI mutation.
-- `kent workflow graph inspect <workflow>` always emits the identity-bound graph editing JSON. It has no `--json` flag.
-- Graph inspect orders Node Groups and Nodes by Key, Transition Groups by source Node identity and Transition Key, and Transition Branches by parent Transition identity and Branch Key. Persistent entity identity breaks ties.
+- `kent workflow graph inspect <workflow> [--json]` always emits the graph editing JSON; `--json` does not change its output.
+- Graph inspect preserves the authored order of every graph collection.
 - `kent workflow graph apply <path-or-dash>` reads graph editing JSON from the selected file. A selector of `-` reads standard input.
 - Graph apply changes the complete authored Workflow graph, including graph-owned configuration. `kent workflow update` remains the CLI authority for Workflow name, description, and Execution Target Policy.
 - Graph apply requires canonical bare UUID v4 text for each new Node, Node Group, Transition Group, and Transition Branch. It rejects prefixed identities, other UUID versions, non-canonical spellings, and surrounding whitespace for additions. It preserves existing graph entity identities and never assigns temporary or persistent identities.
 - Node membership in graph editing JSON uses `group_id` only. Graph inspect never emits `group_key`, and graph apply rejects `group_key` rather than treating it as an alternate membership reference.
 - Graph apply ignores unknown JSON object fields. Unknown or misspelled authored fields are not preserved when Kent saves the complete submitted graph.
-- Graph apply rejects duplicate JSON object fields, trailing JSON values, and missing required fields before it contacts the server.
+- Graph apply uses the installed JSON library's duplicate-field semantics. It rejects trailing JSON values and missing required fields before it contacts the server.
 - Graph apply loads the current Workflow and compares Workflow Version before it classifies graph entity identities. A mismatch returns `blocked` with `version_changed`, including when a legacy identity in the stale document no longer exists or now belongs to another entity type.
-- For a current-version document, graph apply preserves submitted identities that match existing graph entities of the same type and rejects additions without canonical bare UUID v4 identities before preview or save. A concurrent Workflow change after that read remains subject to preview/save stale-version rejection.
-- Graph apply requests a server preview before every save attempt. A non-destructive graph that has no blocker saves immediately.
-- When confirmation is required, an unconfirmed graph apply reports the preview and changes nothing. The caller reruns the same graph editing JSON with `--confirm`.
-- A confirmed graph apply recalculates impact and confirms the fresh aggregate counts in that invocation. An earlier unconfirmed preview is informational and is not a retained confirmation snapshot.
-- A dynamic impact change before the confirmed invocation may be adopted. A Workflow Version or impact-count change between the confirmed invocation's preview and save rejects the save and changes nothing.
+- For a current-version document, graph apply preserves submitted identities that match existing graph entities of the same type, preserves submitted collection order, and rejects additions without canonical bare UUID v4 identities before save.
+- Graph apply submits the document to the server's graph-save operation. A non-destructive graph that has no blocker saves immediately.
+- When confirmation is required, an unconfirmed graph apply reports the impact and changes nothing. With `--confirm`, the command confirms the impact returned by that invocation and retries the save.
+- A Workflow Version or impact-count change before the confirmed save rejects the save and changes nothing.
 - Graph-save impact lists every removed graph entity by stable entity type and persistent identity. It reports Task references as aggregate counts and never materializes an unbounded Task-reference collection.
 - Graph-save blockers identify every affected graph entity by stable entity type and persistent identity.
 - Removed Node Groups appear in impact and aggregate counts. Removing a Node Group alone does not require confirmation.

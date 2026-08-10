@@ -123,57 +123,17 @@ func runWorkflowGraphApply(
 	if err := validateWorkflowGraphAdditionIdentities(current, graph); err != nil {
 		return workflowGraphApplyFailure(workflowGraphApplyInvalidDocument, workflowID, currentVersion, err)
 	}
-	preview, err := previewWorkflowGraphDraft(ctx, remote, current, graph)
-	if err != nil {
-		return workflowGraphApplyFailure(workflowGraphApplyRequestFailed, workflowID, currentVersion, err)
-	}
-	if err := preview.Response.Validate(); err != nil {
-		return workflowGraphApplyFailure(
-			workflowGraphApplyRequestFailed,
-			workflowID,
-			currentVersion,
-			fmt.Errorf("validate Workflow graph save preview: %w", err),
-		)
-	}
-	outcome := workflowGraphApplyOutcome{
-		WorkflowID:        workflowID,
-		CurrentVersion:    workflowGraphApplyPointer(preview.Response.CurrentVersion),
-		ValidationResults: preview.Response.ValidationResults,
-		Impact:            &preview.Response.Impact,
-		Blockers:          preview.Response.Blockers,
-	}
-	if workflowGraphApplyHasBlocker(preview.Response.Blockers, false) {
-		outcome.Outcome = workflowGraphApplyBlocked
+	outcome := saveWorkflowGraphApply(ctx, remote, current, graph, nil)
+	if !confirmed || outcome.Outcome != workflowGraphApplyConfirmationRequired {
 		return outcome
 	}
-	if preview.Response.ConfirmationRequired {
-		if !preview.Response.Changed || !workflowGraphApplyHasBlocker(preview.Response.Blockers, true) {
-			return workflowGraphApplyFailure(
-				workflowGraphApplyRequestFailed,
-				workflowID,
-				outcome.CurrentVersion,
-				errors.New("Workflow graph save preview returned inconsistent confirmation state"),
-			)
-		}
-		if confirmed {
-			return saveWorkflowGraphApply(ctx, remote, current, preview, workflowGraphSaveConfirmationFromImpact(preview.Response.Impact))
-		}
-		outcome.Outcome = workflowGraphApplyConfirmationRequired
-		return outcome
-	}
-	if len(preview.Response.Blockers) != 0 || !preview.Response.CanSave {
-		return workflowGraphApplyFailure(
-			workflowGraphApplyRequestFailed,
-			workflowID,
-			outcome.CurrentVersion,
-			errors.New("Workflow graph save preview returned inconsistent blocker state"),
-		)
-	}
-	if !preview.Response.Changed {
-		outcome.Outcome = workflowGraphApplyUnchanged
-		return outcome
-	}
-	return saveWorkflowGraphApply(ctx, remote, current, preview, nil)
+	return saveWorkflowGraphApply(
+		ctx,
+		remote,
+		current,
+		graph,
+		workflowGraphSaveConfirmationFromImpact(*outcome.Impact),
+	)
 }
 
 func validateWorkflowGraphAdditionIdentities(
@@ -242,21 +202,21 @@ func saveWorkflowGraphApply(
 	ctx context.Context,
 	remote workflowCommandRemote,
 	current serverapi.WorkflowDefinition,
-	preview workflowGraphPreview,
+	graph serverapi.WorkflowGraphDraft,
 	confirmation *serverapi.WorkflowGraphSaveConfirmation,
 ) workflowGraphApplyOutcome {
 	workflowID := workflowGraphApplyPointer(current.Workflow.ID)
 	response, err := remote.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
 		WorkflowID:      current.Workflow.ID,
 		ExpectedVersion: current.Workflow.Version,
-		Graph:           preview.Graph,
+		Graph:           graph,
 		Confirmation:    confirmation,
 	})
 	if err != nil {
 		return workflowGraphApplyFailure(
 			workflowGraphApplyRequestFailed,
 			workflowID,
-			workflowGraphApplyPointer(preview.Response.CurrentVersion),
+			workflowGraphApplyPointer(current.Workflow.Version),
 			err,
 		)
 	}
@@ -283,6 +243,11 @@ func saveWorkflowGraphApply(
 				outcome.CurrentVersion,
 				errors.New("Workflow graph save returned blocked without a blocker"),
 			)
+		}
+		if response.ConfirmationRequired && workflowGraphApplyHasBlocker(response.Blockers, true) &&
+			!workflowGraphApplyHasBlocker(response.Blockers, false) {
+			outcome.Outcome = workflowGraphApplyConfirmationRequired
+			return outcome
 		}
 		outcome.Outcome = workflowGraphApplyBlocked
 		return outcome
@@ -365,29 +330,29 @@ func writeWorkflowGraphApplyOutcome(stdout io.Writer, stderr io.Writer, outcome 
 func writeWorkflowGraphApplyHumanOutcome(stdout io.Writer, stderr io.Writer, outcome workflowGraphApplyOutcome) error {
 	switch outcome.Outcome {
 	case workflowGraphApplySaved:
-		_, err := fmt.Fprintf(stdout, "Saved Workflow %s graph at version %d.\n", outcome.WorkflowID.String(), *outcome.CurrentVersion)
+		_, err := fmt.Fprintf(stdout, "Workflow graph saved at version %d.\n", *outcome.CurrentVersion)
 		return err
 	case workflowGraphApplyUnchanged:
-		_, err := fmt.Fprintf(stdout, "Workflow %s graph is unchanged at version %d.\n", outcome.WorkflowID.String(), *outcome.CurrentVersion)
+		_, err := fmt.Fprintln(stdout, "Workflow was already in the requested state, no changes applied")
 		return err
 	case workflowGraphApplyConfirmationRequired:
-		if _, err := fmt.Fprintf(stderr, "Workflow %s graph changes require confirmation. Rerun with --confirm.\n", outcome.WorkflowID.String()); err != nil {
+		if _, err := fmt.Fprintln(stderr, "Workflow has destructive changes pending. Rerun the command with --confirm to apply anyway"); err != nil {
 			return err
 		}
-		return writeWorkflowGraphApplyPreviewDetails(stderr, outcome)
+		return writeWorkflowGraphApplyDetails(stderr, outcome)
 	case workflowGraphApplyBlocked:
-		if _, err := fmt.Fprintf(stderr, "Workflow %s graph apply was blocked.\n", outcome.WorkflowID.String()); err != nil {
+		if _, err := fmt.Fprintf(stderr, "Workflow graph apply was blocked: %s\n", outcome.Blockers[0].Message); err != nil {
 			return err
 		}
-		return writeWorkflowGraphApplyPreviewDetails(stderr, outcome)
+		return writeWorkflowGraphApplyDetails(stderr, outcome)
 	case workflowGraphApplyInvalidDocument, workflowGraphApplyRequestFailed:
 		_, err := fmt.Fprintln(stderr, *outcome.Message)
 		return err
 	}
-	return errors.New("Workflow graph apply outcome has no human projection")
+	panic(fmt.Sprintf("Workflow graph apply outcome %q passed validation without a human projection", outcome.Outcome))
 }
 
-func writeWorkflowGraphApplyPreviewDetails(stderr io.Writer, outcome workflowGraphApplyOutcome) error {
+func writeWorkflowGraphApplyDetails(stderr io.Writer, outcome workflowGraphApplyOutcome) error {
 	var writeErr error
 	write := func(format string, args ...any) {
 		if writeErr == nil {
@@ -432,7 +397,7 @@ func writeWorkflowGraphApplyPreviewDetails(stderr io.Writer, outcome workflowGra
 			}
 		}
 	}
-	if outcome.Impact != nil {
+	if outcome.Outcome == workflowGraphApplyConfirmationRequired && outcome.Impact != nil {
 		write("Impact:\n")
 		for _, count := range []struct {
 			name  string
@@ -503,9 +468,6 @@ func (outcome workflowGraphApplyOutcome) Validate() error {
 	}
 	if !valid {
 		return fmt.Errorf("Workflow graph apply %q outcome is invalid", outcome.Outcome)
-	}
-	if outcome.CurrentVersion != nil && *outcome.CurrentVersion < 0 {
-		return errors.New("Workflow graph apply current version must be non-negative")
 	}
 	if outcome.Message != nil && strings.TrimSpace(*outcome.Message) == "" {
 		return errors.New("Workflow graph apply message must not be blank")

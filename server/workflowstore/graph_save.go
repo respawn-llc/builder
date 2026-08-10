@@ -580,7 +580,7 @@ func workflowGraphSaveBlockers(req WorkflowGraphSaveRequest, evaluation workflow
 	if removedCount > 0 && req.Confirmed && !workflowGraphSaveConfirmationMatches(req, impact) {
 		blockers = append(blockers, WorkflowGraphSaveBlocker{
 			Code:             "impact_changed",
-			Message:          "Workflow graph save impact changed. Refresh the preview before saving.",
+			Message:          "Workflow graph changed while trying to save the new graph! Inspect the new topology and retry as needed.",
 			Count:            1,
 			AffectedEntities: canonicalWorkflowGraphEntityReferences(impact.RemovedEntities),
 		})
@@ -591,7 +591,7 @@ func workflowGraphSaveBlockers(req WorkflowGraphSaveRequest, evaluation workflow
 func workflowGraphSaveVersionChangedBlockers(version int64) []WorkflowGraphSaveBlocker {
 	return []WorkflowGraphSaveBlocker{{
 		Code:             "version_changed",
-		Message:          "Workflow changed. Refresh before saving.",
+		Message:          "Workflow graph changed while trying to save the new graph! Inspect the new topology and retry as needed.",
 		Count:            version,
 		AffectedEntities: []WorkflowGraphEntityReference{},
 	}}

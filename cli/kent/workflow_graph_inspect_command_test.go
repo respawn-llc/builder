@@ -24,7 +24,7 @@ func (*workflowGraphInspectRemote) ResolveProjectPath(context.Context, serverapi
 }
 func (r *workflowGraphInspectRemote) Close() error { r.closed++; return nil }
 
-func TestWorkflowGraphInspectWritesCanonicalIdentityBoundDocument(t *testing.T) {
+func TestWorkflowGraphInspectWritesAuthoredIdentityBoundDocumentWithJSONFlag(t *testing.T) {
 	id := workflowGraphApplyID(t)
 	remote := &workflowGraphInspectRemote{definition: serverapi.WorkflowDefinition{
 		Workflow: serverapi.WorkflowRecord{ID: id, Version: 7},
@@ -37,7 +37,7 @@ func TestWorkflowGraphInspectWritesCanonicalIdentityBoundDocument(t *testing.T) 
 	}}
 	installWorkflowCommandRemote(t, remote)
 	var stdout, stderr bytes.Buffer
-	if exit := workflowSubcommand([]string{"graph", "inspect", id.String()}, &stdout, &stderr); exit != 0 || stderr.Len() != 0 {
+	if exit := workflowSubcommand([]string{"graph", "inspect", id.String(), "--json"}, &stdout, &stderr); exit != 0 || stderr.Len() != 0 {
 		t.Fatalf("exit=%d stderr=%q", exit, stderr.String())
 	}
 	var document workflowGraphDocument
@@ -47,7 +47,7 @@ func TestWorkflowGraphInspectWritesCanonicalIdentityBoundDocument(t *testing.T) 
 	if document.WorkflowID != id || document.ExpectedVersion != 7 || remote.closed != 1 {
 		t.Fatalf("document=%+v closed=%d", document, remote.closed)
 	}
-	if len(document.Graph.Nodes) != 2 || document.Graph.Nodes[0].ID != "node-a" || document.Graph.Nodes[1].ID != "node-z" {
-		t.Fatalf("canonical Nodes = %+v", document.Graph.Nodes)
+	if len(document.Graph.Nodes) != 2 || document.Graph.Nodes[0].ID != "node-z" || document.Graph.Nodes[1].ID != "node-a" {
+		t.Fatalf("authored Nodes = %+v", document.Graph.Nodes)
 	}
 }

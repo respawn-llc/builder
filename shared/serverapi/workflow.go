@@ -2423,7 +2423,7 @@ func (b WorkflowGraphSaveBlocker) Validate() error {
 		return err
 	}
 	if b.Count < 0 {
-		return errors.New("count must be non-negative")
+		return workflowRequestError(WorkflowRequestErrorInvalidValue, "count", "count must be non-negative")
 	}
 	return validateWorkflowGraphEntityReferences(b.AffectedEntities, "affected_entities")
 }

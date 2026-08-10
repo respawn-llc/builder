@@ -144,6 +144,7 @@ func workflowGraphSubcommand(args []string, stdin io.Reader, stdout io.Writer, s
 
 func workflowGraphInspectSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" workflow graph inspect", stderr, workflowGraphInspectUsage)
+	_ = fs.Bool("json", false, "write the graph document as JSON")
 	positionals, ok, exitCode := parseWorkflowPositionals(fs, args, 1, stderr, "workflow graph inspect requires <uuid>")
 	if !ok {
 		return exitCode

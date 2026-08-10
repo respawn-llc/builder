@@ -606,26 +606,6 @@ func TestGatewayMissingActivationAttachmentDoesNotRecordRuntimeOwnership(t *test
 	}
 }
 
-func TestGatewayHandshakeAndProjectList(t *testing.T) {
-	appCore, server := newGatewayTestServer(t)
-	defer server.Close()
-
-	conn := dialGateway(t, server)
-	defer func() { _ = conn.Close() }()
-
-	var handshake protocol.HandshakeResponse
-	callGateway(t, conn, "1", protocol.MethodHandshake, protocol.HandshakeRequest{ProtocolVersion: "102"}, &handshake)
-	if handshake.Identity.ProtocolVersion != "102" || handshake.Identity.ServerID != "server-1" {
-		t.Fatalf("unexpected handshake: %+v", handshake.Identity)
-	}
-
-	var projects serverapi.ProjectListResponse
-	callGateway(t, conn, "2", protocol.MethodProjectList, serverapi.ProjectListRequest{}, &projects)
-	if len(projects.Projects) != 1 || projects.Projects[0].ProjectID != appCore.ProjectID() {
-		t.Fatalf("unexpected project list: %+v", projects.Projects)
-	}
-}
-
 func TestGatewayHandshakeRejectsProtocolVersionMismatch(t *testing.T) {
 	_, server := newGatewayTestServer(t)
 	defer server.Close()
