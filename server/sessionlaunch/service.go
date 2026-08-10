@@ -3,9 +3,12 @@ package sessionlaunch
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 
 	"core/server/auth"
 	"core/server/launch"
+	"core/server/runtime"
 	"core/server/session"
 	"core/server/sessionruntime"
 	"core/server/subagentpolicy"
@@ -29,6 +32,9 @@ type Service struct {
 	authStates    authStateReader
 	promptHistory promptHistoryReader
 	runtime       *sessionruntime.Authority
+	workspaceID   string
+	fastModeState *runtime.FastModeState
+	draftOwner    *WorkspaceChatDraftOwner
 }
 
 var ErrExistingSessionAuthorityRequired = errors.New("session runtime authority is required for existing-session planning")

@@ -52,4 +52,5 @@ type submitDoneTurnQueueHook struct {
 func (h *submitDoneTurnQueueHook) OnTranscriptMessage(clientui.TranscriptMessage) {}
 func (h *submitDoneTurnQueueHook) OnTurnQueueDrained()                            {}
 func (h *submitDoneTurnQueueHook) OnTurnQueueAborted()                            { h.aborted++ }
+func (h *submitDoneTurnQueueHook) OnTurnSubmissionAborted()                       {}
 func (h *submitDoneTurnQueueHook) OnUserCompactionCompleted(bool)                 {}

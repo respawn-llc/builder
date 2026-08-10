@@ -11,6 +11,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 func TestRuntimeClientMainViewDoesNotRefreshCachedSnapshotBehindUIBack(t *testing.T) {
@@ -114,7 +115,10 @@ func (c *reconnectRetryRuntimeControlClient) SubmitUserTurn(_ context.Context, r
 	if c.submitCalls == 1 && c.firstSubmitErr != nil {
 		return serverapi.RuntimeSubmitUserTurnResponse{}, c.firstSubmitErr
 	}
-	return serverapi.RuntimeSubmitUserTurnResponse{Message: textutil.Value("recovered")}, nil
+	return serverapi.RuntimeSubmitUserTurnResponse{
+		Message:    textutil.Value("recovered"),
+		ResultKind: clientui.UserTurnResultKindAssistantFinal,
+	}, nil
 }
 
 func (c *reconnectRetryRuntimeControlClient) SubmitUserShellCommand(context.Context, serverapi.RuntimeSubmitUserShellCommandRequest) error {

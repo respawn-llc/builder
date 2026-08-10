@@ -11,7 +11,6 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
-	"core/shared/textutil"
 )
 
 type userTurnProjection struct {
@@ -87,7 +86,12 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 				return queueErr
 			}
 			recordAccepted(true)
-			resp = serverapi.RuntimeSubmitUserTurnResponse{Compacted: compacted, Steered: true, QueueItemID: queued.ID}
+			resp = serverapi.RuntimeSubmitUserTurnResponse{
+				Compacted:   compacted,
+				ResultKind:  clientui.UserTurnResultKindQueued,
+				Steered:     true,
+				QueueItemID: queued.ID,
+			}
 			return nil
 		}
 		msg, queued, err := engine.SubmitUserMessageOrSteerWithHooks(runCtx, projection.ExecutionText, nil, recordAccepted)
@@ -95,14 +99,27 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 			return err
 		}
 		if queued != nil {
-			resp = serverapi.RuntimeSubmitUserTurnResponse{Compacted: compacted, Steered: true, QueueItemID: queued.ID}
+			resp = serverapi.RuntimeSubmitUserTurnResponse{
+				Compacted:   compacted,
+				ResultKind:  clientui.UserTurnResultKindQueued,
+				Steered:     true,
+				QueueItemID: queued.ID,
+			}
 			return nil
 		}
-		resp = serverapi.RuntimeSubmitUserTurnResponse{Compacted: compacted}
-		if msg.Content != nil {
-			resp.Message = *msg.Content
+		resp = serverapi.RuntimeSubmitUserTurnResponse{
+			Compacted:  compacted,
+			ResultKind: clientui.UserTurnResultKindNoFinal,
 		}
-		return nil
+		if msg.Content != nil {
+			resp.Message = msg.Content
+			if strings.TrimSpace(*msg.Content) == "" {
+				resp.ResultKind = clientui.UserTurnResultKindSilentFinal
+			} else {
+				resp.ResultKind = clientui.UserTurnResultKindAssistantFinal
+			}
+		}
+		return resp.Validate()
 	})
 	if err != nil {
 		if errors.Is(err, serverapi.ErrSessionRunStarting) {
@@ -148,7 +165,11 @@ func (s *Service) trySubmitUserTurnAsActiveExecution(ctx context.Context, accept
 		if !accepted {
 			return serverapi.ErrSessionRunStarting
 		}
-		resp = serverapi.RuntimeSubmitUserTurnResponse{Steered: true, QueueItemID: item.ID}
+		resp = serverapi.RuntimeSubmitUserTurnResponse{
+			ResultKind:  clientui.UserTurnResultKindQueued,
+			Steered:     true,
+			QueueItemID: item.ID,
+		}
 		steered = true
 		if err != nil {
 			return err

@@ -602,7 +602,7 @@ func TestServiceSubmitUserTurnPreservesBlankFinalPresence(t *testing.T) {
 	}}}
 	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{Model: "gpt-5"})
 
-	resp, err := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "blank-final", "finish silently"))
+	resp, err := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "finish silently"))
 	if err != nil {
 		t.Fatalf("SubmitUserTurn: %v", err)
 	}
@@ -997,7 +997,7 @@ func TestServiceSubmitUserTurnDoesNotWaitForOptionalPromptHistory(t *testing.T) 
 	}
 	select {
 	case outcome := <-done:
-		if outcome.err != nil || outcome.response.Message != "done" {
+		if outcome.err != nil || outcome.response.Message == nil || *outcome.response.Message != "done" {
 			t.Fatalf(
 				"SubmitUserTurn outcome = %+v, error=%v",
 				outcome.response,

@@ -200,7 +200,10 @@ func runtimeSubmitInputText(input clientui.RuntimeSubmitRequest) string {
 }
 
 func userTurnSubmissionFromResponse(resp serverapi.RuntimeSubmitUserTurnResponse, text string) clientui.UserTurnSubmission {
-	submission := clientui.UserTurnSubmission{Message: resp.Message}
+	submission := clientui.UserTurnSubmission{
+		Message:    resp.Message,
+		ResultKind: resp.ResultKind,
+	}
 	if resp.Steered && strings.TrimSpace(resp.QueueItemID) != "" {
 		submission.Queued = clientui.QueuedUserMessage{ID: resp.QueueItemID, Text: text}
 	}

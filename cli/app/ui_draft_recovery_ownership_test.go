@@ -11,6 +11,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -351,7 +352,7 @@ func (c *draftRecoveryRuntimeClient) SubmitRuntimeInput(_ context.Context, reque
 	if err != nil {
 		return clientui.UserTurnSubmission{}, err
 	}
-	return clientui.UserTurnSubmission{Message: text}, nil
+	return clientui.UserTurnSubmission{Message: textutil.Value(text)}, nil
 }
 
 type draftRecoveryLifecycleClient struct {

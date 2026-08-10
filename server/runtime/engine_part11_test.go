@@ -183,7 +183,7 @@ func TestQueuedUserMessageFlushBlankFinalSupersedesDeferredAnswer(t *testing.T) 
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for first final request")
 	}
-	if _, accepted, err := eng.QueueUserMessageForActiveRun(context.Background(), "steer now", liveRunTestRequestID(t), nil); err != nil || !accepted {
+	if _, accepted, err := eng.QueueUserMessageForActiveRun(context.Background(), "steer now", nil); err != nil || !accepted {
 		t.Fatalf("QueueUserMessageForActiveRun accepted=%t err=%v", accepted, err)
 	}
 	release()

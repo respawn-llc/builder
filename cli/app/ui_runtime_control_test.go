@@ -64,7 +64,6 @@ func TestUserTurnSubmissionFromResponsePreservesMessagePresence(t *testing.T) {
 	withBlank := userTurnSubmissionFromResponse(
 		serverapi.RuntimeSubmitUserTurnResponse{Message: &blank, ResultKind: blankKind},
 		"turn",
-		"request",
 	)
 	if withBlank.Message == nil || *withBlank.Message != "" {
 		t.Fatalf("blank submission message = %v, want present empty message", withBlank.Message)
@@ -76,7 +75,6 @@ func TestUserTurnSubmissionFromResponsePreservesMessagePresence(t *testing.T) {
 	withoutMessage := userTurnSubmissionFromResponse(
 		serverapi.RuntimeSubmitUserTurnResponse{},
 		"turn",
-		"request",
 	)
 	if withoutMessage.Message != nil {
 		t.Fatalf("omitted submission message = %v, want absent", withoutMessage.Message)
@@ -414,8 +412,8 @@ func TestRuntimeControlHelpersFallbackWithoutRuntimeClient(t *testing.T) {
 	if goal, err := m.clearRuntimeGoal(); goal != nil || err != nil {
 		t.Fatalf("clear runtime goal without client = (%+v, %v), want (nil, nil)", goal, err)
 	}
-	if submission, err := m.submitRuntimeUserMessage(context.Background(), "prompt"); submission.Message != "" || err != nil {
-		t.Fatalf("submit runtime user message without client = (%q, %v), want (empty, nil)", submission.Message, err)
+	if submission, err := m.submitRuntimeUserMessage(context.Background(), "prompt"); submission.Message != nil || err != nil {
+		t.Fatalf("submit runtime user message without client = (%v, %v), want (empty, nil)", submission.Message, err)
 	}
 	if err := m.submitRuntimeUserShellCommand(context.Background(), "echo hi"); err != nil {
 		t.Fatalf("submit runtime shell command without client: %v", err)

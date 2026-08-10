@@ -105,7 +105,11 @@ func (c uiInputController) submitActiveCmd(token uint64) tea.Cmd {
 			}
 			return newSubmitDoneMsg(token, "", active.text, err)
 		}
-		done := newSubmitDoneMsg(token, submission.Message, active.text, nil)
+		message := ""
+		if submission.Message != nil {
+			message = *submission.Message
+		}
+		done := newSubmitDoneMsg(token, message, active.text, nil)
 		done.queued = submission.Queued
 		resultKind := submission.ResultKind
 		done.resultKind = &resultKind
