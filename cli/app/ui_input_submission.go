@@ -3,11 +3,13 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
 	"core/cli/app/internal/runtimeattach"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
 
@@ -40,8 +42,16 @@ func (c uiInputController) startTypedSubmissionWithPreSubmitQueuePosition(text s
 	if blocked, blockCmd := c.blockInjectedQueueSubmission(); blocked {
 		return blockCmd
 	}
-	c.startRuntimeOperationAffordance(false)
+	clientRequestID := runtimeids.NewRuntimeClientRequestID()
+	dispatch := submitDispatch{kind: submitDispatchUserTurn, input: input}
 	command, isUserShell := parseUserShellCommand(text)
+	if isUserShell {
+		clientRequestID = runtimeids.RuntimeClientRequestID{}
+		dispatch = submitDispatch{kind: submitDispatchUserShell, shellCommand: command}
+	}
+	token := m.beginSubmitAttempt(text, queuedID, clientRequestID, origin)
+	m.holdActiveSubmitInput()
+	c.startRuntimeOperationAffordance(false)
 	if isUserShell {
 		m.logf("step.user_shell.start command_chars=%d", len(command))
 	} else {
@@ -51,10 +61,11 @@ func (c uiInputController) startTypedSubmissionWithPreSubmitQueuePosition(text s
 		m.conversationFreshness = clientui.ConversationFreshnessEstablished
 	}
 	m.layout().syncViewport()
-	if isUserShell {
-		return tea.Batch(c.submitUserShellCmd(text, command, origin), m.reconcileSpinnerTicking(false))
+	if strings.TrimSpace(m.sessionID) == "" {
+		m.releaseActiveSubmitInput()
+		return tea.Batch(c.dispatchPreparedSubmit(token, text, dispatch), m.reconcileSpinnerTicking(false))
 	}
-	return tea.Batch(c.submitCmd(text, input, queuedID, origin), m.reconcileSpinnerTicking(false))
+	return tea.Batch(c.prepareSubmitDraftCmd(token, text, dispatch), m.reconcileSpinnerTicking(false))
 }
 
 func (c uiInputController) startSubmissionWithPromptHistoryAndQueuePositionAndID(text string, queuePosition preSubmitQueuePosition, queuedID string) tea.Cmd {
@@ -76,20 +87,38 @@ func (c uiInputController) startSubmissionWithPromptHistoryAndQueuePositionAndID
 	return c.startSubmissionWithPreSubmitQueuePositionAndOrigin(text, queuePosition, queuedID, origin)
 }
 
-func (c uiInputController) submitCmd(text string, input runtimeinput.Input, queuedID string, origin activeSubmitOrigin) tea.Cmd {
+func (c uiInputController) prepareSubmitDraftCmd(token uint64, text string, dispatch submitDispatch) tea.Cmd {
 	m := c.model
-	operationRef := newRuntimeOperationRef(clientui.RuntimeOperationKindSubmit)
-	preSubmitCompactionRef := newRuntimeOperationRef(clientui.RuntimeOperationKindPreSubmitCompact)
-	m.addPendingRuntimeOperation(preSubmitCompactionRef)
-	token := m.beginSubmitAttempt(text, queuedID, operationRef, origin)
+	client := m.sessionDrafts
+	sessionID := m.sessionID
+	inputDraft := m.sessionDraftInput()
+	recoveryBuffers := m.sessionDraftRecoveryBuffers()
+	return func() tea.Msg {
+		err := persistSessionDraft(context.Background(), client, sessionID, inputDraft, recoveryBuffers)
+		return submitDoneMsg{
+			phase:         submitPhaseDraftPrepared,
+			dispatch:      dispatch,
+			token:         token,
+			submittedText: text,
+			err:           err,
+		}
+	}
+}
+
+func (c uiInputController) submitCmd(token uint64, text string, input runtimeinput.Input, clientRequestID runtimeids.RuntimeClientRequestID) tea.Cmd {
+	m := c.model
 	client := m.runtimeClient()
 	return func() tea.Msg {
 		if client == nil {
 			return newSubmitDoneMsg(token, "", text, errors.New("runtime engine is not configured"))
 		}
+		operationRef := clientui.RuntimeOperationRef{
+			Kind:            clientui.RuntimeOperationKindSubmit,
+			ClientRequestID: clientRequestID,
+		}
 		submission, err := m.submitRuntimeInput(context.Background(), clientui.RuntimeSubmitRequest{
 			OperationRef:                    operationRef,
-			PreSubmitCompactionOperationRef: preSubmitCompactionRef,
+			PreSubmitCompactionOperationRef: newRuntimeOperationRef(clientui.RuntimeOperationKindPreSubmitCompact),
 			Input:                           input,
 		})
 		if err != nil {
@@ -104,16 +133,17 @@ func (c uiInputController) submitCmd(text string, input runtimeinput.Input, queu
 	}
 }
 
-func (c uiInputController) submitUserShellCmd(originalText, command string, origin activeSubmitOrigin) tea.Cmd {
+func (c uiInputController) submitUserShellCmd(token uint64, originalText, command string) tea.Cmd {
 	m := c.model
-	operationRef := newRuntimeOperationRef(clientui.RuntimeOperationKindUserShell)
-	token := m.beginSubmitAttempt(originalText, "", operationRef, origin)
 	client := m.runtimeClient()
 	return func() tea.Msg {
 		if client == nil {
 			return newSubmitDoneMsg(token, "", originalText, errors.New("runtime engine is not configured"))
 		}
-		err := m.submitRuntimeShell(context.Background(), clientui.RuntimeShellRequest{OperationRef: operationRef, Command: command})
+		err := m.submitRuntimeShell(context.Background(), clientui.RuntimeShellRequest{
+			OperationRef: newRuntimeOperationRef(clientui.RuntimeOperationKindUserShell),
+			Command:      command,
+		})
 		if err != nil {
 			if isRuntimeOperationInterrupted(err) {
 				return newSubmitDoneMsg(token, "", originalText, runtimeattach.ErrSubmissionInterrupted)
@@ -124,7 +154,7 @@ func (c uiInputController) submitUserShellCmd(originalText, command string, orig
 	}
 }
 
-func (m *uiModel) beginSubmitAttempt(text string, queuedID string, operationRef clientui.RuntimeOperationRef, origin activeSubmitOrigin) uint64 {
+func (m *uiModel) beginSubmitAttempt(text string, queuedID string, clientRequestID runtimeids.RuntimeClientRequestID, origin activeSubmitOrigin) uint64 {
 	if m == nil {
 		return 0
 	}
@@ -132,8 +162,35 @@ func (m *uiModel) beginSubmitAttempt(text string, queuedID string, operationRef 
 	if m.submitToken == 0 {
 		m.submitToken++
 	}
-	m.activeSubmit = activeSubmitState{token: m.submitToken, text: text, queuedID: queuedID, origin: origin, operationRef: operationRef, restoreOnInterrupt: true}
+	m.activeSubmit = activeSubmitState{token: m.submitToken, text: text, queuedID: queuedID, origin: origin, clientRequestID: clientRequestID, restoreOnInterrupt: true}
 	return m.submitToken
+}
+
+func (m *uiModel) holdActiveSubmitInput() {
+	if m == nil || m.activeSubmit.token == 0 ||
+		m.activeSubmit.origin != activeSubmitOriginDirect ||
+		strings.TrimSpace(m.mainEditor.Text()) != "" {
+		return
+	}
+	m.inputController().restoreSubmittedTextIntoInput(m.activeSubmit.text)
+	m.activeSubmit.heldInput = &activeSubmitHeldInput{draftToken: m.mainInputDraftToken}
+}
+
+func (m *uiModel) activeSubmitHoldsCurrentInput() bool {
+	return m != nil &&
+		m.activeSubmit.heldInput != nil &&
+		m.activeSubmit.heldInput.draftToken == m.mainInputDraftToken
+}
+
+func (m *uiModel) releaseActiveSubmitInput() {
+	if m == nil || m.activeSubmit.heldInput == nil {
+		return
+	}
+	clearHeldInput := m.activeSubmitHoldsCurrentInput()
+	m.activeSubmit.heldInput = nil
+	if clearHeldInput {
+		m.clearInput()
+	}
 }
 
 type uiCompactionOrigin uint8
@@ -146,7 +203,7 @@ const (
 
 func (c uiInputController) startCompactionWithOrigin(args string, origin uiCompactionOrigin) tea.Cmd {
 	m := c.model
-	if m.hasPendingRuntimeOperationKind(clientui.RuntimeOperationKindCompact) {
+	if m.isCompacting() {
 		return nil
 	}
 	c.startRuntimeOperationAffordance(true)
@@ -159,13 +216,14 @@ func (c uiInputController) startCompactionWithOrigin(args string, origin uiCompa
 func (c uiInputController) compactCmd(args string) tea.Cmd {
 	m := c.model
 	client := m.runtimeClient()
-	operationRef := newRuntimeOperationRef(clientui.RuntimeOperationKindCompact)
-	m.addPendingRuntimeOperation(operationRef)
 	return func() tea.Msg {
 		if client == nil {
 			return compactDoneMsg{err: errors.New("runtime engine is not configured")}
 		}
-		return compactDoneMsg{err: m.compactRuntimeInput(context.Background(), clientui.RuntimeCompactRequest{OperationRef: operationRef, Args: args})}
+		return compactDoneMsg{err: m.compactRuntimeInput(context.Background(), clientui.RuntimeCompactRequest{
+			OperationRef: newRuntimeOperationRef(clientui.RuntimeOperationKindCompact),
+			Args:         args,
+		})}
 	}
 }
 
@@ -211,16 +269,17 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 	if msg.token != 0 && msg.token != m.activeSubmit.token {
 		return m, nil
 	}
+	if msg.phase == submitPhaseDraftPrepared {
+		return c.handleSubmitDraftPrepared(msg)
+	}
 	submitOrigin := m.activeSubmit.origin
 	m.observeRuntimeRequestResult(msg.err)
 	restoreSubmittedText := msg.err != nil && (submitOrigin == activeSubmitOriginQueued || msg.token == 0 || m.shouldRestoreSubmittedTextOnSubmitError(msg.err))
 	if msg.token != 0 && msg.err != nil && isRuntimeOperationInterrupted(msg.err) && m.activeSubmit.restoreOnInterrupt {
-		restore, _ := m.shouldRestoreActiveSubmitAfterInterrupt()
-		restoreSubmittedText = restore
+		restoreSubmittedText = !m.activeSubmit.flushed
 	}
 	activeQueuedID := m.activeSubmit.queuedID
 	m.activeSubmit = activeSubmitState{}
-	m.clearPendingRuntimeOperations(clientui.RuntimeOperationKindPreSubmitCompact)
 	c.finishRuntimeOperationAffordance(false)
 	if msg.token == 0 || !m.hasRuntimeClient() {
 		_ = m.applyRuntimeActivityProjection(clientui.RuntimeActivity{State: clientui.RuntimeActivityRegisteredIdle})
@@ -283,6 +342,41 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 	return m, nil
 }
 
+func (c uiInputController) handleSubmitDraftPrepared(msg submitDoneMsg) (tea.Model, tea.Cmd) {
+	m := c.model
+	if msg.err != nil {
+		submittedText := msg.submittedText
+		if m.activeSubmit.heldInput != nil {
+			submittedText = ""
+		}
+		return c.handleSubmitDone(newSubmitDoneMsg(
+			msg.token,
+			"",
+			submittedText,
+			serverapi.NewRuntimeCommandNotAcceptedError(fmt.Errorf("persist active submission draft: %w", msg.err)),
+		))
+	}
+	m.releaseActiveSubmitInput()
+	return m, c.dispatchPreparedSubmit(msg.token, msg.submittedText, msg.dispatch)
+}
+
+func (c uiInputController) dispatchPreparedSubmit(token uint64, text string, dispatch submitDispatch) tea.Cmd {
+	m := c.model
+	switch dispatch.kind {
+	case submitDispatchUserTurn:
+		return c.submitCmd(
+			token,
+			text,
+			dispatch.input,
+			m.activeSubmit.clientRequestID,
+		)
+	case submitDispatchUserShell:
+		return c.submitUserShellCmd(token, text, dispatch.shellCommand)
+	default:
+		panic(fmt.Sprintf("invalid submit dispatch kind %d for token %d", dispatch.kind, token))
+	}
+}
+
 func (c uiInputController) handleSpinnerTick(msg spinnerTickMsg) (tea.Model, tea.Cmd) {
 	m := c.model
 	if msg.token == 0 || msg.token != m.spinnerTickToken {
@@ -312,7 +406,6 @@ func (c uiInputController) handleSpinnerTick(msg spinnerTickMsg) (tea.Model, tea
 func (c uiInputController) handleCompactDone(msg compactDoneMsg) (tea.Model, tea.Cmd) {
 	m := c.model
 	serverActiveBeforeCompletion := m.runtimeActivityBusy()
-	m.clearPendingRuntimeOperations(clientui.RuntimeOperationKindCompact, clientui.RuntimeOperationKindPreSubmitCompact)
 	compactionOrigin := m.compactionOrigin
 	m.compactionOrigin = uiCompactionOriginNone
 	m.observeRuntimeRequestResult(msg.err)
@@ -375,26 +468,7 @@ func (m *uiModel) shouldRestoreSubmittedTextOnSubmitError(err error) bool {
 	if !m.hasRuntimeClient() {
 		return true
 	}
-	ref := m.activeSubmit.operationRef
-	if ref.Validate() != nil {
-		return false
-	}
-	view := m.cachedRuntimeMainView()
-	for _, record := range view.InputReconciliation.Operations {
-		if record.Operation != ref {
-			continue
-		}
-		switch record.State {
-		case clientui.RuntimeInputReconciliationCanceledNotCommitted, clientui.RuntimeInputReconciliationFailedWithRestore:
-			return true
-		case clientui.RuntimeInputReconciliationCommitted,
-			clientui.RuntimeInputReconciliationSubmitted,
-			clientui.RuntimeInputReconciliationUnknown,
-			clientui.RuntimeInputReconciliationEvicted:
-			return false
-		}
-	}
-	return false
+	return errors.Is(err, serverapi.ErrRuntimeCommandNotAccepted)
 }
 
 func isRuntimeOperationInterrupted(err error) bool {

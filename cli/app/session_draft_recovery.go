@@ -10,7 +10,13 @@ func (m *uiModel) sessionDraftRecoveryBuffers() []serverapi.SessionDraftRecovery
 	if m == nil {
 		return nil
 	}
-	buffers := make([]serverapi.SessionDraftRecoveryBuffer, 0, len(m.pendingInjected)+len(m.queued))
+	buffers := make([]serverapi.SessionDraftRecoveryBuffer, 0, 1+len(m.pendingInjected)+len(m.queued))
+	if m.activeSubmit.token != 0 && strings.TrimSpace(m.activeSubmit.text) != "" {
+		buffers = append(buffers, serverapi.SessionDraftRecoveryBuffer{
+			Kind: serverapi.SessionDraftRecoveryBufferActiveSubmit,
+			Text: m.activeSubmit.text,
+		})
+	}
 	for _, pending := range m.pendingInjected {
 		text := strings.TrimSpace(pending.Text)
 		if text == "" {
@@ -34,6 +40,17 @@ func (m *uiModel) sessionDraftRecoveryBuffers() []serverapi.SessionDraftRecovery
 	return buffers
 }
 
+func (m *uiModel) sessionDraftInput() string {
+	if m == nil {
+		return ""
+	}
+	if m.activeSubmit.heldInput != nil &&
+		m.activeSubmit.heldInput.draftToken == m.mainInputDraftToken {
+		return ""
+	}
+	return m.mainEditor.Text()
+}
+
 func (m *uiModel) restoreSessionDraftRecoveryBuffers(buffers []serverapi.SessionDraftRecoveryBuffer) {
 	if m == nil || len(buffers) == 0 {
 		return
@@ -41,9 +58,6 @@ func (m *uiModel) restoreSessionDraftRecoveryBuffers(buffers []serverapi.Session
 	recovered := make([]serverapi.SessionDraftRecoveryBuffer, 0, len(buffers))
 	for _, buffer := range buffers {
 		if strings.TrimSpace(buffer.Text) == "" {
-			continue
-		}
-		if buffer.Kind == serverapi.SessionDraftRecoveryBufferActiveSubmit {
 			continue
 		}
 		recovered = append(recovered, buffer)

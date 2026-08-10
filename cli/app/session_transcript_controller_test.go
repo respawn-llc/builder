@@ -467,7 +467,6 @@ func ongoingHydrationMessage(sequence uint64) clientui.TranscriptMessage {
 				State:          clientui.RuntimeActivityRegisteredIdle,
 				QueueAccepting: true,
 			},
-			InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{},
 		},
 		CommittedRows: []clientui.TranscriptCommittedRow{},
 	}))
@@ -492,7 +491,6 @@ func ongoingTranscriptMessage(sequence uint64, kind clientui.TranscriptMessageKi
 				State:          clientui.RuntimeActivityRegisteredIdle,
 				QueueAccepting: true,
 			},
-			InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{},
 		})
 	case clientui.TranscriptMessageQueuedMessageState:
 		text := "queued prompt"
@@ -503,11 +501,13 @@ func ongoingTranscriptMessage(sequence uint64, kind clientui.TranscriptMessageKi
 			Text:            &text,
 		})
 	case clientui.TranscriptMessageUserMessageFlushed:
+		queueItemID := ongoingTestQueueItemID()
 		event = clientui.NewTranscriptEvent(clientui.TranscriptUserMessageFlushed{
 			StepID: ongoingTestStepID(),
 			Operations: []clientui.RuntimeOperationRef{{
-				Kind:            clientui.RuntimeOperationKindSubmit,
+				Kind:            clientui.RuntimeOperationKindQueuedMessage,
 				ClientRequestID: ongoingTestClientRequestID(),
+				QueueItemID:     &queueItemID,
 			}},
 		})
 	case clientui.TranscriptMessageSessionStatus:

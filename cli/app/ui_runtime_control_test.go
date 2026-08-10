@@ -35,12 +35,9 @@ type runtimeControlFakeClient struct {
 	appendedText          string
 	submitText            string
 	submitCalls           int
-	submitOperationRef    clientui.RuntimeOperationRef
-	preSubmitOperationRef clientui.RuntimeOperationRef
+	shellCalls            int
 	submitResult          string
 	interruptCalls        int
-	interruptPendingRefs  []clientui.RuntimeOperationRef
-	interruptTargetRef    *clientui.RuntimeOperationRef
 	submitQueuedID        string
 	discardQueuedID       string
 	discardQueuedCalls    int
@@ -164,8 +161,6 @@ func (f *runtimeControlFakeClient) submitUserMessage(_ context.Context, text str
 }
 func (f *runtimeControlFakeClient) SubmitRuntimeInput(ctx context.Context, req clientui.RuntimeSubmitRequest) (clientui.UserTurnSubmission, error) {
 	f.submitCalls++
-	f.submitOperationRef = req.OperationRef
-	f.preSubmitOperationRef = req.PreSubmitCompactionOperationRef
 	text := runtimeSubmitInputText(req)
 	submission, err := f.submitUserMessage(ctx, text)
 	if err == nil && strings.TrimSpace(f.submitQueuedID) != "" {
@@ -178,6 +173,7 @@ func (f *runtimeControlFakeClient) SubmitRuntimeInput(ctx context.Context, req c
 	return submission, err
 }
 func (f *runtimeControlFakeClient) submitUserShellCommand(_ context.Context, command string) error {
+	f.shellCalls++
 	return f.err
 }
 func (f *runtimeControlFakeClient) RunUserShell(ctx context.Context, req clientui.RuntimeShellRequest) error {
@@ -192,24 +188,6 @@ func (f *runtimeControlFakeClient) CompactRuntime(ctx context.Context, req clien
 }
 func (f *runtimeControlFakeClient) Interrupt() error {
 	f.interruptCalls++
-	if f.interruptErr != nil {
-		return f.interruptErr
-	}
-	return f.err
-}
-func (f *runtimeControlFakeClient) InterruptWithPendingRefs(refs []clientui.RuntimeOperationRef) error {
-	f.interruptCalls++
-	f.interruptPendingRefs = append([]clientui.RuntimeOperationRef(nil), refs...)
-	f.interruptTargetRef = nil
-	if f.interruptErr != nil {
-		return f.interruptErr
-	}
-	return f.err
-}
-func (f *runtimeControlFakeClient) InterruptWithTarget(target clientui.RuntimeOperationRef, refs []clientui.RuntimeOperationRef) error {
-	f.interruptCalls++
-	f.interruptPendingRefs = append([]clientui.RuntimeOperationRef(nil), refs...)
-	f.interruptTargetRef = &target
 	if f.interruptErr != nil {
 		return f.interruptErr
 	}

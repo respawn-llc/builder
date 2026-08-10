@@ -90,7 +90,4 @@ func TestRuntimeClientInputRequestUsesCallerOperationIdentity(t *testing.T) {
 	if got := controls.submitRequestIDs(); len(got) != 1 || got[0] != ref.ClientRequestID.String() {
 		t.Fatalf("request ids = %+v, want %q", got, ref.ClientRequestID.String())
 	}
-	if len(controls.submitRefs) != 1 || controls.submitRefs[0] != ref {
-		t.Fatalf("operation refs = %+v, want %+v", controls.submitRefs, ref)
-	}
 }

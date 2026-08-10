@@ -293,6 +293,7 @@ func prepareSessionUIRun(
 	return runtimePlan, uiLoopRequest{
 		ctx:                          ctx,
 		wiring:                       runtimePlan.Wiring,
+		sessionDrafts:                server.SessionLifecycleClient(),
 		active:                       plan.ActiveSettings,
 		commandRegistry:              commandRegistry,
 		initialPrompt:                initialPrompt,
@@ -374,11 +375,28 @@ func persistSessionDraftToServer(ctx context.Context, server sessionLifecycleCli
 	if server == nil || server.SessionLifecycleClient() == nil {
 		return nil
 	}
-	_, err := server.SessionLifecycleClient().PersistInputDraft(ctx, serverapi.SessionPersistInputDraftRequest{
+	return persistSessionDraft(ctx, server.SessionLifecycleClient(), sessionID, ui.sessionDraftInput(), ui.sessionDraftRecoveryBuffers())
+}
+
+func persistSessionDraft(
+	ctx context.Context,
+	client apicontract.SessionLifecycleService,
+	sessionID string,
+	input string,
+	recoveryBuffers []serverapi.SessionDraftRecoveryBuffer,
+) error {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return nil
+	}
+	if client == nil {
+		return errors.New("session lifecycle client is required")
+	}
+	_, err := client.PersistInputDraft(ctx, serverapi.SessionPersistInputDraftRequest{
 		ClientRequestID: uuid.NewString(),
-		SessionID:       strings.TrimSpace(sessionID),
-		Input:           ui.mainEditor.Text(),
-		RecoveryBuffers: ui.sessionDraftRecoveryBuffers(),
+		SessionID:       sessionID,
+		Input:           input,
+		RecoveryBuffers: recoveryBuffers,
 	})
 	return err
 }

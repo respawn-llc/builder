@@ -38,6 +38,7 @@ type defaultExclusiveStepLifecycle struct {
 	boundaryDone       chan struct{}
 	runSeq             uint64
 	publicationDepth   uint8
+	publicationDone    chan struct{}
 }
 
 type exclusiveStepWaiter struct {
@@ -345,9 +346,7 @@ func (s *defaultExclusiveStepLifecycle) InterruptCurrent(beforeCancel func(*RunS
 		suspended.cancel()
 	}
 	s.mu.Lock()
-	stale := (active != nil && (s.active == nil || s.active.sequence != active.sequence)) ||
-		(suspended != nil && (s.suspended == nil || s.suspended.sequence != suspended.sequence))
-	if stale {
+	if !s.runCurrentLocked(active) && !s.runCurrentLocked(suspended) {
 		s.finishPublicationLocked()
 		s.mu.Unlock()
 		return nil, nil
@@ -355,11 +354,9 @@ func (s *defaultExclusiveStepLifecycle) InterruptCurrent(beforeCancel func(*RunS
 	s.mu.Unlock()
 	err := s.persistInterruption()
 	s.mu.Lock()
-	if err != nil && active != nil && s.active != nil && s.active.sequence == active.sequence {
-		s.active.interrupted = false
-	}
-	if err != nil && suspended != nil && s.suspended != nil && s.suspended.sequence == suspended.sequence {
-		s.suspended.interrupted = false
+	if err != nil {
+		s.clearCurrentInterruptedLocked(active)
+		s.clearCurrentInterruptedLocked(suspended)
 	}
 	s.finishPublicationLocked()
 	s.mu.Unlock()
@@ -387,7 +384,7 @@ func (s *defaultExclusiveStepLifecycle) InterruptCurrentAgentTurn(beforeCancel f
 		active.cancel()
 	}
 	s.mu.Lock()
-	if s.active == nil || s.active.sequence != active.sequence {
+	if !s.runCurrentLocked(active) {
 		s.finishPublicationLocked()
 		s.mu.Unlock()
 		return nil, nil
@@ -395,8 +392,8 @@ func (s *defaultExclusiveStepLifecycle) InterruptCurrentAgentTurn(beforeCancel f
 	s.mu.Unlock()
 	err := s.persistInterruption()
 	s.mu.Lock()
-	if err != nil && s.active != nil && s.active.sequence == active.sequence {
-		s.active.interrupted = false
+	if err != nil {
+		s.clearCurrentInterruptedLocked(active)
 	}
 	s.finishPublicationLocked()
 	s.mu.Unlock()
@@ -408,6 +405,26 @@ func (s *defaultExclusiveStepLifecycle) InterruptCurrentAgentTurn(beforeCancel f
 
 func (s *defaultExclusiveStepLifecycle) persistInterruption() error {
 	return s.engine.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeInterruption), Content: textutil.Value(interruptMessage)}}))
+}
+
+func (s *defaultExclusiveStepLifecycle) runCurrentLocked(run *exclusiveRunState) bool {
+	if run == nil {
+		return false
+	}
+	return (s.active != nil && s.active.sequence == run.sequence) ||
+		(s.suspended != nil && s.suspended.sequence == run.sequence)
+}
+
+func (s *defaultExclusiveStepLifecycle) clearCurrentInterruptedLocked(run *exclusiveRunState) {
+	if run == nil {
+		return
+	}
+	if s.active != nil && s.active.sequence == run.sequence {
+		s.active.interrupted = false
+	}
+	if s.suspended != nil && s.suspended.sequence == run.sequence {
+		s.suspended.interrupted = false
+	}
 }
 
 func (s *defaultExclusiveStepLifecycle) IsBusy() bool {
@@ -673,6 +690,7 @@ func (s *defaultExclusiveStepLifecycle) end() {
 
 func (s *defaultExclusiveStepLifecycle) beginTerminalPublication() {
 	s.mu.Lock()
+	s.waitForPublicationLocked()
 	s.active = nil
 	s.beginPublicationLocked()
 	s.mu.Unlock()
@@ -693,6 +711,12 @@ func (s *defaultExclusiveStepLifecycle) finishTerminalPublication() {
 }
 
 func (s *defaultExclusiveStepLifecycle) beginPublicationLocked() {
+	if s.publicationDepth == 0 {
+		if s.publicationDone != nil {
+			panic("exclusive step idle publication retained a completion channel")
+		}
+		s.publicationDone = make(chan struct{})
+	}
 	s.publicationDepth++
 }
 
@@ -701,7 +725,26 @@ func (s *defaultExclusiveStepLifecycle) finishPublicationLocked() {
 		panic("exclusive step publication depth underflow")
 	}
 	s.publicationDepth--
+	if s.publicationDepth == 0 {
+		if s.publicationDone == nil {
+			panic("exclusive step publication completed without a completion channel")
+		}
+		close(s.publicationDone)
+		s.publicationDone = nil
+	}
 	s.notifyNextWaiterLocked()
+}
+
+func (s *defaultExclusiveStepLifecycle) waitForPublicationLocked() {
+	for s.publicationDepth > 0 {
+		done := s.publicationDone
+		if done == nil {
+			panic("exclusive step active publication is missing its completion channel")
+		}
+		s.mu.Unlock()
+		<-done
+		s.mu.Lock()
+	}
 }
 
 func (s *defaultExclusiveStepLifecycle) DrainAgentStepBoundary(ctx context.Context) error {

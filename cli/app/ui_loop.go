@@ -28,6 +28,7 @@ type uiProgramComposition struct {
 type uiLoopRequest struct {
 	ctx                          context.Context
 	wiring                       *runtimeWiring
+	sessionDrafts                apicontract.SessionLifecycleService
 	active                       config.Settings
 	commandRegistry              *commands.Registry
 	initialPrompt                string
@@ -169,6 +170,7 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 		}
 		return nil, errors.New("projected UI model has unexpected type")
 	}
+	model.sessionDrafts = request.sessionDrafts
 	if request.initialTransientStatus != nil {
 		model.startupCmds = append(model.startupCmds, model.showTransientStatusNotice(uiStatusNotice{
 			Text:     *request.initialTransientStatus,

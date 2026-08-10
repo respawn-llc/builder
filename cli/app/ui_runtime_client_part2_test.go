@@ -10,11 +10,8 @@ import (
 	"time"
 
 	"core/shared/clientui"
-	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
-
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestRuntimeClientMainViewDoesNotRefreshCachedSnapshotBehindUIBack(t *testing.T) {
@@ -51,7 +48,6 @@ type reconnectRetryRuntimeControlClient struct {
 	submitCalls      int
 	recordCalls      int
 	submitRequestID  []string
-	submitRefs       []clientui.RuntimeOperationRef
 	recordRequestID  []string
 	localEntries     []serverapi.RuntimeAppendCommittedEntryRequest
 	showGoalResp     serverapi.RuntimeGoalShowResponse
@@ -128,7 +124,6 @@ func (c *reconnectRetryRuntimeControlClient) SubmitUserTurn(_ context.Context, r
 	defer c.mu.Unlock()
 	c.submitCalls++
 	c.submitRequestID = append(c.submitRequestID, req.ClientRequestID)
-	c.submitRefs = append(c.submitRefs, req.OperationRef)
 	if c.submitCalls == 1 && c.firstSubmitErr != nil {
 		return serverapi.RuntimeSubmitUserTurnResponse{}, c.firstSubmitErr
 	}
@@ -298,32 +293,6 @@ func TestRuntimeClientGoalMutationMethodsPatchCachedMainView(t *testing.T) {
 	}
 }
 
-func TestRuntimeClientPublicInterruptMethodsDoNotCommitRuntimeTuple(t *testing.T) {
-	current := runtimeTupleTestView(
-		10,
-		runtimeTupleTestIdleActivity(),
-		runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationAccepted),
-	)
-	controls := &reconnectRetryRuntimeControlClient{interruptResp: serverapi.RuntimeInterruptResponse{
-		Version:             clientui.ReadModelVersion{Epoch: current.Version.Epoch, Generation: current.Version.Generation, Sequence: 11},
-		Activity:            runtimeTupleTestRunningActivity(),
-		InputReconciliation: runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationSubmitted),
-	}}
-	runtimeClient := newTestSessionRuntimeClientWithControls(controls)
-	runtimeClient.storeMainView(current)
-
-	if err := runtimeClient.InterruptWithPendingRefs(nil); err != nil {
-		t.Fatalf("interrupt with pending refs: %v", err)
-	}
-	assertRuntimeTupleView(t, runtimeClient.MainView(), current)
-
-	target := newRuntimeOperationRef(clientui.RuntimeOperationKindSubmit)
-	if err := runtimeClient.InterruptWithTarget(target, []clientui.RuntimeOperationRef{target}); err != nil {
-		t.Fatalf("interrupt with target: %v", err)
-	}
-	assertRuntimeTupleView(t, runtimeClient.MainView(), current)
-}
-
 func TestCloneRuntimeGoalReturnsIndependentCopy(t *testing.T) {
 	original := &clientui.RuntimeGoal{ID: "goal-1", Objective: "ship", Status: clientui.RuntimeGoalStatusActive, Suspended: true}
 	cloned := cloneRuntimeGoal(original)
@@ -448,10 +417,7 @@ func TestRuntimeClientSubmitUserMessageRecoversRuntimeUnavailableAndReusesReques
 	runtimeClient.SetRuntimeReactivator(reactivator)
 
 	submission, err := runtimeClient.SubmitRuntimeInput(context.Background(), clientui.RuntimeSubmitRequest{
-		OperationRef: clientui.RuntimeOperationRef{
-			Kind:            clientui.RuntimeOperationKindSubmit,
-			ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
-		},
+		OperationRef:                    newRuntimeOperationRef(clientui.RuntimeOperationKindSubmit),
 		PreSubmitCompactionOperationRef: newRuntimeOperationRef(clientui.RuntimeOperationKindPreSubmitCompact),
 		Input:                           runtimeinput.Text("hello"),
 	})
@@ -497,10 +463,7 @@ func TestRuntimeClientSubmitUserMessageRecoversRuntimeUnavailable(t *testing.T) 
 	runtimeClient.SetRuntimeReactivator(reactivator)
 
 	submission, err := runtimeClient.SubmitRuntimeInput(context.Background(), clientui.RuntimeSubmitRequest{
-		OperationRef: clientui.RuntimeOperationRef{
-			Kind:            clientui.RuntimeOperationKindSubmit,
-			ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
-		},
+		OperationRef:                    newRuntimeOperationRef(clientui.RuntimeOperationKindSubmit),
 		PreSubmitCompactionOperationRef: newRuntimeOperationRef(clientui.RuntimeOperationKindPreSubmitCompact),
 		Input:                           runtimeinput.Text("hello"),
 	})
@@ -532,13 +495,23 @@ func TestRuntimeClientSubmitTurnRecoveryContinuesFirstPrompt(t *testing.T) {
 	runtimeClient.SetRuntimeReactivator(reactivator)
 	model := newProjectedClosedUIModel(runtimeClient)
 	model.startupCmds = nil
-
-	submitCmd := model.inputController().startSubmissionWithPromptHistoryAndQueuePositionAndID("hello after restart", preSubmitQueueBack, "")
-	if submitCmd == nil {
-		t.Fatal("expected submit command")
+	model.sessionID = "session-1"
+	model.sessionDrafts = &recordingSessionLifecycleClient{
+		persistInputDraft: func(context.Context, serverapi.SessionPersistInputDraftRequest) (serverapi.SessionPersistInputDraftResponse, error) {
+			return serverapi.SessionPersistInputDraftResponse{}, nil
+		},
 	}
-	next := tea.Model(model)
+
+	prepareCmd := model.inputController().startSubmissionWithPromptHistoryAndQueuePositionAndID("hello after restart", preSubmitQueueBack, "")
+	if prepareCmd == nil {
+		t.Fatal("expected draft preparation command")
+	}
+	prepared := findSubmitDraftPreparedMessage(t, prepareCmd)
+	next, submitCmd := model.Update(prepared)
 	updated := next.(*uiModel)
+	if submitCmd == nil {
+		t.Fatal("expected submit command after draft persistence")
+	}
 	submitMsgs := collectCmdMessages(t, submitCmd)
 	var done submitDoneMsg
 	foundDone := false
@@ -616,7 +589,7 @@ func TestRuntimeClientMainViewRecoveryPreservesReadDeadline(t *testing.T) {
 	runtimeClient.SetRuntimeReactivator(reactivator)
 
 	start := time.Now()
-	if _, err := runtimeClient.refreshMainViewSync(uiRuntimeReadTimeout, nil); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := runtimeClient.refreshMainViewSync(uiRuntimeReadTimeout); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("refreshMainViewSync error = %v, want reactivation deadline error", err)
 	}
 	if elapsed := time.Since(start); elapsed > uiRuntimeReadTimeout+500*time.Millisecond {
@@ -674,10 +647,7 @@ func TestRuntimeClientReconnectWarningFailureDoesNotBlockSubmit(t *testing.T) {
 	runtimeClient.SetRuntimeReactivator(reactivator)
 
 	submission, err := runtimeClient.SubmitRuntimeInput(context.Background(), clientui.RuntimeSubmitRequest{
-		OperationRef: clientui.RuntimeOperationRef{
-			Kind:            clientui.RuntimeOperationKindSubmit,
-			ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
-		},
+		OperationRef:                    newRuntimeOperationRef(clientui.RuntimeOperationKindSubmit),
 		PreSubmitCompactionOperationRef: newRuntimeOperationRef(clientui.RuntimeOperationKindPreSubmitCompact),
 		Input:                           runtimeinput.Text("hello"),
 	})

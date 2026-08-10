@@ -1,6 +1,10 @@
 package app
 
-import tea "github.com/charmbracelet/bubbletea"
+import (
+	"core/shared/clientui"
+
+	tea "github.com/charmbracelet/bubbletea"
+)
 
 func (c uiInputController) handleRuntimeCtrlC(closeSurface func() tea.Cmd) (tea.Model, tea.Cmd) {
 	m := c.model
@@ -13,11 +17,25 @@ func (c uiInputController) handleRuntimeCtrlC(closeSurface func() tea.Cmd) (tea.
 		m.forcedLocalExit = true
 		return m, sequenceCmds(closeCmd, tea.Quit)
 	}
-	if m.blocksRuntimeInput() {
+	if runtimeActivityAllowsOrdinaryInterrupt(m.runtimeActivityProjection) {
 		return m, sequenceCmds(closeCmd, c.interruptBusyRuntime())
 	}
 	m.exitAction = UIActionExit
 	return m, sequenceCmds(closeCmd, tea.Quit)
+}
+
+func runtimeActivityAllowsOrdinaryInterrupt(activity clientui.RuntimeActivity) bool {
+	if activity.ActiveStep == nil {
+		return false
+	}
+	switch activity.ActiveStep.ActiveKind {
+	case clientui.RuntimeActivityActiveKindUserTurn,
+		clientui.RuntimeActivityActiveKindWorkflowTurn,
+		clientui.RuntimeActivityActiveKindGoalLoop:
+		return true
+	default:
+		return false
+	}
 }
 
 func (c uiInputController) closeTranscriptSurfaceForRuntimeCtrlC(close func()) func() tea.Cmd {

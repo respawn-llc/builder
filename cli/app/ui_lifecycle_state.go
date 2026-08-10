@@ -20,7 +20,7 @@ const (
 )
 
 func (m *uiModel) isBusy() bool {
-	return m != nil && (m.runtimeLifecycle.Run.IsRunning() || m.hasLocalDispatchPending() || len(m.pendingRuntimeOperations) > 0)
+	return m != nil && (m.runtimeLifecycle.Run.IsRunning() || m.hasLocalDispatchPending() || m.isCompacting())
 }
 
 func (m *uiModel) runtimeActivityBusy() bool {

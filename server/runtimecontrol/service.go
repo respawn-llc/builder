@@ -597,7 +597,7 @@ func (s *Service) interrupt(ctx context.Context, req runtimeInterruptMemoRequest
 			}
 		}
 		if interruptActive {
-			if err := engine.Interrupt(); err != nil {
+			if _, err := engine.TryInterruptActiveAgentTurn(); err != nil {
 				return err
 			}
 		}

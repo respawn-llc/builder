@@ -695,8 +695,17 @@ func TestExclusiveStepLifecycleAgentTurnInterruptKeepsSuccessorBehindPersistence
 		t.Fatal("timed out waiting for Agent Turn interruption persistence")
 	}
 
-	lifecycle.beginTerminalPublication()
-	lifecycle.finishTerminalPublication()
+	terminalDone := make(chan struct{})
+	go func() {
+		lifecycle.beginTerminalPublication()
+		lifecycle.finishTerminalPublication()
+		close(terminalDone)
+	}()
+	select {
+	case <-terminalDone:
+		t.Fatal("terminal publication finished before Agent Turn interruption persisted")
+	case <-time.After(50 * time.Millisecond):
+	}
 	successorStarted := make(chan struct{})
 	successorDone := make(chan error, 1)
 	go func() {
@@ -719,6 +728,11 @@ func TestExclusiveStepLifecycleAgentTurnInterruptKeepsSuccessorBehindPersistence
 	result := <-interruptDone
 	if result.err != nil || result.snapshot == nil || result.snapshot.ActiveKind != ActiveKindUserTurn {
 		t.Fatalf("agent-turn interrupt = (%+v, %v), want persisted user Agent Turn", result.snapshot, result.err)
+	}
+	select {
+	case <-terminalDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for terminal publication after interruption persistence")
 	}
 	select {
 	case <-successorStarted:
@@ -1034,6 +1048,47 @@ func TestExclusiveStepLifecycleInterruptSkipsStaleRunCleanup(t *testing.T) {
 	}
 	if len(eng.transcriptRuntimeState().SnapshotMessages()) != 0 {
 		t.Fatalf("expected stale interrupt to avoid appending interruption message, got %+v", eng.transcriptRuntimeState().SnapshotMessages())
+	}
+}
+
+func TestExclusiveStepLifecycleInterruptPersistsForRemainingCurrentRun(t *testing.T) {
+	t.Parallel()
+	store := mustCreateTestSession(t)
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	suspended := &exclusiveRunState{
+		sequence:   2,
+		activeKind: ActiveKindGoalLoop,
+		cancel:     func() {},
+		runID:      uuid.NewString(),
+		stepID:     uuid.NewString(),
+		startedAt:  time.Now().UTC(),
+	}
+	lifecycle := &defaultExclusiveStepLifecycle{
+		engine:    eng,
+		suspended: suspended,
+	}
+	lifecycle.active = &exclusiveRunState{
+		sequence:   1,
+		activeKind: ActiveKindCompaction,
+		cancel: func() {
+			lifecycle.mu.Lock()
+			lifecycle.active = &exclusiveRunState{sequence: 3}
+			lifecycle.mu.Unlock()
+		},
+		runID:     uuid.NewString(),
+		stepID:    uuid.NewString(),
+		startedAt: time.Now().UTC(),
+	}
+
+	if err := lifecycle.Interrupt(); err != nil {
+		t.Fatalf("interrupt: %v", err)
+	}
+	if !suspended.interrupted {
+		t.Fatal("remaining suspended run was not marked interrupted")
+	}
+	messages := eng.transcriptRuntimeState().SnapshotMessages()
+	if len(messages) != 1 || messages[0].MessageType == nil || *messages[0].MessageType != llm.MessageTypeInterruption {
+		t.Fatalf("remaining current run interruption messages = %+v", messages)
 	}
 }
 

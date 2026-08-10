@@ -2205,6 +2205,11 @@ func TestServiceSubmitUserTurnQueuesWhileCompactionOwnsSessionExecution(t *testi
 		started: make(chan struct{}),
 		release: make(chan struct{}),
 	}
+	var releaseOnce sync.Once
+	releaseCompaction := func() {
+		releaseOnce.Do(func() { close(client.release) })
+	}
+	defer releaseCompaction()
 	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{
 		Model:                        "gpt-5",
 		ProviderCapabilitiesOverride: &runtimeControlOpenAICapabilities,
@@ -2231,6 +2236,18 @@ func TestServiceSubmitUserTurnQueuesWhileCompactionOwnsSessionExecution(t *testi
 		t.Fatal("compaction did not start")
 	}
 
+	if _, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
+		ClientRequestID: "interrupt-compaction",
+		SessionID:       store.Meta().SessionID,
+	}); err != nil {
+		t.Fatalf("Interrupt while compacting: %v", err)
+	}
+	select {
+	case err := <-compactDone:
+		t.Fatalf("ordinary Interrupt ended compaction: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
 	queuedText := "queue after compaction"
 	resp, err := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "queue-while-compacting", queuedText))
 	if err != nil {
@@ -2243,7 +2260,7 @@ func TestServiceSubmitUserTurnQueuesWhileCompactionOwnsSessionExecution(t *testi
 		t.Fatal("queued turn was not retained while compaction was active")
 	}
 
-	close(client.release)
+	releaseCompaction()
 	if err := <-compactDone; err != nil {
 		t.Fatalf("CompactContext: %v", err)
 	}

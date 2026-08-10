@@ -7,17 +7,41 @@ import (
 
 	"core/cli/app/commands"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
+	"core/shared/runtimeinput"
 
 	"github.com/google/uuid"
 )
 
 type submitDoneMsg struct {
+	phase         submitPhase
+	dispatch      submitDispatch
 	token         uint64
 	message       string
 	submittedText string
 	silentFinal   bool
 	queued        clientui.QueuedUserMessage
 	err           error
+}
+
+type submitPhase uint8
+
+const (
+	submitPhaseRuntimeCompleted submitPhase = iota
+	submitPhaseDraftPrepared
+)
+
+type submitDispatchKind uint8
+
+const (
+	submitDispatchUserTurn submitDispatchKind = iota
+	submitDispatchUserShell
+)
+
+type submitDispatch struct {
+	kind         submitDispatchKind
+	input        runtimeinput.Input
+	shellCommand string
 }
 
 func newSubmitDoneMsg(token uint64, message string, submittedText string, err error) submitDoneMsg {
@@ -137,9 +161,14 @@ type activeSubmitState struct {
 	text               string
 	queuedID           string
 	origin             activeSubmitOrigin
-	operationRef       clientui.RuntimeOperationRef
+	clientRequestID    runtimeids.RuntimeClientRequestID
 	restoreOnInterrupt bool
 	flushed            bool
+	heldInput          *activeSubmitHeldInput
+}
+
+type activeSubmitHeldInput struct {
+	draftToken uint64
 }
 
 type spinnerTickMsg struct {

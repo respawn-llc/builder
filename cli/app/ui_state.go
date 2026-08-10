@@ -38,6 +38,7 @@ type uiRuntimeFeatureState struct {
 	processClient         clientui.ProcessClient
 	processClientExplicit bool
 	worktreeClient        apicontract.WorktreeService
+	sessionDrafts         apicontract.SessionLifecycleService
 
 	pathReferenceEvents        <-chan uiPathReferenceSearchEvent
 	runtimeConnectionEvents    chan runtimeConnectionStateChangedMsg
@@ -69,12 +70,11 @@ type uiInputFeatureState struct {
 	// UI-side post-turn input queue. It may contain slash commands, shell
 	// commands, and other client-only actions; server queues only runtime
 	// injected user work.
-	queued                   []queuedInputItem
-	compactionOrigin         uiCompactionOrigin
-	pendingRuntimeOperations []clientui.RuntimeOperationRef
-	submitToken              uint64
-	activeSubmit             activeSubmitState
-	recoveredDraftBuffers    []serverapi.SessionDraftRecoveryBuffer
+	queued                []queuedInputItem
+	compactionOrigin      uiCompactionOrigin
+	submitToken           uint64
+	activeSubmit          activeSubmitState
+	recoveredDraftBuffers []serverapi.SessionDraftRecoveryBuffer
 
 	pendingInjected    []clientui.QueuedUserMessage
 	injectedQueue      []injectedRuntimeQueueItem

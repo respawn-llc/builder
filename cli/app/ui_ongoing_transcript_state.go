@@ -6,6 +6,7 @@ import (
 
 	"core/cli/tui"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -146,11 +147,7 @@ func (m *uiModel) applyTranscriptRuntimeReadModelUpdate(admission runtimeTupleMe
 	}
 	var cmd tea.Cmd
 	if m.hasPendingInterrupt() {
-		if m.pendingInterruptMissingInputReconciliation(m.cachedRuntimeMainView()) {
-			cmd = m.requestInputReconciliationRefresh()
-		} else {
-			cmd = m.acknowledgePendingInterrupt()
-		}
+		cmd = m.acknowledgePendingInterrupt()
 	}
 	return tea.Batch(cmd, m.releaseDeferredRuntimeSyncs())
 }
@@ -239,9 +236,11 @@ func (m *uiModel) applyTranscriptUserMessageFlushed(flushed clientui.TranscriptU
 	m.conversationFreshness = clientui.ConversationFreshnessEstablished
 	m.localConversationTurn = true
 	ids := runtimeOperationIdentityStrings(flushed.Operations)
-	if m.activeSubmit.token != 0 && runtimeOperationRefsContain(flushed.Operations, m.activeSubmit.operationRef) {
-		m.activeSubmit.stepID = flushed.StepID.String()
-		m.activeSubmit.flushed = true
+	if m.activeSubmit.token != 0 {
+		if runtimeOperationRefsContainClientRequestID(flushed.Operations, m.activeSubmit.clientRequestID) {
+			m.activeSubmit.stepID = flushed.StepID.String()
+			m.activeSubmit.flushed = true
+		}
 	}
 	for _, id := range ids {
 		m.removePendingInjectedByID(id)
@@ -254,10 +253,11 @@ func (m *uiModel) applyTranscriptUserMessageFlushed(flushed clientui.TranscriptU
 }
 
 func (m *uiModel) applyTranscriptQueuedMessageState(state clientui.TranscriptQueuedMessageState) tea.Cmd {
+	queueItemID := state.QueueItemID
 	ids := runtimeOperationIdentityStrings([]clientui.RuntimeOperationRef{{
 		Kind:            clientui.RuntimeOperationKindQueuedMessage,
 		ClientRequestID: state.ClientRequestID,
-		QueueItemID:     &state.QueueItemID,
+		QueueItemID:     &queueItemID,
 	}})
 	if state.Status == clientui.QueuedUserMessageAccepted {
 		m.registerSteeredQueuedUserMessage(clientui.QueuedUserMessage{
@@ -320,15 +320,27 @@ func (m *uiModel) reconcileTranscriptQueuedMessages(states []clientui.Transcript
 	}
 }
 
-func runtimeOperationIdentityStrings(operations []clientui.RuntimeOperationRef) []string {
-	ids := make([]string, 0, len(operations)*2)
-	for _, operation := range operations {
-		ids = append(ids, operation.ClientRequestID.String())
-		if operation.QueueItemID != nil {
-			ids = append(ids, operation.QueueItemID.String())
+func runtimeOperationIdentityStrings(refs []clientui.RuntimeOperationRef) []string {
+	ids := make([]string, 0, len(refs)*2)
+	for _, ref := range refs {
+		ids = append(ids, ref.ClientRequestID.String())
+		if ref.QueueItemID != nil {
+			ids = append(ids, ref.QueueItemID.String())
 		}
 	}
 	return ids
+}
+
+func runtimeOperationRefsContainClientRequestID(refs []clientui.RuntimeOperationRef, clientRequestID runtimeids.RuntimeClientRequestID) bool {
+	if clientRequestID.IsZero() {
+		return false
+	}
+	for _, ref := range refs {
+		if ref.ClientRequestID == clientRequestID {
+			return true
+		}
+	}
+	return false
 }
 
 func dereferenceTranscriptText(text *string) string {

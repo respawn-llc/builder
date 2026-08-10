@@ -290,7 +290,6 @@ func (e *Engine) queueMessageForActiveRun(ctx context.Context, message llm.Messa
 			e.liveRun.finishQueueItemPublication(queueItemID)
 			e.unmarkQueuedUserInjectionForAutoDrain(item.ID)
 			e.completeLiveRunQueueItems(map[string]struct{}{item.ID: {}})
-			committed = false
 			return false, queueErr
 		}
 		item = queuedItem
