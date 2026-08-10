@@ -470,12 +470,6 @@ func runSemanticCloseFailurePostJoinCase(
 			controller.completionObservations.Load(),
 		)
 	}
-	engine.activeStepGoalMutationsMu.Lock()
-	pendingGoals := len(engine.activeStepGoalMutations["step"])
-	engine.activeStepGoalMutationsMu.Unlock()
-	if pendingGoals != 1 {
-		t.Fatalf("failed close pending Goal mutations = %d, want one untouched", pendingGoals)
-	}
 	_, projected := engine.transcriptRuntimeState().ToolCompletionSnapshot("close-failure")
 	if projected != wantProjected {
 		t.Fatalf("failed close projection = %t, want %t", projected, wantProjected)

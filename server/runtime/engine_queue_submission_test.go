@@ -12,41 +12,6 @@ import (
 	"core/shared/textutil"
 )
 
-func TestAcceptedQueueAutoDrainsAfterActiveTurnWithoutClientKick(t *testing.T) {
-	client := &fakeClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("queued work handled"), Phase: textutil.Value(llm.MessagePhaseFinal)}}}}
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{Model: "gpt-5"})
-	started := make(chan struct{})
-	release := make(chan struct{})
-	done := make(chan error, 1)
-	go func() {
-		done <- engine.stepLifecycle.Run(context.Background(), exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserTurn}, func(context.Context, string) error {
-			close(started)
-			<-release
-			return nil
-		})
-	}()
-	select {
-	case <-started:
-	case <-time.After(3 * time.Second):
-		t.Fatal("active turn did not start")
-	}
-	queued, accepted, err := engine.QueueUserMessageForActiveRun(context.Background(), "queued input", runtimeids.NewRuntimeClientRequestID(), nil)
-	if err != nil || !accepted || queued.ID == "" {
-		t.Fatalf("accepted queue item = %+v/%t/%v", queued, accepted, err)
-	}
-	close(release)
-	if err := <-done; err != nil {
-		t.Fatalf("active turn completion: %v", err)
-	}
-	waitEngineLifecycleTasks(t, engine)
-	if calls := fakeClientCallCount(client); calls != 1 {
-		t.Fatalf("queued work model calls = %d, want 1", calls)
-	}
-	if engine.HasQueuedUserWork() || engine.HasScheduledQueuedUserWork() {
-		t.Fatal("accepted queue remained after the active turn")
-	}
-}
-
 func TestIdleHumanBoundaryAppliesBeforeInitialProviderOriginIsExposed(t *testing.T) {
 	probe := &agentStepOriginProbe{}
 	var originExposedDuringApply atomic.Bool

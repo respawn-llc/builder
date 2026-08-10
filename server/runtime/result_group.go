@@ -349,7 +349,7 @@ func (e *Engine) abortResultGroupForOperationalFailure(
 	if fatal := collector.fatalSnapshot(); fatal != nil {
 		return fatal
 	}
-	steerErr := e.steerRuntimeClose(
+	steerErr := e.steer(
 		stepID,
 		steerResultGroupOperationalFailureIntent(collector, cause),
 	)

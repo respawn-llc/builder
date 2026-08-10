@@ -467,8 +467,10 @@ func (e *Engine) closeAdmissionAfterRuntimeAbort() {
 	if e == nil {
 		return
 	}
+	if err := e.closeRuntimeState(); err != nil {
+		e.surfaceRunError(err)
+	}
 	e.closed.Store(true)
-	e.failPendingWorkflowAssignments(ErrEngineClosed)
 }
 
 func (e *Engine) closeRuntimeState() error {
@@ -1290,7 +1292,7 @@ func (e *Engine) coordinateAcceptedResponsePostJoin(
 			}
 		}
 	}
-	closeErr := e.steerRuntimeClose(
+	closeErr := e.steer(
 		stepID,
 		steerResultGroupCloseIntent(collector),
 	)

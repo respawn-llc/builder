@@ -425,9 +425,6 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 				e.cascadeCompleteActiveGoalOnWorkflowCompletion()
 				return stepLoopResult{ExecutedToolCall: true}, nil
 			}
-			if _, err := s.flushPendingUserInjections(stepID, options); err != nil {
-				return stepLoopResult{}, err
-			}
 			continue
 		}
 
@@ -583,18 +580,6 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 			return stepLoopResult{FinalAnswer: textutil.Value(resolved), ExecutedToolCall: executedToolCall, AssistantCommittedStart: resolvedCommittedStart, AssistantCommittedStartSet: resolvedCommittedStartSet}, nil
 		}
 
-		applied, terminal, err := s.executeLocalToolCallsAndAppendResults(ctx, stepID, localToolCalls)
-		if err != nil {
-			return stepLoopResult{}, err
-		}
-		patchEditsApplied = patchEditsApplied || applied
-		if terminal {
-			e.cascadeCompleteActiveGoalOnWorkflowCompletion()
-			return stepLoopResult{ExecutedToolCall: true}, nil
-		}
-		if err := s.completeAgentStepBoundary(ctx); err != nil {
-			return stepLoopResult{}, err
-		}
 	}
 }
 
@@ -820,7 +805,7 @@ func (s *defaultStepExecutor) executeAcceptedToolCallsAndAppendResults(
 		return false, false, nil
 	}
 	e := s.engine
-	results, durableTerminal, err := e.executeAcceptedToolCallsCoordinated(
+	results, coordinatedDurableTerminal, err := e.executeAcceptedToolCallsCoordinated(
 		ctx,
 		stepID,
 		calls,
@@ -835,7 +820,7 @@ func (s *defaultStepExecutor) executeAcceptedToolCallsAndAppendResults(
 			patchEditsApplied = true
 		}
 	}
-	if terminal {
+	if terminal || coordinatedDurableTerminal {
 		return patchEditsApplied, true, nil
 	}
 	durableTerminal, err := s.engine.observeWorkflowDurableCompletion(ctx)

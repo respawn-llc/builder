@@ -772,6 +772,20 @@ func (e *Engine) surfaceRunError(err error) {
 	e.SetStreamingError(message)
 }
 
+func runtimeAbortFeedbackMessage(fatal *resultGroupFatal) string {
+	if fatal == nil {
+		return ""
+	}
+	message := strings.TrimSpace(llm.UserFacingError(fatal.Cause))
+	if message == "" && fatal.Cause != nil {
+		message = fatal.Cause.Error()
+	}
+	if message == "" {
+		message = fatal.Error()
+	}
+	return message
+}
+
 func (e *Engine) steerRuntimeErrorFeedback(err error) (string, error) {
 	if err == nil {
 		return "", errors.New("runtime error feedback requires an error")

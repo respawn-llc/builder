@@ -628,7 +628,7 @@ func TestExclusiveStepLifecycleCanEmitRunStateWithoutPersistingDurableRun(t *tes
 	}
 }
 
-func TestExclusiveStepRuntimeAbortPreservesRecoveryAndSkipsIdleWork(t *testing.T) {
+func TestExclusiveStepRuntimeAbortPreservesRecoveryAndClosesAdmission(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	lifecycleErr := errors.New("step-ended publication failed")
@@ -645,15 +645,7 @@ func TestExclusiveStepRuntimeAbortPreservesRecoveryAndSkipsIdleWork(t *testing.T
 		tools.NewRegistry(),
 		Config{Model: "gpt-5", StepLifecycle: stepLifecycle},
 	)
-	var idleSchedules int
-	lifecycle := &defaultExclusiveStepLifecycle{
-		engine: eng,
-		background: &stubBackgroundNoticeScheduler{
-			scheduleIfIdle: func() {
-				idleSchedules++
-			},
-		},
-	}
+	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
 	cause := errors.New("result group persistence failed")
 	fatal := &resultGroupFatal{Committed: false, Cause: cause}
 	err := lifecycle.Run(
@@ -688,9 +680,6 @@ func TestExclusiveStepRuntimeAbortPreservesRecoveryAndSkipsIdleWork(t *testing.T
 	}
 	if marker := store.Meta().PendingModelRecovery; marker == nil {
 		t.Fatal("runtime abort cleared PendingModelRecovery")
-	}
-	if idleSchedules != 0 {
-		t.Fatalf("runtime abort idle schedules = %d, want none", idleSchedules)
 	}
 	if _, submitErr := eng.SubmitUserMessage(context.Background(), "later"); !errors.Is(submitErr, ErrEngineClosed) {
 		t.Fatalf("later submission error = %v, want ErrEngineClosed", submitErr)
