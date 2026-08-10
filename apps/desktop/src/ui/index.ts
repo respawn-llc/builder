@@ -114,6 +114,11 @@ export {
   createVirtualizedPixelOffsetRequest,
   type VirtualizedPixelOffsetRequest,
 } from "./virtualizedPixelOffsetRequest";
-export { InfiniteListBoundary, type VirtualizedInfiniteListBoundaryState } from "./InfiniteListBoundary";
+export {
+  autoLoadAvailable,
+  directionalBoundary,
+  InfiniteListBoundary,
+  type VirtualizedInfiniteListBoundaryState,
+} from "./InfiniteListBoundary";
 export { useStableCallback } from "./useStableCallback";
 export type { StatusNotice, ToastTone } from "./statusToast";

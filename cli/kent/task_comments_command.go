@@ -129,12 +129,12 @@ func taskCommentListSubcommand(args []string, stdout io.Writer, stderr io.Writer
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
 		defer cancel()
-		resp, err := remote.ListWorkflowTaskComments(ctx, serverapi.WorkflowTaskCommentListRequest{TaskID: taskID, Offset: offset, Limit: limit})
+		resp, err := remote.ListWorkflowTaskComments(ctx, serverapi.WorkflowTaskOffsetPageRequest{TaskID: taskID, Offset: offset, Limit: limit})
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		writeTaskCommentList(stdout, resp.Comments)
+		writeTaskCommentList(stdout, resp.Items)
 		if resp.NextOffset != nil {
 			if err := writeNextOffset(stderr, *resp.NextOffset); err != nil {
 				return 1

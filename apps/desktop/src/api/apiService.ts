@@ -147,7 +147,7 @@ export interface ApiService {
   approveApproval(approvalID: string): Promise<TaskApproveResponse>;
   deleteTask(taskID: string): Promise<void>;
   getTask(taskID: string): Promise<TaskDetail>;
-  listTaskActivity(taskID: string, pageToken: string): Promise<ActivityPage>;
+  listTaskActivity(taskID: string, offset: number): Promise<ActivityPage>;
   listTaskComments(taskID: string, offset: number): Promise<CommentPage>;
   addComment(taskID: string, body: string): Promise<TaskComment>;
   replaceComment(commentID: string, body: string): Promise<void>;
