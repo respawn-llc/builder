@@ -32,6 +32,7 @@ type GitWorktree struct {
 	Root           string       `json:"-"`
 	HeadOID        string       `json:"head_oid,omitempty"`
 	Branch         *localBranch `json:"-"`
+	RecordedBranch *localBranch `json:"-"`
 	Detached       bool         `json:"detached,omitempty"`
 	Bare           bool         `json:"bare,omitempty"`
 	LockedReason   string       `json:"locked_reason,omitempty"`
