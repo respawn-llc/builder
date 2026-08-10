@@ -629,18 +629,24 @@ func (s *Service) rebindHealthyManagedTaskWorktree(ctx context.Context, task sql
 	if err != nil {
 		return TaskWorktreeMaterialization{}, &LockedTaskWorktreeError{Cause: LockedTaskWorktreeCauseGitFailure, Err: err}
 	}
-	gitMetadata := GitWorktree{
-		Root:     record.CanonicalRoot,
-		HeadOID:  revision.CommitOID,
-		Branch:   identity.branch,
-		Detached: identity.branch == nil,
-	}
-	// Detached HEAD is live state, not a replacement for the Task's last named-branch authority.
-	if identity.branch != nil {
-		record.GitMetadataJSON, err = marshalGitMetadata(gitMetadata)
+	recordedBranch := identity.branch
+	if recordedBranch == nil {
+		persisted, err := worktreeGitMetadataFromRecord(record)
 		if err != nil {
 			return TaskWorktreeMaterialization{}, err
 		}
+		recordedBranch = persisted.RecordedBranch
+	}
+	gitMetadata := GitWorktree{
+		Root:           record.CanonicalRoot,
+		HeadOID:        revision.CommitOID,
+		Branch:         identity.branch,
+		RecordedBranch: recordedBranch,
+		Detached:       identity.branch == nil,
+	}
+	record.GitMetadataJSON, err = marshalGitMetadata(gitMetadata)
+	if err != nil {
+		return TaskWorktreeMaterialization{}, err
 	}
 	record.UpdatedAt = time.Now().UTC()
 	record.WorkspaceID = workspace.WorkspaceID
@@ -753,10 +759,10 @@ func persistedTaskWorktreeBranch(record metadata.WorktreeRecord) (localBranch, e
 	if err != nil {
 		return localBranch{}, err
 	}
-	if persisted.Detached || persisted.Branch == nil {
+	if persisted.RecordedBranch == nil {
 		return localBranch{}, fmt.Errorf("task Worktree %q has no persisted named branch", record.ID)
 	}
-	return *persisted.Branch, nil
+	return *persisted.RecordedBranch, nil
 }
 
 func validateInitialTaskBranchAssertion(requestedBranchName *string, persistedBranch localBranch) error {

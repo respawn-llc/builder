@@ -275,6 +275,7 @@ func TestRestoreLockedTaskWorktreeReusesDetachedHeadWithoutErasingBranchAuthorit
 	worktreeID := taskWorktreeID(materialized.Worktree)
 	worktreeRoot := taskWorktreeRoot(materialized.Worktree)
 	runGit(t, worktreeRoot, "checkout", "--detach")
+	detachedRevision := resolveTaskWorktreeTestHEAD(t, env, worktreeRoot)
 	setupMarker := filepath.Join(t.TempDir(), "setup-ran")
 	setupScript := filepath.Join(t.TempDir(), "setup.sh")
 	writeExecutableFile(t, setupScript, fmt.Sprintf("#!/bin/sh\ntouch %q\n", setupMarker))
@@ -304,10 +305,12 @@ func TestRestoreLockedTaskWorktreeReusesDetachedHeadWithoutErasingBranchAuthorit
 	if err != nil {
 		t.Fatalf("worktreeGitMetadataFromRecord: %v", err)
 	}
-	if persisted.Detached ||
-		persisted.Branch == nil ||
-		persisted.Branch.Name() != task.ShortID {
-		t.Fatalf("persisted branch authority = %+v, want named branch %q", persisted, task.ShortID)
+	if persisted.HeadOID != detachedRevision.CommitOID ||
+		!persisted.Detached ||
+		persisted.Branch != nil ||
+		persisted.RecordedBranch == nil ||
+		persisted.RecordedBranch.Name() != task.ShortID {
+		t.Fatalf("persisted metadata = %+v, want detached head %q with recorded branch %q", persisted, detachedRevision.CommitOID, task.ShortID)
 	}
 	if _, err := os.Stat(setupMarker); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("restore ran setup for reused detached worktree: %v", err)
@@ -985,7 +988,7 @@ func TestMaterializeInitialTaskWorktreeRejectsLocalBranchCreatedAfterFinalInspec
 	}
 }
 
-func TestMaterializeInitialTaskWorktreePreservesUnownedWorktreeAfterAmbiguousAddFailure(t *testing.T) {
+func TestMaterializeInitialTaskWorktreePreservesExternallyRacedWorktreeAfterAddFailure(t *testing.T) {
 	env := newServiceTestEnv(t)
 	task, workflowStore := createTaskWorktreeTestTask(t, env)
 	const branchName = "feature/partial-add-failure"
@@ -993,10 +996,22 @@ func TestMaterializeInitialTaskWorktreePreservesUnownedWorktreeAfterAmbiguousAdd
 		t.Fatalf("ReplacePendingInitialManagedBranchName: %v", err)
 	}
 	addErr := errors.New("post-checkout hook failed")
-	env.service.git = NewGitInspector(&failAfterSuccessfulWorktreeAddRunner{
-		base:       execGitCommandRunner{},
-		branchName: branchName,
-		err:        addErr,
+	var raceOnce sync.Once
+	env.service.git = NewGitInspector(&taskWorktreeGitCommandInterceptor{
+		base: execGitCommandRunner{},
+		beforeOutput: func(ctx context.Context, dir string, args []string) error {
+			if len(args) < 5 || !slices.Equal(args[:4], []string{"worktree", "add", "-b", branchName}) {
+				return nil
+			}
+			var raceErr error
+			raceOnce.Do(func() {
+				_, raceErr = execGitCommandRunner{}.Output(ctx, dir, args...)
+			})
+			if raceErr != nil {
+				return fmt.Errorf("create externally raced worktree: %w", raceErr)
+			}
+			return addErr
+		},
 	})
 
 	_, err := env.service.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{
@@ -1668,32 +1683,6 @@ type taskWorktreeGitCommandInterceptor struct {
 	base         gitCommandRunner
 	beforeRun    func(context.Context, string, []string) error
 	beforeOutput func(context.Context, string, []string) error
-}
-
-type failAfterSuccessfulWorktreeAddRunner struct {
-	base       gitCommandRunner
-	branchName string
-	err        error
-	once       sync.Once
-}
-
-func (r *failAfterSuccessfulWorktreeAddRunner) Output(ctx context.Context, dir string, args ...string) ([]byte, error) {
-	output, err := r.base.Output(ctx, dir, args...)
-	if err != nil || len(args) < 4 || !slices.Equal(args[:4], []string{"worktree", "add", "-b", r.branchName}) {
-		return output, err
-	}
-	injected := false
-	r.once.Do(func() {
-		injected = true
-	})
-	if injected {
-		return output, r.err
-	}
-	return output, nil
-}
-
-func (r *failAfterSuccessfulWorktreeAddRunner) Run(ctx context.Context, dir string, args ...string) ([]byte, int, error) {
-	return r.base.Run(ctx, dir, args...)
 }
 
 func (r *taskWorktreeGitCommandInterceptor) Output(ctx context.Context, dir string, args ...string) ([]byte, error) {
