@@ -2,6 +2,7 @@ package workflowsvc
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"slices"
 	"testing"
@@ -285,26 +286,47 @@ func newWorkflowGraphAtomicFanOutFixture(t *testing.T) (context.Context, *Servic
 	current := getWorkflowGraphAtomicDefinition(t, ctx, service, workflowID)
 	startID := workflowServiceNodeIDByKind(t, current, "start")
 	terminalID := workflowServiceNodeIDByKind(t, current, "terminal")
+	planID := "node-plan-" + workflowID.String()
+	prepID := "node-prep-" + workflowID.String()
+	branchAID := "node-a-" + workflowID.String()
+	branchBID := "node-b-" + workflowID.String()
+	joinID := "node-join-" + workflowID.String()
 	graph := workflowGraphDraftFromDefinition(current)
 	graph.Nodes = append(graph.Nodes,
-		serverapi.WorkflowGraphDraftNode{ID: "node-plan-" + workflowID.String(), Key: "plan", Kind: "agent", DisplayName: "Plan", SubagentRole: "coder"},
-		serverapi.WorkflowGraphDraftNode{ID: "node-prep-" + workflowID.String(), Key: "prep", Kind: "agent", DisplayName: "Prep", SubagentRole: "coder"},
-		serverapi.WorkflowGraphDraftNode{ID: "node-a-" + workflowID.String(), Key: "a", Kind: "agent", DisplayName: "A", SubagentRole: "coder"},
-		serverapi.WorkflowGraphDraftNode{ID: "node-b-" + workflowID.String(), Key: "b", Kind: "agent", DisplayName: "B", SubagentRole: "coder"},
+		serverapi.WorkflowGraphDraftNode{ID: planID, Key: "plan", Kind: "agent", DisplayName: "Plan", SubagentRole: "coder"},
+		serverapi.WorkflowGraphDraftNode{ID: prepID, Key: "prep", Kind: "agent", DisplayName: "Prep", SubagentRole: "coder"},
+		serverapi.WorkflowGraphDraftNode{ID: branchAID, Key: "a", Kind: "agent", DisplayName: "A", SubagentRole: "coder"},
+		serverapi.WorkflowGraphDraftNode{ID: branchBID, Key: "b", Kind: "agent", DisplayName: "B", SubagentRole: "coder"},
+		serverapi.WorkflowGraphDraftNode{ID: joinID, Key: "join", Kind: "join", DisplayName: "Join"},
 	)
 	startGroup := "group-start-" + workflowID.String()
+	prepGroup := "group-prep-" + workflowID.String()
 	splitGroup := "group-split-" + workflowID.String()
+	alternateGroup := "group-alternate-" + workflowID.String()
 	prepDoneGroup := "group-prep-done-" + workflowID.String()
+	joinAGroup := "group-join-a-" + workflowID.String()
+	joinBGroup := "group-join-b-" + workflowID.String()
+	joinDoneGroup := "group-join-done-" + workflowID.String()
 	graph.TransitionGroups = append(graph.TransitionGroups,
 		serverapi.WorkflowGraphDraftTransitionGroup{ID: startGroup, SourceNodeID: startID, TransitionID: "start", DisplayName: "Start"},
-		serverapi.WorkflowGraphDraftTransitionGroup{ID: splitGroup, SourceNodeID: "node-plan-" + workflowID.String(), TransitionID: "split", DisplayName: "Split"},
-		serverapi.WorkflowGraphDraftTransitionGroup{ID: prepDoneGroup, SourceNodeID: "node-prep-" + workflowID.String(), TransitionID: "done", DisplayName: "Done"},
+		serverapi.WorkflowGraphDraftTransitionGroup{ID: prepGroup, SourceNodeID: planID, TransitionID: "prepare", DisplayName: "Prepare"},
+		serverapi.WorkflowGraphDraftTransitionGroup{ID: splitGroup, SourceNodeID: planID, TransitionID: "split", DisplayName: "Split"},
+		serverapi.WorkflowGraphDraftTransitionGroup{ID: alternateGroup, SourceNodeID: planID, TransitionID: "alternate", DisplayName: "Alternate"},
+		serverapi.WorkflowGraphDraftTransitionGroup{ID: prepDoneGroup, SourceNodeID: prepID, TransitionID: "prep_done", DisplayName: "Done"},
+		serverapi.WorkflowGraphDraftTransitionGroup{ID: joinAGroup, SourceNodeID: branchAID, TransitionID: "join_a", DisplayName: "Join"},
+		serverapi.WorkflowGraphDraftTransitionGroup{ID: joinBGroup, SourceNodeID: branchBID, TransitionID: "join_b", DisplayName: "Join"},
+		serverapi.WorkflowGraphDraftTransitionGroup{ID: joinDoneGroup, SourceNodeID: joinID, TransitionID: "join_done", DisplayName: "Done"},
 	)
 	graph.Edges = append(graph.Edges,
-		workflowGraphAtomicEdge("edge-start-"+workflowID.String(), startGroup, "start", "node-plan-"+workflowID.String(), "Plan."),
-		workflowGraphAtomicEdge("edge-split-a-"+workflowID.String(), splitGroup, "a", "node-a-"+workflowID.String(), "A."),
-		workflowGraphAtomicEdge("edge-split-b-"+workflowID.String(), splitGroup, "b", "node-b-"+workflowID.String(), "B."),
-		workflowGraphAtomicEdge("edge-prep-done-"+workflowID.String(), prepDoneGroup, "done", terminalID, ""),
+		workflowGraphAtomicEdge("edge-start-"+workflowID.String(), startGroup, "start", planID, "Plan."),
+		workflowGraphAtomicEdge("edge-prep-"+workflowID.String(), prepGroup, "prepare", prepID, "Prepare."),
+		workflowGraphAtomicEdge("edge-split-a-"+workflowID.String(), splitGroup, "a", branchAID, "A."),
+		workflowGraphAtomicEdge("edge-split-b-"+workflowID.String(), splitGroup, "b", branchBID, "B."),
+		workflowGraphAtomicEdge("edge-alternate-"+workflowID.String(), alternateGroup, "alternate", branchBID, "B."),
+		workflowGraphAtomicEdge("edge-prep-done-"+workflowID.String(), prepDoneGroup, "prep_done", terminalID, ""),
+		workflowGraphAtomicEdge("edge-join-a-"+workflowID.String(), joinAGroup, "join_a", joinID, ""),
+		workflowGraphAtomicEdge("edge-join-b-"+workflowID.String(), joinBGroup, "join_b", joinID, ""),
+		workflowGraphAtomicEdge("edge-join-done-"+workflowID.String(), joinDoneGroup, "join_done", terminalID, ""),
 	)
 	saved := previewWorkflowGraphAtomicDraft(t, ctx, service, current, graph)
 	response := saveWorkflowGraphAtomicPreview(t, ctx, service, current, graph, saved)
@@ -393,6 +415,26 @@ func assertWorkflowGraphAtomicChangedSave(
 	after := getWorkflowGraphAtomicDefinition(t, ctx, service, before.Workflow.ID)
 	if after.Workflow.Version != before.Workflow.Version+1 {
 		t.Fatalf("Workflow Version = %d, want %d", after.Workflow.Version, before.Workflow.Version+1)
+	}
+	reloadedJSON, err := json.Marshal(workflowGraphDraftFromDefinition(after))
+	if err != nil {
+		t.Fatalf("marshal reloaded authored graph: %v", err)
+	}
+	requestedJSON, err := json.Marshal(graph)
+	if err != nil {
+		t.Fatalf("marshal requested authored graph: %v", err)
+	}
+	if string(reloadedJSON) != string(requestedJSON) {
+		t.Fatalf("reloaded authored graph = %s, want %s", reloadedJSON, requestedJSON)
+	}
+	validated, err := service.ValidateWorkflow(ctx, serverapi.WorkflowValidateRequest{
+		WorkflowID: before.Workflow.ID, Mode: serverapi.WorkflowValidationModeExecution,
+	})
+	if err != nil {
+		t.Fatalf("ValidateWorkflow execution: %v", err)
+	}
+	if !validated.Valid {
+		t.Fatalf("reloaded Workflow execution validation = %+v", validated)
 	}
 }
 
