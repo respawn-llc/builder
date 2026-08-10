@@ -856,17 +856,27 @@ func (s *Service) createManagedTaskWorktree(ctx context.Context, req managedTask
 			err = errors.Join(err, cleanupErr)
 		}
 	}()
-	createdBranch, err := s.addManagedWorktree(ctx, req.Workspace.RootPath, worktreeRoot, createSpec, rootKind)
+	createdBranch, err := s.git.Add(ctx, req.Workspace.RootPath, worktreeRoot, createSpec)
 	if err != nil {
 		if createSpec.CreateBranch {
-			return TaskWorktreeMaterialization{}, s.classifyInitialTaskBranchAddFailure(
+			partialCreate, classifiedErr := s.classifyInitialTaskBranchAddFailure(
 				ctx,
 				req.Workspace.RootPath,
+				worktreeRoot,
 				createSpec.BranchName,
 				err,
 			)
+			if partialCreate {
+				cleanup.active = true
+				return TaskWorktreeMaterialization{}, classifiedErr
+			}
+			return TaskWorktreeMaterialization{}, cleanupAutomaticManagedRootAfterAddFailure(
+				rootKind,
+				worktreeRoot,
+				classifiedErr,
+			)
 		}
-		return TaskWorktreeMaterialization{}, err
+		return TaskWorktreeMaterialization{}, cleanupAutomaticManagedRootAfterAddFailure(rootKind, worktreeRoot, err)
 	}
 	cleanup.active = true
 	cleanup.createdBranch = createdBranch
@@ -953,25 +963,42 @@ func (s *Service) createManagedTaskWorktree(ctx context.Context, req managedTask
 func (s *Service) classifyInitialTaskBranchAddFailure(
 	ctx context.Context,
 	workspaceRoot string,
+	worktreeRoot string,
 	branchName string,
 	addErr error,
-) error {
+) (bool, error) {
+	createdWorktree, found, err := s.git.FindCreatedWorktree(ctx, workspaceRoot, worktreeRoot)
+	if err != nil {
+		return false, errors.Join(
+			addErr,
+			fmt.Errorf("inspect requested worktree %q after failed task worktree add: %w", worktreeRoot, err),
+		)
+	}
+	if found {
+		if createdWorktree.Branch != nil && createdWorktree.Branch.Name() == branchName {
+			return true, addErr
+		}
+		return false, errors.Join(
+			addErr,
+			fmt.Errorf("requested worktree %q exists with unexpected branch after failed task worktree add", worktreeRoot),
+		)
+	}
 	exists, err := s.git.BranchExists(ctx, workspaceRoot, branchName)
 	if err != nil {
-		return errors.Join(
+		return false, errors.Join(
 			addErr,
 			fmt.Errorf("inspect local branch %q after failed task worktree add: %w", branchName, err),
 		)
 	}
 	if !exists {
-		return addErr
+		return false, addErr
 	}
 	branch, err := newLocalBranchName(branchName)
 	if err != nil {
-		return errors.Join(addErr, err)
+		return false, errors.Join(addErr, err)
 	}
 	ref := branch.Ref()
-	return workflowTaskInitialBranchError(&InitialTaskBranchError{
+	return false, workflowTaskInitialBranchError(&InitialTaskBranchError{
 		Kind:       InitialTaskBranchErrorLocalCollision,
 		BranchName: branch.Name(),
 		Ref:        &ref,
@@ -1465,13 +1492,17 @@ func (s *Service) addManagedWorktree(
 	rootKind managedRootKind,
 ) (bool, error) {
 	createdBranch, err := s.git.Add(ctx, workspaceRoot, worktreeRoot, createSpec)
-	if err == nil || rootKind != managedRootKindAutomatic {
-		return createdBranch, err
+	return createdBranch, cleanupAutomaticManagedRootAfterAddFailure(rootKind, worktreeRoot, err)
+}
+
+func cleanupAutomaticManagedRootAfterAddFailure(rootKind managedRootKind, worktreeRoot string, addErr error) error {
+	if addErr == nil || rootKind != managedRootKindAutomatic {
+		return addErr
 	}
 	if cleanupErr := removeEmptyManagedRootAfterAddFailure(worktreeRoot); cleanupErr != nil {
-		return false, errors.Join(err, cleanupErr)
+		return errors.Join(addErr, cleanupErr)
 	}
-	return false, err
+	return addErr
 }
 
 func (s *Service) createdWorktreeListEntry(ctx context.Context, workspaceCtx sessionWorkspaceContext, worktreeID string) (serverapi.WorktreeListEntry, error) {

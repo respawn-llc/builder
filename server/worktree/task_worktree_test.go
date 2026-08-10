@@ -973,6 +973,69 @@ func TestMaterializeInitialTaskWorktreeRejectsLocalBranchCreatedAfterFinalInspec
 	}
 }
 
+func TestMaterializeInitialTaskWorktreeCleansPartialAddBeforeReturningOriginalFailure(t *testing.T) {
+	env := newServiceTestEnv(t)
+	task, workflowStore := createTaskWorktreeTestTask(t, env)
+	const branchName = "feature/partial-add-failure"
+	if err := workflowStore.ReplacePendingInitialManagedBranchName(env.ctx, task.ID, branchName); err != nil {
+		t.Fatalf("ReplacePendingInitialManagedBranchName: %v", err)
+	}
+	addErr := errors.New("post-checkout hook failed")
+	env.service.git = NewGitInspector(&failAfterSuccessfulWorktreeAddRunner{
+		base:       execGitCommandRunner{},
+		branchName: branchName,
+		err:        addErr,
+	})
+
+	_, err := env.service.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{
+		TaskID:         task.ID,
+		ResolvedTarget: resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot),
+	})
+	if !errors.Is(err, addErr) {
+		t.Fatalf("MaterializeInitialTaskWorktree error = %T %v, want original add failure", err, err)
+	}
+	var branchErr *serverapi.WorkflowTaskInitialBranchError
+	if errors.As(err, &branchErr) {
+		t.Fatalf("MaterializeInitialTaskWorktree error = %+v, want original add failure rather than branch collision", branchErr)
+	}
+	if exists, branchErr := env.service.git.BranchExists(env.ctx, env.workspaceRoot, branchName); branchErr != nil {
+		t.Fatalf("BranchExists after failed add cleanup: %v", branchErr)
+	} else if exists {
+		t.Fatalf("partial add branch %q survived cleanup", branchName)
+	}
+	worktrees, listErr := env.service.git.List(env.ctx, env.workspaceRoot)
+	if listErr != nil {
+		t.Fatalf("List after failed add cleanup: %v", listErr)
+	}
+	if len(worktrees) != 1 || !worktrees[0].IsMain {
+		t.Fatalf("worktrees after failed add cleanup = %+v, want only source Worktree", worktrees)
+	}
+	row, queryErr := env.store.Queries().GetTask(env.ctx, string(task.ID))
+	if queryErr != nil {
+		t.Fatalf("GetTask: %v", queryErr)
+	}
+	if row.ManagedWorktreeID.Valid {
+		t.Fatalf("failed partial add bound managed Worktree %+v", row.ManagedWorktreeID)
+	}
+	if !row.PendingInitialManagedBranchName.Valid || row.PendingInitialManagedBranchName.String != branchName {
+		t.Fatalf("failed partial add pending branch = %+v, want retained %q", row.PendingInitialManagedBranchName, branchName)
+	}
+
+	materialized, err := env.service.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{
+		TaskID:         task.ID,
+		ResolvedTarget: resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot),
+	})
+	if err != nil {
+		t.Fatalf("MaterializeInitialTaskWorktree retry: %v", err)
+	}
+	if got := taskWorktreeBranch(materialized.Worktree); got != branchName {
+		t.Fatalf("retry materialized branch = %q, want %q", got, branchName)
+	}
+	if got := filepath.Base(taskWorktreeRoot(materialized.Worktree)); got != task.ShortID {
+		t.Fatalf("retry managed root = %q, want cleaned automatic root %q", got, task.ShortID)
+	}
+}
+
 func TestMaterializeInitialTaskWorktreeCreatesFromResolvedCommitAndRecordsImmutableBase(t *testing.T) {
 	env := newServiceTestEnv(t)
 	task, _ := createTaskWorktreeTestTask(t, env)
@@ -1596,6 +1659,32 @@ type taskWorktreeGitCommandInterceptor struct {
 	base         gitCommandRunner
 	beforeRun    func(context.Context, string, []string) error
 	beforeOutput func(context.Context, string, []string) error
+}
+
+type failAfterSuccessfulWorktreeAddRunner struct {
+	base       gitCommandRunner
+	branchName string
+	err        error
+	once       sync.Once
+}
+
+func (r *failAfterSuccessfulWorktreeAddRunner) Output(ctx context.Context, dir string, args ...string) ([]byte, error) {
+	output, err := r.base.Output(ctx, dir, args...)
+	if err != nil || len(args) < 4 || !slices.Equal(args[:4], []string{"worktree", "add", "-b", r.branchName}) {
+		return output, err
+	}
+	injected := false
+	r.once.Do(func() {
+		injected = true
+	})
+	if injected {
+		return output, r.err
+	}
+	return output, nil
+}
+
+func (r *failAfterSuccessfulWorktreeAddRunner) Run(ctx context.Context, dir string, args ...string) ([]byte, int, error) {
+	return r.base.Run(ctx, dir, args...)
 }
 
 func (r *taskWorktreeGitCommandInterceptor) Output(ctx context.Context, dir string, args ...string) ([]byte, error) {
