@@ -73,6 +73,16 @@ func TestCurrentNodeControllerRegistersGateBeforeRunnerAndReleasesLeaseAfterLive
 	if _, live := authority.ExecutionByScope(snapshot.Gates[0].ScopeID); !live {
 		t.Fatal("registered script scope is not live while runner is still preparing")
 	}
+	observation, err := controller.ObserveWorkflowTaskExecutions([]workflow.TaskID{reference.TaskID})
+	if err != nil {
+		t.Fatalf("observe registered launching scope: %v", err)
+	}
+	runs := observation.Runs[reference.TaskID]
+	if len(runs.Queued) != 0 ||
+		len(runs.InterruptibleLaunching) != 1 ||
+		!runs.InterruptibleLaunching[0].Equal(reference) {
+		t.Fatalf("registered launching Run observation = %+v, want %v", runs, reference)
+	}
 
 	close(runner.returnStart)
 	if err := <-started; err != nil {
@@ -325,7 +335,8 @@ func TestCurrentNodeControllerPassesResumePromptDeliveryToRunner(t *testing.T) {
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 	runner := &countingCurrentNodeRunner{}
 	controller, err := NewCurrentNodeController(store, runner, authority, NewTaskMutationCoordinator(), CurrentNodeControllerConfig{
-		AgentConcurrency: 1,
+		AgentConcurrency:      1,
+		LifecycleAvailability: NewLifecycleFatalAvailability(),
 		AssignmentSteerer: &recordingCurrentNodeAssignmentSteerer{
 			err: errors.New("Resume must not steer an assignment"),
 		},
@@ -701,8 +712,9 @@ func TestCurrentNodeControllerStartTaskPublishesAdmissionOwnershipBeforeDeleteCa
 	}
 	taskMutations := NewTaskMutationCoordinator()
 	controller, err := NewCurrentNodeController(store, runner, authority, taskMutations, CurrentNodeControllerConfig{
-		AgentConcurrency:  1,
-		AssignmentSteerer: noOpCurrentNodeAssignmentSteerer{},
+		AgentConcurrency:      1,
+		AssignmentSteerer:     noOpCurrentNodeAssignmentSteerer{},
+		LifecycleAvailability: NewLifecycleFatalAvailability(),
 	})
 	if err != nil {
 		t.Fatalf("NewCurrentNodeController: %v", err)
@@ -781,8 +793,9 @@ func TestCurrentNodeControllerStartTaskReturnsBeforePreparation(t *testing.T) {
 	runner := &blockingCurrentNodeRunner{entered: make(chan struct{}), release: make(chan struct{})}
 	taskMutations := NewTaskMutationCoordinator()
 	controller, err := NewCurrentNodeController(store, runner, authority, taskMutations, CurrentNodeControllerConfig{
-		AgentConcurrency:  1,
-		AssignmentSteerer: noOpCurrentNodeAssignmentSteerer{},
+		AgentConcurrency:      1,
+		AssignmentSteerer:     noOpCurrentNodeAssignmentSteerer{},
+		LifecycleAvailability: NewLifecycleFatalAvailability(),
 	})
 	if err != nil {
 		t.Fatalf("NewCurrentNodeController: %v", err)

@@ -303,8 +303,9 @@ func TestExecutionFinalizationDoesNotMakeUnassignedHeldSuccessorResumable(t *tes
 		started: make(chan workflow.CurrentNodeReference, 4),
 	}
 	controller, err = NewCurrentNodeController(store, runner, authority, NewTaskMutationCoordinator(), CurrentNodeControllerConfig{
-		AgentConcurrency:  1,
-		AssignmentSteerer: steerer,
+		AgentConcurrency:      1,
+		AssignmentSteerer:     steerer,
+		LifecycleAvailability: NewLifecycleFatalAvailability(),
 	})
 	if err != nil {
 		t.Fatalf("new current node controller: %v", err)

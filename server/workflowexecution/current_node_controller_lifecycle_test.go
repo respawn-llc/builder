@@ -364,8 +364,9 @@ func TestCurrentNodeControllerSteersApprovalTargetBeforeStartingIt(t *testing.T)
 	runner := &countingCurrentNodeRunner{}
 	steerer := &recordingCurrentNodeAssignmentSteerer{}
 	controller, err := NewCurrentNodeController(store, runner, authority, NewTaskMutationCoordinator(), CurrentNodeControllerConfig{
-		AgentConcurrency:  1,
-		AssignmentSteerer: steerer,
+		AgentConcurrency:      1,
+		AssignmentSteerer:     steerer,
+		LifecycleAvailability: NewLifecycleFatalAvailability(),
 	})
 	if err != nil {
 		t.Fatalf("new current node controller: %v", err)
@@ -410,8 +411,9 @@ func TestCurrentNodeControllerDoesNotMakeUnassignedApprovalTargetResumable(t *te
 	runner := &countingCurrentNodeRunner{}
 	cause := errors.New("assignment append failed")
 	controller, err := NewCurrentNodeController(store, runner, authority, NewTaskMutationCoordinator(), CurrentNodeControllerConfig{
-		AgentConcurrency:  1,
-		AssignmentSteerer: &recordingCurrentNodeAssignmentSteerer{err: cause},
+		AgentConcurrency:      1,
+		AssignmentSteerer:     &recordingCurrentNodeAssignmentSteerer{err: cause},
+		LifecycleAvailability: NewLifecycleFatalAvailability(),
 	})
 	if err != nil {
 		t.Fatalf("new current node controller: %v", err)
@@ -484,7 +486,8 @@ func TestCompleteIdleCurrentNodeRecoversSuccessorByAssignmentCommit(t *testing.T
 			authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 			runner := &countingCurrentNodeRunner{}
 			controller, err := NewCurrentNodeController(store, runner, authority, NewTaskMutationCoordinator(), CurrentNodeControllerConfig{
-				AgentConcurrency: 1,
+				AgentConcurrency:      1,
+				LifecycleAvailability: NewLifecycleFatalAvailability(),
 				AssignmentSteerer: &recordingCurrentNodeAssignmentSteerer{
 					outcomes: tc.outcomes,
 				},
@@ -561,7 +564,8 @@ func TestCompleteIdleCurrentNodeRetainsLateAssignmentAfterCallerCancellation(t *
 		started: make(chan workflow.CurrentNodeReference, 1),
 	}
 	controller, err := NewCurrentNodeController(store, runner, authority, NewTaskMutationCoordinator(), CurrentNodeControllerConfig{
-		AgentConcurrency: 1,
+		AgentConcurrency:      1,
+		LifecycleAvailability: NewLifecycleFatalAvailability(),
 		AssignmentSteerer: lateCommitCurrentNodeAssignmentSteerer{
 			release: release,
 			started: waitStarted,
@@ -780,7 +784,8 @@ func TestCurrentNodeControllerHoldsSuccessorUntilSourceScopeRetires(t *testing.T
 	}
 	assignmentDeadline := make(chan time.Time, 1)
 	controller, err = NewCurrentNodeController(store, runner, authority, NewTaskMutationCoordinator(), CurrentNodeControllerConfig{
-		AgentConcurrency: 1,
+		AgentConcurrency:      1,
+		LifecycleAvailability: NewLifecycleFatalAvailability(),
 		AssignmentSteerer: deadlineRecordingCurrentNodeAssignmentSteerer{
 			reference: successor,
 			deadline:  assignmentDeadline,

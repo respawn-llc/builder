@@ -2,7 +2,6 @@ package workflowexecution
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -47,9 +46,10 @@ type CurrentNodeAssignmentSteer interface {
 }
 
 type CurrentNodeControllerConfig struct {
-	AgentConcurrency  int
-	Attention         CurrentNodeAttentionLifecycle
-	AssignmentSteerer CurrentNodeAssignmentSteerer
+	AgentConcurrency      int
+	Attention             CurrentNodeAttentionLifecycle
+	AssignmentSteerer     CurrentNodeAssignmentSteerer
+	LifecycleAvailability *LifecycleFatalAvailability
 }
 
 type CurrentNodeAttentionLifecycle interface {
@@ -114,11 +114,12 @@ type CurrentNodeController struct {
 		ValidateCurrentNodeSessionBinding(context.Context, runtimeids.SessionID, workflow.CurrentNodeReference) error
 		TaskExecutionScope(context.Context, workflow.TaskID) (workflowstore.TaskExecutionScope, error)
 	}
-	runner        CurrentNodeRunner
-	steerer       CurrentNodeAssignmentSteerer
-	authority     *sessionruntime.Authority
-	taskMutations *TaskMutationCoordinator
-	attention     CurrentNodeAttentionLifecycle
+	runner                CurrentNodeRunner
+	steerer               CurrentNodeAssignmentSteerer
+	authority             *sessionruntime.Authority
+	taskMutations         *TaskMutationCoordinator
+	attention             CurrentNodeAttentionLifecycle
+	lifecycleAvailability *LifecycleFatalAvailability
 
 	agentConcurrency int
 	workerContext    context.Context
@@ -179,22 +180,26 @@ func NewCurrentNodeController(
 	if cfg.AgentConcurrency <= 0 {
 		return nil, errors.New("workflow agent concurrency must be positive")
 	}
+	if cfg.LifecycleAvailability == nil {
+		return nil, errors.New("workflow lifecycle fatal availability is required")
+	}
 	workerContext, workerCancel := context.WithCancel(context.Background())
 	controller := &CurrentNodeController{
-		store:            store,
-		runner:           runner,
-		steerer:          cfg.AssignmentSteerer,
-		authority:        authority,
-		taskMutations:    taskMutations,
-		attention:        cfg.Attention,
-		agentConcurrency: cfg.AgentConcurrency,
-		workerContext:    workerContext,
-		workerCancel:     workerCancel,
-		workerWake:       make(chan struct{}, 1),
-		runs:             make(map[currentNodeRunID]*currentNodeRun),
-		currentRuns:      make(map[workflow.CurrentNodeReferenceKey]currentNodeRunID),
-		exactRuns:        make(map[runtimeids.ExecutionScopeID]currentNodeRunID),
-		violations:       make(map[runtimeids.ExecutionScopeID]int64),
+		store:                 store,
+		runner:                runner,
+		steerer:               cfg.AssignmentSteerer,
+		authority:             authority,
+		taskMutations:         taskMutations,
+		attention:             cfg.Attention,
+		lifecycleAvailability: cfg.LifecycleAvailability,
+		agentConcurrency:      cfg.AgentConcurrency,
+		workerContext:         workerContext,
+		workerCancel:          workerCancel,
+		workerWake:            make(chan struct{}, 1),
+		runs:                  make(map[currentNodeRunID]*currentNodeRun),
+		currentRuns:           make(map[workflow.CurrentNodeReferenceKey]currentNodeRunID),
+		exactRuns:             make(map[runtimeids.ExecutionScopeID]currentNodeRunID),
+		violations:            make(map[runtimeids.ExecutionScopeID]int64),
 	}
 	controller.workerWG.Add(1)
 	go controller.runAdmissions()
@@ -855,7 +860,7 @@ func (c *CurrentNodeController) FailCurrentNodeScope(
 			if err != nil {
 				c.mu.Lock()
 				if current, stillLive := c.runByScopeLocked(scopeID); stillLive {
-					current.recordCallbackError(err)
+					c.recordInterruptionPersistenceFailureLocked(current, reason, err)
 				}
 				c.mu.Unlock()
 				return err
@@ -878,7 +883,7 @@ func (c *CurrentNodeController) FailCurrentNodeScope(
 		if err := c.store.InterruptAdmittedCurrentNode(ctx, lease.Workflow().CurrentNode, reason, detail); err != nil {
 			c.mu.Lock()
 			if current, stillLive := c.runByScopeLocked(scopeID); stillLive {
-				current.recordCallbackError(err)
+				c.recordInterruptionPersistenceFailureLocked(current, reason, err)
 			}
 			c.mu.Unlock()
 			return err
@@ -947,7 +952,7 @@ func (c *CurrentNodeController) ExecutionFinalized(scope sessionruntime.Executio
 		if err := c.interruptOutcomeLessFinalization(live.id); err != nil {
 			c.mu.Lock()
 			if current := c.runs[live.id]; current != nil {
-				current.recordCallbackError(err)
+				c.recordLifecycleFatalLocked(current, err)
 			}
 			c.mu.Unlock()
 			return
@@ -972,7 +977,7 @@ func (c *CurrentNodeController) ExecutionFinalized(scope sessionruntime.Executio
 		if err != nil {
 			c.mu.Lock()
 			if current := c.runs[live.id]; current != nil {
-				current.recordCallbackError(err)
+				c.recordLifecycleFatalLocked(current, err)
 			}
 			c.mu.Unlock()
 			return
@@ -1028,7 +1033,7 @@ func (c *CurrentNodeController) finalizeAgentSuccessors(
 				return
 			}
 			if recoveryErr != nil {
-				predecessor.recordCallbackError(errors.Join(err, recoveryErr))
+				c.recordLifecycleFatalLocked(predecessor, errors.Join(err, recoveryErr))
 				c.mu.Unlock()
 				return
 			}
@@ -1137,9 +1142,6 @@ func (c *CurrentNodeController) interruptOutcomeLessFinalization(runID currentNo
 				diagnostic,
 			),
 		)
-		if errors.Is(err, sql.ErrNoRows) {
-			return false, nil
-		}
 		if err != nil {
 			return false, fmt.Errorf("interrupt outcome-less finalized Current Node %v: %w", reference, err)
 		}

@@ -285,15 +285,17 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: runtime starter: %w", err)
 	}
+	workflowLifecycleAvailability := workflowexecution.NewLifecycleFatalAvailability()
 	workflowController, err = workflowexecution.NewCurrentNodeController(
 		workflowStore,
 		workflowRuntimeStarter,
 		runtimeAuthority,
 		workflowTaskMutations,
 		workflowexecution.CurrentNodeControllerConfig{
-			AgentConcurrency:  cfg.Settings.Workflow.Concurrency,
-			Attention:         workflowAttentionFinalizer,
-			AssignmentSteerer: workflowRuntimeStarter,
+			AgentConcurrency:      cfg.Settings.Workflow.Concurrency,
+			Attention:             workflowAttentionFinalizer,
+			AssignmentSteerer:     workflowRuntimeStarter,
+			LifecycleAvailability: workflowLifecycleAvailability,
 		},
 	)
 	if err != nil {

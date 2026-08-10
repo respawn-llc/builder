@@ -1,6 +1,8 @@
 package workflowview
 
 import (
+	"context"
+	"sort"
 	"testing"
 
 	"core/internal/testharness/testsetup"
@@ -10,6 +12,155 @@ import (
 	"core/server/workflowstore"
 	"core/shared/serverapi"
 )
+
+func TestQueuedRunStatusFiltersAndPaginatesAcrossTaskSurfaces(t *testing.T) {
+	fixture := newCurrentNodeViewFixture(t, false)
+	ordinary := fixture.startTask(t, "Queued pagination A")
+	launching := fixture.startTask(t, "Queued pagination B")
+	observation := workflowexecution.WorkflowTaskExecutionObservation{
+		Runs: map[workflow.TaskID]workflowexecution.WorkflowTaskRunSnapshot{
+			ordinary.task.ID: {
+				Queued: []workflow.CurrentNodeReference{ordinary.currentNode},
+			},
+			launching.task.ID: {
+				InterruptibleLaunching: []workflow.CurrentNodeReference{launching.currentNode},
+			},
+		},
+		Quiescence: map[workflow.TaskID]bool{
+			ordinary.task.ID:  false,
+			launching.task.ID: false,
+		},
+	}
+	projection, err := NewTaskStatusProjection(
+		fixture.metadata,
+		fixture.store,
+		NewTaskProjector(),
+		staticTaskStatusLiveObservationSource{observation: observation},
+	)
+	if err != nil {
+		t.Fatalf("NewTaskStatusProjection: %v", err)
+	}
+	definitions := mustDefinitionProjection(t, fixture.store)
+	dependencies, err := NewTaskDependencies(fixture.metadata, projection, fixture.dependencyCounter)
+	if err != nil {
+		t.Fatalf("NewTaskDependencies: %v", err)
+	}
+	detail, err := NewTaskDetail(fixture.metadata, projection, dependencies)
+	if err != nil {
+		t.Fatalf("NewTaskDetail: %v", err)
+	}
+	tasks, err := NewTaskList(fixture.metadata, definitions, projection)
+	if err != nil {
+		t.Fatalf("NewTaskList: %v", err)
+	}
+	board, err := NewBoard(fixture.metadata, definitions, testsetup.QuestionsEnabled("coder"), projection)
+	if err != nil {
+		t.Fatalf("NewBoard: %v", err)
+	}
+	search, err := NewTaskSearch(fixture.metadata, projection)
+	if err != nil {
+		t.Fatalf("NewTaskSearch: %v", err)
+	}
+
+	for _, test := range []struct {
+		task          startedCurrentNodeViewTask
+		wantInterrupt bool
+	}{
+		{task: ordinary},
+		{task: launching, wantInterrupt: true},
+	} {
+		projected, err := detail.GetTask(context.Background(), string(test.task.task.ID))
+		if err != nil {
+			t.Fatalf("TaskDetail.GetTask(%s): %v", test.task.task.ID, err)
+		}
+		if projected.Status.Kind != serverapi.WorkflowTaskStatusKindQueued ||
+			projected.Actions.CanInterrupt != test.wantInterrupt ||
+			projected.Actions.CanResume {
+			t.Fatalf("queued detail %s = %+v/%+v", test.task.task.ID, projected.Status, projected.Actions)
+		}
+	}
+
+	projectID := fixture.binding.ProjectID
+	limit := 1
+	listRequest := serverapi.WorkflowTaskListRequest{
+		ProjectID:   &projectID,
+		WorkflowID:  &fixture.workflowID,
+		StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindQueued},
+		LabelFilter: serverapi.WorkflowTaskLabelFilterNone(),
+		Limit:       &limit,
+	}
+	var listedIDs []string
+	for {
+		page, err := tasks.List(context.Background(), listRequest)
+		if err != nil {
+			t.Fatalf("TaskList.List: %v", err)
+		}
+		if len(page.Tasks) != 1 || page.Tasks[0].Status.Kind != serverapi.WorkflowTaskStatusKindQueued {
+			t.Fatalf("queued Task List page = %+v", page)
+		}
+		listedIDs = append(listedIDs, page.Tasks[0].TaskID)
+		if page.NextOffset == nil {
+			break
+		}
+		listRequest.Offset = page.NextOffset
+	}
+
+	boardRequest := serverapi.WorkflowBoardNodeCardsListRequest{
+		ProjectID:   fixture.binding.ProjectID,
+		WorkflowID:  fixture.workflowID,
+		NodeID:      string(fixture.agentNodeID),
+		LabelFilter: serverapi.WorkflowTaskLabelFilterNone(),
+		PageSize:    1,
+	}
+	var boardIDs []string
+	for {
+		page, err := board.ListNodeCards(context.Background(), boardRequest)
+		if err != nil {
+			t.Fatalf("Board.ListNodeCards: %v", err)
+		}
+		if len(page.Cards) != 1 || page.Cards[0].Status.Kind != serverapi.WorkflowTaskStatusKindQueued {
+			t.Fatalf("queued Board page = %+v", page)
+		}
+		boardIDs = append(boardIDs, page.Cards[0].TaskID)
+		if page.NextOffset == nil {
+			break
+		}
+		boardRequest.Offset = page.NextOffset
+	}
+
+	searchRequest := taskSearchRequest("Queued pagination")
+	searchRequest.ProjectIDs = []string{fixture.binding.ProjectID}
+	searchRequest.StatusKinds = []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindQueued}
+	searchRequest.PageSize = 1
+	var searchedIDs []string
+	for {
+		page, err := search.Search(context.Background(), searchRequest)
+		if err != nil {
+			t.Fatalf("TaskSearch.Search: %v", err)
+		}
+		if len(page.Groups) != 1 || page.Groups[0].Status.Kind != serverapi.WorkflowTaskStatusKindQueued {
+			t.Fatalf("queued Task Search page = %+v", page)
+		}
+		searchedIDs = append(searchedIDs, page.Groups[0].TaskID)
+		if page.NextOffset == nil {
+			break
+		}
+		searchRequest.Offset = page.NextOffset
+	}
+
+	wantIDs := []string{string(ordinary.task.ID), string(launching.task.ID)}
+	sort.Strings(wantIDs)
+	for label, got := range map[string][]string{
+		"Task List":   listedIDs,
+		"Board":       boardIDs,
+		"Task Search": searchedIDs,
+	} {
+		sort.Strings(got)
+		if !equalStrings(got, wantIDs) {
+			t.Fatalf("%s queued pagination IDs = %v, want %v", label, got, wantIDs)
+		}
+	}
+}
 
 func TestBoardProjectsStartedCurrentNode(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)

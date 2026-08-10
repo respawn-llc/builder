@@ -27,6 +27,7 @@ type currentNodeInterruptCleanupState struct {
 	launchRuns     []currentNodeRunID
 	admissionWaits []currentNodeAdmissionWait
 	taskFence      *currentNodeInterruptFence
+	persisted      bool
 }
 
 func (c *CurrentNodeController) cleanupInterrupt(state currentNodeInterruptCleanupState) error {
@@ -37,6 +38,29 @@ func (c *CurrentNodeController) cleanupInterrupt(state currentNodeInterruptClean
 	}
 	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), interruptCleanupTimeout)
 	defer cleanupCancel()
+	c.mu.Lock()
+	exactHandles := make([]sessionruntime.ExecutionHandle, 0, len(state.stopHandles))
+	for _, handle := range state.stopHandles {
+		if _, exact := c.runByScopeLocked(handle.Scope().ID()); exact {
+			exactHandles = append(exactHandles, handle)
+		}
+	}
+	c.mu.Unlock()
+	for _, handle := range exactHandles {
+		handle.RequestStop()
+	}
+	var persistenceErr error
+	if !state.persisted {
+		persistenceErr = c.taskMutations.Run(cleanupCtx, state.taskID, func(ctx context.Context) error {
+			return c.persistUserInterrupt(ctx, state.references)
+		})
+	}
+	if persistenceErr != nil {
+		c.mu.Lock()
+		c.rollbackTaskInterruptLocked(state.taskFence)
+		c.mu.Unlock()
+		return persistenceErr
+	}
 	c.mu.Lock()
 	for _, runID := range state.launchRuns {
 		run := c.runs[runID]
@@ -55,11 +79,6 @@ func (c *CurrentNodeController) cleanupInterrupt(state currentNodeInterruptClean
 	for _, handle := range state.stopHandles {
 		handle.RequestStop()
 	}
-	persistenceErr := c.taskMutations.Run(cleanupCtx, state.taskID, func(ctx context.Context) error {
-		detail := workflow.NewCurrentNodeInterruptionDetail(string(workflow.CurrentNodeInterruptionReasonUserInterrupt), nil)
-		_, err := interruptCurrentNodeReferences(ctx, c.store.InterruptCurrentNode, state.references, workflow.CurrentNodeInterruptionReasonUserInterrupt, detail)
-		return err
-	})
 	var waitErrs []error
 	for _, handle := range state.waitHandles {
 		if _, err := handle.Wait(cleanupCtx); err != nil &&
@@ -113,6 +132,7 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 		launchRuns     []currentNodeRunID
 		admissionWaits []currentNodeAdmissionWait
 		taskFence      *currentNodeInterruptFence
+		persisted      bool
 	)
 	if err := c.taskMutations.Run(ctx, selector.TaskID, func(ctx context.Context) error {
 		err := c.authority.WithWorkflowInterruptSelection(selector.TaskID, selector.SessionID, func(selection sessionruntime.WorkflowInterruptSelection) error {
@@ -132,6 +152,7 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 			if c.taskInterruptActiveLocked(selector.TaskID) {
 				return ErrTaskExecutionNotQuiescent
 			}
+			selectedExact := false
 			for _, handle := range owned {
 				scopeID := handle.Scope().ID()
 				scopeRef, workflowScoped := handle.Scope().Workflow()
@@ -139,6 +160,7 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 					return errors.New("authority interrupt selection is not workflow scoped")
 				}
 				if live, exists := c.runByScopeLocked(scopeID); exists {
+					selectedExact = true
 					if !scopeRef.CurrentNode.Equal(live.reference) {
 						return errors.New("authority interrupt selection does not match live workflow execution ownership")
 					}
@@ -206,10 +228,47 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 				references = append(references, scopeRef.CurrentNode)
 			}
 
-			return drainTaskControllerWorkLocked(c, selector.TaskID, taskFence, &references, &admissionWaits, &launchRuns)
+			if err := drainTaskControllerWorkLocked(c, selector.TaskID, taskFence, &references, &admissionWaits, &launchRuns); err != nil {
+				return err
+			}
+			if !selectedExact && len(selection.Finalizing) == 0 && len(launchRuns) != 0 {
+				if err := c.persistUserInterrupt(ctx, references); err != nil {
+					c.rollbackTaskInterruptLocked(taskFence)
+					return err
+				}
+				persisted = true
+			}
+			return nil
 		})
 		if errors.Is(err, sessionruntime.ErrExecutionNoLongerLive) {
-			return ErrNoInterruptibleExecution
+			if selector.SessionID != nil {
+				return ErrNoInterruptibleExecution
+			}
+			c.mu.Lock()
+			defer c.mu.Unlock()
+			if c.closed {
+				return errors.New("current node workflow controller is closed")
+			}
+			if !taskHasInterruptibleLaunchingRunLocked(c, selector.TaskID) {
+				return ErrNoInterruptibleExecution
+			}
+			if err := validateTaskControllerWorkLocked(c, selector.TaskID); err != nil {
+				return err
+			}
+			taskFence, err = c.beginTaskInterruptLocked(selector.TaskID)
+			if err != nil {
+				return err
+			}
+			if err := drainTaskControllerWorkLocked(c, selector.TaskID, taskFence, &references, &admissionWaits, &launchRuns); err != nil {
+				c.rollbackTaskInterruptLocked(taskFence)
+				return err
+			}
+			if err := c.persistUserInterrupt(ctx, references); err != nil {
+				c.rollbackTaskInterruptLocked(taskFence)
+				return err
+			}
+			persisted = true
+			return nil
 		}
 		if err != nil {
 			return err
@@ -226,7 +285,49 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 		launchRuns:     launchRuns,
 		admissionWaits: admissionWaits,
 		taskFence:      taskFence,
+		persisted:      persisted,
 	})
+}
+
+func (c *CurrentNodeController) persistUserInterrupt(
+	ctx context.Context,
+	references []workflow.CurrentNodeReference,
+) error {
+	detail := workflow.NewCurrentNodeInterruptionDetail(string(workflow.CurrentNodeInterruptionReasonUserInterrupt), nil)
+	_, err := interruptCurrentNodeReferences(
+		ctx,
+		c.store.InterruptCurrentNode,
+		references,
+		workflow.CurrentNodeInterruptionReasonUserInterrupt,
+		detail,
+	)
+	return err
+}
+
+func (c *CurrentNodeController) rollbackTaskInterruptLocked(fence *currentNodeInterruptFence) {
+	if fence == nil {
+		return
+	}
+	for _, run := range c.runs {
+		if run.interruptFence != fence {
+			continue
+		}
+		run.interruptFence = nil
+		run.stop = currentNodeRunStopNone
+		if run.phase == currentNodeRunQueued {
+			c.queueRunLocked(run.id, run.assignmentSteer)
+		}
+	}
+	c.finishInterruptFenceLocked(fence)
+}
+
+func taskHasInterruptibleLaunchingRunLocked(c *CurrentNodeController, taskID workflow.TaskID) bool {
+	for _, run := range c.runs {
+		if run.reference.TaskID == taskID && run.launching() && !run.stopping() && run.callbackErr == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // InterruptForManualMove atomically revalidates the mutation, then fences all

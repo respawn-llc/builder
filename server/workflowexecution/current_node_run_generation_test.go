@@ -584,8 +584,9 @@ func TestCurrentNodeControllerKeepsAgentCapacityThroughRetiringWhileScriptsProgr
 		started: make(chan workflow.CurrentNodeReference, 5),
 	}
 	controller, err = NewCurrentNodeController(store, runner, authority, NewTaskMutationCoordinator(), CurrentNodeControllerConfig{
-		AgentConcurrency:  1,
-		AssignmentSteerer: steerer,
+		AgentConcurrency:      1,
+		AssignmentSteerer:     steerer,
+		LifecycleAvailability: NewLifecycleFatalAvailability(),
 	})
 	if err != nil {
 		t.Fatalf("new controller: %v", err)

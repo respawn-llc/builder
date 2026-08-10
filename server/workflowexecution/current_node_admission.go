@@ -741,7 +741,7 @@ func (c *CurrentNodeController) handleAdmissionFailure(
 	if err := c.handleCurrentNodeStartFailures([]currentNodeQueuedStart{{reference: reference}}, admitted, cause); err != nil {
 		c.mu.Lock()
 		if run := c.runs[runID]; run != nil {
-			run.recordCallbackError(errors.Join(cause, err))
+			c.recordLifecycleFatalLocked(run, errors.Join(cause, err))
 			run.transition(currentNodeRunRetiring)
 		}
 		c.mu.Unlock()

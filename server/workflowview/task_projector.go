@@ -8,6 +8,7 @@ import (
 	"core/server/metadata/sqlitegen"
 	"core/server/sessionruntime"
 	"core/server/workflow"
+	"core/server/workflowexecution"
 	"core/shared/serverapi"
 )
 
@@ -26,6 +27,7 @@ type TaskFactsInput struct {
 	Status         workflowTaskStatusFact
 	CurrentNodes   []workflow.CurrentNode
 	LiveExecutions []sessionruntime.TaskExecution
+	LiveRuns       workflowexecution.WorkflowTaskRunSnapshot
 	Definition     definitionSnapshot
 	CanDelete      bool
 }
@@ -71,7 +73,7 @@ func (*TaskProjector) ProjectTaskFacts(input TaskFactsInput) TaskFacts {
 	return TaskFacts{
 		Summary: taskSummary(input.Task, input.Status.Status, done),
 		Status:  input.Status.Status,
-		Actions: taskActions(done, input.Status.Status, input.LiveExecutions, input.CanDelete),
+		Actions: taskActions(done, input.Status.Status, input.LiveExecutions, input.LiveRuns, input.CanDelete),
 		Done:    done,
 	}
 }
@@ -188,10 +190,11 @@ func taskActions(
 	done bool,
 	status serverapi.WorkflowTaskStatus,
 	live []sessionruntime.TaskExecution,
+	runs workflowexecution.WorkflowTaskRunSnapshot,
 	canDelete bool,
 ) serverapi.WorkflowTaskActions {
-	hasLiveExecution := len(live) != 0
-	hasInterruptibleExecution := false
+	hasLiveExecution := len(live) != 0 || len(runs.Queued) != 0 || len(runs.InterruptibleLaunching) != 0
+	hasInterruptibleExecution := len(runs.InterruptibleLaunching) != 0
 	for _, execution := range live {
 		hasInterruptibleExecution = hasInterruptibleExecution ||
 			(!execution.Queued && !execution.HasPendingPrompts())

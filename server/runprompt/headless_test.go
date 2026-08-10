@@ -549,8 +549,9 @@ func newRetainedSelectedRunPromptFixture(
 		authority,
 		workflowexecution.NewTaskMutationCoordinator(),
 		workflowexecution.CurrentNodeControllerConfig{
-			AgentConcurrency:  1,
-			AssignmentSteerer: retainedRunPromptAssignmentSteerer{},
+			AgentConcurrency:      1,
+			AssignmentSteerer:     retainedRunPromptAssignmentSteerer{},
+			LifecycleAvailability: workflowexecution.NewLifecycleFatalAvailability(),
 		},
 	)
 	if err != nil {

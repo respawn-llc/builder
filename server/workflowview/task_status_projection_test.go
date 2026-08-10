@@ -3,8 +3,10 @@ package workflowview
 import (
 	"testing"
 
+	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowexecution"
+	"core/shared/serverapi"
 )
 
 type staticTaskStatusLiveObservationSource struct {
@@ -89,6 +91,42 @@ func TestTaskStatusProjectionDurableSnapshotRetainsOneCurrentNodeGeneration(t *t
 	}
 	if observedState != workflow.CurrentNodeSchedulingInterrupted {
 		t.Fatalf("new snapshot state = %q, want interrupted", observedState)
+	}
+}
+
+func TestTaskDetailProjectsInterruptibleLaunchingRunAsQueued(t *testing.T) {
+	fixture := newCurrentNodeViewFixture(t, false)
+	started := fixture.startTask(t, "interruptible launch")
+	sessionID := fixture.bindCurrentNodeSession(t, started)
+	detail := taskDetailWithObservation(t, fixture, workflowexecution.WorkflowTaskExecutionObservation{
+		Executions: map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot{
+			started.task.ID: {
+				Executions: []sessionruntime.TaskExecution{{
+					Ref: sessionruntime.WorkflowExecutionRef{
+						ProjectID:   fixture.binding.ProjectID,
+						WorkflowID:  fixture.workflowID,
+						CurrentNode: started.currentNode,
+					},
+					Agent: &sessionruntime.TaskAgentExecutionTarget{SessionID: sessionID},
+				}},
+			},
+		},
+		Runs: map[workflow.TaskID]workflowexecution.WorkflowTaskRunSnapshot{
+			started.task.ID: {
+				InterruptibleLaunching: []workflow.CurrentNodeReference{started.currentNode},
+			},
+		},
+		Quiescence: map[workflow.TaskID]bool{started.task.ID: false},
+	})
+
+	projected, err := detail.GetTask(t.Context(), string(started.task.ID))
+	if err != nil {
+		t.Fatalf("TaskDetail.GetTask: %v", err)
+	}
+	if projected.Status.Kind != serverapi.WorkflowTaskStatusKindQueued ||
+		!projected.Actions.CanInterrupt ||
+		projected.Actions.CanResume {
+		t.Fatalf("launching Task detail status/actions = %+v/%+v", projected.Status, projected.Actions)
 	}
 }
 

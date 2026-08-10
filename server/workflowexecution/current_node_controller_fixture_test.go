@@ -44,9 +44,10 @@ func newCurrentNodeControllerWithAttentionForTest(
 ) *CurrentNodeController {
 	t.Helper()
 	controller, err := NewCurrentNodeController(store, runner, authority, NewTaskMutationCoordinator(), CurrentNodeControllerConfig{
-		AgentConcurrency:  concurrency,
-		Attention:         attention,
-		AssignmentSteerer: noOpCurrentNodeAssignmentSteerer{},
+		AgentConcurrency:      concurrency,
+		Attention:             attention,
+		AssignmentSteerer:     noOpCurrentNodeAssignmentSteerer{},
+		LifecycleAvailability: NewLifecycleFatalAvailability(),
 	})
 	if err != nil {
 		t.Fatalf("new current node controller: %v", err)
