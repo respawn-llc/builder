@@ -57,7 +57,9 @@ func (m *uiModel) shouldRestoreActiveSubmitAfterInterrupt() (bool, bool) {
 		switch record.State {
 		case clientui.RuntimeInputReconciliationCommitted, clientui.RuntimeInputReconciliationSubmitted:
 			return false, false
-		case clientui.RuntimeInputReconciliationCanceledNotCommitted, clientui.RuntimeInputReconciliationFailedWithRestore:
+		case clientui.RuntimeInputReconciliationAccepted,
+			clientui.RuntimeInputReconciliationCanceledNotCommitted,
+			clientui.RuntimeInputReconciliationFailedWithRestore:
 			return true, false
 		case clientui.RuntimeInputReconciliationUnknown, clientui.RuntimeInputReconciliationEvicted:
 			if m.activeSubmit.flushed {

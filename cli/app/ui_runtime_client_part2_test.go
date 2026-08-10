@@ -62,6 +62,7 @@ type reconnectRetryRuntimeControlClient struct {
 	clearGoalResp    serverapi.RuntimeGoalShowResponse
 	interruptResp    serverapi.RuntimeInterruptResponse
 	interruptReq     serverapi.RuntimeInterruptRequest
+	interruptFn      func(context.Context, serverapi.RuntimeInterruptRequest) (serverapi.RuntimeInterruptResponse, error)
 }
 
 func (c *reconnectRetryRuntimeControlClient) submitRequestIDs() []string {
@@ -143,7 +144,10 @@ func (c *reconnectRetryRuntimeControlClient) CompactContext(context.Context, ser
 	return nil
 }
 
-func (c *reconnectRetryRuntimeControlClient) Interrupt(_ context.Context, req serverapi.RuntimeInterruptRequest) (serverapi.RuntimeInterruptResponse, error) {
+func (c *reconnectRetryRuntimeControlClient) Interrupt(ctx context.Context, req serverapi.RuntimeInterruptRequest) (serverapi.RuntimeInterruptResponse, error) {
+	if c.interruptFn != nil {
+		return c.interruptFn(ctx, req)
+	}
 	c.mu.Lock()
 	c.interruptReq = req
 	c.mu.Unlock()

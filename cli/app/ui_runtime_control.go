@@ -578,6 +578,7 @@ func (m *uiModel) applyRuntimeControlDone(msg runtimeControlDoneMsg) tea.Cmd {
 		status := serverapi.QuestionsToggleStatusMessage(msg.enabled, msg.changed)
 		return sequenceCmds(m.sendTransientStatusWithNoticeID(status, uiStatusNoticeInfo, transientStatusDuration, uiStatusNoticeReplace, ""), followUpCmd)
 	case runtimeControlInterrupt:
+		preActive := m.interruptPreActive
 		var merge runtimeTupleMergeResult
 		if msg.runtimeTuple != nil {
 			if client, ok := m.runtimeClient().(*sessionRuntimeClient); ok {
@@ -593,6 +594,11 @@ func (m *uiModel) applyRuntimeControlDone(msg runtimeControlDoneMsg) tea.Cmd {
 				m.activity = uiActivityError
 				return tea.Batch(followUpCmd, m.sendTransientStatusWithNoticeID("invalid runtime activity: "+err.Error(), uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, ""))
 			}
+			if preActive && m.preActiveInterruptWasNotCanceled(view) {
+				m.setPendingInterrupt(false)
+				m.exitAction = UIActionExit
+				return tea.Batch(followUpCmd, tea.Quit)
+			}
 			if m.pendingInterruptMissingInputReconciliation(view) {
 				return tea.Batch(followUpCmd, m.requestInputReconciliationRefresh())
 			}
@@ -602,4 +608,20 @@ func (m *uiModel) applyRuntimeControlDone(msg runtimeControlDoneMsg) tea.Cmd {
 	default:
 		return followUpCmd
 	}
+}
+
+func (m *uiModel) preActiveInterruptWasNotCanceled(view clientui.RuntimeMainView) bool {
+	if m == nil {
+		return false
+	}
+	ref := m.activeSubmit.operationRef
+	if err := ref.Validate(); err != nil {
+		return false
+	}
+	for _, record := range view.InputReconciliation.Operations {
+		if record.Operation == ref {
+			return record.State == clientui.RuntimeInputReconciliationAccepted
+		}
+	}
+	return false
 }

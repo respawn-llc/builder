@@ -14,6 +14,12 @@ func (c uiInputController) handleRuntimeCtrlC(closeSurface func() tea.Cmd) (tea.
 		return m, sequenceCmds(closeCmd, tea.Quit)
 	}
 	if m.blocksRuntimeInput() {
+		if !m.runtimeActivityBusy() &&
+			m.hasLocalDispatchPending() &&
+			m.cachedRuntimeStatus().WorkflowSession == nil {
+			m.exitAction = UIActionExit
+			return m, sequenceCmds(closeCmd, tea.Quit)
+		}
 		return m, sequenceCmds(closeCmd, c.interruptBusyRuntime())
 	}
 	m.exitAction = UIActionExit

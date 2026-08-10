@@ -2225,56 +2225,193 @@ func TestAutomaticTechnicalReattachmentAfterRestartRecoveryStartsNothing(t *test
 	}
 }
 
-func TestPostActivationSessionCtrlCTargetsTheAttachedWorkflowExact(t *testing.T) {
+func TestPostActivationTaskAndSessionInterruptTargetTheAttachedWorkflowExact(t *testing.T) {
+	tests := []struct {
+		name      string
+		interrupt func(context.Context, *currentNodeRunnerFixture, workflowstore.TaskRecord, runtimeids.SessionID) error
+	}{
+		{
+			name: "Task Interrupt",
+			interrupt: func(ctx context.Context, f *currentNodeRunnerFixture, task workflowstore.TaskRecord, _ runtimeids.SessionID) error {
+				return f.controller.Interrupt(ctx, workflowexecution.InterruptSelector{TaskID: task.ID})
+			},
+		},
+		{
+			name: "Session Interrupt",
+			interrupt: func(ctx context.Context, f *currentNodeRunnerFixture, _ workflowstore.TaskRecord, sessionID runtimeids.SessionID) error {
+				_, err := newRetainedWorkflowRuntimeControlService(f).Interrupt(ctx, serverapi.RuntimeInterruptRequest{
+					ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
+					SessionID:       sessionID.String(),
+				})
+				return err
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			f, task, sessionID := newInterruptedRetainedActivationFixture(t)
+			client, ok := f.client.(*restartResumeClient)
+			if !ok {
+				t.Fatalf("activation fixture client = %T, want *restartResumeClient", f.client)
+			}
+			modelBegan := make(chan struct{}, 1)
+			modelEnded := make(chan error, 1)
+			client.setBegan(modelBegan)
+			client.setEnded(modelEnded)
+			if _, err := newCurrentNodeActivationAPI(t, f).ActivateSessionRuntime(
+				context.Background(),
+				currentNodeActivationRequest(t, sessionID, "user_activation"),
+			); err != nil {
+				t.Fatalf("retained activation: %v", err)
+			}
+			exact := waitForRetainedSessionExact(t, f, sessionID)
+			scopeRef, workflowOwned := exact.Scope().Workflow()
+			if !workflowOwned {
+				t.Fatal("activated Exact is not Workflow-owned")
+			}
+			select {
+			case <-modelBegan:
+			case <-time.After(3 * time.Second):
+				t.Fatal("activated Exact did not begin its model turn")
+			}
+
+			if err := test.interrupt(context.Background(), f, task, sessionID); err != nil {
+				t.Fatalf("%s: %v", test.name, err)
+			}
+			select {
+			case err := <-modelEnded:
+				if err == nil {
+					t.Fatalf("%s did not interrupt Exact %s", test.name, exact.Scope().ID())
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatalf("%s did not reach Exact %s", test.name, exact.Scope().ID())
+			}
+			if current, live := f.authority.SessionExecution(sessionID); live {
+				t.Fatalf("%s left Exact live: %+v", test.name, current.Scope())
+			}
+			nodes, err := f.store.ListCurrentNodes(context.Background(), task.ID)
+			if err != nil {
+				t.Fatalf("ListCurrentNodes: %v", err)
+			}
+			if len(nodes) != 1 ||
+				nodes[0].Scheduling == nil ||
+				nodes[0].Scheduling.State != workflow.CurrentNodeSchedulingInterrupted ||
+				!nodes[0].Reference.Equal(scopeRef.CurrentNode) {
+				t.Fatalf("%s durable resumable state = %+v, want interrupted %v", test.name, nodes, scopeRef.CurrentNode)
+			}
+		})
+	}
+}
+
+func TestRetainedAttachmentSurvivesInterruptForReplacementTurnAndTaskCompletion(t *testing.T) {
 	f, task, sessionID := newInterruptedRetainedActivationFixture(t)
 	client, ok := f.client.(*restartResumeClient)
 	if !ok {
 		t.Fatalf("activation fixture client = %T, want *restartResumeClient", f.client)
 	}
-	modelBegan := make(chan struct{}, 1)
-	modelEnded := make(chan error, 1)
-	client.setBegan(modelBegan)
-	client.setEnded(modelEnded)
+	firstBegan := make(chan struct{}, 1)
+	firstEnded := make(chan error, 1)
+	client.setBegan(firstBegan)
+	client.setEnded(firstEnded)
 	if _, err := newCurrentNodeActivationAPI(t, f).ActivateSessionRuntime(
 		context.Background(),
 		currentNodeActivationRequest(t, sessionID, "user_activation"),
 	); err != nil {
 		t.Fatalf("retained activation: %v", err)
 	}
-	exact := waitForRetainedSessionExact(t, f, sessionID)
+	firstExact := waitForRetainedSessionExact(t, f, sessionID)
 	select {
-	case <-modelBegan:
+	case <-firstBegan:
 	case <-time.After(3 * time.Second):
 		t.Fatal("activated Exact did not begin its model turn")
 	}
-	control := runtimecontrol.NewService(f.authority).WithRuntimeActivityResolver(f.runtimes)
+	control := newRetainedWorkflowRuntimeControlService(f)
 	if _, err := control.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
-		ClientRequestID: "post-activation-session-ctrl-c",
+		ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
 		SessionID:       sessionID.String(),
 	}); err != nil {
-		t.Fatalf("Session Ctrl+C Interrupt: %v", err)
+		t.Fatalf("retained Session Ctrl+C: %v", err)
 	}
 	select {
-	case err := <-modelEnded:
-		if err == nil {
-			t.Fatal("Session Ctrl+C did not interrupt the attached Exact's active model turn")
-		}
+	case <-firstEnded:
 	case <-time.After(3 * time.Second):
-		t.Fatal("Session Ctrl+C did not reach the attached Exact")
+		t.Fatal("retained Session Ctrl+C did not finish the first Exact")
 	}
-	current, live := f.authority.SessionExecution(sessionID)
-	if !live || current.Scope().ID() != exact.Scope().ID() {
-		t.Fatalf("Session Ctrl+C changed Workflow Exact: live=%v scope=%v, want %s", live, current.Scope().ID(), exact.Scope().ID())
+
+	replacementBegan := make(chan struct{}, 1)
+	replacementEnded := make(chan error, 1)
+	client.setBegan(replacementBegan)
+	client.setEnded(replacementEnded)
+	submitRef := clientui.RuntimeOperationRef{
+		Kind:            clientui.RuntimeOperationKindSubmit,
+		ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
 	}
-	nodes, err := f.store.ListCurrentNodes(context.Background(), task.ID)
+	submitDone := make(chan error, 1)
+	go func() {
+		_, err := control.SubmitUserTurn(context.Background(), serverapi.RuntimeSubmitUserTurnRequest{
+			ClientRequestID: submitRef.ClientRequestID.String(),
+			SessionID:       sessionID.String(),
+			Input:           runtimeinput.Text("replacement attached turn"),
+			OperationRef:    submitRef,
+			PreSubmitCompactionOperationRef: clientui.RuntimeOperationRef{
+				Kind:            clientui.RuntimeOperationKindPreSubmitCompact,
+				ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
+			},
+		})
+		submitDone <- err
+	}()
+	select {
+	case <-replacementBegan:
+	case <-time.After(currentNodeRunnerWait):
+		t.Fatal("replacement attached turn did not begin")
+	}
+	replacementExact := waitForRetainedSessionExact(t, f, sessionID)
+	if replacementExact.Scope().ID() == firstExact.Scope().ID() {
+		t.Fatalf("replacement turn reused interrupted Exact %s", firstExact.Scope().ID())
+	}
+	if _, workflowOwned := replacementExact.Scope().Workflow(); !workflowOwned {
+		t.Fatal("replacement attached turn created a lease-less Exact")
+	}
+
+	result, err := f.controller.CompleteSessionCurrentNode(
+		context.Background(),
+		sessionID,
+		"",
+		nil,
+		"completed from still-open retained attachment",
+	)
 	if err != nil {
-		t.Fatalf("ListCurrentNodes: %v", err)
+		t.Fatalf("kent task complete after replacement turn: %v", err)
 	}
-	if len(nodes) != 1 ||
-		nodes[0].Scheduling == nil ||
-		nodes[0].Scheduling.State != workflow.CurrentNodeSchedulingAdmitted {
-		t.Fatalf("ordinary active-turn Ctrl+C changed Current Node ownership before the later strict Interrupt slice: %+v", nodes)
+	if len(result.Mutation.Removed) != 1 || result.Mutation.Removed[0].TaskID != task.ID {
+		t.Fatalf("replacement kent task complete mutation = %+v, want task %s removed", result.Mutation, task.ID)
 	}
+	replacementExact.RequestStop()
+	select {
+	case <-replacementEnded:
+	case <-time.After(3 * time.Second):
+		t.Fatal("replacement Exact did not stop after completion")
+	}
+	select {
+	case <-submitDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("replacement attached turn did not finish")
+	}
+}
+
+func newRetainedWorkflowRuntimeControlService(f *currentNodeRunnerFixture) *runtimecontrol.Service {
+	f.authority.WithWorkflowSessionOrdinaryStartGuard(f.controller)
+	execution := runtimecommand.NewExecutionAdapter(f.authority, f.controller)
+	return runtimecontrol.NewServiceWithGoalCommands(
+		f.authority,
+		execution,
+		runtimecommand.NewGoalAuthority(f.authority, execution),
+	).
+		WithPersistedSessionResolver(f.metadata).
+		WithWorkflowTaskSessionResolver(f.metadata).
+		WithWorkflowSessionInterruptor(f.controller).
+		WithPromptHistoryStore(f.metadata).
+		WithRuntimeActivityResolver(f.runtimes)
 }
 
 func TestPostActivationKentTaskCompleteResolvesTheAttachedWorkflowCurrentNode(t *testing.T) {
@@ -2337,16 +2474,7 @@ func TestAttachedUserTurnUsesRealWorkflowStarterProfile(t *testing.T) {
 	}
 	attachedStarted := make(chan struct{}, 1)
 	client.setBegan(attachedStarted)
-	f.authority.WithWorkflowSessionOrdinaryStartGuard(f.controller)
-	execution := runtimecommand.NewExecutionAdapter(f.authority, f.controller)
-	service := runtimecontrol.NewServiceWithGoalCommands(
-		f.authority,
-		execution,
-		runtimecommand.NewGoalAuthority(f.authority, execution),
-	).
-		WithPersistedSessionResolver(f.metadata).
-		WithWorkflowTaskSessionResolver(f.metadata).
-		WithPromptHistoryStore(f.metadata)
+	service := newRetainedWorkflowRuntimeControlService(f)
 	submitRef := clientui.RuntimeOperationRef{
 		Kind:            clientui.RuntimeOperationKindSubmit,
 		ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
