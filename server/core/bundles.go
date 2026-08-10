@@ -97,11 +97,11 @@ type SessionBundle struct {
 	sessionLaunchMap map[string]apicontract.SessionLaunchService
 	sessionServices  map[string]*sessionlaunch.Service
 	runPromptMap     map[string]apicontract.RunPromptService
-	workspaceChatDraftOwner *sessionlaunch.WorkspaceChatDraftOwner
-	sessionLaunch           apicontract.SessionLaunchService
-	sessionViews            apicontract.SessionViewService
-	sessionLifecycle        apicontract.SessionLifecycleService
-	runPrompt               apicontract.RunPromptService
+	draftOwner       *sessionlaunch.WorkspaceChatDraftOwner
+	sessionLaunch    apicontract.SessionLaunchService
+	sessionViews     apicontract.SessionViewService
+	sessionLifecycle apicontract.SessionLifecycleService
+	runPrompt        apicontract.RunPromptService
 }
 
 type WorktreeBundle struct {
@@ -163,10 +163,10 @@ func (b *Bundles) withDefaults() *Bundles {
 
 func emptySessionBundle() *SessionBundle {
 	return &SessionBundle{
-		sessionLaunchMap:        make(map[string]apicontract.SessionLaunchService),
-		sessionServices:         make(map[string]*sessionlaunch.Service),
-		runPromptMap:            make(map[string]apicontract.RunPromptService),
-		workspaceChatDraftOwner: nil,
+		sessionLaunchMap: make(map[string]apicontract.SessionLaunchService),
+		sessionServices:  make(map[string]*sessionlaunch.Service),
+		runPromptMap:     make(map[string]apicontract.RunPromptService),
+		draftOwner:       nil,
 	}
 }
 
@@ -319,14 +319,14 @@ func newWorkflowBundle(workflowService *workflowsvc.Service, controller *workflo
 
 func newSessionBundle(sessionViewService *sessionview.Service, sessionLifecycleService *sessionservice.SessionLifecycleService, metadataStore *metadata.Store) *SessionBundle {
 	return &SessionBundle{
-		sessionLaunchMap:        make(map[string]apicontract.SessionLaunchService),
-		sessionServices:         make(map[string]*sessionlaunch.Service),
-		runPromptMap:            make(map[string]apicontract.RunPromptService),
-		workspaceChatDraftOwner: sessionlaunch.NewWorkspaceChatDraftOwner(metadataStore),
-		sessionLaunch:           unregisteredSessionLaunchClient{},
-		sessionViews:            sessionViewService,
-		sessionLifecycle:        sessionLifecycleService,
-		runPrompt:               unregisteredRunPromptClient{},
+		sessionLaunchMap: make(map[string]apicontract.SessionLaunchService),
+		sessionServices:  make(map[string]*sessionlaunch.Service),
+		runPromptMap:     make(map[string]apicontract.RunPromptService),
+		draftOwner:       sessionlaunch.NewWorkspaceChatDraftOwner(metadataStore),
+		sessionLaunch:    unregisteredSessionLaunchClient{},
+		sessionViews:     sessionViewService,
+		sessionLifecycle: sessionLifecycleService,
+		runPrompt:        unregisteredRunPromptClient{},
 	}
 }
 

@@ -432,8 +432,55 @@ func TestSessionLaunchClientForProjectWorkspaceUsesWorkspaceLocalConfig(t *testi
 		t.Fatalf("unexpected active settings: %+v", plan.Plan.ActiveSettings)
 	}
 }
-
-func TestCoreComposedWorkspaceDraftServicesShareLane(t *testing.T) { workspace := t.TempDir(); resolved, err := serverbootstrap.ResolveConfig(serverbootstrap.Request{WorkspaceRoot: workspace, LoadOptions: brand.LoadOptions{ConfigRoot: t.TempDir()}}); if err != nil { t.Fatal(err) }; binding, err := metadata.RegisterBinding(t.Context(), resolved.Config.PersistenceRoot, workspace); if err != nil { t.Fatal(err) }; appCore := newCoreTestApp(t, resolved.Config, auth.EmptyState()); ctx := projectContext{config: resolved.Config, projectID: "project-a", workspaceID: binding.WorkspaceID, projectRoot: workspace, projectSession: t.TempDir()}; first := appCore.sessionLaunchServiceForProjectContext(ctx); ctx.projectID = "project-b"; second := appCore.sessionLaunchServiceForProjectContext(ctx); entered, release := make(chan struct{}), make(chan struct{}); go func() { _, err := first.TransformWorkspaceChatDraftAggregate(t.Context(), func(r sessionlaunch.WorkspaceChatDraftResolution) (sessionlaunch.WorkspaceChatDraft, error) { close(entered); <-release; r.Draft.Message = "new"; return r.Draft, nil }); if err != nil { t.Errorf("first: %v", err) } }(); <-entered; done := make(chan error, 1); go func() { _, err := second.TransformWorkspaceChatDraftAggregate(t.Context(), func(r sessionlaunch.WorkspaceChatDraftResolution) (sessionlaunch.WorkspaceChatDraft, error) { r.Draft.Fast = true; return r.Draft, nil }); done <- err }(); close(release); if err := <-done; err != nil { t.Fatal(err) }; got, err := first.ResolveWorkspaceChatDraftAggregate(t.Context()); if err != nil || got.Draft.Message != "new" || !got.Draft.Fast { t.Fatalf("aggregate=%+v err=%v", got.Draft, err) } }
+func TestCoreComposedWorkspaceDraftServicesShareLane(t *testing.T) {
+	workspace := t.TempDir()
+	resolved, err := serverbootstrap.ResolveConfig(serverbootstrap.Request{WorkspaceRoot: workspace, LoadOptions: brand.LoadOptions{ConfigRoot: t.TempDir()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, err := metadata.RegisterBinding(t.Context(), resolved.Config.PersistenceRoot, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appCore := newCoreTestApp(t, resolved.Config, auth.EmptyState())
+	ctx := projectContext{config: resolved.Config, projectID: "project-a", workspaceID: binding.WorkspaceID, projectRoot: workspace, projectSession: t.TempDir()}
+	first := appCore.sessionLaunchServiceForProjectContext(ctx)
+	ctx.projectID = "project-b"
+	second := appCore.sessionLaunchServiceForProjectContext(ctx)
+	ctx.workspaceID = "workspace-b"
+	if third := appCore.sessionLaunchServiceForProjectContext(ctx); third == first {
+		t.Fatal("workspace cache key ignored workspace identity")
+	}
+	entered, release := make(chan struct{}), make(chan struct{})
+	go func() {
+		_, err := first.TransformWorkspaceChatDraftAggregate(t.Context(), func(r sessionlaunch.WorkspaceChatDraftResolution) (sessionlaunch.WorkspaceChatDraft, error) {
+			close(entered)
+			<-release
+			r.Draft.Message = "new"
+			return r.Draft, nil
+		})
+		if err != nil {
+			t.Errorf("first: %v", err)
+		}
+	}()
+	<-entered
+	done := make(chan error, 1)
+	go func() {
+		_, err := second.TransformWorkspaceChatDraftAggregate(t.Context(), func(r sessionlaunch.WorkspaceChatDraftResolution) (sessionlaunch.WorkspaceChatDraft, error) {
+			r.Draft.Fast = true
+			return r.Draft, nil
+		})
+		done <- err
+	}()
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	got, err := first.ResolveWorkspaceChatDraftAggregate(t.Context())
+	if err != nil || got.Draft.Message != "new" || !got.Draft.Fast {
+		t.Fatalf("aggregate=%+v err=%v", got.Draft, err)
+	}
+}
 func TestRunPromptClientForProjectWorkspaceReplaysHeadlessRunAcrossClientInstances(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()

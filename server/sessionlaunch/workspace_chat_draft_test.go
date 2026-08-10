@@ -48,9 +48,21 @@ func TestWorkspaceChatDraftResolution(t *testing.T) {
 	}
 }
 
-type draftPersistence struct{ draft *WorkspaceChatDraft; writes int }
-func (f *draftPersistence) ReadWorkspaceChatDraft(context.Context, string) (*WorkspaceChatDraft, error) { if f.draft == nil { return nil, nil }; d := *f.draft; return &d, nil }
-func (f *draftPersistence) ReplaceWorkspaceChatDraft(_ context.Context, _ string, d *WorkspaceChatDraft) error { f.writes++; f.draft = d; return nil }
+type draftPersistence struct {
+	draft *WorkspaceChatDraft
+}
+
+func (f *draftPersistence) ReadWorkspaceChatDraft(context.Context, string) (*WorkspaceChatDraft, error) {
+	if f.draft == nil {
+		return nil, nil
+	}
+	d := *f.draft
+	return &d, nil
+}
+func (f *draftPersistence) ReplaceWorkspaceChatDraft(_ context.Context, _ string, d *WorkspaceChatDraft) error {
+	f.draft = d
+	return nil
+}
 
 func TestWorkspaceChatDraftOwnerTransformsClearAndSerializes(t *testing.T) {
 	s := draftSettings("gpt-5.6-sol", "medium")
@@ -60,21 +72,47 @@ func TestWorkspaceChatDraftOwnerTransformsClearAndSerializes(t *testing.T) {
 	resolve := func(context.Context) (WorkspaceChatDraftResolverInput, error) { return draftInput(s), nil }
 	o := NewWorkspaceChatDraftOwner(p)
 	o2 := o
-	got, err := o.TransformWorkspaceChatDraft(context.Background(), "w", resolve, func(r WorkspaceChatDraftResolution) (WorkspaceChatDraft, error) { d := r.Baselines["worker"]; d.Message = r.Draft.Message; return d, nil })
+	got, err := o.TransformWorkspaceChatDraft(context.Background(), "w", resolve, func(r WorkspaceChatDraftResolution) (WorkspaceChatDraft, error) {
+		d := r.Baselines["worker"]
+		d.Message = r.Draft.Message
+		return d, nil
+	})
 	if err != nil || got.Agent != "worker" || got.Message != "latest" || got.Supervisor != "all" || got.Thinking != "low" || got.Fast || !got.Questions || !got.AutoCompaction {
 		t.Fatalf("transform=%+v err=%v", got, err)
 	}
-	if err := o.ClearWorkspaceChatDraft(context.Background(), "w"); err != nil || p.draft != nil { t.Fatalf("clear=%+v err=%v", p.draft, err) }
+	if err := o.ClearWorkspaceChatDraft(context.Background(), "w"); err != nil || p.draft != nil {
+		t.Fatalf("clear=%+v err=%v", p.draft, err)
+	}
 	p.draft = &WorkspaceChatDraft{Message: "old", Agent: "default", Supervisor: "edits", Thinking: "medium"}
 	entered, release := make(chan struct{}), make(chan struct{})
 	first, second := make(chan error, 1), make(chan error, 1)
-	go func() { _, e := o.TransformWorkspaceChatDraft(context.Background(), "w", resolve, func(r WorkspaceChatDraftResolution) (WorkspaceChatDraft, error) { close(entered); <-release; r.Draft.Message = "new"; return r.Draft, nil }); first <- e }()
+	go func() {
+		_, e := o.TransformWorkspaceChatDraft(context.Background(), "w", resolve, func(r WorkspaceChatDraftResolution) (WorkspaceChatDraft, error) {
+			close(entered)
+			<-release
+			r.Draft.Message = "new"
+			return r.Draft, nil
+		})
+		first <- e
+	}()
 	<-entered
-	go func() { _, e := o2.TransformWorkspaceChatDraft(context.Background(), "w", resolve, func(r WorkspaceChatDraftResolution) (WorkspaceChatDraft, error) { r.Draft.Fast = true; return r.Draft, nil }); second <- e }()
-	select { case e := <-second: t.Fatalf("ran early: %v", e); default: }
+	go func() {
+		_, e := o2.TransformWorkspaceChatDraft(context.Background(), "w", resolve, func(r WorkspaceChatDraftResolution) (WorkspaceChatDraft, error) {
+			r.Draft.Fast = true
+			return r.Draft, nil
+		})
+		second <- e
+	}()
+	select {
+	case e := <-second:
+		t.Fatalf("ran early: %v", e)
+	default:
+	}
 	close(release)
-	if err := <-first; err != nil { t.Fatal(err) }
-	if err := <-second; err != nil || p.draft.Message != "new" || !p.draft.Fast { t.Fatalf("serialized=%+v err=%v", p.draft, err) }
-	p.draft = &WorkspaceChatDraft{Message: "   ", Agent: "default", Supervisor: "edits", Thinking: "medium", Questions: true, AutoCompaction: true}
-	if _, err := o.TransformWorkspaceChatDraft(context.Background(), "w", resolve, func(r WorkspaceChatDraftResolution) (WorkspaceChatDraft, error) { return r.Draft, nil }); err != nil || p.draft != nil { t.Fatalf("blank default=%+v err=%v", p.draft, err) }
+	if err := <-first; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-second; err != nil || p.draft.Message != "new" || !p.draft.Fast {
+		t.Fatalf("serialized=%+v err=%v", p.draft, err)
+	}
 }

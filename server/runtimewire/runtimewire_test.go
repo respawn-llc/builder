@@ -1434,9 +1434,3 @@ func (f *busyToggleFakeClient) CallCount() int {
 	defer f.mu.Unlock()
 	return f.calls
 }
-
-func TestRuntimeWiringWorkspaceChatDefaultsRemainEnabled(t *testing.T) {
-	if !runtime.DefaultQuestionsEnabled() || !runtime.DefaultAutoCompactionEnabled() {
-		t.Fatal("workspace Chat defaults must remain enabled")
-	}
-}

@@ -56,7 +56,6 @@ type sessionPlanMemoRequest struct {
 func NewService(planner launch.Planner) *Service {
 	return &Service{planner: planner, plans: requestmemo.New[sessionPlanMemoRequest, PlanResult]()}
 }
-
 func (s *Service) WithAuthStateReader(reader authStateReader) *Service {
 	if s == nil {
 		return nil
@@ -81,25 +80,14 @@ func (s *Service) WithRuntimeAuthority(authority *sessionruntime.Authority) *Ser
 	return s
 }
 
-func (s *Service) WithWorkspaceID(workspaceID string) *Service {
+func (s *Service) WithWorkspaceChatDraft(owner *WorkspaceChatDraftOwner, workspaceID string, state *runtime.FastModeState) *Service {
 	if s != nil {
 		s.workspaceID = strings.TrimSpace(workspaceID)
-	}
-	return s
-}
-func (s *Service) WithFastModeState(state *runtime.FastModeState) *Service {
-	if s != nil {
 		s.fastModeState = state
-	}
-	return s
-}
-func (s *Service) WithWorkspaceChatDraftOwner(owner *WorkspaceChatDraftOwner) *Service {
-	if s != nil {
 		s.draftOwner = owner
 	}
 	return s
 }
-
 func (s *Service) workspaceChatDraftResolverInput(ctx context.Context) (WorkspaceChatDraftResolverInput, error) {
 	planner := s.planner
 	if planner.ReloadConfig != nil {
@@ -148,7 +136,7 @@ func (s *Service) TransformWorkspaceChatDraftAggregate(ctx context.Context, tran
 }
 
 func (s *Service) WorkspaceChatDraft(ctx context.Context, req serverapi.WorkspaceChatDraftRequest) (serverapi.WorkspaceChatDraftResponse, error) {
-	if err := req.Validate(); err != nil {
+	if err := req.Operation.Validate(); err != nil {
 		return serverapi.WorkspaceChatDraftResponse{}, err
 	}
 	switch req.Operation.Kind {

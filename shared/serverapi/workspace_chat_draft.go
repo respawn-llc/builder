@@ -36,16 +36,13 @@ func (o WorkspaceChatDraftOperation) Validate() error {
 	}
 	return nil
 }
-
 func (o *WorkspaceChatDraftOperation) UnmarshalJSON(data []byte) error {
-	var decoded struct {
-		Kind    WorkspaceChatDraftOperationKind `json:"kind"`
-		Message *string                         `json:"message"`
-	}
+	type wire WorkspaceChatDraftOperation
+	var decoded wire
 	if err := protocol.DecodeStrictJSON(data, &decoded); err != nil {
 		return err
 	}
-	o.Kind, o.Message = decoded.Kind, decoded.Message
+	*o = WorkspaceChatDraftOperation(decoded)
 	return o.Validate()
 }
 
@@ -53,19 +50,14 @@ type WorkspaceChatDraftRequest struct {
 	Operation WorkspaceChatDraftOperation `json:"operation"`
 }
 
-func (r WorkspaceChatDraftRequest) Validate() error {
-	return r.Operation.Validate()
-}
-
 func (r *WorkspaceChatDraftRequest) UnmarshalJSON(data []byte) error {
-	var decoded struct {
-		Operation WorkspaceChatDraftOperation `json:"operation"`
-	}
+	type wire WorkspaceChatDraftRequest
+	var decoded wire
 	if err := protocol.DecodeStrictJSON(data, &decoded); err != nil {
 		return err
 	}
-	r.Operation = decoded.Operation
-	return r.Validate()
+	*r = WorkspaceChatDraftRequest(decoded)
+	return r.Operation.Validate()
 }
 
 type WorkspaceChatDraftResponse struct {

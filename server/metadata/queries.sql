@@ -34,7 +34,8 @@ SELECT
     canonical_root_path,
     git_metadata_json,
     created_at_unix_ms,
-    updated_at_unix_ms
+    updated_at_unix_ms,
+    chat_draft_json
 FROM workspaces
 WHERE canonical_root_path = sqlc.arg(canonical_root_path)
 ORDER BY created_at_unix_ms ASC, rowid ASC;
@@ -46,7 +47,8 @@ SELECT
     canonical_root_path,
     git_metadata_json,
     created_at_unix_ms,
-    updated_at_unix_ms
+    updated_at_unix_ms,
+    chat_draft_json
 FROM workspaces
 WHERE id = sqlc.arg(id)
 LIMIT 1;

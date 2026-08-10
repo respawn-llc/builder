@@ -430,13 +430,13 @@ func bindingFromProjectCanonicalRootRow(row sqlitegen.GetWorkspaceBindingByProje
 	)
 }
 
-func (s *Store) GetWorkspaceByID(ctx context.Context, workspaceID string) (sqlitegen.GetWorkspaceByIDRow, error) {
+func (s *Store) GetWorkspaceByID(ctx context.Context, workspaceID string) (sqlitegen.Workspace, error) {
 	if s == nil || s.queries == nil {
-		return sqlitegen.GetWorkspaceByIDRow{}, errors.New("metadata store is required")
+		return sqlitegen.Workspace{}, errors.New("metadata store is required")
 	}
 	row, err := s.queries.GetWorkspaceByID(ctx, strings.TrimSpace(workspaceID))
 	if err != nil {
-		return sqlitegen.GetWorkspaceByIDRow{}, fmt.Errorf("get workspace by id: %w", err)
+		return sqlitegen.Workspace{}, fmt.Errorf("get workspace by id: %w", err)
 	}
 	return row, nil
 }
@@ -498,20 +498,20 @@ func (s *Store) ReplaceWorkspaceChatDraft(ctx context.Context, workspaceID strin
 	return nil
 }
 
-func (s *Store) ResolveProjectSourceWorkspace(ctx context.Context, projectID string) (sqlitegen.GetWorkspaceByIDRow, error) {
+func (s *Store) ResolveProjectSourceWorkspace(ctx context.Context, projectID string) (sqlitegen.Workspace, error) {
 	if s == nil || s.queries == nil {
-		return sqlitegen.GetWorkspaceByIDRow{}, errors.New("metadata store is required")
+		return sqlitegen.Workspace{}, errors.New("metadata store is required")
 	}
 	workspaceID, err := ResolveProjectSourceWorkspaceID(ctx, s.queries, projectID)
 	if err != nil {
-		return sqlitegen.GetWorkspaceByIDRow{}, err
+		return sqlitegen.Workspace{}, err
 	}
 	workspace, err := s.GetWorkspaceByID(ctx, workspaceID)
 	if err != nil {
-		return sqlitegen.GetWorkspaceByIDRow{}, err
+		return sqlitegen.Workspace{}, err
 	}
 	if strings.TrimSpace(workspace.ProjectID) != strings.TrimSpace(projectID) {
-		return sqlitegen.GetWorkspaceByIDRow{}, fmt.Errorf("source workspace %q does not belong to project %q", workspaceID, strings.TrimSpace(projectID))
+		return sqlitegen.Workspace{}, fmt.Errorf("source workspace %q does not belong to project %q", workspaceID, strings.TrimSpace(projectID))
 	}
 	return workspace, nil
 }
@@ -1087,7 +1087,7 @@ func (s *Store) ListWorkspaceSessionIDs(ctx context.Context, workspaceID string)
 	return s.queries.ListWorkspaceSessionIDs(ctx, sql.NullString{String: trimmed, Valid: trimmed != ""})
 }
 
-func workspaceUnlinkBlockersWithQueries(ctx context.Context, q *sqlitegen.Queries, projectID string, workspace sqlitegen.GetWorkspaceByIDRow) ([]serverapi.ProjectWorkspaceUnlinkBlocker, error) {
+func workspaceUnlinkBlockersWithQueries(ctx context.Context, q *sqlitegen.Queries, projectID string, workspace sqlitegen.Workspace) ([]serverapi.ProjectWorkspaceUnlinkBlocker, error) {
 	blockers := []serverapi.ProjectWorkspaceUnlinkBlocker{}
 	addCountBlocker := func(code string, message string, count int64) {
 		if count > 0 {
@@ -1308,14 +1308,14 @@ func (s *Store) RebindWorkspaceWithExpectedBinding(
 	return s.lookupProjectWorkspaceBinding(ctx, oldWorkspace.ProjectID, newCanonicalRoot)
 }
 
-func singleWorkspaceByCanonicalRoot(ctx context.Context, q *sqlitegen.Queries, canonicalRoot string) (sqlitegen.ListWorkspacesByCanonicalRootRow, error) {
+func singleWorkspaceByCanonicalRoot(ctx context.Context, q *sqlitegen.Queries, canonicalRoot string) (sqlitegen.Workspace, error) {
 	rows, err := q.ListWorkspacesByCanonicalRoot(ctx, canonicalRoot)
 	if err != nil {
-		return sqlitegen.ListWorkspacesByCanonicalRootRow{}, err
+		return sqlitegen.Workspace{}, err
 	}
 	switch len(rows) {
 	case 0:
-		return sqlitegen.ListWorkspacesByCanonicalRootRow{}, sql.ErrNoRows
+		return sqlitegen.Workspace{}, sql.ErrNoRows
 	case 1:
 		return rows[0], nil
 	default:
@@ -1323,7 +1323,7 @@ func singleWorkspaceByCanonicalRoot(ctx context.Context, q *sqlitegen.Queries, c
 		for _, row := range rows {
 			projectIDs = append(projectIDs, row.ProjectID)
 		}
-		return sqlitegen.ListWorkspacesByCanonicalRootRow{}, serverapi.WorkspaceBindingAmbiguousError{CanonicalRoot: canonicalRoot, ProjectIDs: projectIDs}
+		return sqlitegen.Workspace{}, serverapi.WorkspaceBindingAmbiguousError{CanonicalRoot: canonicalRoot, ProjectIDs: projectIDs}
 	}
 }
 

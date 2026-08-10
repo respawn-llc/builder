@@ -291,9 +291,7 @@ func (s *Core) sessionLaunchServiceForProjectContextLocked(projectCtx projectCon
 			return s.configForWorkspace(projectCtx.projectRoot)
 		},
 	}).
-		WithWorkspaceID(projectCtx.workspaceID).
-		WithFastModeState(s.safeBundles().Runtime.fastModeState).
-		WithWorkspaceChatDraftOwner(s.safeBundles().Sessions.workspaceChatDraftOwner).
+		WithWorkspaceChatDraft(s.safeBundles().Sessions.draftOwner, projectCtx.workspaceID, s.safeBundles().Runtime.fastModeState).
 		WithAuthStateReader(s.safeBundles().Auth.support.AuthManager).
 		WithPromptHistoryReader(s.safeBundles().Persistence.metadataStore).
 		WithRuntimeAuthority(s.safeBundles().Runtime.runtimeAuthority)
@@ -323,7 +321,7 @@ func (s *Core) runPromptClientForProjectContext(projectCtx projectContext) apico
 }
 
 func projectWorkspaceScopeKey(projectCtx projectContext) string {
-	return strings.TrimSpace(projectCtx.projectID) + "\n" + strings.TrimSpace(projectCtx.config.WorkspaceRoot)
+	return strings.TrimSpace(projectCtx.projectID) + "\n" + strings.TrimSpace(projectCtx.config.WorkspaceRoot) + "\n" + strings.TrimSpace(projectCtx.workspaceID)
 }
 
 func (s *Core) Close() error {

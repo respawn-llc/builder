@@ -2663,24 +2663,16 @@ SELECT
     canonical_root_path,
     git_metadata_json,
     created_at_unix_ms,
-    updated_at_unix_ms
+    updated_at_unix_ms,
+    chat_draft_json
 FROM workspaces
 WHERE id = ?1
 LIMIT 1
 `
 
-type GetWorkspaceByIDRow struct {
-	ID                string
-	ProjectID         string
-	CanonicalRootPath string
-	GitMetadataJson   string
-	CreatedAtUnixMs   int64
-	UpdatedAtUnixMs   int64
-}
-
-func (q *Queries) GetWorkspaceByID(ctx context.Context, id string) (GetWorkspaceByIDRow, error) {
+func (q *Queries) GetWorkspaceByID(ctx context.Context, id string) (Workspace, error) {
 	row := q.db.QueryRowContext(ctx, getWorkspaceByID, id)
-	var i GetWorkspaceByIDRow
+	var i Workspace
 	err := recordQueryError(ctx, row.Scan(
 		&i.ID,
 		&i.ProjectID,
@@ -2688,6 +2680,7 @@ func (q *Queries) GetWorkspaceByID(ctx context.Context, id string) (GetWorkspace
 		&i.GitMetadataJson,
 		&i.CreatedAtUnixMs,
 		&i.UpdatedAtUnixMs,
+		&i.ChatDraftJson,
 	), getWorkspaceByID, 1)
 
 	return i, err
@@ -8199,31 +8192,23 @@ SELECT
     canonical_root_path,
     git_metadata_json,
     created_at_unix_ms,
-    updated_at_unix_ms
+    updated_at_unix_ms,
+    chat_draft_json
 FROM workspaces
 WHERE canonical_root_path = ?1
 ORDER BY created_at_unix_ms ASC, rowid ASC
 `
 
-type ListWorkspacesByCanonicalRootRow struct {
-	ID                string
-	ProjectID         string
-	CanonicalRootPath string
-	GitMetadataJson   string
-	CreatedAtUnixMs   int64
-	UpdatedAtUnixMs   int64
-}
-
-func (q *Queries) ListWorkspacesByCanonicalRoot(ctx context.Context, canonicalRootPath string) ([]ListWorkspacesByCanonicalRootRow, error) {
+func (q *Queries) ListWorkspacesByCanonicalRoot(ctx context.Context, canonicalRootPath string) ([]Workspace, error) {
 	rows, err := q.db.QueryContext(ctx, listWorkspacesByCanonicalRoot, canonicalRootPath)
 	err = recordQueryError(ctx, err, listWorkspacesByCanonicalRoot, 1)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListWorkspacesByCanonicalRootRow
+	var items []Workspace
 	for rows.Next() {
-		var i ListWorkspacesByCanonicalRootRow
+		var i Workspace
 		if err := recordQueryError(ctx, rows.Scan(
 			&i.ID,
 			&i.ProjectID,
@@ -8231,6 +8216,7 @@ func (q *Queries) ListWorkspacesByCanonicalRoot(ctx context.Context, canonicalRo
 			&i.GitMetadataJson,
 			&i.CreatedAtUnixMs,
 			&i.UpdatedAtUnixMs,
+			&i.ChatDraftJson,
 		), listWorkspacesByCanonicalRoot, 1); err != nil {
 			return nil, err
 		}
