@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"reflect"
 	"testing"
+	"time"
 
 	"core/internal/testharness/scriptedllm"
 	"core/server/llm"
@@ -178,6 +179,9 @@ const (
 
 func mustTranscriptHydration(t *testing.T, snapshot runtime.TranscriptHydrationSnapshot) clientui.TranscriptHydration {
 	t.Helper()
+	if snapshot.GoalAvailability == "" {
+		snapshot.GoalAvailability = clientui.GoalAvailabilityAvailable
+	}
 	hydration, err := TranscriptHydrationFromSnapshotChecked(snapshot)
 	if err != nil {
 		t.Fatalf("TranscriptHydrationFromSnapshot: %v", err)
@@ -210,6 +214,7 @@ func TestTranscriptHydrationCarriesRuntimeNativeAssistantStreamIdentity(t *testi
 func TestTranscriptHydrationProjectsRuntimeOwnedFacts(t *testing.T) {
 	clientRequestID, queueItemID := runtimeids.NewRuntimeClientRequestID(), runtimeids.NewQueueItemID()
 	hydration := TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{
+		GoalAvailability: clientui.GoalAvailabilityAvailable,
 		ActiveThinkingStatus: &runtime.TranscriptThinkingStatusState{
 			StepID: transcriptProjectionStepID, Text: "Planning",
 		},
@@ -226,7 +231,7 @@ func TestTranscriptHydrationProjectsRuntimeOwnedFacts(t *testing.T) {
 		ActiveReviewer:   &runtime.TranscriptReviewerState{StepID: transcriptProjectionStepID},
 		ActiveCompaction: &runtime.TranscriptCompactionState{StepID: transcriptProjectionStepID, Mode: "auto", Count: 3},
 		ContextUsage:     &runtime.ContextUsage{UsedTokens: 123, WindowTokens: 4000, CacheHitPercent: 25, HasCacheHitPercentage: true},
-		Goal:             &session.GoalState{ID: "goal-1", Objective: "ship", Status: session.GoalStatusActive},
+		Goal:             &session.GoalState{ID: "goal-1", Objective: "ship", Status: session.GoalStatusActive, CreatedAt: time.Unix(1_700_000_000, 0), UpdatedAt: time.Unix(1_700_000_001, 0)},
 		GoalSuspended:    true,
 	})
 	if hydration.ActiveThinkingStatus == nil || hydration.ActiveThinkingStatus.Text != "Planning" ||
@@ -255,6 +260,7 @@ func TestTranscriptReasoningHydrationAndLivePreserveOrderedIdentities(t *testing
 	firstIndex, secondIndex := int64(0), int64(1)
 	firstID := runtimeids.NewReasoningTraceID()
 	hydration := TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{
+		GoalAvailability: clientui.GoalAvailabilityAvailable,
 		ActiveReasoningTraces: []runtime.TranscriptReasoningTraceState{
 			{StepID: transcriptProjectionStepID, Identity: runtime.TranscriptReasoningTraceIdentity{Kent: &firstID}, Text: "first"},
 			{StepID: transcriptProjectionStepID, Identity: runtime.TranscriptReasoningTraceIdentity{Provider: &llm.ReasoningItemIdentity{ItemID: "second", PartIndex: &secondIndex}}, Text: "second"},
@@ -388,7 +394,8 @@ func TestTranscriptReasoningDurationProjectsHydrationAndBoundedPage(t *testing.T
 		},
 	}
 	hydration := TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{
-		CommittedRows: []runtime.TranscriptCommittedRowFact{fact},
+		CommittedRows:    []runtime.TranscriptCommittedRowFact{fact},
+		GoalAvailability: clientui.GoalAvailabilityAvailable,
 	})
 	if len(hydration.CommittedRows) != 1 || hydration.CommittedRows[0].ReasoningTrace == nil ||
 		hydration.CommittedRows[0].ReasoningTrace.DurationMs == nil ||

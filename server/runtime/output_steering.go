@@ -78,8 +78,9 @@ type steeringAssistantCommitResult struct {
 }
 
 type steeringGoalNoticeAndStatus struct {
-	message llm.Message
-	update  GoalStatusUpdate
+	message    llm.Message
+	update     GoalStatusUpdate
+	emitStatus bool
 }
 
 type steeringLocalEntry struct {
@@ -391,10 +392,14 @@ func steerEventIntent(evt Event) steeringIntent {
 func steerGoalNoticeAndStatusIntent(message llm.Message, update GoalStatusUpdate) steeringIntent {
 	return steeringIntent{
 		priority: steeringPriorityRuntimeContext,
-		items: []steeringItem{{goalNoticeAndStatus: &steeringGoalNoticeAndStatus{
-			message: message,
-			update:  update,
-		}}},
+		items:    []steeringItem{{goalNoticeAndStatus: &steeringGoalNoticeAndStatus{message: message, update: update, emitStatus: true}}},
+	}
+}
+
+func steerGoalNoticeIntent(message llm.Message) steeringIntent {
+	return steeringIntent{
+		priority: steeringPriorityRuntimeContext,
+		items:    []steeringItem{{goalNoticeAndStatus: &steeringGoalNoticeAndStatus{message: message}}},
 	}
 }
 
@@ -753,22 +758,12 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 	}
 	if item.goalNoticeAndStatus != nil {
 		notice := item.goalNoticeAndStatus
-		receipt, noticeErr := e.appendMessageRaw(
-			stepID,
-			notice.message,
-			steeringMessageEventDefault,
-			true,
-			nil,
-		)
+		receipt, noticeErr := e.appendMessageRaw(stepID, notice.message, steeringMessageEventDefault, true, nil)
 		item.recordCommitReceipt(receipt)
-		if !receipt.Committed {
+		if !receipt.Committed || !notice.emitStatus {
 			return noticeErr
 		}
-		statusErr := e.emitRaw(Event{
-			Kind:       EventGoalStatusUpdated,
-			StepID:     stepID,
-			GoalStatus: &notice.update,
-		})
+		statusErr := e.emitRaw(Event{Kind: EventGoalStatusUpdated, StepID: stepID, GoalStatus: &notice.update})
 		return errors.Join(noticeErr, statusErr)
 	}
 	if item.committedAssistant != nil {

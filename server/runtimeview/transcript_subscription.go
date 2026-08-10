@@ -43,7 +43,10 @@ func TranscriptHydrationFromSnapshotChecked(runtimeSnapshot runtime.TranscriptHy
 	hydration.ActiveReviewer = transcriptReviewerStateFromRuntime(runtimeSnapshot.ActiveReviewer)
 	hydration.ActiveCompaction = transcriptCompactionStateFromRuntime(runtimeSnapshot.ActiveCompaction)
 	hydration.ContextUsage = transcriptContextUsageFromRuntime(runtimeSnapshot.ContextUsage)
-	hydration.GoalStatus = transcriptGoalStatusFromRuntime(runtimeSnapshot.Goal, runtimeSnapshot.GoalSuspended)
+	hydration.GoalStatus = transcriptGoalStatusFromRuntime(runtimeSnapshot.Goal, runtimeSnapshot.GoalAvailability, runtimeSnapshot.GoalSuspended)
+	if err := hydration.GoalStatus.Validate(); err != nil {
+		return clientui.TranscriptHydration{}, fmt.Errorf("project goal hydration: %w", err)
+	}
 	return hydration, nil
 }
 
@@ -132,17 +135,13 @@ func transcriptContextUsageFromRuntime(usage *runtime.ContextUsage) *clientui.Tr
 	return projected
 }
 
-func transcriptGoalStatusFromRuntime(goal *session.GoalState, suspended bool) *clientui.TranscriptGoalStatus {
-	projected := GoalFromSessionState(goal, suspended)
-	if projected == nil {
-		return nil
+func transcriptGoalStatusFromRuntime(goal *session.GoalState, availability clientui.GoalAvailability, suspended bool) *clientui.TranscriptGoalStatus {
+	runtimeGoal := GoalFromSessionState(goal, availability, suspended)
+	status := &clientui.TranscriptGoalStatus{Availability: runtimeGoal.Availability}
+	if runtimeGoal.Goal != nil {
+		status.Goal = &clientui.TranscriptGoal{Goal: runtimeGoal.Goal, Suspended: runtimeGoal.Suspended}
 	}
-	return &clientui.TranscriptGoalStatus{Goal: &clientui.TranscriptGoal{
-		ID:        projected.ID,
-		Objective: projected.Objective,
-		Status:    projected.Status,
-		Suspended: projected.Suspended,
-	}}
+	return status
 }
 
 func transcriptToolStartsFromRuntime(starts []runtime.TranscriptLiveToolStart) []clientui.TranscriptToolStart {
@@ -339,14 +338,11 @@ func transcriptCompactionStatus(evt runtime.Event) clientui.TranscriptCompaction
 }
 
 func transcriptGoalStatus(update runtime.GoalStatusUpdate) clientui.TranscriptGoalStatus {
-	if update.Cleared {
-		return clientui.TranscriptGoalStatus{}
+	var state *session.GoalState
+	if !update.Cleared {
+		state = &update.State
 	}
-	return clientui.TranscriptGoalStatus{Goal: &clientui.TranscriptGoal{
-		ID:        strings.TrimSpace(update.State.ID),
-		Objective: update.State.Objective,
-		Status:    clientui.RuntimeGoalStatus(strings.TrimSpace(string(update.State.Status))),
-	}}
+	return *transcriptGoalStatusFromRuntime(state, update.Availability, false)
 }
 
 type transcriptBackgroundActivityFacts struct {

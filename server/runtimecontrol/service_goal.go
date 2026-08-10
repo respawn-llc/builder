@@ -29,10 +29,11 @@ func (s *Service) ShowGoal(ctx context.Context, req serverapi.RuntimeGoalShowReq
 	if record.Meta == nil {
 		return serverapi.RuntimeGoalShowResponse{}, fmt.Errorf("persisted session %q metadata is required", sessionID)
 	}
-	if record.Meta.Goal == nil {
-		return serverapi.RuntimeGoalShowResponse{}, nil
+	availability, err := session.GoalAvailabilityFromMeta(*record.Meta)
+	if err != nil {
+		return serverapi.RuntimeGoalShowResponse{}, fmt.Errorf("resolve Goal availability for session %q: %w", sessionID, err)
 	}
-	return serverapi.RuntimeGoalShowResponse{Goal: runtimeGoalFromSessionGoal(*record.Meta.Goal)}, nil
+	return serverapi.RuntimeGoalShowResponse{Goal: session.GoalCoreFromState(record.Meta.Goal), Availability: availability}, nil
 }
 
 func (s *Service) SetGoal(ctx context.Context, req serverapi.RuntimeGoalSetRequest) (serverapi.RuntimeGoalShowResponse, error) {
@@ -148,7 +149,7 @@ func memoizedGoalMutation[Req any](
 		}
 		response, responseErr := goalResponseFromCommand(outcome)
 		if responseErr != nil {
-			return committedGoalMutationResult{}, responseErr
+			return committedGoalMutationResult{Err: goalMutationError(responseErr)}, nil
 		}
 		return committedGoalMutationResult{
 			Response: response,
@@ -162,13 +163,19 @@ func memoizedGoalMutation[Req any](
 }
 
 func goalResponseFromCommand(result runtimecommand.GoalCommandResult) (serverapi.RuntimeGoalShowResponse, error) {
+	if err := result.Availability.Validate(); err != nil {
+		if result.Err != nil {
+			return serverapi.RuntimeGoalShowResponse{}, result.Err
+		}
+		return serverapi.RuntimeGoalShowResponse{}, err
+	}
 	if result.Cleared {
-		return serverapi.RuntimeGoalShowResponse{}, nil
+		return serverapi.RuntimeGoalShowResponse{Availability: result.Availability}, nil
 	}
 	if result.Goal == nil {
 		return serverapi.RuntimeGoalShowResponse{}, errors.New("accepted goal command is missing projected goal")
 	}
-	return serverapi.RuntimeGoalShowResponse{Goal: runtimeGoalFromSessionGoal(*result.Goal)}, nil
+	return serverapi.RuntimeGoalShowResponse{Goal: session.GoalCoreFromState(result.Goal), Availability: result.Availability}, nil
 }
 
 // goalAgentOverwriteDeniedError preserves the agent-facing policy response while
@@ -191,14 +198,4 @@ func goalMutationError(err error) error {
 		return goalAgentOverwriteDeniedError{Objective: blocked.Goal.Objective, Status: string(blocked.Goal.Status)}
 	}
 	return err
-}
-
-func runtimeGoalFromSessionGoal(goal session.GoalState) *serverapi.RuntimeGoal {
-	return &serverapi.RuntimeGoal{
-		ID:        strings.TrimSpace(goal.ID),
-		Objective: goal.Objective,
-		Status:    strings.TrimSpace(string(goal.Status)),
-		CreatedAt: goal.CreatedAt,
-		UpdatedAt: goal.UpdatedAt,
-	}
 }

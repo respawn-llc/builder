@@ -11,6 +11,7 @@ import (
 
 	"core/prompts"
 	"core/shared/client"
+	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/sessionenv"
@@ -256,7 +257,7 @@ func goalCompleteSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 }
 
 func goalAlreadyComplete(goal *serverapi.RuntimeGoal) bool {
-	return goal != nil && strings.TrimSpace(goal.Status) == "complete"
+	return goal != nil && goal.Status == clientui.RuntimeGoalStatusComplete
 }
 
 func goalClearSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {

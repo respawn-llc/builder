@@ -27,10 +27,9 @@ type RuntimeContextUsage struct {
 }
 
 type RuntimeGoal struct {
-	ID        string
-	Objective string
-	Status    RuntimeGoalStatus
-	Suspended bool
+	*Goal
+	Availability GoalAvailability
+	Suspended    bool
 }
 
 type RuntimeGoalStatus string

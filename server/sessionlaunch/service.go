@@ -127,10 +127,10 @@ func (s *Service) ResolveWorkspaceChatDraftAggregate(ctx context.Context) (Works
 	return owner.ResolveWorkspaceChatDraft(ctx, workspaceID, s.workspaceChatDraftResolverInput)
 }
 
-func (s *Service) TransformWorkspaceChatDraftAggregate(ctx context.Context, transform WorkspaceChatDraftTransform) (WorkspaceChatDraft, error) {
+func (s *Service) TransformWorkspaceChatDraftAggregate(ctx context.Context, transform WorkspaceChatDraftTransform) (WorkspaceChatDraftResolution, error) {
 	owner, workspaceID, err := s.workspaceChatDraftOwner()
 	if err != nil {
-		return WorkspaceChatDraft{}, err
+		return WorkspaceChatDraftResolution{}, err
 	}
 	return owner.TransformWorkspaceChatDraft(ctx, workspaceID, s.workspaceChatDraftResolverInput, transform)
 }
@@ -145,7 +145,10 @@ func (s *Service) WorkspaceChatDraft(ctx context.Context, req serverapi.Workspac
 		if err != nil {
 			return serverapi.WorkspaceChatDraftResponse{}, err
 		}
-		return serverapi.WorkspaceChatDraftResponse{Message: resolved.Draft.Message}, nil
+		return serverapi.WorkspaceChatDraftResponse{
+			Message:          resolved.Draft.Message,
+			GoalAvailability: resolved.GoalAvailability,
+		}, nil
 	case serverapi.WorkspaceChatDraftUpdateMessage:
 		message := *req.Operation.Message
 		resolved, err := s.TransformWorkspaceChatDraftAggregate(ctx, func(current WorkspaceChatDraftResolution) (WorkspaceChatDraft, error) {
@@ -156,7 +159,10 @@ func (s *Service) WorkspaceChatDraft(ctx context.Context, req serverapi.Workspac
 		if err != nil {
 			return serverapi.WorkspaceChatDraftResponse{}, err
 		}
-		return serverapi.WorkspaceChatDraftResponse{Message: resolved.Message}, nil
+		return serverapi.WorkspaceChatDraftResponse{
+			Message:          resolved.Draft.Message,
+			GoalAvailability: resolved.GoalAvailability,
+		}, nil
 	case serverapi.WorkspaceChatDraftClear, serverapi.WorkspaceChatDraftConsume:
 		owner, workspaceID, err := s.workspaceChatDraftOwner()
 		if err != nil {
@@ -165,7 +171,11 @@ func (s *Service) WorkspaceChatDraft(ctx context.Context, req serverapi.Workspac
 		if err := owner.ClearWorkspaceChatDraft(ctx, workspaceID); err != nil {
 			return serverapi.WorkspaceChatDraftResponse{}, err
 		}
-		return serverapi.WorkspaceChatDraftResponse{}, nil
+		resolved, err := s.ResolveWorkspaceChatDraftAggregate(ctx)
+		if err != nil {
+			return serverapi.WorkspaceChatDraftResponse{}, err
+		}
+		return serverapi.WorkspaceChatDraftResponse{GoalAvailability: resolved.GoalAvailability}, nil
 	default:
 		return serverapi.WorkspaceChatDraftResponse{}, fmt.Errorf("workspace Chat draft operation kind %q is invalid", req.Operation.Kind)
 	}

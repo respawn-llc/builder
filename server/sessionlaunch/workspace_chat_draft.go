@@ -13,6 +13,7 @@ import (
 	"core/server/metadata"
 	"core/server/requestmemo"
 	"core/server/runtime"
+	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
@@ -32,9 +33,10 @@ type workspaceChatDraftLimits struct {
 	thinking        map[string]struct{}
 }
 type WorkspaceChatDraftResolution struct {
-	Draft     WorkspaceChatDraft
-	Baselines map[string]WorkspaceChatDraft
-	limits    map[string]workspaceChatDraftLimits
+	Draft            WorkspaceChatDraft
+	Baselines        map[string]WorkspaceChatDraft
+	GoalAvailability clientui.GoalAvailability
+	limits           map[string]workspaceChatDraftLimits
 }
 type workspaceChatDraftPersistence interface {
 	ReadWorkspaceChatDraft(context.Context, string) (*WorkspaceChatDraft, error)
@@ -80,41 +82,42 @@ func (o *WorkspaceChatDraftOwner) ResolveWorkspaceChatDraft(ctx context.Context,
 	}
 	return ResolveWorkspaceChatDraft(input, stored)
 }
-func (o *WorkspaceChatDraftOwner) TransformWorkspaceChatDraft(ctx context.Context, id string, resolve WorkspaceChatDraftInputResolver, transform WorkspaceChatDraftTransform) (WorkspaceChatDraft, error) {
-	var err error
+func (o *WorkspaceChatDraftOwner) TransformWorkspaceChatDraft(ctx context.Context, id string, resolve WorkspaceChatDraftInputResolver, transform WorkspaceChatDraftTransform) (result WorkspaceChatDraftResolution, err error) {
 	if id, err = o.workspaceID(id); err != nil {
-		return WorkspaceChatDraft{}, err
+		return
 	}
 	if resolve == nil {
-		return WorkspaceChatDraft{}, errors.New("workspace Chat draft resolver is required")
+		err = errors.New("workspace Chat draft resolver is required")
+		return
 	}
 	if transform == nil {
-		return WorkspaceChatDraft{}, errors.New("workspace Chat draft transform is required")
+		err = errors.New("workspace Chat draft transform is required")
+		return
 	}
 	lane, err := o.lanes.Acquire(ctx, id)
 	if err != nil {
-		return WorkspaceChatDraft{}, err
+		return
 	}
 	defer lane.Release()
 	input, err := resolve(ctx)
 	if err != nil {
-		return WorkspaceChatDraft{}, err
+		return
 	}
 	stored, err := o.persistence.ReadWorkspaceChatDraft(ctx, id)
 	if err != nil {
-		return WorkspaceChatDraft{}, err
+		return
 	}
 	current, err := ResolveWorkspaceChatDraft(input, stored)
 	if err != nil {
-		return WorkspaceChatDraft{}, err
+		return
 	}
 	next, err := transform(current)
 	if err != nil {
-		return WorkspaceChatDraft{}, err
+		return
 	}
 	next.Agent = normalizeWorkspaceChatDraftAgent(next.Agent)
 	if err := validateWorkspaceChatDraftTransform(next, current); err != nil {
-		return WorkspaceChatDraft{}, err
+		return result, err
 	}
 	var replacement *WorkspaceChatDraft
 	defaults := current.Baselines[config.DefaultSubagentRole]
@@ -122,9 +125,9 @@ func (o *WorkspaceChatDraftOwner) TransformWorkspaceChatDraft(ctx context.Contex
 		replacement = &next
 	}
 	if err := o.persistence.ReplaceWorkspaceChatDraft(ctx, id, replacement); err != nil {
-		return WorkspaceChatDraft{}, err
+		return result, err
 	}
-	return next, nil
+	return workspaceChatDraftResolution(next, current.Baselines, current.limits)
 }
 func (o *WorkspaceChatDraftOwner) ClearWorkspaceChatDraft(ctx context.Context, id string) error {
 	var err error
@@ -163,7 +166,7 @@ func ResolveWorkspaceChatDraft(input WorkspaceChatDraftResolverInput, stored *Wo
 		baselines[agent] = limit.draft
 	}
 	if stored == nil {
-		return WorkspaceChatDraftResolution{Draft: defaults.draft, Baselines: baselines, limits: limits}, nil
+		return workspaceChatDraftResolution(defaults.draft, baselines, limits)
 	}
 	draft := *stored
 	if err := draft.Validate(); err != nil {
@@ -186,7 +189,19 @@ func ResolveWorkspaceChatDraft(input WorkspaceChatDraftResolverInput, stored *Wo
 			draft.Questions = false
 		}
 	}
-	return WorkspaceChatDraftResolution{Draft: draft, Baselines: baselines, limits: limits}, nil
+	return workspaceChatDraftResolution(draft, baselines, limits)
+}
+
+func workspaceChatDraftResolution(draft WorkspaceChatDraft, baselines map[string]WorkspaceChatDraft, limits map[string]workspaceChatDraftLimits) (WorkspaceChatDraftResolution, error) {
+	limit, ok := limits[normalizeWorkspaceChatDraftAgent(draft.Agent)]
+	if !ok {
+		return WorkspaceChatDraftResolution{}, fmt.Errorf("workspace Chat draft Agent %q has no resolved capability", draft.Agent)
+	}
+	availability := clientui.GoalAvailabilityAgentCapabilityMissing
+	if limit.questions {
+		availability = clientui.GoalAvailabilityAvailable
+	}
+	return WorkspaceChatDraftResolution{Draft: draft, Baselines: baselines, GoalAvailability: availability, limits: limits}, nil
 }
 func resolveWorkspaceChatDraftBaselines(input WorkspaceChatDraftResolverInput) (map[string]workspaceChatDraftLimits, error) {
 	selectors := append([]string{config.DefaultSubagentRole}, config.AvailableSubagentRoleNames(input.Settings, false)...)

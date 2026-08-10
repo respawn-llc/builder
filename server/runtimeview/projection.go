@@ -1,8 +1,6 @@
 package runtimeview
 
 import (
-	"strings"
-
 	"core/server/runtime"
 	"core/server/runtimeactivity"
 	"core/server/session"
@@ -55,6 +53,10 @@ func StatusFromRuntime(engine *runtime.Engine) (clientui.RuntimeStatus, error) {
 	if engine == nil {
 		return clientui.RuntimeStatus{}, nil
 	}
+	goalAvailability, err := engine.GoalAvailability()
+	if err != nil {
+		return clientui.RuntimeStatus{}, err
+	}
 	freshness, err := engine.ConversationFreshness()
 	if err != nil {
 		return clientui.RuntimeStatus{}, err
@@ -82,7 +84,7 @@ func StatusFromRuntime(engine *runtime.Engine) (clientui.RuntimeStatus, error) {
 			HasCacheHitPercentage: usage.HasCacheHitPercentage,
 		},
 		CompactionCount: engine.CompactionCount(),
-		Goal:            GoalFromSessionState(engine.Goal(), engine.GoalLoopSuspended()),
+		Goal:            GoalFromSessionState(engine.Goal(), goalAvailability, engine.GoalLoopSuspended()),
 	}
 	if workflowState, err := engine.WorkflowSessionState(); err != nil {
 		return clientui.RuntimeStatus{}, err
@@ -127,16 +129,12 @@ func TranscriptSessionStatusFromRuntime(engine *runtime.Engine) (clientui.Transc
 	return status, nil
 }
 
-func GoalFromSessionState(goal *session.GoalState, suspended bool) *clientui.RuntimeGoal {
-	if goal == nil {
-		return nil
-	}
-	return &clientui.RuntimeGoal{
-		ID:        strings.TrimSpace(goal.ID),
-		Objective: goal.Objective,
-		Status:    clientui.RuntimeGoalStatus(strings.TrimSpace(string(goal.Status))),
-		Suspended: suspended,
-	}
+func GoalFromSessionState(goal *session.GoalState, availability clientui.GoalAvailability, suspended bool) *clientui.RuntimeGoal {
+	projected := clientui.RuntimeGoalFromEnvelope(
+		clientui.ProjectGoal(session.GoalCoreFromState(goal), availability),
+		suspended,
+	)
+	return &projected
 }
 
 func SessionViewFromRuntime(engine *runtime.Engine) (clientui.RuntimeSessionView, error) {

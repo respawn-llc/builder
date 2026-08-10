@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"core/shared/clientui"
 	"core/shared/runtimeids"
@@ -235,20 +234,15 @@ type RuntimeRecordPromptHistoryRequest struct {
 	Text            string `json:"text"`
 }
 
-type RuntimeGoal struct {
-	ID        string    `json:"id"`
-	Objective string    `json:"objective"`
-	Status    string    `json:"status"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-}
+type RuntimeGoal = clientui.Goal
 
 type RuntimeGoalShowRequest struct {
 	SessionID string `json:"session_id"`
 }
 
 type RuntimeGoalShowResponse struct {
-	Goal *RuntimeGoal `json:"goal,omitempty"`
+	Goal         *clientui.Goal            `json:"goal,omitempty"`
+	Availability clientui.GoalAvailability `json:"availability"`
 }
 
 type RuntimeGoalSetRequest struct {

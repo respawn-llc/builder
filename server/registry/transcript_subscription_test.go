@@ -277,6 +277,7 @@ func TestSessionFeedSequencerHydrationProjectionUsesContractFailurePolicy(t *tes
 func TestRegistryHydrationCompositionUsesContractFailurePolicy(t *testing.T) {
 	registry := NewRuntimeRegistry()
 	snapshot := runtime.TranscriptHydrationSnapshot{
+		GoalAvailability: clientui.GoalAvailabilityAvailable,
 		CommittedRows: []runtime.TranscriptCommittedRowFact{{
 			Locator: transcript.CommittedRowLocator{},
 		}},

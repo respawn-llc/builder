@@ -136,13 +136,13 @@ func (f *runtimeControlFakeClient) ShowGoal() (*clientui.RuntimeGoal, error) {
 }
 func (f *runtimeControlFakeClient) SetGoal(objective string) (*clientui.RuntimeGoal, error) {
 	f.setGoalArg = objective
-	f.goal = &clientui.RuntimeGoal{ID: "goal-1", Objective: objective, Status: "active"}
+	f.goal = &clientui.RuntimeGoal{Goal: &clientui.Goal{ID: "goal-1", Objective: objective, Status: "active"}, Availability: clientui.GoalAvailabilityAvailable}
 	return cloneRuntimeGoal(f.goal), f.err
 }
 func (f *runtimeControlFakeClient) PauseGoal() (*clientui.RuntimeGoal, error) {
 	f.pauseGoalCalls++
 	if f.goal == nil {
-		f.goal = &clientui.RuntimeGoal{ID: "goal-1", Objective: "objective"}
+		f.goal = &clientui.RuntimeGoal{Goal: &clientui.Goal{ID: "goal-1", Objective: "objective"}, Availability: clientui.GoalAvailabilityAvailable}
 	}
 	f.goal.Status = "paused"
 	return cloneRuntimeGoal(f.goal), f.err
@@ -150,14 +150,14 @@ func (f *runtimeControlFakeClient) PauseGoal() (*clientui.RuntimeGoal, error) {
 func (f *runtimeControlFakeClient) ResumeGoal() (*clientui.RuntimeGoal, error) {
 	f.resumeGoalCalls++
 	if f.goal == nil {
-		f.goal = &clientui.RuntimeGoal{ID: "goal-1", Objective: "objective"}
+		f.goal = &clientui.RuntimeGoal{Goal: &clientui.Goal{ID: "goal-1", Objective: "objective"}, Availability: clientui.GoalAvailabilityAvailable}
 	}
 	f.goal.Status = "active"
 	return cloneRuntimeGoal(f.goal), f.err
 }
 func (f *runtimeControlFakeClient) CompleteGoal() (*clientui.RuntimeGoal, error) {
 	if f.goal == nil {
-		f.goal = &clientui.RuntimeGoal{ID: "goal-1", Objective: "objective"}
+		f.goal = &clientui.RuntimeGoal{Goal: &clientui.Goal{ID: "goal-1", Objective: "objective"}, Availability: clientui.GoalAvailabilityAvailable}
 	}
 	f.goal.Status = "complete"
 	return cloneRuntimeGoal(f.goal), f.err

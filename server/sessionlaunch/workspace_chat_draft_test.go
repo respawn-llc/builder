@@ -6,6 +6,7 @@ import (
 
 	"core/server/auth"
 	"core/server/runtime"
+	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/toolspec"
 )
@@ -27,7 +28,7 @@ func TestWorkspaceChatDraftResolution(t *testing.T) {
 	base := draftSettings("gpt-5.6-sol", "medium")
 	base.EnabledTools = map[toolspec.ID]bool{toolspec.ToolAskQuestion: true}
 	got, err := ResolveWorkspaceChatDraft(draftInput(base), nil)
-	if err != nil || got.Draft.Agent != "default" || got.Draft.Supervisor != "edits" || got.Draft.Thinking != "medium" || !got.Draft.Questions || !got.Draft.AutoCompaction {
+	if err != nil || got.Draft.Agent != "default" || got.Draft.Supervisor != "edits" || got.Draft.Thinking != "medium" || !got.Draft.Questions || !got.Draft.AutoCompaction || got.GoalAvailability != clientui.GoalAvailabilityAvailable {
 		t.Fatalf("defaults=%+v err=%v", got.Draft, err)
 	}
 	addWorker(&base, "high")
@@ -45,6 +46,17 @@ func TestWorkspaceChatDraftResolution(t *testing.T) {
 	got, err = ResolveWorkspaceChatDraft(draftInput(base), stored)
 	if err != nil || got.Draft.Message != "preserve" || got.Draft.Thinking != "high" || got.Draft.Fast {
 		t.Fatalf("repair=%+v err=%v", got.Draft, err)
+	}
+	worker := base.Subagents["worker"]
+	worker.Settings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolExecCommand: true}
+	worker.Sources["tools.ask_question"] = "file"
+	worker.Sources["tools.exec_command"] = "file"
+	base.Subagents["worker"] = worker
+	workerDraft, err := ResolveWorkspaceChatDraft(draftInput(base), &WorkspaceChatDraft{
+		Message: "keep", Agent: "worker", Supervisor: "all", Thinking: "high",
+	})
+	if err != nil || workerDraft.GoalAvailability != clientui.GoalAvailabilityAgentCapabilityMissing {
+		t.Fatalf("worker availability=%q err=%v", workerDraft.GoalAvailability, err)
 	}
 }
 
@@ -77,8 +89,8 @@ func TestWorkspaceChatDraftOwnerTransformsClearAndSerializes(t *testing.T) {
 		d.Message = r.Draft.Message
 		return d, nil
 	})
-	if err != nil || got.Agent != "worker" || got.Message != "latest" || got.Supervisor != "all" || got.Thinking != "low" || got.Fast || !got.Questions || !got.AutoCompaction {
-		t.Fatalf("transform=%+v err=%v", got, err)
+	if err != nil || got.Draft.Agent != "worker" || got.Draft.Message != "latest" || got.Draft.Supervisor != "all" || got.Draft.Thinking != "low" || got.Draft.Fast || !got.Draft.Questions || !got.Draft.AutoCompaction || got.GoalAvailability != clientui.GoalAvailabilityAvailable {
+		t.Fatalf("transform=%+v err=%v", got.Draft, err)
 	}
 	if err := o.ClearWorkspaceChatDraft(context.Background(), "w"); err != nil || p.draft != nil {
 		t.Fatalf("clear=%+v err=%v", p.draft, err)

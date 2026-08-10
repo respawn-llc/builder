@@ -33,7 +33,8 @@ func TestCommittedRowLocatorIsStableAcrossPageHydrationAndLiveProjection(t *test
 		t.Fatalf("project page: %v", err)
 	}
 	hydration := TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{
-		CommittedRows: runtime.TranscriptCommittedRowFactsFromSnapshot(snapshot),
+		CommittedRows:    runtime.TranscriptCommittedRowFactsFromSnapshot(snapshot),
+		GoalAvailability: clientui.GoalAvailabilityAvailable,
 	})
 	live := TranscriptMessagesFromRuntimeEvent(runtime.Event{
 		Kind:                runtime.EventUserMessageFlushed,

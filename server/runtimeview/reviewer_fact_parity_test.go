@@ -28,7 +28,10 @@ func TestReviewerFactsMatchAcrossLiveHydrationAndPageProjection(t *testing.T) {
 	}
 	snapshot := runtime.ChatSnapshot{Entries: entries}
 	liveFacts := runtime.TranscriptCommittedRowFactsFromSnapshot(snapshot)
-	hydration := TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{CommittedRows: liveFacts})
+	hydration := TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{
+		CommittedRows:    liveFacts,
+		GoalAvailability: clientui.GoalAvailabilityAvailable,
+	})
 	page, err := TranscriptPageFromSegment(
 		"58e121b5-30f7-4d0f-a1fa-fb3e6695e39c",
 		"name",

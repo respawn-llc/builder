@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	"core/shared/clientui"
 	"core/shared/protocol"
 )
 
@@ -61,5 +62,10 @@ func (r *WorkspaceChatDraftRequest) UnmarshalJSON(data []byte) error {
 }
 
 type WorkspaceChatDraftResponse struct {
-	Message string `json:"message"`
+	Message          string                    `json:"message"`
+	GoalAvailability clientui.GoalAvailability `json:"goal_availability"`
+}
+
+func (r WorkspaceChatDraftResponse) Validate() error {
+	return r.GoalAvailability.Validate()
 }
