@@ -196,32 +196,34 @@ func (e *Engine) completeAgentProviderBoundary(
 		e.lifecycleCtx,
 		e.runtimeEvents,
 		agentStepBoundaryRequest{continueTurn: continueTurn},
-		func(
-			command runtimecommand.Admission,
-			request agentStepBoundaryRequest,
-			complete func(agentStepBoundaryDecision, error),
-		) error {
-			admission := runtimeEventAdmission{engine: e, command: command}
-			if e.agentSteps.current == nil {
-				complete(noAgentStepBoundaryDecision{}, nil)
-				return nil
-			}
-			if e.agentSteps.current.phase != agentStepProviderRunning {
-				complete(noAgentStepBoundaryDecision{}, nil)
-				return nil
-			}
-			decision, handleErr := e.applyAgentStepBoundary(admission, request, complete)
-			if handleErr != nil || decision != nil {
-				complete(decision, handleErr)
-			}
-			return nil
-		},
+		e.admitAgentStepBoundary,
 	)
 	if err != nil {
 		return nil, runtimeSteeringError(err)
 	}
 	decision, err := deferred.Await(ctx)
 	return decision, runtimeSteeringError(err)
+}
+
+func (e *Engine) admitAgentStepBoundary(
+	command runtimecommand.Admission,
+	request agentStepBoundaryRequest,
+	complete func(agentStepBoundaryDecision, error),
+) error {
+	admission := runtimeEventAdmission{engine: e, command: command}
+	if e.agentSteps.current == nil {
+		complete(noAgentStepBoundaryDecision{}, nil)
+		return nil
+	}
+	if e.agentSteps.current.phase != agentStepProviderRunning {
+		complete(noAgentStepBoundaryDecision{}, nil)
+		return nil
+	}
+	decision, handleErr := e.applyAgentStepBoundary(admission, request, complete)
+	if handleErr != nil || decision != nil {
+		complete(decision, handleErr)
+	}
+	return nil
 }
 
 func (e *Engine) applyAgentStepBoundary(
@@ -240,11 +242,10 @@ func (e *Engine) applyAgentStepBoundary(
 	e.agentSteps.boundary = current
 	sink, ok := e.cfg.StepLifecycle.(AgentStepOriginLifecycleSink)
 	if !ok {
-		return e.resumeReducerBoundaryGrantWithResolver(
+		return e.resumeReducerBoundaryGrant(
 			admission,
 			localAgentStepReducerGrant{engine: e},
 			request.continueTurn,
-			complete,
 		)
 	}
 	transfer, err := sink.AgentStepBoundary(admission.Context(), current.origin)
@@ -253,11 +254,10 @@ func (e *Engine) applyAgentStepBoundary(
 	}
 	switch typed := transfer.(type) {
 	case AgentStepReducerBoundary:
-		return e.resumeReducerBoundaryGrantWithResolver(
+		return e.resumeReducerBoundaryGrant(
 			admission,
 			typed.Grant,
 			request.continueTurn,
-			complete,
 		)
 	case AgentStepWorktreeBoundary:
 		if typed.Wait == nil {
@@ -288,12 +288,11 @@ func (e *Engine) applyAgentStepBoundary(
 					if waitErr != nil {
 						return nil, waitErr
 					}
-					return e.acceptReducerBoundaryGrantWithResolver(
+					return e.acceptReducerBoundaryGrant(
 						resultAdmission,
 						result.grant,
 						result.continueTurn,
 						result.step,
-						complete,
 					)
 				},
 			)
@@ -375,29 +374,14 @@ func (e *Engine) resumeReducerBoundaryGrant(
 	grant AgentStepReducerGrant,
 	continueTurn bool,
 ) (agentStepBoundaryDecision, error) {
-	return e.resumeReducerBoundaryGrantWithResolver(
-		admission,
-		grant,
-		continueTurn,
-		nil,
-	)
-}
-
-func (e *Engine) resumeReducerBoundaryGrantWithResolver(
-	admission runtimeEventAdmission,
-	grant AgentStepReducerGrant,
-	continueTurn bool,
-	complete func(agentStepBoundaryDecision, error),
-) (agentStepBoundaryDecision, error) {
 	if e.agentSteps.boundary == nil {
 		return nil, errors.New("Agent Step reducer boundary has no closed Step")
 	}
-	return e.acceptReducerBoundaryGrantWithResolver(
+	return e.acceptReducerBoundaryGrant(
 		admission,
 		grant,
 		continueTurn,
 		*e.agentSteps.boundary,
-		complete,
 	)
 }
 
@@ -406,22 +390,6 @@ func (e *Engine) acceptReducerBoundaryGrant(
 	grant AgentStepReducerGrant,
 	continueTurn bool,
 	step activeAgentStep,
-) (agentStepBoundaryDecision, error) {
-	return e.acceptReducerBoundaryGrantWithResolver(
-		admission,
-		grant,
-		continueTurn,
-		step,
-		nil,
-	)
-}
-
-func (e *Engine) acceptReducerBoundaryGrantWithResolver(
-	admission runtimeEventAdmission,
-	grant AgentStepReducerGrant,
-	continueTurn bool,
-	step activeAgentStep,
-	complete func(agentStepBoundaryDecision, error),
 ) (agentStepBoundaryDecision, error) {
 	if grant == nil {
 		return nil, errors.New("Agent Step reducer boundary has no grant")
@@ -438,105 +406,16 @@ func (e *Engine) acceptReducerBoundaryGrantWithResolver(
 	if !continueTurn {
 		selection = turnBoundarySelection(step.scopeID, step.origin)
 	}
-	applied := humanBoundaryApplyResult{}
-	assignmentsApplied := 0
-	backgroundApplied := 0
-	for {
-		next := e.boundaryAgenda.peekNext(selection)
-		if next == nil {
-			break
-		}
-		switch next.(type) {
-		case *humanBoundaryAgendaItem:
-			human, err := e.applyHumanBoundaryPrefix(admission, step.origin.StepID, selection)
-			applied.applied += human.applied
-			if human.receipt.Committed {
-				applied.receipt = human.receipt
-			}
-			if err != nil {
-				e.agentSteps.boundary = nil
-				return nil, errors.Join(err, grant.Release())
-			}
-		case *workflowAssignmentAgendaItem:
-			count, err := e.applyWorkflowAssignmentBoundary(
-				admission,
-				step.origin.StepID,
-				selection,
-			)
-			assignmentsApplied += count
-			if err != nil {
-				e.agentSteps.boundary = nil
-				return nil, errors.Join(err, grant.Release())
-			}
-			goto reduced
-		case *backgroundNoticeAgendaItem:
-			count, err := e.applyBackgroundNoticeBoundary(
-				admission,
-				step.origin.StepID,
-				selection,
-			)
-			backgroundApplied += count
-			if err != nil {
-				e.agentSteps.boundary = nil
-				return nil, errors.Join(err, grant.Release())
-			}
-		case *manualCompactionAgendaItem:
-			if goal, selected := e.longBoundary.selected.(*goalContinuationSelection); selected {
-				goal.detached.Store(true)
-				if err := e.longBoundary.detach(goal); err != nil {
-					e.agentSteps.boundary = nil
-					return nil, errors.Join(err, grant.Release())
-				}
-			}
-			selected, err := e.longBoundary.selectNext(
-				e.boundaryAgenda,
-				selection,
-			)
-			if err != nil || selected == nil {
-				e.agentSteps.boundary = nil
-				return nil, errors.Join(err, grant.Release())
-			}
-			compaction, ok := selected.(*manualCompactionSelection)
-			if !ok {
-				panic(fmt.Sprintf(
-					"manual compaction selection has unexpected type %T",
-					selected,
-				))
-			}
-			e.agentSteps.boundary = nil
-			releaseErr := grant.Release()
-			launchErr := e.launchManualCompactionSelection(admission, compaction)
-			if launchErr != nil {
-				compaction.completion.Complete(
-					session.CommitReceipt{},
-					launchErr,
-				)
-			}
-			return awaitManualCompactionSelectionDecision{
-				Scope:    step.scopeID,
-				Deferred: compaction.completion.Deferred(),
-			}, releaseErr
-		default:
-			e.agentSteps.boundary = nil
-			return nil, errors.Join(
-				fmt.Errorf("unsupported short Boundary Agenda item %T", next),
-				grant.Release(),
-			)
-		}
-	}
-reduced:
 	e.agentSteps.boundary = nil
-	if assignmentsApplied > 0 {
-		return finishAgentTurnDecision{}, grant.Release()
-	}
-	if continueTurn || applied.applied > 0 || backgroundApplied > 0 {
-		if e.agentSteps.reducerGrant != nil {
-			panic("Agent Step reducer grant duplicated")
-		}
-		e.agentSteps.reducerGrant = grant
-		return prepareNextAgentStepDecision{}, nil
-	}
-	return finishAgentTurnDecision{}, grant.Release()
+	stepID := step.origin.StepID
+	return e.reduceAgentStepBoundary(admission, agentStepReduction{
+		grant:                 grant,
+		selection:             selection,
+		scopeID:               step.scopeID,
+		stepID:                &stepID,
+		continueWithoutChange: continueTurn,
+		detachSelectedGoal:    true,
+	})
 }
 
 func (e *Engine) resolveAgentStepBoundaryDecision(
@@ -565,6 +444,9 @@ func (e *Engine) submitFreshAgentStepReducer(
 	scopeID runtimeids.ExecutionScopeID,
 	mode agentStepBoundaryMode,
 ) (agentStepBoundaryDecision, error) {
+	if e.boundaryAgenda.isClosed() {
+		return nil, runtimeSteeringError(runtimecommand.ErrUnavailable)
+	}
 	return submitRuntimeEventWithContext(
 		e.lifecycleCtx,
 		e.lifecycleCtx,
@@ -612,82 +494,134 @@ func (e *Engine) submitFreshAgentStepReducer(
 				grant = acquiredGrant
 			}
 			includeTurn := request.mode == agentStepBoundaryModeTurn
-			selection := continuationBoundarySelection(request.scopeID, includeTurn)
-			applied := humanBoundaryApplyResult{}
-			assignmentsApplied := 0
-			backgroundApplied := 0
-			for {
-				next := e.boundaryAgenda.peekNext(selection)
-				if next == nil {
-					break
-				}
-				switch next.(type) {
-				case *humanBoundaryAgendaItem:
-					human, err := e.applyHumanBoundaryPrefix(admission, "", selection)
-					applied.applied += human.applied
-					if err != nil {
-						return nil, errors.Join(err, grant.Release())
-					}
-				case *workflowAssignmentAgendaItem:
-					count, err := e.applyWorkflowAssignmentBoundary(admission, "", selection)
-					assignmentsApplied += count
-					if err != nil {
-						return nil, errors.Join(err, grant.Release())
-					}
-					goto reduced
-				case *backgroundNoticeAgendaItem:
-					count, err := e.applyBackgroundNoticeBoundary(admission, "", selection)
-					backgroundApplied += count
-					if err != nil {
-						return nil, errors.Join(err, grant.Release())
-					}
-				case *manualCompactionAgendaItem:
-					selected, err := e.longBoundary.selectNext(
-						e.boundaryAgenda,
-						selection,
-					)
-					if err != nil || selected == nil {
-						return nil, errors.Join(err, grant.Release())
-					}
-					compaction, ok := selected.(*manualCompactionSelection)
-					if !ok {
-						panic(fmt.Sprintf(
-							"manual compaction selection has unexpected type %T",
-							selected,
-						))
-					}
-					releaseErr := grant.Release()
-					launchErr := e.launchManualCompactionSelection(admission, compaction)
-					if launchErr != nil {
-						compaction.completion.Complete(
-							session.CommitReceipt{},
-							launchErr,
-						)
-					}
-					return awaitManualCompactionSelectionDecision{
-						Scope:    request.scopeID,
-						Deferred: compaction.completion.Deferred(),
-					}, releaseErr
-				default:
-					return nil, errors.Join(
-						fmt.Errorf("unsupported fresh reducer Boundary Agenda item %T", next),
-						grant.Release(),
-					)
-				}
-			}
-		reduced:
-			if assignmentsApplied > 0 {
-				return finishAgentTurnDecision{}, grant.Release()
-			}
-			if request.mode == agentStepBoundaryModeStep ||
-				applied.applied > 0 ||
-				backgroundApplied > 0 {
-				e.agentSteps.reducerGrant = grant
-				return prepareNextAgentStepDecision{}, nil
-			}
-			return finishAgentTurnDecision{}, grant.Release()
+			return e.reduceAgentStepBoundary(admission, agentStepReduction{
+				grant:                 grant,
+				selection:             continuationBoundarySelection(request.scopeID, includeTurn),
+				scopeID:               request.scopeID,
+				continueWithoutChange: request.mode == agentStepBoundaryModeStep,
+			})
 		},
 	)
+}
+
+type agentStepReduction struct {
+	grant                 AgentStepReducerGrant
+	selection             boundarySelection
+	scopeID               runtimeids.ExecutionScopeID
+	stepID                *string
+	continueWithoutChange bool
+	detachSelectedGoal    bool
+}
+
+func (e *Engine) reduceAgentStepBoundary(
+	admission runtimeEventAdmission,
+	reduction agentStepReduction,
+) (agentStepBoundaryDecision, error) {
+	stepID := ""
+	if reduction.stepID != nil {
+		stepID = *reduction.stepID
+	}
+	appliedHuman := 0
+	assignmentsApplied := 0
+	backgroundApplied := 0
+	for {
+		next := e.boundaryAgenda.peekNext(reduction.selection)
+		if next == nil {
+			break
+		}
+		switch next.(type) {
+		case *humanBoundaryAgendaItem:
+			human, err := e.applyHumanBoundaryPrefix(
+				admission,
+				stepID,
+				reduction.selection,
+			)
+			appliedHuman += human.applied
+			if err != nil {
+				return nil, errors.Join(err, reduction.grant.Release())
+			}
+		case *workflowAssignmentAgendaItem:
+			count, err := e.applyWorkflowAssignmentBoundary(
+				admission,
+				stepID,
+				reduction.selection,
+			)
+			assignmentsApplied += count
+			if err != nil {
+				return nil, errors.Join(err, reduction.grant.Release())
+			}
+			goto reduced
+		case *backgroundNoticeAgendaItem:
+			count, err := e.applyBackgroundNoticeBoundary(
+				admission,
+				stepID,
+				reduction.selection,
+			)
+			backgroundApplied += count
+			if err != nil {
+				return nil, errors.Join(err, reduction.grant.Release())
+			}
+		case *manualCompactionAgendaItem:
+			if reduction.detachSelectedGoal {
+				if goal, selected := e.longBoundary.selected.(*goalContinuationSelection); selected {
+					goal.detached.Store(true)
+					if err := e.longBoundary.detach(goal); err != nil {
+						return nil, errors.Join(err, reduction.grant.Release())
+					}
+				}
+			}
+			return e.selectManualCompactionAtAgentBoundary(admission, reduction)
+		default:
+			return nil, errors.Join(
+				fmt.Errorf("unsupported Agent Step Boundary Agenda item %T", next),
+				reduction.grant.Release(),
+			)
+		}
+	}
+reduced:
+	if assignmentsApplied > 0 {
+		return finishAgentTurnDecision{}, reduction.grant.Release()
+	}
+	if reduction.continueWithoutChange || appliedHuman > 0 || backgroundApplied > 0 {
+		if e.agentSteps.reducerGrant != nil {
+			panic("Agent Step reducer grant duplicated")
+		}
+		e.agentSteps.reducerGrant = reduction.grant
+		return prepareNextAgentStepDecision{}, nil
+	}
+	return finishAgentTurnDecision{}, reduction.grant.Release()
+}
+
+func (e *Engine) selectManualCompactionAtAgentBoundary(
+	admission runtimeEventAdmission,
+	reduction agentStepReduction,
+) (agentStepBoundaryDecision, error) {
+	selected, err := e.longBoundary.selectNext(
+		e.boundaryAgenda,
+		reduction.selection,
+	)
+	if err != nil || selected == nil {
+		return nil, errors.Join(err, reduction.grant.Release())
+	}
+	compaction, ok := selected.(*manualCompactionSelection)
+	if !ok {
+		panic(fmt.Sprintf(
+			"manual compaction selection has unexpected type %T",
+			selected,
+		))
+	}
+	releaseErr := reduction.grant.Release()
+	launchErr := e.launchManualCompactionSelection(admission, compaction)
+	if launchErr != nil {
+		compaction.completion.Complete(
+			session.CommitReceipt{},
+			launchErr,
+		)
+	}
+	return awaitManualCompactionSelectionDecision{
+		Scope:    reduction.scopeID,
+		Deferred: compaction.completion.Deferred(),
+	}, releaseErr
 }
 
 func (e *Engine) failAgentStepScope(cause error) error {

@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -23,77 +24,46 @@ func TestActiveManualCompactionUsesFreshReducerHandoff(t *testing.T) {
 		mode         agentStepBoundaryMode
 		continueTurn bool
 		queueInputs  bool
+		worktree     bool
 		wantContinue bool
 		wantPending  int
 	}{
 		{name: "Step input eligibility", mode: agentStepBoundaryModeStep, continueTurn: true, queueInputs: true, wantContinue: true, wantPending: 1},
 		{name: "Turn input eligibility", mode: agentStepBoundaryModeTurn, queueInputs: true, wantContinue: true},
 		{name: "Turn finish", mode: agentStepBoundaryModeTurn},
+		{name: "current Worktree wins fresh reduction", mode: agentStepBoundaryModeStep, continueTurn: true, queueInputs: true, worktree: true, wantPending: 2},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			scopeID := runtimeids.NewExecutionScopeID()
-			lifecycle := &manualCompactionRunnerLifecycle{scopeID: scopeID}
+			baseLifecycle := &manualCompactionRunnerLifecycle{scopeID: scopeID}
+			var lifecycle StepLifecycleSink = baseLifecycle
+			var worktreeLifecycle *worktreeClaimedManualCompactionLifecycle
+			if test.worktree {
+				worktreeLifecycle = &worktreeClaimedManualCompactionLifecycle{
+					manualCompactionRunnerLifecycle: baseLifecycle,
+				}
+				lifecycle = worktreeLifecycle
+			}
 			client := &fakeCompactionClient{responses: []llm.Response{{
 				Assistant: llm.Message{
 					Role:    llm.RoleAssistant,
 					Content: textutil.Value("summary"),
 				},
 			}}}
-			engine := mustNewTestEngine(
+			engine := newActiveManualCompactionRunnerEngine(
 				t,
-				mustCreateTestSession(t),
+				scopeID,
+				lifecycle,
 				client,
-				tools.NewRegistry(),
-				Config{
-					Model:          "gpt-5",
-					CompactionMode: "local",
-					StepLifecycle:  lifecycle,
-				},
 			)
-			if err := engine.steer("", steerMessagesWithPersistenceIntent(
-				steeringPriorityNormal,
-				steeringMessageEventDefault,
-				true,
-				[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("context")}},
-			)); err != nil {
-				t.Fatalf("seed compaction input: %v", err)
-			}
-			origin := serverapi.RuntimeStepOrigin{
-				RunID:  uuid.NewString(),
-				StepID: uuid.NewString(),
-			}
-			engine.agentSteps.scopeID = scopeID
-			engine.agentSteps.current = &activeAgentStep{
-				scopeID: scopeID,
-				origin:  origin,
-				phase:   agentStepProviderRunning,
-			}
+			origin := engine.agentSteps.current.origin
 
 			started := make(chan struct{})
 			release := make(chan struct{})
-			deferred, err := runtimecommand.SubmitBound(
-				engine.lifecycleCtx,
-				engine.runtimeEvents,
-				struct{}{},
-				func(
-					command runtimecommand.Admission,
-					_ struct{},
-					completion runtimecommand.CompletionBinding[session.CommitReceipt],
-				) error {
-					return engine.admitManualCompaction(
-						runtimeEventAdmission{engine: engine, command: command},
-						compactionInstructionsInput{},
-						func() {
-							close(started)
-							<-release
-						},
-						completion,
-					)
-				},
-			)
-			if err != nil {
-				t.Fatalf("submit manual compaction: %v", err)
-			}
+			deferred := submitManualCompactionRunnerCommand(t, engine, func() {
+				close(started)
+				<-release
+			})
 			decision, err := engine.completeAgentProviderBoundary(
 				context.Background(),
 				test.continueTurn,
@@ -108,7 +78,7 @@ func TestActiveManualCompactionUsesFreshReducerHandoff(t *testing.T) {
 			if engine.agentSteps.current != nil || engine.agentSteps.boundary != nil {
 				t.Fatal("manual selection retained a completion-eligible Agent Step")
 			}
-			if got := lifecycle.initialRelease.Load(); got != 1 {
+			if got := baseLifecycle.initialRelease.Load(); got != 1 {
 				t.Fatalf("initial reducer releases = %d, want one", got)
 			}
 			select {
@@ -154,7 +124,11 @@ func TestActiveManualCompactionUsesFreshReducerHandoff(t *testing.T) {
 			if err != nil || viewReceipt != receipt {
 				t.Fatalf("manual Deferred view = (%+v, %v), want %+v", viewReceipt, err, receipt)
 			}
-			if got := lifecycle.freshAcquisitions.Load(); got != 1 {
+			if test.worktree {
+				if got := worktreeLifecycle.claimArbitrations.Load(); got != 1 {
+					t.Fatalf("Worktree claim arbitrations = %d, want one", got)
+				}
+			} else if got := baseLifecycle.freshAcquisitions.Load(); got != 1 {
 				t.Fatalf("fresh reducer acquisitions = %d, want one", got)
 			}
 			_, continued := resolved.(prepareNextAgentStepDecision)
@@ -169,16 +143,331 @@ func TestActiveManualCompactionUsesFreshReducerHandoff(t *testing.T) {
 }
 
 func TestSelectedManualCompactionRuntimeCloseSettlesCommandAndRetiresRunner(t *testing.T) {
+	scopeID := runtimeids.NewExecutionScopeID()
+	lifecycle := &manualCompactionRunnerLifecycle{scopeID: scopeID}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	engine := newActiveManualCompactionRunnerEngine(
+		t,
+		scopeID,
+		lifecycle,
+		&fakeCompactionClient{},
+	)
+	defer close(release)
+	deferred := submitManualCompactionRunnerCommand(t, engine, func() {
+		close(started)
+		<-release
+	})
+	boundaryDeferred := submitManualCompactionRunnerBoundary(t, engine, true)
+	decision, err := boundaryDeferred.Await(context.Background())
+	if err != nil {
+		t.Fatalf("await selected Boundary: %v", err)
+	}
+	await, ok := decision.(awaitManualCompactionSelectionDecision)
+	if !ok {
+		t.Fatalf("Boundary decision = %T, want manual-compaction await", decision)
+	}
+	<-started
+	if err := engine.ApplyRuntimeCloseUnderAdmission(); err != nil {
+		t.Fatalf("apply runtime close: %v", err)
+	}
+	if _, err := deferred.Await(context.Background()); err != runtimecommand.ErrUnavailable {
+		t.Fatalf("manual command after runtime close = %v, want unavailable", err)
+	}
+	if _, err := await.Deferred.Await(context.Background()); err != runtimecommand.ErrUnavailable {
+		t.Fatalf("manual Deferred view after runtime close = %v, want unavailable", err)
+	}
+	repeated, err := boundaryDeferred.Await(context.Background())
+	if err != nil {
+		t.Fatalf("re-await settled Boundary decision: %v", err)
+	}
+	if _, ok := repeated.(awaitManualCompactionSelectionDecision); !ok {
+		t.Fatalf("Boundary decision after runtime close = %T, want preserved await", repeated)
+	}
+	resolved, err := engine.resolveAgentStepBoundaryDecision(
+		decision,
+		agentStepBoundaryModeStep,
+	)
+	if !errors.Is(err, ErrEngineClosed) || !errors.Is(err, runtimecommand.ErrUnavailable) {
+		t.Fatalf("runner fresh submission after runtime close = (%T, %v), want unavailable", resolved, err)
+	}
+}
+
+func TestActiveManualCompactionOperationalFailureWakesFreshReducer(t *testing.T) {
+	scopeID := runtimeids.NewExecutionScopeID()
+	lifecycle := &manualCompactionRunnerLifecycle{scopeID: scopeID}
+	engine := newActiveManualCompactionRunnerEngine(
+		t,
+		scopeID,
+		lifecycle,
+		&fakeCompactionClient{},
+	)
+	manualDeferred := submitManualCompactionRunnerCommand(t, engine, nil)
+	boundaryDeferred := submitManualCompactionRunnerBoundary(t, engine, true)
+
+	decision, err := boundaryDeferred.Await(context.Background())
+	if err != nil {
+		t.Fatalf("await Boundary selection: %v", err)
+	}
+	if _, ok := decision.(awaitManualCompactionSelectionDecision); !ok {
+		t.Fatalf("Boundary decision = %T, want manual-compaction await", decision)
+	}
+	resolved, err := engine.resolveAgentStepBoundaryDecision(
+		decision,
+		agentStepBoundaryModeStep,
+	)
+	if err != nil {
+		t.Fatalf("fresh reducer after operational failure: %v", err)
+	}
+	if _, ok := resolved.(prepareNextAgentStepDecision); !ok {
+		t.Fatalf("fresh reducer decision = %T, want prepare", resolved)
+	}
+	if _, err := manualDeferred.Await(context.Background()); err == nil {
+		t.Fatal("manual command unexpectedly succeeded")
+	}
+	repeated, err := boundaryDeferred.Await(context.Background())
+	if err != nil {
+		t.Fatalf("re-await Boundary decision: %v", err)
+	}
+	if _, ok := repeated.(awaitManualCompactionSelectionDecision); !ok {
+		t.Fatalf("repeated Boundary decision = %T, want preserved await decision", repeated)
+	}
+}
+
+func TestSelectedManualCompactionCancellationWakesFreshReducer(t *testing.T) {
+	scopeID := runtimeids.NewExecutionScopeID()
+	lifecycle := &manualCompactionRunnerLifecycle{scopeID: scopeID}
 	engine := mustNewTestEngine(
 		t,
 		mustCreateTestSession(t),
 		&fakeClient{},
 		tools.NewRegistry(),
-		Config{Model: "gpt-5"},
+		Config{Model: "gpt-5", StepLifecycle: lifecycle},
 	)
-	scopeID := runtimeids.NewExecutionScopeID()
 	engine.agentSteps.scopeID = scopeID
+	manualDeferred, decision, _ := submitSelectedManualCompaction(t, engine, scopeID)
+	engine.longBoundary.close(context.Canceled)
+
+	resolved, err := engine.resolveAgentStepBoundaryDecision(
+		decision,
+		agentStepBoundaryModeStep,
+	)
+	if err != nil {
+		t.Fatalf("fresh reducer after selected cancellation: %v", err)
+	}
+	if _, ok := resolved.(prepareNextAgentStepDecision); !ok {
+		t.Fatalf("fresh reducer decision = %T, want prepare", resolved)
+	}
+	if _, err := manualDeferred.Await(context.Background()); !errors.Is(err, context.Canceled) {
+		t.Fatalf("manual command error = %v, want cancellation", err)
+	}
+	if _, err := decision.Deferred.Await(context.Background()); !errors.Is(err, context.Canceled) {
+		t.Fatalf("manual Deferred view error = %v, want cancellation", err)
+	}
+}
+
+func TestManualCompactionCloseBeforeSelectionSettlesBothEventsUnavailable(t *testing.T) {
+	scopeID := runtimeids.NewExecutionScopeID()
+	lifecycle := &manualCompactionRunnerLifecycle{scopeID: scopeID}
+	engine := newActiveManualCompactionRunnerEngine(
+		t,
+		scopeID,
+		lifecycle,
+		&fakeCompactionClient{},
+	)
+	blockerStarted := make(chan struct{})
+	closeObserved := make(chan struct{})
+	releaseBlocker := make(chan struct{})
+	blockerDeferred, err := runtimecommand.Submit(
+		context.Background(),
+		engine.runtimeEvents,
+		struct{}{},
+		func(
+			admission runtimecommand.Admission,
+			_ struct{},
+			complete func(struct{}, error),
+		) error {
+			close(blockerStarted)
+			<-admission.Context().Done()
+			close(closeObserved)
+			<-releaseBlocker
+			complete(struct{}{}, nil)
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("submit blocker: %v", err)
+	}
+	<-blockerStarted
+	manualDeferred := submitManualCompactionRunnerCommand(t, engine, nil)
+	boundaryDeferred := submitManualCompactionRunnerBoundary(t, engine, true)
+
+	closeDone := make(chan struct{})
+	go func() {
+		engine.runtimeEvents.Close()
+		close(closeDone)
+	}()
+	<-closeObserved
+	close(releaseBlocker)
+	<-closeDone
+	if _, err := blockerDeferred.Await(context.Background()); err != runtimecommand.ErrUnavailable {
+		t.Fatalf("blocker result after close = %v, want unavailable", err)
+	}
+	if _, err := manualDeferred.Await(context.Background()); err != runtimecommand.ErrUnavailable {
+		t.Fatalf("manual command after close = %v, want unavailable", err)
+	}
+	if _, err := boundaryDeferred.Await(context.Background()); err != runtimecommand.ErrUnavailable {
+		t.Fatalf("Boundary event after close = %v, want unavailable", err)
+	}
+	if err := engine.ApplyRuntimeCloseUnderAdmission(); err != nil {
+		t.Fatalf("settle runtime state after Queue close: %v", err)
+	}
+}
+
+func TestAcceptedFreshManualCompactionReducerRacingCloseSettlesUnavailable(t *testing.T) {
+	scopeID := runtimeids.NewExecutionScopeID()
+	lifecycle := &closingFreshReducerLifecycle{
+		manualCompactionRunnerLifecycle: &manualCompactionRunnerLifecycle{scopeID: scopeID},
+		started:                         make(chan struct{}),
+	}
+	engine := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		&fakeClient{},
+		tools.NewRegistry(),
+		Config{Model: "gpt-5", StepLifecycle: lifecycle},
+	)
+	engine.agentSteps.scopeID = scopeID
+	manualDeferred, decision, selection := submitSelectedManualCompaction(t, engine, scopeID)
+	if _, err := engine.longBoundary.release(boundaryLongWorkResult{id: selection.id}); err != nil {
+		t.Fatalf("release selected manual work: %v", err)
+	}
+	selection.completion.Complete(session.CommitReceipt{Committed: true}, nil)
+	if _, err := manualDeferred.Await(context.Background()); err != nil {
+		t.Fatalf("settle manual command: %v", err)
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, resolveErr := engine.resolveAgentStepBoundaryDecision(
+			decision,
+			agentStepBoundaryModeStep,
+		)
+		result <- resolveErr
+	}()
+	<-lifecycle.started
+	closeDone := make(chan struct{})
+	go func() {
+		engine.runtimeEvents.Close()
+		close(closeDone)
+	}()
+	if err := <-result; !errors.Is(err, ErrEngineClosed) ||
+		!errors.Is(err, runtimecommand.ErrUnavailable) {
+		t.Fatalf("fresh reducer result racing close = %v, want unavailable", err)
+	}
+	<-closeDone
+	if err := engine.ApplyRuntimeCloseUnderAdmission(); err != nil {
+		t.Fatalf("settle runtime state after Queue close: %v", err)
+	}
+}
+
+func newActiveManualCompactionRunnerEngine(
+	t *testing.T,
+	scopeID runtimeids.ExecutionScopeID,
+	lifecycle StepLifecycleSink,
+	client llm.Client,
+) *Engine {
+	t.Helper()
+	engine := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		client,
+		tools.NewRegistry(),
+		Config{
+			Model:          "gpt-5",
+			CompactionMode: "local",
+			StepLifecycle:  lifecycle,
+		},
+	)
+	if err := engine.steer("", steerMessagesWithPersistenceIntent(
+		steeringPriorityNormal,
+		steeringMessageEventDefault,
+		true,
+		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("context")}},
+	)); err != nil {
+		t.Fatalf("seed compaction input: %v", err)
+	}
+	origin := serverapi.RuntimeStepOrigin{
+		RunID:  uuid.NewString(),
+		StepID: uuid.NewString(),
+	}
+	engine.agentSteps.scopeID = scopeID
+	engine.agentSteps.current = &activeAgentStep{
+		scopeID: scopeID,
+		origin:  origin,
+		phase:   agentStepProviderRunning,
+	}
+	return engine
+}
+
+func submitManualCompactionRunnerCommand(
+	t *testing.T,
+	engine *Engine,
+	onActive func(),
+) *runtimecommand.Deferred[session.CommitReceipt] {
+	t.Helper()
+	deferred, err := runtimecommand.SubmitBound(
+		engine.lifecycleCtx,
+		engine.runtimeEvents,
+		struct{}{},
+		func(
+			command runtimecommand.Admission,
+			_ struct{},
+			completion runtimecommand.CompletionBinding[session.CommitReceipt],
+		) error {
+			return engine.admitManualCompaction(
+				runtimeEventAdmission{engine: engine, command: command},
+				compactionInstructionsInput{},
+				onActive,
+				completion,
+			)
+		},
+	)
+	if err != nil {
+		t.Fatalf("submit manual compaction: %v", err)
+	}
+	return deferred
+}
+
+func submitManualCompactionRunnerBoundary(
+	t *testing.T,
+	engine *Engine,
+	continueTurn bool,
+) *runtimecommand.Deferred[agentStepBoundaryDecision] {
+	t.Helper()
+	deferred, err := runtimecommand.Submit(
+		engine.lifecycleCtx,
+		engine.runtimeEvents,
+		agentStepBoundaryRequest{continueTurn: continueTurn},
+		engine.admitAgentStepBoundary,
+	)
+	if err != nil {
+		t.Fatalf("submit Agent Step Boundary: %v", err)
+	}
+	return deferred
+}
+
+func submitSelectedManualCompaction(
+	t *testing.T,
+	engine *Engine,
+	scopeID runtimeids.ExecutionScopeID,
+) (
+	*runtimecommand.Deferred[session.CommitReceipt],
+	awaitManualCompactionSelectionDecision,
+	*manualCompactionSelection,
+) {
+	t.Helper()
 	decisionReady := make(chan awaitManualCompactionSelectionDecision, 1)
+	var selected *manualCompactionSelection
 	deferred, err := runtimecommand.SubmitBound(
 		engine.lifecycleCtx,
 		engine.runtimeEvents,
@@ -188,12 +477,12 @@ func TestSelectedManualCompactionRuntimeCloseSettlesCommandAndRetiresRunner(t *t
 			_ struct{},
 			completion runtimecommand.CompletionBinding[session.CommitReceipt],
 		) error {
-			selection := &manualCompactionSelection{
-				id:         "manual-compaction:close",
+			selected = &manualCompactionSelection{
+				id:         "manual-compaction:selected",
 				completion: completion,
 				scopeID:    scopeID,
 			}
-			engine.longBoundary.selected = selection
+			engine.longBoundary.selected = selected
 			decisionReady <- awaitManualCompactionSelectionDecision{
 				Scope:    scopeID,
 				Deferred: completion.Deferred(),
@@ -204,26 +493,7 @@ func TestSelectedManualCompactionRuntimeCloseSettlesCommandAndRetiresRunner(t *t
 	if err != nil {
 		t.Fatalf("submit selected manual command: %v", err)
 	}
-	decision := <-decisionReady
-	if err := engine.ApplyRuntimeCloseUnderAdmission(); err != nil {
-		t.Fatalf("apply runtime close: %v", err)
-	}
-	if _, err := deferred.Await(context.Background()); err != runtimecommand.ErrUnavailable {
-		t.Fatalf("manual command after runtime close = %v, want unavailable", err)
-	}
-	if _, err := decision.Deferred.Await(context.Background()); err != runtimecommand.ErrUnavailable {
-		t.Fatalf("manual Deferred view after runtime close = %v, want unavailable", err)
-	}
-	resolved, err := engine.resolveAgentStepBoundaryDecision(
-		decision,
-		agentStepBoundaryModeStep,
-	)
-	if err != nil {
-		t.Fatalf("runner retirement after runtime close: %v", err)
-	}
-	if _, retire := resolved.(retireAgentTurnDecision); !retire {
-		t.Fatalf("runner decision after runtime close = %T, want retire", resolved)
-	}
+	return deferred, <-decisionReady, selected
 }
 
 type manualCompactionRunnerLifecycle struct {
@@ -295,4 +565,31 @@ func (g manualCompactionRunnerGrant) Release() error {
 		g.releases.Add(1)
 	}
 	return nil
+}
+
+type closingFreshReducerLifecycle struct {
+	*manualCompactionRunnerLifecycle
+	started chan struct{}
+}
+
+func (l *closingFreshReducerLifecycle) TryAcquireAgentStepReducerBoundary(
+	ctx context.Context,
+	_ runtimeids.ExecutionScopeID,
+) (AgentStepReducerGrant, bool, error) {
+	close(l.started)
+	<-ctx.Done()
+	return nil, false, serverapi.ErrRuntimeUnavailable
+}
+
+type worktreeClaimedManualCompactionLifecycle struct {
+	*manualCompactionRunnerLifecycle
+	claimArbitrations atomic.Int32
+}
+
+func (l *worktreeClaimedManualCompactionLifecycle) TryAcquireAgentStepReducerBoundary(
+	context.Context,
+	runtimeids.ExecutionScopeID,
+) (AgentStepReducerGrant, bool, error) {
+	l.claimArbitrations.Add(1)
+	return nil, false, nil
 }
