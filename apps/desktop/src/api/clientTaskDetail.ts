@@ -34,15 +34,15 @@ export async function getTask(transport: RpcTransport, taskID: string): Promise<
 export async function listTaskActivity(
   transport: RpcTransport,
   taskID: string,
-  pageToken: string,
+  offset: number,
 ): Promise<ActivityPage> {
   const response = parseRpcResponse(
     "workflow.task.activity.list",
     activityPageSchema,
     await transport.call("workflow.task.activity.list", {
       task_id: taskID,
-      page_size: 40,
-      page_token: pageToken,
+      offset,
+      limit: 50,
     }),
   );
   requireTaskBoundItems(taskID, response.items);
@@ -60,7 +60,7 @@ export async function listTaskComments(
     await transport.call("workflow.task.comment.list", {
       task_id: taskID,
       offset,
-      limit: 40,
+      limit: 50,
     }),
   );
 }

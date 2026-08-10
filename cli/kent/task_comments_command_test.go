@@ -14,7 +14,7 @@ const taskCommentListCommandTestTaskID = "task-1"
 type taskCommentListCommandRemote struct {
 	apicontract.WorkflowService
 
-	listRequests []serverapi.WorkflowTaskCommentListRequest
+	listRequests []serverapi.WorkflowTaskOffsetPageRequest
 	responses    map[int]serverapi.WorkflowTaskCommentListResponse
 }
 
@@ -26,7 +26,7 @@ func (r *taskCommentListCommandRemote) GetWorkflowTask(_ context.Context, req se
 	}, nil
 }
 
-func (r *taskCommentListCommandRemote) ListWorkflowTaskComments(_ context.Context, req serverapi.WorkflowTaskCommentListRequest) (serverapi.WorkflowTaskCommentListResponse, error) {
+func (r *taskCommentListCommandRemote) ListWorkflowTaskComments(_ context.Context, req serverapi.WorkflowTaskOffsetPageRequest) (serverapi.WorkflowTaskCommentListResponse, error) {
 	r.listRequests = append(r.listRequests, req)
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowTaskCommentListResponse{}, err
@@ -47,11 +47,15 @@ func TestTaskCommentListUsesOffsetWindowsAndRoutesContinuationToStderr(t *testin
 	remote := &taskCommentListCommandRemote{
 		responses: map[int]serverapi.WorkflowTaskCommentListResponse{
 			0: {
-				Comments:   []serverapi.WorkflowTaskComment{{ID: "comment-1", TaskID: taskCommentListCommandTestTaskID, Author: "user", Body: "first", CreatedAtUnixMs: 1}},
-				NextOffset: &nextOffset,
+				WorkflowOffsetPage: serverapi.WorkflowOffsetPage[serverapi.WorkflowTaskComment]{
+					Items:      []serverapi.WorkflowTaskComment{{ID: "comment-1", TaskID: taskCommentListCommandTestTaskID, Author: "user", Body: "first", CreatedAtUnixMs: 1}},
+					NextOffset: &nextOffset,
+				},
 			},
 			1: {
-				Comments: []serverapi.WorkflowTaskComment{{ID: "comment-2", TaskID: taskCommentListCommandTestTaskID, Author: "user", Body: "continued", CreatedAtUnixMs: 2}},
+				WorkflowOffsetPage: serverapi.WorkflowOffsetPage[serverapi.WorkflowTaskComment]{
+					Items: []serverapi.WorkflowTaskComment{{ID: "comment-2", TaskID: taskCommentListCommandTestTaskID, Author: "user", Body: "continued", CreatedAtUnixMs: 2}},
+				},
 			},
 			3: {},
 		},

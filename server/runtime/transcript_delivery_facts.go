@@ -233,8 +233,13 @@ func locateTranscriptCommittedRowFacts(facts []TranscriptCommittedRowFact) []Tra
 func TranscriptCommittedRowFactsFromSnapshot(snapshot ChatSnapshot) []TranscriptCommittedRowFact {
 	facts := make([]TranscriptCommittedRowFact, 0, len(snapshot.Entries))
 	for _, entry := range snapshot.Entries {
-		if strings.TrimSpace(entry.Role) == "assistant" &&
-			transcript.IsNoopFinalText(entry.Text) {
+		content := entry.Text
+		if transcript.IsBlankAssistantFinal(transcript.AssistantFinalCandidate{
+			IsAssistant:    entry.Role == string(llm.RoleAssistant),
+			IsFinal:        entry.Phase == llm.MessagePhaseFinal,
+			HasMessageType: entry.MessageType != "",
+			Content:        &content,
+		}) {
 			continue
 		}
 		fact, ok := transcriptCommittedRowFactFromChatEntry(entry)
@@ -310,7 +315,7 @@ func transcriptCommittedRowFactsFromMessageUnlocated(msg llm.Message, streamID *
 		return []TranscriptCommittedRowFact{{Kind: TranscriptCommittedRowFactUser, Visibility: transcript.EntryVisibilityOngoing, User: &TranscriptUserRowFact{Text: *msg.Content}}}
 	case llm.RoleAssistant:
 		out := make([]TranscriptCommittedRowFact, 0, 1+len(msg.ToolCalls))
-		if msg.Content != nil && strings.TrimSpace(*msg.Content) != "" && !isNoopFinalAnswer(msg) {
+		if msg.Content != nil && strings.TrimSpace(*msg.Content) != "" && !isBlankFinalAnswer(msg) {
 			phase, _ := textutil.OptionalValue(msg.Phase)
 			out = append(out, TranscriptCommittedRowFact{Kind: TranscriptCommittedRowFactAssistant, Visibility: assistantTranscriptVisibility(phase), Assistant: &TranscriptAssistantRowFact{
 				Text:     *msg.Content,

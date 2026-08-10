@@ -13,6 +13,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 func TestRuntimeClientMainViewDoesNotRefreshCachedSnapshotBehindUIBack(t *testing.T) {
@@ -130,7 +131,7 @@ func (c *reconnectRetryRuntimeControlClient) SubmitUserTurn(_ context.Context, r
 	if c.submitCalls == 1 && c.firstSubmitErr != nil {
 		return serverapi.RuntimeSubmitUserTurnResponse{}, c.firstSubmitErr
 	}
-	return serverapi.RuntimeSubmitUserTurnResponse{Message: "recovered"}, nil
+	return serverapi.RuntimeSubmitUserTurnResponse{Message: textutil.Value("recovered")}, nil
 }
 
 func (c *reconnectRetryRuntimeControlClient) SubmitUserShellCommand(context.Context, serverapi.RuntimeSubmitUserShellCommandRequest) error {
@@ -453,7 +454,10 @@ func TestRuntimeClientSubmitUserMessageRecoversRuntimeUnavailableAndReusesReques
 		PreSubmitCompactionOperationRef: newRuntimeOperationRef(clientui.RuntimeOperationKindPreSubmitCompact),
 		Input:                           runtimeinput.Text("hello"),
 	})
-	message := submission.Message
+	message := ""
+	if submission.Message != nil {
+		message = *submission.Message
+	}
 	if err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
 	}
@@ -502,7 +506,10 @@ func TestRuntimeClientSubmitUserMessageRecoversRuntimeUnavailable(t *testing.T) 
 		PreSubmitCompactionOperationRef: newRuntimeOperationRef(clientui.RuntimeOperationKindPreSubmitCompact),
 		Input:                           runtimeinput.Text("hello"),
 	})
-	message := submission.Message
+	message := ""
+	if submission.Message != nil {
+		message = *submission.Message
+	}
 	if err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
 	}
@@ -689,7 +696,10 @@ func TestRuntimeClientReconnectWarningFailureDoesNotBlockSubmit(t *testing.T) {
 		PreSubmitCompactionOperationRef: newRuntimeOperationRef(clientui.RuntimeOperationKindPreSubmitCompact),
 		Input:                           runtimeinput.Text("hello"),
 	})
-	message := submission.Message
+	message := ""
+	if submission.Message != nil {
+		message = *submission.Message
+	}
 	if err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
 	}

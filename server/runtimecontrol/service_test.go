@@ -564,6 +564,29 @@ func finalResponseRuntimeControlClient() *runtimeControlFakeClient {
 	}}}
 }
 
+func TestServiceSubmitUserTurnPreservesBlankFinalPresence(t *testing.T) {
+	client := &runtimeControlFakeClient{responses: []llm.Response{{
+		Assistant: llm.Message{
+			Role:    llm.RoleAssistant,
+			Content: textutil.Value(""),
+			Phase:   textutil.Value(llm.MessagePhaseFinal),
+		},
+		Usage: llm.Usage{WindowTokens: 200000},
+	}}}
+	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{Model: "gpt-5"})
+
+	resp, err := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "blank-final", "finish silently"))
+	if err != nil {
+		t.Fatalf("SubmitUserTurn: %v", err)
+	}
+	if resp.Message == nil || *resp.Message != "" {
+		t.Fatalf("blank final response message = %v, want present empty message", resp.Message)
+	}
+	if resp.ResultKind != clientui.UserTurnResultKindSilentFinal {
+		t.Fatalf("blank final response result kind = %v, want silent final", resp.ResultKind)
+	}
+}
+
 func (c *runtimeControlFakeClient) Generate(context.Context, llm.Request) (llm.Response, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -696,7 +719,7 @@ func TestServiceCanceledAskQuestionTurnReleasesExecutionForNextUserTurn(t *testi
 	if err != nil {
 		t.Fatalf("submit next user turn after canceled ask_question: %v", err)
 	}
-	if next.Message != "next turn completed" {
+	if next.Message == nil || *next.Message != "next turn completed" {
 		t.Fatalf("next user turn response = %+v, want completed response", next)
 	}
 	if engine.HasActiveLiveRunGroup() {
@@ -1626,8 +1649,8 @@ func TestServiceSubmitUserTurnDedupesSuccessfulRetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubmitUserTurn retry: %v", err)
 	}
-	if first.Message != "done" || second.Message != "done" {
-		t.Fatalf("responses = (%q, %q), want both done", first.Message, second.Message)
+	if first.Message == nil || *first.Message != "done" || second.Message == nil || *second.Message != "done" {
+		t.Fatalf("responses = (%v, %v), want both done", first.Message, second.Message)
 	}
 	if client.calls != 1 {
 		t.Fatalf("generate call count = %d, want 1", client.calls)
@@ -1653,8 +1676,8 @@ func TestServiceSubmitUserTurnPromptCommandUsesExpandedExecutionAndCanonicalHist
 	if err != nil {
 		t.Fatalf("SubmitUserTurn: %v", err)
 	}
-	if resp.Message != "done" {
-		t.Fatalf("prompt command response message = %q, want assistant result", resp.Message)
+	if resp.Message == nil || *resp.Message != "done" {
+		t.Fatalf("prompt command response message = %v, want assistant result", resp.Message)
 	}
 	if resolver.calls != 1 {
 		t.Fatalf("resolver calls = %d, want 1", resolver.calls)

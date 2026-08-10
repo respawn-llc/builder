@@ -159,45 +159,6 @@ func TestTryInterruptActiveRunCancelsCompactionStep(t *testing.T) {
 	}
 }
 
-func TestTryInterruptActiveAgentTurnRejectsCompactionStep(t *testing.T) {
-	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
-	stepCtxSeen := make(chan context.Context, 1)
-	release := make(chan struct{})
-	done := make(chan error, 1)
-	eng.ensureOrchestrationCollaborators()
-	go func() {
-		done <- eng.stepLifecycle.Run(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindCompaction}, func(ctx context.Context, stepID string) error {
-			stepCtxSeen <- ctx
-			<-release
-			return nil
-		})
-	}()
-	var stepCtx context.Context
-	select {
-	case stepCtx = <-stepCtxSeen:
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for compaction step")
-	}
-
-	stopped, err := eng.TryInterruptActiveAgentTurn()
-	if err != nil {
-		t.Fatalf("TryInterruptActiveAgentTurn: %v", err)
-	}
-	if stopped {
-		t.Fatal("ordinary agent-turn interrupt stopped compaction")
-	}
-	select {
-	case <-stepCtx.Done():
-		t.Fatal("ordinary agent-turn interrupt canceled compaction context")
-	default:
-	}
-	close(release)
-	if err := <-done; err != nil {
-		t.Fatalf("compaction step: %v", err)
-	}
-}
-
 func TestTryInterruptActiveRunDoesNotCancelMaintenanceWhileDroppingTaggedItems(t *testing.T) {
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})

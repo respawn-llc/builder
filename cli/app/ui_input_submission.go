@@ -137,8 +137,14 @@ func (c uiInputController) submitCmd(
 			}
 			return newSubmitDoneMsg(token, "", text, err)
 		}
-		done := newSubmitDoneMsg(token, submission.Message, text, nil)
+		message := ""
+		if submission.Message != nil {
+			message = *submission.Message
+		}
+		done := newSubmitDoneMsg(token, message, text, nil)
 		done.queued = submission.Queued
+		resultKind := submission.ResultKind
+		done.resultKind = &resultKind
 		return done
 	}
 }
@@ -336,7 +342,9 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 	if msg.queued.ID != "" {
 		m.registerSteeredQueuedUserMessage(msg.queued)
 	}
-	if msg.silentFinal && m.turnQueueHook != nil {
+	if msg.resultKind != nil &&
+		*msg.resultKind == clientui.UserTurnResultKindSilentFinal &&
+		m.turnQueueHook != nil {
 		m.turnQueueHook.OnTurnQueueAborted()
 	}
 	m.conversationFreshness = clientui.ConversationFreshnessEstablished
