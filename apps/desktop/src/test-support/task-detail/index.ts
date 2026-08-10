@@ -299,8 +299,7 @@ export const activityResponse = {
       },
     },
   ],
-  next_page_token: "",
-  generated_at_unix_ms: 3,
+  next_offset: null,
 };
 
 export const pendingAskResponse = {
@@ -328,7 +327,7 @@ export const commentAddResponse = {
 };
 
 export const commentListResponse = {
-  comments: [
+  items: [
     {
       id: "comment-1",
       task_id: "task-1",
@@ -338,11 +337,12 @@ export const commentListResponse = {
       updated_at_unix_ms: 1,
     },
   ],
-  next_page_token: "",
+  next_offset: null,
+  total_count: 1,
 };
 
 export const firstCommentListResponse = {
-  comments: [
+  items: [
     {
       id: "comment-page-1",
       task_id: "task-1",
@@ -352,11 +352,12 @@ export const firstCommentListResponse = {
       updated_at_unix_ms: 5,
     },
   ],
-  next_page_token: "cursor-2",
+  next_offset: 50,
+  total_count: 2,
 };
 
 export const secondCommentListResponse = {
-  comments: [
+  items: [
     {
       id: "comment-page-2",
       task_id: "task-1",
@@ -366,7 +367,8 @@ export const secondCommentListResponse = {
       updated_at_unix_ms: 6,
     },
   ],
-  next_page_token: "",
+  next_offset: null,
+  total_count: 2,
 };
 
 export const taskUpdateResponse = {
@@ -428,6 +430,7 @@ export function createTaskDetailTestServices(
 
 export type MountedTaskDetailServices = TestAppServices &
   Readonly<{
+    rerenderTaskDetail(taskID: string, retainedState?: unknown): void;
     unmountTaskDetail(): void;
   }>;
 
@@ -440,7 +443,7 @@ export function mountTaskDetailSurface(
     history: createMemoryHistory({ initialEntries: [options.path ?? "/tasks/task-1"] }),
     routeTree: createRootRoute(),
   });
-  const mounted = render(
+  const renderSurface = (taskID: string, retainedState: unknown) =>
     createElement(RouterContextProvider, {
       router,
       children: createElement(SidebarRootContext.Provider, {
@@ -455,9 +458,9 @@ export function mountTaskDetailSurface(
                   onDeleteDismiss: options.onDeleteDismiss ?? (async () => ({ kind: "accepted" })),
                   onMutated: options.onMutated,
                   openSidebar: options.openSidebar,
-                  retainedState: options.retainedState,
+                  retainedState,
                   sidebarMode: options.sidebarMode,
-                  taskId: "task-1",
+                  taskId: taskID,
                 }
               : {
                   enabled: true,
@@ -465,24 +468,27 @@ export function mountTaskDetailSurface(
                   navigator: options.navigator,
                   onMutated: options.onMutated,
                   openSidebar: options.openSidebar,
-                  retainedState: options.retainedState,
+                  retainedState,
                   sidebarDestination: {
                     kind: "taskDetail",
-                    taskID: "task-1",
+                    taskID,
                     ...(options.sidebarMode === undefined ? {} : { mode: options.sidebarMode }),
                     ...(options.onMutated === undefined ? {} : { onMutated: options.onMutated }),
                   },
                   sidebarMode: options.sidebarMode,
-                  taskId: "task-1",
+                  taskId: taskID,
                 },
           ),
           services,
         }),
       }),
-    }),
-  );
+    });
+  const mounted = render(renderSurface("task-1", options.retainedState));
   return {
     ...services,
+    rerenderTaskDetail: (taskID, retainedState) => {
+      mounted.rerender(renderSurface(taskID, retainedState));
+    },
     unmountTaskDetail: mounted.unmount,
   };
 }

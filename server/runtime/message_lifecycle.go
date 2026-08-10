@@ -193,8 +193,8 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 				return fmt.Errorf("restore history replacement mode: %w", err)
 			}
 			if replacement.LastCommittedAssistantFinalAnswer != nil {
-				e.transcriptRuntimeState().SeedLastCommittedAssistantFinalAnswerIfEmpty(
-					*replacement.LastCommittedAssistantFinalAnswer,
+				e.transcriptRuntimeState().SeedLastCommittedAssistantFinalAnswerIfAbsent(
+					replacement.LastCommittedAssistantFinalAnswer,
 				)
 			}
 			if replacement.CompactionNumber != nil && *replacement.CompactionNumber > 0 {

@@ -281,7 +281,7 @@ func TestServiceSubmitUserTurnRunsParentOwnedPreSubmitCompaction(t *testing.T) {
 		t.Fatalf("pre-submit compaction precondition = (%t, %v), usage=%+v", shouldCompact, compactErr, engine.ContextUsage())
 	}
 	resp, err := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "parent-compaction", "after compaction"))
-	if err != nil || !resp.Compacted || resp.Message != "done" {
+	if err != nil || !resp.Compacted || resp.Message == nil || *resp.Message != "done" {
 		t.Fatalf("SubmitUserTurn = (%+v, %v), usage=%+v, want compacted assistant response", resp, err, engine.ContextUsage())
 	}
 	if client.compactionCalls != 1 ||

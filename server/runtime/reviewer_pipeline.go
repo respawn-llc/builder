@@ -71,7 +71,7 @@ func (r *defaultReviewerPipeline) RunFollowUp(ctx context.Context, stepID string
 	if err != nil {
 		return reviewerFollowUpResult{}, fmt.Errorf("run Reviewer follow-up: %w", err)
 	}
-	if followUp.FinalAnswer == nil || isNoopFinalAnswer(*followUp.FinalAnswer) {
+	if followUp.FinalAnswer == nil && !followUp.SilentFinal {
 		return reviewerFollowUpResult{}, errors.New("Reviewer follow-up returned no answer")
 	}
 	status := ReviewerStatus{
@@ -80,7 +80,10 @@ func (r *defaultReviewerPipeline) RunFollowUp(ctx context.Context, stepID string
 		CacheHitPercent:       reviewerResult.CacheHitPercent,
 		HasCacheHitPercentage: reviewerResult.HasCacheHitPercentage,
 	}
-	finalAnswer := *followUp.FinalAnswer
+	finalAnswer := original
+	if followUp.FinalAnswer != nil {
+		finalAnswer = *followUp.FinalAnswer
+	}
 	visibility := transcript.EntryVisibilityOngoingCollapsed
 	if e.cfg.Reviewer.VerboseOutput {
 		visibility = transcript.EntryVisibilityOngoing
@@ -93,7 +96,7 @@ func (r *defaultReviewerPipeline) RunFollowUp(ctx context.Context, stepID string
 		Completion:                 &status,
 		AssistantCommittedStart:    followUp.AssistantCommittedStart,
 		AssistantCommittedStartSet: followUp.AssistantCommittedStartSet,
-		AssistantEventEmitted:      true,
+		AssistantEventEmitted:      !followUp.SilentFinal,
 	}, nil
 }
 

@@ -55,9 +55,6 @@ func sanitizeReviewerSuggestions(in []string) []string {
 		if trimmed == "" {
 			continue
 		}
-		if strings.EqualFold(trimmed, reviewerNoopToken) {
-			continue
-		}
 		out = append(out, suggestion)
 	}
 	if len(out) == 0 {
@@ -357,9 +354,7 @@ func formatReviewerDeveloperInstruction(suggestions []string) string {
 		b.WriteString(suggestion)
 		b.WriteString("\n")
 	}
-	b.WriteString("\nIf no suggestions are applicable and you don't want to say anything to the user (not the supervisor!), respond with exactly ")
-	b.WriteString(reviewerNoopToken)
-	b.WriteString(" and no additional text. Otherwise, address the suggestions now. The supervisor can't hear you, your response will be to the user.")
+	b.WriteString("\nIf no suggestions are applicable and you don't want to say anything to the user (not the supervisor!), respond with an empty final answer and no additional text. Otherwise, address the suggestions now. The supervisor can't hear you, your response will be to the user.")
 	return b.String()
 }
 
