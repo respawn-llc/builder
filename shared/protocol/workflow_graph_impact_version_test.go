@@ -2,6 +2,7 @@ package protocol_test
 
 import (
 	"encoding/json"
+	"strconv"
 	"testing"
 
 	"core/shared/protocol"
@@ -9,8 +10,12 @@ import (
 )
 
 func TestWorkflowGraphImpactHardCutoverChangesProtocolFixture(t *testing.T) {
-	if protocol.Version == "101" {
-		t.Fatal("Workflow graph impact retained the pre-contract protocol version")
+	version, err := strconv.Atoi(protocol.Version)
+	if err != nil {
+		t.Fatalf("parse protocol version %q: %v", protocol.Version, err)
+	}
+	if version <= 104 {
+		t.Fatalf("Workflow graph impact protocol version = %d, want newer than 104", version)
 	}
 	response := protocol.NewSuccessResponse("request", serverapi.WorkflowGraphSavePreviewResponse{
 		Changed: true,

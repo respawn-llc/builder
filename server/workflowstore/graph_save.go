@@ -455,9 +455,7 @@ func prepareWorkflowGraphSave(workflowID runtimeids.WorkflowID, displayName stri
 			return preparedWorkflowGraphSave{}, workflow.Definition{}, errors.New("workflow node group key is required")
 		}
 		group.DisplayName = strings.TrimSpace(group.DisplayName)
-		if group.SortOrder == 0 {
-			group.SortOrder = int64(i * 100)
-		}
+		group.SortOrder = int64(i * 100)
 		if groupsByID[group.ID] {
 			return preparedWorkflowGraphSave{}, workflow.Definition{}, fmt.Errorf("duplicate workflow node group id %q", group.ID)
 		}
@@ -708,6 +706,7 @@ type comparableWorkflowGraphSaveNodeGroup struct {
 	WorkflowID  runtimeids.WorkflowID
 	Key         workflow.ModelKey
 	DisplayName string
+	SortOrder   int64
 }
 
 type comparableWorkflowGraphSaveNode struct {
@@ -765,8 +764,8 @@ func workflowGraphSaveComparable(prepared preparedWorkflowGraphSave) comparableW
 		TransitionGroups: make([]comparableWorkflowGraphSaveTransitionGroup, 0, len(prepared.transitionGroups)),
 		Edges:            make([]comparableWorkflowGraphSaveEdge, 0, len(prepared.edges)),
 	}
-	for _, group := range prepared.nodeGroups {
-		out.NodeGroups = append(out.NodeGroups, comparableWorkflowGraphSaveNodeGroup{ID: group.ID, WorkflowID: group.WorkflowID, Key: group.Key, DisplayName: strings.TrimSpace(group.DisplayName)})
+	for index, group := range prepared.nodeGroups {
+		out.NodeGroups = append(out.NodeGroups, comparableWorkflowGraphSaveNodeGroup{ID: group.ID, WorkflowID: group.WorkflowID, Key: group.Key, DisplayName: strings.TrimSpace(group.DisplayName), SortOrder: int64(index * 100)})
 	}
 	for index, node := range prepared.nodes {
 		out.Nodes = append(out.Nodes, comparableWorkflowGraphSaveNode{ID: node.ID, WorkflowID: node.WorkflowID, Key: node.Key, Kind: node.Kind, DisplayName: strings.TrimSpace(node.DisplayName), GroupID: strings.TrimSpace(node.GroupID), SubagentRole: strings.TrimSpace(node.SubagentRole), CompletionMode: nodeCompletionMode(node), ScriptPath: strings.TrimSpace(node.ScriptPath), JoinInputProviders: node.JoinInputProviders, SortOrder: int64(index * 100)})

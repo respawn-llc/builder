@@ -1472,6 +1472,32 @@ func TestWorkflowGraphSaveKeepsAuthoredCollectionOrderSignificant(t *testing.T) 
 	}
 }
 
+func TestWorkflowGraphSaveDerivesNodeGroupSortOrderFromAuthoredCollection(t *testing.T) {
+	f := newGraphSaveFixture(t, createValidWorkflow)
+	for _, group := range []NodeGroupRecord{
+		{ID: "group-first-" + f.workflowID.String(), WorkflowID: f.workflowID, Key: "first", DisplayName: "First", SortOrder: 50},
+		{ID: "group-second-" + f.workflowID.String(), WorkflowID: f.workflowID, Key: "second", DisplayName: "Second", SortOrder: 150},
+	} {
+		if _, _, err := f.store.AddNodeGroup(f.ctx, group); err != nil {
+			t.Fatalf("AddNodeGroup %q: %v", group.ID, err)
+		}
+	}
+	current, record := f.current(t)
+	req := f.request(record.Version, false, current)
+	req.NodeGroups[0], req.NodeGroups[1] = req.NodeGroups[1], req.NodeGroups[0]
+
+	plan, err := f.store.prepareWorkflowGraphSave(f.ctx, req)
+	if err != nil {
+		t.Fatalf("prepareWorkflowGraphSave: %v", err)
+	}
+	if !plan.GraphChanged {
+		t.Fatal("reordered Node Groups reported an unchanged graph")
+	}
+	if got := []int64{plan.Prepared.nodeGroups[0].SortOrder, plan.Prepared.nodeGroups[1].SortOrder}; !slices.Equal(got, []int64{0, 100}) {
+		t.Fatalf("prepared Node Group sort order = %v, want authored collection order", got)
+	}
+}
+
 func TestWorkflowGraphSaveRejectsStaleVersion(t *testing.T) {
 	f := newGraphSaveFixture(t, createValidWorkflow)
 	if err := f.store.UpdateWorkflowInfo(f.ctx, f.workflowID, "Remote rename", "Remote description"); err != nil {
