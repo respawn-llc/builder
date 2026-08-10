@@ -7,23 +7,18 @@ const batchRequest = {
   sessionID,
   stepID,
   entries: [
-    {
-      kind: "question" as const,
-      promptID: "question-1",
-      selectedOptionNumber: 2,
-      freeform: "because",
-    },
-    { kind: "approval" as const, promptID: "approval-1", decision: "allow_once" as const, commentary: null },
-    { kind: "declined" as const, promptID: "declined-1" },
+    { kind: "question" as const, promptID: "q", selectedOptionNumber: 2, freeform: "because" },
+    { kind: "approval" as const, promptID: "a", decision: "allow_once" as const, commentary: null },
+    { kind: "declined" as const, promptID: "d" },
   ],
 } as const;
 
 describe("ApiClient prompt answer batches", () => {
   it("encodes Question, Approval, and Declined entries and parses identity-keyed outcomes", async () => {
     const results = [
-      { prompt_id: "question-1", outcome: "resolved" },
-      { prompt_id: "approval-1", outcome: "skipped" },
-      { prompt_id: "declined-1", outcome: "resolved" },
+      { prompt_id: "q", outcome: "resolved" },
+      { prompt_id: "a", outcome: "skipped" },
+      { prompt_id: "d", outcome: "resolved" },
     ];
     const transport = new FakeRpcTransport([{ method: "prompt.answerBatch", result: { results } }]);
     const client = new ApiClient(transport);
@@ -39,23 +34,17 @@ describe("ApiClient prompt answer batches", () => {
           session_id: sessionID,
           step_id: stepID,
           entries: [
-            {
-              prompt_id: "question-1",
-              question_answer: { selected_option_number: 2, freeform: "because" },
-            },
-            {
-              prompt_id: "approval-1",
-              approval_answer: { decision: "allow_once" },
-            },
-            { prompt_id: "declined-1", declined: {} },
+            { prompt_id: "q", question_answer: { selected_option_number: 2, freeform: "because" } },
+            { prompt_id: "a", approval_answer: { decision: "allow_once" } },
+            { prompt_id: "d", declined: {} },
           ],
         },
       },
     ]);
     expect(response.results).toEqual([
-      { promptID: "question-1", outcome: "resolved" },
-      { promptID: "approval-1", outcome: "skipped" },
-      { promptID: "declined-1", outcome: "resolved" },
+      { promptID: "q", outcome: "resolved" },
+      { promptID: "a", outcome: "skipped" },
+      { promptID: "d", outcome: "resolved" },
     ]);
   });
 
@@ -64,8 +53,8 @@ describe("ApiClient prompt answer batches", () => {
     { results: [{ prompt_id: "foreign", outcome: "resolved" }] },
     {
       results: [
-        { prompt_id: "question-1", outcome: "resolved" },
-        { prompt_id: "question-1", outcome: "skipped" },
+        { prompt_id: "q", outcome: "resolved" },
+        { prompt_id: "q", outcome: "skipped" },
       ],
     },
   ])("rejects malformed result identity sets", async (result) => {

@@ -1,8 +1,15 @@
 package serverapi
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestPromptFollowUpContractCarriesOnlyFullIdentityAndTerminalOutcome(t *testing.T) {
+	eventType := reflect.TypeOf(PromptFollowUpEvent{})
+	if eventType.NumField() != 1 || eventType.Field(0).Name != "Kind" || eventType.Field(0).Type != reflect.TypeOf(PromptFollowUpEventKind("")) {
+		t.Fatalf("follow-up event fields = %+v, want only typed Kind", reflect.VisibleFields(eventType))
+	}
 	if err := (PromptFollowUpWatchRequest{
 		SessionID: mustPromptBatchSessionID(t), StepID: mustPromptBatchStepID(t), PromptID: "prompt-1",
 	}).Validate(); err != nil {
