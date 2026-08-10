@@ -464,6 +464,17 @@ func runtimeControlExactExecution(t *testing.T) *workflowruntime.CurrentNodeExec
 }
 
 func newRuntimeControlTestService(t *testing.T, client llm.Client, registry *tools.Registry, cfg runtime.Config, opts ...session.StoreOption) (*session.Store, *runtime.Engine, *Service) {
+	return newRuntimeControlTestServiceWithEventFeed(t, client, registry, cfg, nil, opts...)
+}
+
+func newRuntimeControlTestServiceWithEventFeed(
+	t *testing.T,
+	client llm.Client,
+	registry *tools.Registry,
+	cfg runtime.Config,
+	eventFeed sessionruntime.AgentResourceEventFeed,
+	opts ...session.StoreOption,
+) (*session.Store, *runtime.Engine, *Service) {
 	t.Helper()
 	store, _ := newRuntimeControlTestEngine(t, client, registry, cfg, opts...)
 	if client == nil {
@@ -516,6 +527,7 @@ func newRuntimeControlTestService(t *testing.T, client llm.Client, registry *too
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
 		PersistenceRoot: t.TempDir(),
 		StoreOptions:    append(runtimeControlTestSessionPersistence.Options(), opts...),
+		EventFeed:       eventFeed,
 	})
 	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
 	if err != nil {
@@ -2367,7 +2379,13 @@ func TestServiceInterruptDiscardsPendingSteeringBeforeStoppingActiveRun(t *testi
 		ID:      toolspec.ToolExecCommand,
 		Handler: fakeShellHandler{},
 	})
-	store, engine, service := newRuntimeControlTestService(t, client, registry, runtime.Config{})
+	store, engine, service := newRuntimeControlTestServiceWithEventFeed(
+		t,
+		client,
+		registry,
+		runtime.Config{},
+		func(runtimeids.SessionResourceRef, runtime.Event) {},
+	)
 	activeReq := runtimeControlUserTurnRequest(store, "active-turn", "start")
 	submitDone := make(chan error, 1)
 	go func() {

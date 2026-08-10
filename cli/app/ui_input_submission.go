@@ -232,6 +232,12 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 		if m.turnQueueHook != nil {
 			m.turnQueueHook.OnTurnQueueAborted()
 		}
+		if isRuntimeOperationInterrupted(msg.err) && m.hasPendingInterrupt() {
+			m.activity = uiActivityInterrupted
+			m.logf("step.interrupted")
+			m.layout().syncViewport()
+			return m, m.interruptedStatusNoticeCmd()
+		}
 		restoreInjectedCmd := tea.Cmd(nil)
 		if submitOrigin != activeSubmitOriginQueued {
 			restoreInjectedCmd = c.restorePendingInjectedIntoInput()

@@ -78,6 +78,7 @@ type uiInputFeatureState struct {
 	injectedQueue               []injectedRuntimeQueueItem
 	injectedQueueToken          uint64
 	pendingInputSubmissionOrder uint64
+	interruptedQueueEventIDs    map[string]struct{}
 	interruptLifecycle          uiInterruptLifecycle
 	currentRunID                string
 	currentStepID               string

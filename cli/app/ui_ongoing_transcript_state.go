@@ -215,6 +215,7 @@ func (m *uiModel) applyTranscriptSessionIdentity(identity clientui.TranscriptSes
 	if previousSessionID == "" || previousSessionID == nextSessionID {
 		return titleCmd
 	}
+	m.interruptedQueueEventIDs = nil
 	promptCmd := m.reconcileTranscriptPrompts(nil)
 	rollbackCmd := m.discardRollbackStateForSessionReplacement()
 	cancelCmd := m.cancelPendingDetailTranscriptRequest()
@@ -250,6 +251,15 @@ func (m *uiModel) applyTranscriptUserMessageFlushed(flushed clientui.TranscriptU
 }
 
 func (m *uiModel) applyTranscriptQueuedMessageState(state clientui.TranscriptQueuedMessageState) tea.Cmd {
+	if state.Status == clientui.QueuedUserMessageFailed &&
+		state.FailureReason != nil &&
+		*state.FailureReason == clientui.QueuedUserMessageFailureStopped &&
+		m.hasPendingInterrupt() {
+		return m.acknowledgePendingInterrupt()
+	}
+	if m.consumeInterruptedQueueEvent(state) {
+		return nil
+	}
 	queueItemID := state.QueueItemID
 	ids := runtimeOperationIdentityStrings([]clientui.RuntimeOperationRef{{
 		Kind:            clientui.RuntimeOperationKindQueuedMessage,
@@ -282,6 +292,22 @@ func (m *uiModel) applyTranscriptQueuedMessageState(state clientui.TranscriptQue
 		uiStatusNoticeReplace,
 		"",
 	))
+}
+
+func (m *uiModel) consumeInterruptedQueueEvent(state clientui.TranscriptQueuedMessageState) bool {
+	if m == nil || len(m.interruptedQueueEventIDs) == 0 {
+		return false
+	}
+	clientRequestID := state.ClientRequestID.String()
+	queueItemID := state.QueueItemID.String()
+	_, clientMatch := m.interruptedQueueEventIDs[clientRequestID]
+	_, queueMatch := m.interruptedQueueEventIDs[queueItemID]
+	if !clientMatch && !queueMatch {
+		return false
+	}
+	m.rememberInterruptedQueueEventID(clientRequestID)
+	m.rememberInterruptedQueueEventID(queueItemID)
+	return true
 }
 
 func (m *uiModel) reconcileTranscriptQueuedMessages(states []clientui.TranscriptQueuedMessageState) {

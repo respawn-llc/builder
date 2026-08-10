@@ -82,8 +82,8 @@ func newSessionViewRuntimeFixture(t *testing.T, store *session.Store, client llm
 		PersistenceRoot:   t.TempDir(),
 		StoreOptions:      sessionViewTestPersistence.Options(),
 		ResourceLifecycle: activity,
-		EventFeed: func(resource sessionruntime.AgentResourceDescriptor, event runtime.Event) {
-			activity.PublishAuthorityRuntimeEvent(resource.Ref, event)
+		EventFeed: func(resource runtimeids.SessionResourceRef, event runtime.Event) {
+			activity.PublishAuthorityRuntimeEvent(resource, event)
 		},
 	})
 	if _, err := authority.OpenRuntime(t.Context(), sessionruntime.RuntimeOpenRequest{

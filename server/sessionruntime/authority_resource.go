@@ -44,7 +44,7 @@ type AgentResourceDescriptor struct {
 	State AgentResourceState
 }
 
-type AgentResourceEventFeed func(AgentResourceDescriptor, runtime.Event)
+type AgentResourceEventFeed func(runtimeids.SessionResourceRef, runtime.Event)
 
 type AgentResourceRetainer func() (io.Closer, error)
 

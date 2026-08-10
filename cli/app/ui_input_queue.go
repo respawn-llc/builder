@@ -309,13 +309,22 @@ type interruptedInputDraftPart struct {
 	text            string
 }
 
-func (c uiInputController) restoreInterruptedInputsIntoComposer() {
+func (c uiInputController) restoreInterruptedInputsIntoComposer() tea.Cmd {
 	m := c.model
 	if m == nil {
-		return
+		return nil
 	}
 	draft := m.mainEditor.Text()
 	parts := make([]interruptedInputDraftPart, 0, len(m.pendingInjected)+len(m.queued))
+	m.interruptedQueueEventIDs = nil
+	var approvalCmd tea.Cmd
+	for _, item := range m.injectedQueue {
+		m.rememberInterruptedQueueEventID(item.ClientRequestID)
+		m.rememberInterruptedQueueEventID(item.ServerID)
+		if item.ApprovalCommentaryAnswer != nil {
+			approvalCmd = tea.Batch(approvalCmd, m.answerQueuedApprovalCommentary(*item.ApprovalCommentaryAnswer))
+		}
+	}
 	for _, pending := range m.pendingInjected {
 		index := m.injectedQueueIndexByAnyID(pending.ID)
 		if index < 0 {
@@ -350,10 +359,22 @@ func (c uiInputController) restoreInterruptedInputsIntoComposer() {
 	m.injectedQueue = nil
 	m.queued = nil
 	if len(texts) == 0 {
-		return
+		return approvalCmd
 	}
 	m.replaceMainInputAtEnd(strings.Join(texts, "\n\n"))
 	m.logf("interrupt.restore pending_inputs=%d draft=%t", len(parts), draft != "")
+	return approvalCmd
+}
+
+func (m *uiModel) rememberInterruptedQueueEventID(id string) {
+	id = strings.TrimSpace(id)
+	if m == nil || id == "" {
+		return
+	}
+	if m.interruptedQueueEventIDs == nil {
+		m.interruptedQueueEventIDs = make(map[string]struct{})
+	}
+	m.interruptedQueueEventIDs[id] = struct{}{}
 }
 
 func (c uiInputController) flushQueuedInputs(mode queueDrainMode) (tea.Model, tea.Cmd) {

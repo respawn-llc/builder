@@ -528,7 +528,7 @@ func TestCloseIfIdleRetiresOwnerlessRuntimeAfterCurrentExecutionFinishes(t *test
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
 	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
-	authority := newAuthorityWithEventFeed(t, fixture, func(AgentResourceDescriptor, runtime.Event) {})
+	authority := newAuthorityWithEventFeed(t, fixture, func(runtimeids.SessionResourceRef, runtime.Event) {})
 	attachment := openLifecycleRuntime(t, authority, sessionID, "owner-a", &plan)
 
 	entered := make(chan struct{})
@@ -579,7 +579,7 @@ func TestCloseIfIdleFailsQueuedWorkAndRetiresOwnerlessRuntime(t *testing.T) {
 	sessionID := lifecycleSessionID(t, fixture)
 	var statusMu sync.Mutex
 	var statuses []runtime.QueuedUserMessageStatusEvent
-	authority := newAuthorityWithEventFeed(t, fixture, func(_ AgentResourceDescriptor, event runtime.Event) {
+	authority := newAuthorityWithEventFeed(t, fixture, func(_ runtimeids.SessionResourceRef, event runtime.Event) {
 		if event.QueuedUserMessageStatus == nil {
 			return
 		}
@@ -764,7 +764,7 @@ func TestExecutionRetirementDrainsAcceptedQueuedWorkBeforeClosing(t *testing.T) 
 	}
 	var statusMu sync.Mutex
 	var statuses []runtime.QueuedUserMessageStatusEvent
-	authority := newAuthorityWithEventFeed(t, fixture, func(_ AgentResourceDescriptor, event runtime.Event) {
+	authority := newAuthorityWithEventFeed(t, fixture, func(_ runtimeids.SessionResourceRef, event runtime.Event) {
 		if event.QueuedUserMessageStatus == nil {
 			return
 		}
@@ -882,7 +882,7 @@ func TestCloseIfIdleDrainsAcceptedQueuedWorkBeforeOwnerlessRetirement(t *testing
 	}
 	var statusMu sync.Mutex
 	var statuses []runtime.QueuedUserMessageStatusEvent
-	authority := newAuthorityWithEventFeed(t, fixture, func(_ AgentResourceDescriptor, event runtime.Event) {
+	authority := newAuthorityWithEventFeed(t, fixture, func(_ runtimeids.SessionResourceRef, event runtime.Event) {
 		if event.QueuedUserMessageStatus == nil {
 			return
 		}

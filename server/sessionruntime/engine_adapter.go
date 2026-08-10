@@ -237,7 +237,7 @@ func (a *Authority) newRuntimeWiringFromPlan(resource *agentResource, store *ses
 				logger.Logf("%s", runlog.FormatTranscriptRuntimeEventDiagnostic(resource.ref.SessionID().String(), event))
 			}
 			if a.options.eventFeed != nil {
-				a.options.eventFeed(resource.descriptor(), event)
+				a.options.eventFeed(resource.ref, event)
 			}
 			if options.OnEvent != nil {
 				options.OnEvent(event)

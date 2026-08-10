@@ -861,6 +861,36 @@ func TestStaleQueuedApprovalCommentaryDoesNotUnlockCurrentPrompt(t *testing.T) {
 	}
 }
 
+func TestInterruptRestorationDeliversQueuedApprovalCommentary(t *testing.T) {
+	model, control := newProjectedPromptTestUIModel(t)
+	model.engine = &runtimeControlFakeClient{}
+	prompt := testApprovalPrompt(
+		"approval-interrupted-commentary",
+		"Allow operation?",
+		clientui.ApprovalDecisionAllowOnce,
+		clientui.ApprovalDecisionDeny,
+	)
+	model = updateUIModel(t, model, askEventMsg{event: model.transcriptPromptEvent(prompt)})
+	answer := clientui.PromptAnswer{
+		PromptID: string(prompt.PromptID),
+		Approval: &clientui.ApprovalPromptAnswer{
+			Decision:   clientui.ApprovalDecisionAllowOnce,
+			Commentary: "interrupted commentary",
+		},
+	}
+	_ = model.enqueueInjectedInputWithApprovalAnswer("interrupted commentary", &answer)
+	model.setPendingInterrupt(true)
+
+	for _, msg := range collectCmdMessages(t, model.acknowledgePendingInterrupt()) {
+		model = updateUIModel(t, model, msg)
+	}
+
+	request := requireApprovalRequest(t, control)
+	if request.Decision != clientui.ApprovalDecisionAllowOnce || approvalCommentary(request) != "interrupted commentary" {
+		t.Fatalf("approval request = %+v, want queued interrupted commentary", request)
+	}
+}
+
 func TestAllowCommentaryAnswerDeadlineRestoresFreshQueueAndAnswerResubmission(t *testing.T) {
 	disableTransientStatusClearForTest(t)
 	control := newDeadlineThenSuccessApprovalControl()
