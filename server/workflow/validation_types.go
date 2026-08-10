@@ -152,7 +152,6 @@ type ValidationError struct {
 }
 
 func (e ValidationError) withRelatedEntity(entityType workflowcontract.WorkflowGraphEntityType, entityID string) ValidationError {
-	e.RelatedIDs = append(e.RelatedIDs, entityID)
 	e.RelatedEntities = append(e.RelatedEntities, workflowcontract.WorkflowGraphEntityReference{EntityType: entityType, EntityID: entityID})
 	return e
 }

@@ -1469,7 +1469,7 @@ func TestWorkflowGraphSaveKeepsAuthoredCollectionOrderSignificant(t *testing.T) 
 	}
 }
 
-func TestWorkflowGraphSaveDerivesNodeGroupSortOrderFromAuthoredCollection(t *testing.T) {
+func TestWorkflowGraphSavePreservesNodeGroupOrderAndAllUniquenessKeySwaps(t *testing.T) {
 	f := newGraphSaveFixture(t, createValidWorkflow)
 	for _, group := range []NodeGroupRecord{
 		{ID: "group-first-" + f.workflowID.String(), WorkflowID: f.workflowID, Key: "first", DisplayName: "First", SortOrder: 50},
@@ -1493,40 +1493,27 @@ func TestWorkflowGraphSaveDerivesNodeGroupSortOrderFromAuthoredCollection(t *tes
 	if got := []int64{plan.Prepared.nodeGroups[0].SortOrder, plan.Prepared.nodeGroups[1].SortOrder}; !slices.Equal(got, []int64{0, 100}) {
 		t.Fatalf("prepared Node Group sort order = %v, want authored collection order", got)
 	}
-}
-
-func TestApplyWorkflowGraphSaveSupportsAllUniquenessKeySwaps(t *testing.T) {
-	f := newGraphSaveFixture(t, createValidWorkflow)
-	for _, group := range []NodeGroupRecord{
-		{ID: "group-first-" + f.workflowID.String(), WorkflowID: f.workflowID, Key: "first", DisplayName: "First", SortOrder: 50},
-		{ID: "group-second-" + f.workflowID.String(), WorkflowID: f.workflowID, Key: "second", DisplayName: "Second", SortOrder: 150},
-	} {
-		if _, _, err := f.store.AddNodeGroup(f.ctx, group); err != nil {
-			t.Fatalf("AddNodeGroup %q: %v", group.ID, err)
-		}
-	}
-	current, err := currentWorkflowGraphSavePrepared(f.ctx, f.store.queries, f.workflowID)
-	if err != nil {
-		t.Fatalf("currentWorkflowGraphSavePrepared: %v", err)
-	}
-	current.transitionGroups[1].SourceNodeID = current.transitionGroups[0].SourceNodeID
-	if err := upsertWorkflowTransitionGroup(f.ctx, f.store.queries, current.transitionGroups[1], current.transitionGroups[1].SortOrder, "seed shared transition source"); err != nil {
+	currentGraph := plan.current
+	currentGraph.transitionGroups[1].SourceNodeID = currentGraph.transitionGroups[0].SourceNodeID
+	if err := upsertWorkflowTransitionGroup(f.ctx, f.store.queries, currentGraph.transitionGroups[1], currentGraph.transitionGroups[1].SortOrder, "seed shared transition source"); err != nil {
 		t.Fatal(err)
 	}
-	current.edges[1].TransitionGroupID = current.edges[0].TransitionGroupID
-	if err := upsertWorkflowEdge(f.ctx, f.store.queries, current.edges[1], current.edges[1].SortOrder, "seed shared edge group"); err != nil {
+	currentGraph.edges[1].TransitionGroupID = currentGraph.edges[0].TransitionGroupID
+	if err := upsertWorkflowEdge(f.ctx, f.store.queries, currentGraph.edges[1], currentGraph.edges[1].SortOrder, "seed shared edge group"); err != nil {
 		t.Fatal(err)
 	}
-	prepared := clonePreparedWorkflowGraphSave(current)
+	prepared := plan.Prepared
 	prepared.nodeGroups[0].Key, prepared.nodeGroups[1].Key = prepared.nodeGroups[1].Key, prepared.nodeGroups[0].Key
 	prepared.nodes[0].Key, prepared.nodes[1].Key = prepared.nodes[1].Key, prepared.nodes[0].Key
+	prepared.transitionGroups[1].SourceNodeID = currentGraph.transitionGroups[1].SourceNodeID
 	prepared.transitionGroups[0].TransitionID, prepared.transitionGroups[1].TransitionID = prepared.transitionGroups[1].TransitionID, prepared.transitionGroups[0].TransitionID
+	prepared.edges[1].TransitionGroupID = currentGraph.edges[1].TransitionGroupID
 	prepared.edges[0].Key, prepared.edges[1].Key = prepared.edges[1].Key, prepared.edges[0].Key
 	tx, err := f.store.db.BeginTx(f.ctx, nil)
 	if err != nil {
 		t.Fatalf("BeginTx: %v", err)
 	}
-	if err := applyWorkflowGraphSave(f.ctx, f.store.queries.WithTx(tx), f.workflowID, current, prepared, removedWorkflowGraphRows{}); err != nil {
+	if err := applyWorkflowGraphSave(f.ctx, f.store.queries.WithTx(tx), f.workflowID, currentGraph, prepared, removedWorkflowGraphRows{}); err != nil {
 		_ = tx.Rollback()
 		t.Fatalf("applyWorkflowGraphSave: %v", err)
 	}
