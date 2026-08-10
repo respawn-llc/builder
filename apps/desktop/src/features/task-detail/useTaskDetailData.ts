@@ -1,7 +1,7 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef } from "react";
 
-import type { QuestionAnswerInput, TaskDetail } from "@/api";
+import type { OffsetPage, QuestionAnswerInput, TaskDetail } from "@/api";
 import { errorMessage } from "@/api";
 import { invalidateProjectTaskSearches, queryKeys } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
@@ -107,26 +107,51 @@ export function useTaskAttention(taskID: string, enabled: boolean) {
   });
 }
 
+const taskDetailFeedPageSize = 50;
+const taskDetailFeedMaxPages = 10;
+
+export type TaskDetailFeedPage<T> = OffsetPage<T> &
+  Readonly<{
+    offset: number;
+    totalCount?: number;
+  }>;
+
+function taskDetailFeedOptions<T>(
+  queryKey: readonly unknown[],
+  enabled: boolean,
+  loadPage: (offset: number) => Promise<OffsetPage<T>>,
+) {
+  return {
+    queryKey,
+    queryFn: async ({ pageParam }: { pageParam: number }): Promise<TaskDetailFeedPage<T>> => ({
+      ...(await loadPage(pageParam)),
+      offset: pageParam,
+    }),
+    enabled,
+    initialPageParam: 0,
+    getNextPageParam: (lastPage: TaskDetailFeedPage<T>) => lastPage.nextOffset ?? undefined,
+    getPreviousPageParam: (firstPage: TaskDetailFeedPage<T>) =>
+      firstPage.offset === 0 ? undefined : firstPage.offset - taskDetailFeedPageSize,
+    maxPages: taskDetailFeedMaxPages,
+  };
+}
+
 export function useTaskActivity(taskID: string, enabled: boolean) {
   const { api } = useAppServices();
-  return useInfiniteQuery({
-    queryKey: queryKeys.activity(taskID),
-    queryFn: async ({ pageParam }) => api.listTaskActivity(taskID, pageParam),
-    enabled: enabled && taskID.length > 0,
-    initialPageParam: "",
-    getNextPageParam: (lastPage) => (lastPage.nextPageToken.length > 0 ? lastPage.nextPageToken : undefined),
-  });
+  return useInfiniteQuery(
+    taskDetailFeedOptions(queryKeys.activity(taskID), enabled && taskID.length > 0, async (offset) =>
+      api.listTaskActivity(taskID, offset),
+    ),
+  );
 }
 
 export function useTaskComments(taskID: string, enabled: boolean) {
   const { api } = useAppServices();
-  return useInfiniteQuery({
-    queryKey: queryKeys.comments(taskID),
-    queryFn: async ({ pageParam }) => api.listTaskComments(taskID, pageParam),
-    enabled: enabled && taskID.length > 0,
-    initialPageParam: 0,
-    getNextPageParam: (lastPage) => lastPage.nextOffset ?? undefined,
-  });
+  return useInfiniteQuery(
+    taskDetailFeedOptions(queryKeys.comments(taskID), enabled && taskID.length > 0, async (offset) =>
+      api.listTaskComments(taskID, offset),
+    ),
+  );
 }
 
 export function usePendingAsks(sessionID: string | null) {

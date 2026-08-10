@@ -588,8 +588,8 @@ export class ApiClient implements ApiService {
     return taskDetail.getTask(this.#transport, taskID);
   }
 
-  async listTaskActivity(taskID: string, pageToken: string): Promise<ActivityPage> {
-    return taskDetail.listTaskActivity(this.#transport, taskID, pageToken);
+  async listTaskActivity(taskID: string, offset: number): Promise<ActivityPage> {
+    return taskDetail.listTaskActivity(this.#transport, taskID, offset);
   }
 
   async listTaskComments(taskID: string, offset: number): Promise<CommentPage> {

@@ -16,6 +16,7 @@ import { Maximize2, Play, Square } from "lucide-react";
 import { formatRelativeTime } from "@/app-facade";
 import {
   AdaptiveLineClamp,
+  autoLoadAvailable,
   Badge,
   ContextMenu,
   ContextMenuContent,
@@ -316,13 +317,6 @@ function readyBoundary(
   directional: VirtualizedInfiniteListBoundaryState | undefined,
 ): VirtualizedInfiniteListBoundaryState | undefined {
   return initial === undefined ? directional : undefined;
-}
-
-function autoLoadAvailable(
-  available: boolean,
-  boundary: VirtualizedInfiniteListBoundaryState | undefined,
-): boolean {
-  return available && boundary?.state !== "error";
 }
 
 const TaskCard = memo(function TaskCard({
