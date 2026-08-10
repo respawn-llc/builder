@@ -2,14 +2,12 @@ package app
 
 import (
 	"context"
-	"errors"
 	"strings"
 
 	"core/cli/app/commands"
 	"core/cli/app/internal/runtimeattach"
 	"core/shared/clientui"
 	"core/shared/runtimeinput"
-	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/google/uuid"
@@ -550,9 +548,6 @@ func (c uiInputController) handleInjectedQueueCreateDone(msg injectedQueueCreate
 			detailErr := runtimeattach.FormatSubmissionError(msg.err)
 			statusCmd := m.sendTransientStatusWithNoticeID(detailErr, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 			m.logf("queue_create.error err=%q", detailErr)
-			if errors.Is(msg.err, serverapi.ErrRuntimeOperationCanceled) {
-				m.removeInjectedQueueItemAt(index)
-			}
 			persistCmd := m.persistSessionDraftRecoveryCmd()
 			m.layout().syncViewport()
 			if approvalCommentaryAnswer != nil {
