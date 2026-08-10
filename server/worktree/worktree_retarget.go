@@ -359,12 +359,15 @@ func worktreeGitMetadataFromRecord(worktree metadata.WorktreeRecord) (GitWorktre
 	decoded := GitWorktree{
 		Root:           worktree.CanonicalRoot,
 		HeadOID:        persisted.HeadOID,
-		Branch:         branch,
+		RecordedBranch: branch,
 		Detached:       persisted.Detached,
 		Bare:           persisted.Bare,
 		LockedReason:   persisted.LockedReason,
 		PrunableReason: persisted.PrunableReason,
 		IsMain:         worktree.IsMain,
+	}
+	if !persisted.Detached {
+		decoded.Branch = branch
 	}
 	if err := decoded.validateHead(); err != nil {
 		return GitWorktree{}, fmt.Errorf("decode git worktree metadata: %w", err)

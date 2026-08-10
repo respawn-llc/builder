@@ -49,11 +49,9 @@ func (s *Store) ReplacePendingInitialManagedBranchName(ctx context.Context, task
 	if strings.TrimSpace(string(taskID)) == "" {
 		return errors.New("task id is required")
 	}
+	branchName = strings.TrimSpace(branchName)
 	if branchName == "" {
 		return errors.New("pending initial managed branch name is required")
-	}
-	if branchName != strings.TrimSpace(branchName) {
-		return errors.New("pending initial managed branch name must not have surrounding whitespace")
 	}
 	updated, err := s.queries.ReplacePendingInitialManagedBranchName(ctx, sqlitegen.ReplacePendingInitialManagedBranchNameParams{
 		PendingInitialManagedBranchName: nullableString(branchName),

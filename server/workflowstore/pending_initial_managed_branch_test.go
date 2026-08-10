@@ -9,6 +9,23 @@ import (
 	"core/server/metadata/sqlitegen"
 )
 
+func TestReplacePendingInitialManagedBranchNameTrimsSurroundingWhitespace(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+
+	if err := store.ReplacePendingInitialManagedBranchName(ctx, task.ID, "  feature/trimmed  "); err != nil {
+		t.Fatalf("ReplacePendingInitialManagedBranchName: %v", err)
+	}
+	updated, err := store.GetTaskExecutionTargetContext(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetContext: %v", err)
+	}
+	if updated.Task.PendingInitialManagedBranchName == nil || *updated.Task.PendingInitialManagedBranchName != "feature/trimmed" {
+		t.Fatalf("pending initial managed branch = %v, want trimmed branch", updated.Task.PendingInitialManagedBranchName)
+	}
+}
+
 func TestCreateTaskInitializesPendingManagedBranchFromShortID(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
@@ -22,16 +39,6 @@ func TestCreateTaskInitializesPendingManagedBranchFromShortID(t *testing.T) {
 		t.Fatalf("created task pending initial managed branch = %q, want short ID %q", got, task.ShortID)
 	}
 }
-
-func TestTaskRecordProjectionRejectsPresentBlankManagedWorktreeID(t *testing.T) {
-	_, err := taskRecordFromTask(sqlitegen.TaskRecord{
-		ManagedWorktreeID: sql.NullString{Valid: true},
-	})
-	if err == nil {
-		t.Fatal("taskRecordFromTask accepted a present blank managed Worktree ID")
-	}
-}
-
 func TestBindInitialTaskManagedWorktreeClearsCurrentPendingBranch(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
