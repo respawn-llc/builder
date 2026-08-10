@@ -409,6 +409,7 @@ type Workspace struct {
 	GitMetadataJson   string
 	CreatedAtUnixMs   int64
 	UpdatedAtUnixMs   int64
+	ChatDraftJson     sql.NullString
 }
 
 type Worktree struct {

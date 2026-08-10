@@ -35,7 +35,7 @@ type TranscriptSegmentPage struct {
 	NewerCursor                       int64
 	HasMoreBelow                      bool
 	LatestRollbackCandidate           *rollbacktarget.CandidateLocator
-	LastCommittedAssistantFinalAnswer string
+	LastCommittedAssistantFinalAnswer *string
 }
 
 func TranscriptSegmentPageFromEventLog(eventLog session.MaterializedEventLog, cursor int64, cacheWarningMode config.CacheWarningMode) (TranscriptSegmentPage, error) {
@@ -179,9 +179,9 @@ func (e *Engine) ApplyForActiveStep(stepID string, apply func() error) error {
 	return e.stepLifecycle.ApplyForActiveStep(stepID, apply)
 }
 
-func (e *Engine) LastCommittedAssistantFinalAnswer() string {
+func (e *Engine) LastCommittedAssistantFinalAnswer() *string {
 	if e == nil {
-		return ""
+		return nil
 	}
 	return e.transcriptRuntimeState().LastCommittedAssistantFinalAnswer()
 }
@@ -650,14 +650,7 @@ func (e *Engine) ContinuationAgentRole() *string {
 }
 
 func conversationPromptCacheKey(sessionID string, compactionCount int) string {
-	trimmed := strings.TrimSpace(sessionID)
-	if trimmed == "" {
-		return ""
-	}
-	if compactionCount <= 0 {
-		return trimmed
-	}
-	return fmt.Sprintf("%s/compact-%d", trimmed, compactionCount)
+	return conversationPromptCacheKeyForLineage(sessionID, 0, compactionCount)
 }
 
 func conversationPromptCacheKeyForLineage(sessionID string, lineageGeneration, compactionCount int) string {
@@ -668,7 +661,10 @@ func conversationPromptCacheKeyForLineage(sessionID string, lineageGeneration, c
 	if lineageGeneration > 0 {
 		trimmed = fmt.Sprintf("%s/contract-%d", trimmed, lineageGeneration)
 	}
-	return conversationPromptCacheKey(trimmed, compactionCount)
+	if compactionCount <= 0 {
+		return trimmed
+	}
+	return fmt.Sprintf("%s/compact-%d", trimmed, compactionCount)
 }
 
 func (e *Engine) conversationPromptCacheKey(sessionID string) string {
@@ -949,7 +945,10 @@ func (e *Engine) emitRawAtRevision(evt Event, revision int64) error {
 
 func (e *Engine) publishLiveRunFinished(result LiveRunResult) {
 	if result.Status == RunStatusCompleted && result.ResultKind != LiveRunResultAssistantFinalAnswer {
-		return
+		switch result.NoFinalReason {
+		case LiveRunNoFinalAnswerReasonUserShell, LiveRunNoFinalAnswerReasonBackground:
+			return
+		}
 	}
 	if result.Status == RunStatusInterrupted || errors.Is(result.Error, context.Canceled) {
 		return

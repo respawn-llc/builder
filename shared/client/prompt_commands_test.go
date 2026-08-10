@@ -14,6 +14,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 
 	"github.com/google/uuid"
 	"golang.org/x/net/websocket"
@@ -204,7 +205,10 @@ func TestRemotePromptCommandImportCatalogAndInvocationUseServerRoots(t *testing.
 					return
 				}
 				resolvedContent <- content
-				if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.RuntimeSubmitUserTurnResponse{Message: "accepted"})); err != nil {
+				if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.RuntimeSubmitUserTurnResponse{
+					Message:    textutil.Value("accepted"),
+					ResultKind: clientui.UserTurnResultKindAssistantFinal,
+				})); err != nil {
 					t.Errorf("send submit response: %v", err)
 				}
 				return

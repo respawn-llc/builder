@@ -2631,7 +2631,8 @@ SELECT
     canonical_root_path,
     git_metadata_json,
     created_at_unix_ms,
-    updated_at_unix_ms
+    updated_at_unix_ms,
+    chat_draft_json
 FROM workspaces
 WHERE id = ?1
 LIMIT 1
@@ -2647,9 +2648,26 @@ func (q *Queries) GetWorkspaceByID(ctx context.Context, id string) (Workspace, e
 		&i.GitMetadataJson,
 		&i.CreatedAtUnixMs,
 		&i.UpdatedAtUnixMs,
+		&i.ChatDraftJson,
 	), getWorkspaceByID, 1)
 
 	return i, err
+}
+
+const getWorkspaceChatDraft = `-- name: GetWorkspaceChatDraft :one
+SELECT
+    chat_draft_json
+FROM workspaces
+WHERE id = ?1
+LIMIT 1
+`
+
+func (q *Queries) GetWorkspaceChatDraft(ctx context.Context, id string) (sql.NullString, error) {
+	row := q.db.QueryRowContext(ctx, getWorkspaceChatDraft, id)
+	var chat_draft_json sql.NullString
+	err := recordQueryError(ctx, row.Scan(&chat_draft_json), getWorkspaceChatDraft, 1)
+
+	return chat_draft_json, err
 }
 
 const getWorktreeByCanonicalRoot = `-- name: GetWorktreeByCanonicalRoot :one
@@ -7000,58 +7018,36 @@ func (q *Queries) ListWorkflowRecordsPage(ctx context.Context, arg ListWorkflowR
 }
 
 const listWorkflowTaskActivityRows = `-- name: ListWorkflowTaskActivityRows :many
-WITH activity(
-    activity_id,
-    kind,
-    source_id,
-    occurred_at_unix_ms,
-    updated_at_unix_ms,
-    session_name
-) AS (
-    SELECT
-        CAST('comment:' || c.id AS TEXT) AS activity_id,
-        'comment' AS kind,
-        c.id AS source_id,
-        c.updated_at_unix_ms AS occurred_at_unix_ms,
-        c.updated_at_unix_ms AS updated_at_unix_ms,
-        CAST(NULL AS TEXT) AS session_name
-    FROM task_comments c
-    WHERE c.task_id = ?2
-      AND (
-          ?3 = 0
-          OR c.updated_at_unix_ms < ?4
-          OR (c.updated_at_unix_ms = ?4 AND ('comment:' || c.id) < ?5)
-      )
+SELECT
+    CAST('comment:' || c.id AS TEXT) AS activity_id,
+    'comment' AS kind,
+    c.id AS source_id,
+    c.updated_at_unix_ms AS occurred_at_unix_ms,
+    c.updated_at_unix_ms AS updated_at_unix_ms,
+    CAST(NULL AS TEXT) AS session_name
+FROM task_comments c
+WHERE c.task_id = ?3
 
-    UNION ALL
+UNION ALL
 
-    SELECT
-        CAST('session_started:' || s.id AS TEXT) AS activity_id,
-        'session_started' AS kind,
-        s.id AS source_id,
-        s.created_at_unix_ms AS occurred_at_unix_ms,
-        s.created_at_unix_ms AS updated_at_unix_ms,
-        s.name AS session_name
-    FROM sessions s
-    WHERE s.task_id = ?2
-      AND (
-          ?3 = 0
-          OR s.created_at_unix_ms < ?4
-          OR (s.created_at_unix_ms = ?4 AND ('session_started:' || s.id) < ?5)
-      )
-)
-SELECT activity_id, kind, source_id, occurred_at_unix_ms, updated_at_unix_ms, session_name
-FROM activity
+SELECT
+    CAST('session_started:' || s.id AS TEXT) AS activity_id,
+    'session_started' AS kind,
+    s.id AS source_id,
+    s.created_at_unix_ms AS occurred_at_unix_ms,
+    s.created_at_unix_ms AS updated_at_unix_ms,
+    s.name AS session_name
+FROM sessions s
+WHERE s.task_id = ?3
 ORDER BY occurred_at_unix_ms DESC, activity_id DESC
-LIMIT ?1
+LIMIT ?2
+OFFSET ?1
 `
 
 type ListWorkflowTaskActivityRowsParams struct {
-	PageLimit              int64
-	TaskID                 string
-	CursorActive           interface{}
-	CursorOccurredAtUnixMs int64
-	CursorActivityID       string
+	PageOffset int64
+	PageLimit  int64
+	TaskID     string
 }
 
 type ListWorkflowTaskActivityRowsRow struct {
@@ -7064,15 +7060,8 @@ type ListWorkflowTaskActivityRowsRow struct {
 }
 
 func (q *Queries) ListWorkflowTaskActivityRows(ctx context.Context, arg ListWorkflowTaskActivityRowsParams) ([]ListWorkflowTaskActivityRowsRow, error) {
-	rows, err := q.db.QueryContext(ctx, listWorkflowTaskActivityRows,
-		arg.PageLimit,
-		arg.TaskID,
-		arg.CursorActive,
-		arg.CursorOccurredAtUnixMs,
-		arg.CursorActivityID,
-	)
-	err = recordQueryError(ctx, err, listWorkflowTaskActivityRows, 5)
-
+	rows, err := q.db.QueryContext(ctx, listWorkflowTaskActivityRows, arg.PageOffset, arg.PageLimit, arg.TaskID)
+	err = recordQueryError(ctx, err, listWorkflowTaskActivityRows, 3)
 	if err != nil {
 		return nil, err
 	}
@@ -7087,15 +7076,15 @@ func (q *Queries) ListWorkflowTaskActivityRows(ctx context.Context, arg ListWork
 			&i.OccurredAtUnixMs,
 			&i.UpdatedAtUnixMs,
 			&i.SessionName,
-		), listWorkflowTaskActivityRows, 5); err != nil {
+		), listWorkflowTaskActivityRows, 3); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listWorkflowTaskActivityRows, 5); err != nil {
+	if err := recordQueryError(ctx, rows.Close(), listWorkflowTaskActivityRows, 3); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listWorkflowTaskActivityRows, 5); err != nil {
+	if err := recordQueryError(ctx, rows.Err(), listWorkflowTaskActivityRows, 3); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -8141,7 +8130,8 @@ SELECT
     canonical_root_path,
     git_metadata_json,
     created_at_unix_ms,
-    updated_at_unix_ms
+    updated_at_unix_ms,
+    chat_draft_json
 FROM workspaces
 WHERE canonical_root_path = ?1
 ORDER BY created_at_unix_ms ASC, rowid ASC
@@ -8164,6 +8154,7 @@ func (q *Queries) ListWorkspacesByCanonicalRoot(ctx context.Context, canonicalRo
 			&i.GitMetadataJson,
 			&i.CreatedAtUnixMs,
 			&i.UpdatedAtUnixMs,
+			&i.ChatDraftJson,
 		), listWorkspacesByCanonicalRoot, 1); err != nil {
 			return nil, err
 		}
@@ -8455,6 +8446,26 @@ func (q *Queries) RenameProjectLabel(ctx context.Context, arg RenameProjectLabel
 	), renameProjectLabel, 4)
 
 	return i, err
+}
+
+const replaceWorkspaceChatDraft = `-- name: ReplaceWorkspaceChatDraft :execrows
+UPDATE workspaces
+SET chat_draft_json = ?1
+WHERE id = ?2
+`
+
+type ReplaceWorkspaceChatDraftParams struct {
+	ChatDraftJson sql.NullString
+	ID            string
+}
+
+func (q *Queries) ReplaceWorkspaceChatDraft(ctx context.Context, arg ReplaceWorkspaceChatDraftParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, replaceWorkspaceChatDraft, arg.ChatDraftJson, arg.ID)
+	err = recordQueryError(ctx, err, replaceWorkspaceChatDraft, 2)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const resumeBranchCurrentNode = `-- name: ResumeBranchCurrentNode :execrows

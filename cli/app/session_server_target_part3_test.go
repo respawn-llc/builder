@@ -66,8 +66,8 @@ func TestStartSessionServerListsPendingPromptSnapshotOverRemoteReads(t *testing.
 		if result.err != nil {
 			t.Fatalf("SubmitUserMessage: %v", result.err)
 		}
-		if result.submission.Message != "remote prompt snapshot complete" {
-			t.Fatalf("assistant message = %q", result.submission.Message)
+		if result.submission.Message == nil || *result.submission.Message != "remote prompt snapshot complete" {
+			t.Fatalf("assistant message = %v", result.submission.Message)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for remote prompt snapshot completion")

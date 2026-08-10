@@ -111,7 +111,14 @@ func (e *Engine) SubmitUserMessageOrSteerWithHooks(
 	if strings.TrimSpace(text) == "" {
 		return llm.Message{}, nil, errors.New("empty message")
 	}
-	msg, err := e.SubmitUserMessageWithHooks(ctx, text, onActive, func() {
+	return assistant, queued, err
+}
+
+func (e *Engine) SubmitUserMessageOrSteerWithOutcomeHooks(ctx context.Context, text string, clientRequestID string, onActive func(), onAccepted func(queued bool)) (result UserTurnResult, queued *QueuedUserMessage, err error) {
+	if strings.TrimSpace(text) == "" {
+		return UserTurnResult{}, nil, errors.New("empty message")
+	}
+	result, err = e.SubmitUserMessageWithOutcomeWithHooks(ctx, text, onActive, func() {
 		if onAccepted != nil {
 			onAccepted(false)
 		}
@@ -123,14 +130,14 @@ func (e *Engine) SubmitUserMessageOrSteerWithHooks(
 		}
 		item, queueErr = e.acceptHumanAgendaItem(item, boundaryEligibilityStep, true)
 		if queueErr != nil {
-			return llm.Message{}, nil, queueErr
+			return UserTurnResult{}, nil, queueErr
 		}
 		if onAccepted != nil {
 			onAccepted(true)
 		}
-		return llm.Message{}, &item, nil
+		return UserTurnResult{}, &item, nil
 	}
-	return msg, nil, err
+	return result, nil, err
 }
 
 func (e *Engine) HasQueuedUserWork() bool {

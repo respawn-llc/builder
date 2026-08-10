@@ -174,7 +174,8 @@ func TestServiceGetSessionMainViewFallsBackToDurableSessionState(t *testing.T) {
 	}
 	if resp.MainView.Status.ParentAgentSessionID == nil || resp.MainView.Status.ParentAgentSessionID.String() != parentSessionID ||
 		resp.MainView.Status.NavigationTargetSessionID == nil || resp.MainView.Status.NavigationTargetSessionID.String() != parentSessionID ||
-		resp.MainView.Status.LastCommittedAssistantFinalAnswer != "final answer" {
+		resp.MainView.Status.LastCommittedAssistantFinalAnswer == nil ||
+		*resp.MainView.Status.LastCommittedAssistantFinalAnswer != "final answer" {
 		t.Fatalf("unexpected dormant status: %+v", resp.MainView.Status)
 	}
 	if resp.MainView.Status.Goal == nil || resp.MainView.Status.Goal.Status != clientui.RuntimeGoalStatusActive || resp.MainView.Status.Goal.Objective != "ship dormant goal" {
@@ -295,8 +296,8 @@ func TestServiceDormantHistoryReplacementStartsNewTranscriptSegment(t *testing.T
 	if err != nil {
 		t.Fatalf("get session main view: %v", err)
 	}
-	if got := mainViewResp.MainView.Status.LastCommittedAssistantFinalAnswer; got != "" {
-		t.Fatalf("last committed assistant final answer = %q, want empty because later user message supersedes it", got)
+	if got := mainViewResp.MainView.Status.LastCommittedAssistantFinalAnswer; got != nil {
+		t.Fatalf("last committed assistant final answer = %q, want absence because later user message supersedes it", *got)
 	}
 }
 

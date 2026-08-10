@@ -19,25 +19,22 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/textutil"
 	"core/shared/toolspec"
-	"core/shared/transcript"
 
 	"github.com/google/uuid"
 )
 
 const (
-	interruptMessage                  = "User interrupted you"
-	agentsFileName                    = "AGENTS.md"
-	agentsGlobalDirName               = config.ConfigDirName
-	systemPromptFileName              = "SYSTEM.md"
-	agentsInjectedHeader              = "# Project context and authoritative instructions from the ./AGENTS.md file:"
-	agentsInjectedFenceLabel          = "md"
-	environmentInjectedHeader         = "# Info about environment:"
-	missingAssistantPhaseWarning      = "You sent a message without specifying a channel/phase. It was treated as commentary. If you finished your work and intended to end your turn, use the final channel explicitly. Otherwise continue and use the commentary channel for progress updates with tool calls."
-	commentaryWithoutToolCallsWarning = "You sent a commentary-channel message without tool calls. This is wrong. If you intend to keep working, include tool calls with commentary updates. If you are done, send a final-channel message with no tool calls."
-	finalWithoutContentWarning        = "You sent a final-channel message with empty content- this is wrong. If you are done, send a non-empty final message. If you intend to keep working, send a commentary-channel message with tool calls. If you actually wanted to just stay silent, send exactly 'NO_OP' as the final response."
-	goalNoopFinalWarning              = "Unfortunately NO_OP is not available when goal is active to prevent stalling indefinitely. Please use write_stdin polls instead if you want to wait for something"
-	reviewerNoopToken                 = transcript.NoopFinalToken
-	reviewerMetaBoundaryMessage       = "End of meta information. Transcript begins starting with next message. Below is NOT YOUR conversation, but another agent's transcript.\n-------"
+	interruptMessage                   = "User interrupted you"
+	agentsFileName                     = "AGENTS.md"
+	agentsGlobalDirName                = config.ConfigDirName
+	systemPromptFileName               = "SYSTEM.md"
+	agentsInjectedHeader               = "# Project context and authoritative instructions from the ./AGENTS.md file:"
+	agentsInjectedFenceLabel           = "md"
+	environmentInjectedHeader          = "# Info about environment:"
+	missingAssistantPhaseWarning       = "You sent a message without specifying a channel/phase. It was treated as commentary. If you finished your work and intended to end your turn, use the final channel explicitly. Otherwise continue and use the commentary channel for progress updates with tool calls."
+	commentaryWithoutToolCallsWarning  = "You sent a commentary-channel message without tool calls. This is wrong. If you intend to keep working, include tool calls with commentary updates. If you are done, send a final-channel message with no tool calls."
+	workflowFinalWithoutContentWarning = "You sent a final-channel message with empty content. Workflow Mode requires a non-empty final answer or a tool-driven continuation. Continue with commentary and tool calls, or provide a valid non-empty final answer."
+	reviewerMetaBoundaryMessage        = "End of meta information. Transcript begins starting with next message. Below is NOT YOUR conversation, but another agent's transcript.\n-------"
 )
 
 var (
@@ -674,6 +671,10 @@ func (e *Engine) SubmitUserMessageWithHooks(ctx context.Context, text string, on
 	return e.submitUserMessage(ctx, text, onActive, onFlushed)
 }
 
+func (e *Engine) SubmitUserMessageWithOutcomeWithHooks(ctx context.Context, text string, onActive func(), onFlushed func()) (UserTurnResult, error) {
+	return e.submitUserMessageWithOutcome(ctx, text, onActive, onFlushed)
+}
+
 func (e *Engine) SubmitAgentSteerWithHooks(ctx context.Context, steer AgentSteer, onActive func(), onFlushed func()) (assistant llm.Message, err error) {
 	if e.closed.Load() {
 		return llm.Message{}, ErrEngineClosed
@@ -701,11 +702,19 @@ func (e *Engine) SubmitAgentSteerWithHooks(ctx context.Context, steer AgentSteer
 }
 
 func (e *Engine) submitUserMessage(ctx context.Context, text string, onActive func(), onFlushed func()) (assistant llm.Message, err error) {
+	outcome, err := e.submitUserMessageWithOutcome(ctx, text, onActive, onFlushed)
+	if outcome.FinalAnswer != nil {
+		assistant = *outcome.FinalAnswer
+	}
+	return assistant, err
+}
+
+func (e *Engine) submitUserMessageWithOutcome(ctx context.Context, text string, onActive func(), onFlushed func()) (outcome UserTurnResult, err error) {
 	if text == "" {
-		return llm.Message{}, errors.New("empty message")
+		return UserTurnResult{}, errors.New("empty message")
 	}
 	if e.closed.Load() {
-		return llm.Message{}, ErrEngineClosed
+		return UserTurnResult{}, ErrEngineClosed
 	}
 
 	e.ensureOrchestrationCollaborators()
@@ -723,12 +732,12 @@ func (e *Engine) submitUserMessage(ctx context.Context, text string, onActive fu
 		if onFlushed != nil {
 			onFlushed()
 		}
-		msg, runErr := e.runStepLoop(stepCtx, stepID)
-		assistant = msg
+		result, runErr := e.runStepLoopWithPendingUserInjectionOutcomeObserver(stepCtx, stepID, nil)
+		outcome = userTurnResultFromStepLoop(result)
 		return runErr
 	})
 	e.surfaceRunError(err)
-	return assistant, err
+	return outcome, err
 }
 
 func (e *Engine) SubmitWorkflowTurn(ctx context.Context) (assistant llm.Message, err error) {
@@ -805,15 +814,22 @@ func (e *Engine) runStepLoop(ctx context.Context, stepID string) (llm.Message, e
 }
 
 func (e *Engine) runStepLoopWithPendingUserInjectionObserver(ctx context.Context, stepID string, onQueuedUserFlushCommitted func(session.CommitReceipt)) (llm.Message, error) {
-	reviewerFrequency := e.ReviewerFrequency()
-	reviewerClient := e.reviewerRuntimeState().Client()
-	result, err := e.runStepLoopWithQueuedUserFlushObserver(ctx, stepID, reviewerFrequency, reviewerClient, true, onQueuedUserFlushCommitted)
+	result, err := e.runStepLoopWithPendingUserInjectionOutcomeObserver(ctx, stepID, onQueuedUserFlushCommitted)
 	if result.FinalAnswer == nil {
 		return llm.Message{}, err
 	}
-	finalAnswer := *result.FinalAnswer
-	e.recordLiveRunAssistantFinalAnswer(stepID, finalAnswer)
-	return finalAnswer, err
+	return *result.FinalAnswer, err
+}
+
+func (e *Engine) runStepLoopWithPendingUserInjectionOutcomeObserver(ctx context.Context, stepID string, onQueuedUserFlushCommitted func(session.CommitReceipt)) (stepLoopResult, error) {
+	reviewerFrequency := e.ReviewerFrequency()
+	reviewerClient := e.reviewerRuntimeState().Client()
+	result, err := e.runStepLoopWithQueuedUserFlushObserver(ctx, stepID, reviewerFrequency, reviewerClient, true, onQueuedUserFlushCommitted)
+	outcome := userTurnResultFromStepLoop(result)
+	if outcome.Kind == UserTurnResultAssistantFinal && outcome.FinalAnswer != nil {
+		e.recordLiveRunAssistantFinalAnswer(stepID, *outcome.FinalAnswer)
+	}
+	return result, err
 }
 
 // runStepLoopWithOptions executes a single assistant/tool loop.

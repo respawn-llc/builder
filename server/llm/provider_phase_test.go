@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"core/shared/llmerrors"
+	"core/shared/textutil"
 )
 
 func TestProviderPhaseConstruction(t *testing.T) {
@@ -58,7 +59,7 @@ func TestProviderPhaseConstruction(t *testing.T) {
 func TestOpenAIClientProjectsProviderPhaseFromOneAuthoritativeFact(t *testing.T) {
 	client := NewOpenAIClient(providerPhaseProjectionTransport{
 		response: OpenAIResponse{
-			AssistantText: "done",
+			AssistantText: textutil.Value("done"),
 			ProviderPhase: FinalProviderPhase(),
 		},
 	})

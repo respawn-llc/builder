@@ -670,7 +670,7 @@ func TestSubmitUserMessageFinalAnswerWithMixedToolCallsMaterializesAllToolsBefor
 	}
 }
 
-func TestNoopStreamedFinalResetsWithoutFinalPublication(t *testing.T) {
+func TestBlankStreamedFinalSkipsFinalPublication(t *testing.T) {
 	t.Parallel()
 	var events []Event
 	engine := mustNewExecTestEngine(t, mustCreateTestSession(t), fakeNoopStreamClient{}, Config{
@@ -678,7 +678,7 @@ func TestNoopStreamedFinalResetsWithoutFinalPublication(t *testing.T) {
 		OnEvent: func(event Event) { events = append(events, event) },
 	})
 	if _, err := engine.SubmitUserMessage(context.Background(), "turn"); err != nil {
-		t.Fatalf("submit noop stream: %v", err)
+		t.Fatalf("submit blank stream: %v", err)
 	}
 	var delta, reset *Event
 	for index := range events {
@@ -689,12 +689,11 @@ func TestNoopStreamedFinalResetsWithoutFinalPublication(t *testing.T) {
 		case EventAssistantDeltaReset:
 			reset = event
 		case EventAssistantMessage, EventModelResponse:
-			t.Fatalf("noop streamed final published %s: %+v", event.Kind, event)
+			t.Fatalf("blank streamed final published %s: %+v", event.Kind, event)
 		}
 	}
-	if delta == nil || reset == nil || delta.AssistantTranscriptStreamID == nil || reset.AssistantTranscriptStreamID == nil ||
-		*delta.AssistantTranscriptStreamID != *reset.AssistantTranscriptStreamID {
-		t.Fatalf("noop stream terminal facts = delta:%+v reset:%+v", delta, reset)
+	if delta != nil || reset != nil {
+		t.Fatalf("blank stream emitted terminal facts = delta:%+v reset:%+v", delta, reset)
 	}
 }
 
@@ -1103,7 +1102,7 @@ func TestCompletedResponseFinalizationUsesActiveSegmentCoordinatesAfterCompactio
 	}
 	if err := engine.steer(
 		"compaction",
-		steerHistoryReplacementIntent("local", compactionModeAuto, 1, "", "", nil),
+		steerHistoryReplacementIntent("local", compactionModeAuto, 1, "", nil, nil),
 	); err != nil {
 		t.Fatalf("persist history replacement: %v", err)
 	}

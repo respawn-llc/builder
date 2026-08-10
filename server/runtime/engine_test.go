@@ -426,8 +426,27 @@ func TestLastCommittedAssistantFinalAnswerSkipsTrailingReminderEntries(t *testin
 		t.Fatalf("append reminder: %v", err)
 	}
 
-	if got := eng.LastCommittedAssistantFinalAnswer(); got != "final handoff" {
-		t.Fatalf("LastCommittedAssistantFinalAnswer() = %q, want %q", got, "final handoff")
+	if got := eng.LastCommittedAssistantFinalAnswer(); got == nil || *got != "final handoff" {
+		t.Fatalf("LastCommittedAssistantFinalAnswer() = %v, want %q", got, "final handoff")
+	}
+}
+
+func TestLastCommittedAssistantFinalAnswerClearsAtBlankFinal(t *testing.T) {
+	t.Parallel()
+	store := mustCreateTestSession(t)
+
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	for _, message := range []llm.Message{
+		{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final handoff")},
+		{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("")},
+	} {
+		if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{message})); err != nil {
+			t.Fatalf("append assistant final: %v", err)
+		}
+	}
+
+	if got := eng.LastCommittedAssistantFinalAnswer(); got != nil {
+		t.Fatalf("LastCommittedAssistantFinalAnswer() = %v, want absence after blank final", got)
 	}
 }
 
@@ -443,8 +462,8 @@ func TestLastCommittedAssistantFinalAnswerSkipsTrailingErrorFeedback(t *testing.
 		t.Fatalf("append warning: %v", err)
 	}
 
-	if got := eng.LastCommittedAssistantFinalAnswer(); got != "final handoff" {
-		t.Fatalf("LastCommittedAssistantFinalAnswer() = %q, want %q", got, "final handoff")
+	if got := eng.LastCommittedAssistantFinalAnswer(); got == nil || *got != "final handoff" {
+		t.Fatalf("LastCommittedAssistantFinalAnswer() = %v, want %q", got, "final handoff")
 	}
 }
 
@@ -460,8 +479,8 @@ func TestLastCommittedAssistantFinalAnswerSkipsTrailingHandoffFutureMessage(t *t
 		t.Fatalf("append handoff future message: %v", err)
 	}
 
-	if got := eng.LastCommittedAssistantFinalAnswer(); got != "final handoff" {
-		t.Fatalf("LastCommittedAssistantFinalAnswer() = %q, want %q", got, "final handoff")
+	if got := eng.LastCommittedAssistantFinalAnswer(); got == nil || *got != "final handoff" {
+		t.Fatalf("LastCommittedAssistantFinalAnswer() = %v, want %q", got, "final handoff")
 	}
 }
 
@@ -477,8 +496,8 @@ func TestLastCommittedAssistantFinalAnswerSkipsTrailingReviewerFeedback(t *testi
 		t.Fatalf("append reviewer feedback: %v", err)
 	}
 
-	if got := eng.LastCommittedAssistantFinalAnswer(); got != "final handoff" {
-		t.Fatalf("LastCommittedAssistantFinalAnswer() = %q, want %q", got, "final handoff")
+	if got := eng.LastCommittedAssistantFinalAnswer(); got == nil || *got != "final handoff" {
+		t.Fatalf("LastCommittedAssistantFinalAnswer() = %v, want %q", got, "final handoff")
 	}
 }
 
@@ -494,8 +513,8 @@ func TestLastCommittedAssistantFinalAnswerSkipsTrailingGoalFeedback(t *testing.T
 		t.Fatalf("append goal feedback: %v", err)
 	}
 
-	if got := eng.LastCommittedAssistantFinalAnswer(); got != "final handoff" {
-		t.Fatalf("LastCommittedAssistantFinalAnswer() = %q, want %q", got, "final handoff")
+	if got := eng.LastCommittedAssistantFinalAnswer(); got == nil || *got != "final handoff" {
+		t.Fatalf("LastCommittedAssistantFinalAnswer() = %v, want %q", got, "final handoff")
 	}
 }
 
@@ -511,8 +530,8 @@ func TestLastCommittedAssistantFinalAnswerDoesNotSkipTrailingUntypedDeveloperMes
 		t.Fatalf("append developer message: %v", err)
 	}
 
-	if got := eng.LastCommittedAssistantFinalAnswer(); got != "" {
-		t.Fatalf("LastCommittedAssistantFinalAnswer() = %q, want empty", got)
+	if got := eng.LastCommittedAssistantFinalAnswer(); got != nil {
+		t.Fatalf("LastCommittedAssistantFinalAnswer() = %v, want absence", got)
 	}
 }
 
@@ -539,11 +558,8 @@ func (fakeNoopStreamClient) Generate(_ context.Context, _ llm.Request) (llm.Resp
 }
 
 func (fakeNoopStreamClient) GenerateStream(_ context.Context, _ llm.Request, onDelta func(string)) (llm.Response, error) {
-	if onDelta != nil {
-		onDelta(reviewerNoopToken)
-	}
 	return llm.Response{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(reviewerNoopToken), Phase: textutil.Value(llm.MessagePhaseFinal)},
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(""), Phase: textutil.Value(llm.MessagePhaseFinal)},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}, nil
 }

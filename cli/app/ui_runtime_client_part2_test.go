@@ -114,7 +114,7 @@ func (c *reconnectRetryRuntimeControlClient) SubmitUserTurn(_ context.Context, r
 	if c.submitCalls == 1 && c.firstSubmitErr != nil {
 		return serverapi.RuntimeSubmitUserTurnResponse{}, c.firstSubmitErr
 	}
-	return serverapi.RuntimeSubmitUserTurnResponse{Message: "recovered"}, nil
+	return serverapi.RuntimeSubmitUserTurnResponse{Message: textutil.Value("recovered")}, nil
 }
 
 func (c *reconnectRetryRuntimeControlClient) SubmitUserShellCommand(context.Context, serverapi.RuntimeSubmitUserShellCommandRequest) error {

@@ -52,9 +52,6 @@ func TestSubmitUserMessageMissingPhaseOpenAILegacyResponseRemainsTerminal(t *tes
 		if persisted.Role == llm.RoleDeveloper && strings.Contains(messageContent(persisted), commentaryWithoutToolCallsWarning) {
 			t.Fatalf("did not expect commentary-without-tools warning for legacy OpenAI response")
 		}
-		if persisted.Role == llm.RoleDeveloper && strings.Contains(messageContent(persisted), finalWithoutContentWarning) {
-			t.Fatalf("did not expect final-without-content warning for legacy OpenAI response")
-		}
 	}
 }
 
@@ -522,17 +519,103 @@ func TestSubmitUserMessageLegacyArtifactContentRemainsTerminal(t *testing.T) {
 	}
 }
 
-func TestSubmitUserMessageFinalAnswerWithoutContentForcesNextLoop(t *testing.T) {
+func TestSubmitUserMessageFinalAnswerWithoutContentFailsProviderContract(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 
+	client := &fakeClient{responses: []llm.Response{{
+		Assistant: llm.Message{
+			Role:  llm.RoleAssistant,
+			Phase: textutil.Value(llm.MessagePhaseFinal),
+		},
+		Usage: llm.Usage{WindowTokens: 200000},
+	}}}
+
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
+
+	_, err := eng.SubmitUserMessage(context.Background(), "do the task")
+	if err == nil || !strings.Contains(err.Error(), "provider contract violation") {
+		t.Fatalf("submit error = %v, want provider contract violation", err)
+	}
+	if len(client.calls) != 1 {
+		t.Fatalf("provider calls = %d, want one failed response", len(client.calls))
+	}
+}
+
+func TestSubmitUserMessageCommentaryBeforeMissingFinalContinues(t *testing.T) {
+	t.Parallel()
+	store := mustCreateTestSession(t)
 	client := &fakeClient{responses: []llm.Response{
 		{
 			Assistant: llm.Message{
-				Role: llm.RoleAssistant,
-
+				Role:  llm.RoleAssistant,
 				Phase: textutil.Value(llm.MessagePhaseFinal),
 			},
+			OutputItems: []llm.ResponseItem{
+				{
+					Type:    llm.ResponseItemTypeMessage,
+					Role:    textutil.Value(llm.RoleAssistant),
+					Phase:   textutil.Value(llm.MessagePhaseCommentary),
+					Content: textutil.Value("still working"),
+				},
+				{
+					Type:  llm.ResponseItemTypeMessage,
+					Role:  textutil.Value(llm.RoleAssistant),
+					Phase: textutil.Value(llm.MessagePhaseFinal),
+				},
+			},
+			Usage: llm.Usage{WindowTokens: 200000},
+		},
+		finalTextResponse("done"),
+	}}
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
+
+	msg, err := eng.SubmitUserMessage(context.Background(), "continue")
+	if err != nil {
+		t.Fatalf("submit user turn: %v", err)
+	}
+	if got := messageContent(msg); got != "done" {
+		t.Fatalf("final content = %q, want done", got)
+	}
+	assertModelCallCount(t, client, 2)
+}
+
+func TestSubmitUserMessagePhaseOnlyCommentaryWithoutContentFailsProviderContract(t *testing.T) {
+	t.Parallel()
+	store := mustCreateTestSession(t)
+	client := &fakeClient{responses: []llm.Response{{
+		Assistant: llm.Message{
+			Role:    llm.RoleAssistant,
+			Phase:   textutil.Value(llm.MessagePhaseCommentary),
+			Content: nil,
+		},
+		Usage: llm.Usage{WindowTokens: 200000},
+	}}}
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
+
+	_, err := eng.SubmitUserMessage(context.Background(), "continue")
+	if err == nil || !strings.Contains(err.Error(), "provider contract violation") {
+		t.Fatalf("submit error = %v, want provider contract violation", err)
+	}
+	if len(client.calls) != 1 {
+		t.Fatalf("provider calls = %d, want one failed response", len(client.calls))
+	}
+}
+
+func TestSubmitUserMessageMissingFinalContentWithToolCallsExecutesTools(t *testing.T) {
+	t.Parallel()
+	store := mustCreateTestSession(t)
+	client := &fakeClient{responses: []llm.Response{
+		{
+			Assistant: llm.Message{
+				Role:  llm.RoleAssistant,
+				Phase: textutil.Value(llm.MessagePhaseFinal),
+			},
+			ToolCalls: []llm.ToolCall{{
+				ID:    "call_missing_final_content",
+				Name:  string(toolspec.ToolExecCommand),
+				Input: json.RawMessage(`{"command":"pwd"}`),
+			}},
 			Usage: llm.Usage{WindowTokens: 200000},
 		},
 		{
@@ -544,32 +627,19 @@ func TestSubmitUserMessageFinalAnswerWithoutContentForcesNextLoop(t *testing.T) 
 			Usage: llm.Usage{WindowTokens: 200000},
 		},
 	}}
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{
+		ID:      toolspec.ToolExecCommand,
+		Handler: fakeTool{name: toolspec.ToolExecCommand},
+	}), Config{Model: "gpt-5"})
 
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-
-	msg, err := eng.SubmitUserMessage(context.Background(), "do the task")
+	message, err := eng.SubmitUserMessage(context.Background(), "continue")
 	if err != nil {
 		t.Fatalf("submit: %v", err)
 	}
-	if messageContent(msg) != "done" {
-		t.Fatalf("assistant content = %q, want done", messageContent(msg))
+	if messageContent(message) != "done" {
+		t.Fatalf("assistant content = %q, want done", messageContent(message))
 	}
 	if len(client.calls) != 2 {
-		t.Fatalf("expected 2 model calls, got %d", len(client.calls))
-	}
-
-	secondReq := client.calls[1]
-	foundWarning := false
-	for _, reqMsg := range requestMessages(secondReq) {
-		if reqMsg.Role == llm.RoleDeveloper && strings.Contains(messageContent(reqMsg), finalWithoutContentWarning) {
-			if reqMsg.MessageType == nil || *reqMsg.MessageType != llm.MessageTypeErrorFeedback {
-				t.Fatalf("expected final-without-content warning message type error_feedback, got %+v", reqMsg)
-			}
-			foundWarning = true
-			break
-		}
-	}
-	if !foundWarning {
-		t.Fatalf("expected final-without-content warning in next request, got %+v", requestMessages(secondReq))
+		t.Fatalf("provider calls = %d, want tool execution and final", len(client.calls))
 	}
 }

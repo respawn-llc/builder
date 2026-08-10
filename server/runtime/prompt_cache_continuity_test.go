@@ -550,7 +550,7 @@ type promptCacheComparableMainView struct {
 	PreviousSessionID              *runtimeids.SessionID         `json:"previous_session_id,omitempty"`
 	ParentAgentSessionID           *runtimeids.SessionID         `json:"parent_agent_session_id,omitempty"`
 	NavigationTargetSessionID      *runtimeids.SessionID         `json:"navigation_target_session_id,omitempty"`
-	LastCommittedAssistantResponse string                        `json:"last_committed_assistant_response,omitempty"`
+	LastCommittedAssistantResponse *string                       `json:"last_committed_assistant_response,omitempty"`
 	ActiveRun                      *promptCacheComparableRunView `json:"active_run,omitempty"`
 }
 

@@ -256,7 +256,8 @@ func TestMainViewFromRuntimeBundlesStatusAndSession(t *testing.T) {
 	}
 	if view.Status.ParentAgentSessionID == nil || view.Status.ParentAgentSessionID.String() != parentSessionID ||
 		view.Status.NavigationTargetSessionID == nil || view.Status.NavigationTargetSessionID.String() != parentSessionID ||
-		view.Status.LastCommittedAssistantFinalAnswer != "final answer" {
+		view.Status.LastCommittedAssistantFinalAnswer == nil ||
+		*view.Status.LastCommittedAssistantFinalAnswer != "final answer" {
 		t.Fatalf("unexpected status hydration: %+v", view.Status)
 	}
 	if view.Status.ThinkingLevel != "high" || !view.Status.FastModeEnabled || view.Status.AutoCompactionEnabled {

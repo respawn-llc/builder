@@ -53,7 +53,7 @@ type RuntimeStatus struct {
 	PreviousSessionID                 *runtimeids.SessionID
 	ParentAgentSessionID              *runtimeids.SessionID
 	NavigationTargetSessionID         *runtimeids.SessionID
-	LastCommittedAssistantFinalAnswer string
+	LastCommittedAssistantFinalAnswer *string
 	ThinkingLevel                     string
 	CompactionMode                    string
 	ContextUsage                      RuntimeContextUsage
@@ -88,9 +88,19 @@ type QueuedUserMessage struct {
 	Text string
 }
 
+type UserTurnResultKind string
+
+const (
+	UserTurnResultKindQueued         UserTurnResultKind = "queued"
+	UserTurnResultKindNoFinal        UserTurnResultKind = "no_final"
+	UserTurnResultKindAssistantFinal UserTurnResultKind = "assistant_final"
+	UserTurnResultKindSilentFinal    UserTurnResultKind = "silent_final"
+)
+
 type UserTurnSubmission struct {
-	Message string
-	Queued  QueuedUserMessage
+	Message    *string
+	ResultKind UserTurnResultKind
+	Queued     QueuedUserMessage
 }
 
 type RuntimeSubmitRequest struct {

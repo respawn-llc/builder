@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"core/shared/clientui"
+	"core/shared/transcript"
 )
 
 type MessageType string
@@ -100,7 +101,7 @@ func normalizeMessageRecord(message MessageRecord) (MessageRecord, error) {
 	if message.SourcePath, err = normalizeOptionalEventText("source path", message.SourcePath); err != nil {
 		return MessageRecord{}, err
 	}
-	if message.Content, err = normalizeOptionalEventText("content", message.Content); err != nil {
+	if message.Content, err = normalizeMessageContent(message); err != nil {
 		return MessageRecord{}, err
 	}
 	if message.CompactContent, err = normalizeOptionalEventText("compact content", message.CompactContent); err != nil {
@@ -158,6 +159,23 @@ func normalizeMessageRecord(message MessageRecord) (MessageRecord, error) {
 		}
 	}
 	return message, nil
+}
+
+func normalizeMessageContent(message MessageRecord) (*string, error) {
+	if message.Content != nil &&
+		strings.TrimSpace(*message.Content) == "" {
+		if transcript.IsBlankAssistantFinal(transcript.AssistantFinalCandidate{
+			IsAssistant:    message.Role == MessageRoleAssistant,
+			IsFinal:        message.Phase != nil && *message.Phase == MessagePhaseFinal,
+			HasMessageType: message.MessageType != nil,
+			Content:        message.Content,
+		}) {
+			content := *message.Content
+			return &content, nil
+		}
+		return nil, fmt.Errorf("content must be non-empty when present")
+	}
+	return normalizeOptionalEventText("content", message.Content)
 }
 
 func hasPartialBackgroundNoticeIdentity(message MessageRecord) bool {

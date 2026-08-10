@@ -141,6 +141,71 @@ func TestQueuedUserMessageFlushAfterFinalAssistantPublishesCommittedAssistantFir
 	}
 }
 
+func TestQueuedUserMessageFlushBlankFinalSupersedesDeferredAnswer(t *testing.T) {
+	client, started, release := newGatedHookClient(
+		llm.Response{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("first final"), Phase: textutil.Value(llm.MessagePhaseFinal)},
+			Usage:     llm.Usage{WindowTokens: 200000},
+		},
+		llm.Response{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(""), Phase: textutil.Value(llm.MessagePhaseFinal)},
+			Usage:     llm.Usage{WindowTokens: 200000},
+		},
+	)
+	reviewerClient := &fakeClient{}
+	var reviewerStarts int
+	eng := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{
+		Reviewer: ReviewerConfig{
+			Frequency: "all",
+			Model:     "gpt-5",
+			Client:    reviewerClient,
+		},
+		OnEvent: func(evt Event) {
+			if evt.Kind == EventReviewerStarted {
+				reviewerStarts++
+			}
+		},
+	})
+
+	submitDone := make(chan struct {
+		message llm.Message
+		err     error
+	}, 1)
+	go func() {
+		message, err := eng.SubmitUserMessage(context.Background(), "start")
+		submitDone <- struct {
+			message llm.Message
+			err     error
+		}{message: message, err: err}
+	}()
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for first final request")
+	}
+	if _, accepted, err := eng.QueueUserMessageForActiveRun(context.Background(), "steer now", liveRunTestRequestID(t), nil); err != nil || !accepted {
+		t.Fatalf("QueueUserMessageForActiveRun accepted=%t err=%v", accepted, err)
+	}
+	release()
+
+	result := <-submitDone
+	if result.err != nil {
+		t.Fatalf("submit: %v", result.err)
+	}
+	if result.message.Content != nil {
+		t.Fatalf("blank final returned deferred assistant content %q", *result.message.Content)
+	}
+	if len(reviewerClient.calls) != 0 || reviewerStarts != 0 {
+		t.Fatalf("blank final ran reviewer: calls=%d starts=%d", len(reviewerClient.calls), reviewerStarts)
+	}
+	client.mu.Lock()
+	mainCalls := len(client.calls)
+	client.mu.Unlock()
+	if mainCalls != 2 {
+		t.Fatalf("main model calls = %d, want first final plus blank final", mainCalls)
+	}
+}
+
 func TestQueuedUserMessageFlushAfterFinalAssistantWithReasoningPublishesAssistantFirst(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{responses: []llm.Response{

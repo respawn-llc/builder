@@ -619,7 +619,7 @@ func assertReviewerPresentation(t *testing.T, snapshot ChatSnapshot, wantSuggest
 
 func TestParseReviewerSuggestionsObjectSupportsStructuredPayload(t *testing.T) {
 	suggestions := parseReviewerSuggestionsObject(`{"suggestions":["one"," two ","one"," ","NO_OP","no_op"]}`)
-	if len(suggestions) != 3 || suggestions[0] != "one" || suggestions[1] != " two " || suggestions[2] != "one" {
+	if len(suggestions) != 5 || suggestions[0] != "one" || suggestions[1] != " two " || suggestions[2] != "one" || suggestions[3] != "NO_OP" || suggestions[4] != "no_op" {
 		t.Fatalf("unexpected suggestions from object payload: %+v", suggestions)
 	}
 
@@ -649,7 +649,7 @@ func TestParseReviewerSuggestionsObjectPreservesAcceptedMarkdownBytes(t *testing
 		t.Fatalf("marshal Reviewer payload: %v", err)
 	}
 	suggestions := parseReviewerSuggestionsObject(string(payload))
-	if len(suggestions) != 2 || suggestions[0] != first || suggestions[1] != second {
+	if len(suggestions) != 3 || suggestions[0] != first || suggestions[1] != "NO_OP" || suggestions[2] != second {
 		t.Fatalf("suggestions lost exact Markdown bytes: %#v", suggestions)
 	}
 	instruction := formatReviewerDeveloperInstruction(suggestions)

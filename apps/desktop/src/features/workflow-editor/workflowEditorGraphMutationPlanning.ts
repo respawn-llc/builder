@@ -43,6 +43,7 @@ export function confirmationFromImpact(impact: WorkflowGraphSaveImpact): Workflo
     expectedEdgeTaskReferenceCount: impact.edgeTaskReferenceCount,
     expectedNodeTaskReferenceCount: impact.nodeTaskReferenceCount,
     expectedRemovedEdgeCount: impact.removedEdgeCount,
+    expectedRemovedNodeGroupCount: impact.removedNodeGroupCount,
     expectedRemovedNodeCount: impact.removedNodeCount,
     expectedRemovedTransitionGroupCount: impact.removedTransitionGroupCount,
   };

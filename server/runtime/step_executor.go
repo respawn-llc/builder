@@ -44,7 +44,7 @@ type preparedCompletedResponse struct {
 	resolutionOutcome            completedResponseResolutionOutcome
 	resolutionResolved           bool
 	acceptedCalls                acceptedResponseCalls
-	noopFinalAnswer              bool
+	silentFinalAnswer            bool
 	assistantCommittedCoordinate *committedAssistantCoordinate
 	executedToolCall             bool
 	patchEditsApplied            bool
@@ -299,10 +299,6 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 	e := s.engine
 	executedToolCall := false
 	patchEditsApplied := false
-	deferredFinal := llm.Message{}
-	var deferredFinalCommittedCoordinate *committedAssistantCoordinate
-	deferredFinalEventEmitted := false
-	hasDeferredFinal := false
 	for {
 		if err := ctx.Err(); err != nil {
 			return stepLoopResult{}, err
@@ -407,12 +403,12 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 		acceptedCalls := prepared.acceptedCalls
 		localToolCalls := acceptedCalls.local
 		hostedToolExecutions := acceptedCalls.hosted
-		noopFinalAnswer := prepared.noopFinalAnswer
+		silentFinalAnswer := prepared.silentFinalAnswer
 		assistantCommittedCoordinate := prepared.assistantCommittedCoordinate
 		assistantProvenance := cloneTranscriptCommittedRowProvenance(prepared.assistantProvenance)
 		assistantEventEmitted := resolution.committedAssistantEventPublished
 
-		if !noopFinalAnswer {
+		if !silentFinalAnswer {
 			if phaseTurn.MissingAssistantPhase {
 				if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeErrorFeedback), Content: textutil.Value(missingAssistantPhaseWarning)}})); err != nil {
 					return stepLoopResult{}, err
@@ -439,11 +435,16 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 			continue
 		}
 
-		if responseOutputIsReasoningOnly(resp.OutputItems) {
+		if assistantMsg.Content == nil && responseContainsProgress(resp) {
 			if err := s.completeAgentStepBoundary(ctx); err != nil {
 				return stepLoopResult{}, err
 			}
 			continue
+		}
+		if assistantMsg.Content == nil {
+			return stepLoopResult{}, errors.New(
+				"provider contract violation: response contained no final content, tool calls, reasoning, or commentary",
+			)
 		}
 
 		if phaseTurn.EffectivePhase.Is(llm.MessagePhaseFinal) &&
@@ -489,8 +490,8 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 				if assistantMsg.Content != nil {
 					content = strings.TrimSpace(*assistantMsg.Content)
 				}
-				if content == "" && !noopFinalAnswer {
-					if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeErrorFeedback), Content: textutil.Value(finalWithoutContentWarning)}})); err != nil {
+				if assistantMsg.Content != nil && content == "" && !silentFinalAnswer {
+					if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeErrorFeedback), Content: textutil.Value(workflowFinalWithoutContentWarning)}})); err != nil {
 						return stepLoopResult{}, err
 					}
 					continue
@@ -501,7 +502,7 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 						return stepLoopResult{}, err
 					}
 					if terminal {
-						if noopFinalAnswer {
+						if silentFinalAnswer {
 							return stepLoopResult{ExecutedToolCall: executedToolCall}, nil
 						}
 						return stepLoopResult{FinalAnswer: textutil.Value(assistantMsg), ExecutedToolCall: executedToolCall}, nil
@@ -516,29 +517,12 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 			}
 
 			resolved := assistantMsg
-			resolvedNoopFinalAnswer := noopFinalAnswer
+			resolvedSilentFinalAnswer := silentFinalAnswer
 			resolvedCommittedCoordinate := cloneCommittedAssistantCoordinate(assistantCommittedCoordinate)
 			var reviewerCompletion *ReviewerStatus
-			if hasDeferredFinal {
-				if resolvedNoopFinalAnswer {
-					resolved = deferredFinal
-					resolvedNoopFinalAnswer = isNoopFinalAnswer(resolved)
-					resolvedCommittedCoordinate = cloneCommittedAssistantCoordinate(deferredFinalCommittedCoordinate)
-					assistantEventEmitted = deferredFinalEventEmitted
-				}
-				hasDeferredFinal = false
-				deferredFinalCommittedCoordinate = nil
-				deferredFinalEventEmitted = false
-			}
-			if resolvedNoopFinalAnswer {
+			if resolvedSilentFinalAnswer {
 				resolvedCommittedStart, resolvedCommittedStartSet := committedAssistantCoordinateFields(resolvedCommittedCoordinate)
-				if e.goalActive() {
-					if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeErrorFeedback), Content: textutil.Value(goalNoopFinalWarning)}})); err != nil {
-						return stepLoopResult{}, err
-					}
-					continue
-				}
-				return stepLoopResult{ExecutedToolCall: executedToolCall, AssistantCommittedStart: resolvedCommittedStart, AssistantCommittedStartSet: resolvedCommittedStartSet}, nil
+				return stepLoopResult{SilentFinal: true, ExecutedToolCall: executedToolCall, AssistantCommittedStart: resolvedCommittedStart, AssistantCommittedStartSet: resolvedCommittedStartSet}, nil
 			}
 
 			resolvedCommittedStart, resolvedCommittedStartSet := committedAssistantCoordinateFields(resolvedCommittedCoordinate)
@@ -627,7 +611,15 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 		return preparedCompletedResponse{}, err
 	}
 	executedToolCall := acceptedCalls.hasCalls()
-	noopFinalAnswer := isNoopFinalAnswer(assistantMsg)
+	silentFinalAnswer := isBlankFinalAnswer(assistantMsg) &&
+		!e.goalActive() &&
+		!e.currentNodeExecutionActive()
+	if silentFinalAnswer && acceptedCalls.hasCalls() {
+		return preparedCompletedResponse{}, fmt.Errorf(
+			"provider returned a blank final answer with %d accepted tool calls",
+			len(acceptedCalls.order),
+		)
+	}
 
 	if rejection != nil {
 		return preparedCompletedResponse{
@@ -636,7 +628,7 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 			response:           resp,
 			phaseTurn:          phaseTurn,
 			assistant:          assistantMsg,
-			noopFinalAnswer:    noopFinalAnswer,
+			silentFinalAnswer:  silentFinalAnswer,
 			executedToolCall:   executedToolCall,
 			preflightRejection: rejection,
 		}, nil
@@ -665,7 +657,7 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 				response:          resp,
 				phaseTurn:         phaseTurn,
 				assistant:         assistantMsg,
-				noopFinalAnswer:   noopFinalAnswer,
+				silentFinalAnswer: silentFinalAnswer,
 				executedToolCall:  true,
 				patchEditsApplied: patchEditsApplied,
 			}, nil
@@ -678,7 +670,7 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 		}
 	}
 
-	if !noopFinalAnswer {
+	if !silentFinalAnswer {
 		assistantChars := 0
 		assistantPhase, _ := textutil.OptionalValue(assistantMsg.Phase)
 		if assistantMsg.Content != nil {
@@ -698,7 +690,7 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 			return preparedCompletedResponse{}, err
 		}
 	}
-	if !noopFinalAnswer && !finalAnswerWithToolCalls {
+	if !silentFinalAnswer && !finalAnswerWithToolCalls {
 		if err := e.markProviderVisibleModelRecovery(stepID); err != nil {
 			return preparedCompletedResponse{}, err
 		}
@@ -731,7 +723,7 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 		assistant:                    assistantMsg,
 		assistantProvenance:          cloneTranscriptCommittedRowProvenance(assistantProvenance),
 		acceptedCalls:                acceptedCalls,
-		noopFinalAnswer:              noopFinalAnswer,
+		silentFinalAnswer:            silentFinalAnswer,
 		assistantCommittedCoordinate: assistantCommittedCoordinate,
 		executedToolCall:             executedToolCall,
 		patchEditsApplied:            patchEditsApplied,
@@ -1006,7 +998,7 @@ func (s *defaultStepExecutor) publishCommittedAssistantMessage(stepID string, ms
 }
 
 func committedAssistantMessageFinalizesStreaming(msg llm.Message) bool {
-	if msg.Role != llm.RoleAssistant || isNoopFinalAnswer(msg) {
+	if msg.Role != llm.RoleAssistant || isBlankFinalAnswer(msg) {
 		return false
 	}
 	for _, entry := range VisibleChatEntriesFromMessage(msg) {

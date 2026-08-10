@@ -547,10 +547,10 @@ func TestGoalTurnAppendsNudgePromptAndRunsModel(t *testing.T) {
 	}
 }
 
-func TestGoalTurnRejectsNoopFinalWithoutAppendingExtraNudge(t *testing.T) {
+func TestGoalBlankFinalUsesRegularContinuationNudge(t *testing.T) {
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	client := &fakeClient{responses: []llm.Response{
-		finalTextResponse("NO_OP"),
+		finalTextResponse(""),
 		finalTextResponse("working"),
 	}}
 	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
@@ -562,22 +562,29 @@ func TestGoalTurnRejectsNoopFinalWithoutAppendingExtraNudge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runGoalTurn: %v", err)
 	}
+	if messageContent(msg) != "" {
+		t.Fatalf("first assistant content = %q, want blank", messageContent(msg))
+	}
+	msg, err = engine.runGoalTurn(t.Context(), true)
+	if err != nil {
+		t.Fatalf("runGoalTurn continuation: %v", err)
+	}
 	if messageContent(msg) != "working" {
 		t.Fatalf("assistant content = %q, want working", messageContent(msg))
 	}
 	assertModelCallCount(t, client, 2)
 	secondReq := requestMessages(client.calls[1])
-	foundWarning := false
+	foundNudge := false
 	for _, reqMsg := range secondReq {
-		if reqMsg.Role == llm.RoleDeveloper && messageContent(reqMsg) == goalNoopFinalWarning {
-			if reqMsg.MessageType == nil || *reqMsg.MessageType != llm.MessageTypeErrorFeedback {
-				t.Fatalf("NO_OP warning message type = %v, want error_feedback", reqMsg.MessageType)
+		if reqMsg.Role == llm.RoleDeveloper && messageContent(reqMsg) == prompts.RenderGoalNudgePrompt("ship goal mode", "active") {
+			if reqMsg.MessageType == nil || *reqMsg.MessageType != llm.MessageTypeGoal {
+				t.Fatalf("goal nudge message type = %v, want goal", reqMsg.MessageType)
 			}
-			foundWarning = true
+			foundNudge = true
 		}
 	}
-	if !foundWarning {
-		t.Fatalf("expected NO_OP warning in second request, got %+v", secondReq)
+	if !foundNudge {
+		t.Fatalf("expected regular goal nudge in second request, got %+v", secondReq)
 	}
 
 	events, err := collectTestEventRecords(store)
@@ -585,13 +592,8 @@ func TestGoalTurnRejectsNoopFinalWithoutAppendingExtraNudge(t *testing.T) {
 		t.Fatalf("ReadEvents: %v", err)
 	}
 	messages := goalDeveloperMessages(t, events)
-	if len(messages) != 2 {
-		t.Fatalf("goal developer messages len = %d, want set+nudge only: %+v", len(messages), messages)
-	}
-	for _, msg := range messages {
-		if messageContent(msg) == goalNoopFinalWarning {
-			t.Fatalf("NO_OP rejection should use error feedback, not goal feedback: %+v", msg)
-		}
+	if len(messages) != 3 {
+		t.Fatalf("goal developer messages len = %d, want set plus two regular nudges: %+v", len(messages), messages)
 	}
 }
 

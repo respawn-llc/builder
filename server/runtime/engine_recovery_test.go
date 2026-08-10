@@ -340,7 +340,7 @@ func TestReopenedSessionRestoresLastAssistantFinalAnswerAcrossCompaction(t *test
 	)); err != nil {
 		t.Fatalf("persist typed final answer: %v", err)
 	}
-	if engine.LastCommittedAssistantFinalAnswer() == "" {
+	if engine.LastCommittedAssistantFinalAnswer() == nil {
 		t.Fatal("typed final answer did not establish the live final-answer fact")
 	}
 
@@ -370,8 +370,7 @@ func TestReopenedSessionRestoresLastAssistantFinalAnswerAcrossCompaction(t *test
 			continue
 		}
 		replacements++
-		carriedFinalAnswer = replacement.LastCommittedAssistantFinalAnswer != nil &&
-			*replacement.LastCommittedAssistantFinalAnswer != ""
+		carriedFinalAnswer = replacement.LastCommittedAssistantFinalAnswer != nil
 	}
 	if replacements != 1 || !carriedFinalAnswer {
 		t.Fatalf(
@@ -380,13 +379,13 @@ func TestReopenedSessionRestoresLastAssistantFinalAnswerAcrossCompaction(t *test
 			carriedFinalAnswer,
 		)
 	}
-	if engine.LastCommittedAssistantFinalAnswer() == "" {
+	if engine.LastCommittedAssistantFinalAnswer() == nil {
 		t.Fatal("committed compaction cleared the live final-answer fact")
 	}
 
 	reopened := mustOpenTestSession(t, store.Dir())
 	restored := mustNewTestEngine(t, reopened, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
-	if restored.LastCommittedAssistantFinalAnswer() == "" {
+	if restored.LastCommittedAssistantFinalAnswer() == nil {
 		t.Fatal("reopened compaction lost the carried final-answer fact")
 	}
 }

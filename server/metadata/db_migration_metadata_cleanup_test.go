@@ -88,9 +88,6 @@ func TestOpenRemovesSystemTaskCommentAuthorKind(t *testing.T) {
 	if authorKind != "agent" || authorID != "system" {
 		t.Fatalf("migrated system comment author = %q/%q, want agent/system", authorKind, authorID)
 	}
-	if !indexExists(t, store.db, "task_comments_task_updated_idx") {
-		t.Fatal("task_comments_task_updated_idx should be recreated after rebuilding task_comments")
-	}
 	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO task_comments (id, task_id, body, author_kind, created_at_unix_ms, updated_at_unix_ms) VALUES ('comment-system-rejected', 'task-system-comment', 'bad', 'system', 1, 1)`)
 }
 

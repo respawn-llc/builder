@@ -231,8 +231,8 @@ func TestStartSessionServerConfiguredDaemonNoAuthSkipsLaterPrompt(t *testing.T) 
 	if err != nil {
 		t.Fatalf("first SubmitUserMessage: %v", err)
 	}
-	if firstSubmission.Message != "first no-auth reply" {
-		t.Fatalf("first assistant message = %q, want first no-auth reply", firstSubmission.Message)
+	if firstSubmission.Message == nil || *firstSubmission.Message != "first no-auth reply" {
+		t.Fatalf("first assistant message = %v, want first no-auth reply", firstSubmission.Message)
 	}
 	closeRuntimeLaunchPlan(t, firstRuntimePlan)
 	if err := firstServer.Close(); err != nil {
@@ -259,8 +259,8 @@ func TestStartSessionServerConfiguredDaemonNoAuthSkipsLaterPrompt(t *testing.T) 
 	if err != nil {
 		t.Fatalf("second SubmitUserMessage: %v", err)
 	}
-	if secondSubmission.Message != "second no-auth reply" {
-		t.Fatalf("second assistant message = %q, want second no-auth reply", secondSubmission.Message)
+	if secondSubmission.Message == nil || *secondSubmission.Message != "second no-auth reply" {
+		t.Fatalf("second assistant message = %v, want second no-auth reply", secondSubmission.Message)
 	}
 	closeRuntimeLaunchPlan(t, secondRuntimePlan)
 	if hits.Load() != 2 {
@@ -395,7 +395,10 @@ func TestConfiguredDaemonEnvironmentContextUsesSessionWorkspaceRootForCWD(t *tes
 	defer closeRuntimeLaunchPlan(t, runtimePlan)
 
 	submission, err := submitRuntimeClientForTest(t, runtimePlan.Wiring.runtimeClient, "hello through interactive daemon")
-	message := submission.Message
+	message := ""
+	if submission.Message != nil {
+		message = *submission.Message
+	}
 	if err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
 	}
@@ -496,8 +499,8 @@ func TestRemoteInteractiveRuntimeAnswersPromptsFromAnyAttachedClientAcrossWorksp
 		if result.err != nil {
 			t.Fatalf("SubmitUserMessage: %v", result.err)
 		}
-		if result.submission.Message != "multi-client prompt flow complete" {
-			t.Fatalf("assistant message = %q", result.submission.Message)
+		if result.submission.Message == nil || *result.submission.Message != "multi-client prompt flow complete" {
+			t.Fatalf("assistant message = %v", result.submission.Message)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for model turn completion")

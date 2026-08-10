@@ -66,6 +66,7 @@ func (*queuedUserFlushStoppedError) Error() string { return "queued user flush s
 
 type stepLoopResult struct {
 	FinalAnswer                *llm.Message
+	SilentFinal                bool
 	ExecutedToolCall           bool
 	AssistantCommittedStart    int
 	AssistantCommittedStartSet bool
