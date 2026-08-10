@@ -366,7 +366,7 @@ func (s *defaultExclusiveStepLifecycle) InterruptCurrent(beforeCancel func(*RunS
 	return snapshot, nil
 }
 
-func (s *defaultExclusiveStepLifecycle) InterruptCurrentAgentTurn(beforeCancel func(*RunSnapshot)) (*RunSnapshot, error) {
+func (s *defaultExclusiveStepLifecycle) InterruptCurrentAgentTurn(afterPersist func(*RunSnapshot)) (*RunSnapshot, error) {
 	s.mu.Lock()
 	active := s.active
 	if active == nil || !isAgentStepCapable(active.activeKind) || active.closing || active.interrupted {
@@ -374,32 +374,32 @@ func (s *defaultExclusiveStepLifecycle) InterruptCurrentAgentTurn(beforeCancel f
 		return nil, nil
 	}
 	snapshot := cloneRunSnapshot(s.snapshotLocked())
-	if beforeCancel != nil {
-		beforeCancel(cloneRunSnapshot(snapshot))
-	}
 	active.interrupted = true
 	s.beginPublicationLocked()
 	s.mu.Unlock()
-	if active.cancel != nil {
-		active.cancel()
-	}
+	err := s.persistInterruption()
 	s.mu.Lock()
+	if err != nil {
+		s.clearCurrentInterruptedLocked(active)
+		s.finishPublicationLocked()
+		s.mu.Unlock()
+		return nil, err
+	}
 	if !s.runCurrentLocked(active) {
 		s.finishPublicationLocked()
 		s.mu.Unlock()
 		return nil, nil
 	}
 	s.mu.Unlock()
-	err := s.persistInterruption()
-	s.mu.Lock()
-	if err != nil {
-		s.clearCurrentInterruptedLocked(active)
+	if afterPersist != nil {
+		afterPersist(cloneRunSnapshot(snapshot))
 	}
+	if active.cancel != nil {
+		active.cancel()
+	}
+	s.mu.Lock()
 	s.finishPublicationLocked()
 	s.mu.Unlock()
-	if err != nil {
-		return nil, err
-	}
 	return snapshot, nil
 }
 

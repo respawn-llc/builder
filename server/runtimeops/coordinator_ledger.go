@@ -23,10 +23,9 @@ func (l *sessionLedger) pruneLocked(limit int, ttl time.Duration, now time.Time)
 			record := l.records[key]
 			delete(l.records, key)
 			delete(l.terminal, key)
-			if entry := l.operations[key]; entry != nil && entry.completed && (entry.successful || entry.committed) {
+			if entry := l.operations[key]; entry != nil && entry.completed {
 				delete(l.operations, key)
 			}
-			delete(l.failedReqs, key)
 			l.recordEvictedLocked(key, record.Operation, now)
 			continue
 		}
@@ -39,10 +38,9 @@ func (l *sessionLedger) pruneLocked(limit int, ttl time.Duration, now time.Time)
 		record := l.records[key]
 		delete(l.records, key)
 		delete(l.terminal, key)
-		if entry := l.operations[key]; entry != nil && entry.completed && (entry.successful || entry.committed) {
+		if entry := l.operations[key]; entry != nil && entry.completed {
 			delete(l.operations, key)
 		}
-		delete(l.failedReqs, key)
 		l.recordEvictedLocked(key, record.Operation, now)
 	}
 	for key, createdAt := range l.tombstoneAt {
@@ -50,7 +48,6 @@ func (l *sessionLedger) pruneLocked(limit int, ttl time.Duration, now time.Time)
 			delete(l.tombstoneAt, key)
 			delete(l.tombstones, key)
 			delete(l.operations, key)
-			delete(l.failedReqs, key)
 			if record, ok := l.records[key]; ok {
 				if _, terminal := l.terminal[key]; !terminal {
 					delete(l.records, key)

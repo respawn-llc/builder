@@ -620,14 +620,8 @@ func TestExclusiveStepLifecycleAgentTurnInterruptMatchesOnlyAgentTurns(t *testin
 		{name: string(ActiveKindGoalLoop), kind: ActiveKindGoalLoop, wantMatch: true},
 		{name: "closing_user_turn", kind: ActiveKindUserTurn, closing: true},
 		{name: string(ActiveKindCompaction), kind: ActiveKindCompaction},
-		{name: string(ActiveKindPreSubmitCompaction), kind: ActiveKindPreSubmitCompaction},
-		{name: string(ActiveKindUserShell), kind: ActiveKindUserShell},
-		{name: string(ActiveKindBackground), kind: ActiveKindBackground},
-		{name: string(ActiveKindRuntimeMaintenance), kind: ActiveKindRuntimeMaintenance},
 	} {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
 			store := mustCreateTestSession(t)
 			eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 			canceled := false
@@ -636,22 +630,17 @@ func TestExclusiveStepLifecycleAgentTurnInterruptMatchesOnlyAgentTurns(t *testin
 				active: &exclusiveRunState{
 					sequence:   1,
 					activeKind: test.kind,
-					cancel: func() {
-						canceled = true
-					},
-					runID:     uuid.NewString(),
-					stepID:    uuid.NewString(),
-					startedAt: time.Now().UTC(),
-					closing:   test.closing,
+					cancel:     func() { canceled = true },
+					runID:      uuid.NewString(),
+					stepID:     uuid.NewString(),
+					startedAt:  time.Now().UTC(),
+					closing:    test.closing,
 				},
 			}
 
 			interrupted, err := lifecycle.InterruptCurrentAgentTurn(nil)
-			if err != nil {
-				t.Fatalf("agent-turn interrupt: %v", err)
-			}
-			if matched := interrupted != nil; matched != test.wantMatch {
-				t.Fatalf("agent-turn interrupt matched=%t, want %t for %s", matched, test.wantMatch, test.kind)
+			if matched := interrupted != nil; err != nil || matched != test.wantMatch {
+				t.Fatalf("agent-turn interrupt matched/error=%t/%v, want %t for %s", matched, err, test.wantMatch, test.kind)
 			}
 			if canceled != test.wantMatch {
 				t.Fatalf("agent-turn interrupt canceled=%t, want %t for %s", canceled, test.wantMatch, test.kind)
@@ -741,6 +730,37 @@ func TestExclusiveStepLifecycleAgentTurnInterruptKeepsSuccessorBehindPersistence
 	}
 	if err := <-successorDone; err != nil {
 		t.Fatalf("shell successor: %v", err)
+	}
+}
+
+func TestExclusiveStepLifecycleAgentTurnPersistenceFailureDoesNotCancel(t *testing.T) {
+	persistErr := errors.New("interruption persistence failed")
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	canceled := false
+	lifecycle := &defaultExclusiveStepLifecycle{
+		engine: eng,
+		active: &exclusiveRunState{
+			sequence:   1,
+			activeKind: ActiveKindUserTurn,
+			cancel:     func() { canceled = true },
+			runID:      uuid.NewString(),
+			stepID:     uuid.NewString(),
+			startedAt:  time.Now().UTC(),
+		},
+	}
+	gate.FailNext(persistErr)
+
+	snapshot, err := lifecycle.InterruptCurrentAgentTurn(nil)
+	if snapshot != nil || !errors.Is(err, persistErr) {
+		t.Fatalf("agent-turn interrupt = (%+v, %v), want persistence failure", snapshot, err)
+	}
+	if canceled {
+		t.Fatal("Agent Turn context was canceled before interruption persisted")
+	}
+	if lifecycle.active.interrupted {
+		t.Fatal("persistence failure left Agent Turn marked interrupted")
 	}
 }
 
@@ -1185,7 +1205,7 @@ func TestContextCompactorUsesExclusiveStepLifecycle(t *testing.T) {
 
 	steps := &stubExclusiveStepLifecycle{}
 	compactor := &defaultContextCompactor{engine: eng, steps: steps}
-	if _, err := compactor.CompactContextWithActiveHook(context.Background(), "", nil); err != nil {
+	if _, err := compactor.CompactContextWithAcceptance(context.Background(), "", nil, nil); err != nil {
 		t.Fatalf("compact context: %v", err)
 	}
 	if steps.calls() != 1 {

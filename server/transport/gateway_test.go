@@ -143,6 +143,33 @@ func TestResponseForErrorMapsJoinedWorktreeBlocked(t *testing.T) {
 	}
 }
 
+func TestResponseForErrorPreservesRuntimeCommandNotAcceptedCause(t *testing.T) {
+	command := "prompt:review"
+	cause := &serverapi.PromptCommandError{
+		Kind:    serverapi.PromptCommandErrorKindCommandNotFound,
+		Command: &command,
+	}
+	source := serverapi.NewRuntimeCommandNotAcceptedError(cause)
+	response := responseForError("runtime-command", source)
+	if response.Error == nil || response.Error.Code != protocol.ErrCodeRuntimeCommandNotAccepted {
+		t.Fatalf("runtime command response = %+v, want structured not-accepted error", response.Error)
+	}
+	var payload struct {
+		Cause protocol.ResponseError `json:"cause"`
+	}
+	if err := json.Unmarshal(response.Error.Data, &payload); err != nil {
+		t.Fatalf("decode nested cause: %v", err)
+	}
+	if payload.Cause.Code != protocol.ErrCodePromptCommands {
+		t.Fatalf("nested cause code = %d, want %d", payload.Cause.Code, protocol.ErrCodePromptCommands)
+	}
+	decoded := serverapi.DecodePromptCommandError(payload.Cause.Data, payload.Cause.Message)
+	var promptErr *serverapi.PromptCommandError
+	if !errors.As(decoded, &promptErr) || promptErr.Kind != cause.Kind || promptErr.Command == nil || *promptErr.Command != command {
+		t.Fatalf("nested cause = %T %+v, want %+v", decoded, promptErr, cause)
+	}
+}
+
 func TestResponseForErrorMapsProjectWorkspaceTypedFailures(t *testing.T) {
 	tests := []struct {
 		name string

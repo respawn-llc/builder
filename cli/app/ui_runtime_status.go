@@ -38,6 +38,9 @@ func (m *uiModel) applyRuntimeMainViewState(view clientui.RuntimeMainView) tea.C
 		}
 	}
 	if view.Activity.State != "" && !view.Activity.ActiveForControl() && m.hasPendingInterrupt() {
+		if m.pendingInterruptMissingInputReconciliation(view) {
+			return nil
+		}
 		return m.acknowledgePendingInterrupt()
 	}
 	return nil

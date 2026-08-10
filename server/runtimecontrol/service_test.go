@@ -92,6 +92,8 @@ type runtimeControlPromptHistoryStore struct {
 	recordInserted []bool
 	recordErr      error
 	recordCtxErr   error
+	recordEntered  chan struct{}
+	recordRelease  <-chan struct{}
 }
 
 func newRuntimeControlPromptHistoryStore(sessionID string) *runtimeControlPromptHistoryStore {
@@ -108,6 +110,13 @@ func (s *runtimeControlPromptHistoryStore) RecordPromptHistoryEntry(ctx context.
 	}
 	if s.recordCtxErr != nil && ctx.Err() != nil {
 		return metadata.PromptHistoryRecord{}, false, s.recordCtxErr
+	}
+	if s.recordEntered != nil {
+		close(s.recordEntered)
+		s.recordEntered = nil
+	}
+	if s.recordRelease != nil {
+		<-s.recordRelease
 	}
 	for _, record := range s.records {
 		if record.SessionID == entry.SessionID && record.SourceID == entry.SourceID {
@@ -710,20 +719,14 @@ func TestServiceCanceledAskQuestionTurnReleasesExecutionForNextUserTurn(t *testi
 	}
 }
 
-func TestServiceInterruptReturnsUnavailableActivityWithoutEngine(t *testing.T) {
+func TestServiceInterruptWithoutEngineIsNotAccepted(t *testing.T) {
 	service := NewService(sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}))
-	resp, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
+	_, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
 		ClientRequestID: "interrupt-1",
 		SessionID:       "018fdd67-89ab-4cde-8123-456789abcdef",
 	})
-	if err != nil {
-		t.Fatalf("Interrupt: %v", err)
-	}
-	if err := resp.Version.Validate(); err != nil {
-		t.Fatalf("response version invalid: %v", err)
-	}
-	if resp.Activity.State != clientui.RuntimeActivityUnavailable {
-		t.Fatalf("activity = %+v, want unavailable", resp.Activity)
+	if !errors.Is(err, serverapi.ErrRuntimeCommandNotAccepted) {
+		t.Fatalf("Interrupt without engine error = %v, want not accepted", err)
 	}
 }
 
@@ -904,7 +907,7 @@ func runtimeControlPromptHistoryStoresLoad(t *testing.T, sessionID string) *runt
 	return store
 }
 
-func TestServiceInterruptReturnsCurrentActivitySnapshot(t *testing.T) {
+func TestServiceInterruptIdleIsNotAccepted(t *testing.T) {
 	store, _, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{})
 	service.WithRuntimeActivityResolver(&sequenceRuntimeActivityResolver{
 		snapshots: []runtimeactivity.ResponseSnapshot{{
@@ -912,18 +915,12 @@ func TestServiceInterruptReturnsCurrentActivitySnapshot(t *testing.T) {
 			Activity: clientui.RuntimeActivity{State: clientui.RuntimeActivityRegisteredIdle, QueueAccepting: true},
 		}},
 	})
-	resp, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
+	_, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
 		ClientRequestID: "interrupt-1",
 		SessionID:       store.Meta().SessionID,
 	})
-	if err != nil {
-		t.Fatalf("Interrupt: %v", err)
-	}
-	if resp.Activity.State != clientui.RuntimeActivityRegisteredIdle {
-		t.Fatalf("activity = %+v, want idle", resp.Activity)
-	}
-	if err := resp.Version.Validate(); err != nil {
-		t.Fatalf("invalid response version: %v", err)
+	if !errors.Is(err, serverapi.ErrRuntimeCommandNotAccepted) {
+		t.Fatalf("Interrupt idle error = %v, want runtime command not accepted", err)
 	}
 }
 
@@ -1673,25 +1670,24 @@ func TestServiceSubmitUserTurnPromptCommandUsesExpandedExecutionAndCanonicalHist
 	}
 }
 
-func TestServiceSubmitUserTurnPromptResolutionFailureRecordsFailedWithRestore(t *testing.T) {
+func TestServiceSubmitUserTurnPromptResolutionFailureIsNotAcceptedAndRemainsRetryable(t *testing.T) {
 	store, _, service := newRuntimeControlTestService(t, finalResponseRuntimeControlClient(), nil, runtime.Config{})
-	resolver := &runtimeControlPromptCommandResolver{err: errors.New("prompt command disappeared")}
+	resolutionErr := errors.New("prompt command disappeared")
+	resolver := &runtimeControlPromptCommandResolver{err: resolutionErr}
 	service.WithPromptCommandResolver(resolver)
-	operations := runtimeops.NewCoordinator()
-	service.WithOperationCoordinator(operations)
 	req := runtimeControlUserTurnRequest(store, "missing-prompt", "unused")
 	req.Input = runtimeinput.BuiltinCommand(runtimeinput.BuiltinPromptCommandReview, "")
 
-	if _, err := service.SubmitUserTurn(context.Background(), req); err == nil {
-		t.Fatal("SubmitUserTurn missing prompt command succeeded")
+	if _, err := service.SubmitUserTurn(context.Background(), req); !errors.Is(err, serverapi.ErrRuntimeCommandNotAccepted) || !errors.Is(err, resolutionErr) {
+		t.Fatalf("SubmitUserTurn missing prompt command error = %v, want typed not-accepted resolution failure", err)
 	}
-	assertRuntimeControlReconciliation(
-		t,
-		operations,
-		store.Meta().SessionID,
-		req.OperationRef,
-		clientui.RuntimeInputReconciliationFailedWithRestore,
-	)
+	req.Input = runtimeinput.Text("retry after resolution failure")
+	if _, err := service.SubmitUserTurn(context.Background(), req); err != nil {
+		t.Fatalf("SubmitUserTurn retry after pre-acceptance failure: %v", err)
+	}
+	if got := countUserMessagesWithContent(t, store, "retry after resolution failure"); got != 1 {
+		t.Fatalf("retried user message count = %d, want 1", got)
+	}
 }
 
 func TestServiceSubmitUserTurnPromptCommandRetryDoesNotRereadOrDuplicateHistory(t *testing.T) {
@@ -1733,9 +1729,11 @@ func TestServiceSubmitUserTurnOperationTombstonePreventsPreActiveBegin(t *testin
 	operations := runtimeops.NewCoordinator()
 	service.WithOperationCoordinator(operations)
 	req := runtimeControlUserTurnRequest(store, "req-canceled", "hello")
-	if err := operations.CancelOperation(store.Meta().SessionID, req.OperationRef); err != nil {
-		t.Fatalf("CancelOperation: %v", err)
+	cancellation, err := operations.CancelOperationTarget(store.Meta().SessionID, req.OperationRef)
+	if err != nil {
+		t.Fatalf("CancelOperationTarget: %v", err)
 	}
+	cancellation.CancelOperationAttempt()
 
 	if _, err := service.SubmitUserTurn(context.Background(), req); !errors.Is(err, runtimeops.ErrOperationCanceled) {
 		t.Fatalf("SubmitUserTurn after tombstone error = %v, want operation canceled", err)
@@ -2239,8 +2237,8 @@ func TestServiceSubmitUserTurnQueuesWhileCompactionOwnsSessionExecution(t *testi
 	if _, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
 		ClientRequestID: "interrupt-compaction",
 		SessionID:       store.Meta().SessionID,
-	}); err != nil {
-		t.Fatalf("Interrupt while compacting: %v", err)
+	}); !errors.Is(err, serverapi.ErrRuntimeCommandNotAccepted) {
+		t.Fatalf("Interrupt while compacting error = %v, want Runtime Command not accepted", err)
 	}
 	select {
 	case err := <-compactDone:
@@ -2320,43 +2318,31 @@ func TestServiceInterruptDiscardsPendingSteeringBeforeStoppingActiveRun(t *testi
 	}
 
 	steeringReq := runtimeControlUserTurnRequest(store, "queued-steering", "do not continue after interrupt")
-	steered, err := service.SubmitUserTurn(context.Background(), steeringReq)
-	if err != nil {
-		t.Fatalf("SubmitUserTurn steering: %v", err)
-	}
-	queueItemID := mustRuntimeControlQueueItemID(t, steered.QueueItemID)
-	queuedRef := clientui.RuntimeOperationRef{
-		Kind:            clientui.RuntimeOperationKindQueuedMessage,
-		ClientRequestID: steeringReq.OperationRef.ClientRequestID,
-		QueueItemID:     &queueItemID,
-	}
-	runID := mustRuntimeControlRunID(t)
-	stepID := mustRuntimeControlStepID(t)
-	service.WithRuntimeActivityResolver(&sequenceRuntimeActivityResolver{
-		snapshots: []runtimeactivity.ResponseSnapshot{
-			{
-				Version: clientui.ReadModelVersion{Epoch: "epoch-1", Generation: 1, Sequence: 1},
-				Activity: clientui.RuntimeActivity{
-					State: clientui.RuntimeActivityRunning,
-					ActiveStep: &clientui.RuntimeActiveStep{
-						RunID:      runID,
-						StepID:     stepID,
-						ActiveKind: clientui.RuntimeActivityActiveKindUserTurn,
-					},
-				},
-			},
-			{
-				Version:  clientui.ReadModelVersion{Epoch: "epoch-1", Generation: 1, Sequence: 2},
-				Activity: clientui.RuntimeActivity{State: clientui.RuntimeActivityRegisteredIdle, QueueAccepting: true},
-			},
-		},
-	})
+	history := service.promptStore.(*runtimeControlPromptHistoryStore)
+	recordEntered := make(chan struct{})
+	releaseHistory := make(chan struct{})
+	history.mu.Lock()
+	history.recordEntered = recordEntered
+	history.recordRelease = releaseHistory
+	history.mu.Unlock()
+	defer func() {
+		if releaseHistory != nil {
+			close(releaseHistory)
+		}
+	}()
+	var steered serverapi.RuntimeSubmitUserTurnResponse
+	steeringDone := make(chan error, 1)
+	go func() {
+		var err error
+		steered, err = service.SubmitUserTurn(context.Background(), steeringReq)
+		steeringDone <- err
+	}()
+	<-recordEntered
 
-	resp, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
-		ClientRequestID:      "interrupt-active-with-steering",
-		SessionID:            store.Meta().SessionID,
-		TargetOperationRef:   &activeReq.OperationRef,
-		PendingOperationRefs: []clientui.RuntimeOperationRef{activeReq.OperationRef, queuedRef},
+	_, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
+		ClientRequestID:    "interrupt-active-with-steering",
+		SessionID:          store.Meta().SessionID,
+		TargetOperationRef: &steeringReq.OperationRef,
 	})
 	if err != nil {
 		t.Fatalf("Interrupt: %v", err)
@@ -2364,17 +2350,14 @@ func TestServiceInterruptDiscardsPendingSteeringBeforeStoppingActiveRun(t *testi
 	if engine.HasQueuedUserWork() {
 		t.Fatal("interrupt left accepted steering queued")
 	}
-	for _, record := range resp.InputReconciliation.Operations {
-		if record.Operation.Key() == queuedRef.Key() {
-			if record.State != clientui.RuntimeInputReconciliationCanceledNotCommitted {
-				t.Fatalf("queued steering reconciliation = %q, want canceled_not_committed", record.State)
-			}
-			goto reconciled
-		}
+	close(releaseHistory)
+	releaseHistory = nil
+	if err := <-steeringDone; err != nil {
+		t.Fatalf("SubmitUserTurn steering: %v", err)
 	}
-	t.Fatalf("interrupt response omitted queued steering reconciliation: %+v", resp.InputReconciliation.Operations)
-
-reconciled:
+	if !steered.Steered || steered.QueueItemID == "" {
+		t.Fatalf("SubmitUserTurn steering response = %+v, want accepted Queue item", steered)
+	}
 	select {
 	case <-client.secondStarted:
 		t.Fatal("queued steering started a model continuation after interrupt")

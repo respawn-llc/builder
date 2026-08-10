@@ -342,8 +342,10 @@ func TestSubmissionDraftCompletionPreservesConcurrentComposerEdit(t *testing.T) 
 			runtimeClient := &runtimeControlFakeClient{}
 			model := newProjectedClosedUIModel(runtimeClient)
 			model.sessionID = "session-1"
+			var persisted []serverapi.SessionPersistInputDraftRequest
 			model.sessionDrafts = &recordingSessionLifecycleClient{
-				persistInputDraft: func(context.Context, serverapi.SessionPersistInputDraftRequest) (serverapi.SessionPersistInputDraftResponse, error) {
+				persistInputDraft: func(_ context.Context, req serverapi.SessionPersistInputDraftRequest) (serverapi.SessionPersistInputDraftResponse, error) {
+					persisted = append(persisted, req)
 					return serverapi.SessionPersistInputDraftResponse{}, test.persistErr
 				},
 			}
@@ -354,6 +356,17 @@ func TestSubmissionDraftCompletionPreservesConcurrentComposerEdit(t *testing.T) 
 			model.replaceMainInputAtEnd("edited while waiting")
 			next, cmd := model.Update(prepared)
 			updated := next.(*uiModel)
+			if test.persistErr == nil {
+				if runtimeClient.submitCalls != 0 {
+					t.Fatal("RuntimeControl dispatched before the concurrent edit was persisted")
+				}
+				reconciled := findSubmitDraftPreparedMessage(t, cmd)
+				if len(persisted) != 2 || persisted[1].Input != "edited while waiting" {
+					t.Fatalf("reconciled draft requests = %+v, want second request with concurrent edit", persisted)
+				}
+				next, cmd = updated.Update(reconciled)
+				updated = next.(*uiModel)
+			}
 			collectCmdMessages(t, cmd)
 
 			if got := testMainInput(updated); got != "edited while waiting" {

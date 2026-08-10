@@ -7,7 +7,6 @@ import (
 
 	"core/cli/app/commands"
 	"core/shared/clientui"
-	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 
 	"github.com/google/uuid"
@@ -17,6 +16,7 @@ type submitDoneMsg struct {
 	phase         submitPhase
 	dispatch      submitDispatch
 	token         uint64
+	draftToken    uint64
 	message       string
 	submittedText string
 	silentFinal   bool
@@ -39,9 +39,10 @@ const (
 )
 
 type submitDispatch struct {
-	kind         submitDispatchKind
-	input        runtimeinput.Input
-	shellCommand string
+	kind                            submitDispatchKind
+	input                           runtimeinput.Input
+	shellCommand                    string
+	preSubmitCompactionOperationRef clientui.RuntimeOperationRef
 }
 
 func newSubmitDoneMsg(token uint64, message string, submittedText string, err error) submitDoneMsg {
@@ -161,7 +162,7 @@ type activeSubmitState struct {
 	text               string
 	queuedID           string
 	origin             activeSubmitOrigin
-	clientRequestID    runtimeids.RuntimeClientRequestID
+	operationRef       clientui.RuntimeOperationRef
 	restoreOnInterrupt bool
 	flushed            bool
 	heldInput          *activeSubmitHeldInput

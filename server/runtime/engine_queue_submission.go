@@ -172,8 +172,8 @@ func (e *Engine) SubmitUserMessageOrSteerWithHooks(ctx context.Context, text str
 	return e.submitUserMessageOrSteer(ctx, text, clientRequestID, onActive, onAccepted, nil)
 }
 
-func (e *Engine) SubmitUserMessageOrSteerWithAcceptance(ctx context.Context, text string, clientRequestID string, accept CommandAcceptance) (assistant llm.Message, queued *QueuedUserMessage, err error) {
-	return e.submitUserMessageOrSteer(ctx, text, clientRequestID, nil, nil, accept)
+func (e *Engine) SubmitUserMessageOrSteerWithAcceptance(ctx context.Context, text string, clientRequestID string, onActive func(), accept CommandAcceptance) (assistant llm.Message, queued *QueuedUserMessage, err error) {
+	return e.submitUserMessageOrSteer(ctx, text, clientRequestID, onActive, nil, accept)
 }
 
 func (e *Engine) submitUserMessageOrSteer(ctx context.Context, text string, clientRequestID string, onActive func(), onAccepted func(queued bool), accept CommandAcceptance) (assistant llm.Message, queued *QueuedUserMessage, err error) {

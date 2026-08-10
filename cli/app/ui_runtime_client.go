@@ -176,7 +176,11 @@ func (c *sessionRuntimeClient) MainView() clientui.RuntimeMainView {
 }
 
 func (c *sessionRuntimeClient) RefreshMainView() (clientui.RuntimeMainView, error) {
-	return c.refreshMainViewSync(uiRuntimeHydrationReadTimeout)
+	return c.RefreshMainViewWithPendingRefs(nil)
+}
+
+func (c *sessionRuntimeClient) RefreshMainViewWithPendingRefs(refs []clientui.RuntimeOperationRef) (clientui.RuntimeMainView, error) {
+	return c.refreshMainViewSync(uiRuntimeHydrationReadTimeout, refs)
 }
 
 func (c *sessionRuntimeClient) Status() clientui.RuntimeStatus {
@@ -194,8 +198,8 @@ func (c *sessionRuntimeClient) readContext(timeout time.Duration) (context.Conte
 	return context.WithTimeout(context.Background(), timeout)
 }
 
-func (c *sessionRuntimeClient) refreshMainViewSync(timeout time.Duration) (clientui.RuntimeMainView, error) {
-	view, err := c.fetchMainViewSync(timeout)
+func (c *sessionRuntimeClient) refreshMainViewSync(timeout time.Duration, refs []clientui.RuntimeOperationRef) (clientui.RuntimeMainView, error) {
+	view, err := c.fetchMainViewSync(timeout, refs)
 	if err != nil {
 		c.mu.Lock()
 		if c.mainView.Session.SessionID == "" {
@@ -209,15 +213,15 @@ func (c *sessionRuntimeClient) refreshMainViewSync(timeout time.Duration) (clien
 	return c.storeMainView(view), nil
 }
 
-func (c *sessionRuntimeClient) fetchMainView() (clientui.RuntimeMainView, error) {
-	return c.fetchMainViewSync(uiRuntimeHydrationReadTimeout)
+func (c *sessionRuntimeClient) fetchMainViewWithPendingRefs(refs []clientui.RuntimeOperationRef) (clientui.RuntimeMainView, error) {
+	return c.fetchMainViewSync(uiRuntimeHydrationReadTimeout, refs)
 }
 
-func (c *sessionRuntimeClient) fetchMainViewSync(timeout time.Duration) (clientui.RuntimeMainView, error) {
+func (c *sessionRuntimeClient) fetchMainViewSync(timeout time.Duration, refs []clientui.RuntimeOperationRef) (clientui.RuntimeMainView, error) {
 	ctx, cancel := c.readContext(timeout)
 	defer cancel()
 	resp, err := retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionPreservingContext, false, func() (serverapi.SessionMainViewResponse, error) {
-		return c.reads.GetSessionMainView(ctx, serverapi.SessionMainViewRequest{SessionID: c.sessionID})
+		return c.reads.GetSessionMainView(ctx, serverapi.SessionMainViewRequest{SessionID: c.sessionID, PendingOperationRefs: refs})
 	})
 	c.notifyConnectionState(err)
 	if err != nil {

@@ -11,6 +11,7 @@ import (
 
 	"core/server/llm"
 	"core/shared/clientui"
+	"core/shared/serverapi"
 )
 
 type runtimeControlFakeClient struct {
@@ -36,8 +37,12 @@ type runtimeControlFakeClient struct {
 	submitText            string
 	submitCalls           int
 	shellCalls            int
+	submitOperationRef    clientui.RuntimeOperationRef
+	preSubmitOperationRef clientui.RuntimeOperationRef
 	submitResult          string
 	interruptCalls        int
+	interruptPendingRefs  []clientui.RuntimeOperationRef
+	interruptTargetRef    *clientui.RuntimeOperationRef
 	submitQueuedID        string
 	discardQueuedID       string
 	discardQueuedCalls    int
@@ -161,6 +166,8 @@ func (f *runtimeControlFakeClient) submitUserMessage(_ context.Context, text str
 }
 func (f *runtimeControlFakeClient) SubmitRuntimeInput(ctx context.Context, req clientui.RuntimeSubmitRequest) (clientui.UserTurnSubmission, error) {
 	f.submitCalls++
+	f.submitOperationRef = req.OperationRef
+	f.preSubmitOperationRef = req.PreSubmitCompactionOperationRef
 	text := runtimeSubmitInputText(req)
 	submission, err := f.submitUserMessage(ctx, text)
 	if err == nil && strings.TrimSpace(f.submitQueuedID) != "" {
@@ -193,6 +200,24 @@ func (f *runtimeControlFakeClient) Interrupt() error {
 	}
 	return f.err
 }
+func (f *runtimeControlFakeClient) InterruptWithPendingRefs(refs []clientui.RuntimeOperationRef) error {
+	f.interruptCalls++
+	f.interruptPendingRefs = append([]clientui.RuntimeOperationRef(nil), refs...)
+	f.interruptTargetRef = nil
+	if f.interruptErr != nil {
+		return f.interruptErr
+	}
+	return f.err
+}
+func (f *runtimeControlFakeClient) InterruptWithTarget(target clientui.RuntimeOperationRef, refs []clientui.RuntimeOperationRef) error {
+	f.interruptCalls++
+	f.interruptPendingRefs = append([]clientui.RuntimeOperationRef(nil), refs...)
+	f.interruptTargetRef = &target
+	if f.interruptErr != nil {
+		return f.interruptErr
+	}
+	return f.err
+}
 func (f *runtimeControlFakeClient) DiscardQueuedUserMessage(queueItemID string) bool {
 	f.discardQueuedCalls++
 	f.discardQueuedID = queueItemID
@@ -204,6 +229,41 @@ func (f *runtimeControlFakeClient) DiscardQueuedUserMessage(queueItemID string) 
 func (f *runtimeControlFakeClient) RecordPromptHistory(text string) error {
 	f.recordedPromptHistory = text
 	return f.err
+}
+
+func TestRuntimeInterruptNotAcceptedClearsPendingAttempt(t *testing.T) {
+	client := &runtimeControlFakeClient{
+		interruptErr: serverapi.NewRuntimeCommandNotAcceptedError(errors.New("no active Agent Turn")),
+	}
+	m := newProjectedClosedUIModel(client)
+	m.sessionID = "session-1"
+	m.setRuntimeActivityBusyForTest(true)
+	m.activeSubmit = activeSubmitState{
+		token:              1,
+		text:               "keep me",
+		operationRef:       newRuntimeOperationRef(clientui.RuntimeOperationKindSubmit),
+		restoreOnInterrupt: true,
+	}
+
+	cmd := m.inputController().interruptBusyRuntime()
+	if !m.hasPendingInterrupt() {
+		t.Fatal("interrupt attempt was not marked pending")
+	}
+	var done runtimeControlDoneMsg
+	for _, msg := range collectCmdMessages(t, cmd) {
+		if typed, ok := msg.(runtimeControlDoneMsg); ok {
+			done = typed
+		}
+	}
+	next, _ := m.Update(done)
+	updated := next.(*uiModel)
+
+	if updated.hasPendingInterrupt() {
+		t.Fatal("not-accepted interrupt remained pending")
+	}
+	if updated.activeSubmit.token != 1 || updated.activeSubmit.text != "keep me" {
+		t.Fatalf("not-accepted interrupt changed active submit: %+v", updated.activeSubmit)
+	}
 }
 
 func TestThinkingQueryUsesStatusOnly(t *testing.T) {

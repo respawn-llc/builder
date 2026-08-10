@@ -6,7 +6,6 @@ import (
 
 	"core/cli/tui"
 	"core/shared/clientui"
-	"core/shared/runtimeids"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -147,7 +146,11 @@ func (m *uiModel) applyTranscriptRuntimeReadModelUpdate(admission runtimeTupleMe
 	}
 	var cmd tea.Cmd
 	if m.hasPendingInterrupt() {
-		cmd = m.acknowledgePendingInterrupt()
+		if m.pendingInterruptMissingInputReconciliation(m.cachedRuntimeMainView()) {
+			cmd = m.requestInputReconciliationRefresh()
+		} else {
+			cmd = m.acknowledgePendingInterrupt()
+		}
 	}
 	return tea.Batch(cmd, m.releaseDeferredRuntimeSyncs())
 }
@@ -236,11 +239,9 @@ func (m *uiModel) applyTranscriptUserMessageFlushed(flushed clientui.TranscriptU
 	m.conversationFreshness = clientui.ConversationFreshnessEstablished
 	m.localConversationTurn = true
 	ids := runtimeOperationIdentityStrings(flushed.Operations)
-	if m.activeSubmit.token != 0 {
-		if runtimeOperationRefsContainClientRequestID(flushed.Operations, m.activeSubmit.clientRequestID) {
-			m.activeSubmit.stepID = flushed.StepID.String()
-			m.activeSubmit.flushed = true
-		}
+	if m.activeSubmit.token != 0 && runtimeOperationRefsContain(flushed.Operations, m.activeSubmit.operationRef) {
+		m.activeSubmit.stepID = flushed.StepID.String()
+		m.activeSubmit.flushed = true
 	}
 	for _, id := range ids {
 		m.removePendingInjectedByID(id)
@@ -329,18 +330,6 @@ func runtimeOperationIdentityStrings(refs []clientui.RuntimeOperationRef) []stri
 		}
 	}
 	return ids
-}
-
-func runtimeOperationRefsContainClientRequestID(refs []clientui.RuntimeOperationRef, clientRequestID runtimeids.RuntimeClientRequestID) bool {
-	if clientRequestID.IsZero() {
-		return false
-	}
-	for _, ref := range refs {
-		if ref.ClientRequestID == clientRequestID {
-			return true
-		}
-	}
-	return false
 }
 
 func dereferenceTranscriptText(text *string) string {

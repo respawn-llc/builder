@@ -1,6 +1,7 @@
 package serverapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -48,7 +49,9 @@ func (e *RuntimeCommandNotAcceptedError) RPCErrorData() json.RawMessage {
 			cause.Message = ErrRuntimeCommandNotAccepted.Error()
 		}
 		var structured protocol.StructuredRPCError
-		if errors.As(e.Cause, &structured) {
+		if errors.Is(e.Cause, context.Canceled) || errors.Is(e.Cause, ErrRuntimeOperationCanceled) {
+			cause.Code = protocol.ErrCodeRequestCanceled
+		} else if errors.As(e.Cause, &structured) {
 			cause.Code = structured.RPCErrorCode()
 			cause.Data = structured.RPCErrorData()
 		}

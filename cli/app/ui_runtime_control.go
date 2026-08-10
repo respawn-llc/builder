@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"core/cli/app/internal/runtimeattach"
@@ -13,8 +14,20 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+type runtimeInterruptReconciliationClient interface {
+	InterruptWithPendingRefs([]clientui.RuntimeOperationRef) error
+}
+
+type runtimeTargetInterruptClient interface {
+	InterruptWithTarget(clientui.RuntimeOperationRef, []clientui.RuntimeOperationRef) error
+}
+
 type runtimeInterruptCandidateClient interface {
-	interruptRuntimeCandidate() (runtimeTupleCandidate, error)
+	interruptRuntimeCandidate(*clientui.RuntimeOperationRef, []clientui.RuntimeOperationRef) (runtimeTupleCandidate, error)
+}
+
+type runtimeMainViewReconciliationClient interface {
+	RefreshMainViewWithPendingRefs([]clientui.RuntimeOperationRef) (clientui.RuntimeMainView, error)
 }
 
 func newRuntimeOperationRef(kind clientui.RuntimeOperationKind) clientui.RuntimeOperationRef {
@@ -150,10 +163,7 @@ func (m *uiModel) submitRuntimeInput(ctx context.Context, req clientui.RuntimeSu
 }
 
 func (m *uiModel) submitRuntimeUserShellCommand(ctx context.Context, command string) error {
-	return m.submitRuntimeShell(ctx, clientui.RuntimeShellRequest{
-		OperationRef: newRuntimeOperationRef(clientui.RuntimeOperationKindUserShell),
-		Command:      command,
-	})
+	return m.submitRuntimeShell(ctx, clientui.RuntimeShellRequest{OperationRef: newRuntimeOperationRef(clientui.RuntimeOperationKindUserShell), Command: command})
 }
 
 func (m *uiModel) submitRuntimeShell(ctx context.Context, req clientui.RuntimeShellRequest) error {
@@ -166,10 +176,7 @@ func (m *uiModel) submitRuntimeShell(ctx context.Context, req clientui.RuntimeSh
 }
 
 func (m *uiModel) compactRuntimeContext(ctx context.Context, args string) error {
-	return m.compactRuntimeInput(ctx, clientui.RuntimeCompactRequest{
-		OperationRef: newRuntimeOperationRef(clientui.RuntimeOperationKindCompact),
-		Args:         args,
-	})
+	return m.compactRuntimeInput(ctx, clientui.RuntimeCompactRequest{OperationRef: newRuntimeOperationRef(clientui.RuntimeOperationKindCompact), Args: args})
 }
 
 func (m *uiModel) compactRuntimeInput(ctx context.Context, req clientui.RuntimeCompactRequest) error {
@@ -195,16 +202,48 @@ func (m *uiModel) interruptRuntime() error {
 }
 
 type runtimeInterruptRequest struct {
-	client clientui.RuntimeClient
+	client      clientui.RuntimeClient
+	target      *clientui.RuntimeOperationRef
+	pendingRefs []clientui.RuntimeOperationRef
 }
 
 func runtimeInterruptRequestFromModel(m *uiModel) runtimeInterruptRequest {
 	if m == nil {
 		return runtimeInterruptRequest{}
 	}
+	refs := m.pendingRuntimeOperationRefs()
 	return runtimeInterruptRequest{
-		client: m.runtimeClient(),
+		client:      m.runtimeClient(),
+		target:      m.runtimeInterruptTargetRef(refs),
+		pendingRefs: append([]clientui.RuntimeOperationRef(nil), refs...),
 	}
+}
+
+func (m *uiModel) runtimeInterruptTargetRef(refs []clientui.RuntimeOperationRef) *clientui.RuntimeOperationRef {
+	if m == nil || len(refs) == 0 {
+		return nil
+	}
+	if m.runtimeActivityBusy() {
+		if m.runtimeActivityProjection.ActiveStep != nil {
+			if kind := runtimeOperationKindForActiveActivity(m.runtimeActivityProjection.ActiveStep.ActiveKind); kind != "" {
+				for _, ref := range refs {
+					if ref.Kind == kind {
+						target := ref
+						return &target
+					}
+				}
+			}
+		}
+		for _, ref := range refs {
+			if ref.Kind != clientui.RuntimeOperationKindQueuedMessage {
+				target := ref
+				return &target
+			}
+		}
+		return nil
+	}
+	target := refs[0]
+	return &target
 }
 
 func executeRuntimeInterrupt(req runtimeInterruptRequest) (*runtimeTupleCandidate, error) {
@@ -212,13 +251,103 @@ func executeRuntimeInterrupt(req runtimeInterruptRequest) (*runtimeTupleCandidat
 		return nil, nil
 	}
 	if candidateClient, ok := req.client.(runtimeInterruptCandidateClient); ok {
-		candidate, err := candidateClient.interruptRuntimeCandidate()
+		candidate, err := candidateClient.interruptRuntimeCandidate(req.target, req.pendingRefs)
 		if err != nil {
 			return nil, err
 		}
 		return &candidate, nil
 	}
+	if requestClient, ok := req.client.(runtimeInterruptReconciliationClient); ok {
+		if targetClient, ok := req.client.(runtimeTargetInterruptClient); ok && req.target != nil {
+			return nil, targetClient.InterruptWithTarget(*req.target, req.pendingRefs)
+		}
+		return nil, requestClient.InterruptWithPendingRefs(req.pendingRefs)
+	}
 	return nil, req.client.Interrupt()
+}
+
+func (m *uiModel) pendingRuntimeOperationRefs() []clientui.RuntimeOperationRef {
+	if m == nil {
+		return nil
+	}
+	var refs []clientui.RuntimeOperationRef
+	if err := m.activeSubmit.operationRef.Validate(); err == nil {
+		refs = append(refs, m.activeSubmit.operationRef)
+	}
+	for _, ref := range m.pendingRuntimeOperations {
+		if err := ref.Validate(); err == nil && !runtimeOperationRefsContain(refs, ref) {
+			refs = append(refs, ref)
+		}
+	}
+	for _, item := range m.injectedQueue {
+		clientRequestID, err := runtimeids.ParseRuntimeClientRequestID(strings.TrimSpace(item.ClientRequestID))
+		if err != nil {
+			panic(fmt.Sprintf("queued runtime input has invalid client request id %q: %v", item.ClientRequestID, err))
+		}
+		ref := clientui.RuntimeOperationRef{
+			Kind:            clientui.RuntimeOperationKindQueuedMessage,
+			ClientRequestID: clientRequestID,
+		}
+		if serverID := strings.TrimSpace(item.ServerID); serverID != "" {
+			queueItemID, err := runtimeids.ParseQueueItemID(serverID)
+			if err != nil {
+				panic(fmt.Sprintf("queued runtime input has invalid queue item id %q: %v", serverID, err))
+			}
+			ref.QueueItemID = &queueItemID
+		}
+		if err := ref.Validate(); err == nil && !runtimeOperationRefsContain(refs, ref) {
+			refs = append(refs, ref)
+		}
+	}
+	return refs
+}
+
+func (m *uiModel) addPendingRuntimeOperation(ref clientui.RuntimeOperationRef) {
+	if m == nil || ref.Validate() != nil || runtimeOperationRefsContain(m.pendingRuntimeOperations, ref) {
+		return
+	}
+	m.pendingRuntimeOperations = append(m.pendingRuntimeOperations, ref)
+}
+
+func (m *uiModel) hasPendingRuntimeOperationKind(kind clientui.RuntimeOperationKind) bool {
+	for _, ref := range m.pendingRuntimeOperations {
+		if ref.Kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *uiModel) clearPendingRuntimeOperations(kinds ...clientui.RuntimeOperationKind) {
+	if m == nil || len(kinds) == 0 || len(m.pendingRuntimeOperations) == 0 {
+		return
+	}
+	filtered := m.pendingRuntimeOperations[:0]
+	for _, ref := range m.pendingRuntimeOperations {
+		if runtimeOperationKindIn(ref.Kind, kinds) {
+			continue
+		}
+		filtered = append(filtered, ref)
+	}
+	m.pendingRuntimeOperations = filtered
+}
+
+func runtimeOperationKindIn(kind clientui.RuntimeOperationKind, kinds []clientui.RuntimeOperationKind) bool {
+	for _, candidate := range kinds {
+		if kind == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func runtimeOperationRefsContain(refs []clientui.RuntimeOperationRef, ref clientui.RuntimeOperationRef) bool {
+	for _, existing := range refs {
+		if existing == ref {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *uiModel) discardQueuedRuntimeUserMessage(queueItemID string) bool {
@@ -393,6 +522,10 @@ func (m *uiModel) applyRuntimeControlDone(msg runtimeControlDoneMsg) tea.Cmd {
 	m.observeRuntimeRequestResult(msg.err)
 	if msg.err != nil {
 		m.clearRuntimeControlPending(msg.operation)
+		if msg.operation == runtimeControlInterrupt {
+			m.setPendingInterrupt(false)
+			m.interruptPreActive = false
+		}
 		errText := runtimeattach.FormatSubmissionError(msg.err)
 		return sequenceCmds(
 			m.appendLocalEntryWithNoticeID("error", errText, ""),
@@ -463,6 +596,9 @@ func (m *uiModel) applyRuntimeControlDone(msg runtimeControlDoneMsg) tea.Cmd {
 			if err := m.applyRuntimeActivityProjection(view.Activity); err != nil {
 				m.activity = uiActivityError
 				return tea.Batch(followUpCmd, m.sendTransientStatusWithNoticeID("invalid runtime activity: "+err.Error(), uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, ""))
+			}
+			if m.pendingInterruptMissingInputReconciliation(view) {
+				return tea.Batch(followUpCmd, m.requestInputReconciliationRefresh())
 			}
 			return tea.Batch(followUpCmd, m.acknowledgePendingInterrupt())
 		}

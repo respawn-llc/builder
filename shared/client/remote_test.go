@@ -17,6 +17,7 @@ import (
 	"core/shared/llmerrors"
 	"core/shared/protocol"
 	"core/shared/runtimeids"
+	"core/shared/runtimeinput"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 	"golang.org/x/net/websocket"
@@ -2167,6 +2168,92 @@ func TestProtocolErrorMapsEquivalentRuntimeSentinel(t *testing.T) {
 	err := protocolError(&protocol.ResponseError{Code: protocol.ErrCodeRuntimeNoActiveRun, Message: serverapi.ErrRuntimeNoActiveRun.Error()})
 	if !errors.Is(err, serverapi.ErrRuntimeNoActiveRun) {
 		t.Fatalf("expected runtime no-active, got %v", err)
+	}
+}
+
+func TestProtocolErrorDecodesRuntimeCommandNotAcceptedCauses(t *testing.T) {
+	command := runtimeinput.PromptCommandReviewName
+	promptCause := &serverapi.PromptCommandError{
+		Kind:    serverapi.PromptCommandErrorKindCommandNotFound,
+		Command: &command,
+	}
+	for _, test := range []struct {
+		name  string
+		cause error
+		check func(*testing.T, error)
+	}{
+		{
+			name:  "prompt command",
+			cause: promptCause,
+			check: func(t *testing.T, err error) {
+				var decoded *serverapi.PromptCommandError
+				if !errors.As(err, &decoded) || decoded.Kind != promptCause.Kind || decoded.Command == nil || *decoded.Command != command {
+					t.Fatalf("decoded cause = %T %+v, want %+v", err, decoded, promptCause)
+				}
+			},
+		},
+		{name: "manual compaction too soon", cause: serverapi.ErrManualCompactionTooSoon, check: func(t *testing.T, err error) {
+			if !errors.Is(err, serverapi.ErrManualCompactionTooSoon) {
+				t.Fatalf("decoded cause = %v, want manual compaction too soon", err)
+			}
+		}},
+		{name: "manual compaction disabled", cause: serverapi.ErrManualCompactionDisabled, check: func(t *testing.T, err error) {
+			if !errors.Is(err, serverapi.ErrManualCompactionDisabled) {
+				t.Fatalf("decoded cause = %v, want manual compaction disabled", err)
+			}
+		}},
+		{name: "manual compaction active", cause: serverapi.ErrManualCompactionActive, check: func(t *testing.T, err error) {
+			if !errors.Is(err, serverapi.ErrManualCompactionActive) {
+				t.Fatalf("decoded cause = %v, want manual compaction active", err)
+			}
+		}},
+		{name: "operation canceled", cause: serverapi.ErrRuntimeOperationCanceled, check: func(t *testing.T, err error) {
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("decoded cause = %v, want context canceled", err)
+			}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			source := serverapi.NewRuntimeCommandNotAcceptedError(test.cause)
+			decoded := protocolError(&protocol.ResponseError{
+				Code:    source.RPCErrorCode(),
+				Message: source.Error(),
+				Data:    source.RPCErrorData(),
+			})
+			if !errors.Is(decoded, serverapi.ErrRuntimeCommandNotAccepted) {
+				t.Fatalf("decoded error = %v, want runtime command not accepted", decoded)
+			}
+			test.check(t, decoded)
+		})
+	}
+}
+
+func TestProtocolErrorRejectsMalformedRuntimeCommandNotAcceptedCause(t *testing.T) {
+	for _, data := range []json.RawMessage{
+		nil,
+		json.RawMessage(`{}`),
+		mustJSON(t, struct {
+			Cause protocol.ResponseError `json:"cause"`
+		}{Cause: protocol.ResponseError{
+			Code:    protocol.ErrCodeRuntimeCommandNotAccepted,
+			Message: "nested self",
+		}}),
+		mustJSON(t, struct {
+			Cause protocol.ResponseError `json:"cause"`
+		}{Cause: protocol.ResponseError{
+			Code:    protocol.ErrCodePromptCommands,
+			Message: "invalid prompt cause",
+			Data:    json.RawMessage(`{}`),
+		}}),
+	} {
+		err := protocolError(&protocol.ResponseError{
+			Code:    protocol.ErrCodeRuntimeCommandNotAccepted,
+			Message: "not accepted",
+			Data:    data,
+		})
+		if errors.Is(err, serverapi.ErrRuntimeCommandNotAccepted) {
+			t.Fatalf("malformed nested cause decoded as runtime command not accepted: %v", err)
+		}
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/server/tools"
 	"core/shared/runtimeids"
 	"core/shared/textutil"
@@ -697,6 +698,70 @@ func TestTryInterruptActiveAgentTurnCancelsActiveStepAndRestoresTaggedQueue(t *t
 		}
 	}
 	t.Fatalf("missing failed status for stopped tagged Queue item %q", item.ID)
+}
+
+func TestTryInterruptActiveAgentTurnPersistenceFailurePreservesLiveRunAndQueue(t *testing.T) {
+	persistErr := errors.New("interruption persistence failed")
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
+	var statuses []QueuedUserMessageStatusEvent
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+		Model: "gpt-5",
+		OnEvent: func(evt Event) {
+			if evt.QueuedUserMessageStatus != nil {
+				statuses = append(statuses, *evt.QueuedUserMessageStatus)
+			}
+		},
+	})
+	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
+	eng.stepLifecycle = lifecycle
+	started := make(chan context.Context, 1)
+	release := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- lifecycle.Run(context.Background(), exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserTurn}, func(stepCtx context.Context, stepID string) error {
+			started <- stepCtx
+			<-release
+			return nil
+		})
+	}()
+	var stepCtx context.Context
+	select {
+	case stepCtx = <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for active Agent Turn")
+	}
+	item, accepted, err := eng.QueueUserMessageForActiveRun(context.Background(), "keep queued", liveRunTestRequestID(t), nil)
+	if err != nil || !accepted {
+		t.Fatalf("QueueUserMessageForActiveRun accepted=%t err=%v", accepted, err)
+	}
+	gate.FailNext(persistErr)
+
+	stopped, err := eng.TryInterruptActiveAgentTurn()
+	if stopped || !errors.Is(err, persistErr) {
+		t.Fatalf("TryInterruptActiveAgentTurn = (%t, %v), want uncommitted persistence failure", stopped, err)
+	}
+	select {
+	case <-stepCtx.Done():
+		t.Fatal("persistence failure canceled the live Agent Turn")
+	default:
+	}
+	if !eng.HasQueuedUserWork() {
+		t.Fatal("persistence failure discarded accepted queued work")
+	}
+	for _, status := range statuses {
+		if status.QueueItemID == item.ID && status.Status == QueuedUserMessageFailed {
+			t.Fatalf("persistence failure published queued failure: %+v", status)
+		}
+	}
+
+	if !eng.DiscardQueuedUserMessage(item.ID) {
+		t.Fatal("cleanup could not discard preserved queue item")
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("active Agent Turn after release: %v", err)
+	}
 }
 
 func TestTryInterruptActiveAgentTurnPreservesGoalLoopInterruptBookkeeping(t *testing.T) {
