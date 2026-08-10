@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -122,22 +121,22 @@ func normalizedLabelIDs(ids []string) []string {
 }
 
 func getWorkflowTaskForShow(ctx context.Context, cfg config.App, remote workflowCommandRemote, projectRef string, ref string) (string, serverapi.WorkflowTaskDetail, error) {
-	trimmed := strings.TrimSpace(ref)
-	if trimmed == "" {
-		return "", serverapi.WorkflowTaskDetail{}, errors.New("task id is required")
+	selector, err := classifyWorkflowTaskSelector(ref)
+	if err != nil {
+		return "", serverapi.WorkflowTaskDetail{}, err
 	}
 	requestedProjectID := ""
 	if resolved, err := resolveWorkflowProjectID(ctx, cfg, remote, projectRef); err == nil {
 		requestedProjectID = resolved
-	} else if !strings.HasPrefix(trimmed, "task-") {
+	} else if selector.kind != workflowTaskSelectorTaskID {
 		return "", serverapi.WorkflowTaskDetail{}, err
 	}
-	if strings.HasPrefix(trimmed, "task-") {
-		detail, err := getWorkflowTaskByID(ctx, remote, trimmed)
+	if selector.kind == workflowTaskSelectorTaskID {
+		detail, err := getWorkflowTaskByID(ctx, remote, selector.value)
 		return requestedProjectID, detail, err
 	}
 	if requestedProjectID != "" {
-		detail, err := getWorkflowTaskByProjectShortID(ctx, remote, requestedProjectID, trimmed)
+		detail, err := getWorkflowTaskByProjectShortID(ctx, remote, requestedProjectID, selector.value)
 		if err == nil {
 			return requestedProjectID, detail, nil
 		}
@@ -145,7 +144,7 @@ func getWorkflowTaskForShow(ctx context.Context, cfg config.App, remote workflow
 			return requestedProjectID, serverapi.WorkflowTaskDetail{}, err
 		}
 	}
-	detail, err := getWorkflowTaskByShortID(ctx, remote, trimmed)
+	detail, err := getWorkflowTaskByShortID(ctx, remote, selector.value)
 	if err == nil {
 		return requestedProjectID, detail, nil
 	}
@@ -153,9 +152,9 @@ func getWorkflowTaskForShow(ctx context.Context, cfg config.App, remote workflow
 		return requestedProjectID, serverapi.WorkflowTaskDetail{}, err
 	}
 	if requestedProjectID != "" {
-		return requestedProjectID, serverapi.WorkflowTaskDetail{}, fmt.Errorf("task %q not found in project %s", trimmed, requestedProjectID)
+		return requestedProjectID, serverapi.WorkflowTaskDetail{}, fmt.Errorf("task %q not found in project %s", selector.value, requestedProjectID)
 	}
-	return requestedProjectID, serverapi.WorkflowTaskDetail{}, fmt.Errorf("task %q not found", trimmed)
+	return requestedProjectID, serverapi.WorkflowTaskDetail{}, fmt.Errorf("task %q not found", selector.value)
 }
 func writeTaskDetail(stdout io.Writer, task serverapi.WorkflowTaskDetail) error {
 	return writeTaskDetailWithLabelNames(stdout, task, nil)

@@ -38,21 +38,28 @@ func TestAbsoluteForeignManagedWorktreeEditIsDenied(t *testing.T) {
 	base := t.TempDir()
 	currentRoot := filepath.Join(base, "current")
 	foreignRoot := filepath.Join(base, "foreign")
-	for _, dir := range []string{currentRoot, foreignRoot} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatalf("mkdir %s: %v", dir, err)
-		}
-	}
 	if err := os.MkdirAll(filepath.Join(currentRoot, "nested"), 0o755); err != nil {
 		t.Fatalf("mkdir nested workdir: %v", err)
 	}
-	foreignFile := filepath.Join(foreignRoot, "foreign.txt")
-	writeEditTestFile(t, foreignFile, "before\n", 0o644)
-	context, err := tools.NewManagedWorktreePathContext(base, &currentRoot, []string{currentRoot, foreignRoot})
+	pathContext, err := tools.NewManagedWorktreePathContext(base, &currentRoot, []string{currentRoot})
 	if err != nil {
 		t.Fatalf("managed worktree path context: %v", err)
 	}
-	tool := newTestTool(t, filepath.Join(currentRoot, "nested"), WithManagedWorktreePathContext(context))
+	approvalCalls := 0
+	tool := newTestTool(
+		t,
+		filepath.Join(currentRoot, "nested"),
+		WithManagedWorktreePathContext(pathContext),
+		WithOutsideWorkspaceApprover(func(context.Context, tools.FSGuardRequest) (tools.FSGuardApproval, error) {
+			approvalCalls++
+			return tools.FSGuardApproval{Decision: tools.FSGuardDecisionAllowOnce}, nil
+		}),
+	)
+	if err := os.MkdirAll(foreignRoot, 0o755); err != nil {
+		t.Fatalf("mkdir foreign root: %v", err)
+	}
+	foreignFile := filepath.Join(foreignRoot, "foreign.txt")
+	writeEditTestFile(t, foreignFile, "before\n", 0o644)
 
 	result := callEdit(t, tool, map[string]any{
 		"path":       foreignFile,
@@ -62,6 +69,9 @@ func TestAbsoluteForeignManagedWorktreeEditIsDenied(t *testing.T) {
 
 	if !result.IsError || result.Summary == nil || *result.Summary != tools.ForeignManagedWorktreeEditDeniedMessage {
 		t.Fatalf("foreign worktree edit result = %+v", result)
+	}
+	if approvalCalls != 0 {
+		t.Fatalf("outside-workspace approval calls = %d, want 0", approvalCalls)
 	}
 	assertEditTestFileContent(t, foreignFile, "before\n")
 }
@@ -120,7 +130,7 @@ func TestEditManagedWorktreeGuardSkipsNonForeignTargets(t *testing.T) {
 	}
 }
 
-func TestManagedWorktreePathContextIgnoresOrdinaryWorkspaceInsideBase(t *testing.T) {
+func TestManagedWorktreePathContextProtectsConfiguredRootWithoutKnownWorktrees(t *testing.T) {
 	base := t.TempDir()
 	workspaceRoot := filepath.Join(base, "ordinary-workspace")
 	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
@@ -136,8 +146,8 @@ func TestManagedWorktreePathContextIgnoresOrdinaryWorkspaceInsideBase(t *testing
 	if err != nil {
 		t.Fatalf("resolve target: %v", err)
 	}
-	if context.IsForeignManagedWorktreePath(resolvedTarget) {
-		t.Fatal("ordinary Workspace under managed base was classified as foreign")
+	if !context.IsForeignManagedWorktreePath(resolvedTarget) {
+		t.Fatal("configured Worktree root target was not classified as foreign")
 	}
 }
 
