@@ -50,4 +50,19 @@ func TestWorkflowGraphInspectWritesAuthoredIdentityBoundDocumentWithJSONFlag(t *
 	if len(document.Graph.Nodes) != 2 || document.Graph.Nodes[0].ID != "node-z" || document.Graph.Nodes[1].ID != "node-a" {
 		t.Fatalf("authored Nodes = %+v", document.Graph.Nodes)
 	}
+	var wire struct {
+		Graph struct {
+			Nodes []struct {
+				GroupID json.RawMessage `json:"group_id"`
+			} `json:"nodes"`
+		} `json:"graph"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &wire); err != nil {
+		t.Fatalf("decode wire output: %v", err)
+	}
+	for index, node := range wire.Graph.Nodes {
+		if string(node.GroupID) != "null" {
+			t.Fatalf("node %d group_id = %s", index, node.GroupID)
+		}
+	}
 }

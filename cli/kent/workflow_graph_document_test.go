@@ -13,6 +13,7 @@ func TestWorkflowGraphDocumentRequiresPublicShape(t *testing.T) {
 	invalid := []string{
 		`{`,
 		emptyWorkflowGraphDocumentJSON + `{}`,
+		`{"workflow_id":"11111111-1111-4111-8111-111111111111","expected_version":1,"graph":{"node_groups":[],"nodes":[{"id":"11111111-1111-4111-8111-111111111112","kind":"agent","display_name":"Node"}],"transition_groups":[],"edges":[]}}`,
 		`{"workflow_id":"11111111-1111-4111-8111-111111111111","expected_version":1,"graph":{"node_groups":[],"nodes":[{"id":"node","key":"node","kind":"agent","display_name":"Node","group_key":"group"}],"transition_groups":[],"edges":[]}}`,
 		`{"workflow_id":"11111111-1111-4111-8111-111111111111","expected_version":1,"graph":{"node_groups":null,"nodes":[],"transition_groups":[],"edges":[]}}`,
 		`{"workflow_id":"11111111-1111-4111-8111-111111111111","expected_version":1,"graph":{"node_groups":[],"nodes":[],"transition_groups":[],"edges":[{"id":"edge","transition_group_id":"group","key":"edge","target_node_id":"node","assignee_selection":"configured","thinking_selection":"configured","requires_approval":null,"context_mode":"new_session","context_source":null}]}}`,
