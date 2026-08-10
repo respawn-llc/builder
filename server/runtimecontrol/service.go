@@ -623,7 +623,9 @@ func (s *Service) prepareInterrupt(
 			_ = admission.Reject(err)
 			return
 		}
-		if !slices.Contains(reconciliationRefs, *req.TargetOperationRef) {
+		if !slices.ContainsFunc(reconciliationRefs, func(ref clientui.RuntimeOperationRef) bool {
+			return runtimeops.SameOperationRef(ref, *req.TargetOperationRef)
+		}) {
 			reconciliationRefs = append([]clientui.RuntimeOperationRef{*req.TargetOperationRef}, reconciliationRefs...)
 		}
 	}
@@ -632,6 +634,7 @@ func (s *Service) prepareInterrupt(
 	if preparation != nil {
 		target = preparation.Target()
 	}
+	skipOrdinaryInterrupt := false
 	if target != runtimeops.CancellationTargetQueuedMessage && s.workflowInterruptor != nil {
 		parsedSessionID, err := runtimeids.ParseSessionID(sessionID)
 		if err != nil {
@@ -655,8 +658,10 @@ func (s *Service) prepareInterrupt(
 				}
 				go func() {
 					result := runtimeInterruptMemoResult{ReconciliationRefs: reconciliationRefs}
+					var cancellation runtimeops.CancellationResult
 					cleanupErr := cleanup(func(cleanupCtx context.Context) error {
-						_, effectErr := s.runLocalInterrupt(
+						var effectErr error
+						cancellation, effectErr = s.runLocalInterrupt(
 							cleanupCtx,
 							sessionID,
 							preparation,
@@ -665,6 +670,8 @@ func (s *Service) prepareInterrupt(
 							true,
 						)
 						return effectErr
+					}, func(cleanupCtx context.Context) error {
+						return cancellation.WaitForReconciliation(cleanupCtx)
 					})
 					_ = work.Complete(result, cleanupErr)
 				}()
@@ -689,7 +696,21 @@ func (s *Service) prepareInterrupt(
 				ReconciliationRefs: reconciliationRefs,
 			}, nil)
 			return
-		case sessionruntime.WorkflowSessionInterruptUnhandled, sessionruntime.WorkflowSessionInterruptNoLongerLive:
+		case sessionruntime.WorkflowSessionInterruptNoLongerLive:
+			skipOrdinaryInterrupt = true
+			if preparation != nil {
+				_ = preparation.Release()
+				preparation = nil
+			}
+			target = runtimeops.CancellationTargetAbsentOrTerminal
+			if len(queueRefs) == 0 {
+				_ = admission.Complete(runtimeInterruptMemoResult{
+					ReconciliationRefs: reconciliationRefs,
+				}, nil)
+				return
+			}
+		case sessionruntime.WorkflowSessionInterruptUnhandled,
+			sessionruntime.WorkflowSessionInterruptOperationLocal:
 		default:
 			if preparation != nil {
 				_ = preparation.Release()
@@ -698,7 +719,9 @@ func (s *Service) prepareInterrupt(
 			return
 		}
 	}
-	interruptActive := req.TargetOperationRef == nil && s.ordinaryRuntimeInterruptible(ctx, sessionID)
+	interruptActive := req.TargetOperationRef == nil &&
+		!skipOrdinaryInterrupt &&
+		s.ordinaryRuntimeInterruptible(ctx, sessionID)
 	hasLocalEffect := len(queueRefs) != 0 ||
 		target == runtimeops.CancellationTargetQueuedMessage ||
 		target == runtimeops.CancellationTargetNonActive ||
@@ -723,7 +746,7 @@ func (s *Service) prepareInterrupt(
 	}
 	go func() {
 		result := runtimeInterruptMemoResult{ReconciliationRefs: reconciliationRefs}
-		_, err := s.runLocalInterrupt(
+		cancellation, effectErr := s.runLocalInterrupt(
 			s.lifecycleCtx,
 			sessionID,
 			preparation,
@@ -731,7 +754,10 @@ func (s *Service) prepareInterrupt(
 			interruptActive,
 			false,
 		)
-		_ = work.Complete(result, err)
+		_ = work.Complete(
+			result,
+			errors.Join(effectErr, cancellation.WaitForReconciliation(s.lifecycleCtx)),
+		)
 	}()
 }
 
@@ -747,7 +773,11 @@ func (s *Service) ordinaryRuntimeInterruptible(ctx context.Context, sessionID st
 func queuedInterruptRefs(req runtimeInterruptMemoRequest) []clientui.RuntimeOperationRef {
 	refs := make([]clientui.RuntimeOperationRef, 0, len(req.PendingOperationRefs)+1)
 	appendQueued := func(ref clientui.RuntimeOperationRef) {
-		if ref.Kind != clientui.RuntimeOperationKindQueuedMessage || ref.QueueItemID == nil || slices.Contains(refs, ref) {
+		if ref.Kind != clientui.RuntimeOperationKindQueuedMessage ||
+			ref.QueueItemID == nil ||
+			slices.ContainsFunc(refs, func(existing clientui.RuntimeOperationRef) bool {
+				return runtimeops.SameOperationRef(existing, ref)
+			}) {
 			return
 		}
 		refs = append(refs, ref)
@@ -813,10 +843,15 @@ func sameRuntimeInterruptMemoRequest(left, right runtimeInterruptMemoRequest) bo
 	if (left.TargetOperationRef == nil) != (right.TargetOperationRef == nil) {
 		return false
 	}
-	if left.TargetOperationRef != nil && *left.TargetOperationRef != *right.TargetOperationRef {
+	if left.TargetOperationRef != nil &&
+		!runtimeops.SameOperationRef(*left.TargetOperationRef, *right.TargetOperationRef) {
 		return false
 	}
-	return slices.Equal(left.PendingOperationRefs, right.PendingOperationRefs)
+	return slices.EqualFunc(
+		left.PendingOperationRefs,
+		right.PendingOperationRefs,
+		runtimeops.SameOperationRef,
+	)
 }
 
 func (s *Service) runtimeInterruptResponse(sessionID string, refs []clientui.RuntimeOperationRef) (serverapi.RuntimeInterruptResponse, error) {

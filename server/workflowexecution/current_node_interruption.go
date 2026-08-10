@@ -131,7 +131,7 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 func (c *CurrentNodeController) interrupt(
 	ctx context.Context,
 	selector InterruptSelector,
-	onCommitted func(func(func(context.Context) error) error) error,
+	onCommitted func(func(func(context.Context) error, func(context.Context) error) error) error,
 ) error {
 	if c == nil {
 		return errors.New("current node workflow controller is required")
@@ -364,7 +364,7 @@ func (c *CurrentNodeController) interrupt(
 		state.fatalDiagnostic = c.interruptCleanupDiagnosticLocked(state)
 		c.mu.Unlock()
 	}
-	cleanup := func(beforeStop func(context.Context) error) error {
+	cleanup := func(beforeStop func(context.Context) error, afterStop func(context.Context) error) error {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), interruptCleanupTimeout)
 		defer cleanupCancel()
 		var beforeErr error
@@ -372,16 +372,20 @@ func (c *CurrentNodeController) interrupt(
 			beforeErr = beforeStop(cleanupCtx)
 		}
 		stopErr := c.cleanupInterrupt(cleanupCtx, state)
-		return c.finishInterruptCleanup(state, errors.Join(beforeErr, stopErr))
+		var afterErr error
+		if afterStop != nil {
+			afterErr = afterStop(cleanupCtx)
+		}
+		return c.finishInterruptCleanup(state, errors.Join(beforeErr, stopErr, afterErr))
 	}
 	if persisted && onCommitted != nil {
 		if err := onCommitted(cleanup); err == nil {
 			return nil
 		} else {
-			return errors.Join(err, cleanup(nil))
+			return errors.Join(err, cleanup(nil, nil))
 		}
 	}
-	return cleanup(nil)
+	return cleanup(nil, nil)
 }
 
 func (c *CurrentNodeController) finishInterruptCleanup(

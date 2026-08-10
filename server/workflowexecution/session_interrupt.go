@@ -40,7 +40,7 @@ func (c *CurrentNodeController) InterruptWorkflowSession(
 	creator := false
 	if interruptible && request.TargetOperationRef != nil && run.operation != nil {
 		if creatorRef, ok := run.operation.RuntimeOperationRef(); ok {
-			creator = creatorRef == *request.TargetOperationRef
+			creator = runtimeops.SameOperationRef(creatorRef, *request.TargetOperationRef)
 		}
 	}
 	c.mu.Unlock()
@@ -48,11 +48,11 @@ func (c *CurrentNodeController) InterruptWorkflowSession(
 		return sessionruntime.WorkflowSessionInterruptNoLongerLive, nil
 	}
 	if request.TargetOperationRef != nil {
+		if !creator {
+			return sessionruntime.WorkflowSessionInterruptOperationLocal, nil
+		}
 		switch request.Target {
 		case runtimeops.CancellationTargetNonActive:
-			if !creator {
-				return sessionruntime.WorkflowSessionInterruptNoLongerLive, nil
-			}
 		case runtimeops.CancellationTargetActiveInterruptible:
 		case runtimeops.CancellationTargetAbsentOrTerminal:
 			return sessionruntime.WorkflowSessionInterruptNoLongerLive, nil
@@ -70,7 +70,7 @@ func (c *CurrentNodeController) InterruptWorkflowSession(
 			SessionID:   &request.SessionID,
 			CurrentNode: &binding.CurrentNode,
 		},
-		func(cleanup func(func(context.Context) error) error) error {
+		func(cleanup func(func(context.Context) error, func(context.Context) error) error) error {
 			if onCommitted == nil {
 				return errors.New("workflow Session Interrupt committed without a cleanup owner")
 			}

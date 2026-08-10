@@ -6,6 +6,16 @@ import (
 	"core/shared/clientui"
 )
 
+func SameOperationRef(left, right clientui.RuntimeOperationRef) bool {
+	if left.Kind != right.Kind || left.ClientRequestID != right.ClientRequestID {
+		return false
+	}
+	if (left.QueueItemID == nil) != (right.QueueItemID == nil) {
+		return false
+	}
+	return left.QueueItemID == nil || *left.QueueItemID == *right.QueueItemID
+}
+
 func sameOperationRequest[Req any](existing any, req Req, same func(Req, Req) bool) bool {
 	typed, ok := existing.(Req)
 	if !ok {

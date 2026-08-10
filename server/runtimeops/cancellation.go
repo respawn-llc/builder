@@ -78,7 +78,18 @@ func (p *CancellationPreparation) resolve(commit bool) (CancellationResult, erro
 		if entry == nil || entry.completed || !entry.active {
 			return CancellationResult{}, nil
 		}
-		return CancellationResult{InterruptActive: true, cancel: p.cancel}, nil
+		var reconciled <-chan struct{}
+		record, recorded := p.ledger.records[p.key]
+		if !recorded ||
+			(record.State != clientui.RuntimeInputReconciliationCommitted &&
+				record.State != clientui.RuntimeInputReconciliationSubmitted) {
+			reconciled = entry.done
+		}
+		return CancellationResult{
+			InterruptActive: true,
+			cancel:          p.cancel,
+			reconciled:      reconciled,
+		}, nil
 	case CancellationTargetQueuedMessage, CancellationTargetNonActive:
 		if _, exists := p.ledger.tombstones[p.key]; !exists && len(p.ledger.tombstones) >= c.limit {
 			return CancellationResult{}, fmt.Errorf(
@@ -188,16 +199,13 @@ func classifyCancellationTarget(
 			switch record.State {
 			case clientui.RuntimeInputReconciliationAccepted,
 				clientui.RuntimeInputReconciliationSubmitted:
-				if entry != nil && !entry.completed {
-					return CancellationTargetQueuedMessage, entry.cancel
-				}
 				return CancellationTargetQueuedMessage, nil
 			default:
 				return CancellationTargetAbsentOrTerminal, nil
 			}
 		}
 		if entry != nil && !entry.completed {
-			return CancellationTargetQueuedMessage, entry.cancel
+			return CancellationTargetQueuedMessage, nil
 		}
 		return CancellationTargetAbsentOrTerminal, nil
 	}

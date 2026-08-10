@@ -14,10 +14,14 @@ const (
 	WorkflowSessionInterruptUnhandled WorkflowSessionInterruptOutcome = iota
 	WorkflowSessionInterruptNotRetained
 	WorkflowSessionInterruptNoLongerLive
+	WorkflowSessionInterruptOperationLocal
 	WorkflowSessionInterruptCommitted
 )
 
-type WorkflowCommittedInterruptCleanup func(func(context.Context) error) error
+type WorkflowCommittedInterruptCleanup func(
+	beforeStop func(context.Context) error,
+	afterStop func(context.Context) error,
+) error
 
 type WorkflowSessionInterruptRequest struct {
 	SessionID          runtimeids.SessionID

@@ -23,11 +23,27 @@ var ErrOperationCanceled = serverapi.ErrRuntimeOperationCanceled
 type CancellationResult struct {
 	InterruptActive bool
 	cancel          context.CancelFunc
+	reconciled      <-chan struct{}
 }
 
 func (r CancellationResult) CancelOperationAttempt() {
 	if r.cancel != nil {
 		r.cancel()
+	}
+}
+
+func (r CancellationResult) WaitForReconciliation(ctx context.Context) error {
+	if r.reconciled == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-r.reconciled:
+		return nil
+	case <-ctx.Done():
+		return context.Cause(ctx)
 	}
 }
 
