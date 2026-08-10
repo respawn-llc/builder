@@ -81,7 +81,6 @@ describe("Task Detail live refresh", () => {
     });
     expect(screen.queryAllByRole("radio")).toHaveLength(0);
   });
-
   it("skips a masked prompt when handing focus to the next actionable question", async () => {
     mountTaskDetailSurface(taskDetailResponse, {
       routes: [
@@ -113,7 +112,6 @@ describe("Task Detail live refresh", () => {
       expect(screen.getAllByRole("radio")[0]).toHaveFocus();
     });
   });
-
   it("preserves an equal-timestamp background refresh over an earlier reconciliation", async () => {
     let attention = taskAttention("ask-1", 1);
     const delivery = deferred<undefined>();
