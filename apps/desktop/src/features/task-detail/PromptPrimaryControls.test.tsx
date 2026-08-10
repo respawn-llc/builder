@@ -14,18 +14,13 @@ import { QuestionFormView } from "./TaskDetailQuestionFormView";
 
 const services = createTestServices([], undefined, { platform: "macos" });
 const baseQuestion = parsedQuestionAttention();
-
-beforeAll(async () => {
-  await initializeI18n();
-});
+beforeAll(async () => initializeI18n());
 afterEach(() => vi.restoreAllMocks());
-
 describe("Task Detail prompt primary controls", () => {
   it("replaces and unregisters exact-key controls without fallback", () => {
     const registry = new PromptPrimaryControlRegistry();
     const key: PromptAnswerKey = { sessionID: "session-1", stepID: "step-1", promptID: "prompt-1" };
-    const first = vi.fn();
-    const second = vi.fn();
+    const [first, second] = [vi.fn(), vi.fn()];
     const unregisterFirst = registry.register(key, { focusPrimary: first });
     const unregisterSecond = registry.register({ ...key }, { focusPrimary: second });
     unregisterFirst();
@@ -37,7 +32,6 @@ describe("Task Detail prompt primary controls", () => {
       false,
     ]);
   });
-
   it.each([
     ["option Question", ordinaryAttention(["One"]), "radio"],
     ["freeform-only Question", ordinaryAttention([]), "textbox"],
@@ -68,27 +62,15 @@ describe("Task Detail prompt primary controls", () => {
     expect(focus).toHaveBeenCalledWith({ preventScroll: true });
   });
 });
-
-function ordinaryAttention(suggestions: readonly string[]): QuestionAttentionItem {
-  return {
-    ...baseQuestion,
-    question: {
-      ...baseQuestion.question,
-      recommendedOptionIndex: suggestions.length === 0 ? null : 1,
-      suggestions,
-    },
-  };
-}
-
-function approvalAttention(): QuestionAttentionItem {
-  return {
-    ...baseQuestion,
-    question: {
-      approvalDecisions: ["deny", "allow_once"],
-      kind: "approval",
-      promptID: baseQuestion.question.promptID,
-      sessionID: baseQuestion.question.sessionID,
-      stepID: baseQuestion.question.stepID,
-    },
-  };
-}
+const ordinaryAttention = (suggestions: readonly string[]): QuestionAttentionItem => ({
+  ...baseQuestion,
+  question: {
+    ...baseQuestion.question,
+    recommendedOptionIndex: suggestions.length === 0 ? null : 1,
+    suggestions,
+  },
+});
+const approvalAttention = (): QuestionAttentionItem => ({
+  ...baseQuestion,
+  question: { ...baseQuestion.question, approvalDecisions: ["deny", "allow_once"], kind: "approval" },
+});

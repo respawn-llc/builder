@@ -43,8 +43,7 @@ func TestPromptFollowUpSingleOwnerLifecycle(t *testing.T) {
 		if _, err := subscription.Next(context.Background()); !errors.Is(err, io.EOF) {
 			t.Fatalf("closed subscription Next error = %v, want EOF", err)
 		}
-		fresh := subscribePromptFollowUpForTest(t, store, stepID, "ask-1")
-		_ = fresh.Close()
+		_ = subscribePromptFollowUpForTest(t, store, stepID, "ask-1").Close()
 	})
 	t.Run("unknown and resolved keys rejected", func(t *testing.T) {
 		store, _ := newPromptBatchStore(t)
@@ -69,7 +68,6 @@ func TestPromptFollowUpSingleOwnerLifecycle(t *testing.T) {
 		requirePromptFollowUpTerminal(t, subscription, serverapi.PromptFollowUpExecutionClosed)
 	})
 }
-
 func newWatchedPrompt(t *testing.T, promptIDs []string) (*executionPromptStore, runtimeids.StepID, serverapi.PromptFollowUpSubscription) {
 	t.Helper()
 	store, _ := newPromptBatchStore(t)
@@ -80,7 +78,6 @@ func newWatchedPrompt(t *testing.T, promptIDs []string) (*executionPromptStore, 
 	installPromptBatchEntries(&store, promptBatchEntry(request, time.Unix(1, 0)))
 	return &store, stepID, subscribePromptFollowUpForTest(t, &store, stepID, "ask-1")
 }
-
 func resolveWatchedPrompt(t *testing.T, store *executionPromptStore, stepID runtimeids.StepID) {
 	t.Helper()
 	selected := 1
@@ -90,7 +87,6 @@ func resolveWatchedPrompt(t *testing.T, store *executionPromptStore, stepID runt
 		t.Fatalf("ResolvePromptBatch: %v", err)
 	}
 }
-
 func subscribePromptFollowUpForTest(t *testing.T, store *executionPromptStore, stepID runtimeids.StepID, promptID clientui.PromptID) serverapi.PromptFollowUpSubscription {
 	t.Helper()
 	subscription, err := store.subscribePromptFollowUp(stepID, promptID)
@@ -99,7 +95,6 @@ func subscribePromptFollowUpForTest(t *testing.T, store *executionPromptStore, s
 	}
 	return subscription
 }
-
 func requirePromptFollowUpTerminal(t *testing.T, subscription serverapi.PromptFollowUpSubscription, want serverapi.PromptFollowUpEventKind) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)

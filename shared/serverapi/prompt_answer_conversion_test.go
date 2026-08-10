@@ -9,11 +9,9 @@ import (
 )
 
 func TestPromptAnswerBatchEntryFromTypedAnswer(t *testing.T) {
-	selected := 2
-	freeform := "details"
-	commentary := "approved"
-	question := PromptQuestionAnswer{SelectedOptionNumber: &selected, Freeform: &freeform}
-	approval := PromptApprovalAnswer{Decision: clientui.ApprovalDecisionAllowOnce, Commentary: &commentary}
+	selected, freeform, commentary := 2, "details", "approved"
+	question, approval := PromptQuestionAnswer{SelectedOptionNumber: &selected, Freeform: &freeform},
+		PromptApprovalAnswer{Decision: clientui.ApprovalDecisionAllowOnce, Commentary: &commentary}
 	optionOnly := PromptQuestionAnswer{SelectedOptionNumber: textutil.Value(1)}
 	deny := PromptApprovalAnswer{Decision: clientui.ApprovalDecisionDeny}
 	tests := []struct {
@@ -30,11 +28,11 @@ func TestPromptAnswerBatchEntryFromTypedAnswer(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			entry, err := PromptAnswerBatchEntryFrom("prompt-1", test.answer)
-			if err != nil {
-				t.Fatalf("convert answer: %v", err)
+			if err == nil {
+				err = entry.Validate()
 			}
-			if err := entry.Validate(); err != nil {
-				t.Fatalf("validate entry: %v", err)
+			if err != nil {
+				t.Fatalf("convert and validate answer: %v", err)
 			}
 			if !reflect.DeepEqual(entry, test.expected) {
 				t.Fatalf("entry = %+v, want %+v", entry, test.expected)
@@ -42,12 +40,10 @@ func TestPromptAnswerBatchEntryFromTypedAnswer(t *testing.T) {
 		})
 	}
 }
-
 func TestPromptAnswerBatchEntryFromRejectsAbsentOrInvalidTypedAnswer(t *testing.T) {
-	if _, err := PromptAnswerBatchEntryFrom("prompt-1", PromptAnswer{}); err == nil {
-		t.Fatal("absent answer succeeded")
-	}
-	if _, err := PromptAnswerBatchEntryFrom("", DeclinedPromptAnswer()); err == nil {
-		t.Fatal("blank prompt id succeeded")
+	_, absentErr := PromptAnswerBatchEntryFrom("prompt-1", PromptAnswer{})
+	_, blankIDErr := PromptAnswerBatchEntryFrom("", DeclinedPromptAnswer())
+	if absentErr == nil || blankIDErr == nil {
+		t.Fatalf("invalid conversion errors = absent %v, blank ID %v", absentErr, blankIDErr)
 	}
 }

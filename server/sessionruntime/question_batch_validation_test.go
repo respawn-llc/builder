@@ -16,13 +16,9 @@ func TestQuestionBatchMetadataValidationIsIdenticalForDirectAndObservedResolutio
 	}{
 		{name: "metadata origin", mutate: func(request *tools.AskQuestionRequest) { request.QuestionBatch.Origin = "invalid" }},
 		{name: "request origin agreement", mutate: func(request *tools.AskQuestionRequest) { request.Origin = "" }},
-		{name: "blank run identity", mutate: func(request *tools.AskQuestionRequest) {
-			request.RunID = ""
-			request.QuestionBatch.RunID = ""
-		}},
+		{name: "blank run identity", mutate: func(request *tools.AskQuestionRequest) { request.RunID, request.QuestionBatch.RunID = "", "" }},
 		{name: "non-normalized run identity", mutate: func(request *tools.AskQuestionRequest) {
-			request.RunID = " run-1 "
-			request.QuestionBatch.RunID = " run-1 "
+			request.RunID, request.QuestionBatch.RunID = " run-1 ", " run-1 "
 		}},
 		{name: "blank step identity", mutate: func(request *tools.AskQuestionRequest) { request.QuestionBatch.StepID = "" }},
 		{name: "non-normalized step identity", mutate: func(request *tools.AskQuestionRequest) { request.QuestionBatch.StepID = " " + request.StepID + " " }},
@@ -42,7 +38,6 @@ func TestQuestionBatchMetadataValidationIsIdenticalForDirectAndObservedResolutio
 			request.QuestionBatch.BatchPromptIDs = []string{"ask-1", "ask-1"}
 		}},
 	}
-
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			request := questionBatchValidationRequest(t)
@@ -58,7 +53,6 @@ func TestQuestionBatchMetadataValidationIsIdenticalForDirectAndObservedResolutio
 		})
 	}
 }
-
 func TestValidatedQuestionBatchDescriptorOwnsSuccessorIdentityWithoutDirectObservation(t *testing.T) {
 	request := questionBatchValidationRequest(t)
 	descriptor, err := validateQuestionBatchMetadata(request)
@@ -77,7 +71,6 @@ func TestValidatedQuestionBatchDescriptorOwnsSuccessorIdentityWithoutDirectObser
 		t.Fatalf("direct batch allocated follow-up state: %+v", store.promptFollowUps)
 	}
 }
-
 func questionBatchValidationRequest(t *testing.T) tools.AskQuestionRequest {
 	t.Helper()
 	request := batchedPromptRequest("ask-1", 0)
@@ -86,7 +79,6 @@ func questionBatchValidationRequest(t *testing.T) tools.AskQuestionRequest {
 	request.Suggestions = []string{"one", "two"}
 	return request
 }
-
 func resolveMalformedQuestionBatch(t *testing.T, request tools.AskQuestionRequest, watched bool) error {
 	t.Helper()
 	store, feed := newPromptBatchStore(t)

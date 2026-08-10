@@ -33,7 +33,13 @@ type stubQuestionCommandRemote struct {
 	followUpKind      serverapi.PromptFollowUpEventKind
 	outcome           serverapi.PromptAnswerBatchOutcome
 	watchNexts        int
-	watchClosed       bool
+	remoteClosed      bool
+	subscription      *stubPromptFollowUpSubscription
+}
+
+type stubPromptFollowUpSubscription struct {
+	remote *stubQuestionCommandRemote
+	closed bool
 }
 
 type stubQuestionTaskRemote struct {
@@ -133,11 +139,12 @@ func (r *stubQuestionCommandRemote) SubscribeFollowUp(_ context.Context, req ser
 		kind = serverapi.PromptFollowUpNoPreparedSuccessor
 	}
 	r.followUpKind = kind
-	return r, nil
+	r.subscription = &stubPromptFollowUpSubscription{remote: r}
+	return r.subscription, nil
 }
 
 func (r *stubQuestionCommandRemote) Close() error {
-	r.watchClosed = true
+	r.remoteClosed = true
 	return nil
 }
 
@@ -145,7 +152,8 @@ func (r *stubQuestionTaskRemote) Close() error {
 	return nil
 }
 
-func (r *stubQuestionCommandRemote) Next(ctx context.Context) (serverapi.PromptFollowUpEvent, error) {
+func (s *stubPromptFollowUpSubscription) Next(ctx context.Context) (serverapi.PromptFollowUpEvent, error) {
+	r := s.remote
 	r.watchNexts++
 	if r.watchNext != nil {
 		if err := r.watchNext(ctx); err != nil {
@@ -153,6 +161,11 @@ func (r *stubQuestionCommandRemote) Next(ctx context.Context) (serverapi.PromptF
 		}
 	}
 	return serverapi.PromptFollowUpEvent{Kind: r.followUpKind}, r.followUpErr
+}
+
+func (s *stubPromptFollowUpSubscription) Close() error {
+	s.closed = true
+	return nil
 }
 
 func requireQuestionBatchEntry(t *testing.T, request serverapi.PromptAnswerBatchRequest) serverapi.PromptAnswerBatchEntry {
@@ -168,7 +181,8 @@ func requireQuestionWatch(t *testing.T, remote *stubQuestionCommandRemote, wantN
 	if len(remote.watchRequests) != 1 {
 		t.Fatalf("watch requests = %d, want 1", len(remote.watchRequests))
 	}
-	if remote.watchErr == nil && (!remote.watchClosed || remote.watchNexts != wantNext) {
+	if !remote.remoteClosed ||
+		remote.watchErr == nil && (remote.subscription == nil || !remote.subscription.closed || remote.watchNexts != wantNext) {
 		t.Fatalf("subscription = %+v, want closed with %d reads", remote, wantNext)
 	}
 }

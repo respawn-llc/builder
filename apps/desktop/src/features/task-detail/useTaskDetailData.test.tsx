@@ -66,6 +66,52 @@ describe("Task Detail live refresh", () => {
     first.resolve(undefined);
   });
 
+  it("does not jump focus or scroll when the intended next prompt disappears and the earlier prompt restores", async () => {
+    let attention = taskAttentionMany([
+      ["ask-1", 1],
+      ["ask-2", 1],
+      ["ask-3", 1],
+    ]);
+    const answer = deferred<undefined>();
+    mountTaskDetailSurface(taskDetailResponse, {
+      routes: [
+        { method: "workflow.task.attention.list", handler: () => attention },
+        { method: "prompt.answerBatch", handler: async () => answer.promise },
+      ],
+    });
+    const user = userEvent.setup();
+
+    await waitFor(() => {
+      expect(screen.getAllByRole("radio")).toHaveLength(6);
+    });
+    const list = screen.getByTestId("task-detail-island-stack");
+    list.scrollTop = 241;
+    const submits = screen.getAllByRole("button", { name: appI18n.t("task.submitAnswer") });
+    await user.click(submits.reduce((first) => first));
+    await waitFor(() => {
+      expect(screen.queryByText("ask-1")).not.toBeInTheDocument();
+      expect(screen.getByText("ask-2")).toBeInTheDocument();
+      expect(screen.getAllByRole("radio")[0]).toHaveFocus();
+      expect(list.scrollTop).toBe(241);
+    });
+
+    list.scrollTop = 317;
+    attention = taskAttentionMany([
+      ["ask-1", 1],
+      ["ask-3", 1],
+    ]);
+    answer.reject(new Error("delivery failed"));
+    await waitFor(() => {
+      expect(screen.getByText("ask-1")).toBeInTheDocument();
+      expect(screen.queryByText("ask-2")).not.toBeInTheDocument();
+      const radios = screen.getAllByRole("radio");
+      expect(radios).toHaveLength(4);
+      expect(radios[0]).not.toHaveFocus();
+      expect(radios[2]).not.toHaveFocus();
+      expect(list.scrollTop).toBe(317);
+    });
+  });
+
   it("shows the next batch question when its waiting event arrives after an answer", async () => {
     let attention = taskAttention("ask-1", 1);
     const services = mountTaskDetailSurface(taskDetailResponse, {
@@ -197,10 +243,11 @@ async function waitForQuestionOptionCount(count: number) {
   });
 }
 
-function deferred<T>(): Readonly<{ promise: Promise<T>; resolve(value: T): void }> {
+function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((nextResolve) => {
-    resolve = nextResolve;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((nextResolve, nextReject) => {
+    [resolve, reject] = [nextResolve, nextReject];
   });
-  return { promise, resolve };
+  return { promise, reject, resolve };
 }

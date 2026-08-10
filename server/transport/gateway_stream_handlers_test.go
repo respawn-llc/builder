@@ -19,15 +19,11 @@ func TestPromptFollowUpSubscriptionInstallsBeforeSubscribeResponse(t *testing.T)
 	if err != nil {
 		t.Fatalf("parse Step ID: %v", err)
 	}
-	route := apicontract.Route{
-		EventMethod: protocol.MethodPromptFollowUpEvent, CompleteMethod: protocol.MethodPromptFollowUpComplete,
-	}
 	conn := &promptFollowUpRegistrationConn{}
-
 	serveGatewaySubscription(
 		conn,
 		context.Background(),
-		route,
+		apicontract.Route{EventMethod: protocol.MethodPromptFollowUpEvent, CompleteMethod: protocol.MethodPromptFollowUpComplete},
 		protocol.Request{
 			JSONRPC: protocol.JSONRPCVersion,
 			ID:      "watch",
@@ -36,27 +32,22 @@ func TestPromptFollowUpSubscriptionInstallsBeforeSubscribeResponse(t *testing.T)
 				SessionID: runtimeids.NewSessionID(), StepID: stepID, PromptID: "prompt-1",
 			}),
 		},
-		func(context.Context, serverapi.PromptFollowUpWatchRequest) (*scriptedPromptFollowUpSubscription, error) {
+		func(context.Context, serverapi.PromptFollowUpWatchRequest) (*promptFollowUpRegistrationConn, error) {
 			conn.installed = true
-			return &scriptedPromptFollowUpSubscription{}, nil
+			return conn, nil
 		},
 		func(event serverapi.PromptFollowUpEvent) protocol.PromptFollowUpEventParams {
 			return protocol.PromptFollowUpEventParams{Event: protocol.PromptFollowUpEvent{Kind: string(event.Kind)}}
 		},
 	)
-
 	if conn.sent != 2 {
 		t.Fatalf("frames = %d, want SubscribeResponse and completion", conn.sent)
 	}
 }
 
-type scriptedPromptFollowUpSubscription struct{}
-
-func (*scriptedPromptFollowUpSubscription) Next(context.Context) (serverapi.PromptFollowUpEvent, error) {
+func (*promptFollowUpRegistrationConn) Next(context.Context) (serverapi.PromptFollowUpEvent, error) {
 	return serverapi.PromptFollowUpEvent{}, io.EOF
 }
-
-func (*scriptedPromptFollowUpSubscription) Close() error { return nil }
 
 type promptFollowUpRegistrationConn struct {
 	installed bool
@@ -70,13 +61,9 @@ func (c *promptFollowUpRegistrationConn) Send(context.Context, rpcwire.Frame) er
 	c.sent++
 	return nil
 }
-
 func (*promptFollowUpRegistrationConn) Events() <-chan rpcwire.Event { return nil }
-
-func (*promptFollowUpRegistrationConn) Closed() <-chan struct{} { return nil }
-
-func (*promptFollowUpRegistrationConn) Close() error { return nil }
-
+func (*promptFollowUpRegistrationConn) Closed() <-chan struct{}      { return nil }
+func (*promptFollowUpRegistrationConn) Close() error                 { return nil }
 func TestLegacyTranscriptSubscriptionSuppressesLiveRunTerminalAndRenumbers(t *testing.T) {
 	inner := &scriptedGatewayTranscriptSubscription{
 		messages: []clientui.TranscriptMessage{

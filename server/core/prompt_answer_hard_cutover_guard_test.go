@@ -18,7 +18,6 @@ func TestPromptFollowUpContractsCarryIdentityAndTerminalOnlyEvents(t *testing.T)
 	assertStructFields(t, reflect.TypeOf(protocol.PromptFollowUpEventParams{}), []string{"Event"})
 	assertStructFields(t, reflect.TypeOf(protocol.PromptFollowUpEvent{}), []string{"Kind"})
 }
-
 func TestObsoletePromptMutationSymbolsStayDeleted(t *testing.T) {
 	forbiddenIdentifiers := map[string]struct{}{
 		"Ask" + "AnswerRequest": {}, "Approval" + "AnswerRequest": {}, "Answer" + "Ask": {},
@@ -58,7 +57,6 @@ func TestObsoletePromptMutationSymbolsStayDeleted(t *testing.T) {
 		})
 	})
 }
-
 func assertStructFields(t *testing.T, contract reflect.Type, want []string) {
 	t.Helper()
 	if contract.NumField() != len(want) {

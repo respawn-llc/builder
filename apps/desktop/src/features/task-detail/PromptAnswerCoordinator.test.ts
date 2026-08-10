@@ -20,7 +20,6 @@ describe("Task Detail prompt answer reconciliation", () => {
       },
       readAttention: async () => read.promise,
     });
-
     const attempt = submit(harness.coordinator, attention, "draft", async () => undefined);
     expect(harness.state.isMasked(promptAnswerKey(attention))).toBe(true);
     read.resolve([]);
@@ -41,24 +40,26 @@ describe("Task Detail prompt answer reconciliation", () => {
       await submit(harness.coordinator, attention, "retry", async () => {
         if (kind === "delivery") throw new Error("delivery failed");
       });
-
       const key = promptAnswerKey(attention);
       expect(harness.state.isMasked(key)).toBe(false);
       expect(harness.state.selection(key)?.answer).toBe("retry");
       expect(harness.failures).toEqual([expect.objectContaining({ kind, taskShortID: "TASK-1" })]);
     },
   );
-  it("isolates full-key collisions when overlapping reads finish out of order", async () => {
+  it.each([
+    ["step-2", "session-1"],
+    ["step-1", "session-2"],
+  ] as const)("isolates %s/%s identity collisions", async (stepID, sessionID) => {
     const first = question("step-1", "shared");
-    const second = question("step-2", "shared");
-    const firstRead = deferred<readonly QuestionAttentionItem[]>();
-    const secondRead = deferred<readonly QuestionAttentionItem[]>();
+    const second = question(stepID, "shared", sessionID);
+    const [firstRead, secondRead] = [
+      deferred<readonly QuestionAttentionItem[]>(),
+      deferred<readonly QuestionAttentionItem[]>(),
+    ];
     const reads = [firstRead, secondRead];
-    expect([
-      Object.isFrozen(promptAnswerKey(first)),
-      samePromptAnswerKey(promptAnswerKey(first), promptAnswerKey(second)),
-      taskDetailAttentionRowKey(first) === taskDetailAttentionRowKey(second),
-    ]).toEqual([true, false, false]);
+    expect(Object.isFrozen(promptAnswerKey(first))).toBe(true);
+    expect(samePromptAnswerKey(promptAnswerKey(first), promptAnswerKey(second))).toBe(false);
+    expect(taskDetailAttentionRowKey(first)).not.toBe(taskDetailAttentionRowKey(second));
     const harness = coordinatorHarness(
       [
         [first, draft("first")],
@@ -66,7 +67,6 @@ describe("Task Detail prompt answer reconciliation", () => {
       ],
       { readAttention: async () => reads.shift()?.promise ?? Promise.reject(new Error("unexpected read")) },
     );
-
     const firstAttempt = submit(harness.coordinator, first, "first", async () => undefined);
     const secondAttempt = submit(harness.coordinator, second, "second", async () => undefined);
     secondRead.resolve([second]);
@@ -77,7 +77,6 @@ describe("Task Detail prompt answer reconciliation", () => {
     expect(harness.state.selection(promptAnswerKey(first))).toBeUndefined();
     expect(harness.state.selection(promptAnswerKey(second))?.answer).toBe("second");
   });
-
   it("discards state after unmount and identifies the Task on failure", async () => {
     const attention = question("step-1", "prompt-1");
     const answer = deferred<undefined>();
@@ -98,7 +97,6 @@ describe("Task Detail prompt answer reconciliation", () => {
     ]);
   });
 });
-
 function coordinatorHarness(
   selections: readonly (readonly [QuestionAttentionItem, ReturnType<typeof draft>])[],
   options: Pick<CoordinatorOptions, "readAttention"> & Partial<CoordinatorOptions>,
@@ -125,11 +123,7 @@ function coordinatorHarness(
     },
   };
 }
-
-function draft(answer: string) {
-  return withQuestionCommentary(emptyQuestionSelection(), answer);
-}
-
+const draft = (answer: string) => withQuestionCommentary(emptyQuestionSelection(), answer);
 async function submit(
   coordinator: PromptAnswerCoordinator,
   attention: QuestionAttentionItem,
@@ -138,16 +132,11 @@ async function submit(
 ) {
   return coordinator.submit({ attention, selection: draft(answer), send });
 }
-
 const baseQuestion = parsedQuestionAttention();
-
-function question(stepID: string, promptID: string): QuestionAttentionItem {
-  return {
-    ...baseQuestion,
-    question: { ...baseQuestion.question, promptID, sessionID: "session-1", stepID },
-  };
-}
-
+const question = (stepID: string, promptID: string, sessionID = "session-1"): QuestionAttentionItem => ({
+  ...baseQuestion,
+  question: { ...baseQuestion.question, promptID, sessionID, stepID },
+});
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (error: unknown) => void;
