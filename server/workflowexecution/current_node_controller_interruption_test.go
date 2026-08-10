@@ -238,6 +238,9 @@ func TestCurrentNodeControllerTaskInterruptPreservesSiblingPreparation(t *testin
 	case <-time.After(3 * time.Second):
 		t.Fatal("sibling preparation did not start")
 	}
+	if err := controller.InterruptForManualMove(context.Background(), running.TaskID, nil); !errors.Is(err, ErrManualMoveLifecycleConflict) {
+		t.Fatalf("Manual Move during preparation = %v, want %v", err, ErrManualMoveLifecycleConflict)
+	}
 
 	interruptDone := make(chan error, 1)
 	go func() {

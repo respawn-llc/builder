@@ -239,6 +239,9 @@ func (c *CurrentNodeController) InterruptForManualMove(
 			if c.workerErr != nil {
 				return fmt.Errorf("workflow execution lifecycle failed: %w", c.workerErr)
 			}
+			if taskHasPreparationLocked(c, taskID) {
+				return ErrManualMoveLifecycleConflict
+			}
 			if c.interrupts.taskActive(taskID) {
 				return ErrTaskExecutionNotQuiescent
 			}
@@ -356,7 +359,7 @@ func appendAdmissionWait(
 }
 
 func taskHasControllerQueuedWorkLocked(c *CurrentNodeController, taskID workflow.TaskID) bool {
-	if c.queuedTaskPreparationLocked(taskID) != nil || c.runningTaskPreparationLocked(taskID) != nil {
+	if taskHasPreparationLocked(c, taskID) {
 		return true
 	}
 	for entry := c.automaticQueue.first; entry != nil; entry = entry.globalNext {
@@ -397,6 +400,10 @@ func taskHasControllerQueuedWorkLocked(c *CurrentNodeController, taskID workflow
 		}
 	}
 	return false
+}
+
+func taskHasPreparationLocked(c *CurrentNodeController, taskID workflow.TaskID) bool {
+	return c.queuedTaskPreparationLocked(taskID) != nil || c.runningTaskPreparationLocked(taskID) != nil
 }
 
 func validateTaskControllerWorkLocked(c *CurrentNodeController, taskID workflow.TaskID) error {

@@ -1019,70 +1019,24 @@ func (s *Service) startWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 		return serverapi.WorkflowTaskStartResponse{}, err
 	}
 	target.unavailable = initiatingActionTargetInterrupt
-	var decision initiatingActionTargetDecision
-	preparation := workflowexecution.TaskStartPreparation{
-		Prepare: func(preparationCtx context.Context) error {
-			var preparationErr error
-			decision, preparationErr = s.initiatingActionTarget(
+	preparation := s.initiatingActionPreparation(
+		workflow.TaskID(req.TaskID),
+		req.SetupOperationID,
+		target,
+		observation,
+		func(preparationCtx context.Context) (preparedInitiatingActionTarget, error) {
+			decision, preparationErr := s.initiatingActionTarget(
 				preparationCtx,
 				workflow.TaskID(req.TaskID),
 				&req.SetupOperationID,
 				target,
 			)
-			if preparationErr != nil || decision.prepared == nil || decision.prepared.candidate == nil {
-				if preparationErr == nil {
-					preparationErr = errors.New("Task Start target preparation produced no lock candidate")
-				}
-				var setupResult *worktree.WorktreeSetupResult
-				var retainedWorktree *serverapi.WorktreeTopologyEntry
-				var retainedPreviousWorktree *serverapi.RetainedPreviousWorktree
-				if decision.prepared != nil {
-					setupResult = decision.prepared.setupResult
-					retainedWorktree = decision.prepared.retainedWorktree
-					retainedPreviousWorktree = decision.prepared.retainedPreviousWorktree
-				}
-				preparationErr = taskPreparationError(
-					req.SetupOperationID,
-					target,
-					setupResult,
-					retainedWorktree,
-					retainedPreviousWorktree,
-					preparationErr,
-				)
-				observation.record(setupResult, retainedWorktree, retainedPreviousWorktree, preparationErr)
-				return preparationErr
+			if decision.prepared == nil {
+				return preparedInitiatingActionTarget{}, preparationErr
 			}
-			observation.record(
-				decision.prepared.setupResult,
-				decision.prepared.retainedWorktree,
-				decision.prepared.retainedPreviousWorktree,
-				nil,
-			)
-			return nil
+			return *decision.prepared, preparationErr
 		},
-		Commit: func(commitCtx context.Context) error {
-			lockErr := s.store.LockTaskExecutionTarget(
-				commitCtx,
-				workflow.TaskID(req.TaskID),
-				decision.prepared.candidate,
-			)
-			lockErr = taskPreparationError(
-				req.SetupOperationID,
-				target,
-				decision.prepared.setupResult,
-				decision.prepared.retainedWorktree,
-				decision.prepared.retainedPreviousWorktree,
-				lockErr,
-			)
-			observation.record(
-				decision.prepared.setupResult,
-				decision.prepared.retainedWorktree,
-				decision.prepared.retainedPreviousWorktree,
-				lockErr,
-			)
-			return lockErr
-		},
-	}
+	)
 	started, err := s.currentNodeExecution.StartTask(
 		ctx,
 		workflow.TaskID(req.TaskID),
@@ -1104,6 +1058,48 @@ func (s *Service) startWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 			CurrentNodes: workflowview.ProjectCurrentNodes(started.Mutation.Created),
 		},
 	}, nil
+}
+
+func (s *Service) initiatingActionPreparation(
+	taskID workflow.TaskID,
+	setupOperationID serverapi.WorktreeSetupOperationID,
+	target initiatingActionTargetPreflight,
+	observation *taskSetupObservation,
+	materialize func(context.Context) (preparedInitiatingActionTarget, error),
+) workflowexecution.TaskStartPreparation {
+	var preparedTarget preparedInitiatingActionTarget
+	return workflowexecution.TaskStartPreparation{
+		Prepare: func(ctx context.Context) error {
+			var preparationErr error
+			preparedTarget, preparationErr = materialize(ctx)
+			if preparationErr == nil && preparedTarget.candidate == nil {
+				preparationErr = errors.New("Task target preparation produced no lock candidate")
+			}
+			if preparationErr != nil {
+				preparationErr = taskPreparationError(
+					setupOperationID, target, preparedTarget.setupResult, preparedTarget.retainedWorktree,
+					preparedTarget.retainedPreviousWorktree, preparationErr,
+				)
+			}
+			observation.record(
+				preparedTarget.setupResult, preparedTarget.retainedWorktree,
+				preparedTarget.retainedPreviousWorktree, preparationErr,
+			)
+			return preparationErr
+		},
+		Commit: func(ctx context.Context) error {
+			lockErr := s.store.LockTaskExecutionTarget(ctx, taskID, preparedTarget.candidate)
+			lockErr = taskPreparationError(
+				setupOperationID, target, preparedTarget.setupResult, preparedTarget.retainedWorktree,
+				preparedTarget.retainedPreviousWorktree, lockErr,
+			)
+			observation.record(
+				preparedTarget.setupResult, preparedTarget.retainedWorktree,
+				preparedTarget.retainedPreviousWorktree, lockErr,
+			)
+			return lockErr
+		},
+	}
 }
 
 func coordinateInitiatingAction[T any](ctx context.Context, service *Service, req initiatingActionRequest, apply func(*workflowstore.ExecutionTargetCandidate) (*T, error)) (initiatingActionResult[T], error) {
@@ -1559,11 +1555,13 @@ func (s *Service) resumeWorkflowTask(ctx context.Context, req serverapi.Workflow
 				SelectionRequired: selectionRequired,
 			}, nil
 		}
-		var preparedTarget preparedInitiatingActionTarget
-		preparation = &workflowexecution.TaskStartPreparation{
-			Prepare: func(preparationCtx context.Context) error {
-				var preparationErr error
-				preparedTarget, preparationErr = s.materializeInitiatingActionTarget(
+		prepared := s.initiatingActionPreparation(
+			taskID,
+			req.SetupOperationID,
+			target,
+			observation,
+			func(preparationCtx context.Context) (preparedInitiatingActionTarget, error) {
+				return s.materializeInitiatingActionTarget(
 					preparationCtx,
 					taskID,
 					&req.SetupOperationID,
@@ -1571,53 +1569,9 @@ func (s *Service) resumeWorkflowTask(ctx context.Context, req serverapi.Workflow
 					snapshot,
 					setupRequirement,
 				)
-				if preparationErr != nil || preparedTarget.candidate == nil {
-					if preparationErr == nil {
-						preparationErr = errors.New("Task Resume target preparation produced no lock candidate")
-					}
-					preparationErr = taskPreparationError(
-						req.SetupOperationID,
-						target,
-						preparedTarget.setupResult,
-						preparedTarget.retainedWorktree,
-						preparedTarget.retainedPreviousWorktree,
-						preparationErr,
-					)
-					observation.record(
-						preparedTarget.setupResult,
-						preparedTarget.retainedWorktree,
-						preparedTarget.retainedPreviousWorktree,
-						preparationErr,
-					)
-					return preparationErr
-				}
-				observation.record(
-					preparedTarget.setupResult,
-					preparedTarget.retainedWorktree,
-					preparedTarget.retainedPreviousWorktree,
-					nil,
-				)
-				return nil
 			},
-			Commit: func(commitCtx context.Context) error {
-				lockErr := s.store.LockTaskExecutionTarget(commitCtx, taskID, preparedTarget.candidate)
-				lockErr = taskPreparationError(
-					req.SetupOperationID,
-					target,
-					preparedTarget.setupResult,
-					preparedTarget.retainedWorktree,
-					preparedTarget.retainedPreviousWorktree,
-					lockErr,
-				)
-				observation.record(
-					preparedTarget.setupResult,
-					preparedTarget.retainedWorktree,
-					preparedTarget.retainedPreviousWorktree,
-					lockErr,
-				)
-				return lockErr
-			},
-		}
+		)
+		preparation = &prepared
 	}
 	var resumed []workflow.CurrentNode
 	if preparation == nil {
