@@ -230,13 +230,8 @@ retryAdmission:
 			next.Cancel()
 			return errors.New("current node workflow controller is closed")
 		}
-		if _, stopping := c.stopping[next.ScopeID()]; stopping {
-			c.mu.Unlock()
-			next.Cancel()
-			return sessionruntime.ErrExecutionNoLongerLive
-		}
 		run = c.runs[runID]
-		if run == nil || !run.launching() || c.currentRuns[run.key] != runID {
+		if run == nil || !run.launching() || run.stopping() || c.currentRuns[run.key] != runID {
 			c.mu.Unlock()
 			next.Cancel()
 			return sessionruntime.ErrExecutionNoLongerLive
@@ -255,8 +250,8 @@ retryAdmission:
 			return currentNodeAdmissionError{cause: err}
 		}
 		c.mu.Lock()
-		fence := c.interrupts.taskFence(reference.TaskID)
-		selected := c.interrupts.currentNodeFenced(run.key)
+		fence := c.taskInterruptFenceLocked(reference.TaskID)
+		selected := run.interruptFence != nil
 		c.mu.Unlock()
 		if fence == nil || selected {
 			return currentNodeAdmissionError{cause: err}
@@ -296,7 +291,7 @@ retryAdmission:
 		if err := c.ensureTaskAvailableLocked(reference.TaskID); err != nil {
 			return err
 		}
-		if _, stopping := c.stopping[lease.ScopeID()]; stopping {
+		if run.stopping() {
 			return sessionruntime.ErrExecutionNoLongerLive
 		}
 		scopeID := lease.ScopeID()
@@ -527,7 +522,7 @@ func (c *CurrentNodeController) enqueueStarts(starts []currentNodeQueuedStart) {
 			err = c.queueExplicitStartLocked(start)
 		}
 		if err != nil {
-			c.workerErr = errors.Join(c.workerErr, err)
+			panic(fmt.Sprintf("queue current node Run: %v", err))
 		}
 	}
 	c.mu.Unlock()
@@ -622,7 +617,6 @@ func (c *CurrentNodeController) runAdmissions() {
 }
 
 func (c *CurrentNodeController) runAdmission(runID currentNodeRunID) {
-	defer c.admissionWG.Done()
 	c.mu.Lock()
 	run := c.runs[runID]
 	if run == nil {
@@ -630,15 +624,15 @@ func (c *CurrentNodeController) runAdmission(runID currentNodeRunID) {
 		return
 	}
 	reference := run.reference
-	key := run.key
 	done := run.admissionDone
 	c.mu.Unlock()
 	defer close(done)
-	defer c.finishTaskInterruptAdmission(reference)
+	defer c.finishTaskInterruptAdmission(runID)
 	defer c.finishAdmissionWorker(runID)
 	if err := c.admit(runID); err != nil {
 		c.mu.Lock()
-		interrupted := c.interrupts.currentNodeFenced(key)
+		current := c.runs[runID]
+		interrupted := current != nil && current.stopping()
 		c.mu.Unlock()
 		if errors.Is(err, context.Canceled) ||
 			errors.Is(err, sessionruntime.ErrExecutionNoLongerLive) ||
@@ -650,7 +644,7 @@ func (c *CurrentNodeController) runAdmission(runID currentNodeRunID) {
 		if !errors.As(err, &failure) {
 			failure = currentNodeAdmissionError{cause: err}
 		}
-		c.handleAdmissionFailure(reference, failure.admitted, failure.cause)
+		c.handleAdmissionFailure(runID, reference, failure.admitted, failure.cause)
 	}
 }
 
@@ -680,7 +674,6 @@ func (c *CurrentNodeController) takeExplicitStart() (currentNodeRunID, bool) {
 	run.launchContext, run.launchCancel = context.WithCancel(c.workerContext)
 	run.admissionDone = make(chan struct{})
 	run.transition(currentNodeRunLaunching)
-	c.admissionWG.Add(1)
 	return runID, true
 }
 
@@ -711,7 +704,6 @@ func (c *CurrentNodeController) takeAutomaticIntent() (currentNodeRunID, bool) {
 		run.agentCapacity = true
 		c.agentCapacityActive++
 	}
-	c.admissionWG.Add(1)
 	taskID := run.reference.TaskID
 	c.lastAutomaticTask = &taskID
 	return runID, true
@@ -730,7 +722,7 @@ func (c *CurrentNodeController) inFlightAdmissionCountLocked(policy currentNodeA
 func (c *CurrentNodeController) finishAdmissionWorker(runID currentNodeRunID) {
 	c.mu.Lock()
 	run := c.runs[runID]
-	if run != nil && run.phase == currentNodeRunLaunching {
+	if run != nil && run.phase == currentNodeRunLaunching && run.callbackErr == nil {
 		c.removeRunLocked(runID)
 	}
 	closed := c.closed
@@ -740,30 +732,37 @@ func (c *CurrentNodeController) finishAdmissionWorker(runID currentNodeRunID) {
 	}
 }
 
-func (c *CurrentNodeController) handleAdmissionFailure(reference workflow.CurrentNodeReference, admitted bool, cause error) {
-	c.handleCurrentNodeStartFailures([]currentNodeQueuedStart{{reference: reference}}, admitted, cause)
+func (c *CurrentNodeController) handleAdmissionFailure(
+	runID currentNodeRunID,
+	reference workflow.CurrentNodeReference,
+	admitted bool,
+	cause error,
+) {
+	if err := c.handleCurrentNodeStartFailures([]currentNodeQueuedStart{{reference: reference}}, admitted, cause); err != nil {
+		c.mu.Lock()
+		if run := c.runs[runID]; run != nil {
+			run.recordCallbackError(errors.Join(cause, err))
+			run.transition(currentNodeRunRetiring)
+		}
+		c.mu.Unlock()
+	}
 }
 
 func (c *CurrentNodeController) handleCurrentNodeStartFailures(
 	starts []currentNodeQueuedStart,
 	admitted bool,
 	cause error,
-) {
+) error {
 	c.mu.Lock()
 	closed := c.closed
 	c.mu.Unlock()
 	if closed {
-		return
+		return nil
 	}
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), interruptCleanupTimeout)
 	defer cancel()
 	err := c.recoverCurrentNodeStartFailures(cleanupCtx, starts, admitted, cause)
-	if err == nil {
-		return
-	}
-	c.mu.Lock()
-	c.workerErr = errors.Join(c.workerErr, cause, err)
-	c.mu.Unlock()
+	return err
 }
 
 func (c *CurrentNodeController) recoverCurrentNodeStartFailures(

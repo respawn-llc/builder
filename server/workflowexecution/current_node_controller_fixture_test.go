@@ -306,6 +306,7 @@ type currentNodeControllerStore struct {
 	interruptStarted      chan struct{}
 	interruptRelease      chan struct{}
 	interruptOnce         sync.Once
+	interruptErr          error
 	idleResolved          *workflow.CurrentNode
 }
 
@@ -448,6 +449,9 @@ func (s *currentNodeControllerStore) InterruptAdmittedCurrentNode(_ context.Cont
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.interruptErr != nil {
+		return s.interruptErr
+	}
 	if s.interruptions == nil {
 		s.interruptions = make(map[workflow.CurrentNodeReferenceKey]currentNodeInterruptionRecord)
 	}
@@ -457,6 +461,12 @@ func (s *currentNodeControllerStore) InterruptAdmittedCurrentNode(_ context.Cont
 	s.interruptions[key] = currentNodeInterruptionRecord{reason: reason, detail: detail}
 	s.interruptionCalls[key]++
 	return nil
+}
+
+func (s *currentNodeControllerStore) setInterruptError(err error) {
+	s.mu.Lock()
+	s.interruptErr = err
+	s.mu.Unlock()
 }
 
 func (s *currentNodeControllerStore) InterruptCurrentNode(ctx context.Context, reference workflow.CurrentNodeReference, reason workflow.CurrentNodeInterruptionReason, detail workflow.CurrentNodeInterruptionDetail) error {
@@ -876,10 +886,11 @@ type recordingScriptRunner struct {
 }
 
 type completingScriptRunner struct {
-	authority *sessionruntime.Authority
-	source    workflow.CurrentNodeReference
-	shellPath string
-	started   chan workflow.CurrentNodeReference
+	authority   *sessionruntime.Authority
+	source      workflow.CurrentNodeReference
+	shellPath   string
+	started     chan workflow.CurrentNodeReference
+	sourceScope chan runtimeids.ExecutionScopeID
 }
 
 type firstAdmissionBlockingScriptRunner struct {
@@ -1084,6 +1095,9 @@ func (r *completingScriptRunner) StartCurrentNode(_ context.Context, reference w
 			Finalize: func(ctx context.Context, scope sessionruntime.ExecutionScope, result sessionruntime.ScriptResult, runErr error) error {
 				if runErr != nil {
 					return runErr
+				}
+				if r.sourceScope != nil {
+					r.sourceScope <- scope.ID()
 				}
 				_, err := controller.CompleteCurrentNode(ctx, workflowruntime.CompletionRequest{
 					ScopeID:      scope.ID(),

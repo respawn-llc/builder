@@ -247,15 +247,15 @@ func (c *CurrentNodeController) ApplyPendingApproval(
 		var sourceScopeID runtimeids.ExecutionScopeID
 		if sourceLive {
 			sourceScopeID = *sourceRun.exactScopeID
-			if _, completed := c.completed[sourceScopeID]; !completed {
+			if !sourceRun.completion.committed() {
 				c.mu.Unlock()
 				return workflowstore.PendingApprovalApplyResult{}, errors.New("pending approval source scope has not completed")
 			}
-			if _, finalizing := c.postTurnFinalization[sourceScopeID]; finalizing {
+			if sourceRun.postTurn != nil {
 				c.mu.Unlock()
 				return workflowstore.PendingApprovalApplyResult{}, ErrTaskExecutionNotQuiescent
 			}
-			if _, stopping := c.stopping[sourceScopeID]; stopping {
+			if sourceRun.stopping() {
 				c.mu.Unlock()
 				return workflowstore.PendingApprovalApplyResult{}, sessionruntime.ErrExecutionNoLongerLive
 			}
@@ -298,6 +298,7 @@ func (c *CurrentNodeController) ApplyPendingApproval(
 		var applied workflowstore.PendingApprovalApplyResult
 		var starts []currentNodeQueuedStart
 		var pending []*pendingCurrentNodeAssignmentSteer
+		var successorRunIDs []currentNodeRunID
 		err = c.authority.WithExactExecutions([]sessionruntime.ExecutionHandle{handle}, func() error {
 			var applyErr error
 			applied, starts, applyErr = apply()
@@ -308,7 +309,8 @@ func (c *CurrentNodeController) ApplyPendingApproval(
 			c.mu.Lock()
 			runIDs, stageErr := c.stageSuccessorRunsLocked(starts, sourceRun.id, currentNodeRunHeld)
 			if stageErr == nil {
-				c.heldStarts[sourceScopeID] = append(c.heldStarts[sourceScopeID], runIDs...)
+				successorRunIDs = append([]currentNodeRunID(nil), runIDs...)
+				sourceRun.successors = append(sourceRun.successors, runIDs...)
 			}
 			c.mu.Unlock()
 			return stageErr
@@ -316,7 +318,18 @@ func (c *CurrentNodeController) ApplyPendingApproval(
 		if err != nil {
 			return workflowstore.PendingApprovalApplyResult{}, err
 		}
-		return applied, c.resolvePendingCurrentNodeAssignmentSteers(ctx, starts, pending)
+		if err := c.resolvePendingCurrentNodeAssignmentSteers(ctx, starts, pending); err != nil {
+			return workflowstore.PendingApprovalApplyResult{}, err
+		}
+		if sourceRun.completion == currentNodeRunCompletionScriptSucceeded {
+			c.mu.Lock()
+			for index, id := range successorRunIDs {
+				c.queueRunLocked(id, starts[index].assignmentSteer)
+			}
+			c.mu.Unlock()
+			c.wakeAdmissionWorker()
+		}
+		return applied, nil
 	})
 }
 
@@ -417,7 +430,7 @@ func (c *CurrentNodeController) taskQuiescentLocked(taskID workflow.TaskID) (boo
 }
 
 func (c *CurrentNodeController) taskExecutionQuiescentLocked(taskID workflow.TaskID) bool {
-	if c.interrupts.taskActive(taskID) {
+	if c.taskInterruptActiveLocked(taskID) {
 		return false
 	}
 	for _, run := range c.runs {
@@ -432,10 +445,12 @@ func (c *CurrentNodeController) ensureTaskAvailableLocked(taskID workflow.TaskID
 	if c.closed {
 		return errors.New("current node workflow controller is closed")
 	}
-	if c.workerErr != nil {
-		return fmt.Errorf("workflow execution lifecycle failed: %w", c.workerErr)
+	for _, run := range c.runs {
+		if run.reference.TaskID == taskID && run.callbackErr != nil {
+			return fmt.Errorf("workflow execution lifecycle failed for Run %d: %w", run.id.sequence, run.callbackErr)
+		}
 	}
-	if c.interrupts.taskActive(taskID) {
+	if c.taskInterruptActiveLocked(taskID) {
 		return ErrTaskExecutionNotQuiescent
 	}
 	return nil

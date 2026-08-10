@@ -472,50 +472,6 @@ func TestCurrentNodeControllerTaskInterruptUserReasonWinsFinalizingScopeFailure(
 	}
 }
 
-func TestCurrentNodeControllerScopeFailurePersistsDespiteUnrelatedWorkerError(t *testing.T) {
-	reference := currentNodeReferenceForControllerTest(t, "task-scope-failure-worker-error", "node-script")
-	store := &currentNodeControllerStore{}
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
-	controller := newCurrentNodeControllerForTest(t, store, &countingCurrentNodeRunner{}, authority, 1)
-	t.Cleanup(func() {
-		controller.mu.Lock()
-		controller.workerErr = nil
-		controller.mu.Unlock()
-		if err := controller.Close(); err != nil {
-			t.Errorf("close controller: %v", err)
-		}
-		if err := authority.Close(context.Background()); err != nil {
-			t.Errorf("close authority: %v", err)
-		}
-	})
-	lease, err := authority.NewWorkflowExecutionLease(sessionruntime.WorkflowExecutionRef{
-		ProjectID:   "project-test",
-		WorkflowID:  currentNodeControllerTestWorkflowID,
-		CurrentNode: reference,
-	})
-	if err != nil {
-		t.Fatalf("NewWorkflowExecutionLease: %v", err)
-	}
-	t.Cleanup(lease.Cancel)
-	installExactRunForTest(t, controller, reference, currentNodeAdmissionExplicitOverride, &lease, lease.ScopeID())
-	controller.mu.Lock()
-	controller.workerErr = errors.New("unrelated admission persistence failed")
-	controller.mu.Unlock()
-
-	if err := controller.FailCurrentNodeScope(
-		context.Background(),
-		lease.ScopeID(),
-		"workflow_script_failed",
-		errors.New("script failed"),
-	); err != nil {
-		t.Fatalf("FailCurrentNodeScope: %v", err)
-	}
-	interruption, interrupted := store.interruption(reference)
-	if !interrupted || interruption.reason != "workflow_script_failed" {
-		t.Fatalf("scope failure interruption = %+v, interrupted = %t", interruption, interrupted)
-	}
-}
-
 func TestCurrentNodeControllerRecoveryOnlyMarksAdmittedCurrentNodesInterrupted(t *testing.T) {
 	store := &currentNodeControllerStore{recovered: []workflow.CurrentNodeReference{
 		currentNodeReferenceForControllerTest(t, "task-recovered-1", "node-1"),

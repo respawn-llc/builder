@@ -2051,6 +2051,11 @@ func TestMixedAgentScriptSuccessorKeepsHealthyScriptOwnedWhenAgentAssignmentFail
 	}) {
 		t.Fatal("mixed Agent/Script successor stranded the healthy Script after retained Agent assignment failed")
 	}
+	if !testsetup.Until(time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+		return f.controller.EnsureTaskQuiescent(task.ID) == nil
+	}) {
+		t.Fatal("mixed Agent/Script successor execution did not reach a stable disposition")
+	}
 }
 
 func TestAcceptedInertActiveReadRaceCannotRemainStableAfterSuccessorOwnershipFailureReturns(t *testing.T) {

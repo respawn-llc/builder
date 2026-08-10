@@ -15,6 +15,7 @@ import (
 	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
+	"core/shared/runtimeids"
 )
 
 func TestCurrentNodeControllerConcurrentResumeCreatesOneExecution(t *testing.T) {
@@ -261,8 +262,10 @@ func TestCurrentNodeControllerSelfLoopSuccessorCoexistsWithExactPredecessor(t *t
 	<-runner.started
 	waitForRunningCurrentNode(t, authority, reference)
 	scopeID := singleLiveScope(t, controller, reference)
+	sessionID := runtimeids.NewSessionID()
 	if _, err := controller.CompleteCurrentNode(context.Background(), workflowruntime.CompletionRequest{
 		ScopeID:      scopeID,
+		SessionID:    &sessionID,
 		TransitionID: "loop",
 	}); err != nil {
 		t.Fatalf("complete self-loop predecessor: %v", err)
@@ -287,6 +290,18 @@ func TestCurrentNodeControllerSelfLoopSuccessorCoexistsWithExactPredecessor(t *t
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("self-loop successor did not start after predecessor retirement")
+	}
+	waitForRunningCurrentNode(t, authority, reference)
+	if err := controller.FailCurrentNodeScope(
+		context.Background(),
+		scopeID,
+		"workflow_stale_predecessor_callback",
+		errors.New("late predecessor diagnostic"),
+	); !errors.Is(err, sessionruntime.ErrExecutionNoLongerLive) {
+		t.Fatalf("late predecessor callback error = %v, want execution no longer live", err)
+	}
+	if !hasLiveCurrentNode(controller.Snapshot(), reference) {
+		t.Fatal("late predecessor callback retired the self-loop successor")
 	}
 }
 

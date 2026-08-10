@@ -83,13 +83,6 @@ type CurrentNodeHeldIntentSnapshot struct {
 	Automatic   bool
 }
 
-type currentNodePostTurnFinalization struct {
-	sessionID      *runtimeids.SessionID
-	classification workflow.SessionReuseClassification
-	reference      workflow.CurrentNodeReference
-	runs           []currentNodeRunID
-}
-
 // CurrentNodeExecutionSnapshot is immutable live controller state. Durable
 // Current Node scheduling rows are intentionally not inferred from this view.
 type CurrentNodeExecutionSnapshot struct {
@@ -133,25 +126,18 @@ type CurrentNodeController struct {
 	workerCancel     context.CancelFunc
 	workerWake       chan struct{}
 	workerWG         sync.WaitGroup
-	admissionWG      sync.WaitGroup
 
-	mu                   sync.Mutex
-	closed               bool
-	nextRunSequence      uint64
-	runs                 map[currentNodeRunID]*currentNodeRun
-	currentRuns          map[workflow.CurrentNodeReferenceKey]currentNodeRunID
-	exactRuns            map[runtimeids.ExecutionScopeID]currentNodeRunID
-	stopping             map[runtimeids.ExecutionScopeID]struct{}
-	completed            map[runtimeids.ExecutionScopeID]struct{}
-	postTurnFinalization map[runtimeids.ExecutionScopeID]currentNodePostTurnFinalization
-	violations           map[runtimeids.ExecutionScopeID]int64
-	heldStarts           map[runtimeids.ExecutionScopeID][]currentNodeRunID
-	explicitQueue        []currentNodeRunID
-	automaticQueue       currentNodeAutomaticQueue
-	agentCapacityActive  int
-	interrupts           currentNodeInterruptState
-	workerErr            error
-	lastAutomaticTask    *workflow.TaskID
+	mu                  sync.Mutex
+	closed              bool
+	nextRunSequence     uint64
+	runs                map[currentNodeRunID]*currentNodeRun
+	currentRuns         map[workflow.CurrentNodeReferenceKey]currentNodeRunID
+	exactRuns           map[runtimeids.ExecutionScopeID]currentNodeRunID
+	violations          map[runtimeids.ExecutionScopeID]int64
+	explicitQueue       []currentNodeRunID
+	automaticQueue      currentNodeAutomaticQueue
+	agentCapacityActive int
+	lastAutomaticTask   *workflow.TaskID
 }
 
 func NewCurrentNodeController(
@@ -197,25 +183,20 @@ func NewCurrentNodeController(
 	}
 	workerContext, workerCancel := context.WithCancel(context.Background())
 	controller := &CurrentNodeController{
-		store:                store,
-		runner:               runner,
-		steerer:              cfg.AssignmentSteerer,
-		authority:            authority,
-		taskMutations:        taskMutations,
-		attention:            cfg.Attention,
-		agentConcurrency:     cfg.AgentConcurrency,
-		workerContext:        workerContext,
-		workerCancel:         workerCancel,
-		workerWake:           make(chan struct{}, 1),
-		runs:                 make(map[currentNodeRunID]*currentNodeRun),
-		currentRuns:          make(map[workflow.CurrentNodeReferenceKey]currentNodeRunID),
-		exactRuns:            make(map[runtimeids.ExecutionScopeID]currentNodeRunID),
-		stopping:             make(map[runtimeids.ExecutionScopeID]struct{}),
-		completed:            make(map[runtimeids.ExecutionScopeID]struct{}),
-		postTurnFinalization: make(map[runtimeids.ExecutionScopeID]currentNodePostTurnFinalization),
-		violations:           make(map[runtimeids.ExecutionScopeID]int64),
-		heldStarts:           make(map[runtimeids.ExecutionScopeID][]currentNodeRunID),
-		interrupts:           newCurrentNodeInterruptState(),
+		store:            store,
+		runner:           runner,
+		steerer:          cfg.AssignmentSteerer,
+		authority:        authority,
+		taskMutations:    taskMutations,
+		attention:        cfg.Attention,
+		agentConcurrency: cfg.AgentConcurrency,
+		workerContext:    workerContext,
+		workerCancel:     workerCancel,
+		workerWake:       make(chan struct{}, 1),
+		runs:             make(map[currentNodeRunID]*currentNodeRun),
+		currentRuns:      make(map[workflow.CurrentNodeReferenceKey]currentNodeRunID),
+		exactRuns:        make(map[runtimeids.ExecutionScopeID]currentNodeRunID),
+		violations:       make(map[runtimeids.ExecutionScopeID]int64),
 	}
 	controller.workerWG.Add(1)
 	go controller.runAdmissions()
@@ -350,8 +331,11 @@ func (c *CurrentNodeController) completeLiveCurrentNode(ctx context.Context, req
 			c.mu.Unlock()
 			return sessionruntime.ErrExecutionNoLongerLive
 		}
-		if _, stopping := c.stopping[req.ScopeID]; stopping {
+		if live.stopping() {
 			c.mu.Unlock()
+			if live.interruptFence != nil {
+				return ErrTaskExecutionNotQuiescent
+			}
 			return sessionruntime.ErrExecutionNoLongerLive
 		}
 		if err := c.ensureTaskAvailableLocked(live.reference.TaskID); err != nil {
@@ -370,8 +354,11 @@ func (c *CurrentNodeController) completeLiveCurrentNode(ctx context.Context, req
 				c.mu.Unlock()
 				return sessionruntime.ErrExecutionNoLongerLive
 			}
-			if _, stopping := c.stopping[req.ScopeID]; stopping {
+			if exact.stopping() {
 				c.mu.Unlock()
+				if exact.interruptFence != nil {
+					return ErrTaskExecutionNotQuiescent
+				}
 				return sessionruntime.ErrExecutionNoLongerLive
 			}
 			if err := c.ensureTaskAvailableLocked(exact.reference.TaskID); err != nil {
@@ -395,8 +382,20 @@ func (c *CurrentNodeController) completeLiveCurrentNode(ctx context.Context, req
 			}
 			starts = automaticQueuedStarts(intents)
 			c.mu.Lock()
-			c.completed[req.ScopeID] = struct{}{}
 			successorRuns, stageErr := c.stageSuccessorRunsLocked(starts, exact.id, currentNodeRunHeld)
+			if stageErr == nil {
+				exact.successors = append([]currentNodeRunID(nil), successorRuns...)
+				exact.completionSourceRetained = completed.PendingApproval != nil
+				agentCompletion := req.SessionID != nil ||
+					exact.policy == currentNodeAdmissionAutomaticAgent
+				if agentCompletion && completed.PostCompletionEligible {
+					exact.completion = currentNodeRunCompletionAgentPostTurnPending
+				} else if agentCompletion {
+					exact.completion = currentNodeRunCompletionAgentPostTurnSucceeded
+				} else {
+					exact.completion = currentNodeRunCompletionScriptSucceeded
+				}
+			}
 			c.mu.Unlock()
 			if stageErr != nil {
 				return stageErr
@@ -414,14 +413,28 @@ func (c *CurrentNodeController) completeLiveCurrentNode(ctx context.Context, req
 					sourceSessionID = &value
 				}
 				c.mu.Lock()
-				c.postTurnFinalization[req.ScopeID] = currentNodePostTurnFinalization{
+				exact.postTurn = &currentNodeRunPostTurn{
 					sessionID:      sourceSessionID,
 					classification: classification,
-					reference:      exact.reference,
-					runs:           append([]currentNodeRunID(nil), successorRuns...),
 				}
-				c.heldStarts[req.ScopeID] = append([]currentNodeRunID(nil), successorRuns...)
 				c.mu.Unlock()
+				return nil
+			}
+			if exact.completion == currentNodeRunCompletionScriptSucceeded {
+				steered, steerErr := c.steerStartsAssignments(ctx, starts)
+				if steerErr != nil {
+					return steerErr
+				}
+				outcome := waitCurrentNodeAssignmentSteers(ctx, steered)
+				if outcome.err != nil {
+					return outcome.err
+				}
+				c.mu.Lock()
+				for index, id := range successorRuns {
+					c.queueRunLocked(id, steered[index].assignmentSteer)
+				}
+				c.mu.Unlock()
+				starts = nil
 				return nil
 			}
 			starts, pending = pendingCurrentNodeAssignmentStarts(starts)
@@ -431,7 +444,6 @@ func (c *CurrentNodeController) completeLiveCurrentNode(ctx context.Context, req
 					run.assignmentSteer = starts[index].assignmentSteer
 				}
 			}
-			c.heldStarts[req.ScopeID] = successorRuns
 			c.mu.Unlock()
 			return nil
 		}); err != nil {
@@ -486,26 +498,30 @@ func (c *CurrentNodeController) FinalizeCurrentNodePostTurn(
 	if scopeID.IsZero() || sessionID.IsZero() {
 		return errors.New("workflow post-turn finalization identities are required")
 	}
-	var phase currentNodePostTurnFinalization
+	var phase currentNodePostTurnSnapshot
 	var phaseExists bool
 	c.mu.Lock()
-	initial, exists := c.postTurnFinalization[scopeID]
+	initial, exists := c.runByScopeLocked(scopeID)
 	c.mu.Unlock()
-	if !exists {
+	if !exists || initial.postTurn == nil {
 		return nil
 	}
 	if err := c.taskMutations.Run(ctx, initial.reference.TaskID, func(context.Context) error {
 		c.mu.Lock()
-		current, exists := c.postTurnFinalization[scopeID]
-		if !exists {
+		current, exists := c.runByScopeLocked(scopeID)
+		if !exists || current.postTurn == nil {
 			c.mu.Unlock()
 			return nil
 		}
-		if current.sessionID == nil || *current.sessionID != sessionID {
+		if current.postTurn.sessionID == nil || *current.postTurn.sessionID != sessionID {
 			c.mu.Unlock()
 			return fmt.Errorf("workflow post-turn Session %s does not match source Session", sessionID)
 		}
-		phase = current
+		phase = currentNodePostTurnSnapshot{
+			sessionID:      current.postTurn.sessionID,
+			classification: current.postTurn.classification,
+			reference:      current.reference,
+		}
 		phaseExists = true
 		c.mu.Unlock()
 		return nil
@@ -554,18 +570,15 @@ func (c *CurrentNodeController) FinalizeCurrentNodePostTurn(
 	return c.taskMutations.Run(ctx, phase.reference.TaskID, func(context.Context) error {
 		c.mu.Lock()
 		defer c.mu.Unlock()
-		current, stillFinalizing := c.postTurnFinalization[scopeID]
-		if !stillFinalizing || !current.reference.Equal(phase.reference) {
+		current, stillFinalizing := c.runByScopeLocked(scopeID)
+		if !stillFinalizing || current.postTurn == nil || !current.reference.Equal(phase.reference) {
 			return sessionruntime.ErrExecutionNoLongerLive
 		}
-		if _, live := c.runByScopeLocked(scopeID); !live {
+		if current.stopping() {
 			return sessionruntime.ErrExecutionNoLongerLive
 		}
-		if _, stopping := c.stopping[scopeID]; stopping {
-			return sessionruntime.ErrExecutionNoLongerLive
-		}
-		c.heldStarts[scopeID] = append([]currentNodeRunID(nil), phase.runs...)
-		delete(c.postTurnFinalization, scopeID)
+		current.completion = currentNodeRunCompletionAgentPostTurnSucceeded
+		current.postTurn = nil
 		return nil
 	})
 }
@@ -769,7 +782,8 @@ func (c *CurrentNodeController) ObserveCurrentNodeCompletion(_ context.Context, 
 		return workflowruntime.CompletionObservationResult{}, errors.New("workflow exact execution scope id is required")
 	}
 	c.mu.Lock()
-	_, completed := c.completed[req.ScopeID]
+	run, exists := c.runByScopeLocked(req.ScopeID)
+	completed := exists && run.completion.committed()
 	c.mu.Unlock()
 	return workflowruntime.CompletionObservationResult{Completed: completed}, nil
 }
@@ -790,20 +804,23 @@ func (c *CurrentNodeController) FailCurrentNodeScope(
 	}
 	if err := c.taskMutations.Run(ctx, initial.reference.TaskID, func(ctx context.Context) error {
 		c.mu.Lock()
-		if _, stopping := c.stopping[scopeID]; stopping {
-			c.mu.Unlock()
-			return sessionruntime.ErrExecutionNoLongerLive
-		}
 		live, exists := c.runByScopeLocked(scopeID)
 		if !exists {
 			c.mu.Unlock()
+			return sessionruntime.ErrExecutionNoLongerLive
+		}
+		if live.stopping() {
+			c.mu.Unlock()
+			if live.interruptFence != nil {
+				return ErrTaskExecutionNotQuiescent
+			}
 			return sessionruntime.ErrExecutionNoLongerLive
 		}
 		if c.closed {
 			c.mu.Unlock()
 			return errors.New("current node workflow controller is closed")
 		}
-		if c.interrupts.taskActive(live.reference.TaskID) {
+		if c.taskInterruptActiveLocked(live.reference.TaskID) {
 			c.mu.Unlock()
 			return ErrTaskExecutionNotQuiescent
 		}
@@ -812,12 +829,80 @@ func (c *CurrentNodeController) FailCurrentNodeScope(
 			return sessionruntime.ErrExecutionNoLongerLive
 		}
 		lease = *live.lease
+		if live.completion.committed() {
+			sourceRetained := live.completionSourceRetained
+			references := make([]workflow.CurrentNodeReference, 0, len(live.successors))
+			for _, id := range live.successors {
+				if successor := c.runs[id]; successor != nil {
+					references = append(references, successor.reference)
+				}
+			}
+			c.mu.Unlock()
+			var interrupted []workflow.CurrentNodeReference
+			var err error
+			if sourceRetained {
+				err = c.store.InterruptAdmittedCurrentNode(ctx, live.reference, reason, detail)
+				if err == nil {
+					interrupted = []workflow.CurrentNodeReference{live.reference}
+				}
+			} else {
+				interrupted, err = interruptCurrentNodeReferences(
+					ctx,
+					c.store.InterruptCurrentNode,
+					references,
+					reason,
+					detail,
+				)
+			}
+			if err != nil {
+				c.mu.Lock()
+				if current, stillLive := c.runByScopeLocked(scopeID); stillLive {
+					current.recordCallbackError(err)
+				}
+				c.mu.Unlock()
+				return err
+			}
+			c.mu.Lock()
+			current, stillLive := c.runByScopeLocked(scopeID)
+			if !stillLive || current.id != live.id {
+				c.mu.Unlock()
+				return sessionruntime.ErrExecutionNoLongerLive
+			}
+			c.removeSuccessorsLocked(current)
+			current.stop = currentNodeRunStopInterrupted
+			c.mu.Unlock()
+			for _, reference := range interrupted {
+				c.publishPendingInterruptedCurrentNode(ctx, reference, reason)
+			}
+			return nil
+		}
 		c.mu.Unlock()
-		return c.store.InterruptAdmittedCurrentNode(ctx, lease.Workflow().CurrentNode, reason, detail)
+		if err := c.store.InterruptAdmittedCurrentNode(ctx, lease.Workflow().CurrentNode, reason, detail); err != nil {
+			c.mu.Lock()
+			if current, stillLive := c.runByScopeLocked(scopeID); stillLive {
+				current.recordCallbackError(err)
+			}
+			c.mu.Unlock()
+			return err
+		}
+		c.mu.Lock()
+		if current, stillLive := c.runByScopeLocked(scopeID); stillLive {
+			current.stop = currentNodeRunStopInterrupted
+		}
+		c.mu.Unlock()
+		return nil
 	}); err != nil {
 		return err
 	}
-	c.publishPendingInterruptedCurrentNode(ctx, lease.Workflow().CurrentNode, reason)
+	c.mu.Lock()
+	completed := false
+	if current, stillLive := c.runByScopeLocked(scopeID); stillLive {
+		completed = current.completion.committed()
+	}
+	c.mu.Unlock()
+	if !completed {
+		c.publishPendingInterruptedCurrentNode(ctx, lease.Workflow().CurrentNode, reason)
+	}
 	if handle, live := c.authority.ExecutionByScope(scopeID); live {
 		handle.RequestStop()
 	}
@@ -835,21 +920,20 @@ func (c *CurrentNodeController) ExecutionFinalized(scope sessionruntime.Executio
 		live.transition(currentNodeRunRetiring)
 	}
 	delete(c.violations, scope.ID())
-	delete(c.stopping, scope.ID())
-	_, completed := c.completed[scope.ID()]
-	delete(c.completed, scope.ID())
-	delete(c.postTurnFinalization, scope.ID())
-	successorRuns := append([]currentNodeRunID(nil), c.heldStarts[scope.ID()]...)
-	starts := c.startsForRunsLocked(successorRuns)
-	delete(c.heldStarts, scope.ID())
-	interrupted := c.interrupts.scopeFenced(scope.ID())
-	c.interrupts.finishScope(scope.ID())
+	var completion currentNodeRunCompletion
+	var successorRuns []currentNodeRunID
+	stopping := false
+	if isLive {
+		completion = live.completion
+		successorRuns = append([]currentNodeRunID(nil), live.successors...)
+		stopping = live.stopping()
+	}
 	closed := c.closed
 	c.mu.Unlock()
 	if !closed {
 		c.wakeAdmissionWorker()
 	}
-	if !isLive || live.lease == nil || !live.lease.Workflow().CurrentNode.Equal(ref.CurrentNode) || interrupted || closed {
+	if !isLive || live.lease == nil || !live.lease.Workflow().CurrentNode.Equal(ref.CurrentNode) || stopping || closed {
 		if isLive {
 			c.mu.Lock()
 			c.removeRunLocked(live.id)
@@ -860,138 +944,190 @@ func (c *CurrentNodeController) ExecutionFinalized(scope sessionruntime.Executio
 		}
 		return
 	}
-	if !completed {
-		if err := c.interruptOutcomeLessFinalization(live.reference); err != nil {
+	switch completion {
+	case currentNodeRunCompletionNone:
+		if err := c.interruptOutcomeLessFinalization(live.id); err != nil {
 			c.mu.Lock()
-			c.workerErr = errors.Join(c.workerErr, err)
-			c.mu.Unlock()
-		}
-		c.mu.Lock()
-		c.removeRunLocked(live.id)
-		c.mu.Unlock()
-		c.wakeAdmissionWorker()
-		return
-	}
-	waitCtx, cancel := context.WithTimeout(context.Background(), interruptCleanupTimeout)
-	defer cancel()
-	needsAssignmentSteer := false
-	for _, start := range starts {
-		if start.assignmentSteer == nil {
-			needsAssignmentSteer = true
-			break
-		}
-	}
-	if needsAssignmentSteer {
-		steered, steerErr := c.steerStartsAssignments(waitCtx, starts)
-		if steerErr != nil {
-			c.handleCurrentNodeStartFailures(steered, false, steerErr)
-			c.mu.Lock()
-			for _, id := range successorRuns {
-				c.removeRunLocked(id)
+			if current := c.runs[live.id]; current != nil {
+				current.recordCallbackError(err)
 			}
-			c.removeRunLocked(live.id)
 			c.mu.Unlock()
-			c.wakeAdmissionWorker()
 			return
 		}
-		starts = steered
-	}
-	outcome := waitCurrentNodeAssignmentSteers(waitCtx, starts)
-	if outcome.err != nil {
-		if len(outcome.pending) != 0 {
-			c.continueRetiringRunAssignments(live.id, successorRuns, starts)
-			return
-		}
-		c.handleCurrentNodeStartFailures(outcome.committed, false, outcome.err)
 		c.mu.Lock()
-		for _, id := range successorRuns {
-			c.removeRunLocked(id)
-		}
 		c.removeRunLocked(live.id)
 		c.mu.Unlock()
 		c.wakeAdmissionWorker()
 		return
-	}
-	c.mu.Lock()
-	for index, id := range successorRuns {
-		run := c.runs[id]
-		if run == nil {
-			continue
-		}
-		run.assignmentSteer = starts[index].assignmentSteer
-		run.transition(currentNodeRunQueued)
-		if run.policy.isAutomatic() {
-			c.automaticQueue.append(run)
-		} else {
-			c.explicitQueue = append(c.explicitQueue, id)
-		}
-	}
-	c.removeRunLocked(live.id)
-	c.mu.Unlock()
-	c.wakeAdmissionWorker()
-	if len(starts) == 0 {
+	case currentNodeRunCompletionScriptSucceeded:
+		c.mu.Lock()
+		c.removeRunLocked(live.id)
+		c.mu.Unlock()
 		c.wakeAdmissionWorker()
+		return
+	case currentNodeRunCompletionAgentPostTurnPending:
+		err := c.interruptCommittedSuccessors(
+			live.id,
+			reasonCurrentNodeRuntimeFinalizedWithoutOutcome,
+			errors.New("Agent workflow execution finalized before post-turn disposition"),
+		)
+		if err != nil {
+			c.mu.Lock()
+			if current := c.runs[live.id]; current != nil {
+				current.recordCallbackError(err)
+			}
+			c.mu.Unlock()
+			return
+		}
+		c.mu.Lock()
+		c.removeRunLocked(live.id)
+		c.mu.Unlock()
+		c.wakeAdmissionWorker()
+		return
+	case currentNodeRunCompletionAgentPostTurnSucceeded:
+	default:
+		panic(fmt.Sprintf("unknown current node Run completion disposition %d", completion))
 	}
+	c.finalizeAgentSuccessors(live.id, successorRuns)
 }
 
-func (c *CurrentNodeController) continueRetiringRunAssignments(
+func (c *CurrentNodeController) finalizeAgentSuccessors(
 	predecessorID currentNodeRunID,
 	successorRuns []currentNodeRunID,
-	starts []currentNodeQueuedStart,
 ) {
-	c.mu.Lock()
-	if c.closed {
-		c.mu.Unlock()
-		return
-	}
-	c.workerWG.Add(1)
-	c.mu.Unlock()
-	go func() {
-		defer c.workerWG.Done()
-		outcome := waitCurrentNodeAssignmentSteers(c.workerContext, starts)
-		if context.Cause(c.workerContext) != nil {
-			return
-		}
-		if outcome.err != nil {
-			c.handleCurrentNodeStartFailures(outcome.committed, false, outcome.err)
-			c.mu.Lock()
-			for _, id := range successorRuns {
-				c.removeRunLocked(id)
-			}
-			c.removeRunLocked(predecessorID)
+	waitCtx, cancel := context.WithTimeout(context.Background(), interruptCleanupTimeout)
+	defer cancel()
+	for _, id := range successorRuns {
+		c.mu.Lock()
+		run := c.runs[id]
+		if run == nil {
 			c.mu.Unlock()
-			c.wakeAdmissionWorker()
-			return
+			continue
+		}
+		start := currentNodeQueuedStart{
+			reference:          run.reference,
+			preparation:        run.preparation,
+			taskPromptDelivery: run.taskPromptDelivery,
+			assignmentSteer:    run.assignmentSteer,
+			policy:             run.policy,
+		}
+		c.mu.Unlock()
+
+		assignment := start.assignmentSteer
+		var err error
+		if assignment == nil {
+			assignment, err = c.steerAssignment(waitCtx, start.reference)
+		}
+		if err == nil {
+			assignment, err = resolvedCurrentNodeAssignmentSteer(waitCtx, assignment)
+		}
+		if err != nil {
+			recoveryErr := c.recoverCurrentNodeStartFailures(waitCtx, []currentNodeQueuedStart{start}, false, err)
+			c.mu.Lock()
+			predecessor := c.runs[predecessorID]
+			if predecessor == nil {
+				c.mu.Unlock()
+				return
+			}
+			if recoveryErr != nil {
+				predecessor.recordCallbackError(errors.Join(err, recoveryErr))
+				c.mu.Unlock()
+				return
+			}
+			c.removeRunLocked(id)
+			c.mu.Unlock()
+			continue
 		}
 		c.mu.Lock()
-		for index, id := range successorRuns {
-			run := c.runs[id]
-			if run == nil {
-				continue
-			}
-			run.assignmentSteer = starts[index].assignmentSteer
-			run.transition(currentNodeRunQueued)
-			if run.policy.isAutomatic() {
-				c.automaticQueue.append(run)
-			} else {
-				c.explicitQueue = append(c.explicitQueue, id)
-			}
-		}
-		c.removeRunLocked(predecessorID)
+		c.queueRunLocked(id, assignment)
 		c.mu.Unlock()
-		c.wakeAdmissionWorker()
-	}()
+	}
+	c.mu.Lock()
+	c.removeRunLocked(predecessorID)
+	c.mu.Unlock()
+	c.wakeAdmissionWorker()
 }
 
-func (c *CurrentNodeController) interruptOutcomeLessFinalization(reference workflow.CurrentNodeReference) error {
+func (c *CurrentNodeController) interruptCommittedSuccessors(
+	predecessorID currentNodeRunID,
+	reason workflow.CurrentNodeInterruptionReason,
+	cause error,
+) error {
 	ctx, cancel := context.WithTimeout(context.Background(), interruptCleanupTimeout)
 	defer cancel()
+	c.mu.Lock()
+	predecessor := c.runs[predecessorID]
+	if predecessor == nil {
+		c.mu.Unlock()
+		return sessionruntime.ErrExecutionNoLongerLive
+	}
+	references := make([]workflow.CurrentNodeReference, 0, len(predecessor.successors))
+	for _, id := range predecessor.successors {
+		if successor := c.runs[id]; successor != nil {
+			references = append(references, successor.reference)
+		}
+	}
+	sourceRetained := predecessor.completionSourceRetained
+	sourceReference := predecessor.reference
+	taskID := predecessor.reference.TaskID
+	c.mu.Unlock()
+	interrupted, err := RunTaskMutation(ctx, c.taskMutations, taskID, func(ctx context.Context) ([]workflow.CurrentNodeReference, error) {
+		if sourceRetained {
+			err := c.store.InterruptAdmittedCurrentNode(
+				ctx,
+				sourceReference,
+				reason,
+				workflow.NewCurrentNodeInterruptionDetail(string(reason), cause),
+			)
+			if err != nil {
+				return nil, err
+			}
+			return []workflow.CurrentNodeReference{sourceReference}, nil
+		}
+		return interruptCurrentNodeReferences(
+			ctx,
+			c.store.InterruptCurrentNode,
+			references,
+			reason,
+			workflow.NewCurrentNodeInterruptionDetail(string(reason), cause),
+		)
+	})
+	if err != nil {
+		return err
+	}
+	for _, reference := range interrupted {
+		c.publishPendingInterruptedCurrentNode(ctx, reference, reason)
+	}
+	c.mu.Lock()
+	if current := c.runs[predecessorID]; current != nil {
+		c.removeSuccessorsLocked(current)
+		current.stop = currentNodeRunStopInterrupted
+	}
+	c.mu.Unlock()
+	return nil
+}
+
+func (c *CurrentNodeController) interruptOutcomeLessFinalization(runID currentNodeRunID) error {
+	ctx, cancel := context.WithTimeout(context.Background(), interruptCleanupTimeout)
+	defer cancel()
+	c.mu.Lock()
+	run := c.runs[runID]
+	if run == nil {
+		c.mu.Unlock()
+		return sessionruntime.ErrExecutionNoLongerLive
+	}
+	reference := run.reference
+	c.mu.Unlock()
 	interrupted, err := RunTaskMutation(ctx, c.taskMutations, reference.TaskID, func(ctx context.Context) (bool, error) {
 		c.mu.Lock()
 		closed := c.closed
+		current := c.runs[runID]
 		c.mu.Unlock()
 		if closed {
 			return false, nil
+		}
+		if current == nil || !current.reference.Equal(reference) {
+			return false, sessionruntime.ErrExecutionNoLongerLive
 		}
 		diagnostic := errors.New("exact workflow execution finalized without a durable completion or interruption outcome")
 		err := c.store.InterruptAdmittedCurrentNode(
@@ -1066,6 +1202,16 @@ func (c *CurrentNodeController) Snapshot() CurrentNodeExecutionSnapshot {
 				})
 			}
 		}
+		if run.phase == currentNodeRunHeld && run.predecessor != nil {
+			predecessor := c.runs[*run.predecessor]
+			if predecessor != nil && predecessor.exactScopeID != nil {
+				snapshot.HeldIntents = append(snapshot.HeldIntents, CurrentNodeHeldIntentSnapshot{
+					CurrentNode: run.reference,
+					SourceScope: *predecessor.exactScopeID,
+					Automatic:   run.policy.isAutomatic(),
+				})
+			}
+		}
 	}
 	for _, id := range c.explicitQueue {
 		run := c.runs[id]
@@ -1074,20 +1220,7 @@ func (c *CurrentNodeController) Snapshot() CurrentNodeExecutionSnapshot {
 		}
 		snapshot.ExplicitStarts = append(snapshot.ExplicitStarts, CurrentNodeExplicitStart{CurrentNode: run.reference})
 	}
-	for sourceScope, runs := range c.heldStarts {
-		for _, id := range runs {
-			run := c.runs[id]
-			if run == nil {
-				continue
-			}
-			snapshot.HeldIntents = append(snapshot.HeldIntents, CurrentNodeHeldIntentSnapshot{
-				CurrentNode: run.reference,
-				SourceScope: sourceScope,
-				Automatic:   run.policy.isAutomatic(),
-			})
-		}
-	}
-	snapshot.InterruptingTasks = c.interrupts.taskIDs()
+	snapshot.InterruptingTasks = c.interruptingTaskIDsLocked()
 	return snapshot
 }
 
@@ -1103,10 +1236,9 @@ func (c *CurrentNodeController) Close() error {
 	c.closed = true
 	c.explicitQueue = nil
 	c.automaticQueue.clear()
-	c.heldStarts = make(map[runtimeids.ExecutionScopeID][]currentNodeRunID)
-	c.postTurnFinalization = make(map[runtimeids.ExecutionScopeID]currentNodePostTurnFinalization)
 	launchLeases := make([]sessionruntime.WorkflowExecutionLease, 0)
 	liveScopes := make([]runtimeids.ExecutionScopeID, 0, len(c.exactRuns))
+	admissionDone := make([]<-chan struct{}, 0)
 	for _, run := range c.runs {
 		if run.launchCancel != nil {
 			run.launchCancel()
@@ -1116,6 +1248,9 @@ func (c *CurrentNodeController) Close() error {
 		}
 		if run.exactScopeID != nil {
 			liveScopes = append(liveScopes, *run.exactScopeID)
+		}
+		if run.admissionDone != nil {
+			admissionDone = append(admissionDone, run.admissionDone)
 		}
 	}
 	c.mu.Unlock()
@@ -1142,11 +1277,16 @@ func (c *CurrentNodeController) Close() error {
 		}
 	}
 	c.workerWG.Wait()
-	c.admissionWG.Wait()
+	for _, done := range admissionDone {
+		<-done
+	}
 	c.mu.Lock()
-	workerErr := c.workerErr
+	var callbackErrs []error
+	for _, run := range c.runs {
+		callbackErrs = append(callbackErrs, run.callbackErr)
+	}
 	c.mu.Unlock()
-	return errors.Join(errors.Join(stopErrs...), workerErr)
+	return errors.Join(errors.Join(stopErrs...), errors.Join(callbackErrs...))
 }
 
 func (c *CurrentNodeController) liveLease(scopeID runtimeids.ExecutionScopeID) (sessionruntime.WorkflowExecutionLease, error) {
@@ -1154,13 +1294,9 @@ func (c *CurrentNodeController) liveLease(scopeID runtimeids.ExecutionScopeID) (
 		return sessionruntime.WorkflowExecutionLease{}, errors.New("workflow exact execution scope id is required")
 	}
 	c.mu.Lock()
-	if _, stopping := c.stopping[scopeID]; stopping {
-		c.mu.Unlock()
-		return sessionruntime.WorkflowExecutionLease{}, sessionruntime.ErrExecutionNoLongerLive
-	}
 	live, exists := c.runByScopeLocked(scopeID)
 	c.mu.Unlock()
-	if !exists || live.lease == nil {
+	if !exists || live.stopping() || live.lease == nil {
 		return sessionruntime.WorkflowExecutionLease{}, sessionruntime.ErrExecutionNoLongerLive
 	}
 	return *live.lease, nil

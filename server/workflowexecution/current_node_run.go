@@ -2,6 +2,7 @@ package workflowexecution
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"core/server/sessionruntime"
@@ -32,23 +33,62 @@ const (
 	currentNodeRunRetiring
 )
 
+type currentNodeRunCompletion uint8
+
+const (
+	currentNodeRunCompletionNone currentNodeRunCompletion = iota
+	currentNodeRunCompletionAgentPostTurnPending
+	currentNodeRunCompletionAgentPostTurnSucceeded
+	currentNodeRunCompletionScriptSucceeded
+)
+
+func (completion currentNodeRunCompletion) committed() bool {
+	return completion != currentNodeRunCompletionNone
+}
+
+type currentNodeRunStopDisposition uint8
+
+const (
+	currentNodeRunStopNone currentNodeRunStopDisposition = iota
+	currentNodeRunStopInterrupting
+	currentNodeRunStopInterrupted
+)
+
+type currentNodeRunPostTurn struct {
+	sessionID      *runtimeids.SessionID
+	classification workflow.SessionReuseClassification
+}
+
+type currentNodePostTurnSnapshot struct {
+	sessionID      *runtimeids.SessionID
+	classification workflow.SessionReuseClassification
+	reference      workflow.CurrentNodeReference
+}
+
 type currentNodeRun struct {
-	id                 currentNodeRunID
-	reference          workflow.CurrentNodeReference
-	key                workflow.CurrentNodeReferenceKey
-	policy             currentNodeAdmissionPolicy
-	phase              currentNodeRunPhase
-	preparation        TaskStartPreparation
-	taskPromptDelivery workflowruntime.TaskPromptDelivery
-	assignmentSteer    CurrentNodeAssignmentSteer
-	predecessor        *currentNodeRunID
-	phaseChanged       chan struct{}
-	launchContext      context.Context
-	launchCancel       context.CancelFunc
-	admissionDone      chan struct{}
-	lease              *sessionruntime.WorkflowExecutionLease
-	exactScopeID       *runtimeids.ExecutionScopeID
-	agentCapacity      bool
+	id                       currentNodeRunID
+	reference                workflow.CurrentNodeReference
+	key                      workflow.CurrentNodeReferenceKey
+	policy                   currentNodeAdmissionPolicy
+	phase                    currentNodeRunPhase
+	preparation              TaskStartPreparation
+	taskPromptDelivery       workflowruntime.TaskPromptDelivery
+	assignmentSteer          CurrentNodeAssignmentSteer
+	predecessor              *currentNodeRunID
+	phaseChanged             chan struct{}
+	launchContext            context.Context
+	launchCancel             context.CancelFunc
+	admissionDone            chan struct{}
+	lease                    *sessionruntime.WorkflowExecutionLease
+	exactScopeID             *runtimeids.ExecutionScopeID
+	agentCapacity            bool
+	completion               currentNodeRunCompletion
+	completionSourceRetained bool
+	postTurn                 *currentNodeRunPostTurn
+	successors               []currentNodeRunID
+	stop                     currentNodeRunStopDisposition
+	interruptFence           *currentNodeInterruptFence
+	callbackErr              error
 }
 
 func (run *currentNodeRun) transition(phase currentNodeRunPhase) {
@@ -69,6 +109,17 @@ func (run *currentNodeRun) launching() bool {
 
 func (run *currentNodeRun) exact() bool {
 	return run != nil && run.phase == currentNodeRunExact && run.exactScopeID != nil
+}
+
+func (run *currentNodeRun) stopping() bool {
+	return run != nil && run.stop != currentNodeRunStopNone
+}
+
+func (run *currentNodeRun) recordCallbackError(err error) {
+	if run == nil || err == nil {
+		return
+	}
+	run.callbackErr = errors.Join(run.callbackErr, err)
 }
 
 func (c *CurrentNodeController) allocateRunLocked(start currentNodeQueuedStart) (*currentNodeRun, bool, error) {
@@ -196,24 +247,6 @@ func (c *CurrentNodeController) stageSuccessorRunsLocked(
 	return ids, nil
 }
 
-func (c *CurrentNodeController) startsForRunsLocked(ids []currentNodeRunID) []currentNodeQueuedStart {
-	starts := make([]currentNodeQueuedStart, 0, len(ids))
-	for _, id := range ids {
-		run := c.runs[id]
-		if run == nil {
-			continue
-		}
-		starts = append(starts, currentNodeQueuedStart{
-			reference:          run.reference,
-			preparation:        run.preparation,
-			taskPromptDelivery: run.taskPromptDelivery,
-			assignmentSteer:    run.assignmentSteer,
-			policy:             run.policy,
-		})
-	}
-	return starts
-}
-
 func errorsNewCurrentNodeRunAbsent() error {
 	return fmt.Errorf("current node Run generation is absent")
 }
@@ -223,6 +256,8 @@ func (c *CurrentNodeController) removeRunLocked(id currentNodeRunID) {
 	if run == nil {
 		return
 	}
+	fence := run.interruptFence
+	run.interruptFence = nil
 	if run.launchCancel != nil {
 		run.launchCancel()
 		run.launchCancel = nil
@@ -245,6 +280,7 @@ func (c *CurrentNodeController) removeRunLocked(id currentNodeRunID) {
 	}
 	close(run.phaseChanged)
 	delete(c.runs, id)
+	c.finishInterruptFenceLocked(fence)
 }
 
 func (c *CurrentNodeController) runByScopeLocked(scopeID runtimeids.ExecutionScopeID) (*currentNodeRun, bool) {
@@ -286,4 +322,28 @@ func (c *CurrentNodeController) runPredecessorActiveLocked(run *currentNodeRun) 
 	}
 	_, active := c.runs[*run.predecessor]
 	return active
+}
+
+func (c *CurrentNodeController) queueRunLocked(id currentNodeRunID, assignment CurrentNodeAssignmentSteer) {
+	run := c.runs[id]
+	if run == nil || run.stopping() {
+		return
+	}
+	run.assignmentSteer = assignment
+	run.transition(currentNodeRunQueued)
+	if run.policy.isAutomatic() {
+		c.automaticQueue.append(run)
+		return
+	}
+	c.explicitQueue = append(c.explicitQueue, id)
+}
+
+func (c *CurrentNodeController) removeSuccessorsLocked(predecessor *currentNodeRun) {
+	if predecessor == nil {
+		return
+	}
+	for _, id := range predecessor.successors {
+		c.removeRunLocked(id)
+	}
+	predecessor.successors = nil
 }

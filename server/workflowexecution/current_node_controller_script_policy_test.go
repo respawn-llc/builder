@@ -13,6 +13,7 @@ import (
 	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
+	"core/shared/runtimeids"
 )
 
 func TestCurrentNodeControllerFailedScriptDoesNotReleaseAgentCapacity(t *testing.T) {
@@ -328,10 +329,12 @@ func TestExecutionFinalizationDoesNotMakeUnassignedHeldSuccessorResumable(t *tes
 		return hasAutomaticCurrentNodeIntent(controller.Snapshot(), queuedAgent)
 	}, "unrelated Agent did not remain queued while source occupied capacity")
 	sourceScope := singleLiveScope(t, controller, source)
+	sessionID := runtimeids.NewSessionID()
 	cause := errors.New("assignment persistence failed")
 	steerer.setWaitError(cause)
 	if _, err := controller.CompleteCurrentNode(context.Background(), workflowruntime.CompletionRequest{
 		ScopeID:      sourceScope,
+		SessionID:    &sessionID,
 		TransitionID: "next",
 	}); err != nil {
 		t.Fatalf("complete source: %v", err)
@@ -344,8 +347,9 @@ func TestExecutionFinalizationDoesNotMakeUnassignedHeldSuccessorResumable(t *tes
 		t.Fatalf("stop source: %v", err)
 	}
 
-	if interruption, interrupted := store.interruption(successor); interrupted {
-		t.Fatalf("unassigned held successor was made resumable: %+v", interruption)
+	interruption, interrupted := store.interruption(successor)
+	if !interrupted || interruption.reason != reasonCurrentNodeRuntimeStartFailed {
+		t.Fatalf("unassigned committed successor interruption = %+v, interrupted = %t", interruption, interrupted)
 	}
 	if err := controller.EnsureTaskQuiescent(source.TaskID); err != nil {
 		t.Fatalf("uncommitted assignment failure latched controller failure: %v", err)
