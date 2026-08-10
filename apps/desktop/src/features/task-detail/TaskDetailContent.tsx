@@ -351,7 +351,12 @@ function useTaskPromptAnswers({
     const reconciliationOrder = newPromptAttentionReconciliationOrder();
     return new PromptAnswerCoordinator({
       invalidateAttention: async () => {
+        await queryClient.cancelQueries({
+          exact: true,
+          queryKey: queryKeys.taskAttention(detail.id),
+        });
         await queryClient.invalidateQueries({
+          exact: true,
           queryKey: queryKeys.taskAttention(detail.id),
           refetchType: "none",
         });

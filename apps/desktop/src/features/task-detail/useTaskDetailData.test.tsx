@@ -135,6 +135,58 @@ describe("Task Detail live refresh", () => {
     expect(screen.queryAllByRole("radio")).toHaveLength(0);
   });
 
+  it("cancels a pre-answer background refresh before authoritative reconciliation", async () => {
+    const delivery = deferred<undefined>();
+    const backgroundRead = deferred<ReturnType<typeof taskAttention>>();
+    const directRead = deferred<ReturnType<typeof taskAttention>>();
+    let attentionReadCount = 0;
+    const services = mountTaskDetailSurface(taskDetailResponse, {
+      routes: [
+        {
+          method: "workflow.task.attention.list",
+          handler: (): ReturnType<typeof taskAttention> | Promise<ReturnType<typeof taskAttention>> => {
+            attentionReadCount += 1;
+            if (attentionReadCount === 2) return backgroundRead.promise;
+            if (attentionReadCount === 3) return directRead.promise;
+            return taskAttention("ask-1", 1);
+          },
+        },
+        {
+          method: "prompt.answerBatch",
+          handler: async () => {
+            await delivery.promise;
+            return { results: [{ prompt_id: "ask-1", outcome: "resolved" }] };
+          },
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    await waitForQuestionOptionCount(1);
+    await waitForProjectSubscription(() => services.transport.subscriptions);
+    act(() => {
+      services.transport.emit("workflow.project", {
+        event: { ...taskQuestionWaitingEvent.event, action: "question_cleared" },
+      });
+    });
+    await waitFor(() => {
+      expect(attentionReadCount).toBe(2);
+    });
+
+    await user.click(screen.getByRole("button", { name: appI18n.t("task.submitAnswer") }));
+    delivery.resolve(undefined);
+    await waitFor(() => {
+      expect(attentionReadCount).toBe(3);
+    });
+    await act(async () => {
+      directRead.resolve({ items: [], generated_at_unix_ms: 5 });
+    });
+    await act(async () => {
+      backgroundRead.resolve({ ...taskAttention("ask-1", 1), generated_at_unix_ms: 4 });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(screen.queryAllByRole("radio")).toHaveLength(0);
+  });
+
   it("does not jump focus or scroll when the intended next prompt disappears and the earlier prompt restores", async () => {
     let attention = taskAttentionWithOneOption("ask-1", "ask-2", "ask-3");
     const answer = deferred<undefined>();
