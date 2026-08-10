@@ -9,6 +9,7 @@ import (
 
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
+	"core/shared/runtimeids"
 )
 
 const CurrentNodeResumeParameterNotMaterializedCode = "workflow.resume.parameter_not_materialized"
@@ -130,6 +131,20 @@ func (s *Store) PrepareTaskResume(
 		}
 		if err := errors.Join(validationErrors...); err != nil {
 			return PreparedCurrentNodeMutationResult{}, err
+		}
+		ensuredSessions := make(map[runtimeids.SessionID]struct{})
+		for _, classification := range classifications {
+			if classification.CurrentNode.SessionID == nil {
+				continue
+			}
+			sessionID := *classification.CurrentNode.SessionID
+			if _, ensured := ensuredSessions[sessionID]; ensured {
+				continue
+			}
+			if _, err := s.ensureCurrentNodeSessionAssociationWithQueries(ctx, q, sessionID); err != nil {
+				return PreparedCurrentNodeMutationResult{}, err
+			}
+			ensuredSessions[sessionID] = struct{}{}
 		}
 		result := PreparedCurrentNodeMutationResult{}
 		for _, classification := range classifications {

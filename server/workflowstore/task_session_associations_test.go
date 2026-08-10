@@ -1,6 +1,7 @@
 package workflowstore
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"sort"
@@ -635,6 +636,236 @@ func TestAssociateTaskSessionRejectsCrossTaskOwnership(t *testing.T) {
 	}
 	if _, err := store.LatestTaskSessionForNode(ctx, secondCurrentNode); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("second task association error = %v, want sql.ErrNoRows", err)
+	}
+}
+
+func TestEnsureCurrentNodeSessionAssociationRepairsMissingProvenanceIdempotently(t *testing.T) {
+	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
+	workflowID := createValidWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	currentNode := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	sessionID := associateAndBindCurrentNodeSessionForTest(
+		t,
+		ctx,
+		store,
+		binding,
+		cfg,
+		currentNode.Reference,
+	)
+	if _, err := store.db.ExecContext(
+		ctx,
+		`DELETE FROM session_workflow_node_associations
+WHERE session_id = ? AND node_id = ? AND transition_branch_key IS NULL`,
+		sessionID.String(),
+		currentNode.Reference.NodeID,
+	); err != nil {
+		t.Fatalf("delete exact Session provenance: %v", err)
+	}
+
+	repaired, err := store.EnsureCurrentNodeSessionAssociation(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("EnsureCurrentNodeSessionAssociation repair: %v", err)
+	}
+	repeated, err := store.EnsureCurrentNodeSessionAssociation(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("EnsureCurrentNodeSessionAssociation repeat: %v", err)
+	}
+	if repaired != repeated {
+		t.Fatalf("repeated ensure = %+v, want unchanged %+v", repeated, repaired)
+	}
+	if err := store.ValidateCurrentNodeSessionBinding(ctx, sessionID, currentNode.Reference); err != nil {
+		t.Fatalf("repaired exact Session provenance: %v", err)
+	}
+}
+
+func TestEnsureCurrentNodeSessionAssociationRejectsCrossTaskOwnershipWithoutChanges(t *testing.T) {
+	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
+	workflowID := createValidWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	ownerTask := createDefaultTask(t, ctx, store, binding.ProjectID)
+	otherTask := createDefaultTask(t, ctx, store, binding.ProjectID)
+	ownerCurrentNode := startTask(t, ctx, store, ownerTask.ID).Mutation.Created[0]
+	otherCurrentNode := startTask(t, ctx, store, otherTask.ID).Mutation.Created[0]
+	sessionID, err := runtimeids.ParseSessionID(createTestSession(t, ctx, store, binding, cfg))
+	if err != nil {
+		t.Fatalf("ParseSessionID: %v", err)
+	}
+	if _, err := store.AssociateTaskSession(ctx, TaskSessionAssociationRequest{
+		SessionID:    sessionID,
+		CurrentNode:  ownerCurrentNode.Reference,
+		AssociatedAt: time.UnixMilli(1_700_000_000_000).UTC(),
+	}); err != nil {
+		t.Fatalf("AssociateTaskSession owner: %v", err)
+	}
+	if _, err := store.db.ExecContext(
+		ctx,
+		`UPDATE task_current_nodes SET session_id = ?
+WHERE task_id = ? AND node_id = ? AND transition_branch_key IS NULL`,
+		sessionID.String(),
+		otherTask.ID,
+		otherCurrentNode.Reference.NodeID,
+	); err != nil {
+		t.Fatalf("seed cross-Task Current Node ownership: %v", err)
+	}
+
+	if _, err := store.EnsureCurrentNodeSessionAssociation(ctx, sessionID); err == nil {
+		t.Fatal("EnsureCurrentNodeSessionAssociation accepted cross-Task ownership")
+	}
+	owner, err := store.TaskIDForSession(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("TaskIDForSession: %v", err)
+	}
+	if owner == nil || *owner != ownerTask.ID {
+		t.Fatalf("Session owner after rejection = %v, want %q", owner, ownerTask.ID)
+	}
+	currentNodes, err := store.ListCurrentNodes(ctx, otherTask.ID)
+	if err != nil {
+		t.Fatalf("ListCurrentNodes other Task: %v", err)
+	}
+	if len(currentNodes) != 1 || currentNodes[0].SessionID == nil || *currentNodes[0].SessionID != sessionID {
+		t.Fatalf("cross-Task Current Node changed after rejection: %+v", currentNodes)
+	}
+}
+
+func TestEnsureCurrentNodeSessionAssociationRejectsMultipleCurrentNodesWithoutChanges(t *testing.T) {
+	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
+	workflowID := createFanoutJoinWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	fanout, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       source.Reference,
+		OutputValues: map[string]string{"summary": "multiple owner fixture"},
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode fan-out: %v", err)
+	}
+	sessionID, err := runtimeids.ParseSessionID(createTestSession(t, ctx, store, binding, cfg))
+	if err != nil {
+		t.Fatalf("ParseSessionID: %v", err)
+	}
+	if _, err := store.AssociateTaskSession(ctx, TaskSessionAssociationRequest{
+		SessionID:    sessionID,
+		CurrentNode:  fanout.Mutation.Created[0].Reference,
+		AssociatedAt: time.UnixMilli(1_700_000_000_000).UTC(),
+	}); err != nil {
+		t.Fatalf("AssociateTaskSession: %v", err)
+	}
+	if _, err := store.db.ExecContext(
+		ctx,
+		`UPDATE task_current_nodes SET session_id = ? WHERE task_id = ?`,
+		sessionID.String(),
+		task.ID,
+	); err != nil {
+		t.Fatalf("seed multiple Current Node ownership: %v", err)
+	}
+
+	if _, err := store.EnsureCurrentNodeSessionAssociation(ctx, sessionID); err == nil {
+		t.Fatal("EnsureCurrentNodeSessionAssociation accepted multiple Current Nodes")
+	}
+	currentNodes, err := store.ListCurrentNodes(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListCurrentNodes: %v", err)
+	}
+	if len(currentNodes) != 2 {
+		t.Fatalf("Current Nodes after rejection = %+v, want two", currentNodes)
+	}
+	for _, currentNode := range currentNodes {
+		if currentNode.SessionID == nil || *currentNode.SessionID != sessionID {
+			t.Fatalf("Current Node changed after multiple-owner rejection: %+v", currentNode)
+		}
+	}
+}
+
+func TestPreparedTaskResumeRepairsMissingCurrentNodeSessionAssociationAtomically(t *testing.T) {
+	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
+	workflowID := createValidWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	currentNode := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	sessionID := associateAndBindCurrentNodeSessionForTest(t, ctx, store, binding, cfg, currentNode.Reference)
+	if err := store.InterruptCurrentNode(
+		ctx,
+		currentNode.Reference,
+		"test_interruption",
+		workflow.NewCurrentNodeInterruptionDetail("test_interruption", nil),
+	); err != nil {
+		t.Fatalf("InterruptCurrentNode: %v", err)
+	}
+	if _, err := store.db.ExecContext(
+		ctx,
+		`DELETE FROM session_workflow_node_associations
+WHERE session_id = ? AND node_id = ? AND transition_branch_key IS NULL`,
+		sessionID.String(),
+		currentNode.Reference.NodeID,
+	); err != nil {
+		t.Fatalf("delete exact Session provenance: %v", err)
+	}
+
+	prepared, err := store.PrepareTaskResume(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("PrepareTaskResume: %v", err)
+	}
+	if err := prepared.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	if err := store.ValidateCurrentNodeSessionBinding(ctx, sessionID, currentNode.Reference); err != nil {
+		t.Fatalf("Resume did not repair exact Session provenance: %v", err)
+	}
+	resumed, err := store.ListCurrentNodes(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListCurrentNodes: %v", err)
+	}
+	if len(resumed) != 1 || resumed[0].Scheduling == nil ||
+		resumed[0].Scheduling.State != workflow.CurrentNodeSchedulingReady {
+		t.Fatalf("resumed Current Node = %+v, want ready", resumed)
+	}
+}
+
+func TestPreparedTaskResumeCancellationKeepsMissingAssociationAndInterruption(t *testing.T) {
+	parent, store, binding, cfg := newTestStoreWithConfigContext(t)
+	workflowID := createValidWorkflow(t, parent, store)
+	linkWorkflow(t, parent, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, parent, store, binding.ProjectID)
+	currentNode := startTask(t, parent, store, task.ID).Mutation.Created[0]
+	sessionID := associateAndBindCurrentNodeSessionForTest(t, parent, store, binding, cfg, currentNode.Reference)
+	if err := store.InterruptCurrentNode(
+		parent,
+		currentNode.Reference,
+		"test_interruption",
+		workflow.NewCurrentNodeInterruptionDetail("test_interruption", nil),
+	); err != nil {
+		t.Fatalf("InterruptCurrentNode: %v", err)
+	}
+	if _, err := store.db.ExecContext(
+		parent,
+		`DELETE FROM session_workflow_node_associations
+WHERE session_id = ? AND node_id = ? AND transition_branch_key IS NULL`,
+		sessionID.String(),
+		currentNode.Reference.NodeID,
+	); err != nil {
+		t.Fatalf("delete exact Session provenance: %v", err)
+	}
+	ctx, cancel := context.WithCancel(parent)
+	prepared, err := store.PrepareTaskResume(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("PrepareTaskResume: %v", err)
+	}
+	cancel()
+	if err := prepared.Commit(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Commit after cancellation = %v, want context cancellation", err)
+	}
+	if err := store.ValidateCurrentNodeSessionBinding(parent, sessionID, currentNode.Reference); !errors.Is(err, ErrSessionNotCurrentWorkflowNode) {
+		t.Fatalf("canceled Resume provenance = %v, want still missing", err)
+	}
+	currentNodes, err := store.ListCurrentNodes(parent, task.ID)
+	if err != nil {
+		t.Fatalf("ListCurrentNodes: %v", err)
+	}
+	if len(currentNodes) != 1 || currentNodes[0].Scheduling == nil ||
+		currentNodes[0].Scheduling.State != workflow.CurrentNodeSchedulingInterrupted {
+		t.Fatalf("Current Node after canceled Resume = %+v, want interrupted", currentNodes)
 	}
 }
 

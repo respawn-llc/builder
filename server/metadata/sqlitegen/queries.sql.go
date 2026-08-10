@@ -1439,6 +1439,29 @@ func (q *Queries) GetActiveProjectWorkflowLinkByWorkflow(ctx context.Context, ar
 	return i, err
 }
 
+const getBranchSessionWorkflowNodeAssociation = `-- name: GetBranchSessionWorkflowNodeAssociation :one
+SELECT associated_at_unix_ms
+FROM session_workflow_node_associations
+WHERE session_id = ?1
+  AND node_id = ?2
+  AND transition_branch_key = ?3
+LIMIT 1
+`
+
+type GetBranchSessionWorkflowNodeAssociationParams struct {
+	SessionID           string
+	NodeID              string
+	TransitionBranchKey sql.NullString
+}
+
+func (q *Queries) GetBranchSessionWorkflowNodeAssociation(ctx context.Context, arg GetBranchSessionWorkflowNodeAssociationParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, getBranchSessionWorkflowNodeAssociation, arg.SessionID, arg.NodeID, arg.TransitionBranchKey)
+	var associated_at_unix_ms int64
+	err := recordQueryError(ctx, row.Scan(&associated_at_unix_ms), getBranchSessionWorkflowNodeAssociation, 3)
+
+	return associated_at_unix_ms, err
+}
+
 const getDefaultProjectWorkflowLink = `-- name: GetDefaultProjectWorkflowLink :one
 SELECT
     id,
@@ -1717,6 +1740,28 @@ func (q *Queries) GetProjectWorkflowUnlinkState(ctx context.Context, projectID s
 	err := recordQueryError(ctx, row.Scan(&i.DefaultProjectWorkflowLinkID, &i.ActiveLinkCount), getProjectWorkflowUnlinkState, 1)
 
 	return i, err
+}
+
+const getSerialSessionWorkflowNodeAssociation = `-- name: GetSerialSessionWorkflowNodeAssociation :one
+SELECT associated_at_unix_ms
+FROM session_workflow_node_associations
+WHERE session_id = ?1
+  AND node_id = ?2
+  AND transition_branch_key IS NULL
+LIMIT 1
+`
+
+type GetSerialSessionWorkflowNodeAssociationParams struct {
+	SessionID string
+	NodeID    string
+}
+
+func (q *Queries) GetSerialSessionWorkflowNodeAssociation(ctx context.Context, arg GetSerialSessionWorkflowNodeAssociationParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, getSerialSessionWorkflowNodeAssociation, arg.SessionID, arg.NodeID)
+	var associated_at_unix_ms int64
+	err := recordQueryError(ctx, row.Scan(&associated_at_unix_ms), getSerialSessionWorkflowNodeAssociation, 2)
+
+	return associated_at_unix_ms, err
 }
 
 const getSessionExecutionTargetByID = `-- name: GetSessionExecutionTargetByID :one
@@ -4286,6 +4331,43 @@ func (q *Queries) ListBoardNodeTasks(ctx context.Context, arg ListBoardNodeTasks
 		return nil, err
 	}
 	if err := recordQueryError(ctx, rows.Err(), listBoardNodeTasks, 12); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCurrentNodeReferencesBySessionID = `-- name: ListCurrentNodeReferencesBySessionID :many
+SELECT task_id, node_id, transition_branch_key
+FROM task_current_nodes
+WHERE session_id = ?1
+ORDER BY task_id ASC, node_id ASC, transition_branch_key ASC
+`
+
+type ListCurrentNodeReferencesBySessionIDRow struct {
+	TaskID              string
+	NodeID              string
+	TransitionBranchKey sql.NullString
+}
+
+func (q *Queries) ListCurrentNodeReferencesBySessionID(ctx context.Context, sessionID sql.NullString) ([]ListCurrentNodeReferencesBySessionIDRow, error) {
+	rows, err := q.db.QueryContext(ctx, listCurrentNodeReferencesBySessionID, sessionID)
+	err = recordQueryError(ctx, err, listCurrentNodeReferencesBySessionID, 1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListCurrentNodeReferencesBySessionIDRow
+	for rows.Next() {
+		var i ListCurrentNodeReferencesBySessionIDRow
+		if err := recordQueryError(ctx, rows.Scan(&i.TaskID, &i.NodeID, &i.TransitionBranchKey), listCurrentNodeReferencesBySessionID, 1); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := recordQueryError(ctx, rows.Close(), listCurrentNodeReferencesBySessionID, 1); err != nil {
+		return nil, err
+	}
+	if err := recordQueryError(ctx, rows.Err(), listCurrentNodeReferencesBySessionID, 1); err != nil {
 		return nil, err
 	}
 	return items, nil

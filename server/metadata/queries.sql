@@ -2795,6 +2795,12 @@ WHERE id = sqlc.arg(session_id)
   AND task_id IS NOT NULL
 ORDER BY task_id ASC;
 
+-- name: ListCurrentNodeReferencesBySessionID :many
+SELECT task_id, node_id, transition_branch_key
+FROM task_current_nodes
+WHERE session_id = sqlc.arg(session_id)
+ORDER BY task_id ASC, node_id ASC, transition_branch_key ASC;
+
 -- name: BindSessionToTask :execrows
 UPDATE sessions
 SET task_id = sqlc.arg(task_id)
@@ -2869,6 +2875,22 @@ INSERT INTO session_workflow_node_associations (
 )
 ON CONFLICT(session_id, node_id, transition_branch_key) WHERE transition_branch_key IS NOT NULL DO UPDATE SET
     associated_at_unix_ms = excluded.associated_at_unix_ms;
+
+-- name: GetSerialSessionWorkflowNodeAssociation :one
+SELECT associated_at_unix_ms
+FROM session_workflow_node_associations
+WHERE session_id = sqlc.arg(session_id)
+  AND node_id = sqlc.arg(node_id)
+  AND transition_branch_key IS NULL
+LIMIT 1;
+
+-- name: GetBranchSessionWorkflowNodeAssociation :one
+SELECT associated_at_unix_ms
+FROM session_workflow_node_associations
+WHERE session_id = sqlc.arg(session_id)
+  AND node_id = sqlc.arg(node_id)
+  AND transition_branch_key = sqlc.arg(transition_branch_key)
+LIMIT 1;
 
 -- name: CountTaskSessions :one
 SELECT CAST(COUNT(*) AS INTEGER) AS session_count

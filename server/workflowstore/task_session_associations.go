@@ -37,6 +37,143 @@ type TaskSessionAssociation struct {
 // retained-session state, not a data-integrity failure.
 var ErrSessionNotCurrentWorkflowNode = errors.New("session is not bound to a current workflow node")
 
+// EnsureCurrentNodeSessionAssociation repairs exact retained provenance only
+// when direct Session Task ownership and the sole Current Node binding agree.
+func (s *Store) EnsureCurrentNodeSessionAssociation(
+	ctx context.Context,
+	sessionID runtimeids.SessionID,
+) (TaskSessionAssociation, error) {
+	if sessionID.IsZero() {
+		return TaskSessionAssociation{}, errors.New("session id is required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return TaskSessionAssociation{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	association, err := s.ensureCurrentNodeSessionAssociationWithQueries(ctx, s.queries.WithTx(tx), sessionID)
+	if err != nil {
+		return TaskSessionAssociation{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return TaskSessionAssociation{}, err
+	}
+	return association, nil
+}
+
+func (s *Store) ensureCurrentNodeSessionAssociationWithQueries(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	sessionID runtimeids.SessionID,
+) (TaskSessionAssociation, error) {
+	taskIDs, err := q.ListSessionWorkflowTaskIDs(ctx, sessionID.String())
+	if err != nil {
+		return TaskSessionAssociation{}, err
+	}
+	if len(taskIDs) != 1 || !taskIDs[0].Valid || strings.TrimSpace(taskIDs[0].String) == "" {
+		return TaskSessionAssociation{}, fmt.Errorf(
+			"%w: Session %q has %d direct Task owners",
+			ErrSessionNotCurrentWorkflowNode,
+			sessionID,
+			len(taskIDs),
+		)
+	}
+	ownerTaskID := workflow.TaskID(taskIDs[0].String)
+	rows, err := q.ListCurrentNodeReferencesBySessionID(
+		ctx,
+		sql.NullString{String: sessionID.String(), Valid: true},
+	)
+	if err != nil {
+		return TaskSessionAssociation{}, err
+	}
+	if len(rows) != 1 {
+		return TaskSessionAssociation{}, fmt.Errorf(
+			"%w: Session %q is carried by %d Current Nodes",
+			ErrSessionNotCurrentWorkflowNode,
+			sessionID,
+			len(rows),
+		)
+	}
+	var branchKey *workflow.TransitionBranchKey
+	if rows[0].TransitionBranchKey.Valid {
+		value := workflow.TransitionBranchKey(rows[0].TransitionBranchKey.String)
+		branchKey = &value
+	}
+	reference, err := workflow.NewCurrentNodeReference(
+		workflow.TaskID(rows[0].TaskID),
+		workflow.NodeID(rows[0].NodeID),
+		branchKey,
+	)
+	if err != nil {
+		return TaskSessionAssociation{}, err
+	}
+	if reference.TaskID != ownerTaskID {
+		return TaskSessionAssociation{}, fmt.Errorf(
+			"%w: Session %q owns Task %q but Current Node %v belongs to Task %q",
+			ErrSessionNotCurrentWorkflowNode,
+			sessionID,
+			ownerTaskID,
+			reference,
+			reference.TaskID,
+		)
+	}
+	currentNode, err := currentNodeForReference(ctx, q, reference)
+	if err != nil {
+		return TaskSessionAssociation{}, err
+	}
+	if currentNode.SessionID == nil || *currentNode.SessionID != sessionID ||
+		currentNode.Scheduling == nil || currentNode.AgentExecutionSelection == nil {
+		return TaskSessionAssociation{}, fmt.Errorf(
+			"%w: Session %q does not own one executable Agent Current Node",
+			ErrSessionNotCurrentWorkflowNode,
+			sessionID,
+		)
+	}
+	associatedAtUnixMs, err := exactTaskSessionAssociationTime(ctx, q, sessionID, reference)
+	if err == nil {
+		return TaskSessionAssociation{
+			SessionID:    sessionID,
+			CurrentNode:  reference,
+			AssociatedAt: time.UnixMilli(associatedAtUnixMs).UTC(),
+		}, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return TaskSessionAssociation{}, err
+	}
+	association, err := normalizeTaskSessionAssociationRequest(TaskSessionAssociationRequest{
+		SessionID:    sessionID,
+		CurrentNode:  reference,
+		AssociatedAt: s.now(),
+	})
+	if err != nil {
+		return TaskSessionAssociation{}, err
+	}
+	if err := upsertTaskSessionAssociation(ctx, q, association); err != nil {
+		return TaskSessionAssociation{}, err
+	}
+	return taskSessionAssociationFromRequest(association), nil
+}
+
+func exactTaskSessionAssociationTime(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	sessionID runtimeids.SessionID,
+	reference workflow.CurrentNodeReference,
+) (int64, error) {
+	ctx = sqlitegen.WithExpectedNoRows(ctx)
+	if branchKey, branchScoped := reference.TransitionBranchKey(); branchScoped {
+		return q.GetBranchSessionWorkflowNodeAssociation(ctx, sqlitegen.GetBranchSessionWorkflowNodeAssociationParams{
+			SessionID:           sessionID.String(),
+			NodeID:              string(reference.NodeID),
+			TransitionBranchKey: sql.NullString{String: string(branchKey), Valid: true},
+		})
+	}
+	return q.GetSerialSessionWorkflowNodeAssociation(ctx, sqlitegen.GetSerialSessionWorkflowNodeAssociationParams{
+		SessionID: sessionID.String(),
+		NodeID:    string(reference.NodeID),
+	})
+}
+
 // BindSessionToCurrentNode atomically establishes the live agent-session
 // binding for an exact Current Node and records its retained provenance.
 // AssociateTaskSession intentionally does not make a Current Node live.
@@ -162,6 +299,51 @@ func upsertTaskSessionAssociation(ctx context.Context, q *sqlitegen.Queries, req
 		NodeID:             string(req.CurrentNode.NodeID),
 		AssociatedAtUnixMs: req.AssociatedAt.UnixMilli(),
 	})
+}
+
+func ensureMaterializedCurrentNodeSessionAssociations(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	currentNodes []workflow.CurrentNode,
+	associatedAt time.Time,
+) error {
+	for _, currentNode := range currentNodes {
+		if currentNode.Scheduling == nil || currentNode.SessionID == nil {
+			continue
+		}
+		if currentNode.AgentExecutionSelection == nil {
+			return fmt.Errorf(
+				"executable Current Node %v carries retained Session %q without Agent execution selection",
+				currentNode.Reference,
+				*currentNode.SessionID,
+			)
+		}
+		association, err := normalizeTaskSessionAssociationRequest(TaskSessionAssociationRequest{
+			SessionID:    *currentNode.SessionID,
+			CurrentNode:  currentNode.Reference,
+			AssociatedAt: associatedAt,
+		})
+		if err != nil {
+			return err
+		}
+		if err := bindSessionToTask(ctx, q, association); err != nil {
+			return fmt.Errorf(
+				"bind retained Session %q to successor Task %q: %w",
+				association.SessionID,
+				association.CurrentNode.TaskID,
+				err,
+			)
+		}
+		if err := upsertTaskSessionAssociation(ctx, q, association); err != nil {
+			return fmt.Errorf(
+				"record retained Session %q provenance for Current Node %v: %w",
+				association.SessionID,
+				association.CurrentNode,
+				err,
+			)
+		}
+	}
+	return nil
 }
 
 func taskSessionAssociationFromRequest(req TaskSessionAssociationRequest) TaskSessionAssociation {

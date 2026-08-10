@@ -1283,6 +1283,63 @@ func TestServiceTaskResumePreservesConfiguredSelectionAfterMaterializationFailur
 	}
 }
 
+func TestServiceTaskResumeRepairsMissingRetainedSessionProvenance(t *testing.T) {
+	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	started, err := service.store.StartTask(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	currentNode := started.Mutation.Created[0]
+	sessionID := createPersistedWorkflowServiceSession(t, metadataStore, binding)
+	if _, err := service.store.BindSessionToCurrentNode(ctx, workflowstore.CurrentNodeSessionBindingRequest{
+		Association: workflowstore.TaskSessionAssociationRequest{
+			SessionID:    sessionID,
+			CurrentNode:  currentNode.Reference,
+			AssociatedAt: time.UnixMilli(1_700_000_000_000).UTC(),
+		},
+	}); err != nil {
+		t.Fatalf("BindSessionToCurrentNode: %v", err)
+	}
+	if err := service.store.InterruptCurrentNode(
+		ctx,
+		currentNode.Reference,
+		"test_interruption",
+		workflow.NewCurrentNodeInterruptionDetail("test_interruption", nil),
+	); err != nil {
+		t.Fatalf("InterruptCurrentNode: %v", err)
+	}
+	if _, err := metadataStore.DB().ExecContext(
+		ctx,
+		`DELETE FROM session_workflow_node_associations
+WHERE session_id = ? AND node_id = ? AND transition_branch_key IS NULL`,
+		sessionID.String(),
+		currentNode.Reference.NodeID,
+	); err != nil {
+		t.Fatalf("delete exact Session provenance: %v", err)
+	}
+	service.currentNodeExecution = &currentNodeCompletionExecutionStub{store: service.store}
+
+	response, err := service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
+		TaskID:           task.Task.ID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
+			Mode: serverapi.WorkflowExecutionTargetModeNone,
+		},
+	})
+	if err != nil {
+		t.Fatalf("ResumeWorkflowTask: %v", err)
+	}
+	if response.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeApplied || response.Applied == nil {
+		t.Fatalf("ResumeWorkflowTask response = %+v, want applied", response)
+	}
+	if err := service.store.ValidateCurrentNodeSessionBinding(ctx, sessionID, currentNode.Reference); err != nil {
+		t.Fatalf("ResumeWorkflowTask did not repair retained provenance: %v", err)
+	}
+}
+
 func TestServiceTaskResumeRejectsEmptyAppliedResult(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)

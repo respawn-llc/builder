@@ -78,6 +78,14 @@ func (s *Store) prepareCurrentNodeMutation(
 	if err != nil {
 		return nil, err
 	}
+	if err := ensureMaterializedCurrentNodeSessionAssociations(
+		ctx,
+		q,
+		result.Mutation.Created,
+		s.now(),
+	); err != nil {
+		return nil, err
+	}
 	mutation := newPreparedCurrentNodeMutation(ctx, tx, result)
 	tx = nil
 	return mutation, nil

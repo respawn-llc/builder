@@ -248,6 +248,14 @@ func (s *Store) PrepareCurrentNodeCompletion(
 		if err := touchTaskUpdatedAt(ctx, q, string(prepared.Source.TaskID), now); err != nil {
 			return nil, err
 		}
+		if err := ensureMaterializedCurrentNodeSessionAssociations(
+			ctx,
+			q,
+			result.Mutation.Created,
+			nowTime,
+		); err != nil {
+			return nil, err
+		}
 		transactionOpen = false
 		restoreTimeout = false
 		closeConnection = false
@@ -273,6 +281,14 @@ func (s *Store) PrepareCurrentNodeCompletion(
 		}
 		result.SessionReuse = newSessionReuseAnalysisInput(definition, currentSource, []workflow.Edge{target.Edge})
 		result.PostCompletionEligible = source.Kind() == workflow.NodeKindAgent
+		if err := ensureMaterializedCurrentNodeSessionAssociations(
+			ctx,
+			q,
+			result.Mutation.Created,
+			nowTime,
+		); err != nil {
+			return nil, err
+		}
 		transactionOpen = false
 		restoreTimeout = false
 		closeConnection = false
@@ -359,6 +375,14 @@ func (s *Store) PrepareCurrentNodeCompletion(
 			return nil, err
 		}
 		result.AutomaticIntents = []CurrentNodeAutomaticIntent{intent}
+	}
+	if err := ensureMaterializedCurrentNodeSessionAssociations(
+		ctx,
+		q,
+		result.Mutation.Created,
+		nowTime,
+	); err != nil {
+		return nil, err
 	}
 	transactionOpen = false
 	restoreTimeout = false

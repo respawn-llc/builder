@@ -2,8 +2,10 @@ package workflowstore
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
+	"time"
 
 	"core/server/workflow"
 )
@@ -225,6 +227,141 @@ func TestPreparedCurrentNodeCompletionRollbackLeavesSourceCurrent(t *testing.T) 
 	}
 	if len(currentNodes) != 1 || !currentNodes[0].Reference.Equal(source.Reference) {
 		t.Fatalf("Current Nodes after completion rollback = %+v, want source %v", currentNodes, source.Reference)
+	}
+}
+
+func TestPreparedRetainedSuccessorRollbackRestoresUnownedSourceSession(t *testing.T) {
+	fixture := newImmediateContextCompletionFixture(t, workflow.ContextModeContinueSession)
+	if _, err := fixture.store.db.ExecContext(
+		fixture.ctx,
+		`UPDATE sessions SET task_id = NULL WHERE id = ?`,
+		fixture.sessionID.String(),
+	); err != nil {
+		t.Fatalf("clear source Session Task owner: %v", err)
+	}
+
+	prepared, err := fixture.store.PrepareCurrentNodeCompletion(fixture.ctx, CurrentNodeCompletionRequest{
+		Source:       fixture.source.Reference,
+		TransitionID: "review",
+		OutputValues: map[string]string{"summary": "rollback retained successor"},
+	})
+	if err != nil {
+		t.Fatalf("PrepareCurrentNodeCompletion: %v", err)
+	}
+	successor := prepared.Result().Mutation.Created[0]
+	if err := prepared.Rollback(); err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+	owner, err := fixture.store.TaskIDForSession(fixture.ctx, fixture.sessionID)
+	if err != nil {
+		t.Fatalf("TaskIDForSession: %v", err)
+	}
+	if owner != nil {
+		t.Fatalf("rolled-back Session owner = %q, want absent", *owner)
+	}
+	if _, err := fixture.store.LatestTaskSessionForNode(fixture.ctx, successor.Reference); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("rolled-back successor provenance = %v, want absent", err)
+	}
+	currentNodes, err := fixture.store.ListCurrentNodes(fixture.ctx, fixture.source.Reference.TaskID)
+	if err != nil {
+		t.Fatalf("ListCurrentNodes: %v", err)
+	}
+	if len(currentNodes) != 1 || !currentNodes[0].Reference.Equal(fixture.source.Reference) {
+		t.Fatalf("Current Nodes after rollback = %+v, want source", currentNodes)
+	}
+}
+
+func TestPreparedRetainedSuccessorCancellationRollsBackBindingAndProvenance(t *testing.T) {
+	fixture := newImmediateContextCompletionFixture(t, workflow.ContextModeContinueSession)
+	if _, err := fixture.store.db.ExecContext(
+		fixture.ctx,
+		`UPDATE sessions SET task_id = NULL WHERE id = ?`,
+		fixture.sessionID.String(),
+	); err != nil {
+		t.Fatalf("clear source Session Task owner: %v", err)
+	}
+	ctx, cancel := context.WithCancel(fixture.ctx)
+	prepared, err := fixture.store.PrepareCurrentNodeCompletion(ctx, CurrentNodeCompletionRequest{
+		Source:       fixture.source.Reference,
+		TransitionID: "review",
+		OutputValues: map[string]string{"summary": "cancel retained successor"},
+	})
+	if err != nil {
+		t.Fatalf("PrepareCurrentNodeCompletion: %v", err)
+	}
+	successor := prepared.Result().Mutation.Created[0]
+	cancel()
+	if err := prepared.Commit(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Commit after cancellation = %v, want context cancellation", err)
+	}
+	owner, err := fixture.store.TaskIDForSession(fixture.ctx, fixture.sessionID)
+	if err != nil {
+		t.Fatalf("TaskIDForSession: %v", err)
+	}
+	if owner != nil {
+		t.Fatalf("canceled Session owner = %q, want absent", *owner)
+	}
+	if _, err := fixture.store.LatestTaskSessionForNode(fixture.ctx, successor.Reference); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("canceled successor provenance = %v, want absent", err)
+	}
+}
+
+func TestRetainedSuccessorAssociationFailureRollsBackCurrentNodeReplacement(t *testing.T) {
+	fixture := newImmediateContextCompletionFixture(t, workflow.ContextModeContinueSession)
+	fixture.store.now = func() time.Time { return time.UnixMilli(0).UTC() }
+
+	if _, err := fixture.store.PrepareCurrentNodeCompletion(fixture.ctx, CurrentNodeCompletionRequest{
+		Source:       fixture.source.Reference,
+		TransitionID: "review",
+		OutputValues: map[string]string{"summary": "association failure"},
+	}); err == nil {
+		t.Fatal("PrepareCurrentNodeCompletion accepted invalid association time")
+	}
+	currentNodes, err := fixture.store.ListCurrentNodes(fixture.ctx, fixture.source.Reference.TaskID)
+	if err != nil {
+		t.Fatalf("ListCurrentNodes: %v", err)
+	}
+	if len(currentNodes) != 1 || !currentNodes[0].Reference.Equal(fixture.source.Reference) {
+		t.Fatalf("Current Nodes after association failure = %+v, want source", currentNodes)
+	}
+}
+
+func TestRetainedSuccessorRejectsContradictorySessionTaskOwnerWithoutChanges(t *testing.T) {
+	fixture := newImmediateContextCompletionFixture(t, workflow.ContextModeContinueSession)
+	sourceTask, err := fixture.store.queries.GetTask(fixture.ctx, string(fixture.source.Reference.TaskID))
+	if err != nil {
+		t.Fatalf("GetTask source: %v", err)
+	}
+	otherTask := createDefaultTask(t, fixture.ctx, fixture.store, sourceTask.ProjectID)
+	if _, err := fixture.store.db.ExecContext(
+		fixture.ctx,
+		`UPDATE sessions SET task_id = ? WHERE id = ?`,
+		otherTask.ID,
+		fixture.sessionID.String(),
+	); err != nil {
+		t.Fatalf("seed contradictory Session Task owner: %v", err)
+	}
+
+	if _, err := fixture.store.PrepareCurrentNodeCompletion(fixture.ctx, CurrentNodeCompletionRequest{
+		Source:       fixture.source.Reference,
+		TransitionID: "review",
+		OutputValues: map[string]string{"summary": "contradictory owner"},
+	}); err == nil {
+		t.Fatal("PrepareCurrentNodeCompletion accepted contradictory Session Task owner")
+	}
+	currentNodes, err := fixture.store.ListCurrentNodes(fixture.ctx, fixture.source.Reference.TaskID)
+	if err != nil {
+		t.Fatalf("ListCurrentNodes: %v", err)
+	}
+	if len(currentNodes) != 1 || !currentNodes[0].Reference.Equal(fixture.source.Reference) {
+		t.Fatalf("Current Nodes after contradictory ownership = %+v, want source", currentNodes)
+	}
+	owner, err := fixture.store.TaskIDForSession(fixture.ctx, fixture.sessionID)
+	if err != nil {
+		t.Fatalf("TaskIDForSession: %v", err)
+	}
+	if owner == nil || *owner != otherTask.ID {
+		t.Fatalf("Session owner after rejection = %v, want %q", owner, otherTask.ID)
 	}
 }
 

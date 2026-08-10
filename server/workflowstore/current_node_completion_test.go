@@ -357,6 +357,9 @@ func TestCompleteCurrentNodeFanoutPreviousTargetOrNewRetainsBranchSessions(t *te
 		if currentNode.SessionID == nil || *currentNode.SessionID != expectedSessionID {
 			t.Fatalf("completion branch %q session = %v, want retained session %q", branchKey, currentNode.SessionID, expectedSessionID)
 		}
+		if err := store.ValidateCurrentNodeSessionBinding(ctx, expectedSessionID, currentNode.Reference); err != nil {
+			t.Fatalf("completion branch %q exact Session provenance: %v", branchKey, err)
+		}
 	}
 }
 
