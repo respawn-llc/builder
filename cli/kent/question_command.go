@@ -289,12 +289,7 @@ func (c questionCommand) answerTaskQuestion(
 }
 
 func questionAnswerContext() (context.Context, context.CancelFunc) {
-	signalCtx, stopSignal := signal.NotifyContext(context.Background(), os.Interrupt)
-	ctx, cancel := context.WithTimeout(signalCtx, questionCommandTimeout)
-	return ctx, func() {
-		cancel()
-		stopSignal()
-	}
+	return signal.NotifyContext(context.Background(), os.Interrupt)
 }
 
 type questionAnswerUsageError struct {

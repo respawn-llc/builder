@@ -295,17 +295,14 @@ func TestQuestionsAliasDispatchesQuestionCommand(t *testing.T) {
 	}
 }
 
-func TestQuestionAnswerSubmitsOptionAndCommentaryThenReadsNextQuestion(t *testing.T) {
+func TestQuestionAnswerSubmitsThenReconcilesWithoutWorkflowDeadline(t *testing.T) {
 	unsetSessionIDEnvironmentForTest(t)
 	sessionID := uuid.NewString()
-	var answerDeadline int64
 	readCount := 0
-	checkDeadline := func(ctx context.Context) error {
-		deadline, ok := ctx.Deadline()
-		if !ok || answerDeadline != 0 && deadline.UnixNano() != answerDeadline {
-			return errors.New("answer deadline missing or changed")
+	checkTransportDeadline := func(ctx context.Context) error {
+		if _, ok := ctx.Deadline(); !ok {
+			return errors.New("post-answer transport deadline is missing")
 		}
-		answerDeadline = deadline.UnixNano()
 		return nil
 	}
 	remote := &stubQuestionCommandRemote{
@@ -318,7 +315,7 @@ func TestQuestionAnswerSubmitsOptionAndCommentaryThenReadsNextQuestion(t *testin
 		listAsks: func(ctx context.Context) error {
 			readCount++
 			if readCount == 2 {
-				return checkDeadline(ctx)
+				return checkTransportDeadline(ctx)
 			}
 			return nil
 		},
@@ -327,7 +324,10 @@ func TestQuestionAnswerSubmitsOptionAndCommentaryThenReadsNextQuestion(t *testin
 		if len(remote.answerRequests) != 1 {
 			return errors.New("follow-up read started before batch completion")
 		}
-		return checkDeadline(ctx)
+		if _, ok := ctx.Deadline(); ok {
+			return errors.New("post-acceptance follow-up inherited a workflow deadline")
+		}
+		return nil
 	}
 	command, _ := questionCommandWithRemote(remote)
 
