@@ -1498,7 +1498,7 @@ func TestWorkflowGraphSaveDerivesNodeGroupSortOrderFromAuthoredCollection(t *tes
 	}
 }
 
-func TestApplyWorkflowGraphSaveSupportsNodeAndNodeGroupKeySwaps(t *testing.T) {
+func TestApplyWorkflowGraphSaveSupportsAllUniquenessKeySwaps(t *testing.T) {
 	f := newGraphSaveFixture(t, createValidWorkflow)
 	for _, group := range []NodeGroupRecord{
 		{ID: "group-first-" + f.workflowID.String(), WorkflowID: f.workflowID, Key: "first", DisplayName: "First", SortOrder: 50},
@@ -1512,9 +1512,19 @@ func TestApplyWorkflowGraphSaveSupportsNodeAndNodeGroupKeySwaps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("currentWorkflowGraphSavePrepared: %v", err)
 	}
+	current.transitionGroups[1].SourceNodeID = current.transitionGroups[0].SourceNodeID
+	if err := upsertWorkflowTransitionGroup(f.ctx, f.store.queries, current.transitionGroups[1], current.transitionGroups[1].SortOrder, "seed shared transition source"); err != nil {
+		t.Fatal(err)
+	}
+	current.edges[1].TransitionGroupID = current.edges[0].TransitionGroupID
+	if err := upsertWorkflowEdge(f.ctx, f.store.queries, current.edges[1], current.edges[1].SortOrder, "seed shared edge group"); err != nil {
+		t.Fatal(err)
+	}
 	prepared := clonePreparedWorkflowGraphSave(current)
 	prepared.nodeGroups[0].Key, prepared.nodeGroups[1].Key = prepared.nodeGroups[1].Key, prepared.nodeGroups[0].Key
 	prepared.nodes[0].Key, prepared.nodes[1].Key = prepared.nodes[1].Key, prepared.nodes[0].Key
+	prepared.transitionGroups[0].TransitionID, prepared.transitionGroups[1].TransitionID = prepared.transitionGroups[1].TransitionID, prepared.transitionGroups[0].TransitionID
+	prepared.edges[0].Key, prepared.edges[1].Key = prepared.edges[1].Key, prepared.edges[0].Key
 	tx, err := f.store.db.BeginTx(f.ctx, nil)
 	if err != nil {
 		t.Fatalf("BeginTx: %v", err)
@@ -1531,8 +1541,10 @@ func TestApplyWorkflowGraphSaveSupportsNodeAndNodeGroupKeySwaps(t *testing.T) {
 		t.Fatalf("reload graph: %v", err)
 	}
 	if reloaded.nodeGroups[0].Key != prepared.nodeGroups[0].Key || reloaded.nodeGroups[1].Key != prepared.nodeGroups[1].Key ||
-		reloaded.nodes[0].Key != prepared.nodes[0].Key || reloaded.nodes[1].Key != prepared.nodes[1].Key {
-		t.Fatalf("reloaded keys = groups %v nodes %v, want swapped", reloaded.nodeGroups, reloaded.nodes)
+		reloaded.nodes[0].Key != prepared.nodes[0].Key || reloaded.nodes[1].Key != prepared.nodes[1].Key ||
+		reloaded.transitionGroups[0].TransitionID != prepared.transitionGroups[0].TransitionID ||
+		reloaded.edges[0].Key != prepared.edges[0].Key {
+		t.Fatal("reloaded graph uniqueness keys do not match the swapped graph")
 	}
 }
 

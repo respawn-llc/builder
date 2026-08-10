@@ -785,7 +785,7 @@ func workflowGraphSaveComparable(prepared preparedWorkflowGraphSave) comparableW
 }
 
 func applyWorkflowGraphSave(ctx context.Context, q *sqlitegen.Queries, workflowID runtimeids.WorkflowID, current preparedWorkflowGraphSave, prepared preparedWorkflowGraphSave, removed removedWorkflowGraphRows) error {
-	if err := stageWorkflowGraphSaveKeyChanges(ctx, q, current, prepared); err != nil {
+	if err := stageWorkflowGraphSaveKeyChanges(ctx, q, current); err != nil {
 		return err
 	}
 	for _, edgeID := range removed.edges {
@@ -839,30 +839,28 @@ func applyWorkflowGraphSave(ctx context.Context, q *sqlitegen.Queries, workflowI
 	return nil
 }
 
-func stageWorkflowGraphSaveKeyChanges(ctx context.Context, q *sqlitegen.Queries, current preparedWorkflowGraphSave, prepared preparedWorkflowGraphSave) error {
-	groupKeys := make(map[string]workflow.ModelKey, len(prepared.nodeGroups))
-	for _, group := range prepared.nodeGroups {
-		groupKeys[group.ID] = group.Key
-	}
+func stageWorkflowGraphSaveKeyChanges(ctx context.Context, q *sqlitegen.Queries, current preparedWorkflowGraphSave) error {
 	for _, group := range current.nodeGroups {
-		if key, exists := groupKeys[group.ID]; !exists || key == group.Key {
-			continue
-		}
 		group.Key = workflow.ModelKey(uuid.NewString())
 		if err := upsertWorkflowNodeGroup(ctx, q, group, "stage workflow node group key"); err != nil {
 			return err
 		}
 	}
-	nodeKeys := make(map[workflow.NodeID]workflow.ModelKey, len(prepared.nodes))
-	for _, node := range prepared.nodes {
-		nodeKeys[node.ID] = node.Key
-	}
 	for _, node := range current.nodes {
-		if key, exists := nodeKeys[node.ID]; !exists || key == node.Key {
-			continue
-		}
 		node.Key = workflow.ModelKey(uuid.NewString())
 		if err := upsertWorkflowNode(ctx, q, node, node.SortOrder, "stage workflow node key"); err != nil {
+			return err
+		}
+	}
+	for _, group := range current.transitionGroups {
+		group.TransitionID = workflow.TransitionID(uuid.NewString())
+		if err := upsertWorkflowTransitionGroup(ctx, q, group, group.SortOrder, "stage workflow transition group id"); err != nil {
+			return err
+		}
+	}
+	for _, edge := range current.edges {
+		edge.Key = workflow.ModelKey(uuid.NewString())
+		if err := upsertWorkflowEdge(ctx, q, edge, edge.SortOrder, "stage workflow edge key"); err != nil {
 			return err
 		}
 	}
