@@ -2888,7 +2888,7 @@ func TestMixedAgentScriptSuccessorKeepsHealthyScriptOwnedWhenAgentAssignmentFail
 	}
 }
 
-func TestAcceptedInertActiveReadRaceCannotRemainStableAfterSuccessorOwnershipFailureReturns(t *testing.T) {
+func TestPostCompletionSuccessorAssignmentDelayRemainsQueuedUntilFailureIsInterrupted(t *testing.T) {
 	sourceStarted := make(chan struct{})
 	releaseSource := make(chan struct{})
 	var releaseSourceOnce sync.Once
@@ -2907,6 +2907,7 @@ func TestAcceptedInertActiveReadRaceCannotRemainStableAfterSuccessorOwnershipFai
 			},
 			Response: ScriptedFinalAnswer(`{"transition":"next","commentary":"source done"}`).Response,
 		},
+		ScriptedRuntimeError(ErrScriptedRuntime),
 	)
 	f := newCurrentNodeRunnerFixtureWithPersistenceGate(t, client)
 	workflowID := createCurrentNodeChainedWorkflow(t, f.store, workflow.ContextModeNewSession)
@@ -2925,10 +2926,6 @@ func TestAcceptedInertActiveReadRaceCannotRemainStableAfterSuccessorOwnershipFai
 		return snapshot.Meta.SessionID != sourceSessionID.String() && snapshot.Meta.LastSequence > 0
 	})
 	t.Cleanup(releaseAssignment)
-	sourceExecution, live := f.authority.SessionExecution(sourceSessionID)
-	if !live {
-		t.Fatal("source Agent has no Exact Workflow execution")
-	}
 	releaseSourceOnce.Do(func() { close(releaseSource) })
 	select {
 	case <-assignmentEntered:
@@ -2945,20 +2942,20 @@ func TestAcceptedInertActiveReadRaceCannotRemainStableAfterSuccessorOwnershipFai
 		task,
 		workflowID,
 		successor.NodeID,
-		serverapi.WorkflowTaskStatusKindActive,
+		serverapi.WorkflowTaskStatusKindQueued,
 		false,
-		false,
-		"accepted post-commit read race",
+		true,
+		"successor assignment delay",
 	)
 
-	if !sourceExecution.RequestStop() {
-		t.Fatal("source Workflow execution finalized before the ownership-failure barrier was released")
-	}
 	releaseAssignment()
-	waitCtx, cancelWait := context.WithTimeout(context.Background(), 3*time.Second)
-	_, _ = sourceExecution.Wait(waitCtx)
-	cancelWait()
-	f.waitForControllerCurrentNodeFinalized(t, source)
+	f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+		return len(nodes) == 1 &&
+			nodes[0].Reference.Equal(successor) &&
+			nodes[0].Scheduling != nil &&
+			nodes[0].Scheduling.State == workflow.CurrentNodeSchedulingInterrupted
+	})
+	f.waitForControllerCurrentNodeFinalized(t, successor)
 	surfaces.requireState(
 		t,
 		task,
@@ -2967,7 +2964,7 @@ func TestAcceptedInertActiveReadRaceCannotRemainStableAfterSuccessorOwnershipFai
 		serverapi.WorkflowTaskStatusKindInterrupted,
 		true,
 		false,
-		"stable state after successor ownership failure returned",
+		"stable state after successor execution failure returned",
 	)
 }
 

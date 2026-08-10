@@ -89,21 +89,6 @@ func (e LifecycleUnavailableError) Unwrap() error {
 	return e.Cause
 }
 
-type LifecycleDispositionPendingError struct {
-	TaskID      workflow.TaskID
-	CurrentNode workflow.CurrentNodeReference
-	RunID       uint64
-}
-
-func (e LifecycleDispositionPendingError) Error() string {
-	return fmt.Sprintf(
-		"workflow execution lifecycle disposition is pending: task_id=%s current_node=%v run_id=%d",
-		e.TaskID,
-		e.CurrentNode,
-		e.RunID,
-	)
-}
-
 func (c *CurrentNodeController) recordLifecycleFatalLocked(
 	run *currentNodeRun,
 	operation LifecycleFatalOperation,

@@ -1038,6 +1038,84 @@ func TestCurrentNodeControllerCompletesSuccessfulScriptBeforeScopeRetirement(t *
 	}
 }
 
+func TestCurrentNodeControllerRetiringDispositionReadIsInertInsteadOfQueued(t *testing.T) {
+	shellPath, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("sh executable unavailable: %v", err)
+	}
+	reference := currentNodeReferenceForControllerTest(t, "task-retiring-read", "node-script")
+	store := &currentNodeControllerStore{
+		interruptStarted: make(chan struct{}),
+		interruptRelease: make(chan struct{}),
+	}
+	var controller *CurrentNodeController
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
+			controller.ExecutionFinalized(scope)
+		}),
+	})
+	runner := &recordingScriptRunner{
+		authority: authority,
+		command: sessionruntime.ScriptCommand{
+			Path: shellPath,
+			Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
+		},
+		started: make(chan workflow.CurrentNodeReference, 1),
+	}
+	controller = newCurrentNodeControllerForTest(t, store, runner, authority, 1)
+	releaseInterruption := func() {
+		select {
+		case <-store.interruptRelease:
+		default:
+			close(store.interruptRelease)
+		}
+	}
+	t.Cleanup(func() {
+		releaseInterruption()
+		if err := controller.Close(); err != nil {
+			t.Errorf("close controller: %v", err)
+		}
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+
+	if err := startCurrentNodeForControllerTest(context.Background(), controller, store, reference); err != nil {
+		t.Fatalf("start Script Current Node: %v", err)
+	}
+	<-runner.started
+	waitForRunningCurrentNode(t, authority, reference)
+	scopeID := singleLiveScope(t, controller, reference)
+	handle, live := authority.ExecutionByScope(scopeID)
+	if !live {
+		t.Fatal("Script Exact execution is absent")
+	}
+	handle.RequestStop()
+	select {
+	case <-store.interruptStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("outcome-less finalization did not enter durable disposition")
+	}
+
+	observation, err := controller.ObserveWorkflowTaskExecutions([]workflow.TaskID{reference.TaskID})
+	if err != nil {
+		t.Fatalf("ObserveWorkflowTaskExecutions during retiring disposition: %v", err)
+	}
+	if snapshot := observation.Runs[reference.TaskID]; len(snapshot.Queued) != 0 ||
+		len(snapshot.InterruptibleLaunching) != 0 {
+		t.Fatalf("retiring Run projected queued: %+v", snapshot)
+	}
+	if executions := observation.Executions[reference.TaskID].Executions; len(executions) != 0 {
+		t.Fatalf("retired Exact remained live in observation: %+v", executions)
+	}
+
+	releaseInterruption()
+	_, _ = handle.Wait(context.Background())
+	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+		return !hasLiveCurrentNode(controller.Snapshot(), reference)
+	}, "retiring Run did not finish after durable interruption")
+}
+
 func TestCurrentNodeControllerScriptSuccessorInterruptionFailureRetainsOwnershipThroughCleanup(t *testing.T) {
 	shellPath, err := exec.LookPath("sh")
 	if err != nil {

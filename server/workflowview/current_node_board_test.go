@@ -17,6 +17,15 @@ func TestQueuedRunStatusFiltersAndPaginatesAcrossTaskSurfaces(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
 	ordinary := fixture.startTask(t, "Queued pagination A")
 	launching := fixture.startTask(t, "Queued pagination B")
+	dependent := fixture.createBacklogTask(t, "Queued dependency subject")
+	for _, blocker := range []startedCurrentNodeViewTask{ordinary, launching} {
+		if _, err := fixture.store.AddTaskDependency(fixture.ctx, workflowstore.TaskDependencyAddRequest{
+			BlockerTaskID: blocker.task.ID,
+			BlockedTaskID: dependent.ID,
+		}); err != nil {
+			t.Fatalf("AddTaskDependency(%s): %v", blocker.task.ID, err)
+		}
+	}
 	observation := workflowexecution.WorkflowTaskExecutionObservation{
 		Runs: map[workflow.TaskID]workflowexecution.WorkflowTaskRunSnapshot{
 			ordinary.task.ID: {
@@ -87,7 +96,17 @@ func TestQueuedRunStatusFiltersAndPaginatesAcrossTaskSurfaces(t *testing.T) {
 		WorkflowID:  &fixture.workflowID,
 		StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindQueued},
 		LabelFilter: serverapi.WorkflowTaskLabelFilterNone(),
-		Limit:       &limit,
+		Sort: []serverapi.WorkflowTaskListSort{
+			{
+				Field:     serverapi.WorkflowTaskListSortFieldStatus,
+				Direction: serverapi.WorkflowTaskListSortDirectionAsc,
+			},
+			{
+				Field:     serverapi.WorkflowTaskListSortFieldTitle,
+				Direction: serverapi.WorkflowTaskListSortDirectionAsc,
+			},
+		},
+		Limit: &limit,
 	}
 	var listedIDs []string
 	for {
@@ -121,6 +140,10 @@ func TestQueuedRunStatusFiltersAndPaginatesAcrossTaskSurfaces(t *testing.T) {
 		if len(page.Cards) != 1 || page.Cards[0].Status.Kind != serverapi.WorkflowTaskStatusKindQueued {
 			t.Fatalf("queued Board page = %+v", page)
 		}
+		wantInterrupt := page.Cards[0].TaskID == string(launching.task.ID)
+		if page.Cards[0].Actions.CanInterrupt != wantInterrupt || page.Cards[0].Actions.CanResume {
+			t.Fatalf("queued Board actions = %+v", page.Cards[0])
+		}
 		boardIDs = append(boardIDs, page.Cards[0].TaskID)
 		if page.NextOffset == nil {
 			break
@@ -149,6 +172,9 @@ func TestQueuedRunStatusFiltersAndPaginatesAcrossTaskSurfaces(t *testing.T) {
 	}
 
 	wantIDs := []string{string(ordinary.task.ID), string(launching.task.ID)}
+	if !equalStrings(listedIDs, wantIDs) {
+		t.Fatalf("Task List queued status/title order = %v, want %v", listedIDs, wantIDs)
+	}
 	sort.Strings(wantIDs)
 	for label, got := range map[string][]string{
 		"Task List":   listedIDs,
@@ -159,6 +185,127 @@ func TestQueuedRunStatusFiltersAndPaginatesAcrossTaskSurfaces(t *testing.T) {
 		if !equalStrings(got, wantIDs) {
 			t.Fatalf("%s queued pagination IDs = %v, want %v", label, got, wantIDs)
 		}
+	}
+
+	projectedDependencies, err := dependencies.GetTaskDependencies(context.Background(), string(dependent.ID))
+	if err != nil {
+		t.Fatalf("GetTaskDependencies: %v", err)
+	}
+	blockedBy := dependencyDirection(
+		t,
+		projectedDependencies,
+		serverapi.WorkflowTaskDependencyDirectionBlockedBy,
+	)
+	if len(blockedBy.Items) != 2 {
+		t.Fatalf("queued dependencies = %+v, want two blockers", blockedBy.Items)
+	}
+	for _, item := range blockedBy.Items {
+		if item.Status.Kind != serverapi.WorkflowTaskStatusKindQueued ||
+			item.Satisfaction == nil ||
+			*item.Satisfaction != serverapi.WorkflowTaskDependencyUnsatisfied {
+			t.Fatalf("queued dependency item = %+v", item)
+		}
+	}
+}
+
+func TestAdmittedCurrentNodeWithoutLaunchingGenerationStaysInertAcrossReadSurfaces(t *testing.T) {
+	fixture := newCurrentNodeViewFixture(t, false)
+	admitted := fixture.startTask(t, "Admitted capture race")
+	if err := fixture.store.AdmitCurrentNode(fixture.ctx, admitted.currentNode); err != nil {
+		t.Fatalf("AdmitCurrentNode: %v", err)
+	}
+	dependent := fixture.createBacklogTask(t, "Admitted dependency subject")
+	if _, err := fixture.store.AddTaskDependency(fixture.ctx, workflowstore.TaskDependencyAddRequest{
+		BlockerTaskID: admitted.task.ID,
+		BlockedTaskID: dependent.ID,
+	}); err != nil {
+		t.Fatalf("AddTaskDependency: %v", err)
+	}
+
+	detail, err := fixture.detail.GetTask(fixture.ctx, string(admitted.task.ID))
+	if err != nil {
+		t.Fatalf("TaskDetail.GetTask: %v", err)
+	}
+	if detail.Status.Kind != serverapi.WorkflowTaskStatusKindActive ||
+		detail.Actions.CanInterrupt ||
+		detail.Actions.CanResume {
+		t.Fatalf("inert admitted detail = status=%+v actions=%+v", detail.Status, detail.Actions)
+	}
+
+	projectID := fixture.binding.ProjectID
+	limit := 1
+	listed, err := fixture.tasks.List(fixture.ctx, serverapi.WorkflowTaskListRequest{
+		ProjectID:   &projectID,
+		WorkflowID:  &fixture.workflowID,
+		StatusKinds: []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindActive},
+		LabelFilter: serverapi.WorkflowTaskLabelFilterNone(),
+		Limit:       &limit,
+	})
+	if err != nil {
+		t.Fatalf("TaskList.List: %v", err)
+	}
+	if len(listed.Tasks) != 1 ||
+		listed.Tasks[0].TaskID != string(admitted.task.ID) ||
+		listed.Tasks[0].Status.Kind != serverapi.WorkflowTaskStatusKindActive ||
+		listed.NextOffset != nil {
+		t.Fatalf("inert admitted Task List = %+v", listed)
+	}
+
+	board, err := fixture.board.ListNodeCards(fixture.ctx, serverapi.WorkflowBoardNodeCardsListRequest{
+		ProjectID:   fixture.binding.ProjectID,
+		WorkflowID:  fixture.workflowID,
+		NodeID:      string(fixture.agentNodeID),
+		PageSize:    1,
+		LabelFilter: serverapi.WorkflowTaskLabelFilterNone(),
+	})
+	if err != nil {
+		t.Fatalf("Board.ListNodeCards: %v", err)
+	}
+	if len(board.Cards) != 1 ||
+		board.Cards[0].TaskID != string(admitted.task.ID) ||
+		board.Cards[0].Status.Kind != serverapi.WorkflowTaskStatusKindActive ||
+		board.Cards[0].Actions.CanInterrupt ||
+		board.Cards[0].Actions.CanResume ||
+		board.NextOffset != nil {
+		t.Fatalf("inert admitted Board = %+v", board)
+	}
+
+	searchRequest := taskSearchRequest("Admitted capture race")
+	searchRequest.ProjectIDs = []string{fixture.binding.ProjectID}
+	searchRequest.StatusKinds = []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindActive}
+	searchRequest.PageSize = 1
+	searched, err := fixture.search.Search(fixture.ctx, searchRequest)
+	if err != nil {
+		t.Fatalf("TaskSearch.Search: %v", err)
+	}
+	if len(searched.Groups) != 1 ||
+		searched.Groups[0].TaskID != string(admitted.task.ID) ||
+		searched.Groups[0].Status.Kind != serverapi.WorkflowTaskStatusKindActive ||
+		searched.NextOffset != nil {
+		t.Fatalf("inert admitted Task Search = %+v", searched)
+	}
+
+	dependencies, err := NewTaskDependencies(
+		fixture.metadata,
+		fixture.projection,
+		fixture.dependencyCounter,
+	)
+	if err != nil {
+		t.Fatalf("NewTaskDependencies: %v", err)
+	}
+	projectedDependencies, err := dependencies.GetTaskDependencies(fixture.ctx, string(dependent.ID))
+	if err != nil {
+		t.Fatalf("GetTaskDependencies: %v", err)
+	}
+	blockedBy := dependencyDirection(
+		t,
+		projectedDependencies,
+		serverapi.WorkflowTaskDependencyDirectionBlockedBy,
+	)
+	if len(blockedBy.Items) != 1 ||
+		blockedBy.Items[0].TaskID != string(admitted.task.ID) ||
+		blockedBy.Items[0].Status.Kind != serverapi.WorkflowTaskStatusKindActive {
+		t.Fatalf("inert admitted dependency = %+v", blockedBy)
 	}
 }
 
