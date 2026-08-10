@@ -41,7 +41,7 @@ func observationQuestionHint(sessionID string, question serverapi.ObservationQue
 
 func observationQuestionAnswerArgs(question serverapi.ObservationQuestion) []string {
 	if question.Approval != nil || question.Ask != nil && len(question.Ask.Suggestions) > 0 {
-		return []string{"--option", "<number>", "--commentary", "<commentary>"}
+		return []string{"--option", "<number>"}
 	}
 	return []string{"--commentary", "<answer>"}
 }

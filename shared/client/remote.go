@@ -16,6 +16,29 @@ import (
 	"core/shared/serverapi"
 )
 
+type InvalidResponseError struct {
+	Operation string
+	Cause     error
+}
+
+func (e *InvalidResponseError) Error() string {
+	return fmt.Sprintf("validate %s response: %v", e.Operation, e.Cause)
+}
+func (e *InvalidResponseError) Unwrap() error { return e.Cause }
+func invalidResponseError(operation string, cause error) error {
+	return &InvalidResponseError{Operation: operation, Cause: cause}
+}
+
+func validateRuntimeLiveResponseSession(operation string, requestedSessionID string, responseSessionID string) error {
+	if responseSessionID != requestedSessionID {
+		return invalidResponseError(operation, fmt.Errorf(
+			"response session ID %q does not match requested session %q",
+			responseSessionID, requestedSessionID,
+		))
+	}
+	return nil
+}
+
 type Remote struct {
 	plan           remoteDialPlan
 	transport      rpcwire.ClientTransport
@@ -591,8 +614,8 @@ func (c *Remote) AddWorkflowTaskComment(ctx context.Context, req serverapi.Workf
 	return callUnscopedRPC[serverapi.WorkflowTaskCommentAddRequest, serverapi.WorkflowTaskCommentAddResponse](c, ctx, protocol.MethodWorkflowTaskCommentAdd, req)
 }
 
-func (c *Remote) ListWorkflowTaskComments(ctx context.Context, req serverapi.WorkflowTaskCommentListRequest) (serverapi.WorkflowTaskCommentListResponse, error) {
-	return callUnscopedRPC[serverapi.WorkflowTaskCommentListRequest, serverapi.WorkflowTaskCommentListResponse](c, ctx, protocol.MethodWorkflowTaskCommentList, req)
+func (c *Remote) ListWorkflowTaskComments(ctx context.Context, req serverapi.WorkflowTaskOffsetPageRequest) (serverapi.WorkflowTaskCommentListResponse, error) {
+	return callUnscopedRPC[serverapi.WorkflowTaskOffsetPageRequest, serverapi.WorkflowTaskCommentListResponse](c, ctx, protocol.MethodWorkflowTaskCommentList, req)
 }
 
 func (c *Remote) ReplaceWorkflowTaskComment(ctx context.Context, req serverapi.WorkflowTaskCommentReplaceRequest) error {
@@ -603,8 +626,8 @@ func (c *Remote) DeleteWorkflowTaskComment(ctx context.Context, req serverapi.Wo
 	return c.callUnscoped(ctx, protocol.MethodWorkflowTaskCommentDelete, req, &struct{}{})
 }
 
-func (c *Remote) ListWorkflowTaskActivity(ctx context.Context, req serverapi.WorkflowTaskActivityListRequest) (serverapi.WorkflowTaskActivityListResponse, error) {
-	response, err := callUnscopedRPC[serverapi.WorkflowTaskActivityListRequest, serverapi.WorkflowTaskActivityListResponse](c, ctx, protocol.MethodWorkflowTaskActivityList, req)
+func (c *Remote) ListWorkflowTaskActivity(ctx context.Context, req serverapi.WorkflowTaskOffsetPageRequest) (serverapi.WorkflowTaskActivityListResponse, error) {
+	response, err := callUnscopedRPC[serverapi.WorkflowTaskOffsetPageRequest, serverapi.WorkflowTaskActivityListResponse](c, ctx, protocol.MethodWorkflowTaskActivityList, req)
 	return validateWorkflowTaskBoundResponse("list workflow task activity", strings.TrimSpace(req.TaskID), response, err)
 }
 
@@ -655,7 +678,7 @@ func (c *Remote) ObserveWorkflowTask(ctx context.Context, req serverapi.Workflow
 		return serverapi.WorkflowTaskObservationResponse{}, err
 	}
 	if err := response.Validate(); err != nil {
-		return serverapi.WorkflowTaskObservationResponse{}, fmt.Errorf("validate workflow task observation response: %w", err)
+		return serverapi.WorkflowTaskObservationResponse{}, invalidResponseError("workflow task observation", err)
 	}
 	return response, nil
 }
@@ -850,7 +873,17 @@ func (c *Remote) LiveStop(ctx context.Context, req serverapi.RuntimeLiveStopRequ
 }
 
 func (c *Remote) LiveWait(ctx context.Context, req serverapi.RuntimeLiveWaitRequest) (serverapi.RuntimeLiveWaitResponse, error) {
-	return callDedicatedRPC[serverapi.RuntimeLiveWaitRequest, serverapi.RuntimeLiveWaitResponse](c, ctx, "runtime-live-wait", protocol.MethodRuntimeLiveWait, req)
+	response, err := callDedicatedRPC[serverapi.RuntimeLiveWaitRequest, serverapi.RuntimeLiveWaitResponse](c, ctx, "runtime-live-wait", protocol.MethodRuntimeLiveWait, req)
+	if err != nil {
+		return serverapi.RuntimeLiveWaitResponse{}, err
+	}
+	if err := response.Validate(); err != nil {
+		return serverapi.RuntimeLiveWaitResponse{}, invalidResponseError("runtime live wait", err)
+	}
+	if err := validateRuntimeLiveResponseSession("runtime live wait", req.SessionID, response.SessionID); err != nil {
+		return serverapi.RuntimeLiveWaitResponse{}, err
+	}
+	return response, nil
 }
 
 func (c *Remote) LiveWatch(ctx context.Context, req serverapi.RuntimeLiveWatchRequest) (serverapi.RuntimeLiveWatchResponse, error) {
@@ -859,7 +892,10 @@ func (c *Remote) LiveWatch(ctx context.Context, req serverapi.RuntimeLiveWatchRe
 		return serverapi.RuntimeLiveWatchResponse{}, err
 	}
 	if err := response.Validate(); err != nil {
-		return serverapi.RuntimeLiveWatchResponse{}, fmt.Errorf("validate runtime live watch response: %w", err)
+		return serverapi.RuntimeLiveWatchResponse{}, invalidResponseError("runtime live watch", err)
+	}
+	if err := validateRuntimeLiveResponseSession("runtime live watch", req.SessionID, response.SessionID); err != nil {
+		return serverapi.RuntimeLiveWatchResponse{}, err
 	}
 	return response, nil
 }

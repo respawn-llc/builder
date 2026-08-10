@@ -99,7 +99,7 @@ function ManualMoveDialogContent({
   requiredValues: readonly Readonly<{
     nodeKey: string;
     outputName: string;
-    description: string;
+    description: string | null;
     resolvedValue: string | null;
   }>[];
   selectedChoice: Readonly<{
@@ -262,7 +262,7 @@ function ManualMoveDetailsPhase({
   requiredValues: readonly Readonly<{
     nodeKey: string;
     outputName: string;
-    description: string;
+    description: string | null;
     resolvedValue: string | null;
   }>[];
   selectedChoice: Readonly<{
@@ -287,7 +287,7 @@ function ManualMoveDetailsPhase({
             <TextArea
               key={`${value.nodeKey}:${value.outputName}`}
               label={value.outputName}
-              hint={value.description}
+              hint={value.description ?? undefined}
               onChange={(event) => {
                 onValueChange(value.nodeKey, value.outputName, event.target.value);
               }}

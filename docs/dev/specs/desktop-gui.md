@@ -11,6 +11,15 @@
 - Keep unsent local drafts for new Tasks, comments, and editable Task or Project text while the window stays open. Do not queue or replay mutations. After reconnection, refresh server state and let the operator submit preserved drafts manually; a save overwrites remote changes.
 - Local capabilities such as clipboard, directory selection, separate windows, window controls, and notifications are distinct from server readiness. When unavailable, explain the unavailable action; cosmetic shell behavior may be absent in a browser presentation.
 - Text input is plain multiline Markdown. Rich Markdown preserves every source newline as a visible line break. Rich Markdown remains within its available surface width; only a code block may scroll horizontally inside its own block. Task Detail and Workflow Editor content use the approved rich Markdown presentation with sanitized raw-HTML and link behavior. Board previews are flattened text previews: they strip Markdown formatting and raw HTML without rendering rich structure or controls, preserve readable text labels, and remain bounded for dense boards. Completed supported code is syntax-highlighted and selectable in rich content; incomplete code remains selectable plain text.
+- Task Description and Goal objective use one shared large Markdown field. Desktop does not maintain feature-specific copies of its read or edit presentation.
+- The shared Markdown field has one base read-and-edit presentation and one optional collapsible presentation. The collapsible presentation adds overflow detection, a fade, and an accessible Expand action without creating another Markdown editor.
+- Each destination configures the editor's minimum height and the collapsible presentation's height clamp.
+- The destination owns the field's Markdown Draft, editing state, expanded state, dirty-Draft reconciliation, and server mutation. The field reports user editing, expansion, Draft-change, and submission intents without saving.
+- The destination supplies the field's accessible label, placeholder, disabled state, and mutation error. The field presents no built-in visible label, associates a supplied error with the editor, and contains no Task or Goal copy.
+- In enabled read mode, the field renders selectable rich Markdown. When the destination enables task-list interaction, selecting a Markdown task-list checkbox updates the destination-owned Draft without saving it.
+- A plain click or tap with no text selection enters editing. Dragging selects rendered Markdown without editing. Links and task-list checkboxes perform their own actions. Keyboard focus keeps the rendered presentation, and Enter or Space enters editing.
+- In disabled mode, the field renders read-only rich Markdown or its empty placeholder. It offers no editing focus or task-list interaction, and it does not change destination-owned presentation state.
+- Leaving the active editor returns the field to rendered Markdown without discarding its Draft.
 - When focus is in a Desktop text field outside the Workflow editor, Command+Enter on macOS and Ctrl+Enter on Windows or Linux must invoke that field's existing submit, save, or selection action. The shortcut must follow the same validation, disabled state, and confirmation behavior as that action.
 - The shortcut must do nothing when the focused text field has no existing submission action.
 - The shortcut must not change the field's ordinary Enter behavior.
@@ -232,17 +241,25 @@
 - Task creation and editing show server validation errors.
 - Task Detail can appear inline, in a separate window when supported, or as a standalone destination. Reopening an already separate Task Detail focuses it rather than duplicating it. Closing it after a mutation refreshes visible content.
 - On wide layouts that place Description and Metadata side by side, both islands have exactly the same height. Their shared height equals the larger intrinsic island height.
+- Task Description uses the shared collapsible large Markdown field.
 - Long descriptions start collapsed only when they overflow, at roughly half the available height and never fewer than about five or more than about ten rendered lines, with an expand action. Expansion lasts until that Task Detail closes, keeps the description top anchored, grows downward, and occurs automatically for editing.
 - A Markdown task-list item uses one product-styled checkbox in place of its list bullet.
 - Selecting a checkbox in an editable Task description updates the local Markdown body Draft without saving it. The existing Task Save action persists the changed body.
-- From an editable Task description, the text-field submission shortcut must save the current Task title and body together.
-- From an editable Task description, the text-field submission shortcut must close description editing.
+- From an editable Task description with a valid title and a dirty Draft, the text-field submission shortcut must submit the current Task title and body together.
+- From an editable Task description with a clean Draft, the text-field submission shortcut must close description editing without a Task mutation.
+- While a dirty Task Description Save is pending, editing must remain active and the Draft must remain complete.
+- A successful dirty Task Description Save must close editing after the server operation completes.
+- A failed dirty Task Description Save must keep editing active, preserve the complete Draft, and present the mutation error.
 - Task Detail begins with Inbox, which contains current blockers and answer, Approval, and Resume controls. Comments have composer, list, edit, delete, and count. There is no completed Workflow movement or execution-history view.
 - Task Detail shows Task Short ID, title, Markdown body, Project, Workflow, source workspace name and root, all Current Nodes and states, completion state, and available actions including Task Delete. When available, it also shows Execution Target, managed worktree, requested revision, resolved commit, branch, Agent role and execution state, Session identity, source URL, and assignee or column.
 - Source root and Execution Root are not separate facts. Unavailable expected facts are hidden; useful continuity facts may be empty or unassigned; unexpected meaningful absence is an unavailable or error state. Unavailable managed worktrees have no managed-worktree fact.
 - Visible values copy by selecting the value itself, with clipboard feedback that identifies the copied value on success and includes the error on failure. Short commit display copies the complete commit. Actions that copy deliberately hidden content remain explicit controls.
 - Source URL is read-only. Valid web, secure web, and mail links use their host as the label and open externally; other values are plain source text.
-- Core Task Detail, Task attention, and comments load independently. Attention has its own loading and retry state and never blocks core detail. Opening from Inbox focuses its requested attention item once available. Live server changes update open Task Detail without replacing unsaved title or body edits or collapsing the surface.
+- Core Task Detail, Task attention, Comments, and Activity load independently. Comments and Activity start their first page asynchronously and in parallel without blocking other Task Detail content. Attention has its own loading and retry state and never blocks core detail. Opening from Inbox focuses its requested attention item once available. Live server changes update open Task Detail without replacing unsaved title or body edits or collapsing the surface.
+- Comments and Activity use 50 rows per page, newest first, and retain at most 10 nearby pages per feed.
+- Each feed uses edge-driven infinite scroll in both directions. Loading beyond the page budget evicts the farthest page on the opposite side, and returning to an evicted side reloads it.
+- Live feed changes refresh the retained bounded pages. Desktop keeps the visible row steady when it remains loaded and otherwise uses the nearest loaded position.
+- A page-edge failure retains loaded rows and offers Retry at that edge. A first-page failure and an empty feed use the standard feed error and empty states.
 - A non-attention Task Detail failure uses the standard error state; reopening or refreshing Task Detail is its recovery path. Deleted comments are hidden.
 
 ## Task Dependencies
@@ -298,7 +315,7 @@
 - Ordinary New Task keeps header Back and X available while its request is pending.
 - A failed related creation restores header Back and X and preserves the form recovery path.
 - Successful Project deletion from Project Edit closes that mounted Project Edit sidebar.
-- Scroll restoration resumes at the nearest available loaded position and ordinary edge-driven loading continues from there.
+- Scroll restoration reuses bounded cached feed pages while the ordinary query cache retains them, refreshes them asynchronously, and resumes at the nearest available loaded pixel position. A cold cache opens the newest page. Restoration never requests additional pages solely to reach the prior offset, and ordinary edge-driven loading continues from there.
 - Inbox Previous and Next replace the current Inbox Task without adding sidebar history.
 - Related-Task navigation and Dependency Add are unavailable while a Task or comment save is pending.
 - Relationship Remove keeps its independent availability while another Task Detail save is pending.

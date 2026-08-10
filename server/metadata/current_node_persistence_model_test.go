@@ -258,13 +258,15 @@ ORDER BY seqno`, name)
 			return nil, err
 		}
 		for columnIndexRows.Next() {
-			var columnName string
+			var columnName sql.NullString
 			if err := columnIndexRows.Scan(&columnName); err != nil {
 				_ = columnIndexRows.Close()
 				_ = indexRows.Close()
 				return nil, err
 			}
-			index.columns = append(index.columns, columnName)
+			if columnName.Valid {
+				index.columns = append(index.columns, columnName.String)
+			}
 		}
 		if err := columnIndexRows.Close(); err != nil {
 			_ = indexRows.Close()

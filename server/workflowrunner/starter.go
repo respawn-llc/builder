@@ -224,13 +224,20 @@ func (s *Starter) SteerCurrentNodeAssignment(
 		reference:  reference,
 		completion: steer,
 		prepared:   prepared,
+		retainSourceRuntime: admission.RuntimeAvailable &&
+			input.ContextMode == workflow.ContextModeContinueSession &&
+			!input.EnteringEdge.RequiresApproval &&
+			workflow.CanonicalContextSource(input.EnteringEdge.ContextSource).Kind == workflow.ContextSourceImmediateSource &&
+			input.SourceSessionID != nil &&
+			prepared.plan.Descriptor.SessionID() == *input.SourceSessionID,
 	}, nil
 }
 
 type currentNodeAgentAssignmentSteer struct {
-	reference  workflow.CurrentNodeReference
-	completion runtime.WorkflowAssignmentSteer
-	prepared   preparedCurrentNodeAgentSession
+	reference           workflow.CurrentNodeReference
+	completion          runtime.WorkflowAssignmentSteer
+	prepared            preparedCurrentNodeAgentSession
+	retainSourceRuntime bool
 }
 
 func (s *currentNodeAgentAssignmentSteer) Wait(ctx context.Context) (session.CommitReceipt, error) {
@@ -477,6 +484,9 @@ func (s *Starter) currentNodeAgentSessionForStart(
 	}
 	if !receipt.Committed {
 		return preparedCurrentNodeAgentSession{}, nil, errors.New("current node assignment was not committed")
+	}
+	if assignment.retainSourceRuntime {
+		return assignment.prepared, sessionruntime.CurrentAgentResource{}, nil
 	}
 	return assignment.prepared, sessionruntime.ReplaceAgentResource{}, nil
 }
