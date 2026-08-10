@@ -6,6 +6,7 @@ import (
 	serverbootstrap "core/server/bootstrap"
 	"core/server/core"
 	"core/server/session"
+	"core/shared/apicontract"
 	remoteclient "core/shared/client"
 	"core/shared/protocol"
 	"core/shared/runtimeids"
@@ -224,8 +225,8 @@ func TestGatewayRunPromptValidatesTypedIntentCallerAndSelector(t *testing.T) {
 	callGateway(t, conn, "attach-project", protocol.MethodAttachProject, protocol.AttachProjectRequest{ProjectID: appCore.ProjectID()}, nil)
 
 	valid := map[string]json.RawMessage{
-		"omitted caller": []byte(`{"client_request_id":"raw-omitted","intent":{"kind":"open_existing","session_id":"missing-session"},"prompt":"hello"}`),
-		"null caller":    []byte(`{"client_request_id":"raw-null","intent":{"kind":"open_existing","session_id":"missing-session"},"caller_session_id":null,"prompt":"hello","overrides":{"agent_role":null}}`),
+		"omitted caller": []byte(`{"intent":{"kind":"open_existing","session_id":"missing-session"},"prompt":"hello"}`),
+		"null caller":    []byte(`{"intent":{"kind":"open_existing","session_id":"missing-session"},"caller_session_id":null,"prompt":"hello","overrides":{"agent_role":null}}`),
 	}
 	var validCode int
 	for name, params := range valid {
@@ -246,12 +247,12 @@ func TestGatewayRunPromptValidatesTypedIntentCallerAndSelector(t *testing.T) {
 	}
 
 	for name, params := range map[string]json.RawMessage{
-		"empty caller":        []byte(`{"client_request_id":"raw-empty-caller","caller_session_id":"","prompt":"hello"}`),
-		"whitespace caller":   []byte(`{"client_request_id":"raw-space-caller","caller_session_id":" \t ","prompt":"hello"}`),
-		"legacy selected":     []byte(`{"client_request_id":"raw-legacy-selected","selected_session_id":"missing-session","prompt":"hello"}`),
-		"legacy parent":       []byte(`{"client_request_id":"raw-legacy-parent","parent_session_id":"parent-session","prompt":"hello"}`),
-		"empty selector":      []byte(`{"client_request_id":"raw-empty-selector","prompt":"hello","overrides":{"agent_role":""}}`),
-		"whitespace selector": []byte(`{"client_request_id":"raw-space-selector","prompt":"hello","overrides":{"agent_role":" \t "}}`),
+		"empty caller":        []byte(`{"caller_session_id":"","prompt":"hello"}`),
+		"whitespace caller":   []byte(`{"caller_session_id":" \t ","prompt":"hello"}`),
+		"legacy selected":     []byte(`{"selected_session_id":"missing-session","prompt":"hello"}`),
+		"legacy parent":       []byte(`{"parent_session_id":"parent-session","prompt":"hello"}`),
+		"empty selector":      []byte(`{"prompt":"hello","overrides":{"agent_role":""}}`),
+		"whitespace selector": []byte(`{"prompt":"hello","overrides":{"agent_role":" \t "}}`),
 	} {
 		t.Run(name, func(t *testing.T) {
 			resp := callGatewayRaw(t, conn, "raw-invalid-"+name, protocol.MethodRunPrompt, params)
@@ -272,7 +273,7 @@ func TestGatewayRunPromptRejectsMixedTypedAndLegacyLaunchFields(t *testing.T) {
 	handshakeGateway(t, conn)
 	callGateway(t, conn, "attach-project", protocol.MethodAttachProject, protocol.AttachProjectRequest{ProjectID: appCore.ProjectID()}, nil)
 
-	raw := json.RawMessage(`{"client_request_id":"mixed-launch","intent":{"kind":"open_existing","session_id":"target"},"selected_session_id":"legacy","prompt":"hello"}`)
+	raw := json.RawMessage(`{"intent":{"kind":"open_existing","session_id":"target"},"selected_session_id":"legacy","prompt":"hello"}`)
 	resp := callGatewayRaw(t, conn, "mixed-launch", protocol.MethodRunPrompt, raw)
 	if resp.Error == nil || resp.Error.Code != protocol.ErrCodeInvalidParams {
 		t.Fatalf("mixed launch response = %+v, want invalid params", resp)
@@ -567,7 +568,6 @@ func TestDecodeAndHandlePreservesWorktreeCreateOwnership(t *testing.T) {
 		protocol.Request{
 			ID: "worktree-create-error",
 			Params: mustJSON(t, serverapi.WorktreeCreateRequest{
-				ClientRequestID:  "request-1",
 				SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
 				SessionID:        "session",
 				BaseRef:          "HEAD",
@@ -584,6 +584,69 @@ func TestDecodeAndHandlePreservesWorktreeCreateOwnership(t *testing.T) {
 	}
 	if !reflect.DeepEqual(response.Error.Data, source.RPCErrorData()) {
 		t.Fatalf("response data = %s, want %s", response.Error.Data, source.RPCErrorData())
+	}
+}
+
+type countingWorktreeCreateGatewayDependencies struct {
+	*core.Core
+	worktrees apicontract.WorktreeService
+}
+
+func (d countingWorktreeCreateGatewayDependencies) WorktreeClient() apicontract.WorktreeService {
+	return d.worktrees
+}
+
+type countingWorktreeCreateService struct {
+	apicontract.WorktreeService
+	requests []serverapi.WorktreeCreateRequest
+}
+
+func (s *countingWorktreeCreateService) CreateWorktree(
+	_ context.Context,
+	request serverapi.WorktreeCreateRequest,
+) (serverapi.WorktreeCreateResponse, error) {
+	s.requests = append(s.requests, request)
+	return serverapi.WorktreeCreateResponse{}, nil
+}
+
+func TestGatewayWorktreeCreateMakesOneDownstreamCall(t *testing.T) {
+	appCore, _ := newGatewayTestCore(t, true, true)
+	sessionStore := createGatewayAuthoritativeSession(t, appCore)
+	service := &countingWorktreeCreateService{
+		WorktreeService: appCore.WorktreeClient(),
+	}
+	gateway, err := NewGateway(
+		countingWorktreeCreateGatewayDependencies{
+			Core:      appCore,
+			worktrees: service,
+		},
+		protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"},
+	)
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	server := httptest.NewServer(gateway.Handler())
+	defer server.Close()
+	remote, err := remoteclient.DialRemoteURLForSession(
+		context.Background(),
+		"ws"+server.URL[len("http"):],
+		sessionStore.Meta().SessionID,
+	)
+	if err != nil {
+		t.Fatalf("DialRemoteURLForSession: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+	setupID := serverapi.NewWorktreeSetupOperationID()
+	if _, err := remote.CreateWorktree(context.Background(), serverapi.WorktreeCreateRequest{
+		SetupOperationID: setupID,
+		SessionID:        sessionStore.Meta().SessionID,
+		BaseRef:          "HEAD",
+	}); err != nil {
+		t.Fatalf("CreateWorktree: %v", err)
+	}
+	if len(service.requests) != 1 ||
+		service.requests[0].SetupOperationID != setupID {
+		t.Fatalf("downstream create requests = %+v, want one", service.requests)
 	}
 }
 
@@ -646,11 +709,11 @@ func TestGatewayGoalRPCWithoutProjectAttachmentReturnsServiceErrors(t *testing.T
 		code   int
 	}{
 		{name: "show", method: protocol.MethodRuntimeGoalShow, params: serverapi.RuntimeGoalShowRequest{SessionID: "missing-session"}, code: protocol.ErrCodeInternalError},
-		{name: "set", method: protocol.MethodRuntimeGoalSet, params: serverapi.RuntimeGoalSetRequest{ClientRequestID: "goal-set", SessionID: "missing-session", Objective: "ship", Actor: "user"}, code: protocol.ErrCodeInternalError},
-		{name: "pause", method: protocol.MethodRuntimeGoalPause, params: serverapi.RuntimeGoalStatusRequest{ClientRequestID: "goal-pause", SessionID: "missing-session", Actor: "user"}, code: protocol.ErrCodeInternalError},
-		{name: "resume", method: protocol.MethodRuntimeGoalResume, params: serverapi.RuntimeGoalStatusRequest{ClientRequestID: "goal-resume", SessionID: "missing-session", Actor: "user"}, code: protocol.ErrCodeInternalError},
-		{name: "complete", method: protocol.MethodRuntimeGoalComplete, params: serverapi.RuntimeGoalStatusRequest{ClientRequestID: "goal-complete", SessionID: "missing-session", Actor: "agent"}, code: protocol.ErrCodeInternalError},
-		{name: "clear", method: protocol.MethodRuntimeGoalClear, params: serverapi.RuntimeGoalClearRequest{ClientRequestID: "goal-clear", SessionID: "missing-session", Actor: "user"}, code: protocol.ErrCodeInternalError},
+		{name: "set", method: protocol.MethodRuntimeGoalSet, params: serverapi.RuntimeGoalSetRequest{SessionID: "missing-session", Objective: "ship", Actor: "user"}, code: protocol.ErrCodeInternalError},
+		{name: "pause", method: protocol.MethodRuntimeGoalPause, params: serverapi.RuntimeGoalStatusRequest{SessionID: "missing-session", Actor: "user"}, code: protocol.ErrCodeInternalError},
+		{name: "resume", method: protocol.MethodRuntimeGoalResume, params: serverapi.RuntimeGoalStatusRequest{SessionID: "missing-session", Actor: "user"}, code: protocol.ErrCodeInternalError},
+		{name: "complete", method: protocol.MethodRuntimeGoalComplete, params: serverapi.RuntimeGoalStatusRequest{SessionID: "missing-session", Actor: "agent"}, code: protocol.ErrCodeInternalError},
+		{name: "clear", method: protocol.MethodRuntimeGoalClear, params: serverapi.RuntimeGoalClearRequest{SessionID: "missing-session", Actor: "user"}, code: protocol.ErrCodeInternalError},
 	} {
 		err := callGatewayExpectError(t, conn, "goal-"+tc.name, tc.method, tc.params)
 		if err.Code != tc.code {

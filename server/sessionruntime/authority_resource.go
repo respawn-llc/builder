@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"strings"
 	"sync"
 
 	"core/server/runlog"
 	"core/server/runtime"
+	"core/server/runtimecommand"
 	"core/server/runtimewire"
 	"core/server/session"
 	"core/server/tools"
@@ -45,16 +45,9 @@ type AgentResourceDescriptor struct {
 
 type AgentResourceEventFeed func(AgentResourceDescriptor, runtime.Event)
 
-type AgentResourceRetainer func() (io.Closer, error)
-
 type AgentResourceLifecycle interface {
-	ResourceReady(context.Context, AgentResourceDescriptor, *runtime.Engine, AgentResourceRetainer) error
+	ResourceReady(context.Context, AgentResourceDescriptor, *runtime.Engine) error
 	ResourceDraining(context.Context, AgentResourceDescriptor) error
-}
-
-type AgentResourceStepLifecycle interface {
-	StepBegan(context.Context, AgentResourceDescriptor, runtime.StepLifecycleSnapshot) error
-	StepEnded(context.Context, AgentResourceDescriptor, runtime.StepLifecycleSnapshot) error
 }
 
 type AgentResourceSelection interface {
@@ -121,25 +114,15 @@ func (a RuntimeAttachment) Release(ctx context.Context, policy RuntimeReleasePol
 	})
 }
 
-type ResourceRetention struct {
-	resource *agentResource
-	once     sync.Once
-	err      error
-}
-
-func (r *ResourceRetention) Close() error {
-	if r == nil || r.resource == nil {
-		return nil
-	}
-	r.once.Do(func() {
-		r.err = r.resource.releasePin()
-	})
-	return r.err
-}
-
 type AgentRuntimeBridge struct {
 	authority *Authority
 	resource  runtimeids.SessionResourceRef
+}
+
+type RuntimeEventTarget struct {
+	Resource runtimeids.SessionResourceRef
+	Engine   *runtime.Engine
+	Events   *runtimecommand.Queue
 }
 
 func (b AgentRuntimeBridge) WithEngine(ctx context.Context, callback func(context.Context, *runtime.Engine) error) error {
@@ -147,6 +130,31 @@ func (b AgentRuntimeBridge) WithEngine(ctx context.Context, callback func(contex
 		return errors.New("agent runtime bridge is uninitialized")
 	}
 	return b.authority.WithRuntime(ctx, b.resource, callback)
+}
+
+func (b AgentRuntimeBridge) WithRuntimeLifetime(callback func(context.Context) error) error {
+	if b.authority == nil {
+		return errors.New("agent runtime bridge is uninitialized")
+	}
+	if callback == nil {
+		return errors.New("agent runtime lifetime callback is required")
+	}
+	b.authority.mu.Lock()
+	resource := b.authority.resources[b.resource.SessionID()]
+	b.authority.mu.Unlock()
+	if resource == nil {
+		return runtimeUnavailableError(b.resource)
+	}
+	resource.mu.Lock()
+	if resource.ref != b.resource || resource.rejectsNewUseLocked() {
+		resource.mu.Unlock()
+		return runtimeUnavailableError(b.resource)
+	}
+	resourceCtx := resource.ctx
+	resource.mu.Unlock()
+	ctx, stop := MergeContexts(resourceCtx, b.authority.lifecycleCtx)
+	defer stop()
+	return callback(ctx)
 }
 
 type AgentRunner func(context.Context, ExecutionScope, AgentRuntimeBridge) error
@@ -175,6 +183,9 @@ type agentResource struct {
 	ownerlessDisposition agentResourceOwnerlessDisposition
 	store                *session.Store
 	engine               *runtime.Engine
+	events               *runtimecommand.Queue
+	worktreeBoundary     *worktreeBoundaryRecord
+	reducerBoundary      *reducerBoundaryRecord
 	eventBridge          *runtimewire.EventBridge
 	logger               *runlog.RunLogger
 	localTools           *runtimewire.LocalToolRegistryBinding
@@ -204,6 +215,15 @@ func (r *agentResource) descriptor() AgentResourceDescriptor {
 	return r.descriptorLocked()
 }
 
+func (r *agentResource) hasInFlightUseLocked() bool {
+	return r.current != nil ||
+		r.worktreeBoundary != nil ||
+		r.reducerBoundary != nil ||
+		r.pins != 0 ||
+		r.callbacks != 0 ||
+		r.steps != 0
+}
+
 func (r *agentResource) signalLocked() {
 	close(r.changed)
 	r.changed = make(chan struct{})
@@ -212,7 +232,7 @@ func (r *agentResource) signalLocked() {
 func (r *agentResource) currentExecution() (ExecutionHandle, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.current == nil {
+	if r.current == nil || r.current.phase == executionPhaseFinalizing {
 		return nil, false
 	}
 	return executionHandle{execution: r.current}, true
@@ -250,7 +270,7 @@ func (r *agentResource) requestRetirementIfOwnerless() {
 	r.mu.Unlock()
 }
 
-func (r *agentResource) withEngine(ctx context.Context, ref runtimeids.SessionResourceRef, callback func(context.Context, *runtime.Engine) error) (err error) {
+func (r *agentResource) withRuntimeEvents(ctx context.Context, ref runtimeids.SessionResourceRef, callback func(context.Context, RuntimeEventTarget) error) (err error) {
 	if callback == nil {
 		return errors.New("agent resource callback is required")
 	}
@@ -258,14 +278,14 @@ func (r *agentResource) withEngine(ctx context.Context, ref runtimeids.SessionRe
 		return err
 	}
 	r.mu.Lock()
-	if r.ref != ref || r.rejectsNewUseLocked() || r.engine == nil {
+	if r.ref != ref || r.rejectsNewUseLocked() || r.engine == nil || r.events == nil {
 		r.mu.Unlock()
 		return errors.Join(
 			serverapi.ErrRuntimeUnavailable,
 			fmt.Errorf("agent resource %s generation %d is unavailable", ref.SessionID(), ref.Generation()),
 		)
 	}
-	engine := r.engine
+	target := RuntimeEventTarget{Resource: r.ref, Engine: r.engine, Events: r.events}
 	r.callbacks++
 	r.signalLocked()
 	r.mu.Unlock()
@@ -274,6 +294,32 @@ func (r *agentResource) withEngine(ctx context.Context, ref runtimeids.SessionRe
 			err = errors.Join(err, releaseErr)
 		}
 	}()
+	return callback(ctx, target)
+}
+
+func (r *agentResource) withEngine(ctx context.Context, ref runtimeids.SessionResourceRef, callback func(context.Context, *runtime.Engine) error) error {
+	if callback == nil {
+		return errors.New("agent resource callback is required")
+	}
+	return r.withRuntimeEvents(ctx, ref, func(callbackCtx context.Context, target RuntimeEventTarget) error {
+		return callback(callbackCtx, target.Engine)
+	})
+}
+
+func (r *agentResource) withEngineUnderAdmission(ctx context.Context, callback func(context.Context, *runtime.Engine) error) error {
+	if callback == nil {
+		return errors.New("agent resource callback is required")
+	}
+	r.mu.Lock()
+	if r.rejectsNewUseLocked() || r.engine == nil {
+		r.mu.Unlock()
+		return runtimeUnavailableError(r.ref)
+	}
+	engine := r.engine
+	r.callbacks++
+	r.signalLocked()
+	r.mu.Unlock()
+	defer r.releaseCallbackCount()
 	return callback(ctx, engine)
 }
 
@@ -328,9 +374,7 @@ func (r *agentResource) publishReady(ctx context.Context) error {
 	descriptor := r.descriptorLocked()
 	engine := r.engine
 	r.mu.Unlock()
-	return r.authority.options.resourceLifecycle.ResourceReady(ctx, descriptor, engine, func() (io.Closer, error) {
-		return r.authority.retainResource(r.ref)
-	})
+	return r.authority.options.resourceLifecycle.ResourceReady(ctx, descriptor, engine)
 }
 
 func (r *agentResource) closeResource(ctx context.Context) error {
@@ -345,8 +389,37 @@ func (r *agentResource) closeResource(ctx context.Context) error {
 	case AgentResourceBuilding:
 		r.mu.Unlock()
 		return fmt.Errorf("agent resource %s generation %d is still building", r.ref.SessionID(), r.ref.Generation())
+	case AgentResourceDraining:
+		for r.state != AgentResourceClosed {
+			changed := r.changed
+			r.mu.Unlock()
+			select {
+			case <-changed:
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			}
+			r.mu.Lock()
+		}
+		r.mu.Unlock()
+		return nil
 	}
 	r.state = AgentResourceDraining
+	r.signalLocked()
+	r.mu.Unlock()
+	return r.finishResourceClose(ctx)
+}
+
+func (r *agentResource) finishResourceClose(ctx context.Context) error {
+	r.mu.Lock()
+	if r.state != AgentResourceDraining {
+		r.mu.Unlock()
+		return fmt.Errorf(
+			"agent resource %s generation %d cannot finish close from state %d",
+			r.ref.SessionID(),
+			r.ref.Generation(),
+			r.state,
+		)
+	}
 	r.cancel()
 	r.signalLocked()
 	notifyDraining := r.lifecycleReady && !r.lifecycleDraining && r.authority.options.resourceLifecycle != nil
@@ -376,16 +449,65 @@ func (r *agentResource) closeResource(ctx context.Context) error {
 		r.mu.Lock()
 	}
 	closeEngine := r.close
+	r.mu.Unlock()
+	runtimeStateErr := r.closeRuntimeState(ctx, engine)
+	if runtimeStateErr != nil {
+		return errors.Join(lifecycleErr, interruptErr, runtimeStateErr)
+	}
+	r.mu.Lock()
 	r.state = AgentResourceClosed
 	r.signalLocked()
 	r.mu.Unlock()
 	if closeEngine == nil {
-		return lifecycleErr
+		return errors.Join(lifecycleErr, interruptErr)
 	}
 	return errors.Join(lifecycleErr, interruptErr, closeEngine())
 }
 
-func (r *agentResource) StepBegan(ctx context.Context, snapshot runtime.StepLifecycleSnapshot) error {
+func (r *agentResource) closeRuntimeState(ctx context.Context, engine *runtime.Engine) error {
+	settle := func() error {
+		var engineErr error
+		if engine != nil {
+			engineErr = engine.ApplyRuntimeCloseUnderAdmission()
+		}
+		r.mu.Lock()
+		r.settleWorktreeBoundaryLocked(runtimeUnavailableError(r.ref))
+		r.mu.Unlock()
+		return engineErr
+	}
+	if r.events == nil {
+		return settle()
+	}
+	deferred, err := runtimecommand.Submit(
+		context.Background(),
+		r.events,
+		struct{}{},
+		func(
+			_ runtimecommand.Admission,
+			_ struct{},
+			complete func(struct{}, error),
+		) error {
+			complete(struct{}{}, settle())
+			return nil
+		},
+	)
+	if err != nil {
+		if errors.Is(err, runtimecommand.ErrUnavailable) {
+			return settle()
+		}
+		return err
+	}
+	_, err = deferred.Await(ctx)
+	if errors.Is(err, runtimecommand.ErrUnavailable) {
+		return settle()
+	}
+	return err
+}
+
+func (r *agentResource) StepBegan(
+	context.Context,
+	runtime.StepLifecycleSnapshot,
+) error {
 	r.mu.Lock()
 	if r.rejectsNewStepLocked() {
 		r.mu.Unlock()
@@ -401,15 +523,14 @@ func (r *agentResource) StepBegan(ctx context.Context, snapshot runtime.StepLife
 	}
 	r.steps++
 	r.signalLocked()
-	descriptor := r.descriptorLocked()
 	r.mu.Unlock()
-	if r.authority.options.stepLifecycle == nil {
-		return nil
-	}
-	return r.authority.options.stepLifecycle.StepBegan(ctx, descriptor, snapshot)
+	return nil
 }
 
-func (r *agentResource) StepEnded(ctx context.Context, snapshot runtime.StepLifecycleSnapshot) error {
+func (r *agentResource) StepEnded(
+	context.Context,
+	runtime.StepLifecycleSnapshot,
+) error {
 	r.mu.Lock()
 	if r.steps == 0 {
 		rejected := r.rejectsNewStepLocked()
@@ -419,12 +540,7 @@ func (r *agentResource) StepEnded(ctx context.Context, snapshot runtime.StepLife
 		}
 		panic(fmt.Sprintf("agent resource %s generation %d engine step underflow", r.ref.SessionID(), r.ref.Generation()))
 	}
-	descriptor := r.descriptorLocked()
 	r.mu.Unlock()
-	var publishErr error
-	if r.authority.options.stepLifecycle != nil {
-		publishErr = r.authority.options.stepLifecycle.StepEnded(ctx, descriptor, snapshot)
-	}
 	r.mu.Lock()
 	if r.steps != 1 {
 		r.mu.Unlock()
@@ -433,7 +549,7 @@ func (r *agentResource) StepEnded(ctx context.Context, snapshot runtime.StepLife
 	r.steps--
 	r.signalLocked()
 	r.mu.Unlock()
-	return publishErr
+	return nil
 }
 
 func (r *agentResource) rejectsNewUseLocked() bool {
@@ -506,7 +622,12 @@ func (a *Authority) ReleaseRuntime(ctx context.Context, request RuntimeReleaseRe
 	sessionID := request.Resource.SessionID()
 	gate := a.gateFor(sessionID)
 	gate.lock.Lock()
-	defer gate.lock.Unlock()
+	gateHeld := true
+	defer func() {
+		if gateHeld {
+			gate.lock.Unlock()
+		}
+	}()
 
 	a.mu.Lock()
 	resource := a.resources[sessionID]
@@ -539,13 +660,9 @@ func (a *Authority) ReleaseRuntime(ctx context.Context, request RuntimeReleaseRe
 			resource.mu.Unlock()
 			return RuntimeReleaseResult{}, nil
 		}
-		inFlight := resource.current != nil ||
-			resource.pins != 0 ||
-			resource.callbacks != 0 ||
-			resource.steps != 0
+		inFlight := resource.hasInFlightUseLocked()
 		queued := resource.engine != nil && resource.engine.HasQueuedUserWork()
-		scheduled := resource.engine != nil && resource.engine.HasScheduledQueuedUserWork()
-		if inFlight || scheduled || (!request.DropOwner && queued) {
+		if inFlight || (!request.DropOwner && queued) {
 			if request.DropOwner {
 				resource.ownerlessDisposition = agentResourceRetireWhenIdle
 			}
@@ -553,7 +670,10 @@ func (a *Authority) ReleaseRuntime(ctx context.Context, request RuntimeReleaseRe
 			return RuntimeReleaseResult{Active: true}, nil
 		}
 	}
-	closed, closeErr := a.closeAdmittedResourceLocked(ctx, resource)
+	a.beginResourceCloseLocked(resource)
+	gate.lock.Unlock()
+	gateHeld = false
+	closed, closeErr := a.closeAdmittedResource(ctx, resource)
 	return RuntimeReleaseResult{Released: closed}, closeErr
 }
 
@@ -571,24 +691,25 @@ func (a *Authority) closeRetiringResource(ctx context.Context, resource *agentRe
 	sessionID := resource.ref.SessionID()
 	gate := a.gateFor(sessionID)
 	gate.lock.Lock()
-	defer gate.lock.Unlock()
+	gateHeld := true
+	defer func() {
+		if gateHeld {
+			gate.lock.Unlock()
+		}
+	}()
 
 	resource.mu.Lock()
 	if resource.ownerlessDisposition != agentResourceRetireWhenIdle ||
 		resource.state != AgentResourceReady ||
 		len(resource.owners) != 0 ||
-		resource.current != nil ||
-		resource.pins != 0 ||
-		resource.callbacks != 0 ||
-		resource.steps != 0 {
+		resource.hasInFlightUseLocked() {
 		resource.mu.Unlock()
 		return nil
 	}
-	if resource.engine != nil && resource.engine.HasScheduledQueuedUserWork() {
-		resource.mu.Unlock()
-		return nil
-	}
-	_, closeErr := a.closeAdmittedResourceLocked(ctx, resource)
+	a.beginResourceCloseLocked(resource)
+	gate.lock.Unlock()
+	gateHeld = false
+	_, closeErr := a.closeAdmittedResource(ctx, resource)
 	return closeErr
 }
 
@@ -599,7 +720,12 @@ func (a *Authority) retireRuntimeAbortResource(ctx context.Context, resource *ag
 	sessionID := resource.ref.SessionID()
 	gate := a.gateFor(sessionID)
 	gate.lock.Lock()
-	defer gate.lock.Unlock()
+	gateHeld := true
+	defer func() {
+		if gateHeld {
+			gate.lock.Unlock()
+		}
+	}()
 
 	resource.mu.Lock()
 	a.mu.Lock()
@@ -620,24 +746,31 @@ func (a *Authority) retireRuntimeAbortResource(ctx context.Context, resource *ag
 			descriptor.State,
 		)
 	}
-	_, err := a.closeAdmittedResourceLocked(ctx, resource)
-	return err
+	a.beginResourceCloseLocked(resource)
+	gate.lock.Unlock()
+	gateHeld = false
+	_, closeErr := a.closeAdmittedResource(ctx, resource)
+	return closeErr
 }
 
-// closeAdmittedResourceLocked owns the exact transition from a ready resource
-// admitted for closure to its removal from the live authority. The caller must
-// hold the session admission gate and resource.mu.
-func (a *Authority) closeAdmittedResourceLocked(ctx context.Context, resource *agentResource) (bool, error) {
-	sessionID := resource.ref.SessionID()
-	engine := resource.engine
+// beginResourceCloseLocked owns the short transition that rejects new use.
+// The caller must hold the Session admission gate and resource.mu.
+func (a *Authority) beginResourceCloseLocked(resource *agentResource) {
 	resource.state = AgentResourceDraining
 	resource.signalLocked()
 	resource.mu.Unlock()
+}
+
+// closeAdmittedResource joins a generation only after its Session admission
+// gate and resource mutex have been released.
+func (a *Authority) closeAdmittedResource(ctx context.Context, resource *agentResource) (bool, error) {
+	sessionID := resource.ref.SessionID()
+	engine := resource.engine
 
 	if engine != nil {
 		engine.FailQueuedUserMessages(runtime.QueuedUserMessageFailureClosing)
 	}
-	closeErr := resource.closeResource(ctx)
+	closeErr := resource.finishResourceClose(ctx)
 	resource.mu.Lock()
 	closed := resource.state == AgentResourceClosed
 	resource.mu.Unlock()
@@ -676,10 +809,90 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 	if len(gate.blocks) != 0 {
 		return nil, sessionStartsBlockedError(sessionID)
 	}
-	resource, closeResource, err := a.selectResource(ctx, request.Descriptor, request.Runtime, request.Resource)
+	resource, closeResource, err := a.selectResource(ctx, request.Descriptor, request.Runtime, request.Resource, gate)
 	if err != nil {
 		return nil, err
 	}
+	launchReady := make(chan struct{})
+	deferred, err := runtimecommand.Submit(
+		ctx,
+		resource.events,
+		agentExecutionStart{
+			request:       request,
+			resource:      resource,
+			closeResource: closeResource,
+			launchReady:   launchReady,
+		},
+		func(
+			admission runtimecommand.Admission,
+			start agentExecutionStart,
+			complete func(*execution, error),
+		) error {
+			if startErr := admission.StartWork(func(context.Context) {
+				close(start.launchReady)
+			}); startErr != nil {
+				complete(nil, startErr)
+				return startErr
+			}
+			execution, startErr := a.admitAgentExecutionStart(start, nil)
+			complete(execution, startErr)
+			return startErr
+		},
+	)
+	if err != nil {
+		if errors.Is(err, runtimecommand.ErrUnavailable) {
+			return nil, errors.Join(
+				runtimeUnavailableError(resource.ref),
+				errors.New("agent execution start event was not admitted"),
+			)
+		}
+		return nil, err
+	}
+	execution, err := deferred.Await(context.Background())
+	if errors.Is(err, runtimecommand.ErrUnavailable) {
+		return nil, errors.Join(
+			runtimeUnavailableError(resource.ref),
+			errors.New("agent execution start event did not settle before runtime closure"),
+		)
+	}
+	if err != nil {
+		return nil, err
+	}
+	<-launchReady
+	launchErr := resource.engine.LaunchAgentExecution(
+		func(workCtx context.Context) error {
+			return a.runAgentExecution(workCtx, execution, request)
+		},
+		func(runErr error) {
+			execution.finish(ExecutionResult{}, runErr, nil)
+		},
+	)
+	if launchErr != nil {
+		execution.finish(ExecutionResult{}, launchErr, nil)
+		return nil, errors.Join(
+			launchErr,
+			a.closeRetiringResource(context.Background(), resource),
+		)
+	}
+	return executionHandle{execution: execution}, nil
+}
+
+type agentExecutionStart struct {
+	request       AgentExecutionRequest
+	resource      *agentResource
+	closeResource bool
+	launchReady   chan struct{}
+}
+
+func (a *Authority) admitAgentExecutionStart(
+	start agentExecutionStart,
+	reducerBoundary *reducerBoundaryRecord,
+) (*execution, error) {
+	request := start.request
+	resource := start.resource
+	closeResource := start.closeResource
+	sessionID := request.Descriptor.SessionID()
+	var err error
 	a.mu.Lock()
 	if a.closed {
 		a.mu.Unlock()
@@ -709,10 +922,29 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 		}
 	}
 	resource.mu.Lock()
-	if resource.current != nil {
+	if reducerBoundary != nil {
+		if resource.reducerBoundary != reducerBoundary ||
+			reducerBoundary.phase != reducerBoundaryActive {
+			resource.mu.Unlock()
+			a.mu.Unlock()
+			return nil, runtimeUnavailableError(resource.ref)
+		}
+	} else if resource.reducerBoundary != nil {
 		resource.mu.Unlock()
 		a.mu.Unlock()
-		return nil, errors.Join(ErrSessionRunActive, fmt.Errorf("session %s already has an agent execution", sessionID))
+		return nil, errors.Join(
+			ErrSessionRunActive,
+			fmt.Errorf("session %s already has owned reducer Boundary", sessionID),
+		)
+	}
+	if resource.current != nil ||
+		resource.worktreeBoundary != nil {
+		resource.mu.Unlock()
+		a.mu.Unlock()
+		return nil, errors.Join(
+			ErrSessionRunActive,
+			fmt.Errorf("session %s already has an agent execution or owned boundary", sessionID),
+		)
 	}
 	var workflowBinding *runtime.CurrentNodeExecutionBinding
 	closeWorkflowBinding := func() error {
@@ -808,6 +1040,14 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 		resource.askScope = &scopeID
 	}
 	resource.current = execution
+	if reducerBoundary != nil {
+		if _, err := resource.releaseReducerBoundaryLocked(reducerBoundary); err != nil {
+			resource.current = nil
+			resource.mu.Unlock()
+			a.mu.Unlock()
+			return nil, err
+		}
+	}
 	resource.signalLocked()
 	resource.mu.Unlock()
 	a.byScope[scope.ID()] = execution
@@ -815,22 +1055,26 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 		a.addWorkflowExecutionLocked(*workflowRef, workflowKey, execution)
 	}
 	a.mu.Unlock()
+	return execution, nil
+}
 
-	go func() {
-		if request.Workflow != nil {
-			if waitErr := request.Workflow.wait(execution.ctx); waitErr != nil {
-				execution.finish(ExecutionResult{}, waitErr, nil)
-				return
-			}
-			a.beginWorkflowExecution(execution)
+func (a *Authority) runAgentExecution(
+	workCtx context.Context,
+	execution *execution,
+	request AgentExecutionRequest,
+) error {
+	runCtx, stop := MergeContexts(execution.ctx, workCtx)
+	defer stop()
+	if request.Workflow != nil {
+		if waitErr := request.Workflow.wait(runCtx); waitErr != nil {
+			return waitErr
 		}
-		runErr := request.Runner(execution.ctx, execution.scope, AgentRuntimeBridge{
-			authority: a,
-			resource:  resource.ref,
-		})
-		execution.finish(ExecutionResult{}, runErr, nil)
-	}()
-	return executionHandle{execution: execution}, nil
+		a.beginWorkflowExecution(execution)
+	}
+	return request.Runner(runCtx, execution.scope, AgentRuntimeBridge{
+		authority: a,
+		resource:  execution.resource.ref,
+	})
 }
 
 func (a *Authority) RunCurrentAgentExecution(
@@ -844,35 +1088,21 @@ func (a *Authority) RunCurrentAgentExecution(
 	if run == nil {
 		return errors.New("agent runtime callback is required")
 	}
-	operationContinues := make(chan bool, 1)
+	detachedRequestContext := context.WithoutCancel(ctx)
 	handle, err := a.StartAgentExecution(ctx, AgentExecutionRequest{
 		Descriptor: descriptor,
 		Resource:   CurrentAgentResource{},
 		Runner: func(executionCtx context.Context, _ ExecutionScope, bridge AgentRuntimeBridge) error {
-			callbackRan := false
-			runErr := bridge.WithEngine(executionCtx, func(_ context.Context, engine *runtime.Engine) error {
-				callbackRan = true
-				runCtx, stop := MergeContexts(executionCtx, ctx)
+			return bridge.WithEngine(executionCtx, func(_ context.Context, engine *runtime.Engine) error {
+				runCtx, stop := MergeContexts(executionCtx, detachedRequestContext)
 				err := run(runCtx, engine)
 				stop()
-				goalLoopActive := err == nil && engine.GoalLoopRunning()
-				operationContinues <- goalLoopActive
-				if err != nil || !goalLoopActive {
-					return err
-				}
-				return engine.WaitForGoalLoop(executionCtx)
+				return err
 			})
-			if !callbackRan {
-				operationContinues <- false
-			}
-			return runErr
 		},
 	})
 	if err != nil {
 		return err
-	}
-	if <-operationContinues {
-		return nil
 	}
 	_, err = handle.Wait(context.Background())
 	return err
@@ -898,6 +1128,28 @@ func (a *Authority) WithRuntime(ctx context.Context, ref runtimeids.SessionResou
 		)
 	}
 	return resource.withEngine(ctx, ref, callback)
+}
+
+func (a *Authority) WithRuntimeEvents(ctx context.Context, ref runtimeids.SessionResourceRef, callback func(context.Context, RuntimeEventTarget) error) error {
+	if a == nil {
+		return errors.New("session runtime authority is required")
+	}
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
+	if err := ref.Validate(); err != nil {
+		return err
+	}
+	a.mu.Lock()
+	resource := a.resources[ref.SessionID()]
+	a.mu.Unlock()
+	if resource == nil {
+		return errors.Join(
+			serverapi.ErrRuntimeUnavailable,
+			fmt.Errorf("agent resource %s generation %d is unavailable", ref.SessionID(), ref.Generation()),
+		)
+	}
+	return resource.withRuntimeEvents(ctx, ref, callback)
 }
 
 func (a *Authority) WithCurrentRuntime(ctx context.Context, sessionID runtimeids.SessionID, callback func(context.Context, *runtime.Engine) error) error {
@@ -944,31 +1196,13 @@ func (a *Authority) WithLiveExecutionRuntime(
 	return a.WithRuntime(ctx, resource, callback)
 }
 
-func (a *Authority) retainResource(ref runtimeids.SessionResourceRef) (*ResourceRetention, error) {
-	if a == nil {
-		return nil, errors.New("session runtime authority is required")
-	}
-	if err := ref.Validate(); err != nil {
-		return nil, err
-	}
-	a.mu.Lock()
-	resource := a.resources[ref.SessionID()]
-	a.mu.Unlock()
-	if resource == nil {
-		return nil, fmt.Errorf("agent resource %s generation %d is unavailable", ref.SessionID(), ref.Generation())
-	}
-	resource.mu.Lock()
-	defer resource.mu.Unlock()
-	if resource.ref != ref {
-		return nil, fmt.Errorf("agent resource %s generation %d is stale", ref.SessionID(), ref.Generation())
-	}
-	if err := resource.pinLocked(); err != nil {
-		return nil, err
-	}
-	return &ResourceRetention{resource: resource}, nil
-}
-
-func (a *Authority) selectResource(ctx context.Context, descriptor session.SessionDescriptor, plan *AgentRuntimePlan, selection AgentResourceSelection) (*agentResource, bool, error) {
+func (a *Authority) selectResource(
+	ctx context.Context,
+	descriptor session.SessionDescriptor,
+	plan *AgentRuntimePlan,
+	selection AgentResourceSelection,
+	gate *sessionAdmissionGate,
+) (*agentResource, bool, error) {
 	sessionID := descriptor.SessionID()
 	switch selection.(type) {
 	case CurrentAgentResource:
@@ -986,7 +1220,7 @@ func (a *Authority) selectResource(ctx context.Context, descriptor session.Sessi
 		resource, err := a.openResource(ctx, descriptor, plan, nil)
 		return resource, true, err
 	case ReplaceAgentResource:
-		resource, err := a.replaceResource(ctx, descriptor, plan)
+		resource, err := a.replaceResource(ctx, descriptor, plan, gate)
 		return resource, true, err
 	default:
 		return nil, false, fmt.Errorf("unsupported agent resource selection %T", selection)
@@ -1053,20 +1287,35 @@ func (a *Authority) openResource(ctx context.Context, descriptor session.Session
 	return resource, nil
 }
 
-func (a *Authority) replaceResource(ctx context.Context, descriptor session.SessionDescriptor, plan *AgentRuntimePlan) (*agentResource, error) {
+func (a *Authority) replaceResource(
+	ctx context.Context,
+	descriptor session.SessionDescriptor,
+	plan *AgentRuntimePlan,
+	gate *sessionAdmissionGate,
+) (*agentResource, error) {
+	if gate == nil {
+		return nil, errors.New("session admission gate is required")
+	}
 	sessionID := descriptor.SessionID()
 	a.mu.Lock()
 	existing := a.resources[sessionID]
 	a.mu.Unlock()
 	if existing != nil {
-		if err := a.retireResourceForReplacement(ctx, existing); err != nil {
+		if err := a.retireResourceForReplacement(ctx, existing, gate); err != nil {
 			return nil, err
 		}
 	}
 	return a.openResource(ctx, descriptor, plan, nil)
 }
 
-func (a *Authority) retireResourceForReplacement(ctx context.Context, resource *agentResource) error {
+// retireResourceForReplacement is entered and returns with the Session
+// admission gate held. It releases that gate before waiting for the exact
+// generation to close.
+func (a *Authority) retireResourceForReplacement(
+	ctx context.Context,
+	resource *agentResource,
+	gate *sessionAdmissionGate,
+) error {
 	for {
 		resource.mu.Lock()
 		switch resource.state {
@@ -1081,12 +1330,16 @@ func (a *Authority) retireResourceForReplacement(ctx context.Context, resource *
 		case AgentResourceDraining:
 			changed := resource.changed
 			resource.mu.Unlock()
+			gate.lock.Unlock()
 			select {
 			case <-changed:
-				continue
 			case <-ctx.Done():
-				return context.Cause(ctx)
 			}
+			gate.lock.Lock()
+			if err := context.Cause(ctx); err != nil {
+				return err
+			}
+			continue
 		case AgentResourceReady:
 		default:
 			state := resource.state
@@ -1099,30 +1352,10 @@ func (a *Authority) retireResourceForReplacement(ctx context.Context, resource *
 			)
 		}
 
-		if resource.current != nil || resource.callbacks != 0 || resource.steps != 0 {
-			changed := resource.changed
-			resource.mu.Unlock()
-			select {
-			case <-changed:
-				continue
-			case <-ctx.Done():
-				return context.Cause(ctx)
-			}
-		}
-		engine := resource.engine
-		if engine != nil && engine.HasQueuedUserWork() {
-			resource.mu.Unlock()
-			if err := engine.DrainQueuedUserMessagesBeforeClose(ctx); err != nil {
-				return fmt.Errorf(
-					"drain session %s runtime generation %d before replacement: %w",
-					resource.ref.SessionID(),
-					resource.ref.Generation(),
-					err,
-				)
-			}
-			continue
-		}
-		_, closeErr := a.closeAdmittedResourceLocked(ctx, resource)
+		a.beginResourceCloseLocked(resource)
+		gate.lock.Unlock()
+		_, closeErr := a.closeAdmittedResource(ctx, resource)
+		gate.lock.Lock()
 		return closeErr
 	}
 }

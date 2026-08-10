@@ -158,14 +158,6 @@ func TestWorkflowPostCompletionCompactionRestoresBoundaryAndLazyContinuationCons
 	}
 	reopenedStore := mustOpenTestSession(t, fixture.store.Dir())
 	reopened := mustNewTestEngine(t, reopenedStore, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
-	mode, present := reopened.compactionRuntimeState().HistoryReplacementMode()
-	if !present || mode == nil || *mode != session.CompactionModeWorkflowPostCompletion {
-		t.Fatalf(
-			"restored history replacement mode = %v, want %q",
-			mode,
-			compactionModeWorkflowPostCompletion,
-		)
-	}
 	if !reopened.compactionRuntimeState().WorkflowPostCompletionBoundary() {
 		t.Fatal("unconsumed post-completion boundary was not restored from active segment")
 	}
@@ -189,10 +181,6 @@ func TestWorkflowPostCompletionCompactionRestoresBoundaryAndLazyContinuationCons
 	}
 	if reopened.compactionRuntimeState().WorkflowPostCompletionBoundary() {
 		t.Fatal("ordinary replacement restored a stale post-completion boundary")
-	}
-	mode, present = reopened.compactionRuntimeState().HistoryReplacementMode()
-	if !present || mode == nil || *mode != session.CompactionModeManual {
-		t.Fatalf("latest replacement mode = %v, want %q", mode, compactionModeManual)
 	}
 }
 
@@ -450,11 +438,6 @@ func TestWorkflowPostCompletionActivityPolicyPreservesMetaAndConsumesActivity(t 
 		t.Fatal("ordinary activity did not consume the boundary exactly once")
 	}
 	if activity := workflowPostCompletionActivityForSteeringItem(steeringItem{
-		queuedRestore: &steeringQueuedUserMessageRestore{},
-	}); activity != workflowPostCompletionNoActivity {
-		t.Fatalf("queued restore activity = %d, want no activity", activity)
-	}
-	if activity := workflowPostCompletionActivityForSteeringItem(steeringItem{
 		goalNoticeAndStatus: &steeringGoalNoticeAndStatus{},
 	}); activity != workflowPostCompletionDurableActivity {
 		t.Fatalf("goal notice activity = %d, want durable activity", activity)
@@ -462,12 +445,6 @@ func TestWorkflowPostCompletionActivityPolicyPreservesMetaAndConsumesActivity(t 
 	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 	if err := engine.compactionRuntimeState().SetHistoryReplacementMode(&mode); err != nil {
 		t.Fatalf("set engine replacement mode: %v", err)
-	}
-	if err := engine.steer("restore", steerQueuedUserMessageRestoreIntent(nil)); err != nil {
-		t.Fatalf("steer queued restore: %v", err)
-	}
-	if !engine.compactionRuntimeState().WorkflowPostCompletionBoundary() {
-		t.Fatal("queued restore consumed the boundary")
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 
 	"core/cli/app/commands"
 	"core/shared/clientui"
+	"core/shared/runtimeinput"
 
 	"github.com/google/uuid"
 )
@@ -18,6 +19,15 @@ type submitDoneMsg struct {
 	resultKind    *clientui.UserTurnResultKind
 	queued        clientui.QueuedUserMessage
 	err           error
+}
+
+type submitDraftPersistedMsg struct {
+	token uint64
+	err   error
+}
+
+type draftRecoveryPersistedMsg struct {
+	err error
 }
 
 func newSubmitDoneMsg(token uint64, message string, submittedText string, err error) submitDoneMsg {
@@ -97,7 +107,6 @@ type runtimeControlDoneMsg struct {
 	changed        bool
 	mode           string
 	compactionMode string
-	runtimeTuple   *runtimeTupleCandidate
 	err            error
 }
 
@@ -108,6 +117,12 @@ type injectedQueueCreateDoneMsg struct {
 	completed                bool
 	approvalCommentaryAnswer *clientui.PromptAnswer
 	err                      error
+}
+
+type injectedQueueDraftPersistedMsg struct {
+	token   uint64
+	localID string
+	err     error
 }
 
 type injectedQueueDiscardDoneMsg struct {
@@ -131,14 +146,12 @@ const (
 // Active submit is the in-flight turn only. uiModel.queued stores future work;
 // never mirror active submit there or it can run again after completion.
 type activeSubmitState struct {
-	token              uint64
-	stepID             string
-	text               string
-	queuedID           string
-	origin             activeSubmitOrigin
-	operationRef       clientui.RuntimeOperationRef
-	restoreOnInterrupt bool
-	flushed            bool
+	token        uint64
+	text         string
+	queuedID     string
+	origin       activeSubmitOrigin
+	input        runtimeinput.Input
+	shellCommand *string
 }
 
 type spinnerTickMsg struct {

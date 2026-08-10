@@ -5,6 +5,12 @@ import (
 	"testing"
 )
 
+func TestProtocolVersionIncludesCompleteGenericIdentityCut(t *testing.T) {
+	if Version != "106" {
+		t.Fatalf("Version = %q, want 106 after merging main's protocol 105", Version)
+	}
+}
+
 func TestHandshakeRequestClientCapabilitiesRoundTrip(t *testing.T) {
 	request := HandshakeRequest{
 		ProtocolVersion: Version,

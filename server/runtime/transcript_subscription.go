@@ -64,8 +64,6 @@ func (e *Engine) WithTranscriptHydrationSnapshot(fn func(TranscriptHydrationSnap
 		}
 		return fn(TranscriptHydrationSnapshot{})
 	}
-	e.outputMutationMu.Lock()
-	defer e.outputMutationMu.Unlock()
 	if fn == nil {
 		return nil
 	}
@@ -83,10 +81,7 @@ func (e *Engine) transcriptHydrationSegmentLocked() TranscriptHydrationSnapshot 
 	}
 	snapshot := chat.deliverySnapshot()
 	thinkingStatus, reasoningTraces := e.transcriptRuntimeState().ReasoningSnapshot()
-	var queuedMessages []QueuedUserMessage
-	if e.messageFlow != nil {
-		queuedMessages = e.messageFlow.PendingUserMessages()
-	}
+	queuedMessages := e.boundaryAgenda.pendingHuman()
 	usage := e.ContextUsage()
 	return TranscriptHydrationSnapshot{
 		CommittedRows:           snapshot.Rows,

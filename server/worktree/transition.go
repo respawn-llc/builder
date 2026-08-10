@@ -9,7 +9,9 @@ import (
 	"time"
 
 	"core/server/metadata"
+	"core/server/runtimecommand"
 	"core/server/session"
+	"core/server/sessionruntime"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 
@@ -27,6 +29,7 @@ type worktreeTransitionRequest struct {
 
 type pendingWorktreeTransition struct {
 	request worktreeTransitionRequest
+	claim   *sessionruntime.WorktreeBoundaryClaim
 }
 
 type transitionTargetSync func(context.Context, clientui.SessionExecutionTarget, *session.WorktreeReminderState) error
@@ -108,63 +111,178 @@ func (s *Service) scheduleWorktreeTransition(
 			PendingOperationID: pending.request.operationID,
 		}
 	}
-	s.transitions[request.sessionID] = pendingWorktreeTransition{request: request}
+	pending := pendingWorktreeTransition{request: request}
+	s.transitions[request.sessionID] = pending
+	if origin == nil {
+		claim, claimErr := s.authority.ClaimCurrentWorktreeBoundary(
+			request.sessionID,
+			request.operationID,
+		)
+		if claimErr != nil {
+			delete(s.transitions, request.sessionID)
+			s.transitionMu.Unlock()
+			return serverapi.WorktreeScheduledAcknowledgement{}, claimErr
+		}
+		pending.claim = claim
+		s.transitions[request.sessionID] = pending
+	}
 	s.transitionWG.Add(1)
 	s.transitionMu.Unlock()
 
 	if origin != nil {
-		if err := s.runWorktreeTransition(ctx, request, execute, origin); err != nil {
+		if err := s.runWorktreeTransition(ctx, pending, execute, origin); err != nil {
 			return serverapi.WorktreeScheduledAcknowledgement{}, err
 		}
 	} else {
-		go func() { _ = s.runWorktreeTransition(s.transitionCtx, request, execute, nil) }()
+		go func() {
+			_ = s.runWorktreeTransition(s.transitionCtx, pending, execute, nil)
+		}()
 	}
 	return serverapi.WorktreeScheduledAcknowledgement{OperationID: request.operationID}, nil
 }
 
 func (s *Service) runWorktreeTransition(
 	ctx context.Context,
-	request worktreeTransitionRequest,
+	pending pendingWorktreeTransition,
 	execute func(context.Context, transitionAuthority, transitionTargetSync) error,
 	origin *serverapi.RuntimeStepOrigin,
 ) error {
 	defer s.transitionWG.Done()
-	err := s.authority.RunWorktreeTransition(
-		ctx,
-		request.sessionID,
-		origin,
-		func(ctx context.Context, authority func(func() error) error, sync func(context.Context, clientui.SessionExecutionTarget, *session.WorktreeReminderState) error) error {
-			return execute(ctx, transitionAuthority(authority), func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
-				return sync(syncCtx, target, reminder)
-			})
-		},
-	)
-	if s.transitionCtx.Err() == nil {
-		outcome := clientui.WorktreeTransitionOutcome{
-			OperationID: request.operationID,
-			Transition:  request.kind,
-			State:       clientui.WorktreeTransitionCompleted,
+	request := pending.request
+	run := func(
+		runCtx context.Context,
+		authority func(func() error) error,
+		sync func(context.Context, clientui.SessionExecutionTarget, *session.WorktreeReminderState) error,
+	) error {
+		return execute(runCtx, transitionAuthority(authority), func(syncCtx context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
+			return sync(syncCtx, target, reminder)
+		})
+	}
+	var operationErr error
+	if pending.claim != nil {
+		if grantErr := pending.claim.AwaitGrant(ctx); grantErr != nil {
+			operationErr = grantErr
+		} else {
+			operationErr = s.authority.RunClaimedWorktreeTransition(ctx, pending.claim, run)
 		}
-		if err != nil {
-			outcome.State = clientui.WorktreeTransitionFailed
-			outcome.Failure = &clientui.WorktreeTransitionFailure{Diagnostic: err.Error()}
-			var precondition *serverapi.WorktreeDeletePreconditionError
-			if errors.As(err, &precondition) {
-				dirtyState := precondition.DirtyState
-				outcome.Failure.DeletePrecondition = &dirtyState
+	} else {
+		operationErr = s.authority.RunWorktreeTransition(
+			ctx,
+			request.sessionID,
+			origin,
+			run,
+		)
+	}
+	outcome := worktreeTransitionOutcome(request, operationErr)
+	var outcomeErr error
+	if s.transitionCtx.Err() == nil {
+		if pending.claim != nil {
+			outcomeErr = s.submitClaimedWorktreeTransitionOutcome(
+				pending.claim,
+				request.sessionID,
+				outcome,
+			)
+		} else {
+			outcomeErr = s.publisher.PublishWorktreeTransitionOutcome(request.sessionID, outcome)
+			if operationErr != nil {
+				outcomeErr = errors.Join(
+					outcomeErr,
+					s.authority.SteerWorktreeTransitionFailure(
+						s.transitionCtx,
+						request.sessionID,
+						outcome,
+					),
+				)
 			}
 		}
-		s.publisher.PublishWorktreeTransitionOutcome(request.sessionID, outcome)
-		if err != nil {
-			_ = s.authority.SteerWorktreeTransitionFailure(s.transitionCtx, request.sessionID, outcome)
-		}
+	} else if pending.claim != nil {
+		outcomeErr = pending.claim.Cancel(context.Cause(s.transitionCtx))
 	}
 	s.transitionMu.Lock()
 	if pending, ok := s.transitions[request.sessionID]; ok && pending.request == request {
 		delete(s.transitions, request.sessionID)
 	}
 	s.transitionMu.Unlock()
-	return err
+	return errors.Join(operationErr, outcomeErr)
+}
+
+func worktreeTransitionOutcome(
+	request worktreeTransitionRequest,
+	operationErr error,
+) clientui.WorktreeTransitionOutcome {
+	outcome := clientui.WorktreeTransitionOutcome{
+		OperationID: request.operationID,
+		Transition:  request.kind,
+		State:       clientui.WorktreeTransitionCompleted,
+	}
+	if operationErr == nil {
+		return outcome
+	}
+	outcome.State = clientui.WorktreeTransitionFailed
+	outcome.Failure = &clientui.WorktreeTransitionFailure{Diagnostic: operationErr.Error()}
+	var precondition *serverapi.WorktreeDeletePreconditionError
+	if errors.As(operationErr, &precondition) {
+		dirtyState := precondition.DirtyState
+		outcome.Failure.DeletePrecondition = &dirtyState
+	}
+	return outcome
+}
+
+func (s *Service) submitClaimedWorktreeTransitionOutcome(
+	claim *sessionruntime.WorktreeBoundaryClaim,
+	sessionID string,
+	outcome clientui.WorktreeTransitionOutcome,
+) error {
+	outcomeAdmitted := false
+	err := s.authority.WithRuntimeEvents(
+		s.transitionCtx,
+		claim.Resource(),
+		func(callbackCtx context.Context, target sessionruntime.RuntimeEventTarget) error {
+			deferred, err := runtimecommand.Submit(
+				callbackCtx,
+				target.Events,
+				outcome,
+				func(
+					command runtimecommand.Admission,
+					event clientui.WorktreeTransitionOutcome,
+					complete func(struct{}, error),
+				) error {
+					outcomeAdmitted = true
+					admission, admissionErr := target.Engine.AdmitWorktreeOutcome(command)
+					publicationErr := s.publisher.PublishWorktreeTransitionOutcome(
+						sessionID,
+						event,
+					)
+					var noticeErr error
+					if event.State == clientui.WorktreeTransitionFailed {
+						noticeErr = admission.ApplyFailure(event)
+					}
+					grant, releaseErr := claim.Release()
+					reductionErr := admission.ReduceAfterRelease(grant)
+					complete(struct{}{}, errors.Join(
+						admissionErr,
+						publicationErr,
+						noticeErr,
+						releaseErr,
+						reductionErr,
+					))
+					return nil
+				},
+			)
+			if err != nil {
+				return err
+			}
+			_, err = deferred.Await(s.transitionCtx)
+			return err
+		},
+	)
+	if err == nil {
+		return nil
+	}
+	if outcomeAdmitted {
+		return err
+	}
+	return errors.Join(err, claim.Cancel(err))
 }
 
 func (s *Service) resolveScheduledEnterTarget(

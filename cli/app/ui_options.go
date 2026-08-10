@@ -167,6 +167,12 @@ func WithUIInitialRecoveryBuffers(buffers []serverapi.SessionDraftRecoveryBuffer
 	}
 }
 
+func WithUISessionDraftPersistence(persistence apicontract.SessionLifecycleService) UIOption {
+	return func(m *uiModelConstruction) {
+		m.sessionDraftPersistence = persistence
+	}
+}
+
 func WithUISessionName(name string) UIOption {
 	return func(m *uiModelConstruction) {
 		m.sessionName = strings.TrimSpace(name)

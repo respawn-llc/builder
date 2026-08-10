@@ -11,7 +11,6 @@ import (
 	"core/server/launch"
 	"core/server/llm"
 	"core/server/runtime"
-	"core/server/runtimeops"
 	"core/server/session"
 	"core/server/sessionruntime"
 	"core/server/worktree"
@@ -34,7 +33,6 @@ type Service struct {
 	sessions         SessionStoreResolver
 	snapshots        *resolvedSessionSnapshotSource
 	targets          ExecutionTargetResolver
-	operations       *runtimeops.Coordinator
 	app              config.App
 	auth             servicecontract.AuthStatusService
 	git              *worktree.GitInspector
@@ -73,21 +71,9 @@ func NewService(
 		sessions:         sessions,
 		targets:          targets,
 		cacheWarningMode: config.CacheWarningModeDefault,
-		operations:       runtimeops.NewCoordinator(),
 	}
 	svc.snapshots = newResolvedSessionSnapshotSource(sessions, activity, authority, svc.cacheWarningModeValue)
 	return svc
-}
-
-func (s *Service) WithOperationCoordinator(coordinator *runtimeops.Coordinator) *Service {
-	if s == nil {
-		return nil
-	}
-	if coordinator == nil {
-		coordinator = runtimeops.NewCoordinator()
-	}
-	s.operations = coordinator
-	return s
 }
 
 func (s *Service) WithCacheWarningMode(mode config.CacheWarningMode) *Service {
@@ -131,7 +117,7 @@ func (s *Service) GetSessionMainView(ctx context.Context, req serverapi.SessionM
 	if err := req.Validate(); err != nil {
 		return serverapi.SessionMainViewResponse{}, err
 	}
-	snapshot, err := s.resolveSnapshot(ctx, req.SessionID, req.PendingOperationRefs)
+	snapshot, err := s.resolveSnapshot(ctx, req.SessionID)
 	if err != nil {
 		return serverapi.SessionMainViewResponse{}, err
 	}
@@ -146,13 +132,6 @@ func (s *Service) GetSessionMainView(ctx context.Context, req serverapi.SessionM
 		}
 		view.Session.ExecutionTarget = target
 	}
-	if len(view.InputReconciliation.Operations) == 0 && len(req.PendingOperationRefs) > 0 {
-		reconciliation, err := s.operations.FeedSnapshot(strings.TrimSpace(req.SessionID), req.PendingOperationRefs)
-		if err != nil {
-			return serverapi.SessionMainViewResponse{}, err
-		}
-		view.InputReconciliation = reconciliation
-	}
 	return serverapi.SessionMainViewResponse{MainView: view}, nil
 }
 
@@ -160,7 +139,7 @@ func (s *Service) SessionTranscriptTailEntries(ctx context.Context, sessionID st
 	if strings.TrimSpace(sessionID) == "" {
 		return nil, serverapi.ErrSessionIDRequired
 	}
-	snapshot, err := s.resolveSnapshot(ctx, sessionID, nil)
+	snapshot, err := s.resolveSnapshot(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -172,7 +151,7 @@ func (s *Service) GetSessionTranscriptPage(ctx context.Context, req serverapi.Se
 		return serverapi.SessionTranscriptPageResponse{}, err
 	}
 	pageReq := clientui.TranscriptPageRequest{Cursor: req.Cursor, NewerCursor: req.NewerCursor}
-	snapshot, err := s.resolveSnapshot(ctx, req.SessionID, nil)
+	snapshot, err := s.resolveSnapshot(ctx, req.SessionID)
 	if err != nil {
 		return serverapi.SessionTranscriptPageResponse{}, err
 	}
@@ -379,11 +358,11 @@ func sessionExecutionProviderUsesKentManagedAuth(provider string) bool {
 	return err == nil && capabilities.IsOpenAIFirstParty
 }
 
-func (s *Service) resolveSnapshot(ctx context.Context, sessionID string, refs []clientui.RuntimeOperationRef) (sessionSnapshot, error) {
+func (s *Service) resolveSnapshot(ctx context.Context, sessionID string) (sessionSnapshot, error) {
 	if s == nil || s.snapshots == nil {
 		return nil, errSessionStoreResolverRequired
 	}
-	return s.snapshots.resolveSessionSnapshot(ctx, sessionID, refs)
+	return s.snapshots.resolveSessionSnapshot(ctx, sessionID)
 }
 
 var _ servicecontract.SessionViewService = (*Service)(nil)

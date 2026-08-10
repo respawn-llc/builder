@@ -16,44 +16,45 @@ import (
 )
 
 type runtimeControlFakeClient struct {
-	status                clientui.RuntimeStatus
-	sessionView           clientui.RuntimeSessionView
-	mainView              clientui.RuntimeMainView
-	cachedMainView        clientui.RuntimeMainView
-	hasCachedMainView     bool
-	setSessionNameArg     string
-	setThinkingLevelArg   string
-	setFastModeArg        bool
-	setFastModeCalls      int
-	setAutoCompactCalls   int
-	goal                  *clientui.RuntimeGoal
-	showGoalCalls         int
-	setGoalArg            string
-	pauseGoalCalls        int
-	resumeGoalCalls       int
-	clearGoalCalls        int
-	appendCalls           int
-	appendedRole          string
-	appendedText          string
-	submitText            string
-	submitCalls           int
-	submitOperationRef    clientui.RuntimeOperationRef
-	preSubmitOperationRef clientui.RuntimeOperationRef
-	submitResult          string
-	interruptCalls        int
-	interruptPendingRefs  []clientui.RuntimeOperationRef
-	interruptTargetRef    *clientui.RuntimeOperationRef
-	submitQueuedID        string
-	discardQueuedID       string
-	discardQueuedCalls    int
-	discardQueuedResult   bool
-	recordedPromptHistory string
-	refreshMainViewCalls  int
-	err                   error
-	appendErr             error
-	submitErr             error
-	interruptErr          error
-	collaborative         bool
+	status                 clientui.RuntimeStatus
+	sessionView            clientui.RuntimeSessionView
+	mainView               clientui.RuntimeMainView
+	cachedMainView         clientui.RuntimeMainView
+	hasCachedMainView      bool
+	setSessionNameArg      string
+	setThinkingLevelArg    string
+	setFastModeArg         bool
+	setFastModeCalls       int
+	setAutoCompactCalls    int
+	goal                   *clientui.RuntimeGoal
+	showGoalCalls          int
+	setGoalArg             string
+	pauseGoalCalls         int
+	resumeGoalCalls        int
+	clearGoalCalls         int
+	appendCalls            int
+	appendedRole           string
+	appendedText           string
+	submitText             string
+	submitCalls            int
+	submitResult           string
+	hasQueuedUserWork      bool
+	hasQueuedUserWorkCalls int
+	submitQueuedResult     string
+	submitQueuedCalls      int
+	interruptCalls         int
+	submitQueuedID         string
+	discardQueuedID        string
+	discardQueuedCalls     int
+	discardQueuedResult    bool
+	recordedPromptHistory  string
+	refreshMainViewCalls   int
+	err                    error
+	appendErr              error
+	submitErr              error
+	hasQueuedUserWorkErr   error
+	interruptErr           error
+	collaborative          bool
 }
 
 func TestUserTurnSubmissionFromResponsePreservesMessagePresence(t *testing.T) {
@@ -63,7 +64,6 @@ func TestUserTurnSubmissionFromResponsePreservesMessagePresence(t *testing.T) {
 	withBlank := userTurnSubmissionFromResponse(
 		serverapi.RuntimeSubmitUserTurnResponse{Message: &blank, ResultKind: blankKind},
 		"turn",
-		"request",
 	)
 	if withBlank.Message == nil || *withBlank.Message != "" {
 		t.Fatalf("blank submission message = %v, want present empty message", withBlank.Message)
@@ -75,7 +75,6 @@ func TestUserTurnSubmissionFromResponsePreservesMessagePresence(t *testing.T) {
 	withoutMessage := userTurnSubmissionFromResponse(
 		serverapi.RuntimeSubmitUserTurnResponse{},
 		"turn",
-		"request",
 	)
 	if withoutMessage.Message != nil {
 		t.Fatalf("omitted submission message = %v, want absent", withoutMessage.Message)
@@ -192,15 +191,12 @@ func (f *runtimeControlFakeClient) submitUserMessage(_ context.Context, text str
 }
 func (f *runtimeControlFakeClient) SubmitRuntimeInput(ctx context.Context, req clientui.RuntimeSubmitRequest) (clientui.UserTurnSubmission, error) {
 	f.submitCalls++
-	f.submitOperationRef = req.OperationRef
-	f.preSubmitOperationRef = req.PreSubmitCompactionOperationRef
 	text := runtimeSubmitInputText(req)
 	submission, err := f.submitUserMessage(ctx, text)
 	if err == nil && strings.TrimSpace(f.submitQueuedID) != "" {
 		submission.Queued = clientui.QueuedUserMessage{
-			ID:              strings.TrimSpace(f.submitQueuedID),
-			Text:            text,
-			ClientRequestID: req.OperationRef.ClientRequestID.String(),
+			ID:   strings.TrimSpace(f.submitQueuedID),
+			Text: text,
 		}
 	}
 	return submission, err
@@ -220,24 +216,6 @@ func (f *runtimeControlFakeClient) CompactRuntime(ctx context.Context, req clien
 }
 func (f *runtimeControlFakeClient) Interrupt() error {
 	f.interruptCalls++
-	if f.interruptErr != nil {
-		return f.interruptErr
-	}
-	return f.err
-}
-func (f *runtimeControlFakeClient) InterruptWithPendingRefs(refs []clientui.RuntimeOperationRef) error {
-	f.interruptCalls++
-	f.interruptPendingRefs = append([]clientui.RuntimeOperationRef(nil), refs...)
-	f.interruptTargetRef = nil
-	if f.interruptErr != nil {
-		return f.interruptErr
-	}
-	return f.err
-}
-func (f *runtimeControlFakeClient) InterruptWithTarget(target clientui.RuntimeOperationRef, refs []clientui.RuntimeOperationRef) error {
-	f.interruptCalls++
-	f.interruptPendingRefs = append([]clientui.RuntimeOperationRef(nil), refs...)
-	f.interruptTargetRef = &target
 	if f.interruptErr != nil {
 		return f.interruptErr
 	}
@@ -401,6 +379,58 @@ func TestRuntimeControlStaleSessionCompletionClearsPendingToggle(t *testing.T) {
 	}
 }
 
+func TestRuntimeControlHelpersFallbackWithoutRuntimeClient(t *testing.T) {
+	m := newProjectedStaticUIModel()
+
+	if err := m.setRuntimeSessionName("name"); err != nil {
+		t.Fatalf("set runtime session name without client: %v", err)
+	}
+	if err := m.setRuntimeThinkingLevel("high"); err != nil {
+		t.Fatalf("set runtime thinking level without client: %v", err)
+	}
+	if changed, err := m.setRuntimeFastModeEnabled(true); changed || err != nil {
+		t.Fatalf("set runtime fast mode without client = (%t, %v), want (false, nil)", changed, err)
+	}
+	if changed, mode, err := m.setRuntimeReviewerEnabled(true); changed || mode != "" || err != nil {
+		t.Fatalf("set runtime reviewer without client = (%t, %q, %v)", changed, mode, err)
+	}
+	if changed, enabled, err := m.setRuntimeAutoCompactionEnabled(true); changed || enabled || err != nil {
+		t.Fatalf("set runtime autocompaction without client = (%t, %t, %v), want (false, false, nil)", changed, enabled, err)
+	}
+	if goal, err := m.showRuntimeGoal(); goal != nil || err != nil {
+		t.Fatalf("show runtime goal without client = (%+v, %v), want (nil, nil)", goal, err)
+	}
+	if goal, err := m.setRuntimeGoal("goal"); goal != nil || err != nil {
+		t.Fatalf("set runtime goal without client = (%+v, %v), want (nil, nil)", goal, err)
+	}
+	if goal, err := m.pauseRuntimeGoal(); goal != nil || err != nil {
+		t.Fatalf("pause runtime goal without client = (%+v, %v), want (nil, nil)", goal, err)
+	}
+	if goal, err := m.resumeRuntimeGoal(); goal != nil || err != nil {
+		t.Fatalf("resume runtime goal without client = (%+v, %v), want (nil, nil)", goal, err)
+	}
+	if goal, err := m.clearRuntimeGoal(); goal != nil || err != nil {
+		t.Fatalf("clear runtime goal without client = (%+v, %v), want (nil, nil)", goal, err)
+	}
+	if submission, err := m.submitRuntimeUserMessage(context.Background(), "prompt"); submission.Message != nil || err != nil {
+		t.Fatalf("submit runtime user message without client = (%v, %v), want (empty, nil)", submission.Message, err)
+	}
+	if err := m.submitRuntimeUserShellCommand(context.Background(), "echo hi"); err != nil {
+		t.Fatalf("submit runtime shell command without client: %v", err)
+	}
+	if err := m.compactRuntimeContext(context.Background(), "--force"); err != nil {
+		t.Fatalf("compact runtime context without client: %v", err)
+	}
+	if err := m.interruptRuntime(); err != nil {
+		t.Fatalf("interrupt runtime without client: %v", err)
+	}
+	if discarded := m.discardQueuedRuntimeUserMessage("queue-1"); discarded {
+		t.Fatal("did not expect queued runtime user message discarded without client")
+	}
+	if err := m.recordRuntimePromptHistory("prompt history"); err != nil {
+		t.Fatalf("record runtime prompt history without client: %v", err)
+	}
+}
 func TestSubmitErrorShowsTransientStatusWithoutPersisting(t *testing.T) {
 	disableTransientStatusClearForTest(t)
 
@@ -408,7 +438,7 @@ func TestSubmitErrorShowsTransientStatusWithoutPersisting(t *testing.T) {
 	m := newProjectedStaticUIModel()
 	m.engine = client
 	m.setRuntimeActivityBusyForTest(true)
-	m.activeSubmit = activeSubmitState{token: 1, text: "prompt", stepID: "step-1"}
+	m.activeSubmit = activeSubmitState{token: 1, text: "prompt"}
 
 	next, cmd := m.Update(submitDoneMsg{token: 1, submittedText: "prompt", err: errors.New("submit failed")})
 	updated := next.(*uiModel)

@@ -105,9 +105,9 @@ func TestServiceOpenExistingPlanningOwnsRuntimeAdmission(t *testing.T) {
 	planned := make(chan error, 1)
 	go func() {
 		_, planErr := service.PlanSession(context.Background(), serverapi.SessionPlanRequest{
-			ClientRequestID: "planning-runtime-collision",
-			Mode:            serverapi.SessionLaunchModeInteractive,
-			Intent:          serverapi.OpenExistingSessionLaunchIntent(sessionID),
+
+			Mode:   serverapi.SessionLaunchModeInteractive,
+			Intent: serverapi.OpenExistingSessionLaunchIntent(sessionID),
 		})
 		planned <- planErr
 	}()
@@ -274,9 +274,9 @@ func TestServiceOpenExistingWithoutAuthorityFailsBeforeStoreMutation(t *testing.
 	result := make(chan error, 1)
 	go func() {
 		_, planErr := service.PlanSession(context.Background(), serverapi.SessionPlanRequest{
-			ClientRequestID: "missing-authority",
-			Mode:            serverapi.SessionLaunchModeInteractive,
-			Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
+
+			Mode:   serverapi.SessionLaunchModeInteractive,
+			Intent: serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
 		})
 		result <- planErr
 	}()

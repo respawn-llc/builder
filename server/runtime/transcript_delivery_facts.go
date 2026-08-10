@@ -854,19 +854,6 @@ func emptyDeveloperMessageDiagnosticFact(msg llm.Message) TranscriptCommittedRow
 	}}
 }
 
-func runtimeDiagnosticNoticeFact(code string, severity string, detail string) TranscriptCommittedRowFact {
-	code = strings.TrimSpace(code)
-	if code == "" {
-		code = "runtime_notice"
-	}
-	return TranscriptCommittedRowFact{Kind: TranscriptCommittedRowFactNotice, Visibility: transcript.EntryVisibilityOngoing, Notice: &TranscriptNoticeRowFact{
-		Reason:           transcript.NoticeReasonRuntimeDiagnostic,
-		Severity:         normalizeTranscriptNoticeSeverity(severity),
-		DiagnosticCode:   code,
-		DiagnosticDetail: detail,
-	}}
-}
-
 func normalizeTranscriptNoticeSeverity(severity string) string {
 	severity = strings.TrimSpace(severity)
 	if severity == "" {

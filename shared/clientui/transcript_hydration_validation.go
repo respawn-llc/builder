@@ -204,7 +204,6 @@ func validateHydrationTools(tools []TranscriptToolStart) error {
 }
 
 func validateHydrationQueuedMessages(messages []TranscriptQueuedMessageState) error {
-	seenRequests := make(map[runtimeids.RuntimeClientRequestID]struct{}, len(messages))
 	seenItems := make(map[runtimeids.QueueItemID]struct{}, len(messages))
 	for index, message := range messages {
 		if err := message.Validate(); err != nil {
@@ -213,10 +212,6 @@ func validateHydrationQueuedMessages(messages []TranscriptQueuedMessageState) er
 		if message.Status != QueuedUserMessageAccepted {
 			return fmt.Errorf("transcript hydration queued message %d is not accepted", index)
 		}
-		if _, exists := seenRequests[message.ClientRequestID]; exists {
-			return fmt.Errorf("transcript hydration repeats queued client request id %q", message.ClientRequestID.String())
-		}
-		seenRequests[message.ClientRequestID] = struct{}{}
 		if _, exists := seenItems[message.QueueItemID]; exists {
 			return fmt.Errorf("transcript hydration repeats queue item id %q", message.QueueItemID.String())
 		}

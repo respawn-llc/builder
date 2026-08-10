@@ -44,6 +44,7 @@ type CurrentNodeAssignmentSteerer interface {
 
 type CurrentNodeAssignmentSteer interface {
 	Wait(context.Context) (session.CommitReceipt, error)
+	RetainsSourceRuntime() bool
 }
 
 type CurrentNodeControllerConfig struct {
@@ -232,19 +233,15 @@ func NewCurrentNodeController(
 }
 
 func (c *CurrentNodeController) CompleteCurrentNode(ctx context.Context, req workflowruntime.CompletionRequest) (workflowruntime.CompletionResult, error) {
-	_, err := c.completeLiveCurrentNode(ctx, req)
-	if errors.Is(err, sessionruntime.ErrExecutionNoLongerLive) && req.SessionID != nil {
-		_, err = c.CompleteIdleCurrentNode(ctx, workflowstore.IdleCurrentNodeSelector{
-			SessionID: req.SessionID,
-		}, req.TransitionID, req.OutputValues, req.Commentary)
-		if err == nil {
-			c.clearProtocolViolations(req.ScopeID)
-		}
-	}
+	completed, err := c.completeLiveCurrentNode(ctx, req)
 	if err != nil {
 		return workflowruntime.CompletionResult{}, err
 	}
-	return workflowruntime.CompletionResult{TransitionID: workflow.TransitionID(req.TransitionID), State: "applied"}, nil
+	return workflowruntime.CompletionResult{
+		TransitionID: workflow.TransitionID(req.TransitionID),
+		State:        "applied",
+		CurrentNode:  completed,
+	}, nil
 }
 
 // CompleteSessionCurrentNode completes the one exact live agent scope for a
@@ -254,6 +251,7 @@ func (c *CurrentNodeController) CompleteCurrentNode(ctx context.Context, req wor
 func (c *CurrentNodeController) CompleteSessionCurrentNode(
 	ctx context.Context,
 	sessionID runtimeids.SessionID,
+	origin serverapi.RuntimeStepOrigin,
 	transitionID string,
 	outputValues map[string]string,
 	commentary string,
@@ -264,26 +262,27 @@ func (c *CurrentNodeController) CompleteSessionCurrentNode(
 	if sessionID.IsZero() {
 		return workflowstore.CurrentNodeCompletionResult{}, errors.New("session id is required")
 	}
-	handle, live := c.authority.SessionExecution(sessionID)
-	if !live {
-		return workflowstore.CurrentNodeCompletionResult{}, sessionruntime.ErrExecutionNoLongerLive
+	if err := origin.Validate(); err != nil {
+		return workflowstore.CurrentNodeCompletionResult{}, err
 	}
-	scopeRef, workflowScoped := handle.Scope().Workflow()
-	if !workflowScoped {
-		return workflowstore.CurrentNodeCompletionResult{}, sessionruntime.ErrExecutionNoLongerLive
+	acceptance, err := c.authority.AcceptWorkflowCompletion(
+		ctx,
+		sessionID,
+		origin,
+		workflowruntime.ParsedCompletion{
+			TransitionID: transitionID,
+			OutputValues: outputValues,
+			Commentary:   commentary,
+		},
+	)
+	if err != nil {
+		return workflowstore.CurrentNodeCompletionResult{}, err
 	}
-	c.mu.Lock()
-	owned, ownedLive := c.live[handle.Scope().ID()]
-	c.mu.Unlock()
-	if !ownedLive || !owned.reference.Equal(scopeRef.CurrentNode) {
-		return workflowstore.CurrentNodeCompletionResult{}, sessionruntime.ErrExecutionNoLongerLive
+	result, err := acceptance.Await(ctx)
+	if err != nil {
+		return workflowstore.CurrentNodeCompletionResult{}, err
 	}
-	return c.completeLiveCurrentNode(ctx, workflowruntime.CompletionRequest{
-		ScopeID:      handle.Scope().ID(),
-		TransitionID: transitionID,
-		OutputValues: outputValues,
-		Commentary:   commentary,
-	})
+	return result.CurrentNode, nil
 }
 
 type WorkflowQuestionAcceptance interface {
@@ -346,6 +345,7 @@ func (c *CurrentNodeController) completeLiveCurrentNode(ctx context.Context, req
 	var completed workflowstore.CurrentNodeCompletionResult
 	var starts []currentNodeQueuedStart
 	var pending []*pendingCurrentNodeAssignmentSteer
+	var committed bool
 	err := c.permit.Run(ctx, func(ctx context.Context) error {
 		c.mu.Lock()
 		live, exists := c.live[req.ScopeID]
@@ -362,24 +362,20 @@ func (c *CurrentNodeController) completeLiveCurrentNode(ctx context.Context, req
 			return err
 		}
 		c.mu.Unlock()
-		handle, ok := c.authority.ExecutionByScope(req.ScopeID)
-		if !ok {
-			return sessionruntime.ErrExecutionNoLongerLive
-		}
-		if err := c.authority.WithExactExecutions([]sessionruntime.ExecutionHandle{handle}, func() error {
+		apply := func() (bool, error) {
 			c.mu.Lock()
 			exact, stillLive := c.live[req.ScopeID]
 			if !stillLive || !exact.reference.Equal(live.reference) {
 				c.mu.Unlock()
-				return sessionruntime.ErrExecutionNoLongerLive
+				return false, sessionruntime.ErrExecutionNoLongerLive
 			}
 			if _, stopping := c.stopping[req.ScopeID]; stopping {
 				c.mu.Unlock()
-				return sessionruntime.ErrExecutionNoLongerLive
+				return false, sessionruntime.ErrExecutionNoLongerLive
 			}
 			if err := c.ensureTaskAvailableLocked(exact.reference.TaskID); err != nil {
 				c.mu.Unlock()
-				return err
+				return false, err
 			}
 			c.mu.Unlock()
 			var completionErr error
@@ -390,11 +386,11 @@ func (c *CurrentNodeController) completeLiveCurrentNode(ctx context.Context, req
 				Commentary:   req.Commentary,
 			})
 			if completionErr != nil {
-				return completionErr
+				return false, completionErr
 			}
 			intents, intentErr := currentNodeAutomaticIntents(completed.AutomaticIntents)
 			if intentErr != nil {
-				return intentErr
+				return true, intentErr
 			}
 			starts = automaticQueuedStarts(intents)
 			c.mu.Lock()
@@ -421,25 +417,47 @@ func (c *CurrentNodeController) completeLiveCurrentNode(ctx context.Context, req
 				}
 				c.heldStarts[req.ScopeID] = append([]currentNodeQueuedStart(nil), starts...)
 				c.mu.Unlock()
-				return nil
+				return true, nil
 			}
 			starts, pending = pendingCurrentNodeAssignmentStarts(starts)
 			c.mu.Lock()
 			c.heldStarts[req.ScopeID] = starts
 			c.mu.Unlock()
-			return nil
-		}); err != nil {
-			exactErr := err
-			resolveErr := c.resolvePendingCurrentNodeAssignmentSteers(ctx, starts, pending)
-			return errors.Join(exactErr, resolveErr)
+			return true, nil
 		}
-		if completed.PostCompletionEligible {
-			return nil
+		handle, handleExists := c.authority.ExecutionByScope(req.ScopeID)
+		if !handleExists {
+			return sessionruntime.ErrExecutionNoLongerLive
 		}
-		return c.resolvePendingCurrentNodeAssignmentSteers(ctx, starts, pending)
+		if handle.Scope().Kind() == sessionruntime.ExecutionScopeScript {
+			return c.authority.WithExactExecutions(
+				[]sessionruntime.ExecutionHandle{handle},
+				func() error {
+					var applyErr error
+					committed, applyErr = apply()
+					return applyErr
+				},
+			)
+		}
+		var exactErr error
+		committed, exactErr = c.authority.ApplyWorkflowCompletion(req.ScopeID, req.Origin, apply)
+		return exactErr
 	})
+	if completed.PostCompletionEligible {
+		if err != nil {
+			return workflowstore.CurrentNodeCompletionResult{}, err
+		}
+		return completed, nil
+	}
 	if err != nil {
 		return workflowstore.CurrentNodeCompletionResult{}, err
+	}
+	if committed && len(pending) != 0 {
+		c.workerWG.Add(1)
+		go func() {
+			defer c.workerWG.Done()
+			_ = c.resolvePendingCurrentNodeAssignmentSteers(c.workerContext, starts, pending)
+		}()
 	}
 	return completed, nil
 }
@@ -844,7 +862,7 @@ func (c *CurrentNodeController) ExecutionFinalized(scope sessionruntime.Executio
 		}
 		return
 	}
-	waitCtx, cancel := context.WithTimeout(context.Background(), interruptCleanupTimeout)
+	waitCtx, cancel := context.WithTimeout(c.workerContext, interruptCleanupTimeout)
 	defer cancel()
 	needsAssignmentSteer := false
 	for _, start := range starts {
@@ -870,7 +888,22 @@ func (c *CurrentNodeController) ExecutionFinalized(scope sessionruntime.Executio
 		c.handleCurrentNodeStartFailures(outcome.committed, false, outcome.err)
 		return
 	}
+	for index := range starts {
+		if starts[index].done == nil {
+			starts[index].done = make(chan struct{})
+		}
+	}
 	c.enqueueStarts(starts)
+	for _, start := range starts {
+		if !start.assignmentSteer.RetainsSourceRuntime() {
+			continue
+		}
+		select {
+		case <-start.done:
+		case <-waitCtx.Done():
+			return
+		}
+	}
 	if len(starts) == 0 {
 		c.wakeAdmissionWorker()
 	}

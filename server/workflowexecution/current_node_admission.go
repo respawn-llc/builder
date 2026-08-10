@@ -143,6 +143,17 @@ func (s *pendingCurrentNodeAssignmentSteer) Wait(ctx context.Context) (session.C
 	return steer.Wait(ctx)
 }
 
+func (s *pendingCurrentNodeAssignmentSteer) RetainsSourceRuntime() bool {
+	<-s.ready
+	if s.err != nil {
+		panic(fmt.Sprintf("failed current node assignment steer has no runtime retention: %v", s.err))
+	}
+	if s.steer == nil {
+		panic("resolved current node assignment steer is absent")
+	}
+	return s.steer.RetainsSourceRuntime()
+}
+
 func (s *pendingCurrentNodeAssignmentSteer) resolved(ctx context.Context) (CurrentNodeAssignmentSteer, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -713,7 +724,9 @@ func (c *CurrentNodeController) takeExplicitStart() (currentNodeQueuedStart, boo
 		panic(fmt.Sprintf("take explicit current node start: %v", err))
 	}
 	delete(c.explicitQueued, key)
-	start.done = make(chan struct{})
+	if start.done == nil {
+		start.done = make(chan struct{})
+	}
 	c.explicitReservations[key] = start
 	c.admissionWorkers[key] = start
 	c.admissionWG.Add(1)
@@ -738,7 +751,9 @@ func (c *CurrentNodeController) takeAutomaticIntent() (currentNodeQueuedStart, b
 	}
 	delete(c.queued, key)
 	start.taskPromptDelivery = workflowruntime.TaskPromptDeliveryResume
-	start.done = make(chan struct{})
+	if start.done == nil {
+		start.done = make(chan struct{})
+	}
 	if start.policy.countsAgentCapacity() {
 		start.agentCapacityLease = &currentNodeAgentCapacityLease{
 			owner: currentNodeAgentCapacityReservation,

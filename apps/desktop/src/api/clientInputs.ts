@@ -141,7 +141,6 @@ export type TaskResumeInput = Readonly<{
 
 export type OrdinaryQuestionAnswerInput = Readonly<{
   kind: "ordinary";
-  clientRequestID: string;
   taskID: string;
   askID: string;
   selectedOptionNumber: number | null;
@@ -150,7 +149,6 @@ export type OrdinaryQuestionAnswerInput = Readonly<{
 
 export type ApprovalQuestionAnswerInput = Readonly<{
   kind: "approval";
-  clientRequestID: string;
   taskID: string;
   askID: string;
   decision: ApprovalDecision;

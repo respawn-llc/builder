@@ -42,15 +42,6 @@ func newTranscriptSubscriptionBroker() *transcriptSubscriptionBroker {
 	return &transcriptSubscriptionBroker{subscribers: make(map[uint64]*transcriptSubscription)}
 }
 
-func (b *transcriptSubscriptionBroker) SubscriberCount() int {
-	if b == nil {
-		return 0
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return len(b.subscribers)
-}
-
 func (b *transcriptSubscriptionBroker) Subscribe(hydration clientui.TranscriptEvent) (*transcriptSubscription, error) {
 	if b == nil {
 		return nil, fmt.Errorf("transcript stream is unavailable: %w", serverapi.ErrStreamUnavailable)

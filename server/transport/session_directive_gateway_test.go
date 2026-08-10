@@ -66,8 +66,8 @@ func TestGatewaySessionLifecycleResultRoundTrip(t *testing.T) {
 
 	var result serverapi.SessionDirective
 	callGateway(t, conn, "typed-lifecycle-result", protocol.MethodSessionResolveTransition, serverapi.SessionResolveTransitionRequest{
-		ClientRequestID: "gateway-lifecycle-result",
-		Transition:      serverapi.SessionTransition{Action: serverapi.SessionTransitionActionResume},
+
+		Transition: serverapi.SessionTransition{Action: serverapi.SessionTransitionActionResume},
 	}, &result)
 	if result.Kind() != serverapi.SessionDirectiveSelectSession {
 		t.Fatalf("result kind = %q, want select session", result.Kind())

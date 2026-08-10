@@ -231,7 +231,6 @@ func (i *SessionLaunchIntent) UnmarshalJSON(data []byte) error {
 }
 
 type SessionPlanRequest struct {
-	ClientRequestID string              `json:"client_request_id"`
 	Mode            SessionLaunchMode   `json:"mode"`
 	Intent          SessionLaunchIntent `json:"intent"`
 	CallerSessionID *string             `json:"caller_session_id,omitempty"`
@@ -240,7 +239,6 @@ type SessionPlanRequest struct {
 
 func (r *SessionPlanRequest) UnmarshalJSON(data []byte) error {
 	type wire struct {
-		ClientRequestID string              `json:"client_request_id"`
 		Mode            SessionLaunchMode   `json:"mode"`
 		Intent          SessionLaunchIntent `json:"intent"`
 		CallerSessionID *string             `json:"caller_session_id"`
@@ -251,7 +249,6 @@ func (r *SessionPlanRequest) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	request := SessionPlanRequest{
-		ClientRequestID: decoded.ClientRequestID,
 		Mode:            decoded.Mode,
 		Intent:          decoded.Intent,
 		CallerSessionID: decoded.CallerSessionID,
@@ -288,9 +285,6 @@ type SessionPlanResponse struct {
 }
 
 func (r SessionPlanRequest) Validate() error {
-	if strings.TrimSpace(r.ClientRequestID) == "" {
-		return errors.New("client_request_id is required")
-	}
 	mode := strings.TrimSpace(string(r.Mode))
 	if mode == "" {
 		return errors.New("mode is required")

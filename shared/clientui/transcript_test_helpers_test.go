@@ -33,15 +33,6 @@ func transcriptTestRunID(t *testing.T) runtimeids.RunID {
 	return runID
 }
 
-func transcriptTestClientRequestID(t *testing.T) runtimeids.RuntimeClientRequestID {
-	t.Helper()
-	id, err := runtimeids.ParseRuntimeClientRequestID("33333333-3333-4333-8333-333333333333")
-	if err != nil {
-		t.Fatalf("parse client request id: %v", err)
-	}
-	return id
-}
-
 func transcriptTestQueueItemID(t *testing.T) runtimeids.QueueItemID {
 	t.Helper()
 	id, err := runtimeids.ParseQueueItemID("55555555-5555-4555-8555-555555555555")
@@ -84,15 +75,6 @@ func transcriptTestRuntimeReadModelUpdate(t *testing.T) RuntimeReadModelUpdate {
 				StepID:     transcriptTestStepID(t),
 				ActiveKind: RuntimeActivityActiveKindUserTurn,
 			},
-		},
-		InputReconciliation: RuntimeInputReconciliationSnapshot{
-			Operations: []RuntimeInputReconciliation{{
-				Operation: RuntimeOperationRef{
-					Kind:            RuntimeOperationKindSubmit,
-					ClientRequestID: transcriptTestClientRequestID(t),
-				},
-				State: RuntimeInputReconciliationCommitted,
-			}},
 		},
 	}
 }

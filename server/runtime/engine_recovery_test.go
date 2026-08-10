@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -13,17 +14,75 @@ import (
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/tools"
+	"core/shared/config"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 )
+
+func TestWorkflowTerminalProviderStepSurfacesExactRecoveryClearFailureAfterCommit(t *testing.T) {
+	clearErr := errors.New("Workflow terminal pending recovery observer failure")
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
+	var sawPendingRecovery atomic.Bool
+	gate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
+		if snapshot.Meta.PendingModelRecovery != nil {
+			sawPendingRecovery.Store(true)
+			return false
+		}
+		return sawPendingRecovery.Load()
+	}, clearErr)
+	var events []Event
+	controller := &fakeWorkflowController{}
+	client := &fakeClient{responses: []llm.Response{
+		structuredFinalResponse(`{"commentary":"complete","summary":"done"}`),
+	}}
+	engine := mustNewWorkflowTestEngine(
+		t,
+		store,
+		client,
+		testWorkflowConfig(controller, config.WorkflowCompletionModeStructuredOutput),
+		Config{OnEvent: func(event Event) {
+			events = append(events, event)
+		}},
+	)
+
+	if _, err := engine.SubmitUserMessage(context.Background(), "run"); !errors.Is(err, errPendingModelRecoveryClear) {
+		t.Fatalf("submit error = %v, want typed pending-recovery clear failure", err)
+	}
+	if terminal := engine.WorkflowTerminalState(); !terminal.Completed {
+		t.Fatalf("Workflow terminal state = %+v, want committed completion", terminal)
+	}
+	if got := controller.completed.Load(); got != 1 {
+		t.Fatalf("Workflow completion commits = %d, want one", got)
+	}
+	clearFailureEvents := 0
+	for _, event := range events {
+		if event.Kind == EventInFlightClearFailed {
+			clearFailureEvents++
+		}
+	}
+	if clearFailureEvents != 1 {
+		t.Fatalf("typed pending-recovery clear failures = %d, want one", clearFailureEvents)
+	}
+	if recovery := store.Meta().PendingModelRecovery; recovery != nil {
+		t.Fatalf("committed Workflow terminal clear retained pending recovery: %+v", recovery)
+	}
+}
 
 func TestSubmitUserMessageSurfacesInFlightClearFailure(t *testing.T) {
 	t.Parallel()
 	clearErr := errors.New("pending model recovery observer failure")
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
+	var sawPendingRecovery atomic.Bool
+	gate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
+		if snapshot.Meta.PendingModelRecovery != nil {
+			sawPendingRecovery.Store(true)
+			return false
+		}
+		return sawPendingRecovery.Load()
+	}, clearErr)
 	var events []Event
-	failureArmed := false
 	engine := mustNewTestEngine(t, store, &fakeClient{responses: []llm.Response{{
 		Assistant: llm.Message{
 			Role:    llm.RoleAssistant,
@@ -34,18 +93,11 @@ func TestSubmitUserMessageSurfacesInFlightClearFailure(t *testing.T) {
 		Model: "gpt-5",
 		OnEvent: func(event Event) {
 			events = append(events, event)
-			if event.Kind == EventAssistantMessage && !failureArmed {
-				failureArmed = true
-				gate.FailNext(clearErr)
-			}
 		},
 	})
 
 	if _, err := engine.SubmitUserMessage(context.Background(), "input"); !errors.Is(err, errPendingModelRecoveryClear) {
 		t.Fatalf("submit error = %v, want typed pending-recovery clear failure", err)
-	}
-	if !failureArmed {
-		t.Fatal("assistant commit did not arm pending-recovery clear failure")
 	}
 
 	clearFailureEvents := 0
@@ -338,50 +390,6 @@ func TestReopenedSessionRestoresLastAssistantFinalAnswerAcrossCompaction(t *test
 	}
 }
 
-func TestExclusiveStepLifecycleClearsPendingRecoveryBeforeSchedulingBackground(t *testing.T) {
-	t.Parallel()
-	store := mustCreateTestSession(t)
-	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
-	scheduled := false
-	var recoveryAtSchedule *session.PendingModelRecovery
-	lifecycle := &defaultExclusiveStepLifecycle{
-		engine: engine,
-		background: &recoverySchedulingObserver{onSchedule: func() {
-			scheduled = true
-			if recovery := store.Meta().PendingModelRecovery; recovery != nil {
-				captured := cloneSessionPendingModelRecovery(recovery)
-				recoveryAtSchedule = &captured
-			}
-		}},
-	}
-
-	if err := lifecycle.Run(
-		context.Background(),
-		exclusiveStepOptions{ActiveKind: ActiveKindUserTurn},
-		func(_ context.Context, stepID string) error {
-			if err := engine.markProviderVisibleModelRecovery(stepID); err != nil {
-				return err
-			}
-			recovery := store.Meta().PendingModelRecovery
-			if recovery == nil || recovery.StepID != stepID {
-				t.Fatalf("pending recovery during exclusive step = %+v", recovery)
-			}
-			return nil
-		},
-	); err != nil {
-		t.Fatalf("run exclusive step: %v", err)
-	}
-	if !scheduled {
-		t.Fatal("background work was not scheduled after the exclusive step")
-	}
-	if recoveryAtSchedule != nil {
-		t.Fatalf("background work observed pending recovery = %+v", recoveryAtSchedule)
-	}
-	if recovery := store.Meta().PendingModelRecovery; recovery != nil {
-		t.Fatalf("exclusive step retained pending recovery = %+v", recovery)
-	}
-}
-
 func TestExclusiveStepLifecycleDoesNotClearSuccessorPendingRecovery(t *testing.T) {
 	t.Parallel()
 	const (
@@ -501,29 +509,6 @@ func TestReopenRepairsAskQuestionToolAttemptBeforeNextModelRequest(t *testing.T)
 		Name:  string(toolspec.ToolAskQuestion),
 		Input: json.RawMessage(`{"question":"continue?"}`),
 	})
-}
-
-type recoverySchedulingObserver struct {
-	onSchedule func()
-}
-
-func (s *recoverySchedulingObserver) HandleBackgroundShellUpdate(BackgroundShellEvent, bool) {}
-func (s *recoverySchedulingObserver) RecordBackgroundShellUpdate(BackgroundShellEvent) error {
-	return nil
-}
-func (s *recoverySchedulingObserver) QueueBackgroundShellContinuation(BackgroundShellEvent) {}
-func (s *recoverySchedulingObserver) RunBackgroundShellContinuation(context.Context, BackgroundShellEvent) error {
-	return nil
-}
-func (s *recoverySchedulingObserver) QueueDeveloperNotice(llm.Message)           {}
-func (s *recoverySchedulingObserver) flushPendingNotices(string) (int, error)    { return 0, nil }
-func (s *recoverySchedulingObserver) HasPendingNotices() bool                    { return false }
-func (s *recoverySchedulingObserver) ConsumePendingBackgroundNotice(string) bool { return false }
-
-func (s *recoverySchedulingObserver) ScheduleIfIdle() {
-	if s != nil && s.onSchedule != nil {
-		s.onSchedule()
-	}
 }
 
 type finishFailureLifecycleSink struct {

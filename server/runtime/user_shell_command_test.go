@@ -48,3 +48,11 @@ func TestSubmitUserShellCommandPersistsErrorWithoutRegisteredHandler(t *testing.
 		t.Fatalf("persisted unknown shell handler completions = %d, want one", completions)
 	}
 }
+
+func closeSignalOnce(signal chan struct{}) {
+	select {
+	case <-signal:
+	default:
+		close(signal)
+	}
+}

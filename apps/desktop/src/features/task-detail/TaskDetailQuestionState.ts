@@ -6,7 +6,6 @@ export type QuestionSelectionState = Readonly<{
   answer: string;
   askID: string;
   approvalDecision: ApprovalDecision | null;
-  clientRequestID: string | null;
   provenance: QuestionSelectionProvenance;
   selectedOption: number | null;
   submission: "idle" | "submitting" | "accepted";
@@ -37,7 +36,6 @@ export function emptyQuestionSelection(askID: string): QuestionSelectionState {
     answer: "",
     approvalDecision: null,
     askID,
-    clientRequestID: null,
     provenance: "uninitialized",
     selectedOption: null,
     submission: "idle",
@@ -123,7 +121,6 @@ export function withQuestionCommentary(
   return {
     ...selection,
     answer,
-    clientRequestID: null,
     submission: "idle",
   };
 }
@@ -135,7 +132,6 @@ export function withOrdinaryQuestionOption(
   return {
     ...selection,
     approvalDecision: null,
-    clientRequestID: null,
     provenance: "explicit",
     selectedOption,
     submission: "idle",
@@ -149,7 +145,6 @@ export function withApprovalQuestionDecision(
   return {
     ...selection,
     approvalDecision,
-    clientRequestID: null,
     provenance: "explicit",
     selectedOption: null,
     submission: "idle",

@@ -62,7 +62,10 @@ func TestRunStepLoopDoesNotDuplicateCompactionSoonReminderAfterAutoCompactionIsD
 		t.Fatalf("first runStepLoop: %v", err)
 	}
 
-	changed, enabled := eng.SetAutoCompactionEnabled(false)
+	changed, enabled, err := eng.SetAutoCompactionEnabled(false)
+	if err != nil {
+		t.Fatalf("SetAutoCompactionEnabled: %v", err)
+	}
 	if !changed || enabled {
 		t.Fatalf("expected auto compaction toggle off, changed=%v enabled=%v", changed, enabled)
 	}
@@ -872,7 +875,7 @@ func TestCacheWarningSteeringPropagatesCommittedAppendError(t *testing.T) {
 	}
 
 	observer.armed = true
-	err := eng.steer("step-1", steerCacheWarningIntent(transcript.CacheWarning{
+	err := eng.steer("step-1", testCacheWarningIntent(transcript.CacheWarning{
 		Scope:  transcript.CacheWarningScopeConversation,
 		Reason: transcript.CacheWarningReasonCompaction,
 	}, transcript.EntryVisibilityAuto, false))

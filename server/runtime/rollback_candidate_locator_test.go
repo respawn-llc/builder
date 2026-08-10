@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"core/server/llm"
+	"core/server/runtimecommand"
 	"core/server/session"
 	"core/server/tools"
 	"core/shared/rollbacktarget"
@@ -165,7 +166,7 @@ func TestQueuedUserSubmissionUpdatesLatestRollbackCandidateLocator(t *testing.T)
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{})
 
 	mustQueueUserMessage(t, eng, "queued rollback candidate")
-	if _, err := eng.SubmitQueuedUserMessages(context.Background()); err != nil {
+	if _, err := eng.submitQueuedUserMessages(context.Background()); err != nil {
 		t.Fatalf("submit queued user message: %v", err)
 	}
 
@@ -192,7 +193,10 @@ func TestRuntimeRestoreRejectsMalformedPersistedRollbackCandidateLocator(t *test
 	eventLog := mustMaterializeTestEventLog(t, store)
 	appendMalformedRollbackCandidateHistoryReplacement(t, store)
 
-	engine, err := New(store, eventLog, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	engine, err := New(store, eventLog, &fakeClient{}, tools.NewRegistry(), Config{
+		Model:         "gpt-5",
+		RuntimeEvents: runtimecommand.NewQueue(context.Background()),
+	})
 	if engine != nil || !errors.Is(err, rollbacktarget.ErrInvalidCandidateLocator) {
 		t.Fatalf("runtime restore result = engine:%+v error:%v", engine, err)
 	}

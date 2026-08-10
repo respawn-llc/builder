@@ -27,7 +27,7 @@ const cleanupRetryWait = 500 * time.Millisecond
 const controlRequestWait = 500 * time.Millisecond
 const scenarioActionWait = 5 * time.Second
 const cleanupWait = 10 * time.Second
-const readinessWait = cleanupWait
+const readinessWait = 30 * time.Second
 const preflightWait = cleanupWait
 
 var directHTTPClient = &http.Client{

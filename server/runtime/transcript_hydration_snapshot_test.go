@@ -41,8 +41,8 @@ func TestTranscriptHydrationSnapshotProjectsAndResetsOwnerLiveFacts(t *testing.T
 			t.Fatalf("tool %s: %v", call.ID, err)
 		}
 	}
-	first := mustQueueUserMessageWithClientRequestID(t, engine, "first", "client-1")
-	second := mustQueueUserMessageWithClientRequestID(t, engine, "second", "client-2")
+	first := mustQueueUserMessage(t, engine, "first")
+	second := mustQueueUserMessage(t, engine, "second")
 	snapshot := hydrationSnapshot(t, engine)
 	if snapshot.ActiveThinkingStatus == nil || snapshot.ActiveThinkingStatus.StepID != stepID ||
 		snapshot.ActiveThinkingStatus.Text != "Planning" ||
@@ -113,7 +113,7 @@ func TestTranscriptHydrationSnapshotProjectsAndResetsAllRuntimeOwners(t *testing
 	}
 }
 
-func TestFailedQueueFlushRestoresAcceptedStateAcrossHydrationRace(t *testing.T) {
+func TestFailedQueueFlushRetainsSingleAcceptedStatusAcrossHydrationRace(t *testing.T) {
 	store := mustCreateTestSession(t)
 	statuses := make(chan QueuedUserMessageStatusEvent, 4)
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
@@ -127,11 +127,11 @@ func TestFailedQueueFlushRestoresAcceptedStateAcrossHydrationRace(t *testing.T) 
 	if err := engine.ensureMetaContextForRequest(context.Background(), "queue-flush"); err != nil {
 		t.Fatalf("prepare queue flush: %v", err)
 	}
-	queued := mustQueueUserMessageWithClientRequestID(t, engine, "queued input", "request-id")
+	queued := mustQueueUserMessage(t, engine, "queued input")
 	blocker := mustBlockTestEventLogAppends(t, store)
 	flushDone := make(chan error, 1)
 	go func() {
-		_, _, err := engine.SubmitQueuedUserMessagesWithActiveHook(context.Background(), nil)
+		_, _, err := engine.submitQueuedUserMessagesWithActiveHook(context.Background(), nil)
 		flushDone <- err
 	}()
 	var duringFlush TranscriptHydrationSnapshot
@@ -166,7 +166,7 @@ func TestFailedQueueFlushRestoresAcceptedStateAcrossHydrationRace(t *testing.T) 
 				accepted++
 			}
 		default:
-			if accepted != 2 {
+			if accepted != 1 {
 				t.Fatalf("accepted queue statuses = %d", accepted)
 			}
 			if len(duringFlush.QueuedMessages) > 0 && duringFlush.QueuedMessages[0].ID != queued.ID {

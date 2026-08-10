@@ -37,6 +37,7 @@ import (
 	"core/server/llm"
 	"core/server/metadata"
 	"core/server/runtime"
+	"core/server/runtimecommand"
 	"core/server/runtimewire"
 	"core/server/session"
 	"core/server/workflowrunner"
@@ -202,6 +203,7 @@ func captureSessionRequest(
 		return capturedRequest{}, fmt.Errorf("prepare filesystem context: %w", err)
 	}
 	headless := meta.HeadlessActive || workflowPrompt != nil
+	runtimeEvents := runtimecommand.NewQueue(ctx)
 	wiring, err := runtimewire.NewRuntimeWiring(
 		store,
 		eventLog,
@@ -219,9 +221,11 @@ func captureSessionRequest(
 			ProviderCapabilitiesOverride:        providerCapabilitiesOverride,
 			GlobalConfigDir:                     persistenceRoot,
 			WorkflowPrompt:                      workflowPrompt,
+			RuntimeEvents:                       runtimeEvents,
 		},
 	)
 	if err != nil {
+		runtimeEvents.Close()
 		return capturedRequest{}, fmt.Errorf("construct runtime wiring: %w", err)
 	}
 	defer func() {

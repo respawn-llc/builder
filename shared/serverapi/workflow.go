@@ -1063,14 +1063,15 @@ func (e WorkflowTaskQuestionSelectorAmbiguousError) Is(target error) bool {
 }
 
 type WorkflowTaskCompleteRequest struct {
-	SessionID      string            `json:"session_id,omitempty"`
-	TaskID         string            `json:"task_id,omitempty"`
-	TransitionID   string            `json:"transition_id,omitempty"`
-	OutputValues   map[string]string `json:"output_values,omitempty"`
-	Commentary     string            `json:"commentary,omitempty"`
-	ActorKind      string            `json:"actor_kind"`
-	AgentSessionID string            `json:"agent_session_id,omitempty"`
-	Force          bool              `json:"force,omitempty"`
+	SessionID      string             `json:"session_id,omitempty"`
+	TaskID         string             `json:"task_id,omitempty"`
+	TransitionID   string             `json:"transition_id,omitempty"`
+	OutputValues   map[string]string  `json:"output_values,omitempty"`
+	Commentary     string             `json:"commentary,omitempty"`
+	ActorKind      string             `json:"actor_kind"`
+	AgentSessionID string             `json:"agent_session_id,omitempty"`
+	Origin         *RuntimeStepOrigin `json:"origin,omitempty"`
+	Force          bool               `json:"force,omitempty"`
 }
 
 type WorkflowTaskCompleteResponse struct {
@@ -1173,7 +1174,6 @@ type WorkflowTaskQuestionApprovalAnswer struct {
 }
 
 type WorkflowTaskQuestionAnswerRequest struct {
-	ClientRequestID      string                              `json:"client_request_id"`
 	TaskID               string                              `json:"task_id"`
 	AskID                string                              `json:"ask_id"`
 	ErrorMessage         string                              `json:"error_message,omitempty"`
@@ -3141,7 +3141,16 @@ func (r WorkflowTaskCompleteRequest) Validate() error {
 		if strings.TrimSpace(r.AgentSessionID) == "" {
 			return workflowRequestError(WorkflowRequestErrorRequired, "agent_session_id", "agent_session_id is required for agent completion")
 		}
+		if r.Origin == nil {
+			return workflowRequestError(WorkflowRequestErrorRequired, "origin", "origin is required for agent completion")
+		}
+		if err := r.Origin.Validate(); err != nil {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "origin", err.Error())
+		}
 		return nil
+	}
+	if r.Origin != nil {
+		return workflowRequestError(WorkflowRequestErrorInvalidMode, "origin", "origin is not allowed for forced completion")
 	}
 	if !r.Force {
 		return workflowRequestError(WorkflowRequestErrorInvalidMode, "force", "force is required for non-agent completion")
@@ -3206,7 +3215,7 @@ func (r WorkflowTaskAttentionListRequest) Validate() error {
 }
 
 func (r WorkflowTaskQuestionAnswerRequest) Validate() error {
-	if err := validateRequiredFields(requiredField("client_request_id", r.ClientRequestID), requiredField("task_id", r.TaskID), requiredField("ask_id", r.AskID)); err != nil {
+	if err := validateRequiredFields(requiredField("task_id", r.TaskID), requiredField("ask_id", r.AskID)); err != nil {
 		return err
 	}
 	hasTextAnswer := strings.TrimSpace(r.Answer) != ""

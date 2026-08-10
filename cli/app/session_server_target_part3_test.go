@@ -13,8 +13,6 @@ import (
 	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/serverapi"
-
-	"github.com/google/uuid"
 )
 
 func TestStartSessionServerListsPendingPromptSnapshotOverRemoteReads(t *testing.T) {
@@ -144,7 +142,7 @@ func TestStartSessionServerUsesConfiguredDaemonForProcessFlows(t *testing.T) {
 		t.Fatalf("unexpected inline output: %q", inlineResp.Output)
 	}
 
-	if _, err := processes.ProcessControls.KillProcess(context.Background(), serverapi.ProcessKillRequest{ClientRequestID: uuid.NewString(), ProcessID: result.SessionID}); err != nil {
+	if _, err := processes.ProcessControls.KillProcess(context.Background(), serverapi.ProcessKillRequest{ProcessID: result.SessionID}); err != nil {
 		t.Fatalf("KillProcess: %v", err)
 	}
 	waitForRemoteProcessExit(t, processes.ProcessViews, result.SessionID)

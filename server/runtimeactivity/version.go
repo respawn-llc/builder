@@ -9,117 +9,48 @@ import (
 	"time"
 )
 
-const DefaultCoordinatorCacheLimit = 128
+const readModelCoordinatorLimit = 128
 
-var defaultCoordinatorCache = NewCoordinatorCache(DefaultCoordinatorCacheLimit)
+var readModelCoordinators = newCoordinatorCache(readModelCoordinatorLimit)
 
 type ResponseSnapshot struct {
-	Version             clientui.ReadModelVersion
-	Activity            clientui.RuntimeActivity
-	InputReconciliation clientui.RuntimeInputReconciliationSnapshot
+	Version  clientui.ReadModelVersion
+	Activity clientui.RuntimeActivity
 }
 
 type SnapshotInput struct {
-	Resolver            ResolverSnapshot
-	InputReconciliation clientui.RuntimeInputReconciliationSnapshot
+	Resolver ResolverSnapshot
 }
 
 type SnapshotBuilder func() (SnapshotInput, error)
 
-type CoordinatorCache struct {
+type coordinatorCache struct {
 	mu             sync.Mutex
 	epoch          string
 	limit          int
 	nextGeneration uint64
 	clock          uint64
-	entries        map[string]*ReadModelCoordinator
+	entries        map[string]*readModelCoordinator
 }
 
-func NewCoordinatorCache(limit int) *CoordinatorCache {
-	if limit <= 0 {
-		limit = DefaultCoordinatorCacheLimit
-	}
-	return &CoordinatorCache{
-		epoch:          "process-" + strconv.FormatInt(time.Now().UTC().UnixNano(), 36),
-		limit:          limit,
-		nextGeneration: 1,
-		entries:        make(map[string]*ReadModelCoordinator),
-	}
-}
-
-type ReadModelCoordinator struct {
+type readModelCoordinator struct {
 	mu         sync.Mutex
-	sessionID  string
 	epoch      string
 	generation uint64
 	sequence   uint64
 	lastUsed   uint64
-	pins       uint64
 }
 
-func (c *CoordinatorCache) Next(sessionID string) clientui.ReadModelVersion {
-	return c.coordinator(sessionID).Next()
-}
-
-func (c *CoordinatorCache) Snapshot(sessionID string, resolver ResolverSnapshot) (ResponseSnapshot, error) {
-	return c.WithSnapshot(sessionID, func() (SnapshotInput, error) {
-		return SnapshotInput{
-			Resolver:            resolver,
-			InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{},
-		}, nil
-	})
-}
-
-func (c *CoordinatorCache) WithSnapshot(sessionID string, build SnapshotBuilder) (ResponseSnapshot, error) {
-	update, err := c.WithFeedSnapshot(sessionID, build)
-	if err != nil {
-		return ResponseSnapshot{}, err
-	}
-	if build == nil {
-		return ResponseSnapshot{}, nil
-	}
-	return responseSnapshot(update), nil
-}
-
-func (c *CoordinatorCache) WithFeedSnapshot(sessionID string, build SnapshotBuilder) (clientui.RuntimeReadModelUpdate, error) {
-	if build == nil {
-		return clientui.RuntimeReadModelUpdate{}, nil
-	}
-	return c.coordinator(sessionID).feedSnapshot(build)
-}
-
-func (c *CoordinatorCache) IsCurrent(sessionID string, version clientui.ReadModelVersion) bool {
-	if c == nil {
-		return false
-	}
-	coord := c.find(sessionID)
-	if coord == nil {
-		return false
-	}
-	return coord.IsCurrent(version)
-}
-
-func (c *CoordinatorCache) Pin(sessionID string) func() {
-	coord := c.coordinator(sessionID)
-	coord.mu.Lock()
-	coord.pins++
-	coord.mu.Unlock()
-	var once sync.Once
-	return func() {
-		once.Do(func() {
-			coord.mu.Lock()
-			if coord.pins > 0 {
-				coord.pins--
-			}
-			coord.mu.Unlock()
-		})
+func newCoordinatorCache(limit int) *coordinatorCache {
+	return &coordinatorCache{
+		epoch:          "process-" + strconv.FormatInt(time.Now().UTC().UnixNano(), 36),
+		limit:          limit,
+		nextGeneration: 1,
+		entries:        make(map[string]*readModelCoordinator),
 	}
 }
 
-func (c *CoordinatorCache) coordinator(sessionID string) *ReadModelCoordinator {
-	if c == nil {
-		c = defaultCoordinatorCache
-	}
+func (c *coordinatorCache) coordinator(sessionID string) *readModelCoordinator {
 	key := strings.TrimSpace(sessionID)
 	if key == "" {
 		key = "unknown"
@@ -132,93 +63,64 @@ func (c *CoordinatorCache) coordinator(sessionID string) *ReadModelCoordinator {
 		return existing
 	}
 	c.clock++
-	coord := &ReadModelCoordinator{
-		sessionID:  key,
+	coordinator := &readModelCoordinator{
 		epoch:      c.epoch,
 		generation: c.nextGeneration,
 		lastUsed:   c.clock,
 	}
 	c.nextGeneration++
-	c.entries[key] = coord
-	c.evictIfNeededLocked(key)
-	return coord
-}
-
-func (c *CoordinatorCache) find(sessionID string) *ReadModelCoordinator {
-	key := strings.TrimSpace(sessionID)
-	if key == "" {
-		key = "unknown"
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.entries[key]
-}
-
-func (c *CoordinatorCache) evictIfNeededLocked(pinnedKey string) {
+	c.entries[key] = coordinator
 	for len(c.entries) > c.limit {
 		oldestKey := ""
 		oldestStamp := uint64(0)
-		for key, coord := range c.entries {
-			if key == pinnedKey {
+		for candidate, entry := range c.entries {
+			if candidate == key {
 				continue
 			}
-			coord.mu.Lock()
-			pinned := coord.pins > 0
-			coord.mu.Unlock()
-			if pinned {
-				continue
-			}
-			if oldestKey == "" || coord.lastUsed < oldestStamp {
-				oldestKey = key
-				oldestStamp = coord.lastUsed
+			if oldestKey == "" || entry.lastUsed < oldestStamp {
+				oldestKey = candidate
+				oldestStamp = entry.lastUsed
 			}
 		}
 		if oldestKey == "" {
-			return
+			break
 		}
 		delete(c.entries, oldestKey)
 	}
+	return coordinator
 }
 
-func (c *ReadModelCoordinator) Next() clientui.ReadModelVersion {
-	if c == nil {
-		return defaultCoordinatorCache.Next("unknown")
-	}
+func (c *readModelCoordinator) next() clientui.ReadModelVersion {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.nextLocked()
+}
+
+func (c *readModelCoordinator) nextLocked() clientui.ReadModelVersion {
 	c.sequence++
-	version, err := clientui.NewReadModelVersion(c.epoch, c.generation, c.sequence)
+	if c.sequence == 0 {
+		panic("runtime read-model version sequence overflow")
+	}
+	version, err := clientui.NewReadModelVersion(
+		c.epoch,
+		c.generation,
+		c.sequence,
+	)
 	if err != nil {
 		panic(err)
 	}
 	return version
 }
 
-func (c *ReadModelCoordinator) Snapshot(build SnapshotBuilder) (ResponseSnapshot, error) {
-	update, err := c.feedSnapshot(build)
-	if err != nil {
-		return ResponseSnapshot{}, err
-	}
-	if build == nil {
-		return ResponseSnapshot{}, nil
-	}
-	return responseSnapshot(update), nil
-}
-
-func (c *ReadModelCoordinator) feedSnapshot(build SnapshotBuilder) (clientui.RuntimeReadModelUpdate, error) {
-	if c == nil {
-		return defaultCoordinatorCache.WithFeedSnapshot("unknown", build)
-	}
+func (c *readModelCoordinator) buildFeedSnapshot(
+	build SnapshotBuilder,
+) (clientui.RuntimeReadModelUpdate, error) {
 	if build == nil {
 		return clientui.RuntimeReadModelUpdate{}, nil
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.sequence++
-	version, err := clientui.NewReadModelVersion(c.epoch, c.generation, c.sequence)
-	if err != nil {
-		panic(err)
-	}
+	version := c.nextLocked()
 	input, err := build()
 	if err != nil {
 		return clientui.RuntimeReadModelUpdate{}, err
@@ -228,9 +130,8 @@ func (c *ReadModelCoordinator) feedSnapshot(build SnapshotBuilder) (clientui.Run
 		return clientui.RuntimeReadModelUpdate{}, err
 	}
 	update := clientui.RuntimeReadModelUpdate{
-		Version:             version,
-		Activity:            activity,
-		InputReconciliation: input.InputReconciliation,
+		Version:  version,
+		Activity: activity,
 	}
 	if err := update.Validate(); err != nil {
 		return clientui.RuntimeReadModelUpdate{}, fmt.Errorf("validate runtime feed read-model update: %w", err)
@@ -238,25 +139,26 @@ func (c *ReadModelCoordinator) feedSnapshot(build SnapshotBuilder) (clientui.Run
 	return update, nil
 }
 
-func (c *ReadModelCoordinator) IsCurrent(version clientui.ReadModelVersion) bool {
-	if c == nil {
-		return false
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return version.Epoch == c.epoch && version.Generation == c.generation && version.Sequence <= c.sequence
-}
-
 func NextReadModelVersion(sessionID string) clientui.ReadModelVersion {
-	return defaultCoordinatorCache.Next(sessionID)
+	return readModelCoordinators.coordinator(sessionID).next()
 }
 
 func BuildSnapshot(sessionID string, build SnapshotBuilder) (ResponseSnapshot, error) {
-	return defaultCoordinatorCache.WithSnapshot(sessionID, build)
+	update, err := BuildFeedSnapshot(sessionID, build)
+	if err != nil {
+		return ResponseSnapshot{}, err
+	}
+	if build == nil {
+		return ResponseSnapshot{}, nil
+	}
+	return responseSnapshot(update), nil
 }
 
-func BuildFeedSnapshot(sessionID string, build SnapshotBuilder) (clientui.RuntimeReadModelUpdate, error) {
-	return defaultCoordinatorCache.WithFeedSnapshot(sessionID, build)
+func BuildFeedSnapshot(
+	sessionID string,
+	build SnapshotBuilder,
+) (clientui.RuntimeReadModelUpdate, error) {
+	return readModelCoordinators.coordinator(sessionID).buildFeedSnapshot(build)
 }
 
 func responseSnapshot(update clientui.RuntimeReadModelUpdate) ResponseSnapshot {
@@ -264,8 +166,7 @@ func responseSnapshot(update clientui.RuntimeReadModelUpdate) ResponseSnapshot {
 		panic(fmt.Sprintf("project invalid runtime read-model update: %+v: %v", update, err))
 	}
 	return ResponseSnapshot{
-		Version:             update.Version,
-		Activity:            update.Activity,
-		InputReconciliation: update.InputReconciliation,
+		Version:  update.Version,
+		Activity: update.Activity,
 	}
 }

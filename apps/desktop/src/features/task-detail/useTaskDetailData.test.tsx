@@ -61,7 +61,6 @@ describe("Task Detail live refresh", () => {
     expect(subscriptionStarts).toBeGreaterThan(0);
     await services.api.answerQuestion({
       kind: "ordinary",
-      clientRequestID: "request-1",
       taskID: "task-1",
       askID: "ask-1",
       selectedOptionNumber: null,

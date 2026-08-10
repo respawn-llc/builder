@@ -11,6 +11,7 @@ import (
 	"core/server/llm"
 	"core/server/runlog"
 	"core/server/runtime"
+	"core/server/runtimecommand"
 	"core/server/runtimewire"
 	"core/server/session"
 	"core/server/tools"
@@ -99,7 +100,6 @@ type authorityRuntimeOptions struct {
 	storeOptions      []session.StoreOption
 	eventFeed         AgentResourceEventFeed
 	resourceLifecycle AgentResourceLifecycle
-	stepLifecycle     AgentResourceStepLifecycle
 }
 
 func newAuthorityRuntimeOptions(options AuthorityOptions) authorityRuntimeOptions {
@@ -110,7 +110,6 @@ func newAuthorityRuntimeOptions(options AuthorityOptions) authorityRuntimeOption
 		storeOptions:      append([]session.StoreOption(nil), options.StoreOptions...),
 		eventFeed:         options.EventFeed,
 		resourceLifecycle: options.ResourceLifecycle,
-		stepLifecycle:     options.StepLifecycle,
 	}
 }
 
@@ -161,6 +160,7 @@ func (a *Authority) buildAgentResource(ctx context.Context, descriptor session.S
 		ownerlessDisposition: agentResourceRemainAvailable,
 		store:                store,
 	}
+	resource.events = runtimecommand.NewQueue(context.Background())
 	logger, err := runlog.NewRunLogger(store.Dir(), func(diag runlog.RunLoggerDiagnostic) {
 		if plan.options.OnLoggingFailure != nil {
 			plan.options.OnLoggingFailure(diag.Message)
@@ -168,6 +168,7 @@ func (a *Authority) buildAgentResource(ctx context.Context, descriptor session.S
 	})
 	if err != nil {
 		cancel()
+		resource.events.Close()
 		return nil, err
 	}
 	durabilityObserver.Attach(logger)
@@ -177,11 +178,13 @@ func (a *Authority) buildAgentResource(ctx context.Context, descriptor session.S
 	wiring, err := a.newRuntimeWiringFromPlan(resource, store, logger, durabilityObserver, *plan)
 	if err != nil {
 		cancel()
+		resource.events.Close()
 		err = errors.Join(err, logger.Close())
 		return nil, err
 	}
 	if wiring == nil || wiring.Engine == nil {
 		cancel()
+		resource.events.Close()
 		_ = logger.Close()
 		return nil, errors.New("agent runtime factory returned no engine")
 	}
@@ -194,6 +197,7 @@ func (a *Authority) buildAgentResource(ctx context.Context, descriptor session.S
 	resource.backgroundLimit = plan.options.Settings.ShellOutputMaxChars
 	resource.backgroundMode = shelltool.NormalizeBackgroundOutputMode(string(plan.options.Settings.BGShellsOutput))
 	resource.close = func() error {
+		resource.events.Close()
 		return errors.Join(wiring.Close(), logger.Close())
 	}
 	resource.state = AgentResourceReady
@@ -231,6 +235,7 @@ func (a *Authority) newRuntimeWiringFromPlan(resource *agentResource, store *ses
 		LifecycleRuntimeAbort: func() error {
 			return a.retireRuntimeAbortResource(context.Background(), resource)
 		},
+		RuntimeEvents: resource.events,
 		OnEvent: func(event runtime.Event) {
 			logger.Logf("%s", runlog.FormatRuntimeEvent(event))
 			if transcriptdiag.Enabled(options.Settings.Debug, os.Getenv) {

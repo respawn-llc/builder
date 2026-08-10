@@ -271,7 +271,7 @@ func TestProjectMutationsSerializeOnlyEqualProjectIDs(t *testing.T) {
 	guard.assertCalls(t, created.Meta().SessionID)
 }
 
-func TestServiceProjectBlockersIncludeRuntimeMaintenance(t *testing.T) {
+func TestServiceProjectBlockersExcludeDirectRuntimeMaintenance(t *testing.T) {
 	store, cfg, binding := newProjectViewMetadataStore(t)
 	created := createProjectViewSession(t, store, cfg, binding.ProjectID, cfg.WorkspaceRoot, "maintenance")
 	authority, sessionID, plan := newProjectViewRuntimeAuthority(t, store, cfg, created)
@@ -315,8 +315,8 @@ func TestServiceProjectBlockersIncludeRuntimeMaintenance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("project active session blockers: %v", err)
 	}
-	if len(blockers) != 1 || blockers[0].Code != "active_sessions" || blockers[0].Count != 1 {
-		t.Fatalf("project blockers = %+v, want one active maintenance session", blockers)
+	if len(blockers) != 0 {
+		t.Fatalf("project blockers = %+v, want no Exact Execution Scope blocker", blockers)
 	}
 
 	close(release)

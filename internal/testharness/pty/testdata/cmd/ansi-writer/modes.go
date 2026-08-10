@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"os/signal"
 	"syscall"
 	"time"
@@ -43,6 +44,14 @@ func runMode(mode string) error {
 	case "hang":
 		fmt.Print("ready")
 		time.Sleep(24 * time.Hour)
+	case "retain-pty":
+		signal.Ignore(syscall.SIGHUP)
+		descendant := exec.Command("sleep", "3600")
+		descendant.Stdin, descendant.Stdout, descendant.Stderr = os.Stdin, os.Stdout, os.Stderr
+		if err := descendant.Start(); err != nil {
+			return err
+		}
+		return os.WriteFile(os.Getenv("PID_FILE"), []byte(fmt.Sprint(descendant.Process.Pid)), 0o600)
 	case "ignore-term":
 		signal.Ignore(syscall.SIGHUP, syscall.SIGTERM)
 		fmt.Print("\x1b[?25h")

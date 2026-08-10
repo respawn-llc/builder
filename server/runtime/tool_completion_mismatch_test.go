@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"os/exec"
 	"testing"
 
 	"core/server/llm"
@@ -18,42 +20,53 @@ import (
 
 func TestToolCompletionDeletionMismatchPanicsBeforePersistenceInDebug(t *testing.T) {
 	t.Parallel()
-	store := mustCreateTestSession(t)
-	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
-		Model: "gpt-5",
-		Debug: true,
-	})
-	result := mismatchedDeletionCompletion(t, engine)
-
-	defer func() {
-		recovered := recover()
-		failure, ok := recovered.(toolCompletionPresentationPanic)
-		if !ok {
-			t.Fatalf("panic = %#v, want typed tool completion presentation panic", recovered)
-		}
-		if failure.CallID != result.CallID ||
-			failure.ToolName != result.Name ||
-			failure.Mismatch == nil ||
-			failure.Mismatch.Kind != patchformat.WholeFileDeletionFactMismatchUnexpectedOperation {
-			t.Fatalf("typed panic context = %+v", failure)
-		}
-
-		window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
-		if err != nil {
-			t.Fatalf("read bounded mismatch records: %v", err)
-		}
-		for _, record := range window.Records {
-			switch mustSessionEventPayload(record).(type) {
-			case session.ToolCompletionRecord, session.LocalEntryRecord:
-				t.Fatalf("debug mismatch persisted a completion or fallback entry: %+v", record)
+	const childProcess = "KENT_TEST_TOOL_COMPLETION_MISMATCH_CHILD"
+	if os.Getenv(childProcess) != "" {
+		store := mustCreateTestSession(t)
+		engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+			Model: "gpt-5",
+			Debug: true,
+		})
+		result := mismatchedDeletionCompletion(t, engine)
+		defer func() {
+			recovered := recover()
+			failure, ok := recovered.(toolCompletionPresentationPanic)
+			if !ok {
+				t.Fatalf("panic = %#v, want typed tool completion presentation panic", recovered)
 			}
-		}
-		if _, ok := engine.transcriptRuntimeState().liveToolLedger().Lookup(result.CallID); !ok {
-			t.Fatal("debug mismatch removed the live tool before persistence")
-		}
-	}()
+			if failure.CallID != result.CallID ||
+				failure.ToolName != result.Name ||
+				failure.Mismatch == nil ||
+				failure.Mismatch.Kind != patchformat.WholeFileDeletionFactMismatchUnexpectedOperation {
+				t.Fatalf("typed panic context = %+v", failure)
+			}
 
-	_, _ = engine.steerWithCommitReceipt("step-delete", steerToolCompletionIntent(result))
+			window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
+			if err != nil {
+				t.Fatalf("read bounded mismatch records: %v", err)
+			}
+			for _, record := range window.Records {
+				switch mustSessionEventPayload(record).(type) {
+				case session.ToolCompletionRecord, session.LocalEntryRecord:
+					t.Fatalf("debug mismatch persisted a completion or fallback entry: %+v", record)
+				}
+			}
+			if _, ok := engine.transcriptRuntimeState().liveToolLedger().Lookup(result.CallID); !ok {
+				t.Fatal("debug mismatch removed the live tool before persistence")
+			}
+		}()
+		_ = (runtimeEventAdmission{engine: engine}).applySteering(
+			"delete-step",
+			steerToolCompletionIntent(result),
+		)
+		return
+	}
+
+	command := exec.Command(os.Args[0], "-test.run=^TestToolCompletionDeletionMismatchPanicsBeforePersistenceInDebug$")
+	command.Env = append(os.Environ(), childProcess+"=1")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("debug mismatch child invariant check failed: %v\n%s", err, output)
+	}
 }
 
 func TestToolCompletionDeletionMismatchReleaseFallbackPersistsRecovery(t *testing.T) {

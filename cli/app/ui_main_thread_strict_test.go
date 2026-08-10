@@ -78,9 +78,8 @@ func (c *strictRuntimeClient) SubmitRuntimeInput(_ context.Context, request clie
 	c.submitCalls++
 	return clientui.UserTurnSubmission{
 		Queued: clientui.QueuedUserMessage{
-			ID:              c.submitQueuedID,
-			Text:            runtimeSubmitInputText(request),
-			ClientRequestID: request.OperationRef.ClientRequestID.String(),
+			ID:   c.submitQueuedID,
+			Text: runtimeSubmitInputText(request),
 		},
 	}, nil
 }
@@ -101,12 +100,7 @@ func TestTUIStrictIOBusyEnterQueuesInjectedInputAsCommand(t *testing.T) {
 	if client.submitCalls != 0 {
 		t.Fatalf("SubmitRuntimeInput called during Update: %d", client.submitCalls)
 	}
-	for _, msg := range strictCmdMessages(cmd) {
-		if completion, ok := msg.(injectedQueueCreateDoneMsg); ok {
-			next, _ = updated.Update(completion)
-			updated = next.(*uiModel)
-		}
-	}
+	runDraftRecoveryCommands(t, updated, cmd)
 	if client.submitCalls != 1 {
 		t.Fatalf("SubmitRuntimeInput calls after command = %d, want 1", client.submitCalls)
 	}
@@ -193,7 +187,11 @@ func TestTUIStrictIOWorktreeSwitchRunsAsCommand(t *testing.T) {
 }
 
 func newStrictUIModel(client clientui.RuntimeClient, options ...UIOption) *uiModel {
-	return NewProjectedUIModel(client, options...).(*uiModel)
+	defaults := []UIOption{
+		WithUISessionID("11111111-1111-4111-8111-111111111111"),
+		WithUISessionDraftPersistence(testSessionDraftPersistence{}),
+	}
+	return NewProjectedUIModel(client, append(defaults, options...)...).(*uiModel)
 }
 
 func setStrictTestRuntimeBusy(t *testing.T, m *uiModel) {

@@ -37,7 +37,6 @@ type AuthorityOptions struct {
 	StoreOptions       []session.StoreOption
 	EventFeed          AgentResourceEventFeed
 	ResourceLifecycle  AgentResourceLifecycle
-	StepLifecycle      AgentResourceStepLifecycle
 	PromptFeed         ExecutionPromptFeed
 }
 

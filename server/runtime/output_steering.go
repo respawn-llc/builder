@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"core/server/llm"
+	"core/server/runtimecommand"
 	"core/server/session"
 	"core/server/tools"
 	"core/shared/runtimeids"
@@ -48,7 +49,6 @@ type steeringItem struct {
 	resultGroupClose            *steeringResultGroupClose
 	missingToolOutputRepair     *steeringMissingToolOutputRepair
 	queuedFlush                 *steeringQueuedUserMessageFlush
-	queuedRestore               *steeringQueuedUserMessageRestore
 	event                       *Event
 	streaming                   *steeringStreamingOutput
 	cacheWarning                *steeringCacheWarning
@@ -198,10 +198,6 @@ type steeringQueuedUserMessageFlush struct {
 	message    llm.Message
 	batch      []string
 	queueItems []QueuedUserMessage
-}
-
-type steeringQueuedUserMessageRestore struct {
-	items []queuedUserMessage
 }
 
 type steeringMessageEventPolicy uint8
@@ -371,15 +367,6 @@ func steerQueuedUserMessageFlushIntent(message llm.Message, batch []string, queu
 	}
 }
 
-func steerQueuedUserMessageRestoreIntent(items []queuedUserMessage) steeringIntent {
-	return steeringIntent{
-		priority: steeringPriorityUser,
-		items: []steeringItem{{queuedRestore: &steeringQueuedUserMessageRestore{
-			items: append([]queuedUserMessage(nil), items...),
-		}}},
-	}
-}
-
 func steerEventIntent(evt Event) steeringIntent {
 	copyEvent := evt
 	return steeringIntent{
@@ -507,18 +494,6 @@ func steerResetReasoningStateIntent() steeringIntent {
 	}
 }
 
-func steerCacheWarningIntent(warning transcript.CacheWarning, visibility transcript.EntryVisibility, emit bool) steeringIntent {
-	copyWarning := warning
-	return steeringIntent{
-		priority: steeringPriorityRuntimeEvent,
-		items: []steeringItem{{cacheWarning: &steeringCacheWarning{
-			warning:    copyWarning,
-			visibility: normalizeRuntimeEntryVisibility(visibility),
-			emit:       emit,
-		}}},
-	}
-}
-
 func steerCacheObservationIntent(records []session.EventRecordPayload, response persistedCacheResponseObserved, warning *transcript.CacheWarning, visibility transcript.EntryVisibility, emit bool) steeringIntent {
 	copyRecords := append([]session.EventRecordPayload(nil), records...)
 	var copyWarning transcript.CacheWarning
@@ -542,14 +517,77 @@ func (e *Engine) steer(stepID string, intents ...steeringIntent) error {
 	if e.closed.Load() {
 		return ErrEngineClosed
 	}
-	return e.steerOrdered(stepID, intents...)
+	if steeringContainsLineDelta(intents) {
+		if !steeringContainsOnlyLineDeltas(intents) {
+			return errors.New("line-by-line streaming deltas cannot share a durable steering batch")
+		}
+		return e.applyLineDeltas(stepID, intents)
+	}
+	_, err := submitRuntimeEvent(
+		e,
+		steeringEvent{stepID: stepID, intents: intents},
+		func(
+			admission runtimeEventAdmission,
+			event steeringEvent,
+		) (struct{}, error) {
+			return struct{}{}, admission.applySteering(event.stepID, event.intents...)
+		},
+	)
+	return err
 }
 
-func (e *Engine) steerRuntimeClose(stepID string, intents ...steeringIntent) error {
-	if e == nil {
-		return nil
+type steeringEvent struct {
+	stepID  string
+	intents []steeringIntent
+}
+
+func runtimeSteeringError(err error) error {
+	if errors.Is(err, runtimecommand.ErrUnavailable) {
+		return errors.Join(ErrEngineClosed, err)
 	}
-	return e.steerOrdered(stepID, intents...)
+	return err
+}
+
+func steeringContainsLineDelta(intents []steeringIntent) bool {
+	for _, intent := range intents {
+		for _, item := range intent.items {
+			if isLineDelta(item) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func steeringContainsOnlyLineDeltas(intents []steeringIntent) bool {
+	found := false
+	for _, intent := range intents {
+		for _, item := range intent.items {
+			if !isLineDelta(item) {
+				return false
+			}
+			found = true
+		}
+	}
+	return found
+}
+
+func isLineDelta(item steeringItem) bool {
+	return item.streaming != nil &&
+		(item.streaming.assistantDelta != nil || item.streaming.reasoningDelta != nil)
+}
+
+func (e *Engine) applyLineDeltas(stepID string, intents []steeringIntent) error {
+	e.streamMutationMu.Lock()
+	defer e.streamMutationMu.Unlock()
+	for _, intent := range intents {
+		for _, item := range intent.items {
+			if err := e.applyLineDelta(stepID, item); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (e *Engine) steerWithCommitReceipt(stepID string, intent steeringIntent) (session.CommitReceipt, error) {
@@ -565,7 +603,7 @@ func (e *Engine) steerWithCommitReceipt(stepID string, intent steeringIntent) (s
 	return receipt, err
 }
 
-func (e *Engine) steerOrdered(stepID string, intents ...steeringIntent) error {
+func (e *Engine) applySteeringBatch(stepID string, intents ...steeringIntent) error {
 	ordered := make([]steeringIntent, 0, len(intents))
 	for _, intent := range intents {
 		if len(intent.items) == 0 {
@@ -576,8 +614,8 @@ func (e *Engine) steerOrdered(stepID string, intents ...steeringIntent) error {
 	if len(ordered) == 0 {
 		return nil
 	}
-	e.outputMutationMu.Lock()
-	defer e.outputMutationMu.Unlock()
+	e.streamMutationMu.Lock()
+	defer e.streamMutationMu.Unlock()
 	sort.SliceStable(ordered, func(i, j int) bool {
 		return ordered[i].priority < ordered[j].priority
 	})
@@ -617,13 +655,58 @@ func workflowPostCompletionActivityForSteeringItem(item steeringItem) workflowPo
 
 func (e *Engine) resolveCompletedResponseStream(stepID string, instruction completedResponseResolutionInstruction) (completedResponseResolutionOutcome, error) {
 	outcome := completedResponseResolutionOutcome{}
-	if err := e.steerOrdered(stepID, steerCompletedResponseResolutionIntent(instruction, &outcome)); err != nil {
+	if err := e.steer(stepID, steerCompletedResponseResolutionIntent(instruction, &outcome)); err != nil {
 		return completedResponseResolutionOutcome{}, err
 	}
 	if outcome.kind == completedResponseResolutionInvalid {
 		return completedResponseResolutionOutcome{}, errors.New("completed response stream resolution produced no outcome")
 	}
 	return outcome, nil
+}
+
+func (e *Engine) applyLineDelta(stepID string, item steeringItem) error {
+	if item.streaming == nil {
+		return errors.New("line-by-line streaming item is required")
+	}
+	if item.streaming.assistantDelta != nil {
+		delta := *item.streaming.assistantDelta
+		if delta.Text == "" {
+			return nil
+		}
+		revision, err := e.TranscriptRevision()
+		if err != nil {
+			return err
+		}
+		metadata, streamID := e.transcriptRuntimeState().AppendStreamingDelta(
+			stepID,
+			revision,
+			e.CommittedTranscriptEntryCount(),
+			delta.Text,
+			delta.Phase,
+		)
+		return e.emitRaw(Event{
+			Kind:                        EventAssistantDelta,
+			StepID:                      stepID,
+			AssistantDelta:              delta.Text,
+			AssistantDeltaPhase:         delta.Phase,
+			AssistantStreamMetadata:     metadata,
+			AssistantTranscriptStreamID: streamID,
+		})
+	}
+	if item.streaming.reasoningDelta != nil {
+		delta := *item.streaming.reasoningDelta
+		identity, err := e.transcriptRuntimeState().SetReasoningState(stepID, delta)
+		if err != nil {
+			return err
+		}
+		return e.emitRaw(Event{
+			Kind:                   EventReasoningDelta,
+			StepID:                 stepID,
+			ReasoningDelta:         &delta,
+			ReasoningTraceIdentity: cloneTranscriptReasoningTraceIdentity(identity),
+		})
+	}
+	return errors.New("streaming item is not a line-by-line delta")
 }
 
 func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
@@ -858,13 +941,6 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 		item.recordCommitReceipt(receipt)
 		return err
 	}
-	if item.queuedRestore != nil {
-		e.messageFlow.RestorePendingUserInjections(item.queuedRestore.items)
-		for _, pending := range item.queuedRestore.items {
-			e.emitQueuedUserMessageStatus(pending.message, QueuedUserMessageAccepted, "", false)
-		}
-		return nil
-	}
 	if item.event != nil {
 		evt := *item.event
 		if evt.StepID == "" {
@@ -971,30 +1047,8 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 			e.transcriptRuntimeState().ClearReasoningState(stepID)
 			return nil
 		}
-		if item.streaming.assistantDelta != nil {
-			delta := *item.streaming.assistantDelta
-			if delta.Text == "" {
-				return nil
-			}
-			revision, err := e.TranscriptRevision()
-			if err != nil {
-				return err
-			}
-			metadata, streamID := e.transcriptRuntimeState().AppendStreamingDelta(stepID, revision, e.CommittedTranscriptEntryCount(), delta.Text, delta.Phase)
-			return e.emitRaw(Event{Kind: EventAssistantDelta, StepID: stepID, AssistantDelta: delta.Text, AssistantDeltaPhase: delta.Phase, AssistantStreamMetadata: metadata, AssistantTranscriptStreamID: streamID})
-		}
-		if item.streaming.reasoningDelta != nil {
-			delta := *item.streaming.reasoningDelta
-			identity, err := e.transcriptRuntimeState().SetReasoningState(stepID, delta)
-			if err != nil {
-				return err
-			}
-			return e.emitRaw(Event{
-				Kind:                   EventReasoningDelta,
-				StepID:                 stepID,
-				ReasoningDelta:         &delta,
-				ReasoningTraceIdentity: cloneTranscriptReasoningTraceIdentity(identity),
-			})
+		if item.streaming.assistantDelta != nil || item.streaming.reasoningDelta != nil {
+			return errors.New("line-by-line streaming delta reached durable Runtime Event admission")
 		}
 		var clearedMetadata *AssistantStreamMetadata
 		var clearedStreamID *uuid.UUID

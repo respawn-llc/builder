@@ -34,11 +34,6 @@ import (
 
 type authorityLifecycleProbe struct {
 	draining chan struct{}
-	retain   AgentResourceRetainer
-}
-
-type authorityAutoReleaseLifecycle struct {
-	release func() error
 }
 
 type authorityPromptEvent struct {
@@ -303,30 +298,17 @@ func (f authorityPromptFeed) PromptResolvedScope(scope ExecutionScope, requestID
 	return nil
 }
 
-func (p *authorityLifecycleProbe) ResourceReady(_ context.Context, _ AgentResourceDescriptor, _ *runtime.Engine, retain AgentResourceRetainer) error {
-	p.retain = retain
+func (p *authorityLifecycleProbe) ResourceReady(
+	context.Context,
+	AgentResourceDescriptor,
+	*runtime.Engine,
+) error {
 	return nil
 }
 
 func (p *authorityLifecycleProbe) ResourceDraining(context.Context, AgentResourceDescriptor) error {
 	p.draining <- struct{}{}
 	return nil
-}
-
-func (l *authorityAutoReleaseLifecycle) ResourceReady(_ context.Context, _ AgentResourceDescriptor, _ *runtime.Engine, retain AgentResourceRetainer) error {
-	retention, err := retain()
-	if err != nil {
-		return err
-	}
-	l.release = retention.Close
-	return nil
-}
-
-func (l *authorityAutoReleaseLifecycle) ResourceDraining(context.Context, AgentResourceDescriptor) error {
-	if l.release == nil {
-		return nil
-	}
-	return l.release()
 }
 
 func TestOpenRuntimeReturnsRunLoggerCreationError(t *testing.T) {
@@ -524,97 +506,6 @@ func TestNewLazyWithIDPreservesCategoryValidation(t *testing.T) {
 	}
 }
 
-func TestCloseIfIdleRetiresOwnerlessRuntimeAfterCurrentExecutionFinishes(t *testing.T) {
-	fixture := newSessionRuntimeFixture(t)
-	sessionID := lifecycleSessionID(t, fixture)
-	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
-	authority := newAuthorityWithEventFeed(t, fixture, func(AgentResourceDescriptor, runtime.Event) {})
-	attachment := openLifecycleRuntime(t, authority, sessionID, "owner-a", &plan)
-
-	entered := make(chan struct{})
-	finish := make(chan struct{})
-	handle, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
-		Descriptor: mustOpenSessionDescriptor(t, sessionID),
-		Resource:   CurrentAgentResource{},
-		Runner: func(ctx context.Context, _ ExecutionScope, bridge AgentRuntimeBridge) error {
-			if err := bridge.WithEngine(ctx, func(_ context.Context, engine *runtime.Engine) error {
-				engine.QueueUserMessage("queued during current execution")
-				return nil
-			}); err != nil {
-				return err
-			}
-			close(entered)
-			<-finish
-			return nil
-		},
-	})
-	if err != nil {
-		t.Fatalf("start current agent execution: %v", err)
-	}
-	<-entered
-
-	release, err := attachment.Release(context.Background(), RuntimeReleaseCloseIfIdle)
-	if err != nil {
-		t.Fatalf("release active runtime: %v", err)
-	}
-	if !release.Active || release.Released {
-		t.Fatalf("active release = %+v, want active pending retirement", release)
-	}
-	accessErr := authority.WithRuntime(context.Background(), attachment.Resource(), func(context.Context, *runtime.Engine) error {
-		return nil
-	})
-
-	close(finish)
-	if _, err := handle.Wait(context.Background()); err != nil {
-		t.Fatalf("wait current agent execution: %v", err)
-	}
-	if accessErr != nil {
-		t.Fatalf("ready ownerless runtime rejected callback before retirement: %v", accessErr)
-	}
-	assertRuntimeUnavailable(t, authority, attachment.Resource(), "execution finished")
-}
-
-func TestCloseIfIdleFailsQueuedWorkAndRetiresOwnerlessRuntime(t *testing.T) {
-	fixture := newSessionRuntimeFixture(t)
-	sessionID := lifecycleSessionID(t, fixture)
-	var statusMu sync.Mutex
-	var statuses []runtime.QueuedUserMessageStatusEvent
-	authority := newAuthorityWithEventFeed(t, fixture, func(_ AgentResourceDescriptor, event runtime.Event) {
-		if event.QueuedUserMessageStatus == nil {
-			return
-		}
-		statusMu.Lock()
-		statuses = append(statuses, *event.QueuedUserMessageStatus)
-		statusMu.Unlock()
-	})
-	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
-	attachment := openLifecycleRuntime(t, authority, sessionID, "owner-a", &plan)
-	if err := authority.WithRuntime(context.Background(), attachment.Resource(), func(_ context.Context, engine *runtime.Engine) error {
-		engine.QueueUserMessage("queued before disconnect")
-		return nil
-	}); err != nil {
-		t.Fatalf("queue user message: %v", err)
-	}
-
-	release, err := attachment.Release(context.Background(), RuntimeReleaseCloseIfIdle)
-	if err != nil {
-		t.Fatalf("release queued runtime: %v", err)
-	}
-	if !release.Released || release.Active {
-		t.Fatalf("queued release = %+v, want immediate retirement", release)
-	}
-	assertRuntimeUnavailable(t, authority, attachment.Resource(), "queued release")
-
-	statusMu.Lock()
-	defer statusMu.Unlock()
-	if len(statuses) != 2 ||
-		statuses[0].Status != runtime.QueuedUserMessageAccepted ||
-		statuses[1].Status != runtime.QueuedUserMessageFailed ||
-		statuses[1].FailureReason != runtime.QueuedUserMessageFailureClosing {
-		t.Fatalf("queued message statuses = %+v, want accepted then failed-closing", statuses)
-	}
-}
-
 func TestCloseIfIdleRetiresOwnerlessRuntimeAfterCallbackFinishes(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
@@ -649,182 +540,113 @@ func TestCloseIfIdleRetiresOwnerlessRuntimeAfterCallbackFinishes(t *testing.T) {
 	assertRuntimeUnavailable(t, authority, attachment.Resource(), "callback finished")
 }
 
-func TestCloseIfIdleRetiresOwnerlessRuntimeAfterRetentionRelease(t *testing.T) {
-	fixture := newSessionRuntimeFixture(t)
-	sessionID := lifecycleSessionID(t, fixture)
-	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
-	lifecycle := &authorityLifecycleProbe{draining: make(chan struct{}, 1)}
-	authority := NewAuthority(AuthorityOptions{
-		PersistenceRoot:   fixture.config.PersistenceRoot,
-		StoreOptions:      fixture.metadata.AuthoritativeSessionStoreOptions(),
-		ResourceLifecycle: lifecycle,
-	})
-	t.Cleanup(func() {
-		if err := authority.Close(context.Background()); err != nil {
-			t.Errorf("close authority: %v", err)
-		}
-	})
-	attachment := openLifecycleRuntime(t, authority, sessionID, "owner-a", &plan)
-	if lifecycle.retain == nil {
-		t.Fatal("resource lifecycle did not expose retention")
-	}
-	retention, err := lifecycle.retain()
-	if err != nil {
-		t.Fatalf("retain runtime: %v", err)
-	}
-
-	release, err := attachment.Release(context.Background(), RuntimeReleaseCloseIfIdle)
-	if err != nil {
-		t.Fatalf("release retained runtime: %v", err)
-	}
-	if !release.Active || release.Released {
-		t.Fatalf("retained release = %+v, want active pending retirement", release)
-	}
-
-	if err := retention.Close(); err != nil {
-		t.Fatalf("release runtime retention: %v", err)
-	}
-	assertRuntimeUnavailable(t, authority, attachment.Resource(), "retention released")
-}
-
-func TestExecutionRetirementKeepsRetainedRuntimeSteerableUntilDrain(t *testing.T) {
-	fixture := newSessionRuntimeFixture(t)
-	sessionID := lifecycleSessionID(t, fixture)
-	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
-	lifecycle := &authorityLifecycleProbe{draining: make(chan struct{}, 1)}
-	authority := NewAuthority(AuthorityOptions{
-		PersistenceRoot:   fixture.config.PersistenceRoot,
-		StoreOptions:      fixture.metadata.AuthoritativeSessionStoreOptions(),
-		ResourceLifecycle: lifecycle,
-	})
-	t.Cleanup(func() {
-		if err := authority.Close(context.Background()); err != nil {
-			t.Errorf("close authority: %v", err)
-		}
-	})
-	executionStarted := make(chan struct{})
-	finishExecution := make(chan struct{})
-	handle, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
-		Descriptor: mustOpenSessionDescriptor(t, sessionID),
-		Runtime:    &plan,
-		Resource:   OpenAgentResource{},
-		Runner: func(context.Context, ExecutionScope, AgentRuntimeBridge) error {
-			close(executionStarted)
-			<-finishExecution
-			return nil
+func TestExecutionRetirementLaunchesAcceptedRuntimeBoundHumanWorkBeforeClosing(t *testing.T) {
+	tests := []struct {
+		name         string
+		accept       func(*runtime.Engine) error
+		assertEvents func(*testing.T, []runtime.QueuedUserMessageStatusEvent)
+	}{
+		{
+			name: "human input",
+			accept: func(engine *runtime.Engine) error {
+				item, err := engine.QueueUserMessage("accepted before execution exit")
+				if err != nil {
+					return err
+				}
+				if item.ID == "" {
+					return errors.New("queued user message has no id")
+				}
+				return nil
+			},
+			assertEvents: func(t *testing.T, statuses []runtime.QueuedUserMessageStatusEvent) {
+				t.Helper()
+				if len(statuses) != 2 ||
+					statuses[0].Status != runtime.QueuedUserMessageAccepted ||
+					statuses[1].Status != runtime.QueuedUserMessageSubmitted {
+					t.Fatalf("queued message statuses = %+v, want accepted then submitted", statuses)
+				}
+			},
 		},
-	})
-	if err != nil {
-		t.Fatalf("start ownerless execution: %v", err)
-	}
-	resource, hasResource := handle.Scope().Resource()
-	if !hasResource {
-		t.Fatal("ownerless agent execution has no resource")
-	}
-	<-executionStarted
-	if lifecycle.retain == nil {
-		t.Fatal("resource lifecycle did not expose retention")
-	}
-	retention, err := lifecycle.retain()
-	if err != nil {
-		t.Fatalf("retain execution resource: %v", err)
-	}
-
-	close(finishExecution)
-	if _, err := handle.Wait(context.Background()); err != nil {
-		t.Fatalf("wait ownerless execution: %v", err)
-	}
-	if err := authority.WithRuntime(context.Background(), resource, func(_ context.Context, engine *runtime.Engine) error {
-		item, queueErr := engine.QueueUserMessage("steer retained runtime")
-		if queueErr != nil {
-			return queueErr
-		}
-		if !engine.DiscardQueuedUserMessage(item.ID) {
-			return errors.New("discard retained runtime steering")
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("retained ownerless runtime rejected steering: %v", err)
-	}
-
-	if err := retention.Close(); err != nil {
-		t.Fatalf("release execution resource retention: %v", err)
-	}
-	assertRuntimeUnavailable(t, authority, resource, "execution retention released")
-}
-
-func TestExecutionRetirementDrainsAcceptedQueuedWorkBeforeClosing(t *testing.T) {
-	fixture := newSessionRuntimeFixture(t)
-	sessionID := lifecycleSessionID(t, fixture)
-	releaseModel := make(chan struct{})
-	close(releaseModel)
-	client := &ownerlessRetirementLLMClient{
-		firstStarted: make(chan struct{}),
-		releaseFirst: releaseModel,
-	}
-	var statusMu sync.Mutex
-	var statuses []runtime.QueuedUserMessageStatusEvent
-	authority := newAuthorityWithEventFeed(t, fixture, func(_ AgentResourceDescriptor, event runtime.Event) {
-		if event.QueuedUserMessageStatus == nil {
-			return
-		}
-		statusMu.Lock()
-		statuses = append(statuses, *event.QueuedUserMessageStatus)
-		statusMu.Unlock()
-	})
-	plan := authorityTestRuntimePlan(t, fixture, client)
-	executionStarted := make(chan struct{})
-	finishExecution := make(chan struct{})
-	handle, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
-		Descriptor: mustOpenSessionDescriptor(t, sessionID),
-		Runtime:    &plan,
-		Resource:   OpenAgentResource{},
-		Runner: func(context.Context, ExecutionScope, AgentRuntimeBridge) error {
-			close(executionStarted)
-			<-finishExecution
-			return nil
+		{
+			name: "long background continuation",
+			accept: func(engine *runtime.Engine) error {
+				engine.HandleBackgroundShellUpdate(runtime.BackgroundShellEvent{
+					Type:       runtime.BackgroundShellEventCompleted,
+					ID:         "runtime-bound-background",
+					ActivityID: uuid.New(),
+					State:      "completed",
+				}, true)
+				return nil
+			},
 		},
-	})
-	if err != nil {
-		t.Fatalf("start ownerless execution: %v", err)
 	}
-	resource, hasResource := handle.Scope().Resource()
-	if !hasResource {
-		t.Fatal("ownerless agent execution has no resource")
-	}
-	<-executionStarted
-	if err := authority.WithRuntime(context.Background(), resource, func(_ context.Context, engine *runtime.Engine) error {
-		item, queueErr := engine.QueueUserMessage("accepted before execution exit")
-		if queueErr != nil {
-			return queueErr
-		}
-		if item.ID == "" {
-			return errors.New("queued user message has no id")
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("queue accepted user work: %v", err)
-	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newSessionRuntimeFixture(t)
+			sessionID := lifecycleSessionID(t, fixture)
+			releaseModel := make(chan struct{})
+			close(releaseModel)
+			client := &ownerlessRetirementLLMClient{
+				firstStarted: make(chan struct{}),
+				releaseFirst: releaseModel,
+			}
+			var statusMu sync.Mutex
+			var statuses []runtime.QueuedUserMessageStatusEvent
+			authority := newAuthorityWithEventFeed(t, fixture, func(_ AgentResourceDescriptor, event runtime.Event) {
+				if event.QueuedUserMessageStatus == nil {
+					return
+				}
+				statusMu.Lock()
+				statuses = append(statuses, *event.QueuedUserMessageStatus)
+				statusMu.Unlock()
+			})
+			plan := authorityTestRuntimePlan(t, fixture, client)
+			executionStarted := make(chan struct{})
+			finishExecution := make(chan struct{})
+			handle, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+				Descriptor: mustOpenSessionDescriptor(t, sessionID),
+				Runtime:    &plan,
+				Resource:   OpenAgentResource{},
+				Runner: func(context.Context, ExecutionScope, AgentRuntimeBridge) error {
+					close(executionStarted)
+					<-finishExecution
+					return nil
+				},
+			})
+			if err != nil {
+				t.Fatalf("start ownerless execution: %v", err)
+			}
+			resource, hasResource := handle.Scope().Resource()
+			if !hasResource {
+				t.Fatal("ownerless agent execution has no resource")
+			}
+			<-executionStarted
+			if err := authority.WithRuntime(context.Background(), resource, func(_ context.Context, engine *runtime.Engine) error {
+				return test.accept(engine)
+			}); err != nil {
+				t.Fatalf("accept runtime-bound work: %v", err)
+			}
 
-	close(finishExecution)
-	if _, err := handle.Wait(context.Background()); err != nil {
-		t.Fatalf("wait execution retirement: %v", err)
-	}
-	if calls := client.callCount(); calls != 1 {
-		t.Fatalf("model calls = %d, want accepted queue drained before retirement", calls)
-	}
-	assertRuntimeUnavailable(t, authority, resource, "accepted queue drained")
+			close(finishExecution)
+			if _, err := handle.Wait(context.Background()); err != nil {
+				t.Fatalf("wait execution retirement: %v", err)
+			}
+			waitRuntimeUnavailable(t, authority, resource, "accepted runtime-bound work completed")
+			if calls := client.callCount(); calls != 1 {
+				t.Fatalf("model calls = %d, want accepted runtime-bound work launched before retirement", calls)
+			}
 
-	statusMu.Lock()
-	defer statusMu.Unlock()
-	if len(statuses) != 2 ||
-		statuses[0].Status != runtime.QueuedUserMessageAccepted ||
-		statuses[1].Status != runtime.QueuedUserMessageSubmitted {
-		t.Fatalf("queued message statuses = %+v, want accepted then submitted", statuses)
+			if test.assertEvents != nil {
+				statusMu.Lock()
+				statusSnapshot := append([]runtime.QueuedUserMessageStatusEvent(nil), statuses...)
+				statusMu.Unlock()
+				test.assertEvents(t, statusSnapshot)
+			}
+		})
 	}
 }
 
-func TestCloseIfIdleRetiresAfterActiveAutoDrainFinishes(t *testing.T) {
+func TestCloseIfIdleRetiresAfterEngineOwnedIdleHumanExecutionFinishes(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
 	client := &blockingLLMClient{
@@ -835,15 +657,15 @@ func TestCloseIfIdleRetiresAfterActiveAutoDrainFinishes(t *testing.T) {
 	authority := fixture.authority
 	attachment := openLifecycleRuntime(t, authority, sessionID, "owner-a", &plan)
 	if err := authority.WithRuntime(context.Background(), attachment.Resource(), func(_ context.Context, engine *runtime.Engine) error {
-		engine.QueueUserMessageForAutoDrain("queued before disconnect", "queued-request")
-		return nil
+		_, err := engine.QueueUserMessage("queued before disconnect")
+		return err
 	}); err != nil {
-		t.Fatalf("queue auto-drained user message: %v", err)
+		t.Fatalf("queue idle human message: %v", err)
 	}
 	select {
 	case <-client.entered:
 	case <-time.After(3 * time.Second):
-		t.Fatal("auto-drained model request did not start")
+		t.Fatal("Engine-owned idle human execution did not start")
 	}
 
 	type releaseResult struct {
@@ -858,22 +680,22 @@ func TestCloseIfIdleRetiresAfterActiveAutoDrainFinishes(t *testing.T) {
 	select {
 	case outcome := <-released:
 		if outcome.err != nil {
-			t.Fatalf("release auto-draining runtime: %v", outcome.err)
+			t.Fatalf("release runtime with idle human execution: %v", outcome.err)
 		}
 		if !outcome.result.Active || outcome.result.Released {
-			t.Fatalf("auto-draining release = %+v, want active pending retirement", outcome.result)
+			t.Fatalf("idle-execution release = %+v, want active pending retirement", outcome.result)
 		}
 	case <-time.After(time.Second):
 		close(client.release)
 		<-released
-		t.Fatal("close-if-idle blocked on active auto-drain instead of recording retirement")
+		t.Fatal("close-if-idle blocked on Engine-owned idle execution instead of recording retirement")
 	}
 
 	close(client.release)
-	waitRuntimeUnavailable(t, authority, attachment.Resource(), "auto-drain finished")
+	waitRuntimeUnavailable(t, authority, attachment.Resource(), "idle human execution finished")
 }
 
-func TestCloseIfIdleDrainsAcceptedQueuedWorkBeforeOwnerlessRetirement(t *testing.T) {
+func TestCloseIfIdleCompletesAcceptedQueueAtTurnBoundaryBeforeOwnerlessRetirement(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
 	client := &ownerlessRetirementLLMClient{
@@ -911,8 +733,8 @@ func TestCloseIfIdleDrainsAcceptedQueuedWorkBeforeOwnerlessRetirement(t *testing
 		t.Fatal("active model request did not start")
 	}
 	if err := authority.WithRuntime(context.Background(), attachment.Resource(), func(_ context.Context, engine *runtime.Engine) error {
-		engine.QueueUserMessageForAutoDrain("queued after active turn", "queued-request")
-		return nil
+		_, err := engine.QueueUserMessage("queued after active turn")
+		return err
 	}); err != nil {
 		t.Fatalf("queue follow-up user message: %v", err)
 	}
@@ -928,7 +750,7 @@ func TestCloseIfIdleDrainsAcceptedQueuedWorkBeforeOwnerlessRetirement(t *testing
 	if _, err := handle.Wait(context.Background()); err != nil {
 		t.Fatalf("wait current agent execution: %v", err)
 	}
-	waitRuntimeUnavailable(t, authority, attachment.Resource(), "queued auto-drain completion")
+	waitRuntimeUnavailable(t, authority, attachment.Resource(), "queued Turn Boundary completion")
 	if calls := client.callCount(); calls != 2 {
 		t.Fatalf("model calls = %d, want accepted queued follow-up drained before retirement", calls)
 	}
@@ -942,7 +764,7 @@ func TestCloseIfIdleDrainsAcceptedQueuedWorkBeforeOwnerlessRetirement(t *testing
 	}
 }
 
-func TestRuntimeReleaseCloseInterruptsActiveAutoDrain(t *testing.T) {
+func TestRuntimeReleaseCloseInterruptsEngineOwnedIdleHumanExecution(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
 	client := &ownerlessRetirementLLMClient{
@@ -953,15 +775,15 @@ func TestRuntimeReleaseCloseInterruptsActiveAutoDrain(t *testing.T) {
 	authority := fixture.authority
 	attachment := openLifecycleRuntime(t, authority, sessionID, "owner-a", &plan)
 	if err := authority.WithRuntime(context.Background(), attachment.Resource(), func(_ context.Context, engine *runtime.Engine) error {
-		engine.QueueUserMessageForAutoDrain("auto-drain before forced close", "queued-request")
-		return nil
+		_, err := engine.QueueUserMessage("idle input before forced close")
+		return err
 	}); err != nil {
-		t.Fatalf("queue auto-drained user message: %v", err)
+		t.Fatalf("queue idle human message: %v", err)
 	}
 	select {
 	case <-client.firstStarted:
 	case <-time.After(3 * time.Second):
-		t.Fatal("auto-drained model request did not start")
+		t.Fatal("Engine-owned idle human execution did not start")
 	}
 
 	type releaseResult struct {
@@ -976,7 +798,7 @@ func TestRuntimeReleaseCloseInterruptsActiveAutoDrain(t *testing.T) {
 	select {
 	case outcome := <-released:
 		if outcome.err != nil {
-			t.Fatalf("force-close active auto-drain: %v", outcome.err)
+			t.Fatalf("force-close active idle human execution: %v", outcome.err)
 		}
 		if !outcome.result.Released || outcome.result.Active {
 			t.Fatalf("forced release = %+v, want closed runtime", outcome.result)
@@ -984,12 +806,12 @@ func TestRuntimeReleaseCloseInterruptsActiveAutoDrain(t *testing.T) {
 	case <-time.After(time.Second):
 		close(client.releaseFirst)
 		<-released
-		t.Fatal("forced close blocked instead of interrupting active auto-drain")
+		t.Fatal("forced close blocked instead of interrupting Engine-owned idle human execution")
 	}
-	assertRuntimeUnavailable(t, authority, attachment.Resource(), "forced auto-drain close")
+	assertRuntimeUnavailable(t, authority, attachment.Resource(), "forced idle human execution close")
 }
 
-func TestAuthorityCloseInterruptsActiveAutoDrain(t *testing.T) {
+func TestAuthorityCloseInterruptsEngineOwnedIdleHumanExecution(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
 	client := &ownerlessRetirementLLMClient{
@@ -1000,15 +822,15 @@ func TestAuthorityCloseInterruptsActiveAutoDrain(t *testing.T) {
 	authority := fixture.authority
 	attachment := openLifecycleRuntime(t, authority, sessionID, "owner-a", &plan)
 	if err := authority.WithRuntime(context.Background(), attachment.Resource(), func(_ context.Context, engine *runtime.Engine) error {
-		engine.QueueUserMessageForAutoDrain("auto-drain before authority close", "queued-request")
-		return nil
+		_, err := engine.QueueUserMessage("idle input before authority close")
+		return err
 	}); err != nil {
-		t.Fatalf("queue auto-drained user message: %v", err)
+		t.Fatalf("queue idle human message: %v", err)
 	}
 	select {
 	case <-client.firstStarted:
 	case <-time.After(3 * time.Second):
-		t.Fatal("auto-drained model request did not start")
+		t.Fatal("Engine-owned idle human execution did not start")
 	}
 
 	closed := make(chan error, 1)
@@ -1018,14 +840,14 @@ func TestAuthorityCloseInterruptsActiveAutoDrain(t *testing.T) {
 	select {
 	case err := <-closed:
 		if err != nil {
-			t.Fatalf("close authority with active auto-drain: %v", err)
+			t.Fatalf("close authority with active idle human execution: %v", err)
 		}
 	case <-time.After(time.Second):
 		close(client.releaseFirst)
 		<-closed
-		t.Fatal("authority close blocked instead of interrupting active auto-drain")
+		t.Fatal("authority close blocked instead of interrupting Engine-owned idle human execution")
 	}
-	assertRuntimeUnavailable(t, authority, attachment.Resource(), "authority auto-drain close")
+	assertRuntimeUnavailable(t, authority, attachment.Resource(), "authority idle human execution close")
 }
 
 func TestDetachKeepsOwnerlessRuntimeAvailable(t *testing.T) {
@@ -1563,73 +1385,6 @@ func TestStaleRuntimeAttachmentReleaseCannotAffectReplacement(t *testing.T) {
 	}
 }
 
-func TestResourceReplacementWaitsForRetainedGenerationToDrain(t *testing.T) {
-	fixture := newSessionRuntimeFixture(t)
-	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("parse session id: %v", err)
-	}
-	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
-	lifecycle := &authorityLifecycleProbe{draining: make(chan struct{}, 2)}
-	authority := NewAuthority(AuthorityOptions{
-		PersistenceRoot:   fixture.config.PersistenceRoot,
-		StoreOptions:      fixture.metadata.AuthoritativeSessionStoreOptions(),
-		ResourceLifecycle: lifecycle,
-	})
-	t.Cleanup(func() {
-		if err := authority.Close(context.Background()); err != nil {
-			t.Errorf("close authority: %v", err)
-		}
-	})
-
-	_, err = authority.OpenRuntime(context.Background(), RuntimeOpenRequest{
-		SessionID: sessionID,
-		OwnerID:   "owner-a",
-		Runtime:   &plan,
-	})
-	if err != nil {
-		t.Fatalf("open runtime: %v", err)
-	}
-	retention, err := lifecycle.retain()
-	if err != nil {
-		t.Fatalf("retain resource: %v", err)
-	}
-	type replacementResult struct {
-		handle ExecutionHandle
-		err    error
-	}
-	replaced := make(chan replacementResult, 1)
-	go func() {
-		handle, replaceErr := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
-			Descriptor: mustOpenSessionDescriptor(t, sessionID),
-			Runtime:    &plan,
-			Resource:   ReplaceAgentResource{},
-			Runner:     func(context.Context, ExecutionScope, AgentRuntimeBridge) error { return nil },
-		})
-		replaced <- replacementResult{handle: handle, err: replaceErr}
-	}()
-	select {
-	case outcome := <-replaced:
-		t.Fatalf("replacement returned before retained generation drained: %v", outcome.err)
-	case <-lifecycle.draining:
-	case <-time.After(3 * time.Second):
-		t.Fatal("replacement did not begin retained generation drain")
-	}
-	if err := retention.Close(); err != nil {
-		t.Fatalf("release resource retention: %v", err)
-	}
-	if err := retention.Close(); err != nil {
-		t.Fatalf("release resource retention again: %v", err)
-	}
-	outcome := <-replaced
-	if outcome.err != nil {
-		t.Fatalf("replace after retained generation drain: %v", outcome.err)
-	}
-	if _, err := outcome.handle.Wait(context.Background()); err != nil {
-		t.Fatalf("wait replacement: %v", err)
-	}
-}
-
 func TestResourceReplacementWaitsForCurrentExecutionToFinish(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
@@ -1695,7 +1450,7 @@ func TestResourceReplacementWaitsForCurrentExecutionToFinish(t *testing.T) {
 	}
 }
 
-func TestAgentExecutionBindsAndClearsShellCorrelation(t *testing.T) {
+func TestAgentExecutionBindsShellCorrelationToExactScope(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
 	if err != nil {
@@ -1751,12 +1506,12 @@ func TestAgentExecutionBindsAndClearsShellCorrelation(t *testing.T) {
 		}
 	})
 
-	startBackground := func(callID string) (shelltool.Snapshot, error) {
+	startBackground := func(ctx context.Context, bridge AgentRuntimeBridge, callID string) (shelltool.Snapshot, error) {
 		before := make(map[string]struct{})
 		for _, snapshot := range manager.List() {
 			before[snapshot.ID] = struct{}{}
 		}
-		if err := authority.WithCurrentRuntime(context.Background(), sessionID, func(ctx context.Context, engine *runtime.Engine) error {
+		if err := bridge.WithEngine(ctx, func(ctx context.Context, engine *runtime.Engine) error {
 			_, submitErr := engine.SubmitUserMessage(ctx, callID)
 			return submitErr
 		}); err != nil {
@@ -1782,45 +1537,46 @@ func TestAgentExecutionBindsAndClearsShellCorrelation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open runtime: %v", err)
 	}
-	started := make(chan backgroundStartResult, 1)
-	handle, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
-		Descriptor: mustOpenSessionDescriptor(t, sessionID),
-		Resource:   CurrentAgentResource{},
-		Runner: func(context.Context, ExecutionScope, AgentRuntimeBridge) error {
-			snapshot, startErr := startBackground("scoped")
-			started <- backgroundStartResult{snapshot: snapshot, err: startErr}
-			return startErr
-		},
-	})
-	if err != nil {
-		t.Fatalf("start agent execution: %v", err)
-	}
-	startResult := <-started
-	if startResult.err != nil {
-		t.Fatalf("start scoped process: %v", startResult.err)
-	}
-	scoped := startResult.snapshot
-	if _, err := handle.Wait(context.Background()); err != nil {
-		t.Fatalf("wait agent execution: %v", err)
-	}
-	resource, ok := handle.Scope().Resource()
-	if !ok {
-		t.Fatal("agent scope has no resource")
-	}
-	want, err := runtimeids.NewExecutionCorrelation(handle.Scope().ID(), resource.Generation())
-	if err != nil {
-		t.Fatalf("new expected correlation: %v", err)
-	}
-	if scoped.ExecutionCorrelation == nil || *scoped.ExecutionCorrelation != want {
-		t.Fatalf("scoped process correlation = %#v, want %#v", scoped.ExecutionCorrelation, want)
+	runExecution := func(callID string) (shelltool.Snapshot, runtimeids.ExecutionCorrelation) {
+		t.Helper()
+		started := make(chan backgroundStartResult, 1)
+		handle, startErr := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+			Descriptor: mustOpenSessionDescriptor(t, sessionID),
+			Resource:   CurrentAgentResource{},
+			Runner: func(ctx context.Context, _ ExecutionScope, bridge AgentRuntimeBridge) error {
+				snapshot, runErr := startBackground(ctx, bridge, callID)
+				started <- backgroundStartResult{snapshot: snapshot, err: runErr}
+				return runErr
+			},
+		})
+		if startErr != nil {
+			t.Fatalf("start agent execution: %v", startErr)
+		}
+		startResult := <-started
+		if startResult.err != nil {
+			t.Fatalf("start scoped process: %v", startResult.err)
+		}
+		if _, waitErr := handle.Wait(context.Background()); waitErr != nil {
+			t.Fatalf("wait agent execution: %v", waitErr)
+		}
+		resource, ok := handle.Scope().Resource()
+		if !ok {
+			t.Fatal("agent scope has no resource")
+		}
+		want, correlationErr := runtimeids.NewExecutionCorrelation(handle.Scope().ID(), resource.Generation())
+		if correlationErr != nil {
+			t.Fatalf("new expected correlation: %v", correlationErr)
+		}
+		if startResult.snapshot.ExecutionCorrelation == nil || *startResult.snapshot.ExecutionCorrelation != want {
+			t.Fatalf("scoped process correlation = %#v, want %#v", startResult.snapshot.ExecutionCorrelation, want)
+		}
+		return startResult.snapshot, want
 	}
 
-	unscoped, err := startBackground("idle")
-	if err != nil {
-		t.Fatalf("start idle process: %v", err)
-	}
-	if unscoped.ExecutionCorrelation != nil {
-		t.Fatalf("idle process correlation = %#v, want nil", *unscoped.ExecutionCorrelation)
+	_, firstCorrelation := runExecution("call-scoped")
+	_, secondCorrelation := runExecution("call-idle")
+	if secondCorrelation == firstCorrelation {
+		t.Fatalf("successive exact Agent executions reused correlation %#v", secondCorrelation)
 	}
 	if _, err := attachment.Release(context.Background(), RuntimeReleaseClose); err != nil {
 		t.Fatalf("release runtime: %v", err)
@@ -2238,62 +1994,7 @@ func TestCompletedWorkflowSessionDoesNotStartBackgroundContinuation(t *testing.T
 	}
 }
 
-func TestDormantSessionStoreCallbacksAreSerialized(t *testing.T) {
-	fixture := newSessionRuntimeFixture(t)
-	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("parse session id: %v", err)
-	}
-	authority := NewAuthority(AuthorityOptions{
-		PersistenceRoot: fixture.config.PersistenceRoot,
-		StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
-	})
-	descriptor, err := session.NewOpenSessionDescriptor(sessionID)
-	if err != nil {
-		t.Fatalf("new open session descriptor: %v", err)
-	}
-
-	firstEntered := make(chan struct{})
-	releaseFirst := make(chan struct{})
-	firstDone := make(chan error, 1)
-	go func() {
-		firstDone <- authority.WithSessionStore(context.Background(), descriptor, func(context.Context, *session.Store) error {
-			close(firstEntered)
-			<-releaseFirst
-			return nil
-		})
-	}()
-	<-firstEntered
-
-	secondEntered := make(chan struct{})
-	secondDone := make(chan error, 1)
-	go func() {
-		secondDone <- authority.WithSessionStore(context.Background(), descriptor, func(context.Context, *session.Store) error {
-			close(secondEntered)
-			return nil
-		})
-	}()
-	select {
-	case <-secondEntered:
-		t.Fatal("second dormant Store callback overlapped the first")
-	case <-time.After(100 * time.Millisecond):
-	}
-
-	close(releaseFirst)
-	if err := <-firstDone; err != nil {
-		t.Fatalf("first Store callback: %v", err)
-	}
-	select {
-	case <-secondEntered:
-	case <-time.After(3 * time.Second):
-		t.Fatal("second dormant Store callback did not enter after the first completed")
-	}
-	if err := <-secondDone; err != nil {
-		t.Fatalf("second Store callback: %v", err)
-	}
-}
-
-func TestAuthorityWithDormantSessionStoreAdmitsExactlyOnePath(t *testing.T) {
+func TestAuthorityWithSessionRuntimeOrStoreAdmitsExactlyOnePath(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
 	if err != nil {
@@ -2313,20 +2014,25 @@ func TestAuthorityWithDormantSessionStoreAdmitsExactlyOnePath(t *testing.T) {
 		t.Fatalf("new open session descriptor: %v", err)
 	}
 
-	callbackCalled := false
-	admission, err := authority.WithDormantSessionStore(
+	runtimeCalled := false
+	storeCalled := false
+	admission, err := authority.WithSessionRuntimeOrStore(
 		context.Background(),
 		descriptor,
+		func(context.Context, *runtime.Engine) error {
+			runtimeCalled = true
+			return nil
+		},
 		func(context.Context, *session.Store) error {
-			callbackCalled = true
+			storeCalled = true
 			return nil
 		},
 	)
 	if err != nil {
 		t.Fatalf("admit dormant Store callback: %v", err)
 	}
-	if admission.RuntimeAvailable || !callbackCalled {
-		t.Fatalf("dormant admission = %+v callback=%t, want callback-only path", admission, callbackCalled)
+	if admission.RuntimeAvailable || runtimeCalled || !storeCalled {
+		t.Fatalf("dormant admission = %+v runtime=%t store=%t, want Store-only path", admission, runtimeCalled, storeCalled)
 	}
 
 	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
@@ -2336,225 +2042,127 @@ func TestAuthorityWithDormantSessionStoreAdmitsExactlyOnePath(t *testing.T) {
 			t.Errorf("release runtime: %v", releaseErr)
 		}
 	}()
-	callbackCalled = false
-	admission, err = authority.WithDormantSessionStore(
+	runtimeCalled = false
+	storeCalled = false
+	admission, err = authority.WithSessionRuntimeOrStore(
 		context.Background(),
 		descriptor,
+		func(context.Context, *runtime.Engine) error {
+			runtimeCalled = true
+			return nil
+		},
 		func(context.Context, *session.Store) error {
-			callbackCalled = true
+			storeCalled = true
 			return nil
 		},
 	)
 	if err != nil {
 		t.Fatalf("admit live resource: %v", err)
 	}
-	if !admission.RuntimeAvailable || callbackCalled {
-		t.Fatalf("live admission = %+v callback=%t, want runtime-only path", admission, callbackCalled)
+	if !admission.RuntimeAvailable || !runtimeCalled || storeCalled {
+		t.Fatalf("live admission = %+v runtime=%t store=%t, want Runtime-only path", admission, runtimeCalled, storeCalled)
 	}
 }
 
-func TestAuthorityWithDormantSessionStoreRejectsBlockedAndClosedAdmission(t *testing.T) {
-	fixture := newSessionRuntimeFixture(t)
-	sessionID := lifecycleSessionID(t, fixture)
-	descriptor, err := session.NewOpenSessionDescriptor(sessionID)
-	if err != nil {
-		t.Fatalf("new open session descriptor: %v", err)
-	}
-
-	t.Run("blocked", func(t *testing.T) {
-		authority := NewAuthority(AuthorityOptions{
-			PersistenceRoot: fixture.config.PersistenceRoot,
-			StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
-		})
-		t.Cleanup(func() {
-			if closeErr := authority.Close(context.Background()); closeErr != nil {
-				t.Errorf("close authority: %v", closeErr)
-			}
-		})
-		release, blockErr := authority.BlockSessionStarts(
-			context.Background(),
-			[]runtimeids.SessionID{sessionID},
-			SessionStartBlockMaintenance,
-		)
-		if blockErr != nil {
-			t.Fatalf("block session starts: %v", blockErr)
-		}
-		t.Cleanup(func() {
-			if releaseErr := release.Close(context.Background()); releaseErr != nil {
-				t.Errorf("release session-start block: %v", releaseErr)
-			}
-		})
-
-		callbackCalled := false
-		_, admissionErr := authority.WithDormantSessionStore(
-			context.Background(),
-			descriptor,
-			func(context.Context, *session.Store) error {
-				callbackCalled = true
-				return nil
-			},
-		)
-		if !errors.Is(admissionErr, ErrSessionStartsBlocked) {
-			t.Fatalf("blocked dormant admission error = %v, want ErrSessionStartsBlocked", admissionErr)
-		}
-		if callbackCalled {
-			t.Fatal("blocked dormant admission invoked the Store callback")
-		}
-	})
-
-	t.Run("closed", func(t *testing.T) {
-		authority := NewAuthority(AuthorityOptions{
-			PersistenceRoot: fixture.config.PersistenceRoot,
-			StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
-		})
-		if closeErr := authority.Close(context.Background()); closeErr != nil {
-			t.Fatalf("close authority: %v", closeErr)
-		}
-
-		callbackCalled := false
-		_, admissionErr := authority.WithDormantSessionStore(
-			context.Background(),
-			descriptor,
-			func(context.Context, *session.Store) error {
-				callbackCalled = true
-				return nil
-			},
-		)
-		if !errors.Is(admissionErr, ErrAuthorityClosed) {
-			t.Fatalf("closed dormant admission error = %v, want ErrAuthorityClosed", admissionErr)
-		}
-		if callbackCalled {
-			t.Fatal("closed dormant admission invoked the Store callback")
-		}
-	})
-}
-
-func TestAuthorityWithDormantSessionStoreSelectsLiveForEveryRegisteredResourceState(t *testing.T) {
-	fixture := newSessionRuntimeFixture(t)
-	sessionID := lifecycleSessionID(t, fixture)
-	feed := make(authorityPromptFeed, 1)
-	authority := NewAuthority(AuthorityOptions{
-		PersistenceRoot: fixture.config.PersistenceRoot,
-		StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
-		PromptFeed:      feed,
-	})
-	t.Cleanup(func() {
-		if closeErr := authority.Close(context.Background()); closeErr != nil {
-			t.Errorf("close authority: %v", closeErr)
-		}
-	})
-	descriptor, err := session.NewOpenSessionDescriptor(sessionID)
-	if err != nil {
-		t.Fatalf("new open session descriptor: %v", err)
-	}
-
+func TestSessionStoreAdmissionsContinueAfterRegisteredResourceCloses(t *testing.T) {
 	tests := []struct {
-		name     string
-		resource *agentResource
+		name  string
+		admit func(
+			context.Context,
+			*Authority,
+			session.SessionDescriptor,
+			func(context.Context, *session.Store) error,
+		) error
 	}{
-		{name: "building", resource: &agentResource{state: AgentResourceBuilding}},
-		{name: "ownerless", resource: &agentResource{state: AgentResourceReady, owners: map[string]struct{}{}}},
-		{name: "ready", resource: &agentResource{state: AgentResourceReady, owners: map[string]struct{}{"owner-a": {}}}},
-		{name: "active", resource: &agentResource{state: AgentResourceReady, current: &execution{}}},
-		{name: "draining", resource: &agentResource{state: AgentResourceDraining}},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			authority.mu.Lock()
-			authority.resources[sessionID] = test.resource
-			authority.mu.Unlock()
-			defer func() {
-				authority.mu.Lock()
-				delete(authority.resources, sessionID)
-				authority.mu.Unlock()
-			}()
-
-			callbackCalled := false
-			admission, admissionErr := authority.WithDormantSessionStore(
-				context.Background(),
-				descriptor,
-				func(context.Context, *session.Store) error {
-					callbackCalled = true
-					return nil
-				},
-			)
-			if admissionErr != nil {
-				t.Fatalf("admit %s resource: %v", test.name, admissionErr)
-			}
-			if !admission.RuntimeAvailable || callbackCalled {
-				t.Fatalf("%s admission = %+v callback=%t, want live path only", test.name, admission, callbackCalled)
-			}
-		})
-	}
-}
-
-func TestAuthorityWithDormantSessionStoreBlocksRuntimeRegistrationUntilCallbackReturns(t *testing.T) {
-	fixture := newSessionRuntimeFixture(t)
-	sessionID := lifecycleSessionID(t, fixture)
-	authority := NewAuthority(AuthorityOptions{
-		PersistenceRoot: fixture.config.PersistenceRoot,
-		StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
-	})
-	t.Cleanup(func() {
-		if closeErr := authority.Close(context.Background()); closeErr != nil {
-			t.Errorf("close authority: %v", closeErr)
-		}
-	})
-	descriptor, err := session.NewOpenSessionDescriptor(sessionID)
-	if err != nil {
-		t.Fatalf("new open session descriptor: %v", err)
-	}
-	entered := make(chan struct{})
-	release := make(chan struct{})
-	dormantDone := make(chan error, 1)
-	go func() {
-		_, callbackErr := authority.WithDormantSessionStore(
-			context.Background(),
-			descriptor,
-			func(context.Context, *session.Store) error {
-				close(entered)
-				<-release
-				return nil
+		{
+			name: "store",
+			admit: func(
+				ctx context.Context,
+				authority *Authority,
+				descriptor session.SessionDescriptor,
+				storeCallback func(context.Context, *session.Store) error,
+			) error {
+				return authority.WithSessionStore(ctx, descriptor, storeCallback)
 			},
-		)
-		dormantDone <- callbackErr
-	}()
-	select {
-	case <-entered:
-	case <-time.After(3 * time.Second):
-		t.Fatal("dormant Store callback did not start")
+		},
+		{
+			name: "runtime-or-store",
+			admit: func(
+				ctx context.Context,
+				authority *Authority,
+				descriptor session.SessionDescriptor,
+				storeCallback func(context.Context, *session.Store) error,
+			) error {
+				_, err := authority.WithSessionRuntimeOrStore(
+					ctx,
+					descriptor,
+					func(context.Context, *runtime.Engine) error {
+						return errors.New("unexpected Runtime callback")
+					},
+					storeCallback,
+				)
+				return err
+			},
+		},
+	}
+	states := []struct {
+		name       string
+		initial    AgentResourceState
+		closeAfter time.Duration
+	}{
+		{name: "already-closed", initial: AgentResourceClosed},
+		{name: "draining-then-closed", initial: AgentResourceDraining, closeAfter: 50 * time.Millisecond},
 	}
 
-	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
-	type openResult struct {
-		attachment RuntimeAttachment
-		err        error
-	}
-	openDone := make(chan openResult, 1)
-	go func() {
-		attachment, openErr := authority.OpenRuntime(context.Background(), RuntimeOpenRequest{
-			SessionID: sessionID,
-			OwnerID:   "owner-a",
-			Runtime:   &plan,
-		})
-		openDone <- openResult{attachment: attachment, err: openErr}
-	}()
-	select {
-	case result := <-openDone:
-		t.Fatalf("runtime opened while dormant callback held admission gate: %+v", result)
-	case <-time.After(100 * time.Millisecond):
-	}
+	for _, test := range tests {
+		for _, state := range states {
+			t.Run(test.name+"/"+state.name, func(t *testing.T) {
+				fixture := newSessionRuntimeFixture(t)
+				sessionID := lifecycleSessionID(t, fixture)
+				descriptor := mustOpenSessionDescriptor(t, sessionID)
+				resourceRef, err := runtimeids.NewSessionResourceRef(sessionID, 1)
+				if err != nil {
+					t.Fatalf("new Session Resource ref: %v", err)
+				}
+				resource := &agentResource{
+					ref:     resourceRef,
+					state:   state.initial,
+					changed: make(chan struct{}),
+				}
+				fixture.authority.mu.Lock()
+				fixture.authority.resources[sessionID] = resource
+				fixture.authority.mu.Unlock()
 
-	close(release)
-	if callbackErr := <-dormantDone; callbackErr != nil {
-		t.Fatalf("dormant Store callback: %v", callbackErr)
-	}
-	result := <-openDone
-	if result.err != nil {
-		t.Fatalf("open runtime after dormant callback: %v", result.err)
-	}
-	if _, releaseErr := result.attachment.Release(context.Background(), RuntimeReleaseClose); releaseErr != nil {
-		t.Fatalf("release opened runtime: %v", releaseErr)
+				if state.closeAfter != 0 {
+					go func() {
+						time.Sleep(state.closeAfter)
+						resource.mu.Lock()
+						resource.state = AgentResourceClosed
+						resource.signalLocked()
+						resource.mu.Unlock()
+					}()
+				}
+
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				storeCalled := false
+				if err := test.admit(ctx, fixture.authority, descriptor, func(context.Context, *session.Store) error {
+					storeCalled = true
+					return nil
+				}); err != nil {
+					t.Fatalf("admit Store after resource close: %v", err)
+				}
+				if !storeCalled {
+					t.Fatal("Store callback was not called after resource close")
+				}
+				fixture.authority.mu.Lock()
+				registered := fixture.authority.resources[sessionID]
+				fixture.authority.mu.Unlock()
+				if registered == resource {
+					t.Fatal("closed Resource Generation remained registered")
+				}
+			})
+		}
 	}
 }
 
@@ -3043,16 +2651,14 @@ func TestResolvePendingWorkflowPromptUsesExactTaskScope(t *testing.T) {
 	}
 }
 
-func TestQuestionCompletionReplacesRetainedRuntimeAfterDrain(t *testing.T) {
+func TestQuestionCompletionReplacesRuntimeAfterDrain(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
 	promptFeed := make(authorityPromptFeed, 1)
-	lifecycle := &authorityAutoReleaseLifecycle{}
 	authority := NewAuthority(AuthorityOptions{
-		PersistenceRoot:   fixture.config.PersistenceRoot,
-		StoreOptions:      fixture.metadata.AuthoritativeSessionStoreOptions(),
-		PromptFeed:        promptFeed,
-		ResourceLifecycle: lifecycle,
+		PersistenceRoot: fixture.config.PersistenceRoot,
+		StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
+		PromptFeed:      promptFeed,
 	})
 	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
 	askID := uuid.NewString()
@@ -3098,7 +2704,7 @@ func TestQuestionCompletionReplacesRetainedRuntimeAfterDrain(t *testing.T) {
 		Runner:     func(context.Context, ExecutionScope, AgentRuntimeBridge) error { return nil },
 	})
 	if err != nil {
-		t.Fatalf("replace retained runtime after question completion: %v", err)
+		t.Fatalf("replace runtime after question completion: %v", err)
 	}
 	if _, err := successor.Wait(context.Background()); err != nil {
 		t.Fatalf("wait successor execution: %v", err)

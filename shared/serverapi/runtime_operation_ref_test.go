@@ -1,107 +1,28 @@
 package serverapi
 
 import (
+	"reflect"
 	"testing"
 
-	"core/shared/clientui"
-	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 )
 
-func TestInputBearingRuntimeRequestsRequireMatchingOperationRefs(t *testing.T) {
-	submitID := runtimeids.NewRuntimeClientRequestID()
-	preCompactID := runtimeids.NewRuntimeClientRequestID()
-	shellID := runtimeids.NewRuntimeClientRequestID()
-	compactID := runtimeids.NewRuntimeClientRequestID()
-	for name, err := range map[string]error{
-		"submit": (RuntimeSubmitUserTurnRequest{
-			ClientRequestID:                 submitID.String(),
-			SessionID:                       "session-1",
-			Input:                           runtimeinput.Text("hello"),
-			OperationRef:                    clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: submitID},
-			PreSubmitCompactionOperationRef: clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindPreSubmitCompact, ClientRequestID: preCompactID},
-		}).Validate(),
-		"shell": (RuntimeSubmitUserShellCommandRequest{
-			ClientRequestID: shellID.String(),
-			SessionID:       "session-1",
-			Command:         "pwd",
-			OperationRef:    clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindUserShell, ClientRequestID: shellID},
-		}).Validate(),
-		"compact": (RuntimeCompactContextRequest{
-			ClientRequestID: compactID.String(),
-			SessionID:       "session-1",
-			Args:            "notes",
-			OperationRef:    clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindCompact, ClientRequestID: compactID},
-		}).Validate(),
-	} {
-		if err != nil {
-			t.Fatalf("%s request rejected: %v", name, err)
+func TestRuntimeRequestsUseOnlyCommandSpecificInputs(t *testing.T) {
+	requests := []interface{ Validate() error }{
+		RuntimeSubmitUserTurnRequest{SessionID: "session-1", Input: runtimeinput.Text("hello")},
+		RuntimeSubmitUserShellCommandRequest{SessionID: "session-1", Command: "pwd"},
+		RuntimeCompactContextRequest{SessionID: "session-1", Args: "notes"},
+		RuntimeInterruptRequest{SessionID: "session-1"},
+	}
+	for _, request := range requests {
+		if err := request.Validate(); err != nil {
+			t.Fatalf("%T rejected: %v", request, err)
 		}
-	}
-}
-
-func TestInputBearingRuntimeRequestsRejectHiddenOrMismatchedOperationRefs(t *testing.T) {
-	submitID := runtimeids.NewRuntimeClientRequestID()
-	shellID := runtimeids.NewRuntimeClientRequestID()
-	otherID := runtimeids.NewRuntimeClientRequestID()
-	tests := []struct {
-		name string
-		req  interface{ Validate() error }
-	}{
-		{
-			name: "missing ref",
-			req: RuntimeSubmitUserTurnRequest{
-				ClientRequestID: submitID.String(),
-				SessionID:       "session-1",
-				Input:           runtimeinput.Text("hello"),
-			},
-		},
-		{
-			name: "wrong kind",
-			req: RuntimeSubmitUserTurnRequest{
-				ClientRequestID: submitID.String(),
-				SessionID:       "session-1",
-				Input:           runtimeinput.Text("hello"),
-				OperationRef:    clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindUserShell, ClientRequestID: submitID},
-			},
-		},
-		{
-			name: "request id mismatch",
-			req: RuntimeSubmitUserShellCommandRequest{
-				ClientRequestID: shellID.String(),
-				SessionID:       "session-1",
-				Command:         "pwd",
-				OperationRef:    clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindUserShell, ClientRequestID: otherID},
-			},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if err := tt.req.Validate(); err == nil {
-				t.Fatal("expected request to be rejected")
+		typ := reflect.TypeOf(request)
+		for _, field := range []string{"ClientRequestID", "OperationRef", "PendingOperationRefs", "TargetOperationRef"} {
+			if _, present := typ.FieldByName(field); present {
+				t.Fatalf("%T still exposes %s", request, field)
 			}
-		})
-	}
-}
-
-func TestRuntimeInterruptRequestValidatesOptionalTargetOperationRef(t *testing.T) {
-	submitID := runtimeids.NewRuntimeClientRequestID()
-	interruptID := runtimeids.NewRuntimeClientRequestID()
-	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: submitID}
-	if err := (RuntimeInterruptRequest{
-		ClientRequestID:      interruptID.String(),
-		SessionID:            "session-1",
-		TargetOperationRef:   &ref,
-		PendingOperationRefs: []clientui.RuntimeOperationRef{ref},
-	}).Validate(); err != nil {
-		t.Fatalf("targeted interrupt rejected: %v", err)
-	}
-	bad := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindQueuedMessage}
-	if err := (RuntimeInterruptRequest{
-		ClientRequestID:    interruptID.String(),
-		SessionID:          "session-1",
-		TargetOperationRef: &bad,
-	}).Validate(); err == nil {
-		t.Fatal("expected malformed target ref to be rejected")
+		}
 	}
 }

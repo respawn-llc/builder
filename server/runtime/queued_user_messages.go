@@ -1,57 +1,22 @@
 package runtime
 
 import (
-	"core/server/llm"
-	"core/shared/textutil"
+	"context"
 	"errors"
+	"fmt"
 	"strings"
-	"sync"
 
-	"github.com/google/uuid"
+	"core/server/llm"
+	"core/server/session"
+	"core/shared/runtimeids"
+	"core/shared/textutil"
 )
 
 var errInvalidQueuedUserMessage = errors.New("queued message requires a role and content")
 
-type queuedUserMessageStore struct {
-	mu      sync.Mutex
-	pending []queuedUserMessage
-}
-
 type queuedUserMessage struct {
 	message QueuedUserMessage
-}
-
-func newQueuedUserMessageStore() *queuedUserMessageStore {
-	return &queuedUserMessageStore{}
-}
-
-func (s *queuedUserMessageStore) Queue(text string, clientRequestID ...string) (QueuedUserMessage, error) {
-	requestID := ""
-	if len(clientRequestID) > 0 {
-		requestID = clientRequestID[0]
-	}
-	return s.QueueItem(QueuedUserMessage{
-		ID:              uuid.NewString(),
-		ClientRequestID: strings.TrimSpace(requestID),
-		Message:         llm.Message{Role: llm.RoleUser, Content: textutil.Value(text)},
-	})
-}
-
-func (s *queuedUserMessageStore) QueueItem(item QueuedUserMessage) (QueuedUserMessage, error) {
-	item.ID = strings.TrimSpace(item.ID)
-	if item.ID == "" {
-		item.ID = uuid.NewString()
-	}
-	item.ClientRequestID = strings.TrimSpace(item.ClientRequestID)
-	if item.Message.Content == nil ||
-		strings.TrimSpace(*item.Message.Content) == "" ||
-		item.Message.Role == "" {
-		return QueuedUserMessage{}, errInvalidQueuedUserMessage
-	}
-	s.mu.Lock()
-	s.pending = append(s.pending, queuedUserMessage{message: item})
-	s.mu.Unlock()
-	return item, nil
+	agenda  *humanBoundaryAgendaItem
 }
 
 func (m QueuedUserMessage) DisplayText() (string, error) {
@@ -61,99 +26,292 @@ func (m QueuedUserMessage) DisplayText() (string, error) {
 	return *m.Message.Content, nil
 }
 
-func (s *queuedUserMessageStore) Discard(queueItemID string) bool {
-	_, removed := s.DiscardItem(queueItemID)
-	return removed
-}
-
-func (s *queuedUserMessageStore) DiscardItem(queueItemID string) (QueuedUserMessage, bool) {
-	id := strings.TrimSpace(queueItemID)
-	if id == "" || s == nil {
-		return QueuedUserMessage{}, false
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	filtered := s.pending[:0]
-	removed := false
-	var item QueuedUserMessage
-	for _, pending := range s.pending {
-		if pending.message.ID == id {
-			removed = true
-			item = pending.message
-			continue
-		}
-		filtered = append(filtered, pending)
-	}
-	s.pending = filtered
-	return item, removed
-}
-
-func (s *queuedUserMessageStore) Drain() []queuedUserMessage {
-	if s == nil {
-		return nil
-	}
-	s.mu.Lock()
-	pending := append([]queuedUserMessage(nil), s.pending...)
-	s.pending = nil
-	s.mu.Unlock()
-	return pending
-}
-
-func (s *queuedUserMessageStore) DrainByID(ids map[string]struct{}) []queuedUserMessage {
-	if s == nil || len(ids) == 0 {
-		return nil
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	matched := make([]queuedUserMessage, 0, len(ids))
-	remaining := s.pending[:0]
-	for _, pending := range s.pending {
-		if _, ok := ids[strings.TrimSpace(pending.message.ID)]; ok {
-			matched = append(matched, pending)
-			continue
-		}
-		remaining = append(remaining, pending)
-	}
-	s.pending = remaining
-	return matched
-}
-
-func (s *queuedUserMessageStore) RestoreFront(items []queuedUserMessage) {
-	if s == nil || len(items) == 0 {
-		return
-	}
-	restored := append([]queuedUserMessage(nil), items...)
-	s.mu.Lock()
-	s.pending = append(restored, s.pending...)
-	s.mu.Unlock()
-}
-
-func queuedUserMessageWithID(id, text, clientRequestID string) QueuedUserMessage {
+func queuedUserMessageWithID(id, text string) QueuedUserMessage {
 	return QueuedUserMessage{
-		ID:              strings.TrimSpace(id),
-		ClientRequestID: strings.TrimSpace(clientRequestID),
-		Message:         llm.Message{Role: llm.RoleUser, Content: textutil.Value(text)},
+		ID:      strings.TrimSpace(id),
+		Message: llm.Message{Role: llm.RoleUser, Content: textutil.Value(text)},
 	}
 }
 
-func (s *queuedUserMessageStore) HasPending() bool {
-	if s == nil {
-		return false
+func newQueuedUserMessage(message llm.Message) (QueuedUserMessage, error) {
+	item := QueuedUserMessage{
+		ID:      runtimeids.NewQueueItemID().String(),
+		Message: message,
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return len(s.pending) > 0
+	text, err := item.DisplayText()
+	if err != nil || item.Message.Role == "" || strings.TrimSpace(text) == "" {
+		return QueuedUserMessage{}, errInvalidQueuedUserMessage
+	}
+	return item, nil
 }
 
-func (s *queuedUserMessageStore) Snapshot() []QueuedUserMessage {
-	if s == nil {
+func normalizeQueuedUserMessage(item QueuedUserMessage) (QueuedUserMessage, error) {
+	item.ID = strings.TrimSpace(item.ID)
+	if item.ID == "" {
+		item.ID = runtimeids.NewQueueItemID().String()
+	}
+	if _, err := runtimeids.ParseQueueItemID(item.ID); err != nil {
+		return QueuedUserMessage{}, fmt.Errorf("Queue Item ID: %w", err)
+	}
+	text, err := item.DisplayText()
+	if err != nil || item.Message.Role == "" || strings.TrimSpace(text) == "" {
+		return QueuedUserMessage{}, errInvalidQueuedUserMessage
+	}
+	return item, nil
+}
+
+func (e *Engine) acceptHumanAgendaItem(
+	item QueuedUserMessage,
+	eligibility boundaryEligibility,
+	requireActiveScope bool,
+) (QueuedUserMessage, error) {
+	item, err := normalizeQueuedUserMessage(item)
+	if err != nil {
+		return QueuedUserMessage{}, err
+	}
+	return submitRuntimeEvent(
+		e,
+		item,
+		func(admission runtimeEventAdmission, accepted QueuedUserMessage) (QueuedUserMessage, error) {
+			binding, effectiveEligibility, bindingErr := e.humanAgendaBinding(
+				eligibility,
+				requireActiveScope,
+			)
+			if bindingErr != nil {
+				return QueuedUserMessage{}, bindingErr
+			}
+			if err := e.boundaryAgenda.acceptHuman(
+				accepted,
+				binding,
+				effectiveEligibility,
+				func(settlement error) {
+					e.settleHumanAgendaItem(accepted, settlement)
+				},
+			); err != nil {
+				return QueuedUserMessage{}, err
+			}
+			e.emitQueuedUserMessageStatus(accepted, QueuedUserMessageAccepted, "", false)
+			if _, runtimeBound := binding.(runtimeAgendaBinding); runtimeBound {
+				if err := e.reduceIdleBoundary(admission); err != nil {
+					return QueuedUserMessage{}, err
+				}
+			}
+			return accepted, nil
+		},
+	)
+}
+
+func (e *Engine) startRuntimeBoundHumanExecution(admission runtimeEventAdmission) error {
+	launcher, ok := e.cfg.StepLifecycle.(RuntimeBoundExecutionLauncher)
+	if !ok || e.runtimeEvents == nil {
 		return nil
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := make([]QueuedUserMessage, 0, len(s.pending))
-	for _, pending := range s.pending {
-		out = append(out, pending.message)
+	err := launcher.LaunchRuntimeBoundExecution(
+		admission.command,
+		func(ctx context.Context, engine *Engine) error {
+			_, runErr := engine.submitQueuedUserMessages(ctx)
+			return runErr
+		},
+		e.abortRuntimeBoundHumanExecution,
+	)
+	if err != nil {
+		e.settleIdleHumanAgendaItems(err)
+		return errors.Join(err, e.reduceIdleBoundary(admission))
 	}
-	return out
+	return nil
+}
+
+func (e *Engine) abortRuntimeBoundHumanExecution(cause error) {
+	_, err := submitRuntimeEventWithContext(
+		e.lifecycleCtx,
+		e.lifecycleCtx,
+		e,
+		cause,
+		func(
+			admission runtimeEventAdmission,
+			abortErr error,
+		) (struct{}, error) {
+			e.settleIdleHumanAgendaItems(abortErr)
+			return struct{}{}, e.reduceIdleBoundary(admission)
+		},
+	)
+	e.surfaceRunError(errors.Join(cause, err))
+}
+
+func (e *Engine) AgentExecutionScopeReleased(scopeID runtimeids.ExecutionScopeID) error {
+	if e == nil || scopeID.IsZero() {
+		return nil
+	}
+	_, err := submitRuntimeEvent(
+		e,
+		scopeID,
+		func(admission runtimeEventAdmission, released runtimeids.ExecutionScopeID) (struct{}, error) {
+			e.invalidateAgentStepScope(released, errBoundaryScopeFinalized)
+			return struct{}{}, e.reduceIdleBoundary(admission)
+		},
+	)
+	return err
+}
+
+func (e *Engine) settleIdleHumanAgendaItems(cause error) {
+	for _, item := range e.boundaryAgenda.selectHumanItems(idleBoundarySelection()) {
+		item.settleBoundaryAgenda(cause)
+	}
+}
+
+func (e *Engine) humanAgendaBinding(
+	eligibility boundaryEligibility,
+	requireActiveScope bool,
+) (boundaryAgendaBinding, boundaryEligibility, error) {
+	current := e.agentSteps.current
+	if current == nil {
+		current = e.agentSteps.boundary
+	}
+	if current != nil {
+		if requireActiveScope {
+			if lifecycle, ok := e.cfg.StepLifecycle.(AgentStepScopeLifecycle); ok &&
+				!lifecycle.AgentStepScopeLive(e.lifecycleCtx, current.scopeID) {
+				return nil, 0, ErrNoActiveLiveRun
+			}
+		}
+		return scopeBoundaryBinding(current.scopeID, current.origin), eligibility, nil
+	}
+	if selected, ok := e.longBoundary.selected.(*manualCompactionSelection); ok &&
+		!selected.scopeID.IsZero() {
+		if requireActiveScope {
+			if lifecycle, ok := e.cfg.StepLifecycle.(AgentStepScopeLifecycle); ok &&
+				!lifecycle.AgentStepScopeLive(e.lifecycleCtx, selected.scopeID) {
+				return nil, 0, ErrNoActiveLiveRun
+			}
+		}
+		return continuationScopeBoundaryBinding(selected.scopeID), eligibility, nil
+	}
+	if requireActiveScope {
+		return nil, 0, ErrNoActiveLiveRun
+	}
+	return runtimeBoundaryBinding(), boundaryEligibilityIdle, nil
+}
+
+func (e *Engine) settleHumanAgendaItem(item QueuedUserMessage, settlement error) {
+	reason := QueuedUserMessageFailureRuntimeUnavailable
+	switch {
+	case errors.Is(settlement, errBoundaryRuntimeClosed):
+		reason = QueuedUserMessageFailureClosing
+	case errors.Is(settlement, errBoundaryScopeStopped):
+		reason = QueuedUserMessageFailureStopped
+	}
+	e.emitQueuedUserMessageStatus(item, QueuedUserMessageFailed, reason, true)
+}
+
+type humanBoundaryApplyResult struct {
+	applied int
+	receipt session.CommitReceipt
+}
+
+func (e *Engine) applyHumanBoundary(
+	admission runtimeEventAdmission,
+	stepID string,
+	selection boundarySelection,
+) (humanBoundaryApplyResult, error) {
+	if !e.humanBoundarySelectionLive(selection) {
+		return humanBoundaryApplyResult{}, ErrNoActiveLiveRun
+	}
+	return e.applyHumanBoundaryItems(
+		admission,
+		&stepID,
+		e.boundaryAgenda.selectHumanItems(selection),
+	)
+}
+
+func (e *Engine) applyHumanBoundaryPrefix(
+	admission runtimeEventAdmission,
+	stepID *string,
+	selection boundarySelection,
+) (humanBoundaryApplyResult, error) {
+	if !e.humanBoundarySelectionLive(selection) {
+		return humanBoundaryApplyResult{}, ErrNoActiveLiveRun
+	}
+	return e.applyHumanBoundaryItems(
+		admission,
+		stepID,
+		e.boundaryAgenda.selectHumanPrefix(selection),
+	)
+}
+
+func (e *Engine) humanBoundarySelectionLive(selection boundarySelection) bool {
+	var scopeID runtimeids.ExecutionScopeID
+	switch selected := selection.(type) {
+	case scopeStepBoundarySelection:
+		scopeID = selected.scopeID
+	case scopeTurnBoundarySelection:
+		scopeID = selected.scopeID
+	case scopeContinuationBoundarySelection:
+		scopeID = selected.scopeID
+	default:
+		return true
+	}
+	lifecycle, ok := e.cfg.StepLifecycle.(AgentStepScopeLifecycle)
+	return !ok || lifecycle.AgentStepScopeLive(e.lifecycleCtx, scopeID)
+}
+
+func (e *Engine) applyHumanBoundaryItems(
+	admission runtimeEventAdmission,
+	stepID *string,
+	selected []*humanBoundaryAgendaItem,
+) (humanBoundaryApplyResult, error) {
+	if len(selected) == 0 {
+		return humanBoundaryApplyResult{}, nil
+	}
+	pending := make([]queuedUserMessage, 0, len(selected))
+	for _, item := range selected {
+		pending = append(pending, queuedUserMessage{message: item.message, agenda: item})
+	}
+	groups, err := queuedUserMessageFlushGroups(pending)
+	if err != nil {
+		e.restoreHumanAgendaItems(selected)
+		return humanBoundaryApplyResult{}, err
+	}
+	result := humanBoundaryApplyResult{}
+	for groupIndex, group := range groups {
+		receipt := session.CommitReceipt{}
+		intent := steerQueuedUserMessageFlushIntent(group.message, group.batch, group.queueItems)
+		intent.items[0].commitReceipt = &receipt
+		applyErr := admission.applySteeringOptional(stepID, intent)
+		if receipt.Committed {
+			result.receipt = receipt
+		}
+		if applyErr != nil {
+			restoreFrom := groupIndex
+			if receipt.Committed {
+				result.applied += len(group.pending)
+				restoreFrom++
+			}
+			if restoreFrom < len(groups) {
+				e.restoreHumanAgendaItems(humanAgendaTail(groups[restoreFrom:]))
+			}
+			return result, applyErr
+		}
+		result.applied += len(group.pending)
+	}
+	return result, nil
+}
+
+func humanAgendaTail(groups []queuedUserMessageFlushGroup) []*humanBoundaryAgendaItem {
+	var items []*humanBoundaryAgendaItem
+	for _, group := range groups {
+		for _, pending := range group.pending {
+			if pending.agenda == nil {
+				panic(fmt.Sprintf(
+					"selected human Queue Item %q lost its canonical Boundary Agenda item",
+					pending.message.ID,
+				))
+			}
+			items = append(items, pending.agenda)
+		}
+	}
+	return items
+}
+
+func (e *Engine) restoreHumanAgendaItems(items []*humanBoundaryAgendaItem) {
+	e.boundaryAgenda.restoreHumanFront(items)
 }

@@ -11,43 +11,22 @@ import (
 type exclusiveStepOptions struct {
 	EmitRunState bool
 	ActiveKind   ActiveKind
-	Reservation  *exclusiveStepReservation
-}
-
-type exclusiveStepReservationKind uint8
-
-const exclusiveStepReservationManualCompaction exclusiveStepReservationKind = 1
-
-type exclusiveStepReservation = struct {
-	Kind      exclusiveStepReservationKind
-	queueable bool
 }
 
 type exclusiveStepLifecycle interface {
 	Run(ctx context.Context, options exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) error
 	RunNext(ctx context.Context, options exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) error
-	AcquireReservation(reservation *exclusiveStepReservation) error
-	ReleaseReservation(reservation *exclusiveStepReservation)
 	Interrupt() error
 	InterruptCurrent(beforeCancel func(*RunSnapshot)) (*RunSnapshot, error)
 	IsBusy() bool
 	Snapshot() *RunSnapshot
 	WithActiveStep(fn func(stepID string) error) (bool, error)
 	ApplyForActiveStep(stepID string, apply func() error) error
-	DrainAgentStepBoundary(ctx context.Context) error
-	EndAgentStepBoundary()
 }
 
-type backgroundNoticeScheduler interface {
-	HandleBackgroundShellUpdate(evt BackgroundShellEvent, queueNotice bool)
-	RecordBackgroundShellUpdate(BackgroundShellEvent) error
-	QueueBackgroundShellContinuation(BackgroundShellEvent)
-	RunBackgroundShellContinuation(context.Context, BackgroundShellEvent) error
-	QueueDeveloperNotice(msg llm.Message)
-	flushPendingNotices(stepID string) (int, error)
-	HasPendingNotices() bool
-	ConsumePendingBackgroundNotice(sessionID string) bool
-	ScheduleIfIdle()
+type backgroundAgendaAdapter interface {
+	HandleBackgroundShellUpdate(evt BackgroundShellEvent, queueNotice bool) error
+	QueueDeveloperNotice(msg llm.Message) error
 }
 
 type contextCompactor interface {
@@ -67,26 +46,6 @@ type stepLoopOptions struct {
 	OnQueuedUserFlushCommitted     func(session.CommitReceipt)
 }
 
-func observeQueuedUserFlushCommit(options stepLoopOptions, receipt session.CommitReceipt) {
-	if receipt.Committed && options.OnQueuedUserFlushCommitted != nil {
-		options.OnQueuedUserFlushCommitted(receipt)
-	}
-}
-
-type userInjectionSelection interface {
-	userInjectionSelection()
-}
-
-type steerUserInjectionSelection struct {
-	queueItemIDs map[string]struct{}
-}
-
-func (steerUserInjectionSelection) userInjectionSelection() {}
-
-type allPendingUserInjectionSelection struct{}
-
-func (allPendingUserInjectionSelection) userInjectionSelection() {}
-
 type userInjectionFlushDisposition uint8
 
 const (
@@ -104,10 +63,6 @@ type userInjectionCommitResult struct {
 type queuedUserFlushStoppedError struct{}
 
 func (*queuedUserFlushStoppedError) Error() string { return "queued user flush stopped" }
-
-func steerUserInjections(queueItemIDs map[string]struct{}) userInjectionSelection {
-	return steerUserInjectionSelection{queueItemIDs: queueItemIDs}
-}
 
 type stepLoopResult struct {
 	FinalAnswer                *llm.Message
@@ -136,16 +91,6 @@ type toolExecutor interface {
 
 type messageLifecycle interface {
 	RestoreMessages() error
-	CommitPendingUserInjections(stepID string, selection userInjectionSelection) (userInjectionCommitResult, error)
-	FlushPendingUserInjections(stepID string, selection userInjectionSelection) (userInjectionCommitResult, error)
-	DrainPendingUserInjections() []QueuedUserMessage
-	DrainPendingUserInjectionsByID(ids map[string]struct{}) []QueuedUserMessage
-	PendingUserMessages() []QueuedUserMessage
-	RestorePendingUserInjections(items []queuedUserMessage)
-	QueueUserMessage(text string, clientRequestID string) (QueuedUserMessage, error)
-	QueueUserMessageWithID(item QueuedUserMessage) (QueuedUserMessage, error)
-	DiscardQueuedUserMessage(queueItemID string) (QueuedUserMessage, bool)
-	HasPendingUserInjections() bool
 }
 
 type reviewerPipeline interface {
@@ -187,16 +132,13 @@ func (e *Engine) ensureOrchestrationCollaborators() {
 			e.stepLifecycle = &defaultExclusiveStepLifecycle{engine: e}
 		}
 		if e.backgroundFlow == nil {
-			e.backgroundFlow = &defaultBackgroundNoticeScheduler{engine: e, steps: e.stepLifecycle}
-		}
-		if lifecycle, ok := e.stepLifecycle.(*defaultExclusiveStepLifecycle); ok && lifecycle.background == nil {
-			lifecycle.background = e.backgroundFlow
+			e.backgroundFlow = &defaultBackgroundAgendaAdapter{engine: e}
 		}
 		if e.phaseProtocol == nil {
 			e.phaseProtocol = &defaultPhaseProtocol{engine: e}
 		}
 		if e.messageFlow == nil {
-			e.messageFlow = newDefaultMessageLifecycle(e, e.backgroundFlow)
+			e.messageFlow = newDefaultMessageLifecycle(e)
 		}
 		if e.toolFlow == nil {
 			e.toolFlow = &defaultToolExecutor{engine: e}
@@ -213,6 +155,7 @@ func (e *Engine) ensureOrchestrationCollaborators() {
 				phase:    e.phaseProtocol,
 				reviewer: e.reviewerFlow,
 				messages: e.messageFlow,
+				tools:    e.toolFlow,
 			}
 		}
 		if reviewer, ok := e.reviewerFlow.(*defaultReviewerPipeline); ok && reviewer.stepRunner == nil {

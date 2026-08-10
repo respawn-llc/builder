@@ -31,16 +31,38 @@
 
 - The core model tools are `shell`, `write_stdin`, `view_image`, `patch`, `ask_question`, and `trigger_handoff`.
 - Kent does not expose model-callable Goal, worktree, Task, or Workflow tools outside Workflow-controlled Sessions. Adding a tool requires explicit human approval and a spec update.
-- One ordered runtime authority owns all model-visible and transcript-visible changes for an Exact Execution Scope. Human input, workflow-completion intent, Goal changes, and technical input enter that authority. A question answer resolves only its matching live question.
+- Each Active Session Runtime accepts ordered Session changes in FIFO order.
+- Acceptance order does not force operations to run one at a time. Long-running operations follow their feature's normal concurrency and do not prevent unrelated commands from being accepted.
+- Accepted work belongs to the Active Session Runtime rather than to one client connection or request wait. Disconnecting a client stops that client's wait but does not cancel work the runtime already accepted.
+- When long-running work produces another ordered Session change, that change takes its FIFO position when it is ready. The earlier command keeps no reserved position while work runs.
+- Except for instant Stop below, the ordered runtime authority admits all model-visible and transcript-visible changes for an Exact Execution Scope. Human input, workflow-completion intent, Goal changes, and technical input enter that authority. A question answer resolves only its matching live question.
 - `steer` applies submitted commands at the next step boundary. `queue` applies the same commands after the current model turn.
 - A human steer remains a user message. Pending human steers become one user message, with submissions separated by blank lines.
-- Tool lifecycle effects, runtime notices, normal additions after history replacement, and all non-queued transcript/model-visible messages use the same ordered authority. The sole exception is line-by-line Markdown streaming of agent commentary and final answers.
+- A `kent run steer` invoked from another Session emits each accepted submission as a separate developer-role `agent_steer` message in submission order.
+- A `kent run --continue` invoked from another Session that opens an existing Session uses the same `agent_steer` message. Prompts that create a Session retain their ordinary behavior.
+- A steer issued from another Session contains exactly:
+
+```text
+Agent from session <source-session-id> said:
+> <submitted steer text>
+
+To respond, run: kent run steer <source-session-id> "message"
+```
+
+- Kent inserts one literal `>` followed by one space immediately before the submitted steer text. It does not add quote markers to later lines.
+- The message includes the source Session ID and omits its name.
+- A present malformed `KENT_SESSION_ID` fails `kent run steer` before submission. An absent or blank value uses the human-steer behavior.
+- Prompt history stores the complete wrapped message.
+- Tool lifecycle effects, runtime notices, normal additions after history replacement, and all non-queued transcript/model-visible messages use the same ordered authority. The exceptions are line-by-line Markdown streaming of agent commentary and final answers, plus the instant Stop behavior defined below.
 - A Kent-executed tool call is durable before Kent begins its execution. Provider-hosted work may already be complete when Kent receives its outcome; that outcome follows the same compatible Result Group durability as Kent-executed results. Kent commits compatible complete tool results from one Agent Step in one or more ordered Result Groups; an Agent Turn is never a Result Group. Each result keeps its completion, model-visible output, and attached operator diagnostic together, whether it reports success or error.
 - Result Groups preserve provider-required order and otherwise the Agent Step's stable result order. Clients and later model requests see no part of a Result Group before the complete Result Group is durable.
 - A dormant Goal command is the sole persisted-transcript exception outside an Active Session Runtime: the server atomically confirms that no current agent resource owns the Session, then persists the durable Goal transition and one Goal notice without creating a runtime, live event, transaction, rollback, repair, retry, or extra admission lock. A concurrent live release surfaces its error rather than re-admitting.
 - Runtime notices that are not model-visible remain in the transcript. A client never replays a Runtime Command after it loses the result or reconnects. After reconnect, the client refreshes authoritative Session state. A later explicit user submission creates a new Runtime Command.
-- Input accepted before workflow completion becomes final supersedes that pending completion and continues the same Exact Execution Scope. Input submitted after that point, or while the scope is closing, receives a retryable rejection so the client restores its draft; it never reaches a successor Node or Session.
+- Input admitted before workflow completion becomes final supersedes that pending completion and continues the same Exact Execution Scope. Completion admitted first fences later input. Input admitted after that point, or while the scope is closing, receives a retryable rejection so the client restores its draft; it never reaches a successor Node or Session.
 - History replacement is atomic from the model's perspective: replacement content and its new context become the next ordered conversation state together. Persisted transcript order never changes.
+- An instant Stop or Interrupt cancels only matching exact-live execution. Accepted pending steering does not run afterward and Kent visibly reports its disposition. Pending steering may remain visible briefly after Stop returns while Kent finishes that disposition. A graceful Stop request, when used, follows ordinary ordered command behavior and creates no separate priority.
+- A Session does not reject Runtime Events because its internal pending backlog is large. If one Active Session Runtime accumulates 10,000 Runtime Events waiting for admission, Kent panics in every mode.
+- Closing an Active Session Runtime stops new acceptance, settles accepted work that has not completed, and waits for runtime-owned operations to stop. Requests that never became accepted are not part of runtime closure.
 
 ## Command Execution
 
@@ -185,7 +207,9 @@
 - The server owns Goal mutation commands. With an Active Session Runtime, Runtime Command owns overwrite validation, ordered in-memory application, status publication, persistence, and model awareness. Without an Active Session Runtime, the dormant Goal-command use case persists the durable Goal update and then persists the corresponding model-facing Goal notice directly into the session transcript without starting a runtime.
 - An effective set/replace, pause, resume/reopen, complete, or clear mutation persists one model-facing goal notice in both live and dormant sessions. A no-op mutation persists no notice.
 - On the dormant path, the durable goal update is authoritative and is persisted before its model-facing notice. If the later notice persistence fails, the goal update remains committed and the error is surfaced; no cross-resource transaction, rollback, automatic repair, retry, or extra admission lock is required.
-- Replaying the same client request after the durable goal update commits returns the original response/error and does not apply the goal transition or append the notice again.
+- Each Goal mutation invocation is a new command. A repeated invocation follows the current Goal state and the ordinary validation and no-op rules; Kent does not replay an earlier response or error.
+- Goal CLI never mutates session storage directly. It submits goal commands to the server, which selects the live Runtime Command path or dormant persistence path.
+- Any `kent service` commands that affect the server state (restart, stop, start it) detect invocation by kent itself and refuse to run, being human-only.
 - Ctrl+C during active goal work keeps persisted status `active` and creates runtime-local suspension only. The next user message auto-resumes the suspended goal loop after its turn completes (no `/goal resume` needed); an explicit `/goal pause` is still the hard pause. A user turn that is itself interrupted leaves the loop suspended.
 - The goal status-line indicator in TUI shows the animated spinner only while a goal run is executing; when the goal is `active` but idle (e.g. after Ctrl+C), it shows the idle status dot.
 

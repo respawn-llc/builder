@@ -20,132 +20,6 @@ import (
 	"core/shared/toolspec"
 )
 
-func TestMultipleBackgroundShellNoticesFlushTogetherOnFirstAvailableSlot(t *testing.T) {
-	store := mustCreateTestSession(t)
-
-	client := &fakeClient{responses: []llm.Response{
-		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("working"), Phase: textutil.Value(llm.MessagePhaseCommentary)},
-			ToolCalls: []llm.ToolCall{{ID: "call_shell_1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}},
-			Usage:     llm.Usage{WindowTokens: 200000},
-		},
-		{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
-			Usage:     llm.Usage{WindowTokens: 200000},
-		},
-	}}
-
-	started := make(chan struct{})
-	release := make(chan struct{})
-	var (
-		mu     sync.Mutex
-		events []Event
-	)
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: blockingTool{name: toolspec.ToolExecCommand, started: started, release: release}}), Config{
-		Model: "gpt-5",
-		OnEvent: func(evt Event) {
-			mu.Lock()
-			events = append(events, evt)
-			mu.Unlock()
-		},
-	})
-
-	submitDone := make(chan struct {
-		assistant llm.Message
-		err       error
-	}, 1)
-	go func() {
-		assistant, submitErr := eng.SubmitUserMessage(context.Background(), "run tools")
-		submitDone <- struct {
-			assistant llm.Message
-			err       error
-		}{assistant: assistant, err: submitErr}
-	}()
-
-	select {
-	case <-started:
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for tool call to start")
-	}
-
-	eng.HandleBackgroundShellUpdate(BackgroundShellEvent{
-		Type:       BackgroundShellEventCompleted,
-		ID:         "1000",
-		State:      "completed",
-		NoticeText: "Background shell 1000 completed.\nExit code: 0\nOutput:\ndone-a",
-	}, true)
-	eng.HandleBackgroundShellUpdate(BackgroundShellEvent{
-		Type:       BackgroundShellEventCompleted,
-		ID:         "1001",
-		State:      "completed",
-		NoticeText: "Background shell 1001 completed.\nExit code: 0\nOutput:\ndone-b",
-	}, true)
-
-	client.mu.Lock()
-	callCountWhileBusy := len(client.calls)
-	client.mu.Unlock()
-	if callCountWhileBusy != 1 {
-		t.Fatalf("expected queued notices to avoid immediate model calls while busy, got %d calls", callCountWhileBusy)
-	}
-
-	close(release)
-	result := <-submitDone
-	if result.err != nil {
-		t.Fatalf("submit: %v", result.err)
-	}
-	if messageContent(result.assistant) != "done" {
-		t.Fatalf("assistant content = %q, want done", messageContent(result.assistant))
-	}
-
-	client.mu.Lock()
-	requests := append([]llm.Request(nil), client.calls...)
-	client.mu.Unlock()
-	if len(requests) != 2 {
-		t.Fatalf("expected 2 model calls with both background notices injected into the next request, got %d", len(requests))
-	}
-
-	containsNotice := func(req llm.Request, shellID string) bool {
-		for _, msg := range requestMessages(req) {
-			if msg.Role == llm.RoleDeveloper && msg.MessageType != nil && *msg.MessageType == llm.MessageTypeBackgroundNotice && strings.Contains(messageContent(msg), "Background shell "+shellID+" completed.") {
-				return true
-			}
-		}
-		return false
-	}
-	if !containsNotice(requests[1], "1000") || !containsNotice(requests[1], "1001") {
-		t.Fatalf("expected both background notices in the same in-turn follow-up, messages=%+v", requestMessages(requests[1]))
-	}
-
-	time.Sleep(50 * time.Millisecond)
-	client.mu.Lock()
-	callCountAfterReturn := len(client.calls)
-	client.mu.Unlock()
-	if callCountAfterReturn != 2 {
-		t.Fatalf("did not expect a later batched continuation after turn completion, got %d calls", callCountAfterReturn)
-	}
-
-	mu.Lock()
-	defer mu.Unlock()
-	immediateUpdates := map[string]bool{"1000": false, "1001": false}
-	for _, evt := range events {
-		if evt.Kind != EventBackgroundUpdated || evt.Background == nil {
-			continue
-		}
-		if _, ok := immediateUpdates[evt.Background.ID]; !ok {
-			continue
-		}
-		if evt.CommittedEntryCount != 0 || evt.CommittedEntryStartSet {
-			t.Fatalf("background update should not claim committed transcript range, got %+v", evt)
-		}
-		immediateUpdates[evt.Background.ID] = true
-	}
-	for shellID, found := range immediateUpdates {
-		if !found {
-			t.Fatalf("expected immediate background_updated event for %s, got %+v", shellID, events)
-		}
-	}
-}
-
 func TestWriteStdinCompletionDoesNotQueueDuplicateBackgroundNotice(t *testing.T) {
 	store := mustCreateTestSession(t)
 	manager, err := shelltool.NewManager(shelltool.WithMinimumExecToBgTime(time.Millisecond))
@@ -377,7 +251,7 @@ func TestSubmitUserShellCommandPreservesFatalCauseWhenNoResultIsReturned(t *test
 func TestSubmitUserShellCommandReturnsUnknownToolErrorWhenShellNotRegistered(t *testing.T) {
 	store := mustCreateTestSession(t)
 
-	eng, err := New(store, mustMaterializeTestEventLog(t, store), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 
 	result, err := eng.SubmitUserShellCommand(context.Background(), "pwd")
 	if !errors.Is(err, errUnknownTool) {

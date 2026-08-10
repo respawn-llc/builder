@@ -38,12 +38,12 @@ func (a *Authority) SyncExecutionTarget(ctx context.Context, sessionID string, t
 			}
 			return false, store.SetWorktreeReminderState(normalizedReminder)
 		}
-		retire := false
-		err := engine.RunWhenIdleBeforeQueuedUserWork(runCtx, runtime.ActiveKindRuntimeMaintenance, func() error {
-			var syncErr error
-			retire, syncErr = syncResourceExecutionTarget(resource, engine, normalizedTarget, normalizedReminder)
-			return syncErr
-		})
+		retire, err := syncResourceExecutionTarget(
+			resource,
+			engine,
+			normalizedTarget,
+			normalizedReminder,
+		)
 		return retire, err
 	})
 }
@@ -82,21 +82,19 @@ func (a *Authority) RunWorktreeTransition(
 		}
 		if origin == nil {
 			var retire bool
-			err := engine.RunWhenIdleBeforeQueuedUserWork(runCtx, runtime.ActiveKindRuntimeMaintenance, func() error {
-				active := true
-				defer func() { active = false }()
-				return fn(runCtx, func(apply func() error) error { return apply() }, func(_ context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
-					if !active {
-						return errors.New("worktree transition target synchronizer is no longer active")
-					}
-					normalizedTarget, normalizedReminder, err := normalizeTarget(target, reminder)
-					if err != nil {
-						return err
-					}
-					var syncErr error
-					retire, syncErr = syncResourceExecutionTarget(resource, engine, normalizedTarget, normalizedReminder)
-					return syncErr
-				})
+			active := true
+			defer func() { active = false }()
+			err := fn(runCtx, func(apply func() error) error { return apply() }, func(_ context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
+				if !active {
+					return errors.New("worktree transition target synchronizer is no longer active")
+				}
+				normalizedTarget, normalizedReminder, err := normalizeTarget(target, reminder)
+				if err != nil {
+					return err
+				}
+				var syncErr error
+				retire, syncErr = syncResourceExecutionTarget(resource, engine, normalizedTarget, normalizedReminder)
+				return syncErr
 			})
 			return retire, err
 		}
@@ -139,6 +137,64 @@ func (a *Authority) RunWorktreeTransition(
 	})
 }
 
+func (a *Authority) RunClaimedWorktreeTransition(
+	ctx context.Context,
+	claim *WorktreeBoundaryClaim,
+	fn func(context.Context, func(func() error) error, func(context.Context, clientui.SessionExecutionTarget, *session.WorktreeReminderState) error) error,
+) error {
+	if claim == nil {
+		return errors.New("Worktree boundary claim is required")
+	}
+	if fn == nil {
+		return nil
+	}
+	resourceRef := claim.Resource()
+	return a.withMaintenanceResource(ctx, resourceRef.SessionID(), func(
+		runCtx context.Context,
+		_ *session.Store,
+		resource *agentResource,
+		engine *runtime.Engine,
+	) (bool, error) {
+		if resource == nil || resource.ref != resourceRef || engine == nil {
+			return false, runtimeUnavailableError(resourceRef)
+		}
+		active := true
+		defer func() { active = false }()
+		retire := false
+		err := fn(
+			runCtx,
+			func(apply func() error) error {
+				if !active {
+					return runtime.ErrActiveStepInactive
+				}
+				return apply()
+			},
+			func(
+				_ context.Context,
+				target clientui.SessionExecutionTarget,
+				reminder *session.WorktreeReminderState,
+			) error {
+				if !active {
+					return errors.New("worktree transition target synchronizer is no longer active")
+				}
+				normalizedTarget, normalizedReminder, err := normalizeTarget(target, reminder)
+				if err != nil {
+					return err
+				}
+				var syncErr error
+				retire, syncErr = syncResourceExecutionTarget(
+					resource,
+					engine,
+					normalizedTarget,
+					normalizedReminder,
+				)
+				return syncErr
+			},
+		)
+		return retire, err
+	})
+}
+
 func (a *Authority) RunSessionMaintenance(
 	ctx context.Context,
 	sessionID string,
@@ -156,39 +212,37 @@ func (a *Authority) RunSessionMaintenance(
 			return false, fn(runCtx, store, nil)
 		}
 		var retire bool
-		err := engine.RunWhenIdleBeforeQueuedUserWork(runCtx, runtime.ActiveKindRuntimeMaintenance, func() error {
-			previousContext := tools.FilesystemContext{}
-			if resource.localTools != nil {
-				previousContext = resource.localTools.FilesystemContext()
-			}
-			currentContext := previousContext.Clone()
-			active := true
-			maintenance := &ActiveRuntimeMaintenance{
-				PreviousFilesystemContext: previousContext,
-				Replace: func(next tools.FilesystemContext) error {
-					if !active {
-						return errors.New("active runtime maintenance rebind is no longer active")
-					}
-					if err := rebindResourceContext(resource, engine, next); err != nil {
-						return err
-					}
-					currentContext = next.Clone()
-					return nil
-				},
-			}
-			callbackErr := fn(runCtx, store, maintenance)
-			active = false
-			if callbackErr == nil || currentContext.Equal(previousContext) {
-				return callbackErr
-			}
-			rollbackErr := rebindResourceContext(resource, engine, previousContext)
-			if rollbackErr != nil {
-				retire = true
-				engine.FailQueuedUserMessages(runtime.QueuedUserMessageFailureRuntimeUnavailable)
-				rollbackErr = fmt.Errorf("rollback runtime filesystem context: %w", rollbackErr)
-			}
-			return errors.Join(callbackErr, rollbackErr)
-		})
+		previousContext := tools.FilesystemContext{}
+		if resource.localTools != nil {
+			previousContext = resource.localTools.FilesystemContext()
+		}
+		currentContext := previousContext.Clone()
+		active := true
+		maintenance := &ActiveRuntimeMaintenance{
+			PreviousFilesystemContext: previousContext,
+			Replace: func(next tools.FilesystemContext) error {
+				if !active {
+					return errors.New("active runtime maintenance rebind is no longer active")
+				}
+				if err := rebindResourceContext(resource, engine, next); err != nil {
+					return err
+				}
+				currentContext = next.Clone()
+				return nil
+			},
+		}
+		callbackErr := fn(runCtx, store, maintenance)
+		active = false
+		if callbackErr == nil || currentContext.Equal(previousContext) {
+			return false, callbackErr
+		}
+		rollbackErr := rebindResourceContext(resource, engine, previousContext)
+		if rollbackErr != nil {
+			retire = true
+			engine.FailQueuedUserMessages(runtime.QueuedUserMessageFailureRuntimeUnavailable)
+			rollbackErr = fmt.Errorf("rollback runtime filesystem context: %w", rollbackErr)
+		}
+		err := errors.Join(callbackErr, rollbackErr)
 		return retire, err
 	})
 }
@@ -325,24 +379,8 @@ func (a *Authority) deliverBackgroundEvent(resource *agentResource, event shellt
 	resource.mu.Lock()
 	current := resource.current
 	resource.mu.Unlock()
-	if queueNotice && current == nil {
-		delivered := false
-		err := resource.withEngine(context.Background(), resource.ref, func(_ context.Context, engine *runtime.Engine) error {
-			if recordErr := engine.RecordBackgroundShellUpdate(backgroundEvent); recordErr != nil {
-				return recordErr
-			}
-			delivered = true
-			return nil
-		})
-		if err != nil || !delivered {
-			return delivered, err
-		}
-		if resourceSessionHasWorkflowContract(resource) {
-			return true, nil
-		} else {
-			a.startBackgroundContinuation(resource, backgroundEvent)
-			return true, nil
-		}
+	if queueNotice && current == nil && resourceSessionHasWorkflowContract(resource) {
+		queueNotice = false
 	}
 	delivered := false
 	err := resource.withEngine(context.Background(), resource.ref, func(_ context.Context, engine *runtime.Engine) error {
@@ -351,57 +389,6 @@ func (a *Authority) deliverBackgroundEvent(resource *agentResource, event shellt
 		return nil
 	})
 	return delivered, err
-}
-
-func (a *Authority) startBackgroundContinuation(resource *agentResource, event runtime.BackgroundShellEvent) {
-	// Retried terminal events can arrive while OpenRuntime still holds the
-	// Session admission gate. Defer only admission; model work starts inside the
-	// Agent Execution Scope created below.
-	a.launchLifecycleTask(func(ctx context.Context) {
-		descriptor, err := session.NewOpenSessionDescriptor(resource.ref.SessionID())
-		if err == nil {
-			_, err = a.StartAgentExecution(ctx, AgentExecutionRequest{
-				Descriptor: descriptor,
-				Resource:   CurrentAgentResource{},
-				Runner: func(ctx context.Context, _ ExecutionScope, bridge AgentRuntimeBridge) error {
-					return bridge.WithEngine(ctx, func(engineCtx context.Context, engine *runtime.Engine) error {
-						return engine.RunBackgroundShellContinuation(engineCtx, event)
-					})
-				},
-			})
-		}
-		if err == nil {
-			return
-		}
-		if errors.Is(err, ErrSessionRunActive) {
-			err = a.WithCurrentRuntime(ctx, resource.ref.SessionID(), func(_ context.Context, engine *runtime.Engine) error {
-				engine.QueueBackgroundShellContinuation(event)
-				return nil
-			})
-			if err == nil {
-				return
-			}
-		}
-		if backgroundContinuationLifecycleStopped(err) {
-			if resource.logger != nil {
-				resource.logger.Logf("runtime.background.continuation.start.skipped process_id=%s error=%q", event.ID, err.Error())
-			}
-			return
-		}
-		fallbackErr := a.WithCurrentRuntime(ctx, resource.ref.SessionID(), func(_ context.Context, engine *runtime.Engine) error {
-			return engine.SteerBackgroundContinuationFailure(err)
-		})
-		err = errors.Join(err, fallbackErr)
-		if resource.logger != nil {
-			resource.logger.Logf("runtime.background.continuation.start.failed process_id=%s error=%q", event.ID, err.Error())
-		}
-	})
-}
-
-func backgroundContinuationLifecycleStopped(err error) bool {
-	return errors.Is(err, context.Canceled) ||
-		errors.Is(err, ErrAuthorityClosed) ||
-		errors.Is(err, serverapi.ErrRuntimeUnavailable)
 }
 
 func resourceSessionHasWorkflowContract(resource *agentResource) bool {

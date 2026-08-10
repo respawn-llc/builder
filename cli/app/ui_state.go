@@ -69,12 +69,13 @@ type uiInputFeatureState struct {
 	// UI-side post-turn input queue. It may contain slash commands, shell
 	// commands, and other client-only actions; server queues only runtime
 	// injected user work.
-	queued                   []queuedInputItem
-	compactionOrigin         uiCompactionOrigin
-	pendingRuntimeOperations []clientui.RuntimeOperationRef
-	submitToken              uint64
-	activeSubmit             activeSubmitState
-	recoveredDraftBuffers    []serverapi.SessionDraftRecoveryBuffer
+	queued                                 []queuedInputItem
+	compactionOrigin                       uiCompactionOrigin
+	queuedRuntimeWorkCheckCompactionOrigin uiCompactionOrigin
+	submitToken                            uint64
+	activeSubmit                           activeSubmitState
+	recoveredDraftBuffers                  []serverapi.SessionDraftRecoveryBuffer
+	sessionDraftPersistence                apicontract.SessionLifecycleService
 
 	pendingInjected    []clientui.QueuedUserMessage
 	injectedQueue      []injectedRuntimeQueueItem

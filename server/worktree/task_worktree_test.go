@@ -1187,7 +1187,6 @@ func TestCreateWorktreeSetupReplacesStaleParentReservedEnvironment(t *testing.T)
 
 	resp, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		ClientRequestID:  "req-session-contract",
 		SessionID:        env.session.Meta().SessionID,
 		BaseRef:          "HEAD",
 		CreateBranch:     true,

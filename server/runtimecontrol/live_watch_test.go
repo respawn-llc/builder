@@ -160,7 +160,7 @@ func TestLiveWatchSurfacesAttentionStreamFailureWhileRunIsBlocked(t *testing.T) 
 
 	runDone := make(chan error, 1)
 	go func() {
-		_, err := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "watch-stream-loss", "hello"))
+		_, err := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "hello"))
 		runDone <- err
 	}()
 	<-client.started
@@ -192,7 +192,7 @@ func TestLiveWatchPromptWakeWinsWhileRunIsBlocked(t *testing.T) {
 	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
 	runDone := make(chan error, 1)
 	go func() {
-		_, err := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "watch-prompt", "hello"))
+		_, err := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "hello"))
 		runDone <- err
 	}()
 	<-client.started
@@ -266,7 +266,7 @@ func TestLiveWatchCancellationWhileRunIsBlocked(t *testing.T) {
 	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
 	runDone := make(chan error, 1)
 	go func() {
-		_, err := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "watch-cancel", "hello"))
+		_, err := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "hello"))
 		runDone <- err
 	}()
 	<-client.started
@@ -304,7 +304,7 @@ func TestLiveWatchTerminalCompletionWinsWhileRunIsBlocked(t *testing.T) {
 	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
 	runDone := make(chan error, 1)
 	go func() {
-		_, err := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "watch-terminal", "hello"))
+		_, err := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "hello"))
 		runDone <- err
 	}()
 	<-client.started
@@ -344,7 +344,7 @@ func TestLiveWatchReturnsInterruptedOutcomeWhenRunStops(t *testing.T) {
 	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
 	runDone := make(chan error, 1)
 	go func() {
-		_, err := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "watch-interrupt", "hello"))
+		_, err := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "hello"))
 		runDone <- err
 	}()
 	<-client.started
@@ -391,7 +391,7 @@ func TestLiveWatchSurfacesCanceledAttentionStreamWhileRunIsBlocked(t *testing.T)
 	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
 	runDone := make(chan error, 1)
 	go func() {
-		_, err := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "watch-stream-canceled", "hello"))
+		_, err := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "hello"))
 		runDone <- err
 	}()
 	<-client.started

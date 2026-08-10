@@ -103,9 +103,8 @@ func TestServicePlanSessionReadsPromptHistoryFromMetadataOnly(t *testing.T) {
 	}); err != nil || !receipt.Committed {
 		t.Fatalf("append event-log entry: receipt=%+v error=%v", receipt, err)
 	}
-	if _, _, err := meta.RecordPromptHistoryEntry(ctx, metadata.PromptHistoryEntry{
+	if _, err := meta.RecordPromptHistoryEntry(ctx, metadata.PromptHistoryEntry{
 		SessionID: store.Meta().SessionID,
-		SourceID:  "req-1",
 		Text:      "db-history",
 	}); err != nil {
 		t.Fatalf("record metadata prompt history: %v", err)
@@ -122,9 +121,9 @@ func TestServicePlanSessionReadsPromptHistoryFromMetadataOnly(t *testing.T) {
 	}))
 
 	resp, err := service.PlanSession(ctx, serverapi.SessionPlanRequest{
-		ClientRequestID: "plan-1",
-		Mode:            serverapi.SessionLaunchModeInteractive,
-		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
+
+		Mode:   serverapi.SessionLaunchModeInteractive,
+		Intent: serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
 	})
 	if err != nil {
 		t.Fatalf("PlanSession: %v", err)
@@ -145,9 +144,9 @@ func TestServicePlanSessionProjectsTypedOptionalSessionName(t *testing.T) {
 		Settings:        config.Settings{Model: "gpt-5"},
 	}, containerDir)
 	request := serverapi.SessionPlanRequest{
-		ClientRequestID: "typed-session-name",
-		Mode:            serverapi.SessionLaunchModeInteractive,
-		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
+
+		Mode:   serverapi.SessionLaunchModeInteractive,
+		Intent: serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
 	}
 
 	if err := store.SetName(""); err != nil {
@@ -165,7 +164,6 @@ func TestServicePlanSessionProjectsTypedOptionalSessionName(t *testing.T) {
 	if err := store.SetName(title); err != nil {
 		t.Fatalf("set session name: %v", err)
 	}
-	request.ClientRequestID = "typed-session-name-present"
 	present, err := service.PlanSession(t.Context(), request)
 	if err != nil {
 		t.Fatalf("PlanSession present name: %v", err)
@@ -185,9 +183,9 @@ func TestServicePlanSessionReturnsPlanWithoutRegisteringStore(t *testing.T) {
 	}, containerDir)
 
 	resp, err := service.PlanSession(context.Background(), serverapi.SessionPlanRequest{
-		ClientRequestID: "req-1",
-		Mode:            serverapi.SessionLaunchModeInteractive,
-		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+
+		Mode:   serverapi.SessionLaunchModeInteractive,
+		Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
 	})
 	if err != nil {
 		t.Fatalf("PlanSession: %v", err)
@@ -213,7 +211,7 @@ func TestServicePlanSessionReturnsPlanWithoutRegisteringStore(t *testing.T) {
 	}
 }
 
-func TestServicePlanSessionDedupesForceNewSessionRequestID(t *testing.T) {
+func TestServicePlanSessionTreatsRepeatedCreateAsNewOperation(t *testing.T) {
 	persistenceRoot := t.TempDir()
 	containerDir := t.TempDir()
 	service := newSessionLaunchTestService(config.App{
@@ -222,9 +220,9 @@ func TestServicePlanSessionDedupesForceNewSessionRequestID(t *testing.T) {
 		Settings:        config.Settings{Model: "gpt-5"},
 	}, containerDir)
 	req := serverapi.SessionPlanRequest{
-		ClientRequestID: "req-1",
-		Mode:            serverapi.SessionLaunchModeInteractive,
-		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+
+		Mode:   serverapi.SessionLaunchModeInteractive,
+		Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
 	}
 	first, err := service.PlanSession(context.Background(), req)
 	if err != nil {
@@ -234,8 +232,8 @@ func TestServicePlanSessionDedupesForceNewSessionRequestID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PlanSession second: %v", err)
 	}
-	if first.Plan.SessionID != second.Plan.SessionID {
-		t.Fatalf("session ids = %q and %q, want stable replay", first.Plan.SessionID, second.Plan.SessionID)
+	if first.Plan.SessionID == second.Plan.SessionID {
+		t.Fatalf("repeated create reused session %q", first.Plan.SessionID)
 	}
 }
 
@@ -278,9 +276,9 @@ func TestPlanLaunchSessionUsesOneConfigSnapshotForNamedRole(t *testing.T) {
 	role := "worker"
 
 	response, err := service.PlanSession(context.Background(), serverapi.SessionPlanRequest{
-		ClientRequestID: "snapshot-1",
-		Mode:            serverapi.SessionLaunchModeHeadless,
-		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+
+		Mode:   serverapi.SessionLaunchModeHeadless,
+		Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
 		Overrides: serverapi.RunPromptOverrides{
 			AgentRole: &role,
 			Model:     "gpt-5.4",
@@ -321,10 +319,10 @@ func TestPlanLaunchSessionRejectsInvalidPreparedNamedTargetBeforeCreatingSession
 	service := newSessionLaunchTestService(snapshot, containerDir)
 	role := "invalid"
 	_, err := service.PlanLaunchSession(context.Background(), serverapi.SessionPlanRequest{
-		ClientRequestID: "invalid-prepared-target",
-		Mode:            serverapi.SessionLaunchModeHeadless,
-		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
-		Overrides:       serverapi.RunPromptOverrides{AgentRole: &role},
+
+		Mode:      serverapi.SessionLaunchModeHeadless,
+		Intent:    serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+		Overrides: serverapi.RunPromptOverrides{AgentRole: &role},
 	})
 	if err == nil {
 		t.Fatal("PlanLaunchSession unexpectedly succeeded")
@@ -338,24 +336,6 @@ func TestPlanLaunchSessionRejectsInvalidPreparedNamedTargetBeforeCreatingSession
 	}
 }
 
-func TestSessionPlanMemoRequestUsesCanonicalNullableValues(t *testing.T) {
-	base := sessionPlanMemoRequest{
-		Mode:   serverapi.SessionLaunchModeHeadless,
-		Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
-	}
-	if !sameSessionPlanMemoRequest(base, base) {
-		t.Fatal("identical canonical request must match")
-	}
-	explicitDefault := base
-	role := config.DefaultSubagentRole
-	explicitDefault.Overrides = serverapi.RunPromptOverridesKey{
-		AgentRole: serverapi.OptionalStringKey{Present: true, Value: role},
-	}
-	if sameSessionPlanMemoRequest(base, explicitDefault) {
-		t.Fatal("omitted and explicit default selectors must not share a memo entry")
-	}
-}
-
 func TestPlanLaunchSessionRejectsUnknownParentBeforeRegisteringStore(t *testing.T) {
 	service := newSessionLaunchTestService(config.App{
 		WorkspaceRoot:   t.TempDir(),
@@ -364,9 +344,9 @@ func TestPlanLaunchSessionRejectsUnknownParentBeforeRegisteringStore(t *testing.
 	}, t.TempDir())
 	unknownParent := mustSessionLaunchIntentID(t, "unknown-parent")
 	_, err := service.PlanLaunchSession(context.Background(), serverapi.SessionPlanRequest{
-		ClientRequestID: "req-1",
-		Mode:            serverapi.SessionLaunchModeHeadless,
-		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.ParentAgentSessionCreateOrigin(unknownParent)),
+
+		Mode:   serverapi.SessionLaunchModeHeadless,
+		Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.ParentAgentSessionCreateOrigin(unknownParent)),
 	})
 	var denied *serverapi.SubagentLaunchDeniedError
 	if !errors.As(err, &denied) || denied.Kind != serverapi.SubagentLaunchDenialParentMissing {
@@ -424,7 +404,7 @@ func TestPlanLaunchSessionUsesResolvedCallerWorkflowOrigin(t *testing.T) {
 	workflowCallerID := workflowCaller.Meta().SessionID
 	workflowCallerRuntimeID := mustSessionLaunchIntentID(t, workflowCallerID)
 	_, err = service.PlanLaunchSession(ctx, serverapi.SessionPlanRequest{
-		ClientRequestID: "workflow-caller-target",
+
 		Mode:            serverapi.SessionLaunchModeHeadless,
 		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.ParentAgentSessionCreateOrigin(workflowCallerRuntimeID)),
 		CallerSessionID: &workflowCallerID,
@@ -438,7 +418,7 @@ func TestPlanLaunchSessionUsesResolvedCallerWorkflowOrigin(t *testing.T) {
 	ordinaryCallerID := ordinaryCaller.Meta().SessionID
 	ordinaryCallerRuntimeID := mustSessionLaunchIntentID(t, ordinaryCallerID)
 	if _, err := service.PlanLaunchSession(ctx, serverapi.SessionPlanRequest{
-		ClientRequestID: "ordinary-caller-target",
+
 		Mode:            serverapi.SessionLaunchModeHeadless,
 		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.ParentAgentSessionCreateOrigin(ordinaryCallerRuntimeID)),
 		CallerSessionID: &ordinaryCallerID,
@@ -474,9 +454,9 @@ func TestServicePlanSessionRetainsLockedToolsForPreparedNamedTarget(t *testing.T
 	service := newSessionLaunchTestService(cfg, containerDir)
 
 	resp, err := service.PlanSession(context.Background(), serverapi.SessionPlanRequest{
-		ClientRequestID: "locked-named-tools",
-		Mode:            serverapi.SessionLaunchModeInteractive,
-		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
+
+		Mode:   serverapi.SessionLaunchModeInteractive,
+		Intent: serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
 		Overrides: serverapi.RunPromptOverrides{
 			AgentRole: &role,
 			Tools:     "patch,edit",
@@ -514,10 +494,10 @@ func TestServicePlanSessionPreparesOmittedSelectedRoleBeforeMaterialization(t *t
 	service := newSessionLaunchTestService(cfg, containerDir)
 
 	resp, err := service.PlanSession(context.Background(), serverapi.SessionPlanRequest{
-		ClientRequestID: "omitted-selected-role",
-		Mode:            serverapi.SessionLaunchModeHeadless,
-		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
-		Overrides:       serverapi.RunPromptOverrides{Tools: "patch"},
+
+		Mode:      serverapi.SessionLaunchModeHeadless,
+		Intent:    serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
+		Overrides: serverapi.RunPromptOverrides{Tools: "patch"},
 	})
 	if err != nil {
 		t.Fatalf("PlanSession: %v", err)
@@ -542,10 +522,10 @@ func TestPlanLaunchSessionRejectsOmittedTargetBeforeMaterializingSession(t *test
 	service := newSessionLaunchTestService(cfg, containerDir)
 
 	_, err := service.PlanLaunchSession(context.Background(), serverapi.SessionPlanRequest{
-		ClientRequestID: "omitted-target-conflict",
-		Mode:            serverapi.SessionLaunchModeHeadless,
-		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
-		Overrides:       serverapi.RunPromptOverrides{Tools: "patch,edit"},
+
+		Mode:      serverapi.SessionLaunchModeHeadless,
+		Intent:    serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+		Overrides: serverapi.RunPromptOverrides{Tools: "patch,edit"},
 	})
 	if !errors.Is(err, launch.ErrPatchEditToolsConflict) {
 		t.Fatalf("PlanLaunchSession error = %v, want patch/edit conflict", err)
@@ -581,10 +561,10 @@ func TestServicePlanSessionDefaultRoleClearDoesNotRequireAuthState(t *testing.T)
 	}, containerDir).WithAuthStateReader(failingAuthStateReader{})
 
 	if _, err := service.PlanSession(context.Background(), serverapi.SessionPlanRequest{
-		ClientRequestID: "req-1",
-		Mode:            serverapi.SessionLaunchModeInteractive,
-		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
-		Overrides:       serverapi.RunPromptOverrides{AgentRole: sessionLaunchStringPtr(config.DefaultSubagentRole)},
+
+		Mode:      serverapi.SessionLaunchModeInteractive,
+		Intent:    serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+		Overrides: serverapi.RunPromptOverrides{AgentRole: sessionLaunchStringPtr(config.DefaultSubagentRole)},
 	}); err != nil {
 		t.Fatalf("PlanSession with default role clear should not read auth state: %v", err)
 	}
@@ -612,10 +592,10 @@ func TestServicePlanSessionCanClearInvalidPersistedRoleBeforeValidation(t *testi
 	service := newSessionLaunchTestService(cfg, containerDir)
 
 	resp, err := service.PlanSession(context.Background(), serverapi.SessionPlanRequest{
-		ClientRequestID: "req-1",
-		Mode:            serverapi.SessionLaunchModeInteractive,
-		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
-		Overrides:       serverapi.RunPromptOverrides{AgentRole: sessionLaunchStringPtr(config.DefaultSubagentRole)},
+
+		Mode:      serverapi.SessionLaunchModeInteractive,
+		Intent:    serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
+		Overrides: serverapi.RunPromptOverrides{AgentRole: sessionLaunchStringPtr(config.DefaultSubagentRole)},
 	})
 	if err != nil {
 		t.Fatalf("PlanSession: %v", err)
@@ -654,10 +634,10 @@ func TestServicePlanSessionConfigOnlyOverrideDoesNotSkipInvalidPersistedRoleVali
 	service := newSessionLaunchTestService(cfg, containerDir)
 
 	_, err := service.PlanSession(context.Background(), serverapi.SessionPlanRequest{
-		ClientRequestID: "req-1",
-		Mode:            serverapi.SessionLaunchModeInteractive,
-		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
-		Overrides:       serverapi.RunPromptOverrides{Model: "gpt-5.6-sol"},
+
+		Mode:      serverapi.SessionLaunchModeInteractive,
+		Intent:    serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
+		Overrides: serverapi.RunPromptOverrides{Model: "gpt-5.6-sol"},
 	})
 	if err == nil {
 		t.Fatal("expected invalid persisted role validation to fail")
@@ -684,9 +664,9 @@ func TestPlanLaunchSessionHeadlessSelectedSessionAllowsHumanContinuationOfNonCal
 	service := newSessionLaunchTestService(cfg, containerDir)
 
 	result, err := service.PlanLaunchSession(context.Background(), serverapi.SessionPlanRequest{
-		ClientRequestID: "req-persisted-role",
-		Mode:            serverapi.SessionLaunchModeHeadless,
-		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
+
+		Mode:   serverapi.SessionLaunchModeHeadless,
+		Intent: serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
 	})
 	if err != nil {
 		t.Fatalf("PlanLaunchSession: %v", err)
@@ -707,9 +687,9 @@ func TestPlanLaunchSessionHeadlessSelectedSessionAllowsRemovedContinuationRole(t
 	service := newSessionLaunchTestService(cfg, containerDir)
 
 	result, err := service.PlanLaunchSession(context.Background(), serverapi.SessionPlanRequest{
-		ClientRequestID: "req-removed-persisted-role",
-		Mode:            serverapi.SessionLaunchModeHeadless,
-		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
+
+		Mode:   serverapi.SessionLaunchModeHeadless,
+		Intent: serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
 	})
 	if err != nil {
 		t.Fatalf("PlanLaunchSession: %v", err)
@@ -727,9 +707,9 @@ func TestPlanLaunchSessionHeadlessSelectedSessionKeepsOmittedContinuationRoleDef
 	service := newSessionLaunchTestService(cfg, containerDir)
 
 	result, err := service.PlanLaunchSession(context.Background(), serverapi.SessionPlanRequest{
-		ClientRequestID: "req-omitted-persisted-role",
-		Mode:            serverapi.SessionLaunchModeHeadless,
-		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
+
+		Mode:   serverapi.SessionLaunchModeHeadless,
+		Intent: serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
 	})
 	if err != nil {
 		t.Fatalf("PlanLaunchSession: %v", err)
@@ -763,10 +743,10 @@ func TestServicePlanSessionInvalidRoleOverridePrecedesPersistedRoleValidation(t 
 	for _, role := range []string{"none", "self"} {
 		t.Run(role, func(t *testing.T) {
 			_, err := service.PlanSession(context.Background(), serverapi.SessionPlanRequest{
-				ClientRequestID: "req-" + role,
-				Mode:            serverapi.SessionLaunchModeInteractive,
-				Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
-				Overrides:       serverapi.RunPromptOverrides{AgentRole: sessionLaunchStringPtr(role)},
+
+				Mode:      serverapi.SessionLaunchModeInteractive,
+				Intent:    serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
+				Overrides: serverapi.RunPromptOverrides{AgentRole: sessionLaunchStringPtr(role)},
 			})
 			if err == nil {
 				t.Fatal("expected invalid role override to fail")

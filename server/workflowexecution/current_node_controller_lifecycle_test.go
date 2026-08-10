@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os/exec"
+	"sync"
 	"testing"
 	"time"
 
@@ -307,30 +308,17 @@ func TestCurrentNodeControllerCompletesRetainedSessionAfterScopeRetires(t *testi
 		_ = authority.Close(context.Background())
 	})
 
-	scopeID := runtimeids.NewExecutionScopeID()
-	if _, err := controller.RecordProtocolViolation(context.Background(), workflowruntime.ViolationRequest{
-		ScopeID:   scopeID,
-		SessionID: &sessionID,
-		Kind:      workflowruntime.ViolationKindInvalidCompletion,
-		MaxCount:  2,
-	}); err != nil {
-		t.Fatalf("record retained Session protocol violation before completion: %v", err)
-	}
-	if _, err := controller.CompleteCurrentNode(context.Background(), workflowruntime.CompletionRequest{
-		ScopeID:      scopeID,
-		SessionID:    &sessionID,
-		TransitionID: "next",
-	}); err != nil {
+	if _, err := controller.CompleteIdleCurrentNode(
+		context.Background(),
+		workflowstore.IdleCurrentNodeSelector{SessionID: &sessionID},
+		"next",
+		nil,
+		"",
+	); err != nil {
 		t.Fatalf("complete retained Session Current Node: %v", err)
 	}
 	if calls := store.completionCount(); calls != 1 {
 		t.Fatalf("completion calls = %d, want 1", calls)
-	}
-	controller.mu.Lock()
-	_, retainedViolation := controller.violations[scopeID]
-	controller.mu.Unlock()
-	if retainedViolation {
-		t.Fatal("successful retained Session completion kept its retired-scope violation counter")
 	}
 }
 
@@ -910,6 +898,99 @@ func TestCurrentNodeControllerHoldsSuccessorUntilSourceScopeRetires(t *testing.T
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("successor did not start after source retirement")
+	}
+}
+
+func TestCompleteCurrentNodeReleasesMutationPermitBeforeAssignmentPreparation(t *testing.T) {
+	shellPath, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("sh executable unavailable: %v", err)
+	}
+	source := currentNodeReferenceForControllerTest(t, "task-assignment-preparation", "node-source")
+	successor := currentNodeReferenceForControllerTest(t, "task-assignment-preparation", "node-successor")
+	store := &currentNodeControllerStore{
+		completion: workflowstore.CurrentNodeCompletionResult{
+			AutomaticIntents: []workflowstore.CurrentNodeAutomaticIntent{{
+				CurrentNode: successor,
+				NodeKind:    workflow.NodeKindAgent,
+			}},
+		},
+	}
+	var controller *CurrentNodeController
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
+			controller.ExecutionFinalized(scope)
+		}),
+	})
+	runner := &recordingScriptRunner{
+		authority: authority,
+		command: sessionruntime.ScriptCommand{
+			Path: shellPath,
+			Args: []string{"-c", "while :; do sleep 1; done"},
+		},
+		started: make(chan workflow.CurrentNodeReference, 2),
+	}
+	preparation := &blockingCurrentNodeAssignmentPreparation{
+		reference: successor,
+		started:   make(chan struct{}),
+		release:   make(chan struct{}),
+	}
+	var releasePreparation sync.Once
+	release := func() {
+		releasePreparation.Do(func() { close(preparation.release) })
+	}
+	controller, err = NewCurrentNodeController(store, runner, authority, NewMutationPermit(), CurrentNodeControllerConfig{
+		AgentConcurrency:  1,
+		AssignmentSteerer: preparation,
+	})
+	if err != nil {
+		t.Fatalf("new current node controller: %v", err)
+	}
+	t.Cleanup(func() {
+		release()
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+
+	if err := startCurrentNodeForControllerTest(context.Background(), controller, store, source); err != nil {
+		t.Fatalf("start source: %v", err)
+	}
+	if got := <-runner.started; !got.Equal(source) {
+		t.Fatalf("first started current node = %v, want source %v", got, source)
+	}
+	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+		return hasLiveCurrentNode(controller.Snapshot(), source)
+	}, "source did not become live")
+	sourceScope := singleLiveScope(t, controller, source)
+
+	completed := make(chan error, 1)
+	go func() {
+		_, completeErr := controller.CompleteCurrentNode(context.Background(), workflowruntime.CompletionRequest{
+			ScopeID:      sourceScope,
+			TransitionID: "next",
+		})
+		completed <- completeErr
+	}()
+	select {
+	case <-preparation.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("successor assignment preparation did not start")
+	}
+
+	permitCtx, cancelPermit := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancelPermit()
+	if err := controller.permit.Run(permitCtx, func(context.Context) error { return nil }); err != nil {
+		t.Fatalf("unrelated Workflow mutation waited for assignment preparation: %v", err)
+	}
+
+	release()
+	select {
+	case err := <-completed:
+		if err != nil {
+			t.Fatalf("CompleteCurrentNode: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("CompleteCurrentNode did not finish after assignment preparation")
 	}
 }
 

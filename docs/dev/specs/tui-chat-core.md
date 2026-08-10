@@ -54,10 +54,13 @@
 - `Ctrl+C` does not cancel a submission before its Agent Turn starts.
 - The interrupt also drains pending messages: queued and steering queue contents populate the main input, so nothing typed is lost and the user can edit or resend.
 - `Ctrl+C` without an active `Agent Turn` exits the TUI. A submission already sent to the server may start or continue after the client detaches.
+- Before sending composer text, the TUI durably retains that exact text as Draft Recovery. It clears the submitted recovery only after unambiguous evidence that the text was durably applied as user input. Acceptance as in-memory Pending Work is not enough.
+- A typed not-applied result restores the submitted text as editable draft content. A timeout, disconnect, or lost result keeps the submitted recovery because Kent cannot know whether the Runtime Command applied.
+- Ambiguous recovery may show text that already exists in authoritative Session state. The user may delete that extra draft. Kent never replays recovered text automatically, and recovery must not discard newer composer text.
 - Draft recovery does not depend on a graceful shutdown callback. Closing the terminal window or otherwise losing the TUI process preserves the current main-input draft; opening the session later seeds the input from that draft verbatim.
 - Structured draft-recovery entries preserve only their recovery category and text. They carry no runtime operation, request, or queue identity.
 - Recovered entries return as editable composer text and are never reconstructed into operational queues, resumed, or replayed automatically; sending them again requires an explicit user action.
-- Older recovery metadata that contains operation or queue identity remains readable. Kent ignores the obsolete identity while preserving the recovery category and text, without an upgrade warning.
+- Draft Recovery provides no compatibility guarantee for entries that contain runtime operation, request, or queue identity. Kent may discard those incompatible entries.
 - Graceful exit through `Ctrl+C` or `/exit` saves the current composer draft before releasing the Session attachment.
 - `/exit` detaches the client and does not interrupt the Active Session Runtime. Active work continues after this TUI releases its attachment.
 - Session-navigation commands persist the outgoing draft, resolve the typed transition, release the originating attachment, and only then plan or attach the destination. A release failure aborts navigation before destination attachment; an `/exit` release failure is reported after terminal teardown and exits nonzero.

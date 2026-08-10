@@ -6,16 +6,15 @@ import (
 	"reflect"
 	"testing"
 
-	"core/server/requestmemo"
 	"core/server/sessionruntime"
 	askquestion "core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowexecution"
 	"core/server/workflowstore"
-	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
-	"core/shared/textutil"
+
+	"github.com/google/uuid"
 )
 
 func TestCompleteWorkflowTaskReturnsPendingApprovalWithoutReplacingCurrentNode(t *testing.T) {
@@ -31,11 +30,13 @@ func TestCompleteWorkflowTaskReturnsPendingApprovalWithoutReplacingCurrentNode(t
 	}
 	service := currentNodeCompletionService(execution)
 	sessionID := runtimeids.NewSessionID()
+	origin := serverapi.RuntimeStepOrigin{RunID: uuid.NewString(), StepID: uuid.NewString()}
 
 	response, err := service.CompleteWorkflowTask(context.Background(), serverapi.WorkflowTaskCompleteRequest{
 		ActorKind:      serverapi.WorkflowTaskCompleteActorAgent,
 		AgentSessionID: sessionID.String(),
 		TransitionID:   "done",
+		Origin:         &origin,
 	})
 	if err != nil {
 		t.Fatalf("CompleteWorkflowTask: %v", err)
@@ -49,7 +50,10 @@ func TestCompleteWorkflowTaskReturnsPendingApprovalWithoutReplacingCurrentNode(t
 	if len(response.CurrentNodes) != 0 {
 		t.Fatalf("current nodes = %+v, want none while source remains pending approval", response.CurrentNodes)
 	}
-	if execution.sessionID != sessionID || execution.idleSelector.TaskID != nil || execution.idleSelector.SessionID != nil {
+	if execution.sessionID != sessionID ||
+		execution.sessionOrigin != origin ||
+		execution.idleSelector.TaskID != nil ||
+		execution.idleSelector.SessionID != nil {
 		t.Fatalf("completion dispatch = %+v, want live Session completion", execution)
 	}
 }
@@ -150,10 +154,12 @@ func TestCompleteWorkflowTaskMapsAmbiguousAndPendingSourceFailures(t *testing.T)
 	}
 
 	execution := &currentNodeCompletionExecutionStub{sessionErr: sessionruntime.ErrExecutionNoLongerLive}
+	origin := serverapi.RuntimeStepOrigin{RunID: uuid.NewString(), StepID: uuid.NewString()}
 	_, err := currentNodeCompletionService(execution).CompleteWorkflowTask(context.Background(), serverapi.WorkflowTaskCompleteRequest{
 		ActorKind:      serverapi.WorkflowTaskCompleteActorAgent,
 		AgentSessionID: sessionID.String(),
 		TransitionID:   "done",
+		Origin:         &origin,
 	})
 	if !errors.Is(err, serverapi.ErrWorkflowTaskCompleteTargetNotFound) {
 		t.Fatalf("live completion error = %v, want target-not-found", err)
@@ -177,10 +183,10 @@ func TestAnswerWorkflowTaskQuestionRoutesOnlyTaskAndAskToCurrentNodeExecution(t 
 	execution := &currentNodeCompletionExecutionStub{}
 	service := currentNodeCompletionService(execution)
 	request := serverapi.WorkflowTaskQuestionAnswerRequest{
-		ClientRequestID: "question-request-1",
-		TaskID:          "task-question",
-		AskID:           "ask-question",
-		Answer:          "continue",
+
+		TaskID: "task-question",
+		AskID:  "ask-question",
+		Answer: "continue",
 	}
 
 	if err := service.AnswerWorkflowTaskQuestion(context.Background(), request); err != nil {
@@ -193,67 +199,16 @@ func TestAnswerWorkflowTaskQuestionRoutesOnlyTaskAndAskToCurrentNodeExecution(t 
 	}
 	answer, ok := execution.questionResolution.(askquestion.AskQuestionAnswer)
 	if !ok || answer.Freeform == nil || *answer.Freeform != request.Answer {
-		t.Fatalf("question resolution = %+v, want canonical exact answer", execution.questionResolution)
-	}
-}
-
-func TestAnswerWorkflowTaskApprovalNormalizesAbsentCommentary(t *testing.T) {
-	execution := &currentNodeCompletionExecutionStub{}
-	service := currentNodeCompletionService(execution)
-	request := serverapi.WorkflowTaskQuestionAnswerRequest{
-		ClientRequestID: "approval-request-1",
-		TaskID:          "task-question",
-		AskID:           "ask-approval",
-		Approval: &serverapi.WorkflowTaskQuestionApprovalAnswer{
-			Decision:   clientui.ApprovalDecisionAllowOnce,
-			Commentary: "  ",
-		},
-	}
-
-	if err := service.AnswerWorkflowTaskQuestion(context.Background(), request); err != nil {
-		t.Fatalf("AnswerWorkflowTaskQuestion: %v", err)
-	}
-	approval, ok := execution.questionResolution.(askquestion.AskQuestionApproval)
-	if !ok {
-		t.Fatalf("approval resolution type = %T, want AskQuestionApproval", execution.questionResolution)
-	}
-	if approval.Commentary != nil {
-		t.Fatalf("approval commentary = %q, want absent", *approval.Commentary)
-	}
-}
-
-func TestAnswerWorkflowTaskApprovalPreservesExactCommentary(t *testing.T) {
-	execution := &currentNodeCompletionExecutionStub{}
-	service := currentNodeCompletionService(execution)
-	commentary := "  approved from Task Detail  "
-	request := serverapi.WorkflowTaskQuestionAnswerRequest{
-		ClientRequestID: "approval-request-exact",
-		TaskID:          "task-question",
-		AskID:           "ask-approval",
-		Approval: &serverapi.WorkflowTaskQuestionApprovalAnswer{
-			Decision:   clientui.ApprovalDecisionAllowOnce,
-			Commentary: commentary,
-		},
-	}
-
-	if err := service.AnswerWorkflowTaskQuestion(context.Background(), request); err != nil {
-		t.Fatalf("AnswerWorkflowTaskQuestion: %v", err)
-	}
-	approval, ok := execution.questionResolution.(askquestion.AskQuestionApproval)
-	if !ok {
-		t.Fatalf("approval resolution type = %T, want AskQuestionApproval", execution.questionResolution)
-	}
-	if approval.Commentary == nil || *approval.Commentary != commentary {
-		t.Fatalf("approval commentary = %v, want exact Task Detail commentary", approval.Commentary)
+		t.Fatalf("question resolution = %+v, want exact answer", execution.questionResolution)
 	}
 }
 
 func TestAnswerWorkflowTaskQuestionMapsVolatileQuestionFailures(t *testing.T) {
 	request := serverapi.WorkflowTaskQuestionAnswerRequest{
-		ClientRequestID: "question-request-2",
-		TaskID:          "task-question",
-		AskID:           "ask-question",
-		Answer:          "continue",
+
+		TaskID: "task-question",
+		AskID:  "ask-question",
+		Answer: "continue",
 	}
 	tests := []struct {
 		name string
@@ -282,142 +237,9 @@ func TestAnswerWorkflowTaskQuestionMapsVolatileQuestionFailures(t *testing.T) {
 	}
 }
 
-func TestAnswerWorkflowTaskQuestionRejectsConflictingIdempotentPayload(t *testing.T) {
-	execution := &currentNodeCompletionExecutionStub{}
-	service := currentNodeCompletionService(execution)
-	request := serverapi.WorkflowTaskQuestionAnswerRequest{
-		ClientRequestID: "question-request-3",
-		TaskID:          "task-question",
-		AskID:           "ask-question",
-		Answer:          "continue",
-	}
-	if err := service.AnswerWorkflowTaskQuestion(context.Background(), request); err != nil {
-		t.Fatalf("first AnswerWorkflowTaskQuestion: %v", err)
-	}
-	request.Answer = "stop"
-	if err := service.AnswerWorkflowTaskQuestion(context.Background(), request); !errors.Is(err, requestmemo.ErrClientRequestIDReused) {
-		t.Fatalf("conflicting idempotent answer error = %v, want client request id reuse", err)
-	}
-}
-
-func TestAnswerWorkflowTaskQuestionMemoIdentityPreservesExactWhitespaceFields(t *testing.T) {
-	tests := []struct {
-		name   string
-		first  serverapi.WorkflowTaskQuestionAnswerRequest
-		mutate func(*serverapi.WorkflowTaskQuestionAnswerRequest)
-	}{
-		{
-			name: "answer",
-			first: serverapi.WorkflowTaskQuestionAnswerRequest{
-				SelectedOptionNumber: textutil.Value(1),
-			},
-			mutate: func(request *serverapi.WorkflowTaskQuestionAnswerRequest) {
-				request.Answer = "  "
-			},
-		},
-		{
-			name: "freeform answer",
-			first: serverapi.WorkflowTaskQuestionAnswerRequest{
-				SelectedOptionNumber: textutil.Value(1),
-			},
-			mutate: func(request *serverapi.WorkflowTaskQuestionAnswerRequest) {
-				request.FreeformAnswer = "  "
-			},
-		},
-		{
-			name: "error message",
-			first: serverapi.WorkflowTaskQuestionAnswerRequest{
-				SelectedOptionNumber: textutil.Value(1),
-			},
-			mutate: func(request *serverapi.WorkflowTaskQuestionAnswerRequest) {
-				request.ErrorMessage = "  "
-			},
-		},
-		{
-			name: "approval commentary",
-			first: serverapi.WorkflowTaskQuestionAnswerRequest{
-				Approval: &serverapi.WorkflowTaskQuestionApprovalAnswer{
-					Decision: clientui.ApprovalDecisionAllowOnce,
-				},
-			},
-			mutate: func(request *serverapi.WorkflowTaskQuestionAnswerRequest) {
-				request.Approval.Commentary = "  "
-			},
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			execution := &currentNodeCompletionExecutionStub{}
-			service := currentNodeCompletionService(execution)
-			request := test.first
-			request.ClientRequestID = "task-question-exact-whitespace"
-			request.TaskID = "task-question"
-			request.AskID = "ask-question"
-			if err := service.AnswerWorkflowTaskQuestion(context.Background(), request); err != nil {
-				t.Fatalf("AnswerWorkflowTaskQuestion first: %v", err)
-			}
-			test.mutate(&request)
-			if err := service.AnswerWorkflowTaskQuestion(context.Background(), request); !errors.Is(err, requestmemo.ErrClientRequestIDReused) {
-				t.Fatalf("AnswerWorkflowTaskQuestion whitespace-distinct replay error = %v, want payload mismatch", err)
-			}
-			if execution.questionAcceptCalls != 1 {
-				t.Fatalf("question acceptance calls = %d, want 1", execution.questionAcceptCalls)
-			}
-		})
-	}
-}
-
-func TestAnswerWorkflowTaskQuestionMemoizesAcceptanceBeforeCanceledSuccessorWait(t *testing.T) {
-	successorWaitStarted := make(chan struct{}, 2)
-	releaseSuccessor := make(chan struct{})
-	execution := &currentNodeCompletionExecutionStub{
-		questionAcceptance: workflowQuestionAcceptanceFunc(func(ctx context.Context) error {
-			successorWaitStarted <- struct{}{}
-			select {
-			case <-releaseSuccessor:
-				return nil
-			case <-ctx.Done():
-				return context.Cause(ctx)
-			}
-		}),
-	}
-	service := currentNodeCompletionService(execution)
-	request := serverapi.WorkflowTaskQuestionAnswerRequest{
-		ClientRequestID: "question-request-canceled-successor",
-		TaskID:          "task-question",
-		AskID:           "ask-question",
-		Answer:          "continue",
-	}
-
-	firstCtx, cancelFirst := context.WithCancel(context.Background())
-	firstDone := make(chan error, 1)
-	go func() {
-		firstDone <- service.AnswerWorkflowTaskQuestion(firstCtx, request)
-	}()
-	<-successorWaitStarted
-	cancelFirst()
-	if err := <-firstDone; !errors.Is(err, context.Canceled) {
-		t.Fatalf("first canceled answer error = %v, want context cancellation", err)
-	}
-
-	retryDone := make(chan error, 1)
-	go func() {
-		retryDone <- service.AnswerWorkflowTaskQuestion(context.Background(), request)
-	}()
-	<-successorWaitStarted
-	if execution.questionAcceptCalls != 1 {
-		t.Fatalf("accepted answers = %d, want one memoized acceptance", execution.questionAcceptCalls)
-	}
-	close(releaseSuccessor)
-	if err := <-retryDone; err != nil {
-		t.Fatalf("retry accepted answer: %v", err)
-	}
-}
-
 func TestWorkflowTaskQuestionAnswerContractHasNoRunFields(t *testing.T) {
 	for _, contract := range []reflect.Type{
 		reflect.TypeOf(serverapi.WorkflowTaskQuestionAnswerRequest{}),
-		reflect.TypeOf(taskQuestionAnswerMemoRequest{}),
 	} {
 		for _, removed := range []string{"RunID", "RunIDs", "PlacementID", "PlacementIDs"} {
 			if _, exists := contract.FieldByName(removed); exists {
@@ -431,7 +253,6 @@ func currentNodeCompletionService(execution *currentNodeCompletionExecutionStub)
 	return &Service{
 		readModels:           ReadModels{TaskDetail: currentNodeCompletionUnavailableTaskDetail{}},
 		currentNodeExecution: execution,
-		questionMemo:         requestmemo.New[taskQuestionAnswerMemoRequest, workflowexecution.WorkflowQuestionAcceptance](),
 	}
 }
 
@@ -468,6 +289,7 @@ type currentNodeCompletionExecutionStub struct {
 	resumeEligibilityCalls int
 	startPreparations      chan<- workflowexecution.TaskStartPreparation
 	sessionID              runtimeids.SessionID
+	sessionOrigin          serverapi.RuntimeStepOrigin
 	sessionResult          workflowstore.CurrentNodeCompletionResult
 	sessionErr             error
 	idleSelector           workflowstore.IdleCurrentNodeSelector
@@ -597,8 +419,9 @@ func (s *currentNodeCompletionExecutionStub) AcceptWorkflowQuestion(
 	return workflowQuestionAcceptanceFunc(func(context.Context) error { return nil }), nil
 }
 
-func (s *currentNodeCompletionExecutionStub) CompleteSessionCurrentNode(_ context.Context, sessionID runtimeids.SessionID, _ string, _ map[string]string, _ string) (workflowstore.CurrentNodeCompletionResult, error) {
+func (s *currentNodeCompletionExecutionStub) CompleteSessionCurrentNode(_ context.Context, sessionID runtimeids.SessionID, origin serverapi.RuntimeStepOrigin, _ string, _ map[string]string, _ string) (workflowstore.CurrentNodeCompletionResult, error) {
 	s.sessionID = sessionID
+	s.sessionOrigin = origin
 	return s.sessionResult, s.sessionErr
 }
 

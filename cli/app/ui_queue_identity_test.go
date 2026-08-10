@@ -114,7 +114,10 @@ func TestInjectedQueueCreateConnectionFailureRestoresDraftWithoutTranscriptEntry
 		t.Fatalf("composer cursor = %d, want %d", got, want)
 	}
 	if len(updated.pendingInjected) != 0 || len(updated.injectedQueue) != 0 {
-		t.Fatalf("failed queue state = pending %d, queue %d; want no items", len(updated.pendingInjected), len(updated.injectedQueue))
+		t.Fatalf("failed queue recovery = pending %+v queue %+v, want editable draft as sole owner", updated.pendingInjected, updated.injectedQueue)
+	}
+	if got := updated.sessionDraftRecoveryBuffers(); len(got) != 0 {
+		t.Fatalf("failed queue Draft Recovery = %+v, want no duplicate owner", got)
 	}
 	if updated.activity != beforeActivity {
 		t.Fatalf("activity = %v, want pre-failure activity %v", updated.activity, beforeActivity)
@@ -193,7 +196,10 @@ func TestAllowCommentaryQueueCreateConnectionFailureAnswersIndependently(t *test
 		t.Fatalf("restored commentary = %q, want %q", got, want)
 	}
 	if len(model.pendingInjected) != 0 || len(model.injectedQueue) != 0 {
-		t.Fatalf("failed queue state = pending %d, queue %d; want no items", len(model.pendingInjected), len(model.injectedQueue))
+		t.Fatalf("failed queue recovery = pending %+v queue %+v, want editable draft as sole owner", model.pendingInjected, model.injectedQueue)
+	}
+	if got := model.sessionDraftRecoveryBuffers(); len(got) != 0 {
+		t.Fatalf("failed queue Draft Recovery = %+v, want no duplicate owner", got)
 	}
 	if model.activity == uiActivityError {
 		t.Fatalf("activity = %v, want no failure-owned error label", model.activity)
@@ -235,8 +241,17 @@ func TestAllowCommentaryQueueCreateConnectionFailureAnswersIndependently(t *test
 		t.Fatalf("approval request = %+v, want Allow once with failed commentary", approvalRequest)
 	}
 
-	deliveryResult := <-results
-	model = updateUIModel(t, model, deliveryResult)
+	remainingResults := len(batch)
+	deliveryObserved := false
+	for remainingResults > 0 && !deliveryObserved {
+		result := <-results
+		remainingResults--
+		model = updateUIModel(t, model, result)
+		_, deliveryObserved = result.(promptAnswerDeliveryResultMsg)
+	}
+	if !deliveryObserved {
+		t.Fatal("approval delivery produced no result")
+	}
 	model = updateUIModel(t, model, <-model.runtimeConnectionEvents)
 	if model.runtimeDisconnectStatusVisible() {
 		t.Fatal("successful approval delivery did not clear the disconnect state")
@@ -246,7 +261,10 @@ func TestAllowCommentaryQueueCreateConnectionFailureAnswersIndependently(t *test
 	}
 
 	close(releaseExpiry)
-	model = updateUIModel(t, model, <-results)
+	for remainingResults > 0 {
+		model = updateUIModel(t, model, <-results)
+		remainingResults--
+	}
 	if got := ansi.Strip(model.layout().renderStatusNotice(statusLineUnboundedWidth)); got != "" {
 		t.Fatalf("status after transient expiry = %q, want empty", got)
 	}
@@ -255,61 +273,6 @@ func TestAllowCommentaryQueueCreateConnectionFailureAnswersIndependently(t *test
 	}
 	if client.submitCalls != 1 {
 		t.Fatalf("submit calls = %d, want 1", client.submitCalls)
-	}
-}
-
-func TestTranscriptQueuedStateOwnsRestorationAndLocalQueueAdmission(t *testing.T) {
-	disableTransientStatusClearForTest(t)
-	text := "server queued text"
-	for _, test := range []struct {
-		status       clientui.QueuedUserMessageStatus
-		wantQueued   int
-		wantComposer string
-	}{
-		{status: clientui.QueuedUserMessageAccepted, wantQueued: 1, wantComposer: "existing draft"},
-		{status: clientui.QueuedUserMessageSubmitted, wantComposer: "existing draft"},
-		{status: clientui.QueuedUserMessageFailed, wantComposer: "existing draft\n\nserver queued text"},
-		{status: clientui.QueuedUserMessageDiscarded, wantComposer: "existing draft"},
-	} {
-		t.Run(string(test.status), func(t *testing.T) {
-			client := &runtimeControlFakeClient{}
-			model := newProjectedTestUIModel(client)
-			testSetMainInput(model, "existing draft")
-			requestID := ongoingTestClientRequestID()
-			queueID := ongoingTestQueueItemID()
-			model.registerSteeredQueuedUserMessage(clientui.QueuedUserMessage{
-				ID: queueID.String(), Text: text, ClientRequestID: requestID.String(),
-			})
-			if test.status == clientui.QueuedUserMessageSubmitted {
-				model.queued = []queuedInputItem{{ID: "local-draft", Text: "local draft"}}
-				if cmd := model.inputController().resumeQueuedInputsAfterIdleRuntime(); cmd != nil || len(model.queued) != 1 {
-					t.Fatal("local draft advanced before accepted server work reached a terminal state")
-				}
-			}
-
-			cmd := model.applyTranscriptQueuedMessageState(clientui.TranscriptQueuedMessageState{
-				ClientRequestID: requestID,
-				QueueItemID:     queueID,
-				Status:          test.status,
-				Text:            &text,
-			})
-			if test.status == clientui.QueuedUserMessageSubmitted {
-				cmd = tea.Batch(cmd, model.inputController().resumeQueuedInputsAfterIdleRuntime())
-			}
-			for _, msg := range collectCmdMessages(t, cmd) {
-				model = updateUIModel(t, model, msg)
-			}
-
-			if len(model.pendingInjected) != test.wantQueued || len(model.injectedQueue) != test.wantQueued {
-				t.Fatalf("queued state = pending:%d injected:%d, want %d", len(model.pendingInjected), len(model.injectedQueue), test.wantQueued)
-			}
-			if got := testMainInput(model); got != test.wantComposer {
-				t.Fatalf("composer = %q, want %q", got, test.wantComposer)
-			}
-			if test.status == clientui.QueuedUserMessageSubmitted && client.submitCalls != 1 {
-				t.Fatalf("local submit calls = %d, want 1", client.submitCalls)
-			}
-		})
 	}
 }
 

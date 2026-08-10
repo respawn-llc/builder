@@ -175,19 +175,6 @@ func (s *compactionRuntimeState) SetHistoryReplacementMode(mode *session.Compact
 	return nil
 }
 
-func (s *compactionRuntimeState) HistoryReplacementMode() (*session.CompactionMode, bool) {
-	if s == nil {
-		return nil, false
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.historyReplacementMode == nil {
-		return nil, false
-	}
-	value := *s.historyReplacementMode
-	return &value, true
-}
-
 func (s *compactionRuntimeState) WorkflowPostCompletionBoundary() bool {
 	if s == nil {
 		return false

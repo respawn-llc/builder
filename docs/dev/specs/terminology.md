@@ -346,17 +346,17 @@ The shared live resource for one Session. Interactive clients, headless runs, an
 
 The authoritative live status of a Session. It reports whether the Session is unavailable, starting, idle, running, awaiting a live Question or Approval, finishing, or closing. It also identifies exclusive work such as a user turn, Goal continuation, Workflow execution, compaction, shell command, or background step. Running and waiting require a matching Exact Execution Scope. Saved state and client-local assumptions cannot make a Session appear active.
 
+### Runtime Event
+
+A typed change or result accepted into one Active Session Runtime's FIFO. FIFO order applies to acceptance, not to how long accepted operations take or the order in which their later results become ready.
+
 ### Runtime Command
 
-The ordered operation through which model-visible human input, Workflow completion, Goals, and technical input enter an Exact Execution Scope. Runtime Commands determine acceptance, ordering, replacement by newer input, and whether rejected input returns to the user's draft. Answers to a live Question resolve that Question directly.
+The ordered request through which model-visible human input, Workflow completion, Goals, and technical input enter an Exact Execution Scope as a Runtime Event. Runtime Commands determine acceptance, admission order, replacement by newer input, and whether rejected input returns to the user's draft. Answers to a live Question resolve that Question directly.
 
 ### Completion Fence
 
-The point at which Workflow completion can become final for an Exact Execution Scope or one unambiguous idle executable Current Node. Human input accepted before the Completion Fence replaces pending completion and continues the same execution. Input that arrives after the fence is rejected, and the client restores its draft.
-
-### Runtime Gate
-
-A temporary guard that blocks conflicting changes while Workflow Execution changes live execution state. A Runtime Gate is lost on restart.
+The FIFO decision at which Workflow completion can become final for one completion-eligible Agent Step or one unambiguous idle executable Current Node. A human-input Runtime Event admitted first replaces pending completion and continues the same execution. A completion Runtime Event admitted first rejects later input, and the client restores its draft. Reaching a Step Boundary ends that Step's completion eligibility before any between-step action.
 
 ### Append Certainty
 
@@ -384,7 +384,7 @@ The second-`Ctrl+C` exit path while an interrupt is pending. The TUI exits and d
 
 ### Agent Step
 
-One provider request/response iteration in the runtime loop, including returned tool calls and their committed results. A user steer ends the current Agent Step and starts a new Agent Step within the same Agent Turn.
+One provider request/response iteration in the runtime loop, including returned tool calls and their committed results. During live Workflow execution, only the current Agent Step may authorize completion. A user steer ends the current Agent Step and starts a new Agent Step within the same Agent Turn.
 
 ### Result Group
 
@@ -396,7 +396,7 @@ A complete agent run from a user submission until the runtime returns to idle. A
 
 ### Step Boundary
 
-The interval after the current Agent Step commits tool-result handling and before the next provider request or steered Agent Step begins. Transitions that affect the next Agent Step become authoritative at this boundary.
+The interval after the current Agent Step commits tool-result handling and before the next provider request or steered Agent Step begins. The ended Agent Step is no longer completion-eligible, and no new Agent Step becomes eligible until the next model step begins. Transitions that affect the next Agent Step become authoritative at this boundary.
 
 ### Queue
 

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"core/server/llm"
+	"core/shared/serverapi"
 	"core/shared/textutil"
 	"core/shared/transcript"
 )
@@ -39,7 +40,6 @@ func (r *defaultReviewerPipeline) RunFollowUp(ctx context.Context, stepID string
 		if persistErr := e.steer(stepID, steerReviewerErrorIntent(err.Error())); persistErr != nil {
 			return reviewerFollowUpResult{}, fmt.Errorf("persist Reviewer error: %w", persistErr)
 		}
-		_ = e.stepLifecycle.DrainAgentStepBoundary(ctx)
 		status := ReviewerStatus{
 			Outcome: "failed",
 			Error:   strings.TrimSpace(err.Error()),
@@ -48,12 +48,25 @@ func (r *defaultReviewerPipeline) RunFollowUp(ctx context.Context, stepID string
 	}
 	suggestions := reviewerResult.Suggestions
 	if len(suggestions) == 0 {
-		_ = e.stepLifecycle.DrainAgentStepBoundary(ctx)
 		status := ReviewerStatus{Outcome: "no_suggestions"}
 		return reviewerFollowUpResult{Message: original, Completion: &status, AssistantCommittedStart: originalCommittedStart, AssistantCommittedStartSet: originalCommittedStartSet}, nil
 	}
-	if err := e.stepLifecycle.DrainAgentStepBoundary(ctx); err != nil {
-		return reviewerFollowUpResult{}, err
+	decision, err := e.completeAgentProviderBoundary(ctx, true)
+	if err != nil {
+		return reviewerFollowUpResult{}, fmt.Errorf("reduce Reviewer follow-up Step Boundary: %w", err)
+	}
+	decision, err = e.resolveAgentStepBoundaryDecision(
+		decision,
+		agentStepBoundaryModeStep,
+	)
+	if err != nil {
+		return reviewerFollowUpResult{}, fmt.Errorf("resolve Reviewer follow-up Step Boundary: %w", err)
+	}
+	switch decision.(type) {
+	case finishAgentTurnDecision:
+		return reviewerFollowUpResult{}, &queuedUserFlushStoppedError{}
+	case retireAgentTurnDecision:
+		return reviewerFollowUpResult{}, serverapi.ErrRuntimeUnavailable
 	}
 	instruction := formatReviewerDeveloperInstruction(suggestions)
 	if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeReviewerFeedback), Content: textutil.Value(instruction)}})); err != nil {

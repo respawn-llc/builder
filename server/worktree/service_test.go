@@ -29,27 +29,43 @@ func sessionTargetWorktreeID(target clientui.SessionExecutionTarget) string {
 }
 
 type serviceTestPublisher struct {
-	mu       sync.Mutex
-	outcomes []clientui.WorktreeTransitionOutcome
-	ready    chan struct{}
+	mu                sync.Mutex
+	outcomes          []clientui.WorktreeTransitionOutcome
+	ready             chan struct{}
+	err               error
+	onOutcome         func(clientui.WorktreeTransitionOutcome)
+	identityCalls     []string
+	identityFailureAt int
+	identityErr       error
 }
 
-func (p *serviceTestPublisher) PublishSessionIdentity(string) error {
+func (p *serviceTestPublisher) PublishSessionIdentity(sessionID string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.identityCalls = append(p.identityCalls, sessionID)
+	if p.identityFailureAt > 0 && len(p.identityCalls) == p.identityFailureAt {
+		return p.identityErr
+	}
 	return nil
 }
 
-func (p *serviceTestPublisher) PublishWorktreeTransitionOutcome(_ string, outcome clientui.WorktreeTransitionOutcome) {
+func (p *serviceTestPublisher) PublishWorktreeTransitionOutcome(_ string, outcome clientui.WorktreeTransitionOutcome) error {
 	p.mu.Lock()
 	p.outcomes = append(p.outcomes, outcome)
 	if p.ready == nil {
 		p.ready = make(chan struct{}, 1)
 	}
 	ready := p.ready
+	onOutcome := p.onOutcome
 	p.mu.Unlock()
+	if onOutcome != nil {
+		onOutcome(outcome)
+	}
 	select {
 	case ready <- struct{}{}:
 	default:
 	}
+	return p.err
 }
 
 type serviceTestProcessSource struct {
@@ -88,7 +104,6 @@ func TestCreateWorktreeMarksProvenanceAndRunsSetupScriptWithProjectID(t *testing
 
 	resp, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		ClientRequestID:  "req-create",
 		SessionID:        env.session.Meta().SessionID,
 		BaseRef:          "HEAD",
 		CreateBranch:     true,
@@ -159,7 +174,6 @@ func TestCreateWorktreeUsesCompactAutomaticRoot(t *testing.T) {
 	env := newServiceTestEnv(t)
 	resp, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		ClientRequestID:  "compact-root",
 		SessionID:        env.session.Meta().SessionID,
 		BaseRef:          "HEAD",
 		CreateBranch:     true,
@@ -193,7 +207,6 @@ func TestCreateWorktreePreservesExplicitRoot(t *testing.T) {
 	root := filepath.Join(env.baseDir, "explicit-root")
 	resp, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		ClientRequestID:  "explicit-root",
 		SessionID:        env.session.Meta().SessionID,
 		RootPath:         root,
 		BaseRef:          "HEAD",
@@ -220,7 +233,6 @@ func TestCreateWorktreeRejectsExplicitRootThroughBaseSymlinkBeforeGit(t *testing
 	before := len(mustListWorktrees(t, env).Worktrees)
 	_, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		ClientRequestID:  "explicit-symlink-escape",
 		SessionID:        env.session.Meta().SessionID,
 		RootPath:         filepath.Join("link", "new"),
 		BaseRef:          "HEAD",
@@ -240,7 +252,6 @@ func TestCreateWorktreeRejectsExplicitRootOverlappingSourceWorkspace(t *testing.
 	before := len(mustListWorktrees(t, env).Worktrees)
 	_, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		ClientRequestID:  "explicit-source-overlap",
 		SessionID:        env.session.Meta().SessionID,
 		RootPath:         filepath.Join(env.workspaceRoot, "nested"),
 		BaseRef:          "HEAD",
@@ -260,7 +271,6 @@ func TestCreateWorktreeRejectsExplicitRootNestedInExistingManagedWorktree(t *tes
 	existingRoot := filepath.Join(env.baseDir, "existing-root")
 	if _, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		ClientRequestID:  "existing-managed-root",
 		SessionID:        env.session.Meta().SessionID,
 		RootPath:         existingRoot,
 		BaseRef:          "HEAD",
@@ -273,7 +283,6 @@ func TestCreateWorktreeRejectsExplicitRootNestedInExistingManagedWorktree(t *tes
 
 	_, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		ClientRequestID:  "nested-managed-root",
 		SessionID:        env.session.Meta().SessionID,
 		RootPath:         filepath.Join(existingRoot, "nested"),
 		BaseRef:          "HEAD",
@@ -314,7 +323,6 @@ func TestCreateWorktreeRejectsExplicitRootNestedInManagedWorktreeFromOtherProjec
 
 	_, err = env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		ClientRequestID:  "nested-other-project-managed-root",
 		SessionID:        env.session.Meta().SessionID,
 		RootPath:         filepath.Join(otherManagedRoot, "nested"),
 		BaseRef:          "HEAD",
@@ -351,7 +359,6 @@ func TestCreateWorktreeBlocksUntilSetupCompletesBeforeSessionSwitch(t *testing.T
 	go func() {
 		resp, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
 			SetupOperationID: setupID,
-			ClientRequestID:  "req-create-blocking",
 			SessionID:        env.session.Meta().SessionID,
 			BaseRef:          "HEAD",
 			CreateBranch:     true,
@@ -421,7 +428,6 @@ func TestCreateWorktreeSetupFailureKeepsWorktreeAndSessionTarget(t *testing.T) {
 	defer func() { _ = sub.Close() }()
 	_, err = env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
 		SetupOperationID: setupID,
-		ClientRequestID:  "req-setup-fails",
 		SessionID:        env.session.Meta().SessionID,
 		BaseRef:          "HEAD",
 		CreateBranch:     true,
@@ -462,7 +468,6 @@ func TestCreateWorktreeSetupTimeoutKeepsWorktreeAndSessionTarget(t *testing.T) {
 	defer func() { _ = sub.Close() }()
 	_, err = env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
 		SetupOperationID: setupID,
-		ClientRequestID:  "req-setup-timeout",
 		SessionID:        env.session.Meta().SessionID,
 		BaseRef:          "HEAD",
 		CreateBranch:     true,
@@ -512,7 +517,6 @@ func TestCreateWorktreeSetupCancellationKeepsWorktreeAndSessionTarget(t *testing
 	go func() {
 		_, err := env.service.CreateWorktree(ctx, serverapi.WorktreeCreateRequest{
 			SetupOperationID: setupID,
-			ClientRequestID:  "req-setup-cancel",
 			SessionID:        env.session.Meta().SessionID,
 			BaseRef:          "HEAD",
 			CreateBranch:     true,
@@ -581,7 +585,6 @@ func TestCreateWorktreeInvalidSetupScriptsKeepWorktreeAndSessionTarget(t *testin
 			defer func() { _ = sub.Close() }()
 			_, err = env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
 				SetupOperationID: setupID,
-				ClientRequestID:  "req-" + tc.name,
 				SessionID:        env.session.Meta().SessionID,
 				BaseRef:          "HEAD",
 				CreateBranch:     true,
@@ -611,7 +614,6 @@ func TestCreateWorktreeAllowsExistingRefWithoutCreatingBranch(t *testing.T) {
 
 	resp, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		ClientRequestID:  "req-create-existing-ref",
 		SessionID:        env.session.Meta().SessionID,
 		BaseRef:          "feature/existing-ref",
 		CreateBranch:     false,
@@ -642,7 +644,6 @@ func TestCreateWorktreeFromCheckedOutHEADRollsBackDetachedRegistration(t *testin
 	env := newServiceTestEnv(t)
 	_, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		ClientRequestID:  "req-create-detached-head",
 		SessionID:        env.session.Meta().SessionID,
 		BaseRef:          "HEAD",
 	})
@@ -873,7 +874,6 @@ func TestCreateWorktreeKeepsCreatedStateWhenPostSetupSwitchFails(t *testing.T) {
 	env := newServiceTestEnv(t)
 	resp, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		ClientRequestID:  "req-create-rollback",
 		SessionID:        env.session.Meta().SessionID,
 		BaseRef:          "HEAD",
 		CreateBranch:     true,

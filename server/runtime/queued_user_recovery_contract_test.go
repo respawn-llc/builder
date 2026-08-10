@@ -14,11 +14,14 @@ func TestDiscardQueuedUserMessagePreservesOtherQueuedIdentities(t *testing.T) {
 	first := mustQueueUserMessage(t, engine, "same")
 	target := mustQueueUserMessage(t, engine, "same")
 	last := mustQueueUserMessage(t, engine, "same")
+	if pending := engine.boundaryAgenda.pendingHuman(); len(pending) != 3 {
+		t.Fatalf("canonical human agenda entries = %+v, want three", pending)
+	}
 
 	if !engine.DiscardQueuedUserMessage(target.ID) {
 		t.Fatal("target queued identity was not discarded")
 	}
-	queue := engine.messageFlow.(*defaultMessageLifecycle).queue.Snapshot()
+	queue := engine.transcriptHydrationSegmentLocked().QueuedMessages
 	if len(queue) != 2 || queue[0].ID != first.ID || queue[1].ID != last.ID {
 		t.Fatalf("remaining queued identities = %+v", queue)
 	}

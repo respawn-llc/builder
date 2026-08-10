@@ -19,6 +19,8 @@ import (
 	creackpty "github.com/creack/pty"
 )
 
+const postExitDrainWait = time.Second
+
 func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -49,23 +51,35 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 	cmd.Dir = spec.Dir
 
 	started := time.Now()
-	ptmx, err := creackpty.StartWithSize(cmd, &creackpty.Winsize{Rows: uint16(spec.Dimensions.Rows), Cols: uint16(spec.Dimensions.Cols)})
+	ptmx, tty, err := creackpty.Open()
 	if err != nil {
 		return analyzer.Capture{}, errors.Join(
-			fmt.Errorf("start pty command path=%s args=%v dimensions=%+v: %w", spec.Path, spec.Args, spec.Dimensions, err),
+			fmt.Errorf("open pty command path=%s args=%v dimensions=%+v: %w", spec.Path, spec.Args, spec.Dimensions, err),
 			readiness.Close(),
 		)
 	}
 	defer func() {
 		_ = ptmx.Close()
 	}()
+	defer func() {
+		_ = tty.Close()
+	}()
+	if err := creackpty.Setsize(ptmx, &creackpty.Winsize{Rows: uint16(spec.Dimensions.Rows), Cols: uint16(spec.Dimensions.Cols)}); err != nil {
+		return analyzer.Capture{}, errors.Join(
+			fmt.Errorf("size pty command path=%s args=%v dimensions=%+v: %w", spec.Path, spec.Args, spec.Dimensions, err),
+			readiness.Close(),
+		)
+	}
+	cmd.Stdin = tty
+	cmd.Stdout = tty
+	cmd.Stderr = tty
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.Setsid = true
+	cmd.SysProcAttr.Setctty = true
 	waitDone := make(chan error, 1)
 	var processExited atomic.Bool
-	go func() {
-		waitErr := cmd.Wait()
-		processExited.Store(true)
-		waitDone <- waitErr
-	}()
 
 	var mu sync.Mutex
 	var eventWG sync.WaitGroup
@@ -266,6 +280,21 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 			}
 		}
 	}()
+	if err := cmd.Start(); err != nil {
+		_ = tty.Close()
+		_ = ptmx.Close()
+		<-readDone
+		return analyzer.Capture{}, errors.Join(
+			fmt.Errorf("start pty command path=%s args=%v dimensions=%+v: %w", spec.Path, spec.Args, spec.Dimensions, err),
+			readiness.Close(),
+		)
+	}
+	_ = tty.Close()
+	go func() {
+		waitErr := cmd.Wait()
+		processExited.Store(true)
+		waitDone <- waitErr
+	}()
 
 	analysisDone := make(chan struct{})
 	go func() {
@@ -368,19 +397,22 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 		timeout = errors.Is(ctx.Err(), context.DeadlineExceeded)
 	case <-ctx.Done():
 		timeout = errors.Is(ctx.Err(), context.DeadlineExceeded)
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
-		}
+		eventErrors.Add(signalProcessGroup(cmd.Process.Pid, syscall.SIGKILL))
 		waitErr = <-waitDone
 	}
 	cancel()
 	eventWG.Wait()
 	select {
 	case <-readDone:
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(postExitDrainWait):
+		eventErrors.Add(signalProcessGroup(cmd.Process.Pid, syscall.SIGKILL))
+		_ = ptmx.Close()
+		<-readDone
+	}
+	if err := signalProcessGroup(cmd.Process.Pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.EPERM) {
+		eventErrors.Add(err)
 	}
 	_ = ptmx.Close()
-	<-readDone
 	<-analysisDone
 	readinessErr := readiness.Close()
 

@@ -1,4 +1,4 @@
-package runtimecommand
+package runtimecontrol
 
 import (
 	"context"
@@ -8,7 +8,6 @@ import (
 	"core/server/runtime"
 	"core/server/runtimeactivity"
 	"core/server/session"
-	"core/server/sessionruntime"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
@@ -63,19 +62,7 @@ func (r GoalCommandResult) Accepted() bool {
 		r.NoticeReceipt.Committed
 }
 
-type GoalAuthority struct {
-	authority *sessionruntime.Authority
-	execution *ExecutionAdapter
-}
-
-func NewGoalAuthority(authority *sessionruntime.Authority, execution *ExecutionAdapter) *GoalAuthority {
-	if execution == nil {
-		execution = NewExecutionAdapter(authority)
-	}
-	return &GoalAuthority{authority: authority, execution: execution}
-}
-
-func (a *GoalAuthority) Set(ctx context.Context, command GoalSetCommand) (GoalCommandResult, error) {
+func (s *Service) setGoalCommand(ctx context.Context, command GoalSetCommand) (GoalCommandResult, error) {
 	if err := validateGoalCommand(command.SessionID, command.Actor, command.Execution); err != nil {
 		return GoalCommandResult{}, err
 	}
@@ -84,7 +71,7 @@ func (a *GoalAuthority) Set(ctx context.Context, command GoalSetCommand) (GoalCo
 		return GoalCommandResult{}, errors.New("goal objective is required")
 	}
 	if isStepScoped(command.Actor, command.Execution) {
-		return a.withExactLive(ctx, command.SessionID, command.Execution, func(engine *runtime.Engine) (GoalCommandResult, error) {
+		return s.withExactLiveGoal(ctx, command.SessionID, command.Execution, func(engine *runtime.Engine) (GoalCommandResult, error) {
 			goal, queued, err := queueSet(engine, command)
 			if err != nil {
 				return GoalCommandResult{Err: err}, err
@@ -95,19 +82,19 @@ func (a *GoalAuthority) Set(ctx context.Context, command GoalSetCommand) (GoalCo
 			return GoalCommandResult{Err: runtime.ErrAgentGoalStepInactive}, runtime.ErrAgentGoalStepInactive
 		})
 	}
-	return a.withDormantAdmission(ctx, command.SessionID, func(store *session.Store) (GoalCommandResult, error) {
+	return s.withDormantGoalAdmission(ctx, command.SessionID, func(store *session.Store) (GoalCommandResult, error) {
 		return dormantSet(store, command)
 	}, func(engine *runtime.Engine) (GoalCommandResult, error) {
 		return liveSet(engine, command)
 	})
 }
 
-func (a *GoalAuthority) Status(ctx context.Context, command GoalStatusCommand) (GoalCommandResult, error) {
+func (s *Service) statusGoalCommand(ctx context.Context, command GoalStatusCommand) (GoalCommandResult, error) {
 	if err := validateGoalCommand(command.SessionID, command.Actor, command.Execution); err != nil {
 		return GoalCommandResult{}, err
 	}
 	if isStepScoped(command.Actor, command.Execution) {
-		return a.withExactLive(ctx, command.SessionID, command.Execution, func(engine *runtime.Engine) (GoalCommandResult, error) {
+		return s.withExactLiveGoal(ctx, command.SessionID, command.Execution, func(engine *runtime.Engine) (GoalCommandResult, error) {
 			goal, queued, err := queueStatus(engine, command)
 			if err != nil {
 				return GoalCommandResult{Err: err}, err
@@ -118,18 +105,18 @@ func (a *GoalAuthority) Status(ctx context.Context, command GoalStatusCommand) (
 			return GoalCommandResult{Err: runtime.ErrAgentGoalStepInactive}, runtime.ErrAgentGoalStepInactive
 		})
 	}
-	return a.withDormantAdmission(ctx, command.SessionID, func(store *session.Store) (GoalCommandResult, error) {
+	return s.withDormantGoalAdmission(ctx, command.SessionID, func(store *session.Store) (GoalCommandResult, error) {
 		return dormantStatus(store, command)
 	}, func(engine *runtime.Engine) (GoalCommandResult, error) {
 		return liveStatus(engine, command)
 	})
 }
 
-func (a *GoalAuthority) Clear(ctx context.Context, command GoalClearCommand) (GoalCommandResult, error) {
+func (s *Service) clearGoalCommand(ctx context.Context, command GoalClearCommand) (GoalCommandResult, error) {
 	if err := validateGoalCommand(command.SessionID, command.Actor, GoalExecutionIdentity{}); err != nil {
 		return GoalCommandResult{}, err
 	}
-	return a.withDormantAdmission(ctx, command.SessionID, func(store *session.Store) (GoalCommandResult, error) {
+	return s.withDormantGoalAdmission(ctx, command.SessionID, func(store *session.Store) (GoalCommandResult, error) {
 		return dormantClear(store, command)
 	}, func(engine *runtime.Engine) (GoalCommandResult, error) {
 		return liveClear(engine, command)
@@ -158,13 +145,13 @@ func isStepScoped(actor session.GoalActor, execution GoalExecutionIdentity) bool
 	return actor == session.GoalActorAgent && execution.StepID != nil
 }
 
-func (a *GoalAuthority) withDormantAdmission(
+func (s *Service) withDormantGoalAdmission(
 	ctx context.Context,
 	sessionID runtimeids.SessionID,
 	dormant func(*session.Store) (GoalCommandResult, error),
 	live func(*runtime.Engine) (GoalCommandResult, error),
 ) (GoalCommandResult, error) {
-	if a == nil || a.authority == nil {
+	if s == nil || s.authority == nil {
 		return GoalCommandResult{}, errors.New("session runtime authority is required")
 	}
 	if dormant == nil || live == nil {
@@ -175,68 +162,41 @@ func (a *GoalAuthority) withDormantAdmission(
 		return GoalCommandResult{}, err
 	}
 	var result GoalCommandResult
-	admission, err := a.authority.WithDormantSessionStore(ctx, descriptor, func(_ context.Context, store *session.Store) error {
-		applied, applyErr := dormant(store)
+	apply := func(applied GoalCommandResult, applyErr error) error {
 		result = applied
 		if result.Accepted() {
 			result.Err = applyErr
 			return nil
 		}
 		return applyErr
-	})
+	}
+	_, err = s.authority.WithSessionRuntimeOrStore(
+		ctx,
+		descriptor,
+		func(_ context.Context, engine *runtime.Engine) error {
+			return apply(live(engine))
+		},
+		func(_ context.Context, store *session.Store) error {
+			return apply(dormant(store))
+		},
+	)
 	if err != nil {
 		return GoalCommandResult{}, err
 	}
-	if !admission.RuntimeAvailable {
-		return result, nil
-	}
-	return a.withLive(ctx, sessionID, live)
+	return result, nil
 }
 
-func (a *GoalAuthority) withLive(
-	ctx context.Context,
-	sessionID runtimeids.SessionID,
-	mutate func(*runtime.Engine) (GoalCommandResult, error),
-) (GoalCommandResult, error) {
-	if a == nil || a.execution == nil {
-		return GoalCommandResult{}, errors.New("runtime execution adapter is required")
-	}
-	var result GoalCommandResult
-	err := a.execution.RunAgentExecution(ctx, sessionID.String(), func(_ context.Context, engine *runtime.Engine) error {
-		applied, applyErr := mutate(engine)
-		result = applied
-		return applyErr
-	})
-	if result.Accepted() {
-		result.Err = err
-		return result, nil
-	}
-	if !errors.Is(err, serverapi.ErrSessionRunStarting) {
-		return GoalCommandResult{}, err
-	}
-	err = a.execution.WithLiveExecutionRuntime(ctx, sessionID, func(_ context.Context, engine *runtime.Engine) error {
-		applied, applyErr := mutate(engine)
-		result = applied
-		return applyErr
-	})
-	if result.Accepted() {
-		result.Err = err
-		return result, nil
-	}
-	return GoalCommandResult{}, err
-}
-
-func (a *GoalAuthority) withExactLive(
+func (s *Service) withExactLiveGoal(
 	ctx context.Context,
 	sessionID runtimeids.SessionID,
 	execution GoalExecutionIdentity,
 	mutate func(*runtime.Engine) (GoalCommandResult, error),
 ) (GoalCommandResult, error) {
-	if a == nil || a.execution == nil {
-		return GoalCommandResult{}, errors.New("runtime execution adapter is required")
+	if s == nil || s.authority == nil {
+		return GoalCommandResult{}, errors.New("session runtime authority is required")
 	}
 	var result GoalCommandResult
-	err := a.execution.WithLiveExecutionRuntime(ctx, sessionID, func(_ context.Context, engine *runtime.Engine) error {
+	err := s.withLiveExecutionRuntime(ctx, sessionID, func(_ context.Context, engine *runtime.Engine) error {
 		if active := runtimeactivity.ActiveStepFromProvider(engine); active == nil ||
 			active.StepID != *execution.StepID ||
 			(execution.RunID != nil && active.RunID != *execution.RunID) {
@@ -325,7 +285,7 @@ func liveStatus(engine *runtime.Engine, command GoalStatusCommand) (GoalCommandR
 	if !out.Accepted() || err != nil {
 		return out, err
 	}
-	if command.Status == session.GoalStatusActive && out.Disposition != runtime.GoalCommandNoop {
+	if command.Status == session.GoalStatusActive {
 		if startErr := engine.StartGoalLoop(); startErr != nil {
 			out.Err = startErr
 			return out, startErr

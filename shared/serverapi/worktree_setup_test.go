@@ -57,7 +57,7 @@ func TestWorktreeSetupOperationIDJSONRejectsNonV4(t *testing.T) {
 func TestForegroundStartRequiresSetupOperationID(t *testing.T) {
 	id := NewWorktreeSetupOperationID()
 	valid := []interface{ Validate() error }{
-		WorktreeCreateRequest{ClientRequestID: "req", SetupOperationID: id, SessionID: "session", BaseRef: "HEAD", CreateBranch: true, BranchName: "feature"},
+		WorktreeCreateRequest{SetupOperationID: id, SessionID: "session", BaseRef: "HEAD", CreateBranch: true, BranchName: "feature"},
 		WorkflowTaskStartRequest{TaskID: "task", SetupOperationID: id},
 	}
 	for _, req := range valid {
@@ -66,12 +66,36 @@ func TestForegroundStartRequiresSetupOperationID(t *testing.T) {
 		}
 	}
 	invalid := []interface{ Validate() error }{
-		WorktreeCreateRequest{ClientRequestID: "req", SessionID: "session", BaseRef: "HEAD", CreateBranch: true, BranchName: "feature"},
+		WorktreeCreateRequest{SessionID: "session", BaseRef: "HEAD", CreateBranch: true, BranchName: "feature"},
 		WorkflowTaskStartRequest{TaskID: "task"},
 	}
 	for _, req := range invalid {
 		if err := req.Validate(); err == nil {
 			t.Fatalf("%T Validate succeeded without setup operation id", req)
 		}
+	}
+}
+
+func TestWorktreeCreateRequestWireUsesSetupOperationIdentity(t *testing.T) {
+	request := WorktreeCreateRequest{
+		SetupOperationID: NewWorktreeSetupOperationID(),
+		SessionID:        "session",
+		BaseRef:          "HEAD",
+		CreateBranch:     true,
+		BranchName:       "feature",
+	}
+	encoded, err := json.Marshal(request)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if _, exists := fields["client_request_id"]; exists {
+		t.Fatal("Worktree Create wire request retained generic client request identity")
+	}
+	if _, exists := fields["setup_operation_id"]; !exists {
+		t.Fatal("Worktree Create wire request omitted Setup Operation identity")
 	}
 }

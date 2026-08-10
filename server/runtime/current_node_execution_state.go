@@ -99,6 +99,9 @@ func (e *Engine) BindCurrentNodeExecution(
 	}
 	state.owner = &currentNodeExecutionOwner{scopeID: cloned.ScopeID}
 	state.mu.Unlock()
+	if e.agentSteps.current == nil && e.agentSteps.boundary == nil {
+		e.agentSteps.scopeID = cloned.ScopeID
+	}
 	e.mu.Lock()
 	e.workflowTerminal = WorkflowTerminalState{}
 	e.mu.Unlock()

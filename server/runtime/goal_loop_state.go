@@ -1,7 +1,6 @@
 package runtime
 
 import (
-	"context"
 	"sync"
 )
 
@@ -9,11 +8,10 @@ type goalLoopState struct {
 	mu               sync.Mutex
 	lifecycle        goalLoopLifecycleState
 	interruptPending bool
-	changed          chan struct{}
 }
 
 func newGoalLoopState() *goalLoopState {
-	return &goalLoopState{changed: make(chan struct{})}
+	return &goalLoopState{}
 }
 
 func (s *goalLoopState) Suspend() {
@@ -39,8 +37,6 @@ func (s *goalLoopState) Resume() {
 	s.interruptPending = false
 	if s.lifecycle.IsSuspended() {
 		s.lifecycle = goalLoopLifecycleIdle
-		close(s.changed)
-		s.changed = make(chan struct{})
 	}
 	s.mu.Unlock()
 }
@@ -89,8 +85,6 @@ func (s *goalLoopState) Finish(active bool) bool {
 	case goalLoopLifecycleRunning:
 		s.lifecycle = goalLoopLifecycleIdle
 	}
-	close(s.changed)
-	s.changed = make(chan struct{})
 	return false
 }
 
@@ -110,22 +104,6 @@ func (s *goalLoopState) Running() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.lifecycle.IsRunning()
-}
-
-func (s *goalLoopState) Wait(ctx context.Context) error {
-	s.mu.Lock()
-	for s.lifecycle.IsRunning() {
-		changed := s.changed
-		s.mu.Unlock()
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-changed:
-		}
-		s.mu.Lock()
-	}
-	s.mu.Unlock()
-	return nil
 }
 
 func (s *goalLoopState) ContinuationEnforced() bool {

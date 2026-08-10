@@ -108,6 +108,12 @@ func (a taskCompleteArgs) request(ctx context.Context, cfg config.App, remote wo
 	if agentContext {
 		req.ActorKind = serverapi.WorkflowTaskCompleteActorAgent
 		req.AgentSessionID = strings.TrimSpace(agentSessionID)
+		runID, stepID := sessionenv.LookupRunStepID(os.LookupEnv)
+		origin := serverapi.RuntimeStepOrigin{RunID: runID, StepID: stepID}
+		if err := origin.Validate(); err != nil {
+			return serverapi.WorkflowTaskCompleteRequest{}, fmt.Errorf("workflow completion origin: %w", err)
+		}
+		req.Origin = &origin
 	} else {
 		req.ActorKind = serverapi.WorkflowTaskCompleteActorUser
 		req.Force = a.Force

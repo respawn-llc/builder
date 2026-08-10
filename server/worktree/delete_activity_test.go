@@ -28,7 +28,11 @@ type deleteInFlightStartLifecycle struct {
 	*testsetup.StartBarrier
 }
 
-func (l *deleteInFlightStartLifecycle) ResourceReady(ctx context.Context, _ sessionruntime.AgentResourceDescriptor, _ *runtime.Engine, _ sessionruntime.AgentResourceRetainer) error {
+func (l *deleteInFlightStartLifecycle) ResourceReady(
+	ctx context.Context,
+	_ sessionruntime.AgentResourceDescriptor,
+	_ *runtime.Engine,
+) error {
 	return l.ArriveAndWait(ctx)
 }
 
@@ -150,6 +154,49 @@ func (state deleteTargetState) assertUnchanged(t *testing.T, env *serviceTestEnv
 	}
 	if _, err := os.Stat(state.root); err != nil {
 		t.Fatalf("busy worktree root changed after rejected delete: %v", err)
+	}
+}
+
+func openIdleDeleteActivityRuntime(
+	t *testing.T,
+	env *serviceTestEnv,
+	sessionID string,
+	workdir string,
+) sessionruntime.RuntimeAttachment {
+	t.Helper()
+	descriptor := openDeleteActivitySessionDescriptor(t, sessionID)
+	plan := deleteActivityTestRuntimePlan(t, env, workdir)
+	attachment, err := env.authority.OpenRuntime(context.Background(), sessionruntime.RuntimeOpenRequest{
+		SessionID: descriptor.SessionID(),
+		OwnerID:   "delete-idle-" + sessionID,
+		Runtime:   &plan,
+	})
+	if err != nil {
+		t.Fatalf("OpenRuntime: %v", err)
+	}
+	t.Cleanup(func() {
+		_, releaseErr := attachment.Release(context.Background(), sessionruntime.RuntimeReleaseClose)
+		if releaseErr != nil && !errors.Is(releaseErr, serverapi.ErrRuntimeUnavailable) {
+			t.Errorf("release idle delete runtime: %v", releaseErr)
+		}
+	})
+	return attachment
+}
+
+func assertIdleDeleteActivityRuntimeWorkdir(
+	t *testing.T,
+	env *serviceTestEnv,
+	attachment sessionruntime.RuntimeAttachment,
+	want string,
+) {
+	t.Helper()
+	if err := env.authority.WithRuntime(context.Background(), attachment.Resource(), func(_ context.Context, engine *runtime.Engine) error {
+		if got := engine.TranscriptWorkingDir(); got != want {
+			t.Fatalf("runtime workdir = %q, want %q", got, want)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("inspect idle delete runtime: %v", err)
 	}
 }
 
@@ -418,6 +465,7 @@ func TestDeleteWorktreeScheduledCurrentTargetRetargetsOtherSession(t *testing.T)
 	otherSession := createServiceTestSession(t, env.store, env.cfg, env.binding)
 	updateServiceTestSessionTarget(t, env, env.session.Meta().SessionID, env.binding.WorkspaceID, target.WorktreeID, ".")
 	updateServiceTestSessionTarget(t, env, otherSession.Meta().SessionID, env.binding.WorkspaceID, target.WorktreeID, ".")
+	otherRuntime := openIdleDeleteActivityRuntime(t, env, otherSession.Meta().SessionID, target.CanonicalRoot)
 	request := worktreeDeleteRequest(env, target.WorktreeID)
 
 	result, err := env.service.DeleteWorktree(env.ctx, request)
@@ -439,11 +487,88 @@ func TestDeleteWorktreeScheduledCurrentTargetRetargetsOtherSession(t *testing.T)
 	if sessionTargetWorktreeID(otherTarget) != "" || otherTarget.EffectiveWorkdir != env.workspaceRoot {
 		t.Fatalf("other session target after scheduled delete = %+v, want main workspace", otherTarget)
 	}
+	assertIdleDeleteActivityRuntimeWorkdir(t, env, otherRuntime, env.workspaceRoot)
 	if _, err := os.Stat(target.CanonicalRoot); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("scheduled target root still exists: %v", err)
 	}
 	if _, err := env.store.GetWorktreeRecordByID(env.ctx, target.WorktreeID); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("scheduled target metadata = %v, want sql.ErrNoRows", err)
+	}
+}
+
+func TestDeleteWorktreeImmediateRetargetsOtherOpenIdleSession(t *testing.T) {
+	env := newServiceTestEnv(t)
+	target := mustCreateWorktree(t, env, "feature/delete-immediate-other-idle")
+	otherSession := createServiceTestSession(t, env.store, env.cfg, env.binding)
+	updateServiceTestSessionTarget(t, env, otherSession.Meta().SessionID, env.binding.WorkspaceID, target.WorktreeID, ".")
+	otherRuntime := openIdleDeleteActivityRuntime(t, env, otherSession.Meta().SessionID, target.CanonicalRoot)
+
+	result, err := env.service.DeleteWorktree(env.ctx, worktreeDeleteRequest(env, target.WorktreeID))
+	if err != nil {
+		t.Fatalf("DeleteWorktree immediate target: %v", err)
+	}
+	if result.Kind != serverapi.WorktreeDeleteResultKindCompleted {
+		t.Fatalf("DeleteWorktree result = %+v, want completed", result)
+	}
+	otherTarget, err := env.store.ResolveSessionExecutionTarget(env.ctx, otherSession.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ResolveSessionExecutionTarget other session: %v", err)
+	}
+	if sessionTargetWorktreeID(otherTarget) != "" || otherTarget.EffectiveWorkdir != env.workspaceRoot {
+		t.Fatalf("other session target after immediate delete = %+v, want main workspace", otherTarget)
+	}
+	assertIdleDeleteActivityRuntimeWorkdir(t, env, otherRuntime, env.workspaceRoot)
+}
+
+func TestDeleteWorktreeRetargetFailureRestoresOpenIdleSessionsInReverseOrder(t *testing.T) {
+	env := newServiceTestEnv(t)
+	target := mustCreateWorktree(t, env, "feature/delete-retarget-rollback")
+	first := createServiceTestSession(t, env.store, env.cfg, env.binding)
+	second := createServiceTestSession(t, env.store, env.cfg, env.binding)
+	for _, sessionID := range []string{first.Meta().SessionID, second.Meta().SessionID} {
+		updateServiceTestSessionTarget(t, env, sessionID, env.binding.WorkspaceID, target.WorktreeID, ".")
+	}
+	firstRuntime := openIdleDeleteActivityRuntime(t, env, first.Meta().SessionID, target.CanonicalRoot)
+	secondRuntime := openIdleDeleteActivityRuntime(t, env, second.Meta().SessionID, target.CanonicalRoot)
+	blockers, err := env.store.ListSessionsTargetingWorktree(env.ctx, target.WorktreeID)
+	if err != nil {
+		t.Fatalf("ListSessionsTargetingWorktree: %v", err)
+	}
+	if len(blockers) != 2 {
+		t.Fatalf("worktree-targeting sessions = %+v, want two", blockers)
+	}
+	env.publisher.identityFailureAt = 2
+	env.publisher.identityErr = errors.New("session identity publication failed")
+
+	_, err = env.service.DeleteWorktree(env.ctx, worktreeDeleteRequest(env, target.WorktreeID))
+	if !errors.Is(err, env.publisher.identityErr) {
+		t.Fatalf("DeleteWorktree error = %v, want identity publication failure", err)
+	}
+	for _, sessionID := range []string{first.Meta().SessionID, second.Meta().SessionID} {
+		resolved, resolveErr := env.store.ResolveSessionExecutionTarget(env.ctx, sessionID)
+		if resolveErr != nil {
+			t.Fatalf("ResolveSessionExecutionTarget %q: %v", sessionID, resolveErr)
+		}
+		if sessionTargetWorktreeID(resolved) != target.WorktreeID || resolved.EffectiveWorkdir != target.CanonicalRoot {
+			t.Fatalf("restored target for %q = %+v, want deleted worktree", sessionID, resolved)
+		}
+	}
+	assertIdleDeleteActivityRuntimeWorkdir(t, env, firstRuntime, target.CanonicalRoot)
+	assertIdleDeleteActivityRuntimeWorkdir(t, env, secondRuntime, target.CanonicalRoot)
+	env.publisher.mu.Lock()
+	identityCalls := append([]string(nil), env.publisher.identityCalls...)
+	env.publisher.mu.Unlock()
+	wantCalls := []string{
+		blockers[0].SessionID,
+		blockers[1].SessionID,
+		blockers[1].SessionID,
+		blockers[0].SessionID,
+	}
+	if !reflect.DeepEqual(identityCalls, wantCalls) {
+		t.Fatalf("session identity publication order = %+v, want forward then reverse %+v", identityCalls, wantCalls)
+	}
+	if _, statErr := os.Stat(target.CanonicalRoot); statErr != nil {
+		t.Fatalf("worktree root changed after rollback: %v", statErr)
 	}
 }
 

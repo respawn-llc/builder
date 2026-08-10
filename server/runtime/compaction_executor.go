@@ -246,11 +246,6 @@ func (e *Engine) compactLocal(ctx context.Context, stepID string, input []llm.Re
 	}, nil
 }
 
-func (e *Engine) localCompactionSummary(ctx context.Context, input []llm.ResponseItem, instructions string, mode compactionMode) (string, error) {
-	summary, _, err := e.localCompactionSummaryWithRepair(ctx, nil, input, instructions, mode)
-	return summary, err
-}
-
 func (e *Engine) localCompactionSummaryWithRepair(ctx context.Context, repairStepID *string, input []llm.ResponseItem, instructions string, mode compactionMode) (string, compactionOverflowRepairStats, error) {
 	locked, err := e.ensureLocked()
 	if err != nil {

@@ -80,6 +80,9 @@ type execution struct {
 	prompts  executionPromptStore
 
 	phase executionPhase
+	// completionOrigin is present only while the exact Agent execution's
+	// current provider Step may authorize live Workflow completion.
+	completionOrigin *serverapi.RuntimeStepOrigin
 
 	closeResource bool
 }
@@ -166,20 +169,32 @@ func (e *execution) stopError() error {
 }
 
 func (e *execution) finish(result ExecutionResult, runErr error, stopErr error) {
-	drainErr := e.drainQueuedWorkBeforeRetirement(runErr, stopErr)
 	cleanupErr := e.cleanup()
+	if e.resource != nil {
+		scopeReleaseErr := e.resource.engine.AgentExecutionScopeReleased(e.scope.ID())
+		e.resource.mu.Lock()
+		resourceDraining := e.resource.state != AgentResourceReady
+		e.resource.mu.Unlock()
+		if resourceDraining && errors.Is(scopeReleaseErr, serverapi.ErrRuntimeUnavailable) {
+			scopeReleaseErr = nil
+		}
+		cleanupErr = errors.Join(
+			cleanupErr,
+			scopeReleaseErr,
+		)
+	}
 	e.retire()
 
 	authority := e.authority
 	executionErr := runErr
-	if drainErr != nil {
-		executionErr = errors.Join(executionErr, drainErr)
-	}
 	abort, abortErr := runtimeAbortFromError(runErr)
 	if abortErr != nil {
 		executionErr = errors.Join(executionErr, abortErr)
 	}
 	var closeErr error
+	if _, hasWorkflow := e.scope.Workflow(); hasWorkflow && authority.executionFinalized != nil {
+		authority.executionFinalized.ExecutionFinalized(e.scope)
+	}
 	if e.resource != nil {
 		if e.resource.eventBridge != nil {
 			result.DroppedRuntimeEvents = e.resource.eventBridge.Dropped.Load()
@@ -212,11 +227,8 @@ func (e *execution) finish(result ExecutionResult, runErr error, stopErr error) 
 	e.resultMu.Lock()
 	e.result = result
 	e.runErr = finalErr
-	e.stopErr = errors.Join(stopErr, drainErr, cleanupErr, closeErr, abortErr)
+	e.stopErr = errors.Join(stopErr, cleanupErr, closeErr, abortErr)
 	e.resultMu.Unlock()
-	if _, hasWorkflow := e.scope.Workflow(); hasWorkflow && authority.executionFinalized != nil {
-		authority.executionFinalized.ExecutionFinalized(e.scope)
-	}
 	close(e.done)
 }
 
@@ -237,20 +249,6 @@ func runtimeAbortFromError(err error) (bool, error) {
 	}
 	return true, nil
 }
-
-func (e *execution) drainQueuedWorkBeforeRetirement(runErr error, stopErr error) error {
-	if e.resource == nil ||
-		!e.closeResource ||
-		runErr != nil ||
-		stopErr != nil ||
-		context.Cause(e.ctx) != nil {
-		return nil
-	}
-	return e.resource.withEngine(e.ctx, e.resource.ref, func(ctx context.Context, engine *runtime.Engine) error {
-		return engine.DrainQueuedUserMessagesBeforeClose(ctx)
-	})
-}
-
 func (e *execution) retire() {
 	authority := e.authority
 	e.exactMu.Lock()

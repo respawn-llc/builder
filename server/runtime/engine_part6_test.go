@@ -209,7 +209,7 @@ func TestRunReviewerFollowUpReturnsCompletionWhenReviewerInstructionAppendFails(
 	}
 	t.Cleanup(func() { _ = os.Chmod(eventsPath, info.Mode()) })
 
-	_, err = eng.runReviewerFollowUp(context.Background(), "step-1", llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("original final")}, -1, false, reviewerClient)
+	_, err = eng.runReviewerFollowUpAsRuntimeWork(context.Background(), "step-1", llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("original final")}, -1, false, reviewerClient, eng.reviewerFlow)
 	if err == nil {
 		t.Fatal("expected Reviewer instruction append failure")
 	}
@@ -302,6 +302,30 @@ func TestSubmitUserMessageFailsWhenReviewerStatusPersistenceFailsAfterAssistantE
 	localEntryErr := errors.New("injected reviewer status persistence failure")
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
+	var (
+		gateMu              sync.Mutex
+		sawPendingRecovery  bool
+		recoveryClearCount  int
+		secondClearSequence int64
+	)
+	gate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
+		gateMu.Lock()
+		defer gateMu.Unlock()
+		if snapshot.Meta.PendingModelRecovery != nil {
+			sawPendingRecovery = true
+			return false
+		}
+		if sawPendingRecovery {
+			sawPendingRecovery = false
+			recoveryClearCount++
+			if recoveryClearCount == 2 {
+				secondClearSequence = snapshot.Meta.LastSequence
+			}
+			return false
+		}
+		return recoveryClearCount == 2 &&
+			snapshot.Meta.LastSequence > secondClearSequence
+	}, localEntryErr)
 
 	mainClient := &fakeClient{responses: []llm.Response{
 		{
@@ -319,9 +343,8 @@ func TestSubmitUserMessageFailsWhenReviewerStatusPersistenceFailsAfterAssistantE
 	}}}
 
 	var (
-		eventsMu        sync.Mutex
-		events          []Event
-		assistantEvents int
+		eventsMu sync.Mutex
+		events   []Event
 	)
 	eng := mustNewTestEngine(t, store, mainClient, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model: "gpt-5",
@@ -329,12 +352,6 @@ func TestSubmitUserMessageFailsWhenReviewerStatusPersistenceFailsAfterAssistantE
 			eventsMu.Lock()
 			defer eventsMu.Unlock()
 			events = append(events, evt)
-			if evt.Kind == EventAssistantMessage {
-				assistantEvents++
-				if assistantEvents == 2 {
-					gate.FailNext(localEntryErr)
-				}
-			}
 		},
 		Reviewer: ReviewerConfig{
 			Frequency:     "all",
@@ -675,60 +692,6 @@ func TestBuildReviewerTranscriptMessagesIncludesConversationAndToolCalls(t *test
 	}
 	if !strings.Contains(messageContent(reviewerMessages[5]), "Tool result:") || !strings.Contains(messageContent(reviewerMessages[5]), "ok") {
 		t.Fatalf("expected separate tool result transcript entry, message=%q", messageContent(reviewerMessages[5]))
-	}
-}
-
-func TestReviewerStatusTextIncludesReviewerCacheHitMetadata(t *testing.T) {
-	text := reviewerStatusText(ReviewerStatus{
-		Outcome:               "applied",
-		SuggestionsCount:      2,
-		CacheHitPercent:       85,
-		HasCacheHitPercentage: true,
-	}, []string{"one", "two"})
-	if strings.Contains(text, "Supervisor suggested:") || strings.Contains(text, "1. one") {
-		t.Fatalf("expected reviewer status text to stay concise even when suggestions are provided, got %q", text)
-	}
-	if !strings.Contains(text, "85% cache hit") {
-		t.Fatalf("expected reviewer cache hit metadata in reviewer status text, got %q", text)
-	}
-
-	text = reviewerStatusText(ReviewerStatus{
-		Outcome:               "applied",
-		SuggestionsCount:      2,
-		CacheHitPercent:       85,
-		HasCacheHitPercentage: true,
-	}, nil)
-	if !strings.Contains(text, "85% cache hit") {
-		t.Fatalf("expected reviewer cache hit metadata even without suggestions, got %q", text)
-	}
-
-	text = reviewerStatusText(ReviewerStatus{
-		Outcome:          "followup_failed",
-		SuggestionsCount: 2,
-		Error:            "tool crashed",
-	}, []string{"one", "two"})
-	if text != "Supervisor ran: 2 suggestions, but follow-up failed: tool crashed" {
-		t.Fatalf("expected concise follow-up failure status, got %q", text)
-	}
-}
-
-func TestReviewerStatusEntryRoleMarksErrors(t *testing.T) {
-	cases := []struct {
-		outcome string
-		want    string
-	}{
-		{outcome: "failed", want: string(transcript.EntryRoleReviewerError)},
-		{outcome: "followup_failed", want: string(transcript.EntryRoleReviewerError)},
-		{outcome: "applied", want: string(transcript.EntryRoleReviewerStatus)},
-		{outcome: "no_suggestions", want: string(transcript.EntryRoleReviewerStatus)},
-	}
-
-	for _, tt := range cases {
-		t.Run(tt.outcome, func(t *testing.T) {
-			if got := reviewerStatusEntryRole(ReviewerStatus{Outcome: tt.outcome}); got != tt.want {
-				t.Fatalf("reviewerStatusEntryRole = %q, want %q", got, tt.want)
-			}
-		})
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"core/internal/testharness/testsetup"
 	"core/server/launch"
 	"core/server/metadata"
 	"core/server/session"
@@ -116,11 +117,7 @@ func TestPlanCurrentNodeSessionEnforcesRoleBoundaries(t *testing.T) {
 	ctx := context.Background()
 	persistenceRoot := t.TempDir()
 	workspace := t.TempDir()
-	metadataStore, err := metadata.Open(persistenceRoot)
-	if err != nil {
-		t.Fatalf("open metadata: %v", err)
-	}
-	t.Cleanup(func() { _ = metadataStore.Close() })
+	metadataStore := testsetup.OpenStore(t, persistenceRoot)
 	binding, err := metadataStore.RegisterWorkspaceBinding(ctx, workspace)
 	if err != nil {
 		t.Fatalf("register workspace: %v", err)

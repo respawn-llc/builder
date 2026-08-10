@@ -799,7 +799,10 @@ func TestSetAutoCompactionEnabledTogglesRuntimeOnly(t *testing.T) {
 	cfg := Config{Model: "gpt-5"}
 	eng := mustNewExecTestEngine(t, store, &fakeClient{}, cfg)
 
-	changed, enabled := eng.SetAutoCompactionEnabled(false)
+	changed, enabled, err := eng.SetAutoCompactionEnabled(false)
+	if err != nil {
+		t.Fatalf("SetAutoCompactionEnabled: %v", err)
+	}
 	if !changed || enabled {
 		t.Fatalf("expected changed=true enabled=false, got changed=%v enabled=%v", changed, enabled)
 	}
@@ -858,7 +861,10 @@ func TestSetAutoCompactionDisabledConcurrentWithBusyStepSkipsCompactionForCurren
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for tool call to start")
 	}
-	changed, enabled := eng.SetAutoCompactionEnabled(false)
+	changed, enabled, err := eng.SetAutoCompactionEnabled(false)
+	if err != nil {
+		t.Fatalf("SetAutoCompactionEnabled: %v", err)
+	}
 	if !changed || enabled {
 		t.Fatalf("expected changed=true enabled=false, got changed=%v enabled=%v", changed, enabled)
 	}

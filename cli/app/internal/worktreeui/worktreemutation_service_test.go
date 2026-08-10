@@ -2,6 +2,7 @@ package worktreeui
 
 import (
 	"context"
+	"errors"
 	"io"
 	"testing"
 	"time"
@@ -158,6 +159,49 @@ func TestMutationRetriesAfterRecoverableError(t *testing.T) {
 	}
 }
 
+func TestCreateRetriesAtMostOnceWithSameSetupOperation(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		secondErr error
+	}{
+		{name: "recovery succeeds"},
+		{name: "retry remains unavailable", secondErr: serverapi.ErrRuntimeUnavailable},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &testWorktreeClient{
+				errs: []error{serverapi.ErrRuntimeUnavailable, test.secondErr, nil},
+			}
+			recoverCalls := 0
+			service := newTestService(client)
+			service.Runtime.RecoverRuntimeConnection = func(context.Context, error, bool) error {
+				recoverCalls++
+				return nil
+			}
+			setupID := serverapi.NewWorktreeSetupOperationID()
+			_, err := service.Create(serverapi.WorktreeCreateRequest{
+				SetupOperationID: setupID,
+				BaseRef:          "HEAD",
+				CreateBranch:     true,
+				BranchName:       "feature/create",
+			})
+			if !errors.Is(err, test.secondErr) {
+				t.Fatalf("Create error = %v, want %v", err, test.secondErr)
+			}
+			if recoverCalls != 1 || len(client.createRequests) != 2 {
+				t.Fatalf(
+					"create recovery = recover:%d sends:%d, want one recovery and two sends",
+					recoverCalls,
+					len(client.createRequests),
+				)
+			}
+			if client.createRequests[0] != client.createRequests[1] ||
+				client.createRequests[0].SetupOperationID != setupID {
+				t.Fatalf("create retry changed request: %+v", client.createRequests)
+			}
+		})
+	}
+}
+
 func TestCreateEnterDeletePopulateRequests(t *testing.T) {
 	client := &testWorktreeClient{}
 	service := newTestService(client)
@@ -171,7 +215,7 @@ func TestCreateEnterDeletePopulateRequests(t *testing.T) {
 	if _, err := service.Delete(" wt-3 ", true, serverapi.WorktreeBranchCleanupModeDeleteSafe); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	if got := client.createRequests[0]; got.ClientRequestID != "request-1" || got.SessionID != "session-1" || got.BranchName != "feature/a" {
+	if got := client.createRequests[0]; got.SessionID != "session-1" || got.BranchName != "feature/a" {
 		t.Fatalf("create request = %+v", got)
 	}
 	if got := client.enterRequests[0]; got.OperationID != testWorktreeOperationID(t) || got.SessionID != "session-1" || got.Selector != "feature/a" {
@@ -269,8 +313,7 @@ func newTestService(client *testWorktreeClient) Service {
 			},
 			RecoverRuntimeConnection: func(context.Context, error, bool) error { return nil },
 		},
-		NewClientRequestID: func() string { return "request-1" },
-		NewOperationID:     func() serverapi.WorktreeOperationID { return testWorktreeOperationID(nil) },
+		NewOperationID: func() serverapi.WorktreeOperationID { return testWorktreeOperationID(nil) },
 	}
 }
 

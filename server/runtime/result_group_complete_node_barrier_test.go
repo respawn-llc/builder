@@ -60,6 +60,7 @@ func TestCompleteNodeBarrierCommitsReadySiblingBeforeWorkflowMutation(t *testing
 			mutatedBeforeDurability.Store(true)
 		}
 	}
+	execution := testWorkflowConfig(controller, config.WorkflowCompletionModeTool)
 	engine = mustNewTestEngine(
 		t,
 		store,
@@ -67,14 +68,21 @@ func TestCompleteNodeBarrierCommitsReadySiblingBeforeWorkflowMutation(t *testing
 		tools.NewRegistry(),
 		Config{
 			Model:                "gpt-5",
-			CurrentNodeExecution: testWorkflowConfig(controller, config.WorkflowCompletionModeTool),
+			CurrentNodeExecution: execution,
 			DurabilityObserver:   flushes,
 		},
 	)
+	origin := newTestAgentStepOrigin(t)
+	engine.agentSteps.scopeID = execution.ScopeID
+	engine.agentSteps.current = &activeAgentStep{
+		scopeID: execution.ScopeID,
+		origin:  origin,
+		phase:   agentStepProviderRunning,
+	}
 
 	results, err := engine.executeAcceptedToolCalls(
 		context.Background(),
-		"step",
+		origin.StepID,
 		completeNodeBarrierAcceptedCalls(
 			json.RawMessage(`{"summary":"done"}`),
 		),

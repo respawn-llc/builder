@@ -18,6 +18,7 @@ import (
 	"core/server/workflowstore"
 	"core/shared/config"
 	"core/shared/runtimeids"
+	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 )
 
@@ -140,6 +141,7 @@ type TransitionInstruction struct {
 type CompletionRequest struct {
 	ScopeID      runtimeids.ExecutionScopeID
 	SessionID    *runtimeids.SessionID
+	Origin       serverapi.RuntimeStepOrigin
 	TransitionID string
 	OutputValues map[string]string
 	Commentary   string
@@ -148,6 +150,7 @@ type CompletionRequest struct {
 type CompletionResult struct {
 	TransitionID workflow.TransitionID
 	State        string
+	CurrentNode  workflowstore.CurrentNodeCompletionResult
 }
 
 type CompletionObservationRequest struct {
@@ -174,8 +177,8 @@ type PostCompletionRuntime struct {
 	Compact             func(context.Context) PostCompletionCompactionResult
 }
 
-// PostTurnFinalizer owns the process-local completion fence and releases held
-// successors only after post-turn finalization has completed.
+// PostTurnFinalizer completes optional source-Session work before held
+// successors become eligible.
 type PostTurnFinalizer interface {
 	FinalizeCurrentNodePostTurn(context.Context, runtimeids.ExecutionScopeID, runtimeids.SessionID, PostCompletionRuntime) error
 }

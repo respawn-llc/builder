@@ -1,4 +1,4 @@
-package requestmemo
+package metadata
 
 import (
 	"context"

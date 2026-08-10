@@ -134,14 +134,6 @@ func (e *Engine) publishCommittedFinalizedToolCompletion(
 	return errors.Join(err, e.emitRaw(Event{Kind: EventLocalEntryAdded, StepID: resolvedFeedbackStepID, LocalEntry: entry, CommittedTranscriptChanged: true, CommittedProvenance: cloneTranscriptCommittedRowProvenance(feedbackProvenance)}))
 }
 
-func (e *Engine) persistToolCompletionRaw(stepID string, result tools.Result) (session.CommitReceipt, *TranscriptCommittedRowProvenance, error) {
-	receipt, provenance, _, err := e.persistFinalizedToolCompletionRaw(
-		stepID,
-		finalizedToolCompletion{Result: result},
-	)
-	return receipt, provenance, err
-}
-
 func (e *Engine) persistFinalizedToolCompletionRaw(
 	stepID string,
 	completion finalizedToolCompletion,
@@ -204,8 +196,7 @@ func (e *Engine) applyCommittedStoredToolCompletion(
 	e.markCurrentRequestShapeDirtyForSignificantMutation()
 	e.transcriptRuntimeState().RecordStoredToolCompletion(payload, provenance)
 	if hasBackgroundSession {
-		e.ensureOrchestrationCollaborators()
-		e.backgroundFlow.ConsumePendingBackgroundNotice(backgroundSessionID)
+		e.boundaryAgenda.consumeBackgroundSession(backgroundSessionID)
 	}
 }
 
@@ -563,18 +554,15 @@ func (e *Engine) appendQueuedUserMessageFlush(stepID string, message llm.Message
 	}
 	e.emitRaw(event)
 	for _, item := range normalizedItems {
-		e.unmarkQueuedUserInjectionForAutoDrain(item.ID)
 		e.emitRaw(Event{
 			Kind: EventQueuedUserMessageStatus,
 			QueuedUserMessageStatus: &QueuedUserMessageStatusEvent{
-				SessionID:       e.SessionID(),
-				QueueItemID:     item.ID,
-				ClientRequestID: item.ClientRequestID,
-				Status:          QueuedUserMessageSubmitted,
+				SessionID:   e.SessionID(),
+				QueueItemID: item.ID,
+				Status:      QueuedUserMessageSubmitted,
 			},
 		})
 	}
-	e.completeLiveRunQueueItems(queuedUserMessageIDSet(normalizedItems))
 	return appended.CommitReceipt, appendErr
 }
 
@@ -583,7 +571,6 @@ func normalizedQueuedUserMessageStatusItems(raw []QueuedUserMessage) []QueuedUse
 	seen := map[string]bool{}
 	for _, item := range raw {
 		item.ID = strings.TrimSpace(item.ID)
-		item.ClientRequestID = strings.TrimSpace(item.ClientRequestID)
 		if item.ID == "" || seen[item.ID] {
 			continue
 		}
@@ -610,25 +597,10 @@ func queuedUserMessageIdentities(items []QueuedUserMessage) []QueuedUserMessageI
 	identities := make([]QueuedUserMessageIdentity, 0, len(items))
 	for _, item := range items {
 		identities = append(identities, QueuedUserMessageIdentity{
-			QueueItemID:     strings.TrimSpace(item.ID),
-			ClientRequestID: strings.TrimSpace(item.ClientRequestID),
+			QueueItemID: strings.TrimSpace(item.ID),
 		})
 	}
 	return identities
-}
-
-func queuedUserMessageIDSet(items []QueuedUserMessage) map[string]struct{} {
-	if len(items) == 0 {
-		return nil
-	}
-	ids := make(map[string]struct{}, len(items))
-	for _, item := range items {
-		id := strings.TrimSpace(item.ID)
-		if id != "" {
-			ids[id] = struct{}{}
-		}
-	}
-	return ids
 }
 
 func (e *Engine) emitQueuedUserMessageStatus(
@@ -641,11 +613,10 @@ func (e *Engine) emitQueuedUserMessageStatus(
 		return
 	}
 	event := &QueuedUserMessageStatusEvent{
-		SessionID:       e.SessionID(),
-		QueueItemID:     item.ID,
-		ClientRequestID: item.ClientRequestID,
-		Status:          status,
-		FailureReason:   reason,
+		SessionID:     e.SessionID(),
+		QueueItemID:   item.ID,
+		Status:        status,
+		FailureReason: reason,
 	}
 	text, err := item.DisplayText()
 	if err != nil {
@@ -663,16 +634,22 @@ func (e *Engine) emitQueuedUserMessageStatus(
 
 func (e *Engine) FailQueuedUserMessages(reason QueuedUserMessageFailureReason) []QueuedUserMessage {
 	e.ensureOrchestrationCollaborators()
-	e.outputMutationMu.Lock()
-	pending := e.messageFlow.DrainPendingUserInjections()
-	messages := make([]QueuedUserMessage, 0, len(pending))
-	for _, item := range pending {
-		messages = append(messages, item)
-		e.unmarkQueuedUserInjectionForAutoDrain(item.ID)
-		e.emitQueuedUserMessageStatus(item, QueuedUserMessageFailed, reason, true)
+	messages, err := submitRuntimeEvent(
+		e,
+		reason,
+		func(_ runtimeEventAdmission, failure QueuedUserMessageFailureReason) ([]QueuedUserMessage, error) {
+			pending := e.boundaryAgenda.selectAllHumanItems()
+			messages := make([]QueuedUserMessage, 0, len(pending))
+			for _, item := range pending {
+				messages = append(messages, item.message)
+				e.emitQueuedUserMessageStatus(item.message, QueuedUserMessageFailed, failure, true)
+			}
+			return messages, nil
+		},
+	)
+	if err != nil {
+		e.surfaceRunError(err)
 	}
-	e.outputMutationMu.Unlock()
-	e.completeLiveRunQueueItems(queuedUserMessageIDSet(messages))
 	return messages
 }
 
@@ -808,11 +785,6 @@ func flushedUserMessageEvent(provenance *TranscriptCommittedRowProvenance, msg l
 		return nil
 	}
 	return &Event{Kind: EventUserMessageFlushed, StepID: stepID, UserMessage: *msg.Content, UserMessageBatch: []string{*msg.Content}, CommittedTranscriptChanged: true, CommittedProvenance: cloneTranscriptCommittedRowProvenance(provenance)}
-}
-
-func (e *Engine) flushPendingUserInjections(stepID string, selection userInjectionSelection) (userInjectionCommitResult, error) {
-	e.ensureOrchestrationCollaborators()
-	return e.messageFlow.FlushPendingUserInjections(stepID, selection)
 }
 
 // resolveGlobalConfigDir returns the directory that owns model-visible global

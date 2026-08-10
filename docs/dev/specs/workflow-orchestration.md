@@ -288,9 +288,12 @@
 - Each required Transition Parameter must become a non-empty string after leading and trailing whitespace is removed.
 - Size limits: Parameter Key `<= 64` chars, Parameter description `<= 1000`, Parameter value `<= 64 KiB`, commentary `<= 64 KiB`, task comment body `<= 256 KiB`.
 - Completion-contract changes in `structured_output` and `tool` modes can change prompt-cache continuity. `shell_command` and `unstructured_output` preserve the completion contract in appended instructions instead.
-- Kent accepts completion only from the matching Exact Execution Scope or for one unambiguous idle executable Current Node.
+- Kent accepts live Agent completion only when it identifies the matching Exact Execution Scope, Agent Run, and Agent Step. Forced completion remains limited to one unambiguous idle executable Current Node and carries no live Run or Step.
+- Agent `kent task complete` obtains the current Run and Step from its Kent execution environment. Missing or invalid live completion identity fails before Kent requests a Workflow change. Other live completion modes use the identity of the Agent Step that produced the completion.
+- Only the currently completion-eligible Agent Step may complete its Current Node. When that Step reaches its Step Boundary, it stops being eligible before any between-step action begins. No Agent Step is completion-eligible until the next model step begins.
+- FIFO admission decides completion against the Step Boundary. Completion admitted first may complete from the still-current Step. The Boundary admitted first makes that Step stale; a later completion from it changes no Workflow state, including when the boundary action is compaction, worktree maintenance, background work, Goal work, or retirement.
 - Completion from a retained Workflow Session may target its interrupted idle Agent Node when the Session is still bound to that Current Node. Completion atomically supersedes the interruption and applies the selected Transition.
-- Human input accepted before the Completion Fence replaces pending completion. Input after the fence is rejected and returns to the user's draft. Kent never transfers it to a successor Node or Session.
+- FIFO Runtime Event admission decides a human-input and Workflow-completion race for the same Exact Execution Scope. Human input admitted first replaces pending completion. Completion admitted first rejects later input and returns it to the user's draft. Kent never transfers rejected input to a successor Node or Session.
 - After five invalid completion attempts, Kent interrupts the Current Node. `[workflow].max_invalid_completion_attempts` configures this limit and defaults to `5`.
 - Workflow execution ends only after the Exact Execution Scope stops. The outcome is successful completion, a resumable blocked state, or a non-success terminal outcome.
 - Workflow-controlled execution has no wall-clock time limit.
@@ -313,6 +316,7 @@
 
 - Workflow-controlled agent Sessions use dedicated workflow-mode developer instructions.
 - Every Node Transition into an Agent Current Node must steer exactly one target assignment into the target Session before its Exact Execution Scope begins.
+- A direct Transition that continues the same Session without an Approval, pause, Session change, or intervening Node keeps that Active Session Runtime and delivers exactly one next assignment. Kent does not close and reopen the runtime for that continuation.
 - Context-Preservation Mode selects the target Session and assignment template. It does not change the Transition's ownership of assignment delivery.
 - When a Node Transition continues a Session during an active model or tool turn, the target assignment must follow the source turn's durable tool result.
 - Resume must not steer or append a Current Node assignment.
@@ -327,7 +331,7 @@
 - Ordinary final response text cannot bypass the selected completion mode.
 - Existing user goal state is not reused as workflow autonomy state.
 - Workflow Task Sessions reject user `/goal` control; the current workflow Node is the Task objective driver. Agents may set themselves Goals and complete them, per the agent Goal rules in core-runtime-tools.
-- Client input accepted by Runtime Command before the Completion Fence supersedes pending completion. Input that reaches the server after the fence is rejected with a typed retryable result, remains unapplied, and is never transferred to a successor current Node or Session execution.
+- Client input follows the Completion Fence admission contract. Input admitted after completion returns a typed retryable result, remains unapplied, and is never transferred to a successor Current Node or Session execution.
 - Task Comment bodies are not added automatically to agent context. New Workflow instructions include the current visible Comment count and `kent task comment list <task>` when Comments exist. Kent never rewrites older model-visible instructions to update that count.
 - Unsatisfied Task Dependencies use the same instruction lifecycle as Task
   Comment awareness.
@@ -465,7 +469,7 @@
 - Only an actively executing Exact Execution Scope proves that an agent or Script is live and interruptible. Current Nodes, Automatic Intents, Session relations, waiting Questions, Task status, transcript entries, and Goals do not prove liveness.
 - Start and Resume admit selected parallel branches independently. A failed branch does not undo or block a sibling that started successfully.
 - Resume starts a fresh Exact Execution Scope only after the previous scope has fully stopped. Steering remains within the current scope.
-- Restart does not restore live Questions, live Approvals, Automatic Intents, Runtime Gates, or Exact Execution Scopes. Kent marks each affected executable Current Node interrupted with a restart reason.
+- Restart does not restore live Questions, live Approvals, Automatic Intents, or Exact Execution Scopes. Kent marks each affected executable Current Node interrupted with a restart reason.
 - A pending Transition Approval survives restart with the exact frozen Transition that the operator saw.
 - Before Resume continues, the Session satisfies the fresh-resource recovery contract in `core-runtime-tools.md`. Resume does not replay answers or apply a Workflow effect blocked by a durability failure.
 - Kent never retries an interrupted Current Node automatically.
@@ -565,8 +569,9 @@
 - A custom branch name does not change automatic managed Worktree root naming, which remains based on the Task Short ID.
 - Task Worktree creation uses ordinary managed-root collision behavior; its initial branch follows the Task-specific collision rules above.
 - Worktree deletion/retargeting treats non-terminal tasks referencing a managed worktree as blockers.
-- Worktree deletion fails immediately if another Session targeting the worktree is running or has begun to start. It does not wait for that work.
-- After deletion starts, new work for every Session that targets the worktree is rejected until retargeting and Git removal finish.
+- Worktree deletion fails immediately if another Session targeting the worktree has an Exact Execution Scope running or has begun to start. It does not wait for that work.
+- After deletion starts, attempts to start a new Session execution for every Session that targets the worktree are rejected until retargeting and Git removal finish.
+- Work already accepted by an open Session is outside this deletion guarantee and may continue while that Session is retargeted.
 - A rejected deletion leaves Session targets, worktree information, Git state, and branch state unchanged.
 - Task Worktree creation and conservative restoration use the same setup behavior. Restoration follows the existing named-branch and root rules above.
 

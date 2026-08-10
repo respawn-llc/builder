@@ -13,8 +13,7 @@ var ErrTranscriptCursorDirectionAmbiguous = errors.New("transcript page request 
 var ErrTranscriptCursorInvalid = errors.New("transcript cursor must be > 0")
 
 type SessionMainViewRequest struct {
-	SessionID            string
-	PendingOperationRefs []clientui.RuntimeOperationRef
+	SessionID string
 }
 
 type SessionMainViewResponse struct {
@@ -46,11 +45,6 @@ type SessionLatestCommittedAssistantFinalAnswerResponse struct {
 func (r SessionMainViewRequest) Validate() error {
 	if err := validateRequiredSessionID(r.SessionID); err != nil {
 		return err
-	}
-	for _, ref := range r.PendingOperationRefs {
-		if err := ref.Validate(); err != nil {
-			return err
-		}
 	}
 	return nil
 }

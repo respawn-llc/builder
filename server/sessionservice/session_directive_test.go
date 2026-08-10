@@ -4,13 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"core/server/auth"
-	"core/server/requestmemo"
 	"core/server/session"
 	"core/shared/rollbacktarget"
 	"core/shared/runtimeids"
@@ -75,8 +73,8 @@ func TestSessionTransitionMapsEveryActionToTypedLifecycleResult(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			result, err := service.ResolveTransition(context.Background(), serverapi.SessionResolveTransitionRequest{
-				ClientRequestID: "transition-" + test.name,
-				Transition:      test.transition,
+
+				Transition: test.transition,
 			})
 			if err != nil {
 				t.Fatalf("ResolveTransition: %v", err)
@@ -98,8 +96,8 @@ func TestSessionTransitionRollbackLaunchesCreatedFork(t *testing.T) {
 
 	service := newTestSessionLifecycleService(containerDir, nil)
 	result, err := service.ResolveTransition(context.Background(), serverapi.SessionResolveTransitionRequest{
-		ClientRequestID: "rollback-result",
-		SessionID:       store.Meta().SessionID,
+
+		SessionID: store.Meta().SessionID,
 		Transition: serverapi.SessionTransition{
 			Action:                       serverapi.SessionTransitionActionForkRollback,
 			InitialPrompt:                "edited prompt",
@@ -147,9 +145,9 @@ func TestSessionTransitionLogoutResultDependsOnCurrentSession(t *testing.T) {
 	currentID := mustSessionLifecycleResultID(t, "current-session")
 
 	withCurrent, err := service.ResolveTransition(context.Background(), serverapi.SessionResolveTransitionRequest{
-		ClientRequestID: "logout-current",
-		SessionID:       currentID.String(),
-		Transition:      serverapi.SessionTransition{Action: serverapi.SessionTransitionActionLogout},
+
+		SessionID:  currentID.String(),
+		Transition: serverapi.SessionTransition{Action: serverapi.SessionTransitionActionLogout},
 	})
 	if err != nil {
 		t.Fatalf("ResolveTransition with current session: %v", err)
@@ -170,8 +168,8 @@ func TestSessionTransitionLogoutResultDependsOnCurrentSession(t *testing.T) {
 	)
 
 	withoutCurrent, err := service.ResolveTransition(context.Background(), serverapi.SessionResolveTransitionRequest{
-		ClientRequestID: "logout-no-current",
-		Transition:      serverapi.SessionTransition{Action: serverapi.SessionTransitionActionLogout},
+
+		Transition: serverapi.SessionTransition{Action: serverapi.SessionTransitionActionLogout},
 	})
 	if err != nil {
 		t.Fatalf("ResolveTransition without current session: %v", err)
@@ -180,57 +178,6 @@ func TestSessionTransitionLogoutResultDependsOnCurrentSession(t *testing.T) {
 		t.Fatalf("result kind = %q, want select session", withoutCurrent.Kind())
 	}
 	assertSessionLifecycleAuth(t, withoutCurrent, serverapi.SessionAuthPreparationReauthenticate)
-}
-
-func TestSessionTransitionMemoizationUsesTypedLifecycleResult(t *testing.T) {
-	service := newTestSessionLifecycleService(t.TempDir(), nil)
-	req := serverapi.SessionResolveTransitionRequest{
-		ClientRequestID: "typed-result-replay",
-		Transition:      serverapi.SessionTransition{Action: serverapi.SessionTransitionActionResume},
-	}
-	first, err := service.ResolveTransition(context.Background(), req)
-	if err != nil {
-		t.Fatalf("ResolveTransition first: %v", err)
-	}
-	second, err := service.ResolveTransition(context.Background(), req)
-	if err != nil {
-		t.Fatalf("ResolveTransition replay: %v", err)
-	}
-	requireSessionDirectiveWireEqual(t, second, first)
-
-	req.Transition.Action = serverapi.SessionTransitionActionNone
-	if _, err := service.ResolveTransition(context.Background(), req); !errors.Is(err, requestmemo.ErrClientRequestIDReused) {
-		t.Fatalf("changed transition error = %v, want request ID reuse", err)
-	}
-}
-
-func TestSessionTransitionMemoizationComparesPreviousSessionIDByValue(t *testing.T) {
-	parentID := mustSessionLifecycleResultID(t, "parent-session")
-	service := newTestSessionLifecycleService(t.TempDir(), nil)
-	req := serverapi.SessionResolveTransitionRequest{
-		ClientRequestID: "previous-session-replay",
-		Transition: serverapi.SessionTransition{
-			Action:            serverapi.SessionTransitionActionNewSession,
-			PreviousSessionID: &parentID,
-		},
-	}
-	first, err := service.ResolveTransition(context.Background(), req)
-	if err != nil {
-		t.Fatalf("ResolveTransition first: %v", err)
-	}
-	encoded, err := json.Marshal(req)
-	if err != nil {
-		t.Fatalf("Marshal request: %v", err)
-	}
-	var decoded serverapi.SessionResolveTransitionRequest
-	if err := json.Unmarshal(encoded, &decoded); err != nil {
-		t.Fatalf("Unmarshal request: %v", err)
-	}
-	second, err := service.ResolveTransition(context.Background(), decoded)
-	if err != nil {
-		t.Fatalf("ResolveTransition replay after JSON round trip: %v", err)
-	}
-	requireSessionDirectiveWireEqual(t, second, first)
 }
 
 func requireSessionDirectiveWireEqual(t *testing.T, got serverapi.SessionDirective, want serverapi.SessionDirective) {

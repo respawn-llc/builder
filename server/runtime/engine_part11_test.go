@@ -97,7 +97,7 @@ func TestQueuedUserMessageFlushAfterFinalAssistantPublishesCommittedAssistantFir
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for first final request")
 	}
-	if _, accepted, err := eng.QueueUserMessageForActiveRun(context.Background(), "steer now", liveRunTestRequestID(t), nil); err != nil || !accepted {
+	if _, accepted, err := eng.QueueUserMessageForActiveRun(context.Background(), "steer now", nil); err != nil || !accepted {
 		t.Fatalf("QueueUserMessageForActiveRun accepted=%t err=%v", accepted, err)
 	}
 	release()
@@ -183,7 +183,7 @@ func TestQueuedUserMessageFlushBlankFinalSupersedesDeferredAnswer(t *testing.T) 
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for first final request")
 	}
-	if _, accepted, err := eng.QueueUserMessageForActiveRun(context.Background(), "steer now", liveRunTestRequestID(t), nil); err != nil || !accepted {
+	if _, accepted, err := eng.QueueUserMessageForActiveRun(context.Background(), "steer now", nil); err != nil || !accepted {
 		t.Fatalf("QueueUserMessageForActiveRun accepted=%t err=%v", accepted, err)
 	}
 	release()
@@ -492,11 +492,7 @@ func TestDiscardQueuedUserMessageRemovesExactQueuedEntry(t *testing.T) {
 		t.Fatal("expected duplicate queued item removed")
 	}
 
-	messageFlow := eng.messageFlow.(*defaultMessageLifecycle)
-	var messages []QueuedUserMessage
-	if messageFlow != nil && messageFlow.queue != nil {
-		messages = messageFlow.queue.Snapshot()
-	}
+	messages := eng.boundaryAgenda.pendingHuman()
 	if len(messages) != 2 || messages[0].ID != first.ID || mustQueuedUserMessageText(t, messages[0]) != "same" || mustQueuedUserMessageText(t, messages[1]) != "other" {
 		t.Fatalf("unexpected pending queue after discard: %+v", messages)
 	}

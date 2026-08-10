@@ -624,7 +624,6 @@ type WorktreeCreateTargetResolveResponse struct {
 }
 
 type WorktreeCreateRequest struct {
-	ClientRequestID  string                   `json:"client_request_id"`
 	SetupOperationID WorktreeSetupOperationID `json:"setup_operation_id"`
 	SessionID        string                   `json:"session_id"`
 	BaseRef          string                   `json:"base_ref,omitempty"`
@@ -666,9 +665,6 @@ func (r WorktreeCreateTargetResolveRequest) Validate() error {
 }
 
 func (r WorktreeCreateRequest) Validate() error {
-	if err := validateClientRequestID(r.ClientRequestID); err != nil {
-		return NewWorktreeCreateError(WorktreeCreateErrorOwnerForm, err.Error(), err)
-	}
 	if err := r.SetupOperationID.Validate(); err != nil {
 		return NewWorktreeCreateError(WorktreeCreateErrorOwnerForm, err.Error(), err)
 	}

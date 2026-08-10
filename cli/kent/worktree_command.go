@@ -13,8 +13,6 @@ import (
 	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/sessionenv"
-
-	"github.com/google/uuid"
 )
 
 const worktreeCommandTimeout = 5 * time.Second
@@ -193,7 +191,6 @@ func worktreeCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 			return 1
 		}
 		request := serverapi.WorktreeCreateRequest{
-			ClientRequestID:  uuid.NewString(),
 			SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
 			SessionID:        sessionID,
 			RootPath:         rootPath,

@@ -795,9 +795,8 @@ func TestRemotePersistInputDraftSendsInertRecoveryBuffers(t *testing.T) {
 	}
 	defer func() { _ = remote.Close() }()
 	_, err = remote.PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{
-		ClientRequestID: "draft-1",
-		SessionID:       "session-1",
-		Input:           "visible draft",
+		SessionID: "session-1",
+		Input:     "visible draft",
 		RecoveryBuffers: []serverapi.SessionDraftRecoveryBuffer{{
 			Kind: serverapi.SessionDraftRecoveryBufferPendingInjectedInput,
 			Text: "pending steering",
@@ -844,7 +843,7 @@ func TestRemoteRunPromptPublishesProgressNotifications(t *testing.T) {
 	defer func() { _ = remote.Close() }()
 
 	var updates []serverapi.RunPromptProgress
-	resp, err := remote.RunPrompt(context.Background(), serverapi.RunPromptRequest{ClientRequestID: "req-1", Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()), Prompt: "hello"}, serverapi.RunPromptProgressFunc(func(progress serverapi.RunPromptProgress) {
+	resp, err := remote.RunPrompt(context.Background(), serverapi.RunPromptRequest{Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()), Prompt: "hello"}, serverapi.RunPromptProgressFunc(func(progress serverapi.RunPromptProgress) {
 		updates = append(updates, progress)
 	}))
 	if err != nil {
@@ -899,7 +898,6 @@ func TestRemoteRunPromptCarriesTypedParentAgentOriginAndExplicitDefault(t *testi
 	parent := "parent-session"
 	role := "default"
 	if _, err := remote.RunPrompt(context.Background(), serverapi.RunPromptRequest{
-		ClientRequestID: "present",
 		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.ParentAgentSessionCreateOrigin(mustRemoteSessionID(t, parent))),
 		CallerSessionID: &caller,
 		Prompt:          "hello",
@@ -918,10 +916,10 @@ func TestLoopbackAndRemoteRunPromptPreserveTypedIntentCallerAndSelectors(t *test
 		name string
 		req  serverapi.RunPromptRequest
 	}{
-		{name: "human independent", req: serverapi.RunPromptRequest{ClientRequestID: "human-omitted", Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()), Prompt: "hello"}},
-		{name: "new child omitted selector", req: serverapi.RunPromptRequest{ClientRequestID: "new-omitted", Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.ParentAgentSessionCreateOrigin(mustRemoteSessionID(t, parent))), CallerSessionID: &caller, Prompt: "hello"}},
-		{name: "selected explicit default", req: serverapi.RunPromptRequest{ClientRequestID: "selected-default", Intent: serverapi.OpenExistingSessionLaunchIntent(mustRemoteSessionID(t, "selected-session")), CallerSessionID: &caller, Prompt: "hello", Overrides: serverapi.RunPromptOverrides{AgentRole: &defaultRole}}},
-		{name: "selected custom", req: serverapi.RunPromptRequest{ClientRequestID: "selected-worker", Intent: serverapi.OpenExistingSessionLaunchIntent(mustRemoteSessionID(t, "selected-session")), CallerSessionID: &caller, Prompt: "hello", Overrides: serverapi.RunPromptOverrides{AgentRole: &worker}}},
+		{name: "human independent", req: serverapi.RunPromptRequest{Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()), Prompt: "hello"}},
+		{name: "new child omitted selector", req: serverapi.RunPromptRequest{Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.ParentAgentSessionCreateOrigin(mustRemoteSessionID(t, parent))), CallerSessionID: &caller, Prompt: "hello"}},
+		{name: "selected explicit default", req: serverapi.RunPromptRequest{Intent: serverapi.OpenExistingSessionLaunchIntent(mustRemoteSessionID(t, "selected-session")), CallerSessionID: &caller, Prompt: "hello", Overrides: serverapi.RunPromptOverrides{AgentRole: &defaultRole}}},
+		{name: "selected custom", req: serverapi.RunPromptRequest{Intent: serverapi.OpenExistingSessionLaunchIntent(mustRemoteSessionID(t, "selected-session")), CallerSessionID: &caller, Prompt: "hello", Overrides: serverapi.RunPromptOverrides{AgentRole: &worker}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -988,7 +986,7 @@ func TestRemoteRunPromptDecodesTypedPolicyDenial(t *testing.T) {
 		t.Fatalf("DialRemoteURL: %v", err)
 	}
 	defer func() { _ = remote.Close() }()
-	_, err = remote.RunPrompt(context.Background(), serverapi.RunPromptRequest{ClientRequestID: "denied", Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()), Prompt: "hello"}, nil)
+	_, err = remote.RunPrompt(context.Background(), serverapi.RunPromptRequest{Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()), Prompt: "hello"}, nil)
 	var denied *serverapi.SubagentLaunchDeniedError
 	if !errors.As(err, &denied) || denied.Kind != serverapi.SubagentLaunchDenialNotCallable || denied.Target == nil || *denied.Target != target {
 		t.Fatalf("RunPrompt error = %T %v, want typed hidden-target denial", err, err)
@@ -1025,9 +1023,8 @@ func TestRemoteRunPromptPreservesTypedSubagentDepthPolicyWithoutProgress(t *test
 	_, err = remote.RunPrompt(
 		context.Background(),
 		serverapi.RunPromptRequest{
-			ClientRequestID: "depth-policy",
-			Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
-			Prompt:          "delegate",
+			Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+			Prompt: "delegate",
 		},
 		serverapi.RunPromptProgressFunc(func(progress serverapi.RunPromptProgress) {
 			progresses = append(progresses, progress)
@@ -1047,8 +1044,7 @@ func TestRemoteRunPromptPreservesTypedSubagentDepthPolicyWithoutProgress(t *test
 
 func assertSameRunPromptWireContract(t *testing.T, got serverapi.RunPromptRequest, want serverapi.RunPromptRequest) {
 	t.Helper()
-	if got.ClientRequestID != want.ClientRequestID ||
-		!got.Intent.Equal(want.Intent) ||
+	if !got.Intent.Equal(want.Intent) ||
 		got.Prompt != want.Prompt ||
 		serverapi.CanonicalOptionalString(got.CallerSessionID) != serverapi.CanonicalOptionalString(want.CallerSessionID) {
 		t.Fatalf("provenance request = %+v, want %+v", got, want)
@@ -1389,6 +1385,50 @@ func TestRemoteResolveWorktreeCreateTargetCarriesMethodAndPayload(t *testing.T) 
 	}
 	if resp.Resolution.Kind != serverapi.WorktreeCreateTargetResolutionKindDetachedRef || resp.Resolution.ResolvedRef != "abc123" {
 		t.Fatalf("unexpected resolve response: %+v", resp)
+	}
+}
+
+func TestRemoteCreateWorktreeSendsOneDomainIdentityRequest(t *testing.T) {
+	setupID := serverapi.NewWorktreeSetupOperationID()
+	requests := 0
+	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
+		req := acceptRemoteHandshake(t, ws)
+		if err := websocket.JSON.Receive(ws, &req); err != nil {
+			t.Fatalf("receive worktree create: %v", err)
+		}
+		requests++
+		if req.Method != protocol.MethodWorktreeCreate {
+			t.Fatalf("method = %q, want %q", req.Method, protocol.MethodWorktreeCreate)
+		}
+		var params serverapi.WorktreeCreateRequest
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			t.Fatalf("unmarshal create params: %v", err)
+		}
+		if params.SetupOperationID != setupID || params.SessionID != "session-1" {
+			t.Fatalf("create params = %+v", params)
+		}
+		if err := websocket.JSON.Send(
+			ws,
+			protocol.NewSuccessResponse(req.ID, serverapi.WorktreeCreateResponse{}),
+		); err != nil {
+			t.Fatalf("send create response: %v", err)
+		}
+	})
+
+	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
+	if err != nil {
+		t.Fatalf("DialRemote: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+	if _, err := remote.CreateWorktree(context.Background(), serverapi.WorktreeCreateRequest{
+		SetupOperationID: setupID,
+		SessionID:        "session-1",
+		BaseRef:          "HEAD",
+	}); err != nil {
+		t.Fatalf("CreateWorktree: %v", err)
+	}
+	if requests != 1 {
+		t.Fatalf("worktree create requests = %d, want one", requests)
 	}
 }
 
@@ -1973,9 +2013,8 @@ func TestRemoteSessionRetargetErrorRoundTrip(t *testing.T) {
 	}
 	defer func() { _ = remote.Close() }()
 	_, err = remote.RetargetSessionWorkspace(context.Background(), serverapi.SessionRetargetWorkspaceRequest{
-		ClientRequestID: "request-1",
-		SessionID:       source.SessionID,
-		WorkspaceRoot:   source.TargetRoot,
+		SessionID:     source.SessionID,
+		WorkspaceRoot: source.TargetRoot,
 	})
 	assertRemoteSessionRetargetError(t, err, source)
 }

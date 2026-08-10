@@ -228,14 +228,20 @@ func TestQueuedActiveGoalResumeRestartsSuspendedGoalLoop(t *testing.T) {
 	if accepted.Status != session.GoalStatusActive {
 		t.Fatalf("accepted status = %q, want active", accepted.Status)
 	}
-	if engine.pendingGoalLoopStart {
-		t.Fatal("goal loop restart must wait until active-step mutation drain")
+	if pending := pendingGoalContinuationCount(engine); pending != 0 {
+		t.Fatalf(
+			"Goal continuations before active-step mutation drain = %d, want zero",
+			pending,
+		)
 	}
 	if err := engine.drainActiveStepGoalMutations("step-1"); err != nil {
 		t.Fatalf("drain goal mutations: %v", err)
 	}
-	if !engine.pendingGoalLoopStart {
-		t.Fatal("expected queued active resume to schedule goal loop restart")
+	if pending := pendingGoalContinuationCount(engine); pending != 1 {
+		t.Fatalf(
+			"Goal continuations after active-step mutation drain = %d, want one",
+			pending,
+		)
 	}
 }
 
@@ -302,7 +308,7 @@ func TestGoalMutationsEmitGoalStatusEventsAfterFeedback(t *testing.T) {
 	assertGoalFeedbackThenStatusEvent(t, events, 8, cleared.GoalState, true)
 }
 
-func TestConcurrentGoalMutationsDoNotInterleaveBetweenMetadataAndStatusEvent(t *testing.T) {
+func TestConcurrentGoalMutationsEnterRuntimeEventAdmissionBeforeMetadataCommit(t *testing.T) {
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	events := make([]Event, 0, 4)
 	var eventsMu sync.Mutex
@@ -314,11 +320,11 @@ func TestConcurrentGoalMutationsDoNotInterleaveBetweenMetadataAndStatusEvent(t *
 		},
 	})
 
-	engine.outputMutationMu.Lock()
-	outputLocked := true
+	releaseAdmission := blockRuntimeEventAdmission(t, engine.runtimeEvents)
+	admissionBlocked := true
 	defer func() {
-		if outputLocked {
-			engine.outputMutationMu.Unlock()
+		if admissionBlocked {
+			releaseAdmission()
 		}
 	}()
 	firstDone := make(chan error, 1)
@@ -326,7 +332,10 @@ func TestConcurrentGoalMutationsDoNotInterleaveBetweenMetadataAndStatusEvent(t *
 		_, err := engine.SetGoal("first goal", session.GoalActorUser)
 		firstDone <- err
 	}()
-	waitForGoalObjective(t, store, "first goal")
+	time.Sleep(50 * time.Millisecond)
+	if goal := store.Meta().Goal; goal != nil {
+		t.Fatalf("first Goal mutation committed before Runtime Event admission: %+v", goal)
+	}
 
 	secondDone := make(chan error, 1)
 	go func() {
@@ -334,8 +343,8 @@ func TestConcurrentGoalMutationsDoNotInterleaveBetweenMetadataAndStatusEvent(t *
 		secondDone <- err
 	}()
 	time.Sleep(50 * time.Millisecond)
-	if goal := store.Meta().Goal; goal == nil || goal.Objective != "first goal" {
-		t.Fatalf("second mutation interleaved before first status event completed: %+v", goal)
+	if goal := store.Meta().Goal; goal != nil {
+		t.Fatalf("Goal mutation committed before Runtime Event admission: %+v", goal)
 	}
 	eventsMu.Lock()
 	if len(events) != 0 {
@@ -343,8 +352,8 @@ func TestConcurrentGoalMutationsDoNotInterleaveBetweenMetadataAndStatusEvent(t *
 	}
 	eventsMu.Unlock()
 
-	engine.outputMutationMu.Unlock()
-	outputLocked = false
+	releaseAdmission()
+	admissionBlocked = false
 	if err := <-firstDone; err != nil {
 		t.Fatalf("first SetGoal: %v", err)
 	}
@@ -720,6 +729,36 @@ func TestGoalLoopStopsAfterPauseOrClearDuringActiveTurn(t *testing.T) {
 	}
 }
 
+func TestWorkflowGoalRemainsPassiveWithoutContinuationAgendaWork(t *testing.T) {
+	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
+	client := newScriptedGoalLoopClient()
+	engine := mustNewTestEngine(
+		t,
+		store,
+		client,
+		tools.NewRegistry(),
+		Config{
+			EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
+			CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
+				ScopeID: runtimeids.NewExecutionScopeID(),
+			},
+		},
+	)
+	if _, err := engine.SetGoal("workflow-owned goal", session.GoalActorUser); err != nil {
+		t.Fatalf("SetGoal: %v", err)
+	}
+	if err := engine.StartGoalLoop(); err != nil {
+		t.Fatalf("StartGoalLoop: %v", err)
+	}
+	if pending := pendingGoalContinuationCount(engine); pending != 0 {
+		t.Fatalf("Workflow Goal continuations = %d, want zero", pending)
+	}
+	if selected := selectedGoalContinuationIDOrEmpty(t, engine); selected != "" {
+		t.Fatalf("Workflow Goal selected ordinary continuation %q", selected)
+	}
+	client.assertNotStarted(t, 1)
+}
+
 func TestGoalLoopKeepsLiveRunActiveAcrossAutoContinuingTurns(t *testing.T) {
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	client := newScriptedGoalLoopClient()
@@ -937,11 +976,11 @@ func TestGoalResumeWhileInterruptIsPublishingSchedulesRestart(t *testing.T) {
 	}
 	client.waitStarted(t, 1)
 
-	engine.outputMutationMu.Lock()
-	outputLocked := true
+	releaseAdmission := blockRuntimeEventAdmission(t, engine.runtimeEvents)
+	admissionBlocked := true
 	defer func() {
-		if outputLocked {
-			engine.outputMutationMu.Unlock()
+		if admissionBlocked {
+			releaseAdmission()
 		}
 	}()
 	released := map[int]bool{}
@@ -961,16 +1000,41 @@ func TestGoalResumeWhileInterruptIsPublishingSchedulesRestart(t *testing.T) {
 	}()
 	waitGoalLoopContinuationEnforced(t, engine, false)
 
-	accepted, queued, err := engine.QueueGoalStatusForActiveStep(session.GoalStatusActive, session.GoalActorUser)
-	if err != nil || !queued {
-		t.Fatalf("QueueGoalStatusForActiveStep queued=%t err=%v, want queued resume during in-flight interrupt", queued, err)
+	type queuedGoalStatusResult struct {
+		accepted session.GoalState
+		queued   bool
+		err      error
 	}
-	if accepted.Status != session.GoalStatusActive {
-		t.Fatalf("accepted status = %q, want active", accepted.Status)
-	}
+	statusDone := make(chan queuedGoalStatusResult, 1)
+	go func() {
+		accepted, queued, err := engine.QueueGoalStatusForActiveStep(
+			session.GoalStatusActive,
+			session.GoalActorUser,
+		)
+		statusDone <- queuedGoalStatusResult{
+			accepted: accepted,
+			queued:   queued,
+			err:      err,
+		}
+	}()
 
-	engine.outputMutationMu.Unlock()
-	outputLocked = false
+	releaseAdmission()
+	admissionBlocked = false
+	select {
+	case result := <-statusDone:
+		if result.err != nil || !result.queued {
+			t.Fatalf(
+				"QueueGoalStatusForActiveStep queued=%t err=%v, want queued resume during in-flight interrupt",
+				result.queued,
+				result.err,
+			)
+		}
+		if result.accepted.Status != session.GoalStatusActive {
+			t.Fatalf("accepted status = %q, want active", result.accepted.Status)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for queued Goal status admission")
+	}
 	select {
 	case err := <-interruptDone:
 		if err != nil {
@@ -994,42 +1058,40 @@ func TestGoalResumeWhileInterruptIsPublishingSchedulesRestart(t *testing.T) {
 	waitGoalLoopRunning(t, engine, false)
 }
 
-func TestGoalLoopRetriesWhenExclusiveStepIsBusy(t *testing.T) {
+func TestGoalContinuationFailureIsNotRetried(t *testing.T) {
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	client := newScriptedGoalLoopClient()
 	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
-	baseLifecycle := engine.stepLifecycle
+	attempted := make(chan struct{})
 	attempts := 0
 	engine.stepLifecycle = &stubExclusiveStepLifecycle{runFn: func(ctx context.Context, options exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) error {
 		attempts++
 		if attempts == 1 {
-			return ErrAgentBusy
+			close(attempted)
 		}
-		return baseLifecycle.Run(ctx, options, fn)
+		return ErrAgentBusy
 	}}
-	client.beforeReturn = func(call int) {
-		if call == 1 {
-			_, _ = engine.SetGoalStatus(session.GoalStatusComplete, session.GoalActorAgent)
-		}
-	}
 	if _, err := engine.SetGoal("ship goal mode", session.GoalActorUser); err != nil {
 		t.Fatalf("SetGoal: %v", err)
 	}
 	if err := engine.StartGoalLoop(); err != nil {
 		t.Fatalf("StartGoalLoop: %v", err)
 	}
-	client.waitStarted(t, 1)
-	client.releaseCall(1)
-	waitGoalLoopRunning(t, engine, false)
-	if attempts < 2 {
-		t.Fatalf("goal loop attempts = %d, want retry after busy step lifecycle", attempts)
+	select {
+	case <-attempted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Goal continuation did not attempt its selected work")
 	}
-	if got := client.callCount(); got != 1 {
-		t.Fatalf("model calls = %d, want 1", got)
+	waitGoalLoopRunning(t, engine, false)
+	if attempts != 1 {
+		t.Fatalf("Goal continuation attempts = %d, want one", attempts)
+	}
+	if got := client.callCount(); got != 0 {
+		t.Fatalf("model calls = %d, want zero after Boundary work failure", got)
 	}
 	for _, entry := range engine.ChatSnapshot().Entries {
 		if entry.Role == string(transcript.EntryRoleDeveloperErrorFeedback) {
-			t.Fatalf("did not expect busy retry to persist goal-loop error, entries=%+v", engine.ChatSnapshot().Entries)
+			t.Fatalf("did not expect benign busy failure feedback, entries=%+v", engine.ChatSnapshot().Entries)
 		}
 	}
 }
@@ -1039,7 +1101,7 @@ func TestManualCompactionSubmittedDuringGoalTurnRunsBeforeNextGoalTurn(t *testin
 	client := newScriptedGoalLoopClient()
 	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
 	client.beforeReturn = func(call int) {
-		if call == 3 {
+		if call == 4 {
 			_, _ = engine.SetGoalStatus(session.GoalStatusComplete, session.GoalActorAgent)
 		}
 	}
@@ -1058,20 +1120,25 @@ func TestManualCompactionSubmittedDuringGoalTurnRunsBeforeNextGoalTurn(t *testin
 	client.releaseCall(1)
 
 	client.waitStarted(t, 2)
-	if active := engine.ActiveRun(); active == nil || active.ActiveKind != ActiveKindCompaction {
-		t.Fatalf("second model request active run = %+v, want compaction before the next goal turn", active)
+	if active := engine.compactionRuntimeState().ActiveSnapshot(); active == nil {
+		t.Fatal("first manual compaction did not become active before the next goal turn")
 	}
 	client.releaseCall(2)
-	first, second := <-compactDone, <-compactDone
-	if (first == nil) == (second == nil) || (!errors.Is(first, ErrManualCompactionTooSoon) && !errors.Is(second, ErrManualCompactionTooSoon)) {
-		t.Fatalf("duplicate compact errors = (%v, %v), want one success and one too-soon result", first, second)
+	client.waitStarted(t, 3)
+	if active := engine.compactionRuntimeState().ActiveSnapshot(); active == nil {
+		t.Fatal("second distinct manual compaction did not retain FIFO priority")
 	}
-	if got := engine.CompactionCount(); got != 1 {
-		t.Fatalf("compaction count = %d, want 1", got)
+	client.releaseCall(3)
+	first, second := <-compactDone, <-compactDone
+	if first != nil || second != nil {
+		t.Fatalf("distinct compact errors = (%v, %v), want two successes", first, second)
+	}
+	if got := engine.CompactionCount(); got != 2 {
+		t.Fatalf("compaction count = %d, want 2", got)
 	}
 
-	client.waitStarted(t, 3)
-	client.releaseCall(3)
+	client.waitStarted(t, 4)
+	client.releaseCall(4)
 	waitGoalLoopRunning(t, engine, false)
 }
 
@@ -1145,6 +1212,47 @@ func goalDeveloperMessages(t *testing.T, events []testPersistedEvent) []llm.Mess
 		}
 	}
 	return out
+}
+
+func selectedGoalContinuationID(t *testing.T, engine *Engine) boundaryAgendaItemID {
+	t.Helper()
+	id := selectedGoalContinuationIDOrEmpty(t, engine)
+	if id == "" {
+		t.Fatal("Goal provider work has no selected Boundary Agenda continuation")
+	}
+	return id
+}
+
+func selectedGoalContinuationIDOrEmpty(
+	t *testing.T,
+	engine *Engine,
+) boundaryAgendaItemID {
+	t.Helper()
+	id, err := submitRuntimeEvent(
+		engine,
+		struct{}{},
+		func(_ runtimeEventAdmission, _ struct{}) (boundaryAgendaItemID, error) {
+			selected, ok := engine.longBoundary.selected.(*goalContinuationSelection)
+			if !ok {
+				return "", nil
+			}
+			return selected.id, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("inspect selected Goal continuation: %v", err)
+	}
+	return id
+}
+
+func pendingGoalContinuationCount(engine *Engine) int {
+	count := 0
+	for _, item := range engine.boundaryAgenda.pending() {
+		if _, ok := item.(*goalContinuationAgendaItem); ok {
+			count++
+		}
+	}
+	return count
 }
 
 type scriptedGoalLoopClient struct {

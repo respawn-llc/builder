@@ -77,29 +77,6 @@ type lifecycleReminderQueueObserver struct {
 	once  sync.Once
 }
 
-type lifecycleStepProbe struct {
-	began chan runtime.StepLifecycleSnapshot
-	ended chan runtime.StepLifecycleSnapshot
-}
-
-func (p *lifecycleStepProbe) StepBegan(
-	_ context.Context,
-	_ AgentResourceDescriptor,
-	snapshot runtime.StepLifecycleSnapshot,
-) error {
-	p.began <- snapshot
-	return nil
-}
-
-func (p *lifecycleStepProbe) StepEnded(
-	_ context.Context,
-	_ AgentResourceDescriptor,
-	snapshot runtime.StepLifecycleSnapshot,
-) error {
-	p.ended <- snapshot
-	return nil
-}
-
 func (o *lifecycleReminderQueueObserver) ObservePersistedStore(_ context.Context, snapshot session.PersistedStoreSnapshot) error {
 	if snapshot.Meta.WorktreeReminder != nil {
 		o.once.Do(o.queue)
@@ -485,66 +462,7 @@ func assertRuntimeAbortResourceRetired(
 	}
 }
 
-func TestOwnerlessRuntimeStepPublishesResourceLifecycle(t *testing.T) {
-	fixture := newSessionRuntimeFixture(t)
-	sessionID := lifecycleSessionID(t, fixture)
-	client := &ownerlessRetirementLLMClient{
-		firstStarted: make(chan struct{}),
-		releaseFirst: make(chan struct{}),
-	}
-	probe := &lifecycleStepProbe{
-		began: make(chan runtime.StepLifecycleSnapshot, 1),
-		ended: make(chan runtime.StepLifecycleSnapshot, 1),
-	}
-	authority := NewAuthority(AuthorityOptions{
-		PersistenceRoot: fixture.config.PersistenceRoot,
-		StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
-		StepLifecycle:   probe,
-	})
-	t.Cleanup(func() {
-		if err := authority.Close(context.Background()); err != nil {
-			t.Errorf("close authority: %v", err)
-		}
-	})
-	plan := authorityTestRuntimePlan(t, fixture, client)
-	attachment := openLifecycleRuntime(t, authority, sessionID, "owner-a", &plan)
-
-	done := make(chan error, 1)
-	go func() {
-		done <- authority.WithRuntime(context.Background(), attachment.Resource(), func(ctx context.Context, engine *runtime.Engine) error {
-			_, err := engine.SubmitUserMessage(ctx, "ownerless step")
-			return err
-		})
-	}()
-	select {
-	case <-client.firstStarted:
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for ownerless runtime step")
-	}
-	select {
-	case snapshot := <-probe.began:
-		if snapshot.Transition != runtime.StepLifecycleTransitionBegan {
-			t.Fatalf("began snapshot transition = %q", snapshot.Transition)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("ownerless runtime step did not publish began lifecycle")
-	}
-
-	close(client.releaseFirst)
-	if err := <-done; err != nil {
-		t.Fatalf("ownerless runtime step: %v", err)
-	}
-	select {
-	case snapshot := <-probe.ended:
-		if snapshot.Transition != runtime.StepLifecycleTransitionEnded {
-			t.Fatalf("ended snapshot transition = %q", snapshot.Transition)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("ownerless runtime step did not publish ended lifecycle")
-	}
-}
-
-func TestAuthoritySyncExecutionTargetPersistsReminderBeforeQueuedUserDrain(t *testing.T) {
+func TestAuthoritySyncExecutionTargetPersistsReminderBeforeIdleHumanExecution(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
 	client := make(lifecycleRequestCaptureClient, 1)
@@ -554,8 +472,8 @@ func TestAuthoritySyncExecutionTargetPersistsReminderBeforeQueuedUserDrain(t *te
 	attachment := openLifecycleRuntime(t, authority, sessionID, "owner-a", &plan)
 	observer.queue = func() {
 		if err := authority.WithRuntime(context.Background(), attachment.Resource(), func(_ context.Context, engine *runtime.Engine) error {
-			engine.QueueUserMessageForAutoDrain("queued after switch", "request-after-switch")
-			return nil
+			_, err := engine.QueueUserMessage("queued after switch")
+			return err
 		}); err != nil {
 			t.Errorf("queue user work during reminder persistence: %v", err)
 		}
@@ -610,7 +528,6 @@ func (p *startupRepairReadyProbe) ResourceReady(
 	_ context.Context,
 	_ AgentResourceDescriptor,
 	engine *runtime.Engine,
-	_ AgentResourceRetainer,
 ) error {
 	if p.callID != "" {
 		if err := engine.WithTranscriptHydrationSnapshot(func(snapshot runtime.TranscriptHydrationSnapshot) error {
@@ -643,7 +560,7 @@ func (*startupRepairReadyProbe) ResourceDraining(
 	return nil
 }
 
-func (l *authorityStartBarrierLifecycle) ResourceReady(ctx context.Context, _ AgentResourceDescriptor, _ *runtime.Engine, _ AgentResourceRetainer) error {
+func (l *authorityStartBarrierLifecycle) ResourceReady(ctx context.Context, _ AgentResourceDescriptor, _ *runtime.Engine) error {
 	return l.ArriveAndWait(ctx)
 }
 
@@ -1100,7 +1017,7 @@ func TestAuthorityMaintenanceRequiresEveryActiveBlockAuthorization(t *testing.T)
 	}
 }
 
-func TestAuthorityBlockingRuntimeActivityIncludesMaintenanceStep(t *testing.T) {
+func TestAuthorityBlockingRuntimeActivityIgnoresDirectMaintenance(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
 	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
@@ -1137,8 +1054,8 @@ func TestAuthorityBlockingRuntimeActivityIncludesMaintenanceStep(t *testing.T) {
 	if err != nil {
 		t.Fatalf("check blocking runtime activity: %v", err)
 	}
-	if !active {
-		t.Fatal("runtime maintenance was not reported as blocking activity")
+	if active {
+		t.Fatal("direct runtime maintenance was reported as blocking activity")
 	}
 
 	close(release)
@@ -1150,82 +1067,7 @@ func TestAuthorityBlockingRuntimeActivityIncludesMaintenanceStep(t *testing.T) {
 		t.Fatalf("check blocking runtime activity after maintenance: %v", err)
 	}
 	if active {
-		t.Fatal("completed runtime maintenance remained blocking")
-	}
-}
-
-func TestAuthorityBlockingRuntimeActivityIncludesOpenLiveRunGroup(t *testing.T) {
-	fixture := newSessionRuntimeFixture(t)
-	sessionID := lifecycleSessionID(t, fixture)
-	client := &ownerlessRetirementLLMClient{
-		firstStarted: make(chan struct{}),
-		releaseFirst: make(chan struct{}),
-	}
-	plan := authorityTestRuntimePlan(t, fixture, client)
-	attachment := openLifecycleRuntime(t, fixture.authority, sessionID, "owner-a", &plan)
-
-	submitDone := make(chan error, 1)
-	go func() {
-		submitDone <- fixture.authority.WithRuntime(context.Background(), attachment.Resource(), func(ctx context.Context, engine *runtime.Engine) error {
-			_, err := engine.SubmitUserMessage(ctx, "first")
-			return err
-		})
-	}()
-	select {
-	case <-client.firstStarted:
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for the first live step")
-	}
-
-	beforeQueueStarted := make(chan struct{})
-	releaseBeforeQueue := make(chan struct{})
-	defer func() {
-		select {
-		case <-releaseBeforeQueue:
-		default:
-			close(releaseBeforeQueue)
-		}
-	}()
-	queueDone := make(chan error, 1)
-	go func() {
-		queueDone <- fixture.authority.WithRuntime(context.Background(), attachment.Resource(), func(_ context.Context, engine *runtime.Engine) error {
-			item, accepted, err := engine.QueueUserMessageForActiveRun(
-				context.Background(),
-				"follow-up",
-				runtimeids.NewRuntimeClientRequestID(),
-				func() error {
-					close(beforeQueueStarted)
-					<-releaseBeforeQueue
-					return nil
-				},
-			)
-			if err == nil && (!accepted || item.ID == "") {
-				return errors.New("active live run rejected queued follow-up")
-			}
-			return err
-		})
-	}()
-	select {
-	case <-beforeQueueStarted:
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for live-run queue admission")
-	}
-
-	close(client.releaseFirst)
-	if err := <-submitDone; err != nil {
-		t.Fatalf("submit first live step: %v", err)
-	}
-	active, err := fixture.authority.HasBlockingRuntimeActivity(context.Background(), sessionID.String())
-	if err != nil {
-		t.Fatalf("check open live-run activity: %v", err)
-	}
-	if !active {
-		t.Fatal("open live-run group without an engine step was not reported as blocking")
-	}
-
-	close(releaseBeforeQueue)
-	if err := <-queueDone; err != nil {
-		t.Fatalf("queue live-run follow-up: %v", err)
+		t.Fatal("completed direct runtime maintenance was reported as blocking")
 	}
 }
 

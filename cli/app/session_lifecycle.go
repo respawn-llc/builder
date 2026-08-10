@@ -13,8 +13,6 @@ import (
 	"core/shared/lifecyclecontract"
 	"core/shared/serverapi"
 	"core/shared/textutil"
-
-	"github.com/google/uuid"
 )
 
 type sessionLifecycleClientProvider interface {
@@ -299,6 +297,7 @@ func prepareSessionUIRun(
 		initialPromptHistoryRecorded: initialPromptHistoryRecorded,
 		initialInput:                 initialState.Input,
 		recoveryBuffers:              initialState.RecoveryBuffers,
+		sessionDraftPersistence:      server.SessionLifecycleClient(),
 		sessionTitle:                 textutil.Pointer(plan.SessionTitle),
 		modelContractLocked:          plan.ModelContractLocked,
 		configuredModelName:          plan.ConfiguredModelName,
@@ -375,7 +374,6 @@ func persistSessionDraftToServer(ctx context.Context, server sessionLifecycleCli
 		return nil
 	}
 	_, err := server.SessionLifecycleClient().PersistInputDraft(ctx, serverapi.SessionPersistInputDraftRequest{
-		ClientRequestID: uuid.NewString(),
 		SessionID:       strings.TrimSpace(sessionID),
 		Input:           ui.mainEditor.Text(),
 		RecoveryBuffers: ui.sessionDraftRecoveryBuffers(),
@@ -456,8 +454,7 @@ func resolveSessionAction(ctx context.Context, server sessionTransitionServer, i
 		return serverapi.SessionDirective{}, errors.New("session lifecycle client is required")
 	}
 	resolved, err := server.SessionLifecycleClient().ResolveTransition(ctx, serverapi.SessionResolveTransitionRequest{
-		ClientRequestID: uuid.NewString(),
-		SessionID:       strings.TrimSpace(sessionID),
+		SessionID: strings.TrimSpace(sessionID),
 		Transition: serverapi.SessionTransition{
 			Action:                       transition.Action,
 			InitialPrompt:                transition.InitialPrompt,

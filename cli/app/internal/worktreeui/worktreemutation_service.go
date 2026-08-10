@@ -8,8 +8,6 @@ import (
 
 	"core/shared/apicontract"
 	"core/shared/serverapi"
-
-	"github.com/google/uuid"
 )
 
 const defaultResolveTimeout = 3 * time.Second
@@ -27,12 +25,11 @@ type RuntimeControl struct {
 }
 
 type Service struct {
-	Client             apicontract.WorktreeService
-	SessionID          string
-	Runtime            RuntimeControl
-	ResolveContext     func() (context.Context, context.CancelFunc)
-	NewClientRequestID func() string
-	NewOperationID     func() serverapi.WorktreeOperationID
+	Client         apicontract.WorktreeService
+	SessionID      string
+	Runtime        RuntimeControl
+	ResolveContext func() (context.Context, context.CancelFunc)
+	NewOperationID func() serverapi.WorktreeOperationID
 }
 
 func (s Service) List() (serverapi.WorktreeListResponse, error) {
@@ -71,12 +68,10 @@ func (s Service) ResolveSelector(selector string) (serverapi.WorktreeSelectorPre
 }
 
 func (s Service) Create(req serverapi.WorktreeCreateRequest) (serverapi.WorktreeCreateResponse, error) {
-	clientRequestID := s.clientRequestID()
 	if err := req.SetupOperationID.Validate(); err != nil {
 		req.SetupOperationID = serverapi.NewWorktreeSetupOperationID()
 	}
 	return runCreateMutation(s, func(ctx context.Context) (serverapi.WorktreeCreateResponse, error) {
-		req.ClientRequestID = clientRequestID
 		req.SessionID = s.SessionID
 		return s.Client.CreateWorktree(ctx, req)
 	})
@@ -177,15 +172,6 @@ func (s Service) resolveContext() (context.Context, context.CancelFunc) {
 
 func DefaultMutationContext() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), defaultMutationTimeout)
-}
-
-func (s Service) clientRequestID() string {
-	if s.NewClientRequestID != nil {
-		if id := strings.TrimSpace(s.NewClientRequestID()); id != "" {
-			return id
-		}
-	}
-	return uuid.NewString()
 }
 
 func (s Service) operationID() serverapi.WorktreeOperationID {

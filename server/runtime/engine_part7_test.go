@@ -2,16 +2,17 @@ package runtime
 
 import (
 	"context"
-	"core/server/llm"
-	"core/server/tools"
-	shelltool "core/server/tools/shell"
-	"core/shared/textutil"
-	"core/shared/toolspec"
 	"encoding/json"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"core/server/llm"
+	"core/server/tools"
+	shelltool "core/server/tools/shell"
+	"core/shared/textutil"
+	"core/shared/toolspec"
 )
 
 // The readiness-gated background/reviewer tests below intentionally run
@@ -242,10 +243,8 @@ func TestSteerAcceptedDuringReviewerAppearsInMainAgentFollowUp(t *testing.T) {
 			Client:        reviewerClient,
 		},
 	})
-	eng.pauseQueuedUserAutoDrain()
 	t.Cleanup(func() {
 		eng.FailQueuedUserMessages(QueuedUserMessageFailureClosing)
-		eng.resumeQueuedUserAutoDrain()
 		waitEngineLifecycleTasks(t, eng)
 	})
 
@@ -265,7 +264,7 @@ func TestSteerAcceptedDuringReviewerAppearsInMainAgentFollowUp(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for reviewer request")
 	}
-	if _, accepted, err := eng.QueueUserMessageForActiveRun(context.Background(), "steer reviewer follow-up", liveRunTestRequestID(t), nil); err != nil || !accepted {
+	if _, accepted, err := eng.QueueUserMessageForActiveRun(context.Background(), "steer reviewer follow-up", nil); err != nil || !accepted {
 		t.Fatalf("QueueUserMessageForActiveRun accepted=%t err=%v", accepted, err)
 	}
 	releaseReviewer()

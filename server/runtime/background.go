@@ -6,86 +6,322 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 
 	"core/server/llm"
+	"core/server/session"
 	"core/server/tools"
+	"core/shared/serverapi"
 	"core/shared/textutil"
 	"core/shared/toolspec"
+
+	"github.com/google/uuid"
 )
 
-type defaultBackgroundNoticeScheduler struct {
+type defaultBackgroundAgendaAdapter struct {
 	engine *Engine
-	steps  exclusiveStepLifecycle
-
-	mu        sync.Mutex
-	pending   []queuedBackgroundNotice
-	scheduled bool
 }
 
-type queuedBackgroundNotice struct {
+type backgroundNoticeAgendaItem struct {
+	id        boundaryAgendaItemID
 	sessionID string
-	intent    steeringIntent
+	message   llm.Message
+	order     uint64
+	settled   bool
+}
+
+type backgroundNoticeSelection struct {
+	id      boundaryAgendaItemID
+	message llm.Message
+	item    *backgroundNoticeAgendaItem
+}
+
+func newBackgroundNoticeAgendaItem(msg llm.Message) (*backgroundNoticeAgendaItem, error) {
+	if msg.Content == nil || strings.TrimSpace(*msg.Content) == "" {
+		return nil, errors.New("background notice content is required")
+	}
+	sessionID, _ := textutil.OptionalTrimmed(msg.Name)
+	activityID, hasActivityID := textutil.OptionalTrimmed(msg.BackgroundActivityID)
+	id := boundaryAgendaItemID("technical-notice:" + uuid.NewString())
+	if hasActivityID {
+		id = boundaryAgendaItemID("background-notice:" + activityID)
+	}
+	return &backgroundNoticeAgendaItem{
+		id:        id,
+		sessionID: sessionID,
+		message:   msg,
+	}, nil
+}
+
+func (i *backgroundNoticeAgendaItem) agendaID() boundaryAgendaItemID {
+	return i.id
+}
+
+func (*backgroundNoticeAgendaItem) agendaBinding() boundaryAgendaBinding {
+	return runtimeBoundaryBinding()
+}
+
+func (*backgroundNoticeAgendaItem) agendaEligibility() boundaryEligibility {
+	return boundaryEligibilitySafe
+}
+
+func (i *backgroundNoticeAgendaItem) agendaOrder() uint64 {
+	return i.order
+}
+
+func (i *backgroundNoticeAgendaItem) setAgendaOrder(order uint64) {
+	i.order = order
+}
+
+func (i *backgroundNoticeAgendaItem) settleBoundaryAgenda(err error) {
+	if i.settled {
+		panic(fmt.Sprintf("background Boundary Agenda item %q settled twice", i.id))
+	}
+	i.settled = true
+}
+
+func (i *backgroundNoticeAgendaItem) selectLongWork() boundaryLongWork {
+	return &backgroundNoticeSelection{
+		id:      i.id,
+		message: i.message,
+		item:    i,
+	}
+}
+
+func (s *backgroundNoticeSelection) longWorkID() boundaryAgendaItemID {
+	return s.id
+}
+
+func (s *backgroundNoticeSelection) runLongWork(ctx context.Context, engine *Engine) error {
+	return engine.runBackgroundNoticeSelection(ctx, s)
+}
+
+func (s *backgroundNoticeSelection) settleLongWork(err error) {
+	s.item.settleBoundaryAgenda(err)
+}
+
+func (s *backgroundNoticeSelection) completeRuntimeBoundLongWork(
+	engine *Engine,
+	err error,
+) {
+	engine.submitBoundaryLongWorkResult(s.id, err)
 }
 
 func (e *Engine) HandleBackgroundShellUpdate(evt BackgroundShellEvent, queueNotice bool) {
 	e.ensureOrchestrationCollaborators()
-	e.backgroundFlow.HandleBackgroundShellUpdate(evt, queueNotice)
-}
-
-func (e *Engine) RecordBackgroundShellUpdate(evt BackgroundShellEvent) error {
-	e.ensureOrchestrationCollaborators()
-	return e.backgroundFlow.RecordBackgroundShellUpdate(evt)
-}
-
-func (e *Engine) QueueBackgroundShellContinuation(evt BackgroundShellEvent) {
-	e.ensureOrchestrationCollaborators()
-	e.backgroundFlow.QueueBackgroundShellContinuation(evt)
-}
-
-func (e *Engine) RunBackgroundShellContinuation(ctx context.Context, evt BackgroundShellEvent) error {
-	e.ensureOrchestrationCollaborators()
-	return e.backgroundFlow.RunBackgroundShellContinuation(ctx, evt)
-}
-
-func (e *Engine) SteerBackgroundContinuationFailure(err error) error {
-	if err == nil {
-		return errors.New("background continuation failure is required")
+	if err := e.backgroundFlow.HandleBackgroundShellUpdate(evt, queueNotice); err != nil {
+		e.surfaceRunError(err)
 	}
-	_, steerErr := e.steerRuntimeErrorFeedback(
-		fmt.Errorf("background continuation failed: %w", err),
+}
+
+func (b *defaultBackgroundAgendaAdapter) HandleBackgroundShellUpdate(
+	evt BackgroundShellEvent,
+	queueNotice bool,
+) error {
+	var item *backgroundNoticeAgendaItem
+	if queueNotice && evt.Type.IsTerminal() {
+		var err error
+		item, err = newBackgroundNoticeAgendaItem(backgroundShellDeveloperNotice(evt))
+		if err != nil {
+			return err
+		}
+	}
+	_, err := submitRuntimeEvent(
+		b.engine,
+		struct {
+			event BackgroundShellEvent
+			item  *backgroundNoticeAgendaItem
+		}{event: evt, item: item},
+		func(
+			admission runtimeEventAdmission,
+			input struct {
+				event BackgroundShellEvent
+				item  *backgroundNoticeAgendaItem
+			},
+		) (struct{}, error) {
+			if err := admission.applySteering("", steerEventIntent(Event{
+				Kind:       EventBackgroundUpdated,
+				Background: &input.event,
+			})); err != nil {
+				return struct{}{}, err
+			}
+			if input.item == nil {
+				return struct{}{}, nil
+			}
+			return struct{}{}, b.acceptNotice(admission, input.item)
+		},
 	)
-	return steerErr
+	return err
 }
 
-func (b *defaultBackgroundNoticeScheduler) HandleBackgroundShellUpdate(evt BackgroundShellEvent, queueNotice bool) {
-	if err := b.RecordBackgroundShellUpdate(evt); err != nil {
-		b.engine.surfaceRunError(err)
-		return
+func (b *defaultBackgroundAgendaAdapter) QueueDeveloperNotice(msg llm.Message) error {
+	item, err := newBackgroundNoticeAgendaItem(msg)
+	if err != nil {
+		return err
 	}
-	if queueNotice {
-		b.QueueBackgroundShellContinuation(evt)
+	_, err = submitRuntimeEvent(
+		b.engine,
+		item,
+		func(
+			admission runtimeEventAdmission,
+			accepted *backgroundNoticeAgendaItem,
+		) (struct{}, error) {
+			return struct{}{}, b.acceptNotice(admission, accepted)
+		},
+	)
+	return err
+}
+
+func (b *defaultBackgroundAgendaAdapter) acceptNotice(
+	admission runtimeEventAdmission,
+	item *backgroundNoticeAgendaItem,
+) error {
+	if err := b.engine.boundaryAgenda.accept(item); err != nil {
+		return err
 	}
-}
-
-func (b *defaultBackgroundNoticeScheduler) RecordBackgroundShellUpdate(evt BackgroundShellEvent) error {
-	return b.engine.steer("", steerEventIntent(Event{Kind: EventBackgroundUpdated, Background: &evt}))
-}
-
-func (b *defaultBackgroundNoticeScheduler) QueueBackgroundShellContinuation(evt BackgroundShellEvent) {
-	if !evt.Type.IsTerminal() {
-		return
+	if b.engine.idleBoundaryReductionEligible() {
+		return b.engine.reduceIdleBoundary(admission)
 	}
-	b.queueDeveloperNotice(backgroundShellDeveloperNotice(evt), true)
+	return nil
 }
 
-func (b *defaultBackgroundNoticeScheduler) RunBackgroundShellContinuation(ctx context.Context, evt BackgroundShellEvent) error {
-	if !evt.Type.IsTerminal() {
+func (e *Engine) idleBoundaryReductionEligible() bool {
+	return e.agentSteps.current == nil &&
+		e.agentSteps.boundary == nil &&
+		e.agentSteps.reducerGrant == nil &&
+		e.longBoundary.selected == nil
+}
+
+func (e *Engine) startNextBackgroundLongWork(admission runtimeEventAdmission) error {
+	if !e.idleBoundaryReductionEligible() || e.runtimeEvents == nil {
 		return nil
 	}
-	b.queueDeveloperNotice(backgroundShellDeveloperNotice(evt), false)
-	_, err := b.runQueuedNotices(ctx)
+	_, ok := e.boundaryAgenda.peekNext(idleBoundarySelection()).(*backgroundNoticeAgendaItem)
+	if !ok {
+		return nil
+	}
+	return e.startNextRuntimeBoundLongWork(admission)
+}
+
+func (e *Engine) runBackgroundNoticeSelection(
+	ctx context.Context,
+	selected *backgroundNoticeSelection,
+) (assistantErr error) {
+	return e.stepLifecycle.Run(
+		ctx,
+		exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindBackground},
+		func(stepCtx context.Context, stepID string) error {
+			if err := e.ensureMetaContextForRequest(stepCtx, stepID); err != nil {
+				return err
+			}
+			origin, err := e.prepareBackgroundAgentStep(stepCtx)
+			if err != nil {
+				return fmt.Errorf("prepare background Agent Step: %w", err)
+			}
+			if err := e.applySelectedBackgroundNotice(
+				stepCtx,
+				origin.StepID,
+				selected,
+			); err != nil {
+				return errors.Join(
+					fmt.Errorf("apply selected background notice: %w", err),
+					e.failAgentStepScope(err),
+				)
+			}
+			_, runErr := e.runStepLoop(stepCtx, stepID)
+			if runErr != nil {
+				return fmt.Errorf("run background Agent loop: %w", runErr)
+			}
+			return nil
+		},
+	)
+}
+
+func (e *Engine) prepareBackgroundAgentStep(
+	ctx context.Context,
+) (serverapi.RuntimeStepOrigin, error) {
+	snapshot := e.stepLifecycle.Snapshot()
+	if snapshot == nil || snapshot.RunID == "" {
+		return serverapi.RuntimeStepOrigin{}, ErrActiveStepInactive
+	}
+	decision, err := submitRuntimeEventWithContext(
+		e.lifecycleCtx,
+		ctx,
+		e,
+		snapshot.RunID,
+		func(
+			admission runtimeEventAdmission,
+			runID string,
+		) (continueAgentStepDecision, error) {
+			return e.registerAgentProviderStep(admission, runID, false)
+		},
+	)
+	return decision.Origin, err
+}
+
+func (e *Engine) applySelectedBackgroundNotice(
+	ctx context.Context,
+	stepID string,
+	selected *backgroundNoticeSelection,
+) error {
+	_, err := submitRuntimeEventWithContext(
+		e.lifecycleCtx,
+		ctx,
+		e,
+		selected,
+		func(
+			admission runtimeEventAdmission,
+			work *backgroundNoticeSelection,
+		) (struct{}, error) {
+			if e.longBoundary.selected == nil ||
+				e.longBoundary.selected.longWorkID() != work.longWorkID() {
+				return struct{}{}, errors.New("selected background work is no longer owned")
+			}
+			_, applyErr := applyBackgroundNoticeMessage(admission, &stepID, work.message)
+			return struct{}{}, applyErr
+		},
+	)
 	return err
+}
+
+func (e *Engine) applyBackgroundNoticeBoundary(
+	admission runtimeEventAdmission,
+	stepID *string,
+	selection boundarySelection,
+) (int, error) {
+	selected := e.boundaryAgenda.selectNext(selection)
+	item, ok := selected.(*backgroundNoticeAgendaItem)
+	if !ok {
+		if selected == nil {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("background reducer selected unexpected Boundary Agenda item %T", selected)
+	}
+	receipt, err := applyBackgroundNoticeMessage(admission, stepID, item.message)
+	item.settleBoundaryAgenda(err)
+	if receipt.Committed {
+		return 1, err
+	}
+	return 0, err
+}
+
+func applyBackgroundNoticeMessage(
+	admission runtimeEventAdmission,
+	stepID *string,
+	message llm.Message,
+) (session.CommitReceipt, error) {
+	receipt := session.CommitReceipt{}
+	intent := steerMessagesWithPersistenceIntent(
+		steeringPriorityNormal,
+		steeringMessageEventDefault,
+		true,
+		[]llm.Message{message},
+	)
+	intent.items[0].commitReceipt = &receipt
+	err := admission.applySteeringOptional(stepID, intent)
+	if err == nil && !receipt.Committed {
+		err = errors.New("background notice message was not committed")
+	}
+	return receipt, err
 }
 
 func backgroundShellDeveloperNotice(evt BackgroundShellEvent) llm.Message {
@@ -129,125 +365,6 @@ func formatBackgroundShellCompact(evt BackgroundShellEvent) string {
 	return text
 }
 
-func (b *defaultBackgroundNoticeScheduler) QueueDeveloperNotice(msg llm.Message) {
-	b.queueDeveloperNotice(msg, true)
-}
-
-func (b *defaultBackgroundNoticeScheduler) queueDeveloperNotice(msg llm.Message, schedule bool) {
-	if msg.Content == nil || strings.TrimSpace(*msg.Content) == "" {
-		return
-	}
-	shouldSchedule := false
-	sessionID, _ := textutil.OptionalTrimmed(msg.Name)
-	notice := queuedBackgroundNotice{
-		sessionID: sessionID,
-		intent:    steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{msg}),
-	}
-	b.mu.Lock()
-	b.pending = append(b.pending, notice)
-	if schedule && !b.scheduled && (b.steps == nil || !b.steps.IsBusy()) {
-		b.scheduled = true
-		shouldSchedule = true
-	}
-	b.mu.Unlock()
-	if shouldSchedule {
-		if !b.engine.launchLifecycleTask(b.processQueuedNotices) {
-			b.clearScheduled()
-		}
-	}
-}
-
-func (b *defaultBackgroundNoticeScheduler) drainPendingNotices() []queuedBackgroundNotice {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	pending := append([]queuedBackgroundNotice(nil), b.pending...)
-	b.pending = nil
-	b.scheduled = false
-	return pending
-}
-
-func (b *defaultBackgroundNoticeScheduler) restorePendingNotices(notices []queuedBackgroundNotice) {
-	if len(notices) == 0 {
-		return
-	}
-	b.mu.Lock()
-	b.pending = append(append([]queuedBackgroundNotice(nil), notices...), b.pending...)
-	b.scheduled = false
-	b.mu.Unlock()
-}
-
-func (b *defaultBackgroundNoticeScheduler) flushPendingNotices(stepID string) (int, error) {
-	pending := b.drainPendingNotices()
-	flushed := 0
-	for index, notice := range pending {
-		receipt, err := b.engine.steerWithCommitReceipt(stepID, notice.intent)
-		if receipt.Committed {
-			flushed++
-		}
-		if err != nil {
-			restore := pending[index:]
-			if receipt.Committed {
-				restore = pending[index+1:]
-			}
-			b.restorePendingNotices(restore)
-			return flushed, err
-		}
-		if !receipt.Committed {
-			b.restorePendingNotices(pending[index:])
-			return flushed, fmt.Errorf("background notice persistence did not commit")
-		}
-	}
-	return flushed, nil
-}
-
-func (b *defaultBackgroundNoticeScheduler) HasPendingNotices() bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return len(b.pending) > 0
-}
-
-func (b *defaultBackgroundNoticeScheduler) ConsumePendingBackgroundNotice(sessionID string) bool {
-	sessionID = strings.TrimSpace(sessionID)
-	if sessionID == "" {
-		return false
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	removed := false
-	filtered := b.pending[:0]
-	for _, notice := range b.pending {
-		if strings.TrimSpace(notice.sessionID) == sessionID {
-			removed = true
-			continue
-		}
-		filtered = append(filtered, notice)
-	}
-	b.pending = filtered
-	if len(b.pending) == 0 {
-		b.scheduled = false
-	}
-	return removed
-}
-
-func (b *defaultBackgroundNoticeScheduler) ScheduleIfIdle() {
-	if b.steps != nil && b.steps.IsBusy() {
-		return
-	}
-	shouldSchedule := false
-	b.mu.Lock()
-	if len(b.pending) > 0 && !b.scheduled {
-		b.scheduled = true
-		shouldSchedule = true
-	}
-	b.mu.Unlock()
-	if shouldSchedule {
-		if !b.engine.launchLifecycleTask(b.processQueuedNotices) {
-			b.clearScheduled()
-		}
-	}
-}
-
 type harvestedBackgroundCompletion struct {
 	SessionID  int  `json:"background_session_id"`
 	Running    bool `json:"background_running"`
@@ -266,61 +383,4 @@ func harvestedBackgroundCompletionSessionID(res tools.Result) (string, bool) {
 		return "", false
 	}
 	return fmt.Sprintf("%d", out.SessionID), true
-}
-
-func (b *defaultBackgroundNoticeScheduler) processQueuedNotices(ctx context.Context) *resultGroupFatal {
-	if _, err := b.runQueuedNotices(ctx); err != nil {
-		if errors.Is(err, context.Canceled) {
-			return nil
-		}
-		if fatal, abort := resultGroupFatalFromError(err); abort {
-			return fatal
-		}
-		if steerErr := b.engine.SteerBackgroundContinuationFailure(err); steerErr != nil {
-			b.engine.surfaceRunError(errors.Join(err, steerErr))
-		}
-	}
-	return nil
-}
-
-func (b *defaultBackgroundNoticeScheduler) runQueuedNotices(ctx context.Context) (assistant llm.Message, err error) {
-	if len(b.pendingSnapshot()) == 0 {
-		b.clearScheduled()
-		return llm.Message{}, nil
-	}
-	err = b.steps.Run(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindBackground}, func(stepCtx context.Context, stepID string) error {
-		if err := b.engine.ensureMetaContextForRequest(stepCtx, stepID); err != nil {
-			return err
-		}
-		flushed, flushErr := b.flushPendingNotices(stepID)
-		if flushErr != nil {
-			return flushErr
-		}
-		if flushed == 0 {
-			return nil
-		}
-		msg, runErr := b.engine.runStepLoop(stepCtx, stepID)
-		assistant = msg
-		return runErr
-	})
-	if err != nil && b.HasPendingNotices() {
-		b.clearScheduled()
-	}
-	if errors.Is(err, ErrAgentBusy) {
-		b.clearScheduled()
-		return llm.Message{}, nil
-	}
-	return assistant, err
-}
-
-func (b *defaultBackgroundNoticeScheduler) pendingSnapshot() []queuedBackgroundNotice {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return append([]queuedBackgroundNotice(nil), b.pending...)
-}
-
-func (b *defaultBackgroundNoticeScheduler) clearScheduled() {
-	b.mu.Lock()
-	b.scheduled = false
-	b.mu.Unlock()
 }

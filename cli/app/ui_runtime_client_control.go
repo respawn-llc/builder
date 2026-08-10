@@ -8,24 +8,9 @@ import (
 	"core/shared/serverapi"
 )
 
-func (c *sessionRuntimeClient) sessionRuntimeBoundary() {}
-
-func runtimeRequestCallWithID[T any](ctx context.Context, c *sessionRuntimeClient, appendWarning bool, requestID string, call func(ctx context.Context, requestID string) (T, error)) (T, error) {
-	return retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionWithWarning, appendWarning, func() (T, error) {
-		return call(ctx, requestID)
-	})
-}
-
-func runtimeRequestCallNoResultWithID(ctx context.Context, c *sessionRuntimeClient, requestID string, call func(ctx context.Context, requestID string) error) error {
-	_, err := runtimeRequestCallWithID(ctx, c, true, requestID, func(ctx context.Context, requestID string) (struct{}, error) {
-		return struct{}{}, call(ctx, requestID)
-	})
-	return err
-}
-
 func (c *sessionRuntimeClient) SetSessionName(name string) error {
-	if err := runtimeControlCallNoResult(c, func(ctx context.Context, requestID string) error {
-		return c.controls.SetSessionName(ctx, serverapi.RuntimeSetSessionNameRequest{ClientRequestID: requestID, SessionID: c.sessionID, Name: name})
+	if err := runtimeControlCallNoResult(func(ctx context.Context) error {
+		return c.controls.SetSessionName(ctx, serverapi.RuntimeSetSessionNameRequest{SessionID: c.sessionID, Name: name})
 	}); err != nil {
 		return err
 	}
@@ -36,8 +21,8 @@ func (c *sessionRuntimeClient) SetSessionName(name string) error {
 }
 
 func (c *sessionRuntimeClient) SetThinkingLevel(level string) error {
-	if err := runtimeControlCallNoResult(c, func(ctx context.Context, requestID string) error {
-		return c.controls.SetThinkingLevel(ctx, serverapi.RuntimeSetThinkingLevelRequest{ClientRequestID: requestID, SessionID: c.sessionID, Level: level})
+	if err := runtimeControlCallNoResult(func(ctx context.Context) error {
+		return c.controls.SetThinkingLevel(ctx, serverapi.RuntimeSetThinkingLevelRequest{SessionID: c.sessionID, Level: level})
 	}); err != nil {
 		return err
 	}
@@ -48,8 +33,8 @@ func (c *sessionRuntimeClient) SetThinkingLevel(level string) error {
 }
 
 func (c *sessionRuntimeClient) SetFastModeEnabled(enabled bool) (bool, error) {
-	resp, err := runtimeControlCall(c, true, func(ctx context.Context, requestID string) (serverapi.RuntimeSetFastModeEnabledResponse, error) {
-		return c.controls.SetFastModeEnabled(ctx, serverapi.RuntimeSetFastModeEnabledRequest{ClientRequestID: requestID, SessionID: c.sessionID, Enabled: enabled})
+	resp, err := runtimeControlCall(func(ctx context.Context) (serverapi.RuntimeSetFastModeEnabledResponse, error) {
+		return c.controls.SetFastModeEnabled(ctx, serverapi.RuntimeSetFastModeEnabledRequest{SessionID: c.sessionID, Enabled: enabled})
 	})
 	if err == nil {
 		c.patchMainView(func(view *clientui.RuntimeMainView) {
@@ -60,8 +45,8 @@ func (c *sessionRuntimeClient) SetFastModeEnabled(enabled bool) (bool, error) {
 }
 
 func (c *sessionRuntimeClient) SetReviewerEnabled(enabled bool) (bool, string, error) {
-	resp, err := runtimeControlCall(c, true, func(ctx context.Context, requestID string) (serverapi.RuntimeSetReviewerEnabledResponse, error) {
-		return c.controls.SetReviewerEnabled(ctx, serverapi.RuntimeSetReviewerEnabledRequest{ClientRequestID: requestID, SessionID: c.sessionID, Enabled: enabled})
+	resp, err := runtimeControlCall(func(ctx context.Context) (serverapi.RuntimeSetReviewerEnabledResponse, error) {
+		return c.controls.SetReviewerEnabled(ctx, serverapi.RuntimeSetReviewerEnabledRequest{SessionID: c.sessionID, Enabled: enabled})
 	})
 	if err == nil {
 		c.patchMainView(func(view *clientui.RuntimeMainView) {
@@ -73,8 +58,8 @@ func (c *sessionRuntimeClient) SetReviewerEnabled(enabled bool) (bool, string, e
 }
 
 func (c *sessionRuntimeClient) SetAutoCompactionEnabled(enabled bool) (bool, bool, error) {
-	resp, err := runtimeControlCall(c, true, func(ctx context.Context, requestID string) (serverapi.RuntimeSetAutoCompactionEnabledResponse, error) {
-		return c.controls.SetAutoCompactionEnabled(ctx, serverapi.RuntimeSetAutoCompactionEnabledRequest{ClientRequestID: requestID, SessionID: c.sessionID, Enabled: enabled})
+	resp, err := runtimeControlCall(func(ctx context.Context) (serverapi.RuntimeSetAutoCompactionEnabledResponse, error) {
+		return c.controls.SetAutoCompactionEnabled(ctx, serverapi.RuntimeSetAutoCompactionEnabledRequest{SessionID: c.sessionID, Enabled: enabled})
 	})
 	if err != nil {
 		return false, false, err
@@ -86,8 +71,8 @@ func (c *sessionRuntimeClient) SetAutoCompactionEnabled(enabled bool) (bool, boo
 }
 
 func (c *sessionRuntimeClient) SetQuestionsEnabled(enabled bool) (bool, error) {
-	resp, err := runtimeControlCall(c, true, func(ctx context.Context, requestID string) (serverapi.RuntimeSetQuestionsEnabledResponse, error) {
-		return c.controls.SetQuestionsEnabled(ctx, serverapi.RuntimeSetQuestionsEnabledRequest{ClientRequestID: requestID, SessionID: c.sessionID, Enabled: enabled})
+	resp, err := runtimeControlCall(func(ctx context.Context) (serverapi.RuntimeSetQuestionsEnabledResponse, error) {
+		return c.controls.SetQuestionsEnabled(ctx, serverapi.RuntimeSetQuestionsEnabledRequest{SessionID: c.sessionID, Enabled: enabled})
 	})
 	if err != nil {
 		return false, err
@@ -99,7 +84,7 @@ func (c *sessionRuntimeClient) SetQuestionsEnabled(enabled bool) (bool, error) {
 }
 
 func (c *sessionRuntimeClient) ShowGoal() (*clientui.RuntimeGoal, error) {
-	resp, err := runtimeControlCall(c, false, func(ctx context.Context, _ string) (serverapi.RuntimeGoalShowResponse, error) {
+	resp, err := runtimeControlCall(func(ctx context.Context) (serverapi.RuntimeGoalShowResponse, error) {
 		return c.controls.ShowGoal(ctx, serverapi.RuntimeGoalShowRequest{SessionID: c.sessionID})
 	})
 	if err != nil {
@@ -109,8 +94,8 @@ func (c *sessionRuntimeClient) ShowGoal() (*clientui.RuntimeGoal, error) {
 }
 
 func (c *sessionRuntimeClient) SetGoal(objective string) (*clientui.RuntimeGoal, error) {
-	resp, err := runtimeControlCall(c, true, func(ctx context.Context, requestID string) (serverapi.RuntimeGoalShowResponse, error) {
-		return c.controls.SetGoal(ctx, serverapi.RuntimeGoalSetRequest{ClientRequestID: requestID, SessionID: c.sessionID, Objective: objective, Actor: "user"})
+	resp, err := runtimeControlCall(func(ctx context.Context) (serverapi.RuntimeGoalShowResponse, error) {
+		return c.controls.SetGoal(ctx, serverapi.RuntimeGoalSetRequest{SessionID: c.sessionID, Objective: objective, Actor: "user"})
 	})
 	if err != nil {
 		return nil, err
@@ -137,8 +122,8 @@ func (c *sessionRuntimeClient) CompleteGoal() (*clientui.RuntimeGoal, error) {
 }
 
 func (c *sessionRuntimeClient) ClearGoal() (*clientui.RuntimeGoal, error) {
-	resp, err := runtimeControlCall(c, true, func(ctx context.Context, requestID string) (serverapi.RuntimeGoalShowResponse, error) {
-		return c.controls.ClearGoal(ctx, serverapi.RuntimeGoalClearRequest{ClientRequestID: requestID, SessionID: c.sessionID, Actor: "user"})
+	resp, err := runtimeControlCall(func(ctx context.Context) (serverapi.RuntimeGoalShowResponse, error) {
+		return c.controls.ClearGoal(ctx, serverapi.RuntimeGoalClearRequest{SessionID: c.sessionID, Actor: "user"})
 	})
 	if err != nil {
 		return nil, err
@@ -147,8 +132,8 @@ func (c *sessionRuntimeClient) ClearGoal() (*clientui.RuntimeGoal, error) {
 }
 
 func (c *sessionRuntimeClient) setGoalStatus(call func(context.Context, serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalShowResponse, error)) (*clientui.RuntimeGoal, error) {
-	resp, err := runtimeControlCall(c, true, func(ctx context.Context, requestID string) (serverapi.RuntimeGoalShowResponse, error) {
-		return call(ctx, serverapi.RuntimeGoalStatusRequest{ClientRequestID: requestID, SessionID: c.sessionID, Actor: "user"})
+	resp, err := runtimeControlCall(func(ctx context.Context) (serverapi.RuntimeGoalShowResponse, error) {
+		return call(ctx, serverapi.RuntimeGoalStatusRequest{SessionID: c.sessionID, Actor: "user"})
 	})
 	if err != nil {
 		return nil, err
@@ -188,8 +173,8 @@ func (c *sessionRuntimeClient) AppendCommittedEntry(role, text string) error {
 }
 
 func (c *sessionRuntimeClient) AppendCommittedEntryWithNoticeID(role, text, noticeID string) error {
-	return runtimeControlCallNoResult(c, func(ctx context.Context, requestID string) error {
-		return c.controls.AppendCommittedEntry(ctx, serverapi.RuntimeAppendCommittedEntryRequest{ClientRequestID: requestID, SessionID: c.sessionID, Role: role, Text: text, NoticeID: strings.TrimSpace(noticeID)})
+	return runtimeControlCallNoResult(func(ctx context.Context) error {
+		return c.controls.AppendCommittedEntry(ctx, serverapi.RuntimeAppendCommittedEntryRequest{SessionID: c.sessionID, Role: role, Text: text, NoticeID: strings.TrimSpace(noticeID)})
 	})
 }
 
@@ -197,17 +182,13 @@ func (c *sessionRuntimeClient) SubmitRuntimeInput(ctx context.Context, req clien
 	if err := req.Validate(); err != nil {
 		return clientui.UserTurnSubmission{}, err
 	}
-	requestID := req.OperationRef.ClientRequestID.String()
-	resp, err := runtimeRequestCallWithID(ctx, c, true, requestID, func(ctx context.Context, id string) (serverapi.RuntimeSubmitUserTurnResponse, error) {
+	resp, err := runtimeRequestCall(ctx, func(ctx context.Context) (serverapi.RuntimeSubmitUserTurnResponse, error) {
 		return c.controls.SubmitUserTurn(ctx, serverapi.RuntimeSubmitUserTurnRequest{
-			ClientRequestID:                 id,
-			SessionID:                       c.sessionID,
-			Input:                           req.Input,
-			OperationRef:                    req.OperationRef,
-			PreSubmitCompactionOperationRef: req.PreSubmitCompactionOperationRef,
+			SessionID: c.sessionID,
+			Input:     req.Input,
 		})
 	})
-	return userTurnSubmissionFromResponse(resp, runtimeSubmitInputText(req), requestID), err
+	return userTurnSubmissionFromResponse(resp, runtimeSubmitInputText(req)), err
 }
 
 func runtimeSubmitInputText(input clientui.RuntimeSubmitRequest) string {
@@ -218,13 +199,13 @@ func runtimeSubmitInputText(input clientui.RuntimeSubmitRequest) string {
 	return text
 }
 
-func userTurnSubmissionFromResponse(resp serverapi.RuntimeSubmitUserTurnResponse, text string, requestID string) clientui.UserTurnSubmission {
+func userTurnSubmissionFromResponse(resp serverapi.RuntimeSubmitUserTurnResponse, text string) clientui.UserTurnSubmission {
 	submission := clientui.UserTurnSubmission{
 		Message:    resp.Message,
 		ResultKind: resp.ResultKind,
 	}
 	if resp.Steered && strings.TrimSpace(resp.QueueItemID) != "" {
-		submission.Queued = clientui.QueuedUserMessage{ID: resp.QueueItemID, Text: text, ClientRequestID: requestID}
+		submission.Queued = clientui.QueuedUserMessage{ID: resp.QueueItemID, Text: text}
 	}
 	return submission
 }
@@ -233,58 +214,36 @@ func (c *sessionRuntimeClient) RunUserShell(ctx context.Context, req clientui.Ru
 	if err := req.Validate(); err != nil {
 		return err
 	}
-	return runtimeRequestCallNoResultWithID(ctx, c, req.OperationRef.ClientRequestID.String(), func(ctx context.Context, requestID string) error {
-		return c.controls.SubmitUserShellCommand(ctx, serverapi.RuntimeSubmitUserShellCommandRequest{ClientRequestID: requestID, SessionID: c.sessionID, Command: req.Command, OperationRef: req.OperationRef})
+	_, err := runtimeRequestCall(ctx, func(ctx context.Context) (struct{}, error) {
+		return struct{}{}, c.controls.SubmitUserShellCommand(ctx, serverapi.RuntimeSubmitUserShellCommandRequest{SessionID: c.sessionID, Command: req.Command})
 	})
+	return err
 }
 
 func (c *sessionRuntimeClient) CompactRuntime(ctx context.Context, req clientui.RuntimeCompactRequest) error {
 	if err := req.Validate(); err != nil {
 		return err
 	}
-	return runtimeRequestCallNoResultWithID(ctx, c, req.OperationRef.ClientRequestID.String(), func(ctx context.Context, requestID string) error {
-		return c.controls.CompactContext(ctx, serverapi.RuntimeCompactContextRequest{ClientRequestID: requestID, SessionID: c.sessionID, Args: req.Args, OperationRef: req.OperationRef})
+	_, err := runtimeRequestCall(ctx, func(ctx context.Context) (struct{}, error) {
+		return struct{}{}, c.controls.CompactContext(ctx, serverapi.RuntimeCompactContextRequest{SessionID: c.sessionID, Args: req.Args})
 	})
+	return err
 }
 
 func (c *sessionRuntimeClient) Interrupt() error {
-	return c.InterruptWithPendingRefs(nil)
-}
-
-func (c *sessionRuntimeClient) InterruptWithPendingRefs(refs []clientui.RuntimeOperationRef) error {
-	_, err := c.interruptRuntimeCandidate(nil, refs)
-	return err
-}
-
-func (c *sessionRuntimeClient) InterruptWithTarget(target clientui.RuntimeOperationRef, refs []clientui.RuntimeOperationRef) error {
-	if err := target.Validate(); err != nil {
-		return err
-	}
-	_, err := c.interruptRuntimeCandidate(&target, refs)
-	return err
-}
-
-func (c *sessionRuntimeClient) interruptRuntimeCandidate(
-	target *clientui.RuntimeOperationRef,
-	refs []clientui.RuntimeOperationRef,
-) (runtimeTupleCandidate, error) {
-	resp, err := runtimeControlCall(c, true, func(ctx context.Context, requestID string) (serverapi.RuntimeInterruptResponse, error) {
-		return c.controls.Interrupt(ctx, serverapi.RuntimeInterruptRequest{ClientRequestID: requestID, SessionID: c.sessionID, TargetOperationRef: target, PendingOperationRefs: refs})
+	resp, err := runtimeControlCall(func(ctx context.Context) (serverapi.RuntimeInterruptResponse, error) {
+		return c.controls.Interrupt(ctx, serverapi.RuntimeInterruptRequest{SessionID: c.sessionID})
 	})
 	if err != nil {
-		return runtimeTupleCandidate{}, err
+		return err
 	}
-	candidate := runtimeTupleCandidate{
-		Version:             resp.Version,
-		Activity:            resp.Activity,
-		InputReconciliation: resp.InputReconciliation,
-	}
-	return candidate, nil
+	c.mergeRuntimeTuple(runtimeTupleCandidate{Version: resp.Version, Activity: resp.Activity}, runtimeTupleIngressIncremental)
+	return nil
 }
 
 func (c *sessionRuntimeClient) DiscardQueuedUserMessage(queueItemID string) bool {
-	resp, err := runtimeControlCall(c, true, func(ctx context.Context, requestID string) (serverapi.RuntimeDiscardQueuedUserMessageResponse, error) {
-		return c.controls.DiscardQueuedUserMessage(ctx, serverapi.RuntimeDiscardQueuedUserMessageRequest{ClientRequestID: requestID, SessionID: c.sessionID, QueueItemID: queueItemID})
+	resp, err := runtimeControlCall(func(ctx context.Context) (serverapi.RuntimeDiscardQueuedUserMessageResponse, error) {
+		return c.controls.DiscardQueuedUserMessage(ctx, serverapi.RuntimeDiscardQueuedUserMessageRequest{SessionID: c.sessionID, QueueItemID: queueItemID})
 	})
 	if err != nil {
 		return false
@@ -293,7 +252,7 @@ func (c *sessionRuntimeClient) DiscardQueuedUserMessage(queueItemID string) bool
 }
 
 func (c *sessionRuntimeClient) RecordPromptHistory(text string) error {
-	return runtimeControlCallNoResult(c, func(ctx context.Context, requestID string) error {
-		return c.controls.RecordPromptHistory(ctx, serverapi.RuntimeRecordPromptHistoryRequest{ClientRequestID: requestID, SessionID: c.sessionID, Text: text})
+	return runtimeControlCallNoResult(func(ctx context.Context) error {
+		return c.controls.RecordPromptHistory(ctx, serverapi.RuntimeRecordPromptHistoryRequest{SessionID: c.sessionID, Text: text})
 	})
 }

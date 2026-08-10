@@ -86,10 +86,9 @@ func transcriptQueuedMessagesFromRuntime(messages []runtime.QueuedUserMessage) (
 			return nil, fmt.Errorf("queued message %d: %w", index, err)
 		}
 		out = append(out, clientui.TranscriptQueuedMessageState{
-			ClientRequestID: mustTranscriptClientRequestID(message.ClientRequestID, fmt.Sprintf("hydrated queued message %d", index)),
-			QueueItemID:     mustTranscriptQueueItemID(message.ID, fmt.Sprintf("hydrated queued message %d", index)),
-			Status:          clientui.QueuedUserMessageAccepted,
-			Text:            textutil.Value(text),
+			QueueItemID: mustTranscriptQueueItemID(message.ID, fmt.Sprintf("hydrated queued message %d", index)),
+			Status:      clientui.QueuedUserMessageAccepted,
+			Text:        textutil.Value(text),
 		})
 	}
 	return out, nil
@@ -577,9 +576,8 @@ func transcriptQueuedMessageStateMessages(evt runtime.Event) []clientui.Transcri
 	}
 	status := evt.QueuedUserMessageStatus
 	state := clientui.TranscriptQueuedMessageState{
-		ClientRequestID: mustTranscriptClientRequestID(status.ClientRequestID, "queued-message state"),
-		QueueItemID:     mustTranscriptQueueItemID(status.QueueItemID, "queued-message state"),
-		Status:          clientui.QueuedUserMessageStatus(status.Status),
+		QueueItemID: mustTranscriptQueueItemID(status.QueueItemID, "queued-message state"),
+		Status:      clientui.QueuedUserMessageStatus(status.Status),
 	}
 	switch status.Status {
 	case runtime.QueuedUserMessageAccepted:
@@ -599,18 +597,11 @@ func transcriptUserMessageFlushedMessages(evt runtime.Event) []clientui.Transcri
 	if len(evt.UserMessageBatchQueuedItems) == 0 {
 		return nil
 	}
-	operations := make([]clientui.RuntimeOperationRef, 0, len(evt.UserMessageBatchQueuedItems))
 	for index, item := range evt.UserMessageBatchQueuedItems {
-		queueItemID := mustTranscriptQueueItemID(item.QueueItemID, fmt.Sprintf("flushed queued message %d", index))
-		operations = append(operations, clientui.RuntimeOperationRef{
-			Kind:            clientui.RuntimeOperationKindQueuedMessage,
-			ClientRequestID: mustTranscriptClientRequestID(item.ClientRequestID, fmt.Sprintf("flushed queued message %d", index)),
-			QueueItemID:     &queueItemID,
-		})
+		mustTranscriptQueueItemID(item.QueueItemID, fmt.Sprintf("flushed queued message %d", index))
 	}
 	flushed := clientui.TranscriptUserMessageFlushed{
-		StepID:     mustTranscriptStepID(evt.StepID, "user-message flush"),
-		Operations: operations,
+		StepID: mustTranscriptStepID(evt.StepID, "user-message flush"),
 	}
 	return []clientui.TranscriptEvent{clientui.NewTranscriptEvent(flushed)}
 }
@@ -948,14 +939,6 @@ func mustTranscriptAssistantStreamID(raw *uuid.UUID, owner string) runtimeids.As
 	id, err := runtimeids.ParseAssistantStreamID(raw.String())
 	if err != nil {
 		panic(fmt.Sprintf("%s has invalid assistant stream id %q: %v", owner, raw.String(), err))
-	}
-	return id
-}
-
-func mustTranscriptClientRequestID(raw string, owner string) runtimeids.RuntimeClientRequestID {
-	id, err := runtimeids.ParseRuntimeClientRequestID(strings.TrimSpace(raw))
-	if err != nil {
-		panic(fmt.Sprintf("%s has invalid client request id %q: %v", owner, raw, err))
 	}
 	return id
 }

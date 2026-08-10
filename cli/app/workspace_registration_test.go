@@ -15,6 +15,7 @@ import (
 	"core/server/metadata"
 	"core/server/projectview"
 	"core/server/runtime"
+	"core/server/runtimecommand"
 	"core/server/session"
 	serverstartup "core/server/startup"
 	"core/server/tools"
@@ -217,6 +218,9 @@ func newAppRuntimeEngineWithStore(t *testing.T, store *session.Store, client llm
 	}
 	if cfg.GlobalConfigDir == "" {
 		cfg.GlobalConfigDir = t.TempDir()
+	}
+	if cfg.RuntimeEvents == nil {
+		cfg.RuntimeEvents = runtimecommand.NewQueue(t.Context())
 	}
 	eventLog, err := store.MaterializeEventLog()
 	if err != nil {

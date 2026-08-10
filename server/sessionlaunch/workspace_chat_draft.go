@@ -11,7 +11,6 @@ import (
 	"core/server/launch"
 	"core/server/llm"
 	"core/server/metadata"
-	"core/server/requestmemo"
 	"core/server/runtime"
 	"core/shared/config"
 	"core/shared/serverapi"
@@ -43,14 +42,14 @@ type workspaceChatDraftPersistence interface {
 type WorkspaceChatDraftInputResolver func(context.Context) (WorkspaceChatDraftResolverInput, error)
 type WorkspaceChatDraftOwner struct {
 	persistence workspaceChatDraftPersistence
-	lanes       *requestmemo.MutationLaneRegistry[string]
+	lanes       *metadata.MutationLaneRegistry[string]
 }
 
 func NewWorkspaceChatDraftOwner(p workspaceChatDraftPersistence) *WorkspaceChatDraftOwner {
 	if p == nil {
 		return nil
 	}
-	return &WorkspaceChatDraftOwner{persistence: p, lanes: requestmemo.NewMutationLaneRegistry[string]()}
+	return &WorkspaceChatDraftOwner{persistence: p, lanes: metadata.NewMutationLaneRegistry[string]()}
 }
 func (o *WorkspaceChatDraftOwner) workspaceID(id string) (string, error) {
 	if o == nil || o.persistence == nil || o.lanes == nil {

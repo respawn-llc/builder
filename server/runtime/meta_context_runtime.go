@@ -313,10 +313,6 @@ func roleOrUser(role *llm.Role) llm.Role {
 	return *role
 }
 
-func (e *Engine) compactionReinjectedMetaMessages(ctx context.Context) ([]llm.Message, error) {
-	return e.compactionReinjectedMetaMessagesForMode(ctx, compactionModeManual)
-}
-
 func (e *Engine) compactionReinjectedMetaMessagesForMode(ctx context.Context, mode compactionMode) ([]llm.Message, error) {
 	meta := e.store.Meta()
 	skillPolicy, err := e.reconstructionSkillPolicy(ctx)

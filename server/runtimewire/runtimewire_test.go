@@ -98,7 +98,10 @@ func TestRuntimeWiringSnapshotsActiveDebugSettingForToolCompletionMismatch(t *te
 		nil,
 		nil,
 		nil,
-		RuntimeWiringOptions{FilesystemContext: runtimeWireFilesystemContext(t, root), Client: client},
+		clientFactoryRuntimeWiringOptions(t, RuntimeWiringOptions{
+			FilesystemContext: runtimeWireFilesystemContext(t, root),
+			Client:            client,
+		}),
 	)
 	if err != nil {
 		t.Fatalf("NewRuntimeWiringWithBackground: %v", err)
@@ -880,7 +883,10 @@ func TestRuntimeWiringExecCommandUsesEffectiveBuiltinInsteadOfBootstrapNone(t *t
 		nil,
 		nil,
 		background,
-		RuntimeWiringOptions{FilesystemContext: runtimeWireFilesystemContext(t, root), Client: &runtimewireCaptureClient{}},
+		clientFactoryRuntimeWiringOptions(t, RuntimeWiringOptions{
+			FilesystemContext: runtimeWireFilesystemContext(t, root),
+			Client:            &runtimewireCaptureClient{},
+		}),
 	)
 	if err != nil {
 		t.Fatalf("NewRuntimeWiringWithBackground: %v", err)
@@ -917,7 +923,10 @@ func TestRuntimeWiringExecCommandUsesEffectiveHookAcrossWorkspaceRebind(t *testi
 		nil,
 		nil,
 		background,
-		RuntimeWiringOptions{FilesystemContext: runtimeWireFilesystemContext(t, rootA), Client: &runtimewireCaptureClient{}},
+		clientFactoryRuntimeWiringOptions(t, RuntimeWiringOptions{
+			FilesystemContext: runtimeWireFilesystemContext(t, rootA),
+			Client:            &runtimewireCaptureClient{},
+		}),
 	)
 	if err != nil {
 		t.Fatalf("NewRuntimeWiringWithBackground: %v", err)

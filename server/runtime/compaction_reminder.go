@@ -60,10 +60,6 @@ func (c compactionReminderCoordinator) maybeAppend(ctx context.Context, stepID s
 	return e.persistCompactionSoonReminderIssued(true)
 }
 
-func (e *Engine) estimatedToolCallsUntilForcedHandoff() int {
-	return e.compactionPlannerState().estimatedToolCallsUntilForcedHandoff(e.compactionPlanningSnapshot())
-}
-
 func (e *Engine) persistCompactionSoonReminderIssued(issued bool) error {
 	e.compactionRuntimeState().SetSoonReminderIssued(issued)
 	return e.store.SetCompactionSoonReminderIssued(issued)

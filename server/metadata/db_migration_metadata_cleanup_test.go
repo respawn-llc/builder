@@ -235,16 +235,16 @@ WHERE id = 'session-parent-null'
 	if previousSessionID.Valid {
 		t.Fatalf("migrated previous session id = %+v, want NULL absence", previousSessionID)
 	}
-	var promptText string
+	var promptCount int
 	if err := store.db.QueryRowContext(t.Context(), `
-SELECT text
+SELECT COUNT(*)
 FROM session_prompt_history_entries
 WHERE session_id = 'session-parent-null'
-`).Scan(&promptText); err != nil {
-		t.Fatalf("query migrated prompt history: %v", err)
+`).Scan(&promptCount); err != nil {
+		t.Fatalf("count migrated prompt history: %v", err)
 	}
-	if promptText != "legacy prompt" {
-		t.Fatalf("migrated prompt history = %q, want legacy prompt", promptText)
+	if promptCount != 0 {
+		t.Fatalf("migrated prompt history rows = %d, want approved destructive identity cut", promptCount)
 	}
 }
 

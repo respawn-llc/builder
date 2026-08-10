@@ -104,7 +104,10 @@ func TestCompactionSoonReminderStaysSingleShotAfterReEnablingAutoCompactionAbove
 	}
 	eng.setLastUsage(llm.Usage{InputTokens: 890, WindowTokens: 2_000})
 
-	changed, enabled := eng.SetAutoCompactionEnabled(false)
+	changed, enabled, err := eng.SetAutoCompactionEnabled(false)
+	if err != nil {
+		t.Fatalf("SetAutoCompactionEnabled(false): %v", err)
+	}
 	if !changed || enabled {
 		t.Fatalf("expected auto compaction toggle off, changed=%v enabled=%v", changed, enabled)
 	}
@@ -117,7 +120,10 @@ func TestCompactionSoonReminderStaysSingleShotAfterReEnablingAutoCompactionAbove
 		t.Fatalf("expected only seed entry while disabled, got %+v", snap.Entries)
 	}
 
-	changed, enabled = eng.SetAutoCompactionEnabled(true)
+	changed, enabled, err = eng.SetAutoCompactionEnabled(true)
+	if err != nil {
+		t.Fatalf("SetAutoCompactionEnabled(true): %v", err)
+	}
 	if !changed || !enabled {
 		t.Fatalf("expected auto compaction toggle on, changed=%v enabled=%v", changed, enabled)
 	}
@@ -173,7 +179,7 @@ func TestReopenedSessionRestoresCompactionSoonReminderIssuedState(t *testing.T) 
 	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
-	if err := eng.steer("step-1", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeCompactionSoonReminder), Content: textutil.Value(prompts.RenderCompactionSoonReminderPrompt(false, eng.estimatedToolCallsUntilForcedHandoff()))}})); err != nil {
+	if err := eng.steer("step-1", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeCompactionSoonReminder), Content: textutil.Value(prompts.RenderCompactionSoonReminderPrompt(false, eng.compactionPlannerState().estimatedToolCallsUntilForcedHandoff(eng.compactionPlanningSnapshot())))}})); err != nil {
 		t.Fatalf("append reminder: %v", err)
 	}
 
@@ -332,7 +338,10 @@ func TestCompactionSoonReminderSkipsPreciseCountingWhenSuppressed(t *testing.T) 
 			eng.compactionRuntimeState().SetSoonReminderIssued(true)
 
 			if tt.disableAuto {
-				changed, enabled := eng.SetAutoCompactionEnabled(false)
+				changed, enabled, err := eng.SetAutoCompactionEnabled(false)
+				if err != nil {
+					t.Fatalf("SetAutoCompactionEnabled: %v", err)
+				}
 				if !changed || enabled {
 					t.Fatalf("expected auto compaction toggle off, changed=%v enabled=%v", changed, enabled)
 				}

@@ -18,9 +18,11 @@ const (
 )
 
 type worktreeOriginCaptureRemote struct {
-	enter  *serverapi.WorktreeEnterRequest
-	leave  *serverapi.WorktreeLeaveRequest
-	delete *serverapi.WorktreeDeleteRequest
+	createResolveCalls int
+	createRequests     []serverapi.WorktreeCreateRequest
+	enter              *serverapi.WorktreeEnterRequest
+	leave              *serverapi.WorktreeLeaveRequest
+	delete             *serverapi.WorktreeDeleteRequest
 }
 
 func (*worktreeOriginCaptureRemote) GetWorktreeStatus(context.Context, serverapi.WorktreeStatusRequest) (serverapi.WorktreeStatusResponse, error) {
@@ -31,12 +33,18 @@ func (*worktreeOriginCaptureRemote) ListWorktrees(context.Context, serverapi.Wor
 	return serverapi.WorktreeListResponse{}, errors.New("unexpected worktree list request")
 }
 
-func (*worktreeOriginCaptureRemote) ResolveWorktreeCreateTarget(context.Context, serverapi.WorktreeCreateTargetResolveRequest) (serverapi.WorktreeCreateTargetResolveResponse, error) {
-	return serverapi.WorktreeCreateTargetResolveResponse{}, errors.New("unexpected worktree create target request")
+func (r *worktreeOriginCaptureRemote) ResolveWorktreeCreateTarget(context.Context, serverapi.WorktreeCreateTargetResolveRequest) (serverapi.WorktreeCreateTargetResolveResponse, error) {
+	r.createResolveCalls++
+	return serverapi.WorktreeCreateTargetResolveResponse{
+		Resolution: serverapi.WorktreeCreateTargetResolution{
+			Kind: serverapi.WorktreeCreateTargetResolutionKindNewBranch,
+		},
+	}, nil
 }
 
-func (*worktreeOriginCaptureRemote) CreateWorktree(context.Context, serverapi.WorktreeCreateRequest) (serverapi.WorktreeCreateResponse, error) {
-	return serverapi.WorktreeCreateResponse{}, errors.New("unexpected worktree create request")
+func (r *worktreeOriginCaptureRemote) CreateWorktree(_ context.Context, request serverapi.WorktreeCreateRequest) (serverapi.WorktreeCreateResponse, error) {
+	r.createRequests = append(r.createRequests, request)
+	return serverapi.WorktreeCreateResponse{}, nil
 }
 
 func (r *worktreeOriginCaptureRemote) EnterWorktree(_ context.Context, request serverapi.WorktreeEnterRequest) (serverapi.WorktreeScheduledAcknowledgement, error) {
@@ -106,6 +114,37 @@ func TestWorktreeTransitionCommandsDeriveOneRuntimeOrigin(t *testing.T) {
 		if header.Origin == nil || header.Origin.RunID != worktreeOriginTestRunID || header.Origin.StepID != worktreeOriginTestStepID {
 			t.Fatalf("transition header origin = %+v", header.Origin)
 		}
+	}
+}
+
+func TestWorktreeCreateCommandSendsOneSetupOperation(t *testing.T) {
+	remote := &worktreeOriginCaptureRemote{}
+	replaceWorktreeOriginRemote(t, remote)
+	t.Setenv(sessionenv.SessionIDEnv, "shell-session")
+
+	var stdout, stderr bytes.Buffer
+	if exitCode := worktreeCreateSubcommand(
+		[]string{"--json", "feature/create-once"},
+		&stdout,
+		&stderr,
+	); exitCode != 0 {
+		t.Fatalf("exit=%d stderr=%s", exitCode, stderr.String())
+	}
+	if remote.createResolveCalls != 1 || len(remote.createRequests) != 1 {
+		t.Fatalf(
+			"create calls = resolve:%d send:%d, want one each",
+			remote.createResolveCalls,
+			len(remote.createRequests),
+		)
+	}
+	request := remote.createRequests[0]
+	if err := request.SetupOperationID.Validate(); err != nil {
+		t.Fatalf("setup operation ID = %q: %v", request.SetupOperationID, err)
+	}
+	if request.SessionID != "shell-session" ||
+		request.BranchName != "feature/create-once" ||
+		!request.CreateBranch {
+		t.Fatalf("create request = %+v", request)
 	}
 }
 
@@ -188,6 +227,7 @@ func TestExternalWorktreeTransitionCommandsHaveNoRuntimeOrigin(t *testing.T) {
 func TestWorktreeDeleteForceBranchRequestsAuthoritativeForceCleanup(t *testing.T) {
 	remote := &worktreeOriginCaptureRemote{}
 	replaceWorktreeOriginRemote(t, remote)
+	t.Setenv(sessionenv.SessionIDEnv, "")
 	unsetWorktreeOriginEnvironment(t)
 
 	var stdout, stderr bytes.Buffer
@@ -211,6 +251,7 @@ func TestWorktreeDeleteForceBranchRequestsAuthoritativeForceCleanup(t *testing.T
 func TestWorktreeDeleteForceBranchRequiresDeleteBranch(t *testing.T) {
 	remote := &worktreeOriginCaptureRemote{}
 	replaceWorktreeOriginRemote(t, remote)
+	t.Setenv(sessionenv.SessionIDEnv, "")
 	unsetWorktreeOriginEnvironment(t)
 
 	var stdout, stderr bytes.Buffer

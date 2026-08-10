@@ -12,13 +12,11 @@ import (
 	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/config"
-	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 	"core/shared/textutil"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/google/uuid"
 )
 
 type backParentPrefillScenarioServer interface {
@@ -143,10 +141,9 @@ func TestRemoteBackRebindsToParentProjectBeforeRuntimePreparation(t *testing.T) 
 	if _, err := sourceServer.SessionLifecycleClient().RetargetSessionWorkspace(
 		context.Background(),
 		serverapi.SessionRetargetWorkspaceRequest{
-			ClientRequestID: uuid.NewString(),
-			SessionID:       parent.Meta().SessionID,
-			WorkspaceRoot:   workspaceB,
-			ProjectID:       &targetProjectID,
+			SessionID:     parent.Meta().SessionID,
+			WorkspaceRoot: workspaceB,
+			ProjectID:     &targetProjectID,
 		},
 	); err != nil {
 		t.Fatalf("move parent to target project: %v", err)
@@ -305,9 +302,8 @@ func runBackParentPrefillScenario(t *testing.T, server backParentPrefillScenario
 			_, err = server.SessionLifecycleClient().PersistInputDraft(
 				context.Background(),
 				serverapi.SessionPersistInputDraftRequest{
-					ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
-					SessionID:       parent.Meta().SessionID,
-					Input:           "conflicting parent draft",
+					SessionID: parent.Meta().SessionID,
+					Input:     "conflicting parent draft",
 					RecoveryBuffers: []serverapi.SessionDraftRecoveryBuffer{
 						{
 							Kind: serverapi.SessionDraftRecoveryBufferPendingInjectedInput,

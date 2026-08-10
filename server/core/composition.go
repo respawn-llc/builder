@@ -20,9 +20,7 @@ import (
 	"core/server/promptcontrol"
 	"core/server/registry"
 	"core/server/runtime"
-	"core/server/runtimecommand"
 	"core/server/runtimecontrol"
-	"core/server/runtimeops"
 	"core/server/runtimewire"
 	"core/server/serverstatus"
 	"core/server/sessionruntime"
@@ -119,7 +117,6 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 			}
 		},
 		ResourceLifecycle: runtimeRegistry,
-		StepLifecycle:     authorityStepLifecycle{registry: runtimeRegistry},
 		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
 			if workflowController != nil {
 				workflowController.ExecutionFinalized(scope)
@@ -175,17 +172,12 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	projectService.WithRuntimeAuthority(runtimeAuthority)
 	sessionStoreResolver := registry.NewGlobalPersistenceSessionResolver(cfg.PersistenceRoot, storeOptions...)
 	promptControlService := promptcontrol.NewPromptControlService(authorityPromptResponder{authority: runtimeAuthority})
-	runtimeOperations := runtimeops.NewCoordinator()
-	runtimeRegistry.WithOperationCoordinator(runtimeOperations)
 	runtimeRegistry.WithExecutionTargetResolver(metadataStore.ResolveOptionalSessionExecutionTarget)
 	if runtimeSupport.Background != nil {
 		runtimeRegistry.WithBackgroundProcessSnapshots(runtimeSupport.Background.List)
 	}
-	runtimeCommandExecution := runtimecommand.NewExecutionAdapter(runtimeAuthority)
-	runtimeGoalAuthority := runtimecommand.NewGoalAuthority(runtimeAuthority, runtimeCommandExecution)
-	runtimeControlService := runtimecontrol.NewServiceWithGoalCommands(runtimeAuthority, runtimeCommandExecution, runtimeGoalAuthority).
+	runtimeControlService := runtimecontrol.NewService(runtimeAuthority).
 		WithRuntimeActivityResolver(runtimeRegistry).
-		WithOperationCoordinator(runtimeOperations).
 		WithPromptHistoryStore(metadataStore).
 		WithWorkflowTaskSessionResolver(metadataStore).
 		WithPersistedSessionResolver(metadataStore).
@@ -212,7 +204,6 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		WithExecutionEnvironmentConfig(cfg).
 		WithExecutionEnvironmentAuth(authStatusService).
 		WithExecutionEnvironmentGit(gitInspector).
-		WithOperationCoordinator(runtimeOperations).
 		WithCacheWarningMode(cfg.Settings.CacheWarningMode)
 	sessionWorkspaceRetargeter := sessionservice.NewSessionWorkspaceRetargeter(metadataStore, runtimeAuthority, runtimeRegistry, runtimeSupport.Background)
 	sessionLifecycleService := sessionservice.NewGlobalSessionLifecycleService(cfg.PersistenceRoot, runtimeAuthority, authSupport.AuthManager).
@@ -599,18 +590,6 @@ func (r authorityPromptResponder) ResolvePromptBatch(
 	commands []sessionruntime.PromptAnswerCommand,
 ) ([]sessionruntime.PromptAnswerResult, error) {
 	return r.authority.ResolvePromptBatch(ctx, sessionID, stepID, commands)
-}
-
-type authorityStepLifecycle struct {
-	registry *registry.RuntimeRegistry
-}
-
-func (s authorityStepLifecycle) StepBegan(ctx context.Context, resource sessionruntime.AgentResourceDescriptor, snapshot runtime.StepLifecycleSnapshot) error {
-	return runtimewire.NewStepLifecycleSink(resource.Ref.SessionID().String(), s.registry).StepBegan(ctx, snapshot)
-}
-
-func (s authorityStepLifecycle) StepEnded(ctx context.Context, resource sessionruntime.AgentResourceDescriptor, snapshot runtime.StepLifecycleSnapshot) error {
-	return runtimewire.NewStepLifecycleSink(resource.Ref.SessionID().String(), s.registry).StepEnded(ctx, snapshot)
 }
 
 type workflowViewPendingPromptSource struct {

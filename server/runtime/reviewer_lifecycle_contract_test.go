@@ -44,6 +44,7 @@ func TestDefaultStepExecutorOwnsReviewerLifecycleAndPropagatesFatalError(t *test
 		phase:    engine.phaseProtocol,
 		reviewer: reviewer,
 		messages: engine.messageFlow,
+		tools:    engine.toolFlow,
 	}
 
 	_, err := engine.runStepLoopWithOptions(
@@ -76,69 +77,6 @@ func TestDefaultStepExecutorOwnsReviewerLifecycleAndPropagatesFatalError(t *test
 	}
 	if completedIndex <= startIndex {
 		t.Fatalf("Reviewer completion did not follow start: events=%+v", events)
-	}
-}
-
-func TestReviewerStartPublicationFailureDoesNotEmitCompletionOrLeaveState(t *testing.T) {
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
-	var events []Event
-	engine.cfg.OnEvent = func(event Event) {
-		events = append(events, event)
-	}
-	engine.eventLog = session.MaterializedEventLog{}
-
-	err := engine.steer("11111111-1111-4111-8111-111111111111", steerEventIntent(Event{
-		Kind: EventReviewerStarted, StepID: "11111111-1111-4111-8111-111111111111",
-	}))
-	if err == nil {
-		t.Fatal("Reviewer start publication unexpectedly succeeded")
-	}
-	if engine.reviewerRuntimeState().ActiveStepSnapshot() != nil {
-		t.Fatal("failed Reviewer start left active runtime state")
-	}
-	for _, event := range events {
-		if event.Kind == EventReviewerCompleted {
-			t.Fatalf("failed Reviewer start emitted unmatched completion: %+v", events)
-		}
-	}
-}
-
-func TestReviewerLifecycleCallbacksObserveMatchingState(t *testing.T) {
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
-	stepID := "11111111-1111-4111-8111-111111111111"
-	engine.cfg.OnEvent = func(event Event) {
-		switch event.Kind {
-		case EventReviewerStarted:
-			if active := engine.reviewerRuntimeState().ActiveStepSnapshot(); active == nil || active.StepID != stepID {
-				t.Fatalf("Started callback observed Reviewer state %+v", active)
-			}
-		case EventReviewerCompleted:
-			if active := engine.reviewerRuntimeState().ActiveStepSnapshot(); active != nil {
-				t.Fatalf("Completed callback observed active Reviewer state %+v", active)
-			}
-		}
-	}
-	if err := engine.steer(stepID, steerEventIntent(Event{Kind: EventReviewerStarted, StepID: stepID})); err != nil {
-		t.Fatalf("publish Reviewer start: %v", err)
-	}
-	if err := engine.steer(stepID, steerEventIntent(Event{Kind: EventReviewerCompleted, StepID: stepID})); err != nil {
-		t.Fatalf("publish Reviewer completion: %v", err)
-	}
-}
-
-func TestReviewerCompletionPublicationFailureClearsState(t *testing.T) {
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
-	stepID := "11111111-1111-4111-8111-111111111111"
-	if err := engine.steer(stepID, steerEventIntent(Event{Kind: EventReviewerStarted, StepID: stepID})); err != nil {
-		t.Fatalf("publish Reviewer start: %v", err)
-	}
-	engine.eventLog = session.MaterializedEventLog{}
-	executor := &defaultStepExecutor{engine: engine}
-	if err := executor.terminalizeReviewerLifecycle(stepID, nil); err == nil {
-		t.Fatal("completion publication unexpectedly succeeded")
-	}
-	if active := engine.reviewerRuntimeState().ActiveStepSnapshot(); active != nil {
-		t.Fatalf("completion publication failure left Reviewer active: %+v", active)
 	}
 }
 
@@ -212,6 +150,7 @@ func TestReviewerFactCommitFenceRunsThroughCallerLifecycle(t *testing.T) {
 					engine.stepFlow = &defaultStepExecutor{
 						engine: engine, phase: engine.phaseProtocol, reviewer: pipeline,
 						messages: engine.messageFlow,
+						tools:    engine.toolFlow,
 					}
 					_, runErr := engine.runStepLoopWithOptions(context.Background(), "11111111-1111-4111-8111-111111111111", "all", &fakeClient{}, false)
 					if blocker != nil {
