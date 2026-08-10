@@ -21,6 +21,7 @@ import (
 	"core/server/metadata"
 	"core/server/registry"
 	agentruntime "core/server/runtime"
+	"core/server/runtimecommand"
 	"core/server/runtimecontrol"
 	"core/server/runtimewire"
 	"core/server/session"
@@ -31,8 +32,10 @@ import (
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
 	"core/server/workflowview"
+	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/runtimeids"
+	"core/shared/runtimeinput"
 	"core/shared/serverapi"
 	"core/shared/textutil"
 	"core/shared/toolspec"
@@ -2319,6 +2322,67 @@ func waitForRetainedSessionExact(
 		return live
 	}, "retained Session %s did not register an Exact", sessionID)
 	return exact
+}
+
+func TestAttachedUserTurnUsesRealWorkflowStarterProfile(t *testing.T) {
+	f, _, sessionID := newInterruptedRetainedActivationFixture(t)
+	binding, found, err := f.store.ResolveDirectSessionCurrentNodeBinding(context.Background(), sessionID)
+	if err != nil || !found {
+		t.Fatalf("resolve retained Current Node binding: found=%t error=%v", found, err)
+	}
+	currentNode := binding.CurrentNode
+	client, ok := f.client.(*restartResumeClient)
+	if !ok {
+		t.Fatalf("fixture client = %T, want restartResumeClient", f.client)
+	}
+	attachedStarted := make(chan struct{}, 1)
+	client.setBegan(attachedStarted)
+	f.authority.WithWorkflowSessionOrdinaryStartGuard(f.controller)
+	execution := runtimecommand.NewExecutionAdapter(f.authority, f.controller)
+	service := runtimecontrol.NewServiceWithGoalCommands(
+		f.authority,
+		execution,
+		runtimecommand.NewGoalAuthority(f.authority, execution),
+	).
+		WithPersistedSessionResolver(f.metadata).
+		WithWorkflowTaskSessionResolver(f.metadata).
+		WithPromptHistoryStore(f.metadata)
+	submitRef := clientui.RuntimeOperationRef{
+		Kind:            clientui.RuntimeOperationKindSubmit,
+		ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
+	}
+	preCompactRef := clientui.RuntimeOperationRef{
+		Kind:            clientui.RuntimeOperationKindPreSubmitCompact,
+		ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := service.SubmitUserTurn(context.Background(), serverapi.RuntimeSubmitUserTurnRequest{
+			ClientRequestID:                 submitRef.ClientRequestID.String(),
+			SessionID:                       sessionID.String(),
+			Input:                           runtimeinput.Text("continue through the retained Workflow Run"),
+			OperationRef:                    submitRef,
+			PreSubmitCompactionOperationRef: preCompactRef,
+		})
+		done <- err
+	}()
+	select {
+	case <-attachedStarted:
+	case <-time.After(currentNodeRunnerWait):
+		t.Fatal("attached user turn did not reach the real Workflow Starter profile")
+	}
+	exact, live := f.authority.SessionExecution(sessionID)
+	if !live {
+		t.Fatal("attached user turn has no Exact execution")
+	}
+	workflowRef, workflowOwned := exact.Scope().Workflow()
+	if !workflowOwned || !workflowRef.CurrentNode.Equal(currentNode) {
+		t.Fatalf("attached user turn Exact Workflow = (%+v, %t), want %v", workflowRef, workflowOwned, currentNode)
+	}
+	exact.RequestStop()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("attached user turn error = %v, want context canceled", err)
+	}
 }
 
 func newInterruptedRetainedActivationFixture(

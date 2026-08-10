@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"core/server/runtimecommand"
 	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowruntime"
@@ -137,7 +138,8 @@ func (c *CurrentNodeController) StartTask(
 }
 
 func (c *CurrentNodeController) ResumeTask(ctx context.Context, taskID workflow.TaskID) ([]workflow.CurrentNode, error) {
-	return c.resumeTask(ctx, taskID, nil)
+	resumed, _, err := c.resumeTaskConfigured(ctx, taskID, nil, nil, nil)
+	return resumed, err
 }
 
 func (c *CurrentNodeController) ResumeTaskWithPreparation(
@@ -148,7 +150,8 @@ func (c *CurrentNodeController) ResumeTaskWithPreparation(
 	if preparation == nil {
 		return nil, errors.New("task resume preparation is required")
 	}
-	return c.resumeTask(ctx, taskID, preparation)
+	resumed, _, err := c.resumeTaskConfigured(ctx, taskID, preparation, nil, nil)
+	return resumed, err
 }
 
 type TaskResumeConflictError struct {
@@ -164,8 +167,31 @@ func (c *CurrentNodeController) resumeTask(
 	taskID workflow.TaskID,
 	preparation TaskStartPreparation,
 ) ([]workflow.CurrentNode, error) {
+	resumed, _, err := c.resumeTaskConfigured(ctx, taskID, preparation, nil, nil)
+	return resumed, err
+}
+
+func (c *CurrentNodeController) resumeTaskWithOperation(
+	ctx context.Context,
+	taskID workflow.TaskID,
+	reference workflow.CurrentNodeReference,
+	driver runtimecommand.SessionAgentOperationDriver,
+) ([]workflow.CurrentNode, *currentNodeRun, error) {
+	if driver == nil {
+		return nil, nil, errors.New("attached Session operation driver is required")
+	}
+	return c.resumeTaskConfigured(ctx, taskID, nil, &reference, driver)
+}
+
+func (c *CurrentNodeController) resumeTaskConfigured(
+	ctx context.Context,
+	taskID workflow.TaskID,
+	preparation TaskStartPreparation,
+	operationReference *workflow.CurrentNodeReference,
+	driver runtimecommand.SessionAgentOperationDriver,
+) ([]workflow.CurrentNode, *currentNodeRun, error) {
 	if c == nil {
-		return nil, errors.New("current node workflow controller is required")
+		return nil, nil, errors.New("current node workflow controller is required")
 	}
 	if preparation != nil {
 		var once sync.Once
@@ -179,6 +205,7 @@ func (c *CurrentNodeController) resumeTask(
 		}
 	}
 	var resolution workflowstore.TaskAttentionResolution
+	var operationRun *currentNodeRun
 	resumed, err := RunTaskMutation(ctx, c.taskMutations, taskID, func(ctx context.Context) ([]workflow.CurrentNode, error) {
 		c.mu.Lock()
 		if err := c.ensureTaskAvailableLocked(taskID); err != nil {
@@ -215,6 +242,25 @@ func (c *CurrentNodeController) resumeTask(
 			c.mu.Unlock()
 			return nil, errors.Join(err, prepared.Rollback())
 		}
+		if operationReference != nil {
+			for _, runID := range runIDs {
+				run := c.runs[runID]
+				if run != nil && run.reference.Equal(*operationReference) {
+					run.operation = driver
+					run.operationResult = make(chan currentNodeOperationResult, 1)
+					operationRun = run
+					break
+				}
+			}
+			if operationRun == nil {
+				c.discardStagedRunsLocked(runIDs)
+				c.mu.Unlock()
+				return nil, errors.Join(
+					fmt.Errorf("resumed Current Nodes do not include attached Session binding %v", *operationReference),
+					prepared.Rollback(),
+				)
+			}
+		}
 		if err := c.commitStagedRunsLocked(prepared, runIDs); err != nil {
 			c.mu.Unlock()
 			return nil, err
@@ -225,7 +271,7 @@ func (c *CurrentNodeController) resumeTask(
 		return result.CreatedExecutableCurrentNodes, nil
 	})
 	c.finalizeTaskAttentionResolution(resolution)
-	return resumed, err
+	return resumed, operationRun, err
 }
 
 func (c *CurrentNodeController) currentTaskRunNodesLocked(taskID workflow.TaskID) []workflow.CurrentNode {

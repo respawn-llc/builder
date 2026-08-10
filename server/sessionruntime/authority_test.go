@@ -3268,6 +3268,82 @@ func workflowExecutionRefForTestPointer(
 	return &ref
 }
 
+type retainedWorkflowOrdinaryStartGuard struct {
+	err   error
+	calls int
+}
+
+func (g *retainedWorkflowOrdinaryStartGuard) GuardOrdinaryAgentStart(
+	_ context.Context,
+	_ runtimeids.SessionID,
+) error {
+	g.calls++
+	return g.err
+}
+
+func TestAuthorityRejectsLeaseLessStartForRetainedWorkflowSession(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("parse session id: %v", err)
+	}
+	guard := &retainedWorkflowOrdinaryStartGuard{err: ErrWorkflowSessionRoutingRequired}
+	authority := NewAuthority(AuthorityOptions{PersistenceRoot: fixture.config.PersistenceRoot})
+	authority.WithWorkflowSessionOrdinaryStartGuard(guard)
+	t.Cleanup(func() { _ = authority.Close(context.Background()) })
+
+	_, err = authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+		Descriptor: mustOpenSessionDescriptor(t, sessionID),
+		Resource:   CurrentAgentResource{},
+		Runner:     func(context.Context, ExecutionScope, AgentRuntimeBridge) error { return nil },
+	})
+	if !errors.Is(err, ErrWorkflowSessionRoutingRequired) {
+		t.Fatalf("start error = %v, want %v", err, ErrWorkflowSessionRoutingRequired)
+	}
+	if guard.calls != 1 {
+		t.Fatalf("guard calls = %d, want 1", guard.calls)
+	}
+	if _, live := authority.SessionExecution(sessionID); live {
+		t.Fatal("rejected lease-less start created an Agent execution")
+	}
+}
+
+func TestAuthorityWorkflowLeaseBypassesOrdinaryStartGuard(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("parse session id: %v", err)
+	}
+	guard := &retainedWorkflowOrdinaryStartGuard{err: ErrWorkflowSessionRoutingRequired}
+	authority := NewAuthority(AuthorityOptions{PersistenceRoot: fixture.config.PersistenceRoot})
+	authority.WithWorkflowSessionOrdinaryStartGuard(guard)
+	t.Cleanup(func() { _ = authority.Close(context.Background()) })
+	reference := workflow.CurrentNodeReference{
+		TaskID: "task-guard-workflow",
+		NodeID: "node-guard-workflow",
+	}
+	lease, err := authority.NewWorkflowExecutionLease(WorkflowExecutionRef{
+		ProjectID:   "project-guard-workflow",
+		WorkflowID:  authorityWorkflowID(t, "test"),
+		CurrentNode: reference,
+	})
+	if err != nil {
+		t.Fatalf("new Workflow lease: %v", err)
+	}
+	_, err = authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+		Descriptor: mustOpenSessionDescriptor(t, sessionID),
+		Workflow:   &lease,
+		Resource:   CurrentAgentResource{},
+		Runner:     func(context.Context, ExecutionScope, AgentRuntimeBridge) error { return nil },
+	})
+	if errors.Is(err, ErrWorkflowSessionRoutingRequired) {
+		t.Fatalf("Workflow start reached ordinary-start guard: %v", err)
+	}
+	if guard.calls != 0 {
+		t.Fatalf("guard calls = %d, want 0 for Workflow lease", guard.calls)
+	}
+}
+
 func authorityTestRuntimePlan(t *testing.T, fixture sessionRuntimeFixture, client llm.Client, onEvent ...func(runtime.Event)) AgentRuntimePlan {
 	settings := fixture.config.Settings
 	settings.Model = "gpt-5"

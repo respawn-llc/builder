@@ -307,7 +307,7 @@ func newGoalAuthorityFixture(
 			t.Errorf("close authority: %v", err)
 		}
 	})
-	return store, authority, NewGoalAuthority(authority, NewExecutionAdapter(authority)), observer
+	return store, authority, NewGoalAuthority(authority, NewExecutionAdapter(authority, nil)), observer
 }
 
 func workflowGoalAuthorityPlan(t *testing.T, workdir string) sessionruntime.AgentRuntimePlan {

@@ -12,11 +12,13 @@ import (
 	"core/server/llm"
 	"core/server/metadata"
 	"core/server/runtime"
+	"core/server/runtimecommand"
 	"core/server/runtimewire"
 	"core/server/session"
 	"core/server/sessionruntime"
 	shelltool "core/server/tools/shell"
 	"core/server/workflow"
+	"core/server/workflowexecution"
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
 	"core/shared/clientui"
@@ -183,6 +185,146 @@ func TestStillOpenDirectlyRetainedWorkflowSessionRoutesAgentStartingOperationsTh
 	}
 }
 
+func TestRetainedWorkflowExactDoesNotAdmitJoinerBeforeOwnerOrdering(t *testing.T) {
+	fixture := newRuntimeControlRetainedWorkflowFixture(t)
+	fixture.client.blockGenerate()
+	exactEntered := make(chan struct{}, 1)
+	releaseOwner := make(chan struct{})
+	fixture.runner.exact = exactEntered
+	fixture.runner.owner = releaseOwner
+
+	firstRef := runtimeControlOperationRef(clientui.RuntimeOperationKindSubmit)
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := fixture.service.SubmitUserTurn(context.Background(), serverapi.RuntimeSubmitUserTurnRequest{
+			ClientRequestID: firstRef.ClientRequestID.String(),
+			SessionID:       fixture.session.Meta().SessionID,
+			Input:           runtimeinput.Text("own the retained Workflow Exact"),
+			OperationRef:    firstRef,
+			PreSubmitCompactionOperationRef: runtimeControlOperationRef(
+				clientui.RuntimeOperationKindPreSubmitCompact,
+			),
+		})
+		firstDone <- err
+	}()
+	select {
+	case <-exactEntered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("attached owner did not reach Exact-before-ordering barrier")
+	}
+
+	secondRef := runtimeControlOperationRef(clientui.RuntimeOperationKindSubmit)
+	secondDone := make(chan error, 1)
+	go func() {
+		_, err := fixture.service.SubmitUserTurn(context.Background(), serverapi.RuntimeSubmitUserTurnRequest{
+			ClientRequestID: secondRef.ClientRequestID.String(),
+			SessionID:       fixture.session.Meta().SessionID,
+			Input:           runtimeinput.Text("join only after owner ordering"),
+			OperationRef:    secondRef,
+			PreSubmitCompactionOperationRef: runtimeControlOperationRef(
+				clientui.RuntimeOperationKindPreSubmitCompact,
+			),
+		})
+		secondDone <- err
+	}()
+	select {
+	case err := <-secondDone:
+		t.Fatalf("joiner returned before owner ordering: %v", err)
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	close(releaseOwner)
+	select {
+	case err := <-secondDone:
+		if err != nil {
+			t.Fatalf("joiner after owner ordering: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("joiner did not proceed after owner ordering")
+	}
+	if execution, live := fixture.authority.SessionExecution(fixture.sessionID); live {
+		execution.RequestStop()
+	}
+	fixture.client.release()
+	select {
+	case <-firstDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("attached owner did not stop")
+	}
+}
+
+func TestRetainedWorkflowLaunchingJoinUsesTheSameExact(t *testing.T) {
+	fixture := newRuntimeControlRetainedWorkflowFixture(t)
+	fixture.client.blockGenerate()
+	launchingEntered := make(chan struct{}, 1)
+	releaseLaunch := make(chan struct{})
+	fixture.runner.launching = launchingEntered
+	fixture.runner.launch = releaseLaunch
+
+	firstRef := runtimeControlOperationRef(clientui.RuntimeOperationKindSubmit)
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := fixture.service.SubmitUserTurn(context.Background(), serverapi.RuntimeSubmitUserTurnRequest{
+			ClientRequestID: firstRef.ClientRequestID.String(),
+			SessionID:       fixture.session.Meta().SessionID,
+			Input:           runtimeinput.Text("create the launching Workflow Run"),
+			OperationRef:    firstRef,
+			PreSubmitCompactionOperationRef: runtimeControlOperationRef(
+				clientui.RuntimeOperationKindPreSubmitCompact,
+			),
+		})
+		firstDone <- err
+	}()
+	select {
+	case <-launchingEntered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("attached owner did not reach launching barrier")
+	}
+
+	secondRef := runtimeControlOperationRef(clientui.RuntimeOperationKindSubmit)
+	secondDone := make(chan error, 1)
+	go func() {
+		_, err := fixture.service.SubmitUserTurn(context.Background(), serverapi.RuntimeSubmitUserTurnRequest{
+			ClientRequestID: secondRef.ClientRequestID.String(),
+			SessionID:       fixture.session.Meta().SessionID,
+			Input:           runtimeinput.Text("join the launching Workflow Run"),
+			OperationRef:    secondRef,
+			PreSubmitCompactionOperationRef: runtimeControlOperationRef(
+				clientui.RuntimeOperationKindPreSubmitCompact,
+			),
+		})
+		secondDone <- err
+	}()
+	select {
+	case err := <-secondDone:
+		t.Fatalf("launching joiner returned before the Exact existed: %v", err)
+	case <-time.After(150 * time.Millisecond):
+	}
+	close(releaseLaunch)
+	select {
+	case err := <-secondDone:
+		if err != nil {
+			t.Fatalf("launching joiner after Exact ordering: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("launching joiner did not proceed through the shared Exact")
+	}
+	execution, live := fixture.authority.SessionExecution(fixture.sessionID)
+	if !live {
+		t.Fatal("launching join did not produce one live Exact")
+	}
+	if _, workflowOwned := execution.Scope().Workflow(); !workflowOwned {
+		t.Fatal("launching join produced a lease-less ordinary Exact")
+	}
+	execution.RequestStop()
+	fixture.client.release()
+	select {
+	case <-firstDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("launching owner did not stop")
+	}
+}
+
 type runtimeControlRetainedWorkflowFixture struct {
 	service     *Service
 	session     *session.Store
@@ -192,6 +334,105 @@ type runtimeControlRetainedWorkflowFixture struct {
 	sessionID   runtimeids.SessionID
 	client      *runtimeControlAuthorityProbeClient
 	background  *shelltool.Manager
+	runner      *runtimeControlAttachedOperationRunner
+}
+
+type runtimeControlWorkflowAssignmentEnsurer struct{}
+
+func (runtimeControlWorkflowAssignmentEnsurer) EnsureCurrentNodeAssignment(
+	context.Context,
+	workflow.CurrentNodeReference,
+	workflowruntime.TaskPromptDelivery,
+) (workflowexecution.CurrentNodeAssignmentEnsure, error) {
+	return runtimeControlWorkflowAssignmentEnsure{}, nil
+}
+
+type runtimeControlWorkflowAssignmentEnsure struct{}
+
+func (runtimeControlWorkflowAssignmentEnsure) CommitReceipt() session.CommitReceipt {
+	return session.CommitReceipt{Committed: true}
+}
+
+type runtimeControlWorkflowFatalReporter struct{}
+
+func (runtimeControlWorkflowFatalReporter) ReportFatal(
+	workflowexecution.LifecycleFatalDiagnostic,
+) workflowexecution.LifecycleFatalReportResult {
+	return workflowexecution.LifecycleFatalReportResult{ShutdownAccepted: true}
+}
+
+func (runtimeControlWorkflowFatalReporter) Available() error { return nil }
+
+type runtimeControlAttachedOperationRunner struct {
+	authority  *sessionruntime.Authority
+	descriptor session.SessionDescriptor
+	launching  chan struct{}
+	launch     <-chan struct{}
+	exact      chan struct{}
+	owner      <-chan struct{}
+}
+
+func (r runtimeControlAttachedOperationRunner) StartCurrentNode(
+	context.Context,
+	workflow.CurrentNodeReference,
+	workflowruntime.TaskPromptDelivery,
+	workflowexecution.CurrentNodeAssignmentEnsure,
+	sessionruntime.WorkflowExecutionLease,
+	workflowruntime.Controller,
+) error {
+	return errors.New("runtimecontrol retained fixture requires an attached-operation profile")
+}
+
+func (r runtimeControlAttachedOperationRunner) StartCurrentNodeWithProfile(
+	ctx context.Context,
+	_ workflow.CurrentNodeReference,
+	_ workflowruntime.TaskPromptDelivery,
+	_ workflowexecution.CurrentNodeAssignmentEnsure,
+	lease sessionruntime.WorkflowExecutionLease,
+	_ workflowruntime.Controller,
+	profile workflowexecution.CurrentNodeAgentLaunchProfile,
+) error {
+	if profile.Operation == nil {
+		return errors.New("runtimecontrol retained fixture received no attached-operation driver")
+	}
+	if r.launching != nil {
+		r.launching <- struct{}{}
+	}
+	if r.launch != nil {
+		select {
+		case <-r.launch:
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		}
+	}
+	_, err := r.authority.StartAgentExecution(ctx, sessionruntime.AgentExecutionRequest{
+		Descriptor: r.descriptor,
+		Workflow:   &lease,
+		Resource:   sessionruntime.CurrentAgentResource{},
+		Runner: func(runCtx context.Context, _ sessionruntime.ExecutionScope, bridge sessionruntime.AgentRuntimeBridge) error {
+			if r.exact != nil {
+				r.exact <- struct{}{}
+			}
+			if r.owner != nil {
+				select {
+				case <-r.owner:
+				case <-runCtx.Done():
+					return context.Cause(runCtx)
+				}
+			}
+			return bridge.WithEngine(runCtx, func(engineCtx context.Context, engine *runtime.Engine) error {
+				outcome, runErr := profile.Operation.StartOwner(engineCtx, engine, profile.OwnerOrdering)
+				if profile.Complete != nil {
+					profile.Complete(outcome, runErr)
+				}
+				if runErr == nil && engine.GoalLoopRunning() {
+					return engine.WaitForGoalLoop(runCtx)
+				}
+				return runErr
+			})
+		},
+	})
+	return err
 }
 
 type runtimeControlAuthorityProbeClient struct {
@@ -370,10 +611,16 @@ func newRuntimeControlRetainedWorkflowFixture(t *testing.T) *runtimeControlRetai
 			t.Errorf("close shell manager: %v", err)
 		}
 	})
+	var controller *workflowexecution.CurrentNodeController
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
 		PersistenceRoot: persistenceRoot,
 		StoreOptions:    metadataStore.AuthoritativeSessionStoreOptions(),
 		Background:      background,
+		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
+			if controller != nil {
+				controller.ExecutionFinalized(scope)
+			}
+		}),
 	})
 	t.Cleanup(func() {
 		if err := authority.Close(context.Background()); err != nil {
@@ -471,6 +718,14 @@ func newRuntimeControlRetainedWorkflowFixture(t *testing.T) *runtimeControlRetai
 	if execution, live := authority.SessionExecution(sessionID); live {
 		t.Fatalf("initial retained Workflow execution remained live after finalization: %+v", execution.Scope())
 	}
+	if err := workflowStore.InterruptCurrentNode(
+		ctx,
+		currentNode,
+		workflow.CurrentNodeInterruptionReason("runtimecontrol_attached_operation_fixture"),
+		workflow.NewCurrentNodeInterruptionDetail("runtimecontrol attached-operation fixture", nil),
+	); err != nil {
+		t.Fatalf("interrupt retained Current Node after initial Exact: %v", err)
+	}
 	var engine *runtime.Engine
 	if err := authority.WithCurrentRuntime(ctx, sessionID, func(_ context.Context, current *runtime.Engine) error {
 		engine = current
@@ -478,7 +733,34 @@ func newRuntimeControlRetainedWorkflowFixture(t *testing.T) *runtimeControlRetai
 	}); err != nil {
 		t.Fatalf("WithCurrentRuntime: %v", err)
 	}
-	service := NewService(authority).
+	taskMutations := workflowexecution.NewTaskMutationCoordinator()
+	attachedRunner := &runtimeControlAttachedOperationRunner{authority: authority, descriptor: descriptor}
+	controller, err = workflowexecution.NewCurrentNodeController(
+		workflowStore,
+		attachedRunner,
+		authority,
+		taskMutations,
+		workflowexecution.CurrentNodeControllerConfig{
+			AgentConcurrency:  1,
+			AssignmentEnsurer: runtimeControlWorkflowAssignmentEnsurer{},
+			LifecycleReporter: runtimeControlWorkflowFatalReporter{},
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewCurrentNodeController: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := controller.Close(); err != nil {
+			t.Errorf("close Current Node controller: %v", err)
+		}
+	})
+	authority.WithWorkflowSessionOrdinaryStartGuard(controller)
+	execution := runtimecommand.NewExecutionAdapter(authority, controller)
+	service := NewServiceWithGoalCommands(
+		authority,
+		execution,
+		runtimecommand.NewGoalAuthority(authority, execution),
+	).
 		WithPersistedSessionResolver(metadataStore).
 		WithWorkflowTaskSessionResolver(metadataStore).
 		WithPromptHistoryStore(metadataStore)
@@ -491,6 +773,7 @@ func newRuntimeControlRetainedWorkflowFixture(t *testing.T) *runtimeControlRetai
 		sessionID:   sessionID,
 		client:      client,
 		background:  background,
+		runner:      attachedRunner,
 	}
 }
 

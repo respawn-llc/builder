@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"go/ast"
+	"go/parser"
+	"go/token"
 	"go/types"
 	"path/filepath"
 	"sort"
@@ -48,6 +50,51 @@ func TestCurrentNodeControlGraphHasOneAuthority(t *testing.T) {
 	findings := analyzeCurrentNodeGoStructure(pkgs)
 	if len(findings) > 0 {
 		t.Fatalf("Current Node authority structure violations:\n%s", formatCurrentNodeStructureFindings(findings))
+	}
+}
+
+func TestAgentExecutionStartsStayBehindApprovedAuthorities(t *testing.T) {
+	repoRoot := findRepoRoot(t)
+	allowedStartAgentExecution := map[string]bool{
+		"server/runprompt/headless.go":                true,
+		"server/sessionruntime/authority_resource.go": true,
+		"server/sessionruntime/execution_target.go":   true,
+		"server/workflowrunner/starter.go":            true,
+	}
+	if err := walkProductionGoFiles(repoRoot, func(path, relPath string) error {
+		fileSet := token.NewFileSet()
+		file, err := parser.ParseFile(fileSet, path, nil, parser.SkipObjectResolution)
+		if err != nil {
+			return err
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			selector, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			switch selector.Sel.Name {
+			case "StartAgentExecution":
+				if !allowedStartAgentExecution[relPath] {
+					t.Errorf("%s:%d starts Agent execution outside an approved authority", relPath, fileSet.Position(selector.Sel.Pos()).Line)
+				}
+			case "RunCurrentAgentExecution":
+				if relPath != "server/runtimecommand/execution.go" {
+					t.Errorf("%s:%d bypasses the canonical attached-operation adapter", relPath, fileSet.Position(selector.Sel.Pos()).Line)
+				}
+			case "RunAgentOperation":
+				if relPath != "server/runtimecontrol/service.go" {
+					t.Errorf("%s:%d calls the attached-operation adapter outside Runtime Control", relPath, fileSet.Position(selector.Sel.Pos()).Line)
+				}
+			}
+			return true
+		})
+		return nil
+	}); err != nil {
+		t.Fatalf("scan Agent execution starts: %v", err)
 	}
 }
 

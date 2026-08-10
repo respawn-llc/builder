@@ -50,13 +50,13 @@ func (s *Service) SetGoal(ctx context.Context, req serverapi.RuntimeGoalSetReque
 		RunID:     strings.TrimSpace(req.RunID),
 		StepID:    strings.TrimSpace(req.StepID),
 	}
-	return memoizedGoalMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq, s.goals, sameGoalSetMemoRequest, func(ctx context.Context) (runtimecommand.GoalCommandResult, error) {
-		return s.goalAuthority.Set(ctx, runtimecommand.GoalSetCommand{
+	return memoizedGoalMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq, s.goals, sameGoalSetMemoRequest, func(ctx context.Context, admit runtimecommand.SessionAgentOperationAdmitter) (runtimecommand.GoalCommandResult, bool, error) {
+		return s.goalAuthority.SetAdmitted(ctx, runtimecommand.GoalSetCommand{
 			SessionID: sessionID,
 			Objective: memoReq.Objective,
 			Actor:     session.GoalActor(memoReq.Actor),
 			Execution: goalExecutionIdentity(memoReq.RunID, memoReq.StepID),
-		})
+		}, admit)
 	})
 }
 
@@ -87,13 +87,13 @@ func (s *Service) setGoalStatus(ctx context.Context, req serverapi.RuntimeGoalSt
 		RunID:     strings.TrimSpace(req.RunID),
 		StepID:    strings.TrimSpace(req.StepID),
 	}
-	return memoizedGoalMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq, s.goalStatuses, sameGoalStatusMemoRequest, func(ctx context.Context) (runtimecommand.GoalCommandResult, error) {
-		return s.goalAuthority.Status(ctx, runtimecommand.GoalStatusCommand{
+	return memoizedGoalMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq, s.goalStatuses, sameGoalStatusMemoRequest, func(ctx context.Context, admit runtimecommand.SessionAgentOperationAdmitter) (runtimecommand.GoalCommandResult, bool, error) {
+		return s.goalAuthority.StatusAdmitted(ctx, runtimecommand.GoalStatusCommand{
 			SessionID: sessionID,
 			Status:    status,
 			Actor:     session.GoalActor(memoReq.Actor),
 			Execution: goalExecutionIdentity(memoReq.RunID, memoReq.StepID),
-		})
+		}, admit)
 	})
 }
 
@@ -121,11 +121,11 @@ func (s *Service) ClearGoal(ctx context.Context, req serverapi.RuntimeGoalClearR
 		return serverapi.RuntimeGoalShowResponse{}, err
 	}
 	memoReq := goalClearMemoRequest{SessionID: sessionID.String(), Actor: strings.TrimSpace(req.Actor)}
-	return memoizedGoalMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq, s.goalClears, sameGoalClearMemoRequest, func(ctx context.Context) (runtimecommand.GoalCommandResult, error) {
-		return s.goalAuthority.Clear(ctx, runtimecommand.GoalClearCommand{
+	return memoizedGoalMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq, s.goalClears, sameGoalClearMemoRequest, func(ctx context.Context, admit runtimecommand.SessionAgentOperationAdmitter) (runtimecommand.GoalCommandResult, bool, error) {
+		return s.goalAuthority.ClearAdmitted(ctx, runtimecommand.GoalClearCommand{
 			SessionID: sessionID,
 			Actor:     session.GoalActor(memoReq.Actor),
-		})
+		}, admit)
 	})
 }
 
@@ -136,29 +136,67 @@ func memoizedGoalMutation[Req any](
 	req Req,
 	memo *requestmemo.Memo[Req, committedGoalMutationResult],
 	same func(Req, Req) bool,
-	run func(context.Context) (runtimecommand.GoalCommandResult, error),
+	run func(context.Context, runtimecommand.SessionAgentOperationAdmitter) (runtimecommand.GoalCommandResult, bool, error),
 ) (serverapi.RuntimeGoalShowResponse, error) {
 	if service == nil || service.goalAuthority == nil {
 		return serverapi.RuntimeGoalShowResponse{}, errors.New("goal command authority is required")
 	}
-	result, err := memo.Do(ctx, requestID, req, same, func(ctx context.Context) (committedGoalMutationResult, error) {
-		outcome, outerErr := run(ctx)
+	result, err := memo.DoAdmitted(ctx, requestID, req, same, func(prepareCtx context.Context, admission *requestmemo.Admission[committedGoalMutationResult]) {
+		admitted := false
+		outcome, routed, outerErr := run(prepareCtx, func(start runtimecommand.SessionAgentOperationStart) error {
+			work, admitErr := admission.Admit()
+			if admitErr != nil {
+				return admitErr
+			}
+			admitted = true
+			go func() {
+				operationOutcome, runErr := start()
+				goalOutcome, ok := operationOutcome.(runtimecommand.GoalMutationOperationOutcome)
+				if !ok {
+					_ = work.Complete(
+						committedGoalMutationResult{},
+						errors.New("admitted Goal driver returned the wrong outcome"),
+					)
+					return
+				}
+				if goalOutcome.Result.Accepted() {
+					goalOutcome.Result.Err = runErr
+					committed, resultErr := committedGoalMutation(goalOutcome.Result)
+					_ = work.Complete(committed, resultErr)
+					return
+				}
+				_ = work.Complete(committedGoalMutationResult{}, goalMutationError(runErr))
+			}()
+			return nil
+		})
+		if admitted || routed {
+			if outerErr != nil && !admitted {
+				_ = admission.Reject(goalMutationError(outerErr))
+			}
+			return
+		}
 		if outerErr != nil {
-			return committedGoalMutationResult{}, goalMutationError(outerErr)
+			_ = admission.Reject(goalMutationError(outerErr))
+			return
 		}
-		response, responseErr := goalResponseFromCommand(outcome)
-		if responseErr != nil {
-			return committedGoalMutationResult{}, responseErr
-		}
-		return committedGoalMutationResult{
-			Response: response,
-			Err:      goalMutationError(outcome.Err),
-		}, nil
+		committed, resultErr := committedGoalMutation(outcome)
+		_ = admission.Complete(committed, resultErr)
 	})
 	if err != nil {
 		return serverapi.RuntimeGoalShowResponse{}, goalMutationError(err)
 	}
 	return result.Response, result.Err
+}
+
+func committedGoalMutation(outcome runtimecommand.GoalCommandResult) (committedGoalMutationResult, error) {
+	response, err := goalResponseFromCommand(outcome)
+	if err != nil {
+		return committedGoalMutationResult{}, err
+	}
+	return committedGoalMutationResult{
+		Response: response,
+		Err:      goalMutationError(outcome.Err),
+	}, nil
 }
 
 func goalResponseFromCommand(result runtimecommand.GoalCommandResult) (serverapi.RuntimeGoalShowResponse, error) {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"core/server/runtimecommand"
 	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowruntime"
@@ -90,6 +91,16 @@ type currentNodeRun struct {
 	stop                     currentNodeRunStopDisposition
 	interruptFence           *currentNodeInterruptFence
 	callbackErr              error
+	ownerOrdering            runtimecommand.SessionAgentOperationOwnerOrderingNotifier
+	ownerOrdered             runtimecommand.SessionAgentOperationOwnerOrderingNotification
+	operation                runtimecommand.SessionAgentOperationDriver
+	operationResult          chan currentNodeOperationResult
+	operationCompleted       bool
+}
+
+type currentNodeOperationResult struct {
+	outcome runtimecommand.SessionAgentOperationOutcome
+	err     error
 }
 
 func (run *currentNodeRun) transition(phase currentNodeRunPhase) {
@@ -123,6 +134,30 @@ func (run *currentNodeRun) recordCallbackError(err error) {
 	run.callbackErr = errors.Join(run.callbackErr, err)
 }
 
+func (c *CurrentNodeController) completeRunOperation(
+	runID currentNodeRunID,
+	outcome runtimecommand.SessionAgentOperationOutcome,
+	err error,
+) {
+	c.mu.Lock()
+	if run := c.runs[runID]; run != nil {
+		c.completeRunOperationLocked(run, outcome, err)
+	}
+	c.mu.Unlock()
+}
+
+func (c *CurrentNodeController) completeRunOperationLocked(
+	run *currentNodeRun,
+	outcome runtimecommand.SessionAgentOperationOutcome,
+	err error,
+) {
+	if run == nil || run.operationResult == nil || run.operationCompleted {
+		return
+	}
+	run.operationCompleted = true
+	run.operationResult <- currentNodeOperationResult{outcome: outcome, err: err}
+}
+
 func (c *CurrentNodeController) allocateRunLocked(start currentNodeQueuedStart) (*currentNodeRun, bool, error) {
 	key, err := start.reference.Key()
 	if err != nil {
@@ -149,6 +184,7 @@ func (c *CurrentNodeController) allocateRunLocked(start currentNodeQueuedStart) 
 		taskPromptDelivery: start.taskPromptDelivery,
 		phaseChanged:       make(chan struct{}),
 	}
+	run.ownerOrdering, run.ownerOrdered = runtimecommand.NewSessionAgentOperationOwnerOrdering()
 	c.runs[run.id] = run
 	c.currentRuns[key] = run.id
 	return run, true, nil
@@ -429,6 +465,7 @@ func (c *CurrentNodeController) removeRunLocked(id currentNodeRunID) {
 	if run == nil {
 		return
 	}
+	c.completeRunOperationLocked(run, nil, sessionruntime.ErrExecutionNoLongerLive)
 	fence := run.interruptFence
 	run.interruptFence = nil
 	if run.launchCancel != nil {

@@ -182,21 +182,6 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	if runtimeSupport.Background != nil {
 		runtimeRegistry.WithBackgroundProcessSnapshots(runtimeSupport.Background.List)
 	}
-	runtimeCommandExecution := runtimecommand.NewExecutionAdapter(runtimeAuthority)
-	runtimeGoalAuthority := runtimecommand.NewGoalAuthority(runtimeAuthority, runtimeCommandExecution)
-	runtimeControlService := runtimecontrol.NewServiceWithGoalCommands(runtimeAuthority, runtimeCommandExecution, runtimeGoalAuthority).
-		WithRuntimeActivityResolver(runtimeRegistry).
-		WithOperationCoordinator(runtimeOperations).
-		WithPromptHistoryStore(metadataStore).
-		WithWorkflowTaskSessionResolver(metadataStore).
-		WithPersistedSessionResolver(metadataStore).
-		WithLiveWatchPromptSources(askService, approvalService, runtimeRegistry)
-	runtimeControlService.WithPromptCommandResolver(promptCommandRuntimeResolver{
-		effectiveWorkspace: promptCommandEffectiveWorkspaceResolver{
-			persistenceRoot: cfg.PersistenceRoot,
-		},
-		metadataStore: metadataStore,
-	})
 	gitInspector := worktree.NewGitInspector(nil)
 	worktreeService := worktree.NewService(metadataStore, gitInspector, runtimeAuthority, runtimeRegistry, runtimeSupport.Background, worktree.ServiceOptions{
 		BaseDir: cfg.Settings.Worktrees.BaseDir,
@@ -303,6 +288,22 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: current node controller: %w", err)
 	}
+	runtimeAuthority.WithWorkflowSessionOrdinaryStartGuard(workflowController)
+	runtimeCommandExecution := runtimecommand.NewExecutionAdapter(runtimeAuthority, workflowController)
+	runtimeGoalAuthority := runtimecommand.NewGoalAuthority(runtimeAuthority, runtimeCommandExecution)
+	runtimeControlService := runtimecontrol.NewServiceWithGoalCommands(runtimeAuthority, runtimeCommandExecution, runtimeGoalAuthority).
+		WithRuntimeActivityResolver(runtimeRegistry).
+		WithOperationCoordinator(runtimeOperations).
+		WithPromptHistoryStore(metadataStore).
+		WithWorkflowTaskSessionResolver(metadataStore).
+		WithPersistedSessionResolver(metadataStore).
+		WithLiveWatchPromptSources(askService, approvalService, runtimeRegistry)
+	runtimeControlService.WithPromptCommandResolver(promptCommandRuntimeResolver{
+		effectiveWorkspace: promptCommandEffectiveWorkspaceResolver{
+			persistenceRoot: cfg.PersistenceRoot,
+		},
+		metadataStore: metadataStore,
+	})
 	sessionRuntimeAPI.WithWorkflowSessionActivator(workflowController)
 	if _, err := workflowController.Recover(context.Background()); err != nil {
 		cleanupNewFailure()

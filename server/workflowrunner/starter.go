@@ -105,6 +105,30 @@ func (s *Starter) StartCurrentNode(
 	lease sessionruntime.WorkflowExecutionLease,
 	controller workflowruntime.Controller,
 ) error {
+	return s.startCurrentNode(ctx, reference, taskPromptDelivery, assignmentEnsure, lease, controller, workflowexecution.CurrentNodeAgentLaunchProfile{})
+}
+
+func (s *Starter) StartCurrentNodeWithProfile(
+	ctx context.Context,
+	reference workflow.CurrentNodeReference,
+	taskPromptDelivery workflowruntime.TaskPromptDelivery,
+	assignmentEnsure workflowexecution.CurrentNodeAssignmentEnsure,
+	lease sessionruntime.WorkflowExecutionLease,
+	controller workflowruntime.Controller,
+	profile workflowexecution.CurrentNodeAgentLaunchProfile,
+) error {
+	return s.startCurrentNode(ctx, reference, taskPromptDelivery, assignmentEnsure, lease, controller, profile)
+}
+
+func (s *Starter) startCurrentNode(
+	ctx context.Context,
+	reference workflow.CurrentNodeReference,
+	taskPromptDelivery workflowruntime.TaskPromptDelivery,
+	assignmentEnsure workflowexecution.CurrentNodeAssignmentEnsure,
+	lease sessionruntime.WorkflowExecutionLease,
+	controller workflowruntime.Controller,
+	profile workflowexecution.CurrentNodeAgentLaunchProfile,
+) error {
 	if s.closed.Load() {
 		return errors.New("workflow runtime starter closed")
 	}
@@ -117,6 +141,9 @@ func (s *Starter) StartCurrentNode(
 	}
 	switch input.Node.Kind {
 	case workflow.NodeKindScript:
+		if profile.Operation != nil {
+			return errors.New("attached Session operation cannot own a Script Current Node")
+		}
 		return s.startCurrentNodeScript(ctx, input, lease, controller)
 	case workflow.NodeKindAgent:
 		selection, err := currentNodeAgentExecutionSelection(input)
@@ -126,7 +153,7 @@ func (s *Starter) StartCurrentNode(
 		if err := s.validateRole(selection.Assignee); err != nil {
 			return err
 		}
-		return s.startCurrentNodeAgent(ctx, input, taskPromptDelivery, assignmentEnsure, lease, controller)
+		return s.startCurrentNodeAgent(ctx, input, taskPromptDelivery, assignmentEnsure, lease, controller, profile)
 	default:
 		return fmt.Errorf("current node %v is not executable", reference)
 	}
@@ -403,6 +430,7 @@ func (s *Starter) startCurrentNodeAgent(
 	assignmentEnsure workflowexecution.CurrentNodeAssignmentEnsure,
 	lease sessionruntime.WorkflowExecutionLease,
 	controller workflowruntime.Controller,
+	profile workflowexecution.CurrentNodeAgentLaunchProfile,
 ) error {
 	prepared, resource, err := s.currentNodeAgentSessionForStart(input, assignmentEnsure)
 	if err != nil {
@@ -463,18 +491,40 @@ func (s *Starter) startCurrentNodeAgent(
 		},
 		Runner: func(runCtx context.Context, scope sessionruntime.ExecutionScope, bridge sessionruntime.AgentRuntimeBridge) error {
 			var turnEngine *runtime.Engine
+			operationCompleted := false
 			turnErr := bridge.WithEngine(runCtx, func(engineCtx context.Context, engine *runtime.Engine) error {
-				if input.ContextMode == workflow.ContextModeCompactAndContinueSession {
-					_, err := engine.SubmitWorkflowContinuationTurn(metadata.WithQueryFailureDiagnostics(engineCtx))
+				if profile.Operation != nil {
+					outcome, operationErr := profile.Operation.StartOwner(engineCtx, engine, profile.OwnerOrdering)
+					operationCompleted = true
+					if profile.Complete != nil {
+						profile.Complete(outcome, operationErr)
+					}
+					if operationErr != nil {
+						return operationErr
+					}
+					if engine.GoalLoopRunning() {
+						return engine.WaitForGoalLoop(runCtx)
+					}
+				} else if input.ContextMode == workflow.ContextModeCompactAndContinueSession {
+					_, err := engine.SubmitWorkflowContinuationTurnWithActiveHook(
+						metadata.WithQueryFailureDiagnostics(engineCtx),
+						func() { profile.OwnerOrdering.Complete() },
+					)
 					if err != nil {
 						return err
 					}
-				} else if _, err := engine.SubmitWorkflowTurn(metadata.WithQueryFailureDiagnostics(engineCtx)); err != nil {
+				} else if _, err := engine.SubmitWorkflowTurnWithActiveHook(
+					metadata.WithQueryFailureDiagnostics(engineCtx),
+					func() { profile.OwnerOrdering.Complete() },
+				); err != nil {
 					return err
 				}
 				turnEngine = engine
 				return nil
 			})
+			if profile.Operation != nil && !operationCompleted && profile.Complete != nil {
+				profile.Complete(nil, turnErr)
+			}
 			if turnErr == nil && turnEngine != nil {
 				if finalizer, ok := controller.(workflowruntime.PostTurnFinalizer); ok {
 					sessionID, err := runtimeids.ParseSessionID(turnEngine.SessionID())

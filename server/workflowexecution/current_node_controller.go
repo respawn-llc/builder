@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"core/server/runtimecommand"
 	"core/server/session"
 	"core/server/sessionruntime"
 	askquestion "core/server/tools"
@@ -34,6 +35,24 @@ type CurrentNodeRunner interface {
 		CurrentNodeAssignmentEnsure,
 		sessionruntime.WorkflowExecutionLease,
 		workflowruntime.Controller,
+	) error
+}
+
+type CurrentNodeAgentLaunchProfile struct {
+	Operation     runtimecommand.SessionAgentOperationDriver
+	OwnerOrdering runtimecommand.SessionAgentOperationOwnerOrderingNotifier
+	Complete      func(runtimecommand.SessionAgentOperationOutcome, error)
+}
+
+type CurrentNodeProfileRunner interface {
+	StartCurrentNodeWithProfile(
+		context.Context,
+		workflow.CurrentNodeReference,
+		workflowruntime.TaskPromptDelivery,
+		CurrentNodeAssignmentEnsure,
+		sessionruntime.WorkflowExecutionLease,
+		workflowruntime.Controller,
+		CurrentNodeAgentLaunchProfile,
 	) error
 }
 

@@ -3,11 +3,16 @@ package runtimecontrol
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
+	"time"
 
 	"core/server/llm"
+	"core/server/requestmemo"
 	"core/server/runtime"
 	"core/server/runtimeactivity"
+	"core/server/runtimecommand"
 	"core/server/runtimeops"
 	"core/server/session"
 	"core/server/session/sessiontest"
@@ -18,6 +23,235 @@ import (
 	"core/shared/textutil"
 	"core/shared/transcript"
 )
+
+type admittedGoalRouter struct {
+	release    chan struct{}
+	admissions chan struct{}
+
+	mu      sync.Mutex
+	calls   int
+	effects int
+	runErr  error
+}
+
+func newAdmittedGoalRouter() *admittedGoalRouter {
+	return &admittedGoalRouter{
+		release:    make(chan struct{}),
+		admissions: make(chan struct{}, 4096),
+	}
+}
+
+func (r *admittedGoalRouter) RouteSessionAgentOperation(
+	context.Context,
+	runtimeids.SessionID,
+	runtimecommand.SessionAgentOperationDriver,
+) (bool, runtimecommand.SessionAgentOperationOutcome, error) {
+	return false, nil, nil
+}
+
+func (r *admittedGoalRouter) RouteAdmittedSessionAgentOperation(
+	_ context.Context,
+	_ runtimeids.SessionID,
+	_ runtimecommand.SessionAgentOperationDriver,
+	admit runtimecommand.SessionAgentOperationAdmitter,
+) (bool, error) {
+	r.mu.Lock()
+	r.calls++
+	r.mu.Unlock()
+	err := admit(func() (runtimecommand.SessionAgentOperationOutcome, error) {
+		r.admissions <- struct{}{}
+		<-r.release
+		r.mu.Lock()
+		r.effects++
+		r.mu.Unlock()
+		goal := session.GoalState{
+			ID:        "goal-admitted-router",
+			Objective: "retained admitted goal",
+			Status:    session.GoalStatusActive,
+		}
+		return runtimecommand.GoalMutationOperationOutcome{Result: runtimecommand.GoalCommandResult{
+			Goal:        &goal,
+			Disposition: runtime.GoalCommandQueued,
+		}}, r.runErr
+	})
+	return err == nil, err
+}
+
+func (r *admittedGoalRouter) counts() (int, int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.calls, r.effects
+}
+
+func admittedGoalService(router *admittedGoalRouter) *Service {
+	execution := runtimecommand.NewExecutionAdapter(nil, router)
+	return NewServiceWithGoalCommands(
+		nil,
+		execution,
+		runtimecommand.NewGoalAuthority(nil, execution),
+	)
+}
+
+func TestServiceAdmittedGoalRequestLossRetryJoinsOneDriver(t *testing.T) {
+	router := newAdmittedGoalRouter()
+	service := admittedGoalService(router)
+	sessionID := runtimeids.NewSessionID().String()
+	request := serverapi.RuntimeGoalSetRequest{
+		ClientRequestID: "admitted-goal-request-loss",
+		SessionID:       sessionID,
+		Objective:       "retained admitted goal",
+		Actor:           string(session.GoalActorUser),
+	}
+	firstCtx, cancelFirst := context.WithCancel(context.Background())
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := service.SetGoal(firstCtx, request)
+		firstDone <- err
+	}()
+	select {
+	case <-router.admissions:
+	case <-time.After(3 * time.Second):
+		t.Fatal("admitted Goal driver did not start")
+	}
+	cancelFirst()
+	if err := <-firstDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled first Goal request error = %v, want context canceled", err)
+	}
+
+	retryDone := make(chan error, 1)
+	go func() {
+		_, err := service.SetGoal(context.Background(), request)
+		retryDone <- err
+	}()
+	select {
+	case err := <-retryDone:
+		t.Fatalf("same-ID Goal retry returned before admitted driver completed: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(router.release)
+	if err := <-retryDone; err != nil {
+		t.Fatalf("same-ID Goal retry: %v", err)
+	}
+	calls, effects := router.counts()
+	if calls != 1 || effects != 1 {
+		t.Fatalf("admitted Goal router calls/effects = %d/%d, want 1/1", calls, effects)
+	}
+}
+
+func TestServiceAdmittedGoalAcceptedWithErrorReplaysOneTypedResult(t *testing.T) {
+	router := newAdmittedGoalRouter()
+	acceptedErr := errors.New("accepted Goal observer failed")
+	router.runErr = acceptedErr
+	service := admittedGoalService(router)
+	request := serverapi.RuntimeGoalSetRequest{
+		ClientRequestID: "admitted-goal-accepted-with-error",
+		SessionID:       runtimeids.NewSessionID().String(),
+		Objective:       "retained admitted goal",
+		Actor:           string(session.GoalActorUser),
+	}
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := service.SetGoal(context.Background(), request)
+		firstDone <- err
+	}()
+	select {
+	case <-router.admissions:
+	case <-time.After(3 * time.Second):
+		t.Fatal("accepted-with-error Goal was not admitted")
+	}
+	close(router.release)
+	if err := <-firstDone; !errors.Is(err, acceptedErr) {
+		t.Fatalf("first accepted-with-error Goal error = %v, want %v", err, acceptedErr)
+	}
+	if _, err := service.SetGoal(context.Background(), request); !errors.Is(err, acceptedErr) {
+		t.Fatalf("replayed accepted-with-error Goal error = %v, want %v", err, acceptedErr)
+	}
+	calls, effects := router.counts()
+	if calls != 1 || effects != 1 {
+		t.Fatalf("accepted-with-error Goal calls/effects = %d/%d, want 1/1", calls, effects)
+	}
+}
+
+func TestServiceAdmittedGoalSaturationPreservesDuplicatePrecedenceAndReclaimsCapacity(t *testing.T) {
+	router := newAdmittedGoalRouter()
+	service := admittedGoalService(router)
+	sessionID := runtimeids.NewSessionID().String()
+	type result struct {
+		err error
+	}
+	var admitted []<-chan result
+	var first serverapi.RuntimeGoalSetRequest
+	for index := 0; ; index++ {
+		request := serverapi.RuntimeGoalSetRequest{
+			ClientRequestID: fmt.Sprintf("admitted-goal-%d", index),
+			SessionID:       sessionID,
+			Objective:       "retained admitted goal",
+			Actor:           string(session.GoalActorUser),
+		}
+		done := make(chan result, 1)
+		go func() {
+			_, err := service.SetGoal(context.Background(), request)
+			done <- result{err: err}
+		}()
+		select {
+		case <-router.admissions:
+			if len(admitted) == 0 {
+				first = request
+			}
+			admitted = append(admitted, done)
+		case completed := <-done:
+			if !errors.Is(completed.err, requestmemo.ErrCapacityUnavailable) {
+				t.Fatalf("new Goal at saturation error = %v, want capacity unavailable", completed.err)
+			}
+			goto saturated
+		case <-time.After(3 * time.Second):
+			t.Fatal("Goal saturation entry neither admitted nor rejected")
+		}
+	}
+
+saturated:
+	duplicateDone := make(chan error, 1)
+	go func() {
+		_, err := service.SetGoal(context.Background(), first)
+		duplicateDone <- err
+	}()
+	select {
+	case err := <-duplicateDone:
+		t.Fatalf("matching duplicate returned before owner completed: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	mismatched := first
+	mismatched.Objective = "different retained goal"
+	if _, err := service.SetGoal(context.Background(), mismatched); !errors.Is(err, requestmemo.ErrClientRequestIDReused) {
+		t.Fatalf("mismatched duplicate error = %v, want request-ID reuse", err)
+	}
+	if _, err := service.SetGoal(context.Background(), serverapi.RuntimeGoalSetRequest{
+		ClientRequestID: "genuinely-new-saturated-goal",
+		SessionID:       sessionID,
+		Objective:       "retained admitted goal",
+		Actor:           string(session.GoalActorUser),
+	}); !errors.Is(err, requestmemo.ErrCapacityUnavailable) {
+		t.Fatalf("genuinely new saturated Goal error = %v, want capacity unavailable", err)
+	}
+
+	close(router.release)
+	for _, done := range admitted {
+		if completed := <-done; completed.err != nil {
+			t.Fatalf("admitted Goal completion: %v", completed.err)
+		}
+	}
+	if err := <-duplicateDone; err != nil {
+		t.Fatalf("matching duplicate completion: %v", err)
+	}
+	if _, err := service.SetGoal(context.Background(), serverapi.RuntimeGoalSetRequest{
+		ClientRequestID: "goal-after-capacity-reclamation",
+		SessionID:       sessionID,
+		Objective:       "retained admitted goal",
+		Actor:           string(session.GoalActorUser),
+	}); err != nil {
+		t.Fatalf("Goal after completed-entry reclamation: %v", err)
+	}
+}
 
 var runtimeControlOpenAICapabilities = llm.ProviderCapabilities{
 	ProviderID:               "openai",

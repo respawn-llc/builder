@@ -119,6 +119,52 @@ func TestSessionAgentOperationOwnerOrderingCompletesExactlyOnce(t *testing.T) {
 	}
 }
 
+type workflowSessionExecutionRouterStub struct {
+	handled bool
+	outcome SessionAgentOperationOutcome
+	err     error
+	calls   int
+}
+
+func (r *workflowSessionExecutionRouterStub) RouteSessionAgentOperation(
+	_ context.Context,
+	_ runtimeids.SessionID,
+	_ SessionAgentOperationDriver,
+) (bool, SessionAgentOperationOutcome, error) {
+	r.calls++
+	return r.handled, r.outcome, r.err
+}
+
+func TestExecutionAdapterUsesInjectedWorkflowSessionRouter(t *testing.T) {
+	expected := UserShellOperationOutcome{}
+	router := &workflowSessionExecutionRouterStub{handled: true, outcome: expected}
+	adapter := NewExecutionAdapter(nil, router)
+	sessionID, err := runtimeids.ParseSessionID("018fdd67-89ab-4cde-8123-456789abcdef")
+	if err != nil {
+		t.Fatalf("parse session id: %v", err)
+	}
+	driver, err := NewUserShellDriver(UserShellDriverOptions{
+		SessionID:    sessionID,
+		Command:      "pwd",
+		OperationRef: operationDriverRef(clientui.RuntimeOperationKindUserShell),
+		Operations:   runtimeops.NewCoordinator(),
+	})
+	if err != nil {
+		t.Fatalf("NewUserShellDriver: %v", err)
+	}
+
+	outcome, err := adapter.RunAgentOperation(context.Background(), sessionID.String(), driver)
+	if err != nil {
+		t.Fatalf("RunAgentOperation: %v", err)
+	}
+	if _, ok := outcome.(UserShellOperationOutcome); !ok {
+		t.Fatalf("outcome = %#v, want user-shell outcome", outcome)
+	}
+	if router.calls != 1 {
+		t.Fatalf("router calls = %d, want 1", router.calls)
+	}
+}
+
 func TestGoalDriverOrdersAtAcceptedWithErrorBoundary(t *testing.T) {
 	store, authority, _, observer := newGoalAuthorityFixture(t, nil)
 	sessionID := mustGoalAuthoritySessionID(t, store)

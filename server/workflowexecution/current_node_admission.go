@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"core/server/runtimecommand"
 	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowruntime"
@@ -107,6 +108,15 @@ func (c *CurrentNodeController) admit(runID currentNodeRunID) (err error) {
 	preparation := run.preparation
 	delivery := run.taskPromptDelivery
 	policy := run.policy
+	profile := CurrentNodeAgentLaunchProfile{
+		Operation:     run.operation,
+		OwnerOrdering: run.ownerOrdering,
+	}
+	if run.operationResult != nil {
+		profile.Complete = func(outcome runtimecommand.SessionAgentOperationOutcome, err error) {
+			c.completeRunOperation(runID, outcome, err)
+		}
+	}
 	c.mu.Unlock()
 	if preparation != nil {
 		if err := preparation(ctx); err != nil {
@@ -196,20 +206,28 @@ retryAdmission:
 		}
 		goto retryAdmission
 	}
-	if err := c.runner.StartCurrentNode(ctx, reference, delivery, assignment, lease, c); err != nil {
+	var startErr error
+	if profiled, ok := c.runner.(CurrentNodeProfileRunner); ok {
+		startErr = profiled.StartCurrentNodeWithProfile(ctx, reference, delivery, assignment, lease, c, profile)
+	} else if profile.Operation != nil {
+		startErr = errors.New("current node runner does not support attached-operation profiles")
+	} else {
+		startErr = c.runner.StartCurrentNode(ctx, reference, delivery, assignment, lease, c)
+	}
+	if startErr != nil {
 		if _, live := c.authority.ExecutionByScope(lease.ScopeID()); live {
 			if correlateErr := c.correlateExactRun(ctx, runID, reference, lease); correlateErr == nil {
 				_ = c.FailCurrentNodeScope(
 					context.WithoutCancel(ctx),
 					lease.ScopeID(),
 					reasonCurrentNodeRuntimeStartFailed,
-					err,
+					startErr,
 				)
 				return sessionruntime.ErrExecutionNoLongerLive
 			}
 		}
 		return currentNodeAdmissionError{
-			cause:    err,
+			cause:    startErr,
 			admitted: true,
 		}
 	}

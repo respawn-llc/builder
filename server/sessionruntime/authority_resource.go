@@ -746,6 +746,16 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 	if len(gate.blocks) != 0 {
 		return nil, sessionStartsBlockedError(sessionID)
 	}
+	if request.Workflow == nil {
+		a.mu.Lock()
+		ordinaryStartGuard := a.ordinaryStartGuard
+		a.mu.Unlock()
+		if ordinaryStartGuard != nil {
+			if err := ordinaryStartGuard.GuardOrdinaryAgentStart(ctx, sessionID); err != nil {
+				return nil, err
+			}
+		}
+	}
 	resource, closeResource, err := a.selectResource(ctx, request.Descriptor, request.Runtime, request.Resource)
 	if err != nil {
 		return nil, err
@@ -1012,6 +1022,26 @@ func (a *Authority) WithLiveExecutionRuntime(
 		return errors.New("agent execution scope has no runtime resource")
 	}
 	return a.WithRuntime(ctx, resource, callback)
+}
+
+func (a *Authority) WithExactExecutionRuntime(
+	ctx context.Context,
+	handle ExecutionHandle,
+	callback func(context.Context, *runtime.Engine) error,
+) error {
+	if a == nil {
+		return errors.New("session runtime authority is required")
+	}
+	if handle == nil {
+		return ErrExecutionNoLongerLive
+	}
+	resource, ok := handle.Scope().Resource()
+	if !ok {
+		return errors.New("agent execution scope has no runtime resource")
+	}
+	return a.WithExactExecutions([]ExecutionHandle{handle}, func() error {
+		return a.WithRuntime(ctx, resource, callback)
+	})
 }
 
 func (a *Authority) retainResource(ref runtimeids.SessionResourceRef) (*ResourceRetention, error) {
