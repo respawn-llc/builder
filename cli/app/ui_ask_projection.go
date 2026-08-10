@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime/debug"
+	"strconv"
 
 	"core/cli/tui"
 	"core/cli/tui/transcriptrender"
@@ -183,7 +184,7 @@ func (m *uiModel) handleQuestionProjectionError(result questionRenderResultMsg) 
 		promptID = string(m.ask.current.prompt.PromptID)
 	}
 	m.logf(
-		"ask.question_projection.error prompt_id=%q current_token=%d operation_token=%s rendered_at=%+v desired=%+v delivery_generation=%d err=%q stack=%s",
+		"ask.question_projection.error prompt_id=%q current_token=%d operation_token=%s rendered_at=%+v desired=%+v delivery_generation=%s err=%q stack=%s",
 		promptID,
 		m.ask.currentToken,
 		result.request.operationToken,
@@ -223,9 +224,19 @@ func questionRenderIdentityDiagnosticsFor(projection *activeQuestionProjection) 
 	return &diagnostic
 }
 
-func activePromptDeliveryGeneration(delivery *activePromptAnswerDelivery) uint64 {
-	if delivery == nil {
-		return 0
+type promptDeliveryGenerationDiagnostic uint64
+
+func (g *promptDeliveryGenerationDiagnostic) String() string {
+	if g == nil {
+		return "<none>"
 	}
-	return delivery.generation
+	return strconv.FormatUint(uint64(*g), 10)
+}
+
+func activePromptDeliveryGeneration(delivery *activePromptAnswerDelivery) *promptDeliveryGenerationDiagnostic {
+	if delivery == nil {
+		return nil
+	}
+	generation := promptDeliveryGenerationDiagnostic(delivery.generation)
+	return &generation
 }
