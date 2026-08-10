@@ -269,13 +269,12 @@ func TestRestoreLockedTaskWorktreeAcceptsHealthyChangedNamedBranch(t *testing.T)
 	}
 }
 
-func TestRestoreLockedTaskWorktreeReusesDetachedHeadWithoutRunningSetup(t *testing.T) {
+func TestRestoreLockedTaskWorktreeReusesDetachedHeadWithoutErasingBranchAuthority(t *testing.T) {
 	env := newServiceTestEnv(t)
 	task, materialized, _ := materializeAndLockTaskWorktree(t, env)
 	worktreeID := taskWorktreeID(materialized.Worktree)
 	worktreeRoot := taskWorktreeRoot(materialized.Worktree)
 	runGit(t, worktreeRoot, "checkout", "--detach")
-	detachedRevision := resolveTaskWorktreeTestHEAD(t, env, worktreeRoot)
 	setupMarker := filepath.Join(t.TempDir(), "setup-ran")
 	setupScript := filepath.Join(t.TempDir(), "setup.sh")
 	writeExecutableFile(t, setupScript, fmt.Sprintf("#!/bin/sh\ntouch %q\n", setupMarker))
@@ -305,18 +304,31 @@ func TestRestoreLockedTaskWorktreeReusesDetachedHeadWithoutRunningSetup(t *testi
 	if err != nil {
 		t.Fatalf("worktreeGitMetadataFromRecord: %v", err)
 	}
-	if persisted.HeadOID != detachedRevision.CommitOID ||
-		!persisted.Detached ||
-		persisted.Branch != nil {
-		t.Fatalf("persisted detached metadata = %+v, want head %q", persisted, detachedRevision.CommitOID)
+	if persisted.Detached ||
+		persisted.Branch == nil ||
+		persisted.Branch.Name() != task.ShortID {
+		t.Fatalf("persisted branch authority = %+v, want named branch %q", persisted, task.ShortID)
 	}
 	if _, err := os.Stat(setupMarker); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("restore ran setup for reused detached worktree: %v", err)
+	}
+	if err := env.service.AssertInitialTaskBranch(env.ctx, task.ID, task.ShortID); err != nil {
+		t.Fatalf("AssertInitialTaskBranch after detached reuse: %v", err)
+	}
+	otherBranch := "feature/other"
+	err = env.service.AssertInitialTaskBranch(env.ctx, task.ID, otherBranch)
+	var mismatch *serverapi.WorkflowTaskInitialBranchError
+	if !errors.As(err, &mismatch) ||
+		mismatch.Reason != serverapi.WorkflowTaskInitialBranchErrorReasonPostCreationMismatch ||
+		mismatch.ExistingBranchName == nil ||
+		*mismatch.ExistingBranchName != task.ShortID {
+		t.Fatalf("AssertInitialTaskBranch mismatch after detached reuse = %+v, want existing branch %q", err, task.ShortID)
 	}
 
 	repeated, err := env.service.RestoreLockedTaskWorktree(env.ctx, LockedTaskWorktreeRestoreRequest{
 		TaskID:           task.ID,
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		BranchName:       &task.ShortID,
 	})
 	if err != nil {
 		t.Fatalf("RestoreLockedTaskWorktree repeated: %v", err)
@@ -973,7 +985,7 @@ func TestMaterializeInitialTaskWorktreeRejectsLocalBranchCreatedAfterFinalInspec
 	}
 }
 
-func TestMaterializeInitialTaskWorktreeCleansPartialAddBeforeReturningOriginalFailure(t *testing.T) {
+func TestMaterializeInitialTaskWorktreePreservesUnownedWorktreeAfterAmbiguousAddFailure(t *testing.T) {
 	env := newServiceTestEnv(t)
 	task, workflowStore := createTaskWorktreeTestTask(t, env)
 	const branchName = "feature/partial-add-failure"
@@ -995,20 +1007,22 @@ func TestMaterializeInitialTaskWorktreeCleansPartialAddBeforeReturningOriginalFa
 		t.Fatalf("MaterializeInitialTaskWorktree error = %T %v, want original add failure", err, err)
 	}
 	var branchErr *serverapi.WorkflowTaskInitialBranchError
-	if errors.As(err, &branchErr) {
-		t.Fatalf("MaterializeInitialTaskWorktree error = %+v, want original add failure rather than branch collision", branchErr)
+	if !errors.As(err, &branchErr) ||
+		branchErr.Reason != serverapi.WorkflowTaskInitialBranchErrorReasonLocalCollision ||
+		branchErr.BranchName != branchName {
+		t.Fatalf("MaterializeInitialTaskWorktree error = %+v, want joined local collision", err)
 	}
 	if exists, branchErr := env.service.git.BranchExists(env.ctx, env.workspaceRoot, branchName); branchErr != nil {
-		t.Fatalf("BranchExists after failed add cleanup: %v", branchErr)
-	} else if exists {
-		t.Fatalf("partial add branch %q survived cleanup", branchName)
+		t.Fatalf("BranchExists after ambiguous failed add: %v", branchErr)
+	} else if !exists {
+		t.Fatalf("unowned branch %q was deleted", branchName)
 	}
 	worktrees, listErr := env.service.git.List(env.ctx, env.workspaceRoot)
 	if listErr != nil {
-		t.Fatalf("List after failed add cleanup: %v", listErr)
+		t.Fatalf("List after ambiguous failed add: %v", listErr)
 	}
-	if len(worktrees) != 1 || !worktrees[0].IsMain {
-		t.Fatalf("worktrees after failed add cleanup = %+v, want only source Worktree", worktrees)
+	if len(worktrees) != 2 {
+		t.Fatalf("worktrees after ambiguous failed add = %+v, want source and preserved raced Worktree", worktrees)
 	}
 	row, queryErr := env.store.Queries().GetTask(env.ctx, string(task.ID))
 	if queryErr != nil {
@@ -1021,18 +1035,13 @@ func TestMaterializeInitialTaskWorktreeCleansPartialAddBeforeReturningOriginalFa
 		t.Fatalf("failed partial add pending branch = %+v, want retained %q", row.PendingInitialManagedBranchName, branchName)
 	}
 
-	materialized, err := env.service.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{
+	_, err = env.service.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{
 		TaskID:         task.ID,
 		ResolvedTarget: resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot),
 	})
-	if err != nil {
-		t.Fatalf("MaterializeInitialTaskWorktree retry: %v", err)
-	}
-	if got := taskWorktreeBranch(materialized.Worktree); got != branchName {
-		t.Fatalf("retry materialized branch = %q, want %q", got, branchName)
-	}
-	if got := filepath.Base(taskWorktreeRoot(materialized.Worktree)); got != task.ShortID {
-		t.Fatalf("retry managed root = %q, want cleaned automatic root %q", got, task.ShortID)
+	branchErr = nil
+	if !errors.As(err, &branchErr) || branchErr.Reason != serverapi.WorkflowTaskInitialBranchErrorReasonLocalCollision {
+		t.Fatalf("MaterializeInitialTaskWorktree retry error = %+v, want preserved local collision", err)
 	}
 }
 

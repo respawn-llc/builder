@@ -635,9 +635,12 @@ func (s *Service) rebindHealthyManagedTaskWorktree(ctx context.Context, task sql
 		Branch:   identity.branch,
 		Detached: identity.branch == nil,
 	}
-	record.GitMetadataJSON, err = marshalGitMetadata(gitMetadata)
-	if err != nil {
-		return TaskWorktreeMaterialization{}, err
+	// Detached HEAD is live state, not a replacement for the Task's last named-branch authority.
+	if identity.branch != nil {
+		record.GitMetadataJSON, err = marshalGitMetadata(gitMetadata)
+		if err != nil {
+			return TaskWorktreeMaterialization{}, err
+		}
 	}
 	record.UpdatedAt = time.Now().UTC()
 	record.WorkspaceID = workspace.WorkspaceID
@@ -859,15 +862,14 @@ func (s *Service) createManagedTaskWorktree(ctx context.Context, req managedTask
 	createdBranch, err := s.git.Add(ctx, req.Workspace.RootPath, worktreeRoot, createSpec)
 	if err != nil {
 		if createSpec.CreateBranch {
-			partialCreate, classifiedErr := s.classifyInitialTaskBranchAddFailure(
+			rootOccupied, classifiedErr := s.classifyInitialTaskBranchAddFailure(
 				ctx,
 				req.Workspace.RootPath,
 				worktreeRoot,
 				createSpec.BranchName,
 				err,
 			)
-			if partialCreate {
-				cleanup.active = true
+			if rootOccupied {
 				return TaskWorktreeMaterialization{}, classifiedErr
 			}
 			return TaskWorktreeMaterialization{}, cleanupAutomaticManagedRootAfterAddFailure(
@@ -976,9 +978,9 @@ func (s *Service) classifyInitialTaskBranchAddFailure(
 	}
 	if found {
 		if createdWorktree.Branch != nil && createdWorktree.Branch.Name() == branchName {
-			return true, addErr
+			return true, errors.Join(addErr, initialTaskLocalBranchCollision(branchName))
 		}
-		return false, errors.Join(
+		return true, errors.Join(
 			addErr,
 			fmt.Errorf("requested worktree %q exists with unexpected branch after failed task worktree add", worktreeRoot),
 		)
@@ -993,12 +995,16 @@ func (s *Service) classifyInitialTaskBranchAddFailure(
 	if !exists {
 		return false, addErr
 	}
+	return false, initialTaskLocalBranchCollision(branchName)
+}
+
+func initialTaskLocalBranchCollision(branchName string) error {
 	branch, err := newLocalBranchName(branchName)
 	if err != nil {
-		return false, errors.Join(addErr, err)
+		return err
 	}
 	ref := branch.Ref()
-	return false, workflowTaskInitialBranchError(&InitialTaskBranchError{
+	return workflowTaskInitialBranchError(&InitialTaskBranchError{
 		Kind:       InitialTaskBranchErrorLocalCollision,
 		BranchName: branch.Name(),
 		Ref:        &ref,
