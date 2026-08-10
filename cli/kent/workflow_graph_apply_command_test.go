@@ -101,7 +101,7 @@ func TestWorkflowGraphApplyStaleVersionPrecedesIdentityValidation(t *testing.T) 
 		Workflow: serverapi.WorkflowRecord{ID: workflowGraphApplyID(t), Version: 2},
 	}}
 	installWorkflowCommandRemote(t, remote)
-	input := `{"workflow_id":"11111111-1111-4111-8111-111111111111","expected_version":1,"graph":{"node_groups":[],"nodes":[{"id":"not-a-uuid","key":"node","kind":"agent","display_name":"Node"}],"transition_groups":[],"edges":[]}}`
+	input := `{"workflow_id":"11111111-1111-4111-8111-111111111111","expected_version":1,"graph":{"node_groups":[],"nodes":[{"id":"not-a-uuid","key":"node","kind":"agent","display_name":"Node","group_id":null}],"transition_groups":[],"edges":[]}}`
 	exit, outcome, _ := runWorkflowGraphApplyCommand(t, []string{"graph", "apply", "-", "--json"}, input)
 	if exit != 1 || outcome.Outcome != workflowGraphApplyBlocked || outcome.Blockers[0].Code != "version_changed" || remote.previewCalls != 0 {
 		t.Fatalf("exit=%d outcome=%+v preview=%d", exit, outcome, remote.previewCalls)
@@ -119,7 +119,7 @@ func TestWorkflowGraphApplyRejectsMissingEntityFieldBeforeOpeningRemote(t *testi
 		opened++
 		return config.App{}, remote, nil
 	}
-	input := `{"workflow_id":"11111111-1111-4111-8111-111111111111","expected_version":1,"graph":{"node_groups":[],"nodes":[{"id":"11111111-1111-4111-8111-111111111112","kind":"agent","display_name":"Node"}],"transition_groups":[],"edges":[]}}`
+	input := `{"workflow_id":"11111111-1111-4111-8111-111111111111","expected_version":1,"graph":{"node_groups":[],"nodes":[{"id":"11111111-1111-4111-8111-111111111112","kind":"agent","display_name":"Node","group_id":null}],"transition_groups":[],"edges":[]}}`
 	exit, outcome, _ := runWorkflowGraphApplyCommand(t, []string{"graph", "apply", "-", "--json"}, input)
 	if exit != 1 || outcome.Outcome != workflowGraphApplyInvalidDocument || opened != 0 {
 		t.Fatalf("exit=%d outcome=%+v opened=%d", exit, outcome, opened)

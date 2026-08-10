@@ -42,68 +42,77 @@ type workflowGraphDocumentDecode struct {
 }
 
 type workflowGraphDocumentGraphDecode struct {
-	NodeGroups       *[]serverapi.WorkflowGraphDraftNodeGroup       `json:"node_groups"`
-	Nodes            *[]workflowGraphDocumentNode                   `json:"nodes"`
-	TransitionGroups *[]serverapi.WorkflowGraphDraftTransitionGroup `json:"transition_groups"`
-	Edges            *[]serverapi.WorkflowGraphDraftEdge            `json:"edges"`
+	NodeGroups       *[]workflowGraphNodeGroupDecode       `json:"node_groups"`
+	Nodes            *[]workflowGraphNodeDecode            `json:"nodes"`
+	TransitionGroups *[]workflowGraphTransitionGroupDecode `json:"transition_groups"`
+	Edges            *[]workflowGraphEdgeDecode            `json:"edges"`
 }
 
-type workflowGraphDocumentPresence struct {
-	Graph struct {
-		NodeGroups       []workflowGraphNodeGroupPresence       `json:"node_groups"`
-		Nodes            []workflowGraphNodePresence            `json:"nodes"`
-		TransitionGroups []workflowGraphTransitionGroupPresence `json:"transition_groups"`
-		Edges            []workflowGraphEdgePresence            `json:"edges"`
-	} `json:"graph"`
-}
-
-type workflowGraphNodeGroupPresence struct {
+type workflowGraphNodeGroupDecode struct {
 	ID          *string `json:"id"`
 	Key         *string `json:"key"`
 	DisplayName *string `json:"display_name"`
 }
 
-type workflowGraphNodePresence struct {
-	ID                 *string                                  `json:"id"`
-	Key                *string                                  `json:"key"`
-	Kind               *string                                  `json:"kind"`
-	DisplayName        *string                                  `json:"display_name"`
-	JoinInputProviders []workflowGraphJoinInputProviderPresence `json:"join_input_providers"`
+type workflowGraphNodeDecode struct {
+	ID                 *string                                `json:"id"`
+	Key                *string                                `json:"key"`
+	Kind               *string                                `json:"kind"`
+	DisplayName        *string                                `json:"display_name"`
+	GroupID            workflowGraphNullableStringDecode      `json:"group_id"`
+	GroupKey           json.RawMessage                        `json:"group_key"`
+	SubagentRole       string                                 `json:"subagent_role"`
+	CompletionMode     string                                 `json:"completion_mode"`
+	ScriptPath         *string                                `json:"script_path"`
+	JoinInputProviders []workflowGraphJoinInputProviderDecode `json:"join_input_providers"`
 }
 
-type workflowGraphJoinInputProviderPresence struct {
+type workflowGraphJoinInputProviderDecode struct {
 	InputName      *string `json:"input_name"`
 	ProviderEdgeID *string `json:"provider_edge_id"`
 }
 
-type workflowGraphTransitionGroupPresence struct {
+type workflowGraphTransitionGroupDecode struct {
 	ID           *string `json:"id"`
 	SourceNodeID *string `json:"source_node_id"`
 	TransitionID *string `json:"transition_id"`
 	DisplayName  *string `json:"display_name"`
+	Description  string  `json:"description"`
 }
 
-type workflowGraphEdgePresence struct {
-	ID                *string                             `json:"id"`
-	TransitionGroupID *string                             `json:"transition_group_id"`
-	Key               *string                             `json:"key"`
-	TargetNodeID      *string                             `json:"target_node_id"`
-	AssigneeSelection *string                             `json:"assignee_selection"`
-	ThinkingSelection *string                             `json:"thinking_selection"`
-	RequiresApproval  *bool                               `json:"requires_approval"`
-	ContextMode       *string                             `json:"context_mode"`
-	ContextSource     *workflowGraphContextSourcePresence `json:"context_source"`
-	Parameters        []workflowGraphParameterPresence    `json:"parameters"`
+type workflowGraphEdgeDecode struct {
+	ID                *string                           `json:"id"`
+	TransitionGroupID *string                           `json:"transition_group_id"`
+	Key               *string                           `json:"key"`
+	TargetNodeID      *string                           `json:"target_node_id"`
+	AssigneeSelection *string                           `json:"assignee_selection"`
+	ThinkingSelection *string                           `json:"thinking_selection"`
+	RequiresApproval  *bool                             `json:"requires_approval"`
+	ContextMode       *string                           `json:"context_mode"`
+	ContextSource     *workflowGraphContextSourceDecode `json:"context_source"`
+	PromptTemplate    string                            `json:"prompt_template"`
+	Parameters        []workflowGraphParameterDecode    `json:"parameters"`
 }
 
-type workflowGraphContextSourcePresence struct {
-	Kind *string `json:"kind"`
+type workflowGraphContextSourceDecode struct {
+	Kind    *string `json:"kind"`
+	NodeKey string  `json:"node_key"`
 }
 
-type workflowGraphParameterPresence struct {
+type workflowGraphParameterDecode struct {
 	Key         *string `json:"key"`
 	Description *string `json:"description"`
 	Purpose     *string `json:"purpose"`
+}
+
+type workflowGraphNullableStringDecode struct {
+	Value   *string
+	Present bool
+}
+
+func (d *workflowGraphNullableStringDecode) UnmarshalJSON(data []byte) error {
+	d.Present = true
+	return json.Unmarshal(data, &d.Value)
 }
 
 func workflowGraphDocumentFromDefinition(definition serverapi.WorkflowDefinition) (workflowGraphDocument, error) {
@@ -155,70 +164,74 @@ func decodeWorkflowGraphDocument(data []byte) (workflowGraphDocument, error) {
 		decoded.Graph.TransitionGroups == nil || decoded.Graph.Edges == nil {
 		return workflowGraphDocument{}, errors.New("Workflow graph document requires workflow_id, expected_version, graph, and all graph collections")
 	}
-	for index, node := range *decoded.Graph.Nodes {
-		if node.GroupKey != nil {
-			return workflowGraphDocument{}, fmt.Errorf("graph.nodes[%d].group_key is not allowed", index)
-		}
-	}
-	var presence workflowGraphDocumentPresence
-	if err := json.Unmarshal(data, &presence); err != nil {
-		return workflowGraphDocument{}, err
-	}
-	if err := validateWorkflowGraphDocumentPresence(presence); err != nil {
-		return workflowGraphDocument{}, err
-	}
 	document := workflowGraphDocument{
 		WorkflowID:      *decoded.WorkflowID,
 		ExpectedVersion: *decoded.ExpectedVersion,
 		Graph: workflowGraphDocumentGraph{
-			NodeGroups:       *decoded.Graph.NodeGroups,
-			Nodes:            *decoded.Graph.Nodes,
-			TransitionGroups: *decoded.Graph.TransitionGroups,
-			Edges:            *decoded.Graph.Edges,
+			NodeGroups:       make([]serverapi.WorkflowGraphDraftNodeGroup, 0, len(*decoded.Graph.NodeGroups)),
+			Nodes:            make([]workflowGraphDocumentNode, 0, len(*decoded.Graph.Nodes)),
+			TransitionGroups: make([]serverapi.WorkflowGraphDraftTransitionGroup, 0, len(*decoded.Graph.TransitionGroups)),
+			Edges:            make([]serverapi.WorkflowGraphDraftEdge, 0, len(*decoded.Graph.Edges)),
 		},
 	}
-	return document, nil
-}
-
-func validateWorkflowGraphDocumentPresence(document workflowGraphDocumentPresence) error {
-	for index, group := range document.Graph.NodeGroups {
+	for index, group := range *decoded.Graph.NodeGroups {
 		if err := requireWorkflowGraphDocumentFields(index, "node_groups",
 			workflowGraphRequiredField{"id", group.ID == nil},
 			workflowGraphRequiredField{"key", group.Key == nil},
 			workflowGraphRequiredField{"display_name", group.DisplayName == nil},
 		); err != nil {
-			return err
+			return workflowGraphDocument{}, err
 		}
+		document.Graph.NodeGroups = append(document.Graph.NodeGroups, serverapi.WorkflowGraphDraftNodeGroup{
+			ID: *group.ID, Key: *group.Key, DisplayName: *group.DisplayName,
+		})
 	}
-	for index, node := range document.Graph.Nodes {
+	for index, node := range *decoded.Graph.Nodes {
 		if err := requireWorkflowGraphDocumentFields(index, "nodes",
 			workflowGraphRequiredField{"id", node.ID == nil},
 			workflowGraphRequiredField{"key", node.Key == nil},
 			workflowGraphRequiredField{"kind", node.Kind == nil},
 			workflowGraphRequiredField{"display_name", node.DisplayName == nil},
+			workflowGraphRequiredField{"group_id", !node.GroupID.Present},
 		); err != nil {
-			return err
+			return workflowGraphDocument{}, err
 		}
+		if node.GroupKey != nil {
+			return workflowGraphDocument{}, fmt.Errorf("graph.nodes[%d].group_key is not allowed", index)
+		}
+		providers := make([]serverapi.WorkflowJoinInputProvider, 0, len(node.JoinInputProviders))
 		for providerIndex, provider := range node.JoinInputProviders {
 			if provider.InputName == nil {
-				return fmt.Errorf("graph.nodes[%d].join_input_providers[%d].input_name is required", index, providerIndex)
+				return workflowGraphDocument{}, fmt.Errorf("graph.nodes[%d].join_input_providers[%d].input_name is required", index, providerIndex)
 			}
 			if provider.ProviderEdgeID == nil {
-				return fmt.Errorf("graph.nodes[%d].join_input_providers[%d].provider_edge_id is required", index, providerIndex)
+				return workflowGraphDocument{}, fmt.Errorf("graph.nodes[%d].join_input_providers[%d].provider_edge_id is required", index, providerIndex)
 			}
+			providers = append(providers, serverapi.WorkflowJoinInputProvider{
+				InputName: *provider.InputName, ProviderEdgeID: *provider.ProviderEdgeID,
+			})
 		}
+		document.Graph.Nodes = append(document.Graph.Nodes, workflowGraphDocumentNode{
+			ID: *node.ID, Key: *node.Key, Kind: *node.Kind, DisplayName: *node.DisplayName,
+			GroupID: node.GroupID.Value, SubagentRole: node.SubagentRole, CompletionMode: node.CompletionMode,
+			ScriptPath: node.ScriptPath, JoinInputProviders: providers,
+		})
 	}
-	for index, group := range document.Graph.TransitionGroups {
+	for index, group := range *decoded.Graph.TransitionGroups {
 		if err := requireWorkflowGraphDocumentFields(index, "transition_groups",
 			workflowGraphRequiredField{"id", group.ID == nil},
 			workflowGraphRequiredField{"source_node_id", group.SourceNodeID == nil},
 			workflowGraphRequiredField{"transition_id", group.TransitionID == nil},
 			workflowGraphRequiredField{"display_name", group.DisplayName == nil},
 		); err != nil {
-			return err
+			return workflowGraphDocument{}, err
 		}
+		document.Graph.TransitionGroups = append(document.Graph.TransitionGroups, serverapi.WorkflowGraphDraftTransitionGroup{
+			ID: *group.ID, SourceNodeID: *group.SourceNodeID, TransitionID: *group.TransitionID,
+			DisplayName: *group.DisplayName, Description: group.Description,
+		})
 	}
-	for index, edge := range document.Graph.Edges {
+	for index, edge := range *decoded.Graph.Edges {
 		if err := requireWorkflowGraphDocumentFields(index, "edges",
 			workflowGraphRequiredField{"id", edge.ID == nil},
 			workflowGraphRequiredField{"transition_group_id", edge.TransitionGroupID == nil},
@@ -230,24 +243,36 @@ func validateWorkflowGraphDocumentPresence(document workflowGraphDocumentPresenc
 			workflowGraphRequiredField{"context_mode", edge.ContextMode == nil},
 			workflowGraphRequiredField{"context_source", edge.ContextSource == nil},
 		); err != nil {
-			return err
+			return workflowGraphDocument{}, err
 		}
 		if edge.ContextSource.Kind == nil {
-			return fmt.Errorf("graph.edges[%d].context_source.kind is required", index)
+			return workflowGraphDocument{}, fmt.Errorf("graph.edges[%d].context_source.kind is required", index)
 		}
+		parameters := make([]serverapi.WorkflowParameter, 0, len(edge.Parameters))
 		for parameterIndex, parameter := range edge.Parameters {
 			if parameter.Key == nil {
-				return fmt.Errorf("graph.edges[%d].parameters[%d].key is required", index, parameterIndex)
+				return workflowGraphDocument{}, fmt.Errorf("graph.edges[%d].parameters[%d].key is required", index, parameterIndex)
 			}
 			if parameter.Description == nil {
-				return fmt.Errorf("graph.edges[%d].parameters[%d].description is required", index, parameterIndex)
+				return workflowGraphDocument{}, fmt.Errorf("graph.edges[%d].parameters[%d].description is required", index, parameterIndex)
 			}
 			if parameter.Purpose == nil {
-				return fmt.Errorf("graph.edges[%d].parameters[%d].purpose is required", index, parameterIndex)
+				return workflowGraphDocument{}, fmt.Errorf("graph.edges[%d].parameters[%d].purpose is required", index, parameterIndex)
 			}
+			parameters = append(parameters, serverapi.WorkflowParameter{
+				Key: *parameter.Key, Description: *parameter.Description, Purpose: *parameter.Purpose,
+			})
 		}
+		document.Graph.Edges = append(document.Graph.Edges, serverapi.WorkflowGraphDraftEdge{
+			ID: *edge.ID, TransitionGroupID: *edge.TransitionGroupID, Key: *edge.Key,
+			TargetNodeID: *edge.TargetNodeID, AssigneeSelection: *edge.AssigneeSelection,
+			ThinkingSelection: *edge.ThinkingSelection, RequiresApproval: *edge.RequiresApproval,
+			ContextMode:    *edge.ContextMode,
+			ContextSource:  serverapi.WorkflowContextSource{Kind: *edge.ContextSource.Kind, NodeKey: edge.ContextSource.NodeKey},
+			PromptTemplate: edge.PromptTemplate, Parameters: parameters,
+		})
 	}
-	return nil
+	return document, nil
 }
 
 type workflowGraphRequiredField struct {
