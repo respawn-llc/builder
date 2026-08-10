@@ -11,6 +11,23 @@ import type {
   WorkspaceUnlinkResponse,
 } from "../models";
 import { projectBindingSchema, workflowIDSchema, workspaceSummarySchema } from "./common";
+import { canonicalProjectIDSchema, workspaceContinuationWireSchema } from "./catalog";
+
+const workspaceListRowSchema = workspaceSummarySchema.superRefine((value, context) => {
+  if (!canonicalProjectIDSchema.safeParse(value.id).success) {
+    context.addIssue({ code: "custom", path: ["id"], message: "Workspace ID is not canonical." });
+  }
+  if (value.rootPath.length === 0) {
+    context.addIssue({ code: "custom", path: ["rootPath"], message: "Workspace root path is required." });
+  }
+  if (!Number.isFinite(value.updatedAt) || !Number.isInteger(value.updatedAt) || value.updatedAt <= 0) {
+    context.addIssue({ code: "custom", path: ["updatedAt"], message: "Workspace recency is invalid." });
+  }
+});
+
+export const workspaceContinuationSchema = workspaceContinuationWireSchema
+  .optional()
+  .transform((value) => (value === undefined || value === "" ? null : value));
 
 export const projectSummarySchema = z
   .object({
@@ -54,11 +71,12 @@ export const projectPageSchema: z.ZodType<ProjectPage> = z
 
 export const workspaceListSchema: z.ZodType<WorkspaceList> = z
   .object({
-    project_id: z.string(),
-    workspaces: z.array(workspaceSummarySchema),
-    default_workspace_id: z.string(),
-    next_page_token: z.string().optional().default(""),
+    project_id: canonicalProjectIDSchema,
+    workspaces: z.array(workspaceListRowSchema).max(100),
+    default_workspace_id: canonicalProjectIDSchema,
+    next_page_token: workspaceContinuationSchema,
   })
+  .strict()
   .transform((value) => ({
     projectID: value.project_id,
     workspaces: value.workspaces,

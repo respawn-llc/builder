@@ -34,6 +34,9 @@ import type {
   ProjectPage,
   ProjectWorkflowLink,
   ServerReadiness,
+  SessionCatalogPage,
+  SessionCategory,
+  SessionPagePosition,
   TaskAttention,
   TaskApproveResponse,
   TaskComment,
@@ -80,6 +83,11 @@ export interface ApiService {
 
   getReadiness(): Promise<ServerReadiness>;
   listProjects(pageToken: string): Promise<ProjectPage>;
+  listSessionPage(
+    projectID: string,
+    category: SessionCategory,
+    position: SessionPagePosition,
+  ): Promise<SessionCatalogPage>;
   listWorkspaces(projectID: string, pageToken?: string): Promise<WorkspaceList>;
   getProjectEdit(projectID: string, pageToken?: string): Promise<ProjectEdit>;
   planWorkspace(path: string): Promise<BindingPlan>;
