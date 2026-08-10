@@ -21,7 +21,14 @@ type Goal struct {
 	CreatedAt time.Time         `json:"created_at"`
 	UpdatedAt time.Time         `json:"updated_at"`
 }
-func (g Goal) Validate() error {
-	if strings.TrimSpace(g.ID) == "" || strings.TrimSpace(g.Objective) == "" || (g.Status != RuntimeGoalStatusActive && g.Status != RuntimeGoalStatusPaused && g.Status != RuntimeGoalStatusComplete) || g.CreatedAt.IsZero() || g.UpdatedAt.IsZero() { return fmt.Errorf("invalid goal fields") }
+func (g Goal) Validate() error { return g.validate(true) }
+func (g Goal) validate(requireID bool) error {
+	if (requireID && strings.TrimSpace(g.ID) == "") || strings.TrimSpace(g.Objective) == "" || (g.Status != RuntimeGoalStatusActive && g.Status != RuntimeGoalStatusPaused && g.Status != RuntimeGoalStatusComplete) || g.CreatedAt.IsZero() || g.UpdatedAt.IsZero() { return fmt.Errorf("invalid goal fields") }
 	return nil
 }
+
+type GoalEnvelope struct { Goal *Goal `json:"goal,omitempty"`; Availability GoalAvailability `json:"availability"`; Queued bool `json:"queued,omitempty"` }
+func ProjectGoal(goal *Goal, availability GoalAvailability) GoalEnvelope { return GoalEnvelope{Goal: goal, Availability: availability} }
+func RuntimeGoalFromEnvelope(e GoalEnvelope, suspended bool) RuntimeGoal { return RuntimeGoal{Goal: e.Goal, Availability: e.Availability, Suspended: suspended} }
+func TranscriptGoalStatusFromEnvelope(e GoalEnvelope, suspended bool) *TranscriptGoalStatus { if e.Goal == nil { return &TranscriptGoalStatus{Availability: e.Availability} }; return &TranscriptGoalStatus{Goal: &TranscriptGoal{Goal: e.Goal, Suspended: suspended}, Availability: e.Availability} }
+func (g GoalEnvelope) Validate() error { if err := g.Availability.Validate(); err != nil { return err }; if g.Goal != nil { return g.Goal.validate(!g.Queued) }; return nil }

@@ -1,7 +1,7 @@
 package session
 
 import (
-	"strings"
+	"errors"
 	"testing"
 
 	"core/shared/clientui"
@@ -24,7 +24,8 @@ func TestGoalAvailabilityRejectsMalformedLockedSnapshot(t *testing.T) {
 	t.Setenv("KENT_INVARIANT_MODE", "diagnostic")
 	if _, err := GoalAvailabilityFromMeta(Meta{Locked: &LockedContract{}}); err == nil { t.Fatal("missing locked tool snapshot returned availability") }
 	_, err := GoalAvailabilityFromMeta(Meta{SessionID: "session-1", PromptCacheLineageGeneration: 7, Locked: &LockedContract{HasEnabledTools: true, EnabledTools: []string{string(toolspec.ToolAskQuestion), "unknown"}}})
-	if err == nil || !strings.Contains(err.Error(), "generation 7") { t.Fatalf("malformed availability error = %v", err) }
+	var malformed malformedGoalContractError
+	if err == nil || !errors.As(err, &malformed) || malformed.SessionID != "session-1" || malformed.Generation != 7 { t.Fatalf("malformed availability error = %v", err) }
 }
 func assertGoalAvailability(t *testing.T, store *Store, want clientui.GoalAvailability) {
 	got, err := store.GoalAvailability()

@@ -1222,7 +1222,7 @@ func TestServiceShowGoalReturnsCommittedStateAroundQueuedGoalDrain(t *testing.T)
 	if err != nil {
 		t.Fatalf("SetGoal queued mutation: %v", err)
 	}
-	if accepted.Goal == nil || accepted.Goal.Objective != "accepted pending goal" || string(accepted.Goal.Status) != string(session.GoalStatusActive) {
+	if !accepted.Queued || accepted.Goal == nil || accepted.Goal.Objective != "accepted pending goal" || string(accepted.Goal.Status) != string(session.GoalStatusActive) {
 		t.Fatalf("SetGoal accepted response = %+v, want active pending goal", accepted.Goal)
 	}
 

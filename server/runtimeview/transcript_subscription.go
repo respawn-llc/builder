@@ -136,12 +136,7 @@ func transcriptContextUsageFromRuntime(usage *runtime.ContextUsage) *clientui.Tr
 }
 
 func transcriptGoalStatusFromRuntime(goal *session.GoalState, availability clientui.GoalAvailability, suspended bool) *clientui.TranscriptGoalStatus {
-	runtimeGoal := GoalFromSessionState(goal, availability, suspended)
-	status := &clientui.TranscriptGoalStatus{Availability: runtimeGoal.Availability}
-	if runtimeGoal.Goal != nil {
-		status.Goal = &clientui.TranscriptGoal{Goal: runtimeGoal.Goal, Suspended: runtimeGoal.Suspended}
-	}
-	return status
+	return clientui.TranscriptGoalStatusFromEnvelope(clientui.ProjectGoal(session.GoalCoreFromState(goal), availability), suspended)
 }
 
 func transcriptToolStartsFromRuntime(starts []runtime.TranscriptLiveToolStart) []clientui.TranscriptToolStart {

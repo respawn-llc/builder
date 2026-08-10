@@ -28,8 +28,11 @@ func GoalAvailabilityFromMeta(meta Meta) (clientui.GoalAvailability, error) {
 	}
 	return availability, nil
 }
+type malformedGoalContractError struct { SessionID string; Generation int; Cause error }
+func (e malformedGoalContractError) Error() string { return fmt.Sprintf("session %q locked contract generation %d is malformed: %v", e.SessionID, e.Generation, e.Cause) }
+func (e malformedGoalContractError) Unwrap() error { return e.Cause }
 func malformedGoalContract(meta Meta, cause error) error {
-	err := fmt.Errorf("session %q locked contract generation %d is malformed: %w", meta.SessionID, meta.PromptCacheLineageGeneration, cause)
+	err := malformedGoalContractError{SessionID: meta.SessionID, Generation: meta.PromptCacheLineageGeneration, Cause: cause}
 	diagnostic := invariant.FailureDiagnostic(invariant.ScopeSessionPersistence, "goal_availability", err)
 	diagnostic.Fields[invariant.FieldSessionID] = meta.SessionID
 	diagnostic.Fields[invariant.FieldResolverInputs] = fmt.Sprintf("prompt_cache_lineage_generation=%d", meta.PromptCacheLineageGeneration)

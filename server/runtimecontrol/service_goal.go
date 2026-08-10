@@ -8,8 +8,10 @@ import (
 
 	"core/prompts"
 	"core/server/requestmemo"
+	"core/server/runtime"
 	"core/server/runtimecommand"
 	"core/server/session"
+	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
@@ -33,7 +35,7 @@ func (s *Service) ShowGoal(ctx context.Context, req serverapi.RuntimeGoalShowReq
 	if err != nil {
 		return serverapi.RuntimeGoalShowResponse{}, fmt.Errorf("resolve Goal availability for session %q: %w", sessionID, err)
 	}
-	return serverapi.RuntimeGoalShowResponse{Goal: session.GoalCoreFromState(record.Meta.Goal), Availability: availability}, nil
+	return clientui.ProjectGoal(session.GoalCoreFromState(record.Meta.Goal), availability), nil
 }
 
 func (s *Service) SetGoal(ctx context.Context, req serverapi.RuntimeGoalSetRequest) (serverapi.RuntimeGoalShowResponse, error) {
@@ -169,13 +171,16 @@ func goalResponseFromCommand(result runtimecommand.GoalCommandResult) (serverapi
 		}
 		return serverapi.RuntimeGoalShowResponse{}, err
 	}
+	if result.Disposition == runtime.GoalCommandQueued {
+		response := clientui.ProjectGoal(session.GoalCoreFromState(result.Goal), result.Availability); response.Queued = true; return response, nil
+	}
 	if result.Cleared {
-		return serverapi.RuntimeGoalShowResponse{Availability: result.Availability}, nil
+		return clientui.ProjectGoal(nil, result.Availability), nil
 	}
 	if result.Goal == nil {
 		return serverapi.RuntimeGoalShowResponse{}, errors.New("accepted goal command is missing projected goal")
 	}
-	return serverapi.RuntimeGoalShowResponse{Goal: session.GoalCoreFromState(result.Goal), Availability: result.Availability}, nil
+	return clientui.ProjectGoal(session.GoalCoreFromState(result.Goal), result.Availability), nil
 }
 
 // goalAgentOverwriteDeniedError preserves the agent-facing policy response while

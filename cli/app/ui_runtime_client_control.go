@@ -165,10 +165,7 @@ func (c *sessionRuntimeClient) applyGoalResponse(resp serverapi.RuntimeGoalShowR
 }
 
 func runtimeGoalFromResponse(resp serverapi.RuntimeGoalShowResponse) *clientui.RuntimeGoal {
-	return &clientui.RuntimeGoal{
-		Goal:         resp.Goal,
-		Availability: resp.Availability,
-	}
+	goal := clientui.RuntimeGoalFromEnvelope(resp, false); return &goal
 }
 
 func cloneRuntimeGoal(goal *clientui.RuntimeGoal) *clientui.RuntimeGoal {
