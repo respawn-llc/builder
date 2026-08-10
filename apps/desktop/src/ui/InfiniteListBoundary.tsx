@@ -5,6 +5,37 @@ export type VirtualizedInfiniteListBoundaryState =
   | Readonly<{ state: "loading"; label: string }>
   | Readonly<{ state: "error"; message: string; retryLabel: string; onRetry: () => void }>;
 
+export function directionalBoundary(
+  input: Readonly<{
+    message: string;
+    failed: boolean;
+    loading: boolean;
+    loadingLabel: string;
+    onRetry: () => void;
+    retryLabel: string;
+  }>,
+): VirtualizedInfiniteListBoundaryState | undefined {
+  if (input.loading) {
+    return { state: "loading", label: input.loadingLabel };
+  }
+  if (input.failed) {
+    return {
+      state: "error",
+      message: input.message,
+      retryLabel: input.retryLabel,
+      onRetry: input.onRetry,
+    };
+  }
+  return undefined;
+}
+
+export function autoLoadAvailable(
+  available: boolean,
+  boundary: VirtualizedInfiniteListBoundaryState | undefined,
+): boolean {
+  return available && boundary?.state !== "error";
+}
+
 export function InfiniteListBoundary({
   direction,
   state,

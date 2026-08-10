@@ -1191,15 +1191,9 @@ type WorkflowTaskCommentAddResponse struct {
 	Comment WorkflowTaskComment `json:"comment"`
 }
 
-type WorkflowTaskCommentListRequest struct {
-	TaskID string `json:"task_id"`
-	Offset *int   `json:"offset,omitempty"`
-	Limit  *int   `json:"limit,omitempty"`
-}
-
 type WorkflowTaskCommentListResponse struct {
-	Comments   []WorkflowTaskComment `json:"comments"`
-	NextOffset *int                  `json:"next_offset,omitempty"`
+	WorkflowOffsetPage[WorkflowTaskComment]
+	TotalCount int64 `json:"total_count"`
 }
 
 type WorkflowTaskCommentReplaceRequest struct {
@@ -1753,16 +1747,8 @@ type WorkflowTaskGetResponse struct {
 	Task WorkflowTaskDetail `json:"task"`
 }
 
-type WorkflowTaskActivityListRequest struct {
-	TaskID    string `json:"task_id"`
-	PageSize  int    `json:"page_size,omitempty"`
-	PageToken string `json:"page_token,omitempty"`
-}
-
 type WorkflowTaskActivityListResponse struct {
-	Items             []WorkflowTaskActivityItem `json:"items"`
-	NextPageToken     string                     `json:"next_page_token,omitempty"`
-	GeneratedAtUnixMs int64                      `json:"generated_at_unix_ms"`
+	WorkflowOffsetPage[WorkflowTaskActivityItem]
 }
 
 type WorkflowTaskSummary struct {
@@ -3255,14 +3241,6 @@ func validateWorkflowTaskCommentAuthorKind(author string) error {
 	}
 }
 
-func (r WorkflowTaskCommentListRequest) Validate() error {
-	if err := validateRequired("task_id", r.TaskID); err != nil {
-		return err
-	}
-	_, err := ResolveWorkflowOffsetWindow(r.Offset, r.Limit)
-	return err
-}
-
 func (r WorkflowTaskCommentReplaceRequest) Validate() error {
 	return validateRequiredFields(requiredField("comment_id", r.CommentID), requiredField("body", r.Body))
 }
@@ -3459,19 +3437,6 @@ func (r WorkflowTaskGetRequest) Validate() error {
 	}
 	if shortID == "" {
 		return validateRequired("short_id", r.ShortID)
-	}
-	return nil
-}
-
-func (r WorkflowTaskActivityListRequest) Validate() error {
-	if err := validateRequired("task_id", r.TaskID); err != nil {
-		return err
-	}
-	if r.PageSize < 0 {
-		return workflowRequestError(WorkflowRequestErrorInvalidMode, "page_size", "page_size must be non-negative")
-	}
-	if strings.TrimSpace(r.PageToken) != r.PageToken {
-		return workflowRequestError(WorkflowRequestErrorInvalidMode, "page_token", "page_token must not have leading or trailing whitespace")
 	}
 	return nil
 }

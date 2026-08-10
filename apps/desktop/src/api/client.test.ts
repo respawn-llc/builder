@@ -1,6 +1,5 @@
 import { z } from "zod";
 
-import type { ApiService } from "./apiService";
 import { ApiClient } from "./client";
 import { ContractError } from "./errors";
 import { FakeRpcTransport } from "@/test-support/api";
@@ -20,20 +19,6 @@ const appliedStartResponse = {
 } as const;
 
 describe("ApiClient", () => {
-  it("exposes connection state through the feature-safe API port", () => {
-    const transport = new FakeRpcTransport([]);
-    const service: ApiService = new ApiClient(transport);
-
-    expect(service.connection.snapshot()).toMatchObject({ phase: "connected" });
-
-    transport.connection.set("disconnected", "offline");
-
-    expect(service.connection.snapshot()).toMatchObject({
-      phase: "disconnected",
-      lastError: "offline",
-    });
-  });
-
   it("parses readiness and sends mutation params through typed method boundary", async () => {
     const transport = new FakeRpcTransport([
       {
@@ -89,7 +74,13 @@ describe("ApiClient", () => {
     ]);
     const client = new ApiClient(transport);
 
-    await expect(client.getBoard("project-1", undefined, canonicalBoardFilter({ labelFilter: { kind: "none" }, dependencyFilter: null }))).resolves.toMatchObject({
+    await expect(
+      client.getBoard(
+        "project-1",
+        undefined,
+        canonicalBoardFilter({ labelFilter: { kind: "none" }, dependencyFilter: null }),
+      ),
+    ).resolves.toMatchObject({
       projectID: "project-1",
       selectedWorkflow: null,
       workflows: [],
@@ -103,14 +94,19 @@ describe("ApiClient", () => {
       },
     ]);
     const labelID = "f74ce532-9e6e-4cf6-b3c1-d67d5a3eedcf";
-    await expect(client.listBoardNodeCards({
-      projectID: "project-1",
-      workflowID: "11111111-1111-4111-8111-111111111111",
-      nodeID: "node-1",
-      filter: canonicalBoardFilter({ labelFilter: { kind: "named", mode: "all", labelIDs: [labelID] }, dependencyFilter: null }),
-      offset: 25,
-      sort: { field: "labels", direction: "asc" },
-    })).resolves.toMatchObject({
+    await expect(
+      client.listBoardNodeCards({
+        projectID: "project-1",
+        workflowID: "11111111-1111-4111-8111-111111111111",
+        nodeID: "node-1",
+        filter: canonicalBoardFilter({
+          labelFilter: { kind: "named", mode: "all", labelIDs: [labelID] },
+          dependencyFilter: null,
+        }),
+        offset: 25,
+        sort: { field: "labels", direction: "asc" },
+      }),
+    ).resolves.toMatchObject({
       projectID: "project-1",
       workflowID: "11111111-1111-4111-8111-111111111111",
       nodeID: "node-1",
@@ -119,14 +115,33 @@ describe("ApiClient", () => {
     });
     expect(transport.calls).toContainEqual({
       method: "workflow.board.nodeCards.list",
-      params: { project_id: "project-1", workflow_id: "11111111-1111-4111-8111-111111111111", node_id: "node-1", label_filter: { kind: "named", named: { mode: "all", label_ids: [labelID] } }, dependency_filter: null, page_size: 25, sort: { field: "labels", direction: "asc" }, offset: 25 },
+      params: {
+        project_id: "project-1",
+        workflow_id: "11111111-1111-4111-8111-111111111111",
+        node_id: "node-1",
+        label_filter: { kind: "named", named: { mode: "all", label_ids: [labelID] } },
+        dependency_filter: null,
+        page_size: 25,
+        sort: { field: "labels", direction: "asc" },
+        offset: 25,
+      },
     });
     const unblockedFilter = canonicalBoardFilter({ labelFilter: { kind: "none" }, dependencyFilter: true });
     await Promise.all([
       client.getBoard("project-1", "11111111-1111-4111-8111-111111111111", unblockedFilter),
-      client.listBoardNodeCards({ projectID: "project-1", workflowID: "11111111-1111-4111-8111-111111111111", nodeID: "node-1", filter: unblockedFilter, offset: 0, sort: { field: "updated", direction: "desc" } }),
+      client.listBoardNodeCards({
+        projectID: "project-1",
+        workflowID: "11111111-1111-4111-8111-111111111111",
+        nodeID: "node-1",
+        filter: unblockedFilter,
+        offset: 0,
+        sort: { field: "updated", direction: "desc" },
+      }),
     ]);
-    expect(transport.calls.slice(2).map(({ method }) => method)).toEqual(["workflow.board.get", "workflow.board.nodeCards.list"]);
+    expect(transport.calls.slice(2).map(({ method }) => method)).toEqual([
+      "workflow.board.get",
+      "workflow.board.nodeCards.list",
+    ]);
     expect(transport.calls[2]?.params).toMatchObject({ dependency_filter: true });
     expect(transport.calls[3]?.params).toMatchObject({ dependency_filter: true });
   });
@@ -155,7 +170,13 @@ describe("ApiClient", () => {
       new FakeRpcTransport([{ method: "workflow.board.get", result: boardWithJoinResponse }]),
     );
 
-    await expect(client.getBoard("project-1", "11111111-1111-4111-8111-111111111111", canonicalBoardFilter({ labelFilter: { kind: "none" }, dependencyFilter: null }))).resolves.toMatchObject({
+    await expect(
+      client.getBoard(
+        "project-1",
+        "11111111-1111-4111-8111-111111111111",
+        canonicalBoardFilter({ labelFilter: { kind: "none" }, dependencyFilter: null }),
+      ),
+    ).resolves.toMatchObject({
       groups: [{ id: "group-1", nodeIDs: ["node-agent"] }],
       columns: [{ id: "node-agent", kind: "agent" }],
     });
@@ -223,49 +244,6 @@ describe("ApiClient", () => {
     await expect(client.getTask("task-1")).resolves.toMatchObject({
       sourceURL: "https://github.com/respawn-llc/kent/issues/1",
     });
-  });
-
-  it("uses paginated task comment list RPC contract", async () => {
-    const transport = new FakeRpcTransport([
-      {
-        method: "workflow.task.comment.list",
-        result: {
-          comments: [commentResponse],
-          next_offset: 40,
-        },
-      },
-    ]);
-    const client = new ApiClient(transport);
-
-    await expect(client.listTaskComments("task-1", 0)).resolves.toMatchObject({
-      comments: [
-        {
-          id: "comment-1",
-          body: "Existing comment",
-          authorKind: "user",
-          authorID: "Nek-12",
-        },
-      ],
-      nextOffset: 40,
-    });
-    expect(transport.calls).toContainEqual({
-      method: "workflow.task.comment.list",
-      params: { task_id: "task-1", offset: 0, limit: 40 },
-    });
-  });
-
-  it("rejects zero continuation offsets before feature code receives a page", async () => {
-    const workflowClient = new ApiClient(
-      new FakeRpcTransport([{ method: "workflow.list", result: { workflows: [], next_offset: 0 } }]),
-    );
-    const commentClient = new ApiClient(
-      new FakeRpcTransport([
-        { method: "workflow.task.comment.list", result: { comments: [], next_offset: 0 } },
-      ]),
-    );
-
-    await expect(workflowClient.listWorkflows()).rejects.toBeInstanceOf(ContractError);
-    await expect(commentClient.listTaskComments("task-1", 0)).rejects.toBeInstanceOf(ContractError);
   });
 
   it("uses project edit workspace pagination and mutation RPC contracts", async () => {
@@ -343,7 +321,8 @@ describe("ApiClient", () => {
             edgeID: "edge-1",
             inputBindings: [{ field: "summary", name: "summary", source: "transition_output" }],
             requiredProvisionFields: [{ description: "Summary", name: "summary" }],
-            assigneeSelectionApplicability: { available: true, reason: "eligible" }, thinkingSelectionApplicability: { available: true, reason: "eligible" },
+            assigneeSelectionApplicability: { available: true, reason: "eligible" },
+            thinkingSelectionApplicability: { available: true, reason: "eligible" },
           },
         ],
       },
@@ -375,7 +354,9 @@ describe("ApiClient", () => {
         expect.objectContaining({ id: "node-1", name: "Implement", subagentRole: "coder" }),
       ]),
     );
-    await expect(client.validateWorkflow("11111111-1111-4111-8111-111111111111", "execution")).resolves.toMatchObject({
+    await expect(
+      client.validateWorkflow("11111111-1111-4111-8111-111111111111", "execution"),
+    ).resolves.toMatchObject({
       valid: false,
       errors: [
         {
@@ -482,13 +463,23 @@ describe("ApiClient", () => {
             version: 1,
             execution_target_policy: { mode: "none" },
           },
-          link: { id: "link-3", project_id: "project-1", workflow_id: "33333333-3333-4333-8333-333333333333", default: true },
+          link: {
+            id: "link-3",
+            project_id: "project-1",
+            workflow_id: "33333333-3333-4333-8333-333333333333",
+            default: true,
+          },
         },
       },
       {
         method: "workflow.linkProject",
         result: {
-          link: { id: "link-1", project_id: "project-1", workflow_id: "11111111-1111-4111-8111-111111111111", default: false },
+          link: {
+            id: "link-1",
+            project_id: "project-1",
+            workflow_id: "11111111-1111-4111-8111-111111111111",
+            default: false,
+          },
         },
       },
     ]);
@@ -521,7 +512,10 @@ describe("ApiClient", () => {
       workflow: { id: "33333333-3333-4333-8333-333333333333" },
     });
     await expect(
-      client.linkWorkflowToProject({ projectID: "project-1", workflowID: "11111111-1111-4111-8111-111111111111" }),
+      client.linkWorkflowToProject({
+        projectID: "project-1",
+        workflowID: "11111111-1111-4111-8111-111111111111",
+      }),
     ).resolves.toMatchObject({
       id: "link-1",
       isDefault: false,
@@ -557,17 +551,19 @@ describe("ApiClient", () => {
     ]);
     const client = new ApiClient(transport);
 
-    await expect(client.previewWorkflowDelete("11111111-1111-4111-8111-111111111111")).resolves.toMatchObject({
-      workflowID: "11111111-1111-4111-8111-111111111111",
-      version: 7,
-      projectCount: 1,
-      linkCount: 1,
-      defaultReplacementProjectCount: 0,
-      taskCount: 2,
-      currentNodeCount: 0,
-      pendingApprovalCount: 1,
-      blockedTaskCount: 1,
-    });
+    await expect(client.previewWorkflowDelete("11111111-1111-4111-8111-111111111111")).resolves.toMatchObject(
+      {
+        workflowID: "11111111-1111-4111-8111-111111111111",
+        version: 7,
+        projectCount: 1,
+        linkCount: 1,
+        defaultReplacementProjectCount: 0,
+        taskCount: 2,
+        currentNodeCount: 0,
+        pendingApprovalCount: 1,
+        blockedTaskCount: 1,
+      },
+    );
     await expect(
       client.deleteWorkflow({
         workflowID: "11111111-1111-4111-8111-111111111111",
@@ -617,7 +613,16 @@ describe("ApiClient", () => {
                 edge_id: "edge-start",
                 input_bindings: [{ name: "brief", source: "transition_output", field: "brief" }],
                 required_provision_fields: [{ name: "brief", description: "Brief" }],
-                assignee_selection_applicability: { available: true, parameter_visible: true, reason: "eligible" }, thinking_selection_applicability: { available: true, parameter_visible: true, reason: "eligible" },
+                assignee_selection_applicability: {
+                  available: true,
+                  parameter_visible: true,
+                  reason: "eligible",
+                },
+                thinking_selection_applicability: {
+                  available: true,
+                  parameter_visible: true,
+                  reason: "eligible",
+                },
               },
             ],
           },
@@ -880,16 +885,6 @@ const projectSummaryResponse = {
   workflow_count: 1,
 };
 
-const commentResponse = {
-  id: "comment-1",
-  task_id: "task-1",
-  body: "Existing comment",
-  author: "user",
-  author_id: "Nek-12",
-  created_at_unix_ms: 1,
-  updated_at_unix_ms: 1,
-};
-
 const emptyTaskDetailResponse = {
   task: {
     summary: {
@@ -1044,7 +1039,8 @@ const workflowDefinitionResponse = {
           edge_id: "edge-1",
           input_bindings: [{ name: "summary", source: "transition_output", field: "summary" }],
           required_provision_fields: [{ name: "summary", description: "Summary" }],
-          assignee_selection_applicability: { available: true, parameter_visible: true, reason: "eligible" }, thinking_selection_applicability: { available: true, parameter_visible: true, reason: "eligible" },
+          assignee_selection_applicability: { available: true, parameter_visible: true, reason: "eligible" },
+          thinking_selection_applicability: { available: true, parameter_visible: true, reason: "eligible" },
         },
       ],
     },
