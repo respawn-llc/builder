@@ -67,7 +67,7 @@ func TestCurrentNodeControllerReadyPreparationPersistenceFailureReportsTypedFata
 		NewTaskMutationCoordinator(),
 		CurrentNodeControllerConfig{
 			AgentConcurrency:  1,
-			AssignmentSteerer: noOpCurrentNodeAssignmentSteerer{},
+			AssignmentEnsurer: noOpCurrentNodeAssignmentEnsurer{},
 			LifecycleReporter: reporter,
 		},
 	)
@@ -132,7 +132,7 @@ func TestCurrentNodeControllerAdmittedLaunchPersistenceFailureReportsTypedFatalD
 		NewTaskMutationCoordinator(),
 		CurrentNodeControllerConfig{
 			AgentConcurrency:  1,
-			AssignmentSteerer: noOpCurrentNodeAssignmentSteerer{},
+			AssignmentEnsurer: noOpCurrentNodeAssignmentEnsurer{},
 			LifecycleReporter: reporter,
 		},
 	)
@@ -524,7 +524,7 @@ func (r *finalizerFailureScriptRunner) StartCurrentNode(
 	_ context.Context,
 	_ workflow.CurrentNodeReference,
 	_ workflowruntime.TaskPromptDelivery,
-	_ CurrentNodeAssignmentSteer,
+	_ CurrentNodeAssignmentEnsure,
 	lease sessionruntime.WorkflowExecutionLease,
 	_ workflowruntime.Controller,
 ) error {
@@ -554,12 +554,11 @@ func TestCurrentNodeControllerPassesResumePromptDeliveryToRunner(t *testing.T) {
 	}}}
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 	runner := &countingCurrentNodeRunner{}
+	ensurer := &recordingCurrentNodeAssignmentEnsurer{}
 	controller, err := NewCurrentNodeController(store, runner, authority, NewTaskMutationCoordinator(), CurrentNodeControllerConfig{
 		AgentConcurrency:  1,
 		LifecycleReporter: newRecordingLifecycleFatalReporter(),
-		AssignmentSteerer: &recordingCurrentNodeAssignmentSteerer{
-			err: errors.New("Resume must not steer an assignment"),
-		},
+		AssignmentEnsurer: ensurer,
 	})
 	if err != nil {
 		t.Fatalf("new current node controller: %v", err)
@@ -595,6 +594,9 @@ func TestCurrentNodeControllerPassesResumePromptDeliveryToRunner(t *testing.T) {
 	if deliveries := runner.promptDeliveries(); len(deliveries) != 1 ||
 		deliveries[0] != workflowruntime.TaskPromptDeliveryResume {
 		t.Fatalf("runner prompt deliveries = %+v, want Resume", deliveries)
+	}
+	if ensured := ensurer.references(); len(ensured) != 1 || !ensured[0].Equal(reference) {
+		t.Fatalf("ensured Resume assignments = %+v, want %v", ensured, reference)
 	}
 }
 
@@ -942,7 +944,7 @@ func TestCurrentNodeControllerStartTaskPublishesAdmissionOwnershipBeforeDeleteCa
 	taskMutations := NewTaskMutationCoordinator()
 	controller, err := NewCurrentNodeController(store, runner, authority, taskMutations, CurrentNodeControllerConfig{
 		AgentConcurrency:  1,
-		AssignmentSteerer: noOpCurrentNodeAssignmentSteerer{},
+		AssignmentEnsurer: noOpCurrentNodeAssignmentEnsurer{},
 		LifecycleReporter: newRecordingLifecycleFatalReporter(),
 	})
 	if err != nil {
@@ -1023,7 +1025,7 @@ func TestCurrentNodeControllerStartTaskReturnsBeforePreparation(t *testing.T) {
 	taskMutations := NewTaskMutationCoordinator()
 	controller, err := NewCurrentNodeController(store, runner, authority, taskMutations, CurrentNodeControllerConfig{
 		AgentConcurrency:  1,
-		AssignmentSteerer: noOpCurrentNodeAssignmentSteerer{},
+		AssignmentEnsurer: noOpCurrentNodeAssignmentEnsurer{},
 		LifecycleReporter: newRecordingLifecycleFatalReporter(),
 	})
 	if err != nil {

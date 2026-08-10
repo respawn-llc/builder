@@ -5,9 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sync"
 
-	"core/server/session"
 	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowruntime"
@@ -51,7 +49,6 @@ type currentNodeQueuedStart struct {
 	reference          workflow.CurrentNodeReference
 	preparation        TaskStartPreparation
 	taskPromptDelivery workflowruntime.TaskPromptDelivery
-	assignmentSteer    CurrentNodeAssignmentSteer
 	policy             currentNodeAdmissionPolicy
 }
 
@@ -87,72 +84,6 @@ func (e *TaskStartPreparationError) InterruptionDetail() workflow.CurrentNodeInt
 	return e.detail
 }
 
-type pendingCurrentNodeAssignmentSteer struct {
-	ready chan struct{}
-	once  sync.Once
-	steer CurrentNodeAssignmentSteer
-	err   error
-}
-
-func newPendingCurrentNodeAssignmentSteer() *pendingCurrentNodeAssignmentSteer {
-	return &pendingCurrentNodeAssignmentSteer{ready: make(chan struct{})}
-}
-
-func (s *pendingCurrentNodeAssignmentSteer) resolve(steer CurrentNodeAssignmentSteer, err error) {
-	s.once.Do(func() {
-		s.steer = steer
-		s.err = err
-		close(s.ready)
-	})
-}
-
-func (s *pendingCurrentNodeAssignmentSteer) Wait(ctx context.Context) (session.CommitReceipt, error) {
-	steer, err := s.resolved(ctx)
-	if err != nil {
-		return session.CommitReceipt{}, err
-	}
-	return steer.Wait(ctx)
-}
-
-func (s *pendingCurrentNodeAssignmentSteer) resolved(ctx context.Context) (CurrentNodeAssignmentSteer, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	select {
-	case <-s.ready:
-	case <-ctx.Done():
-		return nil, context.Cause(ctx)
-	}
-	if s.err != nil {
-		return nil, s.err
-	}
-	if s.steer == nil {
-		return nil, errors.New("resolved current node assignment steer is absent")
-	}
-	return s.steer, nil
-}
-
-func resolvedCurrentNodeAssignmentSteer(ctx context.Context, steer CurrentNodeAssignmentSteer) (CurrentNodeAssignmentSteer, error) {
-	if steer == nil {
-		return nil, nil
-	}
-	if pending, ok := steer.(*pendingCurrentNodeAssignmentSteer); ok {
-		var err error
-		steer, err = pending.resolved(ctx)
-		if err != nil {
-			return nil, err
-		}
-	}
-	receipt, err := steer.Wait(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if !receipt.Committed {
-		return nil, errors.New("current node assignment was not committed")
-	}
-	return steer, nil
-}
-
 func (e currentNodeAdmissionError) Error() string {
 	return e.cause.Error()
 }
@@ -175,22 +106,14 @@ func (c *CurrentNodeController) admit(runID currentNodeRunID) (err error) {
 	ctx := run.launchContext
 	preparation := run.preparation
 	delivery := run.taskPromptDelivery
-	assignmentSteer := run.assignmentSteer
 	policy := run.policy
 	c.mu.Unlock()
 	if preparation != nil {
 		if err := preparation(ctx); err != nil {
 			return err
 		}
-		if delivery == workflowruntime.TaskPromptDeliveryAssignment {
-			assignment, err := c.steerAssignment(ctx, reference)
-			if err != nil {
-				return err
-			}
-			assignmentSteer = assignment
-		}
 	}
-	assignmentSteer, err = resolvedCurrentNodeAssignmentSteer(ctx, assignmentSteer)
+	assignment, err := c.ensureAssignment(ctx, reference, delivery)
 	if err != nil {
 		return err
 	}
@@ -273,7 +196,7 @@ retryAdmission:
 		}
 		goto retryAdmission
 	}
-	if err := c.runner.StartCurrentNode(ctx, reference, delivery, assignmentSteer, lease, c); err != nil {
+	if err := c.runner.StartCurrentNode(ctx, reference, delivery, assignment, lease, c); err != nil {
 		if _, live := c.authority.ExecutionByScope(lease.ScopeID()); live {
 			if correlateErr := c.correlateExactRun(ctx, runID, reference, lease); correlateErr == nil {
 				_ = c.FailCurrentNodeScope(
@@ -366,208 +289,22 @@ func (c *CurrentNodeController) enqueueAutomaticIntents(intents []CurrentNodeAut
 	c.enqueueStarts(automaticQueuedStarts(intents))
 }
 
-func (c *CurrentNodeController) steerStartsAssignments(ctx context.Context, starts []currentNodeQueuedStart) ([]currentNodeQueuedStart, error) {
-	steered := append([]currentNodeQueuedStart(nil), starts...)
-	for index := range steered {
-		assignment, err := c.steerAssignment(ctx, steered[index].reference)
-		if err != nil {
-			return steered[:index], err
-		}
-		steered[index].assignmentSteer = assignment
-	}
-	return steered, nil
-}
-
-func pendingCurrentNodeAssignmentStarts(starts []currentNodeQueuedStart) ([]currentNodeQueuedStart, []*pendingCurrentNodeAssignmentSteer) {
-	pendingStarts := append([]currentNodeQueuedStart(nil), starts...)
-	pending := make([]*pendingCurrentNodeAssignmentSteer, len(pendingStarts))
-	for index := range pendingStarts {
-		pending[index] = newPendingCurrentNodeAssignmentSteer()
-		pendingStarts[index].assignmentSteer = pending[index]
-	}
-	return pendingStarts, pending
-}
-
-func (c *CurrentNodeController) resolvePendingCurrentNodeAssignmentSteers(
-	ctx context.Context,
-	starts []currentNodeQueuedStart,
-	pending []*pendingCurrentNodeAssignmentSteer,
-) error {
-	if len(pending) == 0 {
-		return nil
-	}
-	if len(pending) != len(starts) {
-		return fmt.Errorf(
-			"pending current node assignment count %d does not match start count %d",
-			len(pending),
-			len(starts),
-		)
-	}
-	for index, start := range starts {
-		assignment, err := c.steerAssignment(ctx, start.reference)
-		pending[index].resolve(assignment, err)
-		if err != nil {
-			for _, unresolved := range pending[index+1:] {
-				unresolved.resolve(nil, err)
-			}
-			return err
-		}
-	}
-	return nil
-}
-
-func (c *CurrentNodeController) resolvePreparedCurrentNodeStarts(
-	ctx context.Context,
-	starts []currentNodeQueuedStart,
-	pending []*pendingCurrentNodeAssignmentSteer,
-	runIDs []currentNodeRunID,
-	wake bool,
-) error {
-	resolveErr := c.resolvePendingCurrentNodeAssignmentSteers(ctx, starts, pending)
-	outcome := waitCurrentNodeAssignmentSteers(ctx, starts)
-	cause := errors.Join(resolveErr, outcome.err)
-	if cause == nil {
-		if wake && len(runIDs) != 0 {
-			c.wakeAdmissionWorker()
-		}
-		return nil
-	}
-	if len(outcome.pending) != 0 {
-		c.continuePreparedCurrentNodeStarts(starts, runIDs, wake, resolveErr)
-		return cause
-	}
-	recoveryErr := c.recoverCurrentNodeStartFailures(ctx, starts, false, cause)
-	if recoveryErr == nil {
-		c.mu.Lock()
-		c.removePreparedCurrentNodeRunsLocked(runIDs)
-		c.mu.Unlock()
-	}
-	return errors.Join(cause, recoveryErr)
-}
-
-func (c *CurrentNodeController) continuePreparedCurrentNodeStarts(
-	starts []currentNodeQueuedStart,
-	runIDs []currentNodeRunID,
-	wake bool,
-	priorErr error,
-) {
-	c.mu.Lock()
-	if c.closed {
-		c.mu.Unlock()
-		return
-	}
-	c.workerWG.Add(1)
-	c.mu.Unlock()
-	go func() {
-		defer c.workerWG.Done()
-		outcome := waitCurrentNodeAssignmentSteers(c.workerContext, starts)
-		if context.Cause(c.workerContext) != nil {
-			return
-		}
-		cause := errors.Join(priorErr, outcome.err)
-		if cause == nil {
-			if wake && len(runIDs) != 0 {
-				c.wakeAdmissionWorker()
-			}
-			return
-		}
-		if err := c.recoverCurrentNodeStartFailures(c.workerContext, starts, false, cause); err != nil {
-			return
-		}
-		c.mu.Lock()
-		c.removePreparedCurrentNodeRunsLocked(runIDs)
-		c.mu.Unlock()
-	}()
-}
-
-func (c *CurrentNodeController) steerAssignment(
+func (c *CurrentNodeController) ensureAssignment(
 	ctx context.Context,
 	reference workflow.CurrentNodeReference,
-) (CurrentNodeAssignmentSteer, error) {
-	assignment, err := c.steerer.SteerCurrentNodeAssignment(ctx, reference)
+	delivery workflowruntime.TaskPromptDelivery,
+) (CurrentNodeAssignmentEnsure, error) {
+	assignment, err := c.assignmentEnsurer.EnsureCurrentNodeAssignment(ctx, reference, delivery)
 	if err != nil {
-		return nil, fmt.Errorf("steer current node assignment %v: %w", reference, err)
+		return nil, fmt.Errorf("ensure current node assignment %v: %w", reference, err)
 	}
 	if assignment == nil {
-		return nil, fmt.Errorf("steer current node assignment %v returned no completion", reference)
+		return nil, fmt.Errorf("ensure current node assignment %v returned no result", reference)
+	}
+	if !assignment.CommitReceipt().Committed {
+		return nil, fmt.Errorf("ensure current node assignment %v was not committed", reference)
 	}
 	return assignment, nil
-}
-
-type currentNodeAssignmentWaitOutcome struct {
-	committed []currentNodeQueuedStart
-	pending   []currentNodeQueuedStart
-	err       error
-}
-
-func waitCurrentNodeAssignmentSteers(
-	ctx context.Context,
-	starts []currentNodeQueuedStart,
-) currentNodeAssignmentWaitOutcome {
-	outcome := currentNodeAssignmentWaitOutcome{
-		committed: make([]currentNodeQueuedStart, 0, len(starts)),
-		pending:   make([]currentNodeQueuedStart, 0, len(starts)),
-	}
-	for _, start := range starts {
-		if start.assignmentSteer == nil {
-			outcome.err = errors.Join(outcome.err, fmt.Errorf(
-				"current node assignment %v has no steer completion",
-				start.reference,
-			))
-			continue
-		}
-		receipt, err := start.assignmentSteer.Wait(ctx)
-		if receipt.Committed {
-			outcome.committed = append(outcome.committed, start)
-		}
-		if err != nil {
-			if cause := context.Cause(ctx); !receipt.Committed && cause != nil && errors.Is(err, cause) {
-				outcome.pending = append(outcome.pending, start)
-			}
-			outcome.err = errors.Join(outcome.err, fmt.Errorf(
-				"wait for current node assignment %v: %w",
-				start.reference,
-				err,
-			))
-			continue
-		}
-		if !receipt.Committed {
-			outcome.err = errors.Join(outcome.err, fmt.Errorf(
-				"current node assignment %v was not committed",
-				start.reference,
-			))
-		}
-	}
-	return outcome
-}
-
-func (c *CurrentNodeController) continueCurrentNodeAssignmentStarts(
-	starts []currentNodeQueuedStart,
-	priorErr error,
-) {
-	if len(starts) == 0 {
-		return
-	}
-	c.mu.Lock()
-	if c.closed {
-		c.mu.Unlock()
-		return
-	}
-	c.workerWG.Add(1)
-	c.mu.Unlock()
-	go func() {
-		defer c.workerWG.Done()
-		outcome := waitCurrentNodeAssignmentSteers(c.workerContext, starts)
-		if context.Cause(c.workerContext) != nil {
-			return
-		}
-		cause := errors.Join(priorErr, outcome.err)
-		if cause != nil {
-			c.handleCurrentNodeStartFailures(outcome.committed, false, cause)
-			return
-		}
-		c.enqueueStarts(starts)
-	}()
 }
 
 func (c *CurrentNodeController) enqueueStarts(starts []currentNodeQueuedStart) {
@@ -606,7 +343,6 @@ func (c *CurrentNodeController) queueExplicitStartLocked(start currentNodeQueued
 		if run.phase == currentNodeRunHeld {
 			run.preparation = start.preparation
 			run.taskPromptDelivery = start.taskPromptDelivery
-			run.assignmentSteer = start.assignmentSteer
 			run.transition(currentNodeRunQueued)
 			c.explicitQueue = append(c.explicitQueue, run.id)
 		}
@@ -633,7 +369,6 @@ func (c *CurrentNodeController) queueAutomaticStartLocked(start currentNodeQueue
 		if run.phase == currentNodeRunHeld {
 			run.preparation = start.preparation
 			run.taskPromptDelivery = start.taskPromptDelivery
-			run.assignmentSteer = start.assignmentSteer
 			run.transition(currentNodeRunQueued)
 			c.automaticQueue.append(run)
 		}
@@ -761,7 +496,6 @@ func (c *CurrentNodeController) takeAutomaticIntent() (currentNodeRunID, bool) {
 	if run == nil || run.phase != currentNodeRunQueued {
 		panic("automatic queue points to absent or non-queued Run")
 	}
-	run.taskPromptDelivery = workflowruntime.TaskPromptDeliveryResume
 	run.launchContext, run.launchCancel = context.WithCancel(c.workerContext)
 	run.admissionDone = make(chan struct{})
 	run.transition(currentNodeRunLaunching)
@@ -965,7 +699,7 @@ func currentNodeExplicitStarts(nodes []workflow.CurrentNode) ([]currentNodeQueue
 		seen[key] = struct{}{}
 		starts = append(starts, currentNodeQueuedStart{
 			reference:          currentNode.Reference,
-			taskPromptDelivery: workflowruntime.TaskPromptDeliveryResume,
+			taskPromptDelivery: workflowruntime.TaskPromptDeliveryAssignment,
 		})
 	}
 	return starts, nil

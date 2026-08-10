@@ -75,7 +75,6 @@ type currentNodeRun struct {
 	expectedScheduling       workflow.CurrentNodeSchedulingState
 	preparation              TaskStartPreparation
 	taskPromptDelivery       workflowruntime.TaskPromptDelivery
-	assignmentSteer          CurrentNodeAssignmentSteer
 	predecessor              *currentNodeRunID
 	phaseChanged             chan struct{}
 	launchContext            context.Context
@@ -148,7 +147,6 @@ func (c *CurrentNodeController) allocateRunLocked(start currentNodeQueuedStart) 
 		expectedScheduling: workflow.CurrentNodeSchedulingReady,
 		preparation:        start.preparation,
 		taskPromptDelivery: start.taskPromptDelivery,
-		assignmentSteer:    start.assignmentSteer,
 		phaseChanged:       make(chan struct{}),
 	}
 	c.runs[run.id] = run
@@ -185,7 +183,6 @@ func (c *CurrentNodeController) stageRunsLocked(starts []currentNodeQueuedStart)
 			reference:          start.reference,
 			preparation:        start.preparation,
 			taskPromptDelivery: start.taskPromptDelivery,
-			assignmentSteer:    start.assignmentSteer,
 			policy:             start.policy,
 		})
 		if err != nil {
@@ -273,7 +270,7 @@ func (c *CurrentNodeController) installStagedRunsLocked(ids []currentNodeRunID) 
 		if run == nil || run.phase != currentNodeRunStaged || c.currentRuns[run.key] != id {
 			panic(fmt.Sprintf("install invalid staged Current-Node Run %d", id.sequence))
 		}
-		c.queueRunLocked(id, nil)
+		c.queueRunLocked(id)
 	}
 }
 
@@ -305,7 +302,6 @@ func (c *CurrentNodeController) stageSuccessorRunLocked(
 		expectedScheduling: workflow.CurrentNodeSchedulingReady,
 		preparation:        start.preparation,
 		taskPromptDelivery: start.taskPromptDelivery,
-		assignmentSteer:    start.assignmentSteer,
 		predecessor:        &predecessorID,
 		phaseChanged:       make(chan struct{}),
 	}
@@ -524,12 +520,11 @@ func (c *CurrentNodeController) runPredecessorActiveLocked(run *currentNodeRun) 
 	return active
 }
 
-func (c *CurrentNodeController) queueRunLocked(id currentNodeRunID, assignment CurrentNodeAssignmentSteer) {
+func (c *CurrentNodeController) queueRunLocked(id currentNodeRunID) {
 	run := c.runs[id]
 	if run == nil || run.stopping() {
 		return
 	}
-	run.assignmentSteer = assignment
 	run.transition(currentNodeRunQueued)
 	if run.policy.isAutomatic() {
 		c.automaticQueue.append(run)

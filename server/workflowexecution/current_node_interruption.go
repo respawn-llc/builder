@@ -463,7 +463,7 @@ func (c *CurrentNodeController) rollbackTaskInterruptLocked(fence *currentNodeIn
 		run.interruptFence = nil
 		run.stop = currentNodeRunStopNone
 		if run.phase == currentNodeRunQueued {
-			c.queueRunLocked(run.id, run.assignmentSteer)
+			c.queueRunLocked(run.id)
 		}
 	}
 	c.finishInterruptFenceLocked(fence)

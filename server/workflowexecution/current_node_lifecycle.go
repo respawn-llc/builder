@@ -299,29 +299,27 @@ func (c *CurrentNodeController) ApplyPendingApproval(
 			workflowstore.PreparedCurrentNodeMutation,
 			workflowstore.PendingApprovalApplyResult,
 			[]currentNodeQueuedStart,
-			[]*pendingCurrentNodeAssignmentSteer,
 			error,
 		) {
 			prepared, err := c.store.PreparePendingApprovalApply(ctx, approvalID)
 			if err != nil {
-				return nil, workflowstore.PendingApprovalApplyResult{}, nil, nil, err
+				return nil, workflowstore.PendingApprovalApplyResult{}, nil, err
 			}
 			result := prepared.Result()
 			if result.PendingApprovalApply == nil {
-				return nil, workflowstore.PendingApprovalApplyResult{}, nil, nil, errors.Join(
+				return nil, workflowstore.PendingApprovalApplyResult{}, nil, errors.Join(
 					errors.New("prepared pending Approval apply result is absent"),
 					prepared.Rollback(),
 				)
 			}
 			starts, err := currentNodeExplicitStarts(result.CreatedExecutableCurrentNodes)
 			if err != nil {
-				return nil, workflowstore.PendingApprovalApplyResult{}, nil, nil, errors.Join(err, prepared.Rollback())
+				return nil, workflowstore.PendingApprovalApplyResult{}, nil, errors.Join(err, prepared.Rollback())
 			}
-			starts, pending := pendingCurrentNodeAssignmentStarts(starts)
-			return prepared, *result.PendingApprovalApply, starts, pending, nil
+			return prepared, *result.PendingApprovalApply, starts, nil
 		}
 		if !sourceLive {
-			prepared, applied, starts, pending, err := prepare()
+			prepared, applied, starts, err := prepare()
 			if err != nil {
 				return workflowstore.PendingApprovalApplyResult{}, err
 			}
@@ -341,9 +339,7 @@ func (c *CurrentNodeController) ApplyPendingApproval(
 			}
 			c.mu.Unlock()
 			c.finalizeTaskAttentionResolution(applied.TaskAttentionResolution)
-			if err := c.resolvePreparedCurrentNodeStarts(ctx, starts, pending, runIDs, true); err != nil {
-				return applied, err
-			}
+			c.wakeAdmissionWorker()
 			return applied, nil
 		}
 		handle, live := c.authority.ExecutionByScope(sourceScopeID)
@@ -352,16 +348,13 @@ func (c *CurrentNodeController) ApplyPendingApproval(
 		}
 		var applied workflowstore.PendingApprovalApplyResult
 		var starts []currentNodeQueuedStart
-		var pending []*pendingCurrentNodeAssignmentSteer
-		var successorRunIDs []currentNodeRunID
 		err = c.authority.WithExactExecutions([]sessionruntime.ExecutionHandle{handle}, func() error {
-			prepared, preparedApplied, preparedStarts, preparedPending, applyErr := prepare()
+			prepared, preparedApplied, preparedStarts, applyErr := prepare()
 			if applyErr != nil {
 				return applyErr
 			}
 			applied = preparedApplied
 			starts = preparedStarts
-			pending = preparedPending
 			c.mu.Lock()
 			current, stillLive := c.runByScopeLocked(sourceScopeID)
 			if !stillLive || current.id != sourceRun.id || current.stopping() {
@@ -379,7 +372,6 @@ func (c *CurrentNodeController) ApplyPendingApproval(
 			}
 			stageErr = c.commitSuccessorRunsLocked(prepared, sourceRun.id, runIDs, false, phase)
 			if stageErr == nil {
-				successorRunIDs = append([]currentNodeRunID(nil), runIDs...)
 				sourceRun.successors = append(sourceRun.successors, runIDs...)
 			}
 			c.mu.Unlock()
@@ -389,14 +381,8 @@ func (c *CurrentNodeController) ApplyPendingApproval(
 			return workflowstore.PendingApprovalApplyResult{}, err
 		}
 		c.finalizeTaskAttentionResolution(applied.TaskAttentionResolution)
-		if err := c.resolvePreparedCurrentNodeStarts(
-			ctx,
-			starts,
-			pending,
-			successorRunIDs,
-			sourceRun.completion == currentNodeRunCompletionScriptSucceeded,
-		); err != nil {
-			return applied, err
+		if sourceRun.completion == currentNodeRunCompletionScriptSucceeded {
+			c.wakeAdmissionWorker()
 		}
 		return applied, nil
 	})
@@ -434,7 +420,6 @@ func (c *CurrentNodeController) ApplyManualMove(
 		if err != nil {
 			return workflowstore.ManualMoveResult{}, errors.Join(err, mutation.Rollback())
 		}
-		starts, pending := pendingCurrentNodeAssignmentStarts(starts)
 		c.mu.Lock()
 		if err := c.ensureTaskAvailableLocked(taskID); err != nil {
 			c.mu.Unlock()
@@ -451,9 +436,7 @@ func (c *CurrentNodeController) ApplyManualMove(
 		}
 		c.mu.Unlock()
 		c.finalizeTaskAttentionResolution(moved.TaskAttentionResolution)
-		if err := c.resolvePreparedCurrentNodeStarts(ctx, starts, pending, runIDs, true); err != nil {
-			return moved, err
-		}
+		c.wakeAdmissionWorker()
 		return moved, nil
 	})
 }

@@ -294,7 +294,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		workflowexecution.CurrentNodeControllerConfig{
 			AgentConcurrency:  cfg.Settings.Workflow.Concurrency,
 			Attention:         workflowAttentionFinalizer,
-			AssignmentSteerer: workflowRuntimeStarter,
+			AssignmentEnsurer: workflowRuntimeStarter,
 			LifecycleReporter: lifecycleFatal,
 			LifecycleContext:  lifecycleFatal.Context(),
 		},

@@ -20,6 +20,11 @@ type WorkflowAssignment struct {
 	Prompt         workflowruntime.PromptContract
 }
 
+type WorkflowAssignmentEnsure struct {
+	Receipt  session.CommitReceipt
+	Appended bool
+}
+
 // PersistedWorkflowAssignmentContext supplies the runtime-owned context needed
 // to seed a fresh dormant Session before its first workflow assignment.
 type PersistedWorkflowAssignmentContext struct {
@@ -52,7 +57,7 @@ func newWorkflowAssignmentSteer() WorkflowAssignmentSteer {
 	return WorkflowAssignmentSteer{state: &workflowAssignmentSteerState{done: make(chan struct{})}}
 }
 
-func CompletedWorkflowAssignmentSteer(receipt session.CommitReceipt, err error) WorkflowAssignmentSteer {
+func completedWorkflowAssignmentSteer(receipt session.CommitReceipt, err error) WorkflowAssignmentSteer {
 	steer := newWorkflowAssignmentSteer()
 	steer.complete(receipt, err)
 	return steer
@@ -124,30 +129,54 @@ func (e *Engine) SteerWorkflowAssignment(assignment WorkflowAssignment) (Workflo
 	return steer, nil
 }
 
-func SteerPersistedWorkflowAssignment(
+func (e *Engine) EnsureWorkflowAssignment(
+	ctx context.Context,
+	assignment WorkflowAssignment,
+) (WorkflowAssignmentEnsure, error) {
+	message, err := buildWorkflowAssignmentMessage(assignment)
+	if err != nil {
+		return WorkflowAssignmentEnsure{}, err
+	}
+	if latestActiveMetaContextMatches(e.transcriptRuntimeState().SnapshotItems(), message) {
+		return WorkflowAssignmentEnsure{
+			Receipt: session.CommitReceipt{Committed: true},
+		}, nil
+	}
+	steer, err := e.SteerWorkflowAssignment(assignment)
+	if err != nil {
+		return WorkflowAssignmentEnsure{}, err
+	}
+	receipt, err := steer.Wait(ctx)
+	if err != nil {
+		return WorkflowAssignmentEnsure{Receipt: receipt, Appended: receipt.Committed}, err
+	}
+	if !receipt.Committed {
+		return WorkflowAssignmentEnsure{}, errors.New("workflow assignment message was not committed")
+	}
+	return WorkflowAssignmentEnsure{Receipt: receipt, Appended: true}, nil
+}
+
+func EnsurePersistedWorkflowAssignment(
+	ctx context.Context,
 	store *session.Store,
 	assignment WorkflowAssignment,
 	deliveryContext PersistedWorkflowAssignmentContext,
-) (WorkflowAssignmentSteer, error) {
+) (WorkflowAssignmentEnsure, error) {
 	if store == nil {
-		return WorkflowAssignmentSteer{}, errors.New("session store is required")
+		return WorkflowAssignmentEnsure{}, errors.New("session store is required")
 	}
 	message, err := buildWorkflowAssignmentMessage(assignment)
 	if err != nil {
-		return WorkflowAssignmentSteer{}, err
+		return WorkflowAssignmentEnsure{}, err
 	}
 	engine, err := newPersistedSteeringEngine(store)
 	if err != nil {
-		return WorkflowAssignmentSteer{}, err
+		return WorkflowAssignmentEnsure{}, err
 	}
 	recent, err := engine.eventLog.ReadRecentRecords(1)
 	if err != nil {
-		return WorkflowAssignmentSteer{}, err
+		return WorkflowAssignmentEnsure{}, err
 	}
-	// Dormant admission must call this before appending any other event. A
-	// pre-existing record is the durable witness that base meta context has
-	// already been seeded; unrelated callback writes would invalidate that
-	// freshness test.
 	if len(recent.Records) == 0 {
 		builder := newActiveMetaContextBuilder(
 			engine.store.Meta(),
@@ -159,10 +188,58 @@ func SteerPersistedWorkflowAssignment(
 			time.Now(),
 		).withSubagents(deliveryContext.SubagentCatalogSettings, deliveryContext.EnabledTools)
 		if err := engine.steerBaseMetaContext("", builder, config.SubagentInvocationContextWorkflow); err != nil {
-			return WorkflowAssignmentSteer{}, err
+			return WorkflowAssignmentEnsure{}, err
+		}
+	} else {
+		items, err := activePersistedMetaContextItems(engine.eventLog)
+		if err != nil {
+			return WorkflowAssignmentEnsure{}, err
+		}
+		if latestActiveMetaContextMatches(items, message) {
+			return WorkflowAssignmentEnsure{
+				Receipt: session.CommitReceipt{Committed: true},
+			}, nil
 		}
 	}
-	return completePersistedWorkflowAssignment(engine, message), nil
+	steer := completePersistedWorkflowAssignment(engine, message)
+	receipt, err := steer.Wait(ctx)
+	if err != nil {
+		return WorkflowAssignmentEnsure{Receipt: receipt, Appended: receipt.Committed}, err
+	}
+	return WorkflowAssignmentEnsure{Receipt: receipt, Appended: true}, nil
+}
+
+func activePersistedMetaContextItems(eventLog session.MaterializedEventLog) ([]llm.ResponseItem, error) {
+	var matchErr error
+	window, err := eventLog.ReadNewestSegmentBackward(compactionBoundaryMatcher(&matchErr))
+	if err != nil {
+		return nil, err
+	}
+	if matchErr != nil {
+		return nil, matchErr
+	}
+	items := make([]llm.ResponseItem, 0, len(window.Records))
+	for _, record := range window.Records {
+		payload, err := record.Payload()
+		if err != nil {
+			return nil, err
+		}
+		switch payload := payload.(type) {
+		case session.MessageRecord:
+			restored, err := llmMessageFromSessionRecord(payload)
+			if err != nil {
+				return nil, err
+			}
+			items = append(items, llm.ItemsFromMessages([]llm.Message{restored})...)
+		case session.HistoryReplacementRecord:
+			replacement, err := historyReplacementPayloadFromSessionRecord(payload)
+			if err != nil {
+				return nil, err
+			}
+			items = append(items[:0], replacement.Items...)
+		}
+	}
+	return items, nil
 }
 
 func completePersistedWorkflowAssignment(engine *Engine, message llm.Message) WorkflowAssignmentSteer {
@@ -172,7 +249,7 @@ func completePersistedWorkflowAssignment(engine *Engine, message llm.Message) Wo
 		true,
 		[]llm.Message{message},
 	))
-	return CompletedWorkflowAssignmentSteer(receipt, err)
+	return completedWorkflowAssignmentSteer(receipt, err)
 }
 
 func (e *Engine) flushPendingWorkflowAssignments(stepID string) error {

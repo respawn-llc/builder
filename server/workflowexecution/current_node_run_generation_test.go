@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"core/internal/testharness/testsetup"
-	"core/server/session"
 	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowruntime"
@@ -982,7 +981,7 @@ func TestCurrentNodeControllerKeepsAgentCapacityUntilPredecessorRetiresWhileScri
 	}
 	controller, err = NewCurrentNodeController(store, runner, authority, NewTaskMutationCoordinator(), CurrentNodeControllerConfig{
 		AgentConcurrency:  1,
-		AssignmentSteerer: noOpCurrentNodeAssignmentSteerer{},
+		AssignmentEnsurer: noOpCurrentNodeAssignmentEnsurer{},
 		LifecycleReporter: newRecordingLifecycleFatalReporter(),
 	})
 	if err != nil {
@@ -1100,27 +1099,6 @@ func TestCurrentNodeControllerKeepsAgentCapacityUntilPredecessorRetiresWhileScri
 	case <-time.After(3 * time.Second):
 		t.Fatal("an eligible Agent did not start after predecessor retirement released capacity")
 	}
-}
-
-type selectiveLateCommitSteerer struct {
-	target  workflow.CurrentNodeReference
-	started chan struct{}
-	release <-chan struct{}
-}
-
-func (s selectiveLateCommitSteerer) SteerCurrentNodeAssignment(
-	_ context.Context,
-	reference workflow.CurrentNodeReference,
-) (CurrentNodeAssignmentSteer, error) {
-	if reference.Equal(s.target) {
-		return &lateCommitCurrentNodeAssignmentSteer{
-			started: s.started,
-			release: s.release,
-		}, nil
-	}
-	return completedCurrentNodeAssignmentSteer{
-		receipt: session.CommitReceipt{Committed: true},
-	}, nil
 }
 
 func TestCurrentNodeControllerPrefersSameTaskAutomaticContinuation(t *testing.T) {

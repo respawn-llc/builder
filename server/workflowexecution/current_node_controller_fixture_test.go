@@ -46,7 +46,7 @@ func newCurrentNodeControllerWithAttentionForTest(
 	controller, err := NewCurrentNodeController(store, runner, authority, NewTaskMutationCoordinator(), CurrentNodeControllerConfig{
 		AgentConcurrency:  concurrency,
 		Attention:         attention,
-		AssignmentSteerer: noOpCurrentNodeAssignmentSteerer{},
+		AssignmentEnsurer: noOpCurrentNodeAssignmentEnsurer{},
 		LifecycleReporter: newRecordingLifecycleFatalReporter(),
 	})
 	if err != nil {
@@ -55,142 +55,71 @@ func newCurrentNodeControllerWithAttentionForTest(
 	return controller
 }
 
-type noOpCurrentNodeAssignmentSteerer struct{}
+type noOpCurrentNodeAssignmentEnsurer struct{}
 
-func (noOpCurrentNodeAssignmentSteerer) SteerCurrentNodeAssignment(context.Context, workflow.CurrentNodeReference) (CurrentNodeAssignmentSteer, error) {
-	return completedCurrentNodeAssignmentSteer{
+func (noOpCurrentNodeAssignmentEnsurer) EnsureCurrentNodeAssignment(
+	context.Context,
+	workflow.CurrentNodeReference,
+	workflowruntime.TaskPromptDelivery,
+) (CurrentNodeAssignmentEnsure, error) {
+	return completedCurrentNodeAssignmentEnsure{
 		receipt: session.CommitReceipt{Committed: true},
 	}, nil
 }
 
-type completedCurrentNodeAssignmentSteer struct {
+type completedCurrentNodeAssignmentEnsure struct {
+	receipt session.CommitReceipt
+}
+
+func (s completedCurrentNodeAssignmentEnsure) CommitReceipt() session.CommitReceipt {
+	return s.receipt
+}
+
+type recordingCurrentNodeAssignmentEnsurer struct {
+	mu       sync.Mutex
+	ensured  []workflow.CurrentNodeReference
+	outcomes []currentNodeAssignmentEnsureOutcome
+	err      error
+	receipt  session.CommitReceipt
+}
+
+type currentNodeAssignmentEnsureOutcome struct {
 	receipt session.CommitReceipt
 	err     error
 }
 
-func (s completedCurrentNodeAssignmentSteer) Wait(context.Context) (session.CommitReceipt, error) {
-	return s.receipt, s.err
-}
-
-type deadlineRecordingCurrentNodeAssignmentSteerer struct {
-	reference workflow.CurrentNodeReference
-	deadline  chan<- time.Time
-}
-
-func (s deadlineRecordingCurrentNodeAssignmentSteerer) SteerCurrentNodeAssignment(
+func (s *recordingCurrentNodeAssignmentEnsurer) EnsureCurrentNodeAssignment(
 	_ context.Context,
 	reference workflow.CurrentNodeReference,
-) (CurrentNodeAssignmentSteer, error) {
-	if !reference.Equal(s.reference) {
-		return completedCurrentNodeAssignmentSteer{
-			receipt: session.CommitReceipt{Committed: true},
-		}, nil
-	}
-	return &deadlineRecordingCurrentNodeAssignmentSteer{deadline: s.deadline}, nil
-}
-
-type deadlineRecordingCurrentNodeAssignmentSteer struct {
-	deadline chan<- time.Time
-	mu       sync.Mutex
-	recorded bool
-}
-
-func (s *deadlineRecordingCurrentNodeAssignmentSteer) Wait(ctx context.Context) (session.CommitReceipt, error) {
+	_ workflowruntime.TaskPromptDelivery,
+) (CurrentNodeAssignmentEnsure, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.recorded {
-		return session.CommitReceipt{Committed: true}, nil
-	}
-	deadline, ok := ctx.Deadline()
-	if !ok {
-		return session.CommitReceipt{}, errors.New("assignment steer wait context has no deadline")
-	}
-	s.recorded = true
-	s.deadline <- deadline
-	return session.CommitReceipt{Committed: true}, nil
-}
-
-type lateCommitCurrentNodeAssignmentSteerer struct {
-	release <-chan struct{}
-	started chan struct{}
-}
-
-func (s lateCommitCurrentNodeAssignmentSteerer) SteerCurrentNodeAssignment(
-	context.Context,
-	workflow.CurrentNodeReference,
-) (CurrentNodeAssignmentSteer, error) {
-	return &lateCommitCurrentNodeAssignmentSteer{
-		release: s.release,
-		started: s.started,
-	}, nil
-}
-
-type lateCommitCurrentNodeAssignmentSteer struct {
-	release <-chan struct{}
-	started chan struct{}
-	once    sync.Once
-}
-
-func (s *lateCommitCurrentNodeAssignmentSteer) Wait(ctx context.Context) (session.CommitReceipt, error) {
-	s.once.Do(func() { close(s.started) })
-	select {
-	case <-s.release:
-		return session.CommitReceipt{Committed: true}, nil
-	case <-ctx.Done():
-		return session.CommitReceipt{}, context.Cause(ctx)
-	}
-}
-
-type recordingCurrentNodeAssignmentSteerer struct {
-	mu          sync.Mutex
-	steered     []workflow.CurrentNodeReference
-	outcomes    []currentNodeAssignmentSteerOutcome
-	err         error
-	waitReceipt session.CommitReceipt
-	waitErr     error
-}
-
-type currentNodeAssignmentSteerOutcome struct {
-	receipt  session.CommitReceipt
-	steerErr error
-	waitErr  error
-}
-
-func (s *recordingCurrentNodeAssignmentSteerer) SteerCurrentNodeAssignment(_ context.Context, reference workflow.CurrentNodeReference) (CurrentNodeAssignmentSteer, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.steered = append(s.steered, reference)
-	index := len(s.steered) - 1
+	s.ensured = append(s.ensured, reference)
+	index := len(s.ensured) - 1
 	if index < len(s.outcomes) {
 		outcome := s.outcomes[index]
-		if outcome.steerErr != nil {
-			return nil, outcome.steerErr
+		if outcome.err != nil {
+			return nil, outcome.err
 		}
-		return completedCurrentNodeAssignmentSteer{
+		return completedCurrentNodeAssignmentEnsure{
 			receipt: outcome.receipt,
-			err:     outcome.waitErr,
 		}, nil
 	}
 	if s.err != nil {
 		return nil, s.err
 	}
-	receipt := s.waitReceipt
-	if s.waitErr == nil {
+	receipt := s.receipt
+	if !receipt.Committed {
 		receipt.Committed = true
 	}
-	return completedCurrentNodeAssignmentSteer{receipt: receipt, err: s.waitErr}, nil
+	return completedCurrentNodeAssignmentEnsure{receipt: receipt}, nil
 }
 
-func (s *recordingCurrentNodeAssignmentSteerer) references() []workflow.CurrentNodeReference {
+func (s *recordingCurrentNodeAssignmentEnsurer) references() []workflow.CurrentNodeReference {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]workflow.CurrentNodeReference(nil), s.steered...)
-}
-
-func (s *recordingCurrentNodeAssignmentSteerer) setWaitError(err error) {
-	s.mu.Lock()
-	s.waitErr = err
-	s.mu.Unlock()
+	return append([]workflow.CurrentNodeReference(nil), s.ensured...)
 }
 
 func startCurrentNodeForControllerTest(
@@ -1102,7 +1031,7 @@ type controlledScriptRunner struct {
 	returnErr   error
 }
 
-func (r *controlledScriptRunner) StartCurrentNode(_ context.Context, _ workflow.CurrentNodeReference, _ workflowruntime.TaskPromptDelivery, _ CurrentNodeAssignmentSteer, lease sessionruntime.WorkflowExecutionLease, _ workflowruntime.Controller) error {
+func (r *controlledScriptRunner) StartCurrentNode(_ context.Context, _ workflow.CurrentNodeReference, _ workflowruntime.TaskPromptDelivery, _ CurrentNodeAssignmentEnsure, lease sessionruntime.WorkflowExecutionLease, _ workflowruntime.Controller) error {
 	close(r.entered)
 	<-r.startRunner
 	handle, err := r.authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
@@ -1122,7 +1051,7 @@ type failingCurrentNodeRunner struct {
 	cause error
 }
 
-func (r failingCurrentNodeRunner) StartCurrentNode(context.Context, workflow.CurrentNodeReference, workflowruntime.TaskPromptDelivery, CurrentNodeAssignmentSteer, sessionruntime.WorkflowExecutionLease, workflowruntime.Controller) error {
+func (r failingCurrentNodeRunner) StartCurrentNode(context.Context, workflow.CurrentNodeReference, workflowruntime.TaskPromptDelivery, CurrentNodeAssignmentEnsure, sessionruntime.WorkflowExecutionLease, workflowruntime.Controller) error {
 	return r.cause
 }
 
@@ -1132,7 +1061,7 @@ type blockingCurrentNodeRunner struct {
 	once    sync.Once
 }
 
-func (r *blockingCurrentNodeRunner) StartCurrentNode(context.Context, workflow.CurrentNodeReference, workflowruntime.TaskPromptDelivery, CurrentNodeAssignmentSteer, sessionruntime.WorkflowExecutionLease, workflowruntime.Controller) error {
+func (r *blockingCurrentNodeRunner) StartCurrentNode(context.Context, workflow.CurrentNodeReference, workflowruntime.TaskPromptDelivery, CurrentNodeAssignmentEnsure, sessionruntime.WorkflowExecutionLease, workflowruntime.Controller) error {
 	r.once.Do(func() {
 		close(r.entered)
 	})
@@ -1146,7 +1075,7 @@ type countingCurrentNodeRunner struct {
 	deliveries []workflowruntime.TaskPromptDelivery
 }
 
-func (r *countingCurrentNodeRunner) StartCurrentNode(_ context.Context, _ workflow.CurrentNodeReference, delivery workflowruntime.TaskPromptDelivery, _ CurrentNodeAssignmentSteer, _ sessionruntime.WorkflowExecutionLease, _ workflowruntime.Controller) error {
+func (r *countingCurrentNodeRunner) StartCurrentNode(_ context.Context, _ workflow.CurrentNodeReference, delivery workflowruntime.TaskPromptDelivery, _ CurrentNodeAssignmentEnsure, _ sessionruntime.WorkflowExecutionLease, _ workflowruntime.Controller) error {
 	r.mu.Lock()
 	r.count++
 	r.deliveries = append(r.deliveries, delivery)
@@ -1206,7 +1135,7 @@ func (r *boundedExplicitAdmissionRunner) StartCurrentNode(
 	_ context.Context,
 	reference workflow.CurrentNodeReference,
 	_ workflowruntime.TaskPromptDelivery,
-	_ CurrentNodeAssignmentSteer,
+	_ CurrentNodeAssignmentEnsure,
 	_ sessionruntime.WorkflowExecutionLease,
 	_ workflowruntime.Controller,
 ) error {
@@ -1244,7 +1173,7 @@ func (r *runningAndFinalizingScriptRunner) StartCurrentNode(
 	_ context.Context,
 	reference workflow.CurrentNodeReference,
 	_ workflowruntime.TaskPromptDelivery,
-	_ CurrentNodeAssignmentSteer,
+	_ CurrentNodeAssignmentEnsure,
 	lease sessionruntime.WorkflowExecutionLease,
 	controller workflowruntime.Controller,
 ) error {
@@ -1309,7 +1238,7 @@ func (r *runningAndQueuedGateRunner) StartCurrentNode(
 	_ context.Context,
 	reference workflow.CurrentNodeReference,
 	_ workflowruntime.TaskPromptDelivery,
-	_ CurrentNodeAssignmentSteer,
+	_ CurrentNodeAssignmentEnsure,
 	lease sessionruntime.WorkflowExecutionLease,
 	_ workflowruntime.Controller,
 ) error {
@@ -1340,7 +1269,7 @@ func (r *parallelExplicitRunner) StartCurrentNode(
 	_ context.Context,
 	reference workflow.CurrentNodeReference,
 	_ workflowruntime.TaskPromptDelivery,
-	_ CurrentNodeAssignmentSteer,
+	_ CurrentNodeAssignmentEnsure,
 	lease sessionruntime.WorkflowExecutionLease,
 	_ workflowruntime.Controller,
 ) error {
@@ -1364,7 +1293,7 @@ func (r *parallelExplicitRunner) StartCurrentNode(
 	return err
 }
 
-func (r *firstAdmissionBlockingScriptRunner) StartCurrentNode(_ context.Context, reference workflow.CurrentNodeReference, _ workflowruntime.TaskPromptDelivery, _ CurrentNodeAssignmentSteer, lease sessionruntime.WorkflowExecutionLease, _ workflowruntime.Controller) error {
+func (r *firstAdmissionBlockingScriptRunner) StartCurrentNode(_ context.Context, reference workflow.CurrentNodeReference, _ workflowruntime.TaskPromptDelivery, _ CurrentNodeAssignmentEnsure, lease sessionruntime.WorkflowExecutionLease, _ workflowruntime.Controller) error {
 	r.entered <- reference
 	<-r.release
 	_, err := r.authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
@@ -1374,7 +1303,7 @@ func (r *firstAdmissionBlockingScriptRunner) StartCurrentNode(_ context.Context,
 	return err
 }
 
-func (r *completingScriptRunner) StartCurrentNode(_ context.Context, reference workflow.CurrentNodeReference, _ workflowruntime.TaskPromptDelivery, _ CurrentNodeAssignmentSteer, lease sessionruntime.WorkflowExecutionLease, controller workflowruntime.Controller) error {
+func (r *completingScriptRunner) StartCurrentNode(_ context.Context, reference workflow.CurrentNodeReference, _ workflowruntime.TaskPromptDelivery, _ CurrentNodeAssignmentEnsure, lease sessionruntime.WorkflowExecutionLease, controller workflowruntime.Controller) error {
 	if reference.Equal(r.source) {
 		_, err := r.authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
 			Workflow: &lease,
@@ -1405,7 +1334,7 @@ func (r *completingScriptRunner) StartCurrentNode(_ context.Context, reference w
 	return err
 }
 
-func (r *recordingScriptRunner) StartCurrentNode(_ context.Context, reference workflow.CurrentNodeReference, _ workflowruntime.TaskPromptDelivery, _ CurrentNodeAssignmentSteer, lease sessionruntime.WorkflowExecutionLease, _ workflowruntime.Controller) error {
+func (r *recordingScriptRunner) StartCurrentNode(_ context.Context, reference workflow.CurrentNodeReference, _ workflowruntime.TaskPromptDelivery, _ CurrentNodeAssignmentEnsure, lease sessionruntime.WorkflowExecutionLease, _ workflowruntime.Controller) error {
 	_, err := r.authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
 		Workflow: &lease,
 		Command:  r.command,

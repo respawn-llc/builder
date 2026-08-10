@@ -125,10 +125,10 @@ func TestCurrentNodeControllerFailedReservationReleasesAgentCapacity(t *testing.
 
 	controller.enqueueStarts([]currentNodeQueuedStart{{
 		reference: failed,
-		policy:    currentNodeAdmissionAutomaticAgent,
-		assignmentSteer: completedCurrentNodeAssignmentSteer{
-			err: errors.New("assignment preparation failed"),
+		preparation: func(context.Context) error {
+			return errors.New("assignment preparation failed")
 		},
+		policy: currentNodeAdmissionAutomaticAgent,
 	}})
 	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
 		_, interrupted := store.interruption(failed)
@@ -156,7 +156,7 @@ type selectiveScriptFailureRunner struct {
 	started   chan workflow.CurrentNodeReference
 }
 
-func (r *selectiveScriptFailureRunner) StartCurrentNode(_ context.Context, reference workflow.CurrentNodeReference, _ workflowruntime.TaskPromptDelivery, _ CurrentNodeAssignmentSteer, lease sessionruntime.WorkflowExecutionLease, _ workflowruntime.Controller) error {
+func (r *selectiveScriptFailureRunner) StartCurrentNode(_ context.Context, reference workflow.CurrentNodeReference, _ workflowruntime.TaskPromptDelivery, _ CurrentNodeAssignmentEnsure, lease sessionruntime.WorkflowExecutionLease, _ workflowruntime.Controller) error {
 	if reference.Equal(r.failed) {
 		return errors.New("script start failed")
 	}
@@ -182,7 +182,7 @@ func (r *finalizingBeforeLiveRunner) StartCurrentNode(
 	ctx context.Context,
 	reference workflow.CurrentNodeReference,
 	_ workflowruntime.TaskPromptDelivery,
-	_ CurrentNodeAssignmentSteer,
+	_ CurrentNodeAssignmentEnsure,
 	lease sessionruntime.WorkflowExecutionLease,
 	_ workflowruntime.Controller,
 ) error {
@@ -308,7 +308,7 @@ func TestSuccessorAssignmentFailureInterruptsCommittedBranchAfterPredecessorReti
 	}
 	controller, err = NewCurrentNodeController(store, runner, authority, NewTaskMutationCoordinator(), CurrentNodeControllerConfig{
 		AgentConcurrency:  1,
-		AssignmentSteerer: noOpCurrentNodeAssignmentSteerer{},
+		AssignmentEnsurer: noOpCurrentNodeAssignmentEnsurer{},
 		LifecycleReporter: newRecordingLifecycleFatalReporter(),
 	})
 	if err != nil {
@@ -390,7 +390,7 @@ func (r selectiveFailingCurrentNodeRunner) StartCurrentNode(
 	ctx context.Context,
 	reference workflow.CurrentNodeReference,
 	delivery workflowruntime.TaskPromptDelivery,
-	assignment CurrentNodeAssignmentSteer,
+	assignment CurrentNodeAssignmentEnsure,
 	lease sessionruntime.WorkflowExecutionLease,
 	controller workflowruntime.Controller,
 ) error {

@@ -31,24 +31,28 @@ type CurrentNodeRunner interface {
 		context.Context,
 		workflow.CurrentNodeReference,
 		workflowruntime.TaskPromptDelivery,
-		CurrentNodeAssignmentSteer,
+		CurrentNodeAssignmentEnsure,
 		sessionruntime.WorkflowExecutionLease,
 		workflowruntime.Controller,
 	) error
 }
 
-type CurrentNodeAssignmentSteerer interface {
-	SteerCurrentNodeAssignment(context.Context, workflow.CurrentNodeReference) (CurrentNodeAssignmentSteer, error)
+type CurrentNodeAssignmentEnsurer interface {
+	EnsureCurrentNodeAssignment(
+		context.Context,
+		workflow.CurrentNodeReference,
+		workflowruntime.TaskPromptDelivery,
+	) (CurrentNodeAssignmentEnsure, error)
 }
 
-type CurrentNodeAssignmentSteer interface {
-	Wait(context.Context) (session.CommitReceipt, error)
+type CurrentNodeAssignmentEnsure interface {
+	CommitReceipt() session.CommitReceipt
 }
 
 type CurrentNodeControllerConfig struct {
 	AgentConcurrency  int
 	Attention         CurrentNodeAttentionLifecycle
-	AssignmentSteerer CurrentNodeAssignmentSteerer
+	AssignmentEnsurer CurrentNodeAssignmentEnsurer
 	LifecycleReporter LifecycleFatalReporter
 	LifecycleContext  context.Context
 }
@@ -118,7 +122,7 @@ type CurrentNodeController struct {
 		TaskExecutionScope(context.Context, workflow.TaskID) (workflowstore.TaskExecutionScope, error)
 	}
 	runner                 CurrentNodeRunner
-	steerer                CurrentNodeAssignmentSteerer
+	assignmentEnsurer      CurrentNodeAssignmentEnsurer
 	authority              *sessionruntime.Authority
 	taskMutations          *TaskMutationCoordinator
 	attention              CurrentNodeAttentionLifecycle
@@ -173,8 +177,8 @@ func NewCurrentNodeController(
 	if runner == nil {
 		return nil, errors.New("current node workflow runner is required")
 	}
-	if cfg.AssignmentSteerer == nil {
-		return nil, errors.New("current node assignment steerer is required")
+	if cfg.AssignmentEnsurer == nil {
+		return nil, errors.New("current node assignment ensurer is required")
 	}
 	if authority == nil {
 		return nil, errors.New("session runtime authority is required")
@@ -196,7 +200,7 @@ func NewCurrentNodeController(
 	controller := &CurrentNodeController{
 		store:                  store,
 		runner:                 runner,
-		steerer:                cfg.AssignmentSteerer,
+		assignmentEnsurer:      cfg.AssignmentEnsurer,
 		authority:              authority,
 		taskMutations:          taskMutations,
 		attention:              cfg.Attention,
@@ -647,7 +651,6 @@ func (c *CurrentNodeController) CompleteIdleCurrentNode(
 			return workflowstore.CurrentNodeCompletionResult{}, errors.Join(intentErr, prepared.Rollback())
 		}
 		starts := automaticQueuedStarts(intents)
-		starts, pending := pendingCurrentNodeAssignmentStarts(starts)
 		c.mu.Lock()
 		if err := c.ensureTaskAvailableLocked(source.Reference.TaskID); err != nil {
 			c.mu.Unlock()
@@ -671,9 +674,7 @@ func (c *CurrentNodeController) CompleteIdleCurrentNode(
 				"error", err,
 			)
 		}
-		if err := c.resolvePreparedCurrentNodeStarts(ctx, starts, pending, runIDs, true); err != nil {
-			return completed, err
-		}
+		c.wakeAdmissionWorker()
 		return completed, nil
 	})
 }
@@ -1121,7 +1122,7 @@ func (c *CurrentNodeController) finalizeAgentSuccessors(
 		if run.phase != currentNodeRunHeld {
 			panic(fmt.Sprintf("Agent successor Run %d has phase %d, want held", id.sequence, run.phase))
 		}
-		c.queueRunLocked(id, run.assignmentSteer)
+		c.queueRunLocked(id)
 	}
 	c.removeRunLocked(predecessorID)
 	c.mu.Unlock()

@@ -303,7 +303,7 @@ func newCurrentNodeRunnerFixtureWithRunner(
 	}
 	controller, err = workflowexecution.NewCurrentNodeController(store, runner, fixture.authority, taskMutations, workflowexecution.CurrentNodeControllerConfig{
 		AgentConcurrency:  1,
-		AssignmentSteerer: starter,
+		AssignmentEnsurer: starter,
 		LifecycleReporter: &workflowRunnerLifecycleFatalReporter{},
 	})
 	if err != nil {
@@ -343,7 +343,7 @@ func (r outcomeLessCurrentNodeRunner) StartCurrentNode(
 	ctx context.Context,
 	_ workflow.CurrentNodeReference,
 	_ workflowruntime.TaskPromptDelivery,
-	_ workflowexecution.CurrentNodeAssignmentSteer,
+	_ workflowexecution.CurrentNodeAssignmentEnsure,
 	lease sessionruntime.WorkflowExecutionLease,
 	_ workflowruntime.Controller,
 ) error {
@@ -402,7 +402,7 @@ func (r barrierCurrentNodeRunner) StartCurrentNode(
 	ctx context.Context,
 	reference workflow.CurrentNodeReference,
 	delivery workflowruntime.TaskPromptDelivery,
-	assignment workflowexecution.CurrentNodeAssignmentSteer,
+	assignment workflowexecution.CurrentNodeAssignmentEnsure,
 	lease sessionruntime.WorkflowExecutionLease,
 	controller workflowruntime.Controller,
 ) error {
@@ -736,6 +736,41 @@ func TestCurrentNodeAgentStartsFreshSessionWithLatestRoleAndCompletionContract(t
 	meta := f.onlyProjectSessionMeta(t)
 	if meta.Continuation == nil || meta.Continuation.AgentRole == nil || *meta.Continuation.AgentRole != "coder" {
 		t.Fatalf("fresh workflow Session continuation = %+v, want persisted coder identity", meta.Continuation)
+	}
+}
+
+func TestCurrentNodeScriptAssignmentEnsureIsCommittedNoOp(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fixture uses POSIX shell scripts")
+	}
+	f := newCurrentNodeRunnerFixture(t)
+	sourcePath := filepath.Join(f.workspace, "assignment-noop-source.sh")
+	successorPath := filepath.Join(f.workspace, "assignment-noop-successor.sh")
+	if err := os.WriteFile(
+		sourcePath,
+		[]byte("#!/bin/sh\nprintf '%s' '{\"transition\":\"next\",\"commentary\":\"source done\"}'\n"),
+		0o755,
+	); err != nil {
+		t.Fatalf("write source Script: %v", err)
+	}
+	if err := os.WriteFile(
+		successorPath,
+		[]byte("#!/bin/sh\nprintf '%s' '{\"transition\":\"done\",\"commentary\":\"successor done\"}'\n"),
+		0o755,
+	); err != nil {
+		t.Fatalf("write successor Script: %v", err)
+	}
+	workflowID := createCurrentNodeScriptChainWorkflow(t, f.store, sourcePath, successorPath)
+	task := f.createTask(t, workflowID)
+	f.startTask(t, task)
+	f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+		return len(nodes) == 1 && nodes[0].Scheduling == nil
+	})
+	if count, err := f.store.CountTaskSessions(context.Background(), task.ID); err != nil || count != 0 {
+		t.Fatalf("Script Task retained Sessions = %d, %v; want none", count, err)
+	}
+	if requests := f.client.Requests(); len(requests) != 0 {
+		t.Fatalf("Script assignment no-op produced model requests: %+v", requests)
 	}
 }
 
@@ -1619,6 +1654,53 @@ func TestResumeRetainsEstablishedSessionContractAndAttachedRuntime(t *testing.T)
 		return nil
 	}); err != nil {
 		t.Fatalf("attached Resource Generation was replaced on Resume: %v", err)
+	}
+}
+
+func TestRepeatedResumeReusesPersistedCurrentNodeAssignment(t *testing.T) {
+	f := newCurrentNodeRunnerFixture(
+		t,
+		ScriptedRuntimeError(ErrScriptedRuntime),
+		ScriptedRuntimeError(ErrScriptedRuntime),
+		ScriptedRuntimeError(ErrScriptedRuntime),
+	)
+	workflowID := createCurrentNodeAgentWorkflow(t, f.store)
+	task := f.createTask(t, workflowID)
+	currentNode := f.startTask(t, task)
+	waitInterruptedRequestCount := func(count int) {
+		f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+			return len(nodes) == 1 &&
+				nodes[0].Reference.Equal(currentNode) &&
+				nodes[0].Scheduling != nil &&
+				nodes[0].Scheduling.Interruption != nil &&
+				len(f.client.Requests()) >= count
+		})
+		f.waitForControllerCurrentNodeFinalized(t, currentNode)
+	}
+	waitInterruptedRequestCount(1)
+	if _, err := f.controller.ResumeTask(context.Background(), task.ID); err != nil {
+		t.Fatalf("first Resume: %v", err)
+	}
+	waitInterruptedRequestCount(2)
+	if _, err := f.controller.ResumeTask(context.Background(), task.ID); err != nil {
+		t.Fatalf("second Resume: %v", err)
+	}
+	waitInterruptedRequestCount(3)
+
+	requests := f.client.Requests()
+	var identity string
+	for index, request := range requests {
+		assignments := workflowAssignments(request)
+		if len(assignments) != 1 {
+			t.Fatalf("request %d assignments = %+v, want one", index+1, assignments)
+		}
+		if index == 0 {
+			identity = assignments[0].sourcePath
+			continue
+		}
+		if assignments[0].sourcePath != identity {
+			t.Fatalf("request %d assignment identity = %q, want %q", index+1, assignments[0].sourcePath, identity)
+		}
 	}
 }
 
@@ -3070,7 +3152,7 @@ END`,
 		workflowexecution.NewTaskMutationCoordinator(),
 		workflowexecution.CurrentNodeControllerConfig{
 			AgentConcurrency:  1,
-			AssignmentSteerer: f.starter,
+			AssignmentEnsurer: f.starter,
 			LifecycleReporter: &workflowRunnerLifecycleFatalReporter{},
 		},
 	)
@@ -3866,6 +3948,109 @@ func normalizeWorkflowEdgeRecordForTest(edge workflowstore.EdgeRecord) workflows
 		}
 	}
 	return edge
+}
+
+func TestIneligibleImmediateSourceContinuationReplacesActiveRuntimeGeneration(t *testing.T) {
+	sourceStarted := make(chan struct{})
+	releaseSource := make(chan struct{})
+	successorStarted := make(chan struct{})
+	releaseSuccessor := make(chan struct{})
+	var releaseSourceOnce sync.Once
+	var releaseSuccessorOnce sync.Once
+	t.Cleanup(func() {
+		releaseSourceOnce.Do(func() { close(releaseSource) })
+		releaseSuccessorOnce.Do(func() { close(releaseSuccessor) })
+	})
+	f := newCurrentNodeRunnerFixture(
+		t,
+		ScriptedRuntimeStep{
+			BeforeResponse: func(ctx context.Context) error {
+				close(sourceStarted)
+				select {
+				case <-releaseSource:
+					return nil
+				case <-ctx.Done():
+					return context.Cause(ctx)
+				}
+			},
+			Response: ScriptedFinalAnswer(`{"transition":"next","commentary":"source done"}`).Response,
+		},
+		ScriptedRuntimeStep{
+			BeforeResponse: func(ctx context.Context) error {
+				close(successorStarted)
+				select {
+				case <-releaseSuccessor:
+					return nil
+				case <-ctx.Done():
+					return context.Cause(ctx)
+				}
+			},
+			Response: ScriptedFinalAnswer(`{"commentary":"successor done"}`).Response,
+		},
+	)
+	workflowID := createCurrentNodeTwoStepWorkflowWithTransition(
+		t,
+		f.store,
+		"Ineligible direct continuation replacement",
+		currentNodeWorkflowStep{kind: workflow.NodeKindAgent, role: "coder", prompt: "Complete the source."},
+		currentNodeWorkflowStep{kind: workflow.NodeKindAgent, role: "coder", prompt: "Complete the successor."},
+		currentNodeLinearTransition{
+			id:               "next",
+			mode:             workflow.ContextModeContinueSession,
+			requiresApproval: true,
+			contextSource:    workflow.ContextSource{Kind: workflow.ContextSourceImmediateSource},
+		},
+	)
+	task := f.createTask(t, workflowID)
+	source := f.startTask(t, task)
+	select {
+	case <-sourceStarted:
+	case <-time.After(currentNodeRunnerWait):
+		t.Fatal("source Current Node did not start")
+	}
+	sourceNodes := f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+		return len(nodes) == 1 && nodes[0].Reference.Equal(source) && nodes[0].SessionID != nil
+	})
+	sessionID := *sourceNodes[0].SessionID
+	sourceExecution, live := f.authority.SessionExecution(sessionID)
+	if !live {
+		t.Fatal("source Current Node has no Exact Execution Scope")
+	}
+	sourceResource, hasResource := sourceExecution.Scope().Resource()
+	if !hasResource {
+		t.Fatal("source Exact Execution Scope has no Active Session Runtime")
+	}
+	transcript, err := f.runtimes.SubscribeSessionTranscript(context.Background(), serverapi.TranscriptSubscribeRequest{
+		SessionID: sessionID.String(),
+	})
+	if err != nil {
+		t.Fatalf("subscribe source transcript: %v", err)
+	}
+	t.Cleanup(func() { _ = transcript.Close() })
+
+	releaseSourceOnce.Do(func() { close(releaseSource) })
+	approval := f.waitForPendingApproval(t, task.ID)
+	f.waitForControllerCurrentNodeFinalized(t, approval.Source)
+	if _, err := f.controller.ApplyPendingApproval(context.Background(), approval.ID); err != nil {
+		t.Fatalf("apply continuation Approval: %v", err)
+	}
+	select {
+	case <-successorStarted:
+	case <-time.After(currentNodeRunnerWait):
+		t.Fatal("approved successor did not start")
+	}
+	successorExecution, live := f.authority.SessionExecution(sessionID)
+	if !live {
+		t.Fatal("approved successor has no Exact Execution Scope")
+	}
+	successorResource, hasResource := successorExecution.Scope().Resource()
+	if !hasResource || successorResource == sourceResource {
+		t.Fatalf(
+			"ineligible successor Active Session Runtime = %+v, want replacement of %+v",
+			successorResource,
+			sourceResource,
+		)
+	}
 }
 
 func workflowRunnerShellQuote(value string) string {

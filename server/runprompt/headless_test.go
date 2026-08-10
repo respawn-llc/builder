@@ -415,19 +415,20 @@ type retainedSelectedRunPromptFixture struct {
 	currentNode workflow.CurrentNodeReference
 }
 
-type retainedRunPromptAssignmentSteerer struct{}
+type retainedRunPromptAssignmentEnsurer struct{}
 
-func (retainedRunPromptAssignmentSteerer) SteerCurrentNodeAssignment(
+func (retainedRunPromptAssignmentEnsurer) EnsureCurrentNodeAssignment(
 	context.Context,
 	workflow.CurrentNodeReference,
-) (workflowexecution.CurrentNodeAssignmentSteer, error) {
-	return retainedRunPromptAssignmentSteer{}, nil
+	workflowruntime.TaskPromptDelivery,
+) (workflowexecution.CurrentNodeAssignmentEnsure, error) {
+	return retainedRunPromptAssignmentEnsure{}, nil
 }
 
-type retainedRunPromptAssignmentSteer struct{}
+type retainedRunPromptAssignmentEnsure struct{}
 
-func (retainedRunPromptAssignmentSteer) Wait(context.Context) (session.CommitReceipt, error) {
-	return session.CommitReceipt{Committed: true}, nil
+func (retainedRunPromptAssignmentEnsure) CommitReceipt() session.CommitReceipt {
+	return session.CommitReceipt{Committed: true}
 }
 
 type retainedRunPromptBlockingRunner struct {
@@ -440,7 +441,7 @@ func (r *retainedRunPromptBlockingRunner) StartCurrentNode(
 	context.Context,
 	workflow.CurrentNodeReference,
 	workflowruntime.TaskPromptDelivery,
-	workflowexecution.CurrentNodeAssignmentSteer,
+	workflowexecution.CurrentNodeAssignmentEnsure,
 	sessionruntime.WorkflowExecutionLease,
 	workflowruntime.Controller,
 ) error {
@@ -455,7 +456,7 @@ func (retainedRunPromptFailingRunner) StartCurrentNode(
 	context.Context,
 	workflow.CurrentNodeReference,
 	workflowruntime.TaskPromptDelivery,
-	workflowexecution.CurrentNodeAssignmentSteer,
+	workflowexecution.CurrentNodeAssignmentEnsure,
 	sessionruntime.WorkflowExecutionLease,
 	workflowruntime.Controller,
 ) error {
@@ -574,7 +575,7 @@ func newRetainedSelectedRunPromptFixture(
 		workflowexecution.NewTaskMutationCoordinator(),
 		workflowexecution.CurrentNodeControllerConfig{
 			AgentConcurrency:  1,
-			AssignmentSteerer: retainedRunPromptAssignmentSteerer{},
+			AssignmentEnsurer: retainedRunPromptAssignmentEnsurer{},
 			LifecycleReporter: &runPromptLifecycleFatalReporter{},
 		},
 	)
