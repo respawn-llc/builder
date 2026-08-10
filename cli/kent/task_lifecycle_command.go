@@ -375,6 +375,9 @@ func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 			return 1
 		}
 		if !finishObservedTaskSetup(stderr, positionals[0], recoveryProject, terminal) {
+			if *jsonOut {
+				_ = writeCommandJSON(stdout, stderr, resp)
+			}
 			return 1
 		}
 		if *jsonOut {

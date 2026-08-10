@@ -17,6 +17,7 @@ type taskDependencyLifecycleRemote struct {
 	startResponse   serverapi.WorkflowTaskStartResponse
 	moveResponse    serverapi.WorkflowTaskMoveResponse
 	approveResponse serverapi.WorkflowTaskApproveResponse
+	setupFailure    *serverapi.WorktreeSetupFailed
 	startRequests   []serverapi.WorkflowTaskStartRequest
 	moveRequests    []serverapi.WorkflowTaskMoveRequest
 	approveRequests []serverapi.WorkflowTaskApproveRequest
@@ -54,6 +55,9 @@ func (r *taskDependencyLifecycleRemote) ApproveWorkflowTask(_ context.Context, r
 
 func (r *taskDependencyLifecycleRemote) SubscribeWorktreeSetup(_ context.Context, req serverapi.WorktreeSetupSubscribeRequest) (serverapi.WorktreeSetupSubscription, error) {
 	event := serverapi.WorktreeSetupEvent{SetupOperationID: req.SetupOperationID, Phase: serverapi.WorktreeSetupPhaseNotRequired, NotRequired: &serverapi.WorktreeSetupNotRequired{Reason: serverapi.WorktreeSetupNotRequiredNoTargetPreparation}}
+	if r.setupFailure != nil {
+		event.Phase, event.NotRequired, event.Failed = serverapi.WorktreeSetupPhaseFailed, nil, r.setupFailure
+	}
 	return testWorktreeSetupSubscription(func(context.Context) (serverapi.WorktreeSetupEvent, error) { return event, nil }), nil
 }
 
@@ -123,9 +127,11 @@ func TestTaskStartDependencyConfirmationIsNoninteractiveAndMapsIgnoreFlag(t *tes
 	}
 }
 
-func TestTaskStartFromWorkflowSessionCarriesInvokingSession(t *testing.T) {
+func TestTaskStartFailedSetupWritesAppliedJSONAndCarriesInvokingSession(t *testing.T) {
 	t.Setenv(sessionenv.SessionIDEnv, "agent-session")
+	target := serverapi.WorkflowExecutionTargetSelection{Mode: serverapi.WorkflowExecutionTargetModeHead}
 	remote := &taskDependencyLifecycleRemote{
+		setupFailure: &serverapi.WorktreeSetupFailed{RetryReadiness: serverapi.WorktreeSetupRetryReady, Cause: serverapi.WorktreeSetupFailureCause{Kind: serverapi.WorktreeSetupFailureTargetPreparation, Preparation: &serverapi.WorktreeSetupPreparationFailure{}}, Diagnostic: "target failed", ExecutionTarget: &target},
 		startResponse: serverapi.WorkflowTaskStartResponse{
 			Outcome: serverapi.WorkflowTaskActionOutcomeApplied,
 			Applied: &serverapi.WorkflowTaskStartApplied{
@@ -138,8 +144,12 @@ func TestTaskStartFromWorkflowSessionCarriesInvokingSession(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	exitCode := taskStartSubcommand([]string{"task-1", "--json"}, &stdout, &stderr)
 
-	if exitCode != 0 {
+	if exitCode != 1 {
 		t.Fatalf("exit=%d stdout=%q stderr=%q", exitCode, stdout.String(), stderr.String())
+	}
+	var output serverapi.WorkflowTaskStartResponse
+	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil || output.Applied == nil {
+		t.Fatalf("JSON output=%+v, error=%v", output, err)
 	}
 	if len(remote.startRequests) != 1 ||
 		remote.startRequests[0].InvokingSessionID == nil ||

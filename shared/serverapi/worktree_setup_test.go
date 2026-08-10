@@ -3,6 +3,9 @@ package serverapi
 import (
 	"encoding/json"
 	"testing"
+
+	"core/shared/workflowcontract"
+	"core/shared/worktreecontract"
 )
 
 func TestWorktreeSetupOperationIDRequiresUUIDV4(t *testing.T) {
@@ -64,6 +67,31 @@ func TestWorktreeSetupEventValidation(t *testing.T) {
 	}
 	if err := invalidFailed.Validate(); err == nil {
 		t.Fatal("failed setup event without terminal facts validated")
+	}
+}
+
+func TestSetupRecoveryDetailValidationAtAPIContract(t *testing.T) {
+	valid := workflowcontract.SetupRecoveryDetail[WorktreeSetupOperationID, WorkflowExecutionTargetSelection]{
+		SetupOperationID: NewWorktreeSetupOperationID(), Cause: worktreecontract.SetupFailureTargetPreparation,
+		Diagnostic: "target failed", SetupRequirement: worktreecontract.SetupRequirementRequired,
+		ExecutionTarget: WorkflowExecutionTargetSelection{Mode: WorkflowExecutionTargetModeHead},
+	}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("Validate target-preparation recovery: %v", err)
+	}
+	script, setup := "scripts/setup.sh", valid
+	setup.Cause, setup.ScriptPath, setup.RetainedWorktree = worktreecontract.SetupFailureProcessExit, &script, &workflowcontract.RetainedWorktree{WorktreeID: "worktree-1", Root: "/worktree"}
+	if err := setup.Validate(); err != nil {
+		t.Fatalf("Validate setup-script recovery: %v", err)
+	}
+	invalid := valid
+	invalid.Cause = worktreecontract.SetupFailureCanceled
+	if err := invalid.Validate(); err == nil {
+		t.Fatal("Validate accepted a non-retry-ready cause")
+	}
+	invalid, invalid.Cause, invalid.ScriptPath = valid, worktreecontract.SetupFailureTargetPreparation, &script
+	if err := invalid.Validate(); err == nil {
+		t.Fatal("Validate accepted target preparation with a setup script")
 	}
 }
 
