@@ -851,8 +851,9 @@ func TestServiceTaskStartAppliesExplicitNoneSelectionAndLocksTarget(t *testing.T
 	}
 	if targetContext.Task.ExecutionTarget == nil ||
 		targetContext.Task.ExecutionTarget.Mode != workflow.ExecutionTargetModeNone ||
-		targetContext.Task.ManagedWorktreeID != "" {
-		t.Fatalf("locked target = %+v, managed worktree = %q, want none", targetContext.Task.ExecutionTarget, targetContext.Task.ManagedWorktreeID)
+		targetContext.Task.ManagedWorktreeID != nil ||
+		targetContext.Task.PendingInitialManagedBranchName != nil {
+		t.Fatalf("locked target = %+v, managed worktree = %v, want none", targetContext.Task.ExecutionTarget, targetContext.Task.ManagedWorktreeID)
 	}
 }
 
@@ -887,10 +888,10 @@ func TestServiceTaskStartMaterializesConfiguredHeadBeforeLockingTarget(t *testin
 			}); err != nil {
 				t.Fatalf("UpsertWorktreeRecord: %v", err)
 			}
-			updated, err := metadataStore.Queries().UpdateTaskManagedWorktree(ctx, sqlitegen.UpdateTaskManagedWorktreeParams{
-				ID:                string(taskID),
+			updated, err := metadataStore.Queries().BindInitialTaskManagedWorktree(ctx, sqlitegen.BindInitialTaskManagedWorktreeParams{
 				ManagedWorktreeID: sql.NullString{String: worktreeID, Valid: true},
 				UpdatedAtUnixMs:   time.Now().UTC().UnixMilli(),
+				TaskID:            string(taskID),
 			})
 			if err != nil {
 				t.Fatalf("UpdateTaskManagedWorktree: %v", err)
@@ -928,8 +929,9 @@ func TestServiceTaskStartMaterializesConfiguredHeadBeforeLockingTarget(t *testin
 		targetContext.Task.ExecutionTarget.Mode != workflow.ExecutionTargetModeHead ||
 		targetContext.Task.ExecutionTarget.CommitOID == nil ||
 		*targetContext.Task.ExecutionTarget.CommitOID != commitOID ||
-		targetContext.Task.ManagedWorktreeID != worktreeID {
-		t.Fatalf("locked target = %+v, managed worktree = %q", targetContext.Task.ExecutionTarget, targetContext.Task.ManagedWorktreeID)
+		targetContext.Task.ManagedWorktreeID == nil ||
+		*targetContext.Task.ManagedWorktreeID != worktreeID {
+		t.Fatalf("locked target = %+v, managed worktree = %v", targetContext.Task.ExecutionTarget, targetContext.Task.ManagedWorktreeID)
 	}
 }
 
@@ -960,8 +962,8 @@ func TestServiceTaskStartLocksRetainedTargetWhenSetupFails(t *testing.T) {
 			}); err != nil {
 				return ExecutionTargetMaterialization{}, err
 			}
-			_, err := metadataStore.Queries().UpdateTaskManagedWorktree(ctx, sqlitegen.UpdateTaskManagedWorktreeParams{
-				ID: string(taskID), ManagedWorktreeID: sql.NullString{String: worktreeID, Valid: true},
+			_, err := metadataStore.Queries().BindInitialTaskManagedWorktree(ctx, sqlitegen.BindInitialTaskManagedWorktreeParams{
+				TaskID: string(taskID), ManagedWorktreeID: sql.NullString{String: worktreeID, Valid: true},
 				UpdatedAtUnixMs: time.Now().UTC().UnixMilli(),
 			})
 			root := workflowstore.ManagedExecutionRoot{WorktreeID: worktreeID, Root: worktreeRoot}
@@ -988,8 +990,9 @@ func TestServiceTaskStartLocksRetainedTargetWhenSetupFails(t *testing.T) {
 	}
 	if targetContext.Task.ExecutionTarget == nil ||
 		targetContext.Task.ExecutionTarget.Mode != workflow.ExecutionTargetModeHead ||
-		targetContext.Task.ManagedWorktreeID != worktreeID {
-		t.Fatalf("execution target = %+v, worktree = %q; want retained locked target", targetContext.Task.ExecutionTarget, targetContext.Task.ManagedWorktreeID)
+		targetContext.Task.ManagedWorktreeID == nil ||
+		*targetContext.Task.ManagedWorktreeID != worktreeID {
+		t.Fatalf("execution target = %+v, worktree = %v; want retained locked target", targetContext.Task.ExecutionTarget, targetContext.Task.ManagedWorktreeID)
 	}
 }
 
@@ -1080,10 +1083,12 @@ func TestServiceTaskResumeReselectsUnavailableUnlockedTarget(t *testing.T) {
 			RequestedRef: "HEAD",
 		},
 	}
+	branchName := "feature/reselect-unavailable"
 
 	response, err := service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
 		TaskID:           task.Task.ID,
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		BranchName:       &branchName,
 	})
 	if err != nil {
 		t.Fatalf("ResumeWorkflowTask unavailable target: %v", err)
@@ -1092,6 +1097,17 @@ func TestServiceTaskResumeReselectsUnavailableUnlockedTarget(t *testing.T) {
 		response.SelectionRequired == nil ||
 		response.SelectionRequired.Reason != serverapi.WorkflowExecutionTargetSelectionReasonConfiguredTargetUnavailable {
 		t.Fatalf("resume response = %+v, want configured target selection", response)
+	}
+	if execution.resumeEligibilityCalls != 0 {
+		t.Fatalf("Resume eligibility calls = %d, want none before configured-target selection", execution.resumeEligibilityCalls)
+	}
+	targetContext, err := service.store.GetTaskExecutionTargetContext(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetContext before selection: %v", err)
+	}
+	if targetContext.Task.PendingInitialManagedBranchName == nil ||
+		*targetContext.Task.PendingInitialManagedBranchName != task.Task.ShortID {
+		t.Fatalf("pending branch before selection = %v, want unchanged %q", targetContext.Task.PendingInitialManagedBranchName, task.Task.ShortID)
 	}
 
 	service.executionTargets = &recordingExecutionTargetInfrastructure{}
@@ -1108,7 +1124,10 @@ func TestServiceTaskResumeReselectsUnavailableUnlockedTarget(t *testing.T) {
 	if response.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeApplied || response.Applied == nil {
 		t.Fatalf("resume response = %+v, want applied", response)
 	}
-	targetContext, err := service.store.GetTaskExecutionTargetContext(ctx, workflow.TaskID(task.Task.ID))
+	if execution.resumeEligibilityCalls != 1 {
+		t.Fatalf("Resume eligibility calls = %d, want one after selected target", execution.resumeEligibilityCalls)
+	}
+	targetContext, err = service.store.GetTaskExecutionTargetContext(ctx, workflow.TaskID(task.Task.ID))
 	if err != nil {
 		t.Fatalf("GetTaskExecutionTargetContext: %v", err)
 	}
@@ -1666,15 +1685,24 @@ func TestServiceMapsWorkflowTaskLabelScopeFailures(t *testing.T) {
 }
 
 type recordingExecutionTargetInfrastructure struct {
-	resolution        workflowstore.ExecutionTargetSnapshot
-	resolveSelection  workflow.ExecutionTargetSelection
-	materializeTaskID workflow.TaskID
-	restoreTaskID     workflow.TaskID
-	setupOperationID  serverapi.WorktreeSetupOperationID
-	materialize       func(workflow.TaskID) (ExecutionTargetMaterialization, error)
-	resolveErr        error
-	materializeErr    error
-	restoreErr        error
+	resolution                workflowstore.ExecutionTargetSnapshot
+	resolveSelection          workflow.ExecutionTargetSelection
+	initialBranchInspection   InitialTaskBranchInspectionRequest
+	initialBranchInspections  int
+	initialBranchErr          error
+	initialBranchAssertion    InitialTaskBranchAssertionRequest
+	initialBranchAssertions   int
+	initialBranchAssertionErr error
+	materializeTaskID         workflow.TaskID
+	materializeRequest        ExecutionTargetMaterializeRequest
+	restoreTaskID             workflow.TaskID
+	restoreRequest            ExecutionTargetRestoreRequest
+	restoreRequests           chan<- ExecutionTargetRestoreRequest
+	setupOperationID          serverapi.WorktreeSetupOperationID
+	materialize               func(workflow.TaskID) (ExecutionTargetMaterialization, error)
+	resolveErr                error
+	materializeErr            error
+	restoreErr                error
 }
 
 type manualMoveExecutionStub struct {
@@ -1832,7 +1860,11 @@ func waitForWorkflowMutationPermit(t *testing.T, service *Service, operation fun
 
 func (i *recordingExecutionTargetInfrastructure) RestoreExecutionTarget(_ context.Context, req ExecutionTargetRestoreRequest) error {
 	i.restoreTaskID = req.TaskID
+	i.restoreRequest = req
 	i.setupOperationID = req.SetupOperationID
+	if i.restoreRequests != nil {
+		i.restoreRequests <- req
+	}
 	return i.restoreErr
 }
 
@@ -1844,8 +1876,21 @@ func (i *recordingExecutionTargetInfrastructure) ResolveExecutionTarget(_ contex
 	return i.resolution, nil
 }
 
+func (i *recordingExecutionTargetInfrastructure) InspectProspectiveInitialTaskBranch(_ context.Context, req InitialTaskBranchInspectionRequest) error {
+	i.initialBranchInspection = req
+	i.initialBranchInspections++
+	return i.initialBranchErr
+}
+
+func (i *recordingExecutionTargetInfrastructure) AssertInitialTaskBranch(_ context.Context, req InitialTaskBranchAssertionRequest) error {
+	i.initialBranchAssertion = req
+	i.initialBranchAssertions++
+	return i.initialBranchAssertionErr
+}
+
 func (i *recordingExecutionTargetInfrastructure) MaterializeExecutionTarget(_ context.Context, req ExecutionTargetMaterializeRequest) (ExecutionTargetMaterialization, error) {
 	i.materializeTaskID = req.TaskID
+	i.materializeRequest = req
 	i.setupOperationID = req.SetupOperationID
 	var materialization ExecutionTargetMaterialization
 	if i.materialize != nil {

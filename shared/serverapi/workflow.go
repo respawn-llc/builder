@@ -935,6 +935,7 @@ type WorkflowTaskStartRequest struct {
 	InvokingSessionID          *runtimeids.SessionID             `json:"invoking_session_id,omitempty"`
 	SetupOperationID           WorktreeSetupOperationID          `json:"setup_operation_id"`
 	ExecutionTarget            *WorkflowExecutionTargetSelection `json:"execution_target,omitempty"`
+	BranchName                 *string                           `json:"branch_name,omitempty"`
 	ProceedDespiteDependencies bool                              `json:"proceed_despite_dependencies,omitempty"`
 }
 
@@ -962,6 +963,7 @@ type WorkflowTaskResumeRequest struct {
 	InvokingSessionID *runtimeids.SessionID             `json:"invoking_session_id,omitempty"`
 	SetupOperationID  WorktreeSetupOperationID          `json:"setup_operation_id"`
 	ExecutionTarget   *WorkflowExecutionTargetSelection `json:"execution_target,omitempty"`
+	BranchName        *string                           `json:"branch_name,omitempty"`
 }
 
 type WorkflowTaskResumeResponse struct {
@@ -999,6 +1001,7 @@ type WorkflowTaskMoveRequest struct {
 	Commentary                 string                            `json:"commentary,omitempty"`
 	SetupOperationID           WorktreeSetupOperationID          `json:"setup_operation_id,omitempty"`
 	ExecutionTarget            *WorkflowExecutionTargetSelection `json:"execution_target,omitempty"`
+	BranchName                 *string                           `json:"branch_name,omitempty"`
 	ProceedDespiteDependencies bool                              `json:"proceed_despite_dependencies,omitempty"`
 }
 
@@ -3029,6 +3032,9 @@ func (r WorkflowTaskStartRequest) Validate() error {
 	if err := r.SetupOperationID.Validate(); err != nil {
 		return err
 	}
+	if err := validateWorkflowTaskInitialBranchName(r.BranchName); err != nil {
+		return err
+	}
 	if r.ExecutionTarget != nil {
 		return r.ExecutionTarget.Validate()
 	}
@@ -3043,6 +3049,9 @@ func (r WorkflowTaskResumeRequest) Validate() error {
 		return err
 	}
 	if err := r.SetupOperationID.Validate(); err != nil {
+		return err
+	}
+	if err := validateWorkflowTaskInitialBranchName(r.BranchName); err != nil {
 		return err
 	}
 	if r.ExecutionTarget != nil {
@@ -3068,6 +3077,9 @@ func (r WorkflowTaskMoveRequest) Validate() error {
 	if r.TransitionKey != nil && strings.TrimSpace(*r.TransitionKey) == "" {
 		return workflowRequestError(WorkflowRequestErrorInvalidValue, "transition_key", "transition_key must be non-blank when present")
 	}
+	if err := validateWorkflowTaskInitialBranchName(r.BranchName); err != nil {
+		return err
+	}
 	for nodeKey, outputs := range r.Values {
 		if strings.TrimSpace(nodeKey) == "" {
 			return workflowRequestError(WorkflowRequestErrorInvalidValue, "values", "values node keys must be non-blank")
@@ -3089,6 +3101,13 @@ func (r WorkflowTaskMoveRequest) Validate() error {
 	}
 	if r.ExecutionTarget != nil {
 		return r.ExecutionTarget.Validate()
+	}
+	return nil
+}
+
+func validateWorkflowTaskInitialBranchName(branchName *string) error {
+	if branchName != nil && strings.TrimSpace(*branchName) == "" {
+		return workflowRequestError(WorkflowRequestErrorInvalidValue, "branch_name", "branch_name must be non-blank when present")
 	}
 	return nil
 }

@@ -67,6 +67,7 @@ const (
 	ErrCodeWorkflowTaskMutationSelfTarget    = -32057
 	ErrCodeWorktreeCreate                    = -32058
 	ErrCodePromptCommands                    = -32059
+	ErrCodeWorkflowTaskInitialBranch         = -32060
 )
 
 type Request struct {
