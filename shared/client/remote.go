@@ -263,7 +263,15 @@ func callUnscopedRPC[Req any, Resp any](c *Remote, ctx context.Context, method s
 
 func callControlRPC[Req any, Resp any](c *Remote, ctx context.Context, method string, req Req) (Resp, error) {
 	var resp Resp
-	return resp, c.call(ctx, method, req, &resp)
+	if err := c.call(ctx, method, req, &resp); err != nil {
+		return resp, err
+	}
+	if goal, ok := any(resp).(serverapi.RuntimeGoalShowResponse); ok {
+		if err := goal.Validate(); err != nil {
+			return resp, invalidResponseError(method, err)
+		}
+	}
+	return resp, nil
 }
 
 func callDedicatedRPC[Req any, Resp any](c *Remote, ctx context.Context, requestID string, method string, req Req) (Resp, error) {
@@ -660,7 +668,13 @@ func (c *Remote) PlanSession(ctx context.Context, req serverapi.SessionPlanReque
 
 func (c *Remote) WorkspaceChatDraft(ctx context.Context, req serverapi.WorkspaceChatDraftRequest) (serverapi.WorkspaceChatDraftResponse, error) {
 	var resp serverapi.WorkspaceChatDraftResponse
-	return resp, c.call(ctx, protocol.MethodSessionWorkspaceChatDraft, req, &resp)
+	if err := c.call(ctx, protocol.MethodSessionWorkspaceChatDraft, req, &resp); err != nil {
+		return resp, err
+	}
+	if err := resp.Validate(); err != nil {
+		return serverapi.WorkspaceChatDraftResponse{}, invalidResponseError("workspace Chat draft", err)
+	}
+	return resp, nil
 }
 
 func (c *Remote) GetSessionMainView(ctx context.Context, req serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {

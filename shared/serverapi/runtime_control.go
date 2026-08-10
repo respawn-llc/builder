@@ -245,6 +245,16 @@ type RuntimeGoalShowResponse struct {
 	Availability clientui.GoalAvailability `json:"availability"`
 }
 
+func (r RuntimeGoalShowResponse) Validate() error {
+	if err := r.Availability.Validate(); err != nil {
+		return err
+	}
+	if r.Goal != nil {
+		return r.Goal.Validate()
+	}
+	return nil
+}
+
 type RuntimeGoalSetRequest struct {
 	ClientRequestID string `json:"client_request_id"`
 	SessionID       string `json:"session_id"`

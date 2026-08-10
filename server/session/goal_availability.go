@@ -6,38 +6,45 @@ import (
 	"strings"
 
 	"core/shared/clientui"
+	"core/shared/invariant"
 	"core/shared/toolspec"
 )
-
 func GoalCoreFromState(goal *GoalState) *clientui.Goal {
 	if goal == nil {
 		return nil
 	}
 	return &clientui.Goal{ID: strings.TrimSpace(goal.ID), Objective: goal.Objective, Status: clientui.RuntimeGoalStatus(strings.TrimSpace(string(goal.Status))), CreatedAt: goal.CreatedAt, UpdatedAt: goal.UpdatedAt}
 }
-
 func (s *Store) GoalAvailability() (clientui.GoalAvailability, error) {
 	if s == nil {
 		return "", errors.New("session store is required")
 	}
 	return GoalAvailabilityFromMeta(s.Meta())
 }
-
 func GoalAvailabilityFromMeta(meta Meta) (clientui.GoalAvailability, error) {
 	if meta.Locked == nil {
 		return clientui.GoalAvailabilityAvailable, nil
 	}
 	if !meta.Locked.HasEnabledTools {
-		return "", fmt.Errorf("session %q locked contract has no enabled tool snapshot", meta.SessionID)
+		return "", malformedGoalContract(meta, errors.New("enabled tool snapshot is absent"))
 	}
+	availability := clientui.GoalAvailabilityAgentCapabilityMissing
 	for _, raw := range meta.Locked.EnabledTools {
 		tool, ok := toolspec.ParseID(raw)
 		if !ok {
-			return "", fmt.Errorf("session %q locked contract has invalid enabled tool %q", meta.SessionID, raw)
+			return "", malformedGoalContract(meta, fmt.Errorf("enabled tool %q is invalid", raw))
 		}
 		if tool == toolspec.ToolAskQuestion {
-			return clientui.GoalAvailabilityAvailable, nil
+			availability = clientui.GoalAvailabilityAvailable
 		}
 	}
-	return clientui.GoalAvailabilityAgentCapabilityMissing, nil
+	return availability, nil
+}
+func malformedGoalContract(meta Meta, cause error) error {
+	err := fmt.Errorf("session %q locked contract generation %d is malformed: %w", meta.SessionID, meta.PromptCacheLineageGeneration, cause)
+	diagnostic := invariant.FailureDiagnostic(invariant.ScopeSessionPersistence, "goal_availability", err)
+	diagnostic.Fields[invariant.FieldSessionID] = meta.SessionID
+	diagnostic.Fields[invariant.FieldResolverInputs] = fmt.Sprintf("prompt_cache_lineage_generation=%d", meta.PromptCacheLineageGeneration)
+	invariant.NewPolicy().Check(false, diagnostic)
+	return err
 }

@@ -217,7 +217,9 @@ func (a *GoalAuthority) withLive(
 		return applyErr
 	})
 	if result.Accepted() {
-		result = withEngineAvailability(liveEngine, result)
+		if result.Disposition != runtime.GoalCommandApplied {
+			result = withEngineAvailability(liveEngine, result)
+		}
 		if err != nil {
 			result.Err = err
 		}
@@ -246,7 +248,9 @@ func (a *GoalAuthority) withLive(
 		return applyErr
 	})
 	if result.Accepted() {
-		result = withEngineAvailability(liveEngine, result)
+		if result.Disposition != runtime.GoalCommandApplied {
+			result = withEngineAvailability(liveEngine, result)
+		}
 		if err != nil {
 			result.Err = err
 		}
@@ -273,7 +277,7 @@ func (a *GoalAuthority) withExactLive(
 		}
 		applied, applyErr := mutate(engine)
 		result = applied
-		if result.Accepted() {
+		if result.Accepted() && result.Disposition != runtime.GoalCommandApplied {
 			result = withEngineAvailability(engine, result)
 		}
 		return applyErr

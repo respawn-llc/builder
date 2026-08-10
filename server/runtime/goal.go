@@ -512,6 +512,12 @@ func steerGoalStatusUpdateIntent(update GoalStatusUpdate) steeringIntent {
 func (e *Engine) finishGoalOutput(stepID string, message llm.Message, result *GoalCommandResult, update GoalStatusUpdate) error {
 	noticeReceipt, noticeErr := e.steerWithCommitReceipt(stepID, steerGoalNoticeIntent(message))
 	result.NoticeReceipt = noticeReceipt
+	if !noticeReceipt.Committed {
+		if noticeErr != nil {
+			return noticeErr
+		}
+		return errors.New("goal notice was not committed")
+	}
 	availability, availabilityErr := e.GoalAvailability()
 	if availabilityErr != nil {
 		result.Availability = ""
