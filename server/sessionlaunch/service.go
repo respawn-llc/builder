@@ -89,14 +89,12 @@ func (s *Service) WithWorkspaceID(workspaceID string) *Service {
 	}
 	return s
 }
-
 func (s *Service) WithFastModeState(state *runtime.FastModeState) *Service {
 	if s != nil {
 		s.fastModeState = state
 	}
 	return s
 }
-
 func (s *Service) WithWorkspaceChatDraftMutationLanes(lanes *requestmemo.MutationLaneRegistry[string]) *Service {
 	if s != nil {
 		s.draftLanes = lanes
@@ -104,6 +102,12 @@ func (s *Service) WithWorkspaceChatDraftMutationLanes(lanes *requestmemo.Mutatio
 	return s
 }
 
+func (s *Service) RequireWorkspaceChatDraftMutationLanes(expected *requestmemo.MutationLaneRegistry[string]) *Service {
+	if s.draftLanes != expected {
+		panic(fmt.Sprintf("workspace Chat draft mutation lane ownership invariant violated: got=%p want=%p", s.draftLanes, expected))
+	}
+	return s
+}
 func (s *Service) WithWorkspaceChatDraftStore(store *metadata.Store) *Service {
 	if s == nil {
 		return nil
