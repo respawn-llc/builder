@@ -397,28 +397,6 @@ func TestBuildRequest_UsesBasePromptCacheKeyBeforeFirstCompactionWhenProviderSup
 	}
 }
 
-func TestBuildRequestRotatesCacheNamespaceForStablePromptContract(t *testing.T) {
-	t.Parallel()
-	store := mustCreateTestSession(t)
-	client := &fakeClient{caps: llm.ProviderCapabilities{
-		ProviderID:             "openai-compatible",
-		SupportsResponsesAPI:   true,
-		SupportsPromptCacheKey: true,
-	}}
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
-	req, err := eng.buildRequestWithExtraItems(context.Background(), "", []llm.ResponseItem{{
-		Type:    llm.ResponseItemTypeMessage,
-		Role:    textutil.Value(llm.RoleUser),
-		Content: textutil.Value("hello"),
-	}}, true)
-	if err != nil {
-		t.Fatalf("build request: %v", err)
-	}
-	if req.PromptCacheKey == eng.SessionID() {
-		t.Fatalf("PromptCacheKey = %q, want a prompt-contract namespace", req.PromptCacheKey)
-	}
-}
-
 func TestBuildRequest_RotatesPromptCacheKeyWithRequestSessionIDAfterCompaction(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)

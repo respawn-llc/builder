@@ -57,7 +57,7 @@ func TestResponsesStubDoneWaitsForActiveHandlerCompletion(t *testing.T) {
 func TestParseSessionCacheKeyUsesExactSegmentDiscriminators(t *testing.T) {
 	const sessionID = "018fdd67-89ab-4cde-8123-456789abcdef"
 
-	key, err := parseSessionCacheKey(sessionID + "/prompt-contract-3/contract-1/compact-3")
+	key, err := parseSessionCacheKey(sessionID + "/contract-1/compact-3")
 	if err != nil {
 		t.Fatalf("parse versioned session cache key: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestParseSessionCacheKeyUsesExactSegmentDiscriminators(t *testing.T) {
 		t.Fatalf("parsed cache key = %+v, want compact-3", key)
 	}
 
-	if _, err := parseSessionCacheKey(sessionID + "/prompt-contract-3-extra"); err == nil {
+	if _, err := parseSessionCacheKey(sessionID + "/contract-1-extra"); err == nil {
 		t.Fatal("parse accepted a cache-key segment with an unmatched discriminator")
 	}
 }

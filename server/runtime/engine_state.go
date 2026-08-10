@@ -606,16 +606,11 @@ func conversationPromptCacheKey(sessionID string, compactionCount int) string {
 	return conversationPromptCacheKeyForLineage(sessionID, 0, compactionCount)
 }
 
-// stablePromptCacheContractVersion namespaces provider cache entries by the
-// stable prompt prefix that precedes the conversation transcript.
-const stablePromptCacheContractVersion = 3
-
 func conversationPromptCacheKeyForLineage(sessionID string, lineageGeneration, compactionCount int) string {
 	trimmed := strings.TrimSpace(sessionID)
 	if trimmed == "" {
 		return ""
 	}
-	trimmed = fmt.Sprintf("%s/prompt-contract-%d", trimmed, stablePromptCacheContractVersion)
 	if lineageGeneration > 0 {
 		trimmed = fmt.Sprintf("%s/contract-%d", trimmed, lineageGeneration)
 	}

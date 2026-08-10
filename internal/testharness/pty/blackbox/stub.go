@@ -695,7 +695,6 @@ type sessionCacheKeySegmentKind uint8
 
 const (
 	sessionCacheKeySegmentSupervisor sessionCacheKeySegmentKind = iota
-	sessionCacheKeySegmentPromptContract
 	sessionCacheKeySegmentLineageContract
 	sessionCacheKeySegmentCompaction
 )
@@ -729,7 +728,7 @@ func parseSessionCacheKey(raw string) (sessionCacheKey, error) {
 				return sessionCacheKey{}, errors.New("duplicate supervisor session cache key suffix")
 			}
 			key.Supervisor = true
-		case sessionCacheKeySegmentPromptContract, sessionCacheKeySegmentLineageContract:
+		case sessionCacheKeySegmentLineageContract:
 		case sessionCacheKeySegmentCompaction:
 			if key.Compaction != nil {
 				return sessionCacheKey{}, errors.New("duplicate compacted session cache key suffix")
@@ -749,8 +748,6 @@ func parseSessionCacheKeySegment(segment string) (sessionCacheKeySegment, error)
 	parts := strings.Split(segment, "-")
 	var kind sessionCacheKeySegmentKind
 	switch {
-	case len(parts) == 3 && parts[0] == "prompt" && parts[1] == "contract":
-		kind = sessionCacheKeySegmentPromptContract
 	case len(parts) == 2 && parts[0] == "contract":
 		kind = sessionCacheKeySegmentLineageContract
 	case len(parts) == 2 && parts[0] == "compact":
