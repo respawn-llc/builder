@@ -1,4 +1,4 @@
-import { act, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { appI18n } from "@/i18n";
@@ -241,6 +241,7 @@ describe("Task Detail live refresh", () => {
       expect(list.scrollTop).toBe(241);
     });
     list.scrollTop = 317;
+    fireEvent.scroll(list);
     attention = taskAttentionWithOneOption("ask-1", "ask-3");
     answer.reject(new Error("delivery failed"));
     await waitFor(() => {

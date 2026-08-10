@@ -11,6 +11,7 @@ import (
 	"core/server/llm/openaiwire"
 	"core/shared/textutil"
 	"core/shared/toolspec"
+	"core/shared/transcript"
 
 	"github.com/openai/openai-go/v3/packages/param"
 	"github.com/openai/openai-go/v3/responses"
@@ -324,12 +325,18 @@ func openAIMessageInputRaw(item ResponseItem) (json.RawMessage, bool) {
 	if item.MessageType != nil && *item.MessageType == MessageTypeCompactionSummary {
 		text = prompts.CompactionSummaryPrefix + "\n\n" + strings.TrimSpace(text)
 	}
-	if strings.TrimSpace(text) == "" {
-		return nil, false
-	}
 	role := ""
 	if item.Role != nil {
 		role = strings.TrimSpace(string(*item.Role))
+	}
+	blankFinal := transcript.IsBlankAssistantFinal(transcript.AssistantFinalCandidate{
+		IsAssistant:    role == string(RoleAssistant),
+		IsFinal:        item.Phase != nil && *item.Phase == MessagePhaseFinal,
+		HasMessageType: item.MessageType != nil,
+		Content:        textutil.Value(text),
+	})
+	if strings.TrimSpace(text) == "" && !blankFinal {
+		return nil, false
 	}
 	if role == string(RoleAssistant) {
 		content := []openAIOutputTextContentRaw{{

@@ -1909,7 +1909,7 @@ func (s *Service) AddWorkflowTaskComment(ctx context.Context, req serverapi.Work
 	return serverapi.WorkflowTaskCommentAddResponse{Comment: commentRecord(comment)}, nil
 }
 
-func (s *Service) ListWorkflowTaskComments(ctx context.Context, req serverapi.WorkflowTaskCommentListRequest) (serverapi.WorkflowTaskCommentListResponse, error) {
+func (s *Service) ListWorkflowTaskComments(ctx context.Context, req serverapi.WorkflowTaskOffsetPageRequest) (serverapi.WorkflowTaskCommentListResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowTaskCommentListResponse{}, err
 	}
@@ -1917,21 +1917,22 @@ func (s *Service) ListWorkflowTaskComments(ctx context.Context, req serverapi.Wo
 	if err != nil {
 		return serverapi.WorkflowTaskCommentListResponse{}, err
 	}
-	comments, err := s.store.ListCommentsPage(ctx, workflow.TaskID(req.TaskID), window.Offset, window.Limit+1)
+	totalCount, err := s.store.CountTaskComments(ctx, workflow.TaskID(req.TaskID))
 	if err != nil {
 		return serverapi.WorkflowTaskCommentListResponse{}, err
 	}
-	var nextOffset *int
-	if len(comments) > window.Limit {
-		comments = comments[:window.Limit]
-		value := window.Offset + len(comments)
-		nextOffset = &value
+	comments, err := s.store.ListCommentsPage(ctx, workflow.TaskID(req.TaskID), window.Offset, window.Limit+1)
+	if err != nil {
+		return serverapi.WorkflowTaskCommentListResponse{}, err
 	}
 	out := make([]serverapi.WorkflowTaskComment, 0, len(comments))
 	for _, comment := range comments {
 		out = append(out, commentRecord(comment))
 	}
-	return serverapi.WorkflowTaskCommentListResponse{Comments: out, NextOffset: nextOffset}, nil
+	return serverapi.WorkflowTaskCommentListResponse{
+		WorkflowOffsetPage: serverapi.FinalizeWorkflowOffsetPage(window, out),
+		TotalCount:         totalCount,
+	}, nil
 }
 
 func (s *Service) ReplaceWorkflowTaskComment(ctx context.Context, req serverapi.WorkflowTaskCommentReplaceRequest) error {
@@ -1964,7 +1965,7 @@ func (s *Service) DeleteWorkflowTaskComment(ctx context.Context, req serverapi.W
 	return nil
 }
 
-func (s *Service) ListWorkflowTaskActivity(ctx context.Context, req serverapi.WorkflowTaskActivityListRequest) (serverapi.WorkflowTaskActivityListResponse, error) {
+func (s *Service) ListWorkflowTaskActivity(ctx context.Context, req serverapi.WorkflowTaskOffsetPageRequest) (serverapi.WorkflowTaskActivityListResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowTaskActivityListResponse{}, err
 	}

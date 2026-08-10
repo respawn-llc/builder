@@ -8,10 +8,7 @@ import (
 func (h *bellHooks) OnTranscriptMessage(message clientui.TranscriptMessage) {
 	switch message.Kind() {
 	case clientui.TranscriptMessageAssistantDelta:
-		delta := message.Payload().(clientui.TranscriptAssistantDelta)
-		if isNoopFinalText(delta.Delta) {
-			h.clearPendingTurnCompletionForSilentFinal(delta.StepID)
-		}
+		_ = message.Payload().(clientui.TranscriptAssistantDelta)
 	case clientui.TranscriptMessageToolStart:
 		tool := message.Payload().(clientui.TranscriptToolStart)
 		h.recordToolCall(tool.StepID)
@@ -21,6 +18,11 @@ func (h *bellHooks) OnTranscriptMessage(message clientui.TranscriptMessage) {
 		step := message.Payload().(clientui.TranscriptStepState)
 		if step.Lifecycle == clientui.StepLifecycleFinished {
 			h.recordStepFinished(step.StepID)
+		}
+	case clientui.TranscriptMessageLiveRunFinished:
+		result := message.Payload().(clientui.TranscriptLiveRunResult)
+		if result.ResultKind == clientui.LiveRunResultNoFinalAnswer {
+			h.clearPendingTurnCompletionForNoFinal()
 		}
 	case clientui.TranscriptMessageCommittedRow:
 		row := message.Payload().(clientui.TranscriptCommittedRow)

@@ -96,8 +96,16 @@ export type WorkspaceList = Readonly<{
   projectID: string;
   workspaces: readonly WorkspaceSummary[];
   defaultWorkspaceID: string;
-  nextPageToken: string;
+  nextPageToken: string | null;
 }>;
+
+export type SessionCategory = "main" | "subagent";
+
+export type SessionPagePosition = Readonly<{ kind: "newest" }>
+  | Readonly<{ kind: "older"; token: string }>
+  | Readonly<{ kind: "newer"; token: string }>;
+export type SessionCatalogSummary = Readonly<{ id: string; category: SessionCategory; name: string | null; firstPromptPreview: string | null; updatedAt: number }>;
+export type SessionCatalogPage = Readonly<{ projectID: string; category: SessionCategory; sessions: readonly SessionCatalogSummary[]; older: string | null; newer: string | null }>;
 
 export type ProjectEdit = Readonly<{
   projectID: string;
@@ -662,11 +670,6 @@ export type TaskComment = Readonly<{
   updatedAt: number;
 }>;
 
-export type CommentPage = Readonly<{
-  comments: readonly TaskComment[];
-  nextOffset: number | null;
-}>;
-
 export type TaskCurrentNode = Readonly<{
   nodeID: string;
   transitionBranchKey: string | null;
@@ -730,8 +733,14 @@ export type SessionStartedActivityItem = Readonly<{
 
 export type ActivityItem = CommentActivityItem | SessionStartedActivityItem;
 
-export type ActivityPage = Readonly<{
-  items: readonly ActivityItem[];
-  nextPageToken: string;
-  generatedAt: number;
+export type OffsetPage<T> = Readonly<{
+  items: readonly T[];
+  nextOffset: number | null;
 }>;
+
+export type CommentPage = OffsetPage<TaskComment> &
+  Readonly<{
+    totalCount: number;
+  }>;
+
+export type ActivityPage = OffsetPage<ActivityItem>;

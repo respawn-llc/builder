@@ -111,6 +111,7 @@ func steerUserInjections(queueItemIDs map[string]struct{}) userInjectionSelectio
 
 type stepLoopResult struct {
 	FinalAnswer                *llm.Message
+	SilentFinal                bool
 	ExecutedToolCall           bool
 	AssistantCommittedStart    int
 	AssistantCommittedStartSet bool

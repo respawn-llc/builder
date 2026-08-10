@@ -15,7 +15,7 @@ type submitDoneMsg struct {
 	token         uint64
 	message       string
 	submittedText string
-	silentFinal   bool
+	resultKind    *clientui.UserTurnResultKind
 	queued        clientui.QueuedUserMessage
 	err           error
 }
@@ -25,7 +25,6 @@ func newSubmitDoneMsg(token uint64, message string, submittedText string, err er
 		token:         token,
 		message:       message,
 		submittedText: submittedText,
-		silentFinal:   isNoopFinalText(message),
 		err:           err,
 	}
 }

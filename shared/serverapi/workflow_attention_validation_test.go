@@ -175,11 +175,13 @@ func TestWorkflowAttentionResponseValidationPrefixesItemErrorsAndBindsTaskRespon
 }
 
 func TestWorkflowTaskActivityResponseValidationOnlyAcceptsDurableActivity(t *testing.T) {
-	valid := WorkflowTaskActivityListResponse{Items: []WorkflowTaskActivityItem{{
-		Type:    "comment",
-		TaskID:  "task-1",
-		Comment: &WorkflowTaskComment{ID: "comment-1"},
-	}}}
+	valid := WorkflowTaskActivityListResponse{
+		WorkflowOffsetPage: WorkflowOffsetPage[WorkflowTaskActivityItem]{Items: []WorkflowTaskActivityItem{{
+			Type:    "comment",
+			TaskID:  "task-1",
+			Comment: &WorkflowTaskComment{ID: "comment-1"},
+		}}},
+	}
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("comment activity response rejected: %v", err)
 	}
@@ -195,25 +197,25 @@ func TestWorkflowTaskActivityResponseValidationOnlyAcceptsDurableActivity(t *tes
 		{
 			name:     "outer task mismatch",
 			taskID:   "task-1",
-			response: WorkflowTaskActivityListResponse{Items: []WorkflowTaskActivityItem{{Type: "comment", TaskID: "task-2", Comment: &WorkflowTaskComment{ID: "comment-1"}}}},
+			response: WorkflowTaskActivityListResponse{WorkflowOffsetPage: WorkflowOffsetPage[WorkflowTaskActivityItem]{Items: []WorkflowTaskActivityItem{{Type: "comment", TaskID: "task-2", Comment: &WorkflowTaskComment{ID: "comment-1"}}}}},
 		},
 		{
 			name:   "comment with session payload",
 			taskID: "task-1",
-			response: WorkflowTaskActivityListResponse{Items: []WorkflowTaskActivityItem{{
+			response: WorkflowTaskActivityListResponse{WorkflowOffsetPage: WorkflowOffsetPage[WorkflowTaskActivityItem]{Items: []WorkflowTaskActivityItem{{
 				Type:           "comment",
 				TaskID:         "task-1",
 				Comment:        &WorkflowTaskComment{ID: "comment-1"},
 				SessionStarted: &WorkflowTaskSessionStarted{SessionID: "session-1", Name: "Session"},
-			}}},
+			}}}},
 		},
 		{
 			name:   "session without payload",
 			taskID: "task-1",
-			response: WorkflowTaskActivityListResponse{Items: []WorkflowTaskActivityItem{{
+			response: WorkflowTaskActivityListResponse{WorkflowOffsetPage: WorkflowOffsetPage[WorkflowTaskActivityItem]{Items: []WorkflowTaskActivityItem{{
 				Type:   "session_started",
 				TaskID: "task-1",
-			}}},
+			}}}},
 		},
 	}
 	for _, tt := range tests {

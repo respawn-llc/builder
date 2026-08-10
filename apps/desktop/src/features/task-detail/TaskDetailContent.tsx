@@ -56,7 +56,6 @@ import type { useTaskActivity, useTaskAttention, useTaskComments } from "./useTa
 // a server refresh, which lets a clean surface follow live updates while a
 // dirty surface keeps the user's in-progress edits.
 type TaskDraftState = Readonly<{
-  taskID: string;
   base: TaskDraft;
   draft: TaskDraft;
 }>;
@@ -154,7 +153,6 @@ export function TaskDetailContent({
   );
   const serverDraft = taskDraft(detail);
   const [draftState, setDraftState] = useState<TaskDraftState>(() => ({
-    taskID: detail.id,
     base: restored?.base ?? serverDraft,
     draft: restored?.draft ?? serverDraft,
   }));
@@ -170,20 +168,6 @@ export function TaskDetailContent({
   );
   const [localDependencyFocusRequest, setLocalDependencyFocusRequest] = useState<number | null>(null);
   const promptAnswers = useTaskPromptAnswers({ attention, detail, scrollElement });
-  // When the surface switches to a different task, drop the previous task's
-  // in-progress comment edit, new-comment draft, and question selections so they
-  // don't bleed into the newly loaded task. Reset during render (the React
-  // "adjust state on prop change" pattern) rather than in an effect. The
-  // title/body draft is reconciled separately below via reconcileDraftState.
-  const [loadedTaskID, setLoadedTaskID] = useState(detail.id);
-  if (loadedTaskID !== detail.id) {
-    setLoadedTaskID(detail.id);
-    setEditingComment(null);
-    setNewCommentBody("");
-    setDescriptionPresentation(initialDescriptionPresentationState);
-    promptAnswers.reset();
-    setLocalDependencyFocusRequest(null);
-  }
   const update = useUpdateTask(detail.id, detail.projectID);
   useTaskDetailRetainedCapture({
     base: draftState.base,
@@ -220,12 +204,12 @@ export function TaskDetailContent({
   const connection = useConnectionSnapshot();
   useTaskDetailLiveRefresh(detail, true);
   // Reconcile the draft with the latest server snapshot during render (the
-  // React "adjust state on prop change" pattern). Switching tasks resets to the
-  // server values; a clean surface follows live server updates; a surface with
-  // unsaved edits keeps the user's draft so a background refresh never clobbers
-  // in-progress work. A draft that has caught up to the server (e.g. after a
-  // save) re-baselines so subsequent server changes are followed again.
-  const reconciled = reconcileDraftState(draftState, detail.id, serverDraft);
+  // React "adjust state on prop change" pattern). A clean surface follows live
+  // server updates; a surface with unsaved edits keeps the user's draft so a
+  // background refresh never clobbers in-progress work. A draft that has
+  // caught up to the server (e.g. after a save) re-baselines so subsequent
+  // server changes are followed again.
+  const reconciled = reconcileDraftState(draftState, serverDraft);
   if (reconciled !== draftState) {
     setDraftState(reconciled);
   }
@@ -247,7 +231,6 @@ export function TaskDetailContent({
 
   return (
     <TaskInitiatingActionProvider
-      key={detail.id}
       onApplied={mutations.refresh}
       onViewDependencies={(taskID) => {
         presentTaskDependencies({
@@ -279,7 +262,7 @@ export function TaskDetailContent({
           newCommentBody={newCommentBody}
           relationshipNavigationAvailable={relationshipNavigationAvailable}
           onDraftChange={(nextDraft) => {
-            setDraftState({ taskID: detail.id, base: reconciled.base, draft: nextDraft });
+            setDraftState({ base: reconciled.base, draft: nextDraft });
           }}
           onDescriptionPresentationChange={setDescriptionPresentation}
           onAddDependency={(direction) => {
@@ -631,20 +614,16 @@ function sameDraft(a: TaskDraft, b: TaskDraft): boolean {
   return a.title === b.title && a.body === b.body;
 }
 
-function reconcileDraftState(state: TaskDraftState, taskID: string, serverDraft: TaskDraft): TaskDraftState {
-  if (state.taskID !== taskID) {
-    // Switched to a different task: drop the previous task's draft entirely.
-    return { taskID, base: serverDraft, draft: serverDraft };
-  }
+function reconcileDraftState(state: TaskDraftState, serverDraft: TaskDraft): TaskDraftState {
   const hasUnsavedEdits = !sameDraft(state.draft, state.base);
   if (!hasUnsavedEdits) {
     // Clean surface: track the latest server values (re-baseline on change).
-    return sameDraft(state.base, serverDraft) ? state : { taskID, base: serverDraft, draft: serverDraft };
+    return sameDraft(state.base, serverDraft) ? state : { base: serverDraft, draft: serverDraft };
   }
   if (sameDraft(state.draft, serverDraft)) {
     // The draft caught up to the server (e.g. the edit was just saved): treat
     // it as clean again so future server changes are followed.
-    return { taskID, base: serverDraft, draft: serverDraft };
+    return { base: serverDraft, draft: serverDraft };
   }
   // Unsaved edits diverge from the server: keep them; edits take priority.
   return state;

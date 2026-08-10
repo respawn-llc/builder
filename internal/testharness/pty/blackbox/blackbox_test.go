@@ -864,8 +864,8 @@ func TestResponsesStubStreamsRequiredOperationToHTTPTransport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateStream: %v", err)
 	}
-	if response.AssistantText != output {
-		t.Fatalf("assistant text = %q, want %q", response.AssistantText, output)
+	if response.AssistantText == nil || *response.AssistantText != output {
+		t.Fatalf("assistant text = %#v, want %q", response.AssistantText, output)
 	}
 	if len(deltas) != 1 || deltas[0] != output {
 		t.Fatalf("assistant deltas = %#v, want %q", deltas, output)

@@ -494,6 +494,11 @@
 - Core Task detail includes an unresolved-attention count but not the attention items. It does not scan transcript history.
 - The Task-specific attention feed can read the newest active transcript segment to recover unresolved Question content. Desktop Task detail loads this feed independently so it does not delay core Task detail.
 - Task Activity is a server-paginated projection of durable Comments and retained Session creation. It contains no workflow movement, Node completion, interruption, attempt, or diagnostic history. Clients render Session creation as localized `Session started` activity.
+- Task Activity uses the offset pagination contract defined below.
+- Task Activity requests may omit offset and limit. An omitted offset starts at zero, offsets are zero-based and non-negative, and an omitted limit defaults to 100 with a maximum of 100.
+- Task Activity pagination is stateless between requests. The server bounds each response by the requested limit and does not retain page contents or pagination state.
+- Insertions, removals, or reordering between independent Task Activity requests may cause later results to repeat or skip items.
+- Task Activity orders items by occurrence time descending, then Activity ID descending. A Comment occurrence uses the Comment's latest update time. A Session-start occurrence uses the Session's creation time.
 - Task detail reports the total retained Session count. It provides direct Open and Interrupt actions only for agent Sessions with live Exact Execution Scopes; non-live Sessions remain available through the Session picker.
 - Desktop shows Task-wide Interrupt when several Exact Execution Scopes are live or a Script Node is live.
 - Task status is structured and independent of a specific client. Each client renders and localizes it.
@@ -517,15 +522,6 @@
 - [CLI Commands](cli-commands.md) owns the complete Task Search command contract.
 - Search returns Task status from the server-owned Task-status projection.
 - Each response is point-in-time consistent for matching text, counts, filters, and Task metadata. It combines that durable view with one separately captured Immutable Live Snapshot. A Workflow lifecycle change between the views may briefly combine durable and live facts from different moments.
-
-## Workflow And Task API Pagination
-
-- Paginated Workflow and Task API requests may omit both `offset` and `limit`.
-- An omitted offset starts at the beginning, and an explicit offset of zero is valid.
-- An omitted limit defaults to 100. Supplied limits must be from 1 through 100.
-- The API represents omitted numeric values as absent or null rather than as zero.
-- The server keeps pagination memory bounded by the requested limit.
-- The server does not retain page contents or pagination state between requests and does not persist pagination state.
 
 ## Execution Targets And Worktrees
 
@@ -582,6 +578,12 @@
 - There are no model-callable comment tools.
 - Comments record the author or source agent when available.
 - Comments belong to the Task and are not files in its worktree.
+- Comment lists order by creation time descending, then Comment ID descending.
+- Each Comment list response reports the current total number of Comments independently of its bounded item window.
+- Comment listing accepts an optional zero-based, non-negative offset and an optional limit. Omitted offset starts at zero; omitted limit defaults to 100; the maximum limit is 100.
+- Each Comment list request is independent and stateless. The server bounds the response by the requested limit and retains no page contents or pagination state.
+- A Comment list response includes `next_offset` only when another offset request may return more items; terminal responses omit it.
+- Insertions, removals, or reordering between independent Comment list requests may cause later results to repeat or skip items.
 - Deleting a Task Comment removes it completely. Kent cannot list or restore deleted Comments.
 
 ## Durable Workflow State

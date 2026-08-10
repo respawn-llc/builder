@@ -8,7 +8,6 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/shared/textutil"
-	"core/shared/transcript"
 )
 
 func appendFinalAnswerTestRecord(
@@ -66,7 +65,7 @@ func TestLatestCommittedAssistantFinalAnswerReturnsNewestFinalByteForByte(t *tes
 	}
 }
 
-func TestLatestCommittedAssistantFinalAnswerSkipsLaterNonCandidatesAndNoopFinals(t *testing.T) {
+func TestLatestCommittedAssistantFinalAnswerBlankStopsBeforePrevious(t *testing.T) {
 	t.Parallel()
 	eventLog := mustMaterializeTestEventLog(t, mustCreateTestSession(t))
 	appendFinalAnswerTestRecord(t, eventLog, finalAnswerMessageRecord(t, llm.Message{
@@ -83,15 +82,15 @@ func TestLatestCommittedAssistantFinalAnswerSkipsLaterNonCandidatesAndNoopFinals
 	appendFinalAnswerTestRecord(t, eventLog, finalAnswerMessageRecord(t, llm.Message{
 		Role:    llm.RoleAssistant,
 		Phase:   textutil.Value(llm.MessagePhaseFinal),
-		Content: textutil.Value(transcript.NoopFinalToken),
+		Content: textutil.Value(""),
 	}))
 
 	answer, err := LatestCommittedAssistantFinalAnswerFromEventLog(eventLog)
 	if err != nil {
 		t.Fatalf("lookup final answer: %v", err)
 	}
-	if answer == nil || *answer != "committed answer" {
-		t.Fatalf("answer = %v, want committed answer", answer)
+	if answer != nil {
+		t.Fatalf("answer = %q, want absence at blank final", *answer)
 	}
 }
 

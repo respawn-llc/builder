@@ -39,6 +39,7 @@ export {
 } from "./models";
 export { boardNodeCardsPageSize, defaultBoardNodeCardsSort } from "./boardNodeCardsSorting";
 export {
+  CatalogContractError,
   ContractError,
   ProtocolMismatchError,
   RpcError,
@@ -56,6 +57,7 @@ export {
   errorMessage,
 } from "./errors";
 export type { WorkflowLabelErrorReason } from "./errors";
+export type { CatalogContractErrorReason } from "./errors";
 export type { WorkflowTaskDependencyErrorReason } from "./errors";
 export type { TaskSearchErrorReason } from "./errors";
 export { guiTaskCommentAuthor } from "./client";
@@ -95,6 +97,8 @@ export type {
   TaskComment,
   TaskAttention,
   TaskCommentAuthorKind,
+  CommentPage,
+  OffsetPage,
   TaskDetail,
   TaskDependencies,
   TaskDependencyAddAvailability,
@@ -163,6 +167,7 @@ export type {
   WorkflowValidation,
   WorkflowValidationError,
   WorkspaceSummary,
+  WorkspaceList,
   WorkspaceAvailability,
   WorkspaceUnlinkBlocker,
   WorkspaceUnlinkResponse,
@@ -173,6 +178,12 @@ export type {
   OrdinaryQuestionPrompt,
   PromptIdentity,
 } from "./promptModels";
+export type {
+  SessionCatalogPage,
+  SessionCatalogSummary,
+  SessionCategory,
+  SessionPagePosition,
+} from "./models";
 export type {
   WorkflowEdgeSelectionMode,
   WorkflowParameterPurpose,

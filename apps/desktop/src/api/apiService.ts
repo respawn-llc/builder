@@ -35,6 +35,9 @@ import type {
   ProjectPage,
   ProjectWorkflowLink,
   ServerReadiness,
+  SessionCatalogPage,
+  SessionCategory,
+  SessionPagePosition,
   TaskAttention,
   TaskApproveResponse,
   TaskComment,
@@ -81,6 +84,11 @@ export interface ApiService {
 
   getReadiness(): Promise<ServerReadiness>;
   listProjects(pageToken: string): Promise<ProjectPage>;
+  listSessionPage(
+    projectID: string,
+    category: SessionCategory,
+    position: SessionPagePosition,
+  ): Promise<SessionCatalogPage>;
   listWorkspaces(projectID: string, pageToken?: string): Promise<WorkspaceList>;
   getProjectEdit(projectID: string, pageToken?: string): Promise<ProjectEdit>;
   planWorkspace(path: string): Promise<BindingPlan>;
@@ -148,7 +156,7 @@ export interface ApiService {
   approveApproval(approvalID: string): Promise<TaskApproveResponse>;
   deleteTask(taskID: string): Promise<void>;
   getTask(taskID: string): Promise<TaskDetail>;
-  listTaskActivity(taskID: string, pageToken: string): Promise<ActivityPage>;
+  listTaskActivity(taskID: string, offset: number): Promise<ActivityPage>;
   listTaskComments(taskID: string, offset: number): Promise<CommentPage>;
   addComment(taskID: string, body: string): Promise<TaskComment>;
   replaceComment(commentID: string, body: string): Promise<void>;

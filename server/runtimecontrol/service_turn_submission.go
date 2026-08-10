@@ -12,6 +12,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 type userTurnProjection struct {
@@ -119,22 +120,45 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 					return queueErr
 				}
 				recordAccepted(true)
-				resp = serverapi.RuntimeSubmitUserTurnResponse{Compacted: compacted, Steered: true, QueueItemID: queued.ID}
+				resp = serverapi.RuntimeSubmitUserTurnResponse{
+					Compacted:   compacted,
+					ResultKind:  clientui.UserTurnResultKindQueued,
+					Steered:     true,
+					QueueItemID: queued.ID,
+				}
 				return nil
 			}
-			msg, queued, err := engine.SubmitUserMessageOrSteerWithHooks(runCtx, projection.ExecutionText, strings.TrimSpace(req.ClientRequestID), func() {
+			outcome, queued, err := engine.SubmitUserMessageOrSteerWithOutcomeHooks(runCtx, projection.ExecutionText, strings.TrimSpace(req.ClientRequestID), func() {
 				s.operations.MarkOperationActive(memoReq.SessionID, req.OperationRef)
 			}, recordAccepted)
 			if err != nil {
 				return err
 			}
 			if queued != nil {
-				resp = serverapi.RuntimeSubmitUserTurnResponse{Compacted: compacted, Steered: true, QueueItemID: queued.ID}
+				resp = serverapi.RuntimeSubmitUserTurnResponse{
+					Compacted:   compacted,
+					ResultKind:  clientui.UserTurnResultKindQueued,
+					Steered:     true,
+					QueueItemID: queued.ID,
+				}
 				return nil
 			}
-			resp = serverapi.RuntimeSubmitUserTurnResponse{Compacted: compacted}
-			if msg.Content != nil {
-				resp.Message = *msg.Content
+			resp = serverapi.RuntimeSubmitUserTurnResponse{
+				Compacted:  compacted,
+				ResultKind: clientui.UserTurnResultKindNoFinal,
+			}
+			switch outcome.Kind {
+			case runtime.UserTurnResultAssistantFinal:
+				resp.ResultKind = clientui.UserTurnResultKindAssistantFinal
+				if outcome.FinalAnswer != nil && outcome.FinalAnswer.Content != nil {
+					resp.Message = outcome.FinalAnswer.Content
+				}
+			case runtime.UserTurnResultSilentFinal:
+				resp.ResultKind = clientui.UserTurnResultKindSilentFinal
+				resp.Message = textutil.Value("")
+			}
+			if err := resp.Validate(); err != nil {
+				return err
 			}
 			return nil
 		})
@@ -147,6 +171,9 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 				}
 				if steered {
 					s.operations.RecordQueuedMessageSubmitted(memoReq.SessionID, req.OperationRef)
+					if validateErr := resp.Validate(); validateErr != nil {
+						return serverapi.RuntimeSubmitUserTurnResponse{}, validateErr
+					}
 					return resp, nil
 				}
 			}
@@ -155,7 +182,13 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 			s.recordRuntimeAccessFailureOrCancellation(memoReq.SessionID, req.OperationRef, err, attempt)
 			return serverapi.RuntimeSubmitUserTurnResponse{}, err
 		}
-		return resp, err
+		if err != nil {
+			return resp, err
+		}
+		if validateErr := resp.Validate(); validateErr != nil {
+			return serverapi.RuntimeSubmitUserTurnResponse{}, validateErr
+		}
+		return resp, nil
 	})
 }
 
@@ -189,7 +222,11 @@ func (s *Service) trySubmitUserTurnAsActiveExecution(ctx context.Context, attemp
 			if !accepted {
 				return serverapi.ErrSessionRunStarting
 			}
-			resp = serverapi.RuntimeSubmitUserTurnResponse{Steered: true, QueueItemID: item.ID}
+			resp = serverapi.RuntimeSubmitUserTurnResponse{
+				ResultKind:  clientui.UserTurnResultKindQueued,
+				Steered:     true,
+				QueueItemID: item.ID,
+			}
 			steered = true
 			return nil
 		})

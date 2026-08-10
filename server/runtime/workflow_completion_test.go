@@ -286,7 +286,7 @@ func compatiblePhaseAbsentResponse(content string) llm.Response {
 
 func compatibleFinalResponse(content string) llm.Response {
 	return llm.Response{
-		Assistant:     llm.Message{Role: llm.RoleAssistant, Content: textutil.OptionalTrimmedString(content), Phase: textutil.Value(llm.MessagePhaseFinal)},
+		Assistant:     llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(content), Phase: textutil.Value(llm.MessagePhaseFinal)},
 		ProviderPhase: llm.FinalProviderPhase(),
 		Usage:         llm.Usage{WindowTokens: 200000},
 	}
@@ -1249,8 +1249,12 @@ func TestWorkflowShellToolDurableCompletionStopsAfterToolResult(t *testing.T) {
 		t.Fatalf("runtime completions = %d, want external completion only", got)
 	}
 	assertToolMessageWithCallID(t, eng, "call_shell")
-	if got := events.count(); got != 0 {
-		t.Fatalf("shell-command workflow completion published final-answer terminal facts: %+v", events.snapshot())
+	result := events.single(t)
+	if result.Status != RunStatusCompleted ||
+		result.ResultKind != LiveRunResultNoFinalAnswer ||
+		result.NoFinalReason != LiveRunNoFinalAnswerReasonWorkflow ||
+		result.AssistantMessage.Content != nil {
+		t.Fatalf("shell-command workflow completion result = %+v, want workflow no-final terminal fact", result)
 	}
 }
 
@@ -1362,15 +1366,13 @@ func TestCompatibleProviderPhaseAbsentProseConsumesWorkflowViolationAndCanRecove
 	}
 }
 
-func TestCompatibleProviderEmptyNoToolResponsesContinueWithoutWorkflowViolation(t *testing.T) {
+func TestWorkflowBlankFinalUsesNormalIncompleteOutputHandling(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name     string
 		response func(string) llm.Response
 		content  string
 	}{
-		{name: "absent empty", response: compatiblePhaseAbsentResponse, content: ""},
-		{name: "absent whitespace", response: compatiblePhaseAbsentResponse, content: " \n\t "},
 		{name: "final empty", response: compatibleFinalResponse, content: ""},
 		{name: "final whitespace", response: compatibleFinalResponse, content: " \n\t "},
 	}
