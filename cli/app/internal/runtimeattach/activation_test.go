@@ -100,6 +100,12 @@ func TestTechnicalReattachmentCannotMasqueradeAsFreshUserActivation(t *testing.T
 	if got := runtimeActivationOperation(t, service.activateRequests[1]); got != "technical_reattachment" {
 		t.Fatalf("automatic reattachment operation = %q, want technical_reattachment", got)
 	}
+	if err := lease.Reactivate(context.Background()); err != nil {
+		t.Fatalf("second Reactivate: %v", err)
+	}
+	if got := runtimeActivationOperation(t, service.activateRequests[2]); got != "technical_reattachment" {
+		t.Fatalf("later automatic reattachment operation = %q, want technical_reattachment", got)
+	}
 }
 
 func runtimeActivationOperation(t *testing.T, request serverapi.SessionRuntimeActivateRequest) string {

@@ -444,11 +444,25 @@ func TestGatewayConnectionCloseReleasesOwnedIdleRuntime(t *testing.T) {
 		if activationRequest.OwnerID == "" || activationRequest.OwnerID == "client-spoof" {
 			t.Fatalf("gateway did not inject connection owner id: %+v", activationRequest)
 		}
+		if activationRequest.Operation != serverapi.SessionRuntimeActivationUserActivation {
+			t.Fatalf("gateway changed fresh activation operation: %+v", activationRequest)
+		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for activation request")
 	}
 	var successor serverapi.SessionRuntimeActivateResponse
-	callGateway(t, conn, "activate-runtime-2", protocol.MethodSessionRuntimeActivate, gatewayRuntimeActivateRequest(appCore, store.Meta().SessionID, "activate-runtime-2"), &successor)
+	reattachment := gatewayRuntimeActivateRequest(appCore, store.Meta().SessionID, "activate-runtime-2")
+	reattachment.Operation = serverapi.SessionRuntimeActivationTechnicalReattachment
+	callGateway(t, conn, "activate-runtime-2", protocol.MethodSessionRuntimeActivate, reattachment, &successor)
+	select {
+	case reattachmentRequest := <-counter.activateRequests:
+		if reattachmentRequest.OwnerID != activationRequest.OwnerID ||
+			reattachmentRequest.Operation != serverapi.SessionRuntimeActivationTechnicalReattachment {
+			t.Fatalf("gateway owner/technical operation propagation = %+v, want owner %q", reattachmentRequest, activationRequest.OwnerID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for technical reattachment request")
+	}
 	callGateway(t, conn, "release-runtime-1", protocol.MethodSessionRuntimeRelease, serverapi.SessionRuntimeReleaseRequest{
 		ClientRequestID: "release-runtime-1",
 		Attachment:      activation.Attachment,

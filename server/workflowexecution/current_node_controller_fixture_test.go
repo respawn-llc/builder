@@ -238,6 +238,9 @@ type currentNodeControllerStore struct {
 	completionOnce        sync.Once
 	completionPrepareErr  error
 	completionCommitErr   error
+	sessionTaskID         *workflow.TaskID
+	directSessionBinding  *workflowstore.DirectSessionCurrentNodeBinding
+	sessionAssociation    *workflowstore.TaskSessionAssociation
 	bindingErr            error
 	bindings              []currentNodeSessionBindingCall
 	interruptStarted      chan struct{}
@@ -740,25 +743,41 @@ func (*currentNodeControllerStore) PublishCurrentNodeCompletion(
 	return nil
 }
 
-func (*currentNodeControllerStore) ResolveDirectSessionCurrentNodeBinding(
+func (s *currentNodeControllerStore) ResolveDirectSessionCurrentNodeBinding(
 	context.Context,
 	runtimeids.SessionID,
 ) (workflowstore.DirectSessionCurrentNodeBinding, bool, error) {
-	return workflowstore.DirectSessionCurrentNodeBinding{}, false, nil
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.directSessionBinding == nil {
+		return workflowstore.DirectSessionCurrentNodeBinding{}, false, nil
+	}
+	return *s.directSessionBinding, true, nil
 }
 
-func (*currentNodeControllerStore) TaskIDForSession(
+func (s *currentNodeControllerStore) TaskIDForSession(
 	context.Context,
 	runtimeids.SessionID,
 ) (*workflow.TaskID, error) {
-	return nil, nil
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.sessionTaskID == nil {
+		return nil, nil
+	}
+	taskID := *s.sessionTaskID
+	return &taskID, nil
 }
 
-func (*currentNodeControllerStore) EnsureCurrentNodeSessionAssociation(
+func (s *currentNodeControllerStore) EnsureCurrentNodeSessionAssociation(
 	context.Context,
 	runtimeids.SessionID,
 ) (workflowstore.TaskSessionAssociation, error) {
-	return workflowstore.TaskSessionAssociation{}, workflowstore.ErrSessionNotCurrentWorkflowNode
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.sessionAssociation == nil {
+		return workflowstore.TaskSessionAssociation{}, workflowstore.ErrSessionNotCurrentWorkflowNode
+	}
+	return *s.sessionAssociation, nil
 }
 
 func (s *currentNodeControllerStore) ValidateCurrentNodeSessionBinding(_ context.Context, sessionID runtimeids.SessionID, reference workflow.CurrentNodeReference) error {

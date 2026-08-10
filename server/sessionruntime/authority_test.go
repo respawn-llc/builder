@@ -3210,6 +3210,51 @@ func TestAttachWorkflowRuntimeRequiresTheExpectedLiveExactGeneration(t *testing.
 	); !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
 		t.Fatalf("attach after exact retirement error = %v, want runtime unavailable", err)
 	}
+
+	replacementRelease := make(chan struct{})
+	replacement, err := fixture.authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
+		Descriptor: mustOpenSessionDescriptor(t, sessionID),
+		Runtime:    &plan,
+		Workflow:   releasedWorkflowLeaseForTest(t, fixture.authority, workflowRef),
+		Resource:   OpenAgentResource{},
+		Runner: func(ctx context.Context, _ ExecutionScope, _ AgentRuntimeBridge) error {
+			select {
+			case <-replacementRelease:
+				return nil
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("start replacement Workflow Exact: %v", err)
+	}
+	t.Cleanup(func() {
+		close(replacementRelease)
+		_, _ = replacement.Wait(context.Background())
+	})
+	replacementResource, ok := replacement.Scope().Resource()
+	if !ok {
+		t.Fatal("replacement Workflow Exact has no Session Resource")
+	}
+	if replacementResource.Generation() <= expected.ResourceGeneration {
+		t.Fatalf(
+			"replacement Resource Generation = %d, want newer than stale generation %d",
+			replacementResource.Generation(),
+			expected.ResourceGeneration,
+		)
+	}
+	if _, err := fixture.authority.AttachWorkflowRuntime(
+		context.Background(),
+		expected,
+		"stale-owner-after-replacement",
+	); !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
+		t.Fatalf("stale expected attachment after replacement error = %v, want runtime unavailable", err)
+	}
+	current, live := fixture.authority.SessionExecution(sessionID)
+	if !live || current.Scope().ID() != replacement.Scope().ID() {
+		t.Fatalf("stale attachment changed current Exact: live=%v scope=%v, want %s", live, current.Scope().ID(), replacement.Scope().ID())
+	}
 }
 
 func workflowExecutionRefForTestPointer(

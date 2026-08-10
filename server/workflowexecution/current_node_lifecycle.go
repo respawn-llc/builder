@@ -234,13 +234,14 @@ func (c *CurrentNodeController) currentTaskRunNodesLocked(taskID workflow.TaskID
 		if run.reference.TaskID != taskID ||
 			(run.phase != currentNodeRunStaged &&
 				run.phase != currentNodeRunQueued &&
-				run.phase != currentNodeRunLaunching) {
+				run.phase != currentNodeRunLaunching &&
+				run.phase != currentNodeRunExact) {
 			continue
 		}
 		node, err := workflow.NewCurrentNode(
 			run.reference,
 			nil,
-			&workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
+			&workflow.CurrentNodeScheduling{State: run.expectedScheduling},
 		)
 		if err != nil {
 			panic(err)

@@ -14,6 +14,7 @@ import (
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
 	"core/shared/runtimeids"
+	"core/shared/serverapi"
 )
 
 func TestCurrentNodeControllerConcurrentResumeCreatesOneExecution(t *testing.T) {
@@ -92,6 +93,119 @@ func TestCurrentNodeControllerConcurrentResumeCreatesOneExecution(t *testing.T) 
 	case duplicate := <-runner.started:
 		t.Fatalf("duplicate Resume started a second execution for %v", duplicate)
 	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestRetainedUserActivationWaitsForQueuedSuccessorBehindItsExactPredecessor(t *testing.T) {
+	shellPath, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("sh executable unavailable: %v", err)
+	}
+	taskID := workflow.TaskID("task-retained-predecessor-wait")
+	source := currentNodeReferenceForControllerTest(t, string(taskID), "node-source")
+	successor := currentNodeReferenceForControllerTest(t, string(taskID), "node-successor")
+	sessionID := runtimeids.NewSessionID()
+	store := &currentNodeControllerStore{
+		completion: workflowstore.CurrentNodeCompletionResult{
+			Mutation: workflow.CurrentNodeMutationResult{
+				Removed: []workflow.CurrentNodeReference{source},
+				Created: []workflow.CurrentNode{{
+					Reference:  successor,
+					Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
+				}},
+			},
+			AutomaticIntents: []workflowstore.CurrentNodeAutomaticIntent{{
+				CurrentNode: successor,
+				NodeKind:    workflow.NodeKindAgent,
+			}},
+		},
+		sessionTaskID: &taskID,
+		directSessionBinding: &workflowstore.DirectSessionCurrentNodeBinding{
+			TaskID:      taskID,
+			CurrentNode: successor,
+		},
+		sessionAssociation: &workflowstore.TaskSessionAssociation{
+			SessionID:   sessionID,
+			CurrentNode: successor,
+		},
+	}
+	var controller *CurrentNodeController
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
+			controller.ExecutionFinalized(scope)
+		}),
+	})
+	runner := &recordingScriptRunner{
+		authority: authority,
+		command: sessionruntime.ScriptCommand{
+			Path: shellPath,
+			Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
+		},
+		started: make(chan workflow.CurrentNodeReference, 2),
+	}
+	controller = newCurrentNodeControllerForTest(t, store, runner, authority, 1)
+	t.Cleanup(func() {
+		if err := controller.Close(); err != nil {
+			t.Errorf("close controller: %v", err)
+		}
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+
+	if err := startCurrentNodeForControllerTest(context.Background(), controller, store, source); err != nil {
+		t.Fatalf("start predecessor: %v", err)
+	}
+	<-runner.started
+	waitForRunningCurrentNode(t, authority, source)
+	sourceScope := singleLiveScope(t, controller, source)
+	if _, err := controller.CompleteCurrentNode(context.Background(), workflowruntime.CompletionRequest{
+		ScopeID:      sourceScope,
+		TransitionID: "next",
+	}); err != nil {
+		t.Fatalf("complete predecessor: %v", err)
+	}
+	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+		observation, observeErr := controller.ObserveWorkflowTaskExecutions([]workflow.TaskID{taskID})
+		if observeErr != nil {
+			return false
+		}
+		runs := observation.Runs[taskID]
+		return len(runs.Queued) == 1 &&
+			runs.Queued[0].Equal(successor) &&
+			len(runs.InterruptibleLaunching) == 0
+	}, "successor did not remain queued and non-interruptible behind its Exact predecessor")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	activationDone := make(chan error, 1)
+	go func() {
+		_, activationErr := controller.ActivateWorkflowSession(ctx, sessionruntime.WorkflowSessionActivationRequest{
+			SessionID: sessionID,
+			OwnerID:   "retained-predecessor-owner",
+			Operation: serverapi.SessionRuntimeActivationUserActivation,
+		})
+		activationDone <- activationErr
+	}()
+	select {
+	case activationErr := <-activationDone:
+		t.Fatalf("activation returned before predecessor retirement: %v", activationErr)
+	case <-time.After(150 * time.Millisecond):
+	}
+	cancel()
+	select {
+	case activationErr := <-activationDone:
+		if !errors.Is(activationErr, context.Canceled) {
+			t.Fatalf("canceled predecessor-wait activation error = %v, want context canceled", activationErr)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("canceled predecessor-wait activation did not return")
+	}
+	handle, live := authority.ExecutionByScope(sourceScope)
+	if !live {
+		t.Fatal("predecessor retired before explicit cleanup")
+	}
+	if err := handle.Stop(context.Background()); err != nil {
+		t.Fatalf("stop predecessor: %v", err)
 	}
 }
 

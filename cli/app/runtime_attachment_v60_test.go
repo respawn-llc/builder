@@ -238,6 +238,122 @@ func TestPickerExistingSessionLifecycleCarriesUserActivationAuthority(t *testing
 	requireCapturedUserActivation(t, err, server, sessionID.String())
 }
 
+func TestOrdinarySessionLifecycleReachesLazyHydrationWithoutStartingAgentExecution(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		intent *serverapi.SessionLaunchIntent
+		pick   sessionPickerResult
+		wantID string
+	}{
+		{
+			name:   "initial create-new",
+			pick:   sessionPickerCreateResult{},
+			wantID: "created-session",
+		},
+		{
+			name: "ordinary --session",
+			intent: func() *serverapi.SessionLaunchIntent {
+				intent := serverapi.OpenExistingSessionLaunchIntent(sessionLifecycleSessionID(t, "ordinary-explicit"))
+				return &intent
+			}(),
+			wantID: "ordinary-explicit",
+		},
+		{
+			name:   "ordinary picker selection",
+			pick:   newSessionPickerOpenResult(sessionLifecycleSessionID(t, "ordinary-picker")),
+			wantID: "ordinary-picker",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := newActivationLifecycleTestServer(t, 0)
+			if test.pick != nil {
+				withSessionPickerResult(t, test.pick)
+			}
+			withUIInput(t, "\x03")
+
+			if err := runSessionLifecycleWithOptions(
+				context.Background(),
+				server,
+				nil,
+				sessionLifecycleOptions{Intent: test.intent},
+			); err != nil {
+				t.Fatalf("runSessionLifecycleWithOptions: %v", err)
+			}
+
+			if len(server.activateRequests) != 1 {
+				t.Fatalf("activation requests = %d, want 1", len(server.activateRequests))
+			}
+			requireUserActivationRequest(t, server.activateRequests[0], test.wantID)
+			if got := server.runtimeControls.submitCalls; got != 0 {
+				t.Fatalf("startup Agent submissions = %d, want lazy open with none", got)
+			}
+			if got := server.transcriptSubscriber.sessionIDs; len(got) != 1 || got[0] != test.wantID {
+				t.Fatalf("hydration subscriptions = %v, want [%s]", got, test.wantID)
+			}
+		})
+	}
+}
+
+func TestRetainedSessionLifecycleWaitsForExactBeforeHydration(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		intent *serverapi.SessionLaunchIntent
+		pick   sessionPickerResult
+		wantID string
+	}{
+		{
+			name: "directly retained --session",
+			intent: func() *serverapi.SessionLaunchIntent {
+				intent := serverapi.OpenExistingSessionLaunchIntent(sessionLifecycleSessionID(t, "retained-explicit"))
+				return &intent
+			}(),
+			wantID: "retained-explicit",
+		},
+		{
+			name:   "retained picker selection",
+			pick:   newSessionPickerOpenResult(sessionLifecycleSessionID(t, "retained-picker")),
+			wantID: "retained-picker",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := newActivationLifecycleTestServer(t, 0)
+			server.blockActivation(test.wantID)
+			if test.pick != nil {
+				withSessionPickerResult(t, test.pick)
+			}
+			withUIInput(t, "\x03")
+			done := make(chan error, 1)
+			go func() {
+				done <- runSessionLifecycleWithOptions(
+					context.Background(),
+					server,
+					nil,
+					sessionLifecycleOptions{Intent: test.intent},
+				)
+			}()
+
+			server.waitForBlockedActivation(t)
+			server.requireNoTranscriptSubscription(t)
+			server.releaseBlockedActivation()
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatalf("runSessionLifecycleWithOptions: %v", err)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("retained lifecycle did not reach hydration after Exact attachment")
+			}
+			if len(server.activateRequests) != 1 {
+				t.Fatalf("activation requests = %d, want 1", len(server.activateRequests))
+			}
+			requireUserActivationRequest(t, server.activateRequests[0], test.wantID)
+			if got := server.transcriptSubscriber.sessionIDs; len(got) != 1 || got[0] != test.wantID {
+				t.Fatalf("post-Exact hydration subscriptions = %v, want [%s]", got, test.wantID)
+			}
+		})
+	}
+}
+
 func TestInAppNavigationLifecycleCarriesUserActivationAuthority(t *testing.T) {
 	server := newActivationLifecycleTestServer(t, 2)
 	sourceID := sessionLifecycleSessionID(t, "navigation-source")
@@ -257,12 +373,62 @@ func TestInAppNavigationLifecycleCarriesUserActivationAuthority(t *testing.T) {
 	}
 }
 
+func TestInAppNavigationToRetainedSessionWaitsForExactBeforeDestinationHydration(t *testing.T) {
+	server := newActivationLifecycleTestServer(t, 0)
+	server.blockActivation("navigation-target")
+	sourceID := sessionLifecycleSessionID(t, "navigation-source-retained")
+	intent := serverapi.OpenExistingSessionLaunchIntent(sourceID)
+	withUIInput(t, "/new\r")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- runSessionLifecycleWithOptions(
+			ctx,
+			server,
+			nil,
+			sessionLifecycleOptions{Intent: &intent},
+		)
+	}()
+
+	server.waitForBlockedActivation(t)
+	if got := server.waitForTranscriptSubscription(t); got != sourceID.String() {
+		t.Fatalf("source hydration subscription = %q, want %q", got, sourceID)
+	}
+	server.requireNoTranscriptSubscription(t)
+	server.releaseBlockedActivation()
+	if got := server.waitForTranscriptSubscription(t); got != "navigation-target" {
+		t.Fatalf("retained destination hydration subscription = %q, want navigation-target", got)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil && !errors.Is(err, context.Canceled) {
+			t.Fatalf("runSessionLifecycleWithOptions: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("retained navigation did not reach destination hydration")
+	}
+	if got := server.transcriptSubscriber.sessionIDs; len(got) != 2 || got[1] != "navigation-target" {
+		t.Fatalf("navigation hydration subscriptions = %v, want source then retained destination", got)
+	}
+	for index, wantSessionID := range []string{sourceID.String(), "navigation-target"} {
+		requireUserActivationRequest(t, server.activateRequests[index], wantSessionID)
+	}
+}
+
 type activationLifecycleTestServer struct {
-	cfg              config.App
-	projectView      *activationLifecycleProjectView
-	sessionView      stubSessionViewClient
-	activateRequests []serverapi.SessionRuntimeActivateRequest
-	stopAfter        int
+	cfg                  config.App
+	projectView          *activationLifecycleProjectView
+	sessionView          stubSessionViewClient
+	runtimeControls      *reconnectRetryRuntimeControlClient
+	transcriptSubscriber *recordingTranscriptSubscriber
+	activateRequests     []serverapi.SessionRuntimeActivateRequest
+	stopAfter            int
+	blockedSessionID     string
+	activationEntered    chan struct{}
+	activationRelease    chan struct{}
+	transcriptStarted    chan string
 }
 
 func newActivationLifecycleTestServer(t *testing.T, stopAfter int) *activationLifecycleTestServer {
@@ -277,7 +443,12 @@ func newActivationLifecycleTestServer(t *testing.T, stopAfter int) *activationLi
 				Theme: "dark",
 			},
 		},
-		stopAfter: stopAfter,
+		stopAfter:         stopAfter,
+		transcriptStarted: make(chan string, 2),
+	}
+	server.runtimeControls = &reconnectRetryRuntimeControlClient{}
+	server.transcriptSubscriber = &recordingTranscriptSubscriber{
+		subs: []*scriptedTranscriptSubscription{{}, {}},
 	}
 	server.projectView = &activationLifecycleProjectView{server: server}
 	server.sessionView = stubSessionViewClient{
@@ -332,20 +503,73 @@ func (s *activationLifecycleTestServer) SessionLifecycleClient() apicontract.Ses
 
 func (s *activationLifecycleTestServer) RuntimeAttachmentClients() runtimeAttachmentClients {
 	return runtimeAttachmentClients{
-		RuntimeControls: &reconnectRetryRuntimeControlClient{},
+		RuntimeControls: s.runtimeControls,
 		SessionRuntime: &recordingSessionRuntimeClient{
 			activate: func(_ context.Context, req serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
 				s.activateRequests = append(s.activateRequests, req)
+				if req.SessionID == s.blockedSessionID {
+					close(s.activationEntered)
+					<-s.activationRelease
+				}
 				if len(s.activateRequests) == s.stopAfter {
 					return serverapi.SessionRuntimeActivateResponse{}, errLifecycleActivationCaptured
 				}
 				return sessionRuntimeActivateResponse(req.SessionID, uint64(len(s.activateRequests))), nil
 			},
 		},
-		SessionTranscript: &recordingTranscriptSubscriber{
-			subs: []*scriptedTranscriptSubscription{{}},
-		},
-		SessionViews: s.sessionView,
+		SessionTranscript: activationLifecycleTranscriptSubscriber{server: s},
+		SessionViews:      s.sessionView,
+	}
+}
+
+type activationLifecycleTranscriptSubscriber struct {
+	server *activationLifecycleTestServer
+}
+
+func (s activationLifecycleTranscriptSubscriber) SubscribeSessionTranscript(
+	ctx context.Context,
+	req serverapi.TranscriptSubscribeRequest,
+) (serverapi.TranscriptSubscription, error) {
+	s.server.transcriptStarted <- req.SessionID
+	return s.server.transcriptSubscriber.SubscribeSessionTranscript(ctx, req)
+}
+
+func (s *activationLifecycleTestServer) blockActivation(sessionID string) {
+	s.blockedSessionID = sessionID
+	s.activationEntered = make(chan struct{})
+	s.activationRelease = make(chan struct{})
+}
+
+func (s *activationLifecycleTestServer) waitForBlockedActivation(t *testing.T) {
+	t.Helper()
+	select {
+	case <-s.activationEntered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("retained activation did not reach the pre-Exact wait")
+	}
+}
+
+func (s *activationLifecycleTestServer) releaseBlockedActivation() {
+	close(s.activationRelease)
+}
+
+func (s *activationLifecycleTestServer) waitForTranscriptSubscription(t *testing.T) string {
+	t.Helper()
+	select {
+	case sessionID := <-s.transcriptStarted:
+		return sessionID
+	case <-time.After(3 * time.Second):
+		t.Fatal("Session transcript hydration did not start")
+		return ""
+	}
+}
+
+func (s *activationLifecycleTestServer) requireNoTranscriptSubscription(t *testing.T) {
+	t.Helper()
+	select {
+	case sessionID := <-s.transcriptStarted:
+		t.Fatalf("Session transcript hydration started before Exact for %q", sessionID)
+	default:
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -15,6 +16,8 @@ import (
 	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
+	"core/shared/runtimeids"
+	"core/shared/serverapi"
 
 	"github.com/google/uuid"
 )
@@ -666,6 +669,253 @@ func TestCurrentNodeControllerBoundsExplicitAdmissionSetupWithoutBlockingSibling
 			len(snapshot.ExplicitStarts) == branchCount-explicitAdmissionConcurrency-1
 	}, "queued explicit sibling did not replace released setup capacity")
 	releaseAll()
+}
+
+func TestRetainedUserActivationWaitsBehindExplicitAdmissionCapacityWithoutOwningAWaiter(t *testing.T) {
+	const branchCount = explicitAdmissionConcurrency + 1
+	taskID := workflow.TaskID("task-retained-activation-capacity")
+	interrupted := make([]workflow.CurrentNode, 0, branchCount)
+	for index := 0; index < branchCount; index++ {
+		reference := currentNodeReferenceForControllerTest(t, string(taskID), uuid.NewString())
+		interrupted = append(interrupted, workflow.CurrentNode{
+			Reference:  reference,
+			Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingInterrupted},
+		})
+	}
+	retained := interrupted[len(interrupted)-1].Reference
+	sessionID, err := runtimeids.ParseSessionID(uuid.NewString())
+	if err != nil {
+		t.Fatalf("ParseSessionID: %v", err)
+	}
+	store := &currentNodeControllerStore{
+		interrupted:   interrupted,
+		sessionTaskID: &taskID,
+		directSessionBinding: &workflowstore.DirectSessionCurrentNodeBinding{
+			TaskID:      taskID,
+			CurrentNode: retained,
+		},
+		sessionAssociation: &workflowstore.TaskSessionAssociation{
+			SessionID:   sessionID,
+			CurrentNode: retained,
+		},
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	runner := &boundedExplicitAdmissionRunner{
+		entered: make(chan workflow.CurrentNodeReference, branchCount),
+		release: make(chan struct{}),
+	}
+	controller := newCurrentNodeControllerForTest(t, store, runner, authority, 1)
+	t.Cleanup(func() {
+		close(runner.release)
+		if err := controller.Close(); err != nil {
+			t.Errorf("close controller: %v", err)
+		}
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+
+	if _, err := controller.ResumeTask(context.Background(), taskID); err != nil {
+		t.Fatalf("ResumeTask: %v", err)
+	}
+	for range explicitAdmissionConcurrency {
+		select {
+		case <-runner.entered:
+		case <-time.After(3 * time.Second):
+			t.Fatal("explicit admission did not fill its bounded setup capacity")
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	activationDone := make(chan error, 1)
+	go func() {
+		_, activationErr := controller.ActivateWorkflowSession(ctx, sessionruntime.WorkflowSessionActivationRequest{
+			SessionID: sessionID,
+			OwnerID:   "retained-capacity-owner",
+			Operation: serverapi.SessionRuntimeActivationUserActivation,
+		})
+		activationDone <- activationErr
+	}()
+	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+		observation, observeErr := controller.ObserveWorkflowTaskExecutions([]workflow.TaskID{taskID})
+		if observeErr != nil {
+			return false
+		}
+		runs := observation.Runs[taskID]
+		return slices.ContainsFunc(runs.Queued, func(reference workflow.CurrentNodeReference) bool {
+			return reference.Equal(retained)
+		}) &&
+			!slices.ContainsFunc(runs.InterruptibleLaunching, func(reference workflow.CurrentNodeReference) bool {
+				return reference.Equal(retained)
+			})
+	}, "retained activation did not remain queued and non-interruptible behind explicit admission capacity")
+
+	cancel()
+	select {
+	case activationErr := <-activationDone:
+		if !errors.Is(activationErr, context.Canceled) {
+			t.Fatalf("canceled capacity-waiting activation error = %v, want context canceled", activationErr)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("canceled capacity-waiting activation did not return")
+	}
+	observation, err := controller.ObserveWorkflowTaskExecutions([]workflow.TaskID{taskID})
+	if err != nil {
+		t.Fatalf("ObserveWorkflowTaskExecutions: %v", err)
+	}
+	if !slices.ContainsFunc(observation.Runs[taskID].Queued, func(reference workflow.CurrentNodeReference) bool {
+		return reference.Equal(retained)
+	}) {
+		t.Fatalf("request cancellation removed the capacity-owned Run: %+v", observation.Runs[taskID])
+	}
+}
+
+func TestRetainedUserActivationReadyPreparationFailureReturnsAfterDurableInterruption(t *testing.T) {
+	taskID := workflow.TaskID("task-retained-activation-ready-failure")
+	reference := currentNodeReferenceForControllerTest(t, string(taskID), "node-agent")
+	sessionID := runtimeids.NewSessionID()
+	store := retainedActivationControllerStore(taskID, reference, sessionID)
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	runner := &countingCurrentNodeRunner{}
+	controller := newCurrentNodeControllerForTest(t, store, runner, authority, 1)
+	t.Cleanup(func() {
+		if err := controller.Close(); err != nil {
+			t.Errorf("close controller: %v", err)
+		}
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+
+	preparationEntered := make(chan struct{})
+	releasePreparation := make(chan struct{})
+	preparationErr := errors.New("retained activation ready preparation failed")
+	if _, err := controller.ResumeTaskWithPreparation(
+		context.Background(),
+		taskID,
+		func(ctx context.Context) error {
+			close(preparationEntered)
+			select {
+			case <-releasePreparation:
+				return preparationErr
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			}
+		},
+	); err != nil {
+		t.Fatalf("ResumeTaskWithPreparation: %v", err)
+	}
+	select {
+	case <-preparationEntered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Task Resume did not enter ready-scheduling preparation")
+	}
+
+	activationDone := make(chan error, 1)
+	go func() {
+		_, activationErr := controller.ActivateWorkflowSession(context.Background(), sessionruntime.WorkflowSessionActivationRequest{
+			SessionID: sessionID,
+			OwnerID:   "retained-ready-failure-owner",
+			Operation: serverapi.SessionRuntimeActivationUserActivation,
+		})
+		activationDone <- activationErr
+	}()
+	select {
+	case activationErr := <-activationDone:
+		t.Fatalf("activation returned while ready preparation was blocked: %v", activationErr)
+	case <-time.After(150 * time.Millisecond):
+	}
+	observation, err := controller.ObserveWorkflowTaskExecutions([]workflow.TaskID{taskID})
+	if err != nil {
+		t.Fatalf("ObserveWorkflowTaskExecutions: %v", err)
+	}
+	runs := observation.Runs[taskID]
+	if len(runs.Queued) != 0 ||
+		len(runs.InterruptibleLaunching) != 1 ||
+		!runs.InterruptibleLaunching[0].Equal(reference) {
+		t.Fatalf("ready preparation activation observation = %+v, want one interruptible launching Run", runs)
+	}
+
+	close(releasePreparation)
+	select {
+	case activationErr := <-activationDone:
+		if !errors.Is(activationErr, serverapi.ErrRuntimeUnavailable) {
+			t.Fatalf("ready preparation activation error = %v, want runtime unavailable", activationErr)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("activation did not return after ready preparation failure")
+	}
+	interruption, interrupted := store.interruption(reference)
+	if !interrupted ||
+		interruption.reason != reasonCurrentNodeRuntimeStartFailed ||
+		store.interruptionCount(reference) != 1 {
+		t.Fatalf("ready preparation interruption = %+v, interrupted=%t", interruption, interrupted)
+	}
+	if starts := runner.starts(); starts != 0 {
+		t.Fatalf("ready preparation failure reached runner %d times, want 0", starts)
+	}
+}
+
+func TestRetainedUserActivationAdmittedLaunchFailureReturnsAfterDurableInterruption(t *testing.T) {
+	taskID := workflow.TaskID("task-retained-activation-admitted-failure")
+	reference := currentNodeReferenceForControllerTest(t, string(taskID), "node-agent")
+	sessionID := runtimeids.NewSessionID()
+	store := retainedActivationControllerStore(taskID, reference, sessionID)
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	launchErr := errors.New("retained activation admitted launch failed")
+	controller := newCurrentNodeControllerForTest(t, store, failingCurrentNodeRunner{cause: launchErr}, authority, 1)
+	t.Cleanup(func() {
+		if err := controller.Close(); err != nil {
+			t.Errorf("close controller: %v", err)
+		}
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+
+	_, err := controller.ActivateWorkflowSession(context.Background(), sessionruntime.WorkflowSessionActivationRequest{
+		SessionID: sessionID,
+		OwnerID:   "retained-admitted-failure-owner",
+		Operation: serverapi.SessionRuntimeActivationUserActivation,
+	})
+	if !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
+		t.Fatalf("admitted launch activation error = %v, want runtime unavailable", err)
+	}
+	interruption, interrupted := store.interruption(reference)
+	if !interrupted ||
+		interruption.reason != reasonCurrentNodeRuntimeStartFailed ||
+		store.interruptionCount(reference) != 1 ||
+		store.admitCount() != 1 {
+		t.Fatalf(
+			"admitted launch interruption = %+v, interrupted=%t writes=%d admits=%d",
+			interruption,
+			interrupted,
+			store.interruptionCount(reference),
+			store.admitCount(),
+		)
+	}
+}
+
+func retainedActivationControllerStore(
+	taskID workflow.TaskID,
+	reference workflow.CurrentNodeReference,
+	sessionID runtimeids.SessionID,
+) *currentNodeControllerStore {
+	return &currentNodeControllerStore{
+		interrupted: []workflow.CurrentNode{{
+			Reference:  reference,
+			Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingInterrupted},
+		}},
+		sessionTaskID: &taskID,
+		directSessionBinding: &workflowstore.DirectSessionCurrentNodeBinding{
+			TaskID:      taskID,
+			CurrentNode: reference,
+		},
+		sessionAssociation: &workflowstore.TaskSessionAssociation{
+			SessionID:   sessionID,
+			CurrentNode: reference,
+		},
+	}
 }
 
 func TestCurrentNodeControllerReservesAutomaticCapacityBeforeLaunchingAdmission(t *testing.T) {
