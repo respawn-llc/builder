@@ -27,6 +27,7 @@ func TestBundlesStructOnlyExposesCohesiveBundleSlots(t *testing.T) {
 	want := []string{"Auth", "Capability", "Persistence", "Processes", "Projects", "Prompts", "Runtime", "Sessions", "Workflows", "Worktrees", "cleanup"}
 	assertStringSet(t, "Bundles fields", got, want)
 }
+
 func structFieldNames(structType *ast.StructType) []string {
 	names := make([]string, 0, len(structType.Fields.List))
 	for _, field := range structType.Fields.List {
