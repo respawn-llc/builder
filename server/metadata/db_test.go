@@ -3,8 +3,9 @@ package metadata
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
-	"embed"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,18 +15,6 @@ import (
 
 	_ "modernc.org/sqlite"
 )
-
-//go:embed testdata/*.sql
-var metadataDBTestFixtures embed.FS
-
-func metadataDBTestSQL(t *testing.T, name string) string {
-	t.Helper()
-	contents, err := metadataDBTestFixtures.ReadFile("testdata/" + name)
-	if err != nil {
-		t.Fatalf("read metadata db test fixture %s: %v", name, err)
-	}
-	return string(contents)
-}
 
 func TestOpenSuppressesGooseStatusLogging(t *testing.T) {
 	root := t.TempDir()
@@ -181,41 +170,219 @@ func TestMetadataSQLiteDSNNormalizesWindowsPaths(t *testing.T) {
 	}
 }
 
-func TestOpenAllowsDatabaseAtRemovedMigrationVersion(t *testing.T) {
+func TestOpenRejectsUnsupportedMetadataDatabaseWithoutMutation(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name            string
+		recordedVersion *int64
+		wantVersion     int64
+	}{
+		{name: "unversioned", wantVersion: 0},
+		{name: "version zero", recordedVersion: new(int64), wantVersion: 0},
+		{name: "version 34", recordedVersion: int64Pointer(34), wantVersion: 34},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			dbPath := filepath.Join(root, "db", "main.sqlite3")
+			createUnsupportedMetadataDatabase(t, dbPath, test.recordedVersion)
+			before := metadataDatabaseDigest(t, dbPath)
+
+			store, err := OpenAtPath(root, dbPath)
+			if store != nil {
+				_ = store.Close()
+				t.Fatal("unsupported metadata database unexpectedly opened")
+			}
+			var unsupported *UnsupportedMetadataVersionError
+			if !errors.As(err, &unsupported) {
+				t.Fatalf("OpenAtPath error = %v, want UnsupportedMetadataVersionError", err)
+			}
+			if unsupported.DatabasePath != dbPath ||
+				unsupported.CurrentVersion != test.wantVersion ||
+				unsupported.MinimumVersion != 35 {
+				t.Fatalf("unsupported metadata error = %+v", unsupported)
+			}
+			if after := metadataDatabaseDigest(t, dbPath); after != before {
+				t.Fatalf("unsupported metadata database changed: before=%x after=%x", before, after)
+			}
+
+			db, err := sql.Open("sqlite", dbPath)
+			if err != nil {
+				t.Fatalf("reopen rejected database: %v", err)
+			}
+			t.Cleanup(func() { _ = db.Close() })
+			var journalMode string
+			if err := db.QueryRow(`PRAGMA journal_mode`).Scan(&journalMode); err != nil {
+				t.Fatalf("read rejected database journal mode: %v", err)
+			}
+			if journalMode != "wal" {
+				t.Fatalf("rejected database journal mode = %q, want wal", journalMode)
+			}
+			var marker string
+			if err := db.QueryRow(`SELECT value FROM metadata_floor_probe WHERE id = 1`).Scan(&marker); err != nil {
+				t.Fatalf("read rejection marker: %v", err)
+			}
+			if marker != "preserve" {
+				t.Fatalf("rejection marker = %q, want preserve", marker)
+			}
+			if test.recordedVersion == nil {
+				if tableExists(t, db, "goose_db_version") {
+					t.Fatal("rejection created Goose version storage")
+				}
+				return
+			}
+			var latest int64
+			if err := db.QueryRow(`
+SELECT MAX(version_id)
+FROM goose_db_version
+WHERE is_applied = 1`).Scan(&latest); err != nil {
+				t.Fatalf("read rejected migration version: %v", err)
+			}
+			if latest != test.wantVersion {
+				t.Fatalf("rejected migration version = %d, want %d", latest, test.wantVersion)
+			}
+		})
+	}
+}
+
+func TestOpenUpgradesVersion35DatabaseWithHistoricalLedger(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	store, err := Open(root)
-	if err != nil {
-		t.Fatalf("initial open: %v", err)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatalf("close initial store: %v", err)
-	}
-
 	dbPath := filepath.Join(root, "db", "main.sqlite3")
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 35)
 	if err != nil {
-		t.Fatalf("open sqlite db: %v", err)
+		t.Fatalf("open version 35 database: %v", err)
 	}
-	t.Cleanup(func() { _ = db.Close() })
-
-	if _, err := db.Exec(metadataDBTestSQL(t, "legacy_mutation_dedupe.sql")); err != nil {
-		t.Fatalf("create legacy mutation_dedupe table: %v", err)
+	for version := int64(1); version < 35; version++ {
+		if _, err := db.Exec(`
+INSERT INTO goose_db_version (version_id, is_applied)
+SELECT ?, 1
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM goose_db_version
+    WHERE version_id = ?
+      AND is_applied = 1
+)`, version, version); err != nil {
+			t.Fatalf("record historical migration version %d: %v", version, err)
+		}
 	}
-	if _, err := db.Exec(`INSERT INTO goose_db_version (version_id, is_applied) VALUES (3, 1)`); err != nil {
-		t.Fatalf("insert removed migration version: %v", err)
+	if _, err := db.Exec(`
+INSERT INTO projects (
+    id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json
+) VALUES (
+    'project-v35', 'Version 35', 1, 1, '{}'
+);
+INSERT INTO workspaces (
+    id, project_id, canonical_root_path, git_metadata_json,
+    created_at_unix_ms, updated_at_unix_ms
+) VALUES (
+    'workspace-v35', 'project-v35', '/workspace-v35', '{}', 1, 1
+);
+UPDATE projects
+SET primary_workspace_id = 'workspace-v35'
+WHERE id = 'project-v35';
+INSERT INTO sessions (
+    id, project_id, workspace_id, artifact_relpath, name,
+    created_at_unix_ms, updated_at_unix_ms
+) VALUES (
+    'session-v35', 'project-v35', 'workspace-v35',
+    'sessions/session-v35', 'Preserved session', 1, 1
+)`); err != nil {
+		t.Fatalf("seed version 35 data: %v", err)
 	}
 	if err := db.Close(); err != nil {
-		t.Fatalf("close sqlite db: %v", err)
+		t.Fatalf("close version 35 database: %v", err)
 	}
 
-	reopened, err := Open(root)
+	store, err := Open(root)
 	if err != nil {
-		t.Fatalf("reopen metadata store with removed migration version: %v", err)
+		t.Fatalf("upgrade version 35 database: %v", err)
 	}
-	if err := reopened.Close(); err != nil {
-		t.Fatalf("close reopened store: %v", err)
+	t.Cleanup(func() { _ = store.Close() })
+
+	var projectName, sessionName string
+	if err := store.db.QueryRow(`SELECT display_name FROM projects WHERE id = 'project-v35'`).Scan(&projectName); err != nil {
+		t.Fatalf("read upgraded project: %v", err)
 	}
+	if err := store.db.QueryRow(`SELECT name FROM sessions WHERE id = 'session-v35'`).Scan(&sessionName); err != nil {
+		t.Fatalf("read upgraded session: %v", err)
+	}
+	if projectName != "Version 35" || sessionName != "Preserved session" {
+		t.Fatalf("upgraded data = %q/%q", projectName, sessionName)
+	}
+	provider, err := newMetadataMigrationProvider(store.db)
+	if err != nil {
+		t.Fatalf("create migration provider: %v", err)
+	}
+	version, err := provider.GetDBVersion(t.Context())
+	if err != nil {
+		t.Fatalf("read upgraded migration version: %v", err)
+	}
+	if version != 79 {
+		t.Fatalf("upgraded migration version = %d, want 79", version)
+	}
+}
+
+func createUnsupportedMetadataDatabase(t *testing.T, dbPath string, recordedVersion *int64) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		t.Fatalf("create unsupported database directory: %v", err)
+	}
+	dsn, err := metadataSQLiteDSN(dbPath)
+	if err != nil {
+		t.Fatalf("build unsupported database DSN: %v", err)
+	}
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatalf("open unsupported database: %v", err)
+	}
+	if _, err := db.Exec(`
+CREATE TABLE metadata_floor_probe (
+    id INTEGER PRIMARY KEY,
+    value TEXT NOT NULL
+);
+INSERT INTO metadata_floor_probe (id, value) VALUES (1, 'preserve')`); err != nil {
+		_ = db.Close()
+		t.Fatalf("create unsupported database marker: %v", err)
+	}
+	if recordedVersion != nil {
+		if _, err := db.Exec(`
+CREATE TABLE goose_db_version (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    version_id INTEGER NOT NULL,
+    is_applied INTEGER NOT NULL,
+    tstamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)`); err != nil {
+			_ = db.Close()
+			t.Fatalf("create Goose version storage: %v", err)
+		}
+		for version := int64(0); version <= *recordedVersion; version++ {
+			if _, err := db.Exec(
+				`INSERT INTO goose_db_version (version_id, is_applied) VALUES (?, 1)`,
+				version,
+			); err != nil {
+				_ = db.Close()
+				t.Fatalf("record migration version %d: %v", version, err)
+			}
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close unsupported database: %v", err)
+	}
+}
+
+func metadataDatabaseDigest(t *testing.T, dbPath string) [sha256.Size]byte {
+	t.Helper()
+	contents, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatalf("read metadata database: %v", err)
+	}
+	return sha256.Sum256(contents)
+}
+
+func int64Pointer(value int64) *int64 {
+	return &value
 }
 
 func openDatabaseAtVersionForTest(t *testing.T, root string, dbPath string, version int64) (*sql.DB, error) {
@@ -255,26 +422,4 @@ func openDatabaseAtPathWithoutMigrationsForTest(root string, dbPath string) (*sq
 		return nil, err
 	}
 	return db, nil
-}
-
-func primaryWorkspaceIDsByProject(t *testing.T, db *sql.DB) map[string]string {
-	t.Helper()
-	rows, err := db.Query(`SELECT id, primary_workspace_id FROM projects`)
-	if err != nil {
-		t.Fatalf("query project primary workspace ids: %v", err)
-	}
-	defer func() { _ = rows.Close() }()
-	out := map[string]string{}
-	for rows.Next() {
-		var projectID string
-		var workspaceID sql.NullString
-		if err := rows.Scan(&projectID, &workspaceID); err != nil {
-			t.Fatalf("scan project primary workspace id: %v", err)
-		}
-		out[projectID] = workspaceID.String
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("iterate project primary workspace ids: %v", err)
-	}
-	return out
 }
