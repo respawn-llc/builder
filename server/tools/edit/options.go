@@ -2,34 +2,28 @@ package edit
 
 import "core/server/tools"
 
-type Option func(*Tool)
+type options struct {
+	allowOutsideWorkspace    bool
+	outsideWorkspaceApprover tools.FileAccessApprover
+	pathDenyPolicy           tools.PathDenyPolicy
+}
+
+type Option func(*options)
 
 func WithAllowOutsideWorkspace(allow bool) Option {
-	return func(t *Tool) {
-		t.allowOutsideWorkspace = allow
+	return func(options *options) {
+		options.allowOutsideWorkspace = allow
 	}
 }
 
-func WithOutsideWorkspaceApprover(approver tools.FSGuardApprover) Option {
-	return func(t *Tool) {
-		t.outsideWorkspaceApprover = approver
+func WithOutsideWorkspaceApprover(approver tools.FileAccessApprover) Option {
+	return func(options *options) {
+		options.outsideWorkspaceApprover = approver
 	}
 }
 
 func WithPathDenyPolicy(policy tools.PathDenyPolicy) Option {
-	return func(t *Tool) {
-		t.pathDenyPolicy = policy
-	}
-}
-
-func WithManagedWorktreePathContext(context *tools.ManagedWorktreePathContext) Option {
-	return func(t *Tool) {
-		t.managedWorktreePathContext = context
-	}
-}
-
-func WithFileAccessScope(scope tools.FileAccessScope) Option {
-	return func(t *Tool) {
-		t.fileAccessScope = scope.Clone()
+	return func(options *options) {
+		options.pathDenyPolicy = policy
 	}
 }

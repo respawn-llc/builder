@@ -46,8 +46,8 @@ type LocalToolRuntimeContext struct {
 	BackgroundShellManager          *shelltool.Manager
 	ShellPostprocessor              *postprocess.Runner
 	TriggerHandoffController        func() triggerhandofftool.TriggerHandoffController
-	OutsideWorkspaceEditApprover    patchtool.OutsideWorkspaceApprover
-	OutsideWorkspaceReadApprover    patchtool.OutsideWorkspaceApprover
+	OutsideWorkspaceEditApprover    tools.FileAccessApprover
+	OutsideWorkspaceReadApprover    tools.FileAccessApprover
 	ViewImageOutsideWorkspaceLogger readimagetool.OutsideWorkspaceAuditLogger
 	EditPathDenyPolicy              tools.PathDenyPolicy
 }
@@ -80,26 +80,20 @@ func BuildLocalRuntimeHandler(def tools.Definition, ctx LocalToolRuntimeContext)
 			return nil, fmt.Errorf("patch outside-workspace approver is unavailable")
 		}
 		return patchtool.New(
-			ctx.FilesystemContext.Access.WorkingDirectory.LexicalPath,
-			true,
+			ctx.FilesystemContext,
 			patchtool.WithAllowOutsideWorkspace(ctx.AllowNonCwdEdits),
 			patchtool.WithOutsideWorkspaceApprover(ctx.OutsideWorkspaceEditApprover),
 			patchtool.WithPathDenyPolicy(ctx.EditPathDenyPolicy),
-			patchtool.WithFileAccessScope(ctx.FilesystemContext.Access),
-			patchtool.WithManagedWorktreePathContext(ctx.FilesystemContext.ManagedWorktree),
 		)
 	case tools.LocalRuntimeBuilderEdit:
 		if ctx.OutsideWorkspaceEditApprover == nil {
 			return nil, fmt.Errorf("edit outside-workspace approver is unavailable")
 		}
 		return edittool.New(
-			ctx.FilesystemContext.Access.WorkingDirectory.LexicalPath,
-			true,
+			ctx.FilesystemContext,
 			edittool.WithAllowOutsideWorkspace(ctx.AllowNonCwdEdits),
 			edittool.WithOutsideWorkspaceApprover(ctx.OutsideWorkspaceEditApprover),
 			edittool.WithPathDenyPolicy(ctx.EditPathDenyPolicy),
-			edittool.WithFileAccessScope(ctx.FilesystemContext.Access),
-			edittool.WithManagedWorktreePathContext(ctx.FilesystemContext.ManagedWorktree),
 		)
 	case tools.LocalRuntimeBuilderAskQuestion:
 		if ctx.AskQuestionBroker == nil {
@@ -120,12 +114,11 @@ func BuildLocalRuntimeHandler(def tools.Definition, ctx LocalToolRuntimeContext)
 		opts := []readimagetool.Option{
 			readimagetool.WithAllowOutsideWorkspace(ctx.AllowNonCwdEdits),
 			readimagetool.WithOutsideWorkspaceApprover(ctx.OutsideWorkspaceReadApprover),
-			readimagetool.WithFileAccessScope(ctx.FilesystemContext.Access),
 		}
 		if ctx.ViewImageOutsideWorkspaceLogger != nil {
 			opts = append(opts, readimagetool.WithOutsideWorkspaceAuditLogger(ctx.ViewImageOutsideWorkspaceLogger))
 		}
-		return readimagetool.New(ctx.FilesystemContext.Access.WorkingDirectory.LexicalPath, ctx.SupportsVision, opts...)
+		return readimagetool.New(ctx.FilesystemContext, ctx.SupportsVision, opts...)
 	default:
 		return nil, fmt.Errorf("unsupported local runtime builder %q for tool %q", def.LocalRuntimeBuilder(), def.ID)
 	}
@@ -295,8 +288,8 @@ func NewLocalToolRegistryBinding(opts LocalToolRegistryOptions) (*LocalToolRegis
 		BackgroundShellManager:       background,
 		ShellPostprocessor:           opts.ShellPostprocessor,
 		TriggerHandoffController:     opts.TriggerHandoffController,
-		OutsideWorkspaceEditApprover: patchtool.OutsideWorkspaceApprover(patchOutsideWorkspaceApprover.Approve),
-		OutsideWorkspaceReadApprover: patchtool.OutsideWorkspaceApprover(readOutsideWorkspaceApprover.Approve),
+		OutsideWorkspaceEditApprover: patchOutsideWorkspaceApprover.Approve,
+		OutsideWorkspaceReadApprover: readOutsideWorkspaceApprover.Approve,
 		EditPathDenyPolicy:           editPathDenyPolicy,
 		ViewImageOutsideWorkspaceLogger: readimagetool.OutsideWorkspaceAuditLogger(func(entry readimagetool.OutsideWorkspaceAudit) {
 			if opts.Logger == nil {

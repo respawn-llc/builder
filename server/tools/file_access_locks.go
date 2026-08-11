@@ -9,7 +9,7 @@ import (
 
 var pathLocks sync.Map
 
-func LockFSGuardPath(path string) func() {
+func lockFileAccessPath(path string) func() {
 	key := canonicalLockKey(path)
 	if key == "" {
 		return func() {}
@@ -20,7 +20,7 @@ func LockFSGuardPath(path string) func() {
 	return mu.Unlock
 }
 
-func LockFSGuardPaths(paths []string) func() {
+func LockFileAccessPaths(paths []string) func() {
 	if len(paths) == 0 {
 		return func() {}
 	}
@@ -40,7 +40,7 @@ func LockFSGuardPaths(paths []string) func() {
 	sort.Strings(ordered)
 	unlocks := make([]func(), 0, len(ordered))
 	for _, path := range ordered {
-		unlocks = append(unlocks, LockFSGuardPath(path))
+		unlocks = append(unlocks, lockFileAccessPath(path))
 	}
 	return func() {
 		for i := len(unlocks) - 1; i >= 0; i-- {

@@ -9,7 +9,6 @@ import (
 	"core/internal/testharness/testsetup"
 	"core/server/runtimewire"
 	askquestion "core/server/tools"
-	patchtool "core/server/tools/patch"
 	"core/shared/textutil"
 )
 
@@ -35,13 +34,13 @@ func TestOutsideWorkspaceApprovalFromResolution(t *testing.T) {
 	tests := []struct {
 		name       string
 		resolution askquestion.AskQuestionResolution
-		want       patchtool.OutsideWorkspaceApproval
+		want       askquestion.FileAccessApproval
 	}{
-		{name: "allow once", resolution: testOutsideWorkspaceApprovalResolution(askquestion.AskQuestionApprovalDecisionAllowOnce, nil), want: patchtool.OutsideWorkspaceApproval{Decision: patchtool.OutsideWorkspaceDecisionAllowOnce}},
-		{name: "allow session", resolution: testOutsideWorkspaceApprovalResolution(askquestion.AskQuestionApprovalDecisionAllowSession, nil), want: patchtool.OutsideWorkspaceApproval{Decision: patchtool.OutsideWorkspaceDecisionAllowSession}},
-		{name: "deny", resolution: testOutsideWorkspaceApprovalResolution(askquestion.AskQuestionApprovalDecisionDeny, nil), want: patchtool.OutsideWorkspaceApproval{Decision: patchtool.OutsideWorkspaceDecisionDeny}},
-		{name: "allow once with commentary", resolution: testOutsideWorkspaceApprovalResolution(askquestion.AskQuestionApprovalDecisionAllowOnce, &approvedCommentary), want: patchtool.OutsideWorkspaceApproval{Decision: patchtool.OutsideWorkspaceDecisionAllowOnce, Commentary: &approvedCommentary}},
-		{name: "deny with commentary", resolution: testOutsideWorkspaceApprovalResolution(askquestion.AskQuestionApprovalDecisionDeny, &deniedCommentary), want: patchtool.OutsideWorkspaceApproval{Decision: patchtool.OutsideWorkspaceDecisionDeny, Commentary: &deniedCommentary}},
+		{name: "allow once", resolution: testOutsideWorkspaceApprovalResolution(askquestion.AskQuestionApprovalDecisionAllowOnce, nil), want: askquestion.FileAccessApproval{Kind: askquestion.FileAccessApprovalAllowOnce}},
+		{name: "allow session", resolution: testOutsideWorkspaceApprovalResolution(askquestion.AskQuestionApprovalDecisionAllowSession, nil), want: askquestion.FileAccessApproval{Kind: askquestion.FileAccessApprovalAllowSession}},
+		{name: "deny", resolution: testOutsideWorkspaceApprovalResolution(askquestion.AskQuestionApprovalDecisionDeny, nil), want: askquestion.FileAccessApproval{Kind: askquestion.FileAccessApprovalDeny}},
+		{name: "allow once with commentary", resolution: testOutsideWorkspaceApprovalResolution(askquestion.AskQuestionApprovalDecisionAllowOnce, &approvedCommentary), want: askquestion.FileAccessApproval{Kind: askquestion.FileAccessApprovalAllowOnce, Commentary: &approvedCommentary}},
+		{name: "deny with commentary", resolution: testOutsideWorkspaceApprovalResolution(askquestion.AskQuestionApprovalDecisionDeny, &deniedCommentary), want: askquestion.FileAccessApproval{Kind: askquestion.FileAccessApprovalDeny, Commentary: &deniedCommentary}},
 	}
 
 	for _, tc := range tests {
@@ -50,7 +49,7 @@ func TestOutsideWorkspaceApprovalFromResolution(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parse approval response: %v", err)
 			}
-			if got.Decision != tc.want.Decision ||
+			if got.Kind != tc.want.Kind ||
 				!textutil.EqualOptional(got.Commentary, tc.want.Commentary) {
 				t.Fatalf("decision mismatch: got %v want %v", got, tc.want)
 			}
@@ -81,7 +80,7 @@ func TestOutsideWorkspaceApprovalFromResolutionRejectsMissingOrInvalidPayload(t 
 	}
 }
 
-func TestPatchOutsideWorkspaceApproverCachesSessionDecision(t *testing.T) {
+func TestOutsideWorkspaceApproverCachesSessionDecision(t *testing.T) {
 	broker := askquestion.NewAskQuestionBroker()
 	askCalls := 0
 	broker.SetAskHandler(func(_ context.Context, req askquestion.AskQuestionRequest) (askquestion.AskQuestionResolution, error) {
@@ -102,20 +101,20 @@ func TestPatchOutsideWorkspaceApproverCachesSessionDecision(t *testing.T) {
 	})
 
 	approver := runtimewire.NewOutsideWorkspaceApprover(broker, "editing")
-	req := patchtool.OutsideWorkspaceRequest{RequestedPath: "../x.txt", ResolvedPath: "/tmp/x.txt", WorkingDirectory: "/tmp/w"}
+	req := askquestion.FileAccessRequest{RequestedPath: "../x.txt", ResolvedPath: "/tmp/x.txt", WorkingDirectory: "/tmp/w"}
 
 	first, err := approver.Approve(context.Background(), req)
 	if err != nil {
 		t.Fatalf("approve first call: %v", err)
 	}
-	if first.Decision != patchtool.OutsideWorkspaceDecisionAllowSession {
+	if first.Kind != askquestion.FileAccessApprovalAllowSession {
 		t.Fatalf("unexpected first decision: %v", first)
 	}
 	second, err := approver.Approve(context.Background(), req)
 	if err != nil {
 		t.Fatalf("approve second call: %v", err)
 	}
-	if second.Decision != patchtool.OutsideWorkspaceDecisionAllowSession {
+	if second.Kind != askquestion.FileAccessApprovalSessionCached {
 		t.Fatalf("unexpected second decision: %v", second)
 	}
 	if askCalls != 1 {
@@ -123,14 +122,14 @@ func TestPatchOutsideWorkspaceApproverCachesSessionDecision(t *testing.T) {
 	}
 }
 
-func TestPatchOutsideWorkspaceApproverPropagatesAskError(t *testing.T) {
+func TestOutsideWorkspaceApproverPropagatesAskError(t *testing.T) {
 	broker := askquestion.NewAskQuestionBroker()
 	broker.SetAskHandler(func(context.Context, askquestion.AskQuestionRequest) (askquestion.AskQuestionResolution, error) {
 		return nil, errors.New("ask failed")
 	})
 
 	approver := runtimewire.NewOutsideWorkspaceApprover(broker, "editing")
-	_, err := approver.Approve(context.Background(), patchtool.OutsideWorkspaceRequest{RequestedPath: "../x.txt", ResolvedPath: "/tmp/x.txt", WorkingDirectory: "/tmp/w"})
+	_, err := approver.Approve(context.Background(), askquestion.FileAccessRequest{RequestedPath: "../x.txt", ResolvedPath: "/tmp/x.txt", WorkingDirectory: "/tmp/w"})
 	if err == nil {
 		t.Fatal("expected ask error")
 	}
@@ -139,9 +138,9 @@ func TestPatchOutsideWorkspaceApproverPropagatesAskError(t *testing.T) {
 func TestOutsideWorkspaceApproverQueuedApprovalBlocksUntilSubmitted(t *testing.T) {
 	broker := askquestion.NewAskQuestionBroker()
 	approver := runtimewire.NewOutsideWorkspaceApprover(broker, "editing")
-	req := patchtool.OutsideWorkspaceRequest{RequestedPath: "../x.txt", ResolvedPath: "/tmp/x.txt", WorkingDirectory: "/tmp/w"}
+	req := askquestion.FileAccessRequest{RequestedPath: "../x.txt", ResolvedPath: "/tmp/x.txt", WorkingDirectory: "/tmp/w"}
 	type out struct {
-		approval patchtool.OutsideWorkspaceApproval
+		approval askquestion.FileAccessApproval
 		err      error
 	}
 	done := make(chan out, 1)
@@ -185,7 +184,7 @@ func TestOutsideWorkspaceApproverQueuedApprovalBlocksUntilSubmitted(t *testing.T
 		if result.err != nil {
 			t.Fatalf("approve: %v", result.err)
 		}
-		if result.approval.Decision != patchtool.OutsideWorkspaceDecisionDeny {
+		if result.approval.Kind != askquestion.FileAccessApprovalDeny {
 			t.Fatalf("unexpected approval decision: %+v", result.approval)
 		}
 		if result.approval.Commentary == nil || *result.approval.Commentary != "no" {
@@ -203,9 +202,9 @@ func TestOutsideWorkspaceApproverQueuedApprovalBlocksUntilSubmitted(t *testing.T
 func TestOutsideWorkspaceApproverQueuedAllowSessionCachesWithoutSecondPrompt(t *testing.T) {
 	broker := askquestion.NewAskQuestionBroker()
 	approver := runtimewire.NewOutsideWorkspaceApprover(broker, "editing")
-	req := patchtool.OutsideWorkspaceRequest{RequestedPath: "../x.txt", ResolvedPath: "/tmp/x.txt", WorkingDirectory: "/tmp/w"}
+	req := askquestion.FileAccessRequest{RequestedPath: "../x.txt", ResolvedPath: "/tmp/x.txt", WorkingDirectory: "/tmp/w"}
 	type out struct {
-		approval patchtool.OutsideWorkspaceApproval
+		approval askquestion.FileAccessApproval
 		err      error
 	}
 	done := make(chan out, 1)
@@ -225,7 +224,7 @@ func TestOutsideWorkspaceApproverQueuedAllowSessionCachesWithoutSecondPrompt(t *
 		if result.err != nil {
 			t.Fatalf("approve: %v", result.err)
 		}
-		if result.approval.Decision != patchtool.OutsideWorkspaceDecisionAllowSession {
+		if result.approval.Kind != askquestion.FileAccessApprovalAllowSession {
 			t.Fatalf("unexpected first approval decision: %+v", result.approval)
 		}
 	case <-time.After(2 * time.Second):
@@ -243,7 +242,7 @@ func TestOutsideWorkspaceApproverQueuedAllowSessionCachesWithoutSecondPrompt(t *
 		if result.err != nil {
 			t.Fatalf("second approve: %v", result.err)
 		}
-		if result.approval.Decision != patchtool.OutsideWorkspaceDecisionAllowSession {
+		if result.approval.Kind != askquestion.FileAccessApprovalSessionCached {
 			t.Fatalf("unexpected cached approval decision: %+v", result.approval)
 		}
 	case <-time.After(200 * time.Millisecond):

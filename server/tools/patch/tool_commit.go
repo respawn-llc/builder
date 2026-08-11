@@ -207,14 +207,14 @@ func commitStagedFiles(
 }
 
 func revalidateCommitPath(tool *Tool, path string) error {
-	if tool == nil || tool.managedWorktreePathContext == nil {
+	if tool == nil || tool.fileAccess == nil {
 		return nil
 	}
 	resolved, err := config.ResolveExistingAncestorRealPath(path)
 	if err != nil {
 		return err
 	}
-	return tool.checkForeignManagedWorktreePath(resolved)
+	return tool.fileAccess.ValidateMutationTarget(resolved)
 }
 
 func createStagedFile(targetPath string, data []byte, mode os.FileMode) (string, error) {
