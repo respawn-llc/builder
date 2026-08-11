@@ -5,6 +5,13 @@
 - Every artifact in one release uses the same Kent version.
 - Release tags use the normalized form `v<version>`.
 
+## Metadata Upgrades
+
+- Kent directly upgrades an existing Metadata database created by Kent v2.0.0 or newer.
+- Kent rejects an older existing Metadata database before changing its schema or data.
+- A missing Metadata database remains a supported fresh installation.
+- Kent provides no fallback migration path or downgrade path.
+
 ## Targets
 
 - Supported release targets are `darwin/arm64`, `linux/amd64`, `linux/arm64`, `windows/amd64`, and `windows/arm64`.
