@@ -1,7 +1,7 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef } from "react";
 
-import type { OffsetPage, QuestionAnswerInput, TaskDetail } from "@/api";
+import type { OffsetPage, TaskDetail } from "@/api";
 import { errorMessage } from "@/api";
 import { invalidateProjectBoardQueries, invalidateProjectTaskSearches, queryKeys } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
@@ -58,7 +58,6 @@ export function useTaskDetailLiveRefresh(detail: TaskDetail, enabled: boolean) {
           queryKey: queryKeys.comments(taskID),
           refetchType: "active",
         }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.allPendingAsks, refetchType: "active" }),
       ]);
     };
     const refreshOrReport = (): void => {
@@ -154,24 +153,6 @@ export function useTaskComments(taskID: string, enabled: boolean) {
   );
 }
 
-export function usePendingAsks(sessionID: string | null) {
-  const { api } = useAppServices();
-  return useQuery({
-    queryKey: queryKeys.pendingAsks(sessionID),
-    queryFn: async () => {
-      if (sessionID === null) {
-        throw new Error("pending ask lookup requires an enabled session");
-      }
-      if (sessionID.length === 0) {
-        throw new Error("pending ask lookup requires a non-empty session id");
-      }
-      return api.listPendingAsks(sessionID);
-    },
-    enabled: sessionID !== null && sessionID.length > 0,
-    refetchOnMount: "always",
-  });
-}
-
 type TaskLifecycleAction = "dependency_remove" | "interrupt";
 
 type TaskMutationCallbacks = Readonly<{
@@ -197,7 +178,6 @@ export function useTaskMutations(
     await queryClient.invalidateQueries({ queryKey: queryKeys.allBoardNodeCards });
     await queryClient.invalidateQueries({ queryKey: queryKeys.allTasks });
     await queryClient.invalidateQueries({ queryKey: queryKeys.allActivity });
-    await queryClient.invalidateQueries({ queryKey: queryKeys.allPendingAsks });
     await invalidateProjectTaskSearches(queryClient, projectID);
     onChanged?.();
   }
@@ -256,9 +236,6 @@ export function useTaskMutations(
     approveApproval: useMutation({
       mutationFn: async (approvalID: string) => api.approveApproval(approvalID),
       onSuccess: refresh,
-    }),
-    answerQuestion: useMutation({
-      mutationFn: async (input: QuestionAnswerInput) => api.answerQuestion(input),
     }),
   };
 }

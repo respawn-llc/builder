@@ -38,7 +38,7 @@ func TestAskEventDefersWhileDetailModeActive(t *testing.T) {
 
 	m = updateUIModel(t, m, tea.KeyMsg{Type: tea.KeyPgUp})
 
-	if len(control.askRequests) != 0 {
+	if len(control.batchRequests) != 0 {
 		t.Fatal("did not expect ask answered before leaving detail mode")
 	}
 
@@ -59,8 +59,9 @@ func TestAskEventDefersWhileDetailModeActive(t *testing.T) {
 
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = runPromptDeliveryCommand(t, next.(*uiModel), cmd)
-	request := requireAskRequest(t, control)
-	if request.SelectedOptionNumber == nil || *request.SelectedOptionNumber != 1 {
+	request := requirePromptAnswerBatchRequest(t, control)
+	entry := requireQuestionAnswerEntry(t, request)
+	if entry.QuestionAnswer.SelectedOptionNumber == nil || *entry.QuestionAnswer.SelectedOptionNumber != 1 {
 		t.Fatalf("expected first option selected by default, got %+v", request)
 	}
 }
@@ -87,7 +88,7 @@ func TestAskEventDefersWhileProcessListOverlayIsOpen(t *testing.T) {
 		t.Fatal("hidden process-list ask emitted attention before becoming visible")
 	}
 
-	if len(control.askRequests) != 0 {
+	if len(control.batchRequests) != 0 {
 		t.Fatal("did not expect ask answered while process list overlay was open")
 	}
 
@@ -111,8 +112,9 @@ func TestAskEventDefersWhileProcessListOverlayIsOpen(t *testing.T) {
 
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = runPromptDeliveryCommand(t, next.(*uiModel), cmd)
-	request := requireAskRequest(t, control)
-	if request.SelectedOptionNumber == nil || *request.SelectedOptionNumber != 1 {
+	request := requirePromptAnswerBatchRequest(t, control)
+	entry := requireQuestionAnswerEntry(t, request)
+	if entry.QuestionAnswer.SelectedOptionNumber == nil || *entry.QuestionAnswer.SelectedOptionNumber != 1 {
 		t.Fatalf("expected first option selected by default, got %+v", request)
 	}
 }

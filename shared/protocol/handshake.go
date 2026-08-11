@@ -86,7 +86,6 @@ const (
 	MethodWorkflowTaskDependencyList                    = "workflow.task.dependency.list"
 	MethodWorkflowAttentionList                         = "workflow.attention.list"
 	MethodWorkflowTaskAttentionList                     = "workflow.task.attention.list"
-	MethodWorkflowTaskQuestionAnswer                    = "workflow.task.question.answer"
 	MethodWorkflowTaskCommentAdd                        = "workflow.task.comment.add"
 	MethodWorkflowTaskCommentList                       = "workflow.task.comment.list"
 	MethodWorkflowTaskCommentReplace                    = "workflow.task.comment.replace"
@@ -158,10 +157,11 @@ const (
 	MethodProcessKill                                   = "process.kill"
 	MethodProcessInlineOutput                           = "process.inlineOutput"
 	MethodAskListPending                                = "ask.listPendingBySession"
-	MethodAskAnswer                                     = "ask.answer"
 	MethodPromptAnswerBatch                             = "prompt.answerBatch"
+	MethodPromptFollowUpWatch                           = "prompt.followUp.watch"
+	MethodPromptFollowUpEvent                           = "prompt.followUp.event"
+	MethodPromptFollowUpComplete                        = "prompt.followUp.complete"
 	MethodApprovalListPending                           = "approval.listPendingBySession"
-	MethodApprovalAnswer                                = "approval.answer"
 	MethodAttentionNotificationSubscribe                = "attention.notification.subscribe"
 	MethodAttentionNotificationEvent                    = "attention.notification"
 	MethodAttentionNotificationComplete                 = "attention.notification.complete"
@@ -819,6 +819,14 @@ type AttentionNotificationEventParams struct {
 	Event clientui.AttentionNotificationEvent `json:"event"`
 }
 
+type PromptFollowUpEventParams struct {
+	Event PromptFollowUpEvent `json:"event"`
+}
+
+type PromptFollowUpEvent struct {
+	Kind string `json:"kind"`
+}
+
 type WorkflowProjectEventParams struct {
 	Event WorkflowProjectEvent `json:"event"`
 }
@@ -878,7 +886,6 @@ const (
 	WorkflowProjectEventActionCommentDeleted         WorkflowProjectEventAction = "comment_deleted"
 	WorkflowProjectEventActionQuestionWaiting        WorkflowProjectEventAction = "question_waiting"
 	WorkflowProjectEventActionQuestionCleared        WorkflowProjectEventAction = "question_cleared"
-	WorkflowProjectEventActionQuestionAnswered       WorkflowProjectEventAction = "question_answered"
 	WorkflowProjectEventActionLabelsChanged          WorkflowProjectEventAction = "labels_changed"
 	WorkflowProjectEventActionDependenciesChanged    WorkflowProjectEventAction = "dependencies_changed"
 )

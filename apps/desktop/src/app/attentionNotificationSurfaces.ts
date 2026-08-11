@@ -317,8 +317,8 @@ function attentionTargetIsActive(
         item.kind === "question" &&
         item.currentNode.nodeID === target.currentNodeID &&
         item.currentNode.transitionBranchKey === (target.currentNodeBranchKey ?? null) &&
-        item.sessionID === (target.sessionID ?? null) &&
-        askIDs.has(item.questionID),
+        item.question.sessionID === (target.sessionID ?? null) &&
+        askIDs.has(item.question.promptID),
     );
   }
   if (focus.kind === "approval") {

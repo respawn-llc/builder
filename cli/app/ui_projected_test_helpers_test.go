@@ -68,8 +68,7 @@ func newProjectedStaticUIModel(opts ...UIOption) *uiModel {
 
 type recordingPromptControl struct {
 	singlePromptOnlyControl
-	askRequests      chan serverapi.AskAnswerRequest
-	approvalRequests chan serverapi.ApprovalAnswerRequest
+	batchRequests chan serverapi.PromptAnswerBatchRequest
 }
 
 type singlePromptOnlyControl struct{}
@@ -83,19 +82,27 @@ func (singlePromptOnlyControl) AnswerPromptBatch(
 
 func newRecordingPromptControl() *recordingPromptControl {
 	return &recordingPromptControl{
-		askRequests:      make(chan serverapi.AskAnswerRequest, 8),
-		approvalRequests: make(chan serverapi.ApprovalAnswerRequest, 8),
+		batchRequests: make(chan serverapi.PromptAnswerBatchRequest, 8),
 	}
 }
 
-func (c *recordingPromptControl) AnswerAsk(_ context.Context, request serverapi.AskAnswerRequest) error {
-	c.askRequests <- request
-	return nil
+func (c *recordingPromptControl) AnswerPromptBatch(
+	_ context.Context,
+	request serverapi.PromptAnswerBatchRequest,
+) (serverapi.PromptAnswerBatchResponse, error) {
+	c.batchRequests <- request
+	return resolvedPromptBatchResponse(request), nil
 }
 
-func (c *recordingPromptControl) AnswerApproval(_ context.Context, request serverapi.ApprovalAnswerRequest) error {
-	c.approvalRequests <- request
-	return nil
+func resolvedPromptBatchResponse(request serverapi.PromptAnswerBatchRequest) serverapi.PromptAnswerBatchResponse {
+	results := make([]serverapi.PromptAnswerBatchResult, 0, len(request.Entries))
+	for _, entry := range request.Entries {
+		results = append(results, serverapi.PromptAnswerBatchResult{
+			PromptID: entry.PromptID,
+			Outcome:  serverapi.PromptAnswerBatchOutcomeResolved,
+		})
+	}
+	return serverapi.PromptAnswerBatchResponse{Results: results}
 }
 
 func newProjectedPromptTestUIModel(t *testing.T, opts ...UIOption) (*uiModel, *recordingPromptControl) {
@@ -116,33 +123,38 @@ func runPromptDeliveryCommand(t *testing.T, model *uiModel, command tea.Cmd) *ui
 	return updateUIModel(t, model, command())
 }
 
-func submitAskPromptKey(t *testing.T, model *uiModel, control *recordingPromptControl, key tea.KeyMsg) (*uiModel, serverapi.AskAnswerRequest) {
+func submitAskPromptKey(t *testing.T, model *uiModel, control *recordingPromptControl, key tea.KeyMsg) (*uiModel, serverapi.PromptAnswerBatchRequest) {
 	t.Helper()
 	next, command := model.Update(key)
 	updated := runPromptDeliveryCommand(t, next.(*uiModel), command)
-	return updated, requireAskRequest(t, control)
+	return updated, requirePromptAnswerBatchRequest(t, control)
 }
 
-func requireAskRequest(t *testing.T, control *recordingPromptControl) serverapi.AskAnswerRequest {
+func requirePromptAnswerBatchRequest(t *testing.T, control *recordingPromptControl) serverapi.PromptAnswerBatchRequest {
 	t.Helper()
 	select {
-	case request := <-control.askRequests:
+	case request := <-control.batchRequests:
 		return request
 	default:
-		t.Fatal("completed prompt delivery recorded no ask request")
-		return serverapi.AskAnswerRequest{}
+		t.Fatal("completed prompt delivery recorded no prompt answer batch request")
+		return serverapi.PromptAnswerBatchRequest{}
 	}
 }
 
-func requireApprovalRequest(t *testing.T, control *recordingPromptControl) serverapi.ApprovalAnswerRequest {
+func requireQuestionAnswerEntry(t *testing.T, request serverapi.PromptAnswerBatchRequest) serverapi.PromptAnswerBatchEntry {
 	t.Helper()
-	select {
-	case request := <-control.approvalRequests:
-		return request
-	default:
-		t.Fatal("completed prompt delivery recorded no approval request")
-		return serverapi.ApprovalAnswerRequest{}
+	if len(request.Entries) != 1 || request.Entries[0].QuestionAnswer == nil {
+		t.Fatalf("prompt answer batch = %+v, want one Question answer", request)
 	}
+	return request.Entries[0]
+}
+
+func requireApprovalAnswerEntry(t *testing.T, request serverapi.PromptAnswerBatchRequest) serverapi.PromptAnswerBatchEntry {
+	t.Helper()
+	if len(request.Entries) != 1 || request.Entries[0].ApprovalAnswer == nil {
+		t.Fatalf("prompt answer batch = %+v, want one Approval answer", request)
+	}
+	return request.Entries[0]
 }
 
 type projectedAuthorityRuntime struct {

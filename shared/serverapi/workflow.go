@@ -1097,7 +1097,6 @@ const (
 
 var ErrWorkflowTaskCompleteTargetNotFound = errors.New("workflow task completion target not found")
 var ErrWorkflowTaskCompleteSelectorAmbiguous = errors.New("workflow task completion selector is ambiguous")
-var ErrWorkflowTaskQuestionSelectorAmbiguous = errors.New("workflow task question selector is ambiguous")
 
 type WorkflowTaskCompleteSelectorAmbiguousError struct {
 	Message string
@@ -1113,22 +1112,6 @@ func (e WorkflowTaskCompleteSelectorAmbiguousError) Error() string {
 
 func (e WorkflowTaskCompleteSelectorAmbiguousError) Is(target error) bool {
 	return target == ErrWorkflowTaskCompleteSelectorAmbiguous
-}
-
-type WorkflowTaskQuestionSelectorAmbiguousError struct {
-	Message string
-}
-
-func (e WorkflowTaskQuestionSelectorAmbiguousError) Error() string {
-	message := strings.TrimSpace(e.Message)
-	if message == "" {
-		return ErrWorkflowTaskQuestionSelectorAmbiguous.Error()
-	}
-	return message
-}
-
-func (e WorkflowTaskQuestionSelectorAmbiguousError) Is(target error) bool {
-	return target == ErrWorkflowTaskQuestionSelectorAmbiguous
 }
 
 type WorkflowTaskCompleteRequest struct {
@@ -1189,25 +1172,22 @@ type WorkflowTaskAttentionListResponse struct {
 }
 
 type WorkflowAttentionItem struct {
-	ID                     string                             `json:"id"`
-	Kind                   string                             `json:"kind"`
-	ProjectID              string                             `json:"project_id"`
-	WorkflowID             runtimeids.WorkflowID              `json:"workflow_id"`
-	TaskID                 string                             `json:"task_id"`
-	TaskShortID            string                             `json:"task_short_id"`
-	TaskTitle              string                             `json:"task_title"`
-	Message                *string                            `json:"message,omitempty"`
-	ApprovalID             *string                            `json:"approval_id,omitempty"`
-	CurrentNode            *WorkflowTaskCurrentNode           `json:"current_node,omitempty"`
-	SessionID              *string                            `json:"session_id,omitempty"`
-	SessionName            *string                            `json:"session_name"`
-	DetailJSON             *string                            `json:"detail_json,omitempty"`
-	QuestionID             *string                            `json:"question_id,omitempty"`
-	Suggestions            []string                           `json:"suggestions,omitempty"`
-	RecommendedOptionIndex *int                               `json:"recommended_option_index,omitempty"`
-	Question               *WorkflowAttentionQuestionPrompt   `json:"question,omitempty"`
-	ApprovalSnapshot       *WorkflowAttentionApprovalSnapshot `json:"approval_snapshot,omitempty"`
-	OccurredAtUnixMs       int64                              `json:"occurred_at_unix_ms"`
+	ID               string                             `json:"id"`
+	Kind             string                             `json:"kind"`
+	ProjectID        string                             `json:"project_id"`
+	WorkflowID       runtimeids.WorkflowID              `json:"workflow_id"`
+	TaskID           string                             `json:"task_id"`
+	TaskShortID      string                             `json:"task_short_id"`
+	TaskTitle        string                             `json:"task_title"`
+	Message          *string                            `json:"message,omitempty"`
+	ApprovalID       *string                            `json:"approval_id,omitempty"`
+	CurrentNode      *WorkflowTaskCurrentNode           `json:"current_node,omitempty"`
+	SessionID        *string                            `json:"session_id,omitempty"`
+	SessionName      *string                            `json:"session_name"`
+	DetailJSON       *string                            `json:"detail_json,omitempty"`
+	Question         *WorkflowAttentionQuestionPrompt   `json:"question,omitempty"`
+	ApprovalSnapshot *WorkflowAttentionApprovalSnapshot `json:"approval_snapshot,omitempty"`
+	OccurredAtUnixMs int64                              `json:"occurred_at_unix_ms"`
 }
 
 type WorkflowAttentionApprovalSnapshot struct {
@@ -1230,26 +1210,13 @@ const (
 )
 
 type WorkflowAttentionQuestionPrompt struct {
+	SessionID              runtimeids.SessionID          `json:"session_id"`
+	StepID                 runtimeids.StepID             `json:"step_id"`
+	PromptID               clientui.PromptID             `json:"prompt_id"`
 	Kind                   WorkflowAttentionQuestionKind `json:"kind"`
 	Suggestions            []string                      `json:"suggestions,omitempty"`
 	RecommendedOptionIndex *int                          `json:"recommended_option_index,omitempty"`
 	ApprovalDecisions      []clientui.ApprovalDecision   `json:"approval_decisions,omitempty"`
-}
-
-type WorkflowTaskQuestionApprovalAnswer struct {
-	Decision   clientui.ApprovalDecision `json:"decision"`
-	Commentary string                    `json:"commentary,omitempty"`
-}
-
-type WorkflowTaskQuestionAnswerRequest struct {
-	ClientRequestID      string                              `json:"client_request_id"`
-	TaskID               string                              `json:"task_id"`
-	AskID                string                              `json:"ask_id"`
-	ErrorMessage         string                              `json:"error_message,omitempty"`
-	Answer               string                              `json:"answer,omitempty"`
-	SelectedOptionNumber *int                                `json:"selected_option_number"`
-	FreeformAnswer       string                              `json:"freeform_answer,omitempty"`
-	Approval             *WorkflowTaskQuestionApprovalAnswer `json:"approval,omitempty"`
 }
 
 type WorkflowTaskCommentAddRequest struct {
@@ -1662,7 +1629,6 @@ const (
 	WorkflowProjectEventActionCommentDeleted         = protocol.WorkflowProjectEventActionCommentDeleted
 	WorkflowProjectEventActionQuestionWaiting        = protocol.WorkflowProjectEventActionQuestionWaiting
 	WorkflowProjectEventActionQuestionCleared        = protocol.WorkflowProjectEventActionQuestionCleared
-	WorkflowProjectEventActionQuestionAnswered       = protocol.WorkflowProjectEventActionQuestionAnswered
 	WorkflowProjectEventActionLabelsChanged          = protocol.WorkflowProjectEventActionLabelsChanged
 	WorkflowProjectEventActionDependenciesChanged    = protocol.WorkflowProjectEventActionDependenciesChanged
 )
@@ -1782,7 +1748,6 @@ func workflowProjectEventActionAllowed(resource WorkflowProjectEventResource, ac
 			WorkflowProjectEventActionCommentDeleted,
 			WorkflowProjectEventActionQuestionWaiting,
 			WorkflowProjectEventActionQuestionCleared,
-			WorkflowProjectEventActionQuestionAnswered,
 			WorkflowProjectEventActionLabelsChanged,
 			WorkflowProjectEventActionDependenciesChanged:
 			return true
@@ -2774,33 +2739,29 @@ func (r WorkflowAttentionItem) Validate() error {
 		if err := validateRequiredAttentionString("message", r.Message); err != nil {
 			return err
 		}
-		if err := validateRequiredAttentionString("question_id", r.QuestionID); err != nil {
-			return err
-		}
 		if r.CurrentNode == nil {
 			return workflowRequestError(WorkflowRequestErrorRequired, "current_node", "current_node is required")
 		}
 		if err := validateWorkflowTaskCurrentNode(*r.CurrentNode); err != nil {
 			return err
 		}
-		if err := validateOptionalAttentionString("session_id", r.SessionID); err != nil {
-			return err
+		if r.CurrentNode.SessionID != nil {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "current_node.session_id", "current_node.session_id is not allowed for kind question")
 		}
 		if err := validateOptionalAttentionString("session_name", r.SessionName); err != nil {
 			return err
 		}
-		if err := validateWorkflowAttentionRecommendation(r.Suggestions, r.RecommendedOptionIndex); err != nil {
-			return err
+		if r.Question == nil {
+			return workflowRequestError(WorkflowRequestErrorRequired, "question", "question is required")
 		}
-		if r.Question != nil {
-			if err := r.Question.Validate(); err != nil {
-				return err
-			}
+		if err := r.Question.Validate(); err != nil {
+			return err
 		}
 		return validateWorkflowAttentionFieldsAbsent(r.Kind,
 			workflowAttentionFieldPresence{name: "approval_id", present: r.ApprovalID != nil},
 			workflowAttentionFieldPresence{name: "approval_snapshot", present: r.ApprovalSnapshot != nil},
 			workflowAttentionFieldPresence{name: "detail_json", present: r.DetailJSON != nil},
+			workflowAttentionFieldPresence{name: "session_id", present: r.SessionID != nil},
 		)
 	case "approval":
 		if err := validateOptionalAttentionString("message", r.Message); err != nil {
@@ -2818,11 +2779,8 @@ func (r WorkflowAttentionItem) Validate() error {
 		return validateWorkflowAttentionFieldsAbsent(r.Kind,
 			workflowAttentionFieldPresence{name: "session_id", present: r.SessionID != nil},
 			workflowAttentionFieldPresence{name: "session_name", present: r.SessionName != nil},
-			workflowAttentionFieldPresence{name: "question_id", present: r.QuestionID != nil},
 			workflowAttentionFieldPresence{name: "current_node", present: r.CurrentNode != nil},
 			workflowAttentionFieldPresence{name: "question", present: r.Question != nil},
-			workflowAttentionFieldPresence{name: "suggestions", present: r.Suggestions != nil},
-			workflowAttentionFieldPresence{name: "recommended_option_index", present: r.RecommendedOptionIndex != nil},
 			workflowAttentionFieldPresence{name: "detail_json", present: r.DetailJSON != nil},
 		)
 	case "interrupted_current_node":
@@ -2844,11 +2802,8 @@ func (r WorkflowAttentionItem) Validate() error {
 		return validateWorkflowAttentionFieldsAbsent(r.Kind,
 			workflowAttentionFieldPresence{name: "approval_id", present: r.ApprovalID != nil},
 			workflowAttentionFieldPresence{name: "session_name", present: r.SessionName != nil},
-			workflowAttentionFieldPresence{name: "question_id", present: r.QuestionID != nil},
 			workflowAttentionFieldPresence{name: "question", present: r.Question != nil},
 			workflowAttentionFieldPresence{name: "approval_snapshot", present: r.ApprovalSnapshot != nil},
-			workflowAttentionFieldPresence{name: "suggestions", present: r.Suggestions != nil},
-			workflowAttentionFieldPresence{name: "recommended_option_index", present: r.RecommendedOptionIndex != nil},
 		)
 	default:
 		return workflowRequestError(WorkflowRequestErrorInvalidMode, "kind", "kind must be question, approval, or interrupted_current_node")
@@ -2881,6 +2836,9 @@ func (t WorkflowAttentionApprovalTarget) Validate() error {
 }
 
 func (p WorkflowAttentionQuestionPrompt) Validate() error {
+	if err := validateObservationPromptIdentity(p.PromptID, p.SessionID, p.StepID); err != nil {
+		return workflowRequestError(WorkflowRequestErrorInvalidValue, "question.identity", err.Error())
+	}
 	switch p.Kind {
 	case WorkflowAttentionQuestionKindOrdinary:
 		if p.ApprovalDecisions != nil {
@@ -3281,39 +3239,6 @@ func (r WorkflowAttentionListRequest) Validate() error {
 
 func (r WorkflowTaskAttentionListRequest) Validate() error {
 	return validateRequired("task_id", r.TaskID)
-}
-
-func (r WorkflowTaskQuestionAnswerRequest) Validate() error {
-	if err := validateRequiredFields(requiredField("client_request_id", r.ClientRequestID), requiredField("task_id", r.TaskID), requiredField("ask_id", r.AskID)); err != nil {
-		return err
-	}
-	hasTextAnswer := strings.TrimSpace(r.Answer) != ""
-	hasFreeform := strings.TrimSpace(r.FreeformAnswer) != ""
-	hasApproval := r.Approval != nil
-	if r.SelectedOptionNumber != nil && *r.SelectedOptionNumber <= 0 {
-		return WorkflowRequestValidationError{Code: WorkflowRequestErrorInvalidMode, Field: "selected_option_number", Message: "selected_option_number must be positive when present"}
-	}
-	hasSelected := r.SelectedOptionNumber != nil
-	hasAnswer := hasTextAnswer || hasFreeform || hasSelected || hasApproval
-	hasError := strings.TrimSpace(r.ErrorMessage) != ""
-	if hasAnswer && hasError {
-		return WorkflowRequestValidationError{Code: WorkflowRequestErrorInvalidMode, Field: "error_message", Message: "error_message cannot be combined with answer fields"}
-	}
-	if hasApproval {
-		if hasTextAnswer || hasFreeform || hasSelected {
-			return WorkflowRequestValidationError{Code: WorkflowRequestErrorInvalidMode, Field: "approval", Message: "approval cannot be combined with ordinary answer fields"}
-		}
-		if err := validateWorkflowApprovalDecision(r.Approval.Decision); err != nil {
-			return err
-		}
-	}
-	if hasTextAnswer && (hasFreeform || hasSelected) {
-		return WorkflowRequestValidationError{Code: WorkflowRequestErrorInvalidMode, Field: "answer", Message: "answer cannot be combined with selected_option_number or freeform_answer"}
-	}
-	if !hasAnswer && !hasError {
-		return WorkflowRequestValidationError{Code: WorkflowRequestErrorRequired, Field: "answer", Message: "answer is required"}
-	}
-	return nil
 }
 
 func validateWorkflowApprovalDecision(decision clientui.ApprovalDecision) error {

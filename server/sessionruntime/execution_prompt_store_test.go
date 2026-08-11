@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"core/server/tools"
+	"core/shared/clientui"
 	"core/shared/runtimeids"
 )
 
@@ -33,182 +34,18 @@ func requireQuestionAnswer(
 	}
 }
 
-func TestExecutionPromptStoreAnswerWaitsForPreparedSuccessor(t *testing.T) {
-	feed := make(authorityPromptFeed)
-	store := newExecutionPromptStoreForTest(t, feed)
-	first := batchedPromptRequest("ask-1", 0)
-	second := batchedPromptRequest("ask-2", 1)
-	firstResult := make(chan promptAwaitTestResult, 1)
-	go func() {
-		resolution, err := store.Await(context.Background(), first)
-		firstResult <- promptAwaitTestResult{resolution: resolution, err: err}
-	}()
-	pending := <-feed
-	if pending.requestID != first.ID || pending.resolved {
-		t.Fatalf("first prompt event = %+v, want pending %q", pending, first.ID)
-	}
-	requirePromptPending(t, &store, first.ID)
-
-	answerDone := make(chan error, 1)
-	go func() {
-		acceptance, err := store.Accept(
-			first.ID,
-			testQuestionResolution("one"),
-			nil,
-		)
-		if err != nil {
-			answerDone <- err
-			return
-		}
-		answerDone <- acceptance.AwaitSuccessor(context.Background())
-	}()
-	resolved := <-feed
-	if resolved.requestID != first.ID || !resolved.resolved {
-		t.Fatalf("first resolution event = %+v, want resolved %q", resolved, first.ID)
-	}
-	select {
-	case result := <-firstResult:
-		if result.err != nil || result.resolution == nil {
-			t.Fatalf("first prompt result = %+v", result)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for first prompt response")
-	}
-	select {
-	case err := <-answerDone:
-		t.Fatalf("answer returned before successor became pending: %v", err)
-	default:
-	}
-
-	secondResult := make(chan promptAwaitTestResult, 1)
-	go func() {
-		resolution, err := store.Await(context.Background(), second)
-		secondResult <- promptAwaitTestResult{resolution: resolution, err: err}
-	}()
-	requirePromptPending(t, &store, second.ID)
-	select {
-	case err := <-answerDone:
-		t.Fatalf("answer returned before successor was published: %v", err)
-	default:
-	}
-	pending = <-feed
-	if pending.requestID != second.ID || pending.resolved {
-		t.Fatalf("second prompt event = %+v, want pending %q", pending, second.ID)
-	}
-	select {
-	case err := <-answerDone:
-		if err != nil {
-			t.Fatalf("successor-aware answer: %v", err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("answer did not return after successor became pending")
-	}
-	submitDone := make(chan error, 1)
-	go func() {
-		submitDone <- store.Submit(
-			second.ID,
-			testQuestionResolution("two"),
-			nil,
-		)
-	}()
-	resolved = <-feed
-	if resolved.requestID != second.ID || !resolved.resolved {
-		t.Fatalf("second resolution event = %+v, want resolved %q", resolved, second.ID)
-	}
-	if err := <-submitDone; err != nil {
-		t.Fatalf("submit second prompt: %v", err)
-	}
-	select {
-	case result := <-secondResult:
-		if result.err != nil || result.resolution == nil {
-			t.Fatalf("second prompt result = %+v", result)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for second prompt response")
-	}
-}
-
-func TestExecutionPromptStorePreservesCanonicalQuestionResolution(t *testing.T) {
-	store := newExecutionPromptStore(&Authority{}, ExecutionScope{}, nil)
-	request := tools.AskQuestionRequest{ID: "question", Question: "Proceed?"}
-	result := make(chan promptAwaitTestResult, 1)
-	go func() {
-		resolution, err := store.Await(context.Background(), request)
-		result <- promptAwaitTestResult{resolution: resolution, err: err}
-	}()
-	requirePromptPending(t, &store, request.ID)
-
-	freeform := "  exact freeform  "
-	if err := store.Submit(request.ID, tools.AskQuestionAnswer{
-		Freeform: &freeform,
-	}, nil); err != nil {
-		t.Fatalf("Submit: %v", err)
-	}
-	got := <-result
-	if got.err != nil {
-		t.Fatalf("Await: %v", got.err)
-	}
-	answer, ok := got.resolution.(tools.AskQuestionAnswer)
-	if !ok {
-		t.Fatalf("resolution type = %T", got.resolution)
-	}
-	if answer.Freeform == nil || *answer.Freeform != freeform {
-		t.Fatalf("freeform = %v, want exact value", answer.Freeform)
-	}
-}
-
-func TestExecutionPromptStorePreservesExactApprovalCommentary(t *testing.T) {
-	store := newExecutionPromptStore(&Authority{}, ExecutionScope{}, nil)
-	request := tools.AskQuestionRequest{
-		ID:       "legacy-approval",
-		Question: "Approve?",
-		Approval: true,
-		ApprovalOptions: []tools.AskQuestionApprovalOption{{
-			Decision: tools.AskQuestionApprovalDecisionAllowOnce,
-			Label:    "Allow once",
-		}},
-	}
-	result := make(chan promptAwaitTestResult, 1)
-	go func() {
-		resolution, err := store.Await(context.Background(), request)
-		result <- promptAwaitTestResult{resolution: resolution, err: err}
-	}()
-	requirePromptPending(t, &store, request.ID)
-
-	commentary := "  exact commentary  "
-	if err := store.Submit(request.ID, tools.AskQuestionApproval{
-		Decision:   tools.AskQuestionApprovalDecisionAllowOnce,
-		Commentary: &commentary,
-	}, nil); err != nil {
-		t.Fatalf("Submit: %v", err)
-	}
-	got := <-result
-	if got.err != nil {
-		t.Fatalf("Await: %v", got.err)
-	}
-	approval, ok := got.resolution.(tools.AskQuestionApproval)
-	if !ok || approval.Commentary == nil || *approval.Commentary != commentary {
-		t.Fatalf("Approval resolution = %+v, want exact commentary", got.resolution)
-	}
-}
-
-func TestPromptInvariantUsesDebugAwarePolicy(t *testing.T) {
-	t.Run("production", func(t *testing.T) {
-		t.Setenv("KENT_DEBUG", "")
-		t.Setenv("KENT_INVARIANT_MODE", "diagnostic")
-		if err := reportPromptInvariant("test_prompt_operation", "prompt-1", "test failure"); err == nil {
-			t.Fatal("prompt invariant did not surface an error")
-		}
-	})
-	t.Run("debug", func(t *testing.T) {
-		t.Setenv("KENT_INVARIANT_MODE", "panic")
-		defer func() {
-			if recovered := recover(); recovered == nil {
-				t.Fatal("prompt invariant did not panic in debug mode")
-			}
-		}()
-		_ = reportPromptInvariant("test_prompt_operation", "prompt-1", "test failure")
-	})
+func resolveAuthorityQuestionForTest(
+	authority *Authority,
+	sessionID runtimeids.SessionID,
+	stepID runtimeids.StepID,
+	promptID string,
+	answer tools.AskQuestionAnswer,
+) error {
+	_, err := authority.ResolvePromptBatch(context.Background(), sessionID, stepID, []PromptAnswerCommand{{
+		PromptID: clientui.PromptID(promptID),
+		Payload:  PromptQuestionAnswerCommand{Answer: answer},
+	}})
+	return err
 }
 
 func TestExecutionPromptStoreClosePublishesLifecycleBeforeReleasingPrompt(t *testing.T) {
@@ -224,7 +61,7 @@ func TestExecutionPromptStoreClosePublishesLifecycleBeforeReleasingPrompt(t *tes
 
 	closeDone := make(chan struct{})
 	go func() {
-		store.Close(context.Canceled)
+		_ = store.Close(context.Canceled)
 		close(closeDone)
 	}()
 	select {
@@ -279,110 +116,6 @@ func TestExecutionPromptStoreRejectsPromptWhenPendingPublicationFails(t *testing
 	}
 	if store.hasPendingID("ask-failed") {
 		t.Fatal("failed prompt remained pending in execution store")
-	}
-}
-
-func TestExecutionPromptStoreAnswerReturnsWhenExecutionClosesWithoutPreparedSuccessor(t *testing.T) {
-	store := newExecutionPromptStore(&Authority{}, ExecutionScope{}, nil)
-	request := batchedPromptRequest("ask-1", 0)
-	result := make(chan promptAwaitTestResult, 1)
-	go func() {
-		resolution, err := store.Await(context.Background(), request)
-		result <- promptAwaitTestResult{resolution: resolution, err: err}
-	}()
-	requirePromptPending(t, &store, request.ID)
-
-	answerDone := make(chan error, 1)
-	go func() {
-		acceptance, err := store.Accept(
-			request.ID,
-			testQuestionResolution("one"),
-			nil,
-		)
-		if err != nil {
-			answerDone <- err
-			return
-		}
-		answerDone <- acceptance.AwaitSuccessor(context.Background())
-	}()
-	select {
-	case <-result:
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for prompt response")
-	}
-	select {
-	case err := <-answerDone:
-		t.Fatalf("answer returned before exact execution closed: %v", err)
-	default:
-	}
-	store.Close(context.Canceled)
-	select {
-	case err := <-answerDone:
-		if err != nil {
-			t.Fatalf("answer after close: %v", err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("answer did not return after exact execution closed")
-	}
-}
-
-func TestExecutionPromptStoreAcceptedAnswerRemembersResolvedSuccessor(t *testing.T) {
-	store := newExecutionPromptStore(&Authority{}, ExecutionScope{}, nil)
-	first := batchedPromptRequest("ask-1", 0)
-	second := batchedPromptRequest("ask-2", 1)
-	firstResult := make(chan promptAwaitTestResult, 1)
-	go func() {
-		resolution, err := store.Await(context.Background(), first)
-		firstResult <- promptAwaitTestResult{resolution: resolution, err: err}
-	}()
-	requirePromptPending(t, &store, first.ID)
-
-	acceptance, err := store.Accept(
-		first.ID,
-		testQuestionResolution("one"),
-		nil,
-	)
-	if err != nil {
-		t.Fatalf("accept first prompt response: %v", err)
-	}
-	select {
-	case result := <-firstResult:
-		if result.err != nil || result.resolution == nil {
-			t.Fatalf("first prompt result = %+v", result)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for first prompt response")
-	}
-
-	secondResult := make(chan promptAwaitTestResult, 1)
-	go func() {
-		resolution, err := store.Await(context.Background(), second)
-		secondResult <- promptAwaitTestResult{resolution: resolution, err: err}
-	}()
-	requirePromptPending(t, &store, second.ID)
-	if err := store.Submit(
-		second.ID,
-		testQuestionResolution("two"),
-		nil,
-	); err != nil {
-		t.Fatalf("submit second prompt response: %v", err)
-	}
-	select {
-	case result := <-secondResult:
-		if result.err != nil || result.resolution == nil {
-			t.Fatalf("second prompt result = %+v", result)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for second prompt response")
-	}
-
-	for attempt := 1; attempt <= 2; attempt++ {
-		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-		err := acceptance.AwaitSuccessor(ctx)
-		cancel()
-		if err != nil {
-			t.Fatalf("await resolved successor attempt %d: %v", attempt, err)
-		}
 	}
 }
 

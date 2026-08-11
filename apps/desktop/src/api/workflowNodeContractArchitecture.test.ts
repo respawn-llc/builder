@@ -7,6 +7,14 @@ import { describe, expect, it } from "vitest";
 
 const legacyTypeNames = new Set(["promptTemplate", "inputFields", "outputFields"]);
 const legacyWireNames = new Set(["prompt_template", "input_fields", "output_fields"]);
+const promptFollowUpSymbols = new Set([
+  "PromptFollowUpWatchRequest",
+  "PromptFollowUpEvent",
+  "subscribeFollowUp",
+  "prompt.followUp.watch",
+  "prompt.followUp.event",
+  "prompt.followUp.complete",
+]);
 
 function source(path: string): ts.SourceFile {
   return ts.createSourceFile(
@@ -14,7 +22,7 @@ function source(path: string): ts.SourceFile {
     readFileSync(path, "utf8"),
     ts.ScriptTarget.Latest,
     true,
-    ts.ScriptKind.TS,
+    path.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
   );
 }
 
@@ -129,6 +137,28 @@ function findNodePayload(sourceFile: ts.SourceFile): ts.ObjectLiteralExpression 
 }
 
 describe("workflow Node contract ownership", () => {
+  it("keeps Desktop off the command-only prompt follow-up stream", () => {
+    const findings: string[] = [];
+    for (const path of ts.sys.readDirectory(
+      canonicalPath("../"),
+      [".ts", ".tsx"],
+      ["**/*.test.ts", "**/*.test.tsx"],
+    )) {
+      const sourceFile = source(path);
+      const visit = (node: ts.Node): void => {
+        if (
+          (ts.isIdentifier(node) || ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) &&
+          promptFollowUpSymbols.has(node.text)
+        ) {
+          findings.push(`${path}:${node.text}`);
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(sourceFile);
+    }
+    expect(findings).toEqual([]);
+  });
+
   it("removes legacy fields from canonical Node and draft types", () => {
     const canonicalTypes = [
       [source(canonicalPath("./models.ts")), "WorkflowNode"],

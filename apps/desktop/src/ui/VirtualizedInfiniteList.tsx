@@ -145,6 +145,7 @@ function VirtualizedInfiniteListContent<TItem>({
   );
   const lastInitialScrollKeyRef = useRef<string | null>(null);
   const lastPixelOffsetKeyRef = useRef<string | null>(null);
+  const pixelOffsetAppliedKeyRef = useRef<string | null>(null);
   const lastLoadPreviousKeyRef = useRef<string | null>(null);
   const lastLoadMoreKeyRef = useRef<string | null>(null);
   const wasFetchingPreviousPageRef = useRef(false);
@@ -324,6 +325,7 @@ function VirtualizedInfiniteListContent<TItem>({
     scrollRef.current.scrollTop = validatedPixelOffsetRequest.offsetPx;
     virtualizer.scrollToOffset(scrollRef.current.scrollTop, { behavior: "auto" });
     lastPixelOffsetKeyRef.current = validatedPixelOffsetRequest.key;
+    pixelOffsetAppliedKeyRef.current = validatedPixelOffsetRequest.key;
   }, [items.length, validatedPixelOffsetRequest, virtualizer]);
 
   useLayoutEffect(() => {
@@ -332,7 +334,11 @@ function VirtualizedInfiniteListContent<TItem>({
       occurrenceKey: getItemOccurrenceKeyForItem(item),
     }));
     const previousEntries = previousAnchorEntriesRef.current;
-    const anchor = leadingAnchorRef.current;
+    const anchor = recoverableLeadingAnchor(
+      leadingAnchorRef.current,
+      pixelOffsetAppliedKeyRef.current,
+      validatedPixelOffsetRequest,
+    );
     const element = scrollRef.current;
     if (previousEntries.length > 0 && anchor !== null && element !== null) {
       const resolvedPreviousIndex = resolveAnchorEntryIndex(previousEntries, anchor);
@@ -352,6 +358,7 @@ function VirtualizedInfiniteListContent<TItem>({
       }
     }
     previousAnchorEntriesRef.current = currentEntries;
+    pixelOffsetAppliedKeyRef.current = null;
     captureLeadingAnchor();
   }, [
     captureLeadingAnchor,
@@ -362,6 +369,7 @@ function VirtualizedInfiniteListContent<TItem>({
     itemStartIndex,
     items,
     paddingStart,
+    validatedPixelOffsetRequest,
     virtualItems,
     virtualizer,
   ]);
@@ -619,6 +627,14 @@ type VirtualizedLeadingAnchor = Readonly<{
   occurrenceKey: string;
   inRowOffset: number;
 }>;
+
+function recoverableLeadingAnchor(
+  anchor: VirtualizedLeadingAnchor | null,
+  appliedPixelOffsetKey: string | null,
+  request: VirtualizedPixelOffsetRequest | undefined,
+): VirtualizedLeadingAnchor | null {
+  return appliedPixelOffsetKey === request?.key ? null : anchor;
+}
 
 type VirtualizedAnchorEntry = Readonly<{
   anchorKey: string;

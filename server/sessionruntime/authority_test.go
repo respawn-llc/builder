@@ -23,6 +23,7 @@ import (
 	shelltool "core/server/tools/shell"
 	"core/server/workflow"
 	"core/server/workflowruntime"
+	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
@@ -44,6 +45,7 @@ type authorityAutoReleaseLifecycle struct {
 type authorityPromptEvent struct {
 	resource  runtimeids.SessionResourceRef
 	scopeID   runtimeids.ExecutionScopeID
+	stepID    runtimeids.StepID
 	requestID string
 	resolved  bool
 }
@@ -293,7 +295,11 @@ func (c *ownerlessRetirementLLMClient) callCount() int {
 
 func (f authorityPromptFeed) PromptPendingScope(scope ExecutionScope, req tools.AskQuestionRequest, _ time.Time) error {
 	resource, _ := scope.Resource()
-	f <- authorityPromptEvent{resource: resource, scopeID: scope.ID(), requestID: req.ID}
+	stepID, err := runtimeids.ParseStepID(req.StepID)
+	if err != nil {
+		return err
+	}
+	f <- authorityPromptEvent{resource: resource, scopeID: scope.ID(), stepID: stepID, requestID: req.ID}
 	return nil
 }
 
@@ -2152,13 +2158,14 @@ func TestOwnerlessBackgroundContinuationPublishesQuestionFromExactExecution(t *t
 	if pending.resource != attachment.Resource() || pending.scopeID.IsZero() || pending.requestID == "" {
 		t.Fatalf("pending background question = %+v", pending)
 	}
-	if err := authority.SubmitPromptResolution(
+	if err := resolveAuthorityQuestionForTest(
+		authority,
 		sessionID,
+		pending.stepID,
 		pending.requestID,
 		testQuestionResolution("yes"),
-		nil,
 	); err != nil {
-		t.Fatalf("submit background question response: %v", err)
+		t.Fatalf("resolve background question batch: %v", err)
 	}
 	select {
 	case resolved := <-feed:
@@ -2721,7 +2728,11 @@ func TestPromptResponseResolvesCurrentExactExecutionScope(t *testing.T) {
 
 	resource, _ := handle.Scope().Resource()
 	pending := <-feed
-	if pending != (authorityPromptEvent{resource: resource, scopeID: handle.Scope().ID(), requestID: askID}) {
+	expectedStepID, err := runtimeids.ParseStepID(request.StepID)
+	if err != nil {
+		t.Fatalf("parse prompt step: %v", err)
+	}
+	if pending != (authorityPromptEvent{resource: resource, scopeID: handle.Scope().ID(), stepID: expectedStepID, requestID: askID}) {
 		t.Fatalf("pending prompt = %+v, want exact resource %v scope %s ask %s", pending, resource, handle.Scope().ID(), askID)
 	}
 	snapshot, err := authority.CurrentScopedTaskExecutionSnapshot(workflowRef.ProjectID, workflowRef.WorkflowID, workflowRef.CurrentNode.TaskID)
@@ -2745,13 +2756,9 @@ func TestPromptResponseResolvesCurrentExactExecutionScope(t *testing.T) {
 		t.Fatalf("pending-prompt mutation error/called = %v/%t, want pending rejection before mutation", err, mutationCalled)
 	}
 
-	if err := authority.SubmitPromptResolution(
-		sessionID,
-		askID,
-		testQuestionResolution("yes"),
-		nil,
-	); err != nil {
-		t.Fatalf("submit prompt response: %v", err)
+	stepID := expectedStepID
+	if err := resolveAuthorityQuestionForTest(authority, sessionID, stepID, askID, testQuestionResolution("yes")); err != nil {
+		t.Fatalf("resolve prompt batch: %v", err)
 	}
 	resolved := <-feed
 	if resolved != (authorityPromptEvent{resource: resource, scopeID: handle.Scope().ID(), requestID: askID, resolved: true}) {
@@ -2855,7 +2862,16 @@ func TestPromptStoreMutationsDoNotRequireAuthorityLock(t *testing.T) {
 
 	submitDone := make(chan error, 1)
 	go func() {
-		submitDone <- store.Submit(request.ID, resolution, nil)
+		stepID, parseErr := runtimeids.ParseStepID(request.StepID)
+		if parseErr != nil {
+			submitDone <- parseErr
+			return
+		}
+		_, resolveErr := store.ResolvePromptBatch(context.Background(), stepID, []PromptAnswerCommand{{
+			PromptID: clientui.PromptID(request.ID),
+			Payload:  PromptQuestionAnswerCommand{Answer: resolution},
+		}})
+		submitDone <- resolveErr
 	}()
 	select {
 	case submitErr := <-submitDone:
@@ -3033,7 +3049,7 @@ func TestTaskExecutionRejectsPendingPromptsForQueuedAndScript(t *testing.T) {
 	}
 }
 
-func TestResolvePendingWorkflowPromptUsesExactTaskScope(t *testing.T) {
+func TestAuthorityResolvePromptBatchUsesExactFullKey(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
 	feed := make(authorityPromptFeed, 1)
@@ -3071,20 +3087,12 @@ func TestResolvePendingWorkflowPromptUsesExactTaskScope(t *testing.T) {
 		t.Fatalf("pending prompt = %+v, want scope %s ask %s", pending, handle.Scope().ID(), askID)
 	}
 
-	resolved, err := authority.ResolvePendingWorkflowPrompt(workflowRef.CurrentNode.TaskID, askID)
+	stepID, err := runtimeids.ParseStepID(request.StepID)
 	if err != nil {
-		t.Fatalf("ResolvePendingWorkflowPrompt: %v", err)
+		t.Fatalf("parse prompt step: %v", err)
 	}
-	if resolved.ScopeID != handle.Scope().ID() || resolved.SessionID != sessionID || !resolved.CurrentNode.Equal(workflowRef.CurrentNode) {
-		t.Fatalf("prompt resolution = %+v, want scope %s session %s node %v", resolved, handle.Scope().ID(), sessionID, workflowRef.CurrentNode)
-	}
-	if err := authority.SubmitPromptResolutionForScope(
-		resolved.ScopeID,
-		askID,
-		testQuestionResolution("yes"),
-		nil,
-	); err != nil {
-		t.Fatalf("SubmitPromptResolutionForScope: %v", err)
+	if err := resolveAuthorityQuestionForTest(authority, sessionID, stepID, askID, testQuestionResolution("yes")); err != nil {
+		t.Fatalf("ResolvePromptBatch: %v", err)
 	}
 	if result := <-responseDone; result.err != nil {
 		t.Fatalf("prompt resolution error = %v", result.err)
@@ -3094,8 +3102,12 @@ func TestResolvePendingWorkflowPromptUsesExactTaskScope(t *testing.T) {
 	if _, err := handle.Wait(context.Background()); err != nil {
 		t.Fatalf("wait agent execution: %v", err)
 	}
-	if _, err := authority.ResolvePendingWorkflowPrompt(workflowRef.CurrentNode.TaskID, askID); !errors.Is(err, serverapi.ErrPromptNotFound) {
-		t.Fatalf("retired prompt resolution error = %v, want prompt not found", err)
+	results, err := authority.ResolvePromptBatch(context.Background(), sessionID, stepID, []PromptAnswerCommand{{
+		PromptID: clientui.PromptID(askID),
+		Payload:  PromptQuestionAnswerCommand{Answer: testQuestionResolution("late")},
+	}})
+	if err != nil || len(results) != 1 || results[0].Outcome != PromptAnswerOutcomeSkipped {
+		t.Fatalf("retired prompt batch = (%+v, %v), want skipped", results, err)
 	}
 }
 
@@ -3133,13 +3145,12 @@ func TestQuestionCompletionReplacesRetainedRuntimeAfterDrain(t *testing.T) {
 	if pending.scopeID != handle.Scope().ID() || pending.requestID != askID {
 		t.Fatalf("pending question = %+v", pending)
 	}
-	if err := authority.SubmitPromptResolution(
-		sessionID,
-		askID,
-		testQuestionResolution("yes"),
-		nil,
-	); err != nil {
-		t.Fatalf("submit prompt response: %v", err)
+	stepID, err := runtimeids.ParseStepID(request.StepID)
+	if err != nil {
+		t.Fatalf("parse prompt step: %v", err)
+	}
+	if err := resolveAuthorityQuestionForTest(authority, sessionID, stepID, askID, testQuestionResolution("yes")); err != nil {
+		t.Fatalf("resolve prompt batch: %v", err)
 	}
 	if _, err := handle.Wait(context.Background()); err != nil {
 		t.Fatalf("wait questioning execution: %v", err)

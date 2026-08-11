@@ -43,6 +43,20 @@ func (c *Remote) SubscribeSessionAttentionNotifications(ctx context.Context, req
 	}), nil
 }
 
+func (c *Remote) SubscribeFollowUp(ctx context.Context, req serverapi.PromptFollowUpWatchRequest) (serverapi.PromptFollowUpSubscription, error) {
+	conn, route, err := c.subscribeRPC(ctx, protocol.MethodPromptFollowUpWatch, "subscribe-prompt-follow-up", req, req.SessionID.String(), true)
+	if err != nil {
+		return nil, err
+	}
+	return newRemoteSubscriptionWithError(conn, route, func(params protocol.PromptFollowUpEventParams) (serverapi.PromptFollowUpEvent, error) {
+		event := serverapi.PromptFollowUpEvent{Kind: serverapi.PromptFollowUpEventKind(params.Event.Kind)}
+		if err := event.Validate(); err != nil {
+			return serverapi.PromptFollowUpEvent{}, err
+		}
+		return event, nil
+	}), nil
+}
+
 func (c *Remote) RunPrompt(ctx context.Context, req serverapi.RunPromptRequest, progress serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error) {
 	route := mustRemoteRoute(protocol.MethodRunPrompt)
 	conn, cleanup, err := c.openRPCConn(ctx)

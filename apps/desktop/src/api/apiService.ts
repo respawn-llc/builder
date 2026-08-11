@@ -1,7 +1,8 @@
 import type { AttentionNotificationEventHandler } from "./attentionNotifications";
 import type {
   BoardNodeCardsInput,
-  QuestionAnswerInput,
+  PromptAnswerBatchInput,
+  PromptAnswerBatchResponse,
   TaskEditInput,
   TaskMoveInput,
   TaskResumeInput,
@@ -160,7 +161,7 @@ export interface ApiService {
   addComment(taskID: string, body: string): Promise<TaskComment>;
   replaceComment(commentID: string, body: string): Promise<void>;
   deleteComment(commentID: string): Promise<void>;
-  answerQuestion(input: QuestionAnswerInput): Promise<void>;
+  answerPromptBatch(input: PromptAnswerBatchInput): Promise<PromptAnswerBatchResponse>;
   listPendingAsks(sessionID: string): Promise<readonly PendingAsk[]>;
   subscribeProject(projectID: string, handler: WorkflowProjectEventHandler): ApiSubscription;
   subscribeWorkflow(workflowID: string, handler: WorkflowProjectEventHandler): ApiSubscription;

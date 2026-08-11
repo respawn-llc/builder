@@ -8,7 +8,13 @@ import {
   RouterContextProvider,
 } from "@tanstack/react-router";
 
-import { guiTaskCommentAuthor, type JsonObject, type JsonValue, type TaskDetail } from "@/api";
+import {
+  guiTaskCommentAuthor,
+  type JsonObject,
+  type JsonValue,
+  type QuestionAttentionItem,
+  type TaskDetail,
+} from "@/api";
 import { ApiClient } from "@/api/composition";
 import {
   SidebarRootContext,
@@ -248,15 +254,52 @@ export const questionAttention = {
   current_node: {
     node_id: "node-1",
     transition_branch_key: null,
-    session_id: "session-1",
+    session_id: null,
   },
-  session_id: "session-1",
   session_name: "Session one",
-  question_id: "ask-1",
   message: "Choose snack",
-  recommended_option_index: 1,
-  suggestions: ["Trail mix", "Dark chocolate"],
+  question: {
+    session_id: "session-1",
+    step_id: "22222222-2222-4222-8222-222222222222",
+    prompt_id: "ask-1",
+    kind: "ordinary",
+    recommended_option_index: 1,
+    suggestions: ["Trail mix", "Dark chocolate"],
+  },
 };
+
+export function parsedQuestionAttention(): QuestionAttentionItem &
+  Readonly<{
+    question: Extract<QuestionAttentionItem["question"], Readonly<{ kind: "ordinary" }>>;
+  }> {
+  return {
+    id: questionAttention.id,
+    projectID: questionAttention.project_id,
+    workflowID: questionAttention.workflow_id,
+    taskID: questionAttention.task_id,
+    taskShortID: questionAttention.task_short_id,
+    taskTitle: questionAttention.task_title,
+    occurredAt: questionAttention.occurred_at_unix_ms,
+    kind: "question",
+    currentNode: {
+      nodeID: questionAttention.current_node.node_id,
+      transitionBranchKey: questionAttention.current_node.transition_branch_key,
+      sessionID: questionAttention.current_node.session_id,
+      effectiveAssignee: null,
+      effectiveThinking: null,
+    },
+    sessionName: questionAttention.session_name,
+    message: questionAttention.message,
+    question: {
+      sessionID: questionAttention.question.session_id,
+      stepID: questionAttention.question.step_id,
+      promptID: questionAttention.question.prompt_id,
+      kind: "ordinary",
+      recommendedOptionIndex: questionAttention.question.recommended_option_index,
+      suggestions: questionAttention.question.suggestions,
+    },
+  };
+}
 
 export const taskQuestionWaitingEvent = {
   event: {
@@ -305,8 +348,9 @@ export const activityResponse = {
 export const pendingAskResponse = {
   Asks: [
     {
-      AskID: "ask-1",
+      PromptID: "ask-1",
       SessionID: "session-1",
+      StepID: "11111111-1111-4111-8111-111111111111",
       Question: "Choose path",
       Suggestions: ["Use option A", "Use option B"],
       RecommendedOptionIndex: 1,

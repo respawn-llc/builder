@@ -175,8 +175,9 @@ export type BindingPlan = Readonly<{
 }>;
 
 export type PendingAsk = Readonly<{
-  askID: string;
+  promptID: string;
   sessionID: string;
+  stepID: string;
   question: string;
   suggestions: readonly string[];
   recommendedOptionIndex: number | null;
@@ -184,19 +185,6 @@ export type PendingAsk = Readonly<{
 }>;
 
 export type ApprovalDecision = "allow_once" | "allow_session" | "deny";
-
-export type OrdinaryQuestionPrompt = Readonly<{
-  kind: "ordinary";
-  suggestions: readonly string[];
-  recommendedOptionIndex: number | null;
-}>;
-
-export type ApprovalQuestionPrompt = Readonly<{
-  kind: "approval";
-  approvalDecisions: readonly ApprovalDecision[];
-}>;
-
-export type AttentionQuestionPrompt = OrdinaryQuestionPrompt | ApprovalQuestionPrompt;
 
 export type WorkflowValidationError = Readonly<{
   code: string;

@@ -7,6 +7,7 @@ import (
 
 	servicecontract "core/shared/apicontract"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -25,11 +26,19 @@ func (s *AskViewService) ListPendingAsksBySession(_ context.Context, req servera
 	if s == nil || s.prompts == nil {
 		return serverapi.AskListPendingBySessionResponse{}, fmt.Errorf("pending prompt source is required")
 	}
-	items := s.prompts.ListPendingPrompts(strings.TrimSpace(req.SessionID))
+	sessionID, err := runtimeids.ParseSessionID(strings.TrimSpace(req.SessionID))
+	if err != nil {
+		return serverapi.AskListPendingBySessionResponse{}, fmt.Errorf("pending ask session identity: %w", err)
+	}
+	items := s.prompts.ListPendingPrompts(sessionID.String())
 	asks := make([]clientui.PendingAsk, 0, len(items))
 	for _, item := range items {
 		if item.Request.Approval {
 			continue
+		}
+		promptID, stepID, err := pendingPromptIdentity(item.Request.ID, item.Request.StepID)
+		if err != nil {
+			return serverapi.AskListPendingBySessionResponse{}, fmt.Errorf("pending ask identity: %w", err)
 		}
 		recommendedOptionIndex, err := DecodeLegacyRecommendedOptionIndex(
 			item.Request.RecommendedOptionIndex,
@@ -43,8 +52,9 @@ func (s *AskViewService) ListPendingAsksBySession(_ context.Context, req servera
 			)
 		}
 		asks = append(asks, clientui.PendingAsk{
-			AskID:                  item.Request.ID,
-			SessionID:              strings.TrimSpace(req.SessionID),
+			PromptID:               promptID,
+			SessionID:              sessionID,
+			StepID:                 stepID,
 			Question:               item.Request.Question,
 			Suggestions:            append([]string(nil), item.Request.Suggestions...),
 			RecommendedOptionIndex: recommendedOptionIndex,

@@ -92,12 +92,13 @@ func TestTaskObservationHelpReturnsSuccessWithoutJSONEnvelope(t *testing.T) {
 
 func TestProjectRunWatchJSONQuestionUsesAnswerTargetAndOrderedSuggestions(t *testing.T) {
 	recommended := 2
+	responseSessionID := runtimeids.NewSessionID()
 	response := serverapi.RuntimeLiveWatchResponse{
-		SessionID: "response-session",
+		SessionID: responseSessionID.String(),
 		Outcome: serverapi.RuntimeLiveWatchOutcome{
 			Kind: serverapi.RuntimeLiveWatchQuestion,
 			Question: &serverapi.ObservationQuestion{Ask: &clientui.PendingAsk{
-				AskID: "ask-1", SessionID: "response-session", Question: "Proceed?",
+				PromptID: "ask-1", SessionID: responseSessionID, StepID: questionCommandStepID(), Question: "Proceed?",
 				Suggestions: []string{"yes", "no"}, RecommendedOptionIndex: &recommended,
 			}},
 		},
@@ -128,7 +129,8 @@ func TestProjectRunWatchJSONQuestionUsesAnswerTargetAndOrderedSuggestions(t *tes
 }
 
 func TestProjectTaskObservationJSONPreservesQuestionNodeAndKeepsDoneEmpty(t *testing.T) {
-	sessionID := "question-session"
+	typedSessionID := runtimeids.NewSessionID()
+	sessionID := typedSessionID.String()
 	nodeKey := "build"
 	envelope, _, err := projectTaskObservationJSON("task-id", serverapi.WorkflowTaskObservationResponse{
 		TaskID: "response-task", TaskShortID: "T-1",
@@ -136,7 +138,7 @@ func TestProjectTaskObservationJSONPreservesQuestionNodeAndKeepsDoneEmpty(t *tes
 			{Kind: serverapi.WorkflowTaskObservationDone, SessionID: &sessionID, NodeKey: &nodeKey},
 			{Kind: serverapi.WorkflowTaskObservationQuestion, SessionID: &sessionID, NodeKey: &nodeKey,
 				Question: &serverapi.ObservationQuestion{Ask: &clientui.PendingAsk{
-					AskID: "ask", SessionID: sessionID, Question: "Continue?",
+					PromptID: "ask", SessionID: typedSessionID, StepID: questionCommandStepID(), Question: "Continue?",
 				}}},
 		},
 	})

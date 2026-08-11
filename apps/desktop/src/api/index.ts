@@ -1,6 +1,8 @@
 export type { ApiConnectionSource, ApiService, ApiSubscription } from "./apiService";
 export type {
   BoardNodeCardsInput,
+  PromptAnswerBatchInput,
+  PromptAnswerBatchResponse,
   QuestionAnswerInput,
   TaskEditInput,
   TaskMoveInput,
@@ -180,6 +182,12 @@ export type {
   WorkspaceUnlinkResponse,
 } from "./models";
 export type { WorkflowGraphDraft } from "./workflowGraphModels";
+export type {
+  AttentionQuestionPrompt,
+  ApprovalQuestionPrompt,
+  OrdinaryQuestionPrompt,
+  PromptIdentity,
+} from "./promptModels";
 export type {
   SessionCatalogPage,
   SessionCatalogSummary,

@@ -19,11 +19,14 @@ import {
 } from "@/ui";
 import { ActivityRow, CommentComposer, CommentRow } from "./TaskDetailActivity";
 import type { DescriptionPresentationState } from "./TaskDetailDescriptionPresentation";
-import { TaskInbox } from "./TaskDetailInbox";
+import { TaskDetailInboxRow } from "./TaskDetailInboxRow";
 import { DescriptionIsland, PropertiesIsland, TaskHeaderIsland, type TaskDraft } from "./TaskDetailRows";
 import { TaskTabs, type DetailTab } from "./TaskDetailTabs";
 import { TaskDependenciesArea } from "./TaskDependenciesArea";
 import type { QuestionSelectionState } from "./TaskDetailQuestionState";
+import { promptAnswerKey, type PromptAnswerKey, type PromptAnswerState } from "./PromptAnswerState";
+import type { PromptPrimaryFocusRequest } from "./PromptPrimaryControlRegistry";
+import type { QuestionAnswerMutation } from "./TaskDetailQuestionAnswer";
 import { feedPixelOffsetRequest, selectedFeed, taskDetailPaging } from "./taskDetailPaging";
 import type {
   TaskDetailFeedPage,
@@ -56,6 +59,7 @@ type TaskDetailFeedRow<T> = Readonly<{
 
 export function TaskDetailList({
   activity,
+  answerQuestion,
   attention,
   comments,
   detail,
@@ -78,7 +82,8 @@ export function TaskDetailList({
   onScrollElementChange,
   onSaveDraft,
   pixelOffsetRequest,
-  questionSelections,
+  primaryFocusRequest,
+  promptAnswerState,
   relationshipNavigationAvailable,
   selectedTab,
   setTab,
@@ -86,6 +91,7 @@ export function TaskDetailList({
   updatePending,
 }: Readonly<{
   activity: ReturnType<typeof useTaskActivity>;
+  answerQuestion: QuestionAnswerMutation;
   attention: ReturnType<typeof useTaskAttention>;
   comments: ReturnType<typeof useTaskComments>;
   detail: TaskDetail;
@@ -104,11 +110,12 @@ export function TaskDetailList({
   onSelectDependencyTask: (taskID: string) => void;
   onNewCommentBodyChange: (body: string) => void;
   onEditingCommentChange: (editing: Readonly<{ id: string; body: string }> | null) => void;
-  onQuestionSelectionChange: (askID: string, selection: QuestionSelectionState) => void;
+  onQuestionSelectionChange: (key: PromptAnswerKey, selection: QuestionSelectionState) => void;
   onScrollElementChange: (element: HTMLDivElement | null) => void;
   onSaveDraft: (draft?: TaskDraft) => Promise<void>;
   pixelOffsetRequest?: VirtualizedPixelOffsetRequest | undefined;
-  questionSelections: ReadonlyMap<string, QuestionSelectionState>;
+  primaryFocusRequest?: PromptPrimaryFocusRequest | undefined;
+  promptAnswerState: PromptAnswerState;
   relationshipNavigationAvailable: boolean;
   selectedTab: DetailTab;
   setTab: (tab: DetailTab) => void;
@@ -128,7 +135,13 @@ export function TaskDetailList({
     [comments.data],
   );
   const commentCount = commentCountFromData(comments.data);
-  const attentionItems = useMemo(() => attention.data?.items ?? [], [attention.data]);
+  const attentionItems = useMemo(
+    () =>
+      (attention.data?.items ?? []).filter(
+        (item) => item.kind !== "question" || !promptAnswerState.isMasked(promptAnswerKey(item)),
+      ),
+    [attention.data, promptAnswerState],
+  );
   const listItems = useMemo(
     () =>
       taskDetailListItems({
@@ -230,6 +243,7 @@ export function TaskDetailList({
       renderItem={(item) => (
         <TaskDetailListRow
           activityCount={activityItems.length}
+          answerQuestion={answerQuestion}
           attentionItems={attentionItems}
           attentionPending={attention.isPending}
           commentCount={commentCount}
@@ -257,7 +271,8 @@ export function TaskDetailList({
           onEditingCommentChange={onEditingCommentChange}
           onQuestionSelectionChange={onQuestionSelectionChange}
           onSaveDraft={onSaveDraft}
-          questionSelections={questionSelections}
+          primaryFocusRequest={primaryFocusRequest}
+          promptAnswerState={promptAnswerState}
           relationshipNavigationAvailable={relationshipNavigationAvailable}
           selectedTab={selectedTab}
           setTab={setTab}
@@ -277,6 +292,7 @@ export function TaskDetailList({
 
 type TaskDetailListRowProps = Readonly<{
   activityCount: number;
+  answerQuestion: QuestionAnswerMutation;
   attentionItems: readonly AttentionItem[];
   attentionPending: boolean;
   canSaveDraft: boolean;
@@ -302,9 +318,10 @@ type TaskDetailListRowProps = Readonly<{
   onSelectDependencyTask: (taskID: string) => void;
   onNewCommentBodyChange: (body: string) => void;
   onEditingCommentChange: (editing: Readonly<{ id: string; body: string }> | null) => void;
-  onQuestionSelectionChange: (askID: string, selection: QuestionSelectionState) => void;
+  onQuestionSelectionChange: (key: PromptAnswerKey, selection: QuestionSelectionState) => void;
   onSaveDraft: (draft?: TaskDraft) => Promise<void>;
-  questionSelections: ReadonlyMap<string, QuestionSelectionState>;
+  primaryFocusRequest?: PromptPrimaryFocusRequest | undefined;
+  promptAnswerState: PromptAnswerState;
   relationshipNavigationAvailable: boolean;
   selectedTab: DetailTab;
   setTab: (tab: DetailTab) => void;
@@ -317,7 +334,7 @@ const rowRenderers: Record<TaskDetailListItem["kind"], (props: TaskDetailListRow
   header: HeaderRow,
   body: BodyRow,
   dependencies: DependenciesRow,
-  inbox: InboxRow,
+  inbox: TaskDetailInboxRow,
   tabs: TabsRow,
   "comment-composer": CommentComposerRow,
   "comments-loading": LoadingRow,
@@ -425,33 +442,6 @@ function DependenciesRow({
       onRemove={onRemoveDependency}
       onSelectTask={onSelectDependencyTask}
       taskID={detail.id}
-    />
-  );
-}
-
-function InboxRow({
-  attentionItems,
-  attentionPending,
-  detail,
-  disabled,
-  initialFocus,
-  mutations,
-  onQuestionSelectionChange,
-  questionSelections,
-}: TaskDetailListRowProps): ReactNode {
-  if (attentionPending) {
-    return <LoadingState appearanceDelayMs={0} fullPage={false} reveal={false} title={undefined} />;
-  }
-  return (
-    <TaskInbox
-      attentionItems={attentionItems}
-      currentVersion={detail.workflowVersion}
-      detail={detail}
-      disabled={disabled}
-      initialFocus={initialFocus}
-      mutations={mutations}
-      onQuestionSelectionChange={onQuestionSelectionChange}
-      questionSelections={questionSelections}
     />
   );
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/textutil"
 )
@@ -29,7 +30,7 @@ func TestWorkflowAttentionItemEncodesAbsentSessionNameAsNull(t *testing.T) {
 
 func TestWorkflowAttentionItemValidateEnforcesDiscriminatedVariants(t *testing.T) {
 	question := func(mutate func(*WorkflowAttentionItem)) WorkflowAttentionItem {
-		item := validWorkflowAttentionQuestion()
+		item := validWorkflowAttentionQuestion(t)
 		mutate(&item)
 		return item
 	}
@@ -48,7 +49,8 @@ func TestWorkflowAttentionItemValidateEnforcesDiscriminatedVariants(t *testing.T
 		item WorkflowAttentionItem
 		want bool
 	}{
-		{name: "question", item: validWorkflowAttentionQuestion(), want: true},
+		{name: "question", item: validWorkflowAttentionQuestion(t), want: true},
+		{name: "runtime approval question", item: validWorkflowAttentionRuntimeApproval(t), want: true},
 		{name: "approval", item: validWorkflowAttentionApproval(), want: true},
 		{name: "interrupted current node", item: validWorkflowAttentionInterrupted(), want: true},
 		{name: "unknown kind", item: question(func(item *WorkflowAttentionItem) { item.Kind = "unknown" }), want: false},
@@ -58,7 +60,12 @@ func TestWorkflowAttentionItemValidateEnforcesDiscriminatedVariants(t *testing.T
 		{name: "blank task title", item: question(func(item *WorkflowAttentionItem) { item.TaskTitle = "" }), want: false},
 		{name: "blank workflow identity", item: question(func(item *WorkflowAttentionItem) { item.WorkflowID = runtimeids.WorkflowID{} }), want: false},
 		{name: "question without current node", item: question(func(item *WorkflowAttentionItem) { item.CurrentNode = nil }), want: false},
-		{name: "question without question", item: question(func(item *WorkflowAttentionItem) { item.QuestionID = nil }), want: false},
+		{name: "question without question", item: question(func(item *WorkflowAttentionItem) { item.Question = nil }), want: false},
+		{name: "question without nested session", item: question(func(item *WorkflowAttentionItem) { item.Question.SessionID = runtimeids.SessionID{} }), want: false},
+		{name: "question without nested step", item: question(func(item *WorkflowAttentionItem) { item.Question.StepID = runtimeids.StepID{} }), want: false},
+		{name: "question without nested prompt", item: question(func(item *WorkflowAttentionItem) { item.Question.PromptID = "" }), want: false},
+		{name: "question with top-level session", item: question(func(item *WorkflowAttentionItem) { item.SessionID = textutil.Value("session-1") }), want: false},
+		{name: "question with current node session", item: question(func(item *WorkflowAttentionItem) { item.CurrentNode.SessionID = textutil.Value("session-1") }), want: false},
 		{name: "question with blank session name", item: question(func(item *WorkflowAttentionItem) { item.SessionName = textutil.Value("") }), want: false},
 		{name: "question with approval snapshot", item: question(func(item *WorkflowAttentionItem) { item.ApprovalSnapshot = workflowAttentionApprovalSnapshot() }), want: false},
 		{name: "question with approval identity", item: question(func(item *WorkflowAttentionItem) { item.ApprovalID = textutil.Value("approval-1") }), want: false},
@@ -68,11 +75,8 @@ func TestWorkflowAttentionItemValidateEnforcesDiscriminatedVariants(t *testing.T
 		{name: "approval with blank message", item: approval(func(item *WorkflowAttentionItem) { item.Message = textutil.Value("") }), want: false},
 		{name: "approval without snapshot", item: approval(func(item *WorkflowAttentionItem) { item.ApprovalSnapshot = nil }), want: false},
 		{name: "approval with malformed snapshot", item: approval(func(item *WorkflowAttentionItem) { item.ApprovalSnapshot = &WorkflowAttentionApprovalSnapshot{} }), want: false},
-		{name: "approval with question", item: approval(func(item *WorkflowAttentionItem) { item.QuestionID = textutil.Value("question-1") }), want: false},
 		{name: "approval with session", item: approval(func(item *WorkflowAttentionItem) { item.SessionID = textutil.Value("session-1") }), want: false},
 		{name: "approval with session name", item: approval(func(item *WorkflowAttentionItem) { item.SessionName = textutil.Value("Session") }), want: false},
-		{name: "approval with suggestions", item: approval(func(item *WorkflowAttentionItem) { item.Suggestions = []string{} }), want: false},
-		{name: "approval with recommendation", item: approval(func(item *WorkflowAttentionItem) { item.RecommendedOptionIndex = textutil.Value(1) }), want: false},
 		{name: "approval with question metadata", item: approval(func(item *WorkflowAttentionItem) { item.Question = &WorkflowAttentionQuestionPrompt{} }), want: false},
 		{name: "approval with detail", item: approval(func(item *WorkflowAttentionItem) { item.DetailJSON = textutil.Value("{}") }), want: false},
 		{name: "interrupted without current node", item: interrupted(func(item *WorkflowAttentionItem) { item.CurrentNode = nil }), want: false},
@@ -87,7 +91,6 @@ func TestWorkflowAttentionItemValidateEnforcesDiscriminatedVariants(t *testing.T
 		{name: "interrupted with blank session", item: interrupted(func(item *WorkflowAttentionItem) { item.SessionID = textutil.Value("") }), want: false},
 		{name: "interrupted with session name", item: interrupted(func(item *WorkflowAttentionItem) { item.SessionName = textutil.Value("Session") }), want: false},
 		{name: "interrupted with blank detail", item: interrupted(func(item *WorkflowAttentionItem) { item.DetailJSON = textutil.Value("") }), want: false},
-		{name: "interrupted with question", item: interrupted(func(item *WorkflowAttentionItem) { item.QuestionID = textutil.Value("question-1") }), want: false},
 		{name: "interrupted with approval snapshot", item: interrupted(func(item *WorkflowAttentionItem) { item.ApprovalSnapshot = workflowAttentionApprovalSnapshot() }), want: false},
 	}
 	for _, tt := range tests {
@@ -98,6 +101,15 @@ func TestWorkflowAttentionItemValidateEnforcesDiscriminatedVariants(t *testing.T
 			}
 		})
 	}
+}
+
+func validWorkflowAttentionRuntimeApproval(t *testing.T) WorkflowAttentionItem {
+	item := validWorkflowAttentionQuestion(t)
+	item.Question.Kind = WorkflowAttentionQuestionKindApproval
+	item.Question.Suggestions = nil
+	item.Question.RecommendedOptionIndex = nil
+	item.Question.ApprovalDecisions = []clientui.ApprovalDecision{clientui.ApprovalDecisionAllowOnce, clientui.ApprovalDecisionDeny}
+	return item
 }
 
 func TestWorkflowAttentionItemValidateRequiresStrictInterruptedDetailSchema(t *testing.T) {
@@ -143,7 +155,7 @@ func TestWorkflowAttentionApprovalSnapshotValidateRejectsMalformedContents(t *te
 
 func TestWorkflowAttentionResponseValidationPrefixesItemErrorsAndBindsTaskResponses(t *testing.T) {
 	global := WorkflowAttentionListResponse{Items: []WorkflowAttentionItem{
-		validWorkflowAttentionQuestion(),
+		validWorkflowAttentionQuestion(t),
 		func() WorkflowAttentionItem {
 			item := validWorkflowAttentionApproval()
 			item.TaskID = "task-2"
@@ -153,7 +165,7 @@ func TestWorkflowAttentionResponseValidationPrefixesItemErrorsAndBindsTaskRespon
 	}}
 	requireWorkflowAttentionIndexedError(t, global.Validate(), "items[1].approval_id")
 
-	taskResponse := WorkflowTaskAttentionListResponse{Items: []WorkflowAttentionItem{validWorkflowAttentionQuestion()}}
+	taskResponse := WorkflowTaskAttentionListResponse{Items: []WorkflowAttentionItem{validWorkflowAttentionQuestion(t)}}
 	if err := taskResponse.Validate(); err != nil {
 		t.Fatalf("task attention response rejected a valid item: %v", err)
 	}
@@ -215,27 +227,24 @@ func TestWorkflowTaskActivityResponseValidationOnlyAcceptsDurableActivity(t *tes
 	}
 }
 
-func validWorkflowAttentionQuestion() WorkflowAttentionItem {
-	sessionID := "session-1"
+func validWorkflowAttentionQuestion(t *testing.T) WorkflowAttentionItem {
 	sessionName := "Session one"
-	questionID := "question-1"
 	recommended := 1
 	return WorkflowAttentionItem{
-		ID:                     "question:task-1:node-1:session-1:question-1",
-		ProjectID:              "project-1",
-		TaskID:                 "task-1",
-		TaskShortID:            "KENT-1",
-		TaskTitle:              "Task",
-		WorkflowID:             runtimeids.NewWorkflowID(),
-		Kind:                   "question",
-		Message:                textutil.Value("Continue?"),
-		CurrentNode:            &WorkflowTaskCurrentNode{NodeID: "node-1", SessionID: &sessionID},
-		SessionID:              &sessionID,
-		SessionName:            &sessionName,
-		QuestionID:             &questionID,
-		Suggestions:            []string{"Continue"},
-		RecommendedOptionIndex: &recommended,
+		ID:          "question:task-1:node-1:session-1:question-1",
+		ProjectID:   "project-1",
+		TaskID:      "task-1",
+		TaskShortID: "KENT-1",
+		TaskTitle:   "Task",
+		WorkflowID:  runtimeids.NewWorkflowID(),
+		Kind:        "question",
+		Message:     textutil.Value("Continue?"),
+		CurrentNode: &WorkflowTaskCurrentNode{NodeID: "node-1"},
+		SessionName: &sessionName,
 		Question: &WorkflowAttentionQuestionPrompt{
+			SessionID:              mustPromptBatchSessionID(t),
+			StepID:                 mustPromptBatchStepID(t),
+			PromptID:               clientui.PromptID("question-1"),
 			Kind:                   WorkflowAttentionQuestionKindOrdinary,
 			Suggestions:            []string{"Continue"},
 			RecommendedOptionIndex: &recommended,

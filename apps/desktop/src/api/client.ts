@@ -1,12 +1,12 @@
-import type { z } from "zod";
-
 import type { AttentionNotificationEventHandler } from "./attentionNotifications";
 import { attentionNotificationRpcHandler } from "./attentionNotificationSubscription";
 import type { ApiConnectionSource, ApiService, ApiSubscription } from "./apiService";
+import { parseCatalogInput, parseCatalogResponse, requireCatalogProject } from "./clientCatalog";
 import { parseRpcResponse as parse } from "./clientParse";
 import * as taskLifecycle from "./clientTaskLifecycle";
 import * as taskDependencies from "./clientTaskDependencies";
 import * as taskDetail from "./clientTaskDetail";
+import * as promptAnswers from "./clientPromptAnswers";
 import * as taskSearch from "./clientTaskSearch";
 import {
   workflowGraphDraftPayload,
@@ -15,7 +15,8 @@ import {
 } from "./clientWorkflowGraph";
 import type {
   BoardNodeCardsInput,
-  QuestionAnswerInput,
+  PromptAnswerBatchInput,
+  PromptAnswerBatchResponse,
   TaskEditInput,
   TaskMoveInput,
   TaskResumeInput,
@@ -97,7 +98,7 @@ import {
   sessionPageResponseSchema,
   workspacePageTokenSchema,
 } from "./schemas/catalog";
-import { CatalogContractError, ContractError } from "./errors";
+import { CatalogContractError } from "./errors";
 import { readinessSchema } from "./schemas/status";
 import { workflowIDSchema } from "./schemas/workflowID";
 import {
@@ -125,25 +126,6 @@ import type { TaskSearchInput, TaskSearchResponse } from "./taskSearch";
 import { workflowProjectEventRpcHandler } from "./workflowProjectEvents";
 import * as workflowBoard from "./clientWorkflowBoard";
 import * as workflowLabels from "./clientWorkflowLabels";
-
-function parseCatalogInput<T>(operation: string, schema: z.ZodType<T>, value: unknown): T {
-  const result = schema.safeParse(value);
-  if (result.success) return result.data;
-  throw new ContractError(`${operation} did not match the catalog contract.`, result.error.issues.map((issue) => ({
-    code: issue.code,
-    path: issue.path.map(String),
-  })));
-}
-
-function parseCatalogResponse<T>(method: string, schema: z.ZodType<T>, value: unknown): T {
-  try { return parse(method, schema, value); } catch (error) {
-    throw error instanceof ContractError ? CatalogContractError.malformedResponse(method, error) : error;
-  }
-}
-
-function requireCatalogProject(method: string, expected: string, actual: string): void {
-  if (actual !== expected) throw CatalogContractError.projectMismatch(method, expected, actual);
-}
 
 export const guiTaskCommentAuthor = "user";
 
@@ -177,7 +159,11 @@ export class ApiClient implements ApiService {
     category: SessionCategory,
     position: SessionPagePosition,
   ): Promise<SessionCatalogPage> {
-    const validatedProjectID = parseCatalogInput("session.page project ID", canonicalProjectIDSchema, projectID);
+    const validatedProjectID = parseCatalogInput(
+      "session.page project ID",
+      canonicalProjectIDSchema,
+      projectID,
+    );
     const validatedCategory = parseCatalogInput("session.page category", sessionCategorySchema, category);
     const validatedPosition = parseCatalogInput("session.page position", sessionPagePositionSchema, position);
     const response = parseCatalogResponse(
@@ -198,7 +184,11 @@ export class ApiClient implements ApiService {
   }
 
   async listWorkspaces(projectID: string, pageToken?: string): Promise<WorkspaceList> {
-    const validatedProjectID = parseCatalogInput("project.workspace.list project ID", canonicalProjectIDSchema, projectID);
+    const validatedProjectID = parseCatalogInput(
+      "project.workspace.list project ID",
+      canonicalProjectIDSchema,
+      projectID,
+    );
     const validatedPageToken =
       pageToken === undefined
         ? undefined
@@ -426,7 +416,10 @@ export class ApiClient implements ApiService {
     return parse(
       "workflow.validate",
       workflowValidationSchema,
-      await this.#transport.call("workflow.validate", { workflow_id: workflowIDSchema.parse(workflowID), mode }),
+      await this.#transport.call("workflow.validate", {
+        workflow_id: workflowIDSchema.parse(workflowID),
+        mode,
+      }),
     );
   }
 
@@ -514,7 +507,9 @@ export class ApiClient implements ApiService {
     return parse(
       "workflow.deletePreview",
       workflowDeletePreviewSchema,
-      await this.#transport.call("workflow.deletePreview", { workflow_id: workflowIDSchema.parse(workflowID) }),
+      await this.#transport.call("workflow.deletePreview", {
+        workflow_id: workflowIDSchema.parse(workflowID),
+      }),
     );
   }
 
@@ -672,8 +667,8 @@ export class ApiClient implements ApiService {
     await this.#transport.call("workflow.task.comment.delete", { comment_id: commentID });
   }
 
-  async answerQuestion(input: QuestionAnswerInput): Promise<void> {
-    await taskDetail.answerQuestion(this.#transport, input);
+  async answerPromptBatch(input: PromptAnswerBatchInput): Promise<PromptAnswerBatchResponse> {
+    return promptAnswers.answerPromptBatch(this.#transport, input);
   }
 
   async listPendingAsks(sessionID: string): Promise<readonly PendingAsk[]> {

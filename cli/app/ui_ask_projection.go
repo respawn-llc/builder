@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime/debug"
+	"strconv"
 
 	"core/cli/tui"
 	"core/cli/tui/transcriptrender"
@@ -183,13 +184,13 @@ func (m *uiModel) handleQuestionProjectionError(result questionRenderResultMsg) 
 		promptID = string(m.ask.current.prompt.PromptID)
 	}
 	m.logf(
-		"ask.question_projection.error prompt_id=%q current_token=%d operation_token=%s rendered_at=%+v desired=%+v delivery_request_id=%q err=%q stack=%s",
+		"ask.question_projection.error prompt_id=%q current_token=%d operation_token=%s rendered_at=%+v desired=%+v delivery_generation=%s err=%q stack=%s",
 		promptID,
 		m.ask.currentToken,
 		result.request.operationToken,
 		questionRenderIdentityDiagnosticsFor(m.ask.activeProjection),
 		questionRenderIdentityDiagnostics(result.request.identity),
-		activePromptDeliveryRequestID(m.ask.activeDelivery),
+		activePromptDeliveryGeneration(m.ask.activeDelivery),
 		result.err.Error(),
 		result.stack,
 	)
@@ -223,9 +224,19 @@ func questionRenderIdentityDiagnosticsFor(projection *activeQuestionProjection) 
 	return &diagnostic
 }
 
-func activePromptDeliveryRequestID(delivery *activePromptAnswerDelivery) string {
-	if delivery == nil {
-		return ""
+type promptDeliveryGenerationDiagnostic uint64
+
+func (g *promptDeliveryGenerationDiagnostic) String() string {
+	if g == nil {
+		return "<none>"
 	}
-	return delivery.requestID.String()
+	return strconv.FormatUint(uint64(*g), 10)
+}
+
+func activePromptDeliveryGeneration(delivery *activePromptAnswerDelivery) *promptDeliveryGenerationDiagnostic {
+	if delivery == nil {
+		return nil
+	}
+	generation := promptDeliveryGenerationDiagnostic(delivery.generation)
+	return &generation
 }

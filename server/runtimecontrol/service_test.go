@@ -655,7 +655,7 @@ func TestServiceSubmitUserTurnStillCancelsOnExplicitInterrupt(t *testing.T) {
 }
 
 func TestServicePendingQuestionRejectsInterruptAndReleasesAfterResolution(t *testing.T) {
-	toolStarted := make(chan struct{})
+	toolStarted := make(chan string, 1)
 	client := &runtimeControlFakeClient{responses: []llm.Response{
 		{
 			Assistant: llm.Message{Role: llm.RoleAssistant},
@@ -691,9 +691,8 @@ func TestServicePendingQuestionRejectsInterruptAndReleasesAfterResolution(t *tes
 				return
 			}
 			select {
-			case <-toolStarted:
+			case toolStarted <- event.StepID:
 			default:
-				close(toolStarted)
 			}
 		},
 	})
@@ -704,8 +703,14 @@ func TestServicePendingQuestionRejectsInterruptAndReleasesAfterResolution(t *tes
 		_, err := service.SubmitUserTurn(context.Background(), firstRequest)
 		firstDone <- err
 	}()
+	var promptStepID runtimeids.StepID
 	select {
-	case <-toolStarted:
+	case rawStepID := <-toolStarted:
+		var err error
+		promptStepID, err = runtimeids.ParseStepID(rawStepID)
+		if err != nil {
+			t.Fatalf("parse prompt step id: %v", err)
+		}
 	case err := <-firstDone:
 		t.Fatalf("ask_question turn ended before tool start: %v", err)
 	case <-time.After(3 * time.Second):
@@ -737,13 +742,22 @@ func TestServicePendingQuestionRejectsInterruptAndReleasesAfterResolution(t *tes
 	}); !errors.Is(err, serverapi.ErrRuntimeCommandNotAccepted) || !errors.Is(err, sessionruntime.ErrExecutionPromptPending) {
 		t.Fatalf("pending-question Interrupt error = %v, want typed pending-prompt rejection", err)
 	}
-	if err := service.authority.SubmitPromptResolution(
+	results, err := service.authority.ResolvePromptBatch(
+		context.Background(),
 		sessionID,
-		"ask-cancel",
-		tools.AskQuestionAnswer{Freeform: textutil.Value("continue")},
-		nil,
-	); err != nil {
+		promptStepID,
+		[]sessionruntime.PromptAnswerCommand{{
+			PromptID: "ask-cancel",
+			Payload: sessionruntime.PromptQuestionAnswerCommand{
+				Answer: tools.AskQuestionAnswer{Freeform: textutil.Value("continue")},
+			},
+		}},
+	)
+	if err != nil {
 		t.Fatalf("resolve pending question: %v", err)
+	}
+	if len(results) != 1 || results[0].Outcome != sessionruntime.PromptAnswerOutcomeResolved {
+		t.Fatalf("prompt answer results = %+v, want resolved", results)
 	}
 	select {
 	case err := <-firstDone:

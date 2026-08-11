@@ -72,8 +72,9 @@ const card = {
 describe("workflow board schemas", () => {
   it("preserves pending-ask recommendation presence and rejects invalid indexes", () => {
     const pendingAsk = {
-      AskID: "ask-1",
+      PromptID: "ask-1",
       SessionID: "session-1",
+      StepID: "11111111-1111-4111-8111-111111111111",
       Question: "Choose?",
       Suggestions: ["one", "two"],
       CreatedAt: "2026-08-03T00:00:00Z",

@@ -8,11 +8,17 @@ const baseAttentionItem = {
   task_id: "task-1",
   task_short_id: "KT-1",
   task_title: "Task",
-  current_node: { node_id: "node-1", transition_branch_key: null, session_id: "session-1" },
-  session_id: "session-1",
+  current_node: { node_id: "node-1", transition_branch_key: null, session_id: null },
   session_name: "Session one",
-  question_id: "ask-1",
   message: "Approve protected path?",
+  question: {
+    session_id: "session-1",
+    step_id: "22222222-2222-4222-8222-222222222222",
+    prompt_id: "ask-1",
+    kind: "ordinary",
+    suggestions: [],
+    recommended_option_index: null,
+  },
   occurred_at_unix_ms: 1,
 };
 
@@ -83,8 +89,7 @@ describe("attentionItemSchema", () => {
     ) {
       throw new Error("attention variants did not decode to their discriminants");
     }
-    expect(question.question).toBeNull();
-    expect(question.recommendedOptionIndex).toBeNull();
+    expect(question.question.promptID).toBe("ask-1");
     expect(question.sessionName).toBe("Session one");
     expect(approval.approvalSnapshot).not.toBeNull();
     expect(interrupted.currentNode.nodeID).toBe("node-1");
@@ -101,11 +106,21 @@ describe("attentionItemSchema", () => {
       { ...baseAttentionItem, task_title: "" },
       { ...baseAttentionItem, workflow_id: "" },
       { ...baseAttentionItem, current_node: { ...baseAttentionItem.current_node, node_id: "" } },
-      { ...baseAttentionItem, question_id: "" },
+      { ...baseAttentionItem, question: { ...baseAttentionItem.question, prompt_id: "" } },
+      { ...baseAttentionItem, question: { ...baseAttentionItem.question, session_id: "" } },
+      { ...baseAttentionItem, question: { ...baseAttentionItem.question, step_id: "" } },
       { ...baseAttentionItem, session_name: "" },
       { ...baseAttentionItem, approval_id: "approval-1" },
       { ...baseAttentionItem, approval_snapshot: approvalSnapshot },
       { ...baseAttentionItem, detail_json: "{}" },
+      { ...baseAttentionItem, session_id: "session-1" },
+      { ...baseAttentionItem, question_id: "ask-1" },
+      { ...baseAttentionItem, suggestions: [] },
+      { ...baseAttentionItem, recommended_option_index: 1 },
+      {
+        ...baseAttentionItem,
+        current_node: { ...baseAttentionItem.current_node, session_id: "session-1" },
+      },
       { ...approvalAttentionItem, approval_id: "" },
       (() => {
         const item = { ...approvalAttentionItem };
@@ -159,6 +174,9 @@ describe("attentionItemSchema", () => {
     const item = attentionItemSchema.parse({
       ...baseAttentionItem,
       question: {
+        prompt_id: baseAttentionItem.question.prompt_id,
+        session_id: baseAttentionItem.question.session_id,
+        step_id: baseAttentionItem.question.step_id,
         kind: "approval",
         approval_decisions: ["allow_once", "allow_session", "deny"],
       },
@@ -168,10 +186,12 @@ describe("attentionItemSchema", () => {
     }
 
     expect(item.question).toEqual({
+      promptID: "ask-1",
+      sessionID: "session-1",
+      stepID: "22222222-2222-4222-8222-222222222222",
       kind: "approval",
       approvalDecisions: ["allow_once", "allow_session", "deny"],
     });
-    expect(item.suggestions).toEqual([]);
   });
 
   it("accepts omitted client-owned fallback messages", () => {

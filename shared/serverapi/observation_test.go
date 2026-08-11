@@ -4,18 +4,21 @@ import (
 	"testing"
 
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 )
 
 func TestWorkflowTaskObservationResponseValidatesTypedOutcomes(t *testing.T) {
-	sessionID := "9b9447ad-04e7-4c70-b4b0-f0eb1a53b47d"
+	sessionID := observationSessionID(t, "9b9447ad-04e7-4c70-b4b0-f0eb1a53b47d")
+	rawSessionID := sessionID.String()
 	question := ObservationQuestion{Ask: &clientui.PendingAsk{
-		AskID: "ask-1", SessionID: sessionID, Question: "Continue?",
+		PromptID: "ask-1", SessionID: sessionID, StepID: observationStepID(t),
+		Question: "Continue?",
 	}}
 	response := WorkflowTaskObservationResponse{
 		TaskID: "task-1", TaskShortID: "KNT-42",
 		Outcomes: []WorkflowTaskObservationOutcome{{
 			Kind:      WorkflowTaskObservationQuestion,
-			SessionID: &sessionID,
+			SessionID: &rawSessionID,
 			Question:  &question,
 		}},
 	}
@@ -39,7 +42,7 @@ func TestWorkflowTaskObservationResponseRejectsInvalidOutcomePayloads(t *testing
 			Outcomes: []WorkflowTaskObservationOutcome{{
 				Kind: WorkflowTaskObservationQuestion,
 				Question: &ObservationQuestion{Ask: &clientui.PendingAsk{
-					AskID: "ask-1", SessionID: "session-1",
+					PromptID: "ask-1", SessionID: observationSessionID(t, "session-1"),
 				}},
 			}},
 		},
@@ -48,7 +51,8 @@ func TestWorkflowTaskObservationResponseRejectsInvalidOutcomePayloads(t *testing
 			Outcomes: []WorkflowTaskObservationOutcome{{
 				Kind: WorkflowTaskObservationQuestion,
 				Question: &ObservationQuestion{Approval: &clientui.PendingApproval{
-					SessionID: "session-1", Question: "Allow?",
+					PromptID: "approval-1", SessionID: observationSessionID(t, "session-1"),
+					StepID: observationStepID(t), Question: "Allow?",
 				}},
 			}},
 		},
@@ -69,9 +73,13 @@ func TestWorkflowTaskObservationResponseRejectsInvalidOutcomePayloads(t *testing
 
 func TestRuntimeLiveWatchResponseRejectsQuestionSessionMismatch(t *testing.T) {
 	for _, question := range []ObservationQuestion{
-		{Ask: &clientui.PendingAsk{AskID: "ask-1", SessionID: "session-b", Question: "Continue?"}},
+		{Ask: &clientui.PendingAsk{
+			PromptID: "ask-1", SessionID: observationSessionID(t, "session-b"),
+			StepID: observationStepID(t), Question: "Continue?",
+		}},
 		{Approval: &clientui.PendingApproval{
-			ApprovalID: "approval-1", SessionID: "session-b", Question: "Allow?",
+			PromptID: "approval-1", SessionID: observationSessionID(t, "session-b"),
+			StepID: observationStepID(t), Question: "Allow?",
 			Options: []clientui.ApprovalOption{{Decision: clientui.ApprovalDecisionAllowOnce, Label: "Allow once"}},
 		}},
 	} {
@@ -86,4 +94,22 @@ func TestRuntimeLiveWatchResponseRejectsQuestionSessionMismatch(t *testing.T) {
 			t.Fatalf("question session mismatch unexpectedly validated: %+v", response)
 		}
 	}
+}
+
+func observationSessionID(t *testing.T, raw string) runtimeids.SessionID {
+	t.Helper()
+	id, err := runtimeids.ParseSessionID(raw)
+	if err != nil {
+		t.Fatalf("ParseSessionID(%q): %v", raw, err)
+	}
+	return id
+}
+
+func observationStepID(t *testing.T) runtimeids.StepID {
+	t.Helper()
+	id, err := runtimeids.ParseStepID("22222222-2222-4222-8222-222222222222")
+	if err != nil {
+		t.Fatalf("ParseStepID: %v", err)
+	}
+	return id
 }

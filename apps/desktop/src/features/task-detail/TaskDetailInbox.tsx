@@ -1,34 +1,49 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ContractError, parseTaskSetupRecoveryDetail, type AttentionItem, type TaskDetail } from "@/api";
 import type { TaskDetailInitialFocus } from "@/app-facade";
 import { sameTaskDetailInitialFocus } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
 import { ApprovalBox, InterruptedCurrentNodeBox, QuestionBox } from "./TaskDetailAttention";
+import { taskDetailAttentionRowKey } from "./TaskDetailAttentionRowKey";
 import { emptyQuestionSelection, type QuestionSelectionState } from "./TaskDetailQuestionState";
+import { promptAnswerKey, type PromptAnswerKey, type PromptAnswerState } from "./PromptAnswerState";
+import { PromptPrimaryControlRegistry, type PromptPrimaryFocusRequest } from "./PromptPrimaryControlRegistry";
 import type { useTaskMutations } from "./useTaskDetailData";
+import type { QuestionAnswerMutation } from "./TaskDetailQuestionAnswer";
 
 export function TaskInbox({
+  answerQuestion,
   attentionItems,
   currentVersion,
   detail,
   disabled,
   initialFocus,
   mutations,
-  questionSelections,
+  primaryFocusRequest,
+  promptAnswerState,
   onQuestionSelectionChange,
 }: Readonly<{
+  answerQuestion: QuestionAnswerMutation;
   attentionItems: readonly AttentionItem[];
   currentVersion: number;
   detail: TaskDetail;
   disabled: boolean;
   initialFocus?: TaskDetailInitialFocus | undefined;
   mutations: ReturnType<typeof useTaskMutations>;
-  questionSelections: ReadonlyMap<string, QuestionSelectionState>;
-  onQuestionSelectionChange: (askID: string, selection: QuestionSelectionState) => void;
+  primaryFocusRequest?: PromptPrimaryFocusRequest | undefined;
+  promptAnswerState: PromptAnswerState;
+  onQuestionSelectionChange: (key: PromptAnswerKey, selection: QuestionSelectionState) => void;
 }>) {
   const { logger } = useAppServices();
   const missingFocusLogKeyRef = useRef<TaskDetailInitialFocus | null>(null);
+  const [primaryControls] = useState(() => new PromptPrimaryControlRegistry());
   const focusedAttentionID = focusedAttentionItemID(attentionItems, initialFocus);
+
+  useLayoutEffect(() => {
+    if (primaryFocusRequest !== undefined) {
+      primaryControls.focus(primaryFocusRequest.key);
+    }
+  }, [primaryControls, primaryFocusRequest]);
 
   useEffect(() => {
     if (initialFocus === undefined || focusedAttentionID !== undefined) {
@@ -48,14 +63,16 @@ export function TaskInbox({
     <>
       {attentionItems.map((item) => (
         <InboxItem
+          answerQuestion={answerQuestion}
           attention={item}
           currentVersion={currentVersion}
           disabled={disabled}
           focusOnMount={item.id === focusedAttentionID}
-          key={item.id}
+          key={taskDetailAttentionRowKey(item)}
           mutations={mutations}
           onQuestionSelectionChange={onQuestionSelectionChange}
-          questionSelections={questionSelections}
+          primaryControls={primaryControls}
+          promptAnswerState={promptAnswerState}
           task={detail}
         />
       ))}
@@ -86,8 +103,8 @@ function focusedAttentionItemID(
   if (initialFocus.kind === "question") {
     const itemIDByAskID = new Map<string, string>();
     for (const item of attentionItems) {
-      if (item.kind === "question" && !itemIDByAskID.has(item.questionID)) {
-        itemIDByAskID.set(item.questionID, item.id);
+      if (item.kind === "question" && !itemIDByAskID.has(item.question.promptID)) {
+        itemIDByAskID.set(item.question.promptID, item.id);
       }
     }
     return initialFocus.askIDs
@@ -99,29 +116,40 @@ function focusedAttentionItemID(
       (item) => item.kind === "approval" && item.approvalID === initialFocus.approvalID,
     )?.id;
   }
-  return attentionItems.find((item) => {
-    if (item.kind !== "interrupted_current_node") return false;
-    try { return parseTaskSetupRecoveryDetail(item.detailJSON) !== null; } catch (error) { if (error instanceof ContractError) return false; throw error; }
-  })?.id ?? attentionItems.find((item) => item.kind === "interrupted_current_node")?.id;
+  return (
+    attentionItems.find((item) => {
+      if (item.kind !== "interrupted_current_node") return false;
+      try {
+        return parseTaskSetupRecoveryDetail(item.detailJSON) !== null;
+      } catch (error) {
+        if (error instanceof ContractError) return false;
+        throw error;
+      }
+    })?.id ?? attentionItems.find((item) => item.kind === "interrupted_current_node")?.id
+  );
 }
 
 function InboxItem({
+  answerQuestion,
   attention,
   currentVersion,
   disabled,
   focusOnMount,
   mutations,
   onQuestionSelectionChange,
-  questionSelections,
+  primaryControls,
+  promptAnswerState,
   task,
 }: Readonly<{
+  answerQuestion: QuestionAnswerMutation;
   attention: AttentionItem;
   currentVersion: number;
   disabled: boolean;
   focusOnMount: boolean;
   mutations: ReturnType<typeof useTaskMutations>;
-  onQuestionSelectionChange: (askID: string, selection: QuestionSelectionState) => void;
-  questionSelections: ReadonlyMap<string, QuestionSelectionState>;
+  onQuestionSelectionChange: (key: PromptAnswerKey, selection: QuestionSelectionState) => void;
+  primaryControls: PromptPrimaryControlRegistry;
+  promptAnswerState: PromptAnswerState;
   task: TaskDetail;
 }>) {
   const focusTargetRef = useRef<HTMLDivElement | null>(null);
@@ -145,19 +173,19 @@ function InboxItem({
   }, [focusOnMount]);
 
   if (attention.kind === "question") {
-    const questionSelection =
-      questionSelections.get(attention.questionID) ?? emptyQuestionSelection(attention.questionID);
+    const key = promptAnswerKey(attention);
+    const questionSelection = promptAnswerState.selection(key) ?? emptyQuestionSelection();
     return (
       <div ref={focusTargetRef}>
         <QuestionBox
           attention={attention}
-          answerQuestion={mutations.answerQuestion}
+          answerQuestion={answerQuestion}
           disabled={disabled}
           onSelectionStateChange={(selection) => {
-            onQuestionSelectionChange(attention.questionID, selection);
+            onQuestionSelectionChange(key, selection);
           }}
+          registerPrimaryControl={(control) => primaryControls.register(key, control)}
           selectionState={questionSelection}
-          taskId={task.id}
         />
       </div>
     );
@@ -176,7 +204,11 @@ function InboxItem({
   }
   return (
     <div ref={focusTargetRef}>
-      <InterruptedCurrentNodeBox attention={attention} canResume={task.actions.canResume} disabled={disabled} />
+      <InterruptedCurrentNodeBox
+        attention={attention}
+        canResume={task.actions.canResume}
+        disabled={disabled}
+      />
     </div>
   );
 }

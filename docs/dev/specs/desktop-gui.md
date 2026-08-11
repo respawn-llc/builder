@@ -348,10 +348,22 @@
 
 - Inbox lists the global infinite-scrolling attention feed. Task Detail owns Question and Approval actions through its bounded Task attention view.
 - Inbox-opened Task Detail can move through the live Inbox order with Previous and Next. After resolution removes the open Task, Next advances to the replacement item. These controls are unavailable outside Inbox.
-- The top Task Detail action opens or focuses the highest-priority unresolved attention. Unresolved items retain their applicable inline controls; sibling setup interruptions represented by a canonical recovery item are informational as defined by [Workflow Orchestration](workflow-orchestration.md#execution-targets-and-worktrees).
+- The top Task Detail action opens or focuses the highest-priority unresolved attention. Every unresolved item not awaiting an answer result retains its applicable inline controls; sibling setup interruptions represented by a canonical recovery item are informational as defined by [Workflow Orchestration](workflow-orchestration.md#execution-targets-and-worktrees).
 - Home Inbox shows only task-scoped attention. It has no Workflow-validity badge or section.
 - Questions support suggestions, freeform commentary, recommendations, pointer or keyboard selection, and ordinary focus navigation. An option Question selects its valid recommended option by default and otherwise selects option 1; malformed recommendation metadata follows the same option-1 fallback. Live refresh preserves the user's selection and draft. Selection and recommendation remain distinct states. A Question with no suggestions has only freeform response and does not offer `Neither`.
 - Runtime Approvals use the actual prompt, approval-specific choices, select the one-time allow choice when offered and otherwise the first offered choice, and do not offer `Neither`; Deny requires commentary. Workflow transition approval offers only Approve and shows source Node, Transition Key and label, target Nodes, required values, commentary, Workflow Version, and stale warning.
+- Task Detail sends each `Submit answer` independently and does not collect responses across Questions or runtime Approvals.
+- Selecting `Submit answer` removes that prompt from local attention before Kent reports the result.
+- Task Detail moves focus to the next unresolved prompt's first answer control and keeps the attention list at the submitted prompt's position.
+- The next prompt accepts edits and submission while earlier answer deliveries are in progress. Answer deliveries may finish in a different order.
+- After every answer attempt settles, Task Detail refetches Task attention. It restores the submitted selection and commentary only if refreshed attention still contains the exact Session, Step, and prompt identity; otherwise it discards that answer state.
+- If delivery fails while the same Task Detail is present and refreshed attention still contains the prompt, Task Detail restores it in server order, surfaces the failure, and permits manual retry without moving focus or scroll away from another prompt being edited.
+- If the attention refetch fails, Task Detail restores the prompt from cached attention with its submitted selection and commentary, surfaces the reconciliation failure, and permits manual retry. A retry may report that the prompt was already resolved.
+- Task Detail does not replay a failed answer automatically.
+- If delivery fails after the operator leaves the originating Task Detail, Desktop discards the submitted answer state and identifies the Task in the failure notification. Reopening the Task uses server-provided defaults for an unresolved prompt.
+- Leaving Task Detail discards unsubmitted Question and runtime Approval answer state.
+- A prompt resolved by another client disappears without feedback.
+- Task Detail does not offer Decline for Questions or runtime Approvals.
 - Approving a transition that first needs an Execution Target uses the same selection dialog. Dismissing it leaves Approval pending. Interrupt acts immediately without confirmation.
 - Task Detail opened from Inbox remains open after resolution while Inbox updates in the background.
 - Desktop attention includes workflow Questions, workflow Approvals, ordinary Session Questions and Approvals with a Desktop response surface, and executable Nodes interrupted by errors. It excludes user interruptions.

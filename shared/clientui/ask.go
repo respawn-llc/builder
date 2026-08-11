@@ -1,10 +1,15 @@
 package clientui
 
-import "time"
+import (
+	"time"
+
+	"core/shared/runtimeids"
+)
 
 type PendingAsk struct {
-	AskID                  string
-	SessionID              string
+	PromptID               PromptID
+	SessionID              runtimeids.SessionID
+	StepID                 runtimeids.StepID
 	Question               string
 	Suggestions            []string
 	RecommendedOptionIndex *int
