@@ -126,7 +126,7 @@ func (o *WorkspaceChatDraftOwner) TransformWorkspaceChatDraft(ctx context.Contex
 	if err := o.persistence.ReplaceWorkspaceChatDraft(ctx, id, replacement); err != nil {
 		return WorkspaceChatDraftResolution{}, err
 	}
-	resolved, err := ResolveWorkspaceChatDraft(input, &next)
+	resolved, err := workspaceChatDraftResolution(next, current.Baselines, current.limits)
 	if err != nil {
 		return WorkspaceChatDraftResolution{}, err
 	}
