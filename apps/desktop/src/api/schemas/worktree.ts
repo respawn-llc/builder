@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import type { SetupOperationID } from "../setupOperationID";
 import { parseWorktreeOperationID } from "../worktreeOperationID";
+import { nonBlankString as sharedNonBlankString } from "./common";
 
 const strict = z.strictObject;
 type DeepReadonly<T> = T extends (...args: never[]) => unknown
@@ -12,9 +13,10 @@ type DeepReadonly<T> = T extends (...args: never[]) => unknown
       ? { readonly [Key in keyof T]: DeepReadonly<T[Key]> }
       : T;
 type Output<Schema extends z.ZodType> = DeepReadonly<z.output<Schema>>;
-export const nonBlankString = z.string().refine((value) => value.trim().length > 0, {
-  message: "Expected a non-blank string.",
-});
+export const nonBlankString = z.string().refine(
+  (value) => sharedNonBlankString.safeParse(value).success,
+  { message: "Expected a non-blank string." },
+);
 const nullableNonBlankString = nonBlankString.nullable();
 export const optionalNonBlankString = nonBlankString.optional().transform((value) => value ?? null);
 export const worktreeOperationIDSchema = z.string().transform((value, context) => {

@@ -5,14 +5,18 @@ import { ContractError, RpcError } from "./errors";
 import type { JsonValue } from "./json";
 import { rpcErrorCodes } from "./rpcErrorCodes";
 import * as worktree from "./schemas/worktree";
-import type { RpcTransport } from "./transport";
+import type { RpcCallOptions, RpcTransport } from "./transport";
 import { decodeWorktreeSetupRetainedError, type RetainedPreviousWorktree } from "./worktreeSetup";
 import { parseWorktreeOperationID } from "./worktreeOperationID";
 
 export const getWorktreeStatus = async (transport: RpcTransport, sessionID: string) =>
-  call(transport, "worktree.status", session(sessionID), worktree.worktreeStatusResponseSchema);
+  call(transport, "worktree.status", session(sessionID), {
+    schema: worktree.worktreeStatusResponseSchema,
+  });
 export const listWorktrees = async (transport: RpcTransport, sessionID: string) =>
-  call(transport, "worktree.list", session(sessionID), worktree.worktreeListResponseSchema);
+  call(transport, "worktree.list", session(sessionID), {
+    schema: worktree.worktreeListResponseSchema,
+  });
 export const resolveWorktreeSelector = factRead(
   "worktree.selector.resolve",
   "selector",
@@ -46,7 +50,7 @@ export async function createWorktree(transport: RpcTransport, input: worktree.Wo
           : resolution.resolvedRef,
       ...(resolution.kind === "new_branch" ? { create_branch: true, branch_name: resolution.input } : {}),
     },
-    worktree.worktreeCreateResponseSchema,
+    { schema: worktree.worktreeCreateResponseSchema, options: { timeoutMs: null } },
   );
 }
 
@@ -64,7 +68,7 @@ export async function switchWorktree(
     authority.kind === "enter"
       ? { ...session(sessionID), operation_id: id.toJSONValue(), selector: authority.selector }
       : { ...session(sessionID), operation_id: id.toJSONValue() },
-    worktree.worktreeScheduledAcknowledgementSchema,
+    { schema: worktree.worktreeScheduledAcknowledgementSchema },
   );
   requireMatchingOperationID(id.toJSONValue(), result);
   return result;
@@ -95,7 +99,7 @@ export async function deleteWorktree(
       force_folder_removal: authority.cleanliness.kind !== "clean",
       branch_cleanup_policy: choice === "confirm" ? "auto_if_kent_created" : "delete_safe",
     },
-    worktree.worktreeDeleteResultSchema,
+    { schema: worktree.worktreeDeleteResultSchema },
   );
   if (result.kind === "scheduled") {
     requireMatchingOperationID(id.toJSONValue(), result.acknowledgement);
@@ -106,7 +110,12 @@ export async function deleteWorktree(
 const session = (sessionID: string) => ({ session_id: worktree.nonBlankString.parse(sessionID) });
 function factRead<Output>(method: string, fact: "selector" | "target", schema: z.ZodType<Output>) {
   return async (transport: RpcTransport, sessionID: string, value: string) =>
-    call(transport, method, { ...session(sessionID), [fact]: worktree.nonBlankString.parse(value) }, schema);
+    call(
+      transport,
+      method,
+      { ...session(sessionID), [fact]: worktree.nonBlankString.parse(value) },
+      { schema },
+    );
 }
 function requireMatchingOperationID(
   expected: string,
@@ -116,14 +125,16 @@ function requireMatchingOperationID(
     throw new ContractError("Server returned a different Worktree operation identity.");
   }
 }
+type CallContract<T> = Readonly<{ schema: z.ZodType<T>; options?: RpcCallOptions }>;
 async function call<T>(
   transport: RpcTransport,
   method: string,
   params: JsonValue,
-  schema: z.ZodType<T>,
+  contract: CallContract<T>,
 ): Promise<T> {
+  const { schema, options } = contract;
   try {
-    return parseRpcResponse(method, schema, await transport.call(method, params));
+    return parseRpcResponse(method, schema, await transport.call(method, params, options));
   } catch (error) {
     throw decodeWorktreeError(error) ?? error;
   }

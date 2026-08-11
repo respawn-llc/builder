@@ -144,6 +144,9 @@ describe("Desktop Worktree client", () => {
       completed: { cleanup: { kind: "not_requested" }, leftover_root: "/repo/feature" },
     });
     expect(completed.kind === "completed" ? completed.leftoverRoot : null).toBe("/repo/feature");
+    expect(
+      worktreeCleanlinessSchema.parse({ kind: "unknown", unknown_cause: " inspection failed " }),
+    ).toEqual({ kind: "unknown", unknownCause: " inspection failed " });
     expectRejected(
       () => worktreeTopologySchema.parse({ ...topology, extra: true }),
       () =>
@@ -158,6 +161,7 @@ describe("Desktop Worktree client", () => {
           problems: [],
         }),
       () => worktreeCleanlinessSchema.parse({ kind: "dirty", dirty_file_count: 0 }),
+      () => worktreeCleanlinessSchema.parse({ kind: "unknown", unknown_cause: " " }),
       () =>
         worktreeCreateTargetResolutionResponseSchema.parse({
           resolution: { kind: "new_branch", input: "feature", resolved_ref: "x" },
@@ -246,6 +250,11 @@ describe("Desktop Worktree client", () => {
     for (const { params } of mutations.slice(0, 3)) {
       expect(params).not.toHaveProperty("client_request_id");
     }
+    expect(mutations.slice(0, 3).map(({ options }) => options)).toEqual([
+      { timeoutMs: null },
+      { timeoutMs: null },
+      { timeoutMs: null },
+    ]);
     expect(mutations[3]).toMatchObject({ method: "worktree.enter", params: { selector: "feature" } });
     expect(mutations[4]?.method).toBe("worktree.leave");
     expect(mutations.slice(5).map(({ params }) => params)).toMatchObject([
