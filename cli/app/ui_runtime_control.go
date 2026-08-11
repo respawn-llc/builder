@@ -88,46 +88,6 @@ func (m *uiModel) showRuntimeGoal() (*clientui.RuntimeGoal, error) {
 	return nil, nil
 }
 
-func (m *uiModel) setRuntimeGoal(objective string) (*clientui.RuntimeGoal, error) {
-	m.checkTUIBlockingOperation("runtime control mutation", "set goal")
-	if client := m.runtimeClient(); client != nil {
-		result, err := client.SetGoal(objective)
-		m.observeRuntimeRequestResult(err)
-		return runtimeGoalFromMutationResult(result, nil), err
-	}
-	return nil, nil
-}
-
-func (m *uiModel) pauseRuntimeGoal() (*clientui.RuntimeGoal, error) {
-	m.checkTUIBlockingOperation("runtime control mutation", "pause goal")
-	if client := m.runtimeClient(); client != nil {
-		result, err := client.PauseGoal()
-		m.observeRuntimeRequestResult(err)
-		return runtimeGoalFromMutationResult(result, nil), err
-	}
-	return nil, nil
-}
-
-func (m *uiModel) resumeRuntimeGoal() (*clientui.RuntimeGoal, error) {
-	m.checkTUIBlockingOperation("runtime control mutation", "resume goal")
-	if client := m.runtimeClient(); client != nil {
-		result, err := client.ResumeGoal()
-		m.observeRuntimeRequestResult(err)
-		return runtimeGoalFromMutationResult(result, nil), err
-	}
-	return nil, nil
-}
-
-func (m *uiModel) clearRuntimeGoal() (*clientui.RuntimeGoal, error) {
-	m.checkTUIBlockingOperation("runtime control mutation", "clear goal")
-	if client := m.runtimeClient(); client != nil {
-		result, err := client.ClearGoal()
-		m.observeRuntimeRequestResult(err)
-		return runtimeGoalFromMutationResult(result, nil), err
-	}
-	return nil, nil
-}
-
 func (m *uiModel) submitRuntimeUserMessage(ctx context.Context, text string) (clientui.UserTurnSubmission, error) {
 	return m.submitRuntimeInput(ctx, clientui.RuntimeSubmitRequest{
 		ClientRequestID: runtimeids.NewRuntimeClientRequestID(),

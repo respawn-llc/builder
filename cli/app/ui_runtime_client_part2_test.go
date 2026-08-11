@@ -304,9 +304,6 @@ func TestRuntimeClientGoalMutationMethodsReturnTypedResults(t *testing.T) {
 			if !reflect.DeepEqual(result.Goal, tt.want) {
 				t.Fatalf("%s result Goal = %+v, want %+v", tt.name, result.Goal, tt.want)
 			}
-			if tt.want != nil {
-				assertRuntimeGoalConversionDropsAPITimestamps(t, runtimeGoalFromMutationResult(result, nil), tt.want)
-			}
 		})
 	}
 }
