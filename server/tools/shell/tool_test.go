@@ -183,137 +183,73 @@ func TestExecCommandEmptyDefaultWorkdirReturnsManagerErrorWithoutExecuting(t *te
 	waitForManagerCount(t, manager, 0, time.Second)
 }
 
-func TestExecCommandDeletedDefaultWorkdirReturnsExactValidationErrorWithoutExecuting(t *testing.T) {
-	workspace := t.TempDir()
-	resolvedWorkdir, err := filepath.Abs(ResolveWorkdir(workspace, ""))
-	if err != nil {
-		t.Fatalf("normalize default workdir: %v", err)
+func TestExecCommandWorkdirValidationErrors(t *testing.T) {
+	tests := []struct {
+		name, id, workdir, reason string
+		prepare                   func(*testing.T, string)
+	}{
+		{
+			name: "deleted default", id: "deleted-default-workdir", reason: missingWorkingDirectoryReason,
+			prepare: func(t *testing.T, workspace string) {
+				if err := os.RemoveAll(workspace); err != nil {
+					t.Fatalf("remove default workdir: %v", err)
+				}
+			},
+		},
+		{
+			name: "missing relative", id: "missing-relative-workdir",
+			workdir: filepath.Join("nested", "..", "missing", ".", "child"), reason: missingWorkingDirectoryReason,
+		},
+		{
+			name: "regular file", id: "file-workdir", workdir: "workdir-file",
+			reason: missingWorkingDirectoryReason,
+			prepare: func(t *testing.T, workspace string) {
+				if err := os.WriteFile(filepath.Join(workspace, "workdir-file"), []byte("not a directory"), 0o600); err != nil {
+					t.Fatalf("write workdir file: %v", err)
+				}
+			},
+		},
 	}
-	sideEffect := filepath.Join(t.TempDir(), "exec-command-deleted-default-side-effect")
-	if err := os.RemoveAll(workspace); err != nil {
-		t.Fatalf("remove default workdir: %v", err)
-	}
-	manager := newBackgroundTestManager(t)
-	execTool := NewExecCommandTool(workspace, 16_000, manager, "")
-	call := tools.Call{
-		ID:   "deleted-default-workdir",
-		Name: toolspec.ToolExecCommand,
-	}
-	call.Input, err = json.Marshal(map[string]any{
-		"cmd":           "touch " + sideEffect,
-		"shell":         "/bin/sh",
-		"login":         false,
-		"yield_time_ms": 1_000,
-	})
-	if err != nil {
-		t.Fatalf("marshal exec_command input: %v", err)
-	}
-	want := tools.ErrorResultWith(
-		call,
-		strings.Join([]string{resolvedWorkdir, missingWorkingDirectoryReason, existingWorkingDirectoryHint}, " "),
-		marshalNoHTMLEscape,
-	)
+	tests[2].reason = nonDirectoryWorkingDirectoryReason
 
-	got, err := execTool.Call(context.Background(), call)
-	if err != nil {
-		t.Fatalf("exec_command call returned transport error: %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			workspace := t.TempDir()
+			resolved, err := filepath.Abs(ResolveWorkdir(workspace, tt.workdir))
+			if err != nil {
+				t.Fatalf("normalize workdir: %v", err)
+			}
+			if tt.prepare != nil {
+				tt.prepare(t, workspace)
+			}
+			sideEffect := filepath.Join(t.TempDir(), "side-effect")
+			input := map[string]any{
+				"cmd": "touch " + sideEffect, "shell": "/bin/sh", "login": false, "yield_time_ms": 1_000,
+			}
+			if tt.workdir != "" {
+				input["workdir"] = tt.workdir
+			}
+			rawInput, err := json.Marshal(input)
+			if err != nil {
+				t.Fatalf("marshal exec_command input: %v", err)
+			}
+			call := tools.Call{ID: tt.id, Name: toolspec.ToolExecCommand, Input: rawInput}
+			manager := newBackgroundTestManager(t)
+			got, err := NewExecCommandTool(workspace, 16_000, manager, "").Call(context.Background(), call)
+			if err != nil {
+				t.Fatalf("exec_command call returned transport error: %v", err)
+			}
+			wantMessage := strings.Join([]string{resolved, tt.reason, existingWorkingDirectoryHint}, " ")
+			want := tools.ErrorResultWith(call, wantMessage, marshalNoHTMLEscape)
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("exec_command result = %#v, want %#v", got, want)
+			}
+			if _, err := os.Stat(sideEffect); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("command side effect = %v, want os.ErrNotExist", err)
+			}
+			waitForManagerCount(t, manager, 0, time.Second)
+		})
 	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("exec_command result = %#v, want %#v", got, want)
-	}
-	if _, err := os.Stat(sideEffect); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("deleted default workdir command side effect = %v, want os.ErrNotExist", err)
-	}
-	waitForManagerCount(t, manager, 0, time.Second)
-}
-
-func TestExecCommandMissingRelativeWorkdirUsesCleanAbsolutePath(t *testing.T) {
-	workspace := t.TempDir()
-	requestedWorkdir := filepath.Join("nested", "..", "missing", ".", "child")
-	resolvedWorkdir, err := filepath.Abs(ResolveWorkdir(workspace, requestedWorkdir))
-	if err != nil {
-		t.Fatalf("normalize custom workdir: %v", err)
-	}
-	sideEffect := filepath.Join(t.TempDir(), "exec-command-missing-relative-side-effect")
-	manager := newBackgroundTestManager(t)
-	execTool := NewExecCommandTool(workspace, 16_000, manager, "")
-	call := tools.Call{
-		ID:   "missing-relative-workdir",
-		Name: toolspec.ToolExecCommand,
-	}
-	call.Input, err = json.Marshal(map[string]any{
-		"cmd":           "touch " + sideEffect,
-		"workdir":       requestedWorkdir,
-		"shell":         "/bin/sh",
-		"login":         false,
-		"yield_time_ms": 1_000,
-	})
-	if err != nil {
-		t.Fatalf("marshal exec_command input: %v", err)
-	}
-	want := tools.ErrorResultWith(
-		call,
-		strings.Join([]string{resolvedWorkdir, missingWorkingDirectoryReason, existingWorkingDirectoryHint}, " "),
-		marshalNoHTMLEscape,
-	)
-
-	got, err := execTool.Call(context.Background(), call)
-	if err != nil {
-		t.Fatalf("exec_command call returned transport error: %v", err)
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("exec_command result = %#v, want %#v", got, want)
-	}
-	if _, err := os.Stat(sideEffect); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("missing relative workdir command side effect = %v, want os.ErrNotExist", err)
-	}
-	waitForManagerCount(t, manager, 0, time.Second)
-}
-
-func TestExecCommandFileWorkdirReturnsExactValidationErrorWithoutExecuting(t *testing.T) {
-	workspace := t.TempDir()
-	workdir := filepath.Join(workspace, "workdir-file")
-	if err := os.WriteFile(workdir, []byte("not a directory"), 0o600); err != nil {
-		t.Fatalf("write workdir file: %v", err)
-	}
-	resolvedWorkdir, err := filepath.Abs(workdir)
-	if err != nil {
-		t.Fatalf("normalize file workdir: %v", err)
-	}
-	sideEffect := filepath.Join(t.TempDir(), "exec-command-file-workdir-side-effect")
-	manager := newBackgroundTestManager(t)
-	execTool := NewExecCommandTool(workspace, 16_000, manager, "")
-	call := tools.Call{
-		ID:   "file-workdir",
-		Name: toolspec.ToolExecCommand,
-	}
-	call.Input, err = json.Marshal(map[string]any{
-		"cmd":           "touch " + sideEffect,
-		"workdir":       filepath.Base(workdir),
-		"shell":         "/bin/sh",
-		"login":         false,
-		"yield_time_ms": 1_000,
-	})
-	if err != nil {
-		t.Fatalf("marshal exec_command input: %v", err)
-	}
-	want := tools.ErrorResultWith(
-		call,
-		strings.Join([]string{resolvedWorkdir, nonDirectoryWorkingDirectoryReason, existingWorkingDirectoryHint}, " "),
-		marshalNoHTMLEscape,
-	)
-
-	got, err := execTool.Call(context.Background(), call)
-	if err != nil {
-		t.Fatalf("exec_command call returned transport error: %v", err)
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("exec_command result = %#v, want %#v", got, want)
-	}
-	if _, err := os.Stat(sideEffect); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("file workdir command side effect = %v, want os.ErrNotExist", err)
-	}
-	waitForManagerCount(t, manager, 0, time.Second)
 }
 
 func envSliceToMap(t *testing.T, in []string) map[string]string {
