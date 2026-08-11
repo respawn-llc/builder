@@ -3,8 +3,10 @@ package shell
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -88,6 +90,23 @@ func (t *ExecCommandTool) Call(ctx context.Context, c tools.Call) (tools.Result,
 		return tools.ErrorResultWith(c, "cmd is required", marshalNoHTMLEscape), nil
 	}
 	workdir := ResolveWorkdir(t.workspaceRoot, in.Workdir)
+	if workdir != "" {
+		normalizedWorkdir, err := filepath.Abs(workdir)
+		if err != nil {
+			return tools.ErrorResultWith(c, err.Error(), marshalNoHTMLEscape), nil
+		}
+		workdir = normalizedWorkdir
+		info, err := os.Stat(workdir)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return tools.ErrorResultWith(c, formatMissingWorkingDirectoryError(workdir), marshalNoHTMLEscape), nil
+			}
+			return tools.ErrorResultWith(c, err.Error(), marshalNoHTMLEscape), nil
+		}
+		if !info.IsDir() {
+			return tools.ErrorResultWith(c, formatNonDirectoryWorkingDirectoryError(workdir), marshalNoHTMLEscape), nil
+		}
+	}
 	resolvedShell := strings.TrimSpace(in.Shell)
 	if resolvedShell == "" {
 		resolvedShell = t.defaultShell
@@ -125,7 +144,7 @@ func (t *ExecCommandTool) Call(ctx context.Context, c tools.Call) (tools.Result,
 		Postprocessor:        t.postprocessor,
 	})
 	if err != nil {
-		return tools.ErrorResultWith(c, formatToolCallError("exec_command", err), marshalNoHTMLEscape), nil
+		return tools.ErrorResultWith(c, formatToolCallErrorBase(err), marshalNoHTMLEscape), nil
 	}
 	if strings.TrimSpace(result.ToolError) != "" {
 		return tools.ErrorResultWith(c, formatToolError(result.Warning, result.ToolError), marshalNoHTMLEscape), nil

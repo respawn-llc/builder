@@ -45,6 +45,10 @@
 ## Command Execution
 
 - `shell` is the only model-facing command-execution tool. It uses the user's login shell without a TTY, inherits the parent environment, adds non-interactive technical environment values, and combines stdout and stderr into one unlabelled stream.
+- Before launching a command, Kent must resolve the selected Working Directory to a normalized absolute path and verify that the path exists and is a directory.
+- If the selected Working Directory does not exist, Kent must not launch the command and must return `<normalized absolute path> does not exist, so the shell command was not executed. Please select an existing working directory`.
+- If the selected Working Directory exists but is not a directory, Kent must not launch the command and must return `<normalized absolute path> is not a directory, so the shell command was not executed. Please select an existing working directory`.
+- A `shell` failure never adds the `exec_command failed:` prefix to its model-visible error.
 - Commands have no lifetime limit. `yield_time_ms` returns control and leaves the command running in the background. An output check with no requested wait may return available output immediately.
 - Kent does not limit concurrent command processes, including background processes visible through `/ps`.
 - A model output check requesting less than 15 seconds fails with `Avoid polling repeatedly for short intervals, prefer 3-15min polls depending on task. Pick a better interval and retry`. One requesting more than 24 hours fails with `This poll is too long. Consider using system cron jobs and \`kent run\` headless runs for tasks that require such long wait periods`. Sending input is not subject to those limits.
