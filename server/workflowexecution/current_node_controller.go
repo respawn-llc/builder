@@ -135,31 +135,30 @@ type CurrentNodeController struct {
 	admissionWG      sync.WaitGroup
 	preparationWG    sync.WaitGroup
 
-	mu                      sync.Mutex
-	closed                  bool
-	gates                   map[workflow.CurrentNodeReferenceKey]currentNodeAdmissionGate
-	live                    map[runtimeids.ExecutionScopeID]currentNodeLiveScope
-	liveByNode              map[workflow.CurrentNodeReferenceKey]runtimeids.ExecutionScopeID
-	stopping                map[runtimeids.ExecutionScopeID]struct{}
-	completed               map[runtimeids.ExecutionScopeID]struct{}
-	postTurnFinalization    map[runtimeids.ExecutionScopeID]currentNodePostTurnFinalization
-	violations              map[runtimeids.ExecutionScopeID]int64
-	heldStarts              map[runtimeids.ExecutionScopeID][]currentNodeQueuedStart
-	explicitQueue           []currentNodeQueuedStart
-	explicitQueued          map[workflow.CurrentNodeReferenceKey]struct{}
-	explicitReservations    map[workflow.CurrentNodeReferenceKey]currentNodeQueuedStart
-	preparationQueue        []*taskPreparationBatch
-	preparationRunning      []*taskPreparationBatch
-	assignmentContinuations map[*currentNodeAssignmentContinuation]struct{}
-	automaticQueue          currentNodeAutomaticQueue
-	queued                  map[workflow.CurrentNodeReferenceKey]struct{}
-	automaticReservations   map[workflow.CurrentNodeReferenceKey]currentNodeQueuedStart
-	admissionWorkers        map[workflow.CurrentNodeReferenceKey]currentNodeQueuedStart
-	agentCapacityActive     int
-	interrupts              currentNodeInterruptState
-	workerErr               error
-	workerDiagnostics       error
-	lastAutomaticTask       *workflow.TaskID
+	mu                    sync.Mutex
+	closed                bool
+	gates                 map[workflow.CurrentNodeReferenceKey]currentNodeAdmissionGate
+	live                  map[runtimeids.ExecutionScopeID]currentNodeLiveScope
+	liveByNode            map[workflow.CurrentNodeReferenceKey]runtimeids.ExecutionScopeID
+	stopping              map[runtimeids.ExecutionScopeID]struct{}
+	completed             map[runtimeids.ExecutionScopeID]struct{}
+	postTurnFinalization  map[runtimeids.ExecutionScopeID]currentNodePostTurnFinalization
+	violations            map[runtimeids.ExecutionScopeID]int64
+	heldStarts            map[runtimeids.ExecutionScopeID][]currentNodeQueuedStart
+	explicitQueue         []currentNodeQueuedStart
+	explicitQueued        map[workflow.CurrentNodeReferenceKey]struct{}
+	explicitReservations  map[workflow.CurrentNodeReferenceKey]currentNodeQueuedStart
+	preparationQueue      []*taskPreparationBatch
+	preparationRunning    []*taskPreparationBatch
+	automaticQueue        currentNodeAutomaticQueue
+	queued                map[workflow.CurrentNodeReferenceKey]struct{}
+	automaticReservations map[workflow.CurrentNodeReferenceKey]currentNodeQueuedStart
+	admissionWorkers      map[workflow.CurrentNodeReferenceKey]currentNodeQueuedStart
+	agentCapacityActive   int
+	interrupts            currentNodeInterruptState
+	workerErr             error
+	workerDiagnostics     error
+	lastAutomaticTask     *workflow.TaskID
 }
 
 func NewCurrentNodeController(
@@ -206,31 +205,30 @@ func NewCurrentNodeController(
 	}
 	workerContext, workerCancel := context.WithCancel(context.Background())
 	controller := &CurrentNodeController{
-		store:                   store,
-		runner:                  runner,
-		steerer:                 cfg.AssignmentSteerer,
-		authority:               authority,
-		permit:                  permit,
-		attention:               cfg.Attention,
-		agentConcurrency:        cfg.AgentConcurrency,
-		workerContext:           workerContext,
-		workerCancel:            workerCancel,
-		workerWake:              make(chan struct{}, 1),
-		gates:                   make(map[workflow.CurrentNodeReferenceKey]currentNodeAdmissionGate),
-		live:                    make(map[runtimeids.ExecutionScopeID]currentNodeLiveScope),
-		liveByNode:              make(map[workflow.CurrentNodeReferenceKey]runtimeids.ExecutionScopeID),
-		stopping:                make(map[runtimeids.ExecutionScopeID]struct{}),
-		completed:               make(map[runtimeids.ExecutionScopeID]struct{}),
-		postTurnFinalization:    make(map[runtimeids.ExecutionScopeID]currentNodePostTurnFinalization),
-		violations:              make(map[runtimeids.ExecutionScopeID]int64),
-		heldStarts:              make(map[runtimeids.ExecutionScopeID][]currentNodeQueuedStart),
-		explicitQueued:          make(map[workflow.CurrentNodeReferenceKey]struct{}),
-		explicitReservations:    make(map[workflow.CurrentNodeReferenceKey]currentNodeQueuedStart),
-		assignmentContinuations: make(map[*currentNodeAssignmentContinuation]struct{}),
-		queued:                  make(map[workflow.CurrentNodeReferenceKey]struct{}),
-		automaticReservations:   make(map[workflow.CurrentNodeReferenceKey]currentNodeQueuedStart),
-		admissionWorkers:        make(map[workflow.CurrentNodeReferenceKey]currentNodeQueuedStart),
-		interrupts:              newCurrentNodeInterruptState(),
+		store:                 store,
+		runner:                runner,
+		steerer:               cfg.AssignmentSteerer,
+		authority:             authority,
+		permit:                permit,
+		attention:             cfg.Attention,
+		agentConcurrency:      cfg.AgentConcurrency,
+		workerContext:         workerContext,
+		workerCancel:          workerCancel,
+		workerWake:            make(chan struct{}, 1),
+		gates:                 make(map[workflow.CurrentNodeReferenceKey]currentNodeAdmissionGate),
+		live:                  make(map[runtimeids.ExecutionScopeID]currentNodeLiveScope),
+		liveByNode:            make(map[workflow.CurrentNodeReferenceKey]runtimeids.ExecutionScopeID),
+		stopping:              make(map[runtimeids.ExecutionScopeID]struct{}),
+		completed:             make(map[runtimeids.ExecutionScopeID]struct{}),
+		postTurnFinalization:  make(map[runtimeids.ExecutionScopeID]currentNodePostTurnFinalization),
+		violations:            make(map[runtimeids.ExecutionScopeID]int64),
+		heldStarts:            make(map[runtimeids.ExecutionScopeID][]currentNodeQueuedStart),
+		explicitQueued:        make(map[workflow.CurrentNodeReferenceKey]struct{}),
+		explicitReservations:  make(map[workflow.CurrentNodeReferenceKey]currentNodeQueuedStart),
+		queued:                make(map[workflow.CurrentNodeReferenceKey]struct{}),
+		automaticReservations: make(map[workflow.CurrentNodeReferenceKey]currentNodeQueuedStart),
+		admissionWorkers:      make(map[workflow.CurrentNodeReferenceKey]currentNodeQueuedStart),
+		interrupts:            newCurrentNodeInterruptState(),
 	}
 	controller.workerWG.Add(1)
 	go controller.runAdmissions()
@@ -251,10 +249,15 @@ func (c *CurrentNodeController) CompleteCurrentNode(ctx context.Context, req wor
 		}
 	}
 	if committed {
+		if err != nil {
+			c.mu.Lock()
+			c.workerDiagnostics = errors.Join(c.workerDiagnostics, err)
+			c.mu.Unlock()
+		}
 		return workflowruntime.CompletionResult{
 			TransitionID: workflow.TransitionID(req.TransitionID),
-			State:        workflowruntime.CompletionStateApplied,
-		}, err
+			State:        "applied",
+		}, nil
 	}
 	if err != nil {
 		return workflowruntime.CompletionResult{}, err
@@ -825,11 +828,11 @@ func (c *CurrentNodeController) ExecutionFinalized(scope sessionruntime.Executio
 	classified := make([]currentNodeQueuedStart, 0, len(starts))
 	unclassified := make([]currentNodeQueuedStart, 0, len(starts))
 	for _, start := range starts {
-		if start.assignment == nil {
-			unclassified = append(unclassified, start)
+		if start.assignment != nil || start.assignmentWait != nil {
+			classified = append(classified, start)
 			continue
 		}
-		classified = append(classified, start)
+		unclassified = append(unclassified, start)
 	}
 	if len(unclassified) != 0 {
 		resolved, diagnostic := c.classifyAutomaticStarts(waitCtx, unclassified, nil)

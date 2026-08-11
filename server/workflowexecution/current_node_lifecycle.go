@@ -519,13 +519,6 @@ func (c *CurrentNodeController) taskExecutionQuiescentLocked(taskID workflow.Tas
 	if c.queuedTaskPreparationLocked(taskID) != nil || c.runningTaskPreparationLocked(taskID) != nil {
 		return false
 	}
-	for continuation := range c.assignmentContinuations {
-		for _, candidate := range continuation.prepared {
-			if candidate.start.reference.TaskID == taskID {
-				return false
-			}
-		}
-	}
 	for _, gate := range c.gates {
 		if gate.reference.TaskID == taskID {
 			return false

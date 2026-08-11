@@ -145,15 +145,9 @@ type CompletionRequest struct {
 	Commentary   string
 }
 
-const CompletionStateApplied = "applied"
-
 type CompletionResult struct {
 	TransitionID workflow.TransitionID
 	State        string
-}
-
-func (r CompletionResult) IsApplied() bool {
-	return r.State == CompletionStateApplied
 }
 
 type CompletionObservationRequest struct {
@@ -544,16 +538,12 @@ func ToolErrorPayload(err error) json.RawMessage {
 	return raw
 }
 
-func ToolSuccessPayload(result CompletionResult, diagnostic error) json.RawMessage {
-	payload := map[string]any{
+func ToolSuccessPayload(result CompletionResult) json.RawMessage {
+	raw, err := json.Marshal(map[string]any{
 		"status":     "completed",
 		"transition": string(result.TransitionID),
 		"state":      result.State,
-	}
-	if diagnostic != nil {
-		payload["diagnostic"] = strings.TrimSpace(diagnostic.Error())
-	}
-	raw, err := json.Marshal(payload)
+	})
 	if err != nil {
 		return json.RawMessage(`{"status":"completed"}`)
 	}

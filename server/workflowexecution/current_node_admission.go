@@ -86,6 +86,8 @@ type currentNodeQueuedStart struct {
 	reference          workflow.CurrentNodeReference
 	taskPromptDelivery workflowruntime.TaskPromptDelivery
 	assignment         *CurrentNodeClassifiedAssignment
+	assignmentWait     CurrentNodeAssignmentSteer
+	holdFor            *runtimeids.ExecutionScopeID
 	policy             currentNodeAdmissionPolicy
 	done               chan struct{}
 	agentCapacityLease *currentNodeAgentCapacityLease
@@ -158,7 +160,6 @@ func (c *CurrentNodeController) admit(ctx context.Context, start currentNodeQueu
 	if err != nil {
 		return err
 	}
-	defer c.releaseReservation(key, start.policy, start.agentCapacityLease)
 	if start.taskPromptDelivery == workflowruntime.TaskPromptDeliveryAssignment &&
 		start.assignment == nil {
 		prepared, err := c.steerAssignment(ctx, reference)
@@ -365,14 +366,6 @@ type currentNodePreparedAssignment struct {
 	preparation error
 }
 
-type currentNodeAssignmentContinuation struct {
-	prepared    []currentNodePreparedAssignment
-	holdFor     *runtimeids.ExecutionScopeID
-	done        chan struct{}
-	interrupted bool
-	result      error
-}
-
 type currentNodeAssignmentUncommittedError struct {
 	reference workflow.CurrentNodeReference
 }
@@ -547,99 +540,17 @@ func (c *CurrentNodeController) continueCurrentNodeAssignmentStarts(
 	if len(prepared) == 0 {
 		return
 	}
-	continuation := &currentNodeAssignmentContinuation{
-		prepared: append([]currentNodePreparedAssignment(nil), prepared...),
-		holdFor:  holdFor,
-		done:     make(chan struct{}),
-	}
-	c.mu.Lock()
-	if c.closed {
-		c.mu.Unlock()
-		return
-	}
-	c.assignmentContinuations[continuation] = struct{}{}
-	c.workerWG.Add(1)
-	c.mu.Unlock()
-	go func() {
-		defer c.workerWG.Done()
-		defer close(continuation.done)
-		accepted, diagnostic := c.classifyPreparedAutomaticStarts(
-			c.workerContext,
-			continuation.prepared,
-			false,
-			nil,
-		)
-		if context.Cause(c.workerContext) != nil {
-			c.mu.Lock()
-			delete(c.assignmentContinuations, continuation)
-			continuation.result = context.Cause(c.workerContext)
-			c.mu.Unlock()
-			return
+	starts := make([]currentNodeQueuedStart, 0, len(prepared))
+	for _, candidate := range prepared {
+		if candidate.preparation != nil || candidate.prepared == nil {
+			panic("transferred Current Node assignment requires a prepared wait")
 		}
-		diagnostic = errors.Join(
-			diagnostic,
-			c.deliverContinuedClassifiedStarts(accepted, continuation),
-		)
-		c.mu.Lock()
-		continuation.result = diagnostic
-		if diagnostic != nil {
-			c.workerDiagnostics = errors.Join(c.workerDiagnostics, diagnostic)
-		}
-		c.mu.Unlock()
-	}()
-}
-
-func (c *CurrentNodeController) deliverContinuedClassifiedStarts(
-	starts []currentNodeQueuedStart,
-	continuation *currentNodeAssignmentContinuation,
-) error {
-	c.mu.Lock()
-	if _, exists := c.assignmentContinuations[continuation]; !exists {
-		c.mu.Unlock()
-		return nil
+		start := candidate.start
+		start.assignmentWait = candidate.prepared
+		start.holdFor = holdFor
+		starts = append(starts, start)
 	}
-	delete(c.assignmentContinuations, continuation)
-	if continuation.interrupted {
-		c.mu.Unlock()
-		detail := workflow.NewCurrentNodeInterruptionDetail(
-			string(workflow.CurrentNodeInterruptionReasonUserInterrupt),
-			nil,
-		)
-		var diagnostics []error
-		for _, start := range starts {
-			committed, diagnostic := classifyCurrentNodeInterruption(c.store.InterruptCurrentNode(
-				c.workerContext,
-				start.reference,
-				workflow.CurrentNodeInterruptionReasonUserInterrupt,
-				detail,
-			))
-			if committed {
-				c.publishPendingInterruptedCurrentNode(
-					c.workerContext,
-					start.reference,
-					workflow.CurrentNodeInterruptionReasonUserInterrupt,
-				)
-			}
-			diagnostics = append(diagnostics, diagnostic)
-		}
-		return errors.Join(diagnostics...)
-	}
-	if continuation.holdFor != nil {
-		if _, live := c.live[*continuation.holdFor]; live {
-			if _, completed := c.completed[*continuation.holdFor]; completed {
-				c.heldStarts[*continuation.holdFor] = append(
-					c.heldStarts[*continuation.holdFor],
-					starts...,
-				)
-				c.mu.Unlock()
-				return nil
-			}
-		}
-	}
-	c.queueStartsLocked(starts)
-	c.mu.Unlock()
-	c.wakeAdmissionWorker()
-	return nil
+	c.enqueueStarts(starts)
 }
 
 func (c *CurrentNodeController) deliverClassifiedStarts(
@@ -806,6 +717,51 @@ func (c *CurrentNodeController) runAdmission(start currentNodeQueuedStart) {
 	defer close(start.done)
 	defer c.finishTaskInterruptAdmission(start.reference)
 	defer c.finishAdmissionWorker(start)
+	defer c.releaseReservation(start.referenceKey(), start.policy, start.agentCapacityLease)
+	if start.assignmentWait != nil {
+		decision := classifyCurrentNodeAssignment(
+			c.workerContext,
+			start.reference,
+			start.assignmentWait,
+		)
+		start.assignmentWait = nil
+		key := start.referenceKey()
+		c.mu.Lock()
+		interrupted := c.interrupts.currentNodeFenced(key)
+		if decision.diagnostic != nil {
+			c.workerDiagnostics = errors.Join(
+				c.workerDiagnostics,
+				fmt.Errorf(
+					"wait for current node assignment %v: %w",
+					start.reference,
+					decision.diagnostic,
+				),
+			)
+		}
+		c.mu.Unlock()
+		if interrupted || context.Cause(c.workerContext) != nil {
+			return
+		}
+		if decision.assignment == nil {
+			c.handleAdmissionFailure(start, false, decision.diagnostic)
+			return
+		}
+		start.assignment = decision.assignment
+	}
+	if start.holdFor != nil {
+		if source, live := c.authority.ExecutionByScope(*start.holdFor); live {
+			if err := source.Close(c.workerContext); err != nil {
+				return
+			}
+		}
+		c.mu.Lock()
+		interrupted := c.interrupts.currentNodeFenced(start.referenceKey())
+		c.mu.Unlock()
+		if interrupted || context.Cause(c.workerContext) != nil {
+			return
+		}
+		start.holdFor = nil
+	}
 	if err := c.admit(c.workerContext, start); err != nil {
 		key, keyErr := start.reference.Key()
 		if keyErr != nil {
@@ -825,6 +781,14 @@ func (c *CurrentNodeController) runAdmission(start currentNodeQueuedStart) {
 		}
 		c.handleAdmissionFailure(start, failure.admitted, failure.cause)
 	}
+}
+
+func (s currentNodeQueuedStart) referenceKey() workflow.CurrentNodeReferenceKey {
+	key, err := s.reference.Key()
+	if err != nil {
+		panic(fmt.Sprintf("inspect Current Node queued start: %v", err))
+	}
+	return key
 }
 
 func (c *CurrentNodeController) takeExplicitStart() (currentNodeQueuedStart, bool) {

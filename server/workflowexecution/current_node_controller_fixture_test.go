@@ -355,6 +355,7 @@ type currentNodeControllerStore struct {
 	interruptStarted          chan struct{}
 	interruptRelease          chan struct{}
 	interruptOnce             sync.Once
+	interruptPermit           *MutationPermit
 	idleResolved              *workflow.CurrentNode
 }
 
@@ -533,6 +534,7 @@ func (s *currentNodeControllerStore) InterruptAdmittedCurrentNode(_ context.Cont
 func (s *currentNodeControllerStore) InterruptCurrentNode(ctx context.Context, reference workflow.CurrentNodeReference, reason workflow.CurrentNodeInterruptionReason, detail workflow.CurrentNodeInterruptionDetail) error {
 	s.mu.Lock()
 	s.interruptAttempts++
+	s.interruptPermit, _ = ctx.Value(mutationPermitContextKey{}).(*MutationPermit)
 	err := s.interruptErr
 	s.mu.Unlock()
 	committed, diagnostic := classifyCurrentNodeInterruption(err)

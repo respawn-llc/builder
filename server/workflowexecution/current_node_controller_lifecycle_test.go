@@ -697,6 +697,12 @@ func TestCompleteIdleCurrentNodeClassifiesTransferredAssignmentsIndependently(t 
 			if !started[script] {
 				t.Fatal("healthy Script sibling did not start")
 			}
+			if !test.wantAgentStarted {
+				testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+					_, interrupted := store.interruption(agent)
+					return interrupted
+				}, "uncommitted transferred Agent was not interrupted")
+			}
 			_, agentInterrupted := store.interruption(agent)
 			if agentInterrupted == test.wantAgentStarted {
 				t.Fatalf("Agent interrupted = %t, want %t", agentInterrupted, !test.wantAgentStarted)
@@ -874,11 +880,12 @@ func TestTaskInterruptDispositionsTransferredSuccessorBeforeLateAssignmentDelive
 		started: assignmentStarted,
 	}
 
+	sourceScope := singleLiveScope(t, authority, source)
 	completionCtx, cancelCompletion := context.WithCancel(context.Background())
 	completionDone := make(chan error, 1)
 	go func() {
 		_, completeErr := controller.CompleteCurrentNode(completionCtx, workflowruntime.CompletionRequest{
-			ScopeID:      singleLiveScope(t, authority, source),
+			ScopeID:      sourceScope,
 			TransitionID: "next",
 		})
 		completionDone <- completeErr
@@ -891,12 +898,28 @@ func TestTaskInterruptDispositionsTransferredSuccessorBeforeLateAssignmentDelive
 	cancelCompletion()
 	select {
 	case completeErr := <-completionDone:
-		if !errors.Is(completeErr, context.Canceled) {
-			t.Fatalf("CompleteCurrentNode error = %v, want context cancellation", completeErr)
+		if completeErr != nil {
+			t.Fatalf("CompleteCurrentNode committed diagnostic = %v, want controller-consumed diagnostic", completeErr)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("CompleteCurrentNode did not transfer the canceled assignment wait")
 	}
+	controller.mu.Lock()
+	completionDiagnostic := controller.workerDiagnostics
+	controller.mu.Unlock()
+	if !errors.Is(completionDiagnostic, context.Canceled) {
+		t.Fatalf("controller background diagnostic = %v, want caller cancellation", completionDiagnostic)
+	}
+	successorKey, err := successor.Key()
+	if err != nil {
+		t.Fatalf("successor key: %v", err)
+	}
+	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+		controller.mu.Lock()
+		defer controller.mu.Unlock()
+		_, waiting := controller.admissionWorkers[successorKey]
+		return waiting
+	}, "transferred successor did not enter the existing admission worker")
 
 	interruptDone := make(chan error, 1)
 	go func() {
@@ -913,6 +936,12 @@ func TestTaskInterruptDispositionsTransferredSuccessorBeforeLateAssignmentDelive
 	close(releaseAssignment)
 	if interruptErr := <-interruptDone; interruptErr != nil {
 		t.Fatalf("Interrupt Task with transferred successor: %v", interruptErr)
+	}
+	store.mu.Lock()
+	interruptPermit := store.interruptPermit
+	store.mu.Unlock()
+	if interruptPermit != controller.permit {
+		t.Fatal("transferred successor interruption bypassed the workflow mutation permit")
 	}
 	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
 		_, interrupted := store.interruption(successor)
