@@ -452,29 +452,40 @@ func TestCoreComposedWorkspaceDraftServicesShareLane(t *testing.T) {
 		t.Fatal("workspace cache key ignored workspace identity")
 	}
 	entered, release := make(chan struct{}), make(chan struct{})
+	type draftResult struct {
+		value sessionlaunch.WorkspaceChatDraftResolution
+		err   error
+	}
+	firstResult := make(chan draftResult, 1)
 	go func() {
-		_, err := first.TransformWorkspaceChatDraftAggregate(t.Context(), func(r sessionlaunch.WorkspaceChatDraftResolution) (sessionlaunch.WorkspaceChatDraft, error) {
+		value, err := first.TransformWorkspaceChatDraftAggregate(t.Context(), func(r sessionlaunch.WorkspaceChatDraftResolution) (sessionlaunch.WorkspaceChatDraft, error) {
 			close(entered)
 			<-release
 			r.Draft.Message = "new"
 			return r.Draft, nil
 		})
-		if err != nil {
-			t.Errorf("first: %v", err)
-		}
+		firstResult <- draftResult{value: value, err: err}
 	}()
 	<-entered
-	done := make(chan error, 1)
+	secondResult := make(chan draftResult, 1)
 	go func() {
-		_, err := second.TransformWorkspaceChatDraftAggregate(t.Context(), func(r sessionlaunch.WorkspaceChatDraftResolution) (sessionlaunch.WorkspaceChatDraft, error) {
+		value, err := second.TransformWorkspaceChatDraftAggregate(t.Context(), func(r sessionlaunch.WorkspaceChatDraftResolution) (sessionlaunch.WorkspaceChatDraft, error) {
 			r.Draft.Fast = true
 			return r.Draft, nil
 		})
-		done <- err
+		secondResult <- draftResult{value: value, err: err}
 	}()
 	close(release)
-	if err := <-done; err != nil {
-		t.Fatal(err)
+	firstOutcome := <-firstResult
+	secondOutcome := <-secondResult
+	if firstOutcome.err != nil || secondOutcome.err != nil {
+		t.Fatalf("draft transforms = (%+v), (%+v)", firstOutcome, secondOutcome)
+	}
+	if firstOutcome.value.Draft.Message != "new" || firstOutcome.value.Draft.Fast {
+		t.Fatalf("first response = %+v, want first writer's draft identity", firstOutcome.value)
+	}
+	if secondOutcome.value.Draft.Message != "new" || !secondOutcome.value.Draft.Fast {
+		t.Fatalf("second response = %+v, want second writer's draft identity", secondOutcome.value)
 	}
 	got, err := first.ResolveWorkspaceChatDraftAggregate(t.Context())
 	if err != nil || got.Draft.Message != "new" || !got.Draft.Fast {

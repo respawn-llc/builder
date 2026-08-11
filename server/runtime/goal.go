@@ -510,6 +510,11 @@ func steerGoalStatusUpdateIntent(update GoalStatusUpdate) steeringIntent {
 }
 
 func (e *Engine) finishGoalOutput(stepID string, message llm.Message, result *GoalCommandResult, update GoalStatusUpdate) error {
+	noticeReceipt, noticeErr := e.steerWithCommitReceipt(stepID, steerGoalNoticeIntent(message))
+	result.NoticeReceipt = noticeReceipt
+	if noticeErr != nil {
+		return noticeErr
+	}
 	availability, availabilityErr := e.GoalAvailability()
 	if availabilityErr != nil {
 		result.Availability = ""
@@ -517,9 +522,7 @@ func (e *Engine) finishGoalOutput(stepID string, message llm.Message, result *Go
 	}
 	result.Availability = availability
 	update.Availability = availability
-	noticeReceipt, err := e.steerWithCommitReceipt(stepID, steerGoalNoticeAndStatusIntent(message, update))
-	result.NoticeReceipt = noticeReceipt
-	return err
+	return e.steer(stepID, steerGoalStatusUpdateIntent(update))
 }
 
 func (e *Engine) StartGoalLoop() error {

@@ -114,7 +114,7 @@ func TestWorkspaceChatDraftOwnerTransformsClearAndSerializes(t *testing.T) {
 		return d, nil
 	})
 	resolved, resolveErr := o.ResolveWorkspaceChatDraft(context.Background(), "w", resolve)
-	if err != nil || resolveErr != nil || got.Agent != "worker" || got.Message != "latest" || got.Supervisor != "all" || got.Thinking != "low" || got.Fast || resolved.Draft.Questions || !resolved.Draft.AutoCompaction || resolved.GoalAvailability != clientui.GoalAvailabilityAgentCapabilityMissing {
+	if err != nil || resolveErr != nil || got.Draft.Agent != "worker" || got.Draft.Message != "latest" || got.Draft.Supervisor != "all" || got.Draft.Thinking != "low" || got.Draft.Fast || resolved.Draft.Questions || !resolved.Draft.AutoCompaction || resolved.GoalAvailability != clientui.GoalAvailabilityAgentCapabilityMissing {
 		t.Fatalf("transform=%+v resolved=%+v err=%v resolveErr=%v", got, resolved, err, resolveErr)
 	}
 	if err := o.ClearWorkspaceChatDraft(context.Background(), "w"); err != nil || p.draft != nil {

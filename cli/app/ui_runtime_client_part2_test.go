@@ -237,7 +237,12 @@ func goalResponseFixture(goal *serverapi.RuntimeGoal) serverapi.RuntimeGoalMutat
 	return serverapi.RuntimeGoalMutationResponse{Goal: goal, Availability: clientui.GoalAvailabilityAvailable}
 }
 func goalEnvelopeFixture(goal *serverapi.RuntimeGoal) serverapi.RuntimeGoalShowResponse {
-	return serverapi.RuntimeGoalShowResponse{Goal: goal, Availability: clientui.GoalAvailabilityAvailable}
+	return serverapi.RuntimeGoalShowResponse{
+		GoalEnvelope: clientui.GoalEnvelope{
+			Goal:         goal,
+			Availability: clientui.GoalAvailabilityAvailable,
+		},
+	}
 }
 
 func runtimeGoalFixtureFromAPI(goal *serverapi.RuntimeGoal) *clientui.RuntimeGoal {
@@ -597,8 +602,13 @@ func TestRuntimeClientMainViewRecoveryPreservesReadDeadline(t *testing.T) {
 func TestRuntimeClientShowGoalRecoversRuntimeUnavailableSilently(t *testing.T) {
 	goal := &serverapi.RuntimeGoal{ID: "goal-1", Objective: "ship", Status: "active"}
 	controls := &reconnectRetryRuntimeControlClient{
-		showGoalErr:  serverapi.ErrRuntimeUnavailable,
-		showGoalResp: serverapi.RuntimeGoalShowResponse{Goal: goal, Availability: clientui.GoalAvailabilityAvailable},
+		showGoalErr: serverapi.ErrRuntimeUnavailable,
+		showGoalResp: serverapi.RuntimeGoalShowResponse{
+			GoalEnvelope: clientui.GoalEnvelope{
+				Goal:         goal,
+				Availability: clientui.GoalAvailabilityAvailable,
+			},
+		},
 	}
 	runtimeClient := newTestSessionRuntimeClientWithControls(controls)
 	reactivator := newRuntimeReactivator()

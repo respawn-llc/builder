@@ -130,9 +130,6 @@ func TranscriptSessionStatusFromRuntime(engine *runtime.Engine) (clientui.Transc
 }
 
 func GoalFromSessionState(goal *session.GoalState, availability clientui.GoalAvailability, suspended bool) *clientui.RuntimeGoal {
-	if goal == nil {
-		return nil
-	}
 	projected := clientui.RuntimeGoalFromEnvelope(clientui.ProjectGoal(session.GoalCoreFromState(goal), availability), suspended)
 	return &projected
 }

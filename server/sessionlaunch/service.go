@@ -132,10 +132,7 @@ func (s *Service) TransformWorkspaceChatDraftAggregate(ctx context.Context, tran
 	if err != nil {
 		return WorkspaceChatDraftResolution{}, err
 	}
-	if _, err := owner.TransformWorkspaceChatDraft(ctx, workspaceID, s.workspaceChatDraftResolverInput, transform); err != nil {
-		return WorkspaceChatDraftResolution{}, err
-	}
-	return owner.ResolveWorkspaceChatDraft(ctx, workspaceID, s.workspaceChatDraftResolverInput)
+	return owner.TransformWorkspaceChatDraft(ctx, workspaceID, s.workspaceChatDraftResolverInput, transform)
 }
 
 func (s *Service) WorkspaceChatDraft(ctx context.Context, req serverapi.WorkspaceChatDraftRequest) (serverapi.WorkspaceChatDraftResponse, error) {

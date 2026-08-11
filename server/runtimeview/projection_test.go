@@ -175,6 +175,22 @@ func TestStatusFromRuntimeIncludesSuspendedGoal(t *testing.T) {
 	}
 }
 
+func TestStatusFromRuntimePreservesGoalAvailabilityWithoutGoal(t *testing.T) {
+	store := newRuntimeViewStore(t)
+	if err := store.MarkModelDispatchLocked(session.LockedContract{EnabledTools: []string{string(toolspec.ToolExecCommand)}}); err != nil {
+		t.Fatal(err)
+	}
+	engine := newRuntimeViewEngine(t, store, projectionFastClient{}, runtime.Config{Model: "gpt-5"})
+
+	status, err := StatusFromRuntime(engine)
+	if err != nil {
+		t.Fatalf("project runtime status: %v", err)
+	}
+	if status.Goal == nil || status.Goal.Goal != nil || status.Goal.Availability != clientui.GoalAvailabilityAgentCapabilityMissing {
+		t.Fatalf("status Goal = %+v, want outer envelope with absent durable Goal and resolved availability", status.Goal)
+	}
+}
+
 func TestTranscriptSessionStatusDoesNotAdvertiseUnavailableFastMode(t *testing.T) {
 	eng := newRuntimeViewEngine(
 		t,

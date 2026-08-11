@@ -240,7 +240,14 @@ type RuntimeGoalShowRequest struct {
 	SessionID string `json:"session_id"`
 }
 
-type RuntimeGoalShowResponse = clientui.GoalEnvelope
+type RuntimeGoalShowResponse struct {
+	clientui.GoalEnvelope
+}
+
+func (r RuntimeGoalShowResponse) Validate() error {
+	return r.GoalEnvelope.Validate()
+}
+
 type RuntimeGoalMutationResponse struct {
 	Goal         *clientui.Goal            `json:"goal,omitempty"`
 	Pending      *clientui.GoalPreview     `json:"pending,omitempty"`

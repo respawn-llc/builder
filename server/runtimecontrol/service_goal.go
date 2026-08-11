@@ -35,7 +35,12 @@ func (s *Service) ShowGoal(ctx context.Context, req serverapi.RuntimeGoalShowReq
 	if err != nil {
 		return serverapi.RuntimeGoalShowResponse{}, fmt.Errorf("resolve Goal availability for session %q: %w", sessionID, err)
 	}
-	return serverapi.RuntimeGoalShowResponse{Goal: session.GoalCoreFromState(record.Meta.Goal), Availability: availability}, nil
+	return serverapi.RuntimeGoalShowResponse{
+		GoalEnvelope: clientui.GoalEnvelope{
+			Goal:         session.GoalCoreFromState(record.Meta.Goal),
+			Availability: availability,
+		},
+	}, nil
 }
 
 func (s *Service) SetGoal(ctx context.Context, req serverapi.RuntimeGoalSetRequest) (serverapi.RuntimeGoalMutationResponse, error) {

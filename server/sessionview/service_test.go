@@ -14,6 +14,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
+	"core/shared/toolspec"
 	"core/shared/transcript"
 )
 
@@ -183,6 +184,22 @@ func TestServiceGetSessionMainViewFallsBackToDurableSessionState(t *testing.T) {
 	}
 	if resp.MainView.Activity.State != clientui.RuntimeActivityUnavailable {
 		t.Fatalf("dormant activity = %+v, want unavailable", resp.MainView.Activity)
+	}
+}
+
+func TestServiceGetSessionMainViewPreservesGoalAvailabilityWithoutGoal(t *testing.T) {
+	store := newSessionViewStore(t, t.TempDir(), "ws", t.TempDir())
+	if err := store.MarkModelDispatchLocked(session.LockedContract{EnabledTools: []string{string(toolspec.ToolExecCommand)}}); err != nil {
+		t.Fatal(err)
+	}
+	response, err := NewService(newTestSessionResolver(store), nil, nil, nil).
+		GetSessionMainView(t.Context(), serverapi.SessionMainViewRequest{SessionID: store.Meta().SessionID})
+	if err != nil {
+		t.Fatalf("get dormant main view: %v", err)
+	}
+	goal := response.MainView.Status.Goal
+	if goal == nil || goal.Goal != nil || goal.Availability != clientui.GoalAvailabilityAgentCapabilityMissing {
+		t.Fatalf("dormant main-view Goal = %+v, want outer envelope with absent durable Goal and resolved availability", goal)
 	}
 }
 
