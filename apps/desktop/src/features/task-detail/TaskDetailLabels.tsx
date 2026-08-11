@@ -51,7 +51,11 @@ export function TaskDetailLabels({ disabled }: Readonly<{ disabled: boolean }>) 
                     </span>
                   ) : null}
                   {visibleLabels.map((label) => (
-                    <span className={pendingLabelIDs.has(label.id) ? "opacity-60" : undefined} key={label.id}>
+                    <span
+                      aria-busy={pendingLabelIDs.has(label.id) || undefined}
+                      className={pendingLabelIDs.has(label.id) ? "opacity-60" : undefined}
+                      key={label.id}
+                    >
                       <Badge tone="neutral">{label.name}</Badge>
                     </span>
                   ))}

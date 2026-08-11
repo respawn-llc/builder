@@ -81,14 +81,6 @@ export function createProjectLabelEffects({
         },
         refetchOptions,
       ),
-      queryClient.invalidateQueries(
-        {
-          queryKey: queryKeys.task(taskID),
-          exact: true,
-          refetchType: "active",
-        },
-        refetchOptions,
-      ),
       invalidateMembership(),
     ]);
   };

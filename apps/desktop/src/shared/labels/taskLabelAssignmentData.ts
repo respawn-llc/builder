@@ -215,7 +215,7 @@ export function useManagedTaskLabelAssignment({
       setLocal((state) =>
         setDesiredLabel(state, labelID, selected, {
           base: base.labelIDs,
-          available: new Set([labelID]),
+          available: new Set([...state.pending.keys(), ...state.failures.keys(), labelID]),
         }),
       );
       return;

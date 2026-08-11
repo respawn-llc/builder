@@ -89,10 +89,15 @@ describe("useManagedTaskLabelAssignment", () => {
     expect(scheduleTaskAssignmentRefresh).not.toHaveBeenCalled();
   });
 
-  it("auto-selects a created Label while the catalog query is still loading", async () => {
+  it("auto-selects and preserves queued created Labels while the catalog query is still loading", async () => {
     appServiceMocks.getTaskLabels.mockResolvedValueOnce(assignment([]));
-    const update = deferred<TaskLabelAssignment>();
-    appServiceMocks.updateTaskLabels.mockReturnValueOnce(update.promise);
+    const beta = deferred<TaskLabelAssignment>();
+    const alpha = deferred<TaskLabelAssignment>();
+    const remote = deferred<TaskLabelAssignment>();
+    appServiceMocks.updateTaskLabels
+      .mockReturnValueOnce(beta.promise)
+      .mockReturnValueOnce(alpha.promise)
+      .mockReturnValueOnce(remote.promise);
     const queryClient = createQueryClient([]);
     queryClient.removeQueries({
       queryKey: queryKeys.projectLabels(projectID),
@@ -100,12 +105,7 @@ describe("useManagedTaskLabelAssignment", () => {
     });
     const scheduleCatalogRefresh = vi.fn();
     const scheduleMembershipRefresh = vi.fn();
-    const scheduleTaskAssignmentRefresh = vi.fn(() => {
-      void queryClient.invalidateQueries({
-        queryKey: queryKeys.taskLabels(taskID),
-        exact: true,
-      });
-    });
+    const scheduleTaskAssignmentRefresh = vi.fn();
     const loadingCatalogLabelIDs: readonly string[] = [];
     const { result, rerender } = renderHook(
       ({ availableLabelIDs }: Readonly<{ availableLabelIDs: readonly string[] }>) =>
@@ -128,32 +128,58 @@ describe("useManagedTaskLabelAssignment", () => {
 
     act(() => {
       result.current.setSelected(betaID, true);
+      result.current.setSelected(alphaID, true);
+      result.current.setSelected(remoteID, true);
     });
-    expect(appServiceMocks.updateTaskLabels).toHaveBeenCalledWith(taskID, [betaID], []);
+    expect(appServiceMocks.updateTaskLabels).toHaveBeenCalledTimes(1);
+    expect(appServiceMocks.updateTaskLabels).toHaveBeenLastCalledWith(taskID, [betaID], []);
 
-    appServiceMocks.getTaskLabels.mockResolvedValueOnce(assignment([betaID]));
-    update.resolve(assignment([betaID]));
+    await act(async () => {
+      beta.resolve(assignment([betaID]));
+      await beta.promise;
+    });
     await waitFor(() => {
       expect(scheduleCatalogRefresh).toHaveBeenCalledOnce();
       expect(scheduleMembershipRefresh).not.toHaveBeenCalled();
       expect(scheduleTaskAssignmentRefresh).toHaveBeenCalledWith(taskID);
     });
-    await waitFor(() => {
-      expect(result.current.pendingLabelIDs).toEqual([]);
-    });
+    expect(appServiceMocks.updateTaskLabels).toHaveBeenCalledTimes(1);
 
+    queryClient.setQueryData(queryKeys.taskLabels(taskID), assignment([betaID]));
     queryClient.setQueryData(queryKeys.projectLabels(projectID), {
       projectID,
-      labels: [{ id: betaID, name: "Beta" }],
+      labels: [
+        { id: betaID, name: "Beta" },
+        { id: alphaID, name: "Alpha" },
+        { id: remoteID, name: "Remote" },
+      ],
     });
-    rerender({ availableLabelIDs: [betaID] });
+    rerender({ availableLabelIDs: [betaID, alphaID, remoteID] });
 
     await waitFor(() => {
-      expect(scheduleTaskAssignmentRefresh).toHaveBeenCalledOnce();
-      expect(result.current.selectedLabelIDs).toEqual([betaID]);
-      expect(result.current.pendingLabelIDs).toEqual([]);
-      expect(queryClient.getQueryData(queryKeys.taskLabels(taskID))).toEqual(assignment([betaID]));
+      expect(appServiceMocks.updateTaskLabels).toHaveBeenCalledTimes(2);
     });
+    expect(appServiceMocks.updateTaskLabels).toHaveBeenLastCalledWith(taskID, [alphaID], []);
+
+    await act(async () => {
+      alpha.resolve(assignment([alphaID]));
+      await alpha.promise;
+    });
+    await waitFor(() => {
+      expect(appServiceMocks.updateTaskLabels).toHaveBeenCalledTimes(3);
+    });
+    expect(appServiceMocks.updateTaskLabels).toHaveBeenLastCalledWith(taskID, [remoteID], []);
+
+    await act(async () => {
+      remote.resolve(assignment([betaID, alphaID, remoteID]));
+      await remote.promise;
+    });
+    await waitFor(() => {
+      expect(result.current.pendingLabelIDs).toEqual([]);
+    });
+    expect([...result.current.selectedLabelIDs].sort()).toEqual([alphaID, betaID, remoteID].sort());
+    expect(scheduleTaskAssignmentRefresh).toHaveBeenCalledOnce();
+    expect(scheduleMembershipRefresh).toHaveBeenCalledTimes(2);
   });
 
   it("rolls back a failed current intent and retains per-Label Retry", async () => {

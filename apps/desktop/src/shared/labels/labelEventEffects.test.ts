@@ -244,7 +244,7 @@ describe("Project label event effects", () => {
     expect(settled).toHaveBeenCalledOnce();
   });
 
-  it("invalidates exact assignment and detail reads plus Project membership for labels_changed", async () => {
+  it("invalidates exact assignment and Project membership without duplicating Task detail refresh", async () => {
     const queryClient = queryClientWithMembership();
     queryClient.setQueryData(queryKeys.taskLabels("task-1"), {
       taskID: "task-1",
@@ -261,11 +261,11 @@ describe("Project label event effects", () => {
 
     await waitFor(() => {
       expectInvalidated(queryClient, queryKeys.taskLabels("task-1"));
-      expectInvalidated(queryClient, queryKeys.task("task-1"));
       expectInvalidated(queryClient, queryKeys.projectBoardsRoot("project-1"));
       expectInvalidated(queryClient, queryKeys.projectBoardNodeCardsRoot("project-1"));
       expectInvalidated(queryClient, queryKeys.projectTaskListsRoot("project-1"));
     });
+    expectInvalidated(queryClient, queryKeys.task("task-1"), false);
     expectInvalidated(queryClient, queryKeys.taskLabels("task-2"), false);
   });
 
@@ -337,13 +337,13 @@ describe("Project label event effects", () => {
 
     await waitFor(() => {
       expectInvalidated(queryClient, queryKeys.taskLabels("task-1"));
-      expectInvalidated(queryClient, queryKeys.task("task-1"));
       expectInvalidated(queryClient, queryKeys.projectBoardsRoot("project-1"));
       expectInvalidated(queryClient, queryKeys.projectBoardNodeCardsRoot("project-1"));
       expectInvalidated(queryClient, queryKeys.projectTaskListsRoot("project-1"));
     });
     expect(queryClient.getQueryData(queryKeys.projectLabels("project-1"))).toEqual(projectedCatalog);
     expectInvalidated(queryClient, queryKeys.projectLabels("project-1"), false);
+    expectInvalidated(queryClient, queryKeys.task("task-1"), false);
     expectInvalidated(queryClient, queryKeys.taskLabels("task-2"), false);
   });
 

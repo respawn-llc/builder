@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import type { ButtonHTMLAttributes, ReactElement, ReactNode } from "react";
 import { vi } from "vitest";
 
+import type * as SharedLabelsModule from "@/shared/labels";
 import { TaskDetailLabels } from "./TaskDetailLabels";
 
 const ids = vi.hoisted(() => ({
@@ -38,39 +39,39 @@ interface LabelChooserInvocation {
   onSelectionChange(labelID: string, selected: boolean): void;
 }
 
-vi.mock("@/shared/labels", () => ({
-  LabelChooser: ({
-    invocation,
-    trigger,
-  }: Readonly<{
-    invocation: LabelChooserInvocation;
-    trigger: ReactElement;
-  }>) => (
-    <div>
-      {trigger}
-      <button
-        onClick={() => {
-          invocation.onSelectionChange(ids.alpha, false);
-        }}
-        type="button"
-      >
-        Change assignment
-      </button>
-    </div>
-  ),
-  orderedAssignedLabels: (
-    catalog: Readonly<{ labels: readonly Readonly<{ id: string; name: string }>[] }>,
-    selectedLabelIDs: readonly string[],
-  ) => catalog.labels.filter((label) => selectedLabelIDs.includes(label.id)),
-  useProjectLabelCatalog: () => ({
-    data: {
-      projectID: "project-1",
-      labels: [{ id: ids.alpha, name: "Alpha" }],
-    },
-    isPending: false,
-  }),
-  useTaskLabelAssignment: () => assignment,
-}));
+vi.mock("@/shared/labels", async (importOriginal) => {
+  const actual = await importOriginal<typeof SharedLabelsModule>();
+  return {
+    ...actual,
+    LabelChooser: ({
+      invocation,
+      trigger,
+    }: Readonly<{
+      invocation: LabelChooserInvocation;
+      trigger: ReactElement;
+    }>) => (
+      <div>
+        {trigger}
+        <button
+          onClick={() => {
+            invocation.onSelectionChange(ids.alpha, false);
+          }}
+          type="button"
+        >
+          Change assignment
+        </button>
+      </div>
+    ),
+    useProjectLabelCatalog: () => ({
+      data: {
+        projectID: "project-1",
+        labels: [{ id: ids.alpha, name: "Alpha" }],
+      },
+      isPending: false,
+    }),
+    useTaskLabelAssignment: () => assignment,
+  };
+});
 
 vi.mock("./TaskPropertyLine", () => ({
   TaskPropertyLine: ({ value }: Readonly<{ value: ReactElement }>) => value,
@@ -122,7 +123,7 @@ describe("TaskDetailLabels", () => {
     assignment.pendingLabelIDs = [ids.alpha];
     render(<TaskDetailLabels disabled={false} />);
 
-    expect(screen.getByText("Alpha")).toHaveClass("opacity-60");
+    expect(screen.getByText("Alpha")).toHaveAttribute("aria-busy", "true");
     fireEvent.click(screen.getByRole("button", { name: "Change assignment" }));
     expect(assignment.setSelected).toHaveBeenCalledWith(ids.alpha, false);
   });
