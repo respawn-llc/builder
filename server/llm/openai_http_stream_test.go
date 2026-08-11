@@ -880,6 +880,23 @@ func TestGenerateStream_MapsStructuredStreamErrorToProviderAPIError(t *testing.T
 	}
 }
 
+func TestGenerateStream_MapsProviderOverloadCodeWithoutMessageMatching(t *testing.T) {
+	transport := newOpenAIStreamTestTransport(t,
+		`{"type":"error","error":{"type":"server_error","code":"server_is_overloaded","param":"request","message":"not the overload wording"}}`,
+		`[DONE]`,
+	)
+	_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{})
+	var providerErr *ProviderAPIError
+	if err == nil || !errors.As(err, &providerErr) {
+		t.Fatalf("expected ProviderAPIError, got %T", err)
+	}
+	if providerErr.Code != UnifiedErrorCodeProviderOverload || providerErr.ProviderCode != "server_is_overloaded" || providerErr.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected provider overload: %+v", providerErr)
+	}
+	if got := classifyOpenAIUnifiedErrorCode(http.StatusUnauthorized, "server_is_overloaded"); got != UnifiedErrorCodeAuthentication || classifyOpenAIUnifiedErrorCode(http.StatusOK, "SERVER_IS_OVERLOADED") != UnifiedErrorCodeUnknown {
+		t.Fatalf("terminal HTTP status classification = %q, want %q", got, UnifiedErrorCodeAuthentication)
+	}
+}
 func TestGenerateStream_MapsResponseErrorEventToProviderAPIError(t *testing.T) {
 	transport := newOpenAIStreamTestTransport(t,
 		`{"type":"error","code":"context_length_exceeded","param":"input","message":"too many tokens","sequence_number":1}`,

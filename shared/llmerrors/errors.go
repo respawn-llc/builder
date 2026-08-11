@@ -29,6 +29,7 @@ const (
 	UnifiedErrorCodeAuthentication        UnifiedErrorCode = "authentication"
 	UnifiedErrorCodeContextLengthOverflow UnifiedErrorCode = "context_length_overflow"
 	UnifiedErrorCodeProviderContract      UnifiedErrorCode = "provider_contract_error"
+	UnifiedErrorCodeProviderOverload      UnifiedErrorCode = "provider_overload"
 )
 
 const providerTypeResponseIncomplete = "response.incomplete"

@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync/atomic"
 	"testing"
@@ -52,7 +53,7 @@ func TestGenerateWithRetryRetryPolicyByToolChoice(t *testing.T) {
 			wantAttempts: int32(len(generateRetryDelays) + 1),
 		},
 		{
-			name: "required provider surfaces without retry",
+			name: "required provider uses full budget",
 			request: llm.Request{
 				Model:          "gpt-5",
 				ToolChoiceMode: llm.ToolChoiceModeRequired,
@@ -61,11 +62,11 @@ func TestGenerateWithRetryRetryPolicyByToolChoice(t *testing.T) {
 					Schema: json.RawMessage(`{"type":"object"}`),
 				}},
 			},
-			err:          &llm.APIStatusError{StatusCode: 503, Body: "overloaded"},
-			wantAttempts: 1,
+			err:          &llm.ProviderAPIError{StatusCode: 503, Code: llm.UnifiedErrorCodeUnknown},
+			wantAttempts: int32(len(generateRetryDelays) + 1),
 		},
 		{
-			name: "required stall surfaces without retry",
+			name: "required stall uses reduced budget",
 			request: llm.Request{
 				Model:          "gpt-5",
 				ToolChoiceMode: llm.ToolChoiceModeRequired,
@@ -75,7 +76,7 @@ func TestGenerateWithRetryRetryPolicyByToolChoice(t *testing.T) {
 				}},
 			},
 			err:          fmt.Errorf("model stream stalled: %w", llm.ErrModelStreamStalled),
-			wantAttempts: 1,
+			wantAttempts: int32(len(idleStallRetryDelays) + 1),
 		},
 	}
 	for _, tt := range tests {
@@ -92,6 +93,47 @@ func TestGenerateWithRetryRetryPolicyByToolChoice(t *testing.T) {
 	}
 }
 
+type retryingEventsClient struct {
+	fakeClient
+	attempts int
+}
+
+func (c *retryingEventsClient) GenerateStreamWithEvents(_ context.Context, _ llm.Request, callbacks llm.StreamCallbacks) (llm.Response, error) {
+	c.attempts++
+	callbacks.OnAssistantDelta(llm.AssistantDelta{Text: "x"})
+	callbacks.OnReasoningSummaryDelta(llm.ReasoningSummaryDelta{Text: "x"})
+	if c.attempts == 1 {
+		return llm.Response{ToolCalls: []llm.ToolCall{{ID: "incomplete", Name: "exec_command"}}}, &llm.ProviderAPIError{Code: llm.UnifiedErrorCodeUnknown}
+	}
+	return llm.Response{}, nil
+}
+func TestRequiredRetryClearsIncompleteAssistantReasoningAndTools(t *testing.T) {
+	withGenerateRetryDelays(t, []time.Duration{0})
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	var sequence []EventKind
+	resp, err := engine.generateWithRetryClient(context.Background(), "step", &retryingEventsClient{},
+		llm.Request{Model: "gpt-5", ToolChoiceMode: llm.ToolChoiceModeRequired},
+		func(_ llm.AssistantDelta) { sequence = append(sequence, EventAssistantDelta) },
+		func(_ llm.ReasoningSummaryDelta) { sequence = append(sequence, EventReasoningDelta) },
+		func() { sequence = append(sequence, EventAssistantDeltaReset, EventReasoningDeltaReset) },
+	)
+	if err != nil || len(resp.ToolCalls) != 0 || len(sequence) != 6 || sequence[0] != EventAssistantDelta || sequence[1] != EventReasoningDelta || sequence[2] != EventAssistantDeltaReset || sequence[3] != EventReasoningDeltaReset || sequence[4] != EventAssistantDelta || sequence[5] != EventReasoningDelta {
+		t.Fatalf("required retry = response:%+v error:%v sequence:%v", resp, err, sequence)
+	}
+}
+func TestRetryBudgetResetsAfterSuccessAndRetainsOverloadCause(t *testing.T) {
+	withGenerateRetryDelays(t, []time.Duration{0, 0, 0, 0, 0})
+	cause := &llm.ProviderAPIError{StatusCode: 200, Code: llm.UnifiedErrorCodeProviderOverload}
+	client := &fakeClient{errors: []error{&llm.APIStatusError{StatusCode: 503}, nil, cause, cause, cause, cause, cause, cause}}
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{Model: "gpt-5"})
+	if _, err := engine.generateWithRetryClient(context.Background(), "first", client, llm.Request{Model: "gpt-5", ToolChoiceMode: llm.ToolChoiceModeAutomatic}, nil, nil, nil); err != nil {
+		t.Fatalf("first generation: %v", err)
+	}
+	_, err := engine.generateWithRetryClient(context.Background(), "second", client, llm.Request{Model: "gpt-5", ToolChoiceMode: llm.ToolChoiceModeAutomatic}, nil, nil, nil)
+	if !errors.Is(err, cause) || fakeClientCallCount(client) != 2+len(generateRetryDelays)+1 {
+		t.Fatalf("exhausted overload = %v, calls = %d", err, fakeClientCallCount(client))
+	}
+}
 func TestStatusFromRunErrorClassifiesStallAsFailed(t *testing.T) {
 	t.Parallel()
 	stall := fmt.Errorf("model generation failed after retries: %w", llm.ErrModelStreamStalled)
