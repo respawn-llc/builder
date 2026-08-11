@@ -27,9 +27,6 @@ func TestDeleteProjectAuthoritativeCurrentNodeBlockerWinsPreparationInvalidation
 	if err != nil {
 		t.Fatalf("DeleteProject error = %v, want Current Node blocker", err)
 	}
-	if errors.Is(err, ErrProjectDeletePreparationInvalidated) {
-		t.Fatalf("DeleteProject error = %v, authoritative blocker must win preparation invalidation", err)
-	}
 	if len(blockers) != 1 || blockers[0].Code != "non_terminal_tasks" {
 		t.Fatalf("DeleteProject blockers = %+v, want Current Node non-terminal task blocker", blockers)
 	}

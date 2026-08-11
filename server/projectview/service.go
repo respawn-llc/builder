@@ -429,7 +429,7 @@ func deleteProjectSessionArtifacts(persistenceRoot string, projectID string) err
 		return err
 	}
 	projectID = strings.TrimSpace(projectID)
-	if projectID == "" || filepath.Base(projectID) != projectID {
+	if projectID == "" || projectID == "." || projectID == ".." || filepath.Base(projectID) != projectID {
 		return fmt.Errorf("invalid project id %q", projectID)
 	}
 	sessionsRoot := filepath.Join(root, "projects", projectID, "sessions")

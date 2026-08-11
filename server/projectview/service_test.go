@@ -170,6 +170,29 @@ func TestServiceProjectDeleteSurfacesArtifactCleanupFailureAfterCommit(t *testin
 	}
 }
 
+func TestDeleteProjectSessionArtifactsRejectsRelativeProjectIDs(t *testing.T) {
+	persistenceRoot := t.TempDir()
+	sharedSessionsRoot := filepath.Join(persistenceRoot, "sessions")
+	if err := os.MkdirAll(sharedSessionsRoot, 0o755); err != nil {
+		t.Fatalf("create shared sessions root: %v", err)
+	}
+	marker := filepath.Join(sharedSessionsRoot, "keep")
+	if err := os.WriteFile(marker, []byte("keep"), 0o644); err != nil {
+		t.Fatalf("write shared sessions marker: %v", err)
+	}
+
+	for _, projectID := range []string{".", ".."} {
+		t.Run(projectID, func(t *testing.T) {
+			if err := deleteProjectSessionArtifacts(persistenceRoot, projectID); err == nil {
+				t.Fatalf("deleteProjectSessionArtifacts(%q) succeeded", projectID)
+			}
+			if _, err := os.Stat(marker); err != nil {
+				t.Fatalf("shared sessions marker changed: %v", err)
+			}
+		})
+	}
+}
+
 func TestMetadataServicePaginatesProjectWorkspacesForGUI(t *testing.T) {
 	store, _, binding := newProjectViewMetadataStore(t)
 	first := attachProjectViewWorkspace(t, store, binding.ProjectID)
