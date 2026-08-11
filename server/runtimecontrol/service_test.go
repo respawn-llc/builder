@@ -1708,7 +1708,7 @@ func TestServiceResumeGoalDuringInterruptSchedulesRestartWithReminder(t *testing
 		client.releaseSecond()
 	}()
 	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
-	goal, err := engine.SetGoal("ship goal mode", session.GoalActorUser)
+	_, err := engine.SetGoal("ship goal mode", session.GoalActorUser)
 	if err != nil {
 		t.Fatalf("SetGoal: %v", err)
 	}
@@ -1732,8 +1732,8 @@ func TestServiceResumeGoalDuringInterruptSchedulesRestartWithReminder(t *testing
 	if err != nil {
 		t.Fatalf("ResumeGoal: %v", err)
 	}
-	if resp.Goal == nil || resp.Goal.Objective != goal.Objective || resp.Goal.Status != clientui.RuntimeGoalStatusActive {
-		t.Fatalf("resume suspending active response = %+v, want existing active goal", resp)
+	if resp.Goal != nil || resp.Pending != nil || resp.Availability != clientui.GoalAvailabilityAvailable {
+		t.Fatalf("resume suspending active response = %+v, want queued status feedback without Goal projection", resp)
 	}
 	client.releaseFirst()
 	select {

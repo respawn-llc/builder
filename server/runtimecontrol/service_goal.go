@@ -178,14 +178,14 @@ func goalMutationResponseFromCommand(result runtimecommand.GoalCommandResult, al
 		return serverapi.RuntimeGoalMutationResponse{Availability: result.Availability}, nil
 	}
 	if result.Disposition == runtime.GoalCommandQueued {
+		if !allowPendingPreview {
+			return serverapi.RuntimeGoalMutationResponse{Availability: result.Availability}, nil
+		}
 		if result.Goal == nil {
 			return serverapi.RuntimeGoalMutationResponse{}, errors.New("queued goal command is missing preview")
 		}
 		if projected := session.GoalCoreFromState(result.Goal); projected != nil && strings.TrimSpace(projected.ID) != "" {
 			return serverapi.RuntimeGoalMutationResponse{Goal: projected, Availability: result.Availability}, nil
-		}
-		if !allowPendingPreview {
-			return serverapi.RuntimeGoalMutationResponse{Availability: result.Availability}, nil
 		}
 		return serverapi.RuntimeGoalMutationResponse{Pending: &clientui.GoalPreview{Objective: result.Goal.Objective, Status: clientui.RuntimeGoalStatus(result.Goal.Status)}, Availability: result.Availability}, nil
 	}

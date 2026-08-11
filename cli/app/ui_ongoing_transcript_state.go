@@ -51,8 +51,7 @@ func (m *uiModel) applyAdmittedTranscriptMessageState(
 	case clientui.TranscriptMessageContextUsage:
 		m.applyTranscriptContextUsage(message.Payload().(clientui.TranscriptContextUsage))
 	case clientui.TranscriptMessageGoalStatus:
-		// The runtime-client main-view cache is the goal read model used by the
-		// status line and goal flow.
+		m.reconcileAuthoritativeGoal(admission.view.Status.Goal)
 	case clientui.TranscriptMessageBackgroundActivity:
 		m.applyTranscriptBackgroundActivity(message.Payload().(clientui.TranscriptBackgroundActivity))
 		if m.processList.open {
@@ -80,6 +79,7 @@ func (m *uiModel) applyTranscriptHydration(
 	cmds = append(cmds, m.applyTranscriptSessionIdentity(hydration.SessionIdentity))
 	m.applyTranscriptSessionStatus(hydration.SessionStatus)
 	cmds = append(cmds, m.applyTranscriptRuntimeReadModelUpdate(admission))
+	m.reconcileAuthoritativeGoal(admission.view.Status.Goal)
 
 	m.reasoningStatusHeader = ""
 	if hydration.ActiveThinkingStatus != nil {
@@ -120,6 +120,16 @@ func (m *uiModel) applyTranscriptHydration(
 		cmds = append(cmds, m.requestProcessListRefresh())
 	}
 	return batchCmds(cmds...)
+}
+
+func (m *uiModel) reconcileAuthoritativeGoal(goal *clientui.RuntimeGoal) {
+	if m == nil {
+		return
+	}
+	m.goal.pending = nil
+	if m.goal.open {
+		m.goal.goal = cloneRuntimeGoal(goal)
+	}
 }
 
 func (m *uiModel) applyTranscriptRuntimeReadModelUpdate(admission runtimeTupleMergeResult) tea.Cmd {
