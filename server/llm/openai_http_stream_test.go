@@ -886,16 +886,11 @@ func TestGenerateStream_MapsProviderOverloadCodeWithoutMessageMatching(t *testin
 		`[DONE]`,
 	)
 	_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{})
-	if err == nil {
-		t.Fatal("expected stream error")
-	}
 	var providerErr *ProviderAPIError
-	if !errors.As(err, &providerErr) {
+	if err == nil || !errors.As(err, &providerErr) {
 		t.Fatalf("expected ProviderAPIError, got %T", err)
 	}
-	if providerErr.Code != UnifiedErrorCodeProviderOverload ||
-		providerErr.ProviderCode != "server_is_overloaded" ||
-		providerErr.StatusCode != http.StatusOK {
+	if providerErr.Code != UnifiedErrorCodeProviderOverload || providerErr.ProviderCode != "server_is_overloaded" || providerErr.StatusCode != http.StatusOK {
 		t.Fatalf("unexpected provider overload: %+v", providerErr)
 	}
 	if got := classifyOpenAIUnifiedErrorCode(http.StatusUnauthorized, "server_is_overloaded"); got != UnifiedErrorCodeAuthentication || classifyOpenAIUnifiedErrorCode(http.StatusOK, "SERVER_IS_OVERLOADED") != UnifiedErrorCodeUnknown {

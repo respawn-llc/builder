@@ -1,6 +1,10 @@
 package llm
 
-import "core/shared/llmerrors"
+import (
+	"errors"
+
+	"core/shared/llmerrors"
+)
 
 var ErrModelStreamStalled = llmerrors.ErrModelStreamStalled
 
@@ -23,7 +27,7 @@ func IsAuthenticationError(err error) bool {
 }
 
 func IsNonRetriableModelError(err error) bool {
-	return llmerrors.IsNonRetriableModelError(err)
+	return errors.Is(err, ErrInvalidRequest) || errors.Is(err, ErrUnsupportedToolChoicePolicy) || llmerrors.IsNonRetriableModelError(err)
 }
 
 func IsContextLengthOverflowError(err error) bool {

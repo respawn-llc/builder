@@ -73,16 +73,15 @@ func TestGenerateWithRetryRejectsNonRetriableModelErrorsWithoutRetry(t *testing.
 			},
 		},
 		{
-			name: "provider-contract",
-			cause: &llm.ProviderAPIError{
-				Code: llm.UnifiedErrorCodeProviderContract,
+			name: "request-policy",
+			cause: &llm.UnsupportedToolChoicePolicyError{
+				ProviderID: "test",
+				Mode:       llm.ToolChoiceModeRequired,
 			},
 			assertCategory: func(t *testing.T, err error) {
 				t.Helper()
-				var providerErr *llm.ProviderAPIError
-				if !errors.As(err, &providerErr) ||
-					providerErr.Code != llm.UnifiedErrorCodeProviderContract {
-					t.Fatalf("error does not retain provider-contract category: %T", err)
+				if !errors.Is(err, llm.ErrUnsupportedToolChoicePolicy) {
+					t.Fatalf("error does not retain request-policy category: %T", err)
 				}
 			},
 		},
