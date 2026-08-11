@@ -17,10 +17,6 @@ func (c uiInputController) applyCommandResultWithPreSubmitQueuePosition(commandR
 	return c.applyCommandResultWithPreSubmitQueuePositionAndSubmittedText(commandResult, queuePosition, activeSubmitOriginDirect, "")
 }
 
-func (c uiInputController) applyCommandResultWithPreSubmitQueuePositionAndOrigin(commandResult commands.Result, queuePosition preSubmitQueuePosition, origin activeSubmitOrigin) (tea.Model, tea.Cmd) {
-	return c.applyCommandResultWithPreSubmitQueuePositionAndSubmittedText(commandResult, queuePosition, origin, "")
-}
-
 func (c uiInputController) applyCommandResultWithPreSubmitQueuePositionAndSubmittedText(
 	commandResult commands.Result,
 	queuePosition preSubmitQueuePosition,
