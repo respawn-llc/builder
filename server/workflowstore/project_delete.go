@@ -11,20 +11,14 @@ import (
 	"core/shared/serverapi"
 )
 
-type ProjectDeleteRuntimeBlocker func(
-	context.Context,
-	[]string,
-) ([]serverapi.ProjectDeleteBlocker, func(), error)
-
 // ErrProjectDeletePreparationInvalidated is returned when the Project's Session
 // set changes after Project Delete preparation but before the authoritative
 // write transaction can commit.
 var ErrProjectDeletePreparationInvalidated = errors.New("project delete preparation was invalidated")
 
 type ProjectDeleteRequest struct {
-	ProjectID         string
-	PreflightBlockers []serverapi.ProjectDeleteBlocker
-	RuntimeBlocker    ProjectDeleteRuntimeBlocker
+	ProjectID          string
+	ExpectedSessionIDs []string
 }
 
 func (s *Store) DeleteProject(ctx context.Context, req ProjectDeleteRequest) ([]serverapi.ProjectDeleteBlocker, error) {
@@ -33,33 +27,12 @@ func (s *Store) DeleteProject(ctx context.Context, req ProjectDeleteRequest) ([]
 	}
 	projectID := strings.TrimSpace(req.ProjectID)
 
-	preflightBlockers := append([]serverapi.ProjectDeleteBlocker(nil), req.PreflightBlockers...)
 	counts, err := s.queries.GetProjectDeleteBlockerCounts(ctx, projectID)
 	if err != nil {
 		return nil, fmt.Errorf("count project delete blockers: %w", err)
 	}
-	preflightBlockers = append(preflightBlockers, projectDeleteBlockersFromCounts(counts)...)
-	if len(preflightBlockers) > 0 {
-		return preflightBlockers, nil
-	}
-
-	preparedSessionIDs, err := s.queries.ListProjectSessionIDs(ctx, projectID)
-	if err != nil {
-		return nil, fmt.Errorf("list project sessions for preparation: %w", err)
-	}
-	releaseRuntimeBlocker := func() {}
-	if req.RuntimeBlocker != nil {
-		runtimeBlockers, release, err := req.RuntimeBlocker(ctx, preparedSessionIDs)
-		if release != nil {
-			releaseRuntimeBlocker = release
-			defer releaseRuntimeBlocker()
-		}
-		if err != nil {
-			return nil, err
-		}
-		if len(runtimeBlockers) > 0 {
-			return runtimeBlockers, nil
-		}
+	if blockers := projectDeleteBlockersFromCounts(counts); len(blockers) > 0 {
+		return blockers, nil
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -97,7 +70,7 @@ func (s *Store) DeleteProject(ctx context.Context, req ProjectDeleteRequest) ([]
 	if err != nil {
 		return nil, rollback(fmt.Errorf("list project sessions for commit: %w", err))
 	}
-	if !metadata.SessionIDSetsEqual(preparedSessionIDs, commitSessionIDs) {
+	if !metadata.SessionIDSetsEqual(req.ExpectedSessionIDs, commitSessionIDs) {
 		return nil, rollback(ErrProjectDeletePreparationInvalidated)
 	}
 	if _, err := q.DeleteProjectTaskPendingApprovals(ctx, projectID); err != nil {

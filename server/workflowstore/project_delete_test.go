@@ -4,23 +4,24 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
 
 	"core/shared/serverapi"
 )
 
 func TestDeleteProjectAuthoritativeCurrentNodeBlockerWinsPreparationInvalidation(t *testing.T) {
 	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
+	expectedSessionIDs, err := store.metadata.ListProjectSessionIDs(ctx, binding.ProjectID)
+	if err != nil {
+		t.Fatalf("ListProjectSessionIDs: %v", err)
+	}
+	createTestSession(t, ctx, store, binding, cfg)
+	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	startTask(t, ctx, store, task.ID)
 
 	blockers, err := store.DeleteProject(ctx, ProjectDeleteRequest{
-		ProjectID: binding.ProjectID,
-		RuntimeBlocker: func(context.Context, []string) ([]serverapi.ProjectDeleteBlocker, func(), error) {
-			createTestSession(t, ctx, store, binding, cfg)
-			createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
-			task := createDefaultTask(t, ctx, store, binding.ProjectID)
-			startTask(t, ctx, store, task.ID)
-			return nil, func() {}, nil
-		},
+		ProjectID:          binding.ProjectID,
+		ExpectedSessionIDs: expectedSessionIDs,
 	})
 
 	if err != nil {
@@ -37,43 +38,21 @@ func TestDeleteProjectAuthoritativeCurrentNodeBlockerWinsPreparationInvalidation
 
 func TestDeleteProjectRejectsPreparedSessionSetChangeBeforeCommit(t *testing.T) {
 	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
-	_, err := store.DeleteProject(ctx, ProjectDeleteRequest{
-		ProjectID: binding.ProjectID,
-		RuntimeBlocker: func(context.Context, []string) ([]serverapi.ProjectDeleteBlocker, func(), error) {
-			createTestSession(t, ctx, store, binding, cfg)
-			return nil, func() {}, nil
-		},
+	expectedSessionIDs, err := store.metadata.ListProjectSessionIDs(ctx, binding.ProjectID)
+	if err != nil {
+		t.Fatalf("ListProjectSessionIDs: %v", err)
+	}
+	createTestSession(t, ctx, store, binding, cfg)
+
+	_, err = store.DeleteProject(ctx, ProjectDeleteRequest{
+		ProjectID:          binding.ProjectID,
+		ExpectedSessionIDs: expectedSessionIDs,
 	})
 
 	if !errors.Is(err, ErrProjectDeletePreparationInvalidated) {
 		t.Fatalf("DeleteProject error = %v, want %v", err, ErrProjectDeletePreparationInvalidated)
 	}
 	assertProjectExists(t, ctx, store, binding.ProjectID)
-}
-
-func TestDeleteProjectRuntimePreparationDoesNotBlockUnrelatedMetadata(t *testing.T) {
-	ctx, store, binding, _ := newTestStoreWithConfigContext(t)
-	started := make(chan struct{})
-	release := make(chan struct{})
-	deleted := make(chan error, 1)
-	go func() {
-		_, err := store.DeleteProject(ctx, ProjectDeleteRequest{
-			ProjectID: binding.ProjectID,
-			RuntimeBlocker: func(context.Context, []string) ([]serverapi.ProjectDeleteBlocker, func(), error) {
-				close(started)
-				<-release
-				return nil, func() {}, nil
-			},
-		})
-		deleted <- err
-	}()
-	<-started
-
-	assertUnrelatedMetadataWriteCompletes(t, store)
-	close(release)
-	if err := <-deleted; err != nil {
-		t.Fatalf("DeleteProject: %v", err)
-	}
 }
 
 func TestDeleteProjectDatabaseFailureRollsBackMetadata(t *testing.T) {
@@ -148,23 +127,5 @@ func assertProjectAbsent(t *testing.T, ctx context.Context, store *Store, projec
 	}
 	if count != 0 {
 		t.Fatalf("project count = %d, want 0", count)
-	}
-}
-
-func assertUnrelatedMetadataWriteCompletes(t *testing.T, store *Store) {
-	t.Helper()
-	workspaceRoot := t.TempDir()
-	done := make(chan error, 1)
-	go func() {
-		_, err := store.metadata.RegisterWorkspaceBinding(context.Background(), workspaceRoot)
-		done <- err
-	}()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("unrelated metadata write: %v", err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("unrelated metadata write remained blocked during project deletion preparation")
 	}
 }

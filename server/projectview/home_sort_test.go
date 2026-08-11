@@ -3,7 +3,6 @@ package projectview
 import (
 	"context"
 	_ "embed"
-	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -21,7 +20,7 @@ var homeSortTaskCommentSQL string
 func TestMetadataServiceSortsProjectHomeByLatestTaskActivityOrEdit(t *testing.T) {
 	ctx := context.Background()
 	store, cfg, older := newProjectViewMetadataStore(t)
-	svc, err := NewMetadataService(store, "")
+	svc, err := NewMetadataService(store)
 	if err != nil {
 		t.Fatalf("NewMetadataService: %v", err)
 	}
@@ -145,59 +144,6 @@ func TestProjectHomeOrderingAdvancesOnCurrentNodeMutation(t *testing.T) {
 	}
 }
 
-func BenchmarkMetadataServiceListProjectHomeSummaries(b *testing.B) {
-	ctx := context.Background()
-	store, _, first := newProjectViewMetadataStore(b)
-	svc, err := NewMetadataService(store, "")
-	if err != nil {
-		b.Fatalf("NewMetadataService: %v", err)
-	}
-	workflowStore, err := workflowstore.New(store, workflowstore.WithNow(func() time.Time {
-		return time.UnixMilli(1)
-	}))
-	if err != nil {
-		b.Fatalf("workflowstore.New: %v", err)
-	}
-	workflow, err := workflowStore.CreateWorkflow(ctx, workflowstore.CreateWorkflowRequest{Name: "Profile Board"})
-	if err != nil {
-		b.Fatalf("CreateWorkflow: %v", err)
-	}
-	projectIDs := []string{first.ProjectID}
-	for index := 1; index < 250; index++ {
-		created, err := svc.CreateProject(ctx, serverapi.ProjectCreateRequest{
-			DisplayName:   fmt.Sprintf("Project %03d", index),
-			ProjectKey:    fmt.Sprintf("P%03d", index),
-			WorkspaceRoot: b.TempDir(),
-		})
-		if err != nil {
-			b.Fatalf("CreateProject %d: %v", index, err)
-		}
-		projectIDs = append(projectIDs, created.Binding.ProjectID)
-	}
-	for projectIndex, projectID := range projectIDs {
-		if _, err := workflowStore.LinkWorkflow(ctx, projectID, workflow.ID, true); err != nil {
-			b.Fatalf("LinkWorkflow %d: %v", projectIndex, err)
-		}
-		for taskIndex := 0; taskIndex < 3; taskIndex++ {
-			task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: projectID, Title: fmt.Sprintf("Task %d", taskIndex), Body: "Body"})
-			if err != nil {
-				b.Fatalf("CreateTask %d/%d: %v", projectIndex, taskIndex, err)
-			}
-			if _, err := workflowStore.AddComment(ctx, task.ID, "Comment", "user", "bench"); err != nil {
-				b.Fatalf("AddComment %d/%d: %v", projectIndex, taskIndex, err)
-			}
-		}
-	}
-
-	b.ReportAllocs()
-	b.ResetTimer()
-	for range b.N {
-		if _, err := svc.ListProjectHome(ctx, serverapi.ProjectHomeListRequest{PageSize: 40}); err != nil {
-			b.Fatalf("ListProjectHome: %v", err)
-		}
-	}
-}
-
 type projectHomeActivityFixture struct {
 	store         *metadata.Store
 	svc           *Service
@@ -212,7 +158,7 @@ type projectHomeActivityFixture struct {
 func newProjectHomeActivityFixture(t *testing.T, ctx context.Context) projectHomeActivityFixture {
 	t.Helper()
 	store, _, older := newProjectViewMetadataStore(t)
-	svc, err := NewMetadataService(store, "")
+	svc, err := NewMetadataService(store)
 	if err != nil {
 		t.Fatalf("NewMetadataService: %v", err)
 	}

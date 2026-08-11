@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"core/server/metadata"
-	"core/server/requestmemo"
 	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowexecution"
@@ -23,68 +22,12 @@ import (
 
 type Service struct {
 	metadata          *metadata.Store
-	projectID         string
-	runtimeGuard      runtimeSessionGuard
-	projectMutations  *requestmemo.MutationLaneRegistry[string]
+	runtimeAuthority  *sessionruntime.Authority
 	mutationPermit    *workflowexecution.MutationPermit
 	workflowExecution interface {
 		EnsureTaskQuiescent(workflow.TaskID) error
 	}
 	workflowStore *workflowstore.Store
-}
-
-// runtimeSessionGuard is an internal composition collaborator. Production
-// composition always installs the authority adapter via WithRuntimeAuthority.
-type runtimeSessionGuard interface {
-	CountBlockingRuntimeActivity(context.Context, []string) (int, error)
-	BlockSessionStarts(context.Context, []string) (func(), error)
-}
-
-type authorityRuntimeSessionGuard struct {
-	authority *sessionruntime.Authority
-}
-
-func (g authorityRuntimeSessionGuard) CountBlockingRuntimeActivity(ctx context.Context, sessionIDs []string) (int, error) {
-	if g.authority == nil {
-		return 0, nil
-	}
-	if err := context.Cause(ctx); err != nil {
-		return 0, err
-	}
-	ids, err := sessionruntime.ParseSessionIDs(sessionIDs)
-	if err != nil {
-		return 0, err
-	}
-	count := 0
-	for _, id := range ids {
-		active, err := g.authority.HasBlockingRuntimeActivity(ctx, id.String())
-		if err != nil {
-			return 0, err
-		}
-		if active {
-			count++
-		}
-	}
-	return count, nil
-}
-
-func (g authorityRuntimeSessionGuard) BlockSessionStarts(ctx context.Context, sessionIDs []string) (func(), error) {
-	if g.authority == nil {
-		return func() {}, nil
-	}
-	ids, err := sessionruntime.ParseSessionIDs(sessionIDs)
-	if err != nil || len(ids) == 0 {
-		return func() {}, err
-	}
-	release, err := g.authority.BlockSessionStarts(ctx, ids, sessionruntime.SessionStartBlockMaintenance)
-	if err != nil {
-		return nil, err
-	}
-	return func() {
-		if err := release.Close(context.Background()); err != nil {
-			panic(fmt.Sprintf("release project session start block: %v", err))
-		}
-	}, nil
 }
 
 // ErrSessionArtifactEscapesRoot is returned when a session artifact path
@@ -99,26 +42,18 @@ const (
 	maxWorkspacePageSize       = 100
 )
 
-func NewMetadataService(metadataStore *metadata.Store, projectID string) (*Service, error) {
+func NewMetadataService(metadataStore *metadata.Store) (*Service, error) {
 	if metadataStore == nil {
 		return nil, errors.New("metadata store is required")
 	}
-	return &Service{
-		metadata:         metadataStore,
-		projectID:        strings.TrimSpace(projectID),
-		projectMutations: requestmemo.NewMutationLaneRegistry[string](),
-	}, nil
+	return &Service{metadata: metadataStore}, nil
 }
 
 func (s *Service) WithRuntimeAuthority(authority *sessionruntime.Authority) *Service {
 	if s == nil {
 		return nil
 	}
-	if authority == nil {
-		s.runtimeGuard = nil
-	} else {
-		s.runtimeGuard = authorityRuntimeSessionGuard{authority: authority}
-	}
+	s.runtimeAuthority = authority
 	return s
 }
 
@@ -134,13 +69,6 @@ func (s *Service) WithWorkflowExecution(permit *workflowexecution.MutationPermit
 	return s
 }
 
-func (s *Service) ProjectID() string {
-	if s == nil {
-		return ""
-	}
-	return s.projectID
-}
-
 func (s *Service) ListProjects(ctx context.Context, _ serverapi.ProjectListRequest) (serverapi.ProjectListResponse, error) {
 	if s == nil {
 		return serverapi.ProjectListResponse{}, errors.New("project service is required")
@@ -148,16 +76,6 @@ func (s *Service) ListProjects(ctx context.Context, _ serverapi.ProjectListReque
 	projects, err := s.metadata.ListProjects(ctx)
 	if err != nil {
 		return serverapi.ProjectListResponse{}, err
-	}
-	if trimmedProjectID := strings.TrimSpace(s.projectID); trimmedProjectID != "" {
-		filtered := make([]clientui.ProjectSummary, 0, 1)
-		for _, project := range projects {
-			if strings.TrimSpace(project.ProjectID) == trimmedProjectID {
-				filtered = append(filtered, project)
-				break
-			}
-		}
-		return serverapi.ProjectListResponse{Projects: filtered}, nil
 	}
 	return serverapi.ProjectListResponse{Projects: projects}, nil
 }
@@ -180,8 +98,7 @@ func (s *Service) ListProjectHome(ctx context.Context, req serverapi.ProjectHome
 	if err != nil {
 		return serverapi.ProjectHomeListResponse{}, err
 	}
-	scopedProjectID := strings.TrimSpace(s.projectID)
-	summaries, err := s.metadata.ListProjectHomeSummaries(ctx, scopedProjectID, pageSize+1, offset)
+	summaries, err := s.metadata.ListProjectHomeSummaries(ctx, "", pageSize+1, offset)
 	if err != nil {
 		return serverapi.ProjectHomeListResponse{}, err
 	}
@@ -310,14 +227,6 @@ func (s *Service) UpdateProject(ctx context.Context, req serverapi.ProjectUpdate
 	if s == nil {
 		return serverapi.ProjectUpdateResponse{}, errors.New("project service is required")
 	}
-	if err := s.requireProjectID(req.ProjectID); err != nil {
-		return serverapi.ProjectUpdateResponse{}, err
-	}
-	lease, err := s.acquireProjectMutationLease(ctx, req.ProjectID)
-	if err != nil {
-		return serverapi.ProjectUpdateResponse{}, err
-	}
-	defer lease.Release()
 	if err := s.metadata.UpdateProjectMetadata(ctx, req.ProjectID, req.DisplayName, req.ProjectKey); err != nil {
 		return serverapi.ProjectUpdateResponse{}, err
 	}
@@ -334,9 +243,6 @@ func (s *Service) GetProjectEdit(ctx context.Context, req serverapi.ProjectEditG
 	}
 	if s == nil {
 		return serverapi.ProjectEditGetResponse{}, errors.New("project service is required")
-	}
-	if err := s.requireProjectID(req.ProjectID); err != nil {
-		return serverapi.ProjectEditGetResponse{}, err
 	}
 	project, err := s.projectHomeSummary(ctx, req.ProjectID)
 	if err != nil {
@@ -367,22 +273,11 @@ func (s *Service) DeleteProject(ctx context.Context, req serverapi.ProjectDelete
 	if s == nil {
 		return serverapi.ProjectDeleteResponse{}, errors.New("project service is required")
 	}
-	if err := s.requireProjectID(req.ProjectID); err != nil {
-		return serverapi.ProjectDeleteResponse{}, err
-	}
 	projectID := strings.TrimSpace(req.ProjectID)
-	lease, err := s.acquireProjectMutationLease(ctx, projectID)
-	if err != nil {
-		return serverapi.ProjectDeleteResponse{}, err
-	}
-	defer lease.Release()
 	if s.mutationPermit == nil || s.workflowExecution == nil {
 		return serverapi.ProjectDeleteResponse{}, errors.New("workflow execution is required for project deletion")
 	}
 
-	runtimeBlocker := func(ctx context.Context, sessionIDs []string) ([]serverapi.ProjectDeleteBlocker, func(), error) {
-		return withRuntimeBlockers(ctx, sessionIDs, s.projectActiveSessionBlockers, s.blockSessionStarts)
-	}
 	deleteProject := func(ctx context.Context) ([]serverapi.ProjectDeleteBlocker, error) {
 		taskIDs, err := s.metadata.ListProjectTaskIDs(ctx, projectID)
 		if err != nil {
@@ -396,20 +291,36 @@ func (s *Service) DeleteProject(ctx context.Context, req serverapi.ProjectDelete
 		if s.workflowStore == nil {
 			return nil, errors.New("workflow store is required for project deletion")
 		}
+		sessionIDs, err := s.metadata.ListProjectSessionIDs(ctx, projectID)
+		if err != nil {
+			return nil, err
+		}
+		runtimeBlockers, release, err := withRuntimeBlockers(
+			ctx,
+			sessionIDs,
+			s.projectActiveSessionBlockers,
+			s.blockSessionStarts,
+		)
+		if release != nil {
+			defer release()
+		}
+		if err != nil || len(runtimeBlockers) > 0 {
+			return runtimeBlockers, err
+		}
 		blockers, err := s.workflowStore.DeleteProject(ctx, workflowstore.ProjectDeleteRequest{
-			ProjectID:      projectID,
-			RuntimeBlocker: runtimeBlocker,
+			ProjectID:          projectID,
+			ExpectedSessionIDs: sessionIDs,
 		})
 		if err != nil || len(blockers) > 0 {
 			return blockers, err
 		}
 		if err := deleteProjectSessionArtifacts(s.metadata.PersistenceRoot(), projectID); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("project %q was deleted, but session artifact cleanup failed: %w", projectID, err)
 		}
 		return nil, nil
 	}
 	var blockers []serverapi.ProjectDeleteBlocker
-	err = s.mutationPermit.Run(ctx, func(ctx context.Context) error {
+	err := s.mutationPermit.Run(ctx, func(ctx context.Context) error {
 		var runErr error
 		blockers, runErr = deleteProject(ctx)
 		return runErr
@@ -424,10 +335,22 @@ func (s *Service) DeleteProject(ctx context.Context, req serverapi.ProjectDelete
 }
 
 func (s *Service) blockSessionStarts(ctx context.Context, sessionIDs []string) (func(), error) {
-	if s == nil || s.runtimeGuard == nil {
+	if s == nil || s.runtimeAuthority == nil {
 		return func() {}, nil
 	}
-	return s.runtimeGuard.BlockSessionStarts(ctx, sessionIDs)
+	ids, err := sessionruntime.ParseSessionIDs(sessionIDs)
+	if err != nil || len(ids) == 0 {
+		return func() {}, err
+	}
+	release, err := s.runtimeAuthority.BlockSessionStarts(ctx, ids, sessionruntime.SessionStartBlockMaintenance)
+	if err != nil {
+		return nil, err
+	}
+	return func() {
+		if err := release.Close(context.Background()); err != nil {
+			panic(fmt.Sprintf("release project session start block: %v", err))
+		}
+	}, nil
 }
 
 func withRuntimeBlockers[T any](
@@ -477,10 +400,27 @@ func (s *Service) workspaceActiveSessionBlockers(ctx context.Context, sessionIDs
 }
 
 func (s *Service) countBlockingRuntimeActivity(ctx context.Context, sessionIDs []string) (int, error) {
-	if s == nil || s.runtimeGuard == nil {
+	if s == nil || s.runtimeAuthority == nil {
 		return 0, nil
 	}
-	return s.runtimeGuard.CountBlockingRuntimeActivity(ctx, sessionIDs)
+	if err := context.Cause(ctx); err != nil {
+		return 0, err
+	}
+	ids, err := sessionruntime.ParseSessionIDs(sessionIDs)
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for _, id := range ids {
+		active, err := s.runtimeAuthority.HasBlockingRuntimeActivity(ctx, id.String())
+		if err != nil {
+			return 0, err
+		}
+		if active {
+			count++
+		}
+	}
+	return count, nil
 }
 
 func deleteProjectSessionArtifacts(persistenceRoot string, projectID string) error {
@@ -579,9 +519,6 @@ func (s *Service) ListProjectWorkspaces(ctx context.Context, req serverapi.Proje
 	if s == nil {
 		return serverapi.ProjectWorkspaceListResponse{}, errors.New("project service is required")
 	}
-	if err := s.requireProjectID(req.ProjectID); err != nil {
-		return serverapi.ProjectWorkspaceListResponse{}, err
-	}
 	pageSize := req.PageSize
 	if pageSize == 0 {
 		pageSize = defaultWorkspacePageSize
@@ -626,14 +563,6 @@ func (s *Service) AttachWorkspaceToProject(ctx context.Context, req serverapi.Pr
 	if s == nil {
 		return serverapi.ProjectAttachWorkspaceResponse{}, errors.New("project service is required")
 	}
-	if err := s.requireProjectID(req.ProjectID); err != nil {
-		return serverapi.ProjectAttachWorkspaceResponse{}, err
-	}
-	lease, err := s.acquireProjectMutationLease(ctx, req.ProjectID)
-	if err != nil {
-		return serverapi.ProjectAttachWorkspaceResponse{}, err
-	}
-	defer lease.Release()
 	binding, err := s.metadata.AttachWorkspaceToProject(ctx, req.ProjectID, req.WorkspaceRoot)
 	if err != nil {
 		return serverapi.ProjectAttachWorkspaceResponse{}, err
@@ -652,14 +581,6 @@ func (s *Service) RebindWorkspace(ctx context.Context, req serverapi.ProjectRebi
 	if err != nil {
 		return serverapi.ProjectRebindWorkspaceResponse{}, err
 	}
-	if err := s.requireProjectID(prepared.ProjectID); err != nil {
-		return serverapi.ProjectRebindWorkspaceResponse{}, err
-	}
-	lease, err := s.acquireProjectMutationLease(ctx, prepared.ProjectID)
-	if err != nil {
-		return serverapi.ProjectRebindWorkspaceResponse{}, err
-	}
-	defer lease.Release()
 	binding, err := s.metadata.RebindWorkspaceWithExpectedBinding(
 		ctx,
 		req.OldWorkspaceRoot,
@@ -677,8 +598,8 @@ func (s *Service) GetProjectOverview(ctx context.Context, req serverapi.ProjectG
 	if err := req.Validate(); err != nil {
 		return serverapi.ProjectGetOverviewResponse{}, err
 	}
-	if err := s.requireProjectID(req.ProjectID); err != nil {
-		return serverapi.ProjectGetOverviewResponse{}, err
+	if s == nil {
+		return serverapi.ProjectGetOverviewResponse{}, errors.New("project service is required")
 	}
 	overview, err := s.metadata.GetProjectOverview(ctx, req.ProjectID)
 	if err != nil {
@@ -691,31 +612,10 @@ func (s *Service) ListSessionPage(ctx context.Context, req serverapi.SessionPage
 	if err := req.Validate(); err != nil {
 		return serverapi.SessionPageResponse{}, err
 	}
-	if err := s.requireProjectID(req.ProjectID); err != nil {
-		return serverapi.SessionPageResponse{}, err
+	if s == nil {
+		return serverapi.SessionPageResponse{}, errors.New("project service is required")
 	}
 	return s.metadata.ListSessionPage(ctx, req)
-}
-
-func (s *Service) requireProjectID(projectID string) error {
-	if s == nil {
-		return errors.New("project service is required")
-	}
-	if trimmedProjectID := strings.TrimSpace(s.projectID); trimmedProjectID != "" && strings.TrimSpace(projectID) != trimmedProjectID {
-		return fmt.Errorf("project %q not available", strings.TrimSpace(projectID))
-	}
-	return nil
-}
-
-func (s *Service) acquireProjectMutationLease(ctx context.Context, projectID string) (*requestmemo.MutationLaneLease[string], error) {
-	if s == nil || s.projectMutations == nil {
-		return nil, errors.New("project mutation lanes are required")
-	}
-	trimmedProjectID := strings.TrimSpace(projectID)
-	if trimmedProjectID == "" {
-		return nil, errors.New("project mutation requires a project id")
-	}
-	return s.projectMutations.Acquire(ctx, trimmedProjectID)
 }
 
 func (s *Service) projectHomeSummary(ctx context.Context, projectID string) (serverapi.ProjectHomeSummary, error) {
