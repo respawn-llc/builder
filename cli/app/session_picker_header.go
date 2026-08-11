@@ -25,7 +25,6 @@ type sessionPickerHeaderInfo struct {
 	Notice        *startupPickerNotice
 	ModelFacts    *sessionPickerModelFacts
 	updateStatus  apicontract.ServerStatusService
-	debug         bool
 }
 
 type sessionPickerModelFacts struct {

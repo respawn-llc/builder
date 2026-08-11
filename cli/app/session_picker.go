@@ -63,7 +63,6 @@ type sessionPickerModel struct {
 	theme          string
 	styles         sessionPickerStyles
 	result         sessionPickerResult
-	debugMode      bool
 
 	spinnerFrame               int
 	spinnerSequence            uint64
@@ -114,7 +113,6 @@ func newSessionPickerModel(
 		styles:         newSessionPickerStyles(theme),
 		startupStatus:  startupStatus,
 		clock:          time.Now,
-		debugMode:      header.debug,
 	}
 }
 
@@ -512,7 +510,7 @@ func (m *sessionPickerModel) applyPageLoaded(message sessionPickerPageLoadedMsg)
 			directional.generation,
 			directional.requestedOffset,
 		)
-		if m.debugMode {
+		if m.header.StatusRequest.Settings.Debug {
 			panic(err)
 		}
 		tab.resetForFreshLoad()

@@ -245,7 +245,6 @@ func (p *launchPlanner) sessionPickerHeaderInfo(cfg config.App) sessionPickerHea
 		StatusRequest: statusReq,
 		ServerAddress: net.JoinHostPort(cfg.Settings.ServerHost, strconv.Itoa(cfg.Settings.ServerPort)),
 		updateStatus:  p.server.ServerStatusClient(),
-		debug:         cfg.Settings.Debug,
 	}
 }
 
