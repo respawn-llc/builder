@@ -1068,7 +1068,10 @@ func TestServiceInterruptIdleIsNotAccepted(t *testing.T) {
 }
 
 func TestServiceGoalMutationsSetShowComplete(t *testing.T) {
-	store, _, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
+	store, _, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{
+		CurrentNodeExecution: runtimeControlExactExecution(t),
+		EnabledTools:         []toolspec.ID{toolspec.ToolAskQuestion},
+	})
 
 	setResp, err := service.SetGoal(context.Background(), serverapi.RuntimeGoalSetRequest{
 		ClientRequestID: "goal-set-1",
