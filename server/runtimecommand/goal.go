@@ -72,7 +72,7 @@ type GoalAuthority struct {
 
 func NewGoalAuthority(authority *sessionruntime.Authority, execution *ExecutionAdapter) *GoalAuthority {
 	if execution == nil {
-		execution = NewExecutionAdapter(authority)
+		execution = NewExecutionAdapter(authority, nil)
 	}
 	return &GoalAuthority{authority: authority, execution: execution}
 }
