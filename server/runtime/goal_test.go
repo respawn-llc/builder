@@ -94,55 +94,6 @@ func TestGoalLifecycleCarriesMissingAskQuestionCapability(t *testing.T) {
 	assertMissing("clear")
 }
 
-func TestGoalAvailabilityFailurePreservesNoticeWithoutMalformedStatus(t *testing.T) {
-	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
-	if err := store.MarkModelDispatchLocked(session.LockedContract{EnabledTools: []string{"not-a-tool"}}); err != nil {
-		t.Fatal(err)
-	}
-	events := []Event{}
-	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
-		OnEvent: func(evt Event) {
-			events = append(events, evt)
-		},
-	})
-
-	result, err := engine.SetGoal("durable despite malformed contract", session.GoalActorUser)
-	if err == nil || !result.NoticeReceipt.Committed {
-		t.Fatalf("SetGoal result=%+v err=%v, want committed notice and availability error", result, err)
-	}
-	var joined interface{ Unwrap() []error }
-	if errors.As(err, &joined) {
-		t.Fatalf("availability failure error = %T, must not be joined", err)
-	}
-	if goal := store.Meta().Goal; goal == nil || goal.Objective != "durable despite malformed contract" {
-		t.Fatalf("durable goal = %+v, want accepted mutation", goal)
-	}
-	feedback, status := 0, 0
-	for _, event := range events {
-		switch event.Kind {
-		case EventConversationUpdated:
-			feedback++
-		case EventGoalStatusUpdated:
-			status++
-		}
-	}
-	if feedback != 1 || status != 0 {
-		t.Fatalf("events = %+v, want one committed notice and no malformed status", events)
-	}
-}
-
-func TestGoalNoticeFailureDoesNotEmitStatus(t *testing.T) {
-	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
-	events := []Event{}
-	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{OnEvent: func(evt Event) { events = append(events, evt) }})
-	mustBlockTestEventLogAppends(t, store)
-	result := GoalCommandResult{}
-	err := engine.finishGoalOutput("", llm.Message{Role: llm.RoleDeveloper, Content: textutil.Value("goal")}, &result, GoalStatusUpdate{})
-	if err == nil || result.NoticeReceipt.Committed || len(events) != 0 {
-		t.Fatalf("notice failure err=%v receipt=%+v events=%+v", err, result.NoticeReceipt, events)
-	}
-}
-
 func TestQueuedAgentShellGoalSetDrainsAfterToolCompletion(t *testing.T) {
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{

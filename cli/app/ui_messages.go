@@ -74,7 +74,7 @@ type goalRuntimeDoneMsg struct {
 	operation      goalRuntimeOperation
 	objective      string
 	goal           *clientui.RuntimeGoal
-	pending        *clientui.GoalPreview
+	mutation       clientui.GoalMutationResult
 	err            error
 }
 

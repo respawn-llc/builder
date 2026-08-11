@@ -248,27 +248,7 @@ func (r RuntimeGoalShowResponse) Validate() error {
 	return r.GoalEnvelope.Validate()
 }
 
-type RuntimeGoalMutationResponse struct {
-	Goal         *clientui.Goal            `json:"goal,omitempty"`
-	Pending      *clientui.GoalPreview     `json:"pending,omitempty"`
-	Availability clientui.GoalAvailability `json:"availability"`
-}
-
-func (r RuntimeGoalMutationResponse) Validate() error {
-	if err := r.Availability.Validate(); err != nil {
-		return err
-	}
-	if r.Goal != nil && r.Pending != nil {
-		return errors.New("goal mutation response cannot contain Goal and pending preview")
-	}
-	if r.Goal != nil {
-		return r.Goal.Validate()
-	}
-	if r.Pending != nil {
-		return r.Pending.Validate()
-	}
-	return nil
-}
+type RuntimeGoalMutationResponse = clientui.GoalMutationResult
 
 type RuntimeGoalSetRequest struct {
 	ClientRequestID string `json:"client_request_id"`

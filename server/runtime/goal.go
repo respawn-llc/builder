@@ -137,8 +137,14 @@ func (e *Engine) setGoalForStep(stepID string, objective string, actor session.G
 	if err != nil {
 		return result, err
 	}
+	availability, err := e.GoalAvailability()
+	if err != nil {
+		return result, err
+	}
+	result.Availability = availability
 	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
-	err = e.finishGoalOutput(stepID, msg, &result, goalStatusUpdateFromState(goal, ""))
+	noticeReceipt, err := e.steerGoalNoticeAndStatus(stepID, msg, goalStatusUpdateFromState(goal, availability))
+	result.NoticeReceipt = noticeReceipt
 	return result, err
 }
 
@@ -160,7 +166,10 @@ func (e *Engine) setGoalStatusForStepWithGoalLoopAdmission(stepID string, status
 	}
 	if current := e.Goal(); current != nil && current.Status == status {
 		if status != session.GoalStatusActive || e.GoalLoopContinuationEnforced() {
-			return goalCommandResult(GoalCommandNoop, *current, false, session.CommitReceipt{}, session.CommitReceipt{}), nil
+			result := goalCommandResult(GoalCommandNoop, *current, false, session.CommitReceipt{}, session.CommitReceipt{})
+			availability, err := e.GoalAvailability()
+			result.Availability = availability
+			return result, err
 		}
 	}
 	if status == session.GoalStatusActive && requireGoalLoopStart {
@@ -183,8 +192,14 @@ func (e *Engine) setGoalStatusForStepWithGoalLoopAdmission(stepID string, status
 	if err != nil {
 		return result, err
 	}
+	availability, err := e.GoalAvailability()
+	if err != nil {
+		return result, err
+	}
+	result.Availability = availability
 	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
-	err = e.finishGoalOutput(stepID, msg, &result, goalStatusUpdateFromState(goal, ""))
+	noticeReceipt, err := e.steerGoalNoticeAndStatus(stepID, msg, goalStatusUpdateFromState(goal, availability))
+	result.NoticeReceipt = noticeReceipt
 	return result, err
 }
 
@@ -452,8 +467,14 @@ func (e *Engine) clearGoalForStep(stepID string, actor session.GoalActor) (GoalC
 	if err != nil {
 		return result, err
 	}
+	availability, err := e.GoalAvailability()
+	if err != nil {
+		return result, err
+	}
+	result.Availability = availability
 	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
-	err = e.finishGoalOutput(stepID, msg, &result, goalStatusClearUpdate(""))
+	noticeReceipt, err := e.steerGoalNoticeAndStatus(stepID, msg, goalStatusClearUpdate(availability))
+	result.NoticeReceipt = noticeReceipt
 	return result, err
 }
 
@@ -490,9 +511,13 @@ func (e *Engine) cascadeCompleteActiveGoalOnWorkflowCompletion() {
 		reportErr(err)
 		return
 	}
+	availability, err := e.GoalAvailability()
+	if err != nil {
+		reportErr(err)
+		return
+	}
 	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
-	result := goalCommandResult(GoalCommandApplied, completed, false, session.CommitReceipt{}, session.CommitReceipt{})
-	if err := e.finishGoalOutput("", msg, &result, goalStatusUpdateFromState(completed, "")); err != nil {
+	if _, err := e.steerGoalNoticeAndStatus("", msg, goalStatusUpdateFromState(completed, availability)); err != nil {
 		reportErr(err)
 	}
 }
@@ -509,25 +534,15 @@ func steerGoalStatusUpdateIntent(update GoalStatusUpdate) steeringIntent {
 	return steerEventIntent(Event{Kind: EventGoalStatusUpdated, GoalStatus: &update})
 }
 
-func (e *Engine) finishGoalOutput(stepID string, message llm.Message, result *GoalCommandResult, update GoalStatusUpdate) error {
-	noticeReceipt := session.CommitReceipt{}
-	noticeIntent := steerGoalNoticeIntent(message)
-	noticeIntent.items[0].commitReceipt = &noticeReceipt
-	availability, availabilityErr := e.GoalAvailability()
-	if availabilityErr != nil {
-		result.Availability = ""
-		noticeErr := e.steer(stepID, noticeIntent)
-		result.NoticeReceipt = noticeReceipt
-		if noticeErr != nil {
-			e.surfaceRunError(noticeErr)
-		}
-		return availabilityErr
+func (e *Engine) steerGoalNoticeAndStatus(
+	stepID string,
+	message llm.Message,
+	update GoalStatusUpdate,
+) (session.CommitReceipt, error) {
+	if e == nil || e.closed.Load() {
+		return session.CommitReceipt{}, ErrEngineClosed
 	}
-	result.Availability = availability
-	update.Availability = availability
-	err := e.steer(stepID, noticeIntent, steerGoalStatusUpdateIntent(update))
-	result.NoticeReceipt = noticeReceipt
-	return err
+	return e.steerWithCommitReceipt(stepID, steerGoalNoticeAndStatusIntent(message, update))
 }
 
 func (e *Engine) StartGoalLoop() error {

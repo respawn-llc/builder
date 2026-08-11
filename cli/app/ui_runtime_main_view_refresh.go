@@ -139,7 +139,6 @@ func (m *uiModel) handleRuntimeMainViewRefreshed(msg runtimeMainViewRefreshedMsg
 	}
 	m.observeRuntimeRequestResult(nil)
 	canonical := msg.view
-	previousGoal := m.cachedRuntimeMainView().Status.Goal
 	if client, ok := m.runtimeClient().(*sessionRuntimeClient); ok {
 		canonical = client.mergeMainViewCandidate(
 			msg.view,
@@ -148,9 +147,6 @@ func (m *uiModel) handleRuntimeMainViewRefreshed(msg runtimeMainViewRefreshedMsg
 		).view
 	}
 	applyCmd := m.applyRuntimeMainViewState(canonical)
-	if !runtimeGoalsEqual(previousGoal, canonical.Status.Goal) {
-		m.reconcileAuthoritativeGoal(canonical.Status.Goal)
-	}
 	return sequenceCmds(applyCmd, m.applyRuntimeSessionMetadata(canonical.Session), m.drainPendingRuntimeMainViewRefresh().cmd)
 }
 

@@ -4,14 +4,10 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
 
 	"core/server/llm"
-	"core/server/requestmemo"
 	"core/server/runtime"
 	"core/server/runtimeactivity"
-	"core/server/runtimecommand"
-	"core/server/runtimeops"
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/sessionruntime"
@@ -19,7 +15,6 @@ import (
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
-	"core/shared/sessioncontract"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
@@ -58,132 +53,6 @@ func TestServiceSetThinkingLevelDedupesSuccessfulRetry(t *testing.T) {
 	}
 	if got := engine.ThinkingLevel(); got != "high" {
 		t.Fatalf("thinking level = %q, want high", got)
-	}
-}
-
-func TestGoalMutationOutputFailureIsMemoized(t *testing.T) {
-	outputErr := errors.New("goal status output failed")
-	service := &Service{
-		goalAuthority: runtimecommand.NewGoalAuthority(nil, nil),
-		goals:         requestmemo.New[goalSetMemoRequest, committedGoalMutationResult](),
-	}
-	req := goalSetMemoRequest{SessionID: "session-1", Objective: "ship it", Actor: "user"}
-	calls := 0
-	run := func(context.Context) (runtimecommand.GoalCommandResult, error) {
-		calls++
-		now := time.Now().UTC()
-		return runtimecommand.GoalCommandResult{
-			Goal:         &session.GoalState{ID: "goal-1", Objective: req.Objective, Status: session.GoalStatusActive, CreatedAt: now, UpdatedAt: now},
-			Availability: clientui.GoalAvailabilityAvailable,
-			Disposition:  runtime.GoalCommandApplied,
-			Err:          outputErr,
-		}, nil
-	}
-	first, firstErr := memoizedGoalMutation(service, context.Background(), "goal-request-1", req, service.goals, sameGoalSetMemoRequest, true, run)
-	second, secondErr := memoizedGoalMutation(service, context.Background(), "goal-request-1", req, service.goals, sameGoalSetMemoRequest, true, run)
-	if !errors.Is(firstErr, outputErr) || !errors.Is(secondErr, outputErr) || first.Goal == nil || second.Goal == nil || first.Goal.ID != second.Goal.ID || calls != 1 {
-		t.Fatalf("memoized Goal output failure = (%+v,%v), (%+v,%v), calls=%d", first, firstErr, second, secondErr, calls)
-	}
-}
-
-func TestDormantGoalMutationAvailabilityFailureIsMemoizedWithoutSecondNotice(t *testing.T) {
-	persistenceRoot := t.TempDir()
-	store, err := session.Create(
-		persistenceRoot,
-		"workspace-x",
-		t.TempDir(),
-		sessioncontract.SessionCategoryMain,
-		runtimeControlTestSessionPersistence.Options()...,
-	)
-	if err != nil {
-		t.Fatalf("create session store: %v", err)
-	}
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		PersistenceRoot: persistenceRoot,
-		StoreOptions:    runtimeControlTestSessionPersistence.Options(),
-	})
-	t.Cleanup(func() {
-		if err := authority.Close(context.Background()); err != nil {
-			t.Errorf("close authority: %v", err)
-		}
-	})
-	service := NewService(authority)
-	if err := store.MarkModelDispatchLocked(session.LockedContract{EnabledTools: []string{"not-a-tool"}}); err != nil {
-		t.Fatal(err)
-	}
-	req := serverapi.RuntimeGoalSetRequest{
-		ClientRequestID: "goal-malformed-replay",
-		SessionID:       store.Meta().SessionID,
-		Objective:       "persist before availability failure",
-		Actor:           "user",
-	}
-
-	first, firstErr := service.SetGoal(context.Background(), req)
-	second, secondErr := service.SetGoal(context.Background(), req)
-	if first != second || firstErr == nil || secondErr == nil {
-		t.Fatalf("responses/errors = (%+v,%v), (%+v,%v), want identical memoized failure", first, firstErr, second, secondErr)
-	}
-	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("parse session id: %v", err)
-	}
-	descriptor, err := session.NewOpenSessionDescriptor(sessionID)
-	if err != nil {
-		t.Fatalf("open session descriptor: %v", err)
-	}
-	reopened, err := session.MaterializeSessionDescriptor(
-		persistenceRoot,
-		descriptor,
-		runtimeControlTestSessionPersistence.Options()...,
-	)
-	if err != nil {
-		t.Fatalf("reopen session store: %v", err)
-	}
-	if goal := reopened.Meta().Goal; goal == nil || goal.Objective != req.Objective {
-		t.Fatalf("durable Goal = %+v, responses/errors=(%+v,%v),(%+v,%v)", goal, first, firstErr, second, secondErr)
-	}
-	if messages := runtimeControlGoalDeveloperMessages(t, reopened); len(messages) != 1 {
-		t.Fatalf("goal developer messages = %d, want one notice across replay", len(messages))
-	}
-}
-
-func TestLiveGoalMutationAvailabilityFailureIsMemoizedWithoutSecondNotice(t *testing.T) {
-	events := []runtime.Event{}
-	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{
-		CurrentNodeExecution: runtimeControlExactExecution(t),
-		OnEvent: func(event runtime.Event) {
-			events = append(events, event)
-		},
-	})
-	if err := store.MarkModelDispatchLocked(session.LockedContract{EnabledTools: []string{"not-a-tool"}}); err != nil {
-		t.Fatal(err)
-	}
-	req := serverapi.RuntimeGoalSetRequest{
-		ClientRequestID: "live-goal-malformed-replay",
-		SessionID:       store.Meta().SessionID,
-		Objective:       "persist live before availability failure",
-		Actor:           "user",
-	}
-
-	first, firstErr := service.SetGoal(context.Background(), req)
-	second, secondErr := service.SetGoal(context.Background(), req)
-	if first != second || firstErr == nil || secondErr == nil {
-		t.Fatalf("responses/errors = (%+v,%v), (%+v,%v), want identical memoized failure", first, firstErr, second, secondErr)
-	}
-	if goal := engine.Goal(); goal == nil || goal.Objective != req.Objective {
-		t.Fatalf("live durable Goal = %+v, want accepted mutation", goal)
-	}
-	feedback, status := 0, 0
-	for _, event := range events {
-		switch event.Kind {
-		case runtime.EventConversationUpdated:
-			feedback++
-		case runtime.EventGoalStatusUpdated:
-			status++
-		}
-	}
-	if feedback != 1 || status != 0 {
-		t.Fatalf("live events = %+v, want one notice and no malformed status across replay", events)
 	}
 }
 

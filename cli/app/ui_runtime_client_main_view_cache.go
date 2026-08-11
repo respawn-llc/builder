@@ -34,14 +34,9 @@ func (c *sessionRuntimeClient) mergeMainViewCandidate(
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	decision := decideRuntimeTuple(c.mainView.Version, view.Version, ingress)
-	metadataAccepted := metadataBaselineRevision == nil || c.metadataRevision == *metadataBaselineRevision
-	previousGoal := c.mainView.Status.Goal
-	if metadataAccepted {
+	if metadataBaselineRevision == nil || c.metadataRevision == *metadataBaselineRevision {
 		c.mainView.Status = view.Status
 		c.mainView.Session = view.Session
-		if !runtimeGoalsEqual(previousGoal, c.mainView.Status.Goal) {
-			c.clearGoalMutationPendingLocked()
-		}
 		c.advanceMetadataRevision()
 	}
 	if decision == runtimeTupleApply {
@@ -49,26 +44,6 @@ func (c *sessionRuntimeClient) mergeMainViewCandidate(
 	}
 	c.hasMainView = true
 	return runtimeTupleMergeResult{decision: decision, view: c.mainView, project: decision == runtimeTupleApply}
-}
-
-func runtimeGoalsEqual(left, right *clientui.RuntimeGoal) bool {
-	if left == right {
-		return true
-	}
-	if left == nil || right == nil {
-		return false
-	}
-	if left.Availability != right.Availability || left.Suspended != right.Suspended {
-		return false
-	}
-	if left.Goal == nil || right.Goal == nil {
-		return left.Goal == right.Goal
-	}
-	return left.ID == right.ID &&
-		left.Objective == right.Objective &&
-		left.Status == right.Status &&
-		left.CreatedAt.Equal(right.CreatedAt) &&
-		left.UpdatedAt.Equal(right.UpdatedAt)
 }
 
 func (c *sessionRuntimeClient) mainViewMetadataRevision() uint64 {

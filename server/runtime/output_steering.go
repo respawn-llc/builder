@@ -35,6 +35,7 @@ type steeringIntent struct {
 type steeringItem struct {
 	message                     *steeringMessage
 	assistantCommit             *steeringAssistantCommit
+	goalNoticeAndStatus         *steeringGoalNoticeAndStatus
 	committedAssistant          *steeringCommittedAssistantMessage
 	completedResponseResolution *steeringCompletedResponseResolution
 	localEntry                  *steeringLocalEntry
@@ -74,6 +75,11 @@ type steeringAssistantCommitResult struct {
 	provenance *TranscriptCommittedRowProvenance
 	coordinate *committedAssistantCoordinate
 	resolution completedResponseResolutionOutcome
+}
+
+type steeringGoalNoticeAndStatus struct {
+	message llm.Message
+	update  GoalStatusUpdate
 }
 
 type steeringLocalEntry struct {
@@ -382,13 +388,14 @@ func steerEventIntent(evt Event) steeringIntent {
 	}
 }
 
-func steerGoalNoticeIntent(message llm.Message) steeringIntent {
-	return steerMessagesWithPersistenceIntent(
-		steeringPriorityRuntimeContext,
-		steeringMessageEventDefault,
-		true,
-		[]llm.Message{message},
-	)
+func steerGoalNoticeAndStatusIntent(message llm.Message, update GoalStatusUpdate) steeringIntent {
+	return steeringIntent{
+		priority: steeringPriorityRuntimeContext,
+		items: []steeringItem{{goalNoticeAndStatus: &steeringGoalNoticeAndStatus{
+			message: message,
+			update:  update,
+		}}},
+	}
 }
 
 func steerLiveToolAbortIntent(reason string) steeringIntent {
@@ -596,6 +603,7 @@ func workflowPostCompletionActivityForSteeringItem(item steeringItem) workflowPo
 	if item.assistantCommit != nil ||
 		item.committedAssistant != nil ||
 		item.completedResponseResolution != nil ||
+		item.goalNoticeAndStatus != nil ||
 		item.reviewerFeedback != nil ||
 		item.reviewerError != nil ||
 		item.toolCompletion != nil ||
@@ -742,6 +750,26 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 			}
 		}
 		return err
+	}
+	if item.goalNoticeAndStatus != nil {
+		notice := item.goalNoticeAndStatus
+		receipt, noticeErr := e.appendMessageRaw(
+			stepID,
+			notice.message,
+			steeringMessageEventDefault,
+			true,
+			nil,
+		)
+		item.recordCommitReceipt(receipt)
+		if !receipt.Committed {
+			return noticeErr
+		}
+		statusErr := e.emitRaw(Event{
+			Kind:       EventGoalStatusUpdated,
+			StepID:     stepID,
+			GoalStatus: &notice.update,
+		})
+		return errors.Join(noticeErr, statusErr)
 	}
 	if item.committedAssistant != nil {
 		return e.emitCommittedAssistantMessageRaw(stepID, *item.committedAssistant)

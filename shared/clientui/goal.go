@@ -44,6 +44,12 @@ type GoalPreview struct {
 	Status    RuntimeGoalStatus `json:"status"`
 }
 
+type GoalMutationResult struct {
+	Goal         *Goal            `json:"goal,omitempty"`
+	Pending      *GoalPreview     `json:"pending,omitempty"`
+	Availability GoalAvailability `json:"availability"`
+}
+
 func ProjectGoal(goal *Goal, availability GoalAvailability) GoalEnvelope {
 	return GoalEnvelope{Goal: goal, Availability: availability}
 }
@@ -68,6 +74,22 @@ func (g GoalEnvelope) Validate() error {
 func (r GoalPreview) Validate() error {
 	if strings.TrimSpace(r.Objective) == "" || (r.Status != RuntimeGoalStatusActive && r.Status != RuntimeGoalStatusPaused && r.Status != RuntimeGoalStatusComplete) {
 		return fmt.Errorf("invalid goal preview fields")
+	}
+	return nil
+}
+
+func (r GoalMutationResult) Validate() error {
+	if err := r.Availability.Validate(); err != nil {
+		return err
+	}
+	if r.Goal != nil && r.Pending != nil {
+		return fmt.Errorf("goal mutation result cannot contain Goal and pending preview")
+	}
+	if r.Goal != nil {
+		return r.Goal.Validate()
+	}
+	if r.Pending != nil {
+		return r.Pending.Validate()
 	}
 	return nil
 }

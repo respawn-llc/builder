@@ -46,7 +46,6 @@ func (c *sessionRuntimeClient) admitTranscriptMessageState(message clientui.Tran
 			applyRuntimeTuple(&c.mainView, candidate)
 		}
 		applyTranscriptHydrationMetadataToMainView(&c.mainView, hydration)
-		c.clearGoalMutationPendingLocked()
 		c.ensureMainViewIdentity()
 		c.advanceMetadataRevision()
 		result = runtimeTupleMergeResult{decision: decision, view: c.mainView, project: true}
@@ -61,9 +60,6 @@ func (c *sessionRuntimeClient) admitTranscriptMessageState(message clientui.Tran
 		}
 		result = runtimeTupleMergeResult{decision: decision, view: c.mainView, project: decision == runtimeTupleApply}
 	default:
-		if message.Kind() == clientui.TranscriptMessageGoalStatus {
-			c.clearGoalMutationPendingLocked()
-		}
 		metadataChanged := applyTranscriptMetadataToMainView(&c.mainView, message)
 		if c.ensureMainViewIdentity() || metadataChanged {
 			c.advanceMetadataRevision()

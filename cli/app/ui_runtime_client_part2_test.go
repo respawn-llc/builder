@@ -207,8 +207,8 @@ func TestRuntimeClientShowGoalDoesNotInstallAcceptedPendingPreview(t *testing.T)
 	if err != nil {
 		t.Fatalf("SetGoal: %v", err)
 	}
-	if accepted != nil {
-		t.Fatalf("accepted pending Goal = %+v, want no authoritative read-model Goal", accepted)
+	if accepted.Pending == nil || accepted.Pending.Objective != pending.Objective || accepted.Goal != nil {
+		t.Fatalf("accepted pending result = %+v, want identity-less pending preview", accepted)
 	}
 	view, ok := runtimeClient.CachedMainView()
 	if ok && view.Status.Goal != nil {
@@ -292,23 +292,30 @@ func TestRuntimeClientGoalMutationMethodsPatchCachedMainView(t *testing.T) {
 
 	for _, tt := range []struct {
 		name string
-		call func() (*clientui.RuntimeGoal, error)
+		call func() (clientui.GoalMutationResult, error)
 		want *serverapi.RuntimeGoal
 	}{
-		{name: "set", call: func() (*clientui.RuntimeGoal, error) { return runtimeClient.SetGoal("set goal") }, want: setGoal},
+		{name: "set", call: func() (clientui.GoalMutationResult, error) { return runtimeClient.SetGoal("set goal") }, want: setGoal},
 		{name: "pause", call: runtimeClient.PauseGoal, want: pauseGoal},
 		{name: "resume", call: runtimeClient.ResumeGoal, want: resumeGoal},
 		{name: "complete", call: runtimeClient.CompleteGoal, want: completeGoal},
 		{name: "clear", call: runtimeClient.ClearGoal, want: nil},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			goal, err := tt.call()
+			result, err := tt.call()
 			if err != nil {
 				t.Fatalf("%s goal: %v", tt.name, err)
 			}
-			assertRuntimeClientGoalCached(t, runtimeClient, goal, runtimeGoalFixtureFromAPI(tt.want))
+			if !reflect.DeepEqual(result.Goal, tt.want) {
+				t.Fatalf("%s mutation result Goal = %+v, want %+v", tt.name, result.Goal, tt.want)
+			}
+			wantGoal := runtimeGoalFixtureFromAPI(tt.want)
+			view, ok := runtimeClient.CachedMainView()
+			if !ok || !reflect.DeepEqual(view.Status.Goal, wantGoal) {
+				t.Fatalf("%s cached Goal = %+v, want %+v", tt.name, view.Status.Goal, wantGoal)
+			}
 			if tt.want != nil {
-				assertRuntimeGoalConversionDropsAPITimestamps(t, goal, tt.want)
+				assertRuntimeGoalConversionDropsAPITimestamps(t, runtimeGoalFromMutationResult(result), tt.want)
 			}
 		})
 	}

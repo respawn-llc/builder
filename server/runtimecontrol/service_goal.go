@@ -154,7 +154,7 @@ func memoizedGoalMutation[Req any](
 		}
 		response, responseErr := goalMutationResponseFromCommand(outcome, allowPendingPreview)
 		if responseErr != nil {
-			return committedGoalMutationResult{Err: goalMutationError(responseErr)}, nil
+			return committedGoalMutationResult{}, goalMutationError(responseErr)
 		}
 		return committedGoalMutationResult{
 			Response: response,

@@ -168,10 +168,6 @@ type goalRuntimePendingState struct {
 	desiredObjective  string
 }
 
-type goalMutationPendingClient interface {
-	goalMutationPendingSnapshot() *clientui.GoalPreview
-}
-
 func goalRuntimeOperationMutates(operation goalRuntimeOperation) bool {
 	switch operation {
 	case goalRuntimeSet, goalRuntimePause, goalRuntimeResume, goalRuntimeComplete, goalRuntimeClear:
@@ -232,18 +228,15 @@ func (m *uiModel) goalRuntimeCommand(operation goalRuntimeOperation, objective s
 		case goalRuntimeShow, goalRuntimeCheckSet, goalRuntimeCheckClear:
 			msg.goal, msg.err = client.ShowGoal()
 		case goalRuntimeSet:
-			msg.goal, msg.err = client.SetGoal(objective)
-			if msg.err == nil {
-				msg.pending = goalMutationPendingSnapshot(client)
-			}
+			msg.mutation, msg.err = client.SetGoal(objective)
 		case goalRuntimePause:
-			msg.goal, msg.err = client.PauseGoal()
+			msg.mutation, msg.err = client.PauseGoal()
 		case goalRuntimeResume:
-			msg.goal, msg.err = client.ResumeGoal()
+			msg.mutation, msg.err = client.ResumeGoal()
 		case goalRuntimeComplete:
-			msg.goal, msg.err = client.CompleteGoal()
+			msg.mutation, msg.err = client.CompleteGoal()
 		case goalRuntimeClear:
-			msg.goal, msg.err = client.ClearGoal()
+			msg.mutation, msg.err = client.ClearGoal()
 		}
 		return msg
 	}
@@ -313,26 +306,29 @@ func (m *uiModel) applyGoalRuntimeDone(msg goalRuntimeDoneMsg) tea.Cmd {
 		}
 		return sequenceCmds(m.goalRuntimeCommand(goalRuntimeClear, ""), followUpCmd)
 	case goalRuntimeSet:
-		m.goal.goal = cloneRuntimeGoal(msg.goal)
-		m.goal.pending = cloneGoalPreview(msg.pending)
+		m.goal.goal = runtimeGoalFromMutationResult(msg.mutation)
+		m.goal.pending = cloneGoalPreview(msg.mutation.Pending)
 		overlayCmd := tea.Cmd(nil)
 		if m.goal.open && strings.TrimSpace(m.goal.confirmMode) != "" {
 			overlayCmd = m.inputController().stopGoalFlowCmd()
 		}
 		return sequenceCmds(overlayCmd, followUpCmd)
 	case goalRuntimePause:
-		if msg.goal != nil {
-			m.goal.goal = cloneRuntimeGoal(msg.goal)
+		m.goal.pending = nil
+		if goal := runtimeGoalFromMutationResult(msg.mutation); goal != nil {
+			m.goal.goal = goal
 		}
 		return followUpCmd
 	case goalRuntimeResume:
-		if msg.goal != nil {
-			m.goal.goal = cloneRuntimeGoal(msg.goal)
+		m.goal.pending = nil
+		if goal := runtimeGoalFromMutationResult(msg.mutation); goal != nil {
+			m.goal.goal = goal
 		}
 		return followUpCmd
 	case goalRuntimeComplete:
-		if msg.goal != nil {
-			m.goal.goal = cloneRuntimeGoal(msg.goal)
+		m.goal.pending = nil
+		if goal := runtimeGoalFromMutationResult(msg.mutation); goal != nil {
+			m.goal.goal = goal
 		}
 		return followUpCmd
 	case goalRuntimeClear:
@@ -572,10 +568,10 @@ func cloneGoalPreview(preview *clientui.GoalPreview) *clientui.GoalPreview {
 	return &cloned
 }
 
-func goalMutationPendingSnapshot(client clientui.RuntimeClient) *clientui.GoalPreview {
-	previewClient, ok := client.(goalMutationPendingClient)
-	if !ok {
+func runtimeGoalFromMutationResult(result clientui.GoalMutationResult) *clientui.RuntimeGoal {
+	if result.Goal == nil {
 		return nil
 	}
-	return cloneGoalPreview(previewClient.goalMutationPendingSnapshot())
+	goal := clientui.RuntimeGoalFromEnvelope(clientui.ProjectGoal(result.Goal, result.Availability), false)
+	return &goal
 }
