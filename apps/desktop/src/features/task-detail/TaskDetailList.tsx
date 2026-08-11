@@ -439,8 +439,10 @@ function DependenciesRow({
         mutations.replaceComment.isPending
       }
       onAdd={onAddDependency}
+      onAddExisting={async (pair) => mutations.addDependency.mutateAsync(pair)}
       onRemove={onRemoveDependency}
       onSelectTask={onSelectDependencyTask}
+      projectID={detail.projectID}
       taskID={detail.id}
     />
   );

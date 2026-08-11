@@ -9,6 +9,44 @@ import { createTaskDetailTestServices, taskDetailResponse } from "@/test-support
 import { useTaskMutations } from "./useTaskDetailData";
 
 describe("Task dependency removal", () => {
+  it("adds an existing Task and invalidates both Tasks plus project views", async () => {
+    const services = createTaskDetailTestServices(taskWithBlocker(), {
+      routes: [
+        {
+          method: "workflow.task.dependency.add",
+          result: {
+            outcome: "added",
+            blocker_task_id: "task-3",
+            blocker_short_id: "T-3",
+            blocked_task_id: "task-1",
+            blocked_short_id: "T-1",
+          },
+        },
+      ],
+    });
+    const queryClient = new QueryClient();
+    const blockerTaskKey = queryKeys.task("task-3");
+    const blockedTaskKey = queryKeys.task("task-1");
+    const taskListKey = queryKeys.projectTaskListsRoot("project-1");
+    queryClient.setQueryData(blockerTaskKey, {});
+    queryClient.setQueryData(blockedTaskKey, {});
+    queryClient.setQueryData(taskListKey, {});
+    const { result } = renderHook(() => useTaskMutations("task-1", "project-1"), {
+      wrapper: testWrapper(services, queryClient),
+    });
+
+    await act(async () => {
+      await result.current.addDependency.mutateAsync({
+        blockerTaskID: "task-3",
+        blockedTaskID: "task-1",
+      });
+    });
+
+    expect(queryClient.getQueryState(blockerTaskKey)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(blockedTaskKey)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(taskListKey)?.isInvalidated).toBe(true);
+  });
+
   it("patches the open Task immediately and invalidates both Tasks plus project views", async () => {
     const services = createTaskDetailTestServices(taskWithBlocker(), {
       routes: [

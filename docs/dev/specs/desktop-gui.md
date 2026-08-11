@@ -303,7 +303,12 @@
 - Opening a root sidebar destination replaces the prior sidebar stack.
 - Selecting a related Task pushes Task Detail onto the sidebar stack.
 - Selecting a Task already retained in the stack returns to that Task and discards every later destination.
-- Dependency Add pushes the ordinary New Task form with the relationship intent hidden and preconfigured.
+- Dependency Add opens a compact picker with project-scoped full Task search.
+- The picker places a New Task plus action beside and after its search field, with compact existing-Task results below.
+- The picker smoothly morphs its height as search results and state feedback appear or disappear, subject to reduced-motion preference.
+- Selecting New Task pushes the ordinary New Task form with the relationship intent hidden and preconfigured.
+- Selecting an existing Task adds it in the chosen `Blocked by` or `Blocks` direction without opening Task Detail.
+- The picker excludes the open Task and Tasks already related to it.
 - Successful related-Task creation atomically creates the Task and relationship, then replaces New Task with the created Task Detail.
 - Back returns to the preceding sidebar destination.
 - Back is hidden at the root.
@@ -333,8 +338,8 @@
   minimal uncircled red `X`.
 - Remove acts immediately without confirmation.
 - Dependency actions use icon-only controls outside confirmation dialogs.
-- `Blocked by` Add opens the ordinary New Task form for a new Blocker Task.
-- `Blocks` Add opens the ordinary New Task form for a new Blocked Task.
+- The `Blocked by` picker's New Task action opens the ordinary New Task form for a new Blocker Task.
+- The `Blocks` picker's New Task action opens the ordinary New Task form for a new Blocked Task.
 - Related-Task creation uses the open Task's Project and Workflow.
 - Related-Task creation defaults source workspace to the open Task's source
   workspace and keeps the ordinary source-workspace selector available.
@@ -345,7 +350,6 @@
 - A related-Task creation failure creates neither Task nor relationship and
   preserves the ordinary New Task recovery path.
 - Canceling related-Task creation creates neither Task nor relationship.
-- Desktop has no existing-Task dependency picker.
 - The Add control is unavailable with an accessible explanation when its
   relationship direction has reached the 50-Task limit.
 - Kent rechecks the limit when related-Task creation is submitted.

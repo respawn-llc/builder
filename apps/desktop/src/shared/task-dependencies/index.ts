@@ -12,6 +12,7 @@ export {
   TaskDependencyProgressChip,
   TaskDependencyProgressInteractiveChip,
 } from "./TaskDependencyProgressChip";
+export { TaskDependencyPicker } from "./TaskDependencyPicker";
 export type {
   TaskDependencyProgressChipProps,
   TaskDependencyProgressInteractiveChipProps,

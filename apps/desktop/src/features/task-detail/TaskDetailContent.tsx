@@ -180,14 +180,19 @@ export function TaskDetailContent({
     selectedTab,
   });
   const reportActionError = useCallback(
-    (action: "dependency_remove" | "interrupt", error: unknown) => {
+    (action: "dependency_add" | "dependency_remove" | "interrupt", error: unknown) => {
       const notice =
         action === "interrupt"
           ? { id: "task-interrupt-error", title: t("board.interruptFailed") }
-          : {
-              id: "task-dependency-remove-error",
-              title: t("task.dependenciesRemoveFailed"),
-            };
+          : action === "dependency_add"
+            ? {
+                id: "task-dependency-add-error",
+                title: t("task.dependenciesAddFailed"),
+              }
+            : {
+                id: "task-dependency-remove-error",
+                title: t("task.dependenciesRemoveFailed"),
+              };
       push({
         ...notice,
         body: errorMessage(error),

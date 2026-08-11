@@ -3,15 +3,11 @@ import type { PointerEvent } from "react";
 import { useTranslation } from "react-i18next";
 
 import { type TaskSearchGroup, type TaskSearchHit, type TaskSearchLiteralHit } from "@/api";
+import type { TaskSearchResult } from "@/app-facade";
 import { TaskStatusIcon } from "@/shared/task-status";
 import { cx, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/ui";
 
 const visibleHitLimit = 3;
-
-export type TaskSearchResultItem = Readonly<{
-  key: string;
-  group: TaskSearchGroup;
-}>;
 
 export function TaskSearchResultRow({
   active,
@@ -24,7 +20,7 @@ export function TaskSearchResultRow({
   id: string;
   onActivate(): void;
   onPointerMove(event: PointerEvent<HTMLElement>): void;
-  result: TaskSearchResultItem;
+  result: TaskSearchResult;
 }>) {
   const { t } = useTranslation();
   const shortIDHits = result.group.hits.filter((hit) => hit.source.kind === "short_id");
