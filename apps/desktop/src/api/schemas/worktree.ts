@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import type { SetupOperationID } from "../setupOperationID";
 import { parseWorktreeOperationID } from "../worktreeOperationID";
-import { nonBlankString as sharedNonBlankString } from "./common";
+import { nonBlankString as nonBlank, workspaceAvailabilitySchema as workspaceAvailability } from "./common";
 
 const strict = z.strictObject;
 type DeepReadonly<T> = T extends (...args: never[]) => unknown
@@ -13,10 +13,9 @@ type DeepReadonly<T> = T extends (...args: never[]) => unknown
       ? { readonly [Key in keyof T]: DeepReadonly<T[Key]> }
       : T;
 type Output<Schema extends z.ZodType> = DeepReadonly<z.output<Schema>>;
-export const nonBlankString = z.string().refine(
-  (value) => sharedNonBlankString.safeParse(value).success,
-  { message: "Expected a non-blank string." },
-);
+export const nonBlankString = z.string().refine((value) => nonBlank.safeParse(value).success, {
+  message: "Expected a non-blank string.",
+});
 const nullableNonBlankString = nonBlankString.nullable();
 export const optionalNonBlankString = nonBlankString.optional().transform((value) => value ?? null);
 export const worktreeOperationIDSchema = z.string().transform((value, context) => {
@@ -91,7 +90,7 @@ export const sessionExecutionTargetSchema = strict({
   WorkspaceID: nonBlankString,
   WorkspaceName: nonBlankString,
   WorkspaceRoot: nonBlankString,
-  WorkspaceAvailability: z.enum(["available", "missing", "inaccessible", "unlinked"]),
+  WorkspaceAvailability: workspaceAvailability,
   Worktree: executionWorktree.nullable(),
   CwdRelpath: nonBlankString,
   EffectiveWorkdir: nonBlankString,
