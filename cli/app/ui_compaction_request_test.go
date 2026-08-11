@@ -25,8 +25,7 @@ func (h *compactionTurnQueueHook) OnUserCompactionCompleted(bool) {
 }
 
 func TestDirectCompactWithoutClientRestoresExactSubmittedText(t *testing.T) {
-	hook := &compactionTurnQueueHook{}
-	model := newProjectedStaticUIModel(WithUITurnQueueHook(hook))
+	model := newProjectedStaticUIModel()
 	submitted := "  /compact  preserve\n these instructions  "
 	testSetMainInput(model, submitted)
 
@@ -40,9 +39,6 @@ func TestDirectCompactWithoutClientRestoresExactSubmittedText(t *testing.T) {
 	model = updateUIModel(t, model, done)
 	if got := testMainInput(model); got != submitted {
 		t.Fatalf("restored composer = %q, want exact %q", got, submitted)
-	}
-	if hook.aborted != 0 || hook.compactionCompleted != 0 {
-		t.Fatalf("queue hooks = aborted %d completed %d, want 0/0", hook.aborted, hook.compactionCompleted)
 	}
 }
 

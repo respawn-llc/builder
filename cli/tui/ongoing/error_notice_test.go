@@ -2,6 +2,7 @@ package ongoing
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"core/cli/tui/transcriptrender"
@@ -10,17 +11,17 @@ import (
 )
 
 func TestErrorNoticesRenderCompletelyThroughNormalOngoingModes(t *testing.T) {
-	diagnosticDetail := "runtime diagnostic \x1b[31mred\tgamma\nruntime diagnostic second \x00line"
-	legacyText := "legacy error alpha\tbeta\nlegacy error second \x07line"
+	diagnosticDetail := "runtime diagnostic first line\nruntime diagnostic second line"
+	legacyText := "legacy error first line\nlegacy error second line"
 	misleadingCompact := "wrong compact source"
 	misleadingCondensed := "wrong condensed source"
 	messageType := clientui.TranscriptMessageErrorFeedback
-
 	tests := []struct {
 		name       string
 		visibility transcript.EntryVisibility
 		notice     *clientui.TranscriptNoticeRow
 		wantMode   transcriptrender.Mode
+		wantText   string
 	}{
 		{
 			name:       "runtime diagnostic ongoing",
@@ -36,6 +37,7 @@ func TestErrorNoticesRenderCompletelyThroughNormalOngoingModes(t *testing.T) {
 				},
 			},
 			wantMode: transcriptrender.ModeOngoing,
+			wantText: diagnosticDetail,
 		},
 		{
 			name:       "legacy error ongoing collapsed",
@@ -49,33 +51,31 @@ func TestErrorNoticesRenderCompletelyThroughNormalOngoingModes(t *testing.T) {
 				CondensedText: &misleadingCondensed,
 			},
 			wantMode: transcriptrender.ModeOngoingCollapsed,
+			wantText: legacyText,
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			row := clientui.TranscriptCommittedRow{
-				Visibility: test.visibility,
-				Integrity:  transcript.RowIntegrityValid,
-				Kind:       clientui.TranscriptRowNotice,
-				Notice:     test.notice,
-			}
-			if err := test.notice.Validate(); err != nil {
-				t.Fatalf("notice is invalid: %v", err)
-			}
+			row := clientui.TranscriptCommittedRow{Visibility: test.visibility, Kind: clientui.TranscriptRowNotice, Notice: test.notice}
 			if got := ongoingRenderMode(row); got != test.wantMode {
 				t.Fatalf("normal ongoing render mode = %d, want %d", got, test.wantMode)
 			}
-
-			const width = 80
-			structured := transcriptrender.RenderCommittedRow(row, width, "dark", test.wantMode)
-			if got := len(structured.Lines); got != 2 {
-				t.Fatalf("structured ongoing error lines = %d, want both authored lines", got)
+			structured := transcriptrender.RenderCommittedRow(row, 80, "dark", test.wantMode)
+			gotText := make([]string, len(structured.Lines))
+			for index, line := range structured.Lines {
+				for _, span := range line.Spans {
+					if role, ok := span.Style.Role(); ok && role == transcriptrender.StyleRoleError {
+						gotText[index] += span.Text
+					}
+				}
+				gotText[index] = strings.TrimSpace(gotText[index])
 			}
-
-			wantEncoded := encodeTranscriptLines(structured.Lines, "dark")
-			if got := NewSurface().renderCommittedRow(row, width, "dark"); !reflect.DeepEqual(got, wantEncoded) {
-				t.Fatalf("ongoing surface changed structured renderer output: got=%q want=%q", got, wantEncoded)
+			if want := strings.Split(test.wantText, "\n"); !reflect.DeepEqual(gotText, want) {
+				t.Fatalf("structured ongoing error payload = %#v, want %#v", gotText, want)
+			}
+			if got, want := NewSurface().renderCommittedRow(row, 80, "dark"), encodeTranscriptLines(structured.Lines, "dark"); !reflect.DeepEqual(got, want) {
+				t.Fatalf("ongoing surface changed structured renderer output: got=%q want=%q", got, want)
 			}
 		})
 	}

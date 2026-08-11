@@ -741,9 +741,13 @@ func noticeRoleAndText(row *clientui.TranscriptNoticeRow, visibility clientui.En
 		case clientui.TranscriptNoticeRuntimeDiagnostic:
 			return role, row.Diagnostic.Detail
 		case clientui.TranscriptNoticeLegacyUntypedNotice:
+			messageType := "<nil>"
+			if row.MessageType != nil {
+				messageType = string(*row.MessageType)
+			}
 			panic(fmt.Sprintf(
 				"render legacy error notice with no content source: message_type=%q",
-				*row.MessageType,
+				messageType,
 			))
 		default:
 			panic(fmt.Sprintf("render error notice with unsupported reason %q", row.Reason))
