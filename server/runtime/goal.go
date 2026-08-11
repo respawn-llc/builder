@@ -518,7 +518,10 @@ func (e *Engine) finishGoalOutput(stepID string, message llm.Message, result *Go
 		result.Availability = ""
 		noticeErr := e.steer(stepID, noticeIntent)
 		result.NoticeReceipt = noticeReceipt
-		return errors.Join(availabilityErr, noticeErr)
+		if noticeErr != nil {
+			e.surfaceRunError(noticeErr)
+		}
+		return availabilityErr
 	}
 	result.Availability = availability
 	update.Availability = availability

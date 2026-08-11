@@ -110,6 +110,10 @@ func TestGoalAvailabilityFailurePreservesNoticeWithoutMalformedStatus(t *testing
 	if err == nil || !result.NoticeReceipt.Committed {
 		t.Fatalf("SetGoal result=%+v err=%v, want committed notice and availability error", result, err)
 	}
+	var joined interface{ Unwrap() []error }
+	if errors.As(err, &joined) {
+		t.Fatalf("availability failure error = %T, must not be joined", err)
+	}
 	if goal := store.Meta().Goal; goal == nil || goal.Objective != "durable despite malformed contract" {
 		t.Fatalf("durable goal = %+v, want accepted mutation", goal)
 	}
