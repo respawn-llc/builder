@@ -1,9 +1,11 @@
 import { render, screen } from "@testing-library/react";
-import type { ReactNode } from "react";
+import type { ReactElement, ReactNode } from "react";
+import { I18nextProvider } from "react-i18next";
 
 import { RpcError, rpcErrorCodes, type WorkspaceList } from "@/api";
 import { NewTaskForm } from "@/features/tasks";
 import { LinkWorkflowSidebar } from "@/features/workflows";
+import { appI18n, initializeI18n } from "@/i18n";
 import { createTestSidebarNavigator } from "@/test-support/sidebar";
 const fixture = vi.hoisted<{
   createError: Error | null;
@@ -52,13 +54,18 @@ vi.mock("@/shared/workflow-library", () => ({
 
 const missing = new RpcError({ code: rpcErrorCodes.projectNotFound, message: "gone", method: "mutation" });
 
+beforeAll(async () => initializeI18n());
 beforeEach(() => Object.assign(fixture, { createError: null, linkError: null, workspaces: undefined }));
+
+function renderWithI18n(element: ReactElement) {
+  return render(<I18nextProvider i18n={appI18n}>{element}</I18nextProvider>);
+}
 
 describe("Project-missing mutation seams", () => {
   it("dismisses New Task when creation reports the Project missing", async () => {
     fixture.createError = missing;
     const onProjectMissing = vi.fn();
-    render(
+    renderWithI18n(
       <NewTaskForm
         boardQueryWorkflowID="workflow-1"
         onProjectMissing={onProjectMissing}
@@ -73,7 +80,7 @@ describe("Project-missing mutation seams", () => {
   it("backs out of Link Workflow when linking reports the Project missing", async () => {
     fixture.linkError = missing;
     const navigator = createTestSidebarNavigator();
-    render(
+    renderWithI18n(
       <LinkWorkflowSidebar
         creating={false}
         navigator={navigator}
@@ -87,24 +94,24 @@ describe("Project-missing mutation seams", () => {
 });
 
 describe("New Task workspace selection", () => {
-  it("hides Source workspace when the Project has only one workspace", () => {
+  it("renders Source workspace only when the Project has a workspace choice", () => {
+    const sourceWorkspaceLabel = appI18n.t("task.sourceWorkspace");
+    const primaryWorkspace = {
+      id: "workspace-1",
+      name: "kent",
+      rootPath: "/workspace",
+      availability: "available" as const,
+      isPrimary: true,
+      updatedAt: 1,
+    };
     fixture.workspaces = {
       projectID: "project-1",
       defaultWorkspaceID: "workspace-1",
       nextPageToken: null,
-      workspaces: [
-        {
-          id: "workspace-1",
-          name: "kent",
-          rootPath: "/workspace",
-          availability: "available",
-          isPrimary: true,
-          updatedAt: 1,
-        },
-      ],
+      workspaces: [primaryWorkspace],
     };
 
-    const { container } = render(
+    const singleWorkspace = renderWithI18n(
       <NewTaskForm
         boardQueryWorkflowID="workflow-1"
         onSubmitted={vi.fn()}
@@ -113,7 +120,31 @@ describe("New Task workspace selection", () => {
       />,
     );
 
-    expect(screen.queryByText("task.sourceWorkspace")).not.toBeInTheDocument();
-    expect(container.querySelector('[data-slot="select-trigger"]')).not.toBeInTheDocument();
+    expect(screen.queryByText(sourceWorkspaceLabel)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: sourceWorkspaceLabel })).not.toBeInTheDocument();
+
+    singleWorkspace.unmount();
+    fixture.workspaces = {
+      ...fixture.workspaces,
+      workspaces: [
+        primaryWorkspace,
+        {
+          ...primaryWorkspace,
+          id: "workspace-2",
+          name: "docs",
+          isPrimary: false,
+        },
+      ],
+    };
+    renderWithI18n(
+      <NewTaskForm
+        boardQueryWorkflowID="workflow-1"
+        onSubmitted={vi.fn()}
+        projectID="project-1"
+        workflowID="workflow-1"
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: sourceWorkspaceLabel })).toBeEnabled();
   });
 });
