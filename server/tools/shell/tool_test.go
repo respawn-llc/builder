@@ -202,7 +202,7 @@ func TestExecCommandWorkdirValidationErrors(t *testing.T) {
 		},
 		{
 			name: "regular file", id: "file-workdir", workdir: "workdir-file",
-			reason: missingWorkingDirectoryReason,
+			reason: nonDirectoryWorkingDirectoryReason,
 			prepare: func(t *testing.T, workspace string) {
 				if err := os.WriteFile(filepath.Join(workspace, "workdir-file"), []byte("not a directory"), 0o600); err != nil {
 					t.Fatalf("write workdir file: %v", err)
@@ -210,7 +210,6 @@ func TestExecCommandWorkdirValidationErrors(t *testing.T) {
 			},
 		},
 	}
-	tests[2].reason = nonDirectoryWorkingDirectoryReason
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
