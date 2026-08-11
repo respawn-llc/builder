@@ -85,7 +85,7 @@ func TestCurrentNodeControllerRegistersGateBeforeRunnerAndReleasesLeaseAfterLive
 
 func TestCurrentNodeControllerRunnerFailuresInterruptAdmittedCurrentNode(t *testing.T) {
 	for name, cause := range map[string]error{
-		"ordinary failure":          errors.New("provider unavailable"),
+		"ordinary failure":         errors.New("provider unavailable"),
 		"execution no longer live": sessionruntime.ErrExecutionNoLongerLive,
 	} {
 		t.Run(name, func(t *testing.T) {
