@@ -25,6 +25,12 @@ type projectDeleteTestOperations struct {
 	deleteRequests []serverapi.ProjectDeleteRequest
 }
 
+type projectDeleteFailingWriter struct{}
+
+func (projectDeleteFailingWriter) Write([]byte) (int, error) {
+	return 0, errors.New("output write failed")
+}
+
 func (r *projectDeleteTestOperations) ListWorkflowTasks(_ context.Context, req serverapi.WorkflowTaskListRequest) (serverapi.WorkflowTaskListResponse, error) {
 	r.listRequests = append(r.listRequests, req)
 	return r.listResponse, r.listErr
@@ -359,7 +365,7 @@ func TestProjectDeletePlainOutputFailureReturnsNonZero(t *testing.T) {
 		Result: &projectDeleteResult{ProjectID: "project-123"},
 	}
 	var stderr bytes.Buffer
-	if exitCode := writeProjectDeleteOutcome(bindingMutationFailingWriter{}, &stderr, outcome, false); exitCode != 1 {
+	if exitCode := writeProjectDeleteOutcome(projectDeleteFailingWriter{}, &stderr, outcome, false); exitCode != 1 {
 		t.Fatalf("exit code = %d, want 1", exitCode)
 	}
 	if stderr.Len() == 0 {

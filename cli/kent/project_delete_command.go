@@ -72,7 +72,7 @@ func projectDeleteSubcommand(args []string, stdout io.Writer, stderr io.Writer) 
 		return 2
 	}
 
-	_, remote, err := bindingCommandRemoteOpener(context.Background(), ".")
+	_, remote, err := openBindingCommandRemote(context.Background(), ".")
 	if err != nil {
 		return writeProjectDeleteOutcome(stdout, stderr, projectDeleteOutcome{
 			Error: &projectDeleteError{Code: "request_failed", Message: err.Error(), ProjectID: projectID},

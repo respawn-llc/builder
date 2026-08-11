@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"core/shared/apicontract"
+	"core/shared/client"
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -52,19 +53,8 @@ type workflowEdgeOutput struct {
 	Version           int64                 `json:"version"`
 }
 
-type workflowCommandRemote interface {
-	apicontract.WorkflowService
-	ResolveProjectPath(context.Context, serverapi.ProjectResolvePathRequest) (serverapi.ProjectResolvePathResponse, error)
-	Close() error
-}
-
-var workflowCommandRemoteOpener func(context.Context, string) (config.App, workflowCommandRemote, error) = func(ctx context.Context, path string) (config.App, workflowCommandRemote, error) {
-	cfg, remote, err := bindingCommandRemoteOpener(ctx, path)
-	return cfg, remote, err
-}
-
-func runWorkflowCommandSession(stderr io.Writer, run func(config.App, workflowCommandRemote) int) int {
-	cfg, remote, err := workflowCommandRemoteOpener(context.Background(), ".")
+func runWorkflowCommandSession(stderr io.Writer, run func(config.App, *client.Remote) int) int {
+	cfg, remote, err := openBindingCommandRemote(context.Background(), ".")
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -154,7 +144,7 @@ func workflowGraphInspectSubcommand(args []string, stdout io.Writer, stderr io.W
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	return runWorkflowCommandSession(stderr, func(_ config.App, remote workflowCommandRemote) int {
+	return runWorkflowCommandSession(stderr, func(_ config.App, remote *client.Remote) int {
 		definition, err := resolveWorkflowDefinition(context.Background(), remote, selector)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
@@ -197,7 +187,7 @@ func workflowUpdateSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	return runWorkflowCommandSession(stderr, func(_ config.App, remote workflowCommandRemote) int {
+	return runWorkflowCommandSession(stderr, func(_ config.App, remote *client.Remote) int {
 		def, err := resolveWorkflowDefinition(context.Background(), remote, selector)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
@@ -259,7 +249,7 @@ func workflowCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 		fmt.Fprintln(stderr, "workflow create requires <name>")
 		return 2
 	}
-	return runWorkflowCommandSession(stderr, func(_ config.App, remote workflowCommandRemote) int {
+	return runWorkflowCommandSession(stderr, func(_ config.App, remote *client.Remote) int {
 		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
 		defer cancel()
 		resp, err := remote.CreateWorkflow(ctx, serverapi.WorkflowCreateRequest{Name: name, Description: *description})
@@ -298,7 +288,11 @@ func workflowListSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 		fmt.Fprintln(stderr, "workflow list --project requires a non-blank value")
 		return 2
 	}
-	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
+	if err := validateWorkflowPagination(*offset, *limit); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
+	return runWorkflowCommandSession(stderr, func(cfg config.App, remote *client.Remote) int {
 		var projectID *string
 		if projectProvided {
 			resolved, err := resolveWorkflowProjectID(context.Background(), cfg, remote, *project)
@@ -313,32 +307,57 @@ func workflowListSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		workflows, err := workflowRecordsForCLI(response.Workflows)
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		if err := validateWorkflowListProjectMetadata(workflowListExpectedScope{ProjectID: projectID}, response.ProjectID, workflows); err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		if *jsonOut {
-			return writeCommandJSON(stdout, stderr, workflowListOutput{Workflows: workflows, ProjectID: response.ProjectID, NextOffset: response.NextOffset})
-		}
-		for _, workflow := range workflows {
-			if response.ProjectID != nil {
-				fmt.Fprintf(stdout, "%s: %s (v%d; %s; target %s)\n", workflow.ID, workflow.Name, workflow.Version, workflowProjectLinkState(workflow.ProjectLink), workflowExecutionTargetPolicySelector(workflow.ExecutionTargetPolicy))
-				continue
-			}
-			fmt.Fprintf(stdout, "%s: %s (v%d)\n", workflow.ID, workflow.Name, workflow.Version)
-		}
-		if response.NextOffset != nil {
-			if err := writeNextOffset(stderr, *response.NextOffset); err != nil {
-				return 1
-			}
-		}
-		return 0
+		return writeWorkflowListResponse(
+			stdout,
+			stderr,
+			response,
+			workflowListExpectedScope{ProjectID: projectID},
+			*jsonOut,
+		)
 	})
+}
+
+func writeWorkflowListResponse(
+	stdout io.Writer,
+	stderr io.Writer,
+	response serverapi.WorkflowListResponse,
+	expected workflowListExpectedScope,
+	jsonOut bool,
+) int {
+	workflows, err := workflowRecordsForCLI(response.Workflows)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if err := validateWorkflowListProjectMetadata(expected, response.ProjectID, workflows); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if jsonOut {
+		return writeCommandJSON(stdout, stderr, workflowListOutput{
+			Workflows:  workflows,
+			ProjectID:  response.ProjectID,
+			NextOffset: response.NextOffset,
+		})
+	}
+	for _, workflow := range workflows {
+		if response.ProjectID != nil {
+			fmt.Fprintf(stdout, "%s: %s (v%d; %s; target %s)\n", workflow.ID, workflow.Name, workflow.Version, workflowProjectLinkState(workflow.ProjectLink), workflowExecutionTargetPolicySelector(workflow.ExecutionTargetPolicy))
+			continue
+		}
+		fmt.Fprintf(stdout, "%s: %s (v%d)\n", workflow.ID, workflow.Name, workflow.Version)
+	}
+	if response.NextOffset != nil {
+		if err := writeNextOffset(stderr, *response.NextOffset); err != nil {
+			return 1
+		}
+	}
+	return 0
+}
+
+func validateWorkflowPagination(offset int, limit int) error {
+	_, err := serverapi.ResolveWorkflowOffsetWindow(&offset, &limit)
+	return err
 }
 
 type workflowListExpectedScope struct {
@@ -424,7 +443,7 @@ func workflowNodeAddSubcommand(args []string, stdout io.Writer, stderr io.Writer
 		return 2
 	}
 	nodeID := uuid.NewString()
-	return runWorkflowCommandSession(stderr, func(_ config.App, remote workflowCommandRemote) int {
+	return runWorkflowCommandSession(stderr, func(_ config.App, remote *client.Remote) int {
 		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
 		defer cancel()
 		node := serverapi.WorkflowGraphDraftNode{
@@ -467,7 +486,7 @@ func workflowNodeUpdateSubcommand(args []string, stdout io.Writer, stderr io.Wri
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	return runWorkflowCommandSession(stderr, func(_ config.App, remote workflowCommandRemote) int {
+	return runWorkflowCommandSession(stderr, func(_ config.App, remote *client.Remote) int {
 		update := workflowNodeUpdateDraftMutation{NodeKey: positionals[1]}
 		if strings.TrimSpace(*key) != "" {
 			value := strings.TrimSpace(*key)
@@ -607,7 +626,7 @@ func workflowEdgeAddSubcommand(args []string, stdout io.Writer, stderr io.Writer
 	}
 	edgeID := uuid.NewString()
 	newTransitionGroupID := uuid.NewString()
-	return runWorkflowCommandSession(stderr, func(_ config.App, remote workflowCommandRemote) int {
+	return runWorkflowCommandSession(stderr, func(_ config.App, remote *client.Remote) int {
 		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
 		defer cancel()
 		added, result, err := runWorkflowGraphMutation(ctx, remote, selector, addWorkflowEdgeDraftMutation(workflowEdgeAddDraftMutation{
@@ -762,7 +781,7 @@ func workflowEdgeUpdateSubcommand(args []string, stdout io.Writer, stderr io.Wri
 	if flagExplicit(fs, "prompt") {
 		update.PromptTemplate = workflowStringMutation{Set: true, Value: *prompt}
 	}
-	return runWorkflowCommandSession(stderr, func(_ config.App, remote workflowCommandRemote) int {
+	return runWorkflowCommandSession(stderr, func(_ config.App, remote *client.Remote) int {
 		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
 		defer cancel()
 		updated, result, err := runWorkflowGraphMutation(ctx, remote, selector, updateWorkflowEdgeDraftMutation(update))
@@ -796,7 +815,7 @@ func workflowLinkSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
+	return runWorkflowCommandSession(stderr, func(cfg config.App, remote *client.Remote) int {
 		projectID, err := resolveWorkflowProjectID(context.Background(), cfg, remote, positionals[0])
 		if err != nil {
 			fmt.Fprintln(stderr, err)
@@ -847,8 +866,8 @@ func workflowUnlinkSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
-		link, err := resolveWorkflowProjectLink(context.Background(), cfg, remote, positionals[0], selector)
+	return runWorkflowCommandSession(stderr, func(cfg config.App, remote *client.Remote) int {
+		link, err := resolveWorkflowProjectLink(context.Background(), cfg, remote, remote, positionals[0], selector)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
@@ -888,7 +907,7 @@ func workflowDefaultSubcommand(args []string, stdout io.Writer, stderr io.Writer
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
+	return runWorkflowCommandSession(stderr, func(cfg config.App, remote *client.Remote) int {
 		projectID, err := resolveWorkflowProjectID(context.Background(), cfg, remote, positionals[0])
 		if err != nil {
 			fmt.Fprintln(stderr, err)
@@ -928,7 +947,7 @@ func workflowValidateSubcommand(args []string, stdout io.Writer, stderr io.Write
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	return runWorkflowCommandSession(stderr, func(_ config.App, remote workflowCommandRemote) int {
+	return runWorkflowCommandSession(stderr, func(_ config.App, remote *client.Remote) int {
 		workflowID := selector
 		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
 		defer cancel()
@@ -1005,7 +1024,7 @@ func workflowInspectSubcommand(args []string, stdout io.Writer, stderr io.Writer
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	return runWorkflowCommandSession(stderr, func(_ config.App, remote workflowCommandRemote) int {
+	return runWorkflowCommandSession(stderr, func(_ config.App, remote *client.Remote) int {
 		if *summary {
 			limit := 1
 			persistedWorkflowID := selector
@@ -1385,7 +1404,7 @@ func canonicalAPIContextSource(source serverapi.WorkflowContextSource) serverapi
 	return source
 }
 
-func resolveWorkflowDefinition(ctx context.Context, remote workflowCommandRemote, selector runtimeids.WorkflowID) (serverapi.WorkflowDefinition, error) {
+func resolveWorkflowDefinition(ctx context.Context, remote apicontract.WorkflowService, selector runtimeids.WorkflowID) (serverapi.WorkflowDefinition, error) {
 	getCtx, getCancel := context.WithTimeout(ctx, workflowCommandTimeout)
 	defer getCancel()
 	resp, err := remote.GetWorkflow(getCtx, serverapi.WorkflowGetRequest{WorkflowID: selector})
@@ -1402,7 +1421,7 @@ func resolveWorkflowDefinition(ctx context.Context, remote workflowCommandRemote
 	return resp.Definition, nil
 }
 
-func listWorkflowPage(ctx context.Context, remote workflowCommandRemote, req serverapi.WorkflowListRequest) (serverapi.WorkflowListResponse, error) {
+func listWorkflowPage(ctx context.Context, remote apicontract.WorkflowService, req serverapi.WorkflowListRequest) (serverapi.WorkflowListResponse, error) {
 	rpcCtx, cancel := context.WithTimeout(ctx, workflowCommandTimeout)
 	defer cancel()
 	resp, err := remote.ListWorkflows(rpcCtx, req)
@@ -1412,7 +1431,7 @@ func listWorkflowPage(ctx context.Context, remote workflowCommandRemote, req ser
 	return resp, nil
 }
 
-func resolveWorkflowProjectID(ctx context.Context, cfg config.App, remote workflowCommandRemote, ref string) (string, error) {
+func resolveWorkflowProjectID(ctx context.Context, cfg config.App, remote apicontract.ProjectViewService, ref string) (string, error) {
 	trimmed := strings.TrimSpace(ref)
 	if trimmed == "" {
 		return "", errors.New("project is required")
@@ -1444,7 +1463,7 @@ func resolveWorkflowProjectID(ctx context.Context, cfg config.App, remote workfl
 // workspace id. A path-like reference (".", a path separator, or an existing
 // path) is resolved through its project binding; any other value is treated as
 // an explicit workspace id.
-func resolveWorkflowSourceWorkspaceID(ctx context.Context, cfg config.App, remote workflowCommandRemote, ref string) (string, error) {
+func resolveWorkflowSourceWorkspaceID(ctx context.Context, cfg config.App, remote apicontract.ProjectViewService, ref string) (string, error) {
 	trimmed := strings.TrimSpace(ref)
 	if trimmed == "" {
 		return "", errors.New("source workspace is required")
@@ -1472,15 +1491,22 @@ func resolveWorkflowSourceWorkspaceID(ctx context.Context, cfg config.App, remot
 	return trimmed, nil
 }
 
-func resolveWorkflowProjectLink(ctx context.Context, cfg config.App, remote workflowCommandRemote, projectRef string, selector runtimeids.WorkflowID) (serverapi.ProjectWorkflowLink, error) {
-	projectID, err := resolveWorkflowProjectID(ctx, cfg, remote, projectRef)
+func resolveWorkflowProjectLink(
+	ctx context.Context,
+	cfg config.App,
+	projects apicontract.ProjectViewService,
+	workflows apicontract.WorkflowService,
+	projectRef string,
+	selector runtimeids.WorkflowID,
+) (serverapi.ProjectWorkflowLink, error) {
+	projectID, err := resolveWorkflowProjectID(ctx, cfg, projects, projectRef)
 	if err != nil {
 		return serverapi.ProjectWorkflowLink{}, err
 	}
 	workflowID := selector
 	rpcCtx, cancel := context.WithTimeout(ctx, workflowCommandTimeout)
 	defer cancel()
-	resp, err := remote.ListProjectWorkflowLinks(rpcCtx, serverapi.WorkflowListProjectLinksRequest{ProjectID: projectID})
+	resp, err := workflows.ListProjectWorkflowLinks(rpcCtx, serverapi.WorkflowListProjectLinksRequest{ProjectID: projectID})
 	if err != nil {
 		return serverapi.ProjectWorkflowLink{}, err
 	}

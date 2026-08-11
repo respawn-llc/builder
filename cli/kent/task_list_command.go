@@ -7,6 +7,8 @@ import (
 	"io"
 	"strings"
 
+	"core/shared/apicontract"
+	"core/shared/client"
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -46,12 +48,18 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "task list does not accept positional arguments")
 		return 2
 	}
-	if (unblockedProvided && !*unblocked) || (blockedProvided && !*blocked) {
-		fmt.Fprintln(stderr, "--unblocked and --blocked must be enabled when supplied")
+	dependencyFilter, err := parseTaskListDependencyFilter(
+		*unblocked,
+		unblockedProvided,
+		*blocked,
+		blockedProvided,
+	)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	if unblockedProvided && blockedProvided {
-		fmt.Fprintln(stderr, "--unblocked and --blocked are mutually exclusive")
+	if err := validateWorkflowPagination(*offset, *limit); err != nil {
+		fmt.Fprintln(stderr, err)
 		return 2
 	}
 	columnKeys, err := parseTaskListFilterValues([]string(columnFlags), "column")
@@ -96,15 +104,7 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		value := labelMatch
 		recoveryLabelMatch = &value
 	}
-	var dependencyFilter *bool
-	if unblockedProvided {
-		value := true
-		dependencyFilter = &value
-	} else if blockedProvided {
-		value := false
-		dependencyFilter = &value
-	}
-	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
+	return runWorkflowCommandSession(stderr, func(cfg config.App, remote *client.Remote) int {
 		projectID, err := resolveWorkflowProjectID(context.Background(), cfg, remote, *projectRef)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
@@ -167,6 +167,29 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	})
 }
 
+func parseTaskListDependencyFilter(
+	unblocked bool,
+	unblockedProvided bool,
+	blocked bool,
+	blockedProvided bool,
+) (*bool, error) {
+	if (unblockedProvided && !unblocked) || (blockedProvided && !blocked) {
+		return nil, errors.New("--unblocked and --blocked must be enabled when supplied")
+	}
+	if unblockedProvided && blockedProvided {
+		return nil, errors.New("--unblocked and --blocked are mutually exclusive")
+	}
+	if unblockedProvided {
+		value := true
+		return &value, nil
+	}
+	if blockedProvided {
+		value := false
+		return &value, nil
+	}
+	return nil, nil
+}
+
 func parseTaskListLabelMatch(raw string, explicit bool, selectorCount int, unlabeled bool) (serverapi.WorkflowTaskNamedLabelFilterMode, error) {
 	mode := serverapi.WorkflowTaskNamedLabelFilterMode(raw)
 	if mode != serverapi.WorkflowTaskNamedLabelFilterModeAny && mode != serverapi.WorkflowTaskNamedLabelFilterModeAll {
@@ -181,7 +204,7 @@ func parseTaskListLabelMatch(raw string, explicit bool, selectorCount int, unlab
 	return mode, nil
 }
 
-func writeTaskListResponse(ctx context.Context, stdout io.Writer, stderr io.Writer, remote workflowCommandRemote, resp serverapi.WorkflowTaskListResponse, expectedScope taskListExpectedScope, jsonOut bool) int {
+func writeTaskListResponse(ctx context.Context, stdout io.Writer, stderr io.Writer, remote apicontract.WorkflowService, resp serverapi.WorkflowTaskListResponse, expectedScope taskListExpectedScope, jsonOut bool) int {
 	projection, err := taskListProjectionFromResponse(resp, expectedScope)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
