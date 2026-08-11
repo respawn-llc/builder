@@ -33,3 +33,4 @@ export * from "./windowChromeTitle";
 export * from "./WindowChromeTitleProvider";
 export * from "./TaskSearchMemoryProvider";
 export * from "./workflowProjectEvents";
+export * from "./worktreeQueries";

@@ -74,14 +74,13 @@ func projectWorktreeList(entries []serverapi.WorktreeTopologyEntry, target *clie
 		if err != nil {
 			return nil, err
 		}
-		entry := serverapi.WorktreeListEntry{
-			Topology: topology,
-			Projection: serverapi.WorktreeListProjection{
-				Selector:  selector,
-				IsCurrent: target != nil && topologyIsCurrent(topology, *target),
-			},
-		}
-		if err := entry.Validate(); err != nil {
+		entry, err := serverapi.ProjectWorktreeListEntry(
+			topology,
+			selector,
+			target != nil && topologyIsCurrent(topology, *target),
+			target != nil,
+		)
+		if err != nil {
 			return nil, fmt.Errorf("project worktree list entry %d: %w", index, err)
 		}
 		out = append(out, entry)
@@ -112,16 +111,17 @@ func (s *Service) ResolveWorktreeSelector(ctx context.Context, req serverapi.Wor
 	if err != nil {
 		return serverapi.WorktreeSelectorPreviewResponse{}, err
 	}
-	selector, err := topologySelectorFor(resolution.entries, resolution.match.index)
+	projected, err := projectWorktreeList(resolution.entries, &resolution.target)
 	if err != nil {
 		return serverapi.WorktreeSelectorPreviewResponse{}, err
 	}
-	return serverapi.WorktreeSelectorPreviewResponse{Worktree: resolution.match.entry, Selector: selector}, nil
+	return serverapi.WorktreeSelectorPreviewResponse{Worktree: projected[resolution.match.index]}, nil
 }
 
 type worktreeSelectorResolution struct {
 	entries []serverapi.WorktreeTopologyEntry
 	match   topologySelectorMatch
+	target  clientui.SessionExecutionTarget
 }
 
 func (s *Service) resolveWorktreeSelector(ctx context.Context, sessionID string, selector string) (worktreeSelectorResolution, error) {
@@ -137,7 +137,7 @@ func (s *Service) resolveWorktreeSelector(ctx context.Context, sessionID string,
 	if err != nil {
 		return worktreeSelectorResolution{}, err
 	}
-	return worktreeSelectorResolution{entries: entries, match: match}, nil
+	return worktreeSelectorResolution{entries: entries, match: match, target: workspaceCtx.target}, nil
 }
 
 func (s *Service) PreviewWorktreeDelete(ctx context.Context, req serverapi.WorktreeDeletePreviewRequest) (serverapi.WorktreeDeletePreviewResponse, error) {

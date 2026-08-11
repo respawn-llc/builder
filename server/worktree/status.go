@@ -58,7 +58,7 @@ func (s *Service) GetWorktreeStatus(ctx context.Context, req serverapi.WorktreeS
 			)
 		}
 	}
-	response := serverapi.WorktreeStatusResponse{Target: target, Worktree: status}
+	response := serverapi.WorktreeStatusResponse{Target: target, Worktree: status, Problems: []serverapi.WorktreeStatusProblem{}}
 	if _, err := os.Stat(root); err != nil {
 		kind := serverapi.WorktreeStatusProblemRootInaccessible
 		if errors.Is(err, os.ErrNotExist) {

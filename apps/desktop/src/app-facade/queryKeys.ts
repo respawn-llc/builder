@@ -1,6 +1,7 @@
 import {
   canonicalBoardFilter,
   defaultBoardNodeCardsSort,
+  nonBlankString,
   type BoardFilterInput,
   type BoardNodeCardsSort,
   type SessionCategory,
@@ -32,6 +33,15 @@ function boardFilterKey(filter: BoardFilterInput): readonly string[] {
 function dependencyFilterKey(filter: boolean | null): string {
   return filter === null ? "dependency:null" : filter ? "dependency:true" : "dependency:false";
 }
+
+function worktreeFact(value: string, requireTrimmed = false): string {
+  const parsed = nonBlankString.safeParse(value);
+  if (!parsed.success || (requireTrimmed && value !== parsed.data)) throw new TypeError("Worktree query fact is invalid.");
+  return value;
+}
+
+const worktreeOperationKey = (sessionID: string, kind: "create-target-resolution" | "selector-resolution" | "delete-preview", value: string, requireTrimmed = false) =>
+  ["worktree", worktreeFact(sessionID), kind, worktreeFact(value, requireTrimmed)] as const;
 
 export const queryKeys = {
   startup: ["startup"],
@@ -150,4 +160,12 @@ export const queryKeys = {
   activity: (taskID: string) => ["activity", taskID],
   comments: (taskID: string) => ["comments", taskID],
   pendingAsks: (sessionID: string | null) => ["pending-asks", sessionID],
+  worktreeStatus: (sessionID: string) => ["worktree", worktreeFact(sessionID), "status"] as const,
+  worktreeList: (sessionID: string) => ["worktree", worktreeFact(sessionID), "list"] as const,
+  worktreeCreateTargetResolution: (sessionID: string, target: string) =>
+    worktreeOperationKey(sessionID, "create-target-resolution", target, true),
+  worktreeSelectorResolution: (sessionID: string, selector: string) =>
+    worktreeOperationKey(sessionID, "selector-resolution", selector),
+  worktreeDeletePreview: (sessionID: string, selector: string) =>
+    worktreeOperationKey(sessionID, "delete-preview", selector),
 };

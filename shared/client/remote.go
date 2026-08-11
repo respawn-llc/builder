@@ -745,13 +745,11 @@ func (c *Remote) ResolveTransition(ctx context.Context, req serverapi.SessionRes
 }
 
 func (c *Remote) ListWorktrees(ctx context.Context, req serverapi.WorktreeListRequest) (serverapi.WorktreeListResponse, error) {
-	var resp serverapi.WorktreeListResponse
-	return resp, c.call(ctx, protocol.MethodWorktreeList, req, &resp)
+	return callValidatedRPC[serverapi.WorktreeListRequest, serverapi.WorktreeListResponse](c, ctx, protocol.MethodWorktreeList, req)
 }
 
 func (c *Remote) ListWorkspaceWorktrees(ctx context.Context, req serverapi.WorktreeWorkspaceListRequest) (serverapi.WorktreeWorkspaceListResponse, error) {
-	var resp serverapi.WorktreeWorkspaceListResponse
-	return resp, c.call(ctx, protocol.MethodWorktreeWorkspaceList, req, &resp)
+	return callValidatedRPC[serverapi.WorktreeWorkspaceListRequest, serverapi.WorktreeWorkspaceListResponse](c, ctx, protocol.MethodWorktreeWorkspaceList, req)
 }
 
 func (c *Remote) GetWorktreeStatus(ctx context.Context, req serverapi.WorktreeStatusRequest) (serverapi.WorktreeStatusResponse, error) {
@@ -760,8 +758,7 @@ func (c *Remote) GetWorktreeStatus(ctx context.Context, req serverapi.WorktreeSt
 }
 
 func (c *Remote) ResolveWorktreeSelector(ctx context.Context, req serverapi.WorktreeSelectorPreviewRequest) (serverapi.WorktreeSelectorPreviewResponse, error) {
-	var resp serverapi.WorktreeSelectorPreviewResponse
-	return resp, c.call(ctx, protocol.MethodWorktreeSelectorResolve, req, &resp)
+	return callValidatedRPC[serverapi.WorktreeSelectorPreviewRequest, serverapi.WorktreeSelectorPreviewResponse](c, ctx, protocol.MethodWorktreeSelectorResolve, req)
 }
 
 func (c *Remote) PreviewWorktreeDelete(ctx context.Context, req serverapi.WorktreeDeletePreviewRequest) (serverapi.WorktreeDeletePreviewResponse, error) {
@@ -781,8 +778,7 @@ func (c *Remote) ResolveWorktreeCreateTarget(ctx context.Context, req serverapi.
 }
 
 func (c *Remote) CreateWorktree(ctx context.Context, req serverapi.WorktreeCreateRequest) (serverapi.WorktreeCreateResponse, error) {
-	var resp serverapi.WorktreeCreateResponse
-	return resp, c.call(ctx, protocol.MethodWorktreeCreate, req, &resp)
+	return callValidatedRPC[serverapi.WorktreeCreateRequest, serverapi.WorktreeCreateResponse](c, ctx, protocol.MethodWorktreeCreate, req)
 }
 
 func (c *Remote) EnterWorktree(ctx context.Context, req serverapi.WorktreeEnterRequest) (serverapi.WorktreeScheduledAcknowledgement, error) {
@@ -986,6 +982,17 @@ func (c *Remote) ensureOpen() error {
 
 func (c *Remote) call(ctx context.Context, method string, params any, out any) error {
 	return c.callUnscoped(ctx, method, params, out)
+}
+
+func callValidatedRPC[Req any, Resp interface{ Validate() error }](c *Remote, ctx context.Context, method string, req Req) (Resp, error) {
+	var resp Resp
+	if err := c.call(ctx, method, req, &resp); err != nil {
+		return resp, err
+	}
+	if err := resp.Validate(); err != nil {
+		return resp, fmt.Errorf("validate %s response: %w", method, err)
+	}
+	return resp, nil
 }
 
 func (c *Remote) callUnscoped(ctx context.Context, method string, params any, out any) error {

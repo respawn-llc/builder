@@ -1,9 +1,11 @@
 import { z } from "zod";
 
 import { ContractError, RpcError } from "./errors";
+import { rpcErrorCodes } from "./rpcErrorCodes";
 import { parseSetupOperationID, type SetupOperationID } from "./setupOperationID";
+import { registeredWorktreeTopologySchema, type RegisteredWorktreeTopology } from "./schemas/worktree";
 import { workflowExecutionTargetSelectionSchema } from "./schemas/workflowExecutionTarget";
-import type { RpcEventHandler } from "./transport";
+import type { RpcEventHandler, RpcSubscription, RpcTransport } from "./transport";
 import type { WorkflowExecutionTargetSelection } from "./workflowExecutionTarget";
 
 const nonBlank = z.string().trim().min(1);
@@ -17,48 +19,8 @@ const setupOperationIDSchema = z.string().transform((value, context): SetupOpera
   }
 });
 
-const gitFactsSchema = z
-  .object({
-    canonical_root: nonBlank,
-    head_object: nonBlank,
-    branch_ref: nullableNonBlank,
-    branch_name: nullableNonBlank,
-    detached: z.boolean(),
-    bare: z.boolean(),
-    locked_reason: nullableNonBlank,
-    prunable_reason: nullableNonBlank,
-    is_main: z.boolean(),
-    path_available: z.boolean(),
-  })
-  .strict()
-  .transform((value) => ({ canonicalRoot: value.canonical_root }));
-const kentFactsSchema = z
-  .object({
-    worktree_id: nonBlank,
-    canonical_root: nonBlank,
-    display_name: nonBlank,
-    managed: z.boolean(),
-    created_branch: z.boolean(),
-    origin_session_id: nullableNonBlank,
-  })
-  .strict()
-  .transform((value) => ({ worktreeID: value.worktree_id, canonicalRoot: value.canonical_root }));
-
-export type RegisteredWorktreeTopology = Readonly<{
-  variant: "registered";
-  registered: Readonly<{ git: z.output<typeof gitFactsSchema>; kent: z.output<typeof kentFactsSchema> }>;
-}>;
 export type RetainedPreviousWorktree = Readonly<{ worktree: RegisteredWorktreeTopology }>;
 
-const registeredWorktreeTopologySchema: z.ZodType<RegisteredWorktreeTopology> = z
-  .object({
-    variant: z.literal("registered"),
-    registered: z
-      .object({ git: gitFactsSchema, kent: kentFactsSchema })
-      .strict()
-      .refine((value) => value.git.canonicalRoot === value.kent.canonicalRoot),
-  })
-  .strict();
 export const retainedPreviousWorktreeSchema: z.ZodType<RetainedPreviousWorktree> =
   z.object({ worktree: registeredWorktreeTopologySchema }).strict();
 
@@ -119,29 +81,29 @@ export function parseTaskSetupRecoveryDetail(detailJSON: string | null): TaskSet
   return parsed.data.setup_recovery ?? null;
 }
 
-export type WorktreeSetupFailureCause = Readonly<{ kind:
-  "process_exit" | "timeout" | "target_preparation" | "interruption_persistence" |
-  "canceled" | "controller_shutdown" | "operational" }>;
+type WorktreeSetupOutput = Readonly<{ stdout: string | null; stderr: string | null }>;
+export type WorktreeSetupFailureCause =
+  | (Readonly<{ kind: "process_exit"; exitCode: number }> & WorktreeSetupOutput)
+  | (Readonly<{ kind: "timeout" }> & WorktreeSetupOutput)
+  | Readonly<{ kind: "target_preparation" | "interruption_persistence" | "canceled" | "controller_shutdown" | "operational" }>;
 export type WorktreeSetupFailure = Readonly<{
   retryReadiness: "retry_ready" | "non_retryable"; cause: WorktreeSetupFailureCause; diagnostic: string; scriptPath: string | null;
   executionTarget: WorkflowExecutionTargetSelection | null; retainedWorktree: RegisteredWorktreeTopology | null; retainedPreviousWorktree: RetainedPreviousWorktree | null;
 }>;
 
 const outputSchema = z.object({ stdout: z.string().nullable(), stderr: z.string().nullable() }).strict();
-const failureKindSchema = z.enum(["process_exit", "timeout", "target_preparation", "interruption_persistence", "canceled", "controller_shutdown", "operational"]);
 const markerKinds = ["target_preparation", "interruption_persistence", "canceled", "controller_shutdown", "operational"] as const;
-const failureCauseSchema = z
-  .union([
-    z.object({
+const failureCauseSchema = z.union([
+  z.object({
       kind: z.literal("process_exit"),
       process_exit: outputSchema.extend({ exit_code: z.number().int().refine((value) => value !== 0) }),
-    }).strict(),
-    z.object({ kind: z.literal("timeout"), timeout: outputSchema }).strict(),
-    ...markerKinds.map((kind) =>
-      z.object({ kind: z.literal(kind), [kind]: z.object({}).strict() }).strict(),
-    ),
-  ])
-  .transform((value): WorktreeSetupFailureCause => ({ kind: failureKindSchema.parse(value.kind) }));
+    }).strict().transform((value): WorktreeSetupFailureCause => ({ kind: value.kind, exitCode: value.process_exit.exit_code,
+      stdout: value.process_exit.stdout, stderr: value.process_exit.stderr })),
+  z.object({ kind: z.literal("timeout"), timeout: outputSchema }).strict()
+    .transform((value): WorktreeSetupFailureCause => ({ kind: value.kind, stdout: value.timeout.stdout, stderr: value.timeout.stderr })),
+  ...markerKinds.map((kind) => z.object({ kind: z.literal(kind), [kind]: z.object({}).strict() }).strict()
+    .transform((): WorktreeSetupFailureCause => ({ kind }))),
+]);
 
 const worktreeSetupFailureWireSchema: z.ZodType<WorktreeSetupFailure> = z
   .object({
@@ -204,7 +166,7 @@ const retainedErrorSchema = z
   .strict();
 
 export function decodeWorktreeSetupRetainedError(error: unknown): WorktreeSetupRetainedError | null {
-  if (!(error instanceof RpcError) || error.code !== -32039) return null;
+  if (!(error instanceof RpcError) || error.code !== rpcErrorCodes.worktreeSetupRetained) return null;
   const parsed = retainedErrorSchema.safeParse(error.data);
   return parsed.success
     ? new WorktreeSetupRetainedError(error, {
@@ -263,16 +225,37 @@ export type WorktreeSetupEventHandler = Readonly<{
   onComplete(code: number, message: string): void; onError(error: Error): void;
 }>;
 export const worktreeSetupEventParamsSchema = z.object({ event: setupEventWireSchema }).strict();
-export function worktreeSetupRpcHandler(handler: WorktreeSetupEventHandler): RpcEventHandler {
+function worktreeSetupRpcHandler(handler: WorktreeSetupEventHandler, finish: (notify: () => void) => void): RpcEventHandler {
   return {
     ...(handler.onOpen === undefined ? {} : { onOpen: handler.onOpen }),
-    onComplete: handler.onComplete,
-    onError: handler.onError,
+    onComplete(code, message) { if (code === 0) finish(() => { handler.onComplete(code, message); }); },
+    onError(error) { finish(() => { handler.onError(error); }); },
     onEvent(method, params) {
       if (method !== "worktree.setup") return;
       const parsed = worktreeSetupEventParamsSchema.safeParse(params);
-      if (parsed.success) handler.onEvent(parsed.data.event);
-      else handler.onError(new ContractError("worktree.setup event did not match GUI contract."));
+      if (!parsed.success) {
+        finish(() => { handler.onError(new ContractError("worktree.setup event did not match GUI contract.")); });
+        return;
+      }
+      handler.onEvent(parsed.data.event);
+      if (parsed.data.event.phase !== "started") finish(() => { handler.onComplete(0, ""); });
     },
   };
+}
+
+export function subscribeWorktreeSetup(
+  transport: RpcTransport, setupOperationID: SetupOperationID, handler: WorktreeSetupEventHandler,
+): RpcSubscription {
+  let subscription: RpcSubscription | null = null;
+  const state = { finished: false };
+  const finish = (notify?: () => void) => {
+    if (state.finished) return;
+    state.finished = true;
+    subscription?.close();
+    notify?.();
+  };
+  subscription = transport.subscribe("worktree.setup.subscribe",
+    { setup_operation_id: setupOperationID.toJSONValue() }, worktreeSetupRpcHandler(handler, finish));
+  if (state.finished) subscription.close();
+  return { close: finish };
 }

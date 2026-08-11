@@ -267,7 +267,6 @@ func TestWorktreeCreateErrorBoundaryHandlesTypedNil(t *testing.T) {
 
 func TestWorktreeCreateRequestValidationProjectsNeutralFailures(t *testing.T) {
 	base := WorktreeCreateRequest{
-		ClientRequestID:  "request-1",
 		SetupOperationID: NewWorktreeSetupOperationID(),
 		SessionID:        "session",
 		BranchName:       "feature",
@@ -305,15 +304,6 @@ func TestWorktreeCreateRequestValidationProjectsNeutralFailures(t *testing.T) {
 			patch: func(request *WorktreeCreateRequest) {
 				request.CreateBranch = false
 				request.BaseRef = "feature"
-			},
-			owner: WorktreeCreateErrorOwnerForm,
-		},
-		{
-			name: "blank client request id",
-			patch: func(request *WorktreeCreateRequest) {
-				request.ClientRequestID = ""
-				request.CreateBranch = true
-				request.BaseRef = "HEAD"
 			},
 			owner: WorktreeCreateErrorOwnerForm,
 		},
