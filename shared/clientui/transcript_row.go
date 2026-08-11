@@ -515,19 +515,6 @@ func (r TranscriptNoticeRow) Validate() error {
 		if r.LegacyText == nil && r.MessageType == nil {
 			return fmt.Errorf("legacy notice requires text or typed message metadata")
 		}
-		if r.Severity == TranscriptNoticeError && r.LegacyText == nil {
-			if r.Worktree == nil {
-				return fmt.Errorf("legacy error without text requires typed Worktree metadata")
-			}
-			switch *r.MessageType {
-			case TranscriptMessageWorktreeMode, TranscriptMessageWorktreeModeExit:
-			default:
-				return fmt.Errorf(
-					"legacy error without text has unsupported typed message metadata %q",
-					*r.MessageType,
-				)
-			}
-		}
 		if r.CacheWarning != nil || r.Compaction != nil || r.ToolOutputRepair != nil || r.Diagnostic != nil || r.Background != nil {
 			return fmt.Errorf("legacy notice cannot carry a typed notice reason payload")
 		}
