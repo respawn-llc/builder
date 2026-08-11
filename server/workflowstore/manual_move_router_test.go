@@ -224,7 +224,7 @@ func createManualMoveStaticReviewRouterWorkflow(t *testing.T, ctx context.Contex
 		return TransitionGroupRecord{ID: id, WorkflowID: workflowID, SourceNodeID: source, TransitionID: workflow.TransitionID(transition), DisplayName: display}
 	}
 	edge := func(id workflow.EdgeID, group workflow.TransitionGroupID, key string, target workflow.NodeID, mode workflow.ContextMode, prompt string) EdgeRecord {
-		return EdgeRecord{ID: id, WorkflowID: workflowID, TransitionGroupID: group, Key: workflow.ModelKey(key), TargetNodeID: target, ContextMode: mode, PromptTemplate: prompt}
+		return EdgeRecord{ID: id, WorkflowID: workflowID, TransitionGroupID: group, Key: workflow.ModelKey(key), TargetNodeID: target, ContextMode: mode, PromptTemplate: prompt, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured}
 	}
 
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
@@ -252,11 +252,11 @@ func createManualMoveStaticReviewRouterWorkflow(t *testing.T, ctx context.Contex
 			group(qaDone, qa, "qa_done", "Done"),
 		)
 		planEdge := edge(edgeID("plan-approved"), planApproved, "plan_approved", plan, workflow.ContextModeNewSession, "Check {{.Params.plan_file_path}}.")
-		planEdge.Parameters = []workflow.Parameter{{Key: "plan_file_path", Description: "Plan file path."}}
+		planEdge.Parameters = []workflow.Parameter{{Key: "plan_file_path", Description: "Plan file path.", Purpose: workflow.ParameterPurposeOrdinary}}
 		codeEdge := edge(joinA, approveA, "approve_findings_a", join, workflow.ContextModeNewSession, "")
-		codeEdge.Parameters = []workflow.Parameter{{Key: "code_review_findings", Description: "Code review findings."}}
+		codeEdge.Parameters = []workflow.Parameter{{Key: "code_review_findings", Description: "Code review findings.", Purpose: workflow.ParameterPurposeOrdinary}}
 		complianceEdge := edge(joinB, approveB, "approve_findings_b", join, workflow.ContextModeNewSession, "")
-		complianceEdge.Parameters = []workflow.Parameter{{Key: "compliance_findings", Description: "Compliance findings."}}
+		complianceEdge.Parameters = []workflow.Parameter{{Key: "compliance_findings", Description: "Compliance findings.", Purpose: workflow.ParameterPurposeOrdinary}}
 		qaEdge := edge(edgeID("qa-ready"), qaReady, "qa_ready", qa, workflow.ContextModeContinueSession, "QA {{.Params.plan_approved.plan_file_path}} {{.Params.implementation_ready.commentary}}.")
 		qaEdge.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourcePreviousTargetOrNew}
 		rejectedEdge := edge(edgeID("code-review-rejected"), rejected, "code_review_rejected", implementation, workflow.ContextModeContinueSession, "Rework {{.Params.approve_review_findings.code_review_findings}} {{.Params.approve_review_findings.compliance_findings}}.")

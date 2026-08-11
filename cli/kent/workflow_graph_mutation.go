@@ -44,7 +44,7 @@ func runWorkflowGraphMutation[T any](
 	if err != nil {
 		return zero, workflowGraphMutationResult{}, err
 	}
-	graph, value, err := mutate(workflowGraphDraftFromDefinition(current))
+	graph, value, err := mutate(serverapi.WorkflowGraphDraftFromDefinition(current))
 	if err != nil {
 		return zero, workflowGraphMutationResult{}, err
 	}
