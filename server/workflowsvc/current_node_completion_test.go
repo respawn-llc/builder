@@ -3,12 +3,16 @@ package workflowsvc
 import (
 	"context"
 	"errors"
+	"os/exec"
 	"reflect"
 	"testing"
+	"time"
 
+	"core/server/session"
 	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowexecution"
+	"core/server/workflowruntime"
 	"core/server/workflowstore"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -47,6 +51,209 @@ func TestCompleteWorkflowTaskReturnsPendingApprovalWithoutReplacingCurrentNode(t
 	}
 	if execution.sessionID != sessionID || execution.idleSelector.TaskID != nil || execution.idleSelector.SessionID != nil {
 		t.Fatalf("completion dispatch = %+v, want live Session completion", execution)
+	}
+}
+
+func TestCompleteWorkflowTaskConsumesCommittedResultBeforeReturningDiagnostic(t *testing.T) {
+	source := currentNodeCompletionReference(t, "task-completion-diagnostic", "node-agent")
+	approvalID := workflow.NewApprovalID()
+	diagnostic := errors.New("successor assignment diagnostic")
+	execution := &currentNodeCompletionExecutionStub{
+		sessionResult: workflowstore.CurrentNodeCompletionResult{
+			PendingApproval: &workflow.PendingApproval{
+				ID:     approvalID,
+				Source: source,
+			},
+		},
+		sessionErr: diagnostic,
+	}
+	attention := &workflowAttentionRecorder{}
+	service := currentNodeCompletionService(execution)
+	service.attentionFinalizer = attention
+
+	response, err := service.CompleteWorkflowTask(context.Background(), serverapi.WorkflowTaskCompleteRequest{
+		ActorKind:      serverapi.WorkflowTaskCompleteActorAgent,
+		AgentSessionID: runtimeids.NewSessionID().String(),
+		TransitionID:   "done",
+	})
+	if !errors.Is(err, diagnostic) {
+		t.Fatalf("CompleteWorkflowTask error = %v, want %v", err, diagnostic)
+	}
+	if response.TaskID != string(source.TaskID) ||
+		response.PendingApprovalID == nil ||
+		*response.PendingApprovalID != approvalID.String() {
+		t.Fatalf("committed completion response = %+v, want pending Approval %q", response, approvalID)
+	}
+	if len(attention.pending) != 1 || attention.pending[0] != approvalID {
+		t.Fatalf("published pending Approvals = %+v, want %q", attention.pending, approvalID)
+	}
+}
+
+func TestApproveWorkflowTaskConsumesCommittedResultBeforeReturningDiagnostic(t *testing.T) {
+	source := currentNodeCompletionReference(t, "task-approval-diagnostic", "node-agent")
+	target := currentNodeCompletionReference(t, "task-approval-diagnostic", "node-review")
+	approvalID := workflow.NewApprovalID()
+	workflowID := runtimeids.NewWorkflowID()
+	diagnostic := errors.New("approved successor assignment diagnostic")
+	execution := &currentNodeCompletionExecutionStub{
+		approvalResult: workflowstore.PendingApprovalApplyResult{
+			Mutation: workflow.CurrentNodeMutationResult{
+				Removed: []workflow.CurrentNodeReference{source},
+				Created: []workflow.CurrentNode{{Reference: target}},
+			},
+			ResolvedApproval: workflow.PendingApproval{
+				ID:     approvalID,
+				Source: source,
+			},
+			TaskAttentionResolution: workflowstore.TaskAttentionResolution{
+				Approvals: []workflowstore.ApprovalAttentionProjection{{
+					ApprovalID: approvalID,
+					Source:     source,
+				}},
+			},
+		},
+		approvalErr: diagnostic,
+	}
+	attention := &workflowAttentionRecorder{}
+	service := currentNodeCompletionService(execution)
+	service.readModels.TaskDetail = currentNodeCompletionTaskDetail{
+		detail: serverapi.WorkflowTaskDetail{Summary: serverapi.WorkflowTaskSummary{
+			ID:         string(source.TaskID),
+			ProjectID:  "project-approval-diagnostic",
+			WorkflowID: workflowID,
+		}},
+	}
+	service.attentionFinalizer = attention
+	service.events = newWorkflowProjectEventBroker()
+	_, persistedService, _ := newWorkflowServiceTestContext(t)
+	service.store = persistedService.store
+	service.store.SetWorkflowEventPublisher(service.events)
+	subscription, err := service.events.subscribe("project-approval-diagnostic", nil)
+	if err != nil {
+		t.Fatalf("subscribe Workflow project events: %v", err)
+	}
+	t.Cleanup(func() { _ = subscription.Close() })
+
+	response, err := service.ApproveWorkflowTask(context.Background(), serverapi.WorkflowTaskApproveRequest{
+		ApprovalID: approvalID.String(),
+	})
+	if !errors.Is(err, diagnostic) {
+		t.Fatalf("ApproveWorkflowTask error = %v, want %v", err, diagnostic)
+	}
+	if response.Applied == nil ||
+		response.Applied.TaskID != string(source.TaskID) ||
+		len(response.Applied.CurrentNodes) != 1 ||
+		response.Applied.CurrentNodes[0].NodeID != string(target.NodeID) {
+		t.Fatalf("committed Approval response = %+v, want applied target %v", response, target)
+	}
+	if approvalIDs := attention.resolvedApprovalIDs(); len(approvalIDs) != 1 || approvalIDs[0] != approvalID {
+		t.Fatalf("resolved Approval attention = %+v, want %q", approvalIDs, approvalID)
+	}
+	eventCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	event, eventErr := subscription.Next(eventCtx)
+	if eventErr != nil {
+		t.Fatalf("read approved Task event: %v", eventErr)
+	}
+	if event.Action != serverapi.WorkflowProjectEventActionApproved ||
+		event.PrimaryEntityID != string(source.TaskID) {
+		t.Fatalf("approved Task event = %+v", event)
+	}
+}
+
+func TestResumeWorkflowTaskRepairsDirectlyConsistentRetainedSessionProvenance(t *testing.T) {
+	shellPath, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("sh executable unavailable: %v", err)
+	}
+	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	started, err := service.store.StartTask(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	currentNode := started.Mutation.Created[0]
+	sessionID := createPersistedWorkflowServiceSession(t, metadataStore, binding)
+	if _, err := service.store.BindSessionToCurrentNode(ctx, workflowstore.CurrentNodeSessionBindingRequest{
+		Association: workflowstore.TaskSessionAssociationRequest{
+			SessionID:    sessionID,
+			CurrentNode:  currentNode.Reference,
+			AssociatedAt: time.UnixMilli(1_700_000_000_000).UTC(),
+		},
+	}); err != nil {
+		t.Fatalf("BindSessionToCurrentNode: %v", err)
+	}
+	if err := service.store.InterruptCurrentNode(
+		ctx,
+		currentNode.Reference,
+		"test_interruption",
+		workflow.NewCurrentNodeInterruptionDetail("test_interruption", nil),
+	); err != nil {
+		t.Fatalf("InterruptCurrentNode: %v", err)
+	}
+	if _, err := metadataStore.DB().ExecContext(
+		ctx,
+		`DELETE FROM session_workflow_node_associations
+WHERE session_id = ? AND node_id = ? AND transition_branch_key IS NULL`,
+		sessionID.String(),
+		currentNode.Reference.NodeID,
+	); err != nil {
+		t.Fatalf("delete exact Session provenance: %v", err)
+	}
+
+	var controller *workflowexecution.CurrentNodeController
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
+			controller.ExecutionFinalized(scope)
+		}),
+	})
+	runner := &workflowServiceValidatingRunner{
+		store:     service.store,
+		authority: authority,
+		shellPath: shellPath,
+		started:   make(chan workflow.CurrentNodeReference, 1),
+	}
+	controller, err = workflowexecution.NewCurrentNodeController(
+		service.store,
+		runner,
+		authority,
+		workflowexecution.NewMutationPermit(),
+		workflowexecution.CurrentNodeControllerConfig{
+			AgentConcurrency:  1,
+			AssignmentSteerer: workflowServiceCommittedAssignmentSteerer{},
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewCurrentNodeController: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+	service.currentNodeExecution = controller
+
+	response, err := service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
+		TaskID:           task.Task.ID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
+			Mode: serverapi.WorkflowExecutionTargetModeNone,
+		},
+	})
+	if err != nil || response.Applied == nil {
+		t.Fatalf("ResumeWorkflowTask = %+v, %v; want applied", response, err)
+	}
+	select {
+	case resumed := <-runner.started:
+		if !resumed.Equal(currentNode.Reference) {
+			t.Fatalf("resumed Current Node = %v, want %v", resumed, currentNode.Reference)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("directly consistent retained Session did not start after Resume repair")
+	}
+	if err := service.store.ValidateCurrentNodeSessionBinding(ctx, sessionID, currentNode.Reference); err != nil {
+		t.Fatalf("ResumeWorkflowTask did not repair exact Session provenance: %v", err)
 	}
 }
 
@@ -194,6 +401,86 @@ func (currentNodeCompletionUnavailableTaskDetail) GetTaskByShortID(context.Conte
 	return serverapi.WorkflowTaskDetail{}, errors.New("task detail unavailable")
 }
 
+type currentNodeCompletionTaskDetail struct {
+	detail serverapi.WorkflowTaskDetail
+}
+
+type workflowServiceCommittedAssignmentSteerer struct{}
+
+func (workflowServiceCommittedAssignmentSteerer) SteerCurrentNodeAssignment(
+	context.Context,
+	workflow.CurrentNodeReference,
+) (workflowexecution.CurrentNodeAssignmentSteer, error) {
+	return workflowServiceCommittedAssignment{}, nil
+}
+
+type workflowServiceCommittedAssignment struct{}
+
+func (workflowServiceCommittedAssignment) Wait(context.Context) (session.CommitReceipt, error) {
+	return session.CommitReceipt{Committed: true}, nil
+}
+
+type workflowServiceValidatingRunner struct {
+	store     *workflowstore.Store
+	authority *sessionruntime.Authority
+	shellPath string
+	started   chan workflow.CurrentNodeReference
+}
+
+func (r *workflowServiceValidatingRunner) StartCurrentNode(
+	ctx context.Context,
+	reference workflow.CurrentNodeReference,
+	_ workflowruntime.TaskPromptDelivery,
+	_ *workflowexecution.CurrentNodeClassifiedAssignment,
+	lease sessionruntime.WorkflowExecutionLease,
+	_ workflowruntime.Controller,
+) error {
+	currentNodes, err := r.store.ListCurrentNodes(ctx, reference.TaskID)
+	if err != nil {
+		return err
+	}
+	var sessionID *runtimeids.SessionID
+	for index := range currentNodes {
+		if currentNodes[index].Reference.Equal(reference) {
+			sessionID = currentNodes[index].SessionID
+			break
+		}
+	}
+	if sessionID == nil {
+		return errors.New("resumed retained Current Node has no Session")
+	}
+	if err := r.store.ValidateCurrentNodeSessionBinding(ctx, *sessionID, reference); err != nil {
+		return err
+	}
+	if _, err := r.authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
+		Workflow: &lease,
+		Command: sessionruntime.ScriptCommand{
+			Path: r.shellPath,
+			Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
+		},
+	}); err != nil {
+		return err
+	}
+	r.started <- reference
+	return nil
+}
+
+func (d currentNodeCompletionTaskDetail) GetTask(context.Context, string) (serverapi.WorkflowTaskDetail, error) {
+	return d.detail, nil
+}
+
+func (d currentNodeCompletionTaskDetail) GetTaskByProjectShortID(context.Context, string, string) (serverapi.WorkflowTaskDetail, error) {
+	return d.detail, nil
+}
+
+func (d currentNodeCompletionTaskDetail) ListCurrentNodes(context.Context, string) ([]workflow.CurrentNode, error) {
+	return nil, nil
+}
+
+func (d currentNodeCompletionTaskDetail) GetTaskByShortID(context.Context, string) (serverapi.WorkflowTaskDetail, error) {
+	return d.detail, nil
+}
+
 func currentNodeCompletionReference(t *testing.T, taskID, nodeID string) workflow.CurrentNodeReference {
 	t.Helper()
 	reference, err := workflow.NewCurrentNodeReference(workflow.TaskID(taskID), workflow.NodeID(nodeID), nil)
@@ -215,6 +502,8 @@ type currentNodeCompletionExecutionStub struct {
 	idleSelector           workflowstore.IdleCurrentNodeSelector
 	idleResult             workflowstore.CurrentNodeCompletionResult
 	idleErr                error
+	approvalResult         workflowstore.PendingApprovalApplyResult
+	approvalErr            error
 }
 
 func (s *currentNodeCompletionExecutionStub) EnsureTaskResumeEligible(context.Context, workflow.TaskID) error {
@@ -313,6 +602,9 @@ func (s *currentNodeCompletionExecutionStub) ResumeTaskWithPreparation(
 }
 
 func (s *currentNodeCompletionExecutionStub) ApplyPendingApproval(ctx context.Context, approvalID workflow.ApprovalID) (workflowstore.PendingApprovalApplyResult, error) {
+	if s.approvalErr != nil {
+		return s.approvalResult, s.approvalErr
+	}
 	if s.store == nil {
 		return workflowstore.PendingApprovalApplyResult{}, errors.New("workflow store is required")
 	}

@@ -441,7 +441,7 @@ func TestCurrentNodeControllerSteersApprovalTargetBeforeStartingIt(t *testing.T)
 	}
 }
 
-func TestCurrentNodeControllerDoesNotMakeUnassignedApprovalTargetResumable(t *testing.T) {
+func TestCurrentNodeControllerInterruptsUnassignedApprovalTarget(t *testing.T) {
 	target := currentNodeReferenceForControllerTest(t, "task-approval-steer-failure", "node-target")
 	approval := workflow.PendingApproval{
 		ID:     workflow.NewApprovalID(),
@@ -479,65 +479,148 @@ func TestCurrentNodeControllerDoesNotMakeUnassignedApprovalTargetResumable(t *te
 	if starts := runner.starts(); starts != 0 {
 		t.Fatalf("runner starts = %d, want none after steering failure", starts)
 	}
-	if interruption, interrupted := store.interruption(target); interrupted {
-		t.Fatalf("unassigned approval target was made resumable: %+v", interruption)
+	if interruption, interrupted := store.interruption(target); !interrupted {
+		t.Fatal("unassigned approval target was not interrupted")
+	} else if interruption.reason != reasonCurrentNodeRuntimeStartFailed {
+		t.Fatalf("approval target interruption = %+v, want runtime start failure", interruption)
 	}
 }
 
-func TestCompleteIdleCurrentNodeRecoversSuccessorByAssignmentCommit(t *testing.T) {
+func TestCompleteIdleCurrentNodeQueuesCommittedDiagnosticAndHealthyScriptSibling(t *testing.T) {
+	shellPath, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("sh executable unavailable: %v", err)
+	}
 	cause := errors.New("assignment persistence failed")
-	for _, tc := range []struct {
-		name            string
-		outcomes        []currentNodeAssignmentSteerOutcome
-		wantInterrupted []bool
+	source := currentNodeReferenceForControllerTest(t, "task-idle-completion-committed-diagnostic", "node-source")
+	agent := currentNodeReferenceForControllerTest(t, "task-idle-completion-committed-diagnostic", "node-agent")
+	script := currentNodeReferenceForControllerTest(t, "task-idle-completion-committed-diagnostic", "node-script")
+	sourceNode := workflow.CurrentNode{
+		Reference:  source,
+		Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
+	}
+	expected := workflowstore.CurrentNodeCompletionResult{
+		AutomaticIntents: []workflowstore.CurrentNodeAutomaticIntent{
+			{CurrentNode: agent, NodeKind: workflow.NodeKindAgent},
+			{CurrentNode: script, NodeKind: workflow.NodeKindScript},
+		},
+	}
+	store := &currentNodeControllerStore{
+		idleResolved: &sourceNode,
+		completion:   expected,
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	runner := &recordingScriptRunner{
+		authority: authority,
+		command: sessionruntime.ScriptCommand{
+			Path: shellPath,
+			Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
+		},
+		started: make(chan workflow.CurrentNodeReference, 2),
+	}
+	controller, err := NewCurrentNodeController(store, runner, authority, NewMutationPermit(), CurrentNodeControllerConfig{
+		AgentConcurrency: 1,
+		AssignmentSteerer: &recordingCurrentNodeAssignmentSteerer{
+			outcomes: []currentNodeAssignmentSteerOutcome{
+				{receipt: session.CommitReceipt{Committed: true}, waitErr: cause},
+				{receipt: session.CommitReceipt{Committed: true}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("new current node controller: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+
+	taskID := source.TaskID
+	completed, completeErr := controller.CompleteIdleCurrentNode(
+		context.Background(),
+		workflowstore.IdleCurrentNodeSelector{TaskID: &taskID},
+		"next",
+		nil,
+		"forced completion",
+	)
+	if !errors.Is(completeErr, cause) {
+		t.Fatalf("CompleteIdleCurrentNode error = %v, want %v", completeErr, cause)
+	}
+	if len(completed.AutomaticIntents) != len(expected.AutomaticIntents) {
+		t.Fatalf("committed Automatic Intents = %+v, want %+v", completed.AutomaticIntents, expected.AutomaticIntents)
+	}
+	started := make(map[workflow.CurrentNodeReference]bool, 2)
+	for len(started) < 2 {
+		select {
+		case reference := <-runner.started:
+			started[reference] = true
+		case <-time.After(3 * time.Second):
+			t.Fatalf("started successors = %+v, want Agent %v and Script %v", started, agent, script)
+		}
+	}
+	for _, reference := range []workflow.CurrentNodeReference{agent, script} {
+		if !started[reference] {
+			t.Fatalf("successor %v did not start: %+v", reference, started)
+		}
+		if interruption, interrupted := store.interruption(reference); interrupted {
+			t.Fatalf("committed successor %v was interrupted: %+v", reference, interruption)
+		}
+	}
+}
+
+func TestCompleteIdleCurrentNodeInterruptsOnlyFailedAgentAndStartsHealthyScriptSibling(t *testing.T) {
+	shellPath, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("sh executable unavailable: %v", err)
+	}
+	cause := errors.New("assignment persistence failed")
+	for _, test := range []struct {
+		name    string
+		outcome currentNodeAssignmentSteerOutcome
 	}{
 		{
-			name: "uncommitted assignment",
-			outcomes: []currentNodeAssignmentSteerOutcome{{
-				waitErr: cause,
-			}},
-			wantInterrupted: []bool{false},
+			name:    "uncommitted assignment",
+			outcome: currentNodeAssignmentSteerOutcome{waitErr: cause},
 		},
 		{
-			name: "committed assignment with observer failure",
-			outcomes: []currentNodeAssignmentSteerOutcome{{
-				receipt: session.CommitReceipt{Committed: true},
-				waitErr: cause,
-			}},
-			wantInterrupted: []bool{true},
-		},
-		{
-			name: "later fanout assignment preparation failure",
-			outcomes: []currentNodeAssignmentSteerOutcome{
-				{receipt: session.CommitReceipt{Committed: true}},
-				{steerErr: cause},
-			},
-			wantInterrupted: []bool{true, false},
+			name:    "assignment preparation failure",
+			outcome: currentNodeAssignmentSteerOutcome{steerErr: cause},
 		},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			source := currentNodeReferenceForControllerTest(t, "task-idle-completion-steer-failure", "node-source")
-			targets := []workflowstore.CurrentNodeAutomaticIntent{
-				{CurrentNode: currentNodeReferenceForControllerTest(t, "task-idle-completion-steer-failure", "node-target-a"), NodeKind: workflow.NodeKindAgent},
-				{CurrentNode: currentNodeReferenceForControllerTest(t, "task-idle-completion-steer-failure", "node-target-b"), NodeKind: workflow.NodeKindAgent},
-			}
-			targets = targets[:len(tc.wantInterrupted)]
+		t.Run(test.name, func(t *testing.T) {
+			source := currentNodeReferenceForControllerTest(t, "task-idle-completion-independent-failure", "node-source")
+			agent := currentNodeReferenceForControllerTest(t, "task-idle-completion-independent-failure", "node-agent")
+			script := currentNodeReferenceForControllerTest(t, "task-idle-completion-independent-failure", "node-script")
 			sourceNode := workflow.CurrentNode{
 				Reference:  source,
 				Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
 			}
-			store := &currentNodeControllerStore{
-				idleResolved: &sourceNode,
-				completion: workflowstore.CurrentNodeCompletionResult{
-					AutomaticIntents: targets,
+			expected := workflowstore.CurrentNodeCompletionResult{
+				AutomaticIntents: []workflowstore.CurrentNodeAutomaticIntent{
+					{CurrentNode: agent, NodeKind: workflow.NodeKindAgent},
+					{CurrentNode: script, NodeKind: workflow.NodeKindScript},
 				},
 			}
+			store := &currentNodeControllerStore{
+				idleResolved: &sourceNode,
+				completion:   expected,
+			}
 			authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
-			runner := &countingCurrentNodeRunner{}
+			runner := &recordingScriptRunner{
+				authority: authority,
+				command: sessionruntime.ScriptCommand{
+					Path: shellPath,
+					Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
+				},
+				started: make(chan workflow.CurrentNodeReference, 2),
+			}
 			controller, err := NewCurrentNodeController(store, runner, authority, NewMutationPermit(), CurrentNodeControllerConfig{
 				AgentConcurrency: 1,
 				AssignmentSteerer: &recordingCurrentNodeAssignmentSteerer{
-					outcomes: tc.outcomes,
+					outcomes: []currentNodeAssignmentSteerOutcome{
+						test.outcome,
+						{receipt: session.CommitReceipt{Committed: true}},
+					},
 				},
 			})
 			if err != nil {
@@ -549,37 +632,108 @@ func TestCompleteIdleCurrentNodeRecoversSuccessorByAssignmentCommit(t *testing.T
 			})
 
 			taskID := source.TaskID
-			if _, err := controller.CompleteIdleCurrentNode(
+			completed, completeErr := controller.CompleteIdleCurrentNode(
 				context.Background(),
 				workflowstore.IdleCurrentNodeSelector{TaskID: &taskID},
 				"next",
 				nil,
 				"forced completion",
-			); !errors.Is(err, cause) {
-				t.Fatalf("CompleteIdleCurrentNode error = %v, want %v", err, cause)
+			)
+			if !errors.Is(completeErr, cause) {
+				t.Fatalf("CompleteIdleCurrentNode error = %v, want %v", completeErr, cause)
 			}
-			if starts := runner.starts(); starts != 0 {
-				t.Fatalf("runner starts = %d, want none after assignment failure", starts)
+			if len(completed.AutomaticIntents) != len(expected.AutomaticIntents) {
+				t.Fatalf("committed Automatic Intents = %+v, want %+v", completed.AutomaticIntents, expected.AutomaticIntents)
 			}
-			for index, intent := range targets {
-				target := intent.CurrentNode
-				interruption, interrupted := store.interruption(target)
-				if interrupted != tc.wantInterrupted[index] {
-					t.Fatalf(
-						"forced-completion successor %v interrupted = %t (%+v), want %t",
-						target,
-						interrupted,
-						interruption,
-						tc.wantInterrupted[index],
-					)
+			select {
+			case started := <-runner.started:
+				if !started.Equal(script) {
+					t.Fatalf("started successor = %v, want healthy Script %v", started, script)
 				}
-				if interrupted &&
-					(interruption.reason != reasonCurrentNodeRuntimeStartFailed ||
-						interruption.detail.Code != string(reasonCurrentNodeRuntimeStartFailed)) {
-					t.Fatalf("forced-completion successor %v interruption = %+v, want runtime start failure", target, interruption)
-				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("healthy Script sibling did not start")
+			}
+			if interruption, interrupted := store.interruption(agent); !interrupted {
+				t.Fatalf("failed Agent was not interrupted: %+v", interruption)
+			}
+			if interruption, interrupted := store.interruption(script); interrupted {
+				t.Fatalf("healthy Script was interrupted: %+v", interruption)
 			}
 		})
+	}
+}
+
+func TestCompleteIdleCurrentNodeContinuesSiblingAfterCommittedInterruptionDiagnostic(t *testing.T) {
+	shellPath, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("sh executable unavailable: %v", err)
+	}
+	assignmentErr := errors.New("assignment persistence failed")
+	deliveryErr := errors.New("interruption event delivery unavailable")
+	source := currentNodeReferenceForControllerTest(t, "task-idle-interruption-diagnostic", "node-source")
+	agent := currentNodeReferenceForControllerTest(t, "task-idle-interruption-diagnostic", "node-agent")
+	script := currentNodeReferenceForControllerTest(t, "task-idle-interruption-diagnostic", "node-script")
+	sourceNode := workflow.CurrentNode{
+		Reference:  source,
+		Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
+	}
+	store := &currentNodeControllerStore{
+		idleResolved: &sourceNode,
+		completion: workflowstore.CurrentNodeCompletionResult{
+			AutomaticIntents: []workflowstore.CurrentNodeAutomaticIntent{
+				{CurrentNode: agent, NodeKind: workflow.NodeKindAgent},
+				{CurrentNode: script, NodeKind: workflow.NodeKindScript},
+			},
+		},
+		interruptErr: currentNodeInterruptionPostCommitDiagnosticForTest(agent, deliveryErr),
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	runner := &recordingScriptRunner{
+		authority: authority,
+		command: sessionruntime.ScriptCommand{
+			Path: shellPath,
+			Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
+		},
+		started: make(chan workflow.CurrentNodeReference, 1),
+	}
+	controller, err := NewCurrentNodeController(store, runner, authority, NewMutationPermit(), CurrentNodeControllerConfig{
+		AgentConcurrency: 1,
+		AssignmentSteerer: &recordingCurrentNodeAssignmentSteerer{
+			outcomes: []currentNodeAssignmentSteerOutcome{
+				{waitErr: assignmentErr},
+				{receipt: session.CommitReceipt{Committed: true}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("new current node controller: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+
+	taskID := source.TaskID
+	_, completeErr := controller.CompleteIdleCurrentNode(
+		context.Background(),
+		workflowstore.IdleCurrentNodeSelector{TaskID: &taskID},
+		"next",
+		nil,
+		"forced completion",
+	)
+	if !errors.Is(completeErr, assignmentErr) || !errors.Is(completeErr, deliveryErr) {
+		t.Fatalf("CompleteIdleCurrentNode error = %v, want assignment and event diagnostics", completeErr)
+	}
+	select {
+	case started := <-runner.started:
+		if !started.Equal(script) {
+			t.Fatalf("started successor = %v, want healthy Script %v", started, script)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("healthy Script sibling did not start")
+	}
+	if _, interrupted := store.interruption(agent); !interrupted {
+		t.Fatal("failed Agent successor was not interrupted")
 	}
 }
 
@@ -671,6 +825,133 @@ func TestCompleteIdleCurrentNodeRetainsLateAssignmentAfterCallerCancellation(t *
 	}
 	if interruption, interrupted := store.interruption(target); interrupted {
 		t.Fatalf("late-assigned successor was interrupted: %+v", interruption)
+	}
+}
+
+func TestCompleteIdleCurrentNodeClassifiesTransferredAssignmentsIndependently(t *testing.T) {
+	shellPath, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("sh executable unavailable: %v", err)
+	}
+	diagnostic := errors.New("late assignment diagnostic")
+	for _, test := range []struct {
+		name             string
+		receipt          session.CommitReceipt
+		eventualErr      error
+		wantAgentStarted bool
+	}{
+		{
+			name:             "committed with diagnostic",
+			receipt:          session.CommitReceipt{Committed: true},
+			eventualErr:      diagnostic,
+			wantAgentStarted: true,
+		},
+		{
+			name:        "uncommitted with error",
+			eventualErr: diagnostic,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			source := currentNodeReferenceForControllerTest(t, "task-idle-completion-transferred", "node-source")
+			agent := currentNodeReferenceForControllerTest(t, "task-idle-completion-transferred", "node-agent")
+			script := currentNodeReferenceForControllerTest(t, "task-idle-completion-transferred", "node-script")
+			sourceNode := workflow.CurrentNode{
+				Reference:  source,
+				Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
+			}
+			store := &currentNodeControllerStore{
+				idleResolved: &sourceNode,
+				completion: workflowstore.CurrentNodeCompletionResult{
+					AutomaticIntents: []workflowstore.CurrentNodeAutomaticIntent{
+						{CurrentNode: agent, NodeKind: workflow.NodeKindAgent},
+						{CurrentNode: script, NodeKind: workflow.NodeKindScript},
+					},
+				},
+			}
+			release := make(chan struct{})
+			waitStarted := make(chan struct{})
+			authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+			runner := &recordingScriptRunner{
+				authority: authority,
+				command: sessionruntime.ScriptCommand{
+					Path: shellPath,
+					Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
+				},
+				started: make(chan workflow.CurrentNodeReference, 2),
+			}
+			controller, err := NewCurrentNodeController(store, runner, authority, NewMutationPermit(), CurrentNodeControllerConfig{
+				AgentConcurrency: 1,
+				AssignmentSteerer: &lateFirstCurrentNodeAssignmentSteerer{
+					release: release,
+					started: waitStarted,
+					receipt: test.receipt,
+					err:     test.eventualErr,
+				},
+			})
+			if err != nil {
+				t.Fatalf("new current node controller: %v", err)
+			}
+			t.Cleanup(func() {
+				_ = controller.Close()
+				_ = authority.Close(context.Background())
+			})
+
+			ctx, cancel := context.WithCancel(context.Background())
+			taskID := source.TaskID
+			completed := make(chan error, 1)
+			go func() {
+				_, completeErr := controller.CompleteIdleCurrentNode(
+					ctx,
+					workflowstore.IdleCurrentNodeSelector{TaskID: &taskID},
+					"next",
+					nil,
+					"forced completion",
+				)
+				completed <- completeErr
+			}()
+			select {
+			case <-waitStarted:
+			case <-time.After(3 * time.Second):
+				t.Fatal("assignment wait did not start")
+			}
+			cancel()
+			select {
+			case completeErr := <-completed:
+				if !errors.Is(completeErr, context.Canceled) {
+					t.Fatalf("CompleteIdleCurrentNode error = %v, want context canceled", completeErr)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("CompleteIdleCurrentNode did not return after caller cancellation")
+			}
+			close(release)
+
+			started := make(map[workflow.CurrentNodeReference]bool, 2)
+			wantStarts := 1
+			if test.wantAgentStarted {
+				wantStarts = 2
+			}
+			for len(started) < wantStarts {
+				select {
+				case reference := <-runner.started:
+					started[reference] = true
+				case <-time.After(3 * time.Second):
+					t.Fatalf("started successors = %+v, want Agent started = %t and Script started", started, test.wantAgentStarted)
+				}
+			}
+			if started[agent] != test.wantAgentStarted {
+				t.Fatalf("Agent started = %t, want %t", started[agent], test.wantAgentStarted)
+			}
+			if !started[script] {
+				t.Fatal("healthy Script sibling did not start")
+			}
+			_, agentInterrupted := store.interruption(agent)
+			if agentInterrupted == test.wantAgentStarted {
+				t.Fatalf("Agent interrupted = %t, want %t", agentInterrupted, !test.wantAgentStarted)
+			}
+			if interruption, interrupted := store.interruption(script); interrupted {
+				t.Fatalf("healthy Script was interrupted: %+v", interruption)
+			}
+		})
 	}
 }
 

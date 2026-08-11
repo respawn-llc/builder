@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
@@ -262,7 +263,7 @@ func createTaskWithQueries(ctx context.Context, q *sqlitegen.Queries, prepared p
 	if err != nil {
 		return TaskRecord{}, err
 	}
-	if err := insertTaskCurrentNode(ctx, q, currentNode); err != nil {
+	if err := insertTaskCurrentNode(ctx, q, currentNode, time.UnixMilli(prepared.nowUnixMs).UTC()); err != nil {
 		return TaskRecord{}, fmt.Errorf("insert task start current node: %w", err)
 	}
 	for _, id := range prepared.labelIDs {
@@ -507,7 +508,8 @@ func (s *Store) startTask(ctx context.Context, taskID workflow.TaskID, candidate
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
-	now := s.now().UnixMilli()
+	nowTime := s.now().UTC()
+	now := nowTime.UnixMilli()
 	if requireTarget {
 		if err := applyPreparedExecutionTargetMutation(ctx, q, prepared.task, targetMutation, now); err != nil {
 			return StartTaskResult{}, err
@@ -520,7 +522,7 @@ func (s *Store) startTask(ctx context.Context, taskID workflow.TaskID, candidate
 	if removed != 1 {
 		return StartTaskResult{}, sql.ErrNoRows
 	}
-	if err := insertTaskCurrentNode(ctx, q, target); err != nil {
+	if err := insertTaskCurrentNode(ctx, q, target, nowTime); err != nil {
 		return StartTaskResult{}, err
 	}
 	if err := touchTaskUpdatedAt(ctx, q, string(taskID), now); err != nil {

@@ -2,14 +2,23 @@ package transport
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"core/server/sessionruntime"
+	"core/server/workflow"
+	"core/server/workflowexecution"
+	"core/server/workflowruntime"
+	"core/server/workflowstore"
 	"core/shared/apicontract"
 	"core/shared/protocol"
 	"core/shared/serverapi"
@@ -19,7 +28,8 @@ import (
 
 type gatewayConcurrencyWorkflowService struct {
 	apicontract.WorkflowService
-	getWorkflowTask func(context.Context, serverapi.WorkflowTaskGetRequest) (serverapi.WorkflowTaskGetResponse, error)
+	getWorkflowTask      func(context.Context, serverapi.WorkflowTaskGetRequest) (serverapi.WorkflowTaskGetResponse, error)
+	completeWorkflowTask func(context.Context, serverapi.WorkflowTaskCompleteRequest) (serverapi.WorkflowTaskCompleteResponse, error)
 }
 
 func (s *gatewayConcurrencyWorkflowService) GetWorkflowTask(
@@ -29,10 +39,104 @@ func (s *gatewayConcurrencyWorkflowService) GetWorkflowTask(
 	return s.getWorkflowTask(ctx, req)
 }
 
+func (s *gatewayConcurrencyWorkflowService) CompleteWorkflowTask(
+	ctx context.Context,
+	req serverapi.WorkflowTaskCompleteRequest,
+) (serverapi.WorkflowTaskCompleteResponse, error) {
+	if s.completeWorkflowTask == nil {
+		return s.WorkflowService.CompleteWorkflowTask(ctx, req)
+	}
+	return s.completeWorkflowTask(ctx, req)
+}
+
 type gatewayConcurrencyDependencies struct {
 	GatewayDependencies
 	workflow apicontract.WorkflowService
 	debug    bool
+}
+
+type gatewayAutomaticFatalStore struct {
+	*workflowstore.Store
+	db        *sql.DB
+	source    workflow.CurrentNodeReference
+	successor workflow.CurrentNodeReference
+}
+
+func (s *gatewayAutomaticFatalStore) ResolveIdleExecutableCurrentNode(
+	context.Context,
+	workflowstore.IdleCurrentNodeSelector,
+) (workflow.CurrentNode, error) {
+	return workflow.CurrentNode{
+		Reference:  s.source,
+		Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
+	}, nil
+}
+
+func (s *gatewayAutomaticFatalStore) CompleteCurrentNode(
+	ctx context.Context,
+	_ workflowstore.CurrentNodeCompletionRequest,
+) (workflowstore.CurrentNodeCompletionResult, error) {
+	if _, err := s.db.ExecContext(
+		ctx,
+		`INSERT INTO current_node_fatal_successors(task_id, node_id) VALUES (?, ?)`,
+		string(s.successor.TaskID),
+		string(s.successor.NodeID),
+	); err != nil {
+		return workflowstore.CurrentNodeCompletionResult{}, err
+	}
+	successor := workflow.CurrentNode{
+		Reference:  s.successor,
+		Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
+	}
+	return workflowstore.CurrentNodeCompletionResult{
+		Mutation: workflow.CurrentNodeMutationResult{
+			Removed: []workflow.CurrentNodeReference{s.source},
+			Created: []workflow.CurrentNode{successor},
+		},
+		AutomaticIntents: []workflowstore.CurrentNodeAutomaticIntent{{
+			CurrentNode: s.successor,
+			NodeKind:    workflow.NodeKindAgent,
+		}},
+	}, nil
+}
+
+func (s *gatewayAutomaticFatalStore) InterruptCurrentNode(
+	ctx context.Context,
+	reference workflow.CurrentNodeReference,
+	_ workflow.CurrentNodeInterruptionReason,
+	_ workflow.CurrentNodeInterruptionDetail,
+) error {
+	_, err := s.db.ExecContext(
+		ctx,
+		`UPDATE current_node_fatal_successors SET interrupted = 1 WHERE task_id = ? AND node_id = ?`,
+		string(reference.TaskID),
+		string(reference.NodeID),
+	)
+	return err
+}
+
+type gatewayAutomaticFatalSteerer struct {
+	cause error
+}
+
+func (s gatewayAutomaticFatalSteerer) SteerCurrentNodeAssignment(
+	context.Context,
+	workflow.CurrentNodeReference,
+) (workflowexecution.CurrentNodeAssignmentSteer, error) {
+	return nil, s.cause
+}
+
+type gatewayAutomaticFatalRunner struct{}
+
+func (gatewayAutomaticFatalRunner) StartCurrentNode(
+	context.Context,
+	workflow.CurrentNodeReference,
+	workflowruntime.TaskPromptDelivery,
+	*workflowexecution.CurrentNodeClassifiedAssignment,
+	sessionruntime.WorkflowExecutionLease,
+	workflowruntime.Controller,
+) error {
+	return errors.New("automatic fatal test runner must not start")
 }
 
 func (d *gatewayConcurrencyDependencies) WorkflowClient() apicontract.WorkflowService {
@@ -294,6 +398,166 @@ func TestGatewayOrdinaryHandlerPanicFailsFastInDebug(t *testing.T) {
 	}, func() {
 		stopped = true
 	})
+}
+
+type gatewayProcessFatalTestPanic struct{}
+
+func (*gatewayProcessFatalTestPanic) ProcessFatalPanic() {}
+
+func TestGatewayOrdinaryHandlerRepanicsProcessFatalMarker(t *testing.T) {
+	fatal := &gatewayProcessFatalTestPanic{}
+	appCore, _ := newGatewayTestCore(t, true, true)
+	defer func() { _ = appCore.Close() }()
+	workflow := &gatewayConcurrencyWorkflowService{
+		WorkflowService: appCore.WorkflowClient(),
+		getWorkflowTask: func(context.Context, serverapi.WorkflowTaskGetRequest) (serverapi.WorkflowTaskGetResponse, error) {
+			panic(fatal)
+		},
+	}
+	deps := &gatewayConcurrencyDependencies{
+		GatewayDependencies: appCore,
+		workflow:            workflow,
+	}
+	gateway, err := NewGateway(deps, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	stopped := false
+	defer func() {
+		recovered := recover()
+		if recovered != fatal {
+			t.Fatalf("recovered panic = %#v, want exact process-fatal marker", recovered)
+		}
+		if stopped {
+			t.Fatal("process-fatal panic used ordinary connection recovery")
+		}
+	}()
+	gateway.serveOrdinaryGatewayRequest(
+		nil,
+		context.Background(),
+		&connectionState{handshakeDone: true},
+		protocol.Request{
+			JSONRPC: protocol.JSONRPCVersion,
+			ID:      "fatal",
+			Method:  protocol.MethodWorkflowTaskGet,
+			Params:  mustJSON(t, serverapi.WorkflowTaskGetRequest{TaskID: "fatal"}),
+		},
+		gatewayRequestSchedule{kind: gatewayRequestScheduleOrdinary},
+		func() { stopped = true },
+	)
+}
+
+func TestGatewayAutomaticSuccessorFatalTerminatesProcess(t *testing.T) {
+	const childEnv = "KENT_GATEWAY_AUTOMATIC_FATAL_CHILD"
+	const addressEnv = "KENT_GATEWAY_AUTOMATIC_FATAL_ADDRESS"
+	addressPath := os.Getenv(addressEnv)
+	if addressPath == "" {
+		addressPath = filepath.Join(t.TempDir(), "gateway-address")
+	}
+	if os.Getenv(childEnv) == "1" {
+		appCore, _ := newGatewayTestCore(t, true, true)
+		defer func() { _ = appCore.Close() }()
+		if _, err := appCore.MetadataStore().DB().ExecContext(context.Background(), `
+CREATE TABLE current_node_fatal_successors (
+	task_id TEXT NOT NULL,
+	node_id TEXT NOT NULL,
+	interrupted INTEGER NOT NULL DEFAULT 0,
+	PRIMARY KEY (task_id, node_id)
+);
+CREATE TRIGGER current_node_interruption_failure
+BEFORE UPDATE OF interrupted ON current_node_fatal_successors
+BEGIN
+	SELECT RAISE(ABORT, 'current node interruption persistence failed');
+END;
+`); err != nil {
+			t.Fatalf("install interruption SQL failure: %v", err)
+		}
+		source, err := workflow.NewCurrentNodeReference("task-fatal", "node-source", nil)
+		if err != nil {
+			t.Fatalf("source Current Node reference: %v", err)
+		}
+		successor, err := workflow.NewCurrentNodeReference("task-fatal", "node-successor", nil)
+		if err != nil {
+			t.Fatalf("successor Current Node reference: %v", err)
+		}
+		workflowStore, err := workflowstore.New(appCore.MetadataStore())
+		if err != nil {
+			t.Fatalf("workflowstore.New: %v", err)
+		}
+		authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+		controller, err := workflowexecution.NewCurrentNodeController(
+			&gatewayAutomaticFatalStore{
+				Store:     workflowStore,
+				db:        appCore.MetadataStore().DB(),
+				source:    source,
+				successor: successor,
+			},
+			gatewayAutomaticFatalRunner{},
+			authority,
+			workflowexecution.NewMutationPermit(),
+			workflowexecution.CurrentNodeControllerConfig{
+				AgentConcurrency: 1,
+				AssignmentSteerer: gatewayAutomaticFatalSteerer{
+					cause: errors.New("automatic successor assignment failed"),
+				},
+			},
+		)
+		if err != nil {
+			t.Fatalf("NewCurrentNodeController: %v", err)
+		}
+		workflowClient := &gatewayConcurrencyWorkflowService{
+			WorkflowService: appCore.WorkflowClient(),
+			completeWorkflowTask: func(ctx context.Context, req serverapi.WorkflowTaskCompleteRequest) (serverapi.WorkflowTaskCompleteResponse, error) {
+				taskID := workflow.TaskID(req.TaskID)
+				_, completeErr := controller.CompleteIdleCurrentNode(
+					ctx,
+					workflowstore.IdleCurrentNodeSelector{TaskID: &taskID},
+					req.TransitionID,
+					req.OutputValues,
+					req.Commentary,
+				)
+				return serverapi.WorkflowTaskCompleteResponse{}, completeErr
+			},
+		}
+		gateway, err := NewGateway(
+			&gatewayConcurrencyDependencies{GatewayDependencies: appCore, workflow: workflowClient},
+			protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"},
+		)
+		if err != nil {
+			t.Fatalf("NewGateway: %v", err)
+		}
+		server := httptest.NewServer(gateway.Handler())
+		if err := os.WriteFile(addressPath, []byte(server.URL), 0o600); err != nil {
+			t.Fatalf("write Gateway address: %v", err)
+		}
+		conn := dialGateway(t, server)
+		handshakeGateway(t, conn)
+		sendGatewayRequest(t, conn, "fatal", protocol.MethodWorkflowTaskComplete, serverapi.WorkflowTaskCompleteRequest{
+			TaskID:       "task-fatal",
+			TransitionID: "next",
+			ActorKind:    serverapi.WorkflowTaskCompleteActorUser,
+			Force:        true,
+		})
+		select {}
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=^TestGatewayAutomaticSuccessorFatalTerminatesProcess$")
+	cmd.Env = append(os.Environ(), childEnv+"=1", addressEnv+"="+addressPath)
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("automatic successor fatal child exited successfully\n%s", output)
+	}
+	rawAddress, readErr := os.ReadFile(addressPath)
+	if readErr != nil {
+		t.Fatalf("read Gateway address after child exit: %v\n%s", readErr, output)
+	}
+	if _, dialErr := websocket.Dial(
+		"ws"+string(rawAddress[len("http"):]),
+		"",
+		string(rawAddress),
+	); dialErr == nil {
+		t.Fatal("Gateway accepted a subsequent connection after process-fatal panic")
+	}
 }
 
 func TestGatewayCloseCancelsAndDrainsHandlersBeforeRuntimeCleanup(t *testing.T) {

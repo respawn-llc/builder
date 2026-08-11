@@ -177,6 +177,211 @@ func TestCurrentNodeControllerExecutionLossBeforeAdmissionInterruptsReadyCurrent
 	}, "pre-admission execution loss did not publish interrupted Current Node attention")
 }
 
+func TestInitialStartInterruptionPersistenceFailureRemainsNonFatalAndObservable(t *testing.T) {
+	assignmentErr := errors.New("initial assignment failed")
+	persistenceErr := errors.New("interrupt initial Start failed")
+	reference := currentNodeReferenceForControllerTest(t, "task-initial-interrupt-persistence", "node-agent")
+	store := &currentNodeControllerStore{interruptErr: persistenceErr}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller, err := NewCurrentNodeController(
+		store,
+		&countingCurrentNodeRunner{},
+		authority,
+		NewMutationPermit(),
+		CurrentNodeControllerConfig{
+			AgentConcurrency: 1,
+			AssignmentSteerer: &recordingCurrentNodeAssignmentSteerer{
+				waitErr: assignmentErr,
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("new current node controller: %v", err)
+	}
+	t.Cleanup(func() { _ = authority.Close(context.Background()) })
+
+	if err := startCurrentNodeForControllerTest(context.Background(), controller, store, reference); err != nil {
+		t.Fatalf("queue initial Start: %v", err)
+	}
+	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+		return store.interruptionAttemptCount(false) == 1
+	}, "initial Start did not attempt interruption persistence")
+	closeErr := controller.Close()
+	if !errors.Is(closeErr, assignmentErr) || !errors.Is(closeErr, persistenceErr) {
+		t.Fatalf("controller Close error = %v, want assignment and persistence failures", closeErr)
+	}
+}
+
+func TestExplicitResumeInterruptionPersistenceFailureRemainsNonFatalAndObservable(t *testing.T) {
+	startErr := errors.New("resumed runtime start failed")
+	persistenceErr := errors.New("interrupt explicit Resume failed")
+	reference := currentNodeReferenceForControllerTest(t, "task-resume-interrupt-persistence", "node-agent")
+	store := &currentNodeControllerStore{
+		interrupted: []workflow.CurrentNode{{
+			Reference: reference,
+			Scheduling: &workflow.CurrentNodeScheduling{
+				State: workflow.CurrentNodeSchedulingInterrupted,
+			},
+		}},
+		admittedInterruptErr: persistenceErr,
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller := newCurrentNodeControllerForTest(t, store, failingCurrentNodeRunner{cause: startErr}, authority, 1)
+	t.Cleanup(func() { _ = authority.Close(context.Background()) })
+
+	resumed, err := controller.ResumeTask(context.Background(), reference.TaskID)
+	if err != nil {
+		t.Fatalf("ResumeTask: %v", err)
+	}
+	if len(resumed) != 1 || !resumed[0].Reference.Equal(reference) {
+		t.Fatalf("resumed Current Nodes = %+v, want %v", resumed, reference)
+	}
+	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+		return store.interruptionAttemptCount(true) == 1
+	}, "explicit Resume did not attempt admitted interruption persistence")
+	closeErr := controller.Close()
+	if !errors.Is(closeErr, startErr) || !errors.Is(closeErr, persistenceErr) {
+		t.Fatalf("controller Close error = %v, want start and persistence failures", closeErr)
+	}
+}
+
+func TestExplicitAdmissionConsumesCommittedInterruptionDiagnostic(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		resume bool
+	}{
+		{name: "initial Start"},
+		{name: "Resume", resume: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			reference := currentNodeReferenceForControllerTest(
+				t,
+				"task-explicit-event-diagnostic",
+				"node-"+test.name,
+			)
+			startErr := errors.New("explicit admission failed")
+			deliveryErr := errors.New("interruption event delivery unavailable")
+			store := &currentNodeControllerStore{}
+			var runner CurrentNodeRunner = &countingCurrentNodeRunner{}
+			steerer := CurrentNodeAssignmentSteerer(&recordingCurrentNodeAssignmentSteerer{waitErr: startErr})
+			if test.resume {
+				store.interrupted = []workflow.CurrentNode{{
+					Reference:  reference,
+					Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingInterrupted},
+				}}
+				store.admittedInterruptErr = currentNodeInterruptionPostCommitDiagnosticForTest(reference, deliveryErr)
+				runner = failingCurrentNodeRunner{cause: startErr}
+				steerer = noOpCurrentNodeAssignmentSteerer{}
+			} else {
+				store.interruptErr = currentNodeInterruptionPostCommitDiagnosticForTest(reference, deliveryErr)
+			}
+			authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+			controller, err := NewCurrentNodeController(
+				store,
+				runner,
+				authority,
+				NewMutationPermit(),
+				CurrentNodeControllerConfig{AgentConcurrency: 1, AssignmentSteerer: steerer},
+			)
+			if err != nil {
+				t.Fatalf("new current node controller: %v", err)
+			}
+			t.Cleanup(func() { _ = authority.Close(context.Background()) })
+
+			if test.resume {
+				if _, err := controller.ResumeTask(context.Background(), reference.TaskID); err != nil {
+					t.Fatalf("ResumeTask: %v", err)
+				}
+			} else if err := startCurrentNodeForControllerTest(context.Background(), controller, store, reference); err != nil {
+				t.Fatalf("queue initial Start: %v", err)
+			}
+			testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+				return store.interruptionAttemptCount(test.resume) == 1
+			}, "explicit admission did not persist interruption")
+			closeErr := controller.Close()
+			if !errors.Is(closeErr, startErr) || !errors.Is(closeErr, deliveryErr) {
+				t.Fatalf("controller Close error = %v, want start and event diagnostics", closeErr)
+			}
+			if _, interrupted := store.interruption(reference); !interrupted {
+				t.Fatal("explicit admission Current Node was not interrupted")
+			}
+		})
+	}
+}
+
+func TestAutomaticInterruptionPersistenceFailurePanicsWithAdmissionOrigin(t *testing.T) {
+	for _, test := range []struct {
+		name               string
+		operation          string
+		admitted           bool
+		expectedScheduling workflow.CurrentNodeSchedulingState
+		invoke             func(*CurrentNodeController, currentNodeQueuedStart, error)
+	}{
+		{
+			name:               "assignment",
+			operation:          "assignment",
+			expectedScheduling: workflow.CurrentNodeSchedulingReady,
+			invoke: func(controller *CurrentNodeController, start currentNodeQueuedStart, cause error) {
+				_ = controller.interruptUncommittedAutomaticStart(context.Background(), start, cause)
+			},
+		},
+		{
+			name:               "ready start",
+			operation:          "ready_start",
+			expectedScheduling: workflow.CurrentNodeSchedulingReady,
+			invoke: func(controller *CurrentNodeController, start currentNodeQueuedStart, cause error) {
+				controller.handleAdmissionFailure(start, false, cause)
+			},
+		},
+		{
+			name:               "admitted start",
+			operation:          "admitted_start",
+			admitted:           true,
+			expectedScheduling: workflow.CurrentNodeSchedulingAdmitted,
+			invoke: func(controller *CurrentNodeController, start currentNodeQueuedStart, cause error) {
+				controller.handleAdmissionFailure(start, true, cause)
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			reference := currentNodeReferenceForControllerTest(t, "task-automatic-fatal", "node-agent")
+			originalErr := errors.New("automatic successor failed")
+			persistenceErr := errors.New("interrupt automatic successor failed")
+			store := &currentNodeControllerStore{interruptErr: persistenceErr}
+			if test.admitted {
+				store.interruptErr = nil
+				store.admittedInterruptErr = persistenceErr
+			}
+			controller := &CurrentNodeController{
+				store:  store,
+				permit: NewMutationPermit(),
+			}
+			start := currentNodeQueuedStart{
+				reference: reference,
+				policy:    currentNodeAdmissionAutomaticAgent,
+			}
+			defer func() {
+				recovered := recover()
+				fatal, ok := recovered.(*CurrentNodeAutomaticInterruptionPersistencePanic)
+				if !ok {
+					t.Fatalf("recovered panic = %#v, want automatic interruption fatal", recovered)
+				}
+				if fatal.Operation != test.operation ||
+					!fatal.Reference.Equal(reference) ||
+					fatal.ExpectedScheduling != test.expectedScheduling ||
+					!errors.Is(fatal.OriginalFailure, originalErr) ||
+					!errors.Is(fatal.InterruptionFailure, persistenceErr) {
+					t.Fatalf("automatic interruption fatal = %+v", fatal)
+				}
+				var marker interface{ ProcessFatalPanic() } = fatal
+				marker.ProcessFatalPanic()
+			}()
+			test.invoke(controller, start, originalErr)
+			t.Fatal("automatic interruption persistence failure did not panic")
+		})
+	}
+}
+
 func TestCurrentNodeControllerFinalizedWithoutOutcomeInterruptsAdmittedCurrentNode(t *testing.T) {
 	shellPath, err := exec.LookPath("sh")
 	if err != nil {
@@ -342,7 +547,7 @@ func (r *finalizerFailureScriptRunner) StartCurrentNode(
 	_ context.Context,
 	_ workflow.CurrentNodeReference,
 	_ workflowruntime.TaskPromptDelivery,
-	_ CurrentNodeAssignmentSteer,
+	_ *CurrentNodeClassifiedAssignment,
 	lease sessionruntime.WorkflowExecutionLease,
 	_ workflowruntime.Controller,
 ) error {
@@ -926,6 +1131,61 @@ func TestCurrentNodeControllerPreparationFailureInterruptsPlacedNode(t *testing.
 	}
 	if runner.starts() != 0 {
 		t.Fatalf("runner starts = %d, want none", runner.starts())
+	}
+}
+
+func TestCurrentNodeControllerPreparationFailureConsumesCommittedInterruptionDiagnostic(t *testing.T) {
+	reference := currentNodeReferenceForControllerTest(t, "task-preparation-event-diagnostic", "node-agent")
+	deliveryErr := errors.New("interruption event delivery unavailable")
+	store := &currentNodeControllerStore{
+		started: workflowstore.StartTaskResult{Mutation: workflow.CurrentNodeMutationResult{
+			Created: []workflow.CurrentNode{{
+				Reference:  reference,
+				Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
+			}},
+		}},
+		interruptErr: currentNodeInterruptionPostCommitDiagnosticForTest(reference, deliveryErr),
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	attention := &currentNodeAttentionRecorder{}
+	controller := newCurrentNodeControllerWithAttentionForTest(
+		t,
+		store,
+		&countingCurrentNodeRunner{},
+		authority,
+		1,
+		attention,
+	)
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+	preparationErr := errors.New("worktree setup failed")
+	finalized := make(chan TaskPreparationFinalization, 1)
+
+	if _, err := controller.StartTask(
+		context.Background(),
+		reference.TaskID,
+		testTaskPreparation(func(context.Context) error { return preparationErr }),
+		func(finalization TaskPreparationFinalization) { finalized <- finalization },
+	); err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	select {
+	case finalization := <-finalized:
+		if finalization.Kind != TaskPreparationFailed ||
+			!errors.Is(finalization.Cause, preparationErr) ||
+			!errors.Is(finalization.Cause, deliveryErr) {
+			t.Fatalf("task preparation finalization = %+v, want committed interruption diagnostic", finalization)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("task preparation did not finalize")
+	}
+	if _, interrupted := store.interruption(reference); !interrupted {
+		t.Fatal("preparation Current Node was not interrupted")
+	}
+	if attention.pendingCount() != 1 {
+		t.Fatalf("interruption attention = %d, want one", attention.pendingCount())
 	}
 }
 

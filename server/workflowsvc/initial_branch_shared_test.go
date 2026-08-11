@@ -17,7 +17,7 @@ func (initialBranchControllerRunner) StartCurrentNode(
 	context.Context,
 	workflow.CurrentNodeReference,
 	workflowruntime.TaskPromptDelivery,
-	workflowexecution.CurrentNodeAssignmentSteer,
+	*workflowexecution.CurrentNodeClassifiedAssignment,
 	sessionruntime.WorkflowExecutionLease,
 	workflowruntime.Controller,
 ) error {

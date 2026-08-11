@@ -29,7 +29,7 @@ type CurrentNodeRunner interface {
 		context.Context,
 		workflow.CurrentNodeReference,
 		workflowruntime.TaskPromptDelivery,
-		CurrentNodeAssignmentSteer,
+		*CurrentNodeClassifiedAssignment,
 		sessionruntime.WorkflowExecutionLease,
 		workflowruntime.Controller,
 	) error
@@ -41,6 +41,40 @@ type CurrentNodeAssignmentSteerer interface {
 
 type CurrentNodeAssignmentSteer interface {
 	Wait(context.Context) (session.CommitReceipt, error)
+}
+
+// CurrentNodeClassifiedAssignment is the immutable durable assignment proof
+// consumed by admission and the real Current Node runner.
+type CurrentNodeClassifiedAssignment struct {
+	reference workflow.CurrentNodeReference
+	prepared  CurrentNodeAssignmentSteer
+}
+
+func newCurrentNodeClassifiedAssignment(
+	reference workflow.CurrentNodeReference,
+	prepared CurrentNodeAssignmentSteer,
+) *CurrentNodeClassifiedAssignment {
+	if prepared == nil {
+		panic("classified Current Node assignment requires prepared assignment")
+	}
+	return &CurrentNodeClassifiedAssignment{
+		reference: reference,
+		prepared:  prepared,
+	}
+}
+
+func (a *CurrentNodeClassifiedAssignment) Reference() workflow.CurrentNodeReference {
+	if a == nil {
+		return workflow.CurrentNodeReference{}
+	}
+	return a.reference
+}
+
+func (a *CurrentNodeClassifiedAssignment) PreparedAssignment() CurrentNodeAssignmentSteer {
+	if a == nil {
+		return nil
+	}
+	return a.prepared
 }
 
 type CurrentNodeControllerConfig struct {
@@ -83,6 +117,7 @@ type CurrentNodeController struct {
 		RecoverExecutableCurrentNodes(context.Context, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) ([]workflow.CurrentNodeReference, error)
 		ResolveIdleExecutableCurrentNode(context.Context, workflowstore.IdleCurrentNodeSelector) (workflow.CurrentNode, error)
 		CompleteCurrentNode(context.Context, workflowstore.CurrentNodeCompletionRequest) (workflowstore.CurrentNodeCompletionResult, error)
+		RepairCurrentNodeSessionProvenanceForResume(context.Context, workflow.CurrentNode) error
 		ValidateCurrentNodeSessionBinding(context.Context, runtimeids.SessionID, workflow.CurrentNodeReference) error
 		TaskExecutionScope(context.Context, workflow.TaskID) (workflowstore.TaskExecutionScope, error)
 	}
@@ -122,6 +157,7 @@ type CurrentNodeController struct {
 	agentCapacityActive   int
 	interrupts            currentNodeInterruptState
 	workerErr             error
+	workerDiagnostics     error
 	lastAutomaticTask     *workflow.TaskID
 }
 
@@ -140,6 +176,7 @@ func NewCurrentNodeController(
 		RecoverExecutableCurrentNodes(context.Context, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) ([]workflow.CurrentNodeReference, error)
 		ResolveIdleExecutableCurrentNode(context.Context, workflowstore.IdleCurrentNodeSelector) (workflow.CurrentNode, error)
 		CompleteCurrentNode(context.Context, workflowstore.CurrentNodeCompletionRequest) (workflowstore.CurrentNodeCompletionResult, error)
+		RepairCurrentNodeSessionProvenanceForResume(context.Context, workflow.CurrentNode) error
 		ValidateCurrentNodeSessionBinding(context.Context, runtimeids.SessionID, workflow.CurrentNodeReference) error
 		TaskExecutionScope(context.Context, workflow.TaskID) (workflowstore.TaskExecutionScope, error)
 	},
@@ -256,7 +293,7 @@ func (c *CurrentNodeController) CompleteSessionCurrentNode(
 func (c *CurrentNodeController) completeLiveCurrentNode(ctx context.Context, req workflowruntime.CompletionRequest) (workflowstore.CurrentNodeCompletionResult, error) {
 	var completed workflowstore.CurrentNodeCompletionResult
 	var starts []currentNodeQueuedStart
-	var pending []*pendingCurrentNodeAssignmentSteer
+	var prepared []currentNodePreparedAssignment
 	err := c.permit.Run(ctx, func(ctx context.Context) error {
 		c.mu.Lock()
 		live, exists := c.live[req.ScopeID]
@@ -334,23 +371,25 @@ func (c *CurrentNodeController) completeLiveCurrentNode(ctx context.Context, req
 				c.mu.Unlock()
 				return nil
 			}
-			starts, pending = pendingCurrentNodeAssignmentStarts(starts)
-			c.mu.Lock()
-			c.heldStarts[req.ScopeID] = starts
-			c.mu.Unlock()
+			prepared = c.prepareCurrentNodeAssignments(ctx, starts)
 			return nil
 		}); err != nil {
-			exactErr := err
-			resolveErr := c.resolvePendingCurrentNodeAssignmentSteers(ctx, starts, pending)
-			return errors.Join(exactErr, resolveErr)
+			return err
 		}
 		if completed.PostCompletionEligible {
 			return nil
 		}
-		return c.resolvePendingCurrentNodeAssignmentSteers(ctx, starts, pending)
+		classified, assignmentErr := c.classifyPreparedAutomaticStarts(
+			ctx,
+			prepared,
+			true,
+			&req.ScopeID,
+		)
+		c.deliverClassifiedStarts(classified, &req.ScopeID)
+		return assignmentErr
 	})
 	if err != nil {
-		return workflowstore.CurrentNodeCompletionResult{}, err
+		return completed, err
 	}
 	return completed, nil
 }
@@ -502,20 +541,11 @@ func (c *CurrentNodeController) CompleteIdleCurrentNode(
 		}
 		intents, intentErr := currentNodeAutomaticIntents(completed.AutomaticIntents)
 		if intentErr != nil {
-			return workflowstore.CurrentNodeCompletionResult{}, intentErr
+			return completed, intentErr
 		}
-		starts, startErr := c.steerAndWaitStarts(ctx, automaticQueuedStarts(intents), recoverCommittedCurrentNodeStarts)
-		if startErr != nil {
-			return workflowstore.CurrentNodeCompletionResult{}, startErr
-		}
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		for _, start := range starts {
-			if err := c.queueAutomaticStartLocked(start); err != nil {
-				return workflowstore.CurrentNodeCompletionResult{}, err
-			}
-		}
-		return completed, nil
+		starts, startErr := c.classifyAutomaticStarts(ctx, automaticQueuedStarts(intents), nil)
+		c.deliverClassifiedStarts(starts, nil)
+		return completed, startErr
 	})
 }
 
@@ -572,26 +602,28 @@ func (c *CurrentNodeController) recordIdleCurrentNodeProtocolViolation(
 			c.clearProtocolViolations(req.ScopeID)
 			return result, nil
 		}
-		if err := c.store.InterruptCurrentNode(
+		interruptErr := c.store.InterruptCurrentNode(
 			ctx,
 			source.Reference,
 			reasonProtocolViolationCap,
 			workflow.NewCurrentNodeInterruptionDetail(string(reasonProtocolViolationCap), workflowProtocolViolationCause(req)),
-		); err != nil {
-			return workflowruntime.ViolationResult{}, err
+		)
+		committed, diagnostic := classifyCurrentNodeInterruption(interruptErr)
+		if !committed {
+			return workflowruntime.ViolationResult{}, diagnostic
 		}
 		reference := source.Reference
 		interruptedReference = &reference
 		c.clearProtocolViolations(req.ScopeID)
-		return result, nil
+		return result, diagnostic
 	})
-	if err != nil {
+	if err != nil && interruptedReference == nil {
 		return workflowruntime.ViolationResult{}, err
 	}
 	if interruptedReference != nil {
 		c.publishPendingInterruptedCurrentNode(ctx, *interruptedReference, reasonProtocolViolationCap)
 	}
-	return result, nil
+	return result, err
 }
 
 func (c *CurrentNodeController) resolveQuiescentIdleCurrentNode(
@@ -673,6 +705,7 @@ func (c *CurrentNodeController) FailCurrentNodeScope(
 ) error {
 	detail := workflow.NewCurrentNodeInterruptionDetail(string(reason), cause)
 	var lease sessionruntime.WorkflowExecutionLease
+	var interrupted bool
 	if err := c.permit.Run(ctx, func(ctx context.Context) error {
 		c.mu.Lock()
 		if _, stopping := c.stopping[scopeID]; stopping {
@@ -694,8 +727,19 @@ func (c *CurrentNodeController) FailCurrentNodeScope(
 		}
 		lease = live.lease
 		c.mu.Unlock()
-		return c.store.InterruptAdmittedCurrentNode(ctx, lease.Workflow().CurrentNode, reason, detail)
+		committed, diagnostic := classifyCurrentNodeInterruption(
+			c.store.InterruptAdmittedCurrentNode(ctx, lease.Workflow().CurrentNode, reason, detail),
+		)
+		interrupted = committed
+		return diagnostic
 	}); err != nil {
+		if !interrupted {
+			return err
+		}
+		c.publishPendingInterruptedCurrentNode(ctx, lease.Workflow().CurrentNode, reason)
+		if handle, live := c.authority.ExecutionByScope(scopeID); live {
+			handle.RequestStop()
+		}
 		return err
 	}
 	c.publishPendingInterruptedCurrentNode(ctx, lease.Workflow().CurrentNode, reason)
@@ -750,39 +794,37 @@ func (c *CurrentNodeController) ExecutionFinalized(scope sessionruntime.Executio
 	if !completed {
 		if err := c.interruptOutcomeLessFinalization(live.reference); err != nil {
 			c.mu.Lock()
-			c.workerErr = errors.Join(c.workerErr, err)
+			if committed, _ := classifyCurrentNodeInterruption(err); committed {
+				c.workerDiagnostics = errors.Join(c.workerDiagnostics, err)
+			} else {
+				c.workerErr = errors.Join(c.workerErr, err)
+			}
 			c.mu.Unlock()
 		}
 		return
 	}
 	waitCtx, cancel := context.WithTimeout(context.Background(), interruptCleanupTimeout)
 	defer cancel()
-	needsAssignmentSteer := false
+	classified := make([]currentNodeQueuedStart, 0, len(starts))
+	unclassified := make([]currentNodeQueuedStart, 0, len(starts))
 	for _, start := range starts {
-		if start.assignmentSteer == nil {
-			needsAssignmentSteer = true
-			break
+		if start.assignment == nil {
+			unclassified = append(unclassified, start)
+			continue
+		}
+		classified = append(classified, start)
+	}
+	if len(unclassified) != 0 {
+		resolved, diagnostic := c.classifyAutomaticStarts(waitCtx, unclassified, nil)
+		classified = append(classified, resolved...)
+		if diagnostic != nil {
+			c.mu.Lock()
+			c.workerDiagnostics = errors.Join(c.workerDiagnostics, diagnostic)
+			c.mu.Unlock()
 		}
 	}
-	if needsAssignmentSteer {
-		steered, steerErr := c.steerStartsAssignments(waitCtx, starts)
-		if steerErr != nil {
-			c.handleCurrentNodeStartFailures(steered, false, steerErr)
-			return
-		}
-		starts = steered
-	}
-	outcome := waitCurrentNodeAssignmentSteers(waitCtx, starts)
-	if outcome.err != nil {
-		if len(outcome.pending) != 0 {
-			c.continueCurrentNodeAssignmentStarts(starts, nil)
-			return
-		}
-		c.handleCurrentNodeStartFailures(outcome.committed, false, outcome.err)
-		return
-	}
-	c.enqueueStarts(starts)
-	if len(starts) == 0 {
+	c.enqueueStarts(classified)
+	if len(classified) == 0 {
 		c.wakeAdmissionWorker()
 	}
 }
@@ -798,7 +840,7 @@ func (c *CurrentNodeController) interruptOutcomeLessFinalization(reference workf
 			return false, nil
 		}
 		diagnostic := errors.New("exact workflow execution finalized without a durable completion or interruption outcome")
-		err := c.store.InterruptAdmittedCurrentNode(
+		committed, diagnostic := classifyCurrentNodeInterruption(c.store.InterruptAdmittedCurrentNode(
 			ctx,
 			reference,
 			reasonCurrentNodeRuntimeFinalizedWithoutOutcome,
@@ -806,22 +848,19 @@ func (c *CurrentNodeController) interruptOutcomeLessFinalization(reference workf
 				string(reasonCurrentNodeRuntimeFinalizedWithoutOutcome),
 				diagnostic,
 			),
-		)
-		if errors.Is(err, sql.ErrNoRows) {
+		))
+		if errors.Is(diagnostic, sql.ErrNoRows) {
 			return false, nil
 		}
-		if err != nil {
-			return false, fmt.Errorf("interrupt outcome-less finalized Current Node %v: %w", reference, err)
+		if !committed {
+			return false, fmt.Errorf("interrupt outcome-less finalized Current Node %v: %w", reference, diagnostic)
 		}
-		return true, nil
+		return true, diagnostic
 	})
-	if err != nil {
-		return err
-	}
 	if interrupted {
 		c.publishPendingInterruptedCurrentNode(ctx, reference, reasonCurrentNodeRuntimeFinalizedWithoutOutcome)
 	}
-	return nil
+	return err
 }
 
 func (c *CurrentNodeController) Close() error {
@@ -900,8 +939,9 @@ func (c *CurrentNodeController) Close() error {
 	c.admissionWG.Wait()
 	c.mu.Lock()
 	workerErr := c.workerErr
+	workerDiagnostics := c.workerDiagnostics
 	c.mu.Unlock()
-	return errors.Join(errors.Join(stopErrs...), workerErr)
+	return errors.Join(errors.Join(stopErrs...), workerErr, workerDiagnostics)
 }
 
 func (c *CurrentNodeController) liveLease(scopeID runtimeids.ExecutionScopeID) (sessionruntime.WorkflowExecutionLease, error) {

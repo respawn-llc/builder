@@ -325,6 +325,94 @@ func (s *Store) ValidateCurrentNodeSessionBinding(
 	return nil
 }
 
+// RepairCurrentNodeSessionProvenanceForResume is the temporary KENT-534
+// compatibility path for directly consistent retained Current Nodes created
+// before provenance became atomic with insertion.
+func (s *Store) RepairCurrentNodeSessionProvenanceForResume(
+	ctx context.Context,
+	currentNode workflow.CurrentNode,
+) error {
+	if currentNode.SessionID == nil {
+		return nil
+	}
+	if currentNode.AgentExecutionSelection == nil {
+		return errors.New("retained Resume Current Node must be an Agent")
+	}
+	if currentNode.Scheduling == nil ||
+		currentNode.Scheduling.State != workflow.CurrentNodeSchedulingInterrupted {
+		return errors.New("retained Resume Current Node must be interrupted")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	q := s.queries.WithTx(tx)
+	persisted, err := currentNodeForReference(ctx, q, currentNode.Reference)
+	if err != nil {
+		return err
+	}
+	if persisted.SessionID == nil ||
+		*persisted.SessionID != *currentNode.SessionID ||
+		persisted.AgentExecutionSelection == nil ||
+		persisted.Scheduling == nil ||
+		persisted.Scheduling.State != workflow.CurrentNodeSchedulingInterrupted {
+		return ErrSessionNotCurrentWorkflowNode
+	}
+	currentNodes, err := listTaskCurrentNodes(ctx, q, currentNode.Reference.TaskID)
+	if err != nil {
+		return err
+	}
+	sessionOwners := 0
+	for _, candidate := range currentNodes {
+		if candidate.SessionID != nil && *candidate.SessionID == *currentNode.SessionID {
+			sessionOwners++
+			if !candidate.Reference.Equal(currentNode.Reference) {
+				return ErrSessionNotCurrentWorkflowNode
+			}
+		}
+	}
+	if sessionOwners != 1 {
+		return ErrSessionNotCurrentWorkflowNode
+	}
+	taskIDs, err := q.ListSessionWorkflowTaskIDs(ctx, currentNode.SessionID.String())
+	if err != nil {
+		return err
+	}
+	if len(taskIDs) != 1 ||
+		!taskIDs[0].Valid ||
+		workflow.TaskID(taskIDs[0].String) != currentNode.Reference.TaskID {
+		return ErrSessionNotCurrentWorkflowNode
+	}
+	association, err := latestTaskSessionForNode(
+		sqlitegen.WithExpectedNoRows(ctx),
+		q,
+		currentNode.Reference,
+	)
+	if err == nil && association.SessionID == *currentNode.SessionID {
+		return nil
+	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	associatedAt := s.now().UTC()
+	if err == nil && !associatedAt.After(association.AssociatedAt) {
+		associatedAt = association.AssociatedAt.Add(time.Millisecond)
+	}
+	normalized, err := normalizeTaskSessionAssociationRequest(TaskSessionAssociationRequest{
+		SessionID:    *currentNode.SessionID,
+		CurrentNode:  currentNode.Reference,
+		AssociatedAt: associatedAt,
+	})
+	if err != nil {
+		return err
+	}
+	if err := upsertTaskSessionAssociation(ctx, q, normalized); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // ResolveCurrentNodeStartContext prepares an admitted executable Current Node
 // from its own materialized values and the latest definition. It never
 // reconstructs discarded execution history.

@@ -1,6 +1,7 @@
 package workflowstore
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"sort"
@@ -12,6 +13,171 @@ import (
 	"core/server/workflow"
 	"core/shared/runtimeids"
 )
+
+func TestRepairRetainedResumeProvenanceIsIdempotentForConsistentRows(t *testing.T) {
+	for _, state := range []string{"correct", "missing", "stale"} {
+		t.Run(state, func(t *testing.T) {
+			fixture := newImmediateContextCompletionFixture(t, workflow.ContextModeContinueSession)
+			completed, err := fixture.store.CompleteCurrentNode(fixture.ctx, CurrentNodeCompletionRequest{
+				Source: fixture.source.Reference, TransitionID: "review",
+				OutputValues: map[string]string{"summary": "resume"},
+			})
+			if err != nil {
+				t.Fatalf("CompleteCurrentNode: %v", err)
+			}
+			target := completed.Mutation.Created[0]
+			if err := fixture.store.InterruptCurrentNode(
+				fixture.ctx, target.Reference, "test",
+				workflow.NewCurrentNodeInterruptionDetail("test", nil),
+			); err != nil {
+				t.Fatalf("InterruptCurrentNode: %v", err)
+			}
+			switch state {
+			case "missing":
+				if _, err := fixture.store.db.ExecContext(
+					fixture.ctx,
+					`DELETE FROM session_workflow_node_associations WHERE session_id = ? AND node_id = ?`,
+					fixture.sessionID.String(), target.Reference.NodeID,
+				); err != nil {
+					t.Fatalf("delete association: %v", err)
+				}
+			case "stale":
+				staleSession, err := runtimeids.ParseSessionID(createTestSession(
+					t, fixture.ctx, fixture.store, fixture.binding, fixture.cfg,
+				))
+				if err != nil {
+					t.Fatalf("ParseSessionID: %v", err)
+				}
+				if _, err := fixture.store.AssociateTaskSession(fixture.ctx, TaskSessionAssociationRequest{
+					SessionID: staleSession, CurrentNode: target.Reference,
+					AssociatedAt: time.Now().UTC().Add(time.Hour),
+				}); err != nil {
+					t.Fatalf("seed stale latest association: %v", err)
+				}
+			}
+			currentNode := interruptedCurrentNodeForTest(t, fixture.ctx, fixture.store, target.Reference)
+			for range 2 {
+				if err := fixture.store.RepairCurrentNodeSessionProvenanceForResume(fixture.ctx, currentNode); err != nil {
+					t.Fatalf("RepairCurrentNodeSessionProvenanceForResume: %v", err)
+				}
+			}
+			if err := fixture.store.ValidateCurrentNodeSessionBinding(
+				fixture.ctx, fixture.sessionID, target.Reference,
+			); err != nil {
+				t.Fatalf("repaired binding: %v", err)
+			}
+		})
+	}
+}
+
+func TestRepairRetainedResumeProvenanceRejectsInconsistentOwnershipWithoutResuming(t *testing.T) {
+	for _, state := range []string{"absent", "contradictory"} {
+		t.Run(state, func(t *testing.T) {
+			fixture := newImmediateContextCompletionFixture(t, workflow.ContextModeContinueSession)
+			completed, err := fixture.store.CompleteCurrentNode(fixture.ctx, CurrentNodeCompletionRequest{
+				Source: fixture.source.Reference, TransitionID: "review",
+				OutputValues: map[string]string{"summary": "resume"},
+			})
+			if err != nil {
+				t.Fatalf("CompleteCurrentNode: %v", err)
+			}
+			target := completed.Mutation.Created[0]
+			if err := fixture.store.InterruptCurrentNode(
+				fixture.ctx, target.Reference, "test",
+				workflow.NewCurrentNodeInterruptionDetail("test", nil),
+			); err != nil {
+				t.Fatalf("InterruptCurrentNode: %v", err)
+			}
+			var owner any
+			if state == "contradictory" {
+				otherTask := createDefaultTask(t, fixture.ctx, fixture.store, fixture.binding.ProjectID)
+				owner = string(otherTask.ID)
+			}
+			if _, err := fixture.store.db.ExecContext(
+				fixture.ctx, `UPDATE sessions SET task_id = ? WHERE id = ?`,
+				owner, fixture.sessionID.String(),
+			); err != nil {
+				t.Fatalf("change Session owner: %v", err)
+			}
+			currentNode := interruptedCurrentNodeForTest(t, fixture.ctx, fixture.store, target.Reference)
+			if err := fixture.store.RepairCurrentNodeSessionProvenanceForResume(
+				fixture.ctx, currentNode,
+			); !errors.Is(err, ErrSessionNotCurrentWorkflowNode) {
+				t.Fatalf("repair error = %v, want ErrSessionNotCurrentWorkflowNode", err)
+			}
+			interruptedCurrentNodeForTest(t, fixture.ctx, fixture.store, target.Reference)
+		})
+	}
+}
+
+func TestRepairRetainedResumeProvenanceRejectsSessionOnMultipleCurrentNodes(t *testing.T) {
+	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
+	workflowID := createFanoutJoinWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	split, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source: source.Reference, OutputValues: map[string]string{"summary": "split"},
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode: %v", err)
+	}
+	first, second := split.Mutation.Created[0], split.Mutation.Created[1]
+	sessionID, err := runtimeids.ParseSessionID(createTestSession(t, ctx, store, binding, cfg))
+	if err != nil {
+		t.Fatalf("ParseSessionID: %v", err)
+	}
+	if _, err := store.BindSessionToCurrentNode(ctx, CurrentNodeSessionBindingRequest{
+		Association: TaskSessionAssociationRequest{
+			SessionID: sessionID, CurrentNode: first.Reference,
+			AssociatedAt: time.Now().UTC(),
+		},
+	}); err != nil {
+		t.Fatalf("BindSessionToCurrentNode: %v", err)
+	}
+	secondBranch, _ := second.Reference.TransitionBranchKey()
+	if _, err := store.db.ExecContext(ctx, `UPDATE task_current_nodes
+SET session_id = ? WHERE task_id = ? AND node_id = ? AND transition_branch_key = ?`,
+		sessionID.String(), second.Reference.TaskID, second.Reference.NodeID, secondBranch,
+	); err != nil {
+		t.Fatalf("duplicate retained Session owner: %v", err)
+	}
+	if err := store.InterruptCurrentNode(
+		ctx, first.Reference, "test",
+		workflow.NewCurrentNodeInterruptionDetail("test", nil),
+	); err != nil {
+		t.Fatalf("InterruptCurrentNode: %v", err)
+	}
+	currentNode := interruptedCurrentNodeForTest(t, ctx, store, first.Reference)
+	if err := store.RepairCurrentNodeSessionProvenanceForResume(
+		ctx, currentNode,
+	); !errors.Is(err, ErrSessionNotCurrentWorkflowNode) {
+		t.Fatalf("repair error = %v, want ErrSessionNotCurrentWorkflowNode", err)
+	}
+	interruptedCurrentNodeForTest(t, ctx, store, first.Reference)
+}
+
+func interruptedCurrentNodeForTest(
+	t *testing.T,
+	ctx context.Context,
+	store *Store,
+	reference workflow.CurrentNodeReference,
+) workflow.CurrentNode {
+	t.Helper()
+	currentNodes, err := store.ListCurrentNodes(ctx, reference.TaskID)
+	if err != nil {
+		t.Fatalf("ListCurrentNodes: %v", err)
+	}
+	for _, currentNode := range currentNodes {
+		if currentNode.Reference.Equal(reference) &&
+			currentNode.Scheduling != nil &&
+			currentNode.Scheduling.State == workflow.CurrentNodeSchedulingInterrupted {
+			return currentNode
+		}
+	}
+	t.Fatalf("Current Node %v is not interrupted: %+v", reference, currentNodes)
+	return workflow.CurrentNode{}
+}
 
 func TestAssociateTaskSessionBindsFreshSessionToCurrentNode(t *testing.T) {
 	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)

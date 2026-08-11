@@ -10,6 +10,7 @@ import (
 
 	"core/server/sessionruntime"
 	"core/server/workflow"
+	"core/server/workflowstore"
 )
 
 const interruptCleanupTimeout = 300 * time.Second
@@ -28,6 +29,17 @@ type currentNodeInterruptCleanupState struct {
 	taskFence      *currentNodeInterruptFence
 }
 
+func classifyCurrentNodeInterruption(err error) (committed bool, diagnostic error) {
+	if err == nil {
+		return true, nil
+	}
+	var postCommit *workflowstore.CurrentNodeInterruptionPostCommitDiagnostic
+	if errors.As(err, &postCommit) {
+		return true, err
+	}
+	return false, err
+}
+
 func (c *CurrentNodeController) cleanupInterrupt(state currentNodeInterruptCleanupState) error {
 	if len(state.stopHandles) == 0 &&
 		len(state.drainedGates) == 0 &&
@@ -43,9 +55,17 @@ func (c *CurrentNodeController) cleanupInterrupt(state currentNodeInterruptClean
 	for _, handle := range state.stopHandles {
 		handle.RequestStop()
 	}
+	var interrupted []workflow.CurrentNodeReference
 	persistenceErr := c.permit.Run(cleanupCtx, func(ctx context.Context) error {
 		detail := workflow.NewCurrentNodeInterruptionDetail(string(workflow.CurrentNodeInterruptionReasonUserInterrupt), nil)
-		_, err := interruptCurrentNodeReferences(ctx, c.store.InterruptCurrentNode, state.references, workflow.CurrentNodeInterruptionReasonUserInterrupt, detail)
+		var err error
+		interrupted, err = interruptCurrentNodeReferences(
+			ctx,
+			c.store.InterruptCurrentNode,
+			state.references,
+			workflow.CurrentNodeInterruptionReasonUserInterrupt,
+			detail,
+		)
 		return err
 	})
 	var waitErrs []error
@@ -81,6 +101,13 @@ func (c *CurrentNodeController) cleanupInterrupt(state currentNodeInterruptClean
 		}
 		return nil
 	})
+	for _, reference := range interrupted {
+		c.publishPendingInterruptedCurrentNode(
+			cleanupCtx,
+			reference,
+			workflow.CurrentNodeInterruptionReasonUserInterrupt,
+		)
+	}
 	return errors.Join(persistenceErr, errors.Join(waitErrs...), verifyErr)
 }
 
@@ -597,8 +624,11 @@ func interruptCurrentNodeReferences(
 		if errors.Is(err, sql.ErrNoRows) {
 			continue
 		}
-		if err != nil {
-			interruptErrs = append(interruptErrs, err)
+		committed, diagnostic := classifyCurrentNodeInterruption(err)
+		if diagnostic != nil {
+			interruptErrs = append(interruptErrs, diagnostic)
+		}
+		if !committed {
 			continue
 		}
 		interrupted = append(interrupted, reference)

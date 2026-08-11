@@ -162,6 +162,10 @@ type gatewayRequestPanicDiagnostic struct {
 	Stack     string
 }
 
+type processFatalGatewayPanic interface {
+	ProcessFatalPanic()
+}
+
 func (p gatewayRequestPanicDiagnostic) Error() string {
 	return fmt.Sprintf(
 		"gateway request panic operation=%q method=%q request_id=%q cause=%v\nstack:\n%s",
@@ -384,6 +388,9 @@ func (g *Gateway) serveGatewayRequest(conn rpcwire.Conn, ctx context.Context, st
 func (g *Gateway) serveOrdinaryGatewayRequest(conn rpcwire.Conn, ctx context.Context, state *connectionState, req protocol.Request, schedule gatewayRequestSchedule, stop func()) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
+			if _, processFatal := recovered.(processFatalGatewayPanic); processFatal {
+				panic(recovered)
+			}
 			stack := string(debug.Stack())
 			slog.Error(
 				"gateway request handler panicked",
