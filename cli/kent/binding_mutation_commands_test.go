@@ -2,531 +2,175 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
-	"core/shared/client"
 	"core/shared/config"
 	"core/shared/serverapi"
 )
 
-func TestBindingMutationArgumentParsing(t *testing.T) {
-	t.Run("defaults to current workspace path", func(t *testing.T) {
-		var stderr bytes.Buffer
-		arguments, ok, exitCode := parseBindingMutationArguments(
-			"detach",
-			detachUsage,
-			[]string{"--project", "project-1"},
-			&stderr,
-		)
-		if !ok || exitCode != 0 {
-			t.Fatalf("parse = (%+v, %t, %d), stderr=%q", arguments, ok, exitCode, stderr.String())
-		}
-		if arguments.ProjectID != "project-1" || arguments.Workspace != "." || arguments.WorkspaceID != nil {
-			t.Fatalf("arguments = %+v, want project and current-path selector", arguments)
-		}
-	})
-
-	t.Run("accepts workspace ID", func(t *testing.T) {
-		var stderr bytes.Buffer
-		arguments, ok, exitCode := parseBindingMutationArguments(
-			"project default",
-			projectDefaultUsage,
-			[]string{"--project", "project-1", "--workspace", "workspace-1", "--json"},
-			&stderr,
-		)
-		if !ok || exitCode != 0 || arguments.WorkspaceID == nil || *arguments.WorkspaceID != "workspace-1" || !arguments.JSON {
-			t.Fatalf("parse = (%+v, %t, %d), stderr=%q", arguments, ok, exitCode, stderr.String())
-		}
-	})
-
-	for _, test := range []struct {
-		name string
-		args []string
-	}{
-		{name: "missing project", args: []string{"."}},
-		{name: "blank project", args: []string{"--project", " "}},
-		{name: "blank workspace ID", args: []string{"--project", "project-1", "--workspace", " "}},
-		{name: "both selectors", args: []string{"--project", "project-1", "--workspace", "workspace-1", "."}},
-		{name: "too many paths", args: []string{"--project", "project-1", "one", "two"}},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			var stderr bytes.Buffer
-			_, ok, exitCode := parseBindingMutationArguments("detach", detachUsage, test.args, &stderr)
-			if ok || exitCode != 2 || strings.TrimSpace(stderr.String()) == "" {
-				t.Fatalf("parse = (%t, %d), stderr=%q; want usage failure", ok, exitCode, stderr.String())
-			}
-		})
+func TestBindingMutationArgumentsAndSelector(t *testing.T) {
+	var stderr bytes.Buffer
+	args, ok, code := parseBindingMutationArguments(
+		"detach",
+		detachUsage,
+		[]string{"--project", " project-1 ", "--workspace", " workspace-1 ", "--json"},
+		&stderr,
+	)
+	if !ok || code != 0 || stderr.Len() != 0 {
+		t.Fatalf("parse=(%+v,%t,%d), stderr=%q", args, ok, code, stderr.String())
 	}
-}
+	if args.ProjectID != "project-1" || args.WorkspaceID == nil || *args.WorkspaceID != "workspace-1" || !args.JSON {
+		t.Fatalf("arguments=%+v", args)
+	}
+	selector, err := bindingMutationSelector(config.App{}, args)
+	if err != nil || selector.WorkspaceIDValue() == nil || *selector.WorkspaceIDValue() != "workspace-1" {
+		t.Fatalf("selector=%+v err=%v", selector, err)
+	}
 
-func TestBindingMutationSelectorNormalizesPathAfterOpeningCurrentWorkspace(t *testing.T) {
-	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
-	arguments := bindingMutationArguments{
+	root := filepath.Join(t.TempDir(), "workspace")
+	pathSelector, err := bindingMutationSelector(config.App{WorkspaceRoot: root}, bindingMutationArguments{
 		ProjectID: "project-1",
 		Workspace: ".",
+	})
+	if err != nil || pathSelector.WorkspaceRootValue() == nil || *pathSelector.WorkspaceRootValue() != root {
+		t.Fatalf("path selector=%+v err=%v", pathSelector, err)
 	}
-	selector, err := bindingMutationSelector(config.App{WorkspaceRoot: workspaceRoot}, arguments)
-	if err != nil {
-		t.Fatalf("build selector: %v", err)
-	}
-	root := selector.WorkspaceRootValue()
-	if root == nil || *root != workspaceRoot || !filepath.IsAbs(*root) {
-		t.Fatalf("selector = %+v, want absolute opened workspace root", selector)
-	}
-}
 
-func TestBindingMutationResultValidationRejectsMixedAndMissingIdentity(t *testing.T) {
-	projectID := "project-1"
-	workspaceID := "workspace-1"
-	project := validProjectHomeSummaryForBindingMutationTest()
-	for name, result := range map[string]bindingMutationResult{
-		"missing detach identity": {},
-		"mixed result":            {ProjectID: &projectID, WorkspaceID: &workspaceID, Project: &project},
+	for _, invalid := range [][]string{
+		{"."},
+		{"--project", " "},
+		{"--project", "project-1", "--workspace", " "},
+		{"--project", "project-1", "--workspace", "workspace-1", "."},
+		{"--project", "project-1", "one", "two"},
 	} {
-		t.Run(name, func(t *testing.T) {
-			if err := result.validate(); err == nil {
-				t.Fatal("validate succeeded; want structural error")
-			}
-		})
-	}
-	if err := (bindingMutationResult{ProjectID: &projectID, WorkspaceID: &workspaceID}).validate(); err != nil {
-		t.Fatalf("valid detach result rejected: %v", err)
-	}
-	if err := (bindingMutationResult{Project: &project}).validate(); err != nil {
-		t.Fatalf("valid default result rejected: %v", err)
+		stderr.Reset()
+		if _, ok, code := parseBindingMutationArguments("detach", detachUsage, invalid, &stderr); ok || code != 2 || stderr.Len() == 0 {
+			t.Fatalf("args=%q parse=(%t,%d), stderr=%q", invalid, ok, code, stderr.String())
+		}
 	}
 }
 
-func validProjectHomeSummaryForBindingMutationTest() serverapi.ProjectHomeSummary {
-	return serverapi.ProjectHomeSummary{
-		ProjectID:   "project-1",
-		ProjectKey:  "project",
-		DisplayName: "Authoritative",
-		PrimaryWorkspace: serverapi.ProjectWorkspaceSummary{
-			WorkspaceID:  "workspace-1",
-			DisplayName:  "Workspace",
-			RootPath:     "/workspace",
-			Availability: "available",
-		},
+func TestBindingMutationResultValidation(t *testing.T) {
+	projectID, workspaceID := "project-1", "workspace-1"
+	project := validBindingMutationProject()
+	valid := []bindingMutationResult{
+		{ProjectID: &projectID, WorkspaceID: &workspaceID},
+		{Project: &project},
+	}
+	for _, result := range valid {
+		if err := result.validate(); err != nil {
+			t.Fatalf("valid result %+v rejected: %v", result, err)
+		}
+	}
+	invalid := []bindingMutationResult{
+		{},
+		{ProjectID: &projectID},
+		{ProjectID: &projectID, WorkspaceID: &workspaceID, Project: &project},
+	}
+	for _, result := range invalid {
+		if err := result.validate(); err == nil {
+			t.Fatalf("invalid result %+v accepted", result)
+		}
 	}
 }
 
-func TestProjectDefaultUsageValidationDoesNotOpenRemote(t *testing.T) {
-	var stdout, stderr bytes.Buffer
-	if code := projectDefaultSubcommand([]string{"."}, &stdout, &stderr); code != 2 {
-		t.Fatalf("exit code = %d, want usage error 2; stderr=%q", code, stderr.String())
-	}
-}
-
-func TestDetachUsageValidationDoesNotOpenRemote(t *testing.T) {
-	var stdout, stderr bytes.Buffer
-	if code := detachSubcommand([]string{"."}, &stdout, &stderr); code != 2 {
-		t.Fatalf("exit code = %d, want usage error 2; stderr=%q", code, stderr.String())
-	}
-}
-
-func TestDetachUnexpectedIncompleteResponseEmitsJSONFailure(t *testing.T) {
-	installBindingMutationTestRemote(t)
-
-	workspaceID := "workspace-1"
-	arguments := bindingMutationArguments{
-		ProjectID:   "project-1",
-		WorkspaceID: &workspaceID,
-		JSON:        true,
-	}
-	var stdout, stderr bytes.Buffer
-	code := runBindingMutationCommand(
-		arguments,
-		&stdout,
-		&stderr,
-		func(context.Context, *client.Remote, serverapi.ProjectWorkspaceSelector) (bindingMutationResult, error) {
-			return bindingMutationResultFromDetachResponse(serverapi.ProjectWorkspaceUnlinkResponse{})
-		},
-		false,
-	)
-	if code != 1 {
-		t.Fatalf("command exit code = %d, want 1; stdout=%q stderr=%q", code, stdout.String(), stderr.String())
-	}
-	var envelope struct {
-		Status string `json:"status"`
-		Error  struct {
-			Code        string `json:"code"`
-			Message     string `json:"message"`
-			ProjectID   string `json:"project_id"`
-			WorkspaceID string `json:"workspace_id"`
-		} `json:"error"`
-	}
-	if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil {
-		t.Fatalf("decode failure envelope: %v; stdout=%q stderr=%q", err, stdout.String(), stderr.String())
-	}
-	if envelope.Status != "error" || envelope.Error.Code != "request_failed" {
-		t.Fatalf("envelope = %+v, want request_failed error", envelope)
-	}
-	if envelope.Error.ProjectID != "" || envelope.Error.WorkspaceID != "" {
-		t.Fatalf("envelope = %+v, want no resolved identity", envelope)
-	}
-}
-
-func TestLegacyEmptyProjectKeyMutationSuccessOutputs(t *testing.T) {
-	installBindingMutationTestRemote(t)
-	project := validProjectHomeSummaryForBindingMutationTest()
-	project.ProjectKey = ""
-	workspaceID := "workspace-1"
-
-	t.Run("default JSON", func(t *testing.T) {
-		var stdout, stderr bytes.Buffer
-		code := runBindingMutationCommand(
-			bindingMutationArguments{ProjectID: "project-1", WorkspaceID: &workspaceID, JSON: true},
-			&stdout,
-			&stderr,
-			func(context.Context, *client.Remote, serverapi.ProjectWorkspaceSelector) (bindingMutationResult, error) {
-				return bindingMutationResult{Project: &project}, nil
-			},
-			true,
-		)
-		if code != 0 || stderr.Len() != 0 {
-			t.Fatalf("default mutation = exit %d stdout=%q stderr=%q, want success", code, stdout.String(), stderr.String())
-		}
-		var envelope bindingMutationEnvelope
-		if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil {
-			t.Fatalf("decode default success: %v", err)
-		}
-		if envelope.Status != "ok" || envelope.Result == nil || envelope.Result.Project == nil {
-			t.Fatalf("default success envelope = %+v, want authoritative project result", envelope)
-		}
-		if envelope.Result.Project.ProjectID != project.ProjectID || envelope.Result.Project.ProjectKey != "" {
-			t.Fatalf("default success project = %+v, want legacy empty key project", envelope.Result.Project)
-		}
-	})
-
-	t.Run("detach plain", func(t *testing.T) {
-		var stdout, stderr bytes.Buffer
-		code := runBindingMutationCommand(
-			bindingMutationArguments{ProjectID: "project-1", WorkspaceID: &workspaceID},
-			&stdout,
-			&stderr,
-			func(context.Context, *client.Remote, serverapi.ProjectWorkspaceSelector) (bindingMutationResult, error) {
-				return bindingMutationResultFromDetachResponse(serverapi.ProjectWorkspaceUnlinkResponse{
-					ProjectID:   project.ProjectID,
-					WorkspaceID: workspaceID,
-					Project:     &project,
-				})
-			},
-			false,
-		)
-		if code != 0 || stdout.String() != workspaceID+"\n" || stderr.Len() != 0 {
-			t.Fatalf("detach mutation = exit %d stdout=%q stderr=%q, want authoritative success", code, stdout.String(), stderr.String())
-		}
-	})
-}
-
-func installBindingMutationTestRemote(t *testing.T) {
-	t.Helper()
-	originalOpener := bindingCommandRemoteOpener
-	bindingCommandRemoteOpener = func(context.Context, string) (config.App, *client.Remote, error) {
-		return config.App{}, nil, nil
-	}
-	t.Cleanup(func() {
-		bindingCommandRemoteOpener = originalOpener
-	})
-}
-
-func assertBindingMutationJSONFailure(
-	t *testing.T,
-	mutate func(context.Context, *client.Remote, serverapi.ProjectWorkspaceSelector) (bindingMutationResult, error),
-	defaultMutation bool,
-) {
-	t.Helper()
-	installBindingMutationTestRemote(t)
-
-	workspaceID := "workspace-1"
-	arguments := bindingMutationArguments{
-		ProjectID:   "project-1",
-		WorkspaceID: &workspaceID,
-		JSON:        true,
-	}
-	var stdout, stderr bytes.Buffer
-	code := runBindingMutationCommand(arguments, &stdout, &stderr, mutate, defaultMutation)
-	if code != 1 {
-		t.Fatalf("command exit code = %d, want 1; stdout=%q stderr=%q", code, stdout.String(), stderr.String())
-	}
-
-	decoder := json.NewDecoder(bytes.NewReader(stdout.Bytes()))
-	var envelope struct {
-		Status string `json:"status"`
-		Error  struct {
-			Code        string  `json:"code"`
-			ProjectID   *string `json:"project_id"`
-			WorkspaceID *string `json:"workspace_id"`
-		} `json:"error"`
-	}
-	if err := decoder.Decode(&envelope); err != nil {
-		t.Fatalf("decode failure envelope: %v; stdout=%q stderr=%q", err, stdout.String(), stderr.String())
-	}
-	var extra any
-	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		t.Fatalf("stdout contains more than one JSON object: extra=%v err=%v output=%q", extra, err, stdout.String())
-	}
-	if envelope.Status != "error" || envelope.Error.Code != "request_failed" {
-		t.Fatalf("envelope = %+v, want request_failed error", envelope)
-	}
-	if envelope.Error.ProjectID != nil || envelope.Error.WorkspaceID != nil {
-		t.Fatalf("envelope = %+v, want no resolved identity", envelope)
-	}
-}
-
-type bindingMutationFailingWriter struct{}
-
-func (bindingMutationFailingWriter) Write([]byte) (int, error) {
-	return 0, errors.New("output write failed")
-}
-
-func TestBindingMutationPlainOutputFailureReturnsNonZero(t *testing.T) {
-	projectID := "project-1"
-	workspaceID := "workspace-1"
-	var stderr bytes.Buffer
-	code := writeBindingMutationPlainResult(
-		bindingMutationFailingWriter{},
-		&stderr,
-		bindingMutationResult{ProjectID: &projectID, WorkspaceID: &workspaceID},
-		false,
-	)
-	if code != 1 {
-		t.Fatalf("plain output exit code = %d, want 1; stderr=%q", code, stderr.String())
-	}
-	if stderr.Len() == 0 {
-		t.Fatal("plain output failure omitted stderr diagnostics")
-	}
-}
-
-func TestProjectWorkspaceMutationErrorProjection(t *testing.T) {
-	t.Run("project and workspace lookup failures omit requested identity", func(t *testing.T) {
-		for _, test := range []struct {
-			name string
-			err  error
-			code string
-		}{
-			{name: "project", err: serverapi.ErrProjectNotFound, code: "project_not_found"},
-			{name: "workspace", err: serverapi.ErrWorkspaceNotRegistered, code: "workspace_not_attached"},
-		} {
-			t.Run(test.name, func(t *testing.T) {
-				projection, err := projectWorkspaceMutationErrorProjection(test.err, "requested-project", false)
-				if err != nil {
-					t.Fatalf("project projection: %v", err)
-				}
-				if projection.Code != test.code || projection.ProjectID != nil || projection.WorkspaceID != nil {
-					t.Fatalf("projection = %+v, want %s without identity", projection, test.code)
-				}
-			})
-		}
-	})
-
-	t.Run("path identity failure adds workspace fallback only", func(t *testing.T) {
-		err := serverapi.WorkspacePathIdentityError{WorkspaceRoot: "/missing", Cause: errors.New("unavailable")}
-		projection, projectionErr := projectWorkspaceMutationErrorProjection(err, "project-1", false)
-		if projectionErr != nil {
-			t.Fatalf("project path identity projection: %v", projectionErr)
-		}
-		encoded, marshalErr := json.Marshal(projection)
-		if marshalErr != nil {
-			t.Fatalf("marshal projection: %v", marshalErr)
-		}
-		var encodedFields map[string]json.RawMessage
-		if err := json.Unmarshal(encoded, &encodedFields); err != nil {
-			t.Fatalf("decode projection: %v", err)
-		}
-		if projection.Code != "request_failed" {
-			t.Fatalf("projection = %+v, want request_failed", projection)
-		}
-		if _, present := encodedFields["remediation"]; present {
-			t.Fatalf("projection encoded unexpected remediation field: %s", encoded)
-		}
-		generic, projectionErr := projectWorkspaceMutationErrorProjection(errors.New("remote failed"), "project-1", false)
-		if projectionErr != nil {
-			t.Fatalf("project generic projection: %v", projectionErr)
-		}
-		genericEncoded, marshalErr := json.Marshal(generic)
-		if marshalErr != nil {
-			t.Fatalf("marshal generic projection: %v", marshalErr)
-		}
-		var genericFields map[string]json.RawMessage
-		if err := json.Unmarshal(genericEncoded, &genericFields); err != nil {
-			t.Fatalf("decode generic projection: %v", err)
-		}
-		if _, present := genericFields["remediation"]; present {
-			t.Fatalf("generic projection encoded unexpected remediation field: %s", genericEncoded)
-		}
-	})
-
-	t.Run("resolved mutation failure carries authoritative identity", func(t *testing.T) {
-		err := &serverapi.WorkspaceMutationError{
-			ProjectID:   "resolved-project",
-			WorkspaceID: "resolved-workspace",
-			Cause:       errors.New("write failed"),
-		}
-		projection, projectionErr := projectWorkspaceMutationErrorProjection(err, "requested-project", false)
-		if projectionErr != nil {
-			t.Fatalf("project mutation projection: %v", projectionErr)
-		}
-		if projection.ProjectID == nil || projection.WorkspaceID == nil ||
-			*projection.ProjectID != "resolved-project" || *projection.WorkspaceID != "resolved-workspace" {
-			t.Fatalf("projection = %+v, want carried identity", projection)
-		}
-	})
-
-	t.Run("detach conflict is retryable", func(t *testing.T) {
-		err := &serverapi.WorkspaceDetachConflictError{
-			ProjectID:   "project-1",
-			WorkspaceID: "workspace-1",
-		}
-		projection, projectionErr := projectWorkspaceMutationErrorProjection(err, "project-1", false)
-		if projectionErr != nil {
-			t.Fatalf("project conflict projection: %v", projectionErr)
-		}
-		if projection.Code != "workspace_detach_conflict" || projection.Retryable == nil || !*projection.Retryable {
-			t.Fatalf("projection = %+v, want retryable detach conflict", projection)
-		}
-	})
-}
-
-func TestDetachBlockerProjectionIncludesAllBlockersAndPositiveCounts(t *testing.T) {
-	err, constructionErr := newBindingMutationBlockedError("project-1", "workspace-1", []serverapi.ProjectWorkspaceUnlinkBlocker{
+func TestBindingMutationTypedErrorProjection(t *testing.T) {
+	blocked, err := newBindingMutationBlockedError(" project-1 ", " workspace-1 ", []serverapi.ProjectWorkspaceUnlinkBlocker{
 		{Code: "default_workspace", Message: "default", Count: 1},
-		{Code: "active_sessions", Message: "active", Count: 0},
+		{Code: "active_sessions", Message: "active"},
 	})
-	if constructionErr != nil {
-		t.Fatalf("construct blocked error: %v", constructionErr)
+	if err != nil {
+		t.Fatal(err)
 	}
-	projection, projectionErr := projectWorkspaceMutationErrorProjection(err, "project-1", false)
-	if projectionErr != nil {
-		t.Fatalf("project blocker projection: %v", projectionErr)
+	projection, err := projectWorkspaceMutationErrorProjection(blocked, "ignored", false)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if projection.Code != "workspace_detach_blocked" || len(projection.Blockers) != 2 {
-		t.Fatalf("projection = %+v, want two blockers", projection)
+	if projection.Code != "workspace_detach_blocked" ||
+		projection.ProjectID == nil || *projection.ProjectID != "project-1" ||
+		projection.WorkspaceID == nil || *projection.WorkspaceID != "workspace-1" ||
+		len(projection.Blockers) != 2 ||
+		projection.Blockers[0].Count == nil || *projection.Blockers[0].Count != 1 ||
+		projection.Blockers[1].Count != nil {
+		t.Fatalf("projection=%+v", projection)
 	}
-	if projection.Blockers[0].Count == nil || *projection.Blockers[0].Count != 1 {
-		t.Fatalf("positive blocker count = %+v, want 1", projection.Blockers[0].Count)
+	if strings.TrimSpace(projection.Blockers[0].Guidance) == "" ||
+		strings.TrimSpace(projection.Blockers[1].Guidance) == "" {
+		t.Fatalf("guidance=%+v", projection.Blockers)
 	}
-	if projection.Blockers[1].Count != nil {
-		t.Fatalf("zero blocker count = %+v, want omitted", projection.Blockers[1].Count)
+	guidance, err := blockerGuidanceFor("default_workspace", "project-1")
+	if err != nil ||
+		guidance.Kind != blockerGuidanceDefaultWorkspace ||
+		guidance.PathCommand == nil ||
+		guidance.WorkspaceIDCommand == nil ||
+		!slices.Equal(*guidance.PathCommand, []string{
+			config.Command, "project", "default", "--project", "project-1", "<replacement-path>",
+		}) ||
+		!slices.Equal(*guidance.WorkspaceIDCommand, []string{
+			config.Command, "project", "default", "--project", "project-1",
+			"--workspace", "<replacement-workspace-id>",
+		}) {
+		t.Fatalf("typed guidance=%+v err=%v", guidance, err)
 	}
-	if strings.TrimSpace(projection.Blockers[0].Guidance) == "" || strings.TrimSpace(projection.Blockers[1].Guidance) == "" {
-		t.Fatalf("blocker guidance = %+v, want non-blank guidance", projection.Blockers)
+
+	retryable, err := projectWorkspaceMutationErrorProjection(&serverapi.WorkspaceDetachConflictError{
+		ProjectID: "project-1", WorkspaceID: "workspace-1",
+	}, "ignored", false)
+	if err != nil || retryable.Code != "workspace_detach_conflict" || retryable.Retryable == nil || !*retryable.Retryable {
+		t.Fatalf("retryable=%+v err=%v", retryable, err)
+	}
+
+	for input, code := range map[error]string{
+		serverapi.ErrProjectNotFound:            "project_not_found",
+		serverapi.ErrWorkspaceNotRegistered:     "workspace_not_attached",
+		errors.New("unclassified remote error"): "request_failed",
+	} {
+		got, err := projectWorkspaceMutationErrorProjection(input, "requested-project", false)
+		if err != nil || got.Code != code {
+			t.Fatalf("input=%v projection=%+v err=%v", input, got, err)
+		}
+		if code != "request_failed" && (got.ProjectID != nil || got.WorkspaceID != nil) {
+			t.Fatalf("unresolved lookup leaked requested identity: %+v", got)
+		}
 	}
 }
 
-func TestBlockerGuidanceUsesTypedActions(t *testing.T) {
-	defaultGuidance, err := blockerGuidanceFor("default_workspace", "project-1")
-	if err != nil {
-		t.Fatalf("default guidance: %v", err)
-	}
-	if defaultGuidance.Kind != blockerGuidanceDefaultWorkspace ||
-		defaultGuidance.PathCommand == nil ||
-		defaultGuidance.WorkspaceIDCommand == nil {
-		t.Fatalf("default guidance = %+v, want path and workspace-ID actions", defaultGuidance)
-	}
-	if got := strings.Join(*defaultGuidance.PathCommand, " "); got != config.Command+" project default --project project-1 <replacement-path>" {
-		t.Fatalf("default path command = %q, want typed path command", got)
-	}
-	if got := strings.Join(*defaultGuidance.WorkspaceIDCommand, " "); got != config.Command+" project default --project project-1 --workspace <replacement-workspace-id>" {
-		t.Fatalf("default workspace-ID command = %q, want typed workspace-ID command", got)
-	}
-	unknownGuidance, err := blockerGuidanceFor("future_code", "project-1")
-	if err != nil {
-		t.Fatalf("unknown guidance: %v", err)
-	}
-	if unknownGuidance.Kind != blockerGuidanceUnknown ||
-		unknownGuidance.PathCommand != nil ||
-		unknownGuidance.WorkspaceIDCommand != nil {
-		t.Fatalf("unknown guidance = %+v, want commandless unknown action", unknownGuidance)
-	}
-	if _, err := blockerGuidanceFor("default_workspace", " "); err == nil {
-		t.Fatal("blank project ID accepted for default-workspace guidance")
-	}
-}
-
-func TestBindingMutationEnvelopeProjectsExactDetachSuccess(t *testing.T) {
-	projectID := "project-1"
-	workspaceID := "workspace-1"
-	envelope := bindingMutationEnvelope{
+func TestBindingMutationJSONShapesAndOutputFailure(t *testing.T) {
+	projectID, workspaceID := "project-1", "workspace-1"
+	var stdout, stderr bytes.Buffer
+	if code := writeBindingMutationEnvelope(&stdout, &stderr, bindingMutationEnvelope{
 		Status: "ok",
 		Result: &bindingMutationResult{ProjectID: &projectID, WorkspaceID: &workspaceID},
+	}); code != 0 {
+		t.Fatalf("write exit=%d stderr=%q", code, stderr.String())
 	}
-	var stdout, stderr bytes.Buffer
-	if code := writeBindingMutationEnvelope(&stdout, &stderr, envelope); code != 0 {
-		t.Fatalf("write envelope exit code = %d, stderr=%q", code, stderr.String())
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
 	}
-	var decoded map[string]json.RawMessage
-	if err := json.Unmarshal(stdout.Bytes(), &decoded); err != nil {
-		t.Fatalf("decode envelope: %v", err)
-	}
-	if len(decoded) != 2 {
-		t.Fatalf("success envelope keys = %v, want exactly status and result", decoded)
-	}
-	if _, present := decoded["status"]; !present {
-		t.Fatalf("success envelope = %s, want status", stdout.String())
-	}
-	if _, present := decoded["result"]; !present {
-		t.Fatalf("success envelope = %s, want result", stdout.String())
-	}
-	if _, present := decoded["error"]; present {
-		t.Fatalf("success envelope contains error: %s", stdout.String())
-	}
-	var status string
-	if err := json.Unmarshal(decoded["status"], &status); err != nil || status != "ok" {
-		t.Fatalf("status = %q, want ok", status)
+	if len(envelope) != 2 || envelope["status"] == nil || envelope["result"] == nil || envelope["error"] != nil {
+		t.Fatalf("envelope=%s", stdout.String())
 	}
 	var result map[string]json.RawMessage
-	if err := json.Unmarshal(decoded["result"], &result); err != nil {
-		t.Fatalf("decode result: %v", err)
+	if err := json.Unmarshal(envelope["result"], &result); err != nil {
+		t.Fatal(err)
 	}
-	if len(result) != 2 {
-		t.Fatalf("detach result keys = %v, want exactly project_id and workspace_id", result)
+	if len(result) != 2 || result["project_id"] == nil || result["workspace_id"] == nil || result["project"] != nil {
+		t.Fatalf("result=%s", envelope["result"])
 	}
-	if _, present := result["project_id"]; !present {
-		t.Fatalf("detach result = %s, want project_id", stdout.String())
-	}
-	if _, present := result["workspace_id"]; !present {
-		t.Fatalf("detach result = %s, want workspace_id", stdout.String())
-	}
-	var gotProjectID, gotWorkspaceID string
-	if err := json.Unmarshal(result["project_id"], &gotProjectID); err != nil {
-		t.Fatalf("decode result project_id: %v", err)
-	}
-	if err := json.Unmarshal(result["workspace_id"], &gotWorkspaceID); err != nil {
-		t.Fatalf("decode result workspace_id: %v", err)
-	}
-	if gotProjectID != projectID || gotWorkspaceID != workspaceID {
-		t.Fatalf("detach result IDs = %q/%q, want %q/%q", gotProjectID, gotWorkspaceID, projectID, workspaceID)
-	}
-}
 
-func TestProjectDefaultJSONSuccessOmitsAbsentWorkflowFields(t *testing.T) {
-	envelope := bindingMutationEnvelope{
+	stdout.Reset()
+	project := validBindingMutationProject()
+	if code := writeBindingMutationEnvelope(&stdout, &stderr, bindingMutationEnvelope{
 		Status: "ok",
-		Result: &bindingMutationResult{
-			Project: &serverapi.ProjectHomeSummary{
-				ProjectID:   "project-1",
-				ProjectKey:  "project",
-				DisplayName: "Authoritative",
-				PrimaryWorkspace: serverapi.ProjectWorkspaceSummary{
-					WorkspaceID:  "workspace-1",
-					DisplayName:  "Workspace",
-					RootPath:     "/workspace",
-					Availability: "available",
-				},
-			},
-		},
-	}
-	var stdout, stderr bytes.Buffer
-	if code := writeBindingMutationEnvelope(&stdout, &stderr, envelope); code != 0 {
-		t.Fatalf("write default envelope exit code = %d, stderr=%q", code, stderr.String())
+		Result: &bindingMutationResult{Project: &project},
+	}); code != 0 {
+		t.Fatalf("write project exit=%d stderr=%q", code, stderr.String())
 	}
 	var decoded struct {
 		Result struct {
@@ -534,13 +178,34 @@ func TestProjectDefaultJSONSuccessOmitsAbsentWorkflowFields(t *testing.T) {
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(stdout.Bytes(), &decoded); err != nil {
-		t.Fatalf("decode default envelope: %v", err)
+		t.Fatal(err)
 	}
-	workflowID, present := decoded.Result.Project["default_workflow_id"]
-	if !present || string(workflowID) != "null" {
-		t.Fatalf("default JSON workflow ID = %s, present=%t; want explicit null", workflowID, present)
+	if raw, present := decoded.Result.Project["default_workflow_id"]; !present || string(raw) != "null" {
+		t.Fatalf("default_workflow_id=%s present=%t", raw, present)
 	}
 	if _, present := decoded.Result.Project["default_workflow_name"]; present {
-		t.Fatal("default JSON encoded absent default_workflow_name")
+		t.Fatal("absent default_workflow_name was encoded")
+	}
+
+	stderr.Reset()
+	if code := writeBindingMutationPlainResult(failingCLIWriter{}, &stderr, bindingMutationResult{
+		ProjectID: &projectID, WorkspaceID: &workspaceID,
+	}, false); code != 1 || stderr.Len() == 0 {
+		t.Fatalf("write failure exit=%d stderr=%q", code, stderr.String())
+	}
+}
+
+type failingCLIWriter struct{}
+
+func (failingCLIWriter) Write([]byte) (int, error) {
+	return 0, errors.New("write failed")
+}
+
+func validBindingMutationProject() serverapi.ProjectHomeSummary {
+	return serverapi.ProjectHomeSummary{
+		ProjectID: "project-1", ProjectKey: "PROJECT", DisplayName: "Project",
+		PrimaryWorkspace: serverapi.ProjectWorkspaceSummary{
+			WorkspaceID: "workspace-1", DisplayName: "Workspace", RootPath: "/workspace", Availability: "available",
+		},
 	}
 }

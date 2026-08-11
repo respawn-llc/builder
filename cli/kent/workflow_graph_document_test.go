@@ -7,7 +7,10 @@ import (
 	"core/shared/serverapi"
 )
 
-const emptyWorkflowGraphDocumentJSON = `{"workflow_id":"11111111-1111-4111-8111-111111111111","expected_version":1,"graph":{"node_groups":[],"nodes":[],"transition_groups":[],"edges":[]}}`
+const (
+	emptyWorkflowGraphDocumentID   = "11111111-1111-4111-8111-111111111111"
+	emptyWorkflowGraphDocumentJSON = `{"workflow_id":"` + emptyWorkflowGraphDocumentID + `","expected_version":1,"graph":{"node_groups":[],"nodes":[],"transition_groups":[],"edges":[]}}`
+)
 
 func TestWorkflowGraphDocumentRequiresPublicShape(t *testing.T) {
 	invalid := []string{
@@ -48,7 +51,7 @@ func TestWorkflowGraphDocumentRequiresPublicShape(t *testing.T) {
 }
 
 func TestWorkflowGraphDocumentEmitsExplicitArraysAndPreservesNestedOrder(t *testing.T) {
-	document, err := workflowGraphDocumentFromDraft(workflowGraphApplyID(t), 1, serverapi.WorkflowGraphDraft{
+	document, err := workflowGraphDocumentFromDraft(mustWorkflowID(t, emptyWorkflowGraphDocumentID), 1, serverapi.WorkflowGraphDraft{
 		NodeGroups:       []serverapi.WorkflowGraphDraftNodeGroup{},
 		Nodes:            []serverapi.WorkflowGraphDraftNode{{ID: "node", Key: "node", Kind: "join", DisplayName: "Node", JoinInputProviders: []serverapi.WorkflowJoinInputProvider{{InputName: "second", ProviderEdgeID: "edge-2"}, {InputName: "first", ProviderEdgeID: "edge-1"}}}},
 		TransitionGroups: []serverapi.WorkflowGraphDraftTransitionGroup{},

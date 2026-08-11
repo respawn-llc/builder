@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"core/shared/apicontract"
+	"core/shared/client"
 	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/sessionenv"
@@ -50,8 +52,8 @@ func taskCommentAddSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
-		taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, *projectRef, positionals[0])
+	return runWorkflowCommandSession(stderr, func(cfg config.App, remote *client.Remote) int {
+		taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, remote, *projectRef, positionals[0])
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
@@ -77,7 +79,7 @@ type taskCommentAuthor struct {
 	ID   string
 }
 
-func taskCommentAuthorForAdd(ctx context.Context, remote workflowCommandRemote, taskID string, explicitAuthor string, explicit bool) taskCommentAuthor {
+func taskCommentAuthorForAdd(ctx context.Context, remote apicontract.WorkflowService, taskID string, explicitAuthor string, explicit bool) taskCommentAuthor {
 	if explicit {
 		return taskCommentAuthor{Kind: strings.TrimSpace(explicitAuthor)}
 	}
@@ -88,13 +90,9 @@ func taskCommentAuthorForAdd(ctx context.Context, remote workflowCommandRemote, 
 	return taskCommentAuthor{Kind: "agent", ID: sessionAgentAuthorID(ctx, remote, sessionID)}
 }
 
-type sessionMainViewGetter interface {
-	GetSessionMainView(ctx context.Context, req serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error)
-}
-
-func sessionAgentAuthorID(ctx context.Context, remote workflowCommandRemote, sessionID string) string {
+func sessionAgentAuthorID(ctx context.Context, remote apicontract.WorkflowService, sessionID string) string {
 	trimmedSessionID := strings.TrimSpace(sessionID)
-	if getter, ok := remote.(sessionMainViewGetter); ok {
+	if getter, ok := remote.(apicontract.SessionViewService); ok {
 		rpcCtx, cancel := context.WithTimeout(ctx, workflowCommandTimeout)
 		defer cancel()
 		resp, err := getter.GetSessionMainView(rpcCtx, serverapi.SessionMainViewRequest{SessionID: trimmedSessionID})
@@ -121,27 +119,43 @@ func taskCommentListSubcommand(args []string, stdout io.Writer, stderr io.Writer
 		fmt.Fprintln(stderr, "task comment list requires <short-id-or-task-id>")
 		return 2
 	}
-	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
-		taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, *projectRef, positionals[0])
+	if err := validateWorkflowPagination(*offset, *limit); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
+	return runWorkflowCommandSession(stderr, func(cfg config.App, remote *client.Remote) int {
+		taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, remote, *projectRef, positionals[0])
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
 		defer cancel()
-		resp, err := remote.ListWorkflowTaskComments(ctx, serverapi.WorkflowTaskOffsetPageRequest{TaskID: taskID, Offset: offset, Limit: limit})
+		resp, err := remote.ListWorkflowTaskComments(ctx, serverapi.WorkflowTaskOffsetPageRequest{
+			TaskID: taskID,
+			Offset: offset,
+			Limit:  limit,
+		})
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		writeTaskCommentList(stdout, resp.Items)
-		if resp.NextOffset != nil {
-			if err := writeNextOffset(stderr, *resp.NextOffset); err != nil {
-				return 1
-			}
-		}
-		return 0
+		return writeTaskCommentListResponse(stdout, stderr, resp)
 	})
+}
+
+func writeTaskCommentListResponse(
+	stdout io.Writer,
+	stderr io.Writer,
+	response serverapi.WorkflowTaskCommentListResponse,
+) int {
+	writeTaskCommentList(stdout, response.Items)
+	if response.NextOffset != nil {
+		if err := writeNextOffset(stderr, *response.NextOffset); err != nil {
+			return 1
+		}
+	}
+	return 0
 }
 
 func writeTaskCommentList(stdout io.Writer, comments []serverapi.WorkflowTaskComment) {
@@ -164,7 +178,7 @@ func taskCommentReplaceSubcommand(args []string, stdout io.Writer, stderr io.Wri
 		fmt.Fprintln(stderr, "task comment replace requires <comment-id>")
 		return 2
 	}
-	return runWorkflowCommandSession(stderr, func(_ config.App, remote workflowCommandRemote) int {
+	return runWorkflowCommandSession(stderr, func(_ config.App, remote *client.Remote) int {
 		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
 		defer cancel()
 		if err := remote.ReplaceWorkflowTaskComment(ctx, serverapi.WorkflowTaskCommentReplaceRequest{CommentID: positionals[0], Body: *body}); err != nil {
@@ -190,7 +204,7 @@ func taskCommentDeleteSubcommand(args []string, stdout io.Writer, stderr io.Writ
 	if denyAgentHumanOnlyTaskAction(stderr) {
 		return 1
 	}
-	return runWorkflowCommandSession(stderr, func(_ config.App, remote workflowCommandRemote) int {
+	return runWorkflowCommandSession(stderr, func(_ config.App, remote *client.Remote) int {
 		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
 		defer cancel()
 		if err := remote.DeleteWorkflowTaskComment(ctx, serverapi.WorkflowTaskCommentDeleteRequest{CommentID: positionals[0]}); err != nil {
