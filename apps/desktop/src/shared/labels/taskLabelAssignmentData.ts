@@ -43,14 +43,12 @@ export function useManagedTaskLabelAssignment({
   availableLabelIDs,
   projectID,
   scheduleCatalogRefresh,
-  scheduleMembershipRefresh,
   scheduleTaskAssignmentRefresh,
   taskID,
 }: Readonly<{
   availableLabelIDs: readonly string[];
   projectID: string;
   scheduleCatalogRefresh(): void;
-  scheduleMembershipRefresh(): void;
   scheduleTaskAssignmentRefresh(taskID: string): void;
   taskID: string;
 }>): TaskLabelAssignmentData {
@@ -129,7 +127,7 @@ export function useManagedTaskLabelAssignment({
       patchExistingTaskLabelAssignment(queryClient, { taskID, labelIDs: installed });
       patchExistingTaskLabelProjections(queryClient, taskID, installed);
       setLocal((state) => settleAssignmentSuccess(state, intent, installed, available));
-      scheduleMembershipRefresh();
+      scheduleTaskAssignmentRefresh(taskID);
     } catch (error: unknown) {
       if (!isTaskLive()) {
         clearIfMounted();

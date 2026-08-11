@@ -38,13 +38,12 @@ describe("useManagedTaskLabelAssignment", () => {
     appServiceMocks.updateTaskLabels.mockReset();
   });
 
-  it("cancels the exact assignment, installs the normalized response, and refreshes membership", async () => {
+  it("cancels the exact assignment, installs the normalized response, and refreshes authority", async () => {
     appServiceMocks.getTaskLabels.mockResolvedValueOnce(assignment([]));
     const update = deferred<TaskLabelAssignment>();
     appServiceMocks.updateTaskLabels.mockReturnValueOnce(update.promise);
     const queryClient = createQueryClient([alphaID, betaID]);
     const scheduleCatalogRefresh = vi.fn();
-    const scheduleMembershipRefresh = vi.fn();
     const scheduleTaskAssignmentRefresh = vi.fn();
     const cancel = vi.spyOn(queryClient, "cancelQueries");
     const { result } = renderHook(
@@ -53,7 +52,6 @@ describe("useManagedTaskLabelAssignment", () => {
           availableLabelIDs: [alphaID, betaID],
           projectID,
           scheduleCatalogRefresh,
-          scheduleMembershipRefresh,
           scheduleTaskAssignmentRefresh,
           taskID,
         }),
@@ -85,8 +83,7 @@ describe("useManagedTaskLabelAssignment", () => {
       labelIDs: [alphaID, betaID],
     });
     expect(scheduleCatalogRefresh).not.toHaveBeenCalled();
-    expect(scheduleMembershipRefresh).toHaveBeenCalledOnce();
-    expect(scheduleTaskAssignmentRefresh).not.toHaveBeenCalled();
+    expect(scheduleTaskAssignmentRefresh).toHaveBeenCalledWith(taskID);
   });
 
   it("auto-selects and preserves queued created Labels while the catalog query is still loading", async () => {
@@ -104,7 +101,6 @@ describe("useManagedTaskLabelAssignment", () => {
       exact: true,
     });
     const scheduleCatalogRefresh = vi.fn();
-    const scheduleMembershipRefresh = vi.fn();
     const scheduleTaskAssignmentRefresh = vi.fn();
     const loadingCatalogLabelIDs: readonly string[] = [];
     const { result, rerender } = renderHook(
@@ -113,7 +109,6 @@ describe("useManagedTaskLabelAssignment", () => {
           availableLabelIDs,
           projectID,
           scheduleCatalogRefresh,
-          scheduleMembershipRefresh,
           scheduleTaskAssignmentRefresh,
           taskID,
         }),
@@ -140,7 +135,6 @@ describe("useManagedTaskLabelAssignment", () => {
     });
     await waitFor(() => {
       expect(scheduleCatalogRefresh).toHaveBeenCalledOnce();
-      expect(scheduleMembershipRefresh).not.toHaveBeenCalled();
       expect(scheduleTaskAssignmentRefresh).toHaveBeenCalledWith(taskID);
     });
     expect(appServiceMocks.updateTaskLabels).toHaveBeenCalledTimes(1);
@@ -178,8 +172,7 @@ describe("useManagedTaskLabelAssignment", () => {
       expect(result.current.pendingLabelIDs).toEqual([]);
     });
     expect([...result.current.selectedLabelIDs].sort()).toEqual([alphaID, betaID, remoteID].sort());
-    expect(scheduleTaskAssignmentRefresh).toHaveBeenCalledOnce();
-    expect(scheduleMembershipRefresh).toHaveBeenCalledTimes(2);
+    expect(scheduleTaskAssignmentRefresh).toHaveBeenCalledTimes(3);
   });
 
   it("rolls back a failed current intent and retains per-Label Retry", async () => {
@@ -194,7 +187,6 @@ describe("useManagedTaskLabelAssignment", () => {
           availableLabelIDs: [alphaID],
           projectID,
           scheduleCatalogRefresh: vi.fn(),
-          scheduleMembershipRefresh: vi.fn(),
           scheduleTaskAssignmentRefresh: vi.fn(),
           taskID,
         }),
@@ -247,7 +239,6 @@ describe("useManagedTaskLabelAssignment", () => {
           availableLabelIDs: [alphaID, betaID],
           projectID,
           scheduleCatalogRefresh: vi.fn(),
-          scheduleMembershipRefresh: vi.fn(),
           scheduleTaskAssignmentRefresh: vi.fn(),
           taskID,
         }),
@@ -291,7 +282,6 @@ describe("useManagedTaskLabelAssignment", () => {
           availableLabelIDs: [alphaID, betaID],
           projectID,
           scheduleCatalogRefresh: vi.fn(),
-          scheduleMembershipRefresh: vi.fn(),
           scheduleTaskAssignmentRefresh: vi.fn(),
           taskID,
         }),
@@ -332,7 +322,6 @@ describe("useManagedTaskLabelAssignment", () => {
             availableLabelIDs: [alphaID],
             projectID,
             scheduleCatalogRefresh: vi.fn(),
-            scheduleMembershipRefresh: vi.fn(),
             scheduleTaskAssignmentRefresh: vi.fn(),
             taskID,
           }),
@@ -340,7 +329,6 @@ describe("useManagedTaskLabelAssignment", () => {
             availableLabelIDs: [alphaID],
             projectID,
             scheduleCatalogRefresh: vi.fn(),
-            scheduleMembershipRefresh: vi.fn(),
             scheduleTaskAssignmentRefresh: vi.fn(),
             taskID,
           }),
@@ -367,6 +355,61 @@ describe("useManagedTaskLabelAssignment", () => {
     expect(queryClient.getQueryData(queryKeys.taskLabels(taskID))).toEqual(assignment([]));
   });
 
+  it("refreshes the authoritative assignment after out-of-order destination responses", async () => {
+    appServiceMocks.getTaskLabels.mockResolvedValueOnce(assignment([]));
+    const older = deferred<TaskLabelAssignment>();
+    const newer = deferred<TaskLabelAssignment>();
+    appServiceMocks.updateTaskLabels.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
+    const queryClient = createQueryClient([alphaID, betaID]);
+    let authoritative = assignment([]);
+    const scheduleTaskAssignmentRefresh = vi.fn(() => {
+      queryClient.setQueryData(queryKeys.taskLabels(taskID), authoritative);
+    });
+    const { result } = renderHook(
+      () =>
+        [
+          useManagedTaskLabelAssignment({
+            availableLabelIDs: [alphaID, betaID],
+            projectID,
+            scheduleCatalogRefresh: vi.fn(),
+            scheduleTaskAssignmentRefresh,
+            taskID,
+          }),
+          useManagedTaskLabelAssignment({
+            availableLabelIDs: [alphaID, betaID],
+            projectID,
+            scheduleCatalogRefresh: vi.fn(),
+            scheduleTaskAssignmentRefresh,
+            taskID,
+          }),
+        ] as const,
+      { wrapper: createWrapper(queryClient) },
+    );
+    await waitFor(() => {
+      expect(result.current[0].isPending).toBe(false);
+      expect(result.current[1].isPending).toBe(false);
+    });
+
+    act(() => {
+      result.current[0].setSelected(alphaID, true);
+      result.current[1].setSelected(betaID, true);
+    });
+    expect(appServiceMocks.updateTaskLabels).toHaveBeenCalledTimes(2);
+
+    authoritative = assignment([alphaID, betaID]);
+    newer.resolve(authoritative);
+    await waitFor(() => {
+      expect(result.current[1].pendingLabelIDs).toEqual([]);
+    });
+    older.resolve(assignment([alphaID]));
+    await waitFor(() => {
+      expect(result.current[0].pendingLabelIDs).toEqual([]);
+    });
+
+    expect(scheduleTaskAssignmentRefresh).toHaveBeenCalledTimes(2);
+    expect(queryClient.getQueryData(queryKeys.taskLabels(taskID))).toEqual(authoritative);
+  });
+
   it("does not restore a Label deleted while an assignment response is late", async () => {
     appServiceMocks.getTaskLabels.mockResolvedValueOnce(assignment([]));
     const update = deferred<TaskLabelAssignment>();
@@ -378,7 +421,6 @@ describe("useManagedTaskLabelAssignment", () => {
           availableLabelIDs,
           projectID,
           scheduleCatalogRefresh: vi.fn(),
-          scheduleMembershipRefresh: vi.fn(),
           scheduleTaskAssignmentRefresh: vi.fn(),
           taskID,
         }),
@@ -420,7 +462,6 @@ describe("useManagedTaskLabelAssignment", () => {
           availableLabelIDs: [alphaID, betaID],
           projectID,
           scheduleCatalogRefresh: vi.fn(),
-          scheduleMembershipRefresh: vi.fn(),
           scheduleTaskAssignmentRefresh: vi.fn(),
           taskID,
         }),
@@ -456,13 +497,11 @@ describe("useManagedTaskLabelAssignment", () => {
       appServiceMocks.updateTaskLabels.mockReturnValueOnce(update.promise);
       const queryClient = createQueryClient([alphaID, betaID]);
       const scheduleCatalogRefresh = vi.fn();
-      const scheduleMembershipRefresh = vi.fn();
       const scheduleTaskAssignmentRefresh = vi.fn();
       const input = {
         availableLabelIDs: [alphaID, betaID],
         projectID,
         scheduleCatalogRefresh,
-        scheduleMembershipRefresh,
         scheduleTaskAssignmentRefresh,
         taskID,
       };
@@ -492,7 +531,6 @@ describe("useManagedTaskLabelAssignment", () => {
       expect(queryClient.getQueryData(queryKeys.taskLabels(taskID))).toEqual(assignment([]));
       expect(queryClient.getQueryData(queryKeys.task(taskID))).toMatchObject({ labelIDs: [] });
       expect(scheduleCatalogRefresh).not.toHaveBeenCalled();
-      expect(scheduleMembershipRefresh).not.toHaveBeenCalled();
       expect(scheduleTaskAssignmentRefresh).not.toHaveBeenCalled();
       expect(appServiceMocks.updateTaskLabels).toHaveBeenCalledTimes(1);
 

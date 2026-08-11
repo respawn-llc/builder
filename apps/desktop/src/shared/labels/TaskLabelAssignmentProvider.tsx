@@ -20,7 +20,6 @@ export function TaskLabelAssignmentProvider({
     availableLabelIDs,
     projectID,
     scheduleCatalogRefresh: effects.scheduleCatalogRefresh,
-    scheduleMembershipRefresh: effects.scheduleMembershipRefresh,
     scheduleTaskAssignmentRefresh: effects.scheduleTaskAssignmentRefresh,
     taskID,
   });
