@@ -666,8 +666,10 @@ func TestInterruptRestorationDeliversQueuedApprovalCommentary(t *testing.T) {
 		model = updateUIModel(t, model, msg)
 	}
 
-	request := requireApprovalRequest(t, control)
-	if request.Decision != clientui.ApprovalDecisionAllowOnce || approvalCommentary(request) != "interrupted commentary" {
+	request := requirePromptAnswerBatchRequest(t, control)
+	approvalAnswer := requireApprovalAnswerEntry(t, request).ApprovalAnswer
+	if approvalAnswer.Decision != clientui.ApprovalDecisionAllowOnce ||
+		approvalCommentary(approvalAnswer) != "interrupted commentary" {
 		t.Fatalf("approval request = %+v, want queued interrupted commentary", request)
 	}
 }
