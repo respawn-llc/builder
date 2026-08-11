@@ -23,6 +23,7 @@ type Manager struct {
 	mu                   sync.Mutex
 	nextID               int
 	entries              map[string]*processEntry
+	completedRecency     []string
 	tempDir              string
 	onEvent              func(Event) bool
 	minimumExecToBgTime  time.Duration
