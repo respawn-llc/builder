@@ -111,6 +111,9 @@ func renderCommittedRow(
 			group = clientui.TranscriptRowTool
 		}
 		options := textBlockOptions{}
+		if row.Notice != nil && row.Notice.Severity == clientui.TranscriptNoticeError {
+			options.forceFull = true
+		}
 		if isReviewerNotice(row.Notice) {
 			options.compactEllipsis = compactEllipsisNever
 		}
@@ -251,6 +254,7 @@ func renderTextBlockWithInlineMeta(role StyleRole, text string, inlineMeta strin
 
 type textBlockOptions struct {
 	compactEllipsis compactEllipsisPolicy
+	forceFull       bool
 }
 
 type compactEllipsisPolicy uint8
@@ -325,7 +329,7 @@ func renderFormattedTextBlock(
 	if text == "" {
 		text = labelForRole(role)
 	}
-	if modeUsesCompactTextBlock(mode) {
+	if !options.forceFull && modeUsesCompactTextBlock(mode) {
 		first := firstDisplayLine(text)
 		return attachPrefixWithFirstLineMeta(
 			role,
@@ -692,6 +696,9 @@ func noticeRoleAndText(row *clientui.TranscriptNoticeRow, visibility clientui.En
 	if row == nil {
 		return StyleRoleNotice, "notice"
 	}
+	if row.Severity == clientui.TranscriptNoticeError {
+		return StyleRoleError, errorNoticeText(row)
+	}
 	if row.MessageType != nil && *row.MessageType == clientui.TranscriptMessageAgentSteer {
 		if mode != ModeDetailCollapsed && mode != ModeDetailExpanded && row.Diagnostic != nil {
 			return StyleRoleUser, row.Diagnostic.Detail
@@ -728,6 +735,37 @@ func noticeRoleAndText(row *clientui.TranscriptNoticeRow, visibility clientui.En
 		text = firstNonEmpty(row.Diagnostic.Detail, string(row.Diagnostic.Code), text)
 	}
 	return noticeStyleRoleForMode(row, mode), text
+}
+
+func errorNoticeText(row *clientui.TranscriptNoticeRow) string {
+	switch row.Reason {
+	case clientui.TranscriptNoticeCacheWarning:
+		return cacheWarningNoticeText(row.CacheWarning)
+	case clientui.TranscriptNoticeCompaction:
+		if row.Compaction.Detail != nil {
+			return *row.Compaction.Detail
+		}
+		return compactionNoticeText(row.Compaction.Count)
+	case clientui.TranscriptNoticeToolOutputRepair:
+		return toolOutputRepairNoticeText(row.ToolOutputRepair)
+	case clientui.TranscriptNoticeRuntimeDiagnostic:
+		return row.Diagnostic.Detail
+	case clientui.TranscriptNoticeLegacyUntypedNotice:
+		if row.LegacyText != nil {
+			return *row.LegacyText
+		}
+		if text, ok := worktreeNoticeText(row, ModeDetailExpanded); ok {
+			return text
+		}
+		return firstNonBlankPreservingWhitespace(
+			optionalString(row.CondensedText),
+			optionalString(row.CompactLabel),
+			optionalString(row.SourcePath),
+			string(row.Reason),
+		)
+	default:
+		panic(fmt.Sprintf("render error notice with unsupported reason %q", row.Reason))
+	}
 }
 
 func toolOutputRepairNoticeText(repair *transcript.ToolOutputRepairNotice) string {

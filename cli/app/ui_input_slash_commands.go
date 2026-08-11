@@ -45,7 +45,8 @@ func (c uiInputController) handleEnteredSlashCommandInput(text string) (bool, te
 		return false, m, nil
 	}
 	command := selection.command
-	if m.isBusy() {
+	commandResult := m.commandRegistry.Execute(commandText)
+	if m.isBusy() && !isBusyLocalWorktreePicker(commandResult) {
 		switch command.ActiveRunPolicy {
 		case commands.ActiveRunPolicyAllowed:
 		default:
@@ -53,7 +54,6 @@ func (c uiInputController) handleEnteredSlashCommandInput(text string) (bool, te
 			return true, m, c.model.sendTransientStatusWithNoticeID(fmt.Sprintf("cannot run /%s while model is working", command.Name), uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 		}
 	}
-	commandResult := m.commandRegistry.Execute(commandText)
 	if commandResult.Handled {
 		draft := m.capturePromptHistoryDraftForReuse()
 		var recordCmd tea.Cmd
@@ -61,7 +61,12 @@ func (c uiInputController) handleEnteredSlashCommandInput(text string) (bool, te
 			recordCmd = m.recordPromptHistory(commandText)
 		}
 		m.clearCommandInput(command, draft)
-		next, cmd := c.applyCommandResultWithPreSubmitQueuePosition(commandResult, preSubmitQueueBack)
+		next, cmd := c.applyCommandResultWithPreSubmitQueuePositionAndSubmittedText(
+			commandResult,
+			preSubmitQueueBack,
+			activeSubmitOriginDirect,
+			text,
+		)
 		return true, next, finalizeSlashCommandCmd(commandResult.Action, cmd, recordCmd)
 	}
 	return false, m, nil
@@ -141,7 +146,7 @@ func (m *uiModel) blockedDeferredSlashCommand(commandText string) (string, bool)
 			return "background process client is unavailable", true
 		}
 	case commands.ActionWorktree:
-		if m.isBusy() {
+		if m.isBusy() && !isBusyLocalWorktreePicker(commandResult) {
 			return "cannot run /worktree while model is working", true
 		}
 		if m.worktreeClient == nil {
@@ -149,4 +154,10 @@ func (m *uiModel) blockedDeferredSlashCommand(commandText string) (string, bool)
 		}
 	}
 	return "", false
+}
+
+func isBusyLocalWorktreePicker(commandResult commands.Result) bool {
+	return commandResult.Handled &&
+		commandResult.Action == commands.ActionWorktree &&
+		strings.TrimSpace(commandResult.Args) == ""
 }
