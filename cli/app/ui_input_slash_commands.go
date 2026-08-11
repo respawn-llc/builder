@@ -28,7 +28,7 @@ func (c uiInputController) handleQueuedSlashCommandInput(text string) (bool, tea
 		return true, m, sequenceCmds(c.model.appendLocalEntryWithNoticeID("error", errText, ""), c.model.sendTransientStatusWithNoticeID(errText, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, ""))
 	}
 	queuedText := selection.commandText()
-	if commandResult := m.commandRegistry.Execute(queuedText); m.isBusy() && isCompactCommandResult(commandResult) {
+	if commandResult := m.commandRegistry.Execute(queuedText); isCompactCommandResult(commandResult) {
 		queuedText = text
 	}
 	next, cmd := c.queueOrStartSubmission(queuedText)

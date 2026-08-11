@@ -165,6 +165,49 @@ func TestQueuedCompactOwnsExactComposerTextBeforeNormalization(t *testing.T) {
 	}
 }
 
+func TestIdleQueueKeyCompactRejectionRestoresExactComposerText(t *testing.T) {
+	disableTransientStatusClearForTest(t)
+	tests := []struct {
+		name string
+		key  tea.Msg
+	}{
+		{name: "Tab", key: tea.KeyMsg{Type: tea.KeyTab}},
+		{name: "CtrlEnter", key: customKeyMsg{Kind: customKeyCtrlEnter}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			model := newProjectedStaticUIModel()
+			submitted := "  /compact  idle\n guidance  "
+			testSetMainInput(model, submitted)
+
+			next, cmd := model.Update(test.key)
+			model = next.(*uiModel)
+			if cmd == nil {
+				t.Fatalf(
+					"idle Queue-key compact did not dispatch: input=%q queued=%+v blockers=%d busy=%t",
+					testMainInput(model),
+					model.queued,
+					model.postTurnCompactionsInFlight,
+					model.blocksRuntimeInput(),
+				)
+			}
+			done := compactDoneMessageFromCommand(t, cmd)
+			if !errors.Is(done.err, serverapi.ErrRuntimeCommandNotAccepted) {
+				t.Fatalf("compact error = %v, want runtime command not accepted", done.err)
+			}
+			if done.submittedText != submitted {
+				t.Fatalf("request-owned compact text = %q, want exact %q", done.submittedText, submitted)
+			}
+
+			next, _ = model.Update(done)
+			model = next.(*uiModel)
+			if got := testMainInput(model); got != submitted {
+				t.Fatalf("restored composer = %q, want exact %q", got, submitted)
+			}
+		})
+	}
+}
+
 func TestCompactCommandInvokesCapturedClientAndReducesItsResult(t *testing.T) {
 	capturedErr := serverapi.NewRuntimeCommandNotAcceptedError(errors.New("captured client rejected request"))
 	captured := &runtimeControlFakeClient{compactErr: capturedErr}

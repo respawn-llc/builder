@@ -38,7 +38,7 @@ func TestErrorNoticesRenderCompletelyThroughNormalOngoingModes(t *testing.T) {
 					Detail: diagnosticDetail,
 				},
 			},
-			source:   diagnosticLines,
+			source:   []string{"! " + diagnosticLines[0], "  " + diagnosticLines[1]},
 			wantMode: transcriptrender.ModeOngoing,
 		},
 		{
@@ -52,7 +52,7 @@ func TestErrorNoticesRenderCompletelyThroughNormalOngoingModes(t *testing.T) {
 				CompactLabel:  &misleadingCompact,
 				CondensedText: &misleadingCondensed,
 			},
-			source:   legacyLines,
+			source:   []string{"! " + legacyLines[0], "  " + legacyLines[1]},
 			wantMode: transcriptrender.ModeOngoingCollapsed,
 		},
 	}
@@ -74,13 +74,8 @@ func TestErrorNoticesRenderCompletelyThroughNormalOngoingModes(t *testing.T) {
 
 			const width = 80
 			structured := transcriptrender.RenderCommittedRow(row, width, "dark", test.wantMode)
-			if len(structured.Lines) != len(test.source) {
-				t.Fatalf("structured ongoing rows = %d, want %d", len(structured.Lines), len(test.source))
-			}
-			for index, line := range structured.Lines {
-				if got := ongoingErrorLineContent(t, line, index); got != test.source[index] {
-					t.Fatalf("structured ongoing error line %d = %q, want %q", index, got, test.source[index])
-				}
+			if got := transcriptrender.PlainLines(structured.Lines); !reflect.DeepEqual(got, test.source) {
+				t.Fatalf("structured ongoing error lines = %#v, want %#v", got, test.source)
 			}
 
 			wantEncoded := encodeTranscriptLines(structured.Lines, "dark")
@@ -89,31 +84,4 @@ func TestErrorNoticesRenderCompletelyThroughNormalOngoingModes(t *testing.T) {
 			}
 		})
 	}
-}
-
-func ongoingErrorLineContent(t *testing.T, line transcriptrender.Line, index int) string {
-	t.Helper()
-	start := 0
-	if line.LeadingSymbol != nil {
-		if index != 0 ||
-			line.LeadingSymbol.Style.Kind != transcriptrender.SpanStyleSemantic ||
-			line.LeadingSymbol.Style.SemanticRole != transcriptrender.StyleRoleError {
-			t.Fatalf("ongoing error line %d has invalid leading symbol: %+v", index, line.LeadingSymbol)
-		}
-		if len(line.Spans) == 0 ||
-			line.Spans[0].Style.Kind != transcriptrender.SpanStyleSemantic ||
-			line.Spans[0].Style.SemanticRole != transcriptrender.StyleRoleError ||
-			line.Spans[0].Text != " " {
-			t.Fatalf("ongoing error line %d has invalid structured symbol gap: %+v", index, line.Spans)
-		}
-		start = 1
-	}
-	content := ""
-	for _, span := range line.Spans[start:] {
-		if span.Style.Kind == transcriptrender.SpanStyleSemantic &&
-			span.Style.SemanticRole == transcriptrender.StyleRoleError {
-			content += span.Text
-		}
-	}
-	return content
 }

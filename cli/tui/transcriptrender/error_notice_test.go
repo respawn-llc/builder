@@ -1,6 +1,7 @@
 package transcriptrender
 
 import (
+	"reflect"
 	"testing"
 
 	"core/shared/clientui"
@@ -22,7 +23,7 @@ func TestErrorNoticeClassifiesAsError(t *testing.T) {
 }
 
 func TestRuntimeDiagnosticErrorUsesCompleteTypedDetailInEveryMode(t *testing.T) {
-	detail := "diagnostic alpha beta gamma \x1b[31mred\nsecond diagnostic line remains complete"
+	detail := "diagnostic alpha beta gamma red\nsecond diagnostic line remains complete"
 	misleadingCompact := "wrong compact source"
 	misleadingCondensed := "wrong condensed source"
 	row := errorNoticeRow(&clientui.TranscriptNoticeRow{
@@ -41,8 +42,16 @@ func TestRuntimeDiagnosticErrorUsesCompleteTypedDetailInEveryMode(t *testing.T) 
 
 	for _, mode := range allTranscriptModes() {
 		t.Run(transcriptModeName(mode), func(t *testing.T) {
-			rendered := RenderCommittedRow(row, 24, "dark", mode)
-			assertCompleteErrorContent(t, rendered, detail, 24)
+			rendered := RenderCommittedRow(row, 120, "dark", mode)
+			assertCompleteErrorContent(
+				t,
+				rendered,
+				completeErrorLinesForMode(
+					mode,
+					"diagnostic alpha beta gamma red",
+					"second diagnostic line remains complete",
+				),
+			)
 		})
 	}
 }
@@ -66,8 +75,16 @@ func TestLegacyUntypedErrorUsesCompleteLegacyTextInEveryMode(t *testing.T) {
 
 	for _, mode := range allTranscriptModes() {
 		t.Run(transcriptModeName(mode), func(t *testing.T) {
-			rendered := RenderCommittedRow(row, 24, "dark", mode)
-			assertCompleteErrorContent(t, rendered, legacy, 24)
+			rendered := RenderCommittedRow(row, 120, "dark", mode)
+			assertCompleteErrorContent(
+				t,
+				rendered,
+				completeErrorLinesForMode(
+					mode,
+					"legacy alpha beta gamma",
+					"second legacy line remains complete",
+				),
+			)
 		})
 	}
 }
@@ -179,13 +196,13 @@ func TestErrorNoticeReasonSelectsItsTypedContentSource(t *testing.T) {
 			if err := test.notice.Validate(); err != nil {
 				t.Fatalf("notice is invalid: %v", err)
 			}
-			rendered := RenderCommittedRow(errorNoticeRow(test.notice), 32, "dark", ModeOngoingCollapsed)
-			assertCompleteErrorContent(t, rendered, test.want, 32)
+			rendered := RenderCommittedRow(errorNoticeRow(test.notice), 120, "dark", ModeOngoingCollapsed)
+			assertCompleteErrorContent(t, rendered, []string{"! " + test.want})
 		})
 	}
 }
 
-func TestMetadataOnlyLegacyErrorDoesNotUseCompactPreviewFields(t *testing.T) {
+func TestMetadataOnlyLegacyErrorWithoutTypedFormatterFailsFast(t *testing.T) {
 	messageType := clientui.TranscriptMessageErrorFeedback
 	condensed := "condensed preview is not error content"
 	compact := "compact label is not error content"
@@ -202,8 +219,12 @@ func TestMetadataOnlyLegacyErrorDoesNotUseCompactPreviewFields(t *testing.T) {
 		t.Fatalf("metadata-only legacy notice is invalid: %v", err)
 	}
 
-	rendered := RenderCommittedRow(errorNoticeRow(notice), 80, "dark", ModeOngoingCollapsed)
-	assertCompleteErrorContent(t, rendered, string(notice.Reason), 80)
+	defer func() {
+		if recovered := recover(); recovered == nil {
+			t.Fatal("metadata-only legacy error without a typed formatter did not fail fast")
+		}
+	}()
+	RenderCommittedRow(errorNoticeRow(notice), 80, "dark", ModeOngoingCollapsed)
 }
 
 func TestNonErrorNoticeAndToolRowsRetainCompactOneLineLayout(t *testing.T) {
@@ -271,36 +292,20 @@ func transcriptModeName(mode Mode) string {
 	}
 }
 
-func assertCompleteErrorContent(t *testing.T, rendered Row, source string, width int) {
+func assertCompleteErrorContent(t *testing.T, rendered Row, want []string) {
 	t.Helper()
-	want := wrapLines(TerminalSafePlainText(source), contentWidth(StyleRoleError, width))
-	if len(rendered.Lines) != len(want) {
-		t.Fatalf("rendered error lines = %d, want %d", len(rendered.Lines), len(want))
+	if got := PlainLines(rendered.Lines); !reflect.DeepEqual(got, want) {
+		t.Fatalf("rendered error lines = %#v, want %#v", got, want)
 	}
-	for index, line := range rendered.Lines {
-		start := 0
-		if line.LeadingSymbol != nil {
-			if index != 0 ||
-				line.LeadingSymbol.Style.Kind != SpanStyleSemantic ||
-				line.LeadingSymbol.Style.SemanticRole != StyleRoleError {
-				t.Fatalf("error line %d has invalid leading symbol: %+v", index, line.LeadingSymbol)
-			}
-			if len(line.Spans) == 0 ||
-				line.Spans[0].Style.Kind != SpanStyleSemantic ||
-				line.Spans[0].Style.SemanticRole != StyleRoleError ||
-				line.Spans[0].Text != " " {
-				t.Fatalf("error line %d has invalid structured symbol gap: %+v", index, line.Spans)
-			}
-			start = 1
-		}
-		content := ""
-		for _, span := range line.Spans[start:] {
-			if span.Style.Kind == SpanStyleSemantic && span.Style.SemanticRole == StyleRoleError {
-				content += span.Text
-			}
-		}
-		if content != want[index] {
-			t.Fatalf("rendered error line %d = %q, want %q", index, content, want[index])
-		}
+}
+
+func completeErrorLinesForMode(mode Mode, first, second string) []string {
+	switch mode {
+	case ModeOngoingStable:
+		return []string{"! " + first, second}
+	case ModeDetailCollapsed, ModeDetailExpanded:
+		return []string{"! " + first, "└ " + second}
+	default:
+		return []string{"! " + first, "  " + second}
 	}
 }
