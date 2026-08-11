@@ -172,9 +172,9 @@
 - Cache warnings and non-interrupting warnings use warning text. Compaction reminders use warning text in ongoing and collapsed Detail, and normal notice text when expanded.
 - Error rows use the Error color for both symbol and text, including interruption rows. Error rows may retain faintness when their presentation requires it.
 - One shared transcript renderer selects the complete content and layout for every error-severity notice from its typed reason.
-- A runtime-diagnostic error uses its complete diagnostic detail. A legacy-untyped error uses its complete legacy text when present, then an existing typed formatter for its valid message metadata such as Worktree context, then its complete condensed text when no formatter exists.
+- A runtime-diagnostic error uses its complete diagnostic detail. A legacy-untyped error uses its complete legacy text when present and otherwise uses an existing typed formatter for its valid message metadata, such as Worktree context.
 - A cache-warning error uses its typed cache-warning text. A compaction error uses its typed detail when present and otherwise uses its typed compaction summary. A tool-output-repair error uses its typed repair text.
-- Error-severity notices ignore compact labels, source paths, and other compact preview fields. Condensed text is used only as the complete content source for a metadata-only legacy error with no typed formatter. Error notices wrap to transcript width without ellipsis in every Ongoing and Detail render mode.
+- Error-severity notices ignore compact labels, condensed text, source paths, and other compact preview fields, including for metadata-only legacy errors. They wrap to transcript width without ellipsis in every Ongoing and Detail render mode.
 - Non-error rows retain their existing mode-specific compact or full content and layout rules.
 - Background shell completion notices use full-strength foreground text and remain separate transcript rows from shell tool calls/results, but join the tool-activity visual group so no blank separator appears between them.
 - Moving a shell to the background ends its mutable live-tool presentation. The backgrounded tool row remains in immutable ongoing scrollback, and completion is represented by a separate immutable notice.

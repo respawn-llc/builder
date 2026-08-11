@@ -757,7 +757,10 @@ func errorNoticeText(row *clientui.TranscriptNoticeRow) string {
 		if text, ok := worktreeNoticeText(row, ModeDetailExpanded); ok {
 			return text
 		}
-		return optionalString(row.CondensedText)
+		panic(fmt.Sprintf(
+			"render legacy error notice with no content source: message_type=%q",
+			*row.MessageType,
+		))
 	default:
 		panic(fmt.Sprintf("render error notice with unsupported reason %q", row.Reason))
 	}

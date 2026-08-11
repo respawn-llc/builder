@@ -204,9 +204,9 @@ func TestErrorNoticeReasonSelectsItsTypedContentSource(t *testing.T) {
 	}
 }
 
-func TestMetadataOnlyLegacyErrorUsesCompleteCondensedText(t *testing.T) {
+func TestMetadataOnlyLegacyErrorWithoutTypedFormatterFailsValidation(t *testing.T) {
 	messageType := clientui.TranscriptMessageErrorFeedback
-	condensed := "complete metadata error content"
+	condensed := "condensed preview is not error content"
 	compact := "compact label is not error content"
 	sourcePath := "/preview/source/path"
 	notice := &clientui.TranscriptNoticeRow{
@@ -217,11 +217,9 @@ func TestMetadataOnlyLegacyErrorUsesCompleteCondensedText(t *testing.T) {
 		CompactLabel:  &compact,
 		SourcePath:    &sourcePath,
 	}
-	if err := notice.Validate(); err != nil {
-		t.Fatalf("metadata-only legacy error is invalid: %v", err)
+	if err := notice.Validate(); err == nil {
+		t.Fatal("metadata-only legacy error without a typed formatter passed validation")
 	}
-	rendered := RenderCommittedRow(errorNoticeRow(notice), 120, "dark", ModeOngoingCollapsed)
-	assertCompleteErrorContent(t, rendered, []string{condensed})
 }
 
 func TestNonErrorNoticeAndToolRowsRetainCompactOneLineLayout(t *testing.T) {
