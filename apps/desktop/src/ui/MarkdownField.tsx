@@ -287,7 +287,7 @@ function MarkdownFieldReadViewport({
   const expandLabel = readPresentation.kind === "collapsible" ? readPresentation.expandLabel : undefined;
 
   return (
-    <div className="relative h-full min-h-0 min-w-0">
+    <div className={cx("relative min-h-0 min-w-0", !collapsed && "h-full")}>
       <div
         aria-label={label}
         aria-readonly

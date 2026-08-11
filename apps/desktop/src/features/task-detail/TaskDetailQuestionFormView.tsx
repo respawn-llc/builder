@@ -13,9 +13,10 @@ import { errorMessage, type ApprovalDecision, type QuestionAttentionItem } from 
 import type { QuestionAnswerInput } from "@/api";
 import { useTextFieldSubmitShortcut } from "@/app-facade";
 import { Button, RadioGroup, RadioGroupItem, showStatusToast, StaticMarkdown } from "@/ui";
-import { cx, fieldInputClassName } from "@/ui";
+import { cx, fieldInputClassNameForRadius } from "@/ui";
 import type { QuestionAnswerMutation } from "./TaskDetailQuestionAnswer";
 import type { PromptPrimaryControl } from "./PromptPrimaryControlRegistry";
+import { taskDetailIslandRadius } from "./taskDetailIslandStyles";
 import {
   withApprovalQuestionDecision,
   withOrdinaryQuestionOption,
@@ -335,7 +336,7 @@ function QuestionFormFrame({
       )}
       <textarea
         aria-label={t("task.commentary")}
-        className={cx(fieldInputClassName, "min-h-24")}
+        className={cx(fieldInputClassNameForRadius(taskDetailIslandRadius), "min-h-24")}
         disabled={interactionDisabled}
         id={answerID}
         onChange={(event) => {

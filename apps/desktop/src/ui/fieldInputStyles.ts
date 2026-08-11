@@ -11,8 +11,12 @@ const fieldIslandRadiusClassNames: Record<FieldIslandRadius, string> = {
   l: "rounded-[var(--radius-l)]",
 };
 
-export const fieldInputClassName = cx(fieldInputBaseClassName, fieldIslandRadiusClassNames.m);
+export function fieldInputClassNameForRadius(radius: FieldIslandRadius = "m"): string {
+  return cx(fieldInputBaseClassName, fieldIslandRadiusClassNames[radius]);
+}
+
+export const fieldInputClassName = fieldInputClassNameForRadius();
 
 export function fieldIslandInputClassName(level: IslandLevel = 0, radius: FieldIslandRadius = "m"): string {
-  return cx(fieldInputBaseClassName, fieldIslandRadiusClassNames[radius], islandSurfaceClassName(level));
+  return cx(fieldInputClassNameForRadius(radius), islandSurfaceClassName(level));
 }
