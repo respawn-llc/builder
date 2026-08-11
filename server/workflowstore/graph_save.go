@@ -138,6 +138,14 @@ func (s *Store) planWorkflowGraphSave(ctx context.Context, q *sqlitegen.Queries,
 	if err != nil {
 		return WorkflowGraphSavePlan{}, err
 	}
+	plan := WorkflowGraphSavePlan{
+		WorkflowID: workflowID,
+		Version:    current.Version,
+	}
+	if current.Version != req.ExpectedVersion {
+		plan.Blockers = workflowGraphSaveVersionChangedBlockers(current.Version)
+		return plan, nil
+	}
 	currentPolicy := workflow.ExecutionTargetPolicy{
 		Mode:      workflow.ExecutionTargetMode(current.ExecutionTargetPolicy),
 		CustomRef: workflowCustomRefFromRow(current.ExecutionTargetCustomRef),
@@ -164,7 +172,7 @@ func (s *Store) planWorkflowGraphSave(ctx context.Context, q *sqlitegen.Queries,
 	}
 	graphChanged := !workflowGraphSavePreparedEqual(currentGraph, prepared)
 	structural := describeWorkflowGraphSave(currentGraph, prepared)
-	plan := WorkflowGraphSavePlan{
+	plan = WorkflowGraphSavePlan{
 		WorkflowID:      workflowID,
 		Version:         current.Version,
 		Prepared:        prepared,
@@ -196,10 +204,6 @@ func (s *Store) planWorkflowGraphSave(ctx context.Context, q *sqlitegen.Queries,
 	}, s.roleResolver, nil)
 	validation := plan.ValidationResults[workflow.ValidationContextDraft]
 	plan.ValidationErrors = validation.Errors
-	if current.Version != req.ExpectedVersion {
-		plan.Blockers = workflowGraphSaveVersionChangedBlockers(current.Version)
-		return plan, nil
-	}
 	if !graphChanged && !metadataChanged {
 		return plan, nil
 	}
@@ -597,6 +601,13 @@ func workflowGraphSaveVersionChangedBlockers(version int64) []WorkflowGraphSaveB
 		Count:            version,
 		AffectedEntities: []WorkflowGraphEntityReference{},
 	}}
+}
+
+func WorkflowGraphSaveVersionChangedResult(version int64) WorkflowGraphSaveResult {
+	return WorkflowGraphSavePlan{
+		Version:  version,
+		Blockers: workflowGraphSaveVersionChangedBlockers(version),
+	}.workflowGraphSaveResult(false)
 }
 
 func workflowGraphSaveConfirmationMatches(req WorkflowGraphSaveRequest, impact WorkflowGraphSaveImpact) bool {

@@ -653,6 +653,78 @@ func TestGatewayHandshakeAndProjectList(t *testing.T) {
 	}
 }
 
+func TestGatewayRemoteWorkflowGraphSaveRoutesReturnVersionChangedBeforeDraftIdentityValidation(t *testing.T) {
+	appCore, server := newGatewayTestServer(t)
+	defer func() { _ = appCore.Close() }()
+	defer server.Close()
+
+	workflowClient := appCore.WorkflowClient()
+	created, err := workflowClient.CreateWorkflow(t.Context(), serverapi.WorkflowCreateRequest{Name: "Workflow"})
+	if err != nil {
+		t.Fatalf("CreateWorkflow: %v", err)
+	}
+	if _, err := workflowClient.UpdateWorkflow(t.Context(), serverapi.WorkflowUpdateRequest{
+		WorkflowID:  created.Workflow.ID,
+		Name:        "Updated Workflow",
+		Description: "",
+	}); err != nil {
+		t.Fatalf("UpdateWorkflow: %v", err)
+	}
+
+	remote, err := remoteclient.DialRemoteURLForProject(
+		t.Context(),
+		"ws"+server.URL[len("http"):],
+		appCore.ProjectID(),
+	)
+	if err != nil {
+		t.Fatalf("DialRemoteURLForProject: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+
+	blankGroupID := ""
+	graph := serverapi.WorkflowGraphDraft{Nodes: []serverapi.WorkflowGraphDraftNode{{
+		ID:             "node-prefixed",
+		Kind:           string(serverapi.WorkflowNodeKindAgent),
+		GroupID:        &blankGroupID,
+		CompletionMode: "tool",
+	}}}
+	preview, err := remote.PreviewWorkflowGraphSave(t.Context(), serverapi.WorkflowGraphSavePreviewRequest{
+		WorkflowID:      created.Workflow.ID,
+		ExpectedVersion: created.Workflow.Version,
+		Graph:           graph,
+	})
+	if err != nil {
+		t.Fatalf("PreviewWorkflowGraphSave: %v", err)
+	}
+	if preview.CurrentVersion != created.Workflow.Version+1 ||
+		!gatewayHasWorkflowGraphSaveBlocker(preview.Blockers, "version_changed") {
+		t.Fatalf("preview = %+v, want current-version blocker", preview)
+	}
+
+	saved, err := remote.SaveWorkflowGraph(t.Context(), serverapi.WorkflowGraphSaveRequest{
+		WorkflowID:      created.Workflow.ID,
+		ExpectedVersion: created.Workflow.Version,
+		Graph:           graph,
+	})
+	if err != nil {
+		t.Fatalf("SaveWorkflowGraph: %v", err)
+	}
+	if saved.Saved ||
+		saved.CurrentVersion != created.Workflow.Version+1 ||
+		!gatewayHasWorkflowGraphSaveBlocker(saved.Blockers, "version_changed") {
+		t.Fatalf("save = %+v, want current-version blocker", saved)
+	}
+}
+
+func gatewayHasWorkflowGraphSaveBlocker(blockers []serverapi.WorkflowGraphSaveBlocker, code string) bool {
+	for _, blocker := range blockers {
+		if blocker.Code == code {
+			return true
+		}
+	}
+	return false
+}
+
 func TestGatewayHandshakeRejectsProtocolVersionMismatch(t *testing.T) {
 	_, server := newGatewayTestServer(t)
 	defer server.Close()

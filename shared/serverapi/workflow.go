@@ -2325,6 +2325,20 @@ func (r WorkflowGraphDeriveWiringRequest) Validate() error {
 }
 
 func (r WorkflowGraphSavePreviewRequest) Validate() error {
+	if err := validateWorkflowGraphSavePreviewFields(r); err != nil {
+		return err
+	}
+	return validateWorkflowGraphDraftEnvelope(r.Graph)
+}
+
+func (r WorkflowGraphSavePreviewRequest) ValidateRPC() error {
+	if err := validateWorkflowGraphSavePreviewFields(r); err != nil {
+		return err
+	}
+	return validateWorkflowGraphDraftCollectionBounds(r.Graph)
+}
+
+func validateWorkflowGraphSavePreviewFields(r WorkflowGraphSavePreviewRequest) error {
 	if err := validateRequiredWorkflowID(r.WorkflowID); err != nil {
 		return err
 	}
@@ -2334,26 +2348,37 @@ func (r WorkflowGraphSavePreviewRequest) Validate() error {
 	if r.ExpectedVersion < 0 {
 		return workflowRequestError(WorkflowRequestErrorInvalidValue, "expected_version", "expected_version must be non-negative")
 	}
-	return validateWorkflowGraphDraftEnvelope(r.Graph)
+	return nil
 }
 
 func (r WorkflowGraphSaveRequest) Validate() error {
 	if err := (WorkflowGraphSavePreviewRequest{WorkflowID: r.WorkflowID, ExpectedVersion: r.ExpectedVersion, Metadata: r.Metadata, Graph: r.Graph}).Validate(); err != nil {
 		return err
 	}
-	if r.Confirmation == nil {
+	return validateWorkflowGraphSaveConfirmation(r.Confirmation)
+}
+
+func (r WorkflowGraphSaveRequest) ValidateRPC() error {
+	if err := (WorkflowGraphSavePreviewRequest{WorkflowID: r.WorkflowID, ExpectedVersion: r.ExpectedVersion, Metadata: r.Metadata, Graph: r.Graph}).ValidateRPC(); err != nil {
+		return err
+	}
+	return validateWorkflowGraphSaveConfirmation(r.Confirmation)
+}
+
+func validateWorkflowGraphSaveConfirmation(confirmation *WorkflowGraphSaveConfirmation) error {
+	if confirmation == nil {
 		return nil
 	}
 	for _, field := range []struct {
 		name  string
 		value int64
 	}{
-		{"expected_removed_node_group_count", r.Confirmation.ExpectedRemovedNodeGroupCount},
-		{"expected_removed_node_count", r.Confirmation.ExpectedRemovedNodeCount},
-		{"expected_removed_transition_group_count", r.Confirmation.ExpectedRemovedTransitionGroupCount},
-		{"expected_removed_edge_count", r.Confirmation.ExpectedRemovedEdgeCount},
-		{"expected_node_task_reference_count", r.Confirmation.ExpectedNodeTaskReferenceCount},
-		{"expected_edge_task_reference_count", r.Confirmation.ExpectedEdgeTaskReferenceCount},
+		{"expected_removed_node_group_count", confirmation.ExpectedRemovedNodeGroupCount},
+		{"expected_removed_node_count", confirmation.ExpectedRemovedNodeCount},
+		{"expected_removed_transition_group_count", confirmation.ExpectedRemovedTransitionGroupCount},
+		{"expected_removed_edge_count", confirmation.ExpectedRemovedEdgeCount},
+		{"expected_node_task_reference_count", confirmation.ExpectedNodeTaskReferenceCount},
+		{"expected_edge_task_reference_count", confirmation.ExpectedEdgeTaskReferenceCount},
 	} {
 		if field.value < 0 {
 			return workflowRequestError(WorkflowRequestErrorInvalidValue, field.name, field.name+" must be non-negative")
@@ -2523,19 +2548,8 @@ func validateWorkflowGraphValidationModes(modes []WorkflowValidationMode) error 
 }
 
 func validateWorkflowGraphDraftEnvelope(graph WorkflowGraphDraft) error {
-	for _, field := range []struct {
-		name  string
-		count int
-		limit int
-	}{
-		{"node_groups", len(graph.NodeGroups), WorkflowGraphDraftMaxNodeGroups},
-		{"nodes", len(graph.Nodes), WorkflowGraphDraftMaxNodes},
-		{"transition_groups", len(graph.TransitionGroups), WorkflowGraphDraftMaxTransitionGroups},
-		{"edges", len(graph.Edges), WorkflowGraphDraftMaxEdges},
-	} {
-		if field.count > field.limit {
-			return workflowRequestError(WorkflowRequestErrorTooLong, "graph."+field.name, fmt.Sprintf("%s must be <= %d", field.name, field.limit))
-		}
+	if err := validateWorkflowGraphDraftCollectionBounds(graph); err != nil {
+		return err
 	}
 	for _, node := range graph.Nodes {
 		if kind := WorkflowNodeKind(strings.TrimSpace(node.Kind)); !slices.Contains([]WorkflowNodeKind{WorkflowNodeKindStart, WorkflowNodeKindAgent, WorkflowNodeKindScript, WorkflowNodeKindJoin, WorkflowNodeKindTerminal}, kind) {
@@ -2568,6 +2582,24 @@ func validateWorkflowGraphDraftEnvelope(graph WorkflowGraphDraft) error {
 	for _, group := range graph.TransitionGroups {
 		if len([]rune(group.Description)) > 1000 {
 			return workflowRequestError(WorkflowRequestErrorTooLong, "graph.transition_groups.description", "description must be <= 1000 characters")
+		}
+	}
+	return nil
+}
+
+func validateWorkflowGraphDraftCollectionBounds(graph WorkflowGraphDraft) error {
+	for _, field := range []struct {
+		name  string
+		count int
+		limit int
+	}{
+		{"node_groups", len(graph.NodeGroups), WorkflowGraphDraftMaxNodeGroups},
+		{"nodes", len(graph.Nodes), WorkflowGraphDraftMaxNodes},
+		{"transition_groups", len(graph.TransitionGroups), WorkflowGraphDraftMaxTransitionGroups},
+		{"edges", len(graph.Edges), WorkflowGraphDraftMaxEdges},
+	} {
+		if field.count > field.limit {
+			return workflowRequestError(WorkflowRequestErrorTooLong, "graph."+field.name, fmt.Sprintf("%s must be <= %d", field.name, field.limit))
 		}
 	}
 	return nil

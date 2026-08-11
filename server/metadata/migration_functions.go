@@ -104,6 +104,22 @@ func registerMetadataSQLiteFunctions() error {
 			return
 		}
 		registerMetadataSQLiteFunctionsErr = sqlitedriver.RegisterDeterministicScalarFunction(
+			graphEntityIDBlobFunction,
+			1,
+			graphEntityIDBlob,
+		)
+		if registerMetadataSQLiteFunctionsErr != nil {
+			return
+		}
+		registerMetadataSQLiteFunctionsErr = sqlitedriver.RegisterDeterministicScalarFunction(
+			graphEntityIDTextFunction,
+			1,
+			graphEntityIDText,
+		)
+		if registerMetadataSQLiteFunctionsErr != nil {
+			return
+		}
+		registerMetadataSQLiteFunctionsErr = sqlitedriver.RegisterDeterministicScalarFunction(
 			migrationCurrentNodeAgentExecutionFunction,
 			6,
 			migrationCurrentNodeAgentExecution,

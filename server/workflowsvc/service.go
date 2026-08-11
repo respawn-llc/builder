@@ -740,6 +740,23 @@ func (s *Service) DeriveWorkflowGraphWiring(ctx context.Context, req serverapi.W
 }
 
 func (s *Service) PreviewWorkflowGraphSave(ctx context.Context, req serverapi.WorkflowGraphSavePreviewRequest) (serverapi.WorkflowGraphSavePreviewResponse, error) {
+	if err := req.ValidateRPC(); err != nil {
+		return serverapi.WorkflowGraphSavePreviewResponse{}, err
+	}
+	currentVersion, err := s.workflowGraphSaveCurrentVersion(ctx, req.WorkflowID)
+	if err != nil {
+		return serverapi.WorkflowGraphSavePreviewResponse{}, err
+	}
+	if currentVersion != req.ExpectedVersion {
+		resp := workflowGraphSavePreviewResponse(
+			workflowstore.WorkflowGraphSaveVersionChangedResult(currentVersion),
+			map[serverapi.WorkflowValidationMode]serverapi.WorkflowValidateResponse{},
+		)
+		if err := resp.Validate(); err != nil {
+			return serverapi.WorkflowGraphSavePreviewResponse{}, fmt.Errorf("project workflow graph save preview response: %w", err)
+		}
+		return resp, nil
+	}
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowGraphSavePreviewResponse{}, err
 	}
@@ -755,6 +772,23 @@ func (s *Service) PreviewWorkflowGraphSave(ctx context.Context, req serverapi.Wo
 }
 
 func (s *Service) SaveWorkflowGraph(ctx context.Context, req serverapi.WorkflowGraphSaveRequest) (serverapi.WorkflowGraphSaveResponse, error) {
+	if err := req.ValidateRPC(); err != nil {
+		return serverapi.WorkflowGraphSaveResponse{}, err
+	}
+	currentVersion, err := s.workflowGraphSaveCurrentVersion(ctx, req.WorkflowID)
+	if err != nil {
+		return serverapi.WorkflowGraphSaveResponse{}, err
+	}
+	if currentVersion != req.ExpectedVersion {
+		resp := workflowGraphSaveResponse(
+			workflowstore.WorkflowGraphSaveVersionChangedResult(currentVersion),
+			map[serverapi.WorkflowValidationMode]serverapi.WorkflowValidateResponse{},
+		)
+		if err := resp.Validate(); err != nil {
+			return serverapi.WorkflowGraphSaveResponse{}, fmt.Errorf("project workflow graph save response: %w", err)
+		}
+		return resp, nil
+	}
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowGraphSaveResponse{}, err
 	}
@@ -777,6 +811,14 @@ func (s *Service) SaveWorkflowGraph(ctx context.Context, req serverapi.WorkflowG
 		return serverapi.WorkflowGraphSaveResponse{}, fmt.Errorf("project workflow graph save response: %w", err)
 	}
 	return resp, nil
+}
+
+func (s *Service) workflowGraphSaveCurrentVersion(ctx context.Context, workflowID runtimeids.WorkflowID) (int64, error) {
+	_, record, err := s.store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		return 0, err
+	}
+	return record.Version, nil
 }
 
 func (s *Service) CreateWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskCreateRequest) (serverapi.WorkflowTaskCreateResponse, error) {

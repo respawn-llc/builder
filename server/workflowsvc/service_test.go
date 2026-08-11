@@ -2791,6 +2791,83 @@ func TestServiceWorkflowGraphSaveIgnoresNodeGroupNumericSortSpacing(t *testing.T
 	}
 }
 
+func TestServiceWorkflowGraphSaveChecksVersionBeforeDraftIdentityFields(t *testing.T) {
+	ctx, service, _ := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	original, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow original: %v", err)
+	}
+	current, err := service.UpdateWorkflow(ctx, serverapi.WorkflowUpdateRequest{
+		WorkflowID:  workflowID,
+		Name:        "Updated Workflow",
+		Description: "",
+	})
+	if err != nil {
+		t.Fatalf("UpdateWorkflow: %v", err)
+	}
+
+	blankGroupID := ""
+	graph := serverapi.WorkflowGraphDraft{Nodes: []serverapi.WorkflowGraphDraftNode{{
+		ID:             "node-prefixed",
+		Kind:           string(serverapi.WorkflowNodeKindAgent),
+		GroupID:        &blankGroupID,
+		CompletionMode: "tool",
+	}}}
+	preview, err := service.PreviewWorkflowGraphSave(ctx, serverapi.WorkflowGraphSavePreviewRequest{
+		WorkflowID:      workflowID,
+		ExpectedVersion: original.Definition.Workflow.Version,
+		Graph:           graph,
+	})
+	if err != nil {
+		t.Fatalf("PreviewWorkflowGraphSave stale malformed Draft: %v", err)
+	}
+	if preview.CurrentVersion != current.Definition.Workflow.Version ||
+		!workflowServiceHasGraphSaveBlocker(preview.Blockers, "version_changed") {
+		t.Fatalf("preview = %+v, want current-version blocker", preview)
+	}
+
+	saved, err := service.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
+		WorkflowID:      workflowID,
+		ExpectedVersion: original.Definition.Workflow.Version,
+		Graph:           graph,
+	})
+	if err != nil {
+		t.Fatalf("SaveWorkflowGraph stale malformed Draft: %v", err)
+	}
+	if saved.Saved ||
+		saved.CurrentVersion != current.Definition.Workflow.Version ||
+		!workflowServiceHasGraphSaveBlocker(saved.Blockers, "version_changed") {
+		t.Fatalf("save = %+v, want current-version blocker", saved)
+	}
+
+	_, err = service.PreviewWorkflowGraphSave(ctx, serverapi.WorkflowGraphSavePreviewRequest{
+		WorkflowID:      workflowID,
+		ExpectedVersion: current.Definition.Workflow.Version,
+		Graph:           graph,
+	})
+	if !isWorkflowServiceRequestFieldError(err, "graph.nodes.group_id") {
+		t.Fatalf("current-version preview error = %v, want group_id validation", err)
+	}
+	_, err = service.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
+		WorkflowID:      workflowID,
+		ExpectedVersion: current.Definition.Workflow.Version,
+		Graph:           graph,
+	})
+	if !isWorkflowServiceRequestFieldError(err, "graph.nodes.group_id") {
+		t.Fatalf("current-version save error = %v, want group_id validation", err)
+	}
+}
+
+func workflowServiceHasGraphSaveBlocker(blockers []serverapi.WorkflowGraphSaveBlocker, code string) bool {
+	for _, blocker := range blockers {
+		if blocker.Code == code {
+			return true
+		}
+	}
+	return false
+}
+
 func TestWorkflowGraphStoreSaveSerializesSameWorkflowWithoutBlockingDifferentWorkflow(t *testing.T) {
 	resolver := &blockingWorkflowGraphRoleResolver{started: make(chan struct{}), release: make(chan struct{})}
 	service, _, _ := newWorkflowServiceTestServiceWithRoleResolver(t, resolver)

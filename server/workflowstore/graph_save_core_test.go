@@ -1548,6 +1548,31 @@ func TestWorkflowGraphSaveRejectsStaleVersion(t *testing.T) {
 	}
 }
 
+func TestWorkflowGraphSaveChecksVersionBeforePreparingDraftRecords(t *testing.T) {
+	f := newGraphSaveFixture(t, createValidWorkflow)
+	if err := f.store.UpdateWorkflowInfo(f.ctx, f.workflowID, "Remote rename", "Remote description"); err != nil {
+		t.Fatalf("UpdateWorkflowInfo: %v", err)
+	}
+	_, current := f.current(t)
+
+	stale := f.request(f.record.Version, false, f.def)
+	stale.Nodes[0].WorkflowID = runtimeids.WorkflowID{}
+	preview := f.preview(t, stale)
+	if workflowGraphSaveBlockerCount(preview.Blockers, "version_changed") != current.Version {
+		t.Fatalf("stale preview = %+v, want current-version blocker", preview)
+	}
+	saved := f.save(t, stale)
+	if saved.Saved || workflowGraphSaveBlockerCount(saved.Blockers, "version_changed") != current.Version {
+		t.Fatalf("stale save = %+v, want current-version blocker", saved)
+	}
+
+	currentVersion := stale
+	currentVersion.ExpectedVersion = current.Version
+	if _, err := f.store.PreviewWorkflowGraphSave(f.ctx, currentVersion); !errors.Is(err, ErrWorkflowIDRequired) {
+		t.Fatalf("current-version preview error = %v, want invalid nested Workflow identity", err)
+	}
+}
+
 func TestPreviewWorkflowGraphSaveDoesNotMutateWithoutBlockers(t *testing.T) {
 	f := newGraphSaveFixture(t, createValidWorkflow)
 	agentID := workflow.NodeID("node-agent-" + f.workflowID.String())
