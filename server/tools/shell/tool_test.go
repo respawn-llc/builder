@@ -209,6 +209,15 @@ func TestExecCommandWorkdirValidationErrors(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "file ancestor", id: "file-ancestor-workdir",
+			workdir: filepath.Join("workdir-file", "child"), reason: missingWorkingDirectoryReason,
+			prepare: func(t *testing.T, workspace string) {
+				if err := os.WriteFile(filepath.Join(workspace, "workdir-file"), []byte("not a directory"), 0o600); err != nil {
+					t.Fatalf("write workdir file: %v", err)
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {

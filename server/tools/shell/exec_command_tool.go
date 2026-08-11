@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"core/server/tools"
@@ -98,7 +99,7 @@ func (t *ExecCommandTool) Call(ctx context.Context, c tools.Call) (tools.Result,
 		workdir = normalizedWorkdir
 		info, err := os.Stat(workdir)
 		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
+			if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
 				return tools.ErrorResultWith(c, formatMissingWorkingDirectoryError(workdir), marshalNoHTMLEscape), nil
 			}
 			return tools.ErrorResultWith(c, err.Error(), marshalNoHTMLEscape), nil
