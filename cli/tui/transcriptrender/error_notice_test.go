@@ -2,7 +2,9 @@ package transcriptrender
 
 import (
 	"reflect"
+	"strings"
 	"testing"
+	"unicode"
 
 	"core/shared/clientui"
 	"core/shared/transcript"
@@ -23,7 +25,11 @@ func TestErrorNoticeClassifiesAsError(t *testing.T) {
 }
 
 func TestRuntimeDiagnosticErrorUsesCompleteTypedDetailInEveryMode(t *testing.T) {
-	detail := "diagnostic alpha beta gamma red\nsecond diagnostic line remains complete"
+	detail := "diagnostic \x1b[31mred\tvalue\x00\nsecond diagnostic \x07line remains complete"
+	want := []string{
+		"diagnostic [31mred value",
+		"second diagnostic line remains complete",
+	}
 	misleadingCompact := "wrong compact source"
 	misleadingCondensed := "wrong condensed source"
 	row := errorNoticeRow(&clientui.TranscriptNoticeRow{
@@ -46,18 +52,18 @@ func TestRuntimeDiagnosticErrorUsesCompleteTypedDetailInEveryMode(t *testing.T) 
 			assertCompleteErrorContent(
 				t,
 				rendered,
-				completeErrorLinesForMode(
-					mode,
-					"diagnostic alpha beta gamma red",
-					"second diagnostic line remains complete",
-				),
+				want,
 			)
 		})
 	}
 }
 
 func TestLegacyUntypedErrorUsesCompleteLegacyTextInEveryMode(t *testing.T) {
-	legacy := "legacy alpha beta gamma\nsecond legacy line remains complete"
+	legacy := "legacy alpha\tbeta\x00\nsecond legacy \x07line remains complete"
+	want := []string{
+		"legacy alpha beta",
+		"second legacy line remains complete",
+	}
 	misleadingCompact := "wrong compact source"
 	misleadingCondensed := "wrong condensed source"
 	messageType := clientui.TranscriptMessageErrorFeedback
@@ -79,11 +85,7 @@ func TestLegacyUntypedErrorUsesCompleteLegacyTextInEveryMode(t *testing.T) {
 			assertCompleteErrorContent(
 				t,
 				rendered,
-				completeErrorLinesForMode(
-					mode,
-					"legacy alpha beta gamma",
-					"second legacy line remains complete",
-				),
+				want,
 			)
 		})
 	}
@@ -197,12 +199,12 @@ func TestErrorNoticeReasonSelectsItsTypedContentSource(t *testing.T) {
 				t.Fatalf("notice is invalid: %v", err)
 			}
 			rendered := RenderCommittedRow(errorNoticeRow(test.notice), 120, "dark", ModeOngoingCollapsed)
-			assertCompleteErrorContent(t, rendered, []string{"! " + test.want})
+			assertCompleteErrorContent(t, rendered, []string{test.want})
 		})
 	}
 }
 
-func TestMetadataOnlyLegacyErrorWithoutTypedFormatterFailsFast(t *testing.T) {
+func TestMetadataOnlyLegacyErrorWithoutTypedFormatterFailsValidation(t *testing.T) {
 	messageType := clientui.TranscriptMessageErrorFeedback
 	condensed := "condensed preview is not error content"
 	compact := "compact label is not error content"
@@ -215,16 +217,9 @@ func TestMetadataOnlyLegacyErrorWithoutTypedFormatterFailsFast(t *testing.T) {
 		CompactLabel:  &compact,
 		SourcePath:    &sourcePath,
 	}
-	if err := notice.Validate(); err != nil {
-		t.Fatalf("metadata-only legacy notice is invalid: %v", err)
+	if err := notice.Validate(); err == nil {
+		t.Fatal("metadata-only legacy error without a typed formatter passed validation")
 	}
-
-	defer func() {
-		if recovered := recover(); recovered == nil {
-			t.Fatal("metadata-only legacy error without a typed formatter did not fail fast")
-		}
-	}()
-	RenderCommittedRow(errorNoticeRow(notice), 80, "dark", ModeOngoingCollapsed)
 }
 
 func TestNonErrorNoticeAndToolRowsRetainCompactOneLineLayout(t *testing.T) {
@@ -294,18 +289,23 @@ func transcriptModeName(mode Mode) string {
 
 func assertCompleteErrorContent(t *testing.T, rendered Row, want []string) {
 	t.Helper()
-	if got := PlainLines(rendered.Lines); !reflect.DeepEqual(got, want) {
-		t.Fatalf("rendered error lines = %#v, want %#v", got, want)
+	got := make([]string, 0, len(rendered.Lines))
+	for _, line := range rendered.Lines {
+		var content strings.Builder
+		for _, span := range line.Spans {
+			if role, ok := span.Style.Role(); ok && role == StyleRoleError {
+				content.WriteString(span.Text)
+			}
+		}
+		projected := strings.TrimSpace(content.String())
+		for _, value := range projected {
+			if unicode.IsControl(value) {
+				t.Fatalf("rendered error payload contains terminal control %U", value)
+			}
+		}
+		got = append(got, projected)
 	}
-}
-
-func completeErrorLinesForMode(mode Mode, first, second string) []string {
-	switch mode {
-	case ModeOngoingStable:
-		return []string{"! " + first, second}
-	case ModeDetailCollapsed, ModeDetailExpanded:
-		return []string{"! " + first, "└ " + second}
-	default:
-		return []string{"! " + first, "  " + second}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("rendered semantic error payload = %#v, want %#v", got, want)
 	}
 }

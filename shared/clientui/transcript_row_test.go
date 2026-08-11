@@ -162,6 +162,41 @@ func TestTranscriptCacheWarningAcceptsAbsentLossAndRejectsPresentZero(t *testing
 	}
 }
 
+func TestTranscriptNoticeRowRejectsPreviewOnlyLegacyError(t *testing.T) {
+	messageType := TranscriptMessageErrorFeedback
+	condensed := "preview"
+	compact := "compact"
+	sourcePath := "/preview"
+	notice := TranscriptNoticeRow{
+		Reason:        TranscriptNoticeLegacyUntypedNotice,
+		Severity:      TranscriptNoticeError,
+		MessageType:   &messageType,
+		CondensedText: &condensed,
+		CompactLabel:  &compact,
+		SourcePath:    &sourcePath,
+	}
+	if err := notice.Validate(); err == nil {
+		t.Fatal("accepted a legacy error with preview fields but no complete content source")
+	}
+}
+
+func TestTranscriptNoticeRowAcceptsMetadataOnlyWorktreeError(t *testing.T) {
+	messageType := TranscriptMessageWorktreeMode
+	notice := TranscriptNoticeRow{
+		Reason:      TranscriptNoticeLegacyUntypedNotice,
+		Severity:    TranscriptNoticeError,
+		MessageType: &messageType,
+		Worktree: &TranscriptWorktreeContext{
+			WorktreePath:  "/workspace/feature",
+			WorkspaceRoot: "/workspace",
+			EffectiveCwd:  "/workspace/feature",
+		},
+	}
+	if err := notice.Validate(); err != nil {
+		t.Fatalf("rejected metadata-only Worktree error: %v", err)
+	}
+}
+
 func TestTranscriptNoticeRowRejectsReasonPayloadMismatch(t *testing.T) {
 	legacyText := "legacy notice"
 	tests := []TranscriptNoticeRow{

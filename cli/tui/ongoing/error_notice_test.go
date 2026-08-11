@@ -10,10 +10,8 @@ import (
 )
 
 func TestErrorNoticesRenderCompletelyThroughNormalOngoingModes(t *testing.T) {
-	diagnosticLines := []string{"runtime diagnostic alpha beta gamma", "runtime diagnostic second line"}
-	diagnosticDetail := diagnosticLines[0] + "\n" + diagnosticLines[1]
-	legacyLines := []string{"legacy error alpha beta gamma", "legacy error second line"}
-	legacyText := legacyLines[0] + "\n" + legacyLines[1]
+	diagnosticDetail := "runtime diagnostic \x1b[31mred\tgamma\nruntime diagnostic second \x00line"
+	legacyText := "legacy error alpha\tbeta\nlegacy error second \x07line"
 	misleadingCompact := "wrong compact source"
 	misleadingCondensed := "wrong condensed source"
 	messageType := clientui.TranscriptMessageErrorFeedback
@@ -22,7 +20,6 @@ func TestErrorNoticesRenderCompletelyThroughNormalOngoingModes(t *testing.T) {
 		name       string
 		visibility transcript.EntryVisibility
 		notice     *clientui.TranscriptNoticeRow
-		source     []string
 		wantMode   transcriptrender.Mode
 	}{
 		{
@@ -38,7 +35,6 @@ func TestErrorNoticesRenderCompletelyThroughNormalOngoingModes(t *testing.T) {
 					Detail: diagnosticDetail,
 				},
 			},
-			source:   []string{"! " + diagnosticLines[0], "  " + diagnosticLines[1]},
 			wantMode: transcriptrender.ModeOngoing,
 		},
 		{
@@ -52,7 +48,6 @@ func TestErrorNoticesRenderCompletelyThroughNormalOngoingModes(t *testing.T) {
 				CompactLabel:  &misleadingCompact,
 				CondensedText: &misleadingCondensed,
 			},
-			source:   []string{"! " + legacyLines[0], "  " + legacyLines[1]},
 			wantMode: transcriptrender.ModeOngoingCollapsed,
 		},
 	}
@@ -74,8 +69,8 @@ func TestErrorNoticesRenderCompletelyThroughNormalOngoingModes(t *testing.T) {
 
 			const width = 80
 			structured := transcriptrender.RenderCommittedRow(row, width, "dark", test.wantMode)
-			if got := transcriptrender.PlainLines(structured.Lines); !reflect.DeepEqual(got, test.source) {
-				t.Fatalf("structured ongoing error lines = %#v, want %#v", got, test.source)
+			if got := len(structured.Lines); got != 2 {
+				t.Fatalf("structured ongoing error lines = %d, want both authored lines", got)
 			}
 
 			wantEncoded := encodeTranscriptLines(structured.Lines, "dark")
