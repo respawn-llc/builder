@@ -123,7 +123,11 @@ func ForkAtUserMessage(parentLog MaterializedEventLog, userMessageSeq int64, for
 	if userMessageSeq <= 0 {
 		return nil, 0, fmt.Errorf("user message seq must be >= 1")
 	}
-	return streamChildFromParent(parentLog, forkName, category, userMessageSeq)
+	return streamChildFromParent(parentLog, forkName, category, ChildContextOptions{
+		InheritLockedContract: true,
+		InheritContinuation:   true,
+		InheritGoal:           true,
+	}, userMessageSeq)
 }
 
 // CloneSession creates a child session that replays the parent's entire
@@ -131,7 +135,10 @@ func ForkAtUserMessage(parentLog MaterializedEventLog, userMessageSeq int64, for
 // so each parallel continuation compacts its own isolated copy of the source
 // conversation instead of mutating the shared source session.
 func CloneSession(parentLog MaterializedEventLog, forkName string, category sessioncontract.SessionCategory) (*Store, error) {
-	child, _, err := streamChildFromParent(parentLog, forkName, category, 0)
+	child, _, err := streamChildFromParent(parentLog, forkName, category, ChildContextOptions{
+		InheritLockedContract: true,
+		InheritContinuation:   true,
+	}, 0)
 	return child, err
 }
 
@@ -140,7 +147,13 @@ func CloneSession(parentLog MaterializedEventLog, forkName string, category sess
 // visible user message persisted at that sequence (fork-at-message); targetSeq
 // == 0 clones everything. It returns the 1-based ordinal of the cut user
 // message among the parent's visible user messages (0 when cloning).
-func streamChildFromParent(parentLog MaterializedEventLog, forkName string, category sessioncontract.SessionCategory, targetSeq int64) (_ *Store, _ int, resultErr error) {
+func streamChildFromParent(
+	parentLog MaterializedEventLog,
+	forkName string,
+	category sessioncontract.SessionCategory,
+	contextOptions ChildContextOptions,
+	targetSeq int64,
+) (_ *Store, _ int, resultErr error) {
 	parent, err := materializedForkParent(parentLog)
 	if err != nil {
 		return nil, 0, err
@@ -157,10 +170,7 @@ func streamChildFromParent(parentLog MaterializedEventLog, forkName string, cate
 			resultErr = errors.Join(resultErr, child.RemoveDurable())
 		}
 	}()
-	if err := InitializeCreationContext(child, parent, SessionCreationSourcePreviousSession, ChildContextOptions{
-		InheritLockedContract: true,
-		InheritContinuation:   true,
-	}); err != nil {
+	if err := InitializeCreationContext(child, parent, SessionCreationSourcePreviousSession, contextOptions); err != nil {
 		return nil, 0, err
 	}
 
@@ -389,6 +399,9 @@ type ChildContextOptions struct {
 	// interactive children. Headless subagent launches leave this false so
 	// parent role/base URL state cannot override the selected subagent config.
 	InheritContinuation bool
+	// InheritGoal preserves the parent's current goal for user-facing
+	// Edit/Fork children. Complete-history workflow clones leave this false.
+	InheritGoal bool
 }
 
 type SessionCreationSourceKind uint8
@@ -443,6 +456,11 @@ func InitializeCreationContext(child *Store, source *Store, kind SessionCreation
 	child.meta.WorkspaceContainer = sourceMeta.WorkspaceContainer
 	child.meta.WorktreeReminder = CloneWorktreeReminderState(sourceMeta.WorktreeReminder)
 	child.meta.UsageState = nil
+	if opts.InheritGoal {
+		child.meta.Goal = cloneGoalState(sourceMeta.Goal)
+	} else {
+		child.meta.Goal = nil
+	}
 	sourceID, err := runtimeids.ParseSessionID(sourceMeta.SessionID)
 	if err != nil {
 		return fmt.Errorf("invalid creation source session id: %w", err)
