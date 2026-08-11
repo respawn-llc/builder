@@ -109,14 +109,9 @@ func (c *sessionRuntimeClient) ShowGoal() (*clientui.RuntimeGoal, error) {
 }
 
 func (c *sessionRuntimeClient) SetGoal(objective string) (clientui.GoalMutationResult, error) {
-	resp, err := runtimeControlCall(c, true, func(ctx context.Context, requestID string) (serverapi.RuntimeGoalMutationResponse, error) {
+	return runtimeControlCall(c, true, func(ctx context.Context, requestID string) (serverapi.RuntimeGoalMutationResponse, error) {
 		return c.controls.SetGoal(ctx, serverapi.RuntimeGoalSetRequest{ClientRequestID: requestID, SessionID: c.sessionID, Objective: objective, Actor: "user"})
 	})
-	if err != nil {
-		return clientui.GoalMutationResult{}, err
-	}
-	c.applyGoalMutationResult(resp, false)
-	return resp, nil
 }
 
 func (c *sessionRuntimeClient) PauseGoal() (clientui.GoalMutationResult, error) {
@@ -138,47 +133,19 @@ func (c *sessionRuntimeClient) CompleteGoal() (clientui.GoalMutationResult, erro
 }
 
 func (c *sessionRuntimeClient) ClearGoal() (clientui.GoalMutationResult, error) {
-	resp, err := runtimeControlCall(c, true, func(ctx context.Context, requestID string) (serverapi.RuntimeGoalMutationResponse, error) {
+	return runtimeControlCall(c, true, func(ctx context.Context, requestID string) (serverapi.RuntimeGoalMutationResponse, error) {
 		return c.controls.ClearGoal(ctx, serverapi.RuntimeGoalClearRequest{ClientRequestID: requestID, SessionID: c.sessionID, Actor: "user"})
 	})
-	if err != nil {
-		return clientui.GoalMutationResult{}, err
-	}
-	c.applyGoalMutationResult(resp, true)
-	return resp, nil
 }
 
 func (c *sessionRuntimeClient) setGoalStatus(call func(context.Context, serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalMutationResponse, error)) (clientui.GoalMutationResult, error) {
-	resp, err := runtimeControlCall(c, true, func(ctx context.Context, requestID string) (serverapi.RuntimeGoalMutationResponse, error) {
+	return runtimeControlCall(c, true, func(ctx context.Context, requestID string) (serverapi.RuntimeGoalMutationResponse, error) {
 		return call(ctx, serverapi.RuntimeGoalStatusRequest{ClientRequestID: requestID, SessionID: c.sessionID, Actor: "user"})
-	})
-	if err != nil {
-		return clientui.GoalMutationResult{}, err
-	}
-	c.applyGoalMutationResult(resp, false)
-	return resp, nil
-}
-
-func (c *sessionRuntimeClient) applyGoalMutationResult(resp clientui.GoalMutationResult, clearAbsentGoal bool) {
-	if resp.Goal == nil {
-		if !clearAbsentGoal {
-			return
-		}
-		goal := clientui.RuntimeGoalFromEnvelope(clientui.ProjectGoal(nil, resp.Availability), false)
-		c.patchMainView(func(view *clientui.RuntimeMainView) {
-			view.Status.Goal = cloneRuntimeGoal(&goal)
-		})
-		return
-	}
-	goal := clientui.RuntimeGoalFromEnvelope(clientui.ProjectGoal(resp.Goal, resp.Availability), false)
-	c.patchMainView(func(view *clientui.RuntimeMainView) {
-		view.Status.Goal = cloneRuntimeGoal(&goal)
 	})
 }
 
 func runtimeGoalFromResponse(resp serverapi.RuntimeGoalShowResponse) *clientui.RuntimeGoal {
-	goal := clientui.RuntimeGoalFromEnvelope(clientui.ProjectGoal(resp.Goal, resp.Availability), false)
-	return &goal
+	return &clientui.RuntimeGoal{Goal: resp.Goal, Availability: resp.Availability}
 }
 
 func cloneRuntimeGoal(goal *clientui.RuntimeGoal) *clientui.RuntimeGoal {

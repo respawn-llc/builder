@@ -1229,33 +1229,6 @@ func TestServiceShowGoalReturnsCommittedStateAroundQueuedGoalDrain(t *testing.T)
 	if beforeDrain.Goal == nil || beforeDrain.Goal.ID != initialGoal.ID || beforeDrain.Goal.Objective != initialGoal.Objective {
 		t.Fatalf("ShowGoal before drain = %+v, want prior committed goal %+v", beforeDrain.Goal, initialGoal)
 	}
-	for _, test := range []struct {
-		name string
-		call func(context.Context, serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalMutationResponse, error)
-	}{
-		{name: "pause", call: service.PauseGoal},
-		{name: "resume", call: service.ResumeGoal},
-		{name: "complete", call: service.CompleteGoal},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			resp, err := test.call(context.Background(), serverapi.RuntimeGoalStatusRequest{
-				ClientRequestID: "goal-" + test.name + "-queued",
-				SessionID:       store.Meta().SessionID,
-				Actor:           string(session.GoalActorUser),
-			})
-			if err != nil || resp.Goal != nil || resp.Pending != nil || resp.Availability != clientui.GoalAvailabilityAvailable {
-				t.Fatalf("%s response = %+v, err=%v, want accepted no-Goal command response without pending preview", test.name, resp, err)
-			}
-		})
-	}
-	cleared, err := service.ClearGoal(context.Background(), serverapi.RuntimeGoalClearRequest{
-		ClientRequestID: "goal-clear-queued",
-		SessionID:       store.Meta().SessionID,
-		Actor:           string(session.GoalActorUser),
-	})
-	if err != nil || cleared.Goal != nil || cleared.Pending != nil || cleared.Availability != clientui.GoalAvailabilityAvailable {
-		t.Fatalf("queued Clear response = %+v, err=%v, want accepted structural no-Goal response", cleared, err)
-	}
 
 	close(client.release)
 	released = true
@@ -1272,8 +1245,8 @@ func TestServiceShowGoalReturnsCommittedStateAroundQueuedGoalDrain(t *testing.T)
 	if err != nil {
 		t.Fatalf("ShowGoal after drain: %v", err)
 	}
-	if afterDrain.Goal != nil {
-		t.Fatalf("ShowGoal after drain = %+v, want cleared goal", afterDrain.Goal)
+	if afterDrain.Goal == nil || afterDrain.Goal.Objective != accepted.Pending.Objective || afterDrain.Goal.Status != accepted.Pending.Status {
+		t.Fatalf("ShowGoal after drain = %+v, want committed accepted goal %+v", afterDrain.Goal, accepted.Pending)
 	}
 }
 

@@ -455,7 +455,7 @@ func TestWorkflowPostCompletionActivityPolicyPreservesMetaAndConsumesActivity(t 
 		t.Fatalf("queued restore activity = %d, want no activity", activity)
 	}
 	if activity := workflowPostCompletionActivityForSteeringItem(steeringItem{
-		message: &steeringMessage{},
+		goalNoticeAndStatus: &steeringGoalNoticeAndStatus{},
 	}); activity != workflowPostCompletionDurableActivity {
 		t.Fatalf("goal notice activity = %d, want durable activity", activity)
 	}

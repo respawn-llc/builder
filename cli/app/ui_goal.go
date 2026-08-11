@@ -45,14 +45,14 @@ func (m *uiModel) workflowSessionActive() bool {
 }
 
 func goalIsActive(goal *clientui.RuntimeGoal) bool {
-	return goal != nil && goalStatus(goal) == clientui.RuntimeGoalStatusActive
+	return goal != nil && goal.Goal != nil && goal.Status == clientui.RuntimeGoalStatusActive
 }
 
 func goalIsPresent(goal *clientui.RuntimeGoal) bool {
 	if goal == nil || goal.Goal == nil {
 		return false
 	}
-	switch goalStatus(goal) {
+	switch goal.Status {
 	case clientui.RuntimeGoalStatusActive, clientui.RuntimeGoalStatusPaused:
 		return true
 	default:
@@ -307,7 +307,7 @@ func (m *uiModel) applyGoalRuntimeDone(msg goalRuntimeDoneMsg) tea.Cmd {
 		return sequenceCmds(m.goalRuntimeCommand(goalRuntimeClear, ""), followUpCmd)
 	case goalRuntimeSet:
 		m.goal.goal = runtimeGoalFromMutationResult(msg.mutation)
-		m.goal.pending = cloneGoalPreview(msg.mutation.Pending)
+		m.goal.pending = msg.mutation.Pending
 		overlayCmd := tea.Cmd(nil)
 		if m.goal.open && strings.TrimSpace(m.goal.confirmMode) != "" {
 			overlayCmd = m.inputController().stopGoalFlowCmd()
@@ -517,14 +517,14 @@ func (l uiViewLayout) goalConfirmContentLines(width int, titleStyle, boldStyle, 
 	switch strings.TrimSpace(m.goal.confirmMode) {
 	case "replace":
 		builder.appendWrapped("Replace active goal?", boldStyle)
-		if objective := goalObjective(m.goal.goal); objective != "" {
-			builder.appendWrapped("Current: "+objective, lipgloss.Style{})
+		if m.goal.goal != nil && m.goal.goal.Goal != nil {
+			builder.appendWrapped("Current: "+m.goal.goal.Objective, lipgloss.Style{})
 		}
 		builder.appendWrapped("New: "+m.goal.pendingObjective, lipgloss.Style{})
 	case "clear":
 		builder.appendWrapped("Clear active goal?", boldStyle)
-		if objective := goalObjective(m.goal.goal); objective != "" {
-			builder.appendWrapped(objective, lipgloss.Style{})
+		if m.goal.goal != nil && m.goal.goal.Goal != nil {
+			builder.appendWrapped(m.goal.goal.Objective, lipgloss.Style{})
 		}
 	default:
 		builder.appendWrapped("Confirm goal action?", boldStyle)
@@ -534,20 +534,6 @@ func (l uiViewLayout) goalConfirmContentLines(width int, titleStyle, boldStyle, 
 	builder.lines = append(builder.lines, padANSIRight(renderUIChoiceGroupLine(width, m.theme, uiChoiceGroupKindButton, buttons, m.goal.confirmSelection), builder.width))
 	builder.appendWrapped("Tab/←/→ select. Enter confirms. ↑/↓ scroll. Esc cancels.", subtleStyle)
 	return builder.lines
-}
-
-func goalStatus(goal *clientui.RuntimeGoal) clientui.RuntimeGoalStatus {
-	if goal == nil || goal.Goal == nil {
-		return ""
-	}
-	return goal.Status
-}
-
-func goalObjective(goal *clientui.RuntimeGoal) string {
-	if goal == nil || goal.Goal == nil {
-		return ""
-	}
-	return goal.Objective
 }
 
 func goalDisplay(goal *clientui.RuntimeGoal, pending *clientui.GoalPreview) (clientui.RuntimeGoalStatus, string) {
@@ -560,18 +546,9 @@ func goalDisplay(goal *clientui.RuntimeGoal, pending *clientui.GoalPreview) (cli
 	return "", ""
 }
 
-func cloneGoalPreview(preview *clientui.GoalPreview) *clientui.GoalPreview {
-	if preview == nil {
-		return nil
-	}
-	cloned := *preview
-	return &cloned
-}
-
 func runtimeGoalFromMutationResult(result clientui.GoalMutationResult) *clientui.RuntimeGoal {
 	if result.Goal == nil {
 		return nil
 	}
-	goal := clientui.RuntimeGoalFromEnvelope(clientui.ProjectGoal(result.Goal, result.Availability), false)
-	return &goal
+	return &clientui.RuntimeGoal{Goal: result.Goal, Availability: result.Availability}
 }

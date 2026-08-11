@@ -53,29 +53,11 @@ type GoalMutationResult struct {
 func ProjectGoal(goal *Goal, availability GoalAvailability) GoalEnvelope {
 	return GoalEnvelope{Goal: goal, Availability: availability}
 }
-func RuntimeGoalFromEnvelope(e GoalEnvelope, suspended bool) RuntimeGoal {
-	return RuntimeGoal{Goal: e.Goal, Availability: e.Availability, Suspended: suspended}
-}
-func TranscriptGoalStatusFromEnvelope(e GoalEnvelope, suspended bool) *TranscriptGoalStatus {
-	if e.Goal == nil {
-		return &TranscriptGoalStatus{Availability: e.Availability}
-	}
-	return &TranscriptGoalStatus{Goal: &TranscriptGoal{Goal: e.Goal, Suspended: suspended}, Availability: e.Availability}
-}
 func (g GoalEnvelope) Validate() error {
-	if err := g.Availability.Validate(); err != nil {
+	if err := g.Availability.Validate(); err != nil || g.Goal == nil {
 		return err
 	}
-	if g.Goal != nil {
-		return g.Goal.Validate()
-	}
-	return nil
-}
-func (r GoalPreview) Validate() error {
-	if strings.TrimSpace(r.Objective) == "" || (r.Status != RuntimeGoalStatusActive && r.Status != RuntimeGoalStatusPaused && r.Status != RuntimeGoalStatusComplete) {
-		return fmt.Errorf("invalid goal preview fields")
-	}
-	return nil
+	return g.Goal.Validate()
 }
 
 func (r GoalMutationResult) Validate() error {
@@ -89,7 +71,9 @@ func (r GoalMutationResult) Validate() error {
 		return r.Goal.Validate()
 	}
 	if r.Pending != nil {
-		return r.Pending.Validate()
+		if strings.TrimSpace(r.Pending.Objective) == "" || (r.Pending.Status != RuntimeGoalStatusActive && r.Pending.Status != RuntimeGoalStatusPaused && r.Pending.Status != RuntimeGoalStatusComplete) {
+			return fmt.Errorf("invalid goal preview fields")
+		}
 	}
 	return nil
 }

@@ -88,44 +88,44 @@ func (m *uiModel) showRuntimeGoal() (*clientui.RuntimeGoal, error) {
 	return nil, nil
 }
 
-func (m *uiModel) setRuntimeGoal(objective string) (clientui.GoalMutationResult, error) {
+func (m *uiModel) setRuntimeGoal(objective string) (*clientui.RuntimeGoal, error) {
 	m.checkTUIBlockingOperation("runtime control mutation", "set goal")
 	if client := m.runtimeClient(); client != nil {
 		result, err := client.SetGoal(objective)
 		m.observeRuntimeRequestResult(err)
-		return result, err
+		return runtimeGoalFromMutationResult(result), err
 	}
-	return clientui.GoalMutationResult{}, nil
+	return nil, nil
 }
 
-func (m *uiModel) pauseRuntimeGoal() (clientui.GoalMutationResult, error) {
+func (m *uiModel) pauseRuntimeGoal() (*clientui.RuntimeGoal, error) {
 	m.checkTUIBlockingOperation("runtime control mutation", "pause goal")
 	if client := m.runtimeClient(); client != nil {
 		result, err := client.PauseGoal()
 		m.observeRuntimeRequestResult(err)
-		return result, err
+		return runtimeGoalFromMutationResult(result), err
 	}
-	return clientui.GoalMutationResult{}, nil
+	return nil, nil
 }
 
-func (m *uiModel) resumeRuntimeGoal() (clientui.GoalMutationResult, error) {
+func (m *uiModel) resumeRuntimeGoal() (*clientui.RuntimeGoal, error) {
 	m.checkTUIBlockingOperation("runtime control mutation", "resume goal")
 	if client := m.runtimeClient(); client != nil {
 		result, err := client.ResumeGoal()
 		m.observeRuntimeRequestResult(err)
-		return result, err
+		return runtimeGoalFromMutationResult(result), err
 	}
-	return clientui.GoalMutationResult{}, nil
+	return nil, nil
 }
 
-func (m *uiModel) clearRuntimeGoal() (clientui.GoalMutationResult, error) {
+func (m *uiModel) clearRuntimeGoal() (*clientui.RuntimeGoal, error) {
 	m.checkTUIBlockingOperation("runtime control mutation", "clear goal")
 	if client := m.runtimeClient(); client != nil {
 		result, err := client.ClearGoal()
 		m.observeRuntimeRequestResult(err)
-		return result, err
+		return runtimeGoalFromMutationResult(result), err
 	}
-	return clientui.GoalMutationResult{}, nil
+	return nil, nil
 }
 
 func (m *uiModel) submitRuntimeUserMessage(ctx context.Context, text string) (clientui.UserTurnSubmission, error) {

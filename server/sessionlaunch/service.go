@@ -127,10 +127,10 @@ func (s *Service) ResolveWorkspaceChatDraftAggregate(ctx context.Context) (Works
 	return owner.ResolveWorkspaceChatDraft(ctx, workspaceID, s.workspaceChatDraftResolverInput)
 }
 
-func (s *Service) TransformWorkspaceChatDraftAggregate(ctx context.Context, transform WorkspaceChatDraftTransform) (WorkspaceChatDraftResolution, error) {
+func (s *Service) TransformWorkspaceChatDraftAggregate(ctx context.Context, transform WorkspaceChatDraftTransform) (WorkspaceChatDraft, error) {
 	owner, workspaceID, err := s.workspaceChatDraftOwner()
 	if err != nil {
-		return WorkspaceChatDraftResolution{}, err
+		return WorkspaceChatDraft{}, err
 	}
 	return owner.TransformWorkspaceChatDraft(ctx, workspaceID, s.workspaceChatDraftResolverInput, transform)
 }
@@ -148,11 +148,14 @@ func (s *Service) WorkspaceChatDraft(ctx context.Context, req serverapi.Workspac
 		return serverapi.WorkspaceChatDraftResponse{Message: resolved.Draft.Message, GoalAvailability: resolved.GoalAvailability}, nil
 	case serverapi.WorkspaceChatDraftUpdateMessage:
 		message := *req.Operation.Message
-		resolved, err := s.TransformWorkspaceChatDraftAggregate(ctx, func(current WorkspaceChatDraftResolution) (WorkspaceChatDraft, error) {
+		if _, err := s.TransformWorkspaceChatDraftAggregate(ctx, func(current WorkspaceChatDraftResolution) (WorkspaceChatDraft, error) {
 			next := current.Draft
 			next.Message = message
 			return next, nil
-		})
+		}); err != nil {
+			return serverapi.WorkspaceChatDraftResponse{}, err
+		}
+		resolved, err := s.ResolveWorkspaceChatDraftAggregate(ctx)
 		if err != nil {
 			return serverapi.WorkspaceChatDraftResponse{}, err
 		}

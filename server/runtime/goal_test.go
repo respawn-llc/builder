@@ -61,39 +61,6 @@ func TestGoalSetEmitsCommittedGoalFeedbackEvent(t *testing.T) {
 	}
 }
 
-func TestGoalLifecycleCarriesMissingAskQuestionCapability(t *testing.T) {
-	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
-	if err := store.MarkModelDispatchLocked(session.LockedContract{EnabledTools: []string{string(toolspec.ToolExecCommand)}}); err != nil {
-		t.Fatal(err)
-	}
-	events := []Event{}
-	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{OnEvent: func(evt Event) { events = append(events, evt) }})
-	assertMissing := func(name string) {
-		u := events[len(events)-1].GoalStatus
-		if u == nil || u.Availability != clientui.GoalAvailabilityAgentCapabilityMissing {
-			t.Fatalf("goal %s update=%+v", name, u)
-		}
-	}
-	if _, err := engine.SetGoal("goal", session.GoalActorUser); err != nil {
-		t.Fatal(err)
-	}
-	assertMissing("set")
-	if _, err := engine.SetGoal("replacement", session.GoalActorUser); err != nil {
-		t.Fatal(err)
-	}
-	assertMissing("replace")
-	for _, status := range []session.GoalStatus{session.GoalStatusPaused, session.GoalStatusActive, session.GoalStatusComplete} {
-		if _, err := engine.SetGoalStatusWithoutGoalLoopStart(status, session.GoalActorUser); err != nil {
-			t.Fatal(err)
-		}
-		assertMissing(string(status))
-	}
-	if _, err := engine.ClearGoal(session.GoalActorUser); err != nil {
-		t.Fatal(err)
-	}
-	assertMissing("clear")
-}
-
 func TestQueuedAgentShellGoalSetDrainsAfterToolCompletion(t *testing.T) {
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
@@ -308,37 +275,37 @@ func TestGoalMutationsEmitGoalStatusEventsAfterFeedback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SetGoal: %v", err)
 	}
-	assertGoalFeedbackThenStatusEvent(t, store, events, 0, set.GoalState, false)
+	assertGoalFeedbackThenStatusEvent(t, events, 0, set.GoalState, false)
 
 	replaced, err := engine.SetGoal("replace goal mode", session.GoalActorUser)
 	if err != nil {
 		t.Fatalf("replace goal: %v", err)
 	}
-	assertGoalFeedbackThenStatusEvent(t, store, events, 2, replaced.GoalState, false)
+	assertGoalFeedbackThenStatusEvent(t, events, 2, replaced.GoalState, false)
 
 	paused, err := engine.SetGoalStatus(session.GoalStatusPaused, session.GoalActorUser)
 	if err != nil {
 		t.Fatalf("pause goal: %v", err)
 	}
-	assertGoalFeedbackThenStatusEvent(t, store, events, 4, paused.GoalState, false)
+	assertGoalFeedbackThenStatusEvent(t, events, 4, paused.GoalState, false)
 
 	active, err := engine.SetGoalStatus(session.GoalStatusActive, session.GoalActorUser)
 	if err != nil {
 		t.Fatalf("resume goal: %v", err)
 	}
-	assertGoalFeedbackThenStatusEvent(t, store, events, 6, active.GoalState, false)
+	assertGoalFeedbackThenStatusEvent(t, events, 6, active.GoalState, false)
 
 	complete, err := engine.SetGoalStatus(session.GoalStatusComplete, session.GoalActorAgent)
 	if err != nil {
 		t.Fatalf("complete goal: %v", err)
 	}
-	assertGoalFeedbackThenStatusEvent(t, store, events, 8, complete.GoalState, false)
+	assertGoalFeedbackThenStatusEvent(t, events, 8, complete.GoalState, false)
 
 	cleared, err := engine.ClearGoal(session.GoalActorUser)
 	if err != nil {
 		t.Fatalf("clear goal: %v", err)
 	}
-	assertGoalFeedbackThenStatusEvent(t, store, events, 10, cleared.GoalState, true)
+	assertGoalFeedbackThenStatusEvent(t, events, 10, cleared.GoalState, true)
 }
 
 func TestConcurrentGoalMutationsDoNotInterleaveBetweenMetadataAndStatusEvent(t *testing.T) {
@@ -424,7 +391,7 @@ func assertGoalStatusEventObjective(t *testing.T, events []Event, start int, obj
 	}
 }
 
-func assertGoalFeedbackThenStatusEvent(t *testing.T, store *session.Store, events []Event, start int, goal session.GoalState, cleared bool) {
+func assertGoalFeedbackThenStatusEvent(t *testing.T, events []Event, start int, goal session.GoalState, cleared bool) {
 	t.Helper()
 	if len(events) < start+2 {
 		t.Fatalf("events len = %d, want at least %d: %+v", len(events), start+2, events)
@@ -446,15 +413,8 @@ func assertGoalFeedbackThenStatusEvent(t *testing.T, store *session.Store, event
 	if cleared {
 		return
 	}
-	if goal.CreatedAt.IsZero() || goal.UpdatedAt.IsZero() {
-		t.Fatalf("goal timestamps = %s/%s, want nonzero", goal.CreatedAt, goal.UpdatedAt)
-	}
-	if status.GoalStatus.State.ID != goal.ID || status.GoalStatus.State.Objective != goal.Objective || status.GoalStatus.State.Status != goal.Status {
+	if status.GoalStatus.State != goal {
 		t.Fatalf("goal status state = %+v, want %+v", status.GoalStatus.State, goal)
-	}
-	stored := store.Meta().Goal
-	if stored == nil || !status.GoalStatus.State.CreatedAt.Equal(stored.CreatedAt) || !status.GoalStatus.State.UpdatedAt.Equal(stored.UpdatedAt) {
-		t.Fatalf("goal status timestamps = %s/%s, stored goal = %+v", status.GoalStatus.State.CreatedAt, status.GoalStatus.State.UpdatedAt, stored)
 	}
 }
 
@@ -1154,10 +1114,6 @@ func TestNewOpensPersistedActiveGoalWhenAskQuestionDisabled(t *testing.T) {
 	if _, _, err := store.SetGoal("ship goal mode", session.GoalActorUser); err != nil {
 		t.Fatalf("SetGoal: %v", err)
 	}
-	persisted := store.Meta().Goal
-	if persisted == nil {
-		t.Fatal("persisted goal is absent")
-	}
 	reopenedStore := mustOpenTestSession(t, store.Dir())
 	client := newScriptedGoalLoopClient()
 	engine := mustNewTestEngine(t, reopenedStore, client, tools.NewRegistry(), Config{EnabledTools: []toolspec.ID{toolspec.ToolExecCommand}})
@@ -1166,9 +1122,6 @@ func TestNewOpensPersistedActiveGoalWhenAskQuestionDisabled(t *testing.T) {
 	goal := engine.Goal()
 	if goal == nil || goal.Status != session.GoalStatusActive || goal.Objective != "ship goal mode" {
 		t.Fatalf("goal after reopen = %+v", goal)
-	}
-	if !goal.CreatedAt.Equal(persisted.CreatedAt) || !goal.UpdatedAt.Equal(persisted.UpdatedAt) {
-		t.Fatalf("reopened timestamps = %s/%s, persisted = %s/%s", goal.CreatedAt, goal.UpdatedAt, persisted.CreatedAt, persisted.UpdatedAt)
 	}
 	if engine.GoalLoopSuspended() {
 		t.Fatal("did not expect reopened active goal to be reported suspended before an explicit start attempt")

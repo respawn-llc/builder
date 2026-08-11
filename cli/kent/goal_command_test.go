@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"strings"
 	"testing"
 
 	"core/shared/clientui"
@@ -15,7 +14,7 @@ func TestWriteGoalMutationTextRendersPendingPreview(t *testing.T) {
 		Pending:      &clientui.GoalPreview{Objective: "ship the queued goal", Status: clientui.RuntimeGoalStatusActive},
 		Availability: clientui.GoalAvailabilityAvailable,
 	})
-	if got := output.String(); !strings.Contains(got, "ship the queued goal") || !strings.Contains(got, "active") || strings.Contains(got, "No goal") {
-		t.Fatalf("pending CLI Goal output = %q", got)
+	if got, want := output.String(), "Goal: ship the queued goal\nStatus: active\n"; got != want {
+		t.Fatalf("pending CLI Goal output = %q, want %q", got, want)
 	}
 }

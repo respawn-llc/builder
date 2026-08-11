@@ -185,15 +185,13 @@ func TestServiceGetSessionMainViewFallsBackToDurableSessionState(t *testing.T) {
 	if resp.MainView.Activity.State != clientui.RuntimeActivityUnavailable {
 		t.Fatalf("dormant activity = %+v, want unavailable", resp.MainView.Activity)
 	}
-}
-
-func TestServiceGetSessionMainViewPreservesGoalAvailabilityWithoutGoal(t *testing.T) {
-	store := newSessionViewStore(t, t.TempDir(), "ws", t.TempDir())
+	if _, _, err := store.ClearGoal(session.GoalActorUser); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.MarkModelDispatchLocked(session.LockedContract{EnabledTools: []string{string(toolspec.ToolExecCommand)}}); err != nil {
 		t.Fatal(err)
 	}
-	response, err := NewService(newTestSessionResolver(store), nil, nil, nil).
-		GetSessionMainView(t.Context(), serverapi.SessionMainViewRequest{SessionID: store.Meta().SessionID})
+	response, err := svc.GetSessionMainView(t.Context(), serverapi.SessionMainViewRequest{SessionID: store.Meta().SessionID})
 	if err != nil {
 		t.Fatalf("get dormant main view: %v", err)
 	}

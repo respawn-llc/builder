@@ -218,7 +218,10 @@ func (s dormantSessionSnapshot) MainView(ctx context.Context) (clientui.RuntimeM
 		return clientui.RuntimeMainView{}, err
 	}
 	freshness := runtimeview.ConversationFreshnessFromSession(sessionFreshness)
-	goalAvailability, err := s.store.GoalAvailability(); if err != nil { return clientui.RuntimeMainView{}, err }
+	goalAvailability, err := s.store.GoalAvailability()
+	if err != nil {
+		return clientui.RuntimeMainView{}, err
+	}
 	status := clientui.RuntimeStatus{
 		ConversationFreshness:             freshness,
 		PreviousSessionID:                 textutil.Pointer(meta.PreviousSessionID),

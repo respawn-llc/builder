@@ -12,7 +12,7 @@ func TestPromptAnswerBatchChangesProtocolVersion(t *testing.T) {
 }
 
 func TestGoalMutationResponseChangesProtocolVersion(t *testing.T) {
-	if Version == "104" {
-		t.Fatal("Goal mutation response retained the pre-contract protocol version")
+	if Version != "116" {
+		t.Fatalf("Goal hard cutover protocol version = %q, want 116", Version)
 	}
 }

@@ -82,41 +82,41 @@ func (o *WorkspaceChatDraftOwner) ResolveWorkspaceChatDraft(ctx context.Context,
 	}
 	return ResolveWorkspaceChatDraft(input, stored)
 }
-func (o *WorkspaceChatDraftOwner) TransformWorkspaceChatDraft(ctx context.Context, id string, resolve WorkspaceChatDraftInputResolver, transform WorkspaceChatDraftTransform) (WorkspaceChatDraftResolution, error) {
+func (o *WorkspaceChatDraftOwner) TransformWorkspaceChatDraft(ctx context.Context, id string, resolve WorkspaceChatDraftInputResolver, transform WorkspaceChatDraftTransform) (WorkspaceChatDraft, error) {
 	var err error
 	if id, err = o.workspaceID(id); err != nil {
-		return WorkspaceChatDraftResolution{}, err
+		return WorkspaceChatDraft{}, err
 	}
 	if resolve == nil {
-		return WorkspaceChatDraftResolution{}, errors.New("workspace Chat draft resolver is required")
+		return WorkspaceChatDraft{}, errors.New("workspace Chat draft resolver is required")
 	}
 	if transform == nil {
-		return WorkspaceChatDraftResolution{}, errors.New("workspace Chat draft transform is required")
+		return WorkspaceChatDraft{}, errors.New("workspace Chat draft transform is required")
 	}
 	lane, err := o.lanes.Acquire(ctx, id)
 	if err != nil {
-		return WorkspaceChatDraftResolution{}, err
+		return WorkspaceChatDraft{}, err
 	}
 	defer lane.Release()
 	input, err := resolve(ctx)
 	if err != nil {
-		return WorkspaceChatDraftResolution{}, err
+		return WorkspaceChatDraft{}, err
 	}
 	stored, err := o.persistence.ReadWorkspaceChatDraft(ctx, id)
 	if err != nil {
-		return WorkspaceChatDraftResolution{}, err
+		return WorkspaceChatDraft{}, err
 	}
 	current, err := ResolveWorkspaceChatDraft(input, stored)
 	if err != nil {
-		return WorkspaceChatDraftResolution{}, err
+		return WorkspaceChatDraft{}, err
 	}
 	next, err := transform(current)
 	if err != nil {
-		return WorkspaceChatDraftResolution{}, err
+		return WorkspaceChatDraft{}, err
 	}
 	next.Agent = normalizeWorkspaceChatDraftAgent(next.Agent)
 	if err := validateWorkspaceChatDraftTransform(next, current); err != nil {
-		return WorkspaceChatDraftResolution{}, err
+		return WorkspaceChatDraft{}, err
 	}
 	var replacement *WorkspaceChatDraft
 	defaults := current.Baselines[config.DefaultSubagentRole]
@@ -124,13 +124,9 @@ func (o *WorkspaceChatDraftOwner) TransformWorkspaceChatDraft(ctx context.Contex
 		replacement = &next
 	}
 	if err := o.persistence.ReplaceWorkspaceChatDraft(ctx, id, replacement); err != nil {
-		return WorkspaceChatDraftResolution{}, err
+		return WorkspaceChatDraft{}, err
 	}
-	resolved, err := workspaceChatDraftResolution(next, current.Baselines, current.limits)
-	if err != nil {
-		return WorkspaceChatDraftResolution{}, err
-	}
-	return resolved, nil
+	return next, nil
 }
 func (o *WorkspaceChatDraftOwner) ClearWorkspaceChatDraft(ctx context.Context, id string) error {
 	var err error

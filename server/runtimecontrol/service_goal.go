@@ -90,7 +90,7 @@ func (s *Service) setGoalStatus(ctx context.Context, req serverapi.RuntimeGoalSt
 		RunID:     strings.TrimSpace(req.RunID),
 		StepID:    strings.TrimSpace(req.StepID),
 	}
-	mutation, err := memoizedGoalMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq, s.goalStatuses, sameGoalStatusMemoRequest, false, func(ctx context.Context) (runtimecommand.GoalCommandResult, error) {
+	return memoizedGoalMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq, s.goalStatuses, sameGoalStatusMemoRequest, false, func(ctx context.Context) (runtimecommand.GoalCommandResult, error) {
 		return s.goalAuthority.Status(ctx, runtimecommand.GoalStatusCommand{
 			SessionID: sessionID,
 			Status:    status,
@@ -98,7 +98,6 @@ func (s *Service) setGoalStatus(ctx context.Context, req serverapi.RuntimeGoalSt
 			Execution: goalExecutionIdentity(memoReq.RunID, memoReq.StepID),
 		})
 	})
-	return mutation, err
 }
 
 func goalExecutionIdentity(runID string, stepID string) runtimecommand.GoalExecutionIdentity {
@@ -125,13 +124,12 @@ func (s *Service) ClearGoal(ctx context.Context, req serverapi.RuntimeGoalClearR
 		return serverapi.RuntimeGoalMutationResponse{}, err
 	}
 	memoReq := goalClearMemoRequest{SessionID: sessionID.String(), Actor: strings.TrimSpace(req.Actor)}
-	mutation, err := memoizedGoalMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq, s.goalClears, sameGoalClearMemoRequest, false, func(ctx context.Context) (runtimecommand.GoalCommandResult, error) {
+	return memoizedGoalMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq, s.goalClears, sameGoalClearMemoRequest, false, func(ctx context.Context) (runtimecommand.GoalCommandResult, error) {
 		return s.goalAuthority.Clear(ctx, runtimecommand.GoalClearCommand{
 			SessionID: sessionID,
 			Actor:     session.GoalActor(memoReq.Actor),
 		})
 	})
-	return mutation, err
 }
 
 func memoizedGoalMutation[Req any](
@@ -168,12 +166,6 @@ func memoizedGoalMutation[Req any](
 }
 
 func goalMutationResponseFromCommand(result runtimecommand.GoalCommandResult, allowPendingPreview bool) (serverapi.RuntimeGoalMutationResponse, error) {
-	if err := result.Availability.Validate(); err != nil {
-		if result.Err != nil {
-			return serverapi.RuntimeGoalMutationResponse{}, result.Err
-		}
-		return serverapi.RuntimeGoalMutationResponse{}, err
-	}
 	if result.Cleared {
 		return serverapi.RuntimeGoalMutationResponse{Availability: result.Availability}, nil
 	}
@@ -183,9 +175,6 @@ func goalMutationResponseFromCommand(result runtimecommand.GoalCommandResult, al
 		}
 		if result.Goal == nil {
 			return serverapi.RuntimeGoalMutationResponse{}, errors.New("queued goal command is missing preview")
-		}
-		if projected := session.GoalCoreFromState(result.Goal); projected != nil && strings.TrimSpace(projected.ID) != "" {
-			return serverapi.RuntimeGoalMutationResponse{Goal: projected, Availability: result.Availability}, nil
 		}
 		return serverapi.RuntimeGoalMutationResponse{Pending: &clientui.GoalPreview{Objective: result.Goal.Objective, Status: clientui.RuntimeGoalStatus(result.Goal.Status)}, Availability: result.Availability}, nil
 	}
