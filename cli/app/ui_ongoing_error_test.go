@@ -89,24 +89,25 @@ func TestOngoingTranscriptTransportOpenFailureKeepsTUIAndShowsDisconnect(t *test
 	}
 }
 
-func TestRecoverableTranscriptAdmissionErrorSurfacesAndRehydrates(t *testing.T) {
+func TestTranscriptGoalProjectionErrorRepaintsNativeSurfaceWithoutRehydration(t *testing.T) {
 	t.Setenv("KENT_INVARIANT_MODE", "diagnostic")
 	runtimeClient := newTestSessionRuntimeClientWithControls(&reconnectRetryRuntimeControlClient{})
+	m := newProjectedTestUIModel(
+		runtimeClient,
+		WithUIOngoingSurface(ongoing.NewSurface(nil)),
+	)
+	surface := &ongoingSurfaceSpy{}
 	controller := newOngoingTranscriptController(
-		&ongoingSurfaceSpy{},
-		ongoingTestFrameProvider,
+		surface,
+		m.ongoingFrameInput,
 		runtimeClient.admitTranscriptMessageState,
-		func(clientui.TranscriptMessage, runtimeTupleMergeResult) tea.Cmd { return nil },
+		m.applyAdmittedTranscriptMessageState,
 	)
 	if _, _, err := controller.Accept(ongoingHydrationMessage(1)); err != nil {
 		t.Fatalf("accept hydration: %v", err)
 	}
-	reopened := false
-	m := newProjectedTestUIModel(
-		runtimeClient,
-		withUIOngoingTranscriptController(controller),
-		WithUIOngoingTranscriptReopen(func() { reopened = true }),
-	)
+	surface.calls = nil
+	m.ongoingTranscript = controller
 
 	cmd := m.handleOngoingTranscriptEvent(ongoingTranscriptEvent{
 		Kind: ongoingTranscriptEventMessage,
@@ -119,13 +120,20 @@ func TestRecoverableTranscriptAdmissionErrorSurfacesAndRehydrates(t *testing.T) 
 		t.Fatal("recoverable admission error did not surface a status command")
 	}
 	if m.Transition().Exit {
-		t.Fatal("recoverable admission error exited the TUI")
+		t.Fatal("Goal projection error exited the TUI")
 	}
-	if !reopened {
-		t.Fatal("recoverable admission error did not reopen transcript hydration")
+	if !controller.hydrated || controller.lastSequence != 2 {
+		t.Fatalf("transcript continuity = hydrated %t sequence %d, want accepted sequence 2", controller.hydrated, controller.lastSequence)
 	}
 	if m.transientStatus == "" || m.transientStatusKind != uiStatusNoticeError {
 		t.Fatalf("transient status = %q kind=%q, want surfaced error", m.transientStatus, m.transientStatusKind)
+	}
+	if got := surface.callKinds(); !reflect.DeepEqual(got, []string{"render"}) {
+		t.Fatalf("native surface calls = %v, want one repaint", got)
+	}
+	expectedStatus := m.layout().renderStatusLine(m.layout().effectiveWidth(), uiThemeStyles(m.theme))
+	if got := surface.lastFrameSectionLines(ongoing.FrameSectionStatus); !reflect.DeepEqual(got, []string{expectedStatus}) {
+		t.Fatalf("native status frame = %q, want current surfaced status frame", got)
 	}
 }
 

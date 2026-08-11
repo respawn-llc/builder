@@ -383,13 +383,16 @@ func TestRuntimeClientGoalStatusWithoutAvailabilityReturnsRecoverableInvariant(t
 	initial := clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{SessionID: "session-1"}}
 	runtimeClient.storeMainView(initial)
 
-	_, err := runtimeClient.admitTranscriptMessageState(clientui.NewTranscriptMessage(0, clientui.NewTranscriptEvent(clientui.TranscriptGoalStatus{
+	admission, err := runtimeClient.admitTranscriptMessageState(clientui.NewTranscriptMessage(0, clientui.NewTranscriptEvent(clientui.TranscriptGoalStatus{
 		Goal: transcriptGoalFixture("goal-1", "ship feature", clientui.RuntimeGoalStatusActive),
 	})))
+	if err != nil {
+		t.Fatalf("admit Goal status: %v", err)
+	}
 
 	var projectionErr transcriptGoalAvailabilityProjectionError
-	if !errors.As(err, &projectionErr) {
-		t.Fatalf("admission error = %T %v, want recoverable Goal availability projection error", err, err)
+	if !errors.As(admission.projectionError, &projectionErr) {
+		t.Fatalf("projection error = %T %v, want Goal availability projection error", admission.projectionError, admission.projectionError)
 	}
 	assertRuntimeTupleView(t, runtimeClient.MainView(), initial)
 }

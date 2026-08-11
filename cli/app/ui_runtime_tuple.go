@@ -26,9 +26,10 @@ type runtimeTupleCandidate struct {
 }
 
 type runtimeTupleMergeResult struct {
-	decision runtimeTupleDecision
-	view     clientui.RuntimeMainView
-	project  bool
+	decision        runtimeTupleDecision
+	view            clientui.RuntimeMainView
+	project         bool
+	projectionError error
 }
 
 func decideRuntimeTuple(

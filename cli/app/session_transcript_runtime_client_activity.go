@@ -3,7 +3,6 @@ package app
 import (
 	"fmt"
 
-	"core/cli/tui/ongoing"
 	"core/shared/clientui"
 	"core/shared/invariant"
 	"core/shared/textutil"
@@ -68,7 +67,9 @@ func (c *sessionRuntimeClient) admitTranscriptMessageState(message clientui.Tran
 	default:
 		metadataChanged, err := applyTranscriptMetadataToMainView(&c.mainView, message, c.sessionID)
 		if err != nil {
-			return runtimeTupleMergeResult{}, err
+			result.view = c.mainView
+			result.projectionError = err
+			return result, nil
 		}
 		if c.ensureMainViewIdentity() || metadataChanged {
 			c.advanceMetadataRevision()
@@ -186,10 +187,6 @@ func (e transcriptGoalAvailabilityProjectionError) Error() string {
 		e.sessionID,
 		e.goalPresent,
 	)
-}
-
-func (transcriptGoalAvailabilityProjectionError) transcriptRehydrationReason() ongoing.RehydrateReason {
-	return ongoing.RehydrateReasonSequenceGap
 }
 
 func runtimeGoalFromTranscript(status clientui.TranscriptGoalStatus, previous *clientui.RuntimeGoal, sessionID string) (*clientui.RuntimeGoal, error) {

@@ -28,11 +28,6 @@ type ongoingTranscriptRuntimeAdmission func(clientui.TranscriptMessage) (runtime
 
 type ongoingTranscriptAdmittedStateObserver func(clientui.TranscriptMessage, runtimeTupleMergeResult) tea.Cmd
 
-type ongoingTranscriptAdmissionRecovery interface {
-	error
-	transcriptRehydrationReason() ongoing.RehydrateReason
-}
-
 type ongoingTranscriptController struct {
 	surface          ongoingTranscriptSurface
 	frameProvider    ongoingFrameProvider
@@ -82,16 +77,7 @@ func (c *ongoingTranscriptController) Accept(message clientui.TranscriptMessage)
 	}
 	admission, err := c.runtimeAdmission(message)
 	if err != nil {
-		err = c.diagnoseRuntimeAdmissionError(message, err)
-		var recovery ongoingTranscriptAdmissionRecovery
-		if errors.As(err, &recovery) {
-			c.requestScratchRehydration()
-			return ongoing.Result{
-				Action: ongoing.ResultRequestScratchRehydration,
-				Reason: recovery.transcriptRehydrationReason(),
-			}, nil, err
-		}
-		return ongoing.Result{}, nil, err
+		return ongoing.Result{}, nil, c.diagnoseRuntimeAdmissionError(message, err)
 	}
 	c.commitDelivery(message)
 	stateChanged := c.applyState(message)
