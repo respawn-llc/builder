@@ -432,8 +432,8 @@ func assertRuntimeGoalConversionDropsAPITimestamps(t *testing.T, got *clientui.R
 	}
 }
 
-func TestRuntimeClientSubmitUserMessageRecoversRuntimeUnavailableAndReusesRequestID(t *testing.T) {
-	controls := &reconnectRetryRuntimeControlClient{firstSubmitErr: serverapi.ErrRuntimeUnavailable}
+func TestRuntimeClientSubmitUserMessageRecoversNotAcceptedRuntimeUnavailableAndReusesRequestID(t *testing.T) {
+	controls := &reconnectRetryRuntimeControlClient{firstSubmitErr: serverapi.NewRuntimeCommandNotAcceptedError(serverapi.ErrRuntimeUnavailable)}
 	runtimeClient := newTestSessionRuntimeClientWithControls(controls)
 	reactivator := newRuntimeReactivator()
 	recoveryCalls := 0
@@ -483,11 +483,8 @@ func TestRuntimeClientCompactNotAcceptedUnavailableDoesNotReactivateOrRetry(t *t
 		!errors.Is(err, serverapi.ErrRuntimeUnavailable) {
 		t.Fatalf("CompactRuntime error = %v, want unchanged joined not-accepted/unavailable error", err)
 	}
-	if controls.compactContextCalls != 1 {
-		t.Fatalf("compact control calls = %d, want 1", controls.compactContextCalls)
-	}
-	if recoveryCalls != 0 {
-		t.Fatalf("runtime reactivation calls = %d, want 0", recoveryCalls)
+	if controls.compactContextCalls != 1 || recoveryCalls != 0 {
+		t.Fatalf("compact calls = %d and reactivation calls = %d, want 1/0", controls.compactContextCalls, recoveryCalls)
 	}
 }
 

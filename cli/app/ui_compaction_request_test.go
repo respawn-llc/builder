@@ -228,8 +228,7 @@ func TestCompactCommandInvokesCapturedClientAndReducesItsResult(t *testing.T) {
 	if !errors.Is(done.err, capturedErr) {
 		t.Fatalf("completion error = %v, want captured result %v", done.err, capturedErr)
 	}
-	if done.submittedText != submitted || done.guidance != "captured guidance" ||
-		done.origin != uiCompactionOriginManual || !done.invoked {
+	if done.submittedText != submitted || done.origin != uiCompactionOriginManual || !done.invoked {
 		t.Fatalf("request-owned completion = %+v", done)
 	}
 

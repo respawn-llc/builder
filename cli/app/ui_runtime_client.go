@@ -139,9 +139,6 @@ func runtimeControlCallNoResult(c *sessionRuntimeClient, call func(ctx context.C
 
 func retryRuntimeUnavailableCall[T any](ctx context.Context, recoverRuntimeConnection func(context.Context, error, bool) error, appendRecoveryWarning bool, call func() (T, error)) (T, error) {
 	value, err := call()
-	if errors.Is(err, serverapi.ErrRuntimeCommandNotAccepted) {
-		return value, err
-	}
 	if !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
 		return value, err
 	}

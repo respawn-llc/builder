@@ -120,7 +120,6 @@ type injectedQueueDiscardDoneMsg struct {
 
 type compactDoneMsg struct {
 	submittedText string
-	guidance      string
 	origin        uiCompactionOrigin
 	invoked       bool
 	err           error

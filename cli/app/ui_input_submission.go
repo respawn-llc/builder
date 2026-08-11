@@ -210,7 +210,6 @@ func (c uiInputController) compactCmd(submittedText, args string, origin uiCompa
 		if client == nil {
 			return compactDoneMsg{
 				submittedText: submittedText,
-				guidance:      args,
 				origin:        origin,
 				err: serverapi.NewRuntimeCommandNotAcceptedError(
 					errors.New("runtime engine is not configured"),
@@ -220,7 +219,6 @@ func (c uiInputController) compactCmd(submittedText, args string, origin uiCompa
 		err := client.CompactRuntime(context.Background(), clientui.RuntimeCompactRequest{Args: args})
 		return compactDoneMsg{
 			submittedText: submittedText,
-			guidance:      args,
 			origin:        origin,
 			invoked:       true,
 			err:           err,
