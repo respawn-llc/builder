@@ -757,12 +757,7 @@ func errorNoticeText(row *clientui.TranscriptNoticeRow) string {
 		if text, ok := worktreeNoticeText(row, ModeDetailExpanded); ok {
 			return text
 		}
-		return firstNonBlankPreservingWhitespace(
-			optionalString(row.CondensedText),
-			optionalString(row.CompactLabel),
-			optionalString(row.SourcePath),
-			string(row.Reason),
-		)
+		return string(row.Reason)
 	default:
 		panic(fmt.Sprintf("render error notice with unsupported reason %q", row.Reason))
 	}

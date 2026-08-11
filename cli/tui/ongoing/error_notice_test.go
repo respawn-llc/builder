@@ -1,19 +1,19 @@
 package ongoing
 
 import (
-	"strings"
+	"reflect"
 	"testing"
 
 	"core/cli/tui/transcriptrender"
 	"core/shared/clientui"
 	"core/shared/transcript"
-
-	xansi "github.com/charmbracelet/x/ansi"
 )
 
 func TestErrorNoticesRenderCompletelyThroughNormalOngoingModes(t *testing.T) {
-	diagnosticDetail := "runtime diagnostic alpha beta gamma\nruntime diagnostic second line"
-	legacyText := "legacy error alpha beta gamma\nlegacy error second line"
+	diagnosticLines := []string{"runtime diagnostic alpha beta gamma", "runtime diagnostic second line"}
+	diagnosticDetail := diagnosticLines[0] + "\n" + diagnosticLines[1]
+	legacyLines := []string{"legacy error alpha beta gamma", "legacy error second line"}
+	legacyText := legacyLines[0] + "\n" + legacyLines[1]
 	misleadingCompact := "wrong compact source"
 	misleadingCondensed := "wrong condensed source"
 	messageType := clientui.TranscriptMessageErrorFeedback
@@ -22,7 +22,7 @@ func TestErrorNoticesRenderCompletelyThroughNormalOngoingModes(t *testing.T) {
 		name       string
 		visibility transcript.EntryVisibility
 		notice     *clientui.TranscriptNoticeRow
-		source     string
+		source     []string
 		wantMode   transcriptrender.Mode
 	}{
 		{
@@ -38,7 +38,7 @@ func TestErrorNoticesRenderCompletelyThroughNormalOngoingModes(t *testing.T) {
 					Detail: diagnosticDetail,
 				},
 			},
-			source:   diagnosticDetail,
+			source:   diagnosticLines,
 			wantMode: transcriptrender.ModeOngoing,
 		},
 		{
@@ -52,7 +52,7 @@ func TestErrorNoticesRenderCompletelyThroughNormalOngoingModes(t *testing.T) {
 				CompactLabel:  &misleadingCompact,
 				CondensedText: &misleadingCondensed,
 			},
-			source:   legacyText,
+			source:   legacyLines,
 			wantMode: transcriptrender.ModeOngoingCollapsed,
 		},
 	}
@@ -72,27 +72,48 @@ func TestErrorNoticesRenderCompletelyThroughNormalOngoingModes(t *testing.T) {
 				t.Fatalf("normal ongoing render mode = %d, want %d", got, test.wantMode)
 			}
 
-			rendered := NewSurface().renderCommittedRow(row, 26, "dark")
-			var visible strings.Builder
-			for _, line := range rendered {
-				plain := xansi.Strip(line)
-				if strings.Contains(plain, "…") {
-					t.Fatalf("ongoing error line was ellipsized: %q", plain)
-				}
-				if strings.HasPrefix(plain, "! ") {
-					plain = strings.TrimPrefix(plain, "! ")
-				} else {
-					plain = strings.TrimPrefix(
-						plain,
-						strings.Repeat(" ", transcriptrender.RolePrefixWidth(transcriptrender.StyleRoleError)),
-					)
-				}
-				visible.WriteString(plain)
+			const width = 80
+			structured := transcriptrender.RenderCommittedRow(row, width, "dark", test.wantMode)
+			if len(structured.Lines) != len(test.source) {
+				t.Fatalf("structured ongoing rows = %d, want %d", len(structured.Lines), len(test.source))
 			}
-			want := strings.ReplaceAll(transcriptrender.TerminalSafePlainText(test.source), "\n", "")
-			if got := visible.String(); got != want {
-				t.Fatalf("ongoing error content = %q, want complete source %q", got, want)
+			for index, line := range structured.Lines {
+				if got := ongoingErrorLineContent(t, line, index); got != test.source[index] {
+					t.Fatalf("structured ongoing error line %d = %q, want %q", index, got, test.source[index])
+				}
+			}
+
+			wantEncoded := encodeTranscriptLines(structured.Lines, "dark")
+			if got := NewSurface().renderCommittedRow(row, width, "dark"); !reflect.DeepEqual(got, wantEncoded) {
+				t.Fatalf("ongoing surface changed structured renderer output: got=%q want=%q", got, wantEncoded)
 			}
 		})
 	}
+}
+
+func ongoingErrorLineContent(t *testing.T, line transcriptrender.Line, index int) string {
+	t.Helper()
+	start := 0
+	if line.LeadingSymbol != nil {
+		if index != 0 ||
+			line.LeadingSymbol.Style.Kind != transcriptrender.SpanStyleSemantic ||
+			line.LeadingSymbol.Style.SemanticRole != transcriptrender.StyleRoleError {
+			t.Fatalf("ongoing error line %d has invalid leading symbol: %+v", index, line.LeadingSymbol)
+		}
+		if len(line.Spans) == 0 ||
+			line.Spans[0].Style.Kind != transcriptrender.SpanStyleSemantic ||
+			line.Spans[0].Style.SemanticRole != transcriptrender.StyleRoleError ||
+			line.Spans[0].Text != " " {
+			t.Fatalf("ongoing error line %d has invalid structured symbol gap: %+v", index, line.Spans)
+		}
+		start = 1
+	}
+	content := ""
+	for _, span := range line.Spans[start:] {
+		if span.Style.Kind == transcriptrender.SpanStyleSemantic &&
+			span.Style.SemanticRole == transcriptrender.StyleRoleError {
+			content += span.Text
+		}
+	}
+	return content
 }

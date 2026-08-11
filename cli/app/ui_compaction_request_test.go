@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"core/cli/app/internal/runtimeattach"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 
@@ -39,6 +40,58 @@ func TestDirectCompactWithoutClientRestoresExactSubmittedText(t *testing.T) {
 	model = updateUIModel(t, model, done)
 	if got := testMainInput(model); got != submitted {
 		t.Fatalf("restored composer = %q, want exact %q", got, submitted)
+	}
+	if hook.aborted != 1 || hook.compactionCompleted != 0 {
+		t.Fatalf("queue hooks = aborted %d completed %d, want 1/0", hook.aborted, hook.compactionCompleted)
+	}
+}
+
+func TestCompactNotAcceptedUsesOnlyLocalCreationFailurePresentation(t *testing.T) {
+	disableTransientStatusClearForTest(t)
+	rejection := serverapi.NewRuntimeCommandNotAcceptedError(serverapi.ErrRuntimeUnavailable)
+	client := &runtimeControlFakeClient{compactErr: rejection}
+	hook := &compactionTurnQueueHook{}
+	model := newProjectedTestUIModel(client, WithUITurnQueueHook(hook))
+	model.activity = uiActivityRunning
+	model.injectedQueue = []injectedRuntimeQueueItem{{
+		LocalID:  "local-steer",
+		ServerID: "server-steer",
+		Text:     "existing accepted steer",
+		State:    injectedRuntimeQueueEnqueued,
+	}}
+	submitted := "/compact rejected"
+
+	done := compactDoneMessageFromCommand(
+		t,
+		model.inputController().startCompactionWithOrigin(submitted, "rejected", uiCompactionOriginManual),
+	)
+	next, _ := model.Update(done)
+	model = next.(*uiModel)
+
+	if model.activity != uiActivityRunning {
+		t.Fatalf("activity = %v, want unchanged running activity", model.activity)
+	}
+	if model.transientStatus != runtimeattach.FormatSubmissionError(rejection) ||
+		model.transientStatusKind != uiStatusNoticeError {
+		t.Fatalf(
+			"transient status = %q kind %v, want ordinary compact rejection detail",
+			model.transientStatus,
+			model.transientStatusKind,
+		)
+	}
+	if got := testMainInput(model); got != submitted {
+		t.Fatalf("restored composer = %q, want %q", got, submitted)
+	}
+	if len(model.injectedQueue) != 1 || model.injectedQueue[0].State != injectedRuntimeQueueEnqueued {
+		t.Fatalf("existing accepted steer was mutated: %+v", model.injectedQueue)
+	}
+	if client.compactCalls != 1 || client.appendCalls != 0 || client.discardQueuedCalls != 0 {
+		t.Fatalf(
+			"runtime calls = compact %d append %d discard %d, want 1/0/0",
+			client.compactCalls,
+			client.appendCalls,
+			client.discardQueuedCalls,
+		)
 	}
 	if hook.aborted != 1 || hook.compactionCompleted != 0 {
 		t.Fatalf("queue hooks = aborted %d completed %d, want 1/0", hook.aborted, hook.compactionCompleted)
@@ -80,6 +133,35 @@ func TestQueuedCompactWithoutClientRestoresExactTextAndAbortsDrain(t *testing.T)
 	}
 	if hook.aborted != 1 || hook.compactionCompleted != 0 {
 		t.Fatalf("queue hooks = aborted %d completed %d, want 1/0", hook.aborted, hook.compactionCompleted)
+	}
+}
+
+func TestQueuedCompactOwnsExactComposerTextBeforeNormalization(t *testing.T) {
+	disableTransientStatusClearForTest(t)
+	model := busyCommandTestModel()
+	submitted := "  /compact  queued\n guidance  "
+	testSetMainInput(model, submitted)
+
+	next, queueCmd := model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	model = next.(*uiModel)
+	if queueCmd != nil {
+		t.Fatal("busy Queue submission unexpectedly dispatched immediately")
+	}
+	if len(model.queued) != 1 || model.queued[0].Text != submitted {
+		t.Fatalf("queued compact text = %+v, want exact composer text %q", model.queued, submitted)
+	}
+
+	next, drainCmd := model.Update(submitDoneMsg{message: "turn complete"})
+	model = next.(*uiModel)
+	done := compactDoneMessageFromCommand(t, drainCmd)
+	if done.submittedText != submitted {
+		t.Fatalf("request-owned compact text = %q, want exact %q", done.submittedText, submitted)
+	}
+
+	next, _ = model.Update(done)
+	model = next.(*uiModel)
+	if got := testMainInput(model); got != submitted {
+		t.Fatalf("restored composer = %q, want exact %q", got, submitted)
 	}
 }
 

@@ -86,7 +86,7 @@ func (c uiInputController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if errText, blocked := m.slashCommandInputBlocked(trimmedText); blocked {
 			return m, c.model.sendTransientStatusWithNoticeID(errText, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 		}
-		if handled, next, cmd := c.handleQueuedSlashCommandInput(trimmedText); handled {
+		if handled, next, cmd := c.handleQueuedSlashCommandInput(submittedText); handled {
 			return next, cmd
 		}
 		return c.queueOrStartSubmission(submittedText)

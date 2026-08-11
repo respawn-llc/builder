@@ -402,18 +402,21 @@ func (c uiInputController) handleCompactDone(msg compactDoneMsg) (tea.Model, tea
 	}
 	if msg.err != nil {
 		if notAccepted {
-			restoreInjectedCmd := c.restoreInjectedInputsIntoComposer()
 			if m.turnQueueHook != nil {
 				m.turnQueueHook.OnTurnQueueAborted()
 			}
 			c.restoreSubmittedTextIntoInput(msg.submittedText)
 			c.restoreQueuedMessagesIntoInput()
 			detailErr := runtimeattach.FormatSubmissionError(msg.err)
-			m.activity = uiActivityError
-			appendCmd := m.appendLocalEntryWithNoticeID(operatorErrorFeedbackRole, detailErr, "")
 			m.logf("compaction.error err=%q", detailErr)
 			m.layout().syncViewport()
-			return m, tea.Batch(restoreInjectedCmd, appendCmd)
+			return m, m.sendTransientStatusWithNoticeID(
+				detailErr,
+				uiStatusNoticeError,
+				transientStatusDuration,
+				uiStatusNoticeReplace,
+				"",
+			)
 		}
 		detailErr := runtimeattach.FormatSubmissionError(msg.err)
 		m.activity = uiActivityError

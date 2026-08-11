@@ -27,7 +27,11 @@ func (c uiInputController) handleQueuedSlashCommandInput(text string) (bool, tea
 	if errText, blocked := m.blockedDeferredSlashCommand(selection.commandText()); blocked {
 		return true, m, sequenceCmds(c.model.appendLocalEntryWithNoticeID("error", errText, ""), c.model.sendTransientStatusWithNoticeID(errText, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, ""))
 	}
-	next, cmd := c.queueOrStartSubmission(selection.commandText())
+	queuedText := selection.commandText()
+	if commandResult := m.commandRegistry.Execute(queuedText); m.isBusy() && isCompactCommandResult(commandResult) {
+		queuedText = text
+	}
+	next, cmd := c.queueOrStartSubmission(queuedText)
 	return true, next, cmd
 }
 
@@ -160,4 +164,8 @@ func isBusyLocalWorktreePicker(commandResult commands.Result) bool {
 	return commandResult.Handled &&
 		commandResult.Action == commands.ActionWorktree &&
 		strings.TrimSpace(commandResult.Args) == ""
+}
+
+func isCompactCommandResult(commandResult commands.Result) bool {
+	return commandResult.Handled && commandResult.Action == commands.ActionCompact
 }
