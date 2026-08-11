@@ -313,10 +313,6 @@ func (m *uiModel) applyGoalRuntimeDone(msg goalRuntimeDoneMsg) tea.Cmd {
 		}
 		return sequenceCmds(m.goalRuntimeCommand(goalRuntimeClear, ""), followUpCmd)
 	case goalRuntimeSet:
-		if !goalMutationSetResultCurrent(m.runtimeClient(), msg) {
-			m.reconcileAuthoritativeGoal(m.cachedRuntimeMainView().Status.Goal)
-			return followUpCmd
-		}
 		m.goal.goal = cloneRuntimeGoal(msg.goal)
 		m.goal.pending = cloneGoalPreview(msg.pending)
 		overlayCmd := tea.Cmd(nil)
@@ -582,32 +578,4 @@ func goalMutationPendingSnapshot(client clientui.RuntimeClient) *clientui.GoalPr
 		return nil
 	}
 	return cloneGoalPreview(previewClient.goalMutationPendingSnapshot())
-}
-
-func goalMutationSetResultCurrent(client clientui.RuntimeClient, msg goalRuntimeDoneMsg) bool {
-	if msg.pending == nil && msg.goal == nil {
-		return false
-	}
-	previewClient, ok := client.(goalMutationPendingClient)
-	if !ok {
-		return true
-	}
-	if msg.pending != nil {
-		current := previewClient.goalMutationPendingSnapshot()
-		if current == nil {
-			return false
-		}
-		return current.Objective == msg.pending.Objective && current.Status == msg.pending.Status
-	}
-	if msg.goal == nil {
-		return false
-	}
-	cached, ok := client.(interface {
-		CachedMainView() (clientui.RuntimeMainView, bool)
-	})
-	if !ok {
-		return true
-	}
-	view, hasView := cached.CachedMainView()
-	return hasView && runtimeGoalsEqual(view.Status.Goal, msg.goal)
 }
