@@ -223,7 +223,7 @@ func (s *workflowGraphApplyStub) SaveWorkflowGraph(
 }
 
 func TestWorkflowGraphApplyTypedOutcomesAndConfirmation(t *testing.T) {
-	workflowID := mustWorkflowID(t, "11111111-1111-4111-8111-111111111111")
+	workflowID := mustWorkflowID(t, emptyWorkflowGraphDocumentID)
 	document, err := decodeWorkflowGraphDocument([]byte(emptyWorkflowGraphDocumentJSON))
 	if err != nil {
 		t.Fatal(err)
@@ -318,7 +318,7 @@ func TestWorkflowGraphApplyTypedOutcomesAndConfirmation(t *testing.T) {
 }
 
 func TestWorkflowGraphApplyChecksStaleVersionBeforeAddedIdentity(t *testing.T) {
-	workflowID := mustWorkflowID(t, "11111111-1111-4111-8111-111111111111")
+	workflowID := mustWorkflowID(t, emptyWorkflowGraphDocumentID)
 	remote := &workflowGraphApplyStub{definition: serverapi.WorkflowDefinition{
 		Workflow: serverapi.WorkflowRecord{ID: workflowID, Version: 2},
 	}}
@@ -341,7 +341,7 @@ func TestWorkflowGraphApplyChecksStaleVersionBeforeAddedIdentity(t *testing.T) {
 }
 
 func TestWorkflowGraphAddedIdentityAndDraftContracts(t *testing.T) {
-	const canonical = "11111111-1111-4111-8111-111111111111"
+	const canonical = emptyWorkflowGraphDocumentID
 	if err := validateWorkflowGraphAdditionIdentities(serverapi.WorkflowDefinition{}, serverapi.WorkflowGraphDraft{
 		Nodes: []serverapi.WorkflowGraphDraftNode{{ID: canonical}},
 	}); err != nil {

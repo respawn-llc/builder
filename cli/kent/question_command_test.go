@@ -37,14 +37,16 @@ func (s *questionWorkflowStub) ListWorkflowTaskAttention(
 type questionApprovalStub struct {
 	apicontract.ApprovalViewService
 	apicontract.PromptControlService
-	responses []serverapi.ApprovalListPendingBySessionResponse
-	answers   []serverapi.ApprovalAnswerRequest
+	responses              []serverapi.ApprovalListPendingBySessionResponse
+	answers                []serverapi.ApprovalAnswerRequest
+	listContextHadDeadline bool
 }
 
 func (s *questionApprovalStub) ListPendingApprovalsBySession(
-	context.Context,
-	serverapi.ApprovalListPendingBySessionRequest,
+	ctx context.Context,
+	_ serverapi.ApprovalListPendingBySessionRequest,
 ) (serverapi.ApprovalListPendingBySessionResponse, error) {
+	_, s.listContextHadDeadline = ctx.Deadline()
 	if len(s.responses) == 0 {
 		return serverapi.ApprovalListPendingBySessionResponse{}, nil
 	}
@@ -181,6 +183,27 @@ func TestTaskQuestionCandidatesSelectOldestAndOmitStaleApproval(t *testing.T) {
 		candidates[0].Questions[1].RecommendedOptionIndex == nil ||
 		*candidates[0].Questions[1].RecommendedOptionIndex != 2 {
 		t.Fatalf("ordered questions=%+v", candidates[0].Questions)
+	}
+}
+
+func TestTaskQuestionCandidateApprovalLookupHasDeadline(t *testing.T) {
+	sessionID := uuid.NewString()
+	workflow := &questionWorkflowStub{responses: []serverapi.WorkflowTaskAttentionListResponse{{
+		Items: []serverapi.WorkflowAttentionItem{approvalQuestionAttention(sessionID, "approval-1", 1)},
+	}}}
+	approvals := &questionApprovalStub{responses: []serverapi.ApprovalListPendingBySessionResponse{{
+		Approvals: []clientui.PendingApproval{{
+			ApprovalID: "approval-1",
+			SessionID:  sessionID,
+			Question:   "Allow?",
+		}},
+	}}}
+
+	if _, err := listTaskQuestionCandidates(context.Background(), workflow, approvals, "task-1"); err != nil {
+		t.Fatal(err)
+	}
+	if !approvals.listContextHadDeadline {
+		t.Fatal("approval lookup context has no deadline")
 	}
 }
 

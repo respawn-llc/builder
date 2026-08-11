@@ -492,14 +492,16 @@ func listTaskQuestionCandidates(
 	taskID string,
 ) ([]taskQuestionSessionCandidate, error) {
 	rpcCtx, cancel := context.WithTimeout(ctx, questionCommandTimeout)
-	defer cancel()
 	response, err := workflows.ListWorkflowTaskAttention(rpcCtx, serverapi.WorkflowTaskAttentionListRequest{
 		TaskID: taskID,
 	})
+	cancel()
 	if err != nil {
 		return nil, err
 	}
-	return taskQuestionCandidatesWithRemote(ctx, approvals, response.Items)
+	approvalCtx, approvalCancel := context.WithTimeout(ctx, questionCommandTimeout)
+	defer approvalCancel()
+	return taskQuestionCandidatesWithRemote(approvalCtx, approvals, response.Items)
 }
 
 func taskQuestionCandidatesWithRemote(ctx context.Context, approvals apicontract.ApprovalViewService, items []serverapi.WorkflowAttentionItem) ([]taskQuestionSessionCandidate, error) {
