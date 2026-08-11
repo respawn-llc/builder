@@ -6,11 +6,11 @@ import (
 )
 
 func TestLockPathsDoesNotBlockUnrelatedPaths(t *testing.T) {
-	unlockA := LockFSGuardPaths([]string{"a"})
+	unlockA := LockFileAccessPaths([]string{"a"})
 
 	unrelated := make(chan struct{})
 	go func() {
-		unlockB := LockFSGuardPaths([]string{"b"})
+		unlockB := LockFileAccessPaths([]string{"b"})
 		unlockB()
 		close(unrelated)
 	}()
@@ -22,7 +22,7 @@ func TestLockPathsDoesNotBlockUnrelatedPaths(t *testing.T) {
 
 	same := make(chan struct{})
 	go func() {
-		unlockA2 := LockFSGuardPaths([]string{"a"})
+		unlockA2 := LockFileAccessPaths([]string{"a"})
 		unlockA2()
 		close(same)
 	}()
@@ -40,10 +40,10 @@ func TestLockPathsDoesNotBlockUnrelatedPaths(t *testing.T) {
 }
 
 func TestLockPathsNormalizesEquivalentPaths(t *testing.T) {
-	unlockA := LockFSGuardPaths([]string{"a/../x"})
+	unlockA := LockFileAccessPaths([]string{"a/../x"})
 	same := make(chan struct{})
 	go func() {
-		unlockB := LockFSGuardPaths([]string{"./x"})
+		unlockB := LockFileAccessPaths([]string{"./x"})
 		unlockB()
 		close(same)
 	}()
@@ -61,10 +61,10 @@ func TestLockPathsNormalizesEquivalentPaths(t *testing.T) {
 }
 
 func TestLockPathEmptyKeyIsNoop(t *testing.T) {
-	unlock := LockFSGuardPath(" \t")
+	unlock := LockFileAccessPaths([]string{" \t"})
 	done := make(chan struct{})
 	go func() {
-		unlockB := LockFSGuardPath("")
+		unlockB := LockFileAccessPaths([]string{""})
 		unlockB()
 		close(done)
 	}()

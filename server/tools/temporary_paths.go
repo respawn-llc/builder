@@ -1,4 +1,4 @@
-package patch
+package tools
 
 import (
 	"os"
@@ -10,8 +10,8 @@ import (
 )
 
 var (
-	temporaryEditableRootsOnce sync.Once
-	temporaryEditableRoots     []string
+	temporaryFileRootsOnce sync.Once
+	temporaryFileRoots     []string
 )
 
 func IsPathInTemporaryDir(path string) bool {
@@ -28,20 +28,20 @@ func IsPathInTemporaryDir(path string) bool {
 		abs = resolvedAbs
 	}
 	abs = filepath.Clean(abs)
-	for _, root := range tempEditableRoots() {
-		if pathWithinRoot(abs, root) {
+	for _, root := range tempFileRoots() {
+		if pathWithinTemporaryRoot(abs, root) {
 			return true
 		}
 	}
 	return false
 }
 
-func tempEditableRoots() []string {
-	temporaryEditableRootsOnce.Do(func() {
+func tempFileRoots() []string {
+	temporaryFileRootsOnce.Do(func() {
 		seen := map[string]struct{}{}
 		roots := make([]string, 0, 12)
 		add := func(raw string) {
-			for _, root := range existingPathAliases(raw) {
+			for _, root := range existingTemporaryPathAliases(raw) {
 				if _, ok := seen[root]; ok {
 					continue
 				}
@@ -62,14 +62,14 @@ func tempEditableRoots() []string {
 		}
 
 		sort.Strings(roots)
-		temporaryEditableRoots = roots
+		temporaryFileRoots = roots
 	})
-	out := make([]string, len(temporaryEditableRoots))
-	copy(out, temporaryEditableRoots)
+	out := make([]string, len(temporaryFileRoots))
+	copy(out, temporaryFileRoots)
 	return out
 }
 
-func existingPathAliases(path string) []string {
+func existingTemporaryPathAliases(path string) []string {
 	trimmed := strings.TrimSpace(path)
 	if trimmed == "" {
 		return nil
@@ -97,7 +97,7 @@ func existingPathAliases(path string) []string {
 	return aliases
 }
 
-func pathWithinRoot(path, root string) bool {
+func pathWithinTemporaryRoot(path, root string) bool {
 	if path == "" || root == "" {
 		return false
 	}

@@ -13,11 +13,11 @@ import (
 )
 
 type applyState struct {
-	tool            *Tool
-	ctx             context.Context
-	state           map[string]*patchFileState
-	deleteTargets   map[string]wholeFileDeletionTarget
-	approvedOutside map[string]bool
+	tool          *Tool
+	ctx           context.Context
+	state         map[string]*patchFileState
+	deleteTargets map[string]wholeFileDeletionTarget
+	accessCall    *tools.FileAccessCall
 }
 
 type wholeFileDeletionTarget struct {
@@ -26,11 +26,11 @@ type wholeFileDeletionTarget struct {
 
 func newApplyState(tool *Tool, ctx context.Context) *applyState {
 	return &applyState{
-		tool:            tool,
-		ctx:             ctx,
-		state:           map[string]*patchFileState{},
-		deleteTargets:   map[string]wholeFileDeletionTarget{},
-		approvedOutside: map[string]bool{},
+		tool:          tool,
+		ctx:           ctx,
+		state:         map[string]*patchFileState{},
+		deleteTargets: map[string]wholeFileDeletionTarget{},
+		accessCall:    tool.fileAccess.BeginCall(),
 	}
 }
 
@@ -57,12 +57,19 @@ func (s *applyState) lockDocumentPaths(doc patchformat.Document) (func(), error)
 		if strings.TrimSpace(raw) == "" {
 			return nil
 		}
-		resolved, err := s.tool.resolvePathTarget(raw, mustExist)
+		resolved, err := s.tool.resolvePathTarget(raw, false)
 		if err != nil {
 			return err
 		}
-		if err := s.tool.checkForeignManagedWorktreePath(resolved); err != nil {
-			return err
+		outcome := s.tool.fileAccess.CheckMutationTarget(raw, resolved)
+		if outcome.Kind != tools.FileAccessTargetAccepted {
+			return fileAccessFailure(outcome)
+		}
+		if mustExist {
+			resolved, err = s.tool.resolvePathTarget(raw, true)
+			if err != nil {
+				return err
+			}
 		}
 		targets = append(targets, documentPath{raw: raw, resolved: resolved})
 		return nil
@@ -88,35 +95,19 @@ func (s *applyState) lockDocumentPaths(doc patchformat.Document) (func(), error)
 			}
 		}
 	}
-	for _, target := range targets {
-		match, denied, denyErr := s.tool.pathDenyPolicy.Check(tools.PathDenyCheck{
-			RequestedPath:        target.raw,
-			ResolvedPath:         target.resolved,
-			WorkingDirectoryReal: s.tool.fileAccessScope.WorkingDirectory.RealPath,
-		})
-		if denyErr != nil {
-			return nil, denyErr
-		}
-		if denied {
-			return nil, noPermissionFailure(target.raw, match.Message)
-		}
-	}
 	paths := make([]string, 0, len(targets))
 	for _, target := range targets {
-		resolved, err := s.tool.guardResolvedPath(s.ctx, target.raw, target.resolved, s.approvedOutside)
-		if err != nil {
-			return nil, err
+		outcome := s.accessCall.Authorize(s.ctx, target.raw, target.resolved)
+		if !outcome.IsAllowed() {
+			return nil, fileAccessFailure(outcome)
 		}
-		if err := s.tool.checkForeignManagedWorktreePath(resolved); err != nil {
-			return nil, err
-		}
-		paths = append(paths, resolved)
+		paths = append(paths, target.resolved)
 	}
-	return tools.LockFSGuardPaths(paths), nil
+	return tools.LockFileAccessPaths(paths), nil
 }
 
 func (s *applyState) getState(path string) (*patchFileState, error) {
-	resolved, err := s.tool.resolvePath(s.ctx, path, false, s.approvedOutside)
+	resolved, err := s.tool.resolvePath(s.ctx, path, false, s.accessCall)
 	if err != nil {
 		return nil, err
 	}
@@ -137,7 +128,7 @@ func (s *applyState) getState(path string) (*patchFileState, error) {
 }
 
 func (s *applyState) addFile(op patchformat.AddFile) error {
-	target, err := s.tool.resolvePath(s.ctx, op.Path, false, s.approvedOutside)
+	target, err := s.tool.resolvePath(s.ctx, op.Path, false, s.accessCall)
 	if err != nil {
 		return err
 	}
@@ -169,7 +160,7 @@ func (s *applyState) deleteFile(
 	op patchformat.DeleteFile,
 	operationID patchformat.WholeFileDeletionOperationID,
 ) error {
-	target, err := s.tool.resolvePath(s.ctx, op.Path, true, s.approvedOutside)
+	target, err := s.tool.resolvePath(s.ctx, op.Path, true, s.accessCall)
 	if err != nil {
 		return err
 	}
@@ -190,7 +181,7 @@ func (s *applyState) deleteFile(
 }
 
 func (s *applyState) updateFile(op patchformat.UpdateFile) error {
-	resolved, err := s.tool.resolvePath(s.ctx, op.Path, false, s.approvedOutside)
+	resolved, err := s.tool.resolvePath(s.ctx, op.Path, false, s.accessCall)
 	if err != nil {
 		return err
 	}
@@ -212,7 +203,7 @@ func (s *applyState) updateFile(op patchformat.UpdateFile) error {
 	if strings.TrimSpace(op.MoveTo) == "" {
 		return nil
 	}
-	moveTarget, err := s.tool.resolvePath(s.ctx, op.MoveTo, false, s.approvedOutside)
+	moveTarget, err := s.tool.resolvePath(s.ctx, op.MoveTo, false, s.accessCall)
 	if err != nil {
 		return err
 	}

@@ -7,8 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	askquestion "core/server/tools"
-	patchtool "core/server/tools/patch"
+	"core/server/tools"
 )
 
 const (
@@ -18,13 +17,13 @@ const (
 )
 
 type OutsideWorkspaceApprover struct {
-	broker         *askquestion.AskQuestionBroker
+	broker         *tools.AskQuestionBroker
 	actionVerb     string
 	mu             sync.Mutex
 	sessionAllowed bool
 }
 
-func NewOutsideWorkspaceApprover(broker *askquestion.AskQuestionBroker, actionVerb string) *OutsideWorkspaceApprover {
+func NewOutsideWorkspaceApprover(broker *tools.AskQuestionBroker, actionVerb string) *OutsideWorkspaceApprover {
 	verb := strings.TrimSpace(actionVerb)
 	if verb == "" {
 		verb = "accessing"
@@ -32,37 +31,37 @@ func NewOutsideWorkspaceApprover(broker *askquestion.AskQuestionBroker, actionVe
 	return &OutsideWorkspaceApprover{broker: broker, actionVerb: verb}
 }
 
-func (a *OutsideWorkspaceApprover) Approve(ctx context.Context, req patchtool.OutsideWorkspaceRequest) (patchtool.OutsideWorkspaceApproval, error) {
+func (a *OutsideWorkspaceApprover) Approve(ctx context.Context, req tools.FileAccessRequest) (tools.FileAccessApproval, error) {
 	a.mu.Lock()
 	if a.sessionAllowed {
 		a.mu.Unlock()
-		return patchtool.OutsideWorkspaceApproval{Decision: patchtool.OutsideWorkspaceDecisionAllowSession}, nil
+		return tools.FileAccessApproval{Kind: tools.FileAccessApprovalSessionCached}, nil
 	}
 	a.mu.Unlock()
 
-	request := askquestion.AskQuestionRequest{
+	request := tools.AskQuestionRequest{
 		Question: fmt.Sprintf("Allow %s %s (outside workspace dir)?", a.actionVerb, req.ResolvedPath),
 		Approval: true,
-		ApprovalOptions: []askquestion.AskQuestionApprovalOption{
-			{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce, Label: OutsideWorkspaceAllowOnceSuggestion},
-			{Decision: askquestion.AskQuestionApprovalDecisionAllowSession, Label: OutsideWorkspaceAllowSessionSuggestion},
-			{Decision: askquestion.AskQuestionApprovalDecisionDeny, Label: OutsideWorkspaceDenySuggestion},
+		ApprovalOptions: []tools.AskQuestionApprovalOption{
+			{Decision: tools.AskQuestionApprovalDecisionAllowOnce, Label: OutsideWorkspaceAllowOnceSuggestion},
+			{Decision: tools.AskQuestionApprovalDecisionAllowSession, Label: OutsideWorkspaceAllowSessionSuggestion},
+			{Decision: tools.AskQuestionApprovalDecisionDeny, Label: OutsideWorkspaceDenySuggestion},
 		},
 	}
-	if identity, identityErr := askquestion.ExecutionIdentityFromContext(ctx); identityErr == nil {
+	if identity, identityErr := tools.ExecutionIdentityFromContext(ctx); identityErr == nil {
 		request.RunID = identity.RunID
 		request.StepID = identity.StepID
 	}
 	resp, err := a.broker.Ask(ctx, request)
 	if err != nil {
-		return patchtool.OutsideWorkspaceApproval{Decision: patchtool.OutsideWorkspaceDecisionDeny}, err
+		return tools.FileAccessApproval{Kind: tools.FileAccessApprovalDeny}, err
 	}
 
 	approval, err := OutsideWorkspaceApprovalFromResolution(resp)
 	if err != nil {
-		return patchtool.OutsideWorkspaceApproval{Decision: patchtool.OutsideWorkspaceDecisionDeny}, err
+		return tools.FileAccessApproval{Kind: tools.FileAccessApprovalDeny}, err
 	}
-	if approval.Decision == patchtool.OutsideWorkspaceDecisionAllowSession {
+	if approval.Kind == tools.FileAccessApprovalAllowSession {
 		a.mu.Lock()
 		a.sessionAllowed = true
 		a.mu.Unlock()
@@ -71,25 +70,25 @@ func (a *OutsideWorkspaceApprover) Approve(ctx context.Context, req patchtool.Ou
 }
 
 func OutsideWorkspaceApprovalFromResolution(
-	resolution askquestion.AskQuestionResolution,
-) (patchtool.OutsideWorkspaceApproval, error) {
-	if err := askquestion.ValidateAskQuestionResolutionShape(resolution); err != nil {
-		return patchtool.OutsideWorkspaceApproval{}, fmt.Errorf("validate approval resolution: %w", err)
+	resolution tools.AskQuestionResolution,
+) (tools.FileAccessApproval, error) {
+	if err := tools.ValidateAskQuestionResolutionShape(resolution); err != nil {
+		return tools.FileAccessApproval{}, fmt.Errorf("validate approval resolution: %w", err)
 	}
-	answer, ok := resolution.(askquestion.AskQuestionApproval)
+	answer, ok := resolution.(tools.AskQuestionApproval)
 	if !ok {
-		return patchtool.OutsideWorkspaceApproval{}, errors.New("missing approval payload")
+		return tools.FileAccessApproval{}, errors.New("missing approval payload")
 	}
-	approval := patchtool.OutsideWorkspaceApproval{Commentary: answer.Commentary}
+	approval := tools.FileAccessApproval{Commentary: answer.Commentary}
 	switch answer.Decision {
-	case askquestion.AskQuestionApprovalDecisionAllowOnce:
-		approval.Decision = patchtool.OutsideWorkspaceDecisionAllowOnce
-	case askquestion.AskQuestionApprovalDecisionAllowSession:
-		approval.Decision = patchtool.OutsideWorkspaceDecisionAllowSession
-	case askquestion.AskQuestionApprovalDecisionDeny:
-		approval.Decision = patchtool.OutsideWorkspaceDecisionDeny
+	case tools.AskQuestionApprovalDecisionAllowOnce:
+		approval.Kind = tools.FileAccessApprovalAllowOnce
+	case tools.AskQuestionApprovalDecisionAllowSession:
+		approval.Kind = tools.FileAccessApprovalAllowSession
+	case tools.AskQuestionApprovalDecisionDeny:
+		approval.Kind = tools.FileAccessApprovalDeny
 	default:
-		return patchtool.OutsideWorkspaceApproval{}, fmt.Errorf("unsupported approval decision %q", answer.Decision)
+		return tools.FileAccessApproval{}, fmt.Errorf("unsupported approval decision %q", answer.Decision)
 	}
 	return approval, nil
 }

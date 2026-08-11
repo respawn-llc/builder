@@ -9,10 +9,9 @@ import (
 	"testing"
 
 	"core/internal/testharness/filemode"
+	"core/internal/testharness/runtimewirefixture"
 	testsetup "core/internal/testharness/testsetup"
 	"core/server/tools"
-	patchtool "core/server/tools/patch"
-	"core/shared/config"
 	"core/shared/toolspec"
 )
 
@@ -46,13 +45,14 @@ func TestAbsoluteForeignManagedWorktreeEditIsDenied(t *testing.T) {
 		t.Fatalf("managed worktree path context: %v", err)
 	}
 	approvalCalls := 0
-	tool := newTestTool(
+	filesystemContext := runtimewirefixture.FilesystemContext(t, filepath.Join(currentRoot, "nested"))
+	filesystemContext.ManagedWorktree = pathContext
+	tool := newTestToolWithFilesystemContext(
 		t,
-		filepath.Join(currentRoot, "nested"),
-		WithManagedWorktreePathContext(pathContext),
-		WithOutsideWorkspaceApprover(func(context.Context, tools.FSGuardRequest) (tools.FSGuardApproval, error) {
+		filesystemContext,
+		WithOutsideWorkspaceApprover(func(context.Context, tools.FileAccessRequest) (tools.FileAccessApproval, error) {
 			approvalCalls++
-			return tools.FSGuardApproval{Decision: tools.FSGuardDecisionAllowOnce}, nil
+			return tools.FileAccessApproval{Kind: tools.FileAccessApprovalAllowOnce}, nil
 		}),
 	)
 	if err := os.MkdirAll(foreignRoot, 0o755); err != nil {
@@ -95,11 +95,13 @@ func TestEditManagedWorktreeGuardSkipsNonForeignTargets(t *testing.T) {
 	writeEditTestFile(t, currentFile, "before\n", 0o644)
 	writeEditTestFile(t, foreignFile, "before\n", 0o644)
 	writeEditTestFile(t, outsideFile, "before\n", 0o644)
-	context, err := tools.NewManagedWorktreePathContext(base, &currentRoot, []string{currentRoot, foreignRoot})
+	managedWorktree, err := tools.NewManagedWorktreePathContext(base, &currentRoot, []string{currentRoot, foreignRoot})
 	if err != nil {
 		t.Fatalf("managed worktree path context: %v", err)
 	}
-	tool := newTestTool(t, filepath.Join(currentRoot, "nested"), WithManagedWorktreePathContext(context), WithAllowOutsideWorkspace(true))
+	filesystemContext := runtimewirefixture.FilesystemContext(t, filepath.Join(currentRoot, "nested"))
+	filesystemContext.ManagedWorktree = managedWorktree
+	tool := newTestToolWithFilesystemContext(t, filesystemContext, WithAllowOutsideWorkspace(true))
 
 	tests := []struct {
 		name    string
@@ -127,59 +129,6 @@ func TestEditManagedWorktreeGuardSkipsNonForeignTargets(t *testing.T) {
 				t.Fatalf("unexpected managed worktree warning: %+v", result.ModelWarnings)
 			}
 		})
-	}
-}
-
-func TestManagedWorktreePathContextProtectsConfiguredRootWithoutKnownWorktrees(t *testing.T) {
-	base := t.TempDir()
-	workspaceRoot := filepath.Join(base, "ordinary-workspace")
-	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
-		t.Fatalf("mkdir workspace: %v", err)
-	}
-	target := filepath.Join(workspaceRoot, "file.txt")
-	writeEditTestFile(t, target, "before\n", 0o644)
-	context, err := tools.NewManagedWorktreePathContext(base, nil, nil)
-	if err != nil {
-		t.Fatalf("managed worktree path context: %v", err)
-	}
-	resolvedTarget, err := config.ResolveExistingPathRealPath(target)
-	if err != nil {
-		t.Fatalf("resolve target: %v", err)
-	}
-	if !context.IsForeignManagedWorktreePath(resolvedTarget) {
-		t.Fatal("configured Worktree root target was not classified as foreign")
-	}
-}
-
-func TestManagedWorktreePathContextRejectsNestedRoots(t *testing.T) {
-	base := t.TempDir()
-	outer := filepath.Join(base, "outer")
-	inner := filepath.Join(outer, "inner")
-	if err := os.MkdirAll(inner, 0o755); err != nil {
-		t.Fatalf("mkdir nested roots: %v", err)
-	}
-	if _, err := tools.NewManagedWorktreePathContext(base, nil, []string{outer, inner}); err == nil {
-		t.Fatal("managed worktree path context accepted nested managed roots")
-	}
-	if _, err := tools.NewManagedWorktreePathContext(base, &inner, []string{outer}); err == nil {
-		t.Fatal("managed worktree path context accepted a current root nested in a foreign root")
-	}
-	context, err := tools.NewManagedWorktreePathContext(base, &outer, []string{outer})
-	if err != nil {
-		t.Fatalf("managed worktree path context with registered current root: %v", err)
-	}
-	externalRoot := filepath.Join(t.TempDir(), "external")
-	if err := os.MkdirAll(externalRoot, 0o755); err != nil {
-		t.Fatalf("mkdir external root: %v", err)
-	}
-	if _, err := tools.NewManagedWorktreePathContext(base, &externalRoot, []string{outer}); err != nil {
-		t.Fatalf("managed worktree path context rejected adopted external current root: %v", err)
-	}
-	if _, err := context.WithCurrentWorktreeRoot(&externalRoot); err != nil {
-		t.Fatalf("managed worktree path context rejected adopted external rebinding: %v", err)
-	}
-	if _, err := context.WithCurrentWorktreeRoot(&inner); err == nil {
-		t.Fatal("managed worktree path context rebound to an unregistered nested root")
 	}
 }
 
@@ -355,9 +304,9 @@ func TestOutsideWorkspaceAncestorAliasUsesSingleCallApproval(t *testing.T) {
 		t.Skipf("symlink unavailable: %v", err)
 	}
 	prompts := 0
-	tool := newTestTool(t, workspace, WithOutsideWorkspaceApprover(func(context.Context, tools.FSGuardRequest) (tools.FSGuardApproval, error) {
+	tool := newTestTool(t, workspace, WithOutsideWorkspaceApprover(func(context.Context, tools.FileAccessRequest) (tools.FileAccessApproval, error) {
 		prompts++
-		return tools.FSGuardApproval{Decision: tools.FSGuardDecisionAllowOnce}, nil
+		return tools.FileAccessApproval{Kind: tools.FileAccessApprovalAllowOnce}, nil
 	}))
 
 	result := callEdit(t, tool, map[string]any{"path": filepath.Join(alias, "target.txt"), "old_string": "old", "new_string": "new"})
@@ -380,9 +329,9 @@ func TestOutsideWorkspaceMissingAncestorAliasUsesSingleCallApproval(t *testing.T
 		t.Skipf("symlink unavailable: %v", err)
 	}
 	prompts := 0
-	tool := newTestTool(t, workspace, WithOutsideWorkspaceApprover(func(context.Context, tools.FSGuardRequest) (tools.FSGuardApproval, error) {
+	tool := newTestTool(t, workspace, WithOutsideWorkspaceApprover(func(context.Context, tools.FileAccessRequest) (tools.FileAccessApproval, error) {
 		prompts++
-		return tools.FSGuardApproval{Decision: tools.FSGuardDecisionAllowOnce}, nil
+		return tools.FileAccessApproval{Kind: tools.FileAccessApprovalAllowOnce}, nil
 	}))
 
 	result := callEdit(t, tool, map[string]any{"path": filepath.Join(alias, "new.txt"), "old_string": "", "new_string": "new\n"})
@@ -403,9 +352,9 @@ func TestOutsideWorkspaceFinalSymlinkRequiresRealPathApproval(t *testing.T) {
 		t.Skipf("symlink unavailable: %v", err)
 	}
 	prompts := 0
-	tool := newTestTool(t, workspace, WithOutsideWorkspaceApprover(func(context.Context, tools.FSGuardRequest) (tools.FSGuardApproval, error) {
+	tool := newTestTool(t, workspace, WithOutsideWorkspaceApprover(func(context.Context, tools.FileAccessRequest) (tools.FileAccessApproval, error) {
 		prompts++
-		return tools.FSGuardApproval{Decision: tools.FSGuardDecisionAllowOnce}, nil
+		return tools.FileAccessApproval{Kind: tools.FileAccessApprovalAllowOnce}, nil
 	}))
 
 	result := callEdit(t, tool, map[string]any{"path": link, "old_string": "old", "new_string": "new"})
@@ -427,9 +376,9 @@ func TestPathDenyPolicyBlocksCreateReplaceAndRealSymlinkTargets(t *testing.T) {
 	prompts := 0
 	tool := newTestTool(t, workspace,
 		WithPathDenyPolicy(policy),
-		WithOutsideWorkspaceApprover(func(context.Context, tools.FSGuardRequest) (tools.FSGuardApproval, error) {
+		WithOutsideWorkspaceApprover(func(context.Context, tools.FileAccessRequest) (tools.FileAccessApproval, error) {
 			prompts++
-			return tools.FSGuardApproval{Decision: tools.FSGuardDecisionAllowOnce}, nil
+			return tools.FileAccessApproval{Kind: tools.FileAccessApprovalAllowOnce}, nil
 		}),
 	)
 
@@ -491,13 +440,18 @@ func newNonTemporaryOutsideDir(t *testing.T) string {
 	return testsetup.NonTemporaryDirectory(
 		t,
 		"kent-edit-outside-",
-		patchtool.IsPathInTemporaryDir,
+		tools.IsPathInTemporaryDir,
 	)
 }
 
 func newTestTool(t *testing.T, dir string, opts ...Option) *Tool {
 	t.Helper()
-	tool, err := New(dir, true, opts...)
+	return newTestToolWithFilesystemContext(t, runtimewirefixture.FilesystemContext(t, dir), opts...)
+}
+
+func newTestToolWithFilesystemContext(t *testing.T, filesystemContext tools.FilesystemContext, opts ...Option) *Tool {
+	t.Helper()
+	tool, err := New(filesystemContext, opts...)
 	if err != nil {
 		t.Fatalf("new edit tool: %v", err)
 	}

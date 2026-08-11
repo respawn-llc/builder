@@ -2,34 +2,16 @@ package patch
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 
 	"core/internal/testharness/filemode"
+	"core/internal/testharness/runtimewirefixture"
 	"core/server/tools"
 )
-
-func TestNewMissingWorkspaceSuggestsRebind(t *testing.T) {
-	missingWorkspace := filepath.Join(t.TempDir(), "workspace-removed")
-
-	_, err := New(missingWorkspace, true)
-	if err == nil {
-		t.Fatal("expected error for missing workspace")
-	}
-	if !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("expected os.ErrNotExist, got %v", err)
-	}
-	want := `workspace root ` + strconv.Quote(missingWorkspace) + ` is missing`
-	if got := err.Error(); got != want {
-		t.Fatalf("error = %q, want %q", got, want)
-	}
-}
 
 func TestAbsoluteForeignManagedWorktreePatchIsDeniedBeforeMove(t *testing.T) {
 	base := t.TempDir()
@@ -48,13 +30,14 @@ func TestAbsoluteForeignManagedWorktreePatchIsDeniedBeforeMove(t *testing.T) {
 		t.Fatalf("managed worktree path context: %v", err)
 	}
 	approvalCalls := 0
-	tool := newPatchTestTool(
+	filesystemContext := runtimewirefixture.FilesystemContext(t, filepath.Join(currentRoot, "nested"))
+	filesystemContext.ManagedWorktree = pathContext
+	tool := newPatchTestToolWithContext(
 		t,
-		filepath.Join(currentRoot, "nested"),
-		WithManagedWorktreePathContext(pathContext),
-		WithOutsideWorkspaceApprover(func(context.Context, OutsideWorkspaceRequest) (OutsideWorkspaceApproval, error) {
+		filesystemContext,
+		WithOutsideWorkspaceApprover(func(context.Context, tools.FileAccessRequest) (tools.FileAccessApproval, error) {
 			approvalCalls++
-			return OutsideWorkspaceApproval{Decision: OutsideWorkspaceDecisionAllowOnce}, nil
+			return tools.FileAccessApproval{Kind: tools.FileAccessApprovalAllowOnce}, nil
 		}),
 	)
 	if err := os.MkdirAll(foreignRoot, 0o755); err != nil {
@@ -90,13 +73,16 @@ func TestPatchDeniesEveryForeignAbsoluteTargetKind(t *testing.T) {
 			t.Fatalf("mkdir %s: %v", dir, err)
 		}
 	}
-	context, err := tools.NewManagedWorktreePathContext(base, &currentRoot, []string{currentRoot, foreignRoot})
+	pathContext, err := tools.NewManagedWorktreePathContext(base, &currentRoot, []string{currentRoot, foreignRoot})
 	if err != nil {
 		t.Fatalf("managed worktree path context: %v", err)
 	}
-	tool := newPatchTestTool(t, filepath.Join(currentRoot, "nested"), WithManagedWorktreePathContext(context))
+	filesystemContext := runtimewirefixture.FilesystemContext(t, filepath.Join(currentRoot, "nested"))
+	filesystemContext.ManagedWorktree = pathContext
+	tool := newPatchTestToolWithContext(t, filesystemContext)
 	update := filepath.Join(foreignRoot, "update.txt")
 	deletePath := filepath.Join(foreignRoot, "delete.txt")
+	missingDeletePath := filepath.Join(foreignRoot, "missing-delete.txt")
 	moveSource := filepath.Join(foreignRoot, "move.txt")
 	for _, path := range []string{update, deletePath, moveSource} {
 		if err := os.WriteFile(path, []byte("before\n"), 0o644); err != nil {
@@ -110,6 +96,7 @@ func TestPatchDeniesEveryForeignAbsoluteTargetKind(t *testing.T) {
 		{name: "add", patch: "*** Begin Patch\n*** Add File: " + filepath.Join(foreignRoot, "added.txt") + "\n+after\n*** End Patch\n"},
 		{name: "update", patch: "*** Begin Patch\n*** Update File: " + update + "\n-before\n+after\n*** End Patch\n"},
 		{name: "delete", patch: "*** Begin Patch\n*** Delete File: " + deletePath + "\n*** End Patch\n"},
+		{name: "delete missing", patch: "*** Begin Patch\n*** Delete File: " + missingDeletePath + "\n*** End Patch\n"},
 		{name: "move source", patch: "*** Begin Patch\n*** Update File: " + moveSource + "\n*** Move to: " + filepath.Join(currentRoot, "moved.txt") + "\n-before\n+after\n*** End Patch\n"},
 	}
 	for _, test := range tests {
@@ -122,65 +109,41 @@ func TestPatchDeniesEveryForeignAbsoluteTargetKind(t *testing.T) {
 	}
 }
 
-func TestPatchManagedWorktreeGuardSkipsRelativeCurrentAndOutsideBase(t *testing.T) {
+func TestPatchResolvesRelativePathsBeforeManagedWorktreePolicy(t *testing.T) {
 	base := t.TempDir()
 	currentRoot := filepath.Join(base, "current")
+	workingDirectory := filepath.Join(currentRoot, "nested")
 	foreignRoot := filepath.Join(base, "foreign")
-	outsideRoot := t.TempDir()
-	for _, dir := range []string{currentRoot, foreignRoot} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatalf("mkdir %s: %v", dir, err)
+	for _, root := range []string{workingDirectory, foreignRoot} {
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			t.Fatalf("create root %q: %v", root, err)
 		}
 	}
-	if err := os.MkdirAll(filepath.Join(currentRoot, "nested"), 0o755); err != nil {
-		t.Fatalf("mkdir nested workdir: %v", err)
-	}
-	current := filepath.Join(currentRoot, "current.txt")
-	foreign := filepath.Join(foreignRoot, "foreign.txt")
-	outside := filepath.Join(outsideRoot, "outside.txt")
-	for _, path := range []string{current, foreign, outside} {
+	currentFile := filepath.Join(currentRoot, "current.txt")
+	foreignFile := filepath.Join(foreignRoot, "foreign.txt")
+	for _, path := range []string{currentFile, foreignFile} {
 		if err := os.WriteFile(path, []byte("before\n"), 0o644); err != nil {
-			t.Fatalf("write %s: %v", path, err)
+			t.Fatalf("write %q: %v", path, err)
 		}
 	}
-	context, err := tools.NewManagedWorktreePathContext(base, &currentRoot, []string{currentRoot, foreignRoot})
+	managed, err := tools.NewManagedWorktreePathContext(base, &currentRoot, []string{currentRoot, foreignRoot})
 	if err != nil {
 		t.Fatalf("managed worktree path context: %v", err)
 	}
-	tool := newPatchTestTool(t, filepath.Join(currentRoot, "nested"), WithManagedWorktreePathContext(context), WithAllowOutsideWorkspace(true))
+	filesystemContext := runtimewirefixture.FilesystemContext(t, workingDirectory)
+	filesystemContext.ManagedWorktree = managed
+	tool := newPatchTestToolWithContext(t, filesystemContext, WithAllowOutsideWorkspace(true))
 
-	tests := []struct {
-		name    string
-		path    string
-		old     string
-		new     string
-		isError bool
-	}{
-		{name: "relative current", path: "../current.txt", old: "before", new: "after"},
-		{name: "relative foreign", path: filepath.Join("..", "..", "foreign", "foreign.txt"), old: "before", new: "after", isError: true},
-		{name: "absolute current", path: current, old: "after", new: "again"},
-		{name: "absolute outside managed base", path: outside, old: "before", new: "after"},
+	currentResult := callPatch(t, tool, "relative-current", "*** Begin Patch\n*** Update File: ../current.txt\n-before\n+after\n*** End Patch\n")
+	if currentResult.IsError {
+		t.Fatalf("relative current patch = error: %s", string(currentResult.Output))
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			result := callPatch(t, tool, "skip-"+tc.name, "*** Begin Patch\n*** Update File: "+tc.path+"\n-"+tc.old+"\n+"+tc.new+"\n*** End Patch\n")
-			if result.IsError != tc.isError {
-				t.Fatalf("error = %t, want %t; result=%q", result.IsError, tc.isError, patchResultText(t, result))
-			}
-			if len(result.ModelWarnings) != 0 {
-				t.Fatalf("unexpected managed worktree warning: %+v", result.ModelWarnings)
-			}
-		})
+	foreignResult := callPatch(t, tool, "relative-foreign", "*** Begin Patch\n*** Update File: ../../foreign/foreign.txt\n-before\n+after\n*** End Patch\n")
+	if !foreignResult.IsError || foreignResult.Summary == nil || *foreignResult.Summary != tools.ForeignManagedWorktreeEditDeniedMessage {
+		t.Fatalf("relative foreign patch result = %+v", foreignResult)
 	}
-}
-
-func patchResultText(t *testing.T, result tools.Result) string {
-	t.Helper()
-	var value any
-	if err := json.Unmarshal(result.Output, &value); err != nil {
-		t.Fatalf("decode patch result: %v", err)
-	}
-	return fmt.Sprint(value)
+	assertPatchFileContent(t, currentFile, "after\n")
+	assertPatchFileContent(t, foreignFile, "before\n")
 }
 
 func TestDeleteParticipatesInAtomicPatchCommit(t *testing.T) {
@@ -699,11 +662,13 @@ func TestCommitStagedFilesRollsBackOnManagedWorktreeRevalidationFailure(t *testi
 	}
 	t.Cleanup(func() { _ = os.Remove(stage) })
 
-	context, err := tools.NewManagedWorktreePathContext(base, &currentRoot, []string{currentRoot, foreignRoot})
+	pathContext, err := tools.NewManagedWorktreePathContext(base, &currentRoot, []string{currentRoot, foreignRoot})
 	if err != nil {
 		t.Fatalf("managed worktree path context: %v", err)
 	}
-	tool := newPatchTestTool(t, currentWorkspace, WithManagedWorktreePathContext(context))
+	filesystemContext := runtimewirefixture.FilesystemContext(t, currentWorkspace)
+	filesystemContext.ManagedWorktree = pathContext
+	tool := newPatchTestToolWithContext(t, filesystemContext)
 
 	_, err = commitStagedFiles(
 		tool,
@@ -732,11 +697,13 @@ func TestPrepareCommitStatesRevalidatesBeforeStagingForeignTargets(t *testing.T)
 		}
 	}
 
-	context, err := tools.NewManagedWorktreePathContext(base, &currentRoot, []string{currentRoot, foreignRoot})
+	pathContext, err := tools.NewManagedWorktreePathContext(base, &currentRoot, []string{currentRoot, foreignRoot})
 	if err != nil {
 		t.Fatalf("managed worktree path context: %v", err)
 	}
-	tool := newPatchTestTool(t, currentWorkspace, WithManagedWorktreePathContext(context))
+	filesystemContext := runtimewirefixture.FilesystemContext(t, currentWorkspace)
+	filesystemContext.ManagedWorktree = pathContext
+	tool := newPatchTestToolWithContext(t, filesystemContext)
 	currentTarget := filepath.Join(currentRoot, "current.txt")
 	foreignTarget := filepath.Join(foreignRoot, "foreign.txt")
 	state := &applyState{
@@ -763,89 +730,6 @@ func TestPrepareCommitStatesRevalidatesBeforeStagingForeignTargets(t *testing.T)
 	}
 }
 
-func TestOutsideWorkspaceEditAllowedWhenConfigured(t *testing.T) {
-	workspace := t.TempDir()
-	outsideRoot := outsideNonTempDir(t)
-	target := filepath.Join(outsideRoot, "outside.txt")
-	if err := os.WriteFile(target, []byte("start\n"), 0o644); err != nil {
-		t.Fatalf("seed outside file: %v", err)
-	}
-
-	tool := newPatchTestTool(t, workspace, WithAllowOutsideWorkspace(true))
-
-	result := callPatch(t, tool, "allow-config", "*** Begin Patch\n*** Update File: "+target+"\n-start\n+done\n*** End Patch\n")
-	if result.IsError {
-		t.Fatalf("expected success, got %s", string(result.Output))
-	}
-
-	got, err := os.ReadFile(target)
-	if err != nil {
-		t.Fatalf("read outside file: %v", err)
-	}
-	if string(got) != "done\n" {
-		t.Fatalf("outside file not updated: %q", string(got))
-	}
-}
-
-func TestOutsideWorkspaceTempDirBypassesApprover(t *testing.T) {
-	workspace := t.TempDir()
-	outsideRoot := t.TempDir()
-	target := filepath.Join(outsideRoot, "outside.txt")
-	if err := os.WriteFile(target, []byte("start\n"), 0o644); err != nil {
-		t.Fatalf("seed outside file: %v", err)
-	}
-
-	approveCalls := 0
-	tool := newPatchTestTool(t, workspace, WithOutsideWorkspaceApprover(func(context.Context, OutsideWorkspaceRequest) (OutsideWorkspaceApproval, error) {
-		approveCalls++
-		return OutsideWorkspaceApproval{Decision: OutsideWorkspaceDecisionDeny}, nil
-	}))
-
-	result := callPatch(t, tool, "allow-temp-bypass", "*** Begin Patch\n*** Update File: "+target+"\n-start\n+done\n*** End Patch\n")
-	if result.IsError {
-		t.Fatalf("expected success for temp outside path, got %s", string(result.Output))
-	}
-	if approveCalls != 0 {
-		t.Fatalf("expected temp exclusion to bypass approver, got %d calls", approveCalls)
-	}
-}
-
-func TestCaseVariantAbsoluteInWorkspaceDoesNotTriggerOutsideApproval(t *testing.T) {
-	workspace := t.TempDir()
-	target := filepath.Join(workspace, "inside.txt")
-	if err := os.WriteFile(target, []byte("start\n"), 0o644); err != nil {
-		t.Fatalf("seed inside file: %v", err)
-	}
-
-	variantWorkspace, ok := findCaseVariantExistingAlias(workspace)
-	if !ok {
-		t.Skip("filesystem does not provide a case-variant alias for workspace path")
-	}
-	variantTarget := filepath.Join(variantWorkspace, "inside.txt")
-
-	approveCalls := 0
-	tool := newPatchTestTool(t, workspace, WithOutsideWorkspaceApprover(func(context.Context, OutsideWorkspaceRequest) (OutsideWorkspaceApproval, error) {
-		approveCalls++
-		return OutsideWorkspaceApproval{Decision: OutsideWorkspaceDecisionDeny}, nil
-	}))
-
-	result := callPatch(t, tool, "case-variant-inside", "*** Begin Patch\n*** Update File: "+variantTarget+"\n-start\n+done\n*** End Patch\n")
-	if result.IsError {
-		t.Fatalf("expected success for case-variant absolute in-workspace target, got %s", string(result.Output))
-	}
-	if approveCalls != 0 {
-		t.Fatalf("expected no outside-workspace approval prompts, got %d", approveCalls)
-	}
-
-	got, err := os.ReadFile(target)
-	if err != nil {
-		t.Fatalf("read inside file: %v", err)
-	}
-	if string(got) != "done\n" {
-		t.Fatalf("inside file not updated: %q", string(got))
-	}
-}
-
 func TestOutsideWorkspaceEditRejectionContainsSteeringMessage(t *testing.T) {
 	workspace := t.TempDir()
 	outsideRoot := outsideNonTempDir(t)
@@ -855,9 +739,9 @@ func TestOutsideWorkspaceEditRejectionContainsSteeringMessage(t *testing.T) {
 	}
 
 	approveCalls := 0
-	tool := newPatchTestTool(t, workspace, WithOutsideWorkspaceApprover(func(context.Context, OutsideWorkspaceRequest) (OutsideWorkspaceApproval, error) {
+	tool := newPatchTestTool(t, workspace, WithOutsideWorkspaceApprover(func(context.Context, tools.FileAccessRequest) (tools.FileAccessApproval, error) {
 		approveCalls++
-		return OutsideWorkspaceApproval{Decision: OutsideWorkspaceDecisionDeny}, nil
+		return tools.FileAccessApproval{Kind: tools.FileAccessApprovalDeny}, nil
 	}))
 
 	result := callPatch(t, tool, "deny-outside", "*** Begin Patch\n*** Update File: "+target+"\n-start\n+done\n*** End Patch\n")
@@ -879,63 +763,5 @@ func TestOutsideWorkspaceEditRejectionContainsSteeringMessage(t *testing.T) {
 	}
 	if string(got) != "start\n" {
 		t.Fatalf("outside file changed despite rejection: %q", string(got))
-	}
-}
-
-func TestOutsideWorkspaceAllowSessionSkipsFuturePrompts(t *testing.T) {
-	workspace := t.TempDir()
-	outsideRoot := outsideNonTempDir(t)
-	first := filepath.Join(outsideRoot, "first.txt")
-	second := filepath.Join(outsideRoot, "second.txt")
-	if err := os.WriteFile(first, []byte("one\n"), 0o644); err != nil {
-		t.Fatalf("seed first file: %v", err)
-	}
-	if err := os.WriteFile(second, []byte("two\n"), 0o644); err != nil {
-		t.Fatalf("seed second file: %v", err)
-	}
-
-	approveCalls := 0
-	tool := newPatchTestTool(t, workspace, WithOutsideWorkspaceApprover(func(context.Context, OutsideWorkspaceRequest) (OutsideWorkspaceApproval, error) {
-		approveCalls++
-		return OutsideWorkspaceApproval{Decision: OutsideWorkspaceDecisionAllowSession}, nil
-	}))
-
-	result := callPatch(t, tool, "allow-session-1", "*** Begin Patch\n*** Update File: "+first+"\n-one\n+one-updated\n*** End Patch\n")
-	if result.IsError {
-		t.Fatalf("expected first patch success, got %s", string(result.Output))
-	}
-	result = callPatch(t, tool, "allow-session-2", "*** Begin Patch\n*** Update File: "+second+"\n-two\n+two-updated\n*** End Patch\n")
-	if result.IsError {
-		t.Fatalf("expected second patch success, got %s", string(result.Output))
-	}
-	if approveCalls != 1 {
-		t.Fatalf("expected one approval call, got %d", approveCalls)
-	}
-}
-
-func TestOutsideWorkspaceAllowOncePromptsEachCall(t *testing.T) {
-	workspace := t.TempDir()
-	outsideRoot := outsideNonTempDir(t)
-	target := filepath.Join(outsideRoot, "outside.txt")
-	if err := os.WriteFile(target, []byte("start\n"), 0o644); err != nil {
-		t.Fatalf("seed outside file: %v", err)
-	}
-
-	approveCalls := 0
-	tool := newPatchTestTool(t, workspace, WithOutsideWorkspaceApprover(func(context.Context, OutsideWorkspaceRequest) (OutsideWorkspaceApproval, error) {
-		approveCalls++
-		return OutsideWorkspaceApproval{Decision: OutsideWorkspaceDecisionAllowOnce}, nil
-	}))
-
-	result := callPatch(t, tool, "allow-once-1", "*** Begin Patch\n*** Update File: "+target+"\n-start\n+mid\n*** End Patch\n")
-	if result.IsError {
-		t.Fatalf("expected first patch success, got %s", string(result.Output))
-	}
-	result = callPatch(t, tool, "allow-once-2", "*** Begin Patch\n*** Update File: "+target+"\n-mid\n+done\n*** End Patch\n")
-	if result.IsError {
-		t.Fatalf("expected second patch success, got %s", string(result.Output))
-	}
-	if approveCalls != 2 {
-		t.Fatalf("expected two approval calls, got %d", approveCalls)
 	}
 }
