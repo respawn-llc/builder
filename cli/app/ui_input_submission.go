@@ -402,11 +402,13 @@ func (c uiInputController) handleCompactDone(msg compactDoneMsg) (tea.Model, tea
 	}
 	if msg.err != nil {
 		if notAccepted {
-			if m.turnQueueHook != nil {
-				m.turnQueueHook.OnTurnQueueAborted()
-			}
 			c.restoreSubmittedTextIntoInput(msg.submittedText)
-			c.restoreQueuedMessagesIntoInput()
+			if compactionOrigin == uiCompactionOriginQueued {
+				if m.turnQueueHook != nil {
+					m.turnQueueHook.OnTurnQueueAborted()
+				}
+				c.restoreQueuedMessagesIntoInput()
+			}
 			detailErr := runtimeattach.FormatSubmissionError(msg.err)
 			m.logf("compaction.error err=%q", detailErr)
 			m.layout().syncViewport()

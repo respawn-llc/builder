@@ -41,8 +41,8 @@ func TestDirectCompactWithoutClientRestoresExactSubmittedText(t *testing.T) {
 	if got := testMainInput(model); got != submitted {
 		t.Fatalf("restored composer = %q, want exact %q", got, submitted)
 	}
-	if hook.aborted != 1 || hook.compactionCompleted != 0 {
-		t.Fatalf("queue hooks = aborted %d completed %d, want 1/0", hook.aborted, hook.compactionCompleted)
+	if hook.aborted != 0 || hook.compactionCompleted != 0 {
+		t.Fatalf("queue hooks = aborted %d completed %d, want 0/0", hook.aborted, hook.compactionCompleted)
 	}
 }
 
@@ -59,6 +59,7 @@ func TestCompactNotAcceptedUsesOnlyLocalCreationFailurePresentation(t *testing.T
 		Text:     "existing accepted steer",
 		State:    injectedRuntimeQueueEnqueued,
 	}}
+	model.queueInput("unrelated queued input")
 	submitted := "/compact rejected"
 
 	done := compactDoneMessageFromCommand(
@@ -85,6 +86,9 @@ func TestCompactNotAcceptedUsesOnlyLocalCreationFailurePresentation(t *testing.T
 	if len(model.injectedQueue) != 1 || model.injectedQueue[0].State != injectedRuntimeQueueEnqueued {
 		t.Fatalf("existing accepted steer was mutated: %+v", model.injectedQueue)
 	}
+	if len(model.queued) != 1 || model.queued[0].Text != "unrelated queued input" {
+		t.Fatalf("unrelated queued input was mutated: %+v", model.queued)
+	}
 	if client.compactCalls != 1 || client.appendCalls != 0 || client.discardQueuedCalls != 0 {
 		t.Fatalf(
 			"runtime calls = compact %d append %d discard %d, want 1/0/0",
@@ -93,8 +97,8 @@ func TestCompactNotAcceptedUsesOnlyLocalCreationFailurePresentation(t *testing.T
 			client.discardQueuedCalls,
 		)
 	}
-	if hook.aborted != 1 || hook.compactionCompleted != 0 {
-		t.Fatalf("queue hooks = aborted %d completed %d, want 1/0", hook.aborted, hook.compactionCompleted)
+	if hook.aborted != 0 || hook.compactionCompleted != 0 {
+		t.Fatalf("queue hooks = aborted %d completed %d, want 0/0", hook.aborted, hook.compactionCompleted)
 	}
 }
 
