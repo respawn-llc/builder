@@ -125,6 +125,58 @@ func TestCurrentNodeControllerRunnerFailuresInterruptAdmittedCurrentNode(t *test
 	}
 }
 
+func TestCurrentNodeControllerExecutionLossBeforeAdmissionInterruptsReadyCurrentNode(t *testing.T) {
+	reference := currentNodeReferenceForControllerTest(t, "task-pre-admission-failure", "node-agent")
+	store := &currentNodeControllerStore{}
+	attention := &currentNodeAttentionRecorder{}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	runner := &countingCurrentNodeRunner{}
+	controller, err := NewCurrentNodeController(store, runner, authority, NewMutationPermit(), CurrentNodeControllerConfig{
+		AgentConcurrency: 1,
+		Attention:        attention,
+		AssignmentSteerer: &recordingCurrentNodeAssignmentSteerer{
+			waitErr: sessionruntime.ErrExecutionNoLongerLive,
+		},
+	})
+	if err != nil {
+		t.Fatalf("new current node controller: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := controller.Close(); err != nil {
+			t.Errorf("close controller: %v", err)
+		}
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+
+	if err := startCurrentNodeForControllerTest(context.Background(), controller, store, reference); err != nil {
+		t.Fatalf("queue current node start: %v", err)
+	}
+	var interruption currentNodeInterruptionRecord
+	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+		var interrupted bool
+		interruption, interrupted = store.interruption(reference)
+		return interrupted
+	}, "pre-admission execution loss did not interrupt the ready current node")
+	if admitted := store.admitCount(); admitted != 0 {
+		t.Fatalf("admitted current nodes = %d, want 0", admitted)
+	}
+	if deliveries := runner.promptDeliveries(); len(deliveries) != 0 {
+		t.Fatalf("runner prompt deliveries = %+v, want none", deliveries)
+	}
+	if interruption.reason != reasonCurrentNodeRuntimeStartFailed {
+		t.Fatalf("interruption reason = %q, want %q", interruption.reason, reasonCurrentNodeRuntimeStartFailed)
+	}
+	if interruption.detail.Code != string(reasonCurrentNodeRuntimeStartFailed) ||
+		interruption.detail.Diagnostic() == nil {
+		t.Fatalf("interruption detail = %+v, want runtime-start diagnostic", interruption.detail)
+	}
+	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+		return attention.pendingCount() == 1
+	}, "pre-admission execution loss did not publish interrupted Current Node attention")
+}
+
 func TestCurrentNodeControllerFinalizedWithoutOutcomeInterruptsAdmittedCurrentNode(t *testing.T) {
 	shellPath, err := exec.LookPath("sh")
 	if err != nil {
