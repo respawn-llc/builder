@@ -4,8 +4,6 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"go/ast"
-	"go/parser"
-	"go/token"
 	"go/types"
 	"path/filepath"
 	"sort"
@@ -50,51 +48,6 @@ func TestCurrentNodeControlGraphHasOneAuthority(t *testing.T) {
 	findings := analyzeCurrentNodeGoStructure(pkgs)
 	if len(findings) > 0 {
 		t.Fatalf("Current Node authority structure violations:\n%s", formatCurrentNodeStructureFindings(findings))
-	}
-}
-
-func TestAgentExecutionStartsStayBehindApprovedAuthorities(t *testing.T) {
-	repoRoot := findRepoRoot(t)
-	allowedStartAgentExecution := map[string]bool{
-		"server/runprompt/headless.go":                true,
-		"server/sessionruntime/authority_resource.go": true,
-		"server/sessionruntime/execution_target.go":   true,
-		"server/workflowrunner/starter.go":            true,
-	}
-	if err := walkProductionGoFiles(repoRoot, func(path, relPath string) error {
-		fileSet := token.NewFileSet()
-		file, err := parser.ParseFile(fileSet, path, nil, parser.SkipObjectResolution)
-		if err != nil {
-			return err
-		}
-		ast.Inspect(file, func(node ast.Node) bool {
-			call, ok := node.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			selector, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok {
-				return true
-			}
-			switch selector.Sel.Name {
-			case "StartAgentExecution":
-				if !allowedStartAgentExecution[relPath] {
-					t.Errorf("%s:%d starts Agent execution outside an approved authority", relPath, fileSet.Position(selector.Sel.Pos()).Line)
-				}
-			case "RunCurrentAgentExecution":
-				if relPath != "server/runtimecommand/execution.go" {
-					t.Errorf("%s:%d bypasses the canonical attached-operation adapter", relPath, fileSet.Position(selector.Sel.Pos()).Line)
-				}
-			case "RunAgentOperation":
-				if relPath != "server/runtimecontrol/service.go" {
-					t.Errorf("%s:%d calls the attached-operation adapter outside Runtime Control", relPath, fileSet.Position(selector.Sel.Pos()).Line)
-				}
-			}
-			return true
-		})
-		return nil
-	}); err != nil {
-		t.Fatalf("scan Agent execution starts: %v", err)
 	}
 }
 
@@ -216,14 +169,13 @@ func analyzeCurrentNodeGoStructure(pkgs []*packages.Package) []currentNodeStruct
 
 func currentNodeProductionCompositionFindings(index currentNodeTypeIndex) []currentNodeStructureFinding {
 	permit := index.named["core/server/workflowexecution.MutationPermit"]
-	taskMutations := index.named["core/server/workflowexecution.TaskMutationCoordinator"]
 	controller := index.named["core/server/workflowexecution.CurrentNodeController"]
 	starter := index.named["core/server/workflowrunner.Starter"]
 	authority := index.named["core/server/sessionruntime.Authority"]
 	statusProjection := index.named["core/server/workflowview.TaskStatusProjection"]
 	projectService := index.named["core/server/projectview.Service"]
 	workflowService := index.named["core/server/workflowsvc.Service"]
-	if permit == nil || taskMutations == nil || controller == nil || starter == nil || authority == nil || statusProjection == nil || projectService == nil || workflowService == nil {
+	if permit == nil || controller == nil || starter == nil || authority == nil || statusProjection == nil || projectService == nil || workflowService == nil {
 		return nil
 	}
 
@@ -248,7 +200,6 @@ func currentNodeProductionCompositionFindings(index currentNodeTypeIndex) []curr
 
 	expectedCalls := []string{
 		"core/server/workflowexecution.NewMutationPermit",
-		"core/server/workflowexecution.NewTaskMutationCoordinator",
 		"core/server/sessionruntime.NewAuthority",
 		"core/server/workflowrunner.NewStarter",
 		"core/server/workflowview.NewTaskStatusProjection",
@@ -274,20 +225,17 @@ func currentNodeProductionCompositionFindings(index currentNodeTypeIndex) []curr
 	}
 
 	permitType := types.NewPointer(permit)
-	taskMutationType := types.NewPointer(taskMutations)
 	authorityType := types.NewPointer(authority)
 	starterType := types.NewPointer(starter)
 	controllerType := types.NewPointer(controller)
 	statusProjectionType := types.NewPointer(statusProjection)
 	permitObject := assignedVariableOfType(calls["core/server/workflowexecution.NewMutationPermit"][0], permitType)
-	taskMutationObject := assignedVariableOfType(calls["core/server/workflowexecution.NewTaskMutationCoordinator"][0], taskMutationType)
 	authorityObject := assignedVariableOfType(calls["core/server/sessionruntime.NewAuthority"][0], authorityType)
 	starterObject := assignedVariableOfType(calls["core/server/workflowrunner.NewStarter"][0], starterType)
 	controllerObject := assignedVariableOfType(controllerCalls[0], controllerType)
 	statusProjectionObject := assignedVariableOfType(calls["core/server/workflowview.NewTaskStatusProjection"][0], statusProjectionType)
 	for name, object := range map[string]*types.Var{
 		"workflow mutation permit":        permitObject,
-		"Task mutation coordinator":       taskMutationObject,
 		"session runtime authority":       authorityObject,
 		"workflow runtime starter":        starterObject,
 		"workflow execution controller":   controllerObject,
@@ -305,6 +253,8 @@ func currentNodeProductionCompositionFindings(index currentNodeTypeIndex) []curr
 	}
 
 	for _, key := range []string{
+		"core/server/workflowrunner.NewStarter",
+		"core/server/workflowexecution.NewCurrentNodeController",
 		"core/server/workflowsvc.New",
 		"core/server/projectview.WithWorkflowExecution",
 	} {
@@ -312,19 +262,6 @@ func currentNodeProductionCompositionFindings(index currentNodeTypeIndex) []curr
 			findings = append(findings, currentNodeStructureFinding{
 				kind:     findingControllerComposition,
 				position: key + " must receive the one production workflow mutation permit",
-			})
-		}
-	}
-	for _, key := range []string{
-		"core/server/workflowrunner.NewStarter",
-		"core/server/workflowexecution.NewCurrentNodeController",
-		"core/server/workflowsvc.New",
-		"core/server/projectview.WithWorkflowExecution",
-	} {
-		if !callReferencesExactly(calls[key][0], taskMutationType, taskMutationObject) {
-			findings = append(findings, currentNodeStructureFinding{
-				kind:     findingControllerComposition,
-				position: key + " must receive the one production Task mutation coordinator",
 			})
 		}
 	}
@@ -533,11 +470,8 @@ func currentNodeControllerFindings(index currentNodeTypeIndex) []currentNodeStru
 	canonicalController := index.named["core/server/workflowexecution.CurrentNodeController"]
 	referenceKey := index.named["core/server/workflow.CurrentNodeReferenceKey"]
 	scopeID := index.named["core/shared/runtimeids.ExecutionScopeID"]
-	runID := index.named["core/server/workflowexecution.currentNodeRunID"]
-	runType := index.named["core/server/workflowexecution.currentNodeRun"]
-	taskMutations := index.named["core/server/workflowexecution.TaskMutationCoordinator"]
-	if controllerInterface == nil || canonicalController == nil || referenceKey == nil || scopeID == nil ||
-		runID == nil || runType == nil || taskMutations == nil {
+	mutationPermit := index.named["core/server/workflowexecution.MutationPermit"]
+	if controllerInterface == nil || canonicalController == nil || referenceKey == nil || scopeID == nil || mutationPermit == nil {
 		return []currentNodeStructureFinding{{kind: findingControllerComposition, position: "canonical controller structure is missing"}}
 	}
 	interfaceType, ok := controllerInterface.Underlying().(*types.Interface)
@@ -570,59 +504,25 @@ func currentNodeControllerFindings(index currentNodeTypeIndex) []currentNodeStru
 		})
 	}
 	controllerStruct, ok := canonicalController.Underlying().(*types.Struct)
-	if !ok || !structDirectlyContains(controllerStruct, types.NewPointer(taskMutations)) {
+	if !ok || !structDirectlyContains(controllerStruct, types.NewPointer(mutationPermit)) {
 		findings = append(findings, currentNodeStructureFinding{
 			kind:     findingControllerComposition,
-			position: namedTypePosition(index, canonicalController) + ": Task mutation coordinator field is missing",
+			position: namedTypePosition(index, canonicalController) + ": shared mutation permit field is missing",
 		})
 	}
 	if ok {
-		var (
-			hasRunRegistry  bool
-			hasCurrentIndex bool
-			hasExactIndex   bool
-		)
 		for fieldIndex := 0; fieldIndex < controllerStruct.NumFields(); fieldIndex++ {
-			field := controllerStruct.Field(fieldIndex)
-			mapType, isMap := types.Unalias(field.Type()).(*types.Map)
+			mapType, isMap := types.Unalias(controllerStruct.Field(fieldIndex).Type()).(*types.Map)
 			if !isMap {
 				continue
 			}
 			key := types.Unalias(mapType.Key())
-			element := types.Unalias(mapType.Elem())
-			if types.Identical(key, runID) &&
-				field.Name() == "runs" &&
-				types.Identical(element, types.NewPointer(runType)) {
-				hasRunRegistry = true
-				continue
-			}
-			if types.Identical(key, referenceKey) {
-				if field.Name() == "currentRuns" && types.Identical(element, runID) {
-					hasCurrentIndex = true
-				}
-				continue
-			}
-			if types.Identical(key, scopeID) {
-				if field.Name() == "exactRuns" && types.Identical(element, runID) {
-					hasExactIndex = true
-				}
+			if types.Identical(key, referenceKey) || types.Identical(key, scopeID) {
 				continue
 			}
 			findings = append(findings, currentNodeStructureFinding{
 				kind:     findingForeignControllerMapIdentity,
-				position: namedTypePosition(index, canonicalController) + "." + field.Name(),
-			})
-		}
-		if !hasRunRegistry || !hasCurrentIndex || !hasExactIndex {
-			findings = append(findings, currentNodeStructureFinding{
-				kind: findingControllerComposition,
-				position: fmt.Sprintf(
-					"%s: generation registry=%t Current-Node index=%t Exact-Scope index=%t",
-					namedTypePosition(index, canonicalController),
-					hasRunRegistry,
-					hasCurrentIndex,
-					hasExactIndex,
-				),
+				position: namedTypePosition(index, canonicalController) + "." + controllerStruct.Field(fieldIndex).Name(),
 			})
 		}
 	}
@@ -693,7 +593,7 @@ func currentNodeWireFindings(index currentNodeTypeIndex) []currentNodeStructureF
 	}
 	sort.Strings(serializedShapes)
 	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(strings.Join(serializedShapes, "\n"))))
-	const expectedWorkflowCurrentNodeWireDigest = "adf4a27f3ae974b79d5f784c5ad4b24605e057173e33f4616482fc4d8a8efa3e"
+	const expectedWorkflowCurrentNodeWireDigest = "707b8d5f4a561f86ac5bdbe3405a9b3edf3902f5fb3469f34af5b4b3ed710042"
 	if digest != expectedWorkflowCurrentNodeWireDigest {
 		return []currentNodeStructureFinding{{
 			kind:     findingSerializedExecutionAuthority,
@@ -1094,7 +994,7 @@ type Controller interface {
 import "core/server/workflowexecution"
 
 func compose() {
-	workflowexecution.NewCurrentNodeController(&workflowexecution.TaskMutationCoordinator{})
+	workflowexecution.NewCurrentNodeController(&workflowexecution.MutationPermit{})
 }
 `,
 		"shared/serverapi/workflow.go": `package serverapi
@@ -1154,21 +1054,17 @@ import (
 	"core/shared/runtimeids"
 )
 
-type TaskMutationCoordinator struct{}
-
-type currentNodeRunID struct{ sequence uint64 }
-type currentNodeRun struct{}
+type MutationPermit struct{}
 
 type CurrentNodeController struct {
-	taskMutations *TaskMutationCoordinator
-	runs map[currentNodeRunID]*currentNodeRun
-	currentRuns map[workflow.CurrentNodeReferenceKey]currentNodeRunID
-	exactRuns map[runtimeids.ExecutionScopeID]currentNodeRunID
+	permit *MutationPermit
+	gates map[workflow.CurrentNodeReferenceKey]struct{}
+	live map[runtimeids.ExecutionScopeID]struct{}
 	` + extraField + `
 }
 
-func NewCurrentNodeController(taskMutations *TaskMutationCoordinator) *CurrentNodeController {
-	return &CurrentNodeController{taskMutations: taskMutations}
+func NewCurrentNodeController(permit *MutationPermit) *CurrentNodeController {
+	return &CurrentNodeController{permit: permit}
 }
 
 func (*CurrentNodeController) CompleteCurrentNode(context.Context) error { return nil }

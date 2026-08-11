@@ -136,7 +136,6 @@ func (a *Authority) WithWorkflowManualMoveSelection(
 func (a *Authority) WithWorkflowInterruptSelection(
 	taskID workflow.TaskID,
 	sessionID *runtimeids.SessionID,
-	currentNode *workflow.CurrentNodeReference,
 	operation func(WorkflowInterruptSelection) error,
 ) error {
 	if a == nil {
@@ -148,17 +147,6 @@ func (a *Authority) WithWorkflowInterruptSelection(
 	if sessionID != nil && sessionID.IsZero() {
 		return errors.New("session id is required")
 	}
-	if currentNode != nil {
-		if err := currentNode.Validate(); err != nil {
-			return fmt.Errorf("workflow interrupt Current Node: %w", err)
-		}
-		if currentNode.TaskID != taskID {
-			return errors.New("workflow interrupt Current Node belongs to a different Task")
-		}
-		if sessionID == nil {
-			return errors.New("workflow interrupt Current Node requires a Session")
-		}
-	}
 	if operation == nil {
 		return errors.New("workflow interrupt selection operation is required")
 	}
@@ -169,9 +157,6 @@ func (a *Authority) WithWorkflowInterruptSelection(
 	a.forEachWorkflowExecutionLocked(func(execution *execution) {
 		ref, workflowScoped := execution.scope.Workflow()
 		if !workflowScoped || ref.CurrentNode.TaskID != taskID {
-			return
-		}
-		if currentNode != nil && !ref.CurrentNode.Equal(*currentNode) {
 			return
 		}
 		if sessionID != nil {

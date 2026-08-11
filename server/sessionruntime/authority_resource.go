@@ -25,6 +25,7 @@ type agentResourceOwnerlessDisposition uint8
 
 var ErrSessionRunActive = errors.New("session has an active run")
 var ErrSessionStartsBlocked = errors.New("session starts are blocked")
+var ErrExecutionPromptPending = errors.New("exact execution has a pending prompt")
 
 const (
 	AgentResourceBuilding AgentResourceState = iota + 1
@@ -43,7 +44,7 @@ type AgentResourceDescriptor struct {
 	State AgentResourceState
 }
 
-type AgentResourceEventFeed func(AgentResourceDescriptor, runtime.Event)
+type AgentResourceEventFeed func(runtimeids.SessionResourceRef, runtime.Event)
 
 type AgentResourceRetainer func() (io.Closer, error)
 
@@ -105,78 +106,8 @@ type RuntimeAttachment struct {
 	ownerID   string
 }
 
-type WorkflowRuntimeAttachmentExpectation struct {
-	SessionID          runtimeids.SessionID
-	ScopeID            runtimeids.ExecutionScopeID
-	CurrentNode        workflow.CurrentNodeReference
-	ResourceGeneration runtimeids.ResourceGeneration
-}
-
 func (a RuntimeAttachment) Resource() runtimeids.SessionResourceRef {
 	return a.resource
-}
-
-func (a *Authority) AttachWorkflowRuntime(
-	ctx context.Context,
-	expected WorkflowRuntimeAttachmentExpectation,
-	ownerID string,
-) (RuntimeAttachment, error) {
-	if a == nil {
-		return RuntimeAttachment{}, errors.New("session runtime authority is required")
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if err := context.Cause(ctx); err != nil {
-		return RuntimeAttachment{}, err
-	}
-	if expected.SessionID.IsZero() || expected.ScopeID.IsZero() {
-		return RuntimeAttachment{}, errors.New("workflow runtime attachment expectation is incomplete")
-	}
-	if err := expected.CurrentNode.Validate(); err != nil {
-		return RuntimeAttachment{}, err
-	}
-	if err := expected.ResourceGeneration.Validate(); err != nil {
-		return RuntimeAttachment{}, err
-	}
-	ownerID = strings.TrimSpace(ownerID)
-	if ownerID == "" {
-		return RuntimeAttachment{}, errors.New("runtime owner id is required")
-	}
-	gate := a.gateFor(expected.SessionID)
-	if err := gate.lock.LockContext(ctx); err != nil {
-		return RuntimeAttachment{}, err
-	}
-	defer gate.lock.Unlock()
-
-	a.mu.Lock()
-	execution := a.byScope[expected.ScopeID]
-	resource := a.resources[expected.SessionID]
-	if execution == nil || resource == nil || execution.resource != resource {
-		a.mu.Unlock()
-		return RuntimeAttachment{}, runtimeUnavailableErr(expected.SessionID.String())
-	}
-	workflowRef, workflowOwned := execution.scope.Workflow()
-	resource.mu.Lock()
-	matches := workflowOwned &&
-		workflowRef.CurrentNode.Equal(expected.CurrentNode) &&
-		execution.scope.ResourceGeneration() == expected.ResourceGeneration &&
-		resource.ref.Generation() == expected.ResourceGeneration &&
-		resource.current == execution &&
-		resource.state == AgentResourceReady &&
-		(execution.phase == executionPhaseQueued || execution.phase == executionPhaseRunning)
-	if !matches {
-		resource.mu.Unlock()
-		a.mu.Unlock()
-		return RuntimeAttachment{}, runtimeUnavailableErr(expected.SessionID.String())
-	}
-	resource.owners[ownerID] = struct{}{}
-	resource.ownerlessDisposition = agentResourceRemainAvailable
-	resource.signalLocked()
-	ref := resource.ref
-	resource.mu.Unlock()
-	a.mu.Unlock()
-	return RuntimeAttachment{authority: a, resource: ref, ownerID: ownerID}, nil
 }
 
 func (a RuntimeAttachment) Release(ctx context.Context, policy RuntimeReleasePolicy) (RuntimeReleaseResult, error) {
@@ -746,16 +677,6 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 	if len(gate.blocks) != 0 {
 		return nil, sessionStartsBlockedError(sessionID)
 	}
-	if request.Workflow == nil {
-		a.mu.Lock()
-		ordinaryStartGuard := a.ordinaryStartGuard
-		a.mu.Unlock()
-		if ordinaryStartGuard != nil {
-			if err := ordinaryStartGuard.GuardOrdinaryAgentStart(ctx, sessionID); err != nil {
-				return nil, err
-			}
-		}
-	}
 	resource, closeResource, err := a.selectResource(ctx, request.Descriptor, request.Runtime, request.Resource)
 	if err != nil {
 		return nil, err
@@ -1024,24 +945,63 @@ func (a *Authority) WithLiveExecutionRuntime(
 	return a.WithRuntime(ctx, resource, callback)
 }
 
-func (a *Authority) WithExactExecutionRuntime(
+// WithInterruptibleAgentTurn prevents Question admission across one exact current-execution mutation.
+func (a *Authority) WithInterruptibleAgentTurn(
 	ctx context.Context,
-	handle ExecutionHandle,
+	sessionID runtimeids.SessionID,
+	withoutExecution func() error,
 	callback func(context.Context, *runtime.Engine) error,
 ) error {
 	if a == nil {
 		return errors.New("session runtime authority is required")
 	}
-	if handle == nil {
+	if sessionID.IsZero() {
+		return errors.New("session id is required")
+	}
+	if callback == nil {
+		return errors.New("interruptible Agent Turn mutation is required")
+	}
+	runWithoutExecution := func(missing error) error {
+		if err := context.Cause(ctx); err != nil {
+			return err
+		}
+		if withoutExecution != nil {
+			return withoutExecution()
+		}
+		return missing
+	}
+	a.mu.Lock()
+	resource := a.resources[sessionID]
+	if resource == nil {
+		defer a.mu.Unlock()
+		return runWithoutExecution(errors.Join(serverapi.ErrRuntimeUnavailable, fmt.Errorf("session %s has no active runtime available", sessionID)))
+	}
+	resource.mu.Lock()
+	execution := resource.current
+	if execution == nil {
+		defer a.mu.Unlock()
+		defer resource.mu.Unlock()
+		return runWithoutExecution(ErrExecutionNoLongerLive)
+	}
+	resource.mu.Unlock()
+	a.mu.Unlock()
+	execution.prompts.mu.RLock()
+	defer execution.prompts.mu.RUnlock()
+	resource.mu.Lock()
+	defer resource.mu.Unlock()
+	if resource.current != execution {
 		return ErrExecutionNoLongerLive
 	}
-	resource, ok := handle.Scope().Resource()
-	if !ok {
-		return errors.New("agent execution scope has no runtime resource")
+	if resource.rejectsNewUseLocked() || resource.engine == nil {
+		return errors.Join(serverapi.ErrRuntimeUnavailable, fmt.Errorf("session %s has no active runtime available", sessionID))
 	}
-	return a.WithExactExecutions([]ExecutionHandle{handle}, func() error {
-		return a.WithRuntime(ctx, resource, callback)
-	})
+	if len(execution.prompts.pending) != 0 {
+		return ErrExecutionPromptPending
+	}
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
+	return callback(ctx, resource.engine)
 }
 
 func (a *Authority) retainResource(ref runtimeids.SessionResourceRef) (*ResourceRetention, error) {

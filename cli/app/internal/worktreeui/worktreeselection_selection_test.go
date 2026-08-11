@@ -61,6 +61,7 @@ func TestSelectionIdentityRejectsInvalidPresentKentID(t *testing.T) {
 }
 
 func TestStableMutationSelectorUsesExternalCanonicalRoot(t *testing.T) {
+	fallbackIdentity := "external"
 	item, err := ProjectItem(serverapi.WorktreeListEntry{
 		Topology: serverapi.WorktreeTopologyEntry{
 			Variant: serverapi.WorktreeTopologyVariantExternal,
@@ -73,7 +74,10 @@ func TestStableMutationSelectorUsesExternalCanonicalRoot(t *testing.T) {
 				},
 			},
 		},
-		Projection: serverapi.WorktreeListProjection{Selector: "external"},
+		Projection: serverapi.WorktreeListProjection{
+			Selector:         "external",
+			FallbackIdentity: &fallbackIdentity,
+		},
 	})
 	if err != nil {
 		t.Fatalf("ProjectItem: %v", err)

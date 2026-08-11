@@ -188,7 +188,7 @@ func (c uiAskController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					ringBellCmd(),
 				)
 			}
-			resp := clientui.PromptAnswer{Answer: commentary, FreeformAnswer: commentary}
+			resp := clientui.PromptAnswer{FreeformAnswer: commentary}
 			if optionNumber, ok := selectedAskOptionNumber(req, m.ask.cursor); ok {
 				resp.SelectedOptionNumber = textutil.Value(optionNumber)
 			}
@@ -236,7 +236,7 @@ func (c uiAskController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.ask.freeform = true
 				return m, nil
 			}
-			_, hasNext, answerCmd := c.answer(clientui.PromptAnswer{Answer: commentary, FreeformAnswer: commentary}, nil)
+			_, hasNext, answerCmd := c.answer(clientui.PromptAnswer{FreeformAnswer: commentary}, nil)
 			if hasNext {
 				m.activity = uiActivityQuestion
 			} else {
@@ -408,7 +408,7 @@ func (c uiAskController) answer(resp clientui.PromptAnswer, err error) (bool, bo
 		resp.PromptID = answerPromptID
 	}
 	if m.promptAnswers == nil || m.ask.current.prompt.SessionID.IsZero() || currentPromptID == "" {
-		return true, c.resolveAnsweredPromptOptimistically(), nil
+		return true, c.finishDeliveredPrompt(), nil
 	}
 	active, cmd, deliveryErr := m.promptAnswers.delivery(m.ask.current.prompt, resp, err)
 	if deliveryErr != nil {
@@ -418,7 +418,7 @@ func (c uiAskController) answer(resp clientui.PromptAnswer, err error) (bool, bo
 	return true, false, cmd
 }
 
-func (c uiAskController) resolveAnsweredPromptOptimistically() bool {
+func (c uiAskController) finishDeliveredPrompt() bool {
 	m := c.model
 	c.cancelActiveDelivery()
 	if len(m.ask.queue) == 0 {
@@ -479,10 +479,19 @@ func (c uiAskController) cancelActiveDelivery() {
 
 func (c uiAskController) applyDeliveryResult(result promptAnswerDeliveryResultMsg) tea.Cmd {
 	m := c.model
-	if m == nil || !m.ask.activeDelivery.matches(result.key, result.requestID) {
+	if m == nil || !m.ask.activeDelivery.matches(result.key, result.generation) {
 		return nil
 	}
 	if result.err == nil {
+		c.cancelActiveDelivery()
+		hasNext := c.finishDeliveredPrompt()
+		if hasNext {
+			m.activity = uiActivityQuestion
+		} else if m.isBusy() {
+			m.activity = uiActivityRunning
+		} else {
+			m.activity = uiActivityIdle
+		}
 		return nil
 	}
 	c.cancelActiveDelivery()

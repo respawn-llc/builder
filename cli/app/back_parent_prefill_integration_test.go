@@ -308,16 +308,6 @@ func runBackParentPrefillScenario(t *testing.T, server backParentPrefillScenario
 					ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
 					SessionID:       parent.Meta().SessionID,
 					Input:           "conflicting parent draft",
-					RecoveryBuffers: []serverapi.SessionDraftRecoveryBuffer{
-						{
-							Kind: serverapi.SessionDraftRecoveryBufferPendingInjectedInput,
-							Text: "conflicting pending input",
-						},
-						{
-							Kind: serverapi.SessionDraftRecoveryBufferQueuedInput,
-							Text: "conflicting queued input",
-						},
-					},
 				},
 			)
 			if err != nil {
@@ -432,8 +422,8 @@ func runBackParentPrefillScenario(t *testing.T, server backParentPrefillScenario
 			if parentModel.startupSubmit != "" || parentModel.activeSubmit.text != "" || parentModel.isBusy() {
 				t.Fatalf("parent prefill submitted on startup: startup=%q active=%+v busy=%t", parentModel.startupSubmit, parentModel.activeSubmit, parentModel.isBusy())
 			}
-			if len(parentModel.recoveredDraftBuffers) != 0 || len(parentModel.pendingInjected) != 0 || len(parentModel.queued) != 0 {
-				t.Fatalf("parent draft recovery leaked: recovered=%+v pending=%+v queued=%+v", parentModel.recoveredDraftBuffers, parentModel.pendingInjected, parentModel.queued)
+			if len(parentModel.injectedQueue) != 0 || len(parentModel.queued) != 0 {
+				t.Fatalf("parent input queues leaked: injected=%+v queued=%+v", parentModel.injectedQueue, parentModel.queued)
 			}
 
 			beforeEdit, err := parentRuntimePlan.Wiring.runtimeClient.RefreshMainView()

@@ -15,14 +15,6 @@ func (s *Service) SetDefaultWorkspace(ctx context.Context, req serverapi.Project
 	if s == nil {
 		return serverapi.ProjectDefaultWorkspaceSetResponse{}, errors.New("project service is required")
 	}
-	if err := s.requireProjectID(req.ProjectID); err != nil {
-		return serverapi.ProjectDefaultWorkspaceSetResponse{}, err
-	}
-	lease, err := s.acquireProjectMutationLease(ctx, req.ProjectID)
-	if err != nil {
-		return serverapi.ProjectDefaultWorkspaceSetResponse{}, err
-	}
-	defer lease.Release()
 	binding, err := s.metadata.ResolveProjectWorkspaceSelector(ctx, req.ProjectID, req.ProjectWorkspaceSelector)
 	if err != nil {
 		return serverapi.ProjectDefaultWorkspaceSetResponse{}, err
@@ -41,14 +33,6 @@ func (s *Service) UnlinkWorkspaceFromProject(ctx context.Context, req serverapi.
 	if s == nil {
 		return serverapi.ProjectWorkspaceUnlinkResponse{}, errors.New("project service is required")
 	}
-	if err := s.requireProjectID(req.ProjectID); err != nil {
-		return serverapi.ProjectWorkspaceUnlinkResponse{}, err
-	}
-	lease, err := s.acquireProjectMutationLease(ctx, req.ProjectID)
-	if err != nil {
-		return serverapi.ProjectWorkspaceUnlinkResponse{}, err
-	}
-	defer lease.Release()
 	binding, err := s.metadata.ResolveProjectWorkspaceSelector(ctx, req.ProjectID, req.ProjectWorkspaceSelector)
 	if err != nil {
 		return serverapi.ProjectWorkspaceUnlinkResponse{}, err

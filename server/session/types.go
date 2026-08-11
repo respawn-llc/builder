@@ -197,7 +197,6 @@ type Meta struct {
 	Name                            string                           `json:"name,omitempty"`
 	FirstPromptPreview              string                           `json:"first_prompt_preview,omitempty"`
 	InputDraft                      string                           `json:"input_draft,omitempty"`
-	InputDraftRecoveryBuffers       []InputDraftRecoveryBuffer       `json:"input_draft_recovery_buffers,omitempty"`
 	PreviousSessionID               *runtimeids.SessionID            `json:"previous_session_id,omitempty"`
 	ParentAgentSessionID            *runtimeids.SessionID            `json:"parent_agent_session_id,omitempty"`
 	WorkspaceRoot                   string                           `json:"workspace_root"`
@@ -226,9 +225,4 @@ type PendingModelRecovery struct {
 	Reason                 string    `json:"reason"`
 	CreatedAt              time.Time `json:"created_at"`
 	OutstandingToolCallIDs []string  `json:"outstanding_tool_call_ids,omitempty"`
-}
-
-type InputDraftRecoveryBuffer struct {
-	Kind string `json:"kind"`
-	Text string `json:"text,omitempty"`
 }

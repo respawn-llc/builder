@@ -4,11 +4,7 @@ import { useTranslation } from "react-i18next";
 
 import type { TaskCurrentNode, TaskDetail } from "@/api";
 import { errorMessage } from "@/api";
-import {
-  useAppServices,
-  useTextFieldSubmitShortcut,
-  useTextFieldSubmitShortcutPolicy,
-} from "@/app-facade";
+import { useAppServices, useTextFieldSubmitShortcut, useTextFieldSubmitShortcutPolicy } from "@/app-facade";
 import { useOpenExternalLink } from "@/app-facade";
 import { writeClipboardText } from "@/shared/native-clipboard";
 import { taskStatusTone } from "@/shared/task-status";
@@ -28,6 +24,7 @@ import { TaskDetailLabels } from "./TaskDetailLabels";
 import { TaskDeleteButton } from "./TaskDeleteButton";
 import { TaskResumeButton, TaskStartButton } from "./TaskResumeButton";
 import { TaskPropertyLine } from "./TaskPropertyLine";
+import { taskDetailIslandRadius } from "./taskDetailIslandStyles";
 import { taskExecutionRoot } from "./taskExecutionTarget";
 import type { useTaskMutations } from "./useTaskDetailData";
 
@@ -78,7 +75,7 @@ export function TaskHeaderIsland({
       <input
         aria-label={t("task.name")}
         className={cx(
-          fieldIslandInputClassName(1),
+          fieldIslandInputClassName(1, taskDetailIslandRadius),
           "min-w-0 flex-1 px-[var(--space-3)] py-[var(--space-2)] text-[1.125rem] font-bold",
         )}
         disabled={disabled}
@@ -188,6 +185,7 @@ export function DescriptionIsland({
         }}
         placeholder={t("task.bodyPlaceholder")}
         submitIntent={submitIntent}
+        surfaceRadius={taskDetailIslandRadius}
         taskListInteraction={{
           checkedLabel: t("markdown.markIncomplete"),
           uncheckedLabel: t("markdown.markComplete"),
@@ -214,7 +212,7 @@ export function PropertiesIsland({
       aria-label={t("task.properties")}
       className="grid min-w-0 content-start gap-[var(--space-2)] p-[var(--space-4)]"
       level={1}
-      radius="l"
+      radius={taskDetailIslandRadius}
       unpadded
     >
       <dl className="m-0 grid min-w-0 gap-[var(--space-2)]">

@@ -7,6 +7,7 @@ import { formatRelativeTime, useStatusController, useTextFieldSubmitShortcut } f
 import { Button, homeListCardMaxWidthClassName, IslandSurface, StaticMarkdown } from "@/ui";
 import { cx, fieldIslandInputClassName } from "@/ui";
 import type { useTaskMutations } from "./useTaskDetailData";
+import { taskDetailIslandRadius, taskDetailIslandRadiusClassName } from "./taskDetailIslandStyles";
 
 export function CommentComposer({
   body,
@@ -66,7 +67,7 @@ export function CommentComposer({
         <textarea
           aria-label={editing === null ? t("task.addComment") : t("task.editComment")}
           className={cx(
-            fieldIslandInputClassName(1),
+            fieldIslandInputClassName(1, taskDetailIslandRadius),
             "relative z-0 col-start-1 row-start-1 block min-h-[112px] resize-none p-[var(--space-2)] pb-12",
           )}
           disabled={interactionDisabled}
@@ -143,7 +144,7 @@ export function CommentRow({
   return (
     <IslandSurface
       as="article"
-      className="grid gap-[var(--space-2)] rounded-[var(--radius-l)] p-[var(--space-2)]"
+      className={cx("grid gap-[var(--space-2)] p-[var(--space-2)]", taskDetailIslandRadiusClassName)}
       level={1}
     >
       <header className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-[var(--space-2)]">
@@ -213,7 +214,8 @@ export function ActivityRow({ item }: Readonly<{ item: ActivityItem }>) {
     <IslandSurface
       as="article"
       className={cx(
-        "grid w-full gap-[var(--space-1)] rounded-[var(--radius-l)] p-[var(--space-2)]",
+        "grid w-full gap-[var(--space-1)] p-[var(--space-2)]",
+        taskDetailIslandRadiusClassName,
         homeListCardMaxWidthClassName,
       )}
       level={1}

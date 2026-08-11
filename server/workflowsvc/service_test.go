@@ -3,10 +3,12 @@ package workflowsvc
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -25,6 +27,8 @@ import (
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/textutil"
+	"core/shared/worktreecontract"
 )
 
 func nextWorkflowProjectEvent(t *testing.T, sub serverapi.WorkflowProjectSubscription) serverapi.WorkflowProjectEvent {
@@ -113,6 +117,16 @@ func TestServiceCreatesValidatesLinksAndStartsDefaultWorkflowTask(t *testing.T) 
 	if len(started.CurrentNodes) != 1 || strings.TrimSpace(started.CurrentNodes[0].NodeID) == "" {
 		t.Fatalf("start response = %+v, want one Current Node", started)
 	}
+	_, err = service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
+		TaskID:           task.Task.ID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	})
+	var conflict *serverapi.WorkflowTaskStartConflictError
+	if !errors.As(err, &conflict) ||
+		conflict.TaskID != task.Task.ID ||
+		conflict.Reason != serverapi.WorkflowTaskStartConflictAlreadyStarted {
+		t.Fatalf("StartWorkflowTask error = %T %+v, want public already-started conflict", err, err)
+	}
 }
 
 func TestServiceValidateWorkflowScriptPathReportsMissingPath(t *testing.T) {
@@ -174,7 +188,7 @@ func TestServiceCommentMutationsUpdateActivityAndPublishInvalidations(t *testing
 	if err := service.ReplaceWorkflowTaskComment(ctx, serverapi.WorkflowTaskCommentReplaceRequest{CommentID: added.Comment.ID, Body: "updated"}); err != nil {
 		t.Fatalf("ReplaceWorkflowTaskComment: %v", err)
 	}
-	activity, err := service.ListWorkflowTaskActivity(ctx, serverapi.WorkflowTaskActivityListRequest{TaskID: taskID})
+	activity, err := service.ListWorkflowTaskActivity(ctx, serverapi.WorkflowTaskOffsetPageRequest{TaskID: taskID})
 	if err != nil {
 		t.Fatalf("ListWorkflowTaskActivity: %v", err)
 	}
@@ -184,7 +198,7 @@ func TestServiceCommentMutationsUpdateActivityAndPublishInvalidations(t *testing
 	if err := service.DeleteWorkflowTaskComment(ctx, serverapi.WorkflowTaskCommentDeleteRequest{CommentID: added.Comment.ID}); err != nil {
 		t.Fatalf("DeleteWorkflowTaskComment: %v", err)
 	}
-	activity, err = service.ListWorkflowTaskActivity(ctx, serverapi.WorkflowTaskActivityListRequest{TaskID: taskID})
+	activity, err = service.ListWorkflowTaskActivity(ctx, serverapi.WorkflowTaskOffsetPageRequest{TaskID: taskID})
 	if err != nil {
 		t.Fatalf("ListWorkflowTaskActivity after delete: %v", err)
 	}
@@ -209,7 +223,7 @@ func TestServiceTaskCommentListPaginatesOffsetWindows(t *testing.T) {
 	}
 	offset := 0
 	limit := 2
-	first, err := service.ListWorkflowTaskComments(ctx, serverapi.WorkflowTaskCommentListRequest{
+	first, err := service.ListWorkflowTaskComments(ctx, serverapi.WorkflowTaskOffsetPageRequest{
 		TaskID: taskID,
 		Offset: &offset,
 		Limit:  &limit,
@@ -217,10 +231,10 @@ func TestServiceTaskCommentListPaginatesOffsetWindows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListWorkflowTaskComments first page: %v", err)
 	}
-	if len(first.Comments) != 2 || first.NextOffset == nil || *first.NextOffset != 2 {
+	if len(first.Items) != 2 || first.NextOffset == nil || *first.NextOffset != 2 || first.TotalCount != 3 {
 		t.Fatalf("first comment page = %+v", first)
 	}
-	second, err := service.ListWorkflowTaskComments(ctx, serverapi.WorkflowTaskCommentListRequest{
+	second, err := service.ListWorkflowTaskComments(ctx, serverapi.WorkflowTaskOffsetPageRequest{
 		TaskID: taskID,
 		Offset: first.NextOffset,
 		Limit:  &limit,
@@ -228,11 +242,11 @@ func TestServiceTaskCommentListPaginatesOffsetWindows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListWorkflowTaskComments continued page: %v", err)
 	}
-	if len(second.Comments) != 1 || second.NextOffset != nil {
+	if len(second.Items) != 1 || second.NextOffset != nil || second.TotalCount != 3 {
 		t.Fatalf("continued comment page = %+v", second)
 	}
 	beyondEnd := 3
-	empty, err := service.ListWorkflowTaskComments(ctx, serverapi.WorkflowTaskCommentListRequest{
+	empty, err := service.ListWorkflowTaskComments(ctx, serverapi.WorkflowTaskOffsetPageRequest{
 		TaskID: taskID,
 		Offset: &beyondEnd,
 		Limit:  &limit,
@@ -240,7 +254,7 @@ func TestServiceTaskCommentListPaginatesOffsetWindows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListWorkflowTaskComments beyond end: %v", err)
 	}
-	if len(empty.Comments) != 0 || empty.NextOffset != nil {
+	if len(empty.Items) != 0 || empty.NextOffset != nil || empty.TotalCount != 3 {
 		t.Fatalf("beyond-end comment page = %+v", empty)
 	}
 	negativeOffset := -1
@@ -257,7 +271,7 @@ func TestServiceTaskCommentListPaginatesOffsetWindows(t *testing.T) {
 		{name: "limit above maximum", offset: &offset, limit: &aboveLimit, field: "limit"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := service.ListWorkflowTaskComments(ctx, serverapi.WorkflowTaskCommentListRequest{
+			_, err := service.ListWorkflowTaskComments(ctx, serverapi.WorkflowTaskOffsetPageRequest{
 				TaskID: taskID,
 				Offset: tt.offset,
 				Limit:  tt.limit,
@@ -321,9 +335,8 @@ func TestServiceManualMoveExecutableSelectsTargetThenStartsCurrentNode(t *testin
 	service.currentNodeExecution = execution
 
 	selectionRequired, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
-		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		TaskID:           task.Task.ID,
-		TargetNodeID:     targetNodeID,
+		TaskID:       task.Task.ID,
+		TargetNodeID: targetNodeID,
 	})
 	if err != nil {
 		t.Fatalf("MoveWorkflowTask selection: %v", err)
@@ -339,9 +352,8 @@ func TestServiceManualMoveExecutableSelectsTargetThenStartsCurrentNode(t *testin
 	}
 
 	applied, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
-		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		TaskID:           task.Task.ID,
-		TargetNodeID:     targetNodeID,
+		TaskID:       task.Task.ID,
+		TargetNodeID: targetNodeID,
 		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
 			Mode: serverapi.WorkflowExecutionTargetModeNone,
 		},
@@ -564,10 +576,9 @@ func TestServiceManualMoveApprovalAppliesImmediately(t *testing.T) {
 	execution.started = nil
 
 	moved, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
-		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		TaskID:           task.Task.ID,
-		TargetNodeID:     targetNodeID,
-		Values:           map[string]map[string]string{"plan": {"prior_summary": "manual plan"}},
+		TaskID:       task.Task.ID,
+		TargetNodeID: targetNodeID,
+		Values:       map[string]map[string]string{"plan": {"prior_summary": "manual plan"}},
 	})
 	if err != nil {
 		t.Fatalf("MoveWorkflowTask: %v", err)
@@ -607,9 +618,8 @@ func TestServiceManualMoveRevalidatesTaskQuiescenceBeforeDurableApply(t *testing
 	service.currentNodeExecution = execution
 
 	_, err = service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
-		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		TaskID:           task.Task.ID,
-		TargetNodeID:     targetNodeID,
+		TaskID:       task.Task.ID,
+		TargetNodeID: targetNodeID,
 		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
 			Mode: serverapi.WorkflowExecutionTargetModeNone,
 		},
@@ -629,7 +639,7 @@ func TestServiceManualMoveRevalidatesTaskQuiescenceBeforeDurableApply(t *testing
 		t.Fatalf("GetTaskExecutionTargetContext: %v", err)
 	}
 	if targetContext.Task.ExecutionTarget != nil {
-		t.Fatalf("rejected move locked execution target = %+v", targetContext.Task.ExecutionTarget)
+		t.Fatalf("rejected move execution target = %+v, want target unlocked", targetContext.Task.ExecutionTarget)
 	}
 	if len(execution.quiescentTaskIDs) != 1 {
 		t.Fatalf("quiescence checks = %v, want durable revalidation only", execution.quiescentTaskIDs)
@@ -807,138 +817,19 @@ func TestServiceGraphSaveAndWorkflowDeleteWaitForConcurrentWorkflowMutation(t *t
 	})
 }
 
-func TestServiceTaskDeleteWaitsForPublicStartAndObservesStartedWork(t *testing.T) {
+func TestServiceWorkflowTaskDeleteWaitsForConcurrentWorkflowMutation(t *testing.T) {
 	ctx, service, _, _, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
-	entered := make(chan struct{})
-	release := make(chan struct{})
-	execution := newManualMoveExecutionStub(service)
-	execution.startEntered = entered
-	execution.startRelease = release
-	execution.quiescentErrors = []error{nil, workflowexecution.ErrTaskExecutionNotQuiescent}
-	service.currentNodeExecution = execution
 
-	startDone := make(chan error, 1)
-	go func() {
-		_, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
-			TaskID: taskID, SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-			ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{Mode: serverapi.WorkflowExecutionTargetModeNone},
-		})
-		startDone <- err
-	}()
-	<-entered
-	deleteDone := make(chan error, 1)
-	go func() {
-		deleteDone <- service.DeleteWorkflowTask(ctx, serverapi.WorkflowTaskDeleteRequest{TaskID: taskID})
-	}()
-	select {
-	case err := <-deleteDone:
-		t.Fatalf("Task Delete crossed public Start: %v", err)
-	case <-time.After(25 * time.Millisecond):
-	}
-	close(release)
-	if err := <-startDone; err != nil {
-		t.Fatalf("StartWorkflowTask: %v", err)
-	}
-	if err := <-deleteDone; !errors.Is(err, workflowexecution.ErrTaskExecutionNotQuiescent) {
-		t.Fatalf("Task Delete after Start = %v, want non-quiescent", err)
-	}
-}
+	waitForWorkflowMutationPermit(t, service, func() error {
+		return service.DeleteWorkflowTask(ctx, serverapi.WorkflowTaskDeleteRequest{TaskID: taskID})
+	}, func() {
+		if _, err := service.GetWorkflowTask(ctx, serverapi.WorkflowTaskGetRequest{TaskID: taskID}); err != nil {
+			t.Fatalf("GetWorkflowTask while delete waits: %v", err)
+		}
+	})
 
-func TestServiceTaskDeleteWaitsForPublicResumeAndObservesResumedWork(t *testing.T) {
-	ctx, service, _, _, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
-	started, err := service.store.StartTask(ctx, workflow.TaskID(taskID))
-	if err != nil {
-		t.Fatalf("StartTask fixture: %v", err)
-	}
-	reference := started.Mutation.Created[0].Reference
-	if err := service.store.InterruptCurrentNode(
-		ctx,
-		reference,
-		"test_interruption",
-		workflow.NewCurrentNodeInterruptionDetail("test_interruption", nil),
-	); err != nil {
-		t.Fatalf("InterruptCurrentNode fixture: %v", err)
-	}
-	entered := make(chan struct{})
-	release := make(chan struct{})
-	execution := newManualMoveExecutionStub(service)
-	execution.resumeEntered = entered
-	execution.resumeRelease = release
-	execution.quiescentErr = workflowexecution.ErrTaskExecutionNotQuiescent
-	service.currentNodeExecution = execution
-
-	resumeDone := make(chan error, 1)
-	go func() {
-		_, err := service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
-			TaskID: taskID, SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-			ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
-				Mode: serverapi.WorkflowExecutionTargetModeNone,
-			},
-		})
-		resumeDone <- err
-	}()
-	<-entered
-	deleteDone := make(chan error, 1)
-	go func() {
-		deleteDone <- service.DeleteWorkflowTask(ctx, serverapi.WorkflowTaskDeleteRequest{TaskID: taskID})
-	}()
-	select {
-	case err := <-deleteDone:
-		t.Fatalf("Task Delete crossed public Resume: %v", err)
-	case <-time.After(25 * time.Millisecond):
-	}
-	close(release)
-	if err := <-resumeDone; err != nil {
-		t.Fatalf("ResumeWorkflowTask: %v", err)
-	}
-	if err := <-deleteDone; !errors.Is(err, workflowexecution.ErrTaskExecutionNotQuiescent) {
-		t.Fatalf("Task Delete after Resume = %v, want non-quiescent", err)
-	}
-}
-
-func TestServiceWorkflowDeleteFreezeWaitsForPublicStart(t *testing.T) {
-	ctx, service, _, workflowID, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
-	preview, err := service.PreviewWorkflowDelete(ctx, serverapi.WorkflowDeletePreviewRequest{WorkflowID: workflowID})
-	if err != nil {
-		t.Fatalf("PreviewWorkflowDelete: %v", err)
-	}
-	entered := make(chan struct{})
-	release := make(chan struct{})
-	execution := newManualMoveExecutionStub(service)
-	execution.startEntered = entered
-	execution.startRelease = release
-	execution.quiescentErrors = []error{nil, workflowexecution.ErrTaskExecutionNotQuiescent}
-	service.currentNodeExecution = execution
-
-	startDone := make(chan error, 1)
-	go func() {
-		_, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
-			TaskID: taskID, SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-			ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{Mode: serverapi.WorkflowExecutionTargetModeNone},
-		})
-		startDone <- err
-	}()
-	<-entered
-	deleteDone := make(chan error, 1)
-	go func() {
-		_, err := service.DeleteWorkflow(ctx, serverapi.WorkflowDeleteRequest{
-			WorkflowID: workflowID, Confirmed: true, ExpectedVersion: preview.Impact.Version,
-			ExpectedProjectCount: preview.Impact.ProjectCount, ExpectedLinkCount: preview.Impact.LinkCount,
-			ExpectedTaskCount: preview.Impact.TaskCount,
-		})
-		deleteDone <- err
-	}()
-	select {
-	case err := <-deleteDone:
-		t.Fatalf("Workflow Delete crossed public Start: %v", err)
-	case <-time.After(25 * time.Millisecond):
-	}
-	close(release)
-	if err := <-startDone; err != nil {
-		t.Fatalf("StartWorkflowTask: %v", err)
-	}
-	if err := <-deleteDone; !errors.Is(err, workflowexecution.ErrTaskExecutionNotQuiescent) {
-		t.Fatalf("Workflow Delete after Start = %v, want non-quiescent", err)
+	if _, err := service.GetWorkflowTask(ctx, serverapi.WorkflowTaskGetRequest{TaskID: taskID}); err == nil {
+		t.Fatal("deleted workflow task remains readable after permit release")
 	}
 }
 
@@ -967,12 +858,13 @@ func TestServiceTaskStartAppliesExplicitNoneSelectionAndLocksTarget(t *testing.T
 	}
 	if targetContext.Task.ExecutionTarget == nil ||
 		targetContext.Task.ExecutionTarget.Mode != workflow.ExecutionTargetModeNone ||
-		targetContext.Task.ManagedWorktreeID != "" {
-		t.Fatalf("locked target = %+v, managed worktree = %q, want none", targetContext.Task.ExecutionTarget, targetContext.Task.ManagedWorktreeID)
+		targetContext.Task.ManagedWorktreeID != nil ||
+		targetContext.Task.PendingInitialManagedBranchName != nil {
+		t.Fatalf("locked target = %+v, managed worktree = %v, want none", targetContext.Task.ExecutionTarget, targetContext.Task.ManagedWorktreeID)
 	}
 }
 
-func TestServiceTaskStartMaterializesConfiguredHeadBeforeLockingTarget(t *testing.T) {
+func TestServiceAffectedStartNodeWithProvisionalWorktreeStartsAndLocksTarget(t *testing.T) {
 	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
 	setWorkflowServiceExecutionTargetPolicy(t, ctx, service, workflowID, serverapi.WorkflowExecutionTargetConfiguration{
@@ -985,6 +877,7 @@ func TestServiceTaskStartMaterializesConfiguredHeadBeforeLockingTarget(t *testin
 	requestedRef := "HEAD"
 	resolvedRef := "refs/heads/main"
 	commitOID := strings.Repeat("a", 40)
+	bindWorkflowServiceManagedWorktree(t, ctx, metadataStore, binding.WorkspaceID, workflow.TaskID(task.Task.ID), worktreeID, worktreeRoot, true)
 	infrastructure := &recordingExecutionTargetInfrastructure{
 		resolution: workflowstore.ExecutionTargetSnapshot{
 			Mode:         workflow.ExecutionTargetModeHead,
@@ -994,47 +887,22 @@ func TestServiceTaskStartMaterializesConfiguredHeadBeforeLockingTarget(t *testin
 			Provenance:   workflowstore.ExecutionTargetProvenanceResolved,
 		},
 		materialize: func(taskID workflow.TaskID) (ExecutionTargetMaterialization, error) {
-			if err := metadataStore.UpsertWorktreeRecord(ctx, metadata.WorktreeRecord{
-				ID:            worktreeID,
-				WorkspaceID:   binding.WorkspaceID,
-				CanonicalRoot: worktreeRoot,
-				Managed:       true,
-				CreatedBranch: true,
-			}); err != nil {
-				t.Fatalf("UpsertWorktreeRecord: %v", err)
-			}
-			updated, err := metadataStore.Queries().UpdateTaskManagedWorktree(ctx, sqlitegen.UpdateTaskManagedWorktreeParams{
-				ID:                string(taskID),
-				ManagedWorktreeID: sql.NullString{String: worktreeID, Valid: true},
-				UpdatedAtUnixMs:   time.Now().UTC().UnixMilli(),
-			})
-			if err != nil {
-				t.Fatalf("UpdateTaskManagedWorktree: %v", err)
-			}
-			if updated != 1 {
-				t.Fatalf("UpdateTaskManagedWorktree updated %d rows, want 1", updated)
-			}
 			root := workflowstore.ManagedExecutionRoot{WorktreeID: worktreeID, Root: worktreeRoot}
 			return ExecutionTargetMaterialization{RetainedRoot: &root}, nil
 		},
 	}
 	service.executionTargets = infrastructure
-	setupID := serverapi.NewWorktreeSetupOperationID()
 
+	detail, err := service.GetWorkflowTask(ctx, serverapi.WorkflowTaskGetRequest{TaskID: task.Task.ID})
+	if err != nil || detail.Task.ExecutionTarget != nil || detail.Task.WorktreePath != nil || !detail.Task.Actions.CanStart {
+		t.Fatalf("provisional Task detail = %+v, %v; want hidden target facts and Start action", detail.Task, err)
+	}
 	response, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
-		SetupOperationID: setupID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
 		TaskID:           task.Task.ID,
 	})
-	if err != nil {
-		t.Fatalf("StartWorkflowTask: %v", err)
-	}
-	if response.Outcome != serverapi.WorkflowTaskActionOutcomeApplied || response.Applied == nil {
-		t.Fatalf("start response = %+v, want applied", response)
-	}
-	if infrastructure.resolveSelection.Mode != workflow.ExecutionTargetModeHead ||
-		infrastructure.materializeTaskID != workflow.TaskID(task.Task.ID) ||
-		infrastructure.setupOperationID != setupID {
-		t.Fatalf("execution target infrastructure = %+v, want resolved and materialized HEAD for task", infrastructure)
+	if err != nil || response.Applied == nil {
+		t.Fatalf("StartWorkflowTask = %+v, %v; want applied", response, err)
 	}
 	targetContext, err := service.store.GetTaskExecutionTargetContext(ctx, workflow.TaskID(task.Task.ID))
 	if err != nil {
@@ -1044,26 +912,30 @@ func TestServiceTaskStartMaterializesConfiguredHeadBeforeLockingTarget(t *testin
 		targetContext.Task.ExecutionTarget.Mode != workflow.ExecutionTargetModeHead ||
 		targetContext.Task.ExecutionTarget.CommitOID == nil ||
 		*targetContext.Task.ExecutionTarget.CommitOID != commitOID ||
-		targetContext.Task.ManagedWorktreeID != worktreeID {
-		t.Fatalf("locked target = %+v, managed worktree = %q", targetContext.Task.ExecutionTarget, targetContext.Task.ManagedWorktreeID)
+		targetContext.Task.ManagedWorktreeID == nil ||
+		*targetContext.Task.ManagedWorktreeID != worktreeID {
+		t.Fatalf("locked target = %+v, managed worktree = %v", targetContext.Task.ExecutionTarget, targetContext.Task.ManagedWorktreeID)
 	}
 }
 
-func TestServiceTaskStartLocksRetainedTargetWhenSetupFails(t *testing.T) {
+func TestServiceTaskResumeDoesNotRepeatCompletedSetupAfterTargetLockFailure(t *testing.T) {
 	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
 	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
 	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
 	preparations := make(chan workflowexecution.TaskStartPreparation, 1)
+	finalizers := make(chan workflowexecution.TaskPreparationFinalizer, 1)
 	service.currentNodeExecution = &currentNodeCompletionExecutionStub{
-		store: service.store, startPreparations: preparations,
+		store:             service.store,
+		startPreparations: preparations,
+		startFinalizers:   finalizers,
 	}
 	requestedRef := "HEAD"
 	commitOID := strings.Repeat("b", 40)
 	worktreeID := "worktree-" + task.Task.ID
 	worktreeRoot := filepath.Join(t.TempDir(), "task-worktree")
-	setupErr := errors.New("setup failed")
-	service.executionTargets = &recordingExecutionTargetInfrastructure{
+	firstMaterialization := true
+	infrastructure := &recordingExecutionTargetInfrastructure{
 		resolution: workflowstore.ExecutionTargetSnapshot{
 			Mode:         workflow.ExecutionTargetModeHead,
 			RequestedRef: &requestedRef,
@@ -1071,20 +943,27 @@ func TestServiceTaskStartLocksRetainedTargetWhenSetupFails(t *testing.T) {
 			Provenance:   workflowstore.ExecutionTargetProvenanceResolved,
 		},
 		materialize: func(taskID workflow.TaskID) (ExecutionTargetMaterialization, error) {
-			if err := metadataStore.UpsertWorktreeRecord(ctx, metadata.WorktreeRecord{
-				ID: worktreeID, WorkspaceID: binding.WorkspaceID, CanonicalRoot: worktreeRoot, Managed: true,
-			}); err != nil {
-				return ExecutionTargetMaterialization{}, err
+			if firstMaterialization {
+				bindWorkflowServiceManagedWorktree(t, ctx, metadataStore, binding.WorkspaceID, taskID, worktreeID, worktreeRoot, false)
+				firstMaterialization = false
 			}
-			_, err := metadataStore.Queries().UpdateTaskManagedWorktree(ctx, sqlitegen.UpdateTaskManagedWorktreeParams{
-				ID: string(taskID), ManagedWorktreeID: sql.NullString{String: worktreeID, Valid: true},
-				UpdatedAtUnixMs: time.Now().UTC().UnixMilli(),
-			})
 			root := workflowstore.ManagedExecutionRoot{WorktreeID: worktreeID, Root: worktreeRoot}
-			return ExecutionTargetMaterialization{RetainedRoot: &root}, err
+			return ExecutionTargetMaterialization{
+				RetainedRoot: &root,
+				SetupResult:  &worktree.WorktreeSetupResult{Completed: &serverapi.WorktreeSetupCompleted{}},
+				RetainedWorktree: &serverapi.WorktreeTopologyEntry{
+					Variant: serverapi.WorktreeTopologyVariantRegistered,
+					Registered: &serverapi.WorktreeRegisteredFacts{
+						Git: serverapi.WorktreeGitFacts{CanonicalRoot: worktreeRoot, HeadObject: commitOID},
+						Kent: serverapi.WorktreeKentFacts{
+							WorktreeID: worktreeID, CanonicalRoot: worktreeRoot, DisplayName: task.Task.ShortID,
+						},
+					},
+				},
+			}, nil
 		},
-		materializeErr: setupErr,
 	}
+	service.executionTargets = infrastructure
 	response, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
 		TaskID:           task.Task.ID,
@@ -1095,17 +974,120 @@ func TestServiceTaskStartLocksRetainedTargetWhenSetupFails(t *testing.T) {
 	if err != nil || response.Applied == nil {
 		t.Fatalf("StartWorkflowTask = %+v, %v; want applied placement", response, err)
 	}
-	if err := (<-preparations)(ctx); !errors.Is(err, setupErr) {
-		t.Fatalf("asynchronous preparation error = %v, want setup failure", err)
+	preparation := <-preparations
+	if err := preparation.Prepare(ctx); err != nil {
+		t.Fatalf("setup preparation: %v", err)
+	}
+	canceledCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	preparationErr := preparation.Commit(canceledCtx)
+	if !errors.Is(preparationErr, context.Canceled) {
+		t.Fatalf("target lock error = %v, want context canceled", preparationErr)
+	}
+	var typedPreparationErr *workflowexecution.TaskStartPreparationError
+	if !errors.As(preparationErr, &typedPreparationErr) {
+		t.Fatalf("preparation error = %T %v, want typed interruption", preparationErr, preparationErr)
+	}
+	reference, err := workflow.NewCurrentNodeReference(
+		workflow.TaskID(task.Task.ID),
+		workflow.NodeID(response.Applied.CurrentNodes[0].NodeID),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("NewCurrentNodeReference: %v", err)
+	}
+	if err := service.store.InterruptCurrentNode(
+		ctx,
+		reference,
+		workflow.CurrentNodeInterruptionReason("workflow_task_setup_failed"),
+		typedPreparationErr.InterruptionDetail(),
+	); err != nil {
+		t.Fatalf("InterruptCurrentNode: %v", err)
+	}
+	(<-finalizers)(workflowexecution.TaskPreparationFinalization{
+		Kind:  workflowexecution.TaskPreparationFailed,
+		Cause: preparationErr,
+	})
+	attention, err := service.ListWorkflowTaskAttention(ctx, serverapi.WorkflowTaskAttentionListRequest{TaskID: task.Task.ID})
+	if err != nil || len(attention.Items) != 1 || attention.Items[0].DetailJSON == nil {
+		t.Fatalf("setup recovery attention = %+v, %v; want one typed interruption", attention, err)
+	}
+
+	service.currentNodeExecution = &currentNodeCompletionExecutionStub{store: service.store}
+	resumed, err := service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
+		TaskID:           task.Task.ID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
+			Mode: serverapi.WorkflowExecutionTargetModeHead,
+		},
+	})
+	if err != nil || resumed.Applied == nil {
+		t.Fatalf("ResumeWorkflowTask = %+v, %v; want applied recovery", resumed, err)
+	}
+	if want := []worktreecontract.SetupRequirement{
+		worktreecontract.SetupRequirementRequired,
+		worktreecontract.SetupRequirementAlreadyCompleted,
+	}; !reflect.DeepEqual(infrastructure.setupRequirements, want) {
+		t.Fatalf("setup requirements = %v, want %v", infrastructure.setupRequirements, want)
 	}
 	targetContext, err := service.store.GetTaskExecutionTargetContext(ctx, workflow.TaskID(task.Task.ID))
 	if err != nil {
-		t.Fatalf("GetTaskExecutionTargetContext: %v", err)
+		t.Fatalf("GetTaskExecutionTargetContext after Resume: %v", err)
 	}
 	if targetContext.Task.ExecutionTarget == nil ||
 		targetContext.Task.ExecutionTarget.Mode != workflow.ExecutionTargetModeHead ||
-		targetContext.Task.ManagedWorktreeID != worktreeID {
-		t.Fatalf("execution target = %+v, worktree = %q; want retained locked target", targetContext.Task.ExecutionTarget, targetContext.Task.ManagedWorktreeID)
+		targetContext.Task.ManagedWorktreeID == nil ||
+		*targetContext.Task.ManagedWorktreeID != worktreeID {
+		t.Fatalf("recovered target = %+v, worktree = %v; want locked retained target", targetContext.Task.ExecutionTarget, targetContext.Task.ManagedWorktreeID)
+	}
+}
+
+func TestTaskSetupObservationPublishesRetryReadyFailureOnlyAfterFinalization(t *testing.T) {
+	setupOperationID := serverapi.NewWorktreeSetupOperationID()
+	recorder := &workflowTaskSetupEventRecorder{}
+	observation, err := newTaskSetupObservation(
+		setupOperationID,
+		workflow.ExecutionTargetSelection{Mode: workflow.ExecutionTargetModeNone},
+		recorder,
+	)
+	if err != nil {
+		t.Fatalf("newTaskSetupObservation: %v", err)
+	}
+	preparationErr := taskPreparationError(
+		setupOperationID,
+		initiatingActionTargetPreflight{
+			selection: workflow.ExecutionTargetSelection{Mode: workflow.ExecutionTargetModeNone},
+			explicit:  true,
+		},
+		nil,
+		nil,
+		nil,
+		errors.New("target preparation failed"),
+	)
+	observation.record(preparedInitiatingActionTarget{}, preparationErr)
+	if events := recorder.recordedEvents(); len(events) != 0 {
+		t.Fatalf("setup events before preparation finalization = %+v, want none", events)
+	}
+
+	observation.finalize(workflowexecution.TaskPreparationFinalization{
+		Kind:  workflowexecution.TaskPreparationFailed,
+		Cause: preparationErr,
+	})
+	events := recorder.recordedEvents()
+	if len(events) != 1 {
+		t.Fatalf("setup events after preparation finalization = %+v, want one", events)
+	}
+	event := events[0]
+	if err := event.Validate(); err != nil {
+		t.Fatalf("setup event validation: %v", err)
+	}
+	if event.Phase != serverapi.WorktreeSetupPhaseFailed ||
+		event.Failed == nil ||
+		event.Failed.RetryReadiness != serverapi.WorktreeSetupRetryReady ||
+		event.Failed.Cause.Kind != serverapi.WorktreeSetupFailureTargetPreparation ||
+		event.Failed.ExecutionTarget == nil ||
+		event.Failed.ExecutionTarget.Mode != serverapi.WorkflowExecutionTargetModeNone {
+		t.Fatalf("setup event = %+v, want retry-ready target preparation failure", event)
 	}
 }
 
@@ -1136,7 +1118,7 @@ func TestServiceTaskStartDefersConfiguredTargetResolutionFailure(t *testing.T) {
 		t.Fatalf("StartWorkflowTask = %+v, %v; want applied placement", response, err)
 	}
 	var resolutionErr *worktree.GitRevisionResolutionError
-	preparationErr := (<-preparations)(ctx)
+	preparationErr := (<-preparations).Prepare(ctx)
 	if !errors.As(preparationErr, &resolutionErr) {
 		t.Fatalf("asynchronous preparation error = %v, want revision failure", preparationErr)
 	}
@@ -1196,10 +1178,12 @@ func TestServiceTaskResumeReselectsUnavailableUnlockedTarget(t *testing.T) {
 			RequestedRef: "HEAD",
 		},
 	}
+	branchName := "feature/reselect-unavailable"
 
 	response, err := service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
 		TaskID:           task.Task.ID,
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		BranchName:       &branchName,
 	})
 	if err != nil {
 		t.Fatalf("ResumeWorkflowTask unavailable target: %v", err)
@@ -1208,6 +1192,17 @@ func TestServiceTaskResumeReselectsUnavailableUnlockedTarget(t *testing.T) {
 		response.SelectionRequired == nil ||
 		response.SelectionRequired.Reason != serverapi.WorkflowExecutionTargetSelectionReasonConfiguredTargetUnavailable {
 		t.Fatalf("resume response = %+v, want configured target selection", response)
+	}
+	if execution.resumeEligibilityCalls != 0 {
+		t.Fatalf("Resume eligibility calls = %d, want none before configured-target selection", execution.resumeEligibilityCalls)
+	}
+	targetContext, err := service.store.GetTaskExecutionTargetContext(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetContext before selection: %v", err)
+	}
+	if targetContext.Task.PendingInitialManagedBranchName == nil ||
+		*targetContext.Task.PendingInitialManagedBranchName != task.Task.ShortID {
+		t.Fatalf("pending branch before selection = %v, want unchanged %q", targetContext.Task.PendingInitialManagedBranchName, task.Task.ShortID)
 	}
 
 	service.executionTargets = &recordingExecutionTargetInfrastructure{}
@@ -1224,7 +1219,10 @@ func TestServiceTaskResumeReselectsUnavailableUnlockedTarget(t *testing.T) {
 	if response.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeApplied || response.Applied == nil {
 		t.Fatalf("resume response = %+v, want applied", response)
 	}
-	targetContext, err := service.store.GetTaskExecutionTargetContext(ctx, workflow.TaskID(task.Task.ID))
+	if execution.resumeEligibilityCalls != 1 {
+		t.Fatalf("Resume eligibility calls = %d, want one after selected target", execution.resumeEligibilityCalls)
+	}
+	targetContext, err = service.store.GetTaskExecutionTargetContext(ctx, workflow.TaskID(task.Task.ID))
 	if err != nil {
 		t.Fatalf("GetTaskExecutionTargetContext: %v", err)
 	}
@@ -1283,63 +1281,6 @@ func TestServiceTaskResumePreservesConfiguredSelectionAfterMaterializationFailur
 	}
 }
 
-func TestServiceTaskResumeRepairsMissingRetainedSessionProvenance(t *testing.T) {
-	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
-	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
-	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
-	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
-	started, err := service.store.StartTask(ctx, workflow.TaskID(task.Task.ID))
-	if err != nil {
-		t.Fatalf("StartTask: %v", err)
-	}
-	currentNode := started.Mutation.Created[0]
-	sessionID := createPersistedWorkflowServiceSession(t, metadataStore, binding)
-	if _, err := service.store.BindSessionToCurrentNode(ctx, workflowstore.CurrentNodeSessionBindingRequest{
-		Association: workflowstore.TaskSessionAssociationRequest{
-			SessionID:    sessionID,
-			CurrentNode:  currentNode.Reference,
-			AssociatedAt: time.UnixMilli(1_700_000_000_000).UTC(),
-		},
-	}); err != nil {
-		t.Fatalf("BindSessionToCurrentNode: %v", err)
-	}
-	if err := service.store.InterruptCurrentNode(
-		ctx,
-		currentNode.Reference,
-		"test_interruption",
-		workflow.NewCurrentNodeInterruptionDetail("test_interruption", nil),
-	); err != nil {
-		t.Fatalf("InterruptCurrentNode: %v", err)
-	}
-	if _, err := metadataStore.DB().ExecContext(
-		ctx,
-		`DELETE FROM session_workflow_node_associations
-WHERE session_id = ? AND node_id = ? AND transition_branch_key IS NULL`,
-		sessionID.String(),
-		currentNode.Reference.NodeID,
-	); err != nil {
-		t.Fatalf("delete exact Session provenance: %v", err)
-	}
-	service.currentNodeExecution = &currentNodeCompletionExecutionStub{store: service.store}
-
-	response, err := service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
-		TaskID:           task.Task.ID,
-		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
-			Mode: serverapi.WorkflowExecutionTargetModeNone,
-		},
-	})
-	if err != nil {
-		t.Fatalf("ResumeWorkflowTask: %v", err)
-	}
-	if response.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeApplied || response.Applied == nil {
-		t.Fatalf("ResumeWorkflowTask response = %+v, want applied", response)
-	}
-	if err := service.store.ValidateCurrentNodeSessionBinding(ctx, sessionID, currentNode.Reference); err != nil {
-		t.Fatalf("ResumeWorkflowTask did not repair retained provenance: %v", err)
-	}
-}
-
 func TestServiceTaskResumeRejectsEmptyAppliedResult(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
@@ -1389,7 +1330,7 @@ func TestServiceTaskStartReturnsTypedErrorForInvalidExplicitCustomRef(t *testing
 		t.Fatalf("StartWorkflowTask = %+v, %v; want applied placement", response, err)
 	}
 	var resolutionErr *serverapi.WorkflowExecutionTargetResolutionError
-	if err := (<-preparations)(ctx); !errors.As(err, &resolutionErr) ||
+	if err := (<-preparations).Prepare(ctx); !errors.As(err, &resolutionErr) ||
 		resolutionErr.Code != serverapi.WorkflowExecutionTargetResolutionErrorInvalidRevision ||
 		resolutionErr.RequestedRef != customRef {
 		t.Fatalf("StartWorkflowTask error = %v, want typed invalid custom ref", err)
@@ -1839,23 +1780,29 @@ func TestServiceMapsWorkflowTaskLabelScopeFailures(t *testing.T) {
 }
 
 type recordingExecutionTargetInfrastructure struct {
-	resolution        workflowstore.ExecutionTargetSnapshot
-	resolveSelection  workflow.ExecutionTargetSelection
-	materializeTaskID workflow.TaskID
-	restoreTaskID     workflow.TaskID
-	setupOperationID  serverapi.WorktreeSetupOperationID
-	materialize       func(workflow.TaskID) (ExecutionTargetMaterialization, error)
-	resolveErr        error
-	materializeErr    error
-	restoreErr        error
+	resolution                workflowstore.ExecutionTargetSnapshot
+	resolveSelection          workflow.ExecutionTargetSelection
+	initialBranchInspection   InitialTaskBranchInspectionRequest
+	initialBranchInspections  int
+	initialBranchErr          error
+	initialBranchAssertion    InitialTaskBranchAssertionRequest
+	initialBranchAssertions   int
+	initialBranchAssertionErr error
+	materializeTaskID         workflow.TaskID
+	materializeRequest        ExecutionTargetMaterializeRequest
+	restoreTaskID             workflow.TaskID
+	restoreRequest            ExecutionTargetRestoreRequest
+	restoreRequests           chan<- ExecutionTargetRestoreRequest
+	setupOperationID          *serverapi.WorktreeSetupOperationID
+	setupRequirements         []worktreecontract.SetupRequirement
+	materialize               func(workflow.TaskID) (ExecutionTargetMaterialization, error)
+	resolveErr                error
+	materializeErr            error
+	restoreErr                error
 }
 
 type manualMoveExecutionStub struct {
 	currentNodeCompletionExecutionStub
-	startEntered     chan struct{}
-	startRelease     <-chan struct{}
-	resumeEntered    chan struct{}
-	resumeRelease    <-chan struct{}
 	started          []workflow.CurrentNodeReference
 	quiescentErr     error
 	quiescentErrors  []error
@@ -1871,6 +1818,23 @@ type manualMoveExecutionStub struct {
 type workflowAttentionRecorder struct {
 	resolutions []workflowstore.TaskAttentionResolution
 	pending     []workflow.ApprovalID
+}
+
+type workflowTaskSetupEventRecorder struct {
+	mu     sync.Mutex
+	events []serverapi.WorktreeSetupEvent
+}
+
+func (r *workflowTaskSetupEventRecorder) PublishWorkflowTaskSetupEvent(event serverapi.WorktreeSetupEvent) {
+	r.mu.Lock()
+	r.events = append(r.events, event)
+	r.mu.Unlock()
+}
+
+func (r *workflowTaskSetupEventRecorder) recordedEvents() []serverapi.WorktreeSetupEvent {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]serverapi.WorktreeSetupEvent(nil), r.events...)
 }
 
 func (r *workflowAttentionRecorder) FinalizeTaskResolution(resolution workflowstore.TaskAttentionResolution) {
@@ -1901,49 +1865,13 @@ func (s *manualMoveExecutionStub) StartTask(
 	ctx context.Context,
 	taskID workflow.TaskID,
 	preparation workflowexecution.TaskStartPreparation,
+	finalizer workflowexecution.TaskPreparationFinalizer,
 ) (workflowstore.StartTaskResult, error) {
-	if s.startEntered != nil {
-		close(s.startEntered)
-	}
-	if s.startRelease != nil {
-		select {
-		case <-s.startRelease:
-		case <-ctx.Done():
-			return workflowstore.StartTaskResult{}, context.Cause(ctx)
-		}
-	}
-	started, err := s.currentNodeCompletionExecutionStub.StartTask(ctx, taskID, preparation)
+	started, err := s.currentNodeCompletionExecutionStub.StartTask(ctx, taskID, preparation, finalizer)
 	if err == nil {
 		s.recordStarted(started.Mutation.Created)
 	}
 	return started, err
-}
-
-func (s *manualMoveExecutionStub) ResumeTask(ctx context.Context, taskID workflow.TaskID) ([]workflow.CurrentNode, error) {
-	if s.resumeEntered != nil {
-		close(s.resumeEntered)
-	}
-	if s.resumeRelease != nil {
-		select {
-		case <-s.resumeRelease:
-		case <-ctx.Done():
-			return nil, context.Cause(ctx)
-		}
-	}
-	return s.currentNodeCompletionExecutionStub.ResumeTask(ctx, taskID)
-}
-
-func (s *manualMoveExecutionStub) ResumeTaskWithPreparation(
-	ctx context.Context,
-	taskID workflow.TaskID,
-	preparation workflowexecution.TaskStartPreparation,
-) ([]workflow.CurrentNode, error) {
-	if preparation != nil {
-		if err := preparation(ctx); err != nil {
-			return nil, err
-		}
-	}
-	return s.ResumeTask(ctx, taskID)
 }
 
 func (s *manualMoveExecutionStub) ApplyPendingApproval(ctx context.Context, approvalID workflow.ApprovalID) (workflowstore.PendingApprovalApplyResult, error) {
@@ -2046,7 +1974,11 @@ func waitForWorkflowMutationPermit(t *testing.T, service *Service, operation fun
 
 func (i *recordingExecutionTargetInfrastructure) RestoreExecutionTarget(_ context.Context, req ExecutionTargetRestoreRequest) error {
 	i.restoreTaskID = req.TaskID
+	i.restoreRequest = req
 	i.setupOperationID = req.SetupOperationID
+	if i.restoreRequests != nil {
+		i.restoreRequests <- req
+	}
 	return i.restoreErr
 }
 
@@ -2058,9 +1990,23 @@ func (i *recordingExecutionTargetInfrastructure) ResolveExecutionTarget(_ contex
 	return i.resolution, nil
 }
 
+func (i *recordingExecutionTargetInfrastructure) InspectProspectiveInitialTaskBranch(_ context.Context, req InitialTaskBranchInspectionRequest) error {
+	i.initialBranchInspection = req
+	i.initialBranchInspections++
+	return i.initialBranchErr
+}
+
+func (i *recordingExecutionTargetInfrastructure) AssertInitialTaskBranch(_ context.Context, req InitialTaskBranchAssertionRequest) error {
+	i.initialBranchAssertion = req
+	i.initialBranchAssertions++
+	return i.initialBranchAssertionErr
+}
+
 func (i *recordingExecutionTargetInfrastructure) MaterializeExecutionTarget(_ context.Context, req ExecutionTargetMaterializeRequest) (ExecutionTargetMaterialization, error) {
 	i.materializeTaskID = req.TaskID
+	i.materializeRequest = req
 	i.setupOperationID = req.SetupOperationID
+	i.setupRequirements = append(i.setupRequirements, req.SetupRequirement)
 	var materialization ExecutionTargetMaterialization
 	if i.materialize != nil {
 		var err error
@@ -2282,7 +2228,7 @@ func TestServiceWorkflowGraphValidatePreviewAndSave(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PreviewWorkflowGraphSave: %v", err)
 	}
-	if !preview.CanSave || preview.ConfirmationRequired || len(preview.Blockers) != 0 {
+	if !preview.Changed || !preview.CanSave || preview.ConfirmationRequired || len(preview.Blockers) != 0 {
 		t.Fatalf("preview graph save = %+v, want savable preview without blockers", preview)
 	}
 	afterPreview, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
@@ -2323,7 +2269,7 @@ func TestServiceWorkflowGraphValidatePreviewAndSave(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SaveWorkflowGraph: %v", err)
 	}
-	if !saved.Saved || saved.Definition == nil || saved.CurrentVersion != source.Definition.Workflow.Version+1 {
+	if !saved.Saved || !saved.Changed || saved.Definition == nil || saved.CurrentVersion != source.Definition.Workflow.Version+1 {
 		t.Fatalf("saved graph = %+v, want saved canonical definition with incremented version", saved)
 	}
 	if saved.Definition.Workflow.Name != "Saved Workflow" || saved.Definition.Workflow.Description != "Saved metadata" {
@@ -2530,6 +2476,318 @@ func TestServiceWorkflowGraphValidationParityForUnavailableAssigneeAndInvalidScr
 		!workflowValidationHasCode(savedExecution.Errors, string(workflow.CodeAgentRoleMissing)) ||
 		!workflowValidationHasCode(savedExecution.Errors, workflowscript.CodeMissingPath) {
 		t.Fatalf("saved validation = draft=%+v execution=%+v, want unavailable assignee in both and missing script path only in execution", savedDraft, savedExecution)
+	}
+}
+
+func TestServiceWorkflowGraphSaveProjectsRemovedTransitionBranchImpactDeterministically(t *testing.T) {
+	ctx, service, _ := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	current, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow current: %v", err)
+	}
+	graph := workflowGraphDraftFromDefinition(current.Definition)
+	spareNodeID := "node-spare-done-" + workflowID.String()
+	removedEdgeID := "edge-spare-done-" + workflowID.String()
+	graph.Nodes = append(graph.Nodes, serverapi.WorkflowGraphDraftNode{
+		ID:          spareNodeID,
+		Key:         "spare_done",
+		Kind:        "terminal",
+		DisplayName: "Spare Done",
+	})
+	graph.Edges = append(graph.Edges, serverapi.WorkflowGraphDraftEdge{
+		ID:                removedEdgeID,
+		TransitionGroupID: "group-done-" + workflowID.String(),
+		Key:               "spare_done",
+		TargetNodeID:      spareNodeID,
+		AssigneeSelection: "configured",
+		ThinkingSelection: "configured",
+		ContextMode:       "new_session",
+		ContextSource:     serverapi.WorkflowContextSource{Kind: "immediate_source"},
+	})
+	added, err := service.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
+		WorkflowID:      workflowID,
+		ExpectedVersion: current.Definition.Workflow.Version,
+		Graph:           graph,
+	})
+	if err != nil {
+		t.Fatalf("SaveWorkflowGraph add Transition Branch: %v", err)
+	}
+	if !added.Saved {
+		t.Fatalf("add Transition Branch response = %+v, want saved", added)
+	}
+	removedGroupID := "group-empty-" + workflowID.String()
+	if _, err := service.AddWorkflowNodeGroup(ctx, serverapi.WorkflowNodeGroupAddRequest{
+		WorkflowID:  workflowID,
+		GroupID:     removedGroupID,
+		GroupKey:    "empty",
+		DisplayName: "Empty",
+	}); err != nil {
+		t.Fatalf("AddWorkflowNodeGroup: %v", err)
+	}
+	current, err = service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow with removable entities: %v", err)
+	}
+	graph = workflowGraphDraftFromDefinition(current.Definition)
+	graph.Edges = slices.DeleteFunc(graph.Edges, func(edge serverapi.WorkflowGraphDraftEdge) bool {
+		return edge.ID == removedEdgeID
+	})
+	graph.NodeGroups = slices.DeleteFunc(graph.NodeGroups, func(group serverapi.WorkflowGraphDraftNodeGroup) bool {
+		return group.ID == removedGroupID
+	})
+	preview, err := service.PreviewWorkflowGraphSave(ctx, serverapi.WorkflowGraphSavePreviewRequest{
+		WorkflowID:      workflowID,
+		ExpectedVersion: current.Definition.Workflow.Version,
+		Graph:           graph,
+	})
+	if err != nil {
+		t.Fatalf("PreviewWorkflowGraphSave remove Transition Branch: %v", err)
+	}
+	wantRemoved := []serverapi.WorkflowGraphEntityReference{
+		{
+			EntityType: serverapi.WorkflowGraphEntityTypeEdge,
+			EntityID:   removedEdgeID,
+		},
+		{
+			EntityType: serverapi.WorkflowGraphEntityTypeNodeGroup,
+			EntityID:   removedGroupID,
+		},
+	}
+	if !preview.Changed ||
+		preview.Impact.RemovedNodeGroupCount != 1 ||
+		preview.Impact.RemovedEdgeCount != 1 ||
+		!slices.Equal(preview.Impact.RemovedEntities, wantRemoved) ||
+		preview.Impact.NodeTaskReferenceCount != 0 ||
+		preview.Impact.EdgeTaskReferenceCount != 0 {
+		t.Fatalf("removed Transition Branch preview = %+v, want changed exact impact %+v with unchanged Task-reference counts", preview, wantRemoved)
+	}
+	wantConfirmationEntities := []serverapi.WorkflowGraphEntityReference{{
+		EntityType: serverapi.WorkflowGraphEntityTypeEdge,
+		EntityID:   removedEdgeID,
+	}}
+	if got := workflowServiceGraphSaveBlockerEntities(preview.Blockers, "confirmation_required"); !slices.Equal(got, wantConfirmationEntities) {
+		t.Fatalf("confirmation_required affected entities = %+v, want %+v", got, wantConfirmationEntities)
+	}
+	if err := preview.Validate(); err != nil {
+		t.Fatalf("preview response validation: %v", err)
+	}
+	first, err := json.Marshal(preview)
+	if err != nil {
+		t.Fatalf("marshal first preview: %v", err)
+	}
+	var roundTrip serverapi.WorkflowGraphSavePreviewResponse
+	if err := json.Unmarshal(first, &roundTrip); err != nil {
+		t.Fatalf("unmarshal preview: %v", err)
+	}
+	if !slices.Equal(roundTrip.Impact.RemovedEntities, wantRemoved) {
+		t.Fatalf("round-trip removed entities = %+v, want canonical order %+v", roundTrip.Impact.RemovedEntities, wantRemoved)
+	}
+	second, err := json.Marshal(preview)
+	if err != nil {
+		t.Fatalf("marshal second preview: %v", err)
+	}
+	if string(first) != string(second) {
+		t.Fatalf("preview JSON is not deterministic:\nfirst:  %s\nsecond: %s", first, second)
+	}
+	saved, err := service.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
+		WorkflowID:      workflowID,
+		ExpectedVersion: current.Definition.Workflow.Version,
+		Graph:           graph,
+		Confirmation: &serverapi.WorkflowGraphSaveConfirmation{
+			ExpectedRemovedNodeGroupCount:       preview.Impact.RemovedNodeGroupCount,
+			ExpectedRemovedNodeCount:            preview.Impact.RemovedNodeCount,
+			ExpectedRemovedTransitionGroupCount: preview.Impact.RemovedTransitionGroupCount,
+			ExpectedRemovedEdgeCount:            preview.Impact.RemovedEdgeCount,
+			ExpectedNodeTaskReferenceCount:      preview.Impact.NodeTaskReferenceCount,
+			ExpectedEdgeTaskReferenceCount:      preview.Impact.EdgeTaskReferenceCount,
+		},
+	})
+	if err != nil {
+		t.Fatalf("SaveWorkflowGraph confirmed removal: %v", err)
+	}
+	if !saved.Saved || !saved.Changed {
+		t.Fatalf("confirmed removal = %+v, want changed save", saved)
+	}
+}
+
+func TestServiceWorkflowGraphSaveRejectsStaleNoop(t *testing.T) {
+	ctx, service, _ := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	original, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow original: %v", err)
+	}
+	if _, err := service.UpdateWorkflow(ctx, serverapi.WorkflowUpdateRequest{
+		WorkflowID:  workflowID,
+		Name:        "Remote rename",
+		Description: "Remote description",
+	}); err != nil {
+		t.Fatalf("UpdateWorkflow: %v", err)
+	}
+	current, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow current: %v", err)
+	}
+	req := serverapi.WorkflowGraphSavePreviewRequest{
+		WorkflowID:      workflowID,
+		ExpectedVersion: original.Definition.Workflow.Version,
+		Graph:           workflowGraphDraftFromDefinition(original.Definition),
+	}
+	preview, err := service.PreviewWorkflowGraphSave(ctx, req)
+	if err != nil {
+		t.Fatalf("PreviewWorkflowGraphSave stale no-op: %v", err)
+	}
+	if preview.Changed || preview.CanSave {
+		t.Fatalf("stale no-op preview = %+v, want unchanged blocked response", preview)
+	}
+	if got := workflowServiceGraphSaveBlockerEntities(preview.Blockers, "version_changed"); got == nil || len(got) != 0 {
+		t.Fatalf("version_changed affected entities = %+v, want present empty collection", got)
+	}
+
+	saved, err := service.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
+		WorkflowID:      req.WorkflowID,
+		ExpectedVersion: req.ExpectedVersion,
+		Graph:           req.Graph,
+	})
+	if err != nil {
+		t.Fatalf("SaveWorkflowGraph stale no-op: %v", err)
+	}
+	if saved.Saved || saved.CanSave {
+		t.Fatalf("stale no-op save = %+v, want blocked response", saved)
+	}
+	if got := workflowServiceGraphSaveBlockerEntities(saved.Blockers, "version_changed"); got == nil || len(got) != 0 {
+		t.Fatalf("save version_changed affected entities = %+v, want present empty collection", got)
+	}
+	after, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow after stale no-op: %v", err)
+	}
+	if after.Definition.Workflow.Version != current.Definition.Workflow.Version ||
+		after.Definition.Workflow.Name != current.Definition.Workflow.Name {
+		t.Fatalf("workflow after stale no-op = %+v, want unchanged current workflow %+v", after.Definition.Workflow, current.Definition.Workflow)
+	}
+}
+
+func TestServiceWorkflowGraphSaveAllowsRemovingNodeGroupWithoutConfirmation(t *testing.T) {
+	ctx, service, _ := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	removedGroupID := "group-empty-" + workflowID.String()
+	if _, err := service.AddWorkflowNodeGroup(ctx, serverapi.WorkflowNodeGroupAddRequest{
+		WorkflowID:  workflowID,
+		GroupID:     removedGroupID,
+		GroupKey:    "empty",
+		DisplayName: "Empty",
+	}); err != nil {
+		t.Fatalf("AddWorkflowNodeGroup: %v", err)
+	}
+	current, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow current: %v", err)
+	}
+	graph := workflowGraphDraftFromDefinition(current.Definition)
+	graph.NodeGroups = slices.DeleteFunc(graph.NodeGroups, func(group serverapi.WorkflowGraphDraftNodeGroup) bool {
+		return group.ID == removedGroupID
+	})
+
+	preview, err := service.PreviewWorkflowGraphSave(ctx, serverapi.WorkflowGraphSavePreviewRequest{
+		WorkflowID:      workflowID,
+		ExpectedVersion: current.Definition.Workflow.Version,
+		Graph:           graph,
+	})
+	if err != nil {
+		t.Fatalf("PreviewWorkflowGraphSave remove Node Group: %v", err)
+	}
+	wantRemoved := []serverapi.WorkflowGraphEntityReference{{
+		EntityType: serverapi.WorkflowGraphEntityTypeNodeGroup,
+		EntityID:   removedGroupID,
+	}}
+	if !preview.Changed ||
+		preview.Impact.RemovedNodeGroupCount != 1 ||
+		!slices.Equal(preview.Impact.RemovedEntities, wantRemoved) {
+		t.Fatalf("removed Node Group preview = %+v, want changed exact impact %+v", preview, wantRemoved)
+	}
+	if !preview.CanSave || preview.ConfirmationRequired {
+		t.Fatalf("removed Node Group preview = %+v, want saveable without confirmation", preview)
+	}
+
+	saved, err := service.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
+		WorkflowID:      workflowID,
+		ExpectedVersion: current.Definition.Workflow.Version,
+		Graph:           graph,
+	})
+	if err != nil {
+		t.Fatalf("SaveWorkflowGraph remove Node Group: %v", err)
+	}
+	if !saved.Saved || !saved.Changed || saved.ConfirmationRequired {
+		t.Fatalf("removed Node Group save = %+v, want changed save without confirmation", saved)
+	}
+}
+
+func TestServiceWorkflowGraphSaveIgnoresNodeGroupNumericSortSpacing(t *testing.T) {
+	ctx, service, _ := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	groupIDs := []string{
+		"group-first-" + workflowID.String(),
+		"group-second-" + workflowID.String(),
+	}
+	for index, groupID := range groupIDs {
+		if _, err := service.AddWorkflowNodeGroup(ctx, serverapi.WorkflowNodeGroupAddRequest{
+			WorkflowID:  workflowID,
+			GroupID:     groupID,
+			GroupKey:    fmt.Sprintf("group_%d", index+1),
+			DisplayName: fmt.Sprintf("Group %d", index+1),
+			SortOrder:   50 + index*100,
+		}); err != nil {
+			t.Fatalf("AddWorkflowNodeGroup %q: %v", groupID, err)
+		}
+	}
+	current, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow current: %v", err)
+	}
+	if len(current.Definition.NodeGroups) != len(groupIDs) {
+		t.Fatalf("Node Groups = %+v, want %v", current.Definition.NodeGroups, groupIDs)
+	}
+	for index, groupID := range groupIDs {
+		if current.Definition.NodeGroups[index].GroupID != groupID {
+			t.Fatalf("Node Group order = %+v, want %v", current.Definition.NodeGroups, groupIDs)
+		}
+	}
+	graph := workflowGraphDraftFromDefinition(current.Definition)
+	preview, err := service.PreviewWorkflowGraphSave(ctx, serverapi.WorkflowGraphSavePreviewRequest{
+		WorkflowID:      workflowID,
+		ExpectedVersion: current.Definition.Workflow.Version,
+		Graph:           graph,
+	})
+	if err != nil {
+		t.Fatalf("PreviewWorkflowGraphSave: %v", err)
+	}
+	if preview.Changed || !preview.CanSave || len(preview.Blockers) != 0 {
+		t.Fatalf("preview = %+v, want unchanged saveable graph", preview)
+	}
+	saved, err := service.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
+		WorkflowID:      workflowID,
+		ExpectedVersion: current.Definition.Workflow.Version,
+		Graph:           graph,
+	})
+	if err != nil {
+		t.Fatalf("SaveWorkflowGraph: %v", err)
+	}
+	if !saved.Saved || saved.Changed || saved.CurrentVersion != current.Definition.Workflow.Version {
+		t.Fatalf("save = %+v, want unchanged version %d", saved, current.Definition.Workflow.Version)
+	}
+	reloaded, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow reloaded: %v", err)
+	}
+	if reloaded.Definition.Workflow.Version != current.Definition.Workflow.Version {
+		t.Fatalf("reloaded version = %d, want %d", reloaded.Definition.Workflow.Version, current.Definition.Workflow.Version)
+	}
+	for index, groupID := range groupIDs {
+		if reloaded.Definition.NodeGroups[index].GroupID != groupID {
+			t.Fatalf("reloaded Node Group order = %+v, want %v", reloaded.Definition.NodeGroups, groupIDs)
+		}
 	}
 }
 
@@ -2771,6 +3029,30 @@ func newWorkflowServiceTestContextWithMetadata(t *testing.T) (context.Context, *
 	return context.Background(), service, binding, metadataStore
 }
 
+func bindWorkflowServiceManagedWorktree(
+	t *testing.T,
+	ctx context.Context,
+	store *metadata.Store,
+	workspaceID string,
+	taskID workflow.TaskID,
+	worktreeID string,
+	root string,
+	createdBranch bool,
+) {
+	t.Helper()
+	if err := store.UpsertWorktreeRecord(ctx, metadata.WorktreeRecord{
+		ID: worktreeID, WorkspaceID: workspaceID, CanonicalRoot: root, Managed: true, CreatedBranch: createdBranch,
+	}); err != nil {
+		t.Fatalf("UpsertWorktreeRecord: %v", err)
+	}
+	updated, err := store.Queries().BindInitialTaskManagedWorktree(ctx, sqlitegen.BindInitialTaskManagedWorktreeParams{
+		TaskID: string(taskID), ManagedWorktreeID: sql.NullString{String: worktreeID, Valid: true}, UpdatedAtUnixMs: time.Now().UTC().UnixMilli(),
+	})
+	if err != nil || updated != 1 {
+		t.Fatalf("UpdateTaskManagedWorktree = %d, %v; want one row", updated, err)
+	}
+}
+
 func TestNewRejectsEveryMissingReadModelCapability(t *testing.T) {
 	service, _, metadataStore := newWorkflowServiceTestServiceWithMetadata(t)
 	complete := newWorkflowServiceReadModels(t, metadataStore, service.store, service.roleResolver, nil, nil)
@@ -2788,7 +3070,7 @@ func TestNewRejectsEveryMissingReadModelCapability(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, err := New(service.store, tt.readModels, service.roleResolver, workflowexecution.NewMutationPermit(), workflowexecution.NewTaskMutationCoordinator()); err == nil {
+			if _, err := New(service.store, tt.readModels, service.roleResolver, workflowexecution.NewMutationPermit()); err == nil {
 				t.Fatal("New accepted a missing read-model capability")
 			}
 		})
@@ -2822,10 +3104,12 @@ func newWorkflowServiceTestServiceWithRoleResolver(t *testing.T, resolver workfl
 		t.Fatalf("workflowstore.New: %v", err)
 	}
 	readModels := newWorkflowServiceReadModels(t, metadataStore, store, resolver, nil, nil)
-	service, err := New(store, readModels, resolver, workflowexecution.NewMutationPermit(), workflowexecution.NewTaskMutationCoordinator(), WithCurrentNodeExecution(&currentNodeCompletionExecutionStub{store: store}))
+	service, err := New(store, readModels, resolver, workflowexecution.NewMutationPermit(), WithCurrentNodeExecution(&currentNodeCompletionExecutionStub{store: store}))
 	if err != nil {
 		t.Fatalf("workflowsvc.New: %v", err)
 	}
+	service.executionTargets = &recordingExecutionTargetInfrastructure{}
+	service.setupEvents = &workflowTaskSetupEventRecorder{}
 	return service, binding, metadataStore
 }
 
@@ -3179,6 +3463,15 @@ func workflowServiceTransitionGroupByID(t *testing.T, def serverapi.WorkflowDefi
 	return serverapi.WorkflowTransitionGroup{}
 }
 
+func workflowServiceGraphSaveBlockerEntities(blockers []serverapi.WorkflowGraphSaveBlocker, code string) []serverapi.WorkflowGraphEntityReference {
+	for _, blocker := range blockers {
+		if blocker.Code == code {
+			return blocker.AffectedEntities
+		}
+	}
+	return nil
+}
+
 func workflowGraphDraftFromDefinition(def serverapi.WorkflowDefinition) serverapi.WorkflowGraphDraft {
 	graph := serverapi.WorkflowGraphDraft{
 		NodeGroups:       make([]serverapi.WorkflowGraphDraftNodeGroup, 0, len(def.NodeGroups)),
@@ -3190,7 +3483,7 @@ func workflowGraphDraftFromDefinition(def serverapi.WorkflowDefinition) serverap
 		graph.NodeGroups = append(graph.NodeGroups, serverapi.WorkflowGraphDraftNodeGroup{ID: group.GroupID, Key: group.GroupKey, DisplayName: group.DisplayName})
 	}
 	for _, node := range def.Nodes {
-		graph.Nodes = append(graph.Nodes, serverapi.WorkflowGraphDraftNode{ID: node.ID, Key: node.Key, Kind: node.Kind, DisplayName: node.DisplayName, GroupID: node.GroupID, GroupKey: node.GroupKey, SubagentRole: node.SubagentRole, CompletionMode: node.CompletionMode, ScriptPath: node.ScriptPath, JoinInputProviders: node.JoinInputProviders})
+		graph.Nodes = append(graph.Nodes, serverapi.WorkflowGraphDraftNode{ID: node.ID, Key: node.Key, Kind: node.Kind, DisplayName: node.DisplayName, GroupID: textutil.OptionalExactString(node.GroupID), GroupKey: node.GroupKey, SubagentRole: node.SubagentRole, CompletionMode: node.CompletionMode, ScriptPath: node.ScriptPath, JoinInputProviders: node.JoinInputProviders})
 	}
 	for _, group := range def.TransitionGroups {
 		graph.TransitionGroups = append(graph.TransitionGroups, serverapi.WorkflowGraphDraftTransitionGroup{ID: group.ID, SourceNodeID: group.SourceNodeID, TransitionID: group.TransitionID, DisplayName: group.DisplayName, Description: group.Description})

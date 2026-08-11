@@ -49,6 +49,9 @@ cover.out
 # Go workspace/module local files
 go.work.sum
 
+# Rendered only while metadata SQL adapters are generated.
+/server/metadata/queries.sql
+
 # Rust/Tauri build artifacts
 target
 
@@ -70,6 +73,7 @@ docs/tmp/
 .kent/plans/
 .kent/qa/
 .kent/proofs/
+.kent/tmp/
 .builder/
 # Private, machine-local QA harness skill (references omlx + user dirs)
 .kent/skills/qa-harness/

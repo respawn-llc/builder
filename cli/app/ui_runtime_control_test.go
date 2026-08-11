@@ -12,8 +12,8 @@ import (
 	"core/server/llm"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
-
-	tea "github.com/charmbracelet/bubbletea"
+	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 type runtimeControlFakeClient struct {
@@ -38,12 +38,8 @@ type runtimeControlFakeClient struct {
 	appendedText          string
 	submitText            string
 	submitCalls           int
-	submitOperationRef    clientui.RuntimeOperationRef
-	preSubmitOperationRef clientui.RuntimeOperationRef
 	submitResult          string
 	interruptCalls        int
-	interruptPendingRefs  []clientui.RuntimeOperationRef
-	interruptTargetRef    *clientui.RuntimeOperationRef
 	submitQueuedID        string
 	discardQueuedID       string
 	discardQueuedCalls    int
@@ -55,7 +51,32 @@ type runtimeControlFakeClient struct {
 	submitErr             error
 	interruptErr          error
 	collaborative         bool
-	interruptCandidate    *runtimeTupleCandidate
+}
+
+func TestUserTurnSubmissionFromResponsePreservesMessagePresence(t *testing.T) {
+	t.Parallel()
+	blank := ""
+	blankKind := clientui.UserTurnResultKindSilentFinal
+	withBlank := userTurnSubmissionFromResponse(
+		serverapi.RuntimeSubmitUserTurnResponse{Message: &blank, ResultKind: blankKind},
+		"turn",
+		"request",
+	)
+	if withBlank.Message == nil || *withBlank.Message != "" {
+		t.Fatalf("blank submission message = %v, want present empty message", withBlank.Message)
+	}
+	if withBlank.ResultKind != clientui.UserTurnResultKindSilentFinal {
+		t.Fatalf("blank submission result kind = %v, want silent final", withBlank.ResultKind)
+	}
+
+	withoutMessage := userTurnSubmissionFromResponse(
+		serverapi.RuntimeSubmitUserTurnResponse{},
+		"turn",
+		"request",
+	)
+	if withoutMessage.Message != nil {
+		t.Fatalf("omitted submission message = %v, want absent", withoutMessage.Message)
+	}
 }
 
 type timeoutNetError struct{}
@@ -160,7 +181,7 @@ func (f *runtimeControlFakeClient) AppendCommittedEntryWithNoticeID(role, text, 
 }
 func (f *runtimeControlFakeClient) submitUserMessage(_ context.Context, text string) (clientui.UserTurnSubmission, error) {
 	f.submitText = text
-	result := clientui.UserTurnSubmission{Message: f.submitResult}
+	result := clientui.UserTurnSubmission{Message: textutil.Value(f.submitResult)}
 	if f.submitErr != nil {
 		return result, f.submitErr
 	}
@@ -168,15 +189,13 @@ func (f *runtimeControlFakeClient) submitUserMessage(_ context.Context, text str
 }
 func (f *runtimeControlFakeClient) SubmitRuntimeInput(ctx context.Context, req clientui.RuntimeSubmitRequest) (clientui.UserTurnSubmission, error) {
 	f.submitCalls++
-	f.submitOperationRef = req.OperationRef
-	f.preSubmitOperationRef = req.PreSubmitCompactionOperationRef
 	text := runtimeSubmitInputText(req)
 	submission, err := f.submitUserMessage(ctx, text)
 	if err == nil && strings.TrimSpace(f.submitQueuedID) != "" {
 		submission.Queued = clientui.QueuedUserMessage{
 			ID:              strings.TrimSpace(f.submitQueuedID),
 			Text:            text,
-			ClientRequestID: req.OperationRef.ClientRequestID.String(),
+			ClientRequestID: req.ClientRequestID.String(),
 		}
 	}
 	return submission, err
@@ -201,42 +220,6 @@ func (f *runtimeControlFakeClient) Interrupt() error {
 	}
 	return f.err
 }
-func (f *runtimeControlFakeClient) InterruptWithPendingRefs(refs []clientui.RuntimeOperationRef) error {
-	f.interruptCalls++
-	f.interruptPendingRefs = append([]clientui.RuntimeOperationRef(nil), refs...)
-	f.interruptTargetRef = nil
-	if f.interruptErr != nil {
-		return f.interruptErr
-	}
-	return f.err
-}
-func (f *runtimeControlFakeClient) InterruptWithTarget(target clientui.RuntimeOperationRef, refs []clientui.RuntimeOperationRef) error {
-	f.interruptCalls++
-	f.interruptPendingRefs = append([]clientui.RuntimeOperationRef(nil), refs...)
-	f.interruptTargetRef = &target
-	if f.interruptErr != nil {
-		return f.interruptErr
-	}
-	return f.err
-}
-func (f *runtimeControlFakeClient) interruptRuntimeCandidate(target *clientui.RuntimeOperationRef, refs []clientui.RuntimeOperationRef) (runtimeTupleCandidate, error) {
-	f.interruptCalls++
-	f.interruptPendingRefs = append([]clientui.RuntimeOperationRef(nil), refs...)
-	f.interruptTargetRef = target
-	if f.interruptErr != nil {
-		return runtimeTupleCandidate{}, f.interruptErr
-	}
-	if f.err != nil {
-		return runtimeTupleCandidate{}, f.err
-	}
-	if f.interruptCandidate != nil {
-		view := f.mainView
-		applyRuntimeTuple(&view, *f.interruptCandidate)
-		f.mainView = view
-		return *f.interruptCandidate, nil
-	}
-	return runtimeTupleCandidate{}, nil
-}
 func (f *runtimeControlFakeClient) DiscardQueuedUserMessage(queueItemID string) bool {
 	f.discardQueuedCalls++
 	f.discardQueuedID = queueItemID
@@ -248,6 +231,124 @@ func (f *runtimeControlFakeClient) DiscardQueuedUserMessage(queueItemID string) 
 func (f *runtimeControlFakeClient) RecordPromptHistory(text string) error {
 	f.recordedPromptHistory = text
 	return f.err
+}
+
+func TestRuntimeInterruptNotAcceptedClearsPendingAttempt(t *testing.T) {
+	client := &runtimeControlFakeClient{
+		interruptErr: serverapi.NewRuntimeCommandNotAcceptedError(errors.New("no active Agent Turn")),
+	}
+	m := newProjectedClosedUIModel(client)
+	m.sessionID = "session-1"
+	m.setRuntimeActivityBusyForTest(true)
+	m.activeSubmit = activeSubmitState{
+		token: 1,
+		text:  "keep me",
+	}
+
+	cmd := m.inputController().interruptBusyRuntime()
+	if !m.hasPendingInterrupt() {
+		t.Fatal("interrupt attempt was not marked pending")
+	}
+	done := cmd().(runtimeControlDoneMsg)
+	next, _ := m.Update(done)
+	updated := next.(*uiModel)
+
+	if updated.hasPendingInterrupt() {
+		t.Fatal("not-accepted interrupt remained pending")
+	}
+	if updated.activeSubmit.token != 1 || updated.activeSubmit.text != "keep me" {
+		t.Fatalf("not-accepted interrupt changed active submit: %+v", updated.activeSubmit)
+	}
+}
+
+func TestRuntimeInterruptRestoresPendingInputsBeforeComposerDraftInSubmissionOrder(t *testing.T) {
+	client := &runtimeControlFakeClient{}
+	m := newProjectedClosedUIModel(client)
+	steerOne := "  steer one\nline\t "
+	queueTwo := "\tqueue two  "
+	steerThree := "steer  three\n\ninside"
+	queueFour := " queue four "
+	draft := "  existing draft\t"
+	_ = m.queueInjectedInput(steerOne)
+	m.queueInput(queueTwo)
+	_ = m.queueInjectedInput(steerThree)
+	m.queueInput(queueFour)
+	stopped := clientui.QueuedUserMessageFailureStopped
+	bindSteer := func(index int) clientui.TranscriptQueuedMessageState {
+		t.Helper()
+		requestID, err := runtimeids.ParseRuntimeClientRequestID(m.injectedQueue[index].ClientRequestID)
+		if err != nil {
+			t.Fatalf("parse queued client request id: %v", err)
+		}
+		queueID := runtimeids.NewQueueItemID()
+		text := m.injectedQueue[index].Text
+		m.registerSteeredQueuedUserMessage(clientui.QueuedUserMessage{
+			ID:              queueID.String(),
+			Text:            text,
+			ClientRequestID: requestID.String(),
+		})
+		return clientui.TranscriptQueuedMessageState{
+			ClientRequestID: requestID,
+			QueueItemID:     queueID,
+			Status:          clientui.QueuedUserMessageFailed,
+			FailureReason:   &stopped,
+			Text:            &text,
+		}
+	}
+	firstFailure := bindSteer(0)
+	secondFailure := bindSteer(1)
+	testSetMainInput(m, draft)
+	activeText := "active turn already visible in the transcript"
+	m.activeSubmit = activeSubmitState{
+		token:  1,
+		text:   activeText,
+		origin: activeSubmitOriginQueued,
+	}
+	m.setPendingInterrupt(true)
+
+	next, interruptedCmd := m.inputController().handleSubmitDone(newSubmitDoneMsg(1, "", activeText, context.Canceled))
+	m = next.(*uiModel)
+	for _, msg := range collectCmdMessages(t, interruptedCmd) {
+		m = updateUIModel(t, m, msg)
+	}
+	if got := testMainInput(m); got != draft {
+		t.Fatalf("interrupted active Submit changed composer before interrupt response = %q", got)
+	}
+	if len(m.injectedQueue) != 2 || len(m.queued) != 2 {
+		t.Fatalf("interrupted active Submit consumed pending inputs before response: injected=%d queued=%d", len(m.injectedQueue), len(m.queued))
+	}
+	if client.discardQueuedCalls != 0 {
+		t.Fatalf("interrupted active Submit dispatched %d queued-message discards before response", client.discardQueuedCalls)
+	}
+	stoppedCmd := m.applyTranscriptQueuedMessageState(firstFailure)
+	if stoppedCmd == nil {
+		t.Fatal("stopped queue event did not acknowledge the observed interruption")
+	}
+	for _, msg := range collectCmdMessages(t, stoppedCmd) {
+		m = updateUIModel(t, m, msg)
+	}
+
+	want := strings.Join([]string{steerOne, queueTwo, steerThree, queueFour, draft}, "\n\n")
+	if got := testMainInput(m); got != want {
+		t.Fatalf("restored composer = %q, want %q", got, want)
+	}
+	if len(m.injectedQueue) != 0 || len(m.queued) != 0 {
+		t.Fatalf("pending input state remained after restoration: injected=%+v queued=%+v", m.injectedQueue, m.queued)
+	}
+	if m.hasPendingInterrupt() {
+		t.Fatal("interrupt remained pending after local restoration")
+	}
+	accepted := secondFailure
+	accepted.Status = clientui.QueuedUserMessageAccepted
+	accepted.FailureReason = nil
+	m.applyTranscriptQueuedMessageState(accepted)
+	m.applyTranscriptQueuedMessageState(secondFailure)
+	if got := testMainInput(m); got != want {
+		t.Fatalf("late queue events duplicated restored composer = %q, want %q", got, want)
+	}
+	if len(m.injectedQueue) != 0 {
+		t.Fatalf("late queue events recreated interrupted state: injected=%+v", m.injectedQueue)
+	}
 }
 
 func TestThinkingQueryUsesStatusOnly(t *testing.T) {
@@ -402,7 +503,7 @@ func TestSubmitErrorShowsTransientStatusWithoutPersisting(t *testing.T) {
 	m := newProjectedStaticUIModel()
 	m.engine = client
 	m.setRuntimeActivityBusyForTest(true)
-	m.activeSubmit = activeSubmitState{token: 1, text: "prompt", stepID: "step-1"}
+	m.activeSubmit = activeSubmitState{token: 1, text: "prompt"}
 
 	next, cmd := m.Update(submitDoneMsg{token: 1, submittedText: "prompt", err: errors.New("submit failed")})
 	updated := next.(*uiModel)
@@ -494,301 +595,4 @@ func TestRuntimeControlOpTimeoutDoesNotMarkDisconnect(t *testing.T) {
 	if m.runtimeDisconnectStatusVisible() {
 		t.Fatal("did not expect op timeout to mark disconnect")
 	}
-}
-
-func TestOrdinaryPreActiveCtrlCDetachesWithoutCancelingSubmission(t *testing.T) {
-	client := &runtimeControlFakeClient{}
-	model := newProjectedTestUIModel(client)
-	target := clientui.RuntimeOperationRef{
-		Kind:            clientui.RuntimeOperationKindSubmit,
-		ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
-	}
-	model.beginSubmitAttempt("ordinary submission continues", "", target, activeSubmitOriginDirect)
-
-	next, command := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
-	updated := next.(*uiModel)
-
-	if updated.exitAction != UIActionExit {
-		t.Fatalf("exit action = %q, want detach/exit", updated.exitAction)
-	}
-	if client.interruptCalls != 0 {
-		t.Fatalf("ordinary pre-active Ctrl+C interrupt calls = %d, want 0", client.interruptCalls)
-	}
-	if updated.activeSubmit.operationRef != target || updated.activeSubmit.text != "ordinary submission continues" {
-		t.Fatalf("ordinary pre-active Ctrl+C changed submission state: %+v", updated.activeSubmit)
-	}
-	if command == nil {
-		t.Fatal("ordinary pre-active Ctrl+C did not return quit command")
-	}
-}
-
-func TestRetainedPreActiveCtrlCRestoresOnlyCanceledNotCommittedInput(t *testing.T) {
-	target := clientui.RuntimeOperationRef{
-		Kind:            clientui.RuntimeOperationKindSubmit,
-		ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
-	}
-	candidate := runtimeTupleCandidate{
-		Version: clientui.ReadModelVersion{Epoch: "retained-pre-active", Generation: 1, Sequence: 2},
-		Activity: clientui.RuntimeActivity{
-			State: clientui.RuntimeActivityRegisteredIdle,
-		},
-		InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{
-			Operations: []clientui.RuntimeInputReconciliation{{
-				Operation: target,
-				State:     clientui.RuntimeInputReconciliationCanceledNotCommitted,
-			}},
-		},
-	}
-	client := &runtimeControlFakeClient{
-		mainView: clientui.RuntimeMainView{
-			Version: clientui.ReadModelVersion{Epoch: "retained-pre-active", Generation: 1, Sequence: 1},
-			Status: clientui.RuntimeStatus{
-				WorkflowSession: &clientui.WorkflowSessionStatus{TaskID: "task-1"},
-			},
-			Activity: clientui.RuntimeActivity{State: clientui.RuntimeActivityRegisteredIdle},
-		},
-		interruptCandidate: &candidate,
-	}
-	model := newProjectedTestUIModel(client)
-	model.beginSubmitAttempt("restore retained submission", "", target, activeSubmitOriginDirect)
-
-	next, command := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
-	updated := next.(*uiModel)
-	if command == nil {
-		t.Fatal("retained pre-active Ctrl+C did not start targeted interrupt")
-	}
-	if updated.exitAction != UIActionNone || !updated.hasPendingInterrupt() {
-		t.Fatalf("retained pre-active Ctrl+C state = exit %q pending %t", updated.exitAction, updated.hasPendingInterrupt())
-	}
-	messages := collectCmdMessages(t, command)
-	var done runtimeControlDoneMsg
-	for _, message := range messages {
-		if typed, ok := message.(runtimeControlDoneMsg); ok {
-			done = typed
-		}
-	}
-	next, _ = updated.Update(done)
-	updated = next.(*uiModel)
-
-	if client.interruptTargetRef == nil || *client.interruptTargetRef != target {
-		t.Fatalf("retained pre-active Ctrl+C target = %+v, want %+v", client.interruptTargetRef, target)
-	}
-	if got := testMainInput(updated); got != "restore retained submission" {
-		t.Fatalf("restored input = %q, want original retained submission", got)
-	}
-	if updated.hasPendingInterrupt() || updated.activeSubmit.token != 0 {
-		t.Fatalf("completed retained cancellation state = pending %t active %+v", updated.hasPendingInterrupt(), updated.activeSubmit)
-	}
-}
-
-func TestStaleRetainedPreActiveCtrlCDegradesToDetachWithoutCancelingSubmission(t *testing.T) {
-	target := clientui.RuntimeOperationRef{
-		Kind:            clientui.RuntimeOperationKindSubmit,
-		ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
-	}
-	candidate := runtimeTupleCandidate{
-		Version:  clientui.ReadModelVersion{Epoch: "stale-retained", Generation: 1, Sequence: 2},
-		Activity: clientui.RuntimeActivity{State: clientui.RuntimeActivityRegisteredIdle},
-		InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{
-			Operations: []clientui.RuntimeInputReconciliation{{
-				Operation: target,
-				State:     clientui.RuntimeInputReconciliationAccepted,
-			}},
-		},
-	}
-	client := &runtimeControlFakeClient{
-		mainView: clientui.RuntimeMainView{
-			Version: clientui.ReadModelVersion{Epoch: "stale-retained", Generation: 1, Sequence: 1},
-			Status: clientui.RuntimeStatus{
-				WorkflowSession: &clientui.WorkflowSessionStatus{TaskID: "stale-task"},
-			},
-			Activity: clientui.RuntimeActivity{State: clientui.RuntimeActivityRegisteredIdle},
-		},
-		interruptCandidate: &candidate,
-	}
-	model := newProjectedTestUIModel(client)
-	model.beginSubmitAttempt("submission survives stale hint", "", target, activeSubmitOriginDirect)
-
-	next, command := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
-	updated := next.(*uiModel)
-	messages := collectCmdMessages(t, command)
-	var done runtimeControlDoneMsg
-	for _, message := range messages {
-		if typed, ok := message.(runtimeControlDoneMsg); ok {
-			done = typed
-		}
-	}
-	next, quit := updated.Update(done)
-	updated = next.(*uiModel)
-
-	if updated.exitAction != UIActionExit || quit == nil {
-		t.Fatalf("stale retained Ctrl+C = exit %q command %v, want detach/exit", updated.exitAction, quit)
-	}
-	if updated.activeSubmit.operationRef != target || updated.activeSubmit.text != "submission survives stale hint" {
-		t.Fatalf("stale retained Ctrl+C changed submission state: %+v", updated.activeSubmit)
-	}
-	if got := testMainInput(updated); got != "" {
-		t.Fatalf("stale retained Ctrl+C restored canceled text %q", got)
-	}
-}
-
-func TestActiveRuntimeCtrlCTargetsOperationSpecificReceipts(t *testing.T) {
-	tests := []struct {
-		name       string
-		activeKind clientui.RuntimeActivityActiveKind
-		targetKind clientui.RuntimeOperationKind
-	}{
-		{
-			name:       "submitted user turn",
-			activeKind: clientui.RuntimeActivityActiveKindUserTurn,
-			targetKind: clientui.RuntimeOperationKindSubmit,
-		},
-		{
-			name:       "user shell",
-			activeKind: clientui.RuntimeActivityActiveKindUserShell,
-			targetKind: clientui.RuntimeOperationKindUserShell,
-		},
-		{
-			name:       "manual compaction",
-			activeKind: clientui.RuntimeActivityActiveKindCompaction,
-			targetKind: clientui.RuntimeOperationKindCompact,
-		},
-		{
-			name:       "nested pre-submit compaction",
-			activeKind: clientui.RuntimeActivityActiveKindPreSubmitCompaction,
-			targetKind: clientui.RuntimeOperationKindPreSubmitCompact,
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			client := &runtimeControlFakeClient{}
-			model := newProjectedTestUIModel(client)
-			submit := clientui.RuntimeOperationRef{
-				Kind:            clientui.RuntimeOperationKindSubmit,
-				ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
-			}
-			model.beginSubmitAttempt("parent input", "", submit, activeSubmitOriginDirect)
-			if test.targetKind != clientui.RuntimeOperationKindSubmit {
-				model.addPendingRuntimeOperation(clientui.RuntimeOperationRef{
-					Kind:            test.targetKind,
-					ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
-				})
-			}
-			if err := model.applyRuntimeActivityProjection(runtimeTupleTestRunningActivityWithKind(test.activeKind)); err != nil {
-				t.Fatalf("apply runtime activity: %v", err)
-			}
-
-			_, command := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
-			_ = collectCmdMessages(t, command)
-
-			if client.interruptTargetRef == nil || client.interruptTargetRef.Kind != test.targetKind {
-				t.Fatalf("interrupt target = %+v, want kind %q", client.interruptTargetRef, test.targetKind)
-			}
-		})
-	}
-}
-
-func TestActiveCommittedInputIsNotRestoredAfterInterrupt(t *testing.T) {
-	target := clientui.RuntimeOperationRef{
-		Kind:            clientui.RuntimeOperationKindSubmit,
-		ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
-	}
-	candidate := runtimeTupleCandidate{
-		Version:  clientui.ReadModelVersion{Epoch: "active-committed", Generation: 1, Sequence: 2},
-		Activity: clientui.RuntimeActivity{State: clientui.RuntimeActivityRegisteredIdle},
-		InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{
-			Operations: []clientui.RuntimeInputReconciliation{{
-				Operation: target,
-				State:     clientui.RuntimeInputReconciliationCommitted,
-			}},
-		},
-	}
-	client := &runtimeControlFakeClient{
-		mainView: clientui.RuntimeMainView{
-			Version:  clientui.ReadModelVersion{Epoch: "active-committed", Generation: 1, Sequence: 1},
-			Activity: runtimeTupleTestRunningActivity(),
-		},
-		interruptCandidate: &candidate,
-	}
-	model := newProjectedTestUIModel(client)
-	model.beginSubmitAttempt("already committed", "", target, activeSubmitOriginDirect)
-	if err := model.applyRuntimeActivityProjection(runtimeTupleTestRunningActivity()); err != nil {
-		t.Fatalf("apply runtime activity: %v", err)
-	}
-
-	next, command := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
-	updated := next.(*uiModel)
-	var done runtimeControlDoneMsg
-	for _, message := range collectCmdMessages(t, command) {
-		if typed, ok := message.(runtimeControlDoneMsg); ok {
-			done = typed
-		}
-	}
-	next, _ = updated.Update(done)
-	updated = next.(*uiModel)
-
-	if got := testMainInput(updated); got != "" {
-		t.Fatalf("committed input restored as %q", got)
-	}
-	if updated.activeSubmit.token != 0 || updated.hasPendingInterrupt() {
-		t.Fatalf("committed interrupt did not reconcile: active=%+v pending=%t", updated.activeSubmit, updated.hasPendingInterrupt())
-	}
-}
-
-func TestActiveNestedPreSubmitCancellationRestoresUnacceptedParentInput(t *testing.T) {
-	parent := clientui.RuntimeOperationRef{
-		Kind:            clientui.RuntimeOperationKindSubmit,
-		ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
-	}
-	child := clientui.RuntimeOperationRef{
-		Kind:            clientui.RuntimeOperationKindPreSubmitCompact,
-		ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
-	}
-	candidate := runtimeTupleCandidate{
-		Version:  clientui.ReadModelVersion{Epoch: "nested-pre-submit", Generation: 1, Sequence: 2},
-		Activity: clientui.RuntimeActivity{State: clientui.RuntimeActivityRegisteredIdle},
-		InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{
-			Operations: []clientui.RuntimeInputReconciliation{
-				{Operation: child, State: clientui.RuntimeInputReconciliationCanceledNotCommitted},
-				{Operation: parent, State: clientui.RuntimeInputReconciliationAccepted},
-			},
-		},
-	}
-	client := &runtimeControlFakeClient{
-		mainView: clientui.RuntimeMainView{
-			Version:  clientui.ReadModelVersion{Epoch: "nested-pre-submit", Generation: 1, Sequence: 1},
-			Activity: runtimeTupleTestRunningActivityWithKind(clientui.RuntimeActivityActiveKindPreSubmitCompaction),
-		},
-		interruptCandidate: &candidate,
-	}
-	model := newProjectedTestUIModel(client)
-	model.beginSubmitAttempt("parent survives child cancellation", "", parent, activeSubmitOriginDirect)
-	model.addPendingRuntimeOperation(child)
-	if err := model.applyRuntimeActivityProjection(runtimeTupleTestRunningActivityWithKind(clientui.RuntimeActivityActiveKindPreSubmitCompaction)); err != nil {
-		t.Fatalf("apply runtime activity: %v", err)
-	}
-
-	next, command := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
-	updated := next.(*uiModel)
-	var done runtimeControlDoneMsg
-	for _, message := range collectCmdMessages(t, command) {
-		if typed, ok := message.(runtimeControlDoneMsg); ok {
-			done = typed
-		}
-	}
-	next, _ = updated.Update(done)
-	updated = next.(*uiModel)
-
-	if client.interruptTargetRef == nil || *client.interruptTargetRef != child {
-		t.Fatalf("nested pre-submit target = %+v, want child %+v", client.interruptTargetRef, child)
-	}
-	if got := testMainInput(updated); got != "parent survives child cancellation" {
-		t.Fatalf("restored parent input = %q", got)
-	}
-}
-
-func runtimeTupleTestRunningActivityWithKind(kind clientui.RuntimeActivityActiveKind) clientui.RuntimeActivity {
-	activity := runtimeTupleTestRunningActivity()
-	activity.ActiveStep.ActiveKind = kind
-	return activity
 }

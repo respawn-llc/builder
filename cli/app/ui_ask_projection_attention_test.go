@@ -88,7 +88,7 @@ func TestAskInitialProjectionReadinessBlocksPromptAndComposerKeys(t *testing.T) 
 			if testMainInput(updated) != "main draft" {
 				t.Fatalf("pending readiness key mutated hidden composer: %q", testMainInput(updated))
 			}
-			if len(control.askRequests) != 0 || len(control.approvalRequests) != 0 {
+			if len(control.batchRequests) != 0 {
 				t.Fatal("pending readiness key sent an invisible prompt answer")
 			}
 		})
@@ -122,7 +122,7 @@ func TestAskInitialProjectionReadinessKeepsHelpAndGlobalCtrlC(t *testing.T) {
 		if updated.exitAction != UIActionExit || command == nil {
 			t.Fatal("pending ctrl-c did not reach global runtime/terminal handling")
 		}
-		if len(control.askRequests) != 0 || len(control.approvalRequests) != 0 {
+		if len(control.batchRequests) != 0 {
 			t.Fatal("pending ctrl-c sent an invisible prompt answer")
 		}
 	})

@@ -1,44 +1,25 @@
 package main
 
 import (
-	"bytes"
 	"errors"
-	"flag"
 	"fmt"
-	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
-	"text/template"
 
-	"core/shared/serverapi"
+	"core/server/metadata"
 )
 
-type taskLabelFilterTemplateData struct {
-	FilterKind       string
-	FilterMode       string
-	Indent           string
-	LabelIDs         string
-	ExcludedLabelIDs string
-	TaskID           string
-}
-
-type taskDependencyFilterTemplateData struct {
-	DependencyFilter string
-	Indent           string
-	TaskID           string
-}
-
-type taskStatusProjectionTemplateData struct {
-	LiveTaskStatesJSON string
-	Indent             string
-	Suffix             string
-}
-
-type taskListSortSlotTemplateData struct {
-	Index int
-	Last  bool
-}
+const (
+	metadataQuerySourceDirectory     = "server/metadata/querysrc"
+	renderedQueriesPath              = "server/metadata/queries.sql"
+	sqlcConfigPath                   = "sqlc.yaml"
+	generatedQueriesDirectory        = "server/metadata/sqlitegen"
+	generatedQueriesFilename         = "queries.sql.go"
+	generatedPageDescriptorsFilename = "task_search_page_descriptors_generated.go"
+	generatedSchemaContractFilename  = "task_search_schema_contract_generated.go"
+)
 
 func main() {
 	if err := runCommand(os.Args[1:]); err != nil {
@@ -48,280 +29,101 @@ func main() {
 
 func runCommand(args []string) error {
 	if len(args) == 0 {
-		return errors.New("command is required: render, annotate-sqlc, generate-normalization, check-normalization, generate-task-search-page-descriptors, or generate-task-search-schema-contract")
+		return errors.New("command is required: generate, generate-normalization, or check-normalization")
 	}
 	switch args[0] {
-	case "render":
-		return renderQueriesCommand(args[1:])
-	case "annotate-sqlc":
-		return annotateSQLCCommand(args[1:])
+	case "generate":
+		return generateMetadataQueriesCommand(args[1:])
 	case "generate-normalization":
 		return runNormalizationCommand("generate", args[1:])
 	case "check-normalization":
 		return runNormalizationCommand("check", args[1:])
-	case "generate-task-search-page-descriptors":
-		return generateTaskSearchPageDescriptorsCommand(args[1:])
-	case "generate-task-search-schema-contract":
-		return generateTaskSearchSchemaContractCommand(args[1:])
 	default:
-		return fmt.Errorf("unknown command %q: expected render, annotate-sqlc, generate-normalization, check-normalization, generate-task-search-page-descriptors, or generate-task-search-schema-contract", args[0])
+		return fmt.Errorf(
+			"unknown command %q: expected generate, generate-normalization, or check-normalization",
+			args[0],
+		)
 	}
 }
 
-func renderQueriesCommand(args []string) error {
-	fs := flag.NewFlagSet("render", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	input := fs.String("input", "", "metadata query template input file")
-	fragment := fs.String("fragment", "", "task label filter template fragment")
-	dependencyFragment := fs.String("dependency-fragment", "", "task dependency filter template fragment")
-	statusFragment := fs.String("status-fragment", "", "task status projection template fragment")
-	output := fs.String("output", "", "generated metadata query output file")
-	if err := fs.Parse(args); err != nil {
-		return err
+func generateMetadataQueriesCommand(args []string) (err error) {
+	if len(args) != 0 {
+		return errors.New("generate does not accept positional arguments")
 	}
-	if fs.NArg() != 0 {
-		return fmt.Errorf("render does not accept positional arguments")
-	}
-	if strings.TrimSpace(*input) == "" {
-		return errors.New("input is required")
-	}
-	if strings.TrimSpace(*fragment) == "" {
-		return errors.New("fragment is required")
-	}
-	if strings.TrimSpace(*dependencyFragment) == "" {
-		return errors.New("dependency-fragment is required")
-	}
-	if strings.TrimSpace(*statusFragment) == "" {
-		return errors.New("status-fragment is required")
-	}
-	if strings.TrimSpace(*output) == "" {
-		return errors.New("output is required")
-	}
-	source, err := os.ReadFile(*input)
-	if err != nil {
-		return fmt.Errorf("read input: %w", err)
-	}
-	filterSource, err := os.ReadFile(*fragment)
-	if err != nil {
-		return fmt.Errorf("read fragment: %w", err)
-	}
-	dependencySource, err := os.ReadFile(*dependencyFragment)
-	if err != nil {
-		return fmt.Errorf("read dependency fragment: %w", err)
-	}
-	statusSource, err := os.ReadFile(*statusFragment)
-	if err != nil {
-		return fmt.Errorf("read status fragment: %w", err)
-	}
-	generated, err := generateQueries(source, filterSource, dependencySource, statusSource)
+	repositoryRoot, err := findModuleRoot()
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(*output), 0o755); err != nil {
-		return fmt.Errorf("create output dir: %w", err)
+	renderer, err := metadata.LoadQuerySourceRenderer(filepath.Join(repositoryRoot, metadataQuerySourceDirectory))
+	if err != nil {
+		return err
 	}
-	if err := os.WriteFile(*output, generated, 0o644); err != nil {
-		return fmt.Errorf("write output: %w", err)
+	generatedDir := filepath.Join(repositoryRoot, generatedQueriesDirectory)
+	renderedPath := filepath.Join(repositoryRoot, renderedQueriesPath)
+	if err := os.MkdirAll(generatedDir, 0o755); err != nil {
+		return fmt.Errorf("create generated query directory: %w", err)
+	}
+	rendered, err := renderer.Render()
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(renderedPath, rendered, 0o600); err != nil {
+		return fmt.Errorf("write rendered metadata queries: %w", err)
+	}
+	defer func() {
+		if cleanupErr := os.Remove(renderedPath); cleanupErr != nil && !errors.Is(cleanupErr, os.ErrNotExist) {
+			err = errors.Join(err, fmt.Errorf("remove rendered metadata queries: %w", cleanupErr))
+		}
+	}()
+	command := exec.Command("sqlc", "generate", "-f", filepath.Join(repositoryRoot, sqlcConfigPath))
+	command.Dir = repositoryRoot
+	output, commandErr := command.CombinedOutput()
+	if commandErr != nil {
+		return fmt.Errorf(
+			"generate metadata SQL adapters: %w\n%s",
+			commandErr,
+			strings.TrimSpace(string(output)),
+		)
+	}
+	if err := annotateFile(filepath.Join(generatedDir, generatedQueriesFilename)); err != nil {
+		return err
+	}
+	pageQuery, err := renderer.RenderTaskSearchPageDescriptors()
+	if err != nil {
+		return err
+	}
+	pageAdapter, err := generateTaskSearchPageDescriptors(pageQuery)
+	if err != nil {
+		return err
+	}
+	if err := writeGeneratedFile(
+		filepath.Join(generatedDir, generatedPageDescriptorsFilename),
+		pageAdapter,
+	); err != nil {
+		return err
+	}
+	contractQuery, err := renderer.RenderTaskSearchSchemaContract()
+	if err != nil {
+		return err
+	}
+	contractAdapter, err := generateTaskSearchSchemaContract(contractQuery)
+	if err != nil {
+		return err
+	}
+	return writeGeneratedFile(
+		filepath.Join(generatedDir, generatedSchemaContractFilename),
+		contractAdapter,
+	)
+}
+
+func writeGeneratedFile(path string, source []byte) error {
+	if err := os.WriteFile(path, source, 0o644); err != nil {
+		return fmt.Errorf("write generated query adapter %s: %w", filepath.Base(path), err)
 	}
 	return nil
-}
-
-func annotateSQLCCommand(args []string) error {
-	fs := flag.NewFlagSet("annotate-sqlc", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	input := fs.String("input", "", "sqlc-generated Go source to annotate")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if fs.NArg() != 0 {
-		return fmt.Errorf("annotate-sqlc does not accept positional arguments")
-	}
-	if strings.TrimSpace(*input) == "" {
-		return errors.New("input is required")
-	}
-	return annotateFile(*input)
 }
 
 func exitWithError(err error) {
 	_, _ = fmt.Fprintf(os.Stderr, "metadataquerygen: %v\n", err)
 	os.Exit(1)
-}
-
-func generateQueries(source []byte, filterSource []byte, dependencySource []byte, statusSource []byte) ([]byte, error) {
-	queryTemplate, err := parseMetadataQueryTemplate(source, filterSource, dependencySource, statusSource)
-	if err != nil {
-		return nil, err
-	}
-	var generated bytes.Buffer
-	if err := queryTemplate.Execute(&generated, metadataQueryRenderData{
-		TaskListSortSlots: taskListSortSlots(),
-	}); err != nil {
-		return nil, fmt.Errorf("render metadata query template: %w", err)
-	}
-	return append(bytes.TrimRight(generated.Bytes(), "\n"), '\n'), nil
-}
-
-type metadataQueryRenderData struct {
-	IncludeTaskSearchPageDescriptors bool
-	TaskListSortSlots                []taskListSortSlotTemplateData
-}
-
-func taskListSortSlots() []taskListSortSlotTemplateData {
-	slots := make([]taskListSortSlotTemplateData, serverapi.WorkflowTaskListMaxSortSelectors)
-	for index := range slots {
-		slots[index] = taskListSortSlotTemplateData{
-			Index: index + 1,
-			Last:  index == len(slots)-1,
-		}
-	}
-	return slots
-}
-
-func renderTaskSearchPageDescriptors(source []byte, filterSource []byte, dependencySource []byte, statusSource []byte) ([]byte, error) {
-	return renderTaskSearchQueryTemplate("taskSearchPageDescriptors", source, filterSource, dependencySource, statusSource, true)
-}
-
-func renderTaskSearchSchemaContract(source []byte, filterSource []byte, dependencySource []byte, statusSource []byte) ([]byte, error) {
-	return renderTaskSearchQueryTemplate("taskSearchSchemaContract", source, filterSource, dependencySource, statusSource, false)
-}
-
-func renderTaskSearchQueryTemplate(templateName string, source []byte, filterSource []byte, dependencySource []byte, statusSource []byte, includePageDescriptors bool) ([]byte, error) {
-	queryTemplate, err := parseMetadataQueryTemplate(source, filterSource, dependencySource, statusSource)
-	if err != nil {
-		return nil, err
-	}
-	query := queryTemplate.Lookup(templateName)
-	if query == nil {
-		return nil, fmt.Errorf("task-search query template %q is absent", templateName)
-	}
-	var rendered bytes.Buffer
-	if err := query.Execute(&rendered, metadataQueryRenderData{IncludeTaskSearchPageDescriptors: includePageDescriptors}); err != nil {
-		return nil, fmt.Errorf("render task-search query template %q: %w", templateName, err)
-	}
-	return rendered.Bytes(), nil
-}
-
-func parseMetadataQueryTemplate(source []byte, filterSource []byte, dependencySource []byte, statusSource []byte) (*template.Template, error) {
-	filterTemplate, err := template.New("task_label_filter").Option("missingkey=error").Parse(string(filterSource))
-	if err != nil {
-		return nil, fmt.Errorf("parse task label filter template: %w", err)
-	}
-	dependencyTemplate, err := template.New("task_dependency_filter").Option("missingkey=error").Parse(string(dependencySource))
-	if err != nil {
-		return nil, fmt.Errorf("parse task dependency filter template: %w", err)
-	}
-	statusTemplate, err := template.New("task_status_projection").Option("missingkey=error").Parse(string(statusSource))
-	if err != nil {
-		return nil, fmt.Errorf("parse task status projection template: %w", err)
-	}
-	renderTaskLabelFilter := func(
-		indent string,
-		taskID string,
-		filterKind string,
-		filterMode string,
-		labelIDs string,
-		excludedLabelIDs string,
-	) (string, error) {
-		data := taskLabelFilterTemplateData{
-			FilterKind:       filterKind,
-			FilterMode:       filterMode,
-			Indent:           indent,
-			LabelIDs:         labelIDs,
-			ExcludedLabelIDs: excludedLabelIDs,
-			TaskID:           taskID,
-		}
-		if err := data.validate(); err != nil {
-			return "", err
-		}
-		var rendered bytes.Buffer
-		if err := filterTemplate.Execute(&rendered, data); err != nil {
-			return "", fmt.Errorf("render task label filter template: %w", err)
-		}
-		return rendered.String(), nil
-	}
-	renderTaskStatusProjection := func(
-		indent string,
-		liveTaskStatesJSON string,
-		suffix string,
-	) (string, error) {
-		data := taskStatusProjectionTemplateData{
-			LiveTaskStatesJSON: liveTaskStatesJSON,
-			Indent:             indent,
-			Suffix:             suffix,
-		}
-		if err := data.validate(); err != nil {
-			return "", err
-		}
-		var rendered bytes.Buffer
-		if err := statusTemplate.Execute(&rendered, data); err != nil {
-			return "", fmt.Errorf("render task status projection template: %w", err)
-		}
-		return rendered.String(), nil
-	}
-	renderTaskDependencyFilter := func(indent string, taskID string, dependencyFilter string) (string, error) {
-		data := taskDependencyFilterTemplateData{
-			DependencyFilter: dependencyFilter,
-			Indent:           indent,
-			TaskID:           taskID,
-		}
-		if err := data.validate(); err != nil {
-			return "", err
-		}
-		var rendered bytes.Buffer
-		if err := dependencyTemplate.Execute(&rendered, data); err != nil {
-			return "", fmt.Errorf("render task dependency filter template: %w", err)
-		}
-		return rendered.String(), nil
-	}
-	queryTemplate, err := template.New("queries").
-		Option("missingkey=error").
-		Funcs(template.FuncMap{
-			"taskLabelFilter":      renderTaskLabelFilter,
-			"taskDependencyFilter": renderTaskDependencyFilter,
-			"taskStatusProjection": renderTaskStatusProjection,
-		}).
-		Parse(string(source))
-	if err != nil {
-		return nil, fmt.Errorf("parse metadata query template: %w", err)
-	}
-	return queryTemplate, nil
-}
-
-func (d taskDependencyFilterTemplateData) validate() error {
-	switch {
-	case strings.TrimSpace(d.TaskID) == "":
-		return errors.New("task ID template expression is empty")
-	case strings.TrimSpace(d.DependencyFilter) == "":
-		return errors.New("dependency filter template expression is empty")
-	default:
-		return nil
-	}
-}
-
-func (d taskLabelFilterTemplateData) validate() error {
-	switch {
-	case strings.TrimSpace(d.TaskID) == "":
-		return errors.New("task ID template expression is empty")
-	case strings.TrimSpace(d.FilterKind) == "":
-		return errors.New("filter kind template expression is empty")
-	case strings.TrimSpace(d.FilterMode) == "":
-		return errors.New("filter mode template expression is empty")
-	case strings.TrimSpace(d.LabelIDs) == "":
-		return errors.New("label IDs template expression is empty")
-	case strings.TrimSpace(d.ExcludedLabelIDs) == "":
-		return errors.New("excluded label IDs template expression is empty")
-	default:
-		return nil
-	}
-}
-
-func (d taskStatusProjectionTemplateData) validate() error {
-	switch {
-	case strings.TrimSpace(d.LiveTaskStatesJSON) == "":
-		return errors.New("live task states JSON template expression is empty")
-	case d.Suffix != "" && d.Suffix != ",":
-		return fmt.Errorf("task status projection suffix %q is invalid", d.Suffix)
-	default:
-		return nil
-	}
 }

@@ -10,66 +10,40 @@ import (
 	"core/shared/config"
 )
 
-type OutsideWorkspaceRequest = tools.FSGuardRequest
-type OutsideWorkspaceDecision = tools.FSGuardDecision
+type options struct {
+	allowOutsideWorkspace    bool
+	outsideWorkspaceApprover tools.FileAccessApprover
+	pathDenyPolicy           tools.PathDenyPolicy
+}
 
-const (
-	OutsideWorkspaceDecisionDeny         = tools.FSGuardDecisionDeny
-	OutsideWorkspaceDecisionAllowOnce    = tools.FSGuardDecisionAllowOnce
-	OutsideWorkspaceDecisionAllowSession = tools.FSGuardDecisionAllowSession
-)
-
-type OutsideWorkspaceApproval = tools.FSGuardApproval
-type OutsideWorkspaceApprover = tools.FSGuardApprover
-
-type Option func(*Tool)
+type Option func(*options)
 
 func WithAllowOutsideWorkspace(allow bool) Option {
-	return func(t *Tool) {
-		t.allowOutsideWorkspace = allow
+	return func(options *options) {
+		options.allowOutsideWorkspace = allow
 	}
 }
 
-func WithOutsideWorkspaceApprover(approver OutsideWorkspaceApprover) Option {
-	return func(t *Tool) {
-		t.outsideWorkspaceApprover = approver
+func WithOutsideWorkspaceApprover(approver tools.FileAccessApprover) Option {
+	return func(options *options) {
+		options.outsideWorkspaceApprover = approver
 	}
 }
 
 func WithPathDenyPolicy(policy tools.PathDenyPolicy) Option {
-	return func(t *Tool) {
-		t.pathDenyPolicy = policy
+	return func(options *options) {
+		options.pathDenyPolicy = policy
 	}
 }
 
-func WithManagedWorktreePathContext(context *tools.ManagedWorktreePathContext) Option {
-	return func(t *Tool) {
-		t.managedWorktreePathContext = context
-	}
-}
-
-func WithFileAccessScope(scope tools.FileAccessScope) Option {
-	return func(t *Tool) {
-		t.fileAccessScope = scope.Clone()
-	}
-}
-
-const outsideWorkspaceRejectionInstruction = "If it's essential to the task, ask the user to make the edit manually at the end of the task."
-
-func (t *Tool) resolvePath(ctx context.Context, path string, mustExist bool, approvedOutside map[string]bool) (string, error) {
+func (t *Tool) resolvePath(ctx context.Context, path string, mustExist bool, accessCall *tools.FileAccessCall) (string, error) {
 	real, err := t.resolvePathTarget(path, mustExist)
 	if err != nil {
 		return "", err
 	}
-	if err := t.checkForeignManagedWorktreePath(real); err != nil {
-		return "", err
-	}
-	real, err = t.guardResolvedPath(ctx, path, real, approvedOutside)
-	if err != nil {
-		return "", err
-	}
-	if err := t.checkForeignManagedWorktreePath(real); err != nil {
-		return "", err
+	outcome := accessCall.Authorize(ctx, path, real)
+	if !outcome.IsAllowed() {
+		return "", fileAccessFailure(outcome)
 	}
 	return real, nil
 }
@@ -80,7 +54,7 @@ func (t *Tool) resolvePathTarget(path string, mustExist bool) (string, error) {
 	}
 	candidate := path
 	if !filepath.IsAbs(candidate) {
-		candidate = filepath.Join(t.fileAccessScope.WorkingDirectory.LexicalPath, candidate)
+		candidate = filepath.Join(t.fileAccess.WorkingDirectory().LexicalPath, candidate)
 	}
 	candidate = filepath.Clean(candidate)
 
@@ -100,34 +74,4 @@ func (t *Tool) resolvePathTarget(path string, mustExist bool) (string, error) {
 	}
 
 	return real, nil
-}
-
-func (t *Tool) guardResolvedPath(ctx context.Context, path string, real string, approvedOutside map[string]bool) (string, error) {
-	guard := NewOutsideWorkspaceGuardWithScope(
-		t.fileAccessScope,
-		t.workspaceOnly,
-		t.allowOutsideWorkspace,
-		t.outsideWorkspaceApprover,
-		func() bool {
-			t.outsideWorkspaceSessionMu.RLock()
-			defer t.outsideWorkspaceSessionMu.RUnlock()
-			return t.outsideWorkspaceSessionAllow
-		},
-		func(allow bool) {
-			t.outsideWorkspaceSessionMu.Lock()
-			t.outsideWorkspaceSessionAllow = allow
-			t.outsideWorkspaceSessionMu.Unlock()
-		},
-		outsideWorkspaceRejectionInstruction,
-		OutsideWorkspaceErrorLabels{
-			OutsidePath:          "patch target outside workspace",
-			ApprovalFailed:       "outside-workspace edit approval failed",
-			RejectedByUserPrefix: "patch target outside workspace rejected by user",
-		},
-		OutsideWorkspaceFailureFactory{},
-		IsPathInTemporaryDir,
-		nil,
-		t.pathDenyPolicy,
-	)
-	return guard.Allow(ctx, path, real, approvedOutside)
 }

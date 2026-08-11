@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"core/cli/tui/transcriptrender"
@@ -360,7 +361,7 @@ func TestBellHooksSupervisorToolThresholdSpansReview(t *testing.T) {
 	}
 }
 
-func TestBellHooksSupervisorNoopFollowUpPreservesTurn(t *testing.T) {
+func TestBellHooksBlankFinalFollowUpPreservesTurn(t *testing.T) {
 	ringer := &countRinger{}
 	hooks := newUnfocusedBellHooks(ringer)
 	preFeedback := "answer preserved across silent review"
@@ -369,7 +370,8 @@ func TestBellHooksSupervisorNoopFollowUpPreservesTurn(t *testing.T) {
 	hooks.OnTranscriptMessage(bellAssistantFinalMessageWithText(1, preFeedback))
 	hooks.OnTranscriptMessage(bellReviewerStateMessage(1, clientui.ReviewerStateRunning))
 	hooks.OnTranscriptMessage(bellToolStartMessage(1))
-	hooks.OnTranscriptMessage(bellAssistantDeltaMessage(1, uiNoopFinalToken))
+	hooks.OnTranscriptMessage(bellAssistantDeltaMessage(1, " \n\t"))
+	hooks.OnTranscriptMessage(bellLiveRunNoFinalMessage())
 	hooks.OnTranscriptMessage(bellReviewerStateMessage(1, clientui.ReviewerStateCompleted))
 	hooks.OnTranscriptMessage(bellStepFinishedMessage(1))
 	hooks.OnTurnQueueDrained()
@@ -445,29 +447,28 @@ func TestBellHooksTurnCompletionFocusPolicy(t *testing.T) {
 	})
 }
 
-func TestBellHooksNoopFinalizationScope(t *testing.T) {
-	t.Run("clears pending completion", func(t *testing.T) {
-		ringer := &countRinger{}
-		hooks := newUnfocusedBellHooks(ringer)
-		recordToolHeavyBellTurn(hooks, 1)
-		hooks.OnTranscriptMessage(bellAssistantDeltaMessage(2, uiNoopFinalToken))
-		hooks.OnTurnQueueDrained()
-		if ringer.total() != 0 {
-			t.Fatalf("NO_OP finalization emitted %d events", ringer.total())
-		}
-	})
-	t.Run("preserves unrelated active turn", func(t *testing.T) {
-		ringer := &countRinger{}
-		hooks := newUnfocusedBellHooks(ringer)
-		recordToolHeavyBellTurn(hooks, 1)
-		hooks.OnTranscriptMessage(bellToolStartMessage(2))
-		hooks.OnTranscriptMessage(bellAssistantDeltaMessage(3, uiNoopFinalToken))
-		recordToolHeavyBellTurn(hooks, 2)
-		hooks.OnTurnQueueDrained()
-		if ringer.notifications != 1 {
-			t.Fatalf("unrelated active turn emitted %d notifications", ringer.notifications)
-		}
-	})
+func TestBellHooksBlankFinalDoesNotCreateNotification(t *testing.T) {
+	ringer := &countRinger{}
+	hooks := newUnfocusedBellHooks(ringer)
+	hooks.OnTurnQueueAborted()
+	hooks.OnTurnQueueDrained()
+	if ringer.total() != 0 {
+		t.Fatalf("blank final emitted %d events", ringer.total())
+	}
+}
+
+func TestBellHooksNoFinalLiveRunClearsEarlierPendingCompletion(t *testing.T) {
+	ringer := &countRinger{}
+	hooks := newUnfocusedBellHooks(ringer)
+
+	recordToolHeavyBellTurn(hooks, 1)
+	hooks.OnTranscriptMessage(bellLiveRunNoFinalMessage())
+	hooks.OnTranscriptMessage(bellStepFinishedMessage(2))
+	hooks.OnTurnQueueDrained()
+
+	if ringer.total() != 0 {
+		t.Fatalf("no-final live run emitted %d stale completion events", ringer.total())
+	}
 }
 
 func TestBellHooksCorrelateQueuedTurnSteps(t *testing.T) {
@@ -625,6 +626,16 @@ func bellAssistantDeltaMessage(step int, delta string) clientui.TranscriptMessag
 		StepID: bellTestStepID(step), StreamID: runtimeids.NewAssistantStreamID(), Delta: delta, Phase: transcript.AssistantPhaseFinal,
 	}))
 
+}
+
+func bellLiveRunNoFinalMessage() clientui.TranscriptMessage {
+	startedAt := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+	return clientui.NewTranscriptMessage(2, clientui.NewTranscriptEvent(clientui.TranscriptLiveRunResult{
+		Status:     clientui.LiveRunStatusCompleted,
+		ResultKind: clientui.LiveRunResultNoFinalAnswer,
+		StartedAt:  startedAt,
+		FinishedAt: startedAt.Add(time.Second),
+	}))
 }
 
 func recordToolHeavyBellTurn(hooks *bellHooks, step int) {

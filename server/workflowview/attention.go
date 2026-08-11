@@ -15,6 +15,7 @@ import (
 	"core/server/metadata/sqlitegen"
 	"core/server/sessionruntime"
 	"core/server/workflow"
+	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/textutil"
@@ -315,23 +316,22 @@ func (a *Attention) liveQuestionCandidates(ctx context.Context, taskFilter *stri
 			if err != nil {
 				return nil, err
 			}
-			promptsByID := make(map[string]PendingPromptSnapshot, len(prompts))
+			promptsByID := make(map[clientui.PromptID]PendingPromptSnapshot, len(prompts))
 			for _, prompt := range prompts {
-				promptID := strings.TrimSpace(prompt.ID)
-				if promptID == "" {
-					return nil, fmt.Errorf("task %q session %q has a pending prompt without question identity", taskID, execution.Agent.SessionID)
+				if err := prompt.PromptID.Validate(); err != nil {
+					return nil, fmt.Errorf("task %q session %q pending prompt identity: %w", taskID, execution.Agent.SessionID, err)
 				}
-				if _, duplicate := promptsByID[promptID]; duplicate {
-					return nil, fmt.Errorf("task %q session %q has duplicate pending prompt %q", taskID, execution.Agent.SessionID, promptID)
+				if _, duplicate := promptsByID[prompt.PromptID]; duplicate {
+					return nil, fmt.Errorf("task %q session %q has duplicate pending prompt %q", taskID, execution.Agent.SessionID, prompt.PromptID)
 				}
-				promptsByID[promptID] = prompt
+				promptsByID[prompt.PromptID] = prompt
 			}
 			for _, promptReference := range execution.PendingPrompts {
 				if promptReference.Kind != sessionruntime.PendingPromptKindQuestion &&
 					promptReference.Kind != sessionruntime.PendingPromptKindSessionApproval {
 					continue
 				}
-				prompt, present := promptsByID[promptReference.ID]
+				prompt, present := promptsByID[clientui.PromptID(promptReference.ID)]
 				if !present {
 					continue
 				}
@@ -349,26 +349,19 @@ func (a *Attention) liveQuestionCandidates(ctx context.Context, taskFilter *stri
 				if occurredAt <= 0 {
 					return nil, fmt.Errorf("task %q session %q prompt %q has no occurrence time", taskID, execution.Agent.SessionID, promptReference.ID)
 				}
-				questionID := promptReference.ID
-				sessionID := execution.Agent.SessionID.String()
 				currentNode := workflowCurrentNodeReference(execution.Ref.CurrentNode)
-				currentNode.SessionID = &sessionID
 				out = append(out, attentionCandidate{item: serverapi.WorkflowAttentionItem{
-					ID:                     "question:" + sessionID + ":" + questionID,
-					Kind:                   "question",
-					ProjectID:              task.ProjectID,
-					WorkflowID:             task.WorkflowID,
-					TaskID:                 task.ID,
-					TaskShortID:            task.ShortID,
-					TaskTitle:              task.Title,
-					Message:                textutil.Value(question.message),
-					CurrentNode:            &currentNode,
-					SessionID:              &sessionID,
-					QuestionID:             &questionID,
-					Suggestions:            question.suggestions,
-					RecommendedOptionIndex: question.recommendedOptionIndex,
-					Question:               question.prompt,
-					OccurredAtUnixMs:       occurredAt,
+					ID:               liveQuestionAttentionID(execution.Agent.SessionID, question.prompt.StepID, question.prompt.PromptID),
+					Kind:             "question",
+					ProjectID:        task.ProjectID,
+					WorkflowID:       task.WorkflowID,
+					TaskID:           task.ID,
+					TaskShortID:      task.ShortID,
+					TaskTitle:        task.Title,
+					Message:          textutil.Value(question.message),
+					CurrentNode:      &currentNode,
+					Question:         question.prompt,
+					OccurredAtUnixMs: occurredAt,
 				}})
 			}
 		}
@@ -379,20 +372,28 @@ func (a *Attention) liveQuestionCandidates(ctx context.Context, taskFilter *stri
 	return out, nil
 }
 
+func liveQuestionAttentionID(
+	sessionID runtimeids.SessionID,
+	stepID runtimeids.StepID,
+	promptID clientui.PromptID,
+) string {
+	return "question:" + sessionID.String() + ":" + stepID.String() + ":" + string(promptID)
+}
+
 func (a *Attention) attachLiveQuestionSessionNames(ctx context.Context, candidates []attentionCandidate) error {
 	sessionIDs := make([]string, 0, len(candidates))
 	for _, candidate := range candidates {
-		if candidate.item.SessionID == nil {
-			return fmt.Errorf("live question attention %q has no session id", candidate.item.ID)
+		if candidate.item.Question == nil {
+			return fmt.Errorf("live question attention %q has no prompt", candidate.item.ID)
 		}
-		sessionIDs = append(sessionIDs, *candidate.item.SessionID)
+		sessionIDs = append(sessionIDs, candidate.item.Question.SessionID.String())
 	}
 	names, err := resolveSessionNames(ctx, a.queries.ListSessionNamesByIDs, sessionIDs)
 	if err != nil {
 		return err
 	}
 	for index := range candidates {
-		candidates[index].item.SessionName = names[*candidates[index].item.SessionID]
+		candidates[index].item.SessionName = names[candidates[index].item.Question.SessionID.String()]
 	}
 	return nil
 }

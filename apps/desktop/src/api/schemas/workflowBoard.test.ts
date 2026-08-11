@@ -72,8 +72,9 @@ const card = {
 describe("workflow board schemas", () => {
   it("preserves pending-ask recommendation presence and rejects invalid indexes", () => {
     const pendingAsk = {
-      AskID: "ask-1",
+      PromptID: "ask-1",
       SessionID: "session-1",
+      StepID: "11111111-1111-4111-8111-111111111111",
       Question: "Choose?",
       Suggestions: ["one", "two"],
       CreatedAt: "2026-08-03T00:00:00Z",
@@ -165,6 +166,66 @@ describe("workflow board schemas", () => {
         ],
       },
     });
+  });
+
+  it("requires Manual Move descriptions to be explicit nullable nonblank metadata", () => {
+    const base = {
+      outcome: "transition" as const,
+      transition: {
+        choices: [
+          {
+            transition_key: "next",
+            label: "Next",
+            source_node_display_name: "Plan",
+            required_values: [
+              {
+                node_key: "plan",
+                output_name: "summary",
+                resolved_value: null,
+              },
+            ],
+          },
+        ],
+      },
+    };
+    const baseChoice = base.transition.choices[0];
+    if (baseChoice === undefined) {
+      throw new Error("expected base choice");
+    }
+    const parsed = taskMovePreviewResponseSchema.parse({
+        ...base,
+        transition: {
+          ...base.transition,
+          choices: [
+            {
+              ...baseChoice,
+              required_values: [{ ...baseChoice.required_values[0], description: null }],
+            },
+          ],
+        },
+      });
+    if (parsed.outcome !== "transition") {
+      throw new Error("expected transition preview");
+    }
+    if (!("transition" in parsed)) {
+      throw new Error("expected transition preview");
+    }
+    expect(parsed.transition.choices[0]?.requiredValues[0]?.description).toBeNull();
+    expect(() =>
+      taskMovePreviewResponseSchema.parse({
+        ...base,
+        transition: {
+          ...base.transition,
+          choices: [
+            {
+              ...baseChoice,
+              required_values: [{ ...baseChoice.required_values[0], description: " \t" }],
+            },
+          ],
+        },
+      }),
+    ).toThrow();
+    expect(() => taskMovePreviewResponseSchema.parse(base)).toThrow();
   });
 
   it("rejects legacy prefixed Workflow IDs", () => {
@@ -372,8 +433,7 @@ describe("task activity schema", () => {
     expect(
       activityPageSchema.parse({
         items: [commentActivity, sessionStartedActivity],
-        next_page_token: "",
-        generated_at_unix_ms: 2,
+        next_offset: 50,
       }),
     ).toMatchObject({
       items: [
@@ -395,10 +455,19 @@ describe("task activity schema", () => {
       expect(() =>
         activityPageSchema.parse({
           items: [item],
-          next_page_token: "",
-          generated_at_unix_ms: 2,
+          next_offset: null,
         }),
       ).toThrow();
     }
+  });
+
+  it("rejects Activity cursor and generated-at fields", () => {
+    expect(() =>
+      activityPageSchema.parse({
+        items: [],
+        next_page_token: "legacy",
+        generated_at_unix_ms: 2,
+      }),
+    ).toThrow();
   });
 });

@@ -146,20 +146,13 @@ func (m *uiModel) applyTranscriptRuntimeReadModelUpdate(admission runtimeTupleMe
 	}
 	var cmd tea.Cmd
 	if m.hasPendingInterrupt() {
-		if m.pendingInterruptMissingInputReconciliation(m.cachedRuntimeMainView()) {
-			cmd = m.requestInputReconciliationRefresh()
-		} else {
-			cmd = m.acknowledgePendingInterrupt()
-		}
+		cmd = m.acknowledgePendingInterrupt()
 	}
 	return tea.Batch(cmd, m.releaseDeferredRuntimeSyncs())
 }
 
 func (m *uiModel) applyTranscriptStepState(state clientui.TranscriptStepState) {
 	if state.Lifecycle == clientui.StepLifecycleStarted {
-		if m.activeSubmit.token != 0 && strings.TrimSpace(m.activeSubmit.stepID) == "" {
-			m.activeSubmit.stepID = state.StepID.String()
-		}
 		return
 	}
 	m.reasoningStatusHeader = ""
@@ -238,14 +231,7 @@ func (m *uiModel) applyTranscriptContextUsage(usage clientui.TranscriptContextUs
 func (m *uiModel) applyTranscriptUserMessageFlushed(flushed clientui.TranscriptUserMessageFlushed) tea.Cmd {
 	m.conversationFreshness = clientui.ConversationFreshnessEstablished
 	m.localConversationTurn = true
-	ids := runtimeOperationIdentityStrings(flushed.Operations)
-	if m.activeSubmit.token != 0 && runtimeOperationRefsContain(flushed.Operations, m.activeSubmit.operationRef) {
-		m.activeSubmit.stepID = flushed.StepID.String()
-		m.activeSubmit.flushed = true
-	}
-	for _, id := range ids {
-		m.removePendingInjectedByID(id)
-	}
+	ids := queuedMessageIdentityStrings(flushed.Messages)
 	var cmd tea.Cmd
 	for _, answer := range m.removeInjectedQueueItemsByIDs(ids) {
 		cmd = tea.Batch(cmd, m.answerQueuedApprovalCommentary(answer))
@@ -254,11 +240,12 @@ func (m *uiModel) applyTranscriptUserMessageFlushed(flushed clientui.TranscriptU
 }
 
 func (m *uiModel) applyTranscriptQueuedMessageState(state clientui.TranscriptQueuedMessageState) tea.Cmd {
-	ids := runtimeOperationIdentityStrings([]clientui.RuntimeOperationRef{{
-		Kind:            clientui.RuntimeOperationKindQueuedMessage,
-		ClientRequestID: state.ClientRequestID,
-		QueueItemID:     &state.QueueItemID,
-	}})
+	if state.Status == clientui.QueuedUserMessageFailed &&
+		state.FailureReason != nil &&
+		*state.FailureReason == clientui.QueuedUserMessageFailureStopped &&
+		m.hasPendingInterrupt() {
+		return m.acknowledgePendingInterrupt()
+	}
 	if state.Status == clientui.QueuedUserMessageAccepted {
 		m.registerSteeredQueuedUserMessage(clientui.QueuedUserMessage{
 			ID:              state.QueueItemID.String(),
@@ -267,17 +254,23 @@ func (m *uiModel) applyTranscriptQueuedMessageState(state clientui.TranscriptQue
 		})
 		return nil
 	}
-	for _, id := range ids {
-		m.removePendingInjectedByID(id)
+	ids := []string{state.ClientRequestID.String(), state.QueueItemID.String()}
+	index := m.injectedQueueIndexByAnyID(state.ClientRequestID.String())
+	if index < 0 {
+		index = m.injectedQueueIndexByAnyID(state.QueueItemID.String())
 	}
+	if index < 0 {
+		return nil
+	}
+	localText := m.injectedQueue[index].Text
 	var cmd tea.Cmd
 	for _, answer := range m.removeInjectedQueueItemsByIDs(ids) {
 		cmd = tea.Batch(cmd, m.answerQueuedApprovalCommentary(answer))
 	}
-	if state.Status != clientui.QueuedUserMessageFailed || state.Text == nil {
+	if state.Status != clientui.QueuedUserMessageFailed {
 		return cmd
 	}
-	m.inputController().restoreInjectedTextIntoInput(*state.Text)
+	m.inputController().restoreInjectedTextIntoInput(localText)
 	return tea.Batch(cmd, m.sendTransientStatusWithNoticeID(
 		"queued message was not submitted; restored to input",
 		uiStatusNoticeError,
@@ -288,30 +281,10 @@ func (m *uiModel) applyTranscriptQueuedMessageState(state clientui.TranscriptQue
 }
 
 func (m *uiModel) reconcileTranscriptQueuedMessages(states []clientui.TranscriptQueuedMessageState) {
-	present := make(map[string]struct{}, len(states)*2)
 	for _, state := range states {
-		present[state.ClientRequestID.String()] = struct{}{}
-		present[state.QueueItemID.String()] = struct{}{}
-	}
-	filtered := m.injectedQueue[:0]
-	for _, item := range m.injectedQueue {
-		switch item.State {
-		case injectedRuntimeQueuePendingCreate, injectedRuntimeQueueCanceledBeforeCreate, injectedRuntimeQueueCreateFailed:
-			filtered = append(filtered, item)
+		if state.Status != clientui.QueuedUserMessageAccepted {
 			continue
 		}
-		_, requestPresent := present[strings.TrimSpace(item.ClientRequestID)]
-		_, itemPresent := present[strings.TrimSpace(item.ServerID)]
-		if requestPresent || itemPresent {
-			filtered = append(filtered, item)
-			continue
-		}
-		m.removePendingInjectedByID(item.LocalID)
-		m.removePendingInjectedByID(item.ServerID)
-		m.removePendingInjectedByID(item.ClientRequestID)
-	}
-	m.injectedQueue = filtered
-	for _, state := range states {
 		m.registerSteeredQueuedUserMessage(clientui.QueuedUserMessage{
 			ID:              state.QueueItemID.String(),
 			Text:            dereferenceTranscriptText(state.Text),
@@ -320,13 +293,10 @@ func (m *uiModel) reconcileTranscriptQueuedMessages(states []clientui.Transcript
 	}
 }
 
-func runtimeOperationIdentityStrings(operations []clientui.RuntimeOperationRef) []string {
-	ids := make([]string, 0, len(operations)*2)
-	for _, operation := range operations {
-		ids = append(ids, operation.ClientRequestID.String())
-		if operation.QueueItemID != nil {
-			ids = append(ids, operation.QueueItemID.String())
-		}
+func queuedMessageIdentityStrings(messages []clientui.QueuedUserMessageIdentity) []string {
+	ids := make([]string, 0, len(messages)*2)
+	for _, message := range messages {
+		ids = append(ids, message.ClientRequestID.String(), message.QueueItemID.String())
 	}
 	return ids
 }

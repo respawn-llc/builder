@@ -6,16 +6,21 @@ import (
 	"strings"
 
 	"core/server/runtime"
-	"core/server/runtimecommand"
-	"core/server/runtimeops"
+	"core/server/runtimeactivity"
+	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 type userTurnProjection struct {
 	ExecutionText string
 	HistoryText   string
+}
+
+func queuedUserTurnResponse(compacted bool, queueItemID string) serverapi.RuntimeSubmitUserTurnResponse {
+	return serverapi.RuntimeSubmitUserTurnResponse{Compacted: compacted, ResultKind: clientui.UserTurnResultKindQueued, Steered: true, QueueItemID: queueItemID}
 }
 
 func userTurnMemoRequest(req serverapi.RuntimeSubmitUserTurnRequest) sessionUserTurnMemoRequest {
@@ -62,48 +67,204 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 	if err := req.Validate(); err != nil {
 		return serverapi.RuntimeSubmitUserTurnResponse{}, err
 	}
+	clientRequestID, err := runtimeids.ParseRuntimeClientRequestID(req.ClientRequestID)
+	if err != nil {
+		return serverapi.RuntimeSubmitUserTurnResponse{}, err
+	}
 	memoReq := userTurnMemoRequest(req)
-	return runtimeops.Do(s.operations, ctx, memoReq.SessionID, req.OperationRef, memoReq, sameSessionUserTurnMemoRequest, func(ctx context.Context, attempt runtimeops.Attempt) (serverapi.RuntimeSubmitUserTurnResponse, error) {
+	return memoizedRuntimeCommand(ctx, clientRequestID.String(), memoReq, s.userTurns, sameSessionUserTurnMemoRequest, func(ctx context.Context) (serverapi.RuntimeSubmitUserTurnResponse, bool, error) {
 		projection, err := s.resolveUserTurnInput(ctx, req.SessionID, req.Input)
 		if err != nil {
-			s.recordRuntimeAccessFailureOrCancellation(memoReq.SessionID, req.OperationRef, err, attempt)
-			return serverapi.RuntimeSubmitUserTurnResponse{}, err
+			return serverapi.RuntimeSubmitUserTurnResponse{}, false, err
 		}
-		sessionID, err := runtimeids.ParseSessionID(memoReq.SessionID)
+		attempt := newRuntimeCommandAttempt(ctx)
+		defer attempt.Finish()
+		response, commandErr := s.submitUserTurn(attempt, clientRequestID, memoReq, projection, req)
+		if commandErr == nil {
+			commandErr = response.Validate()
+		}
+		return response, attempt.Accepted(), commandErr
+	})
+}
+
+func (s *Service) submitUserTurn(
+	attempt *runtimeCommandAttempt,
+	clientRequestID runtimeids.RuntimeClientRequestID,
+	memoReq sessionUserTurnMemoRequest,
+	projection userTurnProjection,
+	req serverapi.RuntimeSubmitUserTurnRequest,
+) (serverapi.RuntimeSubmitUserTurnResponse, error) {
+	var response serverapi.RuntimeSubmitUserTurnResponse
+	err := s.runAgentExecution(attempt.Context(), req.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
+		defer func() {
+			if !attempt.Accepted() {
+				return
+			}
+			if _, _, err := s.recordPromptHistory(context.Background(), memoReq.SessionID, clientRequestID.String(), projection.HistoryText); err != nil {
+				engine.ReportPromptHistoryPersistError(err.Error())
+			}
+		}()
+		shouldCompact, err := engine.ShouldCompactBeforeUserMessage(runCtx, projection.ExecutionText)
 		if err != nil {
-			s.recordRuntimeAccessFailureOrCancellation(memoReq.SessionID, req.OperationRef, err, attempt)
-			return serverapi.RuntimeSubmitUserTurnResponse{}, err
+			return err
 		}
-		driver, err := runtimecommand.NewUserTurnDriver(runtimecommand.UserTurnDriverOptions{
-			SessionID:                       sessionID,
-			ExecutionText:                   projection.ExecutionText,
-			HistoryText:                     projection.HistoryText,
-			ClientRequestID:                 req.OperationRef.ClientRequestID,
-			OperationRef:                    req.OperationRef,
-			PreSubmitCompactionOperationRef: req.PreSubmitCompactionOperationRef,
-			Operations:                      s.operations,
-			AttemptContext:                  attempt.Context(),
-			RecordPromptHistory: func(
-				historyCtx context.Context,
-				engine *runtime.Engine,
-				historySessionID runtimeids.SessionID,
-				sourceID string,
-				text string,
-			) {
-				if _, _, historyErr := s.recordPromptHistory(historyCtx, historySessionID.String(), sourceID, text); historyErr != nil {
-					engine.ReportPromptHistoryPersistError(historyErr.Error())
+		compacted := false
+		compactionBusy := false
+		var acceptedCompactionErr error
+		if shouldCompact {
+			compactionAccepted, compactErr := s.runPreSubmitCompaction(
+				attempt.Context(),
+				clientRequestID.String(),
+				memoReq.SessionID,
+				engine,
+			)
+			if compactionAccepted {
+				compacted = true
+				acceptedCompactionErr = compactErr
+			} else if compactErr != nil {
+				if !errors.Is(compactErr, runtime.ErrAgentBusy) {
+					return compactErr
 				}
-			},
-		})
+				compactionBusy = true
+			}
+		}
+		if compactionBusy {
+			queued, queueErr := engine.QueueUserMessageForAutoDrainWithAcceptance(
+				projection.ExecutionText,
+				clientRequestID.String(),
+				attempt.Accept,
+			)
+			if queueErr != nil {
+				return errors.Join(acceptedCompactionErr, queueErr)
+			}
+			response = queuedUserTurnResponse(compacted, queued.ID)
+			return acceptedCompactionErr
+		}
+		outcome, queued, err := engine.SubmitUserMessageOrSteerWithAcceptance(
+			runCtx,
+			projection.ExecutionText,
+			clientRequestID.String(),
+			attempt.Accept,
+		)
 		if err != nil {
-			s.recordRuntimeAccessFailureOrCancellation(memoReq.SessionID, req.OperationRef, err, attempt)
-			return serverapi.RuntimeSubmitUserTurnResponse{}, err
+			return errors.Join(acceptedCompactionErr, err)
 		}
-		outcome, runErr := s.runAgentOperation(attempt.Context(), req.SessionID, driver)
-		typed, ok := outcome.(runtimecommand.UserTurnOperationOutcome)
-		if outcome != nil && !ok {
-			return serverapi.RuntimeSubmitUserTurnResponse{}, errors.New("user turn driver returned the wrong outcome")
+		if queued != nil {
+			response = queuedUserTurnResponse(compacted, queued.ID)
+			return acceptedCompactionErr
 		}
-		return typed.Response, runErr
+		response = serverapi.RuntimeSubmitUserTurnResponse{
+			Compacted:  compacted,
+			ResultKind: clientui.UserTurnResultKindNoFinal,
+		}
+		switch outcome.Kind {
+		case runtime.UserTurnResultAssistantFinal:
+			response.ResultKind = clientui.UserTurnResultKindAssistantFinal
+			if outcome.FinalAnswer != nil && outcome.FinalAnswer.Content != nil {
+				response.Message = outcome.FinalAnswer.Content
+			}
+		case runtime.UserTurnResultSilentFinal:
+			response.ResultKind = clientui.UserTurnResultKindSilentFinal
+			response.Message = textutil.Value("")
+		}
+		return acceptedCompactionErr
+	})
+	if err == nil || attempt.Accepted() || !errors.Is(err, serverapi.ErrSessionRunStarting) {
+		return response, err
+	}
+	activeResponse, steered, activeErr := s.trySubmitUserTurnAsActiveExecution(
+		attempt,
+		clientRequestID,
+		memoReq,
+		projection,
+		req,
+	)
+	if activeErr != nil {
+		return serverapi.RuntimeSubmitUserTurnResponse{}, activeErr
+	}
+	if steered {
+		return activeResponse, nil
+	}
+	return serverapi.RuntimeSubmitUserTurnResponse{}, err
+}
+
+func (s *Service) trySubmitUserTurnAsActiveExecution(
+	attempt *runtimeCommandAttempt,
+	clientRequestID runtimeids.RuntimeClientRequestID,
+	memoReq sessionUserTurnMemoRequest,
+	projection userTurnProjection,
+	req serverapi.RuntimeSubmitUserTurnRequest,
+) (serverapi.RuntimeSubmitUserTurnResponse, bool, error) {
+	var response serverapi.RuntimeSubmitUserTurnResponse
+	steered := false
+	sessionID, err := runtimeids.ParseSessionID(req.SessionID)
+	if err != nil {
+		return serverapi.RuntimeSubmitUserTurnResponse{}, false, err
+	}
+	if s == nil || s.authority == nil {
+		return serverapi.RuntimeSubmitUserTurnResponse{}, false, errors.New("session runtime authority is required")
+	}
+	err = s.withLiveExecutionRuntime(attempt.Context(), sessionID, func(callbackCtx context.Context, engine *runtime.Engine) error {
+		item, accepted, err := engine.QueueUserMessageForActiveRunWithAcceptance(
+			callbackCtx,
+			projection.ExecutionText,
+			clientRequestID,
+			attempt.Accept,
+		)
+		if errors.Is(err, runtime.ErrNoActiveLiveRun) {
+			if !activeExecutionAllowsUserTurnAutoDrain(runtimeactivity.ActiveStepFromProvider(engine)) {
+				return serverapi.ErrSessionRunStarting
+			}
+			item, err = engine.QueueUserMessageForAutoDrainWithAcceptance(
+				projection.ExecutionText,
+				clientRequestID.String(),
+				attempt.Accept,
+			)
+			accepted = err == nil
+		}
+		if err != nil {
+			return err
+		}
+		if !accepted {
+			return serverapi.ErrSessionRunStarting
+		}
+		response = queuedUserTurnResponse(false, item.ID)
+		steered = true
+		if _, _, err := s.recordPromptHistory(context.Background(), memoReq.SessionID, clientRequestID.String(), projection.HistoryText); err != nil {
+			engine.ReportPromptHistoryPersistError(err.Error())
+		}
+		return nil
+	})
+	if err != nil {
+		return serverapi.RuntimeSubmitUserTurnResponse{}, steered, err
+	}
+	return response, steered, nil
+}
+
+func activeExecutionAllowsUserTurnAutoDrain(snapshot *runtimeactivity.ActiveStepSnapshot) bool {
+	if snapshot == nil {
+		return false
+	}
+	switch snapshot.ActiveKind {
+	case clientui.RuntimeActivityActiveKindCompaction, clientui.RuntimeActivityActiveKindPreSubmitCompaction:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Service) runPreSubmitCompaction(
+	ctx context.Context,
+	requestID string,
+	sessionID string,
+	engine *runtime.Engine,
+) (bool, error) {
+	memoReq := sessionOnlyMemoRequest{SessionID: strings.TrimSpace(sessionID)}
+	return memoizedRuntimeCommand(ctx, requestID, memoReq, s.preSubmitCompactions, sameComparable[sessionOnlyMemoRequest], func(ctx context.Context) (bool, bool, error) {
+		attempt := newRuntimeCommandAttempt(ctx)
+		defer attempt.Finish()
+		_, commandErr := engine.CompactContextForPreSubmitWithAcceptance(attempt.Context(), attempt.Accept)
+		accepted := attempt.Accepted()
+		return accepted, accepted, commandErr
 	})
 }

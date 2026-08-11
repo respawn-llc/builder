@@ -17,15 +17,13 @@ import (
 	"core/server/llm"
 	"core/server/metadata"
 	serverstartup "core/server/startup"
-	patchtool "core/server/tools/patch"
+	"core/server/tools"
 	"core/shared/client"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/protocol"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
-
-	"github.com/google/uuid"
 )
 
 type configuredDaemonFixture struct {
@@ -99,7 +97,7 @@ func appTestOutsidePatchCall(id, path string) appTestModelToolCall {
 func appTestOutsidePatchPath(t *testing.T) string {
 	t.Helper()
 	return filepath.Join(
-		testsetup.NonTemporaryDirectory(t, "kent-app-outside-", patchtool.IsPathInTemporaryDir),
+		testsetup.NonTemporaryDirectory(t, "kent-app-outside-", tools.IsPathInTemporaryDir),
 		"approved.txt",
 	)
 }
@@ -233,8 +231,8 @@ func TestStartSessionServerConfiguredDaemonNoAuthSkipsLaterPrompt(t *testing.T) 
 	if err != nil {
 		t.Fatalf("first SubmitUserMessage: %v", err)
 	}
-	if firstSubmission.Message != "first no-auth reply" {
-		t.Fatalf("first assistant message = %q, want first no-auth reply", firstSubmission.Message)
+	if firstSubmission.Message == nil || *firstSubmission.Message != "first no-auth reply" {
+		t.Fatalf("first assistant message = %v, want first no-auth reply", firstSubmission.Message)
 	}
 	closeRuntimeLaunchPlan(t, firstRuntimePlan)
 	if err := firstServer.Close(); err != nil {
@@ -261,8 +259,8 @@ func TestStartSessionServerConfiguredDaemonNoAuthSkipsLaterPrompt(t *testing.T) 
 	if err != nil {
 		t.Fatalf("second SubmitUserMessage: %v", err)
 	}
-	if secondSubmission.Message != "second no-auth reply" {
-		t.Fatalf("second assistant message = %q, want second no-auth reply", secondSubmission.Message)
+	if secondSubmission.Message == nil || *secondSubmission.Message != "second no-auth reply" {
+		t.Fatalf("second assistant message = %v, want second no-auth reply", secondSubmission.Message)
 	}
 	closeRuntimeLaunchPlan(t, secondRuntimePlan)
 	if hits.Load() != 2 {
@@ -397,7 +395,10 @@ func TestConfiguredDaemonEnvironmentContextUsesSessionWorkspaceRootForCWD(t *tes
 	defer closeRuntimeLaunchPlan(t, runtimePlan)
 
 	submission, err := submitRuntimeClientForTest(t, runtimePlan.Wiring.runtimeClient, "hello through interactive daemon")
-	message := submission.Message
+	message := ""
+	if submission.Message != nil {
+		message = *submission.Message
+	}
 	if err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
 	}
@@ -470,13 +471,16 @@ func TestRemoteInteractiveRuntimeAnswersPromptsFromAnyAttachedClientAcrossWorksp
 	}
 	runtimeClientsB := fixture.serverB.RuntimeAttachmentClients()
 
-	if err := runtimeClientsB.PromptControl.AnswerAsk(context.Background(), serverapi.AskAnswerRequest{
-		ClientRequestID: uuid.NewString(),
-		SessionID:       fixture.planA.SessionID,
-		AskID:           "ask-race-1",
-		Answer:          "answer from client B",
+	askAnswer := "answer from client B"
+	if _, err := runtimeClientsB.PromptControl.AnswerPromptBatch(context.Background(), serverapi.PromptAnswerBatchRequest{
+		SessionID: askPrompt.SessionID,
+		StepID:    askPrompt.StepID,
+		Entries: []serverapi.PromptAnswerBatchEntry{{
+			PromptID:       askPrompt.PromptID,
+			QuestionAnswer: &serverapi.PromptQuestionAnswer{Freeform: &askAnswer},
+		}},
 	}); err != nil {
-		t.Fatalf("AnswerAsk from attached client B: %v", err)
+		t.Fatalf("AnswerPromptBatch Question from attached client B: %v", err)
 	}
 
 	approvalPrompt := waitForRemoteTranscriptPrompt(t, fixture.runtimePlanA.Wiring.eventDispatcher.transcriptEvents, "", submissionFailed)
@@ -485,14 +489,18 @@ func TestRemoteInteractiveRuntimeAnswersPromptsFromAnyAttachedClientAcrossWorksp
 	}
 
 	commentary := "approved by client B"
-	if err := runtimeClientsB.PromptControl.AnswerApproval(context.Background(), serverapi.ApprovalAnswerRequest{
-		ClientRequestID: uuid.NewString(),
-		SessionID:       fixture.planA.SessionID,
-		ApprovalID:      string(approvalPrompt.PromptID),
-		Decision:        clientui.ApprovalDecisionAllowOnce,
-		Commentary:      &commentary,
+	if _, err := runtimeClientsB.PromptControl.AnswerPromptBatch(context.Background(), serverapi.PromptAnswerBatchRequest{
+		SessionID: approvalPrompt.SessionID,
+		StepID:    approvalPrompt.StepID,
+		Entries: []serverapi.PromptAnswerBatchEntry{{
+			PromptID: approvalPrompt.PromptID,
+			ApprovalAnswer: &serverapi.PromptApprovalAnswer{
+				Decision:   clientui.ApprovalDecisionAllowOnce,
+				Commentary: &commentary,
+			},
+		}},
 	}); err != nil {
-		t.Fatalf("AnswerApproval from attached client B: %v", err)
+		t.Fatalf("AnswerPromptBatch Approval from attached client B: %v", err)
 	}
 
 	select {
@@ -500,8 +508,8 @@ func TestRemoteInteractiveRuntimeAnswersPromptsFromAnyAttachedClientAcrossWorksp
 		if result.err != nil {
 			t.Fatalf("SubmitUserMessage: %v", result.err)
 		}
-		if result.submission.Message != "multi-client prompt flow complete" {
-			t.Fatalf("assistant message = %q", result.submission.Message)
+		if result.submission.Message == nil || *result.submission.Message != "multi-client prompt flow complete" {
+			t.Fatalf("assistant message = %v", result.submission.Message)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for model turn completion")

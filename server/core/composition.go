@@ -22,15 +22,12 @@ import (
 	"core/server/runtime"
 	"core/server/runtimecommand"
 	"core/server/runtimecontrol"
-	"core/server/runtimeops"
 	"core/server/runtimewire"
 	"core/server/serverstatus"
 	"core/server/sessionruntime"
 	"core/server/sessionservice"
 	"core/server/sessionview"
 	"core/server/sleepguard"
-	askquestion "core/server/tools"
-
 	"core/server/workflow"
 	"core/server/workflowattention"
 	"core/server/workflowexecution"
@@ -64,7 +61,6 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	lifecycleFatal := newLifecycleFatalState(ctx)
 	rootLease := opts.RootLease
 	ownsIncomingRootLease := rootLease != nil
 	if rootLease == nil {
@@ -111,12 +107,12 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		Background:      runtimeSupport.Background,
 		StoreOptions:    storeOptions,
 		PromptFeed:      runtimeRegistry,
-		EventFeed: func(resource sessionruntime.AgentResourceDescriptor, event runtime.Event) {
-			if err := runtimeRegistry.PublishAuthorityRuntimeEvent(resource.Ref, event); err != nil {
+		EventFeed: func(resource runtimeids.SessionResourceRef, event runtime.Event) {
+			if err := runtimeRegistry.PublishAuthorityRuntimeEvent(resource, event); err != nil {
 				if cfg.Settings.Debug {
-					panic(fmt.Sprintf("publish runtime event for session resource %v: %v", resource.Ref, err))
+					panic(fmt.Sprintf("publish runtime event for session resource %v: %v", resource, err))
 				}
-				fmt.Fprintf(os.Stderr, "publish runtime event for session resource %v: %v\n", resource.Ref, err)
+				fmt.Fprintf(os.Stderr, "publish runtime event for session resource %v: %v\n", resource, err)
 			}
 		},
 		ResourceLifecycle: runtimeRegistry,
@@ -144,7 +140,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	if observer := sleepManager.RuntimeActiveObserver(); observer != nil {
 		runtimeRegistry.SetSleepObserver(observer)
 	}
-	projectService, err := projectview.NewMetadataService(metadataStore, "")
+	projectService, err := projectview.NewMetadataService(metadataStore)
 	if err != nil {
 		closeRootLeaseOnFailure()
 		_ = metadataStore.Close()
@@ -176,12 +172,24 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	projectService.WithRuntimeAuthority(runtimeAuthority)
 	sessionStoreResolver := registry.NewGlobalPersistenceSessionResolver(cfg.PersistenceRoot, storeOptions...)
 	promptControlService := promptcontrol.NewPromptControlService(authorityPromptResponder{authority: runtimeAuthority})
-	runtimeOperations := runtimeops.NewCoordinator()
-	runtimeRegistry.WithOperationCoordinator(runtimeOperations)
 	runtimeRegistry.WithExecutionTargetResolver(metadataStore.ResolveOptionalSessionExecutionTarget)
 	if runtimeSupport.Background != nil {
 		runtimeRegistry.WithBackgroundProcessSnapshots(runtimeSupport.Background.List)
 	}
+	runtimeCommandExecution := runtimecommand.NewExecutionAdapter(runtimeAuthority)
+	runtimeGoalAuthority := runtimecommand.NewGoalAuthority(runtimeAuthority, runtimeCommandExecution)
+	runtimeControlService := runtimecontrol.NewServiceWithGoalCommands(runtimeAuthority, runtimeCommandExecution, runtimeGoalAuthority).
+		WithRuntimeActivityResolver(runtimeRegistry).
+		WithPromptHistoryStore(metadataStore).
+		WithWorkflowTaskSessionResolver(metadataStore).
+		WithPersistedSessionResolver(metadataStore).
+		WithLiveWatchPromptSources(askService, approvalService, runtimeRegistry)
+	runtimeControlService.WithPromptCommandResolver(promptCommandRuntimeResolver{
+		effectiveWorkspace: promptCommandEffectiveWorkspaceResolver{
+			persistenceRoot: cfg.PersistenceRoot,
+		},
+		metadataStore: metadataStore,
+	})
 	gitInspector := worktree.NewGitInspector(nil)
 	worktreeService := worktree.NewService(metadataStore, gitInspector, runtimeAuthority, runtimeRegistry, runtimeSupport.Background, worktree.ServiceOptions{
 		BaseDir: cfg.Settings.Worktrees.BaseDir,
@@ -198,7 +206,6 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		WithExecutionEnvironmentConfig(cfg).
 		WithExecutionEnvironmentAuth(authStatusService).
 		WithExecutionEnvironmentGit(gitInspector).
-		WithOperationCoordinator(runtimeOperations).
 		WithCacheWarningMode(cfg.Settings.CacheWarningMode)
 	sessionWorkspaceRetargeter := sessionservice.NewSessionWorkspaceRetargeter(metadataStore, runtimeAuthority, runtimeRegistry, runtimeSupport.Background)
 	sessionLifecycleService := sessionservice.NewGlobalSessionLifecycleService(cfg.PersistenceRoot, runtimeAuthority, authSupport.AuthManager).
@@ -260,11 +267,10 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	}
 	runtimeRegistry.WithWorkflowEventPublisher(workflowStore.PublishWorkflowEvent)
 	workflowMutationPermit := workflowexecution.NewMutationPermit()
-	workflowTaskMutations := workflowexecution.NewTaskMutationCoordinator()
 	workflowRuntimeStarter, err = workflowrunner.NewStarter(cfg, metadataStore, workflowStore, authSupport.AuthManager, runtimeRegistry, workflowrunner.StarterOptions{
 		RuntimeClientFactory: opts.RuntimeClientFactory,
 		RuntimeAuthority:     runtimeAuthority,
-		TaskMutations:        workflowTaskMutations,
+		MutationPermit:       workflowMutationPermit,
 		TaskDependencies:     workflowTaskDependencyCounter,
 	})
 	if err != nil {
@@ -275,38 +281,17 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		workflowStore,
 		workflowRuntimeStarter,
 		runtimeAuthority,
-		workflowTaskMutations,
+		workflowMutationPermit,
 		workflowexecution.CurrentNodeControllerConfig{
 			AgentConcurrency:  cfg.Settings.Workflow.Concurrency,
 			Attention:         workflowAttentionFinalizer,
-			AssignmentEnsurer: workflowRuntimeStarter,
-			LifecycleReporter: lifecycleFatal,
-			LifecycleContext:  lifecycleFatal.Context(),
+			AssignmentSteerer: workflowRuntimeStarter,
 		},
 	)
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: current node controller: %w", err)
 	}
-	runtimeAuthority.WithWorkflowSessionOrdinaryStartGuard(workflowController)
-	runtimeCommandExecution := runtimecommand.NewExecutionAdapter(runtimeAuthority, workflowController)
-	runtimeGoalAuthority := runtimecommand.NewGoalAuthority(runtimeAuthority, runtimeCommandExecution)
-	runtimeControlService := runtimecontrol.NewServiceWithGoalCommands(runtimeAuthority, runtimeCommandExecution, runtimeGoalAuthority).
-		WithRuntimeActivityResolver(runtimeRegistry).
-		WithOperationCoordinator(runtimeOperations).
-		WithLifecycleContext(lifecycleFatal.Context()).
-		WithPromptHistoryStore(metadataStore).
-		WithWorkflowTaskSessionResolver(metadataStore).
-		WithWorkflowSessionInterruptor(workflowController).
-		WithPersistedSessionResolver(metadataStore).
-		WithLiveWatchPromptSources(askService, approvalService, runtimeRegistry)
-	runtimeControlService.WithPromptCommandResolver(promptCommandRuntimeResolver{
-		effectiveWorkspace: promptCommandEffectiveWorkspaceResolver{
-			persistenceRoot: cfg.PersistenceRoot,
-		},
-		metadataStore: metadataStore,
-	})
-	sessionRuntimeAPI.WithWorkflowSessionActivator(workflowController)
 	if _, err := workflowController.Recover(context.Background()); err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: current node recovery: %w", err)
@@ -346,7 +331,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: task detail: %w", err)
 	}
-	projectService.WithWorkflowExecution(workflowMutationPermit, workflowTaskMutations, workflowController, workflowStore)
+	projectService.WithWorkflowExecution(workflowMutationPermit, workflowController, workflowStore)
 	workflowService, err := workflowsvc.New(workflowStore, workflowsvc.ReadModels{
 		Definitions:      workflowDefinitions,
 		Board:            workflowBoard,
@@ -357,12 +342,12 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		Activity:         workflowActivity,
 		Attention:        workflowAttention,
 		Approvals:        approvalService,
-	}, workflowRoleResolver, workflowMutationPermit, workflowTaskMutations, workflowsvc.WithExecutionTargetInfrastructure(taskExecutionTargetInfrastructure{service: worktreeService, git: gitInspector}), workflowsvc.WithTaskWorktreeDeleter(taskWorktreeDeleter{service: worktreeService}), workflowsvc.WithCurrentNodeExecution(workflowController), workflowsvc.WithWorkflowAttentionFinalizer(workflowAttentionFinalizer))
+	}, workflowRoleResolver, workflowMutationPermit, workflowsvc.WithExecutionTargetInfrastructure(taskExecutionTargetInfrastructure{service: worktreeService, git: gitInspector}), workflowsvc.WithTaskWorktreeDeleter(taskWorktreeDeleter{service: worktreeService}), workflowsvc.WithCurrentNodeExecution(workflowController), workflowsvc.WithWorkflowAttentionFinalizer(workflowAttentionFinalizer), workflowsvc.WithWorkflowTaskSetupEventPublisher(worktreeService))
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: service: %w", err)
 	}
-	core := &Core{fatalLifecycle: lifecycleFatal, bundles: composeBundles(bundleCompositionInput{
+	core := &Core{bundles: composeBundles(bundleCompositionInput{
 		cfg:                     cfg,
 		authSupport:             authSupport,
 		capabilityFactsService:  capabilityFactsService,
@@ -425,6 +410,20 @@ type taskExecutionTargetInfrastructure struct {
 	git     *worktree.GitInspector
 }
 
+func (i taskExecutionTargetInfrastructure) InspectProspectiveInitialTaskBranch(ctx context.Context, req workflowsvc.InitialTaskBranchInspectionRequest) error {
+	if i.service == nil {
+		return errors.New("worktree service is required")
+	}
+	return i.service.InspectProspectiveInitialTaskBranch(ctx, req.SourceWorkspaceRoot, req.BranchName)
+}
+
+func (i taskExecutionTargetInfrastructure) AssertInitialTaskBranch(ctx context.Context, req workflowsvc.InitialTaskBranchAssertionRequest) error {
+	if i.service == nil {
+		return errors.New("worktree service is required")
+	}
+	return i.service.AssertInitialTaskBranch(ctx, req.TaskID, req.BranchName)
+}
+
 func (i taskExecutionTargetInfrastructure) ResolveExecutionTarget(ctx context.Context, req workflowsvc.ExecutionTargetResolveRequest) (workflowstore.ExecutionTargetSnapshot, error) {
 	if i.git == nil {
 		return workflowstore.ExecutionTargetSnapshot{}, errors.New("git inspector is required")
@@ -472,37 +471,42 @@ func (i taskExecutionTargetInfrastructure) MaterializeExecutionTarget(ctx contex
 	if err := req.Snapshot.Validate(); err != nil {
 		return workflowsvc.ExecutionTargetMaterialization{}, err
 	}
+	if req.Snapshot.Mode == workflow.ExecutionTargetModeNone {
+		prepared, err := i.service.PrepareTaskExecutionRoot(ctx, worktree.TaskExecutionRootPreparationRequest{
+			TaskID: req.TaskID, SetupOperationID: req.SetupOperationID, SetupRequirement: req.SetupRequirement,
+		})
+		return workflowsvc.ExecutionTargetMaterialization{RetainedPreviousWorktree: prepared.RetainedPreviousWorktree}, err
+	}
 	if req.Snapshot.RequestedRef == nil || req.Snapshot.CommitOID == nil {
 		return workflowsvc.ExecutionTargetMaterialization{}, errors.New("managed execution target snapshot is incomplete")
 	}
-	materialized, err := i.service.MaterializeInitialTaskWorktree(ctx, worktree.InitialTaskWorktreeMaterializationRequest{
+	prepared, err := i.service.PrepareTaskExecutionRoot(ctx, worktree.TaskExecutionRootPreparationRequest{
 		TaskID:           req.TaskID,
 		SetupOperationID: req.SetupOperationID,
-		ResolvedTarget: worktree.GitRevision{
+		BranchName:       req.InitialBranchAssertion,
+		ManagedTarget: &worktree.GitRevision{
 			RequestedRef: *req.Snapshot.RequestedRef,
 			CommitOID:    *req.Snapshot.CommitOID,
 			CanonicalRef: req.Snapshot.ResolvedRef,
 		},
+		SetupRequirement: req.SetupRequirement,
 	})
-	if err != nil {
-		var retained *serverapi.WorktreeSetupRetainedError
-		if !errors.As(err, &retained) || retained.Worktree.Registered == nil {
-			return workflowsvc.ExecutionTargetMaterialization{}, err
+	if prepared.Root.Managed == nil {
+		if err == nil {
+			return workflowsvc.ExecutionTargetMaterialization{}, errors.New("prepared task execution root is not managed")
 		}
-		root := workflowstore.ManagedExecutionRoot{
-			WorktreeID: retained.Worktree.Registered.Kent.WorktreeID,
-			Root:       retained.Worktree.Registered.Git.CanonicalRoot,
-		}
-		return workflowsvc.ExecutionTargetMaterialization{RetainedRoot: &root}, err
+		return workflowsvc.ExecutionTargetMaterialization{RetainedPreviousWorktree: prepared.RetainedPreviousWorktree}, err
 	}
-	if materialized.Worktree.Variant != serverapi.WorktreeTopologyVariantRegistered || materialized.Worktree.Registered == nil {
-		return workflowsvc.ExecutionTargetMaterialization{}, errors.New("materialized task worktree is not registered")
+	var retainedWorktree *serverapi.WorktreeTopologyEntry
+	if prepared.Materialization != nil {
+		retainedWorktree = &prepared.Materialization.Worktree
 	}
-	root := workflowstore.ManagedExecutionRoot{
-		WorktreeID: materialized.Worktree.Registered.Kent.WorktreeID,
-		Root:       materialized.Worktree.Registered.Git.CanonicalRoot,
-	}
-	return workflowsvc.ExecutionTargetMaterialization{RetainedRoot: &root}, nil
+	return workflowsvc.ExecutionTargetMaterialization{
+		RetainedRoot:             prepared.Root.Managed,
+		SetupResult:              prepared.SetupResult,
+		RetainedWorktree:         retainedWorktree,
+		RetainedPreviousWorktree: prepared.RetainedPreviousWorktree,
+	}, err
 }
 
 func (i taskExecutionTargetInfrastructure) RestoreExecutionTarget(ctx context.Context, req workflowsvc.ExecutionTargetRestoreRequest) error {
@@ -512,6 +516,7 @@ func (i taskExecutionTargetInfrastructure) RestoreExecutionTarget(ctx context.Co
 	_, err := i.service.RestoreLockedTaskWorktree(ctx, worktree.LockedTaskWorktreeRestoreRequest{
 		TaskID:           req.TaskID,
 		SetupOperationID: req.SetupOperationID,
+		BranchName:       req.InitialBranchAssertion,
 	})
 	return err
 }
@@ -571,19 +576,6 @@ type authorityPromptResponder struct {
 	authority *sessionruntime.Authority
 }
 
-func (r authorityPromptResponder) AcceptPromptResolution(
-	sessionID string,
-	promptID string,
-	resolution askquestion.AskQuestionResolution,
-	submitErr error,
-) (promptcontrol.PromptResponseAcceptance, error) {
-	id, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
-	if err != nil {
-		return nil, err
-	}
-	return r.authority.AcceptPromptResolution(id, promptID, resolution, submitErr)
-}
-
 func (r authorityPromptResponder) ResolvePromptBatch(
 	ctx context.Context,
 	sessionID runtimeids.SessionID,
@@ -591,6 +583,15 @@ func (r authorityPromptResponder) ResolvePromptBatch(
 	commands []sessionruntime.PromptAnswerCommand,
 ) ([]sessionruntime.PromptAnswerResult, error) {
 	return r.authority.ResolvePromptBatch(ctx, sessionID, stepID, commands)
+}
+
+func (r authorityPromptResponder) SubscribePromptFollowUp(
+	ctx context.Context,
+	sessionID runtimeids.SessionID,
+	stepID runtimeids.StepID,
+	promptID clientui.PromptID,
+) (serverapi.PromptFollowUpSubscription, error) {
+	return r.authority.SubscribePromptFollowUp(ctx, sessionID, stepID, promptID)
 }
 
 type authorityStepLifecycle struct {
@@ -652,8 +653,20 @@ func (s workflowViewPendingPromptSource) ListPendingPrompts(sessionID string) ([
 		return nil, nil
 	}
 	items := s.prompts.ListPendingPrompts(sessionID)
+	typedSessionID, err := runtimeids.ParseSessionID(sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("pending prompt session identity: %w", err)
+	}
 	out := make([]workflowview.PendingPromptSnapshot, 0, len(items))
 	for _, item := range items {
+		promptID := clientui.PromptID(item.Request.ID)
+		stepID, err := runtimeids.ParseStepID(item.Request.StepID)
+		if err != nil {
+			return nil, fmt.Errorf("session %q pending prompt %q step identity: %w", sessionID, item.Request.ID, err)
+		}
+		if err := promptID.Validate(); err != nil {
+			return nil, fmt.Errorf("session %q pending prompt identity: %w", sessionID, err)
+		}
 		recommendedOptionIndex, err := promptcontrol.DecodeLegacyRecommendedOptionIndex(
 			item.Request.RecommendedOptionIndex,
 			len(item.Request.Suggestions),
@@ -666,7 +679,9 @@ func (s workflowViewPendingPromptSource) ListPendingPrompts(sessionID string) ([
 			decisions = append(decisions, clientui.ApprovalDecision(option.Decision))
 		}
 		out = append(out, workflowview.PendingPromptSnapshot{
-			ID:                     item.Request.ID,
+			PromptID:               promptID,
+			SessionID:              typedSessionID,
+			StepID:                 stepID,
 			CreatedAt:              item.CreatedAt,
 			Question:               item.Request.Question,
 			Suggestions:            append([]string(nil), item.Request.Suggestions...),

@@ -16,11 +16,6 @@ import (
 
 var ErrAuthorityClosed = errors.New("session runtime authority is closed")
 var ErrExecutionNoLongerLive = errors.New("exact execution scope is no longer live")
-var ErrWorkflowSessionRoutingRequired = errors.New("retained workflow session requires workflow execution routing")
-
-type WorkflowSessionOrdinaryStartGuard interface {
-	GuardOrdinaryAgentStart(context.Context, runtimeids.SessionID) error
-}
 
 type ExecutionFinalized interface {
 	ExecutionFinalized(ExecutionScope)
@@ -60,7 +55,6 @@ type Authority struct {
 	gates              map[runtimeids.SessionID]*sessionAdmissionGate
 	executionFinalized ExecutionFinalized
 	promptFeed         ExecutionPromptFeed
-	ordinaryStartGuard WorkflowSessionOrdinaryStartGuard
 	options            authorityRuntimeOptions
 }
 
@@ -81,18 +75,6 @@ func NewAuthority(options AuthorityOptions) *Authority {
 		authority.options.background.SetEventHandler(authority.routeBackgroundEvent)
 	}
 	return authority
-}
-
-func (a *Authority) WithWorkflowSessionOrdinaryStartGuard(
-	guard WorkflowSessionOrdinaryStartGuard,
-) *Authority {
-	if a == nil {
-		return nil
-	}
-	a.mu.Lock()
-	a.ordinaryStartGuard = guard
-	a.mu.Unlock()
-	return a
 }
 
 func (a *Authority) launchLifecycleTask(task func(context.Context)) bool {
@@ -372,26 +354,6 @@ func (a *Authority) SessionExecution(sessionID runtimeids.SessionID) (ExecutionH
 		return nil, false
 	}
 	return resource.currentExecution()
-}
-
-// SessionHasActiveOrRetiringExecution reports whether the Session still has an
-// Exact execution or a resource retirement caused by one. It is an admission
-// check only; it does not expose either state as a new execution authority.
-func (a *Authority) SessionHasActiveOrRetiringExecution(sessionID runtimeids.SessionID) bool {
-	if a == nil || sessionID.IsZero() {
-		return false
-	}
-	a.mu.Lock()
-	resource := a.resources[sessionID]
-	a.mu.Unlock()
-	if resource == nil {
-		return false
-	}
-	resource.mu.Lock()
-	defer resource.mu.Unlock()
-	return resource.current != nil ||
-		resource.state == AgentResourceDraining ||
-		resource.ownerlessDisposition == agentResourceRetireWhenIdle
 }
 
 func (a *Authority) StopWorkflowExecutions(ctx context.Context) error {

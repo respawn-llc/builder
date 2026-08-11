@@ -7,15 +7,29 @@ import type { TaskDetailInitialFocus } from "@/app-facade";
 import { taskDetailInitialFocusRequestKey } from "@/app-facade";
 import { useSidebarHeaderOffset } from "@/app-facade";
 import type { TaskDependencyPair } from "@/shared/task-dependencies";
-import { ErrorState, LoadingState, VirtualizedInfiniteList, type VirtualizedPixelOffsetRequest } from "@/ui";
+import {
+  autoLoadAvailable,
+  directionalBoundary,
+  ErrorState,
+  InfiniteListBoundary,
+  LoadingState,
+  VirtualizedInfiniteList,
+  type VirtualizedInfiniteListBoundaryState,
+  type VirtualizedPixelOffsetRequest,
+} from "@/ui";
 import { ActivityRow, CommentComposer, CommentRow } from "./TaskDetailActivity";
 import type { DescriptionPresentationState } from "./TaskDetailDescriptionPresentation";
-import { TaskInbox } from "./TaskDetailInbox";
+import { TaskDetailInboxRow } from "./TaskDetailInboxRow";
 import { DescriptionIsland, PropertiesIsland, TaskHeaderIsland, type TaskDraft } from "./TaskDetailRows";
 import { TaskTabs, type DetailTab } from "./TaskDetailTabs";
 import { TaskDependenciesArea } from "./TaskDependenciesArea";
 import type { QuestionSelectionState } from "./TaskDetailQuestionState";
+import { promptAnswerKey, type PromptAnswerKey, type PromptAnswerState } from "./PromptAnswerState";
+import type { PromptPrimaryFocusRequest } from "./PromptPrimaryControlRegistry";
+import type { QuestionAnswerMutation } from "./TaskDetailQuestionAnswer";
+import { feedPixelOffsetRequest, selectedFeed, taskDetailPaging } from "./taskDetailPaging";
 import type {
+  TaskDetailFeedPage,
   useTaskActivity,
   useTaskAttention,
   useTaskComments,
@@ -32,14 +46,20 @@ type TaskDetailListItem =
   | Readonly<{ kind: "comments-loading" }>
   | Readonly<{ kind: "comments-error"; error: unknown }>
   | Readonly<{ kind: "comments-empty" }>
-  | Readonly<{ kind: "comment"; comment: TaskComment }>
+  | Readonly<{ kind: "comment"; comment: TaskComment; presentationKey: string }>
   | Readonly<{ kind: "activity-loading" }>
   | Readonly<{ kind: "activity-error"; error: unknown }>
   | Readonly<{ kind: "activity-empty" }>
-  | Readonly<{ kind: "activity"; item: ActivityItem }>;
+  | Readonly<{ kind: "activity"; item: ActivityItem; presentationKey: string }>;
+
+type TaskDetailFeedRow<T> = Readonly<{
+  item: T;
+  presentationKey: string;
+}>;
 
 export function TaskDetailList({
   activity,
+  answerQuestion,
   attention,
   comments,
   detail,
@@ -62,7 +82,8 @@ export function TaskDetailList({
   onScrollElementChange,
   onSaveDraft,
   pixelOffsetRequest,
-  questionSelections,
+  primaryFocusRequest,
+  promptAnswerState,
   relationshipNavigationAvailable,
   selectedTab,
   setTab,
@@ -70,6 +91,7 @@ export function TaskDetailList({
   updatePending,
 }: Readonly<{
   activity: ReturnType<typeof useTaskActivity>;
+  answerQuestion: QuestionAnswerMutation;
   attention: ReturnType<typeof useTaskAttention>;
   comments: ReturnType<typeof useTaskComments>;
   detail: TaskDetail;
@@ -88,11 +110,12 @@ export function TaskDetailList({
   onSelectDependencyTask: (taskID: string) => void;
   onNewCommentBodyChange: (body: string) => void;
   onEditingCommentChange: (editing: Readonly<{ id: string; body: string }> | null) => void;
-  onQuestionSelectionChange: (askID: string, selection: QuestionSelectionState) => void;
+  onQuestionSelectionChange: (key: PromptAnswerKey, selection: QuestionSelectionState) => void;
   onScrollElementChange: (element: HTMLDivElement | null) => void;
   onSaveDraft: (draft?: TaskDraft) => Promise<void>;
   pixelOffsetRequest?: VirtualizedPixelOffsetRequest | undefined;
-  questionSelections: ReadonlyMap<string, QuestionSelectionState>;
+  primaryFocusRequest?: PromptPrimaryFocusRequest | undefined;
+  promptAnswerState: PromptAnswerState;
   relationshipNavigationAvailable: boolean;
   selectedTab: DetailTab;
   setTab: (tab: DetailTab) => void;
@@ -104,14 +127,21 @@ export function TaskDetailList({
   const draftDirty = draft.title !== detail.title || draft.body !== detail.body;
   const canSaveDraft = draftDirty && !disabled && !updatePending && draft.title.trim().length > 0;
   const activityItems = useMemo(
-    () => activity.data?.pages.flatMap((page) => page.items) ?? [],
+    () => withPresentationKeys(activity.data?.pages ?? [], "activity"),
     [activity.data],
   );
   const commentItems = useMemo(
-    () => comments.data?.pages.flatMap((page) => page.comments) ?? [],
+    () => withPresentationKeys(comments.data?.pages ?? [], "comment"),
     [comments.data],
   );
-  const attentionItems = useMemo(() => attention.data?.items ?? [], [attention.data]);
+  const commentCount = commentCountFromData(comments.data);
+  const attentionItems = useMemo(
+    () =>
+      (attention.data?.items ?? []).filter(
+        (item) => item.kind !== "question" || !promptAnswerState.isMasked(promptAnswerKey(item)),
+      ),
+    [attention.data, promptAnswerState],
+  );
   const listItems = useMemo(
     () =>
       taskDetailListItems({
@@ -156,37 +186,67 @@ export function TaskDetailList({
     return keys.size === 0 ? undefined : keys;
   }, [attention.isPending, initialFocus]);
   const paging = taskDetailPaging({ activity, comments, detailID: detail.id, selectedTab });
+  const previousBoundary = directionalBoundary({
+    failed: paging.isFetchPreviousPageError,
+    loading: paging.isFetchingPreviousPage,
+    loadingLabel: t("app.loadingMore"),
+    message: errorMessage(paging.error),
+    onRetry: paging.loadPrevious,
+    retryLabel: t("app.retry"),
+  });
+  const nextBoundary = directionalBoundary({
+    failed: paging.isFetchNextPageError,
+    loading: paging.isFetchingNextPage,
+    loadingLabel: t("app.loadingMore"),
+    message: errorMessage(paging.error),
+    onRetry: paging.loadNext,
+    retryLabel: t("app.retry"),
+  });
+  const firstFeedItemKey = selectedFeed(selectedTab, commentItems, activityItems)[0]?.presentationKey;
+  const feedOffsetRequest = feedPixelOffsetRequest(
+    attention.isPending,
+    selectedFeed(selectedTab, comments.isPending, activity.isPending),
+    pixelOffsetRequest,
+  );
 
   return (
     <VirtualizedInfiniteList
       ariaLabel={t("task.title")}
       className="task-detail-island-stack h-full min-h-0 overflow-auto hide-scrollbar p-[var(--space-3)]"
       estimateSize={() => 160}
+      getItemAnchorKey={taskDetailListItemAnchorKey}
       getItemKey={taskDetailListItemKey}
-      hasNextPage={paging.hasNextPage}
+      getItemOccurrenceKey={taskDetailListItemKey}
+      hasNextPage={autoLoadAvailable(paging.hasNextPage, nextBoundary)}
+      hasPreviousPage={autoLoadAvailable(paging.hasPreviousPage, previousBoundary)}
       initialScrollKey={initialScrollKey}
-      initialScrollRequestKey={resolveTaskDetailFocusRequestKey(detail.id, initialFocus, focusRequestKey)}
+      initialScrollRequestKey={
+        focusRequestKey ??
+        (initialFocus === undefined ? undefined : taskDetailInitialFocusRequestKey(detail.id, initialFocus))
+      }
       isFetchingNextPage={paging.isFetchingNextPage}
+      isFetchingPreviousPage={paging.isFetchingPreviousPage}
       items={listItems}
       loadingLabel={t("app.loadingMore")}
-      loadMoreKey={paging.loadMoreKey}
+      loadMoreKey={paging.nextLoadKey}
       nonAdjustingResizeItemKey="body"
-      onLoadMore={paging.loadMore}
+      onLoadMore={paging.loadNext}
+      onLoadPrevious={paging.loadPrevious}
       onScrollElementChange={onScrollElementChange}
       paddingStart={headerOffset}
       pinnedItemKeys={pinnedItemKeys}
-      pixelOffsetRequest={
-        !attention.isPending && !(selectedTab === "comments" ? comments.isPending : activity.isPending)
-          ? pixelOffsetRequest
-          : undefined
-      }
+      pixelOffsetRequest={feedOffsetRequest}
       rowSpacing="compact"
+      nextBoundary={nextBoundary}
+      previousLoadItemKey={firstFeedItemKey}
+      previousLoadKey={paging.previousLoadKey}
       renderItem={(item) => (
         <TaskDetailListRow
           activityCount={activityItems.length}
+          answerQuestion={answerQuestion}
           attentionItems={attentionItems}
           attentionPending={attention.isPending}
-          commentCount={commentItems.length}
+          commentCount={commentCount}
           canSaveDraft={canSaveDraft}
           draftDirty={draftDirty}
           detail={detail}
@@ -211,10 +271,16 @@ export function TaskDetailList({
           onEditingCommentChange={onEditingCommentChange}
           onQuestionSelectionChange={onQuestionSelectionChange}
           onSaveDraft={onSaveDraft}
-          questionSelections={questionSelections}
+          primaryFocusRequest={primaryFocusRequest}
+          promptAnswerState={promptAnswerState}
           relationshipNavigationAvailable={relationshipNavigationAvailable}
           selectedTab={selectedTab}
           setTab={setTab}
+          previousBoundary={
+            (item.kind === "comment" || item.kind === "activity") && item.presentationKey === firstFeedItemKey
+              ? previousBoundary
+              : undefined
+          }
           updateError={updateError}
           updatePending={updatePending}
         />
@@ -224,19 +290,9 @@ export function TaskDetailList({
   );
 }
 
-function resolveTaskDetailFocusRequestKey(
-  taskID: string,
-  focus: TaskDetailInitialFocus | undefined,
-  requestKey: string | undefined,
-): string | undefined {
-  if (requestKey !== undefined) {
-    return requestKey;
-  }
-  return focus === undefined ? undefined : taskDetailInitialFocusRequestKey(taskID, focus);
-}
-
 type TaskDetailListRowProps = Readonly<{
   activityCount: number;
+  answerQuestion: QuestionAnswerMutation;
   attentionItems: readonly AttentionItem[];
   attentionPending: boolean;
   canSaveDraft: boolean;
@@ -262,12 +318,14 @@ type TaskDetailListRowProps = Readonly<{
   onSelectDependencyTask: (taskID: string) => void;
   onNewCommentBodyChange: (body: string) => void;
   onEditingCommentChange: (editing: Readonly<{ id: string; body: string }> | null) => void;
-  onQuestionSelectionChange: (askID: string, selection: QuestionSelectionState) => void;
+  onQuestionSelectionChange: (key: PromptAnswerKey, selection: QuestionSelectionState) => void;
   onSaveDraft: (draft?: TaskDraft) => Promise<void>;
-  questionSelections: ReadonlyMap<string, QuestionSelectionState>;
+  primaryFocusRequest?: PromptPrimaryFocusRequest | undefined;
+  promptAnswerState: PromptAnswerState;
   relationshipNavigationAvailable: boolean;
   selectedTab: DetailTab;
   setTab: (tab: DetailTab) => void;
+  previousBoundary?: VirtualizedInfiniteListBoundaryState | undefined;
   updateError: unknown;
   updatePending: boolean;
 }>;
@@ -276,7 +334,7 @@ const rowRenderers: Record<TaskDetailListItem["kind"], (props: TaskDetailListRow
   header: HeaderRow,
   body: BodyRow,
   dependencies: DependenciesRow,
-  inbox: InboxRow,
+  inbox: TaskDetailInboxRow,
   tabs: TabsRow,
   "comment-composer": CommentComposerRow,
   "comments-loading": LoadingRow,
@@ -296,6 +354,9 @@ function TaskDetailListRow(props: TaskDetailListRowProps): ReactNode {
   }
   return (
     <div className="task-detail-feed-row" data-task-detail-feed-tab={props.selectedTab}>
+      {props.previousBoundary === undefined ? null : (
+        <InfiniteListBoundary direction="previous" state={props.previousBoundary} />
+      )}
       {row}
     </div>
   );
@@ -385,33 +446,6 @@ function DependenciesRow({
   );
 }
 
-function InboxRow({
-  attentionItems,
-  attentionPending,
-  detail,
-  disabled,
-  initialFocus,
-  mutations,
-  onQuestionSelectionChange,
-  questionSelections,
-}: TaskDetailListRowProps): ReactNode {
-  if (attentionPending) {
-    return <LoadingState appearanceDelayMs={0} fullPage={false} reveal={false} title={undefined} />;
-  }
-  return (
-    <TaskInbox
-      attentionItems={attentionItems}
-      currentVersion={detail.workflowVersion}
-      detail={detail}
-      disabled={disabled}
-      initialFocus={initialFocus}
-      mutations={mutations}
-      onQuestionSelectionChange={onQuestionSelectionChange}
-      questionSelections={questionSelections}
-    />
-  );
-}
-
 function TabsRow({ activityCount, commentCount, selectedTab, setTab }: TaskDetailListRowProps): ReactNode {
   return (
     <TaskTabs
@@ -490,6 +524,24 @@ function ActivityItemRow({ item }: TaskDetailListRowProps): ReactNode {
   );
 }
 
+function withPresentationKeys<T>(
+  pages: readonly TaskDetailFeedPage<T>[],
+  prefix: string,
+): readonly TaskDetailFeedRow<T>[] {
+  return pages.flatMap((page) =>
+    page.items.map((item, index) => ({
+      item,
+      presentationKey: `${prefix}:offset:${page.offset.toString()}:item:${index.toString()}`,
+    })),
+  );
+}
+
+function commentCountFromData<T>(
+  data: Readonly<{ pages: readonly TaskDetailFeedPage<T>[] }> | undefined,
+): number {
+  return data?.pages[0]?.totalCount ?? 0;
+}
+
 function taskDetailListItems({
   activityError,
   activityItems,
@@ -505,12 +557,12 @@ function taskDetailListItems({
   tab,
 }: Readonly<{
   activityError: unknown;
-  activityItems: readonly ActivityItem[];
+  activityItems: readonly TaskDetailFeedRow<ActivityItem>[];
   activityPending: boolean;
   attentionFailed: boolean;
   attentionItems: readonly AttentionItem[];
   attentionPending: boolean;
-  commentItems: readonly TaskComment[];
+  commentItems: readonly TaskDetailFeedRow<TaskComment>[];
   commentsError: unknown;
   commentsPending: boolean;
   detail: TaskDetail;
@@ -532,13 +584,19 @@ function taskDetailListItems({
       ...staticItems,
       { kind: "comment-composer" },
       ...commentStatusItems({ commentsError, commentsPending, commentItems }),
-      ...commentItems.map((comment) => ({ kind: "comment", comment }) satisfies TaskDetailListItem),
+      ...commentItems.map(
+        ({ item: comment, presentationKey }) =>
+          ({ kind: "comment", comment, presentationKey }) satisfies TaskDetailListItem,
+      ),
     ];
   }
   return [
     ...staticItems,
     ...activityStatusItems({ activityError, activityPending, activityItems }),
-    ...activityItems.map((item) => ({ kind: "activity", item }) satisfies TaskDetailListItem),
+    ...activityItems.map(
+      ({ item, presentationKey }) =>
+        ({ kind: "activity", item, presentationKey }) satisfies TaskDetailListItem,
+    ),
   ];
 }
 
@@ -547,7 +605,7 @@ function commentStatusItems({
   commentsError,
   commentsPending,
 }: Readonly<{
-  commentItems: readonly TaskComment[];
+  commentItems: readonly TaskDetailFeedRow<TaskComment>[];
   commentsError: unknown;
   commentsPending: boolean;
 }>): readonly TaskDetailListItem[] {
@@ -572,7 +630,7 @@ function activityStatusItems({
   activityPending,
 }: Readonly<{
   activityError: unknown;
-  activityItems: readonly ActivityItem[];
+  activityItems: readonly TaskDetailFeedRow<ActivityItem>[];
   activityPending: boolean;
 }>): readonly TaskDetailListItem[] {
   // Keep already-loaded activity rows visible across later page fetches; only
@@ -591,59 +649,24 @@ function activityStatusItems({
 
 function taskDetailListItemKey(item: TaskDetailListItem): string {
   if (item.kind === "comment") {
+    return item.presentationKey;
+  }
+  if (item.kind === "activity") {
+    return item.presentationKey;
+  }
+  return item.kind;
+}
+
+function taskDetailListItemAnchorKey(item: TaskDetailListItem): string {
+  if (item.kind === "comment") {
     return `comment:${item.comment.id}`;
   }
   if (item.kind === "activity") {
     return `activity:${item.item.id}`;
   }
-  return item.kind;
+  return taskDetailListItemKey(item);
 }
 
 function isFeedItem(item: TaskDetailListItem): boolean {
-  return (
-    item.kind !== "header" &&
-    item.kind !== "body" &&
-    item.kind !== "dependencies" &&
-    item.kind !== "inbox" &&
-    item.kind !== "tabs"
-  );
-}
-
-function taskDetailPaging({
-  activity,
-  comments,
-  detailID,
-  selectedTab,
-}: Readonly<{
-  activity: ReturnType<typeof useTaskActivity>;
-  comments: ReturnType<typeof useTaskComments>;
-  detailID: string;
-  selectedTab: DetailTab;
-}>): Readonly<{
-  hasNextPage: boolean;
-  isFetchingNextPage: boolean;
-  loadMoreKey: string;
-  loadMore: () => void;
-}> {
-  if (selectedTab === "comments") {
-    const nextOffset = comments.data?.pages.at(-1)?.nextOffset;
-    const nextOffsetKey = nextOffset === undefined || nextOffset === null ? "none" : nextOffset.toString();
-    return {
-      hasNextPage: comments.hasNextPage,
-      isFetchingNextPage: comments.isFetchingNextPage,
-      loadMoreKey: `${detailID}:comments:${nextOffsetKey}:${comments.dataUpdatedAt.toString()}`,
-      loadMore: () => {
-        void comments.fetchNextPage();
-      },
-    };
-  }
-  const nextPageToken = activity.data?.pages.at(-1)?.nextPageToken ?? "";
-  return {
-    hasNextPage: activity.hasNextPage,
-    isFetchingNextPage: activity.isFetchingNextPage,
-    loadMoreKey: `${detailID}:activity:${nextPageToken}:${activity.dataUpdatedAt.toString()}`,
-    loadMore: () => {
-      void activity.fetchNextPage();
-    },
-  };
+  return item.kind === "comment" || item.kind === "activity";
 }

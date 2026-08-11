@@ -4,38 +4,27 @@ import { useEffect, useMemo, useRef, type ReactNode } from "react";
 import { errorMessage } from "@/api";
 import { queryKeys, useAppServices, useConnectionSnapshot } from "@/app-facade";
 import { useStableCallback } from "@/ui";
-import { createProjectLabelEffects, type LabelMembershipRefreshEffect } from "./labelEventEffects";
+import { createProjectLabelEffects } from "./labelEventEffects";
 import { ProjectLabelDataContext } from "./projectLabelContext";
-import { projectCatalogAuthorityRegistryFor } from "./projectCatalogAuthorityRegistry";
 import { useManagedProjectLabelFilter } from "./projectLabelFilter";
 
 export function ProjectLabelsProvider({
   children,
   onBackgroundError,
-  onMembershipRefresh,
   subscribeToProject = true,
   projectID,
 }: Readonly<{
   children: ReactNode;
   onBackgroundError?: ((error: unknown) => void) | undefined;
-  onMembershipRefresh?: ((effect: LabelMembershipRefreshEffect) => Promise<void> | void) | undefined;
   subscribeToProject?: boolean | undefined;
   projectID: string;
 }>) {
   const { api, logger } = useAppServices();
   const queryClient = useQueryClient();
   const connection = useConnectionSnapshot();
-  const authorityLease = useMemo(
-    () =>
-      projectCatalogAuthorityRegistryFor(queryClient).prepare(projectID, async () =>
-        api.listProjectLabels(projectID),
-      ),
-    [api, projectID, queryClient],
-  );
-  const authority = authorityLease.authority;
   const catalog = useQuery({
     queryKey: queryKeys.projectLabels(projectID),
-    queryFn: async ({ signal }) => authority.read(signal),
+    queryFn: async () => api.listProjectLabels(projectID),
     retry: false,
   });
   const catalogLabelIDs = useMemo(
@@ -43,10 +32,6 @@ export function ProjectLabelsProvider({
     [catalog.data],
   );
   const filter = useManagedProjectLabelFilter(projectID, catalogLabelIDs);
-  useEffect(() => authorityLease.retain(filter.dispatch), [authorityLease, filter.dispatch]);
-  const notifyMembershipRefresh = useStableCallback(async (effect: LabelMembershipRefreshEffect) => {
-    await onMembershipRefresh?.(effect);
-  });
   const reportBackgroundError = useStableCallback((error: unknown) => {
     onBackgroundError?.(error);
     void logger.append("warn", "Project label refresh failed.", {
@@ -69,21 +54,12 @@ export function ProjectLabelsProvider({
   const effects = useMemo(
     () =>
       createProjectLabelEffects({
-        authority,
-        onFilterAction: authorityLease.dispatchFilterAction,
+        onFilterAction: filter.dispatch,
         onBackgroundError: reportBackgroundError,
-        onMembershipRefresh: notifyMembershipRefresh,
         projectID,
         queryClient,
       }),
-    [
-      authority,
-      authorityLease.dispatchFilterAction,
-      notifyMembershipRefresh,
-      projectID,
-      queryClient,
-      reportBackgroundError,
-    ],
+    [filter.dispatch, projectID, queryClient, reportBackgroundError],
   );
   useEffect(() => {
     if (!subscribeToProject || projectID.length === 0 || connection.phase !== "connected") {
@@ -121,13 +97,12 @@ export function ProjectLabelsProvider({
   ]);
   const value = useMemo(
     () => ({
-      authority,
       catalog,
       effects,
       filter,
       projectID,
     }),
-    [authority, catalog, effects, filter, projectID],
+    [catalog, effects, filter, projectID],
   );
   return <ProjectLabelDataContext.Provider value={value}>{children}</ProjectLabelDataContext.Provider>;
 }

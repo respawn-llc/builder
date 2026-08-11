@@ -1,7 +1,0 @@
-- [x] Adjudicate both dependency findings against the approved lifecycle-read contract and LoC cap.
-- [x] Add regressions proving Get/count observe only relationship Task IDs and share one lifecycle-aware authority.
-- [x] Remove the duplicate durable-only satisfaction path and wire runner/service callers to the same authority.
-- [x] Run focused tests, affected race coverage, architecture guards, build, and diff/LoC checks.
-- [x] Commit and push the round atomically.
-- [x] Reply to and resolve both review threads.
-- [ ] Return PR #724 to the watcher.

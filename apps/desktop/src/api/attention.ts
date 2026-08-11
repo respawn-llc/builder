@@ -1,4 +1,5 @@
-import type { ApprovalSnapshot, AttentionQuestionPrompt, TaskCurrentNode } from "./models";
+import type { ApprovalSnapshot, TaskCurrentNode } from "./models";
+import type { AttentionQuestionPrompt } from "./promptModels";
 
 type AttentionItemBase = Readonly<{
   id: string;
@@ -14,13 +15,9 @@ export type QuestionAttentionItem = AttentionItemBase &
   Readonly<{
     kind: "question";
     currentNode: TaskCurrentNode;
-    sessionID: string | null;
     sessionName: string | null;
-    questionID: string;
     message: string;
-    suggestions: readonly string[];
-    recommendedOptionIndex: number | null;
-    question: AttentionQuestionPrompt | null;
+    question: AttentionQuestionPrompt;
   }>;
 
 export type ApprovalAttentionItem = AttentionItemBase &
@@ -40,4 +37,5 @@ export type InterruptedCurrentNodeAttentionItem = AttentionItemBase &
     message: string | null;
   }>;
 
-export type AttentionItem = QuestionAttentionItem | ApprovalAttentionItem | InterruptedCurrentNodeAttentionItem;
+export type AttentionItem =
+  QuestionAttentionItem | ApprovalAttentionItem | InterruptedCurrentNodeAttentionItem;

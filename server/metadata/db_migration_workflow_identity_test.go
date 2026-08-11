@@ -199,7 +199,7 @@ func TestOpenRepairsWorkflowIdentityMigrationVersionCollision(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
-	summaries, err := store.ListProjectHomeSummaries(t.Context(), "", 10, 0)
+	summaries, err := store.ListProjectHomeSummaries(t.Context(), 10, 0)
 	if err != nil {
 		t.Fatalf("list project home summaries after repair: %v", err)
 	}

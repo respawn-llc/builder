@@ -4,11 +4,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 
-import type {
-  BoardFilterGenerationController,
-  BoardFilterGenerationSnapshot,
-} from "./BoardFilterGenerationController";
-import type { BoardNodeCardsSort } from "@/api";
+import type { BoardFilter, BoardNodeCardsSort } from "@/api";
 
 type LabelRuntimeState =
   | Readonly<{ filter: { kind: "none" } }>
@@ -25,33 +21,25 @@ const labelRuntime = vi.hoisted(
     dispatch: vi.fn(),
   }),
 );
-interface GenerationRuntime {
-  snapshot: BoardFilterGenerationSnapshot;
-  controller: Pick<BoardFilterGenerationController, "getSnapshot" | "setDesiredFilter">;
+
+interface BoardQueryRuntime {
+  filter: BoardFilter;
+  setDependencyFilter: ReturnType<typeof vi.fn>;
   sort: BoardNodeCardsSort;
-  setSort(sort: BoardNodeCardsSort): void;
+  setSort: ReturnType<typeof vi.fn>;
 }
-const generationRuntime = vi.hoisted((): GenerationRuntime => ({
-  snapshot: {
-    active: {
-      generation: 1,
-      filter: {
-        labelFilter: {
-          kind: "named",
-          mode: "all",
-          labelIDs: ["label-1"],
-          excludedLabelIDs: [],
-        },
-        dependencyFilter: true,
-      },
-      retiring: false,
+
+const boardQueryRuntime = vi.hoisted((): BoardQueryRuntime => ({
+  filter: {
+    labelFilter: {
+      kind: "named",
+      mode: "all",
+      labelIDs: ["label-1"],
+      excludedLabelIDs: [],
     },
-    desiredFilter: null,
+    dependencyFilter: true,
   },
-  controller: {
-    getSnapshot: () => generationRuntime.snapshot,
-    setDesiredFilter: vi.fn(),
-  },
+  setDependencyFilter: vi.fn(),
   sort: { field: "updated", direction: "desc" },
   setSort: vi.fn(),
 }));
@@ -69,7 +57,6 @@ vi.mock("@/shared/labels", () => ({
         invocation.onAction({ type: "clear" });
       },
     }),
-  reduceLabelFilterState: () => ({ filter: { kind: "none" } }),
   taskLabelFilterConditionCount: () => 1,
   useProjectLabelFilter: () => labelRuntime,
 }));
@@ -80,8 +67,8 @@ vi.mock("react-i18next", () => ({
   }),
 }));
 
-vi.mock("./BoardFilterGenerationRuntime", () => ({
-  useBoardFilterGeneration: () => generationRuntime,
+vi.mock("./BoardQueryRuntime", () => ({
+  useBoardQuery: () => boardQueryRuntime,
 }));
 
 vi.mock("./TaskSearchChrome", () => ({
@@ -92,18 +79,17 @@ import { BoardFilterChrome } from "./BoardLabelFilter";
 import { BoardFilterRow } from "./BoardFilterRow";
 
 describe("BoardFilterChrome", () => {
-  it("toggles Unblocked through the latest desired composite filter", async () => {
+  beforeEach(() => {
+    labelRuntime.dispatch.mockReset();
+    boardQueryRuntime.setDependencyFilter.mockReset();
+    boardQueryRuntime.setSort.mockReset();
+  });
+
+  it("toggles the route-local Unblocked filter", async () => {
     const user = userEvent.setup();
-    generationRuntime.snapshot = {
-      active: {
-        generation: 1,
-        filter: {
-          labelFilter: { kind: "named", mode: "all", labelIDs: ["label-1"], excludedLabelIDs: [] },
-          dependencyFilter: null,
-        },
-        retiring: false,
-      },
-      desiredFilter: null,
+    boardQueryRuntime.filter = {
+      labelFilter: { kind: "named", mode: "all", labelIDs: ["label-1"], excludedLabelIDs: [] },
+      dependencyFilter: null,
     };
     const view = render(<BoardFilterChrome />);
 
@@ -113,35 +99,18 @@ describe("BoardFilterChrome", () => {
     }
     expect(chip).toHaveAttribute("aria-pressed", "false");
     await user.click(chip);
+    expect(boardQueryRuntime.setDependencyFilter).toHaveBeenCalledWith(true);
 
-    expect(generationRuntime.controller.setDesiredFilter).toHaveBeenCalledWith({
-      labelFilter: { kind: "named", mode: "all", labelIDs: ["label-1"], excludedLabelIDs: [] },
-      dependencyFilter: true,
-    });
-
-    generationRuntime.snapshot = {
-      ...generationRuntime.snapshot,
-      active: {
-        ...generationRuntime.snapshot.active,
-        filter: { ...generationRuntime.snapshot.active.filter, dependencyFilter: true },
-      },
-    };
+    boardQueryRuntime.filter = { ...boardQueryRuntime.filter, dependencyFilter: true };
     view.rerender(<BoardFilterChrome />);
     expect(screen.getAllByRole("button").at(-1)).toHaveAttribute("aria-pressed", "true");
   });
 
-  it("preserves the dependency filter when the Labels filter changes", async () => {
+  it("changes Labels without changing the route-local dependency filter", async () => {
     const user = userEvent.setup();
-    generationRuntime.snapshot = {
-      active: {
-        generation: 1,
-        filter: {
-          labelFilter: { kind: "named", mode: "all", labelIDs: ["label-1"], excludedLabelIDs: [] },
-          dependencyFilter: true,
-        },
-        retiring: false,
-      },
-      desiredFilter: null,
+    boardQueryRuntime.filter = {
+      labelFilter: { kind: "named", mode: "all", labelIDs: ["label-1"], excludedLabelIDs: [] },
+      dependencyFilter: true,
     };
     render(<BoardFilterChrome />);
 
@@ -151,24 +120,15 @@ describe("BoardFilterChrome", () => {
     }
     await user.click(labelTrigger);
 
-    expect(generationRuntime.controller.setDesiredFilter).toHaveBeenCalledWith({
-      labelFilter: { kind: "none" },
-      dependencyFilter: true,
-    });
+    expect(labelRuntime.dispatch).toHaveBeenCalledWith({ type: "clear" });
+    expect(boardQueryRuntime.setDependencyFilter).not.toHaveBeenCalled();
   });
 
   it("keeps Labels, Sort, Unblocked, and Search in the board chrome order", () => {
     labelRuntime.state = { filter: { kind: "none" } };
-    generationRuntime.snapshot = {
-      active: {
-        generation: 1,
-        filter: {
-          labelFilter: { kind: "none" },
-          dependencyFilter: true,
-        },
-        retiring: false,
-      },
-      desiredFilter: null,
+    boardQueryRuntime.filter = {
+      labelFilter: { kind: "none" },
+      dependencyFilter: true,
     };
     render(<BoardFilterRow onOpenTask={vi.fn()} projectID="project-1" />);
 

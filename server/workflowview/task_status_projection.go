@@ -35,7 +35,6 @@ type TaskStatusProjectionResult struct {
 	Done                         bool
 	CurrentNodes                 []workflow.CurrentNode
 	LiveExecutions               []sessionruntime.TaskExecution
-	LiveRuns                     workflowexecution.WorkflowTaskRunSnapshot
 	PendingTransitionApprovalIDs []string
 	Actions                      serverapi.WorkflowTaskActions
 	AttentionCount               int
@@ -82,7 +81,7 @@ func (p *TaskStatusProjection) Observe(taskIDs []workflow.TaskID) (TaskStatusObs
 	if err != nil {
 		return TaskStatusObservation{}, err
 	}
-	liveTaskStatesJSON, err := taskStatusLiveStatesJSON(observation)
+	liveTaskStatesJSON, err := taskStatusLiveStatesJSON(observation.Executions)
 	if err != nil {
 		return TaskStatusObservation{}, err
 	}
@@ -107,26 +106,14 @@ type taskStatusLiveState struct {
 	HasWaitingApproval bool   `json:"has_waiting_approval"`
 }
 
-func taskStatusLiveStatesJSON(observation workflowexecution.WorkflowTaskExecutionObservation) (string, error) {
-	statesByTask := make(map[workflow.TaskID]taskStatusLiveState, len(observation.Executions)+len(observation.Runs))
-	for taskID, snapshot := range observation.Runs {
-		if len(snapshot.Queued) == 0 && len(snapshot.InterruptibleLaunching) == 0 {
-			continue
-		}
-		statesByTask[taskID] = taskStatusLiveState{TaskID: string(taskID), HasQueued: true}
-	}
-	for taskID, snapshot := range observation.Executions {
+func taskStatusLiveStatesJSON(snapshots map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot) (string, error) {
+	states := make([]taskStatusLiveState, 0, len(snapshots))
+	for taskID, snapshot := range snapshots {
 		if len(snapshot.Executions) == 0 {
 			continue
 		}
-		state := statesByTask[taskID]
-		state.TaskID = string(taskID)
-		runs := observation.Runs[taskID]
+		state := taskStatusLiveState{TaskID: string(taskID)}
 		for _, execution := range snapshot.Executions {
-			if currentNodeReferencesContain(runs.InterruptibleLaunching, execution.Ref.CurrentNode) {
-				state.HasQueued = true
-				continue
-			}
 			state.HasRunning = state.HasRunning || !execution.Queued
 			state.HasQueued = state.HasQueued || execution.Queued
 			state.WaitingQuestion = state.WaitingQuestion ||
@@ -134,10 +121,6 @@ func taskStatusLiveStatesJSON(observation workflowexecution.WorkflowTaskExecutio
 			state.HasWaitingApproval = state.HasWaitingApproval ||
 				execution.HasPendingPromptKind(sessionruntime.PendingPromptKindSessionApproval)
 		}
-		statesByTask[taskID] = state
-	}
-	states := make([]taskStatusLiveState, 0, len(statesByTask))
-	for _, state := range statesByTask {
 		states = append(states, state)
 	}
 	sort.Slice(states, func(i, j int) bool { return states[i].TaskID < states[j].TaskID })
@@ -146,18 +129,6 @@ func taskStatusLiveStatesJSON(observation workflowexecution.WorkflowTaskExecutio
 		return "", err
 	}
 	return string(raw), nil
-}
-
-func currentNodeReferencesContain(
-	references []workflow.CurrentNodeReference,
-	target workflow.CurrentNodeReference,
-) bool {
-	for _, reference := range references {
-		if reference.Equal(target) {
-			return true
-		}
-	}
-	return false
 }
 
 func (p *TaskStatusProjection) WithSnapshot(
@@ -253,7 +224,6 @@ func (p *TaskStatusProjection) Project(
 			return nil, fmt.Errorf("workflow execution omitted Task %q from Quiescence snapshot", taskID)
 		}
 		liveExecutions := append([]sessionruntime.TaskExecution(nil), observation.Live.Executions[taskID].Executions...)
-		liveRuns := observation.Live.Runs[taskID]
 		pendingApprovals := pendingApprovalsByTask[taskID]
 		pendingApprovalIDs := make([]string, 0, len(pendingApprovals))
 		for _, approval := range pendingApprovals {
@@ -268,7 +238,6 @@ func (p *TaskStatusProjection) Project(
 			Status:         status,
 			CurrentNodes:   currentNodes,
 			LiveExecutions: liveExecutions,
-			LiveRuns:       liveRuns,
 			Definition:     definition,
 			CanDelete:      quiescent,
 		})
@@ -279,7 +248,6 @@ func (p *TaskStatusProjection) Project(
 			Done:                         facts.Done,
 			CurrentNodes:                 append([]workflow.CurrentNode(nil), currentNodes...),
 			LiveExecutions:               liveExecutions,
-			LiveRuns:                     liveRuns,
 			PendingTransitionApprovalIDs: pendingApprovalIDs,
 			Actions:                      facts.Actions,
 			AttentionCount:               taskStatusAttentionCount(currentNodes, liveExecutions, len(pendingApprovalIDs)),

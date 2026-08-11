@@ -414,8 +414,7 @@ func TestWorktreeListRefreshPreservesSelectionAndDeleteTargetByKentID(t *testing
 
 func testSelectorPreview(entry serverapi.WorktreeListEntry) serverapi.WorktreeSelectorPreviewResponse {
 	return serverapi.WorktreeSelectorPreviewResponse{
-		Worktree: entry.Topology,
-		Selector: entry.Projection.Selector,
+		Worktree: entry,
 	}
 }
 

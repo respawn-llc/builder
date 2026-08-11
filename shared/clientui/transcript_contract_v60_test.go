@@ -51,17 +51,9 @@ func TestTranscriptContractRejectsUninitializedEvents(t *testing.T) {
 	}
 }
 
-func TestRuntimeReadModelUpdateOwnsTheOnlyReconciliationVersion(t *testing.T) {
+func TestRuntimeReadModelUpdateOwnsVersion(t *testing.T) {
 	if _, present := reflect.TypeOf(RuntimeReadModelUpdate{}).FieldByName("Version"); !present {
 		t.Fatal("RuntimeReadModelUpdate.Version is required")
-	}
-	for _, value := range []any{
-		RuntimeInputReconciliationSnapshot{},
-		RuntimeInputReconciliation{},
-	} {
-		if _, present := reflect.TypeOf(value).FieldByName("Version"); present {
-			t.Fatalf("%T must not repeat RuntimeReadModelUpdate.Version", value)
-		}
 	}
 }
 
@@ -104,7 +96,6 @@ func TestRuntimeReadModelUpdateRejectsInvalidNestedFacts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new read model version: %v", err)
 	}
-	clientRequestID := transcriptTestClientRequestID(t)
 	valid := RuntimeReadModelUpdate{
 		Version:  version,
 		Activity: RuntimeActivity{State: RuntimeActivityRegisteredIdle, QueueAccepting: true},
@@ -112,40 +103,11 @@ func TestRuntimeReadModelUpdateRejectsInvalidNestedFacts(t *testing.T) {
 	tests := []RuntimeReadModelUpdate{
 		{Activity: valid.Activity},
 		{Version: version, Activity: RuntimeActivity{State: RuntimeActivityState("unknown")}},
-		{
-			Version:  version,
-			Activity: valid.Activity,
-			InputReconciliation: RuntimeInputReconciliationSnapshot{
-				Operations: []RuntimeInputReconciliation{{
-					Operation: RuntimeOperationRef{
-						Kind:            RuntimeOperationKindSubmit,
-						ClientRequestID: clientRequestID,
-					},
-					State: RuntimeInputReconciliationState("unknown_state"),
-				}},
-			},
-		},
 	}
 	for _, update := range tests {
 		if err := update.Validate(); err == nil {
 			t.Fatalf("accepted invalid runtime read-model update: %+v", update)
 		}
-	}
-}
-
-func TestRuntimeInputReconciliationRejectsDuplicateOperationIdentity(t *testing.T) {
-	operation := RuntimeInputReconciliation{
-		Operation: RuntimeOperationRef{
-			Kind:            RuntimeOperationKindSubmit,
-			ClientRequestID: transcriptTestClientRequestID(t),
-		},
-		State: RuntimeInputReconciliationCommitted,
-	}
-	snapshot := RuntimeInputReconciliationSnapshot{
-		Operations: []RuntimeInputReconciliation{operation, operation},
-	}
-	if err := snapshot.Validate(); err == nil {
-		t.Fatal("accepted duplicate runtime reconciliation operation")
 	}
 }
 

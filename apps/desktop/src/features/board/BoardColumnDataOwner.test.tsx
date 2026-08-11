@@ -1,17 +1,9 @@
 import { render, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { canonicalBoardFilter, type BoardColumn } from "@/api";
-import type {
-  BoardFilterGenerationController,
-  BoardFilterGenerationSnapshot,
-} from "./BoardFilterGenerationController";
+import type { BoardColumn } from "@/api";
 
 type LogContext = Readonly<Record<string, string>>;
-interface TestRuntime {
-  snapshot: BoardFilterGenerationSnapshot;
-  controller: Pick<BoardFilterGenerationController, "getSnapshot">;
-}
 
 const { loggerAppend } = vi.hoisted(() => ({
   loggerAppend: vi.fn(async (...args: ["warn", string, LogContext]): Promise<void> => {
@@ -20,19 +12,6 @@ const { loggerAppend } = vi.hoisted(() => ({
 }));
 
 const queryByColumn = new Map<string, Record<string, unknown>>();
-const runtime: TestRuntime = {
-  snapshot: {
-    active: {
-      generation: 2,
-      filter: canonicalBoardFilter({ labelFilter: { kind: "none" }, dependencyFilter: true }),
-      retiring: false,
-    },
-    desiredFilter: null,
-  },
-  controller: {
-    getSnapshot: () => runtime.snapshot,
-  },
-};
 
 vi.mock("@/app-facade", () => ({
   useAppServices: () => ({ logger: { append: loggerAppend } }),
@@ -44,10 +23,6 @@ vi.mock("@/shared/labels", () => ({
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({ t: (key: string) => key }),
-}));
-
-vi.mock("./BoardFilterGenerationRuntime", () => ({
-  useBoardFilterGeneration: () => runtime,
 }));
 
 vi.mock("./useBoardData", () => ({
@@ -63,23 +38,27 @@ const board = {
   projectID: "project-1",
   selectedWorkflow: { id: "workflow-1" },
 };
-const column: BoardColumn = { id: "column-1", key: "column-1", kind: "agent", name: "Column", assigneeRole: "", outputFields: [], groupID: "group-1", sortOrder: 0, isBacklog: false, isDone: false, taskCount: 1 };
+const column: BoardColumn = {
+  id: "column-1",
+  key: "column-1",
+  kind: "agent",
+  name: "Column",
+  assigneeRole: "",
+  outputFields: [],
+  groupID: "group-1",
+  sortOrder: 0,
+  isBacklog: false,
+  isDone: false,
+  taskCount: 1,
+};
 
 afterEach(() => {
   queryByColumn.clear();
   loggerAppend.mockClear();
-  runtime.snapshot = {
-    active: {
-      generation: 2,
-      filter: canonicalBoardFilter({ labelFilter: { kind: "none" }, dependencyFilter: true }),
-      retiring: false,
-    },
-    desiredFilter: null,
-  };
 });
 
 describe("BoardColumnDataOwner retained replacement boundary", () => {
-  it("publishes a generation-scoped Retry boundary, logs the failure, and removes it after recovery", async () => {
+  it("publishes a Retry boundary, logs the failure, and removes it after recovery", async () => {
     const refetch = vi.fn(async () => undefined);
     const onViewRelease = vi.fn();
     queryByColumn.set("column-1", queryState({ refetch }));
@@ -95,10 +74,6 @@ describe("BoardColumnDataOwner retained replacement boundary", () => {
     await waitFor(() => {
       expect(latestView?.replacementBoundary).toBeUndefined();
     });
-    runtime.snapshot = {
-      ...runtime.snapshot,
-      active: { ...runtime.snapshot.active, generation: 3 },
-    };
     queryByColumn.set(
       "column-1",
       queryState({ error: new Error(), isError: true, isPlaceholderData: true, refetch }),
@@ -120,7 +95,6 @@ describe("BoardColumnDataOwner retained replacement boundary", () => {
     expect(diagnostic).toEqual(
       expect.objectContaining({
         columnID: "column-1",
-        filterGeneration: "3",
         projectID: "project-1",
         workflowID: "workflow-1",
       }),
@@ -129,15 +103,8 @@ describe("BoardColumnDataOwner retained replacement boundary", () => {
     if (latestView?.replacementBoundary?.state === "error") {
       latestView.replacementBoundary.onRetry();
     }
-    const staleRetry = latestView?.replacementBoundary;
-    runtime.snapshot = {
-      active: { ...runtime.snapshot.active, generation: 4 },
-      desiredFilter: null,
-    };
-    if (staleRetry?.state === "error") {
-      staleRetry.onRetry();
-    }
     expect(refetch).toHaveBeenCalledOnce();
+
     queryByColumn.set("column-1", queryState({ refetch }));
     view.rerender(
       <Owner
@@ -180,10 +147,6 @@ describe("BoardColumnDataOwner retained replacement boundary", () => {
       expect(views.get("column-2")?.replacementBoundary).toBeUndefined();
     });
 
-    runtime.snapshot = {
-      ...runtime.snapshot,
-      active: { ...runtime.snapshot.active, generation: 3 },
-    };
     queryByColumn.set(
       "column-1",
       queryState({ error: new Error(), isError: true, isPlaceholderData: true, refetch: firstRefetch }),

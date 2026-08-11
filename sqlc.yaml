@@ -1,3 +1,4 @@
+# `go generate ./server/metadata/sqlitegen` renders the temporary query input.
 version: "2"
 sql:
   - engine: "sqlite"

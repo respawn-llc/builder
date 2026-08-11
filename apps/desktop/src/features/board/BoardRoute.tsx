@@ -2,12 +2,7 @@ import type { DragEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import {
-  canonicalBoardFilter,
-  hasSelectedWorkflow,
-  type BoardColumn,
-  type SelectedWorkflowBoard,
-} from "@/api";
+import { hasSelectedWorkflow, type BoardColumn, type SelectedWorkflowBoard } from "@/api";
 import { errorMessage } from "@/api";
 import { useAppNavigation } from "@/app-facade";
 import { useConnectionSnapshot } from "@/app-facade";
@@ -40,10 +35,8 @@ import { useBoardInitiatingActionController } from "./useBoardInitiatingActionCo
 import { useBoardResumeAction } from "./useBoardResumeAction";
 import { useManualMoveController } from "./useManualMoveController";
 import "./board.css";
-import { BoardFilterGenerationProvider } from "./BoardFilterGenerationContext";
-import { BoardMembershipRefreshBinding } from "./BoardLabelFilter";
 import { BoardFilterRow } from "./BoardFilterRow";
-import { ignoreBoardMembershipRefresh, type BoardMembershipRefreshRef } from "./BoardMembershipRefresh";
+import { BoardQueryProvider } from "./BoardQueryContext";
 import { useBoard, useBoardTaskActions, useProjectBoardSubscription } from "./useBoardData";
 import { useBoardLoadErrorReporter } from "./useBoardLoadErrorReporter";
 
@@ -75,58 +68,47 @@ function manualMoveBlockerCopy(reason: string, translate: (key: string) => strin
 
 export function BoardRoute({ projectId, workflowId, selectedTaskId }: BoardRouteProps) {
   const reportBoardLoadError = useBoardLoadErrorReporter();
-  const membershipRefreshRef = useRef<BoardMembershipRefreshRef["current"]>(ignoreBoardMembershipRefresh);
   return (
     <SidebarRootOwner>
       <ProjectLabelsProvider
-      onBackgroundError={reportBoardLoadError}
-      onMembershipRefresh={async (effect) => membershipRefreshRef.current(effect)}
-      projectID={projectId}
-      subscribeToProject={false}
-      >
-      <BoardRouteWithLabels
-        membershipRefreshRef={membershipRefreshRef}
         onBackgroundError={reportBoardLoadError}
-        projectId={projectId}
-        selectedTaskId={selectedTaskId}
-        workflowId={workflowId}
-      />
+        projectID={projectId}
+        subscribeToProject={false}
+      >
+        <BoardRouteWithLabels
+          onBackgroundError={reportBoardLoadError}
+          projectId={projectId}
+          selectedTaskId={selectedTaskId}
+          workflowId={workflowId}
+        />
       </ProjectLabelsProvider>
     </SidebarRootOwner>
   );
 }
 
 function BoardRouteWithLabels({
-  membershipRefreshRef,
   onBackgroundError,
   projectId,
   workflowId,
   selectedTaskId,
 }: BoardRouteProps &
   Readonly<{
-    membershipRefreshRef: BoardMembershipRefreshRef;
     onBackgroundError(error: unknown): void;
   }>) {
   const filter = useProjectLabelFilter();
   return (
-    <BoardFilterGenerationProvider
-      desiredLabelFilter={filter.state.filter}
-      initialFilter={canonicalBoardFilter({
-        labelFilter: filter.state.filter,
-        dependencyFilter: null,
-      })}
+    <BoardQueryProvider
       key={`${projectId}:${workflowId ?? "default"}`}
-      onBackgroundError={onBackgroundError}
+      labelFilter={filter.state.filter}
       queriesEnabled={filter.persistence.status !== "loading"}
     >
-      <BoardMembershipRefreshBinding membershipRefreshRef={membershipRefreshRef} />
       <BoardRouteData
         onBackgroundError={onBackgroundError}
         projectId={projectId}
         selectedTaskId={selectedTaskId}
         workflowId={workflowId}
       />
-    </BoardFilterGenerationProvider>
+    </BoardQueryProvider>
   );
 }
 
@@ -162,12 +144,7 @@ function BoardRouteData({
     // the route task alone would leave it mounted and refetching the now-deleted
     // task into an error state. Close it too when it targets the deleted task.
     void navigation.closeProjectTask(projectId, workflowId).catch(reportBoardNavigationError);
-  }, [
-    navigation,
-    projectId,
-    reportBoardNavigationError,
-    workflowId,
-  ]);
+  }, [navigation, projectId, reportBoardNavigationError, workflowId]);
   useProjectBoardSubscription(projectId, workflowId, {
     onBackgroundError: reportBoardLoadError,
     onSelectedTaskDeleted: handleSelectedTaskDeleted,
@@ -353,14 +330,7 @@ function BoardContent({
       active = false;
       root.release();
     };
-  }, [
-    board.projectID,
-    board.selectedWorkflow.id,
-    navigation,
-    open,
-    reportNavigationError,
-    selectedTaskId,
-  ]);
+  }, [board.projectID, board.selectedWorkflow.id, navigation, open, reportNavigationError, selectedTaskId]);
 
   useEffect(() => {
     const handleDocumentDrop = (event: Event): void => {

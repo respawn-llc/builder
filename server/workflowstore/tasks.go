@@ -15,6 +15,20 @@ import (
 	"core/shared/runtimeids"
 )
 
+type (
+	TaskStartConflictReason string
+	TaskStartConflictError  struct {
+		TaskID workflow.TaskID
+		Reason TaskStartConflictReason
+	}
+)
+
+const TaskStartConflictAlreadyStarted TaskStartConflictReason = "already_started"
+
+func (e TaskStartConflictError) Error() string {
+	return fmt.Sprintf("task %q start conflict: %s", e.TaskID, e.Reason)
+}
+
 type CreateTaskRequest struct {
 	ProjectID         string
 	WorkflowID        *runtimeids.WorkflowID
@@ -237,8 +251,10 @@ func createTaskWithQueries(ctx context.Context, q *sqlitegen.Queries, prepared p
 		ID: prepared.taskID, ProjectWorkflowLinkID: link.ID, WorkflowRevisionSeen: record.Version,
 		TaskSeq: sequence, ShortID: shortID, Title: prepared.title, Body: prepared.body,
 		SourceUrl: prepared.sourceURL, SourceWorkspaceID: nullableString(sourceWorkspaceID),
-		ManagedWorktreeID: sql.NullString{}, CreatedAtUnixMs: prepared.nowUnixMs,
-		UpdatedAtUnixMs: prepared.nowUnixMs, MetadataJson: metadataJSON,
+		ManagedWorktreeID:               sql.NullString{},
+		PendingInitialManagedBranchName: nullableString(shortID),
+		CreatedAtUnixMs:                 prepared.nowUnixMs,
+		UpdatedAtUnixMs:                 prepared.nowUnixMs, MetadataJson: metadataJSON,
 	}); err != nil {
 		return TaskRecord{}, fmt.Errorf("insert task: %w", err)
 	}
@@ -278,7 +294,9 @@ func createTaskWithQueries(ctx context.Context, q *sqlitegen.Queries, prepared p
 	return TaskRecord{
 		ID: workflow.TaskID(prepared.taskID), ProjectID: prepared.projectID, WorkflowID: link.WorkflowID,
 		LinkID: link.ID, ShortID: shortID, Title: prepared.title, Body: prepared.body,
-		SourceURL: prepared.sourceURL, SourceWorkspaceID: sourceWorkspaceID, Version: record.Version,
+		SourceURL: prepared.sourceURL, SourceWorkspaceID: sourceWorkspaceID,
+		PendingInitialManagedBranchName: metadata.OptionalString(nullableString(shortID)),
+		Version:                         record.Version,
 	}, nil
 }
 
@@ -428,111 +446,93 @@ func (s *Store) DeleteTask(ctx context.Context, taskID workflow.TaskID) (DeleteT
 }
 
 func (s *Store) StartTask(ctx context.Context, taskID workflow.TaskID) (StartTaskResult, error) {
-	prepared, err := s.PrepareTaskStart(ctx, taskID)
-	if err != nil {
-		return StartTaskResult{}, err
-	}
-	result := prepared.Result()
-	if err := prepared.Commit(); err != nil {
-		return StartTaskResult{}, err
-	}
-	return StartTaskResult{Mutation: result.Mutation}, nil
+	return s.startTask(ctx, taskID, nil, false)
 }
 
 func (s *Store) StartTaskWithExecutionTarget(ctx context.Context, taskID workflow.TaskID, candidate *ExecutionTargetCandidate) (StartTaskResult, error) {
-	prepared, err := s.prepareTaskStartMutation(ctx, taskID, candidate, true)
+	return s.startTask(ctx, taskID, candidate, true)
+}
+
+func (s *Store) startTask(ctx context.Context, taskID workflow.TaskID, candidate *ExecutionTargetCandidate, requireTarget bool) (StartTaskResult, error) {
+	prepared, err := s.prepareTaskStart(ctx, taskID)
 	if err != nil {
 		return StartTaskResult{}, err
 	}
-	result := prepared.Result()
-	if err := prepared.Commit(); err != nil {
+	var targetMutation preparedExecutionTargetMutation
+	if requireTarget {
+		targetMutation, err = s.prepareExecutionTargetMutation(ctx, prepared.task, candidate)
+		if err != nil {
+			return StartTaskResult{}, err
+		}
+	}
+	executionRoot, err := executionRootForLockedTaskIfPresent(ctx, s.queries, prepared.task)
+	if err != nil {
 		return StartTaskResult{}, err
 	}
-	return StartTaskResult{Mutation: result.Mutation}, nil
-}
-
-func (s *Store) PrepareTaskStart(ctx context.Context, taskID workflow.TaskID) (PreparedCurrentNodeMutation, error) {
-	return s.prepareTaskStartMutation(ctx, taskID, nil, false)
-}
-
-func (s *Store) prepareTaskStartMutation(
-	ctx context.Context,
-	taskID workflow.TaskID,
-	candidate *ExecutionTargetCandidate,
-	requireTarget bool,
-) (PreparedCurrentNodeMutation, error) {
-	return s.prepareCurrentNodeMutation(ctx, taskID, func(ctx context.Context, q *sqlitegen.Queries) (PreparedCurrentNodeMutationResult, error) {
-		prepared, err := s.prepareTaskStartWithQueries(ctx, q, taskID)
-		if err != nil {
-			return PreparedCurrentNodeMutationResult{}, err
+	if prepared.target.Kind() == workflow.NodeKindScript {
+		if err := s.validateScriptNodeForExecution(ctx, s.queries, workflow.NodeIDOf(prepared.target), executionRoot); err != nil {
+			return StartTaskResult{}, err
 		}
-		var targetMutation preparedExecutionTargetMutation
-		if requireTarget {
-			targetMutation, err = s.prepareExecutionTargetMutationWithQueries(ctx, q, prepared.task, candidate)
-			if err != nil {
-				return PreparedCurrentNodeMutationResult{}, err
-			}
+	}
+	var targetSelection *workflow.AgentExecutionSelection
+	if prepared.target.Kind() == workflow.NodeKindAgent {
+		selectionPlan, selectionErr := workflow.PlanTransitionSelection(workflow.TransitionParameterContractRequest{
+			Edge:       prepared.startEdge,
+			SourceKind: prepared.start.Kind(),
+			TargetKind: prepared.target.Kind(),
+			TargetRole: workflow.NodeSubagentRole(prepared.target),
+			Catalog:    s.roleResolver,
+			Materialization: &workflow.TransitionSelectionMaterializationRequest{
+				FallbackRole: workflow.NodeSubagentRole(prepared.target),
+			},
+		})
+		var value workflow.AgentExecutionSelection
+		if selectionErr == nil && selectionPlan.ExecutionSelection != nil {
+			value = *selectionPlan.ExecutionSelection
+		} else if selectionErr == nil {
+			selectionErr = errors.New("transition selection planner omitted Agent execution selection")
 		}
-		executionRoot, err := executionRootForLockedTaskIfPresent(ctx, q, prepared.task)
-		if err != nil {
-			return PreparedCurrentNodeMutationResult{}, err
+		if selectionErr != nil {
+			return StartTaskResult{}, fmt.Errorf("materialize Agent target selection: %w", selectionErr)
 		}
-		if prepared.target.Kind() == workflow.NodeKindScript {
-			if err := s.validateScriptNodeForExecution(ctx, q, workflow.NodeIDOf(prepared.target), executionRoot); err != nil {
-				return PreparedCurrentNodeMutationResult{}, err
-			}
+		targetSelection = &value
+	}
+	target, err := newReadyCurrentNode(taskID, workflow.NodeIDOf(prepared.target), prepared.startEdge.ID, targetSelection)
+	if err != nil {
+		return StartTaskResult{}, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return StartTaskResult{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	q := s.queries.WithTx(tx)
+	now := s.now().UnixMilli()
+	if requireTarget {
+		if err := applyPreparedExecutionTargetMutation(ctx, q, prepared.task, targetMutation, now); err != nil {
+			return StartTaskResult{}, err
 		}
-		var targetSelection *workflow.AgentExecutionSelection
-		if prepared.target.Kind() == workflow.NodeKindAgent {
-			selectionPlan, selectionErr := workflow.PlanTransitionSelection(workflow.TransitionParameterContractRequest{
-				Edge:       prepared.startEdge,
-				SourceKind: prepared.start.Kind(),
-				TargetKind: prepared.target.Kind(),
-				TargetRole: workflow.NodeSubagentRole(prepared.target),
-				Catalog:    s.roleResolver,
-				Materialization: &workflow.TransitionSelectionMaterializationRequest{
-					FallbackRole: workflow.NodeSubagentRole(prepared.target),
-				},
-			})
-			var value workflow.AgentExecutionSelection
-			if selectionErr == nil && selectionPlan.ExecutionSelection != nil {
-				value = *selectionPlan.ExecutionSelection
-			} else if selectionErr == nil {
-				selectionErr = errors.New("transition selection planner omitted Agent execution selection")
-			}
-			if selectionErr != nil {
-				return PreparedCurrentNodeMutationResult{}, fmt.Errorf("materialize Agent target selection: %w", selectionErr)
-			}
-			targetSelection = &value
-		}
-		target, err := newReadyCurrentNode(taskID, workflow.NodeIDOf(prepared.target), prepared.startEdge.ID, targetSelection)
-		if err != nil {
-			return PreparedCurrentNodeMutationResult{}, err
-		}
-		now := s.now().UnixMilli()
-		if requireTarget {
-			if err := applyPreparedExecutionTargetMutation(ctx, q, prepared.task, targetMutation, now); err != nil {
-				return PreparedCurrentNodeMutationResult{}, err
-			}
-		}
-		removed, err := q.DeleteSerialTaskCurrentNode(ctx, sqlitegen.DeleteSerialTaskCurrentNodeParams{TaskID: string(taskID), NodeID: string(workflow.NodeIDOf(prepared.start))})
-		if err != nil {
-			return PreparedCurrentNodeMutationResult{}, err
-		}
-		if removed != 1 {
-			return PreparedCurrentNodeMutationResult{}, sql.ErrNoRows
-		}
-		if err := insertTaskCurrentNode(ctx, q, target); err != nil {
-			return PreparedCurrentNodeMutationResult{}, err
-		}
-		if err := touchTaskUpdatedAt(ctx, q, string(taskID), now); err != nil {
-			return PreparedCurrentNodeMutationResult{}, err
-		}
-		return PreparedCurrentNodeMutationResult{Mutation: workflow.CurrentNodeMutationResult{
-			Removed: []workflow.CurrentNodeReference{prepared.startCurrentNode.Reference},
-			Created: []workflow.CurrentNode{target},
-		}, CreatedExecutableCurrentNodes: []workflow.CurrentNode{target}}, nil
-	})
+	}
+	removed, err := q.DeleteSerialTaskCurrentNode(ctx, sqlitegen.DeleteSerialTaskCurrentNodeParams{TaskID: string(taskID), NodeID: string(workflow.NodeIDOf(prepared.start))})
+	if err != nil {
+		return StartTaskResult{}, err
+	}
+	if removed != 1 {
+		return StartTaskResult{}, sql.ErrNoRows
+	}
+	if err := insertTaskCurrentNode(ctx, q, target); err != nil {
+		return StartTaskResult{}, err
+	}
+	if err := touchTaskUpdatedAt(ctx, q, string(taskID), now); err != nil {
+		return StartTaskResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return StartTaskResult{}, err
+	}
+	return StartTaskResult{Mutation: workflow.CurrentNodeMutationResult{
+		Removed: []workflow.CurrentNodeReference{prepared.startCurrentNode.Reference},
+		Created: []workflow.CurrentNode{target},
+	}}, nil
 }
 
 func (s *Store) ValidateTaskStart(ctx context.Context, taskID workflow.TaskID) error {
@@ -549,19 +549,11 @@ type preparedTaskStart struct {
 }
 
 func (s *Store) prepareTaskStart(ctx context.Context, taskID workflow.TaskID) (preparedTaskStart, error) {
-	return s.prepareTaskStartWithQueries(ctx, s.queries, taskID)
-}
-
-func (s *Store) prepareTaskStartWithQueries(
-	ctx context.Context,
-	q *sqlitegen.Queries,
-	taskID workflow.TaskID,
-) (preparedTaskStart, error) {
-	task, err := q.GetTask(ctx, string(taskID))
+	task, err := s.queries.GetTask(ctx, string(taskID))
 	if err != nil {
 		return preparedTaskStart{}, err
 	}
-	definition, _, err := GetDefinitionWithQueries(ctx, q, task.WorkflowID)
+	definition, _, err := s.GetDefinition(ctx, task.WorkflowID)
 	if err != nil {
 		return preparedTaskStart{}, err
 	}
@@ -573,8 +565,11 @@ func (s *Store) prepareTaskStartWithQueries(
 	if err != nil {
 		return preparedTaskStart{}, err
 	}
-	current, err := currentNodeForReference(ctx, q, reference)
+	current, err := currentNodeForReference(ctx, s.queries, reference)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return preparedTaskStart{}, TaskStartConflictError{TaskID: taskID, Reason: TaskStartConflictAlreadyStarted}
+		}
 		return preparedTaskStart{}, err
 	}
 	if current.SessionID != nil || current.Scheduling != nil {
@@ -625,12 +620,15 @@ func taskRecordFromTask(row sqlitegen.TaskRecord) (TaskRecord, error) {
 	if err != nil {
 		return TaskRecord{}, err
 	}
+	managedWorktreeID := metadata.OptionalString(row.ManagedWorktreeID)
 	return TaskRecord{
 		ID: workflow.TaskID(row.ID), ProjectID: row.ProjectID, WorkflowID: row.WorkflowID,
 		LinkID: row.ProjectWorkflowLinkID, ShortID: row.ShortID, Title: row.Title, Body: row.Body,
 		SourceURL: row.SourceUrl, SourceWorkspaceID: strings.TrimSpace(row.SourceWorkspaceID.String),
-		ManagedWorktreeID: strings.TrimSpace(row.ManagedWorktreeID.String), ExecutionTarget: target,
-		Version: row.WorkflowRevisionSeen,
+		ManagedWorktreeID:               managedWorktreeID,
+		PendingInitialManagedBranchName: metadata.OptionalString(row.PendingInitialManagedBranchName),
+		ExecutionTarget:                 target,
+		Version:                         row.WorkflowRevisionSeen,
 	}, nil
 }
 

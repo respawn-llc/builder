@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"core/server/runtime"
+	"core/server/runtimeactivity"
 	"core/server/session"
 	"core/server/sessionruntime"
 	"core/shared/runtimeids"
@@ -69,124 +70,70 @@ type GoalAuthority struct {
 
 func NewGoalAuthority(authority *sessionruntime.Authority, execution *ExecutionAdapter) *GoalAuthority {
 	if execution == nil {
-		execution = NewExecutionAdapter(authority, nil)
+		execution = NewExecutionAdapter(authority)
 	}
 	return &GoalAuthority{authority: authority, execution: execution}
 }
 
 func (a *GoalAuthority) Set(ctx context.Context, command GoalSetCommand) (GoalCommandResult, error) {
-	result, _, err := a.SetAdmitted(ctx, command, nil)
-	return result, err
-}
-
-func (a *GoalAuthority) SetAdmitted(
-	ctx context.Context,
-	command GoalSetCommand,
-	admit SessionAgentOperationAdmitter,
-) (GoalCommandResult, bool, error) {
 	if err := validateGoalCommand(command.SessionID, command.Actor, command.Execution); err != nil {
-		return GoalCommandResult{}, false, err
+		return GoalCommandResult{}, err
 	}
 	command.Objective = strings.TrimSpace(command.Objective)
 	if command.Objective == "" {
-		return GoalCommandResult{}, false, errors.New("goal objective is required")
-	}
-	driver, err := NewGoalMutationDriver(command)
-	if err != nil {
-		return GoalCommandResult{}, false, err
-	}
-	if handled, admitted, result, routeErr := a.routeRetained(ctx, command.SessionID, driver, admit); handled || routeErr != nil {
-		return result, admitted, routeErr
+		return GoalCommandResult{}, errors.New("goal objective is required")
 	}
 	if isStepScoped(command.Actor, command.Execution) {
-		result, err := a.withExactLive(ctx, command.SessionID, driver)
-		return result, false, err
+		return a.withExactLive(ctx, command.SessionID, command.Execution, func(engine *runtime.Engine) (GoalCommandResult, error) {
+			goal, queued, err := queueSet(engine, command)
+			if err != nil {
+				return GoalCommandResult{Err: err}, err
+			}
+			if queued {
+				return queuedGoalResult(goal), nil
+			}
+			return GoalCommandResult{Err: runtime.ErrAgentGoalStepInactive}, runtime.ErrAgentGoalStepInactive
+		})
 	}
-	result, err := a.withDormantAdmission(ctx, command.SessionID, func(store *session.Store) (GoalCommandResult, error) {
+	return a.withDormantAdmission(ctx, command.SessionID, func(store *session.Store) (GoalCommandResult, error) {
 		return dormantSet(store, command)
-	}, driver)
-	return result, false, err
+	}, func(engine *runtime.Engine) (GoalCommandResult, error) {
+		return liveSet(engine, command)
+	})
 }
 
 func (a *GoalAuthority) Status(ctx context.Context, command GoalStatusCommand) (GoalCommandResult, error) {
-	result, _, err := a.StatusAdmitted(ctx, command, nil)
-	return result, err
-}
-
-func (a *GoalAuthority) StatusAdmitted(
-	ctx context.Context,
-	command GoalStatusCommand,
-	admit SessionAgentOperationAdmitter,
-) (GoalCommandResult, bool, error) {
 	if err := validateGoalCommand(command.SessionID, command.Actor, command.Execution); err != nil {
-		return GoalCommandResult{}, false, err
-	}
-	driver, err := NewGoalMutationDriver(command)
-	if err != nil {
-		return GoalCommandResult{}, false, err
-	}
-	if handled, admitted, result, routeErr := a.routeRetained(ctx, command.SessionID, driver, admit); handled || routeErr != nil {
-		return result, admitted, routeErr
+		return GoalCommandResult{}, err
 	}
 	if isStepScoped(command.Actor, command.Execution) {
-		result, err := a.withExactLive(ctx, command.SessionID, driver)
-		return result, false, err
+		return a.withExactLive(ctx, command.SessionID, command.Execution, func(engine *runtime.Engine) (GoalCommandResult, error) {
+			goal, queued, err := queueStatus(engine, command)
+			if err != nil {
+				return GoalCommandResult{Err: err}, err
+			}
+			if queued {
+				return queuedGoalResult(goal), nil
+			}
+			return GoalCommandResult{Err: runtime.ErrAgentGoalStepInactive}, runtime.ErrAgentGoalStepInactive
+		})
 	}
-	result, err := a.withDormantAdmission(ctx, command.SessionID, func(store *session.Store) (GoalCommandResult, error) {
+	return a.withDormantAdmission(ctx, command.SessionID, func(store *session.Store) (GoalCommandResult, error) {
 		return dormantStatus(store, command)
-	}, driver)
-	return result, false, err
+	}, func(engine *runtime.Engine) (GoalCommandResult, error) {
+		return liveStatus(engine, command)
+	})
 }
 
 func (a *GoalAuthority) Clear(ctx context.Context, command GoalClearCommand) (GoalCommandResult, error) {
-	result, _, err := a.ClearAdmitted(ctx, command, nil)
-	return result, err
-}
-
-func (a *GoalAuthority) ClearAdmitted(
-	ctx context.Context,
-	command GoalClearCommand,
-	admit SessionAgentOperationAdmitter,
-) (GoalCommandResult, bool, error) {
 	if err := validateGoalCommand(command.SessionID, command.Actor, GoalExecutionIdentity{}); err != nil {
-		return GoalCommandResult{}, false, err
+		return GoalCommandResult{}, err
 	}
-	driver, err := NewGoalMutationDriver(command)
-	if err != nil {
-		return GoalCommandResult{}, false, err
-	}
-	if handled, admitted, result, routeErr := a.routeRetained(ctx, command.SessionID, driver, admit); handled || routeErr != nil {
-		return result, admitted, routeErr
-	}
-	result, err := a.withDormantAdmission(ctx, command.SessionID, func(store *session.Store) (GoalCommandResult, error) {
+	return a.withDormantAdmission(ctx, command.SessionID, func(store *session.Store) (GoalCommandResult, error) {
 		return dormantClear(store, command)
-	}, driver)
-	return result, false, err
-}
-
-func (a *GoalAuthority) routeRetained(
-	ctx context.Context,
-	sessionID runtimeids.SessionID,
-	driver SessionAgentOperationDriver,
-	admit SessionAgentOperationAdmitter,
-) (bool, bool, GoalCommandResult, error) {
-	if a == nil || a.execution == nil {
-		return false, false, GoalCommandResult{}, errors.New("runtime execution adapter is required")
-	}
-	if admit != nil {
-		handled, err := a.execution.routeAdmittedWorkflowAgentOperation(ctx, sessionID, driver, admit)
-		return handled, handled && err == nil, GoalCommandResult{}, err
-	}
-	handled, outcome, err := a.execution.routeWorkflowAgentOperation(ctx, sessionID, driver)
-	if !handled {
-		return false, false, GoalCommandResult{}, err
-	}
-	result := goalCommandResultFromOutcome(outcome)
-	if result.Accepted() {
-		result.Err = err
-		return true, false, result, nil
-	}
-	return true, false, GoalCommandResult{}, err
+	}, func(engine *runtime.Engine) (GoalCommandResult, error) {
+		return liveClear(engine, command)
+	})
 }
 
 func validateGoalCommand(sessionID runtimeids.SessionID, actor session.GoalActor, execution GoalExecutionIdentity) error {
@@ -215,12 +162,12 @@ func (a *GoalAuthority) withDormantAdmission(
 	ctx context.Context,
 	sessionID runtimeids.SessionID,
 	dormant func(*session.Store) (GoalCommandResult, error),
-	driver SessionAgentOperationDriver,
+	live func(*runtime.Engine) (GoalCommandResult, error),
 ) (GoalCommandResult, error) {
 	if a == nil || a.authority == nil {
 		return GoalCommandResult{}, errors.New("session runtime authority is required")
 	}
-	if dormant == nil || driver == nil {
+	if dormant == nil || live == nil {
 		return GoalCommandResult{}, errors.New("goal command handlers are required")
 	}
 	descriptor, err := session.NewOpenSessionDescriptor(sessionID)
@@ -243,19 +190,35 @@ func (a *GoalAuthority) withDormantAdmission(
 	if !admission.RuntimeAvailable {
 		return result, nil
 	}
-	return a.withLive(ctx, sessionID, driver)
+	return a.withLive(ctx, sessionID, live)
 }
 
 func (a *GoalAuthority) withLive(
 	ctx context.Context,
 	sessionID runtimeids.SessionID,
-	driver SessionAgentOperationDriver,
+	mutate func(*runtime.Engine) (GoalCommandResult, error),
 ) (GoalCommandResult, error) {
 	if a == nil || a.execution == nil {
 		return GoalCommandResult{}, errors.New("runtime execution adapter is required")
 	}
-	outcome, err := a.execution.runOrdinaryAgentOperation(ctx, sessionID, driver)
-	result := goalCommandResultFromOutcome(outcome)
+	var result GoalCommandResult
+	err := a.execution.RunAgentExecution(ctx, sessionID.String(), func(_ context.Context, engine *runtime.Engine) error {
+		applied, applyErr := mutate(engine)
+		result = applied
+		return applyErr
+	})
+	if result.Accepted() {
+		result.Err = err
+		return result, nil
+	}
+	if !errors.Is(err, serverapi.ErrSessionRunStarting) {
+		return GoalCommandResult{}, err
+	}
+	err = a.execution.WithLiveExecutionRuntime(ctx, sessionID, func(_ context.Context, engine *runtime.Engine) error {
+		applied, applyErr := mutate(engine)
+		result = applied
+		return applyErr
+	})
 	if result.Accepted() {
 		result.Err = err
 		return result, nil
@@ -266,13 +229,23 @@ func (a *GoalAuthority) withLive(
 func (a *GoalAuthority) withExactLive(
 	ctx context.Context,
 	sessionID runtimeids.SessionID,
-	driver SessionAgentOperationDriver,
+	execution GoalExecutionIdentity,
+	mutate func(*runtime.Engine) (GoalCommandResult, error),
 ) (GoalCommandResult, error) {
 	if a == nil || a.execution == nil {
 		return GoalCommandResult{}, errors.New("runtime execution adapter is required")
 	}
-	outcome, err := a.execution.JoinLiveAgentOperation(ctx, sessionID, driver)
-	result := goalCommandResultFromOutcome(outcome)
+	var result GoalCommandResult
+	err := a.execution.WithLiveExecutionRuntime(ctx, sessionID, func(_ context.Context, engine *runtime.Engine) error {
+		if active := runtimeactivity.ActiveStepFromProvider(engine); active == nil ||
+			active.StepID != *execution.StepID ||
+			(execution.RunID != nil && active.RunID != *execution.RunID) {
+			return runtime.ErrAgentGoalStepInactive
+		}
+		applied, applyErr := mutate(engine)
+		result = applied
+		return applyErr
+	})
 	if result.Accepted() {
 		result.Err = err
 		return result, nil
@@ -281,13 +254,6 @@ func (a *GoalAuthority) withExactLive(
 		return GoalCommandResult{}, runtime.ErrAgentGoalStepInactive
 	}
 	return GoalCommandResult{}, err
-}
-
-func goalCommandResultFromOutcome(outcome SessionAgentOperationOutcome) GoalCommandResult {
-	if typed, ok := outcome.(GoalMutationOperationOutcome); ok {
-		return typed.Result
-	}
-	return GoalCommandResult{}
 }
 
 func liveSet(engine *runtime.Engine, command GoalSetCommand) (GoalCommandResult, error) {

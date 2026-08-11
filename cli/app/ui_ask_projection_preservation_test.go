@@ -28,7 +28,7 @@ func TestAskProjectionInvalidationPreservesVisibleDeliveryStateAndKeys(t *testin
 		t.Fatal("visible prompt did not establish answer delivery")
 	}
 	activeDelivery := delivering.ask.activeDelivery
-	requestID := activeDelivery.requestID
+	generation := activeDelivery.generation
 	currentToken := delivering.ask.currentToken
 
 	replacement := testQuestionAskEvent("ask-1", "Updated question", "new one", "new two")
@@ -38,7 +38,7 @@ func TestAskProjectionInvalidationPreservesVisibleDeliveryStateAndKeys(t *testin
 		t.Fatal("same-ID question invalidation did not schedule projection")
 	}
 	if reprojecting.ask.activeDelivery != activeDelivery ||
-		reprojecting.ask.activeDelivery.requestID != requestID ||
+		reprojecting.ask.activeDelivery.generation != generation ||
 		reprojecting.ask.currentToken != currentToken {
 		t.Fatal("projection invalidation changed delivery or current ownership")
 	}
@@ -56,7 +56,7 @@ func TestAskProjectionInvalidationPreservesVisibleDeliveryStateAndKeys(t *testin
 	next, _ = reprojecting.Update(projectionCommand())
 	updated := next.(*uiModel)
 	if updated.ask.activeDelivery != activeDelivery ||
-		updated.ask.activeDelivery.requestID != requestID ||
+		updated.ask.activeDelivery.generation != generation ||
 		updated.ask.editor.Text() != "retry" ||
 		!updated.ask.freeform {
 		t.Fatal("projection install mutated delivery ownership or retry draft")

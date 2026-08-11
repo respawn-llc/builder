@@ -357,9 +357,6 @@ func TestCompleteCurrentNodeFanoutPreviousTargetOrNewRetainsBranchSessions(t *te
 		if currentNode.SessionID == nil || *currentNode.SessionID != expectedSessionID {
 			t.Fatalf("completion branch %q session = %v, want retained session %q", branchKey, currentNode.SessionID, expectedSessionID)
 		}
-		if err := store.ValidateCurrentNodeSessionBinding(ctx, expectedSessionID, currentNode.Reference); err != nil {
-			t.Fatalf("completion branch %q exact Session provenance: %v", branchKey, err)
-		}
 	}
 }
 
@@ -669,7 +666,6 @@ func TestDeleteProjectRemovesPendingApprovalsBeforeCurrentNodeCascade(t *testing
 	}
 	blockers, err := store.DeleteProject(ctx, ProjectDeleteRequest{
 		ProjectID: binding.ProjectID,
-		Artifacts: projectDeleteArtifactsNoop{},
 	})
 	if err != nil {
 		t.Fatalf("DeleteProject: %v", err)
@@ -723,36 +719,6 @@ func TestCompleteCurrentNodeContinueSessionUsesImmediateSourceSession(t *testing
 		completed.Mutation.Created[0].SessionID == nil ||
 		*completed.Mutation.Created[0].SessionID != fixture.sessionID {
 		t.Fatalf("continue-session target = %+v, want source session %q", completed.Mutation.Created, fixture.sessionID)
-	}
-}
-
-func TestCompleteCurrentNodeRetainedSuccessorCommitsExactSessionProvenance(t *testing.T) {
-	fixture := newImmediateContextCompletionFixture(t, workflow.ContextModeContinueSession)
-
-	completed, err := fixture.store.CompleteCurrentNode(fixture.ctx, CurrentNodeCompletionRequest{
-		Source:       fixture.source.Reference,
-		TransitionID: "review",
-		OutputValues: map[string]string{"summary": "plan complete"},
-	})
-	if err != nil {
-		t.Fatalf("CompleteCurrentNode: %v", err)
-	}
-	if len(completed.Mutation.Created) != 1 {
-		t.Fatalf("created Current Nodes = %+v, want one retained successor", completed.Mutation.Created)
-	}
-	successor := completed.Mutation.Created[0]
-	if successor.SessionID == nil || *successor.SessionID != fixture.sessionID {
-		t.Fatalf("retained successor = %+v, want Session %q", successor, fixture.sessionID)
-	}
-	if err := fixture.store.ValidateCurrentNodeSessionBinding(
-		fixture.ctx,
-		fixture.sessionID,
-		successor.Reference,
-	); err != nil {
-		t.Fatalf(
-			"retained successor committed without exact Session provenance: %v",
-			err,
-		)
 	}
 }
 

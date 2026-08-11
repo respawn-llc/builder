@@ -143,6 +143,33 @@ func TestResponseForErrorMapsJoinedWorktreeBlocked(t *testing.T) {
 	}
 }
 
+func TestResponseForErrorPreservesRuntimeCommandNotAcceptedCause(t *testing.T) {
+	command := "prompt:review"
+	cause := &serverapi.PromptCommandError{
+		Kind:    serverapi.PromptCommandErrorKindCommandNotFound,
+		Command: &command,
+	}
+	source := serverapi.NewRuntimeCommandNotAcceptedError(cause)
+	response := responseForError("runtime-command", source)
+	if response.Error == nil || response.Error.Code != protocol.ErrCodeRuntimeCommandNotAccepted {
+		t.Fatalf("runtime command response = %+v, want structured not-accepted error", response.Error)
+	}
+	var payload struct {
+		Cause protocol.ResponseError `json:"cause"`
+	}
+	if err := json.Unmarshal(response.Error.Data, &payload); err != nil {
+		t.Fatalf("decode nested cause: %v", err)
+	}
+	if payload.Cause.Code != protocol.ErrCodePromptCommands {
+		t.Fatalf("nested cause code = %d, want %d", payload.Cause.Code, protocol.ErrCodePromptCommands)
+	}
+	decoded := serverapi.DecodePromptCommandError(payload.Cause.Data, payload.Cause.Message)
+	var promptErr *serverapi.PromptCommandError
+	if !errors.As(decoded, &promptErr) || promptErr.Kind != cause.Kind || promptErr.Command == nil || *promptErr.Command != command {
+		t.Fatalf("nested cause = %T %+v, want %+v", decoded, promptErr, cause)
+	}
+}
+
 func TestResponseForErrorMapsProjectWorkspaceTypedFailures(t *testing.T) {
 	tests := []struct {
 		name string
@@ -322,7 +349,6 @@ func activateGatewayController(t *testing.T, appCore *core.Core, sessionID strin
 		ClientRequestID: "activate-" + strings.TrimSpace(sessionID),
 		SessionID:       strings.TrimSpace(sessionID),
 		OwnerID:         "gateway-test-owner",
-		Operation:       serverapi.SessionRuntimeActivationUserActivation,
 		ActiveSettings:  settings,
 		Source:          appCore.Config().Source,
 	})
@@ -357,7 +383,6 @@ func gatewayRuntimeActivateRequest(appCore *core.Core, sessionID string, request
 	return serverapi.SessionRuntimeActivateRequest{
 		ClientRequestID: strings.TrimSpace(requestID),
 		SessionID:       strings.TrimSpace(sessionID),
-		Operation:       serverapi.SessionRuntimeActivationUserActivation,
 		ActiveSettings:  settings,
 		Source:          appCore.Config().Source,
 	}
@@ -444,25 +469,11 @@ func TestGatewayConnectionCloseReleasesOwnedIdleRuntime(t *testing.T) {
 		if activationRequest.OwnerID == "" || activationRequest.OwnerID == "client-spoof" {
 			t.Fatalf("gateway did not inject connection owner id: %+v", activationRequest)
 		}
-		if activationRequest.Operation != serverapi.SessionRuntimeActivationUserActivation {
-			t.Fatalf("gateway changed fresh activation operation: %+v", activationRequest)
-		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for activation request")
 	}
 	var successor serverapi.SessionRuntimeActivateResponse
-	reattachment := gatewayRuntimeActivateRequest(appCore, store.Meta().SessionID, "activate-runtime-2")
-	reattachment.Operation = serverapi.SessionRuntimeActivationTechnicalReattachment
-	callGateway(t, conn, "activate-runtime-2", protocol.MethodSessionRuntimeActivate, reattachment, &successor)
-	select {
-	case reattachmentRequest := <-counter.activateRequests:
-		if reattachmentRequest.OwnerID != activationRequest.OwnerID ||
-			reattachmentRequest.Operation != serverapi.SessionRuntimeActivationTechnicalReattachment {
-			t.Fatalf("gateway owner/technical operation propagation = %+v, want owner %q", reattachmentRequest, activationRequest.OwnerID)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for technical reattachment request")
-	}
+	callGateway(t, conn, "activate-runtime-2", protocol.MethodSessionRuntimeActivate, gatewayRuntimeActivateRequest(appCore, store.Meta().SessionID, "activate-runtime-2"), &successor)
 	callGateway(t, conn, "release-runtime-1", protocol.MethodSessionRuntimeRelease, serverapi.SessionRuntimeReleaseRequest{
 		ClientRequestID: "release-runtime-1",
 		Attachment:      activation.Attachment,
@@ -630,8 +641,8 @@ func TestGatewayHandshakeAndProjectList(t *testing.T) {
 	defer func() { _ = conn.Close() }()
 
 	var handshake protocol.HandshakeResponse
-	callGateway(t, conn, "1", protocol.MethodHandshake, protocol.HandshakeRequest{ProtocolVersion: "102"}, &handshake)
-	if handshake.Identity.ProtocolVersion != "102" || handshake.Identity.ServerID != "server-1" {
+	callGateway(t, conn, "1", protocol.MethodHandshake, protocol.HandshakeRequest{ProtocolVersion: protocol.Version}, &handshake)
+	if handshake.Identity.ProtocolVersion != protocol.Version || handshake.Identity.ServerID != "server-1" {
 		t.Fatalf("unexpected handshake: %+v", handshake.Identity)
 	}
 
@@ -658,16 +669,16 @@ func TestGatewayHandshakeRejectsProtocolVersionMismatch(t *testing.T) {
 	}
 }
 
-func TestGatewayHandshakeRejectsProtocolVersion100(t *testing.T) {
+func TestGatewayHandshakeRejectsProtocolVersion106(t *testing.T) {
 	_, server := newGatewayTestServer(t)
 	defer server.Close()
 
 	conn := dialGateway(t, server)
 	defer func() { _ = conn.Close() }()
 
-	respErr := callGatewayExpectError(t, conn, "1", protocol.MethodHandshake, protocol.HandshakeRequest{ProtocolVersion: "100"})
+	respErr := callGatewayExpectError(t, conn, "1", protocol.MethodHandshake, protocol.HandshakeRequest{ProtocolVersion: "106"})
 	if respErr.Code != protocol.ErrCodeProtocolVersionMismatch {
-		t.Fatalf("expected protocol version 100 rejection, got %+v", respErr)
+		t.Fatalf("expected protocol version 106 rejection, got %+v", respErr)
 	}
 }
 
@@ -1460,7 +1471,7 @@ func TestGatewayAllowsOptionalSessionLifecycleRequestsWithoutSessionID(t *testin
 	}
 }
 
-func TestGatewayDraftRecoveryRoundTripKeepsServerAvailable(t *testing.T) {
+func TestGatewayComposerDraftRoundTripKeepsServerAvailable(t *testing.T) {
 	appCore, server := newGatewayTestServer(t)
 	store := createGatewayAuthoritativeSession(t, appCore)
 
@@ -1474,15 +1485,10 @@ func TestGatewayDraftRecoveryRoundTripKeepsServerAvailable(t *testing.T) {
 	}
 	defer func() { _ = remote.Close() }()
 
-	wantRecovery := []serverapi.SessionDraftRecoveryBuffer{
-		{Kind: serverapi.SessionDraftRecoveryBufferPendingInjectedInput, Text: "  pending steering\n"},
-		{Kind: serverapi.SessionDraftRecoveryBufferQueuedInput, Text: "\tqueued later  "},
-	}
 	if _, err := remote.PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{
-		ClientRequestID: "gateway-draft-recovery",
+		ClientRequestID: "gateway-composer-draft",
 		SessionID:       store.Meta().SessionID,
 		Input:           "visible draft",
-		RecoveryBuffers: wantRecovery,
 	}); err != nil {
 		t.Fatalf("PersistInputDraft: %v", err)
 	}
@@ -1492,11 +1498,8 @@ func TestGatewayDraftRecoveryRoundTripKeepsServerAvailable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetInitialInput: %v", err)
 	}
-	if initialInput.Input != "visible draft" ||
-		len(initialInput.RecoveryBuffers) != len(wantRecovery) ||
-		initialInput.RecoveryBuffers[0] != wantRecovery[0] ||
-		initialInput.RecoveryBuffers[1] != wantRecovery[1] {
-		t.Fatalf("initial input = %+v, want visible draft and ordered byte-preserved recovery %+v", initialInput, wantRecovery)
+	if initialInput.Input != "visible draft" {
+		t.Fatalf("initial input = %+v, want visible draft", initialInput)
 	}
 	projects, err := remote.ListProjects(context.Background(), serverapi.ProjectListRequest{})
 	if err != nil {

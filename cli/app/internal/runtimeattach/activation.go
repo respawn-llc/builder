@@ -36,7 +36,7 @@ func Activate(ctx context.Context, service servicecontract.SessionRuntimeService
 		return nil, errors.New("session runtime service is required")
 	}
 	ownerID := uuid.NewString()
-	attachment, err := activate(ctx, service, req, ownerID, serverapi.SessionRuntimeActivationUserActivation)
+	attachment, err := activate(ctx, service, req, ownerID)
 	if err != nil {
 		return nil, err
 	}
@@ -51,7 +51,7 @@ func Activate(ctx context.Context, service servicecontract.SessionRuntimeService
 func (a *Activation) Reactivate(ctx context.Context) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	attachment, err := activate(ctx, a.service, a.request, a.ownerID, serverapi.SessionRuntimeActivationTechnicalReattachment)
+	attachment, err := activate(ctx, a.service, a.request, a.ownerID)
 	if err != nil {
 		return err
 	}
@@ -78,14 +78,8 @@ func (a *Activation) ReleaseWithClosePolicy(closePolicy serverapi.SessionRuntime
 	return err
 }
 
-func activate(
-	ctx context.Context,
-	service servicecontract.SessionRuntimeService,
-	req Request,
-	ownerID string,
-	operation serverapi.SessionRuntimeActivationOperation,
-) (serverapi.SessionRuntimeAttachment, error) {
-	response, err := service.ActivateSessionRuntime(ctx, activateRequest(req, ownerID, operation))
+func activate(ctx context.Context, service servicecontract.SessionRuntimeService, req Request, ownerID string) (serverapi.SessionRuntimeAttachment, error) {
+	response, err := service.ActivateSessionRuntime(ctx, activateRequest(req, ownerID))
 	if err != nil {
 		return serverapi.SessionRuntimeAttachment{}, err
 	}
@@ -95,16 +89,11 @@ func activate(
 	return response.Attachment, nil
 }
 
-func activateRequest(
-	req Request,
-	ownerID string,
-	operation serverapi.SessionRuntimeActivationOperation,
-) serverapi.SessionRuntimeActivateRequest {
+func activateRequest(req Request, ownerID string) serverapi.SessionRuntimeActivateRequest {
 	return serverapi.SessionRuntimeActivateRequest{
 		ClientRequestID: uuid.NewString(),
 		SessionID:       req.SessionID,
 		OwnerID:         ownerID,
-		Operation:       operation,
 		ActiveSettings:  req.ActiveSettings,
 		EnabledToolIDs:  toolspec.IDStrings(req.EnabledTools),
 		Source:          req.Source,

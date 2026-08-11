@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"core/shared/apicontract"
+	"core/shared/client"
 	"fmt"
 	"io"
 	"strconv"
@@ -69,8 +71,8 @@ func taskLabelAssignmentSubcommand(args []string, stdout io.Writer, stderr io.Wr
 		fmt.Fprintln(stderr, "task label "+commandName+" requires at least one --label <name-or-uuid>")
 		return 2
 	}
-	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
-		task, err := resolveWorkflowTask(context.Background(), cfg, remote, *projectRef, positionals[0])
+	return runWorkflowCommandSession(stderr, func(cfg config.App, remote *client.Remote) int {
+		task, err := resolveWorkflowTask(context.Background(), cfg, remote, remote, *projectRef, positionals[0])
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
@@ -130,7 +132,7 @@ func taskLabelCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer
 	if !ok {
 		return exitCode
 	}
-	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
+	return runWorkflowCommandSession(stderr, func(cfg config.App, remote *client.Remote) int {
 		projectID, err := resolveWorkflowProjectID(context.Background(), cfg, remote, *projectRef)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
@@ -171,7 +173,7 @@ func taskLabelListSubcommand(args []string, stdout io.Writer, stderr io.Writer) 
 		fmt.Fprintln(stderr, "task label list --name requires a non-blank value")
 		return 2
 	}
-	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
+	return runWorkflowCommandSession(stderr, func(cfg config.App, remote *client.Remote) int {
 		projectID, err := resolveWorkflowProjectID(context.Background(), cfg, remote, *projectRef)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
@@ -211,7 +213,7 @@ func taskLabelRenameSubcommand(args []string, stdout io.Writer, stderr io.Writer
 		fmt.Fprintln(stderr, "task label rename requires --label <name-or-uuid>")
 		return 2
 	}
-	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
+	return runWorkflowCommandSession(stderr, func(cfg config.App, remote *client.Remote) int {
 		projectID, err := resolveWorkflowProjectID(context.Background(), cfg, remote, *projectRef)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
@@ -271,7 +273,7 @@ func taskLabelDeleteSubcommand(args []string, stdout io.Writer, stderr io.Writer
 		fmt.Fprintln(stderr, "task label delete requires --label <name-or-uuid>")
 		return 2
 	}
-	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
+	return runWorkflowCommandSession(stderr, func(cfg config.App, remote *client.Remote) int {
 		projectID, err := resolveWorkflowProjectID(context.Background(), cfg, remote, *projectRef)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
@@ -315,7 +317,7 @@ func taskLabelDeleteSubcommand(args []string, stdout io.Writer, stderr io.Writer
 	})
 }
 
-func loadWorkflowProjectLabelCatalog(ctx context.Context, remote workflowCommandRemote, projectID string) (serverapi.WorkflowProjectLabelCatalogResponse, workflowProjectLabelCatalogSnapshot, error) {
+func loadWorkflowProjectLabelCatalog(ctx context.Context, remote apicontract.WorkflowService, projectID string) (serverapi.WorkflowProjectLabelCatalogResponse, workflowProjectLabelCatalogSnapshot, error) {
 	rpcCtx, cancel := context.WithTimeout(ctx, workflowCommandTimeout)
 	defer cancel()
 	response, err := remote.ListWorkflowProjectLabels(rpcCtx, serverapi.WorkflowProjectLabelCatalogRequest{ProjectID: projectID})

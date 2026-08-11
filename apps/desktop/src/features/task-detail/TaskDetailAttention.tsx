@@ -1,13 +1,14 @@
 import { useTranslation } from "react-i18next";
 
 import type { ApprovalAttentionItem, ApprovalSnapshot, InterruptedCurrentNodeAttentionItem } from "@/api";
-import { errorMessage } from "@/api";
+import { ContractError, errorMessage, parseTaskSetupRecoveryDetail } from "@/api";
 import { useAppServices } from "@/app-facade";
 import { writeClipboardText } from "@/shared/native-clipboard";
 import { WorkflowEdgeRouteGraphic } from "@/shared/workflow-edge";
 import { Button, Island, showStatusToast } from "@/ui";
 import { TaskResumeButton } from "./TaskResumeButton";
 import { TaskDetailCopyableValue } from "./TaskDetailCopyableValue";
+import { taskDetailIslandRadius } from "./taskDetailIslandStyles";
 import type { useTaskMutations } from "./useTaskDetailData";
 
 export { QuestionBox } from "./TaskDetailQuestionForm";
@@ -27,16 +28,14 @@ export function ApprovalBox({
   const snapshot = attention.approvalSnapshot;
   const stale = snapshot.version !== currentVersion;
   function approve(): void {
-    void mutations.approveApproval
-      .mutateAsync(attention.approvalID)
-      .catch((error: unknown) => {
-        showStatusToast({
-          body: errorMessage(error),
-          id: "task-approval-failed",
-          title: t("task.approvalFailed"),
-          tone: "danger",
-        });
+    void mutations.approveApproval.mutateAsync(attention.approvalID).catch((error: unknown) => {
+      showStatusToast({
+        body: errorMessage(error),
+        id: "task-approval-failed",
+        title: t("task.approvalFailed"),
+        tone: "danger",
       });
+    });
   }
   return (
     <>
@@ -44,7 +43,7 @@ export function ApprovalBox({
         aria-label={t("task.approval")}
         className="grid gap-[var(--space-2)] p-[var(--space-2)]"
         level={1}
-        radius="l"
+        radius={taskDetailIslandRadius}
         unpadded
       >
         <div className="grid gap-[var(--space-2)]">
@@ -63,10 +62,7 @@ export function ApprovalBox({
             <span className="min-w-0 flex-1" />
             <Button
               className="shrink-0"
-              disabled={
-                disabled ||
-                mutations.approveApproval.isPending
-              }
+              disabled={disabled || mutations.approveApproval.isPending}
               onClick={approve}
               variant="primary"
             >
@@ -90,26 +86,41 @@ export function ApprovalBox({
 
 export function InterruptedCurrentNodeBox({
   attention,
+  canResume,
   disabled,
 }: Readonly<{
   attention: InterruptedCurrentNodeAttentionItem;
+  canResume: boolean;
   disabled: boolean;
 }>) {
   const { t } = useTranslation();
   const { nativeBridge } = useAppServices();
   const detailJSON = attention.detailJSON;
+  let recovery = null;
+  let recoveryError: string | null = null;
+  try {
+    recovery = parseTaskSetupRecoveryDetail(detailJSON);
+  } catch (error) {
+    if (!(error instanceof ContractError)) throw error;
+    recoveryError = errorMessage(error);
+  }
   return (
     <Island
       aria-label={t("task.interrupted")}
       className="grid gap-[var(--space-2)] p-[var(--space-4)]"
       level={1}
-      radius="l"
+      radius={taskDetailIslandRadius}
       unpadded
     >
       <strong>{t("task.interrupted")}</strong>
       {attention.message !== null ? (
         <p className="m-0 text-sm text-[var(--color-muted)]">{attention.message}</p>
       ) : null}
+      {recoveryError === null ? null : (
+        <p className="m-0 text-sm text-[var(--color-error)]" role="alert">
+          {recoveryError}
+        </p>
+      )}
       {detailJSON !== null ? (
         <Button
           disabled={disabled}
@@ -136,7 +147,9 @@ export function InterruptedCurrentNodeBox({
           {t("task.copyInterruptionDetail")}
         </Button>
       ) : null}
-      <TaskResumeButton disabled={disabled} />
+      {recovery !== null || canResume ? (
+        <TaskResumeButton disabled={disabled} {...(recovery === null ? {} : { recovery })} />
+      ) : null}
     </Island>
   );
 }

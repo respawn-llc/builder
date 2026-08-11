@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -229,6 +230,7 @@ func testRegisteredWorktreeListEntry(id, name, root, branch string, main, curren
 }
 
 func testExternalWorktreeListEntry(root string, selector string, current bool) serverapi.WorktreeListEntry {
+	fallbackIdentity := filepath.Base(root)
 	return serverapi.WorktreeListEntry{
 		Topology: serverapi.WorktreeTopologyEntry{
 			Variant: serverapi.WorktreeTopologyVariantExternal,
@@ -242,8 +244,9 @@ func testExternalWorktreeListEntry(root string, selector string, current bool) s
 			},
 		},
 		Projection: serverapi.WorktreeListProjection{
-			Selector:  selector,
-			IsCurrent: current,
+			Selector:         selector,
+			IsCurrent:        current,
+			FallbackIdentity: &fallbackIdentity,
 		},
 	}
 }

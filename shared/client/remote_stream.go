@@ -43,6 +43,20 @@ func (c *Remote) SubscribeSessionAttentionNotifications(ctx context.Context, req
 	}), nil
 }
 
+func (c *Remote) SubscribeFollowUp(ctx context.Context, req serverapi.PromptFollowUpWatchRequest) (serverapi.PromptFollowUpSubscription, error) {
+	conn, route, err := c.subscribeRPC(ctx, protocol.MethodPromptFollowUpWatch, "subscribe-prompt-follow-up", req, req.SessionID.String(), true)
+	if err != nil {
+		return nil, err
+	}
+	return newRemoteSubscriptionWithError(conn, route, func(params protocol.PromptFollowUpEventParams) (serverapi.PromptFollowUpEvent, error) {
+		event := serverapi.PromptFollowUpEvent{Kind: serverapi.PromptFollowUpEventKind(params.Event.Kind)}
+		if err := event.Validate(); err != nil {
+			return serverapi.PromptFollowUpEvent{}, err
+		}
+		return event, nil
+	}), nil
+}
+
 func (c *Remote) RunPrompt(ctx context.Context, req serverapi.RunPromptRequest, progress serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error) {
 	route := mustRemoteRoute(protocol.MethodRunPrompt)
 	conn, cleanup, err := c.openRPCConn(ctx)
@@ -161,19 +175,35 @@ func (c *Remote) SubscribeWorktreeSetup(ctx context.Context, req serverapi.Workt
 		if err != nil {
 			return serverapi.WorktreeSetupEvent{}, err
 		}
-		return serverapi.WorktreeSetupEvent{
-			SetupOperationID:    id,
-			SourceWorkspaceRoot: params.Event.SourceWorkspaceRoot,
-			WorktreeRoot:        params.Event.WorktreeRoot,
-			ScriptPath:          params.Event.ScriptPath,
-			Phase:               serverapi.WorktreeSetupPhase(params.Event.Phase),
-			Timeout:             params.Event.Timeout,
-			Canceled:            params.Event.Canceled,
-			ExitCode:            params.Event.ExitCode,
-			Stdout:              params.Event.Stdout,
-			Stderr:              params.Event.Stderr,
-			Error:               params.Event.Error,
-		}, nil
+		decoded := serverapi.WorktreeSetupEvent{
+			SetupOperationID: id,
+			Phase:            serverapi.WorktreeSetupPhase(params.Event.Phase),
+		}
+		decodePayload := func(raw json.RawMessage, target any) error {
+			if len(raw) == 0 {
+				return nil
+			}
+			if err := protocol.DecodeStrictJSON([]byte(raw), target); err != nil {
+				return err
+			}
+			return nil
+		}
+		if err := decodePayload(params.Event.Started, &decoded.Started); err != nil {
+			return serverapi.WorktreeSetupEvent{}, err
+		}
+		if err := decodePayload(params.Event.Completed, &decoded.Completed); err != nil {
+			return serverapi.WorktreeSetupEvent{}, err
+		}
+		if err := decodePayload(params.Event.NotRequired, &decoded.NotRequired); err != nil {
+			return serverapi.WorktreeSetupEvent{}, err
+		}
+		if err := decodePayload(params.Event.Failed, &decoded.Failed); err != nil {
+			return serverapi.WorktreeSetupEvent{}, err
+		}
+		if err := decoded.Validate(); err != nil {
+			return serverapi.WorktreeSetupEvent{}, err
+		}
+		return decoded, nil
 	}), nil
 }
 

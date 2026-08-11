@@ -1,7 +1,5 @@
-import type { QuestionAnswerInput } from "./clientInputs";
 import { parseRpcResponse } from "./clientParse";
 import { requireTaskBoundItems } from "./clientParse";
-import { compactJsonObject } from "./json";
 import type { ActivityPage, CommentPage, PendingAsk, TaskAttention, TaskComment, TaskDetail } from "./models";
 import {
   activityPageSchema,
@@ -34,15 +32,15 @@ export async function getTask(transport: RpcTransport, taskID: string): Promise<
 export async function listTaskActivity(
   transport: RpcTransport,
   taskID: string,
-  pageToken: string,
+  offset: number,
 ): Promise<ActivityPage> {
   const response = parseRpcResponse(
     "workflow.task.activity.list",
     activityPageSchema,
     await transport.call("workflow.task.activity.list", {
       task_id: taskID,
-      page_size: 40,
-      page_token: pageToken,
+      offset,
+      limit: 50,
     }),
   );
   requireTaskBoundItems(taskID, response.items);
@@ -60,7 +58,7 @@ export async function listTaskComments(
     await transport.call("workflow.task.comment.list", {
       task_id: taskID,
       offset,
-      limit: 40,
+      limit: 50,
     }),
   );
 }
@@ -82,30 +80,6 @@ export async function addComment(
   ).comment;
 }
 
-export async function answerQuestion(transport: RpcTransport, input: QuestionAnswerInput): Promise<void> {
-  const answer =
-    input.kind === "approval"
-      ? {
-          approval: {
-            decision: input.decision,
-            commentary: input.commentary,
-          },
-        }
-      : {
-          selected_option_number: input.selectedOptionNumber,
-          freeform_answer: input.freeformAnswer,
-        };
-  await transport.call(
-    "workflow.task.question.answer",
-    compactJsonObject({
-      client_request_id: input.clientRequestID,
-      task_id: input.taskID,
-      ask_id: input.askID,
-      ...answer,
-    }),
-  );
-}
-
 export async function listPendingAsks(
   transport: RpcTransport,
   sessionID: string,
@@ -113,6 +87,8 @@ export async function listPendingAsks(
   return parseRpcResponse(
     "ask.listPendingBySession",
     pendingAskListSchema,
-    await transport.call("ask.listPendingBySession", { SessionID: sessionID }),
+    await transport.callAttachedSession(sessionID, "ask.listPendingBySession", {
+      SessionID: sessionID,
+    }),
   );
 }

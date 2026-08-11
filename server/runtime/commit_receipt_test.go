@@ -21,14 +21,13 @@ func TestPersistedWorkflowAssignmentFailureReporting(t *testing.T) {
 		store := mustCreateTestSession(t)
 		mustBlockTestEventLogAppends(t, store)
 
-		_, err := EnsurePersistedWorkflowAssignment(
-			t.Context(),
+		_, err := SteerPersistedWorkflowAssignment(
 			store,
 			workflowAssignmentForCommitReceiptTest(),
 			persistedWorkflowAssignmentContextForTest(t),
 		)
 		if err == nil {
-			t.Fatal("EnsurePersistedWorkflowAssignment did not return preparation failure")
+			t.Fatal("SteerPersistedWorkflowAssignment did not return preparation failure")
 		}
 	})
 
@@ -62,181 +61,74 @@ func TestPersistedWorkflowAssignmentFailureReporting(t *testing.T) {
 		seedPersistedWorkflowBaseContextForCommitReceiptTest(t, store)
 		gate.FailNext(observerErr)
 
-		ensured, err := EnsurePersistedWorkflowAssignment(
-			t.Context(),
+		steer, err := SteerPersistedWorkflowAssignment(
 			store,
 			workflowAssignmentForCommitReceiptTest(),
 			persistedWorkflowAssignmentContextForTest(t),
 		)
-		if !errors.Is(err, observerErr) {
-			t.Fatalf("workflow assignment completion error = %v, want %v", err, observerErr)
+		if err != nil {
+			t.Fatalf("SteerPersistedWorkflowAssignment: %v", err)
 		}
-		if !ensured.Receipt.Committed {
-			t.Fatalf("workflow assignment receipt = %+v, want committed", ensured.Receipt)
+		receipt, waitErr := steer.Wait(t.Context())
+		if !errors.Is(waitErr, observerErr) {
+			t.Fatalf("workflow assignment completion error = %v, want %v", waitErr, observerErr)
+		}
+		if !receipt.Committed {
+			t.Fatalf("workflow assignment receipt = %+v, want committed", receipt)
 		}
 	})
 }
 
-func TestEnsurePersistedWorkflowAssignmentAppendsAbsentIdentityAndReusesMatch(t *testing.T) {
-	store := mustCreateTestSession(t)
-	assignment := workflowAssignmentForCommitReceiptTest()
-
-	first, err := EnsurePersistedWorkflowAssignment(
-		t.Context(),
-		store,
-		assignment,
-		persistedWorkflowAssignmentContextForTest(t),
-	)
-	if err != nil || !first.Receipt.Committed || !first.Appended {
-		t.Fatalf("first assignment ensure = %+v, %v; want committed append", first, err)
-	}
-	second, err := EnsurePersistedWorkflowAssignment(
-		t.Context(),
-		store,
-		assignment,
-		persistedWorkflowAssignmentContextForTest(t),
-	)
-	if err != nil || !second.Receipt.Committed || second.Appended {
-		t.Fatalf("matching assignment ensure = %+v, %v; want committed no-op", second, err)
-	}
-	if got := persistedWorkflowAssignmentSourcePaths(t, store); !slices.Equal(got, []string{assignment.Prompt.Identity}) {
-		t.Fatalf("persisted assignment identities = %v, want one %q", got, assignment.Prompt.Identity)
-	}
-}
-
-func TestEnsurePersistedWorkflowAssignmentAppendsDifferentIdentity(t *testing.T) {
-	store := mustCreateTestSession(t)
-	first := workflowAssignmentForCommitReceiptTest()
-	if _, err := EnsurePersistedWorkflowAssignment(
-		t.Context(),
-		store,
-		first,
-		persistedWorkflowAssignmentContextForTest(t),
-	); err != nil {
-		t.Fatalf("ensure first assignment: %v", err)
-	}
-	second := workflowAssignmentForCommitReceiptTest()
-	second.ContextMode = workflow.ContextModeContinueSession
-	second.Prompt.Instructions.CurrentNode.NodeID = "node-assignment-next"
-	second.Prompt.Identity = workflowruntime.CurrentNodePromptIdentity(second.Prompt.Instructions.CurrentNode)
-	ensured, err := EnsurePersistedWorkflowAssignment(
-		t.Context(),
-		store,
-		second,
-		persistedWorkflowAssignmentContextForTest(t),
-	)
-	if err != nil || !ensured.Receipt.Committed || !ensured.Appended {
-		t.Fatalf("different assignment ensure = %+v, %v; want committed append", ensured, err)
-	}
-	if got := persistedWorkflowAssignmentSourcePaths(t, store); !slices.Equal(got, []string{
-		first.Prompt.Identity,
-		second.Prompt.Identity,
-	}) {
-		t.Fatalf("persisted assignment identities = %v", got)
-	}
-}
-
-func TestEnsurePersistedWorkflowAssignmentRestoresCompactedActiveIdentity(t *testing.T) {
+func TestPersistedWorkflowAssignmentDoesNotRepairExistingSession(t *testing.T) {
 	store := mustCreateTestSession(t)
 	assignment := workflowAssignmentForCommitReceiptTest()
 	message, err := buildWorkflowAssignmentMessage(assignment)
 	if err != nil {
 		t.Fatalf("build workflow assignment: %v", err)
 	}
-	_, receipt, err := appendTestCompactionHistoryReplacement(
-		t,
-		store,
-		"compact",
-		historyReplacementPayload{
-			Engine: "local",
-			Mode:   string(session.CompactionModeManual),
-			Items:  llm.ItemsFromMessages([]llm.Message{message}),
-		},
-	)
+	receipt, err := SteerPersistedMessage(store, "", message)
 	if err != nil || !receipt.Committed {
-		t.Fatalf("append compacted active assignment = %+v, %v", receipt, err)
+		t.Fatalf("seed existing workflow assignment = %+v, %v; want committed", receipt, err)
 	}
-	ensured, err := EnsurePersistedWorkflowAssignment(
-		t.Context(),
+
+	steer, err := SteerPersistedWorkflowAssignment(
 		store,
 		assignment,
 		persistedWorkflowAssignmentContextForTest(t),
 	)
-	if err != nil || !ensured.Receipt.Committed || ensured.Appended {
-		t.Fatalf("compacted matching assignment ensure = %+v, %v; want committed no-op", ensured, err)
+	if err != nil {
+		t.Fatalf("SteerPersistedWorkflowAssignment: %v", err)
 	}
-}
+	if receipt, err := steer.Wait(t.Context()); err != nil || !receipt.Committed {
+		t.Fatalf("wait for workflow assignment = %+v, %v; want committed", receipt, err)
+	}
 
-func TestEnsureWorkflowAssignmentUsesLiveStructuredIdentity(t *testing.T) {
-	store := mustCreateTestSession(t)
-	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
-		Model: "gpt-5",
-	})
-	first := workflowAssignmentForCommitReceiptTest()
-	ensured, err := engine.EnsureWorkflowAssignment(t.Context(), first)
-	if err != nil || !ensured.Receipt.Committed || !ensured.Appended {
-		t.Fatalf("live first assignment ensure = %+v, %v; want committed append", ensured, err)
-	}
-	ensured, err = engine.EnsureWorkflowAssignment(t.Context(), first)
-	if err != nil || !ensured.Receipt.Committed || ensured.Appended {
-		t.Fatalf("live matching assignment ensure = %+v, %v; want committed no-op", ensured, err)
-	}
-	second := workflowAssignmentForCommitReceiptTest()
-	second.ContextMode = workflow.ContextModeContinueSession
-	second.Prompt.Instructions.CurrentNode.NodeID = "node-assignment-live-next"
-	second.Prompt.Identity = workflowruntime.CurrentNodePromptIdentity(second.Prompt.Instructions.CurrentNode)
-	ensured, err = engine.EnsureWorkflowAssignment(t.Context(), second)
-	if err != nil || !ensured.Receipt.Committed || !ensured.Appended {
-		t.Fatalf("live different assignment ensure = %+v, %v; want committed append", ensured, err)
-	}
-	if got := activeWorkflowAssignmentSourcePaths(engine.transcriptRuntimeState().SnapshotItems()); !slices.Equal(got, []string{
-		first.Prompt.Identity,
-		second.Prompt.Identity,
-	}) {
-		t.Fatalf("live assignment identities = %v", got)
-	}
-}
-
-func activeWorkflowAssignmentSourcePaths(items []llm.ResponseItem) []string {
-	paths := make([]string, 0, 2)
-	for _, item := range items {
-		if item.Type != llm.ResponseItemTypeMessage ||
-			item.MessageType == nil ||
-			*item.MessageType != llm.MessageTypeWorkflowMode ||
-			item.SourcePath == nil {
-			continue
-		}
-		paths = append(paths, *item.SourcePath)
-	}
-	return paths
-}
-
-func persistedWorkflowAssignmentSourcePaths(t *testing.T, store *session.Store) []string {
-	t.Helper()
 	eventLog, err := store.MaterializeEventLog()
 	if err != nil {
 		t.Fatalf("materialize event log: %v", err)
 	}
-	window, err := eventLog.ReadNewestSegmentBackward(nil)
+	recent, err := eventLog.ReadRecentRecords(10)
 	if err != nil {
-		t.Fatalf("read active transcript segment: %v", err)
+		t.Fatalf("read recent records: %v", err)
 	}
-	paths := make([]string, 0, 2)
-	for _, record := range window.Records {
+	messageTypes := make([]session.MessageType, 0, len(recent.Records))
+	for _, record := range recent.Records {
 		payload, err := record.Payload()
 		if err != nil {
 			t.Fatalf("read event payload: %v", err)
 		}
 		message, ok := payload.(session.MessageRecord)
-		if !ok ||
-			message.MessageType == nil ||
-			*message.MessageType != session.MessageTypeWorkflowMode ||
-			message.SourcePath == nil {
-			continue
+		if ok && message.MessageType != nil {
+			messageTypes = append(messageTypes, *message.MessageType)
 		}
-		paths = append(paths, *message.SourcePath)
 	}
-	return paths
+	want := []session.MessageType{
+		session.MessageTypeWorkflowMode,
+		session.MessageTypeWorkflowMode,
+	}
+	if !slices.Equal(messageTypes, want) {
+		t.Fatalf("existing Session message types = %v, want assignments only %v", messageTypes, want)
+	}
 }
 
 func workflowAssignmentForCommitReceiptTest() WorkflowAssignment {

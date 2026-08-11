@@ -359,7 +359,7 @@ func TestProjectDeletePlainOutputFailureReturnsNonZero(t *testing.T) {
 		Result: &projectDeleteResult{ProjectID: "project-123"},
 	}
 	var stderr bytes.Buffer
-	if exitCode := writeProjectDeleteOutcome(bindingMutationFailingWriter{}, &stderr, outcome, false); exitCode != 1 {
+	if exitCode := writeProjectDeleteOutcome(failingCLIWriter{}, &stderr, outcome, false); exitCode != 1 {
 		t.Fatalf("exit code = %d, want 1", exitCode)
 	}
 	if stderr.Len() == 0 {

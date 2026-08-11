@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,7 +20,40 @@ import (
 	"core/server/workflowstore"
 	"core/shared/config"
 	"core/shared/serverapi"
+	"core/shared/worktreecontract"
 )
+
+func materializeInitialTaskWorktree(
+	ctx context.Context,
+	service *Service,
+	req InitialTaskWorktreeMaterializationRequest,
+) (TaskWorktreeMaterialization, error) {
+	return prepareManagedTaskExecutionRoot(ctx, service, req.TaskID, req.SetupOperationID, req.ResolvedTarget)
+}
+
+func prepareManagedTaskExecutionRoot(
+	ctx context.Context,
+	service *Service,
+	taskID workflow.TaskID,
+	setupOperationID *serverapi.WorktreeSetupOperationID,
+	resolvedTarget GitRevision,
+) (TaskWorktreeMaterialization, error) {
+	prepared, err := service.PrepareTaskExecutionRoot(ctx, TaskExecutionRootPreparationRequest{
+		TaskID:           taskID,
+		SetupOperationID: setupOperationID,
+		ManagedTarget:    &resolvedTarget,
+		SetupRequirement: worktreecontract.SetupRequirementRequired,
+	})
+	if prepared.Materialization == nil {
+		return TaskWorktreeMaterialization{}, err
+	}
+	return *prepared.Materialization, err
+}
+
+func newWorktreeSetupOperationIDPointer() *serverapi.WorktreeSetupOperationID {
+	value := serverapi.NewWorktreeSetupOperationID()
+	return &value
+}
 
 func taskWorktreeID(entry serverapi.WorktreeTopologyEntry) string {
 	return entry.Registered.Kent.WorktreeID
@@ -70,7 +104,7 @@ func TestMaterializeInitialTaskWorktreeRequiresResolvedCommit(t *testing.T) {
 	env := newServiceTestEnv(t)
 	task, _ := createTaskWorktreeTestTask(t, env)
 
-	_, err := env.service.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{
+	_, err := materializeInitialTaskWorktree(env.ctx, env.service, InitialTaskWorktreeMaterializationRequest{
 		TaskID: task.ID,
 	})
 	if err == nil {
@@ -97,15 +131,15 @@ func TestMaterializeInitialTaskWorktreeRejectsExistingOutsideNamespaceRoot(t *te
 	}); err != nil {
 		t.Fatalf("UpsertWorktreeRecord: %v", err)
 	}
-	if _, err := env.store.Queries().UpdateTaskManagedWorktree(env.ctx, sqlitegen.UpdateTaskManagedWorktreeParams{
-		ID:                string(task.ID),
+	if _, err := env.store.Queries().BindInitialTaskManagedWorktree(env.ctx, sqlitegen.BindInitialTaskManagedWorktreeParams{
 		ManagedWorktreeID: sql.NullString{String: "legacy-initial-record", Valid: true},
 		UpdatedAtUnixMs:   time.Now().UTC().UnixMilli(),
+		TaskID:            string(task.ID),
 	}); err != nil {
-		t.Fatalf("UpdateTaskManagedWorktree: %v", err)
+		t.Fatalf("BindInitialTaskManagedWorktree: %v", err)
 	}
 
-	_, err := env.service.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{
+	_, err := materializeInitialTaskWorktree(env.ctx, env.service, InitialTaskWorktreeMaterializationRequest{
 		TaskID:         task.ID,
 		ResolvedTarget: resolved,
 	})
@@ -268,7 +302,7 @@ func TestRestoreLockedTaskWorktreeAcceptsHealthyChangedNamedBranch(t *testing.T)
 	}
 }
 
-func TestRestoreLockedTaskWorktreeReusesDetachedHeadWithoutRunningSetup(t *testing.T) {
+func TestRestoreLockedTaskWorktreeReusesDetachedHeadWithoutErasingBranchAuthority(t *testing.T) {
 	env := newServiceTestEnv(t)
 	task, materialized, _ := materializeAndLockTaskWorktree(t, env)
 	worktreeID := taskWorktreeID(materialized.Worktree)
@@ -282,7 +316,7 @@ func TestRestoreLockedTaskWorktreeReusesDetachedHeadWithoutRunningSetup(t *testi
 
 	restored, err := env.service.RestoreLockedTaskWorktree(env.ctx, LockedTaskWorktreeRestoreRequest{
 		TaskID:           task.ID,
-		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		SetupOperationID: newWorktreeSetupOperationIDPointer(),
 	})
 	if err != nil {
 		t.Fatalf("RestoreLockedTaskWorktree: %v", err)
@@ -306,42 +340,121 @@ func TestRestoreLockedTaskWorktreeReusesDetachedHeadWithoutRunningSetup(t *testi
 	}
 	if persisted.HeadOID != detachedRevision.CommitOID ||
 		!persisted.Detached ||
-		persisted.Branch != nil {
-		t.Fatalf("persisted detached metadata = %+v, want head %q", persisted, detachedRevision.CommitOID)
+		persisted.Branch != nil ||
+		persisted.RecordedBranch == nil ||
+		persisted.RecordedBranch.Name() != task.ShortID {
+		t.Fatalf("persisted metadata = %+v, want detached head %q with recorded branch %q", persisted, detachedRevision.CommitOID, task.ShortID)
 	}
 	if _, err := os.Stat(setupMarker); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("restore ran setup for reused detached worktree: %v", err)
 	}
-}
+	if err := env.service.AssertInitialTaskBranch(env.ctx, task.ID, task.ShortID); err != nil {
+		t.Fatalf("AssertInitialTaskBranch after detached reuse: %v", err)
+	}
+	otherBranch := "feature/other"
+	err = env.service.AssertInitialTaskBranch(env.ctx, task.ID, otherBranch)
+	var mismatch *serverapi.WorkflowTaskInitialBranchError
+	if !errors.As(err, &mismatch) ||
+		mismatch.Reason != serverapi.WorkflowTaskInitialBranchErrorReasonPostCreationMismatch ||
+		mismatch.ExistingBranchName == nil ||
+		*mismatch.ExistingBranchName != task.ShortID {
+		t.Fatalf("AssertInitialTaskBranch mismatch after detached reuse = %+v, want existing branch %q", err, task.ShortID)
+	}
 
-func TestMaterializeInitialTaskWorktreeRejectsDetachedExistingCandidate(t *testing.T) {
-	env := newServiceTestEnv(t)
-	task, _ := createTaskWorktreeTestTask(t, env)
-	resolved := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
-	materialized, err := env.service.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{
-		TaskID:         task.ID,
-		ResolvedTarget: resolved,
+	repeated, err := env.service.RestoreLockedTaskWorktree(env.ctx, LockedTaskWorktreeRestoreRequest{
+		TaskID:           task.ID,
+		SetupOperationID: newWorktreeSetupOperationIDPointer(),
+		BranchName:       &task.ShortID,
 	})
 	if err != nil {
-		t.Fatalf("MaterializeInitialTaskWorktree first: %v", err)
+		t.Fatalf("RestoreLockedTaskWorktree repeated: %v", err)
 	}
-	worktreeID := taskWorktreeID(materialized.Worktree)
-	runGit(t, taskWorktreeRoot(materialized.Worktree), "checkout", "--detach")
+	if repeated.Created ||
+		taskWorktreeID(repeated.Worktree) != worktreeID ||
+		taskWorktreeRoot(repeated.Worktree) != worktreeRoot ||
+		repeated.Worktree.Registered == nil ||
+		!repeated.Worktree.Registered.Git.Detached {
+		t.Fatalf("repeated restored worktree = %+v, want detached reuse of %q", repeated, worktreeID)
+	}
+	if _, err := os.Stat(setupMarker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("repeated restore ran setup for reused detached worktree: %v", err)
+	}
+}
 
-	_, err = env.service.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{
-		TaskID:         task.ID,
-		ResolvedTarget: resolved,
+func TestPrepareTaskExecutionRootNoneTargetRetainsModifiedRoot(t *testing.T) {
+	env := newServiceTestEnv(t)
+	task, _ := createTaskWorktreeTestTask(t, env)
+	firstTarget := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
+	first, err := env.service.PrepareTaskExecutionRoot(env.ctx, TaskExecutionRootPreparationRequest{
+		TaskID:           task.ID,
+		ManagedTarget:    &firstTarget,
+		SetupRequirement: worktreecontract.SetupRequirementRequired,
 	})
-	var identityErr *ManagedWorktreeIdentityError
-	if !errors.As(err, &identityErr) || identityErr.Kind != ManagedWorktreeIdentityErrorDetachedHead {
-		t.Fatalf("MaterializeInitialTaskWorktree error = %v, want detached-head identity error", err)
+	if err != nil {
+		t.Fatalf("PrepareTaskExecutionRoot first: %v", err)
+	}
+	if first.Root.Managed == nil {
+		t.Fatalf("first preparation root = %+v, want managed", first.Root)
+	}
+	changedPath := filepath.Join(first.Root.Managed.Root, "operator-change.txt")
+	if err := os.WriteFile(changedPath, []byte("keep me\n"), 0o644); err != nil {
+		t.Fatalf("change provisional worktree: %v", err)
+	}
+	replacement, err := env.service.PrepareTaskExecutionRoot(env.ctx, TaskExecutionRootPreparationRequest{
+		TaskID:           task.ID,
+		SetupRequirement: worktreecontract.SetupRequirementRequired,
+	})
+	if err != nil {
+		t.Fatalf("PrepareTaskExecutionRoot replacement: %v", err)
+	}
+	if replacement.Root.Managed != nil {
+		t.Fatalf("replacement root = %+v, want source workspace", replacement.Root)
+	}
+	if replacement.RetainedPreviousWorktree == nil ||
+		replacement.RetainedPreviousWorktree.Worktree.Registered == nil ||
+		replacement.RetainedPreviousWorktree.Worktree.Registered.Kent.WorktreeID != first.Root.Managed.WorktreeID {
+		t.Fatalf("retained previous worktree = %+v, want %q", replacement.RetainedPreviousWorktree, first.Root.Managed.WorktreeID)
+	}
+	if got := waitForFileText(t, changedPath); got != "keep me" {
+		t.Fatalf("retained worktree change = %q, want preserved", got)
 	}
 	row, err := env.store.Queries().GetTask(env.ctx, string(task.ID))
 	if err != nil {
 		t.Fatalf("GetTask: %v", err)
 	}
-	if !row.ManagedWorktreeID.Valid || row.ManagedWorktreeID.String != worktreeID {
-		t.Fatalf("task managed worktree id = %+v, want unchanged %q", row.ManagedWorktreeID, worktreeID)
+	if row.ManagedWorktreeID.Valid {
+		t.Fatalf("task managed worktree = %+v, want unbound", row.ManagedWorktreeID)
+	}
+}
+
+func TestPrepareTaskExecutionRootSettingsFailureSurfacesOnceWithoutSetup(t *testing.T) {
+	env := newServiceTestEnv(t)
+	task, _ := createTaskWorktreeTestTask(t, env)
+	target := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
+	settingsErr := errors.New("injected setup settings failure")
+	resolveCalls := 0
+	env.service.resolveSetup = func(string) (config.WorktreeSettings, error) {
+		resolveCalls++
+		return config.WorktreeSettings{}, settingsErr
+	}
+
+	_, err := env.service.PrepareTaskExecutionRoot(env.ctx, TaskExecutionRootPreparationRequest{
+		TaskID:           task.ID,
+		ManagedTarget:    &target,
+		SetupRequirement: worktreecontract.SetupRequirementRequired,
+	})
+	if !errors.Is(err, settingsErr) {
+		t.Fatalf("PrepareTaskExecutionRoot error = %v, want %v", err, settingsErr)
+	}
+	if resolveCalls != 1 {
+		t.Fatalf("setup settings resolutions = %d, want one", resolveCalls)
+	}
+	row, err := env.store.Queries().GetTask(env.ctx, string(task.ID))
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if row.ManagedWorktreeID.Valid {
+		t.Fatalf("settings failure attached managed worktree = %+v", row.ManagedWorktreeID)
 	}
 }
 
@@ -438,7 +551,7 @@ func TestRestoreLockedTaskWorktreeReportsConflictForRegisteredMissingRoot(t *tes
 
 	_, err = env.service.RestoreLockedTaskWorktree(env.ctx, LockedTaskWorktreeRestoreRequest{
 		TaskID:           task.ID,
-		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		SetupOperationID: newWorktreeSetupOperationIDPointer(),
 	})
 	var lockedErr *LockedTaskWorktreeError
 	if !errors.As(err, &lockedErr) || lockedErr.Cause != LockedTaskWorktreeCauseConflict {
@@ -541,7 +654,7 @@ func TestRestoreLockedTaskWorktreeRejectsDetachedUnboundExistingRoot(t *testing.
 
 	_, err = env.service.RestoreLockedTaskWorktree(env.ctx, LockedTaskWorktreeRestoreRequest{
 		TaskID:           task.ID,
-		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		SetupOperationID: newWorktreeSetupOperationIDPointer(),
 	})
 	var lockedErr *LockedTaskWorktreeError
 	if !errors.As(err, &lockedErr) || lockedErr.Cause != LockedTaskWorktreeCauseConflict {
@@ -712,7 +825,7 @@ func TestMaterializeInitialTaskWorktreeCreatesShortIDBranchWithoutControllerLeas
 	task, _ := createTaskWorktreeTestTask(t, env)
 	resolvedTarget := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
 
-	resp, err := env.service.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{
+	resp, err := materializeInitialTaskWorktree(env.ctx, env.service, InitialTaskWorktreeMaterializationRequest{
 		TaskID:         task.ID,
 		ResolvedTarget: resolvedTarget,
 	})
@@ -743,6 +856,289 @@ func TestMaterializeInitialTaskWorktreeCreatesShortIDBranchWithoutControllerLeas
 	}
 }
 
+func TestMaterializeInitialTaskWorktreeCreatesPendingCustomBranchAtShortIDRoot(t *testing.T) {
+	env := newServiceTestEnv(t)
+	task, workflowStore := createTaskWorktreeTestTask(t, env)
+	const branchName = "feature/MBL-742"
+	if err := workflowStore.ReplacePendingInitialManagedBranchName(env.ctx, task.ID, branchName); err != nil {
+		t.Fatalf("ReplacePendingInitialManagedBranchName: %v", err)
+	}
+
+	resp, err := env.service.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{
+		TaskID:         task.ID,
+		ResolvedTarget: resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot),
+	})
+	if err != nil {
+		t.Fatalf("MaterializeInitialTaskWorktree: %v", err)
+	}
+	if got := taskWorktreeBranch(resp.Worktree); got != branchName {
+		t.Fatalf("materialized branch = %q, want %q", got, branchName)
+	}
+	if got := filepath.Base(taskWorktreeRoot(resp.Worktree)); got != task.ShortID {
+		t.Fatalf("automatic root basename = %q, want Task Short ID %q", got, task.ShortID)
+	}
+	row, err := env.store.Queries().GetTask(env.ctx, string(task.ID))
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if row.PendingInitialManagedBranchName.Valid {
+		t.Fatalf("bound pending initial managed branch = %+v, want absent", row.PendingInitialManagedBranchName)
+	}
+}
+
+func TestMaterializeInitialTaskWorktreeUsesLeasedPendingBranchSnapshot(t *testing.T) {
+	env := newServiceTestEnv(t)
+	task, workflowStore := createTaskWorktreeTestTask(t, env)
+	const (
+		snapshotBranch = "feature/snapshot"
+		laterBranch    = "feature/later"
+	)
+	if err := workflowStore.ReplacePendingInitialManagedBranchName(env.ctx, task.ID, snapshotBranch); err != nil {
+		t.Fatalf("replace snapshot branch: %v", err)
+	}
+	inspectionStarted := make(chan struct{})
+	releaseInspection := make(chan struct{})
+	var pauseOnce sync.Once
+	runner := &taskWorktreeGitCommandInterceptor{
+		base: execGitCommandRunner{},
+		beforeRun: func(ctx context.Context, _ string, args []string) error {
+			if !slices.Equal(args, []string{"check-ref-format", "refs/heads/" + snapshotBranch}) {
+				return nil
+			}
+			pauseOnce.Do(func() { close(inspectionStarted) })
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-releaseInspection:
+				return nil
+			}
+		},
+	}
+	env.service.git = NewGitInspector(runner)
+
+	type result struct {
+		materialized TaskWorktreeMaterialization
+		err          error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		materialized, err := env.service.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{
+			TaskID:         task.ID,
+			ResolvedTarget: resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot),
+		})
+		resultCh <- result{materialized: materialized, err: err}
+	}()
+
+	select {
+	case <-inspectionStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for pending branch snapshot inspection")
+	}
+	if err := workflowStore.ReplacePendingInitialManagedBranchName(env.ctx, task.ID, laterBranch); err != nil {
+		t.Fatalf("replace later branch: %v", err)
+	}
+	close(releaseInspection)
+
+	var got result
+	select {
+	case got = <-resultCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for materialization")
+	}
+	if got.err != nil {
+		t.Fatalf("MaterializeInitialTaskWorktree: %v", got.err)
+	}
+	if branch := taskWorktreeBranch(got.materialized.Worktree); branch != snapshotBranch {
+		t.Fatalf("materialized branch = %q, want cutoff snapshot %q", branch, snapshotBranch)
+	}
+	if exists, err := env.service.git.BranchExists(env.ctx, env.workspaceRoot, laterBranch); err != nil {
+		t.Fatalf("BranchExists later branch: %v", err)
+	} else if exists {
+		t.Fatalf("post-snapshot branch %q was created", laterBranch)
+	}
+	row, err := env.store.Queries().GetTask(env.ctx, string(task.ID))
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if row.PendingInitialManagedBranchName.Valid {
+		t.Fatalf("post-snapshot pending branch survived bind: %+v", row.PendingInitialManagedBranchName)
+	}
+}
+
+func TestMaterializeInitialTaskWorktreeAllowsRemoteTrackingRefCreatedAfterFinalInspection(t *testing.T) {
+	env := newServiceTestEnv(t)
+	task, workflowStore := createTaskWorktreeTestTask(t, env)
+	const branchName = "feature/remote-race"
+	if err := workflowStore.ReplacePendingInitialManagedBranchName(env.ctx, task.ID, branchName); err != nil {
+		t.Fatalf("ReplacePendingInitialManagedBranchName: %v", err)
+	}
+	runGit(t, env.workspaceRoot, "remote", "add", "origin", "https://example.invalid/origin.git")
+	var mutateOnce sync.Once
+	env.service.git = NewGitInspector(&taskWorktreeGitCommandInterceptor{
+		base: execGitCommandRunner{},
+		beforeOutput: func(ctx context.Context, dir string, args []string) error {
+			if len(args) < 4 || !slices.Equal(args[:4], []string{"worktree", "add", "-b", branchName}) {
+				return nil
+			}
+			var err error
+			mutateOnce.Do(func() {
+				_, err = execGitCommandRunner{}.Output(
+					ctx,
+					dir,
+					"update-ref",
+					"refs/remotes/origin/"+branchName,
+					"HEAD",
+				)
+			})
+			return err
+		},
+	})
+
+	materialized, err := env.service.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{
+		TaskID:         task.ID,
+		ResolvedTarget: resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot),
+	})
+	if err != nil {
+		t.Fatalf("MaterializeInitialTaskWorktree: %v", err)
+	}
+	if got := taskWorktreeBranch(materialized.Worktree); got != branchName {
+		t.Fatalf("materialized branch = %q, want %q", got, branchName)
+	}
+	for _, ref := range []string{"refs/heads/" + branchName, "refs/remotes/origin/" + branchName} {
+		exists, err := env.service.git.RefExists(env.ctx, env.workspaceRoot, ref)
+		if err != nil {
+			t.Fatalf("RefExists(%q): %v", ref, err)
+		}
+		if !exists {
+			t.Fatalf("expected coexisting ref %q", ref)
+		}
+	}
+}
+
+func TestMaterializeInitialTaskWorktreeRejectsLocalBranchCreatedAfterFinalInspection(t *testing.T) {
+	env := newServiceTestEnv(t)
+	task, workflowStore := createTaskWorktreeTestTask(t, env)
+	const branchName = "feature/local-race"
+	if err := workflowStore.ReplacePendingInitialManagedBranchName(env.ctx, task.ID, branchName); err != nil {
+		t.Fatalf("ReplacePendingInitialManagedBranchName: %v", err)
+	}
+	var mutateOnce sync.Once
+	env.service.git = NewGitInspector(&taskWorktreeGitCommandInterceptor{
+		base: execGitCommandRunner{},
+		beforeOutput: func(ctx context.Context, dir string, args []string) error {
+			if len(args) < 4 || !slices.Equal(args[:4], []string{"worktree", "add", "-b", branchName}) {
+				return nil
+			}
+			var err error
+			mutateOnce.Do(func() {
+				_, err = execGitCommandRunner{}.Output(ctx, dir, "branch", branchName)
+			})
+			return err
+		},
+	})
+
+	_, err := env.service.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{
+		TaskID:         task.ID,
+		ResolvedTarget: resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot),
+	})
+	localRef := "refs/heads/" + branchName
+	var branchErr *serverapi.WorkflowTaskInitialBranchError
+	if !errors.As(err, &branchErr) ||
+		branchErr.Reason != serverapi.WorkflowTaskInitialBranchErrorReasonLocalCollision ||
+		branchErr.BranchName != branchName ||
+		branchErr.Ref == nil ||
+		*branchErr.Ref != localRef {
+		t.Fatalf("MaterializeInitialTaskWorktree error = %T %+v, want local collision for %q", err, err, localRef)
+	}
+	row, queryErr := env.store.Queries().GetTask(env.ctx, string(task.ID))
+	if queryErr != nil {
+		t.Fatalf("GetTask: %v", queryErr)
+	}
+	if row.ManagedWorktreeID.Valid {
+		t.Fatalf("failed local race bound managed Worktree %+v", row.ManagedWorktreeID)
+	}
+	if !row.PendingInitialManagedBranchName.Valid || row.PendingInitialManagedBranchName.String != branchName {
+		t.Fatalf("failed local race pending branch = %+v, want retained %q", row.PendingInitialManagedBranchName, branchName)
+	}
+	if exists, branchErr := env.service.git.BranchExists(env.ctx, env.workspaceRoot, branchName); branchErr != nil {
+		t.Fatalf("BranchExists: %v", branchErr)
+	} else if !exists {
+		t.Fatalf("injected local branch %q disappeared", branchName)
+	}
+}
+
+func TestMaterializeInitialTaskWorktreePreservesExternallyRacedWorktreeAfterAddFailure(t *testing.T) {
+	env := newServiceTestEnv(t)
+	task, workflowStore := createTaskWorktreeTestTask(t, env)
+	const branchName = "feature/partial-add-failure"
+	if err := workflowStore.ReplacePendingInitialManagedBranchName(env.ctx, task.ID, branchName); err != nil {
+		t.Fatalf("ReplacePendingInitialManagedBranchName: %v", err)
+	}
+	addErr := errors.New("post-checkout hook failed")
+	var raceOnce sync.Once
+	env.service.git = NewGitInspector(&taskWorktreeGitCommandInterceptor{
+		base: execGitCommandRunner{},
+		beforeOutput: func(ctx context.Context, dir string, args []string) error {
+			if len(args) < 5 || !slices.Equal(args[:4], []string{"worktree", "add", "-b", branchName}) {
+				return nil
+			}
+			var raceErr error
+			raceOnce.Do(func() {
+				_, raceErr = execGitCommandRunner{}.Output(ctx, dir, args...)
+			})
+			if raceErr != nil {
+				return fmt.Errorf("create externally raced worktree: %w", raceErr)
+			}
+			return addErr
+		},
+	})
+
+	_, err := env.service.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{
+		TaskID:         task.ID,
+		ResolvedTarget: resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot),
+	})
+	if !errors.Is(err, addErr) {
+		t.Fatalf("MaterializeInitialTaskWorktree error = %T %v, want original add failure", err, err)
+	}
+	var branchErr *serverapi.WorkflowTaskInitialBranchError
+	if !errors.As(err, &branchErr) ||
+		branchErr.Reason != serverapi.WorkflowTaskInitialBranchErrorReasonLocalCollision ||
+		branchErr.BranchName != branchName {
+		t.Fatalf("MaterializeInitialTaskWorktree error = %+v, want joined local collision", err)
+	}
+	if exists, branchErr := env.service.git.BranchExists(env.ctx, env.workspaceRoot, branchName); branchErr != nil {
+		t.Fatalf("BranchExists after ambiguous failed add: %v", branchErr)
+	} else if !exists {
+		t.Fatalf("unowned branch %q was deleted", branchName)
+	}
+	worktrees, listErr := env.service.git.List(env.ctx, env.workspaceRoot)
+	if listErr != nil {
+		t.Fatalf("List after ambiguous failed add: %v", listErr)
+	}
+	if len(worktrees) != 2 {
+		t.Fatalf("worktrees after ambiguous failed add = %+v, want source and preserved raced Worktree", worktrees)
+	}
+	row, queryErr := env.store.Queries().GetTask(env.ctx, string(task.ID))
+	if queryErr != nil {
+		t.Fatalf("GetTask: %v", queryErr)
+	}
+	if row.ManagedWorktreeID.Valid {
+		t.Fatalf("failed partial add bound managed Worktree %+v", row.ManagedWorktreeID)
+	}
+	if !row.PendingInitialManagedBranchName.Valid || row.PendingInitialManagedBranchName.String != branchName {
+		t.Fatalf("failed partial add pending branch = %+v, want retained %q", row.PendingInitialManagedBranchName, branchName)
+	}
+
+	_, err = env.service.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{
+		TaskID:         task.ID,
+		ResolvedTarget: resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot),
+	})
+	branchErr = nil
+	if !errors.As(err, &branchErr) || branchErr.Reason != serverapi.WorkflowTaskInitialBranchErrorReasonLocalCollision {
+		t.Fatalf("MaterializeInitialTaskWorktree retry error = %+v, want preserved local collision", err)
+	}
+}
+
 func TestMaterializeInitialTaskWorktreeCreatesFromResolvedCommitAndRecordsImmutableBase(t *testing.T) {
 	env := newServiceTestEnv(t)
 	task, _ := createTaskWorktreeTestTask(t, env)
@@ -756,7 +1152,7 @@ func TestMaterializeInitialTaskWorktreeCreatesFromResolvedCommitAndRecordsImmuta
 	runGit(t, env.workspaceRoot, "add", "after-resolution.txt")
 	runGit(t, env.workspaceRoot, "commit", "-q", "-m", "advance source after resolution")
 
-	resp, err := env.service.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{
+	resp, err := materializeInitialTaskWorktree(env.ctx, env.service, InitialTaskWorktreeMaterializationRequest{
 		TaskID:         task.ID,
 		ResolvedTarget: resolvedBase,
 	})
@@ -801,9 +1197,9 @@ func TestMaterializeInitialTaskWorktreeRunsSetupAndPublishesProgressBeforeReturn
 	}
 	resultCh := make(chan materializationResult, 1)
 	go func() {
-		resp, err := env.service.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{
+		resp, err := materializeInitialTaskWorktree(env.ctx, env.service, InitialTaskWorktreeMaterializationRequest{
 			TaskID:           task.ID,
-			SetupOperationID: setupID,
+			SetupOperationID: &setupID,
 			ResolvedTarget:   resolvedTarget,
 		})
 		resultCh <- materializationResult{resp: resp, err: err}
@@ -816,7 +1212,8 @@ func TestMaterializeInitialTaskWorktreeRunsSetupAndPublishesProgressBeforeReturn
 	if err != nil {
 		t.Fatalf("setup event: %v", err)
 	}
-	if evt.Phase != serverapi.WorktreeSetupPhaseStarted || evt.SetupOperationID != setupID || evt.ScriptPath == "" || evt.WorktreeRoot == "" {
+	if evt.Phase != serverapi.WorktreeSetupPhaseStarted || evt.SetupOperationID != setupID ||
+		evt.Started == nil || evt.Started.ScriptPath == "" || evt.Started.WorktreeRoot == "" {
 		t.Fatalf("started setup event = %+v", evt)
 	}
 	select {
@@ -854,7 +1251,7 @@ func TestMaterializeInitialTaskWorktreeSetupOmitsStaleParentSessionEnvironment(t
 	env.service.setupScript = capture.Executable()
 	resolvedTarget := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
 
-	resp, err := env.service.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{
+	resp, err := materializeInitialTaskWorktree(env.ctx, env.service, InitialTaskWorktreeMaterializationRequest{
 		TaskID:         task.ID,
 		ResolvedTarget: resolvedTarget,
 	})
@@ -894,7 +1291,6 @@ func TestCreateWorktreeSetupReplacesStaleParentReservedEnvironment(t *testing.T)
 
 	resp, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		ClientRequestID:  "req-session-contract",
 		SessionID:        env.session.Meta().SessionID,
 		BaseRef:          "HEAD",
 		CreateBranch:     true,
@@ -929,69 +1325,103 @@ func TestCreateWorktreeSetupReplacesStaleParentReservedEnvironment(t *testing.T)
 	}
 }
 
-func TestMaterializeInitialTaskWorktreeReturnsExistingManagedWorktree(t *testing.T) {
+func TestPrepareTaskExecutionRootRecreatesCleanRootBeforeRetry(t *testing.T) {
 	env := newServiceTestEnv(t)
 	task, _ := createTaskWorktreeTestTask(t, env)
-	base, err := env.service.git.ResolveHEAD(env.ctx, env.workspaceRoot)
-	if err != nil {
-		t.Fatalf("ResolveHEAD: %v", err)
-	}
+	base := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
+	countPath := filepath.Join(t.TempDir(), "count")
+	scriptRelpath := filepath.Join("scripts", "retry-clean-setup.sh")
+	writeExecutableFile(t, filepath.Join(env.workspaceRoot, scriptRelpath), fmt.Sprintf("#!/bin/sh\ncount=0\nif [ -f %q ]; then count=$(cat %q); fi\ncount=$((count + 1))\nprintf '%%s' \"$count\" > %q\nif [ \"$count\" = \"1\" ]; then exit 3; fi\n", countPath, countPath, countPath))
+	env.service.setupScript = scriptRelpath
+	runner := &recordingGitCommandRunner{delegate: execGitCommandRunner{}}
+	env.service.git = NewGitInspector(runner)
 
-	first, err := env.service.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{TaskID: task.ID, ResolvedTarget: base})
+	_, err := prepareManagedTaskExecutionRoot(env.ctx, env.service, task.ID, nil, base)
 	if err != nil {
-		t.Fatalf("MaterializeInitialTaskWorktree first: %v", err)
+		t.Fatalf("PrepareTaskExecutionRoot: %v", err)
 	}
-	second, err := env.service.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{TaskID: task.ID, ResolvedTarget: base})
-	if err != nil {
-		t.Fatalf("MaterializeInitialTaskWorktree second: %v", err)
+	if got := waitForFileText(t, countPath); got != "2" {
+		t.Fatalf("setup attempt count = %q, want 2", got)
 	}
-	if second.Created || second.CreatedBranch {
-		t.Fatalf("second ensure created flags = created:%t branch:%t, want false/false", second.Created, second.CreatedBranch)
+	adds, removes := 0, 0
+	for _, call := range runner.calls {
+		if len(call) >= 2 && call[0] == "worktree" {
+			switch call[1] {
+			case "add":
+				adds++
+			case "remove":
+				removes++
+			}
+		}
 	}
-	if taskWorktreeID(first.Worktree) != taskWorktreeID(second.Worktree) {
-		t.Fatalf("second worktree id = %q, want %q", taskWorktreeID(second.Worktree), taskWorktreeID(first.Worktree))
-	}
-	if err := os.WriteFile(filepath.Join(env.workspaceRoot, "incompatible.txt"), []byte("new base\n"), 0o644); err != nil {
-		t.Fatalf("write source advancement: %v", err)
-	}
-	runGit(t, env.workspaceRoot, "add", "incompatible.txt")
-	runGit(t, env.workspaceRoot, "commit", "-q", "-m", "change base")
-	incompatible, err := env.service.git.ResolveHEAD(env.ctx, env.workspaceRoot)
-	if err != nil {
-		t.Fatalf("ResolveHEAD after advance: %v", err)
-	}
-	_, err = env.service.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{TaskID: task.ID, ResolvedTarget: incompatible})
-	var mismatch *TaskWorktreeBaseCommitMismatchError
-	if !errors.As(err, &mismatch) || mismatch.RequestedCommitOID != incompatible.CommitOID || mismatch.CreationBaseCommitOID == nil || *mismatch.CreationBaseCommitOID != base.CommitOID {
-		t.Fatalf("incompatible MaterializeInitialTaskWorktree error = %v, want typed base mismatch", err)
+	if adds != 2 || removes != 1 {
+		t.Fatalf("Git recreation calls = %d add, %d remove; want 2 add, 1 remove", adds, removes)
 	}
 }
 
-func TestMaterializeInitialTaskWorktreeFailureRetryTrustsExistingWorktreeAndRecreatesRemovedRoot(t *testing.T) {
+func TestPrepareTaskExecutionRootRetriesIgnoredOrEmptyChangedRootInPlace(t *testing.T) {
 	env := newServiceTestEnv(t)
 	task, _ := createTaskWorktreeTestTask(t, env)
-	base, err := env.service.git.ResolveHEAD(env.ctx, env.workspaceRoot)
-	if err != nil {
-		t.Fatalf("ResolveHEAD: %v", err)
-	}
+	base := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
 	countPath := filepath.Join(t.TempDir(), "count")
-	scriptRelpath := filepath.Join("scripts", "retry-setup.sh")
-	writeExecutableFile(t, filepath.Join(env.workspaceRoot, scriptRelpath), fmt.Sprintf("#!/bin/sh\ncount=0\nif [ -f %q ]; then count=$(cat %q); fi\ncount=$((count + 1))\nprintf '%%s' \"$count\" > %q\nif [ \"$count\" = \"1\" ]; then exit 3; fi\n", countPath, countPath, countPath))
+	scriptRelpath := filepath.Join("scripts", "retry-in-place.sh")
+	writeExecutableFile(t, filepath.Join(env.workspaceRoot, scriptRelpath), fmt.Sprintf("#!/bin/sh\ncount=0\nif [ -f %q ]; then count=$(cat %q); fi\ncount=$((count + 1))\nprintf '%%s' \"$count\" > %q\nif [ \"$count\" = \"1\" ]; then printf 'setup-change.txt\\n' >> \"$(git rev-parse --git-path info/exclude)\"; printf changed > \"$PWD/setup-change.txt\"; exit 3; fi\nif [ ! -f \"$PWD/setup-change.txt\" ]; then exit 9; fi\n", countPath, countPath, countPath))
 	env.service.setupScript = scriptRelpath
 
-	_, err = env.service.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{TaskID: task.ID, SetupOperationID: serverapi.NewWorktreeSetupOperationID(), ResolvedTarget: base})
-	if err == nil {
-		t.Fatal("first MaterializeInitialTaskWorktree succeeded, want setup failure")
+	materialized, err := prepareManagedTaskExecutionRoot(env.ctx, env.service, task.ID, nil, base)
+	if err != nil {
+		t.Fatalf("PrepareTaskExecutionRoot: %v", err)
+	}
+	if got := waitForFileText(t, filepath.Join(taskWorktreeRoot(materialized.Worktree), "setup-change.txt")); got != "changed" {
+		t.Fatalf("in-place setup change = %q, want retained", got)
+	}
+	if err := errors.Join(os.Remove(filepath.Join(taskWorktreeRoot(materialized.Worktree), "setup-change.txt")), os.Mkdir(filepath.Join(taskWorktreeRoot(materialized.Worktree), "empty-change"), 0o755)); err != nil {
+		t.Fatalf("prepare empty-directory change: %v", err)
+	}
+	if unchanged, err := env.service.git.probeRecreationUnchanged(env.ctx, taskWorktreeRoot(materialized.Worktree)); err != nil || unchanged {
+		t.Fatalf("empty-directory probe = %t, %v; want changed", unchanged, err)
+	}
+}
+
+func TestPrepareTaskExecutionRootFinalSetupFailureRetainsCurrentRootAndBinding(t *testing.T) {
+	env := newServiceTestEnv(t)
+	task, _ := createTaskWorktreeTestTask(t, env)
+	base := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
+	countPath := filepath.Join(t.TempDir(), "count")
+	scriptRelpath := filepath.Join("scripts", "fails-twice.sh")
+	writeExecutableFile(t, filepath.Join(env.workspaceRoot, scriptRelpath), fmt.Sprintf(
+		"#!/bin/sh\ncount=0\nif [ -f %q ]; then count=$(cat %q); fi\ncount=$((count + 1))\nprintf '%%s' \"$count\" > %q\nif [ \"$count\" = \"1\" ]; then printf changed > \"$PWD/setup-change.txt\"; exit 3; fi\nexit 7\n",
+		countPath,
+		countPath,
+		countPath,
+	))
+	env.service.setupScript = scriptRelpath
+
+	materialized, err := prepareManagedTaskExecutionRoot(env.ctx, env.service, task.ID, nil, base)
+	var retained *serverapi.WorktreeSetupRetainedError
+	if !errors.As(err, &retained) || retained.Worktree.Registered == nil {
+		t.Fatalf("PrepareTaskExecutionRoot error = %T %v, want retained setup failure", err, err)
+	}
+	if got := waitForFileText(t, countPath); got != "2" {
+		t.Fatalf("setup attempt count = %q, want 2", got)
+	}
+	if materialized.SetupResult == nil || materialized.SetupResult.Failed == nil ||
+		materialized.SetupResult.Failed.Cause.ProcessExit == nil ||
+		materialized.SetupResult.Failed.Cause.ProcessExit.ExitCode != 7 {
+		t.Fatalf("setup result = %+v, want final process exit 7", materialized.SetupResult)
 	}
 	row, err := env.store.Queries().GetTask(env.ctx, string(task.ID))
 	if err != nil {
 		t.Fatalf("GetTask: %v", err)
 	}
-	if !row.ManagedWorktreeID.Valid || strings.TrimSpace(row.ManagedWorktreeID.String) == "" {
-		t.Fatalf("managed worktree not attached after setup failure: %+v", row.ManagedWorktreeID)
+	if !row.ManagedWorktreeID.Valid || row.ManagedWorktreeID.String != retained.Worktree.Registered.Kent.WorktreeID {
+		t.Fatalf("retained task binding = %+v, want %q", row.ManagedWorktreeID, retained.Worktree.Registered.Kent.WorktreeID)
 	}
 	if row.ExecutionTargetMode.Valid {
 		t.Fatalf("failed setup locked execution target = %+v, want task remain unlocked", row.ExecutionTargetMode)
+	}
+	if row.PendingInitialManagedBranchName.Valid {
+		t.Fatalf("failed setup retained pending initial managed branch %+v", row.PendingInitialManagedBranchName)
 	}
 	record, err := env.store.GetWorktreeRecordByID(env.ctx, row.ManagedWorktreeID.String)
 	if err != nil {
@@ -1000,41 +1430,12 @@ func TestMaterializeInitialTaskWorktreeFailureRetryTrustsExistingWorktreeAndRecr
 	if _, err := os.Stat(record.CanonicalRoot); err != nil {
 		t.Fatalf("failed setup worktree root unavailable: %v", err)
 	}
-	if got := waitForFileText(t, countPath); got != "1" {
-		t.Fatalf("setup run count after failure = %q, want 1", got)
-	}
-
-	restarted := NewService(
-		env.store,
-		env.service.git,
-		env.authority,
-		env.publisher,
-		env.processes,
-		ServiceOptions{BaseDir: env.baseDir, SetupScript: scriptRelpath},
-	)
-	second, err := restarted.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{TaskID: task.ID, SetupOperationID: serverapi.NewWorktreeSetupOperationID(), ResolvedTarget: base})
+	persisted, err := worktreeGitMetadataFromRecord(record)
 	if err != nil {
-		t.Fatalf("second MaterializeInitialTaskWorktree should trust existing root: %v", err)
+		t.Fatalf("worktreeGitMetadataFromRecord: %v", err)
 	}
-	if second.Created {
-		t.Fatalf("second ensure created worktree, want existing trusted: %+v", second)
-	}
-	if got := waitForFileText(t, countPath); got != "1" {
-		t.Fatalf("setup reran for existing worktree, count=%q", got)
-	}
-
-	if err := env.service.git.Remove(env.ctx, env.workspaceRoot, record.CanonicalRoot, true); err != nil {
-		t.Fatalf("remove stale worktree root: %v", err)
-	}
-	third, err := restarted.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{TaskID: task.ID, SetupOperationID: serverapi.NewWorktreeSetupOperationID(), ResolvedTarget: base})
-	if err != nil {
-		t.Fatalf("third MaterializeInitialTaskWorktree should recreate removed root: %v", err)
-	}
-	if !third.Created {
-		t.Fatalf("third ensure did not recreate worktree: %+v", third)
-	}
-	if got := waitForFileText(t, countPath); got != "2" {
-		t.Fatalf("setup run count after recreate = %q, want 2", got)
+	if persisted.Branch == nil || persisted.Branch.Name() != task.ShortID {
+		t.Fatalf("failed setup persisted branch = %+v, want %q", persisted.Branch, task.ShortID)
 	}
 }
 
@@ -1052,7 +1453,7 @@ func TestMaterializeInitialTaskWorktreeUsesTaskSourceWorkspace(t *testing.T) {
 	task, _ := createTaskWorktreeTestTaskWithSource(t, env, source.WorkspaceID)
 	resolvedTarget := resolveTaskWorktreeTestHEAD(t, env, sourceRoot)
 
-	resp, err := env.service.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{
+	resp, err := materializeInitialTaskWorktree(env.ctx, env.service, InitialTaskWorktreeMaterializationRequest{
 		TaskID:         task.ID,
 		ResolvedTarget: resolvedTarget,
 	})
@@ -1108,7 +1509,7 @@ func TestMaterializeInitialTaskWorktreeHandlesRootCollisionAndReportsBranchColli
 	}
 	resolvedTarget := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
 
-	resp, err := env.service.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{
+	resp, err := materializeInitialTaskWorktree(env.ctx, env.service, InitialTaskWorktreeMaterializationRequest{
 		TaskID:         task.ID,
 		ResolvedTarget: resolvedTarget,
 	})
@@ -1124,12 +1525,16 @@ func TestMaterializeInitialTaskWorktreeHandlesRootCollisionAndReportsBranchColli
 
 	otherTask, _ := createTaskWorktreeTestTask(t, env)
 	runGit(t, env.workspaceRoot, "branch", otherTask.ShortID)
-	_, err = env.service.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{
+	_, err = materializeInitialTaskWorktree(env.ctx, env.service, InitialTaskWorktreeMaterializationRequest{
 		TaskID:         otherTask.ID,
 		ResolvedTarget: resolvedTarget,
 	})
-	var branchCollision *TaskBranchCollisionError
-	if !errors.As(err, &branchCollision) || branchCollision.BranchName != otherTask.ShortID {
+	var branchCollision *serverapi.WorkflowTaskInitialBranchError
+	if !errors.As(err, &branchCollision) ||
+		branchCollision.Reason != serverapi.WorkflowTaskInitialBranchErrorReasonLocalCollision ||
+		branchCollision.BranchName != otherTask.ShortID ||
+		branchCollision.Ref == nil ||
+		*branchCollision.Ref != "refs/heads/"+otherTask.ShortID {
 		t.Fatalf("MaterializeInitialTaskWorktree branch collision error = %v, want task branch collision", err)
 	}
 }
@@ -1181,7 +1586,7 @@ func TestDeleteWorktreeRecreatesNonTerminalTaskManagedWorktreeOnRestore(t *testi
 func TestDeleteWorktreeAllowsTerminalTaskManagedWorktree(t *testing.T) {
 	env := newServiceTestEnv(t)
 	task, workflowStore := createTaskWorktreeTestTask(t, env)
-	created, err := env.service.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{
+	created, err := materializeInitialTaskWorktree(env.ctx, env.service, InitialTaskWorktreeMaterializationRequest{
 		TaskID:         task.ID,
 		ResolvedTarget: resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot),
 	})
@@ -1221,7 +1626,7 @@ func TestDeleteWorktreeAllowsTerminalTaskManagedWorktree(t *testing.T) {
 func TestDeleteTaskWorktreeRemovesManagedWorktreeAndBranch(t *testing.T) {
 	env := newServiceTestEnv(t)
 	task, _ := createTaskWorktreeTestTask(t, env)
-	created, err := env.service.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{
+	created, err := materializeInitialTaskWorktree(env.ctx, env.service, InitialTaskWorktreeMaterializationRequest{
 		TaskID:         task.ID,
 		ResolvedTarget: resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot),
 	})
@@ -1254,7 +1659,7 @@ func TestDeleteTaskWorktreeRemovesManagedWorktreeAndBranch(t *testing.T) {
 func TestDeleteTaskWorktreeRollsBackSessionTargetWhenRemovalFails(t *testing.T) {
 	env := newServiceTestEnv(t)
 	task, _ := createTaskWorktreeTestTask(t, env)
-	created, err := env.service.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{
+	created, err := materializeInitialTaskWorktree(env.ctx, env.service, InitialTaskWorktreeMaterializationRequest{
 		TaskID:         task.ID,
 		ResolvedTarget: resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot),
 	})
@@ -1306,7 +1711,7 @@ func materializeAndLockTaskWorktree(t *testing.T, env *serviceTestEnv) (workflow
 	t.Helper()
 	task, workflowStore := createTaskWorktreeTestTask(t, env)
 	resolvedTarget := resolveTaskWorktreeTestHEAD(t, env, env.workspaceRoot)
-	materialized, err := env.service.MaterializeInitialTaskWorktree(env.ctx, InitialTaskWorktreeMaterializationRequest{
+	materialized, err := materializeInitialTaskWorktree(env.ctx, env.service, InitialTaskWorktreeMaterializationRequest{
 		TaskID:         task.ID,
 		ResolvedTarget: resolvedTarget,
 	})
@@ -1347,6 +1752,31 @@ type selectedCommandFailingGitRunner struct {
 	base      gitCommandRunner
 	directory string
 	arguments []string
+}
+
+type taskWorktreeGitCommandInterceptor struct {
+	base         gitCommandRunner
+	beforeRun    func(context.Context, string, []string) error
+	beforeOutput func(context.Context, string, []string) error
+}
+
+func (r *taskWorktreeGitCommandInterceptor) Output(ctx context.Context, dir string, args ...string) ([]byte, error) {
+	if r.beforeOutput != nil {
+		if err := r.beforeOutput(ctx, dir, slices.Clone(args)); err != nil {
+			return nil, err
+		}
+	}
+	output, err := r.base.Output(ctx, dir, args...)
+	return output, err
+}
+
+func (r *taskWorktreeGitCommandInterceptor) Run(ctx context.Context, dir string, args ...string) ([]byte, int, error) {
+	if r.beforeRun != nil {
+		if err := r.beforeRun(ctx, dir, slices.Clone(args)); err != nil {
+			return nil, -1, err
+		}
+	}
+	return r.base.Run(ctx, dir, args...)
 }
 
 func (r *selectedCommandFailingGitRunner) Output(ctx context.Context, dir string, args ...string) ([]byte, error) {

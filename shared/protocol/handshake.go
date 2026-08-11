@@ -86,7 +86,6 @@ const (
 	MethodWorkflowTaskDependencyList                    = "workflow.task.dependency.list"
 	MethodWorkflowAttentionList                         = "workflow.attention.list"
 	MethodWorkflowTaskAttentionList                     = "workflow.task.attention.list"
-	MethodWorkflowTaskQuestionAnswer                    = "workflow.task.question.answer"
 	MethodWorkflowTaskCommentAdd                        = "workflow.task.comment.add"
 	MethodWorkflowTaskCommentList                       = "workflow.task.comment.list"
 	MethodWorkflowTaskCommentReplace                    = "workflow.task.comment.replace"
@@ -105,6 +104,7 @@ const (
 	MethodWorkflowTaskGet                               = "workflow.task.get"
 	MethodWorkflowTaskObserve                           = "workflow.task.observe"
 	MethodSessionPlan                                   = "session.plan"
+	MethodSessionWorkspaceChatDraft                     = "session.workspaceChatDraft"
 	MethodSessionGetMainView                            = "session.getMainView"
 	MethodSessionGetExecutionEnvironment                = "session.getExecutionEnvironment"
 	MethodSessionGetTranscriptPage                      = "session.getTranscriptPage"
@@ -157,10 +157,11 @@ const (
 	MethodProcessKill                                   = "process.kill"
 	MethodProcessInlineOutput                           = "process.inlineOutput"
 	MethodAskListPending                                = "ask.listPendingBySession"
-	MethodAskAnswer                                     = "ask.answer"
 	MethodPromptAnswerBatch                             = "prompt.answerBatch"
+	MethodPromptFollowUpWatch                           = "prompt.followUp.watch"
+	MethodPromptFollowUpEvent                           = "prompt.followUp.event"
+	MethodPromptFollowUpComplete                        = "prompt.followUp.complete"
 	MethodApprovalListPending                           = "approval.listPendingBySession"
-	MethodApprovalAnswer                                = "approval.answer"
 	MethodAttentionNotificationSubscribe                = "attention.notification.subscribe"
 	MethodAttentionNotificationEvent                    = "attention.notification"
 	MethodAttentionNotificationComplete                 = "attention.notification.complete"
@@ -818,6 +819,14 @@ type AttentionNotificationEventParams struct {
 	Event clientui.AttentionNotificationEvent `json:"event"`
 }
 
+type PromptFollowUpEventParams struct {
+	Event PromptFollowUpEvent `json:"event"`
+}
+
+type PromptFollowUpEvent struct {
+	Kind string `json:"kind"`
+}
+
 type WorkflowProjectEventParams struct {
 	Event WorkflowProjectEvent `json:"event"`
 }
@@ -827,17 +836,12 @@ type WorktreeSetupEventParams struct {
 }
 
 type WorktreeSetupEvent struct {
-	SetupOperationID    string `json:"setup_operation_id"`
-	SourceWorkspaceRoot string `json:"source_workspace_root"`
-	WorktreeRoot        string `json:"worktree_root"`
-	ScriptPath          string `json:"script_path"`
-	Phase               string `json:"phase"`
-	Timeout             bool   `json:"timeout,omitempty"`
-	Canceled            bool   `json:"canceled,omitempty"`
-	ExitCode            *int   `json:"exit_code,omitempty"`
-	Stdout              string `json:"stdout,omitempty"`
-	Stderr              string `json:"stderr,omitempty"`
-	Error               string `json:"error,omitempty"`
+	SetupOperationID string          `json:"setup_operation_id"`
+	Phase            string          `json:"phase"`
+	Started          json.RawMessage `json:"started,omitempty"`
+	Completed        json.RawMessage `json:"completed,omitempty"`
+	NotRequired      json.RawMessage `json:"not_required,omitempty"`
+	Failed           json.RawMessage `json:"failed,omitempty"`
 }
 
 type WorkflowProjectEventResource string
@@ -882,7 +886,6 @@ const (
 	WorkflowProjectEventActionCommentDeleted         WorkflowProjectEventAction = "comment_deleted"
 	WorkflowProjectEventActionQuestionWaiting        WorkflowProjectEventAction = "question_waiting"
 	WorkflowProjectEventActionQuestionCleared        WorkflowProjectEventAction = "question_cleared"
-	WorkflowProjectEventActionQuestionAnswered       WorkflowProjectEventAction = "question_answered"
 	WorkflowProjectEventActionLabelsChanged          WorkflowProjectEventAction = "labels_changed"
 	WorkflowProjectEventActionDependenciesChanged    WorkflowProjectEventAction = "dependencies_changed"
 )

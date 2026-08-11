@@ -1,7 +1,8 @@
 import type { AttentionNotificationEventHandler } from "./attentionNotifications";
 import type {
   BoardNodeCardsInput,
-  QuestionAnswerInput,
+  PromptAnswerBatchInput,
+  PromptAnswerBatchResponse,
   TaskEditInput,
   TaskMoveInput,
   TaskResumeInput,
@@ -34,6 +35,9 @@ import type {
   ProjectPage,
   ProjectWorkflowLink,
   ServerReadiness,
+  SessionCatalogPage,
+  SessionCategory,
+  SessionPagePosition,
   TaskAttention,
   TaskApproveResponse,
   TaskComment,
@@ -62,6 +66,7 @@ import type {
 import type { ProjectLabel, ProjectLabelCatalog, TaskLabelAssignment, TaskListPage } from "./workflowLabels";
 import type { BoardFilter } from "./workflowBoardFilters";
 import type { SetupOperationID } from "./setupOperationID";
+import type * as worktree from "./schemas/worktree";
 import type { WorktreeSetupEventHandler } from "./worktreeSetup";
 import type { WorkflowProjectEventHandler } from "./workflowProjectEvents";
 import type { TaskSearchInput, TaskSearchResponse } from "./taskSearch";
@@ -80,6 +85,11 @@ export interface ApiService {
 
   getReadiness(): Promise<ServerReadiness>;
   listProjects(pageToken: string): Promise<ProjectPage>;
+  listSessionPage(
+    projectID: string,
+    category: SessionCategory,
+    position: SessionPagePosition,
+  ): Promise<SessionCatalogPage>;
   listWorkspaces(projectID: string, pageToken?: string): Promise<WorkspaceList>;
   getProjectEdit(projectID: string, pageToken?: string): Promise<ProjectEdit>;
   planWorkspace(path: string): Promise<BindingPlan>;
@@ -147,16 +157,34 @@ export interface ApiService {
   approveApproval(approvalID: string): Promise<TaskApproveResponse>;
   deleteTask(taskID: string): Promise<void>;
   getTask(taskID: string): Promise<TaskDetail>;
-  listTaskActivity(taskID: string, pageToken: string): Promise<ActivityPage>;
+  listTaskActivity(taskID: string, offset: number): Promise<ActivityPage>;
   listTaskComments(taskID: string, offset: number): Promise<CommentPage>;
   addComment(taskID: string, body: string): Promise<TaskComment>;
   replaceComment(commentID: string, body: string): Promise<void>;
   deleteComment(commentID: string): Promise<void>;
-  answerQuestion(input: QuestionAnswerInput): Promise<void>;
+  answerPromptBatch(input: PromptAnswerBatchInput): Promise<PromptAnswerBatchResponse>;
   listPendingAsks(sessionID: string): Promise<readonly PendingAsk[]>;
   subscribeProject(projectID: string, handler: WorkflowProjectEventHandler): ApiSubscription;
   subscribeWorkflow(workflowID: string, handler: WorkflowProjectEventHandler): ApiSubscription;
   subscribeAttentionNotifications(handler: AttentionNotificationEventHandler): ApiSubscription;
+  getWorktreeStatus(sessionID: string): Promise<worktree.WorktreeStatus>;
+  listWorktrees(sessionID: string): Promise<worktree.WorktreeList>;
+  resolveWorktreeSelector(sessionID: string, selector: string): Promise<worktree.WorktreeSelectorResolution>;
+  resolveWorktreeCreateTarget(
+    sessionID: string,
+    target: string,
+  ): Promise<worktree.WorktreeCreateTargetResolutionResponse>;
+  previewWorktreeDelete(sessionID: string, selector: string): Promise<worktree.WorktreeDeletePreview>;
+  createWorktree(input: worktree.WorktreeCreateInput): Promise<worktree.WorktreeCreateResponse>;
+  switchWorktree(
+    sessionID: string,
+    operation: worktree.WorktreeSwitch,
+  ): Promise<worktree.WorktreeScheduledAcknowledgement>;
+  deleteWorktree(
+    sessionID: string,
+    preview: worktree.WorktreeDeletePreview,
+    confirmation: worktree.WorktreeDeleteConfirmationChoice,
+  ): Promise<worktree.WorktreeDeleteResult>;
   subscribeWorktreeSetup(
     setupOperationID: SetupOperationID,
     handler: WorktreeSetupEventHandler,

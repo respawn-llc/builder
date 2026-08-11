@@ -20,7 +20,7 @@ type RuntimeActivityRegistrySnapshotProvider interface {
 }
 
 type RuntimeReadModelFeedSnapshotProvider interface {
-	RuntimeReadModelFeedSnapshot(ctx context.Context, sessionID string, refs []clientui.RuntimeOperationRef) (clientui.RuntimeReadModelUpdate, error)
+	RuntimeReadModelFeedSnapshot(ctx context.Context, sessionID string) (clientui.RuntimeReadModelUpdate, error)
 }
 
 func NewStepLifecycleSink(sessionID string, publisher RuntimeReadModelPublisher) runtime.StepLifecycleSink {
@@ -85,13 +85,10 @@ func (s stepLifecycleSink) publish(cause string, terminal bool, resolver runtime
 
 func (s stepLifecycleSink) feedSnapshot(sessionID string, resolver runtimeactivity.ResolverSnapshot) (clientui.RuntimeReadModelUpdate, error) {
 	if provider, ok := s.publisher.(RuntimeReadModelFeedSnapshotProvider); ok {
-		return provider.RuntimeReadModelFeedSnapshot(context.Background(), sessionID, nil)
+		return provider.RuntimeReadModelFeedSnapshot(context.Background(), sessionID)
 	}
-	return runtimeactivity.BuildFeedSnapshot(sessionID, func() (runtimeactivity.SnapshotInput, error) {
-		return runtimeactivity.SnapshotInput{
-			Resolver:            resolver,
-			InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{},
-		}, nil
+	return runtimeactivity.BuildFeedSnapshot(sessionID, func() (runtimeactivity.ResolverSnapshot, error) {
+		return resolver, nil
 	})
 }
 
@@ -131,19 +128,14 @@ func (s stepLifecycleSink) handlePublicationFailure(cause string, terminal bool,
 
 func (s stepLifecycleSink) recoverySnapshot(sessionID string) (clientui.RuntimeReadModelUpdate, error) {
 	if provider, ok := s.publisher.(RuntimeReadModelFeedSnapshotProvider); ok {
-		return provider.RuntimeReadModelFeedSnapshot(context.Background(), sessionID, nil)
+		return provider.RuntimeReadModelFeedSnapshot(context.Background(), sessionID)
 	}
 	return terminalRecoverySnapshot(sessionID, s.registrySnapshot())
 }
 
 func terminalRecoverySnapshot(sessionID string, registry runtimeactivity.RegistrySnapshot) (clientui.RuntimeReadModelUpdate, error) {
-	update, err := runtimeactivity.BuildFeedSnapshot(sessionID, func() (runtimeactivity.SnapshotInput, error) {
-		return runtimeactivity.SnapshotInput{
-			Resolver: runtimeactivity.ResolverSnapshot{
-				Registry: registry,
-			},
-			InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{},
-		}, nil
+	update, err := runtimeactivity.BuildFeedSnapshot(sessionID, func() (runtimeactivity.ResolverSnapshot, error) {
+		return runtimeactivity.ResolverSnapshot{Registry: registry}, nil
 	})
 	if err != nil {
 		return clientui.RuntimeReadModelUpdate{}, err

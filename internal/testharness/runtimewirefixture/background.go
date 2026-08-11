@@ -23,6 +23,7 @@ func BackgroundCompletionEventWithOutput(id string, ownerSessionID string, root 
 	if err := os.WriteFile(sourcePath, []byte(output), 0o644); err != nil {
 		panic(fmt.Sprintf("write background shell fixture output: %v", err))
 	}
+	releasePath := filepath.Join(root, id+".fixture-release")
 	manager, err := shelltool.NewManager(shelltool.WithMinimumExecToBgTime(time.Millisecond))
 	if err != nil {
 		panic(fmt.Sprintf("create background shell manager fixture: %v", err))
@@ -37,7 +38,11 @@ func BackgroundCompletionEventWithOutput(id string, ownerSessionID string, root 
 		return true
 	})
 	result, err := manager.Start(context.Background(), shelltool.ExecRequest{
-		Command:        []string{"/bin/sh", "-c", fmt.Sprintf("sleep 0.02; cat %q; exit %d", sourcePath, exitCode)},
+		Command: []string{
+			"/bin/sh",
+			"-c",
+			fmt.Sprintf("while [ ! -f %q ]; do sleep 0.01; done; cat %q; exit %d", releasePath, sourcePath, exitCode),
+		},
 		DisplayCommand: "fixture background completion",
 		OwnerSessionID: ownerSessionID,
 		Workdir:        root,
@@ -48,6 +53,9 @@ func BackgroundCompletionEventWithOutput(id string, ownerSessionID string, root 
 	}
 	if !result.MovedToBackground {
 		panic("background shell fixture completed before background transition")
+	}
+	if err := os.WriteFile(releasePath, nil, 0o644); err != nil {
+		panic(fmt.Sprintf("release background shell fixture: %v", err))
 	}
 	select {
 	case event := <-events:

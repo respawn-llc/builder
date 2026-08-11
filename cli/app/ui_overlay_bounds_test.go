@@ -27,11 +27,13 @@ func TestBoundedOverlayFramesFitTerminal(t *testing.T) {
 	create := sizedTestUIModel(newWorktreeCreateControllerTestModel(t, nil), width, height)
 	create.worktrees.create.submitting = true
 	create.worktrees.create.setupEvent = &serverapi.WorktreeSetupEvent{
-		SetupOperationID:    serverapi.NewWorktreeSetupOperationID(),
-		SourceWorkspaceRoot: "/workspace/with/a/long/source/path",
-		WorktreeRoot:        "/workspace/with/a/long/worktree/path",
-		ScriptPath:          "/workspace/with/a/long/scripts/setup-worktree.sh",
-		Phase:               serverapi.WorktreeSetupPhaseStarted,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		Phase:            serverapi.WorktreeSetupPhaseStarted,
+		Started: &serverapi.WorktreeSetupStarted{
+			SourceWorkspaceRoot: "/workspace/with/a/long/source/path",
+			WorktreeRoot:        "/workspace/with/a/long/worktree/path",
+			ScriptPath:          "/workspace/with/a/long/scripts/setup-worktree.sh",
+		},
 	}
 	_ = create.activateSurface(uiSurfaceWorktree)
 

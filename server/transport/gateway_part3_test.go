@@ -567,7 +567,6 @@ func TestDecodeAndHandlePreservesWorktreeCreateOwnership(t *testing.T) {
 		protocol.Request{
 			ID: "worktree-create-error",
 			Params: mustJSON(t, serverapi.WorktreeCreateRequest{
-				ClientRequestID:  "request-1",
 				SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
 				SessionID:        "session",
 				BaseRef:          "HEAD",

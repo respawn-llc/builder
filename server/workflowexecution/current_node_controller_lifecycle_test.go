@@ -16,17 +16,56 @@ import (
 	"core/shared/runtimeids"
 )
 
+func TestCurrentTaskQuiescenceIgnoresLatchedWorkerFailure(t *testing.T) {
+	cause := errors.New("automatic assignment failed")
+	controller := &CurrentNodeController{workerErr: cause}
+	taskID := workflow.TaskID("task-board-read")
+
+	quiescence, err := controller.CurrentTaskQuiescence([]workflow.TaskID{taskID})
+	if err != nil {
+		t.Fatalf("CurrentTaskQuiescence: %v", err)
+	}
+	if !quiescence[taskID] {
+		t.Fatalf("task quiescence = %+v, want quiescent controller snapshot", quiescence)
+	}
+	if err := controller.EnsureTaskQuiescent(taskID); !errors.Is(err, cause) {
+		t.Fatalf("EnsureTaskQuiescent error = %v, want worker failure %v", err, cause)
+	}
+}
+
 func TestPostTurnCompactionReleasesMutationPermitWhileApprovalFenceIsActive(t *testing.T) {
+	source := currentNodeReferenceForControllerTest(t, "task-post-turn-fence", "node-source")
+	sessionID := runtimeids.NewSessionID()
+	scopeID := runtimeids.NewExecutionScopeID()
+	key, err := source.Key()
+	if err != nil {
+		t.Fatalf("source key: %v", err)
+	}
 	entered := make(chan struct{})
 	release := make(chan struct{})
-	controller, store, scopeID, sessionID := newPostTurnFinalizationControllerForTest(
-		t,
-		workflow.SessionReuseGuaranteedCACReuse,
-	)
-	source := controller.Snapshot().LiveScopes[0].CurrentNode
-	store.mu.Lock()
-	store.pendingApproval = workflow.PendingApproval{Source: source}
-	store.mu.Unlock()
+	controller := &CurrentNodeController{
+		store: &currentNodeControllerStore{
+			pendingApproval: workflow.PendingApproval{Source: source},
+		},
+		permit:    NewMutationPermit(),
+		authority: sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}),
+		liveByNode: map[workflow.CurrentNodeReferenceKey]runtimeids.ExecutionScopeID{
+			key: scopeID,
+		},
+		live: map[runtimeids.ExecutionScopeID]currentNodeLiveScope{
+			scopeID: {reference: source},
+		},
+		completed: map[runtimeids.ExecutionScopeID]struct{}{scopeID: {}},
+		postTurnFinalization: map[runtimeids.ExecutionScopeID]currentNodePostTurnFinalization{
+			scopeID: {
+				sessionID:      &sessionID,
+				classification: workflow.SessionReuseGuaranteedCACReuse,
+				reference:      source,
+			},
+		},
+		heldStarts: make(map[runtimeids.ExecutionScopeID][]currentNodeQueuedStart),
+	}
+	t.Cleanup(func() { _ = controller.authority.Close(context.Background()) })
 
 	finalizationDone := make(chan error, 1)
 	go func() {
@@ -44,7 +83,7 @@ func TestPostTurnCompactionReleasesMutationPermitWhileApprovalFenceIsActive(t *t
 	case <-time.After(time.Second):
 		t.Fatal("post-turn compaction did not start")
 	}
-	_, err := controller.ApplyPendingApproval(context.Background(), "approval")
+	_, err = controller.ApplyPendingApproval(context.Background(), "approval")
 	if !errors.Is(err, ErrTaskExecutionNotQuiescent) {
 		t.Fatalf("approval apply while post-turn compaction = %v, want %v", err, ErrTaskExecutionNotQuiescent)
 	}
@@ -104,7 +143,7 @@ func TestPostTurnFinalizationCompactionEligibilityMatrix(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			controller, _, scopeID, sessionID := newPostTurnFinalizationControllerForTest(
+			controller, scopeID, sessionID := newPostTurnFinalizationControllerForTest(
 				t,
 				workflow.SessionReuseClassification(test.classification),
 			)
@@ -126,13 +165,11 @@ func TestPostTurnFinalizationCompactionEligibilityMatrix(t *testing.T) {
 			if compactions != test.wantCompactions {
 				t.Fatalf("compactions = %d, want %d", compactions, test.wantCompactions)
 			}
-			if err := controller.FinalizeCurrentNodePostTurn(
-				context.Background(),
-				scopeID,
-				sessionID,
-				workflowruntime.PostCompletionRuntime{CompactionMode: "none"},
-			); err != nil {
-				t.Fatalf("repeat finalized post-turn: %v", err)
+			controller.mu.Lock()
+			_, finalizing := controller.postTurnFinalization[scopeID]
+			controller.mu.Unlock()
+			if finalizing {
+				t.Fatal("post-turn finalization fence remained after finalization")
 			}
 		})
 	}
@@ -140,7 +177,7 @@ func TestPostTurnFinalizationCompactionEligibilityMatrix(t *testing.T) {
 
 func TestPostTurnFinalizationSurfacesInvalidThresholdAndCancellation(t *testing.T) {
 	t.Run("invalid threshold", func(t *testing.T) {
-		controller, _, scopeID, sessionID := newPostTurnFinalizationControllerForTest(
+		controller, scopeID, sessionID := newPostTurnFinalizationControllerForTest(
 			t,
 			workflow.SessionReuseThresholdPossibleReuse,
 		)
@@ -150,21 +187,16 @@ func TestPostTurnFinalizationSurfacesInvalidThresholdAndCancellation(t *testing.
 		if err == nil {
 			t.Fatal("invalid pre-compaction threshold returned nil")
 		}
-		if retryErr := controller.FinalizeCurrentNodePostTurn(
-			context.Background(),
-			scopeID,
-			sessionID,
-			workflowruntime.PostCompletionRuntime{
-				PreCompactionTokens: 1,
-				CompactionMode:      "local",
-			},
-		); retryErr != nil {
-			t.Fatalf("retry valid post-turn finalization: %v", retryErr)
+		controller.mu.Lock()
+		_, finalizing := controller.postTurnFinalization[scopeID]
+		controller.mu.Unlock()
+		if !finalizing {
+			t.Fatal("invalid threshold cleared the finalization fence")
 		}
 	})
 
 	t.Run("cancellation is fatal", func(t *testing.T) {
-		controller, _, scopeID, sessionID := newPostTurnFinalizationControllerForTest(
+		controller, scopeID, sessionID := newPostTurnFinalizationControllerForTest(
 			t,
 			workflow.SessionReuseGuaranteedCACReuse,
 		)
@@ -202,163 +234,57 @@ func TestPostTurnFinalizationSurfacesInvalidThresholdAndCancellation(t *testing.
 func newPostTurnFinalizationControllerForTest(
 	t *testing.T,
 	classification workflow.SessionReuseClassification,
-) (*CurrentNodeController, *currentNodeControllerStore, runtimeids.ExecutionScopeID, runtimeids.SessionID) {
+) (*CurrentNodeController, runtimeids.ExecutionScopeID, runtimeids.SessionID) {
 	t.Helper()
-	shellPath, err := exec.LookPath("sh")
-	if err != nil {
-		t.Skipf("sh executable unavailable: %v", err)
-	}
 	source := currentNodeReferenceForControllerTest(t, "task-post-turn-matrix", "node-source")
 	sessionID := runtimeids.NewSessionID()
-	analysis := postTurnSessionReuseAnalysis(t, source, sessionID, classification)
-	store := &currentNodeControllerStore{
-		completion: workflowstore.CurrentNodeCompletionResult{
-			SessionReuse:           &analysis,
-			PostCompletionEligible: true,
-			PendingApproval:        &workflow.PendingApproval{Source: source},
+	scopeID := runtimeids.NewExecutionScopeID()
+	key, err := source.Key()
+	if err != nil {
+		t.Fatalf("source key: %v", err)
+	}
+	controller := &CurrentNodeController{
+		permit:    NewMutationPermit(),
+		authority: sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}),
+		liveByNode: map[workflow.CurrentNodeReferenceKey]runtimeids.ExecutionScopeID{
+			key: scopeID,
 		},
-		sessionReuse: []workflow.SessionReuseAssociation{{
-			SessionID:   sessionID,
-			CurrentNode: source,
-		}},
-	}
-	var controller *CurrentNodeController
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
-		}),
-	})
-	runner := &recordingScriptRunner{
-		authority: authority,
-		command: sessionruntime.ScriptCommand{
-			Path: shellPath,
-			Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
+		live: map[runtimeids.ExecutionScopeID]currentNodeLiveScope{
+			scopeID: {reference: source},
 		},
-		started: make(chan workflow.CurrentNodeReference, 1),
+		completed: map[runtimeids.ExecutionScopeID]struct{}{scopeID: {}},
+		postTurnFinalization: map[runtimeids.ExecutionScopeID]currentNodePostTurnFinalization{
+			scopeID: {
+				sessionID:      &sessionID,
+				classification: classification,
+				reference:      source,
+			},
+		},
+		heldStarts: make(map[runtimeids.ExecutionScopeID][]currentNodeQueuedStart),
 	}
-	controller = newCurrentNodeControllerForTest(t, store, runner, authority, 1)
-	t.Cleanup(func() {
-		if err := controller.Close(); err != nil {
-			t.Errorf("close controller: %v", err)
-		}
-		if err := authority.Close(context.Background()); err != nil {
-			t.Errorf("close authority: %v", err)
-		}
-	})
-	if err := startCurrentNodeForControllerTest(context.Background(), controller, store, source); err != nil {
-		t.Fatalf("start post-turn source: %v", err)
-	}
-	<-runner.started
-	waitForRunningCurrentNode(t, authority, source)
-	scopeID := singleLiveScope(t, controller, source)
-	if _, err := controller.CompleteCurrentNode(context.Background(), workflowruntime.CompletionRequest{
-		ScopeID:      scopeID,
-		SessionID:    &sessionID,
-		TransitionID: "next",
-	}); err != nil {
-		t.Fatalf("complete post-turn source: %v", err)
-	}
-	return controller, store, scopeID, sessionID
+	t.Cleanup(func() { _ = controller.authority.Close(context.Background()) })
+	return controller, scopeID, sessionID
 }
 
-func postTurnSessionReuseAnalysis(
-	t *testing.T,
-	source workflow.CurrentNodeReference,
-	sessionID runtimeids.SessionID,
-	classification workflow.SessionReuseClassification,
-) workflow.SessionReuseAnalysisInput {
-	t.Helper()
-	completed, err := workflow.NewCurrentNode(source, &sessionID, nil)
+func TestObserveWorkflowTaskExecutionsIgnoresLatchedWorkerFailure(t *testing.T) {
+	cause := errors.New("automatic assignment failed")
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller := &CurrentNodeController{
+		authority: authority,
+		workerErr: cause,
+	}
+	t.Cleanup(func() {
+		_ = authority.Close(context.Background())
+	})
+	taskID := workflow.TaskID("task-status-read")
+
+	observation, err := controller.ObserveWorkflowTaskExecutions([]workflow.TaskID{taskID})
 	if err != nil {
-		t.Fatalf("completed Current Node: %v", err)
+		t.Fatalf("ObserveWorkflowTaskExecutions: %v", err)
 	}
-	if classification == workflow.SessionReuseNone {
-		return workflow.SessionReuseAnalysisInput{CompletedCurrentNode: completed}
+	if !observation.Quiescence[taskID] {
+		t.Fatalf("task quiescence = %+v, want quiescent observation", observation.Quiescence)
 	}
-	review, err := workflow.NewNode(workflow.NodeIdentity{
-		WorkflowID:  currentNodeControllerTestWorkflowID,
-		ID:          "node-review",
-		Key:         "review",
-		DisplayName: "Review",
-	}, workflow.NodeKindAgent, workflow.NodeFields{SubagentRole: "reviewer"})
-	if err != nil {
-		t.Fatalf("review node: %v", err)
-	}
-	sourceNode, err := workflow.NewNode(workflow.NodeIdentity{
-		WorkflowID:  currentNodeControllerTestWorkflowID,
-		ID:          source.NodeID,
-		Key:         "source",
-		DisplayName: "Source",
-	}, workflow.NodeKindAgent, workflow.NodeFields{SubagentRole: "coder"})
-	if err != nil {
-		t.Fatalf("source node: %v", err)
-	}
-	accepted := workflow.Edge{
-		WorkflowID:        currentNodeControllerTestWorkflowID,
-		ID:                "edge-source-review",
-		Key:               "review",
-		TransitionGroupID: "group-source",
-		TargetNodeID:      "node-review",
-		ContextMode:       workflow.ContextModeNewSession,
-	}
-	cac := workflow.Edge{
-		WorkflowID:        currentNodeControllerTestWorkflowID,
-		ID:                "edge-review-source",
-		Key:               "source",
-		TransitionGroupID: "group-review",
-		TargetNodeID:      source.NodeID,
-		ContextMode:       workflow.ContextModeCompactAndContinueSession,
-		ContextSource:     workflow.ContextSource{Kind: workflow.ContextSourceSelectedNode, NodeKey: "source"},
-	}
-	analysis := workflow.SessionReuseAnalysisInput{
-		Workflow: workflow.Definition{
-			ID:          currentNodeControllerTestWorkflowID,
-			DisplayName: "Post-turn fixture",
-			Nodes:       []workflow.Node{sourceNode, review},
-			TransitionGroups: []workflow.TransitionGroup{{
-				WorkflowID:   currentNodeControllerTestWorkflowID,
-				ID:           "group-source",
-				SourceNodeID: source.NodeID,
-			}, {
-				WorkflowID:   currentNodeControllerTestWorkflowID,
-				ID:           "group-review",
-				SourceNodeID: "node-review",
-			}},
-			Edges: []workflow.Edge{accepted, cac},
-		},
-		AcceptedBranches:     []workflow.Edge{accepted},
-		CompletedCurrentNode: completed,
-	}
-	if classification == workflow.SessionReuseThresholdPossibleReuse {
-		terminal, terminalErr := workflow.NewNode(workflow.NodeIdentity{
-			WorkflowID:  currentNodeControllerTestWorkflowID,
-			ID:          "node-done",
-			Key:         "done",
-			DisplayName: "Done",
-		}, workflow.NodeKindTerminal, workflow.NodeFields{})
-		if terminalErr != nil {
-			t.Fatalf("terminal node: %v", terminalErr)
-		}
-		alternative := workflow.Edge{
-			WorkflowID:        currentNodeControllerTestWorkflowID,
-			ID:                "edge-source-done",
-			Key:               "done",
-			TransitionGroupID: "group-review-terminal",
-			TargetNodeID:      "node-done",
-			ContextMode:       workflow.ContextModeNewSession,
-		}
-		analysis.Workflow.Nodes = append(analysis.Workflow.Nodes, terminal)
-		analysis.Workflow.Edges = append(analysis.Workflow.Edges, alternative)
-		analysis.Workflow.TransitionGroups = append(
-			analysis.Workflow.TransitionGroups,
-			workflow.TransitionGroup{
-				WorkflowID:   currentNodeControllerTestWorkflowID,
-				ID:           "group-review-terminal",
-				SourceNodeID: "node-review",
-			},
-		)
-	}
-	return analysis
 }
 
 func TestCurrentNodeControllerCompletesRetainedSessionAfterScopeRetires(t *testing.T) {
@@ -469,7 +395,7 @@ func TestCurrentNodeControllerRecordsProtocolViolationsForRetainedSessionAfterSc
 	}
 }
 
-func TestCurrentNodeControllerEnsuresApprovalTargetBeforeStartingIt(t *testing.T) {
+func TestCurrentNodeControllerSteersApprovalTargetBeforeStartingIt(t *testing.T) {
 	target := currentNodeReferenceForControllerTest(t, "task-approval-steer", "node-target")
 	approval := workflow.PendingApproval{
 		ID:     workflow.NewApprovalID(),
@@ -487,11 +413,10 @@ func TestCurrentNodeControllerEnsuresApprovalTargetBeforeStartingIt(t *testing.T
 	}
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 	runner := &countingCurrentNodeRunner{}
-	ensurer := &recordingCurrentNodeAssignmentEnsurer{}
-	controller, err := NewCurrentNodeController(store, runner, authority, NewTaskMutationCoordinator(), CurrentNodeControllerConfig{
+	steerer := &recordingCurrentNodeAssignmentSteerer{}
+	controller, err := NewCurrentNodeController(store, runner, authority, NewMutationPermit(), CurrentNodeControllerConfig{
 		AgentConcurrency:  1,
-		AssignmentEnsurer: ensurer,
-		LifecycleReporter: newRecordingLifecycleFatalReporter(),
+		AssignmentSteerer: steerer,
 	})
 	if err != nil {
 		t.Fatalf("new current node controller: %v", err)
@@ -504,19 +429,19 @@ func TestCurrentNodeControllerEnsuresApprovalTargetBeforeStartingIt(t *testing.T
 	if _, err := controller.ApplyPendingApproval(context.Background(), approval.ID); err != nil {
 		t.Fatalf("ApplyPendingApproval: %v", err)
 	}
-	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		return len(runner.promptDeliveries()) == 1 && len(ensurer.references()) == 1
-	}, "approval target did not reach runner")
-	if got := ensurer.references(); !got[0].Equal(target) {
-		t.Fatalf("ensured assignments = %+v, want %v", got, target)
+	if got := steerer.references(); len(got) != 1 || !got[0].Equal(target) {
+		t.Fatalf("steered assignments = %+v, want %v", got, target)
 	}
+	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+		return len(runner.promptDeliveries()) == 1
+	}, "approval target did not reach runner")
 	if deliveries := runner.promptDeliveries(); len(deliveries) != 1 ||
-		deliveries[0] != workflowruntime.TaskPromptDeliveryAssignment {
-		t.Fatalf("runner prompt deliveries = %+v, want Assignment for admitted transition", deliveries)
+		deliveries[0] != workflowruntime.TaskPromptDeliveryResume {
+		t.Fatalf("runner prompt deliveries = %+v, want Resume after transition steer", deliveries)
 	}
 }
 
-func TestCurrentNodeControllerInterruptsApprovalTargetWhenAssignmentEnsureFails(t *testing.T) {
+func TestCurrentNodeControllerDoesNotMakeUnassignedApprovalTargetResumable(t *testing.T) {
 	target := currentNodeReferenceForControllerTest(t, "task-approval-steer-failure", "node-target")
 	approval := workflow.PendingApproval{
 		ID:     workflow.NewApprovalID(),
@@ -535,10 +460,9 @@ func TestCurrentNodeControllerInterruptsApprovalTargetWhenAssignmentEnsureFails(
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 	runner := &countingCurrentNodeRunner{}
 	cause := errors.New("assignment append failed")
-	controller, err := NewCurrentNodeController(store, runner, authority, NewTaskMutationCoordinator(), CurrentNodeControllerConfig{
+	controller, err := NewCurrentNodeController(store, runner, authority, NewMutationPermit(), CurrentNodeControllerConfig{
 		AgentConcurrency:  1,
-		AssignmentEnsurer: &recordingCurrentNodeAssignmentEnsurer{err: cause},
-		LifecycleReporter: newRecordingLifecycleFatalReporter(),
+		AssignmentSteerer: &recordingCurrentNodeAssignmentSteerer{err: cause},
 	})
 	if err != nil {
 		t.Fatalf("new current node controller: %v", err)
@@ -548,19 +472,205 @@ func TestCurrentNodeControllerInterruptsApprovalTargetWhenAssignmentEnsureFails(
 		_ = authority.Close(context.Background())
 	})
 
-	if _, err := controller.ApplyPendingApproval(context.Background(), approval.ID); err != nil {
-		t.Fatalf("ApplyPendingApproval: %v", err)
+	if _, err := controller.ApplyPendingApproval(context.Background(), approval.ID); !errors.Is(err, cause) {
+		t.Fatalf("ApplyPendingApproval error = %v, want %v", err, cause)
 	}
-	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		_, interrupted := store.interruption(target)
-		return interrupted
-	}, "assignment ensure failure did not interrupt Approval target")
+	time.Sleep(50 * time.Millisecond)
 	if starts := runner.starts(); starts != 0 {
 		t.Fatalf("runner starts = %d, want none after steering failure", starts)
 	}
-	if interruption, interrupted := store.interruption(target); !interrupted ||
-		interruption.reason != reasonCurrentNodeRuntimeStartFailed {
-		t.Fatalf("unassigned approval target interruption = %+v, %t, want runtime start failure", interruption, interrupted)
+	if interruption, interrupted := store.interruption(target); interrupted {
+		t.Fatalf("unassigned approval target was made resumable: %+v", interruption)
+	}
+}
+
+func TestCompleteIdleCurrentNodeRecoversSuccessorByAssignmentCommit(t *testing.T) {
+	cause := errors.New("assignment persistence failed")
+	for _, tc := range []struct {
+		name            string
+		outcomes        []currentNodeAssignmentSteerOutcome
+		wantInterrupted []bool
+	}{
+		{
+			name: "uncommitted assignment",
+			outcomes: []currentNodeAssignmentSteerOutcome{{
+				waitErr: cause,
+			}},
+			wantInterrupted: []bool{false},
+		},
+		{
+			name: "committed assignment with observer failure",
+			outcomes: []currentNodeAssignmentSteerOutcome{{
+				receipt: session.CommitReceipt{Committed: true},
+				waitErr: cause,
+			}},
+			wantInterrupted: []bool{true},
+		},
+		{
+			name: "later fanout assignment preparation failure",
+			outcomes: []currentNodeAssignmentSteerOutcome{
+				{receipt: session.CommitReceipt{Committed: true}},
+				{steerErr: cause},
+			},
+			wantInterrupted: []bool{true, false},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source := currentNodeReferenceForControllerTest(t, "task-idle-completion-steer-failure", "node-source")
+			targets := []workflowstore.CurrentNodeAutomaticIntent{
+				{CurrentNode: currentNodeReferenceForControllerTest(t, "task-idle-completion-steer-failure", "node-target-a"), NodeKind: workflow.NodeKindAgent},
+				{CurrentNode: currentNodeReferenceForControllerTest(t, "task-idle-completion-steer-failure", "node-target-b"), NodeKind: workflow.NodeKindAgent},
+			}
+			targets = targets[:len(tc.wantInterrupted)]
+			sourceNode := workflow.CurrentNode{
+				Reference:  source,
+				Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
+			}
+			store := &currentNodeControllerStore{
+				idleResolved: &sourceNode,
+				completion: workflowstore.CurrentNodeCompletionResult{
+					AutomaticIntents: targets,
+				},
+			}
+			authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+			runner := &countingCurrentNodeRunner{}
+			controller, err := NewCurrentNodeController(store, runner, authority, NewMutationPermit(), CurrentNodeControllerConfig{
+				AgentConcurrency: 1,
+				AssignmentSteerer: &recordingCurrentNodeAssignmentSteerer{
+					outcomes: tc.outcomes,
+				},
+			})
+			if err != nil {
+				t.Fatalf("new current node controller: %v", err)
+			}
+			t.Cleanup(func() {
+				_ = controller.Close()
+				_ = authority.Close(context.Background())
+			})
+
+			taskID := source.TaskID
+			if _, err := controller.CompleteIdleCurrentNode(
+				context.Background(),
+				workflowstore.IdleCurrentNodeSelector{TaskID: &taskID},
+				"next",
+				nil,
+				"forced completion",
+			); !errors.Is(err, cause) {
+				t.Fatalf("CompleteIdleCurrentNode error = %v, want %v", err, cause)
+			}
+			if starts := runner.starts(); starts != 0 {
+				t.Fatalf("runner starts = %d, want none after assignment failure", starts)
+			}
+			for index, intent := range targets {
+				target := intent.CurrentNode
+				interruption, interrupted := store.interruption(target)
+				if interrupted != tc.wantInterrupted[index] {
+					t.Fatalf(
+						"forced-completion successor %v interrupted = %t (%+v), want %t",
+						target,
+						interrupted,
+						interruption,
+						tc.wantInterrupted[index],
+					)
+				}
+				if interrupted &&
+					(interruption.reason != reasonCurrentNodeRuntimeStartFailed ||
+						interruption.detail.Code != string(reasonCurrentNodeRuntimeStartFailed)) {
+					t.Fatalf("forced-completion successor %v interruption = %+v, want runtime start failure", target, interruption)
+				}
+			}
+		})
+	}
+}
+
+func TestCompleteIdleCurrentNodeRetainsLateAssignmentAfterCallerCancellation(t *testing.T) {
+	shellPath, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("sh executable unavailable: %v", err)
+	}
+	source := currentNodeReferenceForControllerTest(t, "task-idle-completion-late-assignment", "node-source")
+	target := currentNodeReferenceForControllerTest(t, "task-idle-completion-late-assignment", "node-target")
+	sourceNode := workflow.CurrentNode{
+		Reference:  source,
+		Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
+	}
+	store := &currentNodeControllerStore{
+		idleResolved: &sourceNode,
+		completion: workflowstore.CurrentNodeCompletionResult{
+			AutomaticIntents: []workflowstore.CurrentNodeAutomaticIntent{{CurrentNode: target, NodeKind: workflow.NodeKindAgent}},
+		},
+	}
+	release := make(chan struct{})
+	waitStarted := make(chan struct{})
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	runner := &recordingScriptRunner{
+		authority: authority,
+		command: sessionruntime.ScriptCommand{
+			Path: shellPath,
+			Args: []string{"-c", "while :; do sleep 1; done"},
+		},
+		started: make(chan workflow.CurrentNodeReference, 1),
+	}
+	controller, err := NewCurrentNodeController(store, runner, authority, NewMutationPermit(), CurrentNodeControllerConfig{
+		AgentConcurrency: 1,
+		AssignmentSteerer: lateCommitCurrentNodeAssignmentSteerer{
+			release: release,
+			started: waitStarted,
+		},
+	})
+	if err != nil {
+		t.Fatalf("new current node controller: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	taskID := source.TaskID
+	completed := make(chan error, 1)
+	go func() {
+		_, completeErr := controller.CompleteIdleCurrentNode(
+			ctx,
+			workflowstore.IdleCurrentNodeSelector{TaskID: &taskID},
+			"next",
+			nil,
+			"forced completion",
+		)
+		completed <- completeErr
+	}()
+	select {
+	case <-waitStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("assignment wait did not start")
+	}
+	cancel()
+	select {
+	case err := <-completed:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("CompleteIdleCurrentNode error = %v, want context canceled", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("CompleteIdleCurrentNode did not return after caller cancellation")
+	}
+	select {
+	case started := <-runner.started:
+		t.Fatalf("runner started %v before late assignment commit", started)
+	default:
+	}
+
+	close(release)
+	select {
+	case started := <-runner.started:
+		if !started.Equal(target) {
+			t.Fatalf("runner started %v after late assignment commit, want %v", started, target)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("late-assigned successor did not start")
+	}
+	if interruption, interrupted := store.interruption(target); interrupted {
+		t.Fatalf("late-assigned successor was interrupted: %+v", interruption)
 	}
 }
 
@@ -619,30 +729,16 @@ func TestCurrentNodeControllerHoldsApprovalTargetUntilCompletedSourceScopeRetire
 		CurrentNode: queuedAgent,
 		NodeKind:    workflow.NodeKindAgent,
 	}})
-	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		snapshot := controller.Snapshot()
-		return hasLiveCurrentNode(snapshot, source) && hasAutomaticCurrentNodeIntent(snapshot, queuedAgent)
-	}, "approval source did not hold Agent capacity while queued Agent remained queued")
-	sourceScope := singleLiveScope(t, controller, source)
-	sourceSessionID := runtimeids.NewSessionID()
+	waitForRunningCurrentNode(t, authority, source)
+	sourceScope := singleLiveScope(t, authority, source)
 	if _, err := controller.CompleteCurrentNode(context.Background(), workflowruntime.CompletionRequest{
 		ScopeID:      sourceScope,
-		SessionID:    &sourceSessionID,
 		TransitionID: "review",
 	}); err != nil {
 		t.Fatalf("complete approval source: %v", err)
 	}
 	if _, err := controller.ApplyPendingApproval(context.Background(), approval.ID); err != nil {
 		t.Fatalf("ApplyPendingApproval: %v", err)
-	}
-	snapshot := controller.Snapshot()
-	if len(snapshot.HeldIntents) != 1 ||
-		!snapshot.HeldIntents[0].CurrentNode.Equal(target) ||
-		snapshot.HeldIntents[0].Automatic {
-		t.Fatalf("held approval starts = %+v, want explicit target held by source scope", snapshot.HeldIntents)
-	}
-	if !hasAutomaticCurrentNodeIntent(snapshot, queuedAgent) {
-		t.Fatalf("automatic agent queue = %+v, want queued agent while source occupies capacity", snapshot.AutomaticIntents)
 	}
 	select {
 	case started := <-runner.started:
@@ -672,17 +768,8 @@ func TestCurrentNodeControllerHoldsApprovalTargetUntilCompletedSourceScopeRetire
 			t.Fatal("approval target did not start after source retirement")
 		}
 	}
-	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		for _, live := range controller.Snapshot().LiveScopes {
-			if live.CurrentNode.Equal(target) {
-				return !live.Automatic
-			}
-		}
-		return false
-	}, "approval target did not enter an explicit live scope")
-	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		return hasLiveCurrentNode(controller.Snapshot(), queuedAgent)
-	}, "queued Agent did not enter a live automatic scope")
+	waitForRunningCurrentNode(t, authority, target)
+	waitForRunningCurrentNode(t, authority, queuedAgent)
 }
 
 func TestCurrentNodeControllerHoldsSuccessorUntilSourceScopeRetires(t *testing.T) {
@@ -719,10 +806,13 @@ func TestCurrentNodeControllerHoldsSuccessorUntilSourceScopeRetires(t *testing.T
 		},
 		started: make(chan workflow.CurrentNodeReference, 4),
 	}
-	controller, err = NewCurrentNodeController(store, runner, authority, NewTaskMutationCoordinator(), CurrentNodeControllerConfig{
-		AgentConcurrency:  1,
-		LifecycleReporter: newRecordingLifecycleFatalReporter(),
-		AssignmentEnsurer: noOpCurrentNodeAssignmentEnsurer{},
+	assignmentDeadline := make(chan time.Time, 1)
+	controller, err = NewCurrentNodeController(store, runner, authority, NewMutationPermit(), CurrentNodeControllerConfig{
+		AgentConcurrency: 1,
+		AssignmentSteerer: deadlineRecordingCurrentNodeAssignmentSteerer{
+			reference: successor,
+			deadline:  assignmentDeadline,
+		},
 	})
 	if err != nil {
 		t.Fatalf("new current node controller: %v", err)
@@ -743,18 +833,14 @@ func TestCurrentNodeControllerHoldsSuccessorUntilSourceScopeRetires(t *testing.T
 		t.Fatalf("first started current node = %v, want source %v", got, source)
 	}
 	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		return hasLiveCurrentNode(controller.Snapshot(), source)
+		return hasLiveCurrentNode(authority, source)
 	}, "source did not become live")
-	sourceScope := singleLiveScope(t, controller, source)
+	sourceScope := singleLiveScope(t, authority, source)
 	if _, err := controller.CompleteCurrentNode(context.Background(), workflowruntime.CompletionRequest{
 		ScopeID:      sourceScope,
 		TransitionID: "next",
 	}); err != nil {
 		t.Fatalf("complete source: %v", err)
-	}
-	snapshot := controller.Snapshot()
-	if len(snapshot.HeldIntents) != 1 || !snapshot.HeldIntents[0].CurrentNode.Equal(successor) {
-		t.Fatalf("held intents = %+v, want successor held by source retirement", snapshot.HeldIntents)
 	}
 	select {
 	case started := <-runner.started:
@@ -765,10 +851,6 @@ func TestCurrentNodeControllerHoldsSuccessorUntilSourceScopeRetires(t *testing.T
 		CompactionMode: "none",
 	}); err != nil {
 		t.Fatalf("finalize source post-turn: %v", err)
-	}
-	if snapshot := controller.Snapshot(); len(snapshot.HeldIntents) != 1 ||
-		!snapshot.HeldIntents[0].CurrentNode.Equal(successor) {
-		t.Fatalf("post-finalization held intents = %+v, want successor held until source retirement", snapshot.HeldIntents)
 	}
 	select {
 	case started := <-runner.started:
@@ -784,216 +866,21 @@ func TestCurrentNodeControllerHoldsSuccessorUntilSourceScopeRetires(t *testing.T
 		t.Fatalf("stop source: %v", err)
 	}
 	select {
+	case deadline := <-assignmentDeadline:
+		remaining := time.Until(deadline)
+		if remaining < interruptCleanupTimeout-time.Second || remaining > interruptCleanupTimeout {
+			t.Fatalf("finalization assignment wait deadline remaining = %s, want %s", remaining, interruptCleanupTimeout)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("finalization did not wait for successor assignment with a deadline")
+	}
+	select {
 	case started := <-runner.started:
 		if !started.Equal(successor) {
 			t.Fatalf("started successor = %v, want %v", started, successor)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("successor did not start after source retirement")
-	}
-}
-
-func TestCurrentNodeControllerAgentPostTurnFailureInterruptsCommittedSuccessorBeforePredecessorRetires(t *testing.T) {
-	shellPath, err := exec.LookPath("sh")
-	if err != nil {
-		t.Skipf("sh executable unavailable: %v", err)
-	}
-	source := currentNodeReferenceForControllerTest(t, "task-agent-post-turn-failure", "node-source")
-	successor := currentNodeReferenceForControllerTest(t, "task-agent-post-turn-failure", "node-successor")
-	sessionID := runtimeids.NewSessionID()
-	store := &currentNodeControllerStore{
-		completion: workflowstore.CurrentNodeCompletionResult{
-			AutomaticIntents: []workflowstore.CurrentNodeAutomaticIntent{{
-				CurrentNode: successor,
-				NodeKind:    workflow.NodeKindAgent,
-			}},
-			SessionReuse: &workflow.SessionReuseAnalysisInput{
-				CompletedCurrentNode: workflow.CurrentNode{
-					Reference: source,
-					SessionID: &sessionID,
-				},
-			},
-			PostCompletionEligible: true,
-		},
-	}
-	var controller *CurrentNodeController
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
-		}),
-	})
-	runner := &recordingScriptRunner{
-		authority: authority,
-		command: sessionruntime.ScriptCommand{
-			Path: shellPath,
-			Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
-		},
-		started: make(chan workflow.CurrentNodeReference, 2),
-	}
-	controller = newCurrentNodeControllerForTest(t, store, runner, authority, 1)
-	t.Cleanup(func() {
-		if err := controller.Close(); err != nil {
-			t.Errorf("close controller: %v", err)
-		}
-		if err := authority.Close(context.Background()); err != nil {
-			t.Errorf("close authority: %v", err)
-		}
-	})
-
-	if err := startCurrentNodeForControllerTest(context.Background(), controller, store, source); err != nil {
-		t.Fatalf("start source: %v", err)
-	}
-	<-runner.started
-	waitForRunningCurrentNode(t, authority, source)
-	scopeID := singleLiveScope(t, controller, source)
-	if _, err := controller.CompleteCurrentNode(context.Background(), workflowruntime.CompletionRequest{
-		ScopeID:      scopeID,
-		SessionID:    &sessionID,
-		TransitionID: "next",
-	}); err != nil {
-		t.Fatalf("complete source: %v", err)
-	}
-	finalizationErr := controller.FinalizeCurrentNodePostTurn(
-		context.Background(),
-		scopeID,
-		runtimeids.NewSessionID(),
-		workflowruntime.PostCompletionRuntime{CompactionMode: "none"},
-	)
-	if finalizationErr == nil {
-		t.Fatal("mismatched post-turn finalization returned nil")
-	}
-	if err := controller.FailCurrentNodeScope(
-		context.Background(),
-		scopeID,
-		"workflow_runtime_failed",
-		finalizationErr,
-	); err != nil {
-		t.Fatalf("fail completed source scope: %v", err)
-	}
-	handle, live := authority.ExecutionByScope(scopeID)
-	if !live {
-		t.Fatal("completed predecessor retired before explicit stop")
-	}
-	if err := handle.Stop(context.Background()); err != nil {
-		t.Fatalf("stop completed predecessor: %v", err)
-	}
-
-	interruption, interrupted := store.interruption(successor)
-	if !interrupted || interruption.reason != "workflow_runtime_failed" {
-		t.Fatalf("successor interruption = %+v, interrupted = %t", interruption, interrupted)
-	}
-	select {
-	case started := <-runner.started:
-		t.Fatalf("failed Agent released committed successor %v", started)
-	case <-time.After(100 * time.Millisecond):
-	}
-}
-
-func TestCurrentNodeControllerAgentPostTurnFailureRetainsSuccessorUntilInterruptionCommits(t *testing.T) {
-	shellPath, err := exec.LookPath("sh")
-	if err != nil {
-		t.Skipf("sh executable unavailable: %v", err)
-	}
-	source := currentNodeReferenceForControllerTest(t, "task-agent-post-turn-persistence", "node-source")
-	successor := currentNodeReferenceForControllerTest(t, "task-agent-post-turn-persistence", "node-successor")
-	sessionID := runtimeids.NewSessionID()
-	persistenceErr := errors.New("interrupt successor persistence failed")
-	store := &currentNodeControllerStore{
-		completion: workflowstore.CurrentNodeCompletionResult{
-			AutomaticIntents: []workflowstore.CurrentNodeAutomaticIntent{{
-				CurrentNode: successor,
-				NodeKind:    workflow.NodeKindAgent,
-			}},
-			SessionReuse: &workflow.SessionReuseAnalysisInput{
-				CompletedCurrentNode: workflow.CurrentNode{
-					Reference: source,
-					SessionID: &sessionID,
-				},
-			},
-			PostCompletionEligible: true,
-		},
-	}
-	var controller *CurrentNodeController
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
-		}),
-	})
-	runner := &recordingScriptRunner{
-		authority: authority,
-		command: sessionruntime.ScriptCommand{
-			Path: shellPath,
-			Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
-		},
-		started: make(chan workflow.CurrentNodeReference, 2),
-	}
-	controller = newCurrentNodeControllerForTest(t, store, runner, authority, 1)
-	t.Cleanup(func() {
-		store.setInterruptError(nil)
-		if err := controller.Close(); err != nil && !errors.Is(err, persistenceErr) {
-			t.Errorf("close controller: %v", err)
-		}
-		if err := authority.Close(context.Background()); err != nil {
-			t.Errorf("close authority: %v", err)
-		}
-	})
-
-	if err := startCurrentNodeForControllerTest(context.Background(), controller, store, source); err != nil {
-		t.Fatalf("start source: %v", err)
-	}
-	<-runner.started
-	waitForRunningCurrentNode(t, authority, source)
-	scopeID := singleLiveScope(t, controller, source)
-	if _, err := controller.CompleteCurrentNode(context.Background(), workflowruntime.CompletionRequest{
-		ScopeID:      scopeID,
-		SessionID:    &sessionID,
-		TransitionID: "next",
-	}); err != nil {
-		t.Fatalf("complete source: %v", err)
-	}
-	finalizationErr := controller.FinalizeCurrentNodePostTurn(
-		context.Background(),
-		scopeID,
-		runtimeids.NewSessionID(),
-		workflowruntime.PostCompletionRuntime{CompactionMode: "none"},
-	)
-	if finalizationErr == nil {
-		t.Fatal("mismatched post-turn finalization returned nil")
-	}
-	store.setInterruptError(persistenceErr)
-	if err := controller.FailCurrentNodeScope(
-		context.Background(),
-		scopeID,
-		"workflow_runtime_failed",
-		finalizationErr,
-	); !errors.Is(err, persistenceErr) {
-		t.Fatalf("first failure disposition error = %v, want %v", err, persistenceErr)
-	}
-	snapshot := controller.Snapshot()
-	if len(snapshot.HeldIntents) != 1 || !snapshot.HeldIntents[0].CurrentNode.Equal(successor) {
-		t.Fatalf("held successors after failed persistence = %+v, want %v", snapshot.HeldIntents, successor)
-	}
-	if observation, err := controller.ObserveCurrentNodeCompletion(
-		context.Background(),
-		workflowruntime.CompletionObservationRequest{ScopeID: scopeID},
-	); err != nil || !observation.Completed {
-		t.Fatalf("completion observation after failed disposition = %+v, %v", observation, err)
-	}
-
-	store.setInterruptError(nil)
-	if err := controller.FailCurrentNodeScope(
-		context.Background(),
-		scopeID,
-		"workflow_runtime_failed",
-		finalizationErr,
-	); err == nil {
-		t.Fatal("fatal successor interruption persistence failure allowed another lifecycle disposition")
-	} else if !errors.Is(err, persistenceErr) {
-		t.Fatalf("retry failure disposition error = %v, want fatal cause %v", err, persistenceErr)
-	}
-	if snapshot := controller.Snapshot(); len(snapshot.HeldIntents) != 1 ||
-		!snapshot.HeldIntents[0].CurrentNode.Equal(successor) {
-		t.Fatalf("fatal persistence recovery released successor ownership: %+v", snapshot.HeldIntents)
 	}
 }
 
@@ -1040,7 +927,7 @@ func TestCurrentNodeControllerCompletionAndTaskInterruptDoNotDeadlockOrReleaseSu
 	}
 	<-runner.started
 	waitForRunningCurrentNode(t, authority, source)
-	sourceScope := singleLiveScope(t, controller, source)
+	sourceScope := singleLiveScope(t, authority, source)
 	completionDone := make(chan error, 1)
 	go func() {
 		_, err := controller.CompleteCurrentNode(context.Background(), workflowruntime.CompletionRequest{
@@ -1106,11 +993,10 @@ func TestCurrentNodeControllerCompletesSuccessfulScriptBeforeScopeRetirement(t *
 		}),
 	})
 	runner := &completingScriptRunner{
-		authority:   authority,
-		source:      source,
-		shellPath:   shellPath,
-		started:     make(chan workflow.CurrentNodeReference, 2),
-		sourceScope: make(chan runtimeids.ExecutionScopeID, 1),
+		authority: authority,
+		source:    source,
+		shellPath: shellPath,
+		started:   make(chan workflow.CurrentNodeReference, 2),
 	}
 	controller = newCurrentNodeControllerForTest(t, store, runner, authority, 1)
 	t.Cleanup(func() {
@@ -1125,12 +1011,6 @@ func TestCurrentNodeControllerCompletesSuccessfulScriptBeforeScopeRetirement(t *
 	if err := startCurrentNodeForControllerTest(context.Background(), controller, store, source); err != nil {
 		t.Fatalf("start script current node: %v", err)
 	}
-	var sourceScope runtimeids.ExecutionScopeID
-	select {
-	case sourceScope = <-runner.sourceScope:
-	case <-time.After(3 * time.Second):
-		t.Fatal("successful Script did not enter its completion callback")
-	}
 	select {
 	case started := <-runner.started:
 		if !started.Equal(successor) {
@@ -1144,185 +1024,5 @@ func TestCurrentNodeControllerCompletesSuccessfulScriptBeforeScopeRetirement(t *
 	}
 	if interruption, interrupted := store.interruption(source); interrupted {
 		t.Fatalf("successful script source was interrupted: %+v", interruption)
-	}
-	if err := controller.FailCurrentNodeScope(
-		context.Background(),
-		sourceScope,
-		"workflow_script_cleanup_diagnostic",
-		errors.New("late script cleanup diagnostic"),
-	); !errors.Is(err, sessionruntime.ErrExecutionNoLongerLive) {
-		t.Fatalf("late Script cleanup diagnostic error = %v, want execution no longer live", err)
-	}
-	if interruption, interrupted := store.interruption(successor); interrupted {
-		t.Fatalf("late Script cleanup diagnostic interrupted successor: %+v", interruption)
-	}
-	if !hasLiveCurrentNode(controller.Snapshot(), successor) {
-		t.Fatal("late Script cleanup diagnostic removed the successor Run")
-	}
-}
-
-func TestCurrentNodeControllerRetiringDispositionReadIsInertInsteadOfQueued(t *testing.T) {
-	shellPath, err := exec.LookPath("sh")
-	if err != nil {
-		t.Skipf("sh executable unavailable: %v", err)
-	}
-	reference := currentNodeReferenceForControllerTest(t, "task-retiring-read", "node-script")
-	store := &currentNodeControllerStore{
-		interruptStarted: make(chan struct{}),
-		interruptRelease: make(chan struct{}),
-	}
-	var controller *CurrentNodeController
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
-		}),
-	})
-	runner := &recordingScriptRunner{
-		authority: authority,
-		command: sessionruntime.ScriptCommand{
-			Path: shellPath,
-			Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
-		},
-		started: make(chan workflow.CurrentNodeReference, 1),
-	}
-	controller = newCurrentNodeControllerForTest(t, store, runner, authority, 1)
-	releaseInterruption := func() {
-		select {
-		case <-store.interruptRelease:
-		default:
-			close(store.interruptRelease)
-		}
-	}
-	t.Cleanup(func() {
-		releaseInterruption()
-		if err := controller.Close(); err != nil {
-			t.Errorf("close controller: %v", err)
-		}
-		if err := authority.Close(context.Background()); err != nil {
-			t.Errorf("close authority: %v", err)
-		}
-	})
-
-	if err := startCurrentNodeForControllerTest(context.Background(), controller, store, reference); err != nil {
-		t.Fatalf("start Script Current Node: %v", err)
-	}
-	<-runner.started
-	waitForRunningCurrentNode(t, authority, reference)
-	scopeID := singleLiveScope(t, controller, reference)
-	handle, live := authority.ExecutionByScope(scopeID)
-	if !live {
-		t.Fatal("Script Exact execution is absent")
-	}
-	handle.RequestStop()
-	select {
-	case <-store.interruptStarted:
-	case <-time.After(3 * time.Second):
-		t.Fatal("outcome-less finalization did not enter durable disposition")
-	}
-
-	observation, err := controller.ObserveWorkflowTaskExecutions([]workflow.TaskID{reference.TaskID})
-	if err != nil {
-		t.Fatalf("ObserveWorkflowTaskExecutions during retiring disposition: %v", err)
-	}
-	if snapshot := observation.Runs[reference.TaskID]; len(snapshot.Queued) != 0 ||
-		len(snapshot.InterruptibleLaunching) != 0 {
-		t.Fatalf("retiring Run projected queued: %+v", snapshot)
-	}
-	if executions := observation.Executions[reference.TaskID].Executions; len(executions) != 0 {
-		t.Fatalf("retired Exact remained live in observation: %+v", executions)
-	}
-
-	releaseInterruption()
-	_, _ = handle.Wait(context.Background())
-	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		return !hasLiveCurrentNode(controller.Snapshot(), reference)
-	}, "retiring Run did not finish after durable interruption")
-}
-
-func TestCurrentNodeControllerScriptSuccessorInterruptionFailureRetainsOwnershipThroughCleanup(t *testing.T) {
-	shellPath, err := exec.LookPath("sh")
-	if err != nil {
-		t.Skipf("sh executable unavailable: %v", err)
-	}
-	source := currentNodeReferenceForControllerTest(t, "task-script-persistence-failure", "node-source")
-	successor := currentNodeReferenceForControllerTest(t, "task-script-persistence-failure", "node-successor")
-	persistenceErr := errors.New("interrupt Script successor persistence failed")
-	store := &currentNodeControllerStore{completion: workflowstore.CurrentNodeCompletionResult{
-		Mutation: workflow.CurrentNodeMutationResult{
-			Removed: []workflow.CurrentNodeReference{source},
-			Created: []workflow.CurrentNode{{
-				Reference:  successor,
-				Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
-			}},
-		},
-		AutomaticIntents: []workflowstore.CurrentNodeAutomaticIntent{{
-			CurrentNode: successor,
-			NodeKind:    workflow.NodeKindAgent,
-		}},
-	}}
-	var controller *CurrentNodeController
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
-		}),
-	})
-	runner := &recordingScriptRunner{
-		authority: authority,
-		command: sessionruntime.ScriptCommand{
-			Path: shellPath,
-			Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
-		},
-		started: make(chan workflow.CurrentNodeReference, 2),
-	}
-	controller = newCurrentNodeControllerForTest(t, store, runner, authority, 1)
-	t.Cleanup(func() {
-		store.setInterruptError(nil)
-		if err := controller.Close(); err != nil && !errors.Is(err, persistenceErr) {
-			t.Errorf("close controller: %v", err)
-		}
-		if err := authority.Close(context.Background()); err != nil {
-			t.Errorf("close authority: %v", err)
-		}
-	})
-
-	if err := startCurrentNodeForControllerTest(context.Background(), controller, store, source); err != nil {
-		t.Fatalf("start Script predecessor: %v", err)
-	}
-	<-runner.started
-	waitForRunningCurrentNode(t, authority, source)
-	scopeID := singleLiveScope(t, controller, source)
-	if _, err := controller.CompleteCurrentNode(context.Background(), workflowruntime.CompletionRequest{
-		ScopeID:      scopeID,
-		TransitionID: "next",
-	}); err != nil {
-		t.Fatalf("complete Script predecessor: %v", err)
-	}
-	store.setInterruptError(persistenceErr)
-	if err := controller.FailCurrentNodeScope(
-		context.Background(),
-		scopeID,
-		"workflow_script_cleanup_failed",
-		errors.New("late Script cleanup failure"),
-	); !errors.Is(err, persistenceErr) {
-		t.Fatalf("Script successor interruption error = %v, want %v", err, persistenceErr)
-	}
-	if snapshot := controller.Snapshot(); !hasLiveCurrentNode(snapshot, source) ||
-		!hasAutomaticCurrentNodeIntent(snapshot, successor) {
-		t.Fatalf("Script persistence failure ownership = %+v, want predecessor and queued successor", snapshot)
-	}
-	handle, live := authority.ExecutionByScope(scopeID)
-	if !live {
-		t.Fatal("Script predecessor retired before cleanup")
-	}
-	if err := handle.Stop(context.Background()); err != nil {
-		t.Fatalf("stop Script predecessor: %v", err)
-	}
-	if snapshot := controller.Snapshot(); !hasAutomaticCurrentNodeIntent(snapshot, successor) {
-		t.Fatalf("Script cleanup released successor after fatal persistence failure: %+v", snapshot)
-	}
-	select {
-	case started := <-runner.started:
-		t.Fatalf("Script cleanup admitted successor %v after fatal persistence failure", started)
-	case <-time.After(100 * time.Millisecond):
 	}
 }

@@ -13,6 +13,23 @@ import (
 
 const queuedUserSubmissionBusyRetryDelay = 25 * time.Millisecond
 
+// CommandAcceptance serializes caller cancellation with a candidate mutation that reports whether it committed.
+type CommandAcceptance func(commit func() (bool, error)) (bool, error)
+
+func runCommandAcceptance(accept CommandAcceptance, commit func() (bool, error)) (bool, error) {
+	if accept == nil {
+		return commit()
+	}
+	return accept(commit)
+}
+
+func commandAcceptanceResult(committed bool, err error) error {
+	if committed || err != nil {
+		return err
+	}
+	return context.Canceled
+}
+
 func (e *Engine) RunWhenIdle(ctx context.Context, activeKind ActiveKind, fn func() error) error {
 	if fn == nil {
 		return nil
@@ -149,29 +166,49 @@ func (e *Engine) SubmitUserMessageOrSteerWithAcceptedHook(ctx context.Context, t
 }
 
 func (e *Engine) SubmitUserMessageOrSteerWithHooks(ctx context.Context, text string, clientRequestID string, onActive func(), onAccepted func(queued bool)) (assistant llm.Message, queued *QueuedUserMessage, err error) {
-	if strings.TrimSpace(text) == "" {
-		return llm.Message{}, nil, errors.New("empty message")
+	result, queued, err := e.SubmitUserMessageOrSteerWithOutcomeHooks(ctx, text, clientRequestID, onActive, onAccepted)
+	if result.FinalAnswer != nil {
+		assistant = *result.FinalAnswer
 	}
-	msg, err := e.SubmitUserMessageWithHooks(ctx, text, onActive, func() {
+	return assistant, queued, err
+}
+
+func (e *Engine) SubmitUserMessageOrSteerWithOutcomeHooks(ctx context.Context, text string, clientRequestID string, onActive func(), onAccepted func(queued bool)) (result UserTurnResult, queued *QueuedUserMessage, err error) {
+	return e.submitUserMessageOrSteerWithOutcome(ctx, text, clientRequestID, onActive, onAccepted, nil)
+}
+
+func (e *Engine) SubmitUserMessageOrSteerWithAcceptance(ctx context.Context, text string, clientRequestID string, accept CommandAcceptance) (result UserTurnResult, queued *QueuedUserMessage, err error) {
+	return e.submitUserMessageOrSteerWithOutcome(ctx, text, clientRequestID, nil, nil, accept)
+}
+
+func (e *Engine) submitUserMessageOrSteerWithOutcome(ctx context.Context, text string, clientRequestID string, onActive func(), onAccepted func(queued bool), accept CommandAcceptance) (result UserTurnResult, queued *QueuedUserMessage, err error) {
+	if strings.TrimSpace(text) == "" {
+		return UserTurnResult{}, nil, errors.New("empty message")
+	}
+	result, err = e.submitUserMessageWithOutcome(ctx, text, onActive, func() {
 		if onAccepted != nil {
 			onAccepted(false)
 		}
-	})
+	}, accept)
 	if errors.Is(err, ErrAgentBusy) {
-		item, queueErr := e.QueueUserMessageForAutoDrain(text, clientRequestID)
+		item, queueErr := e.QueueUserMessageForAutoDrainWithAcceptance(text, clientRequestID, accept)
 		if queueErr != nil {
-			return llm.Message{}, nil, queueErr
+			return UserTurnResult{}, nil, queueErr
 		}
 		if onAccepted != nil {
 			onAccepted(true)
 		}
-		return llm.Message{}, &item, nil
+		return UserTurnResult{}, &item, nil
 	}
-	return msg, nil, err
+	return result, nil, err
 }
 
 func (e *Engine) QueueUserMessageForAutoDrain(text string, clientRequestID string) (QueuedUserMessage, error) {
-	return e.queueUserMessageWithClientRequestID(text, clientRequestID, true)
+	return e.queueUserMessageWithClientRequestID(text, clientRequestID, true, nil)
+}
+
+func (e *Engine) QueueUserMessageForAutoDrainWithAcceptance(text string, clientRequestID string, accept CommandAcceptance) (QueuedUserMessage, error) {
+	return e.queueUserMessageWithClientRequestID(text, clientRequestID, true, accept)
 }
 
 func (e *Engine) HasQueuedUserWork() bool {

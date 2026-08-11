@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"core/internal/testharness/runtimewirefixture"
 	"core/server/llm"
 	"core/server/tools"
 	edittool "core/server/tools/edit"
@@ -22,7 +23,7 @@ func TestEditAliasCompletionDiffAndReviewerEditsFlow(t *testing.T) {
 		t.Fatalf("seed file: %v", err)
 	}
 	store := mustCreateNamedTestSessionAt(t, filepath.Join(t.TempDir(), "sessions"), "ws", workspace)
-	editTool, err := edittool.New(workspace, true)
+	editTool, err := edittool.New(runtimewirefixture.FilesystemContext(t, workspace))
 	if err != nil {
 		t.Fatalf("new edit tool: %v", err)
 	}

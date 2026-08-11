@@ -34,9 +34,7 @@ type currentNodeAutomaticQueue struct {
 }
 
 type currentNodeAutomaticQueueEntry struct {
-	runID      currentNodeRunID
-	taskID     workflow.TaskID
-	policy     currentNodeAdmissionPolicy
+	start      currentNodeQueuedStart
 	order      uint64
 	globalPrev *currentNodeAutomaticQueueEntry
 	globalNext *currentNodeAutomaticQueueEntry
@@ -61,18 +59,13 @@ func (lanes *currentNodeAutomaticQueueLanes) lane(policy currentNodeAdmissionPol
 	return &lanes[currentNodeAutomaticQueueLaneForPolicy(policy)]
 }
 
-func (q *currentNodeAutomaticQueue) append(run *currentNodeRun) {
-	if run == nil {
-		panic("automatic queue requires a Run generation")
-	}
+func (q *currentNodeAutomaticQueue) append(start currentNodeQueuedStart) {
 	q.nextOrder++
 	if q.nextOrder == 0 {
 		panic("automatic queue order overflow")
 	}
 	entry := &currentNodeAutomaticQueueEntry{
-		runID:      run.id,
-		taskID:     run.reference.TaskID,
-		policy:     run.policy,
+		start:      start,
 		order:      q.nextOrder,
 		globalPrev: q.last,
 	}
@@ -86,13 +79,13 @@ func (q *currentNodeAutomaticQueue) append(run *currentNodeRun) {
 	if q.tasks == nil {
 		q.tasks = make(map[workflow.TaskID]*currentNodeAutomaticTaskQueue)
 	}
-	taskQueue := q.tasks[run.reference.TaskID]
+	taskQueue := q.tasks[start.reference.TaskID]
 	if taskQueue == nil {
 		taskQueue = &currentNodeAutomaticTaskQueue{}
-		q.tasks[run.reference.TaskID] = taskQueue
+		q.tasks[start.reference.TaskID] = taskQueue
 	}
-	policyLane := q.lanes.lane(run.policy)
-	taskLane := taskQueue.lanes.lane(run.policy)
+	policyLane := q.lanes.lane(start.policy)
+	taskLane := taskQueue.lanes.lane(start.policy)
 	entry.policyPrev = policyLane.last
 	entry.taskPrev = taskLane.last
 	if policyLane.last == nil {
@@ -110,7 +103,7 @@ func (q *currentNodeAutomaticQueue) append(run *currentNodeRun) {
 	q.size++
 }
 
-func (q *currentNodeAutomaticQueue) remove(entry *currentNodeAutomaticQueueEntry) currentNodeRunID {
+func (q *currentNodeAutomaticQueue) remove(entry *currentNodeAutomaticQueueEntry) currentNodeQueuedStart {
 	if entry.globalPrev == nil {
 		q.first = entry.globalNext
 	} else {
@@ -122,12 +115,12 @@ func (q *currentNodeAutomaticQueue) remove(entry *currentNodeAutomaticQueueEntry
 		entry.globalNext.globalPrev = entry.globalPrev
 	}
 
-	taskQueue := q.tasks[entry.taskID]
+	taskQueue := q.tasks[entry.start.reference.TaskID]
 	if taskQueue == nil {
 		panic("automatic queue task index lost an entry")
 	}
-	policyLane := q.lanes.lane(entry.policy)
-	taskLane := taskQueue.lanes.lane(entry.policy)
+	policyLane := q.lanes.lane(entry.start.policy)
+	taskLane := taskQueue.lanes.lane(entry.start.policy)
 	if entry.policyPrev == nil {
 		policyLane.first = entry.policyNext
 	} else {
@@ -150,10 +143,10 @@ func (q *currentNodeAutomaticQueue) remove(entry *currentNodeAutomaticQueueEntry
 	}
 	if taskQueue.lanes[currentNodeAutomaticAgentLane].first == nil &&
 		taskQueue.lanes[currentNodeAutomaticScriptLane].first == nil {
-		delete(q.tasks, entry.taskID)
+		delete(q.tasks, entry.start.reference.TaskID)
 	}
 	q.size--
-	return entry.runID
+	return entry.start
 }
 
 func (q *currentNodeAutomaticQueue) clear() {
@@ -169,36 +162,13 @@ func (q *currentNodeAutomaticQueue) len() int {
 	return q.size
 }
 
-func (q *currentNodeAutomaticQueue) selectEntry(
-	lastTask *workflow.TaskID,
-	agentAvailable bool,
-	eligible func(currentNodeRunID) bool,
-) (*currentNodeAutomaticQueueEntry, bool) {
-	firstEligible := func(
-		entry *currentNodeAutomaticQueueEntry,
-		next func(*currentNodeAutomaticQueueEntry) *currentNodeAutomaticQueueEntry,
-	) *currentNodeAutomaticQueueEntry {
-		for entry != nil && eligible != nil && !eligible(entry.runID) {
-			entry = next(entry)
-		}
-		return entry
-	}
+func (q *currentNodeAutomaticQueue) selectEntry(lastTask *workflow.TaskID, agentAvailable bool) (*currentNodeAutomaticQueueEntry, bool) {
 	if lastTask != nil {
 		if taskQueue := q.tasks[*lastTask]; taskQueue != nil {
-			script := firstEligible(
-				taskQueue.lanes.lane(currentNodeAdmissionAutomaticScript).first,
-				func(entry *currentNodeAutomaticQueueEntry) *currentNodeAutomaticQueueEntry {
-					return entry.taskNext
-				},
-			)
+			script := taskQueue.lanes.lane(currentNodeAdmissionAutomaticScript).first
 			candidate := script
 			if agentAvailable {
-				agent := firstEligible(
-					taskQueue.lanes.lane(currentNodeAdmissionAutomaticAgent).first,
-					func(entry *currentNodeAutomaticQueueEntry) *currentNodeAutomaticQueueEntry {
-						return entry.taskNext
-					},
-				)
+				agent := taskQueue.lanes.lane(currentNodeAdmissionAutomaticAgent).first
 				if agent != nil && (candidate == nil || agent.order < candidate.order) {
 					candidate = agent
 				}
@@ -208,21 +178,11 @@ func (q *currentNodeAutomaticQueue) selectEntry(
 			}
 		}
 	}
-	script := firstEligible(
-		q.lanes.lane(currentNodeAdmissionAutomaticScript).first,
-		func(entry *currentNodeAutomaticQueueEntry) *currentNodeAutomaticQueueEntry {
-			return entry.policyNext
-		},
-	)
+	script := q.lanes.lane(currentNodeAdmissionAutomaticScript).first
 	if !agentAvailable {
 		return script, script != nil
 	}
-	agent := firstEligible(
-		q.lanes.lane(currentNodeAdmissionAutomaticAgent).first,
-		func(entry *currentNodeAutomaticQueueEntry) *currentNodeAutomaticQueueEntry {
-			return entry.policyNext
-		},
-	)
+	agent := q.lanes.lane(currentNodeAdmissionAutomaticAgent).first
 	if agent == nil {
 		return script, script != nil
 	}

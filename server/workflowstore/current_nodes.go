@@ -396,9 +396,70 @@ func (s *Store) AdmitCurrentNode(ctx context.Context, reference workflow.Current
 	return nil
 }
 
+// ResumeCurrentNode clears an interrupted restart marker. Workflow Execution
+// immediately follows it with AdmitCurrentNode under the same mutation permit;
+// it is deliberately not an automatic recovery path.
+func (s *Store) ResumeCurrentNode(ctx context.Context, reference workflow.CurrentNodeReference) (InterruptedCurrentNodeAttentionProjection, bool, error) {
+	if err := reference.Validate(); err != nil {
+		return InterruptedCurrentNodeAttentionProjection{}, false, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return InterruptedCurrentNodeAttentionProjection{}, false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	q := s.queries.WithTx(tx)
+	branchKey, branchScoped := reference.TransitionBranchKey()
+	var branchValue any
+	if branchScoped {
+		branchValue = string(branchKey)
+	}
+	locked, err := q.AcquireCurrentNodeResumeWriteLock(ctx, sqlitegen.AcquireCurrentNodeResumeWriteLockParams{
+		TaskID:              string(reference.TaskID),
+		NodeID:              string(reference.NodeID),
+		TransitionBranchKey: branchValue,
+	})
+	if err != nil {
+		return InterruptedCurrentNodeAttentionProjection{}, false, err
+	}
+	if locked != 1 {
+		return InterruptedCurrentNodeAttentionProjection{}, false, sql.ErrNoRows
+	}
+	projection, found, err := pendingInterruptedCurrentNodeAttentionProjection(ctx, q, reference)
+	if err != nil {
+		return InterruptedCurrentNodeAttentionProjection{}, false, err
+	}
+	var (
+		resumed   int64
+		resumeErr error
+	)
+	if branchScoped {
+		resumed, resumeErr = q.ResumeBranchCurrentNode(ctx, sqlitegen.ResumeBranchCurrentNodeParams{
+			TaskID:              string(reference.TaskID),
+			NodeID:              string(reference.NodeID),
+			TransitionBranchKey: sql.NullString{String: string(branchKey), Valid: true},
+		})
+	} else {
+		resumed, resumeErr = q.ResumeSerialCurrentNode(ctx, sqlitegen.ResumeSerialCurrentNodeParams{
+			TaskID: string(reference.TaskID),
+			NodeID: string(reference.NodeID),
+		})
+	}
+	if resumeErr != nil {
+		return InterruptedCurrentNodeAttentionProjection{}, false, resumeErr
+	}
+	if resumed != 1 {
+		return InterruptedCurrentNodeAttentionProjection{}, false, sql.ErrNoRows
+	}
+	if err := tx.Commit(); err != nil {
+		return InterruptedCurrentNodeAttentionProjection{}, false, err
+	}
+	return projection, found, nil
+}
+
 // InterruptedExecutableCurrentNodes returns the exact interrupted nodes a
 // caller may explicitly resume. Pending Approval sources are excluded here
-// and again atomically by the prepared Resume mutation/AdmitCurrentNode.
+// and again atomically by ResumeCurrentNode/AdmitCurrentNode.
 func (s *Store) InterruptedExecutableCurrentNodes(ctx context.Context, taskID workflow.TaskID) ([]workflow.CurrentNode, error) {
 	if strings.TrimSpace(string(taskID)) == "" {
 		return nil, errors.New("task id is required")

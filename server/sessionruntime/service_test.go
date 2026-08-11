@@ -191,7 +191,6 @@ func TestActivateSessionRuntimeRejectsPathLikeSessionID(t *testing.T) {
 		ClientRequestID: "req-1",
 		SessionID:       "../session-1",
 		OwnerID:         "owner-a",
-		Operation:       serverapi.SessionRuntimeActivationUserActivation,
 	})
 	if !errors.Is(err, serverapi.ErrSessionIDNotSingle) {
 		t.Fatalf("expected path-like session id rejection, got %v", err)
@@ -203,100 +202,9 @@ func TestActivateSessionRuntimeRejectsMissingOwnerID(t *testing.T) {
 	_, err := svc.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
 		ClientRequestID: "req-1",
 		SessionID:       "session-1",
-		Operation:       serverapi.SessionRuntimeActivationUserActivation,
 	})
 	if !errors.Is(err, ErrRuntimeOwnerIDRequired) {
 		t.Fatalf("expected runtime owner id rejection, got %v", err)
-	}
-}
-
-type workflowSessionActivatorFunc func(
-	context.Context,
-	WorkflowSessionActivationRequest,
-) (WorkflowSessionActivationResult, error)
-
-func (f workflowSessionActivatorFunc) ActivateWorkflowSession(
-	ctx context.Context,
-	request WorkflowSessionActivationRequest,
-) (WorkflowSessionActivationResult, error) {
-	return f(ctx, request)
-}
-
-func TestActivateSessionRuntimeKeepsUnboundOrdinarySessionLazy(t *testing.T) {
-	fixture := newSessionRuntimeFixture(t)
-	fixture.api = NewAPI(fixture.metadata, nil, fixture.authority, APIOptions{
-		RuntimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(
-			context.Context,
-			runtimewire.RuntimeClientRequest,
-		) (llm.Client, error) {
-			return &sessionRuntimeTestLLMClient{}, nil
-		}),
-	})
-	var observed WorkflowSessionActivationRequest
-	fixture.api.WithWorkflowSessionActivator(workflowSessionActivatorFunc(func(
-		_ context.Context,
-		request WorkflowSessionActivationRequest,
-	) (WorkflowSessionActivationResult, error) {
-		observed = request
-		return WorkflowSessionActivationResult{}, nil
-	}))
-	response, err := fixture.api.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
-		ClientRequestID: "activate-lazy-ordinary",
-		SessionID:       fixture.store.Meta().SessionID,
-		OwnerID:         "ordinary-owner",
-		Operation:       serverapi.SessionRuntimeActivationUserActivation,
-		ActiveSettings: config.Settings{
-			Model:              "gpt-5",
-			ModelContextWindow: 200000,
-			Reviewer:           config.ReviewerSettings{Frequency: "off"},
-			Timeouts:           config.Timeouts{ModelRequestSeconds: 1},
-			Shell:              config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},
-		},
-		Source: config.SourceReport{Sources: map[string]string{}},
-	})
-	if err != nil {
-		t.Fatalf("ActivateSessionRuntime: %v", err)
-	}
-	if observed.SessionID.String() != fixture.store.Meta().SessionID ||
-		observed.Operation != serverapi.SessionRuntimeActivationUserActivation {
-		t.Fatalf("workflow activation observation = %+v", observed)
-	}
-	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("ParseSessionID: %v", err)
-	}
-	if _, live := fixture.authority.SessionExecution(sessionID); live {
-		t.Fatal("ordinary Session activation started an Agent execution before a turn")
-	}
-	_, _ = fixture.api.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
-		ClientRequestID: "release-lazy-ordinary",
-		Attachment:      response.Attachment,
-		OwnerID:         "ordinary-owner",
-		DropOwner:       true,
-		ClosePolicy:     serverapi.SessionRuntimeReleaseClosePolicyDetachOnly,
-	})
-}
-
-func TestActivateSessionRuntimeDoesNotFallBackAfterWorkflowBindingError(t *testing.T) {
-	bindingErr := errors.New("contradictory retained Workflow binding")
-	api := &API{
-		workflowSessionActivator: workflowSessionActivatorFunc(func(
-			context.Context,
-			WorkflowSessionActivationRequest,
-		) (WorkflowSessionActivationResult, error) {
-			return WorkflowSessionActivationResult{}, bindingErr
-		}),
-		authority: NewAuthority(AuthorityOptions{}),
-	}
-	t.Cleanup(func() { _ = api.authority.Close(context.Background()) })
-	_, err := api.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
-		ClientRequestID: "activate-contradictory-binding",
-		SessionID:       "session-1",
-		OwnerID:         "owner",
-		Operation:       serverapi.SessionRuntimeActivationUserActivation,
-	})
-	if !errors.Is(err, bindingErr) {
-		t.Fatalf("ActivateSessionRuntime error = %v, want binding error without ordinary fallback", err)
 	}
 }
 
@@ -316,7 +224,6 @@ func TestServicePassesRuntimeClientFactoryIntoInteractiveRuntime(t *testing.T) {
 		ClientRequestID: "activate-factory",
 		SessionID:       fixture.store.Meta().SessionID,
 		OwnerID:         "owner",
-		Operation:       serverapi.SessionRuntimeActivationUserActivation,
 		ActiveSettings: config.Settings{
 			Model:              "gpt-5",
 			ModelContextWindow: 200000,
@@ -380,7 +287,6 @@ func TestActivateSessionRuntimeAllowsNativeEditInSiblingWorkspace(t *testing.T) 
 		ClientRequestID: "activate-sibling-edit",
 		SessionID:       fixture.store.Meta().SessionID,
 		OwnerID:         "interactive-owner",
-		Operation:       serverapi.SessionRuntimeActivationUserActivation,
 		ActiveSettings: config.Settings{
 			Model:              "gpt-5",
 			ModelContextWindow: 200000,
@@ -513,7 +419,6 @@ func TestActivateSessionRuntimeDeniesEditInForeignManagedWorktree(t *testing.T) 
 	})
 	activation, err := fixture.api.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
 		ClientRequestID: "activate-foreign-edit", SessionID: fixture.store.Meta().SessionID, OwnerID: "interactive-owner",
-		Operation: serverapi.SessionRuntimeActivationUserActivation,
 		ActiveSettings: config.Settings{
 			Model: "gpt-5", ModelContextWindow: 200000,
 			Reviewer: config.ReviewerSettings{Frequency: "off"}, Timeouts: config.Timeouts{ModelRequestSeconds: 1},
@@ -601,7 +506,6 @@ func TestActivateSessionRuntimeRejectsManagedWorktreeOutsideServerNamespace(t *t
 		ClientRequestID: "activate-legacy-outside-namespace",
 		SessionID:       fixture.store.Meta().SessionID,
 		OwnerID:         "interactive-owner",
-		Operation:       serverapi.SessionRuntimeActivationUserActivation,
 		ActiveSettings: config.Settings{
 			Model: "gpt-5", ModelContextWindow: 200000,
 			Reviewer: config.ReviewerSettings{Frequency: "off"},
@@ -680,7 +584,6 @@ func TestActivateSessionRuntimeUsesActiveShellPostprocessingWithSuppliedManager(
 		ClientRequestID: "activate-active-shell",
 		SessionID:       sessionID,
 		OwnerID:         "interactive-owner",
-		Operation:       serverapi.SessionRuntimeActivationUserActivation,
 		ActiveSettings: config.Settings{
 			Model:                  "gpt-5",
 			ThinkingLevel:          "medium",

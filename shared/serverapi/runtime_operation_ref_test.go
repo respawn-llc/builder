@@ -1,107 +1,86 @@
 package serverapi
 
 import (
+	"encoding/json"
 	"testing"
 
-	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 )
 
-func TestInputBearingRuntimeRequestsRequireMatchingOperationRefs(t *testing.T) {
-	submitID := runtimeids.NewRuntimeClientRequestID()
-	preCompactID := runtimeids.NewRuntimeClientRequestID()
-	shellID := runtimeids.NewRuntimeClientRequestID()
-	compactID := runtimeids.NewRuntimeClientRequestID()
-	for name, err := range map[string]error{
-		"submit": (RuntimeSubmitUserTurnRequest{
-			ClientRequestID:                 submitID.String(),
-			SessionID:                       "session-1",
-			Input:                           runtimeinput.Text("hello"),
-			OperationRef:                    clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: submitID},
-			PreSubmitCompactionOperationRef: clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindPreSubmitCompact, ClientRequestID: preCompactID},
-		}).Validate(),
-		"shell": (RuntimeSubmitUserShellCommandRequest{
-			ClientRequestID: shellID.String(),
-			SessionID:       "session-1",
-			Command:         "pwd",
-			OperationRef:    clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindUserShell, ClientRequestID: shellID},
-		}).Validate(),
-		"compact": (RuntimeCompactContextRequest{
-			ClientRequestID: compactID.String(),
-			SessionID:       "session-1",
-			Args:            "notes",
-			OperationRef:    clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindCompact, ClientRequestID: compactID},
-		}).Validate(),
-	} {
-		if err != nil {
-			t.Fatalf("%s request rejected: %v", name, err)
-		}
-	}
-}
-
-func TestInputBearingRuntimeRequestsRejectHiddenOrMismatchedOperationRefs(t *testing.T) {
-	submitID := runtimeids.NewRuntimeClientRequestID()
-	shellID := runtimeids.NewRuntimeClientRequestID()
-	otherID := runtimeids.NewRuntimeClientRequestID()
-	tests := []struct {
-		name string
-		req  interface{ Validate() error }
+func TestRuntimeInputRequestsUseRequestIdentityWithoutOperationRefs(t *testing.T) {
+	requests := []struct {
+		name      string
+		request   interface{ Validate() error }
+		forbidden []string
 	}{
 		{
-			name: "missing ref",
-			req: RuntimeSubmitUserTurnRequest{
-				ClientRequestID: submitID.String(),
+			name: "submit",
+			request: RuntimeSubmitUserTurnRequest{
+				ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
 				SessionID:       "session-1",
 				Input:           runtimeinput.Text("hello"),
 			},
+			forbidden: []string{"operation_ref", "pre_submit_compaction_operation_ref"},
 		},
 		{
-			name: "wrong kind",
-			req: RuntimeSubmitUserTurnRequest{
-				ClientRequestID: submitID.String(),
-				SessionID:       "session-1",
-				Input:           runtimeinput.Text("hello"),
-				OperationRef:    clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindUserShell, ClientRequestID: submitID},
-			},
-		},
-		{
-			name: "request id mismatch",
-			req: RuntimeSubmitUserShellCommandRequest{
-				ClientRequestID: shellID.String(),
+			name: "shell",
+			request: RuntimeSubmitUserShellCommandRequest{
+				ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
 				SessionID:       "session-1",
 				Command:         "pwd",
-				OperationRef:    clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindUserShell, ClientRequestID: otherID},
 			},
+			forbidden: []string{"operation_ref"},
+		},
+		{
+			name: "compact",
+			request: RuntimeCompactContextRequest{
+				ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
+				SessionID:       "session-1",
+				Args:            "notes",
+			},
+			forbidden: []string{"operation_ref"},
+		},
+		{
+			name: "interrupt",
+			request: RuntimeInterruptRequest{
+				ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
+				SessionID:       "session-1",
+			},
+			forbidden: []string{"target_operation_ref", "pending_operation_refs"},
 		},
 	}
-	for _, tt := range tests {
+	for _, tt := range requests {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := tt.req.Validate(); err == nil {
-				t.Fatal("expected request to be rejected")
+			if err := tt.request.Validate(); err != nil {
+				t.Fatalf("Validate: %v", err)
+			}
+			wire, err := json.Marshal(tt.request)
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(wire, &fields); err != nil {
+				t.Fatalf("Unmarshal: %v", err)
+			}
+			for _, field := range tt.forbidden {
+				if _, exists := fields[field]; exists {
+					t.Fatalf("wire request unexpectedly contains %q: %s", field, wire)
+				}
 			}
 		})
 	}
 }
 
-func TestRuntimeInterruptRequestValidatesOptionalTargetOperationRef(t *testing.T) {
-	submitID := runtimeids.NewRuntimeClientRequestID()
-	interruptID := runtimeids.NewRuntimeClientRequestID()
-	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: submitID}
-	if err := (RuntimeInterruptRequest{
-		ClientRequestID:      interruptID.String(),
-		SessionID:            "session-1",
-		TargetOperationRef:   &ref,
-		PendingOperationRefs: []clientui.RuntimeOperationRef{ref},
-	}).Validate(); err != nil {
-		t.Fatalf("targeted interrupt rejected: %v", err)
+func TestRuntimeSubmitUserShellCommandRequestRejectsBlankCommand(t *testing.T) {
+	request := RuntimeSubmitUserShellCommandRequest{
+		ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
+		SessionID:       "session-1",
 	}
-	bad := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindQueuedMessage}
-	if err := (RuntimeInterruptRequest{
-		ClientRequestID:    interruptID.String(),
-		SessionID:          "session-1",
-		TargetOperationRef: &bad,
-	}).Validate(); err == nil {
-		t.Fatal("expected malformed target ref to be rejected")
+	for _, command := range []string{"", " \t\n"} {
+		request.Command = command
+		if err := request.Validate(); err == nil {
+			t.Fatalf("accepted blank shell command %q", command)
+		}
 	}
 }

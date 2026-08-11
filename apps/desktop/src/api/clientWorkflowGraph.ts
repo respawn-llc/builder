@@ -1,5 +1,6 @@
 import { compactJsonObject, type JsonObject } from "./json";
-import type { WorkflowGraphDraft, WorkflowGraphMetadata, WorkflowGraphSaveConfirmation } from "./models";
+import type { WorkflowGraphMetadata, WorkflowGraphSaveConfirmation } from "./models";
+import type { WorkflowGraphDraft } from "./workflowGraphModels";
 
 export function workflowGraphDraftPayload(graph: WorkflowGraphDraft): JsonObject {
   return {
@@ -14,9 +15,8 @@ export function workflowGraphDraftPayload(graph: WorkflowGraphDraft): JsonObject
         key: node.key,
         kind: node.kind,
         display_name: node.name,
-        group_id: node.groupID.length > 0 ? node.groupID : undefined,
-        group_key: node.groupKey.length > 0 ? node.groupKey : undefined,
-        subagent_role: node.subagentRole.length > 0 ? node.subagentRole : undefined,
+        group_id: node.groupID,
+        subagent_role: node.subagentRole,
         completion_mode:
           node.completionMode !== undefined && node.completionMode.length > 0
             ? node.completionMode
@@ -88,6 +88,7 @@ export function workflowGraphSaveConfirmationPayload(
     return undefined;
   }
   return {
+    expected_removed_node_group_count: confirmation.expectedRemovedNodeGroupCount,
     expected_removed_node_count: confirmation.expectedRemovedNodeCount,
     expected_removed_transition_group_count: confirmation.expectedRemovedTransitionGroupCount,
     expected_removed_edge_count: confirmation.expectedRemovedEdgeCount,

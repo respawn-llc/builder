@@ -13,10 +13,9 @@ import (
 	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
-	"core/shared/runtimeids"
 )
 
-func TestCurrentNodeControllerInterruptCancellationBeforeCommitLeavesExactAuthorityUnchanged(t *testing.T) {
+func TestCurrentNodeControllerInterruptPersistsAfterCallerDeadline(t *testing.T) {
 	shellPath, err := exec.LookPath("sh")
 	if err != nil {
 		t.Skipf("sh executable unavailable: %v", err)
@@ -67,177 +66,15 @@ func TestCurrentNodeControllerInterruptCancellationBeforeCommitLeavesExactAuthor
 		t.Fatal("interrupt did not begin its durable cleanup")
 	}
 	<-ctx.Done()
-	select {
-	case err := <-result:
-		if !errors.Is(err, context.DeadlineExceeded) {
-			t.Fatalf("interrupt before commit error = %v, want deadline exceeded", err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("pre-commit cancellation did not return")
-	}
-	if interruption, interrupted := store.interruption(reference); interrupted {
-		t.Fatalf("pre-commit cancellation persisted interruption: %+v", interruption)
-	}
-	if !hasLiveCurrentNode(controller.Snapshot(), reference) {
-		t.Fatalf("pre-commit cancellation removed exact authority: %+v", controller.Snapshot())
-	}
 	close(store.interruptRelease)
-}
-
-func TestWorkflowSessionInterruptRejectsBindingChangedBeforeTaskWriter(t *testing.T) {
-	reference := currentNodeReferenceForControllerTest(t, "task-session-interrupt-binding", "node-agent")
-	replacement := currentNodeReferenceForControllerTest(t, string(reference.TaskID), "node-replacement")
-	taskID := reference.TaskID
-	sessionID := runtimeids.NewSessionID()
-	store := &currentNodeControllerStore{
-		sessionTaskID: &taskID,
-		directSessionBinding: &workflowstore.DirectSessionCurrentNodeBinding{
-			TaskID:      taskID,
-			CurrentNode: reference,
-		},
-		bindingResolveStarted: make(chan struct{}),
-		bindingResolveRelease: make(chan struct{}),
+	if err := <-result; err != nil {
+		t.Fatalf("interrupt current node after caller deadline: %v", err)
 	}
-	runner := &contextBlockingCurrentNodeRunner{
-		entered: make(chan workflow.CurrentNodeReference, 1),
+	if interruption, interrupted := store.interruption(reference); !interrupted || interruption.reason != workflow.CurrentNodeInterruptionReasonUserInterrupt {
+		t.Fatalf("interruption = %+v, interrupted = %t, want durable user interruption", interruption, interrupted)
 	}
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
-	controller := newCurrentNodeControllerForTest(t, store, runner, authority, 1)
-	t.Cleanup(func() {
-		select {
-		case <-store.bindingResolveRelease:
-		default:
-			close(store.bindingResolveRelease)
-		}
-		if err := controller.Close(); err != nil {
-			t.Errorf("close controller: %v", err)
-		}
-		if err := authority.Close(context.Background()); err != nil {
-			t.Errorf("close authority: %v", err)
-		}
-	})
-
-	if err := startCurrentNodeForControllerTest(context.Background(), controller, store, reference); err != nil {
-		t.Fatalf("start retained generation: %v", err)
-	}
-	select {
-	case <-runner.entered:
-	case <-time.After(3 * time.Second):
-		t.Fatal("retained generation did not begin launching")
-	}
-
-	type interruptResult struct {
-		outcome sessionruntime.WorkflowSessionInterruptOutcome
-		err     error
-	}
-	result := make(chan interruptResult, 1)
-	go func() {
-		outcome, err := controller.InterruptWorkflowSession(
-			context.Background(),
-			sessionruntime.WorkflowSessionInterruptRequest{SessionID: sessionID},
-			func(cleanup sessionruntime.WorkflowCommittedInterruptCleanup) error {
-				return cleanup(nil, nil)
-			},
-		)
-		result <- interruptResult{outcome: outcome, err: err}
-	}()
-	select {
-	case <-store.bindingResolveStarted:
-	case <-time.After(3 * time.Second):
-		t.Fatal("Session Interrupt did not resolve its initial binding")
-	}
-	store.mu.Lock()
-	store.directSessionBinding = &workflowstore.DirectSessionCurrentNodeBinding{
-		TaskID:      taskID,
-		CurrentNode: replacement,
-	}
-	store.mu.Unlock()
-	close(store.bindingResolveRelease)
-	select {
-	case got := <-result:
-		if got.err != nil {
-			t.Fatalf("Session Interrupt replacement result: %v", got.err)
-		}
-		if got.outcome != sessionruntime.WorkflowSessionInterruptNoLongerLive {
-			t.Fatalf("Session Interrupt outcome = %v, want no longer live", got.outcome)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("Session Interrupt did not reject the changed binding")
-	}
-	if count := store.interruptionCount(reference); count != 0 {
-		t.Fatalf("durable interruptions = %d, want none", count)
-	}
-	if snapshot := controller.Snapshot(); len(snapshot.Gates) != 1 || !snapshot.Gates[0].CurrentNode.Equal(reference) {
-		t.Fatalf("original generation was stopped: %+v", snapshot)
-	}
-}
-
-func TestCurrentNodeControllerInterruptCancellationAfterCommitCannotPreventExactCleanup(t *testing.T) {
-	shellPath, err := exec.LookPath("sh")
-	if err != nil {
-		t.Skipf("sh executable unavailable: %v", err)
-	}
-	reference := currentNodeReferenceForControllerTest(t, "task-interrupt-post-commit", "node-agent")
-	store := &currentNodeControllerStore{
-		interruptCommitted:   make(chan struct{}),
-		interruptAfterCommit: make(chan struct{}),
-	}
-	var controller *CurrentNodeController
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
-		}),
-	})
-	runner := &recordingScriptRunner{
-		authority: authority,
-		command: sessionruntime.ScriptCommand{
-			Path: shellPath,
-			Args: []string{"-c", "while :; do sleep 1; done"},
-		},
-		started: make(chan workflow.CurrentNodeReference, 1),
-	}
-	controller = newCurrentNodeControllerForTest(t, store, runner, authority, 1)
-	t.Cleanup(func() {
-		select {
-		case <-store.interruptAfterCommit:
-		default:
-			close(store.interruptAfterCommit)
-		}
-		if err := controller.Close(); err != nil {
-			t.Errorf("close controller: %v", err)
-		}
-		if err := authority.Close(context.Background()); err != nil {
-			t.Errorf("close authority: %v", err)
-		}
-	})
-
-	if err := startCurrentNodeForControllerTest(context.Background(), controller, store, reference); err != nil {
-		t.Fatalf("start current node: %v", err)
-	}
-	<-runner.started
-	waitForRunningCurrentNode(t, authority, reference)
-	ctx, cancel := context.WithCancel(context.Background())
-	result := make(chan error, 1)
-	go func() {
-		result <- controller.Interrupt(ctx, InterruptSelector{TaskID: reference.TaskID})
-	}()
-	select {
-	case <-store.interruptCommitted:
-	case <-time.After(3 * time.Second):
-		t.Fatal("interrupt did not commit its durable disposition")
-	}
-	cancel()
-	close(store.interruptAfterCommit)
-	select {
-	case err := <-result:
-		if err != nil {
-			t.Fatalf("post-commit interrupt cleanup: %v", err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("post-commit caller cancellation prevented cleanup")
-	}
-	if hasLiveCurrentNode(controller.Snapshot(), reference) {
-		t.Fatalf("post-commit cleanup retained exact authority: %+v", controller.Snapshot())
+	if hasLiveCurrentNode(authority, reference) {
+		t.Fatal("interrupted current node remains live")
 	}
 }
 
@@ -310,15 +147,6 @@ func TestCurrentNodeControllerTaskInterruptFenceRejectsLifecycleMutationsUntilRe
 	if err := controller.EnsureTaskQuiescent(source.TaskID); !errors.Is(err, ErrTaskExecutionNotQuiescent) {
 		t.Fatalf("quiescence during Task Interrupt = %v, want %v", err, ErrTaskExecutionNotQuiescent)
 	}
-	duplicateDone := make(chan error, 1)
-	go func() {
-		duplicateDone <- controller.Interrupt(context.Background(), InterruptSelector{TaskID: source.TaskID})
-	}()
-	select {
-	case err := <-duplicateDone:
-		t.Fatalf("duplicate Task Interrupt did not join stop-pending completion: %v", err)
-	case <-time.After(50 * time.Millisecond):
-	}
 
 	close(releaseFinalization)
 	select {
@@ -329,17 +157,9 @@ func TestCurrentNodeControllerTaskInterruptFenceRejectsLifecycleMutationsUntilRe
 	case <-time.After(3 * time.Second):
 		t.Fatal("Task Interrupt fence did not clear after retirement")
 	}
-	select {
-	case err := <-duplicateDone:
-		if err != nil {
-			t.Fatalf("duplicate Task Interrupt completion: %v", err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("duplicate Task Interrupt did not observe shared cleanup completion")
-	}
 }
 
-func TestCurrentNodeControllerTaskInterruptCancelsSiblingLaunchPreparation(t *testing.T) {
+func TestCurrentNodeControllerTaskInterruptPreservesSiblingPreparation(t *testing.T) {
 	shellPath, err := exec.LookPath("sh")
 	if err != nil {
 		t.Skipf("sh executable unavailable: %v", err)
@@ -397,21 +217,29 @@ func TestCurrentNodeControllerTaskInterruptCancelsSiblingLaunchPreparation(t *te
 	}}
 	store.mu.Unlock()
 	preparationStarted := make(chan struct{})
-	if _, err := controller.ResumeTaskWithPreparation(context.Background(), running.TaskID, func(ctx context.Context) error {
-		close(preparationStarted)
-		select {
-		case <-preparationRelease:
-			return nil
-		case <-ctx.Done():
-			return context.Cause(ctx)
-		}
-	}); err != nil {
+	if _, err := controller.ResumeTaskWithPreparation(
+		context.Background(),
+		running.TaskID,
+		testTaskPreparation(func(ctx context.Context) error {
+			close(preparationStarted)
+			select {
+			case <-preparationRelease:
+				return nil
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			}
+		}),
+		noOpTaskPreparationFinalizer,
+	); err != nil {
 		t.Fatalf("resume preparing sibling: %v", err)
 	}
 	select {
 	case <-preparationStarted:
 	case <-time.After(3 * time.Second):
 		t.Fatal("sibling preparation did not start")
+	}
+	if err := controller.InterruptForManualMove(context.Background(), running.TaskID, nil); !errors.Is(err, ErrManualMoveLifecycleConflict) {
+		t.Fatalf("Manual Move during preparation = %v, want %v", err, ErrManualMoveLifecycleConflict)
 	}
 
 	interruptDone := make(chan error, 1)
@@ -424,17 +252,20 @@ func TestCurrentNodeControllerTaskInterruptCancelsSiblingLaunchPreparation(t *te
 			t.Fatalf("interrupt running sibling: %v", err)
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("Task Interrupt did not cancel sibling launch preparation")
+		t.Fatal("Task Interrupt waited for non-selected sibling preparation")
 	}
-	if interruption, interrupted := store.interruption(preparing); !interrupted ||
-		interruption.reason != workflow.CurrentNodeInterruptionReasonUserInterrupt {
-		t.Fatalf("preparing sibling interruption = %+v, interrupted = %t", interruption, interrupted)
+	if interruption, interrupted := store.interruption(preparing); interrupted {
+		t.Fatalf("preparing sibling was interrupted: %+v", interruption)
 	}
 
+	close(preparationRelease)
 	select {
 	case started := <-runner.started:
-		t.Fatalf("interrupted launch preparation started Current Node %v", started)
-	case <-time.After(100 * time.Millisecond):
+		if !started.Equal(preparing) {
+			t.Fatalf("started Current Node = %v, want preserved sibling %v", started, preparing)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("preserved sibling did not start after Task Interrupt")
 	}
 }
 
@@ -516,9 +347,9 @@ func TestCurrentNodeControllerTaskInterruptFencesFinalizingSiblingBeforeReturn(t
 	case <-time.After(3 * time.Second):
 		t.Fatal("Task Interrupt did not begin durable cleanup")
 	}
-	if !hasLiveCurrentNode(controller.Snapshot(), running) {
-		t.Fatal("Task Interrupt stopped the running sibling before durable interruption committed")
-	}
+	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+		return !hasLiveCurrentNode(authority, running)
+	}, "running sibling did not retire while interrupt persistence was blocked")
 
 	releaseFinalizer()
 	releaseInterrupt()
@@ -537,9 +368,6 @@ func TestCurrentNodeControllerTaskInterruptFencesFinalizingSiblingBeforeReturn(t
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("Task Interrupt did not join the finalizing sibling")
-	}
-	if hasLiveCurrentNode(controller.Snapshot(), running) {
-		t.Fatal("running sibling remained live after durable Task Interrupt cleanup")
 	}
 	if calls := store.completionCount(); calls != 0 {
 		t.Fatalf("finalizing sibling durable completions = %d, want 0", calls)
@@ -655,6 +483,55 @@ func TestCurrentNodeControllerTaskInterruptUserReasonWinsFinalizingScopeFailure(
 	}
 }
 
+func TestCurrentNodeControllerScopeFailurePersistsDespiteUnrelatedWorkerError(t *testing.T) {
+	reference := currentNodeReferenceForControllerTest(t, "task-scope-failure-worker-error", "node-script")
+	store := &currentNodeControllerStore{}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller := newCurrentNodeControllerForTest(t, store, &countingCurrentNodeRunner{}, authority, 1)
+	t.Cleanup(func() {
+		controller.mu.Lock()
+		controller.workerErr = nil
+		controller.mu.Unlock()
+		if err := controller.Close(); err != nil {
+			t.Errorf("close controller: %v", err)
+		}
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+	lease, err := authority.NewWorkflowExecutionLease(sessionruntime.WorkflowExecutionRef{
+		ProjectID:   "project-test",
+		WorkflowID:  currentNodeControllerTestWorkflowID,
+		CurrentNode: reference,
+	})
+	if err != nil {
+		t.Fatalf("NewWorkflowExecutionLease: %v", err)
+	}
+	t.Cleanup(lease.Cancel)
+	key, err := reference.Key()
+	if err != nil {
+		t.Fatalf("Current Node key: %v", err)
+	}
+	controller.mu.Lock()
+	controller.live[lease.ScopeID()] = currentNodeLiveScope{reference: reference, lease: lease}
+	controller.liveByNode[key] = lease.ScopeID()
+	controller.workerErr = errors.New("unrelated admission persistence failed")
+	controller.mu.Unlock()
+
+	if err := controller.FailCurrentNodeScope(
+		context.Background(),
+		lease.ScopeID(),
+		"workflow_script_failed",
+		errors.New("script failed"),
+	); err != nil {
+		t.Fatalf("FailCurrentNodeScope: %v", err)
+	}
+	interruption, interrupted := store.interruption(reference)
+	if !interrupted || interruption.reason != "workflow_script_failed" {
+		t.Fatalf("scope failure interruption = %+v, interrupted = %t", interruption, interrupted)
+	}
+}
+
 func TestCurrentNodeControllerRecoveryOnlyMarksAdmittedCurrentNodesInterrupted(t *testing.T) {
 	store := &currentNodeControllerStore{recovered: []workflow.CurrentNodeReference{
 		currentNodeReferenceForControllerTest(t, "task-recovered-1", "node-1"),
@@ -721,19 +598,25 @@ func TestCurrentNodeControllerTaskInterruptDrainsReservationOnlyAlongsideLiveSco
 		}
 	})
 
-	controller.enqueueAutomaticIntents([]CurrentNodeAutomaticIntent{{
-		CurrentNode: live,
-		NodeKind:    workflow.NodeKindAgent,
-	}})
+	if err := startCurrentNodeForControllerTest(context.Background(), controller, store, live); err != nil {
+		t.Fatalf("start live current node: %v", err)
+	}
 	<-runner.started
 	waitForRunningCurrentNode(t, authority, live)
-	controller.enqueueAutomaticIntents([]CurrentNodeAutomaticIntent{{
-		CurrentNode: reserved,
-		NodeKind:    workflow.NodeKindAgent,
-	}})
-	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		return hasAutomaticCurrentNodeIntent(controller.Snapshot(), reserved)
-	}, "successor did not remain queued behind occupied Agent capacity")
+	reservedKey, err := reserved.Key()
+	if err != nil {
+		t.Fatalf("reserved key: %v", err)
+	}
+	controller.mu.Lock()
+	controller.agentCapacityActive = 1
+	controller.automaticReservations[reservedKey] = currentNodeQueuedStart{
+		reference: reserved,
+		policy:    currentNodeAdmissionAutomaticAgent,
+		agentCapacityLease: &currentNodeAgentCapacityLease{
+			owner: currentNodeAgentCapacityReservation,
+		},
+	}
+	controller.mu.Unlock()
 
 	if err := controller.Interrupt(context.Background(), InterruptSelector{TaskID: live.TaskID}); err != nil {
 		t.Fatalf("task interrupt: %v", err)
@@ -743,9 +626,6 @@ func TestCurrentNodeControllerTaskInterruptDrainsReservationOnlyAlongsideLiveSco
 	}
 	if err := controller.EnsureTaskQuiescent(live.TaskID); err != nil {
 		t.Fatalf("task remains non-quiescent after interrupt: %v", err)
-	}
-	if hasAutomaticCurrentNodeIntent(controller.Snapshot(), reserved) {
-		t.Fatalf("drained reservation remains in snapshot: %+v", controller.Snapshot())
 	}
 	controller.mu.Lock()
 	if controller.agentCapacityActive != 0 {
@@ -814,20 +694,13 @@ func TestCurrentNodeControllerInterruptingScriptDoesNotReleaseAgentCapacity(t *t
 		t.Fatal("Script did not start while Agent capacity was occupied")
 	}
 	waitForRunningCurrentNode(t, authority, script)
-	if !hasAutomaticCurrentNodeIntent(controller.Snapshot(), queuedAgent) {
-		t.Fatalf("queued Agent = %+v, want queued while occupying Agent is live", controller.Snapshot().AutomaticIntents)
-	}
-
 	if err := controller.Interrupt(context.Background(), InterruptSelector{TaskID: script.TaskID}); err != nil {
 		t.Fatalf("interrupt Script: %v", err)
 	}
-	if hasLiveCurrentNode(controller.Snapshot(), script) {
-		t.Fatalf("interrupted Script remains live: %+v", controller.Snapshot().LiveScopes)
+	if hasLiveCurrentNode(authority, script) {
+		t.Fatal("interrupted Script remains live")
 	}
-	if !hasAutomaticCurrentNodeIntent(controller.Snapshot(), queuedAgent) {
-		t.Fatalf("queued Agent = %+v, want queued after Script interruption", controller.Snapshot().AutomaticIntents)
-	}
-	occupyingHandle, live := authority.ExecutionByScope(singleLiveScope(t, controller, occupyingAgent))
+	occupyingHandle, live := authority.ExecutionByScope(singleLiveScope(t, authority, occupyingAgent))
 	if !live {
 		t.Fatal("occupying Agent is not live")
 	}
@@ -945,23 +818,9 @@ func TestCurrentNodeControllerTaskInterruptDrainsAuthorityQueuedGateAlongsideRun
 
 func TestCurrentNodeControllerReservationDoesNotAuthorizeTaskInterrupt(t *testing.T) {
 	reference := currentNodeReferenceForControllerTest(t, "task-reservation-no-live", "node-agent")
-	occupying := currentNodeReferenceForControllerTest(t, "task-reservation-capacity-owner", "node-agent")
 	store := &currentNodeControllerStore{}
-	var controller *CurrentNodeController
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
-		}),
-	})
-	runner := &recordingScriptRunner{
-		authority: authority,
-		command: sessionruntime.ScriptCommand{
-			Path: "/bin/sh",
-			Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
-		},
-		started: make(chan workflow.CurrentNodeReference, 1),
-	}
-	controller = newCurrentNodeControllerForTest(t, store, runner, authority, 1)
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller := newCurrentNodeControllerForTest(t, store, &countingCurrentNodeRunner{}, authority, 1)
 	t.Cleanup(func() {
 		if err := controller.Close(); err != nil {
 			t.Errorf("close controller: %v", err)
@@ -971,29 +830,19 @@ func TestCurrentNodeControllerReservationDoesNotAuthorizeTaskInterrupt(t *testin
 		}
 	})
 
-	controller.enqueueAutomaticIntents([]CurrentNodeAutomaticIntent{{
-		CurrentNode: occupying,
-		NodeKind:    workflow.NodeKindAgent,
-	}})
-	select {
-	case <-runner.started:
-	case <-time.After(3 * time.Second):
-		t.Fatal("capacity owner did not start")
+	key, err := reference.Key()
+	if err != nil {
+		t.Fatalf("reference key: %v", err)
 	}
-	waitForRunningCurrentNode(t, authority, occupying)
-	controller.enqueueAutomaticIntents([]CurrentNodeAutomaticIntent{{
-		CurrentNode: reference,
-		NodeKind:    workflow.NodeKindAgent,
-	}})
-	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		return hasAutomaticCurrentNodeIntent(controller.Snapshot(), reference)
-	}, "Run did not remain queued behind unrelated Agent capacity")
+	controller.mu.Lock()
+	controller.automaticReservations[key] = currentNodeQueuedStart{reference: reference, policy: currentNodeAdmissionAutomaticAgent}
+	controller.mu.Unlock()
 
 	if err := controller.Interrupt(context.Background(), InterruptSelector{TaskID: reference.TaskID}); !errors.Is(err, ErrNoInterruptibleExecution) {
 		t.Fatalf("reservation-only task interrupt error = %v, want %v", err, ErrNoInterruptibleExecution)
 	}
-	if !hasAutomaticCurrentNodeIntent(controller.Snapshot(), reference) {
-		t.Fatalf("reservation was removed despite absent live-scope authorization: %+v", controller.Snapshot())
+	if err := controller.EnsureTaskQuiescent(reference.TaskID); !errors.Is(err, ErrTaskExecutionNotQuiescent) {
+		t.Fatalf("reservation-only task quiescence = %v, want %v", err, ErrTaskExecutionNotQuiescent)
 	}
 }
 
@@ -1033,7 +882,7 @@ func TestCurrentNodeControllerProtocolViolationCapStopsAndInterruptsLiveScope(t 
 	}
 	<-runner.started
 	waitForRunningCurrentNode(t, authority, reference)
-	scopeID := singleLiveScope(t, controller, reference)
+	scopeID := singleLiveScope(t, authority, reference)
 	result, err := controller.RecordProtocolViolation(context.Background(), workflowruntime.ViolationRequest{
 		ScopeID:  scopeID,
 		Kind:     workflowruntime.ViolationKindInvalidCompletion,

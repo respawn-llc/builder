@@ -102,11 +102,16 @@ func TestPrepareManualMoveValidatesExecutableCompletionShapeWithoutMutation(t *t
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	started := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	_ = started
 	definition, _, err := store.GetDefinition(ctx, workflowID)
 	if err != nil {
 		t.Fatalf("GetDefinition: %v", err)
 	}
 	target := nodeByKey(t, definition, "implement")
+	before, err := store.ListCurrentNodes(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListCurrentNodes before rejected move: %v", err)
+	}
 	_, err = store.PrepareManualMove(ctx, ManualMoveRequest{
 		TaskID:       task.ID,
 		TargetNodeID: workflow.NodeIDOf(target),
@@ -121,8 +126,13 @@ func TestPrepareManualMoveValidatesExecutableCompletionShapeWithoutMutation(t *t
 	if err != nil {
 		t.Fatalf("ListCurrentNodes: %v", err)
 	}
-	if len(currentNodes) != 1 || !currentNodes[0].Reference.Equal(started.Reference) {
-		t.Fatalf("current nodes = %+v, want unchanged source", currentNodes)
+	if len(currentNodes) != len(before) {
+		t.Fatalf("current nodes after rejected move = %+v, before = %+v", currentNodes, before)
+	}
+	for index := range before {
+		if !currentNodes[index].Reference.Equal(before[index].Reference) {
+			t.Fatalf("current nodes after rejected move = %+v, before = %+v", currentNodes, before)
+		}
 	}
 }
 
@@ -415,7 +425,7 @@ func TestManualMoveFanoutTransitionReplacesTaskWithEveryBranch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareManualMove: %v", err)
 	}
-	mutation, err := store.PrepareManualMoveApply(ctx, prepared, &ExecutionTargetCandidate{
+	moved, err := store.ApplyManualMove(ctx, prepared, &ExecutionTargetCandidate{
 		Snapshot: ExecutionTargetSnapshot{
 			Mode:       workflow.ExecutionTargetModeNone,
 			Provenance: ExecutionTargetProvenanceResolved,
@@ -426,16 +436,8 @@ func TestManualMoveFanoutTransitionReplacesTaskWithEveryBranch(t *testing.T) {
 		},
 	})
 	if err != nil {
-		t.Fatalf("PrepareManualMoveApply: %v", err)
+		t.Fatalf("ApplyManualMove: %v", err)
 	}
-	result := mutation.Result()
-	if result.ManualMove == nil || len(result.CreatedExecutableCurrentNodes) != 2 {
-		t.Fatalf("prepared fan-out Manual Move = %+v, want two executable branches", result)
-	}
-	if err := mutation.Commit(); err != nil {
-		t.Fatalf("Commit: %v", err)
-	}
-	moved := *result.ManualMove
 	if moved.Outcome != ManualMoveResultOutcomeApplied ||
 		len(moved.Mutation.Removed) != 1 ||
 		!moved.Mutation.Removed[0].Equal(source.Reference) ||

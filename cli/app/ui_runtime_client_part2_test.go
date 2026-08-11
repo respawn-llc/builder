@@ -13,6 +13,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -51,7 +52,6 @@ type reconnectRetryRuntimeControlClient struct {
 	submitCalls      int
 	recordCalls      int
 	submitRequestID  []string
-	submitRefs       []clientui.RuntimeOperationRef
 	recordRequestID  []string
 	localEntries     []serverapi.RuntimeAppendCommittedEntryRequest
 	showGoalResp     serverapi.RuntimeGoalShowResponse
@@ -62,7 +62,6 @@ type reconnectRetryRuntimeControlClient struct {
 	clearGoalResp    serverapi.RuntimeGoalShowResponse
 	interruptResp    serverapi.RuntimeInterruptResponse
 	interruptReq     serverapi.RuntimeInterruptRequest
-	interruptFn      func(context.Context, serverapi.RuntimeInterruptRequest) (serverapi.RuntimeInterruptResponse, error)
 }
 
 func (c *reconnectRetryRuntimeControlClient) submitRequestIDs() []string {
@@ -129,11 +128,10 @@ func (c *reconnectRetryRuntimeControlClient) SubmitUserTurn(_ context.Context, r
 	defer c.mu.Unlock()
 	c.submitCalls++
 	c.submitRequestID = append(c.submitRequestID, req.ClientRequestID)
-	c.submitRefs = append(c.submitRefs, req.OperationRef)
 	if c.submitCalls == 1 && c.firstSubmitErr != nil {
 		return serverapi.RuntimeSubmitUserTurnResponse{}, c.firstSubmitErr
 	}
-	return serverapi.RuntimeSubmitUserTurnResponse{Message: "recovered"}, nil
+	return serverapi.RuntimeSubmitUserTurnResponse{Message: textutil.Value("recovered")}, nil
 }
 
 func (c *reconnectRetryRuntimeControlClient) SubmitUserShellCommand(context.Context, serverapi.RuntimeSubmitUserShellCommandRequest) error {
@@ -144,10 +142,7 @@ func (c *reconnectRetryRuntimeControlClient) CompactContext(context.Context, ser
 	return nil
 }
 
-func (c *reconnectRetryRuntimeControlClient) Interrupt(ctx context.Context, req serverapi.RuntimeInterruptRequest) (serverapi.RuntimeInterruptResponse, error) {
-	if c.interruptFn != nil {
-		return c.interruptFn(ctx, req)
-	}
+func (c *reconnectRetryRuntimeControlClient) Interrupt(_ context.Context, req serverapi.RuntimeInterruptRequest) (serverapi.RuntimeInterruptResponse, error) {
 	c.mu.Lock()
 	c.interruptReq = req
 	c.mu.Unlock()
@@ -302,28 +297,20 @@ func TestRuntimeClientGoalMutationMethodsPatchCachedMainView(t *testing.T) {
 	}
 }
 
-func TestRuntimeClientPublicInterruptMethodsDoNotCommitRuntimeTuple(t *testing.T) {
+func TestRuntimeClientInterruptDoesNotCommitRuntimeTuple(t *testing.T) {
 	current := runtimeTupleTestView(
 		10,
 		runtimeTupleTestIdleActivity(),
-		runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationAccepted),
 	)
 	controls := &reconnectRetryRuntimeControlClient{interruptResp: serverapi.RuntimeInterruptResponse{
-		Version:             clientui.ReadModelVersion{Epoch: current.Version.Epoch, Generation: current.Version.Generation, Sequence: 11},
-		Activity:            runtimeTupleTestRunningActivity(),
-		InputReconciliation: runtimeTupleTestReconciliation(clientui.RuntimeInputReconciliationSubmitted),
+		Version:  clientui.ReadModelVersion{Epoch: current.Version.Epoch, Generation: current.Version.Generation, Sequence: 11},
+		Activity: runtimeTupleTestRunningActivity(),
 	}}
 	runtimeClient := newTestSessionRuntimeClientWithControls(controls)
 	runtimeClient.storeMainView(current)
 
-	if err := runtimeClient.InterruptWithPendingRefs(nil); err != nil {
-		t.Fatalf("interrupt with pending refs: %v", err)
-	}
-	assertRuntimeTupleView(t, runtimeClient.MainView(), current)
-
-	target := newRuntimeOperationRef(clientui.RuntimeOperationKindSubmit)
-	if err := runtimeClient.InterruptWithTarget(target, []clientui.RuntimeOperationRef{target}); err != nil {
-		t.Fatalf("interrupt with target: %v", err)
+	if err := runtimeClient.Interrupt(); err != nil {
+		t.Fatalf("interrupt: %v", err)
 	}
 	assertRuntimeTupleView(t, runtimeClient.MainView(), current)
 }
@@ -452,14 +439,13 @@ func TestRuntimeClientSubmitUserMessageRecoversRuntimeUnavailableAndReusesReques
 	runtimeClient.SetRuntimeReactivator(reactivator)
 
 	submission, err := runtimeClient.SubmitRuntimeInput(context.Background(), clientui.RuntimeSubmitRequest{
-		OperationRef: clientui.RuntimeOperationRef{
-			Kind:            clientui.RuntimeOperationKindSubmit,
-			ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
-		},
-		PreSubmitCompactionOperationRef: newRuntimeOperationRef(clientui.RuntimeOperationKindPreSubmitCompact),
-		Input:                           runtimeinput.Text("hello"),
+		ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
+		Input:           runtimeinput.Text("hello"),
 	})
-	message := submission.Message
+	message := ""
+	if submission.Message != nil {
+		message = *submission.Message
+	}
 	if err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
 	}
@@ -501,14 +487,13 @@ func TestRuntimeClientSubmitUserMessageRecoversRuntimeUnavailable(t *testing.T) 
 	runtimeClient.SetRuntimeReactivator(reactivator)
 
 	submission, err := runtimeClient.SubmitRuntimeInput(context.Background(), clientui.RuntimeSubmitRequest{
-		OperationRef: clientui.RuntimeOperationRef{
-			Kind:            clientui.RuntimeOperationKindSubmit,
-			ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
-		},
-		PreSubmitCompactionOperationRef: newRuntimeOperationRef(clientui.RuntimeOperationKindPreSubmitCompact),
-		Input:                           runtimeinput.Text("hello"),
+		ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
+		Input:           runtimeinput.Text("hello"),
 	})
-	message := submission.Message
+	message := ""
+	if submission.Message != nil {
+		message = *submission.Message
+	}
 	if err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
 	}
@@ -620,7 +605,7 @@ func TestRuntimeClientMainViewRecoveryPreservesReadDeadline(t *testing.T) {
 	runtimeClient.SetRuntimeReactivator(reactivator)
 
 	start := time.Now()
-	if _, err := runtimeClient.refreshMainViewSync(uiRuntimeReadTimeout, nil); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := runtimeClient.refreshMainViewSync(uiRuntimeReadTimeout); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("refreshMainViewSync error = %v, want reactivation deadline error", err)
 	}
 	if elapsed := time.Since(start); elapsed > uiRuntimeReadTimeout+500*time.Millisecond {
@@ -678,14 +663,13 @@ func TestRuntimeClientReconnectWarningFailureDoesNotBlockSubmit(t *testing.T) {
 	runtimeClient.SetRuntimeReactivator(reactivator)
 
 	submission, err := runtimeClient.SubmitRuntimeInput(context.Background(), clientui.RuntimeSubmitRequest{
-		OperationRef: clientui.RuntimeOperationRef{
-			Kind:            clientui.RuntimeOperationKindSubmit,
-			ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
-		},
-		PreSubmitCompactionOperationRef: newRuntimeOperationRef(clientui.RuntimeOperationKindPreSubmitCompact),
-		Input:                           runtimeinput.Text("hello"),
+		ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
+		Input:           runtimeinput.Text("hello"),
 	})
-	message := submission.Message
+	message := ""
+	if submission.Message != nil {
+		message = *submission.Message
+	}
 	if err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
 	}

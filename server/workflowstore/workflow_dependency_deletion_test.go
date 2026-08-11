@@ -75,8 +75,9 @@ func TestDeleteProjectCascadesTaskDependenciesWithoutSurvivorTouch(t *testing.T)
 	if _, err := store.AddTaskDependency(ctx, TaskDependencyAddRequest{BlockerTaskID: blocker.ID, BlockedTaskID: blocked.ID}); err != nil {
 		t.Fatalf("add project dependency: %v", err)
 	}
-	artifacts := projectDeleteArtifactsNoop{}
-	if blockers, err := store.DeleteProject(ctx, ProjectDeleteRequest{ProjectID: binding.ProjectID, Artifacts: artifacts}); err != nil {
+	if blockers, err := store.DeleteProject(ctx, ProjectDeleteRequest{
+		ProjectID: binding.ProjectID,
+	}); err != nil {
 		t.Fatalf("DeleteProject: %v", err)
 	} else if len(blockers) != 0 {
 		t.Fatalf("DeleteProject blockers = %+v, want none", blockers)

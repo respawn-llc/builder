@@ -25,28 +25,12 @@ type API struct {
 	authority                *Authority
 	runtimeClientFactory     runtimewire.RuntimeClientFactory
 	managedWorktreeBaseDir   string
-	workflowSessionActivator WorkflowSessionActivator
 }
 
 type APIOptions struct {
 	RuntimeClientFactory     runtimewire.RuntimeClientFactory
 	RecoveredWarningProvider func() (string, bool, error)
 	ManagedWorktreeBaseDir   string
-}
-
-type WorkflowSessionActivationRequest struct {
-	SessionID runtimeids.SessionID
-	OwnerID   string
-	Operation serverapi.SessionRuntimeActivationOperation
-}
-
-type WorkflowSessionActivationResult struct {
-	Handled    bool
-	Attachment RuntimeAttachment
-}
-
-type WorkflowSessionActivator interface {
-	ActivateWorkflowSession(context.Context, WorkflowSessionActivationRequest) (WorkflowSessionActivationResult, error)
 }
 
 func NewAPI(metadataStore *metadata.Store, fastModeState *runtime.FastModeState, authority *Authority, options APIOptions) *API {
@@ -58,13 +42,6 @@ func NewAPI(metadataStore *metadata.Store, fastModeState *runtime.FastModeState,
 		runtimeClientFactory:     options.RuntimeClientFactory,
 		managedWorktreeBaseDir:   options.ManagedWorktreeBaseDir,
 	}
-}
-
-func (s *API) WithWorkflowSessionActivator(activator WorkflowSessionActivator) {
-	if s == nil {
-		return
-	}
-	s.workflowSessionActivator = activator
 }
 
 func appendRecoveredWarning(store *session.Store, provider func() (string, bool, error)) error {
@@ -108,25 +85,6 @@ func (s *API) ActivateSessionRuntime(ctx context.Context, req serverapi.SessionR
 	sessionID, err := runtimeids.ParseSessionID(strings.TrimSpace(req.SessionID))
 	if err != nil {
 		return serverapi.SessionRuntimeActivateResponse{}, err
-	}
-	if s.workflowSessionActivator != nil {
-		result, activationErr := s.workflowSessionActivator.ActivateWorkflowSession(ctx, WorkflowSessionActivationRequest{
-			SessionID: sessionID,
-			OwnerID:   ownerID,
-			Operation: req.Operation,
-		})
-		if activationErr != nil {
-			return serverapi.SessionRuntimeActivateResponse{}, activationErr
-		}
-		if result.Handled {
-			resource := result.Attachment.Resource()
-			return serverapi.SessionRuntimeActivateResponse{
-				Attachment: serverapi.SessionRuntimeAttachment{
-					SessionID:  resource.SessionID().String(),
-					Generation: uint64(resource.Generation()),
-				},
-			}, nil
-		}
 	}
 	plan, err := s.interactiveRuntimePlan(ctx, req, sessionID.String())
 	if err != nil {

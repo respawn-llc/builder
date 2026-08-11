@@ -6,7 +6,6 @@ import (
 	"time"
 
 	askquestion "core/server/tools"
-	patchtool "core/server/tools/patch"
 )
 
 func TestOutsideWorkspaceApprovalRetainsExecutingToolIdentity(t *testing.T) {
@@ -23,7 +22,7 @@ func TestOutsideWorkspaceApprovalRetainsExecutingToolIdentity(t *testing.T) {
 			RunID:  "11111111-1111-4111-8111-111111111111",
 			StepID: "22222222-2222-4222-8222-222222222222",
 		}),
-		patchtool.OutsideWorkspaceRequest{RequestedPath: "/outside/file", ResolvedPath: "/outside/file"},
+		askquestion.FileAccessRequest{RequestedPath: "/outside/file", ResolvedPath: "/outside/file"},
 	)
 	if err != nil {
 		t.Fatalf("Approve: %v", err)
@@ -37,12 +36,12 @@ func TestOutsideWorkspaceApprovalRetainsExecutingToolIdentity(t *testing.T) {
 func TestOutsideWorkspaceApproverAcceptsTaskDetailNormalizedApprovalFromSharedBroker(t *testing.T) {
 	broker := askquestion.NewAskQuestionBroker()
 	approver := NewOutsideWorkspaceApprover(broker, "editing")
-	result := make(chan patchtool.OutsideWorkspaceApproval, 1)
+	result := make(chan askquestion.FileAccessApproval, 1)
 	errs := make(chan error, 1)
 	go func() {
 		approval, err := approver.Approve(
 			context.Background(),
-			patchtool.OutsideWorkspaceRequest{ResolvedPath: "/outside/file"},
+			askquestion.FileAccessRequest{ResolvedPath: "/outside/file"},
 		)
 		if err != nil {
 			errs <- err
@@ -72,8 +71,8 @@ func TestOutsideWorkspaceApproverAcceptsTaskDetailNormalizedApprovalFromSharedBr
 	case err := <-errs:
 		t.Fatalf("Approve: %v", err)
 	case approval := <-result:
-		if approval.Decision != patchtool.OutsideWorkspaceDecisionAllowOnce {
-			t.Fatalf("approval decision = %v", approval.Decision)
+		if approval.Kind != askquestion.FileAccessApprovalAllowOnce {
+			t.Fatalf("approval kind = %v", approval.Kind)
 		}
 		if approval.Commentary == nil || *approval.Commentary != commentary {
 			t.Fatalf("approval commentary = %v, want exact Task Detail commentary", approval.Commentary)

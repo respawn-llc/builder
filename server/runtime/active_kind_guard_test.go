@@ -26,13 +26,13 @@ func TestExclusiveStepCallSitesDeclareActiveKind(t *testing.T) {
 		"server/runtime/background.go:runQueuedNotices": {
 			activeKind: "ActiveKindBackground", spinnerPolicy: "background", statusPolicy: "background", interruptPolicy: "interruptible-if-step-cancelable", goalSuspension: "never", goalAutoResume: "never",
 		},
-		"server/runtime/engine.go:submitUserMessage": {
+		"server/runtime/engine.go:submitUserMessageWithOutcome": {
 			activeKind: "ActiveKindUserTurn", spinnerPolicy: "model-turn", statusPolicy: "user-turn", interruptPolicy: "interruptible", goalSuspension: "never", goalAutoResume: "after-success-only",
 		},
 		"server/runtime/engine.go:SubmitAgentSteerWithHooks": {
 			activeKind: "ActiveKindUserTurn", spinnerPolicy: "model-turn", statusPolicy: "user-turn", interruptPolicy: "interruptible", goalSuspension: "never", goalAutoResume: "after-success-only",
 		},
-		"server/runtime/engine.go:SubmitWorkflowTurnWithActiveHook": {
+		"server/runtime/engine.go:SubmitWorkflowTurn": {
 			activeKind: "ActiveKindWorkflowTurn", spinnerPolicy: "workflow-turn", statusPolicy: "workflow-turn", interruptPolicy: "interruptible", goalSuspension: "never", goalAutoResume: "never",
 		},
 		"server/runtime/engine.go:submitUserShellCommand": {

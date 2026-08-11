@@ -61,7 +61,8 @@ func TestResolveWorktreeSelectorUsesReadOnlyTopology(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveWorktreeSelector: %v", err)
 	}
-	if response.Worktree.Variant != serverapi.WorktreeTopologyVariantExternal || response.Selector == "" {
+	if response.Worktree.Topology.Variant != serverapi.WorktreeTopologyVariantExternal ||
+		response.Worktree.Projection.Selector == "" {
 		t.Fatalf("selector preview = %+v", response)
 	}
 }
@@ -319,7 +320,6 @@ func TestPreviewWorktreeDeleteDoesNotHoldMutationLane(t *testing.T) {
 	go func() {
 		response, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
 			SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-			ClientRequestID:  "req-create-preview-mutation-lane",
 			SessionID:        env.session.Meta().SessionID,
 			BaseRef:          "HEAD",
 			CreateBranch:     true,
@@ -423,6 +423,92 @@ func TestListWorkspaceWorktreesProjectsMarkerlessTopology(t *testing.T) {
 	}
 }
 
+func TestProjectWorktreeListProjectsSessionActionsAndExternalFallbackFromLoadedFacts(t *testing.T) {
+	branch := func(value string) *string { return &value }
+	external := func(root string, name *string, available, main bool) serverapi.WorktreeTopologyEntry {
+		return serverapi.WorktreeTopologyEntry{
+			Variant: serverapi.WorktreeTopologyVariantExternal,
+			External: &serverapi.WorktreeExternalFacts{Git: serverapi.WorktreeGitFacts{
+				CanonicalRoot: root,
+				HeadObject:    root + "-head",
+				BranchName:    name,
+				Detached:      name == nil,
+				IsMain:        main,
+				PathAvailable: available,
+			}},
+		}
+	}
+	entries := []serverapi.WorktreeTopologyEntry{
+		external("/repo", branch("main"), true, true),
+		{
+			Variant: serverapi.WorktreeTopologyVariantRegistered,
+			Registered: &serverapi.WorktreeRegisteredFacts{
+				Git: serverapi.WorktreeGitFacts{
+					CanonicalRoot: "/worktrees/registered",
+					HeadObject:    "registered-head",
+					BranchName:    branch("feature/registered"),
+					PathAvailable: true,
+				},
+				Kent: serverapi.WorktreeKentFacts{
+					WorktreeID:    "registered-id",
+					CanonicalRoot: "/worktrees/registered",
+					DisplayName:   "registered",
+				},
+			},
+		},
+		external("/worktrees/external", branch("feature/external"), true, false),
+		external("/worktrees/detached-title", nil, true, false),
+		external("/worktrees/unavailable", nil, false, false),
+	}
+
+	registeredTarget := clientui.SessionExecutionTarget{
+		WorkspaceID:   "workspace",
+		WorkspaceRoot: "/repo",
+		Worktree:      &clientui.SessionExecutionWorktreeTarget{ID: "registered-id", Root: "/worktrees/registered"},
+	}
+	currentRegistered, err := projectWorktreeList(entries, &registeredTarget)
+	if err != nil {
+		t.Fatalf("project current registered: %v", err)
+	}
+	if currentRegistered[0].Projection.Switch == nil ||
+		currentRegistered[0].Projection.Switch.Kind != serverapi.WorktreeSwitchOperationLeaveMain ||
+		currentRegistered[0].Projection.Switch.Selector != nil {
+		t.Fatalf("non-current main projection = %+v, want leave-main", currentRegistered[0].Projection)
+	}
+	if !currentRegistered[1].Projection.IsCurrent ||
+		currentRegistered[1].Projection.Switch != nil ||
+		currentRegistered[1].Projection.DeletePreview == nil {
+		t.Fatalf("current registered projection = %+v", currentRegistered[1].Projection)
+	}
+	assertEnterAndDeleteProjection(t, currentRegistered[2], "/worktrees/external")
+	assertEnterAndDeleteProjection(t, currentRegistered[3], "/worktrees/detached-title")
+	if currentRegistered[2].Projection.FallbackIdentity != nil {
+		t.Fatalf("branch-backed external fallback = %+v, want absent", currentRegistered[2].Projection)
+	}
+	if currentRegistered[3].Projection.FallbackIdentity == nil ||
+		*currentRegistered[3].Projection.FallbackIdentity != "detached-title" {
+		t.Fatalf("detached external fallback = %+v", currentRegistered[3].Projection)
+	}
+	if currentRegistered[4].Projection.Switch != nil ||
+		currentRegistered[4].Projection.DeletePreview == nil ||
+		currentRegistered[4].Projection.FallbackIdentity == nil ||
+		*currentRegistered[4].Projection.FallbackIdentity != "unavailable" {
+		t.Fatalf("path-unavailable external projection = %+v", currentRegistered[4].Projection)
+	}
+}
+
+func assertEnterAndDeleteProjection(t *testing.T, entry serverapi.WorktreeListEntry, deleteSelector string) {
+	t.Helper()
+	if entry.Projection.Switch == nil ||
+		entry.Projection.Switch.Kind != serverapi.WorktreeSwitchOperationEnter ||
+		entry.Projection.Switch.Selector == nil ||
+		*entry.Projection.Switch.Selector != entry.Projection.Selector ||
+		entry.Projection.DeletePreview == nil ||
+		entry.Projection.DeletePreview.Selector != deleteSelector {
+		t.Fatalf("entry projection = %+v, want enter selector %q and delete selector %q", entry.Projection, entry.Projection.Selector, deleteSelector)
+	}
+}
+
 func TestListWorkspaceWorktreesRejectsWorkspaceFromAnotherProject(t *testing.T) {
 	env := newServiceTestEnv(t)
 
@@ -464,7 +550,6 @@ func TestProjectTopologyRejectsDuplicateGitAndKentRoots(t *testing.T) {
 func TestCreateRegistersOnlyTheCreatedWorktreeWithoutReconcilingOtherTopology(t *testing.T) {
 	env := newServiceTestEnv(t)
 	response, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
-		ClientRequestID:  "create-without-reconcile",
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
 		SessionID:        env.session.Meta().SessionID,
 		BaseRef:          "HEAD",
@@ -481,6 +566,7 @@ func TestCreateRegistersOnlyTheCreatedWorktreeWithoutReconcilingOtherTopology(t 
 	if len(records) != 1 || records[0].ID != worktreeIDFromListEntry(response.Worktree) {
 		t.Fatalf("records = %+v, want only created worktree", records)
 	}
+	assertEnterAndDeleteProjection(t, response.Worktree, records[0].ID)
 	list, err := env.service.ListWorktrees(env.ctx, serverapi.WorktreeListRequest{SessionID: env.session.Meta().SessionID})
 	if err != nil {
 		t.Fatalf("ListWorktrees: %v", err)

@@ -10,21 +10,13 @@ import (
 )
 
 type SessionRuntimeActivateRequest struct {
-	ClientRequestID string                            `json:"client_request_id"`
-	SessionID       string                            `json:"session_id"`
-	OwnerID         string                            `json:"owner_id,omitempty"`
-	Operation       SessionRuntimeActivationOperation `json:"operation"`
-	ActiveSettings  config.Settings                   `json:"active_settings"`
-	EnabledToolIDs  []string                          `json:"enabled_tool_ids"`
-	Source          config.SourceReport               `json:"source"`
+	ClientRequestID string              `json:"client_request_id"`
+	SessionID       string              `json:"session_id"`
+	OwnerID         string              `json:"owner_id,omitempty"`
+	ActiveSettings  config.Settings     `json:"active_settings"`
+	EnabledToolIDs  []string            `json:"enabled_tool_ids"`
+	Source          config.SourceReport `json:"source"`
 }
-
-type SessionRuntimeActivationOperation string
-
-const (
-	SessionRuntimeActivationUserActivation        SessionRuntimeActivationOperation = "user_activation"
-	SessionRuntimeActivationTechnicalReattachment SessionRuntimeActivationOperation = "technical_reattachment"
-)
 
 type SessionRuntimeAttachment struct {
 	SessionID  string `json:"session_id"`
@@ -61,11 +53,6 @@ func (r SessionRuntimeActivateRequest) Validate() error {
 	}
 	if err := validateScopedSessionID(r.SessionID); err != nil {
 		return err
-	}
-	switch r.Operation {
-	case SessionRuntimeActivationUserActivation, SessionRuntimeActivationTechnicalReattachment:
-	default:
-		return errors.New("invalid session runtime activation operation")
 	}
 	return nil
 }

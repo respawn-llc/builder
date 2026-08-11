@@ -23,6 +23,7 @@ import (
 	shelltool "core/server/tools/shell"
 	"core/server/workflow"
 	"core/server/workflowruntime"
+	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
@@ -44,6 +45,7 @@ type authorityAutoReleaseLifecycle struct {
 type authorityPromptEvent struct {
 	resource  runtimeids.SessionResourceRef
 	scopeID   runtimeids.ExecutionScopeID
+	stepID    runtimeids.StepID
 	requestID string
 	resolved  bool
 }
@@ -293,7 +295,11 @@ func (c *ownerlessRetirementLLMClient) callCount() int {
 
 func (f authorityPromptFeed) PromptPendingScope(scope ExecutionScope, req tools.AskQuestionRequest, _ time.Time) error {
 	resource, _ := scope.Resource()
-	f <- authorityPromptEvent{resource: resource, scopeID: scope.ID(), requestID: req.ID}
+	stepID, err := runtimeids.ParseStepID(req.StepID)
+	if err != nil {
+		return err
+	}
+	f <- authorityPromptEvent{resource: resource, scopeID: scope.ID(), stepID: stepID, requestID: req.ID}
 	return nil
 }
 
@@ -528,7 +534,7 @@ func TestCloseIfIdleRetiresOwnerlessRuntimeAfterCurrentExecutionFinishes(t *test
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
 	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
-	authority := newAuthorityWithEventFeed(t, fixture, func(AgentResourceDescriptor, runtime.Event) {})
+	authority := newAuthorityWithEventFeed(t, fixture, func(runtimeids.SessionResourceRef, runtime.Event) {})
 	attachment := openLifecycleRuntime(t, authority, sessionID, "owner-a", &plan)
 
 	entered := make(chan struct{})
@@ -579,7 +585,7 @@ func TestCloseIfIdleFailsQueuedWorkAndRetiresOwnerlessRuntime(t *testing.T) {
 	sessionID := lifecycleSessionID(t, fixture)
 	var statusMu sync.Mutex
 	var statuses []runtime.QueuedUserMessageStatusEvent
-	authority := newAuthorityWithEventFeed(t, fixture, func(_ AgentResourceDescriptor, event runtime.Event) {
+	authority := newAuthorityWithEventFeed(t, fixture, func(_ runtimeids.SessionResourceRef, event runtime.Event) {
 		if event.QueuedUserMessageStatus == nil {
 			return
 		}
@@ -764,7 +770,7 @@ func TestExecutionRetirementDrainsAcceptedQueuedWorkBeforeClosing(t *testing.T) 
 	}
 	var statusMu sync.Mutex
 	var statuses []runtime.QueuedUserMessageStatusEvent
-	authority := newAuthorityWithEventFeed(t, fixture, func(_ AgentResourceDescriptor, event runtime.Event) {
+	authority := newAuthorityWithEventFeed(t, fixture, func(_ runtimeids.SessionResourceRef, event runtime.Event) {
 		if event.QueuedUserMessageStatus == nil {
 			return
 		}
@@ -882,7 +888,7 @@ func TestCloseIfIdleDrainsAcceptedQueuedWorkBeforeOwnerlessRetirement(t *testing
 	}
 	var statusMu sync.Mutex
 	var statuses []runtime.QueuedUserMessageStatusEvent
-	authority := newAuthorityWithEventFeed(t, fixture, func(_ AgentResourceDescriptor, event runtime.Event) {
+	authority := newAuthorityWithEventFeed(t, fixture, func(_ runtimeids.SessionResourceRef, event runtime.Event) {
 		if event.QueuedUserMessageStatus == nil {
 			return
 		}
@@ -1328,7 +1334,7 @@ func TestScriptExecutionRetiresBeforeCompletionFinalizer(t *testing.T) {
 		t.Fatalf("finalizing script remains interruptible: %+v", targets)
 	}
 	selectionCalled := false
-	selectionErr := authority.WithWorkflowInterruptSelection(taskID, nil, nil, func(WorkflowInterruptSelection) error {
+	selectionErr := authority.WithWorkflowInterruptSelection(taskID, nil, func(WorkflowInterruptSelection) error {
 		selectionCalled = true
 		return nil
 	})
@@ -1404,7 +1410,7 @@ func TestTaskInterruptSelectionIncludesFinalizingScriptAlongsideRunningTaskScope
 	deadline := time.After(3 * time.Second)
 	for {
 		var selection WorkflowInterruptSelection
-		selectionErr := authority.WithWorkflowInterruptSelection(taskID, nil, nil, func(got WorkflowInterruptSelection) error {
+		selectionErr := authority.WithWorkflowInterruptSelection(taskID, nil, func(got WorkflowInterruptSelection) error {
 			selection = got
 			return nil
 		})
@@ -1467,7 +1473,7 @@ func TestScriptStartupFailureLeavesNoWorkflowRunningOrInterruptibleState(t *test
 		t.Fatalf("startup failure published workflow execution: %+v", targets)
 	}
 	selectionCalled := false
-	selectionErr := authority.WithWorkflowInterruptSelection(taskID, nil, nil, func(WorkflowInterruptSelection) error {
+	selectionErr := authority.WithWorkflowInterruptSelection(taskID, nil, func(WorkflowInterruptSelection) error {
 		selectionCalled = true
 		return nil
 	})
@@ -2152,13 +2158,14 @@ func TestOwnerlessBackgroundContinuationPublishesQuestionFromExactExecution(t *t
 	if pending.resource != attachment.Resource() || pending.scopeID.IsZero() || pending.requestID == "" {
 		t.Fatalf("pending background question = %+v", pending)
 	}
-	if err := authority.SubmitPromptResolution(
+	if err := resolveAuthorityQuestionForTest(
+		authority,
 		sessionID,
+		pending.stepID,
 		pending.requestID,
 		testQuestionResolution("yes"),
-		nil,
 	); err != nil {
-		t.Fatalf("submit background question response: %v", err)
+		t.Fatalf("resolve background question batch: %v", err)
 	}
 	select {
 	case resolved := <-feed:
@@ -2699,6 +2706,7 @@ func TestPromptResponseResolvesCurrentExactExecutionScope(t *testing.T) {
 	}
 	workflowRef := workflowExecutionRefForTest(t, "task-pending-question", "node-pending-question", nil)
 	responseDone := make(chan promptAwaitTestResult, 1)
+	releaseExecution := make(chan struct{})
 	handle, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
 		Descriptor: mustOpenSessionDescriptor(t, sessionID),
 		Runtime:    &plan,
@@ -2707,6 +2715,10 @@ func TestPromptResponseResolvesCurrentExactExecutionScope(t *testing.T) {
 		Runner: func(ctx context.Context, scope ExecutionScope, _ AgentRuntimeBridge) error {
 			resolution, askErr := authority.AwaitPromptResolution(ctx, scope.ID(), request)
 			responseDone <- promptAwaitTestResult{resolution: resolution, err: askErr}
+			select {
+			case <-releaseExecution:
+			case <-ctx.Done():
+			}
 			return askErr
 		},
 	})
@@ -2716,7 +2728,11 @@ func TestPromptResponseResolvesCurrentExactExecutionScope(t *testing.T) {
 
 	resource, _ := handle.Scope().Resource()
 	pending := <-feed
-	if pending != (authorityPromptEvent{resource: resource, scopeID: handle.Scope().ID(), requestID: askID}) {
+	expectedStepID, err := runtimeids.ParseStepID(request.StepID)
+	if err != nil {
+		t.Fatalf("parse prompt step: %v", err)
+	}
+	if pending != (authorityPromptEvent{resource: resource, scopeID: handle.Scope().ID(), stepID: expectedStepID, requestID: askID}) {
 		t.Fatalf("pending prompt = %+v, want exact resource %v scope %s ask %s", pending, resource, handle.Scope().ID(), askID)
 	}
 	snapshot, err := authority.CurrentScopedTaskExecutionSnapshot(workflowRef.ProjectID, workflowRef.WorkflowID, workflowRef.CurrentNode.TaskID)
@@ -2731,14 +2747,18 @@ func TestPromptResponseResolvesCurrentExactExecutionScope(t *testing.T) {
 		!snapshot.Executions[0].HasPendingPromptKind(PendingPromptKindQuestion) {
 		t.Fatalf("pending question snapshot = %+v", snapshot)
 	}
+	mutationCalled := false
+	err = authority.WithInterruptibleAgentTurn(context.Background(), sessionID, nil, func(context.Context, *runtime.Engine) error {
+		mutationCalled = true
+		return nil
+	})
+	if !errors.Is(err, ErrExecutionPromptPending) || mutationCalled {
+		t.Fatalf("pending-prompt mutation error/called = %v/%t, want pending rejection before mutation", err, mutationCalled)
+	}
 
-	if err := authority.SubmitPromptResolution(
-		sessionID,
-		askID,
-		testQuestionResolution("yes"),
-		nil,
-	); err != nil {
-		t.Fatalf("submit prompt response: %v", err)
+	stepID := expectedStepID
+	if err := resolveAuthorityQuestionForTest(authority, sessionID, stepID, askID, testQuestionResolution("yes")); err != nil {
+		t.Fatalf("resolve prompt batch: %v", err)
 	}
 	resolved := <-feed
 	if resolved != (authorityPromptEvent{resource: resource, scopeID: handle.Scope().ID(), requestID: askID, resolved: true}) {
@@ -2749,6 +2769,49 @@ func TestPromptResponseResolvesCurrentExactExecutionScope(t *testing.T) {
 	} else {
 		requireQuestionAnswer(t, result.resolution, "yes")
 	}
+	waitingCtx, cancelWaiting := context.WithCancel(context.Background())
+	waitingDone := make(chan error, 1)
+	err = authority.WithInterruptibleAgentTurn(context.Background(), sessionID, nil, func(context.Context, *runtime.Engine) error {
+		started := make(chan struct{})
+		go func() {
+			close(started)
+			waitingDone <- authority.WithInterruptibleAgentTurn(waitingCtx, sessionID, nil, func(context.Context, *runtime.Engine) error {
+				return errors.New("canceled waiting mutation ran")
+			})
+		}()
+		<-started
+		time.Sleep(50 * time.Millisecond)
+		cancelWaiting()
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("interruptible Agent Turn mutation: %v", err)
+	}
+	if err := <-waitingDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled waiting mutation error = %v, want context canceled", err)
+	}
+	second := tools.AskQuestionRequest{ID: uuid.NewString(), StepID: uuid.NewString(), Question: "Again?"}
+	err = authority.WithInterruptibleAgentTurn(context.Background(), sessionID, nil, func(context.Context, *runtime.Engine) error {
+		started := make(chan struct{})
+		go func() {
+			close(started)
+			_, _ = authority.AwaitPromptResolution(context.Background(), handle.Scope().ID(), second)
+		}()
+		<-started
+		select {
+		case event := <-feed:
+			t.Fatalf("prompt admitted during interrupt mutation: %+v", event)
+		case <-time.After(50 * time.Millisecond):
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("interruptible Agent Turn mutation: %v", err)
+	}
+	if pending := <-feed; pending.requestID != second.ID || pending.resolved {
+		t.Fatalf("second pending prompt = %+v", pending)
+	}
+	close(releaseExecution)
 	if _, err := handle.Wait(context.Background()); err != nil {
 		t.Fatalf("wait agent execution: %v", err)
 	}
@@ -2799,7 +2862,16 @@ func TestPromptStoreMutationsDoNotRequireAuthorityLock(t *testing.T) {
 
 	submitDone := make(chan error, 1)
 	go func() {
-		submitDone <- store.Submit(request.ID, resolution, nil)
+		stepID, parseErr := runtimeids.ParseStepID(request.StepID)
+		if parseErr != nil {
+			submitDone <- parseErr
+			return
+		}
+		_, resolveErr := store.ResolvePromptBatch(context.Background(), stepID, []PromptAnswerCommand{{
+			PromptID: clientui.PromptID(request.ID),
+			Payload:  PromptQuestionAnswerCommand{Answer: resolution},
+		}})
+		submitDone <- resolveErr
 	}()
 	select {
 	case submitErr := <-submitDone:
@@ -2977,7 +3049,7 @@ func TestTaskExecutionRejectsPendingPromptsForQueuedAndScript(t *testing.T) {
 	}
 }
 
-func TestResolvePendingWorkflowPromptUsesExactTaskScope(t *testing.T) {
+func TestAuthorityResolvePromptBatchUsesExactFullKey(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
 	feed := make(authorityPromptFeed, 1)
@@ -3015,20 +3087,12 @@ func TestResolvePendingWorkflowPromptUsesExactTaskScope(t *testing.T) {
 		t.Fatalf("pending prompt = %+v, want scope %s ask %s", pending, handle.Scope().ID(), askID)
 	}
 
-	resolved, err := authority.ResolvePendingWorkflowPrompt(workflowRef.CurrentNode.TaskID, askID)
+	stepID, err := runtimeids.ParseStepID(request.StepID)
 	if err != nil {
-		t.Fatalf("ResolvePendingWorkflowPrompt: %v", err)
+		t.Fatalf("parse prompt step: %v", err)
 	}
-	if resolved.ScopeID != handle.Scope().ID() || resolved.SessionID != sessionID || !resolved.CurrentNode.Equal(workflowRef.CurrentNode) {
-		t.Fatalf("prompt resolution = %+v, want scope %s session %s node %v", resolved, handle.Scope().ID(), sessionID, workflowRef.CurrentNode)
-	}
-	if err := authority.SubmitPromptResolutionForScope(
-		resolved.ScopeID,
-		askID,
-		testQuestionResolution("yes"),
-		nil,
-	); err != nil {
-		t.Fatalf("SubmitPromptResolutionForScope: %v", err)
+	if err := resolveAuthorityQuestionForTest(authority, sessionID, stepID, askID, testQuestionResolution("yes")); err != nil {
+		t.Fatalf("ResolvePromptBatch: %v", err)
 	}
 	if result := <-responseDone; result.err != nil {
 		t.Fatalf("prompt resolution error = %v", result.err)
@@ -3038,8 +3102,12 @@ func TestResolvePendingWorkflowPromptUsesExactTaskScope(t *testing.T) {
 	if _, err := handle.Wait(context.Background()); err != nil {
 		t.Fatalf("wait agent execution: %v", err)
 	}
-	if _, err := authority.ResolvePendingWorkflowPrompt(workflowRef.CurrentNode.TaskID, askID); !errors.Is(err, serverapi.ErrPromptNotFound) {
-		t.Fatalf("retired prompt resolution error = %v, want prompt not found", err)
+	results, err := authority.ResolvePromptBatch(context.Background(), sessionID, stepID, []PromptAnswerCommand{{
+		PromptID: clientui.PromptID(askID),
+		Payload:  PromptQuestionAnswerCommand{Answer: testQuestionResolution("late")},
+	}})
+	if err != nil || len(results) != 1 || results[0].Outcome != PromptAnswerOutcomeSkipped {
+		t.Fatalf("retired prompt batch = (%+v, %v), want skipped", results, err)
 	}
 }
 
@@ -3077,13 +3145,12 @@ func TestQuestionCompletionReplacesRetainedRuntimeAfterDrain(t *testing.T) {
 	if pending.scopeID != handle.Scope().ID() || pending.requestID != askID {
 		t.Fatalf("pending question = %+v", pending)
 	}
-	if err := authority.SubmitPromptResolution(
-		sessionID,
-		askID,
-		testQuestionResolution("yes"),
-		nil,
-	); err != nil {
-		t.Fatalf("submit prompt response: %v", err)
+	stepID, err := runtimeids.ParseStepID(request.StepID)
+	if err != nil {
+		t.Fatalf("parse prompt step: %v", err)
+	}
+	if err := resolveAuthorityQuestionForTest(authority, sessionID, stepID, askID, testQuestionResolution("yes")); err != nil {
+		t.Fatalf("resolve prompt batch: %v", err)
 	}
 	if _, err := handle.Wait(context.Background()); err != nil {
 		t.Fatalf("wait questioning execution: %v", err)
@@ -3149,114 +3216,6 @@ func releasedWorkflowLeaseForTest(t *testing.T, authority *Authority, ref Workfl
 	return &lease
 }
 
-func TestAttachWorkflowRuntimeRequiresTheExpectedLiveExactGeneration(t *testing.T) {
-	fixture := newSessionRuntimeFixture(t)
-	sessionID := lifecycleSessionID(t, fixture)
-	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
-	workflowRef := workflowExecutionRefForTest(
-		t,
-		workflow.TaskID(uuid.NewString()),
-		workflow.NodeID(uuid.NewString()),
-		nil,
-	)
-	release := make(chan struct{})
-	handle, err := fixture.authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
-		Descriptor: mustOpenSessionDescriptor(t, sessionID),
-		Runtime:    &plan,
-		Workflow:   releasedWorkflowLeaseForTest(t, fixture.authority, workflowRef),
-		Resource:   OpenAgentResource{},
-		Runner: func(ctx context.Context, _ ExecutionScope, _ AgentRuntimeBridge) error {
-			select {
-			case <-release:
-				return nil
-			case <-ctx.Done():
-				return context.Cause(ctx)
-			}
-		},
-	})
-	if err != nil {
-		t.Fatalf("StartAgentExecution: %v", err)
-	}
-	scope := handle.Scope()
-	resource, ok := scope.Resource()
-	if !ok {
-		t.Fatal("workflow Agent Exact has no Session Resource")
-	}
-	expected := WorkflowRuntimeAttachmentExpectation{
-		SessionID:          sessionID,
-		ScopeID:            scope.ID(),
-		CurrentNode:        workflowRef.CurrentNode,
-		ResourceGeneration: resource.Generation(),
-	}
-	attachment, err := fixture.authority.AttachWorkflowRuntime(context.Background(), expected, "interactive-owner")
-	if err != nil {
-		t.Fatalf("AttachWorkflowRuntime: %v", err)
-	}
-	if attachment.Resource() != resource {
-		t.Fatalf("attached resource = %v, want %v", attachment.Resource(), resource)
-	}
-	if _, err := attachment.Release(context.Background(), RuntimeReleaseDetach); err != nil {
-		t.Fatalf("release attached owner: %v", err)
-	}
-
-	close(release)
-	if _, err := handle.Wait(context.Background()); err != nil {
-		t.Fatalf("wait workflow Exact retirement: %v", err)
-	}
-	if _, err := fixture.authority.AttachWorkflowRuntime(
-		context.Background(),
-		expected,
-		"late-owner",
-	); !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
-		t.Fatalf("attach after exact retirement error = %v, want runtime unavailable", err)
-	}
-
-	replacementRelease := make(chan struct{})
-	replacement, err := fixture.authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
-		Descriptor: mustOpenSessionDescriptor(t, sessionID),
-		Runtime:    &plan,
-		Workflow:   releasedWorkflowLeaseForTest(t, fixture.authority, workflowRef),
-		Resource:   OpenAgentResource{},
-		Runner: func(ctx context.Context, _ ExecutionScope, _ AgentRuntimeBridge) error {
-			select {
-			case <-replacementRelease:
-				return nil
-			case <-ctx.Done():
-				return context.Cause(ctx)
-			}
-		},
-	})
-	if err != nil {
-		t.Fatalf("start replacement Workflow Exact: %v", err)
-	}
-	t.Cleanup(func() {
-		close(replacementRelease)
-		_, _ = replacement.Wait(context.Background())
-	})
-	replacementResource, ok := replacement.Scope().Resource()
-	if !ok {
-		t.Fatal("replacement Workflow Exact has no Session Resource")
-	}
-	if replacementResource.Generation() <= expected.ResourceGeneration {
-		t.Fatalf(
-			"replacement Resource Generation = %d, want newer than stale generation %d",
-			replacementResource.Generation(),
-			expected.ResourceGeneration,
-		)
-	}
-	if _, err := fixture.authority.AttachWorkflowRuntime(
-		context.Background(),
-		expected,
-		"stale-owner-after-replacement",
-	); !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
-		t.Fatalf("stale expected attachment after replacement error = %v, want runtime unavailable", err)
-	}
-	current, live := fixture.authority.SessionExecution(sessionID)
-	if !live || current.Scope().ID() != replacement.Scope().ID() {
-		t.Fatalf("stale attachment changed current Exact: live=%v scope=%v, want %s", live, current.Scope().ID(), replacement.Scope().ID())
-	}
-}
-
 func workflowExecutionRefForTestPointer(
 	t *testing.T,
 	taskID workflow.TaskID,
@@ -3266,82 +3225,6 @@ func workflowExecutionRefForTestPointer(
 	t.Helper()
 	ref := workflowExecutionRefForTest(t, taskID, nodeID, branchKey)
 	return &ref
-}
-
-type retainedWorkflowOrdinaryStartGuard struct {
-	err   error
-	calls int
-}
-
-func (g *retainedWorkflowOrdinaryStartGuard) GuardOrdinaryAgentStart(
-	_ context.Context,
-	_ runtimeids.SessionID,
-) error {
-	g.calls++
-	return g.err
-}
-
-func TestAuthorityRejectsLeaseLessStartForRetainedWorkflowSession(t *testing.T) {
-	fixture := newSessionRuntimeFixture(t)
-	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("parse session id: %v", err)
-	}
-	guard := &retainedWorkflowOrdinaryStartGuard{err: ErrWorkflowSessionRoutingRequired}
-	authority := NewAuthority(AuthorityOptions{PersistenceRoot: fixture.config.PersistenceRoot})
-	authority.WithWorkflowSessionOrdinaryStartGuard(guard)
-	t.Cleanup(func() { _ = authority.Close(context.Background()) })
-
-	_, err = authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
-		Descriptor: mustOpenSessionDescriptor(t, sessionID),
-		Resource:   CurrentAgentResource{},
-		Runner:     func(context.Context, ExecutionScope, AgentRuntimeBridge) error { return nil },
-	})
-	if !errors.Is(err, ErrWorkflowSessionRoutingRequired) {
-		t.Fatalf("start error = %v, want %v", err, ErrWorkflowSessionRoutingRequired)
-	}
-	if guard.calls != 1 {
-		t.Fatalf("guard calls = %d, want 1", guard.calls)
-	}
-	if _, live := authority.SessionExecution(sessionID); live {
-		t.Fatal("rejected lease-less start created an Agent execution")
-	}
-}
-
-func TestAuthorityWorkflowLeaseBypassesOrdinaryStartGuard(t *testing.T) {
-	fixture := newSessionRuntimeFixture(t)
-	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("parse session id: %v", err)
-	}
-	guard := &retainedWorkflowOrdinaryStartGuard{err: ErrWorkflowSessionRoutingRequired}
-	authority := NewAuthority(AuthorityOptions{PersistenceRoot: fixture.config.PersistenceRoot})
-	authority.WithWorkflowSessionOrdinaryStartGuard(guard)
-	t.Cleanup(func() { _ = authority.Close(context.Background()) })
-	reference := workflow.CurrentNodeReference{
-		TaskID: "task-guard-workflow",
-		NodeID: "node-guard-workflow",
-	}
-	lease, err := authority.NewWorkflowExecutionLease(WorkflowExecutionRef{
-		ProjectID:   "project-guard-workflow",
-		WorkflowID:  authorityWorkflowID(t, "test"),
-		CurrentNode: reference,
-	})
-	if err != nil {
-		t.Fatalf("new Workflow lease: %v", err)
-	}
-	_, err = authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
-		Descriptor: mustOpenSessionDescriptor(t, sessionID),
-		Workflow:   &lease,
-		Resource:   CurrentAgentResource{},
-		Runner:     func(context.Context, ExecutionScope, AgentRuntimeBridge) error { return nil },
-	})
-	if errors.Is(err, ErrWorkflowSessionRoutingRequired) {
-		t.Fatalf("Workflow start reached ordinary-start guard: %v", err)
-	}
-	if guard.calls != 0 {
-		t.Fatalf("guard calls = %d, want 0 for Workflow lease", guard.calls)
-	}
 }
 
 func authorityTestRuntimePlan(t *testing.T, fixture sessionRuntimeFixture, client llm.Client, onEvent ...func(runtime.Event)) AgentRuntimePlan {

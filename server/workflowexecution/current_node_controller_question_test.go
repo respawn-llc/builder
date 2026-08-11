@@ -11,7 +11,6 @@ import (
 	askquestion "core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowstore"
-	"core/shared/serverapi"
 
 	"github.com/google/uuid"
 )
@@ -29,22 +28,40 @@ func TestCurrentNodeControllerTaskInterruptLeavesWaitingQuestionScopeNonQuiescen
 		StepID:   uuid.NewString(),
 		Question: "Keep waiting?",
 	}
-	pending, runningHandle := fixture.startPendingPromptWithScript(
-		t,
-		question,
-		request,
-		running,
-		sessionruntime.ScriptCommand{
-			Path: shellPath,
-			Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
-		},
-	)
+	pending := fixture.startPendingPrompt(t, question, request)
 	fixture.waitForPendingPrompt(t, question.TaskID, request.ID)
 	t.Cleanup(func() {
 		pending.handle.RequestStop()
 		_, _ = pending.handle.Wait(context.Background())
 	})
 
+	lease, err := fixture.authority.NewWorkflowExecutionLease(sessionruntime.WorkflowExecutionRef{
+		ProjectID:   "project-test",
+		WorkflowID:  currentNodeControllerTestWorkflowID,
+		CurrentNode: running,
+	})
+	if err != nil {
+		t.Fatalf("NewWorkflowExecutionLease: %v", err)
+	}
+	lease.Release()
+	runningHandle, err := fixture.authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
+		Workflow: &lease,
+		Command: sessionruntime.ScriptCommand{
+			Path: shellPath,
+			Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartScriptExecution: %v", err)
+	}
+	runningKey, err := running.Key()
+	if err != nil {
+		t.Fatalf("running Current Node key: %v", err)
+	}
+	fixture.controller.mu.Lock()
+	fixture.controller.live[lease.ScopeID()] = currentNodeLiveScope{reference: running, lease: lease}
+	fixture.controller.liveByNode[runningKey] = lease.ScopeID()
+	fixture.controller.mu.Unlock()
 	waitForRunningCurrentNode(t, fixture.authority, running)
 
 	if err := fixture.controller.Interrupt(context.Background(), InterruptSelector{TaskID: running.TaskID}); err != nil {
@@ -80,21 +97,39 @@ func TestCurrentNodeControllerManualMoveRejectsWaitingQuestionWithoutStoppingSib
 		StepID:   uuid.NewString(),
 		Question: "Keep waiting?",
 	}
-	pending, runningHandle := fixture.startPendingPromptWithScript(
-		t,
-		question,
-		request,
-		running,
-		sessionruntime.ScriptCommand{
-			Path: shellPath,
-			Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
-		},
-	)
+	pending := fixture.startPendingPrompt(t, question, request)
 	fixture.waitForPendingPrompt(t, question.TaskID, request.ID)
 	t.Cleanup(func() {
 		pending.handle.RequestStop()
 		_, _ = pending.handle.Wait(context.Background())
 	})
+	lease, err := fixture.authority.NewWorkflowExecutionLease(sessionruntime.WorkflowExecutionRef{
+		ProjectID:   "project-test",
+		WorkflowID:  currentNodeControllerTestWorkflowID,
+		CurrentNode: running,
+	})
+	if err != nil {
+		t.Fatalf("NewWorkflowExecutionLease: %v", err)
+	}
+	lease.Release()
+	runningHandle, err := fixture.authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
+		Workflow: &lease,
+		Command: sessionruntime.ScriptCommand{
+			Path: shellPath,
+			Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartScriptExecution: %v", err)
+	}
+	key, err := running.Key()
+	if err != nil {
+		t.Fatalf("running Current Node key: %v", err)
+	}
+	fixture.controller.mu.Lock()
+	fixture.controller.live[lease.ScopeID()] = currentNodeLiveScope{reference: running, lease: lease}
+	fixture.controller.liveByNode[key] = lease.ScopeID()
+	fixture.controller.mu.Unlock()
 	waitForRunningCurrentNode(t, fixture.authority, running)
 
 	if err := fixture.controller.InterruptForManualMove(context.Background(), running.TaskID, nil); !errors.Is(err, sessionruntime.ErrWorkflowQuestionPending) {
@@ -179,23 +214,25 @@ func TestCurrentNodeControllerAnswersOnlyDurablyBoundExactPromptScope(t *testing
 	pending := fixture.startPendingPrompt(t, reference, request)
 	fixture.waitForPendingPrompt(t, reference.TaskID, request.ID)
 
-	if err := fixture.answerWorkflowQuestion(
+	outcome, err := fixture.answerPromptBatch(
 		context.Background(),
-		reference.TaskID,
+		pending,
+		request.StepID,
 		"different-ask-id",
 		currentNodeQuestionAnswer("yes"),
-		nil,
-	); !errors.Is(err, serverapi.ErrPromptNotFound) {
-		t.Fatalf("unknown prompt answer error = %v, want prompt not found", err)
+	)
+	if err != nil || outcome != sessionruntime.PromptAnswerOutcomeSkipped {
+		t.Fatalf("unknown prompt batch = (%q, %v), want skipped", outcome, err)
 	}
-	if err := fixture.answerWorkflowQuestion(
+	outcome, err = fixture.answerPromptBatch(
 		context.Background(),
-		reference.TaskID,
+		pending,
+		request.StepID,
 		request.ID,
 		currentNodeQuestionAnswer("yes"),
-		nil,
-	); err != nil {
-		t.Fatalf("AnswerWorkflowQuestion: %v", err)
+	)
+	if err != nil || outcome != sessionruntime.PromptAnswerOutcomeResolved {
+		t.Fatalf("exact prompt batch = (%q, %v), want resolved", outcome, err)
 	}
 	select {
 	case result := <-pending.result:
@@ -208,8 +245,8 @@ func TestCurrentNodeControllerAnswersOnlyDurablyBoundExactPromptScope(t *testing
 	if _, err := pending.handle.Wait(context.Background()); err != nil {
 		t.Fatalf("wait prompt execution: %v", err)
 	}
-	if calls := fixture.store.bindingCalls(); len(calls) != 1 || calls[0].sessionID != pending.sessionID || !calls[0].reference.Equal(reference) {
-		t.Fatalf("binding validation calls = %+v, want exact session/current-node binding", calls)
+	if calls := fixture.store.bindingCalls(); len(calls) != 0 {
+		t.Fatalf("batch answer consulted Workflow durable bindings: %+v", calls)
 	}
 }
 
@@ -280,13 +317,14 @@ func TestCurrentNodeControllerReleasesMutationPermitAfterAcceptingAnswer(t *test
 
 	answerDone := make(chan error, 1)
 	go func() {
-		answerDone <- fixture.answerWorkflowQuestion(
+		_, err := fixture.answerPromptBatch(
 			context.Background(),
-			reference.TaskID,
+			currentNodePendingPrompt{sessionID: sessionID},
+			stepID,
 			firstID,
 			currentNodeQuestionAnswer("one"),
-			nil,
 		)
+		answerDone <- err
 	}()
 	select {
 	case result := <-firstResult:
@@ -299,13 +337,14 @@ func TestCurrentNodeControllerReleasesMutationPermitAfterAcceptingAnswer(t *test
 
 	independentDone := make(chan error, 1)
 	go func() {
-		independentDone <- fixture.answerWorkflowQuestion(
+		_, err := fixture.answerPromptBatch(
 			context.Background(),
-			independentReference.TaskID,
+			independent,
+			independentRequest.StepID,
 			independentRequest.ID,
 			currentNodeQuestionAnswer("independent"),
-			nil,
 		)
+		independentDone <- err
 	}()
 	select {
 	case err := <-independentDone:
@@ -328,27 +367,24 @@ func TestCurrentNodeControllerReleasesMutationPermitAfterAcceptingAnswer(t *test
 	}
 	select {
 	case err := <-answerDone:
-		t.Fatalf("answer returned before successor became pending: %v", err)
-	default:
+		if err != nil {
+			t.Fatalf("first prompt batch: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("prompt batch waited for prepared successor")
 	}
 
 	allowSuccessor <- struct{}{}
 	fixture.waitForPendingPrompt(t, reference.TaskID, secondID)
-	select {
-	case err := <-answerDone:
-		if err != nil {
-			t.Fatalf("AnswerWorkflowQuestion: %v", err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("answer did not return after successor became pending")
-	}
-	if err := fixture.authority.SubmitPromptResolution(
-		sessionID,
+	outcome, err := fixture.answerPromptBatch(
+		context.Background(),
+		currentNodePendingPrompt{sessionID: sessionID},
+		stepID,
 		secondID,
 		currentNodeQuestionAnswer("two"),
-		nil,
-	); err != nil {
-		t.Fatalf("submit second prompt: %v", err)
+	)
+	if err != nil || outcome != sessionruntime.PromptAnswerOutcomeResolved {
+		t.Fatalf("second prompt batch = (%q, %v), want resolved", outcome, err)
 	}
 	select {
 	case result := <-secondResult:
@@ -385,12 +421,12 @@ func TestCurrentNodeControllerMalformedPreparedBatchResolvesAwaiterWithInvariant
 	pending := fixture.startPendingPrompt(t, reference, request)
 	fixture.waitForPendingPrompt(t, reference.TaskID, request.ID)
 
-	err := fixture.answerWorkflowQuestion(
+	_, err := fixture.answerPromptBatch(
 		context.Background(),
-		reference.TaskID,
+		pending,
+		request.StepID,
 		request.ID,
 		currentNodeQuestionAnswer("yes"),
-		nil,
 	)
 	var invariantErr sessionruntime.PromptBatchInvariantError
 	if !errors.As(err, &invariantErr) {
@@ -398,17 +434,22 @@ func TestCurrentNodeControllerMalformedPreparedBatchResolvesAwaiterWithInvariant
 	}
 	select {
 	case result := <-pending.result:
-		if !errors.As(result.err, &invariantErr) {
-			t.Fatalf("prompt await error = %v, want PromptBatchInvariantError", result.err)
+		t.Fatalf("malformed batch mutated pending prompt: %+v", result)
+	default:
+	}
+	if count := fixture.pendingPromptCount(reference.TaskID, request.ID); count != 1 {
+		t.Fatalf("malformed batch retained %d pending prompts, want 1", count)
+	}
+	if err := pending.handle.Stop(context.Background()); err != nil {
+		t.Fatalf("stop pending prompt: %v", err)
+	}
+	select {
+	case result := <-pending.result:
+		if !errors.Is(result.err, context.Canceled) {
+			t.Fatalf("stopped prompt result error = %v, want cancellation", result.err)
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("prompt awaiter remained blocked after malformed prepared batch")
-	}
-	if _, err := pending.handle.Wait(context.Background()); !errors.As(err, &invariantErr) {
-		t.Fatalf("prompt execution error = %v, want PromptBatchInvariantError", err)
-	}
-	if _, err := fixture.authority.ResolvePendingWorkflowPrompt(reference.TaskID, request.ID); !errors.Is(err, serverapi.ErrPromptNotFound) {
-		t.Fatalf("resolved malformed prompt error = %v, want prompt not found", err)
+		t.Fatal("timed out waiting for stopped prompt")
 	}
 }
 
@@ -424,31 +465,29 @@ func TestCurrentNodeControllerRejectsOwnershipMismatchWithoutPromptDelivery(t *t
 	fixture.waitForPendingPrompt(t, reference.TaskID, request.ID)
 	fixture.store.setBindingError(workflowstore.ErrSessionNotCurrentWorkflowNode)
 
-	err := fixture.answerWorkflowQuestion(
+	outcome, err := fixture.answerPromptBatch(
 		context.Background(),
-		reference.TaskID,
+		pending,
+		request.StepID,
 		request.ID,
 		currentNodeQuestionAnswer("yes"),
-		nil,
 	)
-	if !errors.Is(err, serverapi.ErrPromptNotFound) {
-		t.Fatalf("ownership mismatch answer error = %v, want prompt not found", err)
+	if err != nil || outcome != sessionruntime.PromptAnswerOutcomeResolved {
+		t.Fatalf("prompt batch = (%q, %v), want resolved", outcome, err)
 	}
 	select {
 	case result := <-pending.result:
-		t.Fatalf("ownership mismatch delivered response %+v", result)
-	default:
-	}
-	if err := pending.handle.Stop(context.Background()); err != nil {
-		t.Fatalf("stop undelivered prompt execution: %v", err)
-	}
-	select {
-	case result := <-pending.result:
-		if !errors.Is(result.err, context.Canceled) {
-			t.Fatalf("undelivered prompt result error = %v, want cancellation", result.err)
+		if result.err != nil || result.resolution == nil {
+			t.Fatalf("prompt result = %+v, want exact successful answer", result)
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for canceled undelivered prompt")
+		t.Fatal("timed out waiting for prompt response")
+	}
+	if _, err := pending.handle.Wait(context.Background()); err != nil {
+		t.Fatalf("wait prompt execution: %v", err)
+	}
+	if calls := fixture.store.bindingCalls(); len(calls) != 0 {
+		t.Fatalf("batch answer consulted Workflow durable bindings: %+v", calls)
 	}
 }
 
@@ -460,22 +499,13 @@ func TestCurrentNodeControllerRejectsAmbiguousPromptScope(t *testing.T) {
 		StepID:   uuid.NewString(),
 		Question: "Proceed?",
 	}
-	pending := fixture.startPendingPrompts(t, []workflow.CurrentNodeReference{
-		currentNodeReferenceForControllerTest(t, string(taskID), "node-question-a"),
-		currentNodeReferenceForControllerTest(t, string(taskID), "node-question-b"),
-	}, request)
-	first, second := pending[0], pending[1]
+	first := fixture.startPendingPrompt(t, currentNodeReferenceForControllerTest(t, string(taskID), "node-question-a"), request)
+	fixture.waitForPendingPrompt(t, taskID, request.ID)
+	second := fixture.startPendingPrompt(t, currentNodeReferenceForControllerTest(t, string(taskID), "node-question-b"), request)
 	fixture.waitForAmbiguousPendingPrompt(t, taskID, request.ID)
 
-	err := fixture.answerWorkflowQuestion(
-		context.Background(),
-		taskID,
-		request.ID,
-		currentNodeQuestionAnswer("yes"),
-		nil,
-	)
-	if !errors.Is(err, sessionruntime.ErrWorkflowPromptAmbiguous) {
-		t.Fatalf("ambiguous prompt answer error = %v, want prompt ambiguity", err)
+	if count := fixture.pendingPromptCount(taskID, request.ID); count != 2 {
+		t.Fatalf("matching pending prompts = %d, want 2 exact executions", count)
 	}
 	if calls := fixture.store.bindingCalls(); len(calls) != 0 {
 		t.Fatalf("ambiguous prompt checked durable bindings = %+v, want none", calls)

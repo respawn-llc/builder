@@ -400,7 +400,7 @@ func TestGitInspectorResolveCreateTarget(t *testing.T) {
 		{
 			name: "invalid branch", target: "feature..bad",
 			results: map[string]stubGitCommandResult{
-				gitCommandKey("check-ref-format", "--branch", "feature..bad"):              {err: errors.New("exit status 128"), exitCode: 128},
+				gitCommandKey("check-ref-format", "refs/heads/feature..bad"):               {err: errors.New("exit status 1"), exitCode: 1},
 				gitCommandKey("rev-parse", "--verify", "--quiet", "feature..bad^{object}"): {err: errors.New("exit status 1"), exitCode: 1},
 			},
 			invalid: true,
@@ -466,6 +466,156 @@ func TestGitInspectorIsValidBranchNamePropagatesContextCancellation(t *testing.T
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("isValidBranchName error = %v, want context canceled", err)
 	}
+}
+
+func TestGitInspectorInspectProspectiveInitialTaskBranchRejectsInvalidName(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	initGitRepo(t, workspaceRoot)
+
+	err := NewGitInspector(nil).InspectProspectiveInitialTaskBranch(
+		context.Background(),
+		workspaceRoot,
+		"feature..invalid",
+	)
+
+	var branchErr *InitialTaskBranchError
+	if !errors.As(err, &branchErr) {
+		t.Fatalf("error = %T %v, want InitialTaskBranchError", err, err)
+	}
+	if branchErr.Kind != InitialTaskBranchErrorInvalidName ||
+		branchErr.BranchName != "feature..invalid" ||
+		branchErr.Ref != nil ||
+		branchErr.Remote != nil {
+		t.Fatalf("initial Task branch error = %+v", branchErr)
+	}
+}
+
+func TestGitInspectorInspectProspectiveInitialTaskBranchRejectsCheckoutShorthand(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	initGitRepo(t, workspaceRoot)
+	runGit(t, workspaceRoot, "switch", "-c", "feature/previous-checkout")
+	runGit(t, workspaceRoot, "switch", "-")
+
+	err := NewGitInspector(nil).InspectProspectiveInitialTaskBranch(
+		context.Background(),
+		workspaceRoot,
+		"@{-1}",
+	)
+
+	var branchErr *InitialTaskBranchError
+	if !errors.As(err, &branchErr) {
+		t.Fatalf("error = %T %v, want InitialTaskBranchError", err, err)
+	}
+	if branchErr.Kind != InitialTaskBranchErrorInvalidName ||
+		branchErr.BranchName != "@{-1}" ||
+		branchErr.Ref != nil ||
+		branchErr.Remote != nil {
+		t.Fatalf("initial Task branch error = %+v", branchErr)
+	}
+}
+
+func TestGitInspectorInspectProspectiveInitialTaskBranchRejectsUncreatableNames(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	initGitRepo(t, workspaceRoot)
+
+	for _, branchName := range []string{"HEAD", "-leading-dash"} {
+		t.Run(branchName, func(t *testing.T) {
+			err := NewGitInspector(nil).InspectProspectiveInitialTaskBranch(
+				context.Background(),
+				workspaceRoot,
+				branchName,
+			)
+
+			var branchErr *InitialTaskBranchError
+			if !errors.As(err, &branchErr) {
+				t.Fatalf("error = %T %v, want InitialTaskBranchError", err, err)
+			}
+			if branchErr.Kind != InitialTaskBranchErrorInvalidName ||
+				branchErr.BranchName != branchName ||
+				branchErr.Ref != nil ||
+				branchErr.Remote != nil {
+				t.Fatalf("initial Task branch error = %+v", branchErr)
+			}
+		})
+	}
+}
+
+func TestGitInspectorInspectProspectiveInitialTaskBranchFindsExactCollisions(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	initGitRepo(t, workspaceRoot)
+	commitOID := runGit(t, workspaceRoot, "rev-parse", "HEAD")
+	runGit(t, workspaceRoot, "branch", "feature/local")
+	runGit(t, workspaceRoot, "-c", "tag.gpgSign=false", "tag", "feature/tag")
+	runGit(t, workspaceRoot, "remote", "add", "upstream", "https://example.invalid/upstream.git")
+	runGit(t, workspaceRoot, "update-ref", "refs/remotes/upstream/feature/remote", commitOID)
+
+	runner := &recordingGitCommandRunner{delegate: execGitCommandRunner{}}
+	inspector := NewGitInspector(runner)
+	tests := []struct {
+		branchName string
+		kind       *InitialTaskBranchErrorKind
+		ref        *string
+		remote     *string
+	}{
+		{
+			branchName: "feature/local",
+			kind:       initialTaskBranchErrorKindPointer(InitialTaskBranchErrorLocalCollision),
+			ref:        stringPointer("refs/heads/feature/local"),
+		},
+		{
+			branchName: "feature/remote",
+			kind:       initialTaskBranchErrorKindPointer(InitialTaskBranchErrorRemoteTrackingCollision),
+			ref:        stringPointer("refs/remotes/upstream/feature/remote"),
+			remote:     stringPointer("upstream"),
+		},
+		{branchName: "feature/tag"},
+		{branchName: "feature/new"},
+	}
+	for _, test := range tests {
+		t.Run(test.branchName, func(t *testing.T) {
+			runner.resetCalls()
+			err := inspector.InspectProspectiveInitialTaskBranch(context.Background(), workspaceRoot, test.branchName)
+			if test.kind == nil {
+				if err != nil {
+					t.Fatalf("InspectProspectiveInitialTaskBranch: %v", err)
+				}
+			} else {
+				var branchErr *InitialTaskBranchError
+				if !errors.As(err, &branchErr) {
+					t.Fatalf("error = %T %v, want InitialTaskBranchError", err, err)
+				}
+				if branchErr.Kind != *test.kind ||
+					branchErr.BranchName != test.branchName ||
+					!reflectOptionalStringEqual(branchErr.Ref, test.ref) ||
+					!reflectOptionalStringEqual(branchErr.Remote, test.remote) {
+					t.Fatalf("initial Task branch error = %+v", branchErr)
+				}
+			}
+			for _, call := range runner.calls {
+				if len(call) == 0 {
+					continue
+				}
+				switch call[0] {
+				case "fetch", "ls-remote", "push":
+					t.Fatalf("prospective branch inspection contacted a remote: %v", call)
+				}
+			}
+		})
+	}
+
+	noRemoteRoot := t.TempDir()
+	initGitRepo(t, noRemoteRoot)
+	if err := inspector.InspectProspectiveInitialTaskBranch(context.Background(), noRemoteRoot, "feature/no-remotes"); err != nil {
+		t.Fatalf("branch in repository without remotes rejected: %v", err)
+	}
+}
+
+func initialTaskBranchErrorKindPointer(value InitialTaskBranchErrorKind) *InitialTaskBranchErrorKind {
+	return &value
+}
+
+func reflectOptionalStringEqual(left, right *string) bool {
+	return left == nil && right == nil || left != nil && right != nil && *left == *right
 }
 
 func TestGitInspectorResolveRevisionPeelsCommitAndReportsCanonicalRef(t *testing.T) {

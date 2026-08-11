@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/textutil"
 )
@@ -17,7 +18,9 @@ type SessionActiveTranscriptProvider interface {
 }
 
 type PendingPromptSnapshot struct {
-	ID                     string
+	PromptID               clientui.PromptID
+	SessionID              runtimeids.SessionID
+	StepID                 runtimeids.StepID
 	CreatedAt              time.Time
 	Question               string
 	Suggestions            []string
@@ -100,7 +103,7 @@ func (r *pendingQuestionResolver) questionFromPendingPrompt(sessionID string, as
 		return pendingQuestion{}, false, fmt.Errorf("load pending prompts for session %q: %w", sessionID, err)
 	}
 	for _, snapshot := range snapshots {
-		if strings.TrimSpace(snapshot.ID) != askID {
+		if string(snapshot.PromptID) != askID {
 			continue
 		}
 		return pendingQuestionFromPrompt(snapshot)
@@ -109,21 +112,33 @@ func (r *pendingQuestionResolver) questionFromPendingPrompt(sessionID string, as
 }
 
 func pendingQuestionFromPrompt(snapshot PendingPromptSnapshot) (pendingQuestion, bool, error) {
+	if err := snapshot.PromptID.Validate(); err != nil {
+		return pendingQuestion{}, true, fmt.Errorf("pending prompt identity: %w", err)
+	}
+	if snapshot.SessionID.IsZero() {
+		return pendingQuestion{}, true, fmt.Errorf("pending prompt %q has no session identity", snapshot.PromptID)
+	}
+	if snapshot.StepID.IsZero() {
+		return pendingQuestion{}, true, fmt.Errorf("pending prompt %q has no step identity", snapshot.PromptID)
+	}
 	if snapshot.Approval {
 		decisions := append([]clientui.ApprovalDecision(nil), snapshot.ApprovalDecisions...)
 		for _, decision := range decisions {
 			switch decision {
 			case clientui.ApprovalDecisionAllowOnce, clientui.ApprovalDecisionAllowSession, clientui.ApprovalDecisionDeny:
 			default:
-				return pendingQuestion{}, true, fmt.Errorf("pending approval question %q has invalid decision %q", snapshot.ID, decision)
+				return pendingQuestion{}, true, fmt.Errorf("pending approval question %q has invalid decision %q", snapshot.PromptID, decision)
 			}
 		}
 		if len(decisions) == 0 {
-			return pendingQuestion{}, true, fmt.Errorf("pending approval question %q has no approval decisions", snapshot.ID)
+			return pendingQuestion{}, true, fmt.Errorf("pending approval question %q has no approval decisions", snapshot.PromptID)
 		}
 		return pendingQuestion{
 			message: strings.TrimSpace(snapshot.Question),
 			prompt: &serverapi.WorkflowAttentionQuestionPrompt{
+				SessionID:         snapshot.SessionID,
+				StepID:            snapshot.StepID,
+				PromptID:          snapshot.PromptID,
 				Kind:              serverapi.WorkflowAttentionQuestionKindApproval,
 				ApprovalDecisions: decisions,
 			},
@@ -132,13 +147,16 @@ func pendingQuestionFromPrompt(snapshot PendingPromptSnapshot) (pendingQuestion,
 	suggestions := normalizedPendingQuestionSuggestions(snapshot.Suggestions)
 	recommended, err := validatePendingQuestionRecommendation(snapshot.RecommendedOptionIndex, len(suggestions))
 	if err != nil {
-		return pendingQuestion{}, true, fmt.Errorf("pending question %q: %w", snapshot.ID, err)
+		return pendingQuestion{}, true, fmt.Errorf("pending question %q: %w", snapshot.PromptID, err)
 	}
 	return pendingQuestion{
 		message:                strings.TrimSpace(snapshot.Question),
 		suggestions:            suggestions,
 		recommendedOptionIndex: recommended,
 		prompt: &serverapi.WorkflowAttentionQuestionPrompt{
+			SessionID:              snapshot.SessionID,
+			StepID:                 snapshot.StepID,
+			PromptID:               snapshot.PromptID,
 			Kind:                   serverapi.WorkflowAttentionQuestionKindOrdinary,
 			Suggestions:            suggestions,
 			RecommendedOptionIndex: textutil.Pointer(recommended),

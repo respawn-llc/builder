@@ -24,57 +24,6 @@ func (staticTransportAuth) AuthorizationHeader(context.Context) (string, error) 
 	return "Bearer test", nil
 }
 
-func TestDecodeScenarioRejectsUnknownFieldsAndUnionEscapeHatches(t *testing.T) {
-	t.Parallel()
-
-	id := uuid.New().String()
-	_, err := blackbox.DecodeScenario([]byte(`{"version":1,"id":"` + id + `","dimensions":{"rows":2,"cols":8},"model_operations":[],"actions":[],"delay_ms":1}`))
-	if err == nil {
-		t.Fatal("DecodeScenario accepted unknown delay field")
-	}
-	_, err = blackbox.DecodeScenario([]byte(`{"version":1,"id":"` + id + `","dimensions":{"rows":2,"cols":8},"model_operations":[],"actions":[{"id":"` + uuid.New().String() + `","kind":"terminate_process","input":"x"}]}`))
-	if err == nil {
-		t.Fatal("DecodeScenario accepted mixed action union")
-	}
-	_, err = blackbox.DecodeScenario([]byte(`{"version":1,"id":"` + id + `","dimensions":{"rows":2,"cols":8},"model_operations":[],"actions":[{"id":"` + uuid.New().String() + `","kind":"terminate_process","input":""}]}`))
-	if err == nil {
-		t.Fatal("DecodeScenario accepted explicitly empty mixed action union field")
-	}
-	_, err = blackbox.DecodeScenario([]byte(`{"version":1,"id":"` + id + `","dimensions":{"rows":2,"cols":8},"model_operations":[],"actions":[{"id":"` + uuid.New().String() + `","kind":"wait","predicate":{"kind":"private_mode","mode":25,"enabled":true,"rows":0}}]}`))
-	if err == nil {
-		t.Fatal("DecodeScenario accepted an irrelevant predicate field")
-	}
-	_, err = blackbox.DecodeScenario([]byte(`{"version":1,"id":"` + id + `","dimensions":{"rows":2,"cols":8},"model_operations":[{"id":"` + uuid.New().String() + `","route":"compact","stream":false}],"actions":[]}`))
-	if err == nil {
-		t.Fatal("DecodeScenario accepted explicitly irrelevant model operation field")
-	}
-}
-
-func TestDecodeScenarioRejectsInvalidIdentitiesPayloadsAndRouteCombinations(t *testing.T) {
-	t.Parallel()
-
-	id := uuid.New().String()
-	action := uuid.New().String()
-	operation := uuid.New().String()
-	cases := []string{
-		`{"version":2,"id":"` + id + `","dimensions":{"rows":2,"cols":8},"model_operations":[],"actions":[]}`,
-		`{"version":1,"id":"00000000-0000-0000-0000-000000000000","dimensions":{"rows":2,"cols":8},"model_operations":[],"actions":[]}`,
-		`{"version":1,"id":"` + id + `","dimensions":{"rows":2,"cols":8},"model_operations":[],"actions":[{"id":"` + action + `","kind":"enter_input","input":""}]}`,
-		`{"version":1,"id":"` + id + `","dimensions":{"rows":2,"cols":8},"model_operations":[{"id":"` + operation + `","route":"compact","outcome":"hold_sse"}],"actions":[]}`,
-		`{"version":1,"id":"` + id + `","dimensions":{"rows":2,"cols":8},"model_operations":[{"id":"` + operation + `","route":"model_metadata","outcome":"json","output":"x"}],"actions":[]}`,
-		`{"version":1,"id":"` + id + `","dimensions":{"rows":2,"cols":8},"model_operations":[],"actions":[{"id":"` + action + `","kind":"wait","predicate":{"kind":"all","children":[]}}]}`,
-	}
-	for _, document := range cases {
-		if _, err := blackbox.DecodeScenario([]byte(document)); err == nil {
-			t.Fatalf("DecodeScenario accepted invalid document: %s", document)
-		}
-	}
-	oversized := []byte(`{"version":1,"id":"` + id + `","dimensions":{"rows":2,"cols":8},"model_operations":[],"actions":[],"padding":"` + strings.Repeat("x", 256*1024) + `"}`)
-	if _, err := blackbox.DecodeScenario(oversized); err == nil {
-		t.Fatal("DecodeScenario accepted oversized document")
-	}
-}
-
 func TestResponsesStubRejectsUnexpectedDeveloperMessageCount(t *testing.T) {
 	want := 0
 	stub, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{
@@ -128,98 +77,6 @@ func TestResponsesStubAcceptsExpectedDeveloperMessageCount(t *testing.T) {
 	}
 	if err := stub.Verify(); err != nil {
 		t.Fatalf("Verify: %v", err)
-	}
-}
-
-func TestPredicateVocabularyAndCompositesUseStructuredObservation(t *testing.T) {
-	t.Parallel()
-
-	dimensions := analyzer.MustDimensions(2, 8)
-	screen := analyzer.NewScreenSnapshot(dimensions)
-	analysis := analyzer.Analysis{
-		Dimensions:         dimensions,
-		Screen:             screen,
-		PrivateModeChanges: []analyzer.PrivateModeChange{{Mode: 25, Enabled: true}},
-	}
-	observation := blackbox.RunObservation{
-		Analysis:     &analysis,
-		ClientExited: true,
-		ServerReady:  true,
-		Model: blackbox.StubSnapshot{
-			RequiredIndex: 1, RequiredTotal: 1,
-		},
-	}
-	enabled := true
-	rows, cols, mode := 2, 8, 25
-	for _, predicate := range []blackbox.Predicate{
-		{Kind: blackbox.PredicateParseable},
-		{Kind: blackbox.PredicateBlank},
-		{Kind: blackbox.PredicateDimensions, Rows: &rows, Cols: &cols},
-		{Kind: blackbox.PredicatePrivateMode, Mode: &mode, Enabled: &enabled},
-		{Kind: blackbox.PredicatePromptReady},
-		{Kind: blackbox.PredicateProcessExited},
-		{Kind: blackbox.PredicateServerReady},
-		{Kind: blackbox.PredicateModelConsumed},
-		{Kind: blackbox.PredicateNoActiveModels},
-		{Kind: blackbox.PredicateAll, Children: []blackbox.Predicate{{Kind: blackbox.PredicateParseable}, {Kind: blackbox.PredicateServerReady}}},
-		{Kind: blackbox.PredicateAny, Children: []blackbox.Predicate{{Kind: blackbox.PredicateNonBlank}, {Kind: blackbox.PredicateServerReady}}},
-	} {
-		if !predicate.Matches(observation) {
-			t.Fatalf("structured predicate %s did not match %#v", predicate.Kind, observation)
-		}
-	}
-	analysis.Screen.Cells[0][0] = analyzer.Cell{Content: "x"}
-	if !(&blackbox.Predicate{Kind: blackbox.PredicateNonBlank}).Matches(observation) {
-		t.Fatal("nonblank predicate did not inspect screen structure")
-	}
-}
-
-func TestDecodeScenarioDistinguishesAbsentAndInvalidZeroPredicateFields(t *testing.T) {
-	t.Parallel()
-
-	id := uuid.New().String()
-	action := uuid.New().String()
-	for _, document := range []string{
-		`{"version":1,"id":"` + id + `","dimensions":{"rows":2,"cols":8},"model_operations":[],"actions":[{"id":"` + action + `","kind":"wait","predicate":{"kind":"dimensions","rows":0,"cols":8}}]}`,
-		`{"version":1,"id":"` + id + `","dimensions":{"rows":2,"cols":8},"model_operations":[],"actions":[{"id":"` + action + `","kind":"wait","predicate":{"kind":"dimensions","cols":8}}]}`,
-		`{"version":1,"id":"` + id + `","dimensions":{"rows":2,"cols":8},"model_operations":[],"actions":[{"id":"` + action + `","kind":"wait","predicate":{"kind":"private_mode","mode":0,"enabled":true}}]}`,
-		`{"version":1,"id":"` + id + `","dimensions":{"rows":2,"cols":8},"model_operations":[],"actions":[{"id":"` + action + `","kind":"wait","predicate":{"kind":"private_mode","enabled":true}}]}`,
-	} {
-		if _, err := blackbox.DecodeScenario([]byte(document)); err == nil {
-			t.Fatalf("DecodeScenario accepted invalid zero or absent required predicate field: %s", document)
-		}
-	}
-}
-
-func TestPromptReadyRequiresCursorVisibilityAfterMostRecentAlternateExit(t *testing.T) {
-	t.Parallel()
-
-	predicate := blackbox.Predicate{Kind: blackbox.PredicatePromptReady}
-	observation := func(changes ...analyzer.PrivateModeChange) blackbox.RunObservation {
-		return blackbox.RunObservation{Analysis: &analyzer.Analysis{PrivateModeChanges: changes}}
-	}
-	if !predicate.Matches(observation(analyzer.PrivateModeChange{Mode: 25, Enabled: true})) {
-		t.Fatal("startup cursor-visible transition did not satisfy prompt readiness")
-	}
-	if predicate.Matches(observation(
-		analyzer.PrivateModeChange{Mode: 1049, Enabled: true},
-		analyzer.PrivateModeChange{Mode: 25, Enabled: true},
-	)) {
-		t.Fatal("cursor-visible transition inside alternate screen satisfied prompt readiness")
-	}
-	if predicate.Matches(observation(
-		analyzer.PrivateModeChange{Mode: 25, Enabled: true},
-		analyzer.PrivateModeChange{Mode: 1049, Enabled: true},
-		analyzer.PrivateModeChange{Mode: 1049, Enabled: false},
-	)) {
-		t.Fatal("cursor transition before alternate exit satisfied prompt readiness")
-	}
-	if !predicate.Matches(observation(
-		analyzer.PrivateModeChange{Mode: 1049, Enabled: true},
-		analyzer.PrivateModeChange{Mode: 1049, Enabled: false},
-		analyzer.PrivateModeChange{Mode: 25, Enabled: true},
-	)) {
-		t.Fatal("cursor-visible transition after alternate exit did not satisfy prompt readiness")
 	}
 }
 
@@ -570,21 +427,71 @@ func TestResponsesStubRecordsUnsupportedRouteAsProtocolFailure(t *testing.T) {
 func TestResponsesStubRejectsInvalidDeclaredOperationBeforeListening(t *testing.T) {
 	t.Parallel()
 
-	if _, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{
-		Route: blackbox.RouteResponses,
-	}}); err == nil {
-		t.Fatal("StartResponsesStub accepted an invalid declared operation")
-	}
+	negative := -1
+	invalidProbe := "not-a-uuid"
 	output := "invalid"
-	if _, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{
-		ID: uuid.New(), Route: blackbox.RouteCompact, Outcome: blackbox.OutcomeStream,
-	}}); err == nil {
-		t.Fatal("StartResponsesStub accepted compact stream outcome")
-	}
-	if _, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{
-		ID: uuid.New(), Route: blackbox.RouteInputTokens, Outcome: blackbox.OutcomeJSON, Output: &output,
-	}}); err == nil {
-		t.Fatal("StartResponsesStub accepted route-irrelevant output")
+	oversized := strings.Repeat("x", 64*1024+1)
+	invalidPhase := blackbox.ResponsePhase("invalid")
+	for name, operation := range map[string]blackbox.RequiredOperation{
+		"missing identity": {
+			Route: blackbox.RouteResponses,
+		},
+		"unsupported route": {
+			ID: uuid.New(), Route: blackbox.Route("unsupported"), Outcome: blackbox.OutcomeJSON,
+		},
+		"unsupported outcome": {
+			ID: uuid.New(), Route: blackbox.RouteResponses, Outcome: blackbox.Outcome("unsupported"),
+		},
+		"invalid probe": {
+			ID: uuid.New(), Route: blackbox.RouteResponses, Probe: &invalidProbe, Outcome: blackbox.OutcomeJSON,
+		},
+		"negative developer message count": {
+			ID: uuid.New(), Route: blackbox.RouteResponses, DeveloperMessageCount: &negative, Outcome: blackbox.OutcomeJSON,
+		},
+		"oversized probe": {
+			ID: uuid.New(), Route: blackbox.RouteResponses, Probe: &oversized, Outcome: blackbox.OutcomeJSON,
+		},
+		"oversized output": {
+			ID: uuid.New(), Route: blackbox.RouteResponses, Output: &oversized, Outcome: blackbox.OutcomeJSON,
+		},
+		"non-responses stream": {
+			ID: uuid.New(), Route: blackbox.RouteCompact, Outcome: blackbox.OutcomeStream,
+		},
+		"non-responses held stream": {
+			ID: uuid.New(), Route: blackbox.RouteCompact, Outcome: blackbox.OutcomeHoldSSE,
+		},
+		"non-responses probe": {
+			ID: uuid.New(), Route: blackbox.RouteCompact, Outcome: blackbox.OutcomeJSON, Probe: &invalidProbe,
+		},
+		"non-responses developer message count": {
+			ID: uuid.New(), Route: blackbox.RouteCompact, Outcome: blackbox.OutcomeJSON,
+			DeveloperMessageCount: &negative,
+		},
+		"non-responses output": {
+			ID: uuid.New(), Route: blackbox.RouteInputTokens, Outcome: blackbox.OutcomeJSON, Output: &output,
+		},
+		"non-responses response phase": {
+			ID: uuid.New(), Route: blackbox.RouteCompact, Outcome: blackbox.OutcomeJSON,
+			ResponsePhase: blackbox.NewResponsePhase(blackbox.ResponsePhaseFinal),
+		},
+		"non-responses session cache key": {
+			ID: uuid.New(), Route: blackbox.RouteCompact, Outcome: blackbox.OutcomeJSON, SessionCacheKey: true,
+		},
+		"emitted message missing phase": {
+			ID: uuid.New(), Route: blackbox.RouteResponses, Outcome: blackbox.OutcomeJSON, Output: &output,
+		},
+		"phase without emitted message": {
+			ID: uuid.New(), Route: blackbox.RouteResponses, Outcome: blackbox.OutcomeJSON,
+			ResponsePhase: blackbox.NewResponsePhase(blackbox.ResponsePhaseFinal),
+		},
+		"invalid response phase": {
+			ID: uuid.New(), Route: blackbox.RouteResponses, Outcome: blackbox.OutcomeJSON,
+			Output: &output, ResponsePhase: &invalidPhase,
+		},
+	} {
+		if _, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{operation}); err == nil {
+			t.Fatalf("StartResponsesStub accepted %s", name)
+		}
 	}
 }
 
@@ -864,8 +771,8 @@ func TestResponsesStubStreamsRequiredOperationToHTTPTransport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateStream: %v", err)
 	}
-	if response.AssistantText != output {
-		t.Fatalf("assistant text = %q, want %q", response.AssistantText, output)
+	if response.AssistantText == nil || *response.AssistantText != output {
+		t.Fatalf("assistant text = %#v, want %q", response.AssistantText, output)
 	}
 	if len(deltas) != 1 || deltas[0] != output {
 		t.Fatalf("assistant deltas = %#v, want %q", deltas, output)

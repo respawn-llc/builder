@@ -1,6 +1,8 @@
 export type { ApiConnectionSource, ApiService, ApiSubscription } from "./apiService";
 export type {
   BoardNodeCardsInput,
+  PromptAnswerBatchInput,
+  PromptAnswerBatchResponse,
   QuestionAnswerInput,
   TaskEditInput,
   TaskMoveInput,
@@ -37,6 +39,7 @@ export {
 } from "./models";
 export { boardNodeCardsPageSize, defaultBoardNodeCardsSort } from "./boardNodeCardsSorting";
 export {
+  CatalogContractError,
   ContractError,
   ProtocolMismatchError,
   RpcError,
@@ -54,14 +57,28 @@ export {
   errorMessage,
 } from "./errors";
 export type { WorkflowLabelErrorReason } from "./errors";
+export type { CatalogContractErrorReason } from "./errors";
 export type { WorkflowTaskDependencyErrorReason } from "./errors";
 export type { TaskSearchErrorReason } from "./errors";
 export { guiTaskCommentAuthor } from "./client";
 export type { JsonArray, JsonObject, JsonPrimitive, JsonValue } from "./json";
 export { newSetupOperationID, parseSetupOperationID, SetupOperationID } from "./setupOperationID";
+export { parseWorktreeOperationID, type WorktreeOperationID } from "./worktreeOperationID";
+export type * from "./schemas/worktree";
 export { rpcErrorCodes } from "./rpcErrorCodes";
+export { decodeWorktreeError, WorktreeError } from "./clientWorktree";
+export type { WorktreeErrorDetail } from "./clientWorktree";
 export { workflowIDSchema } from "./schemas/workflowID";
-export type { WorktreeSetupEvent, WorktreeSetupEventHandler, WorktreeSetupPhase } from "./worktreeSetup";
+export { nonBlankString } from "./schemas/common";
+export {
+  decodeWorktreeSetupRetainedError,
+  parseTaskSetupRecoveryDetail,
+  type TaskSetupRecovery,
+  type WorktreeSetupEvent,
+  type WorktreeSetupEventHandler,
+  type WorktreeSetupPhase,
+  type WorktreeSetupRetainedError,
+} from "./worktreeSetup";
 export type { WorkflowProjectEvent, WorkflowProjectEventHandler } from "./workflowProjectEvents";
 export { workflowLabelMaxIDs } from "./workflowLabelContract";
 export type { ConnectionPhase, ConnectionSnapshot } from "./connectionStore";
@@ -93,6 +110,8 @@ export type {
   TaskComment,
   TaskAttention,
   TaskCommentAuthorKind,
+  CommentPage,
+  OffsetPage,
   TaskDetail,
   TaskDependencies,
   TaskDependencyAddAvailability,
@@ -139,7 +158,8 @@ export type {
   WorkflowExecutionTargetUnavailableCause,
   WorkflowManagedExecutionTarget,
   WorkflowNoManagedExecutionTarget,
-  WorkflowGraphDraft,
+  WorkflowGraphEntityReference,
+  WorkflowGraphEntityType,
   WorkflowGraphMetadata,
   WorkflowGraphSaveConfirmation,
   WorkflowGraphSaveImpact,
@@ -161,9 +181,23 @@ export type {
   WorkflowValidation,
   WorkflowValidationError,
   WorkspaceSummary,
+  WorkspaceList,
   WorkspaceAvailability,
   WorkspaceUnlinkBlocker,
   WorkspaceUnlinkResponse,
+} from "./models";
+export type { WorkflowGraphDraft } from "./workflowGraphModels";
+export type {
+  AttentionQuestionPrompt,
+  ApprovalQuestionPrompt,
+  OrdinaryQuestionPrompt,
+  PromptIdentity,
+} from "./promptModels";
+export type {
+  SessionCatalogPage,
+  SessionCatalogSummary,
+  SessionCategory,
+  SessionPagePosition,
 } from "./models";
 export type {
   WorkflowEdgeSelectionMode,

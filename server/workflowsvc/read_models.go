@@ -41,7 +41,7 @@ type WorkflowTaskDependencyReadModel interface {
 }
 
 type WorkflowActivityReadModel interface {
-	List(context.Context, serverapi.WorkflowTaskActivityListRequest) (serverapi.WorkflowTaskActivityListResponse, error)
+	List(context.Context, serverapi.WorkflowTaskOffsetPageRequest) (serverapi.WorkflowTaskActivityListResponse, error)
 }
 
 type WorkflowAttentionReadModel interface {

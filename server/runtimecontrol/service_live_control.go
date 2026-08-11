@@ -17,10 +17,10 @@ import (
 var _ servicecontract.RuntimeLiveControlService = (*Service)(nil)
 
 func (s *Service) withLiveExecutionRuntime(ctx context.Context, id runtimeids.SessionID, fn func(context.Context, *runtime.Engine) error) error {
-	if s == nil || s.authority == nil {
+	if s == nil || s.execution == nil {
 		return errors.New("session runtime authority is required")
 	}
-	return s.authority.WithLiveExecutionRuntime(ctx, id, fn)
+	return s.execution.WithLiveExecutionRuntime(ctx, id, fn)
 }
 
 func (s *Service) LiveSteer(ctx context.Context, req serverapi.RuntimeLiveSteerRequest) (serverapi.RuntimeLiveSteerResponse, error) {

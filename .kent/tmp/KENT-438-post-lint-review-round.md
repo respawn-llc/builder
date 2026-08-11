@@ -1,7 +1,0 @@
-- [x] Reproduce the two new inline findings with deterministic regression tests.
-- [x] Enqueue ready held successors before failed-sibling recovery can block.
-- [x] Preserve mandatory post-turn release while suppressing compaction after post-commit cancellation.
-- [x] Run focused repetitions, race coverage, relevant full suites, vet, and the required build.
-- [x] Commit and push the complete review round.
-- [x] Reply to and resolve both addressed threads.
-- [x] Confirm PR state and return PR #724 to the watcher.

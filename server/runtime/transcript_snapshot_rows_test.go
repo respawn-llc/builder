@@ -86,6 +86,29 @@ func TestTranscriptCommittedRowFactsFromSnapshotOwnsKindsVisibilityAndIntegrity(
 	}
 }
 
+func TestTranscriptCommittedRowFactsFromSnapshotUsesBlankAssistantFinalAuthority(t *testing.T) {
+	t.Parallel()
+	facts := TranscriptCommittedRowFactsFromSnapshot(ChatSnapshot{Entries: []ChatEntry{
+		{
+			Role:  string(llm.RoleAssistant),
+			Phase: llm.MessagePhaseFinal,
+			Text:  " \t\n",
+		},
+		{
+			Role:        string(llm.RoleAssistant),
+			Phase:       llm.MessagePhaseFinal,
+			MessageType: llm.MessageTypeGoal,
+		},
+	}})
+
+	if len(facts) != 1 ||
+		facts[0].Kind != TranscriptCommittedRowFactAssistant ||
+		facts[0].Assistant == nil ||
+		facts[0].Assistant.Text != "" {
+		t.Fatalf("snapshot facts = %+v, want only the typed blank assistant final", facts)
+	}
+}
+
 func TestTranscriptDetailSnapshotOmitsRawToolCallEntries(t *testing.T) {
 	t.Parallel()
 	facts := TranscriptCommittedRowFactsFromSnapshot(ChatSnapshot{Entries: []ChatEntry{

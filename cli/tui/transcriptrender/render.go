@@ -138,7 +138,7 @@ func renderCommittedRow(
 		}
 		text := fmt.Sprintf("%d suggestions", row.ReviewerFeedback.SuggestionCount)
 		if mode == ModeOngoing || mode == ModeOngoingFull || mode == ModeDetailExpanded {
-			text = strings.Join(row.ReviewerFeedback.Suggestions, "\n\n")
+			text = reviewerFeedbackText(row.ReviewerFeedback.Suggestions)
 		}
 		return Row{Group: row.Kind, Lines: renderMarkdownTextBlock(StyleRoleNoticeReviewer, text, width, mode, toolMeta{}, textBlockOptions{}, linkPresentation)}
 	case clientui.TranscriptRowReviewerError:
@@ -149,6 +149,15 @@ func renderCommittedRow(
 	default:
 		return Row{Group: clientui.TranscriptRowNotice, Lines: renderTextBlock(StyleRoleNotice, "unknown transcript row", width, mode)}
 	}
+}
+
+func reviewerFeedbackText(suggestions []string) string {
+	var text strings.Builder
+	text.WriteString("Supervisor suggested:")
+	for index, suggestion := range suggestions {
+		fmt.Fprintf(&text, "\n%d. %s", index+1, strings.TrimSpace(suggestion))
+	}
+	return text.String()
 }
 
 // userAssistantDisplayText selects compact vs full source for user/assistant

@@ -858,8 +858,8 @@ func TestGenerate_ExplicitBaseURLAllowsAnonymousRequests(t *testing.T) {
 		t.Fatal(err)
 	default:
 	}
-	if resp.AssistantText != "hello from anonymous compatible server" {
-		t.Fatalf("assistant text = %q", resp.AssistantText)
+	if optionalStringValue(resp.AssistantText) != "hello from anonymous compatible server" {
+		t.Fatalf("assistant text = %q", optionalStringValue(resp.AssistantText))
 	}
 }
 

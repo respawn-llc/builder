@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"strings"
-	"sync"
 
 	"core/server/runtime"
 	"core/server/session"
@@ -13,185 +12,50 @@ import (
 	"core/shared/serverapi"
 )
 
-type SessionAgentOperationOwnerOrderingNotifier struct {
-	state *sessionAgentOperationOwnerOrderingState
-}
-
-type SessionAgentOperationOwnerOrderingNotification struct {
-	state *sessionAgentOperationOwnerOrderingState
-}
-
-type sessionAgentOperationOwnerOrderingState struct {
-	once sync.Once
-	done chan struct{}
-}
-
-func NewSessionAgentOperationOwnerOrdering() (
-	SessionAgentOperationOwnerOrderingNotifier,
-	SessionAgentOperationOwnerOrderingNotification,
-) {
-	state := &sessionAgentOperationOwnerOrderingState{done: make(chan struct{})}
-	return SessionAgentOperationOwnerOrderingNotifier{state: state},
-		SessionAgentOperationOwnerOrderingNotification{state: state}
-}
-
-func (n SessionAgentOperationOwnerOrderingNotifier) Complete() bool {
-	if n.state == nil {
-		return false
-	}
-	completed := false
-	n.state.once.Do(func() {
-		completed = true
-		close(n.state.done)
-	})
-	return completed
-}
-
-func (n SessionAgentOperationOwnerOrderingNotification) Done() <-chan struct{} {
-	if n.state == nil {
-		return nil
-	}
-	return n.state.done
-}
-
 type ExecutionAdapter struct {
 	authority *sessionruntime.Authority
-	router    WorkflowSessionExecutionRouter
 }
 
-type WorkflowSessionExecutionRouter interface {
-	RouteSessionAgentOperation(
-		context.Context,
-		runtimeids.SessionID,
-		SessionAgentOperationDriver,
-	) (bool, SessionAgentOperationOutcome, error)
+func NewExecutionAdapter(authority *sessionruntime.Authority) *ExecutionAdapter {
+	return &ExecutionAdapter{authority: authority}
 }
 
-type SessionAgentOperationStart func() (SessionAgentOperationOutcome, error)
-
-type SessionAgentOperationAdmitter func(SessionAgentOperationStart) error
-
-type WorkflowSessionAdmittedExecutionRouter interface {
-	RouteAdmittedSessionAgentOperation(
-		context.Context,
-		runtimeids.SessionID,
-		SessionAgentOperationDriver,
-		SessionAgentOperationAdmitter,
-	) (bool, error)
-}
-
-func NewExecutionAdapter(
-	authority *sessionruntime.Authority,
-	router WorkflowSessionExecutionRouter,
-) *ExecutionAdapter {
-	return &ExecutionAdapter{authority: authority, router: router}
-}
-
-func (a *ExecutionAdapter) RunAgentOperation(
+func (a *ExecutionAdapter) RunAgentExecution(
 	ctx context.Context,
 	sessionID string,
-	driver SessionAgentOperationDriver,
-) (SessionAgentOperationOutcome, error) {
-	if driver == nil {
-		return nil, errors.New("session Agent operation driver is required")
+	run func(context.Context, *runtime.Engine) error,
+) error {
+	if a == nil || a.authority == nil {
+		return errors.New("session runtime authority is required")
 	}
 	id, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
 	if err != nil {
-		return nil, err
-	}
-	handled, outcome, routeErr := a.routeWorkflowAgentOperation(ctx, id, driver)
-	if handled || routeErr != nil {
-		return outcome, routeErr
-	}
-	return a.runOrdinaryAgentOperation(ctx, id, driver)
-}
-
-func (a *ExecutionAdapter) routeWorkflowAgentOperation(
-	ctx context.Context,
-	sessionID runtimeids.SessionID,
-	driver SessionAgentOperationDriver,
-) (bool, SessionAgentOperationOutcome, error) {
-	if a == nil || a.router == nil {
-		return false, nil, nil
-	}
-	return a.router.RouteSessionAgentOperation(ctx, sessionID, driver)
-}
-
-func (a *ExecutionAdapter) runOrdinaryAgentOperation(
-	ctx context.Context,
-	id runtimeids.SessionID,
-	driver SessionAgentOperationDriver,
-) (SessionAgentOperationOutcome, error) {
-	if a == nil || a.authority == nil {
-		return nil, errors.New("session runtime authority is required")
+		return err
 	}
 	descriptor, err := session.NewOpenSessionDescriptor(id)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	ordering, _ := NewSessionAgentOperationOwnerOrdering()
-	var outcome SessionAgentOperationOutcome
-	err = a.authority.RunCurrentAgentExecution(ctx, descriptor, func(runCtx context.Context, engine *runtime.Engine) error {
-		var runErr error
-		outcome, runErr = driver.StartOwner(runCtx, engine, ordering)
-		return runErr
-	})
-	if errors.Is(err, sessionruntime.ErrSessionRunActive) {
-		err = a.authority.WithLiveExecutionRuntime(ctx, id, func(runCtx context.Context, engine *runtime.Engine) error {
-			var runErr error
-			outcome, runErr = driver.JoinLive(runCtx, engine)
-			return runErr
-		})
-	}
+	err = a.authority.RunCurrentAgentExecution(ctx, descriptor, run)
 	if err != nil {
 		if errors.Is(err, sessionruntime.ErrSessionStartsBlocked) {
-			err = errors.Join(serverapi.ErrSessionWorktreeDeleting, err)
+			return errors.Join(serverapi.ErrSessionWorktreeDeleting, err)
 		}
 		if errors.Is(err, sessionruntime.ErrSessionRunActive) {
-			err = errors.Join(serverapi.ErrSessionRunStarting, err)
+			return errors.Join(serverapi.ErrSessionRunStarting, err)
 		}
+		return err
 	}
-	return outcome, err
+	return nil
 }
 
-func (a *ExecutionAdapter) routeAdmittedWorkflowAgentOperation(
+func (a *ExecutionAdapter) WithLiveExecutionRuntime(
 	ctx context.Context,
 	sessionID runtimeids.SessionID,
-	driver SessionAgentOperationDriver,
-	admit SessionAgentOperationAdmitter,
-) (bool, error) {
-	if a == nil || a.router == nil {
-		return false, nil
-	}
-	router, ok := a.router.(WorkflowSessionAdmittedExecutionRouter)
-	if !ok {
-		return false, errors.New("workflow Session execution router does not support admitted work")
-	}
-	return router.RouteAdmittedSessionAgentOperation(ctx, sessionID, driver, admit)
-}
-
-func (a *ExecutionAdapter) JoinLiveAgentOperation(
-	ctx context.Context,
-	sessionID runtimeids.SessionID,
-	driver SessionAgentOperationDriver,
-) (SessionAgentOperationOutcome, error) {
+	callback func(context.Context, *runtime.Engine) error,
+) error {
 	if a == nil || a.authority == nil {
-		return nil, errors.New("session runtime authority is required")
+		return errors.New("session runtime authority is required")
 	}
-	if driver == nil {
-		return nil, errors.New("session Agent operation driver is required")
-	}
-	if a.router != nil {
-		handled, outcome, routeErr := a.router.RouteSessionAgentOperation(ctx, sessionID, driver)
-		if handled || routeErr != nil {
-			return outcome, routeErr
-		}
-	}
-	var outcome SessionAgentOperationOutcome
-	err := a.authority.WithLiveExecutionRuntime(ctx, sessionID, func(runCtx context.Context, engine *runtime.Engine) error {
-		var runErr error
-		outcome, runErr = driver.JoinLive(runCtx, engine)
-		return runErr
-	})
-	return outcome, err
+	return a.authority.WithLiveExecutionRuntime(ctx, sessionID, callback)
 }

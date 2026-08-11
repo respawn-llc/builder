@@ -1,8 +1,0 @@
-- [x] Read the full revision against origin/main c20b176e.
-- [x] Verify all five prior findings are represented in Architecture and Planning.
-- [x] Trace provisional transfer commit ordering and external visibility.
-- [x] Trace terminal entry ownership/cleanup under remote and embedded attachment lifecycles.
-- [x] Trace prelude-to-hydration ordering and client terminal handling.
-- [x] Trace explicit activation versus automatic technical reactivation.
-- [x] Check the protocol-102 hard-cut against origin/main transcript compatibility paths.
-- [x] Record blocking findings and transition.

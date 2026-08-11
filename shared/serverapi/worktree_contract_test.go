@@ -130,6 +130,154 @@ func TestWorktreeTopologyEntryDeletionSelectorCoversEveryDeletionVariant(t *test
 	}
 }
 
+func TestWorktreeListEntryValidatesSessionActionProjection(t *testing.T) {
+	enterSelector := "feature"
+	deleteSelector := "worktree-id"
+	branchName := "feature"
+	registered := WorktreeTopologyEntry{
+		Variant: WorktreeTopologyVariantRegistered,
+		Registered: &WorktreeRegisteredFacts{
+			Git: WorktreeGitFacts{
+				CanonicalRoot: "/repo/feature",
+				HeadObject:    "abc123",
+				BranchName:    &branchName,
+				PathAvailable: true,
+			},
+			Kent: WorktreeKentFacts{
+				WorktreeID:    deleteSelector,
+				CanonicalRoot: "/repo/feature",
+				DisplayName:   "feature",
+			},
+		},
+	}
+	valid := WorktreeListEntry{
+		Topology: registered,
+		Projection: WorktreeListProjection{
+			Selector: enterSelector,
+			Switch: &WorktreeSwitchOperation{
+				Kind:     WorktreeSwitchOperationEnter,
+				Selector: &enterSelector,
+			},
+			DeletePreview: &WorktreeDeletePreviewOperation{Selector: deleteSelector},
+		},
+	}
+	if err := valid.validateProjection(true); err != nil {
+		t.Fatalf("valid session projection rejected: %v", err)
+	}
+
+	other := "other"
+	tests := map[string]func(*WorktreeListEntry){
+		"current row switches": func(entry *WorktreeListEntry) { entry.Projection.IsCurrent = true },
+		"enter selector differs from row": func(entry *WorktreeListEntry) {
+			entry.Projection.Switch = &WorktreeSwitchOperation{Kind: WorktreeSwitchOperationEnter, Selector: &other}
+		},
+		"registered row leaves main": func(entry *WorktreeListEntry) {
+			entry.Projection.Switch = &WorktreeSwitchOperation{Kind: WorktreeSwitchOperationLeaveMain}
+		},
+		"delete selector differs from topology": func(entry *WorktreeListEntry) {
+			entry.Projection.DeletePreview = &WorktreeDeletePreviewOperation{Selector: "/repo/feature"}
+		},
+		"registered row has external fallback": func(entry *WorktreeListEntry) {
+			entry.Projection.FallbackIdentity = stringPointer("feature")
+		},
+		"main row has delete preview": func(entry *WorktreeListEntry) {
+			git := registered.Registered.Git
+			git.IsMain = true
+			entry.Topology.Registered = &WorktreeRegisteredFacts{Git: git, Kent: registered.Registered.Kent}
+			entry.Projection.Switch = &WorktreeSwitchOperation{Kind: WorktreeSwitchOperationLeaveMain}
+		},
+		"missing row switches": func(entry *WorktreeListEntry) {
+			entry.Topology = WorktreeTopologyEntry{
+				Variant: WorktreeTopologyVariantMissing,
+				Missing: &WorktreeMissingFacts{Kent: registered.Registered.Kent},
+			}
+		},
+		"unavailable path switches": func(entry *WorktreeListEntry) {
+			git := registered.Registered.Git
+			git.PathAvailable = false
+			entry.Topology = WorktreeTopologyEntry{
+				Variant:  WorktreeTopologyVariantExternal,
+				External: &WorktreeExternalFacts{Git: git},
+			}
+			entry.Projection.DeletePreview = &WorktreeDeletePreviewOperation{Selector: git.CanonicalRoot}
+		},
+		"branch-backed external has fallback": func(entry *WorktreeListEntry) {
+			entry.Topology = WorktreeTopologyEntry{
+				Variant:  WorktreeTopologyVariantExternal,
+				External: &WorktreeExternalFacts{Git: registered.Registered.Git},
+			}
+			entry.Projection.DeletePreview = &WorktreeDeletePreviewOperation{Selector: registered.Registered.Git.CanonicalRoot}
+			entry.Projection.FallbackIdentity = stringPointer("external")
+		},
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			entry := valid
+			mutate(&entry)
+			if err := entry.validateProjection(true); err == nil {
+				t.Fatalf("invalid session projection validated: %+v", entry)
+			}
+		})
+	}
+}
+
+func TestWorktreeProjectedResponsesValidateTheirProjectionScope(t *testing.T) {
+	branchName := "feature"
+	topology := WorktreeTopologyEntry{
+		Variant: WorktreeTopologyVariantRegistered,
+		Registered: &WorktreeRegisteredFacts{
+			Git: WorktreeGitFacts{
+				CanonicalRoot: "/repo/feature",
+				HeadObject:    "abc123",
+				BranchName:    &branchName,
+				PathAvailable: true,
+			},
+			Kent: WorktreeKentFacts{
+				WorktreeID:    "worktree-id",
+				CanonicalRoot: "/repo/feature",
+				DisplayName:   "feature",
+			},
+		},
+	}
+	sessionEntry, err := ProjectWorktreeListEntry(topology, branchName, false, true)
+	if err != nil {
+		t.Fatalf("ProjectWorktreeListEntry session: %v", err)
+	}
+	workspaceEntry, err := ProjectWorktreeListEntry(topology, branchName, false, false)
+	if err != nil {
+		t.Fatalf("ProjectWorktreeListEntry workspace: %v", err)
+	}
+	target := clientui.SessionExecutionTarget{
+		WorkspaceID:           "workspace",
+		WorkspaceName:         "Workspace",
+		WorkspaceRoot:         "/repo",
+		WorkspaceAvailability: clientui.ProjectAvailabilityAvailable,
+		CwdRelpath:            ".",
+		EffectiveWorkdir:      "/repo",
+	}
+	tests := []struct {
+		response interface{ Validate() error }
+		wantErr  bool
+	}{
+		{response: WorktreeListResponse{Target: target, Worktrees: []WorktreeListEntry{sessionEntry}}},
+		{response: WorktreeWorkspaceListResponse{WorkspaceID: "workspace", Worktrees: []WorktreeListEntry{workspaceEntry}}},
+		{response: WorktreeSelectorPreviewResponse{Worktree: sessionEntry}},
+		{response: WorktreeCreateResponse{Target: target, Worktree: sessionEntry}},
+		{response: WorktreeListResponse{Worktrees: []WorktreeListEntry{sessionEntry}}, wantErr: true},
+		{response: WorktreeCreateResponse{Worktree: sessionEntry}, wantErr: true},
+		{response: WorktreeListResponse{Target: target, Worktrees: []WorktreeListEntry{workspaceEntry}}, wantErr: true},
+		{response: WorktreeWorkspaceListResponse{WorkspaceID: "workspace", Worktrees: []WorktreeListEntry{sessionEntry}}, wantErr: true},
+		{response: WorktreeWorkspaceListResponse{Worktrees: []WorktreeListEntry{workspaceEntry}}, wantErr: true},
+		{response: WorktreeSelectorPreviewResponse{Worktree: workspaceEntry}, wantErr: true},
+		{response: WorktreeCreateResponse{Target: target, Worktree: workspaceEntry}, wantErr: true},
+	}
+	for _, test := range tests {
+		if err := test.response.Validate(); (err != nil) != test.wantErr {
+			t.Fatalf("%T validation error = %v, wantErr %t", test.response, err, test.wantErr)
+		}
+	}
+}
+
 func TestWorktreeDeletePreviewResponseValidatesTopologyOwnedSelectorAndCleanliness(t *testing.T) {
 	entry := WorktreeTopologyEntry{
 		Variant: WorktreeTopologyVariantMissing,
@@ -498,6 +646,33 @@ func TestWorktreeTransitionRequestsKeepFlatWireHeader(t *testing.T) {
 				t.Fatalf("decoded external origin=%+v", decoded.Origin)
 			}
 		})
+	}
+}
+
+func TestWorktreeCreateWireUsesOnlySetupOperationIdentity(t *testing.T) {
+	request := WorktreeCreateRequest{
+		SetupOperationID: NewWorktreeSetupOperationID(),
+		SessionID:        "session",
+		BaseRef:          "HEAD",
+		CreateBranch:     true,
+		BranchName:       "feature",
+	}
+	if err := request.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	encoded, err := json.Marshal(request)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if _, exists := fields["client_request_id"]; exists {
+		t.Fatalf("Worktree Create retained generic client request identity: %s", encoded)
+	}
+	if _, exists := fields["setup_operation_id"]; !exists {
+		t.Fatalf("Worktree Create omitted setup operation identity: %s", encoded)
 	}
 }
 

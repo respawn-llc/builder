@@ -20,8 +20,7 @@ vi.mock("@/app-facade", () => ({
         sort?: BoardNodeCardsSort;
       }): Promise<BoardNodeCardsPage> => {
         const offset = input.offset ?? 0;
-        const sort =
-          input.sort ?? ({ field: "updated", direction: "desc" } satisfies BoardNodeCardsSort);
+        const sort = input.sort ?? ({ field: "updated", direction: "desc" } satisfies BoardNodeCardsSort);
         testState.requests.push({ offset, sort });
         return {
           projectID: "project-1",
@@ -39,25 +38,15 @@ vi.mock("@/app-facade", () => ({
   },
 }));
 
-vi.mock("./BoardFilterGenerationRuntime", () => ({
-  useBoardFilterGeneration: () => ({
+vi.mock("./BoardQueryRuntime", () => ({
+  useBoardQuery: () => ({
+    filter: { labelFilter: { kind: "none" }, dependencyFilter: null },
     queriesEnabled: true,
-    requestAdapter: {
-      requestCards: async ({ transport }: { transport: () => Promise<BoardNodeCardsPage> }) => transport(),
-    },
-    snapshot: {
-      active: {
-        generation: 1,
-        filter: { labelFilter: { kind: "none" }, dependencyFilter: null },
-        retiring: false,
-      },
-      desiredFilter: null,
-    },
     sort: testState.sort,
   }),
 }));
 
-import { useBoardNodeCards } from "./useBoardData";
+import { shouldRefreshBoardFromProjectEvent, useBoardNodeCards } from "./useBoardData";
 
 describe("useBoardNodeCards pagination", () => {
   afterEach(() => {
@@ -138,6 +127,44 @@ describe("useBoardNodeCards pagination", () => {
       sort: { field: "labels", direction: "asc" },
     });
     expect(result.current.hasPreviousPage).toBe(false);
+  });
+});
+
+describe("Board project event refresh", () => {
+  it("leaves label membership refresh to the Project Label owner", () => {
+    expect(
+      shouldRefreshBoardFromProjectEvent(
+        {
+          action: "labels_changed",
+          occurredAtUnixMs: 1,
+          primaryEntityID: "task-1",
+          projectID: "project-1",
+          relatedIDs: [],
+          resource: "task",
+          workflowID: "workflow-1",
+        },
+        "workflow-1",
+        "workflow-1",
+      ),
+    ).toBe(false);
+  });
+
+  it("refreshes when a label event has no Workflow owner", () => {
+    expect(
+      shouldRefreshBoardFromProjectEvent(
+        {
+          action: "labels_changed",
+          occurredAtUnixMs: 1,
+          primaryEntityID: "task-1",
+          projectID: "project-1",
+          relatedIDs: [],
+          resource: "task",
+          workflowID: null,
+        },
+        "workflow-1",
+        "workflow-1",
+      ),
+    ).toBe(true);
   });
 });
 

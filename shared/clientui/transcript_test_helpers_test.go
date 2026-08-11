@@ -85,15 +85,6 @@ func transcriptTestRuntimeReadModelUpdate(t *testing.T) RuntimeReadModelUpdate {
 				ActiveKind: RuntimeActivityActiveKindUserTurn,
 			},
 		},
-		InputReconciliation: RuntimeInputReconciliationSnapshot{
-			Operations: []RuntimeInputReconciliation{{
-				Operation: RuntimeOperationRef{
-					Kind:            RuntimeOperationKindSubmit,
-					ClientRequestID: transcriptTestClientRequestID(t),
-				},
-				State: RuntimeInputReconciliationCommitted,
-			}},
-		},
 	}
 }
 

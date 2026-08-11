@@ -15,6 +15,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 
 	"github.com/google/uuid"
 	"golang.org/x/net/websocket"
@@ -205,7 +206,10 @@ func TestRemotePromptCommandImportCatalogAndInvocationUseServerRoots(t *testing.
 					return
 				}
 				resolvedContent <- content
-				if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.RuntimeSubmitUserTurnResponse{Message: "accepted"})); err != nil {
+				if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.RuntimeSubmitUserTurnResponse{
+					Message:    textutil.Value("accepted"),
+					ResultKind: clientui.UserTurnResultKindAssistantFinal,
+				})); err != nil {
 					t.Errorf("send submit response: %v", err)
 				}
 				return
@@ -232,19 +236,10 @@ func TestRemotePromptCommandImportCatalogAndInvocationUseServerRoots(t *testing.
 		t.Fatalf("catalog = %+v", catalog.Commands)
 	}
 	submitID := runtimeids.NewRuntimeClientRequestID()
-	preSubmitID := runtimeids.NewRuntimeClientRequestID()
 	_, err = remote.SubmitUserTurn(context.Background(), serverapi.RuntimeSubmitUserTurnRequest{
 		ClientRequestID: submitID.String(),
 		SessionID:       runtimeids.NewSessionID().String(),
 		Input:           runtimeinput.Command("prompt:remote_demo", "hello world"),
-		OperationRef: clientui.RuntimeOperationRef{
-			Kind:            clientui.RuntimeOperationKindSubmit,
-			ClientRequestID: submitID,
-		},
-		PreSubmitCompactionOperationRef: clientui.RuntimeOperationRef{
-			Kind:            clientui.RuntimeOperationKindPreSubmitCompact,
-			ClientRequestID: preSubmitID,
-		},
 	})
 	if err != nil {
 		t.Fatalf("SubmitUserTurn: %v", err)

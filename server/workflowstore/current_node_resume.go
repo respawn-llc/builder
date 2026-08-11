@@ -2,14 +2,11 @@ package workflowstore
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
 
-	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
-	"core/shared/runtimeids"
 )
 
 const CurrentNodeResumeParameterNotMaterializedCode = "workflow.resume.parameter_not_materialized"
@@ -59,24 +56,16 @@ func (s *Store) PreflightTaskResume(
 	if strings.TrimSpace(string(taskID)) == "" {
 		return nil, errors.New("task id is required")
 	}
-	return s.preflightTaskResumeWithQueries(ctx, s.queries, taskID)
-}
-
-func (s *Store) preflightTaskResumeWithQueries(
-	ctx context.Context,
-	q *sqlitegen.Queries,
-	taskID workflow.TaskID,
-) ([]CurrentNodeResumeClassification, error) {
-	task, err := q.GetTask(ctx, string(taskID))
+	task, err := s.queries.GetTask(ctx, string(taskID))
 	if err != nil {
 		return nil, err
 	}
-	definition, _, err := GetDefinitionWithQueries(ctx, q, task.WorkflowID)
+	definition, _, err := s.GetDefinition(ctx, task.WorkflowID)
 	if err != nil {
 		return nil, err
 	}
 	derived := workflow.DeriveWiring(definition)
-	currentNodes, err := s.interruptedExecutableCurrentNodesWithDefinitionAndQueries(ctx, q, taskID, definition)
+	currentNodes, err := s.interruptedExecutableCurrentNodesWithDefinition(ctx, taskID, definition)
 	if err != nil {
 		return nil, err
 	}
@@ -109,88 +98,6 @@ func (s *Store) preflightTaskResumeWithQueries(
 		classifications = append(classifications, classification)
 	}
 	return classifications, nil
-}
-
-func (s *Store) PrepareTaskResume(
-	ctx context.Context,
-	taskID workflow.TaskID,
-) (PreparedCurrentNodeMutation, error) {
-	if strings.TrimSpace(string(taskID)) == "" {
-		return nil, errors.New("task id is required")
-	}
-	return s.prepareCurrentNodeMutation(ctx, taskID, func(ctx context.Context, q *sqlitegen.Queries) (PreparedCurrentNodeMutationResult, error) {
-		classifications, err := s.preflightTaskResumeWithQueries(ctx, q, taskID)
-		if err != nil {
-			return PreparedCurrentNodeMutationResult{}, err
-		}
-		var validationErrors []error
-		for _, classification := range classifications {
-			if err := classification.ValidationError(); err != nil {
-				validationErrors = append(validationErrors, err)
-			}
-		}
-		if err := errors.Join(validationErrors...); err != nil {
-			return PreparedCurrentNodeMutationResult{}, err
-		}
-		ensuredSessions := make(map[runtimeids.SessionID]struct{})
-		for _, classification := range classifications {
-			if classification.CurrentNode.SessionID == nil {
-				continue
-			}
-			sessionID := *classification.CurrentNode.SessionID
-			if _, ensured := ensuredSessions[sessionID]; ensured {
-				continue
-			}
-			if _, err := s.ensureCurrentNodeSessionAssociationWithQueries(ctx, q, sessionID); err != nil {
-				return PreparedCurrentNodeMutationResult{}, err
-			}
-			ensuredSessions[sessionID] = struct{}{}
-		}
-		result := PreparedCurrentNodeMutationResult{}
-		for _, classification := range classifications {
-			currentNode := classification.CurrentNode
-			projection, found, err := pendingInterruptedCurrentNodeAttentionProjection(ctx, q, currentNode.Reference)
-			if err != nil {
-				return PreparedCurrentNodeMutationResult{}, err
-			}
-			if found {
-				result.TaskAttentionResolution.InterruptedCurrentNodes = append(
-					result.TaskAttentionResolution.InterruptedCurrentNodes,
-					projection,
-				)
-			}
-			resumed, err := resumeCurrentNodeWithQueries(ctx, q, currentNode.Reference)
-			if err != nil {
-				return PreparedCurrentNodeMutationResult{}, err
-			}
-			if resumed != 1 {
-				return PreparedCurrentNodeMutationResult{}, sql.ErrNoRows
-			}
-			ready := currentNode
-			ready.Scheduling = &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady}
-			result.Mutation.Updated = append(result.Mutation.Updated, ready)
-			result.CreatedExecutableCurrentNodes = append(result.CreatedExecutableCurrentNodes, ready)
-		}
-		return result, nil
-	})
-}
-
-func resumeCurrentNodeWithQueries(
-	ctx context.Context,
-	q *sqlitegen.Queries,
-	reference workflow.CurrentNodeReference,
-) (int64, error) {
-	if branchKey, branchScoped := reference.TransitionBranchKey(); branchScoped {
-		return q.ResumeBranchCurrentNode(ctx, sqlitegen.ResumeBranchCurrentNodeParams{
-			TaskID:              string(reference.TaskID),
-			NodeID:              string(reference.NodeID),
-			TransitionBranchKey: sql.NullString{String: string(branchKey), Valid: true},
-		})
-	}
-	return q.ResumeSerialCurrentNode(ctx, sqlitegen.ResumeSerialCurrentNodeParams{
-		TaskID: string(reference.TaskID),
-		NodeID: string(reference.NodeID),
-	})
 }
 
 func resumeTransitionProtectedParameterConsumption(
@@ -271,16 +178,7 @@ func (s *Store) interruptedExecutableCurrentNodesWithDefinition(
 	taskID workflow.TaskID,
 	definition workflow.Definition,
 ) ([]workflow.CurrentNode, error) {
-	return s.interruptedExecutableCurrentNodesWithDefinitionAndQueries(ctx, s.queries, taskID, definition)
-}
-
-func (s *Store) interruptedExecutableCurrentNodesWithDefinitionAndQueries(
-	ctx context.Context,
-	q *sqlitegen.Queries,
-	taskID workflow.TaskID,
-	definition workflow.Definition,
-) ([]workflow.CurrentNode, error) {
-	currentNodes, err := listTaskCurrentNodes(ctx, q, taskID)
+	currentNodes, err := s.ListCurrentNodes(ctx, taskID)
 	if err != nil {
 		return nil, err
 	}
@@ -296,11 +194,11 @@ func (s *Store) interruptedExecutableCurrentNodesWithDefinitionAndQueries(
 		if !executableNodeKind(node.Kind()) {
 			continue
 		}
-		_, pending, err := currentNodePendingApprovalID(ctx, q, currentNode.Reference)
+		eligible, err := s.IsCurrentNodeExecutionEligible(ctx, currentNode.Reference)
 		if err != nil {
 			return nil, err
 		}
-		if !pending {
+		if eligible {
 			interrupted = append(interrupted, currentNode)
 		}
 	}

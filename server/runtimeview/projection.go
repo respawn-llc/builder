@@ -31,11 +31,10 @@ func MainViewFromRuntimeActivity(
 		activity = clientui.RuntimeActivity{State: clientui.RuntimeActivityUnavailable, DiagnosticRecovery: true}
 	}
 	return clientui.RuntimeMainView{
-		Version:             version,
-		Status:              status,
-		Session:             sessionView,
-		Activity:            activity,
-		InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{},
+		Version:  version,
+		Status:   status,
+		Session:  sessionView,
+		Activity: activity,
 	}, nil
 }
 
@@ -45,11 +44,10 @@ func RuntimeMainViewFromActivity(activity clientui.RuntimeActivity, status clien
 		activity = clientui.RuntimeActivity{State: clientui.RuntimeActivityUnavailable, DiagnosticRecovery: true}
 	}
 	return clientui.RuntimeMainView{
-		Version:             version,
-		Status:              status,
-		Session:             sessionView,
-		Activity:            activity,
-		InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{},
+		Version:  version,
+		Status:   status,
+		Session:  sessionView,
+		Activity: activity,
 	}
 }
 

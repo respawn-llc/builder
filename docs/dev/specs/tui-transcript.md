@@ -99,6 +99,11 @@
 
 - Transcript visibility is defined by one product matrix, not ad hoc filters.
 - Visibility changes presentation only. It does not change Session history.
+- Outside an active Goal and Workflow Mode, an explicitly present empty or whitespace-only assistant final answer ends work silently. It creates no visible assistant row, completion notification, or terminal bell.
+- A response with omitted assistant final content and actual tool calls executes those calls without a missing-content warning and continues.
+- A response with omitted assistant final content and reasoning or nonempty commentary content continues without a missing-content warning.
+- A response with omitted assistant final content and no tool calls, reasoning, nonempty commentary content, or final content fails as a provider-contract error.
+- During an active Goal or Workflow Mode, a blank final answer follows that mode's ordinary incomplete-output behavior and does not silently stop.
 - Visibility values are `O` full ongoing+detail, `OC` collapsed/short ongoing plus full detail, `D` detail-only, and `X` hidden.
 - Unknown/malformed entries with recoverable text are `O`; empty unknown/malformed entries are `D` diagnostics.
 - Locked message-type visibility:
@@ -111,9 +116,10 @@
 - `interruption`: `O`
 - `error_feedback`: `O`
 - `compaction_soon_reminder`: `D`
-- Reviewer feedback uses `O` when `reviewer.verbose_output` is enabled and `OC` when it is disabled. Every nonempty Reviewer result creates one feedback row regardless of this setting. `O` renders the complete ordered Markdown suggestion list in ongoing scrollback. `OC` renders the suggestion count in ongoing and collapsed Detail; expanded Detail renders the complete ordered Markdown suggestion list.
+- Reviewer feedback uses `O` when `reviewer.verbose_output` is enabled and `OC` when it is disabled. Every nonempty Reviewer result creates one feedback row when the suggestions are issued, before the follow-up begins. `O` renders the complete ordered Markdown suggestion list in ongoing scrollback without truncation or ellipsis. `OC` renders the suggestion count in ongoing and collapsed Detail; expanded Detail renders the complete ordered Markdown suggestion list.
+- A successful Reviewer follow-up creates a separate `OC` outcome row after the follow-up. The outcome reports whether Kent applied the suggestions or made no changes.
 - Reviewer errors use `O` and show their complete failure detail.
-- Reviewer running and completion lifecycle create no transcript row.
+- Reviewer running and completion lifecycle events create no transcript row.
 - `background_notice`: `OC`
 - `custom_tool_call_output`: follows the tool call/result row it belongs to.
 - `handoff_future_message`: `D`
@@ -132,6 +138,7 @@
 - assistant commentary/thinking turns: `D`
 - tool calls: `OC`
 - Reviewer feedback: `OC` or `O` as defined above.
+- Reviewer outcome: `OC`.
 - Reviewer errors: `O`.
 - Reasoning Trace progress updates: `D`; their live first bold span is projected into Thinking Status while the model is reasoning. Detail keeps persisted Reasoning Traces faint and treats them as plain text. The server presentation projection removes only outer literal `**` delimiters; the TUI does not repeat that cleanup. A Reasoning Trace is not expandable unless expansion exposes additional content. Ongoing scrollback contains neither Reasoning Trace rows nor assistant commentary/thinking rows.
 - Kent decides which messages become transcript entries and which role they use.
@@ -200,16 +207,10 @@
 - Multiple queued human steering messages flushed at one boundary coalesce into one user message separated by blank lines. Each queued steer issued from another Session remains a separate message.
 - Pending queues have no fixed count limit and are lost on process exit.
 - A mid-turn message becomes durable only when Kent delivers it.
-- In an ordinary Session, Ctrl+C interrupts only an active Agent Turn. It stops the current model step and active tool process and keeps the app and Session alive. It does not cancel a submission before its Agent Turn starts. A submission already sent to the server may start or continue after the client detaches.
-- Retained Workflow user activation does not open a transcript while its Run is queued or launching. It returns the ordinary ready Session attachment only after Authority atomically verifies and attaches to the expected still-current Exact Execution Scope and Resource Generation. Opening failure surfaces the activation error without a pre-Exact transcript.
-- Automatic transcript or control recovery uses technical reattachment. It never creates or joins a Workflow Run or waits for future execution. It attaches to the matching Exact execution live when Kent handles the request, or returns unavailable, leaves the Current Node unchanged, and creates no transcript when none is live.
-- In an opened retained Workflow Session, Ctrl+C targets that matching Exact Execution Scope through Workflow Execution. If durable interruption fails, the client surfaces the failure and Exact execution remains active.
-- If the Exact ends while the retained Workflow transcript remains attached, the next explicit message, user shell, or compaction operation creates or joins the Current-Node Run and uses its Workflow-owned Exact scope. The transcript does not need to close and reopen, and no ordinary Session execution is created.
-- If that explicit operation created an interruptible launching Run, Ctrl+C targets the creator operation and restores its text only after Workflow Execution durably interrupts the Current Node and Runtime Command reports canceled-not-committed. A failed interruption leaves the operation and Run unchanged.
-- Transcript opening and reconnection retain the ordinary hydration-first subscription contract and existing Resource Generation ownership.
+- Ctrl+C interrupts only an active Agent Turn: stop the current model step and active tool process and keep the app/session alive. It does not cancel a submission before its Agent Turn starts; a submission already sent to the server may start or continue after the client detaches.
 - Interrupt injects detail-only developer-role control message `User interrupted you`.
 - Post-interrupt state returns idle with input ready.
-- Resume after ordinary Session interruption requires explicit user text. A retained Workflow Current Node may Resume through any fresh user-initiated Session activation or an explicit attached message, user-shell, or compaction operation that starts Agent execution. Automatic technical reattachment never Resumes it.
+- Resume after interrupt requires explicit user text.
 - Session reopening after a crash or durability-failure retirement follows the fresh-resource recovery contract in `core-runtime-tools.md`. The TUI does not expose a stale tool call as live; otherwise it restores normal state.
 - Failed prompt-history navigation emits plain terminal BEL with no transient UI notification.
 
@@ -372,7 +373,9 @@
 - The Reviewer receives shorter tool output than the main agent.
 - Reviewer contract is minimal JSON `{"suggestions":["..."]}`; invalid payloads are ignored non-fatally.
 - A Reviewer generation failure creates one expanded Reviewer error row. Reviewer running and completion create no transcript row.
-- If suggestions exist, Kent runs one extra main-agent follow-up. A successful follow-up creates exactly one Reviewer feedback row after that follow-up's committed output. The row preserves the ordered Markdown suggestions and uses their count as its compact summary.
+- If suggestions exist, Kent creates the Reviewer feedback row immediately and then runs one extra main-agent follow-up. The row preserves the ordered Markdown suggestions and uses their count as its compact summary.
+- A follow-up that returns a nonblank final answer succeeds. Kent shows that answer and then creates a separate Reviewer outcome row that reports the suggestions as applied.
+- An explicitly blank silent follow-up succeeds without another assistant answer. Kent then creates a separate Reviewer outcome row that reports no changes applied.
 - `reviewer.verbose_output` controls only the TUI's initial feedback presentation: enabled uses `O`, disabled uses `OC`. It never controls whether the feedback row exists.
-- If Kent cannot apply nonempty Reviewer feedback, the current engine and Session fail and create neither a Reviewer feedback row nor a Reviewer error row for that result. This includes a missing follow-up answer and the exact `NO_OP` answer.
+- If Kent cannot apply nonempty Reviewer feedback, the issued feedback row remains visible and the engine and Session fail. This includes a missing follow-up answer; an explicitly blank follow-up final answer is successful, not missing.
 - The Reviewer runs once and does not review its own follow-up.

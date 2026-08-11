@@ -3,9 +3,7 @@ package workflowview
 import (
 	"testing"
 
-	"core/server/sessionruntime"
 	"core/server/workflow"
-	"core/server/workflowexecution"
 	"core/server/workflowstore"
 	"core/shared/serverapi"
 )
@@ -76,86 +74,6 @@ func TestTaskDependenciesProjectsCompleteDirectionsOrderingAndAvailability(t *te
 	}
 	if blocks.AddAvailability == nil || blocks.AddAvailability.Available == nil || blocks.AddAvailability.Available.RemainingCapacity != workflow.MaxTaskDependencies-1 {
 		t.Fatalf("blocks availability = %+v, want remaining capacity %d", blocks.AddAvailability, workflow.MaxTaskDependencies-1)
-	}
-}
-
-func TestTaskDependenciesReturnQueuedRunningAndInterruptedStatuses(t *testing.T) {
-	fixture := newCurrentNodeViewFixture(t, false)
-	subject := fixture.createBacklogTask(t, "Dependency subject")
-	queued := fixture.startTask(t, "Queued blocker")
-	running := fixture.startTask(t, "Running blocker")
-	interrupted := fixture.startTask(t, "Interrupted blocker")
-	if err := fixture.store.InterruptCurrentNode(
-		fixture.ctx,
-		interrupted.currentNode,
-		workflow.CurrentNodeInterruptionReason("server_restart"),
-		workflow.CurrentNodeInterruptionDetail{Code: "restart"},
-	); err != nil {
-		t.Fatalf("InterruptCurrentNode: %v", err)
-	}
-	for _, blocker := range []startedCurrentNodeViewTask{queued, running, interrupted} {
-		if _, err := fixture.store.AddTaskDependency(fixture.ctx, workflowstore.TaskDependencyAddRequest{
-			BlockerTaskID: blocker.task.ID,
-			BlockedTaskID: subject.ID,
-		}); err != nil {
-			t.Fatalf("AddTaskDependency(%s): %v", blocker.task.ID, err)
-		}
-	}
-	runningSessionID := fixture.bindCurrentNodeSession(t, running)
-	projection, err := NewTaskStatusProjection(
-		fixture.metadata,
-		fixture.store,
-		NewTaskProjector(),
-		staticTaskStatusLiveObservationSource{
-			observation: workflowexecution.WorkflowTaskExecutionObservation{
-				Executions: map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot{
-					running.task.ID: {
-						Executions: []sessionruntime.TaskExecution{{
-							Ref: sessionruntime.WorkflowExecutionRef{
-								ProjectID:   fixture.binding.ProjectID,
-								WorkflowID:  fixture.workflowID,
-								CurrentNode: running.currentNode,
-							},
-							Agent: &sessionruntime.TaskAgentExecutionTarget{SessionID: runningSessionID},
-						}},
-					},
-				},
-				Runs: map[workflow.TaskID]workflowexecution.WorkflowTaskRunSnapshot{
-					queued.task.ID: {
-						Queued: []workflow.CurrentNodeReference{queued.currentNode},
-					},
-				},
-			},
-		},
-	)
-	if err != nil {
-		t.Fatalf("NewTaskStatusProjection: %v", err)
-	}
-	dependencies, err := NewTaskDependencies(fixture.metadata, projection, fixture.dependencyCounter)
-	if err != nil {
-		t.Fatalf("NewTaskDependencies: %v", err)
-	}
-
-	projected, err := dependencies.GetTaskDependencies(fixture.ctx, string(subject.ID))
-	if err != nil {
-		t.Fatalf("GetTaskDependencies: %v", err)
-	}
-	blockedBy := dependencyDirection(t, projected, serverapi.WorkflowTaskDependencyDirectionBlockedBy)
-	statuses := make(map[string]serverapi.WorkflowTaskStatusKind, len(blockedBy.Items))
-	for _, item := range blockedBy.Items {
-		statuses[item.TaskID] = item.Status.Kind
-		if item.Satisfaction == nil || *item.Satisfaction != serverapi.WorkflowTaskDependencyUnsatisfied {
-			t.Fatalf("dependency satisfaction = %+v, want unsatisfied", item)
-		}
-	}
-	for taskID, want := range map[string]serverapi.WorkflowTaskStatusKind{
-		string(queued.task.ID):      serverapi.WorkflowTaskStatusKindQueued,
-		string(running.task.ID):     serverapi.WorkflowTaskStatusKindRunning,
-		string(interrupted.task.ID): serverapi.WorkflowTaskStatusKindInterrupted,
-	} {
-		if got := statuses[taskID]; got != want {
-			t.Fatalf("dependency status for %s = %q, want %q", taskID, got, want)
-		}
 	}
 }
 

@@ -14,7 +14,6 @@ import (
 	"core/server/metadata"
 	"core/server/onboarding"
 	"core/shared/client"
-	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
@@ -132,7 +131,6 @@ func TestRemotePromptCommandStartupCatalogAndInvocationUseImportedServerContent(
 	attachment, err := remote.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
 		ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
 		SessionID:       plan.Plan.SessionID,
-		Operation:       serverapi.SessionRuntimeActivationUserActivation,
 		ActiveSettings:  plan.Plan.ActiveSettings,
 		EnabledToolIDs:  plan.Plan.EnabledToolIDs,
 		Source:          plan.Plan.Source,
@@ -141,19 +139,10 @@ func TestRemotePromptCommandStartupCatalogAndInvocationUseImportedServerContent(
 		t.Fatalf("ActivateSessionRuntime: %v", err)
 	}
 	submitID := runtimeids.NewRuntimeClientRequestID()
-	preSubmitID := runtimeids.NewRuntimeClientRequestID()
 	if _, err := remote.SubmitUserTurn(context.Background(), serverapi.RuntimeSubmitUserTurnRequest{
 		ClientRequestID: submitID.String(),
 		SessionID:       plan.Plan.SessionID,
 		Input:           runtimeinput.Command("prompt:remote_demo", "hello world"),
-		OperationRef: clientui.RuntimeOperationRef{
-			Kind:            clientui.RuntimeOperationKindSubmit,
-			ClientRequestID: submitID,
-		},
-		PreSubmitCompactionOperationRef: clientui.RuntimeOperationRef{
-			Kind:            clientui.RuntimeOperationKindPreSubmitCompact,
-			ClientRequestID: preSubmitID,
-		},
 	}); err != nil {
 		t.Fatalf("SubmitUserTurn: %v", err)
 	}

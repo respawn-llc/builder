@@ -21,6 +21,7 @@ import (
 	"core/shared/protocol"
 	"core/shared/rpcwire"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 func TestDialConfiguredRemotePrefersLocalUnixSocket(t *testing.T) {
@@ -711,7 +712,10 @@ func TestRemoteInterruptUsesDedicatedConnWhileSubmitIsInFlight(t *testing.T) {
 				default:
 				}
 				<-releaseSubmit
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, serverapi.RuntimeSubmitUserTurnResponse{Message: "done"}))); err != nil {
+				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, serverapi.RuntimeSubmitUserTurnResponse{
+					Message:    textutil.Value("done"),
+					ResultKind: clientui.UserTurnResultKindAssistantFinal,
+				}))); err != nil {
 					reportHandlerError(handlerErrs, "send submit response: %w", err)
 				}
 				return
@@ -726,9 +730,8 @@ func TestRemoteInterruptUsesDedicatedConnWhileSubmitIsInFlight(t *testing.T) {
 					return
 				}
 				response := serverapi.RuntimeInterruptResponse{
-					Version:             version,
-					Activity:            clientui.RuntimeActivity{State: clientui.RuntimeActivityRegisteredIdle},
-					InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{},
+					Version:  version,
+					Activity: clientui.RuntimeActivity{State: clientui.RuntimeActivityRegisteredIdle},
 				}
 				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, response))); err != nil {
 					reportHandlerError(handlerErrs, "send interrupt response: %w", err)

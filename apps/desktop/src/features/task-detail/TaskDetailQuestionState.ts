@@ -1,15 +1,13 @@
-import type { ApprovalDecision, PendingAsk, QuestionAttentionItem } from "@/api";
+import type { ApprovalDecision, QuestionAttentionItem } from "@/api";
+import type { OrdinaryQuestionPrompt } from "@/api";
 
 export type QuestionSelectionProvenance = "uninitialized" | "anchored-default" | "explicit";
 
 export type QuestionSelectionState = Readonly<{
   answer: string;
-  askID: string;
   approvalDecision: ApprovalDecision | null;
-  clientRequestID: string | null;
   provenance: QuestionSelectionProvenance;
   selectedOption: number | null;
-  submission: "idle" | "submitting" | "accepted";
 }>;
 
 export type QuestionSelectionDefault =
@@ -32,28 +30,20 @@ export type QuestionPresentation = Readonly<{
 
 const emptySuggestions: readonly string[] = [];
 
-export function emptyQuestionSelection(askID: string): QuestionSelectionState {
+export function emptyQuestionSelection(): QuestionSelectionState {
   return {
     answer: "",
     approvalDecision: null,
-    askID,
-    clientRequestID: null,
     provenance: "uninitialized",
     selectedOption: null,
-    submission: "idle",
   };
 }
 
-export function questionPresentation(
-  attention: QuestionAttentionItem,
-  pendingAsk: PendingAsk | undefined,
-  pendingAskSettled: boolean,
-): QuestionPresentation {
-  const question = attention.message.length > 0 ? attention.message : pendingAsk?.question;
-  if (attention.question?.kind === "approval") {
-    return approvalQuestionPresentation(question, attention.question.approvalDecisions);
+export function questionPresentation(attention: QuestionAttentionItem): QuestionPresentation {
+  if (attention.question.kind === "approval") {
+    return approvalQuestionPresentation(attention.message, attention.question.approvalDecisions);
   }
-  return ordinaryQuestionPresentation(attention, pendingAsk, pendingAskSettled, question);
+  return ordinaryQuestionPresentation(attention.message, attention.question);
 }
 
 function approvalQuestionPresentation(
@@ -70,22 +60,13 @@ function approvalQuestionPresentation(
 }
 
 function ordinaryQuestionPresentation(
-  attention: QuestionAttentionItem,
-  pendingAsk: PendingAsk | undefined,
-  pendingAskSettled: boolean,
-  question: string | undefined,
+  question: string,
+  prompt: OrdinaryQuestionPrompt,
 ): QuestionPresentation {
-  const suggestions =
-    attention.suggestions.length > 0
-      ? attention.suggestions
-      : (pendingAsk?.suggestions ?? emptySuggestions);
-  const recommendation =
-    attention.suggestions.length > 0
-      ? attention.recommendedOptionIndex
-      : (pendingAsk?.recommendedOptionIndex ?? null);
-  const ready = attention.suggestions.length > 0 || pendingAskSettled;
+  const suggestions = prompt.suggestions;
+  const recommendation = prompt.recommendedOptionIndex;
   return {
-    defaultSelection: ready ? ordinaryQuestionSelectionDefault(suggestions.length, recommendation) : null,
+    defaultSelection: ordinaryQuestionSelectionDefault(suggestions.length, recommendation),
     kind: "ordinary",
     question,
     recommendedOption: recommendedOptionNumber(suggestions.length, recommendation),
@@ -123,8 +104,6 @@ export function withQuestionCommentary(
   return {
     ...selection,
     answer,
-    clientRequestID: null,
-    submission: "idle",
   };
 }
 
@@ -135,10 +114,8 @@ export function withOrdinaryQuestionOption(
   return {
     ...selection,
     approvalDecision: null,
-    clientRequestID: null,
     provenance: "explicit",
     selectedOption,
-    submission: "idle",
   };
 }
 
@@ -149,10 +126,8 @@ export function withApprovalQuestionDecision(
   return {
     ...selection,
     approvalDecision,
-    clientRequestID: null,
     provenance: "explicit",
     selectedOption: null,
-    submission: "idle",
   };
 }
 
@@ -163,25 +138,18 @@ function ordinaryQuestionSelectionDefault(
   return {
     kind: "ordinary",
     selectedOption:
-      suggestionCount === 0
-        ? null
-        : (recommendedOptionNumber(suggestionCount, recommendation) ?? 1),
+      suggestionCount === 0 ? null : (recommendedOptionNumber(suggestionCount, recommendation) ?? 1),
   };
 }
 
-function approvalQuestionSelectionDefault(
-  decisions: readonly ApprovalDecision[],
-): QuestionSelectionDefault {
+function approvalQuestionSelectionDefault(decisions: readonly ApprovalDecision[]): QuestionSelectionDefault {
   return {
     approvalDecision: decisions.find((decision) => decision === "allow_once") ?? decisions[0] ?? null,
     kind: "approval",
   };
 }
 
-function recommendedOptionNumber(
-  suggestionCount: number,
-  recommendation: number | null,
-): number | null {
+function recommendedOptionNumber(suggestionCount: number, recommendation: number | null): number | null {
   return recommendation !== null &&
     Number.isInteger(recommendation) &&
     recommendation >= 1 &&

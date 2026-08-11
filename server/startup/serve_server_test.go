@@ -240,50 +240,6 @@ func TestServeWaitsForContextCancellation(t *testing.T) {
 	}
 }
 
-func TestServeReturnsFatalLifecycleCauseAfterClosingRPCAndCore(t *testing.T) {
-	workspace := newServeWorkspace(t)
-	request := Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}
-	server := startServeTestServer(t, request, envAuthHandler{}, noopOnboarding)
-	fatal := &controlledLifecycleFatalSource{shutdown: make(chan struct{})}
-	server.lifecycleFatal = fatal
-
-	serveDone := make(chan error, 1)
-	go func() {
-		releaseServeTestPortForConfig(server.Config())
-		serveDone <- server.Serve(context.Background())
-	}()
-	healthURL := config.ServerHTTPBaseURL(server.Config()) + protocol.HealthPath
-	response := requireServeResponse(t, http.DefaultClient, healthURL, http.StatusOK)
-	_ = response.Body.Close()
-
-	fatal.cause = errors.New("fatal workflow persistence")
-	close(fatal.shutdown)
-	select {
-	case err := <-serveDone:
-		if !errors.Is(err, fatal.cause) {
-			t.Fatalf("Serve fatal error = %v, want %v", err, fatal.cause)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("Serve did not propagate fatal lifecycle shutdown")
-	}
-	if _, err := StartServeServer(context.Background(), request, envAuthHandler{}, noopOnboarding); err != nil {
-		t.Fatalf("fatal Serve shutdown did not release Core persistence ownership: %v", err)
-	}
-}
-
-type controlledLifecycleFatalSource struct {
-	shutdown chan struct{}
-	cause    error
-}
-
-func (s *controlledLifecycleFatalSource) LifecycleFatalShutdown() <-chan struct{} {
-	return s.shutdown
-}
-
-func (s *controlledLifecycleFatalSource) LifecycleFatalCause() error {
-	return s.cause
-}
-
 func TestStartServeServerRecoversAdmittedCurrentNodeOnRestart(t *testing.T) {
 	workspace := newServeWorkspace(t)
 	request := Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}

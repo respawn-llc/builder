@@ -39,7 +39,6 @@ func persistedMetaFromMetadata(metadata session.Meta) session.Meta {
 		Name:                            metadata.Name,
 		FirstPromptPreview:              metadata.FirstPromptPreview,
 		InputDraft:                      metadata.InputDraft,
-		InputDraftRecoveryBuffers:       metadata.InputDraftRecoveryBuffers,
 		PreviousSessionID:               metadata.PreviousSessionID,
 		ParentAgentSessionID:            metadata.ParentAgentSessionID,
 		WorkspaceRoot:                   metadata.WorkspaceRoot,

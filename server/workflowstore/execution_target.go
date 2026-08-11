@@ -40,9 +40,32 @@ type TaskExecutionTargetContext struct {
 }
 
 var (
-	ErrExecutionTargetRequired      = errors.New("execution target is required")
-	ErrExecutionTargetAlreadyLocked = errors.New("execution target is already locked")
+	ErrExecutionTargetRequired                = errors.New("execution target is required")
+	ErrExecutionTargetAlreadyLocked           = errors.New("execution target is already locked")
+	ErrPendingInitialManagedBranchUnavailable = errors.New("pending initial managed branch is unavailable")
 )
+
+func (s *Store) ReplacePendingInitialManagedBranchName(ctx context.Context, taskID workflow.TaskID, branchName string) error {
+	if strings.TrimSpace(string(taskID)) == "" {
+		return errors.New("task id is required")
+	}
+	branchName = strings.TrimSpace(branchName)
+	if branchName == "" {
+		return errors.New("pending initial managed branch name is required")
+	}
+	updated, err := s.queries.ReplacePendingInitialManagedBranchName(ctx, sqlitegen.ReplacePendingInitialManagedBranchNameParams{
+		PendingInitialManagedBranchName: nullableString(branchName),
+		UpdatedAtUnixMs:                 s.now().UnixMilli(),
+		TaskID:                          string(taskID),
+	})
+	if err != nil {
+		return err
+	}
+	if updated != 1 {
+		return ErrPendingInitialManagedBranchUnavailable
+	}
+	return nil
+}
 
 func (s *Store) LockTaskExecutionTarget(ctx context.Context, taskID workflow.TaskID, candidate *ExecutionTargetCandidate) error {
 	task, err := s.queries.GetTask(ctx, string(taskID))
@@ -98,15 +121,6 @@ type preparedExecutionTargetMutation struct {
 }
 
 func (s *Store) prepareExecutionTargetMutation(ctx context.Context, task sqlitegen.TaskRecord, candidate *ExecutionTargetCandidate) (preparedExecutionTargetMutation, error) {
-	return s.prepareExecutionTargetMutationWithQueries(ctx, s.queries, task, candidate)
-}
-
-func (s *Store) prepareExecutionTargetMutationWithQueries(
-	ctx context.Context,
-	q *sqlitegen.Queries,
-	task sqlitegen.TaskRecord,
-	candidate *ExecutionTargetCandidate,
-) (preparedExecutionTargetMutation, error) {
 	snapshot, err := executionTargetSnapshotFromTask(task)
 	if err != nil {
 		return preparedExecutionTargetMutation{}, err
@@ -115,7 +129,7 @@ func (s *Store) prepareExecutionTargetMutationWithQueries(
 		if candidate == nil {
 			return preparedExecutionTargetMutation{}, ErrExecutionTargetRequired
 		}
-		if err := validateExecutionTargetCandidateForTask(ctx, q, task, *candidate); err != nil {
+		if err := validateExecutionTargetCandidateForTask(ctx, s.queries, task, *candidate); err != nil {
 			return preparedExecutionTargetMutation{}, err
 		}
 		return preparedExecutionTargetMutation{
@@ -126,7 +140,7 @@ func (s *Store) prepareExecutionTargetMutationWithQueries(
 	if candidate != nil {
 		return preparedExecutionTargetMutation{}, ErrExecutionTargetAlreadyLocked
 	}
-	root, err := executionRootForTask(ctx, q, task)
+	root, err := executionRootForTask(ctx, s.queries, task)
 	if err != nil {
 		return preparedExecutionTargetMutation{}, err
 	}

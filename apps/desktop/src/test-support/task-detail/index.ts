@@ -8,7 +8,13 @@ import {
   RouterContextProvider,
 } from "@tanstack/react-router";
 
-import { guiTaskCommentAuthor, type JsonObject, type JsonValue, type TaskDetail } from "@/api";
+import {
+  guiTaskCommentAuthor,
+  type JsonObject,
+  type JsonValue,
+  type QuestionAttentionItem,
+  type TaskDetail,
+} from "@/api";
 import { ApiClient } from "@/api/composition";
 import {
   SidebarRootContext,
@@ -248,15 +254,52 @@ export const questionAttention = {
   current_node: {
     node_id: "node-1",
     transition_branch_key: null,
-    session_id: "session-1",
+    session_id: null,
   },
-  session_id: "session-1",
   session_name: "Session one",
-  question_id: "ask-1",
   message: "Choose snack",
-  recommended_option_index: 1,
-  suggestions: ["Trail mix", "Dark chocolate"],
+  question: {
+    session_id: "session-1",
+    step_id: "22222222-2222-4222-8222-222222222222",
+    prompt_id: "ask-1",
+    kind: "ordinary",
+    recommended_option_index: 1,
+    suggestions: ["Trail mix", "Dark chocolate"],
+  },
 };
+
+export function parsedQuestionAttention(): QuestionAttentionItem &
+  Readonly<{
+    question: Extract<QuestionAttentionItem["question"], Readonly<{ kind: "ordinary" }>>;
+  }> {
+  return {
+    id: questionAttention.id,
+    projectID: questionAttention.project_id,
+    workflowID: questionAttention.workflow_id,
+    taskID: questionAttention.task_id,
+    taskShortID: questionAttention.task_short_id,
+    taskTitle: questionAttention.task_title,
+    occurredAt: questionAttention.occurred_at_unix_ms,
+    kind: "question",
+    currentNode: {
+      nodeID: questionAttention.current_node.node_id,
+      transitionBranchKey: questionAttention.current_node.transition_branch_key,
+      sessionID: questionAttention.current_node.session_id,
+      effectiveAssignee: null,
+      effectiveThinking: null,
+    },
+    sessionName: questionAttention.session_name,
+    message: questionAttention.message,
+    question: {
+      sessionID: questionAttention.question.session_id,
+      stepID: questionAttention.question.step_id,
+      promptID: questionAttention.question.prompt_id,
+      kind: "ordinary",
+      recommendedOptionIndex: questionAttention.question.recommended_option_index,
+      suggestions: questionAttention.question.suggestions,
+    },
+  };
+}
 
 export const taskQuestionWaitingEvent = {
   event: {
@@ -299,15 +342,15 @@ export const activityResponse = {
       },
     },
   ],
-  next_page_token: "",
-  generated_at_unix_ms: 3,
+  next_offset: null,
 };
 
 export const pendingAskResponse = {
   Asks: [
     {
-      AskID: "ask-1",
+      PromptID: "ask-1",
       SessionID: "session-1",
+      StepID: "11111111-1111-4111-8111-111111111111",
       Question: "Choose path",
       Suggestions: ["Use option A", "Use option B"],
       RecommendedOptionIndex: 1,
@@ -328,7 +371,7 @@ export const commentAddResponse = {
 };
 
 export const commentListResponse = {
-  comments: [
+  items: [
     {
       id: "comment-1",
       task_id: "task-1",
@@ -338,11 +381,12 @@ export const commentListResponse = {
       updated_at_unix_ms: 1,
     },
   ],
-  next_page_token: "",
+  next_offset: null,
+  total_count: 1,
 };
 
 export const firstCommentListResponse = {
-  comments: [
+  items: [
     {
       id: "comment-page-1",
       task_id: "task-1",
@@ -352,11 +396,12 @@ export const firstCommentListResponse = {
       updated_at_unix_ms: 5,
     },
   ],
-  next_page_token: "cursor-2",
+  next_offset: 50,
+  total_count: 2,
 };
 
 export const secondCommentListResponse = {
-  comments: [
+  items: [
     {
       id: "comment-page-2",
       task_id: "task-1",
@@ -366,7 +411,8 @@ export const secondCommentListResponse = {
       updated_at_unix_ms: 6,
     },
   ],
-  next_page_token: "",
+  next_offset: null,
+  total_count: 2,
 };
 
 export const taskUpdateResponse = {
@@ -428,6 +474,7 @@ export function createTaskDetailTestServices(
 
 export type MountedTaskDetailServices = TestAppServices &
   Readonly<{
+    rerenderTaskDetail(taskID: string, retainedState?: unknown): void;
     unmountTaskDetail(): void;
   }>;
 
@@ -440,7 +487,7 @@ export function mountTaskDetailSurface(
     history: createMemoryHistory({ initialEntries: [options.path ?? "/tasks/task-1"] }),
     routeTree: createRootRoute(),
   });
-  const mounted = render(
+  const renderSurface = (taskID: string, retainedState: unknown) =>
     createElement(RouterContextProvider, {
       router,
       children: createElement(SidebarRootContext.Provider, {
@@ -455,9 +502,9 @@ export function mountTaskDetailSurface(
                   onDeleteDismiss: options.onDeleteDismiss ?? (async () => ({ kind: "accepted" })),
                   onMutated: options.onMutated,
                   openSidebar: options.openSidebar,
-                  retainedState: options.retainedState,
+                  retainedState,
                   sidebarMode: options.sidebarMode,
-                  taskId: "task-1",
+                  taskId: taskID,
                 }
               : {
                   enabled: true,
@@ -465,24 +512,27 @@ export function mountTaskDetailSurface(
                   navigator: options.navigator,
                   onMutated: options.onMutated,
                   openSidebar: options.openSidebar,
-                  retainedState: options.retainedState,
+                  retainedState,
                   sidebarDestination: {
                     kind: "taskDetail",
-                    taskID: "task-1",
+                    taskID,
                     ...(options.sidebarMode === undefined ? {} : { mode: options.sidebarMode }),
                     ...(options.onMutated === undefined ? {} : { onMutated: options.onMutated }),
                   },
                   sidebarMode: options.sidebarMode,
-                  taskId: "task-1",
+                  taskId: taskID,
                 },
           ),
           services,
         }),
       }),
-    }),
-  );
+    });
+  const mounted = render(renderSurface("task-1", options.retainedState));
   return {
     ...services,
+    rerenderTaskDetail: (taskID, retainedState) => {
+      mounted.rerender(renderSurface(taskID, retainedState));
+    },
     unmountTaskDetail: mounted.unmount,
   };
 }

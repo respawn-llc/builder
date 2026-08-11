@@ -146,24 +146,31 @@ func TestTaskCurrentNodeFailureUsesDefinitionIdentityAndDiagnostic(t *testing.T)
 
 func TestTaskQuestionResolvesLiveAccessThroughAuthoritativeApprovalView(t *testing.T) {
 	sessionID := runtimeids.NewSessionID()
+	stepID, err := runtimeids.ParseStepID("55555555-5555-4555-8555-555555555555")
+	if err != nil {
+		t.Fatalf("ParseStepID: %v", err)
+	}
 	questionID := "access-1"
 	message := "Allow access?"
 	createdAt := time.UnixMilli(42).UTC()
 	service := &Service{readModels: ReadModels{
 		Approvals: observationApprovalViewStub{approvals: []clientui.PendingApproval{{
-			ApprovalID: questionID,
-			SessionID:  sessionID.String(),
-			Question:   message,
-			Options:    []clientui.ApprovalOption{{Decision: clientui.ApprovalDecisionAllowOnce, Label: "Allow once"}},
-			CreatedAt:  createdAt,
+			PromptID:  clientui.PromptID(questionID),
+			SessionID: sessionID,
+			StepID:    stepID,
+			Question:  message,
+			Options:   []clientui.ApprovalOption{{Decision: clientui.ApprovalDecisionAllowOnce, Label: "Allow once"}},
+			CreatedAt: createdAt,
 		}}},
 	}}
 	item := serverapi.WorkflowAttentionItem{
-		Kind:             string(serverapi.WorkflowTaskAttentionKindQuestion),
-		SessionID:        &[]string{sessionID.String()}[0],
-		QuestionID:       &questionID,
-		Message:          &message,
-		Question:         &serverapi.WorkflowAttentionQuestionPrompt{Kind: serverapi.WorkflowAttentionQuestionKindApproval},
+		Kind:    string(serverapi.WorkflowTaskAttentionKindQuestion),
+		Message: &message,
+		Question: &serverapi.WorkflowAttentionQuestionPrompt{
+			SessionID: sessionID, StepID: stepID, PromptID: clientui.PromptID(questionID),
+			Kind:              serverapi.WorkflowAttentionQuestionKindApproval,
+			ApprovalDecisions: []clientui.ApprovalDecision{clientui.ApprovalDecisionAllowOnce},
+		},
 		OccurredAtUnixMs: createdAt.UnixMilli(),
 	}
 	outcome, ok, err := service.taskQuestion(context.Background(), item, nil, map[string][]clientui.PendingApproval{})

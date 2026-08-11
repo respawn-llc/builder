@@ -312,7 +312,6 @@ func TestTaskSessionAssociationSchemaUsesDirectOwnerAndNaturalKeys(t *testing.T)
 		"associated_at_unix_ms": {},
 	})
 	for _, index := range []string{
-		"sessions_task_id_idx",
 		"session_workflow_node_associations_serial_unique_idx",
 		"session_workflow_node_associations_branch_unique_idx",
 	} {
