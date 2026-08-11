@@ -13,7 +13,7 @@ import { ChevronDown } from "lucide-react";
 
 import { StaticMarkdown } from "./MarkdownText";
 import { cx } from "./classes";
-import { fieldIslandInputClassName } from "./fieldInputStyles";
+import { fieldIslandInputClassName, type FieldIslandRadius } from "./fieldInputStyles";
 import { useOpacityExit } from "./motion";
 import {
   consumeTextFieldSubmitShortcut,
@@ -47,6 +47,7 @@ type MarkdownFieldCommonProps = Readonly<{
   onEditingChange: (editing: boolean) => void;
   placeholder: string;
   submitIntent?: MarkdownFieldSubmitIntent | undefined;
+  surfaceRadius?: FieldIslandRadius | undefined;
   taskListInteraction?: MarkdownFieldTaskListInteraction | undefined;
   value: string;
   editing: boolean;
@@ -113,6 +114,7 @@ function MarkdownFieldCore({
   placeholder,
   readPresentation,
   submitIntent,
+  surfaceRadius,
   taskListInteraction,
   value,
   editing,
@@ -146,6 +148,7 @@ function MarkdownFieldCore({
               }
             }}
             placeholder={placeholder}
+            surfaceRadius={surfaceRadius}
             value={value}
           />
         ) : (
@@ -157,6 +160,7 @@ function MarkdownFieldCore({
             onExpand={readPresentation.kind === "collapsible" ? readPresentation.onExpand : undefined}
             placeholder={placeholder}
             readPresentation={readPresentation}
+            surfaceRadius={surfaceRadius}
             taskListInteraction={taskListInteraction}
             value={value}
           />
@@ -181,6 +185,7 @@ function MarkdownFieldEditor({
   onChange,
   onKeyDown,
   placeholder,
+  surfaceRadius,
   value,
 }: Readonly<{
   describedBy?: string | undefined;
@@ -192,6 +197,7 @@ function MarkdownFieldEditor({
   onChange: (value: string) => void;
   onKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
   placeholder: string;
+  surfaceRadius: FieldIslandRadius | undefined;
   value: string;
 }>) {
   const editorRef = useRef<HTMLTextAreaElement | null>(null);
@@ -224,7 +230,7 @@ function MarkdownFieldEditor({
       aria-label={label}
       autoFocus
       className={cx(
-        fieldIslandInputClassName(1),
+        fieldIslandInputClassName(1, surfaceRadius),
         "block h-full min-h-0 min-w-0 resize-none p-[var(--space-2)] font-mono",
       )}
       id={fieldID}
@@ -248,6 +254,7 @@ function MarkdownFieldReadViewport({
   onExpand,
   placeholder,
   readPresentation,
+  surfaceRadius,
   taskListInteraction,
   value,
 }: Readonly<{
@@ -258,6 +265,7 @@ function MarkdownFieldReadViewport({
   onExpand: (() => void) | undefined;
   placeholder: string;
   readPresentation: MarkdownFieldReadPresentation;
+  surfaceRadius: FieldIslandRadius | undefined;
   taskListInteraction: MarkdownFieldTaskListInteraction | undefined;
   value: string;
 }>) {
@@ -279,15 +287,15 @@ function MarkdownFieldReadViewport({
   const expandLabel = readPresentation.kind === "collapsible" ? readPresentation.expandLabel : undefined;
 
   return (
-    <div className="relative h-full min-h-0 min-w-0">
+    <div className={cx("relative min-h-0 min-w-0", !collapsed && "h-full")}>
       <div
         aria-label={label}
         aria-readonly
         className={cx(
-          fieldIslandInputClassName(1),
-          "block h-full min-h-0 min-w-0 overflow-visible p-[var(--space-2)]",
+          fieldIslandInputClassName(1, surfaceRadius),
+          "relative block h-full min-h-0 min-w-0 p-[var(--space-2)]",
           !disabled && "cursor-text",
-          collapsed && "overflow-hidden",
+          collapsed ? "overflow-hidden" : "overflow-visible",
         )}
         onKeyDown={(event) => {
           activateFromKeyboard(event, disabled, onEdit);
@@ -307,8 +315,9 @@ function MarkdownFieldReadViewport({
             <span className="text-[var(--color-muted)]">{placeholder}</span>
           )}
         </div>
+        {renderMarkdownFieldFade(affordancePhase, expandLabel, onExpand)}
       </div>
-      {renderMarkdownFieldAffordance(affordancePhase, expandLabel, onExpand)}
+      {renderMarkdownFieldExpandButton(affordancePhase, expandLabel, onExpand)}
     </div>
   );
 }
@@ -395,21 +404,22 @@ function markdownTaskListProps(
   disabled: boolean,
   interaction: MarkdownFieldTaskListInteraction | undefined,
   onChange: (value: string) => void,
-): Readonly<{
-  onTaskListChange: (value: string) => void;
-  taskListItemToggleLabel: (checked: boolean) => string;
-}> | undefined {
+):
+  | Readonly<{
+      onTaskListChange: (value: string) => void;
+      taskListItemToggleLabel: (checked: boolean) => string;
+    }>
+  | undefined {
   if (disabled || interaction === undefined) {
     return undefined;
   }
   return {
     onTaskListChange: onChange,
-    taskListItemToggleLabel: (checked) =>
-      checked ? interaction.checkedLabel : interaction.uncheckedLabel,
+    taskListItemToggleLabel: (checked) => (checked ? interaction.checkedLabel : interaction.uncheckedLabel),
   };
 }
 
-function renderMarkdownFieldAffordance(
+function renderMarkdownFieldFade(
   phase: ReturnType<typeof useOpacityExit>,
   expandLabel: string | undefined,
   onExpand: (() => void) | undefined,
@@ -418,32 +428,40 @@ function renderMarkdownFieldAffordance(
     return null;
   }
   return (
-    <>
-      <div
-        aria-hidden="true"
-        className={cx(
-          "pointer-events-none absolute inset-x-[var(--space-2)] bottom-[var(--space-2)] h-12 bg-gradient-to-b from-transparent to-[var(--color-island-1)] transition-opacity motion-reduce:transition-none",
-          phase === "visible" ? "opacity-100" : "opacity-0",
-        )}
-        data-state={phase}
-      />
-      <button
-        aria-label={expandLabel}
-        aria-hidden={phase === "visible" ? undefined : true}
-        className={cx(
-          "app-region-no-drag absolute inset-x-0 bottom-0 grid h-10 place-items-center text-[var(--color-on-island)] transition-opacity motion-reduce:transition-none",
-          phase === "visible"
-            ? "pointer-events-auto opacity-100"
-            : "pointer-events-none opacity-0",
-        )}
-        data-state={phase}
-        onClick={onExpand}
-        tabIndex={phase === "visible" ? undefined : -1}
-        type="button"
-      >
-        <ChevronDown aria-hidden="true" size={20} strokeWidth={1.5} />
-      </button>
-    </>
+    <div
+      aria-hidden="true"
+      className={cx(
+        "pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-b from-transparent to-[var(--color-island-1)] transition-opacity motion-reduce:transition-none",
+        phase === "visible" ? "opacity-100" : "opacity-0",
+      )}
+      data-state={phase}
+    />
+  );
+}
+
+function renderMarkdownFieldExpandButton(
+  phase: ReturnType<typeof useOpacityExit>,
+  expandLabel: string | undefined,
+  onExpand: (() => void) | undefined,
+): ReactNode {
+  if (phase === "hidden" || onExpand === undefined || expandLabel === undefined) {
+    return null;
+  }
+  return (
+    <button
+      aria-label={expandLabel}
+      aria-hidden={phase === "visible" ? undefined : true}
+      className={cx(
+        "app-region-no-drag absolute inset-x-0 bottom-0 grid h-10 place-items-center text-[var(--color-on-island)] transition-opacity motion-reduce:transition-none",
+        phase === "visible" ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0",
+      )}
+      data-state={phase}
+      onClick={onExpand}
+      tabIndex={phase === "visible" ? undefined : -1}
+      type="button"
+    >
+      <ChevronDown aria-hidden="true" size={20} strokeWidth={1.5} />
+    </button>
   );
 }
 

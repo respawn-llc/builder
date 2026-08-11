@@ -55,7 +55,8 @@ SELECT
     canonical_root_path,
     git_metadata_json,
     created_at_unix_ms,
-    updated_at_unix_ms
+    updated_at_unix_ms,
+    chat_draft_json
 FROM workspaces
 WHERE canonical_root_path = sqlc.arg(canonical_root_path)
 ORDER BY created_at_unix_ms ASC, rowid ASC;
@@ -67,10 +68,23 @@ SELECT
     canonical_root_path,
     git_metadata_json,
     created_at_unix_ms,
-    updated_at_unix_ms
+    updated_at_unix_ms,
+    chat_draft_json
 FROM workspaces
 WHERE id = sqlc.arg(id)
 LIMIT 1;
+
+-- name: GetWorkspaceChatDraft :one
+SELECT
+    chat_draft_json
+FROM workspaces
+WHERE id = sqlc.arg(id)
+LIMIT 1;
+
+-- name: ReplaceWorkspaceChatDraft :execrows
+UPDATE workspaces
+SET chat_draft_json = sqlc.arg(chat_draft_json)
+WHERE id = sqlc.arg(id);
 
 -- name: ListProjectKeyRows :many
 SELECT
@@ -1206,6 +1220,7 @@ INSERT INTO tasks (
     source_url,
     source_workspace_id,
     managed_worktree_id,
+    pending_initial_managed_branch_name,
     created_at_unix_ms,
     updated_at_unix_ms,
     metadata_json
@@ -1220,6 +1235,7 @@ INSERT INTO tasks (
     sqlc.arg(source_url),
     sqlc.narg(source_workspace_id),
     sqlc.narg(managed_worktree_id),
+    sqlc.narg(pending_initial_managed_branch_name),
     sqlc.arg(created_at_unix_ms),
     sqlc.arg(updated_at_unix_ms),
     sqlc.arg(metadata_json)
@@ -1239,6 +1255,7 @@ SELECT
     source_url,
     source_workspace_id,
     managed_worktree_id,
+    pending_initial_managed_branch_name,
     execution_target_mode,
     execution_target_requested_ref,
     execution_target_resolved_ref,
@@ -1265,6 +1282,7 @@ SELECT
     source_url,
     source_workspace_id,
     managed_worktree_id,
+    pending_initial_managed_branch_name,
     execution_target_mode,
     execution_target_requested_ref,
     execution_target_resolved_ref,
@@ -1333,6 +1351,7 @@ SELECT
     source_url,
     source_workspace_id,
     managed_worktree_id,
+    pending_initial_managed_branch_name,
     execution_target_mode,
     execution_target_requested_ref,
     execution_target_resolved_ref,
@@ -1374,6 +1393,26 @@ SET
     updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
 WHERE id = sqlc.arg(id);
 
+-- name: ReplacePendingInitialManagedBranchName :execrows
+UPDATE tasks
+SET
+    pending_initial_managed_branch_name = sqlc.arg(pending_initial_managed_branch_name),
+    updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
+WHERE id = sqlc.arg(task_id)
+  AND execution_target_mode IS NULL
+  AND managed_worktree_id IS NULL;
+
+-- name: BindInitialTaskManagedWorktree :execrows
+UPDATE tasks
+SET
+    managed_worktree_id = sqlc.arg(managed_worktree_id),
+    pending_initial_managed_branch_name = NULL,
+    updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
+WHERE id = sqlc.arg(task_id)
+  AND execution_target_mode IS NULL
+  AND managed_worktree_id IS NULL
+  AND pending_initial_managed_branch_name IS NOT NULL;
+
 -- name: ListTasksByProject :many
 SELECT
     id,
@@ -1388,6 +1427,7 @@ SELECT
     source_url,
     source_workspace_id,
     managed_worktree_id,
+    pending_initial_managed_branch_name,
     execution_target_mode,
     execution_target_requested_ref,
     execution_target_resolved_ref,
@@ -2206,7 +2246,7 @@ SELECT
 FROM projects p
 LEFT JOIN workspaces w ON w.id = p.primary_workspace_id AND w.project_id = p.id
 JOIN project_default_workflow_identity default_workflow ON default_workflow.project_id = p.id
-WHERE (sqlc.arg(project_id) = '' OR p.id = sqlc.arg(project_id))
+WHERE p.id = COALESCE(sqlc.narg(project_id), p.id)
 ORDER BY latest_activity_unix_ms DESC, p.rowid DESC
 LIMIT sqlc.arg(limit_rows)
 OFFSET sqlc.arg(offset_rows);
@@ -2341,15 +2381,6 @@ LIMIT sqlc.arg(page_limit);
 SELECT id
 FROM sessions
 WHERE project_id = sqlc.arg(project_id)
-ORDER BY rowid ASC;
-
--- name: ListProjectSessionArtifacts :many
-SELECT
-    id,
-    artifact_relpath
-FROM sessions
-WHERE project_id = sqlc.arg(project_id)
-  AND trim(artifact_relpath) != ''
 ORDER BY rowid ASC;
 
 -- name: GetProjectDeleteBlockerCounts :one
@@ -2766,50 +2797,30 @@ LIMIT CASE
 END;
 
 -- name: ListWorkflowTaskActivityRows :many
-WITH activity(
-    activity_id,
-    kind,
-    source_id,
-    occurred_at_unix_ms,
-    updated_at_unix_ms,
-    session_name
-) AS (
-    SELECT
-        CAST('comment:' || c.id AS TEXT) AS activity_id,
-        'comment' AS kind,
-        c.id AS source_id,
-        c.updated_at_unix_ms AS occurred_at_unix_ms,
-        c.updated_at_unix_ms AS updated_at_unix_ms,
-        CAST(NULL AS TEXT) AS session_name
-    FROM task_comments c
-    WHERE c.task_id = sqlc.arg(task_id)
-      AND (
-          sqlc.arg(cursor_active) = 0
-          OR c.updated_at_unix_ms < sqlc.arg(cursor_occurred_at_unix_ms)
-          OR (c.updated_at_unix_ms = sqlc.arg(cursor_occurred_at_unix_ms) AND ('comment:' || c.id) < sqlc.arg(cursor_activity_id))
-      )
+SELECT
+    CAST('comment:' || c.id AS TEXT) AS activity_id,
+    'comment' AS kind,
+    c.id AS source_id,
+    c.updated_at_unix_ms AS occurred_at_unix_ms,
+    c.updated_at_unix_ms AS updated_at_unix_ms,
+    CAST(NULL AS TEXT) AS session_name
+FROM task_comments c
+WHERE c.task_id = sqlc.arg(task_id)
 
-    UNION ALL
+UNION ALL
 
-    SELECT
-        CAST('session_started:' || s.id AS TEXT) AS activity_id,
-        'session_started' AS kind,
-        s.id AS source_id,
-        s.created_at_unix_ms AS occurred_at_unix_ms,
-        s.created_at_unix_ms AS updated_at_unix_ms,
-        s.name AS session_name
-    FROM sessions s
-    WHERE s.task_id = sqlc.arg(task_id)
-      AND (
-          sqlc.arg(cursor_active) = 0
-          OR s.created_at_unix_ms < sqlc.arg(cursor_occurred_at_unix_ms)
-          OR (s.created_at_unix_ms = sqlc.arg(cursor_occurred_at_unix_ms) AND ('session_started:' || s.id) < sqlc.arg(cursor_activity_id))
-      )
-)
-SELECT activity_id, kind, source_id, occurred_at_unix_ms, updated_at_unix_ms, session_name
-FROM activity
+SELECT
+    CAST('session_started:' || s.id AS TEXT) AS activity_id,
+    'session_started' AS kind,
+    s.id AS source_id,
+    s.created_at_unix_ms AS occurred_at_unix_ms,
+    s.created_at_unix_ms AS updated_at_unix_ms,
+    s.name AS session_name
+FROM sessions s
+WHERE s.task_id = sqlc.arg(task_id)
 ORDER BY occurred_at_unix_ms DESC, activity_id DESC
-LIMIT sqlc.arg(page_limit);
+LIMIT sqlc.arg(page_limit)
+OFFSET sqlc.arg(page_offset);
 
 -- name: ListTaskCommentsByIDs :many
 SELECT
@@ -2832,6 +2843,7 @@ WHERE id IN (sqlc.slice('ids'));
 UPDATE tasks
 SET
     managed_worktree_id = sqlc.narg(managed_worktree_id),
+    pending_initial_managed_branch_name = NULL,
     execution_target_mode = sqlc.narg(execution_target_mode),
     execution_target_requested_ref = sqlc.narg(execution_target_requested_ref),
     execution_target_resolved_ref = sqlc.narg(execution_target_resolved_ref),

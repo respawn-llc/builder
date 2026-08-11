@@ -7,9 +7,8 @@ import (
 )
 
 type RuntimeReadModelUpdate struct {
-	Version             ReadModelVersion
-	Activity            RuntimeActivity
-	InputReconciliation RuntimeInputReconciliationSnapshot
+	Version  ReadModelVersion
+	Activity RuntimeActivity
 }
 
 type RuntimeActivity struct {
@@ -25,30 +24,12 @@ type RuntimeActiveStep struct {
 	ActiveKind RuntimeActivityActiveKind
 }
 
-type RuntimeOperationRef struct {
-	Kind            RuntimeOperationKind
-	ClientRequestID runtimeids.RuntimeClientRequestID
-	QueueItemID     *runtimeids.QueueItemID
-}
-
-type RuntimeInputReconciliationSnapshot struct {
-	Operations []RuntimeInputReconciliation
-}
-
-type RuntimeInputReconciliation struct {
-	Operation RuntimeOperationRef
-	State     RuntimeInputReconciliationState
-}
-
 func (u RuntimeReadModelUpdate) Validate() error {
 	if err := u.Version.Validate(); err != nil {
 		return fmt.Errorf("validate runtime read-model version: %w", err)
 	}
 	if err := u.Activity.Validate(); err != nil {
 		return fmt.Errorf("validate runtime activity: %w", err)
-	}
-	if err := u.InputReconciliation.Validate(); err != nil {
-		return fmt.Errorf("validate runtime input reconciliation: %w", err)
 	}
 	return nil
 }
@@ -99,46 +80,6 @@ func (s RuntimeActiveStep) Validate() error {
 	}
 	if err := s.ActiveKind.Validate(); err != nil {
 		return err
-	}
-	return nil
-}
-
-func (r RuntimeOperationRef) Validate() error {
-	if err := r.Kind.Validate(); err != nil {
-		return err
-	}
-	if r.ClientRequestID.IsZero() {
-		return fmt.Errorf("runtime operation requires client request id")
-	}
-	if r.Kind != RuntimeOperationKindQueuedMessage && r.QueueItemID != nil {
-		return fmt.Errorf("%s runtime operation cannot carry queue item id", r.Kind)
-	}
-	if r.QueueItemID != nil && r.QueueItemID.IsZero() {
-		return fmt.Errorf("runtime queued-message operation queue item id is invalid")
-	}
-	return nil
-}
-
-func (s RuntimeInputReconciliationSnapshot) Validate() error {
-	seen := make(map[runtimeids.RuntimeClientRequestID]struct{}, len(s.Operations))
-	for index, operation := range s.Operations {
-		if err := operation.Validate(); err != nil {
-			return fmt.Errorf("validate runtime input reconciliation operation %d: %w", index, err)
-		}
-		if _, exists := seen[operation.Operation.ClientRequestID]; exists {
-			return fmt.Errorf("runtime input reconciliation repeats client request id %q", operation.Operation.ClientRequestID.String())
-		}
-		seen[operation.Operation.ClientRequestID] = struct{}{}
-	}
-	return nil
-}
-
-func (r RuntimeInputReconciliation) Validate() error {
-	if err := r.Operation.Validate(); err != nil {
-		return fmt.Errorf("validate runtime operation identity: %w", err)
-	}
-	if err := r.State.Validate(); err != nil {
-		return fmt.Errorf("validate runtime input reconciliation state: %w", err)
 	}
 	return nil
 }

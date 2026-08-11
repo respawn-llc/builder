@@ -21,8 +21,8 @@ type ExecutionTargetPolicy struct {
 }
 
 type ExecutionTargetSelection struct {
-	Mode      ExecutionTargetMode
-	CustomRef *string
+	Mode      ExecutionTargetMode `json:"mode"`
+	CustomRef *string             `json:"custom_ref,omitempty"`
 }
 
 type ExecutionTargetUnavailableCause string
@@ -83,6 +83,16 @@ func (s ExecutionTargetSelection) Validate() error {
 		return errors.New("execution target custom ref is required")
 	}
 	return nil
+}
+
+func (s ExecutionTargetSelection) Equal(other ExecutionTargetSelection) bool {
+	if s.Mode != other.Mode {
+		return false
+	}
+	if s.CustomRef == nil || other.CustomRef == nil {
+		return s.CustomRef == nil && other.CustomRef == nil
+	}
+	return *s.CustomRef == *other.CustomRef
 }
 
 func validExecutionTargetPolicyMode(mode ExecutionTargetMode) bool {

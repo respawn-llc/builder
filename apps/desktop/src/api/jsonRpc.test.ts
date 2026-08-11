@@ -168,6 +168,45 @@ describe("JsonRpcWebSocketTransport", () => {
     expect(controlSocket.readyState).toBe(MockWebSocket.OPEN);
   });
 
+  it("attaches a dedicated Session before a Session-scoped call", async () => {
+    const transport = createJsonRpcTransport("ws://127.0.0.1:53082/rpc");
+    const answer = transport.callAttachedSession("session-1", "prompt.answerBatch", {
+      session_id: "session-1",
+    });
+    const socket = sockets[0] ?? failTest("attached Session socket missing");
+
+    socket.open();
+    await waitForSent(socket, 1);
+    ack(socket, 0);
+    await waitForSent(socket, 2);
+    expect(frame(socket, 1)).toMatchObject({ method: "session.attach" });
+    ack(socket, 1);
+    await waitForSent(socket, 3);
+    expect(frame(socket, 2)).toMatchObject({ method: "prompt.answerBatch" });
+    ack(socket, 2);
+
+    await expect(answer).resolves.toEqual({});
+    expect(socket.readyState).toBe(MockWebSocket.CLOSED);
+  });
+
+  it("does not send a Session-scoped call when Session attachment fails", async () => {
+    const transport = createJsonRpcTransport("ws://127.0.0.1:53082/rpc");
+    const answer = transport.callAttachedSession("session-1", "prompt.answerBatch", {
+      session_id: "session-1",
+    });
+    const socket = sockets[0] ?? failTest("attached Session socket missing");
+
+    socket.open();
+    await waitForSent(socket, 1);
+    ack(socket, 0);
+    await waitForSent(socket, 2);
+    errorAck(socket, 1, { code: -32602, message: "session unavailable" });
+
+    await expect(answer).rejects.toThrow("session unavailable");
+    expect(socket.sent).toHaveLength(2);
+    expect(socket.readyState).toBe(MockWebSocket.CLOSED);
+  });
+
   it("cancels a dedicated call by closing only its socket", async () => {
     const transport = createJsonRpcTransport("ws://127.0.0.1:53082/rpc");
     const controller = new AbortController();

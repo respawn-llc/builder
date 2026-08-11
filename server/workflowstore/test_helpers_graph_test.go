@@ -40,6 +40,15 @@ func workflowGraphSaveBlockerCount(blockers []WorkflowGraphSaveBlocker, code str
 	return 0
 }
 
+func workflowGraphSaveBlockerEntities(blockers []WorkflowGraphSaveBlocker, code string) []WorkflowGraphEntityReference {
+	for _, blocker := range blockers {
+		if blocker.Code == code {
+			return blocker.AffectedEntities
+		}
+	}
+	return nil
+}
+
 func nodeByID(t *testing.T, def workflow.Definition, nodeID workflow.NodeID) workflow.Node {
 	t.Helper()
 	for _, node := range def.Nodes {
@@ -395,6 +404,7 @@ func attachManagedWorktree(t *testing.T, ctx context.Context, store *Store, work
 UPDATE tasks
 SET source_workspace_id = ?,
     managed_worktree_id = ?,
+    pending_initial_managed_branch_name = NULL,
     execution_target_mode = ?,
     execution_target_requested_ref = ?,
     execution_target_commit_oid = ?,

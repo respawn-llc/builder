@@ -54,6 +54,10 @@ func selectorApplicability(fact workflow.SelectorApplicability) serverapi.Workfl
 func ValidationErrors(inheritedWorkflowID *runtimeids.WorkflowID, errs []workflow.ValidationError) []serverapi.WorkflowValidationError {
 	out := make([]serverapi.WorkflowValidationError, 0, len(errs))
 	for _, err := range errs {
+		relatedIDs := append([]string(nil), err.RelatedIDs...)
+		for _, entity := range err.RelatedEntities {
+			relatedIDs = append(relatedIDs, entity.EntityID)
+		}
 		projected := serverapi.WorkflowValidationError{
 			Code:              string(err.Code),
 			Message:           err.Message,
@@ -62,7 +66,7 @@ func ValidationErrors(inheritedWorkflowID *runtimeids.WorkflowID, errs []workflo
 			TransitionGroupID: string(err.TransitionGroupID),
 			EdgeID:            string(err.EdgeID),
 			Details:           validationErrorDetails(err),
-			RelatedIDs:        err.RelatedIDs,
+			RelatedIDs:        relatedIDs,
 			BlocksContext:     err.BlocksContext,
 		}
 		if projected.WorkflowID == nil {

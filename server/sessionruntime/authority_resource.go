@@ -26,6 +26,7 @@ type agentResourceOwnerlessDisposition uint8
 var ErrSessionRunActive = errors.New("session has an active run")
 var ErrSessionStartsBlocked = errors.New("session starts are blocked")
 var ErrSessionWorkflowActivationActive = errors.New("session has a retained workflow activation")
+var ErrExecutionPromptPending = errors.New("exact execution has a pending prompt")
 
 const (
 	AgentResourceBuilding AgentResourceState = iota + 1
@@ -44,7 +45,7 @@ type AgentResourceDescriptor struct {
 	State AgentResourceState
 }
 
-type AgentResourceEventFeed func(AgentResourceDescriptor, runtime.Event)
+type AgentResourceEventFeed func(runtimeids.SessionResourceRef, runtime.Event)
 
 type AgentResourceRetainer func() (io.Closer, error)
 
@@ -951,6 +952,65 @@ func (a *Authority) WithLiveExecutionRuntime(
 		return errors.New("agent execution scope has no runtime resource")
 	}
 	return a.WithRuntime(ctx, resource, callback)
+}
+
+// WithInterruptibleAgentTurn prevents Question admission across one exact current-execution mutation.
+func (a *Authority) WithInterruptibleAgentTurn(
+	ctx context.Context,
+	sessionID runtimeids.SessionID,
+	withoutExecution func() error,
+	callback func(context.Context, *runtime.Engine) error,
+) error {
+	if a == nil {
+		return errors.New("session runtime authority is required")
+	}
+	if sessionID.IsZero() {
+		return errors.New("session id is required")
+	}
+	if callback == nil {
+		return errors.New("interruptible Agent Turn mutation is required")
+	}
+	runWithoutExecution := func(missing error) error {
+		if err := context.Cause(ctx); err != nil {
+			return err
+		}
+		if withoutExecution != nil {
+			return withoutExecution()
+		}
+		return missing
+	}
+	a.mu.Lock()
+	resource := a.resources[sessionID]
+	if resource == nil {
+		defer a.mu.Unlock()
+		return runWithoutExecution(errors.Join(serverapi.ErrRuntimeUnavailable, fmt.Errorf("session %s has no active runtime available", sessionID)))
+	}
+	resource.mu.Lock()
+	execution := resource.current
+	if execution == nil {
+		defer a.mu.Unlock()
+		defer resource.mu.Unlock()
+		return runWithoutExecution(ErrExecutionNoLongerLive)
+	}
+	resource.mu.Unlock()
+	a.mu.Unlock()
+	execution.prompts.mu.RLock()
+	defer execution.prompts.mu.RUnlock()
+	resource.mu.Lock()
+	defer resource.mu.Unlock()
+	if resource.current != execution {
+		return ErrExecutionNoLongerLive
+	}
+	if resource.rejectsNewUseLocked() || resource.engine == nil {
+		return errors.Join(serverapi.ErrRuntimeUnavailable, fmt.Errorf("session %s has no active runtime available", sessionID))
+	}
+	if len(execution.prompts.pending) != 0 {
+		return ErrExecutionPromptPending
+	}
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
+	return callback(ctx, resource.engine)
 }
 
 func (a *Authority) retainResource(ref runtimeids.SessionResourceRef) (*ResourceRetention, error) {

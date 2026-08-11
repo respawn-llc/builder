@@ -2,11 +2,8 @@ package workflowview
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
-	"strconv"
 	"strings"
-	"time"
 
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
@@ -19,10 +16,10 @@ type Activity struct {
 }
 
 type activityPage struct {
-	task          sqlitegen.TaskRecord
-	rows          []taskActivityRow
-	comments      map[string]sqlitegen.TaskComment
-	nextPageToken string
+	task       sqlitegen.TaskRecord
+	rows       []taskActivityRow
+	comments   map[string]sqlitegen.TaskComment
+	offsetPage serverapi.WorkflowOffsetPage[taskActivityRow]
 }
 
 type taskActivityRow struct {
@@ -32,12 +29,6 @@ type taskActivityRow struct {
 	occurredAtUnixMs int64
 	updatedAtUnixMs  int64
 	sessionName      *string
-}
-
-type activityPageCursor struct {
-	occurredAtUnixMs int64
-	activityID       string
-	hasValue         bool
 }
 
 func NewActivity(metadataStore *metadata.Store, projector *TaskProjector) (*Activity, error) {
@@ -50,7 +41,7 @@ func NewActivity(metadataStore *metadata.Store, projector *TaskProjector) (*Acti
 	return &Activity{queries: metadataStore.Queries(), projector: projector}, nil
 }
 
-func (a *Activity) List(ctx context.Context, req serverapi.WorkflowTaskActivityListRequest) (serverapi.WorkflowTaskActivityListResponse, error) {
+func (a *Activity) List(ctx context.Context, req serverapi.WorkflowTaskOffsetPageRequest) (serverapi.WorkflowTaskActivityListResponse, error) {
 	page, err := a.loadPage(ctx, req)
 	if err != nil {
 		return serverapi.WorkflowTaskActivityListResponse{}, err
@@ -60,13 +51,14 @@ func (a *Activity) List(ctx context.Context, req serverapi.WorkflowTaskActivityL
 		return serverapi.WorkflowTaskActivityListResponse{}, err
 	}
 	return serverapi.WorkflowTaskActivityListResponse{
-		Items:             items,
-		NextPageToken:     page.nextPageToken,
-		GeneratedAtUnixMs: time.Now().UTC().UnixMilli(),
+		WorkflowOffsetPage: serverapi.WorkflowOffsetPage[serverapi.WorkflowTaskActivityItem]{
+			Items:      items,
+			NextOffset: page.offsetPage.NextOffset,
+		},
 	}, nil
 }
 
-func (a *Activity) loadPage(ctx context.Context, req serverapi.WorkflowTaskActivityListRequest) (activityPage, error) {
+func (a *Activity) loadPage(ctx context.Context, req serverapi.WorkflowTaskOffsetPageRequest) (activityPage, error) {
 	if a == nil {
 		return activityPage{}, errors.New("activity is required")
 	}
@@ -77,53 +69,35 @@ func (a *Activity) loadPage(ctx context.Context, req serverapi.WorkflowTaskActiv
 	if err != nil {
 		return activityPage{}, err
 	}
-	pageSize := req.PageSize
-	if pageSize == 0 {
-		pageSize = 50
-	}
-	cursor, err := parseActivityPageToken(req.PageToken)
+	window, err := serverapi.ResolveWorkflowOffsetWindow(req.Offset, req.Limit)
 	if err != nil {
 		return activityPage{}, err
 	}
-	rows, err := a.activityRows(ctx, task.ID, cursor, pageSize+1)
+	rows, err := a.activityRows(ctx, task.ID, window.Offset, window.Limit+1)
 	if err != nil {
 		return activityPage{}, err
 	}
-	pageRows := rows
-	hasNext := len(rows) > pageSize
-	if hasNext {
-		pageRows = rows[:pageSize]
-	}
-	comments, err := a.commentsByID(ctx, sourceIDsByType(pageRows, "comment"))
+	offsetPage := serverapi.FinalizeWorkflowOffsetPage(window, rows)
+	comments, err := a.commentsByID(ctx, sourceIDsByType(offsetPage.Items, "comment"))
 	if err != nil {
 		return activityPage{}, err
-	}
-	nextPageToken := ""
-	if hasNext && len(pageRows) > 0 {
-		nextPageToken = activityPageToken(pageRows[len(pageRows)-1])
 	}
 	return activityPage{
-		task:          task,
-		rows:          pageRows,
-		comments:      comments,
-		nextPageToken: nextPageToken,
+		task:       task,
+		rows:       offsetPage.Items,
+		comments:   comments,
+		offsetPage: offsetPage,
 	}, nil
 }
 
-func (a *Activity) activityRows(ctx context.Context, taskID string, cursor activityPageCursor, limit int) ([]taskActivityRow, error) {
+func (a *Activity) activityRows(ctx context.Context, taskID string, offset int, limit int) ([]taskActivityRow, error) {
 	if limit <= 0 {
 		return []taskActivityRow{}, nil
 	}
-	cursorActive := int64(0)
-	if cursor.hasValue {
-		cursorActive = 1
-	}
 	rows, err := a.queries.ListWorkflowTaskActivityRows(ctx, sqlitegen.ListWorkflowTaskActivityRowsParams{
-		PageLimit:              int64(limit),
-		TaskID:                 taskID,
-		CursorActive:           cursorActive,
-		CursorOccurredAtUnixMs: cursor.occurredAtUnixMs,
-		CursorActivityID:       cursor.activityID,
+		PageLimit:  int64(limit),
+		PageOffset: int64(offset),
+		TaskID:     taskID,
 	})
 	if err != nil {
 		return nil, err
@@ -199,28 +173,4 @@ func sourceIDsByType(rows []taskActivityRow, kind string) []string {
 		seen[row.sourceID] = true
 	}
 	return ids
-}
-
-func parseActivityPageToken(token string) (activityPageCursor, error) {
-	trimmed := strings.TrimSpace(token)
-	if trimmed == "" {
-		return activityPageCursor{}, nil
-	}
-	timestampPart, encodedID, ok := strings.Cut(trimmed, "|")
-	if !ok {
-		return activityPageCursor{}, ErrInvalidPageToken
-	}
-	occurredAt, err := strconv.ParseInt(timestampPart, 10, 64)
-	if err != nil || occurredAt < 0 {
-		return activityPageCursor{}, ErrInvalidPageToken
-	}
-	decodedID, err := base64.RawURLEncoding.DecodeString(encodedID)
-	if err != nil || strings.TrimSpace(string(decodedID)) == "" {
-		return activityPageCursor{}, ErrInvalidPageToken
-	}
-	return activityPageCursor{occurredAtUnixMs: occurredAt, activityID: string(decodedID), hasValue: true}, nil
-}
-
-func activityPageToken(row taskActivityRow) string {
-	return strconv.FormatInt(row.occurredAtUnixMs, 10) + "|" + base64.RawURLEncoding.EncodeToString([]byte(row.activityID))
 }

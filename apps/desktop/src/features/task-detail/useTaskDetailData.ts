@@ -1,9 +1,9 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef } from "react";
 
-import type { QuestionAnswerInput, TaskDetail } from "@/api";
+import type { OffsetPage, TaskDetail } from "@/api";
 import { errorMessage } from "@/api";
-import { invalidateProjectTaskSearches, queryKeys } from "@/app-facade";
+import { invalidateProjectBoardQueries, invalidateProjectTaskSearches, queryKeys } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
 import { useConnectionSnapshot } from "@/app-facade";
 import {
@@ -58,7 +58,6 @@ export function useTaskDetailLiveRefresh(detail: TaskDetail, enabled: boolean) {
           queryKey: queryKeys.comments(taskID),
           refetchType: "active",
         }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.allPendingAsks, refetchType: "active" }),
       ]);
     };
     const refreshOrReport = (): void => {
@@ -107,44 +106,51 @@ export function useTaskAttention(taskID: string, enabled: boolean) {
   });
 }
 
+const taskDetailFeedPageSize = 50;
+const taskDetailFeedMaxPages = 10;
+
+export type TaskDetailFeedPage<T> = OffsetPage<T> &
+  Readonly<{
+    offset: number;
+    totalCount?: number;
+  }>;
+
+function taskDetailFeedOptions<T>(
+  queryKey: readonly unknown[],
+  enabled: boolean,
+  loadPage: (offset: number) => Promise<OffsetPage<T>>,
+) {
+  return {
+    queryKey,
+    queryFn: async ({ pageParam }: { pageParam: number }): Promise<TaskDetailFeedPage<T>> => ({
+      ...(await loadPage(pageParam)),
+      offset: pageParam,
+    }),
+    enabled,
+    initialPageParam: 0,
+    getNextPageParam: (lastPage: TaskDetailFeedPage<T>) => lastPage.nextOffset ?? undefined,
+    getPreviousPageParam: (firstPage: TaskDetailFeedPage<T>) =>
+      firstPage.offset === 0 ? undefined : firstPage.offset - taskDetailFeedPageSize,
+    maxPages: taskDetailFeedMaxPages,
+  };
+}
+
 export function useTaskActivity(taskID: string, enabled: boolean) {
   const { api } = useAppServices();
-  return useInfiniteQuery({
-    queryKey: queryKeys.activity(taskID),
-    queryFn: async ({ pageParam }) => api.listTaskActivity(taskID, pageParam),
-    enabled: enabled && taskID.length > 0,
-    initialPageParam: "",
-    getNextPageParam: (lastPage) => (lastPage.nextPageToken.length > 0 ? lastPage.nextPageToken : undefined),
-  });
+  return useInfiniteQuery(
+    taskDetailFeedOptions(queryKeys.activity(taskID), enabled && taskID.length > 0, async (offset) =>
+      api.listTaskActivity(taskID, offset),
+    ),
+  );
 }
 
 export function useTaskComments(taskID: string, enabled: boolean) {
   const { api } = useAppServices();
-  return useInfiniteQuery({
-    queryKey: queryKeys.comments(taskID),
-    queryFn: async ({ pageParam }) => api.listTaskComments(taskID, pageParam),
-    enabled: enabled && taskID.length > 0,
-    initialPageParam: 0,
-    getNextPageParam: (lastPage) => lastPage.nextOffset ?? undefined,
-  });
-}
-
-export function usePendingAsks(sessionID: string | null) {
-  const { api } = useAppServices();
-  return useQuery({
-    queryKey: queryKeys.pendingAsks(sessionID),
-    queryFn: async () => {
-      if (sessionID === null) {
-        throw new Error("pending ask lookup requires an enabled session");
-      }
-      if (sessionID.length === 0) {
-        throw new Error("pending ask lookup requires a non-empty session id");
-      }
-      return api.listPendingAsks(sessionID);
-    },
-    enabled: sessionID !== null && sessionID.length > 0,
-    refetchOnMount: "always",
-  });
+  return useInfiniteQuery(
+    taskDetailFeedOptions(queryKeys.comments(taskID), enabled && taskID.length > 0, async (offset) =>
+      api.listTaskComments(taskID, offset),
+    ),
+  );
 }
 
 type TaskLifecycleAction = "dependency_remove" | "interrupt";
@@ -172,7 +178,6 @@ export function useTaskMutations(
     await queryClient.invalidateQueries({ queryKey: queryKeys.allBoardNodeCards });
     await queryClient.invalidateQueries({ queryKey: queryKeys.allTasks });
     await queryClient.invalidateQueries({ queryKey: queryKeys.allActivity });
-    await queryClient.invalidateQueries({ queryKey: queryKeys.allPendingAsks });
     await invalidateProjectTaskSearches(queryClient, projectID);
     onChanged?.();
   }
@@ -213,10 +218,7 @@ export function useTaskMutations(
         await Promise.all([
           queryClient.invalidateQueries({ queryKey: queryKeys.task(pair.blockerTaskID) }),
           queryClient.invalidateQueries({ queryKey: queryKeys.task(pair.blockedTaskID) }),
-          queryClient.invalidateQueries({ queryKey: queryKeys.projectBoardsRoot(projectID) }),
-          queryClient.invalidateQueries({
-            queryKey: queryKeys.projectBoardNodeCardsRoot(projectID),
-          }),
+          invalidateProjectBoardQueries(queryClient, projectID),
           queryClient.invalidateQueries({
             queryKey: queryKeys.projectTaskListsRoot(projectID),
           }),
@@ -234,9 +236,6 @@ export function useTaskMutations(
     approveApproval: useMutation({
       mutationFn: async (approvalID: string) => api.approveApproval(approvalID),
       onSuccess: refresh,
-    }),
-    answerQuestion: useMutation({
-      mutationFn: async (input: QuestionAnswerInput) => api.answerQuestion(input),
     }),
   };
 }

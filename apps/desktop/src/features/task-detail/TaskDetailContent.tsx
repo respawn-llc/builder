@@ -1,8 +1,15 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { z } from "zod";
 
-import { errorMessage, type TaskDependencyDirection, type TaskDetail } from "@/api";
+import {
+  errorMessage,
+  type QuestionAnswerInput,
+  type TaskAttention,
+  type TaskDependencyDirection,
+  type TaskDetail,
+} from "@/api";
 import type {
   SidebarPageNavigator,
   SidebarMode,
@@ -10,9 +17,15 @@ import type {
   SidebarDestination,
   TaskDetailInitialFocus,
 } from "@/app-facade";
-import { useAppNavigation, useConnectionSnapshot, useStatusController } from "@/app-facade";
+import {
+  queryKeys,
+  useAppNavigation,
+  useAppServices,
+  useConnectionSnapshot,
+  useStatusController,
+} from "@/app-facade";
 import { useUpdateTask } from "@/shared/task-mutations";
-import { createVirtualizedPixelOffsetRequest } from "@/ui";
+import { createVirtualizedPixelOffsetRequest, type VirtualizedPixelOffsetRequest } from "@/ui";
 import {
   initialDescriptionPresentationState,
   type DescriptionPresentationState,
@@ -21,6 +34,16 @@ import { TaskDeleteProvider } from "./TaskDeleteButton";
 import { TaskDetailList } from "./TaskDetailList";
 import { taskDetailSidebarDestination } from "./taskDetailSidebarDestination";
 import type { TaskDetailDeleteDismissal } from "./taskDetailDismissal";
+import {
+  emptyPromptAnswerState,
+  promptAnswerKey,
+  type PromptAnswerKey,
+  type PromptAnswerState,
+} from "./PromptAnswerState";
+import { PromptAnswerCoordinator } from "./PromptAnswerCoordinator";
+import type { PromptPrimaryFocusRequest } from "./PromptPrimaryControlRegistry";
+import { promptSubmissionHandoff } from "./PromptSubmissionHandoff";
+import { questionAnswerBatchInput, type QuestionAnswerMutation } from "./TaskDetailQuestionAnswer";
 import type { QuestionSelectionState } from "./TaskDetailQuestionState";
 import { TaskInitiatingActionProvider } from "./TaskResumeButton";
 import type { TaskDraft } from "./TaskDetailRows";
@@ -33,10 +56,62 @@ import type { useTaskActivity, useTaskAttention, useTaskComments } from "./useTa
 // a server refresh, which lets a clean surface follow live updates while a
 // dirty surface keeps the user's in-progress edits.
 type TaskDraftState = Readonly<{
-  taskID: string;
   base: TaskDraft;
   draft: TaskDraft;
 }>;
+
+interface PromptAttentionReconciliationIdentity {
+  readonly generatedAt: number;
+  readonly requestSequence: number;
+}
+
+interface PromptAttentionReconciliationRequest {
+  readonly cacheAtStart: TaskAttention | undefined;
+  readonly requestSequence: number;
+}
+
+interface AcceptedPromptAttentionReconciliation extends PromptAttentionReconciliationIdentity {
+  readonly snapshot: TaskAttention;
+}
+
+function newPromptAttentionReconciliationOrder() {
+  let nextRequestSequence = 0;
+  let lastAccepted: AcceptedPromptAttentionReconciliation | undefined;
+  return {
+    accept(
+      request: PromptAttentionReconciliationRequest,
+      candidate: TaskAttention,
+      current: TaskAttention | undefined,
+    ): boolean {
+      const olderThanAccepted =
+        lastAccepted !== undefined &&
+        (candidate.generatedAt < lastAccepted.generatedAt ||
+          (candidate.generatedAt === lastAccepted.generatedAt &&
+            request.requestSequence < lastAccepted.requestSequence));
+      const unsequencedEqualTimestampWrite =
+        current?.generatedAt === candidate.generatedAt &&
+        current !== request.cacheAtStart &&
+        current !== lastAccepted?.snapshot;
+      if (
+        olderThanAccepted ||
+        unsequencedEqualTimestampWrite ||
+        (current !== undefined && current.generatedAt > candidate.generatedAt)
+      ) {
+        return false;
+      }
+      lastAccepted = {
+        generatedAt: candidate.generatedAt,
+        requestSequence: request.requestSequence,
+        snapshot: candidate,
+      };
+      return true;
+    },
+    beginRequest(cacheAtStart: TaskAttention | undefined): PromptAttentionReconciliationRequest {
+      nextRequestSequence += 1;
+      return { cacheAtStart, requestSequence: nextRequestSequence };
+    },
+  };
+}
 
 export function TaskDetailContent({
   activity,
@@ -72,16 +147,12 @@ export function TaskDetailContent({
   const restored = decodeTaskDetailRetainedState(retainedState);
   const restorationKey = useId();
   const [scrollElement, setScrollElement] = useState<HTMLDivElement | null>(null);
-  const pixelOffsetRequest = useMemo(
-    () =>
-      restored === undefined
-        ? undefined
-        : createVirtualizedPixelOffsetRequest(restorationKey, restored.scrollOffsetPx),
+  const restoredPixelOffsetRequest = useMemo(
+    () => restoredPixelOffsetRequestFor(restorationKey, restored),
     [restorationKey, restored],
   );
   const serverDraft = taskDraft(detail);
   const [draftState, setDraftState] = useState<TaskDraftState>(() => ({
-    taskID: detail.id,
     base: restored?.base ?? serverDraft,
     draft: restored?.draft ?? serverDraft,
   }));
@@ -96,23 +167,7 @@ export function TaskDetailContent({
     restored?.selectedTab ?? "comments",
   );
   const [localDependencyFocusRequest, setLocalDependencyFocusRequest] = useState<number | null>(null);
-  const [questionSelections, setQuestionSelections] = useState<ReadonlyMap<string, QuestionSelectionState>>(
-    () => new Map(),
-  );
-  // When the surface switches to a different task, drop the previous task's
-  // in-progress comment edit, new-comment draft, and question selections so they
-  // don't bleed into the newly loaded task. Reset during render (the React
-  // "adjust state on prop change" pattern) rather than in an effect. The
-  // title/body draft is reconciled separately below via reconcileDraftState.
-  const [loadedTaskID, setLoadedTaskID] = useState(detail.id);
-  if (loadedTaskID !== detail.id) {
-    setLoadedTaskID(detail.id);
-    setEditingComment(null);
-    setNewCommentBody("");
-    setDescriptionPresentation(initialDescriptionPresentationState);
-    setQuestionSelections(new Map());
-    setLocalDependencyFocusRequest(null);
-  }
+  const promptAnswers = useTaskPromptAnswers({ attention, detail, scrollElement });
   const update = useUpdateTask(detail.id, detail.projectID);
   useTaskDetailRetainedCapture({
     base: draftState.base,
@@ -148,14 +203,13 @@ export function TaskDetailContent({
   });
   const connection = useConnectionSnapshot();
   useTaskDetailLiveRefresh(detail, true);
-
   // Reconcile the draft with the latest server snapshot during render (the
-  // React "adjust state on prop change" pattern). Switching tasks resets to the
-  // server values; a clean surface follows live server updates; a surface with
-  // unsaved edits keeps the user's draft so a background refresh never clobbers
-  // in-progress work. A draft that has caught up to the server (e.g. after a
-  // save) re-baselines so subsequent server changes are followed again.
-  const reconciled = reconcileDraftState(draftState, detail.id, serverDraft);
+  // React "adjust state on prop change" pattern). A clean surface follows live
+  // server updates; a surface with unsaved edits keeps the user's draft so a
+  // background refresh never clobbers in-progress work. A draft that has
+  // caught up to the server (e.g. after a save) re-baselines so subsequent
+  // server changes are followed again.
+  const reconciled = reconcileDraftState(draftState, serverDraft);
   if (reconciled !== draftState) {
     setDraftState(reconciled);
   }
@@ -177,7 +231,6 @@ export function TaskDetailContent({
 
   return (
     <TaskInitiatingActionProvider
-      key={detail.id}
       onApplied={mutations.refresh}
       onViewDependencies={(taskID) => {
         presentTaskDependencies({
@@ -195,6 +248,7 @@ export function TaskDetailContent({
       <TaskDeleteProvider onDismiss={onDeleteDismiss} taskID={detail.id}>
         <TaskDetailList
           activity={activity}
+          answerQuestion={promptAnswers.answerQuestion}
           attention={attention}
           comments={comments}
           detail={detail}
@@ -202,17 +256,13 @@ export function TaskDetailContent({
           draft={draft}
           descriptionPresentation={descriptionPresentation}
           editingComment={editingComment}
-          focusRequestKey={
-            localDependencyFocusRequest === null
-              ? undefined
-              : `${detail.id}:dependencies:${localDependencyFocusRequest.toString()}`
-          }
+          focusRequestKey={dependencyFocusRequestKey(detail.id, localDependencyFocusRequest)}
           initialFocus={focusPresentation}
           mutations={mutations}
           newCommentBody={newCommentBody}
           relationshipNavigationAvailable={relationshipNavigationAvailable}
           onDraftChange={(nextDraft) => {
-            setDraftState({ taskID: detail.id, base: reconciled.base, draft: nextDraft });
+            setDraftState({ base: reconciled.base, draft: nextDraft });
           }}
           onDescriptionPresentationChange={setDescriptionPresentation}
           onAddDependency={(direction) => {
@@ -234,13 +284,14 @@ export function TaskDetailContent({
           }}
           onNewCommentBodyChange={setNewCommentBody}
           onEditingCommentChange={setEditingComment}
-          onQuestionSelectionChange={(askID, selection) => {
-            setQuestionSelections((previous) => new Map(previous).set(askID, selection));
+          onQuestionSelectionChange={(key: PromptAnswerKey, selection: QuestionSelectionState) => {
+            promptAnswers.setState((previous) => previous.withSelection(key, selection));
           }}
           onScrollElementChange={setScrollElement}
           onSaveDraft={saveDraft}
-          pixelOffsetRequest={pixelOffsetRequest}
-          questionSelections={questionSelections}
+          pixelOffsetRequest={promptAnswers.pixelOffsetRequest ?? restoredPixelOffsetRequest}
+          primaryFocusRequest={promptAnswers.primaryFocusRequest}
+          promptAnswerState={promptAnswers.state}
           selectedTab={selectedTab}
           setTab={setSelectedTab}
           updateError={update.error}
@@ -249,6 +300,139 @@ export function TaskDetailContent({
       </TaskDeleteProvider>
     </TaskInitiatingActionProvider>
   );
+}
+
+function useTaskPromptAnswers({
+  attention,
+  detail,
+  scrollElement,
+}: Readonly<{
+  attention: ReturnType<typeof useTaskAttention>;
+  detail: TaskDetail;
+  scrollElement: HTMLDivElement | null;
+}>) {
+  const { api } = useAppServices();
+  const { push } = useStatusController();
+  const { t } = useTranslation();
+  const queryClient = useQueryClient();
+  const [state, setState] = useState<PromptAnswerState>(emptyPromptAnswerState);
+  const [pixelOffsetRequest, setPixelOffsetRequest] = useState<VirtualizedPixelOffsetRequest | undefined>(
+    undefined,
+  );
+  const [primaryFocusRequest, setPrimaryFocusRequest] = useState<PromptPrimaryFocusRequest | undefined>(
+    undefined,
+  );
+  const requestSequence = useMemo(() => ({ value: 0 }), [detail.id]);
+  const taskScope = useMemo(() => ({ mounted: true }), [detail.id]);
+  useEffect(
+    () => () => {
+      taskScope.mounted = false;
+    },
+    [taskScope],
+  );
+  const coordinator = useMemo(() => {
+    const reconciliationOrder = newPromptAttentionReconciliationOrder();
+    return new PromptAnswerCoordinator({
+      invalidateAttention: async () => {
+        await queryClient.cancelQueries({
+          exact: true,
+          queryKey: queryKeys.taskAttention(detail.id),
+        });
+        await queryClient.invalidateQueries({
+          exact: true,
+          queryKey: queryKeys.taskAttention(detail.id),
+          refetchType: "none",
+        });
+      },
+      isMounted: () => taskScope.mounted,
+      notifyFailure: (failure) => {
+        push({
+          body: `${failure.taskShortID} · ${failure.taskTitle}\n${errorMessage(failure.cause)}`,
+          durationMs: Infinity,
+          id: [
+            "task-prompt-answer",
+            failure.kind,
+            failure.taskID,
+            failure.promptKey.sessionID,
+            failure.promptKey.stepID,
+            failure.promptKey.promptID,
+          ].join(":"),
+          title: t("states.error"),
+          tone: "danger",
+        });
+      },
+      readAttention: async () => {
+        const attentionKey = queryKeys.taskAttention(detail.id);
+        const request = reconciliationOrder.beginRequest(
+          queryClient.getQueryData<TaskAttention>(attentionKey),
+        );
+        const fresh = await api.listTaskAttention(detail.id);
+        const accepted = queryClient.setQueryData<TaskAttention>(attentionKey, (current) =>
+          reconciliationOrder.accept(request, fresh, current) ? fresh : current,
+        );
+        if (accepted === undefined) {
+          throw new Error("accepted Task attention reconciliation snapshot is unavailable");
+        }
+        return accepted.items.filter(
+          (item): item is Extract<(typeof accepted.items)[number], { kind: "question" }> =>
+            item.kind === "question",
+        );
+      },
+      task: { id: detail.id, shortID: detail.shortID, title: detail.title },
+      updateState: setState,
+    });
+  }, [api, detail.id, detail.shortID, detail.title, push, queryClient, t, taskScope]);
+  const answerQuestion = useMemo<QuestionAnswerMutation>(
+    () => ({
+      isPending: false,
+      async mutateAsync(
+        input: QuestionAnswerInput,
+        attempt: Parameters<QuestionAnswerMutation["mutateAsync"]>[1],
+      ): Promise<void> {
+        requestSequence.value += 1;
+        const handoff = promptSubmissionHandoff({
+          attentionItems: (attention.data?.items ?? []).filter(
+            (item) => item.kind !== "question" || !state.isMasked(promptAnswerKey(item)),
+          ),
+          requestID: requestSequence.value,
+          scrollOffsetPx: scrollElement?.scrollTop ?? 0,
+          submittedKey: promptAnswerKey(attempt.attention),
+        });
+        setPixelOffsetRequest(handoff.pixelOffsetRequest);
+        setPrimaryFocusRequest(handoff.primaryFocusRequest);
+        await coordinator.submit({
+          attention: attempt.attention,
+          selection: attempt.selection,
+          send: async () => api.answerPromptBatch(questionAnswerBatchInput(input)),
+        });
+      },
+    }),
+    [api, attention.data?.items, coordinator, requestSequence, scrollElement, state],
+  );
+  const projectedState =
+    attention.data === undefined
+      ? state
+      : state.reconcileProjection(
+          attention.data.items.filter(
+            (item): item is Extract<(typeof attention.data.items)[number], { kind: "question" }> =>
+              item.kind === "question",
+          ),
+        );
+  if (projectedState !== state) {
+    setState(projectedState);
+  }
+  return {
+    answerQuestion,
+    pixelOffsetRequest,
+    primaryFocusRequest,
+    reset(): void {
+      setState(emptyPromptAnswerState());
+      setPixelOffsetRequest(undefined);
+      setPrimaryFocusRequest(undefined);
+    },
+    setState,
+    state: projectedState,
+  } as const;
 }
 
 function taskDetailFocusPresentation({
@@ -408,6 +592,20 @@ function decodeTaskDetailRetainedState(state: unknown): TaskDetailRetainedState 
   return taskDetailRetainedStateSchema.safeParse(state).data;
 }
 
+function restoredPixelOffsetRequestFor(
+  restorationKey: string,
+  restored: TaskDetailRetainedState | undefined,
+): VirtualizedPixelOffsetRequest | undefined {
+  if (restored === undefined) {
+    return undefined;
+  }
+  return createVirtualizedPixelOffsetRequest(restorationKey, restored.scrollOffsetPx);
+}
+
+function dependencyFocusRequestKey(taskID: string, request: number | null): string | undefined {
+  return request === null ? undefined : `${taskID}:dependencies:${request.toString()}`;
+}
+
 function taskDraft(detail: TaskDetail): TaskDraft {
   return { title: detail.title, body: detail.body };
 }
@@ -416,20 +614,16 @@ function sameDraft(a: TaskDraft, b: TaskDraft): boolean {
   return a.title === b.title && a.body === b.body;
 }
 
-function reconcileDraftState(state: TaskDraftState, taskID: string, serverDraft: TaskDraft): TaskDraftState {
-  if (state.taskID !== taskID) {
-    // Switched to a different task: drop the previous task's draft entirely.
-    return { taskID, base: serverDraft, draft: serverDraft };
-  }
+function reconcileDraftState(state: TaskDraftState, serverDraft: TaskDraft): TaskDraftState {
   const hasUnsavedEdits = !sameDraft(state.draft, state.base);
   if (!hasUnsavedEdits) {
     // Clean surface: track the latest server values (re-baseline on change).
-    return sameDraft(state.base, serverDraft) ? state : { taskID, base: serverDraft, draft: serverDraft };
+    return sameDraft(state.base, serverDraft) ? state : { base: serverDraft, draft: serverDraft };
   }
   if (sameDraft(state.draft, serverDraft)) {
     // The draft caught up to the server (e.g. the edit was just saved): treat
     // it as clean again so future server changes are followed.
-    return { taskID, base: serverDraft, draft: serverDraft };
+    return { base: serverDraft, draft: serverDraft };
   }
   // Unsaved edits diverge from the server: keep them; edits take priority.
   return state;

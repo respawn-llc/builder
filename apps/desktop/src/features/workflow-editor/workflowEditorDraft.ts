@@ -22,10 +22,7 @@ import {
 } from "./workflowEditorGraphMutations";
 import { workflowGraphsEqual } from "./workflowDraftEquality";
 import { draftParameterRowID, reorderDraftRows } from "./workflowEditorDraftRows";
-import {
-  isProtectedWorkflowParameter,
-  setWorkflowEdgeSelector,
-} from "./workflowEditorEdgeSelection";
+import { isProtectedWorkflowParameter, setWorkflowEdgeSelector } from "./workflowEditorEdgeSelection";
 import { workflowEditorTopologyMutation } from "./workflowEditorTopologyReducer";
 import type {
   DraftWorkflowDefinition,
@@ -71,9 +68,7 @@ export type WorkflowEditorDraftAction =
   | Readonly<{
       type: "editAgentNode";
       nodeID: string;
-      patch: Partial<
-        Pick<WorkflowNode, "key" | "name" | "subagentRole" | "completionMode">
-      >;
+      patch: Partial<Pick<WorkflowNode, "key" | "name" | "subagentRole" | "completionMode">>;
     }>
   | Readonly<{
       type: "editScriptNode";
@@ -148,11 +143,7 @@ type LifecycleAction = Extract<
 type NodeFieldAction = Extract<
   WorkflowEditorDraftAction,
   {
-    type:
-      | "editNodeIdentity"
-      | "editAgentNode"
-      | "editScriptNode"
-      | "assignJoinInputProvider";
+    type: "editNodeIdentity" | "editAgentNode" | "editScriptNode" | "assignJoinInputProvider";
   }
 >;
 
@@ -383,8 +374,7 @@ function reduceEdgeFieldAction(
       return editDraftEdge(state, action.edgeID, false, (edge) => ({
         ...edge,
         parameters: edge.parameters.filter(
-          (parameter) =>
-            parameter.rowID !== action.parameterRowID || isProtectedWorkflowParameter(parameter),
+          (parameter) => parameter.rowID !== action.parameterRowID || isProtectedWorkflowParameter(parameter),
         ),
       }));
     case "reorderEdgeParameter":
@@ -454,8 +444,7 @@ export function workflowEditorDraftGraph(state: WorkflowEditorDraftState): Workf
     })),
     nodeGroups: definition.nodeGroups.map((group) => ({ id: group.id, key: group.key, name: group.name })),
     nodes: definition.nodes.map((node) => ({
-      groupID: node.groupID,
-      groupKey: node.groupKey,
+      groupID: node.groupID.length > 0 ? node.groupID : null,
       id: node.id,
       key: node.key,
       kind: node.kind,
@@ -463,7 +452,7 @@ export function workflowEditorDraftGraph(state: WorkflowEditorDraftState): Workf
       completionMode: node.completionMode,
       scriptPath: node.scriptPath,
       joinInputProviders: node.joinInputProviders,
-      subagentRole: node.subagentRole,
+      ...(node.subagentRole ? { subagentRole: node.subagentRole } : {}),
     })),
     transitionGroups: definition.transitionGroups.map((group) => ({
       description: group.description,

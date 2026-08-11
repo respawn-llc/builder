@@ -85,11 +85,9 @@ type RuntimeShouldCompactBeforeUserMessageResponse struct {
 }
 
 type RuntimeSubmitUserTurnRequest struct {
-	ClientRequestID                 string                       `json:"client_request_id"`
-	SessionID                       string                       `json:"session_id"`
-	Input                           RuntimeUserTurnInput         `json:"input"`
-	OperationRef                    clientui.RuntimeOperationRef `json:"operation_ref"`
-	PreSubmitCompactionOperationRef clientui.RuntimeOperationRef `json:"pre_submit_compaction_operation_ref,omitempty"`
+	ClientRequestID string               `json:"client_request_id"`
+	SessionID       string               `json:"session_id"`
+	Input           RuntimeUserTurnInput `json:"input"`
 }
 
 type RuntimeUserTurnInputKind = runtimeinput.Kind
@@ -103,37 +101,69 @@ type RuntimePromptCommandInput = runtimeinput.PromptCommand
 type RuntimeUserTurnInput = runtimeinput.Input
 
 type RuntimeSubmitUserTurnResponse struct {
-	Message     string `json:"message"`
-	Compacted   bool   `json:"compacted,omitempty"`
-	Steered     bool   `json:"steered,omitempty"`
-	QueueItemID string `json:"queue_item_id,omitempty"`
+	Message     *string                     `json:"message,omitempty"`
+	ResultKind  clientui.UserTurnResultKind `json:"result_kind"`
+	Compacted   bool                        `json:"compacted,omitempty"`
+	Steered     bool                        `json:"steered,omitempty"`
+	QueueItemID string                      `json:"queue_item_id,omitempty"`
+}
+
+func (r RuntimeSubmitUserTurnResponse) Validate() error {
+	switch r.ResultKind {
+	case clientui.UserTurnResultKindQueued:
+		if !r.Steered {
+			return errors.New("queued result must be steered")
+		}
+		if strings.TrimSpace(r.QueueItemID) == "" {
+			return errors.New("queued result requires queue_item_id")
+		}
+		if r.Message != nil {
+			return errors.New("queued result must not include message")
+		}
+	case clientui.UserTurnResultKindNoFinal:
+		if r.Steered || strings.TrimSpace(r.QueueItemID) != "" || r.Message != nil {
+			return errors.New("no_final result must not include message or queue state")
+		}
+	case clientui.UserTurnResultKindAssistantFinal:
+		if r.Steered || strings.TrimSpace(r.QueueItemID) != "" {
+			return errors.New("assistant_final result must not include queue state")
+		}
+		if r.Message == nil || strings.TrimSpace(*r.Message) == "" {
+			return errors.New("assistant_final result requires a present nonblank message")
+		}
+	case clientui.UserTurnResultKindSilentFinal:
+		if r.Steered || strings.TrimSpace(r.QueueItemID) != "" {
+			return errors.New("silent_final result must not include queue state")
+		}
+		if r.Message == nil || *r.Message != "" {
+			return errors.New("silent_final result requires a present empty message")
+		}
+	default:
+		return errors.New("result_kind must be queued, no_final, assistant_final, or silent_final")
+	}
+	return nil
 }
 
 type RuntimeSubmitUserShellCommandRequest struct {
-	ClientRequestID string                       `json:"client_request_id"`
-	SessionID       string                       `json:"session_id"`
-	Command         string                       `json:"command"`
-	OperationRef    clientui.RuntimeOperationRef `json:"operation_ref"`
+	ClientRequestID string `json:"client_request_id"`
+	SessionID       string `json:"session_id"`
+	Command         string `json:"command"`
 }
 
 type RuntimeCompactContextRequest struct {
-	ClientRequestID string                       `json:"client_request_id"`
-	SessionID       string                       `json:"session_id"`
-	Args            string                       `json:"args"`
-	OperationRef    clientui.RuntimeOperationRef `json:"operation_ref"`
+	ClientRequestID string `json:"client_request_id"`
+	SessionID       string `json:"session_id"`
+	Args            string `json:"args"`
 }
 
 type RuntimeInterruptRequest struct {
-	ClientRequestID      string                         `json:"client_request_id"`
-	SessionID            string                         `json:"session_id"`
-	TargetOperationRef   *clientui.RuntimeOperationRef  `json:"target_operation_ref,omitempty"`
-	PendingOperationRefs []clientui.RuntimeOperationRef `json:"pending_operation_refs,omitempty"`
+	ClientRequestID string `json:"client_request_id"`
+	SessionID       string `json:"session_id"`
 }
 
 type RuntimeInterruptResponse struct {
-	Version             clientui.ReadModelVersion                   `json:"version"`
-	Activity            clientui.RuntimeActivity                    `json:"activity"`
-	InputReconciliation clientui.RuntimeInputReconciliationSnapshot `json:"input_reconciliation"`
+	Version  clientui.ReadModelVersion `json:"version"`
+	Activity clientui.RuntimeActivity  `json:"activity"`
 }
 
 type RuntimeLiveSteerRequest struct {
@@ -278,19 +308,6 @@ func validateRuntimeControlRequest(clientRequestID string, sessionID string) err
 	return validateRequiredSessionID(sessionID)
 }
 
-func validateRuntimeOperationRef(ref clientui.RuntimeOperationRef, kind clientui.RuntimeOperationKind, clientRequestID string) error {
-	if err := ref.Validate(); err != nil {
-		return err
-	}
-	if ref.Kind != kind {
-		return errors.New("operation_ref kind does not match request")
-	}
-	if ref.ClientRequestID.String() != strings.TrimSpace(clientRequestID) {
-		return errors.New("operation_ref client_request_id must match request client_request_id")
-	}
-	return nil
-}
-
 func (r RuntimeSetSessionNameRequest) Validate() error {
 	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)
 }
@@ -327,41 +344,22 @@ func (r RuntimeSubmitUserTurnRequest) Validate() error {
 	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID); err != nil {
 		return err
 	}
-	if err := r.Input.Validate(); err != nil {
-		return err
-	}
-	if err := validateRuntimeOperationRef(r.OperationRef, clientui.RuntimeOperationKindSubmit, r.ClientRequestID); err != nil {
-		return err
-	}
-	return validateRuntimeOperationRef(r.PreSubmitCompactionOperationRef, clientui.RuntimeOperationKindPreSubmitCompact, r.PreSubmitCompactionOperationRef.ClientRequestID.String())
+	return r.Input.Validate()
 }
 func (r RuntimeSubmitUserShellCommandRequest) Validate() error {
 	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID); err != nil {
 		return err
 	}
-	return validateRuntimeOperationRef(r.OperationRef, clientui.RuntimeOperationKindUserShell, r.ClientRequestID)
-}
-func (r RuntimeCompactContextRequest) Validate() error {
-	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID); err != nil {
-		return err
-	}
-	return validateRuntimeOperationRef(r.OperationRef, clientui.RuntimeOperationKindCompact, r.ClientRequestID)
-}
-func (r RuntimeInterruptRequest) Validate() error {
-	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID); err != nil {
-		return err
-	}
-	if r.TargetOperationRef != nil {
-		if err := r.TargetOperationRef.Validate(); err != nil {
-			return err
-		}
-	}
-	for _, ref := range r.PendingOperationRefs {
-		if err := ref.Validate(); err != nil {
-			return err
-		}
+	if strings.TrimSpace(r.Command) == "" {
+		return errors.New("shell command is required")
 	}
 	return nil
+}
+func (r RuntimeCompactContextRequest) Validate() error {
+	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)
+}
+func (r RuntimeInterruptRequest) Validate() error {
+	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)
 }
 func (r RuntimeLiveSteerRequest) Validate() error {
 	if err := validateRuntimeLiveControlRequest(r.ClientRequestID, r.SessionID); err != nil {

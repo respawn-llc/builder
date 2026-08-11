@@ -2,6 +2,7 @@ package workflowview
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"core/server/workflow"
 	"core/server/workflowexecution"
 	"core/server/workflowstore"
+	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -469,17 +471,38 @@ func (f currentNodeViewFixture) startCurrentNodePrompt(
 
 func (p currentNodeViewPrompt) resolve(t *testing.T, ctx context.Context, resolution tools.AskQuestionResolution) {
 	t.Helper()
-	if err := p.authority.SubmitPromptResolution(
-		p.sessionID,
-		p.request.ID,
-		resolution,
-		nil,
-	); err != nil {
-		t.Fatalf("SubmitPromptResolution: %v", err)
+	if err := resolveWorkflowViewPrompt(p.authority, p.sessionID, p.request, resolution); err != nil {
+		t.Fatalf("ResolvePromptBatch: %v", err)
 	}
 	if _, err := p.handle.Wait(ctx); err != nil {
 		t.Fatalf("wait prompt execution: %v", err)
 	}
+}
+
+func resolveWorkflowViewPrompt(
+	authority *sessionruntime.Authority,
+	sessionID runtimeids.SessionID,
+	request tools.AskQuestionRequest,
+	resolution tools.AskQuestionResolution,
+) error {
+	stepID, err := runtimeids.ParseStepID(request.StepID)
+	if err != nil {
+		return err
+	}
+	var payload sessionruntime.PromptAnswerPayload
+	switch value := resolution.(type) {
+	case tools.AskQuestionAnswer:
+		payload = sessionruntime.PromptQuestionAnswerCommand{Answer: value}
+	case tools.AskQuestionApproval:
+		payload = sessionruntime.PromptApprovalAnswerCommand{Answer: value}
+	default:
+		return fmt.Errorf("unsupported prompt resolution %T", resolution)
+	}
+	_, err = authority.ResolvePromptBatch(context.Background(), sessionID, stepID, []sessionruntime.PromptAnswerCommand{{
+		PromptID: clientui.PromptID(request.ID),
+		Payload:  payload,
+	}})
+	return err
 }
 
 func (q currentNodeViewQuestion) resolve(t *testing.T, ctx context.Context) {

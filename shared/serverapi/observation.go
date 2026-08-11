@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 )
 
 type RuntimeLiveWatchOutcomeKind string
@@ -45,13 +46,13 @@ func FirstPendingPromptObservation(
 	prompts := make([]PendingPromptObservation, 0, len(asks)+len(approvals))
 	for index := range asks {
 		prompts = append(prompts, PendingPromptObservation{
-			ID: asks[index].AskID, CreatedAt: asks[index].CreatedAt,
+			ID: string(asks[index].PromptID), CreatedAt: asks[index].CreatedAt,
 			Question: ObservationQuestion{Ask: &asks[index]},
 		})
 	}
 	for index := range approvals {
 		prompts = append(prompts, PendingPromptObservation{
-			ID: approvals[index].ApprovalID, CreatedAt: approvals[index].CreatedAt,
+			ID: string(approvals[index].PromptID), CreatedAt: approvals[index].CreatedAt,
 			Question: ObservationQuestion{Approval: &approvals[index]},
 		})
 	}
@@ -78,10 +79,7 @@ func (q ObservationQuestion) Validate() error {
 }
 
 func validateObservationAsk(ask clientui.PendingAsk) error {
-	if strings.TrimSpace(ask.AskID) == "" {
-		return errors.New("observation ask id is required")
-	}
-	if err := validateRequiredSessionID(ask.SessionID); err != nil {
+	if err := validateObservationPromptIdentity(ask.PromptID, ask.SessionID, ask.StepID); err != nil {
 		return err
 	}
 	if strings.TrimSpace(ask.Question) == "" {
@@ -95,10 +93,7 @@ func validateObservationAsk(ask clientui.PendingAsk) error {
 }
 
 func validateObservationApproval(approval clientui.PendingApproval) error {
-	if strings.TrimSpace(approval.ApprovalID) == "" {
-		return errors.New("observation approval id is required")
-	}
-	if err := validateRequiredSessionID(approval.SessionID); err != nil {
+	if err := validateObservationPromptIdentity(approval.PromptID, approval.SessionID, approval.StepID); err != nil {
 		return err
 	}
 	if strings.TrimSpace(approval.Question) == "" {
@@ -175,10 +170,10 @@ func (r RuntimeLiveWatchResponse) Validate() error {
 		if err := r.Outcome.Question.Validate(); err != nil {
 			return err
 		}
-		if r.Outcome.Question.Ask != nil && r.Outcome.Question.Ask.SessionID != r.SessionID {
+		if r.Outcome.Question.Ask != nil && r.Outcome.Question.Ask.SessionID.String() != r.SessionID {
 			return errors.New("question ask session does not match live watch session")
 		}
-		if r.Outcome.Question.Approval != nil && r.Outcome.Question.Approval.SessionID != r.SessionID {
+		if r.Outcome.Question.Approval != nil && r.Outcome.Question.Approval.SessionID.String() != r.SessionID {
 			return errors.New("question approval session does not match live watch session")
 		}
 		return nil
@@ -193,6 +188,19 @@ func (r RuntimeLiveWatchResponse) Validate() error {
 		return r.Outcome.Failure.Validate()
 	default:
 		return errors.New("live watch outcome kind is invalid")
+	}
+	return nil
+}
+
+func validateObservationPromptIdentity(promptID clientui.PromptID, sessionID runtimeids.SessionID, stepID runtimeids.StepID) error {
+	if err := promptID.Validate(); err != nil {
+		return err
+	}
+	if sessionID.IsZero() {
+		return errors.New("observation prompt session id is required")
+	}
+	if stepID.IsZero() {
+		return errors.New("observation prompt step id is required")
 	}
 	return nil
 }

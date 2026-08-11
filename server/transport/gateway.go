@@ -218,6 +218,7 @@ var gatewaySubscriptionHandlerEntries = map[string]gatewaySubscriptionHandler{
 	protocol.MethodProcessSubscribeOutput:                (*Gateway).serveProcessOutputSubscription,
 	protocol.MethodAttentionNotificationSubscribe:        (*Gateway).serveAttentionNotificationSubscription,
 	protocol.MethodAttentionSessionNotificationSubscribe: (*Gateway).serveSessionAttentionNotificationSubscription,
+	protocol.MethodPromptFollowUpWatch:                   (*Gateway).servePromptFollowUpSubscription,
 	protocol.MethodWorkflowSubscribe:                     (*Gateway).serveWorkflowSubscription,
 	protocol.MethodWorkflowSubscribeProject:              (*Gateway).serveWorkflowProjectSubscription,
 	protocol.MethodWorktreeSetupSubscribe:                (*Gateway).serveWorktreeSetupSubscription,
@@ -549,7 +550,7 @@ func protocolError(err error) (int, string) {
 		return protocol.ErrCodeInternalError, "internal error"
 	}
 	message := strings.TrimSpace(err.Error())
-	if errors.Is(err, context.Canceled) || errors.Is(err, serverapi.ErrRuntimeOperationCanceled) {
+	if errors.Is(err, context.Canceled) {
 		if message == "" || message == context.Canceled.Error() {
 			message = canceledByClientMessage
 		}

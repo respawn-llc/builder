@@ -1,59 +1,17 @@
-import { useLayoutEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { CheckCircle2Icon, FilterIcon, XIcon } from "lucide-react";
 
-import {
-  boardFilterWithDependencyFilter,
-  boardFilterWithLabelFilter,
-  taskLabelFilterConditionCount,
-} from "@/api";
-import {
-  LabelChooser,
-  type LabelMembershipRefreshEffect,
-  reduceLabelFilterState,
-  useProjectLabelFilter,
-} from "@/shared/labels";
-import { Button, InteractiveChip, cx, useStableCallback } from "@/ui";
+import { taskLabelFilterConditionCount } from "@/api";
+import { LabelChooser, useProjectLabelFilter } from "@/shared/labels";
+import { Button, InteractiveChip, cx } from "@/ui";
 import { AnimatedBoardChipSummary } from "./BoardChipSummary";
-import { useBoardFilterGeneration } from "./BoardFilterGenerationRuntime";
-import { ignoreBoardMembershipRefresh, type BoardMembershipRefreshRef } from "./BoardMembershipRefresh";
+import { useBoardQuery } from "./BoardQueryRuntime";
 import { BoardSortChrome } from "./BoardSortChrome";
-
-export function BoardMembershipRefreshBinding({
-  membershipRefreshRef,
-}: Readonly<{
-  membershipRefreshRef: BoardMembershipRefreshRef;
-}>) {
-  const filter = useProjectLabelFilter();
-  const generation = useBoardFilterGeneration();
-  const refresh = useStableCallback(async (effect: LabelMembershipRefreshEffect) => {
-    if (effect.kind === "catalog.deleted") {
-      const next = reduceLabelFilterState(filter.state, {
-        type: "label.deleted",
-        labelID: effect.labelID,
-      });
-      const latestSnapshot = generation.controller.getSnapshot();
-      const current = latestSnapshot.desiredFilter ?? latestSnapshot.active.filter;
-      generation.controller.setDesiredFilter(boardFilterWithLabelFilter(current, next.filter));
-    }
-    const activeGeneration = generation.controller.getSnapshot().active.generation;
-    await generation.queryRegistry.invalidateGeneration(activeGeneration);
-  });
-  useLayoutEffect(() => {
-    membershipRefreshRef.current = refresh;
-    return () => {
-      if (membershipRefreshRef.current === refresh) {
-        membershipRefreshRef.current = ignoreBoardMembershipRefresh;
-      }
-    };
-  }, [membershipRefreshRef, refresh]);
-  return null;
-}
 
 export function BoardFilterChrome() {
   const { t } = useTranslation();
   const filter = useProjectLabelFilter();
-  const generation = useBoardFilterGeneration();
+  const boardQuery = useBoardQuery();
   const active = filter.state.filter.kind !== "none";
   const summary =
     filter.state.filter.kind === "named"
@@ -61,22 +19,7 @@ export function BoardFilterChrome() {
       : filter.state.filter.kind === "unlabeled"
         ? t("labels.unlabeled")
         : t("labels.filter");
-  const dispatch = useStableCallback((action: Parameters<typeof filter.dispatch>[0]): void => {
-    const next = reduceLabelFilterState(filter.state, action);
-    const currentSnapshot = generation.controller.getSnapshot();
-    const current = currentSnapshot.desiredFilter ?? currentSnapshot.active.filter;
-    generation.controller.setDesiredFilter(boardFilterWithLabelFilter(current, next.filter));
-    filter.dispatch(action);
-  });
-  const current = generation.snapshot.desiredFilter ?? generation.snapshot.active.filter;
-  const unblocked = current.dependencyFilter === true;
-  const toggleDependencyFilter = useStableCallback(() => {
-    const latestSnapshot = generation.controller.getSnapshot();
-    const latest = latestSnapshot.desiredFilter ?? latestSnapshot.active.filter;
-    generation.controller.setDesiredFilter(
-      boardFilterWithDependencyFilter(latest, latest.dependencyFilter === true ? null : true),
-    );
-  });
+  const unblocked = boardQuery.filter.dependencyFilter === true;
   return (
     <>
       <span className="relative inline-flex">
@@ -84,7 +27,7 @@ export function BoardFilterChrome() {
           invocation={{
             kind: "filter",
             state: filter.state,
-            onAction: dispatch,
+            onAction: filter.dispatch,
           }}
           trigger={
             <InteractiveChip
@@ -113,7 +56,7 @@ export function BoardFilterChrome() {
             aria-label={t("labels.clearFilter")}
             className="h-full w-7"
             onClick={() => {
-              dispatch({ type: "clear" });
+              filter.dispatch({ type: "clear" });
             }}
             size="icon-sm"
             style={{ color: "var(--color-primary)" }}
@@ -126,7 +69,9 @@ export function BoardFilterChrome() {
       <BoardSortChrome />
       <InteractiveChip
         aria-pressed={unblocked}
-        onClick={toggleDependencyFilter}
+        onClick={() => {
+          boardQuery.setDependencyFilter(unblocked ? null : true);
+        }}
         selected={unblocked}
         style={{ paddingInline: "var(--space-3)" }}
         tone={unblocked ? "primary" : "neutral"}

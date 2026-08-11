@@ -71,6 +71,7 @@ func TestWorktreeStructuredErrorsRoundTripTypedFacts(t *testing.T) {
 				},
 			},
 		},
+		ScriptPath: "/repo/scripts/setup.sh",
 		Diagnostic: "setup exited unsuccessfully",
 	}
 	precondition := &WorktreeDeletePreconditionError{
@@ -266,7 +267,6 @@ func TestWorktreeCreateErrorBoundaryHandlesTypedNil(t *testing.T) {
 
 func TestWorktreeCreateRequestValidationProjectsNeutralFailures(t *testing.T) {
 	base := WorktreeCreateRequest{
-		ClientRequestID:  "request-1",
 		SetupOperationID: NewWorktreeSetupOperationID(),
 		SessionID:        "session",
 		BranchName:       "feature",
@@ -307,15 +307,6 @@ func TestWorktreeCreateRequestValidationProjectsNeutralFailures(t *testing.T) {
 			},
 			owner: WorktreeCreateErrorOwnerForm,
 		},
-		{
-			name: "blank client request id",
-			patch: func(request *WorktreeCreateRequest) {
-				request.ClientRequestID = ""
-				request.CreateBranch = true
-				request.BaseRef = "HEAD"
-			},
-			owner: WorktreeCreateErrorOwnerForm,
-		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -349,6 +340,7 @@ func TestWorktreeSetupRetainedErrorKeepsExistingWireIdentity(t *testing.T) {
 				},
 			},
 		},
+		ScriptPath: "/repo/scripts/setup.sh",
 		Diagnostic: "setup failed",
 	}
 	if source.RPCErrorCode() != protocol.ErrCodeWorktreeSetupRetained {

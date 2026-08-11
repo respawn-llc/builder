@@ -21,9 +21,6 @@ import (
 )
 
 var bindingCommandRPCTimeout = 5 * time.Second
-var bindingCommandRemoteOpener = openBindingCommandRemote
-var bindingCommandWorkspaceResolver = resolveWorkspaceBinding
-var bindingCommandSessionRetargeter = retargetSessionWorkspace
 
 func projectSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	if len(args) > 0 {
@@ -172,12 +169,12 @@ func projectIDForPath(ctx context.Context, path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	_, remote, err := bindingCommandRemoteOpener(ctx, targetPath)
+	_, remote, err := openBindingCommandRemote(ctx, targetPath)
 	if err != nil {
 		return "", err
 	}
 	defer func() { _ = remote.Close() }()
-	binding, err := bindingCommandWorkspaceResolver(ctx, remote, targetPath)
+	binding, err := resolveWorkspaceBinding(ctx, remote, targetPath)
 	if err != nil {
 		return "", err
 	}
@@ -185,14 +182,14 @@ func projectIDForPath(ctx context.Context, path string) (string, error) {
 }
 
 func attachWorkspace(ctx context.Context, explicitProjectID string, targetPath string) (string, error) {
-	sourceCfg, remote, err := bindingCommandRemoteOpener(ctx, ".")
+	sourceCfg, remote, err := openBindingCommandRemote(ctx, ".")
 	if err != nil {
 		return "", err
 	}
 	defer func() { _ = remote.Close() }()
 	projectID := strings.TrimSpace(explicitProjectID)
 	if projectID == "" {
-		sourceBinding, err := bindingCommandWorkspaceResolver(ctx, remote, sourceCfg.WorkspaceRoot)
+		sourceBinding, err := resolveWorkspaceBinding(ctx, remote, sourceCfg.WorkspaceRoot)
 		if err != nil {
 			return "", fmt.Errorf("%w: current workspace is not attached to a project; run `"+config.Command+" project` in a workspace that already belongs to the target project or pass --project <project-id>", err)
 		}
@@ -238,7 +235,7 @@ func retargetSessionWorkspace(ctx context.Context, remote apicontract.SessionLif
 }
 
 func listProjects(ctx context.Context) ([]clientui.ProjectSummary, error) {
-	_, remote, err := bindingCommandRemoteOpener(ctx, ".")
+	_, remote, err := openBindingCommandRemote(ctx, ".")
 	if err != nil {
 		return nil, err
 	}
@@ -259,7 +256,7 @@ func createProject(ctx context.Context, displayName string, workspaceRoot string
 	if err != nil {
 		return serverapi.ProjectBinding{}, err
 	}
-	_, remote, err := bindingCommandRemoteOpener(ctx, ".")
+	_, remote, err := openBindingCommandRemote(ctx, ".")
 	if err != nil {
 		return serverapi.ProjectBinding{}, err
 	}
@@ -272,12 +269,12 @@ func createProject(ctx context.Context, displayName string, workspaceRoot string
 }
 
 func retargetSessionWorkspaceResponse(ctx context.Context, sessionID string, newPath string, projectID *string) (serverapi.SessionRetargetWorkspaceResponse, error) {
-	newCfg, remote, err := bindingCommandRemoteOpener(ctx, newPath)
+	newCfg, remote, err := openBindingCommandRemote(ctx, newPath)
 	if err != nil {
 		return serverapi.SessionRetargetWorkspaceResponse{}, err
 	}
 	defer func() { _ = remote.Close() }()
-	resp, err := bindingCommandSessionRetargeter(ctx, remote, sessionID, newCfg.WorkspaceRoot, projectID)
+	resp, err := retargetSessionWorkspace(ctx, remote, sessionID, newCfg.WorkspaceRoot, projectID)
 	if err != nil {
 		return serverapi.SessionRetargetWorkspaceResponse{}, err
 	}

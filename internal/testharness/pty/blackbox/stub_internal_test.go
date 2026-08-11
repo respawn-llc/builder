@@ -53,3 +53,19 @@ func TestResponsesStubDoneWaitsForActiveHandlerCompletion(t *testing.T) {
 		t.Fatal("Done did not close after handler completion")
 	}
 }
+
+func TestParseSessionCacheKeyUsesExactSegmentDiscriminators(t *testing.T) {
+	const sessionID = "018fdd67-89ab-4cde-8123-456789abcdef"
+
+	key, err := parseSessionCacheKey(sessionID + "/contract-1/compact-3")
+	if err != nil {
+		t.Fatalf("parse versioned session cache key: %v", err)
+	}
+	if key.Compaction == nil || *key.Compaction != 3 {
+		t.Fatalf("parsed cache key = %+v, want compact-3", key)
+	}
+
+	if _, err := parseSessionCacheKey(sessionID + "/contract-1-extra"); err == nil {
+		t.Fatal("parse accepted a cache-key segment with an unmatched discriminator")
+	}
+}

@@ -74,7 +74,8 @@ func TestTaskObservationRendersDiscriminatorAndTaskTargetForOneQuestion(t *testi
 			SessionID: &sessionID,
 			NodeKey:   stringPointerForTest("build"),
 			Question: &serverapi.ObservationQuestion{Ask: &clientui.PendingAsk{
-				AskID: "ask-1", SessionID: sessionID, Question: "Proceed?", Suggestions: []string{"Yes"},
+				PromptID: "ask-1", SessionID: taskObservationSessionID(t, sessionID),
+				StepID: questionCommandStepID(), Question: "Proceed?", Suggestions: []string{"Yes"},
 			}},
 		}},
 	}
@@ -104,11 +105,17 @@ func TestTaskObservationUsesSessionTargetsForParallelQuestions(t *testing.T) {
 		Outcomes: []serverapi.WorkflowTaskObservationOutcome{
 			{
 				Kind: serverapi.WorkflowTaskObservationQuestion, SessionID: &firstSession,
-				Question: &serverapi.ObservationQuestion{Ask: &clientui.PendingAsk{AskID: "ask-1", SessionID: firstSession, Question: "One?"}},
+				Question: &serverapi.ObservationQuestion{Ask: &clientui.PendingAsk{
+					PromptID: "ask-1", SessionID: taskObservationSessionID(t, firstSession),
+					StepID: questionCommandStepID(), Question: "One?",
+				}},
 			},
 			{
 				Kind: serverapi.WorkflowTaskObservationQuestion, SessionID: &secondSession,
-				Question: &serverapi.ObservationQuestion{Ask: &clientui.PendingAsk{AskID: "ask-2", SessionID: secondSession, Question: "Two?"}},
+				Question: &serverapi.ObservationQuestion{Ask: &clientui.PendingAsk{
+					PromptID: "ask-2", SessionID: taskObservationSessionID(t, secondSession),
+					StepID: questionCommandStepID(), Question: "Two?",
+				}},
 			},
 		},
 	}
@@ -122,6 +129,15 @@ func TestTaskObservationUsesSessionTargetsForParallelQuestions(t *testing.T) {
 	if !strings.Contains(text, firstHint) || !strings.Contains(text, secondHint) {
 		t.Fatalf("parallel task observation output = %q", text)
 	}
+}
+
+func taskObservationSessionID(t *testing.T, raw string) runtimeids.SessionID {
+	t.Helper()
+	sessionID, err := runtimeids.ParseSessionID(raw)
+	if err != nil {
+		t.Fatalf("ParseSessionID: %v", err)
+	}
+	return sessionID
 }
 
 func stringPointerForTest(value string) *string {

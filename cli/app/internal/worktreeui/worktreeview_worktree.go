@@ -76,12 +76,7 @@ func ProjectItem(entry serverapi.WorktreeListEntry) (Item, error) {
 }
 
 func ProjectSelectorPreview(response serverapi.WorktreeSelectorPreviewResponse) (Item, error) {
-	return ProjectItem(serverapi.WorktreeListEntry{
-		Topology: response.Worktree,
-		Projection: serverapi.WorktreeListProjection{
-			Selector: response.Selector,
-		},
-	})
+	return ProjectItem(response.Worktree)
 }
 
 func WorktreeID(item Item) string {

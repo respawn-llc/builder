@@ -606,16 +606,12 @@ func (c *Remote) ListWorkflowTaskAttention(ctx context.Context, req serverapi.Wo
 	return validateWorkflowTaskBoundResponse("list workflow task attention", strings.TrimSpace(req.TaskID), response, err)
 }
 
-func (c *Remote) AnswerWorkflowTaskQuestion(ctx context.Context, req serverapi.WorkflowTaskQuestionAnswerRequest) error {
-	return c.callUnscoped(ctx, protocol.MethodWorkflowTaskQuestionAnswer, req, &struct{}{})
-}
-
 func (c *Remote) AddWorkflowTaskComment(ctx context.Context, req serverapi.WorkflowTaskCommentAddRequest) (serverapi.WorkflowTaskCommentAddResponse, error) {
 	return callUnscopedRPC[serverapi.WorkflowTaskCommentAddRequest, serverapi.WorkflowTaskCommentAddResponse](c, ctx, protocol.MethodWorkflowTaskCommentAdd, req)
 }
 
-func (c *Remote) ListWorkflowTaskComments(ctx context.Context, req serverapi.WorkflowTaskCommentListRequest) (serverapi.WorkflowTaskCommentListResponse, error) {
-	return callUnscopedRPC[serverapi.WorkflowTaskCommentListRequest, serverapi.WorkflowTaskCommentListResponse](c, ctx, protocol.MethodWorkflowTaskCommentList, req)
+func (c *Remote) ListWorkflowTaskComments(ctx context.Context, req serverapi.WorkflowTaskOffsetPageRequest) (serverapi.WorkflowTaskCommentListResponse, error) {
+	return callUnscopedRPC[serverapi.WorkflowTaskOffsetPageRequest, serverapi.WorkflowTaskCommentListResponse](c, ctx, protocol.MethodWorkflowTaskCommentList, req)
 }
 
 func (c *Remote) ReplaceWorkflowTaskComment(ctx context.Context, req serverapi.WorkflowTaskCommentReplaceRequest) error {
@@ -626,8 +622,8 @@ func (c *Remote) DeleteWorkflowTaskComment(ctx context.Context, req serverapi.Wo
 	return c.callUnscoped(ctx, protocol.MethodWorkflowTaskCommentDelete, req, &struct{}{})
 }
 
-func (c *Remote) ListWorkflowTaskActivity(ctx context.Context, req serverapi.WorkflowTaskActivityListRequest) (serverapi.WorkflowTaskActivityListResponse, error) {
-	response, err := callUnscopedRPC[serverapi.WorkflowTaskActivityListRequest, serverapi.WorkflowTaskActivityListResponse](c, ctx, protocol.MethodWorkflowTaskActivityList, req)
+func (c *Remote) ListWorkflowTaskActivity(ctx context.Context, req serverapi.WorkflowTaskOffsetPageRequest) (serverapi.WorkflowTaskActivityListResponse, error) {
+	response, err := callUnscopedRPC[serverapi.WorkflowTaskOffsetPageRequest, serverapi.WorkflowTaskActivityListResponse](c, ctx, protocol.MethodWorkflowTaskActivityList, req)
 	return validateWorkflowTaskBoundResponse("list workflow task activity", strings.TrimSpace(req.TaskID), response, err)
 }
 
@@ -698,6 +694,11 @@ func (c *Remote) PlanSession(ctx context.Context, req serverapi.SessionPlanReque
 	return resp, c.call(ctx, protocol.MethodSessionPlan, req, &resp)
 }
 
+func (c *Remote) WorkspaceChatDraft(ctx context.Context, req serverapi.WorkspaceChatDraftRequest) (serverapi.WorkspaceChatDraftResponse, error) {
+	var resp serverapi.WorkspaceChatDraftResponse
+	return resp, c.call(ctx, protocol.MethodSessionWorkspaceChatDraft, req, &resp)
+}
+
 func (c *Remote) GetSessionMainView(ctx context.Context, req serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
 	var resp serverapi.SessionMainViewResponse
 	return resp, c.call(ctx, protocol.MethodSessionGetMainView, req, &resp)
@@ -744,13 +745,11 @@ func (c *Remote) ResolveTransition(ctx context.Context, req serverapi.SessionRes
 }
 
 func (c *Remote) ListWorktrees(ctx context.Context, req serverapi.WorktreeListRequest) (serverapi.WorktreeListResponse, error) {
-	var resp serverapi.WorktreeListResponse
-	return resp, c.call(ctx, protocol.MethodWorktreeList, req, &resp)
+	return callValidatedRPC[serverapi.WorktreeListRequest, serverapi.WorktreeListResponse](c, ctx, protocol.MethodWorktreeList, req)
 }
 
 func (c *Remote) ListWorkspaceWorktrees(ctx context.Context, req serverapi.WorktreeWorkspaceListRequest) (serverapi.WorktreeWorkspaceListResponse, error) {
-	var resp serverapi.WorktreeWorkspaceListResponse
-	return resp, c.call(ctx, protocol.MethodWorktreeWorkspaceList, req, &resp)
+	return callValidatedRPC[serverapi.WorktreeWorkspaceListRequest, serverapi.WorktreeWorkspaceListResponse](c, ctx, protocol.MethodWorktreeWorkspaceList, req)
 }
 
 func (c *Remote) GetWorktreeStatus(ctx context.Context, req serverapi.WorktreeStatusRequest) (serverapi.WorktreeStatusResponse, error) {
@@ -759,8 +758,7 @@ func (c *Remote) GetWorktreeStatus(ctx context.Context, req serverapi.WorktreeSt
 }
 
 func (c *Remote) ResolveWorktreeSelector(ctx context.Context, req serverapi.WorktreeSelectorPreviewRequest) (serverapi.WorktreeSelectorPreviewResponse, error) {
-	var resp serverapi.WorktreeSelectorPreviewResponse
-	return resp, c.call(ctx, protocol.MethodWorktreeSelectorResolve, req, &resp)
+	return callValidatedRPC[serverapi.WorktreeSelectorPreviewRequest, serverapi.WorktreeSelectorPreviewResponse](c, ctx, protocol.MethodWorktreeSelectorResolve, req)
 }
 
 func (c *Remote) PreviewWorktreeDelete(ctx context.Context, req serverapi.WorktreeDeletePreviewRequest) (serverapi.WorktreeDeletePreviewResponse, error) {
@@ -780,8 +778,7 @@ func (c *Remote) ResolveWorktreeCreateTarget(ctx context.Context, req serverapi.
 }
 
 func (c *Remote) CreateWorktree(ctx context.Context, req serverapi.WorktreeCreateRequest) (serverapi.WorktreeCreateResponse, error) {
-	var resp serverapi.WorktreeCreateResponse
-	return resp, c.call(ctx, protocol.MethodWorktreeCreate, req, &resp)
+	return callValidatedRPC[serverapi.WorktreeCreateRequest, serverapi.WorktreeCreateResponse](c, ctx, protocol.MethodWorktreeCreate, req)
 }
 
 func (c *Remote) EnterWorktree(ctx context.Context, req serverapi.WorktreeEnterRequest) (serverapi.WorktreeScheduledAcknowledgement, error) {
@@ -842,7 +839,14 @@ func (c *Remote) ShouldCompactBeforeUserMessage(ctx context.Context, req servera
 }
 
 func (c *Remote) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmitUserTurnRequest) (serverapi.RuntimeSubmitUserTurnResponse, error) {
-	return callDedicatedRPC[serverapi.RuntimeSubmitUserTurnRequest, serverapi.RuntimeSubmitUserTurnResponse](c, ctx, "runtime-submit-user-turn", protocol.MethodRuntimeSubmitUserTurn, req)
+	response, err := callDedicatedRPC[serverapi.RuntimeSubmitUserTurnRequest, serverapi.RuntimeSubmitUserTurnResponse](c, ctx, "runtime-submit-user-turn", protocol.MethodRuntimeSubmitUserTurn, req)
+	if err != nil {
+		return serverapi.RuntimeSubmitUserTurnResponse{}, err
+	}
+	if err := response.Validate(); err != nil {
+		return serverapi.RuntimeSubmitUserTurnResponse{}, fmt.Errorf("validate runtime submit user turn response: %w", err)
+	}
+	return response, nil
 }
 
 func (c *Remote) SubmitUserShellCommand(ctx context.Context, req serverapi.RuntimeSubmitUserShellCommandRequest) error {
@@ -950,10 +954,6 @@ func (c *Remote) ListPendingAsksBySession(ctx context.Context, req serverapi.Ask
 	return resp, c.call(ctx, protocol.MethodAskListPending, req, &resp)
 }
 
-func (c *Remote) AnswerAsk(ctx context.Context, req serverapi.AskAnswerRequest) error {
-	return c.call(ctx, protocol.MethodAskAnswer, req, nil)
-}
-
 func (c *Remote) AnswerPromptBatch(ctx context.Context, req serverapi.PromptAnswerBatchRequest) (serverapi.PromptAnswerBatchResponse, error) {
 	response, err := callControlRPC[serverapi.PromptAnswerBatchRequest, serverapi.PromptAnswerBatchResponse](c, ctx, protocol.MethodPromptAnswerBatch, req)
 	if err != nil {
@@ -970,10 +970,6 @@ func (c *Remote) ListPendingApprovalsBySession(ctx context.Context, req serverap
 	return resp, c.call(ctx, protocol.MethodApprovalListPending, req, &resp)
 }
 
-func (c *Remote) AnswerApproval(ctx context.Context, req serverapi.ApprovalAnswerRequest) error {
-	return c.call(ctx, protocol.MethodApprovalAnswer, req, nil)
-}
-
 func (c *Remote) ensureOpen() error {
 	if c == nil {
 		return errors.New("remote client is required")
@@ -986,6 +982,17 @@ func (c *Remote) ensureOpen() error {
 
 func (c *Remote) call(ctx context.Context, method string, params any, out any) error {
 	return c.callUnscoped(ctx, method, params, out)
+}
+
+func callValidatedRPC[Req any, Resp interface{ Validate() error }](c *Remote, ctx context.Context, method string, req Req) (Resp, error) {
+	var resp Resp
+	if err := c.call(ctx, method, req, &resp); err != nil {
+		return resp, err
+	}
+	if err := resp.Validate(); err != nil {
+		return resp, fmt.Errorf("validate %s response: %w", method, err)
+	}
+	return resp, nil
 }
 
 func (c *Remote) callUnscoped(ctx context.Context, method string, params any, out any) error {

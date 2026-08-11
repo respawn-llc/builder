@@ -11,6 +11,7 @@ import (
 	"core/server/workflow"
 	"core/server/workflowstore"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -79,8 +80,7 @@ func TestAttentionProjectsPendingApprovalAndInterruptedCurrentNode(t *testing.T)
 		*interrupted.SessionID != interruptedSessionID.String() ||
 		interrupted.DetailJSON == nil ||
 		strings.TrimSpace(*interrupted.DetailJSON) == "" ||
-		interrupted.ApprovalID != nil ||
-		interrupted.QuestionID != nil {
+		interrupted.ApprovalID != nil {
 		t.Fatalf("interrupted attention item = %+v, want Current Node identity", interrupted)
 	}
 	requireAttentionMessageOmitted(t, interrupted)
@@ -223,13 +223,15 @@ func TestAttentionAndDetailProjectLiveQuestionFromExactScope(t *testing.T) {
 	}
 	prompts := currentNodeViewPrompts{bySession: map[string][]PendingPromptSnapshot{
 		question.sessionID.String(): {{
-			ID:                     question.request.ID,
+			PromptID:               clientui.PromptID(question.request.ID),
+			SessionID:              question.sessionID,
+			StepID:                 mustWorkflowViewStepID(t, question.request.StepID),
 			CreatedAt:              time.UnixMilli(4_000).UTC(),
 			Question:               question.request.Question,
 			Suggestions:            question.request.Suggestions,
 			RecommendedOptionIndex: intPointer(question.request.RecommendedOptionIndex),
 		}, {
-			ID:                "unrelated-approval",
+			PromptID:          clientui.PromptID("unrelated-approval"),
 			CreatedAt:         time.UnixMilli(4_001).UTC(),
 			Question:          "Approve unrelated action?",
 			Approval:          true,
@@ -253,15 +255,17 @@ func TestAttentionAndDetailProjectLiveQuestionFromExactScope(t *testing.T) {
 	}
 	if len(taskAttention.Items) != 1 ||
 		taskAttention.Items[0].Kind != "question" ||
-		taskAttention.Items[0].QuestionID == nil ||
-		*taskAttention.Items[0].QuestionID != question.request.ID ||
 		taskAttention.Items[0].Message == nil ||
 		*taskAttention.Items[0].Message != question.request.Question ||
-		taskAttention.Items[0].SessionID == nil ||
-		*taskAttention.Items[0].SessionID != question.sessionID.String() ||
+		taskAttention.Items[0].SessionID != nil ||
 		taskAttention.Items[0].SessionName == nil ||
 		*taskAttention.Items[0].SessionName != "Current Node session" ||
+		taskAttention.Items[0].Question == nil ||
+		taskAttention.Items[0].Question.PromptID != clientui.PromptID(question.request.ID) ||
+		taskAttention.Items[0].Question.SessionID != question.sessionID ||
+		taskAttention.Items[0].Question.StepID != mustWorkflowViewStepID(t, question.request.StepID) ||
 		taskAttention.Items[0].CurrentNode == nil ||
+		taskAttention.Items[0].CurrentNode.SessionID != nil ||
 		taskAttention.Items[0].CurrentNode.NodeID != string(fixture.agentNodeID) {
 		t.Fatalf("question attention = %+v", taskAttention.Items)
 	}
@@ -305,7 +309,9 @@ func TestAttentionProjectsLiveSessionApprovalFromExactScope(t *testing.T) {
 	prompt := fixture.startCurrentNodePrompt(t, started, request)
 	prompts := currentNodeViewPrompts{bySession: map[string][]PendingPromptSnapshot{
 		prompt.sessionID.String(): {{
-			ID:                request.ID,
+			PromptID:          clientui.PromptID(request.ID),
+			SessionID:         prompt.sessionID,
+			StepID:            mustWorkflowViewStepID(t, request.StepID),
 			CreatedAt:         time.UnixMilli(4_000).UTC(),
 			Question:          request.Question,
 			Approval:          true,
@@ -332,19 +338,50 @@ func TestAttentionProjectsLiveSessionApprovalFromExactScope(t *testing.T) {
 	}
 	item := response.Items[0]
 	if item.Kind != "question" ||
-		item.QuestionID == nil ||
-		*item.QuestionID != request.ID ||
-		item.SessionID == nil ||
-		*item.SessionID != prompt.sessionID.String() ||
+		item.SessionID != nil ||
 		item.Question == nil ||
+		item.Question.PromptID != clientui.PromptID(request.ID) ||
+		item.Question.SessionID != prompt.sessionID ||
+		item.Question.StepID != mustWorkflowViewStepID(t, request.StepID) ||
 		item.Question.Kind != serverapi.WorkflowAttentionQuestionKindApproval ||
 		item.CurrentNode == nil ||
+		item.CurrentNode.SessionID != nil ||
 		item.CurrentNode.NodeID != string(fixture.agentNodeID) {
 		t.Fatalf("live approval attention item = %+v", item)
 	}
 	prompt.resolve(t, fixture.ctx, tools.AskQuestionApproval{
 		Decision: tools.AskQuestionApprovalDecisionAllowOnce,
 	})
+}
+
+func mustWorkflowViewStepID(t *testing.T, raw string) runtimeids.StepID {
+	t.Helper()
+	id, err := runtimeids.ParseStepID(raw)
+	if err != nil {
+		t.Fatalf("ParseStepID(%q): %v", raw, err)
+	}
+	return id
+}
+
+func TestMergeAttentionCandidatesPreservesQuestionStepIdentity(t *testing.T) {
+	sessionID := runtimeids.NewSessionID()
+	promptID := clientui.PromptID("shared-prompt")
+	ids := []string{
+		liveQuestionAttentionID(sessionID, mustWorkflowViewStepID(t, "11111111-1111-4111-8111-111111111111"), promptID),
+		liveQuestionAttentionID(sessionID, mustWorkflowViewStepID(t, "22222222-2222-4222-8222-222222222222"), promptID),
+	}
+	items := mergeAttentionCandidates(
+		attentionPageCursor{},
+		[]attentionCandidate{{item: serverapi.WorkflowAttentionItem{ID: ids[0], OccurredAtUnixMs: 1}}},
+		[]attentionCandidate{{item: serverapi.WorkflowAttentionItem{ID: ids[1], OccurredAtUnixMs: 1}}},
+	)
+	page := mergeAttentionCandidates(
+		attentionPageCursor{occurredAtUnixMs: 1, itemID: items[0].ID, hasValue: true},
+		[]attentionCandidate{{item: items[0]}, {item: items[1]}},
+	)
+	if ids[0] == ids[1] || len(items) != 2 || len(page) != 1 || page[0].ID != items[1].ID {
+		t.Fatalf("full-key merge = ids %v items %+v page %+v", ids, items, page)
+	}
 }
 
 func TestAttentionOmitsLivePromptThatRetiredBeforePromptProjection(t *testing.T) {

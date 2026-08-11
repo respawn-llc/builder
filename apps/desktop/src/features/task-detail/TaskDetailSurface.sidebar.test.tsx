@@ -27,7 +27,6 @@ vi.mock("./TaskDetailContent", () => ({
 vi.mock("@/shared/labels", () => ({
   ProjectLabelsProvider: ({ children }: Readonly<{ children: ReactNode }>) => <>{children}</>,
   TaskLabelAssignmentProvider: ({ children }: Readonly<{ children: ReactNode }>) => <>{children}</>,
-  useProjectLabelCatalog: () => ({ data: { labels: [] } }),
 }));
 
 vi.mock("@/app-facade", async (importOriginal) => ({
@@ -106,8 +105,6 @@ describe("TaskDetailSurface sidebar ownership", () => {
     );
 
     expect(screen.getByTestId("task-detail-content")).toBeInTheDocument();
-    expect(contentProps).toHaveBeenCalledWith(
-      expect.objectContaining({ initialFocus, retainedState }),
-    );
+    expect(contentProps).toHaveBeenCalledWith(expect.objectContaining({ initialFocus, retainedState }));
   });
 });

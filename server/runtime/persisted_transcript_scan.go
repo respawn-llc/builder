@@ -85,9 +85,9 @@ func (s *PersistedTranscriptScan) RecentTailSnapshot() TranscriptWindowSnapshot 
 	}
 }
 
-func (s *PersistedTranscriptScan) LastCommittedAssistantFinalAnswer() string {
+func (s *PersistedTranscriptScan) LastCommittedAssistantFinalAnswer() *string {
 	if s == nil {
-		return ""
+		return nil
 	}
 	return s.scan.LastCommittedAssistantFinalAnswer()
 }

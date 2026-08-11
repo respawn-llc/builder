@@ -30,7 +30,7 @@ type runtimeMainViewRefreshDecision struct {
 }
 
 type runtimeMainViewCandidateClient interface {
-	fetchMainViewWithPendingRefs([]clientui.RuntimeOperationRef) (clientui.RuntimeMainView, error)
+	fetchMainView() (clientui.RuntimeMainView, error)
 }
 
 func (m *uiModel) startRuntimeMainViewRefreshRequest(request runtimeMainViewRefreshRequest) runtimeMainViewRefreshDecision {
@@ -47,7 +47,6 @@ func (m *uiModel) startRuntimeMainViewRefreshRequest(request runtimeMainViewRefr
 	client := m.runtimeClient()
 	m.runtimeMainViewBusy = true
 	m.runtimeMainViewActiveRequest = request
-	refs := m.pendingRuntimeOperationRefs()
 	var metadataBaselineRevision *uint64
 	if sessionClient, ok := client.(*sessionRuntimeClient); ok {
 		revision := sessionClient.mainViewMetadataRevision()
@@ -59,9 +58,7 @@ func (m *uiModel) startRuntimeMainViewRefreshRequest(request runtimeMainViewRefr
 			err  error
 		)
 		if candidateClient, ok := client.(runtimeMainViewCandidateClient); ok {
-			view, err = candidateClient.fetchMainViewWithPendingRefs(refs)
-		} else if requestClient, ok := client.(runtimeMainViewReconciliationClient); ok {
-			view, err = requestClient.RefreshMainViewWithPendingRefs(refs)
+			view, err = candidateClient.fetchMainView()
 		} else {
 			view, err = client.RefreshMainView()
 		}

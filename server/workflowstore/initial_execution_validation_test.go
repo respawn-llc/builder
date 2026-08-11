@@ -7,9 +7,16 @@ import (
 
 	"core/internal/testharness/testsetup"
 	"core/server/metadata"
+	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
 	"core/shared/toolspec"
 )
+
+func TestCurrentNodeSchedulingUsesStrictInterruptionDecoder(t *testing.T) {
+	if _, err := currentNodeSchedulingFromRow(sqlitegen.ListTaskCurrentNodesRow{SchedulingState: sql.NullString{String: string(workflow.CurrentNodeSchedulingInterrupted), Valid: true}, InterruptionDetailJson: sql.NullString{String: `{"code":"interrupted","unknown":true}`, Valid: true}}); err == nil {
+		t.Fatal("unknown persisted interruption detail field was accepted")
+	}
+}
 
 func TestStartTaskRejectsUnsafeWorkflowWithoutMutation(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
@@ -48,7 +55,7 @@ func TestStartTaskRejectsUnsafeWorkflowWithoutMutation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if target.Task.ExecutionTarget != nil || target.Task.ManagedWorktreeID != "" {
+	if target.Task.ExecutionTarget != nil || target.Task.ManagedWorktreeID != nil {
 		t.Fatalf("rejected start mutated task: task=%+v", target.Task)
 	}
 }
@@ -66,8 +73,9 @@ func TestRepeatedStartAfterRoleToolDriftSkipsInitialExecutionPreflight(t *testin
 	if errors.As(err, &validationErr) && validationErr.HasCode(workflow.CodeAgentRoleRequiredToolDisabled) {
 		t.Fatalf("repeated StartTask returned post-start role-tool validation: %+v", validationErr.Diagnostics)
 	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("repeated StartTask error = %v, want no active Start placement", err)
+	var conflict TaskStartConflictError
+	if !errors.As(err, &conflict) || conflict.TaskID != task.ID || conflict.Reason != TaskStartConflictAlreadyStarted {
+		t.Fatalf("repeated StartTask error = %T %+v, want already-started conflict", err, err)
 	}
 }
 

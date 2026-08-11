@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	"core/internal/testharness/runtimewirefixture"
 	"core/internal/testharness/testsetup"
 	"core/server/llm"
 	"core/server/session"
@@ -421,7 +422,7 @@ func runPersistedEffectRecoveryCase(
 	outside := testsetup.NonTemporaryDirectory(
 		t,
 		"kent-persisted-effect-",
-		patchtool.IsPathInTemporaryDir,
+		tools.IsPathInTemporaryDir,
 	)
 	broker := tools.NewAskQuestionBroker()
 	brokerCalls := 0
@@ -524,8 +525,8 @@ func newPersistedEffectFixture(
 	t.Helper()
 	approver := func(
 		ctx context.Context,
-		_ tools.FSGuardRequest,
-	) (tools.FSGuardApproval, error) {
+		_ tools.FileAccessRequest,
+	) (tools.FileAccessApproval, error) {
 		response, err := broker.Ask(ctx, tools.AskQuestionRequest{
 			Question: "Approve outside-workspace access?",
 			Approval: true,
@@ -535,14 +536,15 @@ func newPersistedEffectFixture(
 			}},
 		})
 		if err != nil {
-			return tools.FSGuardApproval{Decision: tools.FSGuardDecisionDeny}, err
+			return tools.FileAccessApproval{Kind: tools.FileAccessApprovalDeny}, err
 		}
 		approval, ok := response.(tools.AskQuestionApproval)
 		if !ok || approval.Decision != tools.AskQuestionApprovalDecisionAllowOnce {
-			return tools.FSGuardApproval{Decision: tools.FSGuardDecisionDeny}, nil
+			return tools.FileAccessApproval{Kind: tools.FileAccessApprovalDeny}, nil
 		}
-		return tools.FSGuardApproval{Decision: tools.FSGuardDecisionAllowOnce}, nil
+		return tools.FileAccessApproval{Kind: tools.FileAccessApprovalAllowOnce}, nil
 	}
+	filesystemContext := runtimewirefixture.FilesystemContext(t, workspace)
 	switch toolID {
 	case toolspec.ToolPatch:
 		path := filepath.Join(outside, "patch.txt")
@@ -551,8 +553,7 @@ func newPersistedEffectFixture(
 			t.Fatalf("write patch fixture: %v", err)
 		}
 		handler, err := patchtool.New(
-			workspace,
-			true,
+			filesystemContext,
 			patchtool.WithOutsideWorkspaceApprover(approver),
 		)
 		if err != nil {
@@ -579,8 +580,7 @@ func newPersistedEffectFixture(
 			t.Fatalf("write edit fixture: %v", err)
 		}
 		handler, err := edittool.New(
-			workspace,
-			true,
+			filesystemContext,
 			edittool.WithOutsideWorkspaceApprover(approver),
 		)
 		if err != nil {
@@ -612,7 +612,7 @@ func newPersistedEffectFixture(
 			t.Fatalf("write view-image fixture: %v", err)
 		}
 		handler, err := readimagetool.New(
-			workspace,
+			filesystemContext,
 			true,
 			readimagetool.WithOutsideWorkspaceApprover(approver),
 		)

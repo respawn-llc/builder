@@ -14,6 +14,7 @@ import (
 	"core/server/sessionruntime"
 	askquestion "core/server/tools"
 	"core/server/workflow"
+	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -136,6 +137,14 @@ func TestPromptPendingScopePublishesTaskWakeOnlyFromWorkflowScope(t *testing.T) 
 		StepID:   registryTestStepID,
 		Question: "Continue?",
 	}
+	workflowID := workflowRef.WorkflowID
+	request.AttentionTarget = &clientui.AttentionNotificationTarget{
+		Kind:       clientui.AttentionNotificationTargetWorkflowTask,
+		ProjectID:  workflowRef.ProjectID,
+		WorkflowID: &workflowID,
+		TaskID:     string(workflowRef.CurrentNode.TaskID),
+		SessionID:  sessionID.String(),
+	}
 	workflowPromptDone := make(chan error, 1)
 	workflowHandle, err := authority.StartAgentExecution(context.Background(), sessionruntime.AgentExecutionRequest{
 		Descriptor: descriptor,
@@ -170,19 +179,39 @@ func TestPromptPendingScopePublishesTaskWakeOnlyFromWorkflowScope(t *testing.T) 
 		event.RelatedIDs[1] != request.ID {
 		t.Fatalf("workflow wake event = %+v", event)
 	}
+	if err := registry.PromptResolvedScope(workflowHandle.Scope(), request.ID); err != nil {
+		t.Fatalf("resolve workflow prompt projection: %v", err)
+	}
+	projected = events.snapshot()
+	if len(projected) != 2 {
+		t.Fatalf("workflow prompt events = %+v, want waiting and cleared", projected)
+	}
+	cleared := projected[1]
+	if cleared.ProjectID == nil || *cleared.ProjectID != workflowRef.ProjectID ||
+		cleared.WorkflowID == nil || *cleared.WorkflowID != workflowRef.WorkflowID ||
+		cleared.Resource != serverapi.WorkflowProjectEventResourceTask ||
+		cleared.Action != serverapi.WorkflowProjectEventActionQuestionCleared ||
+		cleared.PrimaryEntityID != string(workflowRef.CurrentNode.TaskID) ||
+		len(cleared.RelatedIDs) != 2 ||
+		cleared.RelatedIDs[0] != sessionID.String() ||
+		cleared.RelatedIDs[1] != request.ID {
+		t.Fatalf("workflow cleared event = %+v", cleared)
+	}
 	stopCtx, cancelStop := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancelStop()
 	if err := workflowHandle.Stop(stopCtx); err != nil {
 		t.Fatalf("stop workflow execution: %v", err)
 	}
 
+	nonWorkflowRequest := request
+	nonWorkflowRequest.AttentionTarget = nil
 	nonWorkflowPromptDone := make(chan error, 1)
 	nonWorkflowHandle, err := authority.StartAgentExecution(context.Background(), sessionruntime.AgentExecutionRequest{
 		Descriptor: descriptor,
 		Runtime:    &plan,
 		Resource:   sessionruntime.OpenAgentResource{},
 		Runner: func(ctx context.Context, scope sessionruntime.ExecutionScope, _ sessionruntime.AgentRuntimeBridge) error {
-			err := registry.PromptPendingScope(scope, request, time.Now().UTC())
+			err := registry.PromptPendingScope(scope, nonWorkflowRequest, time.Now().UTC())
 			nonWorkflowPromptDone <- err
 			<-ctx.Done()
 			return nil
@@ -194,7 +223,7 @@ func TestPromptPendingScopePublishesTaskWakeOnlyFromWorkflowScope(t *testing.T) 
 	if err := <-nonWorkflowPromptDone; err != nil {
 		t.Fatalf("non-workflow prompt projection: %v", err)
 	}
-	if projected := events.snapshot(); len(projected) != 1 {
+	if projected := events.snapshot(); len(projected) != 2 {
 		t.Fatalf("non-workflow wake events = %+v, want workflow event only", projected)
 	}
 	nonWorkflowStopCtx, cancelNonWorkflowStop := context.WithTimeout(context.Background(), 3*time.Second)

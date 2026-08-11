@@ -3,6 +3,8 @@ package serverapi
 import (
 	"encoding/json"
 	"testing"
+
+	"core/shared/worktreecontract"
 )
 
 func TestWorktreeSetupOperationIDRequiresUUIDV4(t *testing.T) {
@@ -20,30 +22,75 @@ func TestWorktreeSetupOperationIDRequiresUUIDV4(t *testing.T) {
 func TestWorktreeSetupEventValidation(t *testing.T) {
 	id := NewWorktreeSetupOperationID()
 	started := WorktreeSetupEvent{
-		SetupOperationID:    id,
-		SourceWorkspaceRoot: "/source",
-		WorktreeRoot:        "/worktree",
-		ScriptPath:          "/source/scripts/setup.sh",
-		Phase:               WorktreeSetupPhaseStarted,
+		SetupOperationID: id,
+		Phase:            WorktreeSetupPhaseStarted,
+		Started: &WorktreeSetupStarted{
+			SourceWorkspaceRoot: "/source",
+			WorktreeRoot:        "/worktree",
+			ScriptPath:          "/source/scripts/setup.sh",
+		},
 	}
 	if err := started.Validate(); err != nil {
 		t.Fatalf("started setup event validate: %v", err)
 	}
 	invalidStarted := started
-	invalidStarted.ScriptPath = ""
+	invalidStarted.Started = &WorktreeSetupStarted{
+		SourceWorkspaceRoot: started.Started.SourceWorkspaceRoot,
+		WorktreeRoot:        started.Started.WorktreeRoot,
+	}
 	if err := invalidStarted.Validate(); err == nil {
 		t.Fatal("started setup event without script path validated")
 	}
-	failed := started
-	failed.Phase = WorktreeSetupPhaseFailed
-	failed.Error = "exit status 1"
+	failed := WorktreeSetupEvent{
+		SetupOperationID: id,
+		Phase:            WorktreeSetupPhaseFailed,
+		Failed: &WorktreeSetupFailed{
+			RetryReadiness: WorktreeSetupRetryReady,
+			Cause: WorktreeSetupFailureCause{
+				Kind:        WorktreeSetupFailureTargetPreparation,
+				Preparation: &WorktreeSetupPreparationFailure{},
+			},
+			Diagnostic: "target preparation failed",
+		},
+	}
 	if err := failed.Validate(); err != nil {
 		t.Fatalf("failed setup event validate: %v", err)
 	}
-	invalidFailed := started
-	invalidFailed.Phase = WorktreeSetupPhaseFailed
+	invalidFailed := failed
+	invalidFailed.Failed = &WorktreeSetupFailed{
+		RetryReadiness: WorktreeSetupRetryReady,
+		Cause: WorktreeSetupFailureCause{
+			Kind:        WorktreeSetupFailureTargetPreparation,
+			Preparation: &WorktreeSetupPreparationFailure{},
+		},
+	}
 	if err := invalidFailed.Validate(); err == nil {
 		t.Fatal("failed setup event without terminal facts validated")
+	}
+}
+
+func TestSetupRecoveryDetailValidationAtAPIContract(t *testing.T) {
+	valid := worktreecontract.SetupRecoveryDetail[WorktreeSetupOperationID, WorkflowExecutionTargetSelection]{
+		SetupOperationID: NewWorktreeSetupOperationID(), Cause: worktreecontract.SetupFailureTargetPreparation,
+		Diagnostic: "target failed", SetupRequirement: worktreecontract.SetupRequirementRequired,
+		ExecutionTarget: WorkflowExecutionTargetSelection{Mode: WorkflowExecutionTargetModeHead},
+	}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("Validate target-preparation recovery: %v", err)
+	}
+	script, setup := "scripts/setup.sh", valid
+	setup.Cause, setup.ScriptPath, setup.RetainedWorktree = worktreecontract.SetupFailureProcessExit, &script, &worktreecontract.RetainedWorktree{WorktreeID: "worktree-1", Root: "/worktree"}
+	if err := setup.Validate(); err != nil {
+		t.Fatalf("Validate setup-script recovery: %v", err)
+	}
+	invalid := valid
+	invalid.Cause = worktreecontract.SetupFailureCanceled
+	if err := invalid.Validate(); err == nil {
+		t.Fatal("Validate accepted a non-retry-ready cause")
+	}
+	invalid, invalid.Cause, invalid.ScriptPath = valid, worktreecontract.SetupFailureTargetPreparation, &script
+	if err := invalid.Validate(); err == nil {
+		t.Fatal("Validate accepted target preparation with a setup script")
 	}
 }
 
@@ -57,7 +104,7 @@ func TestWorktreeSetupOperationIDJSONRejectsNonV4(t *testing.T) {
 func TestForegroundStartRequiresSetupOperationID(t *testing.T) {
 	id := NewWorktreeSetupOperationID()
 	valid := []interface{ Validate() error }{
-		WorktreeCreateRequest{ClientRequestID: "req", SetupOperationID: id, SessionID: "session", BaseRef: "HEAD", CreateBranch: true, BranchName: "feature"},
+		WorktreeCreateRequest{SetupOperationID: id, SessionID: "session", BaseRef: "HEAD", CreateBranch: true, BranchName: "feature"},
 		WorkflowTaskStartRequest{TaskID: "task", SetupOperationID: id},
 	}
 	for _, req := range valid {
@@ -66,7 +113,7 @@ func TestForegroundStartRequiresSetupOperationID(t *testing.T) {
 		}
 	}
 	invalid := []interface{ Validate() error }{
-		WorktreeCreateRequest{ClientRequestID: "req", SessionID: "session", BaseRef: "HEAD", CreateBranch: true, BranchName: "feature"},
+		WorktreeCreateRequest{SessionID: "session", BaseRef: "HEAD", CreateBranch: true, BranchName: "feature"},
 		WorkflowTaskStartRequest{TaskID: "task"},
 	}
 	for _, req := range invalid {

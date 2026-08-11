@@ -246,8 +246,6 @@ function NewTaskFormContent({
     [workspaceItems],
   );
   const selectedWorkspaceID = useWatch({ control: form.control, name: "sourceWorkspaceID" });
-  const displayedWorkspaceID =
-    selectedWorkspaceID.trim().length > 0 ? selectedWorkspaceID : (initialWorkspaceID ?? "");
   const formShortcut = useTextFieldSubmitShortcut({
     available: canSubmit,
     kind: "form",
@@ -284,17 +282,7 @@ function NewTaskFormContent({
         selectedLabelIDs={effectiveSelectedLabelIDs}
       />
       {workspaceItems.length === 1 ? (
-        <>
-          <input type="hidden" {...form.register("sourceWorkspaceID")} />
-          <SelectField
-            disabled
-            disabledReason={t("task.onlyOneWorkspaceLinked")}
-            label={t("task.sourceWorkspace")}
-            onValueChange={() => undefined}
-            options={workspaceOptions}
-            value={displayedWorkspaceID}
-          />
-        </>
+        <input type="hidden" {...form.register("sourceWorkspaceID")} />
       ) : (
         <SelectField
           disabled={workspaceItems.length <= 1}

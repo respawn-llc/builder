@@ -51,22 +51,21 @@ type liveBandLine struct {
 type FrameSectionKind string
 
 const (
-	FrameSectionRuntimeActivity     FrameSectionKind = "runtime_activity"
-	FrameSectionQueuedOrSteered     FrameSectionKind = "queued_or_steered"
-	FrameSectionPendingPrompt       FrameSectionKind = "pending_prompt"
-	FrameSectionContextUsage        FrameSectionKind = "context_usage"
-	FrameSectionGoal                FrameSectionKind = "goal"
-	FrameSectionStatus              FrameSectionKind = "status"
-	FrameSectionInput               FrameSectionKind = "input"
-	FrameSectionPicker              FrameSectionKind = "picker"
-	FrameSectionHelp                FrameSectionKind = "help"
-	FrameSectionPromptHistory       FrameSectionKind = "prompt_history"
-	FrameSectionPendingTools        FrameSectionKind = "pending_tools"
-	FrameSectionRunState            FrameSectionKind = "run_state"
-	FrameSectionInputReconciliation FrameSectionKind = "input_reconciliation"
-	FrameSectionSessionStatus       FrameSectionKind = "session_status"
-	FrameSectionSessionIdentity     FrameSectionKind = "session_identity"
-	FrameSectionCompaction          FrameSectionKind = "compaction"
+	FrameSectionRuntimeActivity FrameSectionKind = "runtime_activity"
+	FrameSectionQueuedOrSteered FrameSectionKind = "queued_or_steered"
+	FrameSectionPendingPrompt   FrameSectionKind = "pending_prompt"
+	FrameSectionContextUsage    FrameSectionKind = "context_usage"
+	FrameSectionGoal            FrameSectionKind = "goal"
+	FrameSectionStatus          FrameSectionKind = "status"
+	FrameSectionInput           FrameSectionKind = "input"
+	FrameSectionPicker          FrameSectionKind = "picker"
+	FrameSectionHelp            FrameSectionKind = "help"
+	FrameSectionPromptHistory   FrameSectionKind = "prompt_history"
+	FrameSectionPendingTools    FrameSectionKind = "pending_tools"
+	FrameSectionRunState        FrameSectionKind = "run_state"
+	FrameSectionSessionStatus   FrameSectionKind = "session_status"
+	FrameSectionSessionIdentity FrameSectionKind = "session_identity"
+	FrameSectionCompaction      FrameSectionKind = "compaction"
 )
 
 type Result struct {
@@ -290,8 +289,15 @@ func (s *Surface) applyAssistantDelta(streamID runtimeids.AssistantStreamID, del
 }
 
 func (s *Surface) activeAssistantPromotionDeferred() bool {
-	return s.activeAssistant.phase == transcript.AssistantPhaseFinal &&
-		transcript.IsNoopFinalText(s.activeAssistant.source[s.activeAssistant.phaseSourceStart:])
+	if s.activeAssistant.phase != transcript.AssistantPhaseFinal {
+		return false
+	}
+	content := s.activeAssistant.source[s.activeAssistant.phaseSourceStart:]
+	return transcript.IsBlankAssistantFinal(transcript.AssistantFinalCandidate{
+		IsAssistant: true,
+		IsFinal:     true,
+		Content:     &content,
+	})
 }
 
 func (s *Surface) abortAssistantStream(streamID runtimeids.AssistantStreamID, frame FrameInput) (Result, error) {
@@ -344,6 +350,13 @@ func (s *Surface) finalizeAssistantStream(streamID runtimeids.AssistantStreamID,
 }
 
 func (s *Surface) appendAssistantFinalWithoutActiveStream(text string, frame FrameInput) (Result, error) {
+	if transcript.IsBlankAssistantFinal(transcript.AssistantFinalCandidate{
+		IsAssistant: true,
+		IsFinal:     true,
+		Content:     &text,
+	}) {
+		return s.writeFrameTransaction(frame, nil)
+	}
 	row := clientui.TranscriptCommittedRow{
 		Kind:      clientui.TranscriptRowAssistant,
 		Assistant: &clientui.TranscriptAssistantRow{Text: text, Phase: transcript.AssistantPhaseFinal},
@@ -479,7 +492,7 @@ func (s *Surface) renderCommittedRowWithMode(row clientui.TranscriptCommittedRow
 // typed suggestion list belongs in native scrollback. Answered questions are
 // the other typed multi-line exception. D and X rows never reach this path.
 func ongoingRenderMode(row clientui.TranscriptCommittedRow) transcriptrender.Mode {
-	if isFullOngoingNoticeRow(row) {
+	if isFullOngoingRow(row) {
 		return transcriptrender.ModeOngoingFull
 	}
 	switch row.Visibility {
@@ -492,7 +505,12 @@ func ongoingRenderMode(row clientui.TranscriptCommittedRow) transcriptrender.Mod
 	}
 }
 
-func isFullOngoingNoticeRow(row clientui.TranscriptCommittedRow) bool {
+func isFullOngoingRow(row clientui.TranscriptCommittedRow) bool {
+	if row.Kind == clientui.TranscriptRowReviewerFeedback &&
+		row.ReviewerFeedback != nil &&
+		row.Visibility == clientui.EntryVisibilityOngoing {
+		return true
+	}
 	if row.Kind != clientui.TranscriptRowNotice || row.Notice == nil || row.Notice.Diagnostic == nil {
 		return false
 	}

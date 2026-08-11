@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"core/shared/clientui"
@@ -12,6 +13,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/workflowcontract"
 	"core/shared/workflowkey"
+	"core/shared/worktreecontract"
 )
 
 const (
@@ -291,7 +293,7 @@ type WorkflowGraphDraftNode struct {
 	Key                string                      `json:"key"`
 	Kind               string                      `json:"kind"`
 	DisplayName        string                      `json:"display_name"`
-	GroupID            string                      `json:"group_id,omitempty"`
+	GroupID            *string                     `json:"group_id"`
 	GroupKey           string                      `json:"group_key,omitempty"`
 	SubagentRole       string                      `json:"subagent_role,omitempty"`
 	CompletionMode     string                      `json:"completion_mode,omitempty"`
@@ -360,6 +362,7 @@ type WorkflowGraphMetadata struct {
 }
 
 type WorkflowGraphSaveConfirmation struct {
+	ExpectedRemovedNodeGroupCount       int64 `json:"expected_removed_node_group_count"`
 	ExpectedRemovedNodeCount            int64 `json:"expected_removed_node_count"`
 	ExpectedRemovedTransitionGroupCount int64 `json:"expected_removed_transition_group_count"`
 	ExpectedRemovedEdgeCount            int64 `json:"expected_removed_edge_count"`
@@ -377,6 +380,7 @@ type WorkflowGraphSaveRequest struct {
 
 type WorkflowGraphSavePreviewResponse struct {
 	CurrentVersion       int64                                               `json:"current_version"`
+	Changed              bool                                                `json:"changed"`
 	ValidationResults    map[WorkflowValidationMode]WorkflowValidateResponse `json:"validation_results"`
 	Impact               WorkflowGraphSaveImpact                             `json:"impact"`
 	Blockers             []WorkflowGraphSaveBlocker                          `json:"blockers,omitempty"`
@@ -386,6 +390,7 @@ type WorkflowGraphSavePreviewResponse struct {
 
 type WorkflowGraphSaveResponse struct {
 	Saved                bool                                                `json:"saved"`
+	Changed              bool                                                `json:"changed"`
 	Definition           *WorkflowDefinition                                 `json:"definition,omitempty"`
 	CurrentVersion       int64                                               `json:"current_version"`
 	ValidationResults    map[WorkflowValidationMode]WorkflowValidateResponse `json:"validation_results"`
@@ -396,22 +401,35 @@ type WorkflowGraphSaveResponse struct {
 }
 
 type WorkflowGraphSaveImpact struct {
-	RemovedNodeCount                  int64 `json:"removed_node_count"`
-	RemovedTransitionGroupCount       int64 `json:"removed_transition_group_count"`
-	RemovedEdgeCount                  int64 `json:"removed_edge_count"`
-	NodeTaskReferenceCount            int64 `json:"node_task_reference_count"`
-	EdgeTaskReferenceCount            int64 `json:"edge_task_reference_count"`
-	ActiveCurrentNodeCount            int64 `json:"active_current_node_count"`
-	PendingApprovalCount              int64 `json:"pending_approval_count"`
-	StartNodeChangeCount              int64 `json:"start_node_change_count"`
-	LastTerminalChangeCount           int64 `json:"last_terminal_change_count"`
-	TaskReferencedNodeKindChangeCount int64 `json:"task_referenced_node_kind_change_count"`
+	RemovedNodeGroupCount             int64                          `json:"removed_node_group_count"`
+	RemovedNodeCount                  int64                          `json:"removed_node_count"`
+	RemovedTransitionGroupCount       int64                          `json:"removed_transition_group_count"`
+	RemovedEdgeCount                  int64                          `json:"removed_edge_count"`
+	RemovedEntities                   []WorkflowGraphEntityReference `json:"removed_entities"`
+	NodeTaskReferenceCount            int64                          `json:"node_task_reference_count"`
+	EdgeTaskReferenceCount            int64                          `json:"edge_task_reference_count"`
+	ActiveCurrentNodeCount            int64                          `json:"active_current_node_count"`
+	PendingApprovalCount              int64                          `json:"pending_approval_count"`
+	StartNodeChangeCount              int64                          `json:"start_node_change_count"`
+	LastTerminalChangeCount           int64                          `json:"last_terminal_change_count"`
+	TaskReferencedNodeKindChangeCount int64                          `json:"task_referenced_node_kind_change_count"`
 }
 
+const (
+	WorkflowGraphEntityTypeEdge            = workflowcontract.WorkflowGraphEntityTypeEdge
+	WorkflowGraphEntityTypeNode            = workflowcontract.WorkflowGraphEntityTypeNode
+	WorkflowGraphEntityTypeNodeGroup       = workflowcontract.WorkflowGraphEntityTypeNodeGroup
+	WorkflowGraphEntityTypeTransitionGroup = workflowcontract.WorkflowGraphEntityTypeTransitionGroup
+)
+
+type WorkflowGraphEntityType = workflowcontract.WorkflowGraphEntityType
+type WorkflowGraphEntityReference = workflowcontract.WorkflowGraphEntityReference
+
 type WorkflowGraphSaveBlocker struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-	Count   int64  `json:"count"`
+	Code             string                         `json:"code"`
+	Message          string                         `json:"message"`
+	Count            int64                          `json:"count"`
+	AffectedEntities []WorkflowGraphEntityReference `json:"affected_entities"`
 }
 
 type WorkflowCreateRequest struct {
@@ -902,6 +920,73 @@ func DecodeWorkflowTaskMutationSelfTargetError(data json.RawMessage, message str
 	return &WorkflowTaskMutationSelfTargetError{TaskID: envelope.TaskID}
 }
 
+type WorkflowTaskStartConflictReason string
+
+const WorkflowTaskStartConflictAlreadyStarted WorkflowTaskStartConflictReason = "already_started"
+
+type WorkflowTaskStartConflictError struct {
+	TaskID string                          `json:"task_id"`
+	Reason WorkflowTaskStartConflictReason `json:"reason"`
+}
+
+func (e *WorkflowTaskStartConflictError) Error() string {
+	return "workflow task start conflict"
+}
+
+func (e *WorkflowTaskStartConflictError) RPCErrorCode() int {
+	return protocol.ErrCodeWorkflowTaskStartConflict
+}
+
+func (e *WorkflowTaskStartConflictError) RPCErrorData() json.RawMessage {
+	if e == nil {
+		return nil
+	}
+	return marshalRPCErrorData(struct {
+		Type   string                          `json:"type"`
+		TaskID string                          `json:"task_id"`
+		Reason WorkflowTaskStartConflictReason `json:"reason"`
+	}{
+		Type:   "workflow_task_start_conflict",
+		TaskID: e.TaskID,
+		Reason: e.Reason,
+	})
+}
+
+func (e *WorkflowTaskStartConflictError) Validate() error {
+	if e == nil {
+		return errors.New("workflow task start conflict is required")
+	}
+	if strings.TrimSpace(e.TaskID) == "" {
+		return errors.New("workflow task start conflict task_id is required")
+	}
+	if e.Reason != WorkflowTaskStartConflictAlreadyStarted {
+		return errors.New("workflow task start conflict reason is invalid")
+	}
+	return nil
+}
+
+func DecodeWorkflowTaskStartConflictError(data json.RawMessage, message string) error {
+	fallbackMessage := strings.TrimSpace(message)
+	if fallbackMessage == "" {
+		fallbackMessage = "workflow task start conflict"
+	}
+	fallback := errors.New(fallbackMessage)
+	var payload struct {
+		Type   string                          `json:"type"`
+		TaskID string                          `json:"task_id"`
+		Reason WorkflowTaskStartConflictReason `json:"reason"`
+	}
+	if err := protocol.DecodeStrictJSON(data, &payload); err != nil ||
+		payload.Type != "workflow_task_start_conflict" {
+		return fallback
+	}
+	result := &WorkflowTaskStartConflictError{TaskID: payload.TaskID, Reason: payload.Reason}
+	if err := result.Validate(); err != nil {
+		return fallback
+	}
+	return result
+}
+
 type WorkflowTaskUpdateRequest struct {
 	TaskID            string  `json:"task_id"`
 	Title             *string `json:"title,omitempty"`
@@ -918,6 +1003,7 @@ type WorkflowTaskStartRequest struct {
 	InvokingSessionID          *runtimeids.SessionID             `json:"invoking_session_id,omitempty"`
 	SetupOperationID           WorktreeSetupOperationID          `json:"setup_operation_id"`
 	ExecutionTarget            *WorkflowExecutionTargetSelection `json:"execution_target,omitempty"`
+	BranchName                 *string                           `json:"branch_name,omitempty"`
 	ProceedDespiteDependencies bool                              `json:"proceed_despite_dependencies,omitempty"`
 }
 
@@ -945,6 +1031,7 @@ type WorkflowTaskResumeRequest struct {
 	InvokingSessionID *runtimeids.SessionID             `json:"invoking_session_id,omitempty"`
 	SetupOperationID  WorktreeSetupOperationID          `json:"setup_operation_id"`
 	ExecutionTarget   *WorkflowExecutionTargetSelection `json:"execution_target,omitempty"`
+	BranchName        *string                           `json:"branch_name,omitempty"`
 }
 
 type WorkflowTaskResumeResponse struct {
@@ -980,8 +1067,8 @@ type WorkflowTaskMoveRequest struct {
 	TransitionKey              *string                           `json:"transition_key,omitempty"`
 	Values                     map[string]map[string]string      `json:"values,omitempty"`
 	Commentary                 string                            `json:"commentary,omitempty"`
-	SetupOperationID           WorktreeSetupOperationID          `json:"setup_operation_id,omitempty"`
 	ExecutionTarget            *WorkflowExecutionTargetSelection `json:"execution_target,omitempty"`
+	BranchName                 *string                           `json:"branch_name,omitempty"`
 	ProceedDespiteDependencies bool                              `json:"proceed_despite_dependencies,omitempty"`
 }
 
@@ -994,11 +1081,13 @@ type WorkflowTaskMoveResponse struct {
 }
 
 type WorkflowTaskMoveNoOp struct {
-	CurrentNodes []WorkflowTaskCurrentNode `json:"current_nodes"`
+	CurrentNodes             []WorkflowTaskCurrentNode `json:"current_nodes"`
+	RetainedPreviousWorktree *RetainedPreviousWorktree `json:"retained_previous_worktree"`
 }
 
 type WorkflowTaskMoveApplied struct {
-	CurrentNodes []WorkflowTaskCurrentNode `json:"current_nodes"`
+	CurrentNodes             []WorkflowTaskCurrentNode `json:"current_nodes"`
+	RetainedPreviousWorktree *RetainedPreviousWorktree `json:"retained_previous_worktree"`
 }
 
 const (
@@ -1008,7 +1097,6 @@ const (
 
 var ErrWorkflowTaskCompleteTargetNotFound = errors.New("workflow task completion target not found")
 var ErrWorkflowTaskCompleteSelectorAmbiguous = errors.New("workflow task completion selector is ambiguous")
-var ErrWorkflowTaskQuestionSelectorAmbiguous = errors.New("workflow task question selector is ambiguous")
 
 type WorkflowTaskCompleteSelectorAmbiguousError struct {
 	Message string
@@ -1024,22 +1112,6 @@ func (e WorkflowTaskCompleteSelectorAmbiguousError) Error() string {
 
 func (e WorkflowTaskCompleteSelectorAmbiguousError) Is(target error) bool {
 	return target == ErrWorkflowTaskCompleteSelectorAmbiguous
-}
-
-type WorkflowTaskQuestionSelectorAmbiguousError struct {
-	Message string
-}
-
-func (e WorkflowTaskQuestionSelectorAmbiguousError) Error() string {
-	message := strings.TrimSpace(e.Message)
-	if message == "" {
-		return ErrWorkflowTaskQuestionSelectorAmbiguous.Error()
-	}
-	return message
-}
-
-func (e WorkflowTaskQuestionSelectorAmbiguousError) Is(target error) bool {
-	return target == ErrWorkflowTaskQuestionSelectorAmbiguous
 }
 
 type WorkflowTaskCompleteRequest struct {
@@ -1100,25 +1172,22 @@ type WorkflowTaskAttentionListResponse struct {
 }
 
 type WorkflowAttentionItem struct {
-	ID                     string                             `json:"id"`
-	Kind                   string                             `json:"kind"`
-	ProjectID              string                             `json:"project_id"`
-	WorkflowID             runtimeids.WorkflowID              `json:"workflow_id"`
-	TaskID                 string                             `json:"task_id"`
-	TaskShortID            string                             `json:"task_short_id"`
-	TaskTitle              string                             `json:"task_title"`
-	Message                *string                            `json:"message,omitempty"`
-	ApprovalID             *string                            `json:"approval_id,omitempty"`
-	CurrentNode            *WorkflowTaskCurrentNode           `json:"current_node,omitempty"`
-	SessionID              *string                            `json:"session_id,omitempty"`
-	SessionName            *string                            `json:"session_name"`
-	DetailJSON             *string                            `json:"detail_json,omitempty"`
-	QuestionID             *string                            `json:"question_id,omitempty"`
-	Suggestions            []string                           `json:"suggestions,omitempty"`
-	RecommendedOptionIndex *int                               `json:"recommended_option_index,omitempty"`
-	Question               *WorkflowAttentionQuestionPrompt   `json:"question,omitempty"`
-	ApprovalSnapshot       *WorkflowAttentionApprovalSnapshot `json:"approval_snapshot,omitempty"`
-	OccurredAtUnixMs       int64                              `json:"occurred_at_unix_ms"`
+	ID               string                             `json:"id"`
+	Kind             string                             `json:"kind"`
+	ProjectID        string                             `json:"project_id"`
+	WorkflowID       runtimeids.WorkflowID              `json:"workflow_id"`
+	TaskID           string                             `json:"task_id"`
+	TaskShortID      string                             `json:"task_short_id"`
+	TaskTitle        string                             `json:"task_title"`
+	Message          *string                            `json:"message,omitempty"`
+	ApprovalID       *string                            `json:"approval_id,omitempty"`
+	CurrentNode      *WorkflowTaskCurrentNode           `json:"current_node,omitempty"`
+	SessionID        *string                            `json:"session_id,omitempty"`
+	SessionName      *string                            `json:"session_name"`
+	DetailJSON       *string                            `json:"detail_json,omitempty"`
+	Question         *WorkflowAttentionQuestionPrompt   `json:"question,omitempty"`
+	ApprovalSnapshot *WorkflowAttentionApprovalSnapshot `json:"approval_snapshot,omitempty"`
+	OccurredAtUnixMs int64                              `json:"occurred_at_unix_ms"`
 }
 
 type WorkflowAttentionApprovalSnapshot struct {
@@ -1141,26 +1210,13 @@ const (
 )
 
 type WorkflowAttentionQuestionPrompt struct {
+	SessionID              runtimeids.SessionID          `json:"session_id"`
+	StepID                 runtimeids.StepID             `json:"step_id"`
+	PromptID               clientui.PromptID             `json:"prompt_id"`
 	Kind                   WorkflowAttentionQuestionKind `json:"kind"`
 	Suggestions            []string                      `json:"suggestions,omitempty"`
 	RecommendedOptionIndex *int                          `json:"recommended_option_index,omitempty"`
 	ApprovalDecisions      []clientui.ApprovalDecision   `json:"approval_decisions,omitempty"`
-}
-
-type WorkflowTaskQuestionApprovalAnswer struct {
-	Decision   clientui.ApprovalDecision `json:"decision"`
-	Commentary string                    `json:"commentary,omitempty"`
-}
-
-type WorkflowTaskQuestionAnswerRequest struct {
-	ClientRequestID      string                              `json:"client_request_id"`
-	TaskID               string                              `json:"task_id"`
-	AskID                string                              `json:"ask_id"`
-	ErrorMessage         string                              `json:"error_message,omitempty"`
-	Answer               string                              `json:"answer,omitempty"`
-	SelectedOptionNumber *int                                `json:"selected_option_number"`
-	FreeformAnswer       string                              `json:"freeform_answer,omitempty"`
-	Approval             *WorkflowTaskQuestionApprovalAnswer `json:"approval,omitempty"`
 }
 
 type WorkflowTaskCommentAddRequest struct {
@@ -1174,15 +1230,9 @@ type WorkflowTaskCommentAddResponse struct {
 	Comment WorkflowTaskComment `json:"comment"`
 }
 
-type WorkflowTaskCommentListRequest struct {
-	TaskID string `json:"task_id"`
-	Offset *int   `json:"offset,omitempty"`
-	Limit  *int   `json:"limit,omitempty"`
-}
-
 type WorkflowTaskCommentListResponse struct {
-	Comments   []WorkflowTaskComment `json:"comments"`
-	NextOffset *int                  `json:"next_offset,omitempty"`
+	WorkflowOffsetPage[WorkflowTaskComment]
+	TotalCount int64 `json:"total_count"`
 }
 
 type WorkflowTaskCommentReplaceRequest struct {
@@ -1579,7 +1629,6 @@ const (
 	WorkflowProjectEventActionCommentDeleted         = protocol.WorkflowProjectEventActionCommentDeleted
 	WorkflowProjectEventActionQuestionWaiting        = protocol.WorkflowProjectEventActionQuestionWaiting
 	WorkflowProjectEventActionQuestionCleared        = protocol.WorkflowProjectEventActionQuestionCleared
-	WorkflowProjectEventActionQuestionAnswered       = protocol.WorkflowProjectEventActionQuestionAnswered
 	WorkflowProjectEventActionLabelsChanged          = protocol.WorkflowProjectEventActionLabelsChanged
 	WorkflowProjectEventActionDependenciesChanged    = protocol.WorkflowProjectEventActionDependenciesChanged
 )
@@ -1699,7 +1748,6 @@ func workflowProjectEventActionAllowed(resource WorkflowProjectEventResource, ac
 			WorkflowProjectEventActionCommentDeleted,
 			WorkflowProjectEventActionQuestionWaiting,
 			WorkflowProjectEventActionQuestionCleared,
-			WorkflowProjectEventActionQuestionAnswered,
 			WorkflowProjectEventActionLabelsChanged,
 			WorkflowProjectEventActionDependenciesChanged:
 			return true
@@ -1736,16 +1784,8 @@ type WorkflowTaskGetResponse struct {
 	Task WorkflowTaskDetail `json:"task"`
 }
 
-type WorkflowTaskActivityListRequest struct {
-	TaskID    string `json:"task_id"`
-	PageSize  int    `json:"page_size,omitempty"`
-	PageToken string `json:"page_token,omitempty"`
-}
-
 type WorkflowTaskActivityListResponse struct {
-	Items             []WorkflowTaskActivityItem `json:"items"`
-	NextPageToken     string                     `json:"next_page_token,omitempty"`
-	GeneratedAtUnixMs int64                      `json:"generated_at_unix_ms"`
+	WorkflowOffsetPage[WorkflowTaskActivityItem]
 }
 
 type WorkflowTaskSummary struct {
@@ -2308,6 +2348,7 @@ func (r WorkflowGraphSaveRequest) Validate() error {
 		name  string
 		value int64
 	}{
+		{"expected_removed_node_group_count", r.Confirmation.ExpectedRemovedNodeGroupCount},
 		{"expected_removed_node_count", r.Confirmation.ExpectedRemovedNodeCount},
 		{"expected_removed_transition_group_count", r.Confirmation.ExpectedRemovedTransitionGroupCount},
 		{"expected_removed_edge_count", r.Confirmation.ExpectedRemovedEdgeCount},
@@ -2319,6 +2360,127 @@ func (r WorkflowGraphSaveRequest) Validate() error {
 		}
 	}
 	return nil
+}
+
+func (r WorkflowGraphSavePreviewResponse) Validate() error {
+	return validateWorkflowGraphSaveResponse(r.CurrentVersion, r.Impact, r.Blockers)
+}
+
+func (r WorkflowGraphSaveResponse) Validate() error {
+	return validateWorkflowGraphSaveResponse(r.CurrentVersion, r.Impact, r.Blockers)
+}
+
+func validateWorkflowGraphSaveResponse(currentVersion int64, impact WorkflowGraphSaveImpact, blockers []WorkflowGraphSaveBlocker) error {
+	if currentVersion < 0 {
+		return errors.New("current_version must be non-negative")
+	}
+	if err := impact.Validate(); err != nil {
+		return fmt.Errorf("impact: %w", err)
+	}
+	return validateWorkflowGraphSaveBlockers(blockers)
+}
+
+func (i WorkflowGraphSaveImpact) Validate() error {
+	for _, field := range []struct {
+		name  string
+		value int64
+	}{
+		{"removed_node_group_count", i.RemovedNodeGroupCount},
+		{"removed_node_count", i.RemovedNodeCount},
+		{"removed_transition_group_count", i.RemovedTransitionGroupCount},
+		{"removed_edge_count", i.RemovedEdgeCount},
+		{"node_task_reference_count", i.NodeTaskReferenceCount},
+		{"edge_task_reference_count", i.EdgeTaskReferenceCount},
+		{"active_current_node_count", i.ActiveCurrentNodeCount},
+		{"pending_approval_count", i.PendingApprovalCount},
+		{"start_node_change_count", i.StartNodeChangeCount},
+		{"last_terminal_change_count", i.LastTerminalChangeCount},
+		{"task_referenced_node_kind_change_count", i.TaskReferencedNodeKindChangeCount},
+	} {
+		if field.value < 0 {
+			return fmt.Errorf("%s must be non-negative", field.name)
+		}
+	}
+	if err := validateWorkflowGraphEntityReferences(i.RemovedEntities, "removed_entities"); err != nil {
+		return err
+	}
+	counts := map[WorkflowGraphEntityType]int64{}
+	for _, entity := range i.RemovedEntities {
+		counts[entity.EntityType]++
+	}
+	for _, expected := range []struct {
+		entityType WorkflowGraphEntityType
+		count      int64
+	}{
+		{WorkflowGraphEntityTypeNodeGroup, i.RemovedNodeGroupCount},
+		{WorkflowGraphEntityTypeNode, i.RemovedNodeCount},
+		{WorkflowGraphEntityTypeTransitionGroup, i.RemovedTransitionGroupCount},
+		{WorkflowGraphEntityTypeEdge, i.RemovedEdgeCount},
+	} {
+		if counts[expected.entityType] != expected.count {
+			return fmt.Errorf("removed_entities %s count = %d, want %d", expected.entityType, counts[expected.entityType], expected.count)
+		}
+	}
+	return nil
+}
+
+func validateWorkflowGraphEntityReference(r WorkflowGraphEntityReference) error {
+	switch r.EntityType {
+	case WorkflowGraphEntityTypeEdge,
+		WorkflowGraphEntityTypeNode,
+		WorkflowGraphEntityTypeNodeGroup,
+		WorkflowGraphEntityTypeTransitionGroup:
+	default:
+		return errors.New("entity_type is invalid")
+	}
+	return validateRequired("entity_id", r.EntityID)
+}
+
+func (b WorkflowGraphSaveBlocker) Validate() error {
+	if err := validateRequired("code", b.Code); err != nil {
+		return err
+	}
+	if err := validateRequired("message", b.Message); err != nil {
+		return err
+	}
+	if b.Count < 0 {
+		return workflowRequestError(WorkflowRequestErrorInvalidValue, "count", "count must be non-negative")
+	}
+	return validateWorkflowGraphEntityReferences(b.AffectedEntities, "affected_entities")
+}
+
+func validateWorkflowGraphSaveBlockers(blockers []WorkflowGraphSaveBlocker) error {
+	for index, blocker := range blockers {
+		if err := blocker.Validate(); err != nil {
+			return fmt.Errorf("blockers[%d]: %w", index, err)
+		}
+	}
+	return nil
+}
+
+func validateWorkflowGraphEntityReferences(references []WorkflowGraphEntityReference, field string) error {
+	if references == nil {
+		return fmt.Errorf("%s must be present", field)
+	}
+	for index, reference := range references {
+		if err := validateWorkflowGraphEntityReference(reference); err != nil {
+			return fmt.Errorf("%s[%d]: %w", field, index, err)
+		}
+	}
+	if !slices.IsSortedFunc(references, CompareWorkflowGraphEntityReferences) {
+		return fmt.Errorf("%s must use canonical entity_type and entity_id order", field)
+	}
+	for index := 1; index < len(references); index++ {
+		if CompareWorkflowGraphEntityReferences(references[index-1], references[index]) == 0 {
+			return fmt.Errorf("%s contains duplicate entity reference", field)
+		}
+	}
+	return nil
+}
+
+// CompareWorkflowGraphEntityReferences defines the canonical graph entity ordering used by graph-save producers and consumers.
+func CompareWorkflowGraphEntityReferences(left WorkflowGraphEntityReference, right WorkflowGraphEntityReference) int {
+	return workflowcontract.CompareWorkflowGraphEntityReferences(left, right)
 }
 
 func validateWorkflowGraphMetadata(metadata *WorkflowGraphMetadata) error {
@@ -2376,6 +2538,12 @@ func validateWorkflowGraphDraftEnvelope(graph WorkflowGraphDraft) error {
 		}
 	}
 	for _, node := range graph.Nodes {
+		if kind := WorkflowNodeKind(strings.TrimSpace(node.Kind)); !slices.Contains([]WorkflowNodeKind{WorkflowNodeKindStart, WorkflowNodeKindAgent, WorkflowNodeKindScript, WorkflowNodeKindJoin, WorkflowNodeKindTerminal}, kind) {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "graph.nodes.kind", "node kind is invalid")
+		}
+		if node.GroupID != nil && strings.TrimSpace(*node.GroupID) == "" {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "graph.nodes.group_id", "group_id must be non-blank when present")
+		}
 		if err := validateWorkflowNodeCompletionMode(node.Kind, node.CompletionMode); err != nil {
 			return workflowRequestError(WorkflowRequestErrorInvalidValue, "graph.nodes.completion_mode", err.Error())
 		}
@@ -2571,33 +2739,29 @@ func (r WorkflowAttentionItem) Validate() error {
 		if err := validateRequiredAttentionString("message", r.Message); err != nil {
 			return err
 		}
-		if err := validateRequiredAttentionString("question_id", r.QuestionID); err != nil {
-			return err
-		}
 		if r.CurrentNode == nil {
 			return workflowRequestError(WorkflowRequestErrorRequired, "current_node", "current_node is required")
 		}
 		if err := validateWorkflowTaskCurrentNode(*r.CurrentNode); err != nil {
 			return err
 		}
-		if err := validateOptionalAttentionString("session_id", r.SessionID); err != nil {
-			return err
+		if r.CurrentNode.SessionID != nil {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "current_node.session_id", "current_node.session_id is not allowed for kind question")
 		}
 		if err := validateOptionalAttentionString("session_name", r.SessionName); err != nil {
 			return err
 		}
-		if err := validateWorkflowAttentionRecommendation(r.Suggestions, r.RecommendedOptionIndex); err != nil {
-			return err
+		if r.Question == nil {
+			return workflowRequestError(WorkflowRequestErrorRequired, "question", "question is required")
 		}
-		if r.Question != nil {
-			if err := r.Question.Validate(); err != nil {
-				return err
-			}
+		if err := r.Question.Validate(); err != nil {
+			return err
 		}
 		return validateWorkflowAttentionFieldsAbsent(r.Kind,
 			workflowAttentionFieldPresence{name: "approval_id", present: r.ApprovalID != nil},
 			workflowAttentionFieldPresence{name: "approval_snapshot", present: r.ApprovalSnapshot != nil},
 			workflowAttentionFieldPresence{name: "detail_json", present: r.DetailJSON != nil},
+			workflowAttentionFieldPresence{name: "session_id", present: r.SessionID != nil},
 		)
 	case "approval":
 		if err := validateOptionalAttentionString("message", r.Message); err != nil {
@@ -2615,11 +2779,8 @@ func (r WorkflowAttentionItem) Validate() error {
 		return validateWorkflowAttentionFieldsAbsent(r.Kind,
 			workflowAttentionFieldPresence{name: "session_id", present: r.SessionID != nil},
 			workflowAttentionFieldPresence{name: "session_name", present: r.SessionName != nil},
-			workflowAttentionFieldPresence{name: "question_id", present: r.QuestionID != nil},
 			workflowAttentionFieldPresence{name: "current_node", present: r.CurrentNode != nil},
 			workflowAttentionFieldPresence{name: "question", present: r.Question != nil},
-			workflowAttentionFieldPresence{name: "suggestions", present: r.Suggestions != nil},
-			workflowAttentionFieldPresence{name: "recommended_option_index", present: r.RecommendedOptionIndex != nil},
 			workflowAttentionFieldPresence{name: "detail_json", present: r.DetailJSON != nil},
 		)
 	case "interrupted_current_node":
@@ -2641,11 +2802,8 @@ func (r WorkflowAttentionItem) Validate() error {
 		return validateWorkflowAttentionFieldsAbsent(r.Kind,
 			workflowAttentionFieldPresence{name: "approval_id", present: r.ApprovalID != nil},
 			workflowAttentionFieldPresence{name: "session_name", present: r.SessionName != nil},
-			workflowAttentionFieldPresence{name: "question_id", present: r.QuestionID != nil},
 			workflowAttentionFieldPresence{name: "question", present: r.Question != nil},
 			workflowAttentionFieldPresence{name: "approval_snapshot", present: r.ApprovalSnapshot != nil},
-			workflowAttentionFieldPresence{name: "suggestions", present: r.Suggestions != nil},
-			workflowAttentionFieldPresence{name: "recommended_option_index", present: r.RecommendedOptionIndex != nil},
 		)
 	default:
 		return workflowRequestError(WorkflowRequestErrorInvalidMode, "kind", "kind must be question, approval, or interrupted_current_node")
@@ -2678,6 +2836,9 @@ func (t WorkflowAttentionApprovalTarget) Validate() error {
 }
 
 func (p WorkflowAttentionQuestionPrompt) Validate() error {
+	if err := validateObservationPromptIdentity(p.PromptID, p.SessionID, p.StepID); err != nil {
+		return workflowRequestError(WorkflowRequestErrorInvalidValue, "question.identity", err.Error())
+	}
 	switch p.Kind {
 	case WorkflowAttentionQuestionKindOrdinary:
 		if p.ApprovalDecisions != nil {
@@ -2730,6 +2891,10 @@ type workflowAttentionInterruptionDetailSchema struct {
 		RequestedRef *string                                 `json:"requested_ref,omitempty"`
 		Cause        WorkflowExecutionTargetUnavailableCause `json:"cause"`
 	} `json:"configured_execution_target_unavailable,omitempty"`
+	SetupRecovery *worktreecontract.SetupRecoveryDetail[
+		WorktreeSetupOperationID,
+		WorkflowExecutionTargetSelection,
+	] `json:"setup_recovery,omitempty"`
 }
 
 func validateOptionalAttentionInterruptionDetailJSON(field string, value *string) error {
@@ -2762,6 +2927,11 @@ func validateOptionalAttentionInterruptionDetailJSON(field string, value *string
 		}
 		if err := requirement.Validate(); err != nil {
 			return workflowRequestError(WorkflowRequestErrorInvalidValue, field, field+" configured execution target metadata is invalid")
+		}
+	}
+	if recovery := detail.SetupRecovery; recovery != nil {
+		if err := recovery.Validate(); err != nil {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, field, field+" setup recovery facts are invalid")
 		}
 	}
 	return nil
@@ -2898,6 +3068,9 @@ func (r WorkflowTaskStartRequest) Validate() error {
 	if err := r.SetupOperationID.Validate(); err != nil {
 		return err
 	}
+	if err := validateWorkflowTaskInitialBranchName(r.BranchName); err != nil {
+		return err
+	}
 	if r.ExecutionTarget != nil {
 		return r.ExecutionTarget.Validate()
 	}
@@ -2912,6 +3085,9 @@ func (r WorkflowTaskResumeRequest) Validate() error {
 		return err
 	}
 	if err := r.SetupOperationID.Validate(); err != nil {
+		return err
+	}
+	if err := validateWorkflowTaskInitialBranchName(r.BranchName); err != nil {
 		return err
 	}
 	if r.ExecutionTarget != nil {
@@ -2937,6 +3113,9 @@ func (r WorkflowTaskMoveRequest) Validate() error {
 	if r.TransitionKey != nil && strings.TrimSpace(*r.TransitionKey) == "" {
 		return workflowRequestError(WorkflowRequestErrorInvalidValue, "transition_key", "transition_key must be non-blank when present")
 	}
+	if err := validateWorkflowTaskInitialBranchName(r.BranchName); err != nil {
+		return err
+	}
 	for nodeKey, outputs := range r.Values {
 		if strings.TrimSpace(nodeKey) == "" {
 			return workflowRequestError(WorkflowRequestErrorInvalidValue, "values", "values node keys must be non-blank")
@@ -2958,6 +3137,13 @@ func (r WorkflowTaskMoveRequest) Validate() error {
 	}
 	if r.ExecutionTarget != nil {
 		return r.ExecutionTarget.Validate()
+	}
+	return nil
+}
+
+func validateWorkflowTaskInitialBranchName(branchName *string) error {
+	if branchName != nil && strings.TrimSpace(*branchName) == "" {
+		return workflowRequestError(WorkflowRequestErrorInvalidValue, "branch_name", "branch_name must be non-blank when present")
 	}
 	return nil
 }
@@ -3055,39 +3241,6 @@ func (r WorkflowTaskAttentionListRequest) Validate() error {
 	return validateRequired("task_id", r.TaskID)
 }
 
-func (r WorkflowTaskQuestionAnswerRequest) Validate() error {
-	if err := validateRequiredFields(requiredField("client_request_id", r.ClientRequestID), requiredField("task_id", r.TaskID), requiredField("ask_id", r.AskID)); err != nil {
-		return err
-	}
-	hasTextAnswer := strings.TrimSpace(r.Answer) != ""
-	hasFreeform := strings.TrimSpace(r.FreeformAnswer) != ""
-	hasApproval := r.Approval != nil
-	if r.SelectedOptionNumber != nil && *r.SelectedOptionNumber <= 0 {
-		return WorkflowRequestValidationError{Code: WorkflowRequestErrorInvalidMode, Field: "selected_option_number", Message: "selected_option_number must be positive when present"}
-	}
-	hasSelected := r.SelectedOptionNumber != nil
-	hasAnswer := hasTextAnswer || hasFreeform || hasSelected || hasApproval
-	hasError := strings.TrimSpace(r.ErrorMessage) != ""
-	if hasAnswer && hasError {
-		return WorkflowRequestValidationError{Code: WorkflowRequestErrorInvalidMode, Field: "error_message", Message: "error_message cannot be combined with answer fields"}
-	}
-	if hasApproval {
-		if hasTextAnswer || hasFreeform || hasSelected {
-			return WorkflowRequestValidationError{Code: WorkflowRequestErrorInvalidMode, Field: "approval", Message: "approval cannot be combined with ordinary answer fields"}
-		}
-		if err := validateWorkflowApprovalDecision(r.Approval.Decision); err != nil {
-			return err
-		}
-	}
-	if hasTextAnswer && (hasFreeform || hasSelected) {
-		return WorkflowRequestValidationError{Code: WorkflowRequestErrorInvalidMode, Field: "answer", Message: "answer cannot be combined with selected_option_number or freeform_answer"}
-	}
-	if !hasAnswer && !hasError {
-		return WorkflowRequestValidationError{Code: WorkflowRequestErrorRequired, Field: "answer", Message: "answer is required"}
-	}
-	return nil
-}
-
 func validateWorkflowApprovalDecision(decision clientui.ApprovalDecision) error {
 	switch decision {
 	case clientui.ApprovalDecisionAllowOnce, clientui.ApprovalDecisionAllowSession, clientui.ApprovalDecisionDeny:
@@ -3111,14 +3264,6 @@ func validateWorkflowTaskCommentAuthorKind(author string) error {
 	default:
 		return workflowRequestError(WorkflowRequestErrorInvalidValue, "author", "author must be user or agent")
 	}
-}
-
-func (r WorkflowTaskCommentListRequest) Validate() error {
-	if err := validateRequired("task_id", r.TaskID); err != nil {
-		return err
-	}
-	_, err := ResolveWorkflowOffsetWindow(r.Offset, r.Limit)
-	return err
 }
 
 func (r WorkflowTaskCommentReplaceRequest) Validate() error {
@@ -3317,19 +3462,6 @@ func (r WorkflowTaskGetRequest) Validate() error {
 	}
 	if shortID == "" {
 		return validateRequired("short_id", r.ShortID)
-	}
-	return nil
-}
-
-func (r WorkflowTaskActivityListRequest) Validate() error {
-	if err := validateRequired("task_id", r.TaskID); err != nil {
-		return err
-	}
-	if r.PageSize < 0 {
-		return workflowRequestError(WorkflowRequestErrorInvalidMode, "page_size", "page_size must be non-negative")
-	}
-	if strings.TrimSpace(r.PageToken) != r.PageToken {
-		return workflowRequestError(WorkflowRequestErrorInvalidMode, "page_token", "page_token must not have leading or trailing whitespace")
 	}
 	return nil
 }

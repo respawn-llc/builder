@@ -206,10 +206,12 @@ func TestOngoingFrameInputAskViewportAndCursorShareBoundedProjection(t *testing.
 }
 
 func TestOngoingFrameInputKeepsServerBackedQueuedStateTranscriptOwned(t *testing.T) {
-	m := sizedTestUIModel(newProjectedStaticUIModel(), 48, 10)
-	m.pendingInjected = []clientui.QueuedUserMessage{{
-		ID:   "11111111-1111-4111-8111-111111111111",
-		Text: "server accepted",
+	m := sizedTestUIModel(newProjectedTestUIModel(&runtimeControlFakeClient{}), 48, 10)
+	m.injectedQueue = []injectedRuntimeQueueItem{{
+		LocalID:  "22222222-2222-4222-8222-222222222222",
+		ServerID: "11111111-1111-4111-8111-111111111111",
+		Text:     "server accepted",
+		State:    injectedRuntimeQueueEnqueued,
 	}}
 
 	frame := m.ongoingFrameInput()
@@ -249,12 +251,6 @@ func TestOngoingFrameInputRendersPendingInjectedMessagesBeforeServerAcceptance(t
 		ClientRequestID: "22222222-2222-4222-8222-222222222222",
 		State:           injectedRuntimeQueuePendingCreate,
 	}}
-	m.pendingInjected = []clientui.QueuedUserMessage{{
-		ID:              "11111111-1111-4111-8111-111111111111",
-		Text:            "pending injected before server acceptance",
-		ClientRequestID: "22222222-2222-4222-8222-222222222222",
-	}}
-
 	frame := m.ongoingFrameInput()
 
 	section, ok := frameSection(frame, ongoing.FrameSectionQueuedOrSteered)
@@ -281,11 +277,6 @@ func TestOngoingFrameInputRendersNoRuntimeInjectedMessages(t *testing.T) {
 		Text:     "local injected without runtime client",
 		State:    injectedRuntimeQueueEnqueued,
 	}}
-	m.pendingInjected = []clientui.QueuedUserMessage{{
-		ID:   "11111111-1111-4111-8111-111111111111",
-		Text: "local injected without runtime client",
-	}}
-
 	frame := m.ongoingFrameInput()
 
 	section, ok := frameSection(frame, ongoing.FrameSectionQueuedOrSteered)

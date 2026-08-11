@@ -125,23 +125,23 @@ func (s *Service) taskQuestion(
 	keys map[string]string,
 	cache map[string][]clientui.PendingApproval,
 ) (serverapi.WorkflowTaskObservationOutcome, bool, error) {
-	if item.SessionID == nil {
+	if item.Question == nil {
 		return serverapi.WorkflowTaskObservationOutcome{}, false, nil
 	}
-	sessionID := strings.TrimSpace(*item.SessionID)
-	if sessionID == "" {
+	if err := item.Question.Validate(); err != nil {
+		return serverapi.WorkflowTaskObservationOutcome{}, false, err
+	}
+	sessionID := item.Question.SessionID.String()
+	if strings.TrimSpace(sessionID) == "" {
 		return serverapi.WorkflowTaskObservationOutcome{}, false, nil
 	}
-	questionID := item.QuestionID
-	if questionID == nil || strings.TrimSpace(*questionID) == "" {
+	questionID := string(item.Question.PromptID)
+	if strings.TrimSpace(questionID) == "" {
 		return serverapi.WorkflowTaskObservationOutcome{}, false, nil
 	}
 
 	var question serverapi.ObservationQuestion
-	questionKind := serverapi.WorkflowAttentionQuestionKindOrdinary
-	if item.Question != nil {
-		questionKind = item.Question.Kind
-	}
+	questionKind := item.Question.Kind
 	switch questionKind {
 	case serverapi.WorkflowAttentionQuestionKindOrdinary:
 		text, _ := textutil.OptionalExact(item.Message)
@@ -149,11 +149,12 @@ func (s *Service) taskQuestion(
 			return serverapi.WorkflowTaskObservationOutcome{}, false, nil
 		}
 		ask := clientui.PendingAsk{
-			AskID:                  *questionID,
-			SessionID:              sessionID,
+			PromptID:               item.Question.PromptID,
+			SessionID:              item.Question.SessionID,
+			StepID:                 item.Question.StepID,
 			Question:               text,
-			Suggestions:            append([]string(nil), item.Suggestions...),
-			RecommendedOptionIndex: item.RecommendedOptionIndex,
+			Suggestions:            append([]string(nil), item.Question.Suggestions...),
+			RecommendedOptionIndex: item.Question.RecommendedOptionIndex,
 			CreatedAt:              time.UnixMilli(item.OccurredAtUnixMs).UTC(),
 		}
 		question.Ask = &ask
@@ -170,7 +171,9 @@ func (s *Service) taskQuestion(
 		var approval *clientui.PendingApproval
 		for index := range approvals {
 			candidate := &approvals[index]
-			if candidate.ApprovalID == *questionID {
+			if candidate.PromptID == item.Question.PromptID &&
+				candidate.SessionID == item.Question.SessionID &&
+				candidate.StepID == item.Question.StepID {
 				approval = candidate
 				break
 			}
@@ -182,9 +185,10 @@ func (s *Service) taskQuestion(
 	default:
 		return serverapi.WorkflowTaskObservationOutcome{}, false, nil
 	}
+	outcomeSessionID := item.Question.SessionID.String()
 	return serverapi.WorkflowTaskObservationOutcome{
 		Kind:      serverapi.WorkflowTaskObservationQuestion,
-		SessionID: item.SessionID,
+		SessionID: &outcomeSessionID,
 		NodeKey:   nodeKey(item.CurrentNode, keys),
 		Question:  &question,
 	}, true, nil

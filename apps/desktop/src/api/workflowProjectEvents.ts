@@ -37,7 +37,6 @@ export const workflowProjectEventActions = [
   "comment_deleted",
   "question_waiting",
   "question_cleared",
-  "question_answered",
   "labels_changed",
   "dependencies_changed",
 ] as const;
@@ -84,7 +83,6 @@ const allowedActions: Readonly<
     "comment_deleted",
     "question_waiting",
     "question_cleared",
-    "question_answered",
     "labels_changed",
     "dependencies_changed",
   ]),

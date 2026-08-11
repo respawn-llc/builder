@@ -1,11 +1,9 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useMemo } from "react";
 
-import { canonicalBoardFilter, type TaskLabelFilter } from "@/api";
-import { useBoardFilterGeneration } from "./BoardFilterGenerationRuntime";
-import { BoardFilterGenerationProvider } from "./BoardFilterGenerationContext";
+import type { TaskLabelFilter } from "@/api";
+import { BoardQueryProvider } from "./BoardQueryContext";
+import { useBoardQuery } from "./BoardQueryRuntime";
 
 const labelFilter: TaskLabelFilter = {
   kind: "named",
@@ -62,38 +60,27 @@ function TestApp({
   surface?: "board" | "non-board";
   workflowID: string;
 }>) {
-  const queryClient = useMemo(() => new QueryClient(), []);
-  return (
-    <QueryClientProvider client={queryClient}>
-      {surface === "board" ? (
-        <BoardFilterGenerationProvider
-          desiredLabelFilter={labelFilter}
-          initialFilter={canonicalBoardFilter({ labelFilter, dependencyFilter: null })}
-          key={`${projectID}:${workflowID}`}
-        >
-          <FilterProbe />
-        </BoardFilterGenerationProvider>
-      ) : (
-        <div data-testid="non-board">Inbox</div>
-      )}
-    </QueryClientProvider>
+  return surface === "board" ? (
+    <BoardQueryProvider key={`${projectID}:${workflowID}`} labelFilter={labelFilter}>
+      <FilterProbe />
+    </BoardQueryProvider>
+  ) : (
+    <div data-testid="non-board">Inbox</div>
   );
 }
 
 function FilterProbe() {
-  const runtime = useBoardFilterGeneration();
-  const { active } = runtime.snapshot;
+  const runtime = useBoardQuery();
   return (
     <>
-      <output data-testid="dependency-filter">{String(active.filter.dependencyFilter)}</output>
-      <output data-testid="label-filter">{active.filter.labelFilter.kind}</output>
-      <output data-testid="board-sort">{runtime.sort.field}:{runtime.sort.direction}</output>
+      <output data-testid="dependency-filter">{String(runtime.filter.dependencyFilter)}</output>
+      <output data-testid="label-filter">{runtime.filter.labelFilter.kind}</output>
+      <output data-testid="board-sort">
+        {runtime.sort.field}:{runtime.sort.direction}
+      </output>
       <button
         onClick={() => {
-          runtime.controller.setDesiredFilter({
-            labelFilter: active.filter.labelFilter,
-            dependencyFilter: true,
-          });
+          runtime.setDependencyFilter(true);
         }}
         type="button"
       >

@@ -233,8 +233,13 @@ func locateTranscriptCommittedRowFacts(facts []TranscriptCommittedRowFact) []Tra
 func TranscriptCommittedRowFactsFromSnapshot(snapshot ChatSnapshot) []TranscriptCommittedRowFact {
 	facts := make([]TranscriptCommittedRowFact, 0, len(snapshot.Entries))
 	for _, entry := range snapshot.Entries {
-		if strings.TrimSpace(entry.Role) == "assistant" &&
-			transcript.IsNoopFinalText(entry.Text) {
+		content := entry.Text
+		if transcript.IsBlankAssistantFinal(transcript.AssistantFinalCandidate{
+			IsAssistant:    entry.Role == string(llm.RoleAssistant),
+			IsFinal:        entry.Phase == llm.MessagePhaseFinal,
+			HasMessageType: entry.MessageType != "",
+			Content:        &content,
+		}) {
 			continue
 		}
 		fact, ok := transcriptCommittedRowFactFromChatEntry(entry)
@@ -310,7 +315,7 @@ func transcriptCommittedRowFactsFromMessageUnlocated(msg llm.Message, streamID *
 		return []TranscriptCommittedRowFact{{Kind: TranscriptCommittedRowFactUser, Visibility: transcript.EntryVisibilityOngoing, User: &TranscriptUserRowFact{Text: *msg.Content}}}
 	case llm.RoleAssistant:
 		out := make([]TranscriptCommittedRowFact, 0, 1+len(msg.ToolCalls))
-		if msg.Content != nil && strings.TrimSpace(*msg.Content) != "" && !isNoopFinalAnswer(msg) {
+		if msg.Content != nil && strings.TrimSpace(*msg.Content) != "" && !isBlankFinalAnswer(msg) {
 			phase, _ := textutil.OptionalValue(msg.Phase)
 			out = append(out, TranscriptCommittedRowFact{Kind: TranscriptCommittedRowFactAssistant, Visibility: assistantTranscriptVisibility(phase), Assistant: &TranscriptAssistantRowFact{
 				Text:     *msg.Content,
@@ -480,12 +485,8 @@ func transcriptCommittedRowFactFromChatEntryUnlocated(entry ChatEntry) (Transcri
 }
 
 func transcriptNoticeRowFactFromChatEntry(entry ChatEntry) (TranscriptCommittedRowFact, bool) {
-	role := transcript.EntryRole(strings.TrimSpace(entry.Role))
 	visibility := normalizeRuntimeEntryVisibility(entry.Visibility)
 	if visibility == transcript.EntryVisibilityHidden {
-		return TranscriptCommittedRowFact{}, false
-	}
-	if role == transcript.EntryRoleReviewerStatus {
 		return TranscriptCommittedRowFact{}, false
 	}
 	fact, ok := transcriptNoticeRowFactFromChatEntryUnlocated(entry)
@@ -640,6 +641,7 @@ func knownTranscriptNoticeRole(role string) bool {
 		transcript.EntryRoleInterruption,
 		transcript.EntryRoleGoalFeedback,
 		transcript.EntryRoleReasoning,
+		transcript.EntryRoleReviewerStatus,
 		transcript.EntryRoleReviewerError,
 		transcript.EntryRoleReviewerSuggestions:
 		return true
@@ -695,6 +697,8 @@ func defaultTranscriptNoticeVisibility(entry ChatEntry) transcript.EntryVisibili
 	case transcript.EntryRoleReviewerSuggestions,
 		transcript.EntryRoleReviewerError:
 		return transcript.EntryVisibilityOngoing
+	case transcript.EntryRoleReviewerStatus:
+		return transcript.EntryVisibilityOngoingCollapsed
 	default:
 		return transcript.EntryVisibilityOngoing
 	}

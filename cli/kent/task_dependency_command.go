@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 
+	"core/shared/client"
 	"core/shared/config"
 	"core/shared/serverapi"
 )
@@ -64,13 +65,13 @@ func taskDependencyMutationSubcommand(kind taskDependencyMutationKind, args []st
 		fmt.Fprintf(stderr, "task dep %s requires --blocker <task> and --blocked <task>\n", kind)
 		return 2
 	}
-	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
-		blockerTaskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, *projectRef, *blockerRef)
+	return runWorkflowCommandSession(stderr, func(cfg config.App, remote *client.Remote) int {
+		blockerTaskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, remote, *projectRef, *blockerRef)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		blockedTaskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, *projectRef, *blockedRef)
+		blockedTaskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, remote, *projectRef, *blockedRef)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
@@ -141,8 +142,8 @@ func taskDependencyListSubcommand(args []string, stdout io.Writer, stderr io.Wri
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
-		taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, *projectRef, positionals[0])
+	return runWorkflowCommandSession(stderr, func(cfg config.App, remote *client.Remote) int {
+		taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, remote, *projectRef, positionals[0])
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
@@ -192,30 +193,37 @@ type taskDependencyDirection interface {
 }
 
 func writeTaskDependencyDirections[T taskDependencyDirection](stdout io.Writer, directions []T) error {
+	for _, direction := range taskDependencyDirectionsForRender(directions) {
+		if direction.Direction == serverapi.WorkflowTaskDependencyDirectionBlocks {
+			fmt.Fprintf(stdout, "Blocks %d tasks:\n", direction.TotalCount)
+		} else {
+			fmt.Fprintln(stdout, "Blocked by:")
+		}
+		for _, item := range direction.Items {
+			status, err := taskStatusText(item.Status)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(stdout, "%s: %s (%s)\n", item.ShortID, item.Title, status)
+		}
+	}
+	return nil
+}
+
+func taskDependencyDirectionsForRender[T taskDependencyDirection](directions []T) []serverapi.WorkflowTaskDependencyListDirectionProjection {
+	ordered := make([]serverapi.WorkflowTaskDependencyListDirectionProjection, 0, len(directions))
 	for _, wanted := range []serverapi.WorkflowTaskDependencyDirection{
 		serverapi.WorkflowTaskDependencyDirectionBlocks,
 		serverapi.WorkflowTaskDependencyDirectionBlockedBy,
 	} {
 		for _, raw := range directions {
 			direction := dependencyDirectionForRender(raw)
-			if direction.Direction != wanted || len(direction.Items) == 0 {
-				continue
-			}
-			if wanted == serverapi.WorkflowTaskDependencyDirectionBlocks {
-				fmt.Fprintf(stdout, "Blocks %d tasks:\n", direction.TotalCount)
-			} else {
-				fmt.Fprintln(stdout, "Blocked by:")
-			}
-			for _, item := range direction.Items {
-				status, err := taskStatusText(item.Status)
-				if err != nil {
-					return err
-				}
-				fmt.Fprintf(stdout, "%s: %s (%s)\n", item.ShortID, item.Title, status)
+			if direction.Direction == wanted && len(direction.Items) > 0 {
+				ordered = append(ordered, direction)
 			}
 		}
 	}
-	return nil
+	return ordered
 }
 
 func dependencyDirectionForRender[T taskDependencyDirection](direction T) serverapi.WorkflowTaskDependencyListDirectionProjection {

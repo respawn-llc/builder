@@ -15,6 +15,7 @@ import {
 } from "@/shared/task-dependencies";
 import { TaskStatusIcon } from "@/shared/task-status";
 import { ActionableListRow, Button, Island } from "@/ui";
+import { taskDetailIslandRadius } from "./taskDetailIslandStyles";
 
 export function TaskDependenciesArea({
   dependencies,
@@ -37,7 +38,11 @@ export function TaskDependenciesArea({
   const blockedBy = requiredTaskDependencyDirection(dependencies, "blocked-by");
   const blocks = requiredTaskDependencyDirection(dependencies, "blocks");
   return (
-    <Island className="grid gap-[var(--space-3)] p-[var(--space-3)]" level={1}>
+    <Island
+      className="grid gap-[var(--space-3)] p-[var(--space-3)]"
+      level={1}
+      radius={taskDetailIslandRadius}
+    >
       <header className="flex min-w-0 items-center justify-between gap-[var(--space-2)]">
         <h2 className="m-0 text-base font-semibold">{t("task.dependencies")}</h2>
         {dependencies.blockerCount === 0 ? null : (

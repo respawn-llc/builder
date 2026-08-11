@@ -95,7 +95,7 @@
 - A Question or Approval is not presented when its preceding durability barrier fails. A later fresh-resource recovery closes its durable tool call through the ordinary execution-status-neutral missing-durable-output outcome without replaying the blocked interaction.
 - Question origin is not shown in the UI. Stored answers explicitly include the selected option number and commentary.
 - Single-prompt answers are submitted and delivered in strict FIFO order and are not retained across restart. A submission has an immutable answer payload; an editable retry draft after failed delivery affects only a later submission. Supported post-answer actions validate their inputs.
-- When one model response prepares several valid `ask_question` calls, Kent keeps them serial and FIFO. A single-prompt answer remains in flight until a later prepared Question becomes pending or the same Exact Execution Scope closes. Clients keep the accepted Question visible but disabled until authoritative prompt state replaces or removes it.
+- When one model response prepares several valid `ask_question` calls, Kent keeps them serial and FIFO.
 - A typed prompt-answer batch uses the Step identity as its only batch identity. It has no client request identity or replay memo. Each submitted entry is an answered Question, an answered Approval, or a declined prompt.
 - Kent validates the complete typed batch before resolving any prompt. A malformed entry rejects the batch without resolving valid siblings.
 - The order of submitted batch entries has no meaning. Kent resolves submitted prompts that remain pending for that Step in server prompt order. Ordinary Questions retain model tool-call order. Approval order follows server materialization order and has no product guarantee.
@@ -144,7 +144,7 @@
 ## Model Requests And Cache Continuity
 
 - Every generation request has a required tool-choice mode: automatic or required. Missing or unknown modes are invalid.
-- Required tool choice validates against the complete advertised tool set, including local, custom, and enabled provider-hosted tools. An empty set is invalid. A provider that cannot represent required choice returns a policy error before dispatch; a valid required request never retries or falls back to automatic choice after a provider or transport error.
+- Required tool choice validates against the complete advertised tool set, including local, custom, and enabled provider-hosted tools. An empty set is invalid. A provider that cannot represent required choice returns a policy error before dispatch. Automatic and required requests use the same bounded provider- and transport-failure retry policy; a retry preserves the request's tool-choice mode and advertised tools, and Kent never falls back from required to automatic choice.
 - Tool-choice mode changes only tool selection. It never changes the advertised tools or their order, parallel-tool behavior, or prompt-cache identity. Exact counting of a built request preserves its tool mode and complete tool set; standalone estimation uses automatic choice.
 
 ## Compaction

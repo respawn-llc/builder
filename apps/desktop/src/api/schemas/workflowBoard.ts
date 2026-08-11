@@ -7,10 +7,12 @@ import type {
   BoardGroup,
   BoardNodeCardsPage,
   CommentPage,
+  OffsetPage,
   PendingAsk,
   TaskDetail,
   TaskAttention,
   TaskApproveResponse,
+  TaskCurrentNode,
   TaskMoveResponse,
   TaskMovePreviewResponse,
   TaskResumeResponse,
@@ -20,6 +22,7 @@ import type {
   ProjectWorkflowLink,
 } from "../models";
 import type { TaskListPage } from "../workflowLabels";
+import { retainedPreviousWorktreeSchema, type RetainedPreviousWorktree } from "../worktreeSetup";
 import {
   attentionItemSchema,
   boardCardSchema,
@@ -63,6 +66,22 @@ const workflowPickerSchema = z
   .array(workflowPickerItemSchema)
   .nullish()
   .transform((value) => value ?? []);
+
+function offsetPageObjectSchema<T>(itemSchema: z.ZodType<T>) {
+  return z.object({
+    items: z.array(itemSchema),
+    next_offset: z.number().int().positive().nullable().optional(),
+  });
+}
+
+function offsetPageSchema<T>(itemSchema: z.ZodType<T>): z.ZodType<OffsetPage<T>> {
+  return offsetPageObjectSchema(itemSchema)
+    .strict()
+    .transform((value) => ({
+      items: value.items,
+      nextOffset: value.next_offset ?? null,
+    }));
+}
 
 export const taskListPageSchema: z.ZodType<TaskListPage> = z
   .object({
@@ -214,19 +233,33 @@ export const taskResumeResponseSchema: z.ZodType<TaskResumeResponse> = z.discrim
   selectionRequiredResponseSchema,
 ]);
 
-const taskMoveNoOpResponseSchema = z
-  .object({
-    outcome: z.literal("no_op"),
-    no_op: z.object({ current_nodes: z.array(currentNodeSchema).min(1) }).strict(),
-  })
+type TaskMoveMutationResult = Readonly<{ currentNodes: readonly TaskCurrentNode[];
+  retainedPreviousWorktree: RetainedPreviousWorktree | null }>;
+const taskMoveResultSchema: z.ZodType<TaskMoveMutationResult> = z
+  .object({ current_nodes: z.array(currentNodeSchema).min(1),
+    retained_previous_worktree: retainedPreviousWorktreeSchema.nullable() })
   .strict()
-  .transform((value) => ({
-    outcome: value.outcome,
-    noOp: { currentNodes: value.no_op.current_nodes },
-  }));
+  .transform((value) => ({ currentNodes: value.current_nodes,
+    retainedPreviousWorktree: value.retained_previous_worktree }));
+
+const taskMoveNoOpResponseSchema = z
+  .object({ outcome: z.literal("no_op"), no_op: taskMoveResultSchema })
+  .strict()
+  .transform((value) => ({ outcome: value.outcome, noOp: value.no_op }));
+
+const taskMovePreviewNoOpResponseSchema = z
+  .object({ outcome: z.literal("no_op"), no_op:
+    z.object({ current_nodes: z.array(currentNodeSchema).min(1) }).strict() })
+  .strict()
+  .transform((value) => ({ outcome: value.outcome, noOp: { currentNodes: value.no_op.current_nodes } }));
+
+const taskMoveAppliedResponseSchema = z
+  .object({ outcome: z.literal("applied"), applied: taskMoveResultSchema })
+  .strict()
+  .transform((value) => ({ outcome: value.outcome, applied: value.applied }));
 
 export const taskMoveResponseSchema: z.ZodType<TaskMoveResponse> = z.discriminatedUnion("outcome", [
-  appliedCurrentNodesResponseSchema,
+  taskMoveAppliedResponseSchema,
   selectionRequiredResponseSchema,
   taskMoveNoOpResponseSchema,
   dependencyConfirmationRequiredResponseSchema,
@@ -249,7 +282,7 @@ const manualMoveRequiredValueSchema = z
   .object({
     node_key: z.string().trim().min(1),
     output_name: z.string().trim().min(1),
-    description: z.string(),
+    description: nonBlankPreservingString.nullable(),
     resolved_value: nonBlankPreservingString.nullable().optional(),
   })
   .strict()
@@ -263,7 +296,7 @@ const manualMoveRequiredValueSchema = z
 export const taskMovePreviewResponseSchema: z.ZodType<TaskMovePreviewResponse> = z.discriminatedUnion(
   "outcome",
   [
-    taskMoveNoOpResponseSchema,
+    taskMovePreviewNoOpResponseSchema,
     z
       .object({ outcome: z.literal("direct"), direct: z.object({}).strict() })
       .strict()
@@ -273,22 +306,24 @@ export const taskMovePreviewResponseSchema: z.ZodType<TaskMovePreviewResponse> =
         outcome: z.literal("transition"),
         transition: z
           .object({
-            choices: z.array(
-              z
-                .object({
-                  transition_key: z.string().trim().min(1),
-                  label: z.string().trim().min(1),
-                  source_node_display_name: z.string().trim().min(1),
-                  required_values: z.array(manualMoveRequiredValueSchema),
-                })
-                .strict()
-                .transform((value) => ({
-                  transitionKey: value.transition_key,
-                  label: value.label,
-                  sourceNodeDisplayName: value.source_node_display_name,
-                  requiredValues: value.required_values,
-                })),
-            ).min(1),
+            choices: z
+              .array(
+                z
+                  .object({
+                    transition_key: z.string().trim().min(1),
+                    label: z.string().trim().min(1),
+                    source_node_display_name: z.string().trim().min(1),
+                    required_values: z.array(manualMoveRequiredValueSchema),
+                  })
+                  .strict()
+                  .transform((value) => ({
+                    transitionKey: value.transition_key,
+                    label: value.label,
+                    sourceNodeDisplayName: value.source_node_display_name,
+                    requiredValues: value.required_values,
+                  })),
+              )
+              .min(1),
           })
           .strict(),
       })
@@ -572,17 +607,7 @@ const activityItemSchema = z.discriminatedUnion("type", [
     })),
 ]);
 
-export const activityPageSchema: z.ZodType<ActivityPage> = z
-  .object({
-    items: z.array(activityItemSchema),
-    next_page_token: z.string().optional().default(""),
-    generated_at_unix_ms: z.number(),
-  })
-  .transform((value) => ({
-    items: value.items,
-    nextPageToken: value.next_page_token,
-    generatedAt: value.generated_at_unix_ms,
-  }));
+export const activityPageSchema: z.ZodType<ActivityPage> = offsetPageSchema(activityItemSchema);
 
 export const pendingAskListSchema = z
   .object({
@@ -590,8 +615,9 @@ export const pendingAskListSchema = z
       .array(
         z
           .object({
-            AskID: z.string(),
+            PromptID: z.string(),
             SessionID: z.string(),
+            StepID: z.string(),
             Question: z.string(),
             Suggestions: z.array(z.string()).optional().default([]),
             RecommendedOptionIndex: z.number().int().positive().nullable(),
@@ -610,8 +636,9 @@ export const pendingAskListSchema = z
             }
           })
           .transform((value): PendingAsk => ({
-            askID: value.AskID,
+            promptID: value.PromptID,
             sessionID: value.SessionID,
+            stepID: value.StepID,
             question: value.Question,
             suggestions: value.Suggestions,
             recommendedOptionIndex: value.RecommendedOptionIndex,
@@ -629,12 +656,13 @@ export const taskCreateResponseSchema = taskSummaryResponseSchema;
 export const taskUpdateResponseSchema = taskSummaryResponseSchema;
 export const commentAddResponseSchema = z.object({ comment: commentSchema });
 
-export const commentPageSchema: z.ZodType<CommentPage> = z
-  .object({
-    comments: z.array(commentSchema).nullish().transform(emptyArray),
-    next_offset: z.number().int().positive().nullable().optional(),
+export const commentPageSchema: z.ZodType<CommentPage> = offsetPageObjectSchema(commentSchema)
+  .extend({
+    total_count: z.number().int().nonnegative(),
   })
+  .strict()
   .transform((value) => ({
-    comments: value.comments,
+    items: value.items,
     nextOffset: value.next_offset ?? null,
+    totalCount: value.total_count,
   }));

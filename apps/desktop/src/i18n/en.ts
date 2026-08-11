@@ -380,7 +380,6 @@ export const englishResources = {
         default_branch: "Repository default branch",
         custom_ref: "Custom Git revision",
       },
-      onlyOneWorkspaceLinked: "Only one workspace is linked right now.",
       workspace: "Workspace",
       workflow: "Workflow",
       source: "Source",

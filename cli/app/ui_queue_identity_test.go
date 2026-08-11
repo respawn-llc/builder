@@ -2,32 +2,31 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"core/cli/app/internal/runtimeattach"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 )
 
-func queuedUserMessagesForTest(texts ...string) []clientui.QueuedUserMessage {
-	messages := make([]clientui.QueuedUserMessage, 0, len(texts))
-	for index, text := range texts {
-		messages = append(messages, clientui.QueuedUserMessage{ID: fmt.Sprintf("queue-test-%d", index), Text: text})
-	}
-	return messages
-}
-
 func queuedInputsForTest(texts ...string) []queuedInputItem {
 	items := make([]queuedInputItem, 0, len(texts))
 	for index, text := range texts {
-		items = append(items, queuedInputItem{ID: fmt.Sprintf("input-queue-test-%d", index), Text: text})
+		items = append(items, queuedInputItem{
+			ID:              fmt.Sprintf("input-queue-test-%d", index),
+			Text:            text,
+			submissionOrder: inputSubmissionOrder{sequence: uint64(index + 1)},
+		})
 	}
 	return items
 }
@@ -54,7 +53,8 @@ func TestBusyEnterUsesAuthoritativeSubmitPath(t *testing.T) {
 	client := &runtimeControlFakeClient{submitQueuedID: "busy-submit-queue"}
 	model := newProjectedTestUIModel(client)
 	model.setRuntimeActivityBusyForTest(true)
-	testSetMainInput(model, "steer while thinking")
+	submittedText := "  steer while\nthinking  "
+	testSetMainInput(model, submittedText)
 
 	next, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = next.(*uiModel)
@@ -65,8 +65,8 @@ func TestBusyEnterUsesAuthoritativeSubmitPath(t *testing.T) {
 		model = updateUIModel(t, model, message)
 	}
 
-	if client.submitText != "steer while thinking" {
-		t.Fatalf("submitted text = %q, want authoritative submit", client.submitText)
+	if client.submitText != submittedText {
+		t.Fatalf("submitted text = %q, want verbatim %q", client.submitText, submittedText)
 	}
 	if client.submitCalls != 1 {
 		t.Fatalf("authoritative submit calls = %d, want 1", client.submitCalls)
@@ -83,8 +83,8 @@ func TestInjectedQueueCreateConnectionFailureRestoresDraftWithoutTranscriptEntry
 
 	submitCmd := model.queueInjectedInput("  failed steering  ")
 	testSetMainInput(model, "newer draft")
-	if len(model.pendingInjected) != 1 || len(model.injectedQueue) != 1 {
-		t.Fatalf("queued input state = pending %d, queue %d; want one matching item", len(model.pendingInjected), len(model.injectedQueue))
+	if len(model.injectedQueue) != 1 {
+		t.Fatalf("queued input state = %+v, want one item", model.injectedQueue)
 	}
 
 	var createDone injectedQueueCreateDoneMsg
@@ -106,15 +106,15 @@ func TestInjectedQueueCreateConnectionFailureRestoresDraftWithoutTranscriptEntry
 		updated = updateUIModel(t, updated, msg)
 	}
 
-	if got, want := testMainInput(updated), "newer draft\n\nfailed steering"; got != want {
+	if got, want := testMainInput(updated), "newer draft\n\n  failed steering  "; got != want {
 		t.Fatalf("restored composer text = %q, want %q", got, want)
 	}
-	wantInput := "newer draft\n\nfailed steering"
+	wantInput := "newer draft\n\n  failed steering  "
 	if got, want := testMainInputRuneCursor(updated), len([]rune(wantInput)); got != want {
 		t.Fatalf("composer cursor = %d, want %d", got, want)
 	}
-	if len(updated.pendingInjected) != 0 || len(updated.injectedQueue) != 0 {
-		t.Fatalf("failed queue state = pending %d, queue %d; want no items", len(updated.pendingInjected), len(updated.injectedQueue))
+	if len(updated.injectedQueue) != 0 {
+		t.Fatalf("failed queue state = %+v, want no items", updated.injectedQueue)
 	}
 	if updated.activity != beforeActivity {
 		t.Fatalf("activity = %v, want pre-failure activity %v", updated.activity, beforeActivity)
@@ -192,8 +192,8 @@ func TestAllowCommentaryQueueCreateConnectionFailureAnswersIndependently(t *test
 	if got, want := testMainInput(model), "failed commentary"; got != want {
 		t.Fatalf("restored commentary = %q, want %q", got, want)
 	}
-	if len(model.pendingInjected) != 0 || len(model.injectedQueue) != 0 {
-		t.Fatalf("failed queue state = pending %d, queue %d; want no items", len(model.pendingInjected), len(model.injectedQueue))
+	if len(model.injectedQueue) != 0 {
+		t.Fatalf("failed queue state = %+v, want no items", model.injectedQueue)
 	}
 	if model.activity == uiActivityError {
 		t.Fatalf("activity = %v, want no failure-owned error label", model.activity)
@@ -225,14 +225,17 @@ func TestAllowCommentaryQueueCreateConnectionFailureAnswersIndependently(t *test
 		t.Fatal("transient expiry did not start")
 	}
 
-	var approvalRequest serverapi.ApprovalAnswerRequest
+	var batchRequest serverapi.PromptAnswerBatchRequest
 	select {
-	case approvalRequest = <-control.approvalRequests:
+	case batchRequest = <-control.batchRequests:
 	case <-time.After(time.Second):
 		t.Fatal("approval answer did not start while transient expiry was blocked")
 	}
-	if approvalCommentary(approvalRequest) != "failed commentary" || approvalRequest.Decision != clientui.ApprovalDecisionAllowOnce {
-		t.Fatalf("approval request = %+v, want Allow once with failed commentary", approvalRequest)
+	entry := requireApprovalAnswerEntry(t, batchRequest)
+	if entry.ApprovalAnswer.Commentary == nil ||
+		*entry.ApprovalAnswer.Commentary != "failed commentary" ||
+		entry.ApprovalAnswer.Decision != clientui.ApprovalDecisionAllowOnce {
+		t.Fatalf("approval request = %+v, want Allow once with failed commentary", batchRequest)
 	}
 
 	deliveryResult := <-results
@@ -258,9 +261,10 @@ func TestAllowCommentaryQueueCreateConnectionFailureAnswersIndependently(t *test
 	}
 }
 
-func TestTranscriptQueuedStateOwnsRestorationAndLocalQueueAdmission(t *testing.T) {
+func TestTranscriptQueuedStateOnlyMutatesMatchingLocalRestorationOwnership(t *testing.T) {
 	disableTransientStatusClearForTest(t)
-	text := "server queued text"
+	const localText = "  local queued text  "
+	serverText := "server queued text"
 	for _, test := range []struct {
 		status       clientui.QueuedUserMessageStatus
 		wantQueued   int
@@ -268,7 +272,7 @@ func TestTranscriptQueuedStateOwnsRestorationAndLocalQueueAdmission(t *testing.T
 	}{
 		{status: clientui.QueuedUserMessageAccepted, wantQueued: 1, wantComposer: "existing draft"},
 		{status: clientui.QueuedUserMessageSubmitted, wantComposer: "existing draft"},
-		{status: clientui.QueuedUserMessageFailed, wantComposer: "existing draft\n\nserver queued text"},
+		{status: clientui.QueuedUserMessageFailed, wantComposer: "existing draft\n\n  local queued text  "},
 		{status: clientui.QueuedUserMessageDiscarded, wantComposer: "existing draft"},
 	} {
 		t.Run(string(test.status), func(t *testing.T) {
@@ -277,8 +281,15 @@ func TestTranscriptQueuedStateOwnsRestorationAndLocalQueueAdmission(t *testing.T
 			testSetMainInput(model, "existing draft")
 			requestID := ongoingTestClientRequestID()
 			queueID := ongoingTestQueueItemID()
+			model.injectedQueue = []injectedRuntimeQueueItem{{
+				LocalID:         "local-queue-item",
+				Text:            localText,
+				ClientRequestID: requestID.String(),
+				State:           injectedRuntimeQueuePendingCreate,
+				submissionOrder: inputSubmissionOrder{sequence: 1},
+			}}
 			model.registerSteeredQueuedUserMessage(clientui.QueuedUserMessage{
-				ID: queueID.String(), Text: text, ClientRequestID: requestID.String(),
+				ID: queueID.String(), Text: serverText, ClientRequestID: requestID.String(),
 			})
 			if test.status == clientui.QueuedUserMessageSubmitted {
 				model.queued = []queuedInputItem{{ID: "local-draft", Text: "local draft"}}
@@ -291,7 +302,7 @@ func TestTranscriptQueuedStateOwnsRestorationAndLocalQueueAdmission(t *testing.T
 				ClientRequestID: requestID,
 				QueueItemID:     queueID,
 				Status:          test.status,
-				Text:            &text,
+				Text:            &serverText,
 			})
 			if test.status == clientui.QueuedUserMessageSubmitted {
 				cmd = tea.Batch(cmd, model.inputController().resumeQueuedInputsAfterIdleRuntime())
@@ -300,8 +311,8 @@ func TestTranscriptQueuedStateOwnsRestorationAndLocalQueueAdmission(t *testing.T
 				model = updateUIModel(t, model, msg)
 			}
 
-			if len(model.pendingInjected) != test.wantQueued || len(model.injectedQueue) != test.wantQueued {
-				t.Fatalf("queued state = pending:%d injected:%d, want %d", len(model.pendingInjected), len(model.injectedQueue), test.wantQueued)
+			if len(model.injectedQueue) != test.wantQueued {
+				t.Fatalf("queued state = %+v, want %d", model.injectedQueue, test.wantQueued)
 			}
 			if got := testMainInput(model); got != test.wantComposer {
 				t.Fatalf("composer = %q, want %q", got, test.wantComposer)
@@ -313,6 +324,112 @@ func TestTranscriptQueuedStateOwnsRestorationAndLocalQueueAdmission(t *testing.T
 	}
 }
 
+func TestDrainedQueueRuntimeCommandNotAcceptedRestoresVerbatimExactlyOnce(t *testing.T) {
+	client := &runtimeControlFakeClient{
+		submitErr: serverapi.NewRuntimeCommandNotAcceptedError(errors.New("turn was not accepted")),
+	}
+	model := newProjectedTestUIModel(client)
+	text := "  queued\n\tmessage  "
+	model.queueInput(text)
+
+	_, cmd := model.inputController().flushQueuedInputs(queueDrainOne)
+	var done submitDoneMsg
+	found := false
+	for _, msg := range collectCmdMessages(t, cmd) {
+		if typed, ok := msg.(submitDoneMsg); ok {
+			done = typed
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("drained Queue submission returned no completion")
+	}
+
+	model = updateUIModel(t, model, done)
+	if got := testMainInput(model); got != text {
+		t.Fatalf("restored composer = %q, want verbatim %q", got, text)
+	}
+	if len(model.queued) != 0 || len(model.injectedQueue) != 0 {
+		t.Fatalf("rejected Queue item remained pending: queued=%+v injected=%+v", model.queued, model.injectedQueue)
+	}
+
+	model = updateUIModel(t, model, done)
+	if got := testMainInput(model); got != text {
+		t.Fatalf("duplicate completion restored Queue item twice: %q", got)
+	}
+}
+
+func TestDirectRuntimeCommandNotAcceptedRestoresVerbatim(t *testing.T) {
+	client := &runtimeControlFakeClient{
+		submitErr: serverapi.NewRuntimeCommandNotAcceptedError(errors.New("turn was not accepted")),
+	}
+	model := newProjectedTestUIModel(client)
+	text := "  direct\n\tmessage  "
+	testSetMainInput(model, text)
+
+	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(*uiModel)
+	for _, msg := range collectCmdMessages(t, cmd) {
+		model = updateUIModel(t, model, msg)
+	}
+
+	if got := testMainInput(model); got != text {
+		t.Fatalf("restored composer = %q, want verbatim %q", got, text)
+	}
+}
+
+func TestAcceptedQueuedSubmissionKeepsOriginalOrderForInterruptRestoration(t *testing.T) {
+	client := &runtimeControlFakeClient{submitQueuedID: ongoingTestQueueItemID().String()}
+	model := newProjectedTestUIModel(client)
+	first := "  first queued  "
+	second := "\tsecond queued"
+	draft := " draft "
+	model.queueInput(first)
+
+	_, cmd := model.inputController().flushQueuedInputs(queueDrainOne)
+	model.queueInput(second)
+	for _, msg := range collectCmdMessages(t, cmd) {
+		model = updateUIModel(t, model, msg)
+	}
+	if len(model.injectedQueue) != 1 || len(model.queued) != 1 {
+		t.Fatalf("accepted queue state = injected=%+v queued=%+v", model.injectedQueue, model.queued)
+	}
+	if model.injectedQueue[0].submissionOrder.sequence >= model.queued[0].submissionOrder.sequence {
+		t.Fatalf(
+			"accepted Queue item lost original order: accepted=%d queued=%d",
+			model.injectedQueue[0].submissionOrder.sequence,
+			model.queued[0].submissionOrder.sequence,
+		)
+	}
+
+	requestID, err := runtimeids.ParseRuntimeClientRequestID(model.injectedQueue[0].ClientRequestID)
+	if err != nil {
+		t.Fatalf("parse accepted Queue request id: %v", err)
+	}
+	queueID, err := runtimeids.ParseQueueItemID(model.injectedQueue[0].ServerID)
+	if err != nil {
+		t.Fatalf("parse accepted Queue item id: %v", err)
+	}
+	testSetMainInput(model, draft)
+	model.setPendingInterrupt(true)
+	stopped := clientui.QueuedUserMessageFailureStopped
+	restoreCmd := model.applyTranscriptQueuedMessageState(clientui.TranscriptQueuedMessageState{
+		ClientRequestID: requestID,
+		QueueItemID:     queueID,
+		Status:          clientui.QueuedUserMessageFailed,
+		FailureReason:   &stopped,
+	})
+	for _, msg := range collectCmdMessages(t, restoreCmd) {
+		model = updateUIModel(t, model, msg)
+	}
+
+	want := strings.Join([]string{first, second, draft}, "\n\n")
+	if got := testMainInput(model); got != want {
+		t.Fatalf("restored composer = %q, want %q", got, want)
+	}
+}
+
 func TestDisconnectedQueuedFlushRestoresTextWithTransientStatus(t *testing.T) {
 	disableTransientStatusClearForTest(t)
 
@@ -321,12 +438,12 @@ func TestDisconnectedQueuedFlushRestoresTextWithTransientStatus(t *testing.T) {
 	model.setRuntimeActivityBusyForTest(true)
 	model.setRuntimeDisconnected(true)
 	model.queued = queuedInputsForTest("queued message")
-	model.pendingInjected = []clientui.QueuedUserMessage{{ID: "steer-1", Text: "accepted steer"}}
 	model.injectedQueue = []injectedRuntimeQueueItem{{
-		LocalID:  "steer-1",
-		ServerID: "steer-1",
-		Text:     "accepted steer",
-		State:    injectedRuntimeQueueEnqueued,
+		LocalID:         "steer-1",
+		ServerID:        "steer-1",
+		Text:            "accepted steer",
+		State:           injectedRuntimeQueueEnqueued,
+		submissionOrder: inputSubmissionOrder{sequence: 1},
 	}}
 	beforeActivity := model.activity
 
@@ -342,8 +459,8 @@ func TestDisconnectedQueuedFlushRestoresTextWithTransientStatus(t *testing.T) {
 	if len(updated.queued) != 0 {
 		t.Fatalf("queued items = %d, want 0", len(updated.queued))
 	}
-	if len(updated.pendingInjected) != 1 || len(updated.injectedQueue) != 1 {
-		t.Fatalf("accepted steer queue state = pending %d, queue %d; want one item", len(updated.pendingInjected), len(updated.injectedQueue))
+	if len(updated.injectedQueue) != 1 {
+		t.Fatalf("accepted steer queue state = %+v, want one item", updated.injectedQueue)
 	}
 	if updated.activity != beforeActivity {
 		t.Fatalf("activity = %v, want pre-failure activity %v", updated.activity, beforeActivity)

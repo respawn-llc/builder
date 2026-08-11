@@ -8,14 +8,15 @@ import (
 	"core/server/llm"
 	"core/server/runtime"
 	"core/server/runtimeactivity"
-	"core/server/runtimeops"
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/sessionruntime"
+	"core/server/tools"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/textutil"
+	"core/shared/toolspec"
 	"core/shared/transcript"
 )
 
@@ -31,7 +32,7 @@ type sessionStatusCountingResolver struct {
 	publishErr   error
 }
 
-func (r *sessionStatusCountingResolver) RuntimeReadModelSnapshot(context.Context, string, []clientui.RuntimeOperationRef) (runtimeactivity.ResponseSnapshot, error) {
+func (r *sessionStatusCountingResolver) RuntimeReadModelSnapshot(context.Context, string) (runtimeactivity.ResponseSnapshot, error) {
 	return runtimeactivity.ResponseSnapshot{}, nil
 }
 
@@ -90,7 +91,7 @@ type sequenceRuntimeActivityResolver struct {
 	calls     int
 }
 
-func (r *sequenceRuntimeActivityResolver) RuntimeReadModelSnapshot(context.Context, string, []clientui.RuntimeOperationRef) (runtimeactivity.ResponseSnapshot, error) {
+func (r *sequenceRuntimeActivityResolver) RuntimeReadModelSnapshot(context.Context, string) (runtimeactivity.ResponseSnapshot, error) {
 	if r.calls >= len(r.snapshots) {
 		return r.snapshots[len(r.snapshots)-1], nil
 	}
@@ -99,7 +100,7 @@ func (r *sequenceRuntimeActivityResolver) RuntimeReadModelSnapshot(context.Conte
 	return snapshot, nil
 }
 
-func TestServiceInterruptRetryReturnsFreshActivitySnapshot(t *testing.T) {
+func TestServiceInterruptRetryRejectsReadModelLivenessWithoutRuntime(t *testing.T) {
 	runningVersion := clientui.ReadModelVersion{Epoch: "epoch-1", Generation: 1, Sequence: 1}
 	idleVersion := clientui.ReadModelVersion{Epoch: "epoch-1", Generation: 1, Sequence: 2}
 	runID := mustRuntimeControlRunID(t)
@@ -115,7 +116,6 @@ func TestServiceInterruptRetryReturnsFreshActivitySnapshot(t *testing.T) {
 					StepID:     stepID,
 				},
 			},
-			InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{},
 		},
 		{
 			Version: idleVersion,
@@ -123,28 +123,24 @@ func TestServiceInterruptRetryReturnsFreshActivitySnapshot(t *testing.T) {
 				State:          clientui.RuntimeActivityRegisteredIdle,
 				QueueAccepting: true,
 			},
-			InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{},
 		},
 	}}
 	service := NewService(sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})).WithRuntimeActivityResolver(resolver)
 	req := serverapi.RuntimeInterruptRequest{ClientRequestID: "interrupt-retry", SessionID: "018fdd67-89ab-4cde-8123-456789abcdef"}
 
 	first, err := service.Interrupt(context.Background(), req)
-	if err != nil {
-		t.Fatalf("Interrupt first: %v", err)
+	if !errors.Is(err, serverapi.ErrRuntimeCommandNotAccepted) {
+		t.Fatalf("Interrupt first error = %v, want not accepted", err)
 	}
 	second, err := service.Interrupt(context.Background(), req)
-	if err != nil {
-		t.Fatalf("Interrupt retry: %v", err)
+	if !errors.Is(err, serverapi.ErrRuntimeCommandNotAccepted) {
+		t.Fatalf("Interrupt retry error = %v, want not accepted", err)
 	}
-	if !first.Activity.ActiveForControl() {
-		t.Fatalf("first activity = %+v, want active", first.Activity)
+	if first.Activity.ActiveForControl() || second.Activity.ActiveForControl() {
+		t.Fatalf("rejected Interrupt activities = %+v/%+v, want zero values", first.Activity, second.Activity)
 	}
-	if second.Activity.ActiveForControl() || second.Version != idleVersion {
-		t.Fatalf("retry activity/version = %+v/%+v, want fresh idle %+v", second.Activity, second.Version, idleVersion)
-	}
-	if resolver.calls != 2 {
-		t.Fatalf("snapshot calls = %d, want fresh composition on retry", resolver.calls)
+	if resolver.calls != 0 {
+		t.Fatalf("snapshot calls = %d, want exact authority rejection before read-model composition", resolver.calls)
 	}
 }
 
@@ -243,18 +239,75 @@ func TestServiceCommittedControlObserverErrorIsMemoized(t *testing.T) {
 	}
 }
 
+func TestServiceRejectedCompactionHasNoVisibleStatus(t *testing.T) {
+	store, engine, _, _ := newRuntimeControlCompactionFixture(t)
+	if _, err := engine.CompactContextWithAcceptance(context.Background(), "", func(func() (bool, error)) (bool, error) {
+		return false, nil
+	}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("CompactContextWithAcceptance error = %v, want context canceled", err)
+	}
+	if got := len(localEntryEvents(t, store)); got != 0 {
+		t.Fatalf("rejected compaction visible failure entries = %d, want 0", got)
+	}
+}
+
+type acceptedErrorRuntimeControlClient struct {
+	runtimeControlFakeClient
+	err error
+}
+
+func (c *acceptedErrorRuntimeControlClient) Generate(context.Context, llm.Request) (llm.Response, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.calls++
+	return llm.Response{}, c.err
+}
+
+func TestServiceSubmitUserTurnReplaysAcceptedError(t *testing.T) {
+	acceptedErr := &llm.APIStatusError{StatusCode: 400, Body: "model failed after input acceptance"}
+	client := &acceptedErrorRuntimeControlClient{err: acceptedErr}
+	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
+	request := runtimeControlUserTurnRequest(store, "accepted-error", "accepted once")
+
+	for attempt := 0; attempt < 2; attempt++ {
+		if _, err := service.SubmitUserTurn(context.Background(), request); !errors.Is(err, acceptedErr) || errors.Is(err, serverapi.ErrRuntimeCommandNotAccepted) {
+			t.Fatalf("SubmitUserTurn attempt %d error = %v, want accepted model error", attempt+1, err)
+		}
+	}
+	if client.calls != 1 || countUserMessagesWithContent(t, store, "accepted once") != 1 {
+		t.Fatalf("generate calls/user messages = %d/%d, want 1/1", client.calls, countUserMessagesWithContent(t, store, "accepted once"))
+	}
+}
+
+func TestServiceSubmitUserShellCommandReplaysCommittedObserverError(t *testing.T) {
+	observerErr := errors.New("shell acceptance observer failed")
+	gate := sessiontest.NewPersistenceGate(runtimeControlTestSessionPersistence)
+	registry := tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeShellHandler{}})
+	store, _, service := newRuntimeControlTestService(t, nil, registry, runtime.Config{}, session.WithPersistenceObserver(gate))
+	if err := service.SubmitUserShellCommand(context.Background(), runtimeControlShellCommandRequest(store, "seed-shell", "true")); err != nil {
+		t.Fatalf("seed shell metadata: %v", err)
+	}
+	request := runtimeControlShellCommandRequest(store, "accepted-shell-error", "false")
+	gate.FailNext(observerErr)
+
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := service.SubmitUserShellCommand(context.Background(), request); !errors.Is(err, observerErr) || errors.Is(err, serverapi.ErrRuntimeCommandNotAccepted) {
+			t.Fatalf("SubmitUserShellCommand attempt %d error = %v, want committed observer error", attempt+1, err)
+		}
+	}
+	if got := countDirectShellCommandMessages(t, store, "false"); got != 1 {
+		t.Fatalf("direct shell message count = %d, want 1", got)
+	}
+}
+
 func TestServiceCompactionConsumesCommittedObserverError(t *testing.T) {
 	observerErr := errors.New("history replacement observer failed")
 	gate := sessiontest.NewPersistenceGate(runtimeControlTestSessionPersistence)
 	store, _, client, service := newRuntimeControlCompactionFixture(t, session.WithPersistenceObserver(gate))
-	operations := runtimeops.NewCoordinator()
-	service.WithOperationCoordinator(operations)
-	ref := runtimeControlOperationRef(clientui.RuntimeOperationKindCompact)
 	request := serverapi.RuntimeCompactContextRequest{
-		ClientRequestID: ref.ClientRequestID.String(),
+		ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
 		SessionID:       store.Meta().SessionID,
 		Args:            "compact now",
-		OperationRef:    ref,
 	}
 	gate.FailNext(observerErr)
 	if err := service.CompactContext(context.Background(), request); !errors.Is(err, observerErr) {
@@ -269,20 +322,23 @@ func TestServiceCompactionConsumesCommittedObserverError(t *testing.T) {
 	if got := countEventsByKind(t, store, "history_replaced"); got != 1 {
 		t.Fatalf("history_replaced event count = %d, want 1", got)
 	}
-	snapshot := runtimeControlFeedSnapshot(t, operations, store.Meta().SessionID, []clientui.RuntimeOperationRef{ref})
-	if len(snapshot.Operations) != 1 || snapshot.Operations[0].State != clientui.RuntimeInputReconciliationCommitted {
-		t.Fatalf("compaction reconciliation = %+v, want committed", snapshot)
-	}
 }
 
-func TestServiceSubmitUserTurnRunsParentOwnedPreSubmitCompaction(t *testing.T) {
-	store, engine, client, service := newRuntimeControlCompactionFixture(t)
+func TestServiceSubmitUserTurnContinuesAfterAcceptedPreSubmitCompactionError(t *testing.T) {
+	observerErr := errors.New("pre-submit history replacement observer failed")
+	gate := sessiontest.NewPersistenceGate(runtimeControlTestSessionPersistence)
+	store, engine, client, service := newRuntimeControlCompactionFixture(t, session.WithPersistenceObserver(gate))
 	if shouldCompact, compactErr := engine.ShouldCompactBeforeUserMessage(context.Background(), "after compaction"); !shouldCompact || compactErr != nil {
 		t.Fatalf("pre-submit compaction precondition = (%t, %v), usage=%+v", shouldCompact, compactErr, engine.ContextUsage())
 	}
-	resp, err := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "parent-compaction", "after compaction"))
-	if err != nil || !resp.Compacted || resp.Message != "done" {
-		t.Fatalf("SubmitUserTurn = (%+v, %v), usage=%+v, want compacted assistant response", resp, err, engine.ContextUsage())
+	request := runtimeControlUserTurnRequest(store, "parent-compaction", "after compaction")
+	gate.FailNext(observerErr)
+	for attempt := 0; attempt < 2; attempt++ {
+		resp, err := service.SubmitUserTurn(context.Background(), request)
+		if !errors.Is(err, observerErr) || errors.Is(err, serverapi.ErrRuntimeCommandNotAccepted) ||
+			!resp.Compacted || resp.Message == nil || *resp.Message != "done" {
+			t.Fatalf("SubmitUserTurn attempt %d = (%+v, %v), want accepted compacted response and observer error", attempt+1, resp, err)
+		}
 	}
 	if client.compactionCalls != 1 ||
 		countEventsByKind(t, store, "history_replaced") != 1 ||
@@ -443,22 +499,6 @@ func TestServiceRecordPromptHistoryDedupesSuccessfulRetry(t *testing.T) {
 	if got := countPromptHistoryEvents(t, store, "/resume"); got != 1 {
 		t.Fatalf("prompt history count = %d, want 1", got)
 	}
-}
-
-func runtimeControlOperationRef(kind clientui.RuntimeOperationKind) clientui.RuntimeOperationRef {
-	return clientui.RuntimeOperationRef{
-		Kind:            kind,
-		ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
-	}
-}
-
-func runtimeControlFeedSnapshot(t *testing.T, operations *runtimeops.Coordinator, sessionID string, refs []clientui.RuntimeOperationRef) clientui.RuntimeInputReconciliationSnapshot {
-	t.Helper()
-	snapshot, err := operations.FeedSnapshot(sessionID, refs)
-	if err != nil {
-		t.Fatalf("FeedSnapshot: %v", err)
-	}
-	return snapshot
 }
 
 func mustRuntimeControlRunID(t *testing.T) runtimeids.RunID {

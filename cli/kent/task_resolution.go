@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"core/shared/apicontract"
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -39,37 +40,51 @@ func classifyWorkflowTaskSelector(ref string) (workflowTaskSelector, error) {
 	return workflowTaskSelector{kind: workflowTaskSelectorShortID, value: trimmed}, nil
 }
 
-func workflowTaskList(ctx context.Context, remote workflowCommandRemote, req serverapi.WorkflowTaskListRequest) (serverapi.WorkflowTaskListResponse, error) {
+func workflowTaskList(ctx context.Context, remote apicontract.WorkflowService, req serverapi.WorkflowTaskListRequest) (serverapi.WorkflowTaskListResponse, error) {
 	rpcCtx, cancel := context.WithTimeout(ctx, workflowCommandTimeout)
 	defer cancel()
 	return remote.ListWorkflowTasks(rpcCtx, req)
 }
 
-func resolveWorkflowTaskID(ctx context.Context, cfg config.App, remote workflowCommandRemote, projectRef string, ref string) (string, error) {
-	task, err := resolveWorkflowTask(ctx, cfg, remote, projectRef, ref)
+func resolveWorkflowTaskID(
+	ctx context.Context,
+	cfg config.App,
+	projects apicontract.ProjectViewService,
+	workflows apicontract.WorkflowService,
+	projectRef string,
+	ref string,
+) (string, error) {
+	task, err := resolveWorkflowTask(ctx, cfg, projects, workflows, projectRef, ref)
 	if err != nil {
 		return "", err
 	}
 	return task.Summary.ID, nil
 }
 
-func resolveWorkflowTask(ctx context.Context, cfg config.App, remote workflowCommandRemote, projectRef string, ref string) (serverapi.WorkflowTaskDetail, error) {
+func resolveWorkflowTask(
+	ctx context.Context,
+	cfg config.App,
+	projects apicontract.ProjectViewService,
+	workflows apicontract.WorkflowService,
+	projectRef string,
+	ref string,
+) (serverapi.WorkflowTaskDetail, error) {
 	selector, err := classifyWorkflowTaskSelector(ref)
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
 	}
 	if selector.kind == workflowTaskSelectorTaskID {
-		detail, err := getWorkflowTaskByID(ctx, remote, selector.value)
+		detail, err := getWorkflowTaskByID(ctx, workflows, selector.value)
 		if err != nil && isWorkflowTaskNotFound(err) {
 			return serverapi.WorkflowTaskDetail{}, workflowTaskNotFoundError{err}
 		}
 		return detail, err
 	}
-	projectID, err := resolveWorkflowProjectID(ctx, cfg, remote, projectRef)
+	projectID, err := resolveWorkflowProjectID(ctx, cfg, projects, projectRef)
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
 	}
-	detail, err := getWorkflowTaskByProjectShortID(ctx, remote, projectID, selector.value)
+	detail, err := getWorkflowTaskByProjectShortID(ctx, workflows, projectID, selector.value)
 	if err != nil {
 		if errors.Is(err, serverapi.ErrWorkflowTaskNotFound) || errors.Is(err, sql.ErrNoRows) {
 			return serverapi.WorkflowTaskDetail{}, workflowTaskNotFoundError{fmt.Errorf("task %q not found in project %s", selector.value, projectID)}
@@ -83,7 +98,7 @@ func isWorkflowTaskNotFound(err error) bool {
 	return errors.Is(err, sql.ErrNoRows) || errors.Is(err, serverapi.ErrWorkflowTaskNotFound)
 }
 
-func getWorkflowTaskByID(ctx context.Context, remote workflowCommandRemote, taskID string) (serverapi.WorkflowTaskDetail, error) {
+func getWorkflowTaskByID(ctx context.Context, remote apicontract.WorkflowService, taskID string) (serverapi.WorkflowTaskDetail, error) {
 	rpcCtx, cancel := context.WithTimeout(ctx, workflowCommandTimeout)
 	defer cancel()
 	resp, err := remote.GetWorkflowTask(rpcCtx, serverapi.WorkflowTaskGetRequest{TaskID: taskID})
@@ -93,7 +108,7 @@ func getWorkflowTaskByID(ctx context.Context, remote workflowCommandRemote, task
 	return resp.Task, nil
 }
 
-func getWorkflowTaskByProjectShortID(ctx context.Context, remote workflowCommandRemote, projectID string, shortID string) (serverapi.WorkflowTaskDetail, error) {
+func getWorkflowTaskByProjectShortID(ctx context.Context, remote apicontract.WorkflowService, projectID string, shortID string) (serverapi.WorkflowTaskDetail, error) {
 	rpcCtx, cancel := context.WithTimeout(ctx, workflowCommandTimeout)
 	defer cancel()
 	resp, err := remote.GetWorkflowTask(rpcCtx, serverapi.WorkflowTaskGetRequest{ProjectID: projectID, ShortID: shortID})
@@ -103,7 +118,7 @@ func getWorkflowTaskByProjectShortID(ctx context.Context, remote workflowCommand
 	return resp.Task, nil
 }
 
-func getWorkflowTaskByShortID(ctx context.Context, remote workflowCommandRemote, shortID string) (serverapi.WorkflowTaskDetail, error) {
+func getWorkflowTaskByShortID(ctx context.Context, remote apicontract.WorkflowService, shortID string) (serverapi.WorkflowTaskDetail, error) {
 	rpcCtx, cancel := context.WithTimeout(ctx, workflowCommandTimeout)
 	defer cancel()
 	resp, err := remote.GetWorkflowTask(rpcCtx, serverapi.WorkflowTaskGetRequest{ShortID: shortID})

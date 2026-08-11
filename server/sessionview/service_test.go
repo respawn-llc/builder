@@ -10,11 +10,9 @@ import (
 	"time"
 
 	"core/server/llm"
-	"core/server/runtimeops"
 	"core/server/session"
 	"core/shared/clientui"
 	"core/shared/config"
-	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/transcript"
 )
@@ -176,7 +174,8 @@ func TestServiceGetSessionMainViewFallsBackToDurableSessionState(t *testing.T) {
 	}
 	if resp.MainView.Status.ParentAgentSessionID == nil || resp.MainView.Status.ParentAgentSessionID.String() != parentSessionID ||
 		resp.MainView.Status.NavigationTargetSessionID == nil || resp.MainView.Status.NavigationTargetSessionID.String() != parentSessionID ||
-		resp.MainView.Status.LastCommittedAssistantFinalAnswer != "final answer" {
+		resp.MainView.Status.LastCommittedAssistantFinalAnswer == nil ||
+		*resp.MainView.Status.LastCommittedAssistantFinalAnswer != "final answer" {
 		t.Fatalf("unexpected dormant status: %+v", resp.MainView.Status)
 	}
 	if resp.MainView.Status.Goal == nil || resp.MainView.Status.Goal.Status != clientui.RuntimeGoalStatusActive || resp.MainView.Status.Goal.Objective != "ship dormant goal" {
@@ -207,29 +206,6 @@ func TestServiceGetSessionMainViewIncludesExecutionTarget(t *testing.T) {
 	}
 	if resp.MainView.Session.ExecutionTarget.EffectiveWorkdir != dir {
 		t.Fatalf("effective workdir = %q, want %q", resp.MainView.Session.ExecutionTarget.EffectiveWorkdir, dir)
-	}
-}
-
-func TestServiceGetSessionMainViewReconcilesPendingOperationRefs(t *testing.T) {
-	store := newSessionViewStore(t, t.TempDir(), "ws", t.TempDir())
-	ref := clientui.RuntimeOperationRef{
-		Kind:            clientui.RuntimeOperationKindSubmit,
-		ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
-	}
-	operations := runtimeops.NewCoordinator()
-	operations.RecordCommitted(store.Meta().SessionID, ref)
-	response, err := NewService(newTestSessionResolver(store), nil, nil, nil).
-		WithOperationCoordinator(operations).
-		GetSessionMainView(t.Context(), serverapi.SessionMainViewRequest{
-			SessionID:            store.Meta().SessionID,
-			PendingOperationRefs: []clientui.RuntimeOperationRef{ref},
-		})
-	if err != nil {
-		t.Fatalf("GetSessionMainView: %v", err)
-	}
-	got := response.MainView.InputReconciliation.Operations
-	if len(got) != 1 || got[0].Operation != ref || got[0].State != clientui.RuntimeInputReconciliationCommitted {
-		t.Fatalf("input reconciliation = %+v, want committed ref %+v", got, ref)
 	}
 }
 
@@ -320,8 +296,8 @@ func TestServiceDormantHistoryReplacementStartsNewTranscriptSegment(t *testing.T
 	if err != nil {
 		t.Fatalf("get session main view: %v", err)
 	}
-	if got := mainViewResp.MainView.Status.LastCommittedAssistantFinalAnswer; got != "" {
-		t.Fatalf("last committed assistant final answer = %q, want empty because later user message supersedes it", got)
+	if got := mainViewResp.MainView.Status.LastCommittedAssistantFinalAnswer; got != nil {
+		t.Fatalf("last committed assistant final answer = %q, want absence because later user message supersedes it", *got)
 	}
 }
 

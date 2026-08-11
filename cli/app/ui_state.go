@@ -11,7 +11,6 @@ import (
 	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
-	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/google/uuid"
@@ -69,24 +68,22 @@ type uiInputFeatureState struct {
 	// UI-side post-turn input queue. It may contain slash commands, shell
 	// commands, and other client-only actions; server queues only runtime
 	// injected user work.
-	queued                   []queuedInputItem
-	compactionOrigin         uiCompactionOrigin
-	pendingRuntimeOperations []clientui.RuntimeOperationRef
-	submitToken              uint64
-	activeSubmit             activeSubmitState
-	recoveredDraftBuffers    []serverapi.SessionDraftRecoveryBuffer
+	queued           []queuedInputItem
+	compactionOrigin uiCompactionOrigin
+	submitToken      uint64
+	activeSubmit     activeSubmitState
 
-	pendingInjected    []clientui.QueuedUserMessage
-	injectedQueue      []injectedRuntimeQueueItem
-	injectedQueueToken uint64
-	interruptLifecycle uiInterruptLifecycle
-	currentRunID       string
-	currentStepID      string
-	interruptRunID     string
-	interruptStepID    string
-	interruptPreActive bool
-	completedRunID     string
-	completedStepID    string
+	injectedQueue               []injectedRuntimeQueueItem
+	injectedQueueToken          uint64
+	pendingInputSubmissionOrder uint64
+	interruptLifecycle          uiInterruptLifecycle
+	currentRunID                string
+	currentStepID               string
+	interruptRunID              string
+	interruptStepID             string
+	interruptPreActive          bool
+	completedRunID              string
+	completedStepID             string
 
 	modelName                 string
 	configuredModelName       string

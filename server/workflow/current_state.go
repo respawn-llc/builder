@@ -1,11 +1,15 @@
 package workflow
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"core/shared/protocol"
 	"core/shared/runtimeids"
+	"core/shared/worktreecontract"
 	"github.com/google/uuid"
 )
 
@@ -131,7 +135,74 @@ type CurrentNodeInterruptionDetail struct {
 	Code                                 string
 	Fields                               map[string]string
 	ConfiguredExecutionTargetUnavailable *ConfiguredExecutionTargetUnavailable `json:"configured_execution_target_unavailable,omitempty"`
+	SetupRecovery                        *CurrentNodeSetupRecoveryDetail       `json:"setup_recovery,omitempty"`
 }
+
+func DecodeCurrentNodeInterruptionDetail(raw string) (CurrentNodeInterruptionDetail, error) {
+	var detail CurrentNodeInterruptionDetail
+	if err := json.Unmarshal([]byte(raw), &detail); err != nil {
+		return CurrentNodeInterruptionDetail{}, fmt.Errorf("decode current node interruption detail: %w", err)
+	}
+	return detail, nil
+}
+
+func (d *CurrentNodeInterruptionDetail) UnmarshalJSON(data []byte) error {
+	type wire CurrentNodeInterruptionDetail
+	var decoded wire
+	if err := protocol.DecodeStrictJSON(data, &decoded); err != nil {
+		return err
+	}
+	*d = CurrentNodeInterruptionDetail(decoded)
+	return d.Validate()
+}
+
+func (d CurrentNodeInterruptionDetail) Validate() error {
+	for name := range d.Fields {
+		if strings.TrimSpace(name) == "" {
+			return errors.New("current node interruption detail field name is required")
+		}
+	}
+	if d.ConfiguredExecutionTargetUnavailable != nil {
+		if err := d.ConfiguredExecutionTargetUnavailable.Validate(); err != nil {
+			return err
+		}
+	}
+	if d.SetupRecovery != nil {
+		if _, duplicated := d.Fields[CurrentNodeInterruptionDiagnosticField]; duplicated {
+			return errors.New("setup recovery diagnostic must not be duplicated in interruption fields")
+		}
+		return d.SetupRecovery.Validate()
+	}
+	return nil
+}
+
+func (d CurrentNodeInterruptionDetail) SetupOperationID() (*uuid.UUID, error) {
+	if d.SetupRecovery == nil {
+		return nil, nil
+	}
+	if err := d.SetupRecovery.Validate(); err != nil {
+		return nil, err
+	}
+	value := d.SetupRecovery.SetupOperationID
+	return &value, nil
+}
+
+type CurrentNodeSetupRecoveryDetail = worktreecontract.SetupRecoveryDetail[uuid.UUID, ExecutionTargetSelection]
+
+type CurrentNodeSetupRecoveryCause = worktreecontract.SetupFailureKind
+
+type CurrentNodeSetupRequirement = worktreecontract.SetupRequirement
+
+const (
+	CurrentNodeSetupRecoveryCauseProcessExit       = worktreecontract.SetupFailureProcessExit
+	CurrentNodeSetupRecoveryCauseTimeout           = worktreecontract.SetupFailureTimeout
+	CurrentNodeSetupRecoveryCauseTargetPreparation = worktreecontract.SetupFailureTargetPreparation
+	CurrentNodeSetupRecoveryCauseOperational       = worktreecontract.SetupFailureOperational
+	CurrentNodeSetupRequirementRequired            = worktreecontract.SetupRequirementRequired
+	CurrentNodeSetupRequirementAlreadyCompleted    = worktreecontract.SetupRequirementAlreadyCompleted
+)
+
+type CurrentNodeRetainedWorktree = worktreecontract.RetainedWorktree
 
 const CurrentNodeInterruptionDiagnosticField = "error"
 
@@ -147,6 +218,13 @@ func NewCurrentNodeInterruptionDetail(code string, diagnostic error) CurrentNode
 }
 
 func (d CurrentNodeInterruptionDetail) Diagnostic() *string {
+	if d.SetupRecovery != nil {
+		value := d.SetupRecovery.Diagnostic
+		if strings.TrimSpace(value) == "" {
+			return nil
+		}
+		return &value
+	}
 	if d.Fields == nil {
 		return nil
 	}

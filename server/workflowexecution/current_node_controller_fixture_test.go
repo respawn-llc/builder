@@ -19,6 +19,7 @@ import (
 	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
+	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/sessioncontract"
@@ -206,8 +207,22 @@ func startCurrentNodeForControllerTest(
 		}},
 	}}
 	store.mu.Unlock()
-	_, err := controller.StartTask(ctx, reference.TaskID, func(context.Context) error { return nil })
+	_, err := controller.StartTask(
+		ctx,
+		reference.TaskID,
+		testTaskPreparation(func(context.Context) error { return nil }),
+		noOpTaskPreparationFinalizer,
+	)
 	return err
+}
+
+func noOpTaskPreparationFinalizer(TaskPreparationFinalization) {}
+
+func testTaskPreparation(prepare func(context.Context) error) TaskStartPreparation {
+	return TaskStartPreparation{
+		Prepare: prepare,
+		Commit:  func(context.Context) error { return nil },
+	}
 }
 
 func currentNodeReferenceForControllerTest(t *testing.T, taskID string, nodeID string) workflow.CurrentNodeReference {
@@ -219,25 +234,23 @@ func currentNodeReferenceForControllerTest(t *testing.T, taskID string, nodeID s
 	return reference
 }
 
-func singleLiveScope(t *testing.T, controller *CurrentNodeController, reference workflow.CurrentNodeReference) runtimeids.ExecutionScopeID {
+func singleLiveScope(t *testing.T, authority *sessionruntime.Authority, reference workflow.CurrentNodeReference) runtimeids.ExecutionScopeID {
 	t.Helper()
-	snapshot := controller.Snapshot()
-	for _, scope := range snapshot.LiveScopes {
-		if scope.CurrentNode.Equal(reference) {
-			return scope.ScopeID
-		}
+	handle, live := authority.ExecutionByWorkflow(sessionruntime.WorkflowExecutionRef{
+		ProjectID: "project-test", WorkflowID: currentNodeControllerTestWorkflowID, CurrentNode: reference,
+	})
+	if live {
+		return handle.Scope().ID()
 	}
-	t.Fatalf("snapshot %+v has no live scope for %v", snapshot, reference)
+	t.Fatalf("no live execution for %v", reference)
 	return runtimeids.ExecutionScopeID{}
 }
 
-func hasLiveCurrentNode(snapshot CurrentNodeExecutionSnapshot, reference workflow.CurrentNodeReference) bool {
-	for _, live := range snapshot.LiveScopes {
-		if live.CurrentNode.Equal(reference) {
-			return true
-		}
-	}
-	return false
+func hasLiveCurrentNode(authority *sessionruntime.Authority, reference workflow.CurrentNodeReference) bool {
+	_, live := authority.ExecutionByWorkflow(sessionruntime.WorkflowExecutionRef{
+		ProjectID: "project-test", WorkflowID: currentNodeControllerTestWorkflowID, CurrentNode: reference,
+	})
+	return live
 }
 
 func waitForRunningCurrentNode(
@@ -262,15 +275,6 @@ func waitForRunningCurrentNode(
 	}, "current node %v did not begin running", reference)
 }
 
-func hasAutomaticCurrentNodeIntent(snapshot CurrentNodeExecutionSnapshot, reference workflow.CurrentNodeReference) bool {
-	for _, intent := range snapshot.AutomaticIntents {
-		if intent.CurrentNode.Equal(reference) {
-			return true
-		}
-	}
-	return false
-}
-
 var currentNodeControllerTestWorkflowID = func() runtimeids.WorkflowID {
 	workflowID, err := runtimeids.ParseWorkflowID("550e8400-e29b-41d4-a716-446655440201")
 	if err != nil {
@@ -290,6 +294,7 @@ type currentNodeControllerStore struct {
 	resumed               []workflow.CurrentNodeReference
 	resumeErrors          map[workflow.CurrentNodeReferenceKey]error
 	resumeClassifications []workflowstore.CurrentNodeResumeClassification
+	preflightResumeCalls  int
 	interruptions         map[workflow.CurrentNodeReferenceKey]currentNodeInterruptionRecord
 	interruptionCalls     map[workflow.CurrentNodeReferenceKey]int
 	recovered             []workflow.CurrentNodeReference
@@ -371,6 +376,7 @@ func (s *currentNodeControllerStore) InterruptedExecutableCurrentNodes(context.C
 }
 
 func (s *currentNodeControllerStore) PreflightTaskResume(_ context.Context, _ workflow.TaskID) ([]workflowstore.CurrentNodeResumeClassification, error) {
+	s.preflightResumeCalls++
 	if len(s.resumeClassifications) > 0 {
 		return append([]workflowstore.CurrentNodeResumeClassification(nil), s.resumeClassifications...), nil
 	}
@@ -594,6 +600,30 @@ func currentNodeQuestionAnswer(answer string) askquestion.AskQuestionAnswer {
 	}
 }
 
+func (f currentNodeQuestionFixture) answerPromptBatch(
+	ctx context.Context,
+	pending currentNodePendingPrompt,
+	stepID string,
+	promptID string,
+	answer askquestion.AskQuestionAnswer,
+) (sessionruntime.PromptAnswerOutcome, error) {
+	parsedStepID, err := runtimeids.ParseStepID(stepID)
+	if err != nil {
+		return "", err
+	}
+	results, err := f.authority.ResolvePromptBatch(ctx, pending.sessionID, parsedStepID, []sessionruntime.PromptAnswerCommand{{
+		PromptID: clientui.PromptID(promptID),
+		Payload:  sessionruntime.PromptQuestionAnswerCommand{Answer: answer},
+	}})
+	if err != nil {
+		return "", err
+	}
+	if len(results) != 1 {
+		return "", errors.New("one prompt answer result is required")
+	}
+	return results[0].Outcome, nil
+}
+
 type currentNodeQuestionLLMClient struct{}
 
 func (currentNodeQuestionLLMClient) Generate(context.Context, llm.Request) (llm.Response, error) {
@@ -606,20 +636,6 @@ func (currentNodeQuestionLLMClient) ProviderCapabilities(context.Context) (llm.P
 		SupportsResponsesAPI: true,
 		IsOpenAIFirstParty:   true,
 	}, nil
-}
-
-func (f currentNodeQuestionFixture) answerWorkflowQuestion(
-	ctx context.Context,
-	taskID workflow.TaskID,
-	askID string,
-	resolution askquestion.AskQuestionResolution,
-	submitErr error,
-) error {
-	acceptance, err := f.controller.AcceptWorkflowQuestion(ctx, taskID, askID, resolution, submitErr)
-	if err != nil {
-		return err
-	}
-	return acceptance.AwaitSuccessor(ctx)
 }
 
 func newCurrentNodeQuestionFixture(t *testing.T) currentNodeQuestionFixture {
@@ -748,17 +764,35 @@ func (f currentNodeQuestionFixture) startQuestionExecution(
 func (f currentNodeQuestionFixture) waitForPendingPrompt(t *testing.T, taskID workflow.TaskID, askID string) {
 	t.Helper()
 	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		_, err := f.authority.ResolvePendingWorkflowPrompt(taskID, askID)
-		return err == nil || errors.Is(err, sessionruntime.ErrWorkflowPromptAmbiguous)
+		return f.pendingPromptCount(taskID, askID) >= 1
 	}, "timed out waiting for workflow prompt %q on task %q", askID, taskID)
 }
 
 func (f currentNodeQuestionFixture) waitForAmbiguousPendingPrompt(t *testing.T, taskID workflow.TaskID, askID string) {
 	t.Helper()
 	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		_, err := f.authority.ResolvePendingWorkflowPrompt(taskID, askID)
-		return errors.Is(err, sessionruntime.ErrWorkflowPromptAmbiguous)
+		return f.pendingPromptCount(taskID, askID) >= 2
 	}, "timed out waiting for ambiguous workflow prompt %q on task %q", askID, taskID)
+}
+
+func (f currentNodeQuestionFixture) pendingPromptCount(taskID workflow.TaskID, promptID string) int {
+	snapshots, err := f.authority.CurrentWorkflowTaskExecutionSnapshots()
+	if err != nil {
+		return 0
+	}
+	snapshot, exists := snapshots[taskID]
+	if !exists {
+		return 0
+	}
+	count := 0
+	for _, execution := range snapshot.Executions {
+		for _, pending := range execution.PendingPrompts {
+			if pending.ID == promptID {
+				count++
+			}
+		}
+	}
+	return count
 }
 
 type controlledScriptRunner struct {

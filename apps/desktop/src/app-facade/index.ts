@@ -1,10 +1,12 @@
 export type { AppLogger, AppLogLevel } from "./logging";
+export * from "./boardQueries";
 export * from "./browserStorage";
 export * from "./formatters";
 export * from "./nativeHooks";
 export * from "./navigation";
 export * from "./navigationTransitions";
 export * from "./projectDeletionEvents";
+export * from "./projectCatalogQueries";
 export * from "./projectRoutePersistence";
 export * from "./queryKeys";
 export * from "./services";
@@ -31,3 +33,4 @@ export * from "./windowChromeTitle";
 export * from "./WindowChromeTitleProvider";
 export * from "./TaskSearchMemoryProvider";
 export * from "./workflowProjectEvents";
+export * from "./worktreeQueries";

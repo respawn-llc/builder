@@ -3,6 +3,8 @@ package serverapi
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
+	"reflect"
 	"strings"
 
 	"core/shared/clientui"
@@ -29,12 +31,12 @@ const (
 type WorktreeGitFacts struct {
 	CanonicalRoot  string  `json:"canonical_root"`
 	HeadObject     string  `json:"head_object"`
-	BranchRef      *string `json:"branch_ref,omitempty"`
-	BranchName     *string `json:"branch_name,omitempty"`
+	BranchRef      *string `json:"branch_ref"`
+	BranchName     *string `json:"branch_name"`
 	Detached       bool    `json:"detached"`
 	Bare           bool    `json:"bare"`
-	LockedReason   *string `json:"locked_reason,omitempty"`
-	PrunableReason *string `json:"prunable_reason,omitempty"`
+	LockedReason   *string `json:"locked_reason"`
+	PrunableReason *string `json:"prunable_reason"`
 	IsMain         bool    `json:"is_main"`
 	PathAvailable  bool    `json:"path_available"`
 }
@@ -45,7 +47,7 @@ type WorktreeKentFacts struct {
 	DisplayName     string  `json:"display_name"`
 	Managed         bool    `json:"managed"`
 	CreatedBranch   bool    `json:"created_branch"`
-	OriginSessionID *string `json:"origin_session_id,omitempty"`
+	OriginSessionID *string `json:"origin_session_id"`
 }
 
 type WorktreePathAvailability string
@@ -101,13 +103,45 @@ func (entry WorktreeTopologyEntry) DeletionSelector() (string, error) {
 }
 
 type WorktreeListProjection struct {
-	Selector  string `json:"selector"`
-	IsCurrent bool   `json:"is_current"`
+	Selector         string                          `json:"selector"`
+	IsCurrent        bool                            `json:"is_current"`
+	Switch           *WorktreeSwitchOperation        `json:"switch,omitempty"`
+	DeletePreview    *WorktreeDeletePreviewOperation `json:"delete_preview,omitempty"`
+	FallbackIdentity *string                         `json:"fallback_identity,omitempty"`
 }
 
 type WorktreeListEntry struct {
 	Topology   WorktreeTopologyEntry  `json:"topology"`
 	Projection WorktreeListProjection `json:"projection"`
+}
+
+type WorktreeSwitchOperationKind string
+
+const (
+	WorktreeSwitchOperationEnter     WorktreeSwitchOperationKind = "enter"
+	WorktreeSwitchOperationLeaveMain WorktreeSwitchOperationKind = "leave"
+)
+
+type WorktreeSwitchOperation struct {
+	Kind     WorktreeSwitchOperationKind `json:"kind"`
+	Selector *string                     `json:"selector,omitempty"`
+}
+
+type WorktreeDeletePreviewOperation struct {
+	Selector string `json:"selector"`
+}
+
+func ProjectWorktreeListEntry(
+	topology WorktreeTopologyEntry,
+	selector string,
+	isCurrent bool,
+	sessionScoped bool,
+) (WorktreeListEntry, error) {
+	projection, err := projectWorktreeListProjection(topology, selector, isCurrent, sessionScoped)
+	if err != nil {
+		return WorktreeListEntry{}, err
+	}
+	return WorktreeListEntry{Topology: topology, Projection: projection}, nil
 }
 
 type WorktreeStatusProblemKind string
@@ -186,8 +220,11 @@ type WorktreeSelectorPreviewRequest struct {
 }
 
 type WorktreeSelectorPreviewResponse struct {
-	Worktree WorktreeTopologyEntry `json:"worktree"`
-	Selector string                `json:"selector"`
+	Worktree WorktreeListEntry `json:"worktree"`
+}
+
+func (response WorktreeSelectorPreviewResponse) Validate() error {
+	return response.Worktree.validateProjection(true)
 }
 
 type WorktreeDeletePreviewRequest struct {
@@ -340,6 +377,9 @@ func (p WorktreeListProjection) Validate() error {
 	if strings.TrimSpace(p.Selector) == "" {
 		return errors.New("worktree list selector is required")
 	}
+	if p.FallbackIdentity != nil && strings.TrimSpace(*p.FallbackIdentity) == "" {
+		return errors.New("worktree fallback_identity must not be empty")
+	}
 	return nil
 }
 
@@ -348,6 +388,64 @@ func (entry WorktreeListEntry) Validate() error {
 		return err
 	}
 	return entry.Projection.Validate()
+}
+
+// IsCurrent remains a server-owned fact; deriving it here would duplicate
+// server/worktree target matching inside the wire-contract validator.
+func (entry WorktreeListEntry) validateProjection(sessionScoped bool) error {
+	expected, err := projectWorktreeListProjection(
+		entry.Topology,
+		entry.Projection.Selector,
+		entry.Projection.IsCurrent && sessionScoped,
+		sessionScoped,
+	)
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(entry.Projection, expected) {
+		return errors.New("worktree projection contradicts topology or scope")
+	}
+	return nil
+}
+
+func projectWorktreeListProjection(
+	topology WorktreeTopologyEntry,
+	selector string,
+	isCurrent bool,
+	sessionScoped bool,
+) (WorktreeListProjection, error) {
+	if err := topology.Validate(); err != nil {
+		return WorktreeListProjection{}, err
+	}
+	projection := WorktreeListProjection{Selector: selector, IsCurrent: isCurrent}
+	var git *WorktreeGitFacts
+	switch topology.Variant {
+	case WorktreeTopologyVariantRegistered:
+		git = &topology.Registered.Git
+	case WorktreeTopologyVariantExternal:
+		git = &topology.External.Git
+		if git.BranchName == nil {
+			value := filepath.Base(git.CanonicalRoot)
+			projection.FallbackIdentity = &value
+		}
+	}
+	if !sessionScoped {
+		projection.IsCurrent = false
+		return projection, projection.Validate()
+	}
+	if git != nil && !isCurrent && git.PathAvailable {
+		projection.Switch = &WorktreeSwitchOperation{Kind: WorktreeSwitchOperationLeaveMain}
+		if !git.IsMain {
+			projection.Switch.Kind = WorktreeSwitchOperationEnter
+			projection.Switch.Selector = &projection.Selector
+		}
+	}
+	if selector, err := topology.DeletionSelector(); err == nil {
+		projection.DeletePreview = &WorktreeDeletePreviewOperation{Selector: selector}
+	} else if !errors.Is(err, ErrWorktreeBlocked) {
+		return WorktreeListProjection{}, err
+	}
+	return projection, projection.Validate()
 }
 
 func (r WorktreeStatusRequest) Validate() error {
@@ -590,6 +688,10 @@ type WorktreeListResponse struct {
 	Worktrees []WorktreeListEntry             `json:"worktrees"`
 }
 
+func (response WorktreeListResponse) Validate() error {
+	return validateSessionWorktreeResponse(response.Target, response.Worktrees...)
+}
+
 type WorktreeWorkspaceListRequest struct {
 	ProjectID   string `json:"project_id"`
 	WorkspaceID string `json:"workspace_id"`
@@ -598,6 +700,29 @@ type WorktreeWorkspaceListRequest struct {
 type WorktreeWorkspaceListResponse struct {
 	WorkspaceID string              `json:"workspace_id"`
 	Worktrees   []WorktreeListEntry `json:"worktrees"`
+}
+
+func (response WorktreeWorkspaceListResponse) Validate() error {
+	if strings.TrimSpace(response.WorkspaceID) == "" {
+		return errors.New("workspace_id is required")
+	}
+	return validateWorktreeProjections(response.Worktrees, false)
+}
+
+func validateSessionWorktreeResponse(target clientui.SessionExecutionTarget, entries ...WorktreeListEntry) error {
+	if clientui.SessionExecutionTargetIsZero(target) {
+		return errors.New("worktree response target is required")
+	}
+	return validateWorktreeProjections(entries, true)
+}
+
+func validateWorktreeProjections(entries []WorktreeListEntry, sessionScoped bool) error {
+	for _, entry := range entries {
+		if err := entry.validateProjection(sessionScoped); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 type WorktreeCreateTargetResolutionKind string
@@ -624,7 +749,6 @@ type WorktreeCreateTargetResolveResponse struct {
 }
 
 type WorktreeCreateRequest struct {
-	ClientRequestID  string                   `json:"client_request_id"`
 	SetupOperationID WorktreeSetupOperationID `json:"setup_operation_id"`
 	SessionID        string                   `json:"session_id"`
 	BaseRef          string                   `json:"base_ref,omitempty"`
@@ -636,6 +760,10 @@ type WorktreeCreateRequest struct {
 type WorktreeCreateResponse struct {
 	Target   clientui.SessionExecutionTarget `json:"target"`
 	Worktree WorktreeListEntry               `json:"worktree"`
+}
+
+func (response WorktreeCreateResponse) Validate() error {
+	return validateSessionWorktreeResponse(response.Target, response.Worktree)
 }
 
 func (r WorktreeListRequest) Validate() error {
@@ -666,9 +794,6 @@ func (r WorktreeCreateTargetResolveRequest) Validate() error {
 }
 
 func (r WorktreeCreateRequest) Validate() error {
-	if err := validateClientRequestID(r.ClientRequestID); err != nil {
-		return NewWorktreeCreateError(WorktreeCreateErrorOwnerForm, err.Error(), err)
-	}
 	if err := r.SetupOperationID.Validate(); err != nil {
 		return NewWorktreeCreateError(WorktreeCreateErrorOwnerForm, err.Error(), err)
 	}

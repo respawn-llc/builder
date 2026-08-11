@@ -102,11 +102,16 @@ func TestPrepareManualMoveValidatesExecutableCompletionShapeWithoutMutation(t *t
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	started := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	_ = started
 	definition, _, err := store.GetDefinition(ctx, workflowID)
 	if err != nil {
 		t.Fatalf("GetDefinition: %v", err)
 	}
 	target := nodeByKey(t, definition, "implement")
+	before, err := store.ListCurrentNodes(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListCurrentNodes before rejected move: %v", err)
+	}
 	_, err = store.PrepareManualMove(ctx, ManualMoveRequest{
 		TaskID:       task.ID,
 		TargetNodeID: workflow.NodeIDOf(target),
@@ -121,8 +126,13 @@ func TestPrepareManualMoveValidatesExecutableCompletionShapeWithoutMutation(t *t
 	if err != nil {
 		t.Fatalf("ListCurrentNodes: %v", err)
 	}
-	if len(currentNodes) != 1 || !currentNodes[0].Reference.Equal(started.Reference) {
-		t.Fatalf("current nodes = %+v, want unchanged source", currentNodes)
+	if len(currentNodes) != len(before) {
+		t.Fatalf("current nodes after rejected move = %+v, before = %+v", currentNodes, before)
+	}
+	for index := range before {
+		if !currentNodes[index].Reference.Equal(before[index].Reference) {
+			t.Fatalf("current nodes after rejected move = %+v, before = %+v", currentNodes, before)
+		}
 	}
 }
 

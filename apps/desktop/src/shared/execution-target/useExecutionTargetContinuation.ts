@@ -6,6 +6,10 @@ import type {
   WorkflowExecutionTargetSelectionRequirement,
 } from "@/api";
 import {
+  decodeWorktreeSetupRetainedError,
+  type WorktreeSetupRetainedError,
+} from "@/api";
+import {
   initialExecutionTargetSelectionDraft,
   type ExecutionTargetSelectionDraft,
   type TaskInitiatingAction,
@@ -23,6 +27,10 @@ export type PendingTaskInitiatingAction =
       action: TaskInitiatingAction;
       requirement: WorkflowExecutionTargetSelectionRequirement;
       selection: ExecutionTargetSelectionDraft;
+    }>
+  | Readonly<{
+      kind: "setup_recovery"; action: Extract<TaskInitiatingAction, { kind: "move" }>;
+      failure: WorktreeSetupRetainedError; retrySelection?: WorkflowExecutionTargetSelection;
     }>;
 
 export type TaskInitiatingActionController = Readonly<{
@@ -31,7 +39,7 @@ export type TaskInitiatingActionController = Readonly<{
   run(action: TaskInitiatingAction, selection?: WorkflowExecutionTargetSelection): Promise<void>;
   close(): void;
   selectMode(mode: WorkflowExecutionTargetSelectionMode): void;
-  setCustomRef(customRef: string): void;
+  setCustomRef(customRef: string | null): void;
 }>;
 
 export function useTaskInitiatingActionController({
@@ -87,8 +95,15 @@ export function useTaskInitiatingActionController({
       }
       setRunning(true);
       const operation = (async () => {
-        const result = await execute(action, selection);
-        await handleResult(result);
+        try {
+          await handleResult(await execute(action, selection));
+        } catch (error) {
+          if (action.kind !== "move") throw error;
+          const failure = decodeWorktreeSetupRetainedError(error);
+          if (failure === null) throw error;
+          setPending({ kind: "setup_recovery", action, failure,
+            ...(selection === undefined ? {} : { retrySelection: selection }) });
+        }
       })();
       initialRunRef.current = operation;
       const settle = () => {
@@ -118,7 +133,7 @@ export function useTaskInitiatingActionController({
     );
   }, []);
 
-  const setCustomRef = useCallback((customRef: string) => {
+  const setCustomRef = useCallback((customRef: string | null) => {
     setPending((current) =>
       current?.kind !== "execution_target"
         ? current

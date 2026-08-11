@@ -599,18 +599,16 @@ func transcriptUserMessageFlushedMessages(evt runtime.Event) []clientui.Transcri
 	if len(evt.UserMessageBatchQueuedItems) == 0 {
 		return nil
 	}
-	operations := make([]clientui.RuntimeOperationRef, 0, len(evt.UserMessageBatchQueuedItems))
+	messages := make([]clientui.QueuedUserMessageIdentity, 0, len(evt.UserMessageBatchQueuedItems))
 	for index, item := range evt.UserMessageBatchQueuedItems {
-		queueItemID := mustTranscriptQueueItemID(item.QueueItemID, fmt.Sprintf("flushed queued message %d", index))
-		operations = append(operations, clientui.RuntimeOperationRef{
-			Kind:            clientui.RuntimeOperationKindQueuedMessage,
+		messages = append(messages, clientui.QueuedUserMessageIdentity{
 			ClientRequestID: mustTranscriptClientRequestID(item.ClientRequestID, fmt.Sprintf("flushed queued message %d", index)),
-			QueueItemID:     &queueItemID,
+			QueueItemID:     mustTranscriptQueueItemID(item.QueueItemID, fmt.Sprintf("flushed queued message %d", index)),
 		})
 	}
 	flushed := clientui.TranscriptUserMessageFlushed{
-		StepID:     mustTranscriptStepID(evt.StepID, "user-message flush"),
-		Operations: operations,
+		StepID:   mustTranscriptStepID(evt.StepID, "user-message flush"),
+		Messages: messages,
 	}
 	return []clientui.TranscriptEvent{clientui.NewTranscriptEvent(flushed)}
 }

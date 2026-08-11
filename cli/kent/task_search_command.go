@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 
+	"core/shared/apicontract"
+	"core/shared/client"
 	"core/shared/config"
 	"core/shared/serverapi"
 )
@@ -60,26 +62,50 @@ func taskSearchSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 		writeTaskSearchError(stderr, err)
 		return 2
 	}
-	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
-		projectIDs, err := resolveTaskSearchProjectIDs(context.Background(), cfg, remote, []string(projectFlags))
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		request.ProjectIDs = projectIDs
-		response, err := searchWorkflowTasks(context.Background(), remote, request)
-		if err != nil {
-			return writeTaskSearchError(stderr, err)
-		}
-		return writeTaskSearchResponse(stdout, stderr, response, *jsonOut)
+	return runWorkflowCommandSession(stderr, func(cfg config.App, remote *client.Remote) int {
+		return runTaskSearch(
+			context.Background(),
+			cfg,
+			remote,
+			remote,
+			[]string(projectFlags),
+			request,
+			*jsonOut,
+			stdout,
+			stderr,
+		)
 	})
+}
+
+func runTaskSearch(
+	ctx context.Context,
+	cfg config.App,
+	projects apicontract.ProjectViewService,
+	workflows apicontract.WorkflowService,
+	projectRefs []string,
+	request serverapi.TaskSearchRequest,
+	jsonOut bool,
+	stdout io.Writer,
+	stderr io.Writer,
+) int {
+	projectIDs, err := resolveTaskSearchProjectIDs(ctx, cfg, projects, projectRefs)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	request.ProjectIDs = projectIDs
+	response, err := searchWorkflowTasks(ctx, workflows, request)
+	if err != nil {
+		return writeTaskSearchError(stderr, err)
+	}
+	return writeTaskSearchResponse(stdout, stderr, response, jsonOut)
 }
 
 func validateTaskSearchCommandRequest(request serverapi.TaskSearchRequest) error {
 	return request.Validate()
 }
 
-func resolveTaskSearchProjectIDs(ctx context.Context, cfg config.App, remote workflowCommandRemote, refs []string) ([]string, error) {
+func resolveTaskSearchProjectIDs(ctx context.Context, cfg config.App, remote apicontract.ProjectViewService, refs []string) ([]string, error) {
 	if len(refs) == 0 {
 		return nil, nil
 	}
@@ -104,7 +130,7 @@ func parseTaskSearchStatusKinds(raw []string) ([]serverapi.WorkflowTaskStatusKin
 	return statuses, nil
 }
 
-func searchWorkflowTasks(ctx context.Context, remote workflowCommandRemote, request serverapi.TaskSearchRequest) (serverapi.TaskSearchResponse, error) {
+func searchWorkflowTasks(ctx context.Context, remote apicontract.WorkflowService, request serverapi.TaskSearchRequest) (serverapi.TaskSearchResponse, error) {
 	rpcCtx, cancel := context.WithTimeout(ctx, workflowCommandTimeout)
 	defer cancel()
 	return remote.SearchWorkflowTasks(rpcCtx, request)

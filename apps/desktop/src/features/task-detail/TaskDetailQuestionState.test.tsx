@@ -6,7 +6,7 @@ import { I18nextProvider } from "react-i18next";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { PendingAsk, QuestionAnswerInput, QuestionAttentionItem } from "@/api";
-import { AppServicesProvider, queryKeys } from "@/app-facade";
+import { AppServicesProvider } from "@/app-facade";
 import { appI18n, initializeI18n } from "@/i18n";
 import { createTestServices } from "@/test-support/app-services";
 import { QuestionBox } from "./TaskDetailQuestionForm";
@@ -20,7 +20,13 @@ import {
 import { QuestionFormView } from "./TaskDetailQuestionFormView";
 
 type QuestionAnswerMutation = ComponentProps<typeof QuestionFormView>["answerQuestion"];
-type FixtureQuestionAttention = QuestionAttentionItem & Readonly<{ sessionID: string }>;
+type FixtureQuestionAttention = QuestionAttentionItem &
+  Readonly<{
+    questionID: string;
+    recommendedOptionIndex: number;
+    sessionID: string;
+    suggestions: readonly string[];
+  }>;
 
 let questionAnswerMutation: QuestionAnswerMutation;
 let listPendingAsks: (sessionID: string) => Promise<readonly PendingAsk[]>;
@@ -48,8 +54,8 @@ describe("questionPresentation", () => {
   it("anchors the valid recommendation and falls back to option one for absent or malformed metadata", () => {
     expect(
       anchorQuestionSelection(
-        emptyQuestionSelection("ask-1"),
-        questionPresentation(ordinaryAttention(["one", "two"], 2), undefined, false).defaultSelection,
+        emptyQuestionSelection(),
+        questionPresentation(ordinaryAttention(["one", "two"], 2)).defaultSelection,
       ),
     ).toMatchObject({
       provenance: "anchored-default",
@@ -59,9 +65,8 @@ describe("questionPresentation", () => {
     for (const recommendation of [0, 3, 1.5, -1]) {
       expect(
         anchorQuestionSelection(
-          emptyQuestionSelection("ask-1"),
-          questionPresentation(ordinaryAttention(["one", "two"], recommendation), undefined, false)
-            .defaultSelection,
+          emptyQuestionSelection(),
+          questionPresentation(ordinaryAttention(["one", "two"], recommendation)).defaultSelection,
         ),
       ).toMatchObject({
         provenance: "anchored-default",
@@ -70,48 +75,28 @@ describe("questionPresentation", () => {
     }
   });
 
-  it("waits for pending-ask hydration before anchoring an empty ordinary question", () => {
+  it("anchors a complete freeform-only Question without pending-ask hydration", () => {
     const attention = ordinaryAttention([], 0);
-    const uninitialized = emptyQuestionSelection(attention.questionID);
-    const pendingPresentation = questionPresentation(attention, undefined, false);
-
-    expect(pendingPresentation.defaultSelection).toBeNull();
-    expect(anchorQuestionSelection(uninitialized, pendingPresentation.defaultSelection)).toBe(uninitialized);
-
-    const pendingAsk: PendingAsk = {
-      askID: attention.questionID,
-      createdAt: "2026-07-23T00:00:00Z",
-      question: attention.message,
-      recommendedOptionIndex: 2,
-      sessionID: attention.sessionID,
-      suggestions: ["one", "two"],
-    };
-    expect(
-      anchorQuestionSelection(
-        uninitialized,
-        questionPresentation(attention, pendingAsk, true).defaultSelection,
-      ),
-    ).toMatchObject({
+    const uninitialized = emptyQuestionSelection();
+    const presentation = questionPresentation(attention);
+    expect(anchorQuestionSelection(uninitialized, presentation.defaultSelection)).toMatchObject({
       provenance: "anchored-default",
-      selectedOption: 2,
+      selectedOption: null,
     });
   });
 
-  it("refetches a fresh cached no-match before anchoring", async () => {
-    await expectPendingAskHydrationFromFreshCache();
+  it("does not hydrate a complete freeform-only prompt from pending asks", async () => {
+    await expectCompleteAttentionDoesNotLookupPendingAsks(ordinaryAttention([], 0));
   });
 
   it("does not look up pending asks when attention already supplies options", async () => {
-    await expectCompleteAttentionDoesNotLookupPendingAsks();
+    await expectCompleteAttentionDoesNotLookupPendingAsks(ordinaryAttention(["one", "two"], 2));
   });
 
   it("anchors a settled freeform-only question without an option", () => {
     const attention = ordinaryAttention([], 0);
     expect(
-      anchorQuestionSelection(
-        emptyQuestionSelection(attention.questionID),
-        questionPresentation(attention, undefined, true).defaultSelection,
-      ),
+      anchorQuestionSelection(emptyQuestionSelection(), questionPresentation(attention).defaultSelection),
     ).toMatchObject({
       provenance: "anchored-default",
       selectedOption: null,
@@ -120,11 +105,8 @@ describe("questionPresentation", () => {
 
   it("submits the displayed anchored option without a radio change", async () => {
     const attention = ordinaryAttention(["one", "two"], 2);
-    const presentation = questionPresentation(attention, undefined, false);
-    const selection = anchorQuestionSelection(
-      emptyQuestionSelection(attention.questionID),
-      presentation.defaultSelection,
-    );
+    const presentation = questionPresentation(attention);
+    const selection = anchorQuestionSelection(emptyQuestionSelection(), presentation.defaultSelection);
     const inputs: QuestionAnswerInput[] = [];
     const answerQuestion = {
       isPending: false,
@@ -150,13 +132,13 @@ describe("questionPresentation", () => {
 
   it("activates an option but not Streamdown link descendants", async () => {
     const attention = ordinaryAttention(["ordinary option", "[safe](https://example.com)"], 0);
-    const presentation = questionPresentation(attention, undefined, false);
+    const presentation = questionPresentation(attention);
     const user = userEvent.setup();
 
     renderQuestionForm(
       attention,
       presentation,
-      emptyQuestionSelection(attention.questionID),
+      emptyQuestionSelection(),
       recordingQuestionAnswerMutation([]),
     );
 
@@ -172,11 +154,8 @@ describe("questionPresentation", () => {
     "submits option one when recommendation metadata is %s",
     async (recommendation) => {
       const attention = ordinaryAttention(["one", "two"], recommendation);
-      const presentation = questionPresentation(attention, undefined, false);
-      const selection = anchorQuestionSelection(
-        emptyQuestionSelection(attention.questionID),
-        presentation.defaultSelection,
-      );
+      const presentation = questionPresentation(attention);
+      const selection = anchorQuestionSelection(emptyQuestionSelection(), presentation.defaultSelection);
       const inputs: QuestionAnswerInput[] = [];
       const answerQuestion = recordingQuestionAnswerMutation(inputs);
       const user = userEvent.setup();
@@ -197,11 +176,8 @@ describe("questionPresentation", () => {
 
   it("submits a settled freeform-only answer without an option", async () => {
     const attention = ordinaryAttention([], 0);
-    const presentation = questionPresentation(attention, undefined, true);
-    const selection = anchorQuestionSelection(
-      emptyQuestionSelection(attention.questionID),
-      presentation.defaultSelection,
-    );
+    const presentation = questionPresentation(attention);
+    const selection = anchorQuestionSelection(emptyQuestionSelection(), presentation.defaultSelection);
     const inputs: QuestionAnswerInput[] = [];
     const answerQuestion = recordingQuestionAnswerMutation(inputs);
     const user = userEvent.setup();
@@ -224,9 +200,8 @@ describe("questionPresentation", () => {
   it("anchors reordered approval decisions to allow once or the first decision", () => {
     expect(
       anchorQuestionSelection(
-        emptyQuestionSelection("ask-1"),
-        questionPresentation(approvalAttention(["deny", "allow_session", "allow_once"]), undefined, false)
-          .defaultSelection,
+        emptyQuestionSelection(),
+        questionPresentation(approvalAttention(["deny", "allow_session", "allow_once"])).defaultSelection,
       ),
     ).toMatchObject({
       approvalDecision: "allow_once",
@@ -234,8 +209,8 @@ describe("questionPresentation", () => {
     });
     expect(
       anchorQuestionSelection(
-        emptyQuestionSelection("ask-1"),
-        questionPresentation(approvalAttention(["allow_session", "deny"]), undefined, false).defaultSelection,
+        emptyQuestionSelection(),
+        questionPresentation(approvalAttention(["allow_session", "deny"])).defaultSelection,
       ),
     ).toMatchObject({
       approvalDecision: "allow_session",
@@ -245,13 +220,11 @@ describe("questionPresentation", () => {
 
   it("does not rederive an anchored or explicit choice on refresh", () => {
     const ordinarySelection = anchorQuestionSelection(
-      emptyQuestionSelection("ask-1"),
-      questionPresentation(ordinaryAttention(["one", "two", "three"], 2), undefined, false).defaultSelection,
+      emptyQuestionSelection(),
+      questionPresentation(ordinaryAttention(["one", "two", "three"], 2)).defaultSelection,
     );
     const refreshedOrdinary = questionPresentation(
       ordinaryAttention(["three", "one", "two"], 1),
-      undefined,
-      false,
     ).defaultSelection;
     expect(anchorQuestionSelection(ordinarySelection, refreshedOrdinary)).toBe(ordinarySelection);
     expect(
@@ -262,14 +235,11 @@ describe("questionPresentation", () => {
     });
 
     const approvalSelection = anchorQuestionSelection(
-      emptyQuestionSelection("ask-1"),
-      questionPresentation(approvalAttention(["deny", "allow_session", "allow_once"]), undefined, false)
-        .defaultSelection,
+      emptyQuestionSelection(),
+      questionPresentation(approvalAttention(["deny", "allow_session", "allow_once"])).defaultSelection,
     );
     const refreshedApproval = questionPresentation(
       approvalAttention(["deny", "allow_once", "allow_session"]),
-      undefined,
-      false,
     ).defaultSelection;
     expect(anchorQuestionSelection(approvalSelection, refreshedApproval)).toBe(approvalSelection);
     expect(
@@ -280,13 +250,10 @@ describe("questionPresentation", () => {
     });
   });
 
-  it("retains an ordinary anchored choice and request identity across refresh, failure, and retry", async () => {
+  it("retains an ordinary anchored choice across refresh, failure, and retry", async () => {
     const initialAttention = ordinaryAttention(["one", "two", "three"], 2);
-    const initialPresentation = questionPresentation(initialAttention, undefined, false);
-    const selection = anchorQuestionSelection(
-      emptyQuestionSelection(initialAttention.questionID),
-      initialPresentation.defaultSelection,
-    );
+    const initialPresentation = questionPresentation(initialAttention);
+    const selection = anchorQuestionSelection(emptyQuestionSelection(), initialPresentation.defaultSelection);
     const inputs: QuestionAnswerInput[] = [];
     const answerQuestion = failingOnceQuestionAnswerMutation(inputs);
     const user = userEvent.setup();
@@ -297,7 +264,7 @@ describe("questionPresentation", () => {
     view.rerender(
       questionFormTree(
         refreshedAttention,
-        questionPresentation(refreshedAttention, undefined, false),
+        questionPresentation(refreshedAttention),
         selection,
         answerQuestion,
       ),
@@ -313,12 +280,7 @@ describe("questionPresentation", () => {
 
     const retriedAttention = ordinaryAttention(["two", "three", "one"], 3);
     view.rerender(
-      questionFormTree(
-        retriedAttention,
-        questionPresentation(retriedAttention, undefined, false),
-        selection,
-        answerQuestion,
-      ),
+      questionFormTree(retriedAttention, questionPresentation(retriedAttention), selection, answerQuestion),
     );
     expect(screen.getAllByRole("radio")[1]).toBeChecked();
     await user.click(submit);
@@ -338,16 +300,12 @@ describe("questionPresentation", () => {
         selectedOptionNumber: 2,
       }),
     ]);
-    expectSameQuestionRequestID(inputs);
   });
 
-  it("retains an anchored approval decision and request identity across refresh, failure, and retry", async () => {
+  it("retains an anchored approval decision across refresh, failure, and retry", async () => {
     const initialAttention = approvalAttention(["deny", "allow_session", "allow_once"]);
-    const initialPresentation = questionPresentation(initialAttention, undefined, false);
-    const selection = anchorQuestionSelection(
-      emptyQuestionSelection(initialAttention.questionID),
-      initialPresentation.defaultSelection,
-    );
+    const initialPresentation = questionPresentation(initialAttention);
+    const selection = anchorQuestionSelection(emptyQuestionSelection(), initialPresentation.defaultSelection);
     const inputs: QuestionAnswerInput[] = [];
     const answerQuestion = failingOnceQuestionAnswerMutation(inputs);
     const user = userEvent.setup();
@@ -359,7 +317,7 @@ describe("questionPresentation", () => {
     view.rerender(
       questionFormTree(
         refreshedAttention,
-        questionPresentation(refreshedAttention, undefined, false),
+        questionPresentation(refreshedAttention),
         selection,
         answerQuestion,
       ),
@@ -375,12 +333,7 @@ describe("questionPresentation", () => {
 
     const retriedAttention = approvalAttention(["deny", "allow_once", "allow_session"]);
     view.rerender(
-      questionFormTree(
-        retriedAttention,
-        questionPresentation(retriedAttention, undefined, false),
-        selection,
-        answerQuestion,
-      ),
+      questionFormTree(retriedAttention, questionPresentation(retriedAttention), selection, answerQuestion),
     );
     expect(screen.getAllByRole("radio")[1]).toBeChecked();
     await user.click(submit);
@@ -400,83 +353,12 @@ describe("questionPresentation", () => {
         kind: "approval",
       }),
     ]);
-    expectSameQuestionRequestID(inputs);
   });
 });
 
-async function expectPendingAskHydrationFromFreshCache(): Promise<void> {
-  const attention = ordinaryAttention([], 0);
-  const hydratedAsk: PendingAsk = {
-    askID: attention.questionID,
-    createdAt: "2026-07-23T00:00:00Z",
-    question: attention.message,
-    recommendedOptionIndex: 2,
-    sessionID: attention.sessionID,
-    suggestions: ["one", "two"],
-  };
-  const inputs: QuestionAnswerInput[] = [];
-  const selections: ReturnType<typeof emptyQuestionSelection>[] = [];
-  const queryClient = new QueryClient({
-    defaultOptions: {
-      queries: {
-        retry: false,
-        staleTime: 4_000,
-      },
-    },
-  });
-  queryClient.setQueryData(queryKeys.pendingAsks(attention.sessionID), []);
-  const lookup = deferred<readonly PendingAsk[]>();
-  const requestedSessionIDs: string[] = [];
-  listPendingAsks = async (sessionID) => {
-    requestedSessionIDs.push(sessionID);
-    return lookup.promise;
-  };
-  questionAnswerMutation = recordingQuestionAnswerMutation(inputs);
-  const user = userEvent.setup();
-
-  const view = render(
-    questionBoxTree(attention, queryClient, (selection) => {
-      selections.push(selection);
-    }),
-  );
-
-  await waitFor(() => {
-    expect(requestedSessionIDs).toEqual([attention.sessionID]);
-  });
-  expect(selections).toHaveLength(0);
-  expect(screen.queryByRole("radio")).toBeNull();
-
-  lookup.resolve([hydratedAsk]);
-  view.rerender(
-    questionBoxTree(attention, queryClient, (selection) => {
-      selections.push(selection);
-    }),
-  );
-
-  await waitFor(() => {
-    expect(screen.getAllByRole("radio")[1]).toBeChecked();
-    expect(selections).toContainEqual(
-      expect.objectContaining({
-        provenance: "anchored-default",
-        selectedOption: 2,
-      }),
-    );
-  });
-
-  await user.click(screen.getByRole("button"));
-  await waitFor(() => {
-    expect(inputs).toEqual([
-      expect.objectContaining({
-        kind: "ordinary",
-        selectedOptionNumber: 2,
-      }),
-    ]);
-  });
-  queryClient.clear();
-}
-
-async function expectCompleteAttentionDoesNotLookupPendingAsks(): Promise<void> {
-  const attention = ordinaryAttention(["one", "two"], 2);
+async function expectCompleteAttentionDoesNotLookupPendingAsks(
+  attention: FixtureQuestionAttention,
+): Promise<void> {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: {
@@ -499,9 +381,14 @@ async function expectCompleteAttentionDoesNotLookupPendingAsks(): Promise<void> 
     }),
   );
   try {
-    await waitFor(() => {
-      expect(screen.getAllByRole("radio")[1]).toBeChecked();
-    });
+    if (attention.question.kind === "ordinary" && attention.question.suggestions.length > 0) {
+      await waitFor(() => {
+        expect(screen.getAllByRole("radio")[1]).toBeChecked();
+      });
+    } else {
+      expect(screen.queryByRole("radio")).toBeNull();
+      expect(screen.getByRole("textbox")).toBeInTheDocument();
+    }
     await waitFor(() => {
       expect(queryClient.isFetching()).toBe(0);
     });
@@ -541,6 +428,9 @@ function ordinaryAttention(
     occurredAt: 0,
     projectID: "project-1",
     question: {
+      promptID: "ask-1",
+      sessionID: "session-1",
+      stepID: "22222222-2222-4222-8222-222222222222",
       kind: "ordinary",
       recommendedOptionIndex,
       suggestions,
@@ -569,6 +459,9 @@ function approvalAttention(
   return {
     ...ordinaryAttention([], 0),
     question: {
+      promptID: "ask-1",
+      sessionID: "session-1",
+      stepID: "22222222-2222-4222-8222-222222222222",
       approvalDecisions: decisions,
       kind: "approval",
     },
@@ -595,7 +488,6 @@ function QuestionFormHarness({
       onSelectionStateChange={setSelection}
       presentation={presentation}
       selectionState={selection}
-      taskId={attention.taskID}
     />
   );
 }
@@ -619,14 +511,6 @@ function failingOnceQuestionAnswerMutation(inputs: QuestionAnswerInput[]): Quest
       }
     },
   };
-}
-
-function expectSameQuestionRequestID(inputs: readonly QuestionAnswerInput[]): void {
-  const [first, second] = inputs;
-  if (first === undefined || second === undefined) {
-    throw new Error("expected two question-answer inputs");
-  }
-  expect(second.clientRequestID).toBe(first.clientRequestID);
 }
 
 function renderQuestionForm(
@@ -681,7 +565,7 @@ function QuestionBoxHarness({
   attention: QuestionAttentionItem;
   onSelectionChange: (selection: ReturnType<typeof emptyQuestionSelection>) => void;
 }>) {
-  const [selection, setSelection] = useState(emptyQuestionSelection(attention.questionID));
+  const [selection, setSelection] = useState(emptyQuestionSelection());
   return (
     <QuestionBox
       attention={attention}
@@ -692,7 +576,6 @@ function QuestionBoxHarness({
         onSelectionChange(nextSelection);
       }}
       selectionState={selection}
-      taskId={attention.taskID}
     />
   );
 }

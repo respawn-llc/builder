@@ -341,6 +341,47 @@ func TestAskProjectionUpdateFailureExitsInReleaseAndPanicsInDebug(t *testing.T) 
 	})
 }
 
+func TestAskProjectionFailureDiagnosticDistinguishesInactiveAndInvalidDeliveryGeneration(t *testing.T) {
+	for _, test := range []struct {
+		name            string
+		invalidDelivery bool
+		wantPresent     bool
+	}{
+		{name: "inactive"},
+		{name: "invalid generation", invalidDelivery: true, wantPresent: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			logger := &projectionDiagnosticLogger{}
+			model := sizedTestUIModel(newProjectedStaticUIModel(WithUILogger(logger)), 64, 20)
+			model.questionProjector = func(request questionRenderRequest) questionRenderResultMsg {
+				return questionRenderResultMsg{request: request, err: errors.New("render failed")}
+			}
+			model, command := updateQuestionProjection(model, askEventMsg{event: testQuestionAskEvent("ask-1", "Question?")})
+			if test.invalidDelivery {
+				key, err := newTranscriptPromptKey(model.ask.current.prompt)
+				if err != nil {
+					t.Fatalf("create valid delivery key: %v", err)
+				}
+				model.ask.activeDelivery = &activePromptAnswerDelivery{
+					key: key, generation: 0, cancel: func() {},
+				}
+			}
+			_, _ = updateQuestionProjection(model, requireQuestionRenderResult(t, command))
+
+			if len(logger.arguments) != 1 || len(logger.arguments[0]) < 6 {
+				t.Fatalf("projection diagnostics = %#v, want one complete diagnostic", logger.arguments)
+			}
+			generation, ok := logger.arguments[0][5].(*promptDeliveryGenerationDiagnostic)
+			if !ok || (generation != nil) != test.wantPresent {
+				t.Fatalf("delivery generation diagnostic = %#v, want present %t", logger.arguments[0][5], test.wantPresent)
+			}
+			if test.wantPresent && *generation != 0 {
+				t.Fatalf("invalid delivery generation diagnostic = %d, want 0", *generation)
+			}
+		})
+	}
+}
+
 func TestAskProjectionUpdateResizeKeepsVisibleQuestionWidthSafe(t *testing.T) {
 	const initialWidth, targetWidth, height = 64, 18, 12
 	model := sizedTestUIModel(newProjectedStaticUIModel(), initialWidth, height)
@@ -394,6 +435,14 @@ func TestAskProjectionUpdateResizeKeepsVisibleQuestionWidthSafe(t *testing.T) {
 type questionProjectionGate struct {
 	started chan questionRenderRequest
 	release chan struct{}
+}
+
+type projectionDiagnosticLogger struct {
+	arguments [][]any
+}
+
+func (l *projectionDiagnosticLogger) Logf(_ string, arguments ...any) {
+	l.arguments = append(l.arguments, append([]any(nil), arguments...))
 }
 
 func (g *questionProjectionGate) project(request questionRenderRequest) questionRenderResultMsg {

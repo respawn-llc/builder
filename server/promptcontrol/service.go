@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 
-	"core/server/requestmemo"
 	"core/server/sessionruntime"
 	askquestion "core/server/tools"
 	servicecontract "core/shared/apicontract"
@@ -17,123 +16,26 @@ import (
 )
 
 type PendingPromptResponder interface {
-	AcceptPromptResolution(
-		sessionID string,
-		promptID string,
-		resolution askquestion.AskQuestionResolution,
-		err error,
-	) (PromptResponseAcceptance, error)
 	ResolvePromptBatch(
 		context.Context,
 		runtimeids.SessionID,
 		runtimeids.StepID,
 		[]sessionruntime.PromptAnswerCommand,
 	) ([]sessionruntime.PromptAnswerResult, error)
-}
-
-type PromptResponseAcceptance interface {
-	AwaitSuccessor(context.Context) error
+	SubscribePromptFollowUp(
+		context.Context,
+		runtimeids.SessionID,
+		runtimeids.StepID,
+		clientui.PromptID,
+	) (serverapi.PromptFollowUpSubscription, error)
 }
 
 type PromptControlService struct {
-	prompts   PendingPromptResponder
-	asks      *requestmemo.Memo[askAnswerMemoRequest, PromptResponseAcceptance]
-	approvals *requestmemo.Memo[approvalAnswerMemoRequest, struct{}]
-}
-
-type askAnswerMemoRequest struct {
-	SessionID            string
-	AskID                string
-	ErrorMessage         string
-	Answer               string
-	SelectedOptionNumber *int
-	FreeformAnswer       string
-}
-
-type approvalAnswerMemoRequest struct {
-	SessionID    string
-	ApprovalID   string
-	ErrorMessage string
-	Decision     clientui.ApprovalDecision
-	Commentary   string
+	prompts PendingPromptResponder
 }
 
 func NewPromptControlService(prompts PendingPromptResponder) *PromptControlService {
-	return &PromptControlService{
-		prompts:   prompts,
-		asks:      requestmemo.New[askAnswerMemoRequest, PromptResponseAcceptance](),
-		approvals: requestmemo.New[approvalAnswerMemoRequest, struct{}](),
-	}
-}
-
-func (s *PromptControlService) AnswerAsk(ctx context.Context, req serverapi.AskAnswerRequest) error {
-	if err := req.Validate(); err != nil {
-		return err
-	}
-	if s == nil || s.prompts == nil {
-		return errors.New("prompt responder is required")
-	}
-	memoReq := askAnswerMemoRequest{
-		SessionID:            req.SessionID,
-		AskID:                req.AskID,
-		ErrorMessage:         req.ErrorMessage,
-		Answer:               req.Answer,
-		SelectedOptionNumber: textutil.Pointer(req.SelectedOptionNumber),
-		FreeformAnswer:       req.FreeformAnswer,
-	}
-	acceptance, err := s.asks.Do(ctx, req.ClientRequestID, memoReq, sameAskAnswerMemoRequest, func(context.Context) (PromptResponseAcceptance, error) {
-		errorMessage := textutil.OptionalExactString(req.ErrorMessage)
-		if errorMessage != nil {
-			return s.prompts.AcceptPromptResolution(req.SessionID, req.AskID, nil, errors.New(*errorMessage))
-		}
-		return s.prompts.AcceptPromptResolution(
-			req.SessionID,
-			req.AskID,
-			askquestion.AskQuestionAnswerFromLegacyFields(
-				textutil.Pointer(req.SelectedOptionNumber),
-				textutil.OptionalExactString(req.Answer),
-				textutil.OptionalExactString(req.FreeformAnswer),
-			),
-			nil,
-		)
-	})
-	if err != nil {
-		return err
-	}
-	return acceptance.AwaitSuccessor(ctx)
-}
-
-func (s *PromptControlService) AnswerApproval(ctx context.Context, req serverapi.ApprovalAnswerRequest) error {
-	if err := req.Validate(); err != nil {
-		return err
-	}
-	if s == nil || s.prompts == nil {
-		return errors.New("prompt responder is required")
-	}
-	commentary := ""
-	if req.Commentary != nil {
-		commentary = *req.Commentary
-	}
-	memoReq := approvalAnswerMemoRequest{
-		SessionID:    req.SessionID,
-		ApprovalID:   req.ApprovalID,
-		ErrorMessage: req.ErrorMessage,
-		Decision:     req.Decision,
-		Commentary:   commentary,
-	}
-	_, err := s.approvals.Do(ctx, req.ClientRequestID, memoReq, sameApprovalAnswerMemoRequest, func(ctx context.Context) (struct{}, error) {
-		errorMessage := textutil.OptionalExactString(req.ErrorMessage)
-		if errorMessage != nil {
-			_, err := s.prompts.AcceptPromptResolution(req.SessionID, req.ApprovalID, nil, errors.New(*errorMessage))
-			return struct{}{}, err
-		}
-		_, err := s.prompts.AcceptPromptResolution(req.SessionID, req.ApprovalID, askquestion.AskQuestionApproval{
-			Decision:   askquestion.AskQuestionApprovalDecision(req.Decision),
-			Commentary: textutil.Pointer(req.Commentary),
-		}, nil)
-		return struct{}{}, err
-	})
-	return err
+	return &PromptControlService{prompts: prompts}
 }
 
 func (s *PromptControlService) AnswerPromptBatch(
@@ -205,6 +107,19 @@ func (s *PromptControlService) AnswerPromptBatch(
 	return response, nil
 }
 
+func (s *PromptControlService) SubscribeFollowUp(
+	ctx context.Context,
+	req serverapi.PromptFollowUpWatchRequest,
+) (serverapi.PromptFollowUpSubscription, error) {
+	if err := req.Validate(); err != nil {
+		return nil, err
+	}
+	if s == nil || s.prompts == nil {
+		return nil, errors.New("prompt responder is required")
+	}
+	return s.prompts.SubscribePromptFollowUp(ctx, req.SessionID, req.StepID, req.PromptID)
+}
+
 func reportPromptBatchTranslationInvariant(promptID clientui.PromptID) error {
 	err := fmt.Errorf("validated prompt answer batch entry %q has no disposition", promptID)
 	invariant.NewPolicy().Check(false, invariant.WorkflowPromptDiagnostic(
@@ -224,23 +139,6 @@ func appendPromptAnswerBatchResult(
 		PromptID: promptID,
 		Outcome:  outcome,
 	})
-}
-
-func sameAskAnswerMemoRequest(a askAnswerMemoRequest, b askAnswerMemoRequest) bool {
-	return a.SessionID == b.SessionID &&
-		a.AskID == b.AskID &&
-		a.ErrorMessage == b.ErrorMessage &&
-		a.Answer == b.Answer &&
-		textutil.EqualOptional(a.SelectedOptionNumber, b.SelectedOptionNumber) &&
-		a.FreeformAnswer == b.FreeformAnswer
-}
-
-func sameApprovalAnswerMemoRequest(a approvalAnswerMemoRequest, b approvalAnswerMemoRequest) bool {
-	return a.SessionID == b.SessionID &&
-		a.ApprovalID == b.ApprovalID &&
-		a.ErrorMessage == b.ErrorMessage &&
-		a.Decision == b.Decision &&
-		a.Commentary == b.Commentary
 }
 
 var _ servicecontract.PromptControlService = (*PromptControlService)(nil)

@@ -61,7 +61,6 @@ type currentNodeAgentCapacityLease struct {
 
 type currentNodeQueuedStart struct {
 	reference          workflow.CurrentNodeReference
-	preparation        TaskStartPreparation
 	taskPromptDelivery workflowruntime.TaskPromptDelivery
 	assignmentSteer    CurrentNodeAssignmentSteer
 	policy             currentNodeAdmissionPolicy
@@ -203,17 +202,13 @@ func (c *CurrentNodeController) admit(ctx context.Context, start currentNodeQueu
 		return err
 	}
 	defer c.releaseReservation(key, start.policy, start.agentCapacityLease)
-	if start.preparation != nil {
-		if err := start.preparation(ctx); err != nil {
+	if start.taskPromptDelivery == workflowruntime.TaskPromptDeliveryAssignment &&
+		start.assignmentSteer == nil {
+		assignment, err := c.steerAssignment(ctx, reference)
+		if err != nil {
 			return err
 		}
-		if start.taskPromptDelivery == workflowruntime.TaskPromptDeliveryAssignment {
-			assignment, err := c.steerAssignment(ctx, reference)
-			if err != nil {
-				return err
-			}
-			start.assignmentSteer = assignment
-		}
+		start.assignmentSteer = assignment
 	}
 	assignmentSteer, err := resolvedCurrentNodeAssignmentSteer(ctx, start.assignmentSteer)
 	if err != nil {
@@ -625,6 +620,28 @@ func (c *CurrentNodeController) queueAutomaticStartLocked(start currentNodeQueue
 }
 
 func (c *CurrentNodeController) currentNodeOwnedLocked(key workflow.CurrentNodeReferenceKey) bool {
+	for _, batch := range c.preparationQueue {
+		for _, start := range batch.starts {
+			startKey, err := start.reference.Key()
+			if err != nil {
+				panic(fmt.Sprintf("inspect queued task preparation ownership: %v", err))
+			}
+			if startKey == key {
+				return true
+			}
+		}
+	}
+	for _, batch := range c.preparationRunning {
+		for _, start := range batch.starts {
+			startKey, err := start.reference.Key()
+			if err != nil {
+				panic(fmt.Sprintf("inspect running task preparation ownership: %v", err))
+			}
+			if startKey == key {
+				return true
+			}
+		}
+	}
 	if _, queued := c.explicitQueued[key]; queued {
 		return true
 	}
@@ -660,6 +677,10 @@ func (c *CurrentNodeController) runAdmissions() {
 		case <-c.workerWake:
 		}
 		for {
+			if batch, ok := c.takeTaskPreparationBatch(); ok {
+				go c.runTaskPreparationBatch(batch)
+				continue
+			}
 			start, ok := c.takeExplicitStart()
 			if !ok {
 				start, ok = c.takeAutomaticIntent()
@@ -686,7 +707,6 @@ func (c *CurrentNodeController) runAdmission(start currentNodeQueuedStart) {
 		interrupted := c.interrupts.currentNodeFenced(key)
 		c.mu.Unlock()
 		if errors.Is(err, context.Canceled) ||
-			errors.Is(err, sessionruntime.ErrExecutionNoLongerLive) ||
 			errors.Is(err, ErrTaskExecutionNotQuiescent) ||
 			interrupted {
 			return

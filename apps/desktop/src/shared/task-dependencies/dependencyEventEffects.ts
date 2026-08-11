@@ -19,7 +19,6 @@ const relatedDetailActions = new Set<WorkflowProjectEvent["action"]>([
   "completed",
   "question_waiting",
   "question_cleared",
-  "question_answered",
 ]);
 
 export function workflowProjectEventAffectsDependencyBoard(

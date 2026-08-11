@@ -24,10 +24,8 @@ export function workflowProjectEventAffectsTask(event: WorkflowProjectEvent, tas
   if (trimmedTaskID.length === 0) {
     return false;
   }
-  return (
-    event.resource === "task" && event.primaryEntityID === trimmedTaskID
-  );
+  return event.resource === "task" && event.primaryEntityID === trimmedTaskID;
 }
 
 const attentionResources = new Set(["task", "workflow", "workflow_link"]);
-const questionActions = new Set(["question_waiting", "question_cleared", "question_answered"]);
+const questionActions = new Set(["question_waiting", "question_cleared"]);

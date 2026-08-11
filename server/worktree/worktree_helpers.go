@@ -85,9 +85,13 @@ func marshalGitMetadata(entry GitWorktree) (string, error) {
 		LockedReason:   entry.LockedReason,
 		PrunableReason: entry.PrunableReason,
 	}
-	if entry.Branch != nil {
-		branchRef := entry.Branch.Ref()
-		branchName := entry.Branch.Name()
+	recordedBranch := entry.RecordedBranch
+	if recordedBranch == nil {
+		recordedBranch = entry.Branch
+	}
+	if recordedBranch != nil {
+		branchRef := recordedBranch.Ref()
+		branchName := recordedBranch.Name()
 		persisted.BranchRef = &branchRef
 		persisted.BranchName = &branchName
 	}

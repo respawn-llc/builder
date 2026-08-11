@@ -13,7 +13,6 @@ import (
 	"core/shared/config"
 	"core/shared/textutil"
 	"core/shared/toolspec"
-	"core/shared/transcript"
 )
 
 type defaultMessageLifecycle struct {
@@ -118,9 +117,6 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 				return err
 			}
 		case session.LocalEntryRecord:
-			if payload.Role == string(transcript.EntryRoleReviewerStatus) {
-				continue
-			}
 			entry, err := storedLocalEntryFromSessionRecord(payload)
 			if err != nil {
 				return fmt.Errorf("restore session local entry record: %w", err)
@@ -193,8 +189,8 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 				return fmt.Errorf("restore history replacement mode: %w", err)
 			}
 			if replacement.LastCommittedAssistantFinalAnswer != nil {
-				e.transcriptRuntimeState().SeedLastCommittedAssistantFinalAnswerIfEmpty(
-					*replacement.LastCommittedAssistantFinalAnswer,
+				e.transcriptRuntimeState().SeedLastCommittedAssistantFinalAnswerIfAbsent(
+					replacement.LastCommittedAssistantFinalAnswer,
 				)
 			}
 			if replacement.CompactionNumber != nil && *replacement.CompactionNumber > 0 {

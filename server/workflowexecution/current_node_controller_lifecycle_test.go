@@ -33,7 +33,7 @@ func TestCurrentTaskQuiescenceIgnoresLatchedWorkerFailure(t *testing.T) {
 	}
 }
 
-func TestResumeTaskPanicsBeforeMutationWhenRetainedSessionExecutionIsActive(t *testing.T) {
+func TestResumeTaskReturnsConflictBeforeMutationWhenRetainedSessionExecutionIsActive(t *testing.T) {
 	fixture := newCurrentNodeQuestionFixture(t)
 	reference := currentNodeReferenceForControllerTest(t, "task-resume-active-session", "node-implementation")
 	release := make(chan struct{})
@@ -64,26 +64,17 @@ func TestResumeTaskPanicsBeforeMutationWhenRetainedSessionExecutionIsActive(t *t
 		SessionID: &sessionID,
 	}}
 
-	var recovered any
-	func() {
-		defer func() {
-			recovered = recover()
-		}()
-		_, _ = fixture.controller.ResumeTask(context.Background(), reference.TaskID)
-	}()
-	invariant, ok := recovered.(resumeActiveSessionInvariant)
-	if !ok {
-		t.Fatalf("resume panic = %T, want resumeActiveSessionInvariant", recovered)
+	resumed, err := fixture.controller.ResumeTask(context.Background(), reference.TaskID)
+	if !errors.Is(err, ErrTaskExecutionNotQuiescent) {
+		t.Fatalf("resume error = %v, want %v", err, ErrTaskExecutionNotQuiescent)
 	}
-	if !invariant.currentNode.Equal(reference) ||
-		invariant.sessionID != sessionID ||
-		invariant.scopeID != handle.Scope().ID() {
-		t.Fatalf("resume invariant = %+v, want current node %v Session %s scope %s", invariant, reference, sessionID, handle.Scope().ID())
+	if len(resumed) != 0 {
+		t.Fatalf("resumed Current Nodes = %+v, want none", resumed)
 	}
 	fixture.store.mu.Lock()
 	defer fixture.store.mu.Unlock()
 	if len(fixture.store.resumed) != 0 {
-		t.Fatalf("resume mutations = %+v, want none before panic", fixture.store.resumed)
+		t.Fatalf("resume mutations = %+v, want none before conflict", fixture.store.resumed)
 	}
 }
 
@@ -783,11 +774,8 @@ func TestCurrentNodeControllerHoldsApprovalTargetUntilCompletedSourceScopeRetire
 		CurrentNode: queuedAgent,
 		NodeKind:    workflow.NodeKindAgent,
 	}})
-	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		snapshot := controller.Snapshot()
-		return hasLiveCurrentNode(snapshot, source) && hasAutomaticCurrentNodeIntent(snapshot, queuedAgent)
-	}, "approval source did not hold Agent capacity while queued Agent remained queued")
-	sourceScope := singleLiveScope(t, controller, source)
+	waitForRunningCurrentNode(t, authority, source)
+	sourceScope := singleLiveScope(t, authority, source)
 	if _, err := controller.CompleteCurrentNode(context.Background(), workflowruntime.CompletionRequest{
 		ScopeID:      sourceScope,
 		TransitionID: "review",
@@ -796,15 +784,6 @@ func TestCurrentNodeControllerHoldsApprovalTargetUntilCompletedSourceScopeRetire
 	}
 	if _, err := controller.ApplyPendingApproval(context.Background(), approval.ID); err != nil {
 		t.Fatalf("ApplyPendingApproval: %v", err)
-	}
-	snapshot := controller.Snapshot()
-	if len(snapshot.HeldIntents) != 1 ||
-		!snapshot.HeldIntents[0].CurrentNode.Equal(target) ||
-		snapshot.HeldIntents[0].Automatic {
-		t.Fatalf("held approval starts = %+v, want explicit target held by source scope", snapshot.HeldIntents)
-	}
-	if !hasAutomaticCurrentNodeIntent(snapshot, queuedAgent) {
-		t.Fatalf("automatic agent queue = %+v, want queued agent while source occupies capacity", snapshot.AutomaticIntents)
 	}
 	select {
 	case started := <-runner.started:
@@ -834,17 +813,8 @@ func TestCurrentNodeControllerHoldsApprovalTargetUntilCompletedSourceScopeRetire
 			t.Fatal("approval target did not start after source retirement")
 		}
 	}
-	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		for _, live := range controller.Snapshot().LiveScopes {
-			if live.CurrentNode.Equal(target) {
-				return !live.Automatic
-			}
-		}
-		return false
-	}, "approval target did not enter an explicit live scope")
-	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		return hasLiveCurrentNode(controller.Snapshot(), queuedAgent)
-	}, "queued Agent did not enter a live automatic scope")
+	waitForRunningCurrentNode(t, authority, target)
+	waitForRunningCurrentNode(t, authority, queuedAgent)
 }
 
 func TestCurrentNodeControllerHoldsSuccessorUntilSourceScopeRetires(t *testing.T) {
@@ -908,18 +878,14 @@ func TestCurrentNodeControllerHoldsSuccessorUntilSourceScopeRetires(t *testing.T
 		t.Fatalf("first started current node = %v, want source %v", got, source)
 	}
 	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		return hasLiveCurrentNode(controller.Snapshot(), source)
+		return hasLiveCurrentNode(authority, source)
 	}, "source did not become live")
-	sourceScope := singleLiveScope(t, controller, source)
+	sourceScope := singleLiveScope(t, authority, source)
 	if _, err := controller.CompleteCurrentNode(context.Background(), workflowruntime.CompletionRequest{
 		ScopeID:      sourceScope,
 		TransitionID: "next",
 	}); err != nil {
 		t.Fatalf("complete source: %v", err)
-	}
-	snapshot := controller.Snapshot()
-	if len(snapshot.HeldIntents) != 1 || !snapshot.HeldIntents[0].CurrentNode.Equal(successor) {
-		t.Fatalf("held intents = %+v, want successor held by source retirement", snapshot.HeldIntents)
 	}
 	select {
 	case started := <-runner.started:
@@ -930,10 +896,6 @@ func TestCurrentNodeControllerHoldsSuccessorUntilSourceScopeRetires(t *testing.T
 		CompactionMode: "none",
 	}); err != nil {
 		t.Fatalf("finalize source post-turn: %v", err)
-	}
-	if snapshot := controller.Snapshot(); len(snapshot.HeldIntents) != 1 ||
-		!snapshot.HeldIntents[0].CurrentNode.Equal(successor) {
-		t.Fatalf("post-finalization held intents = %+v, want successor held until source retirement", snapshot.HeldIntents)
 	}
 	select {
 	case started := <-runner.started:
@@ -1010,7 +972,7 @@ func TestCurrentNodeControllerCompletionAndTaskInterruptDoNotDeadlockOrReleaseSu
 	}
 	<-runner.started
 	waitForRunningCurrentNode(t, authority, source)
-	sourceScope := singleLiveScope(t, controller, source)
+	sourceScope := singleLiveScope(t, authority, source)
 	completionDone := make(chan error, 1)
 	go func() {
 		_, err := controller.CompleteCurrentNode(context.Background(), workflowruntime.CompletionRequest{

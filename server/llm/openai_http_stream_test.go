@@ -215,8 +215,8 @@ func TestGenerateStream_AcceptsCompletedResponseEOFWithoutDoneSentinel(t *testin
 		t.Fatalf("GenerateStream failed: %v", err)
 	}
 
-	if resp.AssistantText != "Hello" {
-		t.Fatalf("assistant text = %q, want Hello", resp.AssistantText)
+	if optionalStringValue(resp.AssistantText) != "Hello" {
+		t.Fatalf("assistant text = %q, want Hello", optionalStringValue(resp.AssistantText))
 	}
 	if resp.Usage.InputTokens != 11 || resp.Usage.OutputTokens != 7 {
 		t.Fatalf("unexpected usage: %+v", resp.Usage)
@@ -239,8 +239,8 @@ func TestGenerateStream_SalvagesCompletedResponseBeforeTrailingMalformedEvent(t 
 		t.Fatalf("GenerateStream failed: %v", err)
 	}
 
-	if resp.AssistantText != "Done" {
-		t.Fatalf("assistant text = %q, want Done", resp.AssistantText)
+	if optionalStringValue(resp.AssistantText) != "Done" {
+		t.Fatalf("assistant text = %q, want Done", optionalStringValue(resp.AssistantText))
 	}
 	if resp.Usage.InputTokens != 3 || resp.Usage.OutputTokens != 5 {
 		t.Fatalf("unexpected usage: %+v", resp.Usage)
@@ -444,8 +444,8 @@ func TestGenerateStream_EmitsAssistantDeltasAndToolCalls(t *testing.T) {
 	if len(deltas) != 2 || deltas[0].Phase != MessagePhaseCommentary || deltas[1].Phase != MessagePhaseCommentary {
 		t.Fatalf("unexpected delta phases: %+v", deltas)
 	}
-	if resp.AssistantText != "Hello" {
-		t.Fatalf("unexpected assistant text: %q", resp.AssistantText)
+	if optionalStringValue(resp.AssistantText) != "Hello" {
+		t.Fatalf("unexpected assistant text: %q", optionalStringValue(resp.AssistantText))
 	}
 	if !resp.ProviderPhase.Is(MessagePhaseCommentary) {
 		t.Fatalf("unexpected provider phase: %#v", resp.ProviderPhase)
@@ -546,6 +546,39 @@ func TestGenerateStream_EmitsUnknownPhaseWhenDeltaPrecedesAssistantItem(t *testi
 	}
 }
 
+func TestGenerateStreamRejectsUnmatchedAssistantDelta(t *testing.T) {
+	transport := newOpenAIStreamTestTransport(t,
+		`{"type":"response.output_text.delta","delta":"stray"}`,
+		`{"type":"response.output_item.added","output_index":1,"item":{"id":"msg_1","type":"message","role":"assistant","phase":"final_answer","content":[]}}`,
+		`{"type":"response.output_text.delta","output_index":1,"delta":"done"}`,
+		`{"type":"response.completed","response":{"output":[{"id":"msg_1","type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"done"}]}]}}`,
+		`[DONE]`,
+	)
+
+	var deltas []AssistantDelta
+	_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{
+		Model:          "gpt-5",
+		ToolChoiceMode: ToolChoiceModeAutomatic,
+	}, StreamCallbacks{
+		OnAssistantDelta: func(delta AssistantDelta) {
+			deltas = append(deltas, delta)
+		},
+	})
+	if err == nil {
+		t.Fatalf("unmatched assistant delta was accepted; emitted deltas = %+v", deltas)
+	}
+	var providerErr *ProviderAPIError
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("error = %T %v, want ProviderAPIError", err, err)
+	}
+	if providerErr.Code != UnifiedErrorCodeProviderContract {
+		t.Fatalf("provider error code = %q, want %q", providerErr.Code, UnifiedErrorCodeProviderContract)
+	}
+	if got := joinedAssistantDeltas(deltas); got != "straydone" {
+		t.Fatalf("emitted assistant deltas = %q, want all provider bytes", got)
+	}
+}
+
 func TestGenerateStream_RejectsCompletedMessageThatConflictsWithDisplayedDeltas(t *testing.T) {
 	transport := newOpenAIStreamTestTransport(t,
 		`{"type":"response.output_item.added","output_index":0,"item":{"type":"message","role":"assistant","phase":"final_answer","content":[]}}`,
@@ -579,7 +612,7 @@ func TestGenerateStream_RejectsCompletedMessageThatConflictsWithDisplayedDeltas(
 	}
 }
 
-func TestGenerateStream_IgnoresWhitespaceOnlyAssistantShimBeforeToolCall(t *testing.T) {
+func TestGenerateStream_OmitsNonFinalEmptyAssistantContentBeforeToolCall(t *testing.T) {
 	transport := newOpenAIStreamTestTransport(t,
 		`{"type":"response.output_item.added","output_index":1,"item":{"id":"msg_1","type":"message","role":"assistant","content":[]}}`,
 		`{"type":"response.output_text.delta","item_id":"msg_1","output_index":1,"content_index":0,"delta":"\n\n"}`,
@@ -605,8 +638,8 @@ func TestGenerateStream_IgnoresWhitespaceOnlyAssistantShimBeforeToolCall(t *test
 	if len(deltas) != 0 {
 		t.Fatalf("assistant deltas = %+v, want no semantic assistant output", deltas)
 	}
-	if resp.AssistantText != "" {
-		t.Fatalf("assistant text = %q, want empty", resp.AssistantText)
+	if resp.AssistantText != nil {
+		t.Fatalf("assistant text = %#v, want omitted non-final content", resp.AssistantText)
 	}
 	if len(resp.ToolCalls) != 1 || resp.ToolCalls[0].ID != "call_1" || resp.ToolCalls[0].Name != "shell" {
 		t.Fatalf("tool calls = %+v, want shell call_1", resp.ToolCalls)
@@ -624,8 +657,8 @@ func TestGenerateStream_UsesFinalizedOutputTextWhenProviderOmitsDeltas(t *testin
 	if err != nil {
 		t.Fatalf("GenerateStream failed: %v", err)
 	}
-	if resp.AssistantText != "Compaction summary" {
-		t.Fatalf("assistant text = %q, want finalized output text", resp.AssistantText)
+	if optionalStringValue(resp.AssistantText) != "Compaction summary" {
+		t.Fatalf("assistant text = %q, want finalized output text", optionalStringValue(resp.AssistantText))
 	}
 	if len(resp.OutputItems) != 1 || resp.OutputItems[0].Content == nil || *resp.OutputItems[0].Content != "Compaction summary" {
 		t.Fatalf("output items = %+v, want synthesized finalized assistant output", resp.OutputItems)
@@ -657,8 +690,8 @@ func TestGenerateStream_DeliversTrailingWhitespaceBeforeToolCallWithoutBuffering
 	if got := joinedAssistantDeltas(deltas); got != "I will run it.\n\n" {
 		t.Fatalf("assistant deltas = %q, want exact streamed content", got)
 	}
-	if resp.AssistantText != "I will run it.\n\n" {
-		t.Fatalf("assistant text = %q, want exact streamed content", resp.AssistantText)
+	if optionalStringValue(resp.AssistantText) != "I will run it.\n\n" {
+		t.Fatalf("assistant text = %q, want exact streamed content", optionalStringValue(resp.AssistantText))
 	}
 	if len(resp.ToolCalls) != 1 || resp.ToolCalls[0].ID != "call_1" || resp.ToolCalls[0].Name != "shell" {
 		t.Fatalf("tool calls = %+v, want shell call_1", resp.ToolCalls)
@@ -678,8 +711,8 @@ func TestGenerateStream_IgnoresStructuredTrailingWhitespaceShimWithoutDeltaConsu
 	if err != nil {
 		t.Fatalf("GenerateStream failed: %v", err)
 	}
-	if resp.AssistantText != "Hello" {
-		t.Fatalf("assistant text = %q, want finalized content", resp.AssistantText)
+	if optionalStringValue(resp.AssistantText) != "Hello" {
+		t.Fatalf("assistant text = %q, want finalized content", optionalStringValue(resp.AssistantText))
 	}
 }
 
@@ -706,8 +739,8 @@ func TestGenerateStream_IgnoresLeadingWhitespaceAssistantShimBeforeContent(t *te
 	if got := joinedAssistantDeltas(deltas); got != "Hello world" {
 		t.Fatalf("assistant deltas = %q, want finalized content", got)
 	}
-	if resp.AssistantText != "Hello world" {
-		t.Fatalf("assistant text = %q, want finalized content", resp.AssistantText)
+	if optionalStringValue(resp.AssistantText) != "Hello world" {
+		t.Fatalf("assistant text = %q, want finalized content", optionalStringValue(resp.AssistantText))
 	}
 }
 
@@ -721,7 +754,7 @@ func TestGenerateStream_PreservesResumedOutputWhitespaceAfterInterleavedOutput(t
 	)
 
 	var deltas []AssistantDelta
-	_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{
+	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{
 		OnAssistantDelta: func(delta AssistantDelta) {
 			deltas = append(deltas, delta)
 		},
@@ -731,6 +764,52 @@ func TestGenerateStream_PreservesResumedOutputWhitespaceAfterInterleavedOutput(t
 	}
 	if got := joinedAssistantDeltas(deltas); got != "firstsecond continuation" {
 		t.Fatalf("assistant deltas = %q, want resumed output whitespace preserved", got)
+	}
+	if optionalStringValue(resp.AssistantText) != "firstsecond continuation" {
+		t.Fatalf("assistant text = %q, want all interleaved unphased output", optionalStringValue(resp.AssistantText))
+	}
+}
+
+func TestGenerateStream_PreservesPendingOutputIndexAfterFinalizedOutput(t *testing.T) {
+	transport := newOpenAIStreamTestTransport(t,
+		`{"type":"response.output_text.delta","output_index":0,"delta":"first"}`,
+		`{"type":"response.output_text.delta","output_index":1,"delta":"second"}`,
+		`{"type":"response.output_text.done","output_index":0,"text":"first"}`,
+		`{"type":"response.completed","response":{"output":[]}}`,
+		`[DONE]`,
+	)
+
+	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{})
+	if err != nil {
+		t.Fatalf("GenerateStream failed: %v", err)
+	}
+	if optionalStringValue(resp.AssistantText) != "firstsecond" {
+		t.Fatalf("assistant text = %q, want finalized and pending output", optionalStringValue(resp.AssistantText))
+	}
+	if !resp.ProviderPhase.IsAbsent() {
+		t.Fatalf("provider phase = %v, want structurally absent for unphased fallback", resp.ProviderPhase.Value())
+	}
+}
+
+func TestGenerateStreamAcceptsCompletedEmptyFinalAfterDoneOnlyStream(t *testing.T) {
+	transport := newOpenAIStreamTestTransport(t,
+		`{"type":"response.output_text.done","output_index":0,"text":""}`,
+		`{"type":"response.completed","response":{"output":[{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":""}]}]}}`,
+		`[DONE]`,
+	)
+
+	resp, err := NewOpenAIClient(transport).GenerateStreamWithEvents(context.Background(), Request{
+		Model:          "gpt-5",
+		ToolChoiceMode: ToolChoiceModeAutomatic,
+	}, StreamCallbacks{})
+	if err != nil {
+		t.Fatalf("generate stream: %v", err)
+	}
+	if resp.Assistant.Content == nil || *resp.Assistant.Content != "" {
+		t.Fatalf("assistant content = %#v, want present empty content", resp.Assistant.Content)
+	}
+	if resp.Assistant.Phase == nil || *resp.Assistant.Phase != MessagePhaseFinal {
+		t.Fatalf("assistant phase = %#v, want final", resp.Assistant.Phase)
 	}
 }
 
@@ -756,8 +835,8 @@ func TestGenerateStream_PreservesWhitespaceBetweenAssistantContent(t *testing.T)
 	if got := joinedAssistantDeltas(deltas); got != "Hello world" {
 		t.Fatalf("assistant deltas = %q, want preserved interstitial whitespace", got)
 	}
-	if resp.AssistantText != "Hello world" {
-		t.Fatalf("assistant text = %q, want preserved interstitial whitespace", resp.AssistantText)
+	if optionalStringValue(resp.AssistantText) != "Hello world" {
+		t.Fatalf("assistant text = %q, want preserved interstitial whitespace", optionalStringValue(resp.AssistantText))
 	}
 }
 
@@ -772,8 +851,8 @@ func TestGenerateStream_DoesNotRepairMultiMessageAssistantOutputWithAggregateTex
 		t.Fatalf("GenerateStream failed: %v", err)
 	}
 
-	if resp.AssistantText != "AB" {
-		t.Fatalf("assistant text = %q, want aggregate completed text", resp.AssistantText)
+	if optionalStringValue(resp.AssistantText) != "AB" {
+		t.Fatalf("assistant text = %q, want aggregate completed text", optionalStringValue(resp.AssistantText))
 	}
 	if len(resp.OutputItems) != 2 ||
 		resp.OutputItems[0].Content == nil || *resp.OutputItems[0].Content != "A" ||
@@ -801,6 +880,23 @@ func TestGenerateStream_MapsStructuredStreamErrorToProviderAPIError(t *testing.T
 	}
 }
 
+func TestGenerateStream_MapsProviderOverloadCodeWithoutMessageMatching(t *testing.T) {
+	transport := newOpenAIStreamTestTransport(t,
+		`{"type":"error","error":{"type":"server_error","code":"server_is_overloaded","param":"request","message":"not the overload wording"}}`,
+		`[DONE]`,
+	)
+	_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, StreamCallbacks{})
+	var providerErr *ProviderAPIError
+	if err == nil || !errors.As(err, &providerErr) {
+		t.Fatalf("expected ProviderAPIError, got %T", err)
+	}
+	if providerErr.Code != UnifiedErrorCodeProviderOverload || providerErr.ProviderCode != "server_is_overloaded" || providerErr.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected provider overload: %+v", providerErr)
+	}
+	if got := classifyOpenAIUnifiedErrorCode(http.StatusUnauthorized, "server_is_overloaded"); got != UnifiedErrorCodeAuthentication || classifyOpenAIUnifiedErrorCode(http.StatusOK, "SERVER_IS_OVERLOADED") != UnifiedErrorCodeUnknown {
+		t.Fatalf("terminal HTTP status classification = %q, want %q", got, UnifiedErrorCodeAuthentication)
+	}
+}
 func TestGenerateStream_MapsResponseErrorEventToProviderAPIError(t *testing.T) {
 	transport := newOpenAIStreamTestTransport(t,
 		`{"type":"error","code":"context_length_exceeded","param":"input","message":"too many tokens","sequence_number":1}`,
@@ -1039,7 +1135,7 @@ func TestGenerateStream_RejectsEmptyCompletedMessageAfterAssistantDeltas(t *test
 }
 
 func TestBuildOutputItemsFromStreamPreservesAbsentPhase(t *testing.T) {
-	items := buildOutputItemsFromStream("streamed text", "", nil, nil, nil)
+	items := buildOutputItemsFromStream(textutil.Value("streamed text"), true, "", nil, nil, nil)
 	if len(items) != 1 {
 		t.Fatalf("output items = %+v, want one assistant message", items)
 	}
@@ -1060,8 +1156,8 @@ func TestGenerateStream_PreservesAssistantOutputItemPhaseWhenCompletedPhaseIsMis
 		t.Fatalf("GenerateStream failed: %v", err)
 	}
 
-	if resp.AssistantText != "Done" {
-		t.Fatalf("assistant text = %q, want Done", resp.AssistantText)
+	if optionalStringValue(resp.AssistantText) != "Done" {
+		t.Fatalf("assistant text = %q, want Done", optionalStringValue(resp.AssistantText))
 	}
 	if !resp.ProviderPhase.Is(MessagePhaseFinal) {
 		t.Fatalf("provider phase = %#v, want %q", resp.ProviderPhase, MessagePhaseFinal)
@@ -1089,8 +1185,8 @@ func TestGenerateStream_PrefersPhaseResolvedAssistantTextOverRawDeltaConcatenati
 		t.Fatalf("GenerateStream failed: %v", err)
 	}
 
-	if resp.AssistantText != "Done" {
-		t.Fatalf("assistant text = %q, want Done", resp.AssistantText)
+	if optionalStringValue(resp.AssistantText) != "Done" {
+		t.Fatalf("assistant text = %q, want Done", optionalStringValue(resp.AssistantText))
 	}
 	if !resp.ProviderPhase.Is(MessagePhaseFinal) {
 		t.Fatalf("provider phase = %#v, want %q", resp.ProviderPhase, MessagePhaseFinal)
@@ -1135,8 +1231,8 @@ func TestGenerateStream_PreservesHostedWebSearchOutputItemFromStream(t *testing.
 	if err != nil {
 		t.Fatalf("GenerateStream failed: %v", err)
 	}
-	if resp.AssistantText != "Done" {
-		t.Fatalf("assistant text = %q, want Done", resp.AssistantText)
+	if optionalStringValue(resp.AssistantText) != "Done" {
+		t.Fatalf("assistant text = %q, want Done", optionalStringValue(resp.AssistantText))
 	}
 	if len(resp.OutputItems) != 2 {
 		t.Fatalf("expected hosted passthrough output item + assistant message, got %+v", resp.OutputItems)

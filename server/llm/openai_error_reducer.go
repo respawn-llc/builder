@@ -303,6 +303,11 @@ func classifyOpenAIUnifiedErrorCode(statusCode int, providerCode string) Unified
 		"prompt_too_long",
 		"input_too_long":
 		return UnifiedErrorCodeContextLengthOverflow
+	case "server_is_overloaded":
+		if providerCode == "server_is_overloaded" {
+			return UnifiedErrorCodeProviderOverload
+		}
+		return UnifiedErrorCodeUnknown
 	default:
 		return UnifiedErrorCodeUnknown
 	}

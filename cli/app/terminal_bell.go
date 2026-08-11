@@ -317,16 +317,14 @@ func (h *bellHooks) recordReviewerState(state clientui.TranscriptReviewerState) 
 	}
 }
 
-func (h *bellHooks) clearPendingTurnCompletionForSilentFinal(stepID runtimeids.StepID) {
+func (h *bellHooks) clearPendingTurnCompletionForNoFinal() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.reviewerStep != nil && *h.reviewerStep == stepID {
+	if h.reviewerStep != nil {
 		return
 	}
 	h.pendingTurnCompletion = nil
-	if h.observedTurn != nil && h.observedTurn.stepID == stepID {
-		h.observedTurn = nil
-	}
+	h.observedTurn = nil
 }
 
 func (h *bellHooks) OnTurnQueueDrained() {

@@ -260,6 +260,7 @@ func setWorkflowGraphSaveNodeGroup(nodes []NodeRecord, nodeID workflow.NodeID, g
 
 func confirmWorkflowGraphSaveRequest(req WorkflowGraphSaveRequest, impact WorkflowGraphSaveImpact) WorkflowGraphSaveRequest {
 	req.Confirmed = true
+	req.ExpectedRemovedNodeGroupCount = impact.RemovedNodeGroupCount
 	req.ExpectedRemovedNodeCount = impact.RemovedNodeCount
 	req.ExpectedRemovedTransitionGroupCount = impact.RemovedTransitionGroupCount
 	req.ExpectedRemovedEdgeCount = impact.RemovedEdgeCount

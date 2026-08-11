@@ -9,6 +9,7 @@ import (
 	"core/cli/app/commands"
 	"core/shared/clientui"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -322,7 +323,7 @@ func TestSlashCommandPickerAuthRefreshUsesBoundedStatusTimeout(t *testing.T) {
 
 func TestSlashCommandPickerAlwaysShowsCopyWithoutReadingCachedRuntimeStatus(t *testing.T) {
 	client := &runtimeControlFakeClient{
-		status: clientui.RuntimeStatus{LastCommittedAssistantFinalAnswer: "done"},
+		status: clientui.RuntimeStatus{LastCommittedAssistantFinalAnswer: textutil.Value("done")},
 	}
 	m := newProjectedTestUIModel(client)
 	testSetMainInput(m, "/co")

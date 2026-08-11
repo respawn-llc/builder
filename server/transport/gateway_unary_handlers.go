@@ -263,12 +263,11 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 	protocol.MethodWorkflowTaskDelete:            gatewayClientCallNoResponse[apicontract.WorkflowService, serverapi.WorkflowTaskDeleteRequest](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.DeleteWorkflowTask),
 	protocol.MethodWorkflowAttentionList:         gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowAttentionListRequest, serverapi.WorkflowAttentionListResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.ListWorkflowAttention),
 	protocol.MethodWorkflowTaskAttentionList:     gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowTaskAttentionListRequest, serverapi.WorkflowTaskAttentionListResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.ListWorkflowTaskAttention),
-	protocol.MethodWorkflowTaskQuestionAnswer:    gatewayClientCallNoResponse[apicontract.WorkflowService, serverapi.WorkflowTaskQuestionAnswerRequest](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.AnswerWorkflowTaskQuestion),
 	protocol.MethodWorkflowTaskCommentAdd:        gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowTaskCommentAddRequest, serverapi.WorkflowTaskCommentAddResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.AddWorkflowTaskComment),
-	protocol.MethodWorkflowTaskCommentList:       gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowTaskCommentListRequest, serverapi.WorkflowTaskCommentListResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.ListWorkflowTaskComments),
+	protocol.MethodWorkflowTaskCommentList:       gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowTaskOffsetPageRequest, serverapi.WorkflowTaskCommentListResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.ListWorkflowTaskComments),
 	protocol.MethodWorkflowTaskCommentReplace:    gatewayClientCallNoResponse[apicontract.WorkflowService, serverapi.WorkflowTaskCommentReplaceRequest](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.ReplaceWorkflowTaskComment),
 	protocol.MethodWorkflowTaskCommentDelete:     gatewayClientCallNoResponse[apicontract.WorkflowService, serverapi.WorkflowTaskCommentDeleteRequest](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.DeleteWorkflowTaskComment),
-	protocol.MethodWorkflowTaskActivityList:      gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowTaskActivityListRequest, serverapi.WorkflowTaskActivityListResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.ListWorkflowTaskActivity),
+	protocol.MethodWorkflowTaskActivityList:      gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowTaskOffsetPageRequest, serverapi.WorkflowTaskActivityListResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.ListWorkflowTaskActivity),
 	protocol.MethodWorkflowTaskList:              gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowTaskListRequest, serverapi.WorkflowTaskListResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.ListWorkflowTasks),
 	protocol.MethodWorkflowTaskSearch:            gatewayClientCall[apicontract.WorkflowService, serverapi.TaskSearchRequest, serverapi.TaskSearchResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.SearchWorkflowTasks),
 	protocol.MethodWorkflowBoardGet:              gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowBoardRequest, serverapi.WorkflowBoardResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.GetWorkflowBoard),
@@ -282,6 +281,15 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 				return serverapi.SessionPlanResponse{}, err
 			}
 			return launchClient.PlanSession(ctx, params)
+		})
+	},
+	protocol.MethodSessionWorkspaceChatDraft: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
+		return decodeAndHandle(req, func(params serverapi.WorkspaceChatDraftRequest) (serverapi.WorkspaceChatDraftResponse, error) {
+			launchClient, err := g.sessionLaunchClientForState(ctx, state)
+			if err != nil {
+				return serverapi.WorkspaceChatDraftResponse{}, err
+			}
+			return launchClient.WorkspaceChatDraft(ctx, params)
 		})
 	},
 	protocol.MethodSessionGetMainView:                            gatewayClientCall[apicontract.SessionViewService, serverapi.SessionMainViewRequest, serverapi.SessionMainViewResponse](GatewayDependencies.SessionViewClient, apicontract.SessionViewService.GetSessionMainView),
@@ -371,8 +379,6 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 	protocol.MethodProcessKill:         gatewayClientCall[apicontract.ProcessControlService, serverapi.ProcessKillRequest, serverapi.ProcessKillResponse](GatewayDependencies.ProcessControlClient, apicontract.ProcessControlService.KillProcess),
 	protocol.MethodProcessInlineOutput: gatewayClientCall[apicontract.ProcessControlService, serverapi.ProcessInlineOutputRequest, serverapi.ProcessInlineOutputResponse](GatewayDependencies.ProcessControlClient, apicontract.ProcessControlService.GetInlineOutput),
 	protocol.MethodAskListPending:      gatewayClientCall[apicontract.AskViewService, serverapi.AskListPendingBySessionRequest, serverapi.AskListPendingBySessionResponse](GatewayDependencies.AskViewClient, apicontract.AskViewService.ListPendingAsksBySession),
-	protocol.MethodAskAnswer:           gatewayClientCallNoResponse[apicontract.PromptControlService, serverapi.AskAnswerRequest](GatewayDependencies.PromptControlClient, apicontract.PromptControlService.AnswerAsk),
 	protocol.MethodPromptAnswerBatch:   gatewayClientCall[apicontract.PromptControlService, serverapi.PromptAnswerBatchRequest, serverapi.PromptAnswerBatchResponse](GatewayDependencies.PromptControlClient, apicontract.PromptControlService.AnswerPromptBatch),
 	protocol.MethodApprovalListPending: gatewayClientCall[apicontract.ApprovalViewService, serverapi.ApprovalListPendingBySessionRequest, serverapi.ApprovalListPendingBySessionResponse](GatewayDependencies.ApprovalViewClient, apicontract.ApprovalViewService.ListPendingApprovalsBySession),
-	protocol.MethodApprovalAnswer:      gatewayClientCallNoResponse[apicontract.PromptControlService, serverapi.ApprovalAnswerRequest](GatewayDependencies.PromptControlClient, apicontract.PromptControlService.AnswerApproval),
 }

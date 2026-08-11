@@ -28,7 +28,7 @@ func TestSessionLaunchInitialStateReturnsLifecycleError(t *testing.T) {
 	if !errors.Is(err, lookupErr) {
 		t.Fatalf("initial state error = %v, want %v", err, lookupErr)
 	}
-	if state.Input != "" || len(state.RecoveryBuffers) != 0 {
+	if state.Input != "" {
 		t.Fatalf("failed initial state lookup returned state %+v", state)
 	}
 }

@@ -1,11 +1,14 @@
 import type { AttentionNotificationEventHandler } from "./attentionNotifications";
 import { attentionNotificationRpcHandler } from "./attentionNotificationSubscription";
 import type { ApiConnectionSource, ApiService, ApiSubscription } from "./apiService";
+import { parseCatalogInput, parseCatalogResponse, requireCatalogProject } from "./clientCatalog";
 import { parseRpcResponse as parse } from "./clientParse";
 import * as taskLifecycle from "./clientTaskLifecycle";
 import * as taskDependencies from "./clientTaskDependencies";
 import * as taskDetail from "./clientTaskDetail";
+import * as promptAnswers from "./clientPromptAnswers";
 import * as taskSearch from "./clientTaskSearch";
+import * as worktree from "./clientWorktree";
 import {
   workflowGraphDraftPayload,
   workflowGraphMetadataPayload,
@@ -13,7 +16,8 @@ import {
 } from "./clientWorkflowGraph";
 import type {
   BoardNodeCardsInput,
-  QuestionAnswerInput,
+  PromptAnswerBatchInput,
+  PromptAnswerBatchResponse,
   TaskEditInput,
   TaskMoveInput,
   TaskResumeInput,
@@ -33,7 +37,8 @@ import type {
 } from "./clientInputs";
 import { compactJsonObject, emptyJsonObject } from "./json";
 import type { SetupOperationID } from "./setupOperationID";
-import { worktreeSetupRpcHandler, type WorktreeSetupEventHandler } from "./worktreeSetup";
+import type * as worktreeModels from "./schemas/worktree";
+import { subscribeWorktreeSetup, type WorktreeSetupEventHandler } from "./worktreeSetup";
 import type {
   ActivityPage,
   AttentionPage,
@@ -48,6 +53,9 @@ import type {
   ProjectMutationResponse,
   ProjectPage,
   ServerReadiness,
+  SessionCatalogPage,
+  SessionCategory,
+  SessionPagePosition,
   TaskAttention,
   TaskComment,
   TaskDetail,
@@ -85,6 +93,14 @@ import {
   workspaceListSchema,
   workspaceUnlinkResponseSchema,
 } from "./schemas/project";
+import {
+  canonicalProjectIDSchema,
+  sessionCategorySchema,
+  sessionPagePositionSchema,
+  sessionPageResponseSchema,
+  workspacePageTokenSchema,
+} from "./schemas/catalog";
+import { CatalogContractError } from "./errors";
 import { readinessSchema } from "./schemas/status";
 import { workflowIDSchema } from "./schemas/workflowID";
 import {
@@ -140,16 +156,56 @@ export class ApiClient implements ApiService {
     );
   }
 
-  async listWorkspaces(projectID: string, pageToken = ""): Promise<WorkspaceList> {
-    return parse(
-      "project.workspace.list",
-      workspaceListSchema,
-      await this.#transport.call("project.workspace.list", {
-        project_id: projectID,
+  async listSessionPage(
+    projectID: string,
+    category: SessionCategory,
+    position: SessionPagePosition,
+  ): Promise<SessionCatalogPage> {
+    const validatedProjectID = parseCatalogInput(
+      "session.page project ID",
+      canonicalProjectIDSchema,
+      projectID,
+    );
+    const validatedCategory = parseCatalogInput("session.page category", sessionCategorySchema, category);
+    const validatedPosition = parseCatalogInput("session.page position", sessionPagePositionSchema, position);
+    const response = parseCatalogResponse(
+      "session.page",
+      sessionPageResponseSchema,
+      await this.#transport.call("session.page", {
+        project_id: validatedProjectID,
+        category: validatedCategory,
         page_size: 100,
-        page_token: pageToken,
+        position: validatedPosition,
       }),
     );
+    requireCatalogProject("session.page", validatedProjectID, response.projectID);
+    if (response.category !== validatedCategory) {
+      throw CatalogContractError.sessionCategoryMismatch(validatedCategory, response.category);
+    }
+    return response;
+  }
+
+  async listWorkspaces(projectID: string, pageToken?: string): Promise<WorkspaceList> {
+    const validatedProjectID = parseCatalogInput(
+      "project.workspace.list project ID",
+      canonicalProjectIDSchema,
+      projectID,
+    );
+    const validatedPageToken =
+      pageToken === undefined
+        ? undefined
+        : parseCatalogInput("project.workspace.list page token", workspacePageTokenSchema, pageToken);
+    const request =
+      validatedPageToken === undefined
+        ? { project_id: validatedProjectID, page_size: 100 }
+        : { project_id: validatedProjectID, page_size: 100, page_token: validatedPageToken };
+    const response = parseCatalogResponse(
+      "project.workspace.list",
+      workspaceListSchema,
+      await this.#transport.call("project.workspace.list", request),
+    );
+    requireCatalogProject("project.workspace.list", validatedProjectID, response.projectID);
+    return response;
   }
 
   async getProjectEdit(projectID: string, pageToken = ""): Promise<ProjectEdit> {
@@ -362,7 +418,10 @@ export class ApiClient implements ApiService {
     return parse(
       "workflow.validate",
       workflowValidationSchema,
-      await this.#transport.call("workflow.validate", { workflow_id: workflowIDSchema.parse(workflowID), mode }),
+      await this.#transport.call("workflow.validate", {
+        workflow_id: workflowIDSchema.parse(workflowID),
+        mode,
+      }),
     );
   }
 
@@ -450,7 +509,9 @@ export class ApiClient implements ApiService {
     return parse(
       "workflow.deletePreview",
       workflowDeletePreviewSchema,
-      await this.#transport.call("workflow.deletePreview", { workflow_id: workflowIDSchema.parse(workflowID) }),
+      await this.#transport.call("workflow.deletePreview", {
+        workflow_id: workflowIDSchema.parse(workflowID),
+      }),
     );
   }
 
@@ -588,8 +649,8 @@ export class ApiClient implements ApiService {
     return taskDetail.getTask(this.#transport, taskID);
   }
 
-  async listTaskActivity(taskID: string, pageToken: string): Promise<ActivityPage> {
-    return taskDetail.listTaskActivity(this.#transport, taskID, pageToken);
+  async listTaskActivity(taskID: string, offset: number): Promise<ActivityPage> {
+    return taskDetail.listTaskActivity(this.#transport, taskID, offset);
   }
 
   async listTaskComments(taskID: string, offset: number): Promise<CommentPage> {
@@ -608,8 +669,8 @@ export class ApiClient implements ApiService {
     await this.#transport.call("workflow.task.comment.delete", { comment_id: commentID });
   }
 
-  async answerQuestion(input: QuestionAnswerInput): Promise<void> {
-    await taskDetail.answerQuestion(this.#transport, input);
+  async answerPromptBatch(input: PromptAnswerBatchInput): Promise<PromptAnswerBatchResponse> {
+    return promptAnswers.answerPromptBatch(this.#transport, input);
   }
 
   async listPendingAsks(sessionID: string): Promise<readonly PendingAsk[]> {
@@ -640,14 +701,15 @@ export class ApiClient implements ApiService {
     );
   }
 
-  subscribeWorktreeSetup(
-    setupOperationID: SetupOperationID,
-    handler: WorktreeSetupEventHandler,
-  ): ApiSubscription {
-    return this.#transport.subscribe(
-      "worktree.setup.subscribe",
-      { setup_operation_id: setupOperationID.toJSONValue() },
-      worktreeSetupRpcHandler(handler),
-    );
-  }
+  getWorktreeStatus = async (sessionID: string) => worktree.getWorktreeStatus(this.#transport, sessionID);
+  listWorktrees = async (sessionID: string) => worktree.listWorktrees(this.#transport, sessionID);
+  resolveWorktreeSelector = async (sessionID: string, selector: string) => worktree.resolveWorktreeSelector(this.#transport, sessionID, selector);
+  resolveWorktreeCreateTarget = async (sessionID: string, target: string) => worktree.resolveWorktreeCreateTarget(this.#transport, sessionID, target);
+  previewWorktreeDelete = async (sessionID: string, selector: string) => worktree.previewWorktreeDelete(this.#transport, sessionID, selector);
+  createWorktree = async (input: worktreeModels.WorktreeCreateInput) => worktree.createWorktree(this.#transport, input);
+  switchWorktree = async (sessionID: string, operation: worktreeModels.WorktreeSwitch) => worktree.switchWorktree(this.#transport, sessionID, operation);
+  deleteWorktree = async (sessionID: string, preview: worktreeModels.WorktreeDeletePreview,
+    confirmation: worktreeModels.WorktreeDeleteConfirmationChoice) =>
+    worktree.deleteWorktree(this.#transport, sessionID, preview, confirmation);
+  subscribeWorktreeSetup = (setupOperationID: SetupOperationID, handler: WorktreeSetupEventHandler) => subscribeWorktreeSetup(this.#transport, setupOperationID, handler);
 }

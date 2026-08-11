@@ -30,7 +30,7 @@ func failf(format string, args ...any) error {
 }
 
 func editErrorResult(c tools.Call, err error) tools.Result {
-	if errors.Is(err, errForeignManagedWorktree) {
+	if errors.Is(err, tools.ErrForeignManagedWorktreeEdit) {
 		return tools.ErrorResult(c, tools.ForeignManagedWorktreeEditDeniedMessage)
 	}
 	message := "Edit failed."
@@ -44,6 +44,38 @@ func editErrorResult(c tools.Call, err error) tools.Result {
 	return tools.Result{
 		CallID: c.ID, Name: c.Name, Output: body, IsError: true,
 		Summary: textutil.Value(message),
+	}
+}
+
+func editFileAccessFailure(outcome tools.FileAccessOutcome) error {
+	path := strings.TrimSpace(outcome.Request.RequestedPath)
+	switch outcome.Kind {
+	case tools.FileAccessDeniedForeignManagedWorktree:
+		return tools.ErrForeignManagedWorktreeEdit
+	case tools.FileAccessDeniedByPathPolicy:
+		if outcome.PathDeny == nil {
+			return failf("file access path-deny outcome has no match")
+		}
+		return failf("no file edit permission for %s. %s", path, outcome.PathDeny.Message)
+	case tools.FileAccessDeniedOutsideWorkspace:
+		return failf("no file edit permission for %s. edit target outside workspace", path)
+	case tools.FileAccessDeniedByUser:
+		if outcome.Commentary == nil {
+			return failf("user denied the edit for %s.", path)
+		}
+		return failf("user denied the edit for %s.\nUser said: %s", path, strings.TrimSpace(*outcome.Commentary))
+	case tools.FileAccessApprovalFailed:
+		if outcome.Cause == nil {
+			return failf("file edit approval failed for %s.", path)
+		}
+		return failf("file edit approval failed for %s. %s", path, outcome.Cause)
+	case tools.FileAccessPolicyFailed:
+		if outcome.Cause == nil {
+			return failf("file access policy failed for %s.", path)
+		}
+		return outcome.Cause
+	default:
+		return failf("unexpected file access outcome %d for %s.", outcome.Kind, path)
 	}
 }
 

@@ -6,24 +6,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
 	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 
 	"core/server/tools"
-	patchtool "core/server/tools/patch"
 	"core/shared/imagefileio"
 )
-
-// ErrResolveWorkspaceRealPath is returned when the workspace root cannot be
-// resolved to its real (symlink-evaluated) path. Callers and tests match this
-// with errors.Is rather than comparing rendered message text.
-var ErrResolveWorkspaceRealPath = errors.New("resolve workspace real path")
 
 const maxFileSizeBytes int64 = 800 << 10
 const maxOriginalRasterSizeBytes = imagefileio.MaxReadBytes
@@ -39,47 +31,42 @@ var supportedImageMIMEs = map[string]struct{}{
 }
 
 type Tool struct {
-	fileAccessScope           tools.FileAccessScope
-	workspaceOnly             bool
-	allowOutsideWorkspace     bool
-	outsideWorkspaceApprover  patchtool.OutsideWorkspaceApprover
-	outsideWorkspaceAudit     OutsideWorkspaceAuditLogger
-	outsideWorkspaceSessionMu sync.RWMutex
-	outsideWorkspaceAllowed   bool
-	supported                 bool
+	fileAccess            *tools.FileAccessPolicy
+	outsideWorkspaceAudit OutsideWorkspaceAuditLogger
+	supported             bool
 }
 
 type OutsideWorkspaceAudit struct {
 	RequestedPath string
 	ResolvedPath  string
-	Reason        string
+	Reason        tools.FileAccessReason
 }
 
 type OutsideWorkspaceAuditLogger func(OutsideWorkspaceAudit)
 
-type Option func(*Tool)
+type options struct {
+	allowOutsideWorkspace    bool
+	outsideWorkspaceApprover tools.FileAccessApprover
+	outsideWorkspaceAudit    OutsideWorkspaceAuditLogger
+}
+
+type Option func(*options)
 
 func WithAllowOutsideWorkspace(allow bool) Option {
-	return func(t *Tool) {
-		t.allowOutsideWorkspace = allow
+	return func(options *options) {
+		options.allowOutsideWorkspace = allow
 	}
 }
 
-func WithOutsideWorkspaceApprover(approver patchtool.OutsideWorkspaceApprover) Option {
-	return func(t *Tool) {
-		t.outsideWorkspaceApprover = approver
+func WithOutsideWorkspaceApprover(approver tools.FileAccessApprover) Option {
+	return func(options *options) {
+		options.outsideWorkspaceApprover = approver
 	}
 }
 
 func WithOutsideWorkspaceAuditLogger(logger OutsideWorkspaceAuditLogger) Option {
-	return func(t *Tool) {
-		t.outsideWorkspaceAudit = logger
-	}
-}
-
-func WithFileAccessScope(scope tools.FileAccessScope) Option {
-	return func(t *Tool) {
-		t.fileAccessScope = scope.Clone()
+	return func(options *options) {
+		options.outsideWorkspaceAudit = logger
 	}
 }
 
@@ -95,39 +82,27 @@ type contentItem struct {
 	Filename string `json:"filename,omitempty"`
 }
 
-func New(workspaceRoot string, supported bool, opts ...Option) (*Tool, error) {
-	rootAbs, err := filepath.Abs(workspaceRoot)
-	if err != nil {
-		return nil, fmt.Errorf("resolve workspace root: %w", err)
-	}
-	rootReal, err := filepath.EvalSymlinks(rootAbs)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, tools.WrapMissingWorkspaceRootError(rootAbs, fmt.Errorf("%w: %w", ErrResolveWorkspaceRealPath, err))
-		}
-		return nil, fmt.Errorf("%w: %w", ErrResolveWorkspaceRealPath, err)
-	}
-	rootInfo, err := os.Stat(rootReal)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, tools.WrapMissingWorkspaceRootError(rootAbs, fmt.Errorf("stat workspace root: %w", err))
-		}
-		return nil, fmt.Errorf("stat workspace root: %w", err)
-	}
-	t := &Tool{
-		fileAccessScope: tools.FileAccessScope{
-			WorkingDirectory:    tools.FilesystemRoot{LexicalPath: rootAbs, RealPath: rootReal, Info: rootInfo},
-			ExecutionTargetRoot: tools.FilesystemRoot{LexicalPath: rootAbs, RealPath: rootReal, Info: rootInfo},
-		},
-		workspaceOnly: true,
-		supported:     supported,
-	}
+func New(filesystemContext tools.FilesystemContext, supported bool, opts ...Option) (*Tool, error) {
+	settings := options{}
 	for _, opt := range opts {
 		if opt != nil {
-			opt(t)
+			opt(&settings)
 		}
 	}
-	return t, nil
+	fileAccess, err := tools.NewFileAccessPolicy(tools.FileAccessPolicyConfig{
+		Context:               filesystemContext,
+		Mode:                  tools.FileAccessRead,
+		AllowOutsideWorkspace: settings.allowOutsideWorkspace,
+		Approver:              settings.outsideWorkspaceApprover,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &Tool{
+		fileAccess:            fileAccess,
+		outsideWorkspaceAudit: settings.outsideWorkspaceAudit,
+		supported:             supported,
+	}, nil
 }
 
 func (t *Tool) Call(ctx context.Context, c tools.Call) (tools.Result, error) {
@@ -144,8 +119,7 @@ func (t *Tool) Call(ctx context.Context, c tools.Call) (tools.Result, error) {
 		return tools.ErrorResult(c, "path is required"), nil
 	}
 
-	approvedOutside := map[string]bool{}
-	resolvedPath, err := t.resolvePath(ctx, requestedPath, approvedOutside)
+	resolvedPath, err := t.resolvePath(ctx, requestedPath, t.fileAccess.BeginCall())
 	if err != nil {
 		return tools.ErrorResult(c, err.Error()), nil
 	}
@@ -195,14 +169,14 @@ func (t *Tool) Call(ctx context.Context, c tools.Call) (tools.Result, error) {
 	return tools.Result{CallID: c.ID, Name: c.Name, Output: body}, nil
 }
 
-func (t *Tool) resolvePath(ctx context.Context, path string, approvedOutside map[string]bool) (string, error) {
+func (t *Tool) resolvePath(ctx context.Context, path string, accessCall *tools.FileAccessCall) (string, error) {
 	if strings.TrimSpace(path) == "" {
 		return "", errors.New("path is required")
 	}
 
 	candidate := path
 	if !filepath.IsAbs(candidate) {
-		candidate = filepath.Join(t.fileAccessScope.WorkingDirectory.LexicalPath, candidate)
+		candidate = filepath.Join(t.fileAccess.WorkingDirectory().LexicalPath, candidate)
 	}
 	candidate = filepath.Clean(candidate)
 	abs, err := filepath.Abs(candidate)
@@ -215,48 +189,24 @@ func (t *Tool) resolvePath(ctx context.Context, path string, approvedOutside map
 	}
 	real = filepath.Clean(real)
 
-	guard := patchtool.NewOutsideWorkspaceGuardWithScope(
-		t.fileAccessScope,
-		t.workspaceOnly,
-		t.allowOutsideWorkspace,
-		t.outsideWorkspaceApprover,
-		func() bool {
-			t.outsideWorkspaceSessionMu.RLock()
-			defer t.outsideWorkspaceSessionMu.RUnlock()
-			return t.outsideWorkspaceAllowed
-		},
-		func(allow bool) {
-			t.outsideWorkspaceSessionMu.Lock()
-			t.outsideWorkspaceAllowed = allow
-			t.outsideWorkspaceSessionMu.Unlock()
-		},
-		outsideWorkspaceRejectionInstruction,
-		patchtool.OutsideWorkspaceErrorLabels{
-			OutsidePath:          "view_image path outside workspace",
-			ApprovalFailed:       "outside-workspace read approval failed",
-			RejectedByUserPrefix: "view_image path outside workspace rejected by user",
-		},
-		patchtool.OutsideWorkspaceFailureFactory{
-			ApprovalFailed: readImageOutsideWorkspaceApprovalFailed,
-			UserDenied:     readImageOutsideWorkspaceUserDenied,
-		},
-		patchtool.IsPathInTemporaryDir,
-		func(req patchtool.OutsideWorkspaceRequest, reason string) {
-			t.logOutsideWorkspaceApproval(req, reason)
-		},
-		tools.PathDenyPolicy{},
-	)
-	return guard.Allow(ctx, path, real, approvedOutside)
+	outcome := accessCall.Authorize(ctx, path, real)
+	if !outcome.IsAllowed() {
+		return "", readImageFileAccessFailure(outcome)
+	}
+	if outcome.Reason != tools.FileAccessReasonTrustedRoot {
+		t.logOutsideWorkspaceApproval(outcome)
+	}
+	return real, nil
 }
 
-func (t *Tool) logOutsideWorkspaceApproval(req patchtool.OutsideWorkspaceRequest, reason string) {
+func (t *Tool) logOutsideWorkspaceApproval(outcome tools.FileAccessOutcome) {
 	if t.outsideWorkspaceAudit == nil {
 		return
 	}
 	t.outsideWorkspaceAudit(OutsideWorkspaceAudit{
-		RequestedPath: req.RequestedPath,
-		ResolvedPath:  req.ResolvedPath,
-		Reason:        reason,
+		RequestedPath: outcome.Request.RequestedPath,
+		ResolvedPath:  outcome.Request.ResolvedPath,
+		Reason:        outcome.Reason,
 	})
 }
 
@@ -291,9 +241,31 @@ func statResolvedRegularFile(path string) (os.FileInfo, error) {
 	return info, nil
 }
 
-func readImageOutsideWorkspaceApprovalFailed(req patchtool.OutsideWorkspaceRequest, err error) error {
+func readImageFileAccessFailure(outcome tools.FileAccessOutcome) error {
+	path := readImageOutsideWorkspacePath(outcome.Request)
+	switch outcome.Kind {
+	case tools.FileAccessDeniedOutsideWorkspace:
+		return fmt.Errorf("view_image path outside workspace: %s", path)
+	case tools.FileAccessDeniedByUser:
+		return readImageOutsideWorkspaceUserDenied(outcome.Request, outcome.Commentary)
+	case tools.FileAccessApprovalFailed:
+		return readImageOutsideWorkspaceApprovalFailed(outcome.Request, outcome.Cause)
+	case tools.FileAccessPolicyFailed:
+		if outcome.Cause != nil {
+			return outcome.Cause
+		}
+		return errors.New("view_image file access policy failed")
+	default:
+		return fmt.Errorf("unexpected view_image file access outcome %d", outcome.Kind)
+	}
+}
+
+func readImageOutsideWorkspaceApprovalFailed(req tools.FileAccessRequest, err error) error {
 	path := readImageOutsideWorkspacePath(req)
-	reason := strings.TrimSpace(err.Error())
+	reason := ""
+	if err != nil {
+		reason = strings.TrimSpace(err.Error())
+	}
 	message := "outside-workspace read approval failed"
 	if path != "" {
 		message += " for " + path + "."
@@ -306,7 +278,7 @@ func readImageOutsideWorkspaceApprovalFailed(req patchtool.OutsideWorkspaceReque
 	return errors.New(message)
 }
 
-func readImageOutsideWorkspaceUserDenied(req patchtool.OutsideWorkspaceRequest, approval patchtool.OutsideWorkspaceApproval, rejectionInstruction string) error {
+func readImageOutsideWorkspaceUserDenied(req tools.FileAccessRequest, commentary *string) error {
 	path := readImageOutsideWorkspacePath(req)
 
 	var builder strings.Builder
@@ -316,22 +288,22 @@ func readImageOutsideWorkspaceUserDenied(req patchtool.OutsideWorkspaceRequest, 
 		builder.WriteString(path)
 	}
 	builder.WriteString(".")
-	if approval.Commentary != nil {
+	if commentary != nil {
 		builder.WriteString(" User rejected the approval request for this tool call, and said: ")
-		builder.WriteString(strconv.Quote(strings.TrimSpace(*approval.Commentary)))
+		builder.WriteString(strconv.Quote(strings.TrimSpace(*commentary)))
 		builder.WriteString(".")
 	} else {
 		builder.WriteString(" User rejected the approval request for this tool call.")
 	}
 	builder.WriteString(" Do not attempt to circumvent, hack around, or re-execute the same path. Treat this rejection as authoritative.")
-	if instruction := strings.TrimSpace(rejectionInstruction); instruction != "" {
+	if instruction := strings.TrimSpace(outsideWorkspaceRejectionInstruction); instruction != "" {
 		builder.WriteString(" ")
 		builder.WriteString(instruction)
 	}
 	return errors.New(builder.String())
 }
 
-func readImageOutsideWorkspacePath(req patchtool.OutsideWorkspaceRequest) string {
+func readImageOutsideWorkspacePath(req tools.FileAccessRequest) string {
 	if path := strings.TrimSpace(req.ResolvedPath); path != "" {
 		return path
 	}

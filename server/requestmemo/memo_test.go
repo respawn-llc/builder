@@ -191,7 +191,7 @@ func TestMemoPrunesExpiredEntriesBelowCapacity(t *testing.T) {
 	}
 }
 
-func TestMemoDoesNotGrowPastCapacityWhenOnlyInflightEntriesExist(t *testing.T) {
+func TestMemoFailsClosedAtCapacityWhenOnlyInflightEntriesExist(t *testing.T) {
 	memo := New[string, string]()
 	base := time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC)
 	memo.now = func() time.Time { return base }
@@ -206,14 +206,14 @@ func TestMemoDoesNotGrowPastCapacityWhenOnlyInflightEntriesExist(t *testing.T) {
 		runCalls++
 		return "fresh", nil
 	})
-	if err != nil {
-		t.Fatalf("Do: %v", err)
+	if !errors.Is(err, ErrCapacityExceeded) {
+		t.Fatalf("Do error = %v, want ErrCapacityExceeded", err)
 	}
-	if resp != "fresh" {
-		t.Fatalf("response = %q, want fresh", resp)
+	if resp != "" {
+		t.Fatalf("response = %q, want empty", resp)
 	}
-	if runCalls != 1 {
-		t.Fatalf("run calls = %d, want 1", runCalls)
+	if runCalls != 0 {
+		t.Fatalf("run calls = %d, want 0", runCalls)
 	}
 	if got := len(memo.entries); got != 2 {
 		t.Fatalf("memo size = %d, want 2", got)
@@ -221,20 +221,33 @@ func TestMemoDoesNotGrowPastCapacityWhenOnlyInflightEntriesExist(t *testing.T) {
 	if _, ok := memo.entries["req-3"]; ok {
 		t.Fatalf("did not expect req-3 to be memoized at capacity, entries=%+v", memo.entries)
 	}
+}
 
-	resp, err = memo.Do(context.Background(), "req-3", "c", func(a string, b string) bool {
-		return a == b
-	}, func(context.Context) (string, error) {
-		runCalls++
-		return "fresh-again", nil
+func TestMemoRejectsChangedPayloadOnlyWhileEntryExists(t *testing.T) {
+	memo := New[string, string]()
+	same := func(a string, b string) bool { return a == b }
+
+	if _, err := memo.Do(context.Background(), "req-1", "first", same, func(context.Context) (string, error) {
+		return "", errors.New("not accepted")
+	}); err == nil {
+		t.Fatal("first request error = nil, want failure")
+	}
+	resp, err := memo.Do(context.Background(), "req-1", "changed", same, func(context.Context) (string, error) {
+		return "accepted", nil
 	})
-	if err != nil {
-		t.Fatalf("second Do: %v", err)
+	if err != nil || resp != "accepted" {
+		t.Fatalf("changed payload after removed failure = %q, %v", resp, err)
 	}
-	if resp != "fresh-again" {
-		t.Fatalf("second response = %q, want fresh-again", resp)
+
+	runCalls := 0
+	resp, err = memo.Do(context.Background(), "req-1", "other", same, func(context.Context) (string, error) {
+		runCalls++
+		return "unexpected", nil
+	})
+	if !errors.Is(err, ErrClientRequestIDReused) {
+		t.Fatalf("changed payload with extant success error = %v, want ErrClientRequestIDReused", err)
 	}
-	if runCalls != 2 {
-		t.Fatalf("run calls after second request = %d, want 2", runCalls)
+	if resp != "" || runCalls != 0 {
+		t.Fatalf("changed payload with extant success = response %q, run calls %d", resp, runCalls)
 	}
 }

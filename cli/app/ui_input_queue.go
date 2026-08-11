@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"sort"
 	"strings"
 
 	"core/cli/app/commands"
@@ -22,8 +23,13 @@ const (
 )
 
 type queuedInputItem struct {
-	ID   string
-	Text string
+	ID              string
+	Text            string
+	submissionOrder inputSubmissionOrder
+}
+
+type inputSubmissionOrder struct {
+	sequence uint64
 }
 
 type injectedRuntimeQueueState string
@@ -46,50 +52,70 @@ type injectedRuntimeQueueItem struct {
 	CreateToken              uint64
 	DiscardToken             uint64
 	ApprovalCommentaryAnswer *clientui.PromptAnswer
+	submissionOrder          inputSubmissionOrder
 }
 
 func (m *uiModel) queueInput(text string) {
-	m.queued = append(m.queued, newQueuedInputItem(text))
+	m.queued = append(m.queued, queuedInputItem{
+		ID:              uuid.NewString(),
+		Text:            text,
+		submissionOrder: m.nextPendingInputSubmissionOrder(),
+	})
 	m.clearInput()
 }
 
-func newQueuedInputItem(text string) queuedInputItem {
-	return queuedInputItem{ID: uuid.NewString(), Text: text}
+func (m *uiModel) nextPendingInputSubmissionOrder() inputSubmissionOrder {
+	m.pendingInputSubmissionOrder++
+	if m.pendingInputSubmissionOrder == 0 {
+		panic("pending input submission order overflow")
+	}
+	return inputSubmissionOrder{sequence: m.pendingInputSubmissionOrder}
 }
 
-func (m *uiModel) registerSteeredQueuedUserMessage(queued clientui.QueuedUserMessage) {
+func (m *uiModel) registerSteeredQueuedUserMessage(queued clientui.QueuedUserMessage) bool {
 	serverID := strings.TrimSpace(queued.ID)
 	if serverID == "" {
-		return
+		return false
 	}
 	index := m.injectedQueueIndexByAnyID(serverID)
 	if index < 0 {
 		index = m.injectedQueueIndexByAnyID(queued.ClientRequestID)
 	}
-	if index >= 0 {
-		item := m.injectedQueue[index]
-		item.ServerID = serverID
-		item.Text = queued.Text
-		item.ClientRequestID = queued.ClientRequestID
-		item.State = injectedRuntimeQueueEnqueued
-		m.injectedQueue[index] = item
-		m.replacePendingInjectedID(item.LocalID, queued)
-		return
+	if index < 0 && m.activeSubmit.clientRequestID.String() == strings.TrimSpace(queued.ClientRequestID) {
+		m.injectedQueue = append(m.injectedQueue, injectedRuntimeQueueItem{
+			LocalID:         queued.ClientRequestID,
+			ServerID:        serverID,
+			Text:            m.activeSubmit.text,
+			ClientRequestID: queued.ClientRequestID,
+			State:           injectedRuntimeQueueEnqueued,
+			submissionOrder: m.activeSubmit.submissionOrder,
+		})
+		return true
 	}
-	m.pendingInjected = append(m.pendingInjected, clientui.QueuedUserMessage{ID: serverID, Text: queued.Text, ClientRequestID: queued.ClientRequestID})
-	m.injectedQueue = append(m.injectedQueue, injectedRuntimeQueueItem{LocalID: serverID, ServerID: serverID, Text: queued.Text, ClientRequestID: queued.ClientRequestID, State: injectedRuntimeQueueEnqueued})
+	if index < 0 {
+		return false
+	}
+	item := m.injectedQueue[index]
+	item.ServerID = serverID
+	item.State = injectedRuntimeQueueEnqueued
+	m.injectedQueue[index] = item
+	return true
 }
 
 func (m *uiModel) enqueueInjectedInputWithApprovalAnswer(text string, answer *clientui.PromptAnswer) tea.Cmd {
-	trimmed := strings.TrimSpace(text)
-	if trimmed == "" {
+	if strings.TrimSpace(text) == "" {
 		return nil
 	}
 	localID := uuid.NewString()
+	submissionOrder := m.nextPendingInputSubmissionOrder()
 	if !m.hasRuntimeClient() {
-		item := clientui.QueuedUserMessage{ID: localID, Text: trimmed}
-		m.pendingInjected = append(m.pendingInjected, item)
-		m.injectedQueue = append(m.injectedQueue, injectedRuntimeQueueItem{LocalID: localID, ServerID: localID, Text: trimmed, State: injectedRuntimeQueueEnqueued})
+		m.injectedQueue = append(m.injectedQueue, injectedRuntimeQueueItem{
+			LocalID:         localID,
+			ServerID:        localID,
+			Text:            text,
+			State:           injectedRuntimeQueueEnqueued,
+			submissionOrder: submissionOrder,
+		})
 		return nil
 	}
 	token := m.nextInjectedQueueToken()
@@ -99,18 +125,18 @@ func (m *uiModel) enqueueInjectedInputWithApprovalAnswer(text string, answer *cl
 		snap := *answer
 		approvalCommentaryAnswer = &snap
 	}
-	m.pendingInjected = append(m.pendingInjected, clientui.QueuedUserMessage{ID: localID, Text: trimmed, ClientRequestID: clientRequestID.String()})
 	m.injectedQueue = append(m.injectedQueue, injectedRuntimeQueueItem{
 		LocalID:                  localID,
-		Text:                     trimmed,
+		Text:                     text,
 		ClientRequestID:          clientRequestID.String(),
 		State:                    injectedRuntimeQueuePendingCreate,
 		CreateToken:              token,
 		ApprovalCommentaryAnswer: approvalCommentaryAnswer,
+		submissionOrder:          submissionOrder,
 	})
 	client := m.runtimeClient()
 	return func() tea.Msg {
-		item, completed, err := submitRuntimeSteering(client, trimmed, clientRequestID)
+		item, completed, err := submitRuntimeSteering(client, text, clientRequestID)
 		return injectedQueueCreateDoneMsg{
 			token:                    token,
 			localID:                  localID,
@@ -124,12 +150,8 @@ func (m *uiModel) enqueueInjectedInputWithApprovalAnswer(text string, answer *cl
 
 func submitRuntimeSteering(client clientui.RuntimeClient, text string, clientRequestID runtimeids.RuntimeClientRequestID) (clientui.QueuedUserMessage, bool, error) {
 	submission, err := client.SubmitRuntimeInput(context.Background(), clientui.RuntimeSubmitRequest{
-		OperationRef: clientui.RuntimeOperationRef{
-			Kind:            clientui.RuntimeOperationKindSubmit,
-			ClientRequestID: clientRequestID,
-		},
-		PreSubmitCompactionOperationRef: newRuntimeOperationRef(clientui.RuntimeOperationKindPreSubmitCompact),
-		Input:                           runtimeinput.Text(text),
+		ClientRequestID: clientRequestID,
+		Input:           runtimeinput.Text(text),
 	})
 	if err != nil {
 		return clientui.QueuedUserMessage{}, false, err
@@ -198,7 +220,7 @@ func (c uiInputController) blockDisconnectedSubmission(restoreHidden bool, submi
 		return false, nil
 	}
 	if restoreHidden {
-		restoreCmd := c.restorePendingInjectedIntoInput()
+		restoreCmd := c.restoreInjectedInputsIntoComposer()
 		c.restoreSubmittedTextIntoInput(submittedText)
 		c.restoreQueuedMessagesIntoInput()
 		m.activity = uiActivityError
@@ -228,53 +250,102 @@ func (c uiInputController) restoreQueuedMessagesIntoInput() {
 	}
 	joined := strings.Join(queuedInputTexts(m.queued), "\n\n")
 	m.queued = nil
-	newInput := joined
-	current := m.mainEditor.Text()
-	if strings.TrimSpace(current) == "" {
-		newInput = joined
-	} else {
-		newInput = strings.TrimRight(current, "\n") + "\n\n" + joined
-	}
-	m.replaceMainInputAtEnd(newInput)
+	c.appendRestoredInputToComposer(joined)
 }
 
 func (c uiInputController) restoreSubmittedTextIntoInput(text string) {
-	m := c.model
-	submitted := strings.TrimSpace(text)
-	if submitted == "" {
-		return
-	}
-	newInput := submitted
-	current := m.mainEditor.Text()
-	if strings.TrimSpace(current) != "" {
-		newInput = strings.TrimRight(current, "\n") + "\n\n" + submitted
-	}
-	m.replaceMainInputAtEnd(newInput)
+	c.appendRestoredInputToComposer(text)
 }
 
-func (c uiInputController) restorePendingInjectedIntoInput() tea.Cmd {
+func (c uiInputController) appendRestoredInputToComposer(text string) {
+	if strings.TrimSpace(text) == "" {
+		return
+	}
 	m := c.model
-	if len(m.pendingInjected) == 0 {
+	current := m.mainEditor.Text()
+	if strings.TrimSpace(current) != "" {
+		text = strings.TrimRight(current, "\n") + "\n\n" + text
+	}
+	m.replaceMainInputAtEnd(text)
+}
+
+func (c uiInputController) restoreInjectedInputsIntoComposer() tea.Cmd {
+	m := c.model
+	pending := m.restorableInjectedQueueItems()
+	if len(pending) == 0 {
 		return nil
 	}
-	pending := append([]clientui.QueuedUserMessage(nil), m.pendingInjected...)
 	cmds := make([]tea.Cmd, 0, len(pending))
 	for _, item := range pending {
-		if cmd := m.markInjectedQueueDiscardRequested(item.ID); cmd != nil {
+		if cmd := m.markInjectedQueueDiscardRequested(item.LocalID); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
 	}
-	joined := strings.Join(queuedUserMessageTexts(pending), "\n\n")
-	m.pendingInjected = nil
-	newInput := joined
-	current := m.mainEditor.Text()
-	if strings.TrimSpace(current) == "" {
-		newInput = joined
-	} else {
-		newInput = strings.TrimRight(current, "\n") + "\n\n" + joined
+	texts := make([]string, 0, len(pending))
+	for _, item := range pending {
+		texts = append(texts, item.Text)
 	}
-	m.replaceMainInputAtEnd(newInput)
+	c.appendRestoredInputToComposer(strings.Join(texts, "\n\n"))
 	return tea.Batch(cmds...)
+}
+
+func (m *uiModel) restorableInjectedQueueItems() []injectedRuntimeQueueItem {
+	if m == nil {
+		return nil
+	}
+	items := make([]injectedRuntimeQueueItem, 0, len(m.injectedQueue))
+	for _, item := range m.injectedQueue {
+		switch item.State {
+		case injectedRuntimeQueuePendingCreate, injectedRuntimeQueueEnqueued:
+			items = append(items, item)
+		}
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		return items[i].submissionOrder.sequence < items[j].submissionOrder.sequence
+	})
+	return items
+}
+
+type interruptedInputDraftPart struct {
+	submissionOrder inputSubmissionOrder
+	text            string
+}
+
+func (c uiInputController) restoreInterruptedInputsIntoComposer() tea.Cmd {
+	m := c.model
+	if m == nil {
+		return nil
+	}
+	draft := m.mainEditor.Text()
+	parts := make([]interruptedInputDraftPart, 0, len(m.injectedQueue)+len(m.queued))
+	var approvalCmd tea.Cmd
+	for _, item := range m.restorableInjectedQueueItems() {
+		parts = append(parts, interruptedInputDraftPart{submissionOrder: item.submissionOrder, text: item.Text})
+		if item.ApprovalCommentaryAnswer != nil {
+			approvalCmd = tea.Batch(approvalCmd, m.answerQueuedApprovalCommentary(*item.ApprovalCommentaryAnswer))
+		}
+	}
+	for _, queued := range m.queued {
+		parts = append(parts, interruptedInputDraftPart{submissionOrder: queued.submissionOrder, text: queued.Text})
+	}
+	sort.SliceStable(parts, func(i, j int) bool {
+		return parts[i].submissionOrder.sequence < parts[j].submissionOrder.sequence
+	})
+	texts := make([]string, 0, len(parts)+1)
+	for _, part := range parts {
+		texts = append(texts, part.text)
+	}
+	if draft != "" {
+		texts = append(texts, draft)
+	}
+	m.injectedQueue = nil
+	m.queued = nil
+	if len(texts) == 0 {
+		return approvalCmd
+	}
+	m.replaceMainInputAtEnd(strings.Join(texts, "\n\n"))
+	m.logf("interrupt.restore pending_inputs=%d draft=%t", len(parts), draft != "")
+	return approvalCmd
 }
 
 func (c uiInputController) flushQueuedInputs(mode queueDrainMode) (tea.Model, tea.Cmd) {
@@ -324,7 +395,12 @@ func (c uiInputController) dispatchQueuedInput(item queuedInputItem) tea.Cmd {
 				if commandResult.Action == commands.ActionCompact {
 					return finalizeSlashCommandCmd(commandResult.Action, c.startCompactionWithOrigin(commandResult.Args, uiCompactionOriginQueued), m.recordPromptHistory(text))
 				}
-				_, cmd := c.applyCommandResultWithPreSubmitQueuePositionAndOrigin(commandResult, preSubmitQueueFront, activeSubmitOriginQueued)
+				_, cmd := c.applyCommandResultWithPreSubmitQueuePositionAndOriginAndOrder(
+					commandResult,
+					preSubmitQueueFront,
+					activeSubmitOriginQueued,
+					&item.submissionOrder,
+				)
 				var recordCmd tea.Cmd
 				if commandResult.PromptCommand == nil {
 					recordCmd = m.recordPromptHistory(text)
@@ -336,7 +412,14 @@ func (c uiInputController) dispatchQueuedInput(item queuedInputItem) tea.Cmd {
 	if cmd, rejected := c.rejectUnavailablePromptCommand(text); rejected {
 		return cmd
 	}
-	return c.startSubmissionWithPromptHistoryAndQueuePositionAndIDAndOrigin(item.Text, preSubmitQueueFront, item.ID, activeSubmitOriginQueued)
+	m.rememberPromptHistoryLocally(item.Text)
+	return c.startSubmissionWithPreSubmitQueuePositionAndOriginAndOrder(
+		item.Text,
+		preSubmitQueueFront,
+		item.ID,
+		activeSubmitOriginQueued,
+		&item.submissionOrder,
+	)
 }
 
 func (m *uiModel) shouldContinueQueuedInputAutoDrain() bool {
@@ -374,14 +457,6 @@ func (m *uiModel) discardQueuedInput(id string) bool {
 }
 
 func queuedInputTexts(messages []queuedInputItem) []string {
-	texts := make([]string, 0, len(messages))
-	for _, message := range messages {
-		texts = append(texts, message.Text)
-	}
-	return texts
-}
-
-func queuedUserMessageTexts(messages []clientui.QueuedUserMessage) []string {
 	texts := make([]string, 0, len(messages))
 	for _, message := range messages {
 		texts = append(texts, message.Text)
@@ -500,7 +575,6 @@ func (c uiInputController) handleInjectedQueueCreateDone(msg injectedQueueCreate
 	m.observeRuntimeRequestResult(msg.err)
 	if msg.err != nil {
 		m.injectedQueue[index].State = injectedRuntimeQueueCreateFailed
-		m.removePendingInjectedByID(item.LocalID)
 		if item.State == injectedRuntimeQueuePendingCreate {
 			c.restoreInjectedTextIntoInput(item.Text)
 			detailErr := runtimeattach.FormatSubmissionError(msg.err)
@@ -517,7 +591,6 @@ func (c uiInputController) handleInjectedQueueCreateDone(msg injectedQueueCreate
 		return m, nil
 	}
 	if msg.completed {
-		m.removePendingInjectedByID(item.LocalID)
 		m.removeInjectedQueueItemAt(index)
 		if item.State != injectedRuntimeQueuePendingCreate {
 			return m, nil
@@ -532,20 +605,13 @@ func (c uiInputController) handleInjectedQueueCreateDone(msg injectedQueueCreate
 	if serverID == "" {
 		serverID = item.LocalID
 	}
-	serverText := strings.TrimSpace(msg.item.Text)
-	if serverText == "" {
-		serverText = item.Text
-	}
 	item.ServerID = serverID
-	item.Text = serverText
-	item.ClientRequestID = strings.TrimSpace(msg.item.ClientRequestID)
 	item.ApprovalCommentaryAnswer = nil
 	switch item.State {
 	case injectedRuntimeQueuePendingCreate:
 		item.State = injectedRuntimeQueueEnqueued
 		m.injectedQueue[index] = item
-		m.replacePendingInjectedID(item.LocalID, clientui.QueuedUserMessage{ID: serverID, Text: serverText, ClientRequestID: item.ClientRequestID})
-		m.rememberPromptHistoryLocally(serverText)
+		m.rememberPromptHistoryLocally(item.Text)
 		if approvalCommentaryAnswer != nil {
 			return m, m.answerQueuedApprovalCommentary(*approvalCommentaryAnswer)
 		}
@@ -576,14 +642,11 @@ func (c uiInputController) handleInjectedQueueDiscardDone(msg injectedQueueDisca
 		return m, nil
 	}
 	if msg.discarded {
-		m.removePendingInjectedByID(item.LocalID)
-		m.removePendingInjectedByID(item.ServerID)
 		m.removeInjectedQueueItemAt(index)
 		return m, c.resumeQueuedInputsAfterIdleRuntime()
 	}
 	item.State = injectedRuntimeQueueDiscardFailed
 	m.injectedQueue[index] = item
-	m.ensurePendingInjectedVisible(item)
 	detailErr := "failed to discard queued runtime user message"
 	m.activity = uiActivityError
 	appendCmd := m.appendLocalEntryWithNoticeID(operatorErrorFeedbackRole, detailErr, "")
@@ -592,44 +655,7 @@ func (c uiInputController) handleInjectedQueueDiscardDone(msg injectedQueueDisca
 }
 
 func (c uiInputController) restoreInjectedTextIntoInput(text string) {
-	m := c.model
-	trimmed := strings.TrimSpace(text)
-	if trimmed == "" {
-		return
-	}
-	current := m.mainEditor.Text()
-	if strings.TrimSpace(current) == "" {
-		m.replaceMainInputAtEnd(trimmed)
-		return
-	}
-	m.replaceMainInputAtEnd(strings.TrimRight(current, "\n") + "\n\n" + trimmed)
-}
-
-func (m *uiModel) replacePendingInjectedID(oldID string, next clientui.QueuedUserMessage) {
-	oldID = strings.TrimSpace(oldID)
-	for index, item := range m.pendingInjected {
-		if item.ID != oldID {
-			continue
-		}
-		m.pendingInjected[index] = next
-		return
-	}
-	m.pendingInjected = append(m.pendingInjected, next)
-}
-
-func (m *uiModel) removePendingInjectedByID(id string) {
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return
-	}
-	filtered := m.pendingInjected[:0]
-	for _, item := range m.pendingInjected {
-		if item.ID == id || item.ClientRequestID == id {
-			continue
-		}
-		filtered = append(filtered, item)
-	}
-	m.pendingInjected = filtered
+	c.appendRestoredInputToComposer(text)
 }
 
 func (m *uiModel) removeInjectedQueueItemAt(index int) {
@@ -637,22 +663,6 @@ func (m *uiModel) removeInjectedQueueItemAt(index int) {
 		return
 	}
 	m.injectedQueue = append(m.injectedQueue[:index], m.injectedQueue[index+1:]...)
-}
-
-func (m *uiModel) ensurePendingInjectedVisible(item injectedRuntimeQueueItem) {
-	id := strings.TrimSpace(item.ServerID)
-	if id == "" {
-		id = strings.TrimSpace(item.LocalID)
-	}
-	if id == "" {
-		return
-	}
-	for _, pending := range m.pendingInjected {
-		if pending.ID == id || pending.ClientRequestID == id {
-			return
-		}
-	}
-	m.pendingInjected = append(m.pendingInjected, clientui.QueuedUserMessage{ID: id, Text: item.Text, ClientRequestID: item.ClientRequestID})
 }
 
 func (m *uiModel) removeInjectedQueueItemsByIDs(ids []string) []clientui.PromptAnswer {

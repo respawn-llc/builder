@@ -119,7 +119,7 @@ func runBindingMutationCommand(
 	mutate func(context.Context, *client.Remote, serverapi.ProjectWorkspaceSelector) (bindingMutationResult, error),
 	defaultMutation bool,
 ) int {
-	cfg, remote, err := bindingCommandRemoteOpener(context.Background(), ".")
+	cfg, remote, err := openBindingCommandRemote(context.Background(), ".")
 	if err != nil {
 		return writeBindingMutationFailure(stdout, stderr, arguments.JSON, err, arguments.ProjectID, defaultMutation)
 	}

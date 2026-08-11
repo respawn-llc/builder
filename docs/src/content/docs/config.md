@@ -82,7 +82,7 @@ frequency = "edits"
 # auth = "none" # or "inherit"
 # model_context_window = 64000
 timeout_seconds = 120
-verbose_output = false # show supervisor suggestions in ongoing transcript
+verbose_output = false # set true to show complete supervisor suggestions in ongoing transcript
 # system_prompt_file = "~/.kent/reviewer_system_prompt.md"
 
 # custom subagent roles config, fast is the default one, always provided

@@ -90,16 +90,17 @@ func TestCustomKeyCtrlEnterQueuesAndStartsSubmission(t *testing.T) {
 func TestCustomKeyCtrlEnterQueuesPostTurnWhenBusy(t *testing.T) {
 	m := newProjectedStaticUIModel()
 	m.setRuntimeActivityBusyForTest(true)
-	testSetMainInput(m, "echo hi")
+	submittedText := "  echo\n\thi  "
+	testSetMainInput(m, submittedText)
 
 	next, _ := m.Update(customKeyMsg{Kind: customKeyCtrlEnter})
 	updated := next.(*uiModel)
 
-	if len(updated.queued) != 1 {
-		t.Fatalf("expected one queued post-turn message, got %d", len(updated.queued))
+	if len(updated.queued) != 1 || updated.queued[0].Text != submittedText {
+		t.Fatalf("queued post-turn messages = %+v, want verbatim %q", updated.queued, submittedText)
 	}
-	if len(updated.pendingInjected) != 0 {
-		t.Fatalf("did not expect injected steering messages, got %d", len(updated.pendingInjected))
+	if len(updated.injectedQueue) != 0 {
+		t.Fatalf("did not expect injected steering messages, got %d", len(updated.injectedQueue))
 	}
 }
 
@@ -275,18 +276,15 @@ func TestAskQuestionTabFreeformFlow(t *testing.T) {
 	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("custom")})
 	updated = next.(*uiModel)
 	updated, request := submitAskPromptKey(t, updated, control, tea.KeyMsg{Type: tea.KeyEnter})
-	if request.Answer != "custom" {
-		t.Fatalf("unexpected answer: %q", request.Answer)
+	entry := requireQuestionAnswerEntry(t, request)
+	if entry.QuestionAnswer.Freeform == nil || *entry.QuestionAnswer.Freeform != "custom" {
+		t.Fatalf("unexpected freeform answer: %+v", entry.QuestionAnswer)
 	}
-	if request.FreeformAnswer != "custom" {
-		t.Fatalf("unexpected freeform answer: %q", request.FreeformAnswer)
-	}
-	if request.SelectedOptionNumber == nil || *request.SelectedOptionNumber != 1 {
+	if entry.QuestionAnswer.SelectedOptionNumber == nil || *entry.QuestionAnswer.SelectedOptionNumber != 1 {
 		t.Fatalf("expected selected option 1 preserved when switching to freeform, got %+v", request)
 	}
-	resolveAnsweredTestAskThroughTranscript(t, updated)
 	if testActiveAsk(updated) != nil {
-		t.Fatal("ask remained active after transcript resolution")
+		t.Fatal("successful batch did not immediately remove the ask")
 	}
 }
 
@@ -308,10 +306,15 @@ func TestAskQuestionRecommendedOptionIsSelectedAndSubmitted(t *testing.T) {
 	}
 
 	updated, request := submitAskPromptKey(t, updated, control, tea.KeyMsg{Type: tea.KeyEnter})
-	if request.SelectedOptionNumber == nil || *request.SelectedOptionNumber != recommended {
-		t.Fatalf("selected option = %+v, want %d", request.SelectedOptionNumber, recommended)
+	entry := requireQuestionAnswerEntry(t, request)
+	if request.SessionID != event.prompt.SessionID || request.StepID != event.prompt.StepID ||
+		entry.PromptID != event.prompt.PromptID || entry.QuestionAnswer.SelectedOptionNumber == nil ||
+		*entry.QuestionAnswer.SelectedOptionNumber != recommended {
+		t.Fatalf("selected option = %+v, want %d", entry.QuestionAnswer.SelectedOptionNumber, recommended)
 	}
-	resolveAnsweredTestAskThroughTranscript(t, updated)
+	if testActiveAsk(updated) != nil {
+		t.Fatal("successful batch did not immediately remove the ask")
+	}
 }
 
 func TestQueuedAskQuestionReceivesItsRecommendationWhenPromoted(t *testing.T) {
@@ -342,10 +345,13 @@ func TestQueuedAskQuestionReceivesItsRecommendationWhenPromoted(t *testing.T) {
 	}
 
 	updated, request := submitAskPromptKey(t, updated, control, tea.KeyMsg{Type: tea.KeyEnter})
-	if request.SelectedOptionNumber == nil || *request.SelectedOptionNumber != recommended {
-		t.Fatalf("selected option = %+v, want %d", request.SelectedOptionNumber, recommended)
+	entry := requireQuestionAnswerEntry(t, request)
+	if entry.QuestionAnswer.SelectedOptionNumber == nil || *entry.QuestionAnswer.SelectedOptionNumber != recommended {
+		t.Fatalf("selected option = %+v, want %d", entry.QuestionAnswer.SelectedOptionNumber, recommended)
 	}
-	resolveAnsweredTestAskThroughTranscript(t, updated)
+	if testActiveAsk(updated) != nil {
+		t.Fatal("successful batch did not immediately remove the ask")
+	}
 }
 
 func TestAskQuestionPickerSubmitPreservesPendingFreeformDraft(t *testing.T) {
@@ -387,18 +393,15 @@ func TestAskQuestionPickerSubmitPreservesPendingFreeformDraft(t *testing.T) {
 	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
 	updated = next.(*uiModel)
 	updated, request := submitAskPromptKey(t, updated, control, tea.KeyMsg{Type: tea.KeyEnter})
-	if request.SelectedOptionNumber == nil || *request.SelectedOptionNumber != 2 {
+	entry := requireQuestionAnswerEntry(t, request)
+	if entry.QuestionAnswer.SelectedOptionNumber == nil || *entry.QuestionAnswer.SelectedOptionNumber != 2 {
 		t.Fatalf("expected selected option number 2, got %+v", request)
 	}
-	if request.Answer != "" {
-		t.Fatalf("expected structured picker response without raw answer text, got %+v", request)
-	}
-	if request.FreeformAnswer != "custom" {
+	if entry.QuestionAnswer.Freeform == nil || *entry.QuestionAnswer.Freeform != "custom" {
 		t.Fatalf("expected pending freeform draft submitted with picker answer, got %+v", request)
 	}
-	resolveAnsweredTestAskThroughTranscript(t, updated)
 	if testActiveAsk(updated) != nil {
-		t.Fatal("ask remained active after transcript resolution")
+		t.Fatal("successful batch did not immediately remove the ask")
 	}
 }
 
@@ -437,15 +440,15 @@ func TestAskQuestionTabRoundTripRestoresPendingFreeformDraftAndCursor(t *testing
 	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("X")})
 	updated = next.(*uiModel)
 	updated, request := submitAskPromptKey(t, updated, control, tea.KeyMsg{Type: tea.KeyEnter})
-	if request.SelectedOptionNumber == nil || *request.SelectedOptionNumber != 2 {
+	entry := requireQuestionAnswerEntry(t, request)
+	if entry.QuestionAnswer.SelectedOptionNumber == nil || *entry.QuestionAnswer.SelectedOptionNumber != 2 {
 		t.Fatalf("expected selected option number 2 after round-trip, got %+v", request)
 	}
-	if request.FreeformAnswer != "custoXm" {
+	if entry.QuestionAnswer.Freeform == nil || *entry.QuestionAnswer.Freeform != "custoXm" {
 		t.Fatalf("expected restored draft to remain editable, got %+v", request)
 	}
-	resolveAnsweredTestAskThroughTranscript(t, updated)
 	if testActiveAsk(updated) != nil {
-		t.Fatal("ask remained active after transcript resolution")
+		t.Fatal("successful batch did not immediately remove the ask")
 	}
 }
 
@@ -502,7 +505,7 @@ func TestAskQuestionFreeformSelectionEmptySubmitRequiresCommentary(t *testing.T)
 		t.Fatal("expected ask to remain active after validation error")
 	}
 	select {
-	case request := <-control.askRequests:
+	case request := <-control.batchRequests:
 		t.Fatalf("did not expect request on validation error, got %+v", request)
 	default:
 	}
@@ -522,15 +525,15 @@ func TestAskQuestionFreeformSelectionSubmitsFreeformOnly(t *testing.T) {
 	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("custom")})
 	updated = next.(*uiModel)
 	updated, request := submitAskPromptKey(t, updated, control, tea.KeyMsg{Type: tea.KeyEnter})
-	if request.SelectedOptionNumber != nil {
+	entry := requireQuestionAnswerEntry(t, request)
+	if entry.QuestionAnswer.SelectedOptionNumber != nil {
 		t.Fatalf("expected freeform selection to submit without selected option number, got %+v", request)
 	}
-	if request.Answer != "custom" || request.FreeformAnswer != "custom" {
+	if entry.QuestionAnswer.Freeform == nil || *entry.QuestionAnswer.Freeform != "custom" {
 		t.Fatalf("unexpected freeform selection response: %+v", request)
 	}
-	resolveAnsweredTestAskThroughTranscript(t, updated)
 	if testActiveAsk(updated) != nil {
-		t.Fatal("ask remained active after transcript resolution")
+		t.Fatal("successful batch did not immediately remove the ask")
 	}
 }
 
@@ -560,12 +563,12 @@ func TestAskFreeformUsesMainEditingStack(t *testing.T) {
 	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyBackspace})
 	updated = next.(*uiModel)
 	updated, request := submitAskPromptKey(t, updated, control, tea.KeyMsg{Type: tea.KeyEnter})
-	if request.Answer != ">hello _worl" {
-		t.Fatalf("unexpected inline edit result: %q", request.Answer)
+	entry := requireQuestionAnswerEntry(t, request)
+	if entry.QuestionAnswer.Freeform == nil || *entry.QuestionAnswer.Freeform != ">hello _worl" {
+		t.Fatalf("unexpected inline edit result: %+v", entry.QuestionAnswer)
 	}
-	resolveAnsweredTestAskThroughTranscript(t, updated)
 	if testActiveAsk(updated) != nil {
-		t.Fatal("ask remained active after transcript resolution")
+		t.Fatal("successful batch did not immediately remove the ask")
 	}
 }
 
@@ -647,16 +650,18 @@ func TestApprovalAskUsesSingleDenyOptionAndTabCommentary(t *testing.T) {
 		t.Fatal("deny commentary did not create a direct approval delivery command")
 	}
 	updated = runPromptDeliveryCommand(t, updated, cmd)
-	request := requireApprovalRequest(t, control)
-	if request.Decision != clientui.ApprovalDecisionDeny || approvalCommentary(request) != "blocked by policy" {
+	request := requirePromptAnswerBatchRequest(t, control)
+	entry := requireApprovalAnswerEntry(t, request)
+	if entry.ApprovalAnswer.Decision != clientui.ApprovalDecisionDeny ||
+		entry.ApprovalAnswer.Commentary == nil ||
+		*entry.ApprovalAnswer.Commentary != "blocked by policy" {
 		t.Fatalf("unexpected approval request: %+v", request)
 	}
-	if len(updated.pendingInjected) != 0 {
-		t.Fatalf("deny commentary created a duplicate queued user message: %+v", updated.pendingInjected)
+	if len(updated.injectedQueue) != 0 {
+		t.Fatalf("deny commentary created a duplicate queued user message: %+v", updated.injectedQueue)
 	}
-	resolveAnsweredTestAskThroughTranscript(t, updated)
 	if testActiveAsk(updated) != nil {
-		t.Fatal("approval ask remained active after transcript resolution")
+		t.Fatal("successful batch did not immediately remove the Approval")
 	}
 }
 
@@ -695,9 +700,10 @@ func TestApprovalAskDefaultsToAllowOnceOrFirstDecision(t *testing.T) {
 
 			next, command := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
 			updated = runPromptDeliveryCommand(t, next.(*uiModel), command)
-			request := requireApprovalRequest(t, control)
-			if request.Decision != test.want {
-				t.Fatalf("approval decision = %q, want %q", request.Decision, test.want)
+			request := requirePromptAnswerBatchRequest(t, control)
+			entry := requireApprovalAnswerEntry(t, request)
+			if entry.ApprovalAnswer.Decision != test.want || entry.ApprovalAnswer.Commentary != nil {
+				t.Fatalf("approval answer = %+v, want %q without commentary", entry.ApprovalAnswer, test.want)
 			}
 		})
 	}

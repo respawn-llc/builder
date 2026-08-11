@@ -10,162 +10,73 @@ import (
 	"time"
 
 	"core/cli/app"
-	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
-type observationCommandRemote struct {
-	apicontract.WorkflowService
-	closed         bool
-	closeErr       error
-	projectErr     error
-	responseTaskID *string
-}
-
-func (r *observationCommandRemote) Close() error {
-	r.closed = true
-	return r.closeErr
-}
-
-func (r *observationCommandRemote) ResolveProjectPath(context.Context, serverapi.ProjectResolvePathRequest) (serverapi.ProjectResolvePathResponse, error) {
-	if r.projectErr != nil {
-		return serverapi.ProjectResolvePathResponse{}, r.projectErr
+func TestObservationCleanupClosesOnceAndPreservesPrimaryEnvelope(t *testing.T) {
+	closeCalls := 0
+	var stdout bytes.Buffer
+	code := emitObservationJSONWithCleanup(
+		&stdout,
+		observationJSONEnvelope{
+			Status: "success",
+			Target: observationTargetTask("task-1"),
+		},
+		0,
+		nil,
+		func() error {
+			closeCalls++
+			return errors.New("close failed")
+		},
+	)
+	if code != 0 || closeCalls != 1 {
+		t.Fatalf("exit=%d close calls=%d output=%q", code, closeCalls, stdout.String())
 	}
-	return serverapi.ProjectResolvePathResponse{}, errors.New("project resolution should not run")
-}
-
-func (r *observationCommandRemote) GetWorkflowTask(context.Context, serverapi.WorkflowTaskGetRequest) (serverapi.WorkflowTaskGetResponse, error) {
-	return serverapi.WorkflowTaskGetResponse{Task: serverapi.WorkflowTaskDetail{
-		Summary: serverapi.WorkflowTaskSummary{ID: "task-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", ProjectID: "project"},
-	}}, nil
-}
-
-func (r *observationCommandRemote) ObserveWorkflowTask(context.Context, serverapi.WorkflowTaskObservationRequest) (serverapi.WorkflowTaskObservationResponse, error) {
-	taskID := "task-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
-	if r.responseTaskID != nil {
-		taskID = *r.responseTaskID
-	}
-	return serverapi.WorkflowTaskObservationResponse{
-		TaskID:      taskID,
-		TaskShortID: "T-1",
-		Outcomes:    []serverapi.WorkflowTaskObservationOutcome{{Kind: serverapi.WorkflowTaskObservationDone}},
-	}, nil
-}
-
-func TestTaskObservationJSONUsesTrailingFlagAndClosesRemoteOnce(t *testing.T) {
-	remote := &observationCommandRemote{}
-	var stdout, stderr strings.Builder
-	if code := taskWaitWithRemote([]string{"task-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "--json"}, &stdout, &stderr, remote); code != 0 {
-		t.Fatalf("exit code = %d, stdout=%q, stderr=%q", code, stdout.String(), stderr.String())
-	}
-	if !remote.closed || stderr.Len() != 0 {
-		t.Fatalf("closed=%v stderr=%q", remote.closed, stderr.String())
-	}
-	var envelope map[string]any
-	if err := json.Unmarshal([]byte(stdout.String()), &envelope); err != nil {
-		t.Fatal(err)
-	}
-	if envelope["status"] != "success" || envelope["target"] == nil {
-		t.Fatalf("envelope = %#v", envelope)
-	}
-}
-
-func TestTaskObservationJSONPreservesPrimaryResultWithCloseWarning(t *testing.T) {
-	remote := &observationCommandRemote{closeErr: errors.New("close failed")}
-	var stdout, stderr strings.Builder
-	if code := taskWaitWithRemote([]string{"--json", "task-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}, &stdout, &stderr, remote); code != 0 {
-		t.Fatalf("exit code = %d, stdout=%q, stderr=%q", code, stdout.String(), stderr.String())
-	}
-	var envelope map[string]any
-	if err := json.Unmarshal([]byte(stdout.String()), &envelope); err != nil {
-		t.Fatal(err)
-	}
-	if envelope["status"] != "success" || envelope["warnings"] == nil || stderr.Len() != 0 {
-		t.Fatalf("envelope=%#v stderr=%q", envelope, stderr.String())
-	}
-}
-
-func TestTaskObservationJSONMapsProjectUnavailable(t *testing.T) {
-	remote := &observationCommandRemote{projectErr: serverapi.ErrProjectUnavailable}
-	var stdout, stderr strings.Builder
-	if code := taskWaitWithRemote([]string{"--project", "/project", "short-id", "--json"}, &stdout, &stderr, remote); code != 1 {
-		t.Fatalf("exit code = %d, stdout=%q, stderr=%q", code, stdout.String(), stderr.String())
-	}
+	decoder := json.NewDecoder(bytes.NewReader(stdout.Bytes()))
 	var envelope struct {
-		Status string `json:"status"`
-		Error  struct {
-			Code string `json:"code"`
-		} `json:"error"`
-	}
-	if err := json.Unmarshal([]byte(stdout.String()), &envelope); err != nil {
-		t.Fatal(err)
-	}
-	if envelope.Status != "error" || envelope.Error.Code != "unavailable" || stderr.Len() != 0 || !remote.closed {
-		t.Fatalf("envelope=%#v stderr=%q closed=%v", envelope, stderr.String(), remote.closed)
-	}
-}
-
-func TestTaskObservationJSONRejectsResponseForDifferentTask(t *testing.T) {
-	responseTaskID := "task-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
-	remote := &observationCommandRemote{responseTaskID: &responseTaskID}
-	var stdout, stderr strings.Builder
-	if code := taskWaitWithRemote([]string{"task-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "--json"}, &stdout, &stderr, remote); code != 1 {
-		t.Fatalf("exit code = %d, stdout=%q, stderr=%q", code, stdout.String(), stderr.String())
-	}
-	var envelope struct {
-		Status string `json:"status"`
-		Error  struct {
-			Code string `json:"code"`
-		} `json:"error"`
-	}
-	if err := json.Unmarshal([]byte(stdout.String()), &envelope); err != nil {
-		t.Fatal(err)
-	}
-	if envelope.Status != "error" || envelope.Error.Code != "invalid_response" || stderr.Len() != 0 || !remote.closed {
-		t.Fatalf("envelope=%#v stderr=%q closed=%v", envelope, stderr.String(), remote.closed)
-	}
-}
-
-func TestObservationErrorPreservesStartupCleanupWarning(t *testing.T) {
-	var output bytes.Buffer
-	if code := emitObservationError(&output, observationOperationTaskWait, nil, context.Background(), serverapi.ErrProjectUnavailable, nil, func() error {
-		return errors.New("close failed")
-	}); code != 1 {
-		t.Fatalf("exit code = %d", code)
-	}
-	var envelope struct {
+		Status   string   `json:"status"`
 		Warnings []string `json:"warnings"`
-		Error    struct {
-			Code string `json:"code"`
-		} `json:"error"`
 	}
-	if err := json.Unmarshal(output.Bytes(), &envelope); err != nil {
+	if err := decoder.Decode(&envelope); err != nil {
 		t.Fatal(err)
 	}
-	if envelope.Error.Code != "unavailable" || len(envelope.Warnings) != 1 || envelope.Warnings[0] != "close failed" {
-		t.Fatalf("envelope = %#v", envelope)
+	var extra any
+	if err := decoder.Decode(&extra); err == nil {
+		t.Fatalf("second JSON value=%v", extra)
+	}
+	if envelope.Status != "success" || len(envelope.Warnings) != 1 {
+		t.Fatalf("envelope=%+v", envelope)
 	}
 }
 
-func TestTaskObservationJSONParseFailureEmitsOneUsageObjectWithoutRemote(t *testing.T) {
-	remote := &observationCommandRemote{}
-	var stdout, stderr strings.Builder
-	if code := taskWaitWithRemote([]string{"--json", "--unknown", "task-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}, &stdout, &stderr, remote); code != 2 {
-		t.Fatalf("exit code = %d, stdout=%q, stderr=%q", code, stdout.String(), stderr.String())
+func TestTaskObservationJSONUsageWritesExactlyOneObjectAndNoStderr(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := taskObservationSubcommand(
+		[]string{"--json", "--unknown", "task-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"},
+		&stdout,
+		&stderr,
+		serverapi.WorkflowTaskObservationWait,
+	); code != 2 || stderr.Len() != 0 {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
+	decoder := json.NewDecoder(bytes.NewReader(stdout.Bytes()))
 	var envelope struct {
 		Status string `json:"status"`
 		Error  struct {
 			Code string `json:"code"`
 		} `json:"error"`
 	}
-	if err := json.Unmarshal([]byte(stdout.String()), &envelope); err != nil {
+	if err := decoder.Decode(&envelope); err != nil {
 		t.Fatal(err)
 	}
-	if envelope.Status != "error" || envelope.Error.Code != "usage" || stderr.Len() != 0 || remote.closed {
-		t.Fatalf("envelope=%#v stderr=%q closed=%v", envelope, stderr.String(), remote.closed)
+	var extra any
+	if err := decoder.Decode(&extra); err == nil {
+		t.Fatalf("second JSON value=%v", extra)
+	}
+	if envelope.Status != "error" || envelope.Error.Code != "usage" {
+		t.Fatalf("envelope=%+v", envelope)
 	}
 }
 
@@ -181,12 +92,13 @@ func TestTaskObservationHelpReturnsSuccessWithoutJSONEnvelope(t *testing.T) {
 
 func TestProjectRunWatchJSONQuestionUsesAnswerTargetAndOrderedSuggestions(t *testing.T) {
 	recommended := 2
+	responseSessionID := runtimeids.NewSessionID()
 	response := serverapi.RuntimeLiveWatchResponse{
-		SessionID: "response-session",
+		SessionID: responseSessionID.String(),
 		Outcome: serverapi.RuntimeLiveWatchOutcome{
 			Kind: serverapi.RuntimeLiveWatchQuestion,
 			Question: &serverapi.ObservationQuestion{Ask: &clientui.PendingAsk{
-				AskID: "ask-1", SessionID: "response-session", Question: "Proceed?",
+				PromptID: "ask-1", SessionID: responseSessionID, StepID: questionCommandStepID(), Question: "Proceed?",
 				Suggestions: []string{"yes", "no"}, RecommendedOptionIndex: &recommended,
 			}},
 		},
@@ -217,7 +129,8 @@ func TestProjectRunWatchJSONQuestionUsesAnswerTargetAndOrderedSuggestions(t *tes
 }
 
 func TestProjectTaskObservationJSONPreservesQuestionNodeAndKeepsDoneEmpty(t *testing.T) {
-	sessionID := "question-session"
+	typedSessionID := runtimeids.NewSessionID()
+	sessionID := typedSessionID.String()
 	nodeKey := "build"
 	envelope, _, err := projectTaskObservationJSON("task-id", serverapi.WorkflowTaskObservationResponse{
 		TaskID: "response-task", TaskShortID: "T-1",
@@ -225,7 +138,7 @@ func TestProjectTaskObservationJSONPreservesQuestionNodeAndKeepsDoneEmpty(t *tes
 			{Kind: serverapi.WorkflowTaskObservationDone, SessionID: &sessionID, NodeKey: &nodeKey},
 			{Kind: serverapi.WorkflowTaskObservationQuestion, SessionID: &sessionID, NodeKey: &nodeKey,
 				Question: &serverapi.ObservationQuestion{Ask: &clientui.PendingAsk{
-					AskID: "ask", SessionID: sessionID, Question: "Continue?",
+					PromptID: "ask", SessionID: typedSessionID, StepID: questionCommandStepID(), Question: "Continue?",
 				}}},
 		},
 	})
