@@ -204,7 +204,6 @@ func (c *sessionRuntimeClient) setGoalMutationPending(preview *clientui.GoalPrev
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.advanceGoalMutationRevision()
 	if preview == nil {
 		c.goalMutationPending = nil
 		return
@@ -213,34 +212,25 @@ func (c *sessionRuntimeClient) setGoalMutationPending(preview *clientui.GoalPrev
 	c.goalMutationPending = &copyPreview
 }
 
-func (c *sessionRuntimeClient) advanceGoalMutationRevision() {
-	if c.goalMutationRevision == ^uint64(0) {
-		panic("goal mutation revision overflow")
-	}
-	c.goalMutationRevision++
-}
-
 func (c *sessionRuntimeClient) clearGoalMutationPendingLocked() {
-	c.advanceGoalMutationRevision()
 	c.goalMutationPending = nil
 }
 
-func (c *sessionRuntimeClient) goalMutationPendingSnapshot() (*clientui.GoalPreview, uint64) {
+func (c *sessionRuntimeClient) goalMutationPendingSnapshot() *clientui.GoalPreview {
 	if c == nil {
-		return nil, 0
+		return nil
 	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.goalMutationPending == nil {
-		return nil, c.goalMutationRevision
+		return nil
 	}
 	preview := *c.goalMutationPending
-	return &preview, c.goalMutationRevision
+	return &preview
 }
 
 func (c *sessionRuntimeClient) goalMutationPendingPreview() *clientui.GoalPreview {
-	preview, _ := c.goalMutationPendingSnapshot()
-	return preview
+	return c.goalMutationPendingSnapshot()
 }
 
 func (c *sessionRuntimeClient) AppendCommittedEntry(role, text string) error {

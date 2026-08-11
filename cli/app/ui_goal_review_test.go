@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"core/shared/clientui"
 	"core/shared/serverapi"
@@ -214,5 +215,134 @@ func TestAuthoritativeMainViewRefreshReconcilesQueuedGoalPreview(t *testing.T) {
 	}
 	if !runtimeGoalsEqual(runtimeClient.MainView().Status.Goal, authoritative) {
 		t.Fatalf("canonical Goal = %+v, want %+v", runtimeClient.MainView().Status.Goal, authoritative)
+	}
+}
+
+func TestStaleAcceptedGoalSetResultCannotOverwriteAuthoritativeGoal(t *testing.T) {
+	committed := runtimeGoalFixture(
+		"goal-committed",
+		"committed objective",
+		clientui.RuntimeGoalStatusPaused,
+		false,
+	)
+	accepted := &serverapi.RuntimeGoal{
+		ID:        "goal-set",
+		Objective: "set objective",
+		Status:    clientui.RuntimeGoalStatusActive,
+		CreatedAt: time.Unix(2, 0),
+		UpdatedAt: time.Unix(2, 0),
+	}
+	authoritative := runtimeGoalFixture(
+		"goal-authoritative",
+		"authoritative objective",
+		clientui.RuntimeGoalStatusActive,
+		false,
+	)
+	if err := committed.Goal.Validate(); err != nil {
+		t.Fatalf("committed Goal fixture: %v", err)
+	}
+	if err := accepted.Validate(); err != nil {
+		t.Fatalf("accepted Goal fixture: %v", err)
+	}
+	if err := authoritative.Goal.Validate(); err != nil {
+		t.Fatalf("authoritative Goal fixture: %v", err)
+	}
+	controls := &reconnectRetryRuntimeControlClient{
+		setGoalResp: goalResponseFixture(accepted),
+	}
+	runtimeClient := newTestSessionRuntimeClientWithControls(controls)
+	runtimeClient.storeMainView(clientui.RuntimeMainView{
+		Session: clientui.RuntimeSessionView{SessionID: "session-1"},
+		Status:  clientui.RuntimeStatus{Goal: committed},
+	})
+	model := newProjectedTestUIModel(runtimeClient, WithUISessionID("session-1"))
+	model.openGoalOverlay(nil, nil)
+
+	rawMessage := model.goalRuntimeCommand(goalRuntimeSet, accepted.Objective)()
+	message, ok := rawMessage.(goalRuntimeDoneMsg)
+	if !ok {
+		t.Fatalf("goal Set command message = %T, want goalRuntimeDoneMsg", rawMessage)
+	}
+
+	authoritativeMessage := clientui.NewTranscriptMessage(1, clientui.NewTranscriptEvent(clientui.TranscriptGoalStatus{
+		Goal:         &clientui.TranscriptGoal{Goal: authoritative.Goal},
+		Availability: clientui.GoalAvailabilityAvailable,
+	}))
+	admission, err := runtimeClient.admitTranscriptMessageState(authoritativeMessage)
+	if err != nil {
+		t.Fatalf("admit authoritative Goal status: %v", err)
+	}
+	if cmd := model.applyAdmittedTranscriptMessageState(authoritativeMessage, admission); cmd != nil {
+		t.Fatalf("authoritative Goal status command = %v, want nil", cmd)
+	}
+
+	updateUIModel(t, model, message)
+	if model.goal.pending != nil {
+		t.Fatalf("stale accepted Set installed pending preview = %+v", model.goal.pending)
+	}
+	if model.goal.goal == nil || model.goal.goal.ID != authoritative.ID {
+		t.Fatalf("stale accepted Set replaced authoritative Goal = %+v", model.goal.goal)
+	}
+	if !runtimeGoalsEqual(runtimeClient.MainView().Status.Goal, model.goal.goal) {
+		t.Fatalf("TUI Goal = %+v, want canonical Goal %+v", model.goal.goal, runtimeClient.MainView().Status.Goal)
+	}
+}
+
+func TestEmptyGoalSetResultCannotClearAuthoritativeGoal(t *testing.T) {
+	committed := runtimeGoalFixture(
+		"goal-committed",
+		"committed objective",
+		clientui.RuntimeGoalStatusPaused,
+		false,
+	)
+	authoritative := runtimeGoalFixture(
+		"goal-authoritative",
+		"authoritative objective",
+		clientui.RuntimeGoalStatusActive,
+		false,
+	)
+	if err := committed.Goal.Validate(); err != nil {
+		t.Fatalf("committed Goal fixture: %v", err)
+	}
+	if err := authoritative.Goal.Validate(); err != nil {
+		t.Fatalf("authoritative Goal fixture: %v", err)
+	}
+	controls := &reconnectRetryRuntimeControlClient{
+		setGoalResp: serverapi.RuntimeGoalMutationResponse{
+			Availability: clientui.GoalAvailabilityAvailable,
+		},
+	}
+	runtimeClient := newTestSessionRuntimeClientWithControls(controls)
+	runtimeClient.storeMainView(clientui.RuntimeMainView{
+		Session: clientui.RuntimeSessionView{SessionID: "session-1"},
+		Status:  clientui.RuntimeStatus{Goal: committed},
+	})
+	model := newProjectedTestUIModel(runtimeClient, WithUISessionID("session-1"))
+	model.openGoalOverlay(nil, nil)
+
+	rawMessage := model.goalRuntimeCommand(goalRuntimeSet, "queued objective")()
+	message, ok := rawMessage.(goalRuntimeDoneMsg)
+	if !ok {
+		t.Fatalf("goal Set command message = %T, want goalRuntimeDoneMsg", rawMessage)
+	}
+	if message.goal != nil || message.pending != nil {
+		t.Fatalf("empty Goal Set result = %+v, want no projection", message)
+	}
+
+	authoritativeMessage := clientui.NewTranscriptMessage(1, clientui.NewTranscriptEvent(clientui.TranscriptGoalStatus{
+		Goal:         &clientui.TranscriptGoal{Goal: authoritative.Goal},
+		Availability: clientui.GoalAvailabilityAvailable,
+	}))
+	admission, err := runtimeClient.admitTranscriptMessageState(authoritativeMessage)
+	if err != nil {
+		t.Fatalf("admit authoritative Goal status: %v", err)
+	}
+	if cmd := model.applyAdmittedTranscriptMessageState(authoritativeMessage, admission); cmd != nil {
+		t.Fatalf("authoritative Goal status command = %v, want nil", cmd)
+	}
+
+	updateUIModel(t, model, message)
+	if model.goal.goal == nil || model.goal.goal.ID != authoritative.ID {
+		t.Fatalf("empty Set result cleared authoritative Goal = %+v", model.goal.goal)
 	}
 }
