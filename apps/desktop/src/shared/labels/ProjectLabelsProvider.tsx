@@ -6,7 +6,6 @@ import { queryKeys, useAppServices, useConnectionSnapshot } from "@/app-facade";
 import { useStableCallback } from "@/ui";
 import { createProjectLabelEffects } from "./labelEventEffects";
 import { ProjectLabelDataContext } from "./projectLabelContext";
-import { projectCatalogAuthorityRegistryFor } from "./projectCatalogAuthorityRegistry";
 import { useManagedProjectLabelFilter } from "./projectLabelFilter";
 
 export function ProjectLabelsProvider({
@@ -23,17 +22,9 @@ export function ProjectLabelsProvider({
   const { api, logger } = useAppServices();
   const queryClient = useQueryClient();
   const connection = useConnectionSnapshot();
-  const authorityLease = useMemo(
-    () =>
-      projectCatalogAuthorityRegistryFor(queryClient).prepare(projectID, async () =>
-        api.listProjectLabels(projectID),
-      ),
-    [api, projectID, queryClient],
-  );
-  const authority = authorityLease.authority;
   const catalog = useQuery({
     queryKey: queryKeys.projectLabels(projectID),
-    queryFn: async ({ signal }) => authority.read(signal),
+    queryFn: async () => api.listProjectLabels(projectID),
     retry: false,
   });
   const catalogLabelIDs = useMemo(
@@ -41,7 +32,6 @@ export function ProjectLabelsProvider({
     [catalog.data],
   );
   const filter = useManagedProjectLabelFilter(projectID, catalogLabelIDs);
-  useEffect(() => authorityLease.retain(filter.dispatch), [authorityLease, filter.dispatch]);
   const reportBackgroundError = useStableCallback((error: unknown) => {
     onBackgroundError?.(error);
     void logger.append("warn", "Project label refresh failed.", {
@@ -64,13 +54,12 @@ export function ProjectLabelsProvider({
   const effects = useMemo(
     () =>
       createProjectLabelEffects({
-        authority,
-        onFilterAction: authorityLease.dispatchFilterAction,
+        onFilterAction: filter.dispatch,
         onBackgroundError: reportBackgroundError,
         projectID,
         queryClient,
       }),
-    [authority, authorityLease.dispatchFilterAction, projectID, queryClient, reportBackgroundError],
+    [filter.dispatch, projectID, queryClient, reportBackgroundError],
   );
   useEffect(() => {
     if (!subscribeToProject || projectID.length === 0 || connection.phase !== "connected") {
@@ -108,13 +97,12 @@ export function ProjectLabelsProvider({
   ]);
   const value = useMemo(
     () => ({
-      authority,
       catalog,
       effects,
       filter,
       projectID,
     }),
-    [authority, catalog, effects, filter, projectID],
+    [catalog, effects, filter, projectID],
   );
   return <ProjectLabelDataContext.Provider value={value}>{children}</ProjectLabelDataContext.Provider>;
 }

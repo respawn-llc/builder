@@ -27,7 +27,6 @@ vi.mock("./TaskDetailContent", () => ({
 vi.mock("@/shared/labels", () => ({
   ProjectLabelsProvider: ({ children }: Readonly<{ children: ReactNode }>) => <>{children}</>,
   TaskLabelAssignmentProvider: ({ children }: Readonly<{ children: ReactNode }>) => <>{children}</>,
-  useProjectLabelCatalog: () => ({ data: { labels: [] } }),
 }));
 
 vi.mock("@/app-facade", async (importOriginal) => ({
