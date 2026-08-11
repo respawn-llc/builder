@@ -129,12 +129,42 @@ describe("KanbanColumn retained replacement boundary", () => {
     expect(onResumeTask).toHaveBeenCalledWith("task-1");
   });
 
+  it("uses the queued warning control to force Resume", () => {
+    const onResumeTask = vi.fn();
+    render(
+      <KanbanColumn
+        actionsDisabled={false}
+        cards={[{ ...card, statusKind: "queued" }]}
+        column={column}
+        dragDisabled={false}
+        dropState="idle"
+        hasMoreCards={false}
+        initialBoundary={undefined}
+        isFirstActive
+        isLoadingMoreCards={false}
+        nextBoundary={undefined}
+        onCardClick={vi.fn()}
+        onCardDragEnd={vi.fn()}
+        onCardDragStart={vi.fn()}
+        onDeleteTask={vi.fn()}
+        onDropTask={vi.fn()}
+        onInterruptTask={vi.fn()}
+        onLoadMoreCards={vi.fn()}
+        onResumeTask={onResumeTask}
+        replacementBoundary={undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "board.waitingDueToConcurrencyLimits" }));
+    expect(onResumeTask).toHaveBeenCalledWith("task-1");
+    expect(screen.queryByRole("button", { name: "board.resume" })).not.toBeInTheDocument();
+  });
+
   it("does not restore a drag after the selected Workflow becomes invalid", async () => {
     const rootRef = { current: null };
-    const { result, rerender } = renderHook(
-      ({ disabled }) => useBoardDragLifecycle({ disabled, rootRef }),
-      { initialProps: { disabled: false } },
-    );
+    const { result, rerender } = renderHook(({ disabled }) => useBoardDragLifecycle({ disabled, rootRef }), {
+      initialProps: { disabled: false },
+    });
 
     act(() => {
       result.current.start(drag);

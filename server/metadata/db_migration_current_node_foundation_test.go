@@ -124,8 +124,9 @@ func TestSessionCategoryMigrationAddsNullableConstrainedIndexedStorage(t *testin
 	}
 	defer func() { _ = indexRows.Close() }()
 	type indexedColumn struct {
-		name string
-		desc int
+		name       string
+		expression bool
+		desc       int
 	}
 	var columns []indexedColumn
 	for indexRows.Next() {
@@ -135,8 +136,12 @@ func TestSessionCategoryMigrationAddsNullableConstrainedIndexedStorage(t *testin
 		if err := indexRows.Scan(&sequence, &columnID, &name, &desc, &collation, &key); err != nil {
 			t.Fatalf("scan session category index column: %v", err)
 		}
-		if key == 1 && name.Valid {
-			columns = append(columns, indexedColumn{name: name.String, desc: desc})
+		if key == 1 {
+			columns = append(columns, indexedColumn{
+				name:       name.String,
+				expression: columnID == -2,
+				desc:       desc,
+			})
 		}
 	}
 	if err := indexRows.Err(); err != nil {
@@ -144,7 +149,7 @@ func TestSessionCategoryMigrationAddsNullableConstrainedIndexedStorage(t *testin
 	}
 	wantColumns := []indexedColumn{
 		{name: "project_id"},
-		{name: "category"},
+		{expression: true},
 		{name: "updated_at_unix_ms", desc: 1},
 		{name: "id", desc: 1},
 	}

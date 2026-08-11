@@ -205,6 +205,9 @@ func currentNodeCompletionReference(t *testing.T, taskID, nodeID string) workflo
 
 type currentNodeCompletionExecutionStub struct {
 	store                  *workflowstore.Store
+	promoted               []workflow.CurrentNode
+	promotionHandled       bool
+	promotionErr           error
 	resumeEligibilityErr   error
 	resumeEligibilityCalls int
 	startPreparations      chan<- workflowexecution.TaskStartPreparation
@@ -215,6 +218,13 @@ type currentNodeCompletionExecutionStub struct {
 	idleSelector           workflowstore.IdleCurrentNodeSelector
 	idleResult             workflowstore.CurrentNodeCompletionResult
 	idleErr                error
+}
+
+func (s *currentNodeCompletionExecutionStub) PromoteConcurrencyQueuedTask(
+	context.Context,
+	workflow.TaskID,
+) ([]workflow.CurrentNode, bool, error) {
+	return append([]workflow.CurrentNode(nil), s.promoted...), s.promotionHandled, s.promotionErr
 }
 
 func (s *currentNodeCompletionExecutionStub) EnsureTaskResumeEligible(context.Context, workflow.TaskID) error {

@@ -44,7 +44,7 @@ func TestWorkflowTerminalCascadeRacesUserGoalMutationWithoutDeadlock(t *testing.
 	}()
 	select {
 	case <-started:
-	case <-time.After(5 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for workflow turn to start")
 	}
 
@@ -60,12 +60,12 @@ func TestWorkflowTerminalCascadeRacesUserGoalMutationWithoutDeadlock(t *testing.
 		if err != nil {
 			t.Fatalf("SubmitWorkflowTurn: %v", err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("deadlock: workflow turn did not finish racing the goal mutation")
 	}
 	select {
 	case <-mutateDone:
-	case <-time.After(5 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("deadlock: user goal mutation did not finish")
 	}
 }

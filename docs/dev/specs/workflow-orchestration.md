@@ -19,7 +19,10 @@
 - Automation starts only through explicit Task Start, which applies the Start Node's outgoing Transition and adds the first executable current Node.
 - Automation continues through automatic Nodes until terminal or blocked by a Question, Approval/manual gate, error, capacity, interruption, or validation.
 - Task status combines Current Nodes with current live activity. Kent does not store a second lifecycle status that can disagree with them.
-- Running, queued, and waiting require matching Exact Execution Scope evidence. A current Terminal Node makes the Task done.
+- Running and waiting require matching Exact Execution Scope evidence. Queued
+  status requires either a queued Exact Execution Scope or Workflow
+  Execution's live automatic-concurrency queue ownership. A current Terminal
+  Node makes the Task done.
 - A Project owns one shared Label catalog for every linked Workflow board. Tasks can use only Labels from their Project.
 - Labels are many-to-many organizational metadata on tasks. They never affect workflow state, scheduling, prompts, task status, or execution.
 
@@ -461,6 +464,9 @@
 - Script Nodes do not wait for or consume agent-run capacity. Kent does not limit concurrent Script Node runs.
 - When Agent and Script Nodes are both eligible within their applicable capacity, Kent gives neither kind priority. The same-Task continuation preference applies across both kinds.
 - Explicit Start, Resume, approval, and executable manual move may exceed the agent concurrency limit without preempting existing work.
+- Resuming a Task whose automatic Agent Current Nodes are waiting for capacity
+  promotes those queued Nodes into explicit admission. The same Resume action
+  covers an automatically queued first execution and a queued continuation.
 - Resume returns after it durably requeues the interrupted Current Nodes and queues their explicit starts.
 - Resume does not wait for Execution Target restoration, Session setup, or agent or Script startup.
 - Only an actively executing Exact Execution Scope proves that an agent or Script is live and interruptible. Current Nodes, Automatic Intents, Session relations, waiting Questions, Task status, transcript entries, and Goals do not prove liveness.
@@ -504,7 +510,12 @@
 - Desktop shows Task-wide Interrupt when several Exact Execution Scopes are live or a Script Node is live.
 - Task status is structured and independent of a specific client. Each client renders and localizes it.
 - One primary status uses this precedence: done, live question, live or persisted workflow approval, running, queued, interrupted, backlog, active.
-- Running, queued, and live-Question status require matching Exact Execution Scope evidence. `running` means an agent loop or Script process is actively executing; `waiting_question` is not running and is not interruptible. Interruption metadata on a current Node never proves liveness.
+- Running and live-Question status require matching Exact Execution Scope
+  evidence. `queued` requires either a matching queued Exact Execution Scope or
+  Workflow Execution's live automatic-concurrency queue ownership. `running`
+  means an agent loop or Script process is actively executing;
+  `waiting_question` is not running and is not interruptible. Durable Current
+  Node scheduling state and interruption metadata never prove liveness.
 - Task information exposes `can_delete` from the same live state. Delete treats this as a hint and checks Quiescence again before making changes.
 - Task status preserves every applicable attention kind and its Session and Current Node references when parallel branches differ.
 - Workflow validity is workflow-level state and is not a task status.

@@ -78,7 +78,15 @@
 - Board cards use infinite scroll in both directions, 25 cards per page, and retain at most three nearby pages per active column. Cards outside the nearby area release their loaded pages; returning starts at that column's first page in the selected order without changing its expanded state.
 - Card bodies are previews, not full bodies: outer whitespace is removed, content is limited to 512 Unicode code points, and truncation is explicit. Only visible cards render Markdown previews. An ellipsis indicates either truncated content or insufficient card space.
 - Questions and Approvals have distinct semantic card emphasis. Card selection opens Task Detail.
-- Resume appears only when the server says it is available. Interrupt appears in the same action position only for exactly one interruptible live agent Session and acts immediately. Several live agent Sessions use Task Detail for per-Session control; scripts use the Task-wide action.
+- Resume appears only when the server says it is available. For a Task queued
+  by the automatic Agent concurrency limit, Resume promotes its queued Current
+  Nodes into explicit admission and starts them immediately despite the limit.
+  The board card renders that queued Resume action as a warning-colored stop
+  sign with the tooltip `Waiting due to concurrency limits`; Task Detail keeps
+  the ordinary Resume button. Interrupt appears in the same action position
+  only for exactly one interruptible live agent Session and acts immediately.
+  Several live agent Sessions use Task Detail for per-Session control; scripts
+  use the Task-wide action.
 - Board states include Backlog, idle, queued, running, interrupted, Approval-blocked, Question-blocked, and done.
 - Dragging a Backlog Task to its first executable Node starts it immediately without confirmation; that target says `Drag here to start automation`. A drop onto Done is a manual archive move, not normal Workflow completion.
 - When an otherwise valid Start or executable Manual Move has unsatisfied Task
@@ -295,7 +303,12 @@
 - Opening a root sidebar destination replaces the prior sidebar stack.
 - Selecting a related Task pushes Task Detail onto the sidebar stack.
 - Selecting a Task already retained in the stack returns to that Task and discards every later destination.
-- Dependency Add pushes the ordinary New Task form with the relationship intent hidden and preconfigured.
+- Dependency Add opens a compact picker with project-scoped full Task search.
+- The picker places a New Task plus action beside and after its search field, with compact existing-Task results below.
+- The picker smoothly morphs its height as search results and state feedback appear or disappear, subject to reduced-motion preference.
+- Selecting New Task pushes the ordinary New Task form with the relationship intent hidden and preconfigured.
+- Selecting an existing Task adds it in the chosen `Blocked by` or `Blocks` direction without opening Task Detail.
+- The picker excludes the open Task and Tasks already related to it.
 - Successful related-Task creation atomically creates the Task and relationship, then replaces New Task with the created Task Detail.
 - Back returns to the preceding sidebar destination.
 - Back is hidden at the root.
@@ -325,8 +338,8 @@
   minimal uncircled red `X`.
 - Remove acts immediately without confirmation.
 - Dependency actions use icon-only controls outside confirmation dialogs.
-- `Blocked by` Add opens the ordinary New Task form for a new Blocker Task.
-- `Blocks` Add opens the ordinary New Task form for a new Blocked Task.
+- The `Blocked by` picker's New Task action opens the ordinary New Task form for a new Blocker Task.
+- The `Blocks` picker's New Task action opens the ordinary New Task form for a new Blocked Task.
 - Related-Task creation uses the open Task's Project and Workflow.
 - Related-Task creation defaults source workspace to the open Task's source
   workspace and keeps the ordinary source-workspace selector available.
@@ -337,7 +350,6 @@
 - A related-Task creation failure creates neither Task nor relationship and
   preserves the ordinary New Task recovery path.
 - Canceling related-Task creation creates neither Task nor relationship.
-- Desktop has no existing-Task dependency picker.
 - The Add control is unavailable with an accessible explanation when its
   relationship direction has reached the 50-Task limit.
 - Kent rechecks the limit when related-Task creation is submitted.

@@ -149,6 +149,21 @@ func (q *currentNodeAutomaticQueue) remove(entry *currentNodeAutomaticQueueEntry
 	return entry.start
 }
 
+func (q *currentNodeAutomaticQueue) removeTask(taskID workflow.TaskID) []currentNodeQueuedStart {
+	if q.tasks[taskID] == nil {
+		return nil
+	}
+	var starts []currentNodeQueuedStart
+	for entry := q.first; entry != nil; {
+		next := entry.globalNext
+		if entry.start.reference.TaskID == taskID {
+			starts = append(starts, q.remove(entry))
+		}
+		entry = next
+	}
+	return starts
+}
+
 func (q *currentNodeAutomaticQueue) clear() {
 	q.first = nil
 	q.last = nil

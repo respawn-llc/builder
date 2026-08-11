@@ -3,7 +3,34 @@ import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 
 import type { TaskDependencies } from "@/api";
+import type { TaskSearchResult } from "@/app-facade";
 import { TaskDependenciesArea } from "./TaskDependenciesArea";
+
+const searchFixture = vi.hoisted<{ results: readonly TaskSearchResult[] }>(() => ({ results: [] }));
+
+vi.mock("@/app-facade", async (importOriginal) => ({
+  ...(await importOriginal()),
+  taskSearchDebounceMs: 0,
+  useDebouncedText: (value: string) => value,
+  useTaskSearch: () => ({
+    displayedQuery: null,
+    normalizedTooShort: false,
+    paginationUsesVisibleData: true,
+    request: {
+      data: undefined,
+      error: null,
+      fetchNextPage: vi.fn(),
+      hasNextPage: false,
+      isError: false,
+      isFetchNextPageError: false,
+      isFetching: false,
+      isFetchingNextPage: false,
+      refetch: vi.fn(),
+    },
+    results: searchFixture.results,
+    searchable: searchFixture.results.length > 0,
+  }),
+}));
 
 const dependencies: TaskDependencies = {
   blockerCount: 1,
@@ -56,6 +83,10 @@ const dependencies: TaskDependencies = {
 };
 
 describe("TaskDependenciesArea", () => {
+  beforeEach(() => {
+    searchFixture.results = [];
+  });
+
   it("keeps both empty directions actionable without progress", () => {
     render(
       <TaskDependenciesArea
@@ -73,8 +104,10 @@ describe("TaskDependenciesArea", () => {
         disabled={false}
         navigationDisabled={false}
         onAdd={vi.fn()}
+        onAddExisting={vi.fn().mockResolvedValue(undefined)}
         onRemove={vi.fn()}
         onSelectTask={vi.fn()}
+        projectID="project-1"
         taskID="task-1"
       />,
     );
@@ -101,8 +134,10 @@ describe("TaskDependenciesArea", () => {
         disabled={false}
         navigationDisabled={false}
         onAdd={vi.fn()}
+        onAddExisting={vi.fn().mockResolvedValue(undefined)}
         onRemove={vi.fn()}
         onSelectTask={vi.fn()}
+        projectID="project-1"
         taskID="task-1"
       />,
     );
@@ -119,8 +154,10 @@ describe("TaskDependenciesArea", () => {
         disabled
         navigationDisabled
         onAdd={vi.fn()}
+        onAddExisting={vi.fn().mockResolvedValue(undefined)}
         onRemove={vi.fn()}
         onSelectTask={vi.fn()}
+        projectID="project-1"
         taskID="task-1"
       />,
     );
@@ -141,8 +178,10 @@ describe("TaskDependenciesArea", () => {
         disabled={false}
         navigationDisabled={false}
         onAdd={onAdd}
+        onAddExisting={vi.fn().mockResolvedValue(undefined)}
         onRemove={onRemove}
         onSelectTask={onSelectTask}
+        projectID="project-1"
         taskID="task-1"
       />,
     );
@@ -165,12 +204,83 @@ describe("TaskDependenciesArea", () => {
 
     await user.click(screen.getByTestId("dependency-row-task-2"));
     await user.click(screen.getByTestId("dependency-add-blocked-by"));
+    await user.click(screen.getByRole("button", { name: "task.dependenciesCreateTask" }));
     await user.click(screen.getByTestId("dependency-remove-task-2"));
 
     expect(onSelectTask).toHaveBeenCalledWith("task-2");
     expect(onAdd).toHaveBeenCalledWith("blocked-by");
     expect(onRemove).toHaveBeenCalledWith({
       blockerTaskID: "task-2",
+      blockedTaskID: "task-1",
+    });
+  });
+
+  it("adds an existing searched Task in the selected direction", async () => {
+    const onAddExisting = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    searchFixture.results = [
+      {
+        key: "candidate",
+        group: {
+          projectID: "project-1",
+          projectKey: "KENT",
+          taskID: "task-9",
+          shortID: "KENT-9",
+          workflowID: "workflow-1",
+          title: "Existing candidate",
+          status: {
+            kind: "backlog",
+            nativeState: "active",
+            nodeIDs: [],
+            attentionTypes: [],
+          },
+          totalHitCount: 1,
+          hits: [
+            {
+              ordinal: 1,
+              source: { kind: "title" },
+              literal: {
+                before: "",
+                match: "Existing",
+                after: " candidate",
+                leftTruncated: false,
+                rightTruncated: false,
+              },
+            },
+          ],
+        },
+      },
+    ];
+
+    render(
+      <TaskDependenciesArea
+        dependencies={{
+          blockerCount: 0,
+          unsatisfiedBlockerCount: 0,
+          directlyBlockedTaskCount: 0,
+          directions: dependencies.directions.map((direction) => ({
+            ...direction,
+            totalCount: 0,
+            unsatisfiedCount: direction.direction === "blocked-by" ? 0 : null,
+            items: [],
+          })),
+        }}
+        disabled={false}
+        navigationDisabled={false}
+        onAdd={vi.fn()}
+        onAddExisting={onAddExisting}
+        onRemove={vi.fn()}
+        onSelectTask={vi.fn()}
+        projectID="project-1"
+        taskID="task-1"
+      />,
+    );
+
+    await user.click(screen.getByTestId("dependency-add-blocked-by"));
+    await user.click(screen.getByTestId("dependency-candidate-task-9"));
+
+    expect(onAddExisting).toHaveBeenCalledWith({
+      blockerTaskID: "task-9",
       blockedTaskID: "task-1",
     });
   });
@@ -187,16 +297,18 @@ describe("TaskDependenciesArea", () => {
         disabled={false}
         navigationDisabled
         onAdd={onAdd}
+        onAddExisting={vi.fn().mockResolvedValue(undefined)}
         onRemove={onRemove}
         onSelectTask={onSelectTask}
+        projectID="project-1"
         taskID="task-1"
       />,
     );
 
     expect(screen.getByTestId("dependency-add-blocked-by")).toBeDisabled();
-    const dependencyButton = screen.getAllByRole("button").find(
-      (button) => within(button).queryByTestId("dependency-row-task-2") !== null,
-    );
+    const dependencyButton = screen
+      .getAllByRole("button")
+      .find((button) => within(button).queryByTestId("dependency-row-task-2") !== null);
     if (dependencyButton === undefined) throw new Error("Expected the dependency row button.");
     expect(dependencyButton).toBeDisabled();
     expect(screen.getByTestId("dependency-remove-task-2")).toBeEnabled();

@@ -83,9 +83,9 @@ function withDependencies(detail: TaskDetail, dependencies: TaskDependencies): T
   return { ...detail, dependencies };
 }
 
-export function dependencyRelatedTaskIDs(detail: TaskDetail): ReadonlySet<string> {
+export function dependencyRelatedTaskIDs(dependencies: TaskDependencies): ReadonlySet<string> {
   return new Set(
-    detail.dependencies.directions.flatMap((direction) =>
+    dependencies.directions.flatMap((direction) =>
       direction.items.map((item: TaskDependencyItem) => item.taskID),
     ),
   );

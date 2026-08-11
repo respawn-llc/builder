@@ -133,8 +133,9 @@ func (m *Manager) entry(id string) (*processEntry, error) {
 	defer m.mu.Unlock()
 	entry, ok := m.entries[id]
 	if !ok {
-		return nil, fmt.Errorf("unknown session_id %s", id)
+		return nil, ErrResultUnavailable
 	}
+	m.touchCompletedLocked(id)
 	return entry, nil
 }
 
@@ -162,6 +163,7 @@ func (m *Manager) waitForExit(entry *processEntry) {
 	if state == "killed" {
 		eventType = EventKilled
 	}
+	m.retainCompletedEntry(entry.id)
 	event := m.buildTerminalEvent(entry, eventType, snapshot)
 	m.emitCompletionEvent(entry, event)
 	entry.finalizeClosedExit()
@@ -408,6 +410,51 @@ func (m *Manager) releaseEntry(id string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.entries, id)
+	m.removeCompletedLocked(id)
+}
+
+func (m *Manager) retainCompletedEntry(id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	entry, exists := m.entries[id]
+	if !exists || entry.isRunning() {
+		return
+	}
+	m.removeCompletedLocked(id)
+	m.completedRecency = append(m.completedRecency, id)
+	for len(m.completedRecency) > completedProcessRetentionLimit {
+		evictedID := m.completedRecency[0]
+		m.completedRecency[0] = ""
+		m.completedRecency = m.completedRecency[1:]
+		evicted, exists := m.entries[evictedID]
+		if exists && !evicted.isRunning() {
+			delete(m.entries, evictedID)
+		}
+	}
+}
+
+func (m *Manager) touchCompletedLocked(id string) {
+	for index, completedID := range m.completedRecency {
+		if completedID != id {
+			continue
+		}
+		copy(m.completedRecency[index:], m.completedRecency[index+1:])
+		m.completedRecency[len(m.completedRecency)-1] = id
+		return
+	}
+}
+
+func (m *Manager) removeCompletedLocked(id string) {
+	for index, completedID := range m.completedRecency {
+		if completedID != id {
+			continue
+		}
+		copy(m.completedRecency[index:], m.completedRecency[index+1:])
+		last := len(m.completedRecency) - 1
+		m.completedRecency[last] = ""
+		m.completedRecency = m.completedRecency[:last]
+		return
+	}
 }
 
 func (m *Manager) normalizeExecYieldTime(value time.Duration) time.Duration {
