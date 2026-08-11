@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { z } from "zod";
 
 import { createTestServices, startupRoutes } from "@/test-support/app-services";
@@ -17,9 +17,11 @@ vi.mock("@/features/sessions", () => ({
 }));
 
 describe("Project workspace route", () => {
-  beforeEach(() => {
-    vi.stubGlobal("localStorage", memoryStorage());
-    vi.stubGlobal("sessionStorage", memoryStorage());
+  beforeEach(async () => {
+    const { JSDOM } = await vi.importActual<{ JSDOM: JSDOMConstructor }>("jsdom");
+    const storageWindow = new JSDOM("", { url: "http://localhost" }).window;
+    vi.stubGlobal("localStorage", storageWindow.localStorage);
+    vi.stubGlobal("sessionStorage", storageWindow.sessionStorage);
     window.history.replaceState(null, "", "/");
   });
 
@@ -30,17 +32,16 @@ describe("Project workspace route", () => {
 
   it("restores on Sessions, carries Workflows between Projects, and resets after remount", async () => {
     localStorage.setItem("desktop.lastProjectRoute", JSON.stringify({ projectId: "project-1" }));
-    const view = render(<AppRoot services={createTestServices(routes())} />);
+    const view = render(<AppRoot services={createTestServices(routes(["project-2"]))} />);
 
     const workspace = await screen.findByTestId("project-workspace");
     expect(screen.getByTestId("sessions-body")).toHaveTextContent("project-1");
-    fireEvent.click(requiredElement(within(workspace).getAllByRole("tab"), 0));
+    fireEvent.click(within(workspace).getByRole("tab", { selected: false }));
     expect(await screen.findByTestId("workflows-body")).toHaveTextContent("project-1");
     expect(new URL(window.location.href).searchParams.has("tab")).toBe(false);
 
     fireEvent.click(within(screen.getByTestId("app-chrome-navigation")).getByRole("link"));
-    const projects = await screen.findAllByTestId("home-list-card-button");
-    fireEvent.click(requiredElement(projects, 1));
+    fireEvent.click(await screen.findByTestId("home-list-card-button"));
     expect(await screen.findByTestId("workflows-body")).toHaveTextContent("project-2");
 
     view.unmount();
@@ -49,12 +50,12 @@ describe("Project workspace route", () => {
   });
 
   it("starts Home on Projects and opens a manually selected Project on Sessions", async () => {
-    mount("/");
+    mount("/", routes(["project-1"]));
 
     const home = await screen.findByTestId("home-primary-projects-tab-island");
     const projectsTab = within(home).getByRole("tab");
     expect(projectsTab).toHaveAttribute("aria-selected", "true");
-    fireEvent.click(requiredElement(await screen.findAllByTestId("home-list-card-button"), 0));
+    fireEvent.click(await screen.findByTestId("home-list-card-button"));
     await screen.findByTestId("project-workspace");
     expect(screen.getByRole("heading", { name: "Project project-1" })).toBeInTheDocument();
     expect(screen.getByText("KEY-project-1")).toBeInTheDocument();
@@ -62,7 +63,7 @@ describe("Project workspace route", () => {
     expect(screen.queryByTestId("workflows-body")).not.toBeInTheDocument();
   });
 
-  it("blocks both bodies with identity Loading and retryable Error", async () => {
+  it("blocks both bodies while identity loads or a cached refresh fails", async () => {
     const pending = new Promise<never>(() => undefined);
     const loading = mount("/projects/project-1", [
       ...startupRoutes,
@@ -72,21 +73,36 @@ describe("Project workspace route", () => {
     expect(screen.queryByTestId("sessions-body")).not.toBeInTheDocument();
     loading.unmount();
 
-    const services = createTestServices([
+    let failIdentity = false;
+    const services = mount("/projects/project-1", [
       ...startupRoutes,
-      { method: "project.edit.get", error: new Error("identity unavailable") },
+      {
+        method: "project.edit.get",
+        handler: () => {
+          if (failIdentity) throw new Error("identity refresh failed");
+          return projectEditFixture("project-1");
+        },
+      },
     ]);
-    render(<AppRoot services={services} />);
-    expect(await screen.findByTestId("error-state", {}, { timeout: 5_000 })).toBeInTheDocument();
-    expect(screen.queryByTestId("sessions-body")).not.toBeInTheDocument();
-    fireEvent.click(within(screen.getByTestId("error-state-actions")).getByRole("button"));
-    await waitFor(() => {
-      expect(
-        services.transport.calls.filter((call) => call.method === "project.edit.get").length,
-      ).toBeGreaterThan(1);
+    expect(await screen.findByTestId("sessions-body")).toBeInTheDocument();
+    failIdentity = true;
+    await act(async () => {
+      services.transport.connection.set("disconnected");
+      await Promise.resolve();
+      services.transport.connection.set("connected");
+      await Promise.resolve();
     });
+
+    expect(await screen.findByTestId("error-state", {}, { timeout: 5_000 })).toBeInTheDocument();
+    expect(screen.queryByTestId("project-workspace")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("sessions-body")).not.toBeInTheDocument();
+    failIdentity = false;
+    fireEvent.click(within(screen.getByTestId("error-state-actions")).getByRole("button"));
+    expect(await screen.findByTestId("sessions-body")).toBeInTheDocument();
   });
 });
+
+type JSDOMConstructor = new (html?: string, options?: { url?: string }) => { window: Window };
 
 function mount(path: string, fakeRoutes = routes()) {
   window.history.replaceState(null, "", path);
@@ -94,13 +110,13 @@ function mount(path: string, fakeRoutes = routes()) {
   return Object.assign(render(<AppRoot services={services} />), services);
 }
 
-function routes() {
+function routes(projectIDs = ["project-1", "project-2"]) {
   return [
     ...startupRoutes,
     {
       method: "project.home.list",
       result: {
-        projects: ["project-1", "project-2"].map(projectFixture),
+        projects: projectIDs.map(projectFixture),
         next_page_token: "",
         generated_at_unix_ms: 1,
       },
@@ -109,17 +125,21 @@ function routes() {
       method: "project.edit.get",
       handler: (params: unknown) => {
         const projectID = z.object({ project_id: z.string() }).parse(params).project_id;
-        return {
-          project_id: projectID,
-          project_key: `KEY-${projectID}`,
-          display_name: `Project ${projectID}`,
-          default_workspace_id: `workspace-${projectID}`,
-          workspaces: [],
-          next_page_token: "",
-        };
+        return projectEditFixture(projectID);
       },
     },
   ];
+}
+
+function projectEditFixture(projectID: string) {
+  return {
+    project_id: projectID,
+    project_key: `KEY-${projectID}`,
+    display_name: `Project ${projectID}`,
+    default_workspace_id: `workspace-${projectID}`,
+    workspaces: [],
+    next_page_token: "",
+  };
 }
 
 function projectFixture(projectID: string) {
@@ -142,35 +162,5 @@ function projectFixture(projectID: string) {
     task_count: 0,
     attention_count: 0,
     workflow_count: 0,
-  };
-}
-
-function requiredElement(elements: readonly HTMLElement[], index: number): HTMLElement {
-  const element = elements[index];
-  if (element === undefined) throw new Error(`Required element ${index.toString()} is unavailable.`);
-  return element;
-}
-
-function memoryStorage(): Storage {
-  const values = new Map<string, string>();
-  return {
-    get length() {
-      return values.size;
-    },
-    clear() {
-      values.clear();
-    },
-    getItem(key) {
-      return values.get(key) ?? null;
-    },
-    key(index) {
-      return [...values.keys()][index] ?? null;
-    },
-    removeItem(key) {
-      values.delete(key);
-    },
-    setItem(key, value) {
-      values.set(key, value);
-    },
   };
 }

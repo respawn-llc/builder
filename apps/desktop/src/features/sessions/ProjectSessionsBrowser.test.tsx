@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { useState } from "react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { useSyncExternalStore } from "react";
 
 import { createTestServices, TestAppProviders, type TestAppServices } from "@/test-support/app-services";
 import type { FakeRoute } from "@/test-support/api";
@@ -8,30 +8,74 @@ import {
   sessionPageFixture,
   type SessionPageRequest,
 } from "@/test-support/session-catalog";
-import { InfiniteListBoundary, type VirtualizedInfiniteList } from "@/ui";
 import { ProjectSessionsBrowser } from "./ProjectSessionsBrowser";
 
-vi.mock("@/ui", async (importOriginal) => ({
+const virtualizerHarness = vi.hoisted(() => {
+  let itemCount = 0;
+  let visibleIndexes: readonly number[] = [1];
+  const listeners = new Set<() => void>();
+  return {
+    getSnapshot: () => visibleIndexes,
+    itemCount: () => itemCount,
+    setItemCount(count: number) {
+      itemCount = count;
+    },
+    show(indexes: readonly number[]) {
+      visibleIndexes = indexes;
+      for (const listener of listeners) listener();
+    },
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    virtualizer: {
+      getOffsetForIndex: (index: number) => [index * 76],
+      getTotalSize: () => 760,
+      getVirtualItems: () =>
+        visibleIndexes.map((index) => ({
+          end: (index + 1) * 76,
+          index,
+          key: index.toString(),
+          size: 76,
+          start: index * 76,
+        })),
+      measureElement: vi.fn(),
+      scrollToOffset: vi.fn(),
+    },
+  };
+});
+
+vi.mock("@tanstack/react-virtual", async (importOriginal) => ({
   ...(await importOriginal()),
-  VirtualizedInfiniteList: TestVirtualizedInfiniteList,
+  useVirtualizer: (options: Readonly<{ count: number }>) => {
+    virtualizerHarness.setItemCount(options.count);
+    useSyncExternalStore(
+      virtualizerHarness.subscribe,
+      virtualizerHarness.getSnapshot,
+      virtualizerHarness.getSnapshot,
+    );
+    return virtualizerHarness.virtualizer;
+  },
 }));
 
 describe("Project Sessions browser", () => {
+  beforeEach(() => {
+    virtualizerHarness.show([1]);
+  });
+
   it("shows only the selected Project/category and moves one observer with the selection", async () => {
     const requests: SessionPageRequest[] = [];
     const route = sessionRoute((request) => {
       requests.push(request);
-      return sessionPageFixture(request, [[`${request.projectID}-${request.category}`]]);
+      return feedPage(request, [`${request.projectID}-${request.category}`]);
     });
     const view = renderBrowser(route, "project-1");
 
     expect(await screen.findByText("project-1-main")).toBeInTheDocument();
     const browser = screen.getByTestId("project-sessions-browser");
-    const tabs = within(browser).getAllByRole("tab");
-    expect(tabs).toHaveLength(2);
-    expect(tabs.filter(selectedTab)).toHaveLength(1);
+    expect(within(browser).getAllByRole("tab")).toHaveLength(2);
 
-    fireEvent.click(requiredElement(tabs, 1));
+    fireEvent.click(within(browser).getByRole("tab", { selected: false }));
     expect(await screen.findByText("project-1-subagent")).toBeInTheDocument();
 
     view.rerender(browserProviders(view.services, "project-2"));
@@ -46,6 +90,7 @@ describe("Project Sessions browser", () => {
     expect(await screen.findByTestId("loading-state")).toBeInTheDocument();
     view.unmount();
 
+    virtualizerHarness.show([0]);
     view = renderBrowser({
       method: "session.page",
       result: sessionPageFixture({ projectID: "project-1", category: "main" }, []),
@@ -62,6 +107,7 @@ describe("Project Sessions browser", () => {
   });
 
   it("renders compact static rows with name, identity fallback, preview, and recency", async () => {
+    virtualizerHarness.show([0, 1]);
     renderBrowser({
       method: "session.page",
       result: sessionPageFixture({ projectID: "project-1", category: "main" }, [
@@ -75,11 +121,7 @@ describe("Project Sessions browser", () => {
     expect(screen.getByText("Named Session")).toBeInTheDocument();
     expect(screen.getByText("Preview copy")).toBeInTheDocument();
     expect(screen.getByText("session-2")).toBeInTheDocument();
-    expect(
-      within(requiredElement(rows, 0)).getByText((content) => content.trim().length > 0, {
-        selector: "time",
-      }),
-    ).toBeInTheDocument();
+    expect(screen.getAllByText((content) => content.trim().length > 0, { selector: "time" })).toHaveLength(2);
     for (const row of rows) {
       expect(within(row).queryByRole("button")).not.toBeInTheDocument();
       expect(within(row).queryByRole("link")).not.toBeInTheDocument();
@@ -94,14 +136,17 @@ describe("Project Sessions browser", () => {
     renderBrowser(
       sessionRoute((request) => {
         if (request.position.kind === direction) throw new Error(`${direction} failed`);
-        return sessionPageFixture(request, [["retained-session"]], {
+        return feedPage(request, ["retained-session"], {
           ...(direction === "older" ? { older: cursor } : { newer: cursor }),
         });
       }),
     );
 
     expect(await screen.findByText("retained-session")).toBeInTheDocument();
-    fireEvent.click(await screen.findByTestId(`load-${direction}`));
+    await reachEdge(direction);
+    act(() => {
+      virtualizerHarness.show(direction === "older" ? [1, 3] : [0, 2]);
+    });
     const boundary = await screen.findByTestId(boundaryTestID);
     expect(screen.getByText("retained-session")).toBeInTheDocument();
     expect(within(boundary).getByRole("button")).toBeInTheDocument();
@@ -112,31 +157,32 @@ describe("Project Sessions browser", () => {
     renderBrowser(
       sessionRoute((request) => {
         if (request.position.kind === "newest") {
-          return sessionPageFixture(request, [["head"]], { older: "older-1" });
+          return feedPage(request, ["head"], { older: "older-1" });
         }
         if (request.position.kind === "newer") {
-          return sessionPageFixture(request, [["moving-session", "Current occurrence"]], {
+          return feedPage(request, ["moving-session", "Current occurrence"], {
             older: "older-1",
           });
         }
         const number = requiredPage(olderPageByToken, request.position.token);
-        return sessionPageFixture(
+        return feedPage(
           request,
-          [number === 1 ? ["moving-session", "Older occurrence"] : [`older-session-${number.toString()}`]],
+          number === 1 ? ["moving-session", "Older occurrence"] : [`older-session-${number.toString()}`],
           {
-            ...(number < 5 ? { older: `older-${(number + 1).toString()}` } : {}),
+            older: `older-${(number + 1).toString()}`,
             newer: `newer-${(number - 1).toString()}`,
           },
         );
       }),
     );
 
+    expect(await screen.findByText("head")).toBeInTheDocument();
     for (let page = 1; page <= 5; page += 1) {
       await loadPage("older", page === 1 ? "Older occurrence" : `older-session-${page.toString()}`);
     }
     await loadPage("newer", "Current occurrence");
     expect(screen.queryByText("Older occurrence")).not.toBeInTheDocument();
-    expect(screen.getAllByTestId("session-row")).toHaveLength(4);
+    expect(screen.getAllByText("Current occurrence")).toHaveLength(1);
   });
 
   it("re-enters an evicted category at its changed current head", async () => {
@@ -145,32 +191,33 @@ describe("Project Sessions browser", () => {
     renderBrowser(
       sessionRoute((request) => {
         if (request.category === "subagent") {
-          return sessionPageFixture(request, [["subagent-head"]]);
+          return feedPage(request, ["subagent-head"]);
         }
         if (request.position.kind === "newest") {
-          return sessionPageFixture(request, [[currentHead]], { older: "older-1" });
+          return feedPage(request, [currentHead], { older: "older-1" });
         }
         if (request.position.kind === "newer") {
           throw new Error("Re-entry fixture does not load toward newer.");
         }
         const number = requiredPage(olderPageByToken, request.position.token);
-        return sessionPageFixture(request, [[`older-${number.toString()}`]], {
-          ...(number < 5 ? { older: `older-${(number + 1).toString()}` } : {}),
+        return feedPage(request, [`older-${number.toString()}`], {
+          older: `older-${(number + 1).toString()}`,
           newer: `newer-${(number - 1).toString()}`,
         });
       }),
     );
 
+    expect(await screen.findByText("head-before")).toBeInTheDocument();
     for (let page = 1; page <= 5; page += 1) {
       await loadPage("older", `older-${page.toString()}`);
     }
     expect(screen.queryByText("head-before")).not.toBeInTheDocument();
     const browser = screen.getByTestId("project-sessions-browser");
-    fireEvent.click(requiredElement(within(browser).getAllByRole("tab"), 1));
+    fireEvent.click(within(browser).getByRole("tab", { selected: false }));
     expect(await screen.findByText("subagent-head")).toBeInTheDocument();
 
     currentHead = "head-after";
-    fireEvent.click(requiredElement(within(browser).getAllByRole("tab"), 0));
+    fireEvent.click(within(browser).getByRole("tab", { selected: false }));
     expect(await screen.findByText("head-after")).toBeInTheDocument();
   });
 
@@ -187,7 +234,7 @@ describe("Project Sessions browser", () => {
         if (request.position.kind === "older") {
           const page = requiredPage(olderPageByToken, request.position.token);
           return sessionNumberPage(request, page, {
-            ...(page < 7 ? { older: `older-${(page + 1).toString()}` } : {}),
+            older: `older-${(page + 1).toString()}`,
             newer: `newer-${(page - 1).toString()}`,
           });
         }
@@ -199,13 +246,13 @@ describe("Project Sessions browser", () => {
       }),
     );
 
-    expect(await screen.findByText("session-0-0")).toBeInTheDocument();
+    expect(await screen.findByText("session-0-1")).toBeInTheDocument();
     for (let page = 1; page <= 5; page += 1) {
-      await loadPage("older", `session-${page.toString()}-2`);
+      await loadPage("older", `session-${page.toString()}-1`);
     }
     const retainedRowCount = screen.getAllByTestId("session-row").length;
     for (let page = 6; page <= 7; page += 1) {
-      await loadPage("older", `session-${page.toString()}-2`);
+      await loadPage("older", `session-${page.toString()}-1`);
       expect(screen.getAllByTestId("session-row")).toHaveLength(retainedRowCount);
     }
     expect(requests.map((request) => request.position)).toContainEqual({
@@ -214,7 +261,7 @@ describe("Project Sessions browser", () => {
     });
 
     for (let page = 2; page >= 0; page -= 1) {
-      await loadPage("newer", `session-${page.toString()}-0`);
+      await loadPage("newer", `session-${page.toString()}-1`);
       expect(screen.getAllByTestId("session-row")).toHaveLength(retainedRowCount);
     }
     expect(requests.map((request) => request.position)).toContainEqual({
@@ -263,6 +310,17 @@ function sessionNumberPage(
   );
 }
 
+type SessionFixture = Parameters<typeof sessionPageFixture>[1][number];
+
+function feedPage(
+  request: SessionPageRequest,
+  session: SessionFixture,
+  cursors: Readonly<{ older?: string | undefined; newer?: string | undefined }> = {},
+) {
+  const id = session[0];
+  return sessionPageFixture(request, [[`${id}-filler-1`], session, [`${id}-filler-2`]], cursors);
+}
+
 function numberedTokens(prefix: "newer" | "older", last: number, first = 1): ReadonlyMap<string, number> {
   return new Map(
     Array.from({ length: last - first + 1 }, (_, index) => {
@@ -278,69 +336,29 @@ function requiredPage(pages: ReadonlyMap<string, number>, token: string): number
   return page;
 }
 
-function selectedTab(tab: HTMLElement): boolean {
-  return tab.getAttribute("aria-selected") === "true";
-}
-
-function requiredElement(elements: readonly HTMLElement[], index: number): HTMLElement {
-  const element = elements[index];
-  if (element === undefined) throw new Error(`Required element ${index.toString()} is unavailable.`);
-  return element;
-}
-
 async function loadPage(direction: "newer" | "older", visibleIdentity: string): Promise<void> {
-  const edge = await screen.findByTestId(`load-${direction}`);
+  await reachEdge(direction);
   await waitFor(() => {
-    expect(edge).toBeEnabled();
+    const index = direction === "older" ? virtualizerHarness.itemCount() - 3 : 1;
+    act(() => {
+      virtualizerHarness.show([index]);
+    });
+    expect(screen.getByText(visibleIdentity)).toBeInTheDocument();
   });
-  fireEvent.click(edge);
-  expect(await screen.findByText(visibleIdentity)).toBeInTheDocument();
+  act(() => {
+    virtualizerHarness.show([1]);
+  });
 }
 
-type VirtualizedInfiniteListProps<TItem> = Parameters<typeof VirtualizedInfiniteList<TItem>>[0];
-
-function TestVirtualizedInfiniteList<TItem>(props: VirtualizedInfiniteListProps<TItem>) {
-  const [lastOlderKey, setLastOlderKey] = useState<string>();
-  const [lastNewerKey, setLastNewerKey] = useState<string>();
-  const canLoadOlder =
-    props.hasNextPage &&
-    !props.isFetchingNextPage &&
-    props.loadMoreKey !== undefined &&
-    lastOlderKey !== props.loadMoreKey;
-  const canLoadNewer =
-    props.hasPreviousPage &&
-    !props.isFetchingPreviousPage &&
-    props.previousLoadKey !== undefined &&
-    lastNewerKey !== props.previousLoadKey;
-  return (
-    <div>
-      {props.previousBoundary && <InfiniteListBoundary direction="previous" state={props.previousBoundary} />}
-      {props.items.length === 0
-        ? props.empty
-        : props.items.map((item, index) => (
-            <div key={props.getItemKey(item)}>{props.renderItem(item, index)}</div>
-          ))}
-      {props.nextBoundary && <InfiniteListBoundary direction="next" state={props.nextBoundary} />}
-      {props.hasPreviousPage ? (
-        <button
-          data-testid="load-newer"
-          disabled={!canLoadNewer}
-          onClick={() => {
-            setLastNewerKey(props.previousLoadKey);
-            props.onLoadPrevious?.();
-          }}
-        />
-      ) : null}
-      {props.hasNextPage ? (
-        <button
-          data-testid="load-older"
-          disabled={!canLoadOlder}
-          onClick={() => {
-            setLastOlderKey(props.loadMoreKey);
-            props.onLoadMore();
-          }}
-        />
-      ) : null}
-    </div>
-  );
+async function reachEdge(direction: "newer" | "older"): Promise<void> {
+  const itemCount = virtualizerHarness.itemCount();
+  act(() => {
+    virtualizerHarness.show([direction === "older" ? itemCount - 2 : 0]);
+  });
+  await act(async () => {
+    await Promise.resolve();
+  });
+  act(() => {
+    virtualizerHarness.show([1]);
+  });
 }

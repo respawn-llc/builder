@@ -13,9 +13,9 @@ afterEach(() => {
 
 it("refreshes only the active category and surfaces a reconnect failure with Retry", async () => {
   window.history.replaceState(null, "", "/projects/project-1");
-  const callsByCategory = new Map<string, number>();
   const refreshedCategories: string[] = [];
   let collectRefresh = false;
+  let failRefresh = false;
   const services = createTestServices([
     ...startupRoutes,
     {
@@ -33,13 +33,11 @@ it("refreshes only the active category and surfaces a reconnect failure with Ret
       method: "session.page",
       handler: (params) => {
         const request = parseSessionPageRequest(params);
-        const call = (callsByCategory.get(request.category) ?? 0) + 1;
-        callsByCategory.set(request.category, call);
         if (collectRefresh) refreshedCategories.push(request.category);
-        if (request.category === "subagent" && (call === 2 || call === 3)) throw new Error("refresh failed");
+        if (request.category === "subagent" && failRefresh) throw new Error("refresh failed");
         return sessionPageFixture(request, [
           [
-            request.category === "subagent" && call > 2
+            request.category === "subagent" && collectRefresh
               ? "subagent-after-retry"
               : `${request.category}-before-refresh`,
           ],
@@ -50,9 +48,10 @@ it("refreshes only the active category and surfaces a reconnect failure with Ret
   render(<AppRoot services={services} />);
 
   const browser = await screen.findByTestId("project-sessions-browser");
-  fireEvent.click(requiredElement(within(browser).getAllByRole("tab"), 1));
+  fireEvent.click(within(browser).getByRole("tab", { selected: false }));
   expect(await screen.findByText("subagent-before-refresh")).toBeInTheDocument();
   collectRefresh = true;
+  failRefresh = true;
 
   await act(async () => {
     services.transport.connection.set("disconnected");
@@ -65,12 +64,7 @@ it("refreshes only the active category and surfaces a reconnect failure with Ret
 
   expect(await screen.findByTestId("error-state", {}, { timeout: 5_000 })).toBeInTheDocument();
   expect(new Set(refreshedCategories)).toEqual(new Set(["subagent"]));
+  failRefresh = false;
   fireEvent.click(within(screen.getByTestId("error-state-actions")).getByRole("button"));
   expect(await screen.findByText("subagent-after-retry")).toBeInTheDocument();
 });
-
-function requiredElement(elements: readonly HTMLElement[], index: number): HTMLElement {
-  const element = elements[index];
-  if (element === undefined) throw new Error(`Required element ${index.toString()} is unavailable.`);
-  return element;
-}
