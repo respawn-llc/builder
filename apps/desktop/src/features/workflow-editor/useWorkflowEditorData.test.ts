@@ -4,12 +4,15 @@ import { createElement, type ReactNode } from "react";
 
 import type { WorkflowProjectEvent, WorkflowProjectEventHandler } from "@/api";
 
-const fixture = vi.hoisted(() => ({
-  projectHandler: null as WorkflowProjectEventHandler | null,
-  push: vi.fn(),
-  translate: vi.fn((key: string) => key),
-  workflowHandler: null as WorkflowProjectEventHandler | null,
-}));
+const fixture = vi.hoisted(() => {
+  const noHandler = (): WorkflowProjectEventHandler | null => null;
+  return {
+    projectHandler: noHandler(),
+    push: vi.fn(),
+    translate: vi.fn((key: string) => key),
+    workflowHandler: noHandler(),
+  };
+});
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({ t: fixture.translate }),
