@@ -204,14 +204,21 @@ func currentNodeCompletionReference(t *testing.T, taskID, nodeID string) workflo
 }
 
 type currentNodeCompletionExecutionStub struct {
-	store             *workflowstore.Store
-	startPreparations chan<- workflowexecution.TaskStartPreparation
-	sessionID         runtimeids.SessionID
-	sessionResult     workflowstore.CurrentNodeCompletionResult
-	sessionErr        error
-	idleSelector      workflowstore.IdleCurrentNodeSelector
-	idleResult        workflowstore.CurrentNodeCompletionResult
-	idleErr           error
+	store                  *workflowstore.Store
+	resumeEligibilityErr   error
+	resumeEligibilityCalls int
+	startPreparations      chan<- workflowexecution.TaskStartPreparation
+	sessionID              runtimeids.SessionID
+	sessionResult          workflowstore.CurrentNodeCompletionResult
+	sessionErr             error
+	idleSelector           workflowstore.IdleCurrentNodeSelector
+	idleResult             workflowstore.CurrentNodeCompletionResult
+	idleErr                error
+}
+
+func (s *currentNodeCompletionExecutionStub) EnsureTaskResumeEligible(context.Context, workflow.TaskID) error {
+	s.resumeEligibilityCalls++
+	return s.resumeEligibilityErr
 }
 
 func (s *currentNodeCompletionExecutionStub) StartTask(

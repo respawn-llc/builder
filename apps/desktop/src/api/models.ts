@@ -101,11 +101,24 @@ export type WorkspaceList = Readonly<{
 
 export type SessionCategory = "main" | "subagent";
 
-export type SessionPagePosition = Readonly<{ kind: "newest" }>
+export type SessionPagePosition =
+  | Readonly<{ kind: "newest" }>
   | Readonly<{ kind: "older"; token: string }>
   | Readonly<{ kind: "newer"; token: string }>;
-export type SessionCatalogSummary = Readonly<{ id: string; category: SessionCategory; name: string | null; firstPromptPreview: string | null; updatedAt: number }>;
-export type SessionCatalogPage = Readonly<{ projectID: string; category: SessionCategory; sessions: readonly SessionCatalogSummary[]; older: string | null; newer: string | null }>;
+export type SessionCatalogSummary = Readonly<{
+  id: string;
+  category: SessionCategory;
+  name: string | null;
+  firstPromptPreview: string | null;
+  updatedAt: number;
+}>;
+export type SessionCatalogPage = Readonly<{
+  projectID: string;
+  category: SessionCategory;
+  sessions: readonly SessionCatalogSummary[];
+  older: string | null;
+  newer: string | null;
+}>;
 
 export type ProjectEdit = Readonly<{
   projectID: string;
@@ -345,54 +358,6 @@ export type WorkflowValidation = Readonly<{
 
 export type WorkflowValidationMode = "draft" | "task_creation" | "execution";
 
-export type WorkflowGraphDraftNodeGroup = Readonly<{
-  id: string;
-  key: string;
-  name: string;
-}>;
-
-export type WorkflowGraphDraftNode = Readonly<{
-  id: string;
-  key: string;
-  kind: string;
-  name: string;
-  groupID: string;
-  groupKey: string;
-  subagentRole: string;
-  completionMode?: string | undefined;
-  scriptPath?: string | null | undefined;
-  joinInputProviders: readonly WorkflowJoinInputProvider[];
-}>;
-
-export type WorkflowGraphDraftTransitionGroup = Readonly<{
-  id: string;
-  sourceNodeID: string;
-  transitionID: string;
-  name: string;
-  description: string;
-}>;
-
-export type WorkflowGraphDraftEdge = Readonly<{
-  id: string;
-  transitionGroupID: string;
-  key: string;
-  targetNodeID: string;
-  assigneeSelection: WorkflowEdgeSelectionMode;
-  thinkingSelection: WorkflowEdgeSelectionMode;
-  requiresApproval: boolean;
-  contextMode: string;
-  contextSource: WorkflowContextSource;
-  promptTemplate: string;
-  parameters: readonly WorkflowParameter[];
-}>;
-
-export type WorkflowGraphDraft = Readonly<{
-  nodeGroups: readonly WorkflowGraphDraftNodeGroup[];
-  nodes: readonly WorkflowGraphDraftNode[];
-  transitionGroups: readonly WorkflowGraphDraftTransitionGroup[];
-  edges: readonly WorkflowGraphDraftEdge[];
-}>;
-
 export type WorkflowGraphValidationResults = Readonly<
   Partial<Record<WorkflowValidationMode, WorkflowValidation>>
 >;
@@ -408,10 +373,18 @@ export type WorkflowGraphMetadata = Readonly<{
   executionTargetPolicy: WorkflowExecutionTargetPolicy;
 }>;
 
+export type WorkflowGraphEntityType = "edge" | "node" | "node_group" | "transition_group";
+export type WorkflowGraphEntityReference = Readonly<{
+  entityType: WorkflowGraphEntityType;
+  entityID: string;
+}>;
+
 export type WorkflowGraphSaveImpact = Readonly<{
+  removedNodeGroupCount: number;
   removedNodeCount: number;
   removedTransitionGroupCount: number;
   removedEdgeCount: number;
+  removedEntities: readonly WorkflowGraphEntityReference[];
   nodeTaskReferenceCount: number;
   edgeTaskReferenceCount: number;
   activeCurrentNodeCount: number;
@@ -425,9 +398,11 @@ export type WorkflowGraphSaveBlocker = Readonly<{
   code: string;
   message: string;
   count: number;
+  affectedEntities: readonly WorkflowGraphEntityReference[];
 }>;
 
 export type WorkflowGraphSavePreview = Readonly<{
+  changed: boolean;
   currentVersion: number;
   validationResults: WorkflowGraphValidationResults;
   impact: WorkflowGraphSaveImpact;
@@ -437,6 +412,7 @@ export type WorkflowGraphSavePreview = Readonly<{
 }>;
 
 export type WorkflowGraphSaveConfirmation = Readonly<{
+  expectedRemovedNodeGroupCount: number;
   expectedRemovedNodeCount: number;
   expectedRemovedTransitionGroupCount: number;
   expectedRemovedEdgeCount: number;

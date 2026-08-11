@@ -1,7 +1,7 @@
-import { useCallback, useMemo, type ReactNode } from "react";
+import { useCallback } from "react";
 import { useTranslation } from "react-i18next";
 
-import { errorMessage, isTaskMissingError, type TaskDetail, type TaskLabelAssignment } from "@/api";
+import { errorMessage, isTaskMissingError } from "@/api";
 import type {
   SidebarDestination,
   SidebarMode,
@@ -11,7 +11,7 @@ import type {
 } from "@/app-facade";
 import { useSidebarBackWhen } from "@/app-facade";
 import { useStatusController } from "@/app-facade";
-import { ProjectLabelsProvider, TaskLabelAssignmentProvider, useProjectLabelCatalog } from "@/shared/labels";
+import { ProjectLabelsProvider, TaskLabelAssignmentProvider } from "@/shared/labels";
 import { ErrorState, LoadingState } from "@/ui";
 import { TaskDetailContent } from "./TaskDetailContent";
 import type { TaskDetailDeleteDismissal } from "./taskDetailDismissal";
@@ -83,7 +83,7 @@ export function TaskDetailSurface({
   }
   const content = (
     <ProjectLabelsProvider onBackgroundError={reportLabelError} projectID={detail.data.projectID}>
-      <TaskDetailAssignmentScope detail={detail.data}>
+      <TaskLabelAssignmentProvider key={detail.data.id} taskID={detail.data.id}>
         <TaskDetailContent
           key={detail.data.id}
           activity={activity}
@@ -99,7 +99,7 @@ export function TaskDetailSurface({
           sidebarDestination={sidebarDestination}
           sidebarMode={sidebarMode}
         />
-      </TaskDetailAssignmentScope>
+      </TaskLabelAssignmentProvider>
     </ProjectLabelsProvider>
   );
   if (!attention.isError) {
@@ -119,29 +119,5 @@ export function TaskDetailSurface({
       />
       <div className="min-h-0">{content}</div>
     </div>
-  );
-}
-
-function TaskDetailAssignmentScope({
-  children,
-  detail,
-}: Readonly<{ children: ReactNode; detail: TaskDetail }>) {
-  const catalog = useProjectLabelCatalog();
-  const initialAssignment = useMemo<TaskLabelAssignment>(
-    () => ({
-      taskID: detail.id,
-      labelIDs: detail.labelIDs,
-    }),
-    [detail.id, detail.labelIDs],
-  );
-  return (
-    <TaskLabelAssignmentProvider
-      catalog={catalog.data ?? null}
-      initialAssignment={initialAssignment}
-      taskID={detail.id}
-      workflowID={detail.workflowID}
-    >
-      {children}
-    </TaskLabelAssignmentProvider>
   );
 }

@@ -160,8 +160,11 @@ describe("workflow Node contract ownership", () => {
   });
 
   it("removes legacy fields from canonical Node and draft types", () => {
-    const models = source(canonicalPath("./models.ts"));
-    for (const name of ["WorkflowNode", "WorkflowGraphDraftNode"]) {
+    const canonicalTypes = [
+      [source(canonicalPath("./models.ts")), "WorkflowNode"],
+      [source(canonicalPath("./workflowGraphModels.ts")), "WorkflowGraphDraftNode"],
+    ] as const;
+    for (const [models, name] of canonicalTypes) {
       const members = typeLiteralMembers(typeAlias(models, name).type);
       expect(members.map(propertyName).filter((name): name is string => name !== undefined)).not.toEqual(
         expect.arrayContaining([...legacyTypeNames]),

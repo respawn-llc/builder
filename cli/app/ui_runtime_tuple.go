@@ -21,9 +21,8 @@ const (
 )
 
 type runtimeTupleCandidate struct {
-	Version             clientui.ReadModelVersion
-	Activity            clientui.RuntimeActivity
-	InputReconciliation clientui.RuntimeInputReconciliationSnapshot
+	Version  clientui.ReadModelVersion
+	Activity clientui.RuntimeActivity
 }
 
 type runtimeTupleMergeResult struct {
@@ -66,31 +65,25 @@ func decideRuntimeTuple(
 
 func runtimeTupleFromMainView(view clientui.RuntimeMainView) runtimeTupleCandidate {
 	return runtimeTupleCandidate{
-		Version:             view.Version,
-		Activity:            view.Activity,
-		InputReconciliation: view.InputReconciliation,
+		Version:  view.Version,
+		Activity: view.Activity,
 	}
 }
 
 func runtimeTupleFromReadModelUpdate(update clientui.RuntimeReadModelUpdate) runtimeTupleCandidate {
 	return runtimeTupleCandidate{
-		Version:             update.Version,
-		Activity:            update.Activity,
-		InputReconciliation: update.InputReconciliation,
+		Version:  update.Version,
+		Activity: update.Activity,
 	}
 }
 
 func applyRuntimeTuple(view *clientui.RuntimeMainView, candidate runtimeTupleCandidate) {
 	view.Version = candidate.Version
 	view.Activity = candidate.Activity
-	view.InputReconciliation = candidate.InputReconciliation
 }
 
 func runtimeTupleMatchesView(candidate runtimeTupleCandidate, view clientui.RuntimeMainView) bool {
-	if candidate.Version != view.Version || !runtimeActivitiesEqual(candidate.Activity, view.Activity) {
-		return false
-	}
-	return runtimeInputReconciliationSnapshotsEqual(candidate.InputReconciliation, view.InputReconciliation)
+	return candidate.Version == view.Version && runtimeActivitiesEqual(candidate.Activity, view.Activity)
 }
 
 func runtimeActivitiesEqual(left, right clientui.RuntimeActivity) bool {
@@ -105,35 +98,6 @@ func runtimeActivitiesEqual(left, right clientui.RuntimeActivity) bool {
 	return *left.ActiveStep == *right.ActiveStep
 }
 
-func runtimeInputReconciliationSnapshotsEqual(
-	left clientui.RuntimeInputReconciliationSnapshot,
-	right clientui.RuntimeInputReconciliationSnapshot,
-) bool {
-	if len(left.Operations) != len(right.Operations) {
-		return false
-	}
-	for index := range left.Operations {
-		if !runtimeInputReconciliationsEqual(left.Operations[index], right.Operations[index]) {
-			return false
-		}
-	}
-	return true
-}
-
-func runtimeInputReconciliationsEqual(left, right clientui.RuntimeInputReconciliation) bool {
-	return left.State == right.State && runtimeOperationRefsEqual(left.Operation, right.Operation)
-}
-
-func runtimeOperationRefsEqual(left, right clientui.RuntimeOperationRef) bool {
-	if left.Kind != right.Kind || left.ClientRequestID != right.ClientRequestID {
-		return false
-	}
-	if left.QueueItemID == nil || right.QueueItemID == nil {
-		return left.QueueItemID == nil && right.QueueItemID == nil
-	}
-	return *left.QueueItemID == *right.QueueItemID
-}
-
 type hydrationRuntimeTupleConflictError struct {
 	current  clientui.RuntimeMainView
 	incoming runtimeTupleCandidate
@@ -145,12 +109,10 @@ func (e hydrationRuntimeTupleConflictError) Error() string {
 
 func (e hydrationRuntimeTupleConflictError) facts() map[string]any {
 	return map[string]any{
-		"current_version":               e.current.Version,
-		"incoming_version":              e.incoming.Version,
-		"current_activity":              e.current.Activity,
-		"incoming_activity":             e.incoming.Activity,
-		"current_input_reconciliation":  e.current.InputReconciliation,
-		"incoming_input_reconciliation": e.incoming.InputReconciliation,
+		"current_version":   e.current.Version,
+		"incoming_version":  e.incoming.Version,
+		"current_activity":  e.current.Activity,
+		"incoming_activity": e.incoming.Activity,
 	}
 }
 

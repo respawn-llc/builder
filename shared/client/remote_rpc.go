@@ -521,6 +521,9 @@ func protocolError(resp *protocol.ResponseError) error {
 		return nil
 	}
 	message := strings.TrimSpace(resp.Message)
+	if resp.Code == protocol.ErrCodeRuntimeCommandNotAccepted {
+		return decodeRuntimeCommandNotAcceptedError(resp.Data)
+	}
 	switch resp.Code {
 	case protocol.ErrCodeWorkspacePathIdentity:
 		return serverapi.DecodeWorkspacePathIdentityError(resp.Data, message)
@@ -549,6 +552,9 @@ func protocolError(resp *protocol.ResponseError) error {
 	}
 	if resp.Code == protocol.ErrCodeWorkflowTaskMutationSelfTarget && len(resp.Data) > 0 {
 		return serverapi.DecodeWorkflowTaskMutationSelfTargetError(resp.Data, message)
+	}
+	if resp.Code == protocol.ErrCodeWorkflowTaskInitialBranch && len(resp.Data) > 0 {
+		return serverapi.DecodeWorkflowTaskInitialBranchError(resp.Data, message)
 	}
 	if resp.Code == protocol.ErrCodeWorkflowTaskDependency && len(resp.Data) > 0 {
 		return serverapi.DecodeWorkflowTaskDependencyError(resp.Data, message)
@@ -624,11 +630,11 @@ func protocolError(resp *protocol.ResponseError) error {
 	case protocol.ErrCodeRuntimeNoFinalAnswer:
 		return protocol.NewSentinelErrorWithRendering(serverapi.ErrRuntimeNoFinalAnswer, message, protocol.SentinelErrorJoined)
 	case protocol.ErrCodeManualCompactionTooSoon:
-		return serverapi.ErrManualCompactionTooSoon
+		return serverapi.DecodeManualCompactionError(resp.Code, resp.Data)
 	case protocol.ErrCodeManualCompactionDisabled:
-		return serverapi.ErrManualCompactionDisabled
+		return serverapi.DecodeManualCompactionError(resp.Code, resp.Data)
 	case protocol.ErrCodeManualCompactionActive:
-		return serverapi.ErrManualCompactionActive
+		return serverapi.DecodeManualCompactionError(resp.Code, resp.Data)
 	case protocol.ErrCodeStreamUnavailable:
 		return errors.Join(serverapi.ErrStreamUnavailable, errors.New(message))
 	case protocol.ErrCodeStreamFailed:
@@ -648,4 +654,46 @@ func protocolError(resp *protocol.ResponseError) error {
 	default:
 		return errors.New(message)
 	}
+}
+
+func decodeRuntimeCommandNotAcceptedError(data json.RawMessage) error {
+	var payload struct {
+		Cause *protocol.ResponseError `json:"cause"`
+	}
+	if len(data) == 0 {
+		return errors.New("runtime command not-accepted response is missing cause data")
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return fmt.Errorf("decode runtime command not-accepted response: %w", err)
+	}
+	if payload.Cause == nil ||
+		payload.Cause.Code == 0 ||
+		strings.TrimSpace(payload.Cause.Message) == "" ||
+		payload.Cause.Code == protocol.ErrCodeRuntimeCommandNotAccepted {
+		return errors.New("runtime command not-accepted response contains an invalid cause")
+	}
+	cause := protocolError(payload.Cause)
+	if cause == nil {
+		return errors.New("runtime command not-accepted response contains an empty cause")
+	}
+	switch payload.Cause.Code {
+	case protocol.ErrCodePromptCommands:
+		var typed *serverapi.PromptCommandError
+		if !errors.As(cause, &typed) {
+			return errors.New("runtime command not-accepted response contains invalid prompt-command cause data")
+		}
+	case protocol.ErrCodeManualCompactionTooSoon:
+		if !errors.Is(cause, serverapi.ErrManualCompactionTooSoon) {
+			return errors.New("runtime command not-accepted response contains invalid manual-compaction cause data")
+		}
+	case protocol.ErrCodeManualCompactionDisabled:
+		if !errors.Is(cause, serverapi.ErrManualCompactionDisabled) {
+			return errors.New("runtime command not-accepted response contains invalid manual-compaction cause data")
+		}
+	case protocol.ErrCodeManualCompactionActive:
+		if !errors.Is(cause, serverapi.ErrManualCompactionActive) {
+			return errors.New("runtime command not-accepted response contains invalid manual-compaction cause data")
+		}
+	}
+	return errors.Join(serverapi.ErrRuntimeCommandNotAccepted, cause)
 }

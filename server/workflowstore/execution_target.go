@@ -40,9 +40,32 @@ type TaskExecutionTargetContext struct {
 }
 
 var (
-	ErrExecutionTargetRequired      = errors.New("execution target is required")
-	ErrExecutionTargetAlreadyLocked = errors.New("execution target is already locked")
+	ErrExecutionTargetRequired                = errors.New("execution target is required")
+	ErrExecutionTargetAlreadyLocked           = errors.New("execution target is already locked")
+	ErrPendingInitialManagedBranchUnavailable = errors.New("pending initial managed branch is unavailable")
 )
+
+func (s *Store) ReplacePendingInitialManagedBranchName(ctx context.Context, taskID workflow.TaskID, branchName string) error {
+	if strings.TrimSpace(string(taskID)) == "" {
+		return errors.New("task id is required")
+	}
+	branchName = strings.TrimSpace(branchName)
+	if branchName == "" {
+		return errors.New("pending initial managed branch name is required")
+	}
+	updated, err := s.queries.ReplacePendingInitialManagedBranchName(ctx, sqlitegen.ReplacePendingInitialManagedBranchNameParams{
+		PendingInitialManagedBranchName: nullableString(branchName),
+		UpdatedAtUnixMs:                 s.now().UnixMilli(),
+		TaskID:                          string(taskID),
+	})
+	if err != nil {
+		return err
+	}
+	if updated != 1 {
+		return ErrPendingInitialManagedBranchUnavailable
+	}
+	return nil
+}
 
 func (s *Store) LockTaskExecutionTarget(ctx context.Context, taskID workflow.TaskID, candidate *ExecutionTargetCandidate) error {
 	task, err := s.queries.GetTask(ctx, string(taskID))

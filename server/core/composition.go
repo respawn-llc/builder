@@ -22,7 +22,6 @@ import (
 	"core/server/runtime"
 	"core/server/runtimecommand"
 	"core/server/runtimecontrol"
-	"core/server/runtimeops"
 	"core/server/runtimewire"
 	"core/server/serverstatus"
 	"core/server/sessionruntime"
@@ -108,12 +107,12 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		Background:      runtimeSupport.Background,
 		StoreOptions:    storeOptions,
 		PromptFeed:      runtimeRegistry,
-		EventFeed: func(resource sessionruntime.AgentResourceDescriptor, event runtime.Event) {
-			if err := runtimeRegistry.PublishAuthorityRuntimeEvent(resource.Ref, event); err != nil {
+		EventFeed: func(resource runtimeids.SessionResourceRef, event runtime.Event) {
+			if err := runtimeRegistry.PublishAuthorityRuntimeEvent(resource, event); err != nil {
 				if cfg.Settings.Debug {
-					panic(fmt.Sprintf("publish runtime event for session resource %v: %v", resource.Ref, err))
+					panic(fmt.Sprintf("publish runtime event for session resource %v: %v", resource, err))
 				}
-				fmt.Fprintf(os.Stderr, "publish runtime event for session resource %v: %v\n", resource.Ref, err)
+				fmt.Fprintf(os.Stderr, "publish runtime event for session resource %v: %v\n", resource, err)
 			}
 		},
 		ResourceLifecycle: runtimeRegistry,
@@ -141,7 +140,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	if observer := sleepManager.RuntimeActiveObserver(); observer != nil {
 		runtimeRegistry.SetSleepObserver(observer)
 	}
-	projectService, err := projectview.NewMetadataService(metadataStore, "")
+	projectService, err := projectview.NewMetadataService(metadataStore)
 	if err != nil {
 		closeRootLeaseOnFailure()
 		_ = metadataStore.Close()
@@ -173,8 +172,6 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	projectService.WithRuntimeAuthority(runtimeAuthority)
 	sessionStoreResolver := registry.NewGlobalPersistenceSessionResolver(cfg.PersistenceRoot, storeOptions...)
 	promptControlService := promptcontrol.NewPromptControlService(authorityPromptResponder{authority: runtimeAuthority})
-	runtimeOperations := runtimeops.NewCoordinator()
-	runtimeRegistry.WithOperationCoordinator(runtimeOperations)
 	runtimeRegistry.WithExecutionTargetResolver(metadataStore.ResolveOptionalSessionExecutionTarget)
 	if runtimeSupport.Background != nil {
 		runtimeRegistry.WithBackgroundProcessSnapshots(runtimeSupport.Background.List)
@@ -183,7 +180,6 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	runtimeGoalAuthority := runtimecommand.NewGoalAuthority(runtimeAuthority, runtimeCommandExecution)
 	runtimeControlService := runtimecontrol.NewServiceWithGoalCommands(runtimeAuthority, runtimeCommandExecution, runtimeGoalAuthority).
 		WithRuntimeActivityResolver(runtimeRegistry).
-		WithOperationCoordinator(runtimeOperations).
 		WithPromptHistoryStore(metadataStore).
 		WithWorkflowTaskSessionResolver(metadataStore).
 		WithPersistedSessionResolver(metadataStore).
@@ -210,7 +206,6 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		WithExecutionEnvironmentConfig(cfg).
 		WithExecutionEnvironmentAuth(authStatusService).
 		WithExecutionEnvironmentGit(gitInspector).
-		WithOperationCoordinator(runtimeOperations).
 		WithCacheWarningMode(cfg.Settings.CacheWarningMode)
 	sessionWorkspaceRetargeter := sessionservice.NewSessionWorkspaceRetargeter(metadataStore, runtimeAuthority, runtimeRegistry, runtimeSupport.Background)
 	sessionLifecycleService := sessionservice.NewGlobalSessionLifecycleService(cfg.PersistenceRoot, runtimeAuthority, authSupport.AuthManager).
@@ -415,6 +410,20 @@ type taskExecutionTargetInfrastructure struct {
 	git     *worktree.GitInspector
 }
 
+func (i taskExecutionTargetInfrastructure) InspectProspectiveInitialTaskBranch(ctx context.Context, req workflowsvc.InitialTaskBranchInspectionRequest) error {
+	if i.service == nil {
+		return errors.New("worktree service is required")
+	}
+	return i.service.InspectProspectiveInitialTaskBranch(ctx, req.SourceWorkspaceRoot, req.BranchName)
+}
+
+func (i taskExecutionTargetInfrastructure) AssertInitialTaskBranch(ctx context.Context, req workflowsvc.InitialTaskBranchAssertionRequest) error {
+	if i.service == nil {
+		return errors.New("worktree service is required")
+	}
+	return i.service.AssertInitialTaskBranch(ctx, req.TaskID, req.BranchName)
+}
+
 func (i taskExecutionTargetInfrastructure) ResolveExecutionTarget(ctx context.Context, req workflowsvc.ExecutionTargetResolveRequest) (workflowstore.ExecutionTargetSnapshot, error) {
 	if i.git == nil {
 		return workflowstore.ExecutionTargetSnapshot{}, errors.New("git inspector is required")
@@ -468,6 +477,7 @@ func (i taskExecutionTargetInfrastructure) MaterializeExecutionTarget(ctx contex
 	materialized, err := i.service.MaterializeInitialTaskWorktree(ctx, worktree.InitialTaskWorktreeMaterializationRequest{
 		TaskID:           req.TaskID,
 		SetupOperationID: req.SetupOperationID,
+		BranchName:       req.InitialBranchAssertion,
 		ResolvedTarget: worktree.GitRevision{
 			RequestedRef: *req.Snapshot.RequestedRef,
 			CommitOID:    *req.Snapshot.CommitOID,
@@ -502,6 +512,7 @@ func (i taskExecutionTargetInfrastructure) RestoreExecutionTarget(ctx context.Co
 	_, err := i.service.RestoreLockedTaskWorktree(ctx, worktree.LockedTaskWorktreeRestoreRequest{
 		TaskID:           req.TaskID,
 		SetupOperationID: req.SetupOperationID,
+		BranchName:       req.InitialBranchAssertion,
 	})
 	return err
 }

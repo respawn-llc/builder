@@ -291,6 +291,7 @@ type currentNodeControllerStore struct {
 	resumed               []workflow.CurrentNodeReference
 	resumeErrors          map[workflow.CurrentNodeReferenceKey]error
 	resumeClassifications []workflowstore.CurrentNodeResumeClassification
+	preflightResumeCalls  int
 	interruptions         map[workflow.CurrentNodeReferenceKey]currentNodeInterruptionRecord
 	interruptionCalls     map[workflow.CurrentNodeReferenceKey]int
 	recovered             []workflow.CurrentNodeReference
@@ -372,6 +373,7 @@ func (s *currentNodeControllerStore) InterruptedExecutableCurrentNodes(context.C
 }
 
 func (s *currentNodeControllerStore) PreflightTaskResume(_ context.Context, _ workflow.TaskID) ([]workflowstore.CurrentNodeResumeClassification, error) {
+	s.preflightResumeCalls++
 	if len(s.resumeClassifications) > 0 {
 		return append([]workflowstore.CurrentNodeResumeClassification(nil), s.resumeClassifications...), nil
 	}

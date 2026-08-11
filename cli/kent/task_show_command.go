@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"core/shared/apicontract"
+	"core/shared/client"
 	"fmt"
 	"io"
 	"strings"
@@ -50,8 +52,8 @@ func taskShowSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "task show requires <short-id-or-task-id>")
 		return 2
 	}
-	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
-		requestedProjectID, task, err := getWorkflowTaskForShow(context.Background(), cfg, remote, *projectRef, positionals[0])
+	return runWorkflowCommandSession(stderr, func(cfg config.App, remote *client.Remote) int {
+		requestedProjectID, task, err := getWorkflowTaskForShow(context.Background(), cfg, remote, remote, *projectRef, positionals[0])
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
@@ -120,23 +122,30 @@ func normalizedLabelIDs(ids []string) []string {
 	return append(normalized, ids...)
 }
 
-func getWorkflowTaskForShow(ctx context.Context, cfg config.App, remote workflowCommandRemote, projectRef string, ref string) (string, serverapi.WorkflowTaskDetail, error) {
+func getWorkflowTaskForShow(
+	ctx context.Context,
+	cfg config.App,
+	projects apicontract.ProjectViewService,
+	workflows apicontract.WorkflowService,
+	projectRef string,
+	ref string,
+) (string, serverapi.WorkflowTaskDetail, error) {
 	selector, err := classifyWorkflowTaskSelector(ref)
 	if err != nil {
 		return "", serverapi.WorkflowTaskDetail{}, err
 	}
 	requestedProjectID := ""
-	if resolved, err := resolveWorkflowProjectID(ctx, cfg, remote, projectRef); err == nil {
+	if resolved, err := resolveWorkflowProjectID(ctx, cfg, projects, projectRef); err == nil {
 		requestedProjectID = resolved
 	} else if selector.kind != workflowTaskSelectorTaskID {
 		return "", serverapi.WorkflowTaskDetail{}, err
 	}
 	if selector.kind == workflowTaskSelectorTaskID {
-		detail, err := getWorkflowTaskByID(ctx, remote, selector.value)
+		detail, err := getWorkflowTaskByID(ctx, workflows, selector.value)
 		return requestedProjectID, detail, err
 	}
 	if requestedProjectID != "" {
-		detail, err := getWorkflowTaskByProjectShortID(ctx, remote, requestedProjectID, selector.value)
+		detail, err := getWorkflowTaskByProjectShortID(ctx, workflows, requestedProjectID, selector.value)
 		if err == nil {
 			return requestedProjectID, detail, nil
 		}
@@ -144,7 +153,7 @@ func getWorkflowTaskForShow(ctx context.Context, cfg config.App, remote workflow
 			return requestedProjectID, serverapi.WorkflowTaskDetail{}, err
 		}
 	}
-	detail, err := getWorkflowTaskByShortID(ctx, remote, selector.value)
+	detail, err := getWorkflowTaskByShortID(ctx, workflows, selector.value)
 	if err == nil {
 		return requestedProjectID, detail, nil
 	}
@@ -211,7 +220,7 @@ func writeTaskDetailWithLabelNames(stdout io.Writer, task serverapi.WorkflowTask
 	return writeTaskDependencyDirections(stdout, task.Dependencies.Directions)
 }
 
-func taskLabelNamesForHumanOutput(ctx context.Context, remote workflowCommandRemote, projectID string, ids []string) ([]string, error) {
+func taskLabelNamesForHumanOutput(ctx context.Context, remote apicontract.WorkflowService, projectID string, ids []string) ([]string, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}

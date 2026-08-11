@@ -272,6 +272,7 @@ var routeContracts = []Route{
 	unary[serverapi.WorkflowTaskGetRequest, serverapi.WorkflowTaskGetResponse](protocol.MethodWorkflowTaskGet, AuthPreServerAuth, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
 	unary[serverapi.WorkflowTaskObservationRequest, serverapi.WorkflowTaskObservationResponse](protocol.MethodWorkflowTaskObserve, AuthServer, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
 	unary[serverapi.SessionPlanRequest, serverapi.SessionPlanResponse](protocol.MethodSessionPlan, AuthServer, ScopeProjectWorkspace, ConnectionControl, DependencySessionLaunch),
+	unary[serverapi.WorkspaceChatDraftRequest, serverapi.WorkspaceChatDraftResponse](protocol.MethodSessionWorkspaceChatDraft, AuthServer, ScopeProjectWorkspace, ConnectionControl, DependencySessionLaunch),
 	unary[serverapi.SessionMainViewRequest, serverapi.SessionMainViewResponse](protocol.MethodSessionGetMainView, AuthPreServerAuth, ScopeSessionActiveProject, ConnectionControl, DependencySessionView),
 	unary[serverapi.SessionTranscriptPageRequest, serverapi.SessionTranscriptPageResponse](protocol.MethodSessionGetTranscriptPage, AuthPreServerAuth, ScopeSessionActiveProject, ConnectionControl, DependencySessionView),
 	unary[serverapi.SessionLatestCommittedAssistantFinalAnswerRequest, serverapi.SessionLatestCommittedAssistantFinalAnswerResponse](protocol.MethodSessionGetLatestCommittedAssistantFinalAnswer, AuthPreServerAuth, ScopeSessionActiveProject, ConnectionControl, DependencySessionView),

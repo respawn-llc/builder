@@ -31,9 +31,8 @@ type SessionLifecycleService struct {
 }
 
 type sessionDraftMemoRequest struct {
-	SessionID       string
-	Input           string
-	RecoveryBuffers []serverapi.SessionDraftRecoveryBuffer
+	SessionID string
+	Input     string
 }
 
 type sessionTransitionMemoRequest struct {
@@ -105,10 +104,8 @@ func (s *SessionLifecycleService) GetInitialInput(ctx context.Context, req serve
 			resp.Input = req.TransitionInput
 			return nil
 		}
-		meta := store.Meta()
 		resp = serverapi.SessionInitialInputResponse{
-			Input:           initialSessionInput(store, req.TransitionInput),
-			RecoveryBuffers: sessionRecoveryBuffersToAPI(meta.InputDraftRecoveryBuffers),
+			Input: initialSessionInput(store, req.TransitionInput),
 		}
 		return nil
 	})
@@ -122,10 +119,10 @@ func (s *SessionLifecycleService) PersistInputDraft(ctx context.Context, req ser
 	if err := req.Validate(); err != nil {
 		return serverapi.SessionPersistInputDraftResponse{}, err
 	}
-	memoReq := sessionDraftMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Input: req.Input, RecoveryBuffers: req.RecoveryBuffers}
+	memoReq := sessionDraftMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Input: req.Input}
 	return s.drafts.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionDraftMemoRequest, func(runCtx context.Context) (serverapi.SessionPersistInputDraftResponse, error) {
 		err := s.withStore(runCtx, req.SessionID, func(_ context.Context, store *session.Store) error {
-			return persistSessionInputDraftRecovery(store, req.Input, req.RecoveryBuffers)
+			return persistSessionInputDraft(store, req.Input)
 		})
 		return serverapi.SessionPersistInputDraftResponse{}, err
 	})
@@ -183,15 +180,7 @@ func sameSessionTransitionMemoRequest(a sessionTransitionMemoRequest, b sessionT
 }
 
 func sameSessionDraftMemoRequest(a sessionDraftMemoRequest, b sessionDraftMemoRequest) bool {
-	if a.SessionID != b.SessionID || a.Input != b.Input || len(a.RecoveryBuffers) != len(b.RecoveryBuffers) {
-		return false
-	}
-	for i := range a.RecoveryBuffers {
-		if a.RecoveryBuffers[i] != b.RecoveryBuffers[i] {
-			return false
-		}
-	}
-	return true
+	return a.SessionID == b.SessionID && a.Input == b.Input
 }
 
 func (s *SessionLifecycleService) resolveTransitionOnce(ctx context.Context, req serverapi.SessionResolveTransitionRequest) (serverapi.SessionResolveTransitionResponse, error) {

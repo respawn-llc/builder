@@ -69,17 +69,16 @@ type Store struct {
 }
 
 type sessionMetadataDocument struct {
-	WorkspaceRoot                   string                             `json:"workspace_root"`
-	WorkspaceContainer              string                             `json:"workspace_container"`
-	InputDraftRecoveryBuffers       []session.InputDraftRecoveryBuffer `json:"input_draft_recovery_buffers"`
-	ConversationEstablished         bool                               `json:"conversation_established"`
-	PromptCacheLineageGeneration    int                                `json:"prompt_cache_lineage_generation"`
-	HeadlessActive                  bool                               `json:"headless_active"`
-	CompactionSoonReminderIssued    bool                               `json:"compaction_soon_reminder_issued"`
-	GeneratedRecoveredWarningIssued bool                               `json:"generated_recovered_warning_issued"`
-	PendingModelRecovery            *session.PendingModelRecovery      `json:"pending_model_recovery"`
-	WorktreeReminder                *session.WorktreeReminderState     `json:"worktree_reminder"`
-	Goal                            *session.GoalState                 `json:"goal"`
+	WorkspaceRoot                   string                         `json:"workspace_root"`
+	WorkspaceContainer              string                         `json:"workspace_container"`
+	ConversationEstablished         bool                           `json:"conversation_established"`
+	PromptCacheLineageGeneration    int                            `json:"prompt_cache_lineage_generation"`
+	HeadlessActive                  bool                           `json:"headless_active"`
+	CompactionSoonReminderIssued    bool                           `json:"compaction_soon_reminder_issued"`
+	GeneratedRecoveredWarningIssued bool                           `json:"generated_recovered_warning_issued"`
+	PendingModelRecovery            *session.PendingModelRecovery  `json:"pending_model_recovery"`
+	WorktreeReminder                *session.WorktreeReminderState `json:"worktree_reminder"`
+	Goal                            *session.GoalState             `json:"goal"`
 }
 
 var (
@@ -439,6 +438,63 @@ func (s *Store) GetWorkspaceByID(ctx context.Context, workspaceID string) (sqlit
 		return sqlitegen.Workspace{}, fmt.Errorf("get workspace by id: %w", err)
 	}
 	return row, nil
+}
+
+func (s *Store) ReadWorkspaceChatDraft(ctx context.Context, workspaceID string) (*WorkspaceChatDraftDocument, error) {
+	if s == nil || s.queries == nil {
+		return nil, errors.New("metadata store is required")
+	}
+	trimmedWorkspaceID := strings.TrimSpace(workspaceID)
+	if trimmedWorkspaceID == "" {
+		return nil, errors.New("workspace id is required")
+	}
+	document, err := s.queries.GetWorkspaceChatDraft(ctx, trimmedWorkspaceID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("%w: %q", serverapi.ErrWorkspaceNotRegistered, trimmedWorkspaceID)
+		}
+		return nil, fmt.Errorf("get workspace Chat draft: %w", err)
+	}
+	if !document.Valid {
+		return nil, nil
+	}
+	var draft WorkspaceChatDraftDocument
+	if err := json.Unmarshal([]byte(document.String), &draft); err != nil {
+		return nil, fmt.Errorf("decode workspace Chat draft: %w", err)
+	}
+	return &draft, nil
+}
+
+func (s *Store) ReplaceWorkspaceChatDraft(ctx context.Context, workspaceID string, draft *WorkspaceChatDraftDocument) error {
+	if s == nil || s.queries == nil {
+		return errors.New("metadata store is required")
+	}
+	trimmedWorkspaceID := strings.TrimSpace(workspaceID)
+	if trimmedWorkspaceID == "" {
+		return errors.New("workspace id is required")
+	}
+	value := sql.NullString{}
+	if draft != nil {
+		if err := draft.Validate(); err != nil {
+			return err
+		}
+		encoded, err := json.Marshal(draft)
+		if err != nil {
+			return fmt.Errorf("encode workspace Chat draft: %w", err)
+		}
+		value = sql.NullString{String: string(encoded), Valid: true}
+	}
+	rows, err := s.queries.ReplaceWorkspaceChatDraft(ctx, sqlitegen.ReplaceWorkspaceChatDraftParams{
+		ChatDraftJson: value,
+		ID:            trimmedWorkspaceID,
+	})
+	if err != nil {
+		return fmt.Errorf("replace workspace Chat draft: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("%w: %q", serverapi.ErrWorkspaceNotRegistered, trimmedWorkspaceID)
+	}
+	return nil
 }
 
 func (s *Store) ResolveProjectSourceWorkspace(ctx context.Context, projectID string) (sqlitegen.Workspace, error) {
@@ -881,7 +937,7 @@ func (s *Store) SetProjectDefaultWorkspaceAndGetSummary(ctx context.Context, pro
 		}
 	}
 	rows, err := q.ListProjectHomeSummaries(ctx, sqlitegen.ListProjectHomeSummariesParams{
-		ProjectID:  trimmedProjectID,
+		ProjectID:  sql.NullString{String: trimmedProjectID, Valid: true},
 		LimitRows:  1,
 		OffsetRows: 0,
 	})
@@ -1829,7 +1885,28 @@ func (s *Store) ListProjects(ctx context.Context) ([]clientui.ProjectSummary, er
 	return out, nil
 }
 
-func (s *Store) ListProjectHomeSummaries(ctx context.Context, projectID string, pageSize int, offset int) ([]serverapi.ProjectHomeSummary, error) {
+func (s *Store) ListProjectHomeSummaries(ctx context.Context, pageSize int, offset int) ([]serverapi.ProjectHomeSummary, error) {
+	return s.listProjectHomeSummaries(ctx, sql.NullString{}, pageSize, offset)
+}
+
+func (s *Store) GetProjectHomeSummary(ctx context.Context, projectID string) (serverapi.ProjectHomeSummary, error) {
+	trimmedProjectID := strings.TrimSpace(projectID)
+	rows, err := s.listProjectHomeSummaries(
+		ctx,
+		sql.NullString{String: trimmedProjectID, Valid: true},
+		1,
+		0,
+	)
+	if err != nil {
+		return serverapi.ProjectHomeSummary{}, err
+	}
+	if len(rows) == 0 {
+		return serverapi.ProjectHomeSummary{}, fmt.Errorf("%w: %q", serverapi.ErrProjectNotFound, trimmedProjectID)
+	}
+	return rows[0], nil
+}
+
+func (s *Store) listProjectHomeSummaries(ctx context.Context, projectID sql.NullString, pageSize int, offset int) ([]serverapi.ProjectHomeSummary, error) {
 	if s == nil || s.queries == nil {
 		return nil, errors.New("metadata store is required")
 	}
@@ -1840,7 +1917,7 @@ func (s *Store) ListProjectHomeSummaries(ctx context.Context, projectID string, 
 		return nil, errors.New("offset must be non-negative")
 	}
 	rows, err := s.queries.ListProjectHomeSummaries(ctx, sqlitegen.ListProjectHomeSummariesParams{
-		ProjectID:  strings.TrimSpace(projectID),
+		ProjectID:  projectID,
 		LimitRows:  int64(pageSize),
 		OffsetRows: int64(offset),
 	})
@@ -2433,7 +2510,6 @@ func (s *Store) upsertSessionSnapshot(ctx context.Context, snapshot session.Pers
 	metadataJSON, err := marshalJSON(sessionMetadataDocument{
 		WorkspaceRoot:                   workspaceRoot,
 		WorkspaceContainer:              workspaceContainer,
-		InputDraftRecoveryBuffers:       snapshot.Meta.InputDraftRecoveryBuffers,
 		ConversationEstablished:         snapshot.Meta.ConversationEstablished,
 		PromptCacheLineageGeneration:    snapshot.Meta.PromptCacheLineageGeneration,
 		HeadlessActive:                  snapshot.Meta.HeadlessActive,
@@ -2620,7 +2696,6 @@ func sessionMetaFromRecordRow(row sqlitegen.GetSessionRecordByIDRow) (session.Me
 		Name:                            row.Name,
 		FirstPromptPreview:              row.FirstPromptPreview,
 		InputDraft:                      row.InputDraft,
-		InputDraftRecoveryBuffers:       metadataPayload.InputDraftRecoveryBuffers,
 		PreviousSessionID:               previousSessionID,
 		ParentAgentSessionID:            parentAgentSessionID,
 		WorkspaceRoot:                   workspaceRoot,

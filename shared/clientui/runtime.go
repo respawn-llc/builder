@@ -76,11 +76,10 @@ const (
 )
 
 type RuntimeMainView struct {
-	Version             ReadModelVersion
-	Status              RuntimeStatus
-	Session             RuntimeSessionView
-	Activity            RuntimeActivity
-	InputReconciliation RuntimeInputReconciliationSnapshot
+	Version  ReadModelVersion
+	Status   RuntimeStatus
+	Session  RuntimeSessionView
+	Activity RuntimeActivity
 }
 
 type QueuedUserMessage struct {

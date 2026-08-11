@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"core/server/tools"
 )
 
 type failureKind string
@@ -134,6 +136,35 @@ func userDeniedFailure(path string, commentary *string) error {
 
 func approvalFailedFailure(path, reason string) error {
 	return &failure{Kind: failureKindApprovalFailed, Path: path, Reason: reason}
+}
+
+func fileAccessFailure(outcome tools.FileAccessOutcome) error {
+	path := strings.TrimSpace(outcome.Request.RequestedPath)
+	switch outcome.Kind {
+	case tools.FileAccessDeniedForeignManagedWorktree:
+		return tools.ErrForeignManagedWorktreeEdit
+	case tools.FileAccessDeniedByPathPolicy:
+		if outcome.PathDeny == nil {
+			return internalFailure(path, "file access path-deny outcome has no match")
+		}
+		return noPermissionFailure(path, outcome.PathDeny.Message)
+	case tools.FileAccessDeniedOutsideWorkspace:
+		return noPermissionFailure(path, "patch target outside workspace")
+	case tools.FileAccessDeniedByUser:
+		return userDeniedFailure(path, outcome.Commentary)
+	case tools.FileAccessApprovalFailed:
+		if outcome.Cause == nil {
+			return approvalFailedFailure(path, "approval failed")
+		}
+		return approvalFailedFailure(path, outcome.Cause.Error())
+	case tools.FileAccessPolicyFailed:
+		if outcome.Cause == nil {
+			return internalFailure(path, "file access policy failed")
+		}
+		return outcome.Cause
+	default:
+		return internalFailure(path, fmt.Sprintf("unexpected file access outcome %d", outcome.Kind))
+	}
 }
 
 func targetMissingFailure(path, reason string) error {

@@ -304,6 +304,33 @@ func (q *Queries) AnchorTaskSearchReadSnapshot(ctx context.Context) (bool, error
 	return anchored, err
 }
 
+const bindInitialTaskManagedWorktree = `-- name: BindInitialTaskManagedWorktree :execrows
+UPDATE tasks
+SET
+    managed_worktree_id = ?1,
+    pending_initial_managed_branch_name = NULL,
+    updated_at_unix_ms = ?2
+WHERE id = ?3
+  AND execution_target_mode IS NULL
+  AND managed_worktree_id IS NULL
+  AND pending_initial_managed_branch_name IS NOT NULL
+`
+
+type BindInitialTaskManagedWorktreeParams struct {
+	ManagedWorktreeID sql.NullString
+	UpdatedAtUnixMs   int64
+	TaskID            string
+}
+
+func (q *Queries) BindInitialTaskManagedWorktree(ctx context.Context, arg BindInitialTaskManagedWorktreeParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, bindInitialTaskManagedWorktree, arg.ManagedWorktreeID, arg.UpdatedAtUnixMs, arg.TaskID)
+	err = recordQueryError(ctx, err, bindInitialTaskManagedWorktree, 3)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const bindSessionToBranchCurrentNode = `-- name: BindSessionToBranchCurrentNode :execrows
 UPDATE task_current_nodes
 SET session_id = ?1
@@ -1946,6 +1973,7 @@ SELECT
     source_url,
     source_workspace_id,
     managed_worktree_id,
+    pending_initial_managed_branch_name,
     execution_target_mode,
     execution_target_requested_ref,
     execution_target_resolved_ref,
@@ -1975,6 +2003,7 @@ func (q *Queries) GetTask(ctx context.Context, id string) (TaskRecord, error) {
 		&i.SourceUrl,
 		&i.SourceWorkspaceID,
 		&i.ManagedWorktreeID,
+		&i.PendingInitialManagedBranchName,
 		&i.ExecutionTargetMode,
 		&i.ExecutionTargetRequestedRef,
 		&i.ExecutionTargetResolvedRef,
@@ -2016,6 +2045,7 @@ SELECT
     source_url,
     source_workspace_id,
     managed_worktree_id,
+    pending_initial_managed_branch_name,
     execution_target_mode,
     execution_target_requested_ref,
     execution_target_resolved_ref,
@@ -2051,6 +2081,7 @@ func (q *Queries) GetTaskByProjectShortID(ctx context.Context, arg GetTaskByProj
 		&i.SourceUrl,
 		&i.SourceWorkspaceID,
 		&i.ManagedWorktreeID,
+		&i.PendingInitialManagedBranchName,
 		&i.ExecutionTargetMode,
 		&i.ExecutionTargetRequestedRef,
 		&i.ExecutionTargetResolvedRef,
@@ -2663,7 +2694,8 @@ SELECT
     canonical_root_path,
     git_metadata_json,
     created_at_unix_ms,
-    updated_at_unix_ms
+    updated_at_unix_ms,
+    chat_draft_json
 FROM workspaces
 WHERE id = ?1
 LIMIT 1
@@ -2679,9 +2711,26 @@ func (q *Queries) GetWorkspaceByID(ctx context.Context, id string) (Workspace, e
 		&i.GitMetadataJson,
 		&i.CreatedAtUnixMs,
 		&i.UpdatedAtUnixMs,
+		&i.ChatDraftJson,
 	), getWorkspaceByID, 1)
 
 	return i, err
+}
+
+const getWorkspaceChatDraft = `-- name: GetWorkspaceChatDraft :one
+SELECT
+    chat_draft_json
+FROM workspaces
+WHERE id = ?1
+LIMIT 1
+`
+
+func (q *Queries) GetWorkspaceChatDraft(ctx context.Context, id string) (sql.NullString, error) {
+	row := q.db.QueryRowContext(ctx, getWorkspaceChatDraft, id)
+	var chat_draft_json sql.NullString
+	err := recordQueryError(ctx, row.Scan(&chat_draft_json), getWorkspaceChatDraft, 1)
+
+	return chat_draft_json, err
 }
 
 const getWorktreeByCanonicalRoot = `-- name: GetWorktreeByCanonicalRoot :one
@@ -2988,6 +3037,7 @@ INSERT INTO tasks (
     source_url,
     source_workspace_id,
     managed_worktree_id,
+    pending_initial_managed_branch_name,
     created_at_unix_ms,
     updated_at_unix_ms,
     metadata_json
@@ -3004,24 +3054,26 @@ INSERT INTO tasks (
     ?10,
     ?11,
     ?12,
-    ?13
+    ?13,
+    ?14
 )
 `
 
 type InsertTaskParams struct {
-	ID                    string
-	ProjectWorkflowLinkID string
-	WorkflowRevisionSeen  int64
-	TaskSeq               int64
-	ShortID               string
-	Title                 string
-	Body                  string
-	SourceUrl             string
-	SourceWorkspaceID     sql.NullString
-	ManagedWorktreeID     sql.NullString
-	CreatedAtUnixMs       int64
-	UpdatedAtUnixMs       int64
-	MetadataJson          string
+	ID                              string
+	ProjectWorkflowLinkID           string
+	WorkflowRevisionSeen            int64
+	TaskSeq                         int64
+	ShortID                         string
+	Title                           string
+	Body                            string
+	SourceUrl                       string
+	SourceWorkspaceID               sql.NullString
+	ManagedWorktreeID               sql.NullString
+	PendingInitialManagedBranchName sql.NullString
+	CreatedAtUnixMs                 int64
+	UpdatedAtUnixMs                 int64
+	MetadataJson                    string
 }
 
 func (q *Queries) InsertTask(ctx context.Context, arg InsertTaskParams) error {
@@ -3036,11 +3088,12 @@ func (q *Queries) InsertTask(ctx context.Context, arg InsertTaskParams) error {
 		arg.SourceUrl,
 		arg.SourceWorkspaceID,
 		arg.ManagedWorktreeID,
+		arg.PendingInitialManagedBranchName,
 		arg.CreatedAtUnixMs,
 		arg.UpdatedAtUnixMs,
 		arg.MetadataJson,
 	)
-	err = recordQueryError(ctx, err, insertTask, 13)
+	err = recordQueryError(ctx, err, insertTask, 14)
 
 	return err
 }
@@ -4572,14 +4625,14 @@ SELECT
 FROM projects p
 LEFT JOIN workspaces w ON w.id = p.primary_workspace_id AND w.project_id = p.id
 JOIN project_default_workflow_identity default_workflow ON default_workflow.project_id = p.id
-WHERE (?1 = '' OR p.id = ?1)
+WHERE p.id = COALESCE(?1, p.id)
 ORDER BY latest_activity_unix_ms DESC, p.rowid DESC
 LIMIT ?3
 OFFSET ?2
 `
 
 type ListProjectHomeSummariesParams struct {
-	ProjectID  interface{}
+	ProjectID  sql.NullString
 	OffsetRows int64
 	LimitRows  int64
 }
@@ -4769,45 +4822,6 @@ func (q *Queries) ListProjectLabelsByIDs(ctx context.Context, labelIds []string)
 		return nil, err
 	}
 	if err := recordQueryError(ctx, rows.Err(), query, 1); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listProjectSessionArtifacts = `-- name: ListProjectSessionArtifacts :many
-SELECT
-    id,
-    artifact_relpath
-FROM sessions
-WHERE project_id = ?1
-  AND trim(artifact_relpath) != ''
-ORDER BY rowid ASC
-`
-
-type ListProjectSessionArtifactsRow struct {
-	ID              string
-	ArtifactRelpath string
-}
-
-func (q *Queries) ListProjectSessionArtifacts(ctx context.Context, projectID string) ([]ListProjectSessionArtifactsRow, error) {
-	rows, err := q.db.QueryContext(ctx, listProjectSessionArtifacts, projectID)
-	err = recordQueryError(ctx, err, listProjectSessionArtifacts, 1)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListProjectSessionArtifactsRow
-	for rows.Next() {
-		var i ListProjectSessionArtifactsRow
-		if err := recordQueryError(ctx, rows.Scan(&i.ID, &i.ArtifactRelpath), listProjectSessionArtifacts, 1); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := recordQueryError(ctx, rows.Close(), listProjectSessionArtifacts, 1); err != nil {
-		return nil, err
-	}
-	if err := recordQueryError(ctx, rows.Err(), listProjectSessionArtifacts, 1); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -6191,6 +6205,7 @@ SELECT
     source_url,
     source_workspace_id,
     managed_worktree_id,
+    pending_initial_managed_branch_name,
     execution_target_mode,
     execution_target_requested_ref,
     execution_target_resolved_ref,
@@ -6230,6 +6245,7 @@ func (q *Queries) ListTasksByIDs(ctx context.Context, taskIdsJson interface{}) (
 			&i.SourceUrl,
 			&i.SourceWorkspaceID,
 			&i.ManagedWorktreeID,
+			&i.PendingInitialManagedBranchName,
 			&i.ExecutionTargetMode,
 			&i.ExecutionTargetRequestedRef,
 			&i.ExecutionTargetResolvedRef,
@@ -6266,6 +6282,7 @@ SELECT
     source_url,
     source_workspace_id,
     managed_worktree_id,
+    pending_initial_managed_branch_name,
     execution_target_mode,
     execution_target_requested_ref,
     execution_target_resolved_ref,
@@ -6310,6 +6327,7 @@ func (q *Queries) ListTasksByProject(ctx context.Context, projectID string) ([]T
 			&i.SourceUrl,
 			&i.SourceWorkspaceID,
 			&i.ManagedWorktreeID,
+			&i.PendingInitialManagedBranchName,
 			&i.ExecutionTargetMode,
 			&i.ExecutionTargetRequestedRef,
 			&i.ExecutionTargetResolvedRef,
@@ -8145,7 +8163,8 @@ SELECT
     canonical_root_path,
     git_metadata_json,
     created_at_unix_ms,
-    updated_at_unix_ms
+    updated_at_unix_ms,
+    chat_draft_json
 FROM workspaces
 WHERE canonical_root_path = ?1
 ORDER BY created_at_unix_ms ASC, rowid ASC
@@ -8168,6 +8187,7 @@ func (q *Queries) ListWorkspacesByCanonicalRoot(ctx context.Context, canonicalRo
 			&i.GitMetadataJson,
 			&i.CreatedAtUnixMs,
 			&i.UpdatedAtUnixMs,
+			&i.ChatDraftJson,
 		), listWorkspacesByCanonicalRoot, 1); err != nil {
 			return nil, err
 		}
@@ -8255,6 +8275,7 @@ const lockTaskExecutionTarget = `-- name: LockTaskExecutionTarget :execrows
 UPDATE tasks
 SET
     managed_worktree_id = ?1,
+    pending_initial_managed_branch_name = NULL,
     execution_target_mode = ?2,
     execution_target_requested_ref = ?3,
     execution_target_resolved_ref = ?4,
@@ -8459,6 +8480,51 @@ func (q *Queries) RenameProjectLabel(ctx context.Context, arg RenameProjectLabel
 	), renameProjectLabel, 4)
 
 	return i, err
+}
+
+const replacePendingInitialManagedBranchName = `-- name: ReplacePendingInitialManagedBranchName :execrows
+UPDATE tasks
+SET
+    pending_initial_managed_branch_name = ?1,
+    updated_at_unix_ms = ?2
+WHERE id = ?3
+  AND execution_target_mode IS NULL
+  AND managed_worktree_id IS NULL
+`
+
+type ReplacePendingInitialManagedBranchNameParams struct {
+	PendingInitialManagedBranchName sql.NullString
+	UpdatedAtUnixMs                 int64
+	TaskID                          string
+}
+
+func (q *Queries) ReplacePendingInitialManagedBranchName(ctx context.Context, arg ReplacePendingInitialManagedBranchNameParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, replacePendingInitialManagedBranchName, arg.PendingInitialManagedBranchName, arg.UpdatedAtUnixMs, arg.TaskID)
+	err = recordQueryError(ctx, err, replacePendingInitialManagedBranchName, 3)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const replaceWorkspaceChatDraft = `-- name: ReplaceWorkspaceChatDraft :execrows
+UPDATE workspaces
+SET chat_draft_json = ?1
+WHERE id = ?2
+`
+
+type ReplaceWorkspaceChatDraftParams struct {
+	ChatDraftJson sql.NullString
+	ID            string
+}
+
+func (q *Queries) ReplaceWorkspaceChatDraft(ctx context.Context, arg ReplaceWorkspaceChatDraftParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, replaceWorkspaceChatDraft, arg.ChatDraftJson, arg.ID)
+	err = recordQueryError(ctx, err, replaceWorkspaceChatDraft, 2)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const resumeBranchCurrentNode = `-- name: ResumeBranchCurrentNode :execrows

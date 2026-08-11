@@ -14,11 +14,7 @@ import { useTranslation } from "react-i18next";
 
 import { ReorderableList, type ReorderableListItemRenderProps } from "@app/ui-kit";
 import { workflowLabelMaxIDs, type ProjectLabel } from "@/api";
-import {
-  textFieldSubmitShortcutPolicyForPlatform,
-  useAppServices,
-  useStatusController,
-} from "@/app-facade";
+import { textFieldSubmitShortcutPolicyForPlatform, useAppServices, useStatusController } from "@/app-facade";
 import {
   Button,
   IconTooltipButton,
@@ -57,7 +53,6 @@ export type LabelChooserInvocation =
   | Readonly<{
       kind: "assignment";
       selectedLabelIDs: readonly string[];
-      onLabelCreated?(labelID: string): void;
       onCreatePendingChange?(pending: boolean): void;
       onSelectionChange(labelID: string, selected: boolean): void;
     }>;
@@ -313,15 +308,17 @@ export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
           showUnlabeledChoice,
           labels,
           onReorder(nextLabels) {
-            void mutations.reorder.mutateAsync(nextLabels.map((label) => label.id)).catch((error: unknown) => {
-              push({
-                body: labelMutationErrorMessage(error, t),
-                durationMs: Infinity,
-                id: "project-label-reorder-error",
-                title: t("labels.mutationFailed"),
-                tone: "danger",
+            void mutations.reorder
+              .mutateAsync(nextLabels.map((label) => label.id))
+              .catch((error: unknown) => {
+                push({
+                  body: labelMutationErrorMessage(error, t),
+                  durationMs: Infinity,
+                  id: "project-label-reorder-error",
+                  title: t("labels.mutationFailed"),
+                  tone: "danger",
+                });
               });
-            });
           },
           reorderEnabled,
           catalogMutationPending,

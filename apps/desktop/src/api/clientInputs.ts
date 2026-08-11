@@ -1,12 +1,12 @@
 import type {
   ApprovalDecision,
   WorkflowExecutionTargetSelection,
-  WorkflowGraphDraft,
   WorkflowGraphMetadata,
   WorkflowGraphSaveConfirmation,
   TaskStatusKind,
   WorkflowValidationMode,
 } from "./models";
+import type { WorkflowGraphDraft } from "./workflowGraphModels";
 import type { BoardNodeCardsSort, WorkflowTaskListSort } from "./boardNodeCardsSorting";
 import type { TaskLabelFilter } from "./workflowLabels";
 import type { BoardFilter } from "./workflowBoardFilters";

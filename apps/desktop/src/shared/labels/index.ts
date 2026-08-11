@@ -30,10 +30,8 @@ export {
   labelNameContains,
   labelNamesEqual,
 } from "./labelComparison";
-export { createProjectCatalogAuthority, type ProjectCatalogAuthority } from "./projectCatalogAuthority";
 export { ProjectLabelsProvider } from "./ProjectLabelsProvider";
 export {
-  useProjectCatalogAuthority,
   useProjectLabelCatalog,
   useProjectLabelCatalogMutations,
   useProjectLabelEffects,
@@ -45,25 +43,13 @@ export {
   type ProjectLabelFilterController,
 } from "./projectLabelFilter";
 export {
-  createTaskLabelAssignmentController,
-  type TaskLabelAssignmentController,
-  type TaskLabelAssignmentFailure,
-  type TaskLabelReconciliationFailure,
-  type TaskLabelAssignmentSnapshot,
-  type TaskLabelUpdateInput,
-} from "./taskLabelAssignmentController";
-export {
   patchExistingTaskLabelAssignment,
   patchExistingTaskLabelProjections,
   pruneDeletedLabelFromExistingCaches,
   removeDeletedTaskFromExistingCaches,
 } from "./taskLabelCache";
-export { type TaskLabelAssignmentData } from "./taskLabelAssignmentData";
+export { type TaskLabelAssignmentData, type TaskLabelAssignmentFailure } from "./taskLabelAssignmentData";
 export { TaskLabelAssignmentProvider } from "./TaskLabelAssignmentProvider";
 export { useTaskLabelAssignment } from "./taskLabelAssignmentContext";
 export { LabelChooser, type LabelChooserInvocation, type LabelChooserProps } from "./LabelChooser";
-export {
-  createProjectLabelEffects,
-  type LabelMembershipRefreshEffect,
-  type ProjectLabelEffects,
-} from "./labelEventEffects";
+export { createProjectLabelEffects, type ProjectLabelEffects } from "./labelEventEffects";

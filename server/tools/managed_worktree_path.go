@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -16,6 +17,8 @@ type ManagedWorktreePathContext struct {
 }
 
 const ForeignManagedWorktreeEditDeniedMessage = "Directly reaching into another agent's worktree is not permitted. Enter the worktree first instead with `kent worktree enter`"
+
+var ErrForeignManagedWorktreeEdit = errors.New(ForeignManagedWorktreeEditDeniedMessage)
 
 func NewManagedWorktreePathContext(baseDir string, currentWorktreeRoot *string, managedWorktreeRoots []string) (*ManagedWorktreePathContext, error) {
 	base, err := config.ResolveExistingPathRealPath(strings.TrimSpace(baseDir))

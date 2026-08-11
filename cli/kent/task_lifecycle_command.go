@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"core/shared/apicontract"
+	"core/shared/client"
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -53,7 +55,7 @@ func taskCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 		}
 		selectedWorkflow = &selector
 	}
-	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
+	return runWorkflowCommandSession(stderr, func(cfg config.App, remote *client.Remote) int {
 		projectID, err := resolveWorkflowProjectID(context.Background(), cfg, remote, *projectRef)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
@@ -226,8 +228,8 @@ func taskEditSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "--body cannot be combined with --body-file")
 		return 2
 	}
-	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
-		taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, *projectRef, positionals[0])
+	return runWorkflowCommandSession(stderr, func(cfg config.App, remote *client.Remote) int {
+		taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, remote, *projectRef, positionals[0])
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
@@ -291,7 +293,7 @@ func readTaskEditBody(body string, bodyFile string, bodyFileProvided bool) (stri
 func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" task start", stderr, taskStartUsage)
 	projectRef := fs.String("project", ".", "project ID or attached workspace path used to resolve a short ID")
-	executionTargetRaw := fs.String("execution-target", "", "task-local execution target: "+executionTargetSelectorHelp)
+	executionTargetRaw, branchNameRaw := addInitialBranchExecutionFlags(fs)
 	ignoreDependencies := fs.Bool("ignore-dependencies", false, "proceed despite current unsatisfied Task Dependencies")
 	jsonOut := fs.Bool("json", false, "write the typed start outcome as JSON")
 	positionals, flagArgs := takeLeadingPositionals(args, 1)
@@ -308,13 +310,12 @@ func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	executionTarget, err := parseOptionalTaskExecutionTarget(*executionTargetRaw, flagExplicit(fs, "execution-target"))
-	if err != nil {
-		fmt.Fprintln(stderr, err)
+	executionTarget, branchName, ok := parseInitialBranchExecutionOptions(fs, *executionTargetRaw, *branchNameRaw, stderr)
+	if !ok {
 		return 2
 	}
-	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
-		taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, *projectRef, positionals[0])
+	return runWorkflowCommandSession(stderr, func(cfg config.App, remote *client.Remote) int {
+		taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, remote, *projectRef, positionals[0])
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
@@ -325,11 +326,12 @@ func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 				TaskID:                     taskID,
 				InvokingSessionID:          invokingSessionID,
 				ExecutionTarget:            executionTarget,
+				BranchName:                 branchName,
 				ProceedDespiteDependencies: *ignoreDependencies,
 			})
 		})
 		if err != nil {
-			if !writeWorkflowExecutionTargetError(stderr, err) &&
+			if !writeWorkflowTaskTargetOrBranchError(stderr, err) &&
 				!writeWorkflowTaskMutationSelfTargetError(stderr, err) {
 				fmt.Fprintln(stderr, err)
 			}
@@ -439,8 +441,8 @@ func taskDeleteSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 	if denyAgentHumanOnlyTaskAction(stderr) {
 		return 1
 	}
-	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
-		taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, *projectRef, positionals[0])
+	return runWorkflowCommandSession(stderr, func(cfg config.App, remote *client.Remote) int {
+		taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, remote, *projectRef, positionals[0])
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
@@ -465,7 +467,7 @@ func taskDeleteSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 func taskResumeSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" task resume", stderr, taskResumeUsage)
 	projectRef := fs.String("project", ".", "project ID or attached workspace path used to resolve a short ID")
-	executionTargetRaw := fs.String("execution-target", "", "task-local execution target: "+executionTargetSelectorHelp)
+	executionTargetRaw, branchNameRaw := addInitialBranchExecutionFlags(fs)
 	positionals, flagArgs := takeLeadingPositionals(args, 1)
 	if ok, exitCode := parseCommandFlags(fs, flagArgs); !ok {
 		return exitCode
@@ -480,13 +482,12 @@ func taskResumeSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	executionTarget, err := parseOptionalTaskExecutionTarget(*executionTargetRaw, flagExplicit(fs, "execution-target"))
-	if err != nil {
-		fmt.Fprintln(stderr, err)
+	executionTarget, branchName, ok := parseInitialBranchExecutionOptions(fs, *executionTargetRaw, *branchNameRaw, stderr)
+	if !ok {
 		return 2
 	}
-	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
-		taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, *projectRef, positionals[0])
+	return runWorkflowCommandSession(stderr, func(cfg config.App, remote *client.Remote) int {
+		taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, remote, *projectRef, positionals[0])
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
@@ -497,10 +498,11 @@ func taskResumeSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 				InvokingSessionID: invokingSessionID,
 				SetupOperationID:  setupOperationID,
 				ExecutionTarget:   executionTarget,
+				BranchName:        branchName,
 			})
 		})
 		if err != nil {
-			if writeWorkflowExecutionTargetError(stderr, err) ||
+			if writeWorkflowTaskTargetOrBranchError(stderr, err) ||
 				writeWorkflowTaskMutationSelfTargetError(stderr, err) {
 				return 1
 			}
@@ -553,8 +555,8 @@ func taskInterruptSubcommand(args []string, stdout io.Writer, stderr io.Writer) 
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
-		taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, *projectRef, positionals[0])
+	return runWorkflowCommandSession(stderr, func(cfg config.App, remote *client.Remote) int {
+		taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, remote, *projectRef, positionals[0])
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
@@ -599,7 +601,7 @@ func taskApproveSubcommand(args []string, stdout io.Writer, stderr io.Writer) in
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	return runWorkflowCommandSession(stderr, func(_ config.App, remote workflowCommandRemote) int {
+	return runWorkflowCommandSession(stderr, func(_ config.App, remote *client.Remote) int {
 		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
 		defer cancel()
 		resp, err := remote.ApproveWorkflowTask(ctx, serverapi.WorkflowTaskApproveRequest{
@@ -639,7 +641,7 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" task move", stderr, taskMoveUsage)
 	projectRef := fs.String("project", ".", "project ID or attached workspace path used to resolve a short ID")
 	commentary := fs.String("commentary", "", "note recorded with the workflow transition")
-	executionTargetRaw := fs.String("execution-target", "", "task-local execution target: "+executionTargetSelectorHelp)
+	executionTargetRaw, branchNameRaw := addInitialBranchExecutionFlags(fs)
 	ignoreDependencies := fs.Bool("ignore-dependencies", false, "proceed despite current unsatisfied Task Dependencies")
 	transition := fs.String("transition", "", "workflow Transition key")
 	valuesJSON := fs.String("values-json", "", "nested JSON values keyed by Node key and output name")
@@ -659,9 +661,8 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	executionTarget, err := parseOptionalTaskExecutionTarget(*executionTargetRaw, flagExplicit(fs, "execution-target"))
-	if err != nil {
-		fmt.Fprintln(stderr, err)
+	executionTarget, branchName, ok := parseInitialBranchExecutionOptions(fs, *executionTargetRaw, *branchNameRaw, stderr)
+	if !ok {
 		return 2
 	}
 	values, err := readManualMoveValues(
@@ -674,8 +675,8 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
-		taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, *projectRef, positionals[0])
+	return runWorkflowCommandSession(stderr, func(cfg config.App, remote *client.Remote) int {
+		taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, remote, *projectRef, positionals[0])
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
@@ -696,6 +697,9 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			return 1
 		}
 		if preview.Outcome == serverapi.WorkflowTaskMovePreviewOutcomeNoOp {
+			if rejectInitialBranchForMoveNoOp(stderr, branchName) {
+				return 2
+			}
 			if flagExplicit(fs, "transition") || len(values) != 0 {
 				fmt.Fprintln(stderr, "task move no-op does not accept --transition or --values-json/--values-file")
 				return 2
@@ -724,33 +728,11 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		}
 		var transitionKey *string
 		if preview.Outcome == serverapi.WorkflowTaskMovePreviewOutcomeTransition {
-			key := strings.TrimSpace(*transition)
-			if key == "" {
-				if flagExplicit(fs, "transition") {
-					fmt.Fprintln(stderr, "task move --transition cannot be blank")
-					return 2
-				}
-				if len(preview.Transition.Choices) != 1 {
-					fmt.Fprintln(stderr, "task move requires --transition when multiple incoming Transitions are usable")
-					return 2
-				}
-				key = preview.Transition.Choices[0].TransitionKey
-			}
-			var selected *serverapi.WorkflowTaskMovePreviewTransitionChoice
-			for _, choice := range preview.Transition.Choices {
-				if choice.TransitionKey == key {
-					value := choice
-					selected = &value
-					break
-				}
-			}
-			if selected == nil {
-				fmt.Fprintf(stderr, "task move Transition %q is not a usable incoming Transition\n", key)
+			transitionKey, err = selectTaskMoveTransition(preview, *transition, flagExplicit(fs, "transition"))
+			if err != nil {
+				fmt.Fprintln(stderr, err)
 				return 2
 			}
-			choice := *selected
-			authoredKey := choice.TransitionKey
-			transitionKey = &authoredKey
 		}
 		resp, err := runWorkflowMutationWithSetupProgress(context.Background(), remote, stderr, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskMoveResponse, error) {
 			return remote.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
@@ -762,11 +744,12 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 				Commentary:                 *commentary,
 				SetupOperationID:           setupOperationID,
 				ExecutionTarget:            executionTarget,
+				BranchName:                 branchName,
 				ProceedDespiteDependencies: *ignoreDependencies,
 			})
 		})
 		if err != nil {
-			if !writeWorkflowExecutionTargetError(stderr, err) &&
+			if !writeWorkflowTaskTargetOrBranchError(stderr, err) &&
 				!writeWorkflowTaskMutationSelfTargetError(stderr, err) {
 				fmt.Fprintln(stderr, err)
 			}
@@ -819,6 +802,33 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		writeTaskLifecycleResult(stdout, "Moved", detail)
 		return 0
 	})
+}
+
+func selectTaskMoveTransition(
+	preview serverapi.WorkflowTaskMovePreviewResponse,
+	raw string,
+	explicit bool,
+) (*string, error) {
+	if preview.Outcome != serverapi.WorkflowTaskMovePreviewOutcomeTransition || preview.Transition == nil {
+		return nil, errors.New("task move transition selection requires a transition preview")
+	}
+	key := strings.TrimSpace(raw)
+	if key == "" {
+		if explicit {
+			return nil, errors.New("task move --transition cannot be blank")
+		}
+		if len(preview.Transition.Choices) != 1 {
+			return nil, errors.New("task move requires --transition when multiple incoming Transitions are usable")
+		}
+		key = preview.Transition.Choices[0].TransitionKey
+	}
+	for _, choice := range preview.Transition.Choices {
+		if choice.TransitionKey == key {
+			authoredKey := choice.TransitionKey
+			return &authoredKey, nil
+		}
+	}
+	return nil, fmt.Errorf("task move Transition %q is not a usable incoming Transition", key)
 }
 
 func manualMoveBlockerMessage(reason serverapi.WorkflowTaskMovePreviewBlocker) string {
@@ -902,7 +912,7 @@ type worktreeSetupProgressSubscriber interface {
 	SubscribeWorktreeSetup(context.Context, serverapi.WorktreeSetupSubscribeRequest) (serverapi.WorktreeSetupSubscription, error)
 }
 
-func runWorkflowMutationWithSetupProgress[T any](ctx context.Context, remote workflowCommandRemote, stderr io.Writer, mutate func(context.Context, serverapi.WorktreeSetupOperationID) (T, error)) (T, error) {
+func runWorkflowMutationWithSetupProgress[T any](ctx context.Context, remote apicontract.WorkflowService, stderr io.Writer, mutate func(context.Context, serverapi.WorktreeSetupOperationID) (T, error)) (T, error) {
 	setupOperationID := serverapi.NewWorktreeSetupOperationID()
 	stopSetupProgress, err := subscribeWorktreeSetupProgress(ctx, remote, setupOperationID, stderr)
 	if err != nil {
@@ -916,7 +926,7 @@ func runWorkflowMutationWithSetupProgress[T any](ctx context.Context, remote wor
 	return resp, mutateErr
 }
 
-func subscribeWorktreeSetupProgress(ctx context.Context, remote workflowCommandRemote, setupOperationID serverapi.WorktreeSetupOperationID, stderr io.Writer) (func() error, error) {
+func subscribeWorktreeSetupProgress(ctx context.Context, remote apicontract.WorkflowService, setupOperationID serverapi.WorktreeSetupOperationID, stderr io.Writer) (func() error, error) {
 	subscriber, ok := remote.(worktreeSetupProgressSubscriber)
 	if !ok {
 		return nil, errors.New("worktree setup progress subscription is unavailable")
@@ -963,7 +973,7 @@ func writeWorktreeSetupProgress(stderr io.Writer, event serverapi.WorktreeSetupE
 	fmt.Fprintf(stderr, "Waiting for worktree setup script %s in %s.\n", event.ScriptPath, event.WorktreeRoot)
 }
 
-func waitForWorkflowTaskRunSession(ctx context.Context, remote workflowCommandRemote, taskID string, _ string, timeout time.Duration, interval time.Duration) (serverapi.WorkflowTaskDetail, error) {
+func waitForWorkflowTaskRunSession(ctx context.Context, remote apicontract.WorkflowService, taskID string, _ string, timeout time.Duration, interval time.Duration) (serverapi.WorkflowTaskDetail, error) {
 	if strings.TrimSpace(taskID) == "" {
 		return serverapi.WorkflowTaskDetail{}, errors.New("task id is required")
 	}

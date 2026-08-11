@@ -7,40 +7,25 @@ import (
 	"go/token"
 	"os"
 	"testing"
+
+	"core/server/metadata"
 )
 
-func TestGeneratedMetadataQueriesAreFresh(t *testing.T) {
-	const inputPath = "../querysrc/queries.sql.tmpl"
-	const fragmentPath = "../querysrc/task_label_filter.sql.tmpl"
-	const dependencyFragmentPath = "../querysrc/task_dependency_filter.sql.tmpl"
-	const statusFragmentPath = "../querysrc/task_status_projection.sql.tmpl"
-	const outputPath = "../queries.sql"
-	input, err := os.ReadFile(inputPath)
+func TestMetadataQuerySourceRendersDeterministically(t *testing.T) {
+	renderer := testMetadataQueryRenderer(t)
+	first, err := renderer.Render()
 	if err != nil {
-		t.Fatalf("read query template: %v", err)
+		t.Fatalf("render metadata queries: %v", err)
 	}
-	fragment, err := os.ReadFile(fragmentPath)
+	second, err := renderer.Render()
 	if err != nil {
-		t.Fatalf("read task label filter template: %v", err)
+		t.Fatalf("render metadata queries again: %v", err)
 	}
-	dependencyFragment, err := os.ReadFile(dependencyFragmentPath)
-	if err != nil {
-		t.Fatalf("read task dependency filter template: %v", err)
+	if !bytes.Equal(first, second) {
+		t.Fatal("metadata query rendering is not deterministic")
 	}
-	statusFragment, err := os.ReadFile(statusFragmentPath)
-	if err != nil {
-		t.Fatalf("read task status projection template: %v", err)
-	}
-	want, err := generateQueries(input, fragment, dependencyFragment, statusFragment)
-	if err != nil {
-		t.Fatalf("generate metadata queries: %v", err)
-	}
-	got, err := os.ReadFile(outputPath)
-	if err != nil {
-		t.Fatalf("read generated metadata queries: %v", err)
-	}
-	if !bytes.Equal(got, want) {
-		t.Fatal("generated metadata queries are stale; run go generate ./server/metadata/sqlitegen")
+	if len(bytes.TrimSpace(first)) == 0 {
+		t.Fatal("rendered metadata queries are empty")
 	}
 }
 
@@ -124,28 +109,8 @@ func TestGeneratedSQLiteQueriesDiagnosticsAreFresh(t *testing.T) {
 }
 
 func TestGeneratedTaskSearchPageDescriptorAdapterIsFresh(t *testing.T) {
-	const inputPath = "../querysrc/queries.sql.tmpl"
-	const fragmentPath = "../querysrc/task_label_filter.sql.tmpl"
-	const dependencyFragmentPath = "../querysrc/task_dependency_filter.sql.tmpl"
-	const statusFragmentPath = "../querysrc/task_status_projection.sql.tmpl"
 	const generatedPath = "../sqlitegen/task_search_page_descriptors_generated.go"
-	input, err := os.ReadFile(inputPath)
-	if err != nil {
-		t.Fatalf("read query template: %v", err)
-	}
-	fragment, err := os.ReadFile(fragmentPath)
-	if err != nil {
-		t.Fatalf("read task label filter template: %v", err)
-	}
-	dependencyFragment, err := os.ReadFile(dependencyFragmentPath)
-	if err != nil {
-		t.Fatalf("read task dependency filter template: %v", err)
-	}
-	statusFragment, err := os.ReadFile(statusFragmentPath)
-	if err != nil {
-		t.Fatalf("read task status projection template: %v", err)
-	}
-	query, err := renderTaskSearchPageDescriptors(input, fragment, dependencyFragment, statusFragment)
+	query, err := testMetadataQueryRenderer(t).RenderTaskSearchPageDescriptors()
 	if err != nil {
 		t.Fatalf("render task-search page descriptor query: %v", err)
 	}
@@ -163,28 +128,8 @@ func TestGeneratedTaskSearchPageDescriptorAdapterIsFresh(t *testing.T) {
 }
 
 func TestGeneratedTaskSearchSchemaContractAdapterIsFresh(t *testing.T) {
-	const inputPath = "../querysrc/queries.sql.tmpl"
-	const fragmentPath = "../querysrc/task_label_filter.sql.tmpl"
-	const dependencyFragmentPath = "../querysrc/task_dependency_filter.sql.tmpl"
-	const statusFragmentPath = "../querysrc/task_status_projection.sql.tmpl"
 	const generatedPath = "../sqlitegen/task_search_schema_contract_generated.go"
-	input, err := os.ReadFile(inputPath)
-	if err != nil {
-		t.Fatalf("read query template: %v", err)
-	}
-	fragment, err := os.ReadFile(fragmentPath)
-	if err != nil {
-		t.Fatalf("read task label filter template: %v", err)
-	}
-	dependencyFragment, err := os.ReadFile(dependencyFragmentPath)
-	if err != nil {
-		t.Fatalf("read task dependency filter template: %v", err)
-	}
-	statusFragment, err := os.ReadFile(statusFragmentPath)
-	if err != nil {
-		t.Fatalf("read task status projection template: %v", err)
-	}
-	query, err := renderTaskSearchSchemaContract(input, fragment, dependencyFragment, statusFragment)
+	query, err := testMetadataQueryRenderer(t).RenderTaskSearchSchemaContract()
 	if err != nil {
 		t.Fatalf("render task-search schema contract query: %v", err)
 	}
@@ -199,6 +144,15 @@ func TestGeneratedTaskSearchSchemaContractAdapterIsFresh(t *testing.T) {
 	if !bytes.Equal(got, want) {
 		t.Fatal("generated task-search schema contract adapter is stale; run go generate ./server/metadata/sqlitegen")
 	}
+}
+
+func testMetadataQueryRenderer(t testing.TB) metadata.QuerySourceRenderer {
+	t.Helper()
+	renderer, err := metadata.LoadQuerySourceRenderer("../querysrc")
+	if err != nil {
+		t.Fatalf("load metadata query source: %v", err)
+	}
+	return renderer
 }
 
 func countDiagnosticCalls(t *testing.T, source []byte) int {

@@ -217,8 +217,8 @@ func newCurrentNodeRunnerFixtureWithClientAndPersistence(
 			controller.ExecutionFinalized(scope)
 		}),
 		PromptFeed: fixture.runtimes,
-		EventFeed: func(resource sessionruntime.AgentResourceDescriptor, event agentruntime.Event) {
-			fixture.runtimes.PublishAuthorityRuntimeEvent(resource.Ref, event)
+		EventFeed: func(resource runtimeids.SessionResourceRef, event agentruntime.Event) {
+			fixture.runtimes.PublishAuthorityRuntimeEvent(resource, event)
 		},
 		ResourceLifecycle: fixture.runtimes,
 		StepLifecycle:     currentNodeRunnerStepLifecycle{runtimes: fixture.runtimes},

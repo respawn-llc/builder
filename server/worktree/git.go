@@ -32,6 +32,7 @@ type GitWorktree struct {
 	Root           string       `json:"-"`
 	HeadOID        string       `json:"head_oid,omitempty"`
 	Branch         *localBranch `json:"-"`
+	RecordedBranch *localBranch `json:"-"`
 	Detached       bool         `json:"detached,omitempty"`
 	Bare           bool         `json:"bare,omitempty"`
 	LockedReason   string       `json:"locked_reason,omitempty"`
@@ -246,6 +247,28 @@ func (e *GitDefaultBranchResolutionError) Unwrap() error {
 		return nil
 	}
 	return e.Cause
+}
+
+type InitialTaskBranchErrorKind string
+
+const (
+	InitialTaskBranchErrorInvalidName             InitialTaskBranchErrorKind = "invalid_name"
+	InitialTaskBranchErrorLocalCollision          InitialTaskBranchErrorKind = "local_collision"
+	InitialTaskBranchErrorRemoteTrackingCollision InitialTaskBranchErrorKind = "remote_tracking_collision"
+)
+
+type InitialTaskBranchError struct {
+	Kind       InitialTaskBranchErrorKind
+	BranchName string
+	Ref        *string
+	Remote     *string
+}
+
+func (e *InitialTaskBranchError) Error() string {
+	if e == nil {
+		return "initial Task branch inspection failed"
+	}
+	return fmt.Sprintf("initial Task branch %q is unavailable: %s", e.BranchName, e.Kind)
 }
 
 type ManagedWorktreeIdentitySpec struct {
@@ -516,6 +539,62 @@ func gitRemoteNames(output []byte) []string {
 		}
 	}
 	return remotes
+}
+
+func (i *GitInspector) InspectProspectiveInitialTaskBranch(ctx context.Context, workspaceRoot string, branchName string) error {
+	if i == nil {
+		return errors.New("git inspector is required")
+	}
+	canonicalRoot, err := config.CanonicalWorkspaceRoot(workspaceRoot)
+	if err != nil {
+		return err
+	}
+	valid, err := i.isValidBranchName(ctx, canonicalRoot, branchName)
+	if err != nil {
+		return err
+	}
+	if !valid {
+		return &InitialTaskBranchError{
+			Kind:       InitialTaskBranchErrorInvalidName,
+			BranchName: branchName,
+		}
+	}
+	localRef := "refs/heads/" + branchName
+	exists, err := i.RefExists(ctx, canonicalRoot, localRef)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return &InitialTaskBranchError{
+			Kind:       InitialTaskBranchErrorLocalCollision,
+			BranchName: branchName,
+			Ref:        &localRef,
+		}
+	}
+	remoteArgs := []string{"remote"}
+	remoteOutput, exitCode, err := i.runner.Run(ctx, canonicalRoot, remoteArgs...)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		return formatGitRunError(exitCode, err, remoteOutput, remoteArgs...)
+	}
+	for _, remote := range gitRemoteNames(remoteOutput) {
+		ref := "refs/remotes/" + remote + "/" + branchName
+		exists, err := i.RefExists(ctx, canonicalRoot, ref)
+		if err != nil {
+			return err
+		}
+		if exists {
+			return &InitialTaskBranchError{
+				Kind:       InitialTaskBranchErrorRemoteTrackingCollision,
+				BranchName: branchName,
+				Ref:        &ref,
+				Remote:     &remote,
+			}
+		}
+	}
+	return nil
 }
 
 func (i *GitInspector) ValidateManagedWorktreeIdentity(ctx context.Context, spec ManagedWorktreeIdentitySpec) (ManagedWorktreeIdentity, error) {
@@ -875,17 +954,25 @@ func (i *GitInspector) ResolveCreateTarget(ctx context.Context, workspaceRoot st
 }
 
 func (i *GitInspector) isValidBranchName(ctx context.Context, workspaceRoot string, branchName string) (bool, error) {
-	output, exitCode, err := i.runner.Run(ctx, workspaceRoot, "check-ref-format", "--branch", branchName)
-	if err == nil {
-		return true, nil
+	literalRef := "refs/heads/" + branchName
+	validations := [][]string{
+		{"check-ref-format", literalRef},
+		{"check-ref-format", "--branch", branchName},
 	}
-	if err := ctx.Err(); err != nil {
-		return false, err
+	for _, args := range validations {
+		output, exitCode, err := i.runner.Run(ctx, workspaceRoot, args...)
+		if err == nil {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		if exitCode > 0 {
+			return false, nil
+		}
+		return false, formatGitRunError(exitCode, err, output, args...)
 	}
-	if exitCode > 0 {
-		return false, nil
-	}
-	return false, formatGitRunError(exitCode, err, output, "check-ref-format", "--branch", branchName)
+	return true, nil
 }
 
 func (i *GitInspector) Add(ctx context.Context, workspaceRoot string, worktreeRoot string, spec CreateSpec) (bool, error) {

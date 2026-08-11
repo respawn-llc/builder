@@ -17,7 +17,7 @@ import (
 	"core/server/llm"
 	"core/server/metadata"
 	serverstartup "core/server/startup"
-	patchtool "core/server/tools/patch"
+	"core/server/tools"
 	"core/shared/client"
 	"core/shared/clientui"
 	"core/shared/config"
@@ -97,7 +97,7 @@ func appTestOutsidePatchCall(id, path string) appTestModelToolCall {
 func appTestOutsidePatchPath(t *testing.T) string {
 	t.Helper()
 	return filepath.Join(
-		testsetup.NonTemporaryDirectory(t, "kent-app-outside-", patchtool.IsPathInTemporaryDir),
+		testsetup.NonTemporaryDirectory(t, "kent-app-outside-", tools.IsPathInTemporaryDir),
 		"approved.txt",
 	)
 }

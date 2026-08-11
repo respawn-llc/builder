@@ -2,7 +2,6 @@ package session
 
 func cloneMeta(in Meta) Meta {
 	out := in
-	out.InputDraftRecoveryBuffers = append([]InputDraftRecoveryBuffer(nil), in.InputDraftRecoveryBuffers...)
 	if in.PreviousSessionID != nil {
 		previousSessionID := *in.PreviousSessionID
 		out.PreviousSessionID = &previousSessionID

@@ -534,7 +534,7 @@ func TestCloseIfIdleRetiresOwnerlessRuntimeAfterCurrentExecutionFinishes(t *test
 	fixture := newSessionRuntimeFixture(t)
 	sessionID := lifecycleSessionID(t, fixture)
 	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
-	authority := newAuthorityWithEventFeed(t, fixture, func(AgentResourceDescriptor, runtime.Event) {})
+	authority := newAuthorityWithEventFeed(t, fixture, func(runtimeids.SessionResourceRef, runtime.Event) {})
 	attachment := openLifecycleRuntime(t, authority, sessionID, "owner-a", &plan)
 
 	entered := make(chan struct{})
@@ -585,7 +585,7 @@ func TestCloseIfIdleFailsQueuedWorkAndRetiresOwnerlessRuntime(t *testing.T) {
 	sessionID := lifecycleSessionID(t, fixture)
 	var statusMu sync.Mutex
 	var statuses []runtime.QueuedUserMessageStatusEvent
-	authority := newAuthorityWithEventFeed(t, fixture, func(_ AgentResourceDescriptor, event runtime.Event) {
+	authority := newAuthorityWithEventFeed(t, fixture, func(_ runtimeids.SessionResourceRef, event runtime.Event) {
 		if event.QueuedUserMessageStatus == nil {
 			return
 		}
@@ -770,7 +770,7 @@ func TestExecutionRetirementDrainsAcceptedQueuedWorkBeforeClosing(t *testing.T) 
 	}
 	var statusMu sync.Mutex
 	var statuses []runtime.QueuedUserMessageStatusEvent
-	authority := newAuthorityWithEventFeed(t, fixture, func(_ AgentResourceDescriptor, event runtime.Event) {
+	authority := newAuthorityWithEventFeed(t, fixture, func(_ runtimeids.SessionResourceRef, event runtime.Event) {
 		if event.QueuedUserMessageStatus == nil {
 			return
 		}
@@ -888,7 +888,7 @@ func TestCloseIfIdleDrainsAcceptedQueuedWorkBeforeOwnerlessRetirement(t *testing
 	}
 	var statusMu sync.Mutex
 	var statuses []runtime.QueuedUserMessageStatusEvent
-	authority := newAuthorityWithEventFeed(t, fixture, func(_ AgentResourceDescriptor, event runtime.Event) {
+	authority := newAuthorityWithEventFeed(t, fixture, func(_ runtimeids.SessionResourceRef, event runtime.Event) {
 		if event.QueuedUserMessageStatus == nil {
 			return
 		}
@@ -2706,6 +2706,7 @@ func TestPromptResponseResolvesCurrentExactExecutionScope(t *testing.T) {
 	}
 	workflowRef := workflowExecutionRefForTest(t, "task-pending-question", "node-pending-question", nil)
 	responseDone := make(chan promptAwaitTestResult, 1)
+	releaseExecution := make(chan struct{})
 	handle, err := authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
 		Descriptor: mustOpenSessionDescriptor(t, sessionID),
 		Runtime:    &plan,
@@ -2714,6 +2715,10 @@ func TestPromptResponseResolvesCurrentExactExecutionScope(t *testing.T) {
 		Runner: func(ctx context.Context, scope ExecutionScope, _ AgentRuntimeBridge) error {
 			resolution, askErr := authority.AwaitPromptResolution(ctx, scope.ID(), request)
 			responseDone <- promptAwaitTestResult{resolution: resolution, err: askErr}
+			select {
+			case <-releaseExecution:
+			case <-ctx.Done():
+			}
 			return askErr
 		},
 	})
@@ -2742,6 +2747,14 @@ func TestPromptResponseResolvesCurrentExactExecutionScope(t *testing.T) {
 		!snapshot.Executions[0].HasPendingPromptKind(PendingPromptKindQuestion) {
 		t.Fatalf("pending question snapshot = %+v", snapshot)
 	}
+	mutationCalled := false
+	err = authority.WithInterruptibleAgentTurn(context.Background(), sessionID, nil, func(context.Context, *runtime.Engine) error {
+		mutationCalled = true
+		return nil
+	})
+	if !errors.Is(err, ErrExecutionPromptPending) || mutationCalled {
+		t.Fatalf("pending-prompt mutation error/called = %v/%t, want pending rejection before mutation", err, mutationCalled)
+	}
 
 	stepID := expectedStepID
 	if err := resolveAuthorityQuestionForTest(authority, sessionID, stepID, askID, testQuestionResolution("yes")); err != nil {
@@ -2756,6 +2769,49 @@ func TestPromptResponseResolvesCurrentExactExecutionScope(t *testing.T) {
 	} else {
 		requireQuestionAnswer(t, result.resolution, "yes")
 	}
+	waitingCtx, cancelWaiting := context.WithCancel(context.Background())
+	waitingDone := make(chan error, 1)
+	err = authority.WithInterruptibleAgentTurn(context.Background(), sessionID, nil, func(context.Context, *runtime.Engine) error {
+		started := make(chan struct{})
+		go func() {
+			close(started)
+			waitingDone <- authority.WithInterruptibleAgentTurn(waitingCtx, sessionID, nil, func(context.Context, *runtime.Engine) error {
+				return errors.New("canceled waiting mutation ran")
+			})
+		}()
+		<-started
+		time.Sleep(50 * time.Millisecond)
+		cancelWaiting()
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("interruptible Agent Turn mutation: %v", err)
+	}
+	if err := <-waitingDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled waiting mutation error = %v, want context canceled", err)
+	}
+	second := tools.AskQuestionRequest{ID: uuid.NewString(), StepID: uuid.NewString(), Question: "Again?"}
+	err = authority.WithInterruptibleAgentTurn(context.Background(), sessionID, nil, func(context.Context, *runtime.Engine) error {
+		started := make(chan struct{})
+		go func() {
+			close(started)
+			_, _ = authority.AwaitPromptResolution(context.Background(), handle.Scope().ID(), second)
+		}()
+		<-started
+		select {
+		case event := <-feed:
+			t.Fatalf("prompt admitted during interrupt mutation: %+v", event)
+		case <-time.After(50 * time.Millisecond):
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("interruptible Agent Turn mutation: %v", err)
+	}
+	if pending := <-feed; pending.requestID != second.ID || pending.resolved {
+		t.Fatalf("second pending prompt = %+v", pending)
+	}
+	close(releaseExecution)
 	if _, err := handle.Wait(context.Background()); err != nil {
 		t.Fatalf("wait agent execution: %v", err)
 	}

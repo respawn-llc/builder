@@ -298,7 +298,6 @@ func prepareSessionUIRun(
 		initialPrompt:                initialPrompt,
 		initialPromptHistoryRecorded: initialPromptHistoryRecorded,
 		initialInput:                 initialState.Input,
-		recoveryBuffers:              initialState.RecoveryBuffers,
 		sessionTitle:                 textutil.Pointer(plan.SessionTitle),
 		modelContractLocked:          plan.ModelContractLocked,
 		configuredModelName:          plan.ConfiguredModelName,
@@ -338,8 +337,7 @@ func shouldCloseReboundServer(original, rebound interactiveSessionServer) bool {
 }
 
 type sessionLaunchInitialState struct {
-	Input           string
-	RecoveryBuffers []serverapi.SessionDraftRecoveryBuffer
+	Input string
 }
 
 func sessionLaunchInitialStateFromServer(
@@ -360,7 +358,7 @@ func sessionLaunchInitialStateFromServer(
 	if err != nil {
 		return sessionLaunchInitialState{}, err
 	}
-	return sessionLaunchInitialState{Input: resp.Input, RecoveryBuffers: resp.RecoveryBuffers}, nil
+	return sessionLaunchInitialState{Input: resp.Input}, nil
 }
 
 func persistSessionDraftToServer(ctx context.Context, server sessionLifecycleClientProvider, sessionID string, model any) error {
@@ -378,7 +376,6 @@ func persistSessionDraftToServer(ctx context.Context, server sessionLifecycleCli
 		ClientRequestID: uuid.NewString(),
 		SessionID:       strings.TrimSpace(sessionID),
 		Input:           ui.mainEditor.Text(),
-		RecoveryBuffers: ui.sessionDraftRecoveryBuffers(),
 	})
 	return err
 }

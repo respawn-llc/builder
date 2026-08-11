@@ -76,7 +76,7 @@ func newAppMetadataProjectViewClient(t *testing.T, cfg config.App) apicontract.P
 		t.Fatalf("metadata.Open: %v", err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	service, err := projectview.NewMetadataService(store, "")
+	service, err := projectview.NewMetadataService(store)
 	if err != nil {
 		t.Fatalf("NewMetadataService: %v", err)
 	}

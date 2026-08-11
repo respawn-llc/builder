@@ -72,6 +72,7 @@ Overall, treat writing skills like public developer documentation or guidance. A
   - Bad: User mentions "skill should apply outside this codebase" -> you write "This works especially well outside the original codebase" (You encoded irrelevant info from the user prompt in public documentation)
 - Don't praise or explain what you're writing by contrasting it with an implied worse alternative.
   - Bad: "Guide to effective test writing, not shallow coverage pumping". Good: "Testing with Kotest"
+- State guidance directly. Avoid negative comparisons shaped like "`X` is not `Y`."
 - Do not include a global H1 header like `# My Skill`. Do not add extra blank lines immediately after a header line.
 - Do not use eye-candy formatting, emoji, tables, decorative file trees, or fancy diagrams that contain a lot of symbols. Skills are read by AIs, not humans.
 - Do not include large code examples, or API docs in SKILL.md. Generated, third-party, or optional content like templates / API docs lives either as a reference to SSOT, or in adjacent directories. Skills rot just as much as any documentation, so referring to a source is better than duplicating its content.

@@ -31,6 +31,7 @@ type Service struct {
 	mutationPermit       *workflowexecution.MutationPermit
 	currentNodeExecution interface {
 		StartTask(context.Context, workflow.TaskID, workflowexecution.TaskStartPreparation) (workflowstore.StartTaskResult, error)
+		EnsureTaskResumeEligible(context.Context, workflow.TaskID) error
 		ResumeTask(context.Context, workflow.TaskID) ([]workflow.CurrentNode, error)
 		ResumeTaskWithPreparation(context.Context, workflow.TaskID, workflowexecution.TaskStartPreparation) ([]workflow.CurrentNode, error)
 		ApplyPendingApproval(context.Context, workflow.ApprovalID) (workflowstore.PendingApprovalApplyResult, error)
@@ -50,10 +51,12 @@ type initiatingActionTargetDecision struct {
 }
 
 type initiatingActionTargetPreflight struct {
-	context     workflowstore.TaskExecutionTargetContext
-	selection   workflow.ExecutionTargetSelection
-	explicit    bool
-	unavailable initiatingActionTargetUnavailable
+	context                workflowstore.TaskExecutionTargetContext
+	selection              workflow.ExecutionTargetSelection
+	explicit               bool
+	initialBranchAssertion *string
+	pendingBranchReplaced  bool
+	unavailable            initiatingActionTargetUnavailable
 }
 
 type initiatingActionTargetUnavailable uint8
@@ -96,9 +99,21 @@ func (e *manualMoveNoOpBeforeInterruptError) Error() string {
 }
 
 type executionTargetInfrastructure interface {
+	InspectProspectiveInitialTaskBranch(context.Context, InitialTaskBranchInspectionRequest) error
+	AssertInitialTaskBranch(context.Context, InitialTaskBranchAssertionRequest) error
 	ResolveExecutionTarget(context.Context, ExecutionTargetResolveRequest) (workflowstore.ExecutionTargetSnapshot, error)
 	MaterializeExecutionTarget(context.Context, ExecutionTargetMaterializeRequest) (ExecutionTargetMaterialization, error)
 	RestoreExecutionTarget(context.Context, ExecutionTargetRestoreRequest) error
+}
+
+type InitialTaskBranchInspectionRequest struct {
+	SourceWorkspaceRoot string
+	BranchName          string
+}
+
+type InitialTaskBranchAssertionRequest struct {
+	TaskID     workflow.TaskID
+	BranchName string
 }
 
 type ExecutionTargetResolveRequest struct {
@@ -107,9 +122,10 @@ type ExecutionTargetResolveRequest struct {
 }
 
 type ExecutionTargetMaterializeRequest struct {
-	TaskID           workflow.TaskID
-	SetupOperationID serverapi.WorktreeSetupOperationID
-	Snapshot         workflowstore.ExecutionTargetSnapshot
+	TaskID                 workflow.TaskID
+	SetupOperationID       serverapi.WorktreeSetupOperationID
+	Snapshot               workflowstore.ExecutionTargetSnapshot
+	InitialBranchAssertion *string
 }
 
 type ExecutionTargetMaterialization struct {
@@ -117,8 +133,9 @@ type ExecutionTargetMaterialization struct {
 }
 
 type ExecutionTargetRestoreRequest struct {
-	TaskID           workflow.TaskID
-	SetupOperationID serverapi.WorktreeSetupOperationID
+	TaskID                 workflow.TaskID
+	SetupOperationID       serverapi.WorktreeSetupOperationID
+	InitialBranchAssertion *string
 }
 
 var errExecutionTargetInfrastructureRequired = errors.New("execution target infrastructure is required")
@@ -141,6 +158,7 @@ type Option func(*Service)
 
 func WithCurrentNodeExecution(execution interface {
 	StartTask(context.Context, workflow.TaskID, workflowexecution.TaskStartPreparation) (workflowstore.StartTaskResult, error)
+	EnsureTaskResumeEligible(context.Context, workflow.TaskID) error
 	ResumeTask(context.Context, workflow.TaskID) ([]workflow.CurrentNode, error)
 	ResumeTaskWithPreparation(context.Context, workflow.TaskID, workflowexecution.TaskStartPreparation) ([]workflow.CurrentNode, error)
 	ApplyPendingApproval(context.Context, workflow.ApprovalID) (workflowstore.PendingApprovalApplyResult, error)
@@ -705,7 +723,11 @@ func (s *Service) PreviewWorkflowGraphSave(ctx context.Context, req serverapi.Wo
 	if err != nil {
 		return serverapi.WorkflowGraphSavePreviewResponse{}, err
 	}
-	return workflowGraphSavePreviewResponse(result, workflowGraphSaveValidationResponses(result)), nil
+	resp := workflowGraphSavePreviewResponse(result, workflowGraphSaveValidationResponses(result))
+	if err := resp.Validate(); err != nil {
+		return serverapi.WorkflowGraphSavePreviewResponse{}, fmt.Errorf("project workflow graph save preview response: %w", err)
+	}
+	return resp, nil
 }
 
 func (s *Service) SaveWorkflowGraph(ctx context.Context, req serverapi.WorkflowGraphSaveRequest) (serverapi.WorkflowGraphSaveResponse, error) {
@@ -719,14 +741,16 @@ func (s *Service) SaveWorkflowGraph(ctx context.Context, req serverapi.WorkflowG
 		return serverapi.WorkflowGraphSaveResponse{}, err
 	}
 	resp := workflowGraphSaveResponse(result, workflowGraphSaveValidationResponses(result))
-	if !result.Saved {
-		return resp, nil
+	if result.Saved {
+		definition, _ := workflowview.ProjectDefinition(result.Definition, result.Record, s.roleResolver)
+		resp.Definition = &definition
+		resp.CurrentVersion = result.Record.Version
+		if result.Changed {
+			s.publishLinkedWorkflowEvent(ctx, req.WorkflowID, serverapi.WorkflowProjectEventResourceWorkflow, serverapi.WorkflowProjectEventActionGraphSaved, req.WorkflowID.String())
+		}
 	}
-	definition, _ := workflowview.ProjectDefinition(result.Definition, result.Record, s.roleResolver)
-	resp.Definition = &definition
-	resp.CurrentVersion = result.Record.Version
-	if result.Changed {
-		s.publishLinkedWorkflowEvent(ctx, req.WorkflowID, serverapi.WorkflowProjectEventResourceWorkflow, serverapi.WorkflowProjectEventActionGraphSaved, req.WorkflowID.String())
+	if err := resp.Validate(); err != nil {
+		return serverapi.WorkflowGraphSaveResponse{}, fmt.Errorf("project workflow graph save response: %w", err)
 	}
 	return resp, nil
 }
@@ -923,18 +947,19 @@ func (s *Service) startWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 		if err := s.store.ValidateTaskStart(ctx, taskID); err != nil {
 			return initiatingActionPreflight{}, err
 		}
-		target, err := s.preflightInitiatingActionTarget(ctx, taskID, req.ExecutionTarget)
-		if err != nil {
-			return initiatingActionPreflight{}, err
-		}
 		if req.ProceedDespiteDependencies {
-			return initiatingActionPreflight{target: target}, nil
+			target, err := s.preflightInitiatingActionTarget(ctx, taskID, req.ExecutionTarget, req.BranchName)
+			return initiatingActionPreflight{target: target}, err
 		}
 		count, err := s.readModels.TaskDependencies.CountUnsatisfiedBlockers(ctx, req.TaskID)
 		if err != nil {
 			return initiatingActionPreflight{}, err
 		}
-		return initiatingActionPreflight{unsatisfiedDependencyCount: count, target: target}, nil
+		if count > 0 {
+			return initiatingActionPreflight{unsatisfiedDependencyCount: count}, nil
+		}
+		target, err := s.preflightInitiatingActionTarget(ctx, taskID, req.ExecutionTarget, req.BranchName)
+		return initiatingActionPreflight{target: target}, err
 	})
 	if err != nil {
 		return serverapi.WorkflowTaskStartResponse{}, err
@@ -1014,7 +1039,12 @@ func coordinateInitiatingAction[T any](ctx context.Context, service *Service, re
 	return initiatingActionResult[T]{applied: applied}, nil
 }
 
-func (s *Service) preflightInitiatingActionTarget(ctx context.Context, taskID workflow.TaskID, explicit *serverapi.WorkflowExecutionTargetSelection) (initiatingActionTargetPreflight, error) {
+func (s *Service) preflightInitiatingActionTarget(
+	ctx context.Context,
+	taskID workflow.TaskID,
+	explicit *serverapi.WorkflowExecutionTargetSelection,
+	requestedBranchName *string,
+) (initiatingActionTargetPreflight, error) {
 	targetContext, err := s.store.GetTaskExecutionTargetContext(ctx, taskID)
 	if err != nil {
 		return initiatingActionTargetPreflight{}, err
@@ -1028,7 +1058,17 @@ func (s *Service) preflightInitiatingActionTarget(ctx context.Context, taskID wo
 				return initiatingActionTargetPreflight{}, errExecutionTargetInfrastructureRequired
 			}
 		}
-		return initiatingActionTargetPreflight{context: targetContext}, nil
+		branchAssertion, pendingBranchReplaced, err := s.preflightInitialTaskBranch(ctx, targetContext, workflow.ExecutionTargetSelection{
+			Mode: targetContext.Task.ExecutionTarget.Mode,
+		}, requestedBranchName)
+		if err != nil {
+			return initiatingActionTargetPreflight{}, err
+		}
+		return initiatingActionTargetPreflight{
+			context:                targetContext,
+			initialBranchAssertion: branchAssertion,
+			pendingBranchReplaced:  pendingBranchReplaced,
+		}, nil
 	}
 	selection := workflow.ExecutionTargetSelection{
 		Mode:      targetContext.Policy.Mode,
@@ -1051,11 +1091,78 @@ func (s *Service) preflightInitiatingActionTarget(ctx context.Context, taskID wo
 			return initiatingActionTargetPreflight{}, errExecutionTargetInfrastructureRequired
 		}
 	}
+	branchAssertion, pendingBranchReplaced, err := s.preflightInitialTaskBranch(ctx, targetContext, selection, requestedBranchName)
+	if err != nil {
+		return initiatingActionTargetPreflight{}, err
+	}
 	return initiatingActionTargetPreflight{
-		context:   targetContext,
-		selection: selection,
-		explicit:  explicit != nil,
+		context:                targetContext,
+		selection:              selection,
+		explicit:               explicit != nil,
+		initialBranchAssertion: branchAssertion,
+		pendingBranchReplaced:  pendingBranchReplaced,
 	}, nil
+}
+
+func (s *Service) preflightInitialTaskBranch(
+	ctx context.Context,
+	targetContext workflowstore.TaskExecutionTargetContext,
+	selection workflow.ExecutionTargetSelection,
+	requestedBranchName *string,
+) (*string, bool, error) {
+	if selection.Mode == workflow.ExecutionTargetModeNone {
+		if requestedBranchName != nil {
+			return nil, false, &serverapi.WorkflowTaskInitialBranchError{
+				Reason:     serverapi.WorkflowTaskInitialBranchErrorReasonNoManagedTarget,
+				BranchName: *requestedBranchName,
+			}
+		}
+		return nil, false, nil
+	}
+	if targetContext.Task.ManagedWorktreeID != nil {
+		if requestedBranchName != nil {
+			if err := s.executionTargets.AssertInitialTaskBranch(ctx, InitialTaskBranchAssertionRequest{
+				TaskID:     targetContext.Task.ID,
+				BranchName: *requestedBranchName,
+			}); err != nil {
+				return nil, false, err
+			}
+		}
+		return requestedBranchName, false, nil
+	}
+	if targetContext.Task.ExecutionTarget != nil {
+		if requestedBranchName != nil {
+			return nil, false, operationCannotCreateInitialWorktreeError(*requestedBranchName)
+		}
+		return nil, false, nil
+	}
+	branchName := requestedBranchName
+	if branchName == nil {
+		branchName = targetContext.Task.PendingInitialManagedBranchName
+	}
+	if branchName == nil {
+		return nil, false, fmt.Errorf("task %q has no pending initial managed branch", targetContext.Task.ID)
+	}
+	if err := s.executionTargets.InspectProspectiveInitialTaskBranch(ctx, InitialTaskBranchInspectionRequest{
+		SourceWorkspaceRoot: targetContext.SourceWorkspaceRoot,
+		BranchName:          *branchName,
+	}); err != nil {
+		return nil, false, err
+	}
+	if requestedBranchName != nil && targetContext.Task.ExecutionTarget == nil {
+		if err := s.store.ReplacePendingInitialManagedBranchName(ctx, targetContext.Task.ID, *requestedBranchName); err != nil {
+			return nil, false, err
+		}
+		return requestedBranchName, true, nil
+	}
+	return requestedBranchName, false, nil
+}
+
+func operationCannotCreateInitialWorktreeError(branchName string) *serverapi.WorkflowTaskInitialBranchError {
+	return &serverapi.WorkflowTaskInitialBranchError{
+		Reason:     serverapi.WorkflowTaskInitialBranchErrorReasonOperationCannotCreateWorktree,
+		BranchName: branchName,
+	}
 }
 
 func (s *Service) initiatingActionTarget(ctx context.Context, taskID workflow.TaskID, setupOperationID serverapi.WorktreeSetupOperationID, preflight initiatingActionTargetPreflight) (initiatingActionTargetDecision, error) {
@@ -1063,8 +1170,9 @@ func (s *Service) initiatingActionTarget(ctx context.Context, taskID workflow.Ta
 	if targetContext.Task.ExecutionTarget != nil {
 		if targetContext.Task.ExecutionTarget.Mode != workflow.ExecutionTargetModeNone {
 			if err := s.executionTargets.RestoreExecutionTarget(ctx, ExecutionTargetRestoreRequest{
-				TaskID:           taskID,
-				SetupOperationID: setupOperationID,
+				TaskID:                 taskID,
+				SetupOperationID:       setupOperationID,
+				InitialBranchAssertion: preflight.initialBranchAssertion,
 			}); err != nil {
 				return initiatingActionTargetDecision{}, workflowLockedExecutionTargetError(err)
 			}
@@ -1129,9 +1237,10 @@ func (s *Service) materializeInitiatingActionTarget(
 	targetContext := preflight.context
 	if snapshot != nil {
 		materialization, materializationErr := s.executionTargets.MaterializeExecutionTarget(ctx, ExecutionTargetMaterializeRequest{
-			TaskID:           taskID,
-			SetupOperationID: setupOperationID,
-			Snapshot:         *snapshot,
+			TaskID:                 taskID,
+			SetupOperationID:       setupOperationID,
+			Snapshot:               *snapshot,
+			InitialBranchAssertion: preflight.initialBranchAssertion,
 		})
 		if materialization.RetainedRoot == nil {
 			if materializationErr == nil {
@@ -1364,7 +1473,10 @@ func (s *Service) resumeWorkflowTask(ctx context.Context, req serverapi.Workflow
 			}, nil
 		}
 	}
-	target, err := s.preflightInitiatingActionTarget(ctx, taskID, req.ExecutionTarget)
+	if err := s.currentNodeExecution.EnsureTaskResumeEligible(ctx, taskID); err != nil {
+		return serverapi.WorkflowTaskResumeResponse{}, err
+	}
+	target, err := s.preflightInitiatingActionTarget(ctx, taskID, req.ExecutionTarget, req.BranchName)
 	if err != nil {
 		return serverapi.WorkflowTaskResumeResponse{}, err
 	}
@@ -1396,6 +1508,22 @@ func (s *Service) resumeWorkflowTask(ctx context.Context, req serverapi.Workflow
 				return s.store.LockTaskExecutionTarget(ctx, taskID, candidate)
 			})
 			return errors.Join(preparationErr, lockErr)
+		}
+	} else if target.context.Task.ExecutionTarget.Mode != workflow.ExecutionTargetModeNone {
+		preparation = func(preparationCtx context.Context) error {
+			decision, preparationErr := s.initiatingActionTarget(
+				preparationCtx,
+				taskID,
+				req.SetupOperationID,
+				target,
+			)
+			if preparationErr != nil {
+				return preparationErr
+			}
+			if decision.candidate != nil || decision.selectionRequired != nil {
+				return errors.New("locked Resume target returned an initial target decision")
+			}
+			return nil
 		}
 	}
 	var resumed []workflow.CurrentNode
@@ -1592,6 +1720,9 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 	if err != nil {
 		return serverapi.WorkflowTaskMoveResponse{}, err
 	}
+	if req.BranchName != nil && (prepared.IsNoOp() || !prepared.RequiresExecutionTarget()) {
+		return serverapi.WorkflowTaskMoveResponse{}, operationCannotCreateInitialWorktreeError(*req.BranchName)
+	}
 	if prepared.IsNoOp() {
 		return serverapi.WorkflowTaskMoveResponse{
 			Outcome: serverapi.WorkflowExecutionTargetActionOutcomeNoOp,
@@ -1619,7 +1750,7 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 				}, nil
 			}
 		}
-		targetPreflight, err = s.preflightInitiatingActionTarget(ctx, moveRequest.TaskID, req.ExecutionTarget)
+		targetPreflight, err = s.preflightInitiatingActionTarget(ctx, moveRequest.TaskID, req.ExecutionTarget, req.BranchName)
 		if err != nil {
 			return serverapi.WorkflowTaskMoveResponse{}, err
 		}
@@ -1653,6 +1784,9 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 	})
 	var noOpBeforeInterrupt *manualMoveNoOpBeforeInterruptError
 	if errors.As(err, &noOpBeforeInterrupt) {
+		if targetPreflight.pendingBranchReplaced {
+			return serverapi.WorkflowTaskMoveResponse{}, workflowexecution.ErrManualMoveLifecycleConflict
+		}
 		return serverapi.WorkflowTaskMoveResponse{
 			Outcome: serverapi.WorkflowExecutionTargetActionOutcomeNoOp,
 			NoOp: &serverapi.WorkflowTaskMoveNoOp{
@@ -1685,6 +1819,9 @@ func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 		return serverapi.WorkflowTaskMoveResponse{}, err
 	}
 	if moved.Outcome == workflowstore.ManualMoveResultOutcomeNoOp {
+		if targetPreflight.pendingBranchReplaced {
+			return serverapi.WorkflowTaskMoveResponse{}, workflowexecution.ErrManualMoveLifecycleConflict
+		}
 		return serverapi.WorkflowTaskMoveResponse{
 			Outcome: serverapi.WorkflowExecutionTargetActionOutcomeNoOp,
 			NoOp: &serverapi.WorkflowTaskMoveNoOp{
@@ -2184,8 +2321,9 @@ func (s *Service) workflowGraphDraftDefinition(ctx context.Context, workflowID r
 		})
 	}
 	for _, node := range graph.Nodes {
-		if strings.TrimSpace(node.GroupID) != "" {
-			groupMemberIDs[node.GroupID] = append(groupMemberIDs[node.GroupID], workflow.NodeID(node.ID))
+		groupID := optionalStringValue(node.GroupID)
+		if groupID != "" {
+			groupMemberIDs[groupID] = append(groupMemberIDs[groupID], workflow.NodeID(node.ID))
 		}
 		workflowNode, err := workflow.NewNode(
 			workflow.NodeIdentity{
@@ -2193,7 +2331,7 @@ func (s *Service) workflowGraphDraftDefinition(ctx context.Context, workflowID r
 				ID:          workflow.NodeID(node.ID),
 				Key:         workflow.ModelKey(node.Key),
 				DisplayName: node.DisplayName,
-				GroupID:     node.GroupID,
+				GroupID:     groupID,
 			},
 			workflow.NodeKind(node.Kind),
 			workflow.NodeFields{
@@ -2275,6 +2413,7 @@ func workflowGraphStoreSaveRequest(workflowID runtimeids.WorkflowID, expectedVer
 	}
 	if confirmation != nil {
 		req.Confirmed = true
+		req.ExpectedRemovedNodeGroupCount = confirmation.ExpectedRemovedNodeGroupCount
 		req.ExpectedRemovedNodeCount = confirmation.ExpectedRemovedNodeCount
 		req.ExpectedRemovedTransitionGroupCount = confirmation.ExpectedRemovedTransitionGroupCount
 		req.ExpectedRemovedEdgeCount = confirmation.ExpectedRemovedEdgeCount
@@ -2285,7 +2424,7 @@ func workflowGraphStoreSaveRequest(workflowID runtimeids.WorkflowID, expectedVer
 		req.NodeGroups = append(req.NodeGroups, workflowstore.NodeGroupRecord{ID: group.ID, WorkflowID: workflowID, Key: workflow.ModelKey(group.Key), DisplayName: group.DisplayName})
 	}
 	for _, node := range graph.Nodes {
-		req.Nodes = append(req.Nodes, workflowstore.NodeRecord{ID: workflow.NodeID(node.ID), WorkflowID: workflowID, Key: workflow.ModelKey(node.Key), Kind: workflow.NodeKind(node.Kind), DisplayName: node.DisplayName, GroupID: node.GroupID, GroupKey: node.GroupKey, SubagentRole: node.SubagentRole, CompletionMode: node.CompletionMode, ScriptPath: optionalStringValue(node.ScriptPath), JoinInputProviders: joinInputProviders(node.JoinInputProviders)})
+		req.Nodes = append(req.Nodes, workflowstore.NodeRecord{ID: workflow.NodeID(node.ID), WorkflowID: workflowID, Key: workflow.ModelKey(node.Key), Kind: workflow.NodeKind(node.Kind), DisplayName: node.DisplayName, GroupID: optionalStringValue(node.GroupID), GroupKey: node.GroupKey, SubagentRole: node.SubagentRole, CompletionMode: node.CompletionMode, ScriptPath: optionalStringValue(node.ScriptPath), JoinInputProviders: joinInputProviders(node.JoinInputProviders)})
 	}
 	for _, group := range graph.TransitionGroups {
 		req.TransitionGroups = append(req.TransitionGroups, workflowstore.TransitionGroupRecord{ID: workflow.TransitionGroupID(group.ID), WorkflowID: workflowID, SourceNodeID: workflow.NodeID(group.SourceNodeID), TransitionID: workflow.TransitionID(group.TransitionID), DisplayName: group.DisplayName, Description: group.Description})
@@ -2324,6 +2463,7 @@ func workflowExecutionTargetPolicyFromAPI(policy serverapi.WorkflowExecutionTarg
 func workflowGraphSavePreviewResponse(result workflowstore.WorkflowGraphSaveResult, validationResults map[serverapi.WorkflowValidationMode]serverapi.WorkflowValidateResponse) serverapi.WorkflowGraphSavePreviewResponse {
 	return serverapi.WorkflowGraphSavePreviewResponse{
 		CurrentVersion:       result.Version,
+		Changed:              result.Changed,
 		ValidationResults:    validationResults,
 		Impact:               workflowGraphSaveImpact(result),
 		Blockers:             workflowGraphSaveBlockers(result.Blockers),
@@ -2335,6 +2475,7 @@ func workflowGraphSavePreviewResponse(result workflowstore.WorkflowGraphSaveResu
 func workflowGraphSaveResponse(result workflowstore.WorkflowGraphSaveResult, validationResults map[serverapi.WorkflowValidationMode]serverapi.WorkflowValidateResponse) serverapi.WorkflowGraphSaveResponse {
 	return serverapi.WorkflowGraphSaveResponse{
 		Saved:                result.Saved,
+		Changed:              result.Changed,
 		CurrentVersion:       result.Version,
 		ValidationResults:    validationResults,
 		Impact:               workflowGraphSaveImpact(result),
@@ -2346,9 +2487,11 @@ func workflowGraphSaveResponse(result workflowstore.WorkflowGraphSaveResult, val
 
 func workflowGraphSaveImpact(result workflowstore.WorkflowGraphSaveResult) serverapi.WorkflowGraphSaveImpact {
 	return serverapi.WorkflowGraphSaveImpact{
+		RemovedNodeGroupCount:             result.Impact.RemovedNodeGroupCount,
 		RemovedNodeCount:                  result.Impact.RemovedNodeCount,
 		RemovedTransitionGroupCount:       result.Impact.RemovedTransitionGroupCount,
 		RemovedEdgeCount:                  result.Impact.RemovedEdgeCount,
+		RemovedEntities:                   workflowGraphEntityReferences(result.Impact.RemovedEntities),
 		NodeTaskReferenceCount:            result.Impact.NodeTaskReferenceCount,
 		EdgeTaskReferenceCount:            result.Impact.EdgeTaskReferenceCount,
 		ActiveCurrentNodeCount:            result.EditPolicyImpact.ActiveCurrentNodeCount,
@@ -2362,9 +2505,18 @@ func workflowGraphSaveImpact(result workflowstore.WorkflowGraphSaveResult) serve
 func workflowGraphSaveBlockers(blockers []workflowstore.WorkflowGraphSaveBlocker) []serverapi.WorkflowGraphSaveBlocker {
 	out := make([]serverapi.WorkflowGraphSaveBlocker, 0, len(blockers))
 	for _, blocker := range blockers {
-		out = append(out, serverapi.WorkflowGraphSaveBlocker{Code: blocker.Code, Message: blocker.Message, Count: blocker.Count})
+		out = append(out, serverapi.WorkflowGraphSaveBlocker{
+			Code:             blocker.Code,
+			Message:          blocker.Message,
+			Count:            blocker.Count,
+			AffectedEntities: workflowGraphEntityReferences(blocker.AffectedEntities),
+		})
 	}
 	return out
+}
+
+func workflowGraphEntityReferences(references []workflowstore.WorkflowGraphEntityReference) []serverapi.WorkflowGraphEntityReference {
+	return append([]serverapi.WorkflowGraphEntityReference{}, references...)
 }
 
 func commentRecord(row workflowstore.CommentRecord) serverapi.WorkflowTaskComment {

@@ -215,8 +215,8 @@ func newProjectedAuthorityRuntime(
 		PersistenceRoot:   t.TempDir(),
 		StoreOptions:      persistence.Options(),
 		ResourceLifecycle: activity,
-		EventFeed: func(resource sessionruntime.AgentResourceDescriptor, event runtime.Event) {
-			activity.PublishAuthorityRuntimeEvent(resource.Ref, event)
+		EventFeed: func(resource runtimeids.SessionResourceRef, event runtime.Event) {
+			activity.PublishAuthorityRuntimeEvent(resource, event)
 		},
 	})
 	if _, err := authority.OpenRuntime(t.Context(), sessionruntime.RuntimeOpenRequest{
@@ -234,7 +234,7 @@ func newProjectedAuthorityRuntime(
 	reads := sessionview.NewService(testSessionViewSessionResolver{store: store}, activity, authority, nil)
 	controls := runtimecontrol.NewService(authority).WithRuntimeActivityResolver(activity)
 	runtimeClient := newUIRuntimeClientWithReads(sessionID.String(), reads, controls).(*sessionRuntimeClient)
-	snapshot, err := activity.RuntimeReadModelSnapshot(context.Background(), sessionID.String(), nil)
+	snapshot, err := activity.RuntimeReadModelSnapshot(context.Background(), sessionID.String())
 	if err != nil {
 		t.Fatalf("projected runtime snapshot: %v", err)
 	}

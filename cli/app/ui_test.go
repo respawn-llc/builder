@@ -90,16 +90,17 @@ func TestCustomKeyCtrlEnterQueuesAndStartsSubmission(t *testing.T) {
 func TestCustomKeyCtrlEnterQueuesPostTurnWhenBusy(t *testing.T) {
 	m := newProjectedStaticUIModel()
 	m.setRuntimeActivityBusyForTest(true)
-	testSetMainInput(m, "echo hi")
+	submittedText := "  echo\n\thi  "
+	testSetMainInput(m, submittedText)
 
 	next, _ := m.Update(customKeyMsg{Kind: customKeyCtrlEnter})
 	updated := next.(*uiModel)
 
-	if len(updated.queued) != 1 {
-		t.Fatalf("expected one queued post-turn message, got %d", len(updated.queued))
+	if len(updated.queued) != 1 || updated.queued[0].Text != submittedText {
+		t.Fatalf("queued post-turn messages = %+v, want verbatim %q", updated.queued, submittedText)
 	}
-	if len(updated.pendingInjected) != 0 {
-		t.Fatalf("did not expect injected steering messages, got %d", len(updated.pendingInjected))
+	if len(updated.injectedQueue) != 0 {
+		t.Fatalf("did not expect injected steering messages, got %d", len(updated.injectedQueue))
 	}
 }
 
@@ -656,8 +657,8 @@ func TestApprovalAskUsesSingleDenyOptionAndTabCommentary(t *testing.T) {
 		*entry.ApprovalAnswer.Commentary != "blocked by policy" {
 		t.Fatalf("unexpected approval request: %+v", request)
 	}
-	if len(updated.pendingInjected) != 0 {
-		t.Fatalf("deny commentary created a duplicate queued user message: %+v", updated.pendingInjected)
+	if len(updated.injectedQueue) != 0 {
+		t.Fatalf("deny commentary created a duplicate queued user message: %+v", updated.injectedQueue)
 	}
 	if testActiveAsk(updated) != nil {
 		t.Fatal("successful batch did not immediately remove the Approval")

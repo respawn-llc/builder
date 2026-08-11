@@ -196,24 +196,25 @@ type SqliteSchema struct {
 }
 
 type Task struct {
-	ID                          string
-	ProjectWorkflowLinkID       string
-	WorkflowRevisionSeen        int64
-	TaskSeq                     int64
-	ShortID                     string
-	Title                       string
-	Body                        string
-	SourceUrl                   string
-	SourceWorkspaceID           sql.NullString
-	ManagedWorktreeID           sql.NullString
-	ExecutionTargetMode         sql.NullString
-	ExecutionTargetRequestedRef sql.NullString
-	ExecutionTargetResolvedRef  sql.NullString
-	ExecutionTargetCommitOid    sql.NullString
-	ExecutionTargetProvenance   sql.NullString
-	CreatedAtUnixMs             int64
-	UpdatedAtUnixMs             int64
-	MetadataJson                string
+	ID                              string
+	ProjectWorkflowLinkID           string
+	WorkflowRevisionSeen            int64
+	TaskSeq                         int64
+	ShortID                         string
+	Title                           string
+	Body                            string
+	SourceUrl                       string
+	SourceWorkspaceID               sql.NullString
+	ManagedWorktreeID               sql.NullString
+	ExecutionTargetMode             sql.NullString
+	ExecutionTargetRequestedRef     sql.NullString
+	ExecutionTargetResolvedRef      sql.NullString
+	ExecutionTargetCommitOid        sql.NullString
+	ExecutionTargetProvenance       sql.NullString
+	CreatedAtUnixMs                 int64
+	UpdatedAtUnixMs                 int64
+	MetadataJson                    string
+	PendingInitialManagedBranchName sql.NullString
 }
 
 type TaskActiveFanout struct {
@@ -285,26 +286,27 @@ type TaskPendingApprovalBranch struct {
 }
 
 type TaskRecord struct {
-	ID                          string
-	ProjectID                   string
-	ProjectWorkflowLinkID       string
-	WorkflowID                  runtimeids.WorkflowID
-	WorkflowRevisionSeen        int64
-	TaskSeq                     int64
-	ShortID                     string
-	Title                       string
-	Body                        string
-	SourceUrl                   string
-	SourceWorkspaceID           sql.NullString
-	ManagedWorktreeID           sql.NullString
-	ExecutionTargetMode         sql.NullString
-	ExecutionTargetRequestedRef sql.NullString
-	ExecutionTargetResolvedRef  sql.NullString
-	ExecutionTargetCommitOid    sql.NullString
-	ExecutionTargetProvenance   sql.NullString
-	CreatedAtUnixMs             int64
-	UpdatedAtUnixMs             int64
-	MetadataJson                string
+	ID                              string
+	ProjectID                       string
+	ProjectWorkflowLinkID           string
+	WorkflowID                      runtimeids.WorkflowID
+	WorkflowRevisionSeen            int64
+	TaskSeq                         int64
+	ShortID                         string
+	Title                           string
+	Body                            string
+	SourceUrl                       string
+	SourceWorkspaceID               sql.NullString
+	ManagedWorktreeID               sql.NullString
+	PendingInitialManagedBranchName sql.NullString
+	ExecutionTargetMode             sql.NullString
+	ExecutionTargetRequestedRef     sql.NullString
+	ExecutionTargetResolvedRef      sql.NullString
+	ExecutionTargetCommitOid        sql.NullString
+	ExecutionTargetProvenance       sql.NullString
+	CreatedAtUnixMs                 int64
+	UpdatedAtUnixMs                 int64
+	MetadataJson                    string
 }
 
 type TaskSearchContent struct {
@@ -410,6 +412,7 @@ type Workspace struct {
 	GitMetadataJson   string
 	CreatedAtUnixMs   int64
 	UpdatedAtUnixMs   int64
+	ChatDraftJson     sql.NullString
 }
 
 type Worktree struct {

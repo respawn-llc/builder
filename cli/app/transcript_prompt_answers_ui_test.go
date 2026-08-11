@@ -502,8 +502,8 @@ func TestDenyCommentaryDeadlineKeepsEditedDraftActionableWithoutQueuedCopy(t *te
 
 	next, firstDelivery := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = next.(*uiModel)
-	if firstDelivery == nil || len(model.pendingInjected) != 0 {
-		t.Fatalf("deny submission = command %v queued %+v, want direct delivery without queued commentary", firstDelivery, model.pendingInjected)
+	if firstDelivery == nil || len(model.injectedQueue) != 0 {
+		t.Fatalf("deny submission = command %v queued %+v, want direct delivery without queued commentary", firstDelivery, model.injectedQueue)
 	}
 	firstResult := make(chan tea.Msg, 1)
 	go func() {
@@ -539,8 +539,8 @@ func TestDenyCommentaryDeadlineKeepsEditedDraftActionableWithoutQueuedCopy(t *te
 	if approvalCommentary(firstAnswer) != "original denial" || approvalCommentary(secondAnswer) != "original denial edited" {
 		t.Fatalf("denial commentary = %q then %q, want immutable submission then edited retry", approvalCommentary(firstAnswer), approvalCommentary(secondAnswer))
 	}
-	if len(model.pendingInjected) != 0 {
-		t.Fatalf("denial commentary created a queued copy: %+v", model.pendingInjected)
+	if len(model.injectedQueue) != 0 {
+		t.Fatalf("denial commentary created a queued copy: %+v", model.injectedQueue)
 	}
 	if testPromptAnswerDeliveryActive(model) || testActiveAsk(model) != nil {
 		t.Fatal("successful denial delivery did not immediately finish the prompt")
@@ -639,6 +639,36 @@ func TestStaleQueuedApprovalCommentaryDoesNotUnlockCurrentPrompt(t *testing.T) {
 	}
 	if testPromptAnswerDeliveryActive(model) {
 		t.Fatal("stale queued approval commentary created active delivery ownership")
+	}
+}
+
+func TestInterruptRestorationDeliversQueuedApprovalCommentary(t *testing.T) {
+	model, control := newProjectedPromptTestUIModel(t)
+	model.engine = &runtimeControlFakeClient{}
+	prompt := testApprovalPrompt(
+		"approval-interrupted-commentary",
+		"Allow operation?",
+		clientui.ApprovalDecisionAllowOnce,
+		clientui.ApprovalDecisionDeny,
+	)
+	model = updateUIModel(t, model, askEventMsg{event: model.transcriptPromptEvent(prompt)})
+	answer := clientui.PromptAnswer{
+		PromptID: string(prompt.PromptID),
+		Approval: &clientui.ApprovalPromptAnswer{
+			Decision:   clientui.ApprovalDecisionAllowOnce,
+			Commentary: "interrupted commentary",
+		},
+	}
+	_ = model.enqueueInjectedInputWithApprovalAnswer("interrupted commentary", &answer)
+	model.setPendingInterrupt(true)
+
+	for _, msg := range collectCmdMessages(t, model.acknowledgePendingInterrupt()) {
+		model = updateUIModel(t, model, msg)
+	}
+
+	request := requireApprovalRequest(t, control)
+	if request.Decision != clientui.ApprovalDecisionAllowOnce || approvalCommentary(request) != "interrupted commentary" {
+		t.Fatalf("approval request = %+v, want queued interrupted commentary", request)
 	}
 }
 

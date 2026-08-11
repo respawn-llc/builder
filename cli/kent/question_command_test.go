@@ -43,6 +43,7 @@ type stubPromptFollowUpSubscription struct {
 }
 
 type stubQuestionTaskRemote struct {
+	apicontract.ProjectViewService
 	apicontract.WorkflowService
 	task               serverapi.WorkflowTaskDetail
 	taskRequests       []serverapi.WorkflowTaskGetRequest
@@ -145,8 +146,6 @@ func (r *stubQuestionCommandRemote) Close() error {
 	return nil
 }
 
-func (r *stubQuestionTaskRemote) Close() error { return nil }
-
 func (s *stubPromptFollowUpSubscription) Next(ctx context.Context) (serverapi.PromptFollowUpEvent, error) {
 	r := s.remote
 	r.watchNexts++
@@ -189,17 +188,32 @@ func questionCommandWithRemote(remote questionCommandRemote) (questionCommand, *
 	}, &openedSessions
 }
 
-func installQuestionTaskRemote(t *testing.T, remote *stubQuestionTaskRemote) questionCommand {
-	t.Helper()
-	previous := workflowCommandRemoteOpener
-	workflowCommandRemoteOpener = func(context.Context, string) (config.App, workflowCommandRemote, error) {
-		return config.App{WorkspaceRoot: "."}, remote, nil
-	}
-	t.Cleanup(func() {
-		workflowCommandRemoteOpener = previous
-	})
+func questionCommandWithTaskRemote(remote *stubQuestionTaskRemote) questionCommand {
 	command, _ := questionCommandWithRemote(remote.stubQuestionCommandRemote)
 	return command
+}
+
+func questionTaskSelector(taskRef string) questionCommandSelector {
+	return questionCommandSelector{
+		TaskRef:    &taskRef,
+		ProjectRef: ".",
+		Command:    config.Command + " question",
+	}
+}
+
+func unsetSessionIDEnvironmentForTest(t *testing.T) {
+	t.Helper()
+	previous, present := os.LookupEnv(sessionenv.SessionIDEnv)
+	if err := os.Unsetenv(sessionenv.SessionIDEnv); err != nil {
+		t.Fatalf("unset %s: %v", sessionenv.SessionIDEnv, err)
+	}
+	t.Cleanup(func() {
+		if present {
+			_ = os.Setenv(sessionenv.SessionIDEnv, previous)
+		} else {
+			_ = os.Unsetenv(sessionenv.SessionIDEnv)
+		}
+	})
 }
 
 func pendingAsk(sessionID, askID, question string, suggestions ...string) clientui.PendingAsk {
@@ -553,11 +567,16 @@ func TestQuestionAnswerByTaskSelectsUniqueSession(t *testing.T) {
 			{},
 		},
 	}
-	command := installQuestionTaskRemote(t, remote)
+	command := questionCommandWithTaskRemote(remote)
+	commentary := "Proceed"
 
 	var stdout, stderr bytes.Buffer
-	exitCode := command.run(
-		[]string{"answer", "--task", taskID, "--commentary", "  Proceed \n"},
+	exitCode := command.answerResolvedTaskQuestion(
+		questionTaskSelector(taskID),
+		remote,
+		taskID,
+		nil,
+		&commentary,
 		&stdout,
 		&stderr,
 	)
@@ -621,16 +640,22 @@ func TestQuestionByTaskApprovalReadsSuccessorQuestion(t *testing.T) {
 			}},
 		},
 	}
-	command := installQuestionTaskRemote(t, remote)
+	command := questionCommandWithTaskRemote(remote)
+	selector := questionTaskSelector(taskID)
 
 	var stdout, stderr bytes.Buffer
-	if exitCode := command.run([]string{"--task", taskID}, &stdout, &stderr); exitCode != 0 ||
+	if exitCode := command.showResolvedTaskQuestion(selector, remote, taskID, &stdout, &stderr); exitCode != 0 ||
 		stderr.Len() != 0 || !strings.Contains(stdout.String(), approvalLabel) {
 		t.Fatalf("show exit=%d stdout=%q stderr=%q", exitCode, stdout.String(), stderr.String())
 	}
 	stdout.Reset()
-	exitCode := command.run(
-		[]string{"answer", "--task", taskID, "--option", "1"},
+	option := 1
+	exitCode := command.answerResolvedTaskQuestion(
+		selector,
+		remote,
+		taskID,
+		&option,
+		nil,
 		&stdout,
 		&stderr,
 	)
@@ -675,11 +700,16 @@ func TestQuestionByTaskRejectsAmbiguousSessionsWithoutAnswering(t *testing.T) {
 			},
 		}},
 	}
-	command := installQuestionTaskRemote(t, remote)
+	command := questionCommandWithTaskRemote(remote)
+	option := 1
 
 	var stdout, stderr bytes.Buffer
-	exitCode := command.run(
-		[]string{"answer", "--task", taskID, "--option", "1"},
+	exitCode := command.answerResolvedTaskQuestion(
+		questionTaskSelector(taskID),
+		remote,
+		taskID,
+		&option,
+		nil,
 		&stdout,
 		&stderr,
 	)
@@ -717,10 +747,12 @@ func TestQuestionByTaskRejectsCurrentAgentSession(t *testing.T) {
 			},
 		}},
 	}
-	command := installQuestionTaskRemote(t, remote)
+	command := questionCommandWithTaskRemote(remote)
 
-	exitCode := command.run(
-		[]string{"--task", taskID},
+	exitCode := command.showResolvedTaskQuestion(
+		questionTaskSelector(taskID),
+		remote,
+		taskID,
 		io.Discard,
 		io.Discard,
 	)
@@ -753,10 +785,15 @@ func TestQuestionByTaskUsesOldestQuestionInSelectedSession(t *testing.T) {
 			},
 		}, {}},
 	}
-	command := installQuestionTaskRemote(t, remote)
+	command := questionCommandWithTaskRemote(remote)
+	commentary := "Answer"
 
-	exitCode := command.run(
-		[]string{"answer", "--task", taskID, "--commentary", "Answer"},
+	exitCode := command.answerResolvedTaskQuestion(
+		questionTaskSelector(taskID),
+		remote,
+		taskID,
+		nil,
+		&commentary,
 		io.Discard,
 		io.Discard,
 	)
@@ -834,10 +871,24 @@ func TestQuestionByTaskResolvesProjectScopedShortID(t *testing.T) {
 		},
 		attentionResponses: []serverapi.WorkflowTaskAttentionListResponse{{}},
 	}
-	command := installQuestionTaskRemote(t, remote)
+	command := questionCommandWithTaskRemote(remote)
+	selector := questionTaskSelector("KENT-335")
+	resolvedTaskID, err := resolveWorkflowTaskID(
+		context.Background(),
+		config.App{WorkspaceRoot: "."},
+		remote,
+		remote,
+		selector.ProjectRef,
+		*selector.TaskRef,
+	)
+	if err != nil {
+		t.Fatalf("resolve task: %v", err)
+	}
 
-	exitCode := command.run(
-		[]string{"--task", "KENT-335"},
+	exitCode := command.showResolvedTaskQuestion(
+		selector,
+		remote,
+		resolvedTaskID,
 		io.Discard,
 		io.Discard,
 	)

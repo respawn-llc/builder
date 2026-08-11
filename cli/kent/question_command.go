@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"core/shared/apicontract"
 	"core/shared/client"
 	"core/shared/clientui"
 	"core/shared/config"
@@ -210,34 +211,44 @@ func (c questionCommand) answerSessionQuestion(
 }
 
 func (c questionCommand) showTaskQuestion(selector questionCommandSelector, stdout io.Writer, stderr io.Writer) int {
-	return withQuestionTaskRemote(selector, stderr, func(remote workflowCommandRemote, taskID string) int {
-		candidates, err := listTaskQuestionCandidates(context.Background(), remote, taskID)
+	return withQuestionTaskRemote(selector, stderr, func(remote *client.Remote, taskID string) int {
+		return c.showResolvedTaskQuestion(selector, remote, taskID, stdout, stderr)
+	})
+}
+
+func (c questionCommand) showResolvedTaskQuestion(
+	selector questionCommandSelector,
+	workflows apicontract.WorkflowService,
+	taskID string,
+	stdout io.Writer,
+	stderr io.Writer,
+) int {
+	candidates, err := listTaskQuestionCandidates(context.Background(), workflows, taskID)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	candidate, exitCode := selectTaskQuestionCandidate(selector, candidates, stderr)
+	if exitCode != 0 {
+		return exitCode
+	}
+	if candidate == nil {
+		fmt.Fprintln(stdout, noPendingQuestionsText)
+		return 0
+	}
+	expected := candidate.Questions[0]
+	return c.withRemote(stderr, candidate.SessionID, func(promptRemote questionCommandRemote) int {
+		question, ok, err := readPendingSessionPromptByKey(context.Background(), promptRemote, expected)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		candidate, exitCode := selectTaskQuestionCandidate(selector, candidates, stderr)
-		if exitCode != 0 {
-			return exitCode
-		}
-		if candidate == nil {
+		if !ok {
 			fmt.Fprintln(stdout, noPendingQuestionsText)
 			return 0
 		}
-		expected := candidate.Questions[0]
-		return c.withRemote(stderr, candidate.SessionID, func(promptRemote questionCommandRemote) int {
-			question, ok, err := readPendingSessionPromptByKey(context.Background(), promptRemote, expected)
-			if err != nil {
-				fmt.Fprintln(stderr, err)
-				return 1
-			}
-			if !ok {
-				fmt.Fprintln(stdout, noPendingQuestionsText)
-				return 0
-			}
-			writePendingQuestion(stdout, question, false)
-			return 0
-		})
+		writePendingQuestion(stdout, question, false)
+		return 0
 	})
 }
 
@@ -248,43 +259,63 @@ func (c questionCommand) answerTaskQuestion(
 	stdout io.Writer,
 	stderr io.Writer,
 ) int {
-	return withQuestionTaskRemote(selector, stderr, func(remote workflowCommandRemote, taskID string) int {
-		candidates, err := listTaskQuestionCandidates(context.Background(), remote, taskID)
+	return withQuestionTaskRemote(selector, stderr, func(remote *client.Remote, taskID string) int {
+		return c.answerResolvedTaskQuestion(
+			selector,
+			remote,
+			taskID,
+			option,
+			commentary,
+			stdout,
+			stderr,
+		)
+	})
+}
+
+func (c questionCommand) answerResolvedTaskQuestion(
+	selector questionCommandSelector,
+	workflows apicontract.WorkflowService,
+	taskID string,
+	option *int,
+	commentary *string,
+	stdout io.Writer,
+	stderr io.Writer,
+) int {
+	candidates, err := listTaskQuestionCandidates(context.Background(), workflows, taskID)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	candidate, exitCode := selectTaskQuestionCandidate(selector, candidates, stderr)
+	if exitCode != 0 {
+		return exitCode
+	}
+	if candidate == nil {
+		fmt.Fprintln(stderr, noPendingQuestionAnswerText)
+		return 1
+	}
+	expected := candidate.Questions[0]
+	return c.withRemote(stderr, candidate.SessionID, func(promptRemote questionCommandRemote) int {
+		question, ok, err := readPendingSessionPromptByKey(context.Background(), promptRemote, expected)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		candidate, exitCode := selectTaskQuestionCandidate(selector, candidates, stderr)
-		if exitCode != 0 {
-			return exitCode
-		}
-		if candidate == nil {
+		if !ok {
 			fmt.Fprintln(stderr, noPendingQuestionAnswerText)
 			return 1
 		}
-		expected := candidate.Questions[0]
-		return c.withRemote(stderr, candidate.SessionID, func(promptRemote questionCommandRemote) int {
-			question, ok, err := readPendingSessionPromptByKey(context.Background(), promptRemote, expected)
-			if err != nil {
-				fmt.Fprintln(stderr, err)
-				return 1
-			}
-			if !ok {
-				fmt.Fprintln(stderr, noPendingQuestionAnswerText)
-				return 1
-			}
-			return answerQuestionThroughBatch(
-				promptRemote,
-				question,
-				option,
-				commentary,
-				func(ctx context.Context) (questionCommandPendingQuestion, bool, error) {
-					return readTaskQuestionFollowUp(ctx, remote, promptRemote, taskID, candidate.SessionID)
-				},
-				stdout,
-				stderr,
-			)
-		})
+		return answerQuestionThroughBatch(
+			promptRemote,
+			question,
+			option,
+			commentary,
+			func(ctx context.Context) (questionCommandPendingQuestion, bool, error) {
+				return readTaskQuestionFollowUp(ctx, workflows, promptRemote, taskID, candidate.SessionID)
+			},
+			stdout,
+			stderr,
+		)
 	})
 }
 
@@ -401,7 +432,7 @@ func questionBatchAnswer(
 
 func readTaskQuestionFollowUp(
 	ctx context.Context,
-	remote workflowCommandRemote,
+	remote apicontract.WorkflowService,
 	promptRemote questionCommandRemote,
 	taskID string,
 	sessionID runtimeids.SessionID,
@@ -519,9 +550,9 @@ func optionalQuestionCommentary(commentary *string) *string {
 func withQuestionTaskRemote(
 	selector questionCommandSelector,
 	stderr io.Writer,
-	run func(workflowCommandRemote, string) int,
+	run func(*client.Remote, string) int,
 ) int {
-	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
+	return runWorkflowCommandSession(stderr, func(cfg config.App, remote *client.Remote) int {
 		if selector.TaskRef == nil {
 			fmt.Fprintln(stderr, "question task selector is required")
 			return 2
@@ -529,6 +560,7 @@ func withQuestionTaskRemote(
 		taskID, err := resolveWorkflowTaskID(
 			context.Background(),
 			cfg,
+			remote,
 			remote,
 			selector.ProjectRef,
 			*selector.TaskRef,
@@ -543,7 +575,7 @@ func withQuestionTaskRemote(
 
 func listTaskQuestionCandidates(
 	ctx context.Context,
-	remote workflowCommandRemote,
+	remote apicontract.WorkflowService,
 	taskID string,
 ) ([]taskQuestionSessionCandidate, error) {
 	rpcCtx, cancel := context.WithTimeout(ctx, questionCommandTimeout)
@@ -554,14 +586,10 @@ func listTaskQuestionCandidates(
 	if err != nil {
 		return nil, err
 	}
-	return taskQuestionCandidatesWithRemote(ctx, remote, response.Items)
+	return taskQuestionCandidates(response.Items)
 }
 
 func taskQuestionCandidates(items []serverapi.WorkflowAttentionItem) ([]taskQuestionSessionCandidate, error) {
-	return taskQuestionCandidatesWithRemote(context.Background(), nil, items)
-}
-
-func taskQuestionCandidatesWithRemote(_ context.Context, _ workflowCommandRemote, items []serverapi.WorkflowAttentionItem) ([]taskQuestionSessionCandidate, error) {
 	questions := make([]serverapi.WorkflowAttentionItem, 0, len(items))
 	for _, item := range items {
 		if item.Kind != string(serverapi.WorkflowTaskAttentionKindQuestion) {

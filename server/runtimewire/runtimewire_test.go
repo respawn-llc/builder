@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"core/internal/testharness/runtimewirefixture"
 	"core/internal/testharness/scriptedllm"
 	"core/internal/testharness/testsetup"
 	"core/server/auth"
@@ -23,7 +24,6 @@ import (
 	"core/server/session/sessiontest"
 	"core/server/tools"
 	askquestion "core/server/tools"
-	patchtool "core/server/tools/patch"
 	shelltool "core/server/tools/shell"
 	"core/server/tools/shell/postprocess"
 	"core/shared/config"
@@ -342,51 +342,6 @@ func TestPromptFacingSnapshotReloaderUsesActiveWorkspaceRoot(t *testing.T) {
 	}
 }
 
-func TestBuildToolRegistryViewImageApprovedOutsidePathIsLogged(t *testing.T) {
-	workspace := t.TempDir()
-	outsideFile := filepath.Join(outsideNonTempDir(t), "doc.pdf")
-	pdfBytes := []byte("%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n")
-	if err := os.WriteFile(outsideFile, pdfBytes, 0o644); err != nil {
-		t.Fatalf("write outside pdf: %v", err)
-	}
-
-	logger := &testLogger{}
-	registry, broker := newRuntimeWireLoggedToolRegistry(
-		t,
-		workspace,
-		logger,
-		toolspec.ToolViewImage,
-	)
-	broker.SetAskHandler(func(_ context.Context, req askquestion.AskQuestionRequest) (askquestion.AskQuestionResolution, error) {
-		if !req.Approval || len(req.ApprovalOptions) != 3 {
-			t.Fatalf("outside-path request = %+v, want structured approval", req)
-		}
-		return askquestion.AskQuestionApproval{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce}, nil
-	})
-
-	viewImageHandler, ok := registry.Get(toolspec.ToolViewImage)
-	if !ok {
-		t.Fatal("expected view_image handler")
-	}
-	input, err := json.Marshal(map[string]any{"path": outsideFile})
-	if err != nil {
-		t.Fatalf("marshal view_image input: %v", err)
-	}
-	result, err := viewImageHandler.Call(context.Background(), tools.Call{ID: "call-1", Name: toolspec.ToolViewImage, Input: input})
-	if err != nil {
-		t.Fatalf("view_image call: %v", err)
-	}
-	if result.IsError {
-		t.Fatalf("expected success result, got %s", string(result.Output))
-	}
-	if !strings.Contains(logger.String(), "tool.view_image.outside_workspace.approved") {
-		t.Fatalf("expected outside-workspace approval audit line, got %q", logger.String())
-	}
-	if !strings.Contains(logger.String(), "reason=allow_once") {
-		t.Fatalf("expected allow_once reason in audit line, got %q", logger.String())
-	}
-}
-
 func TestOutsideWorkspaceToolsInheritTypedApprovalBarrierFromCallContext(t *testing.T) {
 	workspace := t.TempDir()
 	outside := outsideNonTempDir(t)
@@ -612,7 +567,7 @@ func TestRuntimewireGeneratedPolicyPreservedAcrossWorkspaceRebind(t *testing.T) 
 		t.Fatalf("mkdir generated root: %v", err)
 	}
 	binding, _, _, err := NewLocalToolRegistryBinding(LocalToolRegistryOptions{
-		FilesystemContext:   localToolFilesystemContext(t, t.TempDir()),
+		FilesystemContext:   runtimewirefixture.FilesystemContext(t, t.TempDir()),
 		Enabled:             []toolspec.ID{toolspec.ToolPatch},
 		MinimumExecToBgTime: 15 * time.Second,
 		ShellOutputMaxChars: 16_000,
@@ -622,7 +577,7 @@ func TestRuntimewireGeneratedPolicyPreservedAcrossWorkspaceRebind(t *testing.T) 
 	if err != nil {
 		t.Fatalf("new local tool registry binding: %v", err)
 	}
-	if err := binding.ReplaceFilesystemContext(localToolFilesystemContext(t, t.TempDir())); err != nil {
+	if err := binding.ReplaceFilesystemContext(runtimewirefixture.FilesystemContext(t, t.TempDir())); err != nil {
 		t.Fatalf("rebind: %v", err)
 	}
 	patchHandler, ok := binding.Registry().Get(toolspec.ToolPatch)
@@ -698,7 +653,7 @@ func TestLocalToolRegistryBindingRebindUpdatesExecCommandRoot(t *testing.T) {
 	if got := shellPwdOutput(t, binding.Registry()); got != canonicalPathForTest(t, rootA) {
 		t.Fatalf("pwd before rebind = %q, want %q", got, canonicalPathForTest(t, rootA))
 	}
-	if err := binding.ReplaceFilesystemContext(localToolFilesystemContext(t, rootB)); err != nil {
+	if err := binding.ReplaceFilesystemContext(runtimewirefixture.FilesystemContext(t, rootB)); err != nil {
 		t.Fatalf("rebind: %v", err)
 	}
 	if got := shellPwdOutput(t, binding.Registry()); got != canonicalPathForTest(t, rootB) {
@@ -706,23 +661,262 @@ func TestLocalToolRegistryBindingRebindUpdatesExecCommandRoot(t *testing.T) {
 	}
 }
 
-func TestLocalToolRegistryBindingReplacesCompleteFilesystemContext(t *testing.T) {
-	rootA := t.TempDir()
-	rootB := t.TempDir()
-	binding := newRuntimeWireBinding(t, rootA, toolspec.ToolExecCommand)
-	next := localToolFilesystemContext(t, rootB)
+func TestReplaceFilesystemContextReplacesNativeToolTrustAndProjectWorkspaces(t *testing.T) {
+	rootA := outsideNonTempDir(t)
+	rootB := outsideNonTempDir(t)
+	projectRootA := outsideNonTempDir(t)
+	projectRootB := outsideNonTempDir(t)
+	writeText := func(path string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte("before\n"), 0o644); err != nil {
+			t.Fatalf("write text fixture %s: %v", path, err)
+		}
+	}
+	writePDF := func(path string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte("%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n"), 0o644); err != nil {
+			t.Fatalf("write PDF fixture %s: %v", path, err)
+		}
+	}
+	for _, path := range []string{
+		filepath.Join(rootA, "patch.txt"),
+		filepath.Join(rootA, "edit.txt"),
+		filepath.Join(rootB, "patch.txt"),
+		filepath.Join(rootB, "edit.txt"),
+		filepath.Join(projectRootA, "patch.txt"),
+		filepath.Join(projectRootB, "patch.txt"),
+	} {
+		writeText(path)
+	}
+	writePDF(filepath.Join(rootA, "image.pdf"))
+	writePDF(filepath.Join(rootB, "image.pdf"))
+
+	initial, err := NewFilesystemContext(rootA, rootA, metadata.ProjectWorkspaceBoundary{
+		ProjectID:  "project",
+		Workspaces: []metadata.ProjectWorkspace{{CanonicalRoot: projectRootA}},
+	})
+	if err != nil {
+		t.Fatalf("initial filesystem context: %v", err)
+	}
+	binding, broker, _, err := NewLocalToolRegistryBinding(LocalToolRegistryOptions{
+		FilesystemContext:   initial,
+		Enabled:             []toolspec.ID{toolspec.ToolPatch, toolspec.ToolEdit, toolspec.ToolViewImage},
+		MinimumExecToBgTime: 15 * time.Second,
+		ShellOutputMaxChars: 16_000,
+		SupportsVision:      true,
+	})
+	if err != nil {
+		t.Fatalf("new local tool registry binding: %v", err)
+	}
+	approvalRequests := 0
+	broker.SetAskHandler(func(_ context.Context, _ askquestion.AskQuestionRequest) (askquestion.AskQuestionResolution, error) {
+		approvalRequests++
+		return askquestion.AskQuestionApproval{Decision: askquestion.AskQuestionApprovalDecisionDeny}, nil
+	})
+
+	next, err := NewFilesystemContext(rootB, rootB, metadata.ProjectWorkspaceBoundary{
+		ProjectID:  "project",
+		Workspaces: []metadata.ProjectWorkspace{{CanonicalRoot: projectRootB}},
+	})
+	if err != nil {
+		t.Fatalf("replacement filesystem context: %v", err)
+	}
 	if err := binding.ReplaceFilesystemContext(next); err != nil {
 		t.Fatalf("ReplaceFilesystemContext: %v", err)
 	}
-	if got := shellPwdOutput(t, binding.Registry()); got != canonicalPathForTest(t, rootB) {
-		t.Fatalf("pwd after context replacement = %q, want %q", got, canonicalPathForTest(t, rootB))
+
+	assertRuntimeWireToolSuccess(t, binding.Registry(), toolspec.ToolPatch, map[string]any{
+		"patch": "*** Begin Patch\n*** Update File: " + filepath.Join(rootB, "patch.txt") + "\n-before\n+after\n*** End Patch\n",
+	})
+	assertRuntimeWireToolSuccess(t, binding.Registry(), toolspec.ToolEdit, map[string]any{
+		"path":       filepath.Join(rootB, "edit.txt"),
+		"old_string": "before",
+		"new_string": "after",
+	})
+	assertRuntimeWireToolSuccess(t, binding.Registry(), toolspec.ToolViewImage, map[string]any{
+		"path": filepath.Join(rootB, "image.pdf"),
+	})
+	assertRuntimeWireToolSuccess(t, binding.Registry(), toolspec.ToolPatch, map[string]any{
+		"patch": "*** Begin Patch\n*** Update File: " + filepath.Join(projectRootB, "patch.txt") + "\n-before\n+after\n*** End Patch\n",
+	})
+	if approvalRequests != 0 {
+		t.Fatalf("replacement roots triggered %d approval requests", approvalRequests)
 	}
+
+	assertRuntimeWireToolError(t, binding.Registry(), toolspec.ToolPatch, map[string]any{
+		"patch": "*** Begin Patch\n*** Update File: " + filepath.Join(rootA, "patch.txt") + "\n-before\n+after\n*** End Patch\n",
+	})
+	assertRuntimeWireToolError(t, binding.Registry(), toolspec.ToolEdit, map[string]any{
+		"path":       filepath.Join(rootA, "edit.txt"),
+		"old_string": "before",
+		"new_string": "after",
+	})
+	assertRuntimeWireToolError(t, binding.Registry(), toolspec.ToolViewImage, map[string]any{
+		"path": filepath.Join(rootA, "image.pdf"),
+	})
+	assertRuntimeWireToolError(t, binding.Registry(), toolspec.ToolPatch, map[string]any{
+		"patch": "*** Begin Patch\n*** Update File: " + filepath.Join(projectRootA, "patch.txt") + "\n-before\n+after\n*** End Patch\n",
+	})
+	if approvalRequests != 4 {
+		t.Fatalf("retired roots triggered %d approval requests, want 4", approvalRequests)
+	}
+}
+
+func TestReplaceFilesystemContextReplacesMutationManagedWorktreePolicyWithoutRestrictingReads(t *testing.T) {
+	base := outsideNonTempDir(t)
+	currentRoot := filepath.Join(base, "current")
+	foreignRoot := filepath.Join(base, "foreign")
+	for _, root := range []string{currentRoot, foreignRoot} {
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			t.Fatalf("mkdir managed worktree root %s: %v", root, err)
+		}
+	}
+	foreignPatch := filepath.Join(foreignRoot, "patch.txt")
+	foreignEdit := filepath.Join(foreignRoot, "edit.txt")
+	foreignImage := filepath.Join(foreignRoot, "image.pdf")
+	for _, path := range []string{foreignPatch, foreignEdit} {
+		if err := os.WriteFile(path, []byte("before\n"), 0o644); err != nil {
+			t.Fatalf("write managed worktree fixture %s: %v", path, err)
+		}
+	}
+	if err := os.WriteFile(foreignImage, []byte("%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n"), 0o644); err != nil {
+		t.Fatalf("write managed worktree PDF: %v", err)
+	}
+	managed, err := tools.NewManagedWorktreePathContext(base, &currentRoot, []string{currentRoot, foreignRoot})
+	if err != nil {
+		t.Fatalf("NewManagedWorktreePathContext: %v", err)
+	}
+	initial := runtimewirefixture.FilesystemContext(t, currentRoot)
+	binding, _, _, err := NewLocalToolRegistryBinding(LocalToolRegistryOptions{
+		FilesystemContext:   initial,
+		Enabled:             []toolspec.ID{toolspec.ToolPatch, toolspec.ToolEdit, toolspec.ToolViewImage},
+		MinimumExecToBgTime: 15 * time.Second,
+		ShellOutputMaxChars: 16_000,
+		AllowNonCwdEdits:    true,
+		SupportsVision:      true,
+	})
+	if err != nil {
+		t.Fatalf("new local tool registry binding: %v", err)
+	}
+	next := initial.Clone()
+	next.ManagedWorktree = managed
+	if err := binding.ReplaceFilesystemContext(next); err != nil {
+		t.Fatalf("ReplaceFilesystemContext: %v", err)
+	}
+
+	assertRuntimeWireToolError(t, binding.Registry(), toolspec.ToolPatch, map[string]any{
+		"patch": "*** Begin Patch\n*** Update File: " + foreignPatch + "\n-before\n+after\n*** End Patch\n",
+	})
+	assertRuntimeWireToolError(t, binding.Registry(), toolspec.ToolEdit, map[string]any{
+		"path":       foreignEdit,
+		"old_string": "before",
+		"new_string": "after",
+	})
+	assertRuntimeWireToolSuccess(t, binding.Registry(), toolspec.ToolViewImage, map[string]any{
+		"path": foreignImage,
+	})
+}
+
+func TestReplaceFilesystemContextPreservesSessionApprovalsAcrossRebuildAndRejectedReplacement(t *testing.T) {
+	rootA := outsideNonTempDir(t)
+	rootB := outsideNonTempDir(t)
+	outside := outsideNonTempDir(t)
+	patchBefore := filepath.Join(outside, "patch-before.txt")
+	editAfter := filepath.Join(rootA, "edit-after.txt")
+	imageBefore := filepath.Join(outside, "image-before.pdf")
+	imageAfter := filepath.Join(rootA, "image-after.pdf")
+	for _, path := range []string{patchBefore, editAfter} {
+		if err := os.WriteFile(path, []byte("before\n"), 0o644); err != nil {
+			t.Fatalf("write edit fixture %s: %v", path, err)
+		}
+	}
+	for _, path := range []string{imageBefore, imageAfter} {
+		if err := os.WriteFile(path, []byte("%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n"), 0o644); err != nil {
+			t.Fatalf("write image fixture %s: %v", path, err)
+		}
+	}
+	binding, broker, _, err := NewLocalToolRegistryBinding(LocalToolRegistryOptions{
+		FilesystemContext:   runtimewirefixture.FilesystemContext(t, rootA),
+		Enabled:             []toolspec.ID{toolspec.ToolPatch, toolspec.ToolEdit, toolspec.ToolViewImage},
+		MinimumExecToBgTime: 15 * time.Second,
+		ShellOutputMaxChars: 16_000,
+		SupportsVision:      true,
+	})
+	if err != nil {
+		t.Fatalf("new local tool registry binding: %v", err)
+	}
+	approvalRequests := 0
+	broker.SetAskHandler(func(_ context.Context, _ askquestion.AskQuestionRequest) (askquestion.AskQuestionResolution, error) {
+		approvalRequests++
+		return askquestion.AskQuestionApproval{Decision: askquestion.AskQuestionApprovalDecisionAllowSession}, nil
+	})
+
+	assertRuntimeWireToolSuccess(t, binding.Registry(), toolspec.ToolPatch, map[string]any{
+		"patch": "*** Begin Patch\n*** Update File: " + patchBefore + "\n-before\n+after\n*** End Patch\n",
+	})
+	assertRuntimeWireToolSuccess(t, binding.Registry(), toolspec.ToolViewImage, map[string]any{"path": imageBefore})
+	assertRuntimeWireToolSuccess(t, binding.Registry(), toolspec.ToolViewImage, map[string]any{"path": imageBefore})
+	if approvalRequests != 2 {
+		t.Fatalf("fresh edit/read approval requests = %d, want 2", approvalRequests)
+	}
+
+	if err := binding.ReplaceFilesystemContext(runtimewirefixture.FilesystemContext(t, rootB)); err != nil {
+		t.Fatalf("ReplaceFilesystemContext: %v", err)
+	}
+	contextBeforeFailure := binding.FilesystemContext()
 	if err := binding.ReplaceFilesystemContext(tools.FilesystemContext{}); err == nil {
 		t.Fatal("ReplaceFilesystemContext accepted an invalid context")
 	}
-	if got := shellPwdOutput(t, binding.Registry()); got != canonicalPathForTest(t, rootB) {
-		t.Fatalf("pwd after rejected replacement = %q, want %q", got, canonicalPathForTest(t, rootB))
+	if !binding.FilesystemContext().Equal(contextBeforeFailure) {
+		t.Fatal("failed filesystem context replacement changed the active context")
 	}
+
+	assertRuntimeWireToolSuccess(t, binding.Registry(), toolspec.ToolEdit, map[string]any{
+		"path":       editAfter,
+		"old_string": "before",
+		"new_string": "after",
+	})
+	assertRuntimeWireToolSuccess(t, binding.Registry(), toolspec.ToolViewImage, map[string]any{"path": imageAfter})
+	if approvalRequests != 2 {
+		t.Fatalf("approval requests after rebuild = %d, want cached edit/read decisions", approvalRequests)
+	}
+}
+
+func assertRuntimeWireToolSuccess(t *testing.T, registry *tools.Registry, id toolspec.ID, input any) {
+	t.Helper()
+	result := callRuntimeWireTool(t, registry, id, input)
+	if result.IsError {
+		t.Fatalf("%s result = error: %s", id, string(result.Output))
+	}
+}
+
+func assertRuntimeWireToolError(t *testing.T, registry *tools.Registry, id toolspec.ID, input any) {
+	t.Helper()
+	result := callRuntimeWireTool(t, registry, id, input)
+	if !result.IsError {
+		t.Fatalf("%s result = success, want policy rejection", id)
+	}
+}
+
+func callRuntimeWireTool(t *testing.T, registry *tools.Registry, id toolspec.ID, input any) tools.Result {
+	t.Helper()
+	handler, ok := registry.Get(id)
+	if !ok {
+		t.Fatalf("missing %s handler", id)
+	}
+	encoded, err := json.Marshal(input)
+	if err != nil {
+		t.Fatalf("marshal %s input: %v", id, err)
+	}
+	result, err := handler.Call(context.Background(), tools.Call{
+		ID:    "runtimewire-" + string(id),
+		Name:  id,
+		Input: encoded,
+	})
+	if err != nil {
+		t.Fatalf("%s call: %v", id, err)
+	}
+	return result
 }
 
 func TestLocalToolRegistryBindingBindsExecutionCorrelationPerSuccessiveScope(t *testing.T) {
@@ -737,7 +931,7 @@ func TestLocalToolRegistryBindingBindsExecutionCorrelationPerSuccessiveScope(t *
 	t.Cleanup(func() { _ = manager.Close() })
 
 	binding, _, _, err := NewLocalToolRegistryBinding(LocalToolRegistryOptions{
-		FilesystemContext:   localToolFilesystemContext(t, workspace),
+		FilesystemContext:   runtimewirefixture.FilesystemContext(t, workspace),
 		Enabled:             []toolspec.ID{toolspec.ToolExecCommand},
 		MinimumExecToBgTime: 50 * time.Millisecond,
 		ShellOutputMaxChars: 16_000,
@@ -926,7 +1120,7 @@ func TestRuntimeWiringExecCommandUsesEffectiveHookAcrossWorkspaceRebind(t *testi
 	if got := callRuntimeWireExec(t, wiring.LocalTools.Registry(), "printf original"); got != effectiveHook {
 		t.Fatalf("effective hook output = %q, want %q", got, effectiveHook)
 	}
-	if err := wiring.LocalTools.ReplaceFilesystemContext(localToolFilesystemContext(t, rootB)); err != nil {
+	if err := wiring.LocalTools.ReplaceFilesystemContext(runtimewirefixture.FilesystemContext(t, rootB)); err != nil {
 		t.Fatalf("rebind: %v", err)
 	}
 	if got := callRuntimeWireExec(t, wiring.LocalTools.Registry(), "printf rebound"); got != effectiveHook {
@@ -1035,26 +1229,6 @@ func TestNewLocalToolRegistryBindingRejectsEmptyWorkspaceRoot(t *testing.T) {
 	}
 }
 
-func localToolFilesystemContext(t testing.TB, root string) tools.FilesystemContext {
-	t.Helper()
-	real, err := filepath.EvalSymlinks(root)
-	if err != nil {
-		t.Fatalf("resolve filesystem root: %v", err)
-	}
-	info, err := os.Stat(real)
-	if err != nil {
-		t.Fatalf("stat filesystem root: %v", err)
-	}
-	filesystemRoot := tools.FilesystemRoot{LexicalPath: root, RealPath: real, Info: info}
-	return tools.FilesystemContext{
-		Access: tools.FileAccessScope{
-			WorkingDirectory:    filesystemRoot,
-			ExecutionTargetRoot: filesystemRoot,
-			ProjectWorkspace:    tools.ProjectWorkspaceScope{ProjectID: "test"},
-		},
-	}
-}
-
 func TestNewFilesystemContextValidatesNamedRoots(t *testing.T) {
 	t.Parallel()
 	executionRoot := t.TempDir()
@@ -1148,12 +1322,16 @@ func TestMissingSecondaryWorkspaceIdentityTrustsItsLaterMaterializedRoot(t *test
 	if err != nil {
 		t.Fatalf("resolve secondary file: %v", err)
 	}
-	guard := tools.NewFSGuard(tools.FSGuardConfig{
-		Scope:         filesystemContext.Access,
-		WorkspaceOnly: true,
+	policy, err := tools.NewFileAccessPolicy(tools.FileAccessPolicyConfig{
+		Context: filesystemContext,
+		Mode:    tools.FileAccessRead,
 	})
-	if _, err := guard.Allow(context.Background(), target, resolved, nil); err != nil {
-		t.Fatalf("missing secondary identity was not trusted after materialization: %v", err)
+	if err != nil {
+		t.Fatalf("NewFileAccessPolicy: %v", err)
+	}
+	outcome := policy.BeginCall().Authorize(context.Background(), target, resolved)
+	if !outcome.IsAllowed() || outcome.Reason != tools.FileAccessReasonTrustedRoot {
+		t.Fatalf("missing secondary identity authorization = %+v, want trusted root", outcome)
 	}
 }
 
@@ -1247,7 +1425,7 @@ func outsideNonTempDir(t *testing.T) string {
 	return testsetup.NonTemporaryDirectory(
 		t,
 		"kent-runtimewire-outside-",
-		patchtool.IsPathInTemporaryDir,
+		tools.IsPathInTemporaryDir,
 	)
 }
 
@@ -1277,7 +1455,7 @@ func newRuntimeWireToolRegistry(t *testing.T, workspace string, enabled ...tools
 func newRuntimeWireLoggedToolRegistry(t *testing.T, workspace string, logger Logger, enabled ...toolspec.ID) (*tools.Registry, *askquestion.AskQuestionBroker) {
 	t.Helper()
 	binding, broker, _, err := NewLocalToolRegistryBinding(LocalToolRegistryOptions{
-		FilesystemContext:   localToolFilesystemContext(t, workspace),
+		FilesystemContext:   runtimewirefixture.FilesystemContext(t, workspace),
 		Enabled:             enabled,
 		MinimumExecToBgTime: 15 * time.Second,
 		ShellOutputMaxChars: 16_000,
@@ -1293,7 +1471,7 @@ func newRuntimeWireLoggedToolRegistry(t *testing.T, workspace string, logger Log
 func newRuntimeWireToolRegistryWithConfig(t *testing.T, workspace string, configRoot string, allowNonCwdEdits bool, enabled ...toolspec.ID) (*tools.Registry, *askquestion.AskQuestionBroker) {
 	t.Helper()
 	binding, broker, _, err := NewLocalToolRegistryBinding(LocalToolRegistryOptions{
-		FilesystemContext:   localToolFilesystemContext(t, workspace),
+		FilesystemContext:   runtimewirefixture.FilesystemContext(t, workspace),
 		Enabled:             enabled,
 		MinimumExecToBgTime: 15 * time.Second,
 		ShellOutputMaxChars: 16_000,
@@ -1310,7 +1488,7 @@ func newRuntimeWireToolRegistryWithConfig(t *testing.T, workspace string, config
 func newRuntimeWireBinding(t *testing.T, workspace string, enabled ...toolspec.ID) *LocalToolRegistryBinding {
 	t.Helper()
 	binding, _, _, err := NewLocalToolRegistryBinding(LocalToolRegistryOptions{
-		FilesystemContext:   localToolFilesystemContext(t, workspace),
+		FilesystemContext:   runtimewirefixture.FilesystemContext(t, workspace),
 		Enabled:             enabled,
 		MinimumExecToBgTime: 15 * time.Second,
 		ShellOutputMaxChars: 16_000,
