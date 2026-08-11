@@ -307,6 +307,39 @@ To respond, run: kent run steer <source-session-id> "message"
 - Kent does not bind an offset to a previous query.
 - If items are inserted, removed, or reordered between offset requests, later results may repeat or skip items.
 
+### Task Session listing
+
+- `kent task sessions <task-short-id-or-task-id>` lists every retained agent Session associated with the selected Task.
+- A Task Short ID uses `--project`, which defaults to the Project attached to the current workspace.
+- Script Nodes do not produce Session rows.
+- Sessions from parallel branches are ordinary rows and receive no special grouping or treatment.
+- The command accepts `--offset`, `--limit`, and `--json`.
+- Human and JSON output use the common offset-pagination contract.
+- Kent may project the complete task-scoped active Session set because actual concurrent runtime work is already bounded by configured Workflow concurrency, finite live Workflow Nodes, and machine capacity; registered-idle resources are excluded from this set and it receives no duplicate pagination limit.
+- Reads through retained Idle Session history remain bounded by the requested limit and do not read Session transcript history.
+- A Session is `Running` when it has live runtime activity in startup, active work, draining, or closing.
+- A Session is `Question` while waiting on any runtime prompt, including an ordinary Question, an Approval, or both.
+- Every retained Session without live runtime activity is `Idle`.
+- A retained Task Session continued through the ordinary Session launch path uses the same live statuses even when it is not currently executing through a Workflow Node.
+- The command exposes no separate `Approval` Session status.
+- The command defines no durable `Completed` Session status.
+- `Running` Sessions precede `Question` Sessions, which precede `Idle` Sessions.
+- Within each status group, Sessions are ordered by creation time descending and then Session ID descending.
+- Human output chooses a label from Session name, the associated Node's current display name, then Assignee.
+- If the retained Node association does not resolve, human output continues directly to the Assignee fallback.
+- The command does not retain a historical Node-name snapshot.
+- A human row is `<label> (<session-id>): <status>`.
+- If the selected label equals the Session ID, the row is `<session-id>: <status>`.
+- Human output has no heading.
+- An empty human result writes nothing.
+- JSON output is one object with `task_id`, `items`, and optional `next_offset`.
+- Each JSON item has `session_id`, optional `session_name`, optional `node_name`, `agent_role`, and `status`.
+- JSON status is `running`, `question`, or `idle`.
+- JSON does not expose the human fallback label.
+- Concurrent Session startup or runtime-state changes may temporarily omit a just-starting Session or report a stale status.
+- Every retained Session remains eligible for a later listing after its durable Task association settles.
+- The command adds no retry, synchronization, or special error behavior.
+
 ### Workflow and Task mutation
 
 - Agents can build and edit complete Workflow definitions through high-level commands and graph inspect/apply.

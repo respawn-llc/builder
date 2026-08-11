@@ -3833,6 +3833,75 @@ func (q *Queries) InterruptSerialCurrentNode(ctx context.Context, arg InterruptS
 	return result.RowsAffected()
 }
 
+const listActiveWorkflowTaskSessions = `-- name: ListActiveWorkflowTaskSessions :many
+
+SELECT
+    session.id AS session_id,
+    session.name AS session_name,
+    node.display_name AS node_name,
+    session.continuation_json,
+    session.created_at_unix_ms
+FROM sessions session
+LEFT JOIN session_workflow_node_associations association
+    ON association.rowid = (
+        SELECT candidate.rowid
+        FROM session_workflow_node_associations candidate
+        WHERE candidate.session_id = session.id
+        ORDER BY candidate.associated_at_unix_ms DESC, candidate.node_id DESC
+        LIMIT 1
+    )
+LEFT JOIN workflow_nodes node ON node.id = association.node_id
+
+WHERE session.task_id = ?1
+  AND session.id IN (
+      SELECT CAST(active.value AS TEXT)
+      FROM json_each(CAST(?2 AS TEXT)) active
+  )
+`
+
+type ListActiveWorkflowTaskSessionsParams struct {
+	TaskID         sql.NullString
+	SessionIdsJson string
+}
+
+type ListActiveWorkflowTaskSessionsRow struct {
+	SessionID        string
+	SessionName      string
+	NodeName         sql.NullString
+	ContinuationJson string
+	CreatedAtUnixMs  int64
+}
+
+func (q *Queries) ListActiveWorkflowTaskSessions(ctx context.Context, arg ListActiveWorkflowTaskSessionsParams) ([]ListActiveWorkflowTaskSessionsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listActiveWorkflowTaskSessions, arg.TaskID, arg.SessionIdsJson)
+	err = recordQueryError(ctx, err, listActiveWorkflowTaskSessions, 2)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListActiveWorkflowTaskSessionsRow
+	for rows.Next() {
+		var i ListActiveWorkflowTaskSessionsRow
+		if err := recordQueryError(ctx, rows.Scan(
+			&i.SessionID,
+			&i.SessionName,
+			&i.NodeName,
+			&i.ContinuationJson,
+			&i.CreatedAtUnixMs,
+		), listActiveWorkflowTaskSessions, 2); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := recordQueryError(ctx, rows.Close(), listActiveWorkflowTaskSessions, 2); err != nil {
+		return nil, err
+	}
+	if err := recordQueryError(ctx, rows.Err(), listActiveWorkflowTaskSessions, 2); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listBoardColumnTaskCounts = `-- name: ListBoardColumnTaskCounts :many
 WITH
 label_filter_args AS (
@@ -4292,6 +4361,89 @@ func (q *Queries) ListBoardNodeTasks(ctx context.Context, arg ListBoardNodeTasks
 		return nil, err
 	}
 	if err := recordQueryError(ctx, rows.Err(), listBoardNodeTasks, 12); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listIdleWorkflowTaskSessions = `-- name: ListIdleWorkflowTaskSessions :many
+
+SELECT
+    session.id AS session_id,
+    session.name AS session_name,
+    node.display_name AS node_name,
+    session.continuation_json,
+    session.created_at_unix_ms
+FROM sessions session
+LEFT JOIN session_workflow_node_associations association
+    ON association.rowid = (
+        SELECT candidate.rowid
+        FROM session_workflow_node_associations candidate
+        WHERE candidate.session_id = session.id
+        ORDER BY candidate.associated_at_unix_ms DESC, candidate.node_id DESC
+        LIMIT 1
+    )
+LEFT JOIN workflow_nodes node ON node.id = association.node_id
+
+WHERE session.task_id = ?1
+  AND NOT EXISTS (
+      SELECT 1
+      FROM json_each(CAST(?2 AS TEXT)) excluded
+      WHERE CAST(excluded.value AS TEXT) = session.id
+  )
+ORDER BY
+    session.created_at_unix_ms DESC,
+    CAST('session_started:' || session.id AS TEXT) DESC
+LIMIT ?4
+OFFSET ?3
+`
+
+type ListIdleWorkflowTaskSessionsParams struct {
+	TaskID                 sql.NullString
+	ExcludedSessionIdsJson string
+	PageOffset             int64
+	PageLimit              int64
+}
+
+type ListIdleWorkflowTaskSessionsRow struct {
+	SessionID        string
+	SessionName      string
+	NodeName         sql.NullString
+	ContinuationJson string
+	CreatedAtUnixMs  int64
+}
+
+func (q *Queries) ListIdleWorkflowTaskSessions(ctx context.Context, arg ListIdleWorkflowTaskSessionsParams) ([]ListIdleWorkflowTaskSessionsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listIdleWorkflowTaskSessions,
+		arg.TaskID,
+		arg.ExcludedSessionIdsJson,
+		arg.PageOffset,
+		arg.PageLimit,
+	)
+	err = recordQueryError(ctx, err, listIdleWorkflowTaskSessions, 4)
+
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListIdleWorkflowTaskSessionsRow
+	for rows.Next() {
+		var i ListIdleWorkflowTaskSessionsRow
+		if err := recordQueryError(ctx, rows.Scan(
+			&i.SessionID,
+			&i.SessionName,
+			&i.NodeName,
+			&i.ContinuationJson,
+			&i.CreatedAtUnixMs,
+		), listIdleWorkflowTaskSessions, 4); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := recordQueryError(ctx, rows.Close(), listIdleWorkflowTaskSessions, 4); err != nil {
+		return nil, err
+	}
+	if err := recordQueryError(ctx, rows.Err(), listIdleWorkflowTaskSessions, 4); err != nil {
 		return nil, err
 	}
 	return items, nil
