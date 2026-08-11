@@ -34,10 +34,10 @@ func (e goalRuntimeUnavailablePresentationError) Error() string {
 type goalCommandRemote interface {
 	ShowGoal(context.Context, serverapi.RuntimeGoalShowRequest) (serverapi.RuntimeGoalShowResponse, error)
 	SetGoal(context.Context, serverapi.RuntimeGoalSetRequest) (serverapi.RuntimeGoalMutationResponse, error)
-	PauseGoal(context.Context, serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalShowResponse, error)
-	ResumeGoal(context.Context, serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalShowResponse, error)
-	CompleteGoal(context.Context, serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalShowResponse, error)
-	ClearGoal(context.Context, serverapi.RuntimeGoalClearRequest) (serverapi.RuntimeGoalShowResponse, error)
+	PauseGoal(context.Context, serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalMutationResponse, error)
+	ResumeGoal(context.Context, serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalMutationResponse, error)
+	CompleteGoal(context.Context, serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalMutationResponse, error)
+	ClearGoal(context.Context, serverapi.RuntimeGoalClearRequest) (serverapi.RuntimeGoalMutationResponse, error)
 	Close() error
 }
 
@@ -152,7 +152,7 @@ func goalSetSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			fmt.Fprintln(stderr, goalMutationCommandError(target, err))
 			return 1
 		}
-		writeGoalShowText(stdout, resp.Goal)
+		writeGoalMutationText(stdout, resp)
 		return 0
 	})
 }
@@ -185,7 +185,7 @@ func goalStatusSubcommand(action string, args []string, stdout io.Writer, stderr
 		ctx, cancel := context.WithTimeout(context.Background(), goalCommandTimeout)
 		defer cancel()
 		var (
-			resp    serverapi.RuntimeGoalShowResponse
+			resp    serverapi.RuntimeGoalMutationResponse
 			callErr error
 		)
 		if action == "pause" {
@@ -197,7 +197,7 @@ func goalStatusSubcommand(action string, args []string, stdout io.Writer, stderr
 			fmt.Fprintln(stderr, goalMutationCommandError(target, callErr))
 			return 1
 		}
-		writeGoalShowText(stdout, resp.Goal)
+		writeGoalMutationText(stdout, resp)
 		return 0
 	})
 }
@@ -251,7 +251,7 @@ func goalCompleteSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 			fmt.Fprintln(stderr, goalMutationCommandError(target, err))
 			return 1
 		}
-		writeGoalShowText(stdout, resp.Goal)
+		writeGoalMutationText(stdout, resp)
 		return 0
 	})
 }
@@ -329,6 +329,18 @@ func writeGoalShowText(stdout io.Writer, goal *serverapi.RuntimeGoal) {
 		return
 	}
 	fmt.Fprintf(stdout, "Goal: %s\nStatus: %s\n", goal.Objective, goal.Status)
+}
+
+func writeGoalMutationText(stdout io.Writer, response serverapi.RuntimeGoalMutationResponse) {
+	if response.Goal != nil {
+		writeGoalShowText(stdout, response.Goal)
+		return
+	}
+	if response.Pending != nil {
+		fmt.Fprintf(stdout, "Goal: %s\nStatus: %s\n", response.Pending.Objective, response.Pending.Status)
+		return
+	}
+	fmt.Fprintln(stdout, "No goal")
 }
 
 func goalMutationCommandError(sessionID string, err error) error {

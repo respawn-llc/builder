@@ -1218,7 +1218,9 @@ func TestServiceShowGoalReturnsCommittedStateAroundQueuedGoalDrain(t *testing.T)
 	if err != nil {
 		t.Fatalf("SetGoal queued mutation: %v", err)
 	}
-	if accepted.Pending == nil || accepted.Pending.Objective != "accepted pending goal" || accepted.Pending.Status != clientui.RuntimeGoalStatusActive || accepted.Goal != nil { t.Fatalf("SetGoal accepted response = %+v, want pending preview", accepted) }
+	if accepted.Pending == nil || accepted.Pending.Objective != "accepted pending goal" || accepted.Pending.Status != clientui.RuntimeGoalStatusActive || accepted.Goal != nil {
+		t.Fatalf("SetGoal accepted response = %+v, want pending preview", accepted)
+	}
 
 	beforeDrain, err := service.ShowGoal(context.Background(), serverapi.RuntimeGoalShowRequest{SessionID: store.Meta().SessionID})
 	if err != nil {
@@ -1226,6 +1228,34 @@ func TestServiceShowGoalReturnsCommittedStateAroundQueuedGoalDrain(t *testing.T)
 	}
 	if beforeDrain.Goal == nil || beforeDrain.Goal.ID != initialGoal.ID || beforeDrain.Goal.Objective != initialGoal.Objective {
 		t.Fatalf("ShowGoal before drain = %+v, want prior committed goal %+v", beforeDrain.Goal, initialGoal)
+	}
+	for _, test := range []struct {
+		name string
+		call func(context.Context, serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalMutationResponse, error)
+		want clientui.RuntimeGoalStatus
+	}{
+		{name: "pause", call: service.PauseGoal, want: clientui.RuntimeGoalStatusPaused},
+		{name: "resume", call: service.ResumeGoal, want: clientui.RuntimeGoalStatusActive},
+		{name: "complete", call: service.CompleteGoal, want: clientui.RuntimeGoalStatusComplete},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resp, err := test.call(context.Background(), serverapi.RuntimeGoalStatusRequest{
+				ClientRequestID: "goal-" + test.name + "-queued",
+				SessionID:       store.Meta().SessionID,
+				Actor:           string(session.GoalActorUser),
+			})
+			if err != nil || resp.Goal != nil || resp.Pending == nil || resp.Pending.Objective != "accepted pending goal" || resp.Pending.Status != test.want {
+				t.Fatalf("%s response = %+v, err=%v, want pending %q", test.name, resp, err, test.want)
+			}
+		})
+	}
+	cleared, err := service.ClearGoal(context.Background(), serverapi.RuntimeGoalClearRequest{
+		ClientRequestID: "goal-clear-queued",
+		SessionID:       store.Meta().SessionID,
+		Actor:           string(session.GoalActorUser),
+	})
+	if err != nil || cleared.Goal != nil || cleared.Pending != nil || cleared.Availability != clientui.GoalAvailabilityAvailable {
+		t.Fatalf("queued Clear response = %+v, err=%v, want accepted structural no-Goal response", cleared, err)
 	}
 
 	close(client.release)
@@ -1243,7 +1273,9 @@ func TestServiceShowGoalReturnsCommittedStateAroundQueuedGoalDrain(t *testing.T)
 	if err != nil {
 		t.Fatalf("ShowGoal after drain: %v", err)
 	}
-	if afterDrain.Goal == nil || afterDrain.Goal.Objective != accepted.Pending.Objective || afterDrain.Goal.Status != accepted.Pending.Status { t.Fatalf("ShowGoal after drain = %+v, want committed accepted goal %+v", afterDrain.Goal, accepted.Pending) }
+	if afterDrain.Goal != nil {
+		t.Fatalf("ShowGoal after drain = %+v, want cleared goal", afterDrain.Goal)
+	}
 }
 
 func TestServiceWorkflowRuntimeAllowsGoalControl(t *testing.T) {
@@ -1701,7 +1733,9 @@ func TestServiceResumeGoalDuringInterruptSchedulesRestartWithReminder(t *testing
 	if err != nil {
 		t.Fatalf("ResumeGoal: %v", err)
 	}
-	if resp.Goal == nil || resp.Goal.Objective != goal.Objective || resp.Goal.Status != clientui.RuntimeGoalStatusActive { t.Fatalf("resume suspending active response = %+v, want existing active goal", resp) }
+	if resp.Goal == nil || resp.Goal.Objective != goal.Objective || resp.Goal.Status != clientui.RuntimeGoalStatusActive {
+		t.Fatalf("resume suspending active response = %+v, want existing active goal", resp)
+	}
 	client.releaseFirst()
 	select {
 	case <-client.call2Started:

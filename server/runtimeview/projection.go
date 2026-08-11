@@ -53,7 +53,10 @@ func StatusFromRuntime(engine *runtime.Engine) (clientui.RuntimeStatus, error) {
 	if engine == nil {
 		return clientui.RuntimeStatus{}, nil
 	}
-	goalAvailability, err := engine.GoalAvailability(); if err != nil { return clientui.RuntimeStatus{}, err }
+	goalAvailability, err := engine.GoalAvailability()
+	if err != nil {
+		return clientui.RuntimeStatus{}, err
+	}
 	freshness, err := engine.ConversationFreshness()
 	if err != nil {
 		return clientui.RuntimeStatus{}, err
@@ -127,7 +130,11 @@ func TranscriptSessionStatusFromRuntime(engine *runtime.Engine) (clientui.Transc
 }
 
 func GoalFromSessionState(goal *session.GoalState, availability clientui.GoalAvailability, suspended bool) *clientui.RuntimeGoal {
-	projected := clientui.RuntimeGoalFromEnvelope(clientui.ProjectGoal(session.GoalCoreFromState(goal), availability), suspended); return &projected
+	if goal == nil {
+		return nil
+	}
+	projected := clientui.RuntimeGoalFromEnvelope(clientui.ProjectGoal(session.GoalCoreFromState(goal), availability), suspended)
+	return &projected
 }
 
 func SessionViewFromRuntime(engine *runtime.Engine) (clientui.RuntimeSessionView, error) {

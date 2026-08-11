@@ -305,6 +305,15 @@ func TestGoalMarkdownLinksStayBoundedAndDoNotReachPadding(t *testing.T) {
 	}
 }
 
+func TestGoalOverlayRendersPendingPreviewWithoutDurableID(t *testing.T) {
+	m := newProjectedStaticUIModel()
+	m.goal.goal = runtimeGoalPendingFixture("ship the queued goal", clientui.RuntimeGoalStatusPaused)
+	content := strings.Join(m.layout().goalOverlayContentLines(80), "\n")
+	if !strings.Contains(content, "ship the queued goal") || !strings.Contains(content, "paused") || strings.Contains(content, noGoalHint) || strings.Contains(content, "ID:") {
+		t.Fatalf("pending Goal overlay = %q, want objective/status without no-goal or durable ID presentation", content)
+	}
+}
+
 func TestStartupHeaderTrimmingPreservesMarkdownHyperlinks(t *testing.T) {
 	const target = "https://github.com/org/repo/pull/456"
 	for _, presentation := range []struct {

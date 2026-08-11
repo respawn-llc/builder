@@ -62,11 +62,48 @@ func TestGoalSetEmitsCommittedGoalFeedbackEvent(t *testing.T) {
 }
 
 func TestGoalLifecycleCarriesMissingAskQuestionCapability(t *testing.T) {
-	store:=mustCreateNamedTestSession(t,"workspace-x","/tmp/workspace-x");if err:=store.MarkModelDispatchLocked(session.LockedContract{EnabledTools:[]string{string(toolspec.ToolExecCommand)}});err!=nil{t.Fatal(err)};events:=[]Event{};engine:=mustNewTestEngine(t,store,&fakeClient{},tools.NewRegistry(),Config{OnEvent:func(evt Event){events=append(events,evt)}});assertMissing:=func(name string){u:=events[len(events)-1].GoalStatus;if u==nil||u.Availability!=clientui.GoalAvailabilityAgentCapabilityMissing{t.Fatalf("goal %s update=%+v",name,u)}};if _,err:=engine.SetGoal("goal",session.GoalActorUser);err!=nil{t.Fatal(err)};assertMissing("set");if _,err:=engine.SetGoal("replacement",session.GoalActorUser);err!=nil{t.Fatal(err)};assertMissing("replace");for _,status:=range []session.GoalStatus{session.GoalStatusPaused,session.GoalStatusActive,session.GoalStatusComplete}{if _,err:=engine.SetGoalStatusWithoutGoalLoopStart(status,session.GoalActorUser);err!=nil{t.Fatal(err)};assertMissing(string(status))};if _,err:=engine.ClearGoal(session.GoalActorUser);err!=nil{t.Fatal(err)};assertMissing("clear")
+	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
+	if err := store.MarkModelDispatchLocked(session.LockedContract{EnabledTools: []string{string(toolspec.ToolExecCommand)}}); err != nil {
+		t.Fatal(err)
+	}
+	events := []Event{}
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{OnEvent: func(evt Event) { events = append(events, evt) }})
+	assertMissing := func(name string) {
+		u := events[len(events)-1].GoalStatus
+		if u == nil || u.Availability != clientui.GoalAvailabilityAgentCapabilityMissing {
+			t.Fatalf("goal %s update=%+v", name, u)
+		}
+	}
+	if _, err := engine.SetGoal("goal", session.GoalActorUser); err != nil {
+		t.Fatal(err)
+	}
+	assertMissing("set")
+	if _, err := engine.SetGoal("replacement", session.GoalActorUser); err != nil {
+		t.Fatal(err)
+	}
+	assertMissing("replace")
+	for _, status := range []session.GoalStatus{session.GoalStatusPaused, session.GoalStatusActive, session.GoalStatusComplete} {
+		if _, err := engine.SetGoalStatusWithoutGoalLoopStart(status, session.GoalActorUser); err != nil {
+			t.Fatal(err)
+		}
+		assertMissing(string(status))
+	}
+	if _, err := engine.ClearGoal(session.GoalActorUser); err != nil {
+		t.Fatal(err)
+	}
+	assertMissing("clear")
 }
 
 func TestGoalNoticeFailureDoesNotEmitStatus(t *testing.T) {
-	store:=mustCreateNamedTestSession(t,"workspace-x","/tmp/workspace-x");events:=[]Event{};engine:=mustNewTestEngine(t,store,&fakeClient{},tools.NewRegistry(),Config{OnEvent:func(evt Event){events=append(events,evt)}});mustBlockTestEventLogAppends(t,store);result:=GoalCommandResult{};err:=engine.finishGoalOutput("",llm.Message{Role:llm.RoleDeveloper,Content:textutil.Value("goal")},&result,GoalStatusUpdate{});if err==nil||result.NoticeReceipt.Committed||len(events)!=0{t.Fatalf("notice failure err=%v receipt=%+v events=%+v",err,result.NoticeReceipt,events)}
+	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
+	events := []Event{}
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{OnEvent: func(evt Event) { events = append(events, evt) }})
+	mustBlockTestEventLogAppends(t, store)
+	result := GoalCommandResult{}
+	err := engine.finishGoalOutput("", llm.Message{Role: llm.RoleDeveloper, Content: textutil.Value("goal")}, &result, GoalStatusUpdate{})
+	if err == nil || result.NoticeReceipt.Committed || len(events) != 0 {
+		t.Fatalf("notice failure err=%v receipt=%+v events=%+v", err, result.NoticeReceipt, events)
+	}
 }
 
 func TestQueuedAgentShellGoalSetDrainsAfterToolCompletion(t *testing.T) {
@@ -285,29 +322,35 @@ func TestGoalMutationsEmitGoalStatusEventsAfterFeedback(t *testing.T) {
 	}
 	assertGoalFeedbackThenStatusEvent(t, events, 0, set.GoalState, false)
 
+	replaced, err := engine.SetGoal("replace goal mode", session.GoalActorUser)
+	if err != nil {
+		t.Fatalf("replace goal: %v", err)
+	}
+	assertGoalFeedbackThenStatusEvent(t, events, 2, replaced.GoalState, false)
+
 	paused, err := engine.SetGoalStatus(session.GoalStatusPaused, session.GoalActorUser)
 	if err != nil {
 		t.Fatalf("pause goal: %v", err)
 	}
-	assertGoalFeedbackThenStatusEvent(t, events, 2, paused.GoalState, false)
+	assertGoalFeedbackThenStatusEvent(t, events, 4, paused.GoalState, false)
 
 	active, err := engine.SetGoalStatus(session.GoalStatusActive, session.GoalActorUser)
 	if err != nil {
 		t.Fatalf("resume goal: %v", err)
 	}
-	assertGoalFeedbackThenStatusEvent(t, events, 4, active.GoalState, false)
+	assertGoalFeedbackThenStatusEvent(t, events, 6, active.GoalState, false)
 
 	complete, err := engine.SetGoalStatus(session.GoalStatusComplete, session.GoalActorAgent)
 	if err != nil {
 		t.Fatalf("complete goal: %v", err)
 	}
-	assertGoalFeedbackThenStatusEvent(t, events, 6, complete.GoalState, false)
+	assertGoalFeedbackThenStatusEvent(t, events, 8, complete.GoalState, false)
 
 	cleared, err := engine.ClearGoal(session.GoalActorUser)
 	if err != nil {
 		t.Fatalf("clear goal: %v", err)
 	}
-	assertGoalFeedbackThenStatusEvent(t, events, 8, cleared.GoalState, true)
+	assertGoalFeedbackThenStatusEvent(t, events, 10, cleared.GoalState, true)
 }
 
 func TestConcurrentGoalMutationsDoNotInterleaveBetweenMetadataAndStatusEvent(t *testing.T) {
@@ -414,6 +457,9 @@ func assertGoalFeedbackThenStatusEvent(t *testing.T, events []Event, start int, 
 	}
 	if cleared {
 		return
+	}
+	if goal.CreatedAt.IsZero() || goal.UpdatedAt.IsZero() {
+		t.Fatalf("goal timestamps = %s/%s, want nonzero", goal.CreatedAt, goal.UpdatedAt)
 	}
 	if status.GoalStatus.State.ID != goal.ID || status.GoalStatus.State.Objective != goal.Objective || status.GoalStatus.State.Status != goal.Status {
 		t.Fatalf("goal status state = %+v, want %+v", status.GoalStatus.State, goal)
@@ -1110,6 +1156,9 @@ func TestNewDoesNotRestartPersistedActiveGoalLoop(t *testing.T) {
 
 func TestNewOpensPersistedActiveGoalWhenAskQuestionDisabled(t *testing.T) {
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
+	if err := store.MarkModelDispatchLocked(session.LockedContract{EnabledTools: []string{string(toolspec.ToolExecCommand)}}); err != nil {
+		t.Fatalf("lock model dispatch: %v", err)
+	}
 	if _, _, err := store.SetGoal("ship goal mode", session.GoalActorUser); err != nil {
 		t.Fatalf("SetGoal: %v", err)
 	}
@@ -1124,6 +1173,9 @@ func TestNewOpensPersistedActiveGoalWhenAskQuestionDisabled(t *testing.T) {
 	}
 	if engine.GoalLoopSuspended() {
 		t.Fatal("did not expect reopened active goal to be reported suspended before an explicit start attempt")
+	}
+	if availability, err := engine.GoalAvailability(); err != nil || availability != clientui.GoalAvailabilityAgentCapabilityMissing {
+		t.Fatalf("reopened goal availability = %q, err=%v, want missing ask_question", availability, err)
 	}
 	waitGoalLoopRunning(t, engine, false)
 	if got := client.callCount(); got != 0 {

@@ -4,10 +4,14 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"core/server/llm"
+	"core/server/requestmemo"
 	"core/server/runtime"
 	"core/server/runtimeactivity"
+	"core/server/runtimecommand"
+	"core/server/runtimeops"
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/sessionruntime"
@@ -53,6 +57,31 @@ func TestServiceSetThinkingLevelDedupesSuccessfulRetry(t *testing.T) {
 	}
 	if got := engine.ThinkingLevel(); got != "high" {
 		t.Fatalf("thinking level = %q, want high", got)
+	}
+}
+
+func TestGoalMutationOutputFailureIsMemoized(t *testing.T) {
+	outputErr := errors.New("goal status output failed")
+	service := &Service{
+		goalAuthority: runtimecommand.NewGoalAuthority(nil, nil),
+		goals:         requestmemo.New[goalSetMemoRequest, committedGoalMutationResult](),
+	}
+	req := goalSetMemoRequest{SessionID: "session-1", Objective: "ship it", Actor: "user"}
+	calls := 0
+	run := func(context.Context) (runtimecommand.GoalCommandResult, error) {
+		calls++
+		now := time.Now().UTC()
+		return runtimecommand.GoalCommandResult{
+			Goal:         &session.GoalState{ID: "goal-1", Objective: req.Objective, Status: session.GoalStatusActive, CreatedAt: now, UpdatedAt: now},
+			Availability: clientui.GoalAvailabilityAvailable,
+			Disposition:  runtime.GoalCommandApplied,
+			Err:          outputErr,
+		}, nil
+	}
+	first, firstErr := memoizedGoalMutation(service, context.Background(), "goal-request-1", req, service.goals, sameGoalSetMemoRequest, run)
+	second, secondErr := memoizedGoalMutation(service, context.Background(), "goal-request-1", req, service.goals, sameGoalSetMemoRequest, run)
+	if !errors.Is(firstErr, outputErr) || !errors.Is(secondErr, outputErr) || first.Goal == nil || second.Goal == nil || first.Goal.ID != second.Goal.ID || calls != 1 {
+		t.Fatalf("memoized Goal output failure = (%+v,%v), (%+v,%v), calls=%d", first, firstErr, second, secondErr, calls)
 	}
 }
 

@@ -43,7 +43,10 @@ func TranscriptHydrationFromSnapshotChecked(runtimeSnapshot runtime.TranscriptHy
 	hydration.ActiveReviewer = transcriptReviewerStateFromRuntime(runtimeSnapshot.ActiveReviewer)
 	hydration.ActiveCompaction = transcriptCompactionStateFromRuntime(runtimeSnapshot.ActiveCompaction)
 	hydration.ContextUsage = transcriptContextUsageFromRuntime(runtimeSnapshot.ContextUsage)
-	hydration.GoalStatus = transcriptGoalStatusFromRuntime(runtimeSnapshot.Goal, runtimeSnapshot.GoalAvailability, runtimeSnapshot.GoalSuspended); if err := hydration.GoalStatus.Validate(); err != nil { return clientui.TranscriptHydration{}, fmt.Errorf("project goal hydration: %w", err) }
+	hydration.GoalStatus = transcriptGoalStatusFromRuntime(runtimeSnapshot.Goal, runtimeSnapshot.GoalAvailability, runtimeSnapshot.GoalSuspended)
+	if err := hydration.GoalStatus.Validate(); err != nil {
+		return clientui.TranscriptHydration{}, fmt.Errorf("project goal hydration: %w", err)
+	}
 	return hydration, nil
 }
 
@@ -133,7 +136,14 @@ func transcriptContextUsageFromRuntime(usage *runtime.ContextUsage) *clientui.Tr
 }
 
 func transcriptGoalStatusFromRuntime(goal *session.GoalState, availability clientui.GoalAvailability, suspended bool) *clientui.TranscriptGoalStatus {
-	return clientui.TranscriptGoalStatusFromEnvelope(clientui.ProjectGoal(session.GoalCoreFromState(goal), availability), suspended)
+	projected := GoalFromSessionState(goal, availability, suspended)
+	if projected == nil {
+		return &clientui.TranscriptGoalStatus{Availability: availability}
+	}
+	return &clientui.TranscriptGoalStatus{Goal: &clientui.TranscriptGoal{
+		Goal:      projected.Goal,
+		Suspended: projected.Suspended,
+	}, Availability: availability}
 }
 
 func transcriptToolStartsFromRuntime(starts []runtime.TranscriptLiveToolStart) []clientui.TranscriptToolStart {

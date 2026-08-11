@@ -268,9 +268,13 @@ func callControlRPC[Req any, Resp any](c *Remote, ctx context.Context, method st
 	}
 	switch goal := any(resp).(type) {
 	case serverapi.RuntimeGoalShowResponse:
-		if err := goal.Validate(); err != nil { return resp, invalidResponseError(method, err) }
+		if err := goal.Validate(); err != nil {
+			return resp, invalidResponseError(method, err)
+		}
 	case serverapi.RuntimeGoalMutationResponse:
-		if err := goal.Validate(); err != nil { return resp, invalidResponseError(method, err) }
+		if err := goal.Validate(); err != nil {
+			return resp, invalidResponseError(method, err)
+		}
 	}
 	return resp, nil
 }
@@ -672,7 +676,9 @@ func (c *Remote) WorkspaceChatDraft(ctx context.Context, req serverapi.Workspace
 	if err := c.call(ctx, protocol.MethodSessionWorkspaceChatDraft, req, &resp); err != nil {
 		return resp, err
 	}
-	if err := resp.Validate(); err != nil { return serverapi.WorkspaceChatDraftResponse{}, invalidResponseError("workspace Chat draft", err) }
+	if err := resp.Validate(); err != nil {
+		return serverapi.WorkspaceChatDraftResponse{}, invalidResponseError("workspace Chat draft", err)
+	}
 	return resp, nil
 }
 
@@ -890,20 +896,20 @@ func (c *Remote) SetGoal(ctx context.Context, req serverapi.RuntimeGoalSetReques
 	return callControlRPC[serverapi.RuntimeGoalSetRequest, serverapi.RuntimeGoalMutationResponse](c, ctx, protocol.MethodRuntimeGoalSet, req)
 }
 
-func (c *Remote) PauseGoal(ctx context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalShowResponse, error) {
-	return callControlRPC[serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalShowResponse](c, ctx, protocol.MethodRuntimeGoalPause, req)
+func (c *Remote) PauseGoal(ctx context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalMutationResponse, error) {
+	return callControlRPC[serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalMutationResponse](c, ctx, protocol.MethodRuntimeGoalPause, req)
 }
 
-func (c *Remote) ResumeGoal(ctx context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalShowResponse, error) {
-	return callControlRPC[serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalShowResponse](c, ctx, protocol.MethodRuntimeGoalResume, req)
+func (c *Remote) ResumeGoal(ctx context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalMutationResponse, error) {
+	return callControlRPC[serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalMutationResponse](c, ctx, protocol.MethodRuntimeGoalResume, req)
 }
 
-func (c *Remote) CompleteGoal(ctx context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalShowResponse, error) {
-	return callControlRPC[serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalShowResponse](c, ctx, protocol.MethodRuntimeGoalComplete, req)
+func (c *Remote) CompleteGoal(ctx context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalMutationResponse, error) {
+	return callControlRPC[serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalMutationResponse](c, ctx, protocol.MethodRuntimeGoalComplete, req)
 }
 
-func (c *Remote) ClearGoal(ctx context.Context, req serverapi.RuntimeGoalClearRequest) (serverapi.RuntimeGoalShowResponse, error) {
-	return callControlRPC[serverapi.RuntimeGoalClearRequest, serverapi.RuntimeGoalShowResponse](c, ctx, protocol.MethodRuntimeGoalClear, req)
+func (c *Remote) ClearGoal(ctx context.Context, req serverapi.RuntimeGoalClearRequest) (serverapi.RuntimeGoalMutationResponse, error) {
+	return callControlRPC[serverapi.RuntimeGoalClearRequest, serverapi.RuntimeGoalMutationResponse](c, ctx, protocol.MethodRuntimeGoalClear, req)
 }
 
 func (c *Remote) ListProcesses(ctx context.Context, req serverapi.ProcessListRequest) (serverapi.ProcessListResponse, error) {

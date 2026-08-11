@@ -23,7 +23,7 @@ func draftInput(s config.Settings) WorkspaceChatDraftResolverInput {
 	return WorkspaceChatDraftResolverInput{Settings: s, AuthState: auth.EmptyState(), FastModeState: runtime.NewFastModeState(false)}
 }
 func addWorker(s *config.Settings, thinking string) {
-	s.Subagents = map[string]config.SubagentRole{"worker": {Settings: config.Settings{Model: "worker-model", ProviderOverride: "anthropic", ThinkingLevel: thinking, EnabledTools: map[toolspec.ID]bool{toolspec.ToolExecCommand:true}, Reviewer: config.ReviewerSettings{Frequency: "all"}}, Sources: map[string]string{"model": "file", "provider_override": "file", "thinking_level": "file", "reviewer.frequency": "file", "tools.ask_question": "file", "tools.exec_command": "file"}}}
+	s.Subagents = map[string]config.SubagentRole{"worker": {Settings: config.Settings{Model: "worker-model", ProviderOverride: "anthropic", ThinkingLevel: thinking, EnabledTools: map[toolspec.ID]bool{toolspec.ToolExecCommand: true}, Reviewer: config.ReviewerSettings{Frequency: "all"}}, Sources: map[string]string{"model": "file", "provider_override": "file", "thinking_level": "file", "reviewer.frequency": "file", "tools.ask_question": "file", "tools.exec_command": "file"}}}
 }
 
 func TestWorkspaceChatDraftResolution(t *testing.T) {
@@ -52,7 +52,33 @@ func TestWorkspaceChatDraftResolution(t *testing.T) {
 }
 
 func TestWorkspaceChatDraftServiceProjectsEffectiveGoalAvailabilityAndWireResponse(t *testing.T) {
-	settings:=draftSettings("gpt-5.6-sol","medium");settings.EnabledTools=map[toolspec.ID]bool{toolspec.ToolAskQuestion:true};addWorker(&settings,"high");worker:=settings.Subagents["worker"];worker.Settings.EnabledTools=map[toolspec.ID]bool{toolspec.ToolExecCommand:true};settings.Subagents["worker"]=worker;p:=&draftPersistence{draft:&WorkspaceChatDraft{Agent:"default",Questions:false}};service:=NewService(launch.Planner{Config:config.App{Settings:settings}}).WithWorkspaceChatDraft(NewWorkspaceChatDraftOwner(p),"w",runtime.NewFastModeState(false));read:=func()serverapi.WorkspaceChatDraftRequest{return serverapi.WorkspaceChatDraftRequest{Operation:serverapi.WorkspaceChatDraftOperation{Kind:serverapi.WorkspaceChatDraftReadMessage}}};resp,err:=service.WorkspaceChatDraft(t.Context(),read());if err!=nil||resp.GoalAvailability!=clientui.GoalAvailabilityAvailable{t.Fatalf("capable Questions-off draft response=%+v err=%v",resp,err)};if err:=resp.Validate();err!=nil{t.Fatal(err)};resolved,err:=service.TransformWorkspaceChatDraftAggregate(t.Context(),func(current WorkspaceChatDraftResolution)(WorkspaceChatDraft,error){return current.Baselines["worker"],nil});if err!=nil||resolved.GoalAvailability!=clientui.GoalAvailabilityAgentCapabilityMissing{t.Fatalf("worker transition availability=%q err=%v",resolved.GoalAvailability,err)};if _,err:=service.WorkspaceChatDraft(t.Context(),read());err!=nil{t.Fatal(err)}
+	settings := draftSettings("gpt-5.6-sol", "medium")
+	settings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolAskQuestion: true}
+	addWorker(&settings, "high")
+	worker := settings.Subagents["worker"]
+	worker.Settings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolExecCommand: true}
+	settings.Subagents["worker"] = worker
+	p := &draftPersistence{draft: &WorkspaceChatDraft{Agent: "default", Questions: false}}
+	service := NewService(launch.Planner{Config: config.App{Settings: settings}}).WithWorkspaceChatDraft(NewWorkspaceChatDraftOwner(p), "w", runtime.NewFastModeState(false))
+	read := func() serverapi.WorkspaceChatDraftRequest {
+		return serverapi.WorkspaceChatDraftRequest{Operation: serverapi.WorkspaceChatDraftOperation{Kind: serverapi.WorkspaceChatDraftReadMessage}}
+	}
+	resp, err := service.WorkspaceChatDraft(t.Context(), read())
+	if err != nil || resp.GoalAvailability != clientui.GoalAvailabilityAvailable {
+		t.Fatalf("capable Questions-off draft response=%+v err=%v", resp, err)
+	}
+	if err := resp.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := service.TransformWorkspaceChatDraftAggregate(t.Context(), func(current WorkspaceChatDraftResolution) (WorkspaceChatDraft, error) {
+		return current.Baselines["worker"], nil
+	})
+	if err != nil || resolved.GoalAvailability != clientui.GoalAvailabilityAgentCapabilityMissing {
+		t.Fatalf("worker transition availability=%q err=%v", resolved.GoalAvailability, err)
+	}
+	if _, err := service.WorkspaceChatDraft(t.Context(), read()); err != nil {
+		t.Fatal(err)
+	}
 }
 
 type draftPersistence struct {
@@ -64,7 +90,9 @@ func (f *draftPersistence) ReadWorkspaceChatDraft(context.Context, string) (*Wor
 		return nil, nil
 	}
 	d := *f.draft
-	if d.Supervisor == "" { d.Supervisor, d.Thinking, d.AutoCompaction = "edits", "medium", true }
+	if d.Supervisor == "" {
+		d.Supervisor, d.Thinking, d.AutoCompaction = "edits", "medium", true
+	}
 	return &d, nil
 }
 func (f *draftPersistence) ReplaceWorkspaceChatDraft(_ context.Context, _ string, d *WorkspaceChatDraft) error {
@@ -85,8 +113,9 @@ func TestWorkspaceChatDraftOwnerTransformsClearAndSerializes(t *testing.T) {
 		d.Message = r.Draft.Message
 		return d, nil
 	})
-	if err != nil || got.Draft.Agent != "worker" || got.Draft.Message != "latest" || got.Draft.Supervisor != "all" || got.Draft.Thinking != "low" || got.Draft.Fast || got.Draft.Questions || !got.Draft.AutoCompaction || got.GoalAvailability != clientui.GoalAvailabilityAgentCapabilityMissing {
-		t.Fatalf("transform=%+v availability=%q err=%v", got.Draft, got.GoalAvailability, err)
+	resolved, resolveErr := o.ResolveWorkspaceChatDraft(context.Background(), "w", resolve)
+	if err != nil || resolveErr != nil || got.Agent != "worker" || got.Message != "latest" || got.Supervisor != "all" || got.Thinking != "low" || got.Fast || resolved.Draft.Questions || !resolved.Draft.AutoCompaction || resolved.GoalAvailability != clientui.GoalAvailabilityAgentCapabilityMissing {
+		t.Fatalf("transform=%+v resolved=%+v err=%v resolveErr=%v", got, resolved, err, resolveErr)
 	}
 	if err := o.ClearWorkspaceChatDraft(context.Background(), "w"); err != nil || p.draft != nil {
 		t.Fatalf("clear=%+v err=%v", p.draft, err)

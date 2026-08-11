@@ -552,6 +552,37 @@ func TestRemoteGetUpdateStatusRejectsMalformedResponse(t *testing.T) {
 	requireNoHandlerError(t, handlerErrs)
 }
 
+func TestRemoteGoalMutationRejectsMalformedPendingPreview(t *testing.T) {
+	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
+		acceptRemoteHandshake(t, ws)
+		var request protocol.Request
+		if err := websocket.JSON.Receive(ws, &request); err != nil {
+			return
+		}
+		if request.Method != protocol.MethodRuntimeGoalPause {
+			t.Errorf("method = %q, want %q", request.Method, protocol.MethodRuntimeGoalPause)
+			return
+		}
+		_ = websocket.JSON.Send(ws, protocol.NewSuccessResponse(request.ID, map[string]any{
+			"availability": "available",
+			"pending":      map[string]any{"objective": "", "status": "active"},
+		}))
+	})
+	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
+	if err != nil {
+		t.Fatalf("DialRemoteURL: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+	_, err = remote.PauseGoal(context.Background(), serverapi.RuntimeGoalStatusRequest{
+		ClientRequestID: "018fdd67-89ab-4cde-8123-456789abcdef",
+		SessionID:       "018fdd67-89ab-4cde-8123-456789abcdee",
+		Actor:           "user",
+	})
+	if err == nil {
+		t.Fatal("malformed Goal mutation response was accepted")
+	}
+}
+
 func TestRemoteLiveWatchRejectsMalformedResponse(t *testing.T) {
 	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
 		acceptRemoteHandshake(t, ws)

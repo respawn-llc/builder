@@ -132,7 +132,10 @@ func (s *Service) TransformWorkspaceChatDraftAggregate(ctx context.Context, tran
 	if err != nil {
 		return WorkspaceChatDraftResolution{}, err
 	}
-	return owner.TransformWorkspaceChatDraft(ctx, workspaceID, s.workspaceChatDraftResolverInput, transform)
+	if _, err := owner.TransformWorkspaceChatDraft(ctx, workspaceID, s.workspaceChatDraftResolverInput, transform); err != nil {
+		return WorkspaceChatDraftResolution{}, err
+	}
+	return owner.ResolveWorkspaceChatDraft(ctx, workspaceID, s.workspaceChatDraftResolverInput)
 }
 
 func (s *Service) WorkspaceChatDraft(ctx context.Context, req serverapi.WorkspaceChatDraftRequest) (serverapi.WorkspaceChatDraftResponse, error) {
@@ -165,7 +168,10 @@ func (s *Service) WorkspaceChatDraft(ctx context.Context, req serverapi.Workspac
 		if err := owner.ClearWorkspaceChatDraft(ctx, workspaceID); err != nil {
 			return serverapi.WorkspaceChatDraftResponse{}, err
 		}
-		resolved, err := s.ResolveWorkspaceChatDraftAggregate(ctx); if err != nil { return serverapi.WorkspaceChatDraftResponse{}, err }
+		resolved, err := s.ResolveWorkspaceChatDraftAggregate(ctx)
+		if err != nil {
+			return serverapi.WorkspaceChatDraftResponse{}, err
+		}
 		return serverapi.WorkspaceChatDraftResponse{GoalAvailability: resolved.GoalAvailability}, nil
 	default:
 		return serverapi.WorkspaceChatDraftResponse{}, fmt.Errorf("workspace Chat draft operation kind %q is invalid", req.Operation.Kind)
