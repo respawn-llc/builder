@@ -1,114 +1,427 @@
-import { useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo, useRef, useState } from "react";
 
-import type { TaskLabelAssignment } from "@/api";
-import { useAppServices } from "@/app-facade";
-import {
-  createTaskLabelAssignmentController,
-  type TaskLabelAssignmentController,
-  type TaskLabelAssignmentSnapshot,
-  type TaskLabelUpdateInput,
-} from "./taskLabelAssignmentController";
-import { taskLabelAssignmentRegistryFor } from "./taskLabelAssignmentRegistry";
+import { workflowLabelMaxIDs, type ProjectLabelCatalog, type TaskLabelAssignment } from "@/api";
+import { queryKeys, useAppServices } from "@/app-facade";
+import { useStableCallback } from "@/ui";
+import { patchExistingTaskLabelAssignment, patchExistingTaskLabelProjections } from "./taskLabelCache";
 
-export type TaskLabelAssignmentData = Readonly<{
-  controller: TaskLabelAssignmentController;
-  snapshot: TaskLabelAssignmentSnapshot;
+export type TaskLabelAssignmentFailure = Readonly<{
+  labelID: string;
+  desiredSelected: boolean;
+  error: unknown;
 }>;
 
-export function useManagedTaskLabelAssignment(
-  {
-    availableLabelIDs,
-    enabled = true,
-    initialAssignment,
-    projectID,
-    taskID,
-    workflowID,
-  }: Readonly<{
-    availableLabelIDs: readonly string[];
-    enabled?: boolean | undefined;
-    initialAssignment: TaskLabelAssignment;
-    projectID: string;
-    taskID: string;
-    workflowID: string;
-  }>,
-): TaskLabelAssignmentData {
+export type TaskLabelAssignmentData = Readonly<{
+  selectedLabelIDs: readonly string[];
+  pendingLabelIDs: readonly string[];
+  failures: readonly TaskLabelAssignmentFailure[];
+  isPending: boolean;
+  error: Error | null;
+  retryLoad(): void;
+  setSelected(labelID: string, selected: boolean): void;
+  retry(labelID: string): void;
+}>;
+
+type AssignmentIntent = Readonly<{
+  labelID: string;
+  desiredSelected: boolean;
+}>;
+
+type LocalAssignmentState = Readonly<{
+  pending: ReadonlyMap<string, boolean>;
+  failures: ReadonlyMap<string, TaskLabelAssignmentFailure>;
+  inFlight: AssignmentIntent | null;
+}>;
+
+type AssignmentBasis = Readonly<{
+  base: readonly string[];
+  available: ReadonlySet<string>;
+}>;
+
+export function useManagedTaskLabelAssignment({
+  availableLabelIDs,
+  projectID,
+  scheduleCatalogRefresh,
+  scheduleMembershipRefresh,
+  scheduleTaskAssignmentRefresh,
+  taskID,
+}: Readonly<{
+  availableLabelIDs: readonly string[];
+  projectID: string;
+  scheduleCatalogRefresh(): void;
+  scheduleMembershipRefresh(): void;
+  scheduleTaskAssignmentRefresh(taskID: string): void;
+  taskID: string;
+}>): TaskLabelAssignmentData {
   const { api } = useAppServices();
   const queryClient = useQueryClient();
-  const update = useCallback(
-    async (input: TaskLabelUpdateInput) =>
-      api.updateTaskLabels(taskID, input.addLabelIDs, input.removeLabelIDs),
-    [api, taskID],
+  const assignmentKey = queryKeys.taskLabels(taskID);
+  const taskKey = queryKeys.task(taskID);
+  const catalogKey = queryKeys.projectLabels(projectID);
+  const assignment = useQuery({
+    queryKey: assignmentKey,
+    queryFn: async () => {
+      const loaded = await api.getTaskLabels(taskID);
+      assertTaskAssignment(loaded, taskID);
+      return loaded;
+    },
+    retry: false,
+  });
+  const [local, setLocal] = useState<LocalAssignmentState>(emptyLocalState);
+  const mounted = useRef(false);
+  const launched = useRef<AssignmentIntent | null>(null);
+
+  const isTaskLive = useStableCallback(
+    (): boolean => mounted.current && queryClient.getQueryData(taskKey) !== undefined,
   );
-  const refetch = useCallback(async () => initialAssignment, [initialAssignment]);
-  const registry = taskLabelAssignmentRegistryFor(queryClient);
-  const subscribeController = useCallback(
-    (listener: () => void) => registry.subscribe(taskID, listener),
-    [registry, taskID],
-  );
-  const initialController = useMemo(
-    () =>
-      createTaskLabelAssignmentController({
-        availableLabelIDs,
-        initialLabelIDs: initialAssignment.labelIDs,
-        refetch,
+  const clearIfMounted = useStableCallback((): void => {
+    if (mounted.current) {
+      setLocal(clearLocalAssignment);
+    }
+  });
+  const readAssignment = useStableCallback((): TaskLabelAssignment | undefined => {
+    const current = queryClient.getQueryData<TaskLabelAssignment>(assignmentKey);
+    if (current !== undefined) {
+      assertTaskAssignment(current, taskID);
+    }
+    return current;
+  });
+  const readCatalog = useStableCallback((): ProjectLabelCatalog | undefined => {
+    const catalog = queryClient.getQueryData<ProjectLabelCatalog>(catalogKey);
+    if (catalog !== undefined && catalog.projectID !== projectID) {
+      throw new Error(
+        `Project label catalog for ${catalog.projectID} cannot serve Task ${taskID} in Project ${projectID}.`,
+      );
+    }
+    return catalog;
+  });
+
+  const runIntent = useStableCallback(async (intent: AssignmentIntent): Promise<void> => {
+    try {
+      const response = await api.updateTaskLabels(
         taskID,
-        update,
-      }),
-    [availableLabelIDs, initialAssignment, refetch, taskID, update],
-  );
-  const getController = useCallback(
-    () => (enabled ? registry.get(taskID) : null) ?? initialController,
-    [enabled, initialController, registry, taskID],
-  );
-  const controller = useSyncExternalStore(subscribeController, getController, getController);
+        intent.desiredSelected ? [intent.labelID] : [],
+        intent.desiredSelected ? [] : [intent.labelID],
+      );
+      assertTaskAssignment(response, taskID);
+      if (!isTaskLive()) {
+        clearIfMounted();
+        return;
+      }
+      await queryClient.cancelQueries(
+        { queryKey: assignmentKey, exact: true },
+        { revert: false, silent: true },
+      );
+      if (!isTaskLive()) {
+        clearIfMounted();
+        return;
+      }
+      const catalog = readCatalog();
+      if (catalog === undefined) {
+        setLocal((state) => settleAssignmentSuccess(state, intent, null, null));
+        scheduleCatalogRefresh();
+        scheduleTaskAssignmentRefresh(taskID);
+        return;
+      }
+      const available = new Set(catalog.labels.map((label) => label.id));
+      const installed = response.labelIDs.filter((labelID) => available.has(labelID));
+      patchExistingTaskLabelAssignment(queryClient, { taskID, labelIDs: installed });
+      patchExistingTaskLabelProjections(queryClient, taskID, installed);
+      setLocal((state) => settleAssignmentSuccess(state, intent, installed, available));
+      scheduleMembershipRefresh();
+    } catch (error: unknown) {
+      if (!isTaskLive()) {
+        clearIfMounted();
+        return;
+      }
+      const base = readAssignment()?.labelIDs ?? [];
+      const catalog = readCatalog();
+      setLocal((state) =>
+        settleAssignmentFailure(
+          state,
+          intent,
+          error,
+          catalog === undefined
+            ? null
+            : {
+                base,
+                available: new Set(catalog.labels.map((label) => label.id)),
+              },
+        ),
+      );
+    }
+  });
+
   useEffect(() => {
-    if (!enabled || taskID.length === 0) {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const intent = local.inFlight;
+    if (intent === null || launched.current === intent) {
       return;
     }
-    const lease = registry.acquire({
-      availableLabelIDs,
-      controller: initialController,
-      initialAssignment,
-      projectID,
+    launched.current = intent;
+    if (!isTaskLive()) {
+      clearIfMounted();
+      return;
+    }
+    void runIntent(intent);
+  }, [clearIfMounted, isTaskLive, local.inFlight, runIntent]);
+
+  useEffect(() => {
+    if (!isTaskLive()) {
+      clearIfMounted();
+      return;
+    }
+    const base = readAssignment();
+    const catalog = readCatalog();
+    if (base === undefined || catalog === undefined) {
+      return;
+    }
+    const available = new Set(catalog.labels.map((label) => label.id));
+    patchExistingTaskLabelProjections(
+      queryClient,
       taskID,
-      workflowID,
-    });
-    return () => {
-      lease.release();
-    };
+      base.labelIDs.filter((labelID) => available.has(labelID)),
+    );
+    setLocal((state) => prepareNext(state, base.labelIDs, available));
   }, [
+    assignment.data,
     availableLabelIDs,
-    enabled,
-    initialAssignment,
-    initialController,
-    projectID,
+    clearIfMounted,
+    isTaskLive,
     queryClient,
-    refetch,
-    registry,
+    readAssignment,
+    readCatalog,
     taskID,
-    update,
-    workflowID,
   ]);
 
-  useEffect(() => {
-    if (enabled) {
-      controller.replaceAvailableLabelIDs(availableLabelIDs);
+  const setSelected = useStableCallback((labelID: string, selected: boolean): void => {
+    if (!isTaskLive()) {
+      clearIfMounted();
+      return;
     }
-  }, [availableLabelIDs, controller, enabled]);
-
-  useEffect(() => {
-    if (enabled) {
-      controller.replaceAuthoritative(initialAssignment);
+    const base = readAssignment();
+    const catalog = readCatalog();
+    if (base === undefined || (catalog === undefined && !selected)) {
+      return;
     }
-  }, [controller, enabled, initialAssignment]);
+    if (catalog === undefined) {
+      setLocal((state) =>
+        setDesiredLabel(state, labelID, selected, {
+          base: base.labelIDs,
+          available: new Set([labelID]),
+        }),
+      );
+      return;
+    }
+    if (!catalog.labels.some((label) => label.id === labelID)) {
+      return;
+    }
+    const available = new Set(catalog.labels.map((label) => label.id));
+    setLocal((state) => setDesiredLabel(state, labelID, selected, { base: base.labelIDs, available }));
+  });
 
-  const subscribe = useCallback((listener: () => void) => controller.subscribe(listener), [controller]);
-  const getSnapshot = useCallback(() => controller.getSnapshot(), [controller]);
-  const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const retry = useStableCallback((labelID: string): void => {
+    if (!isTaskLive()) {
+      clearIfMounted();
+      return;
+    }
+    const base = readAssignment();
+    const catalog = readCatalog();
+    if (base === undefined || catalog === undefined) {
+      return;
+    }
+    const available = new Set(catalog.labels.map((label) => label.id));
+    setLocal((state) => retryFailedLabel(state, labelID, base.labelIDs, available));
+  });
+
+  const retryLoad = useStableCallback((): void => {
+    if (!isTaskLive()) {
+      clearIfMounted();
+      return;
+    }
+    void assignment.refetch();
+  });
+
+  const selectedLabelIDs = useMemo(
+    () => visibleLabelIDs(assignment.data?.labelIDs ?? [], local.pending, new Set(availableLabelIDs)),
+    [assignment.data?.labelIDs, availableLabelIDs, local.pending],
+  );
 
   return {
-    controller,
-    snapshot,
+    selectedLabelIDs,
+    pendingLabelIDs: [...local.pending.keys()].filter((labelID) => availableLabelIDs.includes(labelID)),
+    failures: [...local.failures.values()].sort((left, right) => left.labelID.localeCompare(right.labelID)),
+    isPending: assignment.isPending,
+    error: assignment.isError ? assignment.error : null,
+    retryLoad,
+    setSelected,
+    retry,
   };
+}
+
+function clearLocalAssignment(state: LocalAssignmentState): LocalAssignmentState {
+  return state.inFlight === null && state.pending.size === 0 && state.failures.size === 0
+    ? state
+    : emptyLocalState();
+}
+
+function setDesiredLabel(
+  state: LocalAssignmentState,
+  labelID: string,
+  selected: boolean,
+  basis: AssignmentBasis,
+): LocalAssignmentState {
+  const pending = new Map(state.pending);
+  if (!pending.has(labelID) && pending.size >= workflowLabelMaxIDs) {
+    throw new Error(
+      `Task label assignment pending intents exceeded the ${String(workflowLabelMaxIDs)}-Label Project bound.`,
+    );
+  }
+  pending.set(labelID, selected);
+  const failures = new Map(state.failures);
+  failures.delete(labelID);
+  return prepareNext({ ...state, pending, failures }, basis.base, basis.available);
+}
+
+function retryFailedLabel(
+  state: LocalAssignmentState,
+  labelID: string,
+  base: readonly string[],
+  available: ReadonlySet<string>,
+): LocalAssignmentState {
+  const failure = state.failures.get(labelID);
+  if (failure === undefined || !available.has(labelID)) {
+    return state;
+  }
+  const pending = new Map(state.pending);
+  pending.set(labelID, failure.desiredSelected);
+  const failures = new Map(state.failures);
+  failures.delete(labelID);
+  return prepareNext({ ...state, pending, failures }, base, available);
+}
+
+function settleAssignmentSuccess(
+  state: LocalAssignmentState,
+  intent: AssignmentIntent,
+  base: readonly string[] | null,
+  available: ReadonlySet<string> | null,
+): LocalAssignmentState {
+  if (state.inFlight !== intent) {
+    return state;
+  }
+  const pending = new Map(state.pending);
+  if (pending.get(intent.labelID) === intent.desiredSelected) {
+    pending.delete(intent.labelID);
+  }
+  const settled = { ...state, pending, inFlight: null };
+  return base === null || available === null ? settled : prepareNext(settled, base, available);
+}
+
+function settleAssignmentFailure(
+  state: LocalAssignmentState,
+  intent: AssignmentIntent,
+  error: unknown,
+  basis: AssignmentBasis | null,
+): LocalAssignmentState {
+  if (state.inFlight !== intent) {
+    return state;
+  }
+  const pending = new Map(state.pending);
+  const failures = new Map(state.failures);
+  if (pending.get(intent.labelID) === intent.desiredSelected) {
+    pending.delete(intent.labelID);
+    failures.set(intent.labelID, {
+      labelID: intent.labelID,
+      desiredSelected: intent.desiredSelected,
+      error,
+    });
+  }
+  const settled = { ...state, pending, failures, inFlight: null };
+  return basis === null ? settled : prepareNext(settled, basis.base, basis.available);
+}
+
+function prepareNext(
+  state: LocalAssignmentState,
+  baseLabelIDs: readonly string[],
+  availableLabelIDs: ReadonlySet<string>,
+): LocalAssignmentState {
+  const base = new Set(baseLabelIDs);
+  const pending = new Map(
+    [...state.pending].filter(
+      ([labelID, selected]) =>
+        availableLabelIDs.has(labelID) &&
+        (labelID === state.inFlight?.labelID || base.has(labelID) !== selected),
+    ),
+  );
+  const failures = new Map([...state.failures].filter(([labelID]) => availableLabelIDs.has(labelID)));
+  let inFlight = state.inFlight;
+  if (inFlight === null) {
+    const next = pending.entries().next();
+    if (!next.done) {
+      const [labelID, desiredSelected] = next.value;
+      inFlight = { labelID, desiredSelected };
+    }
+  }
+  if (
+    inFlight === state.inFlight &&
+    mapsEqual(pending, state.pending) &&
+    mapsEqual(failures, state.failures)
+  ) {
+    return state;
+  }
+  return { ...state, pending, failures, inFlight };
+}
+
+function emptyLocalState(): LocalAssignmentState {
+  return {
+    pending: new Map(),
+    failures: new Map(),
+    inFlight: null,
+  };
+}
+
+function visibleLabelIDs(
+  authoritativeLabelIDs: readonly string[],
+  pending: ReadonlyMap<string, boolean>,
+  availableLabelIDs: ReadonlySet<string>,
+): readonly string[] {
+  const visible = new Set(authoritativeLabelIDs.filter((labelID) => availableLabelIDs.has(labelID)));
+  for (const [labelID, selected] of pending) {
+    if (!availableLabelIDs.has(labelID)) {
+      continue;
+    }
+    if (selected) {
+      visible.add(labelID);
+    } else {
+      visible.delete(labelID);
+    }
+  }
+  return [...visible];
+}
+
+function mapsEqual<K, V>(left: ReadonlyMap<K, V>, right: ReadonlyMap<K, V>): boolean {
+  if (left.size !== right.size) {
+    return false;
+  }
+  for (const [key, value] of left) {
+    if (right.get(key) !== value) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function assertTaskAssignment(assignment: TaskLabelAssignment, taskID: string): void {
+  if (assignment.taskID !== taskID) {
+    throw new Error(
+      `Task label assignment response for Task ${assignment.taskID} cannot update Task ${taskID}.`,
+    );
+  }
 }

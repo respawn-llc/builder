@@ -1,30 +1,28 @@
 import { useMemo, type ReactNode } from "react";
 
-import type { ProjectLabelCatalog, TaskLabelAssignment } from "@/api";
 import { TaskLabelAssignmentContext } from "./taskLabelAssignmentContext";
 import { useManagedTaskLabelAssignment } from "./taskLabelAssignmentData";
+import { useProjectLabelData } from "./projectLabelContext";
 
 export function TaskLabelAssignmentProvider({
-  catalog,
   children,
-  initialAssignment,
   taskID,
-  workflowID,
 }: Readonly<{
-  catalog: ProjectLabelCatalog | null;
   children: ReactNode;
-  initialAssignment: TaskLabelAssignment;
   taskID: string;
-  workflowID: string;
 }>) {
-  const availableLabelIDs = useMemo(() => catalog?.labels.map((label) => label.id) ?? [], [catalog]);
+  const { catalog, effects, projectID } = useProjectLabelData();
+  const availableLabelIDs = useMemo(
+    () => catalog.data?.labels.map((label) => label.id) ?? [],
+    [catalog.data],
+  );
   const assignment = useManagedTaskLabelAssignment({
     availableLabelIDs,
-    enabled: catalog !== null,
-    initialAssignment,
-    projectID: catalog?.projectID ?? "",
+    projectID,
+    scheduleCatalogRefresh: effects.scheduleCatalogRefresh,
+    scheduleMembershipRefresh: effects.scheduleMembershipRefresh,
+    scheduleTaskAssignmentRefresh: effects.scheduleTaskAssignmentRefresh,
     taskID,
-    workflowID,
   });
   return (
     <TaskLabelAssignmentContext.Provider value={assignment}>{children}</TaskLabelAssignmentContext.Provider>

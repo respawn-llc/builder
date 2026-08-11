@@ -3,12 +3,14 @@ import { useCallback } from "react";
 import type { Dispatch, KeyboardEvent, SetStateAction } from "react";
 
 import { decodeWorkflowLabelError, errorMessage, type ProjectLabel } from "@/api";
-import {
-  isTextFieldSubmitShortcut,
-  type TextFieldSubmitShortcutPolicy,
-} from "@/app-facade";
+import { isTextFieldSubmitShortcut, type TextFieldSubmitShortcutPolicy } from "@/app-facade";
 import type { LabelChooserInvocation } from "./LabelChooser";
-import type { DeleteState, LabelFilterCondition, LabelResultRowSelection, RenameState } from "./LabelChooserRows";
+import type {
+  DeleteState,
+  LabelFilterCondition,
+  LabelResultRowSelection,
+  RenameState,
+} from "./LabelChooserRows";
 import type { LabelFilterState } from "./labelFilterState";
 import type { useProjectLabelCatalogMutations } from "./projectLabelHooks";
 
@@ -219,7 +221,6 @@ export function useLabelChooserMutationActions({
     try {
       const label = await mutations.create.mutateAsync(preparedSearch);
       if (invocation.kind === "assignment") {
-        invocation.onLabelCreated?.(label.id);
         selectLabel(invocation, label.id, true);
       }
       setSearch("");

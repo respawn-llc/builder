@@ -245,6 +245,29 @@ describe("LabelChooser", () => {
     });
   });
 
+  it("keeps selection and search available while disabling creation at the 100-Label bound", async () => {
+    const user = userEvent.setup();
+    hooks.catalog.data = {
+      projectID: "project-1",
+      labels: Array.from({ length: 100 }, (_, index) => ({
+        id: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+        name: `Label ${String(index)}`,
+      })),
+    };
+    render(
+      <LabelChooser
+        invocation={{ kind: "assignment", onSelectionChange: vi.fn(), selectedLabelIDs: [] }}
+        trigger={<button type="button">Open assignment chooser</button>}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Open assignment chooser" }));
+    await user.type(screen.getByRole("textbox", { name: "Search or create labels" }), "New label");
+
+    expect(screen.getByRole("button", { name: "labels.catalogLimit" })).toBeDisabled();
+    expect(screen.getByRole("textbox", { name: "Search or create labels" })).toBeEnabled();
+  });
+
   it("omits reorder handles outside an eligible filter catalog", async () => {
     const user = userEvent.setup();
     const view = render(
@@ -315,7 +338,9 @@ describe("LabelChooser", () => {
     fireEvent.keyDown(handle, { code: "Space", key: " " });
 
     await waitFor(() => {
-      expect(statusPush).toHaveBeenCalledWith(expect.objectContaining({ body: "save failed", tone: "danger" }));
+      expect(statusPush).toHaveBeenCalledWith(
+        expect.objectContaining({ body: "save failed", tone: "danger" }),
+      );
     });
   });
 
@@ -381,29 +406,27 @@ describe("LabelChooser", () => {
       expect(screen.getAllByRole("button", { hidden: true, name: "Reorder Alpha" })).toHaveLength(1);
     });
   });
-
 });
 
 function mockLabelRowRects(): void {
-  [
-    "38bf0da7-a3f7-4c15-bc5f-c8fca538e667",
-    "942495c2-5958-4959-8445-94046ad74fbd",
-  ].forEach((labelID, index) => {
-    const sortableRow = screen.getByTestId(`label-reorder-item-${labelID}`);
-    const top = index * 40;
-    Object.defineProperty(sortableRow, "getBoundingClientRect", {
-      configurable: true,
-      value: () => ({
-        bottom: top + 40,
-        height: 40,
-        left: 0,
-        right: 320,
-        top,
-        width: 320,
-        x: 0,
-        y: top,
-        toJSON: () => ({}),
-      }),
-    });
-  });
+  ["38bf0da7-a3f7-4c15-bc5f-c8fca538e667", "942495c2-5958-4959-8445-94046ad74fbd"].forEach(
+    (labelID, index) => {
+      const sortableRow = screen.getByTestId(`label-reorder-item-${labelID}`);
+      const top = index * 40;
+      Object.defineProperty(sortableRow, "getBoundingClientRect", {
+        configurable: true,
+        value: () => ({
+          bottom: top + 40,
+          height: 40,
+          left: 0,
+          right: 320,
+          top,
+          width: 320,
+          x: 0,
+          y: top,
+          toJSON: () => ({}),
+        }),
+      });
+    },
+  );
 }

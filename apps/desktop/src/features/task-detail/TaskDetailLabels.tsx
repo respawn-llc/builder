@@ -15,12 +15,12 @@ export function TaskDetailLabels({ disabled }: Readonly<{ disabled: boolean }>) 
   const { t } = useTranslation();
   const catalog = useProjectLabelCatalog();
   const assignment = useTaskLabelAssignment();
-  const selectedLabelIDs = assignment.snapshot.visibleLabelIDs;
+  const selectedLabelIDs = assignment.selectedLabelIDs;
   const visibleLabels =
     catalog.data === undefined ? [] : orderedAssignedLabels(catalog.data, selectedLabelIDs);
-  const pendingLabelIDs = new Set(assignment.snapshot.pendingLabelIDs);
-  const triggerDisabled = disabled || assignment.snapshot.closed;
-  const triggerLoading = catalog.isPending;
+  const pendingLabelIDs = new Set(assignment.pendingLabelIDs);
+  const triggerDisabled = disabled || assignment.isPending || assignment.error !== null;
+  const triggerLoading = catalog.isPending || assignment.isPending;
   return (
     <TaskPropertyLine
       label={t("labels.filter")}
@@ -30,14 +30,8 @@ export function TaskDetailLabels({ disabled }: Readonly<{ disabled: boolean }>) 
             invocation={{
               kind: "assignment",
               selectedLabelIDs,
-              onLabelCreated(labelID) {
-                assignment.controller.replaceAvailableLabelIDs([
-                  ...(catalog.data?.labels.map((label) => label.id) ?? []),
-                  labelID,
-                ]);
-              },
               onSelectionChange(labelID, selected) {
-                assignment.controller.setDesired(labelID, selected);
+                assignment.setSelected(labelID, selected);
               },
             }}
             trigger={
@@ -65,6 +59,7 @@ export function TaskDetailLabels({ disabled }: Readonly<{ disabled: boolean }>) 
               </Button>
             }
           />
+          <AssignmentLoadFailure />
           <AssignmentFailures />
         </div>
       }
@@ -73,10 +68,21 @@ export function TaskDetailLabels({ disabled }: Readonly<{ disabled: boolean }>) 
   );
 }
 
+function AssignmentLoadFailure() {
+  const { t } = useTranslation();
+  const assignment = useTaskLabelAssignment();
+  if (assignment.error === null) {
+    return null;
+  }
+  return (
+    <FailureRow error={assignment.error} onRetry={assignment.retryLoad} title={t("labels.loadFailed")} />
+  );
+}
+
 function AssignmentFailures() {
   const { t } = useTranslation();
   const assignment = useTaskLabelAssignment();
-  const failures = assignment.snapshot.failures;
+  const failures = assignment.failures;
   if (failures.length === 0) {
     return null;
   }
@@ -87,7 +93,7 @@ function AssignmentFailures() {
           error={failure.error}
           key={failure.labelID}
           onRetry={() => {
-            assignment.controller.retry(failure.labelID);
+            assignment.retry(failure.labelID);
           }}
           title={t("labels.assignmentFailed")}
         />
