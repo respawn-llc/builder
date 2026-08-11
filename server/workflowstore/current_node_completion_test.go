@@ -666,7 +666,6 @@ func TestDeleteProjectRemovesPendingApprovalsBeforeCurrentNodeCascade(t *testing
 	}
 	blockers, err := store.DeleteProject(ctx, ProjectDeleteRequest{
 		ProjectID: binding.ProjectID,
-		Artifacts: projectDeleteArtifactsNoop{},
 	})
 	if err != nil {
 		t.Fatalf("DeleteProject: %v", err)

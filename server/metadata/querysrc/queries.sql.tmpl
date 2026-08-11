@@ -2246,7 +2246,7 @@ SELECT
 FROM projects p
 LEFT JOIN workspaces w ON w.id = p.primary_workspace_id AND w.project_id = p.id
 JOIN project_default_workflow_identity default_workflow ON default_workflow.project_id = p.id
-WHERE (sqlc.arg(project_id) = '' OR p.id = sqlc.arg(project_id))
+WHERE p.id = COALESCE(sqlc.narg(project_id), p.id)
 ORDER BY latest_activity_unix_ms DESC, p.rowid DESC
 LIMIT sqlc.arg(limit_rows)
 OFFSET sqlc.arg(offset_rows);
@@ -2381,15 +2381,6 @@ LIMIT sqlc.arg(page_limit);
 SELECT id
 FROM sessions
 WHERE project_id = sqlc.arg(project_id)
-ORDER BY rowid ASC;
-
--- name: ListProjectSessionArtifacts :many
-SELECT
-    id,
-    artifact_relpath
-FROM sessions
-WHERE project_id = sqlc.arg(project_id)
-  AND trim(artifact_relpath) != ''
 ORDER BY rowid ASC;
 
 -- name: GetProjectDeleteBlockerCounts :one

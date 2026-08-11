@@ -142,7 +142,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	if observer := sleepManager.RuntimeActiveObserver(); observer != nil {
 		runtimeRegistry.SetSleepObserver(observer)
 	}
-	projectService, err := projectview.NewMetadataService(metadataStore, "")
+	projectService, err := projectview.NewMetadataService(metadataStore)
 	if err != nil {
 		closeRootLeaseOnFailure()
 		_ = metadataStore.Close()
