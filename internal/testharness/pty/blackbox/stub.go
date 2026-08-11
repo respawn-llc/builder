@@ -241,8 +241,8 @@ func (s *ResponsesStub) Stop() error {
 	return nil
 }
 
-// Close preserves the convenience lifecycle boundary used by existing direct
-// tests. The runner uses Stop so its sole cleanup supervisor retains failures.
+// Close preserves the convenience lifecycle boundary used by direct tests
+// that do not need to inspect cleanup errors.
 func (s *ResponsesStub) Close() {
 	_ = s.Stop()
 }
