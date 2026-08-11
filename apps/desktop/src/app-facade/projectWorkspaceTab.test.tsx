@@ -1,9 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 
-import {
-  ProjectWorkspaceTabProvider,
-  useProjectWorkspaceTab,
-} from "./projectWorkspaceTab";
+import { ProjectWorkspaceTabProvider, useProjectWorkspaceTab } from "./projectWorkspaceTab";
 
 function TabProbe({ projectID }: Readonly<{ projectID: string }>) {
   const { selectedTab, selectTab } = useProjectWorkspaceTab();
@@ -12,12 +9,13 @@ function TabProbe({ projectID }: Readonly<{ projectID: string }>) {
       <output aria-label="project">{projectID}</output>
       <output aria-label="selected-tab">{selectedTab}</output>
       <button
+        data-testid="select-workflows"
         onClick={() => {
           selectTab("workflows");
         }}
         type="button"
       >
-        Workflows
+        Select
       </button>
     </>
   );
@@ -31,7 +29,7 @@ it("defaults to Sessions, carries Workflows between Projects, and resets after r
   );
 
   expect(screen.getByLabelText("selected-tab")).toHaveTextContent("sessions");
-  fireEvent.click(screen.getByRole("button", { name: "Workflows" }));
+  fireEvent.click(screen.getByTestId("select-workflows"));
   view.rerender(
     <ProjectWorkspaceTabProvider>
       <TabProbe projectID="project-2" />

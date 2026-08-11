@@ -1,12 +1,17 @@
 import { QueryClient } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { z } from "zod";
 
-import type { SessionCategory, SessionPagePosition } from "@/api";
+import type { SessionCategory } from "@/api";
 import { queryKeys } from "@/app-facade";
 import { createTestServices, TestAppProviders } from "@/test-support/app-services";
 import type { FakeRoute } from "@/test-support/api";
+import {
+  parseSessionPageRequest,
+  sessionPageRequest,
+  singleSessionPageFixture,
+  type SessionPageRequest,
+} from "@/test-support/session-catalog";
 import { useProjectSessionsData } from "./useProjectSessionsData";
 
 describe("Project Sessions query ownership", () => {
@@ -19,64 +24,49 @@ describe("Project Sessions query ownership", () => {
         sessions: [],
       },
     });
-    const view = renderHook(
-      () => useProjectSessionsData("project-1", "main"),
-      { wrapper: harness.Wrapper },
-    );
+    const view = renderHook(() => useProjectSessionsData("project-1", "main"), { wrapper: harness.Wrapper });
 
     await waitForReady(view.result);
     expect(ready(view.result.current).rows).toEqual([]);
   });
 
   it("requests only the selected Project/category and synchronously removes exited scopes", async () => {
-    const requests: CatalogRequest[] = [];
+    const requests: SessionPageRequest[] = [];
     const harness = createHarness(catalogRoute(requests));
     const initialProps: Readonly<{ category: SessionCategory; projectID: string }> = {
       category: "main",
       projectID: "project-1",
     };
-    const view = renderHook(
-      ({ category, projectID }) => useProjectSessionsData(projectID, category),
-      {
-        initialProps,
-        wrapper: harness.Wrapper,
-      },
-    );
+    const view = renderHook(({ category, projectID }) => useProjectSessionsData(projectID, category), {
+      initialProps,
+      wrapper: harness.Wrapper,
+    });
     await waitForReady(view.result);
 
     view.rerender({ category: "subagent", projectID: "project-1" });
     await waitForReady(view.result);
     expect(
-      harness.queryClient.getQueryData(
-        queryKeys.projectSessionCatalog("project-1", "main"),
-      ),
+      harness.queryClient.getQueryData(queryKeys.projectSessionCatalog("project-1", "main")),
     ).toBeUndefined();
 
     view.rerender({ category: "subagent", projectID: "project-2" });
     await waitForReady(view.result);
     expect(
-      harness.queryClient.getQueryData(
-        queryKeys.projectSessionCatalog("project-1", "subagent"),
-      ),
+      harness.queryClient.getQueryData(queryKeys.projectSessionCatalog("project-1", "subagent")),
     ).toBeUndefined();
     expect(requests).toEqual([
-      request("project-1", "main", { kind: "newest" }),
-      request("project-1", "subagent", { kind: "newest" }),
-      request("project-2", "subagent", { kind: "newest" }),
+      sessionPageRequest("project-1", "main", { kind: "newest" }),
+      sessionPageRequest("project-1", "subagent", { kind: "newest" }),
+      sessionPageRequest("project-2", "subagent", { kind: "newest" }),
     ]);
   });
 
   it("deduplicates newest-first rows and keeps cursor keys advancing through five-page eviction", async () => {
-    const requests: CatalogRequest[] = [];
+    const requests: SessionPageRequest[] = [];
     const harness = createHarness(pagedCatalogRoute(requests));
-    const view = renderHook(
-      () => useProjectSessionsData("project-1", "main"),
-      { wrapper: harness.Wrapper },
-    );
+    const view = renderHook(() => useProjectSessionsData("project-1", "main"), { wrapper: harness.Wrapper });
     await waitForReady(view.result);
-    expect(ready(view.result.current).rows.map((row) => row.name)).toEqual([
-      "Newest occurrence",
-    ]);
+    expect(ready(view.result.current).rows.map((row) => row.name)).toEqual(["Newest occurrence"]);
 
     const olderKeys: string[] = [];
     for (let page = 1; page <= 10; page += 1) {
@@ -86,7 +76,7 @@ describe("Project Sessions query ownership", () => {
       });
       await waitFor(() => {
         expect(requests).toContainEqual(
-          request("project-1", "main", {
+          sessionPageRequest("project-1", "main", {
             kind: "older",
             token: `older-${String(page)}`,
           }),
@@ -94,9 +84,7 @@ describe("Project Sessions query ownership", () => {
       });
       await waitForReady(view.result);
       if (page === 1) {
-        expect(
-          ready(view.result.current).rows.filter((row) => row.id === "session-shared"),
-        ).toEqual([
+        expect(ready(view.result.current).rows.filter((row) => row.id === "session-shared")).toEqual([
           expect.objectContaining({ name: "Newest occurrence" }),
         ]);
       }
@@ -114,7 +102,7 @@ describe("Project Sessions query ownership", () => {
       });
       await waitFor(() => {
         expect(requests.at(-1)).toEqual(
-          request("project-1", "main", {
+          sessionPageRequest("project-1", "main", {
             kind: "newer",
             token: `newer-${String(page)}`,
           }),
@@ -126,18 +114,15 @@ describe("Project Sessions query ownership", () => {
   });
 
   it("re-enters a deeply evicted category with exactly one newest request after rapid switching", async () => {
-    const requests: CatalogRequest[] = [];
+    const requests: SessionPageRequest[] = [];
     const harness = createHarness(pagedCatalogRoute(requests));
     const initialProps: Readonly<{ category: SessionCategory }> = {
       category: "main",
     };
-    const view = renderHook(
-      ({ category }) => useProjectSessionsData("project-1", category),
-      {
-        initialProps,
-        wrapper: harness.Wrapper,
-      },
-    );
+    const view = renderHook(({ category }) => useProjectSessionsData("project-1", category), {
+      initialProps,
+      wrapper: harness.Wrapper,
+    });
     await waitForReady(view.result);
     for (let page = 1; page <= 5; page += 1) {
       act(() => {
@@ -145,7 +130,7 @@ describe("Project Sessions query ownership", () => {
       });
       await waitFor(() => {
         expect(requests).toContainEqual(
-          request("project-1", "main", {
+          sessionPageRequest("project-1", "main", {
             kind: "older",
             token: `older-${String(page)}`,
           }),
@@ -159,40 +144,30 @@ describe("Project Sessions query ownership", () => {
     view.rerender({ category: "main" });
     await waitForReady(view.result);
     await waitFor(() => {
-      expect(
-        requests.slice(reentryStart).filter((entry) => entry.category === "main"),
-      ).toEqual([request("project-1", "main", { kind: "newest" })]);
+      expect(requests.slice(reentryStart).filter((entry) => entry.category === "main")).toEqual([
+        sessionPageRequest("project-1", "main", { kind: "newest" }),
+      ]);
     });
     expect(
-      harness.queryClient.getQueryData(
-        queryKeys.projectSessionCatalog("project-1", "main"),
-      ),
+      harness.queryClient.getQueryData(queryKeys.projectSessionCatalog("project-1", "main")),
     ).toBeDefined();
   });
 
   it("removes its exact query on route unmount and remounts from newest", async () => {
-    const requests: CatalogRequest[] = [];
+    const requests: SessionPageRequest[] = [];
     const harness = createHarness(catalogRoute(requests));
-    const view = renderHook(
-      () => useProjectSessionsData("project-1", "main"),
-      { wrapper: harness.Wrapper },
-    );
+    const view = renderHook(() => useProjectSessionsData("project-1", "main"), { wrapper: harness.Wrapper });
     await waitForReady(view.result);
     view.unmount();
     expect(
-      harness.queryClient.getQueryData(
-        queryKeys.projectSessionCatalog("project-1", "main"),
-      ),
+      harness.queryClient.getQueryData(queryKeys.projectSessionCatalog("project-1", "main")),
     ).toBeUndefined();
     const remountStart = requests.length;
 
-    const utils = renderHook(
-      () => useProjectSessionsData("project-1", "main"),
-      { wrapper: harness.Wrapper },
-    );
+    const utils = renderHook(() => useProjectSessionsData("project-1", "main"), { wrapper: harness.Wrapper });
     await waitForReady(utils.result);
     expect(requests.slice(remountStart)).toEqual([
-      request("project-1", "main", { kind: "newest" }),
+      sessionPageRequest("project-1", "main", { kind: "newest" }),
     ]);
   });
 
@@ -202,10 +177,9 @@ describe("Project Sessions query ownership", () => {
       error: new Error("initial failed"),
     });
     {
-      const view = renderHook(
-        () => useProjectSessionsData("project-1", "main"),
-        { wrapper: initial.Wrapper },
-      );
+      const view = renderHook(() => useProjectSessionsData("project-1", "main"), {
+        wrapper: initial.Wrapper,
+      });
       await waitFor(() => {
         expect(view.result.current.kind).toBe("error");
       });
@@ -213,10 +187,7 @@ describe("Project Sessions query ownership", () => {
 
     const older = createHarness(failingDirectionRoute("older"));
     {
-      const view = renderHook(
-        () => useProjectSessionsData("project-1", "main"),
-        { wrapper: older.Wrapper },
-      );
+      const view = renderHook(() => useProjectSessionsData("project-1", "main"), { wrapper: older.Wrapper });
       await waitForReady(view.result);
       act(() => {
         ready(view.result.current).loadOlder();
@@ -229,10 +200,7 @@ describe("Project Sessions query ownership", () => {
 
     const newer = createHarness(failingDirectionRoute("newer"));
     {
-      const view = renderHook(
-        () => useProjectSessionsData("project-1", "main"),
-        { wrapper: newer.Wrapper },
-      );
+      const view = renderHook(() => useProjectSessionsData("project-1", "main"), { wrapper: newer.Wrapper });
       await waitForReady(view.result);
       act(() => {
         ready(view.result.current).loadNewer();
@@ -247,7 +215,7 @@ describe("Project Sessions query ownership", () => {
       method: "session.page",
       handler: (_params, callIndex) => {
         if (callIndex > 0) throw new Error("refresh failed");
-        return page({
+        return singleSessionPageFixture({
           projectID: "project-1",
           category: "main",
           sessionID: "session-1",
@@ -256,10 +224,9 @@ describe("Project Sessions query ownership", () => {
         });
       },
     });
-    const view = renderHook(
-      () => useProjectSessionsData("project-1", "main"),
-      { wrapper: replacement.Wrapper },
-    );
+    const view = renderHook(() => useProjectSessionsData("project-1", "main"), {
+      wrapper: replacement.Wrapper,
+    });
     await waitForReady(view.result);
     act(() => {
       view.result.current.retry();
@@ -268,14 +235,7 @@ describe("Project Sessions query ownership", () => {
       expect(view.result.current.kind).toBe("error");
     });
   });
-
 });
-
-type CatalogRequest = Readonly<{
-  projectID: string;
-  category: SessionCategory;
-  position: SessionPagePosition;
-}>;
 
 function createHarness(route: FakeRoute) {
   const services = createTestServices([route]);
@@ -295,13 +255,13 @@ function createHarness(route: FakeRoute) {
   return { queryClient, services, Wrapper };
 }
 
-function catalogRoute(requests: CatalogRequest[]): FakeRoute {
+function catalogRoute(requests: SessionPageRequest[]): FakeRoute {
   return {
     method: "session.page",
     handler: (params) => {
-      const input = catalogRequest(params);
+      const input = parseSessionPageRequest(params);
       requests.push(input);
-      return page({
+      return singleSessionPageFixture({
         projectID: input.projectID,
         category: input.category,
         sessionID: `${input.projectID}-${input.category}`,
@@ -312,7 +272,7 @@ function catalogRoute(requests: CatalogRequest[]): FakeRoute {
   };
 }
 
-function pagedCatalogRoute(requests: CatalogRequest[]): FakeRoute {
+function pagedCatalogRoute(requests: SessionPageRequest[]): FakeRoute {
   const pageByToken = new Map<string, number>();
   for (let pageNumber = 0; pageNumber <= 20; pageNumber += 1) {
     pageByToken.set(`older-${String(pageNumber)}`, pageNumber);
@@ -321,10 +281,10 @@ function pagedCatalogRoute(requests: CatalogRequest[]): FakeRoute {
   return {
     method: "session.page",
     handler: (params) => {
-      const input = catalogRequest(params);
+      const input = parseSessionPageRequest(params);
       requests.push(input);
       if (input.position.kind === "newest") {
-        return page({
+        return singleSessionPageFixture({
           projectID: input.projectID,
           category: input.category,
           sessionID: "session-shared",
@@ -338,7 +298,7 @@ function pagedCatalogRoute(requests: CatalogRequest[]): FakeRoute {
         throw new Error("Fixture received an unknown Session cursor.");
       }
       if (input.position.kind === "older") {
-        return page({
+        return singleSessionPageFixture({
           projectID: input.projectID,
           category: input.category,
           sessionID: pageNumber === 1 ? "session-shared" : `session-${String(pageNumber)}`,
@@ -347,7 +307,7 @@ function pagedCatalogRoute(requests: CatalogRequest[]): FakeRoute {
           name: pageNumber === 1 ? "Older occurrence" : `Session ${String(pageNumber)}`,
         });
       }
-      return page({
+      return singleSessionPageFixture({
         projectID: input.projectID,
         category: input.category,
         sessionID: `session-newer-${String(pageNumber)}`,
@@ -362,11 +322,11 @@ function failingDirectionRoute(direction: "older" | "newer"): FakeRoute {
   return {
     method: "session.page",
     handler: (params) => {
-      const input = catalogRequest(params);
+      const input = parseSessionPageRequest(params);
       if (input.position.kind === direction) {
         throw new Error(`${direction} failed`);
       }
-      return page({
+      return singleSessionPageFixture({
         projectID: input.projectID,
         category: input.category,
         sessionID: "session-1",
@@ -377,62 +337,12 @@ function failingDirectionRoute(direction: "older" | "newer"): FakeRoute {
   };
 }
 
-function catalogRequest(params: unknown): CatalogRequest {
-  const value = catalogRequestSchema.parse(params);
-  return request(value.project_id, value.category, value.position);
-}
-
-const catalogRequestSchema = z.object({
-  project_id: z.string(),
-  category: z.enum(["main", "subagent"]),
-  position: z.discriminatedUnion("kind", [
-    z.object({ kind: z.literal("newest") }),
-    z.object({ kind: z.literal("older"), token: z.string() }),
-    z.object({ kind: z.literal("newer"), token: z.string() }),
-  ]),
-});
-
-function request(
-  projectID: string,
-  category: SessionCategory,
-  position: SessionPagePosition,
-): CatalogRequest {
-  return { projectID, category, position };
-}
-
-function page(input: Readonly<{
-  projectID: string;
-  category: SessionCategory;
-  sessionID: string;
-  older: string | null;
-  newer: string | null;
-  name?: string;
-}>) {
-  return {
-    project_id: input.projectID,
-    category: input.category,
-    sessions: [
-      {
-        session_id: input.sessionID,
-        category: input.category,
-        name: input.name ?? "Session",
-        first_prompt_preview: "Prompt",
-        updated_at: "2026-08-11T20:00:00Z",
-      },
-    ],
-    ...(input.older === null ? {} : { older: input.older }),
-    ...(input.newer === null ? {} : { newer: input.newer }),
-  };
-}
-
 function ready(value: ReturnType<typeof useProjectSessionsData>) {
   if (value.kind !== "ready") throw new Error(`Expected ready data, received ${value.kind}.`);
   return value;
 }
 
-async function waitForReady(
-  result: Readonly<{ current: ReturnType<typeof useProjectSessionsData> }>,
-) {
+async function waitForReady(result: Readonly<{ current: ReturnType<typeof useProjectSessionsData> }>) {
   await waitFor(() => {
     expect(result.current.kind).toBe("ready");
   });

@@ -13,12 +13,3 @@ it("rejects malformed present workflow selectors while preserving omission", () 
   });
   expect(() => validate({ workflowId: "workflow-1" })).toThrow();
 });
-
-it("does not add Project workspace tabs to route search state", () => {
-  const validate = createAppRouter().routesById["/projects/$projectId"].options.validateSearch;
-  if (!(validate instanceof Function)) {
-    throw new Error("project route search validation is unavailable");
-  }
-
-  expect(validate({ tab: "workflows" })).toEqual({ taskId: "", workflowId: undefined });
-});

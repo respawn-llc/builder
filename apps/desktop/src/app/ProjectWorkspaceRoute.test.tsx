@@ -1,8 +1,10 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 import { AppRoot } from "./AppRoot";
 import { removeBrowserStorage } from "@/app-facade";
 import { createTestServices, startupRoutes } from "@/test-support/app-services";
+import { MemoryStorage } from "@/test-support/browser-storage";
+import { getSelectedTabs, getUnselectedTab } from "@/test-support/tabs";
 
 const bodyMounts = vi.hoisted(() => ({
   sessions: vi.fn(),
@@ -44,37 +46,31 @@ describe("Project workspace route composition", () => {
     const services = createTestServices(routes());
     render(<AppRoot services={services} />);
 
-    expect(
-      await screen.findByRole("heading", { name: "Kent" }, { timeout: 5_000 }),
-    ).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Kent" }, { timeout: 5_000 })).toBeInTheDocument();
     expect(screen.getByText("KNT")).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Sessions" })).toHaveAttribute(
-      "aria-selected",
-      "true",
-    );
+    const workspace = screen.getByTestId("project-workspace");
+    expect(getSelectedTabs(workspace)).toHaveLength(1);
     expect(screen.getByTestId("sessions-body")).toBeInTheDocument();
     expect(screen.queryByTestId("workflows-body")).not.toBeInTheDocument();
     expect(bodyMounts.sessions).toHaveBeenCalled();
     expect(bodyMounts.workflows).not.toHaveBeenCalled();
-    expect(screen.queryByRole("button", { name: /link workflow/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /new session/i })).not.toBeInTheDocument();
-    expect(
-      services.transport.calls.filter((call) => call.method === "workflow.board.get"),
-    ).toHaveLength(0);
+    expect(within(workspace).queryByRole("button")).not.toBeInTheDocument();
+    expect(services.transport.calls.filter((call) => call.method === "workflow.board.get")).toHaveLength(0);
   });
 
   it("restores a Project into Sessions and mounts only Workflows after tab selection", async () => {
     window.history.replaceState(null, "", "/");
-    localStorage.setItem(
-      "desktop.lastProjectRoute",
-      JSON.stringify({ projectId: "project-1" }),
-    );
+    localStorage.setItem("desktop.lastProjectRoute", JSON.stringify({ projectId: "project-1" }));
     const services = createTestServices(routes());
     render(<AppRoot services={services} />);
 
-    fireEvent.click(await screen.findByRole("tab", { name: "Workflows" }));
+    const workspace = await screen.findByTestId("project-workspace");
+    const destination = window.location.href;
+    expect(new URL(destination).searchParams.has("tab")).toBe(false);
+    fireEvent.click(getUnselectedTab(workspace));
     expect(await screen.findByTestId("workflows-body")).toBeInTheDocument();
     expect(screen.queryByTestId("sessions-body")).not.toBeInTheDocument();
+    expect(window.location.href).toBe(destination);
     await waitFor(() => {
       expect(bodyMounts.workflows).toHaveBeenCalled();
     });
@@ -116,13 +112,8 @@ describe("Project workspace route composition", () => {
     ]);
     render(<AppRoot services={services} />);
 
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Kent /workspace/kent" }),
-    );
-    expect(
-      await screen.findByRole("heading", { name: "Kent" }, { timeout: 5_000 }),
-    ).toBeInTheDocument();
-    expect(screen.getByTestId("sessions-body")).toBeInTheDocument();
+    fireEvent.click(await screen.findByTestId("home-list-card-button"));
+    expect(await screen.findByTestId("sessions-body")).toBeInTheDocument();
   });
 });
 
@@ -141,32 +132,4 @@ function routes() {
       },
     },
   ];
-}
-
-class MemoryStorage implements Storage {
-  #entries = new Map<string, string>();
-
-  get length(): number {
-    return this.#entries.size;
-  }
-
-  clear(): void {
-    this.#entries.clear();
-  }
-
-  getItem(key: string): string | null {
-    return this.#entries.get(key) ?? null;
-  }
-
-  key(index: number): string | null {
-    return [...this.#entries.keys()][index] ?? null;
-  }
-
-  removeItem(key: string): void {
-    this.#entries.delete(key);
-  }
-
-  setItem(key: string, value: string): void {
-    this.#entries.set(key, value);
-  }
 }

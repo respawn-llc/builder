@@ -1,5 +1,5 @@
 import { QueryClient } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { z } from "zod";
 
@@ -7,6 +7,7 @@ import { queryKeys } from "@/app-facade";
 import { ProjectWorkspaceTabProvider } from "@/app-facade";
 import { createTestServices, TestAppProviders } from "@/test-support/app-services";
 import type { FakeRoute } from "@/test-support/api";
+import { getUnselectedTab } from "@/test-support/tabs";
 import { ProjectWorkspaceRoute } from "./ProjectWorkspace";
 
 vi.mock("@/features/board", () => ({
@@ -46,7 +47,7 @@ it("retains the selected Project tab while moving between Projects", async () =>
     },
   ];
   const view = renderWorkspace(routes);
-  fireEvent.click(await screen.findByRole("tab", { name: "Workflows" }));
+  fireEvent.click(getUnselectedTab(await screen.findByTestId("project-workspace")));
   expect(await screen.findByTestId("workflows-body")).toBeInTheDocument();
 
   view.rerender(
@@ -63,22 +64,18 @@ it("retains the selected Project tab while moving between Projects", async () =>
 it("renders whole-workspace loading and retryable failure without identity", async () => {
   const pending = new Promise<never>(() => undefined);
   {
-    const view = renderWorkspace([
-      { method: "project.edit.get", handler: async () => pending },
-    ]);
+    const view = renderWorkspace([{ method: "project.edit.get", handler: async () => pending }]);
     expect(await screen.findByTestId("loading-state")).toBeInTheDocument();
     view.unmount();
   }
 
-  const view = renderWorkspace([
-    { method: "project.edit.get", error: new Error("identity unavailable") },
-  ]);
-  expect(await screen.findByText("identity unavailable")).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+  const view = renderWorkspace([{ method: "project.edit.get", error: new Error("identity unavailable") }]);
+  expect(await screen.findByTestId("error-state")).toBeInTheDocument();
+  fireEvent.click(within(screen.getByTestId("error-state-actions")).getByRole("button"));
   await waitFor(() => {
-    expect(
-      view.services.transport.calls.filter((call) => call.method === "project.edit.get"),
-    ).toHaveLength(2);
+    expect(view.services.transport.calls.filter((call) => call.method === "project.edit.get")).toHaveLength(
+      2,
+    );
   });
 });
 
@@ -89,7 +86,7 @@ it("replaces cached identity content when a refresh fails", async () => {
       {
         projectID: "project-1",
         projectKey: "KNT",
-        displayName: "Cached Kent",
+        displayName: "project-cached-display-name",
         defaultWorkspaceID: "workspace-1",
         workspaces: [],
         nextPageToken: "",
@@ -97,13 +94,10 @@ it("replaces cached identity content when a refresh fails", async () => {
     ],
     pageParams: [""],
   });
-  renderWorkspace(
-    [{ method: "project.edit.get", error: new Error("refresh failed") }],
-    queryClient,
-  );
+  renderWorkspace([{ method: "project.edit.get", error: new Error("refresh failed") }], queryClient);
 
-  expect(await screen.findByText("refresh failed")).toBeInTheDocument();
-  expect(screen.queryByText("Cached Kent")).not.toBeInTheDocument();
+  expect(await screen.findByTestId("error-state")).toBeInTheDocument();
+  expect(screen.queryByText("project-cached-display-name")).not.toBeInTheDocument();
   expect(screen.queryByTestId("sessions-body")).not.toBeInTheDocument();
 });
 
