@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef } from "react";
 
 import type { OffsetPage, QuestionAnswerInput, TaskDetail } from "@/api";
 import { errorMessage } from "@/api";
-import { invalidateProjectTaskSearches, queryKeys } from "@/app-facade";
+import { invalidateProjectBoardQueries, invalidateProjectTaskSearches, queryKeys } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
 import { useConnectionSnapshot } from "@/app-facade";
 import {
@@ -238,10 +238,7 @@ export function useTaskMutations(
         await Promise.all([
           queryClient.invalidateQueries({ queryKey: queryKeys.task(pair.blockerTaskID) }),
           queryClient.invalidateQueries({ queryKey: queryKeys.task(pair.blockedTaskID) }),
-          queryClient.invalidateQueries({ queryKey: queryKeys.projectBoardsRoot(projectID) }),
-          queryClient.invalidateQueries({
-            queryKey: queryKeys.projectBoardNodeCardsRoot(projectID),
-          }),
+          invalidateProjectBoardQueries(queryClient, projectID),
           queryClient.invalidateQueries({
             queryKey: queryKeys.projectTaskListsRoot(projectID),
           }),

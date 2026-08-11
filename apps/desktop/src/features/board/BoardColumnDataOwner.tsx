@@ -1,17 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
 
-import { boardFiltersEqual, errorMessage, type BoardColumn, type SelectedWorkflowBoard } from "@/api";
+import { errorMessage, type BoardColumn, type SelectedWorkflowBoard } from "@/api";
 import { useAppServices } from "@/app-facade";
 import { useProjectLabelCatalog } from "@/shared/labels";
-import {
-  directionalBoundary,
-  useStableCallback,
-  type VirtualizedInfiniteListBoundaryState,
-} from "@/ui";
+import { directionalBoundary, useStableCallback, type VirtualizedInfiniteListBoundaryState } from "@/ui";
 import { cardBelongsToColumn } from "./BoardCardMotionModel";
 import { toKanbanCardVM, type KanbanCardVM } from "./BoardColumnViewModel";
-import { useBoardFilterGeneration } from "./BoardFilterGenerationRuntime";
 import { useBoardNodeCards } from "./useBoardData";
 
 export type BoardColumnUpdateCause = "hydration" | "pagination" | "domain";
@@ -69,11 +64,9 @@ export function BoardColumnDataOwner({
   const { t } = useTranslation();
   const { logger } = useAppServices();
   const labelCatalog = useProjectLabelCatalog();
-  const filterGeneration = useBoardFilterGeneration();
   const stableOnDataViewChange = useStableCallback(onDataViewChange);
   const stableOnDataViewRelease = useStableCallback(onDataViewRelease);
   const stableOnReportColumnSnapshot = useStableCallback(onReportColumnSnapshot);
-  const activeFilterGeneration = filterGeneration.snapshot.active;
   const cardsQuery = useBoardNodeCards(board.projectID, board.selectedWorkflow.id, column.id, true);
   const generationRef = useRef(0);
   const paginationInFlightRef = useRef(false);
@@ -111,26 +104,11 @@ export function BoardColumnDataOwner({
     isPending,
     refetch,
   } = cardsQuery;
-  const requestEnabled = !activeFilterGeneration.retiring && filterGeneration.snapshot.desiredFilter === null;
-  const paginationEnabled = requestEnabled && !isPlaceholderData && cardsQuery.data !== undefined;
+  const paginationEnabled = !isPlaceholderData && cardsQuery.data !== undefined;
   const replacementDataRetained = cardsQuery.data !== undefined && isPlaceholderData;
   const retryCards = useCallback(() => {
-    const current = filterGeneration.controller.getSnapshot();
-    if (
-      current.active.generation !== activeFilterGeneration.generation ||
-      current.active.retiring ||
-      current.desiredFilter !== null ||
-      !boardFiltersEqual(current.active.filter, activeFilterGeneration.filter)
-    ) {
-      return;
-    }
     void refetch();
-  }, [
-    activeFilterGeneration.filter,
-    activeFilterGeneration.generation,
-    filterGeneration.controller,
-    refetch,
-  ]);
+  }, [refetch]);
   const loadNewer = useCallback(() => {
     if (paginationEnabled && hasPreviousPage && !isFetchingPreviousPage) {
       void fetchPreviousPage();
@@ -184,7 +162,7 @@ export function BoardColumnDataOwner({
   );
   const replacementBoundary = useMemo<VirtualizedInfiniteListBoundaryState | undefined>(
     () =>
-      isError && replacementDataRetained && requestEnabled
+      isError && replacementDataRetained
         ? {
             state: "error",
             message: t("board.cardsLoadRetryBody"),
@@ -192,7 +170,7 @@ export function BoardColumnDataOwner({
             onRetry: retryCards,
           }
         : undefined,
-    [isError, replacementDataRetained, requestEnabled, retryCards, t],
+    [isError, replacementDataRetained, retryCards, t],
   );
   const dataView = useMemo<BoardColumnDataView>(
     () => ({
@@ -235,19 +213,10 @@ export function BoardColumnDataOwner({
     void logger.append("warn", "Board task-card replacement failed.", {
       columnID: column.id,
       error: errorMessage(error),
-      filterGeneration: activeFilterGeneration.generation.toString(),
       projectID: board.projectID,
       workflowID: board.selectedWorkflow.id,
     });
-  }, [
-    activeFilterGeneration.generation,
-    board.projectID,
-    board.selectedWorkflow.id,
-    column.id,
-    error,
-    logger,
-    replacementBoundary,
-  ]);
+  }, [board.projectID, board.selectedWorkflow.id, column.id, error, logger, replacementBoundary]);
 
   useEffect(() => {
     if (isFetchingPreviousPage || isFetchingNextPage || isFetchPreviousPageError || isFetchNextPageError) {
@@ -256,8 +225,11 @@ export function BoardColumnDataOwner({
   }, [isFetchNextPageError, isFetchPreviousPageError, isFetchingNextPage, isFetchingPreviousPage]);
 
   useEffect(() => {
-    const cause: BoardColumnUpdateCause =
-      paginationInFlightRef.current ? "pagination" : isPlaceholderData ? "hydration" : "domain";
+    const cause: BoardColumnUpdateCause = paginationInFlightRef.current
+      ? "pagination"
+      : isPlaceholderData
+        ? "hydration"
+        : "domain";
     generationRef.current += 1;
     stableOnReportColumnSnapshot(column.id, {
       cause,

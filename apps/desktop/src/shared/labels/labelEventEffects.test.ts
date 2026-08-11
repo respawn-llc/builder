@@ -1,4 +1,4 @@
-import { QueryClient, QueryObserver } from "@tanstack/react-query";
+import { QueryClient } from "@tanstack/react-query";
 import { waitFor } from "@testing-library/react";
 import { vi } from "vitest";
 
@@ -208,15 +208,11 @@ describe("Project label event effects", () => {
       listCatalog: async () => pendingCatalog.promise,
     });
     const filterActions: unknown[] = [];
-    const membershipEffects: unknown[] = [];
     const effects = createProjectLabelEffects({
       authority,
       onBackgroundError: vi.fn(),
       onFilterAction: (action) => {
         filterActions.push(action);
-      },
-      onMembershipRefresh: (effect) => {
-        membershipEffects.push(effect);
       },
       projectID: "project-1",
       queryClient,
@@ -255,18 +251,6 @@ describe("Project label event effects", () => {
       { type: "label.deleted", labelID: alphaID },
       { type: "label.deleted", labelID: alphaID },
     ]);
-    expect(membershipEffects).toEqual([
-      {
-        kind: "catalog.deleted",
-        labelID: alphaID,
-        projectID: "project-1",
-      },
-      {
-        kind: "catalog.deleted",
-        labelID: alphaID,
-        projectID: "project-1",
-      },
-    ]);
   });
 
   it("refreshes membership reads without invalidating the removed assignment read", async () => {
@@ -278,17 +262,14 @@ describe("Project label event effects", () => {
       queryClient,
       listCatalog: async () => pendingCatalog.promise,
     });
-    const membershipEffects: unknown[] = [];
     const effects = createProjectLabelEffects({
       authority,
       onBackgroundError: vi.fn(),
-      onMembershipRefresh: (effect) => {
-        membershipEffects.push(effect);
-      },
       projectID: "project-1",
       queryClient,
     });
     const assignmentKey = queryKeys.taskLabels("task-1");
+    const defaultBoardKey = queryKeys.board("project-1", undefined, { kind: "none" });
     const boardKey = queryKeys.board("project-1", "11111111-1111-4111-8111-111111111111", { kind: "none" });
     const unrelatedBoardKey = queryKeys.board("project-2", "11111111-1111-4111-8111-111111111111", {
       kind: "none",
@@ -296,6 +277,7 @@ describe("Project label event effects", () => {
     const taskListKey = queryKeys.projectTaskListsRoot("project-1");
     const unrelatedTaskListKey = queryKeys.projectTaskListsRoot("project-2");
     queryClient.setQueryData(assignmentKey, { taskID: "task-1", labelIDs: [alphaID] });
+    queryClient.setQueryData(defaultBoardKey, { projectID: "project-1" });
     queryClient.setQueryData(boardKey, { projectID: "project-1" });
     queryClient.setQueryData(unrelatedBoardKey, { projectID: "project-2" });
     queryClient.setQueryData(taskListKey, { tasks: [] });
@@ -310,6 +292,9 @@ describe("Project label event effects", () => {
       true,
     );
     expect(
+      queryClient.getQueryCache().find({ queryKey: defaultBoardKey, exact: true })?.state.isInvalidated,
+    ).toBe(true);
+    expect(
       queryClient.getQueryCache().find({ queryKey: taskListKey, exact: true })?.state.isInvalidated,
     ).toBe(true);
     expect(
@@ -318,57 +303,7 @@ describe("Project label event effects", () => {
     expect(
       queryClient.getQueryCache().find({ queryKey: unrelatedTaskListKey, exact: true })?.state.isInvalidated,
     ).toBe(false);
-    expect(membershipEffects).toEqual([
-      {
-        kind: "task.labels_changed",
-        projectID: "project-1",
-        taskID: "task-1",
-        workflowID: "11111111-1111-4111-8111-111111111111",
-      },
-    ]);
-
     await effects.consumeProjectEvent(taskEvent("updated", "task-2"));
-    expect(membershipEffects).toHaveLength(1);
-  });
-
-  it("lets the host close request admission before broad membership invalidation refetches", async () => {
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    });
-    const authority = createProjectCatalogAuthority({
-      projectID: "project-1",
-      queryClient,
-      listCatalog: async () => pendingCatalog.promise,
-    });
-    let admissionClosed = false;
-    let admittedTransportCalls = 0;
-    const boardKey = queryKeys.board("project-1", "11111111-1111-4111-8111-111111111111", { kind: "none" });
-    const observer = new QueryObserver(queryClient, {
-      queryKey: boardKey,
-      queryFn: async () => {
-        if (!admissionClosed) {
-          admittedTransportCalls += 1;
-        }
-        return { projectID: "project-1" };
-      },
-    });
-    const unsubscribe = observer.subscribe(() => undefined);
-    await observer.refetch();
-    admittedTransportCalls = 0;
-    const effects = createProjectLabelEffects({
-      authority,
-      onBackgroundError: vi.fn(),
-      onMembershipRefresh: () => {
-        admissionClosed = true;
-      },
-      projectID: "project-1",
-      queryClient,
-    });
-
-    await effects.consumeProjectEvent(taskEvent("labels_changed", "task-1"));
-
-    expect(admittedTransportCalls).toBe(0);
-    unsubscribe();
   });
 
   it("removes a deleted task before refreshing membership", async () => {
@@ -380,13 +315,9 @@ describe("Project label event effects", () => {
       queryClient,
       listCatalog: async () => pendingCatalog.promise,
     });
-    const membershipEffects: unknown[] = [];
     const effects = createProjectLabelEffects({
       authority,
       onBackgroundError: vi.fn(),
-      onMembershipRefresh: (effect) => {
-        membershipEffects.push(effect);
-      },
       projectID: "project-1",
       queryClient,
     });
@@ -400,14 +331,6 @@ describe("Project label event effects", () => {
 
     expect(queryClient.getQueryData(queryKeys.task("task-1"))).toBeUndefined();
     expect(queryClient.getQueryData(queryKeys.taskLabels("task-1"))).toBeUndefined();
-    expect(membershipEffects).toEqual([
-      {
-        kind: "task.deleted",
-        projectID: "project-1",
-        taskID: "task-1",
-        workflowID: "11111111-1111-4111-8111-111111111111",
-      },
-    ]);
   });
 });
 

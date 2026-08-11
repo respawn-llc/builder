@@ -1,34 +1,11 @@
 import type { QueryClient } from "@tanstack/react-query";
 
 import type { ProjectLabel, ProjectLabelCatalog, WorkflowProjectEvent } from "@/api";
-import { queryKeys } from "@/app-facade";
+import { invalidateProjectBoardQueries, queryKeys } from "@/app-facade";
 import type { LabelFilterAction } from "./labelFilterState";
 import type { ProjectCatalogAuthority } from "./projectCatalogAuthority";
 import { taskLabelAssignmentRegistryFor } from "./taskLabelAssignmentRegistry";
 import { pruneDeletedLabelFromExistingCaches, removeDeletedTaskFromExistingCaches } from "./taskLabelCache";
-
-export type LabelMembershipRefreshEffect =
-  | Readonly<{
-      kind: "catalog.deleted";
-      labelID: string;
-      projectID: string;
-    }>
-  | Readonly<{
-      kind: "task.labels_changed";
-      projectID: string;
-      taskID: string;
-      workflowID: string;
-    }>
-  | Readonly<{
-      kind: "task.deleted";
-      projectID: string;
-      taskID: string;
-      workflowID: string;
-    }>
-  | Readonly<{
-      kind: "subscription.refresh";
-      projectID: string;
-    }>;
 
 export type ProjectLabelEffects = Readonly<{
   applyLocalCreate(label: ProjectLabel): Promise<void>;
@@ -42,14 +19,12 @@ export type ProjectLabelEffects = Readonly<{
 export function createProjectLabelEffects({
   authority,
   onFilterAction,
-  onMembershipRefresh,
   onBackgroundError,
   projectID,
   queryClient,
 }: Readonly<{
   authority: ProjectCatalogAuthority;
   onFilterAction?: ((action: LabelFilterAction) => void) | undefined;
-  onMembershipRefresh?: ((effect: LabelMembershipRefreshEffect) => Promise<void> | void) | undefined;
   onBackgroundError: (error: unknown) => void;
   projectID: string;
   queryClient: QueryClient;
@@ -61,25 +36,9 @@ export function createProjectLabelEffects({
       refetchType: "active",
     });
   };
-  const refreshMembership = async (effect: LabelMembershipRefreshEffect): Promise<void> => {
-    await onMembershipRefresh?.(effect);
-    const workflowID =
-      effect.kind === "task.labels_changed" || effect.kind === "task.deleted" ? effect.workflowID : undefined;
+  const refreshMembership = async (): Promise<void> => {
     await Promise.all([
-      queryClient.invalidateQueries({
-        queryKey:
-          workflowID === undefined
-            ? queryKeys.projectBoardsRoot(projectID)
-            : queryKeys.boardWorkflowRoot(projectID, workflowID),
-        refetchType: "active",
-      }),
-      queryClient.invalidateQueries({
-        queryKey:
-          workflowID === undefined
-            ? queryKeys.projectBoardNodeCardsRoot(projectID)
-            : queryKeys.boardNodeCardsWorkflowRoot(projectID, workflowID),
-        refetchType: "active",
-      }),
+      invalidateProjectBoardQueries(queryClient, projectID),
       queryClient.invalidateQueries({
         queryKey: queryKeys.projectTaskListsRoot(projectID),
         refetchType: "active",
@@ -91,11 +50,7 @@ export function createProjectLabelEffects({
     registry.deleteLabel(projectID, labelID);
     pruneDeletedLabelFromExistingCaches(queryClient, labelID);
     onFilterAction?.({ type: "label.deleted", labelID });
-    await refreshMembership({
-      kind: "catalog.deleted",
-      labelID,
-      projectID,
-    });
+    await refreshMembership();
   };
   return {
     async applyLocalCreate(label) {
@@ -133,30 +88,17 @@ export function createProjectLabelEffects({
       if (event.action === "deleted") {
         registry.deleteTask(taskID);
         removeDeletedTaskFromExistingCaches(queryClient, taskID);
-        await refreshMembership({
-          kind: "task.deleted",
-          projectID,
-          taskID,
-          workflowID: event.workflowID,
-        });
+        await refreshMembership();
         return;
       }
       if (event.action !== "labels_changed") {
         return;
       }
-      await refreshMembership({
-        kind: "task.labels_changed",
-        projectID,
-        taskID,
-        workflowID: event.workflowID,
-      });
+      await refreshMembership();
     },
     async refreshAfterSubscriptionBoundary() {
       authority.requestRefresh();
-      await refreshMembership({
-        kind: "subscription.refresh",
-        projectID,
-      });
+      await refreshMembership();
     },
   };
 }

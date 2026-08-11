@@ -1,5 +1,4 @@
 import {
-  hashKey,
   useInfiniteQuery,
   useMutation,
   useQuery,
@@ -9,33 +8,24 @@ import {
 import { useCallback, useEffect } from "react";
 
 import { boardNodeCardsPageSize, type BoardNodeCardsPage, type WorkflowProjectEvent } from "@/api";
-import { invalidateProjectTaskSearches, queryKeys } from "@/app-facade";
+import { invalidateProjectBoardQueries, invalidateProjectTaskSearches, queryKeys } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
 import { useConnectionSnapshot } from "@/app-facade";
 import { workflowProjectEventCanChangeTaskSearch } from "@/app-facade";
 import { workflowProjectQuestionTaskID } from "@/app-facade";
 import { useProjectLabelEffects } from "@/shared/labels";
 import { workflowProjectEventAffectsDependencyBoard } from "@/shared/task-dependencies";
-import { useBoardFilterGeneration } from "./BoardFilterGenerationRuntime";
+import { useBoardQuery } from "./BoardQueryRuntime";
 import { useRetainedQueryData } from "./useRetainedQueryData";
 import { useBoardTaskLifecycleAction } from "./useBoardTaskLifecycleAction";
 
 export function useBoard(projectID: string, workflowID: string | undefined) {
   const { api } = useAppServices();
-  const { queriesEnabled, requestAdapter, snapshot } = useBoardFilterGeneration();
-  const { active } = snapshot;
-  const queryKey = queryKeys.board(projectID, workflowID, active.filter);
+  const { filter, queriesEnabled } = useBoardQuery();
   const query = useQuery({
-    queryKey,
-    queryFn: async ({ signal }) =>
-      requestAdapter.requestBoard({
-        generation: active.generation,
-        queryKey,
-        requestIdentity: hashKey(queryKey),
-        signal,
-        transport: async () => api.getBoard(projectID, workflowID, active.filter),
-      }),
-    enabled: queriesEnabled && !active.retiring && projectID.trim().length > 0,
+    queryKey: queryKeys.board(projectID, workflowID, filter),
+    queryFn: async () => api.getBoard(projectID, workflowID, filter),
+    enabled: queriesEnabled && projectID.trim().length > 0,
     gcTime: 0,
     placeholderData: (previous) => previous,
   });
@@ -60,15 +50,7 @@ function boardScopesEqual(left: BoardScope, right: BoardScope): boolean {
 
 export function useBoardNodeCards(projectID: string, workflowID: string, nodeID: string, enabled: boolean) {
   const { api } = useAppServices();
-  const { queriesEnabled, requestAdapter, snapshot, sort } = useBoardFilterGeneration();
-  const { active } = snapshot;
-  const queryKey = queryKeys.boardNodeCards({
-    filter: active.filter,
-    nodeID,
-    projectID,
-    sort,
-    workflowID,
-  });
+  const { filter, queriesEnabled, sort } = useBoardQuery();
   const query = useInfiniteQuery<
     BoardNodeCardsPage,
     Error,
@@ -76,31 +58,24 @@ export function useBoardNodeCards(projectID: string, workflowID: string, nodeID:
     readonly unknown[],
     number
   >({
-    queryKey,
-    queryFn: async ({ pageParam, signal }) =>
-      requestAdapter.requestCards({
-        generation: active.generation,
-        queryKey,
-        requestIdentity: hashKey([...queryKey, pageParam]),
-        signal,
-        transport: async () =>
-          api.listBoardNodeCards({
-            projectID,
-            workflowID,
-            nodeID,
-            filter: active.filter,
-            offset: pageParam,
-            sort,
-          }),
+    queryKey: queryKeys.boardNodeCards({
+      filter,
+      nodeID,
+      projectID,
+      sort,
+      workflowID,
+    }),
+    queryFn: async ({ pageParam }) =>
+      api.listBoardNodeCards({
+        projectID,
+        workflowID,
+        nodeID,
+        filter,
+        offset: pageParam,
+        sort,
       }),
     initialPageParam: 0,
-    enabled:
-      queriesEnabled &&
-      !active.retiring &&
-      enabled &&
-      projectID.length > 0 &&
-      workflowID.length > 0 &&
-      nodeID.length > 0,
+    enabled: queriesEnabled && enabled && projectID.length > 0 && workflowID.length > 0 && nodeID.length > 0,
     getPreviousPageParam: (_firstPage, _allPages, firstPageParam) =>
       firstPageParam === 0 ? undefined : Math.max(0, firstPageParam - boardNodeCardsPageSize),
     getNextPageParam: (lastPage) => lastPage.nextOffset ?? undefined,
@@ -143,7 +118,6 @@ export function useProjectBoardSubscription(
 ) {
   const { api } = useAppServices();
   const queryClient = useQueryClient();
-  const boardGeneration = useBoardFilterGeneration();
   const connection = useConnectionSnapshot();
   const labelEffects = useProjectLabelEffects();
   const { onBackgroundError, onSelectedTaskDeleted, selectedTaskID, selectedWorkflowID } = input;
@@ -159,8 +133,12 @@ export function useProjectBoardSubscription(
       return;
     }
     async function refresh(): Promise<void> {
-      const activeGeneration = boardGeneration.controller.getSnapshot().active.generation;
-      await boardGeneration.queryRegistry.invalidateGeneration(activeGeneration);
+      await Promise.all([
+        invalidateProjectBoardQueries(queryClient, projectID),
+        queryClient.invalidateQueries({ queryKey: queryKeys.attention }),
+      ]);
+    }
+    async function refreshAttention(): Promise<void> {
       await queryClient.invalidateQueries({ queryKey: queryKeys.attention });
     }
     async function refreshQuestionTask(event: WorkflowProjectEvent): Promise<void> {
@@ -178,7 +156,7 @@ export function useProjectBoardSubscription(
       await invalidateProjectTaskSearches(queryClient, projectID);
     }
     async function refreshSubscriptionBoundary(): Promise<void> {
-      await Promise.all([refresh(), refreshTaskSearch()]);
+      await Promise.all([refreshAttention(), refreshTaskSearch()]);
     }
     const subscription = api.subscribeProject(projectID, {
       onOpen() {
@@ -213,8 +191,6 @@ export function useProjectBoardSubscription(
     };
   }, [
     api,
-    boardGeneration.controller,
-    boardGeneration.queryRegistry,
     boardQueryWorkflowID,
     connection.generation,
     connection.phase,
@@ -245,6 +221,9 @@ export function shouldRefreshBoardFromProjectEvent(
   boardQueryWorkflowID: string | undefined,
   selectedWorkflowID: string | undefined,
 ): boolean {
+  if (event.resource === "task" && event.action === "labels_changed" && event.workflowID !== null) {
+    return false;
+  }
   return (
     workflowProjectEventAffectsDependencyBoard(event, boardQueryWorkflowID) ||
     workflowProjectEventAffectsDependencyBoard(event, selectedWorkflowID)
@@ -254,14 +233,12 @@ export function shouldRefreshBoardFromProjectEvent(
 export function useBoardTaskActions(projectID: string) {
   const { api } = useAppServices();
   const queryClient = useQueryClient();
-  const boardGeneration = useBoardFilterGeneration();
   const refresh = useCallback(async (): Promise<void> => {
-    const activeGeneration = boardGeneration.controller.getSnapshot().active.generation;
     await Promise.all([
-      boardGeneration.queryRegistry.invalidateGeneration(activeGeneration),
+      invalidateProjectBoardQueries(queryClient, projectID),
       invalidateProjectTaskSearches(queryClient, projectID),
     ]);
-  }, [boardGeneration.controller, boardGeneration.queryRegistry, projectID, queryClient]);
+  }, [projectID, queryClient]);
   const refreshAfterTaskDelete = useCallback(
     async (taskID: string): Promise<void> => {
       await Promise.all([

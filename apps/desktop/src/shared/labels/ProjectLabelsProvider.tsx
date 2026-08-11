@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, type ReactNode } from "react";
 import { errorMessage } from "@/api";
 import { queryKeys, useAppServices, useConnectionSnapshot } from "@/app-facade";
 import { useStableCallback } from "@/ui";
-import { createProjectLabelEffects, type LabelMembershipRefreshEffect } from "./labelEventEffects";
+import { createProjectLabelEffects } from "./labelEventEffects";
 import { ProjectLabelDataContext } from "./projectLabelContext";
 import { projectCatalogAuthorityRegistryFor } from "./projectCatalogAuthorityRegistry";
 import { useManagedProjectLabelFilter } from "./projectLabelFilter";
@@ -12,13 +12,11 @@ import { useManagedProjectLabelFilter } from "./projectLabelFilter";
 export function ProjectLabelsProvider({
   children,
   onBackgroundError,
-  onMembershipRefresh,
   subscribeToProject = true,
   projectID,
 }: Readonly<{
   children: ReactNode;
   onBackgroundError?: ((error: unknown) => void) | undefined;
-  onMembershipRefresh?: ((effect: LabelMembershipRefreshEffect) => Promise<void> | void) | undefined;
   subscribeToProject?: boolean | undefined;
   projectID: string;
 }>) {
@@ -44,9 +42,6 @@ export function ProjectLabelsProvider({
   );
   const filter = useManagedProjectLabelFilter(projectID, catalogLabelIDs);
   useEffect(() => authorityLease.retain(filter.dispatch), [authorityLease, filter.dispatch]);
-  const notifyMembershipRefresh = useStableCallback(async (effect: LabelMembershipRefreshEffect) => {
-    await onMembershipRefresh?.(effect);
-  });
   const reportBackgroundError = useStableCallback((error: unknown) => {
     onBackgroundError?.(error);
     void logger.append("warn", "Project label refresh failed.", {
@@ -72,18 +67,10 @@ export function ProjectLabelsProvider({
         authority,
         onFilterAction: authorityLease.dispatchFilterAction,
         onBackgroundError: reportBackgroundError,
-        onMembershipRefresh: notifyMembershipRefresh,
         projectID,
         queryClient,
       }),
-    [
-      authority,
-      authorityLease.dispatchFilterAction,
-      notifyMembershipRefresh,
-      projectID,
-      queryClient,
-      reportBackgroundError,
-    ],
+    [authority, authorityLease.dispatchFilterAction, projectID, queryClient, reportBackgroundError],
   );
   useEffect(() => {
     if (!subscribeToProject || projectID.length === 0 || connection.phase !== "connected") {
