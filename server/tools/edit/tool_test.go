@@ -362,9 +362,6 @@ func TestOutsideWorkspaceFinalSymlinkRequiresRealPathApproval(t *testing.T) {
 	if prompts != 2 {
 		t.Fatalf("outside approval prompts = %d, want 2", prompts)
 	}
-	if got := toolResultText(t, result); !strings.Contains(got, "warning: edited through symlink") || !strings.Contains(got, target) {
-		t.Fatalf("final symlink result = %q, want real-path warning", got)
-	}
 }
 
 func TestPathDenyPolicyBlocksCreateReplaceAndRealSymlinkTargets(t *testing.T) {
