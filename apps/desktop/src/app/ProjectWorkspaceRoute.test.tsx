@@ -89,6 +89,8 @@ describe("Project workspace route", () => {
     await act(async () => {
       services.transport.connection.set("disconnected");
       await Promise.resolve();
+    });
+    await act(async () => {
       services.transport.connection.set("connected");
       await Promise.resolve();
     });
