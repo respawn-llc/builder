@@ -6,7 +6,6 @@ import { I18nextProvider } from "react-i18next";
 import { ApiClient, protocolVersion } from "@/api/composition";
 import {
   AppServicesProvider,
-  ProjectWorkspaceTabProvider,
   StatusProvider,
   TaskSearchMemoryProvider,
   WindowChromeTitleProvider,
@@ -46,14 +45,12 @@ export type CreateTestServicesOptions = Readonly<{
 
 export function TestAppProviders({
   children,
-  queryClient: providedQueryClient,
   services,
 }: Readonly<{
   children: ReactNode;
-  queryClient?: QueryClient | undefined;
   services: AppServices;
 }>) {
-  const defaultQueryClient = useMemo(
+  const queryClient = useMemo(
     () =>
       new QueryClient({
         defaultOptions: {
@@ -63,7 +60,6 @@ export function TestAppProviders({
       }),
     [],
   );
-  const queryClient = providedQueryClient ?? defaultQueryClient;
   return createElement(
     I18nextProvider,
     { i18n: appI18n },
@@ -74,9 +70,7 @@ export function TestAppProviders({
         services,
         children: createElement(WindowChromeTitleProvider, {
           children: createElement(StatusProvider, {
-            children: createElement(TaskSearchMemoryProvider, {
-              children: createElement(ProjectWorkspaceTabProvider, { children }),
-            }),
+            children: createElement(TaskSearchMemoryProvider, { children }),
           }),
         }),
       }),

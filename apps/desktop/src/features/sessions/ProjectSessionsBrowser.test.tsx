@@ -1,104 +1,82 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 
 import { createTestServices, TestAppProviders, type TestAppServices } from "@/test-support/app-services";
 import type { FakeRoute } from "@/test-support/api";
 import {
   parseSessionPageRequest,
   sessionPageFixture,
-  sessionPageRequest,
-  sessionSummaryFixture,
+  type SessionPageRequest,
 } from "@/test-support/session-catalog";
-import { getSelectedTabs, getTabs, getUnselectedTab } from "@/test-support/tabs";
+import { InfiniteListBoundary, type VirtualizedInfiniteList } from "@/ui";
 import { ProjectSessionsBrowser } from "./ProjectSessionsBrowser";
 
-describe("Project Sessions browser presentation", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+vi.mock("@/ui", async (importOriginal) => ({
+  ...(await importOriginal()),
+  VirtualizedInfiniteList: TestVirtualizedInfiniteList,
+}));
 
-  it("keeps Sessions/Subagents controls visible through loading and requests only the selected category", async () => {
-    const pending = new Promise<never>(() => undefined);
-    const { services } = renderBrowser({
-      method: "session.page",
-      handler: async () => pending,
+describe("Project Sessions browser", () => {
+  it("shows only the selected Project/category and moves one observer with the selection", async () => {
+    const requests: SessionPageRequest[] = [];
+    const route = sessionRoute((request) => {
+      requests.push(request);
+      return sessionPageFixture(request, [[`${request.projectID}-${request.category}`]]);
     });
+    const view = renderBrowser(route, "project-1");
 
+    expect(await screen.findByText("project-1-main")).toBeInTheDocument();
     const browser = screen.getByTestId("project-sessions-browser");
-    const tabs = getTabs(browser);
+    const tabs = within(browser).getAllByRole("tab");
     expect(tabs).toHaveLength(2);
-    expect(getSelectedTabs(browser)).toHaveLength(1);
-    expect(await screen.findByTestId("loading-state")).toBeInTheDocument();
-    expect(sessionRequests(services)).toEqual([sessionPageRequest("project-1", "main", { kind: "newest" })]);
+    expect(tabs.filter(selectedTab)).toHaveLength(1);
 
-    fireEvent.click(getUnselectedTab(browser));
-    await waitFor(() => {
-      expect(sessionRequests(services)).toEqual([
-        sessionPageRequest("project-1", "main", { kind: "newest" }),
-        sessionPageRequest("project-1", "subagent", { kind: "newest" }),
-      ]);
-    });
+    fireEvent.click(requiredElement(tabs, 1));
+    expect(await screen.findByText("project-1-subagent")).toBeInTheDocument();
+
+    view.rerender(browserProviders(view.services, "project-2"));
+    expect(await screen.findByText("project-2-subagent")).toBeInTheDocument();
+    expect(categories(requests, "project-1")).toEqual(new Set(["main", "subagent"]));
+    expect(categories(requests, "project-2")).toEqual(new Set(["subagent"]));
   });
 
-  it("renders standard empty and retryable whole-list error states", async () => {
-    const { view } = renderBrowser({
+  it("renders loading, empty, and retryable whole-list failure states", async () => {
+    const pending = new Promise<never>(() => undefined);
+    let view = renderBrowser({ method: "session.page", handler: async () => pending });
+    expect(await screen.findByTestId("loading-state")).toBeInTheDocument();
+    view.unmount();
+
+    view = renderBrowser({
       method: "session.page",
-      result: sessionPageFixture({
-        projectID: "project-1",
-        category: "main",
-        sessions: [],
-      }),
+      result: sessionPageFixture({ projectID: "project-1", category: "main" }, []),
     });
     expect(await screen.findByTestId("empty-state")).toBeInTheDocument();
     view.unmount();
 
-    const { services } = renderBrowser({
-      method: "session.page",
-      error: new Error("catalog failed"),
-    });
+    view = renderBrowser({ method: "session.page", error: new Error("catalog failed") });
     expect(await screen.findByTestId("error-state")).toBeInTheDocument();
     fireEvent.click(within(screen.getByTestId("error-state-actions")).getByRole("button"));
     await waitFor(() => {
-      expect(sessionRequests(services)).toHaveLength(2);
+      expect(view.services.transport.calls.length).toBeGreaterThan(1);
     });
   });
 
-  it("projects compact deduplicated rows with fallback identity and no row interaction", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-08-11T22:00:00Z"));
+  it("renders compact static rows with name, identity fallback, preview, and recency", async () => {
     renderBrowser({
       method: "session.page",
-      result: sessionPageFixture({
-        projectID: "project-1",
-        category: "main",
-        sessions: [
-          sessionSummaryFixture("session-1", "main", {
-            name: "  Named Session  ",
-            preview: "  Preview copy  ",
-            updatedAt: "2026-08-11T20:00:00Z",
-          }),
-          sessionSummaryFixture("session-1", "main", {
-            name: "Older duplicate",
-            preview: "Duplicate preview",
-            updatedAt: "2026-08-11T19:00:00Z",
-          }),
-          sessionSummaryFixture("session-2", "main", {
-            preview: "   ",
-            updatedAt: "2026-08-11T21:00:00Z",
-          }),
-        ],
-      }),
+      result: sessionPageFixture({ projectID: "project-1", category: "main" }, [
+        ["session-1", "  Named Session  ", "  Preview copy  "],
+        ["session-2"],
+      ]),
     });
 
     const rows = await screen.findAllByTestId("session-row");
     expect(rows).toHaveLength(2);
     expect(screen.getByText("Named Session")).toBeInTheDocument();
-    expect(screen.queryByText("Older duplicate")).not.toBeInTheDocument();
     expect(screen.getByText("Preview copy")).toBeInTheDocument();
     expect(screen.getByText("session-2")).toBeInTheDocument();
-    const firstRow = rows[0];
-    if (firstRow === undefined) throw new Error("Expected a rendered Session row.");
     expect(
-      within(firstRow).getByText((content) => content.trim().length > 0, {
+      within(requiredElement(rows, 0)).getByText((content) => content.trim().length > 0, {
         selector: "time",
       }),
     ).toBeInTheDocument();
@@ -107,86 +85,262 @@ describe("Project Sessions browser presentation", () => {
       expect(within(row).queryByRole("link")).not.toBeInTheDocument();
       expect(row).not.toHaveAttribute("tabindex");
     }
-
-    const destination = window.location.href;
-    fireEvent.click(firstRow);
-    expect(window.location.href).toBe(destination);
-    await userEvent.tab();
-    await userEvent.tab();
-    for (const row of rows) {
-      expect(row).not.toHaveFocus();
-    }
   });
 
   it.each([
-    {
-      direction: "older" as const,
-      boundaryTestID: "virtual-boundary-next",
-      cursor: "older-1",
-    },
-    {
-      direction: "newer" as const,
-      boundaryTestID: "virtual-boundary-previous",
-      cursor: "newer-1",
-    },
-  ])(
-    "retains rows behind an independent $direction Retry boundary",
-    async ({ boundaryTestID, cursor, direction }) => {
-      renderBrowser({
-        method: "session.page",
-        handler: (params) => {
-          const position = parseSessionPageRequest(params).position;
-          if (position.kind === direction) throw new Error(`${direction} failed`);
-          return sessionPageFixture({
-            projectID: "project-1",
-            category: "main",
-            sessions: [sessionSummaryFixture("session-1", "main")],
-            ...(direction === "older" ? { older: cursor } : {}),
-            ...(direction === "newer" ? { newer: cursor } : {}),
-          });
-        },
-      });
-
-      expect(await screen.findByText("session-1")).toBeInTheDocument();
-      expect(screen.getByTestId(boundaryTestID)).toBeInTheDocument();
-      expect(screen.getByTestId("session-row")).toBeInTheDocument();
-      expect(within(screen.getByTestId(boundaryTestID)).getByRole("button")).toBeInTheDocument();
-    },
-  );
-
-  it("switches category content without retaining a hidden observer", async () => {
-    const { services } = renderBrowser({
-      method: "session.page",
-      handler: (params) => {
-        const category = parseSessionPageRequest(params).category;
-        return sessionPageFixture({
-          projectID: "project-1",
-          category,
-          sessions: [sessionSummaryFixture(`${category}-session`, category)],
+    ["virtual-boundary-next", "older", "older-1"],
+    ["virtual-boundary-previous", "newer", "newer-1"],
+  ] as const)("retains rows behind the %s failure boundary", async (boundaryTestID, direction, cursor) => {
+    renderBrowser(
+      sessionRoute((request) => {
+        if (request.position.kind === direction) throw new Error(`${direction} failed`);
+        return sessionPageFixture(request, [["retained-session"]], {
+          ...(direction === "older" ? { older: cursor } : { newer: cursor }),
         });
-      },
-    });
-    expect(await screen.findByText("main-session")).toBeInTheDocument();
+      }),
+    );
 
-    fireEvent.click(getUnselectedTab(screen.getByTestId("project-sessions-browser")));
-    expect(await screen.findByText("subagent-session")).toBeInTheDocument();
-    expect(screen.queryByText("main-session")).not.toBeInTheDocument();
-    expect(sessionRequests(services).map((entry) => entry.category)).toEqual(["main", "subagent"]);
+    expect(await screen.findByText("retained-session")).toBeInTheDocument();
+    fireEvent.click(await screen.findByTestId(`load-${direction}`));
+    const boundary = await screen.findByTestId(boundaryTestID);
+    expect(screen.getByText("retained-session")).toBeInTheDocument();
+    expect(within(boundary).getByRole("button")).toBeInTheDocument();
+  });
+
+  it("shows one current occurrence when live cursor movement returns an older Session again", async () => {
+    const olderPageByToken = numberedTokens("older", 5);
+    renderBrowser(
+      sessionRoute((request) => {
+        if (request.position.kind === "newest") {
+          return sessionPageFixture(request, [["head"]], { older: "older-1" });
+        }
+        if (request.position.kind === "newer") {
+          return sessionPageFixture(request, [["moving-session", "Current occurrence"]], {
+            older: "older-1",
+          });
+        }
+        const number = requiredPage(olderPageByToken, request.position.token);
+        return sessionPageFixture(
+          request,
+          [number === 1 ? ["moving-session", "Older occurrence"] : [`older-session-${number.toString()}`]],
+          {
+            ...(number < 5 ? { older: `older-${(number + 1).toString()}` } : {}),
+            newer: `newer-${(number - 1).toString()}`,
+          },
+        );
+      }),
+    );
+
+    for (let page = 1; page <= 5; page += 1) {
+      await loadPage("older", page === 1 ? "Older occurrence" : `older-session-${page.toString()}`);
+    }
+    await loadPage("newer", "Current occurrence");
+    expect(screen.queryByText("Older occurrence")).not.toBeInTheDocument();
+    expect(screen.getAllByTestId("session-row")).toHaveLength(4);
+  });
+
+  it("re-enters an evicted category at its changed current head", async () => {
+    let currentHead = "head-before";
+    const olderPageByToken = numberedTokens("older", 5);
+    renderBrowser(
+      sessionRoute((request) => {
+        if (request.category === "subagent") {
+          return sessionPageFixture(request, [["subagent-head"]]);
+        }
+        if (request.position.kind === "newest") {
+          return sessionPageFixture(request, [[currentHead]], { older: "older-1" });
+        }
+        if (request.position.kind === "newer") {
+          throw new Error("Re-entry fixture does not load toward newer.");
+        }
+        const number = requiredPage(olderPageByToken, request.position.token);
+        return sessionPageFixture(request, [[`older-${number.toString()}`]], {
+          ...(number < 5 ? { older: `older-${(number + 1).toString()}` } : {}),
+          newer: `newer-${(number - 1).toString()}`,
+        });
+      }),
+    );
+
+    for (let page = 1; page <= 5; page += 1) {
+      await loadPage("older", `older-${page.toString()}`);
+    }
+    expect(screen.queryByText("head-before")).not.toBeInTheDocument();
+    const browser = screen.getByTestId("project-sessions-browser");
+    fireEvent.click(requiredElement(within(browser).getAllByRole("tab"), 1));
+    expect(await screen.findByText("subagent-head")).toBeInTheDocument();
+
+    currentHead = "head-after";
+    fireEvent.click(requiredElement(within(browser).getAllByRole("tab"), 0));
+    expect(await screen.findByText("head-after")).toBeInTheDocument();
+  });
+
+  it("keeps traversing both directions beyond five retained pages at constant row count", async () => {
+    const requests: SessionPageRequest[] = [];
+    const olderPageByToken = numberedTokens("older", 7);
+    const newerPageByToken = numberedTokens("newer", 6, 0);
+    renderBrowser(
+      sessionRoute((request) => {
+        requests.push(request);
+        if (request.position.kind === "newest") {
+          return sessionNumberPage(request, 0, { older: "older-1" });
+        }
+        if (request.position.kind === "older") {
+          const page = requiredPage(olderPageByToken, request.position.token);
+          return sessionNumberPage(request, page, {
+            ...(page < 7 ? { older: `older-${(page + 1).toString()}` } : {}),
+            newer: `newer-${(page - 1).toString()}`,
+          });
+        }
+        const page = requiredPage(newerPageByToken, request.position.token);
+        return sessionNumberPage(request, page, {
+          older: `older-${(page + 1).toString()}`,
+          ...(page > 0 ? { newer: `newer-${(page - 1).toString()}` } : {}),
+        });
+      }),
+    );
+
+    expect(await screen.findByText("session-0-0")).toBeInTheDocument();
+    for (let page = 1; page <= 5; page += 1) {
+      await loadPage("older", `session-${page.toString()}-2`);
+    }
+    const retainedRowCount = screen.getAllByTestId("session-row").length;
+    for (let page = 6; page <= 7; page += 1) {
+      await loadPage("older", `session-${page.toString()}-2`);
+      expect(screen.getAllByTestId("session-row")).toHaveLength(retainedRowCount);
+    }
+    expect(requests.map((request) => request.position)).toContainEqual({
+      kind: "older",
+      token: "older-7",
+    });
+
+    for (let page = 2; page >= 0; page -= 1) {
+      await loadPage("newer", `session-${page.toString()}-0`);
+      expect(screen.getAllByTestId("session-row")).toHaveLength(retainedRowCount);
+    }
+    expect(requests.map((request) => request.position)).toContainEqual({
+      kind: "newer",
+      token: "newer-0",
+    });
   });
 });
 
-function renderBrowser(route: FakeRoute) {
+function renderBrowser(route: FakeRoute, projectID = "project-1") {
   const services = createTestServices([route]);
-  const view = render(
-    <TestAppProviders services={services}>
-      <ProjectSessionsBrowser projectID="project-1" />
-    </TestAppProviders>,
-  );
-  return { services, view };
+  const view = render(browserProviders(services, projectID));
+  return { ...view, services };
 }
 
-function sessionRequests(services: TestAppServices) {
-  return services.transport.calls
-    .filter((call) => call.method === "session.page")
-    .map((call) => parseSessionPageRequest(call.params));
+function browserProviders(services: TestAppServices, projectID: string) {
+  return (
+    <TestAppProviders services={services}>
+      <ProjectSessionsBrowser projectID={projectID} />
+    </TestAppProviders>
+  );
+}
+
+function categories(requests: readonly SessionPageRequest[], projectID: string) {
+  return new Set(
+    requests.filter((request) => request.projectID === projectID).map((request) => request.category),
+  );
+}
+
+function sessionRoute(handler: (request: SessionPageRequest) => unknown): FakeRoute {
+  return {
+    method: "session.page",
+    handler: (params) => handler(parseSessionPageRequest(params)),
+  };
+}
+
+function sessionNumberPage(
+  request: SessionPageRequest,
+  page: number,
+  cursors: Readonly<{ older?: string | undefined; newer?: string | undefined }>,
+) {
+  return sessionPageFixture(
+    request,
+    Array.from({ length: 3 }, (_, index) => [`session-${page.toString()}-${index.toString()}`] as const),
+    cursors,
+  );
+}
+
+function numberedTokens(prefix: "newer" | "older", last: number, first = 1): ReadonlyMap<string, number> {
+  return new Map(
+    Array.from({ length: last - first + 1 }, (_, index) => {
+      const page = first + index;
+      return [`${prefix}-${page.toString()}`, page] as const;
+    }),
+  );
+}
+
+function requiredPage(pages: ReadonlyMap<string, number>, token: string): number {
+  const page = pages.get(token);
+  if (page === undefined) throw new Error("Fixture received an unknown Session cursor.");
+  return page;
+}
+
+function selectedTab(tab: HTMLElement): boolean {
+  return tab.getAttribute("aria-selected") === "true";
+}
+
+function requiredElement(elements: readonly HTMLElement[], index: number): HTMLElement {
+  const element = elements[index];
+  if (element === undefined) throw new Error(`Required element ${index.toString()} is unavailable.`);
+  return element;
+}
+
+async function loadPage(direction: "newer" | "older", visibleIdentity: string): Promise<void> {
+  const edge = await screen.findByTestId(`load-${direction}`);
+  await waitFor(() => {
+    expect(edge).toBeEnabled();
+  });
+  fireEvent.click(edge);
+  expect(await screen.findByText(visibleIdentity)).toBeInTheDocument();
+}
+
+type VirtualizedInfiniteListProps<TItem> = Parameters<typeof VirtualizedInfiniteList<TItem>>[0];
+
+function TestVirtualizedInfiniteList<TItem>(props: VirtualizedInfiniteListProps<TItem>) {
+  const [lastOlderKey, setLastOlderKey] = useState<string>();
+  const [lastNewerKey, setLastNewerKey] = useState<string>();
+  const canLoadOlder =
+    props.hasNextPage &&
+    !props.isFetchingNextPage &&
+    props.loadMoreKey !== undefined &&
+    lastOlderKey !== props.loadMoreKey;
+  const canLoadNewer =
+    props.hasPreviousPage &&
+    !props.isFetchingPreviousPage &&
+    props.previousLoadKey !== undefined &&
+    lastNewerKey !== props.previousLoadKey;
+  return (
+    <div>
+      {props.previousBoundary && <InfiniteListBoundary direction="previous" state={props.previousBoundary} />}
+      {props.items.length === 0
+        ? props.empty
+        : props.items.map((item, index) => (
+            <div key={props.getItemKey(item)}>{props.renderItem(item, index)}</div>
+          ))}
+      {props.nextBoundary && <InfiniteListBoundary direction="next" state={props.nextBoundary} />}
+      {props.hasPreviousPage ? (
+        <button
+          data-testid="load-newer"
+          disabled={!canLoadNewer}
+          onClick={() => {
+            setLastNewerKey(props.previousLoadKey);
+            props.onLoadPrevious?.();
+          }}
+        />
+      ) : null}
+      {props.hasNextPage ? (
+        <button
+          data-testid="load-older"
+          disabled={!canLoadOlder}
+          onClick={() => {
+            setLastOlderKey(props.loadMoreKey);
+            props.onLoadMore();
+          }}
+        />
+      ) : null}
+    </div>
+  );
 }

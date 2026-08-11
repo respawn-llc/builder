@@ -8,91 +8,43 @@ export type SessionPageRequest = Readonly<{
   position: SessionPagePosition;
 }>;
 
-const sessionPageRequestSchema = z
-  .object({
-    project_id: z.string(),
-    category: z.enum(["main", "subagent"]),
-    page_size: z.literal(100),
-    position: z.discriminatedUnion("kind", [
-      z.object({ kind: z.literal("newest") }).strict(),
-      z.object({ kind: z.literal("older"), token: z.string() }).strict(),
-      z.object({ kind: z.literal("newer"), token: z.string() }).strict(),
-    ]),
-  })
-  .strict();
+const sessionPageRequestSchema = z.strictObject({
+  project_id: z.string(),
+  category: z.enum(["main", "subagent"]),
+  page_size: z.literal(100),
+  position: z.discriminatedUnion("kind", [
+    z.strictObject({ kind: z.literal("newest") }),
+    z.strictObject({ kind: z.literal("older"), token: z.string() }),
+    z.strictObject({ kind: z.literal("newer"), token: z.string() }),
+  ]),
+});
 
 export function parseSessionPageRequest(params: unknown): SessionPageRequest {
   const value = sessionPageRequestSchema.parse(params);
-  return sessionPageRequest(value.project_id, value.category, value.position);
+  return { projectID: value.project_id, category: value.category, position: value.position };
 }
 
-export function sessionPageRequest(
-  projectID: string,
-  category: SessionCategory,
-  position: SessionPagePosition,
-): SessionPageRequest {
-  return { projectID, category, position };
-}
+type SessionFixture = readonly [id: string, name?: string, preview?: string];
 
 export function sessionPageFixture(
-  input: Readonly<{
-    projectID: string;
-    category: SessionCategory;
-    sessions: readonly ReturnType<typeof sessionSummaryFixture>[];
-    older?: string | undefined;
-    newer?: string | undefined;
-  }>,
+  scope: Pick<SessionPageRequest, "projectID" | "category">,
+  sessions: readonly SessionFixture[],
+  cursors: Readonly<{ older?: string | undefined; newer?: string | undefined }> = {},
 ) {
   return {
-    project_id: input.projectID,
-    category: input.category,
-    sessions: input.sessions,
-    ...(input.older === undefined ? {} : { older: input.older }),
-    ...(input.newer === undefined ? {} : { newer: input.newer }),
+    project_id: scope.projectID,
+    category: scope.category,
+    sessions: sessions.map((session) => {
+      const [id, name, preview] = session;
+      return {
+        session_id: id,
+        category: scope.category,
+        name,
+        first_prompt_preview: preview,
+        updated_at: "2026-08-11T20:00:00Z",
+      };
+    }),
+    older: cursors.older,
+    newer: cursors.newer,
   };
-}
-
-export function sessionSummaryFixture(
-  id: string,
-  category: SessionCategory,
-  input: Readonly<{
-    name?: string | undefined;
-    preview?: string | undefined;
-    updatedAt?: string | undefined;
-  }> = {},
-) {
-  return {
-    session_id: id,
-    category,
-    ...(input.name === undefined ? {} : { name: input.name }),
-    ...(input.preview === undefined ? {} : { first_prompt_preview: input.preview }),
-    updated_at: input.updatedAt ?? "2026-08-11T20:00:00Z",
-  };
-}
-
-export function singleSessionPageFixture(
-  input: Readonly<{
-    projectID: string;
-    category: SessionCategory;
-    sessionID: string;
-    older: string | null;
-    newer: string | null;
-    name?: string | undefined;
-    preview?: string | undefined;
-    updatedAt?: string | undefined;
-  }>,
-) {
-  return sessionPageFixture({
-    projectID: input.projectID,
-    category: input.category,
-    sessions: [
-      sessionSummaryFixture(input.sessionID, input.category, {
-        ...(input.name === undefined ? {} : { name: input.name }),
-        ...(input.preview === undefined ? {} : { preview: input.preview }),
-        ...(input.updatedAt === undefined ? {} : { updatedAt: input.updatedAt }),
-      }),
-    ],
-    ...(input.older === null ? {} : { older: input.older }),
-    ...(input.newer === null ? {} : { newer: input.newer }),
-  });
 }

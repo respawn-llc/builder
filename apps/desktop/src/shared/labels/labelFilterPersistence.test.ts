@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { MemoryStorage } from "@/test-support/browser-storage";
 import type { AppStorageNamespace } from "@/app-facade";
 import { createLabelFilterState } from "./labelFilterState";
 import { readPersistedLabelFilterState, writePersistedLabelFilterState } from "./labelFilterPersistence";
@@ -17,7 +16,7 @@ const originalLocalStorage = Object.getOwnPropertyDescriptor(globalThis, "localS
 beforeEach(() => {
   Object.defineProperty(globalThis, "localStorage", {
     configurable: true,
-    value: new MemoryStorage(),
+    value: new TestStorage(),
   });
 });
 
@@ -135,4 +134,32 @@ function generatedLabelIDs(): readonly string[] {
     { length: 101 },
     (_, index) => `00000000-0000-4000-8000-${index.toString().padStart(12, "0")}`,
   );
+}
+
+class TestStorage implements Storage {
+  #entries = new Map<string, string>();
+
+  get length(): number {
+    return this.#entries.size;
+  }
+
+  clear(): void {
+    this.#entries.clear();
+  }
+
+  getItem(key: string): string | null {
+    return this.#entries.get(key) ?? null;
+  }
+
+  key(index: number): string | null {
+    return [...this.#entries.keys()][index] ?? null;
+  }
+
+  removeItem(key: string): void {
+    this.#entries.delete(key);
+  }
+
+  setItem(key: string, value: string): void {
+    this.#entries.set(key, value);
+  }
 }

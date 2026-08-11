@@ -1,25 +1,21 @@
-import { act, render, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
+
+import { removeBrowserStorage } from "@/app-facade";
 import { createTestServices, startupRoutes } from "@/test-support/app-services";
-import { MemoryStorage } from "@/test-support/browser-storage";
-import {
-  parseSessionPageRequest,
-  sessionPageFixture,
-  sessionPageRequest,
-  sessionSummaryFixture,
-  type SessionPageRequest,
-} from "@/test-support/session-catalog";
+import { parseSessionPageRequest, sessionPageFixture } from "@/test-support/session-catalog";
 import { AppRoot } from "./AppRoot";
 
 afterEach(() => {
+  removeBrowserStorage("local", "desktop.lastProjectRoute");
+  removeBrowserStorage("session", "desktop.routeRestoreChecked");
   window.history.replaceState(null, "", "/");
-  vi.unstubAllGlobals();
 });
 
-it("refetches only retained pages for the active Session category after reconnect", async () => {
-  vi.stubGlobal("localStorage", new MemoryStorage());
-  vi.stubGlobal("sessionStorage", new MemoryStorage());
+it("refreshes only the active category and surfaces a reconnect failure with Retry", async () => {
   window.history.replaceState(null, "", "/projects/project-1");
-  const requests: SessionPageRequest[] = [];
+  const callsByCategory = new Map<string, number>();
+  const refreshedCategories: string[] = [];
+  let collectRefresh = false;
   const services = createTestServices([
     ...startupRoutes,
     {
@@ -36,30 +32,27 @@ it("refetches only retained pages for the active Session category after reconnec
     {
       method: "session.page",
       handler: (params) => {
-        const input = parseSessionPageRequest(params);
-        requests.push(input);
-        return sessionPageFixture({
-          projectID: input.projectID,
-          category: input.category,
-          sessions: [
-            sessionSummaryFixture(
-              input.position.kind === "newest" ? "session-newest" : "session-older",
-              input.category,
-            ),
+        const request = parseSessionPageRequest(params);
+        const call = (callsByCategory.get(request.category) ?? 0) + 1;
+        callsByCategory.set(request.category, call);
+        if (collectRefresh) refreshedCategories.push(request.category);
+        if (request.category === "subagent" && (call === 2 || call === 3)) throw new Error("refresh failed");
+        return sessionPageFixture(request, [
+          [
+            request.category === "subagent" && call > 2
+              ? "subagent-after-retry"
+              : `${request.category}-before-refresh`,
           ],
-          ...(input.position.kind === "newest" ? { older: "older-1" } : {}),
-        });
+        ]);
       },
     },
   ]);
   render(<AppRoot services={services} />);
-  await waitFor(() => {
-    expect(requests).toEqual([
-      sessionPageRequest("project-1", "main", { kind: "newest" }),
-      sessionPageRequest("project-1", "main", { kind: "older", token: "older-1" }),
-    ]);
-  });
-  requests.length = 0;
+
+  const browser = await screen.findByTestId("project-sessions-browser");
+  fireEvent.click(requiredElement(within(browser).getAllByRole("tab"), 1));
+  expect(await screen.findByText("subagent-before-refresh")).toBeInTheDocument();
+  collectRefresh = true;
 
   await act(async () => {
     services.transport.connection.set("disconnected");
@@ -69,10 +62,15 @@ it("refetches only retained pages for the active Session category after reconnec
     services.transport.connection.set("connected");
     await Promise.resolve();
   });
-  await waitFor(() => {
-    expect(requests).toEqual([
-      sessionPageRequest("project-1", "main", { kind: "newest" }),
-      sessionPageRequest("project-1", "main", { kind: "older", token: "older-1" }),
-    ]);
-  });
+
+  expect(await screen.findByTestId("error-state", {}, { timeout: 5_000 })).toBeInTheDocument();
+  expect(new Set(refreshedCategories)).toEqual(new Set(["subagent"]));
+  fireEvent.click(within(screen.getByTestId("error-state-actions")).getByRole("button"));
+  expect(await screen.findByText("subagent-after-retry")).toBeInTheDocument();
 });
+
+function requiredElement(elements: readonly HTMLElement[], index: number): HTMLElement {
+  const element = elements[index];
+  if (element === undefined) throw new Error(`Required element ${index.toString()} is unavailable.`);
+  return element;
+}
