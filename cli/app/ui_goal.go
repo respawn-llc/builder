@@ -306,7 +306,7 @@ func (m *uiModel) applyGoalRuntimeDone(msg goalRuntimeDoneMsg) tea.Cmd {
 		}
 		return sequenceCmds(m.goalRuntimeCommand(goalRuntimeClear, ""), followUpCmd)
 	case goalRuntimeSet:
-		m.goal.goal = runtimeGoalFromMutationResult(msg.mutation)
+		m.goal.goal = runtimeGoalFromMutationResult(msg.mutation, m.goal.goal)
 		m.goal.pending = msg.mutation.Pending
 		overlayCmd := tea.Cmd(nil)
 		if m.goal.open && strings.TrimSpace(m.goal.confirmMode) != "" {
@@ -315,19 +315,19 @@ func (m *uiModel) applyGoalRuntimeDone(msg goalRuntimeDoneMsg) tea.Cmd {
 		return sequenceCmds(overlayCmd, followUpCmd)
 	case goalRuntimePause:
 		m.goal.pending = nil
-		if goal := runtimeGoalFromMutationResult(msg.mutation); goal != nil {
+		if goal := runtimeGoalFromMutationResult(msg.mutation, m.goal.goal); goal != nil {
 			m.goal.goal = goal
 		}
 		return followUpCmd
 	case goalRuntimeResume:
 		m.goal.pending = nil
-		if goal := runtimeGoalFromMutationResult(msg.mutation); goal != nil {
+		if goal := runtimeGoalFromMutationResult(msg.mutation, m.goal.goal); goal != nil {
 			m.goal.goal = goal
 		}
 		return followUpCmd
 	case goalRuntimeComplete:
 		m.goal.pending = nil
-		if goal := runtimeGoalFromMutationResult(msg.mutation); goal != nil {
+		if goal := runtimeGoalFromMutationResult(msg.mutation, m.goal.goal); goal != nil {
 			m.goal.goal = goal
 		}
 		return followUpCmd
@@ -546,9 +546,15 @@ func goalDisplay(goal *clientui.RuntimeGoal, pending *clientui.GoalPreview) (cli
 	return "", ""
 }
 
-func runtimeGoalFromMutationResult(result clientui.GoalMutationResult) *clientui.RuntimeGoal {
+func runtimeGoalFromMutationResult(result clientui.GoalMutationResult, previous *clientui.RuntimeGoal) *clientui.RuntimeGoal {
 	if result.Goal == nil {
 		return nil
 	}
-	return &clientui.RuntimeGoal{Goal: result.Goal, Availability: result.Availability}
+	if result.Availability != nil {
+		return &clientui.RuntimeGoal{Goal: result.Goal, Availability: *result.Availability}
+	}
+	if previous == nil {
+		return nil
+	}
+	return &clientui.RuntimeGoal{Goal: result.Goal, Availability: previous.Availability}
 }

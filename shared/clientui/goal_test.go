@@ -1,11 +1,15 @@
 package clientui
 
-import "testing"
+import (
+	"testing"
+
+	"core/shared/textutil"
+)
 
 func TestGoalMutationResultRepresentsQueuedSetWithoutAuthoritativeIdentity(t *testing.T) {
 	result := GoalMutationResult{
 		Pending:      &GoalPreview{Objective: "queued objective", Status: RuntimeGoalStatusActive},
-		Availability: GoalAvailabilityAvailable,
+		Availability: textutil.Value(GoalAvailabilityAvailable),
 	}
 
 	if err := result.Validate(); err != nil {
@@ -13,5 +17,14 @@ func TestGoalMutationResultRepresentsQueuedSetWithoutAuthoritativeIdentity(t *te
 	}
 	if result.Goal != nil || result.Pending == nil {
 		t.Fatalf("queued Goal mutation result = %+v, want pending preview without authoritative Goal", result)
+	}
+}
+
+func TestGoalMutationResultAllowsOmittedAvailability(t *testing.T) {
+	result := GoalMutationResult{
+		Pending: &GoalPreview{Objective: "queued objective", Status: RuntimeGoalStatusActive},
+	}
+	if err := result.Validate(); err != nil {
+		t.Fatalf("validate Goal mutation result without availability: %v", err)
 	}
 }

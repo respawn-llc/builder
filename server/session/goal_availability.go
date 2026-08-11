@@ -22,6 +22,13 @@ func (s *Store) GoalAvailability() (clientui.GoalAvailability, error) {
 	}
 	return GoalAvailabilityFromMeta(s.Meta())
 }
+func (s *Store) GoalMutationAvailability() *clientui.GoalAvailability {
+	availability, err := s.GoalAvailability()
+	if err != nil {
+		return nil
+	}
+	return &availability
+}
 func GoalAvailabilityFromMeta(meta Meta) (clientui.GoalAvailability, error) {
 	if meta.Locked == nil {
 		return clientui.GoalAvailabilityAvailable, nil

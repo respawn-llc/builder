@@ -45,9 +45,9 @@ type GoalPreview struct {
 }
 
 type GoalMutationResult struct {
-	Goal         *Goal            `json:"goal,omitempty"`
-	Pending      *GoalPreview     `json:"pending,omitempty"`
-	Availability GoalAvailability `json:"availability"`
+	Goal         *Goal             `json:"goal,omitempty"`
+	Pending      *GoalPreview      `json:"pending,omitempty"`
+	Availability *GoalAvailability `json:"availability,omitempty"`
 }
 
 func ProjectGoal(goal *Goal, availability GoalAvailability) GoalEnvelope {
@@ -61,8 +61,10 @@ func (g GoalEnvelope) Validate() error {
 }
 
 func (r GoalMutationResult) Validate() error {
-	if err := r.Availability.Validate(); err != nil {
-		return err
+	if r.Availability != nil {
+		if err := r.Availability.Validate(); err != nil {
+			return err
+		}
 	}
 	if r.Goal != nil && r.Pending != nil {
 		return fmt.Errorf("goal mutation result cannot contain Goal and pending preview")

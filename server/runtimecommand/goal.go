@@ -51,7 +51,7 @@ func (GoalClearCommand) goalCommand() {}
 type GoalCommandResult struct {
 	Goal            *session.GoalState
 	Cleared         bool
-	Availability    clientui.GoalAvailability
+	Availability    *clientui.GoalAvailability
 	Disposition     runtime.GoalCommandDisposition
 	MetadataReceipt session.CommitReceipt
 	NoticeReceipt   session.CommitReceipt
@@ -87,10 +87,7 @@ func (a *GoalAuthority) Set(ctx context.Context, command GoalSetCommand) (GoalCo
 	}
 	if isStepScoped(command.Actor, command.Execution) {
 		return a.withExactLive(ctx, command.SessionID, command.Execution, func(engine *runtime.Engine) (GoalCommandResult, error) {
-			availability, err := engine.GoalAvailability()
-			if err != nil {
-				return GoalCommandResult{}, err
-			}
+			availability := engine.GoalMutationAvailability()
 			goal, queued, err := queueSet(engine, command)
 			if err != nil {
 				return GoalCommandResult{Err: err}, err
@@ -114,10 +111,7 @@ func (a *GoalAuthority) Status(ctx context.Context, command GoalStatusCommand) (
 	}
 	if isStepScoped(command.Actor, command.Execution) {
 		return a.withExactLive(ctx, command.SessionID, command.Execution, func(engine *runtime.Engine) (GoalCommandResult, error) {
-			availability, err := engine.GoalAvailability()
-			if err != nil {
-				return GoalCommandResult{}, err
-			}
+			availability := engine.GoalMutationAvailability()
 			goal, queued, err := queueStatus(engine, command)
 			if err != nil {
 				return GoalCommandResult{Err: err}, err
@@ -270,10 +264,7 @@ func liveSet(engine *runtime.Engine, command GoalSetCommand) (GoalCommandResult,
 	if engine == nil {
 		return GoalCommandResult{}, errors.New("runtime engine is required")
 	}
-	availability, err := engine.GoalAvailability()
-	if err != nil {
-		return GoalCommandResult{}, err
-	}
+	availability := engine.GoalMutationAvailability()
 	if engine.CurrentNodeExecutionConfigured() {
 		result, err := engine.SetGoal(command.Objective, command.Actor)
 		return fromRuntimeResult(result, err), err
@@ -310,10 +301,7 @@ func liveStatus(engine *runtime.Engine, command GoalStatusCommand) (GoalCommandR
 	if engine == nil {
 		return GoalCommandResult{}, errors.New("runtime engine is required")
 	}
-	availability, err := engine.GoalAvailability()
-	if err != nil {
-		return GoalCommandResult{}, err
-	}
+	availability := engine.GoalMutationAvailability()
 	if current := engine.Goal(); current != nil && current.Status == command.Status {
 		if command.Status != session.GoalStatusActive || engine.CurrentNodeExecutionConfigured() || engine.GoalLoopContinuationEnforced() {
 			return noopGoalResult(*current, availability), nil
@@ -356,10 +344,7 @@ func liveClear(engine *runtime.Engine, command GoalClearCommand) (GoalCommandRes
 	if engine == nil {
 		return GoalCommandResult{}, errors.New("runtime engine is required")
 	}
-	availability, err := engine.GoalAvailability()
-	if err != nil {
-		return GoalCommandResult{}, err
-	}
+	availability := engine.GoalMutationAvailability()
 	goal, queued, err := engine.QueueGoalClearForActiveStep(command.Actor)
 	if err != nil {
 		return GoalCommandResult{Err: err}, err
@@ -386,10 +371,7 @@ func queueStatus(engine *runtime.Engine, command GoalStatusCommand) (session.Goa
 }
 
 func dormantSet(store *session.Store, command GoalSetCommand) (GoalCommandResult, error) {
-	availability, err := store.GoalAvailability()
-	if err != nil {
-		return GoalCommandResult{}, err
-	}
+	availability := store.GoalMutationAvailability()
 	goal, metadataReceipt, err := store.SetGoal(command.Objective, command.Actor)
 	result := storedGoalResult(goal, false, runtime.GoalCommandApplied, metadataReceipt, session.CommitReceipt{}, err)
 	result.Availability = availability
@@ -404,10 +386,7 @@ func dormantSet(store *session.Store, command GoalSetCommand) (GoalCommandResult
 }
 
 func dormantStatus(store *session.Store, command GoalStatusCommand) (GoalCommandResult, error) {
-	availability, err := store.GoalAvailability()
-	if err != nil {
-		return GoalCommandResult{}, err
-	}
+	availability := store.GoalMutationAvailability()
 	if current := store.Meta().Goal; current != nil && current.Status == command.Status {
 		return noopGoalResult(*current, availability), nil
 	}
@@ -429,10 +408,7 @@ func dormantStatus(store *session.Store, command GoalStatusCommand) (GoalCommand
 }
 
 func dormantClear(store *session.Store, command GoalClearCommand) (GoalCommandResult, error) {
-	availability, err := store.GoalAvailability()
-	if err != nil {
-		return GoalCommandResult{}, err
-	}
+	availability := store.GoalMutationAvailability()
 	goal, metadataReceipt, err := store.ClearGoal(command.Actor)
 	result := storedGoalResult(goal, true, runtime.GoalCommandApplied, metadataReceipt, session.CommitReceipt{}, err)
 	result.Availability = availability
@@ -475,19 +451,19 @@ func fromRuntimeResult(result runtime.GoalCommandResult, err error) GoalCommandR
 	return out
 }
 
-func queuedGoalResult(goal session.GoalState, availability clientui.GoalAvailability) GoalCommandResult {
+func queuedGoalResult(goal session.GoalState, availability *clientui.GoalAvailability) GoalCommandResult {
 	result := storedGoalResult(goal, false, runtime.GoalCommandQueued, session.CommitReceipt{}, session.CommitReceipt{}, nil)
 	result.Availability = availability
 	return result
 }
 
-func queuedClearResult(goal session.GoalState, availability clientui.GoalAvailability) GoalCommandResult {
+func queuedClearResult(goal session.GoalState, availability *clientui.GoalAvailability) GoalCommandResult {
 	result := storedGoalResult(goal, true, runtime.GoalCommandQueued, session.CommitReceipt{}, session.CommitReceipt{}, nil)
 	result.Availability = availability
 	return result
 }
 
-func noopGoalResult(goal session.GoalState, availability clientui.GoalAvailability) GoalCommandResult {
+func noopGoalResult(goal session.GoalState, availability *clientui.GoalAvailability) GoalCommandResult {
 	result := storedGoalResult(goal, false, runtime.GoalCommandNoop, session.CommitReceipt{}, session.CommitReceipt{}, nil)
 	result.Availability = availability
 	return result

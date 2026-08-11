@@ -26,6 +26,17 @@ func TestGoalAvailabilityResolvesCapabilityAndRejectsMalformed(t *testing.T) {
 	if _, err := GoalAvailabilityFromMeta(Meta{Locked: &LockedContract{HasEnabledTools: true, EnabledTools: []string{"unknown"}}}); err == nil {
 		t.Fatal("invalid locked tool returned availability")
 	}
+	malformed := newSessionTestStore(t)
+	malformed.mu.Lock()
+	malformed.meta.Locked = &LockedContract{}
+	malformed.mu.Unlock()
+	if availability := malformed.GoalMutationAvailability(); availability != nil {
+		t.Fatalf("malformed locked contract mutation availability = %q, want omitted", *availability)
+	}
+	goal, receipt, err := malformed.SetGoal("mutation remains accepted", GoalActorUser)
+	if err != nil || !receipt.Committed || goal.Objective != "mutation remains accepted" {
+		t.Fatalf("Goal mutation after omitted availability = goal %+v receipt %+v err %v", goal, receipt, err)
+	}
 }
 func assertGoalAvailability(t *testing.T, store *Store, want clientui.GoalAvailability) {
 	got, err := store.GoalAvailability()

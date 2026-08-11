@@ -93,7 +93,7 @@ func (m *uiModel) setRuntimeGoal(objective string) (*clientui.RuntimeGoal, error
 	if client := m.runtimeClient(); client != nil {
 		result, err := client.SetGoal(objective)
 		m.observeRuntimeRequestResult(err)
-		return runtimeGoalFromMutationResult(result), err
+		return runtimeGoalFromMutationResult(result, nil), err
 	}
 	return nil, nil
 }
@@ -103,7 +103,7 @@ func (m *uiModel) pauseRuntimeGoal() (*clientui.RuntimeGoal, error) {
 	if client := m.runtimeClient(); client != nil {
 		result, err := client.PauseGoal()
 		m.observeRuntimeRequestResult(err)
-		return runtimeGoalFromMutationResult(result), err
+		return runtimeGoalFromMutationResult(result, nil), err
 	}
 	return nil, nil
 }
@@ -113,7 +113,7 @@ func (m *uiModel) resumeRuntimeGoal() (*clientui.RuntimeGoal, error) {
 	if client := m.runtimeClient(); client != nil {
 		result, err := client.ResumeGoal()
 		m.observeRuntimeRequestResult(err)
-		return runtimeGoalFromMutationResult(result), err
+		return runtimeGoalFromMutationResult(result, nil), err
 	}
 	return nil, nil
 }
@@ -123,7 +123,7 @@ func (m *uiModel) clearRuntimeGoal() (*clientui.RuntimeGoal, error) {
 	if client := m.runtimeClient(); client != nil {
 		result, err := client.ClearGoal()
 		m.observeRuntimeRequestResult(err)
-		return runtimeGoalFromMutationResult(result), err
+		return runtimeGoalFromMutationResult(result, nil), err
 	}
 	return nil, nil
 }

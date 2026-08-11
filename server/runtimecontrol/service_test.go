@@ -1101,7 +1101,8 @@ func TestServiceGoalMutationsSetShowComplete(t *testing.T) {
 		t.Fatalf("validate complete Goal response: %v", err)
 	}
 	if completeResp.Pending != nil ||
-		completeResp.Availability != clientui.GoalAvailabilityAvailable ||
+		completeResp.Availability == nil ||
+		*completeResp.Availability != clientui.GoalAvailabilityAvailable ||
 		(completeResp.Goal != nil && completeResp.Goal.Status != clientui.RuntimeGoalStatusComplete) {
 		t.Fatalf("complete Goal response = %+v, want applied Goal or queued status result", completeResp)
 	}
@@ -1611,7 +1612,8 @@ func TestServiceResumeOwnerlessActiveGoalRestartsLoopWithReminder(t *testing.T) 
 	if resp.Goal == nil ||
 		resp.Goal.ID != goal.ID ||
 		resp.Goal.Status != clientui.RuntimeGoalStatusActive ||
-		resp.Availability != clientui.GoalAvailabilityAvailable {
+		resp.Availability == nil ||
+		*resp.Availability != clientui.GoalAvailabilityAvailable {
 		t.Fatalf("resume ownerless active response = %+v, want available existing active Goal", resp)
 	}
 	select {
@@ -1663,7 +1665,7 @@ func TestServiceResumeGoalDuringInterruptSchedulesRestartWithReminder(t *testing
 	if err != nil {
 		t.Fatalf("ResumeGoal: %v", err)
 	}
-	if resp.Goal != nil || resp.Pending != nil || resp.Availability != clientui.GoalAvailabilityAvailable {
+	if resp.Goal != nil || resp.Pending != nil || resp.Availability == nil || *resp.Availability != clientui.GoalAvailabilityAvailable {
 		t.Fatalf("resume suspending active response = %+v, want queued status feedback without Goal projection", resp)
 	}
 	client.releaseFirst()

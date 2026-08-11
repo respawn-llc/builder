@@ -50,7 +50,7 @@ type GoalCommandResult struct {
 	session.GoalState
 	Disposition     GoalCommandDisposition
 	Cleared         bool
-	Availability    clientui.GoalAvailability
+	Availability    *clientui.GoalAvailability
 	MetadataReceipt session.CommitReceipt
 	NoticeReceipt   session.CommitReceipt
 }
@@ -83,6 +83,13 @@ func (e *Engine) GoalAvailability() (clientui.GoalAvailability, error) {
 		return "", errors.New("runtime session store is required")
 	}
 	return e.store.GoalAvailability()
+}
+
+func (e *Engine) GoalMutationAvailability() *clientui.GoalAvailability {
+	if e == nil || e.store == nil {
+		return nil
+	}
+	return e.store.GoalMutationAvailability()
 }
 
 func (e *Engine) GoalLoopSuspended() bool {
@@ -126,10 +133,7 @@ func (e *Engine) setGoalForStep(stepID string, objective string, actor session.G
 		return GoalCommandResult{}, fmt.Errorf("runtime engine is required")
 	}
 	objective = strings.TrimSpace(objective)
-	availability, err := e.GoalAvailability()
-	if err != nil {
-		return GoalCommandResult{}, err
-	}
+	availability := e.GoalMutationAvailability()
 	e.controlMutationMu.Lock()
 	defer e.controlMutationMu.Unlock()
 	goal, metadataReceipt, err := e.store.SetGoal(objective, actor)
@@ -164,10 +168,7 @@ func (e *Engine) setGoalStatusForStepWithGoalLoopAdmission(stepID string, status
 	if e == nil || e.store == nil {
 		return GoalCommandResult{}, fmt.Errorf("runtime engine is required")
 	}
-	availability, err := e.GoalAvailability()
-	if err != nil {
-		return GoalCommandResult{}, err
-	}
+	availability := e.GoalMutationAvailability()
 	if current := e.Goal(); current != nil && current.Status == status {
 		if status != session.GoalStatusActive || e.GoalLoopContinuationEnforced() {
 			result := goalCommandResult(GoalCommandNoop, *current, false, session.CommitReceipt{}, session.CommitReceipt{})
@@ -455,10 +456,7 @@ func (e *Engine) clearGoalForStep(stepID string, actor session.GoalActor) (GoalC
 	if e == nil || e.store == nil {
 		return GoalCommandResult{}, fmt.Errorf("runtime engine is required")
 	}
-	availability, err := e.GoalAvailability()
-	if err != nil {
-		return GoalCommandResult{}, err
-	}
+	availability := e.GoalMutationAvailability()
 	e.controlMutationMu.Lock()
 	defer e.controlMutationMu.Unlock()
 	goal, metadataReceipt, err := e.store.ClearGoal(actor)
@@ -497,11 +495,7 @@ func (e *Engine) cascadeCompleteActiveGoalOnWorkflowCompletion() {
 	}
 	e.controlMutationMu.Lock()
 	defer e.controlMutationMu.Unlock()
-	availability, err := e.GoalAvailability()
-	if err != nil {
-		reportErr(err)
-		return
-	}
+	availability := e.GoalMutationAvailability()
 	completed, transitioned, _, err := e.store.CompleteGoalIfActive(goal.ID, session.GoalActorSystem)
 	if err != nil {
 		reportErr(err)
@@ -521,11 +515,11 @@ func (e *Engine) cascadeCompleteActiveGoalOnWorkflowCompletion() {
 	}
 }
 
-func goalStatusUpdateFromState(goal session.GoalState, availability clientui.GoalAvailability) GoalStatusUpdate {
+func goalStatusUpdateFromState(goal session.GoalState, availability *clientui.GoalAvailability) GoalStatusUpdate {
 	return GoalStatusUpdate{State: goal, Availability: availability}
 }
 
-func goalStatusClearUpdate(availability clientui.GoalAvailability) GoalStatusUpdate {
+func goalStatusClearUpdate(availability *clientui.GoalAvailability) GoalStatusUpdate {
 	return GoalStatusUpdate{Availability: availability, Cleared: true}
 }
 

@@ -407,8 +407,8 @@ func assertGoalFeedbackThenStatusEvent(t *testing.T, events []Event, start int, 
 	if status.GoalStatus.Cleared != cleared {
 		t.Fatalf("cleared = %t, want %t", status.GoalStatus.Cleared, cleared)
 	}
-	if status.GoalStatus.Availability != clientui.GoalAvailabilityAvailable {
-		t.Fatalf("goal availability = %q, want available", status.GoalStatus.Availability)
+	if status.GoalStatus.Availability == nil || *status.GoalStatus.Availability != clientui.GoalAvailabilityAvailable {
+		t.Fatalf("goal availability = %v, want available", status.GoalStatus.Availability)
 	}
 	if cleared {
 		return

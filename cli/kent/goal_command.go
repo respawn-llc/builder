@@ -197,7 +197,7 @@ func goalStatusSubcommand(action string, args []string, stdout io.Writer, stderr
 			fmt.Fprintln(stderr, goalMutationCommandError(target, callErr))
 			return 1
 		}
-		writeGoalMutationText(stdout, resp)
+		writeGoalStatusMutationText(stdout, action, resp)
 		return 0
 	})
 }
@@ -251,7 +251,7 @@ func goalCompleteSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 			fmt.Fprintln(stderr, goalMutationCommandError(target, err))
 			return 1
 		}
-		writeGoalMutationText(stdout, resp)
+		writeGoalStatusMutationText(stdout, "complete", resp)
 		return 0
 	})
 }
@@ -341,6 +341,14 @@ func writeGoalMutationText(stdout io.Writer, response serverapi.RuntimeGoalMutat
 		return
 	}
 	fmt.Fprintln(stdout, "No goal")
+}
+
+func writeGoalStatusMutationText(stdout io.Writer, action string, response serverapi.RuntimeGoalMutationResponse) {
+	if response.Goal != nil || response.Pending != nil {
+		writeGoalMutationText(stdout, response)
+		return
+	}
+	fmt.Fprintf(stdout, "Goal %s queued\n", strings.TrimSpace(action))
 }
 
 func goalMutationCommandError(sessionID string, err error) error {

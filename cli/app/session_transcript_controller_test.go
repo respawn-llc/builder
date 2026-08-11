@@ -11,6 +11,7 @@ import (
 	"core/cli/tui/transcriptrender"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
+	"core/shared/textutil"
 	"core/shared/transcript"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -541,7 +542,7 @@ func ongoingTranscriptMessage(sequence uint64, kind clientui.TranscriptMessageKi
 	case clientui.TranscriptMessageContextUsage:
 		event = clientui.NewTranscriptEvent(clientui.TranscriptContextUsage{UsedTokens: 1200, WindowTokens: 2000})
 	case clientui.TranscriptMessageGoalStatus:
-		event = clientui.NewTranscriptEvent(clientui.TranscriptGoalStatus{Availability: clientui.GoalAvailabilityAvailable})
+		event = clientui.NewTranscriptEvent(clientui.TranscriptGoalStatus{Availability: textutil.Value(clientui.GoalAvailabilityAvailable)})
 	case clientui.TranscriptMessageBackgroundActivity:
 		preview := "running tests"
 		event = clientui.NewTranscriptEvent(clientui.TranscriptBackgroundActivity{

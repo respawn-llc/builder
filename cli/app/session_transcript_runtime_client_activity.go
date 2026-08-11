@@ -88,7 +88,7 @@ func applyTranscriptMetadataToMainView(view *clientui.RuntimeMainView, message c
 	case clientui.TranscriptMessageContextUsage:
 		view.Status.ContextUsage = runtimeContextUsageFromTranscript(message.Payload().(clientui.TranscriptContextUsage))
 	case clientui.TranscriptMessageGoalStatus:
-		view.Status.Goal = runtimeGoalFromTranscript(message.Payload().(clientui.TranscriptGoalStatus))
+		view.Status.Goal = runtimeGoalFromTranscript(message.Payload().(clientui.TranscriptGoalStatus), view.Status.Goal)
 	default:
 		return false
 	}
@@ -104,7 +104,7 @@ func applyTranscriptHydrationMetadataToMainView(view *clientui.RuntimeMainView, 
 	}
 	view.Status.Goal = nil
 	if hydration.GoalStatus != nil {
-		view.Status.Goal = runtimeGoalFromTranscript(*hydration.GoalStatus)
+		view.Status.Goal = runtimeGoalFromTranscript(*hydration.GoalStatus, nil)
 	}
 }
 
@@ -156,8 +156,16 @@ func runtimeContextUsageFromTranscript(usage clientui.TranscriptContextUsage) cl
 	return projected
 }
 
-func runtimeGoalFromTranscript(status clientui.TranscriptGoalStatus) *clientui.RuntimeGoal {
-	goal := &clientui.RuntimeGoal{Availability: status.Availability}
+func runtimeGoalFromTranscript(status clientui.TranscriptGoalStatus, previous *clientui.RuntimeGoal) *clientui.RuntimeGoal {
+	var availability clientui.GoalAvailability
+	if status.Availability != nil {
+		availability = *status.Availability
+	} else if previous != nil {
+		availability = previous.Availability
+	} else {
+		panic("transcript Goal status omitted availability before hydration established prior availability")
+	}
+	goal := &clientui.RuntimeGoal{Availability: availability}
 	if status.Goal != nil {
 		goal.Goal = status.Goal.Goal
 		goal.Suspended = status.Goal.Suspended

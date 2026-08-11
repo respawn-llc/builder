@@ -5,13 +5,14 @@ import (
 
 	"core/shared/clientui"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 func TestGoalSetCommandDeliversQueuedPreviewToTUI(t *testing.T) {
 	controls := &reconnectRetryRuntimeControlClient{
 		setGoalResp: serverapi.RuntimeGoalMutationResponse{
 			Pending:      &clientui.GoalPreview{Objective: "queued objective", Status: clientui.RuntimeGoalStatusActive},
-			Availability: clientui.GoalAvailabilityAvailable,
+			Availability: textutil.Value(clientui.GoalAvailabilityAvailable),
 		},
 	}
 	runtimeClient := newTestSessionRuntimeClientWithControls(controls)

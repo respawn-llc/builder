@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"core/shared/runtimeids"
+	"core/shared/textutil"
 	"core/shared/transcript"
 )
 
@@ -182,7 +183,7 @@ func TestTranscriptMessageJSONRoundTripsEveryVariant(t *testing.T) {
 		NewTranscriptEvent(transcriptTestSessionIdentity(t)),
 		NewTranscriptEvent(TranscriptCompactionStatus{StepID: stepID, State: CompactionStarted, Mode: "auto"}),
 		NewTranscriptEvent(TranscriptContextUsage{WindowTokens: 1000}),
-		NewTranscriptEvent(TranscriptGoalStatus{Availability: GoalAvailabilityAvailable}),
+		NewTranscriptEvent(TranscriptGoalStatus{Availability: textutil.Value(GoalAvailabilityAvailable)}),
 		NewTranscriptEvent(TranscriptBackgroundActivity{ActivityID: transcriptTestBackgroundActivityID(t), ProcessID: "process-1", OwnerRunID: transcriptTestRunID(t), OwnerStepID: stepID, Lifecycle: BackgroundLifecycleBackgrounded, Command: "go test", Workdir: "/repo"}),
 		NewTranscriptEvent(prompt),
 		NewTranscriptEvent(TranscriptWorktreeTransitionOutcome{OperationID: NewWorktreeTransitionID(), Transition: WorktreeTransitionEnter, State: WorktreeTransitionCompleted}),

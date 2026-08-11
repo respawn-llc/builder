@@ -101,6 +101,9 @@ func (h TranscriptHydration) Validate() error {
 		}
 	}
 	if h.GoalStatus != nil {
+		if h.GoalStatus.Availability == nil {
+			return fmt.Errorf("validate transcript hydration goal status: availability is required")
+		}
 		if err := h.GoalStatus.Validate(); err != nil {
 			return fmt.Errorf("validate transcript hydration goal status: %w", err)
 		}

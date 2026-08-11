@@ -15,7 +15,7 @@ type TranscriptContextUsage struct {
 
 type TranscriptGoalStatus struct {
 	Goal         *TranscriptGoal
-	Availability GoalAvailability
+	Availability *GoalAvailability
 }
 
 type TranscriptGoal struct {
@@ -53,8 +53,10 @@ func (u TranscriptContextUsage) Validate() error {
 }
 
 func (s TranscriptGoalStatus) Validate() error {
-	if err := s.Availability.Validate(); err != nil {
-		return err
+	if s.Availability != nil {
+		if err := s.Availability.Validate(); err != nil {
+			return err
+		}
 	}
 	if s.Goal == nil {
 		return nil

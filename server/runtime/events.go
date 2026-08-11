@@ -138,7 +138,7 @@ type Event struct {
 
 type GoalStatusUpdate struct {
 	State        session.GoalState
-	Availability clientui.GoalAvailability
+	Availability *clientui.GoalAvailability
 	Cleared      bool
 }
 

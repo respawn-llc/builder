@@ -3,6 +3,8 @@ package clientui
 import (
 	"testing"
 	"time"
+
+	"core/shared/textutil"
 )
 
 func goalFixture(s RuntimeGoalStatus) *Goal {
@@ -22,7 +24,7 @@ func TestTranscriptContextGoalAndCompactionFactsValidateTypedState(t *testing.T)
 
 	goal := TranscriptGoalStatus{
 		Goal:         &TranscriptGoal{Goal: goalFixture(RuntimeGoalStatusActive)},
-		Availability: GoalAvailabilityAvailable,
+		Availability: textutil.Value(GoalAvailabilityAvailable),
 	}
 	if err := goal.Validate(); err != nil {
 		t.Fatalf("validate goal status: %v", err)
@@ -52,7 +54,7 @@ func TestTranscriptContextGoalAndCompactionFactsRejectInvalidState(t *testing.T)
 			Goal:      goalFixture(RuntimeGoalStatusComplete),
 			Suspended: true,
 		},
-		Availability: GoalAvailabilityAvailable,
+		Availability: textutil.Value(GoalAvailabilityAvailable),
 	}).Validate(); err == nil {
 		t.Fatal("accepted suspended completed goal")
 	}

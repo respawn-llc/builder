@@ -137,13 +137,22 @@ func transcriptContextUsageFromRuntime(usage *runtime.ContextUsage) *clientui.Tr
 
 func transcriptGoalStatusFromRuntime(goal *session.GoalState, availability clientui.GoalAvailability, suspended bool) *clientui.TranscriptGoalStatus {
 	projected := GoalFromSessionState(goal, availability, suspended)
+	projectedAvailability := projected.Availability
 	if projected == nil || projected.Goal == nil {
-		return &clientui.TranscriptGoalStatus{Availability: availability}
+		return &clientui.TranscriptGoalStatus{Availability: &projectedAvailability}
 	}
 	return &clientui.TranscriptGoalStatus{Goal: &clientui.TranscriptGoal{
 		Goal:      projected.Goal,
 		Suspended: projected.Suspended,
-	}, Availability: availability}
+	}, Availability: &projectedAvailability}
+}
+
+func transcriptGoalStatusFromUpdate(goal *session.GoalState, availability *clientui.GoalAvailability, suspended bool) clientui.TranscriptGoalStatus {
+	status := clientui.TranscriptGoalStatus{Availability: availability}
+	if goal != nil {
+		status.Goal = &clientui.TranscriptGoal{Goal: session.GoalCoreFromState(goal), Suspended: suspended}
+	}
+	return status
 }
 
 func transcriptToolStartsFromRuntime(starts []runtime.TranscriptLiveToolStart) []clientui.TranscriptToolStart {
@@ -344,7 +353,7 @@ func transcriptGoalStatus(update runtime.GoalStatusUpdate) clientui.TranscriptGo
 	if !update.Cleared {
 		state = &update.State
 	}
-	return *transcriptGoalStatusFromRuntime(state, update.Availability, false)
+	return transcriptGoalStatusFromUpdate(state, update.Availability, false)
 }
 
 type transcriptBackgroundActivityFacts struct {

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"core/shared/runtimeids"
+	"core/shared/textutil"
 	"core/shared/transcript"
 )
 
@@ -117,7 +118,7 @@ func TestTranscriptEventPayloadsUseOneTypedConstructionPath(t *testing.T) {
 			StepID: transcriptTestStepID(t), State: CompactionStarted, Mode: "auto",
 		}), TranscriptMessageCompactionStatus},
 		{"context usage", NewTranscriptEvent(TranscriptContextUsage{WindowTokens: 1_000}), TranscriptMessageContextUsage},
-		{"goal status", NewTranscriptEvent(TranscriptGoalStatus{Availability: GoalAvailabilityAvailable}), TranscriptMessageGoalStatus},
+		{"goal status", NewTranscriptEvent(TranscriptGoalStatus{Availability: textutil.Value(GoalAvailabilityAvailable)}), TranscriptMessageGoalStatus},
 		{"background activity", NewTranscriptEvent(TranscriptBackgroundActivity{
 			ActivityID: transcriptTestBackgroundActivityID(t), ProcessID: ProcessID("process-1"),
 			OwnerRunID: transcriptTestRunID(t), OwnerStepID: transcriptTestStepID(t),
