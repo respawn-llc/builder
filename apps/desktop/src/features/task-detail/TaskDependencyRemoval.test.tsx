@@ -26,8 +26,20 @@ describe("Task dependency removal", () => {
     });
     const detail = await services.api.getTask("task-1");
     const queryClient = new QueryClient();
+    const relatedTaskKey = queryKeys.task("task-2");
+    const boardKey = queryKeys.board("project-1", "workflow-1", { kind: "none" });
+    const cardsKey = queryKeys.boardNodeCards({
+      filter: { kind: "none" },
+      nodeID: "node-1",
+      projectID: "project-1",
+      workflowID: "workflow-1",
+    });
+    const taskListKey = queryKeys.projectTaskListsRoot("project-1");
     queryClient.setQueryData(queryKeys.task("task-1"), detail);
-    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+    queryClient.setQueryData(relatedTaskKey, {});
+    queryClient.setQueryData(boardKey, {});
+    queryClient.setQueryData(cardsKey, {});
+    queryClient.setQueryData(taskListKey, {});
     const { result } = renderHook(() => useTaskMutations("task-1", "project-1"), {
       wrapper: testWrapper(services, queryClient),
     });
@@ -40,18 +52,10 @@ describe("Task dependency removal", () => {
     });
 
     expect(queryClient.getQueryData<TaskDetail>(queryKeys.task("task-1"))?.dependencies.blockerCount).toBe(0);
-    expect(invalidate).toHaveBeenCalledWith({
-      queryKey: queryKeys.task("task-2"),
-    });
-    expect(invalidate).toHaveBeenCalledWith({
-      queryKey: queryKeys.projectBoardsRoot("project-1"),
-    });
-    expect(invalidate).toHaveBeenCalledWith({
-      queryKey: queryKeys.projectBoardNodeCardsRoot("project-1"),
-    });
-    expect(invalidate).toHaveBeenCalledWith({
-      queryKey: queryKeys.projectTaskListsRoot("project-1"),
-    });
+    expect(queryClient.getQueryState(relatedTaskKey)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(boardKey)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(cardsKey)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(taskListKey)?.isInvalidated).toBe(true);
   });
 
   it("restores the dependency before requesting an authoritative reload after failure", async () => {
