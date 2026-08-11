@@ -253,9 +253,9 @@ func TestMetadataServiceSetsDefaultWorkspaceByProjectScopedPath(t *testing.T) {
 func TestMetadataServiceDefaultWorkspaceSelectorPreservesTrueNoOp(t *testing.T) {
 	store, _, binding := newProjectViewMetadataStore(t)
 	svc := newProjectViewMetadataService(t, store)
-	before, err := store.ListProjectHomeSummaries(context.Background(), binding.ProjectID, 1, 0)
+	before, err := store.GetProjectHomeSummary(context.Background(), binding.ProjectID)
 	if err != nil {
-		t.Fatalf("ListProjectHomeSummaries before: %v", err)
+		t.Fatalf("GetProjectHomeSummary before: %v", err)
 	}
 	selector, err := serverapi.NewProjectWorkspaceSelectorForID(binding.WorkspaceID)
 	if err != nil {
@@ -267,15 +267,12 @@ func TestMetadataServiceDefaultWorkspaceSelectorPreservesTrueNoOp(t *testing.T) 
 	}); err != nil {
 		t.Fatalf("SetDefaultWorkspace no-op: %v", err)
 	}
-	after, err := store.ListProjectHomeSummaries(context.Background(), binding.ProjectID, 1, 0)
+	after, err := store.GetProjectHomeSummary(context.Background(), binding.ProjectID)
 	if err != nil {
-		t.Fatalf("ListProjectHomeSummaries after: %v", err)
+		t.Fatalf("GetProjectHomeSummary after: %v", err)
 	}
-	if len(before) != 1 || len(after) != 1 {
-		t.Fatalf("project summaries before/after = %d/%d, want one each", len(before), len(after))
-	}
-	if after[0].UpdatedAtUnixMs != before[0].UpdatedAtUnixMs {
-		t.Fatalf("no-op changed updated_at from %d to %d", before[0].UpdatedAtUnixMs, after[0].UpdatedAtUnixMs)
+	if after.UpdatedAtUnixMs != before.UpdatedAtUnixMs {
+		t.Fatalf("no-op changed updated_at from %d to %d", before.UpdatedAtUnixMs, after.UpdatedAtUnixMs)
 	}
 }
 

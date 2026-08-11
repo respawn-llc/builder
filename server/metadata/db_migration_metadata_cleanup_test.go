@@ -610,11 +610,11 @@ func TestOpenMigratesWorkspaceWorktreeDerivedStorageAway(t *testing.T) {
 	if workspaces[0].DisplayName != filepath.Base(workspaceRoot) || string(workspaces[0].Availability) != "available" || !workspaces[0].IsPrimary {
 		t.Fatalf("derived workspace summary = %+v", workspaces[0])
 	}
-	home, err := store.ListProjectHomeSummaries(t.Context(), "project-derived", 1, 0)
+	home, err := store.GetProjectHomeSummary(t.Context(), "project-derived")
 	if err != nil {
-		t.Fatalf("ListProjectHomeSummaries: %v", err)
+		t.Fatalf("GetProjectHomeSummary: %v", err)
 	}
-	if len(home) != 1 || home[0].PrimaryWorkspace.DisplayName != filepath.Base(workspaceRoot) || home[0].PrimaryWorkspace.Availability != "available" {
+	if home.PrimaryWorkspace.DisplayName != filepath.Base(workspaceRoot) || home.PrimaryWorkspace.Availability != "available" {
 		t.Fatalf("derived home summary = %+v", home)
 	}
 	worktree, err := store.GetWorktreeRecordByID(t.Context(), "worktree-derived")

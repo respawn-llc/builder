@@ -98,7 +98,7 @@ func (s *Service) ListProjectHome(ctx context.Context, req serverapi.ProjectHome
 	if err != nil {
 		return serverapi.ProjectHomeListResponse{}, err
 	}
-	summaries, err := s.metadata.ListProjectHomeSummaries(ctx, "", pageSize+1, offset)
+	summaries, err := s.metadata.ListProjectHomeSummaries(ctx, pageSize+1, offset)
 	if err != nil {
 		return serverapi.ProjectHomeListResponse{}, err
 	}
@@ -619,14 +619,7 @@ func (s *Service) ListSessionPage(ctx context.Context, req serverapi.SessionPage
 }
 
 func (s *Service) projectHomeSummary(ctx context.Context, projectID string) (serverapi.ProjectHomeSummary, error) {
-	projects, err := s.metadata.ListProjectHomeSummaries(ctx, projectID, 1, 0)
-	if err != nil {
-		return serverapi.ProjectHomeSummary{}, err
-	}
-	if len(projects) == 0 {
-		return serverapi.ProjectHomeSummary{}, fmt.Errorf("%w: %q", serverapi.ErrProjectNotFound, strings.TrimSpace(projectID))
-	}
-	return projects[0], nil
+	return s.metadata.GetProjectHomeSummary(ctx, projectID)
 }
 
 func parseProjectHomePageToken(token string) (int, error) {

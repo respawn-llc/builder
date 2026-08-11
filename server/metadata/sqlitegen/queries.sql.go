@@ -4625,14 +4625,14 @@ SELECT
 FROM projects p
 LEFT JOIN workspaces w ON w.id = p.primary_workspace_id AND w.project_id = p.id
 JOIN project_default_workflow_identity default_workflow ON default_workflow.project_id = p.id
-WHERE (?1 = '' OR p.id = ?1)
+WHERE p.id = COALESCE(?1, p.id)
 ORDER BY latest_activity_unix_ms DESC, p.rowid DESC
 LIMIT ?3
 OFFSET ?2
 `
 
 type ListProjectHomeSummariesParams struct {
-	ProjectID  interface{}
+	ProjectID  sql.NullString
 	OffsetRows int64
 	LimitRows  int64
 }

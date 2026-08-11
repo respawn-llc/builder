@@ -937,7 +937,7 @@ func (s *Store) SetProjectDefaultWorkspaceAndGetSummary(ctx context.Context, pro
 		}
 	}
 	rows, err := q.ListProjectHomeSummaries(ctx, sqlitegen.ListProjectHomeSummariesParams{
-		ProjectID:  trimmedProjectID,
+		ProjectID:  sql.NullString{String: trimmedProjectID, Valid: true},
 		LimitRows:  1,
 		OffsetRows: 0,
 	})
@@ -1885,7 +1885,28 @@ func (s *Store) ListProjects(ctx context.Context) ([]clientui.ProjectSummary, er
 	return out, nil
 }
 
-func (s *Store) ListProjectHomeSummaries(ctx context.Context, projectID string, pageSize int, offset int) ([]serverapi.ProjectHomeSummary, error) {
+func (s *Store) ListProjectHomeSummaries(ctx context.Context, pageSize int, offset int) ([]serverapi.ProjectHomeSummary, error) {
+	return s.listProjectHomeSummaries(ctx, sql.NullString{}, pageSize, offset)
+}
+
+func (s *Store) GetProjectHomeSummary(ctx context.Context, projectID string) (serverapi.ProjectHomeSummary, error) {
+	trimmedProjectID := strings.TrimSpace(projectID)
+	rows, err := s.listProjectHomeSummaries(
+		ctx,
+		sql.NullString{String: trimmedProjectID, Valid: true},
+		1,
+		0,
+	)
+	if err != nil {
+		return serverapi.ProjectHomeSummary{}, err
+	}
+	if len(rows) == 0 {
+		return serverapi.ProjectHomeSummary{}, fmt.Errorf("%w: %q", serverapi.ErrProjectNotFound, trimmedProjectID)
+	}
+	return rows[0], nil
+}
+
+func (s *Store) listProjectHomeSummaries(ctx context.Context, projectID sql.NullString, pageSize int, offset int) ([]serverapi.ProjectHomeSummary, error) {
 	if s == nil || s.queries == nil {
 		return nil, errors.New("metadata store is required")
 	}
@@ -1896,7 +1917,7 @@ func (s *Store) ListProjectHomeSummaries(ctx context.Context, projectID string, 
 		return nil, errors.New("offset must be non-negative")
 	}
 	rows, err := s.queries.ListProjectHomeSummaries(ctx, sqlitegen.ListProjectHomeSummariesParams{
-		ProjectID:  strings.TrimSpace(projectID),
+		ProjectID:  projectID,
 		LimitRows:  int64(pageSize),
 		OffsetRows: int64(offset),
 	})
