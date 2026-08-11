@@ -285,9 +285,9 @@ function MarkdownFieldReadViewport({
         aria-readonly
         className={cx(
           fieldIslandInputClassName(1),
-          "block h-full min-h-0 min-w-0 overflow-visible p-[var(--space-2)]",
+          "block h-full min-h-0 min-w-0 p-[var(--space-2)]",
           !disabled && "cursor-text",
-          collapsed && "overflow-hidden",
+          collapsed ? "overflow-hidden" : "overflow-visible",
         )}
         onKeyDown={(event) => {
           activateFromKeyboard(event, disabled, onEdit);
@@ -395,17 +395,18 @@ function markdownTaskListProps(
   disabled: boolean,
   interaction: MarkdownFieldTaskListInteraction | undefined,
   onChange: (value: string) => void,
-): Readonly<{
-  onTaskListChange: (value: string) => void;
-  taskListItemToggleLabel: (checked: boolean) => string;
-}> | undefined {
+):
+  | Readonly<{
+      onTaskListChange: (value: string) => void;
+      taskListItemToggleLabel: (checked: boolean) => string;
+    }>
+  | undefined {
   if (disabled || interaction === undefined) {
     return undefined;
   }
   return {
     onTaskListChange: onChange,
-    taskListItemToggleLabel: (checked) =>
-      checked ? interaction.checkedLabel : interaction.uncheckedLabel,
+    taskListItemToggleLabel: (checked) => (checked ? interaction.checkedLabel : interaction.uncheckedLabel),
   };
 }
 
@@ -432,9 +433,7 @@ function renderMarkdownFieldAffordance(
         aria-hidden={phase === "visible" ? undefined : true}
         className={cx(
           "app-region-no-drag absolute inset-x-0 bottom-0 grid h-10 place-items-center text-[var(--color-on-island)] transition-opacity motion-reduce:transition-none",
-          phase === "visible"
-            ? "pointer-events-auto opacity-100"
-            : "pointer-events-none opacity-0",
+          phase === "visible" ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0",
         )}
         data-state={phase}
         onClick={onExpand}

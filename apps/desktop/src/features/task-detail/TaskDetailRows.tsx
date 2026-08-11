@@ -4,11 +4,7 @@ import { useTranslation } from "react-i18next";
 
 import type { TaskCurrentNode, TaskDetail } from "@/api";
 import { errorMessage } from "@/api";
-import {
-  useAppServices,
-  useTextFieldSubmitShortcut,
-  useTextFieldSubmitShortcutPolicy,
-} from "@/app-facade";
+import { useAppServices, useTextFieldSubmitShortcut, useTextFieldSubmitShortcutPolicy } from "@/app-facade";
 import { useOpenExternalLink } from "@/app-facade";
 import { writeClipboardText } from "@/shared/native-clipboard";
 import { taskStatusTone } from "@/shared/task-status";
@@ -209,6 +205,9 @@ export function PropertiesIsland({
 }>) {
   const { t } = useTranslation();
   const openExternalLink = useOpenExternalLink();
+  const liveNodeDisplayNameBySessionID = new Map(
+    detail.liveSessions.map((session) => [session.sessionID, session.nodeDisplayName]),
+  );
   return (
     <Island
       aria-label={t("task.properties")}
@@ -237,28 +236,41 @@ export function PropertiesIsland({
         <TaskPropertyLine label={t("task.workflow")} value={detail.workflowName} />
         <SourceLine label={t("task.source")} onOpen={openExternalLink} value={detail.sourceURL} />
         <TaskPropertyLine label={t("task.sessions")} value={detail.retainedSessionCount.toString()} />
-        {detail.currentNodes.map((node) => (
-          <TaskCurrentNodeSelectionProperties key={node.nodeID} node={node} />
-        ))}
+        {detail.currentNodes.map((node) => {
+          const nodeDisplayName =
+            node.sessionID === null ? undefined : liveNodeDisplayNameBySessionID.get(node.sessionID);
+          return nodeDisplayName === undefined ? null : (
+            <TaskCurrentNodeSelectionProperties
+              key={`${node.nodeID}:${node.transitionBranchKey ?? "serial"}`}
+              node={node}
+              nodeDisplayName={nodeDisplayName}
+            />
+          );
+        })}
       </dl>
       <TaskActionPanel detail={detail} disabled={disabled} mutations={mutations} />
     </Island>
   );
 }
 
-export function TaskCurrentNodeSelectionProperties({ node }: Readonly<{ node: TaskCurrentNode }>) {
+export function TaskCurrentNodeSelectionProperties({
+  node,
+  nodeDisplayName,
+}: Readonly<{ node: TaskCurrentNode; nodeDisplayName: string }>) {
   const { t } = useTranslation();
   return (
     <>
       {node.effectiveAssignee === null ? null : (
         <TaskPropertyLine
-          label={t("task.currentNodeAssignee", { nodeID: node.nodeID })}
+          label={t("task.currentNodeAssignee", { nodeName: nodeDisplayName })}
+          singleLine
           value={<span className="font-mono">{node.effectiveAssignee}</span>}
         />
       )}
       {node.effectiveThinking === null ? null : (
         <TaskPropertyLine
-          label={t("task.currentNodeThinking", { nodeID: node.nodeID })}
+          label={t("task.currentNodeThinking", { nodeName: nodeDisplayName })}
+          singleLine
           value={<span className="font-mono">{node.effectiveThinking}</span>}
         />
       )}
@@ -294,7 +306,6 @@ function TaskActionPanel({
         ) : detail.actions.canResume ? (
           <TaskResumeButton disabled={disabled} />
         ) : null}
-        <TaskOpenButtons detail={detail} disabled={disabled} />
         {detail.actions.canInterrupt ? (
           <Button
             aria-label={interruptFullLabel}
@@ -308,6 +319,7 @@ function TaskActionPanel({
             {interruptVisibleLabel}
           </Button>
         ) : null}
+        <TaskOpenButtons detail={detail} disabled={disabled} />
       </div>
     </>
   );
@@ -341,6 +353,7 @@ function TaskOpenButtons({ detail, disabled }: Readonly<{ detail: TaskDetail; di
         return (
           <Button
             aria-label={fullLabel}
+            className="w-max max-w-full shrink-0"
             disabled={disabled}
             key={session.sessionID}
             onClick={() => {
@@ -352,26 +365,32 @@ function TaskOpenButtons({ detail, disabled }: Readonly<{ detail: TaskDetail; di
             title={fullLabel}
             variant="secondary"
           >
-            {t("task.openInCli", { name: ellipsizeActionTarget(target) })}
+            <span className="block min-w-0 truncate whitespace-nowrap">{fullLabel}</span>
           </Button>
         );
       })}
       {canOpenScript
-        ? detail.currentScripts.map((script) => (
-            <Button
-              disabled={disabled}
-              key={`${script.currentNode.nodeID}:${script.currentNode.transitionBranchKey ?? "serial"}`}
-              onClick={() => {
-                setOpenError("");
-                void openScript(script.path).catch((cause: unknown) => {
-                  setOpenError(errorMessage(cause));
-                });
-              }}
-              variant="secondary"
-            >
-              {t("task.openScript")} <span className="truncate font-mono">{script.path}</span>
-            </Button>
-          ))
+        ? detail.currentScripts.map((script) => {
+            const fullLabel = `${t("task.openScript")} ${script.path}`;
+            return (
+              <Button
+                aria-label={fullLabel}
+                className="w-max max-w-full shrink-0"
+                disabled={disabled}
+                key={`${script.currentNode.nodeID}:${script.currentNode.transitionBranchKey ?? "serial"}`}
+                onClick={() => {
+                  setOpenError("");
+                  void openScript(script.path).catch((cause: unknown) => {
+                    setOpenError(errorMessage(cause));
+                  });
+                }}
+                title={fullLabel}
+                variant="secondary"
+              >
+                <span className="block min-w-0 truncate whitespace-nowrap">{fullLabel}</span>
+              </Button>
+            );
+          })
         : null}
       {openError.length > 0 ? <p className="m-0 text-sm text-[var(--color-error)]">{openError}</p> : null}
     </>

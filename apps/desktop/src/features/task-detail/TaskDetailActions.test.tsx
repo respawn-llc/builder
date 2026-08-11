@@ -18,7 +18,7 @@ function taskWithActions(overrides: Record<string, unknown>) {
   };
 }
 
-it("orders Start, Open, and targeted Interrupt in one wrapping action flow", async () => {
+it("orders Start, targeted Interrupt, and auxiliary Open actions in one wrapping action flow", async () => {
   const sessionName = `${"👨‍👩‍👧‍👦".repeat(31)}e\u0301x`;
   mountTaskDetailSurface(
     taskWithActions({
@@ -42,8 +42,9 @@ it("orders Start, Open, and targeted Interrupt in one wrapping action flow", asy
   const interruptLabel = appI18n.t("task.interruptChat", { name: sessionName });
   const open = within(flow).getByRole("button", { name: openLabel });
   const interrupt = within(flow).getByRole("button", { name: interruptLabel });
-  expect(within(flow).getAllByRole("button")).toEqual([start, open, interrupt]);
+  expect(within(flow).getAllByRole("button")).toEqual([start, interrupt, open]);
   expect(open).toHaveAttribute("title", openLabel);
+  expect(open).toHaveTextContent(openLabel);
   expect(interrupt).toHaveAttribute("title", interruptLabel);
 });
 
@@ -72,7 +73,7 @@ it("falls back to the Agent Node display name and keeps Task-wide Interrupt gene
     name: appI18n.t("task.openInCli", { name: "Review" }),
   });
   const interrupt = within(flow).getByRole("button", { name: appI18n.t("board.interrupt") });
-  expect(within(flow).getAllByRole("button")).toEqual([firstOpen, secondOpen, interrupt]);
+  expect(within(flow).getAllByRole("button")).toEqual([interrupt, firstOpen, secondOpen]);
 });
 
 it("keeps Interrupt generic when a Script is the live target", async () => {
@@ -88,7 +89,7 @@ it("keeps Interrupt generic when a Script is the live target", async () => {
 
   const flow = await screen.findByTestId("task-detail-action-flow");
   const interrupt = within(flow).getByRole("button", { name: appI18n.t("board.interrupt") });
-  expect(within(flow).getAllByRole("button").at(-1)).toBe(interrupt);
+  expect(within(flow).getAllByRole("button").at(0)).toBe(interrupt);
 });
 
 it("disables Start while its request is pending and while disconnected", async () => {
