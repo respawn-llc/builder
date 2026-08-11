@@ -78,7 +78,15 @@
 - Board cards use infinite scroll in both directions, 25 cards per page, and retain at most three nearby pages per active column. Cards outside the nearby area release their loaded pages; returning starts at that column's first page in the selected order without changing its expanded state.
 - Card bodies are previews, not full bodies: outer whitespace is removed, content is limited to 512 Unicode code points, and truncation is explicit. Only visible cards render Markdown previews. An ellipsis indicates either truncated content or insufficient card space.
 - Questions and Approvals have distinct semantic card emphasis. Card selection opens Task Detail.
-- Resume appears only when the server says it is available. Interrupt appears in the same action position only for exactly one interruptible live agent Session and acts immediately. Several live agent Sessions use Task Detail for per-Session control; scripts use the Task-wide action.
+- Resume appears only when the server says it is available. For a Task queued
+  by the automatic Agent concurrency limit, Resume promotes its queued Current
+  Nodes into explicit admission and starts them immediately despite the limit.
+  The board card renders that queued Resume action as a warning-colored stop
+  sign with the tooltip `Waiting due to concurrency limits`; Task Detail keeps
+  the ordinary Resume button. Interrupt appears in the same action position
+  only for exactly one interruptible live agent Session and acts immediately.
+  Several live agent Sessions use Task Detail for per-Session control; scripts
+  use the Task-wide action.
 - Board states include Backlog, idle, queued, running, interrupted, Approval-blocked, Question-blocked, and done.
 - Dragging a Backlog Task to its first executable Node starts it immediately without confirmation; that target says `Drag here to start automation`. A drop onto Done is a manual archive move, not normal Workflow completion.
 - When an otherwise valid Start or executable Manual Move has unsatisfied Task

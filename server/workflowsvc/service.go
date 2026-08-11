@@ -33,6 +33,7 @@ type Service struct {
 	mutationPermit       *workflowexecution.MutationPermit
 	currentNodeExecution interface {
 		StartTask(context.Context, workflow.TaskID, workflowexecution.TaskStartPreparation, workflowexecution.TaskPreparationFinalizer) (workflowstore.StartTaskResult, error)
+		PromoteConcurrencyQueuedTask(context.Context, workflow.TaskID) ([]workflow.CurrentNode, bool, error)
 		EnsureTaskResumeEligible(context.Context, workflow.TaskID) error
 		ResumeTask(context.Context, workflow.TaskID) ([]workflow.CurrentNode, error)
 		ResumeTaskWithPreparation(context.Context, workflow.TaskID, workflowexecution.TaskStartPreparation, workflowexecution.TaskPreparationFinalizer) ([]workflow.CurrentNode, error)
@@ -176,6 +177,7 @@ type Option func(*Service)
 
 func WithCurrentNodeExecution(execution interface {
 	StartTask(context.Context, workflow.TaskID, workflowexecution.TaskStartPreparation, workflowexecution.TaskPreparationFinalizer) (workflowstore.StartTaskResult, error)
+	PromoteConcurrencyQueuedTask(context.Context, workflow.TaskID) ([]workflow.CurrentNode, bool, error)
 	EnsureTaskResumeEligible(context.Context, workflow.TaskID) error
 	ResumeTask(context.Context, workflow.TaskID) ([]workflow.CurrentNode, error)
 	ResumeTaskWithPreparation(context.Context, workflow.TaskID, workflowexecution.TaskStartPreparation, workflowexecution.TaskPreparationFinalizer) ([]workflow.CurrentNode, error)
@@ -1599,6 +1601,28 @@ func (s *Service) resumeWorkflowTask(ctx context.Context, req serverapi.Workflow
 		return serverapi.WorkflowTaskResumeResponse{}, errors.New("current node workflow execution is required")
 	}
 	taskID := workflow.TaskID(req.TaskID)
+	promoted, handled, err := s.currentNodeExecution.PromoteConcurrencyQueuedTask(ctx, taskID)
+	if err != nil {
+		return serverapi.WorkflowTaskResumeResponse{}, err
+	}
+	if handled {
+		if detail, detailErr := s.readModels.TaskDetail.GetTask(ctx, req.TaskID); detailErr == nil {
+			s.publishProjectWorkflowEvent(
+				ctx,
+				detail.Summary.ProjectID,
+				detail.Summary.WorkflowID,
+				serverapi.WorkflowProjectEventResourceTask,
+				serverapi.WorkflowProjectEventActionResumed,
+				req.TaskID,
+			)
+		}
+		return serverapi.WorkflowTaskResumeResponse{
+			Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
+			Applied: &serverapi.WorkflowTaskResumeApplied{
+				CurrentNodes: workflowview.ProjectCurrentNodes(promoted),
+			},
+		}, nil
+	}
 	interrupted, err := s.store.InterruptedExecutableCurrentNodes(ctx, taskID)
 	if err != nil {
 		return serverapi.WorkflowTaskResumeResponse{}, err

@@ -2,7 +2,7 @@ import type { ButtonHTMLAttributes, CSSProperties, ReactNode, Ref } from "react"
 
 import { cx } from "./classes";
 
-export type ButtonVariant = "primary" | "primary-outline" | "secondary" | "ghost" | "danger";
+export type ButtonVariant = "primary" | "primary-outline" | "secondary" | "ghost" | "danger" | "warning";
 export type ButtonSize = "default" | "icon" | "icon-sm";
 
 export type ButtonProps = Readonly<{
@@ -75,5 +75,10 @@ const buttonVariantStyles = {
     "--button-bg": "var(--color-island-1)",
     "--button-border": "var(--color-outline)",
     "--button-color": "var(--color-on-island)",
+  },
+  warning: {
+    "--button-bg": "var(--color-island-1)",
+    "--button-border": "var(--color-warning)",
+    "--button-color": "var(--color-warning)",
   },
 } satisfies Record<ButtonVariant, ButtonVariantStyle>;

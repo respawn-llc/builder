@@ -11,7 +11,7 @@ import {
   type ReactNode,
 } from "react";
 import { useTranslation } from "react-i18next";
-import { Maximize2, Play, Square } from "lucide-react";
+import { Maximize2 } from "lucide-react";
 
 import { formatRelativeTime } from "@/app-facade";
 import {
@@ -22,7 +22,6 @@ import {
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuTrigger,
-  IconTooltipButton,
   InfiniteListBoundary,
   TaskBodyMarkdown,
   OneLineOverflowRow,
@@ -38,6 +37,7 @@ import { useBoardCardInstanceVisibility } from "./BoardCardVisibilityRegistry";
 import type { KanbanCardVM, KanbanColumnVM, KanbanGroupVM } from "./BoardColumnViewModel";
 import { useBoardCardMotion } from "./BoardCardMotionContext";
 import { BoardDependencyProgressChip } from "./BoardDependencyProgressChip";
+import { BoardTaskCardActions } from "./BoardTaskCardActions";
 import { useOwnedSidebarRoots } from "@/app-facade";
 
 export type KanbanColumnProps = Readonly<{
@@ -360,7 +360,10 @@ const TaskCard = memo(function TaskCard({
   );
   const canDrag = !dragDisabled;
   const waitingForAnswer = isWaitingForAnswer(card.statusKind);
-  const availableActions = taskCardActionAvailability(card);
+  const availableActions = {
+    canInterrupt: card.actions.canInterrupt,
+    canResume: card.actions.canResume,
+  };
   const labelItems = useMemo(
     () =>
       card.labels.map((label) => ({
@@ -472,10 +475,9 @@ const TaskCard = memo(function TaskCard({
                   />
                 )}
               </div>
-              <TaskCardActions
+              <BoardTaskCardActions
                 actionsDisabled={actionsDisabled}
-                availableActions={availableActions}
-                cardID={card.id}
+                card={card}
                 onInterrupt={onInterruptTask}
                 onResume={onResumeTask}
                 pendingInterrupt={pendingInterrupt}
@@ -583,79 +585,6 @@ function isInteractiveEventTarget(target: EventTarget): boolean {
     return false;
   }
   return target.closest("button,a,input,select,textarea,[role='button']") !== null;
-}
-
-function TaskCardActions({
-  actionsDisabled,
-  availableActions,
-  cardID,
-  onInterrupt,
-  onResume,
-  pendingInterrupt,
-  pendingResume,
-}: Readonly<{
-  actionsDisabled: boolean;
-  availableActions: TaskCardActionAvailability;
-  cardID: string;
-  onInterrupt: (taskID: string) => void;
-  onResume: (taskID: string) => void;
-  pendingInterrupt: boolean;
-  pendingResume: boolean;
-}>) {
-  const { t } = useTranslation();
-  if (!availableActions.canInterrupt && !availableActions.canResume) {
-    return null;
-  }
-  return (
-    <div className="flex shrink-0 flex-wrap justify-end gap-[var(--space-2)]">
-      {availableActions.canResume ? (
-        <IconTooltipButton
-          label={t("board.resume")}
-          onClick={(event) => {
-            event.stopPropagation();
-            onResume(cardID);
-          }}
-          disabled={actionsDisabled || pendingResume}
-          size="icon-sm"
-          variant="primary-outline"
-        >
-          <Play aria-hidden="true" fill="currentColor" size={12} strokeWidth={0} />
-        </IconTooltipButton>
-      ) : null}
-      {availableActions.canInterrupt ? (
-        <IconTooltipButton
-          label={t("board.interrupt")}
-          onClick={(event) => {
-            event.stopPropagation();
-            onInterrupt(cardID);
-          }}
-          disabled={actionsDisabled || pendingInterrupt}
-          size="icon-sm"
-          variant="danger"
-        >
-          <Square
-            aria-hidden="true"
-            className="text-[var(--color-error)]"
-            fill="currentColor"
-            size={12}
-            strokeWidth={0}
-          />
-        </IconTooltipButton>
-      ) : null}
-    </div>
-  );
-}
-
-type TaskCardActionAvailability = Readonly<{
-  canInterrupt: boolean;
-  canResume: boolean;
-}>;
-
-function taskCardActionAvailability(card: KanbanCardVM): TaskCardActionAvailability {
-  return {
-    canInterrupt: card.actions.canInterrupt,
-    canResume: card.actions.canResume,
-  };
 }
 
 function isWaitingForAnswer(statusKind: string): boolean {

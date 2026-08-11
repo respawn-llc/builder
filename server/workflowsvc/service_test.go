@@ -1304,6 +1304,45 @@ func TestServiceTaskResumeRejectsEmptyAppliedResult(t *testing.T) {
 	}
 }
 
+func TestServiceTaskResumePromotesConcurrencyQueuedCurrentNodes(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	node := workflow.CurrentNode{
+		Reference: workflow.CurrentNodeReference{
+			TaskID: workflow.TaskID(task.Task.ID),
+			NodeID: workflow.NodeID("node-queued"),
+		},
+	}
+	execution := &currentNodeCompletionExecutionStub{
+		store:            service.store,
+		promoted:         []workflow.CurrentNode{node},
+		promotionHandled: true,
+	}
+	service.currentNodeExecution = execution
+
+	response, err := service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
+		TaskID:           task.Task.ID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	})
+	if err != nil {
+		t.Fatalf("ResumeWorkflowTask: %v", err)
+	}
+	if response.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeApplied ||
+		response.Applied == nil ||
+		len(response.Applied.CurrentNodes) != 1 ||
+		response.Applied.CurrentNodes[0].NodeID != string(node.Reference.NodeID) {
+		t.Fatalf("ResumeWorkflowTask response = %+v, want promoted Current Node", response)
+	}
+	if execution.resumeEligibilityCalls != 0 {
+		t.Fatalf(
+			"Resume eligibility calls = %d, want queued promotion before interrupted Resume",
+			execution.resumeEligibilityCalls,
+		)
+	}
+}
+
 func TestServiceTaskStartReturnsTypedErrorForInvalidExplicitCustomRef(t *testing.T) {
 	ctx, service, _, _, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
 	preparations := make(chan workflowexecution.TaskStartPreparation, 1)

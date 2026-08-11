@@ -228,6 +228,7 @@ export const englishResources = {
       workspace: "Workspace",
       resume: "Resume",
       interrupt: "Interrupt",
+      waitingDueToConcurrencyLimits: "Waiting due to concurrency limits",
       detail: "Open task detail",
       dropRejected: "Task drop ignored",
       dropRejectedBody: "This card cannot be dropped here.",
