@@ -3,6 +3,8 @@ package sqlitegen
 import (
 	"database/sql"
 	"testing"
+
+	queryplantest "core/internal/testharness/databaseseed"
 )
 
 func TestListWorkflowTaskListRowsUsesProjectLinkAndTaskIndexes(t *testing.T) {
@@ -135,10 +137,10 @@ CREATE INDEX task_label_assignments_label_task_idx
 		int64(101),
 		"[]",
 	}
-	requireQueryUsesAnyTableIndex(t, db, listWorkflowTaskListRows, "project_workflow_links", args...)
-	requireQueryUsesIndex(t, db, listWorkflowTaskListRows, "tasks_project_workflow_link_idx", args...)
-	requireQueryUsesIndex(t, db, listWorkflowTaskListRows, "sqlite_autoindex_task_label_assignments_1", args...)
-	requireQueryUsesIndex(t, db, listWorkflowTaskListRows, "task_label_assignments_label_task_idx", args...)
+	queryplantest.RequireUsesAnyTableIndex(t, db, listWorkflowTaskListRows, "project_workflow_links", args...)
+	queryplantest.RequireUsesIndex(t, db, listWorkflowTaskListRows, "tasks_project_workflow_link_idx", args...)
+	queryplantest.RequireUsesIndex(t, db, listWorkflowTaskListRows, "sqlite_autoindex_task_label_assignments_1", args...)
+	queryplantest.RequireUsesIndex(t, db, listWorkflowTaskListRows, "task_label_assignments_label_task_idx", args...)
 	requireQueryPlanDoesNotGroupIntoTemporaryTree(t, db, listWorkflowTaskListRows, args...)
 }
 
@@ -148,7 +150,7 @@ func requireQueryPlanDoesNotGroupIntoTemporaryTree(t *testing.T, db *sql.DB, que
 	if err != nil {
 		t.Fatalf("explain query plan: %v", err)
 	}
-	defer closeQueryRows(t, rows)
+	defer queryplantest.CloseRows(t, rows)
 	groupingStructures := 0
 	for rows.Next() {
 		var id, parent, unused int64

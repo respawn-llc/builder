@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	queryplantest "core/internal/testharness/databaseseed"
 	"core/shared/tasksearchtext"
 
 	sqlitedriver "modernc.org/sqlite"
@@ -92,22 +93,13 @@ func TestListTaskSearchPageDescriptorsAllocatesSourceOrdinalsFromOneFTSRelation(
 		t.Fatalf("raw continuation = %+v, want body ordinal 2", nextPage)
 	}
 
-	instructions := queryProgram(t, db, listTaskSearchPageDescriptors, taskSearchPageDescriptorArgs(taskSearchPageDescriptorParams(
+	instructions := queryplantest.Program(t, db, listTaskSearchPageDescriptors, taskSearchPageDescriptorArgs(taskSearchPageDescriptorParams(
 		"fts5",
 		"needle",
 		"needle",
 		int64(tasksearchtext.LiteralCaseInsensitive),
 	))...)
-	hasFTSFilter := false
-	for _, instruction := range instructions {
-		if instruction.Opcode == sqliteOpcodeVFilter {
-			hasFTSFilter = true
-			break
-		}
-	}
-	if !hasFTSFilter {
-		t.Fatalf("task-search descriptor query did not invoke a virtual-table filter: %+v", instructions)
-	}
+	queryplantest.RequireProgramContainsOpcode(t, instructions, queryplantest.OpcodeVFilter)
 }
 
 func TestListTaskSearchPageDescriptorsFiltersShortIDIndexBeforeSourceRelations(t *testing.T) {
@@ -137,7 +129,7 @@ func TestListTaskSearchPageDescriptorsFiltersShortIDIndexBeforeSourceRelations(t
 	requireTaskSearchDescriptorProgramFiltersFTSFirst(
 		t,
 		db,
-		queryProgram(t, db, listTaskSearchPageDescriptors, taskSearchPageDescriptorArgs(params)...),
+		queryplantest.Program(t, db, listTaskSearchPageDescriptors, taskSearchPageDescriptorArgs(params)...),
 	)
 }
 
@@ -237,7 +229,7 @@ func TestListTaskSearchPageDescriptorsFiltersCanonicalDocumentsBeforeTaskWinnerS
 	requireTaskSearchDescriptorProgramFiltersFTSFirst(
 		t,
 		db,
-		queryProgram(t, db, listTaskSearchPageDescriptors, taskSearchPageDescriptorArgs(params)...),
+		queryplantest.Program(t, db, listTaskSearchPageDescriptors, taskSearchPageDescriptorArgs(params)...),
 	)
 }
 
@@ -1049,19 +1041,19 @@ VALUES (?, ?)`)
 	}
 }
 
-func requireTaskSearchDescriptorProgramFiltersFTSFirst(t *testing.T, db *sql.DB, instructions []sqliteInstruction) {
+func requireTaskSearchDescriptorProgramFiltersFTSFirst(t *testing.T, db *sql.DB, instructions []queryplantest.Instruction) {
 	t.Helper()
 	relationRoots := taskSearchDescriptorSourceRelationRoots(t, db)
 	relationCursors := make(map[int64]string, len(relationRoots))
 	for _, instruction := range instructions {
 		switch instruction.Opcode {
-		case sqliteOpcodeOpenRead:
+		case queryplantest.OpcodeOpenRead:
 			if relationName, ok := relationRoots[instruction.P2]; ok {
 				relationCursors[instruction.P1] = relationName
 			}
-		case sqliteOpcodeVFilter:
+		case queryplantest.OpcodeVFilter:
 			return
-		case sqliteOpcodeRewind, sqliteOpcodeNext, sqliteOpcodePrev:
+		case queryplantest.OpcodeRewind, queryplantest.OpcodeNext, queryplantest.OpcodePrev:
 			if relationName, ok := relationCursors[instruction.P1]; ok {
 				t.Fatalf(
 					"task-search descriptor query traversed source relation %q before FTS filtering: %+v",
@@ -1091,7 +1083,7 @@ WHERE type = 'table'
 	if err != nil {
 		t.Fatalf("resolve task-search source relation roots: %v", err)
 	}
-	defer closeQueryRows(t, rows)
+	defer queryplantest.CloseRows(t, rows)
 	roots := map[int64]string{}
 	for rows.Next() {
 		var rootPage int64

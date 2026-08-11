@@ -2,6 +2,8 @@ package sqlitegen
 
 import (
 	"testing"
+
+	queryplantest "core/internal/testharness/databaseseed"
 )
 
 func TestSessionPageQueriesUseNormalizedCategoryRecencyIndex(t *testing.T) {
@@ -46,7 +48,7 @@ CREATE INDEX sessions_visible_category_recency_idx
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			requireQueryUsesIndexWithoutSort(
+			queryplantest.RequireUsesIndexWithoutSort(
 				t,
 				db,
 				test.query,
