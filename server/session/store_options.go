@@ -4,8 +4,6 @@ import (
 	"time"
 )
 
-const defaultPersistenceObserverTimeout = 2 * time.Second
-
 type EventLogAppendObservation struct {
 	RecordCount int
 	Latency     time.Duration
@@ -29,7 +27,6 @@ type storeOptions struct {
 	reconciler         EventLogReconciliationObserver
 	resolver           PersistedSessionResolver
 	durabilityObserver DurabilityObserver
-	observerTimeout    time.Duration
 	now                func() time.Time
 }
 
@@ -61,17 +58,12 @@ func WithClock(now func() time.Time) StoreOption {
 }
 
 func normalizeStoreOptions(options ...StoreOption) storeOptions {
-	result := storeOptions{
-		observerTimeout: defaultPersistenceObserverTimeout,
-	}
+	result := storeOptions{}
 	for _, option := range options {
 		if option == nil {
 			continue
 		}
 		option(&result)
-	}
-	if result.observerTimeout <= 0 {
-		result.observerTimeout = defaultPersistenceObserverTimeout
 	}
 	if result.now == nil {
 		result.now = func() time.Time {
