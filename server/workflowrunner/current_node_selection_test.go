@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"core/internal/testharness/workflowfixture"
 	"core/server/workflow"
 	"core/server/workflowstore"
 	"core/shared/runtimeids"
@@ -208,48 +209,33 @@ func createCurrentNodeRoleSelectionWorkflow(t *testing.T, store *workflowstore.S
 	if err != nil {
 		t.Fatalf("CreateWorkflow: %v", err)
 	}
-	definition, _, err := store.GetDefinition(ctx, created.ID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	start := nodeByKindRunnerTest(t, definition, workflow.NodeKindStart)
-	done := nodeByKindRunnerTest(t, definition, workflow.NodeKindTerminal)
 	firstID := workflow.NodeID("node-first-" + created.ID.String())
 	secondID := workflow.NodeID("node-second-" + created.ID.String())
-	for _, node := range []workflowstore.NodeRecord{
-		{ID: firstID, WorkflowID: created.ID, Key: "first", Kind: workflow.NodeKindAgent, DisplayName: "First", SubagentRole: "coder"},
-		{ID: secondID, WorkflowID: created.ID, Key: "second", Kind: workflow.NodeKindAgent, DisplayName: "Second", SubagentRole: "coder"},
-	} {
-		if _, err := store.AddNode(ctx, node); err != nil {
-			t.Fatalf("AddNode: %v", err)
-		}
-	}
 	startGroup := workflow.TransitionGroupID("group-start-" + created.ID.String())
 	nextGroup := workflow.TransitionGroupID("group-next-" + created.ID.String())
 	doneGroup := workflow.TransitionGroupID("group-done-" + created.ID.String())
-	for _, group := range []workflowstore.TransitionGroupRecord{
-		{ID: startGroup, WorkflowID: created.ID, SourceNodeID: workflow.NodeIDOf(start), TransitionID: "start", DisplayName: "Start"},
-		{ID: nextGroup, WorkflowID: created.ID, SourceNodeID: firstID, TransitionID: "next", DisplayName: "Next"},
-		{ID: doneGroup, WorkflowID: created.ID, SourceNodeID: secondID, TransitionID: "done", DisplayName: "Done"},
-	} {
-		if _, err := store.AddTransitionGroup(ctx, group); err != nil {
-			t.Fatalf("AddTransitionGroup: %v", err)
-		}
-	}
-	for _, edge := range []workflowstore.EdgeRecord{
-		{ID: workflow.EdgeID("edge-start-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: firstID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "First."},
-		{
-			ID: workflow.EdgeID("edge-next-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: nextGroup, Key: "next", TargetNodeID: secondID,
-			AssigneeSelection: workflow.AssigneeSelectionPreviousNode, ContextMode: workflow.ContextModeNewSession,
-			PromptTemplate: "Second.", Parameters: []workflow.Parameter{{Key: "role", Purpose: workflow.ParameterPurposeTargetAssignee}},
-		},
-		{ID: workflow.EdgeID("edge-done-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession},
-	} {
-		edge = normalizeWorkflowEdgeRecordForTest(edge)
-		if _, err := store.AddEdge(ctx, edge); err != nil {
-			t.Fatalf("AddEdge: %v", err)
-		}
-	}
+	workflowfixture.SaveStoreGraph(t, ctx, store, created.ID, func(definition workflow.Definition, request *workflowstore.WorkflowGraphSaveRequest) {
+		start := nodeByKindRunnerTest(t, definition, workflow.NodeKindStart)
+		done := nodeByKindRunnerTest(t, definition, workflow.NodeKindTerminal)
+		request.Nodes = append(request.Nodes,
+			workflowstore.NodeRecord{ID: firstID, WorkflowID: created.ID, Key: "first", Kind: workflow.NodeKindAgent, DisplayName: "First", SubagentRole: "coder"},
+			workflowstore.NodeRecord{ID: secondID, WorkflowID: created.ID, Key: "second", Kind: workflow.NodeKindAgent, DisplayName: "Second", SubagentRole: "coder"},
+		)
+		request.TransitionGroups = append(request.TransitionGroups,
+			workflowstore.TransitionGroupRecord{ID: startGroup, WorkflowID: created.ID, SourceNodeID: workflow.NodeIDOf(start), TransitionID: "start", DisplayName: "Start"},
+			workflowstore.TransitionGroupRecord{ID: nextGroup, WorkflowID: created.ID, SourceNodeID: firstID, TransitionID: "next", DisplayName: "Next"},
+			workflowstore.TransitionGroupRecord{ID: doneGroup, WorkflowID: created.ID, SourceNodeID: secondID, TransitionID: "done", DisplayName: "Done"},
+		)
+		request.Edges = append(request.Edges,
+			workflowstore.EdgeRecord{ID: workflow.EdgeID("edge-start-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: firstID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "First."},
+			workflowstore.EdgeRecord{
+				ID: workflow.EdgeID("edge-next-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: nextGroup, Key: "next", TargetNodeID: secondID,
+				AssigneeSelection: workflow.AssigneeSelectionPreviousNode, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession,
+				PromptTemplate: "Second.", Parameters: []workflow.Parameter{{Key: "role", Purpose: workflow.ParameterPurposeTargetAssignee}},
+			},
+			workflowstore.EdgeRecord{ID: workflow.EdgeID("edge-done-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: workflow.NodeIDOf(done), AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession},
+		)
+	})
 	return created.ID
 }
 

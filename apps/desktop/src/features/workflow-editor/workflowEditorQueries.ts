@@ -18,9 +18,13 @@ export type WorkflowSaveConfirmationPreviewEntry = Readonly<{
 }>;
 
 export function workflowSaveConfirmationPreviewKey(state: WorkflowEditorDraftState): string {
-  return [state.source.workflow.id, state.source.workflow.version.toString(), state.version.toString()].join(
-    ":",
-  );
+  const observedRemoteVersion = state.conflict?.workflow.version ?? state.acknowledgedConflictVersion;
+  return [
+    state.source.workflow.id,
+    state.source.workflow.version.toString(),
+    observedRemoteVersion.toString(),
+    state.version.toString(),
+  ].join(":");
 }
 
 export function workflowEditorDraftStateReducer(

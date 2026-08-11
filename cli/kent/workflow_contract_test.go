@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -205,6 +208,195 @@ type workflowGraphApplyStub struct {
 	requests   []serverapi.WorkflowGraphSaveRequest
 }
 
+type workflowGraphMutationStub struct {
+	apicontract.WorkflowService
+	calls           []string
+	definition      serverapi.WorkflowDefinition
+	preview         serverapi.WorkflowGraphSavePreviewResponse
+	previewRequests []serverapi.WorkflowGraphSavePreviewRequest
+	save            serverapi.WorkflowGraphSaveResponse
+	saveRequests    []serverapi.WorkflowGraphSaveRequest
+}
+
+func (s *workflowGraphMutationStub) GetWorkflow(
+	context.Context,
+	serverapi.WorkflowGetRequest,
+) (serverapi.WorkflowGetResponse, error) {
+	s.calls = append(s.calls, "get")
+	return serverapi.WorkflowGetResponse{Definition: s.definition}, nil
+}
+
+func (s *workflowGraphMutationStub) PreviewWorkflowGraphSave(
+	_ context.Context,
+	request serverapi.WorkflowGraphSavePreviewRequest,
+) (serverapi.WorkflowGraphSavePreviewResponse, error) {
+	s.calls = append(s.calls, "preview")
+	s.previewRequests = append(s.previewRequests, request)
+	return s.preview, nil
+}
+
+func (s *workflowGraphMutationStub) SaveWorkflowGraph(
+	_ context.Context,
+	request serverapi.WorkflowGraphSaveRequest,
+) (serverapi.WorkflowGraphSaveResponse, error) {
+	s.calls = append(s.calls, "save")
+	s.saveRequests = append(s.saveRequests, request)
+	return s.save, nil
+}
+
+func TestWorkflowGraphMutationPreviewsAndSavesCompleteDraft(t *testing.T) {
+	workflowID := mustWorkflowID(t, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+	definition := serverapi.WorkflowDefinition{
+		Workflow: serverapi.WorkflowRecord{ID: workflowID, Version: 7},
+		Nodes: []serverapi.WorkflowNode{
+			{ID: "node-source", Key: "source", Kind: "agent", DisplayName: "Source"},
+			{ID: "node-target", Key: "target", Kind: "agent", DisplayName: "Target"},
+		},
+		TransitionGroups: []serverapi.WorkflowTransitionGroup{{
+			ID: "group-existing", SourceNodeID: "node-source", TransitionID: "existing",
+		}},
+		Edges: []serverapi.WorkflowEdge{{
+			ID: "edge-existing", TransitionGroupID: "group-existing", Key: "existing",
+			TargetNodeID: "node-target", AssigneeSelection: "configured",
+			ThinkingSelection: "configured", ContextMode: "new_session",
+		}},
+	}
+	tests := []struct {
+		name   string
+		mutate workflowGraphDraftMutation[struct{}]
+		assert func(*testing.T, serverapi.WorkflowGraphDraft)
+	}{
+		{
+			name: "node add",
+			mutate: func(graph serverapi.WorkflowGraphDraft) (serverapi.WorkflowGraphDraft, struct{}, error) {
+				graph, _, err := addWorkflowNodeDraftMutation(serverapi.WorkflowGraphDraftNode{
+					ID: "node-added", Key: "added", Kind: "terminal", DisplayName: "Added",
+				})(graph)
+				return graph, struct{}{}, err
+			},
+			assert: func(t *testing.T, graph serverapi.WorkflowGraphDraft) {
+				t.Helper()
+				if len(graph.Nodes) != 3 || graph.Nodes[2].ID != "node-added" {
+					t.Fatalf("node add graph = %+v", graph.Nodes)
+				}
+			},
+		},
+		{
+			name: "node update",
+			mutate: func(graph serverapi.WorkflowGraphDraft) (serverapi.WorkflowGraphDraft, struct{}, error) {
+				displayName := "Renamed"
+				graph, _, err := updateWorkflowNodeDraftMutation(workflowNodeUpdateDraftMutation{
+					NodeKey: "source", DisplayName: &displayName,
+				})(graph)
+				return graph, struct{}{}, err
+			},
+			assert: func(t *testing.T, graph serverapi.WorkflowGraphDraft) {
+				t.Helper()
+				if graph.Nodes[0].DisplayName != "Renamed" {
+					t.Fatalf("node update graph = %+v", graph.Nodes)
+				}
+			},
+		},
+		{
+			name: "edge add",
+			mutate: func(graph serverapi.WorkflowGraphDraft) (serverapi.WorkflowGraphDraft, struct{}, error) {
+				graph, _, err := addWorkflowEdgeDraftMutation(workflowEdgeAddDraftMutation{
+					SourceNodeKey: "source", TargetNodeKey: "target",
+					TransitionID: "added", NewTransitionGroupID: "group-added",
+					Edge: serverapi.WorkflowGraphDraftEdge{
+						ID: "edge-added", Key: "added", AssigneeSelection: "configured",
+						ThinkingSelection: "configured", ContextMode: "new_session",
+					},
+				})(graph)
+				return graph, struct{}{}, err
+			},
+			assert: func(t *testing.T, graph serverapi.WorkflowGraphDraft) {
+				t.Helper()
+				if len(graph.TransitionGroups) != 2 || len(graph.Edges) != 2 ||
+					graph.Edges[1].TransitionGroupID != "group-added" {
+					t.Fatalf("edge add graph = %+v / %+v", graph.TransitionGroups, graph.Edges)
+				}
+			},
+		},
+		{
+			name: "edge update",
+			mutate: func(graph serverapi.WorkflowGraphDraft) (serverapi.WorkflowGraphDraft, struct{}, error) {
+				key := "renamed"
+				graph, _, err := updateWorkflowEdgeDraftMutation(workflowEdgeUpdateDraftMutation{
+					EdgeID: "edge-existing", EdgeKey: &key,
+				})(graph)
+				return graph, struct{}{}, err
+			},
+			assert: func(t *testing.T, graph serverapi.WorkflowGraphDraft) {
+				t.Helper()
+				if graph.Edges[0].Key != "renamed" {
+					t.Fatalf("edge update graph = %+v", graph.Edges)
+				}
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			remote := &workflowGraphMutationStub{
+				definition: definition,
+				preview: serverapi.WorkflowGraphSavePreviewResponse{
+					CurrentVersion: 7, Changed: true, CanSave: true,
+					Impact: emptyGraphImpact(), Blockers: []serverapi.WorkflowGraphSaveBlocker{},
+				},
+				save: serverapi.WorkflowGraphSaveResponse{
+					Saved: true, Changed: true, CanSave: true, CurrentVersion: 8,
+					Impact: emptyGraphImpact(), Blockers: []serverapi.WorkflowGraphSaveBlocker{},
+				},
+			}
+			_, result, err := runWorkflowGraphMutation(t.Context(), remote, workflowID, test.mutate)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(remote.calls, []string{"get", "preview", "save"}) ||
+				len(remote.previewRequests) != 1 || len(remote.saveRequests) != 1 ||
+				remote.previewRequests[0].ExpectedVersion != 7 ||
+				remote.saveRequests[0].ExpectedVersion != 7 ||
+				!reflect.DeepEqual(remote.previewRequests[0].Graph, remote.saveRequests[0].Graph) ||
+				result.Version != 8 {
+				t.Fatalf(
+					"calls=%v preview=%+v save=%+v result=%+v",
+					remote.calls, remote.previewRequests, remote.saveRequests, result,
+				)
+			}
+			test.assert(t, remote.saveRequests[0].Graph)
+		})
+	}
+}
+
+func TestWorkflowGraphMutationStopsBeforeSaveWhenPreviewIsBlocked(t *testing.T) {
+	workflowID := mustWorkflowID(t, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+	remote := &workflowGraphMutationStub{
+		definition: serverapi.WorkflowDefinition{
+			Workflow: serverapi.WorkflowRecord{ID: workflowID, Version: 7},
+		},
+		preview: serverapi.WorkflowGraphSavePreviewResponse{
+			CurrentVersion: 7, Changed: true,
+			Impact: emptyGraphImpact(),
+			Blockers: []serverapi.WorkflowGraphSaveBlocker{{
+				Code: "validation_failed", Message: "blocked", Count: 1,
+				AffectedEntities: []serverapi.WorkflowGraphEntityReference{},
+			}},
+		},
+	}
+	_, _, err := runWorkflowGraphMutation(
+		t.Context(),
+		remote,
+		workflowID,
+		addWorkflowNodeDraftMutation(serverapi.WorkflowGraphDraftNode{
+			ID: "node-added", Key: "added", Kind: "terminal", DisplayName: "Added",
+		}),
+	)
+	if err == nil || !reflect.DeepEqual(remote.calls, []string{"get", "preview"}) ||
+		len(remote.saveRequests) != 0 {
+		t.Fatalf("calls=%v saves=%+v err=%v", remote.calls, remote.saveRequests, err)
+	}
+}
+
 func (s *workflowGraphApplyStub) GetWorkflow(
 	context.Context,
 	serverapi.WorkflowGetRequest,
@@ -307,6 +499,7 @@ func TestWorkflowGraphApplyTypedOutcomesAndConfirmation(t *testing.T) {
 			if outcome.Outcome != test.want {
 				t.Fatalf("outcome=%+v", outcome)
 			}
+			assertWorkflowGraphApplyProjection(t, outcome)
 			if test.confirmed {
 				if len(remote.requests) != 2 || remote.requests[1].Confirmation == nil ||
 					remote.requests[1].Confirmation.ExpectedRemovedEdgeCount != 1 {
@@ -337,6 +530,60 @@ func TestWorkflowGraphApplyChecksStaleVersionBeforeAddedIdentity(t *testing.T) {
 	if outcome.Outcome != workflowGraphApplyBlocked || len(outcome.Blockers) != 1 ||
 		outcome.Blockers[0].Code != "version_changed" || len(remote.requests) != 0 {
 		t.Fatalf("outcome=%+v requests=%+v", outcome, remote.requests)
+	}
+	assertWorkflowGraphApplyProjection(t, outcome)
+}
+
+func assertWorkflowGraphApplyProjection(t *testing.T, outcome workflowGraphApplyOutcome) {
+	t.Helper()
+	wantExit := 1
+	if outcome.Outcome == workflowGraphApplySaved || outcome.Outcome == workflowGraphApplyUnchanged {
+		wantExit = 0
+	}
+	for _, jsonOut := range []bool{false, true} {
+		var stdout, stderr bytes.Buffer
+		exitCode := writeWorkflowGraphApplyOutcome(&stdout, &stderr, outcome, jsonOut)
+		if exitCode != wantExit {
+			t.Fatalf("json=%t exit=%d stdout=%q stderr=%q", jsonOut, exitCode, stdout.String(), stderr.String())
+		}
+		if jsonOut {
+			var rendered workflowGraphApplyOutcome
+			if err := json.Unmarshal(stdout.Bytes(), &rendered); err != nil ||
+				rendered.Outcome != outcome.Outcome || stderr.Len() != 0 {
+				t.Fatalf("JSON outcome=%+v stderr=%q err=%v", rendered, stderr.String(), err)
+			}
+			continue
+		}
+		if wantExit == 0 {
+			if stdout.Len() == 0 || stderr.Len() != 0 {
+				t.Fatalf("human stdout=%q stderr=%q", stdout.String(), stderr.String())
+			}
+		} else if stdout.Len() != 0 || stderr.Len() == 0 {
+			t.Fatalf("human stdout=%q stderr=%q", stdout.String(), stderr.String())
+		}
+	}
+}
+
+func TestWorkflowGraphApplyLoadsFileAndStdin(t *testing.T) {
+	const document = `{"workflow_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}`
+	path := filepath.Join(t.TempDir(), "workflow.json")
+	if err := os.WriteFile(path, []byte(document), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name  string
+		path  string
+		stdin *strings.Reader
+	}{
+		{name: "file", path: path},
+		{name: "stdin", path: "-", stdin: strings.NewReader(document)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			data, err := loadWorkflowGraphApplyInput(test.path, test.stdin)
+			if err != nil || string(data) != document {
+				t.Fatalf("data=%q err=%v", data, err)
+			}
+		})
 	}
 }
 
@@ -378,7 +625,7 @@ func TestWorkflowGraphAddedIdentityAndDraftContracts(t *testing.T) {
 			Parameters: []serverapi.WorkflowParameter{{Key: "role", Purpose: "target_assignee"}},
 		}},
 	}
-	draft := workflowGraphDraftFromDefinition(definition)
+	draft := serverapi.WorkflowGraphDraftFromDefinition(definition)
 	if draft.NodeGroups[0].ID != "group-id" || draft.Nodes[0].ID != "node-id" ||
 		draft.TransitionGroups[0].ID != "transition-group-id" || draft.Edges[0].ID != "edge-id" ||
 		draft.Edges[0].AssigneeSelection != "previous_node" ||

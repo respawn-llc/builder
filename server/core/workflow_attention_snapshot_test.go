@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"core/internal/testharness/workflowfixture"
 	"core/server/auth"
 	serverbootstrap "core/server/bootstrap"
 	"core/server/metadata"
@@ -82,68 +83,37 @@ func createCoreStartupRecoveryTask(t *testing.T, store *workflowstore.Store, pro
 	if err != nil {
 		t.Fatalf("CreateWorkflow: %v", err)
 	}
-	definition, _, err := store.GetDefinition(ctx, created.ID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	start := coreWorkflowNodeByKind(t, definition, workflow.NodeKindStart)
-	terminal := coreWorkflowNodeByKind(t, definition, workflow.NodeKindTerminal)
 	agentID := workflow.NodeID("node-" + uuid.NewString())
-	if _, err := store.AddNode(ctx, workflowstore.NodeRecord{
-		ID:           agentID,
-		WorkflowID:   created.ID,
-		Key:          "agent",
-		Kind:         workflow.NodeKindAgent,
-		DisplayName:  "Agent",
-		SubagentRole: "default",
-	}); err != nil {
-		t.Fatalf("AddNode: %v", err)
-	}
 	startGroupID := workflow.TransitionGroupID("group-" + uuid.NewString())
-	if _, err := store.AddTransitionGroup(ctx, workflowstore.TransitionGroupRecord{
-		ID:           startGroupID,
-		WorkflowID:   created.ID,
-		SourceNodeID: workflow.NodeIDOf(start),
-		TransitionID: "start",
-		DisplayName:  "Start",
-	}); err != nil {
-		t.Fatalf("AddTransitionGroup start: %v", err)
-	}
-	if _, err := store.AddEdge(ctx, workflowstore.EdgeRecord{
-		ID:                workflow.EdgeID("edge-" + uuid.NewString()),
-		WorkflowID:        created.ID,
-		TransitionGroupID: startGroupID,
-		Key:               "start",
-		TargetNodeID:      agentID,
-		AssigneeSelection: workflow.AssigneeSelectionConfigured,
-		ThinkingSelection: workflow.ThinkingSelectionConfigured,
-		ContextMode:       workflow.ContextModeNewSession,
-		PromptTemplate:    "Do work.",
-	}); err != nil {
-		t.Fatalf("AddEdge start: %v", err)
-	}
 	doneGroupID := workflow.TransitionGroupID("group-" + uuid.NewString())
-	if _, err := store.AddTransitionGroup(ctx, workflowstore.TransitionGroupRecord{
-		ID:           doneGroupID,
-		WorkflowID:   created.ID,
-		SourceNodeID: agentID,
-		TransitionID: "done",
-		DisplayName:  "Done",
-	}); err != nil {
-		t.Fatalf("AddTransitionGroup done: %v", err)
-	}
-	if _, err := store.AddEdge(ctx, workflowstore.EdgeRecord{
-		ID:                workflow.EdgeID("edge-" + uuid.NewString()),
-		WorkflowID:        created.ID,
-		TransitionGroupID: doneGroupID,
-		Key:               "done",
-		TargetNodeID:      workflow.NodeIDOf(terminal),
-		AssigneeSelection: workflow.AssigneeSelectionConfigured,
-		ThinkingSelection: workflow.ThinkingSelectionConfigured,
-		ContextMode:       workflow.ContextModeNewSession,
-	}); err != nil {
-		t.Fatalf("AddEdge done: %v", err)
-	}
+	workflowfixture.SaveStoreGraph(t, ctx, store, created.ID, func(definition workflow.Definition, request *workflowstore.WorkflowGraphSaveRequest) {
+		start := coreWorkflowNodeByKind(t, definition, workflow.NodeKindStart)
+		terminal := coreWorkflowNodeByKind(t, definition, workflow.NodeKindTerminal)
+		request.Nodes = append(request.Nodes, workflowstore.NodeRecord{
+			ID: agentID, WorkflowID: created.ID, Key: "agent",
+			Kind: workflow.NodeKindAgent, DisplayName: "Agent", SubagentRole: "default",
+		})
+		request.TransitionGroups = append(request.TransitionGroups,
+			workflowstore.TransitionGroupRecord{ID: startGroupID, WorkflowID: created.ID, SourceNodeID: workflow.NodeIDOf(start), TransitionID: "start", DisplayName: "Start"},
+			workflowstore.TransitionGroupRecord{ID: doneGroupID, WorkflowID: created.ID, SourceNodeID: agentID, TransitionID: "done", DisplayName: "Done"},
+		)
+		request.Edges = append(request.Edges,
+			workflowstore.EdgeRecord{
+				ID: workflow.EdgeID("edge-" + uuid.NewString()), WorkflowID: created.ID,
+				TransitionGroupID: startGroupID, Key: "start", TargetNodeID: agentID,
+				AssigneeSelection: workflow.AssigneeSelectionConfigured,
+				ThinkingSelection: workflow.ThinkingSelectionConfigured,
+				ContextMode:       workflow.ContextModeNewSession, PromptTemplate: "Do work.",
+			},
+			workflowstore.EdgeRecord{
+				ID: workflow.EdgeID("edge-" + uuid.NewString()), WorkflowID: created.ID,
+				TransitionGroupID: doneGroupID, Key: "done", TargetNodeID: workflow.NodeIDOf(terminal),
+				AssigneeSelection: workflow.AssigneeSelectionConfigured,
+				ThinkingSelection: workflow.ThinkingSelectionConfigured,
+				ContextMode:       workflow.ContextModeNewSession,
+			},
+		)
+	})
 	if _, err := store.LinkWorkflow(ctx, projectID, created.ID, true); err != nil {
 		t.Fatalf("LinkWorkflow: %v", err)
 	}
