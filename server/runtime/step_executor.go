@@ -253,7 +253,7 @@ func registerAcceptedOutputPosition(
 func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID string, options stepLoopOptions) (stepLoopResult, error) {
 	result, err := s.runStepLoopWithOptions(ctx, stepID, options)
 	var stopped *queuedUserFlushStoppedError
-	if errors.As(err, &stopped) {
+	if errors.As(err, &stopped) && !s.engine.currentNodeExecutionActive() {
 		return stepLoopResult{}, nil
 	}
 	return result, err

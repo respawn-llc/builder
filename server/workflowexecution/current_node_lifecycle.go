@@ -263,6 +263,21 @@ func (c *CurrentNodeController) resumeTask(
 				resumeErrs = append(resumeErrs, keyErr)
 				continue
 			}
+			if currentNode.SessionID != nil {
+				if active, exists := c.authority.SessionExecution(*currentNode.SessionID); exists {
+					resumeErrs = append(
+						resumeErrs,
+						fmt.Errorf(
+							"resume current node %v: retained Session %s already has active execution scope %s: %w",
+							currentNode.Reference,
+							*currentNode.SessionID,
+							active.Scope().ID(),
+							ErrTaskExecutionNotQuiescent,
+						),
+					)
+					continue
+				}
+			}
 			if _, duplicate := seen[key]; duplicate {
 				resumeErrs = append(resumeErrs, fmt.Errorf("resumable current node %v is duplicated", currentNode.Reference))
 				continue

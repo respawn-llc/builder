@@ -25,6 +25,7 @@ type agentResourceOwnerlessDisposition uint8
 
 var ErrSessionRunActive = errors.New("session has an active run")
 var ErrSessionStartsBlocked = errors.New("session starts are blocked")
+var ErrSessionWorkflowActivationActive = errors.New("session has a retained workflow activation")
 var ErrExecutionPromptPending = errors.New("exact execution has a pending prompt")
 
 const (
@@ -714,6 +715,14 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 		resource.mu.Unlock()
 		a.mu.Unlock()
 		return nil, errors.Join(ErrSessionRunActive, fmt.Errorf("session %s already has an agent execution", sessionID))
+	}
+	if workflowRef == nil && resource.engine.CurrentNodeExecutionConfigured() {
+		resource.mu.Unlock()
+		a.mu.Unlock()
+		return nil, errors.Join(
+			ErrSessionWorkflowActivationActive,
+			fmt.Errorf("session %s cannot start an ordinary execution while its workflow activation remains active", sessionID),
+		)
 	}
 	var workflowBinding *runtime.CurrentNodeExecutionBinding
 	closeWorkflowBinding := func() error {
