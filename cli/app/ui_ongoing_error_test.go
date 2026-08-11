@@ -89,6 +89,46 @@ func TestOngoingTranscriptTransportOpenFailureKeepsTUIAndShowsDisconnect(t *test
 	}
 }
 
+func TestRecoverableTranscriptAdmissionErrorSurfacesAndRehydrates(t *testing.T) {
+	t.Setenv("KENT_INVARIANT_MODE", "diagnostic")
+	runtimeClient := newTestSessionRuntimeClientWithControls(&reconnectRetryRuntimeControlClient{})
+	controller := newOngoingTranscriptController(
+		&ongoingSurfaceSpy{},
+		ongoingTestFrameProvider,
+		runtimeClient.admitTranscriptMessageState,
+		func(clientui.TranscriptMessage, runtimeTupleMergeResult) tea.Cmd { return nil },
+	)
+	if _, _, err := controller.Accept(ongoingHydrationMessage(1)); err != nil {
+		t.Fatalf("accept hydration: %v", err)
+	}
+	reopened := false
+	m := newProjectedTestUIModel(
+		runtimeClient,
+		withUIOngoingTranscriptController(controller),
+		WithUIOngoingTranscriptReopen(func() { reopened = true }),
+	)
+
+	cmd := m.handleOngoingTranscriptEvent(ongoingTranscriptEvent{
+		Kind: ongoingTranscriptEventMessage,
+		Message: clientui.NewTranscriptMessage(2, clientui.NewTranscriptEvent(clientui.TranscriptGoalStatus{
+			Goal: transcriptGoalFixture("goal-1", "ship feature", clientui.RuntimeGoalStatusActive),
+		})),
+	})
+
+	if cmd == nil {
+		t.Fatal("recoverable admission error did not surface a status command")
+	}
+	if m.Transition().Exit {
+		t.Fatal("recoverable admission error exited the TUI")
+	}
+	if !reopened {
+		t.Fatal("recoverable admission error did not reopen transcript hydration")
+	}
+	if m.transientStatus == "" || m.transientStatusKind != uiStatusNoticeError {
+		t.Fatalf("transient status = %q kind=%q, want surfaced error", m.transientStatus, m.transientStatusKind)
+	}
+}
+
 func TestRecoveredTranscriptHydrationClearsDisconnectStatusLine(t *testing.T) {
 	surface := &ongoingSurfaceSpy{}
 	m := newProjectedTestUIModel(

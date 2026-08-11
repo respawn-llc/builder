@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"core/shared/clientui"
+	"core/shared/invariant"
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
@@ -374,6 +375,47 @@ func TestRuntimeClientGoalStatusEventPatchesCachedMainView(t *testing.T) {
 		t.Fatalf("admit cleared goal status: %v", err)
 	}
 	assertRuntimeClientGoalCached(t, runtimeClient, runtimeGoalFixtureFromAPI(nil), runtimeGoalFixtureFromAPI(nil))
+}
+
+func TestRuntimeClientGoalStatusWithoutAvailabilityReturnsRecoverableInvariant(t *testing.T) {
+	t.Setenv("KENT_INVARIANT_MODE", string(invariant.ModeDiagnostic))
+	runtimeClient := newTestSessionRuntimeClientWithControls(&reconnectRetryRuntimeControlClient{})
+	initial := clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{SessionID: "session-1"}}
+	runtimeClient.storeMainView(initial)
+
+	_, err := runtimeClient.admitTranscriptMessageState(clientui.NewTranscriptMessage(0, clientui.NewTranscriptEvent(clientui.TranscriptGoalStatus{
+		Goal: transcriptGoalFixture("goal-1", "ship feature", clientui.RuntimeGoalStatusActive),
+	})))
+
+	var projectionErr transcriptGoalAvailabilityProjectionError
+	if !errors.As(err, &projectionErr) {
+		t.Fatalf("admission error = %T %v, want recoverable Goal availability projection error", err, err)
+	}
+	assertRuntimeTupleView(t, runtimeClient.MainView(), initial)
+}
+
+func TestRuntimeClientGoalStatusWithoutAvailabilityPanicsInDebugMode(t *testing.T) {
+	t.Setenv("KENT_INVARIANT_MODE", string(invariant.ModePanic))
+	runtimeClient := newTestSessionRuntimeClientWithControls(&reconnectRetryRuntimeControlClient{})
+	runtimeClient.storeMainView(clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{SessionID: "session-1"}})
+
+	defer func() {
+		recovered := recover()
+		diagnostic, ok := recovered.(invariant.Diagnostic)
+		if !ok {
+			t.Fatalf("panic payload = %T, want invariant diagnostic", recovered)
+		}
+		if diagnostic.Scope != invariant.ScopeTUIProjection ||
+			diagnostic.Fields[invariant.FieldSessionID] != "session-1" ||
+			diagnostic.Fields[invariant.FieldTranscriptState] == "" ||
+			diagnostic.Stack == "" {
+			t.Fatalf("panic diagnostic = %+v, want Goal projection context and stack", diagnostic)
+		}
+	}()
+
+	_, _ = runtimeClient.admitTranscriptMessageState(clientui.NewTranscriptMessage(0, clientui.NewTranscriptEvent(clientui.TranscriptGoalStatus{
+		Goal: transcriptGoalFixture("goal-1", "ship feature", clientui.RuntimeGoalStatusActive),
+	})))
 }
 
 func assertRuntimeClientGoalCached(t *testing.T, runtimeClient *sessionRuntimeClient, got *clientui.RuntimeGoal, want *clientui.RuntimeGoal) {

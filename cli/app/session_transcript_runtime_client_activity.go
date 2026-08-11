@@ -1,7 +1,11 @@
 package app
 
 import (
+	"fmt"
+
+	"core/cli/tui/ongoing"
 	"core/shared/clientui"
+	"core/shared/invariant"
 	"core/shared/textutil"
 )
 
@@ -45,7 +49,9 @@ func (c *sessionRuntimeClient) admitTranscriptMessageState(message clientui.Tran
 		if decision == runtimeTupleApply {
 			applyRuntimeTuple(&c.mainView, candidate)
 		}
-		applyTranscriptHydrationMetadataToMainView(&c.mainView, hydration)
+		if err := applyTranscriptHydrationMetadataToMainView(&c.mainView, hydration, c.sessionID); err != nil {
+			return runtimeTupleMergeResult{}, err
+		}
 		c.ensureMainViewIdentity()
 		c.advanceMetadataRevision()
 		result = runtimeTupleMergeResult{decision: decision, view: c.mainView, project: true}
@@ -60,7 +66,10 @@ func (c *sessionRuntimeClient) admitTranscriptMessageState(message clientui.Tran
 		}
 		result = runtimeTupleMergeResult{decision: decision, view: c.mainView, project: decision == runtimeTupleApply}
 	default:
-		metadataChanged := applyTranscriptMetadataToMainView(&c.mainView, message)
+		metadataChanged, err := applyTranscriptMetadataToMainView(&c.mainView, message, c.sessionID)
+		if err != nil {
+			return runtimeTupleMergeResult{}, err
+		}
 		if c.ensureMainViewIdentity() || metadataChanged {
 			c.advanceMetadataRevision()
 		}
@@ -79,7 +88,7 @@ func (c *sessionRuntimeClient) ensureMainViewIdentity() bool {
 	return false
 }
 
-func applyTranscriptMetadataToMainView(view *clientui.RuntimeMainView, message clientui.TranscriptMessage) bool {
+func applyTranscriptMetadataToMainView(view *clientui.RuntimeMainView, message clientui.TranscriptMessage, sessionID string) (bool, error) {
 	switch message.Kind() {
 	case clientui.TranscriptMessageSessionStatus:
 		applyTranscriptSessionStatusToRuntimeStatus(&view.Status, message.Payload().(clientui.TranscriptSessionStatus))
@@ -88,24 +97,34 @@ func applyTranscriptMetadataToMainView(view *clientui.RuntimeMainView, message c
 	case clientui.TranscriptMessageContextUsage:
 		view.Status.ContextUsage = runtimeContextUsageFromTranscript(message.Payload().(clientui.TranscriptContextUsage))
 	case clientui.TranscriptMessageGoalStatus:
-		view.Status.Goal = runtimeGoalFromTranscript(message.Payload().(clientui.TranscriptGoalStatus), view.Status.Goal)
+		goal, err := runtimeGoalFromTranscript(message.Payload().(clientui.TranscriptGoalStatus), view.Status.Goal, sessionID)
+		if err != nil {
+			return false, err
+		}
+		view.Status.Goal = goal
 	default:
-		return false
+		return false, nil
 	}
-	return true
+	return true, nil
 }
 
-func applyTranscriptHydrationMetadataToMainView(view *clientui.RuntimeMainView, hydration clientui.TranscriptHydration) {
+func applyTranscriptHydrationMetadataToMainView(view *clientui.RuntimeMainView, hydration clientui.TranscriptHydration, sessionID string) error {
+	var goal *clientui.RuntimeGoal
+	if hydration.GoalStatus != nil {
+		var err error
+		goal, err = runtimeGoalFromTranscript(*hydration.GoalStatus, nil, sessionID)
+		if err != nil {
+			return err
+		}
+	}
 	applyTranscriptSessionStatusToRuntimeStatus(&view.Status, hydration.SessionStatus)
 	applyTranscriptSessionIdentityToRuntimeMainView(view, hydration.SessionIdentity)
 	view.Status.ContextUsage = clientui.RuntimeContextUsage{}
 	if hydration.ContextUsage != nil {
 		view.Status.ContextUsage = runtimeContextUsageFromTranscript(*hydration.ContextUsage)
 	}
-	view.Status.Goal = nil
-	if hydration.GoalStatus != nil {
-		view.Status.Goal = runtimeGoalFromTranscript(*hydration.GoalStatus, nil)
-	}
+	view.Status.Goal = goal
+	return nil
 }
 
 func applyTranscriptSessionStatusToRuntimeStatus(status *clientui.RuntimeStatus, update clientui.TranscriptSessionStatus) {
@@ -156,19 +175,51 @@ func runtimeContextUsageFromTranscript(usage clientui.TranscriptContextUsage) cl
 	return projected
 }
 
-func runtimeGoalFromTranscript(status clientui.TranscriptGoalStatus, previous *clientui.RuntimeGoal) *clientui.RuntimeGoal {
+type transcriptGoalAvailabilityProjectionError struct {
+	sessionID   string
+	goalPresent bool
+}
+
+func (e transcriptGoalAvailabilityProjectionError) Error() string {
+	return fmt.Sprintf(
+		"transcript Goal status cannot be projected without current or prior availability: session_id=%q goal_present=%t",
+		e.sessionID,
+		e.goalPresent,
+	)
+}
+
+func (transcriptGoalAvailabilityProjectionError) transcriptRehydrationReason() ongoing.RehydrateReason {
+	return ongoing.RehydrateReasonSequenceGap
+}
+
+func runtimeGoalFromTranscript(status clientui.TranscriptGoalStatus, previous *clientui.RuntimeGoal, sessionID string) (*clientui.RuntimeGoal, error) {
 	var availability clientui.GoalAvailability
 	if status.Availability != nil {
 		availability = *status.Availability
 	} else if previous != nil {
 		availability = previous.Availability
 	} else {
-		panic("transcript Goal status omitted availability before hydration established prior availability")
+		projectionErr := transcriptGoalAvailabilityProjectionError{
+			sessionID:   sessionID,
+			goalPresent: status.Goal != nil,
+		}
+		diagnostic := invariant.FailureDiagnostic(
+			invariant.ScopeTUIProjection,
+			"project transcript Goal status",
+			projectionErr,
+		)
+		diagnostic.Fields[invariant.FieldSessionID] = sessionID
+		diagnostic.Fields[invariant.FieldTranscriptState] = fmt.Sprintf(
+			"goal_present=%t availability_present=false previous_goal_present=false",
+			status.Goal != nil,
+		)
+		invariant.NewPolicy().Check(false, diagnostic)
+		return nil, projectionErr
 	}
 	goal := &clientui.RuntimeGoal{Availability: availability}
 	if status.Goal != nil {
 		goal.Goal = status.Goal.Goal
 		goal.Suspended = status.Goal.Suspended
 	}
-	return goal
+	return goal, nil
 }

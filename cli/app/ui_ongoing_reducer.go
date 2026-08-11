@@ -44,6 +44,19 @@ func (m *uiModel) handleOngoingTranscriptEvent(event ongoingTranscriptEvent) tea
 		var stateCmd tea.Cmd
 		result, stateCmd, err = m.ongoingTranscript.Accept(event.Message)
 		if err != nil {
+			if result.Action == ongoing.ResultRequestScratchRehydration {
+				m.logf("ongoing.transcript.recoverable_admission_error err=%q", err.Error())
+				return tea.Batch(
+					m.sendTransientStatusWithNoticeID(
+						runtimeattach.FormatSubmissionError(err),
+						uiStatusNoticeError,
+						transientStatusDuration,
+						uiStatusNoticeReplace,
+						"",
+					),
+					m.handleOngoingResult(result),
+				)
+			}
 			var developerErr ongoing.DeveloperError
 			if errors.As(err, &developerErr) {
 				return m.handleOngoingDeveloperError(developerErr)
