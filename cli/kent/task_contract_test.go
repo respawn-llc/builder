@@ -514,6 +514,100 @@ func TestTaskMoveStructuredValuesSelectionAndDependencyGuidance(t *testing.T) {
 	}
 }
 
+func TestTaskSetupGuidanceContracts(t *testing.T) {
+	target := serverapi.WorkflowExecutionTargetSelection{Mode: serverapi.WorkflowExecutionTargetModeHead}
+	script := "/repo/setup.sh"
+	failed := &serverapi.WorktreeSetupEvent{
+		Phase: serverapi.WorktreeSetupPhaseFailed,
+		Failed: &serverapi.WorktreeSetupFailed{
+			RetryReadiness: serverapi.WorktreeSetupRetryReady,
+			Cause: serverapi.WorktreeSetupFailureCause{
+				Kind:        serverapi.WorktreeSetupFailureProcessExit,
+				ProcessExit: &serverapi.WorktreeSetupProcessExit{ExitCode: 1},
+			},
+			Diagnostic:               "failed twice",
+			ScriptPath:               &script,
+			ExecutionTarget:          &target,
+			RetainedWorktree:         taskContractSetupWorktree("/tmp/retained"),
+			RetainedPreviousWorktree: &serverapi.RetainedPreviousWorktree{Worktree: *taskContractSetupWorktree("/tmp/previous")},
+		},
+	}
+	start, err := projectTaskSetupGuidance(taskSetupObservedActionStart, "task-1", nil, failed, nil)
+	if err != nil ||
+		start.Outcome != taskSetupOutcomeStartInterruptedSetupFailure ||
+		start.RetainedRoot == nil ||
+		*start.RetainedRoot != "/tmp/retained" ||
+		start.RetainedPreviousWorktree == nil ||
+		len(start.Actions) != 5 ||
+		start.Actions[0].Kind != taskSetupActionRetry ||
+		start.Actions[0].Args[len(start.Actions[0].Args)-1] != "head" {
+		t.Fatalf("start setup guidance=%+v err=%v", start, err)
+	}
+	resume, err := projectTaskSetupGuidance(taskSetupObservedActionResume, "task-1", nil, failed, nil)
+	if err != nil || resume.Outcome != taskSetupOutcomeResumeInterruptedSetupFailure {
+		t.Fatalf("resume setup guidance=%+v err=%v", resume, err)
+	}
+	completed, err := projectTaskSetupGuidance(taskSetupObservedActionStart, "task-1", nil, &serverapi.WorktreeSetupEvent{
+		Phase: serverapi.WorktreeSetupPhaseNotRequired,
+		NotRequired: &serverapi.WorktreeSetupNotRequired{
+			Reason:                   serverapi.WorktreeSetupNotRequiredNoConfiguredScript,
+			RetainedPreviousWorktree: &serverapi.RetainedPreviousWorktree{Worktree: *taskContractSetupWorktree("/tmp/orphan")},
+		},
+	}, nil)
+	if err != nil ||
+		completed.Outcome != taskSetupOutcomeCompleted ||
+		completed.RetainedPreviousWorktree == nil ||
+		len(completed.Actions) != 1 ||
+		completed.Actions[0].Kind != taskSetupActionListWorktrees {
+		t.Fatalf("completed setup guidance=%+v err=%v", completed, err)
+	}
+	observation, err := projectTaskSetupGuidance(
+		taskSetupObservedActionStart,
+		"task-1",
+		nil,
+		nil,
+		context.DeadlineExceeded,
+	)
+	if err != nil ||
+		observation.Outcome != taskSetupOutcomeObservationFailure ||
+		len(observation.Actions) != 2 {
+		t.Fatalf("observation guidance=%+v err=%v", observation, err)
+	}
+}
+
+func TestTaskMoveSetupRecoveryPreservesStructuredInput(t *testing.T) {
+	project, commentary, transition := "project-1", "note", "next"
+	base, err := taskMoveRecoveryArgs(
+		"task-1",
+		"done",
+		&project,
+		&commentary,
+		&transition,
+		map[string]map[string]string{"plan": {"summary": "done"}},
+		true,
+		true,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := serverapi.WorkflowExecutionTargetSelection{Mode: serverapi.WorkflowExecutionTargetModeHead}
+	guidance, err := projectMoveSetupGuidance(base, &target, &serverapi.WorktreeSetupRetainedError{
+		Worktree:                 *taskContractSetupWorktree("/tmp/retained"),
+		Diagnostic:               "failed twice",
+		ScriptPath:               "/repo/setup.sh",
+		RetainedPreviousWorktree: &serverapi.RetainedPreviousWorktree{Worktree: *taskContractSetupWorktree("/tmp/previous")},
+	})
+	if err != nil ||
+		guidance.Outcome != taskSetupOutcomeMoveSetupFailure ||
+		guidance.RetainedRoot == nil ||
+		*guidance.RetainedRoot != "/tmp/retained" ||
+		guidance.RetainedPreviousWorktree == nil ||
+		len(guidance.Actions) != 5 ||
+		!slices.Contains(guidance.Actions[0].Args, `{"plan":{"summary":"done"}}`) {
+		t.Fatalf("move setup guidance=%+v err=%v", guidance, err)
+	}
+}
+
 func TestWorktreeRuntimeOriginHeaderAndBranchCleanupPolicy(t *testing.T) {
 	const (
 		runID  = "018fdd67-89ab-4cde-8123-456789abc001"
@@ -633,6 +727,16 @@ func taskContractStatus(kind serverapi.WorkflowTaskStatusKind) serverapi.Workflo
 		panic("invalid task status")
 	}
 	return serverapi.WorkflowTaskStatus{Kind: kind, NativeState: native}
+}
+
+func taskContractSetupWorktree(root string) *serverapi.WorktreeTopologyEntry {
+	return &serverapi.WorktreeTopologyEntry{
+		Variant: serverapi.WorktreeTopologyVariantRegistered,
+		Registered: &serverapi.WorktreeRegisteredFacts{
+			Git:  serverapi.WorktreeGitFacts{CanonicalRoot: root, HeadObject: "0123456789abcdef"},
+			Kent: serverapi.WorktreeKentFacts{WorktreeID: "worktree-1", CanonicalRoot: root, DisplayName: "KENT-453", Managed: true},
+		},
+	}
 }
 
 func unsetEnvironmentForTaskContractTest(t *testing.T, name string) {

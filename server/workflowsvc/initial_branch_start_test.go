@@ -26,7 +26,9 @@ func TestServiceTaskStartMaterializesLatestTaskScopedPendingBranch(t *testing.T)
 	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
 	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
 	preparations := make(chan workflowexecution.TaskStartPreparation, 1)
-	service.currentNodeExecution = &currentNodeCompletionExecutionStub{store: service.store, startPreparations: preparations}
+	service.currentNodeExecution = &currentNodeCompletionExecutionStub{
+		store: service.store, startPreparations: preparations,
+	}
 	requestedRef := "HEAD"
 	commitOID := strings.Repeat("c", 40)
 	branchA := "feature/request-a"
@@ -72,8 +74,12 @@ func TestServiceTaskStartMaterializesLatestTaskScopedPendingBranch(t *testing.T)
 	if _, err := service.preflightInitiatingActionTarget(ctx, workflow.TaskID(task.Task.ID), nil, &branchB); err != nil {
 		t.Fatalf("second eligible branch preflight: %v", err)
 	}
-	if err := (<-preparations)(context.Background()); err != nil {
+	preparation := <-preparations
+	if err := preparation.Prepare(context.Background()); err != nil {
 		t.Fatalf("start preparation: %v", err)
+	}
+	if err := preparation.Commit(context.Background()); err != nil {
+		t.Fatalf("start preparation commit: %v", err)
 	}
 	if materializedBranch != branchB {
 		t.Fatalf("materialized branch = %q, want latest task-scoped branch %q", materializedBranch, branchB)

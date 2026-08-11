@@ -13,6 +13,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/workflowcontract"
 	"core/shared/workflowkey"
+	"core/shared/worktreecontract"
 )
 
 const (
@@ -919,6 +920,73 @@ func DecodeWorkflowTaskMutationSelfTargetError(data json.RawMessage, message str
 	return &WorkflowTaskMutationSelfTargetError{TaskID: envelope.TaskID}
 }
 
+type WorkflowTaskStartConflictReason string
+
+const WorkflowTaskStartConflictAlreadyStarted WorkflowTaskStartConflictReason = "already_started"
+
+type WorkflowTaskStartConflictError struct {
+	TaskID string                          `json:"task_id"`
+	Reason WorkflowTaskStartConflictReason `json:"reason"`
+}
+
+func (e *WorkflowTaskStartConflictError) Error() string {
+	return "workflow task start conflict"
+}
+
+func (e *WorkflowTaskStartConflictError) RPCErrorCode() int {
+	return protocol.ErrCodeWorkflowTaskStartConflict
+}
+
+func (e *WorkflowTaskStartConflictError) RPCErrorData() json.RawMessage {
+	if e == nil {
+		return nil
+	}
+	return marshalRPCErrorData(struct {
+		Type   string                          `json:"type"`
+		TaskID string                          `json:"task_id"`
+		Reason WorkflowTaskStartConflictReason `json:"reason"`
+	}{
+		Type:   "workflow_task_start_conflict",
+		TaskID: e.TaskID,
+		Reason: e.Reason,
+	})
+}
+
+func (e *WorkflowTaskStartConflictError) Validate() error {
+	if e == nil {
+		return errors.New("workflow task start conflict is required")
+	}
+	if strings.TrimSpace(e.TaskID) == "" {
+		return errors.New("workflow task start conflict task_id is required")
+	}
+	if e.Reason != WorkflowTaskStartConflictAlreadyStarted {
+		return errors.New("workflow task start conflict reason is invalid")
+	}
+	return nil
+}
+
+func DecodeWorkflowTaskStartConflictError(data json.RawMessage, message string) error {
+	fallbackMessage := strings.TrimSpace(message)
+	if fallbackMessage == "" {
+		fallbackMessage = "workflow task start conflict"
+	}
+	fallback := errors.New(fallbackMessage)
+	var payload struct {
+		Type   string                          `json:"type"`
+		TaskID string                          `json:"task_id"`
+		Reason WorkflowTaskStartConflictReason `json:"reason"`
+	}
+	if err := protocol.DecodeStrictJSON(data, &payload); err != nil ||
+		payload.Type != "workflow_task_start_conflict" {
+		return fallback
+	}
+	result := &WorkflowTaskStartConflictError{TaskID: payload.TaskID, Reason: payload.Reason}
+	if err := result.Validate(); err != nil {
+		return fallback
+	}
+	return result
+}
+
 type WorkflowTaskUpdateRequest struct {
 	TaskID            string  `json:"task_id"`
 	Title             *string `json:"title,omitempty"`
@@ -999,7 +1067,6 @@ type WorkflowTaskMoveRequest struct {
 	TransitionKey              *string                           `json:"transition_key,omitempty"`
 	Values                     map[string]map[string]string      `json:"values,omitempty"`
 	Commentary                 string                            `json:"commentary,omitempty"`
-	SetupOperationID           WorktreeSetupOperationID          `json:"setup_operation_id,omitempty"`
 	ExecutionTarget            *WorkflowExecutionTargetSelection `json:"execution_target,omitempty"`
 	BranchName                 *string                           `json:"branch_name,omitempty"`
 	ProceedDespiteDependencies bool                              `json:"proceed_despite_dependencies,omitempty"`
@@ -1014,11 +1081,13 @@ type WorkflowTaskMoveResponse struct {
 }
 
 type WorkflowTaskMoveNoOp struct {
-	CurrentNodes []WorkflowTaskCurrentNode `json:"current_nodes"`
+	CurrentNodes             []WorkflowTaskCurrentNode `json:"current_nodes"`
+	RetainedPreviousWorktree *RetainedPreviousWorktree `json:"retained_previous_worktree"`
 }
 
 type WorkflowTaskMoveApplied struct {
-	CurrentNodes []WorkflowTaskCurrentNode `json:"current_nodes"`
+	CurrentNodes             []WorkflowTaskCurrentNode `json:"current_nodes"`
+	RetainedPreviousWorktree *RetainedPreviousWorktree `json:"retained_previous_worktree"`
 }
 
 const (
@@ -2822,6 +2891,10 @@ type workflowAttentionInterruptionDetailSchema struct {
 		RequestedRef *string                                 `json:"requested_ref,omitempty"`
 		Cause        WorkflowExecutionTargetUnavailableCause `json:"cause"`
 	} `json:"configured_execution_target_unavailable,omitempty"`
+	SetupRecovery *worktreecontract.SetupRecoveryDetail[
+		WorktreeSetupOperationID,
+		WorkflowExecutionTargetSelection,
+	] `json:"setup_recovery,omitempty"`
 }
 
 func validateOptionalAttentionInterruptionDetailJSON(field string, value *string) error {
@@ -2854,6 +2927,11 @@ func validateOptionalAttentionInterruptionDetailJSON(field string, value *string
 		}
 		if err := requirement.Validate(); err != nil {
 			return workflowRequestError(WorkflowRequestErrorInvalidValue, field, field+" configured execution target metadata is invalid")
+		}
+	}
+	if recovery := detail.SetupRecovery; recovery != nil {
+		if err := recovery.Validate(); err != nil {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, field, field+" setup recovery facts are invalid")
 		}
 	}
 	return nil

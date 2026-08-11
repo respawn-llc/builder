@@ -207,8 +207,22 @@ func startCurrentNodeForControllerTest(
 		}},
 	}}
 	store.mu.Unlock()
-	_, err := controller.StartTask(ctx, reference.TaskID, func(context.Context) error { return nil })
+	_, err := controller.StartTask(
+		ctx,
+		reference.TaskID,
+		testTaskPreparation(func(context.Context) error { return nil }),
+		noOpTaskPreparationFinalizer,
+	)
 	return err
+}
+
+func noOpTaskPreparationFinalizer(TaskPreparationFinalization) {}
+
+func testTaskPreparation(prepare func(context.Context) error) TaskStartPreparation {
+	return TaskStartPreparation{
+		Prepare: prepare,
+		Commit:  func(context.Context) error { return nil },
+	}
 }
 
 func currentNodeReferenceForControllerTest(t *testing.T, taskID string, nodeID string) workflow.CurrentNodeReference {
@@ -220,25 +234,23 @@ func currentNodeReferenceForControllerTest(t *testing.T, taskID string, nodeID s
 	return reference
 }
 
-func singleLiveScope(t *testing.T, controller *CurrentNodeController, reference workflow.CurrentNodeReference) runtimeids.ExecutionScopeID {
+func singleLiveScope(t *testing.T, authority *sessionruntime.Authority, reference workflow.CurrentNodeReference) runtimeids.ExecutionScopeID {
 	t.Helper()
-	snapshot := controller.Snapshot()
-	for _, scope := range snapshot.LiveScopes {
-		if scope.CurrentNode.Equal(reference) {
-			return scope.ScopeID
-		}
+	handle, live := authority.ExecutionByWorkflow(sessionruntime.WorkflowExecutionRef{
+		ProjectID: "project-test", WorkflowID: currentNodeControllerTestWorkflowID, CurrentNode: reference,
+	})
+	if live {
+		return handle.Scope().ID()
 	}
-	t.Fatalf("snapshot %+v has no live scope for %v", snapshot, reference)
+	t.Fatalf("no live execution for %v", reference)
 	return runtimeids.ExecutionScopeID{}
 }
 
-func hasLiveCurrentNode(snapshot CurrentNodeExecutionSnapshot, reference workflow.CurrentNodeReference) bool {
-	for _, live := range snapshot.LiveScopes {
-		if live.CurrentNode.Equal(reference) {
-			return true
-		}
-	}
-	return false
+func hasLiveCurrentNode(authority *sessionruntime.Authority, reference workflow.CurrentNodeReference) bool {
+	_, live := authority.ExecutionByWorkflow(sessionruntime.WorkflowExecutionRef{
+		ProjectID: "project-test", WorkflowID: currentNodeControllerTestWorkflowID, CurrentNode: reference,
+	})
+	return live
 }
 
 func waitForRunningCurrentNode(
@@ -261,15 +273,6 @@ func waitForRunningCurrentNode(
 		}
 		return false
 	}, "current node %v did not begin running", reference)
-}
-
-func hasAutomaticCurrentNodeIntent(snapshot CurrentNodeExecutionSnapshot, reference workflow.CurrentNodeReference) bool {
-	for _, intent := range snapshot.AutomaticIntents {
-		if intent.CurrentNode.Equal(reference) {
-			return true
-		}
-	}
-	return false
 }
 
 var currentNodeControllerTestWorkflowID = func() runtimeids.WorkflowID {

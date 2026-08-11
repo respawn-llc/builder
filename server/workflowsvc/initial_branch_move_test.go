@@ -141,7 +141,7 @@ func TestServiceManualMoveCarriesBranchAssertionAndDoesNotApplyOnMismatch(t *tes
 
 	_, err = service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
 		TaskID: task.Task.ID, TargetNodeID: workflowServiceNodeIDByKey(t, definition.Definition, "plan"),
-		SetupOperationID: serverapi.NewWorktreeSetupOperationID(), BranchName: &branchName,
+		BranchName: &branchName,
 	})
 	var mismatch *serverapi.WorkflowTaskInitialBranchError
 	if !errors.As(err, &mismatch) ||
@@ -251,7 +251,7 @@ func TestServiceManualMoveAcceptedBranchReturnsConflictWhenFinalRevalidationBeco
 
 	response, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
 		TaskID: task.Task.ID, TargetNodeID: string(targetNodeID),
-		SetupOperationID: serverapi.NewWorktreeSetupOperationID(), BranchName: &branchName,
+		BranchName: &branchName,
 	})
 
 	if !errors.Is(err, workflowexecution.ErrManualMoveLifecycleConflict) {

@@ -23,7 +23,8 @@ describe("task lifecycle client", () => {
         method: "workflow.task.move",
         result: {
           outcome: "applied",
-          applied: { current_nodes: [{ node_id: "node-2", transition_branch_key: null, session_id: null }] },
+          applied: { current_nodes: [{ node_id: "node-2", transition_branch_key: null, session_id: null }],
+            retained_previous_worktree: null },
         },
       },
       {
@@ -143,6 +144,9 @@ describe("task lifecycle client", () => {
   });
 
   it("parses every Manual Move preview outcome and same-current no-op", () => {
+    expect(taskMoveResponseSchema.parse({ outcome: "no_op", no_op: { current_nodes:
+      [{ node_id: "node-1", transition_branch_key: null, session_id: null }], retained_previous_worktree: null } }))
+      .toMatchObject({ outcome: "no_op", noOp: { retainedPreviousWorktree: null } });
     expect(
       taskMovePreviewResponseSchema.parse({
         outcome: "no_op",

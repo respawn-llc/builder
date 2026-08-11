@@ -5,6 +5,7 @@ import { ContractError } from "./errors";
 import { FakeRpcTransport } from "@/test-support/api";
 import { newSetupOperationID, parseSetupOperationID, type SetupOperationID } from "./setupOperationID";
 import type { WorktreeSetupEvent } from "./worktreeSetup";
+import { parseTaskSetupRecoveryDetail, worktreeSetupEventParamsSchema } from "./worktreeSetup";
 
 const setupOperationIDWireSchema = z.string().transform((value, ctx): SetupOperationID => {
   try {
@@ -25,6 +26,40 @@ function parseSetupMutationParams(value: unknown): Readonly<{ setupOperationID: 
 }
 
 describe("worktree setup API", () => {
+  it("accepts retry-ready operational setup failures", () => {
+    const root = "/worktrees/task-1";
+    const event = worktreeSetupEventParamsSchema.parse({ event: { setup_operation_id:
+      "55555555-5555-4555-8555-555555555555", phase: "failed", failed: {
+        retry_readiness: "retry_ready", cause: { kind: "operational", operational: {} },
+        diagnostic: "setup process could not start", script_path: "/repo/setup.sh", execution_target: null,
+        retained_previous_worktree: null, retained_worktree: { variant: "registered", registered: {
+          git: { canonical_root: root, head_object: "abc", branch_ref: null, branch_name: null, detached: false, bare: false, locked_reason: null, prunable_reason: null, is_main: false, path_available: true },
+          kent: { worktree_id: "worktree-1", canonical_root: root, display_name: "Task", managed: true, created_branch: true, origin_session_id: null },
+        } },
+      },
+    } }).event;
+    expect(event).toMatchObject({ phase: "failed",
+      failed: { retryReadiness: "retry_ready", cause: { kind: "operational" } } });
+  });
+
+  it("decodes canonical Task setup recovery without fabricating topology", () => {
+    const recovery = parseTaskSetupRecoveryDetail(JSON.stringify({
+      setup_recovery: {
+        setup_operation_id: "55555555-5555-4555-8555-555555555555",
+        cause: "target_preparation", diagnostic: "target failed", script_path: null,
+        setup_requirement: "required", retained_worktree: null, retained_previous_worktree: null,
+        execution_target: { mode: "head" },
+      },
+    }));
+    expect(recovery).toMatchObject({
+      cause: "target_preparation", diagnostic: "target failed",
+      executionTarget: { mode: "head", customRef: null },
+      retainedWorktree: null,
+    });
+    expect(parseTaskSetupRecoveryDetail(JSON.stringify({ code: "user_interrupt" }))).toBeNull();
+    expect(() => parseTaskSetupRecoveryDetail('{"setup_recovery":{}}')).toThrow(ContractError);
+  });
+
   it("rejects malformed setup operation ids before RPC submission can use them", () => {
     expect(() => parseSetupOperationID("11111111-1111-1111-1111-111111111111")).toThrow(
       "Setup operation id must be a UUID v4.",
@@ -32,7 +67,7 @@ describe("worktree setup API", () => {
     expect(() => parseSetupOperationID("not-a-uuid")).toThrow("Setup operation id must be a UUID v4.");
   });
 
-  it("uses caller-provided setup operation ids and disables generic timeouts for workflow lifecycle mutations", async () => {
+  it("uses caller-provided setup operation ids only for asynchronous workflow lifecycle mutations", async () => {
     const transport = new FakeRpcTransport([
       {
         method: "workflow.task.start",
@@ -49,13 +84,13 @@ describe("worktree setup API", () => {
           outcome: "applied",
           applied: {
             current_nodes: [{ node_id: "node-1", transition_branch_key: null, session_id: null }],
+            retained_previous_worktree: null,
           },
         },
       },
     ]);
     const client = new ApiClient(transport);
     const startSetupID = newSetupOperationID();
-    const moveSetupID = newSetupOperationID();
 
     client.subscribeWorktreeSetup(startSetupID, {
       onEvent() {
@@ -72,23 +107,20 @@ describe("worktree setup API", () => {
     await client.moveTask({
       taskID: "task-1",
       targetNodeID: "node-1",
-      setupOperationID: moveSetupID,
     });
 
     expect(transport.subscriptions).toContainEqual({
       method: "worktree.setup.subscribe",
       params: { setup_operation_id: startSetupID.toJSONValue() },
     });
-    for (const [method, expectedSetupID] of [
-      ["workflow.task.start", startSetupID],
-      ["workflow.task.move", moveSetupID],
-    ] as const) {
-      const call = transport.calls.find((entry) => entry.method === method);
-      expect(call?.options).toEqual({ timeoutMs: null });
-      expect(parseSetupMutationParams(call?.params).setupOperationID.toJSONValue()).toBe(
-        expectedSetupID.toJSONValue(),
-      );
-    }
+    const startCall = transport.calls.find((entry) => entry.method === "workflow.task.start");
+    expect(startCall?.options).toEqual({ timeoutMs: null });
+    expect(parseSetupMutationParams(startCall?.params).setupOperationID.toJSONValue()).toBe(
+      startSetupID.toJSONValue(),
+    );
+    const moveCall = transport.calls.find((entry) => entry.method === "workflow.task.move");
+    expect(moveCall?.options).toEqual({ timeoutMs: null });
+    expect(moveCall?.params).not.toHaveProperty("setup_operation_id");
   });
 
   it("subscribes to typed worktree setup events and rejects malformed setup ids", () => {
@@ -117,35 +149,36 @@ describe("worktree setup API", () => {
     transport.emit("worktree.setup", {
       event: {
         setup_operation_id: setupOperationID.toJSONValue(),
-        source_workspace_root: "/src",
-        worktree_root: "/worktree",
-        script_path: "/src/setup.sh",
         phase: "started",
+        started: {
+          source_workspace_root: "/src",
+          worktree_root: "/worktree",
+          script_path: "/src/setup.sh",
+        },
       },
     });
 
     expect(events).toEqual([
       {
         setupOperationID,
-        sourceWorkspaceRoot: "/src",
-        worktreeRoot: "/worktree",
-        scriptPath: "/src/setup.sh",
         phase: "started",
-        timeout: false,
-        canceled: false,
-        stdout: "",
-        stderr: "",
-        error: "",
+        started: {
+          sourceWorkspaceRoot: "/src",
+          worktreeRoot: "/worktree",
+          scriptPath: "/src/setup.sh",
+        },
       },
     ]);
 
     transport.emit("worktree.setup", {
       event: {
         setup_operation_id: "not-a-uuid",
-        source_workspace_root: "/src",
-        worktree_root: "/worktree",
-        script_path: "/src/setup.sh",
         phase: "started",
+        started: {
+          source_workspace_root: "/src",
+          worktree_root: "/worktree",
+          script_path: "/src/setup.sh",
+        },
       },
     });
 

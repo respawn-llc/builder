@@ -203,7 +203,6 @@ func TestWorkflowSessionCanMoveAnotherTask(t *testing.T) {
 		TaskID:            targetTask.Task.ID,
 		InvokingSessionID: &sessionID,
 		TargetNodeID:      targetNodeID,
-		SetupOperationID:  serverapi.NewWorktreeSetupOperationID(),
 		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
 			Mode: serverapi.WorkflowExecutionTargetModeNone,
 		},
@@ -379,7 +378,6 @@ func TestUnboundSessionCanMutateAnyTask(t *testing.T) {
 		TaskID:            moveTask.Task.ID,
 		InvokingSessionID: &sessionID,
 		TargetNodeID:      moveTargetNodeID,
-		SetupOperationID:  serverapi.NewWorktreeSetupOperationID(),
 		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
 			Mode: serverapi.WorkflowExecutionTargetModeNone,
 		},
@@ -454,6 +452,7 @@ func (s *taskMutationAuthorizationExecutionStub) ResumeTaskWithPreparation(
 	_ context.Context,
 	taskID workflow.TaskID,
 	_ workflowexecution.TaskStartPreparation,
+	_ workflowexecution.TaskPreparationFinalizer,
 ) ([]workflow.CurrentNode, error) {
 	return s.ResumeTask(context.Background(), taskID)
 }

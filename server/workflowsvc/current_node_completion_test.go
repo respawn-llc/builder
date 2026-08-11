@@ -208,6 +208,7 @@ type currentNodeCompletionExecutionStub struct {
 	resumeEligibilityErr   error
 	resumeEligibilityCalls int
 	startPreparations      chan<- workflowexecution.TaskStartPreparation
+	startFinalizers        chan<- workflowexecution.TaskPreparationFinalizer
 	sessionID              runtimeids.SessionID
 	sessionResult          workflowstore.CurrentNodeCompletionResult
 	sessionErr             error
@@ -225,41 +226,46 @@ func (s *currentNodeCompletionExecutionStub) StartTask(
 	ctx context.Context,
 	taskID workflow.TaskID,
 	preparation workflowexecution.TaskStartPreparation,
+	finalizer workflowexecution.TaskPreparationFinalizer,
 ) (workflowstore.StartTaskResult, error) {
 	if s.store == nil {
 		return workflowstore.StartTaskResult{}, errors.New("workflow store is required")
 	}
 	started, err := s.store.StartTask(ctx, taskID)
-	if err != nil || preparation == nil {
+	if err != nil {
 		return started, err
 	}
 	if s.startPreparations != nil {
 		s.startPreparations <- preparation
+		if s.startFinalizers != nil {
+			s.startFinalizers <- finalizer
+		}
 		return started, nil
 	}
-	return started, preparation(ctx)
+	if err := preparation.Prepare(ctx); err != nil {
+		finalizer(workflowexecution.TaskPreparationFinalization{
+			Kind:  workflowexecution.TaskPreparationFailed,
+			Cause: err,
+		})
+		return started, err
+	}
+	if err := preparation.Commit(ctx); err != nil {
+		finalizer(workflowexecution.TaskPreparationFinalization{
+			Kind:  workflowexecution.TaskPreparationFailed,
+			Cause: err,
+		})
+		return started, err
+	}
+	finalizer(workflowexecution.TaskPreparationFinalization{Kind: workflowexecution.TaskPreparationHandedOff})
+	return started, nil
 }
 
 func (s *currentNodeCompletionExecutionStub) ResumeTask(ctx context.Context, taskID workflow.TaskID) ([]workflow.CurrentNode, error) {
-	return s.ResumeTaskWithPreparation(ctx, taskID, func(context.Context) error { return nil })
-}
-
-func (s *currentNodeCompletionExecutionStub) ResumeTaskWithPreparation(
-	ctx context.Context,
-	taskID workflow.TaskID,
-	preparation workflowexecution.TaskStartPreparation,
-) ([]workflow.CurrentNode, error) {
 	if s.store == nil {
 		return nil, errors.New("workflow store is required")
 	}
-	if preparation == nil {
-		return nil, errors.New("task resume preparation is required")
-	}
 	selected, err := s.store.InterruptedExecutableCurrentNodes(ctx, taskID)
 	if err != nil {
-		return nil, err
-	}
-	if err := preparation(ctx); err != nil {
 		return nil, err
 	}
 	for _, currentNode := range selected {
@@ -267,6 +273,42 @@ func (s *currentNodeCompletionExecutionStub) ResumeTaskWithPreparation(
 			return nil, err
 		}
 	}
+	return selected, nil
+}
+
+func (s *currentNodeCompletionExecutionStub) ResumeTaskWithPreparation(
+	ctx context.Context,
+	taskID workflow.TaskID,
+	preparation workflowexecution.TaskStartPreparation,
+	finalizer workflowexecution.TaskPreparationFinalizer,
+) ([]workflow.CurrentNode, error) {
+	if s.store == nil {
+		return nil, errors.New("workflow store is required")
+	}
+	selected, err := s.store.InterruptedExecutableCurrentNodes(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if err := preparation.Prepare(ctx); err != nil {
+		finalizer(workflowexecution.TaskPreparationFinalization{
+			Kind:  workflowexecution.TaskPreparationFailed,
+			Cause: err,
+		})
+		return nil, err
+	}
+	if err := preparation.Commit(ctx); err != nil {
+		finalizer(workflowexecution.TaskPreparationFinalization{
+			Kind:  workflowexecution.TaskPreparationFailed,
+			Cause: err,
+		})
+		return nil, err
+	}
+	for _, currentNode := range selected {
+		if _, _, err := s.store.ResumeCurrentNode(ctx, currentNode.Reference); err != nil {
+			return nil, err
+		}
+	}
+	finalizer(workflowexecution.TaskPreparationFinalization{Kind: workflowexecution.TaskPreparationHandedOff})
 	return selected, nil
 }
 

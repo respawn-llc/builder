@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { AttentionItem, TaskDetail } from "@/api";
+import { ContractError, parseTaskSetupRecoveryDetail, type AttentionItem, type TaskDetail } from "@/api";
 import type { TaskDetailInitialFocus } from "@/app-facade";
 import { sameTaskDetailInitialFocus } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
@@ -73,6 +73,7 @@ export function TaskInbox({
           onQuestionSelectionChange={onQuestionSelectionChange}
           primaryControls={primaryControls}
           promptAnswerState={promptAnswerState}
+          task={detail}
         />
       ))}
     </>
@@ -115,7 +116,17 @@ function focusedAttentionItemID(
       (item) => item.kind === "approval" && item.approvalID === initialFocus.approvalID,
     )?.id;
   }
-  return attentionItems.find((item) => item.kind === "interrupted_current_node")?.id;
+  return (
+    attentionItems.find((item) => {
+      if (item.kind !== "interrupted_current_node") return false;
+      try {
+        return parseTaskSetupRecoveryDetail(item.detailJSON) !== null;
+      } catch (error) {
+        if (error instanceof ContractError) return false;
+        throw error;
+      }
+    })?.id ?? attentionItems.find((item) => item.kind === "interrupted_current_node")?.id
+  );
 }
 
 function InboxItem({
@@ -128,6 +139,7 @@ function InboxItem({
   onQuestionSelectionChange,
   primaryControls,
   promptAnswerState,
+  task,
 }: Readonly<{
   answerQuestion: QuestionAnswerMutation;
   attention: AttentionItem;
@@ -138,6 +150,7 @@ function InboxItem({
   onQuestionSelectionChange: (key: PromptAnswerKey, selection: QuestionSelectionState) => void;
   primaryControls: PromptPrimaryControlRegistry;
   promptAnswerState: PromptAnswerState;
+  task: TaskDetail;
 }>) {
   const focusTargetRef = useRef<HTMLDivElement | null>(null);
   const scrolledRef = useRef(false);
@@ -191,7 +204,11 @@ function InboxItem({
   }
   return (
     <div ref={focusTargetRef}>
-      <InterruptedCurrentNodeBox attention={attention} disabled={disabled} />
+      <InterruptedCurrentNodeBox
+        attention={attention}
+        canResume={task.actions.canResume}
+        disabled={disabled}
+      />
     </div>
   );
 }

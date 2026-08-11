@@ -19,7 +19,7 @@ export type TaskInitiatingAction =
     }>
   | Readonly<{
       kind: "move";
-      input: TaskMoveInput & Readonly<{ setupOperationID: SetupOperationID }>;
+      input: TaskMoveInput;
     }>
   | Readonly<{
       kind: "resume";
@@ -46,7 +46,7 @@ export type TaskInitiatingActionResult =
 
 export type ExecutionTargetSelectionDraft = Readonly<{
   mode: WorkflowExecutionTargetSelectionMode;
-  customRef: string;
+  customRef: string | null;
 }>;
 
 export function startTaskInitiatingAction(
@@ -64,13 +64,7 @@ export function startTaskInitiatingAction(
 export function moveTaskInitiatingAction(
   input: TaskMoveInput,
 ): Extract<TaskInitiatingAction, { kind: "move" }> {
-  return {
-    kind: "move",
-    input: {
-      ...input,
-      setupOperationID: input.setupOperationID ?? newSetupOperationID(),
-    },
-  };
+  return { kind: "move", input };
 }
 
 export function resumeTaskInitiatingAction(
@@ -99,10 +93,10 @@ export function initialExecutionTargetSelectionDraft(
   if (requirement.reason === "configured_target_unavailable") {
     return {
       mode: requirement.configuredTarget.mode,
-      customRef: requirement.configuredTarget.requestedRef ?? "",
+      customRef: requirement.configuredTarget.requestedRef,
     };
   }
-  return { mode: "default_branch", customRef: "" };
+  return { mode: "default_branch", customRef: null };
 }
 
 export function executionTargetSelectionFromDraft(
@@ -111,8 +105,8 @@ export function executionTargetSelectionFromDraft(
   if (draft.mode !== "custom_ref") {
     return { mode: draft.mode, customRef: null };
   }
-  const customRef = draft.customRef.trim();
-  return customRef.length === 0 ? null : { mode: draft.mode, customRef };
+  const customRef = draft.customRef?.trim();
+  return customRef == null || customRef.length === 0 ? null : { mode: draft.mode, customRef };
 }
 
 export async function executeTaskInitiatingAction(
