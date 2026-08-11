@@ -49,7 +49,7 @@ func goalIsActive(goal *clientui.RuntimeGoal) bool {
 }
 
 func goalIsPresent(goal *clientui.RuntimeGoal) bool {
-	if goal == nil || (goal.Goal == nil && goal.Pending == nil) {
+	if goal == nil || goal.Goal == nil {
 		return false
 	}
 	switch goalStatus(goal) {
@@ -229,6 +229,9 @@ func (m *uiModel) goalRuntimeCommand(operation goalRuntimeOperation, objective s
 			msg.goal, msg.err = client.ShowGoal()
 		case goalRuntimeSet:
 			msg.goal, msg.err = client.SetGoal(objective)
+			if msg.err == nil {
+				msg.pending = goalMutationPendingPreview(client)
+			}
 		case goalRuntimePause:
 			msg.goal, msg.err = client.PauseGoal()
 		case goalRuntimeResume:
@@ -284,6 +287,7 @@ func (m *uiModel) applyGoalRuntimeDone(msg goalRuntimeDoneMsg) tea.Cmd {
 	switch msg.operation {
 	case goalRuntimeShow:
 		m.goal.goal = cloneRuntimeGoal(msg.goal)
+		m.goal.pending = nil
 		m.goal.error = ""
 		return followUpCmd
 	case goalRuntimeCheckSet:
@@ -306,22 +310,30 @@ func (m *uiModel) applyGoalRuntimeDone(msg goalRuntimeDoneMsg) tea.Cmd {
 		return sequenceCmds(m.goalRuntimeCommand(goalRuntimeClear, ""), followUpCmd)
 	case goalRuntimeSet:
 		m.goal.goal = cloneRuntimeGoal(msg.goal)
+		m.goal.pending = cloneGoalPreview(msg.pending)
 		overlayCmd := tea.Cmd(nil)
 		if m.goal.open && strings.TrimSpace(m.goal.confirmMode) != "" {
 			overlayCmd = m.inputController().stopGoalFlowCmd()
 		}
 		return sequenceCmds(overlayCmd, followUpCmd)
 	case goalRuntimePause:
-		m.goal.goal = cloneRuntimeGoal(msg.goal)
+		if msg.goal != nil {
+			m.goal.goal = cloneRuntimeGoal(msg.goal)
+		}
 		return followUpCmd
 	case goalRuntimeResume:
-		m.goal.goal = cloneRuntimeGoal(msg.goal)
+		if msg.goal != nil {
+			m.goal.goal = cloneRuntimeGoal(msg.goal)
+		}
 		return followUpCmd
 	case goalRuntimeComplete:
-		m.goal.goal = cloneRuntimeGoal(msg.goal)
+		if msg.goal != nil {
+			m.goal.goal = cloneRuntimeGoal(msg.goal)
+		}
 		return followUpCmd
 	case goalRuntimeClear:
 		m.goal.goal = nil
+		m.goal.pending = nil
 		overlayCmd := tea.Cmd(nil)
 		if m.goal.open && strings.TrimSpace(m.goal.confirmMode) != "" {
 			overlayCmd = m.inputController().stopGoalFlowCmd()
@@ -336,6 +348,7 @@ func (m *uiModel) openGoalOverlay(goal *clientui.RuntimeGoal, err error) {
 	m.goal.open = true
 	m.goal.scroll = 0
 	m.goal.goal = cloneRuntimeGoal(goal)
+	m.goal.pending = nil
 	m.goal.error = ""
 	if err != nil {
 		m.goal.error = err.Error()
@@ -471,20 +484,21 @@ func (l uiViewLayout) goalOverlayContentLines(width int) []string {
 		builder.appendWrapped("Could not load goal: "+m.goal.error, warningStyle)
 		return builder.lines
 	}
-	if m.goal.goal == nil || (m.goal.goal.Goal == nil && m.goal.goal.Pending == nil) {
+	if (m.goal.goal == nil || m.goal.goal.Goal == nil) && m.goal.pending == nil {
 		builder.appendGap()
 		builder.appendWrapped(noGoalHint, subtleStyle)
 		return builder.lines
 	}
 	goal := m.goal.goal
+	status, objective := goalDisplay(goal, m.goal.pending)
 	builder.appendGap()
-	builder.appendWrapped("Status: "+strings.TrimSpace(string(goalStatus(goal))), boldStyle)
-	if goal.Goal != nil && strings.TrimSpace(goal.ID) != "" {
+	builder.appendWrapped("Status: "+strings.TrimSpace(string(status)), boldStyle)
+	if goal != nil && goal.Goal != nil && strings.TrimSpace(goal.ID) != "" {
 		builder.appendWrapped("ID: "+strings.TrimSpace(goal.ID), subtleStyle)
 	}
 	builder.appendGap()
 	builder.appendWrapped("Objective", titleStyle)
-	builder.appendMarkdown(goalObjective(goal))
+	builder.appendMarkdown(objective)
 	builder.appendGap()
 	builder.appendWrapped("Esc/q closes. /goal pause, /goal resume, /goal clear manage lifecycle.", subtleStyle)
 	return builder.lines
@@ -523,24 +537,44 @@ func (l uiViewLayout) goalConfirmContentLines(width int, titleStyle, boldStyle, 
 }
 
 func goalStatus(goal *clientui.RuntimeGoal) clientui.RuntimeGoalStatus {
-	status, _ := goalDisplay(goal)
-	return status
+	if goal == nil || goal.Goal == nil {
+		return ""
+	}
+	return goal.Status
 }
 
 func goalObjective(goal *clientui.RuntimeGoal) string {
-	_, objective := goalDisplay(goal)
-	return objective
+	if goal == nil || goal.Goal == nil {
+		return ""
+	}
+	return goal.Objective
 }
 
-func goalDisplay(goal *clientui.RuntimeGoal) (clientui.RuntimeGoalStatus, string) {
-	if goal == nil {
-		return "", ""
-	}
-	if goal.Goal != nil {
+func goalDisplay(goal *clientui.RuntimeGoal, pending *clientui.GoalPreview) (clientui.RuntimeGoalStatus, string) {
+	if goal != nil && goal.Goal != nil {
 		return goal.Status, goal.Objective
 	}
-	if goal.Pending != nil {
-		return goal.Pending.Status, goal.Pending.Objective
+	if pending != nil {
+		return pending.Status, pending.Objective
 	}
 	return "", ""
+}
+
+func cloneGoalPreview(preview *clientui.GoalPreview) *clientui.GoalPreview {
+	if preview == nil {
+		return nil
+	}
+	cloned := *preview
+	return &cloned
+}
+
+func goalMutationPendingPreview(client clientui.RuntimeClient) *clientui.GoalPreview {
+	type pendingPreviewClient interface {
+		goalMutationPendingPreview() *clientui.GoalPreview
+	}
+	previewClient, ok := client.(pendingPreviewClient)
+	if !ok {
+		return nil
+	}
+	return cloneGoalPreview(previewClient.goalMutationPendingPreview())
 }

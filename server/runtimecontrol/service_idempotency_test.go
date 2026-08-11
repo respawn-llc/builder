@@ -79,8 +79,8 @@ func TestGoalMutationOutputFailureIsMemoized(t *testing.T) {
 			Err:          outputErr,
 		}, nil
 	}
-	first, firstErr := memoizedGoalMutation(service, context.Background(), "goal-request-1", req, service.goals, sameGoalSetMemoRequest, run)
-	second, secondErr := memoizedGoalMutation(service, context.Background(), "goal-request-1", req, service.goals, sameGoalSetMemoRequest, run)
+	first, firstErr := memoizedGoalMutation(service, context.Background(), "goal-request-1", req, service.goals, sameGoalSetMemoRequest, true, run)
+	second, secondErr := memoizedGoalMutation(service, context.Background(), "goal-request-1", req, service.goals, sameGoalSetMemoRequest, true, run)
 	if !errors.Is(firstErr, outputErr) || !errors.Is(secondErr, outputErr) || first.Goal == nil || second.Goal == nil || first.Goal.ID != second.Goal.ID || calls != 1 {
 		t.Fatalf("memoized Goal output failure = (%+v,%v), (%+v,%v), calls=%d", first, firstErr, second, secondErr, calls)
 	}

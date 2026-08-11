@@ -28,7 +28,6 @@ type RuntimeContextUsage struct {
 
 type RuntimeGoal struct {
 	*Goal
-	Pending      *GoalPreview
 	Availability GoalAvailability
 	Suspended    bool
 }

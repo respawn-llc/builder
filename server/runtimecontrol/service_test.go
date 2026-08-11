@@ -1232,11 +1232,10 @@ func TestServiceShowGoalReturnsCommittedStateAroundQueuedGoalDrain(t *testing.T)
 	for _, test := range []struct {
 		name string
 		call func(context.Context, serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalMutationResponse, error)
-		want clientui.RuntimeGoalStatus
 	}{
-		{name: "pause", call: service.PauseGoal, want: clientui.RuntimeGoalStatusPaused},
-		{name: "resume", call: service.ResumeGoal, want: clientui.RuntimeGoalStatusActive},
-		{name: "complete", call: service.CompleteGoal, want: clientui.RuntimeGoalStatusComplete},
+		{name: "pause", call: service.PauseGoal},
+		{name: "resume", call: service.ResumeGoal},
+		{name: "complete", call: service.CompleteGoal},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			resp, err := test.call(context.Background(), serverapi.RuntimeGoalStatusRequest{
@@ -1244,8 +1243,8 @@ func TestServiceShowGoalReturnsCommittedStateAroundQueuedGoalDrain(t *testing.T)
 				SessionID:       store.Meta().SessionID,
 				Actor:           string(session.GoalActorUser),
 			})
-			if err != nil || resp.Goal != nil || resp.Pending == nil || resp.Pending.Objective != "accepted pending goal" || resp.Pending.Status != test.want {
-				t.Fatalf("%s response = %+v, err=%v, want pending %q", test.name, resp, err, test.want)
+			if err != nil || resp.Goal != nil || resp.Pending != nil || resp.Availability != clientui.GoalAvailabilityAvailable {
+				t.Fatalf("%s response = %+v, err=%v, want accepted no-Goal command response without pending preview", test.name, resp, err)
 			}
 		})
 	}

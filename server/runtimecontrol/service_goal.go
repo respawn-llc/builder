@@ -35,12 +35,7 @@ func (s *Service) ShowGoal(ctx context.Context, req serverapi.RuntimeGoalShowReq
 	if err != nil {
 		return serverapi.RuntimeGoalShowResponse{}, fmt.Errorf("resolve Goal availability for session %q: %w", sessionID, err)
 	}
-	return serverapi.RuntimeGoalShowResponse{
-		GoalEnvelope: clientui.GoalEnvelope{
-			Goal:         session.GoalCoreFromState(record.Meta.Goal),
-			Availability: availability,
-		},
-	}, nil
+	return serverapi.RuntimeGoalShowResponse{GoalEnvelope: clientui.ProjectGoal(session.GoalCoreFromState(record.Meta.Goal), availability)}, nil
 }
 
 func (s *Service) SetGoal(ctx context.Context, req serverapi.RuntimeGoalSetRequest) (serverapi.RuntimeGoalMutationResponse, error) {
@@ -58,7 +53,7 @@ func (s *Service) SetGoal(ctx context.Context, req serverapi.RuntimeGoalSetReque
 		RunID:     strings.TrimSpace(req.RunID),
 		StepID:    strings.TrimSpace(req.StepID),
 	}
-	return memoizedGoalMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq, s.goals, sameGoalSetMemoRequest, func(ctx context.Context) (runtimecommand.GoalCommandResult, error) {
+	return memoizedGoalMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq, s.goals, sameGoalSetMemoRequest, true, func(ctx context.Context) (runtimecommand.GoalCommandResult, error) {
 		return s.goalAuthority.Set(ctx, runtimecommand.GoalSetCommand{
 			SessionID: sessionID,
 			Objective: memoReq.Objective,
@@ -95,7 +90,7 @@ func (s *Service) setGoalStatus(ctx context.Context, req serverapi.RuntimeGoalSt
 		RunID:     strings.TrimSpace(req.RunID),
 		StepID:    strings.TrimSpace(req.StepID),
 	}
-	mutation, err := memoizedGoalMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq, s.goalStatuses, sameGoalStatusMemoRequest, func(ctx context.Context) (runtimecommand.GoalCommandResult, error) {
+	mutation, err := memoizedGoalMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq, s.goalStatuses, sameGoalStatusMemoRequest, false, func(ctx context.Context) (runtimecommand.GoalCommandResult, error) {
 		return s.goalAuthority.Status(ctx, runtimecommand.GoalStatusCommand{
 			SessionID: sessionID,
 			Status:    status,
@@ -130,7 +125,7 @@ func (s *Service) ClearGoal(ctx context.Context, req serverapi.RuntimeGoalClearR
 		return serverapi.RuntimeGoalMutationResponse{}, err
 	}
 	memoReq := goalClearMemoRequest{SessionID: sessionID.String(), Actor: strings.TrimSpace(req.Actor)}
-	mutation, err := memoizedGoalMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq, s.goalClears, sameGoalClearMemoRequest, func(ctx context.Context) (runtimecommand.GoalCommandResult, error) {
+	mutation, err := memoizedGoalMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq, s.goalClears, sameGoalClearMemoRequest, false, func(ctx context.Context) (runtimecommand.GoalCommandResult, error) {
 		return s.goalAuthority.Clear(ctx, runtimecommand.GoalClearCommand{
 			SessionID: sessionID,
 			Actor:     session.GoalActor(memoReq.Actor),
@@ -146,6 +141,7 @@ func memoizedGoalMutation[Req any](
 	req Req,
 	memo *requestmemo.Memo[Req, committedGoalMutationResult],
 	same func(Req, Req) bool,
+	allowPendingPreview bool,
 	run func(context.Context) (runtimecommand.GoalCommandResult, error),
 ) (serverapi.RuntimeGoalMutationResponse, error) {
 	if service == nil || service.goalAuthority == nil {
@@ -156,7 +152,7 @@ func memoizedGoalMutation[Req any](
 		if outerErr != nil {
 			return committedGoalMutationResult{}, goalMutationError(outerErr)
 		}
-		response, responseErr := goalMutationResponseFromCommand(outcome)
+		response, responseErr := goalMutationResponseFromCommand(outcome, allowPendingPreview)
 		if responseErr != nil {
 			return committedGoalMutationResult{Err: goalMutationError(responseErr)}, nil
 		}
@@ -171,7 +167,7 @@ func memoizedGoalMutation[Req any](
 	return result.Response, result.Err
 }
 
-func goalMutationResponseFromCommand(result runtimecommand.GoalCommandResult) (serverapi.RuntimeGoalMutationResponse, error) {
+func goalMutationResponseFromCommand(result runtimecommand.GoalCommandResult, allowPendingPreview bool) (serverapi.RuntimeGoalMutationResponse, error) {
 	if err := result.Availability.Validate(); err != nil {
 		if result.Err != nil {
 			return serverapi.RuntimeGoalMutationResponse{}, result.Err
@@ -187,6 +183,9 @@ func goalMutationResponseFromCommand(result runtimecommand.GoalCommandResult) (s
 		}
 		if projected := session.GoalCoreFromState(result.Goal); projected != nil && strings.TrimSpace(projected.ID) != "" {
 			return serverapi.RuntimeGoalMutationResponse{Goal: projected, Availability: result.Availability}, nil
+		}
+		if !allowPendingPreview {
+			return serverapi.RuntimeGoalMutationResponse{Availability: result.Availability}, nil
 		}
 		return serverapi.RuntimeGoalMutationResponse{Pending: &clientui.GoalPreview{Objective: result.Goal.Objective, Status: clientui.RuntimeGoalStatus(result.Goal.Status)}, Availability: result.Availability}, nil
 	}

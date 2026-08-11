@@ -307,7 +307,7 @@ func TestGoalMarkdownLinksStayBoundedAndDoNotReachPadding(t *testing.T) {
 
 func TestGoalOverlayRendersPendingPreviewWithoutDurableID(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.goal.goal = runtimeGoalPendingFixture("ship the queued goal", clientui.RuntimeGoalStatusPaused)
+	m.goal.pending = &clientui.GoalPreview{Objective: "ship the queued goal", Status: clientui.RuntimeGoalStatusPaused}
 	content := strings.Join(m.layout().goalOverlayContentLines(80), "\n")
 	if !strings.Contains(content, "ship the queued goal") || !strings.Contains(content, "paused") || strings.Contains(content, noGoalHint) || strings.Contains(content, "ID:") {
 		t.Fatalf("pending Goal overlay = %q, want objective/status without no-goal or durable ID presentation", content)

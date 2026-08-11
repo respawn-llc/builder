@@ -105,6 +105,7 @@ func (c *sessionRuntimeClient) ShowGoal() (*clientui.RuntimeGoal, error) {
 	if err != nil {
 		return nil, err
 	}
+	c.setGoalMutationPending(nil)
 	return runtimeGoalFromResponse(resp), nil
 }
 
@@ -115,7 +116,7 @@ func (c *sessionRuntimeClient) SetGoal(objective string) (*clientui.RuntimeGoal,
 	if err != nil {
 		return nil, err
 	}
-	return c.applyGoalMutationResponse(resp), nil
+	return c.applyGoalMutationResponse(resp, false), nil
 }
 
 func (c *sessionRuntimeClient) PauseGoal() (*clientui.RuntimeGoal, error) {
@@ -143,7 +144,7 @@ func (c *sessionRuntimeClient) ClearGoal() (*clientui.RuntimeGoal, error) {
 	if err != nil {
 		return nil, err
 	}
-	return c.applyGoalMutationResponse(resp), nil
+	return c.applyGoalMutationResponse(resp, true), nil
 }
 
 func (c *sessionRuntimeClient) setGoalStatus(call func(context.Context, serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalMutationResponse, error)) (*clientui.RuntimeGoal, error) {
@@ -153,23 +154,35 @@ func (c *sessionRuntimeClient) setGoalStatus(call func(context.Context, serverap
 	if err != nil {
 		return nil, err
 	}
-	return c.applyGoalMutationResponse(resp), nil
+	return c.applyGoalMutationResponse(resp, false), nil
 }
 
-func (c *sessionRuntimeClient) applyGoalMutationResponse(resp serverapi.RuntimeGoalMutationResponse) *clientui.RuntimeGoal {
-	goal := runtimeGoalFromMutationResponse(resp)
+func (c *sessionRuntimeClient) applyGoalMutationResponse(resp serverapi.RuntimeGoalMutationResponse, clearAbsentGoal bool) *clientui.RuntimeGoal {
+	if resp.Pending != nil {
+		c.setGoalMutationPending(resp.Pending)
+		return nil
+	}
+	if resp.Goal == nil {
+		if !clearAbsentGoal {
+			return nil
+		}
+		c.setGoalMutationPending(nil)
+		goal := clientui.RuntimeGoalFromEnvelope(clientui.ProjectGoal(nil, resp.Availability), false)
+		c.patchMainView(func(view *clientui.RuntimeMainView) {
+			view.Status.Goal = cloneRuntimeGoal(&goal)
+		})
+		return &goal
+	}
+	c.setGoalMutationPending(nil)
+	goal := clientui.RuntimeGoalFromEnvelope(clientui.ProjectGoal(resp.Goal, resp.Availability), false)
 	c.patchMainView(func(view *clientui.RuntimeMainView) {
-		view.Status.Goal = cloneRuntimeGoal(goal)
+		view.Status.Goal = cloneRuntimeGoal(&goal)
 	})
-	return goal
+	return &goal
 }
 
 func runtimeGoalFromResponse(resp serverapi.RuntimeGoalShowResponse) *clientui.RuntimeGoal {
-	goal := clientui.RuntimeGoalFromEnvelope(clientui.GoalEnvelope{Goal: resp.Goal, Availability: resp.Availability}, false)
-	return &goal
-}
-func runtimeGoalFromMutationResponse(resp serverapi.RuntimeGoalMutationResponse) *clientui.RuntimeGoal {
-	goal := clientui.RuntimeGoalFromMutationResponse(resp.Goal, resp.Pending, resp.Availability, false)
+	goal := clientui.RuntimeGoalFromEnvelope(clientui.ProjectGoal(resp.Goal, resp.Availability), false)
 	return &goal
 }
 
@@ -182,11 +195,34 @@ func cloneRuntimeGoal(goal *clientui.RuntimeGoal) *clientui.RuntimeGoal {
 		core := *goal.Goal
 		cloned.Goal = &core
 	}
-	if goal.Pending != nil {
-		pending := *goal.Pending
-		cloned.Pending = &pending
-	}
 	return &cloned
+}
+
+func (c *sessionRuntimeClient) setGoalMutationPending(preview *clientui.GoalPreview) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if preview == nil {
+		c.goalMutationPending = nil
+		return
+	}
+	copyPreview := *preview
+	c.goalMutationPending = &copyPreview
+}
+
+func (c *sessionRuntimeClient) goalMutationPendingPreview() *clientui.GoalPreview {
+	if c == nil {
+		return nil
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.goalMutationPending == nil {
+		return nil
+	}
+	preview := *c.goalMutationPending
+	return &preview
 }
 
 func (c *sessionRuntimeClient) AppendCommittedEntry(role, text string) error {
