@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"strconv"
 	"strings"
 	"unicode"
 
@@ -134,18 +133,47 @@ func taskSessionHumanField(value string) string {
 			escaped.WriteRune(current)
 			continue
 		}
-		if current == '\u2028' {
-			escaped.WriteString(`\u2028`)
-			continue
-		}
-		if current == '\u2029' {
-			escaped.WriteString(`\u2029`)
-			continue
-		}
-		quoted := strconv.QuoteRune(current)
-		escaped.WriteString(quoted[1 : len(quoted)-1])
+		writeTaskSessionRuneEscape(&escaped, current)
 	}
 	return escaped.String()
+}
+
+func writeTaskSessionRuneEscape(escaped *strings.Builder, current rune) {
+	switch current {
+	case '\a':
+		escaped.WriteString(`\a`)
+	case '\b':
+		escaped.WriteString(`\b`)
+	case '\f':
+		escaped.WriteString(`\f`)
+	case '\n':
+		escaped.WriteString(`\n`)
+	case '\r':
+		escaped.WriteString(`\r`)
+	case '\t':
+		escaped.WriteString(`\t`)
+	case '\v':
+		escaped.WriteString(`\v`)
+	default:
+		switch {
+		case current <= 0xff:
+			escaped.WriteString(`\x`)
+			writeTaskSessionHex(escaped, uint32(current), 2)
+		case current <= 0xffff:
+			escaped.WriteString(`\u`)
+			writeTaskSessionHex(escaped, uint32(current), 4)
+		default:
+			escaped.WriteString(`\U`)
+			writeTaskSessionHex(escaped, uint32(current), 8)
+		}
+	}
+}
+
+func writeTaskSessionHex(escaped *strings.Builder, value uint32, width int) {
+	const hexDigits = "0123456789abcdef"
+	for shift := (width - 1) * 4; shift >= 0; shift -= 4 {
+		escaped.WriteByte(hexDigits[(value>>uint(shift))&0xf])
+	}
 }
 
 func taskSessionStatusText(status serverapi.WorkflowTaskSessionStatus) (string, error) {

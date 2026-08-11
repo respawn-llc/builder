@@ -23,14 +23,16 @@
 )
 {{end}}
 
-{{define "taskSessionProjection"}}
+{{define "taskSessionProjectionFields"}}
 SELECT
     session.id AS session_id,
     session.name AS session_name,
     node.display_name AS node_name,
     session.continuation_json,
     session.created_at_unix_ms
-FROM sessions session
+{{end}}
+
+{{define "taskSessionProjectionJoins"}}
 LEFT JOIN session_workflow_node_associations association
     ON association.rowid = (
         SELECT candidate.rowid
@@ -2586,7 +2588,9 @@ FROM sessions
 WHERE task_id = sqlc.arg(task_id);
 
 -- name: ListIdleWorkflowTaskSessions :many
-{{template "taskSessionProjection" .}}
+{{template "taskSessionProjectionFields" .}}
+FROM sessions session
+{{template "taskSessionProjectionJoins" .}}
 WHERE session.task_id = sqlc.arg(task_id)
   AND NOT EXISTS (
       SELECT 1
@@ -2600,12 +2604,12 @@ LIMIT sqlc.arg(page_limit)
 OFFSET sqlc.arg(page_offset);
 
 -- name: ListActiveWorkflowTaskSessions :many
-{{template "taskSessionProjection" .}}
-WHERE session.task_id = sqlc.arg(task_id)
-  AND session.id IN (
-      SELECT CAST(active.value AS TEXT)
-      FROM json_each(CAST(sqlc.arg(session_ids_json) AS TEXT)) active
-  );
+{{template "taskSessionProjectionFields" .}}
+FROM json_each(CAST(sqlc.arg(session_ids_json) AS TEXT)) active
+CROSS JOIN sessions session
+    ON session.id = CAST(active.value AS TEXT)
+{{template "taskSessionProjectionJoins" .}}
+WHERE session.task_id = sqlc.arg(task_id);
 
 -- name: GetLatestSerialTaskSessionAssociationForNode :one
 SELECT

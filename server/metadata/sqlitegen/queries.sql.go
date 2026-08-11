@@ -3841,7 +3841,11 @@ SELECT
     node.display_name AS node_name,
     session.continuation_json,
     session.created_at_unix_ms
-FROM sessions session
+
+FROM json_each(CAST(?1 AS TEXT)) active
+CROSS JOIN sessions session
+    ON session.id = CAST(active.value AS TEXT)
+
 LEFT JOIN session_workflow_node_associations association
     ON association.rowid = (
         SELECT candidate.rowid
@@ -3852,16 +3856,12 @@ LEFT JOIN session_workflow_node_associations association
     )
 LEFT JOIN workflow_nodes node ON node.id = association.node_id
 
-WHERE session.task_id = ?1
-  AND session.id IN (
-      SELECT CAST(active.value AS TEXT)
-      FROM json_each(CAST(?2 AS TEXT)) active
-  )
+WHERE session.task_id = ?2
 `
 
 type ListActiveWorkflowTaskSessionsParams struct {
-	TaskID         sql.NullString
 	SessionIdsJson string
+	TaskID         sql.NullString
 }
 
 type ListActiveWorkflowTaskSessionsRow struct {
@@ -3873,7 +3873,7 @@ type ListActiveWorkflowTaskSessionsRow struct {
 }
 
 func (q *Queries) ListActiveWorkflowTaskSessions(ctx context.Context, arg ListActiveWorkflowTaskSessionsParams) ([]ListActiveWorkflowTaskSessionsRow, error) {
-	rows, err := q.db.QueryContext(ctx, listActiveWorkflowTaskSessions, arg.TaskID, arg.SessionIdsJson)
+	rows, err := q.db.QueryContext(ctx, listActiveWorkflowTaskSessions, arg.SessionIdsJson, arg.TaskID)
 	err = recordQueryError(ctx, err, listActiveWorkflowTaskSessions, 2)
 	if err != nil {
 		return nil, err
@@ -4374,7 +4374,9 @@ SELECT
     node.display_name AS node_name,
     session.continuation_json,
     session.created_at_unix_ms
+
 FROM sessions session
+
 LEFT JOIN session_workflow_node_associations association
     ON association.rowid = (
         SELECT candidate.rowid
