@@ -1,37 +1,23 @@
 import { infiniteQueryOptions, type InfiniteData, type QueryClient } from "@tanstack/react-query";
-import type {
-  ApiService,
-  SessionCatalogPage,
-  SessionCategory,
-  SessionPagePosition,
-  WorkspaceList,
-} from "@/api";
+import type { ApiService, SessionCatalogPage, SessionCategory, WorkspaceList } from "@/api";
+import { sessionCatalogPageSize } from "@/api";
 import { queryKeys } from "./queryKeys";
 
-const sessionCatalogMaxPages = 5;
+const sessionCatalogMaxPages = 10;
 const workspaceCatalogMaxPages = 4;
 type SessionCatalogApi = Pick<ApiService, "listSessionPage">;
 type WorkspaceCatalogApi = Pick<ApiService, "listWorkspaces">;
 type WorkspaceCatalogQueryKey = ReturnType<typeof queryKeys.projectWorkspaceCatalog>;
 
-export function mainSessionCatalogInfiniteQueryOptions(
-  api: SessionCatalogApi,
-  projectID: string,
-) {
+export function mainSessionCatalogInfiniteQueryOptions(api: SessionCatalogApi, projectID: string) {
   return sessionCatalogInfiniteQueryOptions(api, projectID, "main");
 }
 
-export function subagentSessionCatalogInfiniteQueryOptions(
-  api: SessionCatalogApi,
-  projectID: string,
-) {
+export function subagentSessionCatalogInfiniteQueryOptions(api: SessionCatalogApi, projectID: string) {
   return sessionCatalogInfiniteQueryOptions(api, projectID, "subagent");
 }
 
-export function workspaceCatalogInfiniteQueryOptions(
-  api: WorkspaceCatalogApi,
-  projectID: string,
-) {
+export function workspaceCatalogInfiniteQueryOptions(api: WorkspaceCatalogApi, projectID: string) {
   return infiniteQueryOptions<
     WorkspaceList,
     Error,
@@ -66,11 +52,14 @@ function sessionCatalogInfiniteQueryOptions(
   return infiniteQueryOptions({
     queryKey: queryKeys.projectSessionCatalog(projectID, category),
     queryFn: async ({ pageParam }) => api.listSessionPage(projectID, category, pageParam),
-    initialPageParam: { kind: "newest" } satisfies SessionPagePosition,
-    getNextPageParam: (lastPage: SessionCatalogPage): SessionPagePosition | undefined =>
-      lastPage.older === null ? undefined : { kind: "older", token: lastPage.older },
-    getPreviousPageParam: (firstPage: SessionCatalogPage): SessionPagePosition | undefined =>
-      firstPage.newer === null ? undefined : { kind: "newer", token: firstPage.newer },
+    initialPageParam: 0,
+    getNextPageParam: (lastPage: SessionCatalogPage): number | undefined => lastPage.nextOffset ?? undefined,
+    getPreviousPageParam: (
+      _firstPage: SessionCatalogPage,
+      _allPages: SessionCatalogPage[],
+      firstPageParam: number,
+    ): number | undefined =>
+      firstPageParam === 0 ? undefined : Math.max(0, firstPageParam - sessionCatalogPageSize),
     maxPages: sessionCatalogMaxPages,
   });
 }

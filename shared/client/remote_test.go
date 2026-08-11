@@ -1925,8 +1925,8 @@ func TestRemoteProjectViewCallsReuseInitialProjectAttach(t *testing.T) {
 	if _, err := remote.ListSessionPage(context.Background(), serverapi.SessionPageRequest{
 		ProjectID: "project-1",
 		Category:  sessioncontract.SessionCategoryMain,
-		PageSize:  20,
-		Position:  serverapi.NewestSessionPagePosition(),
+		Offset:    remoteTestIntPointer(0),
+		Limit:     remoteTestIntPointer(20),
 	}); err != nil {
 		t.Fatalf("ListSessionPage: %v", err)
 	}

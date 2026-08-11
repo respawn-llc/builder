@@ -2321,7 +2321,7 @@ ORDER BY CASE WHEN w.id = p.primary_workspace_id THEN 1 ELSE 0 END DESC, w.creat
 LIMIT sqlc.arg(limit_rows)
 OFFSET sqlc.arg(offset_rows);
 
--- name: ListNewestSessionPage :many
+-- name: ListSessionPage :many
 SELECT
     id,
     name,
@@ -2333,49 +2333,8 @@ WHERE project_id = sqlc.arg(project_id)
   AND launch_visible <> 0
   AND COALESCE(category, 'main') = sqlc.arg(category)
 ORDER BY updated_at_unix_ms DESC, id DESC
-LIMIT sqlc.arg(page_limit);
-
--- name: ListOlderSessionPage :many
-SELECT
-    id,
-    name,
-    first_prompt_preview,
-    COALESCE(category, 'main') AS category,
-    updated_at_unix_ms
-FROM sessions
-WHERE project_id = sqlc.arg(project_id)
-  AND launch_visible <> 0
-  AND COALESCE(category, 'main') = sqlc.arg(category)
-  AND (
-      updated_at_unix_ms < sqlc.arg(boundary_updated_at_unix_ms)
-      OR (
-          updated_at_unix_ms = sqlc.arg(boundary_updated_at_unix_ms)
-          AND id < sqlc.arg(boundary_session_id)
-      )
-  )
-ORDER BY updated_at_unix_ms DESC, id DESC
-LIMIT sqlc.arg(page_limit);
-
--- name: ListNewerSessionPage :many
-SELECT
-    id,
-    name,
-    first_prompt_preview,
-    COALESCE(category, 'main') AS category,
-    updated_at_unix_ms
-FROM sessions
-WHERE project_id = sqlc.arg(project_id)
-  AND launch_visible <> 0
-  AND COALESCE(category, 'main') = sqlc.arg(category)
-  AND (
-      updated_at_unix_ms > sqlc.arg(boundary_updated_at_unix_ms)
-      OR (
-          updated_at_unix_ms = sqlc.arg(boundary_updated_at_unix_ms)
-          AND id > sqlc.arg(boundary_session_id)
-      )
-  )
-ORDER BY updated_at_unix_ms ASC, id ASC
-LIMIT sqlc.arg(page_limit);
+LIMIT sqlc.arg(page_limit)
+OFFSET sqlc.arg(page_offset);
 
 -- name: ListProjectSessionIDs :many
 SELECT id

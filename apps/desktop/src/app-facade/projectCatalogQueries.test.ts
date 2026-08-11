@@ -1,13 +1,7 @@
 import { InfiniteQueryObserver, QueryClient } from "@tanstack/react-query";
 import { waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import type {
-  ApiService,
-  SessionCatalogPage,
-  SessionCategory,
-  SessionPagePosition,
-  WorkspaceList,
-} from "@/api";
+import type { ApiService, SessionCatalogPage, SessionCategory, WorkspaceList } from "@/api";
 import {
   invalidateProjectSessionCatalogs,
   mainSessionCatalogInfiniteQueryOptions,
@@ -15,6 +9,7 @@ import {
   workspaceCatalogInfiniteQueryOptions,
 } from "./projectCatalogQueries";
 import { queryKeys } from "./queryKeys";
+
 describe("Project catalog query authority", () => {
   it("uses independent Project/category keys and a distinct workspace infinite-query key", () => {
     expect(queryKeys.projectSessionCatalog("project-1", "main")).not.toEqual(
@@ -25,30 +20,23 @@ describe("Project catalog query authority", () => {
     );
     expect(queryKeys.projectWorkspaceCatalog("project-1")).not.toEqual(queryKeys.workspaces("project-1"));
   });
-  it("retains five Session pages and traverses newest, older, and newer positions", async () => {
-    const requests: SessionPagePosition[] = [];
-    const pageByToken = new Map<string, number>();
+
+  it("retains ten Session pages and traverses from an evicted newest page back to offset zero", async () => {
+    const requests: number[] = [];
     const api: Pick<ApiService, "listSessionPage"> = {
       listSessionPage: async (
         projectID: string,
         category: SessionCategory,
-        position: SessionPagePosition,
+        offset: number,
       ): Promise<SessionCatalogPage> => {
         expect(projectID).toBe("project-1");
         expect(category).toBe("main");
-        requests.push(position);
-        const page = position.kind === "newest" ? 0 : pageByToken.get(position.token);
-        if (page === undefined) throw new Error("fixture received an unknown continuation.");
-        const older = `older-${String(page + 1)}`;
-        pageByToken.set(older, page + 1);
-        const newer = page > 0 ? `newer-${String(page - 1)}` : null;
-        if (newer !== null) pageByToken.set(newer, page - 1);
+        requests.push(offset);
         return {
           projectID,
           category,
           sessions: [],
-          older,
-          newer,
+          nextOffset: offset + 50,
         };
       },
     };
@@ -60,24 +48,23 @@ describe("Project catalog query authority", () => {
     const unsubscribe = observer.subscribe(() => undefined);
 
     await waitForSuccess(observer);
-    for (let index = 0; index < 5; index += 1) {
+    for (let index = 0; index < 10; index += 1) {
       await observer.fetchNextPage();
     }
 
-    expect(requests).toEqual([
-      { kind: "newest" },
-      { kind: "older", token: "older-1" },
-      { kind: "older", token: "older-2" },
-      { kind: "older", token: "older-3" },
-      { kind: "older", token: "older-4" },
-      { kind: "older", token: "older-5" },
+    expect(requests).toEqual([0, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500]);
+    expect(observer.getCurrentResult().data?.pages).toHaveLength(10);
+    expect(observer.getCurrentResult().data?.pageParams).toEqual([
+      50, 100, 150, 200, 250, 300, 350, 400, 450, 500,
     ]);
-    expect(observer.getCurrentResult().data?.pages).toHaveLength(5);
 
     await observer.fetchPreviousPage();
-    expect(requests.at(-1)).toEqual({ kind: "newer", token: "newer-0" });
+    expect(requests.at(-1)).toBe(0);
+    expect(observer.getCurrentResult().data?.pageParams[0]).toBe(0);
+    expect(observer.getCurrentResult().data?.pages).toHaveLength(10);
     unsubscribe();
   });
+
   it("keeps workspace traversal forward-only and retains fewer than the full collection", async () => {
     const requests: (string | undefined)[] = [];
     const pageByToken = new Map<string, number>();
@@ -113,15 +100,13 @@ describe("Project catalog query authority", () => {
     expect(observer.getCurrentResult().hasPreviousPage).toBe(false);
     unsubscribe();
   });
+
   it("invalidates both Session categories under one Project root", async () => {
     const requests: SessionCategory[] = [];
     const api: Pick<ApiService, "listSessionPage"> = {
-      listSessionPage: async (
-        projectID: string,
-        category: SessionCategory,
-      ): Promise<SessionCatalogPage> => {
+      listSessionPage: async (projectID: string, category: SessionCategory): Promise<SessionCatalogPage> => {
         requests.push(category);
-        return { projectID, category, sessions: [], older: null, newer: null };
+        return { projectID, category, sessions: [], nextOffset: null };
       },
     };
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });

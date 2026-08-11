@@ -17,6 +17,10 @@
 
 - A Project's session browser has `Sessions` and `Subagents` categories. `Sessions` contains server-visible main Sessions and `Subagents` contains server-visible subagent Sessions; Workflow and headless launch modes do not create additional browser categories. Each category uses server-authoritative Infinite Scroll. Changing category requests that category alone, and Desktop never materializes a complete category.
 - Sessions are recency ordered. A compact full-width row shows the Session title, first-prompt preview, and recency. There is no search or additional status filter.
+- Session discovery uses zero-based, non-negative offset pagination. An omitted offset starts at zero. An omitted limit defaults to 100, and a supplied limit is between 1 and 100.
+- A response includes the next offset only when older Sessions remain. Clients derive the preceding page offset from the offset and limit they requested.
+- Each request reads the current category as a stateless live view. Session recency changes between requests may cause later results to repeat or skip Sessions, and Kent does not reconcile them.
+- Desktop requests 50 Sessions per page and retains at most ten pages independently for each category.
 - Selecting a Session opens full-page Chat. Session rows have no secondary actions or context menu.
 - Session rows do not expose execution-target availability or warnings.
 - Opening preserves the Session's recorded execution target and uses the ordinary Session open, launch, and runtime path. Desktop adds no automatic fallback, workspace retarget, target-repair picker, or read-only recovery mode.

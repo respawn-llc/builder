@@ -62,8 +62,8 @@ func TestSessionPickerLifecycleInitialJourneys(t *testing.T) {
 	for range 2 {
 		call := waitSessionPickerValue(t, started)
 		requireSessionPicker(t, call.request.ProjectID == loader.ProjectID() &&
-			call.request.PageSize == sessionPickerPageSize &&
-			call.request.Position.Kind() == serverapi.SessionPagePositionNewest, "initial page request = %+v", call.request)
+			sessionPickerRequestOffset(t, call.request) == 0 &&
+			sessionPickerRequestLimit(t, call.request) == sessionPickerPageSize, "initial page request = %+v", call.request)
 		calls[call.request.Category] = call
 	}
 	requireSessionPicker(t, len(calls) == 2, "initial categories = %+v, want main and subagent", calls)
@@ -138,16 +138,15 @@ func TestSessionPickerLifecyclePageFailuresAndRetry(t *testing.T) {
 			"request failure discarded its diagnostic")
 	}
 
-	older := mustPickerValue(t, "retry-older", serverapi.ParseSessionPageContinuation)
 	loader := &recordingSessionPageLoader{responses: func(request serverapi.SessionPageRequest) sessionPageLoadResult {
 		if request.Category == sessioncontract.SessionCategorySubagent {
 			return sessionPageLoadResult{response: pickerPageResponse(t, request)}
 		}
-		if request.Position.Kind() == serverapi.SessionPagePositionOlder {
+		if sessionPickerRequestOffset(t, request) == sessionPickerPageSize {
 			return sessionPageLoadResult{err: diagnostic}
 		}
 		response := pickerPageResponse(t, request, "retry-1")
-		response.Older = &older
+		response.NextOffset = ptr(sessionPickerPageSize)
 		return sessionPageLoadResult{response: response}
 	}}
 	lifecycle := newTestSessionPickerLifecycle(t, loader)
@@ -163,38 +162,33 @@ func TestSessionPickerLifecyclePageFailuresAndRetry(t *testing.T) {
 	call := waitSessionPickerValue(t, started)
 	tick, ok := waitSessionPickerValue(t, messages).(sessionPickerSpinnerTickMsg)
 	_, tickCommand := lifecycle.Update(tick)
-	requireSessionPicker(t, call.request.Position.Kind() == serverapi.SessionPagePositionNewest && ok && tickCommand != nil,
+	requireSessionPicker(t, sessionPickerRequestOffset(t, call.request) == 0 && ok && tickCommand != nil,
 		"retry did not start newest with a fresh spinner")
 }
 
 func TestSessionPickerLifecycleDirectionalTraversal(t *testing.T) {
-	older1 := mustPickerValue(t, "older-1", serverapi.ParseSessionPageContinuation)
-	older2 := mustPickerValue(t, "older-2", serverapi.ParseSessionPageContinuation)
-	newer1 := mustPickerValue(t, "newer-1", serverapi.ParseSessionPageContinuation)
 	newest := make([]string, sessionPickerPageSize)
 	for index := range newest {
 		newest[index] = fmt.Sprintf("newest-%02d", index)
 	}
+	requests := make([]int, 0, 4)
 	loader := &recordingSessionPageLoader{responses: func(request serverapi.SessionPageRequest) sessionPageLoadResult {
 		if request.Category == sessioncontract.SessionCategorySubagent {
 			return sessionPageLoadResult{response: pickerPageResponse(t, request)}
 		}
-		token, _ := request.Position.Continuation()
-		switch {
-		case request.Position.Kind() == serverapi.SessionPagePositionNewest:
+		offset := sessionPickerRequestOffset(t, request)
+		requests = append(requests, offset)
+		switch offset {
+		case 0:
 			response := pickerPageResponse(t, request, newest...)
-			response.Older = &older1
+			response.NextOffset = ptr(sessionPickerPageSize)
 			return sessionPageLoadResult{response: response}
-		case token.String() == older1.String():
-			response := pickerPageResponse(t, request, newest[len(newest)-1], "older-a")
-			response.Older, response.Newer = &older2, &newer1
+		case sessionPickerPageSize:
+			response := pickerPageResponse(t, request, "older-a")
+			response.NextOffset = ptr(2 * sessionPickerPageSize)
 			return sessionPageLoadResult{response: response}
-		case token.String() == older2.String():
-			return sessionPageLoadResult{response: pickerPageResponse(t, request, "older-a", "older-b")}
-		case request.Position.Kind() == serverapi.SessionPagePositionNewer && token.String() == newer1.String():
-			response := pickerPageResponse(t, request, "older-a", "newer-new")
-			response.Older = &older1
-			return sessionPageLoadResult{response: response}
+		case 2 * sessionPickerPageSize:
+			return sessionPageLoadResult{response: pickerPageResponse(t, request, "older-b")}
 		default:
 			t.Fatalf("unexpected page request: %+v", request)
 			return sessionPageLoadResult{}
@@ -205,13 +199,114 @@ func TestSessionPickerLifecycleDirectionalTraversal(t *testing.T) {
 	for range sessionPickerPageSize + 1 {
 		updateSessionPickerLifecycle(t, lifecycle, tea.KeyMsg{Type: tea.KeyDown})
 	}
-	updateSessionPickerLifecycle(t, lifecycle, tea.KeyPgDown)
-	olderPages, olderIDs := len(lifecycle.picker.main.segments), lifecycle.picker.main.residentSessionCount()
+	updateSessionPickerLifecycle(t, lifecycle, tea.KeyMsg{Type: tea.KeyDown})
+	requireSessionPicker(t, !lifecycle.picker.main.includesCreateRow(), "evicted newest page retained create row")
 	updateSessionPickerLifecycle(t, lifecycle, tea.KeyMsg{Type: tea.KeyUp}, tea.KeyMsg{Type: tea.KeyUp})
-	requireSessionPicker(t, [4]int{olderPages, olderIDs, len(lifecycle.picker.main.segments), lifecycle.picker.main.residentSessionCount()} ==
-		[4]int{2, 2, 2, 2}, "picker exceeded its resident page bound")
+	requireSessionPicker(t, len(requests) == 4 &&
+		requests[0] == 0 &&
+		requests[1] == sessionPickerPageSize &&
+		requests[2] == 2*sessionPickerPageSize &&
+		requests[3] == 0,
+		"directional offsets = %v, want [0 50 100 0]", requests)
+	requireSessionPicker(t, len(lifecycle.picker.main.segments) == 2 &&
+		lifecycle.picker.main.includesCreateRow(), "picker did not reload newest edge within two-page bound")
 	updateSessionPickerLifecycle(t, lifecycle, tea.KeyMsg{Type: tea.KeyEnter})
-	requireSessionPickerResult(t, lifecycle.Result(), newSessionPickerOpenResult(mustPickerValue(t, "newer-new", runtimeids.ParseSessionID)))
+	requireSessionPickerResult(t, lifecycle.Result(), newSessionPickerOpenResult(mustPickerValue(t, newest[len(newest)-1], runtimeids.ParseSessionID)))
+}
+
+func TestSessionPickerLifecyclePreservesRepeatedLiveRows(t *testing.T) {
+	loader := &recordingSessionPageLoader{responses: func(request serverapi.SessionPageRequest) sessionPageLoadResult {
+		if request.Category == sessioncontract.SessionCategorySubagent {
+			return sessionPageLoadResult{response: pickerPageResponse(t, request)}
+		}
+		if sessionPickerRequestOffset(t, request) == 0 {
+			response := pickerPageResponse(t, request, "repeat")
+			response.NextOffset = ptr(sessionPickerPageSize)
+			return sessionPageLoadResult{response: response}
+		}
+		return sessionPageLoadResult{response: pickerPageResponse(t, request, "repeat", "older")}
+	}}
+	lifecycle := newTestSessionPickerLifecycle(t, loader)
+	runSessionPickerTestCommands(lifecycle.Init(), lifecycle)
+	updateSessionPickerLifecycle(t, lifecycle, tea.KeyDown, tea.KeyDown)
+
+	sessions := lifecycle.picker.main.sessions()
+	requireSessionPicker(t, len(sessions) == 3 &&
+		sessions[0].SessionID == sessions[1].SessionID &&
+		sessions[2].SessionID.String() == "older",
+		"repeated live rows were changed: %+v", sessions)
+	requireSessionPicker(t, lifecycle.picker.main.residentSessionCount() == 3,
+		"resident count = %d, want repeated rows included", lifecycle.picker.main.residentSessionCount())
+}
+
+func TestSessionPickerPageResultRequiresRequestedOffset(t *testing.T) {
+	model := newSessionPickerModel(t.Context(), &recordingSessionPageLoader{}, "dark", sessionPickerHeaderInfo{})
+	model.startBodyRequest(sessioncontract.SessionCategoryMain, sessionPickerBodyRequestInitial)
+	request := model.main.bodyRequest
+	requireSessionPicker(t, request != nil, "main request was not started")
+
+	model.applyPageLoaded(sessionPickerPageLoadedMsg{
+		category:        sessioncontract.SessionCategoryMain,
+		generation:      request.generation,
+		requestedOffset: sessionPickerPageSize,
+		response: serverapi.SessionPageResponse{
+			ProjectID: (&recordingSessionPageLoader{}).ProjectID(),
+			Category:  sessioncontract.SessionCategoryMain,
+		},
+	})
+	requireSessionPicker(t, model.main.bodyRequest == request,
+		"page with stale requested offset replaced the active request")
+}
+
+func TestSessionPickerZeroMovementDirectionalResultUsesDebugPolicy(t *testing.T) {
+	for _, debugMode := range []bool{false, true} {
+		t.Run(fmt.Sprintf("debug_%t", debugMode), func(t *testing.T) {
+			model := newSessionPickerModel(
+				t.Context(),
+				&recordingSessionPageLoader{},
+				"dark",
+				sessionPickerHeaderInfo{debug: debugMode},
+			)
+			model.main.bodyRequest = nil
+			model.main.bodyPhase = sessionPickerBodyReady
+			model.main.generation = 1
+			model.main.directional = &sessionPickerDirectionalRequest{
+				generation:      1,
+				requestedOffset: sessionPickerPageSize,
+			}
+			message := sessionPickerPageLoadedMsg{
+				category:        sessioncontract.SessionCategoryMain,
+				generation:      1,
+				requestedOffset: sessionPickerPageSize,
+				response: serverapi.SessionPageResponse{
+					ProjectID: model.loader.ProjectID(),
+					Category:  sessioncontract.SessionCategoryMain,
+				},
+			}
+
+			if debugMode {
+				defer func() {
+					if recover() == nil {
+						t.Fatal("debug picker did not panic on zero directional movement")
+					}
+				}()
+				model.applyPageLoaded(message)
+				return
+			}
+
+			model.applyPageLoaded(message)
+			failure, ok := model.startupStatus.failure(
+				sessioncontract.SessionCategoryMain,
+				sessionPickerOperationDirectionalPage,
+			)
+			requireSessionPicker(t, ok &&
+				failure.Kind == sessionPickerFailurePageContract &&
+				failure.Diagnostic != nil &&
+				model.main.bodyPhase == sessionPickerBodyFailed,
+				"release picker did not surface zero-movement invariant: failure=%+v present=%v phase=%q",
+				failure, ok, model.main.bodyPhase)
+		})
+	}
 }
 
 func TestSessionPickerLifecycleGeometryAndResults(t *testing.T) {
@@ -266,17 +361,16 @@ func TestSessionPickerLifecycleCloseCancelsOutstandingPageRequests(t *testing.T)
 				call := waitSessionPickerValue(t, started)
 				initial[call.request.Category] = call
 			}
-			older := mustPickerValue(t, "cancellation-older", serverapi.ParseSessionPageContinuation)
 			response := pickerPageResponse(t, initial[sessioncontract.SessionCategoryMain].request, sessionID.String())
-			response.Older = &older
+			response.NextOffset = ptr(sessionPickerPageSize)
 			initial[sessioncontract.SessionCategoryMain].complete <- sessionPageLoadResult{response: response}
 			lifecycle.Update(waitSessionPickerPageLoaded(t, initialMessages, sessioncontract.SessionCategoryMain))
 			lifecycle.Update(tea.KeyMsg{Type: tea.KeyDown})
 			_, directional := lifecycle.Update(tea.KeyMsg{Type: tea.KeyDown})
 			directionalMessages := startSessionPickerCommands(directional)
 			directionalCall := waitSessionPickerValue(t, started)
-			requireSessionPicker(t, directionalCall.request.Position.Kind() == serverapi.SessionPagePositionOlder,
-				"directional position = %q, want older", directionalCall.request.Position.Kind())
+			requireSessionPicker(t, sessionPickerRequestOffset(t, directionalCall.request) == sessionPickerPageSize,
+				"directional offset = %d, want %d", sessionPickerRequestOffset(t, directionalCall.request), sessionPickerPageSize)
 			if test.key != nil {
 				lifecycle.Update(*test.key)
 			}
@@ -307,6 +401,22 @@ func pickerPageResponse(t *testing.T, request serverapi.SessionPageRequest, ids 
 		})
 	}
 	return response
+}
+
+func sessionPickerRequestOffset(t *testing.T, request serverapi.SessionPageRequest) int {
+	t.Helper()
+	if request.Offset == nil {
+		t.Fatal("Session page request omitted offset")
+	}
+	return *request.Offset
+}
+
+func sessionPickerRequestLimit(t *testing.T, request serverapi.SessionPageRequest) int {
+	t.Helper()
+	if request.Limit == nil {
+		t.Fatal("Session page request omitted limit")
+	}
+	return *request.Limit
 }
 
 func mustPickerValue[T any](t *testing.T, raw string, parse func(string) (T, error)) T {
