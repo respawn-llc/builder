@@ -222,7 +222,7 @@ func (a *GoalAuthority) withLive(
 		return result, nil
 	}
 	if errors.Is(err, sessionruntime.ErrSessionWorkflowActivationActive) {
-		err = a.execution.WithRetainedWorkflowRuntime(ctx, sessionID, func(_ context.Context, engine *runtime.Engine) error {
+		err = a.execution.withCurrentRuntime(ctx, sessionID, func(_ context.Context, engine *runtime.Engine) error {
 			applied, applyErr := mutate(engine)
 			result = applied
 			return applyErr

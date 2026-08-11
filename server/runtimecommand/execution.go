@@ -60,7 +60,7 @@ func (a *ExecutionAdapter) WithLiveExecutionRuntime(
 	return a.authority.WithLiveExecutionRuntime(ctx, sessionID, callback)
 }
 
-func (a *ExecutionAdapter) WithRetainedWorkflowRuntime(
+func (a *ExecutionAdapter) withCurrentRuntime(
 	ctx context.Context,
 	sessionID runtimeids.SessionID,
 	callback func(context.Context, *runtime.Engine) error,
@@ -68,5 +68,5 @@ func (a *ExecutionAdapter) WithRetainedWorkflowRuntime(
 	if a == nil || a.authority == nil {
 		return errors.New("session runtime authority is required")
 	}
-	return a.authority.WithRetainedWorkflowRuntime(ctx, sessionID, callback)
+	return a.authority.WithCurrentRuntime(ctx, sessionID, callback)
 }
