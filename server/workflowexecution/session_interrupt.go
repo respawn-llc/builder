@@ -37,6 +37,10 @@ func (c *CurrentNodeController) InterruptWorkflowSession(
 	c.mu.Lock()
 	run, exists := c.currentRunLocked(key)
 	interruptible := exists && (run.launching() || run.exact()) && !run.stopping()
+	var expectedRunID currentNodeRunID
+	if interruptible {
+		expectedRunID = run.id
+	}
 	creator := false
 	if interruptible && request.TargetOperationRef != nil && run.operation != nil {
 		if creatorRef, ok := run.operation.RuntimeOperationRef(); ok {
@@ -62,14 +66,40 @@ func (c *CurrentNodeController) InterruptWorkflowSession(
 			panic("unknown Runtime Operation cancellation target")
 		}
 	}
+	revalidateOwnership := func(ctx context.Context) error {
+		currentTaskID, err := c.store.TaskIDForSession(ctx, request.SessionID)
+		if err != nil {
+			return err
+		}
+		if currentTaskID == nil || *currentTaskID != *taskID {
+			return sessionruntime.ErrExecutionNoLongerLive
+		}
+		currentBinding, found, err := c.store.ResolveDirectSessionCurrentNodeBinding(ctx, request.SessionID)
+		if err != nil {
+			return err
+		}
+		if !found ||
+			currentBinding.TaskID != *taskID ||
+			!currentBinding.CurrentNode.Equal(binding.CurrentNode) {
+			return sessionruntime.ErrExecutionNoLongerLive
+		}
+		return nil
+	}
 	cleanupOwned := false
+	selector := InterruptSelector{
+		TaskID:              *taskID,
+		SessionID:           &request.SessionID,
+		CurrentNode:         &binding.CurrentNode,
+		expectedRunID:       &expectedRunID,
+		revalidateOwnership: revalidateOwnership,
+	}
+	if request.TargetOperationRef != nil {
+		targetOperation := *request.TargetOperationRef
+		selector.expectedOperation = &targetOperation
+	}
 	err = c.interrupt(
 		ctx,
-		InterruptSelector{
-			TaskID:      *taskID,
-			SessionID:   &request.SessionID,
-			CurrentNode: &binding.CurrentNode,
-		},
+		selector,
 		func(cleanup func(func(context.Context) error, func(context.Context) error) error) error {
 			if onCommitted == nil {
 				return errors.New("workflow Session Interrupt committed without a cleanup owner")

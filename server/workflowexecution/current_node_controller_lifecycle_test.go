@@ -17,29 +17,16 @@ import (
 )
 
 func TestPostTurnCompactionReleasesMutationPermitWhileApprovalFenceIsActive(t *testing.T) {
-	source := currentNodeReferenceForControllerTest(t, "task-post-turn-fence", "node-source")
-	sessionID := runtimeids.NewSessionID()
-	scopeID := runtimeids.NewExecutionScopeID()
 	entered := make(chan struct{})
 	release := make(chan struct{})
-	controller := &CurrentNodeController{
-		store: &currentNodeControllerStore{
-			pendingApproval: workflow.PendingApproval{Source: source},
-		},
-		taskMutations:          NewTaskMutationCoordinator(),
-		authority:              sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}),
-		lifecycleFatalReporter: newRecordingLifecycleFatalReporter(),
-	}
-	installExactRunForTest(t, controller, source, currentNodeAdmissionExplicitOverride, nil, scopeID)
-	controller.mu.Lock()
-	run, _ := controller.runByScopeLocked(scopeID)
-	run.completion = currentNodeRunCompletionAgentPostTurnPending
-	run.postTurn = &currentNodeRunPostTurn{
-		sessionID:      &sessionID,
-		classification: workflow.SessionReuseGuaranteedCACReuse,
-	}
-	controller.mu.Unlock()
-	t.Cleanup(func() { _ = controller.authority.Close(context.Background()) })
+	controller, store, scopeID, sessionID := newPostTurnFinalizationControllerForTest(
+		t,
+		workflow.SessionReuseGuaranteedCACReuse,
+	)
+	source := controller.Snapshot().LiveScopes[0].CurrentNode
+	store.mu.Lock()
+	store.pendingApproval = workflow.PendingApproval{Source: source}
+	store.mu.Unlock()
 
 	finalizationDone := make(chan error, 1)
 	go func() {
@@ -117,7 +104,7 @@ func TestPostTurnFinalizationCompactionEligibilityMatrix(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			controller, scopeID, sessionID := newPostTurnFinalizationControllerForTest(
+			controller, _, scopeID, sessionID := newPostTurnFinalizationControllerForTest(
 				t,
 				workflow.SessionReuseClassification(test.classification),
 			)
@@ -153,7 +140,7 @@ func TestPostTurnFinalizationCompactionEligibilityMatrix(t *testing.T) {
 
 func TestPostTurnFinalizationSurfacesInvalidThresholdAndCancellation(t *testing.T) {
 	t.Run("invalid threshold", func(t *testing.T) {
-		controller, scopeID, sessionID := newPostTurnFinalizationControllerForTest(
+		controller, _, scopeID, sessionID := newPostTurnFinalizationControllerForTest(
 			t,
 			workflow.SessionReuseThresholdPossibleReuse,
 		)
@@ -177,7 +164,7 @@ func TestPostTurnFinalizationSurfacesInvalidThresholdAndCancellation(t *testing.
 	})
 
 	t.Run("cancellation is fatal", func(t *testing.T) {
-		controller, scopeID, sessionID := newPostTurnFinalizationControllerForTest(
+		controller, _, scopeID, sessionID := newPostTurnFinalizationControllerForTest(
 			t,
 			workflow.SessionReuseGuaranteedCACReuse,
 		)
@@ -215,27 +202,163 @@ func TestPostTurnFinalizationSurfacesInvalidThresholdAndCancellation(t *testing.
 func newPostTurnFinalizationControllerForTest(
 	t *testing.T,
 	classification workflow.SessionReuseClassification,
-) (*CurrentNodeController, runtimeids.ExecutionScopeID, runtimeids.SessionID) {
+) (*CurrentNodeController, *currentNodeControllerStore, runtimeids.ExecutionScopeID, runtimeids.SessionID) {
 	t.Helper()
+	shellPath, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("sh executable unavailable: %v", err)
+	}
 	source := currentNodeReferenceForControllerTest(t, "task-post-turn-matrix", "node-source")
 	sessionID := runtimeids.NewSessionID()
-	scopeID := runtimeids.NewExecutionScopeID()
-	controller := &CurrentNodeController{
-		taskMutations:          NewTaskMutationCoordinator(),
-		authority:              sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}),
-		lifecycleFatalReporter: newRecordingLifecycleFatalReporter(),
+	analysis := postTurnSessionReuseAnalysis(t, source, sessionID, classification)
+	store := &currentNodeControllerStore{
+		completion: workflowstore.CurrentNodeCompletionResult{
+			SessionReuse:           &analysis,
+			PostCompletionEligible: true,
+			PendingApproval:        &workflow.PendingApproval{Source: source},
+		},
+		sessionReuse: []workflow.SessionReuseAssociation{{
+			SessionID:   sessionID,
+			CurrentNode: source,
+		}},
 	}
-	installExactRunForTest(t, controller, source, currentNodeAdmissionExplicitOverride, nil, scopeID)
-	controller.mu.Lock()
-	run, _ := controller.runByScopeLocked(scopeID)
-	run.completion = currentNodeRunCompletionAgentPostTurnPending
-	run.postTurn = &currentNodeRunPostTurn{
-		sessionID:      &sessionID,
-		classification: classification,
+	var controller *CurrentNodeController
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
+			controller.ExecutionFinalized(scope)
+		}),
+	})
+	runner := &recordingScriptRunner{
+		authority: authority,
+		command: sessionruntime.ScriptCommand{
+			Path: shellPath,
+			Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
+		},
+		started: make(chan workflow.CurrentNodeReference, 1),
 	}
-	controller.mu.Unlock()
-	t.Cleanup(func() { _ = controller.authority.Close(context.Background()) })
-	return controller, scopeID, sessionID
+	controller = newCurrentNodeControllerForTest(t, store, runner, authority, 1)
+	t.Cleanup(func() {
+		if err := controller.Close(); err != nil {
+			t.Errorf("close controller: %v", err)
+		}
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+	if err := startCurrentNodeForControllerTest(context.Background(), controller, store, source); err != nil {
+		t.Fatalf("start post-turn source: %v", err)
+	}
+	<-runner.started
+	waitForRunningCurrentNode(t, authority, source)
+	scopeID := singleLiveScope(t, controller, source)
+	if _, err := controller.CompleteCurrentNode(context.Background(), workflowruntime.CompletionRequest{
+		ScopeID:      scopeID,
+		SessionID:    &sessionID,
+		TransitionID: "next",
+	}); err != nil {
+		t.Fatalf("complete post-turn source: %v", err)
+	}
+	return controller, store, scopeID, sessionID
+}
+
+func postTurnSessionReuseAnalysis(
+	t *testing.T,
+	source workflow.CurrentNodeReference,
+	sessionID runtimeids.SessionID,
+	classification workflow.SessionReuseClassification,
+) workflow.SessionReuseAnalysisInput {
+	t.Helper()
+	completed, err := workflow.NewCurrentNode(source, &sessionID, nil)
+	if err != nil {
+		t.Fatalf("completed Current Node: %v", err)
+	}
+	if classification == workflow.SessionReuseNone {
+		return workflow.SessionReuseAnalysisInput{CompletedCurrentNode: completed}
+	}
+	review, err := workflow.NewNode(workflow.NodeIdentity{
+		WorkflowID:  currentNodeControllerTestWorkflowID,
+		ID:          "node-review",
+		Key:         "review",
+		DisplayName: "Review",
+	}, workflow.NodeKindAgent, workflow.NodeFields{SubagentRole: "reviewer"})
+	if err != nil {
+		t.Fatalf("review node: %v", err)
+	}
+	sourceNode, err := workflow.NewNode(workflow.NodeIdentity{
+		WorkflowID:  currentNodeControllerTestWorkflowID,
+		ID:          source.NodeID,
+		Key:         "source",
+		DisplayName: "Source",
+	}, workflow.NodeKindAgent, workflow.NodeFields{SubagentRole: "coder"})
+	if err != nil {
+		t.Fatalf("source node: %v", err)
+	}
+	accepted := workflow.Edge{
+		WorkflowID:        currentNodeControllerTestWorkflowID,
+		ID:                "edge-source-review",
+		Key:               "review",
+		TransitionGroupID: "group-source",
+		TargetNodeID:      "node-review",
+		ContextMode:       workflow.ContextModeNewSession,
+	}
+	cac := workflow.Edge{
+		WorkflowID:        currentNodeControllerTestWorkflowID,
+		ID:                "edge-review-source",
+		Key:               "source",
+		TransitionGroupID: "group-review",
+		TargetNodeID:      source.NodeID,
+		ContextMode:       workflow.ContextModeCompactAndContinueSession,
+		ContextSource:     workflow.ContextSource{Kind: workflow.ContextSourceSelectedNode, NodeKey: "source"},
+	}
+	analysis := workflow.SessionReuseAnalysisInput{
+		Workflow: workflow.Definition{
+			ID:          currentNodeControllerTestWorkflowID,
+			DisplayName: "Post-turn fixture",
+			Nodes:       []workflow.Node{sourceNode, review},
+			TransitionGroups: []workflow.TransitionGroup{{
+				WorkflowID:   currentNodeControllerTestWorkflowID,
+				ID:           "group-source",
+				SourceNodeID: source.NodeID,
+			}, {
+				WorkflowID:   currentNodeControllerTestWorkflowID,
+				ID:           "group-review",
+				SourceNodeID: "node-review",
+			}},
+			Edges: []workflow.Edge{accepted, cac},
+		},
+		AcceptedBranches:     []workflow.Edge{accepted},
+		CompletedCurrentNode: completed,
+	}
+	if classification == workflow.SessionReuseThresholdPossibleReuse {
+		terminal, terminalErr := workflow.NewNode(workflow.NodeIdentity{
+			WorkflowID:  currentNodeControllerTestWorkflowID,
+			ID:          "node-done",
+			Key:         "done",
+			DisplayName: "Done",
+		}, workflow.NodeKindTerminal, workflow.NodeFields{})
+		if terminalErr != nil {
+			t.Fatalf("terminal node: %v", terminalErr)
+		}
+		alternative := workflow.Edge{
+			WorkflowID:        currentNodeControllerTestWorkflowID,
+			ID:                "edge-source-done",
+			Key:               "done",
+			TransitionGroupID: "group-review-terminal",
+			TargetNodeID:      "node-done",
+			ContextMode:       workflow.ContextModeNewSession,
+		}
+		analysis.Workflow.Nodes = append(analysis.Workflow.Nodes, terminal)
+		analysis.Workflow.Edges = append(analysis.Workflow.Edges, alternative)
+		analysis.Workflow.TransitionGroups = append(
+			analysis.Workflow.TransitionGroups,
+			workflow.TransitionGroup{
+				WorkflowID:   currentNodeControllerTestWorkflowID,
+				ID:           "group-review-terminal",
+				SourceNodeID: "node-review",
+			},
+		)
+	}
+	return analysis
 }
 
 func TestCurrentNodeControllerCompletesRetainedSessionAfterScopeRetires(t *testing.T) {

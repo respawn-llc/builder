@@ -20,10 +20,6 @@ type currentNodeRunID struct {
 	sequence uint64
 }
 
-func (id currentNodeRunID) valid() bool {
-	return id.sequence != 0
-}
-
 type currentNodeRunPhase uint8
 
 const (
@@ -38,23 +34,25 @@ const (
 type currentNodeRunCompletion uint8
 
 const (
-	currentNodeRunCompletionNone currentNodeRunCompletion = iota
-	currentNodeRunCompletionAgentPostTurnPending
+	currentNodeRunCompletionAgentPostTurnPending currentNodeRunCompletion = iota
 	currentNodeRunCompletionAgentPostTurnSucceeded
 	currentNodeRunCompletionScriptSucceeded
 )
 
-func (completion currentNodeRunCompletion) committed() bool {
-	return completion != currentNodeRunCompletionNone
-}
-
 type currentNodeRunStopDisposition uint8
 
 const (
-	currentNodeRunStopNone currentNodeRunStopDisposition = iota
-	currentNodeRunStopInterrupting
+	currentNodeRunStopInterrupting currentNodeRunStopDisposition = iota
 	currentNodeRunStopInterrupted
 )
+
+func currentNodeRunCompletionRef(value currentNodeRunCompletion) *currentNodeRunCompletion {
+	return &value
+}
+
+func currentNodeRunStopRef(value currentNodeRunStopDisposition) *currentNodeRunStopDisposition {
+	return &value
+}
 
 type currentNodeRunPostTurn struct {
 	sessionID      *runtimeids.SessionID
@@ -85,11 +83,11 @@ type currentNodeRun struct {
 	lease                    *sessionruntime.WorkflowExecutionLease
 	exactScopeID             *runtimeids.ExecutionScopeID
 	agentCapacity            bool
-	completion               currentNodeRunCompletion
+	completion               *currentNodeRunCompletion
 	completionSourceRetained bool
 	postTurn                 *currentNodeRunPostTurn
 	successors               []currentNodeRunID
-	stop                     currentNodeRunStopDisposition
+	stop                     *currentNodeRunStopDisposition
 	interruptFence           *currentNodeInterruptFence
 	callbackErr              error
 	ownerOrdering            runtimecommand.SessionAgentOperationOwnerOrderingNotifier
@@ -127,7 +125,15 @@ func (run *currentNodeRun) exact() bool {
 }
 
 func (run *currentNodeRun) stopping() bool {
-	return run != nil && run.stop != currentNodeRunStopNone
+	return run != nil && run.stop != nil
+}
+
+func (run *currentNodeRun) completed() bool {
+	return run != nil && run.completion != nil
+}
+
+func (run *currentNodeRun) completionIs(value currentNodeRunCompletion) bool {
+	return run != nil && run.completion != nil && *run.completion == value
 }
 
 func (run *currentNodeRun) recordCallbackError(err error) {

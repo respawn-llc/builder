@@ -327,7 +327,7 @@ func (c *CurrentNodeController) ApplyPendingApproval(
 		var sourceScopeID runtimeids.ExecutionScopeID
 		if sourceLive {
 			sourceScopeID = *sourceRun.exactScopeID
-			if !sourceRun.completion.committed() {
+			if !sourceRun.completed() {
 				c.mu.Unlock()
 				return workflowstore.PendingApprovalApplyResult{}, errors.New("pending approval source scope has not completed")
 			}
@@ -414,7 +414,7 @@ func (c *CurrentNodeController) ApplyPendingApproval(
 				return errors.Join(stageErr, prepared.Rollback())
 			}
 			phase := currentNodeRunHeld
-			if sourceRun.completion == currentNodeRunCompletionScriptSucceeded {
+			if sourceRun.completionIs(currentNodeRunCompletionScriptSucceeded) {
 				phase = currentNodeRunQueued
 			}
 			stageErr = c.commitSuccessorRunsLocked(prepared, sourceRun.id, runIDs, false, phase)
@@ -428,7 +428,7 @@ func (c *CurrentNodeController) ApplyPendingApproval(
 			return workflowstore.PendingApprovalApplyResult{}, err
 		}
 		c.finalizeTaskAttentionResolution(applied.TaskAttentionResolution)
-		if sourceRun.completion == currentNodeRunCompletionScriptSucceeded {
+		if sourceRun.completionIs(currentNodeRunCompletionScriptSucceeded) {
 			c.wakeAdmissionWorker()
 		}
 		return applied, nil

@@ -29,33 +29,22 @@ func TestCurrentNodeControllerTaskInterruptLeavesWaitingQuestionScopeNonQuiescen
 		StepID:   uuid.NewString(),
 		Question: "Keep waiting?",
 	}
-	pending := fixture.startPendingPrompt(t, question, request)
+	pending, runningHandle := fixture.startPendingPromptWithScript(
+		t,
+		question,
+		request,
+		running,
+		sessionruntime.ScriptCommand{
+			Path: shellPath,
+			Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
+		},
+	)
 	fixture.waitForPendingPrompt(t, question.TaskID, request.ID)
 	t.Cleanup(func() {
 		pending.handle.RequestStop()
 		_, _ = pending.handle.Wait(context.Background())
 	})
 
-	lease, err := fixture.authority.NewWorkflowExecutionLease(sessionruntime.WorkflowExecutionRef{
-		ProjectID:   "project-test",
-		WorkflowID:  currentNodeControllerTestWorkflowID,
-		CurrentNode: running,
-	})
-	if err != nil {
-		t.Fatalf("NewWorkflowExecutionLease: %v", err)
-	}
-	lease.Release()
-	runningHandle, err := fixture.authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
-		Workflow: &lease,
-		Command: sessionruntime.ScriptCommand{
-			Path: shellPath,
-			Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
-		},
-	})
-	if err != nil {
-		t.Fatalf("StartScriptExecution: %v", err)
-	}
-	installExactRunForTest(t, fixture.controller, running, currentNodeAdmissionExplicitOverride, &lease, lease.ScopeID())
 	waitForRunningCurrentNode(t, fixture.authority, running)
 
 	if err := fixture.controller.Interrupt(context.Background(), InterruptSelector{TaskID: running.TaskID}); err != nil {
@@ -91,32 +80,21 @@ func TestCurrentNodeControllerManualMoveRejectsWaitingQuestionWithoutStoppingSib
 		StepID:   uuid.NewString(),
 		Question: "Keep waiting?",
 	}
-	pending := fixture.startPendingPrompt(t, question, request)
+	pending, runningHandle := fixture.startPendingPromptWithScript(
+		t,
+		question,
+		request,
+		running,
+		sessionruntime.ScriptCommand{
+			Path: shellPath,
+			Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
+		},
+	)
 	fixture.waitForPendingPrompt(t, question.TaskID, request.ID)
 	t.Cleanup(func() {
 		pending.handle.RequestStop()
 		_, _ = pending.handle.Wait(context.Background())
 	})
-	lease, err := fixture.authority.NewWorkflowExecutionLease(sessionruntime.WorkflowExecutionRef{
-		ProjectID:   "project-test",
-		WorkflowID:  currentNodeControllerTestWorkflowID,
-		CurrentNode: running,
-	})
-	if err != nil {
-		t.Fatalf("NewWorkflowExecutionLease: %v", err)
-	}
-	lease.Release()
-	runningHandle, err := fixture.authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
-		Workflow: &lease,
-		Command: sessionruntime.ScriptCommand{
-			Path: shellPath,
-			Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
-		},
-	})
-	if err != nil {
-		t.Fatalf("StartScriptExecution: %v", err)
-	}
-	installExactRunForTest(t, fixture.controller, running, currentNodeAdmissionExplicitOverride, &lease, lease.ScopeID())
 	waitForRunningCurrentNode(t, fixture.authority, running)
 
 	if err := fixture.controller.InterruptForManualMove(context.Background(), running.TaskID, nil); !errors.Is(err, sessionruntime.ErrWorkflowQuestionPending) {
@@ -482,9 +460,11 @@ func TestCurrentNodeControllerRejectsAmbiguousPromptScope(t *testing.T) {
 		StepID:   uuid.NewString(),
 		Question: "Proceed?",
 	}
-	first := fixture.startPendingPrompt(t, currentNodeReferenceForControllerTest(t, string(taskID), "node-question-a"), request)
-	fixture.waitForPendingPrompt(t, taskID, request.ID)
-	second := fixture.startPendingPrompt(t, currentNodeReferenceForControllerTest(t, string(taskID), "node-question-b"), request)
+	pending := fixture.startPendingPrompts(t, []workflow.CurrentNodeReference{
+		currentNodeReferenceForControllerTest(t, string(taskID), "node-question-a"),
+		currentNodeReferenceForControllerTest(t, string(taskID), "node-question-b"),
+	}, request)
+	first, second := pending[0], pending[1]
 	fixture.waitForAmbiguousPendingPrompt(t, taskID, request.ID)
 
 	err := fixture.answerWorkflowQuestion(

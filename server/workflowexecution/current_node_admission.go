@@ -444,14 +444,14 @@ func (c *CurrentNodeController) runAdmissions() {
 		case <-c.workerWake:
 		}
 		for {
-			runID, ok := c.takeExplicitStart()
-			if !ok {
-				runID, ok = c.takeAutomaticIntent()
-				if !ok {
+			runID := c.takeExplicitStart()
+			if runID == nil {
+				runID = c.takeAutomaticIntent()
+				if runID == nil {
 					break
 				}
 			}
-			go c.runAdmission(runID)
+			go c.runAdmission(*runID)
 		}
 	}
 }
@@ -491,11 +491,11 @@ func (c *CurrentNodeController) runAdmission(runID currentNodeRunID) {
 	}
 }
 
-func (c *CurrentNodeController) takeExplicitStart() (currentNodeRunID, bool) {
+func (c *CurrentNodeController) takeExplicitStart() *currentNodeRunID {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed || c.inFlightAdmissionCountLocked(currentNodeAdmissionExplicitOverride) >= explicitAdmissionConcurrency || len(c.explicitQueue) == 0 {
-		return currentNodeRunID{}, false
+		return nil
 	}
 	index := -1
 	for candidateIndex, candidateID := range c.explicitQueue {
@@ -506,7 +506,7 @@ func (c *CurrentNodeController) takeExplicitStart() (currentNodeRunID, bool) {
 		}
 	}
 	if index < 0 {
-		return currentNodeRunID{}, false
+		return nil
 	}
 	runID := c.explicitQueue[index]
 	c.explicitQueue = append(c.explicitQueue[:index], c.explicitQueue[index+1:]...)
@@ -517,14 +517,14 @@ func (c *CurrentNodeController) takeExplicitStart() (currentNodeRunID, bool) {
 	run.launchContext, run.launchCancel = context.WithCancel(c.workerContext)
 	run.admissionDone = make(chan struct{})
 	run.transition(currentNodeRunLaunching)
-	return runID, true
+	return &runID
 }
 
-func (c *CurrentNodeController) takeAutomaticIntent() (currentNodeRunID, bool) {
+func (c *CurrentNodeController) takeAutomaticIntent() *currentNodeRunID {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed || c.automaticQueue.len() == 0 {
-		return currentNodeRunID{}, false
+		return nil
 	}
 	agentAvailable := c.agentCapacityActive < c.agentConcurrency
 	entry, ok := c.automaticQueue.selectEntry(c.lastAutomaticTask, agentAvailable, func(runID currentNodeRunID) bool {
@@ -532,7 +532,7 @@ func (c *CurrentNodeController) takeAutomaticIntent() (currentNodeRunID, bool) {
 		return run != nil && !c.runPredecessorActiveLocked(run)
 	})
 	if !ok {
-		return currentNodeRunID{}, false
+		return nil
 	}
 	runID := c.automaticQueue.remove(entry)
 	run := c.runs[runID]
@@ -548,7 +548,7 @@ func (c *CurrentNodeController) takeAutomaticIntent() (currentNodeRunID, bool) {
 	}
 	taskID := run.reference.TaskID
 	c.lastAutomaticTask = &taskID
-	return runID, true
+	return &runID
 }
 
 func (c *CurrentNodeController) inFlightAdmissionCountLocked(policy currentNodeAdmissionPolicy) int {
@@ -600,7 +600,7 @@ func (c *CurrentNodeController) handleAdmissionFailure(
 		if run != nil && run.lease != nil {
 			copy := *run.lease
 			lease = &copy
-			run.stop = currentNodeRunStopInterrupted
+			run.stop = currentNodeRunStopRef(currentNodeRunStopInterrupted)
 		}
 		c.mu.Unlock()
 		if lease != nil {

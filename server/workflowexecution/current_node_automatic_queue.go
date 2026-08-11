@@ -62,8 +62,8 @@ func (lanes *currentNodeAutomaticQueueLanes) lane(policy currentNodeAdmissionPol
 }
 
 func (q *currentNodeAutomaticQueue) append(run *currentNodeRun) {
-	if run == nil || !run.id.valid() {
-		panic("automatic queue requires a valid Run generation")
+	if run == nil {
+		panic("automatic queue requires a Run generation")
 	}
 	q.nextOrder++
 	if q.nextOrder == 0 {

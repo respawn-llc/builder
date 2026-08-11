@@ -1328,7 +1328,7 @@ func TestScriptExecutionRetiresBeforeCompletionFinalizer(t *testing.T) {
 		t.Fatalf("finalizing script remains interruptible: %+v", targets)
 	}
 	selectionCalled := false
-	selectionErr := authority.WithWorkflowInterruptSelection(taskID, nil, func(WorkflowInterruptSelection) error {
+	selectionErr := authority.WithWorkflowInterruptSelection(taskID, nil, nil, func(WorkflowInterruptSelection) error {
 		selectionCalled = true
 		return nil
 	})
@@ -1404,7 +1404,7 @@ func TestTaskInterruptSelectionIncludesFinalizingScriptAlongsideRunningTaskScope
 	deadline := time.After(3 * time.Second)
 	for {
 		var selection WorkflowInterruptSelection
-		selectionErr := authority.WithWorkflowInterruptSelection(taskID, nil, func(got WorkflowInterruptSelection) error {
+		selectionErr := authority.WithWorkflowInterruptSelection(taskID, nil, nil, func(got WorkflowInterruptSelection) error {
 			selection = got
 			return nil
 		})
@@ -1467,7 +1467,7 @@ func TestScriptStartupFailureLeavesNoWorkflowRunningOrInterruptibleState(t *test
 		t.Fatalf("startup failure published workflow execution: %+v", targets)
 	}
 	selectionCalled := false
-	selectionErr := authority.WithWorkflowInterruptSelection(taskID, nil, func(WorkflowInterruptSelection) error {
+	selectionErr := authority.WithWorkflowInterruptSelection(taskID, nil, nil, func(WorkflowInterruptSelection) error {
 		selectionCalled = true
 		return nil
 	})

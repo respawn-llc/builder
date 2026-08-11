@@ -40,7 +40,7 @@ func (c *CurrentNodeController) fenceRunLocked(run *currentNodeRun, fence *curre
 		panic("Run generation belongs to conflicting Task interruption fences")
 	}
 	run.interruptFence = fence
-	run.stop = currentNodeRunStopInterrupting
+	run.stop = currentNodeRunStopRef(currentNodeRunStopInterrupting)
 }
 
 func (c *CurrentNodeController) finishInterruptFenceLocked(fence *currentNodeInterruptFence) {

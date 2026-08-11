@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"core/server/runtimeops"
 	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowstore"
@@ -167,7 +168,12 @@ func (c *CurrentNodeController) interrupt(
 		persisted      bool
 	)
 	if err := c.taskMutations.Run(ctx, selector.TaskID, func(ctx context.Context) error {
-		err := c.authority.WithWorkflowInterruptSelection(selector.TaskID, selector.SessionID, func(selection sessionruntime.WorkflowInterruptSelection) error {
+		if selector.revalidateOwnership != nil {
+			if err := selector.revalidateOwnership(ctx); err != nil {
+				return err
+			}
+		}
+		err := c.authority.WithWorkflowInterruptSelection(selector.TaskID, selector.SessionID, selector.CurrentNode, func(selection sessionruntime.WorkflowInterruptSelection) error {
 			selected := append([]sessionruntime.ExecutionHandle(nil), selection.Interruptible...)
 			if selector.SessionID == nil {
 				selected = append(selected, selection.Queued...)
@@ -196,11 +202,17 @@ func (c *CurrentNodeController) interrupt(
 					if !scopeRef.CurrentNode.Equal(live.reference) {
 						return errors.New("authority interrupt selection does not match live workflow execution ownership")
 					}
+					if err := selector.validateExpectedRunLocked(live); err != nil {
+						return err
+					}
 					continue
 				}
 				run, launching := c.launchingRunByScopeLocked(scopeID)
 				if !launching || !run.reference.Equal(scopeRef.CurrentNode) {
 					return errors.New("authority interrupt selection does not match workflow execution ownership")
+				}
+				if err := selector.validateExpectedRunLocked(run); err != nil {
+					return err
 				}
 			}
 
@@ -228,14 +240,14 @@ func (c *CurrentNodeController) interrupt(
 				if taskFence != nil {
 					c.fenceRunLocked(run, taskFence)
 				} else {
-					run.stop = currentNodeRunStopInterrupting
-					if run.completion.committed() {
+					run.stop = currentNodeRunStopRef(currentNodeRunStopInterrupting)
+					if run.completed() {
 						for _, successorID := range run.successors {
 							successor := c.runs[successorID]
 							if successor == nil {
 								continue
 							}
-							successor.stop = currentNodeRunStopInterrupting
+							successor.stop = currentNodeRunStopRef(currentNodeRunStopInterrupting)
 							references = append(references, successor.reference)
 							admissionWaits = appendAdmissionWait(admissionWaits, successorID, successor.admissionDone)
 						}
@@ -243,7 +255,7 @@ func (c *CurrentNodeController) interrupt(
 				}
 				stopHandles = append(stopHandles, handle)
 				waitHandles = append(waitHandles, handle)
-				if !run.completion.committed() || run.completionSourceRetained {
+				if !run.completed() || run.completionSourceRetained {
 					references = append(references, scopeRef.CurrentNode)
 				}
 			}
@@ -259,7 +271,7 @@ func (c *CurrentNodeController) interrupt(
 				selectedRuns = append(selectedRuns, run.id)
 				c.fenceRunLocked(run, taskFence)
 				waitHandles = append(waitHandles, handle)
-				if !run.completion.committed() || run.completionSourceRetained {
+				if !run.completed() || run.completionSourceRetained {
 					references = append(references, scopeRef.CurrentNode)
 				}
 			}
@@ -294,7 +306,11 @@ func (c *CurrentNodeController) interrupt(
 					c.mu.Unlock()
 					return ErrNoInterruptibleExecution
 				}
-				run.stop = currentNodeRunStopInterrupting
+				if err := selector.validateExpectedRunLocked(run); err != nil {
+					c.mu.Unlock()
+					return ErrNoInterruptibleExecution
+				}
+				run.stop = currentNodeRunStopRef(currentNodeRunStopInterrupting)
 				selectedRuns = append(selectedRuns, run.id)
 				launchRuns = append(launchRuns, run.id)
 				references = append(references, run.reference)
@@ -388,6 +404,28 @@ func (c *CurrentNodeController) interrupt(
 	return cleanup(nil, nil)
 }
 
+func (s InterruptSelector) validateExpectedRunLocked(run *currentNodeRun) error {
+	if s.SessionID == nil {
+		return nil
+	}
+	if s.expectedRunID != nil && (run == nil || run.id != *s.expectedRunID) {
+		return sessionruntime.ErrExecutionNoLongerLive
+	}
+	if run == nil || run.stopping() || (!run.launching() && !run.exact()) {
+		return sessionruntime.ErrExecutionNoLongerLive
+	}
+	if s.expectedOperation != nil {
+		if run.operation == nil {
+			return sessionruntime.ErrExecutionNoLongerLive
+		}
+		operation, exists := run.operation.RuntimeOperationRef()
+		if !exists || !runtimeops.SameOperationRef(operation, *s.expectedOperation) {
+			return sessionruntime.ErrExecutionNoLongerLive
+		}
+	}
+	return nil
+}
+
 func (c *CurrentNodeController) finishInterruptCleanup(
 	state currentNodeInterruptCleanupState,
 	err error,
@@ -442,10 +480,10 @@ func (c *CurrentNodeController) rollbackSelectedInterruptLocked(runIDs []current
 		if run == nil {
 			continue
 		}
-		run.stop = currentNodeRunStopNone
+		run.stop = nil
 		for _, successorID := range run.successors {
 			if successor := c.runs[successorID]; successor != nil {
-				successor.stop = currentNodeRunStopNone
+				successor.stop = nil
 			}
 		}
 	}
@@ -530,7 +568,7 @@ func (c *CurrentNodeController) rollbackTaskInterruptLocked(fence *currentNodeIn
 			continue
 		}
 		run.interruptFence = nil
-		run.stop = currentNodeRunStopNone
+		run.stop = nil
 		if run.phase == currentNodeRunQueued {
 			c.queueRunLocked(run.id)
 		}

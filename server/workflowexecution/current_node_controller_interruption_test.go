@@ -13,6 +13,7 @@ import (
 	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
+	"core/shared/runtimeids"
 )
 
 func TestCurrentNodeControllerInterruptCancellationBeforeCommitLeavesExactAuthorityUnchanged(t *testing.T) {
@@ -81,6 +82,94 @@ func TestCurrentNodeControllerInterruptCancellationBeforeCommitLeavesExactAuthor
 		t.Fatalf("pre-commit cancellation removed exact authority: %+v", controller.Snapshot())
 	}
 	close(store.interruptRelease)
+}
+
+func TestWorkflowSessionInterruptRejectsBindingChangedBeforeTaskWriter(t *testing.T) {
+	reference := currentNodeReferenceForControllerTest(t, "task-session-interrupt-binding", "node-agent")
+	replacement := currentNodeReferenceForControllerTest(t, string(reference.TaskID), "node-replacement")
+	taskID := reference.TaskID
+	sessionID := runtimeids.NewSessionID()
+	store := &currentNodeControllerStore{
+		sessionTaskID: &taskID,
+		directSessionBinding: &workflowstore.DirectSessionCurrentNodeBinding{
+			TaskID:      taskID,
+			CurrentNode: reference,
+		},
+		bindingResolveStarted: make(chan struct{}),
+		bindingResolveRelease: make(chan struct{}),
+	}
+	runner := &contextBlockingCurrentNodeRunner{
+		entered: make(chan workflow.CurrentNodeReference, 1),
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller := newCurrentNodeControllerForTest(t, store, runner, authority, 1)
+	t.Cleanup(func() {
+		select {
+		case <-store.bindingResolveRelease:
+		default:
+			close(store.bindingResolveRelease)
+		}
+		if err := controller.Close(); err != nil {
+			t.Errorf("close controller: %v", err)
+		}
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+
+	if err := startCurrentNodeForControllerTest(context.Background(), controller, store, reference); err != nil {
+		t.Fatalf("start retained generation: %v", err)
+	}
+	select {
+	case <-runner.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("retained generation did not begin launching")
+	}
+
+	type interruptResult struct {
+		outcome sessionruntime.WorkflowSessionInterruptOutcome
+		err     error
+	}
+	result := make(chan interruptResult, 1)
+	go func() {
+		outcome, err := controller.InterruptWorkflowSession(
+			context.Background(),
+			sessionruntime.WorkflowSessionInterruptRequest{SessionID: sessionID},
+			func(cleanup sessionruntime.WorkflowCommittedInterruptCleanup) error {
+				return cleanup(nil, nil)
+			},
+		)
+		result <- interruptResult{outcome: outcome, err: err}
+	}()
+	select {
+	case <-store.bindingResolveStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Session Interrupt did not resolve its initial binding")
+	}
+	store.mu.Lock()
+	store.directSessionBinding = &workflowstore.DirectSessionCurrentNodeBinding{
+		TaskID:      taskID,
+		CurrentNode: replacement,
+	}
+	store.mu.Unlock()
+	close(store.bindingResolveRelease)
+	select {
+	case got := <-result:
+		if got.err != nil {
+			t.Fatalf("Session Interrupt replacement result: %v", got.err)
+		}
+		if got.outcome != sessionruntime.WorkflowSessionInterruptNoLongerLive {
+			t.Fatalf("Session Interrupt outcome = %v, want no longer live", got.outcome)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Session Interrupt did not reject the changed binding")
+	}
+	if count := store.interruptionCount(reference); count != 0 {
+		t.Fatalf("durable interruptions = %d, want none", count)
+	}
+	if snapshot := controller.Snapshot(); len(snapshot.Gates) != 1 || !snapshot.Gates[0].CurrentNode.Equal(reference) {
+		t.Fatalf("original generation was stopped: %+v", snapshot)
+	}
 }
 
 func TestCurrentNodeControllerInterruptCancellationAfterCommitCannotPreventExactCleanup(t *testing.T) {

@@ -241,8 +241,12 @@ type currentNodeControllerStore struct {
 	sessionTaskID         *workflow.TaskID
 	directSessionBinding  *workflowstore.DirectSessionCurrentNodeBinding
 	sessionAssociation    *workflowstore.TaskSessionAssociation
+	sessionReuse          []workflow.SessionReuseAssociation
 	bindingErr            error
 	bindings              []currentNodeSessionBindingCall
+	bindingResolveStarted chan struct{}
+	bindingResolveRelease chan struct{}
+	bindingResolveOnce    sync.Once
 	interruptStarted      chan struct{}
 	interruptRelease      chan struct{}
 	interruptOnce         sync.Once
@@ -748,11 +752,22 @@ func (s *currentNodeControllerStore) ResolveDirectSessionCurrentNodeBinding(
 	runtimeids.SessionID,
 ) (workflowstore.DirectSessionCurrentNodeBinding, bool, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.directSessionBinding == nil {
+	binding := s.directSessionBinding
+	started := s.bindingResolveStarted
+	release := s.bindingResolveRelease
+	s.mu.Unlock()
+	if started != nil {
+		s.bindingResolveOnce.Do(func() {
+			close(started)
+		})
+	}
+	if release != nil {
+		<-release
+	}
+	if binding == nil {
 		return workflowstore.DirectSessionCurrentNodeBinding{}, false, nil
 	}
-	return *s.directSessionBinding, true, nil
+	return *binding, true, nil
 }
 
 func (s *currentNodeControllerStore) TaskIDForSession(
@@ -785,6 +800,15 @@ func (s *currentNodeControllerStore) ValidateCurrentNodeSessionBinding(_ context
 	defer s.mu.Unlock()
 	s.bindings = append(s.bindings, currentNodeSessionBindingCall{sessionID: sessionID, reference: reference})
 	return s.bindingErr
+}
+
+func (s *currentNodeControllerStore) LoadSessionReuseAssociations(
+	context.Context,
+	[]workflow.CurrentNodeReference,
+) ([]workflow.SessionReuseAssociation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]workflow.SessionReuseAssociation(nil), s.sessionReuse...), nil
 }
 
 func (s *currentNodeControllerStore) admitCount() int {
@@ -838,7 +862,55 @@ type currentNodeQuestionFixture struct {
 	authority  *sessionruntime.Authority
 	controller *CurrentNodeController
 	store      *currentNodeControllerStore
+	runner     *currentNodeFixtureRunner
 	sessionDir string
+}
+
+type currentNodeFixtureLaunch func(sessionruntime.WorkflowExecutionLease) (sessionruntime.ExecutionHandle, error)
+
+type currentNodeFixtureRunner struct {
+	mu       sync.Mutex
+	launches map[workflow.CurrentNodeReferenceKey]currentNodeFixtureLaunch
+}
+
+func (r *currentNodeFixtureRunner) register(reference workflow.CurrentNodeReference, launch currentNodeFixtureLaunch) error {
+	key, err := reference.Key()
+	if err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.launches == nil {
+		r.launches = make(map[workflow.CurrentNodeReferenceKey]currentNodeFixtureLaunch)
+	}
+	if _, exists := r.launches[key]; exists {
+		return errors.New("fixture Current Node launch is already registered")
+	}
+	r.launches[key] = launch
+	return nil
+}
+
+func (r *currentNodeFixtureRunner) StartCurrentNode(
+	_ context.Context,
+	reference workflow.CurrentNodeReference,
+	_ workflowruntime.TaskPromptDelivery,
+	_ CurrentNodeAssignmentEnsure,
+	lease sessionruntime.WorkflowExecutionLease,
+	_ workflowruntime.Controller,
+) error {
+	key, err := reference.Key()
+	if err != nil {
+		return err
+	}
+	r.mu.Lock()
+	launch := r.launches[key]
+	delete(r.launches, key)
+	r.mu.Unlock()
+	if launch == nil {
+		return errors.New("fixture Current Node has no registered launch")
+	}
+	_, err = launch(lease)
+	return err
 }
 
 type currentNodePendingPrompt struct {
@@ -850,6 +922,13 @@ type currentNodePendingPrompt struct {
 type currentNodePromptResult struct {
 	resolution askquestion.AskQuestionResolution
 	err        error
+}
+
+type currentNodePreparedFixtureExecution struct {
+	reference workflow.CurrentNodeReference
+	launch    currentNodeFixtureLaunch
+	handle    <-chan sessionruntime.ExecutionHandle
+	sessionID *runtimeids.SessionID
 }
 
 func currentNodeQuestionAnswer(answer string) askquestion.AskQuestionAnswer {
@@ -911,7 +990,8 @@ func newCurrentNodeQuestionFixture(t *testing.T) currentNodeQuestionFixture {
 		PersistenceRoot: appCfg.PersistenceRoot,
 		StoreOptions:    metadataStore.AuthoritativeSessionStoreOptions(),
 	})
-	controller = newCurrentNodeControllerForTest(t, store, &countingCurrentNodeRunner{}, authority, 1)
+	runner := &currentNodeFixtureRunner{}
+	controller = newCurrentNodeControllerForTest(t, store, runner, authority, 1)
 	t.Cleanup(func() {
 		if err := controller.Close(); err != nil {
 			t.Errorf("close controller: %v", err)
@@ -926,6 +1006,7 @@ func newCurrentNodeQuestionFixture(t *testing.T) currentNodeQuestionFixture {
 		authority:  authority,
 		controller: controller,
 		store:      store,
+		runner:     runner,
 		sessionDir: filepath.Join(appCfg.PersistenceRoot, "projects", binding.ProjectID, "sessions"),
 	}
 }
@@ -946,6 +1027,17 @@ func (f currentNodeQuestionFixture) startQuestionExecution(
 	reference workflow.CurrentNodeReference,
 	runner sessionruntime.AgentRunner,
 ) (sessionruntime.ExecutionHandle, runtimeids.SessionID) {
+	t.Helper()
+	prepared := f.prepareQuestionExecution(t, reference, runner)
+	handles := f.startPreparedExecutions(t, []currentNodePreparedFixtureExecution{prepared})
+	return handles[0], *prepared.sessionID
+}
+
+func (f currentNodeQuestionFixture) prepareQuestionExecution(
+	t *testing.T,
+	reference workflow.CurrentNodeReference,
+	runner sessionruntime.AgentRunner,
+) currentNodePreparedFixtureExecution {
 	t.Helper()
 	store, err := session.Create(
 		f.sessionDir,
@@ -983,65 +1075,147 @@ func (f currentNodeQuestionFixture) startQuestionExecution(
 	if err != nil {
 		t.Fatalf("NewAgentRuntimePlan: %v", err)
 	}
-	lease, err := f.authority.NewWorkflowExecutionLease(sessionruntime.WorkflowExecutionRef{ProjectID: "project-test", WorkflowID: currentNodeControllerTestWorkflowID, CurrentNode: reference})
-	if err != nil {
-		t.Fatalf("NewWorkflowExecutionLease: %v", err)
+	handleResult := make(chan sessionruntime.ExecutionHandle, 1)
+	return currentNodePreparedFixtureExecution{
+		reference: reference,
+		sessionID: &sessionID,
+		handle:    handleResult,
+		launch: func(lease sessionruntime.WorkflowExecutionLease) (sessionruntime.ExecutionHandle, error) {
+			handle, err := f.authority.StartAgentExecution(context.Background(), sessionruntime.AgentExecutionRequest{
+				Descriptor: descriptor,
+				Runtime:    &plan,
+				Workflow:   &lease,
+				Resource:   sessionruntime.OpenAgentResource{},
+				Runner:     runner,
+			})
+			if err == nil {
+				handleResult <- handle
+			}
+			return handle, err
+		},
 	}
-	lease.Release()
-	handle, err := f.authority.StartAgentExecution(context.Background(), sessionruntime.AgentExecutionRequest{
-		Descriptor: descriptor,
-		Runtime:    &plan,
-		Workflow:   &lease,
-		Resource:   sessionruntime.OpenAgentResource{},
-		Runner:     runner,
-	})
-	if err != nil {
-		t.Fatalf("StartAgentExecution: %v", err)
-	}
-	installExactRunForTest(t, f.controller, reference, currentNodeAdmissionExplicitOverride, &lease, lease.ScopeID())
-	return handle, sessionID
 }
 
-func installExactRunForTest(
-	t *testing.T,
-	controller *CurrentNodeController,
+func (f currentNodeQuestionFixture) prepareScriptExecution(
 	reference workflow.CurrentNodeReference,
-	policy currentNodeAdmissionPolicy,
-	lease *sessionruntime.WorkflowExecutionLease,
-	scopeID runtimeids.ExecutionScopeID,
-) {
+	command sessionruntime.ScriptCommand,
+) currentNodePreparedFixtureExecution {
+	handleResult := make(chan sessionruntime.ExecutionHandle, 1)
+	return currentNodePreparedFixtureExecution{
+		reference: reference,
+		handle:    handleResult,
+		launch: func(lease sessionruntime.WorkflowExecutionLease) (sessionruntime.ExecutionHandle, error) {
+			handle, err := f.authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
+				Workflow: &lease,
+				Command:  command,
+			})
+			if err == nil {
+				handleResult <- handle
+			}
+			return handle, err
+		},
+	}
+}
+
+func (f currentNodeQuestionFixture) startPreparedExecutions(
+	t *testing.T,
+	executions []currentNodePreparedFixtureExecution,
+) []sessionruntime.ExecutionHandle {
 	t.Helper()
-	key, err := reference.Key()
-	if err != nil {
-		t.Fatalf("current node key: %v", err)
+	if len(executions) == 0 {
+		t.Fatal("fixture requires at least one Current Node execution")
 	}
-	controller.mu.Lock()
-	defer controller.mu.Unlock()
-	if controller.runs == nil {
-		controller.runs = make(map[currentNodeRunID]*currentNodeRun)
+	taskID := executions[0].reference.TaskID
+	for _, execution := range executions {
+		if execution.reference.TaskID != taskID {
+			t.Fatal("fixture batch Current Nodes must belong to one Task")
+		}
+		if err := f.runner.register(execution.reference, execution.launch); err != nil {
+			t.Fatalf("register fixture launch: %v", err)
+		}
 	}
-	if controller.currentRuns == nil {
-		controller.currentRuns = make(map[workflow.CurrentNodeReferenceKey]currentNodeRunID)
+	if len(executions) == 1 {
+		if err := startCurrentNodeForControllerTest(context.Background(), f.controller, f.store, executions[0].reference); err != nil {
+			t.Fatalf("start fixture Current Node: %v", err)
+		}
+	} else {
+		nodes := make([]workflow.CurrentNode, 0, len(executions))
+		for _, execution := range executions {
+			nodes = append(nodes, workflow.CurrentNode{
+				Reference: execution.reference,
+				Scheduling: &workflow.CurrentNodeScheduling{
+					State: workflow.CurrentNodeSchedulingInterrupted,
+				},
+			})
+		}
+		f.store.mu.Lock()
+		f.store.interrupted = nodes
+		f.store.mu.Unlock()
+		if _, err := f.controller.ResumeTask(context.Background(), taskID); err != nil {
+			t.Fatalf("resume fixture Current Nodes: %v", err)
+		}
 	}
-	if controller.exactRuns == nil {
-		controller.exactRuns = make(map[runtimeids.ExecutionScopeID]currentNodeRunID)
+	handles := make([]sessionruntime.ExecutionHandle, 0, len(executions))
+	for _, execution := range executions {
+		select {
+		case handle := <-execution.handle:
+			handles = append(handles, handle)
+		case <-time.After(3 * time.Second):
+			t.Fatalf("fixture Current Node %v did not start", execution.reference)
+		}
 	}
-	controller.nextRunSequence++
-	id := currentNodeRunID{sequence: controller.nextRunSequence}
-	run := &currentNodeRun{
-		id:                 id,
-		reference:          reference,
-		key:                key,
-		policy:             policy,
-		phase:              currentNodeRunExact,
-		expectedScheduling: workflow.CurrentNodeSchedulingAdmitted,
-		phaseChanged:       make(chan struct{}),
-		lease:              lease,
-		exactScopeID:       &scopeID,
+	return handles
+}
+
+func (f currentNodeQuestionFixture) startPendingPrompts(
+	t *testing.T,
+	references []workflow.CurrentNodeReference,
+	request askquestion.AskQuestionRequest,
+) []currentNodePendingPrompt {
+	t.Helper()
+	prepared := make([]currentNodePreparedFixtureExecution, 0, len(references))
+	pending := make([]currentNodePendingPrompt, 0, len(references))
+	for _, reference := range references {
+		result := make(chan currentNodePromptResult, 1)
+		execution := f.prepareQuestionExecution(t, reference, func(ctx context.Context, scope sessionruntime.ExecutionScope, _ sessionruntime.AgentRuntimeBridge) error {
+			resolution, askErr := f.authority.AwaitPromptResolution(ctx, scope.ID(), request)
+			result <- currentNodePromptResult{resolution: resolution, err: askErr}
+			return askErr
+		})
+		prepared = append(prepared, execution)
+		pending = append(pending, currentNodePendingPrompt{sessionID: *execution.sessionID, result: result})
 	}
-	controller.runs[id] = run
-	controller.currentRuns[key] = id
-	controller.exactRuns[scopeID] = id
+	handles := f.startPreparedExecutions(t, prepared)
+	for index := range pending {
+		pending[index].handle = handles[index]
+	}
+	return pending
+}
+
+func (f currentNodeQuestionFixture) startPendingPromptWithScript(
+	t *testing.T,
+	question workflow.CurrentNodeReference,
+	request askquestion.AskQuestionRequest,
+	script workflow.CurrentNodeReference,
+	command sessionruntime.ScriptCommand,
+) (currentNodePendingPrompt, sessionruntime.ExecutionHandle) {
+	t.Helper()
+	result := make(chan currentNodePromptResult, 1)
+	questionExecution := f.prepareQuestionExecution(t, question, func(ctx context.Context, scope sessionruntime.ExecutionScope, _ sessionruntime.AgentRuntimeBridge) error {
+		resolution, askErr := f.authority.AwaitPromptResolution(ctx, scope.ID(), request)
+		result <- currentNodePromptResult{resolution: resolution, err: askErr}
+		return askErr
+	})
+	scriptExecution := f.prepareScriptExecution(script, command)
+	handles := f.startPreparedExecutions(t, []currentNodePreparedFixtureExecution{
+		questionExecution,
+		scriptExecution,
+	})
+	return currentNodePendingPrompt{
+		handle:    handles[0],
+		sessionID: *questionExecution.sessionID,
+		result:    result,
+	}, handles[1]
 }
 
 func (f currentNodeQuestionFixture) waitForPendingPrompt(t *testing.T, taskID workflow.TaskID, askID string) {
@@ -1099,6 +1273,23 @@ type blockingCurrentNodeRunner struct {
 	entered chan struct{}
 	release chan struct{}
 	once    sync.Once
+}
+
+type contextBlockingCurrentNodeRunner struct {
+	entered chan workflow.CurrentNodeReference
+}
+
+func (r *contextBlockingCurrentNodeRunner) StartCurrentNode(
+	ctx context.Context,
+	reference workflow.CurrentNodeReference,
+	_ workflowruntime.TaskPromptDelivery,
+	_ CurrentNodeAssignmentEnsure,
+	_ sessionruntime.WorkflowExecutionLease,
+	_ workflowruntime.Controller,
+) error {
+	r.entered <- reference
+	<-ctx.Done()
+	return context.Cause(ctx)
 }
 
 func (r *blockingCurrentNodeRunner) StartCurrentNode(context.Context, workflow.CurrentNodeReference, workflowruntime.TaskPromptDelivery, CurrentNodeAssignmentEnsure, sessionruntime.WorkflowExecutionLease, workflowruntime.Controller) error {

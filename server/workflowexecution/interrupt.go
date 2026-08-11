@@ -1,10 +1,12 @@
 package workflowexecution
 
 import (
+	"context"
 	"errors"
 	"strings"
 
 	"core/server/workflow"
+	"core/shared/clientui"
 	"core/shared/runtimeids"
 )
 
@@ -12,6 +14,10 @@ type InterruptSelector struct {
 	TaskID      workflow.TaskID
 	SessionID   *runtimeids.SessionID
 	CurrentNode *workflow.CurrentNodeReference
+
+	expectedRunID       *currentNodeRunID
+	expectedOperation   *clientui.RuntimeOperationRef
+	revalidateOwnership func(context.Context) error
 }
 
 func (s InterruptSelector) Validate() error {

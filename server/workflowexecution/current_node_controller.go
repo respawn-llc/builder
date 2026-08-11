@@ -471,11 +471,11 @@ func (c *CurrentNodeController) completeLiveCurrentNode(ctx context.Context, req
 			}
 			successorPhase := currentNodeRunHeld
 			if agentCompletion && completed.PostCompletionEligible {
-				exact.completion = currentNodeRunCompletionAgentPostTurnPending
+				exact.completion = currentNodeRunCompletionRef(currentNodeRunCompletionAgentPostTurnPending)
 			} else if agentCompletion {
-				exact.completion = currentNodeRunCompletionAgentPostTurnSucceeded
+				exact.completion = currentNodeRunCompletionRef(currentNodeRunCompletionAgentPostTurnSucceeded)
 			} else {
-				exact.completion = currentNodeRunCompletionScriptSucceeded
+				exact.completion = currentNodeRunCompletionRef(currentNodeRunCompletionScriptSucceeded)
 				successorPhase = currentNodeRunQueued
 			}
 			sourceRetained := completed.PendingApproval != nil
@@ -486,7 +486,7 @@ func (c *CurrentNodeController) completeLiveCurrentNode(ctx context.Context, req
 				sourceRetained,
 				successorPhase,
 			); err != nil {
-				exact.completion = currentNodeRunCompletionNone
+				exact.completion = nil
 				c.mu.Unlock()
 				return err
 			}
@@ -632,7 +632,7 @@ func (c *CurrentNodeController) FinalizeCurrentNodePostTurn(
 		if current.stopping() {
 			return sessionruntime.ErrExecutionNoLongerLive
 		}
-		current.completion = currentNodeRunCompletionAgentPostTurnSucceeded
+		current.completion = currentNodeRunCompletionRef(currentNodeRunCompletionAgentPostTurnSucceeded)
 		current.postTurn = nil
 		return nil
 	})
@@ -860,7 +860,7 @@ func (c *CurrentNodeController) ObserveCurrentNodeCompletion(_ context.Context, 
 	}
 	c.mu.Lock()
 	run, exists := c.runByScopeLocked(req.ScopeID)
-	completed := exists && run.completion.committed()
+	completed := exists && run.completed()
 	c.mu.Unlock()
 	return workflowruntime.CompletionObservationResult{Completed: completed}, nil
 }
@@ -910,7 +910,7 @@ func (c *CurrentNodeController) FailCurrentNodeScope(
 			return sessionruntime.ErrExecutionNoLongerLive
 		}
 		lease = *live.lease
-		if live.completion.committed() {
+		if live.completed() {
 			sourceRetained := live.completionSourceRetained
 			var targets []workflowstore.CurrentNodeSchedulingTarget
 			if sourceRetained {
@@ -938,7 +938,7 @@ func (c *CurrentNodeController) FailCurrentNodeScope(
 				if current, stillLive := c.runByScopeLocked(scopeID); stillLive {
 					if reason != workflow.CurrentNodeInterruptionReasonUserInterrupt {
 						operation := lifecycleFatalOperationForInterruptionReason(reason)
-						if current.completion.committed() {
+						if current.completed() {
 							operation = LifecycleFatalOperationSuccessorDisposition
 						}
 						c.recordLifecycleFatalLocked(
@@ -966,7 +966,7 @@ func (c *CurrentNodeController) FailCurrentNodeScope(
 				return sessionruntime.ErrExecutionNoLongerLive
 			}
 			c.removeSuccessorsLocked(current)
-			current.stop = currentNodeRunStopInterrupted
+			current.stop = currentNodeRunStopRef(currentNodeRunStopInterrupted)
 			c.mu.Unlock()
 			for _, reference := range result.Interrupted {
 				c.publishPendingInterruptedCurrentNode(ctx, reference, reason)
@@ -1020,7 +1020,7 @@ func (c *CurrentNodeController) FailCurrentNodeScope(
 		}
 		c.mu.Lock()
 		if current, stillLive := c.runByScopeLocked(scopeID); stillLive {
-			current.stop = currentNodeRunStopInterrupted
+			current.stop = currentNodeRunStopRef(currentNodeRunStopInterrupted)
 		}
 		c.mu.Unlock()
 		return nil
@@ -1030,7 +1030,7 @@ func (c *CurrentNodeController) FailCurrentNodeScope(
 	c.mu.Lock()
 	completed := false
 	if current, stillLive := c.runByScopeLocked(scopeID); stillLive {
-		completed = current.completion.committed()
+		completed = current.completed()
 	}
 	c.mu.Unlock()
 	if !completed {
@@ -1053,7 +1053,7 @@ func (c *CurrentNodeController) ExecutionFinalized(scope sessionruntime.Executio
 		live.transition(currentNodeRunRetiring)
 	}
 	delete(c.violations, scope.ID())
-	var completion currentNodeRunCompletion
+	var completion *currentNodeRunCompletion
 	var successorRuns []currentNodeRunID
 	stopping := false
 	fatal := false
@@ -1082,8 +1082,7 @@ func (c *CurrentNodeController) ExecutionFinalized(scope sessionruntime.Executio
 		}
 		return
 	}
-	switch completion {
-	case currentNodeRunCompletionNone:
+	if completion == nil {
 		if err := c.interruptOutcomeLessFinalization(live.id); err != nil {
 			c.mu.Lock()
 			if current := c.runs[live.id]; current != nil && c.lifecycleFatalReporter.Available() == nil {
@@ -1102,6 +1101,8 @@ func (c *CurrentNodeController) ExecutionFinalized(scope sessionruntime.Executio
 		c.mu.Unlock()
 		c.wakeAdmissionWorker()
 		return
+	}
+	switch *completion {
 	case currentNodeRunCompletionScriptSucceeded:
 		c.mu.Lock()
 		c.removeRunLocked(live.id)
@@ -1134,7 +1135,7 @@ func (c *CurrentNodeController) ExecutionFinalized(scope sessionruntime.Executio
 		return
 	case currentNodeRunCompletionAgentPostTurnSucceeded:
 	default:
-		panic(fmt.Sprintf("unknown current node Run completion disposition %d", completion))
+		panic(fmt.Sprintf("unknown current node Run completion disposition %d", *completion))
 	}
 	c.finalizeAgentSuccessors(live.id, successorRuns)
 }
@@ -1217,7 +1218,7 @@ func (c *CurrentNodeController) interruptCommittedSuccessors(
 	c.mu.Lock()
 	if current := c.runs[predecessorID]; current != nil {
 		c.removeSuccessorsLocked(current)
-		current.stop = currentNodeRunStopInterrupted
+		current.stop = currentNodeRunStopRef(currentNodeRunStopInterrupted)
 	}
 	c.mu.Unlock()
 	return nil
