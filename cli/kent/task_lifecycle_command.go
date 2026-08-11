@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"core/shared/apicontract"
+	"core/shared/client"
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -53,7 +55,7 @@ func taskCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 		}
 		selectedWorkflow = &selector
 	}
-	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
+	return runWorkflowCommandSession(stderr, func(cfg config.App, remote *client.Remote) int {
 		projectID, err := resolveWorkflowProjectID(context.Background(), cfg, remote, *projectRef)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
@@ -226,8 +228,8 @@ func taskEditSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "--body cannot be combined with --body-file")
 		return 2
 	}
-	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
-		taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, *projectRef, positionals[0])
+	return runWorkflowCommandSession(stderr, func(cfg config.App, remote *client.Remote) int {
+		taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, remote, *projectRef, positionals[0])
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
@@ -316,8 +318,8 @@ func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 	if flagExplicit(fs, "project") {
 		recoveryProject = projectRef
 	}
-	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
-		taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, *projectRef, positionals[0])
+	return runWorkflowCommandSession(stderr, func(cfg config.App, remote *client.Remote) int {
+		taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, remote, *projectRef, positionals[0])
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
@@ -462,8 +464,8 @@ func taskDeleteSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 	if denyAgentHumanOnlyTaskAction(stderr) {
 		return 1
 	}
-	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
-		taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, *projectRef, positionals[0])
+	return runWorkflowCommandSession(stderr, func(cfg config.App, remote *client.Remote) int {
+		taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, remote, *projectRef, positionals[0])
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
@@ -511,8 +513,8 @@ func taskResumeSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 	if flagExplicit(fs, "project") {
 		recoveryProject = projectRef
 	}
-	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
-		taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, *projectRef, positionals[0])
+	return runWorkflowCommandSession(stderr, func(cfg config.App, remote *client.Remote) int {
+		taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, remote, *projectRef, positionals[0])
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
@@ -588,8 +590,8 @@ func taskInterruptSubcommand(args []string, stdout io.Writer, stderr io.Writer) 
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
-		taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, *projectRef, positionals[0])
+	return runWorkflowCommandSession(stderr, func(cfg config.App, remote *client.Remote) int {
+		taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, remote, *projectRef, positionals[0])
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
@@ -634,7 +636,7 @@ func taskApproveSubcommand(args []string, stdout io.Writer, stderr io.Writer) in
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	return runWorkflowCommandSession(stderr, func(_ config.App, remote workflowCommandRemote) int {
+	return runWorkflowCommandSession(stderr, func(_ config.App, remote *client.Remote) int {
 		ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
 		defer cancel()
 		resp, err := remote.ApproveWorkflowTask(ctx, serverapi.WorkflowTaskApproveRequest{
@@ -708,8 +710,8 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
-		taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, *projectRef, positionals[0])
+	return runWorkflowCommandSession(stderr, func(cfg config.App, remote *client.Remote) int {
+		taskID, err := resolveWorkflowTaskID(context.Background(), cfg, remote, remote, *projectRef, positionals[0])
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
@@ -761,33 +763,11 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		}
 		var transitionKey *string
 		if preview.Outcome == serverapi.WorkflowTaskMovePreviewOutcomeTransition {
-			key := strings.TrimSpace(*transition)
-			if key == "" {
-				if flagExplicit(fs, "transition") {
-					fmt.Fprintln(stderr, "task move --transition cannot be blank")
-					return 2
-				}
-				if len(preview.Transition.Choices) != 1 {
-					fmt.Fprintln(stderr, "task move requires --transition when multiple incoming Transitions are usable")
-					return 2
-				}
-				key = preview.Transition.Choices[0].TransitionKey
-			}
-			var selected *serverapi.WorkflowTaskMovePreviewTransitionChoice
-			for _, choice := range preview.Transition.Choices {
-				if choice.TransitionKey == key {
-					value := choice
-					selected = &value
-					break
-				}
-			}
-			if selected == nil {
-				fmt.Fprintf(stderr, "task move Transition %q is not a usable incoming Transition\n", key)
+			transitionKey, err = selectTaskMoveTransition(preview, *transition, flagExplicit(fs, "transition"))
+			if err != nil {
+				fmt.Fprintln(stderr, err)
 				return 2
 			}
-			choice := *selected
-			authoredKey := choice.TransitionKey
-			transitionKey = &authoredKey
 		}
 		var recoveryProject, recoveryCommentary *string
 		if flagExplicit(fs, "project") {
@@ -879,6 +859,33 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		writeTaskLifecycleResult(stdout, "Moved", detail)
 		return 0
 	})
+}
+
+func selectTaskMoveTransition(
+	preview serverapi.WorkflowTaskMovePreviewResponse,
+	raw string,
+	explicit bool,
+) (*string, error) {
+	if preview.Outcome != serverapi.WorkflowTaskMovePreviewOutcomeTransition || preview.Transition == nil {
+		return nil, errors.New("task move transition selection requires a transition preview")
+	}
+	key := strings.TrimSpace(raw)
+	if key == "" {
+		if explicit {
+			return nil, errors.New("task move --transition cannot be blank")
+		}
+		if len(preview.Transition.Choices) != 1 {
+			return nil, errors.New("task move requires --transition when multiple incoming Transitions are usable")
+		}
+		key = preview.Transition.Choices[0].TransitionKey
+	}
+	for _, choice := range preview.Transition.Choices {
+		if choice.TransitionKey == key {
+			authoredKey := choice.TransitionKey
+			return &authoredKey, nil
+		}
+	}
+	return nil, fmt.Errorf("task move Transition %q is not a usable incoming Transition", key)
 }
 
 func manualMoveBlockerMessage(reason serverapi.WorkflowTaskMovePreviewBlocker) string {
@@ -1185,7 +1192,7 @@ func taskExecutionTargetSelector(target serverapi.WorkflowExecutionTargetSelecti
 
 func runWorkflowMutationWithSetupProgress[T any](
 	ctx context.Context,
-	remote workflowCommandRemote,
+	remote apicontract.WorkflowService,
 	stderr io.Writer,
 	mutate func(context.Context, serverapi.WorktreeSetupOperationID) (T, error),
 	shouldWait func(T) bool,
@@ -1218,7 +1225,7 @@ func runWorkflowMutationWithSetupProgress[T any](
 	}
 }
 
-func subscribeWorktreeSetupProgress(ctx context.Context, remote workflowCommandRemote, setupOperationID serverapi.WorktreeSetupOperationID, stderr io.Writer) (worktreeSetupObservation, error) {
+func subscribeWorktreeSetupProgress(ctx context.Context, remote apicontract.WorkflowService, setupOperationID serverapi.WorktreeSetupOperationID, stderr io.Writer) (worktreeSetupObservation, error) {
 	subscriber, ok := remote.(worktreeSetupProgressSubscriber)
 	if !ok {
 		return worktreeSetupObservation{}, errors.New("worktree setup progress subscription is unavailable")
@@ -1341,7 +1348,7 @@ func writeWorktreeSetupProgress(stderr io.Writer, event serverapi.WorktreeSetupE
 	fmt.Fprintf(stderr, "Waiting for worktree setup script %s in %s.\n", event.Started.ScriptPath, event.Started.WorktreeRoot)
 }
 
-func waitForWorkflowTaskRunSession(ctx context.Context, remote workflowCommandRemote, taskID string, _ string, timeout time.Duration, interval time.Duration) (serverapi.WorkflowTaskDetail, error) {
+func waitForWorkflowTaskRunSession(ctx context.Context, remote apicontract.WorkflowService, taskID string, _ string, timeout time.Duration, interval time.Duration) (serverapi.WorkflowTaskDetail, error) {
 	if strings.TrimSpace(taskID) == "" {
 		return serverapi.WorkflowTaskDetail{}, errors.New("task id is required")
 	}

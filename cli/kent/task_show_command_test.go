@@ -10,6 +10,16 @@ import (
 	"core/shared/serverapi"
 )
 
+func taskShowTestStatus(kind serverapi.WorkflowTaskStatusKind) serverapi.WorkflowTaskStatus {
+	native, ok := kind.NativeState()
+	if !ok {
+		panic("invalid test status")
+	}
+	return serverapi.WorkflowTaskStatus{Kind: kind, NativeState: native}
+}
+
+func taskShowTestInt(value int) *int { return &value }
+
 func TestTaskShowJSONIncludesCurrentNodesAndRetainedSessionCount(t *testing.T) {
 	sessionID := "session-1"
 	task := serverapi.WorkflowTaskDetail{
@@ -168,20 +178,20 @@ func TestTaskShowHumanOutputUsesSharedDependencySections(t *testing.T) {
 		},
 		Project:  serverapi.ProjectBoardProject{DisplayName: "Project"},
 		Workflow: serverapi.WorkflowTaskWorkflowSummary{WorkflowID: testsetup.WorkflowID(t, "task-show-dependencies"), DisplayName: "Workflow"},
-		Status:   taskDependencyTestStatus(serverapi.WorkflowTaskStatusKindBacklog),
+		Status:   taskShowTestStatus(serverapi.WorkflowTaskStatusKindBacklog),
 		Dependencies: serverapi.WorkflowTaskDependencies{
 			BlockerCount:            1,
 			UnsatisfiedBlockerCount: 1,
 			Directions: []serverapi.WorkflowTaskDependencyDirectionProjection{{
 				Direction:        serverapi.WorkflowTaskDependencyDirectionBlockedBy,
 				TotalCount:       1,
-				UnsatisfiedCount: intTestPointer(1),
+				UnsatisfiedCount: taskShowTestInt(1),
 				Items: []serverapi.WorkflowTaskDependencyItem{{
 					TaskID:       "task-1",
 					ShortID:      "KNT-1",
 					Title:        "Foundation",
 					WorkflowID:   "workflow-1",
-					Status:       taskDependencyTestStatus(serverapi.WorkflowTaskStatusKindActive),
+					Status:       taskShowTestStatus(serverapi.WorkflowTaskStatusKindActive),
 					Satisfaction: &unsatisfied,
 				}},
 			}},

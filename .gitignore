@@ -49,6 +49,9 @@ cover.out
 # Go workspace/module local files
 go.work.sum
 
+# Rendered only while metadata SQL adapters are generated.
+/server/metadata/queries.sql
+
 # Rust/Tauri build artifacts
 target
 

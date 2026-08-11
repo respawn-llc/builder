@@ -14,17 +14,11 @@ const DefaultCoordinatorCacheLimit = 128
 var defaultCoordinatorCache = NewCoordinatorCache(DefaultCoordinatorCacheLimit)
 
 type ResponseSnapshot struct {
-	Version             clientui.ReadModelVersion
-	Activity            clientui.RuntimeActivity
-	InputReconciliation clientui.RuntimeInputReconciliationSnapshot
+	Version  clientui.ReadModelVersion
+	Activity clientui.RuntimeActivity
 }
 
-type SnapshotInput struct {
-	Resolver            ResolverSnapshot
-	InputReconciliation clientui.RuntimeInputReconciliationSnapshot
-}
-
-type SnapshotBuilder func() (SnapshotInput, error)
+type SnapshotBuilder func() (ResolverSnapshot, error)
 
 type CoordinatorCache struct {
 	mu             sync.Mutex
@@ -62,11 +56,8 @@ func (c *CoordinatorCache) Next(sessionID string) clientui.ReadModelVersion {
 }
 
 func (c *CoordinatorCache) Snapshot(sessionID string, resolver ResolverSnapshot) (ResponseSnapshot, error) {
-	return c.WithSnapshot(sessionID, func() (SnapshotInput, error) {
-		return SnapshotInput{
-			Resolver:            resolver,
-			InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{},
-		}, nil
+	return c.WithSnapshot(sessionID, func() (ResolverSnapshot, error) {
+		return resolver, nil
 	})
 }
 
@@ -219,18 +210,17 @@ func (c *ReadModelCoordinator) feedSnapshot(build SnapshotBuilder) (clientui.Run
 	if err != nil {
 		panic(err)
 	}
-	input, err := build()
+	resolver, err := build()
 	if err != nil {
 		return clientui.RuntimeReadModelUpdate{}, err
 	}
-	activity, err := resolveRuntimeFeedActivity(input.Resolver)
+	activity, err := resolveRuntimeFeedActivity(resolver)
 	if err != nil {
 		return clientui.RuntimeReadModelUpdate{}, err
 	}
 	update := clientui.RuntimeReadModelUpdate{
-		Version:             version,
-		Activity:            activity,
-		InputReconciliation: input.InputReconciliation,
+		Version:  version,
+		Activity: activity,
 	}
 	if err := update.Validate(); err != nil {
 		return clientui.RuntimeReadModelUpdate{}, fmt.Errorf("validate runtime feed read-model update: %w", err)
@@ -264,8 +254,7 @@ func responseSnapshot(update clientui.RuntimeReadModelUpdate) ResponseSnapshot {
 		panic(fmt.Sprintf("project invalid runtime read-model update: %+v: %v", update, err))
 	}
 	return ResponseSnapshot{
-		Version:             update.Version,
-		Activity:            update.Activity,
-		InputReconciliation: update.InputReconciliation,
+		Version:  update.Version,
+		Activity: update.Activity,
 	}
 }

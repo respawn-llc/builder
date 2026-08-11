@@ -72,25 +72,18 @@ func TestRuntimeClientControlMutationsPatchCachedSessionStatus(t *testing.T) {
 	}
 }
 
-func TestRuntimeClientInputRequestUsesCallerOperationIdentity(t *testing.T) {
+func TestRuntimeClientInputRequestUsesCallerRequestIdentity(t *testing.T) {
 	controls := &reconnectRetryRuntimeControlClient{}
 	runtimeClient := newUIRuntimeClientWithReads("session-1", &countingSessionViewClient{}, controls).(*sessionRuntimeClient)
-	ref := clientui.RuntimeOperationRef{
-		Kind:            clientui.RuntimeOperationKindSubmit,
-		ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
-	}
+	requestID := runtimeids.NewRuntimeClientRequestID()
 
 	if _, err := runtimeClient.SubmitRuntimeInput(context.Background(), clientui.RuntimeSubmitRequest{
-		OperationRef:                    ref,
-		PreSubmitCompactionOperationRef: newRuntimeOperationRef(clientui.RuntimeOperationKindPreSubmitCompact),
-		Input:                           runtimeinput.Text("hello"),
+		ClientRequestID: requestID,
+		Input:           runtimeinput.Text("hello"),
 	}); err != nil {
 		t.Fatalf("SubmitRuntimeInput: %v", err)
 	}
-	if got := controls.submitRequestIDs(); len(got) != 1 || got[0] != ref.ClientRequestID.String() {
-		t.Fatalf("request ids = %+v, want %q", got, ref.ClientRequestID.String())
-	}
-	if len(controls.submitRefs) != 1 || controls.submitRefs[0] != ref {
-		t.Fatalf("operation refs = %+v, want %+v", controls.submitRefs, ref)
+	if got := controls.submitRequestIDs(); len(got) != 1 || got[0] != requestID.String() {
+		t.Fatalf("request ids = %+v, want %q", got, requestID.String())
 	}
 }

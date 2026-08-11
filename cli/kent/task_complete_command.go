@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"core/shared/client"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -15,6 +16,7 @@ import (
 	"strings"
 
 	"core/prompts"
+	"core/shared/apicontract"
 	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/sessionenv"
@@ -56,8 +58,8 @@ func taskCompleteSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 		fmt.Fprintln(stderr, "task complete --force requires exactly one explicit selector: --session or --task")
 		return 2
 	}
-	return runWorkflowCommandSession(stderr, func(cfg config.App, remote workflowCommandRemote) int {
-		req, err := parsed.request(context.Background(), cfg, remote, agentSessionID, agentContext)
+	return runWorkflowCommandSession(stderr, func(cfg config.App, remote *client.Remote) int {
+		req, err := parsed.request(context.Background(), cfg, remote, remote, agentSessionID, agentContext)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
@@ -95,7 +97,14 @@ func (a taskCompleteArgs) selectorCount() int {
 	return count
 }
 
-func (a taskCompleteArgs) request(ctx context.Context, cfg config.App, remote workflowCommandRemote, agentSessionID string, agentContext bool) (serverapi.WorkflowTaskCompleteRequest, error) {
+func (a taskCompleteArgs) request(
+	ctx context.Context,
+	cfg config.App,
+	projects apicontract.ProjectViewService,
+	workflows apicontract.WorkflowService,
+	agentSessionID string,
+	agentContext bool,
+) (serverapi.WorkflowTaskCompleteRequest, error) {
 	req := serverapi.WorkflowTaskCompleteRequest{
 		SessionID:    strings.TrimSpace(a.SessionID),
 		TransitionID: strings.TrimSpace(a.TransitionID),
@@ -116,7 +125,7 @@ func (a taskCompleteArgs) request(ctx context.Context, cfg config.App, remote wo
 	if taskRef == "" {
 		return req, nil
 	}
-	taskID, err := resolveWorkflowTaskID(ctx, cfg, remote, a.ProjectRef, taskRef)
+	taskID, err := resolveWorkflowTaskID(ctx, cfg, projects, workflows, a.ProjectRef, taskRef)
 	if err != nil {
 		return serverapi.WorkflowTaskCompleteRequest{}, err
 	}

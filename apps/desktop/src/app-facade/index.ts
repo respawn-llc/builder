@@ -1,4 +1,5 @@
 export type { AppLogger, AppLogLevel } from "./logging";
+export * from "./boardQueries";
 export * from "./browserStorage";
 export * from "./formatters";
 export * from "./nativeHooks";

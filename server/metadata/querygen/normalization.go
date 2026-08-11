@@ -73,15 +73,15 @@ type normalizationMapping struct {
 func runNormalizationCommand(command string, args []string) error {
 	switch command {
 	case "generate":
-		return generateCommand(args)
+		return generateNormalizationCommand(args)
 	case "check":
-		return checkCommand(args)
+		return checkNormalizationCommand(args)
 	default:
 		return fmt.Errorf("unknown normalization generator command %q", command)
 	}
 }
 
-func generateCommand(args []string) error {
+func generateNormalizationCommand(args []string) error {
 	output, err := outputFlag(args)
 	if err != nil {
 		return err
@@ -99,7 +99,7 @@ func generateCommand(args []string) error {
 	return nil
 }
 
-func checkCommand(args []string) error {
+func checkNormalizationCommand(args []string) error {
 	output, err := outputFlag(args)
 	if err != nil {
 		return err

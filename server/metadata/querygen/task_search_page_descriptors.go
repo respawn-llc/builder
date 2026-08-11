@@ -3,98 +3,10 @@ package main
 import (
 	"bytes"
 	"errors"
-	"flag"
 	"fmt"
 	"go/format"
-	"io"
-	"os"
-	"path/filepath"
 	"strconv"
-	"strings"
 )
-
-func generateTaskSearchPageDescriptorsCommand(args []string) error {
-	return generateTaskSearchQueryAdapterCommand(args, taskSearchQueryAdapterSpec{
-		command:    "generate-task-search-page-descriptors",
-		render:     renderTaskSearchPageDescriptors,
-		generate:   generateTaskSearchPageDescriptors,
-		outputNoun: "page descriptor adapter",
-	})
-}
-
-func generateTaskSearchSchemaContractCommand(args []string) error {
-	return generateTaskSearchQueryAdapterCommand(args, taskSearchQueryAdapterSpec{
-		command:    "generate-task-search-schema-contract",
-		render:     renderTaskSearchSchemaContract,
-		generate:   generateTaskSearchSchemaContract,
-		outputNoun: "schema contract adapter",
-	})
-}
-
-type taskSearchQueryAdapterSpec struct {
-	command    string
-	render     func([]byte, []byte, []byte, []byte) ([]byte, error)
-	generate   func([]byte) ([]byte, error)
-	outputNoun string
-}
-
-func generateTaskSearchQueryAdapterCommand(args []string, spec taskSearchQueryAdapterSpec) error {
-	fs := flag.NewFlagSet(spec.command, flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	input := fs.String("input", "", "metadata query template input")
-	fragment := fs.String("fragment", "", "task label filter template fragment")
-	dependencyFragment := fs.String("dependency-fragment", "", "task dependency filter template fragment")
-	statusFragment := fs.String("status-fragment", "", "task status projection template fragment")
-	output := fs.String("output", "", "generated Go output")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if fs.NArg() != 0 {
-		return fmt.Errorf("%s does not accept positional arguments", spec.command)
-	}
-	for name, value := range map[string]string{
-		"input":               *input,
-		"fragment":            *fragment,
-		"dependency-fragment": *dependencyFragment,
-		"status-fragment":     *statusFragment,
-		"output":              *output,
-	} {
-		if strings.TrimSpace(value) == "" {
-			return fmt.Errorf("%s is required", name)
-		}
-	}
-	querySource, err := os.ReadFile(*input)
-	if err != nil {
-		return fmt.Errorf("read query template: %w", err)
-	}
-	filterSource, err := os.ReadFile(*fragment)
-	if err != nil {
-		return fmt.Errorf("read task label filter template: %w", err)
-	}
-	dependencySource, err := os.ReadFile(*dependencyFragment)
-	if err != nil {
-		return fmt.Errorf("read task dependency filter template: %w", err)
-	}
-	statusSource, err := os.ReadFile(*statusFragment)
-	if err != nil {
-		return fmt.Errorf("read task status projection template: %w", err)
-	}
-	query, err := spec.render(querySource, filterSource, dependencySource, statusSource)
-	if err != nil {
-		return err
-	}
-	generated, err := spec.generate(query)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(*output), 0o755); err != nil {
-		return fmt.Errorf("create generated query directory: %w", err)
-	}
-	if err := os.WriteFile(*output, generated, 0o644); err != nil {
-		return fmt.Errorf("write generated %s: %w", spec.outputNoun, err)
-	}
-	return nil
-}
 
 func generateTaskSearchPageDescriptors(query []byte) ([]byte, error) {
 	if len(bytes.TrimSpace(query)) == 0 {

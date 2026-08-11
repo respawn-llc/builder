@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"core/shared/apicontract"
 	"core/shared/serverapi"
 	"core/shared/textutil"
 )
@@ -53,7 +54,7 @@ func workflowGraphDraftFromDefinition(def serverapi.WorkflowDefinition) serverap
 
 func previewWorkflowGraphDraft(
 	ctx context.Context,
-	remote workflowCommandRemote,
+	remote apicontract.WorkflowService,
 	current serverapi.WorkflowDefinition,
 	submitted serverapi.WorkflowGraphDraft,
 ) (workflowGraphPreview, error) {

@@ -22,7 +22,6 @@ import (
 	"core/server/runtime"
 	"core/server/runtimecommand"
 	"core/server/runtimecontrol"
-	"core/server/runtimeops"
 	"core/server/runtimewire"
 	"core/server/serverstatus"
 	"core/server/sessionruntime"
@@ -143,7 +142,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	if observer := sleepManager.RuntimeActiveObserver(); observer != nil {
 		runtimeRegistry.SetSleepObserver(observer)
 	}
-	projectService, err := projectview.NewMetadataService(metadataStore, "")
+	projectService, err := projectview.NewMetadataService(metadataStore)
 	if err != nil {
 		closeRootLeaseOnFailure()
 		_ = metadataStore.Close()
@@ -175,8 +174,6 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	projectService.WithRuntimeAuthority(runtimeAuthority)
 	sessionStoreResolver := registry.NewGlobalPersistenceSessionResolver(cfg.PersistenceRoot, storeOptions...)
 	promptControlService := promptcontrol.NewPromptControlService(authorityPromptResponder{authority: runtimeAuthority})
-	runtimeOperations := runtimeops.NewCoordinator()
-	runtimeRegistry.WithOperationCoordinator(runtimeOperations)
 	runtimeRegistry.WithExecutionTargetResolver(metadataStore.ResolveOptionalSessionExecutionTarget)
 	if runtimeSupport.Background != nil {
 		runtimeRegistry.WithBackgroundProcessSnapshots(runtimeSupport.Background.List)
@@ -185,7 +182,6 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	runtimeGoalAuthority := runtimecommand.NewGoalAuthority(runtimeAuthority, runtimeCommandExecution)
 	runtimeControlService := runtimecontrol.NewServiceWithGoalCommands(runtimeAuthority, runtimeCommandExecution, runtimeGoalAuthority).
 		WithRuntimeActivityResolver(runtimeRegistry).
-		WithOperationCoordinator(runtimeOperations).
 		WithPromptHistoryStore(metadataStore).
 		WithWorkflowTaskSessionResolver(metadataStore).
 		WithPersistedSessionResolver(metadataStore).
@@ -212,7 +208,6 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		WithExecutionEnvironmentConfig(cfg).
 		WithExecutionEnvironmentAuth(authStatusService).
 		WithExecutionEnvironmentGit(gitInspector).
-		WithOperationCoordinator(runtimeOperations).
 		WithCacheWarningMode(cfg.Settings.CacheWarningMode)
 	sessionWorkspaceRetargeter := sessionservice.NewSessionWorkspaceRetargeter(metadataStore, runtimeAuthority, runtimeRegistry, runtimeSupport.Background)
 	sessionLifecycleService := sessionservice.NewGlobalSessionLifecycleService(cfg.PersistenceRoot, runtimeAuthority, authSupport.AuthManager).

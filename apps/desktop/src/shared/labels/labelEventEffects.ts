@@ -1,162 +1,163 @@
 import type { QueryClient } from "@tanstack/react-query";
 
-import type { ProjectLabel, ProjectLabelCatalog, WorkflowProjectEvent } from "@/api";
-import { queryKeys } from "@/app-facade";
+import type { WorkflowProjectEvent } from "@/api";
+import { invalidateProjectBoardQueries, queryKeys } from "@/app-facade";
 import type { LabelFilterAction } from "./labelFilterState";
-import type { ProjectCatalogAuthority } from "./projectCatalogAuthority";
-import { taskLabelAssignmentRegistryFor } from "./taskLabelAssignmentRegistry";
 import { pruneDeletedLabelFromExistingCaches, removeDeletedTaskFromExistingCaches } from "./taskLabelCache";
 
-export type LabelMembershipRefreshEffect =
-  | Readonly<{
-      kind: "catalog.deleted";
-      labelID: string;
-      projectID: string;
-    }>
-  | Readonly<{
-      kind: "task.labels_changed";
-      projectID: string;
-      taskID: string;
-      workflowID: string;
-    }>
-  | Readonly<{
-      kind: "task.deleted";
-      projectID: string;
-      taskID: string;
-      workflowID: string;
-    }>
-  | Readonly<{
-      kind: "subscription.refresh";
-      projectID: string;
-    }>;
-
 export type ProjectLabelEffects = Readonly<{
-  applyLocalCreate(label: ProjectLabel): Promise<void>;
-  applyLocalReorder(catalog: ProjectLabelCatalog, generation: number): Promise<void>;
-  applyLocalRename(label: ProjectLabel): Promise<void>;
-  applyLocalDelete(labelID: string): Promise<void>;
   consumeProjectEvent(event: WorkflowProjectEvent): Promise<void>;
   refreshAfterSubscriptionBoundary(): Promise<void>;
+  scheduleCatalogRefresh(): void;
+  scheduleDeleteRefresh(): void;
+  scheduleMembershipRefresh(): void;
+  scheduleReorderRefresh(): void;
+  scheduleTaskAssignmentRefresh(taskID: string): void;
 }>;
 
 export function createProjectLabelEffects({
-  authority,
   onFilterAction,
-  onMembershipRefresh,
   onBackgroundError,
   projectID,
   queryClient,
 }: Readonly<{
-  authority: ProjectCatalogAuthority;
   onFilterAction?: ((action: LabelFilterAction) => void) | undefined;
-  onMembershipRefresh?: ((effect: LabelMembershipRefreshEffect) => Promise<void> | void) | undefined;
   onBackgroundError: (error: unknown) => void;
   projectID: string;
   queryClient: QueryClient;
 }>): ProjectLabelEffects {
-  const registry = taskLabelAssignmentRegistryFor(queryClient);
-  const refreshBoardCards = async (): Promise<void> => {
-    await queryClient.invalidateQueries({
-      queryKey: queryKeys.projectBoardNodeCardsRoot(projectID),
-      refetchType: "active",
-    });
+  const catalogKey = queryKeys.projectLabels(projectID);
+  const refetchOptions = { throwOnError: true };
+  const invalidateCatalog = async (): Promise<void> => {
+    await queryClient.invalidateQueries(
+      {
+        queryKey: catalogKey,
+        exact: true,
+        refetchType: "active",
+      },
+      refetchOptions,
+    );
   };
-  const refreshMembership = async (effect: LabelMembershipRefreshEffect): Promise<void> => {
-    await onMembershipRefresh?.(effect);
-    const workflowID =
-      effect.kind === "task.labels_changed" || effect.kind === "task.deleted" ? effect.workflowID : undefined;
+  const invalidateReorderMembership = async (): Promise<void> => {
     await Promise.all([
-      queryClient.invalidateQueries({
-        queryKey:
-          workflowID === undefined
-            ? queryKeys.projectBoardsRoot(projectID)
-            : queryKeys.boardWorkflowRoot(projectID, workflowID),
-        refetchType: "active",
-      }),
-      queryClient.invalidateQueries({
-        queryKey:
-          workflowID === undefined
-            ? queryKeys.projectBoardNodeCardsRoot(projectID)
-            : queryKeys.boardNodeCardsWorkflowRoot(projectID, workflowID),
-        refetchType: "active",
-      }),
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.projectTaskListsRoot(projectID),
-        refetchType: "active",
-      }),
+      queryClient.invalidateQueries(
+        {
+          queryKey: queryKeys.projectBoardNodeCardsRoot(projectID),
+          refetchType: "active",
+        },
+        refetchOptions,
+      ),
+      queryClient.invalidateQueries(
+        {
+          queryKey: queryKeys.projectTaskListsRoot(projectID),
+          refetchType: "active",
+        },
+        refetchOptions,
+      ),
     ]);
   };
-  const deleteLabel = async (labelID: string): Promise<void> => {
-    authority.applyDelete(labelID);
-    registry.deleteLabel(projectID, labelID);
-    pruneDeletedLabelFromExistingCaches(queryClient, labelID);
+  const invalidateReorder = async (): Promise<void> => {
+    await Promise.all([invalidateCatalog(), invalidateReorderMembership()]);
+  };
+  const invalidateMembership = async (): Promise<void> => {
+    await Promise.all([
+      invalidateProjectBoardQueries(queryClient, projectID),
+      queryClient.invalidateQueries(
+        {
+          queryKey: queryKeys.projectTaskListsRoot(projectID),
+          refetchType: "active",
+        },
+        refetchOptions,
+      ),
+    ]);
+  };
+  const invalidateTaskAssignment = async (taskID: string): Promise<void> => {
+    await Promise.all([
+      queryClient.invalidateQueries(
+        {
+          queryKey: queryKeys.taskLabels(taskID),
+          exact: true,
+          refetchType: "active",
+        },
+        refetchOptions,
+      ),
+      invalidateMembership(),
+    ]);
+  };
+  const invalidateDeletedLabel = async (): Promise<void> => {
+    await Promise.all([
+      invalidateCatalog(),
+      queryClient.invalidateQueries(
+        { queryKey: queryKeys.allTaskLabels, refetchType: "active" },
+        refetchOptions,
+      ),
+      queryClient.invalidateQueries({ queryKey: queryKeys.allTasks, refetchType: "active" }, refetchOptions),
+      invalidateMembership(),
+    ]);
+  };
+  const run = (operation: Promise<void>): void => {
+    void operation.catch(onBackgroundError);
+  };
+  const pruneDeletedLabel = (labelID: string): void => {
+    pruneDeletedLabelFromExistingCaches(queryClient, projectID, labelID);
     onFilterAction?.({ type: "label.deleted", labelID });
-    await refreshMembership({
-      kind: "catalog.deleted",
-      labelID,
-      projectID,
-    });
   };
   return {
-    async applyLocalCreate(label) {
-      authority.applyCreate(label);
-    },
-    async applyLocalReorder(catalog, generation) {
-      authority.installCatalog(catalog, generation);
-      void refreshBoardCards().catch(onBackgroundError);
-    },
-    async applyLocalRename(label) {
-      authority.applyRename(label);
-    },
-    async applyLocalDelete(labelID) {
-      await deleteLabel(labelID);
-    },
     async consumeProjectEvent(event) {
       if (event.projectID !== projectID) {
         return;
       }
       if (event.resource === "label") {
         if (event.action === "deleted") {
-          await deleteLabel(event.primaryEntityID);
+          pruneDeletedLabel(event.primaryEntityID);
+          await invalidateDeletedLabel();
           return;
         }
-        authority.requestRefresh();
         if (event.action === "reordered") {
-          await refreshBoardCards();
+          await invalidateReorder();
+        } else {
+          await invalidateCatalog();
         }
         return;
       }
-      if (event.resource !== "task" || event.workflowID === null) {
+      if (event.resource !== "task") {
         return;
       }
       const taskID = event.primaryEntityID;
       if (event.action === "deleted") {
-        registry.deleteTask(taskID);
         removeDeletedTaskFromExistingCaches(queryClient, taskID);
-        await refreshMembership({
-          kind: "task.deleted",
-          projectID,
-          taskID,
-          workflowID: event.workflowID,
-        });
+        await invalidateMembership();
         return;
       }
       if (event.action !== "labels_changed") {
         return;
       }
-      await refreshMembership({
-        kind: "task.labels_changed",
-        projectID,
-        taskID,
-        workflowID: event.workflowID,
-      });
+      await invalidateTaskAssignment(taskID);
     },
     async refreshAfterSubscriptionBoundary() {
-      authority.requestRefresh();
-      await refreshMembership({
-        kind: "subscription.refresh",
-        projectID,
-      });
+      await Promise.all([
+        invalidateCatalog(),
+        queryClient.invalidateQueries(
+          { queryKey: queryKeys.allTaskLabels, refetchType: "active" },
+          refetchOptions,
+        ),
+        invalidateMembership(),
+      ]);
+    },
+    scheduleCatalogRefresh() {
+      run(invalidateCatalog());
+    },
+    scheduleDeleteRefresh() {
+      run(invalidateDeletedLabel());
+    },
+    scheduleMembershipRefresh() {
+      run(invalidateMembership());
+    },
+    scheduleReorderRefresh() {
+      run(invalidateReorder());
+    },
+    scheduleTaskAssignmentRefresh(taskID) {
+      run(invalidateTaskAssignment(taskID));
     },
   };
 }

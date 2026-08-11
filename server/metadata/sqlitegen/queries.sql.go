@@ -4625,14 +4625,14 @@ SELECT
 FROM projects p
 LEFT JOIN workspaces w ON w.id = p.primary_workspace_id AND w.project_id = p.id
 JOIN project_default_workflow_identity default_workflow ON default_workflow.project_id = p.id
-WHERE (?1 = '' OR p.id = ?1)
+WHERE p.id = COALESCE(?1, p.id)
 ORDER BY latest_activity_unix_ms DESC, p.rowid DESC
 LIMIT ?3
 OFFSET ?2
 `
 
 type ListProjectHomeSummariesParams struct {
-	ProjectID  interface{}
+	ProjectID  sql.NullString
 	OffsetRows int64
 	LimitRows  int64
 }
@@ -4822,45 +4822,6 @@ func (q *Queries) ListProjectLabelsByIDs(ctx context.Context, labelIds []string)
 		return nil, err
 	}
 	if err := recordQueryError(ctx, rows.Err(), query, 1); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listProjectSessionArtifacts = `-- name: ListProjectSessionArtifacts :many
-SELECT
-    id,
-    artifact_relpath
-FROM sessions
-WHERE project_id = ?1
-  AND trim(artifact_relpath) != ''
-ORDER BY rowid ASC
-`
-
-type ListProjectSessionArtifactsRow struct {
-	ID              string
-	ArtifactRelpath string
-}
-
-func (q *Queries) ListProjectSessionArtifacts(ctx context.Context, projectID string) ([]ListProjectSessionArtifactsRow, error) {
-	rows, err := q.db.QueryContext(ctx, listProjectSessionArtifacts, projectID)
-	err = recordQueryError(ctx, err, listProjectSessionArtifacts, 1)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListProjectSessionArtifactsRow
-	for rows.Next() {
-		var i ListProjectSessionArtifactsRow
-		if err := recordQueryError(ctx, rows.Scan(&i.ID, &i.ArtifactRelpath), listProjectSessionArtifacts, 1); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := recordQueryError(ctx, rows.Close(), listProjectSessionArtifacts, 1); err != nil {
-		return nil, err
-	}
-	if err := recordQueryError(ctx, rows.Err(), listProjectSessionArtifacts, 1); err != nil {
 		return nil, err
 	}
 	return items, nil

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"core/shared/apicontract"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
@@ -34,7 +35,7 @@ func workflowGraphMutationBlocked(workflowID runtimeids.WorkflowID, blockers []s
 
 func runWorkflowGraphMutation[T any](
 	ctx context.Context,
-	remote workflowCommandRemote,
+	remote apicontract.WorkflowService,
 	workflowID runtimeids.WorkflowID,
 	mutate workflowGraphDraftMutation[T],
 ) (T, workflowGraphMutationResult, error) {

@@ -13,7 +13,7 @@ import {
   SegmentedControl,
 } from "@/ui";
 import { AnimatedBoardChipSummary } from "./BoardChipSummary";
-import { useBoardFilterGeneration } from "./BoardFilterGenerationRuntime";
+import { useBoardQuery } from "./BoardQueryRuntime";
 
 export const boardSortFieldOptions = [
   { value: "updated", labelKey: "board.sort.fields.updated" },
@@ -35,7 +35,7 @@ const boardSortDirectionOptions = [
 
 export function BoardSortChrome() {
   const { t } = useTranslation();
-  const { setSort, sort } = useBoardFilterGeneration();
+  const { setSort, sort } = useBoardQuery();
   const [open, setOpen] = useState(false);
   const isDefault = sort.field === "updated" && sort.direction === "desc";
   const fieldOption = boardSortFieldOptions.find((option) => option.value === sort.field);

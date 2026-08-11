@@ -669,16 +669,16 @@ func TestGatewayHandshakeRejectsProtocolVersionMismatch(t *testing.T) {
 	}
 }
 
-func TestGatewayHandshakeRejectsProtocolVersion100(t *testing.T) {
+func TestGatewayHandshakeRejectsProtocolVersion106(t *testing.T) {
 	_, server := newGatewayTestServer(t)
 	defer server.Close()
 
 	conn := dialGateway(t, server)
 	defer func() { _ = conn.Close() }()
 
-	respErr := callGatewayExpectError(t, conn, "1", protocol.MethodHandshake, protocol.HandshakeRequest{ProtocolVersion: "100"})
+	respErr := callGatewayExpectError(t, conn, "1", protocol.MethodHandshake, protocol.HandshakeRequest{ProtocolVersion: "106"})
 	if respErr.Code != protocol.ErrCodeProtocolVersionMismatch {
-		t.Fatalf("expected protocol version 100 rejection, got %+v", respErr)
+		t.Fatalf("expected protocol version 106 rejection, got %+v", respErr)
 	}
 }
 

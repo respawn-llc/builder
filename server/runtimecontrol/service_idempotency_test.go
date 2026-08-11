@@ -4,12 +4,10 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
 
 	"core/server/llm"
 	"core/server/runtime"
 	"core/server/runtimeactivity"
-	"core/server/runtimeops"
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/sessionruntime"
@@ -34,7 +32,7 @@ type sessionStatusCountingResolver struct {
 	publishErr   error
 }
 
-func (r *sessionStatusCountingResolver) RuntimeReadModelSnapshot(context.Context, string, []clientui.RuntimeOperationRef) (runtimeactivity.ResponseSnapshot, error) {
+func (r *sessionStatusCountingResolver) RuntimeReadModelSnapshot(context.Context, string) (runtimeactivity.ResponseSnapshot, error) {
 	return runtimeactivity.ResponseSnapshot{}, nil
 }
 
@@ -93,7 +91,7 @@ type sequenceRuntimeActivityResolver struct {
 	calls     int
 }
 
-func (r *sequenceRuntimeActivityResolver) RuntimeReadModelSnapshot(context.Context, string, []clientui.RuntimeOperationRef) (runtimeactivity.ResponseSnapshot, error) {
+func (r *sequenceRuntimeActivityResolver) RuntimeReadModelSnapshot(context.Context, string) (runtimeactivity.ResponseSnapshot, error) {
 	if r.calls >= len(r.snapshots) {
 		return r.snapshots[len(r.snapshots)-1], nil
 	}
@@ -118,7 +116,6 @@ func TestServiceInterruptRetryRejectsReadModelLivenessWithoutRuntime(t *testing.
 					StepID:     stepID,
 				},
 			},
-			InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{},
 		},
 		{
 			Version: idleVersion,
@@ -126,7 +123,6 @@ func TestServiceInterruptRetryRejectsReadModelLivenessWithoutRuntime(t *testing.
 				State:          clientui.RuntimeActivityRegisteredIdle,
 				QueueAccepting: true,
 			},
-			InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{},
 		},
 	}}
 	service := NewService(sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})).WithRuntimeActivityResolver(resolver)
@@ -245,7 +241,7 @@ func TestServiceCommittedControlObserverErrorIsMemoized(t *testing.T) {
 
 func TestServiceRejectedCompactionHasNoVisibleStatus(t *testing.T) {
 	store, engine, _, _ := newRuntimeControlCompactionFixture(t)
-	if _, err := engine.CompactContextWithAcceptance(context.Background(), "", nil, func(func() (bool, error)) (bool, error) {
+	if _, err := engine.CompactContextWithAcceptance(context.Background(), "", func(func() (bool, error)) (bool, error) {
 		return false, nil
 	}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("CompactContextWithAcceptance error = %v, want context canceled", err)
@@ -308,14 +304,10 @@ func TestServiceCompactionConsumesCommittedObserverError(t *testing.T) {
 	observerErr := errors.New("history replacement observer failed")
 	gate := sessiontest.NewPersistenceGate(runtimeControlTestSessionPersistence)
 	store, _, client, service := newRuntimeControlCompactionFixture(t, session.WithPersistenceObserver(gate))
-	operations := runtimeops.NewCoordinator()
-	service.WithOperationCoordinator(operations)
-	ref := runtimeControlOperationRef(clientui.RuntimeOperationKindCompact)
 	request := serverapi.RuntimeCompactContextRequest{
-		ClientRequestID: ref.ClientRequestID.String(),
+		ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
 		SessionID:       store.Meta().SessionID,
 		Args:            "compact now",
-		OperationRef:    ref,
 	}
 	gate.FailNext(observerErr)
 	if err := service.CompactContext(context.Background(), request); !errors.Is(err, observerErr) {
@@ -330,52 +322,6 @@ func TestServiceCompactionConsumesCommittedObserverError(t *testing.T) {
 	if got := countEventsByKind(t, store, "history_replaced"); got != 1 {
 		t.Fatalf("history_replaced event count = %d, want 1", got)
 	}
-	snapshot := runtimeControlFeedSnapshot(t, operations, store.Meta().SessionID, []clientui.RuntimeOperationRef{ref})
-	if len(snapshot.Operations) != 1 || snapshot.Operations[0].State != clientui.RuntimeInputReconciliationCommitted {
-		t.Fatalf("compaction reconciliation = %+v, want committed", snapshot)
-	}
-}
-
-func TestServiceCompactionSerializesTargetCancellationWithHistoryCommit(t *testing.T) {
-	gate := sessiontest.NewPersistenceGate(runtimeControlTestSessionPersistence)
-	store, _, _, service := newRuntimeControlCompactionFixture(t, session.WithPersistenceObserver(gate))
-	operations := runtimeops.NewCoordinator()
-	service.WithOperationCoordinator(operations)
-	ref := runtimeControlOperationRef(clientui.RuntimeOperationKindCompact)
-	request := serverapi.RuntimeCompactContextRequest{
-		ClientRequestID: ref.ClientRequestID.String(),
-		SessionID:       store.Meta().SessionID,
-		Args:            "compact now",
-		OperationRef:    ref,
-	}
-	baselineSequence := store.Meta().LastSequence
-	commitEntered, releaseCommit := gate.BlockWhen(func(snapshot session.PersistedStoreSnapshot) bool {
-		return snapshot.Meta.LastSequence > baselineSequence && snapshot.Meta.UsageState == nil
-	})
-	defer releaseCommit()
-	compactDone := make(chan error, 1)
-	go func() { compactDone <- service.CompactContext(context.Background(), request) }()
-	<-commitEntered
-
-	cancelDone := make(chan error, 1)
-	go func() {
-		_, err := operations.CancelOperationTarget(request.SessionID, ref)
-		cancelDone <- err
-	}()
-	select {
-	case err := <-cancelDone:
-		t.Fatalf("target cancellation crossed history commit: %v", err)
-	case <-time.After(20 * time.Millisecond):
-	}
-
-	releaseCommit()
-	if err := <-compactDone; err != nil {
-		t.Fatalf("CompactContext: %v", err)
-	}
-	if err := <-cancelDone; err != nil {
-		t.Fatalf("CancelOperationTarget: %v", err)
-	}
-	assertRuntimeControlReconciliation(t, operations, request.SessionID, ref, clientui.RuntimeInputReconciliationCommitted)
 }
 
 func TestServiceSubmitUserTurnContinuesAfterAcceptedPreSubmitCompactionError(t *testing.T) {
@@ -553,22 +499,6 @@ func TestServiceRecordPromptHistoryDedupesSuccessfulRetry(t *testing.T) {
 	if got := countPromptHistoryEvents(t, store, "/resume"); got != 1 {
 		t.Fatalf("prompt history count = %d, want 1", got)
 	}
-}
-
-func runtimeControlOperationRef(kind clientui.RuntimeOperationKind) clientui.RuntimeOperationRef {
-	return clientui.RuntimeOperationRef{
-		Kind:            kind,
-		ClientRequestID: runtimeids.NewRuntimeClientRequestID(),
-	}
-}
-
-func runtimeControlFeedSnapshot(t *testing.T, operations *runtimeops.Coordinator, sessionID string, refs []clientui.RuntimeOperationRef) clientui.RuntimeInputReconciliationSnapshot {
-	t.Helper()
-	snapshot, err := operations.FeedSnapshot(sessionID, refs)
-	if err != nil {
-		t.Fatalf("FeedSnapshot: %v", err)
-	}
-	return snapshot
 }
 
 func mustRuntimeControlRunID(t *testing.T) runtimeids.RunID {

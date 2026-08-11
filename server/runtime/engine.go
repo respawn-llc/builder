@@ -795,8 +795,8 @@ func (e *Engine) SubmitUserShellCommandWithActiveHook(ctx context.Context, comma
 	return e.submitUserShellCommand(ctx, command, onActive, nil)
 }
 
-func (e *Engine) SubmitUserShellCommandWithAcceptance(ctx context.Context, command string, onActive func(), accept CommandAcceptance) (result tools.Result, err error) {
-	return e.submitUserShellCommand(ctx, command, onActive, accept)
+func (e *Engine) SubmitUserShellCommandWithAcceptance(ctx context.Context, command string, accept CommandAcceptance) (result tools.Result, err error) {
+	return e.submitUserShellCommand(ctx, command, nil, accept)
 }
 
 func (e *Engine) submitUserShellCommand(ctx context.Context, command string, onActive func(), accept CommandAcceptance) (result tools.Result, err error) {

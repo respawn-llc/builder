@@ -723,8 +723,8 @@ func TestDenyCommentaryDeadlineKeepsEditedDraftActionableWithoutQueuedCopy(t *te
 
 	next, firstDelivery := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = next.(*uiModel)
-	if firstDelivery == nil || len(model.pendingInjected) != 0 {
-		t.Fatalf("deny submission = command %v queued %+v, want direct delivery without queued commentary", firstDelivery, model.pendingInjected)
+	if firstDelivery == nil || len(model.injectedQueue) != 0 {
+		t.Fatalf("deny submission = command %v queued %+v, want direct delivery without queued commentary", firstDelivery, model.injectedQueue)
 	}
 	firstResult := make(chan tea.Msg, 1)
 	go func() {
@@ -760,8 +760,8 @@ func TestDenyCommentaryDeadlineKeepsEditedDraftActionableWithoutQueuedCopy(t *te
 	if requests[0].ClientRequestID == requests[1].ClientRequestID {
 		t.Fatalf("denial resubmission reused request ID %q", requests[0].ClientRequestID)
 	}
-	if len(model.pendingInjected) != 0 {
-		t.Fatalf("denial commentary created a queued copy: %+v", model.pendingInjected)
+	if len(model.injectedQueue) != 0 {
+		t.Fatalf("denial commentary created a queued copy: %+v", model.injectedQueue)
 	}
 	if !testPromptAnswerDeliveryActive(model) || testActiveAsk(model) == nil {
 		t.Fatal("successful denial delivery stopped awaiting canonical resolution")

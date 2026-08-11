@@ -1,6 +1,12 @@
 import type { InfiniteData, QueryClient } from "@tanstack/react-query";
 
-import type { BoardNodeCardsPage, TaskDetail, TaskLabelAssignment, TaskListPage } from "@/api";
+import type {
+  BoardNodeCardsPage,
+  ProjectLabelCatalog,
+  TaskDetail,
+  TaskLabelAssignment,
+  TaskListPage,
+} from "@/api";
 import { queryKeys } from "@/app-facade";
 
 export function patchExistingTaskLabelProjections(
@@ -79,7 +85,19 @@ export function patchExistingTaskLabelAssignment(
   });
 }
 
-export function pruneDeletedLabelFromExistingCaches(queryClient: QueryClient, labelID: string): void {
+export function pruneDeletedLabelFromExistingCaches(
+  queryClient: QueryClient,
+  projectID: string,
+  labelID: string,
+): void {
+  queryClient.setQueryData<ProjectLabelCatalog>(queryKeys.projectLabels(projectID), (catalog) =>
+    catalog === undefined
+      ? undefined
+      : {
+          ...catalog,
+          labels: catalog.labels.filter((label) => label.id !== labelID),
+        },
+  );
   queryClient.setQueriesData<TaskLabelAssignment>({ queryKey: queryKeys.allTaskLabels }, (assignment) =>
     assignment === undefined
       ? undefined

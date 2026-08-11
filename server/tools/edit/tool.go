@@ -4,16 +4,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync"
 	"unicode/utf8"
 
 	"core/server/tools"
-	patchtool "core/server/tools/patch"
 	"core/shared/config"
 )
 
@@ -23,17 +20,8 @@ const (
 )
 
 type Tool struct {
-	fileAccessScope              tools.FileAccessScope
-	workspaceOnly                bool
-	allowOutsideWorkspace        bool
-	outsideWorkspaceApprover     tools.FSGuardApprover
-	outsideWorkspaceSessionMu    sync.RWMutex
-	outsideWorkspaceSessionAllow bool
-	pathDenyPolicy               tools.PathDenyPolicy
-	managedWorktreePathContext   *tools.ManagedWorktreePathContext
+	fileAccess *tools.FileAccessPolicy
 }
-
-var errForeignManagedWorktree = errors.New(tools.ForeignManagedWorktreeEditDeniedMessage)
 
 type resolvedPath struct {
 	cleaned string
@@ -41,35 +29,24 @@ type resolvedPath struct {
 	symlink bool
 }
 
-func New(workspaceRoot string, workspaceOnly bool, opts ...Option) (*Tool, error) {
-	abs, err := filepath.Abs(workspaceRoot)
-	if err != nil {
-		return nil, fmt.Errorf("resolve workspace root: %w", err)
-	}
-	real, err := filepath.EvalSymlinks(abs)
-	if err != nil {
-		return nil, tools.WrapMissingWorkspaceRootError(abs, fmt.Errorf("resolve workspace real path: %w", err))
-	}
-	rootInfo, err := os.Stat(real)
-	if err != nil {
-		return nil, tools.WrapMissingWorkspaceRootError(abs, fmt.Errorf("stat workspace root: %w", err))
-	}
-	t := &Tool{
-		fileAccessScope: tools.FileAccessScope{
-			WorkingDirectory:    tools.FilesystemRoot{LexicalPath: abs, RealPath: real, Info: rootInfo},
-			ExecutionTargetRoot: tools.FilesystemRoot{LexicalPath: abs, RealPath: real, Info: rootInfo},
-		},
-		workspaceOnly: workspaceOnly,
-	}
+func New(filesystemContext tools.FilesystemContext, opts ...Option) (*Tool, error) {
+	settings := options{}
 	for _, opt := range opts {
 		if opt != nil {
-			opt(t)
+			opt(&settings)
 		}
 	}
-	if err := tools.ValidateFileAccessScope(t.fileAccessScope); err != nil {
-		return nil, fmt.Errorf("validate file access scope: %w", err)
+	fileAccess, err := tools.NewFileAccessPolicy(tools.FileAccessPolicyConfig{
+		Context:               filesystemContext,
+		Mode:                  tools.FileAccessMutation,
+		AllowOutsideWorkspace: settings.allowOutsideWorkspace,
+		Approver:              settings.outsideWorkspaceApprover,
+		PathDenyPolicy:        settings.pathDenyPolicy,
+	})
+	if err != nil {
+		return nil, err
 	}
-	return t, nil
+	return &Tool{fileAccess: fileAccess}, nil
 }
 
 func (t *Tool) Call(ctx context.Context, c tools.Call) (tools.Result, error) {
@@ -81,10 +58,7 @@ func (t *Tool) Call(ctx context.Context, c tools.Call) (tools.Result, error) {
 	if err != nil {
 		return editErrorResult(c, err), nil
 	}
-	if t.managedWorktreePathContext != nil && t.managedWorktreePathContext.IsForeignManagedWorktreePath(resolved.real) {
-		return tools.ErrorResult(c, tools.ForeignManagedWorktreeEditDeniedMessage), nil
-	}
-	unlock := tools.LockFSGuardPaths([]string{resolved.real})
+	unlock := tools.LockFileAccessPaths([]string{resolved.real})
 	defer unlock()
 	if err := t.apply(ctx, resolved, in); err != nil {
 		return editErrorResult(c, err), nil
@@ -214,17 +188,11 @@ func (t *Tool) create(path resolvedPath, newText string, info os.FileInfo, statE
 }
 
 func (t *Tool) validateManagedWorktreeMutation(path resolvedPath) error {
-	if t.managedWorktreePathContext == nil {
-		return nil
-	}
 	real, err := resolveRealTarget(path.cleaned)
 	if err != nil {
 		return err
 	}
-	if t.managedWorktreePathContext.IsForeignManagedWorktreePath(real) {
-		return errors.New(tools.ForeignManagedWorktreeEditDeniedMessage)
-	}
-	return nil
+	return t.fileAccess.ValidateMutationTarget(real)
 }
 
 func decodeText(data []byte, path string) (string, bool, error) {
@@ -354,71 +322,50 @@ func writeAtomicallyIfUnchanged(path string, data []byte, before os.FileInfo, be
 	return nil
 }
 
-func (t *Tool) outsideWorkspaceSessionAllowed() bool {
-	t.outsideWorkspaceSessionMu.RLock()
-	defer t.outsideWorkspaceSessionMu.RUnlock()
-	return t.outsideWorkspaceSessionAllow
-}
-
-func (t *Tool) setOutsideWorkspaceSessionAllowed(allow bool) {
-	t.outsideWorkspaceSessionMu.Lock()
-	t.outsideWorkspaceSessionAllow = allow
-	t.outsideWorkspaceSessionMu.Unlock()
-}
-
 func (t *Tool) resolvePath(ctx context.Context, requested string) (resolvedPath, error) {
 	if runtime.GOOS == "windows" && (strings.HasPrefix(requested, `\\`) || strings.HasPrefix(requested, `//`)) {
 		return resolvedPath{}, failf("UNC paths are not allowed.")
 	}
 	candidate := requested
 	if !filepath.IsAbs(candidate) {
-		candidate = filepath.Join(t.fileAccessScope.WorkingDirectory.LexicalPath, candidate)
+		candidate = filepath.Join(t.fileAccess.WorkingDirectory().LexicalPath, candidate)
 	}
 	cleaned := filepath.Clean(candidate)
 	preApprovalReal, err := resolveRealTarget(cleaned)
 	if err != nil {
 		return resolvedPath{}, err
 	}
-	if t.managedWorktreePathContext != nil && t.managedWorktreePathContext.IsForeignManagedWorktreePath(preApprovalReal) {
-		return resolvedPath{}, errForeignManagedWorktree
+	preflight := t.fileAccess.CheckMutationTarget(requested, preApprovalReal)
+	if preflight.Kind != tools.FileAccessTargetAccepted {
+		return resolvedPath{}, editFileAccessFailure(preflight)
 	}
-	approved := map[string]bool{}
-	if _, err := t.outsideGuard().Allow(ctx, requested, cleaned, approved); err != nil {
-		return resolvedPath{}, err
+	accessCall := t.fileAccess.BeginCall()
+	first := accessCall.Authorize(ctx, requested, cleaned)
+	if !first.IsAllowed() {
+		return resolvedPath{}, editFileAccessFailure(first)
 	}
 	real, err := resolveRealTarget(cleaned)
 	if err != nil {
 		return resolvedPath{}, err
 	}
-	if approved[cleaned] && canReuseOutsideApproval(cleaned, real) {
-		approved[real] = true
-	}
-	if _, err := t.outsideGuard().Allow(ctx, requested, real, approved); err != nil {
-		return resolvedPath{}, err
+	accessCall.ReuseApproval(cleaned, real)
+	second := accessCall.Authorize(ctx, requested, real)
+	if !second.IsAllowed() {
+		return resolvedPath{}, editFileAccessFailure(second)
 	}
 	return resolvedPath{cleaned: cleaned, real: real, symlink: t.isUserSymlink(cleaned, real)}, nil
-}
-
-func canReuseOutsideApproval(cleaned string, real string) bool {
-	if cleaned == real {
-		return true
-	}
-	info, err := os.Lstat(cleaned)
-	if err != nil {
-		return errors.Is(err, os.ErrNotExist)
-	}
-	return info.Mode()&os.ModeSymlink == 0
 }
 
 func (t *Tool) isUserSymlink(cleaned string, real string) bool {
 	if cleaned == real {
 		return false
 	}
-	rel, err := filepath.Rel(t.fileAccessScope.WorkingDirectory.LexicalPath, cleaned)
+	working := t.fileAccess.WorkingDirectory()
+	rel, err := filepath.Rel(working.LexicalPath, cleaned)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return true
 	}
-	expected := filepath.Clean(filepath.Join(t.fileAccessScope.WorkingDirectory.RealPath, rel))
+	expected := filepath.Clean(filepath.Join(working.RealPath, rel))
 	return expected != real
 }
 
@@ -428,35 +375,4 @@ func resolveRealTarget(cleaned string) (string, error) {
 		return "", failf("resolve path %q: %v", cleaned, err)
 	}
 	return real, nil
-}
-
-func (t *Tool) outsideGuard() tools.FSGuard {
-	return tools.NewFSGuard(tools.FSGuardConfig{
-		Scope:                 t.fileAccessScope,
-		WorkspaceOnly:         t.workspaceOnly,
-		AllowOutsideWorkspace: t.allowOutsideWorkspace,
-		Approver:              t.outsideWorkspaceApprover,
-		SessionAllowed:        t.outsideWorkspaceSessionAllowed,
-		SetSessionAllowed:     t.setOutsideWorkspaceSessionAllowed,
-		RejectionInstruction:  "If it's essential to the task, ask the user to make the edit manually at the end of the task.",
-		ErrorLabels: tools.FSGuardErrorLabels{
-			OutsidePath: "edit target outside workspace",
-		},
-		Failures: tools.FSGuardFailureFactory{
-			NoPermission: func(path string, reason string) error {
-				return failf("no file edit permission for %s. %s", path, reason)
-			},
-			DefaultApprovalFailed: func(path string, reason string) error {
-				return failf("file edit approval failed for %s. %s", path, reason)
-			},
-			DefaultUserDenied: func(path string, commentary *string) error {
-				if commentary == nil {
-					return failf("user denied the edit for %s.", path)
-				}
-				return failf("user denied the edit for %s.\nUser said: %s", path, strings.TrimSpace(*commentary))
-			},
-		},
-		TemporaryPathAllowed: patchtool.IsPathInTemporaryDir,
-		PathDenyPolicy:       t.pathDenyPolicy,
-	})
 }

@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 
+	"core/shared/apicontract"
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -54,7 +55,7 @@ func workflowGraphApplySubcommand(args []string, stdin io.Reader, stdout io.Writ
 	if err != nil {
 		return writeWorkflowGraphApplyOutcome(stdout, stderr, workflowGraphApplyFailure(workflowGraphApplyInvalidDocument, nil, nil, err), *jsonOut)
 	}
-	_, remote, err := workflowCommandRemoteOpener(context.Background(), ".")
+	_, remote, err := openBindingCommandRemote(context.Background(), ".")
 	if err != nil {
 		return writeWorkflowGraphApplyOutcome(stdout, stderr, workflowGraphApplyFailure(
 			workflowGraphApplyRequestFailed,
@@ -93,7 +94,7 @@ func loadWorkflowGraphApplyInput(path string, stdin io.Reader) ([]byte, error) {
 
 func runWorkflowGraphApply(
 	ctx context.Context,
-	remote workflowCommandRemote,
+	remote apicontract.WorkflowService,
 	document workflowGraphDocument,
 	confirmed bool,
 ) workflowGraphApplyOutcome {
@@ -200,7 +201,7 @@ func workflowGraphSaveConfirmationFromImpact(impact serverapi.WorkflowGraphSaveI
 
 func saveWorkflowGraphApply(
 	ctx context.Context,
-	remote workflowCommandRemote,
+	remote apicontract.WorkflowService,
 	current serverapi.WorkflowDefinition,
 	graph serverapi.WorkflowGraphDraft,
 	confirmation *serverapi.WorkflowGraphSaveConfirmation,

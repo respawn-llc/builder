@@ -18,8 +18,8 @@ vi.mock("react-i18next", () => ({
   }),
 }));
 
-vi.mock("./BoardFilterGenerationRuntime", () => ({
-  useBoardFilterGeneration: () => runtime,
+vi.mock("./BoardQueryRuntime", () => ({
+  useBoardQuery: () => runtime,
 }));
 
 import { boardSortFieldOptions, BoardSortChrome } from "./BoardSortChrome";

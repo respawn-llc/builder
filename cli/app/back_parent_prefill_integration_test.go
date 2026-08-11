@@ -422,8 +422,8 @@ func runBackParentPrefillScenario(t *testing.T, server backParentPrefillScenario
 			if parentModel.startupSubmit != "" || parentModel.activeSubmit.text != "" || parentModel.isBusy() {
 				t.Fatalf("parent prefill submitted on startup: startup=%q active=%+v busy=%t", parentModel.startupSubmit, parentModel.activeSubmit, parentModel.isBusy())
 			}
-			if len(parentModel.pendingInjected) != 0 || len(parentModel.queued) != 0 {
-				t.Fatalf("parent input queues leaked: pending=%+v queued=%+v", parentModel.pendingInjected, parentModel.queued)
+			if len(parentModel.injectedQueue) != 0 || len(parentModel.queued) != 0 {
+				t.Fatalf("parent input queues leaked: injected=%+v queued=%+v", parentModel.injectedQueue, parentModel.queued)
 			}
 
 			beforeEdit, err := parentRuntimePlan.Wiring.runtimeClient.RefreshMainView()
