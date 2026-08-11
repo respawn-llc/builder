@@ -126,10 +126,15 @@ func (e *Engine) setGoalForStep(stepID string, objective string, actor session.G
 		return GoalCommandResult{}, fmt.Errorf("runtime engine is required")
 	}
 	objective = strings.TrimSpace(objective)
+	availability, err := e.GoalAvailability()
+	if err != nil {
+		return GoalCommandResult{}, err
+	}
 	e.controlMutationMu.Lock()
 	defer e.controlMutationMu.Unlock()
 	goal, metadataReceipt, err := e.store.SetGoal(objective, actor)
 	result := goalCommandResult(GoalCommandApplied, goal, false, metadataReceipt, session.CommitReceipt{})
+	result.Availability = availability
 	if !metadataReceipt.Committed || err != nil {
 		return result, err
 	}
@@ -137,11 +142,6 @@ func (e *Engine) setGoalForStep(stepID string, objective string, actor session.G
 	if err != nil {
 		return result, err
 	}
-	availability, err := e.GoalAvailability()
-	if err != nil {
-		return result, err
-	}
-	result.Availability = availability
 	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
 	noticeReceipt, err := e.steerGoalNoticeAndStatus(stepID, msg, goalStatusUpdateFromState(goal, availability))
 	result.NoticeReceipt = noticeReceipt
@@ -164,12 +164,15 @@ func (e *Engine) setGoalStatusForStepWithGoalLoopAdmission(stepID string, status
 	if e == nil || e.store == nil {
 		return GoalCommandResult{}, fmt.Errorf("runtime engine is required")
 	}
+	availability, err := e.GoalAvailability()
+	if err != nil {
+		return GoalCommandResult{}, err
+	}
 	if current := e.Goal(); current != nil && current.Status == status {
 		if status != session.GoalStatusActive || e.GoalLoopContinuationEnforced() {
 			result := goalCommandResult(GoalCommandNoop, *current, false, session.CommitReceipt{}, session.CommitReceipt{})
-			availability, err := e.GoalAvailability()
 			result.Availability = availability
-			return result, err
+			return result, nil
 		}
 	}
 	if status == session.GoalStatusActive && requireGoalLoopStart {
@@ -185,6 +188,7 @@ func (e *Engine) setGoalStatusForStepWithGoalLoopAdmission(stepID string, status
 		disposition = GoalCommandNoop
 	}
 	result := goalCommandResult(disposition, goal, false, metadataReceipt, session.CommitReceipt{})
+	result.Availability = availability
 	if err != nil || !transitioned || !metadataReceipt.Committed {
 		return result, err
 	}
@@ -192,11 +196,6 @@ func (e *Engine) setGoalStatusForStepWithGoalLoopAdmission(stepID string, status
 	if err != nil {
 		return result, err
 	}
-	availability, err := e.GoalAvailability()
-	if err != nil {
-		return result, err
-	}
-	result.Availability = availability
 	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
 	noticeReceipt, err := e.steerGoalNoticeAndStatus(stepID, msg, goalStatusUpdateFromState(goal, availability))
 	result.NoticeReceipt = noticeReceipt
@@ -456,10 +455,15 @@ func (e *Engine) clearGoalForStep(stepID string, actor session.GoalActor) (GoalC
 	if e == nil || e.store == nil {
 		return GoalCommandResult{}, fmt.Errorf("runtime engine is required")
 	}
+	availability, err := e.GoalAvailability()
+	if err != nil {
+		return GoalCommandResult{}, err
+	}
 	e.controlMutationMu.Lock()
 	defer e.controlMutationMu.Unlock()
 	goal, metadataReceipt, err := e.store.ClearGoal(actor)
 	result := goalCommandResult(GoalCommandApplied, goal, true, metadataReceipt, session.CommitReceipt{})
+	result.Availability = availability
 	if !metadataReceipt.Committed || err != nil {
 		return result, err
 	}
@@ -467,11 +471,6 @@ func (e *Engine) clearGoalForStep(stepID string, actor session.GoalActor) (GoalC
 	if err != nil {
 		return result, err
 	}
-	availability, err := e.GoalAvailability()
-	if err != nil {
-		return result, err
-	}
-	result.Availability = availability
 	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
 	noticeReceipt, err := e.steerGoalNoticeAndStatus(stepID, msg, goalStatusClearUpdate(availability))
 	result.NoticeReceipt = noticeReceipt
@@ -498,6 +497,11 @@ func (e *Engine) cascadeCompleteActiveGoalOnWorkflowCompletion() {
 	}
 	e.controlMutationMu.Lock()
 	defer e.controlMutationMu.Unlock()
+	availability, err := e.GoalAvailability()
+	if err != nil {
+		reportErr(err)
+		return
+	}
 	completed, transitioned, _, err := e.store.CompleteGoalIfActive(goal.ID, session.GoalActorSystem)
 	if err != nil {
 		reportErr(err)
@@ -507,11 +511,6 @@ func (e *Engine) cascadeCompleteActiveGoalOnWorkflowCompletion() {
 		return
 	}
 	msg, err := goalNoticeMessage(GoalNoticeStatus, &completed)
-	if err != nil {
-		reportErr(err)
-		return
-	}
-	availability, err := e.GoalAvailability()
 	if err != nil {
 		reportErr(err)
 		return

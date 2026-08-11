@@ -20,6 +20,7 @@ import (
 	"core/server/promptcontrol"
 	"core/server/registry"
 	"core/server/runtime"
+	"core/server/runtimecommand"
 	"core/server/runtimecontrol"
 	"core/server/runtimewire"
 	"core/server/serverstatus"
@@ -175,7 +176,9 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	if runtimeSupport.Background != nil {
 		runtimeRegistry.WithBackgroundProcessSnapshots(runtimeSupport.Background.List)
 	}
-	runtimeControlService := runtimecontrol.NewService(runtimeAuthority).
+	runtimeCommandExecution := runtimecommand.NewExecutionAdapter(runtimeAuthority)
+	runtimeGoalAuthority := runtimecommand.NewGoalAuthority(runtimeAuthority, runtimeCommandExecution)
+	runtimeControlService := runtimecontrol.NewServiceWithGoalCommands(runtimeAuthority, runtimeCommandExecution, runtimeGoalAuthority).
 		WithRuntimeActivityResolver(runtimeRegistry).
 		WithPromptHistoryStore(metadataStore).
 		WithWorkflowTaskSessionResolver(metadataStore).

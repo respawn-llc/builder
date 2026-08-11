@@ -13,15 +13,11 @@ import (
 )
 
 type ExecutionAdapter struct {
-	authority      *sessionruntime.Authority
-	currentRuntime func(context.Context, runtimeids.SessionID, func(context.Context, *runtime.Engine) error) error
+	authority *sessionruntime.Authority
 }
 
-func NewExecutionAdapter(
-	authority *sessionruntime.Authority,
-	currentRuntime func(context.Context, runtimeids.SessionID, func(context.Context, *runtime.Engine) error) error,
-) *ExecutionAdapter {
-	return &ExecutionAdapter{authority: authority, currentRuntime: currentRuntime}
+func NewExecutionAdapter(authority *sessionruntime.Authority) *ExecutionAdapter {
+	return &ExecutionAdapter{authority: authority}
 }
 
 func (a *ExecutionAdapter) RunAgentExecution(
@@ -62,15 +58,4 @@ func (a *ExecutionAdapter) WithLiveExecutionRuntime(
 		return errors.New("session runtime authority is required")
 	}
 	return a.authority.WithLiveExecutionRuntime(ctx, sessionID, callback)
-}
-
-func (a *ExecutionAdapter) withCurrentRuntime(
-	ctx context.Context,
-	sessionID runtimeids.SessionID,
-	callback func(context.Context, *runtime.Engine) error,
-) error {
-	if a == nil || a.currentRuntime == nil {
-		return errors.New("current runtime adapter is required")
-	}
-	return a.currentRuntime(ctx, sessionID, callback)
 }

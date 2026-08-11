@@ -172,7 +172,7 @@ type goalClearMemoRequest struct {
 }
 
 func NewService(authority *sessionruntime.Authority) *Service {
-	execution := runtimecommand.NewExecutionAdapter(authority, authority.WithCurrentRuntime)
+	execution := runtimecommand.NewExecutionAdapter(authority)
 	return NewServiceWithGoalCommands(
 		authority,
 		execution,
@@ -186,7 +186,7 @@ func NewServiceWithGoalCommands(
 	goalAuthority *runtimecommand.GoalAuthority,
 ) *Service {
 	if execution == nil {
-		execution = runtimecommand.NewExecutionAdapter(authority, authority.WithCurrentRuntime)
+		execution = runtimecommand.NewExecutionAdapter(authority)
 	}
 	if goalAuthority == nil {
 		goalAuthority = runtimecommand.NewGoalAuthority(authority, execution)

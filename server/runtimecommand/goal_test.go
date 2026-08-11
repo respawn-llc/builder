@@ -197,7 +197,7 @@ func TestGoalAuthorityDormantSetRespectsAdmissionFence(t *testing.T) {
 	}
 }
 
-func TestGoalAuthorityLiveSetUsesRuntimeCommand(t *testing.T) {
+func TestGoalAuthorityLiveSetPreservesOrdinaryExecutionAdmission(t *testing.T) {
 	var eventMu sync.Mutex
 	var goalFeedbackEvents int
 	var goalStatusEvents int
@@ -234,29 +234,23 @@ func TestGoalAuthorityLiveSetUsesRuntimeCommand(t *testing.T) {
 		Objective: "persist live goal",
 		Actor:     session.GoalActorUser,
 	})
-	if err != nil {
-		t.Fatalf("Set live goal: %v", err)
+	if !errors.Is(err, sessionruntime.ErrSessionWorkflowActivationActive) {
+		t.Fatalf("Set live Goal error = %v, want retained workflow activation rejection", err)
 	}
-	if result.Goal == nil || result.Goal.Objective != "persist live goal" ||
-		result.Disposition != runtime.GoalCommandApplied ||
-		!result.MetadataReceipt.Committed || !result.NoticeReceipt.Committed {
-		t.Fatalf("live set result = %+v, want applied committed goal", result)
+	if result.Accepted() {
+		t.Fatalf("rejected live Goal result = %+v, want unaccepted", result)
 	}
 	reopened := reopenGoalAuthorityStore(t, store, observer)
-	if goal := reopened.Meta().Goal; goal == nil || goal.ID != result.Goal.ID {
-		t.Fatalf("persisted live goal = %+v, want %+v", goal, result.Goal)
+	if goal := reopened.Meta().Goal; goal != nil {
+		t.Fatalf("rejected live Goal mutation persisted %+v", goal)
 	}
-	if count := goalAuthorityNoticeCount(t, reopened); count != 1 {
-		t.Fatalf("live goal notice count = %d, want 1", count)
+	if count := goalAuthorityNoticeCount(t, reopened); count != 0 {
+		t.Fatalf("rejected live Goal notice count = %d, want 0", count)
 	}
 	eventMu.Lock()
 	defer eventMu.Unlock()
-	if goalFeedbackEvents != 1 || goalStatusEvents != 1 {
-		t.Fatalf(
-			"live goal events = feedback:%d status:%d, want one of each",
-			goalFeedbackEvents,
-			goalStatusEvents,
-		)
+	if goalFeedbackEvents != 0 || goalStatusEvents != 0 {
+		t.Fatalf("rejected live Goal events = feedback:%d status:%d, want none", goalFeedbackEvents, goalStatusEvents)
 	}
 }
 
@@ -294,7 +288,7 @@ func newGoalAuthorityFixture(
 			t.Errorf("close authority: %v", err)
 		}
 	})
-	return store, authority, NewGoalAuthority(authority, NewExecutionAdapter(authority, authority.WithCurrentRuntime)), observer
+	return store, authority, NewGoalAuthority(authority, NewExecutionAdapter(authority)), observer
 }
 
 func workflowGoalAuthorityPlan(t *testing.T, workdir string) sessionruntime.AgentRuntimePlan {

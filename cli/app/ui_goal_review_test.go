@@ -1,7 +1,6 @@
 package app
 
 import (
-	"strings"
 	"testing"
 
 	"core/shared/clientui"
@@ -20,10 +19,18 @@ func TestGoalSetCommandDeliversQueuedPreviewToTUI(t *testing.T) {
 	model.openGoalOverlay(nil, nil)
 
 	message := model.goalRuntimeCommand(goalRuntimeSet, "queued objective")().(goalRuntimeDoneMsg)
+	if message.mutation.Goal != nil ||
+		message.mutation.Pending == nil ||
+		message.mutation.Pending.Objective != "queued objective" ||
+		message.mutation.Pending.Status != clientui.RuntimeGoalStatusActive {
+		t.Fatalf("Goal command result = %+v, want identity-less queued preview", message.mutation)
+	}
 	updateUIModel(t, model, message)
 
-	content := strings.Join(model.layout().goalOverlayContentLines(80), "\n")
-	if model.goal.pending == nil || model.goal.goal != nil || !strings.Contains(content, "queued objective") || strings.Contains(content, "ID:") {
-		t.Fatalf("TUI queued Goal = pending %+v goal %+v content %q", model.goal.pending, model.goal.goal, content)
+	if model.goal.pending == nil ||
+		model.goal.pending.Objective != message.mutation.Pending.Objective ||
+		model.goal.pending.Status != message.mutation.Pending.Status ||
+		model.goal.goal != nil {
+		t.Fatalf("TUI queued Goal = pending %+v goal %+v, want typed preview only", model.goal.pending, model.goal.goal)
 	}
 }
