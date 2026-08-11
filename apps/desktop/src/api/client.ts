@@ -8,6 +8,7 @@ import * as taskDependencies from "./clientTaskDependencies";
 import * as taskDetail from "./clientTaskDetail";
 import * as promptAnswers from "./clientPromptAnswers";
 import * as taskSearch from "./clientTaskSearch";
+import * as worktree from "./clientWorktree";
 import {
   workflowGraphDraftPayload,
   workflowGraphMetadataPayload,
@@ -36,7 +37,8 @@ import type {
 } from "./clientInputs";
 import { compactJsonObject, emptyJsonObject } from "./json";
 import type { SetupOperationID } from "./setupOperationID";
-import { worktreeSetupRpcHandler, type WorktreeSetupEventHandler } from "./worktreeSetup";
+import type * as worktreeModels from "./schemas/worktree";
+import { subscribeWorktreeSetup, type WorktreeSetupEventHandler } from "./worktreeSetup";
 import type {
   ActivityPage,
   AttentionPage,
@@ -699,14 +701,15 @@ export class ApiClient implements ApiService {
     );
   }
 
-  subscribeWorktreeSetup(
-    setupOperationID: SetupOperationID,
-    handler: WorktreeSetupEventHandler,
-  ): ApiSubscription {
-    return this.#transport.subscribe(
-      "worktree.setup.subscribe",
-      { setup_operation_id: setupOperationID.toJSONValue() },
-      worktreeSetupRpcHandler(handler),
-    );
-  }
+  getWorktreeStatus = async (sessionID: string) => worktree.getWorktreeStatus(this.#transport, sessionID);
+  listWorktrees = async (sessionID: string) => worktree.listWorktrees(this.#transport, sessionID);
+  resolveWorktreeSelector = async (sessionID: string, selector: string) => worktree.resolveWorktreeSelector(this.#transport, sessionID, selector);
+  resolveWorktreeCreateTarget = async (sessionID: string, target: string) => worktree.resolveWorktreeCreateTarget(this.#transport, sessionID, target);
+  previewWorktreeDelete = async (sessionID: string, selector: string) => worktree.previewWorktreeDelete(this.#transport, sessionID, selector);
+  createWorktree = async (input: worktreeModels.WorktreeCreateInput) => worktree.createWorktree(this.#transport, input);
+  switchWorktree = async (sessionID: string, operation: worktreeModels.WorktreeSwitch) => worktree.switchWorktree(this.#transport, sessionID, operation);
+  deleteWorktree = async (sessionID: string, preview: worktreeModels.WorktreeDeletePreview,
+    confirmation: worktreeModels.WorktreeDeleteConfirmationChoice) =>
+    worktree.deleteWorktree(this.#transport, sessionID, preview, confirmation);
+  subscribeWorktreeSetup = (setupOperationID: SetupOperationID, handler: WorktreeSetupEventHandler) => subscribeWorktreeSetup(this.#transport, setupOperationID, handler);
 }

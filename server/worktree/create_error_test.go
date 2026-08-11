@@ -78,7 +78,6 @@ func TestCreateWorktreeRejectsBlankBaseRefBeforeGit(t *testing.T) {
 
 	_, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		ClientRequestID:  "blank-base-ref",
 		SessionID:        env.session.Meta().SessionID,
 		CreateBranch:     true,
 		BranchName:       "feature/blank-base-ref",
@@ -100,7 +99,6 @@ func TestCreateWorktreeResolvesBaseRefOnceAndUsesCommitOIDForAdd(t *testing.T) {
 
 	_, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		ClientRequestID:  "resolved-base-ref",
 		SessionID:        env.session.Meta().SessionID,
 		BaseRef:          "HEAD",
 		CreateBranch:     true,
@@ -168,7 +166,6 @@ func TestCreateWorktreeBaseRefResolutionFailuresAreBaseRefOwned(t *testing.T) {
 			runner.resetCalls()
 			_, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
 				SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-				ClientRequestID:  "resolve-" + test.name,
 				SessionID:        env.session.Meta().SessionID,
 				BaseRef:          test.baseRef,
 				CreateBranch:     true,
@@ -206,7 +203,6 @@ func TestCreateWorktreeGitBaseRefResolutionFailureIsFormOwned(t *testing.T) {
 
 	_, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		ClientRequestID:  "resolve-git-failure",
 		SessionID:        env.session.Meta().SessionID,
 		BaseRef:          "HEAD",
 		CreateBranch:     true,
@@ -242,7 +238,6 @@ func TestCreateWorktreeCommitResolutionInfrastructureFailureIsFormOwned(t *testi
 
 	_, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		ClientRequestID:  "resolve-commit-git-failure",
 		SessionID:        env.session.Meta().SessionID,
 		BaseRef:          "HEAD",
 		CreateBranch:     true,
@@ -269,7 +264,6 @@ func TestCreateWorktreePostResolutionAddFailureIsFormOwned(t *testing.T) {
 
 	_, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		ClientRequestID:  "post-resolution-add",
 		SessionID:        env.session.Meta().SessionID,
 		BaseRef:          "HEAD",
 		CreateBranch:     true,
@@ -295,7 +289,6 @@ func TestCreateWorktreeExistingAndDetachedTargetsDoNotResolveBaseRefAgain(t *tes
 
 	_, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		ClientRequestID:  "existing-target",
 		SessionID:        env.session.Meta().SessionID,
 		BaseRef:          "feature/existing-create",
 		BranchName:       "",
@@ -310,7 +303,6 @@ func TestCreateWorktreeExistingAndDetachedTargetsDoNotResolveBaseRefAgain(t *tes
 	runner.resetCalls()
 	_, err = env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		ClientRequestID:  "detached-target",
 		SessionID:        env.session.Meta().SessionID,
 		BaseRef:          "HEAD",
 	})
@@ -337,7 +329,6 @@ func TestCreateWorktreeJoinsPostCreateAndCleanupCausesBeforeFormClassification(t
 
 	_, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
 		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
-		ClientRequestID:  "post-create-cleanup",
 		SessionID:        env.session.Meta().SessionID,
 		BaseRef:          "HEAD",
 		CreateBranch:     true,

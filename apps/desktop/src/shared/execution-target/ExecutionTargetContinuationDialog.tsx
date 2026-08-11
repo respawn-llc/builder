@@ -34,13 +34,19 @@ export function TaskSetupRecoveryDialog({
   onClose(): void;
   onSubmit(selection?: WorkflowExecutionTargetSelection): void;
   open: boolean;
-  recovery: Pick<TaskSetupRecovery, "diagnostic" | "scriptPath" | "retainedWorktree" | "retainedPreviousWorktree">;
+  recovery: Pick<
+    TaskSetupRecovery,
+    "diagnostic" | "scriptPath" | "retainedWorktree" | "retainedPreviousWorktree"
+  >;
   retrySelection?: WorkflowExecutionTargetSelection;
   running: boolean;
 }>) {
   const { t } = useTranslation();
   const [selectionDraft, setSelectionDraft] = useState<ExecutionTargetSelectionDraft | null>(null);
-  const close = () => { setSelectionDraft(null); onClose(); };
+  const close = () => {
+    setSelectionDraft(null);
+    onClose();
+  };
   const selection = selectionDraft === null ? null : executionTargetSelectionFromDraft(selectionDraft);
   return (
     <Dialog closeLabel={t("app.close")} onClose={close} open={open} title={t("task.interrupted")}>
@@ -48,20 +54,33 @@ export function TaskSetupRecoveryDialog({
         <p className="m-0 whitespace-pre-wrap font-mono text-sm text-[var(--color-error)]">
           {recovery.diagnostic}
         </p>
-        {[recovery.scriptPath, recovery.retainedWorktree?.root, recovery.retainedPreviousWorktree?.root].map((value) =>
-          value == null ? null : <p className="m-0 break-all font-mono text-sm" key={value}>{value}</p>,
+        {[recovery.scriptPath, recovery.retainedWorktree?.root, recovery.retainedPreviousWorktree?.root].map(
+          (value) =>
+            value == null ? null : (
+              <p className="m-0 break-all font-mono text-sm" key={value}>
+                {value}
+              </p>
+            ),
         )}
         {selectionDraft === null ? (
           <div className="flex justify-end gap-[var(--space-2)]">
             <Button onClick={close}>{t("app.cancel")}</Button>
-            <Button data-testid="setup-recovery-choose" onClick={() => {
-              setSelectionDraft({ mode: "default_branch", customRef: null });
-            }}>
+            <Button
+              data-testid="setup-recovery-choose"
+              onClick={() => {
+                setSelectionDraft({ mode: "default_branch", customRef: null });
+              }}
+            >
               {t("executionTargetContinuation.title")}
             </Button>
-            <Button data-testid="setup-recovery-retry" disabled={running} onClick={() => {
-              onSubmit(retrySelection);
-            }} variant="primary">
+            <Button
+              data-testid="setup-recovery-retry"
+              disabled={running}
+              onClick={() => {
+                onSubmit(retrySelection);
+              }}
+              variant="primary"
+            >
               {t("app.retry")}
             </Button>
           </div>
@@ -69,16 +88,25 @@ export function TaskSetupRecoveryDialog({
           <>
             <ExecutionTargetChoices
               continuation={{
-                selectMode(mode) { setSelectionDraft({ ...selectionDraft, mode }); },
-                setCustomRef(customRef) { setSelectionDraft({ ...selectionDraft, customRef }); },
+                selectMode(mode) {
+                  setSelectionDraft({ ...selectionDraft, mode });
+                },
+                setCustomRef(customRef) {
+                  setSelectionDraft({ ...selectionDraft, customRef });
+                },
               }}
               pending={{ selection: selectionDraft }}
             />
             <div className="flex justify-end gap-[var(--space-2)]">
               <Button onClick={close}>{t("app.cancel")}</Button>
-              <Button data-testid="setup-recovery-target-submit" disabled={selection === null || running} onClick={() => {
-                if (selection !== null) onSubmit(selection);
-              }} variant="primary">
+              <Button
+                data-testid="setup-recovery-target-submit"
+                disabled={selection === null || running}
+                onClick={() => {
+                  if (selection !== null) onSubmit(selection);
+                }}
+                variant="primary"
+              >
                 {t("executionTargetContinuation.continue")}
               </Button>
             </div>
@@ -107,11 +135,13 @@ export function TaskInitiatingActionDialogs({
 }: Readonly<{
   continuation: TaskInitiatingActionController;
   onResult(result: TaskInitiatingActionDialogResult): void;
-  setupRecovery?: Readonly<{
-    onClose(): void;
-    onSubmit(selection?: WorkflowExecutionTargetSelection): void;
-    recovery: TaskSetupRecovery;
-  }> | undefined;
+  setupRecovery?:
+    | Readonly<{
+        onClose(): void;
+        onSubmit(selection?: WorkflowExecutionTargetSelection): void;
+        recovery: TaskSetupRecovery;
+      }>
+    | undefined;
 }>) {
   const pending = continuation.pending;
   if (setupRecovery !== undefined && pending === null) {
@@ -129,17 +159,36 @@ export function TaskInitiatingActionDialogs({
   }
   if (pending?.kind === "setup_recovery") {
     const { failure } = pending;
-    return <TaskSetupRecoveryDialog onClose={continuation.close} onSubmit={(selection) => {
-      onResult({ kind: "continue", action: pending.action, ...(selection === undefined ? {} : { selection }) });
-    }} open recovery={{
-      diagnostic: failure.diagnostic, scriptPath: failure.scriptPath,
-      retainedWorktree: { root: failure.worktree.registered.kent.canonicalRoot, worktreeID: failure.worktree.registered.kent.worktreeID },
-      retainedPreviousWorktree: failure.retainedPreviousWorktree === null ? null : {
-        root: failure.retainedPreviousWorktree.worktree.registered.kent.canonicalRoot,
-        worktreeID: failure.retainedPreviousWorktree.worktree.registered.kent.worktreeID,
-      },
-    }} {...(pending.retrySelection === undefined ? {} : { retrySelection: pending.retrySelection })}
-      running={continuation.running} />;
+    return (
+      <TaskSetupRecoveryDialog
+        onClose={continuation.close}
+        onSubmit={(selection) => {
+          onResult({
+            kind: "continue",
+            action: pending.action,
+            ...(selection === undefined ? {} : { selection }),
+          });
+        }}
+        open
+        recovery={{
+          diagnostic: failure.diagnostic,
+          scriptPath: failure.scriptPath,
+          retainedWorktree: {
+            root: failure.worktree.kent.canonicalRoot,
+            worktreeID: failure.worktree.kent.worktreeID,
+          },
+          retainedPreviousWorktree:
+            failure.retainedPreviousWorktree === null
+              ? null
+              : {
+                  root: failure.retainedPreviousWorktree.worktree.kent.canonicalRoot,
+                  worktreeID: failure.retainedPreviousWorktree.worktree.kent.worktreeID,
+                },
+        }}
+        {...(pending.retrySelection === undefined ? {} : { retrySelection: pending.retrySelection })}
+        running={continuation.running}
+      />
+    );
   }
   return (
     <ExecutionTargetDialog
@@ -311,7 +360,9 @@ function ExecutionTargetChoices({
         <TextInput
           label={t("executionTargetContinuation.customRef")}
           onChange={(event) => {
-            continuation.setCustomRef(event.currentTarget.value.trim().length === 0 ? null : event.currentTarget.value);
+            continuation.setCustomRef(
+              event.currentTarget.value.trim().length === 0 ? null : event.currentTarget.value,
+            );
           }}
           required
           value={pending.selection.customRef ?? ""}

@@ -6,7 +6,7 @@ export class SetupOperationID {
   }
 
   static parse(value: string): SetupOperationID {
-    if (!isSetupOperationID(value)) {
+    if (!isUUIDv4(value)) {
       throw new Error("Setup operation id must be a UUID v4.");
     }
     return new SetupOperationID(value);
@@ -20,7 +20,7 @@ export class SetupOperationID {
 const uuidSectionLengths = [8, 4, 4, 4, 12] as const;
 const variantDigits = new Set(["8", "9", "a", "b"]);
 
-function isSetupOperationID(value: string): boolean {
+export function isUUIDv4(value: string): boolean {
   const sections = value.split("-");
   return (
     sections.length === uuidSectionLengths.length &&

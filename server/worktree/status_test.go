@@ -2,6 +2,7 @@ package worktree
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -55,6 +56,25 @@ func TestWorktreeStatusInspectsOnlyTheRecordedTarget(t *testing.T) {
 	}
 	if after != before {
 		t.Fatalf("status mutated target: before=%+v after=%+v", before, after)
+	}
+}
+
+func TestHealthyWorktreeStatusEncodesEmptyProblemsArray(t *testing.T) {
+	env := newServiceTestEnv(t)
+	status := mustGetWorktreeStatus(t, env)
+
+	encoded, err := json.Marshal(status)
+	if err != nil {
+		t.Fatalf("Marshal status: %v", err)
+	}
+	var wire struct {
+		Problems []json.RawMessage `json:"problems"`
+	}
+	if err := json.Unmarshal(encoded, &wire); err != nil {
+		t.Fatalf("Unmarshal status: %v", err)
+	}
+	if wire.Problems == nil || len(wire.Problems) != 0 {
+		t.Fatalf("wire problems = %#v, want non-nil empty array", wire.Problems)
 	}
 }
 

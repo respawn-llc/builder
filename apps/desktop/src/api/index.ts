@@ -63,7 +63,11 @@ export type { TaskSearchErrorReason } from "./errors";
 export { guiTaskCommentAuthor } from "./client";
 export type { JsonArray, JsonObject, JsonPrimitive, JsonValue } from "./json";
 export { newSetupOperationID, parseSetupOperationID, SetupOperationID } from "./setupOperationID";
+export { parseWorktreeOperationID, WorktreeOperationID } from "./worktreeOperationID";
+export type * from "./schemas/worktree";
 export { rpcErrorCodes } from "./rpcErrorCodes";
+export { decodeWorktreeError, WorktreeError } from "./clientWorktree";
+export type { WorktreeErrorDetail } from "./clientWorktree";
 export { workflowIDSchema } from "./schemas/workflowID";
 export {
   decodeWorktreeSetupRetainedError,

@@ -66,6 +66,7 @@ import type {
 import type { ProjectLabel, ProjectLabelCatalog, TaskLabelAssignment, TaskListPage } from "./workflowLabels";
 import type { BoardFilter } from "./workflowBoardFilters";
 import type { SetupOperationID } from "./setupOperationID";
+import type * as worktree from "./schemas/worktree";
 import type { WorktreeSetupEventHandler } from "./worktreeSetup";
 import type { WorkflowProjectEventHandler } from "./workflowProjectEvents";
 import type { TaskSearchInput, TaskSearchResponse } from "./taskSearch";
@@ -166,6 +167,24 @@ export interface ApiService {
   subscribeProject(projectID: string, handler: WorkflowProjectEventHandler): ApiSubscription;
   subscribeWorkflow(workflowID: string, handler: WorkflowProjectEventHandler): ApiSubscription;
   subscribeAttentionNotifications(handler: AttentionNotificationEventHandler): ApiSubscription;
+  getWorktreeStatus(sessionID: string): Promise<worktree.WorktreeStatus>;
+  listWorktrees(sessionID: string): Promise<worktree.WorktreeList>;
+  resolveWorktreeSelector(sessionID: string, selector: string): Promise<worktree.WorktreeSelectorResolution>;
+  resolveWorktreeCreateTarget(
+    sessionID: string,
+    target: string,
+  ): Promise<worktree.WorktreeCreateTargetResolutionResponse>;
+  previewWorktreeDelete(sessionID: string, selector: string): Promise<worktree.WorktreeDeletePreview>;
+  createWorktree(input: worktree.WorktreeCreateInput): Promise<worktree.WorktreeCreateResponse>;
+  switchWorktree(
+    sessionID: string,
+    operation: worktree.WorktreeSwitch,
+  ): Promise<worktree.WorktreeScheduledAcknowledgement>;
+  deleteWorktree(
+    sessionID: string,
+    preview: worktree.WorktreeDeletePreview,
+    confirmation: worktree.WorktreeDeleteConfirmationChoice,
+  ): Promise<worktree.WorktreeDeleteResult>;
   subscribeWorktreeSetup(
     setupOperationID: SetupOperationID,
     handler: WorktreeSetupEventHandler,

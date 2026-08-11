@@ -1385,6 +1385,162 @@ func TestRemoteResolveWorktreeCreateTargetCarriesMethodAndPayload(t *testing.T) 
 	}
 }
 
+func TestRemoteCreateWorktreeUsesOnlySetupOperationIdentity(t *testing.T) {
+	setupID := serverapi.NewWorktreeSetupOperationID()
+	worktree := remoteTestRegisteredWorktreeEntry(t, true)
+	requests := 0
+	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
+		req := acceptRemoteHandshake(t, ws)
+		if err := websocket.JSON.Receive(ws, &req); err != nil {
+			t.Fatalf("receive worktree create: %v", err)
+		}
+		requests++
+		if req.Method != protocol.MethodWorktreeCreate {
+			t.Fatalf("method = %q, want %q", req.Method, protocol.MethodWorktreeCreate)
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(req.Params, &fields); err != nil {
+			t.Fatalf("unmarshal create fields: %v", err)
+		}
+		if _, exists := fields["client_request_id"]; exists {
+			t.Fatalf("create request retained generic identity: %s", req.Params)
+		}
+		var params serverapi.WorktreeCreateRequest
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			t.Fatalf("unmarshal create params: %v", err)
+		}
+		if params.SetupOperationID != setupID || params.SessionID != "session-1" {
+			t.Fatalf("create params = %+v", params)
+		}
+		if err := websocket.JSON.Send(
+			ws,
+			protocol.NewSuccessResponse(req.ID, serverapi.WorktreeCreateResponse{Worktree: worktree}),
+		); err != nil {
+			t.Fatalf("send create response: %v", err)
+		}
+	})
+
+	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
+	if err != nil {
+		t.Fatalf("DialRemote: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+	if _, err := remote.CreateWorktree(context.Background(), serverapi.WorktreeCreateRequest{
+		SetupOperationID: setupID,
+		SessionID:        "session-1",
+		BaseRef:          "feature",
+	}); err != nil {
+		t.Fatalf("CreateWorktree: %v", err)
+	}
+	if requests != 1 {
+		t.Fatalf("worktree create requests = %d, want one", requests)
+	}
+}
+
+func TestRemoteWorktreeProjectedResponsesRejectContradictoryScope(t *testing.T) {
+	branchName := "feature"
+	sessionEntry := remoteTestRegisteredWorktreeEntry(t, true)
+	workspaceEntry := remoteTestRegisteredWorktreeEntry(t, false)
+	tests := []struct {
+		name     string
+		response any
+		call     func(context.Context, *Remote) error
+	}{
+		{
+			name:     "session list",
+			response: serverapi.WorktreeListResponse{Worktrees: []serverapi.WorktreeListEntry{workspaceEntry}},
+			call: func(ctx context.Context, remote *Remote) error {
+				_, err := remote.ListWorktrees(ctx, serverapi.WorktreeListRequest{SessionID: "session"})
+				return err
+			},
+		},
+		{
+			name: "workspace list",
+			response: serverapi.WorktreeWorkspaceListResponse{
+				WorkspaceID: "workspace",
+				Worktrees:   []serverapi.WorktreeListEntry{sessionEntry},
+			},
+			call: func(ctx context.Context, remote *Remote) error {
+				_, err := remote.ListWorkspaceWorktrees(ctx, serverapi.WorktreeWorkspaceListRequest{
+					ProjectID:   "project",
+					WorkspaceID: "workspace",
+				})
+				return err
+			},
+		},
+		{
+			name:     "selector resolution",
+			response: serverapi.WorktreeSelectorPreviewResponse{Worktree: workspaceEntry},
+			call: func(ctx context.Context, remote *Remote) error {
+				_, err := remote.ResolveWorktreeSelector(ctx, serverapi.WorktreeSelectorPreviewRequest{
+					SessionID: "session",
+					Selector:  branchName,
+				})
+				return err
+			},
+		},
+		{
+			name:     "create",
+			response: serverapi.WorktreeCreateResponse{Worktree: workspaceEntry},
+			call: func(ctx context.Context, remote *Remote) error {
+				_, err := remote.CreateWorktree(ctx, serverapi.WorktreeCreateRequest{
+					SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+					SessionID:        "session",
+					BaseRef:          branchName,
+				})
+				return err
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := newRemoteTestServer(t, func(ws *websocket.Conn) {
+				req := acceptRemoteHandshake(t, ws)
+				if err := websocket.JSON.Receive(ws, &req); err != nil {
+					t.Fatalf("receive request: %v", err)
+				}
+				if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, test.response)); err != nil {
+					t.Fatalf("send response: %v", err)
+				}
+			})
+			defer server.Close()
+			remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
+			if err != nil {
+				t.Fatalf("DialRemoteURL: %v", err)
+			}
+			defer func() { _ = remote.Close() }()
+			if err := test.call(context.Background(), remote); err == nil {
+				t.Fatal("Remote accepted contradictory Worktree projection scope")
+			}
+		})
+	}
+}
+
+func remoteTestRegisteredWorktreeEntry(t *testing.T, sessionScoped bool) serverapi.WorktreeListEntry {
+	t.Helper()
+	branchName := "feature"
+	entry, err := serverapi.ProjectWorktreeListEntry(serverapi.WorktreeTopologyEntry{
+		Variant: serverapi.WorktreeTopologyVariantRegistered,
+		Registered: &serverapi.WorktreeRegisteredFacts{
+			Git: serverapi.WorktreeGitFacts{
+				CanonicalRoot: "/repo/feature",
+				HeadObject:    "abc123",
+				BranchName:    &branchName,
+				PathAvailable: true,
+			},
+			Kent: serverapi.WorktreeKentFacts{
+				WorktreeID:    "worktree-id",
+				CanonicalRoot: "/repo/feature",
+				DisplayName:   "feature",
+			},
+		},
+	}, branchName, false, sessionScoped)
+	if err != nil {
+		t.Fatalf("ProjectWorktreeListEntry: %v", err)
+	}
+	return entry
+}
+
 func TestRemoteProcessOutputSubscriptionAttachesProjectBeforeSubscribe(t *testing.T) {
 	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
 		var req protocol.Request
