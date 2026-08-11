@@ -6,7 +6,7 @@ export class SetupOperationID {
   }
 
   static parse(value: string): SetupOperationID {
-    if (!isUUIDv4(value)) {
+    if (!isSetupOperationID(value)) {
       throw new Error("Setup operation id must be a UUID v4.");
     }
     return new SetupOperationID(value);
@@ -17,10 +17,32 @@ export class SetupOperationID {
   }
 }
 
+export class UUIDv4Value<Domain extends string> {
+  declare private readonly domain: Domain;
+  readonly #value: SetupOperationID;
+  private constructor(value: SetupOperationID) {
+    this.#value = value;
+  }
+  static parse<ParsedDomain extends string>(value: string, diagnostic: string): UUIDv4Value<ParsedDomain> {
+    try {
+      return new UUIDv4Value<ParsedDomain>(SetupOperationID.parse(value));
+    } catch {
+      throw new Error(diagnostic);
+    }
+  }
+  toJSONValue(): string {
+    return this.#value.toJSONValue();
+  }
+}
+
+export function createUUIDv4ValueParser<Domain extends string>(diagnostic: string) {
+  return (value: string): UUIDv4Value<Domain> => UUIDv4Value.parse<Domain>(value, diagnostic);
+}
+
 const uuidSectionLengths = [8, 4, 4, 4, 12] as const;
 const variantDigits = new Set(["8", "9", "a", "b"]);
 
-export function isUUIDv4(value: string): boolean {
+function isSetupOperationID(value: string): boolean {
   const sections = value.split("-");
   return (
     sections.length === uuidSectionLengths.length &&
