@@ -1388,13 +1388,21 @@ func TestRemoteResolveWorktreeCreateTargetCarriesMethodAndPayload(t *testing.T) 
 func TestRemoteCreateWorktreeUsesOnlySetupOperationIdentity(t *testing.T) {
 	setupID := serverapi.NewWorktreeSetupOperationID()
 	worktree := remoteTestRegisteredWorktreeEntry(t, true)
-	requests := 0
+	var requests atomic.Int64
+	target := clientui.SessionExecutionTarget{
+		WorkspaceID:           "workspace",
+		WorkspaceName:         "Workspace",
+		WorkspaceRoot:         "/repo",
+		WorkspaceAvailability: clientui.ProjectAvailabilityAvailable,
+		CwdRelpath:            ".",
+		EffectiveWorkdir:      "/repo",
+	}
 	server := newRemoteTestServer(t, func(ws *websocket.Conn) {
 		req := acceptRemoteHandshake(t, ws)
 		if err := websocket.JSON.Receive(ws, &req); err != nil {
 			t.Fatalf("receive worktree create: %v", err)
 		}
-		requests++
+		requests.Add(1)
 		if req.Method != protocol.MethodWorktreeCreate {
 			t.Fatalf("method = %q, want %q", req.Method, protocol.MethodWorktreeCreate)
 		}
@@ -1414,7 +1422,7 @@ func TestRemoteCreateWorktreeUsesOnlySetupOperationIdentity(t *testing.T) {
 		}
 		if err := websocket.JSON.Send(
 			ws,
-			protocol.NewSuccessResponse(req.ID, serverapi.WorktreeCreateResponse{Worktree: worktree}),
+			protocol.NewSuccessResponse(req.ID, serverapi.WorktreeCreateResponse{Target: target, Worktree: worktree}),
 		); err != nil {
 			t.Fatalf("send create response: %v", err)
 		}
@@ -1425,15 +1433,19 @@ func TestRemoteCreateWorktreeUsesOnlySetupOperationIdentity(t *testing.T) {
 		t.Fatalf("DialRemote: %v", err)
 	}
 	defer func() { _ = remote.Close() }()
-	if _, err := remote.CreateWorktree(context.Background(), serverapi.WorktreeCreateRequest{
+	response, err := remote.CreateWorktree(context.Background(), serverapi.WorktreeCreateRequest{
 		SetupOperationID: setupID,
 		SessionID:        "session-1",
 		BaseRef:          "feature",
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("CreateWorktree: %v", err)
 	}
-	if requests != 1 {
-		t.Fatalf("worktree create requests = %d, want one", requests)
+	if response.Worktree.Projection.Selector != "feature" {
+		t.Fatalf("CreateWorktree response = %+v, want populated Worktree", response)
+	}
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("worktree create requests = %d, want one", got)
 	}
 }
 

@@ -247,20 +247,29 @@ func TestWorktreeProjectedResponsesValidateTheirProjectionScope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ProjectWorktreeListEntry workspace: %v", err)
 	}
-
+	target := clientui.SessionExecutionTarget{
+		WorkspaceID:           "workspace",
+		WorkspaceName:         "Workspace",
+		WorkspaceRoot:         "/repo",
+		WorkspaceAvailability: clientui.ProjectAvailabilityAvailable,
+		CwdRelpath:            ".",
+		EffectiveWorkdir:      "/repo",
+	}
 	tests := []struct {
 		response interface{ Validate() error }
 		wantErr  bool
 	}{
-		{response: WorktreeListResponse{Worktrees: []WorktreeListEntry{sessionEntry}}},
+		{response: WorktreeListResponse{Target: target, Worktrees: []WorktreeListEntry{sessionEntry}}},
 		{response: WorktreeWorkspaceListResponse{WorkspaceID: "workspace", Worktrees: []WorktreeListEntry{workspaceEntry}}},
 		{response: WorktreeSelectorPreviewResponse{Worktree: sessionEntry}},
-		{response: WorktreeCreateResponse{Worktree: sessionEntry}},
-		{response: WorktreeListResponse{Worktrees: []WorktreeListEntry{workspaceEntry}}, wantErr: true},
+		{response: WorktreeCreateResponse{Target: target, Worktree: sessionEntry}},
+		{response: WorktreeListResponse{Worktrees: []WorktreeListEntry{sessionEntry}}, wantErr: true},
+		{response: WorktreeCreateResponse{Worktree: sessionEntry}, wantErr: true},
+		{response: WorktreeListResponse{Target: target, Worktrees: []WorktreeListEntry{workspaceEntry}}, wantErr: true},
 		{response: WorktreeWorkspaceListResponse{WorkspaceID: "workspace", Worktrees: []WorktreeListEntry{sessionEntry}}, wantErr: true},
 		{response: WorktreeWorkspaceListResponse{Worktrees: []WorktreeListEntry{workspaceEntry}}, wantErr: true},
 		{response: WorktreeSelectorPreviewResponse{Worktree: workspaceEntry}, wantErr: true},
-		{response: WorktreeCreateResponse{Worktree: workspaceEntry}, wantErr: true},
+		{response: WorktreeCreateResponse{Target: target, Worktree: workspaceEntry}, wantErr: true},
 	}
 	for _, test := range tests {
 		if err := test.response.Validate(); (err != nil) != test.wantErr {

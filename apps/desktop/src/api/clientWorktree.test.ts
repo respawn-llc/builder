@@ -81,6 +81,7 @@ const preview = (cleanliness: unknown, worktree: unknown = topology) =>
     deletion_selector: "worktree-1",
     cleanliness,
   });
+afterEach(() => vi.restoreAllMocks());
 describe("Desktop Worktree client", () => {
   it("decodes exact Session reads and every topology/status fact", async () => {
     const topologies = [

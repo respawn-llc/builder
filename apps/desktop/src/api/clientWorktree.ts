@@ -10,13 +10,9 @@ import { decodeWorktreeSetupRetainedError, type RetainedPreviousWorktree } from 
 import { parseWorktreeOperationID } from "./worktreeOperationID";
 
 export const getWorktreeStatus = async (transport: RpcTransport, sessionID: string) =>
-  call(transport, "worktree.status", session(sessionID), {
-    schema: worktree.worktreeStatusResponseSchema,
-  });
+  call(transport, "worktree.status", session(sessionID), { schema: worktree.worktreeStatusResponseSchema });
 export const listWorktrees = async (transport: RpcTransport, sessionID: string) =>
-  call(transport, "worktree.list", session(sessionID), {
-    schema: worktree.worktreeListResponseSchema,
-  });
+  call(transport, "worktree.list", session(sessionID), { schema: worktree.worktreeListResponseSchema });
 export const resolveWorktreeSelector = factRead(
   "worktree.selector.resolve",
   "selector",

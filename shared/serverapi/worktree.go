@@ -390,6 +390,8 @@ func (entry WorktreeListEntry) Validate() error {
 	return entry.Projection.Validate()
 }
 
+// IsCurrent remains a server-owned fact; deriving it here would duplicate
+// server/worktree target matching inside the wire-contract validator.
 func (entry WorktreeListEntry) validateProjection(sessionScoped bool) error {
 	expected, err := projectWorktreeListProjection(
 		entry.Topology,
@@ -687,7 +689,7 @@ type WorktreeListResponse struct {
 }
 
 func (response WorktreeListResponse) Validate() error {
-	return validateWorktreeProjections(response.Worktrees, true)
+	return validateSessionWorktreeResponse(response.Target, response.Worktrees...)
 }
 
 type WorktreeWorkspaceListRequest struct {
@@ -705,6 +707,13 @@ func (response WorktreeWorkspaceListResponse) Validate() error {
 		return errors.New("workspace_id is required")
 	}
 	return validateWorktreeProjections(response.Worktrees, false)
+}
+
+func validateSessionWorktreeResponse(target clientui.SessionExecutionTarget, entries ...WorktreeListEntry) error {
+	if clientui.SessionExecutionTargetIsZero(target) {
+		return errors.New("worktree response target is required")
+	}
+	return validateWorktreeProjections(entries, true)
 }
 
 func validateWorktreeProjections(entries []WorktreeListEntry, sessionScoped bool) error {
@@ -754,7 +763,7 @@ type WorktreeCreateResponse struct {
 }
 
 func (response WorktreeCreateResponse) Validate() error {
-	return response.Worktree.validateProjection(true)
+	return validateSessionWorktreeResponse(response.Target, response.Worktree)
 }
 
 func (r WorktreeListRequest) Validate() error {
