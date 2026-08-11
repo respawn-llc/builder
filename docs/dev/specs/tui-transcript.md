@@ -116,9 +116,10 @@
 - `interruption`: `O`
 - `error_feedback`: `O`
 - `compaction_soon_reminder`: `D`
-- Reviewer feedback uses `O` when `reviewer.verbose_output` is enabled and `OC` when it is disabled. Every nonempty Reviewer result creates one feedback row regardless of this setting. `O` renders the complete ordered Markdown suggestion list in ongoing scrollback. `OC` renders the suggestion count in ongoing and collapsed Detail; expanded Detail renders the complete ordered Markdown suggestion list.
+- Reviewer feedback uses `O` when `reviewer.verbose_output` is enabled and `OC` when it is disabled. Every nonempty Reviewer result creates one feedback row when the suggestions are issued, before the follow-up begins. `O` renders the complete ordered Markdown suggestion list in ongoing scrollback without truncation or ellipsis. `OC` renders the suggestion count in ongoing and collapsed Detail; expanded Detail renders the complete ordered Markdown suggestion list.
+- A successful Reviewer follow-up creates a separate `OC` outcome row after the follow-up. The outcome reports whether Kent applied the suggestions or made no changes.
 - Reviewer errors use `O` and show their complete failure detail.
-- Reviewer running and completion lifecycle create no transcript row.
+- Reviewer running and completion lifecycle events create no transcript row.
 - `background_notice`: `OC`
 - `custom_tool_call_output`: follows the tool call/result row it belongs to.
 - `handoff_future_message`: `D`
@@ -137,6 +138,7 @@
 - assistant commentary/thinking turns: `D`
 - tool calls: `OC`
 - Reviewer feedback: `OC` or `O` as defined above.
+- Reviewer outcome: `OC`.
 - Reviewer errors: `O`.
 - Reasoning Trace progress updates: `D`; their live first bold span is projected into Thinking Status while the model is reasoning. Detail keeps persisted Reasoning Traces faint and treats them as plain text. The server presentation projection removes only outer literal `**` delimiters; the TUI does not repeat that cleanup. A Reasoning Trace is not expandable unless expansion exposes additional content. Ongoing scrollback contains neither Reasoning Trace rows nor assistant commentary/thinking rows.
 - Kent decides which messages become transcript entries and which role they use.
@@ -371,7 +373,9 @@
 - The Reviewer receives shorter tool output than the main agent.
 - Reviewer contract is minimal JSON `{"suggestions":["..."]}`; invalid payloads are ignored non-fatally.
 - A Reviewer generation failure creates one expanded Reviewer error row. Reviewer running and completion create no transcript row.
-- If suggestions exist, Kent runs one extra main-agent follow-up. A follow-up that returns either a nonblank final answer or an explicitly blank silent final answer succeeds and creates exactly one Reviewer feedback row after the follow-up completes. The row preserves the ordered Markdown suggestions and uses their count as its compact summary.
+- If suggestions exist, Kent creates the Reviewer feedback row immediately and then runs one extra main-agent follow-up. The row preserves the ordered Markdown suggestions and uses their count as its compact summary.
+- A follow-up that returns a nonblank final answer succeeds. Kent shows that answer and then creates a separate Reviewer outcome row that reports the suggestions as applied.
+- An explicitly blank silent follow-up succeeds without another assistant answer. Kent then creates a separate Reviewer outcome row that reports no changes applied.
 - `reviewer.verbose_output` controls only the TUI's initial feedback presentation: enabled uses `O`, disabled uses `OC`. It never controls whether the feedback row exists.
-- If Kent cannot apply nonempty Reviewer feedback, the current engine and Session fail and create neither a Reviewer feedback row nor a Reviewer error row for that result. This includes a missing follow-up answer; an explicitly blank follow-up final answer is successful, not missing.
+- If Kent cannot apply nonempty Reviewer feedback, the issued feedback row remains visible and the engine and Session fail. This includes a missing follow-up answer; an explicitly blank follow-up final answer is successful, not missing.
 - The Reviewer runs once and does not review its own follow-up.

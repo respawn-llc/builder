@@ -568,13 +568,22 @@ func TestTranscriptPageProjectsReviewerAndBackgroundMetadata(t *testing.T) {
 		t.Fatalf("project page: %v", err)
 	}
 
-	if len(page.Entries) != 1 {
+	if len(page.Entries) != 2 {
 		t.Fatalf("page entries = %+v", page.Entries)
 	}
-	if page.Entries[0].Kind != clientui.TranscriptRowNotice || page.Entries[0].Notice == nil {
-		t.Fatalf("background row = %+v, want notice", page.Entries[0])
+	reviewerStatus := page.Entries[0]
+	if reviewerStatus.Visibility != clientui.EntryVisibilityOngoingCollapsed ||
+		reviewerStatus.Kind != clientui.TranscriptRowNotice ||
+		reviewerStatus.Notice == nil ||
+		reviewerStatus.Notice.Diagnostic == nil ||
+		reviewerStatus.Notice.Diagnostic.Code != clientui.TranscriptDiagnosticCode(transcript.EntryRoleReviewerStatus) {
+		t.Fatalf("reviewer status row = %+v, want collapsed reviewer status notice", reviewerStatus)
 	}
-	if background := page.Entries[0].Notice.Background; background == nil || background.ExitCode == nil || *background.ExitCode != exitCode {
+	backgroundRow := page.Entries[1]
+	if backgroundRow.Kind != clientui.TranscriptRowNotice || backgroundRow.Notice == nil {
+		t.Fatalf("background row = %+v, want notice", backgroundRow)
+	}
+	if background := backgroundRow.Notice.Background; background == nil || background.ExitCode == nil || *background.ExitCode != exitCode {
 		t.Fatalf("background notice = %+v, want exit code %d", background, exitCode)
 	}
 }

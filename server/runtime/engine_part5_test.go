@@ -8,6 +8,7 @@ import (
 	"core/server/tools"
 	"core/shared/textutil"
 	"core/shared/toolspec"
+	"core/shared/transcript"
 	"encoding/json"
 	"path/filepath"
 	"strings"
@@ -328,7 +329,7 @@ func TestReviewerRunsOnEditsFrequencyOnlyWhenPatchApplied(t *testing.T) {
 	}
 }
 
-func TestReviewerBlankFinalKeepsOriginalAnswerAndPersistsFeedback(t *testing.T) {
+func TestReviewerBlankFinalKeepsOriginalAnswerAndReportsNoChanges(t *testing.T) {
 	store := mustCreateTestSession(t)
 	mainClient := &fakeClient{responses: []llm.Response{
 		{
@@ -378,14 +379,24 @@ func TestReviewerBlankFinalKeepsOriginalAnswerAndPersistsFeedback(t *testing.T) 
 	}
 
 	feedbackRows := 0
+	statusRows := 0
 	snapshot := eng.ChatSnapshot()
 	for _, entry := range snapshot.Entries {
 		if entry.ReviewerFeedback != nil {
 			feedbackRows++
 		}
+		if entry.Role == string(transcript.EntryRoleReviewerStatus) {
+			statusRows++
+			if entry.Text != reviewerStatusText(ReviewerStatus{Outcome: "noop", SuggestionsCount: 1}, nil) {
+				t.Fatalf("reviewer no-change status = %+v", entry)
+			}
+		}
 	}
 	if feedbackRows != 1 {
 		t.Fatalf("reviewer feedback rows = %d, want one; entries=%+v", feedbackRows, snapshot.Entries)
+	}
+	if statusRows != 1 {
+		t.Fatalf("reviewer status rows = %d, want one; entries=%+v", statusRows, snapshot.Entries)
 	}
 	restored := mustNewExecTestEngine(t, store, &fakeClient{}, Config{Model: "gpt-5"})
 	if len(restored.ChatSnapshot().Entries) == 0 {
@@ -402,7 +413,7 @@ func TestReviewerBlankFinalKeepsOriginalAnswerAndPersistsFeedback(t *testing.T) 
 	}
 }
 
-func TestReviewerFollowUpMissingAnswer(t *testing.T) {
+func TestReviewerSuggestionsRemainVisibleWhenFollowUpReturnsNoAnswer(t *testing.T) {
 	store := mustCreateTestSession(t)
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 		Model:    "gpt-5",
@@ -414,7 +425,7 @@ func TestReviewerFollowUpMissingAnswer(t *testing.T) {
 	}
 	_, err := pipeline.RunFollowUp(
 		context.Background(),
-		"review-step",
+		"11111111-1111-4111-8111-111111111111",
 		llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("original")},
 		0,
 		false,
@@ -428,10 +439,14 @@ func TestReviewerFollowUpMissingAnswer(t *testing.T) {
 	if err == nil {
 		t.Fatal("missing Reviewer follow-up answer unexpectedly succeeded")
 	}
+	feedbackRows := 0
 	for _, entry := range engine.ChatSnapshot().Entries {
 		if entry.ReviewerFeedback != nil {
-			t.Fatalf("missing follow-up created Reviewer feedback: %+v", entry)
+			feedbackRows++
 		}
+	}
+	if feedbackRows != 1 {
+		t.Fatalf("missing follow-up feedback rows = %d, want issued suggestions preserved", feedbackRows)
 	}
 }
 

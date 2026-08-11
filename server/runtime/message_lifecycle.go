@@ -13,7 +13,6 @@ import (
 	"core/shared/config"
 	"core/shared/textutil"
 	"core/shared/toolspec"
-	"core/shared/transcript"
 )
 
 type defaultMessageLifecycle struct {
@@ -118,9 +117,6 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 				return err
 			}
 		case session.LocalEntryRecord:
-			if payload.Role == string(transcript.EntryRoleReviewerStatus) {
-				continue
-			}
 			entry, err := storedLocalEntryFromSessionRecord(payload)
 			if err != nil {
 				return fmt.Errorf("restore session local entry record: %w", err)

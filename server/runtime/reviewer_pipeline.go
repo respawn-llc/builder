@@ -55,6 +55,13 @@ func (r *defaultReviewerPipeline) RunFollowUp(ctx context.Context, stepID string
 	if err := e.stepLifecycle.DrainAgentStepBoundary(ctx); err != nil {
 		return reviewerFollowUpResult{}, err
 	}
+	visibility := transcript.EntryVisibilityOngoingCollapsed
+	if e.cfg.Reviewer.VerboseOutput {
+		visibility = transcript.EntryVisibilityOngoing
+	}
+	if err := e.steer(stepID, steerReviewerFeedbackIntent(suggestions, visibility)); err != nil {
+		return reviewerFollowUpResult{}, fmt.Errorf("persist Reviewer feedback: %w", err)
+	}
 	instruction := formatReviewerDeveloperInstruction(suggestions)
 	if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeReviewerFeedback), Content: textutil.Value(instruction)}})); err != nil {
 		return reviewerFollowUpResult{}, fmt.Errorf("persist Reviewer follow-up instruction: %w", err)
@@ -74,8 +81,12 @@ func (r *defaultReviewerPipeline) RunFollowUp(ctx context.Context, stepID string
 	if followUp.FinalAnswer == nil && !followUp.SilentFinal {
 		return reviewerFollowUpResult{}, errors.New("Reviewer follow-up returned no answer")
 	}
+	outcome := "applied"
+	if followUp.SilentFinal {
+		outcome = "noop"
+	}
 	status := ReviewerStatus{
-		Outcome:               "applied",
+		Outcome:               outcome,
 		SuggestionsCount:      len(suggestions),
 		CacheHitPercent:       reviewerResult.CacheHitPercent,
 		HasCacheHitPercentage: reviewerResult.HasCacheHitPercentage,
@@ -83,13 +94,6 @@ func (r *defaultReviewerPipeline) RunFollowUp(ctx context.Context, stepID string
 	finalAnswer := original
 	if followUp.FinalAnswer != nil {
 		finalAnswer = *followUp.FinalAnswer
-	}
-	visibility := transcript.EntryVisibilityOngoingCollapsed
-	if e.cfg.Reviewer.VerboseOutput {
-		visibility = transcript.EntryVisibilityOngoing
-	}
-	if err := e.steer(stepID, steerReviewerFeedbackIntent(suggestions, visibility)); err != nil {
-		return reviewerFollowUpResult{}, fmt.Errorf("persist Reviewer feedback: %w", err)
 	}
 	return reviewerFollowUpResult{
 		Message:                    finalAnswer,

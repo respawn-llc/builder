@@ -111,9 +111,6 @@ func (s *streamingTranscriptScan) ApplyPersistedEvent(record session.EventRecord
 		}
 		s.completionProvenance[callID] = cloneTranscriptCommittedRowProvenance(&provenance)
 	case session.LocalEntryRecord:
-		if payload.Role == string(transcript.EntryRoleReviewerStatus) {
-			return nil
-		}
 		entry, err := storedLocalEntryFromSessionRecord(payload)
 		if err != nil {
 			return fmt.Errorf("restore session local entry record: %w", err)

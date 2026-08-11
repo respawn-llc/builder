@@ -398,23 +398,6 @@ func reviewerStatusEntryRole(status ReviewerStatus) string {
 	}
 }
 
-func reviewerSuggestionsText(suggestions []string) string {
-	if len(suggestions) == 0 {
-		return ""
-	}
-	b := strings.Builder{}
-	b.WriteString("Supervisor suggested:\n")
-	for idx, suggestion := range suggestions {
-		b.WriteString(strconv.Itoa(idx + 1))
-		b.WriteString(". ")
-		b.WriteString(strings.TrimSpace(suggestion))
-		if idx < len(suggestions)-1 {
-			b.WriteString("\n")
-		}
-	}
-	return b.String()
-}
-
 func reviewerSessionID(sessionID string) string {
 	trimmed := strings.TrimSpace(sessionID)
 	if trimmed == "" {

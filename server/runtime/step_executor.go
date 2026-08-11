@@ -496,6 +496,7 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 			resolvedSilentFinalAnswer := silentFinalAnswer
 			resolvedCommittedCoordinate := cloneCommittedAssistantCoordinate(assistantCommittedCoordinate)
 			var reviewerCompletion *ReviewerStatus
+			reviewerRan := false
 			if resolvedSilentFinalAnswer {
 				resolvedCommittedStart, resolvedCommittedStartSet := committedAssistantCoordinateFields(resolvedCommittedCoordinate)
 				return stepLoopResult{SilentFinal: true, ExecutedToolCall: executedToolCall, AssistantCommittedStart: resolvedCommittedStart, AssistantCommittedStartSet: resolvedCommittedStartSet}, nil
@@ -508,6 +509,7 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 				effectiveReviewerFrequency, effectiveReviewerClient = e.reviewerTurnConfigSnapshot()
 			}
 			if s.reviewer.ShouldRunTurn(effectiveReviewerFrequency, effectiveReviewerClient, patchEditsApplied) {
+				reviewerRan = true
 				startErr := e.steer(stepID, steerEventIntent(Event{Kind: EventReviewerStarted, StepID: stepID}))
 				if startErr != nil {
 					return stepLoopResult{}, fmt.Errorf("start Reviewer lifecycle: %w", startErr)
@@ -531,18 +533,25 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 				} else {
 					assistantEventEmitted = assistantEventEmitted && sameVisibleAssistantMessage(preReviewMessage, resolved)
 				}
-				terminalizationErr := s.terminalizeReviewerLifecycle(stepID, reviewerCompletion)
 				if err != nil {
-					return stepLoopResult{}, errors.Join(err, terminalizationErr)
-				}
-				if terminalizationErr != nil {
-					return stepLoopResult{}, terminalizationErr
+					return stepLoopResult{}, errors.Join(err, s.terminalizeReviewerLifecycle(stepID, nil))
 				}
 			}
 			if !assistantEventEmitted {
 				_ = s.publishCommittedAssistantMessage(stepID, resolved, resolvedCommittedCoordinate, assistantProvenance)
 			}
-			if reviewerCompletion != nil {
+			if reviewerRan {
+				var statusErr error
+				if reviewerCompletionHasTranscriptStatus(reviewerCompletion) {
+					statusErr = e.steer(stepID, steerLocalEntryIntent(storedLocalEntry{
+						Role: reviewerStatusEntryRole(*reviewerCompletion),
+						Text: reviewerStatusText(*reviewerCompletion, nil),
+					}))
+				}
+				terminalizationErr := s.terminalizeReviewerLifecycle(stepID, reviewerCompletion)
+				if statusErr != nil || terminalizationErr != nil {
+					return stepLoopResult{}, errors.Join(statusErr, terminalizationErr)
+				}
 			}
 			if err := e.drainActiveStepGoalMutations(stepID); err != nil {
 				return stepLoopResult{}, err
@@ -551,6 +560,18 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 			return stepLoopResult{FinalAnswer: textutil.Value(resolved), ExecutedToolCall: executedToolCall, AssistantCommittedStart: resolvedCommittedStart, AssistantCommittedStartSet: resolvedCommittedStartSet}, nil
 		}
 
+	}
+}
+
+func reviewerCompletionHasTranscriptStatus(status *ReviewerStatus) bool {
+	if status == nil {
+		return false
+	}
+	switch strings.TrimSpace(status.Outcome) {
+	case "applied", "noop", "no_suggestions":
+		return true
+	default:
+		return false
 	}
 }
 

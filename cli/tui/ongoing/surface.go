@@ -492,7 +492,7 @@ func (s *Surface) renderCommittedRowWithMode(row clientui.TranscriptCommittedRow
 // typed suggestion list belongs in native scrollback. Answered questions are
 // the other typed multi-line exception. D and X rows never reach this path.
 func ongoingRenderMode(row clientui.TranscriptCommittedRow) transcriptrender.Mode {
-	if isFullOngoingNoticeRow(row) {
+	if isFullOngoingRow(row) {
 		return transcriptrender.ModeOngoingFull
 	}
 	switch row.Visibility {
@@ -505,7 +505,12 @@ func ongoingRenderMode(row clientui.TranscriptCommittedRow) transcriptrender.Mod
 	}
 }
 
-func isFullOngoingNoticeRow(row clientui.TranscriptCommittedRow) bool {
+func isFullOngoingRow(row clientui.TranscriptCommittedRow) bool {
+	if row.Kind == clientui.TranscriptRowReviewerFeedback &&
+		row.ReviewerFeedback != nil &&
+		row.Visibility == clientui.EntryVisibilityOngoing {
+		return true
+	}
 	if row.Kind != clientui.TranscriptRowNotice || row.Notice == nil || row.Notice.Diagnostic == nil {
 		return false
 	}

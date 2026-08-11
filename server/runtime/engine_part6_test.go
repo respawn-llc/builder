@@ -18,7 +18,7 @@ import (
 	"testing"
 )
 
-func TestReviewerCompletedEventReflectsPersistedReviewerStatusStateWithoutTranscriptAdvance(t *testing.T) {
+func TestReviewerSuggestionsPrecedeFollowUpAndCompletionReportsApplication(t *testing.T) {
 	store := mustCreateTestSession(t)
 
 	mainClient := &fakeClient{responses: []llm.Response{
@@ -43,11 +43,17 @@ func TestReviewerCompletedEventReflectsPersistedReviewerStatusStateWithoutTransc
 		assistantEventCount        int
 		reviewerCompletedEvent     *Event
 		snapshotAtReviewerComplete ChatSnapshot
+		reviewerEventOrder         []Event
 		eng                        *Engine
 	)
 	eng = mustNewTestEngine(t, store, mainClient, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model: "gpt-5",
 		OnEvent: func(evt Event) {
+			if evt.Kind == EventLocalEntryAdded || evt.Kind == EventAssistantMessage || evt.Kind == EventReviewerCompleted {
+				eventsMu.Lock()
+				reviewerEventOrder = append(reviewerEventOrder, evt)
+				eventsMu.Unlock()
+			}
 			if evt.Kind == EventAssistantMessage && messageContent(evt.Message) == "updated final after review" {
 				eventsMu.Lock()
 				captured := evt
@@ -90,6 +96,7 @@ func TestReviewerCompletedEventReflectsPersistedReviewerStatusStateWithoutTransc
 	assistantCount := assistantEventCount
 	completed := reviewerCompletedEvent
 	snapshotAtCompletion := snapshotAtReviewerComplete
+	eventOrder := append([]Event(nil), reviewerEventOrder...)
 	eventsMu.Unlock()
 	if assistant == nil {
 		t.Fatal("expected follow-up assistant event")
@@ -100,11 +107,8 @@ func TestReviewerCompletedEventReflectsPersistedReviewerStatusStateWithoutTransc
 	if completed == nil {
 		t.Fatal("expected reviewer completed event")
 	}
-	if completed.CommittedTranscriptChanged {
-		t.Fatalf("expected reviewer completed event to avoid committed transcript advancement, got %+v", *completed)
-	}
-	if len(snapshotAtCompletion.Entries) < 2 {
-		t.Fatalf("expected follow-up assistant and reviewer status in completion snapshot, got %+v", snapshotAtCompletion.Entries)
+	if len(snapshotAtCompletion.Entries) < 3 {
+		t.Fatalf("expected feedback, follow-up assistant, and reviewer status in completion snapshot, got %+v", snapshotAtCompletion.Entries)
 	}
 	assistantIndex := len(snapshotAtCompletion.Entries) - 2
 	assistantEntry := snapshotAtCompletion.Entries[assistantIndex]
@@ -118,18 +122,55 @@ func TestReviewerCompletedEventReflectsPersistedReviewerStatusStateWithoutTransc
 		t.Fatalf("follow-up assistant committed start = %d, want %d; snapshot=%+v", got, want, snapshotAtCompletion.Entries)
 	}
 	statusEntry := snapshotAtCompletion.Entries[len(snapshotAtCompletion.Entries)-1]
-	if statusEntry.ReviewerFeedback == nil || len(statusEntry.ReviewerFeedback.Suggestions) != 1 {
-		t.Fatalf("expected completion snapshot to end with typed reviewer feedback, got %+v", statusEntry)
+	if statusEntry.Role != string(transcript.EntryRoleReviewerStatus) ||
+		statusEntry.Text != reviewerStatusText(*completed.Reviewer, nil) {
+		t.Fatalf("expected completion snapshot to end with reviewer application status, got %+v", statusEntry)
+	}
+	feedbackEntry := snapshotAtCompletion.Entries[len(snapshotAtCompletion.Entries)-3]
+	if feedbackEntry.ReviewerFeedback == nil || len(feedbackEntry.ReviewerFeedback.Suggestions) != 1 {
+		t.Fatalf("expected typed reviewer feedback before follow-up assistant, got %+v", feedbackEntry)
+	}
+
+	feedbackEventIndex, assistantEventIndex, statusEventIndex, completedEventIndex := -1, -1, -1, -1
+	for index := range eventOrder {
+		event := eventOrder[index]
+		switch {
+		case event.Kind == EventLocalEntryAdded && event.LocalEntry != nil && event.LocalEntry.ReviewerFeedback != nil:
+			feedbackEventIndex = index
+		case event.Kind == EventAssistantMessage && messageContent(event.Message) == "updated final after review":
+			assistantEventIndex = index
+		case event.Kind == EventLocalEntryAdded && event.LocalEntry != nil && event.LocalEntry.Role == string(transcript.EntryRoleReviewerStatus):
+			statusEventIndex = index
+		case event.Kind == EventReviewerCompleted:
+			completedEventIndex = index
+		}
+	}
+	if !(feedbackEventIndex >= 0 &&
+		feedbackEventIndex < assistantEventIndex &&
+		assistantEventIndex < statusEventIndex &&
+		statusEventIndex < completedEventIndex) {
+		t.Fatalf(
+			"reviewer event order = feedback:%d assistant:%d status:%d completed:%d events:%+v",
+			feedbackEventIndex,
+			assistantEventIndex,
+			statusEventIndex,
+			completedEventIndex,
+			eventOrder,
+		)
 	}
 	window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
 	if err != nil {
 		t.Fatalf("read bounded reviewer records: %v", err)
 	}
-	statuses, finalRows := 0, 0
+	feedbackRecords, statusRecords, finalRows := 0, 0, 0
 	for _, record := range window.Records {
 		switch payload := mustSessionEventPayload(record).(type) {
 		case session.ReviewerFeedbackRecord:
-			statuses++
+			feedbackRecords++
+		case session.LocalEntryRecord:
+			if payload.Role == string(transcript.EntryRoleReviewerStatus) {
+				statusRecords++
+			}
 		case session.MessageRecord:
 			message, restoreErr := llmMessageFromSessionRecord(payload)
 			if restoreErr != nil {
@@ -140,8 +181,14 @@ func TestReviewerCompletedEventReflectsPersistedReviewerStatusStateWithoutTransc
 			}
 		}
 	}
-	if statuses != 1 || finalRows != 2 {
-		t.Fatalf("reviewer feedback/final records = feedback:%d finals:%d records:%+v", statuses, finalRows, window.Records)
+	if feedbackRecords != 1 || statusRecords != 1 || finalRows != 2 {
+		t.Fatalf(
+			"reviewer records = feedback:%d status:%d finals:%d records:%+v",
+			feedbackRecords,
+			statusRecords,
+			finalRows,
+			window.Records,
+		)
 	}
 
 	eng.AppendCommittedEntry("warning", "later unrelated note")
@@ -414,14 +461,17 @@ func TestRestoreMessagesKeepsStoredReviewerEntriesVerbatim(t *testing.T) {
 
 	restored := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
 	snapshot := restored.ChatSnapshot()
-	if len(snapshot.Entries) != 2 {
-		t.Fatalf("expected 2 restored legacy entries, got %+v", snapshot.Entries)
+	if len(snapshot.Entries) != 3 {
+		t.Fatalf("expected 3 restored legacy entries, got %+v", snapshot.Entries)
 	}
 	if snapshot.Entries[0].Role != "reviewer_suggestions" || snapshot.Entries[0].CondensedText != "Supervisor made 1 suggestion." {
 		t.Fatalf("expected stored reviewer_suggestions entry, got %+v", snapshot.Entries[0])
 	}
-	if snapshot.Entries[1].Role != "reviewer_error" || snapshot.Entries[1].Text != "legacy Reviewer error" {
-		t.Fatalf("expected stored reviewer_error entry, got %+v", snapshot.Entries[1])
+	if snapshot.Entries[1].Role != "reviewer_status" {
+		t.Fatalf("expected stored reviewer_status entry, got %+v", snapshot.Entries[1])
+	}
+	if snapshot.Entries[2].Role != "reviewer_error" || snapshot.Entries[2].Text != "legacy Reviewer error" {
+		t.Fatalf("expected stored reviewer_error entry, got %+v", snapshot.Entries[2])
 	}
 }
 
