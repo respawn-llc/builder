@@ -69,6 +69,43 @@ func TestGraphEntityIDTextRejectsMalformedBlobs(t *testing.T) {
 	}
 }
 
+func TestMigrateGraphEntityIDBlobPreservesCanonicalAndRemapsLegacyText(t *testing.T) {
+	canonical, err := MigrateGraphEntityIDBlob(testGraphEntityID)
+	if err != nil {
+		t.Fatalf("MigrateGraphEntityIDBlob canonical: %v", err)
+	}
+	wantCanonical, err := GraphEntityIDBlob(testGraphEntityID)
+	if err != nil {
+		t.Fatalf("GraphEntityIDBlob canonical: %v", err)
+	}
+	if !bytes.Equal(canonical, wantCanonical) {
+		t.Fatalf("canonical migration = %x, want %x", canonical, wantCanonical)
+	}
+
+	legacy, err := MigrateGraphEntityIDBlob("node-legacy")
+	if err != nil {
+		t.Fatalf("MigrateGraphEntityIDBlob legacy: %v", err)
+	}
+	if _, err := GraphEntityIDText(legacy); err != nil {
+		t.Fatalf("legacy migration = %x: %v", legacy, err)
+	}
+}
+
+func TestMigrateGraphEntityIDBlobRejectsBlankAndZeroText(t *testing.T) {
+	for name, raw := range map[string]string{
+		"blank":             "",
+		"whitespace":        " ",
+		"canonical zero":    "00000000-0000-0000-0000-000000000000",
+		"noncanonical zero": "00000000000000000000000000000000",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := MigrateGraphEntityIDBlob(raw); err == nil {
+				t.Fatalf("MigrateGraphEntityIDBlob(%q) succeeded", raw)
+			}
+		})
+	}
+}
+
 func graphUUIDBytes(raw string) []byte {
 	value := uuid.MustParse(raw)
 	return value[:]

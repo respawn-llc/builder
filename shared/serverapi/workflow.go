@@ -94,7 +94,7 @@ type WorkflowNode struct {
 	Key                string                      `json:"key"`
 	Kind               string                      `json:"kind"`
 	DisplayName        string                      `json:"display_name"`
-	GroupID            string                      `json:"group_id,omitempty"`
+	GroupID            *string                     `json:"group_id"`
 	GroupKey           string                      `json:"group_key,omitempty"`
 	SubagentRole       string                      `json:"subagent_role,omitempty"`
 	CompletionMode     string                      `json:"completion_mode,omitempty"`
@@ -483,7 +483,7 @@ type WorkflowGetResponse struct {
 
 type WorkflowNodeAddRequest struct {
 	WorkflowID         runtimeids.WorkflowID       `json:"workflow_id"`
-	NodeID             string                      `json:"node_id,omitempty"`
+	NodeID             string                      `json:"node_id"`
 	Key                string                      `json:"key"`
 	Kind               string                      `json:"kind"`
 	DisplayName        string                      `json:"display_name"`
@@ -517,7 +517,7 @@ type WorkflowNodeUpdateResponse struct {
 
 type WorkflowNodeGroupAddRequest struct {
 	WorkflowID  runtimeids.WorkflowID `json:"workflow_id"`
-	GroupID     string                `json:"group_id,omitempty"`
+	GroupID     string                `json:"group_id"`
 	GroupKey    string                `json:"group_key"`
 	DisplayName string                `json:"display_name"`
 	SortOrder   int                   `json:"sort_order"`
@@ -543,7 +543,7 @@ type WorkflowNodeGroupResponse struct {
 
 type WorkflowTransitionGroupAddRequest struct {
 	WorkflowID   runtimeids.WorkflowID `json:"workflow_id"`
-	GroupID      string                `json:"group_id,omitempty"`
+	GroupID      string                `json:"group_id"`
 	SourceNodeID string                `json:"source_node_id"`
 	TransitionID string                `json:"transition_id"`
 	DisplayName  string                `json:"display_name,omitempty"`
@@ -569,7 +569,7 @@ type WorkflowTransitionGroupUpdateResponse struct {
 
 type WorkflowEdgeAddRequest struct {
 	WorkflowID        runtimeids.WorkflowID `json:"workflow_id"`
-	EdgeID            string                `json:"edge_id,omitempty"`
+	EdgeID            string                `json:"edge_id"`
 	TransitionGroupID string                `json:"transition_group_id"`
 	Key               string                `json:"key"`
 	TargetNodeID      string                `json:"target_node_id"`
@@ -725,9 +725,9 @@ type WorkflowValidationError struct {
 	Code              string                          `json:"code"`
 	Message           string                          `json:"message"`
 	WorkflowID        *runtimeids.WorkflowID          `json:"workflow_id,omitempty"`
-	NodeID            string                          `json:"node_id,omitempty"`
-	TransitionGroupID string                          `json:"transition_group_id,omitempty"`
-	EdgeID            string                          `json:"edge_id,omitempty"`
+	NodeID            *string                         `json:"node_id"`
+	TransitionGroupID *string                         `json:"transition_group_id"`
+	EdgeID            *string                         `json:"edge_id"`
 	Details           *WorkflowValidationErrorDetails `json:"details,omitempty"`
 	RelatedIDs        []string                        `json:"related_ids,omitempty"`
 	BlocksContext     bool                            `json:"blocks_context"`
@@ -737,7 +737,7 @@ type WorkflowValidationErrorDetails struct {
 	FieldName      string  `json:"field_name,omitempty"`
 	InputName      string  `json:"input_name,omitempty"`
 	Placeholder    string  `json:"placeholder,omitempty"`
-	ProviderEdgeID string  `json:"provider_edge_id,omitempty"`
+	ProviderEdgeID *string `json:"provider_edge_id"`
 	Role           *string `json:"role,omitempty"`
 	RequiredTool   *string `json:"required_tool,omitempty"`
 }
@@ -1524,7 +1524,7 @@ type WorkflowBoardGroup struct {
 
 type WorkflowBoardColumn struct {
 	Node      WorkflowBoardNodeSummary `json:"node"`
-	GroupID   string                   `json:"group_id,omitempty"`
+	GroupID   *string                  `json:"group_id"`
 	SortOrder int                      `json:"sort_order"`
 	IsBacklog bool                     `json:"is_backlog"`
 	IsDone    bool                     `json:"is_done"`
@@ -1976,7 +1976,18 @@ func (r WorkflowGetRequest) Validate() error {
 }
 
 func (r WorkflowNodeAddRequest) Validate() error {
-	return validateWorkflowNodeFields(r.WorkflowID, "", r.Key, r.Kind, r.DisplayName, r.GroupKey, r.CompletionMode, r.ScriptPath, r.JoinInputProviders)
+	if err := validateGraphEntityID("node_id", r.NodeID); err != nil {
+		return err
+	}
+	if err := validateWorkflowNodeFields(r.WorkflowID, r.NodeID, r.Key, r.Kind, r.DisplayName, r.GroupKey, r.CompletionMode, r.ScriptPath, r.JoinInputProviders); err != nil {
+		return err
+	}
+	for _, provider := range r.JoinInputProviders {
+		if err := validateGraphEntityID("join_input_provider.provider_edge_id", provider.ProviderEdgeID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r WorkflowNodeUpdateRequest) Validate() error {
@@ -2044,6 +2055,9 @@ func (r WorkflowNodeGroupAddRequest) Validate() error {
 	if err := validateRequiredWorkflowID(r.WorkflowID); err != nil {
 		return err
 	}
+	if err := validateGraphEntityID("group_id", r.GroupID); err != nil {
+		return err
+	}
 	if err := validateModelKey("group_key", r.GroupKey); err != nil {
 		return err
 	}
@@ -2083,7 +2097,13 @@ func (r WorkflowNodeGroupDeleteRequest) Validate() error {
 }
 
 func (r WorkflowTransitionGroupAddRequest) Validate() error {
-	return validateWorkflowTransitionGroupFields(r.WorkflowID, "", r.SourceNodeID, r.TransitionID, r.DisplayName, r.Description)
+	if err := validateGraphEntityID("group_id", r.GroupID); err != nil {
+		return err
+	}
+	if err := validateGraphEntityID("source_node_id", r.SourceNodeID); err != nil {
+		return err
+	}
+	return validateWorkflowTransitionGroupFields(r.WorkflowID, r.GroupID, r.SourceNodeID, r.TransitionID, r.DisplayName, r.Description)
 }
 
 func (r WorkflowTransitionGroupUpdateRequest) Validate() error {
@@ -2116,7 +2136,16 @@ func validateWorkflowTransitionGroupFields(workflowID runtimeids.WorkflowID, gro
 }
 
 func (r WorkflowEdgeAddRequest) Validate() error {
-	return validateWorkflowEdgeFields(r.WorkflowID, "", r.TransitionGroupID, r.Key, r.TargetNodeID, r.ContextMode, r.ContextSource, r.AssigneeSelection, r.ThinkingSelection, r.Parameters)
+	for _, field := range []struct{ name, value string }{
+		{"edge_id", r.EdgeID},
+		{"transition_group_id", r.TransitionGroupID},
+		{"target_node_id", r.TargetNodeID},
+	} {
+		if err := validateGraphEntityID(field.name, field.value); err != nil {
+			return err
+		}
+	}
+	return validateWorkflowEdgeFields(r.WorkflowID, r.EdgeID, r.TransitionGroupID, r.Key, r.TargetNodeID, r.ContextMode, r.ContextSource, r.AssigneeSelection, r.ThinkingSelection, r.Parameters)
 }
 
 func (r WorkflowEdgeUpdateRequest) Validate() error {
@@ -2328,7 +2357,10 @@ func (r WorkflowGraphSavePreviewRequest) Validate() error {
 	if err := validateWorkflowGraphSavePreviewFields(r); err != nil {
 		return err
 	}
-	return validateWorkflowGraphDraftEnvelope(r.Graph)
+	if err := validateWorkflowGraphDraftEnvelope(r.Graph); err != nil {
+		return err
+	}
+	return validateWorkflowGraphEntityIDs(r.Graph)
 }
 
 func (r WorkflowGraphSavePreviewRequest) ValidateRPC() error {
@@ -2600,6 +2632,60 @@ func validateWorkflowGraphDraftCollectionBounds(graph WorkflowGraphDraft) error 
 	} {
 		if field.count > field.limit {
 			return workflowRequestError(WorkflowRequestErrorTooLong, "graph."+field.name, fmt.Sprintf("%s must be <= %d", field.name, field.limit))
+		}
+	}
+	return nil
+}
+
+func validateGraphEntityID(field, value string) error {
+	if _, err := runtimeids.GraphEntityIDBlob(value); err != nil {
+		return workflowRequestError(
+			WorkflowRequestErrorInvalidValue,
+			field,
+			field+" must be canonical UUIDv4 text",
+		)
+	}
+	return nil
+}
+
+func validateWorkflowGraphEntityIDs(graph WorkflowGraphDraft) error {
+	for _, group := range graph.NodeGroups {
+		if err := validateGraphEntityID("graph.node_groups.id", group.ID); err != nil {
+			return err
+		}
+	}
+	for _, node := range graph.Nodes {
+		if err := validateGraphEntityID("graph.nodes.id", node.ID); err != nil {
+			return err
+		}
+		if node.GroupID != nil {
+			if err := validateGraphEntityID("graph.nodes.group_id", *node.GroupID); err != nil {
+				return err
+			}
+		}
+		for _, provider := range node.JoinInputProviders {
+			if err := validateGraphEntityID("graph.nodes.join_input_providers.provider_edge_id", provider.ProviderEdgeID); err != nil {
+				return err
+			}
+		}
+	}
+	for _, group := range graph.TransitionGroups {
+		if err := validateGraphEntityID("graph.transition_groups.id", group.ID); err != nil {
+			return err
+		}
+		if err := validateGraphEntityID("graph.transition_groups.source_node_id", group.SourceNodeID); err != nil {
+			return err
+		}
+	}
+	for _, edge := range graph.Edges {
+		for _, field := range []struct{ name, value string }{
+			{"graph.edges.id", edge.ID},
+			{"graph.edges.transition_group_id", edge.TransitionGroupID},
+			{"graph.edges.target_node_id", edge.TargetNodeID},
+		} {
+			if err := validateGraphEntityID(field.name, field.value); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

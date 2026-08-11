@@ -55,7 +55,7 @@ func pendingApprovalAttentionProjection(ctx context.Context, q *sqlitegen.Querie
 	if err != nil {
 		return ApprovalAttentionProjection{}, false, err
 	}
-	approval, err := pendingApprovalFromRow(ctx, q, row)
+	approval, err := pendingApprovalFromRow(ctx, q, pendingApprovalRecordFromGetRow(row))
 	if err != nil {
 		return ApprovalAttentionProjection{}, false, err
 	}

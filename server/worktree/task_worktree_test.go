@@ -19,6 +19,7 @@ import (
 	"core/server/workflow"
 	"core/server/workflowstore"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/worktreecontract"
 )
@@ -1811,20 +1812,24 @@ func createTaskWorktreeTestTaskWithSource(t *testing.T, env *serviceTestEnv, sou
 	}
 	startID := taskWorktreeNodeIDByKind(t, def, workflow.NodeKindStart)
 	doneID := taskWorktreeNodeIDByKind(t, def, workflow.NodeKindTerminal)
-	agentID := workflow.NodeID("node-agent-" + created.ID.String())
+	agentID := workflow.NodeID(runtimeids.NewGraphEntityID())
+	startGroupID := workflow.TransitionGroupID(runtimeids.NewGraphEntityID())
+	startEdgeID := workflow.EdgeID(runtimeids.NewGraphEntityID())
+	doneGroupID := workflow.TransitionGroupID(runtimeids.NewGraphEntityID())
+	doneEdgeID := workflow.EdgeID(runtimeids.NewGraphEntityID())
 	if _, err := store.AddNode(env.ctx, workflowstore.NodeRecord{ID: agentID, WorkflowID: created.ID, Key: "implement", Kind: workflow.NodeKindAgent, DisplayName: "Implement", SubagentRole: "workflow-test"}); err != nil {
 		t.Fatalf("AddNode: %v", err)
 	}
-	if _, err := store.AddTransitionGroup(env.ctx, workflowstore.TransitionGroupRecord{ID: workflow.TransitionGroupID("group-start-" + created.ID.String()), WorkflowID: created.ID, SourceNodeID: startID, TransitionID: "start", DisplayName: "Start"}); err != nil {
+	if _, err := store.AddTransitionGroup(env.ctx, workflowstore.TransitionGroupRecord{ID: startGroupID, WorkflowID: created.ID, SourceNodeID: startID, TransitionID: "start", DisplayName: "Start"}); err != nil {
 		t.Fatalf("AddTransitionGroup start: %v", err)
 	}
-	if _, err := store.AddEdge(env.ctx, workflowstore.EdgeRecord{ID: workflow.EdgeID("edge-start-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: workflow.TransitionGroupID("group-start-" + created.ID.String()), Key: "start", TargetNodeID: agentID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Do work"}); err != nil {
+	if _, err := store.AddEdge(env.ctx, workflowstore.EdgeRecord{ID: startEdgeID, WorkflowID: created.ID, TransitionGroupID: startGroupID, Key: "start", TargetNodeID: agentID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Do work"}); err != nil {
 		t.Fatalf("AddEdge start: %v", err)
 	}
-	if _, err := store.AddTransitionGroup(env.ctx, workflowstore.TransitionGroupRecord{ID: workflow.TransitionGroupID("group-done-" + created.ID.String()), WorkflowID: created.ID, SourceNodeID: agentID, TransitionID: "done", DisplayName: "Done"}); err != nil {
+	if _, err := store.AddTransitionGroup(env.ctx, workflowstore.TransitionGroupRecord{ID: doneGroupID, WorkflowID: created.ID, SourceNodeID: agentID, TransitionID: "done", DisplayName: "Done"}); err != nil {
 		t.Fatalf("AddTransitionGroup done: %v", err)
 	}
-	if _, err := store.AddEdge(env.ctx, workflowstore.EdgeRecord{ID: workflow.EdgeID("edge-done-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: workflow.TransitionGroupID("group-done-" + created.ID.String()), Key: "done", TargetNodeID: doneID, ContextMode: workflow.ContextModeNewSession}); err != nil {
+	if _, err := store.AddEdge(env.ctx, workflowstore.EdgeRecord{ID: doneEdgeID, WorkflowID: created.ID, TransitionGroupID: doneGroupID, Key: "done", TargetNodeID: doneID, ContextMode: workflow.ContextModeNewSession}); err != nil {
 		t.Fatalf("AddEdge done: %v", err)
 	}
 	if _, err := store.LinkWorkflow(env.ctx, env.binding.ProjectID, created.ID, true); err != nil {

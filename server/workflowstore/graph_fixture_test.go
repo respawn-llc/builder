@@ -12,10 +12,11 @@ import (
 func TestWorkflowGraphSaveRequestFromDefinitionPreservesProductGraph(t *testing.T) {
 	workflowID := testsetup.WorkflowID(t, "workflow-rich")
 	groupID := "group-parallel"
-	agentID := workflow.NodeID("node-agent")
-	scriptID := workflow.NodeID("node-script")
-	joinID := workflow.NodeID("node-join")
-	providerEdgeID := workflow.EdgeID("edge-provider")
+	groupIDPointer := &groupID
+	agentID := testNodeID("node-agent")
+	scriptID := testNodeID("node-script")
+	joinID := testNodeID("node-join")
+	providerEdgeID := testEdgeID("edge-provider")
 	def := workflow.Definition{
 		ID: workflowID,
 		NodeGroups: []workflow.NodeGroup{
@@ -35,16 +36,16 @@ func TestWorkflowGraphSaveRequestFromDefinitionPreservesProductGraph(t *testing.
 		Nodes: []workflow.Node{
 			workflow.StartNode{NodeIdentity: workflow.NodeIdentity{WorkflowID: workflowID, ID: "node-start", Key: "start", DisplayName: "Start"}},
 			workflow.AgentNode{
-				NodeIdentity:   workflow.NodeIdentity{WorkflowID: workflowID, ID: agentID, Key: "agent", DisplayName: "Agent", GroupID: groupID},
+				NodeIdentity:   workflow.NodeIdentity{WorkflowID: workflowID, ID: agentID, Key: "agent", DisplayName: "Agent", GroupID: groupIDPointer},
 				SubagentRole:   "coder",
 				CompletionMode: "tool",
 			},
 			workflow.ScriptNode{
-				NodeIdentity: workflow.NodeIdentity{WorkflowID: workflowID, ID: scriptID, Key: "script", DisplayName: "Script", GroupID: groupID},
+				NodeIdentity: workflow.NodeIdentity{WorkflowID: workflowID, ID: scriptID, Key: "script", DisplayName: "Script", GroupID: groupIDPointer},
 				ScriptPath:   workflow.MustPresentScriptPath("scripts/run"),
 			},
 			workflow.JoinNode{
-				NodeIdentity:       workflow.NodeIdentity{WorkflowID: workflowID, ID: joinID, Key: "join", DisplayName: "Join", GroupID: groupID},
+				NodeIdentity:       workflow.NodeIdentity{WorkflowID: workflowID, ID: joinID, Key: "join", DisplayName: "Join", GroupID: groupIDPointer},
 				JoinInputProviders: []workflow.JoinInputProvider{{InputName: "summary", ProviderEdgeID: providerEdgeID}},
 			},
 			workflow.ScriptNode{NodeIdentity: workflow.NodeIdentity{WorkflowID: workflowID, ID: "node-script-absent", Key: "script_absent", DisplayName: "Script absent"}},
@@ -86,7 +87,7 @@ func TestWorkflowGraphSaveRequestFromDefinitionPreservesProductGraph(t *testing.
 		t.Fatalf("node groups = %+v, want canonical order with normalized sort values", req.NodeGroups)
 	}
 	agent := workflowGraphSaveNodeRecord(t, req.Nodes, agentID)
-	if agent.GroupID != groupID || agent.GroupKey != "parallel" || agent.SubagentRole != "coder" || agent.CompletionMode != "tool" {
+	if agent.GroupID == nil || *agent.GroupID != groupID || agent.GroupKey != "parallel" || agent.SubagentRole != "coder" || agent.CompletionMode != "tool" {
 		t.Fatalf("agent record = %+v, want identity and execution fields preserved", agent)
 	}
 	script := workflowGraphSaveNodeRecord(t, req.Nodes, scriptID)
@@ -155,9 +156,9 @@ func TestWorkflowGraphSaveFixtureUsesOneAtomicSaveAndConverterNoop(t *testing.T)
 		t.Fatalf("CreateWorkflow: %v", err)
 	}
 	before := created.Version
-	agentID := workflow.NodeID("node-agent")
-	startGroup := workflow.TransitionGroupID("group-start")
-	doneGroup := workflow.TransitionGroupID("group-done")
+	agentID := testNodeID("node-agent")
+	startGroup := testTransitionGroupID("group-start")
+	doneGroup := testTransitionGroupID("group-done")
 
 	result := saveWorkflowGraphFixture(t, ctx, store, created.ID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
 		start := nodeByKind(t, def, workflow.NodeKindStart)
@@ -168,8 +169,8 @@ func TestWorkflowGraphSaveFixtureUsesOneAtomicSaveAndConverterNoop(t *testing.T)
 			TransitionGroupRecord{ID: doneGroup, WorkflowID: created.ID, SourceNodeID: agentID, TransitionID: "done", DisplayName: "Done"},
 		)
 		req.Edges = append(req.Edges,
-			EdgeRecord{ID: "edge-start", WorkflowID: created.ID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: agentID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Do work."},
-			EdgeRecord{ID: "edge-done", WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession},
+			EdgeRecord{ID: testEdgeID("edge-start"), WorkflowID: created.ID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: agentID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Do work."},
+			EdgeRecord{ID: testEdgeID("edge-done"), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession},
 		)
 	})
 	if !result.Changed || result.Version != before+1 {

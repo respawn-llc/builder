@@ -31,7 +31,7 @@ func definitionScriptPathErrors(def workflow.Definition, rootPath *string) []wor
 				Code:          workflow.ValidationErrorCode(diagnostic.Code),
 				Message:       diagnostic.Message,
 				WorkflowID:    workflow.WorkflowIDPointer(def.ID),
-				NodeID:        workflow.NodeIDOf(node),
+				NodeID:        workflow.NodeIDPointer(workflow.NodeIDOf(node)),
 				BlocksContext: diagnostic.Blocking,
 			})
 		}

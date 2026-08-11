@@ -10,9 +10,8 @@ import (
 	"core/server/workflow"
 	"core/server/workflowexecution"
 	"core/server/workflowstore"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
-
-	"github.com/google/uuid"
 )
 
 func TestTaskDetailDependenciesUseOneStatusObservation(t *testing.T) {
@@ -99,14 +98,14 @@ func TestTaskDetailMaterializesAndOrdersLiveScripts(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
 	started := fixture.startTask(t, "Live Scripts")
 	scriptNodeIDs := []workflow.NodeID{
-		workflow.NodeID("node-" + uuid.NewString()),
-		workflow.NodeID("node-" + uuid.NewString()),
+		workflow.NodeID(runtimeids.NewGraphEntityID()),
+		workflow.NodeID(runtimeids.NewGraphEntityID()),
 	}
 	slices.Sort(scriptNodeIDs)
 	scriptPaths := []string{"scripts/a.sh", "scripts/b.sh"}
-	joinNodeID := workflow.NodeID("node-" + uuid.NewString())
-	joinAEdgeID := workflow.EdgeID("edge-" + uuid.NewString())
-	joinBEdgeID := workflow.EdgeID("edge-" + uuid.NewString())
+	joinNodeID := workflow.NodeID(runtimeids.NewGraphEntityID())
+	joinAEdgeID := workflow.EdgeID(runtimeids.NewGraphEntityID())
+	joinBEdgeID := workflow.EdgeID(runtimeids.NewGraphEntityID())
 	nodes := []workflowstore.NodeRecord{
 		{ID: scriptNodeIDs[0], WorkflowID: fixture.workflowID, Key: "script_a", Kind: workflow.NodeKindScript, DisplayName: "Script A", ScriptPath: scriptPaths[0]},
 		{ID: scriptNodeIDs[1], WorkflowID: fixture.workflowID, Key: "script_b", Kind: workflow.NodeKindScript, DisplayName: "Script B", ScriptPath: scriptPaths[1]},
@@ -123,10 +122,10 @@ func TestTaskDetailMaterializesAndOrdersLiveScripts(t *testing.T) {
 	}
 	terminalNodeID := currentNodeViewNodeIDByKind(t, definition, workflow.NodeKindTerminal)
 	groupIDs := []workflow.TransitionGroupID{
-		workflow.TransitionGroupID("group-" + uuid.NewString()),
-		workflow.TransitionGroupID("group-" + uuid.NewString()),
-		workflow.TransitionGroupID("group-" + uuid.NewString()),
-		workflow.TransitionGroupID("group-" + uuid.NewString()),
+		workflow.TransitionGroupID(runtimeids.NewGraphEntityID()),
+		workflow.TransitionGroupID(runtimeids.NewGraphEntityID()),
+		workflow.TransitionGroupID(runtimeids.NewGraphEntityID()),
+		workflow.TransitionGroupID(runtimeids.NewGraphEntityID()),
 	}
 	groups := []workflowstore.TransitionGroupRecord{
 		{ID: groupIDs[0], WorkflowID: fixture.workflowID, SourceNodeID: fixture.agentNodeID, TransitionID: "split", DisplayName: "Split"},
@@ -140,11 +139,11 @@ func TestTaskDetailMaterializesAndOrdersLiveScripts(t *testing.T) {
 		}
 	}
 	edges := []workflowstore.EdgeRecord{
-		{WorkflowID: fixture.workflowID, TransitionGroupID: groupIDs[0], Key: "split_a", TargetNodeID: scriptNodeIDs[0], ContextMode: workflow.ContextModeNewSession},
-		{WorkflowID: fixture.workflowID, TransitionGroupID: groupIDs[0], Key: "split_b", TargetNodeID: scriptNodeIDs[1], ContextMode: workflow.ContextModeNewSession},
+		{ID: workflow.EdgeID(runtimeids.NewGraphEntityID()), WorkflowID: fixture.workflowID, TransitionGroupID: groupIDs[0], Key: "split_a", TargetNodeID: scriptNodeIDs[0], ContextMode: workflow.ContextModeNewSession},
+		{ID: workflow.EdgeID(runtimeids.NewGraphEntityID()), WorkflowID: fixture.workflowID, TransitionGroupID: groupIDs[0], Key: "split_b", TargetNodeID: scriptNodeIDs[1], ContextMode: workflow.ContextModeNewSession},
 		{ID: joinAEdgeID, WorkflowID: fixture.workflowID, TransitionGroupID: groupIDs[1], Key: "join_a", TargetNodeID: joinNodeID, ContextMode: workflow.ContextModeNewSession, Parameters: []workflow.Parameter{{Key: "joined", Description: "Joined output.", Purpose: workflow.ParameterPurposeOrdinary}}},
 		{ID: joinBEdgeID, WorkflowID: fixture.workflowID, TransitionGroupID: groupIDs[2], Key: "join_b", TargetNodeID: joinNodeID, ContextMode: workflow.ContextModeNewSession},
-		{WorkflowID: fixture.workflowID, TransitionGroupID: groupIDs[3], Key: "finish", TargetNodeID: terminalNodeID, ContextMode: workflow.ContextModeNewSession},
+		{ID: workflow.EdgeID(runtimeids.NewGraphEntityID()), WorkflowID: fixture.workflowID, TransitionGroupID: groupIDs[3], Key: "finish", TargetNodeID: terminalNodeID, ContextMode: workflow.ContextModeNewSession},
 	}
 	for _, edge := range edges {
 		if _, err := fixture.store.AddEdge(fixture.ctx, edge); err != nil {

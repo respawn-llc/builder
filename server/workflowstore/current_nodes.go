@@ -188,8 +188,12 @@ func currentNodeFromRow(row sqlitegen.ListTaskCurrentNodesRow) (workflow.Current
 		branchKey = &value
 	}
 	var enteredByEdgeID *workflow.EdgeID
-	if row.EnteredByEdgeID.Valid {
-		value := workflow.EdgeID(row.EnteredByEdgeID.String)
+	enteredByEdge, err := nullableGraphIdentity(row.EnteredByEdgeID)
+	if err != nil {
+		return workflow.CurrentNode{}, fmt.Errorf("decode current node entering edge: %w", err)
+	}
+	if enteredByEdge != nil {
+		value := workflow.EdgeID(*enteredByEdge)
 		enteredByEdgeID = &value
 	}
 	reference, err := workflow.NewCurrentNodeReference(workflow.TaskID(row.TaskID), workflow.NodeID(row.NodeID), branchKey)
@@ -585,7 +589,7 @@ func (s *Store) RecoverExecutableCurrentNodes(
 			value := workflow.TransitionBranchKey(row.TransitionBranchKey.String)
 			branchKey = &value
 		}
-		reference, err := workflow.NewCurrentNodeReference(workflow.TaskID(row.TaskID), workflow.NodeID(row.NodeID), branchKey)
+		reference, err := workflow.NewCurrentNodeReference(workflow.TaskID(row.TaskID), workflow.NodeID(row.Column2), branchKey)
 		if err != nil {
 			return nil, err
 		}

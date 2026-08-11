@@ -547,13 +547,18 @@ func nodeRecordFromCurrentDefinition(node workflow.Node) (NodeRecord, error) {
 	if path := workflow.NodeScriptPath(node); path.IsPresent() {
 		scriptPath = path.String()
 	}
+	groupID, hasGroup := workflow.NodeGroupID(node)
+	var groupIDPointer *string
+	if hasGroup {
+		groupIDPointer = &groupID
+	}
 	return NodeRecord{
 		ID:                 workflow.NodeIDOf(node),
 		WorkflowID:         *workflowID,
 		Key:                workflow.NodeKey(node),
 		Kind:               node.Kind(),
 		DisplayName:        workflow.NodeDisplayName(node),
-		GroupID:            workflow.NodeGroupID(node),
+		GroupID:            groupIDPointer,
 		SubagentRole:       workflow.NodeSubagentRole(node),
 		CompletionMode:     workflow.NodeCompletionMode(node),
 		ScriptPath:         scriptPath,

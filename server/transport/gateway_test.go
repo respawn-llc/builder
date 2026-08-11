@@ -30,6 +30,7 @@ import (
 	"core/shared/llmerrors"
 	"core/shared/protocol"
 	"core/shared/rpcwire"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 )
@@ -864,10 +865,11 @@ func createGatewaySearchableTask(t *testing.T, appCore *core.Core) serverapi.Wor
 	if startID == "" || terminalID == "" {
 		t.Fatalf("workflow definition lacks start/terminal Nodes: %+v", definition.Definition.Nodes)
 	}
-	workflowID := created.Workflow.ID.String()
-	agentID := "node-agent-" + workflowID
-	startGroupID := "group-start-" + workflowID
-	doneGroupID := "group-done-" + workflowID
+	agentID := runtimeids.NewGraphEntityID()
+	startGroupID := runtimeids.NewGraphEntityID()
+	doneGroupID := runtimeids.NewGraphEntityID()
+	startEdgeID := runtimeids.NewGraphEntityID()
+	doneEdgeID := runtimeids.NewGraphEntityID()
 	if _, err := workflows.AddWorkflowNode(ctx, serverapi.WorkflowNodeAddRequest{
 		WorkflowID:   created.Workflow.ID,
 		NodeID:       agentID,
@@ -889,7 +891,7 @@ func createGatewaySearchableTask(t *testing.T, appCore *core.Core) serverapi.Wor
 	}
 	if _, err := workflows.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{
 		WorkflowID:        created.Workflow.ID,
-		EdgeID:            "edge-start-" + workflowID,
+		EdgeID:            startEdgeID,
 		TransitionGroupID: startGroupID,
 		Key:               "start",
 		TargetNodeID:      agentID,
@@ -911,7 +913,7 @@ func createGatewaySearchableTask(t *testing.T, appCore *core.Core) serverapi.Wor
 	}
 	if _, err := workflows.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{
 		WorkflowID:        created.Workflow.ID,
-		EdgeID:            "edge-done-" + workflowID,
+		EdgeID:            doneEdgeID,
 		TransitionGroupID: doneGroupID,
 		Key:               "done",
 		TargetNodeID:      terminalID,

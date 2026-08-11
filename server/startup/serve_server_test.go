@@ -24,6 +24,7 @@ import (
 	"core/shared/client"
 	"core/shared/config"
 	"core/shared/protocol"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -313,14 +314,14 @@ func createAdmittedCurrentNodeForRecovery(t *testing.T, server *ServeServer) (wo
 	if startID == "" || terminalID == "" {
 		t.Fatalf("default workflow nodes = %+v", definition.Definition.Nodes)
 	}
-	agentID := "node-agent-" + created.Workflow.ID.String()
+	agentID := runtimeids.NewGraphEntityID()
 	if _, err := client.AddWorkflowNode(ctx, serverapi.WorkflowNodeAddRequest{
 		WorkflowID: created.Workflow.ID, NodeID: agentID, Key: "agent", Kind: "agent", DisplayName: "Agent", SubagentRole: "coder",
 	}); err != nil {
 		t.Fatalf("AddWorkflowNode: %v", err)
 	}
-	startGroupID := "group-start-" + created.Workflow.ID.String()
-	doneGroupID := "group-done-" + created.Workflow.ID.String()
+	startGroupID := runtimeids.NewGraphEntityID()
+	doneGroupID := runtimeids.NewGraphEntityID()
 	if _, err := client.AddWorkflowTransitionGroup(ctx, serverapi.WorkflowTransitionGroupAddRequest{
 		WorkflowID: created.Workflow.ID, GroupID: startGroupID, SourceNodeID: startID, TransitionID: "start", DisplayName: "Start",
 	}); err != nil {
@@ -332,12 +333,12 @@ func createAdmittedCurrentNodeForRecovery(t *testing.T, server *ServeServer) (wo
 		t.Fatalf("AddWorkflowTransitionGroup: %v", err)
 	}
 	if _, err := client.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{
-		WorkflowID: created.Workflow.ID, EdgeID: "edge-start-" + created.Workflow.ID.String(), TransitionGroupID: startGroupID, Key: "start", TargetNodeID: agentID, AssigneeSelection: "configured", ThinkingSelection: "configured", ContextMode: "new_session", PromptTemplate: "Perform the work.",
+		WorkflowID: created.Workflow.ID, EdgeID: runtimeids.NewGraphEntityID(), TransitionGroupID: startGroupID, Key: "start", TargetNodeID: agentID, AssigneeSelection: "configured", ThinkingSelection: "configured", ContextMode: "new_session", PromptTemplate: "Perform the work.",
 	}); err != nil {
 		t.Fatalf("AddWorkflowEdge: %v", err)
 	}
 	if _, err := client.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{
-		WorkflowID: created.Workflow.ID, EdgeID: "edge-done-" + created.Workflow.ID.String(), TransitionGroupID: doneGroupID, Key: "done", TargetNodeID: terminalID, AssigneeSelection: "configured", ThinkingSelection: "configured", ContextMode: "new_session",
+		WorkflowID: created.Workflow.ID, EdgeID: runtimeids.NewGraphEntityID(), TransitionGroupID: doneGroupID, Key: "done", TargetNodeID: terminalID, AssigneeSelection: "configured", ThinkingSelection: "configured", ContextMode: "new_session",
 	}); err != nil {
 		t.Fatalf("AddWorkflowEdge: %v", err)
 	}

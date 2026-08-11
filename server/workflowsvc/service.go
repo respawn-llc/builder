@@ -2479,11 +2479,12 @@ func (s *Service) workflowGraphValidationResultsForDefinition(def workflow.Defin
 
 func scriptPathValidationError(workflowID runtimeids.WorkflowID, nodeID workflow.NodeID, diagnostic workflowscript.Diagnostic) serverapi.WorkflowValidationError {
 	workflowIDValue := workflowID
+	nodeIDValue := string(nodeID)
 	return serverapi.WorkflowValidationError{
 		Code:          diagnostic.Code,
 		Message:       diagnostic.Message,
 		WorkflowID:    &workflowIDValue,
-		NodeID:        string(nodeID),
+		NodeID:        &nodeIDValue,
 		BlocksContext: diagnostic.Blocking,
 	}
 }
@@ -2521,9 +2522,8 @@ func (s *Service) workflowGraphDraftDefinition(ctx context.Context, workflowID r
 		})
 	}
 	for _, node := range graph.Nodes {
-		groupID := optionalStringValue(node.GroupID)
-		if groupID != "" {
-			groupMemberIDs[groupID] = append(groupMemberIDs[groupID], workflow.NodeID(node.ID))
+		if node.GroupID != nil {
+			groupMemberIDs[*node.GroupID] = append(groupMemberIDs[*node.GroupID], workflow.NodeID(node.ID))
 		}
 		workflowNode, err := workflow.NewNode(
 			workflow.NodeIdentity{
@@ -2531,7 +2531,7 @@ func (s *Service) workflowGraphDraftDefinition(ctx context.Context, workflowID r
 				ID:          workflow.NodeID(node.ID),
 				Key:         workflow.ModelKey(node.Key),
 				DisplayName: node.DisplayName,
-				GroupID:     groupID,
+				GroupID:     cloneStringPointer(node.GroupID),
 			},
 			workflow.NodeKind(node.Kind),
 			workflow.NodeFields{
@@ -2624,7 +2624,7 @@ func workflowGraphStoreSaveRequest(workflowID runtimeids.WorkflowID, expectedVer
 		req.NodeGroups = append(req.NodeGroups, workflowstore.NodeGroupRecord{ID: group.ID, WorkflowID: workflowID, Key: workflow.ModelKey(group.Key), DisplayName: group.DisplayName})
 	}
 	for _, node := range graph.Nodes {
-		req.Nodes = append(req.Nodes, workflowstore.NodeRecord{ID: workflow.NodeID(node.ID), WorkflowID: workflowID, Key: workflow.ModelKey(node.Key), Kind: workflow.NodeKind(node.Kind), DisplayName: node.DisplayName, GroupID: optionalStringValue(node.GroupID), GroupKey: node.GroupKey, SubagentRole: node.SubagentRole, CompletionMode: node.CompletionMode, ScriptPath: optionalStringValue(node.ScriptPath), JoinInputProviders: joinInputProviders(node.JoinInputProviders)})
+		req.Nodes = append(req.Nodes, workflowstore.NodeRecord{ID: workflow.NodeID(node.ID), WorkflowID: workflowID, Key: workflow.ModelKey(node.Key), Kind: workflow.NodeKind(node.Kind), DisplayName: node.DisplayName, GroupID: cloneStringPointer(node.GroupID), GroupKey: node.GroupKey, SubagentRole: node.SubagentRole, CompletionMode: node.CompletionMode, ScriptPath: optionalStringValue(node.ScriptPath), JoinInputProviders: joinInputProviders(node.JoinInputProviders)})
 	}
 	for _, group := range graph.TransitionGroups {
 		req.TransitionGroups = append(req.TransitionGroups, workflowstore.TransitionGroupRecord{ID: workflow.TransitionGroupID(group.ID), WorkflowID: workflowID, SourceNodeID: workflow.NodeID(group.SourceNodeID), TransitionID: workflow.TransitionID(group.TransitionID), DisplayName: group.DisplayName, Description: group.Description})
@@ -2728,6 +2728,14 @@ func optionalStringValue(value *string) string {
 		return ""
 	}
 	return strings.TrimSpace(*value)
+}
+
+func cloneStringPointer(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
 }
 
 func joinInputProviders(in []serverapi.WorkflowJoinInputProvider) []workflow.JoinInputProvider {

@@ -88,7 +88,7 @@ func createCoreStartupRecoveryTask(t *testing.T, store *workflowstore.Store, pro
 	}
 	start := coreWorkflowNodeByKind(t, definition, workflow.NodeKindStart)
 	terminal := coreWorkflowNodeByKind(t, definition, workflow.NodeKindTerminal)
-	agentID := workflow.NodeID("node-" + uuid.NewString())
+	agentID := workflow.NodeID(uuid.NewString())
 	if _, err := store.AddNode(ctx, workflowstore.NodeRecord{
 		ID:           agentID,
 		WorkflowID:   created.ID,
@@ -99,7 +99,7 @@ func createCoreStartupRecoveryTask(t *testing.T, store *workflowstore.Store, pro
 	}); err != nil {
 		t.Fatalf("AddNode: %v", err)
 	}
-	startGroupID := workflow.TransitionGroupID("group-" + uuid.NewString())
+	startGroupID := workflow.TransitionGroupID(uuid.NewString())
 	if _, err := store.AddTransitionGroup(ctx, workflowstore.TransitionGroupRecord{
 		ID:           startGroupID,
 		WorkflowID:   created.ID,
@@ -110,7 +110,7 @@ func createCoreStartupRecoveryTask(t *testing.T, store *workflowstore.Store, pro
 		t.Fatalf("AddTransitionGroup start: %v", err)
 	}
 	if _, err := store.AddEdge(ctx, workflowstore.EdgeRecord{
-		ID:                workflow.EdgeID("edge-" + uuid.NewString()),
+		ID:                workflow.EdgeID(uuid.NewString()),
 		WorkflowID:        created.ID,
 		TransitionGroupID: startGroupID,
 		Key:               "start",
@@ -122,7 +122,7 @@ func createCoreStartupRecoveryTask(t *testing.T, store *workflowstore.Store, pro
 	}); err != nil {
 		t.Fatalf("AddEdge start: %v", err)
 	}
-	doneGroupID := workflow.TransitionGroupID("group-" + uuid.NewString())
+	doneGroupID := workflow.TransitionGroupID(uuid.NewString())
 	if _, err := store.AddTransitionGroup(ctx, workflowstore.TransitionGroupRecord{
 		ID:           doneGroupID,
 		WorkflowID:   created.ID,
@@ -133,7 +133,7 @@ func createCoreStartupRecoveryTask(t *testing.T, store *workflowstore.Store, pro
 		t.Fatalf("AddTransitionGroup done: %v", err)
 	}
 	if _, err := store.AddEdge(ctx, workflowstore.EdgeRecord{
-		ID:                workflow.EdgeID("edge-" + uuid.NewString()),
+		ID:                workflow.EdgeID(uuid.NewString()),
 		WorkflowID:        created.ID,
 		TransitionGroupID: doneGroupID,
 		Key:               "done",

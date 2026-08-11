@@ -180,10 +180,10 @@ INSERT INTO task_current_nodes (
     effective_assignee, assignee_origin
 ) VALUES (?, ?, ?, '{}', '{"transition_parameters":{}}', ?, 'ready', ?, ?, ?)`,
 		string(task.ID),
-		string(started.Reference.NodeID),
+		testGraphEntityBlob(t, string(started.Reference.NodeID)),
 		string(branchKey),
 		sourceSessionID.String(),
-		string(*started.EnteredByEdgeID),
+		testGraphEntityBlob(t, string(*started.EnteredByEdgeID)),
 		started.AgentExecutionSelection.Assignee,
 		string(started.AgentExecutionSelection.Origin),
 	); err != nil {
@@ -323,7 +323,7 @@ WHERE session_id = ?
   AND node_id = ?
   AND transition_branch_key IS NULL`,
 		sessionID.String(),
-		string(started.Mutation.Created[0].Reference.NodeID),
+		testGraphEntityBlob(t, string(started.Mutation.Created[0].Reference.NodeID)),
 	).Scan(&rowCount); err != nil {
 		t.Fatalf("count serial associations: %v", err)
 	}
@@ -379,7 +379,7 @@ WHERE session_id = ?
   AND node_id = ?
   AND transition_branch_key IS NOT NULL`,
 		sessionID.String(),
-		string(started.Mutation.Created[0].Reference.NodeID),
+		testGraphEntityBlob(t, string(started.Mutation.Created[0].Reference.NodeID)),
 	).Scan(&rowCount); err != nil {
 		t.Fatalf("count branch associations: %v", err)
 	}

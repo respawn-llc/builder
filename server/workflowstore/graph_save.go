@@ -479,17 +479,20 @@ func prepareWorkflowGraphSave(workflowID runtimeids.WorkflowID, displayName stri
 		if err := validateWorkflowGraphRecordWorkflowID(workflowID, node.WorkflowID, "node", string(node.ID)); err != nil {
 			return preparedWorkflowGraphSave{}, workflow.Definition{}, err
 		}
-		node.GroupID = strings.TrimSpace(node.GroupID)
+		if node.GroupID != nil {
+			trimmed := strings.TrimSpace(*node.GroupID)
+			node.GroupID = &trimmed
+		}
 		node.GroupKey = strings.TrimSpace(node.GroupKey)
-		if node.GroupID == "" && node.GroupKey != "" {
+		if node.GroupID == nil && node.GroupKey != "" {
 			groupID, ok := groupsByKey[workflow.ModelKey(node.GroupKey)]
 			if !ok {
 				return preparedWorkflowGraphSave{}, workflow.Definition{}, fmt.Errorf("workflow node group key %q is not in the saved graph", node.GroupKey)
 			}
-			node.GroupID = groupID
+			node.GroupID = &groupID
 		}
-		if node.GroupID != "" && !groupsByID[node.GroupID] {
-			return preparedWorkflowGraphSave{}, workflow.Definition{}, fmt.Errorf("workflow node group %q is not in the saved graph", node.GroupID)
+		if node.GroupID != nil && !groupsByID[*node.GroupID] {
+			return preparedWorkflowGraphSave{}, workflow.Definition{}, fmt.Errorf("workflow node group %q is not in the saved graph", *node.GroupID)
 		}
 		if err := validateNodeCompletionMode(node.Kind, node.CompletionMode); err != nil {
 			return preparedWorkflowGraphSave{}, workflow.Definition{}, err
@@ -666,17 +669,17 @@ func canonicalWorkflowGraphEntityReferences(references []WorkflowGraphEntityRefe
 func workflowGraphEntityReferencesFromValidationErrors(errors []workflow.ValidationError) []WorkflowGraphEntityReference {
 	entities := make([]WorkflowGraphEntityReference, 0, len(errors))
 	for _, validationError := range errors {
-		if validationError.NodeID != "" {
-			entities = append(entities, WorkflowGraphEntityReference{EntityType: WorkflowGraphEntityTypeNode, EntityID: string(validationError.NodeID)})
+		if validationError.NodeID != nil {
+			entities = append(entities, WorkflowGraphEntityReference{EntityType: WorkflowGraphEntityTypeNode, EntityID: string(*validationError.NodeID)})
 		}
-		if validationError.TransitionGroupID != "" {
-			entities = append(entities, WorkflowGraphEntityReference{EntityType: WorkflowGraphEntityTypeTransitionGroup, EntityID: string(validationError.TransitionGroupID)})
+		if validationError.TransitionGroupID != nil {
+			entities = append(entities, WorkflowGraphEntityReference{EntityType: WorkflowGraphEntityTypeTransitionGroup, EntityID: string(*validationError.TransitionGroupID)})
 		}
-		if validationError.EdgeID != "" {
-			entities = append(entities, WorkflowGraphEntityReference{EntityType: WorkflowGraphEntityTypeEdge, EntityID: string(validationError.EdgeID)})
+		if validationError.EdgeID != nil {
+			entities = append(entities, WorkflowGraphEntityReference{EntityType: WorkflowGraphEntityTypeEdge, EntityID: string(*validationError.EdgeID)})
 		}
-		if validationError.ProviderEdgeID != "" {
-			entities = append(entities, WorkflowGraphEntityReference{EntityType: WorkflowGraphEntityTypeEdge, EntityID: string(validationError.ProviderEdgeID)})
+		if validationError.ProviderEdgeID != nil {
+			entities = append(entities, WorkflowGraphEntityReference{EntityType: WorkflowGraphEntityTypeEdge, EntityID: string(*validationError.ProviderEdgeID)})
 		}
 		entities = append(entities, validationError.RelatedEntities...)
 	}
@@ -713,7 +716,7 @@ type comparableWorkflowGraphSaveNode struct {
 	Key                workflow.ModelKey
 	Kind               workflow.NodeKind
 	DisplayName        string
-	GroupID            string
+	GroupID            *string
 	SubagentRole       string
 	CompletionMode     string
 	ScriptPath         string
@@ -748,7 +751,14 @@ type comparableWorkflowGraphSaveEdge struct {
 }
 
 func comparableWorkflowGraphSaveNodesEqual(item comparableWorkflowGraphSaveNode, other comparableWorkflowGraphSaveNode) bool {
-	return item.ID == other.ID && item.WorkflowID == other.WorkflowID && item.Key == other.Key && item.Kind == other.Kind && item.DisplayName == other.DisplayName && item.GroupID == other.GroupID && item.SubagentRole == other.SubagentRole && item.CompletionMode == other.CompletionMode && item.ScriptPath == other.ScriptPath && item.SortOrder == other.SortOrder && slices.Equal(item.JoinInputProviders, other.JoinInputProviders)
+	return item.ID == other.ID && item.WorkflowID == other.WorkflowID && item.Key == other.Key && item.Kind == other.Kind && item.DisplayName == other.DisplayName && equalOptionalString(item.GroupID, other.GroupID) && item.SubagentRole == other.SubagentRole && item.CompletionMode == other.CompletionMode && item.ScriptPath == other.ScriptPath && item.SortOrder == other.SortOrder && slices.Equal(item.JoinInputProviders, other.JoinInputProviders)
+}
+
+func equalOptionalString(left, right *string) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }
 
 func comparableWorkflowGraphSaveEdgesEqual(item comparableWorkflowGraphSaveEdge, other comparableWorkflowGraphSaveEdge) bool {
@@ -766,7 +776,12 @@ func workflowGraphSaveComparable(prepared preparedWorkflowGraphSave) comparableW
 		out.NodeGroups = append(out.NodeGroups, comparableWorkflowGraphSaveNodeGroup{ID: group.ID, WorkflowID: group.WorkflowID, Key: group.Key, DisplayName: strings.TrimSpace(group.DisplayName), SortOrder: int64(index * 100)})
 	}
 	for index, node := range prepared.nodes {
-		out.Nodes = append(out.Nodes, comparableWorkflowGraphSaveNode{ID: node.ID, WorkflowID: node.WorkflowID, Key: node.Key, Kind: node.Kind, DisplayName: strings.TrimSpace(node.DisplayName), GroupID: strings.TrimSpace(node.GroupID), SubagentRole: strings.TrimSpace(node.SubagentRole), CompletionMode: nodeCompletionMode(node), ScriptPath: strings.TrimSpace(node.ScriptPath), JoinInputProviders: node.JoinInputProviders, SortOrder: int64(index * 100)})
+		var groupID *string
+		if node.GroupID != nil {
+			trimmed := strings.TrimSpace(*node.GroupID)
+			groupID = &trimmed
+		}
+		out.Nodes = append(out.Nodes, comparableWorkflowGraphSaveNode{ID: node.ID, WorkflowID: node.WorkflowID, Key: node.Key, Kind: node.Kind, DisplayName: strings.TrimSpace(node.DisplayName), GroupID: groupID, SubagentRole: strings.TrimSpace(node.SubagentRole), CompletionMode: nodeCompletionMode(node), ScriptPath: strings.TrimSpace(node.ScriptPath), JoinInputProviders: node.JoinInputProviders, SortOrder: int64(index * 100)})
 	}
 	for index, group := range prepared.transitionGroups {
 		out.TransitionGroups = append(out.TransitionGroups, comparableWorkflowGraphSaveTransitionGroup{ID: group.ID, WorkflowID: group.WorkflowID, SourceNodeID: group.SourceNodeID, TransitionID: workflow.TransitionID(strings.TrimSpace(string(group.TransitionID))), DisplayName: strings.TrimSpace(group.DisplayName), Description: strings.TrimSpace(group.Description), SortOrder: int64(index * 100)})
@@ -890,7 +905,7 @@ func upsertWorkflowNode(ctx context.Context, q *sqlitegen.Queries, node NodeReco
 		CompletionMode:         nodeCompletionMode(node),
 		ScriptPath:             nullableString(node.ScriptPath),
 		JoinInputProvidersJson: joinProviders,
-		GroupID:                nullableString(node.GroupID),
+		GroupID:                nullableGraphIdentityArgument(node.GroupID),
 		SortOrder:              sortOrder,
 	})
 	return expectAffectedRowCount(updated, err, op)

@@ -869,7 +869,7 @@ func setNodeGroup(nodes []workflow.Node, nodeID workflow.NodeID, groupID string)
 	for index := range out {
 		if workflow.NodeIDOf(out[index]) == nodeID {
 			out[index] = updateNode(out[index], func(identity *workflow.NodeIdentity, _ *workflow.NodeKind, _ *workflow.NodeFields) {
-				identity.GroupID = groupID
+				identity.GroupID = &groupID
 			})
 		}
 	}

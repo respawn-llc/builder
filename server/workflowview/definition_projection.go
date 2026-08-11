@@ -16,6 +16,14 @@ type DefinitionProjection struct {
 	catalog workflow.TargetAgentCatalog
 }
 
+func cloneStringPointer(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
+}
+
 type definitionSnapshot struct {
 	domain    workflow.Definition
 	api       serverapi.WorkflowDefinition
@@ -117,14 +125,18 @@ func ProjectDefinition(def workflow.Definition, record workflowstore.WorkflowRec
 			})
 		}
 		nodeID := string(identity.ID)
+		groupKey := ""
+		if identity.GroupID != nil {
+			groupKey = groupKeyByID[*identity.GroupID]
+		}
 		api.Nodes = append(api.Nodes, serverapi.WorkflowNode{
 			ID:                 nodeID,
 			WorkflowID:         identity.WorkflowID,
 			Key:                string(identity.Key),
 			Kind:               string(node.Kind()),
 			DisplayName:        identity.DisplayName,
-			GroupID:            identity.GroupID,
-			GroupKey:           groupKeyByID[identity.GroupID],
+			GroupID:            cloneStringPointer(identity.GroupID),
+			GroupKey:           groupKey,
 			SubagentRole:       workflow.NodeSubagentRole(node),
 			CompletionMode:     workflow.NodeCompletionMode(node),
 			ScriptPath:         scriptPath,

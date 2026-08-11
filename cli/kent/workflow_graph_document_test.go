@@ -10,6 +10,10 @@ import (
 const (
 	emptyWorkflowGraphDocumentID   = "11111111-1111-4111-8111-111111111111"
 	emptyWorkflowGraphDocumentJSON = `{"workflow_id":"` + emptyWorkflowGraphDocumentID + `","expected_version":1,"graph":{"node_groups":[],"nodes":[],"transition_groups":[],"edges":[]}}`
+	workflowGraphDocumentGroupID   = "22222222-2222-4222-8222-222222222222"
+	workflowGraphDocumentNodeID    = "33333333-3333-4333-8333-333333333333"
+	workflowGraphDocumentEdgeOneID = "44444444-4444-4444-8444-444444444444"
+	workflowGraphDocumentEdgeTwoID = "55555555-5555-4555-8555-555555555555"
 )
 
 func TestWorkflowGraphDocumentRequiresPublicShape(t *testing.T) {
@@ -37,7 +41,7 @@ func TestWorkflowGraphDocumentRequiresPublicShape(t *testing.T) {
 		t.Fatalf("library duplicate-field semantics: document=%+v err=%v", document, err)
 	}
 
-	document, err := decodeWorkflowGraphDocument([]byte(`{"workflow_id":"11111111-1111-4111-8111-111111111111","expected_version":1,"future":{"":true},"graph":{"node_groups":[{"id":"group","key":"group","display_name":"Group"}],"nodes":[{"id":"node","key":"node","kind":"agent","display_name":"Node","group_id":"group"}],"transition_groups":[],"edges":[],"future":[]}}`))
+	document, err := decodeWorkflowGraphDocument([]byte(`{"workflow_id":"11111111-1111-4111-8111-111111111111","expected_version":1,"future":{"":true},"graph":{"node_groups":[{"id":"22222222-2222-4222-8222-222222222222","key":"group","display_name":"Group"}],"nodes":[{"id":"33333333-3333-4333-8333-333333333333","key":"node","kind":"agent","display_name":"Node","group_id":"22222222-2222-4222-8222-222222222222"}],"transition_groups":[],"edges":[],"future":[]}}`))
 	if err != nil {
 		t.Fatalf("valid document: %v", err)
 	}
@@ -45,15 +49,23 @@ func TestWorkflowGraphDocumentRequiresPublicShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("draft: %v", err)
 	}
-	if len(graph.Nodes) != 1 || graph.Nodes[0].GroupID == nil || *graph.Nodes[0].GroupID != "group" || graph.Nodes[0].GroupKey != "" {
+	if len(graph.Nodes) != 1 || graph.Nodes[0].GroupID == nil ||
+		*graph.Nodes[0].GroupID != workflowGraphDocumentGroupID ||
+		graph.Nodes[0].GroupKey != "" {
 		t.Fatalf("Node membership = %+v", graph.Nodes)
 	}
 }
 
 func TestWorkflowGraphDocumentEmitsExplicitArraysAndPreservesNestedOrder(t *testing.T) {
 	document, err := workflowGraphDocumentFromDraft(mustWorkflowID(t, emptyWorkflowGraphDocumentID), 1, serverapi.WorkflowGraphDraft{
-		NodeGroups:       []serverapi.WorkflowGraphDraftNodeGroup{},
-		Nodes:            []serverapi.WorkflowGraphDraftNode{{ID: "node", Key: "node", Kind: "join", DisplayName: "Node", JoinInputProviders: []serverapi.WorkflowJoinInputProvider{{InputName: "second", ProviderEdgeID: "edge-2"}, {InputName: "first", ProviderEdgeID: "edge-1"}}}},
+		NodeGroups: []serverapi.WorkflowGraphDraftNodeGroup{},
+		Nodes: []serverapi.WorkflowGraphDraftNode{{
+			ID: workflowGraphDocumentNodeID, Key: "node", Kind: "join", DisplayName: "Node",
+			JoinInputProviders: []serverapi.WorkflowJoinInputProvider{
+				{InputName: "second", ProviderEdgeID: workflowGraphDocumentEdgeTwoID},
+				{InputName: "first", ProviderEdgeID: workflowGraphDocumentEdgeOneID},
+			},
+		}},
 		TransitionGroups: []serverapi.WorkflowGraphDraftTransitionGroup{},
 		Edges:            []serverapi.WorkflowGraphDraftEdge{},
 	})

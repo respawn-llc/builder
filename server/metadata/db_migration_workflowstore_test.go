@@ -3,6 +3,7 @@ package metadata_test
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -133,7 +134,8 @@ WHERE id = 'edge-start'`, version71CutoverPrompt); err != nil {
 	if len(validation.Errors) != 0 {
 		t.Fatalf("loaded migrated definition validation = %+v", validation.Errors)
 	}
-	edge := findWorkflowEdge(t, loaded, "edge-agent-script")
+	edge := findWorkflowEdge(t, loaded, "to_script")
+	assertCanonicalWorkflowGraphID(t, string(edge.ID))
 	if len(edge.Parameters) != 1 || edge.Parameters[0].Key != "summary" {
 		t.Fatalf("loaded Transition Parameters = %+v, want preserved summary Parameter", edge.Parameters)
 	}
@@ -151,7 +153,7 @@ WHERE name IN ('prompt_template', 'input_fields_json', 'output_fields_json')`).S
 	if err := metadataStore.DB().QueryRowContext(ctx, `
 SELECT subagent_role, completion_mode, COALESCE(script_path, ''), join_input_providers_json
 FROM workflow_nodes
-WHERE id = 'node-agent'`).Scan(&role, &completionMode, &scriptPath, &joinProviders); err != nil {
+WHERE node_key = 'agent'`).Scan(&role, &completionMode, &scriptPath, &joinProviders); err != nil {
 		t.Fatalf("query preserved Agent configuration: %v", err)
 	}
 	if role != "default" || completionMode != "tool" || scriptPath != "" || joinProviders != "[]" {
@@ -162,17 +164,25 @@ WHERE id = 'node-agent'`).Scan(&role, &completionMode, &scriptPath, &joinProvide
 	if err := metadataStore.DB().QueryRowContext(ctx, `
 SELECT kind, COALESCE(script_path, '')
 FROM workflow_nodes
-WHERE id = 'node-script'`).Scan(&scriptKind, &preservedScriptPath); err != nil {
+WHERE node_key = 'script'`).Scan(&scriptKind, &preservedScriptPath); err != nil {
 		t.Fatalf("query preserved Script configuration: %v", err)
 	}
 	if err := metadataStore.DB().QueryRowContext(ctx, `
 SELECT kind, join_input_providers_json
 FROM workflow_nodes
-WHERE id = 'node-join'`).Scan(&joinKind, &preservedJoinProviders); err != nil {
+WHERE node_key = 'join'`).Scan(&joinKind, &preservedJoinProviders); err != nil {
 		t.Fatalf("query preserved Join configuration: %v", err)
 	}
+	var providers []struct {
+		ProviderEdgeID string `json:"provider_edge_id"`
+	}
+	if err := json.Unmarshal([]byte(preservedJoinProviders), &providers); err != nil {
+		t.Fatalf("decode preserved Join providers: %v", err)
+	}
+	joinProviderEdge := findWorkflowEdge(t, loaded, "to_join")
 	if scriptKind != "script" || preservedScriptPath != "scripts/run" ||
-		joinKind != "join" || preservedJoinProviders != `[{"input_name":"summary","provider_edge_id":"edge-agent-join"}]` {
+		joinKind != "join" || len(providers) != 1 ||
+		providers[0].ProviderEdgeID != string(joinProviderEdge.ID) {
 		t.Fatalf("preserved Script/Join configuration = script=(%q,%q) join=(%q,%q)",
 			scriptKind, preservedScriptPath, joinKind, preservedJoinProviders)
 	}
@@ -199,7 +209,7 @@ WHERE id = 'node-join'`).Scan(&joinKind, &preservedJoinProviders); err != nil {
 	}
 	if len(started.Mutation.Created) != 1 ||
 		started.Mutation.Created[0].EnteredByEdgeID == nil ||
-		*started.Mutation.Created[0].EnteredByEdgeID != "edge-start" {
+		*started.Mutation.Created[0].EnteredByEdgeID != findWorkflowEdge(t, loaded, "start").ID {
 		t.Fatalf("started migrated Task mutation = %+v, want actual Transition-owned start path", started.Mutation)
 	}
 	startContext, err := store.ResolveCurrentNodeStartContext(ctx, started.Mutation.Created[0].Reference)
@@ -218,9 +228,10 @@ WHERE id = 'node-join'`).Scan(&joinKind, &preservedJoinProviders); err != nil {
 		t.Fatalf("CompleteCurrentNode through migrated Parameters: %v", err)
 	}
 	var scriptCurrentNode *workflow.CurrentNode
+	scriptNodeID := findWorkflowNodeID(t, loaded, "script")
 	for index := range completed.Mutation.Created {
 		currentNode := &completed.Mutation.Created[index]
-		if currentNode.Reference.NodeID == "node-script" {
+		if currentNode.Reference.NodeID == scriptNodeID {
 			scriptCurrentNode = currentNode
 			break
 		}
@@ -256,13 +267,31 @@ func (cutoverRoleResolver) ExplicitCallableRoles() []workflow.TargetAgentRole {
 	}
 }
 
-func findWorkflowEdge(t *testing.T, definition workflow.Definition, id workflow.EdgeID) workflow.Edge {
+func findWorkflowEdge(t *testing.T, definition workflow.Definition, key workflow.ModelKey) workflow.Edge {
 	t.Helper()
 	for _, edge := range definition.Edges {
-		if edge.ID == id {
+		if edge.Key == key {
 			return edge
 		}
 	}
-	t.Fatalf("workflow edge %q not found", id)
+	t.Fatalf("workflow edge key %q not found", key)
 	return workflow.Edge{}
+}
+
+func findWorkflowNodeID(t *testing.T, definition workflow.Definition, key workflow.ModelKey) workflow.NodeID {
+	t.Helper()
+	for _, node := range definition.Nodes {
+		if node.Identity().Key == key {
+			return node.Identity().ID
+		}
+	}
+	t.Fatalf("workflow node key %q not found", key)
+	return ""
+}
+
+func assertCanonicalWorkflowGraphID(t *testing.T, value string) {
+	t.Helper()
+	if _, err := runtimeids.GraphEntityIDBlob(value); err != nil {
+		t.Fatalf("migrated Workflow graph identity %q is not canonical UUIDv4 text: %v", value, err)
+	}
 }

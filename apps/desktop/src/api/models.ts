@@ -190,9 +190,9 @@ export type WorkflowValidationError = Readonly<{
   code: string;
   message: string;
   workflowID: string | null;
-  nodeID: string;
-  transitionGroupID: string;
-  edgeID: string;
+  nodeID: string | null;
+  transitionGroupID: string | null;
+  edgeID: string | null;
   details: WorkflowValidationErrorDetails;
   relatedIDs: readonly string[];
   blocksContext: boolean;
@@ -202,7 +202,7 @@ export type WorkflowValidationErrorDetails = Readonly<{
   fieldName: string;
   inputName: string;
   placeholder: string;
-  providerEdgeID: string;
+  providerEdgeID: string | null;
   role: string | null;
   requiredTool: string | null;
 }>;
@@ -259,7 +259,7 @@ export type WorkflowNode = Readonly<{
   key: string;
   kind: string;
   name: string;
-  groupID: string;
+  groupID: string | null;
   groupKey: string;
   subagentRole: string;
   completionMode?: string | undefined;
@@ -571,7 +571,7 @@ export type BoardColumn = Readonly<{
   name: string;
   assigneeRole: string;
   outputFields: readonly WorkflowOutputField[];
-  groupID: string;
+  groupID: string | null;
   sortOrder: number;
   isBacklog: boolean;
   isDone: boolean;

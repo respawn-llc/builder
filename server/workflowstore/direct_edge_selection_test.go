@@ -16,7 +16,7 @@ func TestDirectEdgeMutationRejectsInapplicableProtectedSelection(t *testing.T) {
 		t.Fatalf("GetDefinition: %v", err)
 	}
 	request := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, false, definition)
-	edge := workflowGraphSaveEdgeRecord(t, request.Edges, workflow.EdgeID("edge-audit-"+workflowID.String()))
+	edge := workflowGraphSaveEdgeRecord(t, request.Edges, testEdgeID("edge-audit-"+workflowID.String()))
 	edge.AssigneeSelection = workflow.AssigneeSelectionPreviousNode
 	edge.Parameters = []workflow.Parameter{{
 		Key:     "role",
@@ -38,7 +38,7 @@ func TestDirectEdgeMutationAcceptsSelectorEnabledAgentSelfLoop(t *testing.T) {
 		t.Fatalf("GetDefinition: %v", err)
 	}
 	request := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, false, definition)
-	edge := workflowGraphSaveEdgeRecord(t, request.Edges, workflow.EdgeID("edge-audit-"+workflowID.String()))
+	edge := workflowGraphSaveEdgeRecord(t, request.Edges, testEdgeID("edge-audit-"+workflowID.String()))
 	edge.TargetNodeID = workflow.NodeIDOf(nodeByKey(t, definition, "review"))
 	edge.AssigneeSelection = workflow.AssigneeSelectionPreviousNode
 	edge.Parameters = []workflow.Parameter{{

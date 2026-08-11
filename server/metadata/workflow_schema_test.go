@@ -347,28 +347,52 @@ SET task_id = 'task-1'
 WHERE id = ?`, sessionID); err != nil {
 		t.Fatalf("bind session to direct task owner: %v", err)
 	}
-
 	if _, err := store.db.Exec(`INSERT INTO session_workflow_node_associations (
     session_id, node_id, transition_branch_key, associated_at_unix_ms
-) VALUES (?, 'node-agent', NULL, ?)`, sessionID, now); err != nil {
+) VALUES (?, (
+    SELECT node.id
+    FROM workflow_nodes node
+    JOIN task_records task ON task.workflow_id = node.workflow_id
+    WHERE task.id = 'task-1' AND node.node_key = 'agent'
+), NULL, ?)`, sessionID, now); err != nil {
 		t.Fatalf("insert serial association: %v", err)
 	}
 	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_UNIQUE, `INSERT INTO session_workflow_node_associations (
     session_id, node_id, transition_branch_key, associated_at_unix_ms
-) VALUES (?, 'node-agent', NULL, ?)`, sessionID, now+1)
+) VALUES (?, (
+    SELECT node.id
+    FROM workflow_nodes node
+    JOIN task_records task ON task.workflow_id = node.workflow_id
+    WHERE task.id = 'task-1' AND node.node_key = 'agent'
+), NULL, ?)`, sessionID, now+1)
 	for _, branch := range []string{"branch-a", "branch-b"} {
 		if _, err := store.db.Exec(`INSERT INTO session_workflow_node_associations (
     session_id, node_id, transition_branch_key, associated_at_unix_ms
-) VALUES (?, 'node-agent', ?, ?)`, sessionID, branch, now); err != nil {
+) VALUES (?, (
+    SELECT node.id
+    FROM workflow_nodes node
+    JOIN task_records task ON task.workflow_id = node.workflow_id
+    WHERE task.id = 'task-1' AND node.node_key = 'agent'
+), ?, ?)`, sessionID, branch, now); err != nil {
 			t.Fatalf("insert branch association %q: %v", branch, err)
 		}
 	}
 	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_UNIQUE, `INSERT INTO session_workflow_node_associations (
     session_id, node_id, transition_branch_key, associated_at_unix_ms
-) VALUES (?, 'node-agent', 'branch-a', ?)`, sessionID, now+1)
+) VALUES (?, (
+    SELECT node.id
+    FROM workflow_nodes node
+    JOIN task_records task ON task.workflow_id = node.workflow_id
+    WHERE task.id = 'task-1' AND node.node_key = 'agent'
+), 'branch-a', ?)`, sessionID, now+1)
 	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `INSERT INTO session_workflow_node_associations (
     session_id, node_id, transition_branch_key, associated_at_unix_ms
-) VALUES (?, 'node-agent-2', NULL, ?)`, sessionID, now)
+) VALUES (?, (
+    SELECT node.id
+    FROM workflow_nodes node
+    JOIN task_records task ON task.workflow_id = node.workflow_id
+    WHERE task.id = 'task-2' AND node.node_key = 'agent'
+), NULL, ?)`, sessionID, now)
 
 	if _, err := store.db.Exec(`UPDATE sessions
 SET task_id = NULL
@@ -533,26 +557,30 @@ func TestWorkflowSchemaConstraints(t *testing.T) {
 	seedWorkflowTask(t, store, binding.ProjectID, "BLD-1")
 	workflowID := workflowTestID(t, "1")
 	otherWorkflowID := workflowTestID(t, "2")
+	agentNodeID := workflowGraphSeedID(t, store.db, "node-agent")
+	startTransitionID := workflowGraphSeedID(t, store.db, "group-start")
 
 	execSeed(t, store.db, "other workflow", `INSERT INTO workflows (id, name, version, created_at_unix_ms, updated_at_unix_ms) VALUES (?, 'Other', 1, ?, ?)`, otherWorkflowID, now, now)
-	execSeed(t, store.db, "node groups", `INSERT INTO workflow_node_groups (id, workflow_id, group_key, display_name) VALUES ('group-workflow-1', ?, 'impl', 'Implementation'), ('group-other', ?, 'impl', 'Implementation')`, workflowID, otherWorkflowID)
+	groupWorkflowID := newWorkflowGraphTestID(t)
+	groupOtherID := newWorkflowGraphTestID(t)
+	execSeed(t, store.db, "node groups", `INSERT INTO workflow_node_groups (id, workflow_id, group_key, display_name) VALUES (?, ?, 'impl', 'Implementation'), (?, ?, 'impl', 'Implementation')`, groupWorkflowID, workflowID, groupOtherID, otherWorkflowID)
 
-	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_UNIQUE, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name) VALUES ('node-second-start', ?, 'second_start', 'start', 'Second Start')`, workflowID)
-	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name) VALUES ('node-invalid-kind', ?, 'bad', 'robot', 'Bad')`, workflowID)
-	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, completion_mode) VALUES ('node-terminal-completion-mode', ?, 'terminal_mode', 'terminal', 'Terminal Mode', 'tool')`, workflowID)
-	execSeed(t, store.db, "script node with path", `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, script_path) VALUES ('node-script-valid', ?, 'script_valid', 'script', 'Script Valid', 'scripts/complete')`, workflowID)
-	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, script_path) VALUES ('node-script-blank-path', ?, 'script_blank', 'script', 'Script Blank', '   ')`, workflowID)
-	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, script_path) VALUES ('node-agent-script-path', ?, 'agent_script_path', 'agent', 'Agent Script Path', 'scripts/complete')`, workflowID)
-	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, group_id) VALUES ('node-cross-group', ?, 'cross_group', 'agent', 'Cross Group', 'group-other')`, workflowID)
-	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `UPDATE workflow_nodes SET group_id = 'group-other' WHERE id = 'node-agent'`)
-	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflow_edges (id, transition_group_id, edge_key, target_node_id, requires_approval, context_mode, input_bindings_json, output_requirements_json) VALUES ('edge-invalid-bool', 'group-start', 'bad_bool', 'node-agent', 2, 'new_session', '{}', '{}')`)
-	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflow_edges (id, transition_group_id, edge_key, target_node_id, requires_approval, context_mode, context_source_kind, context_source_node_key, input_bindings_json, output_requirements_json) VALUES ('edge-invalid-context-source-empty-key', 'group-start', 'bad_context_empty', 'node-agent', 0, 'continue_session', 'selected_node', '', '{}', '{}')`)
-	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflow_edges (id, transition_group_id, edge_key, target_node_id, requires_approval, context_mode, context_source_kind, context_source_node_key, input_bindings_json, output_requirements_json) VALUES ('edge-invalid-context-source-immediate-key', 'group-start', 'bad_context_key', 'node-agent', 0, 'continue_session', 'immediate_source', 'agent', '{}', '{}')`)
-	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflow_edges (id, transition_group_id, edge_key, target_node_id, requires_approval, context_mode, parameters_json, input_bindings_json, output_requirements_json) VALUES ('edge-invalid-parameters-json', 'group-start', 'bad_parameters_json', 'node-agent', 0, 'new_session', '{}', '{}', '{}')`)
-	execSeed(t, store.db, "previous target context source edge", `INSERT INTO workflow_edges (id, transition_group_id, edge_key, target_node_id, requires_approval, context_mode, context_source_kind, context_source_node_key, input_bindings_json, output_requirements_json) VALUES ('edge-previous-target-context-source', 'group-start', 'previous_target_context', 'node-agent', 0, 'continue_session', 'previous_target', '', '{}', '{}')`)
-	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflow_edges (id, transition_group_id, edge_key, target_node_id, requires_approval, context_mode, context_source_kind, context_source_node_key, input_bindings_json, output_requirements_json) VALUES ('edge-invalid-context-source-previous-target-key', 'group-start', 'bad_previous_target_context_key', 'node-agent', 0, 'continue_session', 'previous_target', 'agent', '{}', '{}')`)
-	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflows (id, name, version, created_at_unix_ms, updated_at_unix_ms) VALUES ('workflow-bad-time', 'Bad', 1, -1, 1)`)
-	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflows (id, name, version, created_at_unix_ms, updated_at_unix_ms) VALUES ('workflow-bad-rev', 'Bad', 0, 1, 1)`)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_UNIQUE, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name) VALUES (?, ?, 'second_start', 'start', 'Second Start')`, newWorkflowGraphTestID(t), workflowID)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name) VALUES (?, ?, 'bad', 'robot', 'Bad')`, newWorkflowGraphTestID(t), workflowID)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, completion_mode) VALUES (?, ?, 'terminal_mode', 'terminal', 'Terminal Mode', 'tool')`, newWorkflowGraphTestID(t), workflowID)
+	execSeed(t, store.db, "script node with path", `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, script_path) VALUES (?, ?, 'script_valid', 'script', 'Script Valid', 'scripts/complete')`, newWorkflowGraphTestID(t), workflowID)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, script_path) VALUES (?, ?, 'script_blank', 'script', 'Script Blank', '   ')`, newWorkflowGraphTestID(t), workflowID)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, script_path) VALUES (?, ?, 'agent_script_path', 'agent', 'Agent Script Path', 'scripts/complete')`, newWorkflowGraphTestID(t), workflowID)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, group_id) VALUES (?, ?, 'cross_group', 'agent', 'Cross Group', ?)`, newWorkflowGraphTestID(t), workflowID, groupOtherID)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `UPDATE workflow_nodes SET group_id = ? WHERE id = ?`, groupOtherID, agentNodeID)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflow_edges (id, transition_group_id, edge_key, target_node_id, requires_approval, context_mode, input_bindings_json, output_requirements_json) VALUES (?, ?, 'bad_bool', ?, 2, 'new_session', '{}', '{}')`, newWorkflowGraphTestID(t), startTransitionID, agentNodeID)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflow_edges (id, transition_group_id, edge_key, target_node_id, requires_approval, context_mode, context_source_kind, context_source_node_key, input_bindings_json, output_requirements_json) VALUES (?, ?, 'bad_context_empty', ?, 0, 'continue_session', 'selected_node', '', '{}', '{}')`, newWorkflowGraphTestID(t), startTransitionID, agentNodeID)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflow_edges (id, transition_group_id, edge_key, target_node_id, requires_approval, context_mode, context_source_kind, context_source_node_key, input_bindings_json, output_requirements_json) VALUES (?, ?, 'bad_context_key', ?, 0, 'continue_session', 'immediate_source', 'agent', '{}', '{}')`, newWorkflowGraphTestID(t), startTransitionID, agentNodeID)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflow_edges (id, transition_group_id, edge_key, target_node_id, requires_approval, context_mode, parameters_json, input_bindings_json, output_requirements_json) VALUES (?, ?, 'bad_parameters_json', ?, 0, 'new_session', '{}', '{}', '{}')`, newWorkflowGraphTestID(t), startTransitionID, agentNodeID)
+	execSeed(t, store.db, "previous target context source edge", `INSERT INTO workflow_edges (id, transition_group_id, edge_key, target_node_id, requires_approval, context_mode, context_source_kind, context_source_node_key, input_bindings_json, output_requirements_json) VALUES (?, ?, 'previous_target_context', ?, 0, 'continue_session', 'previous_target', '', '{}', '{}')`, newWorkflowGraphTestID(t), startTransitionID, agentNodeID)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflow_edges (id, transition_group_id, edge_key, target_node_id, requires_approval, context_mode, context_source_kind, context_source_node_key, input_bindings_json, output_requirements_json) VALUES (?, ?, 'bad_previous_target_context_key', ?, 0, 'continue_session', 'previous_target', 'agent', '{}', '{}')`, newWorkflowGraphTestID(t), startTransitionID, agentNodeID)
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflows (id, name, version, created_at_unix_ms, updated_at_unix_ms) VALUES (?, 'Bad', 1, -1, 1)`, runtimeids.NewWorkflowID())
+	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO workflows (id, name, version, created_at_unix_ms, updated_at_unix_ms) VALUES (?, 'Bad', 0, 1, 1)`, runtimeids.NewWorkflowID())
 	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO task_comments (id, task_id, body, author_kind, created_at_unix_ms, updated_at_unix_ms) VALUES ('comment-system-author', 'task-1', 'system note', 'system', 1, 1)`)
 	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_CHECK, `INSERT INTO task_comments (id, task_id, body, author_kind, created_at_unix_ms, updated_at_unix_ms) VALUES ('comment-too-large', 'task-1', ?, 'agent', 1, 1)`, strings.Repeat("a", 262145))
 }
@@ -1027,6 +1055,8 @@ func seedWorkflowGraphForProject(t *testing.T, db *sql.DB, projectID string, now
 	doneID := "node-done-" + suffix
 	startGroupID := "group-start-" + suffix
 	doneGroupID := "group-done-" + suffix
+	startEdgeID := "edge-start-" + suffix
+	doneEdgeID := "edge-done-" + suffix
 	if suffix == "1" {
 		startID = "node-start"
 		agentID = "node-agent"
@@ -1034,13 +1064,20 @@ func seedWorkflowGraphForProject(t *testing.T, db *sql.DB, projectID string, now
 		startGroupID = "group-start"
 		doneGroupID = "group-done"
 	}
+	startIDValue := workflowGraphSeedID(t, db, startID)
+	agentIDValue := workflowGraphSeedID(t, db, agentID)
+	doneIDValue := workflowGraphSeedID(t, db, doneID)
+	startGroupIDValue := workflowGraphSeedID(t, db, startGroupID)
+	doneGroupIDValue := workflowGraphSeedID(t, db, doneGroupID)
+	startEdgeIDValue := workflowGraphSeedID(t, db, startEdgeID)
+	doneEdgeIDValue := workflowGraphSeedID(t, db, doneEdgeID)
 	execSeed(t, db, "workflow", `INSERT INTO workflows (id, name, description, version, created_at_unix_ms, updated_at_unix_ms)
 VALUES (?, 'Workflow', '', 1, ?, ?)`, workflowID, now, now)
-	execSeed(t, db, "nodes", workflowSeedGraphNodesSQL, startID, workflowID, agentID, workflowID, doneID, workflowID)
+	execSeed(t, db, "nodes", workflowSeedGraphNodesSQL, startIDValue, workflowID, agentIDValue, workflowID, doneIDValue, workflowID)
 	execSeed(t, db, "transition groups", `INSERT INTO workflow_transition_groups (id, source_node_id, transition_id, display_name)
 VALUES (?, ?, 'start', 'Start'),
-       (?, ?, 'done', 'Done')`, startGroupID, startID, doneGroupID, agentID)
-	execSeed(t, db, "edges", workflowSeedGraphEdgesSQL, "edge-start-"+suffix, startGroupID, agentID, "edge-done-"+suffix, doneGroupID, doneID)
+       (?, ?, 'done', 'Done')`, startGroupIDValue, startIDValue, doneGroupIDValue, agentIDValue)
+	execSeed(t, db, "edges", workflowSeedGraphEdgesSQL, startEdgeIDValue, startGroupIDValue, agentIDValue, doneEdgeIDValue, doneGroupIDValue, doneIDValue)
 	linkID := "link-" + suffix
 	execSeed(t, db, "project workflow link", `INSERT INTO project_workflow_links (id, project_id, workflow_id, created_at_unix_ms, updated_at_unix_ms)
 VALUES (?, ?, ?, ?, ?)`, linkID, projectID, workflowID, now, now)
@@ -1095,6 +1132,138 @@ func workflowTestID(t *testing.T, suffix string) runtimeids.WorkflowID {
 		t.Fatalf("parse workflow fixture ID %q: %v", raw, err)
 	}
 	return workflowID
+}
+
+type workflowGraphSeedQueryer interface {
+	QueryRow(string, ...any) *sql.Row
+}
+
+func workflowGraphSeedID(t *testing.T, db workflowGraphSeedQueryer, legacyID string) any {
+	t.Helper()
+	canonical, found := map[string]string{
+		"node-start":    "11111111-1111-4111-8111-111111111101",
+		"node-agent":    "11111111-1111-4111-8111-111111111102",
+		"node-done":     "11111111-1111-4111-8111-111111111103",
+		"group-start":   "11111111-1111-4111-8111-111111111104",
+		"group-done":    "11111111-1111-4111-8111-111111111105",
+		"edge-start-1":  "11111111-1111-4111-8111-111111111106",
+		"edge-done-1":   "11111111-1111-4111-8111-111111111107",
+		"node-start-2":  "22222222-2222-4222-8222-222222222201",
+		"node-agent-2":  "22222222-2222-4222-8222-222222222202",
+		"node-done-2":   "22222222-2222-4222-8222-222222222203",
+		"group-start-2": "22222222-2222-4222-8222-222222222204",
+		"group-done-2":  "22222222-2222-4222-8222-222222222205",
+		"edge-start-2":  "22222222-2222-4222-8222-222222222206",
+		"edge-done-2":   "22222222-2222-4222-8222-222222222207",
+	}[legacyID]
+	if !found {
+		t.Fatalf("unknown Workflow graph fixture identity %q", legacyID)
+	}
+	var columnType string
+	if err := db.QueryRow(`
+SELECT type
+FROM pragma_table_info('workflow_nodes')
+WHERE name = 'id'`).Scan(&columnType); err != nil {
+		t.Fatalf("inspect Workflow Node identity storage: %v", err)
+	}
+	if columnType == "TEXT" {
+		return legacyID
+	}
+	if columnType != "BLOB" {
+		t.Fatalf("workflow_nodes.id storage type = %q, want TEXT or BLOB", columnType)
+	}
+	value, err := runtimeids.GraphEntityIDBlob(canonical)
+	if err != nil {
+		t.Fatalf("encode Workflow graph fixture identity %q: %v", canonical, err)
+	}
+	return value
+}
+
+func workflowGraphSeedIDText(t *testing.T, db workflowGraphSeedQueryer, legacyID string) string {
+	t.Helper()
+	fixture, found := map[string]struct {
+		table     string
+		keyColumn string
+		key       string
+		suffix    string
+	}{
+		"node-start":    {"workflow_nodes", "node_key", "backlog", "1"},
+		"node-agent":    {"workflow_nodes", "node_key", "agent", "1"},
+		"node-done":     {"workflow_nodes", "node_key", "done", "1"},
+		"group-start":   {"workflow_transition_groups", "transition_id", "start", "1"},
+		"group-done":    {"workflow_transition_groups", "transition_id", "done", "1"},
+		"edge-start-1":  {"workflow_edges", "edge_key", "start", "1"},
+		"edge-done-1":   {"workflow_edges", "edge_key", "done", "1"},
+		"node-start-2":  {"workflow_nodes", "node_key", "backlog", "2"},
+		"node-agent-2":  {"workflow_nodes", "node_key", "agent", "2"},
+		"node-done-2":   {"workflow_nodes", "node_key", "done", "2"},
+		"group-start-2": {"workflow_transition_groups", "transition_id", "start", "2"},
+		"group-done-2":  {"workflow_transition_groups", "transition_id", "done", "2"},
+		"edge-start-2":  {"workflow_edges", "edge_key", "start", "2"},
+		"edge-done-2":   {"workflow_edges", "edge_key", "done", "2"},
+	}[legacyID]
+	if !found {
+		t.Fatalf("unknown Workflow graph fixture identity %q", legacyID)
+	}
+	var query string
+	switch fixture.table {
+	case "workflow_nodes":
+		query = fmt.Sprintf(`
+SELECT %s(node.id)
+FROM workflow_nodes node
+WHERE node.workflow_id = ? AND node.%s = ?`, graphEntityIDTextFunction, fixture.keyColumn)
+	case "workflow_transition_groups":
+		query = fmt.Sprintf(`
+SELECT %s(transition_group.id)
+FROM workflow_transition_groups transition_group
+JOIN workflow_nodes source ON source.id = transition_group.source_node_id
+WHERE source.workflow_id = ? AND transition_group.%s = ?`, graphEntityIDTextFunction, fixture.keyColumn)
+	case "workflow_edges":
+		query = fmt.Sprintf(`
+SELECT %s(edge.id)
+FROM workflow_edges edge
+JOIN workflow_transition_groups transition_group ON transition_group.id = edge.transition_group_id
+JOIN workflow_nodes source ON source.id = transition_group.source_node_id
+WHERE source.workflow_id = ? AND edge.%s = ?`, graphEntityIDTextFunction, fixture.keyColumn)
+	default:
+		t.Fatalf("unsupported Workflow graph fixture table %q", fixture.table)
+	}
+	var canonical string
+	if err := db.QueryRow(query, workflowTestID(t, fixture.suffix), fixture.key).Scan(&canonical); err != nil {
+		t.Fatalf("read canonical Workflow graph fixture identity %q: %v", legacyID, err)
+	}
+	return canonical
+}
+
+func graphEntityIDTextByKey(t *testing.T, db workflowGraphSeedQueryer, table, keyColumn, key string) string {
+	t.Helper()
+	var canonical string
+	query := fmt.Sprintf(
+		`SELECT %s(id) FROM %s WHERE %s = ?`,
+		graphEntityIDTextFunction,
+		table,
+		keyColumn,
+	)
+	if err := db.QueryRow(query, key).Scan(&canonical); err != nil {
+		t.Fatalf("read canonical %s identity for %s=%q: %v", table, keyColumn, key, err)
+	}
+	return canonical
+}
+
+func assertCanonicalGraphEntityIDText(t *testing.T, value string) {
+	t.Helper()
+	if _, err := runtimeids.GraphEntityIDBlob(value); err != nil {
+		t.Fatalf("graph entity identity %q is not canonical UUIDv4 text: %v", value, err)
+	}
+}
+
+func newWorkflowGraphTestID(t *testing.T) []byte {
+	t.Helper()
+	value, err := runtimeids.GraphEntityIDBlob(runtimeids.NewGraphEntityID())
+	if err != nil {
+		t.Fatalf("encode Workflow graph test identity: %v", err)
+	}
+	return value
 }
 
 func execSeed(t *testing.T, db *sql.DB, label string, statement string, args ...any) {

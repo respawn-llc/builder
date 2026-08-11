@@ -66,6 +66,42 @@ type pendingApprovalContextSourceResolutionSnapshot struct {
 	SessionID *string `json:"session_id,omitempty"`
 }
 
+type pendingApprovalRecord struct {
+	ID                        string
+	SourceTaskID              string
+	SourceNodeID              string
+	SourceTransitionBranchKey sql.NullString
+	SourceSessionID           sql.NullString
+	WorkflowVersion           int64
+	TransitionSnapshotJSON    string
+	MaterializedValuesJSON    string
+	CreatedAtUnixMs           int64
+}
+
+func pendingApprovalRecordFromListRow(row sqlitegen.ListTaskPendingApprovalsRow) pendingApprovalRecord {
+	return pendingApprovalRecord{
+		ID: row.ID, SourceTaskID: row.SourceTaskID, SourceNodeID: row.SourceNodeID,
+		SourceTransitionBranchKey: row.SourceTransitionBranchKey,
+		SourceSessionID:           row.SourceSessionID,
+		WorkflowVersion:           row.WorkflowVersion,
+		TransitionSnapshotJSON:    row.TransitionSnapshotJson,
+		MaterializedValuesJSON:    row.MaterializedValuesJson,
+		CreatedAtUnixMs:           row.CreatedAtUnixMs,
+	}
+}
+
+func pendingApprovalRecordFromGetRow(row sqlitegen.GetTaskPendingApprovalRow) pendingApprovalRecord {
+	return pendingApprovalRecord{
+		ID: row.ID, SourceTaskID: row.SourceTaskID, SourceNodeID: row.SourceNodeID,
+		SourceTransitionBranchKey: row.SourceTransitionBranchKey,
+		SourceSessionID:           row.SourceSessionID,
+		WorkflowVersion:           row.WorkflowVersion,
+		TransitionSnapshotJSON:    row.TransitionSnapshotJson,
+		MaterializedValuesJSON:    row.MaterializedValuesJson,
+		CreatedAtUnixMs:           row.CreatedAtUnixMs,
+	}
+}
+
 func (s *Store) ListPendingApprovals(ctx context.Context, taskID workflow.TaskID) ([]workflow.PendingApproval, error) {
 	if strings.TrimSpace(string(taskID)) == "" {
 		return nil, errors.New("task id is required")
@@ -76,7 +112,7 @@ func (s *Store) ListPendingApprovals(ctx context.Context, taskID workflow.TaskID
 	}
 	approvals := make([]workflow.PendingApproval, 0, len(rows))
 	for _, row := range rows {
-		approval, err := pendingApprovalFromRow(ctx, s.queries, row)
+		approval, err := pendingApprovalFromRow(ctx, s.queries, pendingApprovalRecordFromListRow(row))
 		if err != nil {
 			return nil, err
 		}
@@ -208,7 +244,7 @@ func pendingApprovalByID(
 	if err != nil {
 		return workflow.PendingApproval{}, err
 	}
-	return pendingApprovalFromRow(ctx, q, row)
+	return pendingApprovalFromRow(ctx, q, pendingApprovalRecordFromGetRow(row))
 }
 
 func pendingApprovalHandoff(approval workflow.PendingApproval) CompletionHandoff {
@@ -459,7 +495,7 @@ func insertPendingApprovalBranch(ctx context.Context, q *sqlitegen.Queries, appr
 	})
 }
 
-func pendingApprovalFromRow(ctx context.Context, q *sqlitegen.Queries, row sqlitegen.TaskPendingApproval) (workflow.PendingApproval, error) {
+func pendingApprovalFromRow(ctx context.Context, q *sqlitegen.Queries, row pendingApprovalRecord) (workflow.PendingApproval, error) {
 	approvalID, err := workflow.ParseApprovalID(row.ID)
 	if err != nil {
 		return workflow.PendingApproval{}, fmt.Errorf("decode pending approval id: %w", err)
@@ -482,14 +518,14 @@ func pendingApprovalFromRow(ctx context.Context, q *sqlitegen.Queries, row sqlit
 		sourceSessionID = &parsed
 	}
 	var transitionSnapshot pendingApprovalTransitionSnapshot
-	if err := workflow.UnmarshalString(row.TransitionSnapshotJson, &transitionSnapshot); err != nil {
+	if err := workflow.UnmarshalString(row.TransitionSnapshotJSON, &transitionSnapshot); err != nil {
 		return workflow.PendingApproval{}, fmt.Errorf("decode pending approval transition snapshot: %w", err)
 	}
 	if strings.TrimSpace(string(transitionSnapshot.ID)) == "" || strings.TrimSpace(string(transitionSnapshot.TransitionID)) == "" || strings.TrimSpace(transitionSnapshot.SourceDisplayName) == "" {
 		return workflow.PendingApproval{}, errors.New("pending approval transition snapshot is invalid")
 	}
 	outputValues := map[string]string{}
-	if err := workflow.UnmarshalString(row.MaterializedValuesJson, &outputValues); err != nil {
+	if err := workflow.UnmarshalString(row.MaterializedValuesJSON, &outputValues); err != nil {
 		return workflow.PendingApproval{}, fmt.Errorf("decode pending approval materialized values: %w", err)
 	}
 	if outputValues == nil {

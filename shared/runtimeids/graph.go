@@ -2,6 +2,7 @@ package runtimeids
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 )
@@ -22,6 +23,21 @@ func GraphEntityIDBlob(raw string) ([]byte, error) {
 	value := make([]byte, len(parsed))
 	copy(value, parsed[:])
 	return value, nil
+}
+
+// MigrateGraphEntityIDBlob preserves canonical UUIDv4 identities, remaps
+// nonblank legacy identities, and rejects absent or zero identities.
+func MigrateGraphEntityIDBlob(raw string) ([]byte, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, fmt.Errorf("graph entity ID migration value must not be blank")
+	}
+	if parsed, err := uuid.Parse(raw); err == nil && parsed == uuid.Nil {
+		return nil, fmt.Errorf("graph entity ID migration value must not be zero")
+	}
+	if value, err := GraphEntityIDBlob(raw); err == nil {
+		return value, nil
+	}
+	return GraphEntityIDBlob(NewGraphEntityID())
 }
 
 // GraphEntityIDText converts a 16-byte SQLite UUIDv4 value to canonical text.

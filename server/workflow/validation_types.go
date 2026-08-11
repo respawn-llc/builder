@@ -137,18 +137,42 @@ type ValidationError struct {
 	Code              ValidationErrorCode
 	Message           string
 	WorkflowID        *runtimeids.WorkflowID
-	NodeID            NodeID
-	TransitionGroupID TransitionGroupID
-	EdgeID            EdgeID
+	NodeID            *NodeID
+	TransitionGroupID *TransitionGroupID
+	EdgeID            *EdgeID
 	FieldName         string
 	InputName         string
 	Placeholder       string
-	ProviderEdgeID    EdgeID
+	ProviderEdgeID    *EdgeID
 	RelatedIDs        []string
 	RelatedEntities   []workflowcontract.WorkflowGraphEntityReference
 	AgentRole         *string
 	RequiredTool      *toolspec.ID
 	BlocksContext     bool
+}
+
+func NodeIDPointer(value NodeID) *NodeID {
+	if value == "" {
+		return nil
+	}
+	copy := value
+	return &copy
+}
+
+func TransitionGroupIDPointer(value TransitionGroupID) *TransitionGroupID {
+	if value == "" {
+		return nil
+	}
+	copy := value
+	return &copy
+}
+
+func EdgeIDPointer(value EdgeID) *EdgeID {
+	if value == "" {
+		return nil
+	}
+	copy := value
+	return &copy
 }
 
 func (e ValidationError) withRelatedEntity(entityType workflowcontract.WorkflowGraphEntityType, entityID string) ValidationError {

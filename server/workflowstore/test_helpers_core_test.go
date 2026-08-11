@@ -154,8 +154,14 @@ func workflowGraphSaveRequestFromDefinition(workflowID runtimeids.WorkflowID, re
 		groupKeyByID[group.ID] = string(group.Key)
 	}
 	for _, node := range def.Nodes {
-		groupID := workflow.NodeGroupID(node)
-		req.Nodes = append(req.Nodes, NodeRecord{ID: workflow.NodeIDOf(node), WorkflowID: workflowID, Key: workflow.NodeKey(node), Kind: node.Kind(), DisplayName: workflow.NodeDisplayName(node), GroupID: groupID, GroupKey: groupKeyByID[groupID], SubagentRole: workflow.NodeSubagentRole(node), CompletionMode: workflow.NodeCompletionMode(node), ScriptPath: workflow.NodeScriptPath(node).String(), JoinInputProviders: workflow.NodeJoinInputProviders(node)})
+		groupID, present := workflow.NodeGroupID(node)
+		var groupIDPointer *string
+		groupKey := ""
+		if present {
+			groupIDPointer = &groupID
+			groupKey = groupKeyByID[groupID]
+		}
+		req.Nodes = append(req.Nodes, NodeRecord{ID: workflow.NodeIDOf(node), WorkflowID: workflowID, Key: workflow.NodeKey(node), Kind: node.Kind(), DisplayName: workflow.NodeDisplayName(node), GroupID: groupIDPointer, GroupKey: groupKey, SubagentRole: workflow.NodeSubagentRole(node), CompletionMode: workflow.NodeCompletionMode(node), ScriptPath: workflow.NodeScriptPath(node).String(), JoinInputProviders: workflow.NodeJoinInputProviders(node)})
 	}
 	for _, group := range def.TransitionGroups {
 		req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{ID: group.ID, WorkflowID: workflowID, SourceNodeID: group.SourceNodeID, TransitionID: group.TransitionID, DisplayName: group.DisplayName, Description: group.Description})
@@ -248,9 +254,11 @@ func setWorkflowGraphSaveNodeGroup(nodes []NodeRecord, nodeID workflow.NodeID, g
 	changed := make([]NodeRecord, 0, len(nodes))
 	for _, node := range nodes {
 		if node.ID == nodeID {
-			node.GroupID = groupID
+			node.GroupID = nil
 			if groupID == "" {
 				node.GroupKey = ""
+			} else {
+				node.GroupID = &groupID
 			}
 		}
 		changed = append(changed, node)

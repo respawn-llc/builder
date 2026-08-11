@@ -175,7 +175,7 @@ INSERT INTO task_transitions (
 	t.Cleanup(func() { _ = store.Close() })
 	var currentInputs, priorNodeValues, enteredByEdgeID string
 	if err := store.db.QueryRowContext(t.Context(), `
-SELECT current_input_values_json, prior_node_values_json, entered_by_edge_id
+SELECT current_input_values_json, prior_node_values_json, `+graphEntityIDTextFunction+`(entered_by_edge_id)
 FROM task_current_nodes
 WHERE task_id = 'task-value-environment-migration'`).Scan(
 		&currentInputs,
@@ -186,7 +186,7 @@ WHERE task_id = 'task-value-environment-migration'`).Scan(
 	}
 	if currentInputs != `{"summary":"approved plan"}` ||
 		priorNodeValues != `{"transition_parameters":{"review":{"summary":"approved plan"}}}` ||
-		enteredByEdgeID != "edge-plan-review" {
+		enteredByEdgeID != graphEntityIDTextByKey(t, store.db, "workflow_edges", "edge_key", "review") {
 		t.Fatalf(
 			"migrated value environment = inputs=%q prior=%q entered_by=%q",
 			currentInputs,
@@ -203,7 +203,7 @@ WHERE task_id = 'task-value-environment-migration'`).Scan(
 	if err := store.db.QueryRowContext(t.Context(), `
 SELECT prompt_template
 FROM workflow_edges
-WHERE id = 'edge-plan-review'`).Scan(&preservedPrompt); err != nil {
+WHERE edge_key = 'review'`).Scan(&preservedPrompt); err != nil {
 		t.Fatalf("query preserved historical prompt: %v", err)
 	}
 	if preservedPrompt != historicalVersion58TransitionPrompt {
@@ -475,7 +475,7 @@ INSERT INTO task_pending_approvals (
     'task-invalid-values',
     'node-agent',
     1,
-    '{}',
+    '{"workflow_id":"workflow-550e8400-e29b-41d4-a716-446655440001","id":"group-review-done-invalid-values","source_node_id":"node-agent","transition_id":"done","display_name":"Done","description":"","source_display_name":"Review"}',
     '{}',
     1
 );
@@ -489,7 +489,7 @@ INSERT INTO task_pending_approval_branches (
     '47d1d167-891d-477e-931c-a139a0c99593',
     'done',
     '{"node_id":"node-done","display_name":"Done","current_input_values":{},"prior_node_values":{"plan":{"summary":"approved plan"}}}',
-    '{}',
+    '{"workflow_id":"workflow-550e8400-e29b-41d4-a716-446655440001","id":"edge-review-done-invalid-values","key":"done","transition_group_id":"group-review-done-invalid-values","target_node_id":"node-done","context_mode":"new_session","context_source":{"kind":"immediate_source"},"requires_approval":true,"prompt_template":"","parameters":[],"input_bindings":[],"output_requirements":[]}',
     '{}'
 )`)
 	if err := db.Close(); err != nil {
@@ -820,7 +820,7 @@ VALUES ('project-runnable-agent-migration', 'Project', ?, ?, '{}')`, now, now)
 	var sessionID sql.NullString
 	if err := store.db.QueryRowContext(t.Context(), `
 SELECT
-    node_id,
+    `+graphEntityIDTextFunction+`(node_id),
     scheduling_state,
     interruption_reason,
     interruption_detail_json,
@@ -837,7 +837,7 @@ WHERE task_id = 'task-runnable-agent-migration'`).Scan(
 	); err != nil {
 		t.Fatalf("query projected runnable agent current node: %v", err)
 	}
-	if nodeID != "node-agent" ||
+	if nodeID != workflowGraphSeedIDText(t, store.db, "node-agent") ||
 		schedulingState != "interrupted" ||
 		interruptionReason != "server_restart" ||
 		interruptionDetail != `{"code":"workflow.execution.restarted","fields":{"operation":"recovery"}}` ||

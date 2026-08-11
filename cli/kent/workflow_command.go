@@ -1000,12 +1000,12 @@ func writeWorkflowValidationError(stdout io.Writer, err serverapi.WorkflowValida
 // points at, preferring the most specific id present.
 func workflowValidationErrorLocation(err serverapi.WorkflowValidationError) string {
 	switch {
-	case strings.TrimSpace(err.EdgeID) != "":
-		return "edge " + strings.TrimSpace(err.EdgeID)
-	case strings.TrimSpace(err.TransitionGroupID) != "":
-		return "transition group " + strings.TrimSpace(err.TransitionGroupID)
-	case strings.TrimSpace(err.NodeID) != "":
-		return "node " + strings.TrimSpace(err.NodeID)
+	case err.EdgeID != nil:
+		return "edge " + *err.EdgeID
+	case err.TransitionGroupID != nil:
+		return "transition group " + *err.TransitionGroupID
+	case err.NodeID != nil:
+		return "node " + *err.NodeID
 	default:
 		return ""
 	}

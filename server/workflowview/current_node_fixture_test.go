@@ -359,8 +359,11 @@ func (f currentNodeViewFixture) setCurrentNodeInterruptedAt(
 	unixMs int64,
 ) {
 	t.Helper()
+	nodeID, err := runtimeids.GraphEntityIDBlob(string(reference.NodeID))
+	if err != nil {
+		t.Fatalf("encode Current Node ID: %v", err)
+	}
 	branchKey, branchScoped := reference.TransitionBranchKey()
-	var err error
 	if branchScoped {
 		_, err = f.metadata.DB().ExecContext(
 			f.ctx,
@@ -369,7 +372,7 @@ SET interrupted_at_unix_ms = ?
 WHERE task_id = ? AND node_id = ? AND transition_branch_key = ?`,
 			unixMs,
 			string(reference.TaskID),
-			string(reference.NodeID),
+			nodeID,
 			string(branchKey),
 		)
 	} else {
@@ -380,7 +383,7 @@ SET interrupted_at_unix_ms = ?
 WHERE task_id = ? AND node_id = ? AND transition_branch_key IS NULL`,
 			unixMs,
 			string(reference.TaskID),
-			string(reference.NodeID),
+			nodeID,
 		)
 	}
 	if err != nil {
@@ -554,7 +557,9 @@ func currentNodeViewWorkflow(t *testing.T, store *workflowstore.Store, requiresA
 	}
 	startNodeID := currentNodeViewNodeIDByKind(t, definition, workflow.NodeKindStart)
 	terminalNodeID := currentNodeViewNodeIDByKind(t, definition, workflow.NodeKindTerminal)
+	agentNodeID := workflow.NodeID(runtimeids.NewGraphEntityID())
 	if _, err := store.AddNode(t.Context(), workflowstore.NodeRecord{
+		ID:           agentNodeID,
 		WorkflowID:   created.ID,
 		Key:          "agent",
 		Kind:         workflow.NodeKindAgent,
@@ -567,8 +572,10 @@ func currentNodeViewWorkflow(t *testing.T, store *workflowstore.Store, requiresA
 	if err != nil {
 		t.Fatalf("GetDefinition after node: %v", err)
 	}
-	agentNodeID := currentNodeViewNodeID(t, definition, "agent")
+	agentNodeID = currentNodeViewNodeID(t, definition, "agent")
+	startGroupID := workflow.TransitionGroupID(runtimeids.NewGraphEntityID())
 	if _, err := store.AddTransitionGroup(t.Context(), workflowstore.TransitionGroupRecord{
+		ID:           startGroupID,
 		WorkflowID:   created.ID,
 		SourceNodeID: startNodeID,
 		TransitionID: "start",
@@ -580,8 +587,9 @@ func currentNodeViewWorkflow(t *testing.T, store *workflowstore.Store, requiresA
 	if err != nil {
 		t.Fatalf("GetDefinition after start group: %v", err)
 	}
-	startGroupID := currentNodeViewTransitionGroupID(t, definition, startNodeID, "start")
+	startGroupID = currentNodeViewTransitionGroupID(t, definition, startNodeID, "start")
 	if _, err := store.AddEdge(t.Context(), workflowstore.EdgeRecord{
+		ID:                workflow.EdgeID(runtimeids.NewGraphEntityID()),
 		WorkflowID:        created.ID,
 		TransitionGroupID: startGroupID,
 		Key:               "start",
@@ -593,7 +601,9 @@ func currentNodeViewWorkflow(t *testing.T, store *workflowstore.Store, requiresA
 	}); err != nil {
 		t.Fatalf("AddEdge start: %v", err)
 	}
+	doneGroupID := workflow.TransitionGroupID(runtimeids.NewGraphEntityID())
 	if _, err := store.AddTransitionGroup(t.Context(), workflowstore.TransitionGroupRecord{
+		ID:           doneGroupID,
 		WorkflowID:   created.ID,
 		SourceNodeID: agentNodeID,
 		TransitionID: "done",
@@ -605,8 +615,9 @@ func currentNodeViewWorkflow(t *testing.T, store *workflowstore.Store, requiresA
 	if err != nil {
 		t.Fatalf("GetDefinition after done group: %v", err)
 	}
-	doneGroupID := currentNodeViewTransitionGroupID(t, definition, agentNodeID, "done")
+	doneGroupID = currentNodeViewTransitionGroupID(t, definition, agentNodeID, "done")
 	if _, err := store.AddEdge(t.Context(), workflowstore.EdgeRecord{
+		ID:                workflow.EdgeID(runtimeids.NewGraphEntityID()),
 		WorkflowID:        created.ID,
 		TransitionGroupID: doneGroupID,
 		Key:               "done",

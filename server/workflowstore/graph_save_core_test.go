@@ -121,7 +121,7 @@ func TestWorkflowGraphElementMutationsRejectMissingWorkflowIDs(t *testing.T) {
 
 func TestWorkflowGraphSaveReportsRemovedTransitionBranchImpact(t *testing.T) {
 	f := newGraphSaveFixture(t, createFanoutJoinWorkflow)
-	removedEdgeID := workflow.EdgeID("edge-split-b-" + f.workflowID.String())
+	removedEdgeID := testEdgeID("edge-split-b-" + f.workflowID.String())
 	req := f.request(f.record.Version, false, f.def)
 	req.Edges = removeWorkflowGraphSaveEdge(req.Edges, removedEdgeID)
 
@@ -146,7 +146,7 @@ func TestWorkflowGraphSaveReportsRemovedTransitionBranchImpact(t *testing.T) {
 
 func TestWorkflowGraphSaveAllowsRemovingNodeGroupWithoutConfirmation(t *testing.T) {
 	f := newGraphSaveFixture(t, createFanoutJoinWorkflow)
-	removedGroupID := "group-parallel-" + f.workflowID.String()
+	removedGroupID := testGraphEntityID("group-parallel-" + f.workflowID.String())
 	added := f.request(f.record.Version, false, f.def)
 	added.NodeGroups = append(added.NodeGroups, NodeGroupRecord{
 		ID:          removedGroupID,
@@ -155,9 +155,9 @@ func TestWorkflowGraphSaveAllowsRemovingNodeGroupWithoutConfirmation(t *testing.
 		DisplayName: "Parallel",
 	})
 	for _, nodeID := range []workflow.NodeID{
-		workflow.NodeID("node-impl-a-" + f.workflowID.String()),
-		workflow.NodeID("node-impl-b-" + f.workflowID.String()),
-		workflow.NodeID("node-join-" + f.workflowID.String()),
+		testNodeID("node-impl-a-" + f.workflowID.String()),
+		testNodeID("node-impl-b-" + f.workflowID.String()),
+		testNodeID("node-join-" + f.workflowID.String()),
 	} {
 		added.Nodes = setWorkflowGraphSaveNodeGroup(added.Nodes, nodeID, removedGroupID)
 	}
@@ -170,9 +170,9 @@ func TestWorkflowGraphSaveAllowsRemovingNodeGroupWithoutConfirmation(t *testing.
 	remove := f.request(record.Version, false, current)
 	remove.NodeGroups = nil
 	for _, nodeID := range []workflow.NodeID{
-		workflow.NodeID("node-impl-a-" + f.workflowID.String()),
-		workflow.NodeID("node-impl-b-" + f.workflowID.String()),
-		workflow.NodeID("node-join-" + f.workflowID.String()),
+		testNodeID("node-impl-a-" + f.workflowID.String()),
+		testNodeID("node-impl-b-" + f.workflowID.String()),
+		testNodeID("node-join-" + f.workflowID.String()),
 	} {
 		remove.Nodes = setWorkflowGraphSaveNodeGroup(remove.Nodes, nodeID, "")
 	}
@@ -211,14 +211,14 @@ func TestWorkflowGraphSaveBlockersIdentifyRemovedTaskReferencedEntities(t *testi
 	if err != nil {
 		t.Fatalf("GetDefinition: %v", err)
 	}
-	agentID := workflow.NodeID("node-agent-" + workflowID.String())
-	startEdgeID := workflow.EdgeID("edge-start-" + workflowID.String())
+	agentID := testNodeID("node-agent-" + workflowID.String())
+	startEdgeID := testEdgeID("edge-start-" + workflowID.String())
 	req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, false, def)
 	req.Nodes = removeWorkflowGraphSaveNode(req.Nodes, agentID)
-	req.TransitionGroups = removeWorkflowGraphSaveTransitionGroupByID(req.TransitionGroups, workflow.TransitionGroupID("group-start-"+workflowID.String()))
-	req.TransitionGroups = removeWorkflowGraphSaveTransitionGroupByID(req.TransitionGroups, workflow.TransitionGroupID("group-done-"+workflowID.String()))
+	req.TransitionGroups = removeWorkflowGraphSaveTransitionGroupByID(req.TransitionGroups, testTransitionGroupID("group-start-"+workflowID.String()))
+	req.TransitionGroups = removeWorkflowGraphSaveTransitionGroupByID(req.TransitionGroups, testTransitionGroupID("group-done-"+workflowID.String()))
 	req.Edges = removeWorkflowGraphSaveEdge(req.Edges, startEdgeID)
-	req.Edges = removeWorkflowGraphSaveEdge(req.Edges, workflow.EdgeID("edge-done-"+workflowID.String()))
+	req.Edges = removeWorkflowGraphSaveEdge(req.Edges, testEdgeID("edge-done-"+workflowID.String()))
 
 	preview := graphSaveFixture{ctx: ctx, store: store, workflowID: workflowID}.preview(t, req)
 
@@ -229,6 +229,54 @@ func TestWorkflowGraphSaveBlockersIdentifyRemovedTaskReferencedEntities(t *testi
 	wantEdge := []WorkflowGraphEntityReference{{EntityType: WorkflowGraphEntityTypeEdge, EntityID: string(startEdgeID)}}
 	if got := workflowGraphSaveBlockerEntities(preview.Blockers, "edge_task_references"); !slices.Equal(got, wantEdge) {
 		t.Fatalf("edge_task_references affected entities = %+v, want %+v", got, wantEdge)
+	}
+}
+
+func TestWorkflowGraphSaveBlockersUsePendingApprovalSnapshots(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createApprovalWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	completed, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       source.Reference,
+		TransitionID: "done",
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode: %v", err)
+	}
+	if completed.PendingApproval == nil {
+		t.Fatal("completion did not create a pending Approval")
+	}
+
+	def, record, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	targetNodeID := workflow.NodeIDOf(nodeByKind(t, def, workflow.NodeKindTerminal))
+	approvalEdge := edgeByKey(t, def, "done")
+	req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, false, def)
+	req.Nodes = removeWorkflowGraphSaveNode(req.Nodes, targetNodeID)
+	req.Edges = removeWorkflowGraphSaveEdge(req.Edges, approvalEdge.ID)
+	req.TransitionGroups = removeWorkflowGraphSaveTransitionGroupByID(req.TransitionGroups, approvalEdge.TransitionGroupID)
+
+	preview, err := store.PreviewWorkflowGraphSave(ctx, req)
+	if err != nil {
+		t.Fatalf("PreviewWorkflowGraphSave: %v", err)
+	}
+	wantNode := []WorkflowGraphEntityReference{{
+		EntityType: WorkflowGraphEntityTypeNode,
+		EntityID:   string(targetNodeID),
+	}}
+	if got := workflowGraphSaveBlockerEntities(preview.Blockers, "node_task_references"); !slices.Equal(got, wantNode) {
+		t.Fatalf("pending-Approval Node blocker entities = %+v, want %+v", got, wantNode)
+	}
+	wantEdge := []WorkflowGraphEntityReference{{
+		EntityType: WorkflowGraphEntityTypeEdge,
+		EntityID:   string(approvalEdge.ID),
+	}}
+	if got := workflowGraphSaveBlockerEntities(preview.Blockers, "edge_task_references"); !slices.Equal(got, wantEdge) {
+		t.Fatalf("pending-Approval Branch blocker entities = %+v, want %+v", got, wantEdge)
 	}
 }
 
@@ -274,7 +322,7 @@ func TestWorkflowGraphSaveTaskReferencedEditBlockersIdentifyChangedEntities(t *t
 		if err != nil {
 			t.Fatalf("GetDefinition: %v", err)
 		}
-		agentID := workflow.NodeID("node-agent-" + workflowID.String())
+		agentID := testNodeID("node-agent-" + workflowID.String())
 		req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, false, def)
 		for index := range req.Nodes {
 			if req.Nodes[index].ID == agentID {
@@ -309,11 +357,11 @@ func TestWorkflowGraphSaveTaskReferencedEditBlockersIdentifyChangedEntities(t *t
 		if err != nil {
 			t.Fatalf("GetDefinition: %v", err)
 		}
-		edgeID := workflow.EdgeID("edge-start-" + workflowID.String())
+		edgeID := testEdgeID("edge-start-" + workflowID.String())
 		req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, false, def)
 		for index := range req.Edges {
 			if req.Edges[index].ID == edgeID {
-				req.Edges[index].TransitionGroupID = workflow.TransitionGroupID("group-done-" + workflowID.String())
+				req.Edges[index].TransitionGroupID = testTransitionGroupID("group-done-" + workflowID.String())
 			}
 		}
 
@@ -330,10 +378,10 @@ func TestWorkflowGraphSaveTaskReferencedEditBlockersIdentifyChangedEntities(t *t
 
 func TestWorkflowGraphSaveValidationBlockerCanonicalizesAffectedEntities(t *testing.T) {
 	f := newGraphSaveFixture(t, createValidWorkflow)
-	agentID := workflow.NodeID("node-agent-" + f.workflowID.String())
+	agentID := testNodeID("node-agent-" + f.workflowID.String())
 	req := f.request(f.record.Version, false, f.def)
 	duplicate := *workflowGraphSaveNodeRecord(t, req.Nodes, agentID)
-	duplicate.ID, duplicate.Kind, duplicate.SubagentRole = workflow.NodeID("node-second-start-"+f.workflowID.String()), workflow.NodeKindStart, ""
+	duplicate.ID, duplicate.Kind, duplicate.SubagentRole = testNodeID("node-second-start-"+f.workflowID.String()), workflow.NodeKindStart, ""
 	req.Nodes = append(req.Nodes, duplicate)
 
 	preview := f.preview(t, req)
@@ -371,7 +419,7 @@ func TestWorkflowGraphSavePreparationDoesNotHoldWriteTransaction(t *testing.T) {
 	resolver := &blockingGraphSaveRoleResolver{started: make(chan struct{}), release: make(chan struct{})}
 	f.store.roleResolver = resolver
 	request := f.request(f.record.Version, false, f.def)
-	request.Nodes = renameWorkflowGraphSaveNode(request.Nodes, workflow.NodeID("node-agent-"+f.workflowID.String()), "Renamed agent")
+	request.Nodes = renameWorkflowGraphSaveNode(request.Nodes, testNodeID("node-agent-"+f.workflowID.String()), "Renamed agent")
 
 	saveDone := make(chan error, 1)
 	go func() {
@@ -414,10 +462,10 @@ func TestWorkflowGraphSaveCommitAllowsActiveWorkStartedDuringPreparation(t *test
 	activeStore, _ := openConcurrentWorkflowStores(t, cfg)
 	activeStore.roleResolver = testsetup.QuestionsEnabled("coder", "reviewer")
 	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
-	agentID := workflow.NodeID("node-agent-" + workflowID.String())
-	spareDoneID := workflow.NodeID("node-spare-done-" + workflowID.String())
-	spareGroupID := workflow.TransitionGroupID("group-spare-done-" + workflowID.String())
-	spareEdgeID := workflow.EdgeID("edge-spare-done-" + workflowID.String())
+	agentID := testNodeID("node-agent-" + workflowID.String())
+	spareDoneID := testNodeID("node-spare-done-" + workflowID.String())
+	spareGroupID := testTransitionGroupID("group-spare-done-" + workflowID.String())
+	spareEdgeID := testEdgeID("edge-spare-done-" + workflowID.String())
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
 		req.Nodes = append(req.Nodes, NodeRecord{ID: spareDoneID, WorkflowID: workflowID, Key: "spare_done", Kind: workflow.NodeKindTerminal, DisplayName: "Spare Done"})
 		req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{ID: spareGroupID, WorkflowID: workflowID, SourceNodeID: agentID, TransitionID: "spare_done", DisplayName: "Spare Done"})
@@ -473,7 +521,7 @@ func TestWorkflowGraphSaveAllowsAddingTransitionFromActiveSource(t *testing.T) {
 		{
 			name: "transition group",
 			mutate: func(workflowID runtimeids.WorkflowID, agentID workflow.NodeID, spareDoneID workflow.NodeID, req *WorkflowGraphSaveRequest) {
-				groupID := workflow.TransitionGroupID("group-added-" + workflowID.String())
+				groupID := testTransitionGroupID("group-added-" + workflowID.String())
 				req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{
 					ID:           groupID,
 					WorkflowID:   workflowID,
@@ -482,7 +530,7 @@ func TestWorkflowGraphSaveAllowsAddingTransitionFromActiveSource(t *testing.T) {
 					DisplayName:  "Added",
 				})
 				req.Edges = append(req.Edges, EdgeRecord{
-					ID:                workflow.EdgeID("edge-added-" + workflowID.String()),
+					ID:                testEdgeID("edge-added-" + workflowID.String()),
 					WorkflowID:        workflowID,
 					TransitionGroupID: groupID,
 					Key:               "added",
@@ -495,9 +543,9 @@ func TestWorkflowGraphSaveAllowsAddingTransitionFromActiveSource(t *testing.T) {
 			name: "edge",
 			mutate: func(workflowID runtimeids.WorkflowID, _ workflow.NodeID, spareDoneID workflow.NodeID, req *WorkflowGraphSaveRequest) {
 				req.Edges = append(req.Edges, EdgeRecord{
-					ID:                workflow.EdgeID("edge-added-" + workflowID.String()),
+					ID:                testEdgeID("edge-added-" + workflowID.String()),
 					WorkflowID:        workflowID,
-					TransitionGroupID: workflow.TransitionGroupID("group-done-" + workflowID.String()),
+					TransitionGroupID: testTransitionGroupID("group-done-" + workflowID.String()),
 					Key:               "added",
 					TargetNodeID:      spareDoneID,
 					ContextMode:       workflow.ContextModeNewSession,
@@ -515,8 +563,8 @@ func TestWorkflowGraphSaveAllowsAddingTransitionFromActiveSource(t *testing.T) {
 			if err != nil {
 				t.Fatalf("GetDefinition: %v", err)
 			}
-			agentID := workflow.NodeID("node-agent-" + workflowID.String())
-			spareDoneID := workflow.NodeID("node-spare-done-" + workflowID.String())
+			agentID := testNodeID("node-agent-" + workflowID.String())
+			spareDoneID := testNodeID("node-spare-done-" + workflowID.String())
 			req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, false, def)
 			req.Nodes = append(req.Nodes, NodeRecord{
 				ID:          spareDoneID,
@@ -589,16 +637,16 @@ func TestWorkflowGraphSaveAllowsReassigningExistingEdgeToActiveSource(t *testing
 	ctx, store, binding, _ := newTestStoreWithConfigContext(t)
 	workflowID := createFanoutJoinWorkflow(t, ctx, store)
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
-	planID := workflow.NodeID("node-plan-" + workflowID.String())
-	joinID := workflow.NodeID("node-join-" + workflowID.String())
-	spareSourceID := workflow.NodeID("node-spare-source-" + workflowID.String())
-	spareBranchAID := workflow.NodeID("node-spare-a-" + workflowID.String())
-	spareBranchBID := workflow.NodeID("node-spare-b-" + workflowID.String())
-	spareRouteGroupID := workflow.TransitionGroupID("group-spare-route-" + workflowID.String())
-	spareSplitGroupID := workflow.TransitionGroupID("group-spare-split-" + workflowID.String())
-	spareBranchAGroupID := workflow.TransitionGroupID("group-spare-a-" + workflowID.String())
-	spareBranchBGroupID := workflow.TransitionGroupID("group-spare-b-" + workflowID.String())
-	reassignedEdgeID := workflow.EdgeID("edge-spare-split-a-" + workflowID.String())
+	planID := testNodeID("node-plan-" + workflowID.String())
+	joinID := testNodeID("node-join-" + workflowID.String())
+	spareSourceID := testNodeID("node-spare-source-" + workflowID.String())
+	spareBranchAID := testNodeID("node-spare-a-" + workflowID.String())
+	spareBranchBID := testNodeID("node-spare-b-" + workflowID.String())
+	spareRouteGroupID := testTransitionGroupID("group-spare-route-" + workflowID.String())
+	spareSplitGroupID := testTransitionGroupID("group-spare-split-" + workflowID.String())
+	spareBranchAGroupID := testTransitionGroupID("group-spare-a-" + workflowID.String())
+	spareBranchBGroupID := testTransitionGroupID("group-spare-b-" + workflowID.String())
+	reassignedEdgeID := testEdgeID("edge-spare-split-a-" + workflowID.String())
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
 		req.Nodes = append(req.Nodes,
 			NodeRecord{ID: spareSourceID, WorkflowID: workflowID, Key: "spare_source", Kind: workflow.NodeKindAgent, DisplayName: "Spare Source", SubagentRole: "coder"},
@@ -612,11 +660,11 @@ func TestWorkflowGraphSaveAllowsReassigningExistingEdgeToActiveSource(t *testing
 			TransitionGroupRecord{ID: spareBranchBGroupID, WorkflowID: workflowID, SourceNodeID: spareBranchBID, TransitionID: "join_spare_b", DisplayName: "Join"},
 		)
 		req.Edges = append(req.Edges,
-			EdgeRecord{ID: workflow.EdgeID("edge-spare-route-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: spareRouteGroupID, Key: "spare", TargetNodeID: spareSourceID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Route spare work."},
+			EdgeRecord{ID: testEdgeID("edge-spare-route-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: spareRouteGroupID, Key: "spare", TargetNodeID: spareSourceID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Route spare work."},
 			EdgeRecord{ID: reassignedEdgeID, WorkflowID: workflowID, TransitionGroupID: spareSplitGroupID, Key: "spare_a", TargetNodeID: spareBranchAID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Do spare A."},
-			EdgeRecord{ID: workflow.EdgeID("edge-spare-split-b-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: spareSplitGroupID, Key: "spare_b", TargetNodeID: spareBranchBID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Do spare B."},
-			EdgeRecord{ID: workflow.EdgeID("edge-spare-a-join-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: spareBranchAGroupID, Key: "join_a", TargetNodeID: joinID, ContextMode: workflow.ContextModeNewSession},
-			EdgeRecord{ID: workflow.EdgeID("edge-spare-b-join-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: spareBranchBGroupID, Key: "join_b", TargetNodeID: joinID, ContextMode: workflow.ContextModeNewSession},
+			EdgeRecord{ID: testEdgeID("edge-spare-split-b-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: spareSplitGroupID, Key: "spare_b", TargetNodeID: spareBranchBID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Do spare B."},
+			EdgeRecord{ID: testEdgeID("edge-spare-a-join-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: spareBranchAGroupID, Key: "join_a", TargetNodeID: joinID, ContextMode: workflow.ContextModeNewSession},
+			EdgeRecord{ID: testEdgeID("edge-spare-b-join-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: spareBranchBGroupID, Key: "join_b", TargetNodeID: joinID, ContextMode: workflow.ContextModeNewSession},
 		)
 	})
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
@@ -629,7 +677,7 @@ func TestWorkflowGraphSaveAllowsReassigningExistingEdgeToActiveSource(t *testing
 	req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, false, def)
 	for index := range req.Edges {
 		if req.Edges[index].ID == reassignedEdgeID {
-			req.Edges[index].TransitionGroupID = workflow.TransitionGroupID("group-split-" + workflowID.String())
+			req.Edges[index].TransitionGroupID = testTransitionGroupID("group-split-" + workflowID.String())
 		}
 	}
 
@@ -645,12 +693,12 @@ func TestWorkflowGraphSaveAllowsReassigningExistingEdgeToActiveSource(t *testing
 func TestWorkflowGraphSaveAllowsReassigningExistingTransitionGroupToActiveSource(t *testing.T) {
 	ctx, store, binding, _ := newTestStoreWithConfigContext(t)
 	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
-	agentID := workflow.NodeID("node-agent-" + workflowID.String())
-	spareAgentID := workflow.NodeID("node-spare-agent-" + workflowID.String())
-	spareDoneID := workflow.NodeID("node-spare-done-" + workflowID.String())
-	spareRouteGroupID := workflow.TransitionGroupID("group-spare-route-" + workflowID.String())
-	spareKeepGroupID := workflow.TransitionGroupID("group-spare-keep-" + workflowID.String())
-	reassignedGroupID := workflow.TransitionGroupID("group-spare-reassigned-" + workflowID.String())
+	agentID := testNodeID("node-agent-" + workflowID.String())
+	spareAgentID := testNodeID("node-spare-agent-" + workflowID.String())
+	spareDoneID := testNodeID("node-spare-done-" + workflowID.String())
+	spareRouteGroupID := testTransitionGroupID("group-spare-route-" + workflowID.String())
+	spareKeepGroupID := testTransitionGroupID("group-spare-keep-" + workflowID.String())
+	reassignedGroupID := testTransitionGroupID("group-spare-reassigned-" + workflowID.String())
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
 		done := nodeByKind(t, def, workflow.NodeKindTerminal)
 		req.Nodes = append(req.Nodes,
@@ -663,9 +711,9 @@ func TestWorkflowGraphSaveAllowsReassigningExistingTransitionGroupToActiveSource
 			TransitionGroupRecord{ID: reassignedGroupID, WorkflowID: workflowID, SourceNodeID: spareAgentID, TransitionID: "spare_reassigned", DisplayName: "Spare Done"},
 		)
 		req.Edges = append(req.Edges,
-			EdgeRecord{ID: workflow.EdgeID("edge-spare-route-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: spareRouteGroupID, Key: "spare", TargetNodeID: spareAgentID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Do spare work."},
-			EdgeRecord{ID: workflow.EdgeID("edge-spare-keep-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: spareKeepGroupID, Key: "done", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession},
-			EdgeRecord{ID: workflow.EdgeID("edge-spare-reassigned-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: reassignedGroupID, Key: "spare_done", TargetNodeID: spareDoneID, ContextMode: workflow.ContextModeNewSession},
+			EdgeRecord{ID: testEdgeID("edge-spare-route-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: spareRouteGroupID, Key: "spare", TargetNodeID: spareAgentID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Do spare work."},
+			EdgeRecord{ID: testEdgeID("edge-spare-keep-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: spareKeepGroupID, Key: "done", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession},
+			EdgeRecord{ID: testEdgeID("edge-spare-reassigned-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: reassignedGroupID, Key: "spare_done", TargetNodeID: spareDoneID, ContextMode: workflow.ContextModeNewSession},
 		)
 	})
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
@@ -701,7 +749,7 @@ func TestWorkflowGraphSaveCommitRejectsVersionChangedDuringPreparation(t *testin
 		t.Fatalf("GetDefinition: %v", err)
 	}
 	local := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, false, def)
-	local.Nodes = renameWorkflowGraphSaveNode(local.Nodes, workflow.NodeID("node-agent-"+workflowID.String()), "Local agent")
+	local.Nodes = renameWorkflowGraphSaveNode(local.Nodes, testNodeID("node-agent-"+workflowID.String()), "Local agent")
 	resolver := &blockingGraphSaveRoleResolver{started: make(chan struct{}), release: make(chan struct{})}
 	store.roleResolver = resolver
 	type saveResult struct {
@@ -716,7 +764,7 @@ func TestWorkflowGraphSaveCommitRejectsVersionChangedDuringPreparation(t *testin
 	<-resolver.started
 
 	remoteRequest := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, false, def)
-	remoteRequest.Nodes = renameWorkflowGraphSaveNode(remoteRequest.Nodes, workflow.NodeID("node-agent-"+workflowID.String()), "Remote agent")
+	remoteRequest.Nodes = renameWorkflowGraphSaveNode(remoteRequest.Nodes, testNodeID("node-agent-"+workflowID.String()), "Remote agent")
 	remoteResult, err := remote.SaveWorkflowGraph(ctx, remoteRequest)
 	if err != nil {
 		t.Fatalf("remote SaveWorkflowGraph: %v", err)
@@ -737,7 +785,7 @@ func TestWorkflowGraphSaveCommitRejectsVersionChangedDuringPreparation(t *testin
 	if err != nil {
 		t.Fatalf("GetDefinition after version race: %v", err)
 	}
-	if currentRecord.Version != remoteResult.Version || workflow.NodeDisplayName(nodeByID(t, current, workflow.NodeID("node-agent-"+workflowID.String()))) != "Remote agent" {
+	if currentRecord.Version != remoteResult.Version || workflow.NodeDisplayName(nodeByID(t, current, testNodeID("node-agent-"+workflowID.String()))) != "Remote agent" {
 		t.Fatalf("definition after version race = record=%+v definition=%+v, want only remote save", currentRecord, current)
 	}
 }
@@ -747,10 +795,10 @@ func TestWorkflowGraphSaveCommitRejectsChangedConfirmationImpactDuringPreparatio
 	activeStore, _ := openConcurrentWorkflowStores(t, cfg)
 	activeStore.roleResolver = testsetup.QuestionsEnabled("coder", "reviewer")
 	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
-	agentID := workflow.NodeID("node-agent-" + workflowID.String())
-	spareDoneID := workflow.NodeID("node-spare-done-" + workflowID.String())
-	spareGroupID := workflow.TransitionGroupID("group-spare-done-" + workflowID.String())
-	spareEdgeID := workflow.EdgeID("edge-spare-done-" + workflowID.String())
+	agentID := testNodeID("node-agent-" + workflowID.String())
+	spareDoneID := testNodeID("node-spare-done-" + workflowID.String())
+	spareGroupID := testTransitionGroupID("group-spare-done-" + workflowID.String())
+	spareEdgeID := testEdgeID("edge-spare-done-" + workflowID.String())
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
 		req.Nodes = append(req.Nodes, NodeRecord{ID: spareDoneID, WorkflowID: workflowID, Key: "spare_done", Kind: workflow.NodeKindTerminal, DisplayName: "Spare Done"})
 		req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{ID: spareGroupID, WorkflowID: workflowID, SourceNodeID: agentID, TransitionID: "spare_done", DisplayName: "Spare Done"})
@@ -829,7 +877,7 @@ func TestWorkflowGraphSaveCommitIgnoresUnrelatedTaskMetadataDuringPreparation(t 
 		t.Fatalf("GetDefinition: %v", err)
 	}
 	req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, false, def)
-	req.Nodes = renameWorkflowGraphSaveNode(req.Nodes, workflow.NodeID("node-agent-"+workflowID.String()), "Renamed agent")
+	req.Nodes = renameWorkflowGraphSaveNode(req.Nodes, testNodeID("node-agent-"+workflowID.String()), "Renamed agent")
 	resolver := &blockingGraphSaveRoleResolver{started: make(chan struct{}), release: make(chan struct{})}
 	store.roleResolver = resolver
 	type saveResult struct {
@@ -861,10 +909,10 @@ func TestWorkflowGraphSaveCommitIgnoresUnrelatedTaskMetadataDuringPreparation(t 
 func TestWorkflowGraphSaveAllowsRemovingCompletedSessionNode(t *testing.T) {
 	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
 	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
-	agentID := workflow.NodeID("node-agent-" + workflowID.String())
-	reviewID := workflow.NodeID("node-review-" + workflowID.String())
-	reviewDoneGroupID := workflow.TransitionGroupID("group-review-done-" + workflowID.String())
-	reviewDoneEdgeID := workflow.EdgeID("edge-review-done-" + workflowID.String())
+	agentID := testNodeID("node-agent-" + workflowID.String())
+	reviewID := testNodeID("node-review-" + workflowID.String())
+	reviewDoneGroupID := testTransitionGroupID("group-review-done-" + workflowID.String())
+	reviewDoneEdgeID := testEdgeID("edge-review-done-" + workflowID.String())
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
 		done := nodeByKind(t, def, workflow.NodeKindTerminal)
 		req.Nodes = append(req.Nodes, NodeRecord{
@@ -872,7 +920,7 @@ func TestWorkflowGraphSaveAllowsRemovingCompletedSessionNode(t *testing.T) {
 			DisplayName: "Review", SubagentRole: "reviewer",
 		})
 		for index := range req.Edges {
-			if req.Edges[index].ID == workflow.EdgeID("edge-done-"+workflowID.String()) {
+			if req.Edges[index].ID == testEdgeID("edge-done-"+workflowID.String()) {
 				req.Edges[index].TargetNodeID = reviewID
 				req.Edges[index].PromptTemplate = "Review the work."
 			}
@@ -933,10 +981,10 @@ func TestWorkflowGraphSaveAllowsRemovingCompletedSessionNode(t *testing.T) {
 	}
 	req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, false, def)
 	req.Nodes = removeWorkflowGraphSaveNode(req.Nodes, agentID)
-	req.Edges = removeWorkflowGraphSaveEdge(req.Edges, workflow.EdgeID("edge-done-"+workflowID.String()))
-	req.TransitionGroups = removeWorkflowGraphSaveTransitionGroupByID(req.TransitionGroups, workflow.TransitionGroupID("group-done-"+workflowID.String()))
+	req.Edges = removeWorkflowGraphSaveEdge(req.Edges, testEdgeID("edge-done-"+workflowID.String()))
+	req.TransitionGroups = removeWorkflowGraphSaveTransitionGroupByID(req.TransitionGroups, testTransitionGroupID("group-done-"+workflowID.String()))
 	for index := range req.Edges {
-		if req.Edges[index].ID == workflow.EdgeID("edge-start-"+workflowID.String()) {
+		if req.Edges[index].ID == testEdgeID("edge-start-"+workflowID.String()) {
 			req.Edges[index].TargetNodeID = reviewID
 			req.Edges[index].PromptTemplate = "Review the work."
 		}
@@ -991,8 +1039,8 @@ func TestWorkflowGraphSaveAllowsRemovingCompletedSessionNode(t *testing.T) {
 func TestWorkflowGraphSaveAppliesExpectedRevisionAndRemovalConfirmation(t *testing.T) {
 	f := newGraphSaveFixture(t, createValidWorkflow)
 	unconfirmed := f.request(f.record.Version, false, f.def)
-	unconfirmed.Edges = removeWorkflowGraphSaveEdge(unconfirmed.Edges, workflow.EdgeID("edge-done-"+f.workflowID.String()))
-	unconfirmed.TransitionGroups = removeWorkflowGraphSaveTransitionGroupByID(unconfirmed.TransitionGroups, workflow.TransitionGroupID("group-done-"+f.workflowID.String()))
+	unconfirmed.Edges = removeWorkflowGraphSaveEdge(unconfirmed.Edges, testEdgeID("edge-done-"+f.workflowID.String()))
+	unconfirmed.TransitionGroups = removeWorkflowGraphSaveTransitionGroupByID(unconfirmed.TransitionGroups, testTransitionGroupID("group-done-"+f.workflowID.String()))
 	blocked := f.save(t, unconfirmed)
 	if blocked.Saved || workflowGraphSaveBlockerCount(blocked.Blockers, "confirmation_required") != 2 {
 		t.Fatalf("unconfirmed graph save = %+v, want confirmation blocker for one removed edge and transition group", blocked)
@@ -1029,7 +1077,7 @@ func TestWorkflowGraphSaveAppliesExpectedRevisionAndRemovalConfirmation(t *testi
 
 func TestWorkflowGraphSaveConfirmationIncludesNodeGroupCountAndImpactChangedEntities(t *testing.T) {
 	f := newGraphSaveFixture(t, createValidWorkflow)
-	nodeGroupID := "group-empty-" + f.workflowID.String()
+	nodeGroupID := testGraphEntityID("group-empty-" + f.workflowID.String())
 	if _, _, err := f.store.AddNodeGroup(f.ctx, NodeGroupRecord{
 		ID:          nodeGroupID,
 		WorkflowID:  f.workflowID,
@@ -1039,8 +1087,8 @@ func TestWorkflowGraphSaveConfirmationIncludesNodeGroupCountAndImpactChangedEnti
 		t.Fatalf("AddNodeGroup: %v", err)
 	}
 	current, record := f.current(t)
-	edgeID := workflow.EdgeID("edge-done-" + f.workflowID.String())
-	transitionGroupID := workflow.TransitionGroupID("group-done-" + f.workflowID.String())
+	edgeID := testEdgeID("edge-done-" + f.workflowID.String())
+	transitionGroupID := testTransitionGroupID("group-done-" + f.workflowID.String())
 	req := f.request(record.Version, false, current)
 	req.NodeGroups = nil
 	req.Edges = removeWorkflowGraphSaveEdge(req.Edges, edgeID)
@@ -1128,7 +1176,7 @@ func TestWorkflowGraphSaveRoundTripsExecutionTargetPolicy(t *testing.T) {
 	}
 
 	combined := f.request(updatedRecord.Version, false, updated)
-	combined.Nodes = renameWorkflowGraphSaveNode(combined.Nodes, workflow.NodeID("node-agent-"+f.workflowID.String()), "Renamed agent")
+	combined.Nodes = renameWorkflowGraphSaveNode(combined.Nodes, testNodeID("node-agent-"+f.workflowID.String()), "Renamed agent")
 	combined.Metadata = &WorkflowGraphSaveMetadata{
 		Name:                  updatedRecord.Name,
 		Description:           updatedRecord.Description,
@@ -1184,7 +1232,7 @@ func TestWorkflowGraphSavePersistsScriptPathOnlyEdit(t *testing.T) {
 	f := newGraphSaveFixture(t, func(t *testing.T, ctx context.Context, store *Store) runtimeids.WorkflowID {
 		return createScriptStartWorkflow(t, ctx, store, "scripts/old")
 	})
-	scriptID := workflow.NodeID("node-script-" + f.workflowID.String())
+	scriptID := testNodeID("node-script-" + f.workflowID.String())
 	req := f.request(f.record.Version, false, f.def)
 	for index := range req.Nodes {
 		if req.Nodes[index].ID == scriptID {
@@ -1307,9 +1355,12 @@ func TestWorkflowGraphSavePersistsSemanticallyInapplicableSelectorForDraftFixup(
 
 func TestWorkflowGraphSaveAcceptsClientGeneratedTopologyIDsAndRejectsCollisions(t *testing.T) {
 	f := newGraphSaveFixture(t, createValidWorkflow)
+	nodeID := testNodeID("client-generated-node")
+	groupID := testTransitionGroupID("client-generated-transition-group")
+	edgeID := testEdgeID("client-generated-edge")
 	req := f.request(f.record.Version, false, f.def)
 	req.Nodes = append(req.Nodes, NodeRecord{
-		ID:           "workflow-node-00000000-0000-4000-8000-000000000001",
+		ID:           nodeID,
 		WorkflowID:   f.workflowID,
 		Key:          "client_generated",
 		Kind:         workflow.NodeKindAgent,
@@ -1317,18 +1368,18 @@ func TestWorkflowGraphSaveAcceptsClientGeneratedTopologyIDsAndRejectsCollisions(
 		SubagentRole: workflow.DefaultAgentRole,
 	})
 	req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{
-		ID:           "workflow-transition-group-00000000-0000-4000-8000-000000000001",
+		ID:           groupID,
 		WorkflowID:   f.workflowID,
-		SourceNodeID: workflow.NodeID("node-agent-" + f.workflowID.String()),
+		SourceNodeID: testNodeID("node-agent-" + f.workflowID.String()),
 		TransitionID: "client_generated",
 		DisplayName:  "Client Generated",
 	})
 	req.Edges = append(req.Edges, EdgeRecord{
-		ID:                "workflow-edge-00000000-0000-4000-8000-000000000001",
+		ID:                edgeID,
 		WorkflowID:        f.workflowID,
-		TransitionGroupID: "workflow-transition-group-00000000-0000-4000-8000-000000000001",
+		TransitionGroupID: groupID,
 		Key:               "client_generated",
-		TargetNodeID:      "workflow-node-00000000-0000-4000-8000-000000000001",
+		TargetNodeID:      nodeID,
 		AssigneeSelection: workflow.AssigneeSelectionConfigured,
 		ThinkingSelection: workflow.ThinkingSelectionConfigured,
 		ContextMode:       workflow.ContextModeNewSession,
@@ -1340,7 +1391,7 @@ func TestWorkflowGraphSaveAcceptsClientGeneratedTopologyIDsAndRejectsCollisions(
 		t.Fatalf("client id graph save = %+v, want saved without blockers", saved)
 	}
 	updated, _ := f.current(t)
-	if workflow.NodeKey(nodeByID(t, updated, "workflow-node-00000000-0000-4000-8000-000000000001")) != "client_generated" {
+	if workflow.NodeKey(nodeByID(t, updated, nodeID)) != "client_generated" {
 		t.Fatalf("client-generated node id was not persisted")
 	}
 
@@ -1354,7 +1405,7 @@ func TestWorkflowGraphSaveAcceptsClientGeneratedTopologyIDsAndRejectsCollisions(
 
 func TestWorkflowGraphSaveMetadataAndGraphAreAtomic(t *testing.T) {
 	f := newGraphSaveFixture(t, createValidWorkflow)
-	agentID := workflow.NodeID("node-agent-" + f.workflowID.String())
+	agentID := testNodeID("node-agent-" + f.workflowID.String())
 
 	combined := f.request(f.record.Version, false, f.def)
 	combined.Metadata = &WorkflowGraphSaveMetadata{Name: "Combined save", Description: "Graph and metadata"}
@@ -1370,7 +1421,7 @@ func TestWorkflowGraphSaveMetadataAndGraphAreAtomic(t *testing.T) {
 
 	blocked := f.request(updatedRecord.Version, false, updatedDef)
 	blocked.Metadata = &WorkflowGraphSaveMetadata{Name: "Must not persist", Description: "Blocked"}
-	blocked.Edges = removeWorkflowGraphSaveEdge(blocked.Edges, workflow.EdgeID("edge-done-"+f.workflowID.String()))
+	blocked.Edges = removeWorkflowGraphSaveEdge(blocked.Edges, testEdgeID("edge-done-"+f.workflowID.String()))
 	blockedResult := f.save(t, blocked)
 	if blockedResult.Saved || workflowGraphSaveBlockerCount(blockedResult.Blockers, "confirmation_required") == 0 {
 		t.Fatalf("blocked combined save = %+v, want confirmation blocker", blockedResult)
@@ -1383,12 +1434,12 @@ func TestWorkflowGraphSaveMetadataAndGraphAreAtomic(t *testing.T) {
 
 func TestWorkflowGraphSaveValidatesAndPersistsV1NodeGroups(t *testing.T) {
 	f := newGraphSaveFixture(t, createFanoutJoinWorkflow)
-	groupID := "group-parallel-" + f.workflowID.String()
+	groupID := testGraphEntityID("group-parallel-" + f.workflowID.String())
 	req := f.request(f.record.Version, false, f.def)
 	req.NodeGroups = append(req.NodeGroups, NodeGroupRecord{ID: groupID, WorkflowID: f.workflowID, Key: "parallel", DisplayName: "Parallel"})
-	req.Nodes = setWorkflowGraphSaveNodeGroup(req.Nodes, workflow.NodeID("node-impl-a-"+f.workflowID.String()), groupID)
-	req.Nodes = setWorkflowGraphSaveNodeGroup(req.Nodes, workflow.NodeID("node-impl-b-"+f.workflowID.String()), groupID)
-	req.Nodes = setWorkflowGraphSaveNodeGroup(req.Nodes, workflow.NodeID("node-join-"+f.workflowID.String()), groupID)
+	req.Nodes = setWorkflowGraphSaveNodeGroup(req.Nodes, testNodeID("node-impl-a-"+f.workflowID.String()), groupID)
+	req.Nodes = setWorkflowGraphSaveNodeGroup(req.Nodes, testNodeID("node-impl-b-"+f.workflowID.String()), groupID)
+	req.Nodes = setWorkflowGraphSaveNodeGroup(req.Nodes, testNodeID("node-join-"+f.workflowID.String()), groupID)
 
 	result := f.save(t, req)
 	if !result.Saved || len(result.Blockers) != 0 {
@@ -1401,12 +1452,12 @@ func TestWorkflowGraphSaveValidatesAndPersistsV1NodeGroups(t *testing.T) {
 	if len(savedDef.NodeGroups) != 1 || len(savedDef.NodeGroups[0].MemberNodeIDs) != 3 {
 		t.Fatalf("saved node groups = %+v, want one group with three members", savedDef.NodeGroups)
 	}
-	if workflow.NodeGroupID(nodeByID(t, savedDef, workflow.NodeID("node-join-"+f.workflowID.String()))) != groupID {
-		t.Fatalf("saved join group id not persisted: %+v", nodeByID(t, savedDef, workflow.NodeID("node-join-"+f.workflowID.String())))
+	if savedGroupID, present := workflow.NodeGroupID(nodeByID(t, savedDef, testNodeID("node-join-"+f.workflowID.String()))); !present || savedGroupID != groupID {
+		t.Fatalf("saved join group id not persisted: %+v", nodeByID(t, savedDef, testNodeID("node-join-"+f.workflowID.String())))
 	}
 
 	invalid := f.request(savedRecord.Version, false, savedDef)
-	invalid.Nodes = setWorkflowGraphSaveNodeGroup(invalid.Nodes, workflow.NodeID("node-impl-b-"+f.workflowID.String()), "")
+	invalid.Nodes = setWorkflowGraphSaveNodeGroup(invalid.Nodes, testNodeID("node-impl-b-"+f.workflowID.String()), "")
 	invalidResult := f.save(t, invalid)
 	if invalidResult.Saved || workflowGraphSaveBlockerCount(invalidResult.Blockers, "validation_failed") == 0 {
 		t.Fatalf("invalid node group graph save = %+v, want validation blocker", invalidResult)
@@ -1416,8 +1467,8 @@ func TestWorkflowGraphSaveValidatesAndPersistsV1NodeGroups(t *testing.T) {
 func TestWorkflowGraphSaveKeepsAuthoredCollectionOrderSignificant(t *testing.T) {
 	f := newGraphSaveFixture(t, createValidWorkflow)
 	for _, group := range []NodeGroupRecord{
-		{ID: "group-first-" + f.workflowID.String(), WorkflowID: f.workflowID, Key: "first", DisplayName: "First", SortOrder: 50},
-		{ID: "group-second-" + f.workflowID.String(), WorkflowID: f.workflowID, Key: "second", DisplayName: "Second", SortOrder: 150},
+		{ID: testGraphEntityID("group-first-" + f.workflowID.String()), WorkflowID: f.workflowID, Key: "first", DisplayName: "First", SortOrder: 50},
+		{ID: testGraphEntityID("group-second-" + f.workflowID.String()), WorkflowID: f.workflowID, Key: "second", DisplayName: "Second", SortOrder: 150},
 	} {
 		if _, _, err := f.store.AddNodeGroup(f.ctx, group); err != nil {
 			t.Fatalf("AddNodeGroup %q: %v", group.ID, err)
@@ -1472,8 +1523,8 @@ func TestWorkflowGraphSaveKeepsAuthoredCollectionOrderSignificant(t *testing.T) 
 func TestWorkflowGraphSavePreservesNodeGroupOrderAndAllUniquenessKeySwaps(t *testing.T) {
 	f := newGraphSaveFixture(t, createValidWorkflow)
 	for _, group := range []NodeGroupRecord{
-		{ID: "group-first-" + f.workflowID.String(), WorkflowID: f.workflowID, Key: "first", DisplayName: "First", SortOrder: 50},
-		{ID: "group-second-" + f.workflowID.String(), WorkflowID: f.workflowID, Key: "second", DisplayName: "Second", SortOrder: 150},
+		{ID: testGraphEntityID("group-first-" + f.workflowID.String()), WorkflowID: f.workflowID, Key: "first", DisplayName: "First", SortOrder: 50},
+		{ID: testGraphEntityID("group-second-" + f.workflowID.String()), WorkflowID: f.workflowID, Key: "second", DisplayName: "Second", SortOrder: 150},
 	} {
 		if _, _, err := f.store.AddNodeGroup(f.ctx, group); err != nil {
 			t.Fatalf("AddNodeGroup %q: %v", group.ID, err)
@@ -1575,7 +1626,7 @@ func TestWorkflowGraphSaveChecksVersionBeforePreparingDraftRecords(t *testing.T)
 
 func TestPreviewWorkflowGraphSaveDoesNotMutateWithoutBlockers(t *testing.T) {
 	f := newGraphSaveFixture(t, createValidWorkflow)
-	agentID := workflow.NodeID("node-agent-" + f.workflowID.String())
+	agentID := testNodeID("node-agent-" + f.workflowID.String())
 	req := f.request(f.record.Version, false, f.def)
 	req.Nodes = renameWorkflowGraphSaveNode(req.Nodes, agentID, "Preview Agent")
 

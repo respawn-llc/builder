@@ -214,8 +214,8 @@ func createCurrentNodeRoleSelectionWorkflow(t *testing.T, store *workflowstore.S
 	}
 	start := nodeByKindRunnerTest(t, definition, workflow.NodeKindStart)
 	done := nodeByKindRunnerTest(t, definition, workflow.NodeKindTerminal)
-	firstID := workflow.NodeID("node-first-" + created.ID.String())
-	secondID := workflow.NodeID("node-second-" + created.ID.String())
+	firstID := workflow.NodeID(runtimeids.NewGraphEntityID())
+	secondID := workflow.NodeID(runtimeids.NewGraphEntityID())
 	for _, node := range []workflowstore.NodeRecord{
 		{ID: firstID, WorkflowID: created.ID, Key: "first", Kind: workflow.NodeKindAgent, DisplayName: "First", SubagentRole: "coder"},
 		{ID: secondID, WorkflowID: created.ID, Key: "second", Kind: workflow.NodeKindAgent, DisplayName: "Second", SubagentRole: "coder"},
@@ -224,9 +224,9 @@ func createCurrentNodeRoleSelectionWorkflow(t *testing.T, store *workflowstore.S
 			t.Fatalf("AddNode: %v", err)
 		}
 	}
-	startGroup := workflow.TransitionGroupID("group-start-" + created.ID.String())
-	nextGroup := workflow.TransitionGroupID("group-next-" + created.ID.String())
-	doneGroup := workflow.TransitionGroupID("group-done-" + created.ID.String())
+	startGroup := workflow.TransitionGroupID(runtimeids.NewGraphEntityID())
+	nextGroup := workflow.TransitionGroupID(runtimeids.NewGraphEntityID())
+	doneGroup := workflow.TransitionGroupID(runtimeids.NewGraphEntityID())
 	for _, group := range []workflowstore.TransitionGroupRecord{
 		{ID: startGroup, WorkflowID: created.ID, SourceNodeID: workflow.NodeIDOf(start), TransitionID: "start", DisplayName: "Start"},
 		{ID: nextGroup, WorkflowID: created.ID, SourceNodeID: firstID, TransitionID: "next", DisplayName: "Next"},
@@ -237,13 +237,13 @@ func createCurrentNodeRoleSelectionWorkflow(t *testing.T, store *workflowstore.S
 		}
 	}
 	for _, edge := range []workflowstore.EdgeRecord{
-		{ID: workflow.EdgeID("edge-start-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: firstID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "First."},
+		{ID: workflow.EdgeID(runtimeids.NewGraphEntityID()), WorkflowID: created.ID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: firstID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "First."},
 		{
-			ID: workflow.EdgeID("edge-next-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: nextGroup, Key: "next", TargetNodeID: secondID,
+			ID: workflow.EdgeID(runtimeids.NewGraphEntityID()), WorkflowID: created.ID, TransitionGroupID: nextGroup, Key: "next", TargetNodeID: secondID,
 			AssigneeSelection: workflow.AssigneeSelectionPreviousNode, ContextMode: workflow.ContextModeNewSession,
 			PromptTemplate: "Second.", Parameters: []workflow.Parameter{{Key: "role", Purpose: workflow.ParameterPurposeTargetAssignee}},
 		},
-		{ID: workflow.EdgeID("edge-done-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession},
+		{ID: workflow.EdgeID(runtimeids.NewGraphEntityID()), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession},
 	} {
 		edge = normalizeWorkflowEdgeRecordForTest(edge)
 		if _, err := store.AddEdge(ctx, edge); err != nil {

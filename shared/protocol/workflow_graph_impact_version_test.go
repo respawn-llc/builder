@@ -2,7 +2,6 @@ package protocol_test
 
 import (
 	"encoding/json"
-	"strconv"
 	"testing"
 
 	"core/shared/protocol"
@@ -10,27 +9,24 @@ import (
 )
 
 func TestWorkflowGraphImpactHardCutoverChangesProtocolFixture(t *testing.T) {
-	version, err := strconv.Atoi(protocol.Version)
-	if err != nil {
-		t.Fatalf("parse protocol version %q: %v", protocol.Version, err)
+	if protocol.Version != "116" {
+		t.Fatalf("Workflow graph identity hard cutover protocol version = %q, want 116", protocol.Version)
 	}
-	if version <= 104 {
-		t.Fatalf("Workflow graph impact protocol version = %d, want newer than 104", version)
-	}
+	const edgeID = "55555555-5555-4555-8555-555555555555"
 	response := protocol.NewSuccessResponse("request", serverapi.WorkflowGraphSavePreviewResponse{
 		Changed: true,
 		Impact: serverapi.WorkflowGraphSaveImpact{
 			RemovedEdgeCount: 1,
 			RemovedEntities: []serverapi.WorkflowGraphEntityReference{{
 				EntityType: serverapi.WorkflowGraphEntityTypeEdge,
-				EntityID:   "edge-1",
+				EntityID:   edgeID,
 			}},
 		},
 		Blockers: []serverapi.WorkflowGraphSaveBlocker{{
 			Code: "confirmation_required", Message: "confirm", Count: 1,
 			AffectedEntities: []serverapi.WorkflowGraphEntityReference{{
 				EntityType: serverapi.WorkflowGraphEntityTypeEdge,
-				EntityID:   "edge-1",
+				EntityID:   edgeID,
 			}},
 		}},
 	})
@@ -38,8 +34,8 @@ func TestWorkflowGraphImpactHardCutoverChangesProtocolFixture(t *testing.T) {
 	if err := json.Unmarshal(response.Result, &fixture); err != nil {
 		t.Fatalf("decode fixture: %v", err)
 	}
-	if !fixture.Changed || fixture.Impact.RemovedEntities[0].EntityID != "edge-1" ||
-		fixture.Blockers[0].AffectedEntities[0].EntityID != "edge-1" {
+	if !fixture.Changed || fixture.Impact.RemovedEntities[0].EntityID != edgeID ||
+		fixture.Blockers[0].AffectedEntities[0].EntityID != edgeID {
 		t.Fatalf("fixture = %+v", fixture)
 	}
 }
