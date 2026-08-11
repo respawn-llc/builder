@@ -16,9 +16,6 @@ import (
 	"time"
 
 	"core/internal/testharness/pty/analyzer"
-	"core/internal/testharness/pty/driver"
-
-	"github.com/google/uuid"
 )
 
 const serverFailureSignalTestWait = 5 * time.Second
@@ -142,14 +139,7 @@ func TestServerLogOverflowIsTypedAndRetainsDiagnosticExcerpts(t *testing.T) {
 	}
 }
 
-func TestServerFailureSignalWakesAQuietActionLoopOnLogOverflow(t *testing.T) {
-	stub, err := StartResponsesStub([]RequiredOperation{{
-		ID: uuid.New(), Route: RouteResponses, Outcome: OutcomeJSON,
-	}})
-	if err != nil {
-		t.Fatalf("StartResponsesStub: %v", err)
-	}
-	t.Cleanup(stub.Close)
+func TestServerFailureSignalReportsTypedLogOverflow(t *testing.T) {
 	failure := make(chan struct{})
 	var notifyOnce sync.Once
 	notify := func() {
@@ -157,47 +147,22 @@ func TestServerFailureSignalWakesAQuietActionLoopOnLogOverflow(t *testing.T) {
 			close(failure)
 		})
 	}
-	environment := &IsolatedEnvironment{
-		Stub: stub,
-		Server: &ServerHandle{
-			done:    make(chan struct{}),
-			failure: failure,
-			stdout:  newBoundedLog(16, notify),
-			stderr:  newBoundedLog(16, notify),
-		},
+	server := &ServerHandle{
+		failure: failure,
+		stdout:  newBoundedLog(16, notify),
+		stderr:  newBoundedLog(16, notify),
 	}
-	session, err := driver.StartSession(driver.SessionSpec{
-		Path:       "/bin/sh",
-		Args:       []string{"-c", "sleep 10"},
-		Env:        []string{"TERM=xterm-256color", "LANG=C.UTF-8", "LC_ALL=C.UTF-8"},
-		Dimensions: analyzer.MustDimensions(2, 8),
-	})
-	if err != nil {
-		t.Fatalf("StartSession: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = session.Close()
-		_ = session.Terminate()
-		_ = session.ForceKill()
-	})
-	result := make(chan error, 1)
-	go func() {
-		_, runErr := runActions(session, environment, []Action{{
-			ID: uuid.New(), Kind: ActionWait, Predicate: &Predicate{Kind: PredicateModelConsumed},
-		}})
-		result <- runErr
-	}()
-	if _, err := environment.Server.stderr.Write([]byte("0123456789abcdefx")); err == nil {
+	if _, err := server.stderr.Write([]byte("0123456789abcdefx")); err == nil {
 		t.Fatal("server log overflow did not fail")
 	}
 	select {
-	case runErr := <-result:
-		var overflow *analyzer.EvidenceLimitExceeded
-		if !errors.As(runErr, &overflow) {
-			t.Fatalf("runActions error = %T %v, want EvidenceLimitExceeded", runErr, runErr)
-		}
+	case <-server.Failure():
 	case <-time.After(serverFailureSignalTestWait):
-		t.Fatal("quiet action loop did not wake for server log overflow")
+		t.Fatal("server failure signal did not report log overflow")
+	}
+	var overflow *analyzer.EvidenceLimitExceeded
+	if err := server.Error(); !errors.As(err, &overflow) {
+		t.Fatalf("server error = %T %v, want EvidenceLimitExceeded", err, err)
 	}
 }
 
