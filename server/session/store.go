@@ -326,6 +326,9 @@ func openPersistedSession(
 	if err := normalizeMetaContinuation(&s.meta); err != nil {
 		return nil, fmt.Errorf("validate session continuation: %w", err)
 	}
+	if err := normalizeMetaChatSettings(&s.meta); err != nil {
+		return nil, fmt.Errorf("validate session Chat settings: %w", err)
+	}
 	if err := normalizeMetaWorktreeReminder(&s.meta); err != nil {
 		return nil, fmt.Errorf("validate session worktree context: %w", err)
 	}

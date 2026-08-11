@@ -14,6 +14,7 @@ import (
 	"core/server/requestmemo"
 	"core/server/runtime"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
 )
@@ -41,6 +42,7 @@ type workspaceChatDraftPersistence interface {
 	ReplaceWorkspaceChatDraft(context.Context, string, *WorkspaceChatDraft) error
 }
 type WorkspaceChatDraftInputResolver func(context.Context) (WorkspaceChatDraftResolverInput, error)
+type WorkspaceChatMaterializer func(context.Context, WorkspaceChatDraftResolution) (runtimeids.SessionID, error)
 type WorkspaceChatDraftOwner struct {
 	persistence workspaceChatDraftPersistence
 	lanes       *requestmemo.MutationLaneRegistry[string]
@@ -52,6 +54,50 @@ func NewWorkspaceChatDraftOwner(p workspaceChatDraftPersistence) *WorkspaceChatD
 	}
 	return &WorkspaceChatDraftOwner{persistence: p, lanes: requestmemo.NewMutationLaneRegistry[string]()}
 }
+
+func (o *WorkspaceChatDraftOwner) MaterializeWorkspaceChat(
+	ctx context.Context,
+	id string,
+	resolve WorkspaceChatDraftInputResolver,
+	materialize WorkspaceChatMaterializer,
+) (runtimeids.SessionID, error) {
+	var err error
+	if id, err = o.workspaceID(id); err != nil {
+		return runtimeids.SessionID{}, err
+	}
+	if resolve == nil {
+		return runtimeids.SessionID{}, errors.New("workspace Chat draft resolver is required")
+	}
+	if materialize == nil {
+		return runtimeids.SessionID{}, errors.New("workspace Chat materializer is required")
+	}
+	lane, err := o.lanes.Acquire(ctx, id)
+	if err != nil {
+		return runtimeids.SessionID{}, err
+	}
+	defer lane.Release()
+	input, err := resolve(ctx)
+	if err != nil {
+		return runtimeids.SessionID{}, err
+	}
+	stored, err := o.persistence.ReadWorkspaceChatDraft(ctx, id)
+	if err != nil {
+		return runtimeids.SessionID{}, err
+	}
+	resolution, err := ResolveWorkspaceChatDraft(input, stored)
+	if err != nil {
+		return runtimeids.SessionID{}, err
+	}
+	sessionID, err := materialize(ctx, resolution)
+	if err != nil {
+		return runtimeids.SessionID{}, err
+	}
+	if sessionID.IsZero() || !sessionID.IsCanonicalUUIDv4() {
+		return runtimeids.SessionID{}, errors.New("materialized Session id must be a canonical UUIDv4")
+	}
+	return sessionID, nil
+}
+
 func (o *WorkspaceChatDraftOwner) workspaceID(id string) (string, error) {
 	if o == nil || o.persistence == nil || o.lanes == nil {
 		return "", errors.New("workspace Chat draft owner is required")

@@ -105,6 +105,7 @@ const (
 	MethodWorkflowTaskObserve                           = "workflow.task.observe"
 	MethodSessionPlan                                   = "session.plan"
 	MethodSessionWorkspaceChatDraft                     = "session.workspaceChatDraft"
+	MethodSessionWorkspaceChatMaterialize               = "session.materializeWorkspaceChat"
 	MethodSessionGetMainView                            = "session.getMainView"
 	MethodSessionGetExecutionEnvironment                = "session.getExecutionEnvironment"
 	MethodSessionGetTranscriptPage                      = "session.getTranscriptPage"

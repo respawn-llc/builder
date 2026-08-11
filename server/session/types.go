@@ -202,6 +202,7 @@ type Meta struct {
 	WorkspaceRoot                   string                           `json:"workspace_root"`
 	WorkspaceContainer              string                           `json:"workspace_container"`
 	Continuation                    *ContinuationContext             `json:"continuation,omitempty"`
+	ChatSettings                    *ChatSettingsOverrides           `json:"chat_settings,omitempty"`
 	CreatedAt                       time.Time                        `json:"created_at"`
 	UpdatedAt                       time.Time                        `json:"updated_at"`
 	LastSequence                    int64                            `json:"last_sequence"`

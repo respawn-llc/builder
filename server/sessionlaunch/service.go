@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"core/server/auth"
@@ -17,6 +18,7 @@ import (
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/sessioncontract"
 	"core/shared/textutil"
 )
 
@@ -29,14 +31,15 @@ type promptHistoryReader interface {
 }
 
 type Service struct {
-	planner       launch.Planner
-	authStates    authStateReader
-	promptHistory promptHistoryReader
-	runtime       *sessionruntime.Authority
-	plans         *requestmemo.Memo[sessionPlanMemoRequest, PlanResult]
-	workspaceID   string
-	fastModeState *runtime.FastModeState
-	draftOwner    *WorkspaceChatDraftOwner
+	planner                     launch.Planner
+	authStates                  authStateReader
+	promptHistory               promptHistoryReader
+	runtime                     *sessionruntime.Authority
+	plans                       *requestmemo.Memo[sessionPlanMemoRequest, PlanResult]
+	workspaceID                 string
+	fastModeState               *runtime.FastModeState
+	draftOwner                  *WorkspaceChatDraftOwner
+	materializationStoreOptions []session.StoreOption
 }
 
 var ErrExistingSessionAuthorityRequired = errors.New("session runtime authority is required for existing-session planning")
@@ -88,6 +91,100 @@ func (s *Service) WithWorkspaceChatDraft(owner *WorkspaceChatDraftOwner, workspa
 	}
 	return s
 }
+
+func (s *Service) WithWorkspaceChatMaterializationStoreOptions(options ...session.StoreOption) *Service {
+	if s != nil {
+		s.materializationStoreOptions = append([]session.StoreOption(nil), options...)
+	}
+	return s
+}
+
+func (s *Service) materializeWorkspaceChatSession(ctx context.Context) (runtimeids.SessionID, error) {
+	owner, workspaceID, err := s.workspaceChatDraftOwner()
+	if err != nil {
+		return runtimeids.SessionID{}, err
+	}
+	return owner.MaterializeWorkspaceChat(
+		ctx,
+		workspaceID,
+		s.workspaceChatDraftResolverInput,
+		s.materializeResolvedWorkspaceChat,
+	)
+}
+
+func (s *Service) MaterializeWorkspaceChat(
+	ctx context.Context,
+	req serverapi.WorkspaceChatMaterializeRequest,
+) (serverapi.WorkspaceChatMaterializeResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkspaceChatMaterializeResponse{}, err
+	}
+	sessionID, err := s.materializeWorkspaceChatSession(ctx)
+	if err != nil {
+		return serverapi.WorkspaceChatMaterializeResponse{}, err
+	}
+	response := serverapi.WorkspaceChatMaterializeResponse{SessionID: sessionID}
+	if err := response.Validate(); err != nil {
+		return serverapi.WorkspaceChatMaterializeResponse{}, err
+	}
+	return response, nil
+}
+
+func (s *Service) materializeResolvedWorkspaceChat(
+	ctx context.Context,
+	resolution WorkspaceChatDraftResolution,
+) (runtimeids.SessionID, error) {
+	if s == nil {
+		return runtimeids.SessionID{}, errors.New("Session launch service is required")
+	}
+	if len(s.materializationStoreOptions) == 0 {
+		return runtimeids.SessionID{}, errors.New("workspace Chat materialization persistence is required")
+	}
+	containerDir := strings.TrimSpace(s.planner.ContainerDir)
+	if containerDir == "" {
+		return runtimeids.SessionID{}, errors.New("Session container directory is required")
+	}
+	workspaceRoot := strings.TrimSpace(s.planner.Config.WorkspaceRoot)
+	if workspaceRoot == "" {
+		return runtimeids.SessionID{}, errors.New("workspace root is required")
+	}
+	store, err := session.NewLazy(
+		containerDir,
+		filepath.Base(containerDir),
+		workspaceRoot,
+		sessioncontract.SessionCategoryMain,
+		s.materializationStoreOptions...,
+	)
+	if err != nil {
+		return runtimeids.SessionID{}, err
+	}
+	draft := resolution.Draft
+	if err := session.InitializeChatDraft(store, session.ChatDraftState{
+		Message: draft.Message,
+		Agent:   draft.Agent,
+		Settings: &session.ChatSettingsOverrides{
+			Supervisor:     &draft.Supervisor,
+			Thinking:       &draft.Thinking,
+			Fast:           &draft.Fast,
+			Questions:      &draft.Questions,
+			AutoCompaction: &draft.AutoCompaction,
+		},
+	}); err != nil {
+		return runtimeids.SessionID{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return runtimeids.SessionID{}, err
+	}
+	if err := store.EnsureDurable(); err != nil {
+		return runtimeids.SessionID{}, errors.Join(err, store.RemoveDurable())
+	}
+	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
+	if err != nil || !sessionID.IsCanonicalUUIDv4() {
+		return runtimeids.SessionID{}, fmt.Errorf("materialized Session id is invalid: %w", err)
+	}
+	return sessionID, nil
+}
+
 func (s *Service) workspaceChatDraftResolverInput(ctx context.Context) (WorkspaceChatDraftResolverInput, error) {
 	planner := s.planner
 	if planner.ReloadConfig != nil {
@@ -157,7 +254,7 @@ func (s *Service) WorkspaceChatDraft(ctx context.Context, req serverapi.Workspac
 			return serverapi.WorkspaceChatDraftResponse{}, err
 		}
 		return serverapi.WorkspaceChatDraftResponse{Message: resolved.Message}, nil
-	case serverapi.WorkspaceChatDraftClear, serverapi.WorkspaceChatDraftConsume:
+	case serverapi.WorkspaceChatDraftClear:
 		owner, workspaceID, err := s.workspaceChatDraftOwner()
 		if err != nil {
 			return serverapi.WorkspaceChatDraftResponse{}, err

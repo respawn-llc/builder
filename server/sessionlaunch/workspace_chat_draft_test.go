@@ -2,11 +2,13 @@ package sessionlaunch
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"core/server/auth"
 	"core/server/runtime"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/toolspec"
 )
 
@@ -50,14 +52,90 @@ func TestWorkspaceChatDraftResolution(t *testing.T) {
 
 type draftPersistence struct {
 	draft *WorkspaceChatDraft
+	reads int
 }
 
 func (f *draftPersistence) ReadWorkspaceChatDraft(context.Context, string) (*WorkspaceChatDraft, error) {
+	f.reads++
 	if f.draft == nil {
 		return nil, nil
 	}
 	d := *f.draft
 	return &d, nil
+}
+
+func TestWorkspaceChatDraftOwnerMaterializesOneCanonicalResolutionUnderItsLane(t *testing.T) {
+	settings := draftSettings("gpt-5.6-sol", "  custom-depth  ")
+	stored := WorkspaceChatDraft{
+		Message:        "unsent",
+		Agent:          "default",
+		Supervisor:     "all",
+		Thinking:       "custom-depth",
+		Fast:           false,
+		Questions:      false,
+		AutoCompaction: false,
+	}
+	persistence := &draftPersistence{draft: &stored}
+	owner := NewWorkspaceChatDraftOwner(persistence)
+	resolverCalls := 0
+	materializerCalls := 0
+	wantID := runtimeids.NewSessionID()
+
+	got, err := owner.MaterializeWorkspaceChat(
+		context.Background(),
+		"workspace-1",
+		func(context.Context) (WorkspaceChatDraftResolverInput, error) {
+			resolverCalls++
+			return draftInput(settings), nil
+		},
+		func(_ context.Context, resolution WorkspaceChatDraftResolution) (runtimeids.SessionID, error) {
+			materializerCalls++
+			if resolution.Draft != stored {
+				t.Fatalf("materializer draft = %+v, want %+v", resolution.Draft, stored)
+			}
+			return wantID, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("MaterializeWorkspaceChat: %v", err)
+	}
+	if got != wantID || resolverCalls != 1 || persistence.reads != 1 || materializerCalls != 1 {
+		t.Fatalf("result=%q resolver=%d reads=%d materializer=%d", got.String(), resolverCalls, persistence.reads, materializerCalls)
+	}
+}
+
+func TestWorkspaceChatDraftOwnerPreservesDraftAcrossMaterializerFailures(t *testing.T) {
+	settings := draftSettings("gpt-5.6-sol", "medium")
+	for _, failure := range []string{"initialization", "filesystem", "metadata commit"} {
+		t.Run(failure, func(t *testing.T) {
+			stored := WorkspaceChatDraft{
+				Message:        "preserve",
+				Agent:          "default",
+				Supervisor:     "edits",
+				Thinking:       "medium",
+				AutoCompaction: true,
+			}
+			persistence := &draftPersistence{draft: &stored}
+			owner := NewWorkspaceChatDraftOwner(persistence)
+			wantErr := errors.New(failure)
+			_, err := owner.MaterializeWorkspaceChat(
+				context.Background(),
+				"workspace-1",
+				func(context.Context) (WorkspaceChatDraftResolverInput, error) {
+					return draftInput(settings), nil
+				},
+				func(context.Context, WorkspaceChatDraftResolution) (runtimeids.SessionID, error) {
+					return runtimeids.SessionID{}, wantErr
+				},
+			)
+			if !errors.Is(err, wantErr) {
+				t.Fatalf("MaterializeWorkspaceChat error = %v, want %v", err, wantErr)
+			}
+			if persistence.draft == nil || *persistence.draft != stored {
+				t.Fatalf("workspace draft after %s failure = %+v, want %+v", failure, persistence.draft, stored)
+			}
+		})
+	}
 }
 func (f *draftPersistence) ReplaceWorkspaceChatDraft(_ context.Context, _ string, d *WorkspaceChatDraft) error {
 	f.draft = d
