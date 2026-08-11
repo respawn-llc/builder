@@ -707,7 +707,6 @@ func (c *CurrentNodeController) runAdmission(start currentNodeQueuedStart) {
 		interrupted := c.interrupts.currentNodeFenced(key)
 		c.mu.Unlock()
 		if errors.Is(err, context.Canceled) ||
-			errors.Is(err, sessionruntime.ErrExecutionNoLongerLive) ||
 			errors.Is(err, ErrTaskExecutionNotQuiescent) ||
 			interrupted {
 			return

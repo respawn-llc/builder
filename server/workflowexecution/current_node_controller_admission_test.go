@@ -83,39 +83,46 @@ func TestCurrentNodeControllerRegistersGateBeforeRunnerAndReleasesLeaseAfterLive
 	}
 }
 
-func TestCurrentNodeControllerRunnerFailureInterruptsAdmittedCurrentNode(t *testing.T) {
-	reference := currentNodeReferenceForControllerTest(t, "task-failure", "node-agent")
-	store := &currentNodeControllerStore{}
-	attention := &currentNodeAttentionRecorder{}
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
-	controller := newCurrentNodeControllerWithAttentionForTest(t, store, failingCurrentNodeRunner{cause: errors.New("provider unavailable")}, authority, 1, attention)
-	t.Cleanup(func() {
-		if err := controller.Close(); err != nil {
-			t.Errorf("close controller: %v", err)
-		}
-		if err := authority.Close(context.Background()); err != nil {
-			t.Errorf("close authority: %v", err)
-		}
-	})
+func TestCurrentNodeControllerRunnerFailuresInterruptAdmittedCurrentNode(t *testing.T) {
+	for name, cause := range map[string]error{
+		"ordinary failure":          errors.New("provider unavailable"),
+		"execution no longer live": sessionruntime.ErrExecutionNoLongerLive,
+	} {
+		t.Run(name, func(t *testing.T) {
+			reference := currentNodeReferenceForControllerTest(t, "task-failure", "node-agent")
+			store := &currentNodeControllerStore{}
+			attention := &currentNodeAttentionRecorder{}
+			authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+			controller := newCurrentNodeControllerWithAttentionForTest(t, store, failingCurrentNodeRunner{cause: cause}, authority, 1, attention)
+			t.Cleanup(func() {
+				if err := controller.Close(); err != nil {
+					t.Errorf("close controller: %v", err)
+				}
+				if err := authority.Close(context.Background()); err != nil {
+					t.Errorf("close authority: %v", err)
+				}
+			})
 
-	if err := startCurrentNodeForControllerTest(context.Background(), controller, store, reference); err != nil {
-		t.Fatalf("queue current node start: %v", err)
+			if err := startCurrentNodeForControllerTest(context.Background(), controller, store, reference); err != nil {
+				t.Fatalf("queue current node start: %v", err)
+			}
+			var interruption currentNodeInterruptionRecord
+			testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+				var interrupted bool
+				interruption, interrupted = store.interruption(reference)
+				return interrupted
+			}, "runner failure did not interrupt the admitted current node")
+			if interruption.reason != "workflow_runtime_start_failed" {
+				t.Fatalf("interruption reason = %q, want workflow_runtime_start_failed", interruption.reason)
+			}
+			if calls := store.interruptionCount(reference); calls != 1 {
+				t.Fatalf("runner failure interruption writes = %d, want 1", calls)
+			}
+			testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+				return attention.pendingCount() == 1
+			}, "runner failure did not publish interrupted Current Node attention")
+		})
 	}
-	var interruption currentNodeInterruptionRecord
-	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		var interrupted bool
-		interruption, interrupted = store.interruption(reference)
-		return interrupted
-	}, "runner failure did not interrupt the admitted current node")
-	if interruption.reason != "workflow_runtime_start_failed" {
-		t.Fatalf("interruption reason = %q, want workflow_runtime_start_failed", interruption.reason)
-	}
-	if calls := store.interruptionCount(reference); calls != 1 {
-		t.Fatalf("runner failure interruption writes = %d, want 1", calls)
-	}
-	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		return attention.pendingCount() == 1
-	}, "runner failure did not publish interrupted Current Node attention")
 }
 
 func TestCurrentNodeControllerFinalizedWithoutOutcomeInterruptsAdmittedCurrentNode(t *testing.T) {
