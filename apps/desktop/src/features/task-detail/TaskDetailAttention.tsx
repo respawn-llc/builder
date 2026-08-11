@@ -8,6 +8,7 @@ import { WorkflowEdgeRouteGraphic } from "@/shared/workflow-edge";
 import { Button, Island, showStatusToast } from "@/ui";
 import { TaskResumeButton } from "./TaskResumeButton";
 import { TaskDetailCopyableValue } from "./TaskDetailCopyableValue";
+import { taskDetailIslandRadius } from "./taskDetailIslandStyles";
 import type { useTaskMutations } from "./useTaskDetailData";
 
 export { QuestionBox } from "./TaskDetailQuestionForm";
@@ -27,16 +28,14 @@ export function ApprovalBox({
   const snapshot = attention.approvalSnapshot;
   const stale = snapshot.version !== currentVersion;
   function approve(): void {
-    void mutations.approveApproval
-      .mutateAsync(attention.approvalID)
-      .catch((error: unknown) => {
-        showStatusToast({
-          body: errorMessage(error),
-          id: "task-approval-failed",
-          title: t("task.approvalFailed"),
-          tone: "danger",
-        });
+    void mutations.approveApproval.mutateAsync(attention.approvalID).catch((error: unknown) => {
+      showStatusToast({
+        body: errorMessage(error),
+        id: "task-approval-failed",
+        title: t("task.approvalFailed"),
+        tone: "danger",
       });
+    });
   }
   return (
     <>
@@ -44,7 +43,7 @@ export function ApprovalBox({
         aria-label={t("task.approval")}
         className="grid gap-[var(--space-2)] p-[var(--space-2)]"
         level={1}
-        radius="l"
+        radius={taskDetailIslandRadius}
         unpadded
       >
         <div className="grid gap-[var(--space-2)]">
@@ -63,10 +62,7 @@ export function ApprovalBox({
             <span className="min-w-0 flex-1" />
             <Button
               className="shrink-0"
-              disabled={
-                disabled ||
-                mutations.approveApproval.isPending
-              }
+              disabled={disabled || mutations.approveApproval.isPending}
               onClick={approve}
               variant="primary"
             >
@@ -113,7 +109,7 @@ export function InterruptedCurrentNodeBox({
       aria-label={t("task.interrupted")}
       className="grid gap-[var(--space-2)] p-[var(--space-4)]"
       level={1}
-      radius="l"
+      radius={taskDetailIslandRadius}
       unpadded
     >
       <strong>{t("task.interrupted")}</strong>
@@ -121,7 +117,9 @@ export function InterruptedCurrentNodeBox({
         <p className="m-0 text-sm text-[var(--color-muted)]">{attention.message}</p>
       ) : null}
       {recoveryError === null ? null : (
-        <p className="m-0 text-sm text-[var(--color-error)]" role="alert">{recoveryError}</p>
+        <p className="m-0 text-sm text-[var(--color-error)]" role="alert">
+          {recoveryError}
+        </p>
       )}
       {detailJSON !== null ? (
         <Button

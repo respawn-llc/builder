@@ -11,6 +11,7 @@ import {
 import { QuestionFormView } from "./TaskDetailQuestionFormView";
 import type { QuestionAnswerMutation } from "./TaskDetailQuestionAnswer";
 import type { PromptPrimaryControl } from "./PromptPrimaryControlRegistry";
+import { taskDetailIslandRadius } from "./taskDetailIslandStyles";
 
 export function QuestionBox({
   attention,
@@ -37,7 +38,13 @@ export function QuestionBox({
   }, [effectiveSelection, onSelectionStateChange, selectionState]);
 
   return (
-    <Island aria-label={t("task.question")} className="p-[var(--space-4)]" level={1} radius="l" unpadded>
+    <Island
+      aria-label={t("task.question")}
+      className="p-[var(--space-4)]"
+      level={1}
+      radius={taskDetailIslandRadius}
+      unpadded
+    >
       <QuestionFormView
         answerQuestion={answerQuestion}
         attention={attention}
