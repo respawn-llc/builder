@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -163,10 +164,10 @@ func (m *Manager) waitForExit(entry *processEntry) {
 	if state == "killed" {
 		eventType = EventKilled
 	}
-	m.retainCompletedEntry(entry.id)
 	event := m.buildTerminalEvent(entry, eventType, snapshot)
 	m.emitCompletionEvent(entry, event)
 	entry.finalizeClosedExit()
+	m.retainCompletedEntry(entry.id)
 }
 
 func (m *Manager) buildTerminalEvent(entry *processEntry, eventType EventType, snapshot Snapshot) Event {
@@ -415,13 +416,14 @@ func (m *Manager) releaseEntry(id string) {
 
 func (m *Manager) retainCompletedEntry(id string) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	entry, exists := m.entries[id]
 	if !exists || entry.isRunning() {
+		m.mu.Unlock()
 		return
 	}
 	m.removeCompletedLocked(id)
 	m.completedRecency = append(m.completedRecency, id)
+	evictedEntries := make([]*processEntry, 0, 1)
 	for len(m.completedRecency) > completedProcessRetentionLimit {
 		evictedID := m.completedRecency[0]
 		m.completedRecency[0] = ""
@@ -429,8 +431,35 @@ func (m *Manager) retainCompletedEntry(id string) {
 		evicted, exists := m.entries[evictedID]
 		if exists && !evicted.isRunning() {
 			delete(m.entries, evictedID)
+			evictedEntries = append(evictedEntries, evicted)
 		}
 	}
+	m.mu.Unlock()
+	for _, evicted := range evictedEntries {
+		if err := removeCompletedEntryArtifacts(evicted); err != nil {
+			slog.Error(
+				"completed shell eviction cleanup failed",
+				"session_id", evicted.id,
+				"error", err,
+			)
+		}
+	}
+}
+
+func removeCompletedEntryArtifacts(entry *processEntry) error {
+	entry.mu.Lock()
+	logPath := entry.logPath
+	entry.mu.Unlock()
+	if strings.TrimSpace(logPath) == "" {
+		return errors.New("evicted shell log path is required")
+	}
+	var cleanupErr error
+	for _, path := range []string{logPath, logPath + ".completion"} {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("remove %q: %w", path, err))
+		}
+	}
+	return cleanupErr
 }
 
 func (m *Manager) touchCompletedLocked(id string) {
