@@ -2,7 +2,6 @@ package transport
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"net/http/httptest"
 	"os"
@@ -14,6 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"core/internal/testharness/testsetup"
+	servercore "core/server/core"
+	"core/server/session"
 	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowexecution"
@@ -24,12 +26,36 @@ import (
 	"core/shared/serverapi"
 
 	"golang.org/x/net/websocket"
+	sqlitedriver "modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 type gatewayConcurrencyWorkflowService struct {
 	apicontract.WorkflowService
 	getWorkflowTask      func(context.Context, serverapi.WorkflowTaskGetRequest) (serverapi.WorkflowTaskGetResponse, error)
 	completeWorkflowTask func(context.Context, serverapi.WorkflowTaskCompleteRequest) (serverapi.WorkflowTaskCompleteResponse, error)
+	startWorkflowTask    func(context.Context, serverapi.WorkflowTaskStartRequest) (serverapi.WorkflowTaskStartResponse, error)
+	resumeWorkflowTask   func(context.Context, serverapi.WorkflowTaskResumeRequest) (serverapi.WorkflowTaskResumeResponse, error)
+}
+
+func (s *gatewayConcurrencyWorkflowService) StartWorkflowTask(
+	ctx context.Context,
+	req serverapi.WorkflowTaskStartRequest,
+) (serverapi.WorkflowTaskStartResponse, error) {
+	if s.startWorkflowTask == nil {
+		return s.WorkflowService.StartWorkflowTask(ctx, req)
+	}
+	return s.startWorkflowTask(ctx, req)
+}
+
+func (s *gatewayConcurrencyWorkflowService) ResumeWorkflowTask(
+	ctx context.Context,
+	req serverapi.WorkflowTaskResumeRequest,
+) (serverapi.WorkflowTaskResumeResponse, error) {
+	if s.resumeWorkflowTask == nil {
+		return s.WorkflowService.ResumeWorkflowTask(ctx, req)
+	}
+	return s.resumeWorkflowTask(ctx, req)
 }
 
 func (s *gatewayConcurrencyWorkflowService) GetWorkflowTask(
@@ -55,66 +81,6 @@ type gatewayConcurrencyDependencies struct {
 	debug    bool
 }
 
-type gatewayAutomaticFatalStore struct {
-	*workflowstore.Store
-	db        *sql.DB
-	source    workflow.CurrentNodeReference
-	successor workflow.CurrentNodeReference
-}
-
-func (s *gatewayAutomaticFatalStore) ResolveIdleExecutableCurrentNode(
-	context.Context,
-	workflowstore.IdleCurrentNodeSelector,
-) (workflow.CurrentNode, error) {
-	return workflow.CurrentNode{
-		Reference:  s.source,
-		Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
-	}, nil
-}
-
-func (s *gatewayAutomaticFatalStore) CompleteCurrentNode(
-	ctx context.Context,
-	_ workflowstore.CurrentNodeCompletionRequest,
-) (workflowstore.CurrentNodeCompletionResult, error) {
-	if _, err := s.db.ExecContext(
-		ctx,
-		`INSERT INTO current_node_fatal_successors(task_id, node_id) VALUES (?, ?)`,
-		string(s.successor.TaskID),
-		string(s.successor.NodeID),
-	); err != nil {
-		return workflowstore.CurrentNodeCompletionResult{}, err
-	}
-	successor := workflow.CurrentNode{
-		Reference:  s.successor,
-		Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
-	}
-	return workflowstore.CurrentNodeCompletionResult{
-		Mutation: workflow.CurrentNodeMutationResult{
-			Removed: []workflow.CurrentNodeReference{s.source},
-			Created: []workflow.CurrentNode{successor},
-		},
-		AutomaticIntents: []workflowstore.CurrentNodeAutomaticIntent{{
-			CurrentNode: s.successor,
-			NodeKind:    workflow.NodeKindAgent,
-		}},
-	}, nil
-}
-
-func (s *gatewayAutomaticFatalStore) InterruptCurrentNode(
-	ctx context.Context,
-	reference workflow.CurrentNodeReference,
-	_ workflow.CurrentNodeInterruptionReason,
-	_ workflow.CurrentNodeInterruptionDetail,
-) error {
-	_, err := s.db.ExecContext(
-		ctx,
-		`UPDATE current_node_fatal_successors SET interrupted = 1 WHERE task_id = ? AND node_id = ?`,
-		string(reference.TaskID),
-		string(reference.NodeID),
-	)
-	return err
-}
-
 type gatewayAutomaticFatalSteerer struct {
 	cause error
 }
@@ -126,9 +92,11 @@ func (s gatewayAutomaticFatalSteerer) SteerCurrentNodeAssignment(
 	return nil, s.cause
 }
 
-type gatewayAutomaticFatalRunner struct{}
+type gatewayFailingRunner struct {
+	cause error
+}
 
-func (gatewayAutomaticFatalRunner) StartCurrentNode(
+func (r gatewayFailingRunner) StartCurrentNode(
 	context.Context,
 	workflow.CurrentNodeReference,
 	workflowruntime.TaskPromptDelivery,
@@ -136,7 +104,81 @@ func (gatewayAutomaticFatalRunner) StartCurrentNode(
 	sessionruntime.WorkflowExecutionLease,
 	workflowruntime.Controller,
 ) error {
-	return errors.New("automatic fatal test runner must not start")
+	return r.cause
+}
+
+type gatewayCommittedAssignmentSteerer struct{}
+
+func (gatewayCommittedAssignmentSteerer) SteerCurrentNodeAssignment(
+	context.Context,
+	workflow.CurrentNodeReference,
+) (workflowexecution.CurrentNodeAssignmentSteer, error) {
+	return gatewayCommittedAssignment{}, nil
+}
+
+type gatewayCommittedAssignment struct{}
+
+func (gatewayCommittedAssignment) Wait(context.Context) (session.CommitReceipt, error) {
+	return session.CommitReceipt{Committed: true}, nil
+}
+
+func gatewayWorkflowStore(t *testing.T, appCore *servercore.Core) *workflowstore.Store {
+	t.Helper()
+	store, err := workflowstore.New(
+		appCore.MetadataStore(),
+		workflowstore.WithRoleResolver(testsetup.QuestionsEnabled("coder")),
+	)
+	if err != nil {
+		t.Fatalf("workflowstore.New: %v", err)
+	}
+	return store
+}
+
+func installCurrentNodeInterruptionFailure(t *testing.T, deps *servercore.Core) {
+	t.Helper()
+	if _, err := deps.MetadataStore().DB().ExecContext(context.Background(), `
+CREATE TRIGGER current_node_interruption_failure
+BEFORE UPDATE OF scheduling_state ON task_current_nodes
+WHEN OLD.scheduling_state <> 'interrupted'
+ AND NEW.scheduling_state = 'interrupted'
+BEGIN
+	SELECT RAISE(ABORT, 'current node interruption persistence failed');
+END;
+`); err != nil {
+		t.Fatalf("install Current Node interruption SQL failure: %v", err)
+	}
+}
+
+func requireGatewayResponse(t *testing.T, conn *websocket.Conn, requestID string) {
+	t.Helper()
+	var response protocol.Response
+	if err := websocket.JSON.Receive(conn, &response); err != nil {
+		t.Fatalf("receive Gateway response %q: %v", requestID, err)
+	}
+	if response.ID != requestID || response.Error != nil {
+		if response.Error != nil {
+			t.Fatalf("Gateway response error = %+v, want successful response %q", *response.Error, requestID)
+		}
+		t.Fatalf("Gateway response = %+v, want successful response %q", response, requestID)
+	}
+}
+
+func requireControllerPersistenceFailure(
+	t *testing.T,
+	controller *workflowexecution.CurrentNodeController,
+	taskID workflow.TaskID,
+	operationFailure error,
+) {
+	t.Helper()
+	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+		err := controller.EnsureTaskQuiescent(taskID)
+		if !errors.Is(err, operationFailure) {
+			return false
+		}
+		var sqliteErr *sqlitedriver.Error
+		return errors.As(err, &sqliteErr) &&
+			sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_TRIGGER
+	}, "controller did not expose the operation and real SQLite interruption failures")
 }
 
 func (d *gatewayConcurrencyDependencies) WorkflowClient() apicontract.WorkflowService {
@@ -400,53 +442,6 @@ func TestGatewayOrdinaryHandlerPanicFailsFastInDebug(t *testing.T) {
 	})
 }
 
-type gatewayProcessFatalTestPanic struct{}
-
-func (*gatewayProcessFatalTestPanic) ProcessFatalPanic() {}
-
-func TestGatewayOrdinaryHandlerRepanicsProcessFatalMarker(t *testing.T) {
-	fatal := &gatewayProcessFatalTestPanic{}
-	appCore, _ := newGatewayTestCore(t, true, true)
-	defer func() { _ = appCore.Close() }()
-	workflow := &gatewayConcurrencyWorkflowService{
-		WorkflowService: appCore.WorkflowClient(),
-		getWorkflowTask: func(context.Context, serverapi.WorkflowTaskGetRequest) (serverapi.WorkflowTaskGetResponse, error) {
-			panic(fatal)
-		},
-	}
-	deps := &gatewayConcurrencyDependencies{
-		GatewayDependencies: appCore,
-		workflow:            workflow,
-	}
-	gateway, err := NewGateway(deps, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
-	if err != nil {
-		t.Fatalf("NewGateway: %v", err)
-	}
-	stopped := false
-	defer func() {
-		recovered := recover()
-		if recovered != fatal {
-			t.Fatalf("recovered panic = %#v, want exact process-fatal marker", recovered)
-		}
-		if stopped {
-			t.Fatal("process-fatal panic used ordinary connection recovery")
-		}
-	}()
-	gateway.serveOrdinaryGatewayRequest(
-		nil,
-		context.Background(),
-		&connectionState{handshakeDone: true},
-		protocol.Request{
-			JSONRPC: protocol.JSONRPCVersion,
-			ID:      "fatal",
-			Method:  protocol.MethodWorkflowTaskGet,
-			Params:  mustJSON(t, serverapi.WorkflowTaskGetRequest{TaskID: "fatal"}),
-		},
-		gatewayRequestSchedule{kind: gatewayRequestScheduleOrdinary},
-		func() { stopped = true },
-	)
-}
-
 func TestGatewayAutomaticSuccessorFatalTerminatesProcess(t *testing.T) {
 	const childEnv = "KENT_GATEWAY_AUTOMATIC_FATAL_CHILD"
 	const addressEnv = "KENT_GATEWAY_AUTOMATIC_FATAL_ADDRESS"
@@ -457,42 +452,17 @@ func TestGatewayAutomaticSuccessorFatalTerminatesProcess(t *testing.T) {
 	if os.Getenv(childEnv) == "1" {
 		appCore, _ := newGatewayTestCore(t, true, true)
 		defer func() { _ = appCore.Close() }()
-		if _, err := appCore.MetadataStore().DB().ExecContext(context.Background(), `
-CREATE TABLE current_node_fatal_successors (
-	task_id TEXT NOT NULL,
-	node_id TEXT NOT NULL,
-	interrupted INTEGER NOT NULL DEFAULT 0,
-	PRIMARY KEY (task_id, node_id)
-);
-CREATE TRIGGER current_node_interruption_failure
-BEFORE UPDATE OF interrupted ON current_node_fatal_successors
-BEGIN
-	SELECT RAISE(ABORT, 'current node interruption persistence failed');
-END;
-`); err != nil {
-			t.Fatalf("install interruption SQL failure: %v", err)
+		task := createGatewaySearchableTask(t, appCore)
+		taskID := workflow.TaskID(task.ID)
+		workflowStore := gatewayWorkflowStore(t, appCore)
+		if _, err := workflowStore.StartTask(context.Background(), taskID); err != nil {
+			t.Fatalf("StartTask: %v", err)
 		}
-		source, err := workflow.NewCurrentNodeReference("task-fatal", "node-source", nil)
-		if err != nil {
-			t.Fatalf("source Current Node reference: %v", err)
-		}
-		successor, err := workflow.NewCurrentNodeReference("task-fatal", "node-successor", nil)
-		if err != nil {
-			t.Fatalf("successor Current Node reference: %v", err)
-		}
-		workflowStore, err := workflowstore.New(appCore.MetadataStore())
-		if err != nil {
-			t.Fatalf("workflowstore.New: %v", err)
-		}
+		installCurrentNodeInterruptionFailure(t, appCore)
 		authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 		controller, err := workflowexecution.NewCurrentNodeController(
-			&gatewayAutomaticFatalStore{
-				Store:     workflowStore,
-				db:        appCore.MetadataStore().DB(),
-				source:    source,
-				successor: successor,
-			},
-			gatewayAutomaticFatalRunner{},
+			workflowStore,
+			gatewayFailingRunner{cause: errors.New("automatic fatal test runner must not start")},
 			authority,
 			workflowexecution.NewMutationPermit(),
 			workflowexecution.CurrentNodeControllerConfig{
@@ -508,7 +478,6 @@ END;
 		workflowClient := &gatewayConcurrencyWorkflowService{
 			WorkflowService: appCore.WorkflowClient(),
 			completeWorkflowTask: func(ctx context.Context, req serverapi.WorkflowTaskCompleteRequest) (serverapi.WorkflowTaskCompleteResponse, error) {
-				taskID := workflow.TaskID(req.TaskID)
 				_, completeErr := controller.CompleteIdleCurrentNode(
 					ctx,
 					workflowstore.IdleCurrentNodeSelector{TaskID: &taskID},
@@ -533,8 +502,8 @@ END;
 		conn := dialGateway(t, server)
 		handshakeGateway(t, conn)
 		sendGatewayRequest(t, conn, "fatal", protocol.MethodWorkflowTaskComplete, serverapi.WorkflowTaskCompleteRequest{
-			TaskID:       "task-fatal",
-			TransitionID: "next",
+			TaskID:       task.ID,
+			TransitionID: "done",
 			ActorKind:    serverapi.WorkflowTaskCompleteActorUser,
 			Force:        true,
 		})
@@ -557,6 +526,131 @@ END;
 		string(rawAddress),
 	); dialErr == nil {
 		t.Fatal("Gateway accepted a subsequent connection after process-fatal panic")
+	}
+}
+
+func TestGatewayExplicitAdmissionInterruptionPersistenceFailureRemainsNonFatal(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		resume bool
+	}{
+		{name: "initial Start"},
+		{name: "explicit Resume", resume: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			appCore, _ := newGatewayTestCore(t, true, true)
+			defer func() { _ = appCore.Close() }()
+			task := createGatewaySearchableTask(t, appCore)
+			taskID := workflow.TaskID(task.ID)
+			workflowStore := gatewayWorkflowStore(t, appCore)
+			operationFailure := errors.New("explicit admission failed")
+			var steerer workflowexecution.CurrentNodeAssignmentSteerer = gatewayAutomaticFatalSteerer{
+				cause: operationFailure,
+			}
+			runner := gatewayFailingRunner{cause: errors.New("runner must not start")}
+			if test.resume {
+				started, err := workflowStore.StartTask(context.Background(), taskID)
+				if err != nil {
+					t.Fatalf("StartTask: %v", err)
+				}
+				if err := workflowStore.InterruptCurrentNode(
+					context.Background(),
+					started.Mutation.Created[0].Reference,
+					workflow.CurrentNodeInterruptionReasonUserInterrupt,
+					workflow.NewCurrentNodeInterruptionDetail(
+						string(workflow.CurrentNodeInterruptionReasonUserInterrupt),
+						nil,
+					),
+				); err != nil {
+					t.Fatalf("seed interrupted Current Node: %v", err)
+				}
+				steerer = gatewayCommittedAssignmentSteerer{}
+				runner = gatewayFailingRunner{cause: operationFailure}
+			}
+			installCurrentNodeInterruptionFailure(t, appCore)
+			authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+			controller, err := workflowexecution.NewCurrentNodeController(
+				workflowStore,
+				runner,
+				authority,
+				workflowexecution.NewMutationPermit(),
+				workflowexecution.CurrentNodeControllerConfig{
+					AgentConcurrency:  1,
+					AssignmentSteerer: steerer,
+				},
+			)
+			if err != nil {
+				t.Fatalf("NewCurrentNodeController: %v", err)
+			}
+			defer func() { _ = authority.Close(context.Background()) }()
+
+			workflowClient := &gatewayConcurrencyWorkflowService{
+				WorkflowService: appCore.WorkflowClient(),
+				startWorkflowTask: func(ctx context.Context, _ serverapi.WorkflowTaskStartRequest) (serverapi.WorkflowTaskStartResponse, error) {
+					started, startErr := controller.StartTask(
+						ctx,
+						taskID,
+						workflowexecution.TaskStartPreparation{
+							Prepare: func(context.Context) error { return nil },
+							Commit:  func(context.Context) error { return nil },
+						},
+						func(workflowexecution.TaskPreparationFinalization) {},
+					)
+					response := serverapi.WorkflowTaskStartResponse{
+						Outcome: serverapi.WorkflowTaskActionOutcomeApplied,
+						Applied: &serverapi.WorkflowTaskStartApplied{
+							CurrentNodes: []serverapi.WorkflowTaskCurrentNode{{
+								NodeID: string(started.Mutation.Created[0].Reference.NodeID),
+							}},
+						},
+					}
+					return response, startErr
+				},
+				resumeWorkflowTask: func(ctx context.Context, _ serverapi.WorkflowTaskResumeRequest) (serverapi.WorkflowTaskResumeResponse, error) {
+					resumed, resumeErr := controller.ResumeTask(ctx, taskID)
+					response := serverapi.WorkflowTaskResumeResponse{
+						Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
+						Applied: &serverapi.WorkflowTaskResumeApplied{
+							CurrentNodes: []serverapi.WorkflowTaskCurrentNode{{
+								NodeID: string(resumed[0].Reference.NodeID),
+							}},
+						},
+					}
+					return response, resumeErr
+				},
+			}
+			gateway, err := NewGateway(
+				&gatewayConcurrencyDependencies{GatewayDependencies: appCore, workflow: workflowClient},
+				protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"},
+			)
+			if err != nil {
+				t.Fatalf("NewGateway: %v", err)
+			}
+			server := httptest.NewServer(gateway.Handler())
+			defer server.Close()
+			conn := dialGateway(t, server)
+			handshakeGateway(t, conn)
+			if test.resume {
+				sendGatewayRequest(t, conn, "explicit", protocol.MethodWorkflowTaskResume, serverapi.WorkflowTaskResumeRequest{
+					TaskID:           task.ID,
+					SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+				})
+			} else {
+				sendGatewayRequest(t, conn, "explicit", protocol.MethodWorkflowTaskStart, serverapi.WorkflowTaskStartRequest{
+					TaskID:           task.ID,
+					SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+				})
+			}
+			requireGatewayResponse(t, conn, "explicit")
+			_ = conn.Close()
+
+			requireControllerPersistenceFailure(t, controller, taskID, operationFailure)
+			next := dialGateway(t, server)
+			handshakeGateway(t, next)
+			_ = next.Close()
+
+			_ = controller.Close()
+		})
 	}
 }
 

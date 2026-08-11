@@ -412,12 +412,19 @@ func (t *defaultToolExecutor) executeCompleteNodeTool(ctx context.Context, stepI
 		}
 	}
 	completed, err := e.completeWorkflowCurrentNode(ctx, parsed)
-	if err != nil {
+	if !completed.IsApplied() && err != nil {
 		return e.workflowCompletionRejectedResult(ctx, result, err)
 	}
+	if !completed.IsApplied() {
+		return e.workflowCompletionRejectedResult(ctx, result, errors.New("workflow completion returned without an applied result"))
+	}
 	e.recordWorkflowTerminalState(WorkflowCompletionSourceTool)
-	result.Output = workflowruntime.ToolSuccessPayload(completed)
-	result.Summary = textutil.Value("workflow node completed")
+	result.Output = workflowruntime.ToolSuccessPayload(completed, err)
+	if err != nil {
+		result.Summary = textutil.Value("workflow node completed with a diagnostic")
+	} else {
+		result.Summary = textutil.Value("workflow node completed")
+	}
 	result.Terminal = true
 	return result
 }

@@ -26,6 +26,7 @@ type currentNodeInterruptCleanupState struct {
 	references     []workflow.CurrentNodeReference
 	drainedGates   []currentNodeAdmissionGate
 	admissionWaits []currentNodeAdmissionWait
+	continuations  []*currentNodeAssignmentContinuation
 	taskFence      *currentNodeInterruptFence
 }
 
@@ -43,7 +44,8 @@ func classifyCurrentNodeInterruption(err error) (committed bool, diagnostic erro
 func (c *CurrentNodeController) cleanupInterrupt(state currentNodeInterruptCleanupState) error {
 	if len(state.stopHandles) == 0 &&
 		len(state.drainedGates) == 0 &&
-		len(state.admissionWaits) == 0 {
+		len(state.admissionWaits) == 0 &&
+		len(state.continuations) == 0 {
 		return nil
 	}
 	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), interruptCleanupTimeout)
@@ -88,6 +90,25 @@ func (c *CurrentNodeController) cleanupInterrupt(state currentNodeInterruptClean
 		}
 		c.finishTaskInterruptAdmissionKey(wait.key)
 	}
+	for _, continuation := range state.continuations {
+		select {
+		case <-continuation.done:
+		case <-cleanupCtx.Done():
+			waitErrs = append(waitErrs, context.Cause(cleanupCtx))
+			continue
+		}
+		c.mu.Lock()
+		waitErrs = append(waitErrs, continuation.result)
+		for _, candidate := range continuation.prepared {
+			key, err := candidate.start.reference.Key()
+			if err != nil {
+				waitErrs = append(waitErrs, err)
+				continue
+			}
+			c.interrupts.finishCurrentNode(key)
+		}
+		c.mu.Unlock()
+	}
 	verifyErr := c.permit.Run(cleanupCtx, func(context.Context) error {
 		c.mu.Lock()
 		defer c.mu.Unlock()
@@ -127,6 +148,7 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 		references     []workflow.CurrentNodeReference
 		drainedGates   []currentNodeAdmissionGate
 		admissionWaits []currentNodeAdmissionWait
+		continuations  []*currentNodeAssignmentContinuation
 		taskFence      *currentNodeInterruptFence
 	)
 	if err := c.permit.Run(ctx, func(ctx context.Context) error {
@@ -203,7 +225,15 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 				references = append(references, scopeRef.CurrentNode)
 			}
 
-			return drainTaskControllerWorkLocked(c, selector.TaskID, taskFence, &references, &admissionWaits, &drainedGates)
+			return drainTaskControllerWorkLocked(
+				c,
+				selector.TaskID,
+				taskFence,
+				&references,
+				&admissionWaits,
+				&drainedGates,
+				&continuations,
+			)
 		})
 		if errors.Is(err, sessionruntime.ErrExecutionNoLongerLive) {
 			return ErrNoInterruptibleExecution
@@ -221,6 +251,7 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 		references:     references,
 		drainedGates:   drainedGates,
 		admissionWaits: admissionWaits,
+		continuations:  continuations,
 		taskFence:      taskFence,
 	})
 }
@@ -246,6 +277,7 @@ func (c *CurrentNodeController) InterruptForManualMove(
 		references     []workflow.CurrentNodeReference
 		drainedGates   []currentNodeAdmissionGate
 		admissionWaits []currentNodeAdmissionWait
+		continuations  []*currentNodeAssignmentContinuation
 		taskFence      *currentNodeInterruptFence
 	)
 	if err := c.permit.Run(ctx, func(ctx context.Context) error {
@@ -352,7 +384,15 @@ func (c *CurrentNodeController) InterruptForManualMove(
 				references = append(references, scopeRef.CurrentNode)
 			}
 			if taskFence != nil {
-				if err := drainTaskControllerWorkLocked(c, taskID, taskFence, &references, &admissionWaits, &drainedGates); err != nil {
+				if err := drainTaskControllerWorkLocked(
+					c,
+					taskID,
+					taskFence,
+					&references,
+					&admissionWaits,
+					&drainedGates,
+					&continuations,
+				); err != nil {
 					return err
 				}
 			}
@@ -373,6 +413,7 @@ func (c *CurrentNodeController) InterruptForManualMove(
 		references:     references,
 		drainedGates:   drainedGates,
 		admissionWaits: admissionWaits,
+		continuations:  continuations,
 		taskFence:      taskFence,
 	})
 }
@@ -388,6 +429,13 @@ func appendAdmissionWait(
 func taskHasControllerQueuedWorkLocked(c *CurrentNodeController, taskID workflow.TaskID) bool {
 	if taskHasPreparationLocked(c, taskID) {
 		return true
+	}
+	for continuation := range c.assignmentContinuations {
+		for _, candidate := range continuation.prepared {
+			if candidate.start.reference.TaskID == taskID {
+				return true
+			}
+		}
 	}
 	for entry := c.automaticQueue.first; entry != nil; entry = entry.globalNext {
 		if entry.start.reference.TaskID == taskID {
@@ -434,6 +482,21 @@ func taskHasPreparationLocked(c *CurrentNodeController, taskID workflow.TaskID) 
 }
 
 func validateTaskControllerWorkLocked(c *CurrentNodeController, taskID workflow.TaskID) error {
+	for continuation := range c.assignmentContinuations {
+		for index, candidate := range continuation.prepared {
+			if candidate.start.reference.TaskID != taskID {
+				continue
+			}
+			if _, err := candidate.start.reference.Key(); err != nil {
+				return fmt.Errorf(
+					"validate assignment continuation at index %d for task %s: %w",
+					index,
+					taskID,
+					err,
+				)
+			}
+		}
+	}
 	for _, batch := range []*taskPreparationBatch{c.queuedTaskPreparationLocked(taskID), c.runningTaskPreparationLocked(taskID)} {
 		if batch == nil {
 			continue
@@ -505,7 +568,27 @@ func drainTaskControllerWorkLocked(
 	references *[]workflow.CurrentNodeReference,
 	admissionWaits *[]currentNodeAdmissionWait,
 	drainedGates *[]currentNodeAdmissionGate,
+	continuations *[]*currentNodeAssignmentContinuation,
 ) error {
+	for continuation := range c.assignmentContinuations {
+		selected := false
+		for _, candidate := range continuation.prepared {
+			if candidate.start.reference.TaskID != taskID {
+				continue
+			}
+			key, err := candidate.start.reference.Key()
+			if err != nil {
+				return fmt.Errorf("drain assignment continuation for task %s: %w", taskID, err)
+			}
+			c.interrupts.addCurrentNode(fence, key)
+			selected = true
+		}
+		if selected {
+			continuation.interrupted = true
+			*continuations = append(*continuations, continuation)
+		}
+	}
+
 	explicitQueue := c.explicitQueue[:0]
 	for _, start := range c.explicitQueue {
 		if start.reference.TaskID != taskID {

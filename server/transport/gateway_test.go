@@ -794,8 +794,10 @@ func createGatewaySearchableTask(t *testing.T, appCore *core.Core) serverapi.Wor
 	}
 	workflowID := created.Workflow.ID.String()
 	agentID := "node-agent-" + workflowID
+	reviewID := "node-review-" + workflowID
 	startGroupID := "group-start-" + workflowID
 	doneGroupID := "group-done-" + workflowID
+	finishGroupID := "group-finish-" + workflowID
 	if _, err := workflows.AddWorkflowNode(ctx, serverapi.WorkflowNodeAddRequest{
 		WorkflowID:   created.Workflow.ID,
 		NodeID:       agentID,
@@ -805,6 +807,16 @@ func createGatewaySearchableTask(t *testing.T, appCore *core.Core) serverapi.Wor
 		SubagentRole: "coder",
 	}); err != nil {
 		t.Fatalf("AddWorkflowNode: %v", err)
+	}
+	if _, err := workflows.AddWorkflowNode(ctx, serverapi.WorkflowNodeAddRequest{
+		WorkflowID:   created.Workflow.ID,
+		NodeID:       reviewID,
+		Key:          "review",
+		Kind:         "agent",
+		DisplayName:  "Review",
+		SubagentRole: "coder",
+	}); err != nil {
+		t.Fatalf("AddWorkflowNode review: %v", err)
 	}
 	if _, err := workflows.AddWorkflowTransitionGroup(ctx, serverapi.WorkflowTransitionGroupAddRequest{
 		WorkflowID:   created.Workflow.ID,
@@ -842,12 +854,34 @@ func createGatewaySearchableTask(t *testing.T, appCore *core.Core) serverapi.Wor
 		EdgeID:            "edge-done-" + workflowID,
 		TransitionGroupID: doneGroupID,
 		Key:               "done",
+		TargetNodeID:      reviewID,
+		AssigneeSelection: "configured",
+		ThinkingSelection: "configured",
+		ContextMode:       "new_session",
+		PromptTemplate:    "Review the search work.",
+	}); err != nil {
+		t.Fatalf("AddWorkflowEdge done: %v", err)
+	}
+	if _, err := workflows.AddWorkflowTransitionGroup(ctx, serverapi.WorkflowTransitionGroupAddRequest{
+		WorkflowID:   created.Workflow.ID,
+		GroupID:      finishGroupID,
+		SourceNodeID: reviewID,
+		TransitionID: "finish",
+		DisplayName:  "Finish",
+	}); err != nil {
+		t.Fatalf("AddWorkflowTransitionGroup finish: %v", err)
+	}
+	if _, err := workflows.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{
+		WorkflowID:        created.Workflow.ID,
+		EdgeID:            "edge-finish-" + workflowID,
+		TransitionGroupID: finishGroupID,
+		Key:               "finish",
 		TargetNodeID:      terminalID,
 		AssigneeSelection: "configured",
 		ThinkingSelection: "configured",
 		ContextMode:       "new_session",
 	}); err != nil {
-		t.Fatalf("AddWorkflowEdge done: %v", err)
+		t.Fatalf("AddWorkflowEdge finish: %v", err)
 	}
 	if _, err := workflows.LinkWorkflowToProject(ctx, serverapi.WorkflowLinkProjectRequest{
 		ProjectID:     appCore.ProjectID(),

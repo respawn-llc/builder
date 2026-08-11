@@ -908,17 +908,28 @@ func (s *defaultStepExecutor) handleWorkflowCompletionSubmission(ctx context.Con
 		terminal, nudgeErr := s.appendWorkflowInvalidCompletionNudge(ctx, stepID, err)
 		return true, terminal, nudgeErr
 	}
-	if completeErr := s.completeCurrentNodeExecutionFromParsed(ctx, parsed); completeErr != nil {
+	completed, completeErr := s.completeCurrentNodeExecutionFromParsed(ctx, parsed)
+	if !completed.IsApplied() && completeErr != nil {
 		terminal, nudgeErr := s.appendWorkflowInvalidCompletionNudge(ctx, stepID, completeErr)
 		return true, terminal, nudgeErr
 	}
+	if !completed.IsApplied() {
+		terminal, nudgeErr := s.appendWorkflowInvalidCompletionNudge(
+			ctx,
+			stepID,
+			errors.New("workflow completion returned without an applied result"),
+		)
+		return true, terminal, nudgeErr
+	}
 	e.setWorkflowTerminalState(source)
-	return true, true, nil
+	return true, true, completeErr
 }
 
-func (s *defaultStepExecutor) completeCurrentNodeExecutionFromParsed(ctx context.Context, parsed workflowruntime.ParsedCompletion) error {
-	_, completeErr := s.engine.completeWorkflowCurrentNode(ctx, parsed)
-	return completeErr
+func (s *defaultStepExecutor) completeCurrentNodeExecutionFromParsed(
+	ctx context.Context,
+	parsed workflowruntime.ParsedCompletion,
+) (workflowruntime.CompletionResult, error) {
+	return s.engine.completeWorkflowCurrentNode(ctx, parsed)
 }
 
 func (s *defaultStepExecutor) appendWorkflowInvalidCompletionNudge(ctx context.Context, stepID string, err error) (bool, error) {

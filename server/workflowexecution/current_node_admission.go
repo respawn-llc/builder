@@ -365,6 +365,14 @@ type currentNodePreparedAssignment struct {
 	preparation error
 }
 
+type currentNodeAssignmentContinuation struct {
+	prepared    []currentNodePreparedAssignment
+	holdFor     *runtimeids.ExecutionScopeID
+	done        chan struct{}
+	interrupted bool
+	result      error
+}
+
 type currentNodeAssignmentUncommittedError struct {
 	reference workflow.CurrentNodeReference
 }
@@ -539,31 +547,99 @@ func (c *CurrentNodeController) continueCurrentNodeAssignmentStarts(
 	if len(prepared) == 0 {
 		return
 	}
+	continuation := &currentNodeAssignmentContinuation{
+		prepared: append([]currentNodePreparedAssignment(nil), prepared...),
+		holdFor:  holdFor,
+		done:     make(chan struct{}),
+	}
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
 		return
 	}
+	c.assignmentContinuations[continuation] = struct{}{}
 	c.workerWG.Add(1)
 	c.mu.Unlock()
 	go func() {
 		defer c.workerWG.Done()
+		defer close(continuation.done)
 		accepted, diagnostic := c.classifyPreparedAutomaticStarts(
 			c.workerContext,
-			prepared,
+			continuation.prepared,
 			false,
 			nil,
 		)
 		if context.Cause(c.workerContext) != nil {
+			c.mu.Lock()
+			delete(c.assignmentContinuations, continuation)
+			continuation.result = context.Cause(c.workerContext)
+			c.mu.Unlock()
 			return
 		}
-		c.deliverClassifiedStarts(accepted, holdFor)
+		diagnostic = errors.Join(
+			diagnostic,
+			c.deliverContinuedClassifiedStarts(accepted, continuation),
+		)
+		c.mu.Lock()
+		continuation.result = diagnostic
 		if diagnostic != nil {
-			c.mu.Lock()
 			c.workerDiagnostics = errors.Join(c.workerDiagnostics, diagnostic)
-			c.mu.Unlock()
 		}
+		c.mu.Unlock()
 	}()
+}
+
+func (c *CurrentNodeController) deliverContinuedClassifiedStarts(
+	starts []currentNodeQueuedStart,
+	continuation *currentNodeAssignmentContinuation,
+) error {
+	c.mu.Lock()
+	if _, exists := c.assignmentContinuations[continuation]; !exists {
+		c.mu.Unlock()
+		return nil
+	}
+	delete(c.assignmentContinuations, continuation)
+	if continuation.interrupted {
+		c.mu.Unlock()
+		detail := workflow.NewCurrentNodeInterruptionDetail(
+			string(workflow.CurrentNodeInterruptionReasonUserInterrupt),
+			nil,
+		)
+		var diagnostics []error
+		for _, start := range starts {
+			committed, diagnostic := classifyCurrentNodeInterruption(c.store.InterruptCurrentNode(
+				c.workerContext,
+				start.reference,
+				workflow.CurrentNodeInterruptionReasonUserInterrupt,
+				detail,
+			))
+			if committed {
+				c.publishPendingInterruptedCurrentNode(
+					c.workerContext,
+					start.reference,
+					workflow.CurrentNodeInterruptionReasonUserInterrupt,
+				)
+			}
+			diagnostics = append(diagnostics, diagnostic)
+		}
+		return errors.Join(diagnostics...)
+	}
+	if continuation.holdFor != nil {
+		if _, live := c.live[*continuation.holdFor]; live {
+			if _, completed := c.completed[*continuation.holdFor]; completed {
+				c.heldStarts[*continuation.holdFor] = append(
+					c.heldStarts[*continuation.holdFor],
+					starts...,
+				)
+				c.mu.Unlock()
+				return nil
+			}
+		}
+	}
+	c.queueStartsLocked(starts)
+	c.mu.Unlock()
+	c.wakeAdmissionWorker()
+	return nil
 }
 
 func (c *CurrentNodeController) deliverClassifiedStarts(
@@ -598,6 +674,12 @@ func (c *CurrentNodeController) enqueueStarts(starts []currentNodeQueuedStart) {
 		c.mu.Unlock()
 		return
 	}
+	c.queueStartsLocked(starts)
+	c.mu.Unlock()
+	c.wakeAdmissionWorker()
+}
+
+func (c *CurrentNodeController) queueStartsLocked(starts []currentNodeQueuedStart) {
 	for _, start := range starts {
 		var err error
 		if start.policy.isAutomatic() {
@@ -609,8 +691,6 @@ func (c *CurrentNodeController) enqueueStarts(starts []currentNodeQueuedStart) {
 			c.workerErr = errors.Join(c.workerErr, err)
 		}
 	}
-	c.mu.Unlock()
-	c.wakeAdmissionWorker()
 }
 
 func (c *CurrentNodeController) queueExplicitStartLocked(start currentNodeQueuedStart) error {

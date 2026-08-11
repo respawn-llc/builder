@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync/atomic"
 	"testing"
 
@@ -15,9 +16,10 @@ import (
 
 type completeNodeBarrierController struct {
 	fakeWorkflowController
-	beforeComplete func()
-	completeError  error
-	completeCalls  atomic.Int32
+	beforeComplete      func()
+	completeError       error
+	committedDiagnostic error
+	completeCalls       atomic.Int32
 }
 
 func (c *completeNodeBarrierController) CompleteCurrentNode(
@@ -33,8 +35,8 @@ func (c *completeNodeBarrierController) CompleteCurrentNode(
 	}
 	return workflowruntime.CompletionResult{
 		TransitionID: "done",
-		State:        "applied",
-	}, nil
+		State:        workflowruntime.CompletionStateApplied,
+	}, c.committedDiagnostic
 }
 
 func completeNodeBarrierAcceptedCalls(input json.RawMessage) acceptedResponseCalls {
@@ -50,7 +52,8 @@ func completeNodeBarrierAcceptedCalls(input json.RawMessage) acceptedResponseCal
 func TestCompleteNodeBarrierCommitsReadySiblingBeforeWorkflowMutation(t *testing.T) {
 	store := mustCreateTestSession(t)
 	flushes := &resultGroupFlushRecorder{}
-	controller := &completeNodeBarrierController{}
+	diagnostic := errors.New("successor assignment observer failed")
+	controller := &completeNodeBarrierController{committedDiagnostic: diagnostic}
 	var (
 		engine                  *Engine
 		mutatedBeforeDurability atomic.Bool
@@ -93,6 +96,12 @@ func TestCompleteNodeBarrierCommitsReadySiblingBeforeWorkflowMutation(t *testing
 		results[0].IsError ||
 		!results[0].Terminal {
 		t.Fatalf("complete_node results = %+v, want one terminal success", results)
+	}
+	var output struct {
+		Diagnostic string `json:"diagnostic"`
+	}
+	if err := json.Unmarshal(results[0].Output, &output); err != nil || output.Diagnostic != diagnostic.Error() {
+		t.Fatalf("complete_node output = %s, %v; want committed diagnostic", results[0].Output, err)
 	}
 	observations := flushes.snapshot()
 	if len(observations) != 2 ||
