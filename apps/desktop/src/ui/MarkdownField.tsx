@@ -285,9 +285,9 @@ function MarkdownFieldReadViewport({
         aria-readonly
         className={cx(
           fieldIslandInputClassName(1),
-          "block h-full min-h-0 min-w-0 overflow-visible p-[var(--space-2)]",
+          "block h-full min-h-0 min-w-0 p-[var(--space-2)]",
           !disabled && "cursor-text",
-          collapsed && "overflow-hidden",
+          collapsed ? "overflow-hidden" : "overflow-visible",
         )}
         onKeyDown={(event) => {
           activateFromKeyboard(event, disabled, onEdit);
