@@ -39,6 +39,14 @@ it("writes a canonical workflow selector unchanged", () => {
   expect(readLastProjectRoute()).toEqual({ projectId: "project-1", workflowId: canonicalWorkflowID });
 });
 
+it("persists no Project workspace tab", () => {
+  writeLastProjectRoute({ projectId: "project-1" });
+
+  expect(JSON.parse(localStorage.getItem(storageKey) ?? "null")).toEqual({
+    projectId: "project-1",
+  });
+});
+
 class TestStorage implements Storage {
   #entries = new Map<string, string>();
 
