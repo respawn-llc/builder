@@ -438,6 +438,10 @@ func (r *agentResource) StepEnded(ctx context.Context, snapshot runtime.StepLife
 	}
 	completing := r.steps[len(r.steps)-1]
 	if completing.stepID != snapshot.StepID || completing.activeKind != snapshot.ActiveKind {
+		if r.rejectsNewStepLocked() && len(r.steps) == 1 && allowsBoundaryCompactionStep(completing.activeKind, snapshot.ActiveKind) {
+			r.mu.Unlock()
+			return nil
+		}
 		r.mu.Unlock()
 		panic(fmt.Sprintf(
 			"agent resource %s generation %d completed engine step out of order: active step %q kind %q, completion step %q kind %q",

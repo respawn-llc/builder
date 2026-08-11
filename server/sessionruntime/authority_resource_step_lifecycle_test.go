@@ -9,20 +9,7 @@ import (
 )
 
 func TestAgentResourceStepLifecycleAllowsBoundaryCompactionNesting(t *testing.T) {
-	sessionID, err := runtimeids.ParseSessionID("018fdd67-89ab-4cde-8123-456789abcdef")
-	if err != nil {
-		t.Fatalf("parse session id: %v", err)
-	}
-	ref, err := runtimeids.NewSessionResourceRef(sessionID, 1)
-	if err != nil {
-		t.Fatalf("new session resource ref: %v", err)
-	}
-	resource := &agentResource{
-		authority: &Authority{},
-		ref:       ref,
-		state:     AgentResourceReady,
-		changed:   make(chan struct{}),
-	}
+	resource := newAgentResourceStepLifecycleTestResource(t)
 	outer := runtime.StepLifecycleSnapshot{
 		StepID:     "outer-agent-step",
 		ActiveKind: runtime.ActiveKindUserTurn,
@@ -43,6 +30,17 @@ func TestAgentResourceStepLifecycleAllowsBoundaryCompactionNesting(t *testing.T)
 	if err := resource.StepEnded(context.Background(), nested); err != nil {
 		t.Fatalf("end boundary compaction: %v", err)
 	}
+	resource.state = AgentResourceDraining
+	nested.StepID = "rejected-nested-compaction"
+	if err := resource.StepBegan(context.Background(), nested); err == nil {
+		t.Fatal("draining resource accepted nested compaction")
+	}
+	if err := resource.StepEnded(context.Background(), nested); err != nil {
+		t.Fatalf("clean up rejected boundary compaction: %v", err)
+	}
+	if len(resource.steps) != 1 || resource.steps[0].stepID != outer.StepID {
+		t.Fatalf("rejected nested cleanup changed outer step stack: %+v", resource.steps)
+	}
 	if err := resource.StepEnded(context.Background(), outer); err != nil {
 		t.Fatalf("end outer Agent Step: %v", err)
 	}
@@ -52,20 +50,7 @@ func TestAgentResourceStepLifecycleAllowsBoundaryCompactionNesting(t *testing.T)
 }
 
 func TestAgentResourceStepLifecycleRejectsUnrelatedOverlap(t *testing.T) {
-	sessionID, err := runtimeids.ParseSessionID("018fdd67-89ab-4cde-8123-456789abcdef")
-	if err != nil {
-		t.Fatalf("parse session id: %v", err)
-	}
-	ref, err := runtimeids.NewSessionResourceRef(sessionID, 1)
-	if err != nil {
-		t.Fatalf("new session resource ref: %v", err)
-	}
-	resource := &agentResource{
-		authority: &Authority{},
-		ref:       ref,
-		state:     AgentResourceReady,
-		changed:   make(chan struct{}),
-	}
+	resource := newAgentResourceStepLifecycleTestResource(t)
 	if err := resource.StepBegan(context.Background(), runtime.StepLifecycleSnapshot{
 		StepID:     "outer-agent-step",
 		ActiveKind: runtime.ActiveKindUserTurn,
@@ -84,4 +69,13 @@ func TestAgentResourceStepLifecycleRejectsUnrelatedOverlap(t *testing.T) {
 		ActiveKind: runtime.ActiveKindRuntimeMaintenance,
 		Transition: runtime.StepLifecycleTransitionBegan,
 	})
+}
+
+func newAgentResourceStepLifecycleTestResource(t *testing.T) *agentResource {
+	t.Helper()
+	ref, err := runtimeids.NewSessionResourceRef(runtimeids.NewSessionID(), 1)
+	if err != nil {
+		t.Fatalf("new session resource ref: %v", err)
+	}
+	return &agentResource{authority: &Authority{}, ref: ref, state: AgentResourceReady, changed: make(chan struct{})}
 }
