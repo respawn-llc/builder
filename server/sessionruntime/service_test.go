@@ -86,7 +86,7 @@ func TestAppendRecoveredWarningIfNeededPersistsOnce(t *testing.T) {
 	if err := fixture.store.EnsureDurable(); err != nil {
 		t.Fatalf("EnsureDurable: %v", err)
 	}
-	fixture.api = NewAPI(fixture.metadata, nil, fixture.authority, APIOptions{
+	fixture.api = NewAPI(fixture.metadata, fixture.authority, APIOptions{
 		RecoveredWarningProvider: func() (string, bool, error) { return warning, true, nil },
 	})
 	if err := appendRecoveredWarning(fixture.store, fixture.api.recoveredWarningProvider); err != nil {
@@ -175,7 +175,7 @@ func TestAppendRecoveredWarningCommitsMarkerWithEventBeforeObserverFailure(t *te
 func TestAppendRecoveredWarningIfNeededSurfacesProviderError(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	providerErr := errors.New("recovered dir unreadable")
-	fixture.api = NewAPI(fixture.metadata, nil, fixture.authority, APIOptions{
+	fixture.api = NewAPI(fixture.metadata, fixture.authority, APIOptions{
 		RecoveredWarningProvider: func() (string, bool, error) {
 			return "", false, providerErr
 		},
@@ -200,8 +200,10 @@ func TestActivateSessionRuntimeRejectsPathLikeSessionID(t *testing.T) {
 func TestActivateSessionRuntimeRejectsMissingOwnerID(t *testing.T) {
 	svc := &API{}
 	_, err := svc.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
-		ClientRequestID: "req-1",
-		SessionID:       "session-1",
+		ClientRequestID:       "req-1",
+		SessionID:             "session-1",
+		QuestionsEnabled:      sessionRuntimeBoolPointer(true),
+		AutoCompactionEnabled: sessionRuntimeBoolPointer(true),
 	})
 	if !errors.Is(err, ErrRuntimeOwnerIDRequired) {
 		t.Fatalf("expected runtime owner id rejection, got %v", err)
@@ -218,12 +220,14 @@ func TestServicePassesRuntimeClientFactoryIntoInteractiveRuntime(t *testing.T) {
 		}
 		return &sessionRuntimeTestLLMClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok"), Phase: textutil.Value(llm.MessagePhaseFinal)}, Usage: llm.Usage{WindowTokens: 200000}}}}, nil
 	})
-	fixture.api = NewAPI(fixture.metadata, nil, fixture.authority, APIOptions{RuntimeClientFactory: factory})
+	fixture.api = NewAPI(fixture.metadata, fixture.authority, APIOptions{RuntimeClientFactory: factory})
 
 	activation, err := fixture.api.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
-		ClientRequestID: "activate-factory",
-		SessionID:       fixture.store.Meta().SessionID,
-		OwnerID:         "owner",
+		ClientRequestID:       "activate-factory",
+		SessionID:             fixture.store.Meta().SessionID,
+		OwnerID:               "owner",
+		QuestionsEnabled:      sessionRuntimeBoolPointer(true),
+		AutoCompactionEnabled: sessionRuntimeBoolPointer(true),
 		ActiveSettings: config.Settings{
 			Model:              "gpt-5",
 			ModelContextWindow: 200000,
@@ -248,6 +252,150 @@ func TestServicePassesRuntimeClientFactoryIntoInteractiveRuntime(t *testing.T) {
 		ClosePolicy:     serverapi.SessionRuntimeReleaseClosePolicyDetachOnly,
 	})
 }
+
+func TestSessionFastModeRemainsEngineLocalAcrossActivationMutationAndReopen(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	second, err := session.Create(
+		filepath.Dir(fixture.store.Dir()),
+		filepath.Base(filepath.Dir(fixture.store.Dir())),
+		fixture.config.WorkspaceRoot,
+		sessioncontract.SessionCategoryMain,
+		fixture.metadata.AuthoritativeSessionStoreOptions()...,
+	)
+	if err != nil {
+		t.Fatalf("create second Session: %v", err)
+	}
+	if _, err := fixture.store.MutateChatSettings(session.ChatSettingsMutation{Fast: sessionRuntimeBoolPointer(true)}); err != nil {
+		t.Fatalf("persist first Fast: %v", err)
+	}
+	if _, err := second.MutateChatSettings(session.ChatSettingsMutation{Fast: sessionRuntimeBoolPointer(false)}); err != nil {
+		t.Fatalf("persist second Fast: %v", err)
+	}
+	factory := runtimewire.RuntimeClientFactoryFunc(func(context.Context, runtimewire.RuntimeClientRequest) (llm.Client, error) {
+		return &sessionRuntimeTestLLMClient{}, nil
+	})
+	fixture.api = NewAPI(fixture.metadata, fixture.authority, APIOptions{
+		RuntimeClientFactory: factory,
+	})
+	firstSettings := sessionRuntimeFastSettings(true)
+	secondSettings := sessionRuntimeFastSettings(false)
+	first := activateSessionRuntimeForFastTest(t, fixture.api, fixture.store.Meta().SessionID, "fast-first", firstSettings)
+	secondAttachment := activateSessionRuntimeForFastTest(t, fixture.api, second.Meta().SessionID, "fast-second", secondSettings)
+
+	firstEngine := currentSessionRuntimeEngine(t, fixture.authority, fixture.store.Meta().SessionID)
+	secondEngine := currentSessionRuntimeEngine(t, fixture.authority, second.Meta().SessionID)
+	if !firstEngine.FastModeEnabled() {
+		t.Error("first Session Fast = false, want true")
+	}
+	if secondEngine.FastModeEnabled() {
+		t.Error("second Session Fast = true, want false")
+	}
+	if _, err := firstEngine.SetFastModeEnabled(true); err != nil {
+		t.Fatalf("set first Fast: %v", err)
+	}
+	if secondEngine.FastModeEnabled() {
+		t.Error("mutating first Session changed second Session Fast")
+	}
+
+	releaseSessionRuntimeForFastTest(t, fixture.api, first, "fast-first")
+	releaseSessionRuntimeForFastTest(t, fixture.api, secondAttachment, "fast-second")
+	activateSessionRuntimeForFastTest(t, fixture.api, fixture.store.Meta().SessionID, "fast-first-reopen", firstSettings)
+	activateSessionRuntimeForFastTest(t, fixture.api, second.Meta().SessionID, "fast-second-reopen", secondSettings)
+	if !currentSessionRuntimeEngine(t, fixture.authority, fixture.store.Meta().SessionID).FastModeEnabled() {
+		t.Error("reopened first Session Fast = false, want true")
+	}
+	if currentSessionRuntimeEngine(t, fixture.authority, second.Meta().SessionID).FastModeEnabled() {
+		t.Error("reopened second Session Fast = true, want false")
+	}
+}
+
+func TestActivateSessionRuntimeUsesTypedQuestionAndAutoCompactionSettings(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	fixture.api = NewAPI(fixture.metadata, fixture.authority, APIOptions{
+		RuntimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(context.Context, runtimewire.RuntimeClientRequest) (llm.Client, error) {
+			return &sessionRuntimeTestLLMClient{}, nil
+		}),
+	})
+	settings := sessionRuntimeFastSettings(false)
+	response, err := fixture.api.ActivateSessionRuntime(t.Context(), serverapi.SessionRuntimeActivateRequest{
+		ClientRequestID:       "typed-session-settings",
+		SessionID:             fixture.store.Meta().SessionID,
+		OwnerID:               "typed-session-settings",
+		ActiveSettings:        settings,
+		QuestionsEnabled:      sessionRuntimeBoolPointer(false),
+		AutoCompactionEnabled: sessionRuntimeBoolPointer(false),
+		Source:                config.SourceReport{Sources: map[string]string{}},
+	})
+	if err != nil {
+		t.Fatalf("ActivateSessionRuntime: %v", err)
+	}
+	engine := currentSessionRuntimeEngine(t, fixture.authority, fixture.store.Meta().SessionID)
+	if engine.QuestionsEnabled() || engine.AutoCompactionEnabled() {
+		t.Fatalf("runtime settings = questions %t auto-compaction %t, want false/false", engine.QuestionsEnabled(), engine.AutoCompactionEnabled())
+	}
+	releaseSessionRuntimeForFastTest(t, fixture.api, response.Attachment, "typed-session-settings")
+}
+
+func sessionRuntimeFastSettings(enabled bool) config.Settings {
+	settings := config.DefaultOnboardingSettings()
+	settings.Model = "gpt-5"
+	settings.PriorityRequestMode = enabled
+	settings.ProviderCapabilities = config.ProviderCapabilitiesOverride{
+		ProviderID:           "openai",
+		SupportsResponsesAPI: true,
+		IsOpenAIFirstParty:   true,
+	}
+	settings.Reviewer.Frequency = "off"
+	return settings
+}
+
+func activateSessionRuntimeForFastTest(t *testing.T, api *API, sessionID string, owner string, settings config.Settings) serverapi.SessionRuntimeAttachment {
+	t.Helper()
+	response, err := api.ActivateSessionRuntime(t.Context(), serverapi.SessionRuntimeActivateRequest{
+		ClientRequestID:       owner,
+		SessionID:             sessionID,
+		OwnerID:               owner,
+		ActiveSettings:        settings,
+		QuestionsEnabled:      sessionRuntimeBoolPointer(true),
+		AutoCompactionEnabled: sessionRuntimeBoolPointer(true),
+		Source:                config.SourceReport{Sources: map[string]string{}},
+	})
+	if err != nil {
+		t.Fatalf("ActivateSessionRuntime %s: %v", owner, err)
+	}
+	return response.Attachment
+}
+
+func releaseSessionRuntimeForFastTest(t *testing.T, api *API, attachment serverapi.SessionRuntimeAttachment, owner string) {
+	t.Helper()
+	if _, err := api.ReleaseSessionRuntime(t.Context(), serverapi.SessionRuntimeReleaseRequest{
+		ClientRequestID: owner + "-release",
+		Attachment:      attachment,
+		OwnerID:         owner,
+		DropOwner:       true,
+		ClosePolicy:     serverapi.SessionRuntimeReleaseClosePolicyCloseIfIdle,
+	}); err != nil {
+		t.Fatalf("ReleaseSessionRuntime %s: %v", owner, err)
+	}
+}
+
+func currentSessionRuntimeEngine(t *testing.T, authority *Authority, rawSessionID string) *runtimepkg.Engine {
+	t.Helper()
+	sessionID, err := runtimeids.ParseSessionID(rawSessionID)
+	if err != nil {
+		t.Fatalf("ParseSessionID: %v", err)
+	}
+	var engine *runtimepkg.Engine
+	if err := authority.WithCurrentRuntime(t.Context(), sessionID, func(_ context.Context, current *runtimepkg.Engine) error {
+		engine = current
+		return nil
+	}); err != nil {
+		t.Fatalf("WithCurrentRuntime: %v", err)
+	}
+	return engine
+}
+
+func sessionRuntimeBoolPointer(value bool) *bool { return &value }
 
 func TestActivateSessionRuntimeAllowsNativeEditInSiblingWorkspace(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
@@ -278,15 +426,17 @@ func TestActivateSessionRuntimeAllowsNativeEditInSiblingWorkspace(t *testing.T) 
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
-	fixture.api = NewAPI(fixture.metadata, nil, fixture.authority, APIOptions{
+	fixture.api = NewAPI(fixture.metadata, fixture.authority, APIOptions{
 		RuntimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(context.Context, runtimewire.RuntimeClientRequest) (llm.Client, error) {
 			return client, nil
 		}),
 	})
 	activation, err := fixture.api.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
-		ClientRequestID: "activate-sibling-edit",
-		SessionID:       fixture.store.Meta().SessionID,
-		OwnerID:         "interactive-owner",
+		ClientRequestID:       "activate-sibling-edit",
+		SessionID:             fixture.store.Meta().SessionID,
+		OwnerID:               "interactive-owner",
+		QuestionsEnabled:      sessionRuntimeBoolPointer(true),
+		AutoCompactionEnabled: sessionRuntimeBoolPointer(true),
 		ActiveSettings: config.Settings{
 			Model:              "gpt-5",
 			ModelContextWindow: 200000,
@@ -413,12 +563,13 @@ func TestActivateSessionRuntimeDeniesEditInForeignManagedWorktree(t *testing.T) 
 		},
 		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)}, Usage: llm.Usage{WindowTokens: 200000}},
 	}}
-	fixture.api = NewAPI(fixture.metadata, nil, fixture.authority, APIOptions{
+	fixture.api = NewAPI(fixture.metadata, fixture.authority, APIOptions{
 		ManagedWorktreeBaseDir: managedBase,
 		RuntimeClientFactory:   runtimewire.RuntimeClientFactoryFunc(func(context.Context, runtimewire.RuntimeClientRequest) (llm.Client, error) { return client, nil }),
 	})
 	activation, err := fixture.api.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
 		ClientRequestID: "activate-foreign-edit", SessionID: fixture.store.Meta().SessionID, OwnerID: "interactive-owner",
+		QuestionsEnabled: sessionRuntimeBoolPointer(true), AutoCompactionEnabled: sessionRuntimeBoolPointer(true),
 		ActiveSettings: config.Settings{
 			Model: "gpt-5", ModelContextWindow: 200000,
 			Reviewer: config.ReviewerSettings{Frequency: "off"}, Timeouts: config.Timeouts{ModelRequestSeconds: 1},
@@ -500,12 +651,14 @@ func TestActivateSessionRuntimeRejectsManagedWorktreeOutsideServerNamespace(t *t
 	}); err != nil {
 		t.Fatalf("UpdateSessionExecutionTarget: %v", err)
 	}
-	_, err = NewAPI(fixture.metadata, nil, fixture.authority, APIOptions{
+	_, err = NewAPI(fixture.metadata, fixture.authority, APIOptions{
 		ManagedWorktreeBaseDir: t.TempDir(),
 	}).ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
-		ClientRequestID: "activate-legacy-outside-namespace",
-		SessionID:       fixture.store.Meta().SessionID,
-		OwnerID:         "interactive-owner",
+		ClientRequestID:       "activate-legacy-outside-namespace",
+		SessionID:             fixture.store.Meta().SessionID,
+		OwnerID:               "interactive-owner",
+		QuestionsEnabled:      sessionRuntimeBoolPointer(true),
+		AutoCompactionEnabled: sessionRuntimeBoolPointer(true),
 		ActiveSettings: config.Settings{
 			Model: "gpt-5", ModelContextWindow: 200000,
 			Reviewer: config.ReviewerSettings{Frequency: "off"},
@@ -561,7 +714,7 @@ func TestActivateSessionRuntimeUsesActiveShellPostprocessingWithSuppliedManager(
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
-	fixture.api = NewAPI(fixture.metadata, nil, authority, APIOptions{
+	fixture.api = NewAPI(fixture.metadata, authority, APIOptions{
 		RuntimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(context.Context, runtimewire.RuntimeClientRequest) (llm.Client, error) {
 			return client, nil
 		}),
@@ -581,9 +734,11 @@ func TestActivateSessionRuntimeUsesActiveShellPostprocessingWithSuppliedManager(
 	})
 
 	activation, err := fixture.api.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
-		ClientRequestID: "activate-active-shell",
-		SessionID:       sessionID,
-		OwnerID:         "interactive-owner",
+		ClientRequestID:       "activate-active-shell",
+		SessionID:             sessionID,
+		OwnerID:               "interactive-owner",
+		QuestionsEnabled:      sessionRuntimeBoolPointer(true),
+		AutoCompactionEnabled: sessionRuntimeBoolPointer(true),
 		ActiveSettings: config.Settings{
 			Model:                  "gpt-5",
 			ThinkingLevel:          "medium",
@@ -730,6 +885,6 @@ func newSessionRuntimeFixture(t *testing.T) sessionRuntimeFixture {
 			t.Errorf("close runtime authority: %v", err)
 		}
 	})
-	api := NewAPI(metadataStore, nil, authority, APIOptions{})
+	api := NewAPI(metadataStore, authority, APIOptions{})
 	return sessionRuntimeFixture{config: appCfg, metadata: metadataStore, store: store, api: api, authority: authority}
 }

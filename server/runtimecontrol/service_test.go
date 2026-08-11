@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"core/prompts"
+	"core/server/launch"
 	"core/server/llm"
 	"core/server/metadata"
 	"core/server/requestmemo"
@@ -565,6 +566,19 @@ func newRuntimeControlTestServiceWithEventFeed(
 	service := NewService(authority).
 		WithPromptHistoryStore(history).
 		WithPersistedSessionResolver(runtimeControlTestSessionPersistence)
+	service.WithChatSettingsPreparationResolver(staticChatSettingsPreparationResolver{
+		prepared: launch.PreparedChatSettings{
+			Baseline: session.ChatSettings{
+				Supervisor:     settings.Reviewer.Frequency,
+				Thinking:       settings.ThinkingLevel,
+				Fast:           settings.PriorityRequestMode,
+				Questions:      runtime.DefaultQuestionsEnabled,
+				AutoCompaction: runtime.DefaultAutoCompactionEnabled,
+			},
+			FastAvailable:      true,
+			QuestionsAvailable: true,
+		},
+	})
 	return store, engine, service
 }
 

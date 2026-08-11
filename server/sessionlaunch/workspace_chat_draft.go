@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 
 	"core/server/auth"
@@ -12,19 +11,16 @@ import (
 	"core/server/llm"
 	"core/server/metadata"
 	"core/server/requestmemo"
-	"core/server/runtime"
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
-	"core/shared/toolspec"
 )
 
 type WorkspaceChatDraft = metadata.WorkspaceChatDraftDocument
 type WorkspaceChatDraftResolverInput struct {
-	Settings      config.Settings
-	Source        config.SourceReport
-	AuthState     auth.State
-	FastModeState *runtime.FastModeState
+	Settings  config.Settings
+	Source    config.SourceReport
+	AuthState auth.State
 }
 type WorkspaceChatDraftTransform func(WorkspaceChatDraftResolution) (WorkspaceChatDraft, error)
 type workspaceChatDraftLimits struct {
@@ -260,21 +256,33 @@ func resolveWorkspaceChatDraftBaselines(input WorkspaceChatDraftResolverInput) (
 		if target == nil {
 			return nil, fmt.Errorf("prepare workspace Chat draft Agent %q returned no target", selector)
 		}
-		capabilities, err := llm.ProviderCapabilitiesForSettings(input.AuthState, target.Settings)
+		preparedSettings, err := launch.PrepareChatSettingsForAgent(
+			config.App{Settings: input.Settings, Source: input.Source},
+			input.AuthState,
+			selector,
+		)
 		if err != nil {
 			return nil, err
 		}
-		supervisor, valid := runtime.NormalizeReviewerFrequency(target.Settings.Reviewer.Frequency)
-		if !valid || strings.TrimSpace(target.Settings.ThinkingLevel) == "" {
-			return nil, errors.New("workspace Chat draft settings are invalid")
-		}
-		thinking := strings.TrimSpace(target.Settings.ThinkingLevel)
+		thinking := preparedSettings.Baseline.Thinking
 		thinkingLevels := make(map[string]struct{})
 		for _, level := range append(llm.SupportedThinkingLevelsModel(target.Settings.Model), thinking) {
 			thinkingLevels[level] = struct{}{}
 		}
-		questions, fast := slices.Contains(target.EnabledTools, toolspec.ToolAskQuestion), llm.SupportsFastModeProvider(capabilities)
-		result[selector] = workspaceChatDraftLimits{draft: WorkspaceChatDraft{Agent: selector, Supervisor: supervisor, Thinking: thinking, Fast: input.FastModeState != nil && input.FastModeState.Enabled() && fast, Questions: runtime.DefaultQuestionsEnabled && questions, AutoCompaction: runtime.DefaultAutoCompactionEnabled}, fast: fast, questions: questions, thinking: thinkingLevels}
+		baseline := preparedSettings.Baseline
+		result[selector] = workspaceChatDraftLimits{
+			draft: WorkspaceChatDraft{
+				Agent:          selector,
+				Supervisor:     baseline.Supervisor,
+				Thinking:       baseline.Thinking,
+				Fast:           baseline.Fast,
+				Questions:      baseline.Questions,
+				AutoCompaction: baseline.AutoCompaction,
+			},
+			fast:      preparedSettings.FastAvailable,
+			questions: preparedSettings.QuestionsAvailable,
+			thinking:  thinkingLevels,
+		}
 	}
 	return result, nil
 }

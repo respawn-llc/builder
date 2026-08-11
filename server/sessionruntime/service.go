@@ -8,7 +8,6 @@ import (
 
 	"core/server/metadata"
 	"core/server/runlog"
-	"core/server/runtime"
 	"core/server/runtimewire"
 	"core/server/session"
 	"core/server/tools"
@@ -20,7 +19,6 @@ import (
 
 type API struct {
 	metadataStore            *metadata.Store
-	fastModeState            *runtime.FastModeState
 	recoveredWarningProvider func() (string, bool, error)
 	authority                *Authority
 	runtimeClientFactory     runtimewire.RuntimeClientFactory
@@ -33,10 +31,9 @@ type APIOptions struct {
 	ManagedWorktreeBaseDir   string
 }
 
-func NewAPI(metadataStore *metadata.Store, fastModeState *runtime.FastModeState, authority *Authority, options APIOptions) *API {
+func NewAPI(metadataStore *metadata.Store, authority *Authority, options APIOptions) *API {
 	return &API{
 		metadataStore:            metadataStore,
-		fastModeState:            fastModeState,
 		recoveredWarningProvider: options.RecoveredWarningProvider,
 		authority:                authority,
 		runtimeClientFactory:     options.RuntimeClientFactory,
@@ -170,7 +167,8 @@ func (s *API) interactiveRuntimePlan(ctx context.Context, req serverapi.SessionR
 		EnabledTools:             enabledTools,
 		FilesystemContext:        tools.FilesystemContext{Access: filesystemContext.Access, ManagedWorktree: managedWorktreePathContext},
 		Sources:                  req.Source.Sources,
-		FastMode:                 s.fastModeState,
+		QuestionsEnabled:         req.QuestionsEnabled,
+		AutoCompactionEnabled:    req.AutoCompactionEnabled,
 		ClientFactory:            s.runtimeClientFactory,
 		StartLogLines:            startLogLines,
 		RecoveredWarningProvider: s.recoveredWarningProvider,

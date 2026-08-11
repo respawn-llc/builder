@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"core/server/auth"
-	"core/server/runtime"
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/toolspec"
@@ -19,7 +18,7 @@ func draftSettings(model, thinking string) config.Settings {
 	return s
 }
 func draftInput(s config.Settings) WorkspaceChatDraftResolverInput {
-	return WorkspaceChatDraftResolverInput{Settings: s, AuthState: auth.EmptyState(), FastModeState: runtime.NewFastModeState(false)}
+	return WorkspaceChatDraftResolverInput{Settings: s, AuthState: auth.EmptyState()}
 }
 func addWorker(s *config.Settings, thinking string) {
 	s.Subagents = map[string]config.SubagentRole{"worker": {Settings: config.Settings{Model: "worker-model", ProviderOverride: "anthropic", ThinkingLevel: thinking, Reviewer: config.ReviewerSettings{Frequency: "all"}}, Sources: map[string]string{"model": "file", "provider_override": "file", "thinking_level": "file", "reviewer.frequency": "file"}}}
@@ -47,6 +46,23 @@ func TestWorkspaceChatDraftResolution(t *testing.T) {
 	got, err = ResolveWorkspaceChatDraft(draftInput(base), stored)
 	if err != nil || got.Draft.Message != "preserve" || got.Draft.Thinking != "high" || got.Draft.Fast {
 		t.Fatalf("repair=%+v err=%v", got.Draft, err)
+	}
+}
+
+func TestWorkspaceChatDraftDefaultFastUsesLoadedConfiguration(t *testing.T) {
+	settings := draftSettings("gpt-5.6-sol", "medium")
+	settings.PriorityRequestMode = true
+	settings.ProviderCapabilities = config.ProviderCapabilitiesOverride{
+		ProviderID:           "openai",
+		SupportsResponsesAPI: true,
+		IsOpenAIFirstParty:   true,
+	}
+	resolved, err := ResolveWorkspaceChatDraft(draftInput(settings), nil)
+	if err != nil {
+		t.Fatalf("ResolveWorkspaceChatDraft: %v", err)
+	}
+	if !resolved.Draft.Fast {
+		t.Fatal("workspace Chat Fast default = false, want loaded configuration value true")
 	}
 }
 

@@ -632,6 +632,209 @@ func TestServicePlanSessionCanClearInvalidPersistedRoleBeforeValidation(t *testi
 	}
 }
 
+func TestServicePlanSessionAgentSelectionPersistsCompletePreparedBaseline(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace := t.TempDir()
+	persistenceRoot := t.TempDir()
+	containerDir := t.TempDir()
+	store := createLaunchTestSession(t, containerDir, "workspace-a", workspace)
+	setSessionLaunchChatSettings(t, store, session.ChatSettings{
+		Supervisor:     "off",
+		Thinking:       "low",
+		Fast:           false,
+		Questions:      false,
+		AutoCompaction: false,
+	})
+	cfg := loadSessionLaunchTestConfig(t, workspace, persistenceRoot)
+	workerSettings := cfg.Settings
+	workerSettings.ProviderOverride = "openai"
+	workerSettings.ProviderCapabilities = config.ProviderCapabilitiesOverride{
+		ProviderID:           "openai",
+		SupportsResponsesAPI: true,
+		IsOpenAIFirstParty:   true,
+	}
+	workerSettings.Reviewer.Frequency = "all"
+	workerSettings.ThinkingLevel = "  custom-depth  "
+	workerSettings.PriorityRequestMode = true
+	workerSettings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolAskQuestion: true}
+	cfg.Settings.Subagents = map[string]config.SubagentRole{
+		"worker": {
+			Settings: workerSettings,
+			Sources: map[string]string{
+				"reviewer.frequency":    "file",
+				"thinking_level":        "file",
+				"priority_request_mode": "file",
+				"tools.ask_question":    "file",
+			},
+		},
+	}
+	service := newSessionLaunchTestService(cfg, containerDir)
+	worker := "worker"
+
+	if _, err := service.PlanSession(t.Context(), serverapi.SessionPlanRequest{
+		ClientRequestID: "select-worker",
+		Mode:            serverapi.SessionLaunchModeInteractive,
+		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
+		Overrides:       serverapi.RunPromptOverrides{AgentRole: &worker},
+	}); err != nil {
+		t.Fatalf("PlanSession select worker: %v", err)
+	}
+	assertSessionLaunchChatSettings(t, store.Dir(), session.ChatSettingsState{
+		Agent: "worker",
+		Settings: &session.ChatSettingsOverrides{
+			Supervisor:     sessionLaunchStringPtr("all"),
+			Thinking:       sessionLaunchStringPtr("custom-depth"),
+			Fast:           sessionLaunchBoolPtr(true),
+			Questions:      sessionLaunchBoolPtr(true),
+			AutoCompaction: sessionLaunchBoolPtr(true),
+		},
+	})
+
+	second, err := service.PlanSession(t.Context(), serverapi.SessionPlanRequest{
+		ClientRequestID: "observe-worker",
+		Mode:            serverapi.SessionLaunchModeInteractive,
+		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
+	})
+	if err != nil {
+		t.Fatalf("PlanSession observe worker: %v", err)
+	}
+	if strings.TrimSpace(second.Plan.ActiveSettings.ThinkingLevel) != "custom-depth" ||
+		second.Plan.ActiveSettings.Reviewer.Frequency != "all" ||
+		!second.Plan.ActiveSettings.PriorityRequestMode {
+		t.Fatalf("second plan active settings = %+v, want selected worker baseline", second.Plan.ActiveSettings)
+	}
+}
+
+func TestServicePlanSessionRepairsUnavailableAgentWithCompleteDefaultBaseline(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace := t.TempDir()
+	persistenceRoot := t.TempDir()
+	containerDir := t.TempDir()
+	store := createLaunchTestSession(t, containerDir, "workspace-a", workspace)
+	removed := "removed"
+	if _, err := store.MutateChatSettings(session.ChatSettingsMutation{Agent: &session.ChatAgentSelection{
+		Agent: removed,
+		Baseline: session.ChatSettings{
+			Supervisor:     "all",
+			Thinking:       "stale-custom",
+			Fast:           true,
+			Questions:      false,
+			AutoCompaction: false,
+		},
+	}}); err != nil {
+		t.Fatalf("seed removed Agent: %v", err)
+	}
+	cfg := loadSessionLaunchTestConfig(t, workspace, persistenceRoot)
+	cfg.Settings.Reviewer.Frequency = "edits"
+	cfg.Settings.ThinkingLevel = "default-custom"
+	cfg.Settings.PriorityRequestMode = false
+	cfg.Settings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolAskQuestion: true}
+	service := newSessionLaunchTestService(cfg, containerDir)
+
+	if _, err := service.PlanSession(t.Context(), serverapi.SessionPlanRequest{
+		ClientRequestID: "repair-removed",
+		Mode:            serverapi.SessionLaunchModeInteractive,
+		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
+	}); err != nil {
+		t.Fatalf("PlanSession repair removed Agent: %v", err)
+	}
+	assertSessionLaunchChatSettings(t, store.Dir(), session.ChatSettingsState{
+		Agent: config.DefaultSubagentRole,
+		Settings: &session.ChatSettingsOverrides{
+			Supervisor:     sessionLaunchStringPtr("edits"),
+			Thinking:       sessionLaunchStringPtr("default-custom"),
+			Fast:           sessionLaunchBoolPtr(false),
+			Questions:      sessionLaunchBoolPtr(true),
+			AutoCompaction: sessionLaunchBoolPtr(true),
+		},
+	})
+}
+
+func TestServicePlanSessionAppliesPersistedChatSettingPrecedence(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace := t.TempDir()
+	containerDir := t.TempDir()
+	store := createLaunchTestSession(t, containerDir, "workspace-a", workspace)
+	setSessionLaunchChatSettings(t, store, session.ChatSettings{
+		Supervisor:     "off",
+		Thinking:       "custom-depth",
+		Fast:           false,
+		Questions:      false,
+		AutoCompaction: false,
+	})
+	cfg := loadSessionLaunchTestConfig(t, workspace, t.TempDir())
+	cfg.Settings.Reviewer.Frequency = "all"
+	cfg.Settings.ThinkingLevel = "high"
+	cfg.Settings.PriorityRequestMode = true
+	cfg.Settings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolAskQuestion: true}
+	service := newSessionLaunchTestService(cfg, containerDir)
+
+	response, err := service.PlanSession(t.Context(), serverapi.SessionPlanRequest{
+		ClientRequestID: "persisted-chat-settings",
+		Mode:            serverapi.SessionLaunchModeInteractive,
+		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
+	})
+	if err != nil {
+		t.Fatalf("PlanSession: %v", err)
+	}
+	if response.Plan.ActiveSettings.Reviewer.Frequency != "off" ||
+		response.Plan.ActiveSettings.ThinkingLevel != "custom-depth" ||
+		response.Plan.ActiveSettings.PriorityRequestMode ||
+		response.Plan.QuestionsEnabled ||
+		response.Plan.AutoCompactionEnabled {
+		t.Fatalf("effective Session Chat settings = %+v questions=%t auto_compaction=%t", response.Plan.ActiveSettings, response.Plan.QuestionsEnabled, response.Plan.AutoCompactionEnabled)
+	}
+
+	withoutOverrides := createLaunchTestSession(t, containerDir, "workspace-b", workspace)
+	fallback, err := service.PlanSession(t.Context(), serverapi.SessionPlanRequest{
+		ClientRequestID: "current-chat-settings",
+		Mode:            serverapi.SessionLaunchModeInteractive,
+		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, withoutOverrides.Meta().SessionID)),
+	})
+	if err != nil {
+		t.Fatalf("PlanSession without overrides: %v", err)
+	}
+	if fallback.Plan.ActiveSettings.Reviewer.Frequency != "all" ||
+		fallback.Plan.ActiveSettings.ThinkingLevel != "high" ||
+		!fallback.Plan.ActiveSettings.PriorityRequestMode ||
+		!fallback.Plan.QuestionsEnabled ||
+		!fallback.Plan.AutoCompactionEnabled {
+		t.Fatalf("fallback Session Chat settings = %+v questions=%t auto_compaction=%t", fallback.Plan.ActiveSettings, fallback.Plan.QuestionsEnabled, fallback.Plan.AutoCompactionEnabled)
+	}
+}
+
+func setSessionLaunchChatSettings(t *testing.T, store *session.Store, settings session.ChatSettings) {
+	t.Helper()
+	if _, err := store.MutateChatSettings(session.ChatSettingsMutation{
+		Supervisor:     sessionLaunchStringPtr(settings.Supervisor),
+		Thinking:       sessionLaunchStringPtr(settings.Thinking),
+		Fast:           sessionLaunchBoolPtr(settings.Fast),
+		Questions:      sessionLaunchBoolPtr(settings.Questions),
+		AutoCompaction: sessionLaunchBoolPtr(settings.AutoCompaction),
+	}); err != nil {
+		t.Fatalf("MutateChatSettings: %v", err)
+	}
+}
+
+func assertSessionLaunchChatSettings(t *testing.T, sessionDir string, want session.ChatSettingsState) {
+	t.Helper()
+	reopened, err := session.Open(sessionDir, serviceTestPersistence.Options()...)
+	if err != nil {
+		t.Fatalf("reopen Session: %v", err)
+	}
+	got, err := session.ChatSettingsStateFromMeta(reopened.Meta())
+	if err != nil {
+		t.Fatalf("ChatSettingsStateFromMeta: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		gotJSON, _ := json.Marshal(got.Settings)
+		wantJSON, _ := json.Marshal(want.Settings)
+		t.Fatalf("Chat settings state = agent %q settings %s, want agent %q settings %s", got.Agent, gotJSON, want.Agent, wantJSON)
+	}
+}
+
+func sessionLaunchBoolPtr(value bool) *bool { return &value }
+
 func TestServicePlanSessionConfigOnlyOverrideDoesNotSkipInvalidPersistedRoleValidation(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	workspace := t.TempDir()

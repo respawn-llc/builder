@@ -42,6 +42,8 @@ type sessionLaunchPlan struct {
 	SessionTitle               *string
 	PromptHistory              []string
 	ModelContractLocked        bool
+	QuestionsEnabled           bool
+	AutoCompactionEnabled      bool
 	StatusConfig               uiStatusConfig
 	ExecutionTarget            clientui.SessionExecutionTarget
 	Source                     config.SourceReport
@@ -167,14 +169,16 @@ func (p *launchPlanner) PlanSession(ctx context.Context, req sessionLaunchReques
 		return sessionLaunchPlan{}, err
 	}
 	return sessionLaunchPlan{
-		Mode:                req.Mode,
-		SessionID:           resp.Plan.SessionID,
-		ActiveSettings:      activeSettings,
-		EnabledTools:        enabledTools,
-		ConfiguredModelName: resp.Plan.ConfiguredModelName,
-		SessionTitle:        sessionTitle,
-		PromptHistory:       append([]string(nil), resp.Plan.PromptHistory...),
-		ModelContractLocked: resp.Plan.ModelContractLocked,
+		Mode:                  req.Mode,
+		SessionID:             resp.Plan.SessionID,
+		ActiveSettings:        activeSettings,
+		EnabledTools:          enabledTools,
+		ConfiguredModelName:   resp.Plan.ConfiguredModelName,
+		SessionTitle:          sessionTitle,
+		PromptHistory:         append([]string(nil), resp.Plan.PromptHistory...),
+		ModelContractLocked:   resp.Plan.ModelContractLocked,
+		QuestionsEnabled:      resp.Plan.QuestionsEnabled,
+		AutoCompactionEnabled: resp.Plan.AutoCompactionEnabled,
 		StatusConfig: uiStatusConfig{
 			WorkspaceRoot:   executionTarget.EffectiveWorkdir,
 			ExecutionTarget: executionTarget,

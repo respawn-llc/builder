@@ -42,7 +42,8 @@ type RuntimeWiringOptions struct {
 	Context                             context.Context
 	OnEvent                             func(evt runtime.Event)
 	Headless                            bool
-	FastMode                            *runtime.FastModeState
+	QuestionsEnabled                    *bool
+	AutoCompactionEnabled               *bool
 	Sources                             map[string]string
 	Client                              llm.Client
 	ClientFactory                       RuntimeClientFactory
@@ -219,7 +220,6 @@ func NewRuntimeWiringWithBackground(
 		ThinkingLevel:                   active.ThinkingLevel,
 		ModelCapabilities:               llm.LockedModelCapabilitiesForConfig(active.Model, active.ModelCapabilities),
 		FastModeEnabled:                 active.PriorityRequestMode,
-		FastModeState:                   opts.FastMode,
 		WebSearchMode:                   active.WebSearch,
 		PromptFacingSnapshotReloader:    promptReloader,
 		ProviderCapabilitiesOverride:    providerCapabilitiesOverride,
@@ -234,8 +234,8 @@ func NewRuntimeWiringWithBackground(
 		LocalCompactionCarryoverLimit:   20_000,
 		CompactionMode:                  string(active.CompactionMode),
 		CacheWarningMode:                active.CacheWarningMode,
-		AutoCompactionEnabled:           boolRef(runtime.DefaultAutoCompactionEnabled),
-		QuestionsEnabled:                boolRef(runtime.DefaultQuestionsEnabled),
+		AutoCompactionEnabled:           boolRefOrDefault(opts.AutoCompactionEnabled, runtime.DefaultAutoCompactionEnabled),
+		QuestionsEnabled:                boolRefOrDefault(opts.QuestionsEnabled, runtime.DefaultQuestionsEnabled),
 		HeadlessMode:                    opts.Headless,
 		ToolPreambles:                   active.ToolPreambles,
 		CurrentNodeExecution:            opts.CurrentNodeExecution,
@@ -395,3 +395,10 @@ func providerCapabilitiesOverridePtr(override config.ProviderCapabilitiesOverrid
 }
 
 func boolRef(v bool) *bool { return &v }
+
+func boolRefOrDefault(value *bool, fallback bool) *bool {
+	if value == nil {
+		return boolRef(fallback)
+	}
+	return boolRef(*value)
+}

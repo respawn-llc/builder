@@ -96,6 +96,8 @@ type SessionPlan struct {
 	ManagedWorktreeRoots                []string
 	Source                              config.SourceReport
 	BaseSource                          config.SourceReport
+	QuestionsEnabled                    bool
+	AutoCompactionEnabled               bool
 }
 
 func sessionPlanWithSnapshot(plan SessionPlan, store *session.Store, containerDir string) SessionPlan {
@@ -128,6 +130,7 @@ func (p Planner) sessionPlanWithSnapshot(plan SessionPlan, store *session.Store)
 
 type RunPromptOverrideOptions struct {
 	AllowLockedAgentRoleChange bool
+	AgentSelectionPersisted    bool
 	RequiredTools              []toolspec.ID
 	WorkflowThinking           WorkflowThinkingMutation
 }
@@ -428,6 +431,13 @@ func (p Planner) planSessionWithStore(ctx context.Context, req SessionRequest, s
 			return SessionPlan{}, err
 		}
 	}
+	chatSettings, err := ResolveSessionChatSettings(meta, active)
+	if err != nil {
+		return SessionPlan{}, err
+	}
+	active.Reviewer.Frequency = chatSettings.Supervisor
+	active.ThinkingLevel = chatSettings.Thinking
+	active.PriorityRequestMode = chatSettings.Fast
 	if meta.Locked != nil && (!meta.Locked.HasEnabledTools || strings.TrimSpace(meta.Locked.WebSearchMode) == "") {
 		backfill, backfillErr := store.BackfillLockedRequestShape(session.LockedRequestShapeBackfill{
 			EnabledTools:    toolspec.IDStrings(enabledTools),
@@ -482,6 +492,8 @@ func (p Planner) planSessionWithStore(ctx context.Context, req SessionRequest, s
 		ManagedWorktreeRoots:                append([]string(nil), managedWorktreeRoots...),
 		Source:                              source,
 		BaseSource:                          baseSource,
+		QuestionsEnabled:                    chatSettings.Questions,
+		AutoCompactionEnabled:               chatSettings.AutoCompaction,
 	}, store), nil
 }
 
@@ -889,7 +901,7 @@ func (p Planner) applyPreparedRunPromptOverridesWithBudgetApplier(plan SessionPl
 		staleLockedPromptFacingContract = true
 	}
 	if roleOverride.Present {
-		shouldPersistContinuation = true
+		shouldPersistContinuation = !options.AgentSelectionPersisted
 		continuationAgentRole = requestedContinuationRole
 		next.ActiveSettings = cloneSettings(baseSettings)
 		next.Source = baseSource

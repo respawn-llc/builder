@@ -97,7 +97,6 @@ type Config struct {
 	ThinkingLevel                   string
 	ModelCapabilities               session.LockedModelCapabilities
 	FastModeEnabled                 bool
-	FastModeState                   *FastModeState
 	WebSearchMode                   string
 	PromptFacingSnapshotReloader    PromptFacingSnapshotReloader
 	ProviderCapabilitiesOverride    *llm.ProviderCapabilities
@@ -316,7 +315,6 @@ func New(
 		reviewerFrequency = "off"
 	}
 	eng.cfg.Reviewer.Frequency = reviewerFrequency
-	eng.reviewerRuntimeState().SetResumeFrequency(reviewerFrequency)
 	if reviewerFrequency != "off" {
 		if err := eng.initReviewerClient(); err != nil {
 			return nil, err

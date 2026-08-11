@@ -39,24 +39,6 @@ func (e *Engine) SetFastModeEnabledWithCommittedFeedback(enabled bool, feedback 
 	if enabled && !e.FastModeAvailable() {
 		return false, session.CommitReceipt{}, errors.New("fast mode is only available for OpenAI-based Responses providers")
 	}
-	if state := e.fastModeState(); state != nil {
-		var receipt session.CommitReceipt
-		var feedbackErr error
-		changed, err := state.SetEnabledWithTransaction(enabled, func(changed bool) error {
-			receipt, feedbackErr = e.appendCommittedControlFeedback(feedback(changed))
-			if !receipt.Committed {
-				return feedbackErr
-			}
-			return nil
-		})
-		if err != nil {
-			return false, receipt, err
-		}
-		if changed {
-			e.markCurrentRequestShapeDirty()
-		}
-		return changed, receipt, feedbackErr
-	}
 	e.controlMutationMu.Lock()
 	defer e.controlMutationMu.Unlock()
 	changed := e.localFastModeEnabledChange(enabled)
@@ -105,4 +87,23 @@ func (e *Engine) SetReviewerEnabledWithCommittedFeedback(enabled bool, feedback 
 	}
 	e.applyReviewerEnabled(enabled, mode)
 	return changed, mode, receipt, feedbackErr
+}
+
+func (e *Engine) SetReviewerFrequencyWithCommittedFeedback(frequency string, feedback func(enabled bool, mode string, changed bool) string) (bool, string, session.CommitReceipt, error) {
+	if feedback == nil {
+		return false, e.ReviewerFrequency(), session.CommitReceipt{}, errCommittedFeedbackBuilderRequired
+	}
+	target, err := e.PrepareReviewerFrequency(frequency)
+	if err != nil {
+		return false, e.ReviewerFrequency(), session.CommitReceipt{}, err
+	}
+	e.controlMutationMu.Lock()
+	defer e.controlMutationMu.Unlock()
+	changed := e.ReviewerFrequency() != target
+	receipt, feedbackErr := e.appendCommittedControlFeedback(feedback(target != "off", target, changed))
+	if !receipt.Committed {
+		return false, e.ReviewerFrequency(), receipt, feedbackErr
+	}
+	e.setReviewerFrequency(target)
+	return changed, target, receipt, feedbackErr
 }

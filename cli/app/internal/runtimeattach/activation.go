@@ -17,10 +17,12 @@ import (
 const ReleaseTimeout = 3 * time.Second
 
 type Request struct {
-	SessionID      string
-	ActiveSettings config.Settings
-	EnabledTools   []toolspec.ID
-	Source         config.SourceReport
+	SessionID             string
+	ActiveSettings        config.Settings
+	EnabledTools          []toolspec.ID
+	QuestionsEnabled      bool
+	AutoCompactionEnabled bool
+	Source                config.SourceReport
 }
 
 type Activation struct {
@@ -91,11 +93,15 @@ func activate(ctx context.Context, service servicecontract.SessionRuntimeService
 
 func activateRequest(req Request, ownerID string) serverapi.SessionRuntimeActivateRequest {
 	return serverapi.SessionRuntimeActivateRequest{
-		ClientRequestID: uuid.NewString(),
-		SessionID:       req.SessionID,
-		OwnerID:         ownerID,
-		ActiveSettings:  req.ActiveSettings,
-		EnabledToolIDs:  toolspec.IDStrings(req.EnabledTools),
-		Source:          req.Source,
+		ClientRequestID:       uuid.NewString(),
+		SessionID:             req.SessionID,
+		OwnerID:               ownerID,
+		ActiveSettings:        req.ActiveSettings,
+		EnabledToolIDs:        toolspec.IDStrings(req.EnabledTools),
+		QuestionsEnabled:      runtimeAttachBoolPointer(req.QuestionsEnabled),
+		AutoCompactionEnabled: runtimeAttachBoolPointer(req.AutoCompactionEnabled),
+		Source:                req.Source,
 	}
 }
+
+func runtimeAttachBoolPointer(value bool) *bool { return &value }

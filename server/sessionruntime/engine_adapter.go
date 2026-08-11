@@ -28,7 +28,8 @@ type AgentRuntimePlanOptions struct {
 	FilesystemContext                   tools.FilesystemContext
 	Sources                             map[string]string
 	Headless                            bool
-	FastMode                            *runtime.FastModeState
+	QuestionsEnabled                    *bool
+	AutoCompactionEnabled               *bool
 	Client                              llm.Client
 	ClientFactory                       runtimewire.RuntimeClientFactory
 	ReviewerClientFactory               runtimewire.RuntimeClientFactory
@@ -59,6 +60,8 @@ func NewAgentRuntimePlan(options AgentRuntimePlanOptions) (AgentRuntimePlan, err
 	options.Sources = maps.Clone(options.Sources)
 	options.StartLogLines = append([]string(nil), options.StartLogLines...)
 	options.FilesystemContext = options.FilesystemContext.Clone()
+	options.QuestionsEnabled = cloneBoolPointer(options.QuestionsEnabled)
+	options.AutoCompactionEnabled = cloneBoolPointer(options.AutoCompactionEnabled)
 	if options.ProviderCapabilitiesOverride != nil {
 		value := *options.ProviderCapabilitiesOverride
 		options.ProviderCapabilitiesOverride = &value
@@ -85,6 +88,14 @@ func cloneAgentRuntimeSettings(settings config.Settings) config.Settings {
 }
 
 func cloneStringPointer(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
+func cloneBoolPointer(value *bool) *bool {
 	if value == nil {
 		return nil
 	}
@@ -211,7 +222,8 @@ func (a *Authority) newRuntimeWiringFromPlan(resource *agentResource, store *ses
 	wiringOptions := runtimewire.RuntimeWiringOptions{
 		Context:                             resource.ctx,
 		Headless:                            options.Headless,
-		FastMode:                            options.FastMode,
+		QuestionsEnabled:                    options.QuestionsEnabled,
+		AutoCompactionEnabled:               options.AutoCompactionEnabled,
 		Sources:                             maps.Clone(options.Sources),
 		Client:                              options.Client,
 		ClientFactory:                       options.ClientFactory,

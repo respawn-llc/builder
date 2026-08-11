@@ -20,6 +20,13 @@ import (
 type ActiveRuntimeMaintenance struct {
 	PreviousFilesystemContext tools.FilesystemContext
 	Replace                   func(tools.FilesystemContext) error
+	retire                    bool
+}
+
+func (m *ActiveRuntimeMaintenance) RetireRuntime() {
+	if m != nil {
+		m.retire = true
+	}
 }
 
 func (a *Authority) SyncExecutionTarget(ctx context.Context, sessionID string, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
@@ -178,6 +185,7 @@ func (a *Authority) RunSessionMaintenance(
 			}
 			callbackErr := fn(runCtx, store, maintenance)
 			active = false
+			retire = retire || maintenance.retire
 			if callbackErr == nil || currentContext.Equal(previousContext) {
 				return callbackErr
 			}

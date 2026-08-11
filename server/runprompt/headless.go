@@ -39,7 +39,6 @@ type promptHistoryStore interface {
 
 type HeadlessBootstrap struct {
 	SessionLaunch    *sessionlaunch.Service
-	FastModeState    *runtime.FastModeState
 	PromptHistory    promptHistoryStore
 	RuntimeAuthority *sessionruntime.Authority
 	// ManagedWorktreeBaseDir is the server-owned managed Worktree namespace.
@@ -195,13 +194,14 @@ func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch
 		startLogLines = append(startLogLines, "config.source "+line)
 	}
 	runtimePlan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
-		Settings:          plan.ActiveSettings,
-		EnabledTools:      plan.EnabledTools,
-		FilesystemContext: askquestion.FilesystemContext{Access: filesystemContext.Access, ManagedWorktree: managedWorktreePathContext},
-		Sources:           plan.Source.Sources,
-		Headless:          true,
-		FastMode:          l.boot.FastModeState,
-		StartLogLines:     startLogLines,
+		Settings:              plan.ActiveSettings,
+		EnabledTools:          plan.EnabledTools,
+		FilesystemContext:     askquestion.FilesystemContext{Access: filesystemContext.Access, ManagedWorktree: managedWorktreePathContext},
+		Sources:               plan.Source.Sources,
+		Headless:              true,
+		QuestionsEnabled:      runPromptBoolPointer(plan.QuestionsEnabled),
+		AutoCompactionEnabled: runPromptBoolPointer(plan.AutoCompactionEnabled),
+		StartLogLines:         startLogLines,
 		OnLoggingFailure: func(message string) {
 			if progress != nil {
 				progress.PublishRunPromptProgress(serverapi.RunPromptProgress{
@@ -284,6 +284,8 @@ func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch
 	prepared.handle = handle
 	return prepared, nil
 }
+
+func runPromptBoolPointer(value bool) *bool { return &value }
 
 func preservePresentAssistantContent(current string, message llm.Message) string {
 	if message.Content == nil {

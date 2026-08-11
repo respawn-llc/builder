@@ -10,7 +10,6 @@ import (
 	"core/server/auth"
 	"core/server/launch"
 	"core/server/requestmemo"
-	"core/server/runtime"
 	"core/server/session"
 	"core/server/sessionruntime"
 	"core/server/subagentpolicy"
@@ -37,7 +36,6 @@ type Service struct {
 	runtime                     *sessionruntime.Authority
 	plans                       *requestmemo.Memo[sessionPlanMemoRequest, PlanResult]
 	workspaceID                 string
-	fastModeState               *runtime.FastModeState
 	draftOwner                  *WorkspaceChatDraftOwner
 	materializationStoreOptions []session.StoreOption
 }
@@ -83,10 +81,9 @@ func (s *Service) WithRuntimeAuthority(authority *sessionruntime.Authority) *Ser
 	return s
 }
 
-func (s *Service) WithWorkspaceChatDraft(owner *WorkspaceChatDraftOwner, workspaceID string, state *runtime.FastModeState) *Service {
+func (s *Service) WithWorkspaceChatDraft(owner *WorkspaceChatDraftOwner, workspaceID string) *Service {
 	if s != nil {
 		s.workspaceID = strings.TrimSpace(workspaceID)
-		s.fastModeState = state
 		s.draftOwner = owner
 	}
 	return s
@@ -202,7 +199,7 @@ func (s *Service) workspaceChatDraftResolverInput(ctx context.Context) (Workspac
 			return WorkspaceChatDraftResolverInput{}, err
 		}
 	}
-	return WorkspaceChatDraftResolverInput{Settings: planner.Config.Settings, Source: planner.Config.Source, AuthState: authState, FastModeState: s.fastModeState}, nil
+	return WorkspaceChatDraftResolverInput{Settings: planner.Config.Settings, Source: planner.Config.Source, AuthState: authState}, nil
 }
 
 func (s *Service) workspaceChatDraftOwner() (*WorkspaceChatDraftOwner, string, error) {
@@ -389,15 +386,11 @@ func (s *Service) planExistingSession(
 	if s.runtime == nil {
 		return PlanResult{}, ErrExistingSessionAuthorityRequired
 	}
-	descriptor, err := session.NewScopedOpenSessionDescriptor(sessionID, planner.ContainerDir)
-	if err != nil {
-		return PlanResult{}, err
-	}
-	callback := func(ctx context.Context, store *session.Store) error {
-		result, resultErr = s.planExistingSessionWithStore(ctx, planner, req, roleOverride, caller, authState, store)
+	callback := func(ctx context.Context, store *session.Store, maintenance *sessionruntime.ActiveRuntimeMaintenance) error {
+		result, resultErr = s.planExistingSessionWithStore(ctx, planner, req, roleOverride, caller, authState, store, maintenance)
 		return resultErr
 	}
-	resultErr = s.runtime.WithSessionStore(ctx, descriptor, callback)
+	resultErr = s.runtime.RunSessionMaintenance(ctx, sessionID.String(), callback)
 	return result, resultErr
 }
 
@@ -409,6 +402,7 @@ func (s *Service) planExistingSessionWithStore(
 	caller *subagentpolicy.Caller,
 	authState auth.State,
 	store *session.Store,
+	maintenance *sessionruntime.ActiveRuntimeMaintenance,
 ) (PlanResult, error) {
 	if req.Mode == serverapi.SessionLaunchModeHeadless && !roleOverride.Present {
 		persistedRole, err := planner.SelectedSessionContinuationAgentRoleWithStore(store)
@@ -444,6 +438,9 @@ func (s *Service) planExistingSessionWithStore(
 	if err != nil {
 		return PlanResult{}, err
 	}
+	if err := applyPreparedAgentChatSettings(planner.Config, authState, roleOverride, store, maintenance); err != nil {
+		return PlanResult{}, err
+	}
 	preparedPromptFacingTarget := preparePromptFacingTarget(req.Mode, roleOverride, &preparedOverrides)
 	return s.finalizeLaunchPlan(
 		ctx,
@@ -457,9 +454,61 @@ func (s *Service) planExistingSessionWithStore(
 			if err != nil {
 				return launch.SessionPlan{}, nil, err
 			}
-			return planner.ApplyPreparedRunPromptOverridesWithStore(plan, store, req.Overrides, preparedOverrides, launch.RunPromptOverrideOptions{})
+			return planner.ApplyPreparedRunPromptOverridesWithStore(plan, store, req.Overrides, preparedOverrides, launch.RunPromptOverrideOptions{
+				AgentSelectionPersisted: roleOverride.Present,
+			})
 		},
 	)
+}
+
+func applyPreparedAgentChatSettings(
+	app config.App,
+	authState auth.State,
+	roleOverride serverapi.RunPromptAgentRoleOverride,
+	store *session.Store,
+	maintenance *sessionruntime.ActiveRuntimeMaintenance,
+) error {
+	state, err := session.ChatSettingsStateFromMeta(store.Meta())
+	if err != nil {
+		return err
+	}
+	targetAgent := state.Agent
+	selectAgent := roleOverride.Present
+	if roleOverride.Present {
+		targetAgent = config.DefaultSubagentRole
+		if !roleOverride.Default {
+			targetAgent = roleOverride.Role
+		}
+	} else if store.Meta().Locked == nil && state.Agent != config.DefaultSubagentRole {
+		lookup := config.LookupSubagentRole(app.Settings, state.Agent)
+		selectAgent = lookup.Status != config.SubagentRoleLookupPresent
+		if selectAgent {
+			targetAgent = config.DefaultSubagentRole
+		}
+	}
+	if !selectAgent {
+		return nil
+	}
+	prepared, err := launch.PrepareChatSettingsForAgent(app, authState, targetAgent)
+	if err != nil {
+		return err
+	}
+	result, err := store.MutateChatSettings(session.ChatSettingsMutation{
+		Agent: &session.ChatAgentSelection{
+			Agent:    targetAgent,
+			Baseline: prepared.Baseline,
+		},
+	})
+	if errors.Is(err, session.ErrChatAgentLocked) {
+		return fmt.Errorf("%w: current=%q requested=%q", launch.ErrLockedAgentRoleChange, state.Agent, targetAgent)
+	}
+	if err != nil && !result.Committed {
+		return err
+	}
+	if result.Changed && maintenance != nil {
+		maintenance.RetireRuntime()
+	}
+	return err
 }
 
 func preparePromptFacingTarget(
@@ -511,14 +560,16 @@ func sessionPlanResponseFromResult(result PlanResult) serverapi.SessionPlanRespo
 		enabledToolIDs = append(enabledToolIDs, string(id))
 	}
 	return serverapi.SessionPlanResponse{Plan: serverapi.SessionPlan{
-		SessionID:           result.Plan.Descriptor.SessionID().String(),
-		ActiveSettings:      result.Plan.ActiveSettings,
-		EnabledToolIDs:      enabledToolIDs,
-		ConfiguredModelName: result.Plan.ConfiguredModelName,
-		SessionName:         textutil.Pointer(result.Plan.SessionName),
-		PromptHistory:       append([]string(nil), result.Plan.PromptHistory...),
-		ModelContractLocked: result.Plan.ModelContractLocked,
-		Source:              result.Plan.Source,
+		SessionID:             result.Plan.Descriptor.SessionID().String(),
+		ActiveSettings:        result.Plan.ActiveSettings,
+		EnabledToolIDs:        enabledToolIDs,
+		ConfiguredModelName:   result.Plan.ConfiguredModelName,
+		SessionName:           textutil.Pointer(result.Plan.SessionName),
+		PromptHistory:         append([]string(nil), result.Plan.PromptHistory...),
+		ModelContractLocked:   result.Plan.ModelContractLocked,
+		QuestionsEnabled:      result.Plan.QuestionsEnabled,
+		AutoCompactionEnabled: result.Plan.AutoCompactionEnabled,
+		Source:                result.Plan.Source,
 	}, Warnings: result.Warnings}
 }
 

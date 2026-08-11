@@ -129,11 +129,13 @@ func TestRemotePromptCommandStartupCatalogAndInvocationUseImportedServerContent(
 		t.Fatalf("PlanSession: %v", err)
 	}
 	attachment, err := remote.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
-		ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
-		SessionID:       plan.Plan.SessionID,
-		ActiveSettings:  plan.Plan.ActiveSettings,
-		EnabledToolIDs:  plan.Plan.EnabledToolIDs,
-		Source:          plan.Plan.Source,
+		ClientRequestID:       runtimeids.NewRuntimeClientRequestID().String(),
+		SessionID:             plan.Plan.SessionID,
+		ActiveSettings:        plan.Plan.ActiveSettings,
+		EnabledToolIDs:        plan.Plan.EnabledToolIDs,
+		QuestionsEnabled:      startupBoolPointer(plan.Plan.QuestionsEnabled),
+		AutoCompactionEnabled: startupBoolPointer(plan.Plan.AutoCompactionEnabled),
+		Source:                plan.Plan.Source,
 	})
 	if err != nil {
 		t.Fatalf("ActivateSessionRuntime: %v", err)
@@ -180,3 +182,5 @@ func TestRemotePromptCommandStartupCatalogAndInvocationUseImportedServerContent(
 		t.Fatalf("provider request omitted resolved prompt body: %+v", payload.Input)
 	}
 }
+
+func startupBoolPointer(value bool) *bool { return &value }

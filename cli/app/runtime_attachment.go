@@ -78,10 +78,12 @@ func prepareSharedRuntime(ctx context.Context, source runtimeAttachmentSource, p
 
 func activateSharedRuntime(ctx context.Context, clients runtimeAttachmentClients, plan sessionLaunchPlan) (*runtimeReactivator, *runtimeattach.Activation, error) {
 	lease, err := runtimeattach.Activate(ctx, clients.SessionRuntime, runtimeattach.Request{
-		SessionID:      plan.SessionID,
-		ActiveSettings: plan.ActiveSettings,
-		EnabledTools:   plan.EnabledTools,
-		Source:         plan.Source,
+		SessionID:             plan.SessionID,
+		ActiveSettings:        plan.ActiveSettings,
+		EnabledTools:          plan.EnabledTools,
+		QuestionsEnabled:      plan.QuestionsEnabled,
+		AutoCompactionEnabled: plan.AutoCompactionEnabled,
+		Source:                plan.Source,
 	})
 	if err != nil {
 		return nil, nil, err

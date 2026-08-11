@@ -207,7 +207,7 @@ func newWorkspaceChatMaterializationService(t *testing.T) (*Service, *metadata.S
 		PersistedSessions:        metadataStore,
 		ProjectWorkspaceBoundary: metadataStore,
 	}).
-		WithWorkspaceChatDraft(NewWorkspaceChatDraftOwner(metadataStore), binding.WorkspaceID, nil).
+		WithWorkspaceChatDraft(NewWorkspaceChatDraftOwner(metadataStore), binding.WorkspaceID).
 		WithWorkspaceChatMaterializationStoreOptions(metadataStore.WorkspaceChatMaterializationStoreOptions(binding.WorkspaceID)...)
 	return service, metadataStore, cfg, binding
 }
