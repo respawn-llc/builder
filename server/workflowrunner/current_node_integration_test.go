@@ -1307,8 +1307,8 @@ func TestWorkflowRunnerCancellationDuringPostTurnFinalizationFinalizesInterrupte
 func TestResumeRetainsEstablishedSessionContractAndAttachedRuntime(t *testing.T) {
 	f := newCurrentNodeRunnerFixture(
 		t,
-		ScriptedCancellation(),
-		ScriptedCancellation(),
+		ScriptedRuntimeError(&llm.ProviderAPIError{Code: llm.UnifiedErrorCodeProviderContract}),
+		ScriptedRuntimeError(&llm.ProviderAPIError{Code: llm.UnifiedErrorCodeProviderContract}),
 	)
 	workflowID := createCurrentNodeAgentWorkflowWithCompletionMode(
 		t,

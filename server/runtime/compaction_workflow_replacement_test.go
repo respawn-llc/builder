@@ -262,7 +262,7 @@ func TestWorkflowAssignmentSteeringPreservesPostCompletionBoundary(t *testing.T)
 
 func TestWorkflowPostCompletionBoundarySurvivesFailedWorkflowRequest(t *testing.T) {
 	t.Parallel()
-	requestErr := errors.New("workflow request construction failed")
+	requestErr := &llm.ProviderAPIError{Code: llm.UnifiedErrorCodeProviderContract}
 	engine := mustNewWorkflowTestEngine(
 		t,
 		mustCreateTestSession(t),

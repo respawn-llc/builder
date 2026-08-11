@@ -15,6 +15,7 @@ const (
 	UnifiedErrorCodeAuthentication        = llmerrors.UnifiedErrorCodeAuthentication
 	UnifiedErrorCodeContextLengthOverflow = llmerrors.UnifiedErrorCodeContextLengthOverflow
 	UnifiedErrorCodeProviderContract      = llmerrors.UnifiedErrorCodeProviderContract
+	UnifiedErrorCodeProviderOverload      = llmerrors.UnifiedErrorCodeProviderOverload
 )
 
 func IsAuthenticationError(err error) bool {
