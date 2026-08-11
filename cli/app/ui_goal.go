@@ -168,6 +168,10 @@ type goalRuntimePendingState struct {
 	desiredObjective  string
 }
 
+type goalMutationPendingClient interface {
+	goalMutationPendingSnapshot() (*clientui.GoalPreview, uint64)
+}
+
 func goalRuntimeOperationMutates(operation goalRuntimeOperation) bool {
 	switch operation {
 	case goalRuntimeSet, goalRuntimePause, goalRuntimeResume, goalRuntimeComplete, goalRuntimeClear:
@@ -230,7 +234,7 @@ func (m *uiModel) goalRuntimeCommand(operation goalRuntimeOperation, objective s
 		case goalRuntimeSet:
 			msg.goal, msg.err = client.SetGoal(objective)
 			if msg.err == nil {
-				msg.pending = goalMutationPendingPreview(client)
+				msg.pending, msg.pendingRevision = goalMutationPendingSnapshot(client)
 			}
 		case goalRuntimePause:
 			msg.goal, msg.err = client.PauseGoal()
@@ -309,6 +313,10 @@ func (m *uiModel) applyGoalRuntimeDone(msg goalRuntimeDoneMsg) tea.Cmd {
 		}
 		return sequenceCmds(m.goalRuntimeCommand(goalRuntimeClear, ""), followUpCmd)
 	case goalRuntimeSet:
+		if msg.pending != nil && !goalMutationPendingResultCurrent(m.runtimeClient(), msg.pending, msg.pendingRevision) {
+			m.reconcileAuthoritativeGoal(m.cachedRuntimeMainView().Status.Goal)
+			return followUpCmd
+		}
 		m.goal.goal = cloneRuntimeGoal(msg.goal)
 		m.goal.pending = cloneGoalPreview(msg.pending)
 		overlayCmd := tea.Cmd(nil)
@@ -568,13 +576,23 @@ func cloneGoalPreview(preview *clientui.GoalPreview) *clientui.GoalPreview {
 	return &cloned
 }
 
-func goalMutationPendingPreview(client clientui.RuntimeClient) *clientui.GoalPreview {
-	type pendingPreviewClient interface {
-		goalMutationPendingPreview() *clientui.GoalPreview
-	}
-	previewClient, ok := client.(pendingPreviewClient)
+func goalMutationPendingSnapshot(client clientui.RuntimeClient) (*clientui.GoalPreview, uint64) {
+	previewClient, ok := client.(goalMutationPendingClient)
 	if !ok {
-		return nil
+		return nil, 0
 	}
-	return cloneGoalPreview(previewClient.goalMutationPendingPreview())
+	preview, revision := previewClient.goalMutationPendingSnapshot()
+	return cloneGoalPreview(preview), revision
+}
+
+func goalMutationPendingResultCurrent(client clientui.RuntimeClient, expected *clientui.GoalPreview, expectedRevision uint64) bool {
+	previewClient, ok := client.(goalMutationPendingClient)
+	if !ok {
+		return true
+	}
+	current, revision := previewClient.goalMutationPendingSnapshot()
+	if current == nil || revision != expectedRevision {
+		return false
+	}
+	return current.Objective == expected.Objective && current.Status == expected.Status
 }
