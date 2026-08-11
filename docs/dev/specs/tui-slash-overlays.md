@@ -45,6 +45,7 @@
 - The selected candidate is highlighted and centered in the transcript. `Up`/`Down` move between candidates; at the window edge they page across transcript windows through bounded requests, re-anchoring the selection.
 - Candidate-free pages encountered during edge navigation are traversed automatically through sequential bounded reads while remaining transient. Each navigation attempt has a 20-second deadline; timeout stops pagination, keeps the current candidate selected, and surfaces an error in the status line.
 - `Enter` creates and opens a rollback fork at the selected message. The fork retains history before the selected user message and excludes that message.
+- The rollback fork inherits the parent Session's complete Goal unchanged, including its objective, state, identity, and original creation and update times.
 - The fork opens in Ongoing Mode with the selected user message text restored as unsent composer input.
 - `Esc` while selecting closes the picker and restores the prior Transcript Mode.
 - Rollback never changes the original Session transcript.
