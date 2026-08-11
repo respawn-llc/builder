@@ -188,6 +188,25 @@ func TestCloneSessionStreamsLargeHistoryAcrossChunks(t *testing.T) {
 	}
 }
 
+func TestCloneSessionDoesNotInheritGoal(t *testing.T) {
+	parent := newSessionTestStore(t)
+	if _, _, err := parent.SetGoal("workflow source goal", GoalActorUser); err != nil {
+		t.Fatalf("SetGoal: %v", err)
+	}
+	parentLog := materializedForkEventLog(t, parent)
+	if _, _, err := parentLog.AppendRecord(forkStringPointer("step"), forkUserMessageRecord("source")); err != nil {
+		t.Fatalf("append source message: %v", err)
+	}
+
+	child, err := CloneSession(parentLog, "clone", testSessionCategory)
+	if err != nil {
+		t.Fatalf("CloneSession: %v", err)
+	}
+	if child.Meta().Goal != nil {
+		t.Fatalf("workflow clone goal = %+v, want nil", child.Meta().Goal)
+	}
+}
+
 func TestStreamedForkAndCloneRequireAndPersistCategory(t *testing.T) {
 	parent, err := Create(t.TempDir(), "workspace", "/tmp/work", sessioncontract.SessionCategoryMain, sessionTestPersistence.options()...)
 	if err != nil {
