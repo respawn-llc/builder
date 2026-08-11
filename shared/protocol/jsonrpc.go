@@ -69,6 +69,7 @@ const (
 	ErrCodePromptCommands                    = -32059
 	ErrCodeWorkflowTaskInitialBranch         = -32060
 	ErrCodeRuntimeCommandNotAccepted         = -32061
+	ErrCodeWorkflowTaskStartConflict         = -32062
 )
 
 type Request struct {

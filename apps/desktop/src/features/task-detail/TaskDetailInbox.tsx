@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import type { AttentionItem, TaskDetail } from "@/api";
+import { ContractError, parseTaskSetupRecoveryDetail, type AttentionItem, type TaskDetail } from "@/api";
 import type { TaskDetailInitialFocus } from "@/app-facade";
 import { sameTaskDetailInitialFocus } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
@@ -56,7 +56,7 @@ export function TaskInbox({
           mutations={mutations}
           onQuestionSelectionChange={onQuestionSelectionChange}
           questionSelections={questionSelections}
-          taskId={detail.id}
+          task={detail}
         />
       ))}
     </>
@@ -99,7 +99,10 @@ function focusedAttentionItemID(
       (item) => item.kind === "approval" && item.approvalID === initialFocus.approvalID,
     )?.id;
   }
-  return attentionItems.find((item) => item.kind === "interrupted_current_node")?.id;
+  return attentionItems.find((item) => {
+    if (item.kind !== "interrupted_current_node") return false;
+    try { return parseTaskSetupRecoveryDetail(item.detailJSON) !== null; } catch (error) { if (error instanceof ContractError) return false; throw error; }
+  })?.id ?? attentionItems.find((item) => item.kind === "interrupted_current_node")?.id;
 }
 
 function InboxItem({
@@ -110,7 +113,7 @@ function InboxItem({
   mutations,
   onQuestionSelectionChange,
   questionSelections,
-  taskId,
+  task,
 }: Readonly<{
   attention: AttentionItem;
   currentVersion: number;
@@ -119,7 +122,7 @@ function InboxItem({
   mutations: ReturnType<typeof useTaskMutations>;
   onQuestionSelectionChange: (askID: string, selection: QuestionSelectionState) => void;
   questionSelections: ReadonlyMap<string, QuestionSelectionState>;
-  taskId: string;
+  task: TaskDetail;
 }>) {
   const focusTargetRef = useRef<HTMLDivElement | null>(null);
   const scrolledRef = useRef(false);
@@ -154,7 +157,7 @@ function InboxItem({
             onQuestionSelectionChange(attention.questionID, selection);
           }}
           selectionState={questionSelection}
-          taskId={taskId}
+          taskId={task.id}
         />
       </div>
     );
@@ -173,7 +176,7 @@ function InboxItem({
   }
   return (
     <div ref={focusTargetRef}>
-      <InterruptedCurrentNodeBox attention={attention} disabled={disabled} />
+      <InterruptedCurrentNodeBox attention={attention} canResume={task.actions.canResume} disabled={disabled} />
     </div>
   );
 }

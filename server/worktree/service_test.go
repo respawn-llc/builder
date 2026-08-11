@@ -368,7 +368,8 @@ func TestCreateWorktreeBlocksUntilSetupCompletesBeforeSessionSwitch(t *testing.T
 	if err != nil {
 		t.Fatalf("setup event: %v", err)
 	}
-	if evt.Phase != serverapi.WorktreeSetupPhaseStarted || evt.SetupOperationID != setupID || evt.ScriptPath == "" || evt.WorktreeRoot == "" {
+	if evt.Phase != serverapi.WorktreeSetupPhaseStarted || evt.SetupOperationID != setupID ||
+		evt.Started == nil || evt.Started.ScriptPath == "" || evt.Started.WorktreeRoot == "" {
 		t.Fatalf("started setup event = %+v", evt)
 	}
 	select {
@@ -440,11 +441,12 @@ func TestCreateWorktreeSetupFailureKeepsWorktreeAndSessionTarget(t *testing.T) {
 	}
 	assertServiceTestSessionTarget(t, env, "", env.workspaceRoot)
 	evt := nextSetupTerminalEvent(t, sub)
-	if evt.Phase != serverapi.WorktreeSetupPhaseFailed || evt.ExitCode == nil || *evt.ExitCode != 7 {
+	if evt.Phase != serverapi.WorktreeSetupPhaseFailed || evt.Failed == nil ||
+		evt.Failed.Cause.ProcessExit == nil || evt.Failed.Cause.ProcessExit.ExitCode != 7 {
 		t.Fatalf("failure setup event = %+v", evt)
 	}
-	if len(evt.Stderr) > setupDiagnosticLimitBytes {
-		t.Fatalf("stderr diagnostic length = %d, want <= %d", len(evt.Stderr), setupDiagnosticLimitBytes)
+	if evt.Failed.Cause.ProcessExit.Stderr == nil || len(*evt.Failed.Cause.ProcessExit.Stderr) > setupDiagnosticLimitBytes {
+		t.Fatalf("stderr diagnostic = %v, want present and <= %d bytes", evt.Failed.Cause.ProcessExit.Stderr, setupDiagnosticLimitBytes)
 	}
 }
 
@@ -487,11 +489,12 @@ func TestCreateWorktreeSetupTimeoutKeepsWorktreeAndSessionTarget(t *testing.T) {
 	}
 	assertServiceTestSessionTarget(t, env, "", env.workspaceRoot)
 	evt := nextSetupTerminalEvent(t, sub)
-	if evt.Phase != serverapi.WorktreeSetupPhaseFailed || !evt.Timeout {
+	if evt.Phase != serverapi.WorktreeSetupPhaseFailed || evt.Failed == nil ||
+		evt.Failed.Cause.Kind != serverapi.WorktreeSetupFailureTimeout {
 		t.Fatalf("timeout setup event = %+v", evt)
 	}
-	if evt.ScriptPath != expectedScript || evt.WorktreeRoot != setupErr.WorktreeRoot || evt.Error != setupErr.Error() {
-		t.Fatalf("timeout setup event = %+v, want timeout/script/worktree context", evt)
+	if evt.Failed.Diagnostic != setupErr.Error() {
+		t.Fatalf("timeout setup event = %+v, want final diagnostic", evt)
 	}
 }
 
@@ -534,13 +537,15 @@ func TestCreateWorktreeSetupCancellationKeepsWorktreeAndSessionTarget(t *testing
 	}
 	assertServiceTestSessionTarget(t, env, "", env.workspaceRoot)
 	evt := nextSetupTerminalEvent(t, sub)
-	if evt.Phase != serverapi.WorktreeSetupPhaseFailed || !evt.Canceled {
+	if evt.Phase != serverapi.WorktreeSetupPhaseFailed || evt.Failed == nil ||
+		evt.Failed.Cause.Kind != serverapi.WorktreeSetupFailureCanceled {
 		t.Fatalf("canceled setup event = %+v", evt)
 	}
-	if evt.WorktreeRoot == "" {
-		t.Fatal("canceled setup event omitted retained worktree root")
+	var retained *serverapi.WorktreeSetupRetainedError
+	if !errors.As(err, &retained) || retained.Worktree.Registered == nil {
+		t.Fatalf("canceled setup error = %T %v, want retained worktree", err, err)
 	}
-	if _, statErr := os.Stat(evt.WorktreeRoot); statErr != nil {
+	if _, statErr := os.Stat(retained.Worktree.Registered.Kent.CanonicalRoot); statErr != nil {
 		t.Fatalf("expected canceled setup worktree kept, stat err=%v", statErr)
 	}
 }
@@ -592,13 +597,15 @@ func TestCreateWorktreeInvalidSetupScriptsKeepWorktreeAndSessionTarget(t *testin
 			}
 			assertServiceTestSessionTarget(t, env, "", env.workspaceRoot)
 			evt := nextSetupTerminalEvent(t, sub)
-			if evt.Phase != serverapi.WorktreeSetupPhaseFailed || strings.TrimSpace(evt.Error) == "" {
+			if evt.Phase != serverapi.WorktreeSetupPhaseFailed || evt.Failed == nil ||
+				strings.TrimSpace(evt.Failed.Diagnostic) == "" {
 				t.Fatalf("invalid setup event = %+v", evt)
 			}
-			if evt.WorktreeRoot == "" {
-				t.Fatal("invalid setup event omitted retained worktree root")
+			var retained *serverapi.WorktreeSetupRetainedError
+			if !errors.As(err, &retained) || retained.Worktree.Registered == nil {
+				t.Fatalf("invalid setup error = %T %v, want retained worktree", err, err)
 			}
-			if _, statErr := os.Stat(evt.WorktreeRoot); statErr != nil {
+			if _, statErr := os.Stat(retained.Worktree.Registered.Kent.CanonicalRoot); statErr != nil {
 				t.Fatalf("expected invalid-setup worktree kept, stat err=%v", statErr)
 			}
 		})

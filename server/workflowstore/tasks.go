@@ -15,6 +15,20 @@ import (
 	"core/shared/runtimeids"
 )
 
+type (
+	TaskStartConflictReason string
+	TaskStartConflictError  struct {
+		TaskID workflow.TaskID
+		Reason TaskStartConflictReason
+	}
+)
+
+const TaskStartConflictAlreadyStarted TaskStartConflictReason = "already_started"
+
+func (e TaskStartConflictError) Error() string {
+	return fmt.Sprintf("task %q start conflict: %s", e.TaskID, e.Reason)
+}
+
 type CreateTaskRequest struct {
 	ProjectID         string
 	WorkflowID        *runtimeids.WorkflowID
@@ -553,6 +567,9 @@ func (s *Store) prepareTaskStart(ctx context.Context, taskID workflow.TaskID) (p
 	}
 	current, err := currentNodeForReference(ctx, s.queries, reference)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return preparedTaskStart{}, TaskStartConflictError{TaskID: taskID, Reason: TaskStartConflictAlreadyStarted}
+		}
 		return preparedTaskStart{}, err
 	}
 	if current.SessionID != nil || current.Scheduling != nil {

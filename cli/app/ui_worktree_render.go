@@ -259,10 +259,12 @@ func (l uiViewLayout) renderWorktreeCreateDialog(width, height int, style uiStyl
 	footer := make([]string, 0, 3)
 	if dialog.submitting {
 		footer = append(footer, style.meta.Render(truncateQueuedMessageLine(pendingToolSpinnerFrame(m.spinnerFrame)+" Creating worktree...", width)))
-		if dialog.setupEvent != nil && dialog.setupEvent.Phase == serverapi.WorktreeSetupPhaseStarted {
+		if dialog.setupEvent != nil &&
+			dialog.setupEvent.Phase == serverapi.WorktreeSetupPhaseStarted &&
+			dialog.setupEvent.Started != nil {
 			footer = append(footer,
-				style.meta.Render(truncateQueuedMessageLine("Setup script: "+dialog.setupEvent.ScriptPath, width)),
-				style.meta.Render(truncateQueuedMessageLine("Setup worktree: "+dialog.setupEvent.WorktreeRoot, width)),
+				style.meta.Render(truncateQueuedMessageLine("Setup script: "+dialog.setupEvent.Started.ScriptPath, width)),
+				style.meta.Render(truncateQueuedMessageLine("Setup worktree: "+dialog.setupEvent.Started.WorktreeRoot, width)),
 			)
 		}
 	}

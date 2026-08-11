@@ -33,7 +33,7 @@ func TestWorkflowTaskInitialBranchRequestContract(t *testing.T) {
 		{
 			name: "move",
 			request: WorkflowTaskMoveRequest{
-				TaskID: "task", TargetNodeID: "node", SetupOperationID: NewWorktreeSetupOperationID(), BranchName: &exact,
+				TaskID: "task", TargetNodeID: "node", BranchName: &exact,
 			},
 			roundTrip: func(data []byte) *string {
 				var decoded WorkflowTaskMoveRequest

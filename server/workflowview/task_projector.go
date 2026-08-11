@@ -71,7 +71,7 @@ func (*TaskProjector) ProjectTaskFacts(input TaskFactsInput) TaskFacts {
 	return TaskFacts{
 		Summary: taskSummary(input.Task, input.Status.Status, done),
 		Status:  input.Status.Status,
-		Actions: taskActions(done, input.Status.Status, input.LiveExecutions, input.CanDelete),
+		Actions: taskActions(done, input.Status.Status, input.CurrentNodes, input.LiveExecutions, input.CanDelete),
 		Done:    done,
 	}
 }
@@ -187,6 +187,7 @@ func currentNodesContainTerminal(nodes []workflow.CurrentNode, nodeKinds map[str
 func taskActions(
 	done bool,
 	status serverapi.WorkflowTaskStatus,
+	currentNodes []workflow.CurrentNode,
 	live []sessionruntime.TaskExecution,
 	canDelete bool,
 ) serverapi.WorkflowTaskActions {
@@ -199,8 +200,22 @@ func taskActions(
 	actions := serverapi.WorkflowTaskActions{
 		CanStart:     !done && !hasLiveExecution && status.Kind == serverapi.WorkflowTaskStatusKindBacklog,
 		CanInterrupt: !done && hasInterruptibleExecution,
-		CanResume:    !done && !hasLiveExecution && status.Kind == serverapi.WorkflowTaskStatusKindInterrupted,
-		CanDelete:    canDelete,
+		CanResume: !done &&
+			!hasLiveExecution &&
+			status.Kind == serverapi.WorkflowTaskStatusKindInterrupted &&
+			!currentNodesOwnSetupRecovery(currentNodes),
+		CanDelete: canDelete,
 	}
 	return actions
+}
+
+func currentNodesOwnSetupRecovery(nodes []workflow.CurrentNode) bool {
+	for _, node := range nodes {
+		if node.Scheduling != nil &&
+			node.Scheduling.Interruption != nil &&
+			node.Scheduling.Interruption.Detail.SetupRecovery != nil {
+			return true
+		}
+	}
+	return false
 }

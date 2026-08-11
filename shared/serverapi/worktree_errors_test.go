@@ -71,6 +71,7 @@ func TestWorktreeStructuredErrorsRoundTripTypedFacts(t *testing.T) {
 				},
 			},
 		},
+		ScriptPath: "/repo/scripts/setup.sh",
 		Diagnostic: "setup exited unsuccessfully",
 	}
 	precondition := &WorktreeDeletePreconditionError{
@@ -349,6 +350,7 @@ func TestWorktreeSetupRetainedErrorKeepsExistingWireIdentity(t *testing.T) {
 				},
 			},
 		},
+		ScriptPath: "/repo/scripts/setup.sh",
 		Diagnostic: "setup failed",
 	}
 	if source.RPCErrorCode() != protocol.ErrCodeWorktreeSetupRetained {
