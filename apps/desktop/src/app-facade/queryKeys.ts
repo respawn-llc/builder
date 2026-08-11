@@ -1,6 +1,7 @@
 import {
   canonicalBoardFilter,
   defaultBoardNodeCardsSort,
+  nonBlankString,
   type BoardFilterInput,
   type BoardNodeCardsSort,
   type SessionCategory,
@@ -34,18 +35,13 @@ function dependencyFilterKey(filter: boolean | null): string {
 }
 
 function worktreeFact(value: string, requireTrimmed = false): string {
-  if (value.trim().length === 0 || (requireTrimmed && value !== value.trim())) {
-    throw new TypeError("Worktree query fact is invalid.");
-  }
+  const parsed = nonBlankString.safeParse(value);
+  if (!parsed.success || (requireTrimmed && value !== parsed.data)) throw new TypeError("Worktree query fact is invalid.");
   return value;
 }
 
-const worktreeOperationKey = (
-  sessionID: string,
-  kind: "create-target-resolution" | "selector-resolution" | "delete-preview",
-  value: string,
-  requireTrimmed = false,
-) => ["worktree", worktreeFact(sessionID), kind, worktreeFact(value, requireTrimmed)] as const;
+const worktreeOperationKey = (sessionID: string, kind: "create-target-resolution" | "selector-resolution" | "delete-preview", value: string, requireTrimmed = false) =>
+  ["worktree", worktreeFact(sessionID), kind, worktreeFact(value, requireTrimmed)] as const;
 
 export const queryKeys = {
   startup: ["startup"],

@@ -69,6 +69,7 @@ export { rpcErrorCodes } from "./rpcErrorCodes";
 export { decodeWorktreeError, WorktreeError } from "./clientWorktree";
 export type { WorktreeErrorDetail } from "./clientWorktree";
 export { workflowIDSchema } from "./schemas/workflowID";
+export { nonBlankString } from "./schemas/common";
 export {
   decodeWorktreeSetupRetainedError,
   parseTaskSetupRecoveryDetail,

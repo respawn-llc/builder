@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { ContractError, RpcError } from "./errors";
+import { rpcErrorCodes } from "./rpcErrorCodes";
 import { parseSetupOperationID, type SetupOperationID } from "./setupOperationID";
 import { registeredWorktreeTopologySchema, type RegisteredWorktreeTopology } from "./schemas/worktree";
 import { workflowExecutionTargetSelectionSchema } from "./schemas/workflowExecutionTarget";
@@ -165,7 +166,7 @@ const retainedErrorSchema = z
   .strict();
 
 export function decodeWorktreeSetupRetainedError(error: unknown): WorktreeSetupRetainedError | null {
-  if (!(error instanceof RpcError) || error.code !== -32039) return null;
+  if (!(error instanceof RpcError) || error.code !== rpcErrorCodes.worktreeSetupRetained) return null;
   const parsed = retainedErrorSchema.safeParse(error.data);
   return parsed.success
     ? new WorktreeSetupRetainedError(error, {
