@@ -41,27 +41,29 @@ func TestRuntimeClientMainViewDoesNotRefreshCachedSnapshotBehindUIBack(t *testin
 }
 
 type reconnectRetryRuntimeControlClient struct {
-	mu               sync.Mutex
-	firstSubmitErr   error
-	firstRecordErr   error
-	appendErr        error
-	compactErr       error
-	compactCalls     int
-	showGoalErr      error
-	showGoalCalls    int
-	submitCalls      int
-	recordCalls      int
-	submitRequestID  []string
-	recordRequestID  []string
-	localEntries     []serverapi.RuntimeAppendCommittedEntryRequest
-	showGoalResp     serverapi.RuntimeGoalShowResponse
-	setGoalResp      serverapi.RuntimeGoalShowResponse
-	pauseGoalResp    serverapi.RuntimeGoalShowResponse
-	resumeGoalResp   serverapi.RuntimeGoalShowResponse
-	completeGoalResp serverapi.RuntimeGoalShowResponse
-	clearGoalResp    serverapi.RuntimeGoalShowResponse
-	interruptResp    serverapi.RuntimeInterruptResponse
-	interruptReq     serverapi.RuntimeInterruptRequest
+	mu                  sync.Mutex
+	firstSubmitErr      error
+	firstRecordErr      error
+	appendErr           error
+	compactErr          error
+	compactCalls        int
+	compactContextErr   error
+	compactContextCalls int
+	showGoalErr         error
+	showGoalCalls       int
+	submitCalls         int
+	recordCalls         int
+	submitRequestID     []string
+	recordRequestID     []string
+	localEntries        []serverapi.RuntimeAppendCommittedEntryRequest
+	showGoalResp        serverapi.RuntimeGoalShowResponse
+	setGoalResp         serverapi.RuntimeGoalShowResponse
+	pauseGoalResp       serverapi.RuntimeGoalShowResponse
+	resumeGoalResp      serverapi.RuntimeGoalShowResponse
+	completeGoalResp    serverapi.RuntimeGoalShowResponse
+	clearGoalResp       serverapi.RuntimeGoalShowResponse
+	interruptResp       serverapi.RuntimeInterruptResponse
+	interruptReq        serverapi.RuntimeInterruptRequest
 }
 
 func (c *reconnectRetryRuntimeControlClient) submitRequestIDs() []string {
@@ -139,7 +141,10 @@ func (c *reconnectRetryRuntimeControlClient) SubmitUserShellCommand(context.Cont
 }
 
 func (c *reconnectRetryRuntimeControlClient) CompactContext(context.Context, serverapi.RuntimeCompactContextRequest) error {
-	return nil
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.compactContextCalls++
+	return c.compactContextErr
 }
 
 func (c *reconnectRetryRuntimeControlClient) Interrupt(_ context.Context, req serverapi.RuntimeInterruptRequest) (serverapi.RuntimeInterruptResponse, error) {
@@ -457,6 +462,32 @@ func TestRuntimeClientSubmitUserMessageRecoversRuntimeUnavailableAndReusesReques
 	}
 	if got := controls.submitRequestIDs(); len(got) != 2 || got[0] == "" || got[0] != got[1] {
 		t.Fatalf("submit request ids = %+v, want same non-empty id across retry", got)
+	}
+}
+
+func TestRuntimeClientCompactNotAcceptedUnavailableDoesNotReactivateOrRetry(t *testing.T) {
+	joined := serverapi.NewRuntimeCommandNotAcceptedError(serverapi.ErrRuntimeUnavailable)
+	controls := &reconnectRetryRuntimeControlClient{compactContextErr: joined}
+	runtimeClient := newTestSessionRuntimeClientWithControls(controls)
+	reactivator := newRuntimeReactivator()
+	recoveryCalls := 0
+	reactivator.SetReactivateFunc(func(context.Context) error {
+		recoveryCalls++
+		return nil
+	})
+	runtimeClient.SetRuntimeReactivator(reactivator)
+
+	err := runtimeClient.CompactRuntime(context.Background(), clientui.RuntimeCompactRequest{})
+	if err != joined ||
+		!errors.Is(err, serverapi.ErrRuntimeCommandNotAccepted) ||
+		!errors.Is(err, serverapi.ErrRuntimeUnavailable) {
+		t.Fatalf("CompactRuntime error = %v, want unchanged joined not-accepted/unavailable error", err)
+	}
+	if controls.compactContextCalls != 1 {
+		t.Fatalf("compact control calls = %d, want 1", controls.compactContextCalls)
+	}
+	if recoveryCalls != 0 {
+		t.Fatalf("runtime reactivation calls = %d, want 0", recoveryCalls)
 	}
 }
 
