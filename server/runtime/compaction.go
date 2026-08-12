@@ -522,7 +522,7 @@ func (e *Engine) compactNowWithAcceptance(ctx context.Context, stepID string, mo
 	if windowTokens <= 0 {
 		windowTokens = e.compactionPlannerState().contextWindowTokens(e.compactionPlanningSnapshot())
 	}
-	inputTokens := estimateItemsTokens(e.transcriptRuntimeState().SnapshotItems())
+	inputTokens := e.estimatePostCompactionInputTokens(ctx)
 	compactedUsage := llm.Usage{
 		InputTokens:  inputTokens,
 		OutputTokens: 0,

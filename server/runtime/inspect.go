@@ -8,10 +8,10 @@ import (
 )
 
 // PrepareInspectionRequest builds the provider-agnostic llm.Request for a session
-// using the exact production request-assembly path, WITHOUT running a model turn
-// or performing any network I/O. It is an operator-only diagnostic seam used by
-// offline inspection tooling to capture the request shape that would be sent to a
-// provider.
+// using the production request-assembly path, WITHOUT running a model turn or
+// performing any network I/O. It is an operator-only diagnostic seam used by
+// offline inspection tooling to capture request shape only. It does not
+// reproduce provider token accounting or compaction/context decisions.
 //
 // The engine must already be constructed (which auto-hydrates the active transcript
 // segment via restoreMessages). It prepares the same meta context that a live turn

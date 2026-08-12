@@ -549,9 +549,9 @@ func TestCompactNowReconcilesLiveUsageWhenFinalUsageObserverFails(t *testing.T) 
 	}
 
 	liveUsage := fixture.engine.ContextUsage()
-	expectedInputTokens := estimateItemsTokens(fixture.engine.transcriptRuntimeState().SnapshotItems())
+	expectedInputTokens := fixture.engine.estimatePostCompactionInputTokens(context.Background())
 	if liveUsage.UsedTokens != expectedInputTokens {
-		t.Fatalf("live compacted usage = %+v, want estimated input tokens %d", liveUsage, expectedInputTokens)
+		t.Fatalf("live compacted usage = %+v, want estimated request input tokens %d", liveUsage, expectedInputTokens)
 	}
 	if persisted := fixture.store.Meta().UsageState; persisted == nil ||
 		persisted.InputTokens != expectedInputTokens ||

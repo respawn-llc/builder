@@ -1,6 +1,7 @@
-// Command dumpmodelrequest captures a semantically equivalent model-request
-// payload for a Kent session without executing a model turn or performing any
-// network I/O.
+// Command dumpmodelrequest captures a production-request-assembly-equivalent
+// model-request payload for a Kent session without executing a model turn or
+// performing any network I/O. It does not reproduce provider token accounting
+// or compaction/context decisions.
 //
 // Given a session ID (and an optional persistence root), it resolves the session
 // via the SQLite metadata index, reconstructs the production request-assembly path
@@ -9,7 +10,7 @@
 // provider-agnostic llm.Request to a file.
 //
 // Payload parameters come from the production HTTPTransport.buildPayload path.
-// The diagnostic JSON is semantically equivalent but may differ byte-for-byte
+// The diagnostic JSON is request-shape equivalent but may differ byte-for-byte
 // from the openai-go SDK HTTP body because JSON escaping can differ. No proxy,
 // mock, or live OpenAI request is involved.
 //
@@ -93,18 +94,27 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 type capturedRequest struct {
-	SessionID   string          `json:"session_id"`
-	Provider    string          `json:"provider"`
-	Model       string          `json:"model"`
-	GeneratedAt string          `json:"generated_at"`
-	WirePayload json.RawMessage `json:"wire_payload"`
-	WireRaw     string          `json:"wire_payload_raw"`
-	Request     llm.Request     `json:"request"`
+	SessionID   string              `json:"session_id"`
+	Provider    string              `json:"provider"`
+	Model       string              `json:"model"`
+	GeneratedAt string              `json:"generated_at"`
+	Semantics   inspectionSemantics `json:"semantics"`
+	WirePayload json.RawMessage     `json:"wire_payload"`
+	WireRaw     string              `json:"wire_payload_raw"`
+	Request     llm.Request         `json:"request"`
 }
 
-// captureSessionRequest reproduces the production request-prep path for a session
-// and returns the prepared provider-agnostic request plus semantically equivalent
-// OpenAI payload JSON. No model turn runs and no HTTP is performed.
+type inspectionSemantics struct {
+	RequestAssembly string `json:"request_assembly"`
+	TokenAccounting string `json:"token_accounting"`
+	Compaction      string `json:"compaction"`
+}
+
+// captureSessionRequest reproduces the production request-assembly path for a
+// session and returns the prepared provider-agnostic request plus an equivalent
+// OpenAI payload JSON. The result is request-shape equivalent only: token
+// accounting and compaction/context decisions are not reproduced. No model turn
+// runs and no HTTP is performed.
 func captureSessionRequest(
 	ctx context.Context,
 	persistenceRoot,
@@ -286,6 +296,11 @@ func captureSessionRequest(
 		Provider:    string(caps.ProviderID),
 		Model:       req.Model,
 		GeneratedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		Semantics: inspectionSemantics{
+			RequestAssembly: "production_equivalent",
+			TokenAccounting: "estimate_only",
+			Compaction:      "estimate_only",
+		},
 		WirePayload: prettyWire,
 		WireRaw:     string(wireBytes),
 		Request:     req,
