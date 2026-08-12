@@ -1,8 +1,6 @@
 package workflow
 
 import (
-	"strings"
-
 	"core/shared/runtimeids"
 )
 
@@ -16,11 +14,12 @@ const (
 	SessionReuseGuaranteedCACReuse     SessionReuseClassification = "guaranteed_cac_reuse"
 )
 
-// SessionReuseAssociation is bounded retained provenance supplied by the
-// Workflow store. Associations are ordered from oldest to newest.
+// SessionReuseAssociation is bounded current retained authority supplied by
+// the Workflow store, including the exact source proof used for freshness.
 type SessionReuseAssociation struct {
-	SessionID   runtimeids.SessionID
-	CurrentNode CurrentNodeReference
+	SessionID       runtimeids.SessionID
+	SourceSessionID runtimeids.SessionID
+	CurrentNode     CurrentNodeReference
 }
 
 // SessionReuseAnalysisInput contains the execution-valid graph slice needed
@@ -37,11 +36,7 @@ type SessionReuseAnalysisInput struct {
 // only Context Source forms that consult retained provenance.
 func SessionReuseAssociationReferences(input SessionReuseAnalysisInput) []CurrentNodeReference {
 	taskID := input.CompletedCurrentNode.Reference.TaskID
-	topology := newFanoutTopology(input.Workflow)
-	nodeIDsByKey := make(map[ModelKey]NodeID, len(input.Workflow.Nodes))
-	for _, node := range input.Workflow.Nodes {
-		nodeIDsByKey[NodeKey(node)] = NodeIDOf(node)
-	}
+	topology := newWorkflowTraversalTopology(input.Workflow)
 
 	references := make([]CurrentNodeReference, 0, len(input.Workflow.Edges)+1)
 	seen := make(map[CurrentNodeReferenceKey]struct{}, cap(references))
@@ -68,18 +63,7 @@ func SessionReuseAssociationReferences(input SessionReuseAnalysisInput) []Curren
 		)
 	}
 
-	type referenceState struct {
-		nodeID NodeID
-		branch reuseBranch
-	}
-	initial := referenceState{
-		nodeID: input.CompletedCurrentNode.Reference.NodeID,
-		branch: reuseBranchForReference(input.CompletedCurrentNode.Reference),
-	}
-	visited := make(map[referenceState]struct{})
-	queue := make([]referenceState, 0, len(input.AcceptedBranches))
-
-	appendContextReference := func(sourceState referenceState, targetBranch reuseBranch, edge Edge, target Node) {
+	appendContextReference := func(sourceBranch, targetBranch reuseBranch, edge Edge, target Node) {
 		if target == nil {
 			return
 		}
@@ -89,7 +73,7 @@ func SessionReuseAssociationReferences(input SessionReuseAnalysisInput) []Curren
 			return
 		}
 		source := CanonicalContextSource(edge.ContextSource)
-		lookupBranch, usesAssociation := reuseContextLookupBranch(sourceState.branch, targetBranch, source)
+		lookupBranch, usesAssociation := reuseContextLookupBranch(sourceBranch, targetBranch, source)
 		if !usesAssociation {
 			return
 		}
@@ -100,7 +84,7 @@ func SessionReuseAssociationReferences(input SessionReuseAnalysisInput) []Curren
 		}
 		switch source.Kind {
 		case ContextSourceSelectedNode:
-			if nodeID, ok := nodeIDsByKey[source.NodeKey]; ok {
+			if nodeID, ok := topology.nodeIDsByKey[source.NodeKey]; ok {
 				appendReference(nodeID, branch)
 			}
 		case ContextSourcePreviousTarget, ContextSourcePreviousTargetOrNew:
@@ -108,38 +92,42 @@ func SessionReuseAssociationReferences(input SessionReuseAnalysisInput) []Curren
 		}
 	}
 
-	enqueue := func(state referenceState, edge Edge) {
-		target, exists := topology.nodesByID[edge.TargetNodeID]
-		if !exists {
-			return
-		}
-		targetBranch := nextReuseBranch(
-			state.branch,
-			edge,
-			target,
-			len(topology.edgesByGroup[edge.TransitionGroupID]),
-		)
-		appendContextReference(state, targetBranch, edge, target)
-		next := referenceState{nodeID: edge.TargetNodeID, branch: targetBranch}
-		if _, exists := visited[next]; exists {
-			return
-		}
-		visited[next] = struct{}{}
-		queue = append(queue, next)
+	rootMode := workflowTraversalCompleteInvocation
+	if input.CompletedCurrentNode.Reference.IsBranchScoped() {
+		rootMode = workflowTraversalPartialInvocation
 	}
-
-	for _, edge := range input.AcceptedBranches {
-		enqueue(initial, edge)
-	}
-	for len(queue) > 0 {
-		state := queue[0]
-		queue = queue[1:]
-		for _, group := range topology.groupsBySource[state.nodeID] {
-			for _, edge := range topology.edgesByGroup[group.ID] {
-				enqueue(state, edge)
-			}
-		}
-	}
+	runWorkflowTraversal(
+		topology,
+		workflowTraversalState[struct{}]{
+			nodeID:   input.CompletedCurrentNode.Reference.NodeID,
+			branch:   reuseBranchForReference(input.CompletedCurrentNode.Reference),
+			analysis: struct{}{},
+		},
+		input.AcceptedBranches,
+		rootMode,
+		workflowTraversalAdapter[struct{}, struct{}]{
+			applyEdge: func(
+				state workflowTraversalState[struct{}],
+				edge Edge,
+				target Node,
+				targetBranch reuseBranch,
+			) (workflowTraversalTransition[struct{}, struct{}], bool) {
+				appendContextReference(state.branch, targetBranch, edge, target)
+				return workflowTraversalTransition[struct{}, struct{}]{
+					target: workflowTraversalState[struct{}]{analysis: struct{}{}},
+				}, true
+			},
+			reduceJoin: func(
+				arrivals []workflowTraversalJoinArrival[struct{}, struct{}],
+			) []workflowTraversalJoinReduction[struct{}, struct{}] {
+				if len(arrivals) == 0 {
+					return nil
+				}
+				return []workflowTraversalJoinReduction[struct{}, struct{}]{{analysis: struct{}{}}}
+			},
+			sameAnalysis: func(struct{}, struct{}) bool { return true },
+		},
+	)
 	return references
 }
 
@@ -154,23 +142,11 @@ func ClassifyWorkflowSessionReuse(input SessionReuseAnalysisInput) SessionReuseC
 		return SessionReuseNone
 	}
 
+	topology := newWorkflowTraversalTopology(input.Workflow)
 	analyzer := sessionReuseAnalyzer{
 		input:              input,
 		completedSessionID: completedSessionID,
-		nodesByID:          make(map[NodeID]Node, len(input.Workflow.Nodes)),
-		groupsBySource:     make(map[NodeID][]TransitionGroup, len(input.Workflow.TransitionGroups)),
-		edgesByGroup:       make(map[TransitionGroupID][]Edge, len(input.Workflow.Edges)),
-		nodeIDsByKey:       make(map[ModelKey]NodeID, len(input.Workflow.Nodes)),
-	}
-	for _, node := range input.Workflow.Nodes {
-		analyzer.nodesByID[NodeIDOf(node)] = node
-		analyzer.nodeIDsByKey[NodeKey(node)] = NodeIDOf(node)
-	}
-	for _, group := range input.Workflow.TransitionGroups {
-		analyzer.groupsBySource[group.SourceNodeID] = append(analyzer.groupsBySource[group.SourceNodeID], group)
-	}
-	for _, edge := range input.Workflow.Edges {
-		analyzer.edgesByGroup[edge.TransitionGroupID] = append(analyzer.edgesByGroup[edge.TransitionGroupID], edge)
+		topology:           topology,
 	}
 
 	initial := reusePathState{
@@ -179,18 +155,80 @@ func ClassifyWorkflowSessionReuse(input SessionReuseAnalysisInput) SessionReuseC
 		currentLineage:   reuseLineageCompleted,
 		completedDormant: acceptedBranchesFanout(input.AcceptedBranches),
 	}
-	initialTransitions := make([]reuseTransition, 0, len(input.AcceptedBranches))
-	for _, edge := range input.AcceptedBranches {
-		transition, ok := analyzer.applyEdge(initial, edge)
-		if ok {
-			initialTransitions = append(initialTransitions, transition)
-		}
+	if sourceSessionID, exact := input.CompletedCurrentNode.ContinuationSource.ExactSessionID(); exact {
+		initial.activeSourceSessionID = sourceSessionID
+		initial.activeSourceKnown = true
+	} else {
+		initial.activeSourceSessionID = completedSessionID
+		initial.activeSourceKnown = true
 	}
+	rootMode := workflowTraversalCompleteInvocation
+	if input.CompletedCurrentNode.Reference.IsBranchScoped() {
+		rootMode = workflowTraversalPartialInvocation
+	}
+	traversed := runWorkflowTraversal(
+		topology,
+		workflowTraversalState[reusePathState]{
+			nodeID:   input.CompletedCurrentNode.Reference.NodeID,
+			branch:   reuseBranchForReference(input.CompletedCurrentNode.Reference),
+			analysis: initial,
+		},
+		input.AcceptedBranches,
+		rootMode,
+		workflowTraversalAdapter[reusePathState, reuseTransitionMetadata]{
+			applyEdge: func(
+				state workflowTraversalState[reusePathState],
+				edge Edge,
+				_ Node,
+				_ reuseBranch,
+			) (workflowTraversalTransition[reusePathState, reuseTransitionMetadata], bool) {
+				transition, ok := analyzer.applyEdge(state.analysis, edge)
+				if !ok {
+					return workflowTraversalTransition[reusePathState, reuseTransitionMetadata]{}, false
+				}
+				return workflowTraversalTransition[reusePathState, reuseTransitionMetadata]{
+					target: workflowTraversalState[reusePathState]{
+						nodeID:   transition.target.nodeID,
+						branch:   transition.target.branch,
+						analysis: transition.target,
+					},
+					metadata: reuseTransitionMetadata{
+						possibleReuse: transition.possibleReuse,
+						guaranteedCAC: transition.guaranteedCAC,
+					},
+				}, true
+			},
+			reduceJoin: func(
+				arrivals []workflowTraversalJoinArrival[reusePathState, reuseTransitionMetadata],
+			) []workflowTraversalJoinReduction[reusePathState, reuseTransitionMetadata] {
+				reductions := make(
+					[]workflowTraversalJoinReduction[reusePathState, reuseTransitionMetadata],
+					0,
+					len(arrivals),
+				)
+				for _, arrival := range arrivals {
+					reductions = append(reductions, workflowTraversalJoinReduction[reusePathState, reuseTransitionMetadata]{
+						analysis: arrival.state.analysis,
+						metadata: arrival.metadata,
+					})
+				}
+				return reductions
+			},
+			sameAnalysis: sameReusePathState,
+			mergeAnalysis: func(left *reusePathState, right reusePathState) bool {
+				merged, changed := mergeOverwritten(left.overwritten, right.overwritten)
+				if changed {
+					left.overwritten = merged
+				}
+				return changed
+			},
+		},
+	)
+	initialTransitions, graph := reuseGraphFromTraversal(traversed)
 	if len(initialTransitions) == 0 {
 		return SessionReuseNone
 	}
 
-	graph := analyzer.buildGraph(initialTransitions)
 	if analyzer.guaranteedAccepted(initialTransitions, graph) {
 		return SessionReuseGuaranteedCACReuse
 	}
@@ -215,12 +253,14 @@ type reuseBranch struct {
 }
 
 type reusePathState struct {
-	nodeID           NodeID
-	branch           reuseBranch
-	currentLineage   reuseLineage
-	completedDormant bool
-	dormancyBlocked  bool
-	overwritten      map[reuseOverwriteKey]reuseOverwriteStatus
+	nodeID                NodeID
+	branch                reuseBranch
+	currentLineage        reuseLineage
+	activeSourceSessionID runtimeids.SessionID
+	activeSourceKnown     bool
+	completedDormant      bool
+	dormancyBlocked       bool
+	overwritten           map[reuseOverwriteKey]reuseOverwriteStatus
 }
 
 type reuseOverwriteKey struct {
@@ -241,6 +281,11 @@ type reuseTransition struct {
 	guaranteedCAC bool
 }
 
+type reuseTransitionMetadata struct {
+	possibleReuse bool
+	guaranteedCAC bool
+}
+
 type reuseGroup struct {
 	transitions []reuseTransition
 }
@@ -248,20 +293,22 @@ type reuseGroup struct {
 type sessionReuseAnalyzer struct {
 	input              SessionReuseAnalysisInput
 	completedSessionID runtimeids.SessionID
-	nodesByID          map[NodeID]Node
-	nodeIDsByKey       map[ModelKey]NodeID
-	groupsBySource     map[NodeID][]TransitionGroup
-	edgesByGroup       map[TransitionGroupID][]Edge
+	topology           workflowTraversalTopology
 }
 
 func (a sessionReuseAnalyzer) applyEdge(state reusePathState, edge Edge) (reuseTransition, bool) {
-	target, exists := a.nodesByID[edge.TargetNodeID]
+	target, exists := a.topology.nodesByID[edge.TargetNodeID]
 	if !exists {
 		return reuseTransition{}, false
 	}
-	groupEdges := a.edgesByGroup[edge.TransitionGroupID]
+	groupEdges := a.topology.edgesByGroup[edge.TransitionGroupID]
 	targetBranch := a.nextBranch(state.branch, edge, target, len(groupEdges))
-	targetLineage, selected := a.targetLineage(state, edge, target, targetBranch)
+	targetLineage, activeSourceSessionID, activeSourceKnown, selected := a.targetContext(
+		state,
+		edge,
+		target,
+		targetBranch,
+	)
 	if !selected {
 		return reuseTransition{}, false
 	}
@@ -278,12 +325,14 @@ func (a sessionReuseAnalyzer) applyEdge(state reusePathState, edge Edge) (reuseT
 		completedDormant = true
 	}
 	targetState := reusePathState{
-		nodeID:           edge.TargetNodeID,
-		branch:           targetBranch,
-		currentLineage:   targetLineage,
-		completedDormant: completedDormant,
-		dormancyBlocked:  dormancyBlocked,
-		overwritten:      cloneOverwritten(state.overwritten),
+		nodeID:                edge.TargetNodeID,
+		branch:                targetBranch,
+		currentLineage:        targetLineage,
+		activeSourceSessionID: activeSourceSessionID,
+		activeSourceKnown:     activeSourceKnown,
+		completedDormant:      completedDormant,
+		dormancyBlocked:       dormancyBlocked,
+		overwritten:           cloneOverwritten(state.overwritten),
 	}
 	if target.Kind() == NodeKindAgent &&
 		targetLineage != reuseLineageAbsent &&
@@ -309,62 +358,72 @@ func (a sessionReuseAnalyzer) applyEdge(state reusePathState, edge Edge) (reuseT
 	}, true
 }
 
-func (a sessionReuseAnalyzer) targetLineage(state reusePathState, edge Edge, target Node, targetBranch reuseBranch) (reuseLineage, bool) {
+func (a sessionReuseAnalyzer) targetContext(
+	state reusePathState,
+	edge Edge,
+	target Node,
+	targetBranch reuseBranch,
+) (reuseLineage, runtimeids.SessionID, bool, bool) {
 	if target.Kind() != NodeKindAgent {
-		return reuseLineageAbsent, true
+		return reuseLineageAbsent, state.activeSourceSessionID, state.activeSourceKnown, true
 	}
 	switch edge.ContextMode {
 	case ContextModeNewSession:
-		return reuseLineageOther, true
+		return reuseLineageOther, runtimeids.SessionID{}, false, true
 	case ContextModeContinueSession, ContextModeCompactAndContinueSession:
 		return a.resolveContextSource(state, edge.ContextSource, target, targetBranch)
 	default:
-		return reuseLineageUnknown, true
+		return reuseLineageUnknown, runtimeids.SessionID{}, false, true
 	}
 }
 
-func (a sessionReuseAnalyzer) resolveContextSource(state reusePathState, source ContextSource, target Node, targetBranch reuseBranch) (reuseLineage, bool) {
+func (a sessionReuseAnalyzer) resolveContextSource(
+	state reusePathState,
+	source ContextSource,
+	target Node,
+	targetBranch reuseBranch,
+) (reuseLineage, runtimeids.SessionID, bool, bool) {
 	canonical := CanonicalContextSource(source)
 	switch canonical.Kind {
 	case ContextSourceImmediateSource:
-		return state.currentLineage, true
+		return state.currentLineage, state.activeSourceSessionID, state.activeSourceKnown, true
 	case ContextSourceSelectedNode:
-		nodeID, exists := a.nodeIDsByKey[canonical.NodeKey]
+		nodeID, exists := a.topology.nodeIDsByKey[canonical.NodeKey]
 		if !exists {
-			return reuseLineageUnknown, true
+			return reuseLineageUnknown, runtimeids.SessionID{}, false, true
 		}
 		lookupBranch, _ := reuseContextLookupBranch(state.branch, targetBranch, canonical)
-		return a.associatedLineage(lookupBranch, state.overwritten, nodeID, true)
+		lineage, association, found := a.associatedLineage(state, lookupBranch, nodeID, true, false)
+		if !found {
+			return lineage, runtimeids.SessionID{}, false, true
+		}
+		return lineage, association.SessionID, true, true
 	case ContextSourcePreviousTarget:
 		lookupBranch, _ := reuseContextLookupBranch(state.branch, targetBranch, canonical)
-		return a.associatedLineage(lookupBranch, state.overwritten, NodeIDOf(target), false)
+		lineage, _, found := a.associatedLineage(state, lookupBranch, NodeIDOf(target), false, true)
+		return lineage, state.activeSourceSessionID, state.activeSourceKnown, found
 	case ContextSourcePreviousTargetOrNew:
 		lookupBranch, _ := reuseContextLookupBranch(state.branch, targetBranch, canonical)
-		lineage, found := a.associatedLineage(lookupBranch, state.overwritten, NodeIDOf(target), true)
+		lineage, _, found := a.associatedLineage(state, lookupBranch, NodeIDOf(target), true, true)
 		if !found {
-			return reuseLineageOther, true
+			return reuseLineageOther, runtimeids.SessionID{}, false, true
 		}
-		return lineage, true
+		return lineage, state.activeSourceSessionID, state.activeSourceKnown, true
 	default:
-		return reuseLineageUnknown, true
+		return reuseLineageUnknown, runtimeids.SessionID{}, false, true
 	}
 }
 
-func reuseContextLookupBranch(sourceBranch, targetBranch reuseBranch, source ContextSource) (reuseBranch, bool) {
-	switch CanonicalContextSource(source).Kind {
-	case ContextSourceSelectedNode:
-		return sourceBranch, true
-	case ContextSourcePreviousTarget, ContextSourcePreviousTargetOrNew:
-		return targetBranch, true
-	default:
-		return reuseBranch{}, false
-	}
-}
-
-func (a sessionReuseAnalyzer) associatedLineage(branch reuseBranch, overwritten map[reuseOverwriteKey]reuseOverwriteStatus, nodeID NodeID, optional bool) (reuseLineage, bool) {
-	status, overwrittenPath := overwritten[reuseOverwriteKey{nodeID: nodeID, branch: branch}]
+func (a sessionReuseAnalyzer) associatedLineage(
+	state reusePathState,
+	branch reuseBranch,
+	nodeID NodeID,
+	optional bool,
+	retainedTarget bool,
+) (reuseLineage, SessionReuseAssociation, bool) {
+	status, overwrittenPath := state.overwritten[reuseOverwriteKey{nodeID: nodeID, branch: branch}]
 	if overwrittenPath && status == reuseOverwriteDefinite {
-		return reuseLineageOther, true
+		return reuseLineageOther, SessionReuseAssociation{}, true
 	}
 	for index := len(a.input.RetainedAssociations) - 1; index >= 0; index-- {
 		association := a.input.RetainedAssociations[index]
@@ -373,21 +432,34 @@ func (a sessionReuseAnalyzer) associatedLineage(branch reuseBranch, overwritten 
 			!sameReuseBranch(branch, association.CurrentNode) {
 			continue
 		}
+		if retainedTarget && !a.retainedTargetSourceMatches(state, association.SourceSessionID) {
+			return reuseLineageOther, association, true
+		}
 		if association.SessionID == a.completedSessionID {
 			if overwrittenPath && status == reuseOverwriteMaybe {
-				return reuseLineageUnknown, true
+				return reuseLineageUnknown, association, true
 			}
-			return reuseLineageCompleted, true
+			return reuseLineageCompleted, association, true
 		}
-		return reuseLineageOther, true
+		return reuseLineageOther, association, true
 	}
 	if overwrittenPath {
-		return reuseLineageOther, true
+		return reuseLineageOther, SessionReuseAssociation{}, true
 	}
 	if optional {
-		return reuseLineageOther, false
+		return reuseLineageOther, SessionReuseAssociation{}, false
 	}
-	return reuseLineageAbsent, false
+	return reuseLineageAbsent, SessionReuseAssociation{}, false
+}
+
+func (a sessionReuseAnalyzer) retainedTargetSourceMatches(
+	state reusePathState,
+	sourceSessionID runtimeids.SessionID,
+) bool {
+	if sourceSessionID.IsZero() {
+		return false
+	}
+	return state.activeSourceKnown && sourceSessionID == state.activeSourceSessionID
 }
 
 func sameReuseBranch(branch reuseBranch, reference CurrentNodeReference) bool {
@@ -420,19 +492,6 @@ func (a sessionReuseAnalyzer) nextBranch(current reuseBranch, edge Edge, target 
 	return nextReuseBranch(current, edge, target, groupEdgeCount)
 }
 
-func nextReuseBranch(current reuseBranch, edge Edge, target Node, groupEdgeCount int) reuseBranch {
-	if target.Kind() == NodeKindJoin {
-		return reuseBranch{}
-	}
-	if groupEdgeCount > 1 {
-		key := TransitionBranchKey(strings.TrimSpace(string(edge.Key)))
-		if key != "" {
-			return reuseBranch{key: key, scoped: true}
-		}
-	}
-	return current
-}
-
 func transitionBranchPointer(reference CurrentNodeReference) *TransitionBranchKey {
 	branch, scoped := reference.TransitionBranchKey()
 	if !scoped {
@@ -447,91 +506,47 @@ type reuseGraph struct {
 	possibleReuse bool
 }
 
-func (a sessionReuseAnalyzer) buildGraph(initial []reuseTransition) reuseGraph {
-	graph := reuseGraph{}
-	processed := make(map[int]bool)
-	// Overwritten provenance is merged by union when structural path states
-	// converge. This deliberately trades some possible-reuse precision for a
-	// bounded worklist instead of enumerating every overwrite subset.
-	addState := func(state reusePathState) (int, bool) {
-		if id, exists := graphStateID(state, graph.states); exists {
-			merged, changed := mergeOverwritten(graph.states[id].overwritten, state.overwritten)
-			if changed {
-				graph.states[id].overwritten = merged
-				graph.groups[id] = nil
-				processed[id] = false
-				return id, true
-			}
-			return id, false
-		}
-		id := len(graph.states)
-		graph.states = append(graph.states, state)
-		graph.groups = append(graph.groups, nil)
-		processed[id] = false
-		return id, true
+func reuseGraphFromTraversal(
+	traversed workflowTraversalGraph[reusePathState, reuseTransitionMetadata],
+) ([]reuseTransition, reuseGraph) {
+	initial := make([]reuseTransition, 0, len(traversed.initial))
+	graph := reuseGraph{
+		states: make([]reusePathState, len(traversed.states)),
+		groups: make([][]reuseGroup, len(traversed.groups)),
 	}
-	queue := make([]int, 0, len(initial))
-	queued := make(map[int]struct{}, len(initial))
-	enqueue := func(stateID int) {
-		if _, exists := queued[stateID]; exists {
-			return
-		}
-		queued[stateID] = struct{}{}
-		queue = append(queue, stateID)
+	for index, state := range traversed.states {
+		graph.states[index] = state.analysis
 	}
-	for _, transition := range initial {
-		if transition.possibleReuse {
+	for _, transition := range traversed.initial {
+		reuseTransition := reuseTransition{
+			target:        transition.target.analysis,
+			possibleReuse: transition.metadata.possibleReuse,
+			guaranteedCAC: transition.metadata.guaranteedCAC,
+		}
+		initial = append(initial, reuseTransition)
+		if reuseTransition.possibleReuse {
 			graph.possibleReuse = true
 		}
-		stateID, _ := addState(transition.target)
-		enqueue(stateID)
 	}
-	for len(queue) > 0 {
-		stateID := queue[0]
-		queue = queue[1:]
-		delete(queued, stateID)
-		if processed[stateID] {
-			continue
-		}
-		processed[stateID] = true
-		groups := a.stateGroups(graph.states[stateID])
-		if groups == nil {
-			groups = []reuseGroup{}
-		}
-		graph.groups[stateID] = groups
-		for _, group := range groups {
+	for stateID, groups := range traversed.groups {
+		graph.groups[stateID] = make([]reuseGroup, len(groups))
+		for groupID, group := range groups {
+			transitions := make([]reuseTransition, 0, len(group.transitions))
 			for _, transition := range group.transitions {
-				if transition.possibleReuse {
+				reuseTransition := reuseTransition{
+					target:        transition.target.analysis,
+					possibleReuse: transition.metadata.possibleReuse,
+					guaranteedCAC: transition.metadata.guaranteedCAC,
+				}
+				transitions = append(transitions, reuseTransition)
+				if reuseTransition.possibleReuse {
 					graph.possibleReuse = true
 				}
-				targetID, changed := addState(transition.target)
-				if changed {
-					enqueue(targetID)
-				}
 			}
+			graph.groups[stateID][groupID] = reuseGroup{transitions: transitions}
 		}
 	}
-	return graph
-}
-
-func (a sessionReuseAnalyzer) stateGroups(state reusePathState) []reuseGroup {
-	groups := a.groupsBySource[state.nodeID]
-	if len(groups) == 0 {
-		return nil
-	}
-	result := make([]reuseGroup, 0, len(groups))
-	for _, group := range groups {
-		edges := a.edgesByGroup[group.ID]
-		transitions := make([]reuseTransition, 0, len(edges))
-		for _, edge := range edges {
-			transition, ok := a.applyEdge(state, edge)
-			if ok {
-				transitions = append(transitions, transition)
-			}
-		}
-		result = append(result, reuseGroup{transitions: transitions})
-	}
-	return result
+	return initial, graph
 }
 
 func (a sessionReuseAnalyzer) guaranteedAccepted(initial []reuseTransition, graph reuseGraph) bool {
@@ -693,6 +708,8 @@ func sameReusePathState(left, right reusePathState) bool {
 	if left.nodeID != right.nodeID ||
 		left.branch != right.branch ||
 		left.currentLineage != right.currentLineage ||
+		left.activeSourceSessionID != right.activeSourceSessionID ||
+		left.activeSourceKnown != right.activeSourceKnown ||
 		left.completedDormant != right.completedDormant ||
 		left.dormancyBlocked != right.dormancyBlocked {
 		return false
