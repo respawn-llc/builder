@@ -99,29 +99,31 @@ type currentNodePostTurnFinalization struct {
 	starts         []currentNodeQueuedStart
 }
 
+type currentNodeStore interface {
+	StartTask(context.Context, workflow.TaskID) (workflowstore.StartTaskResult, error)
+	InterruptedExecutableCurrentNodes(context.Context, workflow.TaskID) ([]workflow.CurrentNode, error)
+	PreflightTaskResume(context.Context, workflow.TaskID) ([]workflowstore.CurrentNodeResumeClassification, error)
+	AdmitCurrentNode(context.Context, workflow.CurrentNodeReference) error
+	ResumeCurrentNode(context.Context, workflow.CurrentNodeReference) (workflowstore.InterruptedCurrentNodeAttentionProjection, bool, error)
+	PendingApproval(context.Context, workflow.ApprovalID) (workflow.PendingApproval, error)
+	ApplyPendingApproval(context.Context, workflow.ApprovalID) (workflowstore.PendingApprovalApplyResult, error)
+	ApplyManualMove(context.Context, workflowstore.ManualMovePreparation, *workflowstore.ExecutionTargetCandidate) (workflowstore.ManualMoveResult, error)
+	InterruptAdmittedCurrentNode(context.Context, workflow.CurrentNodeReference, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) error
+	InterruptCurrentNode(context.Context, workflow.CurrentNodeReference, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) error
+	ReplaceUserInterruptionWithAssignmentFailure(context.Context, workflow.CurrentNodeReference, workflow.CurrentNodeInterruptionDetail) error
+	RecoverExecutableCurrentNodes(context.Context, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) ([]workflow.CurrentNodeReference, error)
+	ResolveIdleExecutableCurrentNode(context.Context, workflowstore.IdleCurrentNodeSelector) (workflow.CurrentNode, error)
+	CompleteCurrentNode(context.Context, workflowstore.CurrentNodeCompletionRequest) (workflowstore.CurrentNodeCompletionResult, error)
+	RepairCurrentNodeSessionProvenanceForResume(context.Context, workflow.CurrentNode) error
+	ValidateCurrentNodeSessionBinding(context.Context, runtimeids.SessionID, workflow.CurrentNodeReference) error
+	TaskExecutionScope(context.Context, workflow.TaskID) (workflowstore.TaskExecutionScope, error)
+}
+
 // CurrentNodeController is the sole workflowruntime.Controller. Its mutex,
 // mutation permit, and Authority operations define the ordering for all
 // lifecycle, admission, interruption, and completion operations.
 type CurrentNodeController struct {
-	store interface {
-		StartTask(context.Context, workflow.TaskID) (workflowstore.StartTaskResult, error)
-		InterruptedExecutableCurrentNodes(context.Context, workflow.TaskID) ([]workflow.CurrentNode, error)
-		PreflightTaskResume(context.Context, workflow.TaskID) ([]workflowstore.CurrentNodeResumeClassification, error)
-		AdmitCurrentNode(context.Context, workflow.CurrentNodeReference) error
-		ResumeCurrentNode(context.Context, workflow.CurrentNodeReference) (workflowstore.InterruptedCurrentNodeAttentionProjection, bool, error)
-		PendingApproval(context.Context, workflow.ApprovalID) (workflow.PendingApproval, error)
-		ApplyPendingApproval(context.Context, workflow.ApprovalID) (workflowstore.PendingApprovalApplyResult, error)
-		ApplyManualMove(context.Context, workflowstore.ManualMovePreparation, *workflowstore.ExecutionTargetCandidate) (workflowstore.ManualMoveResult, error)
-		InterruptAdmittedCurrentNode(context.Context, workflow.CurrentNodeReference, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) error
-		InterruptCurrentNode(context.Context, workflow.CurrentNodeReference, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) error
-		ReplaceUserInterruptionWithAssignmentFailure(context.Context, workflow.CurrentNodeReference, workflow.CurrentNodeInterruptionDetail) error
-		RecoverExecutableCurrentNodes(context.Context, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) ([]workflow.CurrentNodeReference, error)
-		ResolveIdleExecutableCurrentNode(context.Context, workflowstore.IdleCurrentNodeSelector) (workflow.CurrentNode, error)
-		CompleteCurrentNode(context.Context, workflowstore.CurrentNodeCompletionRequest) (workflowstore.CurrentNodeCompletionResult, error)
-		RepairCurrentNodeSessionProvenanceForResume(context.Context, workflow.CurrentNode) error
-		ValidateCurrentNodeSessionBinding(context.Context, runtimeids.SessionID, workflow.CurrentNodeReference) error
-		TaskExecutionScope(context.Context, workflow.TaskID) (workflowstore.TaskExecutionScope, error)
-	}
+	store     currentNodeStore
 	runner    CurrentNodeRunner
 	steerer   CurrentNodeAssignmentSteerer
 	authority *sessionruntime.Authority
@@ -163,25 +165,7 @@ type CurrentNodeController struct {
 }
 
 func NewCurrentNodeController(
-	store interface {
-		StartTask(context.Context, workflow.TaskID) (workflowstore.StartTaskResult, error)
-		InterruptedExecutableCurrentNodes(context.Context, workflow.TaskID) ([]workflow.CurrentNode, error)
-		PreflightTaskResume(context.Context, workflow.TaskID) ([]workflowstore.CurrentNodeResumeClassification, error)
-		AdmitCurrentNode(context.Context, workflow.CurrentNodeReference) error
-		ResumeCurrentNode(context.Context, workflow.CurrentNodeReference) (workflowstore.InterruptedCurrentNodeAttentionProjection, bool, error)
-		PendingApproval(context.Context, workflow.ApprovalID) (workflow.PendingApproval, error)
-		ApplyPendingApproval(context.Context, workflow.ApprovalID) (workflowstore.PendingApprovalApplyResult, error)
-		ApplyManualMove(context.Context, workflowstore.ManualMovePreparation, *workflowstore.ExecutionTargetCandidate) (workflowstore.ManualMoveResult, error)
-		InterruptAdmittedCurrentNode(context.Context, workflow.CurrentNodeReference, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) error
-		InterruptCurrentNode(context.Context, workflow.CurrentNodeReference, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) error
-		ReplaceUserInterruptionWithAssignmentFailure(context.Context, workflow.CurrentNodeReference, workflow.CurrentNodeInterruptionDetail) error
-		RecoverExecutableCurrentNodes(context.Context, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) ([]workflow.CurrentNodeReference, error)
-		ResolveIdleExecutableCurrentNode(context.Context, workflowstore.IdleCurrentNodeSelector) (workflow.CurrentNode, error)
-		CompleteCurrentNode(context.Context, workflowstore.CurrentNodeCompletionRequest) (workflowstore.CurrentNodeCompletionResult, error)
-		RepairCurrentNodeSessionProvenanceForResume(context.Context, workflow.CurrentNode) error
-		ValidateCurrentNodeSessionBinding(context.Context, runtimeids.SessionID, workflow.CurrentNodeReference) error
-		TaskExecutionScope(context.Context, workflow.TaskID) (workflowstore.TaskExecutionScope, error)
-	},
+	store currentNodeStore,
 	runner CurrentNodeRunner,
 	authority *sessionruntime.Authority,
 	permit *MutationPermit,
@@ -245,7 +229,7 @@ func (c *CurrentNodeController) CompleteCurrentNode(ctx context.Context, req wor
 		completed, err = c.CompleteIdleCurrentNode(ctx, workflowstore.IdleCurrentNodeSelector{
 			SessionID: req.SessionID,
 		}, req.TransitionID, req.OutputValues, req.Commentary)
-		committed = err == nil || len(completed.Mutation.Removed) != 0
+		committed = err == nil || completed.Committed()
 		if err == nil {
 			c.clearProtocolViolations(req.ScopeID)
 		}
@@ -848,14 +832,14 @@ func (c *CurrentNodeController) interruptOutcomeLessFinalization(reference workf
 		if closed {
 			return false, nil
 		}
-		diagnostic := errors.New("exact workflow execution finalized without a durable completion or interruption outcome")
+		cause := errors.New("exact workflow execution finalized without a durable completion or interruption outcome")
 		committed, diagnostic := classifyCurrentNodeInterruption(c.store.InterruptAdmittedCurrentNode(
 			ctx,
 			reference,
 			reasonCurrentNodeRuntimeFinalizedWithoutOutcome,
 			workflow.NewCurrentNodeInterruptionDetail(
 				string(reasonCurrentNodeRuntimeFinalizedWithoutOutcome),
-				diagnostic,
+				cause,
 			),
 		))
 		if !committed && errors.Is(diagnostic, sql.ErrNoRows) {

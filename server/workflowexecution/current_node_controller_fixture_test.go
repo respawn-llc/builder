@@ -171,14 +171,16 @@ type blockingCurrentNodeAssignmentSteerer struct {
 	siblingPrepared chan struct{}
 	receipt         session.CommitReceipt
 	err             error
+	startedOnce     sync.Once
+	siblingOnce     sync.Once
 }
 
-func (s blockingCurrentNodeAssignmentSteerer) SteerCurrentNodeAssignment(
+func (s *blockingCurrentNodeAssignmentSteerer) SteerCurrentNodeAssignment(
 	ctx context.Context,
 	reference workflow.CurrentNodeReference,
 ) (CurrentNodeAssignmentSteer, error) {
 	if reference.Equal(s.blocked) {
-		close(s.started)
+		s.startedOnce.Do(func() { close(s.started) })
 		select {
 		case <-s.release:
 		case <-ctx.Done():
@@ -189,7 +191,7 @@ func (s blockingCurrentNodeAssignmentSteerer) SteerCurrentNodeAssignment(
 			err:     s.err,
 		}, nil
 	}
-	close(s.siblingPrepared)
+	s.siblingOnce.Do(func() { close(s.siblingPrepared) })
 	return completedCurrentNodeAssignmentSteer{
 		receipt: session.CommitReceipt{Committed: true},
 	}, nil

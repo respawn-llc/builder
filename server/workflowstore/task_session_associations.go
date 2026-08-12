@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"core/server/metadata/sqlitegen"
+	"core/server/metadata/sqlitelifecyclegen"
 	"core/server/workflow"
 	"core/shared/runtimeids"
 )
@@ -342,12 +343,26 @@ func (s *Store) RepairCurrentNodeSessionProvenanceForResume(
 		currentNode.Scheduling.State != workflow.CurrentNodeSchedulingInterrupted {
 		return errors.New("retained Resume Current Node must be interrupted")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	connection, err := s.db.Conn(ctx)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
-	q := s.queries.WithTx(tx)
+	defer func() { _ = connection.Close() }()
+	lifecycle := sqlitelifecyclegen.New(connection)
+	if err := lifecycle.SetBusyTimeout15Seconds(ctx); err != nil {
+		return err
+	}
+	defer func() { _ = lifecycle.SetBusyTimeout5Seconds(context.Background()) }()
+	if err := lifecycle.BeginImmediate(ctx); err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = lifecycle.Rollback(context.Background())
+		}
+	}()
+	q := sqlitegen.New(connection)
 	persisted, err := currentNodeForReference(ctx, q, currentNode.Reference)
 	if err != nil {
 		return err
@@ -410,7 +425,11 @@ func (s *Store) RepairCurrentNodeSessionProvenanceForResume(
 	if err := upsertTaskSessionAssociation(ctx, q, normalized); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := lifecycle.Commit(ctx); err != nil {
+		return err
+	}
+	committed = true
+	return nil
 }
 
 // ResolveCurrentNodeStartContext prepares an admitted executable Current Node

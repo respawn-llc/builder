@@ -31,6 +31,9 @@ func workflowCompletionOperatorDiagnostic(
 	if diagnostic == nil {
 		panic("workflow completion operator diagnostic requires an error")
 	}
+	if strings.TrimSpace(diagnostic.Error()) == "" {
+		panic("workflow completion operator diagnostic requires a non-blank error")
+	}
 	return storedLocalEntry{
 		Visibility:      transcript.EntryVisibilityAuto,
 		Role:            string(transcript.EntryRoleDeveloperErrorFeedback),

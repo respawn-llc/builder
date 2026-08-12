@@ -1735,7 +1735,7 @@ func (s *Service) approveWorkflowTask(ctx context.Context, req serverapi.Workflo
 		}
 	}
 	approved, err := s.currentNodeExecution.ApplyPendingApproval(ctx, approvalID)
-	if err != nil && len(approved.Mutation.Removed) == 0 {
+	if err != nil && !approved.Committed() {
 		return serverapi.WorkflowTaskApproveResponse{}, err
 	}
 	s.finalizeTaskAttentionResolution(approved.TaskAttentionResolution)
@@ -2076,8 +2076,7 @@ func (s *Service) completeWorkflowTask(ctx context.Context, req serverapi.Workfl
 		}
 		completed, err = s.currentNodeExecution.CompleteIdleCurrentNode(ctx, selector, req.TransitionID, req.OutputValues, req.Commentary)
 	}
-	committed := completed.PendingApproval != nil || len(completed.Mutation.Removed) != 0
-	if err != nil && !committed {
+	if err != nil && !completed.Committed() {
 		if errors.Is(err, sql.ErrNoRows) || errors.Is(err, sessionruntime.ErrExecutionNoLongerLive) {
 			return serverapi.WorkflowTaskCompleteResponse{}, serverapi.ErrWorkflowTaskCompleteTargetNotFound
 		}

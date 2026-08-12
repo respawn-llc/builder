@@ -21,6 +21,10 @@ type PendingApprovalApplyResult struct {
 	TaskAttentionResolution
 }
 
+func (r PendingApprovalApplyResult) Committed() bool {
+	return len(r.Mutation.Removed) != 0
+}
+
 type pendingApprovalTransitionSnapshot struct {
 	WorkflowID        runtimeids.WorkflowID      `json:"workflow_id"`
 	ID                workflow.TransitionGroupID `json:"id"`

@@ -476,9 +476,13 @@ func TestExecutionFinalizationInterruptsUnassignedHeldSuccessor(t *testing.T) {
 		t.Fatalf("stop source: %v", err)
 	}
 
-	if interruption, interrupted := store.interruption(successor); !interrupted {
-		t.Fatal("unassigned held successor was not interrupted")
-	} else if interruption.reason != reasonCurrentNodeRuntimeStartFailed {
+	var interruption currentNodeInterruptionRecord
+	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+		var interrupted bool
+		interruption, interrupted = store.interruption(successor)
+		return interrupted
+	}, "unassigned held successor was not interrupted")
+	if interruption.reason != reasonCurrentNodeRuntimeStartFailed {
 		t.Fatalf("held successor interruption = %+v, want runtime start failure", interruption)
 	}
 	if err := controller.EnsureTaskQuiescent(source.TaskID); err != nil {

@@ -510,9 +510,14 @@ func TestGatewayAutomaticSuccessorFatalTerminatesProcess(t *testing.T) {
 		select {}
 	}
 
-	cmd := exec.Command(os.Args[0], "-test.run=^TestGatewayAutomaticSuccessorFatalTerminatesProcess$")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestGatewayAutomaticSuccessorFatalTerminatesProcess$", "-test.timeout=20s")
 	cmd.Env = append(os.Environ(), childEnv+"=1", addressEnv+"="+addressPath)
 	output, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		t.Fatalf("automatic successor fatal child did not terminate\n%s", output)
+	}
 	if err == nil {
 		t.Fatalf("automatic successor fatal child exited successfully\n%s", output)
 	}
@@ -596,6 +601,9 @@ func TestGatewayExplicitAdmissionInterruptionPersistenceFailureRemainsNonFatal(t
 						},
 						func(workflowexecution.TaskPreparationFinalization) {},
 					)
+					if len(started.Mutation.Created) == 0 {
+						return serverapi.WorkflowTaskStartResponse{}, startErr
+					}
 					response := serverapi.WorkflowTaskStartResponse{
 						Outcome: serverapi.WorkflowTaskActionOutcomeApplied,
 						Applied: &serverapi.WorkflowTaskStartApplied{
@@ -608,6 +616,9 @@ func TestGatewayExplicitAdmissionInterruptionPersistenceFailureRemainsNonFatal(t
 				},
 				resumeWorkflowTask: func(ctx context.Context, _ serverapi.WorkflowTaskResumeRequest) (serverapi.WorkflowTaskResumeResponse, error) {
 					resumed, resumeErr := controller.ResumeTask(ctx, taskID)
+					if len(resumed) == 0 {
+						return serverapi.WorkflowTaskResumeResponse{}, resumeErr
+					}
 					response := serverapi.WorkflowTaskResumeResponse{
 						Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
 						Applied: &serverapi.WorkflowTaskResumeApplied{

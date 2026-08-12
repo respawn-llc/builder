@@ -378,14 +378,14 @@ func insertTaskCurrentNodeWithKind(
 	if err != nil {
 		return err
 	}
+	if currentNode.SessionID != nil && nodeKind != workflow.NodeKindAgent {
+		return fmt.Errorf("%s current node cannot retain a Session", nodeKind)
+	}
 	if err := q.InsertTaskCurrentNode(ctx, params); err != nil {
 		return err
 	}
 	if currentNode.SessionID == nil {
 		return nil
-	}
-	if nodeKind != workflow.NodeKindAgent {
-		return fmt.Errorf("%s current node cannot retain a Session", nodeKind)
 	}
 	association, err := normalizeTaskSessionAssociationRequest(TaskSessionAssociationRequest{
 		SessionID:    *currentNode.SessionID,

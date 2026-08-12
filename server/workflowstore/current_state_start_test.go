@@ -11,6 +11,16 @@ import (
 	"core/shared/runtimeids"
 )
 
+type recordingCurrentNodeEventPublisher struct {
+	events []WorkflowEventRecord
+	err    error
+}
+
+func (p *recordingCurrentNodeEventPublisher) PublishWorkflowEvent(_ context.Context, event WorkflowEventRecord) error {
+	p.events = append(p.events, event)
+	return p.err
+}
+
 func TestTaskStartReplacesBacklogCurrentNodeWithFirstExecutableCurrentNode(t *testing.T) {
 	type fixture struct {
 		store      *Store
@@ -166,7 +176,11 @@ func TestReplaceUserInterruptionWithAssignmentFailure(t *testing.T) {
 		t.Fatalf("ReplaceUserInterruptionWithAssignmentFailure: %v", err)
 	}
 	nodes, err := store.ListCurrentNodes(ctx, task.ID)
-	if err != nil || len(nodes) != 1 || nodes[0].Scheduling.Interruption.Reason != "workflow_runtime_start_failed" {
+	if err != nil ||
+		len(nodes) != 1 ||
+		nodes[0].Scheduling == nil ||
+		nodes[0].Scheduling.Interruption == nil ||
+		nodes[0].Scheduling.Interruption.Reason != "workflow_runtime_start_failed" {
 		t.Fatalf("Current Nodes after assignment failure = %+v, %v", nodes, err)
 	}
 	if err := store.ReplaceUserInterruptionWithAssignmentFailure(ctx, reference, detail); !errors.Is(err, sql.ErrNoRows) {

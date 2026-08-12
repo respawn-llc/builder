@@ -569,12 +569,14 @@ func (c *CurrentNodeController) deliverClassifiedStarts(
 		return
 	}
 	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return
+	}
 	if _, live := c.live[*holdFor]; live {
-		if _, completed := c.completed[*holdFor]; completed {
-			c.heldStarts[*holdFor] = append(c.heldStarts[*holdFor], starts...)
-			c.mu.Unlock()
-			return
-		}
+		c.heldStarts[*holdFor] = append(c.heldStarts[*holdFor], starts...)
+		c.mu.Unlock()
+		return
 	}
 	c.mu.Unlock()
 	c.enqueueStarts(starts)
@@ -769,9 +771,7 @@ func (c *CurrentNodeController) runAdmission(start currentNodeQueuedStart) {
 	}
 	if start.holdFor != nil {
 		if source, live := c.authority.ExecutionByScope(*start.holdFor); live {
-			if err := source.Close(c.workerContext); err != nil {
-				return
-			}
+			_ = source.Close(c.workerContext)
 		}
 		c.mu.Lock()
 		interrupted := c.interrupts.currentNodeFenced(start.referenceKey())

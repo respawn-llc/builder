@@ -41,6 +41,10 @@ type CurrentNodeCompletionResult struct {
 	PostCompletionEligible bool
 }
 
+func (r CurrentNodeCompletionResult) Committed() bool {
+	return r.PendingApproval != nil || len(r.Mutation.Removed) != 0
+}
+
 // ErrCurrentNodeCompletionSelectorAmbiguous means a completion selector
 // matches several Current Nodes. Callers must choose a narrower Session or
 // Task selector; Current Nodes are intentionally not external completion

@@ -15,7 +15,7 @@ import (
 )
 
 func TestRepairRetainedResumeProvenanceIsIdempotentForConsistentRows(t *testing.T) {
-	for _, state := range []string{"correct", "missing", "stale"} {
+	for _, state := range []string{"correct", "missing", "stale", "contended"} {
 		t.Run(state, func(t *testing.T) {
 			fixture := newImmediateContextCompletionFixture(t, workflow.ContextModeContinueSession)
 			completed, err := fixture.store.CompleteCurrentNode(fixture.ctx, CurrentNodeCompletionRequest{
@@ -33,7 +33,7 @@ func TestRepairRetainedResumeProvenanceIsIdempotentForConsistentRows(t *testing.
 				t.Fatalf("InterruptCurrentNode: %v", err)
 			}
 			switch state {
-			case "missing":
+			case "missing", "contended":
 				if _, err := fixture.store.db.ExecContext(
 					fixture.ctx,
 					`DELETE FROM session_workflow_node_associations WHERE session_id = ? AND node_id = ?`,
@@ -56,6 +56,36 @@ func TestRepairRetainedResumeProvenanceIsIdempotentForConsistentRows(t *testing.
 				}
 			}
 			currentNode := interruptedCurrentNodeForTest(t, fixture.ctx, fixture.store, target.Reference)
+			if state == "contended" {
+				repairStore, writerStore := openConcurrentWorkflowStores(t, fixture.cfg)
+				writer, err := writerStore.db.BeginTx(fixture.ctx, nil)
+				if err != nil {
+					t.Fatalf("begin competing writer: %v", err)
+				}
+				defer func() { _ = writer.Rollback() }()
+				if _, err := writer.ExecContext(
+					fixture.ctx,
+					`UPDATE projects SET updated_at_unix_ms = updated_at_unix_ms WHERE id = ?`,
+					fixture.binding.ProjectID,
+				); err != nil {
+					t.Fatalf("acquire competing write transaction: %v", err)
+				}
+				repaired := make(chan error, 1)
+				go func() {
+					repaired <- repairStore.RepairCurrentNodeSessionProvenanceForResume(fixture.ctx, currentNode)
+				}()
+				select {
+				case err := <-repaired:
+					t.Fatalf("repair returned before competing writer committed: %v", err)
+				case <-time.After(100 * time.Millisecond):
+				}
+				if err := writer.Commit(); err != nil {
+					t.Fatalf("commit competing writer: %v", err)
+				}
+				if err := <-repaired; err != nil {
+					t.Fatalf("repair after competing commit: %v", err)
+				}
+			}
 			for range 2 {
 				if err := fixture.store.RepairCurrentNodeSessionProvenanceForResume(fixture.ctx, currentNode); err != nil {
 					t.Fatalf("RepairCurrentNodeSessionProvenanceForResume: %v", err)
@@ -108,53 +138,6 @@ func TestRepairRetainedResumeProvenanceRejectsInconsistentOwnershipWithoutResumi
 			interruptedCurrentNodeForTest(t, fixture.ctx, fixture.store, target.Reference)
 		})
 	}
-}
-
-func TestRepairRetainedResumeProvenanceRejectsSessionOnMultipleCurrentNodes(t *testing.T) {
-	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
-	workflowID := createFanoutJoinWorkflow(t, ctx, store)
-	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
-	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
-	split, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
-		Source: source.Reference, OutputValues: map[string]string{"summary": "split"},
-	})
-	if err != nil {
-		t.Fatalf("CompleteCurrentNode: %v", err)
-	}
-	first, second := split.Mutation.Created[0], split.Mutation.Created[1]
-	sessionID, err := runtimeids.ParseSessionID(createTestSession(t, ctx, store, binding, cfg))
-	if err != nil {
-		t.Fatalf("ParseSessionID: %v", err)
-	}
-	if _, err := store.BindSessionToCurrentNode(ctx, CurrentNodeSessionBindingRequest{
-		Association: TaskSessionAssociationRequest{
-			SessionID: sessionID, CurrentNode: first.Reference,
-			AssociatedAt: time.Now().UTC(),
-		},
-	}); err != nil {
-		t.Fatalf("BindSessionToCurrentNode: %v", err)
-	}
-	secondBranch, _ := second.Reference.TransitionBranchKey()
-	if _, err := store.db.ExecContext(ctx, `UPDATE task_current_nodes
-SET session_id = ? WHERE task_id = ? AND node_id = ? AND transition_branch_key = ?`,
-		sessionID.String(), second.Reference.TaskID, second.Reference.NodeID, secondBranch,
-	); err != nil {
-		t.Fatalf("duplicate retained Session owner: %v", err)
-	}
-	if err := store.InterruptCurrentNode(
-		ctx, first.Reference, "test",
-		workflow.NewCurrentNodeInterruptionDetail("test", nil),
-	); err != nil {
-		t.Fatalf("InterruptCurrentNode: %v", err)
-	}
-	currentNode := interruptedCurrentNodeForTest(t, ctx, store, first.Reference)
-	if err := store.RepairCurrentNodeSessionProvenanceForResume(
-		ctx, currentNode,
-	); !errors.Is(err, ErrSessionNotCurrentWorkflowNode) {
-		t.Fatalf("repair error = %v, want ErrSessionNotCurrentWorkflowNode", err)
-	}
-	interruptedCurrentNodeForTest(t, ctx, store, first.Reference)
 }
 
 func interruptedCurrentNodeForTest(

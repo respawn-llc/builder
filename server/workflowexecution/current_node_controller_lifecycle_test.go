@@ -572,7 +572,7 @@ func TestCompleteIdleCurrentNodePreparesFanOutAssignmentsIndependently(t *testin
 	}
 	controller, err := NewCurrentNodeController(store, runner, authority, NewMutationPermit(), CurrentNodeControllerConfig{
 		AgentConcurrency: 1,
-		AssignmentSteerer: blockingCurrentNodeAssignmentSteerer{
+		AssignmentSteerer: &blockingCurrentNodeAssignmentSteerer{
 			blocked:         first,
 			release:         release,
 			started:         started,
@@ -818,7 +818,10 @@ func TestTaskInterruptDispositionsTransferredSuccessorBeforeLateAssignmentDelive
 		t.Fatal("CompleteCurrentNode did not transfer the canceled assignment wait")
 	}
 	<-assignmentResumed
-	sourceHandle, _ := authority.ExecutionByScope(sourceScope)
+	sourceHandle, live := authority.ExecutionByScope(sourceScope)
+	if !live {
+		t.Fatal("completed source scope retired before stop")
+	}
 	if err := sourceHandle.Stop(context.Background()); err != nil {
 		t.Fatalf("stop completed source: %v", err)
 	}
