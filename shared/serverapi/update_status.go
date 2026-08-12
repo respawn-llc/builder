@@ -211,6 +211,10 @@ type UpdateStatusResponse struct {
 	Result UpdateStatusResult `json:"result"`
 }
 
+type UpdateStatusResponseWire[R any] struct {
+	Result R `json:"result"`
+}
+
 func (r UpdateStatusResponse) Validate() error {
 	return r.Result.Validate()
 }
@@ -219,8 +223,5 @@ func (r UpdateStatusResponse) MarshalJSON() ([]byte, error) {
 	if err := r.Validate(); err != nil {
 		return nil, err
 	}
-	type wire struct {
-		Result UpdateStatusResult `json:"result"`
-	}
-	return json.Marshal(wire{Result: r.Result})
+	return json.Marshal(UpdateStatusResponseWire[UpdateStatusResult]{Result: r.Result})
 }

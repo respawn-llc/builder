@@ -479,6 +479,10 @@ type SessionExecutionEnvironmentResponseWire[E any] struct {
 	Environment E `json:"environment"`
 }
 
+type SessionExecutionEnvironmentRequestWire struct {
+	SessionID string `json:"session_id"`
+}
+
 func (e SessionExecutionEnvironment) Validate() error {
 	if e.SessionID.IsZero() {
 		return errors.New("session execution environment session_id is required")
@@ -534,6 +538,13 @@ func (r SessionExecutionEnvironmentRequest) Validate() error {
 		return errors.New("session_id is required")
 	}
 	return nil
+}
+
+func (r SessionExecutionEnvironmentRequest) MarshalJSON() ([]byte, error) {
+	if err := r.Validate(); err != nil {
+		return nil, err
+	}
+	return json.Marshal(SessionExecutionEnvironmentRequestWire{SessionID: r.SessionID.String()})
 }
 
 func (r SessionExecutionEnvironmentResponse) Validate() error { return r.Environment.Validate() }

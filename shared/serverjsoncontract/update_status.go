@@ -26,8 +26,13 @@ func (updateStatusResultContractSource) JSONSchema() *invjsonschema.Schema {
 	return &invjsonschema.Schema{OneOf: variants}
 }
 
-type updateStatusResponseContractSource struct {
-	Result updateStatusResultContractSource `json:"result"`
+type updateStatusResponseContractSource struct{}
+
+func (updateStatusResponseContractSource) JSONSchema() *invjsonschema.Schema {
+	return (&invjsonschema.Reflector{
+		Anonymous:      true,
+		DoNotReference: true,
+	}).Reflect(serverapi.UpdateStatusResponseWire[updateStatusResultContractSource]{})
 }
 
 type UpdateStatusResponse struct {
@@ -46,28 +51,23 @@ func (c UpdateStatusResponse) Decode(raw []byte) (serverapi.UpdateStatusResponse
 	if err := c.schema.Validate(raw); err != nil {
 		return serverapi.UpdateStatusResponse{}, err
 	}
-	var discriminator struct {
-		Result struct {
-			Kind serverapi.UpdateStatusResultKind `json:"kind"`
-		} `json:"result"`
+	type resultDiscriminator struct {
+		Kind serverapi.UpdateStatusResultKind `json:"kind"`
 	}
+	var discriminator serverapi.UpdateStatusResponseWire[resultDiscriminator]
 	if err := json.Unmarshal(raw, &discriminator); err != nil {
 		return serverapi.UpdateStatusResponse{}, err
 	}
 	var result serverapi.UpdateStatusResult
 	switch discriminator.Result.Kind {
 	case serverapi.UpdateStatusCurrent:
-		var source struct {
-			Result serverapi.CurrentUpdateStatusResultWire `json:"result"`
-		}
+		var source serverapi.UpdateStatusResponseWire[serverapi.CurrentUpdateStatusResultWire]
 		if err := json.Unmarshal(raw, &source); err != nil {
 			return serverapi.UpdateStatusResponse{}, err
 		}
 		result = serverapi.CurrentUpdateStatusResult(source.Result.CurrentVersion, source.Result.LatestVersion)
 	case serverapi.UpdateStatusAvailable:
-		var source struct {
-			Result serverapi.AvailableUpdateStatusResultWire `json:"result"`
-		}
+		var source serverapi.UpdateStatusResponseWire[serverapi.AvailableUpdateStatusResultWire]
 		if err := json.Unmarshal(raw, &source); err != nil {
 			return serverapi.UpdateStatusResponse{}, err
 		}
@@ -75,9 +75,7 @@ func (c UpdateStatusResponse) Decode(raw []byte) (serverapi.UpdateStatusResponse
 	case serverapi.UpdateStatusCheckUnavailable:
 		result = serverapi.CheckUnavailableUpdateStatusResult()
 	case serverapi.UpdateStatusCheckFailed:
-		var source struct {
-			Result serverapi.CheckFailedUpdateStatusResultWire `json:"result"`
-		}
+		var source serverapi.UpdateStatusResponseWire[serverapi.CheckFailedUpdateStatusResultWire]
 		if err := json.Unmarshal(raw, &source); err != nil {
 			return serverapi.UpdateStatusResponse{}, err
 		}

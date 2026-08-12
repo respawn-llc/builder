@@ -57,10 +57,6 @@ func (sessionExecutionModelFieldContractSource) JSONSchema() *invjsonschema.Sche
 	]()
 }
 
-type sessionExecutionEnvironmentRequestContractSource struct {
-	SessionID string `json:"session_id"`
-}
-
 type sessionExecutionEnvironmentResponseContractSource struct{}
 
 func (sessionExecutionEnvironmentResponseContractSource) JSONSchema() *invjsonschema.Schema {
@@ -81,7 +77,10 @@ type SessionExecutionEnvironmentRequest struct {
 }
 
 func PrepareSessionExecutionEnvironmentRequest(preparer jsoncontract.Preparer) (SessionExecutionEnvironmentRequest, error) {
-	schema, err := preparer.Internal("Session execution environment request", sessionExecutionEnvironmentRequestContractSource{})
+	schema, err := preparer.Internal(
+		"Session execution environment request",
+		serverapi.SessionExecutionEnvironmentRequestWire{},
+	)
 	if err != nil {
 		return SessionExecutionEnvironmentRequest{}, err
 	}
@@ -92,7 +91,7 @@ func (c SessionExecutionEnvironmentRequest) Decode(raw []byte) (serverapi.Sessio
 	if err := c.schema.Validate(raw); err != nil {
 		return serverapi.SessionExecutionEnvironmentRequest{}, err
 	}
-	var source sessionExecutionEnvironmentRequestContractSource
+	var source serverapi.SessionExecutionEnvironmentRequestWire
 	if err := json.Unmarshal(raw, &source); err != nil {
 		return serverapi.SessionExecutionEnvironmentRequest{}, err
 	}
