@@ -377,12 +377,20 @@ func assertEligibleReplacementFacts(
 		switch {
 		case fact.User != nil && fact.User.Text == "replacement user":
 			messageCount++
-			replacementTime = fact.User.CommittedAtUnixMs
+			if fact.User.CommittedAtUnixMs == nil {
+				t.Fatalf("replacement user has no committed time")
+			}
+			if replacementTime == nil {
+				replacementTime = fact.User.CommittedAtUnixMs
+			} else if fact.User.CommittedAtUnixMs.UnixMs() != replacementTime.UnixMs() {
+				t.Fatalf("user replacement time = %v, want %v", fact.User.CommittedAtUnixMs, replacementTime)
+			}
 		case fact.Assistant != nil && fact.Assistant.Text == "replacement assistant":
 			messageCount++
-			if replacementTime == nil {
-				replacementTime = fact.Assistant.CommittedAtUnixMs
-			} else if fact.Assistant.CommittedAtUnixMs == nil ||
+			if fact.Assistant.CommittedAtUnixMs == nil {
+				t.Fatalf("replacement assistant has no committed time")
+			}
+			if replacementTime == nil ||
 				fact.Assistant.CommittedAtUnixMs.UnixMs() != replacementTime.UnixMs() {
 				t.Fatalf("assistant replacement time = %v, user = %v", fact.Assistant.CommittedAtUnixMs, replacementTime)
 			}
