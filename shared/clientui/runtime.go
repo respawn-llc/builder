@@ -27,10 +27,9 @@ type RuntimeContextUsage struct {
 }
 
 type RuntimeGoal struct {
-	ID        string
-	Objective string
-	Status    RuntimeGoalStatus
-	Suspended bool
+	*Goal
+	Availability *GoalAvailability
+	Suspended    bool
 }
 
 type RuntimeGoalStatus string
@@ -202,11 +201,11 @@ type RuntimeClient interface {
 	SetAutoCompactionEnabled(enabled bool) (bool, bool, error)
 	SetQuestionsEnabled(enabled bool) (bool, error)
 	ShowGoal() (*RuntimeGoal, error)
-	SetGoal(objective string) (*RuntimeGoal, error)
-	PauseGoal() (*RuntimeGoal, error)
-	ResumeGoal() (*RuntimeGoal, error)
-	CompleteGoal() (*RuntimeGoal, error)
-	ClearGoal() (*RuntimeGoal, error)
+	SetGoal(objective string) (GoalMutationResult, error)
+	PauseGoal() (GoalMutationResult, error)
+	ResumeGoal() (GoalMutationResult, error)
+	CompleteGoal() (GoalMutationResult, error)
+	ClearGoal() (GoalMutationResult, error)
 	AppendCommittedEntry(role, text string) error
 	AppendCommittedEntryWithNoticeID(role, text, noticeID string) error
 	SubmitRuntimeInput(ctx context.Context, req RuntimeSubmitRequest) (UserTurnSubmission, error)

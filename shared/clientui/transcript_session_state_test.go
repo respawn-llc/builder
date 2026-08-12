@@ -2,6 +2,7 @@ package clientui
 
 import (
 	"testing"
+	"time"
 )
 
 func TestTranscriptContextGoalAndCompactionFactsValidateTypedState(t *testing.T) {
@@ -15,15 +16,13 @@ func TestTranscriptContextGoalAndCompactionFactsValidateTypedState(t *testing.T)
 		t.Fatalf("validate context usage: %v", err)
 	}
 
-	goal := TranscriptGoalStatus{Goal: &TranscriptGoal{
-		ID:        "goal-1",
-		Objective: "Ship it",
-		Status:    RuntimeGoalStatusActive,
-	}}
+	goal := TranscriptGoalStatus{Goal: &TranscriptGoal{Goal: &Goal{
+		ID: "goal-1", Objective: "Ship it", Status: RuntimeGoalStatusActive,
+		CreatedAt: time.Unix(1, 0), UpdatedAt: time.Unix(1, 0),
+	}}}
 	if err := goal.Validate(); err != nil {
 		t.Fatalf("validate goal status: %v", err)
 	}
-
 	compaction := TranscriptCompactionStatus{
 		StepID: transcriptTestStepID(t),
 		State:  CompactionStarted,
@@ -43,10 +42,11 @@ func TestTranscriptContextGoalAndCompactionFactsRejectInvalidState(t *testing.T)
 	if err := (TranscriptContextUsage{WindowTokens: 0}).Validate(); err == nil {
 		t.Fatal("accepted context usage without a window")
 	}
+	if err := (GoalMutationResult{Pending: &GoalPreview{Objective: "queued", Status: RuntimeGoalStatusPaused}}).Validate(); err == nil {
+		t.Fatal("accepted non-active Goal preview")
+	}
 	if err := (TranscriptGoalStatus{Goal: &TranscriptGoal{
-		ID:        "goal-1",
-		Objective: "Ship it",
-		Status:    RuntimeGoalStatusComplete,
+		Goal:      &Goal{ID: "goal-1", Objective: "Ship it", Status: RuntimeGoalStatusComplete, CreatedAt: time.Unix(1, 0), UpdatedAt: time.Unix(1, 0)},
 		Suspended: true,
 	}}).Validate(); err == nil {
 		t.Fatal("accepted suspended completed goal")

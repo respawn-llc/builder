@@ -26,6 +26,11 @@ func (m *uiModel) applyAdmittedTranscriptMessageState(
 	}
 	switch message.Kind() {
 	case clientui.TranscriptMessageHydration:
+		m.goalRuntimeMutationSerial = nextNonZeroToken(m.goalRuntimeMutationSerial)
+		if m.goal.open {
+			m.goal.goal = goalCoreFromRuntimeGoal(admission.view.Status.Goal)
+			m.goal.pending = nil
+		}
 		return m.applyTranscriptHydration(message.Payload().(clientui.TranscriptHydration), admission)
 	case clientui.TranscriptMessageThinkingStatusUpdate:
 		m.applyTranscriptThinkingStatusUpdate(message.Payload().(clientui.TranscriptThinkingStatusUpdate))
@@ -51,8 +56,11 @@ func (m *uiModel) applyAdmittedTranscriptMessageState(
 	case clientui.TranscriptMessageContextUsage:
 		m.applyTranscriptContextUsage(message.Payload().(clientui.TranscriptContextUsage))
 	case clientui.TranscriptMessageGoalStatus:
-		// The runtime-client main-view cache is the goal read model used by the
-		// status line and goal flow.
+		m.goalRuntimeMutationSerial = nextNonZeroToken(m.goalRuntimeMutationSerial)
+		if m.goal.open {
+			m.goal.goal = goalCoreFromRuntimeGoal(admission.view.Status.Goal)
+			m.goal.pending = nil
+		}
 	case clientui.TranscriptMessageBackgroundActivity:
 		m.applyTranscriptBackgroundActivity(message.Payload().(clientui.TranscriptBackgroundActivity))
 		if m.processList.open {

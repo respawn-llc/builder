@@ -51,6 +51,7 @@ func TestTranscriptEventPayloadsUseOneTypedConstructionPath(t *testing.T) {
 			SessionIdentity:        transcriptTestSessionIdentity(t),
 			SessionStatus:          transcriptTestSessionStatus(),
 			CommittedRows:          []TranscriptCommittedRow{},
+			GoalStatus:             &TranscriptGoalStatus{Availability: testGoalAvailability()},
 		}), TranscriptMessageHydration},
 		{"committed row", NewTranscriptEvent(TranscriptCommittedRow{
 			Visibility: transcript.EntryVisibilityOngoing,

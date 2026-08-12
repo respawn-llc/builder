@@ -49,8 +49,132 @@ type GoalCommandResult struct {
 	session.GoalState
 	Disposition     GoalCommandDisposition
 	Cleared         bool
+	Availability    *session.GoalAvailability
 	MetadataReceipt session.CommitReceipt
 	NoticeReceipt   session.CommitReceipt
+}
+
+type CurrentGoalOperation interface{ currentGoalOperation() }
+
+type CurrentGoalSet struct {
+	Objective string
+	Actor     session.GoalActor
+}
+
+func (CurrentGoalSet) currentGoalOperation() {}
+
+type CurrentGoalStatus struct {
+	Status session.GoalStatus
+	Actor  session.GoalActor
+}
+
+func (CurrentGoalStatus) currentGoalOperation() {}
+
+type CurrentGoalClear struct{ Actor session.GoalActor }
+
+func (CurrentGoalClear) currentGoalOperation() {}
+
+type CurrentGoalExecutionOwnership uint8
+
+const (
+	CurrentGoalRetainedOnly CurrentGoalExecutionOwnership = iota + 1
+	CurrentGoalExactExecution
+)
+
+type CurrentGoalOperationOutcome struct {
+	Handled           *GoalCommandResult
+	ExecutionRequired bool
+}
+
+func (o CurrentGoalOperationOutcome) Validate() error {
+	if (o.Handled != nil) == o.ExecutionRequired {
+		return errors.New("current Goal operation must be handled or require execution")
+	}
+	return nil
+}
+
+func currentGoalHandled(result GoalCommandResult, err error) (CurrentGoalOperationOutcome, error) {
+	outcome := CurrentGoalOperationOutcome{Handled: &result}
+	if validationErr := outcome.Validate(); validationErr != nil {
+		return CurrentGoalOperationOutcome{}, validationErr
+	}
+	return outcome, err
+}
+
+func currentGoalExecutionRequired() (CurrentGoalOperationOutcome, error) {
+	outcome := CurrentGoalOperationOutcome{ExecutionRequired: true}
+	return outcome, outcome.Validate()
+}
+
+func (e *Engine) currentGoalDisposition(disposition GoalCommandDisposition, goal session.GoalState, cleared bool) (CurrentGoalOperationOutcome, error) {
+	result := goalCommandResult(disposition, goal, cleared, session.CommitReceipt{}, session.CommitReceipt{})
+	result.Availability = e.GoalMutationAvailability()
+	return currentGoalHandled(result, nil)
+}
+
+func (e *Engine) ApplyCurrentGoalOperation(operation CurrentGoalOperation, ownership CurrentGoalExecutionOwnership) (CurrentGoalOperationOutcome, error) {
+	if ownership != CurrentGoalRetainedOnly && ownership != CurrentGoalExactExecution {
+		return CurrentGoalOperationOutcome{}, errors.New("current Goal execution ownership is required")
+	}
+	switch operation := operation.(type) {
+	case CurrentGoalSet:
+		goal, queued, err := e.QueueGoalSetForActiveStep(operation.Objective, operation.Actor)
+		if err != nil {
+			return CurrentGoalOperationOutcome{}, err
+		}
+		if queued {
+			return e.currentGoalDisposition(GoalCommandQueued, goal, false)
+		}
+		if ownership == CurrentGoalExactExecution {
+			result, err := e.SetGoal(operation.Objective, operation.Actor)
+			if err == nil && result.MetadataReceipt.Committed {
+				err = e.StartGoalLoop()
+			}
+			return currentGoalHandled(result, err)
+		}
+		if operation.Actor == session.GoalActorAgent {
+			if current := e.Goal(); current != nil && current.Status != session.GoalStatusComplete {
+				return CurrentGoalOperationOutcome{}, session.GoalAgentOverwriteBlockedError{Goal: *current}
+			}
+		}
+		return currentGoalExecutionRequired()
+	case CurrentGoalStatus:
+		status := operation.Status
+		if current := e.Goal(); current != nil && current.Status == status {
+			if status != session.GoalStatusActive || ownership == CurrentGoalExactExecution || e.CurrentNodeExecutionConfigured() || e.GoalLoopContinuationEnforced() {
+				return e.currentGoalDisposition(GoalCommandNoop, *current, false)
+			}
+		}
+		goal, queued, err := e.QueueGoalStatusForActiveStep(status, operation.Actor)
+		if err != nil {
+			return CurrentGoalOperationOutcome{}, err
+		}
+		if queued {
+			return e.currentGoalDisposition(GoalCommandQueued, goal, false)
+		}
+		if ownership == CurrentGoalExactExecution {
+			result, err := e.SetGoalStatusWithoutGoalLoopStart(status, operation.Actor)
+			if err == nil && status == session.GoalStatusActive && result.MetadataReceipt.Committed {
+				err = e.StartGoalLoop()
+			}
+			return currentGoalHandled(result, err)
+		}
+		if status == session.GoalStatusActive {
+			return currentGoalExecutionRequired()
+		}
+		return currentGoalHandled(e.SetGoalStatusWithoutGoalLoopStart(status, operation.Actor))
+	case CurrentGoalClear:
+		goal, queued, err := e.QueueGoalClearForActiveStep(operation.Actor)
+		if err != nil {
+			return CurrentGoalOperationOutcome{}, err
+		}
+		if queued {
+			return e.currentGoalDisposition(GoalCommandQueued, goal, true)
+		}
+		return currentGoalHandled(e.ClearGoal(operation.Actor))
+	default:
+		return CurrentGoalOperationOutcome{}, errors.New("current Goal operation is required")
+	}
 }
 
 func goalCommandResult(
@@ -74,6 +198,20 @@ func (e *Engine) Goal() *session.GoalState {
 		return nil
 	}
 	return cloneRuntimeGoal(e.store.Meta().Goal)
+}
+
+func (e *Engine) GoalAvailability() (session.GoalAvailability, error) {
+	if e == nil || e.store == nil {
+		return 0, errors.New("runtime session store is required")
+	}
+	return e.store.GoalAvailability()
+}
+
+func (e *Engine) GoalMutationAvailability() *session.GoalAvailability {
+	if e == nil || e.store == nil {
+		return nil
+	}
+	return e.store.GoalMutationAvailability()
 }
 
 func (e *Engine) GoalLoopSuspended() bool {
@@ -117,10 +255,12 @@ func (e *Engine) setGoalForStep(stepID string, objective string, actor session.G
 		return GoalCommandResult{}, fmt.Errorf("runtime engine is required")
 	}
 	objective = strings.TrimSpace(objective)
+	availability := e.GoalMutationAvailability()
 	e.controlMutationMu.Lock()
 	defer e.controlMutationMu.Unlock()
 	goal, metadataReceipt, err := e.store.SetGoal(objective, actor)
 	result := goalCommandResult(GoalCommandApplied, goal, false, metadataReceipt, session.CommitReceipt{})
+	result.Availability = availability
 	if !metadataReceipt.Committed || err != nil {
 		return result, err
 	}
@@ -129,7 +269,7 @@ func (e *Engine) setGoalForStep(stepID string, objective string, actor session.G
 		return result, err
 	}
 	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
-	noticeReceipt, err := e.steerGoalNoticeAndStatus(stepID, msg, goalStatusUpdateFromState(goal))
+	noticeReceipt, err := e.steerGoalNoticeAndStatus(stepID, msg, goalStatusUpdateFromState(goal, availability))
 	result.NoticeReceipt = noticeReceipt
 	return result, err
 }
@@ -150,9 +290,12 @@ func (e *Engine) setGoalStatusForStepWithGoalLoopAdmission(stepID string, status
 	if e == nil || e.store == nil {
 		return GoalCommandResult{}, fmt.Errorf("runtime engine is required")
 	}
+	availability := e.GoalMutationAvailability()
 	if current := e.Goal(); current != nil && current.Status == status {
 		if status != session.GoalStatusActive || e.GoalLoopContinuationEnforced() {
-			return goalCommandResult(GoalCommandNoop, *current, false, session.CommitReceipt{}, session.CommitReceipt{}), nil
+			result := goalCommandResult(GoalCommandNoop, *current, false, session.CommitReceipt{}, session.CommitReceipt{})
+			result.Availability = availability
+			return result, nil
 		}
 	}
 	if status == session.GoalStatusActive && requireGoalLoopStart {
@@ -168,6 +311,7 @@ func (e *Engine) setGoalStatusForStepWithGoalLoopAdmission(stepID string, status
 		disposition = GoalCommandNoop
 	}
 	result := goalCommandResult(disposition, goal, false, metadataReceipt, session.CommitReceipt{})
+	result.Availability = availability
 	if err != nil || !transitioned || !metadataReceipt.Committed {
 		return result, err
 	}
@@ -176,7 +320,7 @@ func (e *Engine) setGoalStatusForStepWithGoalLoopAdmission(stepID string, status
 		return result, err
 	}
 	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
-	noticeReceipt, err := e.steerGoalNoticeAndStatus(stepID, msg, goalStatusUpdateFromState(goal))
+	noticeReceipt, err := e.steerGoalNoticeAndStatus(stepID, msg, goalStatusUpdateFromState(goal, availability))
 	result.NoticeReceipt = noticeReceipt
 	return result, err
 }
@@ -434,10 +578,12 @@ func (e *Engine) clearGoalForStep(stepID string, actor session.GoalActor) (GoalC
 	if e == nil || e.store == nil {
 		return GoalCommandResult{}, fmt.Errorf("runtime engine is required")
 	}
+	availability := e.GoalMutationAvailability()
 	e.controlMutationMu.Lock()
 	defer e.controlMutationMu.Unlock()
 	goal, metadataReceipt, err := e.store.ClearGoal(actor)
 	result := goalCommandResult(GoalCommandApplied, goal, true, metadataReceipt, session.CommitReceipt{})
+	result.Availability = availability
 	if !metadataReceipt.Committed || err != nil {
 		return result, err
 	}
@@ -446,7 +592,7 @@ func (e *Engine) clearGoalForStep(stepID string, actor session.GoalActor) (GoalC
 		return result, err
 	}
 	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
-	noticeReceipt, err := e.steerGoalNoticeAndStatus(stepID, msg, goalStatusClearUpdate())
+	noticeReceipt, err := e.steerGoalNoticeAndStatus(stepID, msg, goalStatusClearUpdate(availability))
 	result.NoticeReceipt = noticeReceipt
 	return result, err
 }
@@ -471,6 +617,7 @@ func (e *Engine) cascadeCompleteActiveGoalOnWorkflowCompletion() {
 	}
 	e.controlMutationMu.Lock()
 	defer e.controlMutationMu.Unlock()
+	availability := e.GoalMutationAvailability()
 	completed, transitioned, _, err := e.store.CompleteGoalIfActive(goal.ID, session.GoalActorSystem)
 	if err != nil {
 		reportErr(err)
@@ -485,17 +632,17 @@ func (e *Engine) cascadeCompleteActiveGoalOnWorkflowCompletion() {
 		return
 	}
 	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
-	if _, err := e.steerGoalNoticeAndStatus("", msg, goalStatusUpdateFromState(completed)); err != nil {
+	if _, err := e.steerGoalNoticeAndStatus("", msg, goalStatusUpdateFromState(completed, availability)); err != nil {
 		reportErr(err)
 	}
 }
 
-func goalStatusUpdateFromState(goal session.GoalState) GoalStatusUpdate {
-	return GoalStatusUpdate{State: goal}
+func goalStatusUpdateFromState(goal session.GoalState, availability *session.GoalAvailability) GoalStatusUpdate {
+	return GoalStatusUpdate{State: goal, Availability: availability}
 }
 
-func goalStatusClearUpdate() GoalStatusUpdate {
-	return GoalStatusUpdate{Cleared: true}
+func goalStatusClearUpdate(availability *session.GoalAvailability) GoalStatusUpdate {
+	return GoalStatusUpdate{Availability: availability, Cleared: true}
 }
 
 func steerGoalStatusUpdateIntent(update GoalStatusUpdate) steeringIntent {

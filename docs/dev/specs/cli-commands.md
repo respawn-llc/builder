@@ -134,6 +134,7 @@
 - Agent `goal set` is allowed only when no active or paused Goal exists. Completed Goals do not block the next agent-set Goal.
 - Goal completion is explicit CLI state mutation, not natural-language inference.
 - Goal CLI never mutates Session storage directly. It submits Goal commands to the server.
+- A successful Goal mutation prints authoritative Goal details when present, prints objective and status for a queued Set or replacement preview, and prints no applied Goal-state output when neither is present.
 - Any `kent service` command that affects server state detects invocation by Kent itself and refuses to run because it is human-only.
 - On Linux and Windows, server exit status `2` must suppress automatic crash recovery for the current service-manager activation. A later independent service-manager activation may run the installed service again.
 - On Linux, every server exit other than status `2` must retain automatic restoration while the current service-manager activation expects Kent to run. On macOS, every server exit must retain automatic restoration while the current service-manager activation expects Kent to run.
