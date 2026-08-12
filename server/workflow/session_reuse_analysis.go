@@ -301,7 +301,7 @@ func (a sessionReuseAnalyzer) applyEdge(state reusePathState, edge Edge) (reuseT
 		return reuseTransition{target: reusePathState{
 			nodeID:       edge.TargetNodeID,
 			branch:       targetBranch,
-			staticSource: a.transferStaticContinuationSource(state.staticSource, edge, target),
+			staticSource: a.transferStaticContinuationSource(state.staticSource, state.nodeID, edge, target),
 		}}, true
 	}
 	targetLineage, activeSourceSessionID, activeSourceKnown, selected := a.targetContext(state, edge, target, targetBranch)
@@ -983,6 +983,7 @@ func sessionReuseFanouts(def Definition) map[TransitionGroupID]staticFanout {
 
 func (a sessionReuseAnalyzer) transferStaticContinuationSource(
 	source staticContinuationSource,
+	sourceNodeID NodeID,
 	edge Edge,
 	target Node,
 ) staticContinuationSource {
@@ -1000,7 +1001,12 @@ func (a sessionReuseAnalyzer) transferStaticContinuationSource(
 		return staticContinuationSource{kind: staticContinuationSourceAbsent}
 	}
 	switch contextSource := CanonicalContextSource(edge.ContextSource); contextSource.Kind {
-	case ContextSourceImmediateSource, ContextSourcePreviousTarget, ContextSourcePreviousTargetOrNew:
+	case ContextSourceImmediateSource:
+		if sourceNode, exists := a.nodesByID[sourceNodeID]; exists && sourceNode.Kind() == NodeKindAgent {
+			return staticContinuationSource{kind: staticContinuationSourceExact, nodeID: sourceNodeID}
+		}
+		return source
+	case ContextSourcePreviousTarget, ContextSourcePreviousTargetOrNew:
 		return source
 	case ContextSourceSelectedNode:
 		if nodeID, exists := a.nodeIDsByKey[contextSource.NodeKey]; exists {

@@ -110,7 +110,7 @@ func (s *Store) BindSessionToCurrentNode(ctx context.Context, req CurrentNodeSes
 			return CurrentNodeSessionBindingAuthority{}, err
 		}
 	}
-	if hasPreviousAssociation && previousAssociation.SessionID != sourceSessionID {
+	if hasPreviousAssociation && previousAssociation.SessionID != normalized.SessionID {
 		if err := retireDependentCurrentTaskSessionAssociations(
 			ctx,
 			q,

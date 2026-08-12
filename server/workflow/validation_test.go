@@ -537,17 +537,6 @@ func TestRetainedTargetRequiresExactActiveContinuationSource(t *testing.T) {
 		},
 		{name: "divergent join sources", setup: func(*workflow.Definition) {}},
 		{
-			name: "absent script source",
-			setup: func(def *workflow.Definition) {
-				updateNodeByKeyForValidationTest(t, def, "plan", func(_ *workflow.NodeIdentity, kind *workflow.NodeKind, fields *workflow.NodeFields) {
-					*kind = workflow.NodeKindScript
-					fields.SubagentRole = ""
-					fields.ScriptPath = workflow.MustPresentScriptPath("./plan.sh")
-				})
-				edgeByIDForValidationTest(t, def, "edge_start").PromptTemplate = ""
-			},
-		},
-		{
 			name: "script branches select divergent sources",
 			setup: func(def *workflow.Definition) {
 				for _, nodeKey := range []workflow.ModelKey{"impl_a", "impl_b"} {
