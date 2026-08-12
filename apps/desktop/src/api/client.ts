@@ -1,7 +1,12 @@
 import type { AttentionNotificationEventHandler } from "./attentionNotifications";
 import { attentionNotificationRpcHandler } from "./attentionNotificationSubscription";
 import type { ApiConnectionSource, ApiService, ApiSubscription } from "./apiService";
-import { parseCatalogInput, parseCatalogResponse, requireCatalogProject } from "./clientCatalog";
+import {
+  parseCatalogInput,
+  parseCatalogResponse,
+  requireCatalogProject,
+  sessionPageCall,
+} from "./clientCatalog";
 import { parseRpcResponse as parse } from "./clientParse";
 import * as taskLifecycle from "./clientTaskLifecycle";
 import * as taskDependencies from "./clientTaskDependencies";
@@ -55,7 +60,6 @@ import type {
   ServerReadiness,
   SessionCatalogPage,
   SessionCategory,
-  SessionPagePosition,
   TaskAttention,
   TaskComment,
   TaskDetail,
@@ -95,8 +99,6 @@ import {
 } from "./schemas/project";
 import {
   canonicalProjectIDSchema,
-  sessionCategorySchema,
-  sessionPagePositionSchema,
   sessionPageResponseSchema,
   workspacePageTokenSchema,
 } from "./schemas/catalog";
@@ -159,28 +161,17 @@ export class ApiClient implements ApiService {
   async listSessionPage(
     projectID: string,
     category: SessionCategory,
-    position: SessionPagePosition,
+    offset: number,
   ): Promise<SessionCatalogPage> {
-    const validatedProjectID = parseCatalogInput(
-      "session.page project ID",
-      canonicalProjectIDSchema,
-      projectID,
-    );
-    const validatedCategory = parseCatalogInput("session.page category", sessionCategorySchema, category);
-    const validatedPosition = parseCatalogInput("session.page position", sessionPagePositionSchema, position);
+    const request = sessionPageCall(projectID, category, offset);
     const response = parseCatalogResponse(
       "session.page",
       sessionPageResponseSchema,
-      await this.#transport.call("session.page", {
-        project_id: validatedProjectID,
-        category: validatedCategory,
-        page_size: 100,
-        position: validatedPosition,
-      }),
+      await this.#transport.call("session.page", request.params),
     );
-    requireCatalogProject("session.page", validatedProjectID, response.projectID);
-    if (response.category !== validatedCategory) {
-      throw CatalogContractError.sessionCategoryMismatch(validatedCategory, response.category);
+    requireCatalogProject("session.page", request.expectedProjectID, response.projectID);
+    if (response.category !== request.expectedCategory) {
+      throw CatalogContractError.sessionCategoryMismatch(request.expectedCategory, response.category);
     }
     return response;
   }
@@ -703,13 +694,21 @@ export class ApiClient implements ApiService {
 
   getWorktreeStatus = async (sessionID: string) => worktree.getWorktreeStatus(this.#transport, sessionID);
   listWorktrees = async (sessionID: string) => worktree.listWorktrees(this.#transport, sessionID);
-  resolveWorktreeSelector = async (sessionID: string, selector: string) => worktree.resolveWorktreeSelector(this.#transport, sessionID, selector);
-  resolveWorktreeCreateTarget = async (sessionID: string, target: string) => worktree.resolveWorktreeCreateTarget(this.#transport, sessionID, target);
-  previewWorktreeDelete = async (sessionID: string, selector: string) => worktree.previewWorktreeDelete(this.#transport, sessionID, selector);
-  createWorktree = async (input: worktreeModels.WorktreeCreateInput) => worktree.createWorktree(this.#transport, input);
-  switchWorktree = async (sessionID: string, operation: worktreeModels.WorktreeSwitch) => worktree.switchWorktree(this.#transport, sessionID, operation);
-  deleteWorktree = async (sessionID: string, preview: worktreeModels.WorktreeDeletePreview,
-    confirmation: worktreeModels.WorktreeDeleteConfirmationChoice) =>
-    worktree.deleteWorktree(this.#transport, sessionID, preview, confirmation);
-  subscribeWorktreeSetup = (setupOperationID: SetupOperationID, handler: WorktreeSetupEventHandler) => subscribeWorktreeSetup(this.#transport, setupOperationID, handler);
+  resolveWorktreeSelector = async (sessionID: string, selector: string) =>
+    worktree.resolveWorktreeSelector(this.#transport, sessionID, selector);
+  resolveWorktreeCreateTarget = async (sessionID: string, target: string) =>
+    worktree.resolveWorktreeCreateTarget(this.#transport, sessionID, target);
+  previewWorktreeDelete = async (sessionID: string, selector: string) =>
+    worktree.previewWorktreeDelete(this.#transport, sessionID, selector);
+  createWorktree = async (input: worktreeModels.WorktreeCreateInput) =>
+    worktree.createWorktree(this.#transport, input);
+  switchWorktree = async (sessionID: string, operation: worktreeModels.WorktreeSwitch) =>
+    worktree.switchWorktree(this.#transport, sessionID, operation);
+  deleteWorktree = async (
+    sessionID: string,
+    preview: worktreeModels.WorktreeDeletePreview,
+    confirmation: worktreeModels.WorktreeDeleteConfirmationChoice,
+  ) => worktree.deleteWorktree(this.#transport, sessionID, preview, confirmation);
+  subscribeWorktreeSetup = (setupOperationID: SetupOperationID, handler: WorktreeSetupEventHandler) =>
+    subscribeWorktreeSetup(this.#transport, setupOperationID, handler);
 }

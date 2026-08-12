@@ -36,6 +36,7 @@ export {
   defaultWorkflowExecutionTargetPolicy,
   emptyWorkflowDerivedWiring,
   hasSelectedWorkflow,
+  sessionCatalogPageSize,
 } from "./models";
 export { boardNodeCardsPageSize, defaultBoardNodeCardsSort } from "./boardNodeCardsSorting";
 export {
@@ -193,12 +194,7 @@ export type {
   OrdinaryQuestionPrompt,
   PromptIdentity,
 } from "./promptModels";
-export type {
-  SessionCatalogPage,
-  SessionCatalogSummary,
-  SessionCategory,
-  SessionPagePosition,
-} from "./models";
+export type { SessionCatalogPage, SessionCatalogSummary, SessionCategory } from "./models";
 export type {
   WorkflowEdgeSelectionMode,
   WorkflowParameterPurpose,
