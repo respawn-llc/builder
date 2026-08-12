@@ -255,7 +255,7 @@ func TestSharedClientUIRemainsDTOOnly(t *testing.T) {
 		"GoalAvailability.Validate":                               {},
 		"GoalEnvelope.Validate":                                   {},
 		"GoalMutationResult.Validate":                             {},
-		"ProjectGoal":                                             {},
+		"validGoalStatus":                                         {},
 		"SessionExecutionTargetIsZero":                            {},
 		"SessionExecutionTargetsEqual":                            {},
 		"ToolCallID.Validate":                                     {},
