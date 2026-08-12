@@ -3038,6 +3038,83 @@ func TestServiceWorkflowGraphPreviewDoesNotWaitForUnrelatedMutation(t *testing.T
 	}
 }
 
+func TestServiceWorkflowGraphPreviewOrdersVersionGateWithSameWorkflowMetadataMutation(t *testing.T) {
+	ctx, service, _ := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	otherWorkflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	current, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow current: %v", err)
+	}
+	otherCurrent, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: otherWorkflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow other current: %v", err)
+	}
+
+	laneStarted := make(chan struct{})
+	releaseLane := make(chan struct{})
+	laneDone := make(chan error, 1)
+	go func() {
+		_, err := service.store.RunWorkflowGraphSaveOperation(ctx, workflowID, func(ctx context.Context) (workflowstore.WorkflowGraphSaveResult, error) {
+			close(laneStarted)
+			<-releaseLane
+			return workflowstore.WorkflowGraphSaveResult{}, service.store.UpdateWorkflowInfo(ctx, workflowID, "Concurrent update", "")
+		})
+		laneDone <- err
+	}()
+	<-laneStarted
+
+	previewDone := make(chan struct {
+		response serverapi.WorkflowGraphSavePreviewResponse
+		err      error
+	}, 1)
+	go func() {
+		response, err := service.PreviewWorkflowGraphSave(ctx, serverapi.WorkflowGraphSavePreviewRequest{
+			WorkflowID:      workflowID,
+			ExpectedVersion: current.Definition.Workflow.Version,
+			Graph: serverapi.WorkflowGraphDraft{Nodes: []serverapi.WorkflowGraphDraftNode{{
+				ID:             "node-prefixed",
+				Kind:           string(serverapi.WorkflowNodeKindAgent),
+				CompletionMode: "tool",
+			}}},
+		})
+		previewDone <- struct {
+			response serverapi.WorkflowGraphSavePreviewResponse
+			err      error
+		}{response: response, err: err}
+	}()
+
+	otherPreview, err := service.PreviewWorkflowGraphSave(ctx, serverapi.WorkflowGraphSavePreviewRequest{
+		WorkflowID:      otherWorkflowID,
+		ExpectedVersion: otherCurrent.Definition.Workflow.Version,
+		Graph:           serverapi.WorkflowGraphDraftFromDefinition(otherCurrent.Definition),
+	})
+	if err != nil {
+		t.Fatalf("PreviewWorkflowGraphSave other Workflow: %v", err)
+	}
+	if otherPreview.Changed {
+		t.Fatalf("other Workflow preview = %+v, want unchanged", otherPreview)
+	}
+	select {
+	case outcome := <-previewDone:
+		t.Fatalf("same-Workflow Preview bypassed metadata ordering: response=%+v error=%v", outcome.response, outcome.err)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	close(releaseLane)
+	if err := <-laneDone; err != nil {
+		t.Fatalf("same-Workflow metadata mutation: %v", err)
+	}
+	outcome := <-previewDone
+	if outcome.err != nil {
+		t.Fatalf("PreviewWorkflowGraphSave stale malformed Draft: %v", outcome.err)
+	}
+	if outcome.response.CurrentVersion != current.Definition.Workflow.Version+1 ||
+		!workflowServiceHasGraphSaveBlocker(outcome.response.Blockers, "version_changed") {
+		t.Fatalf("preview = %+v, want current-version blocker", outcome.response)
+	}
+}
+
 func workflowServiceHasGraphSaveBlocker(blockers []serverapi.WorkflowGraphSaveBlocker, code string) bool {
 	for _, blocker := range blockers {
 		if blocker.Code == code {

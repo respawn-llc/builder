@@ -326,7 +326,10 @@ func (s *Service) UpdateWorkflow(ctx context.Context, req serverapi.WorkflowUpda
 		return serverapi.WorkflowGetResponse{}, err
 	}
 	if _, err := runWorkflowGraphMutation(ctx, s, req.WorkflowID, func(ctx context.Context) (struct{}, error) {
-		return struct{}{}, s.store.UpdateWorkflowInfo(ctx, req.WorkflowID, req.Name, req.Description)
+		_, err := s.store.RunWorkflowGraphSaveOperation(ctx, req.WorkflowID, func(ctx context.Context) (workflowstore.WorkflowGraphSaveResult, error) {
+			return workflowstore.WorkflowGraphSaveResult{}, s.store.UpdateWorkflowInfo(ctx, req.WorkflowID, req.Name, req.Description)
+		})
+		return struct{}{}, err
 	}); err != nil {
 		return serverapi.WorkflowGetResponse{}, err
 	}

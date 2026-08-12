@@ -82,8 +82,8 @@ func TestGraphEntityIDSQLiteFunctionsRejectInvalidScalarValues(t *testing.T) {
 
 func openGraphEntityIDSQLiteTestDatabase(t *testing.T) *sql.DB {
 	t.Helper()
-	if err := registerMetadataSQLiteFunctions(); err != nil {
-		t.Fatalf("register metadata SQLite functions: %v", err)
+	if err := registerMetadataSQLiteCollations(); err != nil {
+		t.Fatalf("register metadata SQLite extensions: %v", err)
 	}
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
