@@ -34,10 +34,32 @@ func TestRequestValidateAcceptsRequiredToolChoiceWithLocalTool(t *testing.T) {
 	err := (Request{
 		Model:          "gpt-5",
 		ToolChoiceMode: ToolChoiceModeRequired,
-		Tools:          []Tool{{Name: "shell"}},
+		Tools:          []Tool{{Name: "shell", Schema: mustTestFunctionSchema(t, struct{}{})}},
 	}).Validate()
 	if err != nil {
 		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestRequestValidateRejectsUnpreparedFunctionSchema(t *testing.T) {
+	err := (Request{
+		Model:          "gpt-5",
+		ToolChoiceMode: ToolChoiceModeAutomatic,
+		Tools:          []Tool{{Name: "shell"}},
+	}).Validate()
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("Validate() error = %v, want ErrInvalidRequest", err)
+	}
+}
+
+func TestRequestValidateRejectsUnpreparedStructuredOutputSchema(t *testing.T) {
+	err := (Request{
+		Model:            "gpt-5",
+		ToolChoiceMode:   ToolChoiceModeAutomatic,
+		StructuredOutput: &StructuredOutput{Name: "reviewer_suggestions"},
+	}).Validate()
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("Validate() error = %v, want ErrInvalidRequest", err)
 	}
 }
 
@@ -65,7 +87,7 @@ func TestRequestFromLockedContract_UsesBinaryPromptAndExplicitTools(t *testing.T
 		Temperature:    1,
 		MaxOutputToken: 0,
 	}
-	tool := Tool{Name: "shell", Schema: []byte(`{"type":"object"}`)}
+	tool := Tool{Name: "shell", Schema: mustTestFunctionSchema(t, struct{}{})}
 
 	req, err := RequestFromLockedContract(locked, "sys", []ResponseItem{{Type: ResponseItemTypeMessage, Role: textutil.Value(RoleUser), Content: textutil.Value("hi")}}, []Tool{tool}, ToolControls{ChoiceMode: ToolChoiceModeAutomatic})
 	if err != nil {

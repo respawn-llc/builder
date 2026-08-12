@@ -6,7 +6,6 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
-	"core/server/tools"
 	"core/shared/textutil"
 )
 
@@ -16,7 +15,7 @@ func TestCompactionReplacementAtomicallyEmbedsReinjectedMetaAndPreservedUserMess
 	client := &fakeCompactionClient{compactionResponses: []llm.CompactionResponse{
 		remoteCompactionReplacement(1_000, 100, 200_000),
 	}}
-	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	if _, err := engine.SetGoal("goal", session.GoalActorUser); err != nil {
 		t.Fatalf("set active goal: %v", err)
 	}

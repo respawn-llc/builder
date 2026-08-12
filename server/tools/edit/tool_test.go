@@ -176,29 +176,6 @@ func TestEditReplacementPreservesExecutableMode(t *testing.T) {
 	filemode.AssertUnixPermissionMode(t, target, 0o755)
 }
 
-func TestInputAliasesAndConflicts(t *testing.T) {
-	dir := t.TempDir()
-	tool := newTestTool(t, dir)
-
-	ok := callEdit(t, tool, map[string]any{
-		"filePath":   "a.txt",
-		"oldText":    "",
-		"newText":    "hello",
-		"replaceAll": true,
-	})
-	requireEditSuccess(t, ok)
-
-	conflict := callEdit(t, tool, map[string]any{
-		"path":      "a.txt",
-		"file_path": "b.txt",
-		"oldText":   "",
-		"newText":   "hello",
-	})
-	if !conflict.IsError || !strings.Contains(toolResultText(t, conflict), "conflicting aliases") {
-		t.Fatalf("expected conflict failure, got %q", toolResultText(t, conflict))
-	}
-}
-
 func TestCreateRejectsNonEmptyAndAllowsWhitespaceOnly(t *testing.T) {
 	dir := t.TempDir()
 	nonEmpty := filepath.Join(dir, "non-empty.txt")

@@ -2,9 +2,11 @@ package tools
 
 import (
 	"context"
+	"core/shared/jsoncontract"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -21,6 +23,40 @@ func handlerRegistration(id toolspec.ID) HandlerRegistration {
 	return HandlerRegistration{ID: id, Handler: stubHandler{id: id}}
 }
 
+type staticContractTestInput struct {
+	Value string `json:"value"`
+}
+
+func staticContractTestSources() []StaticContractSource {
+	ids := []toolspec.ID{
+		toolspec.ToolExecCommand,
+		toolspec.ToolWriteStdin,
+		toolspec.ToolViewImage,
+		toolspec.ToolPatch,
+		toolspec.ToolEdit,
+		toolspec.ToolAskQuestion,
+		toolspec.ToolTriggerHandoff,
+		toolspec.ToolWebSearch,
+	}
+	sources := make([]StaticContractSource, 0, len(ids))
+	for _, id := range ids {
+		sources = append(sources, StaticContractSource{ID: id, Input: staticContractTestInput{}})
+	}
+	return sources
+}
+
+func staticContractTestOwner(t *testing.T) StaticToolContracts {
+	t.Helper()
+	contracts, err := NewStaticToolContracts(
+		jsoncontract.NewPreparer(false),
+		staticContractTestSources()...,
+	)
+	if err != nil {
+		t.Fatalf("prepare static tool contracts: %v", err)
+	}
+	return contracts
+}
+
 func requireDefinition(t *testing.T, id toolspec.ID) Definition {
 	t.Helper()
 	definition, ok := DefinitionFor(id)
@@ -31,10 +67,14 @@ func requireDefinition(t *testing.T, id toolspec.ID) Definition {
 }
 
 func TestRegistryDefinitionsFollowCentralCatalog(t *testing.T) {
-	r := NewRegistry(
+	r, err := NewStaticToolRegistry(
+		staticContractTestOwner(t),
 		handlerRegistration(toolspec.ToolPatch),
 		handlerRegistration(toolspec.ToolExecCommand),
 	)
+	if err != nil {
+		t.Fatalf("NewStaticToolRegistry: %v", err)
+	}
 	defs := r.Definitions()
 	if len(defs) != 2 {
 		t.Fatalf("definitions count=%d want 2", len(defs))
@@ -42,29 +82,38 @@ func TestRegistryDefinitionsFollowCentralCatalog(t *testing.T) {
 	if defs[0].ID != toolspec.ToolPatch || defs[1].ID != toolspec.ToolExecCommand {
 		t.Fatalf("definition order mismatch: %+v", defs)
 	}
-	if len(defs[0].Schema) == 0 || len(defs[1].Schema) == 0 {
+	if !defs[0].Schema.Prepared() || !defs[1].Schema.Prepared() {
 		t.Fatalf("missing centralized schema: %+v", defs)
 	}
 }
 
 func TestRegistryRejectsUnknownToolDefinition(t *testing.T) {
-	defer func() {
-		if recover() == nil {
-			t.Fatal("expected panic for unknown tool definition")
-		}
-	}()
-	_ = NewRegistry(handlerRegistration(toolspec.ID("unknown_tool")))
+	_, err := NewStaticToolRegistry(
+		staticContractTestOwner(t),
+		handlerRegistration(toolspec.ID("unknown_tool")),
+	)
+	if err == nil {
+		t.Fatal("expected error for unknown tool definition")
+	}
 }
 
 func TestRegistryReplaceHandlersSwapsDefinitionsAtomically(t *testing.T) {
-	r := NewRegistry(handlerRegistration(toolspec.ToolExecCommand))
+	r, err := NewStaticToolRegistry(
+		staticContractTestOwner(t),
+		handlerRegistration(toolspec.ToolExecCommand),
+	)
+	if err != nil {
+		t.Fatalf("NewStaticToolRegistry: %v", err)
+	}
 	if defs := r.Definitions(); len(defs) != 1 || defs[0].ID != toolspec.ToolExecCommand {
 		t.Fatalf("unexpected initial definitions: %+v", defs)
 	}
-	r.ReplaceHandlers(
+	if err := r.ReplaceHandlers(
 		handlerRegistration(toolspec.ToolPatch),
 		handlerRegistration(toolspec.ToolWriteStdin),
-	)
+	); err != nil {
+		t.Fatalf("ReplaceHandlers: %v", err)
+	}
 	defs := r.Definitions()
 	if len(defs) != 2 {
 		t.Fatalf("definitions count=%d want 2", len(defs))
@@ -80,15 +129,87 @@ func TestRegistryReplaceHandlersSwapsDefinitionsAtomically(t *testing.T) {
 	}
 }
 
-func TestCentralDefinitionsRequireAdditionalPropertiesFalse(t *testing.T) {
-	for id, def := range definitions {
-		var schema map[string]any
-		if err := json.Unmarshal(def.Schema, &schema); err != nil {
-			t.Fatalf("tool %s has invalid schema json: %v", id, err)
+func TestEmptyRegistryCannotInstallOrdinaryHandlers(t *testing.T) {
+	r := NewRegistry()
+	err := r.ReplaceHandlers(handlerRegistration(toolspec.ToolPatch))
+	if err == nil {
+		t.Fatal("empty registry accepted an ordinary handler")
+	}
+	if defs := r.Definitions(); len(defs) != 0 {
+		t.Fatalf("empty registry recovered definitions from globals: %+v", defs)
+	}
+}
+
+func TestRegistryPrepareInputUsesRegisteredPreparedContract(t *testing.T) {
+	r, err := NewStaticToolRegistry(
+		staticContractTestOwner(t),
+		handlerRegistration(toolspec.ToolPatch),
+	)
+	if err != nil {
+		t.Fatalf("NewStaticToolRegistry: %v", err)
+	}
+	prepared, err := r.PrepareInput(toolspec.ToolPatch, json.RawMessage(`{"value":"ok","unknown":true}`))
+	if err != nil {
+		t.Fatalf("PrepareInput: %v", err)
+	}
+	if string(prepared) != `{"value":"ok"}` {
+		t.Fatalf("prepared input = %s", prepared)
+	}
+	if _, err := r.PrepareInput(toolspec.ToolExecCommand, json.RawMessage(`{"value":"ok"}`)); err == nil {
+		t.Fatal("unregistered tool input unexpectedly prepared")
+	}
+}
+
+func TestCompleteNodeDefinitionIsSchemaFreeMetadata(t *testing.T) {
+	definition, ok := DefinitionFor(toolspec.ToolCompleteNode)
+	if !ok {
+		t.Fatal("complete_node metadata is unavailable")
+	}
+	if definition.Schema.Prepared() {
+		t.Fatal("complete_node metadata carries a static schema")
+	}
+}
+
+func TestRequestEnabledSelectionFiltersRegisteredDefinitions(t *testing.T) {
+	r, err := NewStaticToolRegistry(
+		staticContractTestOwner(t),
+		handlerRegistration(toolspec.ToolPatch),
+	)
+	if err != nil {
+		t.Fatalf("NewStaticToolRegistry: %v", err)
+	}
+	defs := RequestExposedDefinitionsForSession(
+		[]toolspec.ID{toolspec.ToolExecCommand, toolspec.ToolPatch},
+		r.Definitions(),
+		RequestExposureContext{},
+	)
+	if len(defs) != 1 || defs[0].ID != toolspec.ToolPatch {
+		t.Fatalf("enabled definitions recovered unregistered schemas: %+v", defs)
+	}
+}
+
+func TestStaticToolContractPreparationErrorsRetainOwner(t *testing.T) {
+	sources := staticContractTestSources()
+	sources[0].Input = nil
+	_, err := NewStaticToolContracts(jsoncontract.NewPreparer(false), sources...)
+	if err == nil {
+		t.Fatal("unsupported input type unexpectedly prepared")
+	}
+	if !errors.Is(err, errStaticToolContractPreparation) {
+		t.Fatalf("error = %v, want static contract preparation error", err)
+	}
+}
+
+func TestStaticToolContractsRemainNonStrictAndGlobalMetadataSchemaFree(t *testing.T) {
+	contracts := staticContractTestOwner(t)
+	for id, contract := range contracts.byID {
+		if contract.schema.Strict() {
+			t.Fatalf("%s static function schema is strict", id)
 		}
-		got, ok := schema["additionalProperties"].(bool)
-		if !ok || got {
-			t.Fatalf("tool %s must define additionalProperties=false, got %#v", id, schema["additionalProperties"])
+	}
+	for id, definition := range definitions {
+		if definition.Schema.Prepared() {
+			t.Fatalf("%s global metadata retained a schema", id)
 		}
 	}
 }
@@ -255,9 +376,9 @@ func TestEditDefinitionBuildsStructuredPresentationFromCallInput(t *testing.T) {
 	edit := requireDefinition(t, toolspec.ToolEdit)
 
 	meta := edit.BuildToolCallMeta(ToolCallContext{WorkingDir: "/workspace"}, json.RawMessage(`{
-		"filePath":"a.go",
-		"oldText":"old\nunchanged\n",
-		"newText":"new\nunchanged\n"
+		"path":"a.go",
+		"old_string":"old\nunchanged\n",
+		"new_string":"new\nunchanged\n"
 	}`))
 
 	if meta.PatchRender == nil || len(meta.PatchRender.Files) != 1 {
@@ -269,6 +390,27 @@ func TestEditDefinitionBuildsStructuredPresentationFromCallInput(t *testing.T) {
 	}
 	if meta.Command != meta.PatchDetail || meta.CompactText != meta.PatchSummary {
 		t.Fatalf("expected edit text aliases to come from structured input: %+v", meta)
+	}
+}
+
+func TestEditDefinitionFallsBackForIncompleteInput(t *testing.T) {
+	edit := requireDefinition(t, toolspec.ToolEdit)
+	for _, raw := range []string{
+		`{"path":"a.go","old_string":"old"}`,
+		`{"path":"a.go","new_string":"new"}`,
+		`{"old_string":"old","new_string":"new"}`,
+		`{"path":"a.go","old_string":"same","new_string":"same"}`,
+	} {
+		meta := edit.BuildToolCallMeta(
+			ToolCallContext{WorkingDir: "/workspace"},
+			json.RawMessage(raw),
+		)
+		if meta.PatchRender != nil {
+			t.Fatalf("incomplete edit input %s produced a structured diff: %+v", raw, meta)
+		}
+		if meta.RenderHint == nil || meta.RenderHint.Kind != transcript.ToolRenderKindDiff {
+			t.Fatalf("incomplete edit input %s lost its diff render hint: %+v", raw, meta)
+		}
 	}
 }
 

@@ -1,5 +1,13 @@
 -- +goose Up
 
+UPDATE workflow_edges
+SET input_bindings_json = json_array()
+WHERE json_type(input_bindings_json) = 'object'
+  AND NOT EXISTS (
+      SELECT 1
+      FROM json_each(workflow_edges.input_bindings_json)
+  );
+
 CREATE TABLE task_active_fanouts (
     task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE
 );
@@ -583,7 +591,15 @@ SELECT
         placement.task_id,
         placement.node_id,
         branch_edge.edge_key,
-        entering_edge.input_bindings_json,
+        CASE
+            WHEN json_type(entering_edge.input_bindings_json) = 'object'
+             AND NOT EXISTS (
+                 SELECT 1
+                 FROM json_each(entering_edge.input_bindings_json)
+             )
+            THEN json_array()
+            ELSE entering_edge.input_bindings_json
+        END,
         entering_transition.output_values_json,
         entering_transition.commentary,
         task.short_id,
@@ -1452,7 +1468,15 @@ SELECT
             ) > 1 THEN edge.edge_key
             ELSE NULL
         END,
-        edge.input_bindings_json,
+        CASE
+            WHEN json_type(edge.input_bindings_json) = 'object'
+             AND NOT EXISTS (
+                 SELECT 1
+                 FROM json_each(edge.input_bindings_json)
+             )
+            THEN json_array()
+            ELSE edge.input_bindings_json
+        END,
         transition.output_values_json,
         transition.commentary,
         task.short_id,

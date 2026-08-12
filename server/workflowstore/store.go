@@ -13,21 +13,23 @@ import (
 	"core/server/metadata/sqlitegen"
 	"core/server/requestmemo"
 	"core/server/workflow"
+	"core/shared/jsoncontract"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"github.com/google/uuid"
 )
 
 type Store struct {
-	metadata     *metadata.Store
-	db           *sql.DB
-	queries      *sqlitegen.Queries
-	roleResolver workflow.RoleResolver
-	now          func() time.Time
-	approvalGate chan struct{}
-	graphSaves   *requestmemo.MutationLaneRegistry[runtimeids.WorkflowID]
-	eventMu      sync.RWMutex
-	eventSink    WorkflowEventPublisher
+	metadata            *metadata.Store
+	db                  *sql.DB
+	queries             *sqlitegen.Queries
+	priorValuesContract jsoncontract.Internal
+	roleResolver        workflow.RoleResolver
+	now                 func() time.Time
+	approvalGate        chan struct{}
+	graphSaves          *requestmemo.MutationLaneRegistry[runtimeids.WorkflowID]
+	eventMu             sync.RWMutex
+	eventSink           WorkflowEventPublisher
 }
 
 type Option func(*Store)
@@ -57,14 +59,22 @@ func New(metadataStore *metadata.Store, opts ...Option) (*Store, error) {
 	if metadataStore == nil || metadataStore.DB() == nil || metadataStore.Queries() == nil {
 		return nil, errors.New("metadata store is required")
 	}
+	priorValues, err := jsoncontract.NewPreparer(false).Internal(
+		"Workflow Store current-node prior values",
+		workflow.MaterializedPriorValues{},
+	)
+	if err != nil {
+		return nil, err
+	}
 	store := &Store{
-		metadata:     metadataStore,
-		db:           metadataStore.DB(),
-		queries:      metadataStore.Queries(),
-		now:          func() time.Time { return time.Now().UTC() },
-		approvalGate: make(chan struct{}, 1),
-		graphSaves:   requestmemo.NewMutationLaneRegistry[runtimeids.WorkflowID](),
-		eventSink:    noopWorkflowEventPublisher{},
+		metadata:            metadataStore,
+		db:                  metadataStore.DB(),
+		queries:             metadataStore.Queries(),
+		priorValuesContract: priorValues,
+		now:                 func() time.Time { return time.Now().UTC() },
+		approvalGate:        make(chan struct{}, 1),
+		graphSaves:          requestmemo.NewMutationLaneRegistry[runtimeids.WorkflowID](),
+		eventSink:           noopWorkflowEventPublisher{},
 	}
 	for _, opt := range opts {
 		opt(store)

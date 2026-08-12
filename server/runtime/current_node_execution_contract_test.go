@@ -3,7 +3,6 @@ package runtime
 import (
 	"testing"
 
-	"core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/shared/runtimeids"
@@ -40,7 +39,7 @@ func TestRuntimeRejectsCurrentNodeExecutionWithoutScope(t *testing.T) {
 		store,
 		mustMaterializeTestEventLog(t, store),
 		&fakeClient{},
-		tools.NewRegistry(),
+		newTestToolRegistry(t),
 		Config{
 			Model: "gpt-5",
 			CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
@@ -65,7 +64,7 @@ func TestCurrentNodeExecutionBindingHasOneOwner(t *testing.T) {
 			WorkflowID:  workflowID,
 		},
 	}
-	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
 		CurrentNodeExecution: execution,
 	})
 
@@ -106,6 +105,38 @@ func TestCurrentNodeExecutionBindingHasOneOwner(t *testing.T) {
 	}
 }
 
+func TestCurrentNodeExecutionBindingPreparesCompletionContract(t *testing.T) {
+	t.Parallel()
+	store := mustCreateTestSessionAt(t, t.TempDir())
+	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{})
+	execution := &workflowruntime.CurrentNodeExecutionConfig{
+		ScopeID: runtimeids.NewExecutionScopeID(),
+		Contract: workflowruntime.CompletionContract{
+			Transitions: []workflowruntime.CompletionTransition{{ID: "done"}},
+		},
+		Instructions: workflowruntime.TaskInstructions{
+			CurrentNode: mustTestCurrentNodeReference(t, "task-binding-contract", "node-binding-contract", nil),
+		},
+	}
+
+	binding, err := engine.BindCurrentNodeExecution(execution)
+	if err != nil {
+		t.Fatalf("bind Current Node execution: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := binding.Close(); err != nil {
+			t.Errorf("close Current Node execution binding: %v", err)
+		}
+	})
+	bound, active := engine.currentNodeExecutionConfig()
+	if !active {
+		t.Fatal("bound Current Node execution is unavailable")
+	}
+	if _, err := workflowruntime.FunctionSchema(bound.Contract); err != nil {
+		t.Fatalf("bound completion contract is not prepared: %v", err)
+	}
+}
+
 func TestCurrentNodeExecutionBindingClearsCompletedContract(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSessionAt(t, t.TempDir())
@@ -116,7 +147,7 @@ func TestCurrentNodeExecutionBindingClearsCompletedContract(t *testing.T) {
 			WorkflowID:  runtimeids.NewWorkflowID(),
 		},
 	}
-	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
 		CurrentNodeExecution: execution,
 	})
 	binding, err := engine.BindCurrentNodeExecution(execution)
@@ -158,7 +189,7 @@ func TestIdleCompletionActivationClearsRetainedContract(t *testing.T) {
 			WorkflowID:  runtimeids.NewWorkflowID(),
 		},
 	}
-	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
 		CurrentNodeExecution: execution,
 	})
 	engine.setWorkflowTerminalState(WorkflowCompletionSourceTool)

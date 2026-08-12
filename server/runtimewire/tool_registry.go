@@ -1,11 +1,9 @@
 package runtimewire
 
 import (
-	"context"
-	"encoding/json"
-
 	"core/prompts"
 	"core/server/metadata"
+	"core/server/runtimewire/toolcontracts"
 	"core/server/tools"
 	askquestion "core/server/tools"
 	triggerhandofftool "core/server/tools"
@@ -15,8 +13,8 @@ import (
 	shelltool "core/server/tools/shell"
 	"core/server/tools/shell/postprocess"
 	"core/shared/config"
+	"core/shared/jsoncontract"
 	"core/shared/runtimeids"
-	"core/shared/textutil"
 	"core/shared/toolspec"
 	"errors"
 	"fmt"
@@ -100,8 +98,6 @@ func BuildLocalRuntimeHandler(def tools.Definition, ctx LocalToolRuntimeContext)
 			return nil, fmt.Errorf("ask_question broker is unavailable")
 		}
 		return askquestion.NewAskQuestionTool(ctx.AskQuestionBroker, ctx.QuestionsEnabledGetter), nil
-	case tools.LocalRuntimeBuilderCompleteNode:
-		return completeNodeUnavailableTool{}, nil
 	case tools.LocalRuntimeBuilderTriggerHandoff:
 		if ctx.TriggerHandoffController == nil {
 			return nil, fmt.Errorf("trigger_handoff controller is unavailable")
@@ -122,16 +118,6 @@ func BuildLocalRuntimeHandler(def tools.Definition, ctx LocalToolRuntimeContext)
 	default:
 		return nil, fmt.Errorf("unsupported local runtime builder %q for tool %q", def.LocalRuntimeBuilder(), def.ID)
 	}
-}
-
-type completeNodeUnavailableTool struct{}
-
-func (completeNodeUnavailableTool) Call(_ context.Context, c tools.Call) (tools.Result, error) {
-	output, err := json.Marshal(map[string]string{"error": "complete_node is only available during Current Node execution"})
-	if err != nil {
-		output = json.RawMessage(`{"error":"complete_node is only available during Current Node execution"}`)
-	}
-	return tools.Result{CallID: c.ID, Name: toolspec.ToolCompleteNode, IsError: true, Output: output, Summary: textutil.Value("not in Current Node execution")}, nil
 }
 
 func (b *LocalToolRegistryBinding) Registry() *tools.Registry {
@@ -201,7 +187,7 @@ func (b *LocalToolRegistryBinding) rebuild() error {
 
 func (b *LocalToolRegistryBinding) rebuildLocked() error {
 	if b.registry == nil {
-		b.registry = tools.NewRegistry()
+		return fmt.Errorf("local static tool registry is required")
 	}
 	handlers := make([]tools.HandlerRegistration, 0, len(b.enabled))
 	enabledSet := make(map[toolspec.ID]struct{}, len(b.enabled))
@@ -210,6 +196,9 @@ func (b *LocalToolRegistryBinding) rebuildLocked() error {
 	}
 	for _, id := range tools.CatalogIDs() {
 		if _, ok := enabledSet[id]; !ok {
+			continue
+		}
+		if id == toolspec.ToolCompleteNode {
 			continue
 		}
 		def, ok := tools.DefinitionFor(id)
@@ -225,8 +214,7 @@ func (b *LocalToolRegistryBinding) rebuildLocked() error {
 		}
 		handlers = append(handlers, tools.HandlerRegistration{ID: id, Handler: handler})
 	}
-	b.registry.ReplaceHandlers(handlers...)
-	return nil
+	return b.registry.ReplaceHandlers(handlers...)
 }
 
 type LocalToolRegistryOptions struct {
@@ -244,6 +232,7 @@ type LocalToolRegistryOptions struct {
 	TriggerHandoffController func() triggerhandofftool.TriggerHandoffController
 	QuestionsEnabledGetter   func() bool
 	GlobalConfigDir          string
+	Debug                    bool
 }
 
 func NewLocalToolRegistryBinding(opts LocalToolRegistryOptions) (*LocalToolRegistryBinding, *askquestion.AskQuestionBroker, *shelltool.Manager, error) {
@@ -275,7 +264,14 @@ func NewLocalToolRegistryBinding(opts LocalToolRegistryOptions) (*LocalToolRegis
 			return nil, nil, nil, err
 		}
 	}
-	registry := tools.NewRegistry()
+	staticContracts, err := toolcontracts.Prepare(jsoncontract.NewPreparer(opts.Debug))
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("prepare local static tool contracts: %w", err)
+	}
+	registry, err := tools.NewStaticToolRegistry(staticContracts)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("create local static tool registry: %w", err)
+	}
 	ctx := LocalToolRuntimeContext{
 		FilesystemContext:            opts.FilesystemContext.Clone(),
 		OwnerSessionID:               opts.OwnerSessionID,

@@ -29,10 +29,16 @@ func BuildCurrentNodeRuntimeConfig(
 	if err != nil {
 		return nil, err
 	}
+	contract, err := workflowruntime.NewCompletionContract(
+		workflowCompletionTransitions(input.TransitionOptions, input.TransitionIDs),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("prepare current node completion contract: %w", err)
+	}
 	return &workflowruntime.CurrentNodeExecutionConfig{
 		ScopeID:                      lease.ScopeID(),
 		TaskPromptDelivery:           taskPromptDelivery,
-		Contract:                     workflowruntime.CompletionContract{Transitions: workflowCompletionTransitions(input.TransitionOptions, input.TransitionIDs)},
+		Contract:                     contract,
 		CompletionMode:               completionMode,
 		MaxInvalidCompletionAttempts: maxInvalidCompletionAttempts,
 		UseAutomaticToolChoice:       !useRequiredToolCalls,

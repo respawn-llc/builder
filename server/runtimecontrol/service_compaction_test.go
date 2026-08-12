@@ -121,7 +121,7 @@ func (c *boundaryCompactionRuntimeControlClient) ProviderCapabilities(context.Co
 
 func TestServiceCompactContextDuringAgentStepRunsBeforeNextStep(t *testing.T) {
 	client := newBoundaryCompactionRuntimeControlClient()
-	registry := tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeShellHandler{}})
+	registry := newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeShellHandler{}})
 	store, engine, service := newRuntimeControlTestService(t, client, registry, runtime.Config{
 		Model:                        "gpt-5",
 		ProviderCapabilitiesOverride: &runtimeControlOpenAICapabilities,

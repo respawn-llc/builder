@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"core/server/llm"
+	"core/shared/toolspec"
 )
 
 type TriggerHandoffController interface {
@@ -19,8 +20,12 @@ type TriggerHandoffResultPayload struct {
 }
 
 type input struct {
-	SummarizerPrompt   string `json:"summarizer_prompt,omitempty"`
-	FutureAgentMessage string `json:"future_agent_message,omitempty"`
+	SummarizerPrompt   string `json:"summarizer_prompt,omitempty" jsonschema_description:"Optional extra instructions for the handoff summarizer. The summarizer already receives detailed generic guidance on preserving the workspace state and full conversation transcript. Only use this to add something specific about your current thoughts or state of work."`
+	FutureAgentMessage string `json:"future_agent_message,omitempty" jsonschema_description:"Optional message to forward verbatim to the next agent in addition to the detailed summary of current work. Only include specific concise information to preserve from the analysis block or the next immediate step, not generic guidance or conversation summary."`
+}
+
+func TriggerHandoffStaticContractSource() StaticContractSource {
+	return StaticContractSource{ID: toolspec.ToolTriggerHandoff, Input: input{}}
 }
 
 type TriggerHandoffTool struct {
