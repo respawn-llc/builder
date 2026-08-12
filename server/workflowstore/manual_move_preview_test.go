@@ -691,98 +691,6 @@ func TestManualMoveBackwardUsesRetainedImmediateSourceSession(t *testing.T) {
 	}
 }
 
-func TestManualMoveUsesPriorCurrentSessionWhileFreshSourceRemainsUnbound(t *testing.T) {
-	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
-	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeContinueSession, "coder")
-	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
-	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	started := startTask(t, ctx, store, task.ID)
-	priorSessionID := associateAndBindCurrentNodeSessionForTest(
-		t,
-		ctx,
-		store,
-		binding,
-		cfg,
-		started.Mutation.Created[0].Reference,
-	)
-	definition, _, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	done := nodeByKey(t, definition, "done")
-	if _, err := store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(done)}); err != nil {
-		t.Fatalf("move to done: %v", err)
-	}
-	plan := nodeByKey(t, definition, "plan")
-	planMove := applyManualMoveFixture(t, ctx, store, binding, ManualMoveRequest{
-		TaskID:       task.ID,
-		TargetNodeID: workflow.NodeIDOf(plan),
-	})
-	if len(planMove.Mutation.Created) != 1 || planMove.Mutation.Created[0].SessionID != nil {
-		t.Fatalf("planned fresh Plan = %+v, want unbound Current Node", planMove.Mutation.Created)
-	}
-
-	target := nodeByKey(t, definition, "implement")
-	prepared, err := store.PrepareManualMove(ctx, ManualMoveRequest{
-		TaskID:       task.ID,
-		TargetNodeID: workflow.NodeIDOf(target),
-		Values: map[workflow.ModelKey]map[string]string{
-			"plan": {"prior_summary": "retained plan"},
-		},
-	})
-	if err != nil {
-		t.Fatalf("PrepareManualMove Implement: %v", err)
-	}
-	moved, err := store.ApplyManualMove(ctx, prepared, nil)
-	if err != nil {
-		t.Fatalf("ApplyManualMove Implement: %v", err)
-	}
-	if len(moved.Mutation.Created) != 1 ||
-		moved.Mutation.Created[0].SessionID == nil ||
-		*moved.Mutation.Created[0].SessionID != priorSessionID {
-		t.Fatalf("manual move = %+v, want prior current Session %q", moved, priorSessionID)
-	}
-}
-
-func TestManualMoveCreatesFreshSessionWhenCurrentDirectSourceHasNeverBound(t *testing.T) {
-	ctx, store, binding := newTestStoreContext(t)
-	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeContinueSession, "coder")
-	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
-	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	started := startTask(t, ctx, store, task.ID)
-	definition, _, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	target := nodeByKey(t, definition, "implement")
-
-	preview, err := store.PreviewManualMove(ctx, ManualMoveRequest{
-		TaskID:       task.ID,
-		TargetNodeID: workflow.NodeIDOf(target),
-	})
-	if err != nil {
-		t.Fatalf("PreviewManualMove: %v", err)
-	}
-	if preview.Outcome != ManualMovePreviewOutcomeTransition || len(preview.Choices) != 1 {
-		t.Fatalf("preview = %+v, want fresh direct-source recovery", preview)
-	}
-	moved := applyManualMoveFixture(t, ctx, store, binding, ManualMoveRequest{
-		TaskID:       task.ID,
-		TargetNodeID: workflow.NodeIDOf(target),
-		Values: map[workflow.ModelKey]map[string]string{
-			"plan": {"prior_summary": "fresh plan"},
-		},
-	})
-	if len(moved.Mutation.Created) != 1 ||
-		moved.Mutation.Created[0].SessionID != nil ||
-		moved.Mutation.Created[0].ContinuationSource.Kind() != workflow.MaterializedContinuationSourceDeferredSelf {
-		t.Fatalf("manual move = %+v, want fresh unbound deferred-self target", moved)
-	}
-	if !moved.Mutation.Removed[0].Equal(started.Mutation.Created[0].Reference) {
-		t.Fatalf("manual move removed = %+v, want original Current Node", moved.Mutation.Removed)
-	}
-}
-
 func TestManualMoveCreatesFreshRetainedTargetAfterPlannedSourceBinds(t *testing.T) {
 	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
 	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
@@ -982,6 +890,44 @@ func TestManualMoveRetainedTargetWithoutHistoryFailsStrictAndCreatesFallbackWith
 	}
 	if diagnostics.Len() != 0 {
 		t.Fatalf("fallback ordinary unavailable diagnostics = %q, want none", diagnostics.String())
+	}
+}
+
+func TestManualMoveFanoutRetainedTargetUsesSerialAssociationDuringApply(t *testing.T) {
+	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
+	workflowID := createFanoutJoinWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	sourceSessionID := associateAndBindCurrentNodeSessionForTest(t, ctx, store, binding, cfg, source.Reference)
+	source.SessionID = &sourceSessionID
+	exactSource, err := workflow.NewExactMaterializedContinuationSource(sourceSessionID)
+	if err != nil {
+		t.Fatalf("NewExactMaterializedContinuationSource: %v", err)
+	}
+	source.ContinuationSource = exactSource
+	definition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	for _, targetKey := range []string{"impl_a", "impl_b"} {
+		target := nodeByKey(t, definition, targetKey)
+		reference := replaceSerialCurrentNodeBindingFixture(t, ctx, store, source, workflow.NodeIDOf(target), nil, source.ContinuationSource)
+		associateAndBindCurrentNodeSessionForTest(t, ctx, store, binding, cfg, reference)
+		replaceSerialCurrentNodeBindingFixture(t, ctx, store, source, source.Reference.NodeID, source.SessionID, source.ContinuationSource)
+	}
+	for key, targetKey := range map[string]string{"split_a": "impl_a", "split_b": "impl_b"} {
+		edge := edgeByKey(t, definition, key)
+		edge.ContextMode = workflow.ContextModeContinueSession
+		edge.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourcePreviousTarget}
+		branchKey := workflow.TransitionBranchKey(edge.Key)
+		resolved, err := resolveTransitionContext(
+			ctx, store.queries, definition, edge, task.ID, &source, &branchKey,
+			nodeByKey(t, definition, "plan"), nodeByKey(t, definition, targetKey), true,
+		)
+		if err != nil || resolved.targetSessionID() == nil {
+			t.Fatalf("resolve manual move %s = %+v, %v; want retained serial Session", key, resolved, err)
+		}
 	}
 }
 

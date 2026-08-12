@@ -77,13 +77,17 @@ func completeCurrentNodeJoinArrival(
 	if err != nil {
 		return CurrentNodeCompletionResult{}, err
 	}
-	joinContinuationSource, err := mergeCurrentFanoutJoinContinuationSources(arrivals)
-	if err != nil {
-		return CurrentNodeCompletionResult{}, err
-	}
 	target, err := currentFanoutJoinOutgoingTarget(definition, resolution.Join)
 	if err != nil {
 		return CurrentNodeCompletionResult{}, err
+	}
+	joinContinuationSource := workflow.AbsentMaterializedContinuationSource()
+	if target.Node.Kind() != workflow.NodeKindTerminal &&
+		(target.Edge.ContextMode != workflow.ContextModeNewSession || target.Node.Kind() != workflow.NodeKindAgent) {
+		joinContinuationSource, err = mergeCurrentFanoutJoinContinuationSources(arrivals)
+		if err != nil {
+			return CurrentNodeCompletionResult{}, err
+		}
 	}
 	joinSource, err := newNonExecutableCurrentNodeWithPriorValues(
 		source.Reference.TaskID,

@@ -231,7 +231,7 @@ func TestCompleteCurrentNodeFanoutPendingApprovalCarriesCommentary(t *testing.T)
 }
 
 func TestCompleteCurrentNodeJoinContinuationReturnsTargetNodeKind(t *testing.T) {
-	ctx, store, binding := newTestStoreContext(t)
+	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
 	workflowID := createFanoutJoinWorkflow(t, ctx, store)
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
 		edge := edgeByKey(t, def, "join_a")
@@ -262,6 +262,8 @@ func TestCompleteCurrentNodeJoinContinuationReturnsTargetNodeKind(t *testing.T) 
 	}
 
 	first, second := split.Mutation.Created[0], split.Mutation.Created[1]
+	associateAndBindCurrentNodeSessionForTest(t, ctx, store, binding, cfg, first.Reference)
+	associateAndBindCurrentNodeSessionForTest(t, ctx, store, binding, cfg, second.Reference)
 	if _, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 		Source:       first.Reference,
 		TransitionID: "join_a",

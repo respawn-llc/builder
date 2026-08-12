@@ -329,6 +329,9 @@ func (s *Starter) prepareCurrentNodeAgentSession(
 			return preparedCurrentNodeAgentSession{}, cleanup(err)
 		}
 		sessionBound = true
+		if input.CurrentNode.SessionID == nil {
+			cleanup = func(err error) error { return err }
+		}
 	}
 	return preparedCurrentNodeAgentSession{
 		root:    root,

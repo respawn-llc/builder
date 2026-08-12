@@ -1552,6 +1552,14 @@ func TestCurrentNodeRuntimePreparationFailureRetainsAssignedFreshSession(t *test
 	if count, err := f.store.CountTaskSessions(context.Background(), task.ID); err != nil || count != 1 {
 		t.Fatalf("retained Session count after runtime preparation failure = %d, %v; want assigned Session", count, err)
 	}
+	nodes, err := f.store.ListCurrentNodes(context.Background(), task.ID)
+	if err != nil || len(nodes) != 1 || nodes[0].SessionID == nil {
+		t.Fatalf("Current Nodes after runtime preparation failure = %+v, %v; want retained binding", nodes, err)
+	}
+	startContext, err := f.store.ResolveCurrentNodeStartContext(context.Background(), nodes[0].Reference)
+	if err != nil || startContext.CurrentNode.SessionID == nil || *startContext.CurrentNode.SessionID != *nodes[0].SessionID {
+		t.Fatalf("resumed start context Session = %+v, %v; want retained binding %q", startContext.CurrentNode.SessionID, err, nodes[0].SessionID)
+	}
 }
 
 func TestCurrentNodeContinuationModesReuseTheRetainedSession(t *testing.T) {

@@ -112,6 +112,7 @@ func resolveTransitionContext(
 			source,
 			targetBranchKey,
 			sourceNode,
+			manualMoveContext,
 		)
 	default:
 		if manualMoveContext {
@@ -198,11 +199,12 @@ func resolveRetainedTargetTransitionContext(
 	source *workflow.CurrentNode,
 	targetBranchKey *workflow.TransitionBranchKey,
 	sourceNode workflow.Node,
+	manualMoveContext bool,
 ) (transitionContextResolution, error) {
 	targetReference, err := workflow.NewCurrentNodeReference(
 		taskID,
 		edge.TargetNodeID,
-		nilIfManualMoveContext(false, targetBranchKey),
+		nilIfManualMoveContext(manualMoveContext, targetBranchKey),
 	)
 	if err != nil {
 		return transitionContextResolution{}, err
