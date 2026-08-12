@@ -89,6 +89,12 @@ func TestCommittedTimeEventEnvelopeAndNullRejection(t *testing.T) {
 	if err != nil || decoded.CommittedAtUnixMs() == nil || decoded.CommittedAtUnixMs().UnixMs() != 0 {
 		t.Fatalf("decoded record time=%v err=%v", decoded.CommittedAtUnixMs(), err)
 	}
+	for _, value := range []int64{transcript.MinCommittedAtUnixMs - 1, transcript.MaxCommittedAtUnixMs + 1} {
+		outOfRange := transcript.CommittedAtUnixMs(value)
+		if _, err := newEventRecord(1, nil, MessageRecord{Role: MessageRoleUser, Content: &content}, &outOfRange); err == nil {
+			t.Fatalf("out-of-range timestamp %d accepted by event constructor", value)
+		}
+	}
 	historical, err := decodeEventRecordV1([]byte(`{"seq":1,"kind":"message","payload":{"role":"user","content":"old"}}`))
 	if err != nil {
 		t.Fatalf("decode historical: %v", err)
@@ -100,6 +106,12 @@ func TestCommittedTimeEventEnvelopeAndNullRejection(t *testing.T) {
 		if _, err := decodeEventRecordV1([]byte(`{"seq":1,"kind":"message","` + field + `":null,"payload":{"role":"user","content":"old"}}`)); err == nil {
 			t.Fatalf("null field %q accepted", field)
 		}
+	}
+	one := transcript.CommittedAtUnixMs(1)
+	if _, err := newEventRecord(1, nil, MessageRecord{
+		Role: MessageRoleUser, MessageType: messageTypePointer(MessageTypeCompactionSummary), Content: &content,
+	}, &one); err == nil {
+		t.Fatal("ineligible timestamp accepted")
 	}
 }
 

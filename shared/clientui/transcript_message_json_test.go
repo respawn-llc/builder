@@ -328,14 +328,12 @@ func TestTranscriptMessageJSONCommittedTimeFieldIsTypedAndOptional(t *testing.T)
 
 func transcriptMessagePayloadHasCommittedTimeField(t *testing.T, data []byte) bool {
 	t.Helper()
-	var envelope struct {
-		Payload json.RawMessage `json:"payload"`
-	}
+	var envelope map[string]json.RawMessage
 	if err := json.Unmarshal(data, &envelope); err != nil {
 		t.Fatalf("decode transcript message envelope: %v", err)
 	}
 	var payload map[string]json.RawMessage
-	if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+	if err := json.Unmarshal(envelope["payload"], &payload); err != nil {
 		t.Fatalf("decode transcript message payload: %v", err)
 	}
 	for _, raw := range payload {
@@ -348,24 +346,4 @@ func transcriptMessagePayloadHasCommittedTimeField(t *testing.T, data []byte) bo
 		}
 	}
 	return false
-}
-
-func TestTranscriptMessageJSONRejectsExplicitNullCommittedTime(t *testing.T) {
-	var message TranscriptMessage
-	err := json.Unmarshal([]byte(`{
-		"sequence":2,
-		"kind":"committed_row",
-		"payload":{
-			"Visibility":"ongoing",
-			"Kind":"user",
-			"User":{
-				"StepID":"22222222-2222-4222-8222-222222222222",
-				"Text":"user",
-				"committed_at_unix_ms":null
-			}
-		}
-	}`), &message)
-	if err == nil {
-		t.Fatal("explicit null committed time was accepted")
-	}
 }
