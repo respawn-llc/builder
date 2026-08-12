@@ -1,6 +1,9 @@
 package transcript
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 func TestValidateCommittedAtUnixMsAcceptsJavaScriptDateRange(t *testing.T) {
 	tests := []int64{
@@ -53,5 +56,26 @@ func TestDecodeCommittedAtUnixMsFieldRejectsNullRegardlessOfJSONFieldCasing(t *t
 	)
 	if err != nil || !present || value == nil || value.UnixMs() != 0 {
 		t.Fatalf("decoded present zero = value=%v present=%t err=%v", value, present, err)
+	}
+}
+
+func TestCommittedAtUnixMsJSONDecodingIsStructuralAndValidateOwnsRange(t *testing.T) {
+	outOfRange := MaxCommittedAtUnixMs + 1
+	var decoded CommittedAtUnixMs
+	if err := decoded.UnmarshalJSON([]byte(` ` + "9223372036854775807" + ` `)); err != nil {
+		t.Fatalf("structural timestamp decode failed: %v", err)
+	}
+	if decoded.UnixMs() != 9_223_372_036_854_775_807 {
+		t.Fatalf("decoded timestamp = %d", decoded.UnixMs())
+	}
+	if err := decoded.Validate(); err == nil {
+		t.Fatal("Validate accepted out-of-range timestamp")
+	}
+	value, present, err := DecodeCommittedAtUnixMsField(
+		[]byte(fmt.Sprintf(`{"committed_at_unix_ms":%d}`, outOfRange)),
+		"committed_at_unix_ms",
+	)
+	if err != nil || !present || value == nil || value.UnixMs() != outOfRange {
+		t.Fatalf("decoded out-of-range field = value=%v present=%t err=%v", value, present, err)
 	}
 }

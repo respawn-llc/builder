@@ -352,41 +352,33 @@ func assertEligibleReplacementFacts(
 	facts []TranscriptCommittedRowFact,
 ) transcript.CommittedAtUnixMs {
 	t.Helper()
-	var replacementTime *transcript.CommittedAtUnixMs
-	messageCount := 0
-	noticeCount := 0
-	for _, fact := range facts {
-		switch {
-		case fact.User != nil && fact.User.Text == "replacement user":
-			messageCount++
-			if fact.User.CommittedAtUnixMs == nil {
-				t.Fatalf("replacement user has no committed time")
-			}
-			if replacementTime == nil {
-				replacementTime = fact.User.CommittedAtUnixMs
-			} else if fact.User.CommittedAtUnixMs.UnixMs() != replacementTime.UnixMs() {
-				t.Fatalf("user replacement time = %v, want %v", fact.User.CommittedAtUnixMs, replacementTime)
-			}
-		case fact.Assistant != nil && fact.Assistant.Text == "replacement assistant":
-			messageCount++
-			if fact.Assistant.CommittedAtUnixMs == nil {
-				t.Fatalf("replacement assistant has no committed time")
-			}
-			if replacementTime == nil ||
-				fact.Assistant.CommittedAtUnixMs.UnixMs() != replacementTime.UnixMs() {
-				t.Fatalf("assistant replacement time = %v, user = %v", fact.Assistant.CommittedAtUnixMs, replacementTime)
-			}
-		case fact.Notice != nil && fact.Notice.MessageType == llm.MessageTypeCompactionSummary:
-			noticeCount++
-			if fact.Provenance == nil {
-				t.Fatalf("replacement notice has no provenance")
-			}
-		}
+	if len(facts) != 3 ||
+		facts[0].Kind != TranscriptCommittedRowFactUser ||
+		facts[0].User == nil ||
+		facts[1].Kind != TranscriptCommittedRowFactAssistant ||
+		facts[1].Assistant == nil ||
+		facts[2].Kind != TranscriptCommittedRowFactNotice ||
+		facts[2].Notice == nil ||
+		facts[2].Notice.MessageType != llm.MessageTypeCompactionSummary {
+		t.Fatalf("replacement facts = %+v, want ordered user, assistant, summary rows", facts)
 	}
-	if messageCount != 2 || noticeCount != 1 || replacementTime == nil {
-		t.Fatalf("replacement facts = %+v, want two timestamped messages and one untimestamped notice", facts)
+	if facts[0].User.CommittedAtUnixMs == nil {
+		t.Fatal("replacement user has no committed time")
 	}
-	return *replacementTime
+	if facts[1].Assistant.CommittedAtUnixMs == nil {
+		t.Fatal("replacement assistant has no committed time")
+	}
+	if facts[1].Assistant.CommittedAtUnixMs.UnixMs() != facts[0].User.CommittedAtUnixMs.UnixMs() {
+		t.Fatalf(
+			"assistant replacement time = %v, user = %v",
+			facts[1].Assistant.CommittedAtUnixMs,
+			facts[0].User.CommittedAtUnixMs,
+		)
+	}
+	if facts[2].Provenance == nil {
+		t.Fatal("replacement notice has no provenance")
+	}
+	return *facts[0].User.CommittedAtUnixMs
 }
 
 func assertReplacementFactsMatch(

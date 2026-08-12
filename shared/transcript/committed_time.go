@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
-	"strings"
 )
 
 const (
@@ -62,11 +60,25 @@ func (value *CommittedAtUnixMs) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return fmt.Errorf("decode committed time: %w", err)
 	}
-	decoded, err := NewCommittedAtUnixMs(raw)
-	if err != nil {
-		return err
+	*value = CommittedAtUnixMs(raw)
+	return nil
+}
+
+type committedAtUnixMsField struct {
+	value   CommittedAtUnixMs
+	present bool
+}
+
+func (field *committedAtUnixMsField) UnmarshalJSON(data []byte) error {
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		return fmt.Errorf("committed time must be omitted or an integer")
 	}
-	*value = decoded
+	var raw int64
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("decode committed time: %w", err)
+	}
+	field.value = CommittedAtUnixMs(raw)
+	field.present = true
 	return nil
 }
 
@@ -74,42 +86,18 @@ func (value *CommittedAtUnixMs) UnmarshalJSON(data []byte) error {
 // matching while retaining presence and rejecting null, including when a
 // differently-cased duplicate appears anywhere in the object.
 func DecodeCommittedAtUnixMsField(data []byte, fieldName string) (*CommittedAtUnixMs, bool, error) {
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	token, err := decoder.Token()
-	if err != nil {
+	if fieldName != "committed_at_unix_ms" {
+		return nil, false, fmt.Errorf("unsupported committed-time field %q", fieldName)
+	}
+	var decoded struct {
+		CommittedAt committedAtUnixMsField `json:"committed_at_unix_ms"`
+	}
+	if err := json.Unmarshal(data, &decoded); err != nil {
 		return nil, false, err
 	}
-	if delimiter, ok := token.(json.Delim); !ok || delimiter != '{' {
-		return nil, false, fmt.Errorf("committed-time owner must be a JSON object")
+	if !decoded.CommittedAt.present {
+		return nil, false, nil
 	}
-	var value *CommittedAtUnixMs
-	present := false
-	for decoder.More() {
-		token, err := decoder.Token()
-		if err != nil {
-			return nil, false, err
-		}
-		key, ok := token.(string)
-		if !ok {
-			return nil, false, fmt.Errorf("committed-time field name must be a string")
-		}
-		var raw json.RawMessage
-		if err := decoder.Decode(&raw); err != nil {
-			return nil, false, err
-		}
-		if !strings.EqualFold(key, fieldName) {
-			continue
-		}
-		var decoded CommittedAtUnixMs
-		if err := json.Unmarshal(raw, &decoded); err != nil {
-			return nil, false, err
-		}
-		copyValue := decoded
-		value = &copyValue
-		present = true
-	}
-	if _, err := decoder.Token(); err != nil && err != io.EOF {
-		return nil, false, err
-	}
-	return value, present, nil
+	value := decoded.CommittedAt.value
+	return &value, true, nil
 }

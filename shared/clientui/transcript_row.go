@@ -45,11 +45,8 @@ type TranscriptUserRow struct {
 
 func (r *TranscriptUserRow) UnmarshalJSON(data []byte) error {
 	type rowAlias TranscriptUserRow
-	var decoded rowAlias
-	if _, _, err := transcript.DecodeCommittedAtUnixMsField(data, "committed_at_unix_ms"); err != nil {
-		return err
-	}
-	if err := json.Unmarshal(data, &decoded); err != nil {
+	decoded, err := decodeTranscriptMessageRow[rowAlias](data)
+	if err != nil {
 		return err
 	}
 	*r = TranscriptUserRow(decoded)
@@ -67,15 +64,23 @@ type TranscriptAssistantRow struct {
 
 func (r *TranscriptAssistantRow) UnmarshalJSON(data []byte) error {
 	type rowAlias TranscriptAssistantRow
-	var decoded rowAlias
-	if _, _, err := transcript.DecodeCommittedAtUnixMsField(data, "committed_at_unix_ms"); err != nil {
-		return err
-	}
-	if err := json.Unmarshal(data, &decoded); err != nil {
+	decoded, err := decodeTranscriptMessageRow[rowAlias](data)
+	if err != nil {
 		return err
 	}
 	*r = TranscriptAssistantRow(decoded)
 	return nil
+}
+
+func decodeTranscriptMessageRow[T any](data []byte) (T, error) {
+	var decoded T
+	if _, _, err := transcript.DecodeCommittedAtUnixMsField(data, "committed_at_unix_ms"); err != nil {
+		return decoded, err
+	}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return decoded, err
+	}
+	return decoded, nil
 }
 
 type TranscriptToolRow struct {
