@@ -404,7 +404,7 @@ func (r *agentResource) StepBegan(ctx context.Context, snapshot runtime.StepLife
 	}
 	if len(r.steps) != 0 {
 		parent := r.steps[len(r.steps)-1]
-		if len(r.steps) != 1 || !allowsBoundaryCompactionStep(parent.activeKind, snapshot.ActiveKind) {
+		if len(r.steps) != 1 || !allowsBoundaryNestedStep(parent.activeKind, snapshot.ActiveKind) {
 			r.mu.Unlock()
 			panic(fmt.Sprintf(
 				"agent resource %s generation %d admitted overlapping engine steps: active step %q kind %q, incoming step %q kind %q",
@@ -439,7 +439,7 @@ func (r *agentResource) StepEnded(ctx context.Context, snapshot runtime.StepLife
 	}
 	completing := r.steps[len(r.steps)-1]
 	if completing.stepID != snapshot.StepID || completing.activeKind != snapshot.ActiveKind {
-		if r.rejectsNewStepLocked() && len(r.steps) == 1 && allowsBoundaryCompactionStep(completing.activeKind, snapshot.ActiveKind) {
+		if r.rejectsNewStepLocked() && len(r.steps) == 1 && allowsBoundaryNestedStep(completing.activeKind, snapshot.ActiveKind) {
 			r.mu.Unlock()
 			return nil
 		}
@@ -473,8 +473,10 @@ func (r *agentResource) StepEnded(ctx context.Context, snapshot runtime.StepLife
 	return publishErr
 }
 
-func allowsBoundaryCompactionStep(parent runtime.ActiveKind, nested runtime.ActiveKind) bool {
-	if nested != runtime.ActiveKindCompaction {
+func allowsBoundaryNestedStep(parent runtime.ActiveKind, nested runtime.ActiveKind) bool {
+	switch nested {
+	case runtime.ActiveKindCompaction, runtime.ActiveKindRuntimeMaintenance:
+	default:
 		return false
 	}
 	switch parent {
