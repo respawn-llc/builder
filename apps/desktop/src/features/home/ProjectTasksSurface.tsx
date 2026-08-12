@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { WorkflowPickerItem } from "@/api";
@@ -12,6 +13,7 @@ import {
   type SidebarMode,
 } from "@/app-facade";
 import { directionalBoundary, InfiniteListBoundary, InteractiveChip } from "@/ui";
+import { useProjectTaskListData, useProjectTaskListEvents } from "./projectTaskListData";
 
 export function ProjectTasksSurface({
   projectID,
@@ -24,9 +26,22 @@ export function ProjectTasksSurface({
   const { api } = useAppServices();
   const navigation = useAppNavigation();
   const { open } = useOwnedSidebarRoots();
+  const [expanded] = useState({ active: true, backlog: true, done: false });
+  const [anchors] = useState({ active: 0, backlog: 0, done: 0 });
   const query = useQuery({
     queryKey: queryKeys.board(projectID, undefined, canonicalBoardFilter({ kind: "none" })),
     queryFn: async () => api.getBoard(projectID, undefined, canonicalBoardFilter({ kind: "none" })),
+  });
+  useProjectTaskListData({
+    anchors,
+    expanded,
+    gateReady: query.isSuccess && query.data.workflows.length > 0,
+    projectID,
+  });
+  useProjectTaskListEvents({
+    enabled: query.isSuccess,
+    labelEditorTaskID: null,
+    projectID,
   });
   const boundary = directionalBoundary({
     failed: query.isError,

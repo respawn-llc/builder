@@ -156,6 +156,12 @@ export const queryKeys = {
     sort.direction,
   ],
   projectTaskListsRoot: (projectID: string) => ["task-list", projectID],
+  projectTaskGroupCounts: (projectID: string) => ["task-list", projectID, "counts"],
+  projectTaskGroup: (
+    projectID: string,
+    group: "active" | "backlog" | "done",
+    anchorOffset: number,
+  ) => ["task-list", projectID, "group", group, anchorOffset],
   projectTaskSearches: (projectID: string) => ["task-search", projectID],
   taskSearch: (projectID: string | null, query: string) => ["task-search", projectID, query],
   task: (taskID: string) => ["task", taskID],
