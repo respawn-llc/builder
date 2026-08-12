@@ -251,7 +251,7 @@ func TestScheduledWorktreeTransitionRunsAtNextAgentStepBoundary(t *testing.T) {
 		},
 		finalOutputItemResponse("done"),
 	}}
-	registry := tools.NewRegistry(tools.HandlerRegistration{
+	registry := newTestToolRegistry(t, tools.HandlerRegistration{
 		ID: toolspec.ToolExecCommand,
 		Handler: blockingTool{
 			name:    toolspec.ToolExecCommand,
