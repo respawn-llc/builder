@@ -2335,6 +2335,96 @@ WHERE task_id = sqlc.arg(task_id)
       OR session_id = CAST(sqlc.narg(expected_current_session_id) AS TEXT)
   );
 
+-- name: BindLegacySessionToSerialCurrentNode :execrows
+UPDATE task_current_nodes
+SET session_id = sqlc.arg(session_id)
+WHERE task_id = sqlc.arg(task_id)
+  AND node_id = sqlc.arg(node_id)
+  AND transition_branch_key IS NULL
+  AND legacy_materialized = 1
+  AND continuation_source_kind IS NULL
+  AND continuation_source_session_id IS NULL
+  AND (
+      session_id = sqlc.arg(session_id)
+      OR session_id = CAST(sqlc.narg(expected_current_session_id) AS TEXT)
+  );
+
+-- name: BindLegacySessionToBranchCurrentNode :execrows
+UPDATE task_current_nodes
+SET session_id = sqlc.arg(session_id)
+WHERE task_id = sqlc.arg(task_id)
+  AND node_id = sqlc.arg(node_id)
+  AND transition_branch_key = sqlc.arg(transition_branch_key)
+  AND legacy_materialized = 1
+  AND continuation_source_kind IS NULL
+  AND continuation_source_session_id IS NULL
+  AND (
+      session_id = sqlc.arg(session_id)
+      OR session_id = CAST(sqlc.narg(expected_current_session_id) AS TEXT)
+  );
+
+-- name: AppendLegacySerialSessionWorkflowNodeHistory :execrows
+INSERT INTO session_workflow_node_associations (
+    task_id,
+    session_id,
+    node_id,
+    transition_branch_key,
+    association_status,
+    source_session_id,
+    associated_at_unix_ms
+) VALUES (
+    sqlc.arg(task_id),
+    sqlc.arg(session_id),
+    sqlc.arg(node_id),
+    NULL,
+    'historical',
+    NULL,
+    sqlc.arg(associated_at_unix_ms)
+)
+ON CONFLICT(session_id, node_id) WHERE transition_branch_key IS NULL DO UPDATE SET
+    task_id = excluded.task_id,
+    association_status = 'historical',
+    source_session_id = NULL,
+    associated_at_unix_ms = excluded.associated_at_unix_ms
+WHERE session_workflow_node_associations.association_status = 'historical';
+
+-- name: AppendLegacyBranchSessionWorkflowNodeHistory :execrows
+INSERT INTO session_workflow_node_associations (
+    task_id,
+    session_id,
+    node_id,
+    transition_branch_key,
+    association_status,
+    source_session_id,
+    associated_at_unix_ms
+) VALUES (
+    sqlc.arg(task_id),
+    sqlc.arg(session_id),
+    sqlc.arg(node_id),
+    sqlc.arg(transition_branch_key),
+    'historical',
+    NULL,
+    sqlc.arg(associated_at_unix_ms)
+)
+ON CONFLICT(session_id, node_id, transition_branch_key) WHERE transition_branch_key IS NOT NULL DO UPDATE SET
+    task_id = excluded.task_id,
+    association_status = 'historical',
+    source_session_id = NULL,
+    associated_at_unix_ms = excluded.associated_at_unix_ms
+WHERE session_workflow_node_associations.association_status = 'historical';
+
+-- name: ResolveDeferredSelfTaskActiveFanoutBranchSource :execrows
+UPDATE task_active_fanout_branches
+SET
+    continuation_source_kind = 'exact',
+    continuation_source_session_id = sqlc.arg(source_session_id),
+    legacy_materialized = 0
+WHERE task_id = sqlc.arg(task_id)
+  AND transition_branch_key = sqlc.arg(transition_branch_key)
+  AND continuation_source_kind = 'deferred_self'
+  AND continuation_source_session_id IS NULL
+  AND legacy_materialized = 0;
+
 -- name: RetireSerialCurrentSessionWorkflowNodeAssociation :exec
 UPDATE session_workflow_node_associations
 SET association_status = 'historical'

@@ -3,6 +3,7 @@ package workflowstore
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -254,14 +255,18 @@ WHERE id = 'group-fanout'`)
 		}
 		switch branch.TransitionBranchKey {
 		case "split_a":
-			if branch.Target.CurrentNode.SessionID != nil || branch.ContextSourceResolution.SessionID != nil {
+			if branch.Target.CurrentNode.SessionID != nil ||
+				branch.ContextSourceResolution.TargetSession.Kind() != workflow.TargetSessionIntentCreate ||
+				branch.ContextSourceResolution.ActiveSource.Kind() != workflow.MaterializedContinuationSourceDeferredSelf {
 				t.Fatalf("migrated new-session branch = %+v, want no retained Session", branch)
 			}
 		case "split_b":
+			resolvedSessionID, reused := branch.ContextSourceResolution.TargetSession.SessionID()
 			if branch.Target.CurrentNode.SessionID == nil ||
 				branch.Target.CurrentNode.SessionID.String() != sourceSessionID ||
-				branch.ContextSourceResolution.SessionID == nil ||
-				branch.ContextSourceResolution.SessionID.String() != sourceSessionID {
+				!reused ||
+				resolvedSessionID.String() != sourceSessionID ||
+				branch.ContextSourceResolution.ActiveSource.Kind() != workflow.MaterializedContinuationSourceLegacy {
 				t.Fatalf("migrated continuation branch = %+v, want retained Session %q", branch, sourceSessionID)
 			}
 		default:
@@ -276,6 +281,10 @@ WHERE id = 'group-fanout'`)
 	if len(applied.Mutation.Removed) != 1 || len(applied.Mutation.Created) != 2 {
 		t.Fatalf("applied migrated fanout = %+v, want source replaced by two targets", applied)
 	}
+	var (
+		deferredTarget workflow.CurrentNode
+		legacyTarget   workflow.CurrentNode
+	)
 	for _, target := range applied.Mutation.Created {
 		if !target.Reference.IsBranchScoped() {
 			t.Fatalf("applied migrated target = %+v, want branch-scoped current node", target)
@@ -283,16 +292,93 @@ WHERE id = 'group-fanout'`)
 		branchKey, _ := target.Reference.TransitionBranchKey()
 		switch branchKey {
 		case "split_a":
-			if target.SessionID != nil {
-				t.Fatalf("applied migrated new-session target = %+v, want no retained Session", target)
+			if target.SessionID != nil ||
+				target.ContinuationSource.Kind() != workflow.MaterializedContinuationSourceDeferredSelf {
+				t.Fatalf("applied migrated new-session target = %+v, want deferred self without retained Session", target)
 			}
+			deferredTarget = target
 		case "split_b":
-			if target.SessionID == nil || target.SessionID.String() != sourceSessionID {
-				t.Fatalf("applied migrated continuation target = %+v, want Session %q", target, sourceSessionID)
+			if target.SessionID == nil ||
+				target.SessionID.String() != sourceSessionID ||
+				target.ContinuationSource.Kind() != workflow.MaterializedContinuationSourceLegacy {
+				t.Fatalf("applied migrated continuation target = %+v, want legacy Session %q", target, sourceSessionID)
 			}
+			legacyTarget = target
 		default:
 			t.Fatalf("applied migrated unexpected target = %+v", target)
 		}
+	}
+	parsedSourceSessionID, err := runtimeids.ParseSessionID(sourceSessionID)
+	if err != nil {
+		t.Fatalf("parse migrated source Session: %v", err)
+	}
+	authority, err := store.ResolveCurrentNodeSessionBindingAuthority(
+		t.Context(),
+		parsedSourceSessionID,
+		legacyTarget.Reference,
+	)
+	if err != nil {
+		t.Fatalf("ResolveCurrentNodeSessionBindingAuthority migrated Approval target: %v", err)
+	}
+	if authority.Kind() != CurrentNodeSessionBindingAuthorityLegacyHistorical {
+		t.Fatalf("migrated Approval target authority = %q", authority.Kind())
+	}
+	bound, err := store.BindSessionToCurrentNode(t.Context(), CurrentNodeSessionBindingRequest{
+		Association: TaskSessionAssociationRequest{
+			SessionID:    parsedSourceSessionID,
+			CurrentNode:  legacyTarget.Reference,
+			AssociatedAt: time.UnixMilli(now + 2).UTC(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("BindSessionToCurrentNode migrated Approval target: %v", err)
+	}
+	if bound.Kind() != CurrentNodeSessionBindingAuthorityLegacyHistorical {
+		t.Fatalf("migrated Approval target binding authority = %q", bound.Kind())
+	}
+	if _, err := store.CurrentTaskSessionForNode(t.Context(), legacyTarget.Reference); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("migrated Approval target current association = %v, want sql.ErrNoRows", err)
+	}
+	freshSessionID := runtimeids.NewSessionID()
+	if _, err := metadataStore.DB().ExecContext(t.Context(), `
+INSERT INTO sessions (
+    id, project_id, workspace_id, artifact_relpath,
+    created_at_unix_ms, updated_at_unix_ms
+) VALUES (?, ?, ?, ?, ?, ?)`,
+		freshSessionID.String(),
+		"project-migrated-approval-fanout",
+		"workspace-migrated-approval-fanout",
+		"sessions/"+freshSessionID.String(),
+		now+3,
+		now+3,
+	); err != nil {
+		t.Fatalf("insert fresh migrated Approval target Session: %v", err)
+	}
+	freshAuthority, err := store.BindSessionToCurrentNode(t.Context(), CurrentNodeSessionBindingRequest{
+		Association: TaskSessionAssociationRequest{
+			SessionID:    freshSessionID,
+			CurrentNode:  deferredTarget.Reference,
+			AssociatedAt: time.UnixMilli(now + 3).UTC(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("BindSessionToCurrentNode deferred migrated Approval target: %v", err)
+	}
+	if freshAuthority.Kind() != CurrentNodeSessionBindingAuthorityExactCurrent {
+		t.Fatalf("deferred migrated Approval target authority = %q", freshAuthority.Kind())
+	}
+	freshAssociation, err := store.CurrentTaskSessionForNode(t.Context(), deferredTarget.Reference)
+	if err != nil {
+		t.Fatalf("CurrentTaskSessionForNode deferred migrated Approval target: %v", err)
+	}
+	if freshAssociation.SessionID != freshSessionID ||
+		freshAssociation.SourceSessionID != freshSessionID {
+		t.Fatalf("deferred migrated Approval target tuple = (%q, %q), want (%q, %q)",
+			freshAssociation.SessionID,
+			freshAssociation.SourceSessionID,
+			freshSessionID,
+			freshSessionID,
+		)
 	}
 }
 
@@ -458,6 +544,17 @@ INSERT INTO task_runs (
 	}
 	if input.Task.ID != workflow.TaskID(taskID) || input.Node.ID != workflow.NodeID("node-agent") || input.CurrentNode.EnteredByEdgeID == nil || *input.CurrentNode.EnteredByEdgeID != workflow.EdgeID("edge-start") {
 		t.Fatalf("resolved migrated context = %+v, want direct current ownership and entering edge", input)
+	}
+	authority, err := store.ResolveCurrentNodeSessionBindingAuthority(
+		t.Context(),
+		parsedSessionID,
+		input.CurrentNode.Reference,
+	)
+	if err != nil {
+		t.Fatalf("ResolveCurrentNodeSessionBindingAuthority: %v", err)
+	}
+	if authority.Kind() != CurrentNodeSessionBindingAuthorityLegacyHistorical {
+		t.Fatalf("migrated startup authority = %q, want %q", authority.Kind(), CurrentNodeSessionBindingAuthorityLegacyHistorical)
 	}
 }
 

@@ -741,13 +741,13 @@ func TestApprovalTransitionSteersPreviousTargetSessionExactlyOnceAfterSourceReti
 	f.starter.cfg.Settings.CompactionMode = config.CompactionModeNative
 	threshold := 1
 	f.starter.cfg.Settings.Workflow.PreCompactionTokens = &threshold
-	workflowID := createCurrentNodeApprovalLoopWorkflow(t, f.store)
+	workflowID := createCurrentNodeApprovalLoopWorkflow(t, f.store, true)
 	task := f.createTask(t, workflowID)
 	implementation := f.startTask(t, task)
 
 	approval := f.waitForPendingApproval(t, task.ID)
 	f.waitForTaskQuiescence(t, approval.Source.TaskID)
-	implementationSession, err := f.store.LatestTaskSessionForNode(context.Background(), implementation)
+	implementationSession, err := f.store.CurrentTaskSessionForNode(context.Background(), implementation)
 	if err != nil {
 		t.Fatalf("resolve previous target Session: %v", err)
 	}
@@ -829,7 +829,7 @@ func TestWorkflowPostCompletionDiagnosticPreservesApprovalCACBoundary(t *testing
 	f.starter.cfg.Settings.CompactionMode = config.CompactionModeNative
 	threshold := 1
 	f.starter.cfg.Settings.Workflow.PreCompactionTokens = &threshold
-	workflowID := createCurrentNodeApprovalLoopWorkflow(t, f.store)
+	workflowID := createCurrentNodeApprovalLoopWorkflow(t, f.store, false)
 	task := f.createTask(t, workflowID)
 	f.startTask(t, task)
 
@@ -1261,7 +1261,7 @@ func TestWorkflowRunnerCancellationDuringPostTurnFinalizationFinalizesInterrupte
 	if len(pending) != 1 || pending[0].ID != approval.ID {
 		t.Fatalf("pending Approvals after cancellation = %+v, want held source Approval", pending)
 	}
-	association, err := f.store.LatestTaskSessionForNode(context.Background(), source)
+	association, err := f.store.CurrentTaskSessionForNode(context.Background(), source)
 	if err != nil {
 		t.Fatalf("resolve canceled source Session: %v", err)
 	}
@@ -1666,7 +1666,7 @@ func TestCurrentNodeFanoutContinuationClonesAndBindsEachBranchSession(t *testing
 	f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
 		return len(nodes) == 1 && !nodes[0].Reference.IsBranchScoped() && nodes[0].Scheduling == nil
 	})
-	sourceAssociation, err := f.store.LatestTaskSessionForNode(context.Background(), source)
+	sourceAssociation, err := f.store.CurrentTaskSessionForNode(context.Background(), source)
 	if err != nil {
 		t.Fatalf("resolve source Session association: %v", err)
 	}
@@ -1676,7 +1676,7 @@ func TestCurrentNodeFanoutContinuationClonesAndBindsEachBranchSession(t *testing
 		if err != nil {
 			t.Fatalf("create branch %q Current Node reference: %v", branchKey, err)
 		}
-		association, err := f.store.LatestTaskSessionForNode(context.Background(), reference)
+		association, err := f.store.CurrentTaskSessionForNode(context.Background(), reference)
 		if err != nil {
 			t.Fatalf("resolve branch %q Session association: %v", branchKey, err)
 		}
@@ -1748,7 +1748,7 @@ func TestWorkflowPostCompletionCompactsFanoutSourceBeforeBranchClones(t *testing
 			requests[2].PromptCacheKey,
 		)
 	}
-	sourceAssociation, err := f.store.LatestTaskSessionForNode(context.Background(), source)
+	sourceAssociation, err := f.store.CurrentTaskSessionForNode(context.Background(), source)
 	if err != nil {
 		t.Fatalf("resolve source Session association: %v", err)
 	}
@@ -1758,7 +1758,7 @@ func TestWorkflowPostCompletionCompactsFanoutSourceBeforeBranchClones(t *testing
 		if err != nil {
 			t.Fatalf("create branch %q Current Node reference: %v", branchKey, err)
 		}
-		association, err := f.store.LatestTaskSessionForNode(context.Background(), reference)
+		association, err := f.store.CurrentTaskSessionForNode(context.Background(), reference)
 		if err != nil {
 			t.Fatalf("resolve branch %q Session association: %v", branchKey, err)
 		}
@@ -2069,7 +2069,11 @@ func createCurrentNodeChainedWorkflow(t *testing.T, store *workflowstore.Store, 
 	)
 }
 
-func createCurrentNodeApprovalLoopWorkflow(t *testing.T, store *workflowstore.Store) runtimeids.WorkflowID {
+func createCurrentNodeApprovalLoopWorkflow(
+	t *testing.T,
+	store *workflowstore.Store,
+	retainReviewTarget bool,
+) runtimeids.WorkflowID {
 	t.Helper()
 	ctx := context.Background()
 	created, err := store.CreateWorkflow(ctx, workflowstore.CreateWorkflowRequest{Name: "Approval previous-target loop"})
@@ -2085,6 +2089,10 @@ func createCurrentNodeApprovalLoopWorkflow(t *testing.T, store *workflowstore.St
 	workflowfixture.SaveStoreGraph(t, ctx, store, created.ID, func(definition workflow.Definition, request *workflowstore.WorkflowGraphSaveRequest) {
 		startID := workflow.NodeIDOf(nodeByKindRunnerTest(t, definition, workflow.NodeKindStart))
 		doneID := workflow.NodeIDOf(nodeByKindRunnerTest(t, definition, workflow.NodeKindTerminal))
+		reviewRole := "coder"
+		if retainReviewTarget {
+			reviewRole = "reviewer"
+		}
 		request.Nodes = append(request.Nodes,
 			workflowstore.NodeRecord{
 				ID: implementationID, WorkflowID: created.ID, Key: "implementation",
@@ -2092,7 +2100,7 @@ func createCurrentNodeApprovalLoopWorkflow(t *testing.T, store *workflowstore.St
 			},
 			workflowstore.NodeRecord{
 				ID: reviewID, WorkflowID: created.ID, Key: "review",
-				Kind: workflow.NodeKindAgent, DisplayName: "Review", SubagentRole: "reviewer",
+				Kind: workflow.NodeKindAgent, DisplayName: "Review", SubagentRole: reviewRole,
 			},
 		)
 		request.TransitionGroups = append(request.TransitionGroups,
@@ -2101,6 +2109,11 @@ func createCurrentNodeApprovalLoopWorkflow(t *testing.T, store *workflowstore.St
 			workflowstore.TransitionGroupRecord{ID: doneGroup, WorkflowID: created.ID, SourceNodeID: implementationID, TransitionID: "done", DisplayName: "Done"},
 			workflowstore.TransitionGroupRecord{ID: reworkGroup, WorkflowID: created.ID, SourceNodeID: reviewID, TransitionID: "rework", DisplayName: "Rework"},
 		)
+		reviewMode := workflow.ContextModeContinueSession
+		reviewSource := workflow.ContextSource{Kind: workflow.ContextSourceImmediateSource}
+		if retainReviewTarget {
+			reviewSource = workflow.ContextSource{Kind: workflow.ContextSourcePreviousTargetOrNew}
+		}
 		request.Edges = append(request.Edges,
 			workflowstore.EdgeRecord{
 				ID: workflow.EdgeID("edge-start-" + created.ID.String()), WorkflowID: created.ID,
@@ -2110,7 +2123,7 @@ func createCurrentNodeApprovalLoopWorkflow(t *testing.T, store *workflowstore.St
 			workflowstore.EdgeRecord{
 				ID: workflow.EdgeID("edge-review-" + created.ID.String()), WorkflowID: created.ID,
 				TransitionGroupID: reviewGroup, Key: "review", TargetNodeID: reviewID,
-				ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Review the implementation.", AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured,
+				ContextMode: reviewMode, ContextSource: reviewSource, PromptTemplate: "Review the implementation.", AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured,
 			},
 			workflowstore.EdgeRecord{
 				ID: workflow.EdgeID("edge-done-" + created.ID.String()), WorkflowID: created.ID,

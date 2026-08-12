@@ -344,6 +344,19 @@ func EvaluateRetainedTarget(request RetainedTargetEvaluationRequest) (RetainedTa
 	if err := request.ActiveSource.Validate(); err != nil {
 		return RetainedTargetDecision{}, fmt.Errorf("retained target active source: %w", err)
 	}
+	if request.Target.kind == RetainedTargetStateUnavailable {
+		if contextSource.Kind == ContextSourcePreviousTargetOrNew {
+			return RetainedTargetDecision{
+				TargetSession: CreateTargetSessionIntent(),
+				ActiveSource:  request.ActiveSource,
+			}, nil
+		}
+		return RetainedTargetDecision{}, RetainedTargetUnavailableError{
+			TaskID:       request.TaskID,
+			SourceNodeID: request.SourceNodeID,
+			TargetNodeID: request.TargetNodeID,
+		}
+	}
 	activeSourceID, ok := request.ActiveSource.ExactSessionID()
 	if !ok {
 		detail := RetainedTargetInvariantDetail{
@@ -373,18 +386,6 @@ func EvaluateRetainedTarget(request RetainedTargetEvaluationRequest) (RetainedTa
 			}, nil
 		}
 		return RetainedTargetDecision{}, RetainedTargetInvariantError{Detail: detail}
-	case RetainedTargetStateUnavailable:
-		if contextSource.Kind == ContextSourcePreviousTargetOrNew {
-			return RetainedTargetDecision{
-				TargetSession: CreateTargetSessionIntent(),
-				ActiveSource:  request.ActiveSource,
-			}, nil
-		}
-		return RetainedTargetDecision{}, RetainedTargetUnavailableError{
-			TaskID:       request.TaskID,
-			SourceNodeID: request.SourceNodeID,
-			TargetNodeID: request.TargetNodeID,
-		}
 	case RetainedTargetStateHistoricalOnly:
 		return RetainedTargetDecision{
 			TargetSession: CreateTargetSessionIntent(),

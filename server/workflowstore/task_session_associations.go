@@ -38,39 +38,77 @@ type TaskSessionAssociation struct {
 // retained-session state, not a data-integrity failure.
 var ErrSessionNotCurrentWorkflowNode = errors.New("session is not bound to a current workflow node")
 
+type CurrentNodeSessionBindingAuthorityKind string
+
+const (
+	CurrentNodeSessionBindingAuthorityExactCurrent     CurrentNodeSessionBindingAuthorityKind = "exact_current"
+	CurrentNodeSessionBindingAuthorityLegacyHistorical CurrentNodeSessionBindingAuthorityKind = "legacy_historical"
+)
+
+type CurrentNodeSessionBindingAuthority struct {
+	kind        CurrentNodeSessionBindingAuthorityKind
+	association *TaskSessionAssociation
+}
+
+func (a CurrentNodeSessionBindingAuthority) Kind() CurrentNodeSessionBindingAuthorityKind {
+	return a.kind
+}
+
+func (a CurrentNodeSessionBindingAuthority) CurrentAssociation() (TaskSessionAssociation, bool) {
+	if a.kind != CurrentNodeSessionBindingAuthorityExactCurrent || a.association == nil {
+		return TaskSessionAssociation{}, false
+	}
+	return *a.association, true
+}
+
 // BindSessionToCurrentNode atomically establishes the live Agent Session
 // binding and the exact current retained-Session tuple for one Current Node.
-func (s *Store) BindSessionToCurrentNode(ctx context.Context, req CurrentNodeSessionBindingRequest) (TaskSessionAssociation, error) {
+func (s *Store) BindSessionToCurrentNode(ctx context.Context, req CurrentNodeSessionBindingRequest) (CurrentNodeSessionBindingAuthority, error) {
 	normalized, err := normalizeTaskSessionAssociationRequest(req.Association)
 	if err != nil {
-		return TaskSessionAssociation{}, err
+		return CurrentNodeSessionBindingAuthority{}, err
 	}
 	if req.ExpectedCurrentSessionID != nil && req.ExpectedCurrentSessionID.IsZero() {
-		return TaskSessionAssociation{}, errors.New("expected current Session id is invalid")
+		return CurrentNodeSessionBindingAuthority{}, errors.New("expected current Session id is invalid")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return TaskSessionAssociation{}, err
+		return CurrentNodeSessionBindingAuthority{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
 	currentNode, err := currentNodeForReference(ctx, q, normalized.CurrentNode)
 	if err != nil {
-		return TaskSessionAssociation{}, err
+		return CurrentNodeSessionBindingAuthority{}, err
+	}
+	if currentNode.ContinuationSource.Kind() == workflow.MaterializedContinuationSourceLegacy {
+		return bindLegacySessionToCurrentNode(
+			ctx,
+			tx,
+			q,
+			currentNode,
+			normalized,
+			req.ExpectedCurrentSessionID,
+		)
 	}
 	previousAssociation, hasPreviousAssociation, err := currentTaskSessionAssociationBeforeBinding(ctx, q, normalized.CurrentNode)
 	if err != nil {
-		return TaskSessionAssociation{}, err
+		return CurrentNodeSessionBindingAuthority{}, err
 	}
 	sourceSessionID, err := bindingSourceSessionID(currentNode, normalized.SessionID)
 	if err != nil {
-		return TaskSessionAssociation{}, err
+		return CurrentNodeSessionBindingAuthority{}, err
 	}
 	if err := bindSessionToTask(ctx, q, normalized); err != nil {
-		return TaskSessionAssociation{}, err
+		return CurrentNodeSessionBindingAuthority{}, err
 	}
 	if err := bindSessionToExactCurrentNode(ctx, q, normalized, sourceSessionID, req.ExpectedCurrentSessionID); err != nil {
-		return TaskSessionAssociation{}, err
+		return CurrentNodeSessionBindingAuthority{}, err
+	}
+	if currentNode.ContinuationSource.Kind() == workflow.MaterializedContinuationSourceDeferredSelf {
+		if err := resolveDeferredSelfFanoutBranchSource(ctx, q, normalized.CurrentNode, sourceSessionID); err != nil {
+			return CurrentNodeSessionBindingAuthority{}, err
+		}
 	}
 	if hasPreviousAssociation && previousAssociation.SessionID != sourceSessionID {
 		if err := retireDependentCurrentTaskSessionAssociations(
@@ -80,16 +118,157 @@ func (s *Store) BindSessionToCurrentNode(ctx context.Context, req CurrentNodeSes
 			previousAssociation.SessionID,
 			sourceSessionID,
 		); err != nil {
-			return TaskSessionAssociation{}, err
+			return CurrentNodeSessionBindingAuthority{}, err
 		}
 	}
 	if err := designateCurrentTaskSessionAssociation(ctx, q, normalized, sourceSessionID); err != nil {
-		return TaskSessionAssociation{}, err
+		return CurrentNodeSessionBindingAuthority{}, err
 	}
 	if err := tx.Commit(); err != nil {
-		return TaskSessionAssociation{}, err
+		return CurrentNodeSessionBindingAuthority{}, err
 	}
-	return taskSessionAssociationFromRequest(normalized, sourceSessionID), nil
+	association := taskSessionAssociationFromRequest(normalized, sourceSessionID)
+	return CurrentNodeSessionBindingAuthority{
+		kind:        CurrentNodeSessionBindingAuthorityExactCurrent,
+		association: &association,
+	}, nil
+}
+
+func bindLegacySessionToCurrentNode(
+	ctx context.Context,
+	tx *sql.Tx,
+	q *sqlitegen.Queries,
+	currentNode workflow.CurrentNode,
+	req TaskSessionAssociationRequest,
+	expectedCurrentSessionID *runtimeids.SessionID,
+) (CurrentNodeSessionBindingAuthority, error) {
+	if currentNode.SessionID == nil {
+		return CurrentNodeSessionBindingAuthority{}, errors.New("legacy Current Node has no materialized Session")
+	}
+	if err := bindSessionToTask(ctx, q, req); err != nil {
+		return CurrentNodeSessionBindingAuthority{}, err
+	}
+	if err := bindSessionToLegacyCurrentNode(ctx, q, req, expectedCurrentSessionID); err != nil {
+		return CurrentNodeSessionBindingAuthority{}, err
+	}
+	if err := appendLegacyTaskSessionHistory(ctx, q, req); err != nil {
+		return CurrentNodeSessionBindingAuthority{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return CurrentNodeSessionBindingAuthority{}, err
+	}
+	return CurrentNodeSessionBindingAuthority{
+		kind: CurrentNodeSessionBindingAuthorityLegacyHistorical,
+	}, nil
+}
+
+func bindSessionToLegacyCurrentNode(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	req TaskSessionAssociationRequest,
+	expectedCurrentSessionIDValue *runtimeids.SessionID,
+) error {
+	var expectedCurrentSessionID sql.NullString
+	if expectedCurrentSessionIDValue != nil {
+		expectedCurrentSessionID = sql.NullString{
+			String: expectedCurrentSessionIDValue.String(),
+			Valid:  true,
+		}
+	}
+	var (
+		bound int64
+		err   error
+	)
+	if branchKey, branchScoped := req.CurrentNode.TransitionBranchKey(); branchScoped {
+		bound, err = q.BindLegacySessionToBranchCurrentNode(ctx, sqlitegen.BindLegacySessionToBranchCurrentNodeParams{
+			SessionID:                sql.NullString{String: req.SessionID.String(), Valid: true},
+			TaskID:                   string(req.CurrentNode.TaskID),
+			NodeID:                   string(req.CurrentNode.NodeID),
+			TransitionBranchKey:      sql.NullString{String: string(branchKey), Valid: true},
+			ExpectedCurrentSessionID: expectedCurrentSessionID,
+		})
+	} else {
+		bound, err = q.BindLegacySessionToSerialCurrentNode(ctx, sqlitegen.BindLegacySessionToSerialCurrentNodeParams{
+			SessionID:                sql.NullString{String: req.SessionID.String(), Valid: true},
+			TaskID:                   string(req.CurrentNode.TaskID),
+			NodeID:                   string(req.CurrentNode.NodeID),
+			ExpectedCurrentSessionID: expectedCurrentSessionID,
+		})
+	}
+	if err != nil {
+		return err
+	}
+	if bound != 1 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func appendLegacyTaskSessionHistory(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	req TaskSessionAssociationRequest,
+) error {
+	var (
+		appended int64
+		err      error
+	)
+	if branchKey, branchScoped := req.CurrentNode.TransitionBranchKey(); branchScoped {
+		appended, err = q.AppendLegacyBranchSessionWorkflowNodeHistory(
+			ctx,
+			sqlitegen.AppendLegacyBranchSessionWorkflowNodeHistoryParams{
+				TaskID:              string(req.CurrentNode.TaskID),
+				SessionID:           req.SessionID.String(),
+				NodeID:              string(req.CurrentNode.NodeID),
+				TransitionBranchKey: sql.NullString{String: string(branchKey), Valid: true},
+				AssociatedAtUnixMs:  req.AssociatedAt.UnixMilli(),
+			},
+		)
+	} else {
+		appended, err = q.AppendLegacySerialSessionWorkflowNodeHistory(
+			ctx,
+			sqlitegen.AppendLegacySerialSessionWorkflowNodeHistoryParams{
+				TaskID:             string(req.CurrentNode.TaskID),
+				SessionID:          req.SessionID.String(),
+				NodeID:             string(req.CurrentNode.NodeID),
+				AssociatedAtUnixMs: req.AssociatedAt.UnixMilli(),
+			},
+		)
+	}
+	if err != nil {
+		return err
+	}
+	if appended != 1 {
+		return errors.New("legacy Session history conflicts with current association authority")
+	}
+	return nil
+}
+
+func resolveDeferredSelfFanoutBranchSource(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	currentNode workflow.CurrentNodeReference,
+	sourceSessionID runtimeids.SessionID,
+) error {
+	branchKey, branchScoped := currentNode.TransitionBranchKey()
+	if !branchScoped {
+		return nil
+	}
+	updated, err := q.ResolveDeferredSelfTaskActiveFanoutBranchSource(
+		ctx,
+		sqlitegen.ResolveDeferredSelfTaskActiveFanoutBranchSourceParams{
+			SourceSessionID:     sql.NullString{String: sourceSessionID.String(), Valid: true},
+			TaskID:              string(currentNode.TaskID),
+			TransitionBranchKey: string(branchKey),
+		},
+	)
+	if err != nil {
+		return err
+	}
+	if updated != 1 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 func currentTaskSessionAssociationBeforeBinding(
@@ -286,11 +465,19 @@ func (s *Store) CurrentTaskSessionForNode(ctx context.Context, currentNode workf
 }
 
 func (s *Store) HasHistoricalTaskSessionForNode(ctx context.Context, currentNode workflow.CurrentNodeReference) (bool, error) {
+	return hasHistoricalTaskSessionForNode(ctx, s.queries, currentNode)
+}
+
+func hasHistoricalTaskSessionForNode(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	currentNode workflow.CurrentNodeReference,
+) (bool, error) {
 	if err := currentNode.Validate(); err != nil {
 		return false, err
 	}
 	if branchKey, branchScoped := currentNode.TransitionBranchKey(); branchScoped {
-		return s.queries.HasHistoricalBranchTaskSessionAssociationForNode(
+		return q.HasHistoricalBranchTaskSessionAssociationForNode(
 			ctx,
 			sqlitegen.HasHistoricalBranchTaskSessionAssociationForNodeParams{
 				TaskID:              string(currentNode.TaskID),
@@ -299,7 +486,7 @@ func (s *Store) HasHistoricalTaskSessionForNode(ctx context.Context, currentNode
 			},
 		)
 	}
-	return s.queries.HasHistoricalSerialTaskSessionAssociationForNode(
+	return q.HasHistoricalSerialTaskSessionAssociationForNode(
 		ctx,
 		sqlitegen.HasHistoricalSerialTaskSessionAssociationForNodeParams{
 			TaskID: string(currentNode.TaskID),
@@ -374,14 +561,80 @@ func (s *Store) ResolveCurrentSessionStartContext(ctx context.Context, sessionID
 	if currentNode == nil {
 		return CurrentNodeStartContext{}, ErrSessionNotCurrentWorkflowNode
 	}
-	association, err := s.CurrentTaskSessionForNode(ctx, currentNode.Reference)
-	if err != nil {
-		return CurrentNodeStartContext{}, fmt.Errorf("resolve current session node association: %w", err)
-	}
-	if association.SessionID != sessionID {
-		return CurrentNodeStartContext{}, fmt.Errorf("current node %v is associated with session %q, want %q", currentNode.Reference, association.SessionID, sessionID)
+	if _, err := s.resolveCurrentNodeSessionBindingAuthority(ctx, sessionID, *currentNode); err != nil {
+		return CurrentNodeStartContext{}, err
 	}
 	return s.resolveCurrentNodeStartContext(ctx, *currentNode)
+}
+
+func (s *Store) ResolveCurrentNodeSessionBindingAuthority(
+	ctx context.Context,
+	sessionID runtimeids.SessionID,
+	reference workflow.CurrentNodeReference,
+) (CurrentNodeSessionBindingAuthority, error) {
+	if sessionID.IsZero() {
+		return CurrentNodeSessionBindingAuthority{}, errors.New("session id is required")
+	}
+	if err := reference.Validate(); err != nil {
+		return CurrentNodeSessionBindingAuthority{}, err
+	}
+	taskID, err := s.taskIDForSessionOwnership(ctx, sessionID)
+	if err != nil {
+		return CurrentNodeSessionBindingAuthority{}, err
+	}
+	if taskID == nil || *taskID != reference.TaskID {
+		return CurrentNodeSessionBindingAuthority{}, ErrSessionNotCurrentWorkflowNode
+	}
+	currentNode, err := currentNodeForReference(ctx, s.queries, reference)
+	if errors.Is(err, sql.ErrNoRows) {
+		return CurrentNodeSessionBindingAuthority{}, ErrSessionNotCurrentWorkflowNode
+	}
+	if err != nil {
+		return CurrentNodeSessionBindingAuthority{}, err
+	}
+	return s.resolveCurrentNodeSessionBindingAuthority(ctx, sessionID, currentNode)
+}
+
+func (s *Store) resolveCurrentNodeSessionBindingAuthority(
+	ctx context.Context,
+	sessionID runtimeids.SessionID,
+	currentNode workflow.CurrentNode,
+) (CurrentNodeSessionBindingAuthority, error) {
+	if currentNode.SessionID == nil || *currentNode.SessionID != sessionID {
+		return CurrentNodeSessionBindingAuthority{}, ErrSessionNotCurrentWorkflowNode
+	}
+	switch currentNode.ContinuationSource.Kind() {
+	case workflow.MaterializedContinuationSourceLegacy:
+		return CurrentNodeSessionBindingAuthority{kind: CurrentNodeSessionBindingAuthorityLegacyHistorical}, nil
+	case workflow.MaterializedContinuationSourceExact:
+		sourceSessionID, exact := currentNode.ContinuationSource.ExactSessionID()
+		if !exact {
+			return CurrentNodeSessionBindingAuthority{}, errors.New("exact Current Node continuation source omitted Session ID")
+		}
+		association, err := s.CurrentTaskSessionForNode(ctx, currentNode.Reference)
+		if errors.Is(err, sql.ErrNoRows) {
+			return CurrentNodeSessionBindingAuthority{}, ErrSessionNotCurrentWorkflowNode
+		}
+		if err != nil {
+			return CurrentNodeSessionBindingAuthority{}, err
+		}
+		if association.SessionID != sessionID || association.SourceSessionID != sourceSessionID {
+			return CurrentNodeSessionBindingAuthority{}, ErrSessionNotCurrentWorkflowNode
+		}
+		return CurrentNodeSessionBindingAuthority{
+			kind:        CurrentNodeSessionBindingAuthorityExactCurrent,
+			association: &association,
+		}, nil
+	case workflow.MaterializedContinuationSourceDeferredSelf,
+		workflow.MaterializedContinuationSourceAbsent:
+		return CurrentNodeSessionBindingAuthority{}, ErrSessionNotCurrentWorkflowNode
+	default:
+		return CurrentNodeSessionBindingAuthority{}, fmt.Errorf(
+			"current node %v has invalid continuation source kind %q",
+			currentNode.Reference,
+			currentNode.ContinuationSource.Kind(),
+		)
+	}
 }
 
 // ValidateCurrentNodeSessionBinding proves that a volatile exact workflow
@@ -392,40 +645,8 @@ func (s *Store) ValidateCurrentNodeSessionBinding(
 	sessionID runtimeids.SessionID,
 	reference workflow.CurrentNodeReference,
 ) error {
-	if sessionID.IsZero() {
-		return errors.New("session id is required")
-	}
-	if err := reference.Validate(); err != nil {
-		return err
-	}
-	taskID, err := s.taskIDForSessionOwnership(ctx, sessionID)
-	if err != nil {
-		return err
-	}
-	if taskID == nil || *taskID != reference.TaskID {
-		return ErrSessionNotCurrentWorkflowNode
-	}
-	currentNode, err := currentNodeForReference(ctx, s.queries, reference)
-	if errors.Is(err, sql.ErrNoRows) {
-		return ErrSessionNotCurrentWorkflowNode
-	}
-	if err != nil {
-		return err
-	}
-	if currentNode.SessionID == nil || *currentNode.SessionID != sessionID {
-		return ErrSessionNotCurrentWorkflowNode
-	}
-	association, err := s.CurrentTaskSessionForNode(ctx, reference)
-	if errors.Is(err, sql.ErrNoRows) {
-		return ErrSessionNotCurrentWorkflowNode
-	}
-	if err != nil {
-		return err
-	}
-	if association.SessionID != sessionID || !association.CurrentNode.Equal(reference) {
-		return ErrSessionNotCurrentWorkflowNode
-	}
-	return nil
+	_, err := s.ResolveCurrentNodeSessionBindingAuthority(ctx, sessionID, reference)
+	return err
 }
 
 // ResolveCurrentNodeStartContext prepares an admitted executable Current Node

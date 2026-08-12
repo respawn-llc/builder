@@ -326,6 +326,11 @@ WHEN NOT (
         AND NEW.continuation_source_kind = 'exact'
         AND NEW.continuation_source_session_id IS NOT NULL
     )
+    OR (
+        NEW.legacy_materialized = 0
+        AND NEW.continuation_source_kind IN ('deferred_self', 'absent')
+        AND NEW.continuation_source_session_id IS NULL
+    )
 )
 OR (
     NEW.continuation_source_session_id IS NOT NULL
@@ -355,6 +360,11 @@ WHEN NOT (
         NEW.legacy_materialized = 0
         AND NEW.continuation_source_kind = 'exact'
         AND NEW.continuation_source_session_id IS NOT NULL
+    )
+    OR (
+        NEW.legacy_materialized = 0
+        AND NEW.continuation_source_kind IN ('deferred_self', 'absent')
+        AND NEW.continuation_source_session_id IS NULL
     )
 )
 OR (

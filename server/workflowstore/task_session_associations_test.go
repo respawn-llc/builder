@@ -13,6 +13,18 @@ import (
 	"core/shared/runtimeids"
 )
 
+func requireCurrentBindingAssociation(
+	t *testing.T,
+	authority CurrentNodeSessionBindingAuthority,
+) TaskSessionAssociation {
+	t.Helper()
+	association, ok := authority.CurrentAssociation()
+	if !ok {
+		t.Fatalf("binding authority = %q, want exact current association", authority.Kind())
+	}
+	return association
+}
+
 func TestBindSessionToCurrentNodeBindsFreshSessionToTaskAndCurrentNode(t *testing.T) {
 	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
 	workflowID := createValidWorkflow(t, ctx, store)
@@ -25,7 +37,7 @@ func TestBindSessionToCurrentNodeBindsFreshSessionToTaskAndCurrentNode(t *testin
 	}
 	associatedAt := time.UnixMilli(1_700_000_000_000).UTC()
 
-	association, err := store.BindSessionToCurrentNode(ctx, CurrentNodeSessionBindingRequest{
+	authority, err := store.BindSessionToCurrentNode(ctx, CurrentNodeSessionBindingRequest{
 		Association: TaskSessionAssociationRequest{
 			SessionID:    sessionID,
 			CurrentNode:  started.Mutation.Created[0].Reference,
@@ -35,6 +47,7 @@ func TestBindSessionToCurrentNodeBindsFreshSessionToTaskAndCurrentNode(t *testin
 	if err != nil {
 		t.Fatalf("BindSessionToCurrentNode: %v", err)
 	}
+	association := requireCurrentBindingAssociation(t, authority)
 	if !association.CurrentNode.Equal(started.Mutation.Created[0].Reference) ||
 		association.SessionID != sessionID ||
 		!association.AssociatedAt.Equal(associatedAt) {
@@ -106,7 +119,7 @@ func TestBindSessionToCurrentNodeEstablishesLiveBindingAndProvenance(t *testing.
 		t.Fatalf("ParseSessionID: %v", err)
 	}
 
-	association, err := store.BindSessionToCurrentNode(ctx, CurrentNodeSessionBindingRequest{
+	authority, err := store.BindSessionToCurrentNode(ctx, CurrentNodeSessionBindingRequest{
 		Association: TaskSessionAssociationRequest{
 			SessionID:    sessionID,
 			CurrentNode:  started.Mutation.Created[0].Reference,
@@ -116,6 +129,7 @@ func TestBindSessionToCurrentNodeEstablishesLiveBindingAndProvenance(t *testing.
 	if err != nil {
 		t.Fatalf("BindSessionToCurrentNode: %v", err)
 	}
+	association := requireCurrentBindingAssociation(t, authority)
 
 	currentNodes, err := store.ListCurrentNodes(ctx, task.ID)
 	if err != nil {
@@ -146,6 +160,13 @@ func TestBindSessionToCurrentNodeEstablishesLiveBindingAndProvenance(t *testing.
 	}
 	if err := store.ValidateCurrentNodeSessionBinding(ctx, sessionID, started.Mutation.Created[0].Reference); err != nil {
 		t.Fatalf("ValidateCurrentNodeSessionBinding: %v", err)
+	}
+	startupAuthority, err := store.ResolveCurrentNodeSessionBindingAuthority(ctx, sessionID, started.Mutation.Created[0].Reference)
+	if err != nil {
+		t.Fatalf("ResolveCurrentNodeSessionBindingAuthority: %v", err)
+	}
+	if startupAuthority.Kind() != CurrentNodeSessionBindingAuthorityExactCurrent {
+		t.Fatalf("startup authority = %q, want %q", startupAuthority.Kind(), CurrentNodeSessionBindingAuthorityExactCurrent)
 	}
 }
 
@@ -179,7 +200,7 @@ func TestBindSessionToCurrentNodeReplacesCurrentTupleAndRetainsHistoricalProvena
 	}); err != nil {
 		t.Fatalf("bind first Session: %v", err)
 	}
-	replaced, err := store.BindSessionToCurrentNode(ctx, CurrentNodeSessionBindingRequest{
+	replacedAuthority, err := store.BindSessionToCurrentNode(ctx, CurrentNodeSessionBindingRequest{
 		Association: TaskSessionAssociationRequest{
 			SessionID:    replacementSessionID,
 			CurrentNode:  started.Reference,
@@ -190,6 +211,7 @@ func TestBindSessionToCurrentNodeReplacesCurrentTupleAndRetainsHistoricalProvena
 	if err != nil {
 		t.Fatalf("replace bound Session: %v", err)
 	}
+	replaced := requireCurrentBindingAssociation(t, replacedAuthority)
 	if replaced.SessionID != replacementSessionID || replaced.SourceSessionID != firstSessionID {
 		t.Fatalf("replacement tuple = (%q, %q), want (%q, %q)",
 			replaced.SessionID,
@@ -304,7 +326,7 @@ func TestBindSessionToCurrentNodeRetiresTransitiveDependenciesOfSupersededSource
 		nil,
 		workflow.DeferredSelfMaterializedContinuationSource(),
 	)
-	replacement, err := store.BindSessionToCurrentNode(ctx, CurrentNodeSessionBindingRequest{
+	replacementAuthority, err := store.BindSessionToCurrentNode(ctx, CurrentNodeSessionBindingRequest{
 		Association: TaskSessionAssociationRequest{
 			SessionID:    replacementB,
 			CurrentNode:  started.Reference,
@@ -314,6 +336,7 @@ func TestBindSessionToCurrentNodeRetiresTransitiveDependenciesOfSupersededSource
 	if err != nil {
 		t.Fatalf("bind replacement B: %v", err)
 	}
+	replacement := requireCurrentBindingAssociation(t, replacementAuthority)
 	if replacement.SessionID != replacementB || replacement.SourceSessionID != replacementB {
 		t.Fatalf("replacement tuple = (%q, %q), want (%q, %q)",
 			replacement.SessionID,
@@ -391,7 +414,7 @@ func TestBindSessionToCurrentNodeRetiresDisplacedRetainedDependenciesAndPreserve
 		t.Fatalf("bind dependent D: %v", err)
 	}
 	replaceSerialCurrentNodeBindingFixture(t, ctx, store, started, reviewNodeID, &retainedR, sourceContinuation)
-	replacement, err := store.BindSessionToCurrentNode(ctx, CurrentNodeSessionBindingRequest{
+	replacementAuthority, err := store.BindSessionToCurrentNode(ctx, CurrentNodeSessionBindingRequest{
 		Association: TaskSessionAssociationRequest{
 			SessionID: replacementC, CurrentNode: reviewReference, AssociatedAt: associatedAt.Add(3 * time.Millisecond),
 		},
@@ -400,6 +423,7 @@ func TestBindSessionToCurrentNodeRetiresDisplacedRetainedDependenciesAndPreserve
 	if err != nil {
 		t.Fatalf("replace retained R: %v", err)
 	}
+	replacement := requireCurrentBindingAssociation(t, replacementAuthority)
 	if replacement.SessionID != replacementC || replacement.SourceSessionID != sourceS {
 		t.Fatalf("replacement tuple = (%q, %q), want (%q, %q)",
 			replacement.SessionID, replacement.SourceSessionID, replacementC, sourceS)
@@ -464,7 +488,7 @@ func TestBindSessionToCurrentNodePreservesSourceWhenCloneDisplacesSelfRetainedTu
 	}); err != nil {
 		t.Fatalf("bind self-retained target: %v", err)
 	}
-	replacement, err := store.BindSessionToCurrentNode(ctx, CurrentNodeSessionBindingRequest{
+	replacementAuthority, err := store.BindSessionToCurrentNode(ctx, CurrentNodeSessionBindingRequest{
 		Association: TaskSessionAssociationRequest{
 			SessionID: cloneC, CurrentNode: reviewReference, AssociatedAt: associatedAt.Add(2 * time.Millisecond),
 		},
@@ -473,6 +497,7 @@ func TestBindSessionToCurrentNodePreservesSourceWhenCloneDisplacesSelfRetainedTu
 	if err != nil {
 		t.Fatalf("bind clone C: %v", err)
 	}
+	replacement := requireCurrentBindingAssociation(t, replacementAuthority)
 	if replacement.SessionID != cloneC || replacement.SourceSessionID != sourceS {
 		t.Fatalf("clone tuple = (%q, %q), want (%q, %q)",
 			replacement.SessionID, replacement.SourceSessionID, cloneC, sourceS)
@@ -542,7 +567,7 @@ func TestBindSessionToCurrentNodeRetiresCloneDependenciesWhenSourceBecomesRetain
 		t.Fatalf("bind dependent D: %v", err)
 	}
 	replaceSerialCurrentNodeBindingFixture(t, ctx, store, started, reviewNodeID, &cloneC, sourceContinuation)
-	replacement, err := store.BindSessionToCurrentNode(ctx, CurrentNodeSessionBindingRequest{
+	replacementAuthority, err := store.BindSessionToCurrentNode(ctx, CurrentNodeSessionBindingRequest{
 		Association: TaskSessionAssociationRequest{
 			SessionID: sourceS, CurrentNode: reviewReference, AssociatedAt: associatedAt.Add(3 * time.Millisecond),
 		},
@@ -551,6 +576,7 @@ func TestBindSessionToCurrentNodeRetiresCloneDependenciesWhenSourceBecomesRetain
 	if err != nil {
 		t.Fatalf("restore source S as retained Session: %v", err)
 	}
+	replacement := requireCurrentBindingAssociation(t, replacementAuthority)
 	if replacement.SessionID != sourceS || replacement.SourceSessionID != sourceS {
 		t.Fatalf("restored tuple = (%q, %q), want (%q, %q)",
 			replacement.SessionID, replacement.SourceSessionID, sourceS, sourceS)
@@ -585,7 +611,7 @@ func TestBindSessionToCurrentNodeRebindingSameTupleDoesNotCreateHistoricalProven
 	}); err != nil {
 		t.Fatalf("bind tuple: %v", err)
 	}
-	rebound, err := store.BindSessionToCurrentNode(ctx, CurrentNodeSessionBindingRequest{
+	reboundAuthority, err := store.BindSessionToCurrentNode(ctx, CurrentNodeSessionBindingRequest{
 		Association: TaskSessionAssociationRequest{
 			SessionID: sessionID, CurrentNode: started.Reference, AssociatedAt: firstAt.Add(time.Second),
 		},
@@ -593,6 +619,7 @@ func TestBindSessionToCurrentNodeRebindingSameTupleDoesNotCreateHistoricalProven
 	if err != nil {
 		t.Fatalf("rebind same tuple: %v", err)
 	}
+	rebound := requireCurrentBindingAssociation(t, reboundAuthority)
 	if rebound.SessionID != sessionID || rebound.SourceSessionID != sessionID {
 		t.Fatalf("rebound tuple = (%q, %q), want (%q, %q)",
 			rebound.SessionID, rebound.SourceSessionID, sessionID, sessionID)
@@ -791,6 +818,258 @@ END`); err != nil {
 	}
 	if owner != nil {
 		t.Fatalf("replacement Session owner after rollback = %q, want none", *owner)
+	}
+}
+
+func TestMaterializedDeferredSelfReplacementDoesNotSupersedeBeforeBinding(t *testing.T) {
+	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
+	workflowID := createValidWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	sessionA, err := runtimeids.ParseSessionID(createTestSession(t, ctx, store, binding, cfg))
+	if err != nil {
+		t.Fatalf("ParseSessionID: %v", err)
+	}
+	if _, err := store.BindSessionToCurrentNode(ctx, CurrentNodeSessionBindingRequest{
+		Association: TaskSessionAssociationRequest{
+			SessionID:    sessionA,
+			CurrentNode:  started.Reference,
+			AssociatedAt: time.UnixMilli(1_700_000_000_000).UTC(),
+		},
+	}); err != nil {
+		t.Fatalf("bind Session A: %v", err)
+	}
+	replaceSerialCurrentNodeBindingFixture(
+		t,
+		ctx,
+		store,
+		started,
+		started.Reference.NodeID,
+		nil,
+		workflow.DeferredSelfMaterializedContinuationSource(),
+	)
+	current, err := store.CurrentTaskSessionForNode(ctx, started.Reference)
+	if err != nil {
+		t.Fatalf("CurrentTaskSessionForNode after materialization: %v", err)
+	}
+	if current.SessionID != sessionA || current.SourceSessionID != sessionA {
+		t.Fatalf("current tuple after unbound replacement = (%q, %q), want (%q, %q)",
+			current.SessionID, current.SourceSessionID, sessionA, sessionA)
+	}
+}
+
+func TestBindSessionToLegacyCurrentNodeAppendsHistoricalOnlyForSameAndClone(t *testing.T) {
+	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
+	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	definition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	sessionIDs := make([]runtimeids.SessionID, 3)
+	for index := range sessionIDs {
+		sessionIDs[index], err = runtimeids.ParseSessionID(createTestSession(t, ctx, store, binding, cfg))
+		if err != nil {
+			t.Fatalf("ParseSessionID %d: %v", index, err)
+		}
+	}
+	sourceS, dependentR, cloneC := sessionIDs[0], sessionIDs[1], sessionIDs[2]
+	associatedAt := time.UnixMilli(1_700_000_000_000).UTC()
+	if _, err := store.BindSessionToCurrentNode(ctx, CurrentNodeSessionBindingRequest{
+		Association: TaskSessionAssociationRequest{
+			SessionID: sourceS, CurrentNode: started.Reference, AssociatedAt: associatedAt,
+		},
+	}); err != nil {
+		t.Fatalf("bind source S: %v", err)
+	}
+	sourceContinuation, err := workflow.NewExactMaterializedContinuationSource(sourceS)
+	if err != nil {
+		t.Fatalf("create source continuation: %v", err)
+	}
+	reviewReference := replaceSerialCurrentNodeBindingFixture(
+		t,
+		ctx,
+		store,
+		started,
+		workflow.NodeIDOf(nodeByKey(t, definition, "review")),
+		&sourceS,
+		sourceContinuation,
+	)
+	if _, err := store.BindSessionToCurrentNode(ctx, CurrentNodeSessionBindingRequest{
+		Association: TaskSessionAssociationRequest{
+			SessionID: dependentR, CurrentNode: reviewReference, AssociatedAt: associatedAt.Add(time.Millisecond),
+		},
+		ExpectedCurrentSessionID: &sourceS,
+	}); err != nil {
+		t.Fatalf("bind dependent R: %v", err)
+	}
+	if _, err := store.db.ExecContext(ctx, `
+UPDATE session_workflow_node_associations
+SET association_status = 'historical', source_session_id = NULL
+WHERE task_id = ?
+  AND node_id = ?
+  AND transition_branch_key IS NULL`,
+		string(task.ID),
+		string(started.Reference.NodeID),
+	); err != nil {
+		t.Fatalf("mark migrated source association historical: %v", err)
+	}
+	if _, err := store.db.ExecContext(ctx, `
+UPDATE task_current_nodes
+SET
+    node_id = ?,
+    session_id = ?,
+    continuation_source_kind = NULL,
+    continuation_source_session_id = NULL,
+    legacy_materialized = 1
+WHERE task_id = ?
+  AND transition_branch_key IS NULL`,
+		string(started.Reference.NodeID),
+		sourceS.String(),
+		string(task.ID),
+	); err != nil {
+		t.Fatalf("materialize migrated legacy Current Node: %v", err)
+	}
+	sameAuthority, err := store.BindSessionToCurrentNode(ctx, CurrentNodeSessionBindingRequest{
+		Association: TaskSessionAssociationRequest{
+			SessionID: sourceS, CurrentNode: started.Reference, AssociatedAt: associatedAt.Add(2 * time.Millisecond),
+		},
+	})
+	if err != nil {
+		t.Fatalf("bind same legacy Session: %v", err)
+	}
+	if sameAuthority.Kind() != CurrentNodeSessionBindingAuthorityLegacyHistorical {
+		t.Fatalf("same legacy binding authority = %q", sameAuthority.Kind())
+	}
+	cloneAuthority, err := store.BindSessionToCurrentNode(ctx, CurrentNodeSessionBindingRequest{
+		Association: TaskSessionAssociationRequest{
+			SessionID: cloneC, CurrentNode: started.Reference, AssociatedAt: associatedAt.Add(3 * time.Millisecond),
+		},
+		ExpectedCurrentSessionID: &sourceS,
+	})
+	if err != nil {
+		t.Fatalf("bind legacy clone: %v", err)
+	}
+	if cloneAuthority.Kind() != CurrentNodeSessionBindingAuthorityLegacyHistorical {
+		t.Fatalf("clone legacy binding authority = %q", cloneAuthority.Kind())
+	}
+	if _, err := store.CurrentTaskSessionForNode(ctx, started.Reference); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("legacy target current association = %v, want sql.ErrNoRows", err)
+	}
+	dependent, err := store.CurrentTaskSessionForNode(ctx, reviewReference)
+	if err != nil {
+		t.Fatalf("dependent association after legacy clone: %v", err)
+	}
+	if dependent.SessionID != dependentR || dependent.SourceSessionID != sourceS {
+		t.Fatalf("dependent tuple = (%q, %q), want (%q, %q)",
+			dependent.SessionID, dependent.SourceSessionID, dependentR, sourceS)
+	}
+	currentNodes, err := store.ListCurrentNodes(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListCurrentNodes: %v", err)
+	}
+	if len(currentNodes) != 1 ||
+		currentNodes[0].SessionID == nil ||
+		*currentNodes[0].SessionID != cloneC ||
+		currentNodes[0].ContinuationSource.Kind() != workflow.MaterializedContinuationSourceLegacy {
+		t.Fatalf("legacy Current Node after clone = %+v", currentNodes)
+	}
+	if hasHistorical, err := store.HasHistoricalTaskSessionForNode(ctx, started.Reference); err != nil || !hasHistorical {
+		t.Fatalf("legacy historical provenance = %t, %v, want true", hasHistorical, err)
+	}
+}
+
+func TestLegacyAgentStartupAuthorityAcceptsReadyAdmittedAndInterruptedStates(t *testing.T) {
+	for _, state := range []workflow.CurrentNodeSchedulingState{
+		workflow.CurrentNodeSchedulingReady,
+		workflow.CurrentNodeSchedulingAdmitted,
+		workflow.CurrentNodeSchedulingInterrupted,
+	} {
+		t.Run(string(state), func(t *testing.T) {
+			ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
+			workflowID := createValidWorkflow(t, ctx, store)
+			linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+			task := createDefaultTask(t, ctx, store, binding.ProjectID)
+			started := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+			sessionID, err := runtimeids.ParseSessionID(createTestSession(t, ctx, store, binding, cfg))
+			if err != nil {
+				t.Fatalf("ParseSessionID: %v", err)
+			}
+			if _, err := store.BindSessionToCurrentNode(ctx, CurrentNodeSessionBindingRequest{
+				Association: TaskSessionAssociationRequest{
+					SessionID:    sessionID,
+					CurrentNode:  started.Reference,
+					AssociatedAt: time.UnixMilli(1_700_000_000_000).UTC(),
+				},
+			}); err != nil {
+				t.Fatalf("BindSessionToCurrentNode: %v", err)
+			}
+			if _, err := store.db.ExecContext(ctx, `
+UPDATE session_workflow_node_associations
+SET association_status = 'historical', source_session_id = NULL
+WHERE task_id = ?
+  AND node_id = ?
+  AND transition_branch_key IS NULL`,
+				string(task.ID),
+				string(started.Reference.NodeID),
+			); err != nil {
+				t.Fatalf("mark migrated association historical: %v", err)
+			}
+			var (
+				interruptionReason     sql.NullString
+				interruptionDetail     sql.NullString
+				interruptedAtUnixMilli sql.NullInt64
+			)
+			if state == workflow.CurrentNodeSchedulingInterrupted {
+				interruptionReason = sql.NullString{String: "restart_recovery", Valid: true}
+				interruptionDetail = sql.NullString{String: "{}", Valid: true}
+				interruptedAtUnixMilli = sql.NullInt64{Int64: 1_700_000_001_000, Valid: true}
+			}
+			if _, err := store.db.ExecContext(ctx, `
+UPDATE task_current_nodes
+SET
+    scheduling_state = ?,
+    interruption_reason = ?,
+    interruption_detail_json = ?,
+    interrupted_at_unix_ms = ?,
+    continuation_source_kind = NULL,
+    continuation_source_session_id = NULL,
+    legacy_materialized = 1
+WHERE task_id = ?
+  AND node_id = ?
+  AND transition_branch_key IS NULL`,
+				string(state),
+				interruptionReason,
+				interruptionDetail,
+				interruptedAtUnixMilli,
+				string(task.ID),
+				string(started.Reference.NodeID),
+			); err != nil {
+				t.Fatalf("materialize migrated %s Current Node: %v", state, err)
+			}
+			startContext, err := store.ResolveCurrentSessionStartContext(ctx, sessionID)
+			if err != nil {
+				t.Fatalf("ResolveCurrentSessionStartContext: %v", err)
+			}
+			if startContext.CurrentNode.Scheduling == nil ||
+				startContext.CurrentNode.Scheduling.State != state ||
+				startContext.CurrentNode.ContinuationSource.Kind() != workflow.MaterializedContinuationSourceLegacy {
+				t.Fatalf("legacy %s start context = %+v", state, startContext.CurrentNode)
+			}
+			authority, err := store.ResolveCurrentNodeSessionBindingAuthority(ctx, sessionID, started.Reference)
+			if err != nil {
+				t.Fatalf("ResolveCurrentNodeSessionBindingAuthority: %v", err)
+			}
+			if authority.Kind() != CurrentNodeSessionBindingAuthorityLegacyHistorical {
+				t.Fatalf("legacy %s authority = %q", state, authority.Kind())
+			}
+			if _, err := store.CurrentTaskSessionForNode(ctx, started.Reference); !errors.Is(err, sql.ErrNoRows) {
+				t.Fatalf("legacy %s current association = %v, want sql.ErrNoRows", state, err)
+			}
+		})
 	}
 }
 
@@ -1004,7 +1283,7 @@ func TestBindSessionToCurrentNodeUpsertsRepeatedSerialAssociation(t *testing.T) 
 	}
 	firstAt := time.UnixMilli(1_700_000_000_000).UTC()
 	secondAt := firstAt.Add(time.Second)
-	first, err := store.BindSessionToCurrentNode(ctx, CurrentNodeSessionBindingRequest{
+	firstAuthority, err := store.BindSessionToCurrentNode(ctx, CurrentNodeSessionBindingRequest{
 		Association: TaskSessionAssociationRequest{
 			SessionID:    sessionID,
 			CurrentNode:  started.Mutation.Created[0].Reference,
@@ -1014,7 +1293,8 @@ func TestBindSessionToCurrentNodeUpsertsRepeatedSerialAssociation(t *testing.T) 
 	if err != nil {
 		t.Fatalf("first BindSessionToCurrentNode: %v", err)
 	}
-	second, err := store.BindSessionToCurrentNode(ctx, CurrentNodeSessionBindingRequest{
+	first := requireCurrentBindingAssociation(t, firstAuthority)
+	secondAuthority, err := store.BindSessionToCurrentNode(ctx, CurrentNodeSessionBindingRequest{
 		Association: TaskSessionAssociationRequest{
 			SessionID:    sessionID,
 			CurrentNode:  started.Mutation.Created[0].Reference,
@@ -1024,6 +1304,7 @@ func TestBindSessionToCurrentNodeUpsertsRepeatedSerialAssociation(t *testing.T) 
 	if err != nil {
 		t.Fatalf("second BindSessionToCurrentNode: %v", err)
 	}
+	second := requireCurrentBindingAssociation(t, secondAuthority)
 	if !first.CurrentNode.Equal(second.CurrentNode) || !second.AssociatedAt.Equal(secondAt) {
 		t.Fatalf("repeated association = %+v, want same key with updated time", second)
 	}

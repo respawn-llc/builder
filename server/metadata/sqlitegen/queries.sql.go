@@ -304,6 +304,104 @@ func (q *Queries) AnchorTaskSearchReadSnapshot(ctx context.Context) (bool, error
 	return anchored, err
 }
 
+const appendLegacyBranchSessionWorkflowNodeHistory = `-- name: AppendLegacyBranchSessionWorkflowNodeHistory :execrows
+INSERT INTO session_workflow_node_associations (
+    task_id,
+    session_id,
+    node_id,
+    transition_branch_key,
+    association_status,
+    source_session_id,
+    associated_at_unix_ms
+) VALUES (
+    ?1,
+    ?2,
+    ?3,
+    ?4,
+    'historical',
+    NULL,
+    ?5
+)
+ON CONFLICT(session_id, node_id, transition_branch_key) WHERE transition_branch_key IS NOT NULL DO UPDATE SET
+    task_id = excluded.task_id,
+    association_status = 'historical',
+    source_session_id = NULL,
+    associated_at_unix_ms = excluded.associated_at_unix_ms
+WHERE session_workflow_node_associations.association_status = 'historical'
+`
+
+type AppendLegacyBranchSessionWorkflowNodeHistoryParams struct {
+	TaskID              string
+	SessionID           string
+	NodeID              string
+	TransitionBranchKey sql.NullString
+	AssociatedAtUnixMs  int64
+}
+
+func (q *Queries) AppendLegacyBranchSessionWorkflowNodeHistory(ctx context.Context, arg AppendLegacyBranchSessionWorkflowNodeHistoryParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, appendLegacyBranchSessionWorkflowNodeHistory,
+		arg.TaskID,
+		arg.SessionID,
+		arg.NodeID,
+		arg.TransitionBranchKey,
+		arg.AssociatedAtUnixMs,
+	)
+	err = recordQueryError(ctx, err, appendLegacyBranchSessionWorkflowNodeHistory, 5)
+
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const appendLegacySerialSessionWorkflowNodeHistory = `-- name: AppendLegacySerialSessionWorkflowNodeHistory :execrows
+INSERT INTO session_workflow_node_associations (
+    task_id,
+    session_id,
+    node_id,
+    transition_branch_key,
+    association_status,
+    source_session_id,
+    associated_at_unix_ms
+) VALUES (
+    ?1,
+    ?2,
+    ?3,
+    NULL,
+    'historical',
+    NULL,
+    ?4
+)
+ON CONFLICT(session_id, node_id) WHERE transition_branch_key IS NULL DO UPDATE SET
+    task_id = excluded.task_id,
+    association_status = 'historical',
+    source_session_id = NULL,
+    associated_at_unix_ms = excluded.associated_at_unix_ms
+WHERE session_workflow_node_associations.association_status = 'historical'
+`
+
+type AppendLegacySerialSessionWorkflowNodeHistoryParams struct {
+	TaskID             string
+	SessionID          string
+	NodeID             string
+	AssociatedAtUnixMs int64
+}
+
+func (q *Queries) AppendLegacySerialSessionWorkflowNodeHistory(ctx context.Context, arg AppendLegacySerialSessionWorkflowNodeHistoryParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, appendLegacySerialSessionWorkflowNodeHistory,
+		arg.TaskID,
+		arg.SessionID,
+		arg.NodeID,
+		arg.AssociatedAtUnixMs,
+	)
+	err = recordQueryError(ctx, err, appendLegacySerialSessionWorkflowNodeHistory, 4)
+
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const bindInitialTaskManagedWorktree = `-- name: BindInitialTaskManagedWorktree :execrows
 UPDATE tasks
 SET
@@ -325,6 +423,82 @@ type BindInitialTaskManagedWorktreeParams struct {
 func (q *Queries) BindInitialTaskManagedWorktree(ctx context.Context, arg BindInitialTaskManagedWorktreeParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, bindInitialTaskManagedWorktree, arg.ManagedWorktreeID, arg.UpdatedAtUnixMs, arg.TaskID)
 	err = recordQueryError(ctx, err, bindInitialTaskManagedWorktree, 3)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const bindLegacySessionToBranchCurrentNode = `-- name: BindLegacySessionToBranchCurrentNode :execrows
+UPDATE task_current_nodes
+SET session_id = ?1
+WHERE task_id = ?2
+  AND node_id = ?3
+  AND transition_branch_key = ?4
+  AND legacy_materialized = 1
+  AND continuation_source_kind IS NULL
+  AND continuation_source_session_id IS NULL
+  AND (
+      session_id = ?1
+      OR session_id = CAST(?5 AS TEXT)
+  )
+`
+
+type BindLegacySessionToBranchCurrentNodeParams struct {
+	SessionID                sql.NullString
+	TaskID                   string
+	NodeID                   string
+	TransitionBranchKey      sql.NullString
+	ExpectedCurrentSessionID sql.NullString
+}
+
+func (q *Queries) BindLegacySessionToBranchCurrentNode(ctx context.Context, arg BindLegacySessionToBranchCurrentNodeParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, bindLegacySessionToBranchCurrentNode,
+		arg.SessionID,
+		arg.TaskID,
+		arg.NodeID,
+		arg.TransitionBranchKey,
+		arg.ExpectedCurrentSessionID,
+	)
+	err = recordQueryError(ctx, err, bindLegacySessionToBranchCurrentNode, 5)
+
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const bindLegacySessionToSerialCurrentNode = `-- name: BindLegacySessionToSerialCurrentNode :execrows
+UPDATE task_current_nodes
+SET session_id = ?1
+WHERE task_id = ?2
+  AND node_id = ?3
+  AND transition_branch_key IS NULL
+  AND legacy_materialized = 1
+  AND continuation_source_kind IS NULL
+  AND continuation_source_session_id IS NULL
+  AND (
+      session_id = ?1
+      OR session_id = CAST(?4 AS TEXT)
+  )
+`
+
+type BindLegacySessionToSerialCurrentNodeParams struct {
+	SessionID                sql.NullString
+	TaskID                   string
+	NodeID                   string
+	ExpectedCurrentSessionID sql.NullString
+}
+
+func (q *Queries) BindLegacySessionToSerialCurrentNode(ctx context.Context, arg BindLegacySessionToSerialCurrentNodeParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, bindLegacySessionToSerialCurrentNode,
+		arg.SessionID,
+		arg.TaskID,
+		arg.NodeID,
+		arg.ExpectedCurrentSessionID,
+	)
+	err = recordQueryError(ctx, err, bindLegacySessionToSerialCurrentNode, 4)
+
 	if err != nil {
 		return 0, err
 	}
@@ -8431,6 +8605,34 @@ type ReplaceWorkspaceChatDraftParams struct {
 func (q *Queries) ReplaceWorkspaceChatDraft(ctx context.Context, arg ReplaceWorkspaceChatDraftParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, replaceWorkspaceChatDraft, arg.ChatDraftJson, arg.ID)
 	err = recordQueryError(ctx, err, replaceWorkspaceChatDraft, 2)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const resolveDeferredSelfTaskActiveFanoutBranchSource = `-- name: ResolveDeferredSelfTaskActiveFanoutBranchSource :execrows
+UPDATE task_active_fanout_branches
+SET
+    continuation_source_kind = 'exact',
+    continuation_source_session_id = ?1,
+    legacy_materialized = 0
+WHERE task_id = ?2
+  AND transition_branch_key = ?3
+  AND continuation_source_kind = 'deferred_self'
+  AND continuation_source_session_id IS NULL
+  AND legacy_materialized = 0
+`
+
+type ResolveDeferredSelfTaskActiveFanoutBranchSourceParams struct {
+	SourceSessionID     sql.NullString
+	TaskID              string
+	TransitionBranchKey string
+}
+
+func (q *Queries) ResolveDeferredSelfTaskActiveFanoutBranchSource(ctx context.Context, arg ResolveDeferredSelfTaskActiveFanoutBranchSourceParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, resolveDeferredSelfTaskActiveFanoutBranchSource, arg.SourceSessionID, arg.TaskID, arg.TransitionBranchKey)
+	err = recordQueryError(ctx, err, resolveDeferredSelfTaskActiveFanoutBranchSource, 3)
 	if err != nil {
 		return 0, err
 	}

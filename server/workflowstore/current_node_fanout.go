@@ -17,6 +17,7 @@ type currentNodeFanoutTarget struct {
 	CurrentNode workflow.CurrentNode
 	Node        workflow.Node
 	NodeKind    workflow.NodeKind
+	Invariant   *workflow.RetainedTargetInvariantDetail
 }
 
 func completeCurrentNodeFanout(
@@ -45,7 +46,7 @@ func completeCurrentNodeFanout(
 		if branchKey == "" {
 			return CurrentNodeCompletionResult{}, errors.New("fan-out transition branch key is required")
 		}
-		targetCurrentNode, err := materializeCompletionTargetCurrentNode(
+		materializedTarget, err := materializeCompletionTargetCurrentNode(
 			ctx,
 			q,
 			definition,
@@ -62,11 +63,20 @@ func completeCurrentNodeFanout(
 		if err != nil {
 			return CurrentNodeCompletionResult{}, err
 		}
+		targetCurrentNode := materializedTarget.CurrentNode
+		if materializedTarget.Invariant != nil {
+			checkRetainedTargetInvariantBeforeMutation(*materializedTarget.Invariant)
+		}
 		preparedTargets = append(preparedTargets, currentNodeFanoutTarget{
 			BranchKey:   branchKey,
 			CurrentNode: targetCurrentNode,
 			Node:        target.Node,
+			Invariant:   materializedTarget.Invariant,
 		})
+		contextResolution, err := pendingApprovalContextSourceResolution(target.Node.Kind(), targetCurrentNode)
+		if err != nil {
+			return CurrentNodeCompletionResult{}, err
+		}
 		approvalBranches = append(approvalBranches, workflow.PendingApprovalBranch{
 			TransitionBranchKey: branchKey,
 			Target: workflow.PendingApprovalTarget{
@@ -74,10 +84,8 @@ func completeCurrentNodeFanout(
 				DisplayName: workflow.NodeDisplayName(target.Node),
 				NodeKind:    target.Node.Kind(),
 			},
-			EffectiveEdge: target.Edge,
-			ContextSourceResolution: workflow.PendingApprovalContextSourceResolution{
-				SessionID: clonePendingApprovalSessionID(targetCurrentNode.SessionID),
-			},
+			EffectiveEdge:           target.Edge,
+			ContextSourceResolution: contextResolution,
 		})
 		requiresApproval = requiresApproval || target.Edge.RequiresApproval
 	}
@@ -98,7 +106,13 @@ func completeCurrentNodeFanout(
 		if err := insertPendingApproval(ctx, q, approval); err != nil {
 			return CurrentNodeCompletionResult{}, err
 		}
-		return CurrentNodeCompletionResult{PendingApproval: &approval}, nil
+		result := CurrentNodeCompletionResult{PendingApproval: &approval}
+		for _, target := range preparedTargets {
+			if target.Invariant != nil {
+				result.retainedTargetInvariants = append(result.retainedTargetInvariants, *target.Invariant)
+			}
+		}
+		return result, nil
 	}
 	if err := replaceCurrentNodeWithFanout(ctx, q, currentSource.Reference, preparedTargets); err != nil {
 		return CurrentNodeCompletionResult{}, err
@@ -112,6 +126,11 @@ func completeCurrentNodeFanout(
 			Removed: []workflow.CurrentNodeReference{currentSource.Reference},
 			Created: created,
 		},
+	}
+	for _, target := range preparedTargets {
+		if target.Invariant != nil {
+			result.retainedTargetInvariants = append(result.retainedTargetInvariants, *target.Invariant)
+		}
 	}
 	for _, target := range preparedTargets {
 		if target.CurrentNode.Scheduling != nil && executableNodeKind(target.Node.Kind()) {
@@ -186,9 +205,16 @@ func insertTaskFanoutTargets(
 	}
 	for _, target := range targets {
 		branchKey, _ := target.Reference.TransitionBranchKey()
+		sourceKind, sourceSessionID, legacyMaterialized, err := materializedContinuationSourceColumns(target.ContinuationSource)
+		if err != nil {
+			return err
+		}
 		if err := q.InsertTaskActiveFanoutBranch(ctx, sqlitegen.InsertTaskActiveFanoutBranchParams{
-			TaskID:              string(taskID),
-			TransitionBranchKey: string(branchKey),
+			TaskID:                      string(taskID),
+			TransitionBranchKey:         string(branchKey),
+			ContinuationSourceKind:      sourceKind,
+			ContinuationSourceSessionID: sourceSessionID,
+			LegacyMaterialized:          legacyMaterialized,
 		}); err != nil {
 			return err
 		}
@@ -217,9 +243,16 @@ func insertFrozenTaskFanoutTargets(
 	}
 	for _, target := range targets {
 		branchKey, _ := target.CurrentNode.Reference.TransitionBranchKey()
+		sourceKind, sourceSessionID, legacyMaterialized, err := materializedContinuationSourceColumns(target.CurrentNode.ContinuationSource)
+		if err != nil {
+			return err
+		}
 		if err := q.InsertTaskActiveFanoutBranch(ctx, sqlitegen.InsertTaskActiveFanoutBranchParams{
-			TaskID:              string(taskID),
-			TransitionBranchKey: string(branchKey),
+			TaskID:                      string(taskID),
+			TransitionBranchKey:         string(branchKey),
+			ContinuationSourceKind:      sourceKind,
+			ContinuationSourceSessionID: sourceSessionID,
+			LegacyMaterialized:          legacyMaterialized,
 		}); err != nil {
 			return err
 		}

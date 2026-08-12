@@ -557,7 +557,8 @@ type PendingApprovalTarget struct {
 }
 
 type PendingApprovalContextSourceResolution struct {
-	SessionID *runtimeids.SessionID
+	TargetSession TargetSessionIntent
+	ActiveSource  MaterializedContinuationSource
 }
 
 type CurrentNodeMutationResult struct {

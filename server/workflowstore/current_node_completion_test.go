@@ -455,11 +455,15 @@ func TestCompleteCurrentNodeCreatesFrozenPendingApprovalAndRetainsSource(t *test
 		t.Fatalf("approval commentary = %q, want trimmed frozen commentary", approval.Commentary)
 	}
 	branch := approval.Branches[0]
+	resolvedSessionID, reused := branch.ContextSourceResolution.TargetSession.SessionID()
+	activeSourceID, exact := branch.ContextSourceResolution.ActiveSource.ExactSessionID()
 	if branch.Target.CurrentNode.CurrentInputValues["summary"] != "frozen plan" ||
 		branch.Target.CurrentNode.SessionID == nil ||
 		*branch.Target.CurrentNode.SessionID != sourceSessionID ||
-		branch.ContextSourceResolution.SessionID == nil ||
-		*branch.ContextSourceResolution.SessionID != sourceSessionID {
+		!reused ||
+		resolvedSessionID != sourceSessionID ||
+		!exact ||
+		activeSourceID != sourceSessionID {
 		t.Fatalf("approval branch snapshot = %+v, want frozen immediate-source target session and values", branch)
 	}
 
@@ -1009,17 +1013,18 @@ func associateAndBindCurrentNodeSessionForTest(
 	currentNode workflow.CurrentNodeReference,
 ) runtimeids.SessionID {
 	t.Helper()
-	sessionID := associateTaskSessionForTest(t, ctx, store, binding, cfg, currentNode, time.UnixMilli(1_700_000_000_000).UTC())
-	if _, err := store.db.ExecContext(ctx, `UPDATE task_current_nodes
-SET session_id = ?
-WHERE task_id = ?
-  AND node_id = ?
-  AND transition_branch_key IS NULL`,
-		sessionID.String(),
-		string(currentNode.TaskID),
-		string(currentNode.NodeID),
-	); err != nil {
-		t.Fatalf("bind current node session: %v", err)
+	sessionID, err := runtimeids.ParseSessionID(createTestSession(t, ctx, store, binding, cfg))
+	if err != nil {
+		t.Fatalf("ParseSessionID: %v", err)
+	}
+	if _, err := store.BindSessionToCurrentNode(ctx, CurrentNodeSessionBindingRequest{
+		Association: TaskSessionAssociationRequest{
+			SessionID:    sessionID,
+			CurrentNode:  currentNode,
+			AssociatedAt: time.UnixMilli(1_700_000_000_000).UTC(),
+		},
+	}); err != nil {
+		t.Fatalf("BindSessionToCurrentNode: %v", err)
 	}
 	return sessionID
 }
