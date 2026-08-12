@@ -5,5 +5,5 @@ const (
 	MinimumSupportedRelease                        = "v2.0.0"
 	WorkflowIdentityMigrationVersion         int64 = 62
 	WorkflowSessionAgentRoleMigrationVersion int64 = 63
-	WorkflowLegacyProvenanceRepairVersion     int64 = 85
+	WorkflowLegacyProvenanceRepairVersion    int64 = 85
 )
