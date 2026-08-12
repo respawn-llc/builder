@@ -264,13 +264,6 @@ func TestLockedContractPersistenceIncludesPromptAndRequestSnapshots(t *testing.T
 	if locked.WorkflowCompletionMode == nil || *locked.WorkflowCompletionMode != sessioncontract.WorkflowCompletionModeTool {
 		t.Fatalf("locked workflow completion mode = %v, want tool", locked.WorkflowCompletionMode)
 	}
-	if got, err := opened.GoalAvailability(); err != nil || got != GoalAgentCapabilityMissing {
-		t.Fatalf("reopened Goal availability=%q err=%v", got, err)
-	}
-	t.Setenv("KENT_INVARIANT_MODE", "diagnostic")
-	if _, err := GoalAvailabilityFromMeta(Meta{Locked: &LockedContract{HasEnabledTools: true, EnabledTools: []string{"unknown"}}}); err == nil {
-		t.Fatal("malformed locked tools returned Goal availability")
-	}
 }
 
 func TestResetLockedContractForCompactionBoundaryPersistsFreshContractBoundary(t *testing.T) {

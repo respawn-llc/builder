@@ -174,6 +174,13 @@ func TestNonStaleContentCompleteHydrationAppliesWholeEvent(t *testing.T) {
 	if len(controller.liveReadModel.sections) == 0 {
 		t.Fatal("hydrated tools/prompts/queue did not reach controller live state")
 	}
+	m.goal.open = true
+	m.goal.pending = &clientui.GoalPreview{Objective: "queued", Status: clientui.RuntimeGoalStatusActive}
+	goal := runtimeClientTestGoal("goal-1", "hydrated", clientui.RuntimeGoalStatusPaused)
+	m.applyAdmittedTranscriptMessageState(hydration, runtimeTupleMergeResult{view: clientui.RuntimeMainView{Status: clientui.RuntimeStatus{Goal: &clientui.RuntimeGoal{Goal: goal}}}})
+	if m.goal.pending != nil || *m.goal.goal != *goal {
+		t.Fatal("hydration did not replace queued Goal preview")
+	}
 }
 
 func TestHydrationReplacesStaleBackgroundProcessEntries(t *testing.T) {

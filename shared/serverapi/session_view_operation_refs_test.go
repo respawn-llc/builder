@@ -12,8 +12,9 @@ func TestSessionMainViewRequestUsesSessionIdentityOnly(t *testing.T) {
 	if err := req.Validate(); err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
-	if err := (SessionMainViewResponse{MainView: clientui.RuntimeMainView{Status: clientui.RuntimeStatus{Goal: &clientui.RuntimeGoal{}}}}).Validate(); err == nil {
-		t.Fatal("accepted main-view Goal without availability")
+	availability := clientui.GoalAvailabilityAvailable
+	if missing := (SessionMainViewResponse{MainView: clientui.RuntimeMainView{Status: clientui.RuntimeStatus{Goal: &clientui.RuntimeGoal{}}}}).Validate(); missing == nil || (SessionMainViewResponse{MainView: clientui.RuntimeMainView{Status: clientui.RuntimeStatus{Goal: &clientui.RuntimeGoal{Goal: &clientui.Goal{}, Availability: &availability}}}}).Validate() == nil {
+		t.Fatal("accepted malformed main-view Goal availability or core")
 	}
 }
 

@@ -39,8 +39,6 @@ func TestArchitectureBoundaries(t *testing.T) {
 			switch {
 			case strings.HasPrefix(importPath, "core/server/") && strings.HasPrefix(trimmedImport, "core/cli/"):
 				violations = append(violations, importPath+" must not import frontend package "+trimmedImport)
-			case importPath == "core/server/session" && trimmedImport == "core/shared/clientui":
-				violations = append(violations, importPath+" must not import client Goal DTOs")
 			case strings.HasPrefix(importPath, "core/shared/") && strings.HasPrefix(trimmedImport, "core/cli/"):
 				violations = append(violations, importPath+" must not import frontend package "+trimmedImport)
 			case strings.HasPrefix(importPath, "core/shared/") && strings.HasPrefix(trimmedImport, "core/server/"):

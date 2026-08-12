@@ -26,6 +26,11 @@ func (m *uiModel) applyAdmittedTranscriptMessageState(
 	}
 	switch message.Kind() {
 	case clientui.TranscriptMessageHydration:
+		m.goalRuntimeMutationSerial = nextNonZeroToken(m.goalRuntimeMutationSerial)
+		if m.goal.open {
+			m.goal.goal = goalCoreFromRuntimeGoal(admission.view.Status.Goal)
+			m.goal.pending = nil
+		}
 		return m.applyTranscriptHydration(message.Payload().(clientui.TranscriptHydration), admission)
 	case clientui.TranscriptMessageThinkingStatusUpdate:
 		m.applyTranscriptThinkingStatusUpdate(message.Payload().(clientui.TranscriptThinkingStatusUpdate))

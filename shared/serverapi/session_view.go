@@ -28,7 +28,10 @@ func (r SessionMainViewResponse) Validate() error {
 	if goal.Availability == nil {
 		return errors.New("runtime Goal availability is required")
 	}
-	return goal.Availability.Validate()
+	if err := goal.Availability.Validate(); err != nil || goal.Goal == nil {
+		return err
+	}
+	return goal.Goal.Validate()
 }
 
 type SessionTranscriptPageRequest struct {

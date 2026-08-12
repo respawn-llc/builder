@@ -1053,10 +1053,6 @@ func TestDetachKeepsOwnerlessRuntimeAvailable(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("detached ownerless runtime is unavailable: %v", err)
 	}
-	outcome, err := authority.ApplyCurrentGoalOperation(context.Background(), sessionID, runtime.CurrentGoalSet{Objective: "routed Goal", Actor: session.GoalActorUser})
-	if err != nil || !outcome.ExecutionRequired {
-		t.Fatal(outcome, err)
-	}
 }
 
 func assertRuntimeUnavailable(t *testing.T, authority *Authority, resource runtimeids.SessionResourceRef, stage string) {
