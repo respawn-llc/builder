@@ -83,14 +83,27 @@ func (s *API) ActivateSessionRuntime(ctx context.Context, req serverapi.SessionR
 	if err != nil {
 		return serverapi.SessionRuntimeActivateResponse{}, err
 	}
-	plan, err := s.interactiveRuntimePlan(ctx, req, sessionID.String())
-	if err != nil {
-		return serverapi.SessionRuntimeActivateResponse{}, err
-	}
-	attachment, err := s.authority.OpenRuntime(ctx, RuntimeOpenRequest{
+	attachment, err := s.authority.openRuntime(ctx, RuntimeOpenRequest{
 		SessionID: sessionID,
 		OwnerID:   ownerID,
-		Runtime:   &plan,
+	}, func(_ context.Context, store *session.Store) (*AgentRuntimePlan, error) {
+		questions := *req.QuestionsEnabled
+		autoCompaction := *req.AutoCompactionEnabled
+		if overrides := store.Meta().ChatSettings; overrides != nil {
+			if overrides.Questions != nil {
+				questions = *overrides.Questions
+			}
+			if overrides.AutoCompaction != nil {
+				autoCompaction = *overrides.AutoCompaction
+			}
+		}
+		req.QuestionsEnabled = &questions
+		req.AutoCompactionEnabled = &autoCompaction
+		plan, planErr := s.interactiveRuntimePlan(ctx, req, sessionID.String())
+		if planErr != nil {
+			return nil, planErr
+		}
+		return &plan, nil
 	})
 	if err != nil {
 		return serverapi.SessionRuntimeActivateResponse{}, err

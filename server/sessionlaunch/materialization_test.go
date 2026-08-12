@@ -71,6 +71,15 @@ func TestServiceMaterializesCompleteResolvedWorkspaceChatDraft(t *testing.T) {
 	}
 }
 
+func TestServiceMaterializationUsesStoredAuthWithoutRefreshingProviderCredentials(t *testing.T) {
+	service, _, _, _ := newWorkspaceChatMaterializationService(t)
+	service.WithAuthStateReader(failingAuthStateReader{})
+
+	if _, err := service.materializeWorkspaceChatSession(t.Context()); err != nil {
+		t.Fatalf("MaterializeWorkspaceChatSession with refresh failure: %v", err)
+	}
+}
+
 func TestServiceMaterializationFailurePreservesDraftAndCleansFilesystemArtifact(t *testing.T) {
 	ctx := context.Background()
 	service, metadataStore, _, binding := newWorkspaceChatMaterializationService(t)

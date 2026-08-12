@@ -447,6 +447,14 @@ func (r *agentResource) rejectsNewStepLocked() bool {
 }
 
 func (a *Authority) OpenRuntime(ctx context.Context, request RuntimeOpenRequest) (RuntimeAttachment, error) {
+	return a.openRuntime(ctx, request, nil)
+}
+
+func (a *Authority) openRuntime(
+	ctx context.Context,
+	request RuntimeOpenRequest,
+	resolvePlan func(context.Context, *session.Store) (*AgentRuntimePlan, error),
+) (RuntimeAttachment, error) {
 	if a == nil {
 		return RuntimeAttachment{}, errors.New("session runtime authority is required")
 	}
@@ -472,6 +480,19 @@ func (a *Authority) OpenRuntime(ctx context.Context, request RuntimeOpenRequest)
 	descriptor, err := session.NewOpenSessionDescriptor(request.SessionID)
 	if err != nil {
 		return RuntimeAttachment{}, err
+	}
+	if resolvePlan != nil {
+		store, materializeErr := session.MaterializeSessionDescriptor(a.options.persistenceRoot, descriptor, a.options.storeOptions...)
+		if materializeErr != nil {
+			return RuntimeAttachment{}, materializeErr
+		}
+		request.Runtime, err = resolvePlan(ctx, store)
+		if err != nil {
+			return RuntimeAttachment{}, err
+		}
+		if request.Runtime == nil {
+			return RuntimeAttachment{}, errors.New("resolved runtime plan is required")
+		}
 	}
 	resource, err := a.openResource(ctx, descriptor, request.Runtime, &ownerID)
 	if err != nil {

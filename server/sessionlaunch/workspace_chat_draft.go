@@ -256,11 +256,7 @@ func resolveWorkspaceChatDraftBaselines(input WorkspaceChatDraftResolverInput) (
 		if target == nil {
 			return nil, fmt.Errorf("prepare workspace Chat draft Agent %q returned no target", selector)
 		}
-		preparedSettings, err := launch.PrepareChatSettingsForAgent(
-			config.App{Settings: input.Settings, Source: input.Source},
-			input.AuthState,
-			selector,
-		)
+		preparedSettings, err := launch.PrepareChatSettingsForTarget(input.AuthState, *target)
 		if err != nil {
 			return nil, err
 		}

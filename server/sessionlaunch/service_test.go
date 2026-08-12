@@ -41,6 +41,10 @@ func (failingAuthStateReader) CurrentState(context.Context) (auth.State, error) 
 	return auth.State{}, errors.New("auth unavailable")
 }
 
+func (failingAuthStateReader) StoredState(context.Context) (auth.State, error) {
+	return auth.EmptyState(), nil
+}
+
 func sessionLaunchStringPtr(value string) *string {
 	return &value
 }

@@ -336,6 +336,39 @@ func TestActivateSessionRuntimeUsesTypedQuestionAndAutoCompactionSettings(t *tes
 	releaseSessionRuntimeForFastTest(t, fixture.api, response.Attachment, "typed-session-settings")
 }
 
+func TestActivateSessionRuntimeUsesLatestPersistedQuestionAndAutoCompactionSettings(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	fixture.api = NewAPI(fixture.metadata, fixture.authority, APIOptions{
+		RuntimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(context.Context, runtimewire.RuntimeClientRequest) (llm.Client, error) {
+			return &sessionRuntimeTestLLMClient{}, nil
+		}),
+	})
+	if _, err := fixture.store.MutateChatSettings(session.ChatSettingsMutation{
+		Questions:      textutil.Value(false),
+		AutoCompaction: textutil.Value(false),
+	}); err != nil {
+		t.Fatalf("persist latest Session settings: %v", err)
+	}
+
+	response, err := fixture.api.ActivateSessionRuntime(t.Context(), serverapi.SessionRuntimeActivateRequest{
+		ClientRequestID:       "stale-planned-session-settings",
+		SessionID:             fixture.store.Meta().SessionID,
+		OwnerID:               "stale-planned-session-settings",
+		ActiveSettings:        sessionRuntimeFastSettings(false),
+		QuestionsEnabled:      textutil.Value(true),
+		AutoCompactionEnabled: textutil.Value(true),
+		Source:                config.SourceReport{Sources: map[string]string{}},
+	})
+	if err != nil {
+		t.Fatalf("ActivateSessionRuntime: %v", err)
+	}
+	engine := currentSessionRuntimeEngine(t, fixture.authority, fixture.store.Meta().SessionID)
+	if engine.QuestionsEnabled() || engine.AutoCompactionEnabled() {
+		t.Fatalf("runtime settings = questions %t auto-compaction %t, want latest persisted false/false", engine.QuestionsEnabled(), engine.AutoCompactionEnabled())
+	}
+	releaseSessionRuntimeForFastTest(t, fixture.api, response.Attachment, "stale-planned-session-settings")
+}
+
 func sessionRuntimeFastSettings(enabled bool) config.Settings {
 	settings := config.DefaultOnboardingSettings()
 	settings.Model = "gpt-5"

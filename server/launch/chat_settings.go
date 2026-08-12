@@ -54,6 +54,10 @@ func PrepareChatSettingsForAgent(app config.App, authState auth.State, agent str
 	if target == nil {
 		return PreparedChatSettings{}, fmt.Errorf("prepare Chat Agent %q returned no target", agent)
 	}
+	return PrepareChatSettingsForTarget(authState, *target)
+}
+
+func PrepareChatSettingsForTarget(authState auth.State, target PreparedBaseTarget) (PreparedChatSettings, error) {
 	capabilities, err := llm.ProviderCapabilitiesForSettings(authState, target.Settings)
 	if err != nil {
 		return PreparedChatSettings{}, err

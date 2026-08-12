@@ -23,6 +23,7 @@ import (
 
 type authStateReader interface {
 	CurrentState(context.Context) (auth.State, error)
+	StoredState(context.Context) (auth.State, error)
 }
 
 type promptHistoryReader interface {
@@ -194,7 +195,7 @@ func (s *Service) workspaceChatDraftResolverInput(ctx context.Context) (Workspac
 	authState := auth.EmptyState()
 	if s.authStates != nil {
 		var err error
-		authState, err = s.authStates.CurrentState(ctx)
+		authState, err = s.authStates.StoredState(ctx)
 		if err != nil {
 			return WorkspaceChatDraftResolverInput{}, err
 		}
