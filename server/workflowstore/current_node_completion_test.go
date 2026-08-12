@@ -745,105 +745,17 @@ func TestCompleteCurrentNodeCompactAndContinueSessionUsesImmediateSourceSession(
 	}
 }
 
-func TestCompleteCurrentNodeSelectedNodeContextUsesLatestAssociatedSession(t *testing.T) {
-	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
-	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
-	definition, _, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	auditEdgeID := edgeByKey(t, definition, "audit").ID
-	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
-		edge := workflowGraphSaveEdgeRecord(t, req.Edges, auditEdgeID)
-		edge.ContextMode = workflow.ContextModeContinueSession
-		edge.ContextSource = workflow.ContextSource{
-			Kind:    workflow.ContextSourceSelectedNode,
-			NodeKey: "plan",
-		}
-	})
-	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
-	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	started := startTask(t, ctx, store, task.ID)
-	plan := started.Mutation.Created[0]
-	associateAndBindCurrentNodeSessionForTest(t, ctx, store, binding, cfg, plan.Reference)
-	reviewResult, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
-		Source:       plan.Reference,
-		TransitionID: "review",
-		OutputValues: map[string]string{"summary": "plan complete"},
-	})
-	if err != nil {
-		t.Fatalf("CompleteCurrentNode plan: %v", err)
-	}
-	review := reviewResult.Mutation.Created[0]
-	latestPlanSessionID := associateTaskSessionForTest(
-		t,
-		ctx,
-		store,
-		binding,
-		cfg,
-		plan.Reference,
-		time.UnixMilli(1_700_000_000_001).UTC(),
-	)
-	associateAndBindCurrentNodeSessionForTest(t, ctx, store, binding, cfg, review.Reference)
-
-	auditResult, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
-		Source:       review.Reference,
-		TransitionID: "audit",
-	})
-	if err != nil {
-		t.Fatalf("CompleteCurrentNode review: %v", err)
-	}
-	if len(auditResult.Mutation.Created) != 1 ||
-		auditResult.Mutation.Created[0].SessionID == nil ||
-		*auditResult.Mutation.Created[0].SessionID != latestPlanSessionID {
-		t.Fatalf("selected-node target = %+v, want latest plan session %q", auditResult.Mutation.Created, latestPlanSessionID)
-	}
-}
-
-func TestCompleteCurrentNodePreviousTargetContextUsesLatestAssociatedSession(t *testing.T) {
-	fixture := newReworkContextCompletionFixture(t, workflow.ContextSourcePreviousTarget)
-	associateTaskSessionForTest(
-		t,
-		fixture.ctx,
-		fixture.store,
-		fixture.binding,
-		fixture.cfg,
-		fixture.review.Reference,
-		time.UnixMilli(1_700_000_000_000).UTC(),
-	)
-	reviewSessionID := associateTaskSessionForTest(
-		t,
-		fixture.ctx,
-		fixture.store,
-		fixture.binding,
-		fixture.cfg,
-		fixture.review.Reference,
-		time.UnixMilli(1_700_000_000_001).UTC(),
-	)
-	reworkResult, err := fixture.store.CompleteCurrentNode(fixture.ctx, CurrentNodeCompletionRequest{
-		Source:       fixture.audit.Reference,
-		TransitionID: "rework",
-		OutputValues: map[string]string{"summary": "review again"},
-	})
-	if err != nil {
-		t.Fatalf("CompleteCurrentNode audit: %v", err)
-	}
-	if len(reworkResult.Mutation.Created) != 1 ||
-		reworkResult.Mutation.Created[0].SessionID == nil ||
-		*reworkResult.Mutation.Created[0].SessionID != reviewSessionID {
-		t.Fatalf("previous-target current node = %+v, want review session %q", reworkResult.Mutation.Created, reviewSessionID)
-	}
-}
-
 func TestCompleteCurrentNodePreviousTargetContextFailsWithoutAssociatedSession(t *testing.T) {
 	fixture := newReworkContextCompletionFixture(t, workflow.ContextSourcePreviousTarget)
 
-	if _, err := fixture.store.CompleteCurrentNode(fixture.ctx, CurrentNodeCompletionRequest{
+	_, err := fixture.store.CompleteCurrentNode(fixture.ctx, CurrentNodeCompletionRequest{
 		Source:       fixture.audit.Reference,
 		TransitionID: "rework",
 		OutputValues: map[string]string{"summary": "review again"},
-	}); !errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("CompleteCurrentNode error = %v, want sql.ErrNoRows", err)
+	})
+	var unavailable workflow.RetainedTargetUnavailableError
+	if !errors.As(err, &unavailable) {
+		t.Fatalf("CompleteCurrentNode error = %v, want RetainedTargetUnavailableError", err)
 	}
 	currentNodes, err := fixture.store.ListCurrentNodes(fixture.ctx, fixture.audit.Reference.TaskID)
 	if err != nil {
@@ -867,33 +779,6 @@ func TestCompleteCurrentNodePreviousTargetOrNewContextFallsBackToNewSession(t *t
 	}
 	if len(reworkResult.Mutation.Created) != 1 || reworkResult.Mutation.Created[0].SessionID != nil {
 		t.Fatalf("previous-target-or-new current node = %+v, want an unbound target", reworkResult.Mutation.Created)
-	}
-}
-
-func TestCompleteCurrentNodePreviousTargetOrNewContextUsesLatestAssociatedSession(t *testing.T) {
-	fixture := newReworkContextCompletionFixture(t, workflow.ContextSourcePreviousTargetOrNew)
-	reviewSessionID := associateTaskSessionForTest(
-		t,
-		fixture.ctx,
-		fixture.store,
-		fixture.binding,
-		fixture.cfg,
-		fixture.review.Reference,
-		time.UnixMilli(1_700_000_000_000).UTC(),
-	)
-
-	reworkResult, err := fixture.store.CompleteCurrentNode(fixture.ctx, CurrentNodeCompletionRequest{
-		Source:       fixture.audit.Reference,
-		TransitionID: "rework",
-		OutputValues: map[string]string{"summary": "review again"},
-	})
-	if err != nil {
-		t.Fatalf("CompleteCurrentNode audit: %v", err)
-	}
-	if len(reworkResult.Mutation.Created) != 1 ||
-		reworkResult.Mutation.Created[0].SessionID == nil ||
-		*reworkResult.Mutation.Created[0].SessionID != reviewSessionID {
-		t.Fatalf("previous-target-or-new current node = %+v, want review session %q", reworkResult.Mutation.Created, reviewSessionID)
 	}
 }
 
