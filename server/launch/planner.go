@@ -587,6 +587,13 @@ func (p Planner) ApplyRunPromptOverridesWithStore(plan SessionPlan, store *sessi
 	if err != nil {
 		return SessionPlan{}, nil, err
 	}
+	var chatSettings session.ChatSettings
+	next.ActiveSettings, chatSettings, err = applySessionChatSettings(store.Meta(), next.ActiveSettings)
+	if err != nil {
+		return SessionPlan{}, nil, err
+	}
+	next.QuestionsEnabled = chatSettings.Questions
+	next.AutoCompactionEnabled = chatSettings.AutoCompaction
 	next, err = withRequiredRunPromptTools(next, options.RequiredTools)
 	if err != nil {
 		return SessionPlan{}, nil, err
@@ -847,7 +854,18 @@ func (p Planner) ApplyPreparedRunPromptOverridesWithStore(plan SessionPlan, stor
 	if store == nil {
 		return SessionPlan{}, nil, errors.New("session store is required")
 	}
-	return p.applyPreparedRunPromptOverridesWithBudgetApplier(plan, store, overrides, prepared, options, applyDerivedModelContextBudgetOverrides)
+	next, warnings, err := p.applyPreparedRunPromptOverridesWithBudgetApplier(plan, store, overrides, prepared, options, applyDerivedModelContextBudgetOverrides)
+	if err != nil {
+		return SessionPlan{}, nil, err
+	}
+	var chatSettings session.ChatSettings
+	next.ActiveSettings, chatSettings, err = applySessionChatSettings(store.Meta(), next.ActiveSettings)
+	if err != nil {
+		return SessionPlan{}, nil, err
+	}
+	next.QuestionsEnabled = chatSettings.Questions
+	next.AutoCompactionEnabled = chatSettings.AutoCompaction
+	return next, warnings, nil
 }
 
 func (p Planner) applyPreparedRunPromptOverridesWithBudgetApplier(plan SessionPlan, store *session.Store, overrides serverapi.RunPromptOverrides, prepared PreparedRunPromptOverrides, options RunPromptOverrideOptions, applyBudget modelContextBudgetApplier) (SessionPlan, []string, error) {
@@ -882,6 +900,9 @@ func (p Planner) applyPreparedRunPromptOverridesWithBudgetApplier(plan SessionPl
 		return store.SetContinuationContext(ctx)
 	}
 	roleOverride := prepared.AgentRole
+	if strings.TrimSpace(overrides.OpenAIBaseURL) != "" {
+		shouldPersistContinuation = true
+	}
 	if !roleOverride.Present && prepared.BaseTarget != nil {
 		next.ActiveSettings = cloneSettings(prepared.BaseTarget.Settings)
 		next.Source = cloneSourceReport(prepared.BaseTarget.Source)
@@ -907,7 +928,7 @@ func (p Planner) applyPreparedRunPromptOverridesWithBudgetApplier(plan SessionPl
 		staleLockedPromptFacingContract = true
 	}
 	if roleOverride.Present {
-		shouldPersistContinuation = !options.AgentSelectionPersisted
+		shouldPersistContinuation = shouldPersistContinuation || !options.AgentSelectionPersisted
 		continuationAgentRole = requestedContinuationRole
 		next.ActiveSettings = cloneSettings(baseSettings)
 		next.Source = baseSource
@@ -963,9 +984,6 @@ func (p Planner) applyPreparedRunPromptOverridesWithBudgetApplier(plan SessionPl
 	loaded := prepared.OverrideConfig
 	locked := store.Meta().Locked
 	var err error
-	if strings.TrimSpace(overrides.OpenAIBaseURL) != "" {
-		shouldPersistContinuation = true
-	}
 	next.ActiveSettings, next.Source, next.EnabledTools, err = applyPreparedConfigOverrides(
 		cloneSettings(next.ActiveSettings),
 		cloneSourceReport(next.Source),

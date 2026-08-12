@@ -417,38 +417,19 @@ func chatSettingsOverridesEqual(left *ChatSettingsOverrides, right *ChatSettings
 	if left == nil || right == nil {
 		return left == right
 	}
-	return equalOptionalString(left.Supervisor, right.Supervisor) &&
-		equalOptionalString(left.Thinking, right.Thinking) &&
-		equalOptionalBool(left.Fast, right.Fast) &&
-		equalOptionalBool(left.Questions, right.Questions) &&
-		equalOptionalBool(left.AutoCompaction, right.AutoCompaction)
-}
-
-func equalOptionalString(left *string, right *string) bool {
-	if left == nil || right == nil {
-		return left == right
-	}
-	return *left == *right
-}
-
-func equalOptionalBool(left *bool, right *bool) bool {
-	if left == nil || right == nil {
-		return left == right
-	}
-	return *left == *right
+	return textutil.EqualOptional(left.Supervisor, right.Supervisor) &&
+		textutil.EqualOptional(left.Thinking, right.Thinking) &&
+		textutil.EqualOptional(left.Fast, right.Fast) &&
+		textutil.EqualOptional(left.Questions, right.Questions) &&
+		textutil.EqualOptional(left.AutoCompaction, right.AutoCompaction)
 }
 
 func normalizeChatSupervisor(value string) (string, error) {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "off":
-		return "off", nil
-	case "edits":
-		return "edits", nil
-	case "all":
-		return "all", nil
-	default:
+	normalized, ok := NormalizeReviewerFrequency(value)
+	if !ok {
 		return "", fmt.Errorf("Chat settings Supervisor %q is invalid", value)
 	}
+	return normalized, nil
 }
 
 func normalizeCompleteChatSettings(settings ChatSettings) (ChatSettings, error) {
@@ -466,15 +447,23 @@ func normalizeCompleteChatSettings(settings ChatSettings) (ChatSettings, error) 
 }
 
 func normalizeChatAgent(value string) (string, error) {
-	trimmed := strings.TrimSpace(value)
-	if strings.EqualFold(trimmed, config.DefaultSubagentRole) {
-		return config.DefaultSubagentRole, nil
-	}
-	normalized := config.NormalizeSubagentRole(trimmed)
-	if normalized == "" {
+	normalized, ok := NormalizeChatAgent(value)
+	if !ok {
 		return "", fmt.Errorf("Chat draft Agent %q is invalid", value)
 	}
 	return normalized, nil
+}
+
+func NormalizeChatAgent(value string) (string, bool) {
+	trimmed := strings.TrimSpace(value)
+	if strings.EqualFold(trimmed, config.DefaultSubagentRole) {
+		return config.DefaultSubagentRole, true
+	}
+	normalized := config.NormalizeSubagentRole(trimmed)
+	if normalized == "" {
+		return "", false
+	}
+	return normalized, true
 }
 
 func requireCompleteChatSettingsOverrides(settings *ChatSettingsOverrides) error {

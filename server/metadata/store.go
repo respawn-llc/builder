@@ -2581,7 +2581,13 @@ func (s *Store) upsertSessionSnapshotWithQueries(
 			(targetErr == nil &&
 				(existingTarget.ProjectID != workspace.ProjectID ||
 					existingTarget.WorkspaceID != workspace.ID)) {
-			return serverapi.ErrWorkspaceNotRegistered
+			return fmt.Errorf(
+				"%w: workspace %q same_root=%t session %q",
+				serverapi.ErrWorkspaceNotRegistered,
+				options.workspaceID,
+				sameRoot,
+				strings.TrimSpace(snapshot.Meta.SessionID),
+			)
 		}
 		binding = bindingFromWorkspaceFields(
 			workspace.ProjectID,

@@ -173,12 +173,15 @@ func (s *Service) materializeResolvedWorkspaceChat(
 	if err := ctx.Err(); err != nil {
 		return runtimeids.SessionID{}, err
 	}
+	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
+	if err != nil {
+		return runtimeids.SessionID{}, fmt.Errorf("materialized Session id %q is invalid: %w", store.Meta().SessionID, err)
+	}
+	if !sessionID.IsCanonicalUUIDv4() {
+		return runtimeids.SessionID{}, fmt.Errorf("materialized Session id %q must be a canonical UUIDv4", sessionID.String())
+	}
 	if err := store.EnsureDurable(); err != nil {
 		return runtimeids.SessionID{}, errors.Join(err, store.RemoveDurable())
-	}
-	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
-	if err != nil || !sessionID.IsCanonicalUUIDv4() {
-		return runtimeids.SessionID{}, fmt.Errorf("materialized Session id is invalid: %w", err)
 	}
 	return sessionID, nil
 }

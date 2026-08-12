@@ -605,7 +605,7 @@ func (s *Service) mutateChatSettings(
 		if engine != nil && apply != nil {
 			resultErr = errors.Join(resultErr, apply(engine, result))
 		}
-		return resultErr
+		return nil
 	})
 	if !accepted {
 		return result, false, err

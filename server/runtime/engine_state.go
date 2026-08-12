@@ -420,7 +420,7 @@ func (e *Engine) SetReviewerEnabled(enabled bool) (bool, string, error) {
 func (e *Engine) PrepareReviewerFrequency(frequency string) (string, error) {
 	normalized, ok := NormalizeReviewerFrequency(frequency)
 	if !ok {
-		return "", fmt.Errorf("invalid Supervisor frequency %q", strings.TrimSpace(frequency))
+		return "", fmt.Errorf("invalid reviewer frequency %q", strings.TrimSpace(frequency))
 	}
 	if normalized != "off" {
 		if err := e.initReviewerClient(); err != nil {

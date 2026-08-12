@@ -22,13 +22,9 @@ type PreparedChatSettings struct {
 }
 
 func PrepareChatSettingsForAgent(app config.App, authState auth.State, agent string) (PreparedChatSettings, error) {
-	agent = strings.TrimSpace(agent)
-	if strings.EqualFold(agent, config.DefaultSubagentRole) {
-		agent = config.DefaultSubagentRole
-	} else {
-		agent = config.NormalizeSubagentRole(agent)
-	}
-	if agent == "" {
+	var valid bool
+	agent, valid = session.NormalizeChatAgent(agent)
+	if !valid {
 		return PreparedChatSettings{}, errors.New("Chat Agent is required")
 	}
 	prepared, err := PrepareRunPromptOverridesWithContext(
