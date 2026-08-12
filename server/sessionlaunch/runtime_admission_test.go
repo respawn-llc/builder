@@ -212,7 +212,7 @@ func TestServiceOpenExistingPlanningOwnsRuntimeAdmission(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen session: %v", err)
 	}
-	if got := reopened.Meta().Continuation; got == nil || got.OpenAIBaseURL != "http://planning.example/v1" {
+	if got := reopened.Meta().Continuation; got == nil || got.OpenAIBaseURL == nil || *got.OpenAIBaseURL != "http://planning.example/v1" {
 		t.Fatalf("reopened continuation = %+v, want planning metadata", got)
 	}
 	eventLog, err := reopened.MaterializeEventLog()

@@ -8,6 +8,7 @@ import (
 	"core/shared/config"
 	"core/shared/protocol"
 	"core/shared/sessioncontract"
+	"core/shared/textutil"
 )
 
 var ErrChatAgentLocked = errors.New("Chat Agent is locked")
@@ -82,11 +83,11 @@ func NormalizeChatSettingsOverrides(overrides *ChatSettingsOverrides) (*ChatSett
 		return nil, nil
 	}
 	normalized := &ChatSettingsOverrides{
-		Supervisor:     cloneStringPointer(overrides.Supervisor),
-		Thinking:       cloneStringPointer(overrides.Thinking),
-		Fast:           cloneBoolPointer(overrides.Fast),
-		Questions:      cloneBoolPointer(overrides.Questions),
-		AutoCompaction: cloneBoolPointer(overrides.AutoCompaction),
+		Supervisor:     textutil.Pointer(overrides.Supervisor),
+		Thinking:       textutil.Pointer(overrides.Thinking),
+		Fast:           textutil.Pointer(overrides.Fast),
+		Questions:      textutil.Pointer(overrides.Questions),
+		AutoCompaction: textutil.Pointer(overrides.AutoCompaction),
 	}
 	if normalized.Supervisor != nil {
 		value, err := normalizeChatSupervisor(*normalized.Supervisor)
@@ -259,7 +260,7 @@ func (s *Store) MutateChatSettings(mutation ChatSettingsMutation) (ChatSettingsM
 		continuation.AgentRole = &agent
 	}
 	if prepared.agent != nil {
-		continuation.OpenAIBaseURL = ""
+		continuation.OpenAIBaseURL = nil
 	}
 	normalizedContinuation, err := NormalizeContinuationContext(*continuation)
 	if err != nil {
@@ -359,11 +360,11 @@ func applyChatSettingsMutation(
 		return ChatSettingsState{
 			Agent: mutation.agent.Agent,
 			Settings: &ChatSettingsOverrides{
-				Supervisor:     cloneStringPointer(&mutation.agent.Baseline.Supervisor),
-				Thinking:       cloneStringPointer(&mutation.agent.Baseline.Thinking),
-				Fast:           cloneBoolPointer(&mutation.agent.Baseline.Fast),
-				Questions:      cloneBoolPointer(&mutation.agent.Baseline.Questions),
-				AutoCompaction: cloneBoolPointer(&mutation.agent.Baseline.AutoCompaction),
+				Supervisor:     textutil.Value(mutation.agent.Baseline.Supervisor),
+				Thinking:       textutil.Value(mutation.agent.Baseline.Thinking),
+				Fast:           textutil.Value(mutation.agent.Baseline.Fast),
+				Questions:      textutil.Value(mutation.agent.Baseline.Questions),
+				AutoCompaction: textutil.Value(mutation.agent.Baseline.AutoCompaction),
 			},
 		}, nil
 	}
@@ -375,19 +376,19 @@ func applyChatSettingsMutation(
 		next.Settings = &ChatSettingsOverrides{}
 	}
 	if mutation.supervisor != nil {
-		next.Settings.Supervisor = cloneStringPointer(mutation.supervisor)
+		next.Settings.Supervisor = textutil.Pointer(mutation.supervisor)
 	}
 	if mutation.thinking != nil {
-		next.Settings.Thinking = cloneStringPointer(mutation.thinking)
+		next.Settings.Thinking = textutil.Pointer(mutation.thinking)
 	}
 	if mutation.fast != nil {
-		next.Settings.Fast = cloneBoolPointer(mutation.fast)
+		next.Settings.Fast = textutil.Pointer(mutation.fast)
 	}
 	if mutation.questions != nil {
-		next.Settings.Questions = cloneBoolPointer(mutation.questions)
+		next.Settings.Questions = textutil.Pointer(mutation.questions)
 	}
 	if mutation.autoCompaction != nil {
-		next.Settings.AutoCompaction = cloneBoolPointer(mutation.autoCompaction)
+		next.Settings.AutoCompaction = textutil.Pointer(mutation.autoCompaction)
 	}
 	if normalized, err := NormalizeChatSettingsOverrides(next.Settings); err != nil {
 		return current, err
@@ -514,26 +515,10 @@ func cloneChatSettingsOverrides(overrides *ChatSettingsOverrides) *ChatSettingsO
 		return nil
 	}
 	return &ChatSettingsOverrides{
-		Supervisor:     cloneStringPointer(overrides.Supervisor),
-		Thinking:       cloneStringPointer(overrides.Thinking),
-		Fast:           cloneBoolPointer(overrides.Fast),
-		Questions:      cloneBoolPointer(overrides.Questions),
-		AutoCompaction: cloneBoolPointer(overrides.AutoCompaction),
+		Supervisor:     textutil.Pointer(overrides.Supervisor),
+		Thinking:       textutil.Pointer(overrides.Thinking),
+		Fast:           textutil.Pointer(overrides.Fast),
+		Questions:      textutil.Pointer(overrides.Questions),
+		AutoCompaction: textutil.Pointer(overrides.AutoCompaction),
 	}
-}
-
-func cloneStringPointer(value *string) *string {
-	if value == nil {
-		return nil
-	}
-	cloned := *value
-	return &cloned
-}
-
-func cloneBoolPointer(value *bool) *bool {
-	if value == nil {
-		return nil
-	}
-	cloned := *value
-	return &cloned
 }

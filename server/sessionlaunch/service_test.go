@@ -673,7 +673,7 @@ func TestServicePlanSessionAgentSelectionPersistsCompletePreparedBaseline(t *tes
 	service := newSessionLaunchTestService(cfg, containerDir)
 	worker := "worker"
 	if err := store.SetContinuationContext(session.ContinuationContext{
-		OpenAIBaseURL: "https://previous-agent.example/v1",
+		OpenAIBaseURL: textutil.Value("https://previous-agent.example/v1"),
 	}); err != nil {
 		t.Fatalf("seed previous Agent base URL: %v", err)
 	}
@@ -700,7 +700,7 @@ func TestServicePlanSessionAgentSelectionPersistsCompletePreparedBaseline(t *tes
 	if err != nil {
 		t.Fatalf("reopen selected Agent Session: %v", err)
 	}
-	if continuation := selected.Meta().Continuation; continuation == nil || continuation.OpenAIBaseURL != "" {
+	if continuation := selected.Meta().Continuation; continuation == nil || continuation.OpenAIBaseURL != nil {
 		t.Fatalf("selected Agent continuation = %+v, want previous base URL cleared", continuation)
 	}
 
@@ -741,7 +741,7 @@ func TestServicePlanSessionRepairsUnavailableAgentWithCompleteDefaultBaseline(t 
 	}
 	if err := store.SetContinuationContext(session.ContinuationContext{
 		AgentRole:     &removed,
-		OpenAIBaseURL: "https://removed-agent.example/v1",
+		OpenAIBaseURL: textutil.Value("https://removed-agent.example/v1"),
 	}); err != nil {
 		t.Fatalf("seed removed Agent base URL: %v", err)
 	}

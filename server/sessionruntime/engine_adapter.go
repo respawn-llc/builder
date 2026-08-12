@@ -18,6 +18,7 @@ import (
 	"core/server/workflowruntime"
 	"core/shared/config"
 	"core/shared/runtimeids"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcriptdiag"
 )
@@ -66,8 +67,8 @@ func NewAgentRuntimePlan(options AgentRuntimePlanOptions) (AgentRuntimePlan, err
 	options.Sources = maps.Clone(options.Sources)
 	options.StartLogLines = append([]string(nil), options.StartLogLines...)
 	options.FilesystemContext = options.FilesystemContext.Clone()
-	options.QuestionsEnabled = cloneBoolPointer(options.QuestionsEnabled)
-	options.AutoCompactionEnabled = cloneBoolPointer(options.AutoCompactionEnabled)
+	options.QuestionsEnabled = textutil.Pointer(options.QuestionsEnabled)
+	options.AutoCompactionEnabled = textutil.Pointer(options.AutoCompactionEnabled)
 	if options.ProviderCapabilitiesOverride != nil {
 		value := *options.ProviderCapabilitiesOverride
 		options.ProviderCapabilitiesOverride = &value
@@ -80,7 +81,7 @@ func cloneAgentRuntimeSettings(settings config.Settings) config.Settings {
 	cloned.SystemPromptFiles = append([]config.SystemPromptFile(nil), settings.SystemPromptFiles...)
 	cloned.EnabledTools = maps.Clone(settings.EnabledTools)
 	cloned.SkillToggles = maps.Clone(settings.SkillToggles)
-	cloned.Shell.PostprocessHook = cloneStringPointer(settings.Shell.PostprocessHook)
+	cloned.Shell.PostprocessHook = textutil.Pointer(settings.Shell.PostprocessHook)
 	if settings.Subagents != nil {
 		cloned.Subagents = make(map[string]config.SubagentRole, len(settings.Subagents))
 		for name, role := range settings.Subagents {
@@ -91,22 +92,6 @@ func cloneAgentRuntimeSettings(settings config.Settings) config.Settings {
 		}
 	}
 	return cloned
-}
-
-func cloneStringPointer(value *string) *string {
-	if value == nil {
-		return nil
-	}
-	cloned := *value
-	return &cloned
-}
-
-func cloneBoolPointer(value *bool) *bool {
-	if value == nil {
-		return nil
-	}
-	cloned := *value
-	return &cloned
 }
 
 type authorityRuntimeOptions struct {

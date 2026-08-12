@@ -171,7 +171,7 @@ func TestRunPromptCreatesSessionAndPersistsDurableTranscript(t *testing.T) {
 	if meta.FirstPromptPreview != "hello from user" {
 		t.Fatalf("first prompt preview = %q, want %q", meta.FirstPromptPreview, "hello from user")
 	}
-	if meta.Continuation == nil || meta.Continuation.OpenAIBaseURL != server.URL {
+	if meta.Continuation == nil || meta.Continuation.OpenAIBaseURL == nil || *meta.Continuation.OpenAIBaseURL != server.URL {
 		t.Fatalf("unexpected continuation context: %+v", meta.Continuation)
 	}
 
@@ -361,7 +361,7 @@ func TestRunPromptFastRoleUsesRoleLevelProviderSettingsForHeuristics(t *testing.
 		t.Fatalf("model payload = %#v, want gpt-5.6-terra", got)
 	}
 	store := openAuthoritativeWorkspaceSessionStore(t, workspace, server.URL, result.SessionID)
-	if store.Meta().Continuation == nil || store.Meta().Continuation.OpenAIBaseURL != server.URL {
+	if store.Meta().Continuation == nil || store.Meta().Continuation.OpenAIBaseURL == nil || *store.Meta().Continuation.OpenAIBaseURL != server.URL {
 		t.Fatalf("unexpected continuation context: %+v", store.Meta().Continuation)
 	}
 }

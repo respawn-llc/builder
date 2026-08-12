@@ -101,3 +101,14 @@ func ResolveSessionChatSettings(meta session.Meta, current config.Settings) (ses
 		},
 	)
 }
+
+func applySessionChatSettings(meta session.Meta, active config.Settings) (config.Settings, session.ChatSettings, error) {
+	settings, err := ResolveSessionChatSettings(meta, active)
+	if err != nil {
+		return config.Settings{}, session.ChatSettings{}, err
+	}
+	active.Reviewer.Frequency = settings.Supervisor
+	active.ThinkingLevel = settings.Thinking
+	active.PriorityRequestMode = settings.Fast
+	return active, settings, nil
+}

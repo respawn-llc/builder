@@ -275,12 +275,16 @@ func resolvePromptFacingSnapshotPlan(app config.App, store *session.Store, skipC
 			return SessionPlan{}, err
 		}
 		if shouldApplyPersistedContinuationBaseURL(baseActive, meta.Continuation.AgentRole) {
-			if baseURL := strings.TrimSpace(meta.Continuation.OpenAIBaseURL); baseURL != "" {
+			if baseURL, present := textutil.OptionalTrimmed(meta.Continuation.OpenAIBaseURL); present {
 				active.OpenAIBaseURL = baseURL
 			}
 		}
 	}
 	enabledTools, err := ActiveToolIDsForPlan(active, source, meta.Locked)
+	if err != nil {
+		return SessionPlan{}, err
+	}
+	active, chatSettings, err := applySessionChatSettings(meta, active)
 	if err != nil {
 		return SessionPlan{}, err
 	}
@@ -303,6 +307,8 @@ func resolvePromptFacingSnapshotPlan(app config.App, store *session.Store, skipC
 		WorkspaceRoot:                       app.WorkspaceRoot,
 		Source:                              source,
 		BaseSource:                          baseSource,
+		QuestionsEnabled:                    chatSettings.Questions,
+		AutoCompactionEnabled:               chatSettings.AutoCompaction,
 	}, store, filepath.Dir(store.Dir())), nil
 }
 
@@ -398,10 +404,10 @@ func (p Planner) planSessionWithStore(ctx context.Context, req SessionRequest, s
 	baseActive := EffectiveSettings(p.Config.Settings, meta.Locked)
 	baseSource := p.Config.Source
 	var continuationAgentRole *string
-	continuationBaseURL := ""
+	var continuationBaseURL *string
 	if meta.Continuation != nil {
 		continuationAgentRole = cloneContinuationRole(meta.Continuation.AgentRole)
-		continuationBaseURL = strings.TrimSpace(meta.Continuation.OpenAIBaseURL)
+		continuationBaseURL = textutil.Pointer(meta.Continuation.OpenAIBaseURL)
 	}
 	active, source := baseActive, baseSource
 	enabledTools := []toolspec.ID(nil)
@@ -415,11 +421,11 @@ func (p Planner) planSessionWithStore(ctx context.Context, req SessionRequest, s
 		if err != nil {
 			return SessionPlan{}, err
 		}
-		if shouldApplyPersistedContinuationBaseURL(baseActive, continuationAgentRole) && continuationBaseURL != "" {
-			active.OpenAIBaseURL = continuationBaseURL
+		if shouldApplyPersistedContinuationBaseURL(baseActive, continuationAgentRole) && continuationBaseURL != nil {
+			active.OpenAIBaseURL = *continuationBaseURL
 		}
 	}
-	continuation := session.ContinuationContext{OpenAIBaseURL: active.OpenAIBaseURL}
+	continuation := session.ContinuationContext{OpenAIBaseURL: textutil.OptionalTrimmedString(active.OpenAIBaseURL)}
 	if meta.Continuation != nil {
 		continuation.AgentRole = continuationAgentRole
 	}
@@ -434,13 +440,10 @@ func (p Planner) planSessionWithStore(ctx context.Context, req SessionRequest, s
 			return SessionPlan{}, err
 		}
 	}
-	chatSettings, err := ResolveSessionChatSettings(meta, active)
+	active, chatSettings, err := applySessionChatSettings(meta, active)
 	if err != nil {
 		return SessionPlan{}, err
 	}
-	active.Reviewer.Frequency = chatSettings.Supervisor
-	active.ThinkingLevel = chatSettings.Thinking
-	active.PriorityRequestMode = chatSettings.Fast
 	if meta.Locked != nil && (!meta.Locked.HasEnabledTools || strings.TrimSpace(meta.Locked.WebSearchMode) == "") {
 		backfill, backfillErr := store.BackfillLockedRequestShape(session.LockedRequestShapeBackfill{
 			EnabledTools:    toolspec.IDStrings(enabledTools),
@@ -869,7 +872,7 @@ func (p Planner) applyPreparedRunPromptOverridesWithBudgetApplier(plan SessionPl
 	staleLockedPromptFacingContract := false
 	persistContinuation := func() error {
 		ctx := session.ContinuationContext{
-			OpenAIBaseURL: next.ActiveSettings.OpenAIBaseURL,
+			OpenAIBaseURL: textutil.OptionalTrimmedString(next.ActiveSettings.OpenAIBaseURL),
 			AgentRole:     continuationAgentRole,
 		}
 		if staleLockedPromptFacingContract {
