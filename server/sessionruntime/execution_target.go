@@ -82,7 +82,7 @@ func (a *Authority) RunWorktreeTransition(
 		}
 		if origin == nil {
 			var retire bool
-			err := engine.RunWhenIdleBeforeQueuedUserWork(runCtx, runtime.ActiveKindRuntimeMaintenance, func() error {
+			err := engine.RunWorktreeTransition(runCtx, func() error {
 				active := true
 				defer func() { active = false }()
 				return fn(runCtx, func(apply func() error) error { return apply() }, func(_ context.Context, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
