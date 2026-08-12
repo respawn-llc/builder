@@ -1,7 +1,8 @@
-import { createRoute, createRouter, createRootRoute } from "@tanstack/react-router";
+import { createRoute, createRouter, createRootRoute, redirect } from "@tanstack/react-router";
 import { z } from "zod";
 
 import { workflowIDSchema } from "@/api";
+import { desktopChatEnabled } from "@/shared/feature-flags";
 import { createNativeDialogRoutes, workspaceUnlinkNativeDialogPath } from "./nativeDialogRoutes";
 import {
   HomeShellRoute,
@@ -48,6 +49,16 @@ const projectRoute = createRoute({
 const projectTasksRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/projects/$projectId/tasks",
+  beforeLoad: ({ params }) => {
+    if (!desktopChatEnabled) {
+      return redirect({
+        to: "/projects/$projectId",
+        params: { projectId: params.projectId },
+        search: { workflowId: undefined, taskId: "" },
+        replace: true,
+      });
+    }
+  },
   component: ProjectTasksRoute,
 });
 

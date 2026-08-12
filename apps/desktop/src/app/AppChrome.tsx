@@ -180,7 +180,11 @@ function ProjectDeletionEventHandler() {
     nativeBridge,
     useCallback(
       (event) => {
-        const routeMatches = routeReferencesProject(location.pathname, event.projectID);
+        const routeMatches = routeReferencesProject(
+          location.pathname,
+          new URLSearchParams(location.searchStr).get("projectId"),
+          event.projectID,
+        );
         void completeProjectDeletion({
           navigateHome: routeMatches ? navigation.openHome : undefined,
           projectID: event.projectID,
@@ -194,13 +198,20 @@ function ProjectDeletionEventHandler() {
           queryClient,
         });
       },
-      [location.pathname, navigation.openHome, push, queryClient, t],
+      [location.pathname, location.searchStr, navigation.openHome, push, queryClient, t],
     ),
   );
   return null;
 }
 
-function routeReferencesProject(pathname: string, projectID: string): boolean {
+function routeReferencesProject(
+  pathname: string,
+  selectedHomeProjectID: string | null,
+  projectID: string,
+): boolean {
+  if (pathname === "/" && selectedHomeProjectID === projectID) {
+    return true;
+  }
   const segments = pathname.split("/").filter((segment) => segment.length > 0);
   return segments[0] === "projects" && segments[1] === projectID;
 }
