@@ -578,15 +578,15 @@
   -webkit-mask-image: linear-gradient(
     to bottom,
     transparent 0,
-    black var(--space-3),
-    black calc(100% - var(--space-3)),
+    black var(--space-5),
+    black calc(100% - var(--space-5)),
     transparent 100%
   );
   mask-image: linear-gradient(
     to bottom,
     transparent 0,
-    black var(--space-3),
-    black calc(100% - var(--space-3)),
+    black var(--space-5),
+    black calc(100% - var(--space-5)),
     transparent 100%
   );
 }

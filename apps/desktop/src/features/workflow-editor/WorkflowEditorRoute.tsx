@@ -17,6 +17,7 @@ import { SidebarRootOwner, useOwnedSidebarRoots, type SidebarRootController } fr
 import { useSidebarBackWhen } from "@/app-facade";
 import type { WorkflowInspectorInitialFocus, WorkflowInspectorSelection } from "@/app-facade";
 import { useStatusController } from "@/app-facade";
+import { usePublishSidebarHeaderAction } from "@/app-facade";
 import { useWindowChromeTitle } from "@/app-facade";
 import { ErrorState, LoadingState } from "@/ui";
 import { cx } from "@/ui";
@@ -41,17 +42,22 @@ import { useWorkflowEditorGraphState } from "./useWorkflowEditorGraphState";
 import { useWorkflowEditorSave, type WorkflowEditorSave } from "./useWorkflowEditorSave";
 import { useWorkflowGraphDeleteConfirmation } from "./useWorkflowGraphDeleteConfirmation";
 import { WorkflowEditorCanvas } from "./WorkflowEditorCanvas";
+import { WorkflowDraftDetails } from "./WorkflowDraftInspector";
+import { WorkflowDeleteButton } from "./WorkflowDeleteButton";
 import { WorkflowEditorEmbeddedInspector } from "./WorkflowEditorEmbeddedInspector";
 import { WorkflowEditorLegendIsland } from "./WorkflowEditorLegendIsland";
-import { WorkflowEditorStatusIsland } from "./WorkflowEditorStatusIsland";
+import {
+  WorkflowEditorSaveActions,
+  WorkflowEditorStatusIsland,
+} from "./WorkflowEditorStatusIsland";
 import type { WorkflowGraphSelection } from "./workflowGraphSelection";
 import type { WorkflowGraphLayout } from "./workflowGraphLayout";
 import type { WorkflowEditorDraftAction } from "./workflowEditorDraft";
 
 export type WorkflowEditorRouteProps = Readonly<{
-  projectID: string;
   navigator?: SidebarPageNavigator | undefined;
-  surface?: "route" | "sidebar" | undefined;
+  projectID: string;
+  surface?: "route" | "settings" | "sidebar" | undefined;
   workflowID: string;
 }>;
 
@@ -79,7 +85,7 @@ type WorkflowEditorReadyViewProps = Readonly<{
 }>;
 
 export function WorkflowEditorRoute(props: WorkflowEditorRouteProps) {
-  if (props.surface === "sidebar") {
+  if (props.surface === "sidebar" || props.surface === "settings") {
     return <WorkflowEditorRouteContent {...props} openSidebar={null} />;
   }
   return <SidebarRootOwner><OwnedWorkflowEditorRoute {...props} /></SidebarRootOwner>;
@@ -196,6 +202,32 @@ function WorkflowEditorRouteContent({
     workflowID,
   });
 
+  if (surface === "settings") {
+    if (data.workflowQuery.isPending || draftState === null) {
+      return <LoadingState appearanceDelayMs={0} title={t("workflowEditor.loadingTitle")} />;
+    }
+    if (data.workflowQuery.isError) {
+      return (
+        <ErrorState
+          body={errorMessage(data.workflowQuery.error)}
+          onRetry={() => void data.workflowQuery.refetch()}
+          retryLabel={t("app.retry")}
+          title={t("workflowEditor.loadFailed")}
+        />
+      );
+    }
+    return (
+      <WorkflowSettingsSurface
+        controller={controller}
+        deleteConfirmationDialog={deleteConfirmation.dialog}
+        dispatch={dispatch}
+        navigator={navigator}
+        save={save}
+        workflowID={workflowID}
+      />
+    );
+  }
+
   const viewState = workflowEditorViewState(data, layoutQuery, graphState.projectedGraph);
   const activeEmbeddedInspector = embeddedInspectorForWorkflow(
     embeddedInspectorSelection,
@@ -249,7 +281,7 @@ function useWorkflowGraphInspector({
 }: Readonly<{
   openSidebar: SidebarRootController["open"] | null;
   setEmbeddedInspectorSelection: Dispatch<SetStateAction<WorkflowEditorEmbeddedInspectorSelection | null>>;
-  surface: "route" | "sidebar";
+  surface: "route" | "settings" | "sidebar";
   workflowID: string;
 }>): (selection: WorkflowInspectorSelection, initialFocus?: WorkflowInspectorInitialFocus) => void {
   return useCallback(
@@ -341,6 +373,51 @@ function WorkflowEditorReadyView(props: WorkflowEditorReadyViewProps) {
   );
 
   return surface === "route" ? createPortal(editorRoute, document.body) : editorRoute;
+}
+
+function WorkflowSettingsSurface({
+  controller,
+  deleteConfirmationDialog,
+  dispatch,
+  navigator,
+  save,
+  workflowID,
+}: Readonly<{
+  controller: WorkflowEditorDraftController;
+  deleteConfirmationDialog: ReactNode;
+  dispatch: (action: WorkflowEditorDraftAction) => void;
+  navigator?: SidebarPageNavigator | undefined;
+  save: WorkflowEditorSave;
+  workflowID: string;
+}>) {
+  usePublishSidebarHeaderAction(
+    <WorkflowDeleteButton onDeleted={navigator?.close} workflowID={workflowID} />,
+  );
+  return (
+    <div className="grid h-full min-h-0 grid-rows-[minmax(0,1fr)_auto]">
+      <div className="min-h-0 overflow-y-auto p-[var(--space-3)]">
+        <WorkflowDraftDetails controller={controller} />
+      </div>
+      <div className="border-t border-[var(--color-outline)] p-[var(--space-3)]">
+        <WorkflowEditorSaveActions
+          confirmationPreview={save.saveConfirmationPreview}
+          controller={controller}
+          onCancelConfirmation={() => {
+            save.setSaveConfirmationPreview(null);
+          }}
+          onConfirmSave={() => {
+            if (save.saveConfirmationPreview !== null) {
+              void save.saveWorkflowDraft(save.saveConfirmationPreview);
+            }
+          }}
+          onDiscard={() => {
+            dispatch({ source: controller.state.source, type: "reset" });
+          }}
+        />
+      </div>
+      {deleteConfirmationDialog}
+    </div>
+  );
 }
 
 function embeddedSelectionMatchesNode(

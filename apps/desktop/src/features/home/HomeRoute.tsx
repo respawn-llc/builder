@@ -8,13 +8,14 @@ import {
   useState,
 } from "react";
 import { useInfiniteQuery, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Folder, Plus, Workflow } from "lucide-react";
+import { Check, Folder, Pencil, Plus, Workflow } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import type {
   AttentionItem,
   ProjectSummary,
   SessionCatalogSummary,
+  WorkflowRecord,
 } from "@/api";
 import { errorMessage } from "@/api";
 import {
@@ -74,8 +75,8 @@ function HomeRouteContent() {
   const attentionSubscriptionReady = useGlobalAttentionEvents();
   const attention = useGlobalAttentionPages(attentionSubscriptionReady);
   const [primaryTab, setPrimaryTab] = useState<HomePrimaryTab>("projects");
+  const [prototypeCategory, setPrototypeCategory] = useState<HomePrimaryTab>("projects");
   const [selectedProjectID, setSelectedProjectID] = useState<string | null>(null);
-  const [workflowsSelected, setWorkflowsSelected] = useState(false);
   const projectItems = projects.data?.pages.flatMap((page) => page.projects) ?? [];
   const attentionItems = attention.data?.pages.flatMap((page) => page.items) ?? [];
   const disabled = connection.phase !== "connected";
@@ -193,8 +194,7 @@ function HomeRouteContent() {
       selectedProjectID === null
         ? null
         : (projectItems.find((project) => project.id === selectedProjectID) ?? null);
-    const detailKey =
-      selectedProject !== null ? `project:${selectedProject.id}` : workflowsSelected ? "workflows" : "inbox";
+    const detailKey = selectedProject !== null ? `project:${selectedProject.id}` : "inbox";
     return (
       <div className="h-full min-h-0" data-testid="home-route-root">
         {projectCreationDialog.fallback}
@@ -209,20 +209,19 @@ function HomeRouteContent() {
               open({ kind: "workflowCreate", mode: "overlay" });
             }}
             onProjectSelect={(projectID) => {
-              setWorkflowsSelected(false);
               setSelectedProjectID((current) => (current === projectID ? null : projectID));
             }}
-            onWorkflowsSelect={() => {
+            onCategorySelect={(category) => {
+              setPrototypeCategory(category);
               setSelectedProjectID(null);
-              setWorkflowsSelected((current) => !current);
             }}
+            selectedCategory={prototypeCategory}
             projectItems={projectItems}
             projectsQuery={projects}
             selectedProjectID={selectedProjectID}
-            workflowsSelected={workflowsSelected}
           />
           <section className="island-glass my-[var(--space-2)] mr-[var(--space-2)] min-h-0 overflow-hidden rounded-[var(--radius-xl)]">
-            <DetailPaneCrossfade contentKey={detailKey}>
+            <OverlappingCrossfade contentKey={detailKey}>
               {selectedProject !== null ? (
                 <ProjectPrototypeDetail
                   key={selectedProject.id}
@@ -232,12 +231,10 @@ function HomeRouteContent() {
                   }}
                   project={selectedProject}
                 />
-              ) : workflowsSelected ? (
-                <GlobalWorkflowsPrototype />
               ) : (
                 <AttentionList items={attentionItems} query={attention} />
               )}
-            </DetailPaneCrossfade>
+            </OverlappingCrossfade>
           </section>
         </div>
       </div>
@@ -278,7 +275,7 @@ function HomeRouteContent() {
   );
 }
 
-function DetailPaneCrossfade({
+function OverlappingCrossfade({
   children,
   contentKey,
 }: Readonly<{ children: ReactNode; contentKey: string }>) {
@@ -326,173 +323,226 @@ function DetailPaneCrossfade({
 
 function HomePrototypeSidebar({
   disabled,
+  onCategorySelect,
   onChooseWorkspace,
   onCreateWorkflow,
   onProjectSelect,
-  onWorkflowsSelect,
   projectItems,
   projectsQuery,
+  selectedCategory,
   selectedProjectID,
-  workflowsSelected,
 }: Readonly<{
   disabled: boolean;
+  onCategorySelect: (category: HomePrimaryTab) => void;
   onChooseWorkspace: () => void;
   onCreateWorkflow: () => void;
   onProjectSelect: (projectID: string) => void;
-  onWorkflowsSelect: () => void;
   projectItems: readonly ProjectSummary[];
   projectsQuery: ReturnType<typeof useProjectPages>;
+  selectedCategory: HomePrimaryTab;
   selectedProjectID: string | null;
-  workflowsSelected: boolean;
 }>) {
   const { t } = useTranslation();
-  const sidebarItems = [
-    { kind: "projects" as const, id: "projects" },
-    { kind: "workflows" as const, id: "workflows" },
-    ...projectItems.map((project) => ({ kind: "project" as const, id: project.id, project })),
-  ];
-  if (projectsQuery.isPending) {
-    return <LoadingState appearanceDelayMs={0} fullPage={false} title={t("states.loading")} />;
-  }
-  if (projectsQuery.isError) {
-    return <ErrorState body={errorMessage(projectsQuery.error)} fullPage={false} title={t("states.error")} />;
-  }
-  return (
-    <VirtualizedInfiniteList
-      className="home-prototype-sidebar-scroll h-full min-h-0 overflow-auto px-[calc(var(--space-3)/2)] hide-scrollbar contain-strict [-webkit-overflow-scrolling:touch]"
-      estimateSize={() => 54}
-      getItemKey={(item) => item.id}
-      hasNextPage={projectsQuery.hasNextPage}
-      items={sidebarItems}
-      isFetchingNextPage={projectsQuery.isFetchingNextPage}
-      loadingLabel={t("app.loadingMore")}
-      onLoadMore={() => void projectsQuery.fetchNextPage()}
-      paddingEnd={12}
-      paddingStart={12}
-      rowSpacing="compact"
-      renderItem={(item) => {
-        if (item.kind === "projects") {
-          return (
-          <div className="relative flex min-w-0 items-center gap-[var(--space-2)] px-[calc(var(--space-3)/2)] py-[var(--space-1)] pr-[calc(40px+var(--space-3)/2)]">
-            <Folder aria-hidden="true" className="shrink-0" size={18} strokeWidth={1.5} />
-            <strong className="min-w-0 flex-1 truncate">{t("home.projectsPane")}</strong>
-            <button
-              aria-label={t("home.newProject")}
-              className="absolute right-[calc(var(--space-3)/2)] top-1/2 grid h-10 w-10 -translate-y-1/2 place-items-center justify-items-end rounded-full text-[var(--color-on-island)] disabled:opacity-55"
-              disabled={disabled}
-              onClick={onChooseWorkspace}
-              type="button"
-            >
-              <Plus aria-hidden="true" size={14} strokeWidth={1.5} />
-            </button>
-          </div>
-          );
-        }
-        if (item.kind === "workflows") {
-          return (
-          <div
-            className={cx(
-              "relative flex min-w-0 items-center gap-[var(--space-2)] rounded-[var(--radius-m)] px-[calc(var(--space-3)/2)] py-[var(--space-1)] pr-[calc(40px+var(--space-3)/2)] transition-colors",
-              workflowsSelected
-                ? "bg-[color-mix(in_srgb,var(--color-on-island)_12%,transparent)]"
-                : "hover:bg-[color-mix(in_srgb,var(--color-on-island)_4%,transparent)]",
-            )}
-          >
-            <button
-              className="flex min-w-0 flex-1 items-center gap-[var(--space-2)] text-left"
-              onClick={onWorkflowsSelect}
-              type="button"
-            >
-              <span className="relative h-[18px] w-[18px] shrink-0">
-                <Workflow
-                  aria-hidden="true"
-                  className={cx(
-                    "absolute inset-0 transition-opacity",
-                    workflowsSelected ? "opacity-0" : "opacity-100",
-                  )}
-                  size={18}
-                  strokeWidth={1.5}
-                />
-                <Check
-                  aria-hidden="true"
-                  className={cx(
-                    "absolute left-0.5 top-0.5 transition-opacity",
-                    workflowsSelected ? "opacity-100" : "opacity-0",
-                  )}
-                  size={14}
-                  strokeWidth={2}
-                />
-              </span>
-              <strong className="min-w-0 truncate">{t("workflowLibrary.homeIslandTitle")}</strong>
-            </button>
-            <button
-              aria-label={t("workflowLibrary.createWorkflow")}
-              className="absolute right-[calc(var(--space-3)/2)] top-1/2 grid h-10 w-10 -translate-y-1/2 place-items-center justify-items-end rounded-full text-[var(--color-on-island)] disabled:opacity-55"
-              disabled={disabled}
-              onClick={onCreateWorkflow}
-              type="button"
-            >
-              <Plus aria-hidden="true" size={14} strokeWidth={1.5} />
-            </button>
-          </div>
-          );
-        }
-        return (
-        <ProjectRow
-          onSelect={() => {
-            onProjectSelect(item.project.id);
-          }}
-          project={item.project}
-          selected={item.project.id === selectedProjectID}
-        />
-        );
-      }}
-    />
-  );
-}
-
-function GlobalWorkflowsPrototype() {
-  const { t } = useTranslation();
   const navigation = useAppNavigation();
+  const { open } = useOwnedSidebarRoots();
   const workflowsQuery = useWorkflowPages();
   const workflows = useMemo(
     () => workflowsQuery.data?.pages.flatMap((page) => page.workflows) ?? [],
     [workflowsQuery.data],
   );
-  if (workflowsQuery.isPending) {
-    return <LoadingState appearanceDelayMs={0} fullPage={false} title={t("states.loading")} />;
-  }
-  if (workflowsQuery.isError) {
-    return (
-      <ErrorState
-        body={errorMessage(workflowsQuery.error)}
-        fullPage={false}
-        onRetry={() => void workflowsQuery.refetch()}
-        retryLabel={t("app.retry")}
-        title={t("states.error")}
-      />
-    );
-  }
+  const activeQuery = selectedCategory === "projects" ? projectsQuery : workflowsQuery;
   return (
-    <VirtualizedInfiniteList
-      className={`h-full min-h-0 overflow-auto px-[var(--space-4)] hide-scrollbar contain-strict [&>*]:mx-auto [&>*]:w-full ${homeListCardListMaxWidthClassName}`}
-      empty={<EmptyState body={t("workflowLibrary.emptyBody")} fullPage={false} title={t("workflowLibrary.emptyTitle")} />}
-      estimateSize={() => 96}
-      getItemKey={(workflow) => workflow.id}
-      hasNextPage={workflowsQuery.hasNextPage}
-      isFetchingNextPage={workflowsQuery.isFetchingNextPage}
-      items={workflows}
-      loadingLabel={t("app.loadingMore")}
-      onLoadMore={() => void workflowsQuery.fetchNextPage()}
-      paddingEnd={16}
-      paddingStart={16}
-      renderItem={(workflow) => (
-        <WorkflowCard
-          onOpen={() => void navigation.openWorkflowEditor({ workflowID: workflow.id })}
-          workflow={workflow}
-        />
-      )}
-    />
+    <div className="flex h-full min-h-0 select-none flex-col px-[calc(var(--space-3)/2)]">
+      <div className="relative z-20 grid shrink-0 gap-[var(--space-2)] pt-[var(--space-3)]">
+        <div
+          className={cx(
+            "relative flex min-w-0 items-center gap-[var(--space-2)] rounded-[var(--radius-m)] px-[calc(var(--space-3)/2)] py-[var(--space-1)] pr-[calc(40px+var(--space-3)/2)] transition-colors",
+            selectedCategory === "projects"
+              ? "bg-[color-mix(in_srgb,var(--color-on-island)_12%,transparent)]"
+              : "hover:bg-[color-mix(in_srgb,var(--color-on-island)_4%,transparent)]",
+          )}
+        >
+          <button
+            className="flex min-w-0 flex-1 items-center gap-[var(--space-2)] text-left"
+            onClick={() => onCategorySelect("projects")}
+            type="button"
+          >
+            <CategoryIcon
+              icon={<Folder size={18} strokeWidth={1.5} />}
+              selected={selectedCategory === "projects"}
+            />
+            <strong className="min-w-0 truncate">{t("home.projectsPane")}</strong>
+          </button>
+          <button
+            aria-label={t("home.newProject")}
+            className="absolute right-[calc(var(--space-3)/2)] top-1/2 grid h-10 w-10 -translate-y-1/2 place-items-center justify-items-end rounded-full text-[var(--color-on-island)] disabled:opacity-55"
+            disabled={disabled}
+            onClick={onChooseWorkspace}
+            type="button"
+          >
+            <Plus aria-hidden="true" size={14} strokeWidth={1.5} />
+          </button>
+        </div>
+        <div
+          className={cx(
+            "relative flex min-w-0 items-center gap-[var(--space-2)] rounded-[var(--radius-m)] px-[calc(var(--space-3)/2)] py-[var(--space-1)] pr-[calc(40px+var(--space-3)/2)] transition-colors",
+            selectedCategory === "workflows"
+              ? "bg-[color-mix(in_srgb,var(--color-on-island)_12%,transparent)]"
+              : "hover:bg-[color-mix(in_srgb,var(--color-on-island)_4%,transparent)]",
+          )}
+        >
+          <button
+            className="flex min-w-0 flex-1 items-center gap-[var(--space-2)] text-left"
+            onClick={() => onCategorySelect("workflows")}
+            type="button"
+          >
+            <CategoryIcon
+              icon={<Workflow size={18} strokeWidth={1.5} />}
+              selected={selectedCategory === "workflows"}
+            />
+            <strong className="min-w-0 truncate">{t("workflowLibrary.homeIslandTitle")}</strong>
+          </button>
+          <button
+            aria-label={t("workflowLibrary.createWorkflow")}
+            className="absolute right-[calc(var(--space-3)/2)] top-1/2 grid h-10 w-10 -translate-y-1/2 place-items-center justify-items-end rounded-full text-[var(--color-on-island)] disabled:opacity-55"
+            disabled={disabled}
+            onClick={onCreateWorkflow}
+            type="button"
+          >
+            <Plus aria-hidden="true" size={14} strokeWidth={1.5} />
+          </button>
+        </div>
+      </div>
+      <div className="relative -mt-[var(--space-3)] min-h-0 flex-1">
+        <OverlappingCrossfade contentKey={selectedCategory}>
+          {activeQuery.isPending ? (
+            <LoadingState appearanceDelayMs={0} fullPage={false} title={t("states.loading")} />
+          ) : activeQuery.isError ? (
+            <ErrorState body={errorMessage(activeQuery.error)} fullPage={false} title={t("states.error")} />
+          ) : selectedCategory === "projects" ? (
+            <VirtualizedInfiniteList
+              className="home-prototype-sidebar-scroll h-full min-h-0 overflow-auto hide-scrollbar contain-strict [-webkit-overflow-scrolling:touch]"
+              estimateSize={() => 54}
+              getItemKey={(project) => project.id}
+              hasNextPage={projectsQuery.hasNextPage}
+              items={projectItems}
+              isFetchingNextPage={projectsQuery.isFetchingNextPage}
+              loadingLabel={t("app.loadingMore")}
+              onLoadMore={() => void projectsQuery.fetchNextPage()}
+              paddingEnd={24}
+              paddingStart={24}
+              rowSpacing="compact"
+              renderItem={(project) => (
+                <ProjectRow
+                  onSelect={() => {
+                    onProjectSelect(project.id);
+                  }}
+                  project={project}
+                  selected={project.id === selectedProjectID}
+                />
+              )}
+            />
+          ) : (
+            <VirtualizedInfiniteList
+              className="home-prototype-sidebar-scroll h-full min-h-0 overflow-auto hide-scrollbar contain-strict [-webkit-overflow-scrolling:touch]"
+              estimateSize={() => 54}
+              getItemKey={(workflow) => workflow.id}
+              hasNextPage={workflowsQuery.hasNextPage}
+              items={workflows}
+              isFetchingNextPage={workflowsQuery.isFetchingNextPage}
+              loadingLabel={t("app.loadingMore")}
+              onLoadMore={() => void workflowsQuery.fetchNextPage()}
+              paddingEnd={24}
+              paddingStart={24}
+              rowSpacing="compact"
+              renderItem={(workflow) => (
+                <WorkflowPrototypeRow
+                  onEdit={() => {
+                    open({
+                      kind: "workflowSettings",
+                      mode: "overlay",
+                      workflowID: workflow.id,
+                    });
+                  }}
+                  onOpen={() => void navigation.openWorkflowEditor({ workflowID: workflow.id })}
+                  workflow={workflow}
+                />
+              )}
+            />
+          )}
+        </OverlappingCrossfade>
+      </div>
+    </div>
+  );
+}
+
+function CategoryIcon({
+  icon,
+  selected,
+}: Readonly<{ icon: ReactNode; selected: boolean }>) {
+  return (
+    <span className="relative h-[18px] w-[18px] shrink-0">
+      <span
+        aria-hidden="true"
+        className={cx("absolute inset-0 transition-opacity", selected ? "opacity-0" : "opacity-100")}
+      >
+        {icon}
+      </span>
+      <Check
+        aria-hidden="true"
+        className={cx(
+          "absolute left-0.5 top-0.5 transition-opacity",
+          selected ? "opacity-100" : "opacity-0",
+        )}
+        size={14}
+        strokeWidth={2}
+      />
+    </span>
+  );
+}
+
+function WorkflowPrototypeRow({
+  onEdit,
+  onOpen,
+  workflow,
+}: Readonly<{
+  onEdit: () => void;
+  onOpen: () => void;
+  workflow: WorkflowRecord;
+}>) {
+  const { t } = useTranslation();
+  return (
+    <div className="group relative flex min-w-0 select-none flex-col gap-[var(--space-1)] rounded-[var(--radius-m)] px-[calc(var(--space-3)/2)] py-[var(--space-1)] text-[var(--color-on-island)] transition-colors hover:bg-[color-mix(in_srgb,var(--color-on-island)_4%,transparent)]">
+      <button
+        aria-label={workflow.name}
+        className="absolute inset-0 z-0 rounded-[var(--radius-m)]"
+        onClick={onOpen}
+        type="button"
+      />
+      <div className="pointer-events-none min-w-0 pr-10">
+        <div className="block min-w-0 max-w-full text-left">
+          <strong className="block min-w-0 truncate">{workflow.name}</strong>
+        </div>
+        <button
+          aria-label={t("workflowLibrary.editWorkflow", { name: workflow.name })}
+          className="pointer-events-auto absolute right-[calc(var(--space-3)/2)] top-[var(--space-1)] z-10 grid h-10 w-10 place-items-center justify-items-end rounded-full text-[var(--color-muted)] hover:text-[var(--color-on-island)]"
+          onClick={onEdit}
+          type="button"
+        >
+          <Pencil aria-hidden="true" size={14} strokeWidth={1.5} />
+        </button>
+      </div>
+      <div className="pointer-events-none flex min-w-0 items-center gap-[var(--space-2)] text-left">
+        <span className="min-w-0 flex-1 truncate text-xs text-[var(--color-muted)]">
+          {workflow.description.length > 0
+            ? workflow.description
+            : t("workflowLibrary.reusableDefinition")}
+        </span>
+        <span className="shrink-0 font-mono text-[0.78rem] text-[var(--color-muted)]">
+          v{workflow.version}
+        </span>
+      </div>
+    </div>
   );
 }
 

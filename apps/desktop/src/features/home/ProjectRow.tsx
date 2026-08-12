@@ -37,14 +37,21 @@ export function ProjectRow({
   return (
     <div
       className={cx(
-        "group flex min-w-0 flex-col gap-[var(--space-1)] rounded-[var(--radius-m)] px-[calc(var(--space-3)/2)] py-[var(--space-1)] text-[var(--color-on-island)] transition-colors",
+        "group relative flex min-w-0 select-none flex-col gap-[var(--space-1)] rounded-[var(--radius-m)] px-[calc(var(--space-3)/2)] py-[var(--space-1)] text-[var(--color-on-island)] transition-colors",
         selected
           ? "bg-[color-mix(in_srgb,var(--color-on-island)_12%,transparent)]"
           : "hover:bg-[color-mix(in_srgb,var(--color-on-island)_4%,transparent)]",
       )}
     >
-      <div className="relative min-w-0 pr-10">
-        <button className="flex min-w-0 items-center text-left" onClick={selectProject} type="button">
+      <button
+        aria-label={`${project.name} ${workspacePathLabel}`}
+        className="absolute inset-0 z-0 rounded-[var(--radius-m)]"
+        onClick={selectProject}
+        title={project.primaryWorkspace.rootPath}
+        type="button"
+      />
+      <div className="pointer-events-none min-w-0 pr-10">
+        <div className="flex min-w-0 items-center text-left">
           <span
             className={cx(
               "grid shrink-0 overflow-hidden place-items-center [transition:width_var(--motion-fast),opacity_var(--motion-fast)]",
@@ -58,10 +65,10 @@ export function ProjectRow({
             />
           </span>
           <strong className="min-w-0 truncate">{project.name}</strong>
-        </button>
+        </div>
         <button
           aria-label={editLabel}
-          className="absolute right-0 top-1/2 grid h-10 w-10 -translate-y-1/2 place-items-center justify-items-end rounded-full text-[var(--color-muted)] hover:text-[var(--color-on-island)]"
+          className="pointer-events-auto absolute right-[calc(var(--space-3)/2)] top-[var(--space-1)] z-10 grid h-10 w-10 place-items-center justify-items-end rounded-full text-[var(--color-muted)] hover:text-[var(--color-on-island)]"
           onClick={() => {
             open({ kind: "projectEdit", mode: "overlay", projectID: project.id });
           }}
@@ -70,20 +77,14 @@ export function ProjectRow({
           <Pencil aria-hidden="true" size={14} strokeWidth={1.5} />
         </button>
       </div>
-      <button
-        aria-label={`${project.name} ${workspacePathLabel}`}
-        className="flex min-w-0 items-center gap-[var(--space-2)] text-left"
-        onClick={selectProject}
-        title={project.primaryWorkspace.rootPath}
-        type="button"
-      >
-        <span className="min-w-0 flex-1 truncate font-mono text-xs text-[var(--color-muted)]">
+      <div className="pointer-events-none flex min-w-0 items-center gap-[var(--space-2)] text-left">
+        <span className="min-w-0 flex-1 truncate text-xs text-[var(--color-muted)]">
           {workspacePathLabel}
         </span>
         <span className="shrink-0 font-mono text-[0.78rem] text-[var(--color-muted)]">
           {project.key}
         </span>
-      </button>
+      </div>
     </div>
   );
 }
