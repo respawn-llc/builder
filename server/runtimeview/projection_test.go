@@ -186,7 +186,7 @@ func TestStatusFromRuntimePreservesGoalAvailabilityWithoutGoal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("project runtime status: %v", err)
 	}
-	if status.Goal == nil || status.Goal.Goal != nil || status.Goal.Availability != clientui.GoalAvailabilityAgentCapabilityMissing {
+	if status.Goal == nil || status.Goal.Goal != nil || status.Goal.Availability == nil || *status.Goal.Availability != clientui.GoalAvailabilityAgentCapabilityMissing {
 		t.Fatalf("status Goal = %+v, want outer envelope with absent durable Goal and resolved availability", status.Goal)
 	}
 }

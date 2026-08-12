@@ -137,14 +137,13 @@ func transcriptContextUsageFromRuntime(usage *runtime.ContextUsage) *clientui.Tr
 
 func transcriptGoalStatusFromRuntime(goal *session.GoalState, availability clientui.GoalAvailability, suspended bool) *clientui.TranscriptGoalStatus {
 	projected := GoalFromSessionState(goal, availability, suspended)
-	projectedAvailability := projected.Availability
 	if projected == nil || projected.Goal == nil {
-		return &clientui.TranscriptGoalStatus{Availability: &projectedAvailability}
+		return &clientui.TranscriptGoalStatus{Availability: projected.Availability}
 	}
 	return &clientui.TranscriptGoalStatus{Goal: &clientui.TranscriptGoal{
 		Goal:      projected.Goal,
 		Suspended: projected.Suspended,
-	}, Availability: &projectedAvailability}
+	}, Availability: projected.Availability}
 }
 
 func transcriptGoalStatusFromUpdate(goal *session.GoalState, availability *clientui.GoalAvailability, suspended bool) clientui.TranscriptGoalStatus {

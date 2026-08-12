@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"core/cli/app/internal/runtimeattach"
 	"core/cli/tui"
 	"core/shared/clientui"
 
@@ -54,15 +53,6 @@ func (m *uiModel) applyAdmittedTranscriptMessageState(
 	case clientui.TranscriptMessageGoalStatus:
 		// The runtime-client main-view cache is the goal read model used by the
 		// status line and goal flow.
-		if admission.projectionError != nil {
-			return m.sendTransientStatusWithNoticeID(
-				runtimeattach.FormatSubmissionError(admission.projectionError),
-				uiStatusNoticeError,
-				transientStatusDuration,
-				uiStatusNoticeReplace,
-				"",
-			)
-		}
 	case clientui.TranscriptMessageBackgroundActivity:
 		m.applyTranscriptBackgroundActivity(message.Payload().(clientui.TranscriptBackgroundActivity))
 		if m.processList.open {

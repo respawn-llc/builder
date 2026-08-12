@@ -89,54 +89,6 @@ func TestOngoingTranscriptTransportOpenFailureKeepsTUIAndShowsDisconnect(t *test
 	}
 }
 
-func TestTranscriptGoalProjectionErrorRepaintsNativeSurfaceWithoutRehydration(t *testing.T) {
-	t.Setenv("KENT_INVARIANT_MODE", "diagnostic")
-	runtimeClient := newTestSessionRuntimeClientWithControls(&reconnectRetryRuntimeControlClient{})
-	m := newProjectedTestUIModel(
-		runtimeClient,
-		WithUIOngoingSurface(ongoing.NewSurface(nil)),
-	)
-	surface := &ongoingSurfaceSpy{}
-	controller := newOngoingTranscriptController(
-		surface,
-		m.ongoingFrameInput,
-		runtimeClient.admitTranscriptMessageState,
-		m.applyAdmittedTranscriptMessageState,
-	)
-	if _, _, err := controller.Accept(ongoingHydrationMessage(1)); err != nil {
-		t.Fatalf("accept hydration: %v", err)
-	}
-	surface.calls = nil
-	m.ongoingTranscript = controller
-
-	cmd := m.handleOngoingTranscriptEvent(ongoingTranscriptEvent{
-		Kind: ongoingTranscriptEventMessage,
-		Message: clientui.NewTranscriptMessage(2, clientui.NewTranscriptEvent(clientui.TranscriptGoalStatus{
-			Goal: transcriptGoalFixture("goal-1", "ship feature", clientui.RuntimeGoalStatusActive),
-		})),
-	})
-
-	if cmd == nil {
-		t.Fatal("recoverable admission error did not surface a status command")
-	}
-	if m.Transition().Exit {
-		t.Fatal("Goal projection error exited the TUI")
-	}
-	if !controller.hydrated || controller.lastSequence != 2 {
-		t.Fatalf("transcript continuity = hydrated %t sequence %d, want accepted sequence 2", controller.hydrated, controller.lastSequence)
-	}
-	if m.transientStatus == "" || m.transientStatusKind != uiStatusNoticeError {
-		t.Fatalf("transient status = %q kind=%q, want surfaced error", m.transientStatus, m.transientStatusKind)
-	}
-	if got := surface.callKinds(); !reflect.DeepEqual(got, []string{"render"}) {
-		t.Fatalf("native surface calls = %v, want one repaint", got)
-	}
-	expectedStatus := m.layout().renderStatusLine(m.layout().effectiveWidth(), uiThemeStyles(m.theme))
-	if got := surface.lastFrameSectionLines(ongoing.FrameSectionStatus); !reflect.DeepEqual(got, []string{expectedStatus}) {
-		t.Fatalf("native status frame = %q, want current surfaced status frame", got)
-	}
-}
-
 func TestRecoveredTranscriptHydrationClearsDisconnectStatusLine(t *testing.T) {
 	surface := &ongoingSurfaceSpy{}
 	m := newProjectedTestUIModel(

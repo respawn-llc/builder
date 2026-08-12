@@ -28,7 +28,7 @@ type RuntimeContextUsage struct {
 
 type RuntimeGoal struct {
 	*Goal
-	Availability GoalAvailability
+	Availability *GoalAvailability
 	Suspended    bool
 }
 

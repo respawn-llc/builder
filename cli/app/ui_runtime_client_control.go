@@ -148,7 +148,7 @@ func (c *sessionRuntimeClient) setGoalStatus(call func(context.Context, serverap
 }
 
 func runtimeGoalFromResponse(resp serverapi.RuntimeGoalShowResponse) *clientui.RuntimeGoal {
-	return &clientui.RuntimeGoal{Goal: resp.Goal, Availability: resp.Availability}
+	return &clientui.RuntimeGoal{Goal: resp.Goal, Availability: &resp.Availability}
 }
 
 func cloneRuntimeGoal(goal *clientui.RuntimeGoal) *clientui.RuntimeGoal {
@@ -159,6 +159,10 @@ func cloneRuntimeGoal(goal *clientui.RuntimeGoal) *clientui.RuntimeGoal {
 	if goal.Goal != nil {
 		core := *goal.Goal
 		cloned.Goal = &core
+	}
+	if goal.Availability != nil {
+		availability := *goal.Availability
+		cloned.Availability = &availability
 	}
 	return &cloned
 }
