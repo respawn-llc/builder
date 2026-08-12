@@ -757,7 +757,7 @@ func TestGoalLoopKeepsLiveRunActiveAcrossAutoContinuingTurns(t *testing.T) {
 		if !errors.Is(err, ErrLiveRunNoFinalAnswer) {
 			t.Fatalf("WaitForActiveRunResult error = %v, want %v", err, ErrLiveRunNoFinalAnswer)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for live run result")
 	}
 }
@@ -976,7 +976,7 @@ func TestGoalResumeWhileInterruptIsPublishingSchedulesRestart(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Interrupt: %v", err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for interrupt publication")
 	}
 
@@ -1208,7 +1208,7 @@ func (c *scriptedGoalLoopClient) waitStarted(t *testing.T, call int) {
 	c.mu.Unlock()
 	select {
 	case <-started:
-	case <-time.After(5 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatalf("timed out waiting for goal loop call %d to start", call)
 	}
 }
@@ -1254,7 +1254,7 @@ func (c *scriptedGoalLoopClient) channelLocked(channels map[int]chan struct{}, c
 
 func waitGoalLoopRunning(t *testing.T, engine *Engine, want bool) {
 	t.Helper()
-	deadline := time.After(2 * time.Second)
+	deadline := time.After(runtimeTestSynchronizationTimeout)
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -1272,7 +1272,7 @@ func waitGoalLoopRunning(t *testing.T, engine *Engine, want bool) {
 
 func waitGoalLoopContinuationEnforced(t *testing.T, engine *Engine, want bool) {
 	t.Helper()
-	deadline := time.After(2 * time.Second)
+	deadline := time.After(runtimeTestSynchronizationTimeout)
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -1290,7 +1290,7 @@ func waitGoalLoopContinuationEnforced(t *testing.T, engine *Engine, want bool) {
 
 func waitActiveLiveRunGroup(t *testing.T, engine *Engine, want bool) {
 	t.Helper()
-	deadline := time.After(2 * time.Second)
+	deadline := time.After(runtimeTestSynchronizationTimeout)
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {

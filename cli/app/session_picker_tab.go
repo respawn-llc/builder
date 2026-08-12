@@ -24,21 +24,21 @@ const (
 )
 
 type sessionPickerBodyRequest struct {
-	kind       sessionPickerBodyRequestKind
-	generation uint64
-	position   serverapi.SessionPagePosition
+	kind            sessionPickerBodyRequestKind
+	generation      uint64
+	requestedOffset int
 }
 
 type sessionPickerDirectionalRequest struct {
-	generation uint64
-	position   serverapi.SessionPagePosition
-	move       int
+	generation      uint64
+	requestedOffset int
+	move            int
 }
 
 type sessionPickerPageSegment struct {
-	sessions []clientui.SessionSummary
-	older    *serverapi.SessionPageContinuation
-	newer    *serverapi.SessionPageContinuation
+	requestedOffset int
+	sessions        []clientui.SessionSummary
+	nextOffset      *int
 }
 
 type sessionPickerSelection interface {
@@ -68,17 +68,15 @@ type sessionPickerTab struct {
 	directional *sessionPickerDirectionalRequest
 	generation  uint64
 
-	segments    []sessionPickerPageSegment
-	residentIDs map[runtimeids.SessionID]struct{}
-	selected    sessionPickerSelection
-	offset      int
+	segments []sessionPickerPageSegment
+	selected sessionPickerSelection
+	offset   int
 }
 
 func newSessionPickerTab(category sessioncontract.SessionCategory) sessionPickerTab {
 	tab := sessionPickerTab{
-		category:    category,
-		bodyPhase:   sessionPickerBodyInitialLoading,
-		residentIDs: make(map[runtimeids.SessionID]struct{}),
+		category:  category,
+		bodyPhase: sessionPickerBodyInitialLoading,
 	}
 	if category == sessioncontract.SessionCategoryMain {
 		tab.selected = sessionPickerCreateSelection{}
@@ -87,15 +85,15 @@ func newSessionPickerTab(category sessioncontract.SessionCategory) sessionPicker
 }
 
 func (t *sessionPickerTab) residentSessionCount() int {
-	return len(t.residentIDs)
-}
-
-func (t *sessionPickerTab) sessions() []clientui.SessionSummary {
 	count := 0
 	for _, segment := range t.segments {
 		count += len(segment.sessions)
 	}
-	sessions := make([]clientui.SessionSummary, 0, count)
+	return count
+}
+
+func (t *sessionPickerTab) sessions() []clientui.SessionSummary {
+	sessions := make([]clientui.SessionSummary, 0, t.residentSessionCount())
 	for _, segment := range t.segments {
 		sessions = append(sessions, segment.sessions...)
 	}
@@ -103,7 +101,7 @@ func (t *sessionPickerTab) sessions() []clientui.SessionSummary {
 }
 
 func (t *sessionPickerTab) containsNewestEdge() bool {
-	return len(t.segments) == 0 || t.segments[0].newer == nil
+	return len(t.segments) == 0 || t.segments[0].requestedOffset == 0
 }
 
 func (t *sessionPickerTab) includesCreateRow() bool {
@@ -163,7 +161,6 @@ func (t *sessionPickerTab) resetForFreshLoad() {
 	t.bodyPhase = sessionPickerBodyInitialLoading
 	t.directional = nil
 	t.segments = nil
-	t.residentIDs = make(map[runtimeids.SessionID]struct{})
 	t.offset = 0
 	t.selected = nil
 	if t.category == sessioncontract.SessionCategoryMain {
@@ -171,12 +168,10 @@ func (t *sessionPickerTab) resetForFreshLoad() {
 	}
 }
 
-func (t *sessionPickerTab) replaceSegments(response serverapi.SessionPageResponse) {
-	t.segments = []sessionPickerPageSegment{newSessionPickerPageSegment(response)}
-	t.rebuildResidentIDs()
+func (t *sessionPickerTab) replaceSegments(requestedOffset int, response serverapi.SessionPageResponse) {
+	t.segments = []sessionPickerPageSegment{newSessionPickerPageSegment(requestedOffset, response)}
 	if len(response.Sessions) == 0 {
 		t.segments = nil
-		t.rebuildResidentIDs()
 		t.bodyPhase = sessionPickerBodyEmpty
 		if t.category == sessioncontract.SessionCategoryMain {
 			t.selected = sessionPickerCreateSelection{}
@@ -188,42 +183,18 @@ func (t *sessionPickerTab) replaceSegments(response serverapi.SessionPageRespons
 	t.bodyPhase = sessionPickerBodyReady
 }
 
-func (t *sessionPickerTab) rebuildResidentIDs() {
-	t.residentIDs = make(map[runtimeids.SessionID]struct{})
-	for segmentIndex := range t.segments {
-		filtered := t.segments[segmentIndex].sessions[:0]
-		for _, summary := range t.segments[segmentIndex].sessions {
-			if _, exists := t.residentIDs[summary.SessionID]; exists {
-				continue
-			}
-			t.residentIDs[summary.SessionID] = struct{}{}
-			filtered = append(filtered, summary)
-		}
-		t.segments[segmentIndex].sessions = filtered
-	}
-}
-
-func newSessionPickerPageSegment(response serverapi.SessionPageResponse) sessionPickerPageSegment {
+func newSessionPickerPageSegment(requestedOffset int, response serverapi.SessionPageResponse) sessionPickerPageSegment {
 	return sessionPickerPageSegment{
-		sessions: append([]clientui.SessionSummary(nil), response.Sessions...),
-		older:    cloneSessionPageContinuation(response.Older),
-		newer:    cloneSessionPageContinuation(response.Newer),
+		requestedOffset: requestedOffset,
+		sessions:        append([]clientui.SessionSummary(nil), response.Sessions...),
+		nextOffset:      cloneSessionPageOffset(response.NextOffset),
 	}
 }
 
-func cloneSessionPageContinuation(value *serverapi.SessionPageContinuation) *serverapi.SessionPageContinuation {
+func cloneSessionPageOffset(value *int) *int {
 	if value == nil {
 		return nil
 	}
 	cloned := *value
 	return &cloned
-}
-
-func sessionPagePositionsEqual(left, right serverapi.SessionPagePosition) bool {
-	if left.Kind() != right.Kind() {
-		return false
-	}
-	leftToken, leftPresent := left.Continuation()
-	rightToken, rightPresent := right.Continuation()
-	return leftPresent == rightPresent && (!leftPresent || leftToken.String() == rightToken.String())
 }

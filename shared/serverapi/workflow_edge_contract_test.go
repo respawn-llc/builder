@@ -8,7 +8,6 @@ import (
 )
 
 func TestWorkflowEdgeContractRoundTripsSelectionModesAndParameterPurposes(t *testing.T) {
-	workflowID := runtimeids.NewWorkflowID()
 	selected := WorkflowGraphDraftEdge{
 		ID:                "edge-select",
 		TransitionGroupID: "group",
@@ -53,49 +52,60 @@ func TestWorkflowEdgeContractRoundTripsSelectionModesAndParameterPurposes(t *tes
 	if roundTrip.Edges[1].AssigneeSelection != fallback.AssigneeSelection || len(roundTrip.Edges[1].Parameters) != 0 {
 		t.Fatalf("fallback edge state changed across JSON round trip: %#v", roundTrip.Edges[1])
 	}
-	_ = workflowID
 }
 
-func TestWorkflowEdgeRequestsValidateSelectionModesAndParameterPurposes(t *testing.T) {
-	request := WorkflowEdgeAddRequest{
-		WorkflowID:        runtimeids.NewWorkflowID(),
-		TransitionGroupID: "group",
-		Key:               "select",
-		TargetNodeID:      "agent",
-		ContextMode:       "new_session",
-		AssigneeSelection: "invalid",
-		ThinkingSelection: "configured",
-		Parameters: []WorkflowParameter{{
-			Key: "role", Purpose: "target_assignee",
+func TestWorkflowGraphRequestsRejectBlankAndInvalidEdgeSelectionsAndPurposes(t *testing.T) {
+	workflowID := runtimeids.NewWorkflowID()
+	valid := WorkflowGraphDraft{Edges: []WorkflowGraphDraftEdge{{
+		ID: "edge", TransitionGroupID: "group", Key: "edge", TargetNodeID: "target",
+		AssigneeSelection: "configured", ThinkingSelection: "configured",
+		ContextMode: "new_session",
+		Parameters:  []WorkflowParameter{{Key: "summary", Description: "Summary.", Purpose: "ordinary"}},
+	}}}
+	validators := []struct {
+		name     string
+		validate func(WorkflowGraphDraft) error
+	}{
+		{"validate draft", func(graph WorkflowGraphDraft) error {
+			return (WorkflowGraphValidateDraftRequest{
+				WorkflowID: workflowID, Graph: graph,
+				Modes: []WorkflowValidationMode{WorkflowValidationModeDraft},
+			}).Validate()
+		}},
+		{"derive wiring", func(graph WorkflowGraphDraft) error {
+			return (WorkflowGraphDeriveWiringRequest{WorkflowID: workflowID, Graph: graph}).Validate()
+		}},
+		{"preview save", func(graph WorkflowGraphDraft) error {
+			return (WorkflowGraphSavePreviewRequest{WorkflowID: workflowID, Graph: graph}).Validate()
+		}},
+		{"save", func(graph WorkflowGraphDraft) error {
+			return (WorkflowGraphSaveRequest{WorkflowID: workflowID, Graph: graph}).Validate()
 		}},
 	}
-	if err := request.Validate(); err == nil {
-		t.Fatal("Validate accepted an invalid assignee selection mode")
+	invalid := []struct {
+		name   string
+		mutate func(*WorkflowGraphDraftEdge)
+	}{
+		{"blank assignee selection", func(edge *WorkflowGraphDraftEdge) { edge.AssigneeSelection = "" }},
+		{"invalid assignee selection", func(edge *WorkflowGraphDraftEdge) { edge.AssigneeSelection = "invalid" }},
+		{"blank thinking selection", func(edge *WorkflowGraphDraftEdge) { edge.ThinkingSelection = "" }},
+		{"invalid thinking selection", func(edge *WorkflowGraphDraftEdge) { edge.ThinkingSelection = "invalid" }},
+		{"blank parameter purpose", func(edge *WorkflowGraphDraftEdge) { edge.Parameters[0].Purpose = "" }},
+		{"invalid parameter purpose", func(edge *WorkflowGraphDraftEdge) { edge.Parameters[0].Purpose = "invalid" }},
 	}
-
-	request.AssigneeSelection = "previous_node"
-	request.Parameters[0].Purpose = "invalid"
-	if err := request.Validate(); err == nil {
-		t.Fatal("Validate accepted an invalid parameter purpose")
-	}
-}
-
-func TestWorkflowEdgeRequestsRejectBlankSelectionModesAndPurposes(t *testing.T) {
-	request := WorkflowEdgeAddRequest{
-		WorkflowID:        runtimeids.NewWorkflowID(),
-		TransitionGroupID: "group",
-		Key:               "select",
-		TargetNodeID:      "agent",
-		ContextMode:       "new_session",
-		AssigneeSelection: "",
-		ThinkingSelection: "configured",
-		Parameters: []WorkflowParameter{{
-			Key:         "summary",
-			Description: "Summary.",
-			Purpose:     "",
-		}},
-	}
-	if err := request.Validate(); err == nil {
-		t.Fatal("Validate accepted blank selection mode and parameter purpose")
+	for _, request := range validators {
+		t.Run(request.name, func(t *testing.T) {
+			for _, test := range invalid {
+				t.Run(test.name, func(t *testing.T) {
+					graph := valid
+					graph.Edges = append([]WorkflowGraphDraftEdge(nil), valid.Edges...)
+					graph.Edges[0].Parameters = append([]WorkflowParameter(nil), valid.Edges[0].Parameters...)
+					test.mutate(&graph.Edges[0])
+					if err := request.validate(graph); err == nil {
+						t.Fatalf("%s accepted invalid edge: %+v", request.name, graph.Edges[0])
+					}
+				})
+			}
+		})
 	}
 }

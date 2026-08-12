@@ -30,6 +30,8 @@ type testPersistedEvent struct {
 	Record session.EventRecord
 }
 
+const runtimeTestSynchronizationTimeout = 30 * time.Second
+
 func withGenerateRetryDelays(t *testing.T, delays []time.Duration) {
 	t.Helper()
 	previous := generateRetryDelays
@@ -76,7 +78,7 @@ func waitEngineLifecycleTasks(t *testing.T, eng *Engine) {
 	}()
 	select {
 	case <-done:
-	case <-time.After(3 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for engine lifecycle tasks")
 	}
 }

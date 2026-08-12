@@ -952,6 +952,9 @@ func upsertWorkflowNode(ctx context.Context, q *sqlitegen.Queries, node NodeReco
 		GroupID:                nullableGraphIdentityArgument(node.GroupID),
 		SortOrder:              sortOrder,
 	})
+	if err != nil {
+		return fmt.Errorf("%s %q: %w", op, node.ID, err)
+	}
 	return expectAffectedRowCount(updated, err, op)
 }
 

@@ -210,7 +210,7 @@ func workflowUpdateSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 			WorkflowID:      def.Workflow.ID,
 			ExpectedVersion: def.Workflow.Version,
 			Metadata:        &metadata,
-			Graph:           workflowGraphDraftFromDefinition(def),
+			Graph:           serverapi.WorkflowGraphDraftFromDefinition(def),
 		})
 		if err != nil {
 			fmt.Fprintln(stderr, err)

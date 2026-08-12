@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"go/ast"
@@ -23,10 +22,6 @@ import (
 const (
 	shardThreshold = 30
 	maxShards      = 24
-
-	runtimePackagePath                 = "core/server/runtime"
-	runtimeAdmissionHeldEnvironment    = "KENT_TESTSHARD_RUNTIME_ADMISSION_HELD"
-	runtimeAdmissionLockScriptRelative = "scripts/runtime-test-lock.py"
 )
 
 func main() {
@@ -45,65 +40,9 @@ func main() {
 	if err != nil {
 		fatalf("plan Go test shards: %v", err)
 	}
-	if requiresRuntimeAdmission(jobs) {
-		repositoryRoot, err := moduleRoot()
-		if err != nil {
-			fatalf("resolve runtime test repository root: %v", err)
-		}
-		if err := runWithRuntimeAdmission(repositoryRoot); err != nil {
-			fatalf("admit runtime test shards: %v", err)
-		}
-		return
-	}
 	if err := runJobs(jobs, *workers); err != nil {
 		fatalf("run Go test shards: %v", err)
 	}
-}
-
-func requiresRuntimeAdmission(jobs []testJob) bool {
-	if os.Getenv(runtimeAdmissionHeldEnvironment) == "1" {
-		return false
-	}
-	for _, job := range jobs {
-		if job.packagePath == runtimePackagePath {
-			return true
-		}
-	}
-	return false
-}
-
-func moduleRoot() (string, error) {
-	command := exec.Command("go", "list", "-m", "-f", "{{.Dir}}")
-	output, err := command.Output()
-	if err != nil {
-		return "", err
-	}
-	root := strings.TrimSpace(string(output))
-	if root == "" {
-		return "", errors.New("module root is empty")
-	}
-	info, err := os.Stat(root)
-	if err != nil {
-		return "", err
-	}
-	if !info.IsDir() {
-		return "", fmt.Errorf("module root is not a directory: %s", root)
-	}
-	return root, nil
-}
-
-func runWithRuntimeAdmission(repositoryRoot string) error {
-	arguments := append(
-		[]string{filepath.Join(repositoryRoot, runtimeAdmissionLockScriptRelative), os.Args[0]},
-		os.Args[1:]...,
-	)
-	command := exec.Command("python3", arguments...)
-	command.Dir = repositoryRoot
-	command.Stdin = os.Stdin
-	command.Stdout = os.Stdout
-	command.Stderr = os.Stderr
-	command.Env = append(os.Environ(), runtimeAdmissionHeldEnvironment+"=1")
-	return command.Run()
 }
 
 func listPackages(pattern string) ([]goPackage, error) {

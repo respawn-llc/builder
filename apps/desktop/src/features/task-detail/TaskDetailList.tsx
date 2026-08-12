@@ -398,7 +398,7 @@ function BodyRow({
 }: TaskDetailListRowProps): ReactNode {
   return (
     <div
-      className="task-detail-body-split grid items-stretch gap-[var(--space-2)]"
+      className="task-detail-body-split grid w-full min-w-0 max-w-full items-stretch gap-[var(--space-2)]"
       data-testid="task-detail-body-split"
     >
       <DescriptionIsland
@@ -439,8 +439,10 @@ function DependenciesRow({
         mutations.replaceComment.isPending
       }
       onAdd={onAddDependency}
+      onAddExisting={async (pair) => mutations.addDependency.mutateAsync(pair)}
       onRemove={onRemoveDependency}
       onSelectTask={onSelectDependencyTask}
+      projectID={detail.projectID}
       taskID={detail.id}
     />
   );

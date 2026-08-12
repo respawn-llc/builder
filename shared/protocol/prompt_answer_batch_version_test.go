@@ -7,6 +7,6 @@ func TestPromptAnswerBatchChangesProtocolVersion(t *testing.T) {
 		t.Fatal("prompt answer batch method is required")
 	}
 	if Version != "116" {
-		t.Fatalf("current protocol version = %q, want 116", Version)
+		t.Fatalf("prompt answer hard cutover protocol version = %q, want 116", Version)
 	}
 }

@@ -161,7 +161,7 @@ func TestManualMovePreviewDescribesPriorJoinParameterRequirement(t *testing.T) {
 			Key:               "audit",
 			TargetNodeID:      auditID,
 			ContextMode:       workflow.ContextModeNewSession,
-			PromptTemplate:    "Audit {{.Params.synthesize.joined}}.",
+			PromptTemplate:    "Audit {{.Params.synthesize.joined}}.", AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured,
 		})
 	})
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
@@ -213,7 +213,7 @@ func TestManualMovePreviewRequiresAndHonorsStableTransitionSelection(t *testing.
 			TargetNodeID:      workflow.NodeIDOf(target),
 			ContextMode:       workflow.ContextModeNewSession,
 			PromptTemplate:    "Alternate {{.Params.prior_summary}}.",
-			Parameters:        []workflow.Parameter{{Key: "prior_summary", Description: "Prior summary."}},
+			Parameters:        []workflow.Parameter{{Key: "prior_summary", Description: "Prior summary.", Purpose: workflow.ParameterPurposeOrdinary}}, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured,
 		})
 	})
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
@@ -588,8 +588,8 @@ func TestManualMovePreviewBlocksSerialDestinationInsideFanoutBranch(t *testing.T
 			TransitionGroupRecord{ID: detailBGroupID, WorkflowID: workflowID, SourceNodeID: workflow.NodeIDOf(implB), TransitionID: "detail_b", DisplayName: "Detail"},
 		)
 		req.Edges = append(req.Edges,
-			EdgeRecord{ID: testEdgeID("edge-detail-a-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: detailAGroupID, Key: "detail_a", TargetNodeID: detailAID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Detail A."},
-			EdgeRecord{ID: testEdgeID("edge-detail-b-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: detailBGroupID, Key: "detail_b", TargetNodeID: detailBID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Detail B."},
+			EdgeRecord{ID: testEdgeID("edge-detail-a-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: detailAGroupID, Key: "detail_a", TargetNodeID: detailAID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Detail A.", AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured},
+			EdgeRecord{ID: testEdgeID("edge-detail-b-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: detailBGroupID, Key: "detail_b", TargetNodeID: detailBID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Detail B.", AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured},
 		)
 		_ = join
 	})

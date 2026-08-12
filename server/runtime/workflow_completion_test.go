@@ -136,7 +136,7 @@ func TestSubmitWorkflowTurnWaitsForTerminalBackgroundNoticeContinuation(t *testi
 	}, true)
 	select {
 	case <-backgroundStarted:
-	case <-time.After(5 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("terminal background notice continuation did not start")
 	}
 
@@ -157,7 +157,7 @@ func TestSubmitWorkflowTurnWaitsForTerminalBackgroundNoticeContinuation(t *testi
 		if err != nil {
 			t.Fatalf("workflow turn after background continuation: %v", err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("workflow turn did not start after the background continuation finished")
 	}
 	waitEngineLifecycleTasks(t, engine)
@@ -502,7 +502,7 @@ func testAcceptedLiveWorkflowSteeringToolChoice(t *testing.T, useAutomaticToolCh
 	}()
 	select {
 	case <-client.started:
-	case <-time.After(5 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for active workflow request")
 	}
 	_, queued, err := eng.SubmitUserMessageOrSteer(context.Background(), "steer active workflow", "req-steer")
@@ -1098,7 +1098,7 @@ func TestCompatibleProviderCommentaryFlushesAcceptedSteeringBeforeContinuing(t *
 	}()
 	select {
 	case <-started:
-	case <-time.After(5 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for commentary response")
 	}
 	_, accepted, err := eng.QueueUserMessageForActiveRun(context.Background(), "accepted steering", liveRunTestRequestID(t), nil)
@@ -1164,7 +1164,7 @@ func TestWorkflowTerminalCompletionFailsQueuedSteeringAtRunRelease(t *testing.T)
 	}()
 	select {
 	case <-started:
-	case <-time.After(5 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for workflow turn")
 	}
 	queued := mustQueueUserMessageWithClientRequestID(t, eng, "do not submit after run release", "req-after-release")

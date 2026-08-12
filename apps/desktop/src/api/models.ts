@@ -101,10 +101,7 @@ export type WorkspaceList = Readonly<{
 
 export type SessionCategory = "main" | "subagent";
 
-export type SessionPagePosition =
-  | Readonly<{ kind: "newest" }>
-  | Readonly<{ kind: "older"; token: string }>
-  | Readonly<{ kind: "newer"; token: string }>;
+export const sessionCatalogPageSize = 50;
 export type SessionCatalogSummary = Readonly<{
   id: string;
   category: SessionCategory;
@@ -116,8 +113,7 @@ export type SessionCatalogPage = Readonly<{
   projectID: string;
   category: SessionCategory;
   sessions: readonly SessionCatalogSummary[];
-  older: string | null;
-  newer: string | null;
+  nextOffset: number | null;
 }>;
 
 export type ProjectEdit = Readonly<{

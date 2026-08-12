@@ -23,19 +23,17 @@ func TestServiceWorkflowGraphSaveAtomicallyRepairsSavedInvalidWorkflow(t *testin
 	startID := workflowServiceNodeIDByKind(t, before, "start")
 	terminalID := workflowServiceNodeIDByKind(t, before, "terminal")
 	agentID := workflowServiceGraphEntityID("node-agent-" + created.Workflow.ID.String())
-	startGroupID := workflowServiceGraphEntityID("group-start")
-	doneGroupID := workflowServiceGraphEntityID("group-done")
-	graph := workflowGraphDraftFromDefinition(before)
+	graph := serverapi.WorkflowGraphDraftFromDefinition(before)
 	graph.Nodes = append(graph.Nodes, serverapi.WorkflowGraphDraftNode{
 		ID: agentID, Key: "agent", Kind: "agent", DisplayName: "Agent", SubagentRole: "coder",
 	})
 	graph.TransitionGroups = append(graph.TransitionGroups,
-		serverapi.WorkflowGraphDraftTransitionGroup{ID: startGroupID, SourceNodeID: startID, TransitionID: "start", DisplayName: "Start"},
-		serverapi.WorkflowGraphDraftTransitionGroup{ID: doneGroupID, SourceNodeID: agentID, TransitionID: "done", DisplayName: "Done"},
+		serverapi.WorkflowGraphDraftTransitionGroup{ID: workflowServiceGraphEntityID("group-start"), SourceNodeID: startID, TransitionID: "start", DisplayName: "Start"},
+		serverapi.WorkflowGraphDraftTransitionGroup{ID: workflowServiceGraphEntityID("group-done"), SourceNodeID: agentID, TransitionID: "done", DisplayName: "Done"},
 	)
 	graph.Edges = append(graph.Edges,
-		workflowGraphAtomicEdge(workflowServiceGraphEntityID("edge-start"), startGroupID, "start", agentID, "Do work."),
-		workflowGraphAtomicEdge(workflowServiceGraphEntityID("edge-done"), doneGroupID, "done", terminalID, ""),
+		workflowGraphAtomicEdge(workflowServiceGraphEntityID("edge-start"), workflowServiceGraphEntityID("group-start"), "start", agentID, "Do work."),
+		workflowGraphAtomicEdge(workflowServiceGraphEntityID("edge-done"), workflowServiceGraphEntityID("group-done"), "done", terminalID, ""),
 	)
 	assertWorkflowGraphAtomicChangedSave(t, ctx, service, before, graph)
 }
@@ -43,7 +41,7 @@ func TestServiceWorkflowGraphSaveAtomicallyRepairsSavedInvalidWorkflow(t *testin
 func TestServiceWorkflowGraphSaveAtomicallyDeletesFanOutTransitionBranch(t *testing.T) {
 	ctx, service, workflowID := newWorkflowGraphAtomicFanOutFixture(t)
 	before := getWorkflowGraphAtomicDefinition(t, ctx, service, workflowID)
-	graph := workflowGraphDraftFromDefinition(before)
+	graph := serverapi.WorkflowGraphDraftFromDefinition(before)
 	graph.Edges = slices.DeleteFunc(graph.Edges, func(edge serverapi.WorkflowGraphDraftEdge) bool {
 		return edge.ID == workflowServiceGraphEntityID("edge-split-b-"+workflowID.String())
 	})
@@ -65,7 +63,7 @@ func TestServiceWorkflowGraphSaveAtomicallyDeletesNodeAndTransitionGroup(t *test
 func TestServiceWorkflowGraphSaveAtomicallyChangesFanOutSource(t *testing.T) {
 	ctx, service, workflowID := newWorkflowGraphAtomicFanOutFixture(t)
 	before := getWorkflowGraphAtomicDefinition(t, ctx, service, workflowID)
-	graph := workflowGraphDraftFromDefinition(before)
+	graph := serverapi.WorkflowGraphDraftFromDefinition(before)
 	for index := range graph.TransitionGroups {
 		if graph.TransitionGroups[index].ID == workflowServiceGraphEntityID("group-split-"+workflowID.String()) {
 			graph.TransitionGroups[index].SourceNodeID = workflowServiceGraphEntityID("node-prep-" + workflowID.String())
@@ -78,7 +76,7 @@ func TestServiceWorkflowGraphSaveRejectsInvalidAndStaleWithoutMutation(t *testin
 	ctx, service, _ := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
 	before := getWorkflowGraphAtomicDefinition(t, ctx, service, workflowID)
-	invalid := workflowGraphDraftFromDefinition(before)
+	invalid := serverapi.WorkflowGraphDraftFromDefinition(before)
 	invalid.Nodes = append(invalid.Nodes, invalid.Nodes[0])
 	rejected, err := service.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
 		WorkflowID: workflowID, ExpectedVersion: before.Workflow.Version, Graph: invalid,
@@ -88,12 +86,12 @@ func TestServiceWorkflowGraphSaveRejectsInvalidAndStaleWithoutMutation(t *testin
 	}
 	assertWorkflowGraphAtomicUnchanged(t, ctx, service, before)
 
-	changed := workflowGraphDraftFromDefinition(before)
+	changed := serverapi.WorkflowGraphDraftFromDefinition(before)
 	changed.Nodes[0].DisplayName += " edited"
 	assertWorkflowGraphAtomicChangedSave(t, ctx, service, before, changed)
 	current := getWorkflowGraphAtomicDefinition(t, ctx, service, workflowID)
 	rejected, err = service.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
-		WorkflowID: workflowID, ExpectedVersion: before.Workflow.Version, Graph: workflowGraphDraftFromDefinition(before),
+		WorkflowID: workflowID, ExpectedVersion: before.Workflow.Version, Graph: serverapi.WorkflowGraphDraftFromDefinition(before),
 	})
 	if err != nil || rejected.Saved || !workflowGraphSaveResponseHasBlocker(rejected, "version_changed") {
 		t.Fatalf("stale save = %+v, err = %v", rejected, err)
@@ -236,7 +234,7 @@ func workflowGraphDraftWithoutNode(
 	nodeID string,
 	replacementTargetID string,
 ) serverapi.WorkflowGraphDraft {
-	graph := workflowGraphDraftFromDefinition(definition)
+	graph := serverapi.WorkflowGraphDraftFromDefinition(definition)
 	graph.Nodes = slices.DeleteFunc(graph.Nodes, func(node serverapi.WorkflowGraphDraftNode) bool {
 		return node.ID == nodeID
 	})
@@ -290,7 +288,7 @@ func newWorkflowGraphAtomicFanOutFixture(t *testing.T) (context.Context, *Servic
 	branchAID := workflowServiceGraphEntityID("node-a-" + workflowID.String())
 	branchBID := workflowServiceGraphEntityID("node-b-" + workflowID.String())
 	joinID := workflowServiceGraphEntityID("node-join-" + workflowID.String())
-	graph := workflowGraphDraftFromDefinition(current)
+	graph := serverapi.WorkflowGraphDraftFromDefinition(current)
 	graph.Nodes = append(graph.Nodes,
 		serverapi.WorkflowGraphDraftNode{ID: planID, Key: "plan", Kind: "agent", DisplayName: "Plan", SubagentRole: "coder"},
 		serverapi.WorkflowGraphDraftNode{ID: prepID, Key: "prep", Kind: "agent", DisplayName: "Prep", SubagentRole: "coder"},
@@ -415,7 +413,7 @@ func assertWorkflowGraphAtomicChangedSave(
 	if after.Workflow.Version != before.Workflow.Version+1 {
 		t.Fatalf("Workflow Version = %d, want %d", after.Workflow.Version, before.Workflow.Version+1)
 	}
-	reloadedJSON, err := json.Marshal(workflowGraphDraftFromDefinition(after))
+	reloadedJSON, err := json.Marshal(serverapi.WorkflowGraphDraftFromDefinition(after))
 	if err != nil {
 		t.Fatalf("marshal reloaded authored graph: %v", err)
 	}

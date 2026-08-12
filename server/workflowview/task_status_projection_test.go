@@ -5,6 +5,7 @@ import (
 
 	"core/server/workflow"
 	"core/server/workflowexecution"
+	"core/shared/serverapi"
 )
 
 type staticTaskStatusLiveObservationSource struct {
@@ -89,6 +90,27 @@ func TestTaskStatusProjectionDurableSnapshotRetainsOneCurrentNodeGeneration(t *t
 	}
 	if observedState != workflow.CurrentNodeSchedulingInterrupted {
 		t.Fatalf("new snapshot state = %q, want interrupted", observedState)
+	}
+}
+
+func TestTaskDetailProjectsConcurrencyQueuedCurrentNodeAsResumable(t *testing.T) {
+	fixture := newCurrentNodeViewFixture(t, false)
+	started := fixture.startTask(t, "concurrency queued")
+	detail := taskDetailWithObservation(t, fixture, workflowexecution.WorkflowTaskExecutionObservation{
+		ConcurrencyQueued: map[workflow.TaskID][]workflow.CurrentNodeReference{
+			started.task.ID: {started.currentNode},
+		},
+		Quiescence: map[workflow.TaskID]bool{started.task.ID: false},
+	})
+
+	projected, err := detail.GetTask(t.Context(), string(started.task.ID))
+	if err != nil {
+		t.Fatalf("TaskDetail.GetTask: %v", err)
+	}
+	if projected.Status.Kind != serverapi.WorkflowTaskStatusKindQueued ||
+		!projected.Actions.CanResume ||
+		projected.Actions.CanInterrupt {
+		t.Fatalf("concurrency-queued Task detail = %+v", projected)
 	}
 }
 

@@ -13,26 +13,19 @@ import { useTranslation } from "react-i18next";
 
 import {
   SidebarRootOwner,
+  taskSearchDebounceMs,
+  type TaskSearchResult as SearchResult,
+  useDebouncedText,
   useOwnedSidebarRoots,
+  useTaskSearch,
   useTaskSearchMemory,
 } from "@/app-facade";
 import { InteractiveChip } from "@/ui";
-import {
-  adjacentSearchResult,
-  useTaskSearchSelection,
-} from "./taskSearchSelection";
-import type { TaskSearchResultItem as SearchResult } from "./TaskSearchResult";
-import {
-  taskSearchDebounceMs,
-  TaskSearchDialog,
-  useTaskSearch,
-  useTaskSearchShortcuts,
-  useDebouncedText,
-} from "./BoardTaskSearch";
+import { adjacentSearchResult, useTaskSearchSelection } from "./taskSearchSelection";
+import { TaskSearchDialog, useTaskSearchShortcuts } from "./BoardTaskSearch";
 
 type TaskSearchInvocation =
-  | Readonly<{ projectId: string; onOpenTask(taskID: string): void }>
-  | Readonly<{ projectId?: never }>;
+  Readonly<{ projectId: string; onOpenTask(taskID: string): void }> | Readonly<{ projectId?: never }>;
 
 type TaskSearchController = Readonly<{
   invocation: TaskSearchInvocation | null;
@@ -65,9 +58,7 @@ export function TaskSearchProvider({ children }: Readonly<{ children: ReactNode 
     [cancelProjectSearch, close, openSearch, state],
   );
   return (
-    <TaskSearchControllerContext.Provider value={value}>
-      {children}
-    </TaskSearchControllerContext.Provider>
+    <TaskSearchControllerContext.Provider value={value}>{children}</TaskSearchControllerContext.Provider>
   );
 }
 
@@ -167,9 +158,9 @@ function OwnedTaskSearchHost() {
   const { invocation, close, open, openSearch } = useTaskSearchController();
   const { open: openSidebar } = useOwnedSidebarRoots();
   const memory = useTaskSearchMemory();
-  const pendingActivationRef = useRef<
-    Readonly<{ invocation: TaskSearchInvocation; taskID: string }> | null
-  >(null);
+  const pendingActivationRef = useRef<Readonly<{ invocation: TaskSearchInvocation; taskID: string }> | null>(
+    null,
+  );
   const projectID = invocation?.projectId ?? null;
   const query = memory.query;
   const debouncedQuery = useDebouncedText(query, taskSearchDebounceMs);

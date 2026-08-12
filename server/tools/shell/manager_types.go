@@ -2,6 +2,7 @@ package shell
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
@@ -16,19 +17,23 @@ import (
 	"github.com/google/uuid"
 )
 
+// ErrResultUnavailable means a shell ID is unknown or its completed result was evicted.
+var ErrResultUnavailable = errors.New("shell result no longer available")
+
 const (
-	defaultMinimumExecToBgTime = 15 * time.Second
-	defaultWriteYieldTime      = 250 * time.Millisecond
-	closeGracePeriod           = 1 * time.Second
-	closeWaitTimeout           = 5 * time.Second
-	minWriteYieldTime          = 250 * time.Millisecond
-	defaultOutputTokenCap      = 10_000
-	maxPendingOutputBytes      = 1 << 20
-	maxRecentPreviewBytes      = 4096
-	shellOutputNotifyInterval  = 50 * time.Millisecond
-	maxFullLogPostprocessBytes = 2 << 20
-	backgroundLogDirPrefix     = "kent-bg-shells-"
-	initialProcessID           = 1000
+	defaultMinimumExecToBgTime     = 15 * time.Second
+	defaultWriteYieldTime          = 250 * time.Millisecond
+	closeGracePeriod               = 1 * time.Second
+	closeWaitTimeout               = 5 * time.Second
+	minWriteYieldTime              = 250 * time.Millisecond
+	defaultOutputTokenCap          = 10_000
+	maxPendingOutputBytes          = 1 << 20
+	maxRecentPreviewBytes          = 4096
+	shellOutputNotifyInterval      = 50 * time.Millisecond
+	maxFullLogPostprocessBytes     = 2 << 20
+	completedProcessRetentionLimit = 1_000
+	backgroundLogDirPrefix         = "kent-bg-shells-"
+	initialProcessID               = 1000
 )
 
 type EventType string

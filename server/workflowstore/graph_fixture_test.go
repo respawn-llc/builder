@@ -9,9 +9,9 @@ import (
 	"core/server/workflow"
 )
 
-func TestWorkflowGraphSaveRequestFromDefinitionPreservesProductGraph(t *testing.T) {
+func TestNewWorkflowGraphSaveRequestPreservesProductGraph(t *testing.T) {
 	workflowID := testsetup.WorkflowID(t, "workflow-rich")
-	groupID := "group-parallel"
+	groupID := testGraphEntityID("group-parallel")
 	groupIDPointer := &groupID
 	agentID := testNodeID("node-agent")
 	scriptID := testNodeID("node-script")
@@ -31,10 +31,10 @@ func TestWorkflowGraphSaveRequestFromDefinitionPreservesProductGraph(t *testing.
 					joinID,
 				},
 			},
-			{WorkflowID: workflowID, ID: "group-followup", Key: "followup", DisplayName: "Follow-up"},
+			{WorkflowID: workflowID, ID: testGraphEntityID("group-followup"), Key: "followup", DisplayName: "Follow-up"},
 		},
 		Nodes: []workflow.Node{
-			workflow.StartNode{NodeIdentity: workflow.NodeIdentity{WorkflowID: workflowID, ID: "node-start", Key: "start", DisplayName: "Start"}},
+			workflow.StartNode{NodeIdentity: workflow.NodeIdentity{WorkflowID: workflowID, ID: testNodeID("node-start"), Key: "start", DisplayName: "Start"}},
 			workflow.AgentNode{
 				NodeIdentity:   workflow.NodeIdentity{WorkflowID: workflowID, ID: agentID, Key: "agent", DisplayName: "Agent", GroupID: groupIDPointer},
 				SubagentRole:   "coder",
@@ -48,8 +48,8 @@ func TestWorkflowGraphSaveRequestFromDefinitionPreservesProductGraph(t *testing.
 				NodeIdentity:       workflow.NodeIdentity{WorkflowID: workflowID, ID: joinID, Key: "join", DisplayName: "Join", GroupID: groupIDPointer},
 				JoinInputProviders: []workflow.JoinInputProvider{{InputName: "summary", ProviderEdgeID: providerEdgeID}},
 			},
-			workflow.ScriptNode{NodeIdentity: workflow.NodeIdentity{WorkflowID: workflowID, ID: "node-script-absent", Key: "script_absent", DisplayName: "Script absent"}},
-			workflow.TerminalNode{NodeIdentity: workflow.NodeIdentity{WorkflowID: workflowID, ID: "node-done", Key: "done", DisplayName: "Done"}},
+			workflow.ScriptNode{NodeIdentity: workflow.NodeIdentity{WorkflowID: workflowID, ID: testNodeID("node-script-absent"), Key: "script_absent", DisplayName: "Script absent"}},
+			workflow.TerminalNode{NodeIdentity: workflow.NodeIdentity{WorkflowID: workflowID, ID: testNodeID("node-done"), Key: "done", DisplayName: "Done"}},
 		},
 		TransitionGroups: []workflow.TransitionGroup{{
 			WorkflowID:   workflowID,
@@ -63,13 +63,15 @@ func TestWorkflowGraphSaveRequestFromDefinitionPreservesProductGraph(t *testing.
 			WorkflowID:        workflowID,
 			ID:                providerEdgeID,
 			Key:               "review",
-			TransitionGroupID: "transition-review",
+			TransitionGroupID: testTransitionGroupID("transition-review"),
 			TargetNodeID:      scriptID,
+			AssigneeSelection: workflow.AssigneeSelectionConfigured,
+			ThinkingSelection: workflow.ThinkingSelectionConfigured,
 			ContextMode:       workflow.ContextModeContinueSession,
 			ContextSource:     workflow.ContextSource{Kind: workflow.ContextSourceSelectedNode, NodeKey: "agent"},
 			RequiresApproval:  true,
 			PromptTemplate:    "Review {{.Params.summary}}.",
-			Parameters:        []workflow.Parameter{{Key: "summary", Description: "Summary."}},
+			Parameters:        []workflow.Parameter{{Key: "summary", Description: "Summary.", Purpose: workflow.ParameterPurposeOrdinary}},
 			InputBindings:     []workflow.InputBinding{{Name: "summary", Source: workflow.BindingSourceTransitionOutput, Field: "summary"}},
 			OutputRequirements: []workflow.OutputRequirement{{
 				FieldName: "summary",
@@ -77,13 +79,13 @@ func TestWorkflowGraphSaveRequestFromDefinitionPreservesProductGraph(t *testing.
 		}},
 	}
 
-	req := workflowGraphSaveRequestFromDefinition(workflowID, 7, false, def)
+	req := NewWorkflowGraphSaveRequest(def, 7)
 	if req.ExpectedVersion != 7 || req.Confirmed {
 		t.Fatalf("request metadata = %+v, want version 7 unconfirmed", req)
 	}
 	if len(req.NodeGroups) != 2 ||
 		req.NodeGroups[0].ID != groupID || req.NodeGroups[0].Key != "parallel" || req.NodeGroups[0].DisplayName != "Parallel" || req.NodeGroups[0].SortOrder != 0 ||
-		req.NodeGroups[1].ID != "group-followup" || req.NodeGroups[1].Key != "followup" || req.NodeGroups[1].DisplayName != "Follow-up" || req.NodeGroups[1].SortOrder != 100 {
+		req.NodeGroups[1].ID != testGraphEntityID("group-followup") || req.NodeGroups[1].Key != "followup" || req.NodeGroups[1].DisplayName != "Follow-up" || req.NodeGroups[1].SortOrder != 100 {
 		t.Fatalf("node groups = %+v, want canonical order with normalized sort values", req.NodeGroups)
 	}
 	agent := workflowGraphSaveNodeRecord(t, req.Nodes, agentID)
@@ -94,7 +96,7 @@ func TestWorkflowGraphSaveRequestFromDefinitionPreservesProductGraph(t *testing.
 	if script.ScriptPath != "scripts/run" || script.GroupKey != "parallel" {
 		t.Fatalf("script record = %+v, want path and group key preserved", script)
 	}
-	absentScript := workflowGraphSaveNodeRecord(t, req.Nodes, "node-script-absent")
+	absentScript := workflowGraphSaveNodeRecord(t, req.Nodes, testNodeID("node-script-absent"))
 	if absentScript.ScriptPath != "" {
 		t.Fatalf("absent script path = %q, want absent storage value", absentScript.ScriptPath)
 	}
@@ -108,7 +110,7 @@ func TestWorkflowGraphSaveRequestFromDefinitionPreservesProductGraph(t *testing.
 	if len(req.Edges) != 1 || !reflect.DeepEqual(req.Edges[0], EdgeRecord{
 		ID:                 providerEdgeID,
 		WorkflowID:         workflowID,
-		TransitionGroupID:  "transition-review",
+		TransitionGroupID:  testTransitionGroupID("transition-review"),
 		Key:                "review",
 		TargetNodeID:       scriptID,
 		AssigneeSelection:  workflow.AssigneeSelectionConfigured,
@@ -123,6 +125,14 @@ func TestWorkflowGraphSaveRequestFromDefinitionPreservesProductGraph(t *testing.
 	}) {
 		t.Fatalf("edges = %+v, want invocation contract preserved", req.Edges)
 	}
+	def.Edges[0].Parameters[0].Description = "mutated"
+	def.Edges[0].InputBindings[0].Name = "mutated"
+	def.Edges[0].OutputRequirements[0].FieldName = "mutated"
+	if req.Edges[0].Parameters[0].Description != "Summary." ||
+		req.Edges[0].InputBindings[0].Name != "summary" ||
+		req.Edges[0].OutputRequirements[0].FieldName != "summary" {
+		t.Fatalf("request aliases source Definition slices: %+v", req.Edges[0])
+	}
 }
 
 func TestWorkflowGraphSaveFixtureRequestReportsTypedRejectionDetails(t *testing.T) {
@@ -135,7 +145,7 @@ func TestWorkflowGraphSaveFixtureRequestReportsTypedRejectionDetails(t *testing.
 	if err != nil {
 		t.Fatalf("GetDefinition: %v", err)
 	}
-	req := workflowGraphSaveRequestFromDefinition(created.ID, record.Version, false, def)
+	req := NewWorkflowGraphSaveRequest(def, record.Version)
 	req.Nodes = append(req.Nodes, req.Nodes[0])
 
 	result, err := store.SaveWorkflowGraph(ctx, req)
@@ -169,8 +179,8 @@ func TestWorkflowGraphSaveFixtureUsesOneAtomicSaveAndConverterNoop(t *testing.T)
 			TransitionGroupRecord{ID: doneGroup, WorkflowID: created.ID, SourceNodeID: agentID, TransitionID: "done", DisplayName: "Done"},
 		)
 		req.Edges = append(req.Edges,
-			EdgeRecord{ID: testEdgeID("edge-start"), WorkflowID: created.ID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: agentID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Do work."},
-			EdgeRecord{ID: testEdgeID("edge-done"), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession},
+			EdgeRecord{ID: testEdgeID("edge-start"), WorkflowID: created.ID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: agentID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Do work.", AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured},
+			EdgeRecord{ID: testEdgeID("edge-done"), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured},
 		)
 	})
 	if !result.Changed || result.Version != before+1 {
@@ -187,7 +197,7 @@ func TestWorkflowGraphSaveFixtureUsesOneAtomicSaveAndConverterNoop(t *testing.T)
 			t.Fatalf("reloaded edge selectors = %+v, want configured defaults", edge)
 		}
 	}
-	noop := workflowGraphSaveRequestFromDefinition(created.ID, record.Version, false, def)
+	noop := NewWorkflowGraphSaveRequest(def, record.Version)
 	preview, err := store.PreviewWorkflowGraphSave(context.Background(), noop)
 	if err != nil {
 		t.Fatalf("PreviewWorkflowGraphSave converter noop: %v", err)

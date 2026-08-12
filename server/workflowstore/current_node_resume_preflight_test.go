@@ -34,8 +34,8 @@ func TestPreflightTaskResumeRejectsEditedTransitionParameterWithoutMutatingCurre
 		t.Fatalf("InterruptCurrentNode: %v", err)
 	}
 	parameters, err := marshalJSONArray([]workflow.Parameter{
-		{Key: "summary", Description: "Review summary."},
-		{Key: "risk", Description: "New risk."},
+		{Key: "summary", Description: "Review summary.", Purpose: workflow.ParameterPurposeOrdinary},
+		{Key: "risk", Description: "New risk.", Purpose: workflow.ParameterPurposeOrdinary},
 	})
 	if err != nil {
 		t.Fatalf("marshal edited Transition Parameters: %v", err)
@@ -104,7 +104,7 @@ func TestWorkflowGraphSaveAllowsParameterEditForInterruptedCurrentNode(t *testin
 	if err != nil {
 		t.Fatalf("GetDefinition: %v", err)
 	}
-	request := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, false, definition)
+	request := NewWorkflowGraphSaveRequest(definition, record.Version)
 	edgeID := *review.EnteredByEdgeID
 	foundEdge := false
 	for index := range request.Edges {

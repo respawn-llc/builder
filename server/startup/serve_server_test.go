@@ -315,32 +315,25 @@ func createAdmittedCurrentNodeForRecovery(t *testing.T, server *ServeServer) (wo
 		t.Fatalf("default workflow nodes = %+v", definition.Definition.Nodes)
 	}
 	agentID := runtimeids.NewGraphEntityID()
-	if _, err := client.AddWorkflowNode(ctx, serverapi.WorkflowNodeAddRequest{
-		WorkflowID: created.Workflow.ID, NodeID: agentID, Key: "agent", Kind: "agent", DisplayName: "Agent", SubagentRole: "coder",
-	}); err != nil {
-		t.Fatalf("AddWorkflowNode: %v", err)
-	}
 	startGroupID := runtimeids.NewGraphEntityID()
 	doneGroupID := runtimeids.NewGraphEntityID()
-	if _, err := client.AddWorkflowTransitionGroup(ctx, serverapi.WorkflowTransitionGroupAddRequest{
-		WorkflowID: created.Workflow.ID, GroupID: startGroupID, SourceNodeID: startID, TransitionID: "start", DisplayName: "Start",
-	}); err != nil {
-		t.Fatalf("AddWorkflowTransitionGroup: %v", err)
-	}
-	if _, err := client.AddWorkflowTransitionGroup(ctx, serverapi.WorkflowTransitionGroupAddRequest{
-		WorkflowID: created.Workflow.ID, GroupID: doneGroupID, SourceNodeID: agentID, TransitionID: "done", DisplayName: "Done",
-	}); err != nil {
-		t.Fatalf("AddWorkflowTransitionGroup: %v", err)
-	}
-	if _, err := client.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{
-		WorkflowID: created.Workflow.ID, EdgeID: runtimeids.NewGraphEntityID(), TransitionGroupID: startGroupID, Key: "start", TargetNodeID: agentID, AssigneeSelection: "configured", ThinkingSelection: "configured", ContextMode: "new_session", PromptTemplate: "Perform the work.",
-	}); err != nil {
-		t.Fatalf("AddWorkflowEdge: %v", err)
-	}
-	if _, err := client.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{
-		WorkflowID: created.Workflow.ID, EdgeID: runtimeids.NewGraphEntityID(), TransitionGroupID: doneGroupID, Key: "done", TargetNodeID: terminalID, AssigneeSelection: "configured", ThinkingSelection: "configured", ContextMode: "new_session",
-	}); err != nil {
-		t.Fatalf("AddWorkflowEdge: %v", err)
+	graph := serverapi.WorkflowGraphDraftFromDefinition(definition.Definition)
+	graph.Nodes = append(graph.Nodes, serverapi.WorkflowGraphDraftNode{
+		ID: agentID, Key: "agent", Kind: "agent", DisplayName: "Agent", SubagentRole: "coder",
+	})
+	graph.TransitionGroups = append(graph.TransitionGroups,
+		serverapi.WorkflowGraphDraftTransitionGroup{ID: startGroupID, SourceNodeID: startID, TransitionID: "start", DisplayName: "Start"},
+		serverapi.WorkflowGraphDraftTransitionGroup{ID: doneGroupID, SourceNodeID: agentID, TransitionID: "done", DisplayName: "Done"},
+	)
+	graph.Edges = append(graph.Edges,
+		serverapi.WorkflowGraphDraftEdge{ID: runtimeids.NewGraphEntityID(), TransitionGroupID: startGroupID, Key: "start", TargetNodeID: agentID, AssigneeSelection: "configured", ThinkingSelection: "configured", ContextMode: "new_session", PromptTemplate: "Perform the work."},
+		serverapi.WorkflowGraphDraftEdge{ID: runtimeids.NewGraphEntityID(), TransitionGroupID: doneGroupID, Key: "done", TargetNodeID: terminalID, AssigneeSelection: "configured", ThinkingSelection: "configured", ContextMode: "new_session"},
+	)
+	saved, err := client.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
+		WorkflowID: created.Workflow.ID, ExpectedVersion: definition.Definition.Workflow.Version, Graph: graph,
+	})
+	if err != nil || !saved.Saved {
+		t.Fatalf("SaveWorkflowGraph recovery fixture = %+v, err = %v", saved, err)
 	}
 	workflowID := created.Workflow.ID
 	task, err := client.CreateWorkflowTask(ctx, serverapi.WorkflowTaskCreateRequest{

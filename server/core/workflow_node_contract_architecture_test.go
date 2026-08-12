@@ -18,8 +18,6 @@ func TestWorkflowNodeContractsDoNotExposeLegacyFields(t *testing.T) {
 		{path: "../workflowstore/store.go", structName: "NodeRecord"},
 		{path: "../../shared/serverapi/workflow.go", structName: "WorkflowNode"},
 		{path: "../../shared/serverapi/workflow.go", structName: "WorkflowGraphDraftNode"},
-		{path: "../../shared/serverapi/workflow.go", structName: "WorkflowNodeAddRequest"},
-		{path: "../../shared/serverapi/workflow.go", structName: "WorkflowNodeUpdateRequest"},
 	}
 	for _, test := range tests {
 		t.Run(test.structName, func(t *testing.T) {
@@ -121,7 +119,6 @@ func TestGeneratedWorkflowNodeQueryShapesDoNotExposeLegacyFields(t *testing.T) {
 				"GetWorkflowNodeRow",
 				"ListWorkflowNodesRow",
 				"InsertWorkflowNodeParams",
-				"UpdateWorkflowNodeParams",
 				"UpsertWorkflowNodeParams",
 			},
 		},
