@@ -464,7 +464,12 @@ func (s *Starter) currentNodeAgentSessionForStart(
 	classified *workflowexecution.CurrentNodeClassifiedAssignment,
 ) (preparedCurrentNodeAgentSession, sessionruntime.AgentResourceSelection, error) {
 	if classified == nil {
-		prepared, err := s.prepareCurrentNodeAgentSession(ctx, input, true, true)
+		prepared, err := s.prepareCurrentNodeAgentSession(
+			ctx,
+			input,
+			true,
+			input.CurrentNode.SessionID != nil,
+		)
 		return prepared, sessionruntime.OpenAgentResource{}, err
 	}
 	if !classified.Reference().Equal(input.CurrentNode.Reference) {

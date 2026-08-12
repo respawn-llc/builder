@@ -411,6 +411,71 @@ func (f *currentNodeRunnerFixture) startTask(t *testing.T, task workflowstore.Ta
 	return started.Mutation.Created[0].Reference
 }
 
+func (f *currentNodeRunnerFixture) restartRuntime(t *testing.T) {
+	t.Helper()
+	if err := f.controller.Close(); err != nil {
+		t.Fatalf("close pre-restart Current Node controller: %v", err)
+	}
+	if err := f.starter.Close(); err != nil {
+		t.Fatalf("close pre-restart Workflow starter: %v", err)
+	}
+	if err := f.authority.Close(context.Background()); err != nil {
+		t.Fatalf("close pre-restart runtime authority: %v", err)
+	}
+
+	f.runtimes = registry.NewRuntimeRegistry()
+	storeOptions := f.metadata.AuthoritativeSessionStoreOptions()
+	f.authority = sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		PersistenceRoot: f.cfg.PersistenceRoot,
+		StoreOptions:    storeOptions,
+		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
+			f.controller.ExecutionFinalized(scope)
+		}),
+		PromptFeed: f.runtimes,
+		EventFeed: func(resource runtimeids.SessionResourceRef, event agentruntime.Event) {
+			f.runtimes.PublishAuthorityRuntimeEvent(resource, event)
+		},
+		ResourceLifecycle: f.runtimes,
+		StepLifecycle:     currentNodeRunnerStepLifecycle{runtimes: f.runtimes},
+	})
+	permit := workflowexecution.NewMutationPermit()
+	dependencyCounter, err := workflowview.NewTaskDependencyCounter(f.metadata)
+	if err != nil {
+		t.Fatalf("new restarted Task dependency counter: %v", err)
+	}
+	f.starter, err = NewStarter(f.cfg, f.metadata, f.store, nil, nil, StarterOptions{
+		RuntimeAuthority: f.authority,
+		MutationPermit:   permit,
+		TaskDependencies: dependencyCounter,
+		RuntimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(_ context.Context, request runtimewire.RuntimeClientRequest) (llm.Client, error) {
+			f.mu.Lock()
+			f.clientRequests = append(f.clientRequests, request)
+			clientErr := f.clientErr
+			f.mu.Unlock()
+			if clientErr != nil {
+				return nil, clientErr
+			}
+			return f.client, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("new restarted Workflow starter: %v", err)
+	}
+	f.controller, err = workflowexecution.NewCurrentNodeController(
+		f.store,
+		f.starter,
+		f.authority,
+		permit,
+		workflowexecution.CurrentNodeControllerConfig{
+			AgentConcurrency:  1,
+			AssignmentSteerer: f.starter,
+		},
+	)
+	if err != nil {
+		t.Fatalf("new restarted Current Node controller: %v", err)
+	}
+}
+
 func (f *currentNodeRunnerFixture) waitForCurrentNode(t *testing.T, taskID workflow.TaskID, predicate func([]workflow.CurrentNode) bool) []workflow.CurrentNode {
 	t.Helper()
 	deadline := time.Now().Add(currentNodeRunnerWait)
@@ -1462,6 +1527,55 @@ func TestResumeRetainsEstablishedSessionContractAndAttachedRuntime(t *testing.T)
 		return nil
 	}); err != nil {
 		t.Fatalf("attached Resource Generation was replaced on Resume: %v", err)
+	}
+}
+
+func TestResumeAssignsAgentCurrentNodeStrandedBeforeSessionPreparation(t *testing.T) {
+	f := newCurrentNodeRunnerFixture(t, ScriptedFinalAnswer(`{"commentary":"done"}`))
+	workflowID := createCurrentNodeAgentWorkflow(t, f.store)
+	task := f.createTask(t, workflowID)
+	if err := f.store.LockTaskExecutionTarget(context.Background(), task.ID, &workflowstore.ExecutionTargetCandidate{
+		Snapshot: workflowstore.ExecutionTargetSnapshot{
+			Mode:       workflow.ExecutionTargetModeNone,
+			Provenance: workflowstore.ExecutionTargetProvenanceResolved,
+		},
+		Root: workflowstore.ExecutionRoot{
+			SourceWorkspaceID:   f.workspaceID,
+			SourceWorkspaceRoot: f.workspace,
+		},
+	}); err != nil {
+		t.Fatalf("LockTaskExecutionTarget: %v", err)
+	}
+	started, err := f.store.StartTask(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	currentNode := started.Mutation.Created[0]
+	if currentNode.SessionID != nil {
+		t.Fatalf("unprepared Current Node Session = %s, want absent", *currentNode.SessionID)
+	}
+	f.restartRuntime(t)
+	recovered, err := f.controller.Recover(context.Background())
+	if err != nil {
+		t.Fatalf("recover restarted Current Nodes: %v", err)
+	}
+	if recovered != 1 {
+		t.Fatalf("recovered Current Nodes = %d, want one", recovered)
+	}
+
+	if _, err := f.controller.ResumeTask(context.Background(), task.ID); err != nil {
+		t.Fatalf("ResumeTask: %v", err)
+	}
+	f.waitForModelRequests(t, 1)
+	f.waitForWorkflowExecution(t, currentNode.Reference)
+	resumed := f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+		return len(nodes) == 1 &&
+			nodes[0].Reference.Equal(currentNode.Reference) &&
+			nodes[0].SessionID != nil
+	})
+	if resumed[0].Scheduling != nil &&
+		resumed[0].Scheduling.State == workflow.CurrentNodeSchedulingInterrupted {
+		t.Fatalf("resumed Current Node remained interrupted: %+v", resumed[0].Scheduling)
 	}
 }
 
