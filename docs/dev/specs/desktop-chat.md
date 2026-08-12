@@ -223,6 +223,7 @@
 - Every successful Save uses set-or-replace semantics: the resulting Goal is active and Goal work starts or continues, including when the previous Goal was paused or complete.
 - Goal management offers Pause or Resume when applicable and an error-colored outline Clear action.
 - Goal remains visible and inspectable when the selected Agent lacks the locked `ask_question` tool. In that state, Save and Resume are unavailable with `Unavailable for this Agent`; Pause and Clear remain available.
+- Whenever a Session Contract generation is not yet locked, Goal is available a priori. After that generation locks, an attached Desktop may retain the previous availability until the next ordinary Goal update or authoritative Goal read or rehydration; the server remains authoritative for any raced Goal mutation. For lazy New Chat, Goal availability follows the effective selected Agent and updates with ordinary draft responses after Agent changes.
 - The Questions toggle being off does not make Goal unavailable. The server owns final Goal-loop admission, and a raced rejected request uses ordinary Goal mutation error feedback.
 - Clear applies immediately in every Goal state. Desktop shows no confirmation and offers no undo.
 - Pause or Resume preserves any dirty objective draft. Clear resets the sidebar to blank creation state and discards any dirty objective draft.
@@ -239,7 +240,7 @@
 - While the sidebar remains open after a successful read, ordinary Goal broadcasts update clean authoritative state. Desktop adds no Goal polling loop or timer-based server refresh.
 - If an authoritative Goal broadcast arrives after an open read starts but before its response is applied, the broadcast state wins and Desktop discards the late read response. Desktop adds no retry, revision, timestamp-ordering, or polling mechanism for this race.
 - Goal objective drafting copies Task Description reconciliation and destination lifetime. A clean draft follows authoritative Goal broadcasts. A dirty draft remains unchanged while the Goal sidebar destination stays alive. Save replaces the latest authoritative Goal. Closing or navigating away from the sidebar or relaunching Desktop discards an unsaved Goal draft; Desktop adds no server-owned Goal-editor draft.
-- Workflow-controlled Sessions use the same Goal affordance and sidebar as every other Session. A retained Workflow activation rejects Goal mutations through ordinary Goal mutation error feedback.
+- Workflow-controlled Sessions use the same Goal affordance and sidebar as every other Session. Goal mutation admission follows the retained-Workflow rule in [Core Runtime Tools](core-runtime-tools.md).
 - In untouched lazy New Chat, Goal Save is the first agentic trigger and may materialize the Session before Goal validation or admission completes.
 - If Goal validation or admission then fails, the newly materialized Session remains. Desktop keeps the complete dirty Goal draft in the open sidebar, starts no Goal work for the rejected request, and uses ordinary Goal mutation error feedback.
 - After Goal acceptance starts work, later provider, tool, or runtime failure follows ordinary Session failure behavior and leaves the Session and Goal intact.
