@@ -193,7 +193,7 @@ describe("ProjectTasksSurface", () => {
       projectID: "project-1",
     });
     if (destination.kind !== "newTask") throw new Error("Expected New Task destination.");
-    expect(destination.onCreated).toEqual(expect.any(Function));
+    expect(destination.onCreated).toBeTypeOf("function");
 
     fixture.counts = { active: 2, backlog: 0, done: 0 };
     view.rerender(withQueryClient(surface()));
@@ -225,7 +225,7 @@ describe("ProjectTasksSurface", () => {
       projectID: "project-1",
     });
     if (destination.kind !== "linkWorkflow") throw new Error("Expected Link Workflow destination.");
-    expect(destination.onCompleted).toEqual(expect.any(Function));
+    expect(destination.onCompleted).toBeTypeOf("function");
     expect(screen.queryByRole("button", { name: "New Task" })).not.toBeInTheDocument();
   });
 
@@ -252,7 +252,7 @@ describe("ProjectTasksSurface", () => {
       projectID: "project-1",
     });
     if (destination.kind !== "newTask") throw new Error("Expected New Task destination.");
-    expect(destination.onCreated).toEqual(expect.any(Function));
+    expect(destination.onCreated).toBeTypeOf("function");
   });
 
   it("keeps Tasks-origin Link Workflow on Tasks and refreshes its authoritative projections", async () => {
@@ -472,7 +472,7 @@ function withQueryClient(children: React.ReactNode) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
-  vi.spyOn(queryClient, "invalidateQueries").mockImplementation(async (filters, options) => {
+  vi.spyOn(queryClient, "invalidateQueries").mockImplementation(async (filters) => {
     fixture.invalidations.push(filters);
   });
   queryClient.setQueryData(
