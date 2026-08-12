@@ -11,7 +11,7 @@
 - The separate-window action is available only in Chat chrome. Session rows do not offer it in their context menu.
 - Popping out Chat moves that destination into one Session-specific native window and returns the main window to the Project's Sessions tab.
 - Selecting the same Session in the main window afterward opens Chat there normally alongside the pop-out. Desktop adds no focus redirection, move-back behavior, or second pop-out for that Session.
-- Desktop relaunch restores the selected Project and opens its Sessions tab. It does not persist the Home Projects/Workflows selection or the Project Workflows/Sessions selection, reopen Chat, or restore Chat transcript/composer presentation state.
+- Desktop relaunch restores the selected Project and its active Workflows or Sessions tab. It does not reopen Chat or restore Chat transcript/composer presentation state.
 
 ## Sessions
 
