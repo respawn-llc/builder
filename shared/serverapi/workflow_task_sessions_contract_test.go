@@ -3,6 +3,9 @@ package serverapi
 import "testing"
 
 func TestWorkflowTaskSessionResponseContract(t *testing.T) {
+	sessionName := "Implementation"
+	nodeName := "Implement"
+	nextOffset := 25
 	for _, test := range []struct {
 		status WorkflowTaskSessionStatus
 		wire   string
@@ -16,17 +19,25 @@ func TestWorkflowTaskSessionResponseContract(t *testing.T) {
 				TaskID: "task-1",
 				WorkflowOffsetPage: WorkflowOffsetPage[WorkflowTaskSessionItem]{
 					Items: []WorkflowTaskSessionItem{{
-						SessionID: "session-1",
-						AgentRole: "coder",
-						Status:    test.status,
+						SessionID:   "session-1",
+						SessionName: &sessionName,
+						NodeName:    &nodeName,
+						AgentRole:   "coder",
+						Status:      test.status,
 					}},
+					NextOffset: &nextOffset,
 				},
 			}
 			if err := response.ValidateForTask("task-1"); err != nil {
 				t.Fatalf("valid response rejected: %v", err)
 			}
-			if string(test.status) != test.wire {
-				t.Fatalf("status = %q, want wire value %q", test.status, test.wire)
+			encoded, shape := marshalWorkflowJSON[map[string]any](t, response)
+			items := shape["items"].([]any)
+			item := items[0].(map[string]any)
+			if len(items) != 1 || shape["task_id"] != "task-1" || shape["next_offset"] != float64(nextOffset) ||
+				item["session_id"] != "session-1" || item["session_name"] != sessionName ||
+				item["node_name"] != nodeName || item["agent_role"] != "coder" || item["status"] != test.wire {
+				t.Fatalf("response JSON = %s", encoded)
 			}
 		})
 	}

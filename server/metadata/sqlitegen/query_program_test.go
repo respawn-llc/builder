@@ -245,20 +245,5 @@ func closeQueryRows(t *testing.T, rows *sql.Rows) {
 
 func requireQueryProgramOpensIndex(t *testing.T, db *sql.DB, instructions []sqliteInstruction, indexName string) {
 	t.Helper()
-	var indexRootPage int64
-	if err := db.QueryRow(
-		`SELECT rootpage FROM sqlite_schema WHERE type = 'index' AND name = ?`,
-		indexName,
-	).Scan(&indexRootPage); err != nil {
-		t.Fatalf("resolve index root page: %v", err)
-	}
-	indexOpened := false
-	for _, instruction := range instructions {
-		if instruction.Opcode == sqliteOpcodeOpenRead && instruction.P2 == indexRootPage {
-			indexOpened = true
-		}
-	}
-	if !indexOpened {
-		t.Fatalf("query program did not open index %q at root page %d: %+v", indexName, indexRootPage, instructions)
-	}
+	_ = queryProgramIndexCursor(t, db, instructions, indexName)
 }

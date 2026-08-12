@@ -32,6 +32,10 @@ func TestTaskSessionsProjectsActiveParallelOrdinaryAndIdleMetadata(t *testing.T)
 	fixture := newCurrentNodeViewFixture(t, false)
 	started := fixture.startTask(t, "Task Session projection")
 	namedIdleID := fixture.bindCurrentNodeSession(t, started)
+	namedRole := "reviewer"
+	if _, err := fixture.metadata.DB().ExecContext(fixture.ctx, `UPDATE sessions SET continuation_json = ? WHERE id = ?`, `{"agent_role":"reviewer"}`, namedIdleID.String()); err != nil {
+		t.Fatalf("persist named role: %v", err)
+	}
 	runningID := associateTaskSessionForViewTest(t, fixture, started, "running")
 	questionID := associateTaskSessionForViewTest(t, fixture, started, "question")
 	ordinaryID := associateTaskSessionForViewTest(t, fixture, started, "")
@@ -81,7 +85,7 @@ func TestTaskSessionsProjectsActiveParallelOrdinaryAndIdleMetadata(t *testing.T)
 	namedIdle := response.Items[3]
 	if namedIdle.SessionName == nil || *namedIdle.SessionName != "Current Node session" ||
 		namedIdle.NodeName == nil || *namedIdle.NodeName != "Agent" ||
-		namedIdle.AgentRole != workflow.DefaultAgentRole {
+		namedIdle.AgentRole != namedRole {
 		t.Fatalf("named Idle metadata = %+v", namedIdle)
 	}
 	if response.Items[4].AgentRole != workflow.DefaultAgentRole || response.Items[5].NodeName != nil {
