@@ -5,12 +5,19 @@ import type { ApiService, SessionCatalogPage, SessionCategory, WorkspaceList } f
 import {
   invalidateProjectSessionCatalogs,
   mainSessionCatalogInfiniteQueryOptions,
+  previousSessionCatalogOffset,
   subagentSessionCatalogInfiniteQueryOptions,
   workspaceCatalogInfiniteQueryOptions,
 } from "./projectCatalogQueries";
 import { queryKeys } from "./queryKeys";
 
 describe("Project catalog query authority", () => {
+  it("derives the previous retained Session offset from the canonical page size", () => {
+    expect(previousSessionCatalogOffset(0)).toBeUndefined();
+    expect(previousSessionCatalogOffset(50)).toBe(0);
+    expect(previousSessionCatalogOffset(550)).toBe(500);
+  });
+
   it("uses independent Project/category keys and a distinct workspace infinite-query key", () => {
     expect(queryKeys.projectSessionCatalog("project-1", "main")).not.toEqual(
       queryKeys.projectSessionCatalog("project-1", "subagent"),
