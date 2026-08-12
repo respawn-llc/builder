@@ -954,27 +954,6 @@ func (a *Authority) WithLiveExecutionRuntime(
 	return a.WithRuntime(ctx, resource, callback)
 }
 
-// WithRetainedWorkflowRuntime admits a callback only while the Session keeps
-// Workflow activation without requiring an Exact Execution Scope to be live.
-func (a *Authority) WithRetainedWorkflowRuntime(
-	ctx context.Context,
-	sessionID runtimeids.SessionID,
-	callback func(context.Context, *runtime.Engine) error,
-) error {
-	if callback == nil {
-		return errors.New("retained workflow runtime callback is required")
-	}
-	return a.WithCurrentRuntime(ctx, sessionID, func(ctx context.Context, engine *runtime.Engine) error {
-		if !engine.CurrentNodeExecutionConfigured() {
-			return errors.Join(
-				serverapi.ErrRuntimeNoActiveRun,
-				fmt.Errorf("session %s has no retained workflow activation", sessionID),
-			)
-		}
-		return callback(ctx, engine)
-	})
-}
-
 // WithInterruptibleAgentTurn prevents Question admission across one exact current-execution mutation.
 func (a *Authority) WithInterruptibleAgentTurn(
 	ctx context.Context,

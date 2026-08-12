@@ -1388,31 +1388,6 @@ func TestServiceWorkflowRuntimeAllowsGoalStatusTransitions(t *testing.T) {
 	}
 }
 
-func TestServiceWorkflowRuntimeAllowsGoalClear(t *testing.T) {
-	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{
-		CurrentNodeExecution: runtimeControlExactExecution(t),
-		EnabledTools:         []toolspec.ID{toolspec.ToolAskQuestion},
-	})
-	if _, err := engine.SetGoal("workflow goal", session.GoalActorUser); err != nil {
-		t.Fatalf("seed workflow Goal: %v", err)
-	}
-
-	resp, err := service.ClearGoal(context.Background(), serverapi.RuntimeGoalClearRequest{
-		ClientRequestID: "clear",
-		SessionID:       store.Meta().SessionID,
-		Actor:           string(session.GoalActorUser),
-	})
-	if err != nil {
-		t.Fatalf("ClearGoal in workflow runtime = %v, want allowed", err)
-	}
-	if resp.Goal != nil {
-		t.Fatalf("ClearGoal response = %+v, want no Goal", resp.Goal)
-	}
-	if goal := engine.Goal(); goal != nil {
-		t.Fatalf("engine Goal = %+v, want cleared", goal)
-	}
-}
-
 func TestServiceDurableWorkflowSessionAllowsGoalControl(t *testing.T) {
 	store, _, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
 	service = service.WithWorkflowTaskSessionResolver(staticRuntimeControlWorkflowTaskResolver{workflow: true})
