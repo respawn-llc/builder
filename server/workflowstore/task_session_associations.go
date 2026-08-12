@@ -708,7 +708,9 @@ func (s *Store) resolveCurrentNodeStartContext(ctx context.Context, currentNode 
 	var sourceSessionID *runtimeids.SessionID
 	if enteringEdge.ContextMode != workflow.ContextModeNewSession {
 		if currentNode.SessionID == nil {
-			if workflow.CanonicalContextSource(enteringEdge.ContextSource).Kind == workflow.ContextSourcePreviousTargetOrNew {
+			contextSource := workflow.CanonicalContextSource(enteringEdge.ContextSource).Kind
+			if contextSource == workflow.ContextSourcePreviousTargetOrNew ||
+				contextSource == workflow.ContextSourcePreviousTarget {
 				effectiveContextMode = workflow.ContextModeNewSession
 			} else {
 				return CurrentNodeStartContext{}, fmt.Errorf("continuation current node %v has no retained session", currentNode.Reference)

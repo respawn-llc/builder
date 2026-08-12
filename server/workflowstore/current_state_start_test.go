@@ -269,7 +269,7 @@ func TestResolveCurrentNodeStartContextAppliesPreviousTargetOrNewEffectiveMode(t
 		}
 	})
 
-	t.Run("other continuation source still requires retained session", func(t *testing.T) {
+	t.Run("strict retained target mismatch also starts new", func(t *testing.T) {
 		fixture := newReworkContextCompletionFixture(t, workflow.ContextSourcePreviousTargetOrNew)
 		target := completeReworkCurrentNodeForStartContextTest(t, fixture)
 		saveWorkflowGraphFixture(t, fixture.ctx, fixture.store, fixture.workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
@@ -277,8 +277,12 @@ func TestResolveCurrentNodeStartContextAppliesPreviousTargetOrNewEffectiveMode(t
 			edge.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourcePreviousTarget}
 		})
 
-		if _, err := fixture.store.ResolveCurrentNodeStartContext(fixture.ctx, target.Reference); err == nil {
-			t.Fatal("ResolveCurrentNodeStartContext accepted continuation without a retained session")
+		start, err := fixture.store.ResolveCurrentNodeStartContext(fixture.ctx, target.Reference)
+		if err != nil {
+			t.Fatalf("ResolveCurrentNodeStartContext: %v", err)
+		}
+		if start.ContextMode != workflow.ContextModeNewSession || start.SourceSessionID != nil {
+			t.Fatalf("effective start context = mode %q session %v, want new_session without source", start.ContextMode, start.SourceSessionID)
 		}
 	})
 }
