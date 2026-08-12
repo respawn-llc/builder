@@ -157,7 +157,7 @@ WHERE task_id = 'task-input-binding-migration'`).Scan(&currentInputValues); err 
 	}
 }
 
-func TestMigration81NormalizesExistingEmptyObjectInputBindings(t *testing.T) {
+func TestMigration82NormalizesExistingEmptyObjectInputBindings(t *testing.T) {
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "db", "main.sqlite3")
 	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 80)
@@ -182,8 +182,8 @@ WHERE id = 'edge-start-1'`); err != nil {
 	if err != nil {
 		t.Fatalf("create metadata migration provider: %v", err)
 	}
-	if _, err := provider.UpTo(t.Context(), 81); err != nil {
-		t.Fatalf("apply migration 81: %v", err)
+	if _, err := provider.UpTo(t.Context(), 82); err != nil {
+		t.Fatalf("apply migration 82: %v", err)
 	}
 
 	var persistedBindings string
