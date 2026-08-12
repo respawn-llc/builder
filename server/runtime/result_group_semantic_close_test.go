@@ -64,7 +64,7 @@ func TestSemanticClosePrecedesGoalDrainAndWorkflowObservation(t *testing.T) {
 		t,
 		store,
 		&fakeClient{},
-		tools.NewRegistry(tools.HandlerRegistration{
+		newTestToolRegistry(t, tools.HandlerRegistration{
 			ID:      toolspec.ToolExecCommand,
 			Handler: handler,
 		}),
@@ -84,7 +84,7 @@ func TestSemanticClosePrecedesGoalDrainAndWorkflowObservation(t *testing.T) {
 		local: []llm.ToolCall{{
 			ID:    "close-success",
 			Name:  string(toolspec.ToolExecCommand),
-			Input: json.RawMessage(`{}`),
+			Input: json.RawMessage(`{"cmd":"true"}`),
 		}},
 		order: []acceptedResponseCallRef{{
 			source: acceptedResponseCallLocal,
@@ -180,7 +180,7 @@ func TestSemanticCloseDoesNotRereportCompletedCellAndLeavesNoEmptySlot(t *testin
 		t,
 		mustCreateTestSession(t),
 		&fakeClient{},
-		tools.NewRegistry(),
+		newTestToolRegistry(t),
 		Config{Model: "gpt-5"},
 	)
 	calls := []llm.ToolCall{
@@ -264,7 +264,7 @@ func TestSemanticCloseSteeringFailureAbortsResultGroupWithoutPanicking(t *testin
 		t,
 		mustCreateTestSession(t),
 		&fakeClient{},
-		tools.NewRegistry(),
+		newTestToolRegistry(t),
 		Config{Model: "gpt-5"},
 	)
 	call := llm.ToolCall{
@@ -374,7 +374,7 @@ func runSemanticCloseFailurePostJoinCase(
 		t,
 		store,
 		&fakeClient{},
-		tools.NewRegistry(tools.HandlerRegistration{
+		newTestToolRegistry(t, tools.HandlerRegistration{
 			ID:      toolspec.ToolExecCommand,
 			Handler: handler,
 		}),
@@ -394,7 +394,7 @@ func runSemanticCloseFailurePostJoinCase(
 		local: []llm.ToolCall{{
 			ID:    "close-failure",
 			Name:  string(toolspec.ToolExecCommand),
-			Input: json.RawMessage(`{}`),
+			Input: json.RawMessage(`{"cmd":"true"}`),
 		}},
 		order: []acceptedResponseCallRef{{
 			source: acceptedResponseCallLocal,

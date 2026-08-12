@@ -192,8 +192,8 @@ func patchToolCallMeta(toolID toolspec.ID) func(ToolCallContext, json.RawMessage
 
 func editToolCallMeta(toolID toolspec.ID) func(ToolCallContext, json.RawMessage) transcript.ToolCallMeta {
 	return func(ctx ToolCallContext, raw json.RawMessage) transcript.ToolCallMeta {
-		in, err := ParseEditInput(raw)
-		if err != nil {
+		var in EditInput
+		if err := json.Unmarshal(raw, &in); err != nil {
 			meta := defaultToolCallMeta(toolID)(ctx, raw)
 			if path := strings.TrimSpace(in.Path); path != "" {
 				meta.Command = path

@@ -12,6 +12,7 @@ import (
 	"core/server/tools"
 	"core/server/workflowruntime"
 	compactionutil "core/shared/config"
+	"core/shared/jsoncontract"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
@@ -105,11 +106,11 @@ func (e *Engine) buildRequestPlanWithExtraItems(ctx context.Context, stepID stri
 	}
 	if workflowMode != "" {
 		if workflowMode == workflowruntime.CompletionModeStructuredOutput {
-			prompt, promptConfigured := e.workflowPrompt()
-			if !promptConfigured {
-				return requestBuildPlan{}, errors.New("workflow prompt is unavailable")
+			contract, contractErr := e.workflowCompletionContract()
+			if contractErr != nil {
+				return requestBuildPlan{}, contractErr
 			}
-			output, outputErr := workflowruntime.StructuredOutput(workflowruntime.CompletionContract{Transitions: prompt.Transitions})
+			output, outputErr := workflowruntime.StructuredOutput(contract)
 			if outputErr != nil {
 				return requestBuildPlan{}, outputErr
 			}
@@ -220,6 +221,25 @@ func (e *Engine) workflowPrompt() (*workflowruntime.PromptContract, bool) {
 		Transitions:            append([]workflowruntime.CompletionTransition(nil), execution.Contract.Transitions...),
 		TaskAwareness:          workflowruntime.TaskAwareness{},
 	}, true
+}
+
+func newWorkflowPromptCompletionContract(
+	prompt *workflowruntime.PromptContract,
+) (workflowruntime.CompletionContract, error) {
+	if prompt == nil {
+		return workflowruntime.CompletionContract{}, errors.New("workflow prompt is unavailable")
+	}
+	return workflowruntime.NewCompletionContract(prompt.Transitions)
+}
+
+func (e *Engine) workflowCompletionContract() (workflowruntime.CompletionContract, error) {
+	if execution, active := e.currentNodeExecutionConfig(); active {
+		return execution.Contract, nil
+	}
+	if e != nil && e.workflowPromptContract != nil {
+		return *e.workflowPromptContract, nil
+	}
+	return workflowruntime.CompletionContract{}, errors.New("workflow completion contract is unavailable")
 }
 
 func (e *Engine) CurrentNodeExecutionConfigured() bool {
@@ -391,18 +411,18 @@ func (e *Engine) requestTools(ctx context.Context, workflowMode workflowruntime.
 	for _, d := range defs {
 		tool := llm.Tool{Name: string(d.ID), Description: d.Description, Schema: d.Schema}
 		if d.ID == toolspec.ToolCompleteNode {
-			prompt, configured := e.workflowPrompt()
-			if !configured {
-				return nil, errors.New("workflow prompt is unavailable")
+			contract, contractErr := e.workflowCompletionContract()
+			if contractErr != nil {
+				return nil, contractErr
 			}
-			schema, err := workflowruntime.CompletionJSONSchema(workflowruntime.CompletionContract{Transitions: prompt.Transitions})
+			schema, err := workflowruntime.FunctionSchema(contract)
 			if err != nil {
-				continue
+				return nil, fmt.Errorf("prepare complete_node request schema: %w", err)
 			}
 			tool.Schema = schema
 		}
 		if d.ID == toolspec.ToolPatch && customPatchSupported {
-			tool.Schema = nil
+			tool.Schema = jsoncontract.Function{}
 			tool.Custom = &llm.CustomToolFormat{Type: "grammar", Syntax: "lark", Definition: llm.PatchToolLarkGrammar}
 		}
 		out = append(out, tool)

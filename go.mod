@@ -13,6 +13,7 @@ require (
 	github.com/gdamore/tcell/v3 v3.4.1
 	github.com/gofrs/flock v0.13.0
 	github.com/google/uuid v1.6.0
+	github.com/invopop/jsonschema v0.14.0
 	github.com/lxzan/gws v1.10.1
 	github.com/mattn/go-runewidth v0.0.27
 	github.com/muesli/termenv v0.16.0
@@ -20,6 +21,7 @@ require (
 	github.com/pressly/goose/v3 v3.27.3
 	github.com/rivo/uniseg v0.4.7
 	github.com/sahilm/fuzzy v0.1.3
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	github.com/tursodatabase/libsql-client-go v0.0.0-20260528064733-9d5d30a29a60
 	golang.org/x/net v0.57.0
 	golang.org/x/sys v0.47.0
@@ -32,9 +34,13 @@ require (
 
 require (
 	charm.land/lipgloss/v2 v2.0.5 // indirect
+	github.com/bahlo/generic-list-go v0.2.0 // indirect
+	github.com/buger/jsonparser v1.1.2 // indirect
 	github.com/charmbracelet/ultraviolet v0.0.0-20260803092147-8b693049ce2a // indirect
 	github.com/charmbracelet/x/termios v0.1.1 // indirect
 	github.com/charmbracelet/x/windows v0.2.2 // indirect
+	github.com/pb33f/ordered-map/v2 v2.3.1 // indirect
+	go.yaml.in/yaml/v4 v4.0.0-rc.2 // indirect
 	golang.org/x/exp v0.0.0-20260727155853-b88d891fe743 // indirect
 )
 

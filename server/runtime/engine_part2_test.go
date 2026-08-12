@@ -443,7 +443,7 @@ func TestLegacyLockedSessionBackfillsContextBudgetOnce(t *testing.T) {
 		t.Fatalf("mark locked: %v", err)
 	}
 
-	firstEngine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	firstEngine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model:               "gpt-5",
 		EnabledTools:        []toolspec.ID{toolspec.ToolExecCommand},
 		ContextWindowTokens: 272_000,
@@ -456,7 +456,7 @@ func TestLegacyLockedSessionBackfillsContextBudgetOnce(t *testing.T) {
 		t.Fatalf("first estimated tool calls = %d, want 185", got)
 	}
 
-	secondEngine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	secondEngine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model:               "gpt-5",
 		EnabledTools:        []toolspec.ID{toolspec.ToolExecCommand},
 		ContextWindowTokens: 400_000,
@@ -514,7 +514,7 @@ func TestRuntimeControlsRejectInvalidOrUnavailableChanges(t *testing.T) {
 			SupportsResponsesAPI: true,
 			IsOpenAIFirstParty:   false,
 		}},
-		tools.NewRegistry(tools.HandlerRegistration{
+		newTestToolRegistry(t, tools.HandlerRegistration{
 			ID:      toolspec.ToolExecCommand,
 			Handler: fakeTool{name: toolspec.ToolExecCommand},
 		}),
@@ -574,7 +574,7 @@ func TestFastModeEnabledReportsFalseWhenProviderIsUnavailable(t *testing.T) {
 			SupportsResponsesAPI: true,
 			IsOpenAIFirstParty:   false,
 		}},
-		tools.NewRegistry(),
+		newTestToolRegistry(t),
 		Config{
 			Model:         "gpt-5.3-codex",
 			FastModeState: NewFastModeState(true),
@@ -597,7 +597,7 @@ func TestNewRejectsUnavailableProviderCapabilities(t *testing.T) {
 		store,
 		mustMaterializeTestEventLog(t, store),
 		&fakeClient{capsErr: capabilityErr},
-		tools.NewRegistry(),
+		newTestToolRegistry(t),
 		Config{Model: "gpt-5"},
 	)
 	if !errors.Is(err, capabilityErr) {
@@ -842,7 +842,7 @@ func TestSetAutoCompactionDisabledConcurrentWithBusyStepSkipsCompactionForCurren
 
 	started := make(chan struct{})
 	release := make(chan struct{})
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: blockingTool{name: toolspec.ToolExecCommand, started: started, release: release}}), Config{
+	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: blockingTool{name: toolspec.ToolExecCommand, started: started, release: release}}), Config{
 		Model:                 "gpt-5",
 		AutoCompactTokenLimit: 350000,
 	})
@@ -884,7 +884,7 @@ func TestSetReviewerEnabledTogglesRuntimeOnly(t *testing.T) {
 			Client:        &fakeClient{},
 		},
 	}
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), cfg)
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), cfg)
 	changed, mode, err := eng.SetReviewerEnabled(true)
 	if err != nil {
 		t.Fatalf("enable reviewer: %v", err)
@@ -896,7 +896,7 @@ func TestSetReviewerEnabledTogglesRuntimeOnly(t *testing.T) {
 		t.Fatalf("reviewer frequency = %q, want edits", got)
 	}
 
-	restarted := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), cfg)
+	restarted := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), cfg)
 	if got := restarted.ReviewerFrequency(); got != "off" {
 		t.Fatalf("reviewer frequency after restart = %q, want off", got)
 	}
@@ -905,7 +905,7 @@ func TestSetReviewerEnabledTogglesRuntimeOnly(t *testing.T) {
 func TestSetReviewerEnabledLazyInitializesReviewerClient(t *testing.T) {
 	dir := t.TempDir()
 	store := mustCreateTestSessionAt(t, dir)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model: "gpt-5",
 		Reviewer: ReviewerConfig{
 			Frequency:     "off",

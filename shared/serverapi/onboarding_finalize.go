@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 
 	"core/shared/protocol"
@@ -101,7 +100,6 @@ type OnboardingFinalizeRequest struct {
 	SkillsImport        *OnboardingImportSelection     `json:"skills_import,omitempty"`
 	CommandsImport      *OnboardingImportSelection     `json:"commands_import,omitempty"`
 	DisabledSkillNames  []string                       `json:"disabled_skill_names,omitempty"`
-	unknownFields       []string
 }
 
 type OnboardingModelChoice struct {
@@ -142,101 +140,41 @@ type OnboardingImportSelection struct {
 	ProviderUUID      *uuid.UUID           `json:"provider_uuid,omitempty"`
 	ImportProviderID  *string              `json:"import_provider_id,omitempty"`
 	SourceRootPath    *string              `json:"source_root_path,omitempty"`
-	providerRaw       string
 	providerBad       bool
 	importProviderBad bool
 	sourceRootBad     bool
 }
 
-func (r *OnboardingFinalizeRequest) UnmarshalJSON(data []byte) error {
-	type alias OnboardingFinalizeRequest
-	var decoded alias
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		return err
-	}
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-	allowed := map[string]bool{
-		"theme": true, "main_provider": true, "model": true, "context_window": true, "thinking": true, "verbosity": true, "model_timeout_seconds": true,
-		"ask_question": true, "tool_overrides": true, "supervisor": true, "compaction": true, "skills_import": true,
-		"commands_import": true, "disabled_skill_names": true,
-	}
-	for key := range raw {
-		if !allowed[key] {
-			decoded.unknownFields = append(decoded.unknownFields, key)
+func OnboardingImportSelectionFromWire(
+	mode OnboardingImportMode,
+	providerUUID *string,
+	importProviderID *string,
+	sourceRootPath *string,
+) OnboardingImportSelection {
+	selection := OnboardingImportSelection{Mode: mode}
+	if providerUUID != nil {
+		providerRaw := strings.TrimSpace(*providerUUID)
+		parsed, err := uuid.Parse(providerRaw)
+		if err != nil {
+			selection.providerBad = true
+		} else {
+			selection.ProviderUUID = &parsed
 		}
 	}
-	sort.Strings(decoded.unknownFields)
-	*r = OnboardingFinalizeRequest(decoded)
-	return nil
+	selection.ImportProviderID, selection.importProviderBad = onboardingImportSelectionString(importProviderID)
+	selection.SourceRootPath, selection.sourceRootBad = onboardingImportSelectionString(sourceRootPath)
+	return selection
 }
 
-func (s *OnboardingImportSelection) UnmarshalJSON(data []byte) error {
-	var raw struct {
-		Mode             OnboardingImportMode `json:"mode"`
-		ProviderUUID     *json.RawMessage     `json:"provider_uuid"`
-		ImportProviderID *json.RawMessage     `json:"import_provider_id"`
-		SourceRootPath   *json.RawMessage     `json:"source_root_path"`
-	}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-	s.Mode = raw.Mode
-	s.ProviderUUID = nil
-	s.ImportProviderID = nil
-	s.SourceRootPath = nil
-	s.providerRaw = ""
-	s.providerBad = false
-	s.importProviderBad = false
-	s.sourceRootBad = false
-	if raw.ProviderUUID != nil {
-		var value *string
-		if err := json.Unmarshal(*raw.ProviderUUID, &value); err != nil {
-			s.providerBad = true
-		} else if value != nil {
-			s.providerRaw = strings.TrimSpace(*value)
-			parsed, err := uuid.Parse(s.providerRaw)
-			if err != nil {
-				s.providerBad = true
-			} else {
-				s.ProviderUUID = &parsed
-			}
-		}
-	}
-	if raw.ImportProviderID != nil {
-		value, ok := importSelectionString(raw.ImportProviderID)
-		if !ok {
-			s.importProviderBad = true
-		} else {
-			s.ImportProviderID = value
-		}
-	}
-	if raw.SourceRootPath != nil {
-		value, ok := importSelectionString(raw.SourceRootPath)
-		if !ok {
-			s.sourceRootBad = true
-		} else {
-			s.SourceRootPath = value
-		}
-	}
-	return nil
-}
-
-func importSelectionString(raw *json.RawMessage) (*string, bool) {
-	var value *string
-	if err := json.Unmarshal(*raw, &value); err != nil {
-		return nil, false
-	}
+func onboardingImportSelectionString(value *string) (*string, bool) {
 	if value == nil {
-		return nil, true
+		return nil, false
 	}
 	trimmed := strings.TrimSpace(*value)
 	if trimmed == "" {
-		return nil, false
+		return nil, true
 	}
-	return &trimmed, true
+	return &trimmed, false
 }
 
 func (s OnboardingImportSelection) MarshalJSON() ([]byte, error) {
@@ -505,9 +443,6 @@ func ValidateOnboardingFinalizeRequest(req OnboardingFinalizeRequest) error {
 	var fieldErrors []OnboardingFinalizeFieldError
 	add := func(field, code string) {
 		fieldErrors = append(fieldErrors, OnboardingFinalizeFieldError{Field: field, Code: code})
-	}
-	for _, field := range req.unknownFields {
-		add(field, "unknown_field")
 	}
 	if req.Theme != nil && !oneOf(string(*req.Theme), "auto", "light", "dark") {
 		add("theme", "unsupported_value")

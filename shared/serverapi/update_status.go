@@ -169,54 +169,6 @@ func (r UpdateStatusResult) MarshalJSON() ([]byte, error) {
 	})
 }
 
-func (r *UpdateStatusResult) UnmarshalJSON(data []byte) error {
-	var wire *updateStatusResultWire
-	if err := protocol.DecodeStrictJSON(data, &wire); err != nil {
-		return err
-	}
-	if wire == nil {
-		return errors.New("update status result is required")
-	}
-	var members map[string]json.RawMessage
-	if err := json.Unmarshal(data, &members); err != nil {
-		return err
-	}
-	currentVersionPresent := members["current_version"] != nil
-	latestVersionPresent := members["latest_version"] != nil
-	causePresent := members["cause"] != nil
-
-	switch wire.Kind {
-	case UpdateStatusCurrent, UpdateStatusAvailable:
-		if !currentVersionPresent || wire.CurrentVersion == nil ||
-			!latestVersionPresent || wire.LatestVersion == nil ||
-			causePresent {
-			return fmt.Errorf("%s update status payload is invalid", wire.Kind)
-		}
-	case UpdateStatusCheckUnavailable:
-		if currentVersionPresent || latestVersionPresent || causePresent {
-			return errors.New("check_unavailable update status cannot contain versions or a failure cause")
-		}
-	case UpdateStatusCheckFailed:
-		if currentVersionPresent || latestVersionPresent || !causePresent || wire.Cause == nil {
-			return errors.New("check_failed update status payload is invalid")
-		}
-	default:
-		return fmt.Errorf("update status kind %q is invalid", wire.Kind)
-	}
-
-	decoded := UpdateStatusResult{
-		kind:           wire.Kind,
-		currentVersion: wire.CurrentVersion,
-		latestVersion:  wire.LatestVersion,
-		failureCause:   wire.Cause,
-	}
-	if err := decoded.Validate(); err != nil {
-		return err
-	}
-	*r = decoded
-	return nil
-}
-
 type UpdateStatusResponse struct {
 	Result UpdateStatusResult `json:"result"`
 }
@@ -233,22 +185,4 @@ func (r UpdateStatusResponse) MarshalJSON() ([]byte, error) {
 		Result UpdateStatusResult `json:"result"`
 	}
 	return json.Marshal(wire{Result: r.Result})
-}
-
-func (r *UpdateStatusResponse) UnmarshalJSON(data []byte) error {
-	var wire *struct {
-		Result *UpdateStatusResult `json:"result"`
-	}
-	if err := protocol.DecodeStrictJSON(data, &wire); err != nil {
-		return err
-	}
-	if wire == nil || wire.Result == nil {
-		return errors.New("update status response result is required")
-	}
-	decoded := UpdateStatusResponse{Result: *wire.Result}
-	if err := decoded.Validate(); err != nil {
-		return err
-	}
-	*r = decoded
-	return nil
 }

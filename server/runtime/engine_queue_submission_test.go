@@ -10,14 +10,13 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/server/session/sessiontest"
-	"core/server/tools"
 	"core/shared/runtimeids"
 	"core/shared/textutil"
 )
 
 func TestAcceptedQueueAutoDrainsAfterActiveTurnWithoutClientKick(t *testing.T) {
 	client := &fakeClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("queued work handled"), Phase: textutil.Value(llm.MessagePhaseFinal)}}}}
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	started := make(chan struct{})
 	release := make(chan struct{})
 	done := make(chan error, 1)
@@ -61,7 +60,7 @@ func TestSubmitQueuedUserMessagesPreservesCommittedFlushReceiptOnRunError(t *tes
 		t,
 		store,
 		&fakeClient{errors: []error{providerErr}},
-		tools.NewRegistry(),
+		newTestToolRegistry(t),
 		Config{Model: "gpt-5"},
 	)
 	engine.QueueUserMessage("queued input")
@@ -98,7 +97,7 @@ func TestSubmitQueuedUserMessagesPreservesCommittedFlushReceiptOnStepFinalizatio
 				Content: textutil.Value("completed"),
 			},
 		}}},
-		tools.NewRegistry(),
+		newTestToolRegistry(t),
 		Config{Model: "gpt-5", StepLifecycle: sink},
 	)
 	engine.QueueUserMessage("queued input")
@@ -125,7 +124,7 @@ func TestDrainQueuedUserMessagesBeforeCloseFailsRestoredQueueWhenFlushPersistenc
 	store := mustCreateTestSession(t)
 	var statuses []QueuedUserMessageStatusEvent
 	var statusMu sync.Mutex
-	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
 		Model: "gpt-5",
 		OnEvent: func(event Event) {
 			if event.QueuedUserMessageStatus != nil {
@@ -188,7 +187,7 @@ func TestDrainQueuedUserMessagesBeforeCloseConsumesCommittedFlushObserverFailure
 	)
 	var statuses []QueuedUserMessageStatusEvent
 	var statusMu sync.Mutex
-	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
 		Model: "gpt-5",
 		OnEvent: func(event Event) {
 			if event.QueuedUserMessageStatus != nil {
@@ -235,7 +234,7 @@ func TestQueuedFlushStopFailsTheRemainingTypedTail(t *testing.T) {
 	store := mustCreateTestSession(t)
 	var statuses []QueuedUserMessageStatusEvent
 	var statusMu sync.Mutex
-	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
 		Model: "gpt-5",
 		OnEvent: func(event Event) {
 			if event.QueuedUserMessageStatus != nil {
@@ -297,7 +296,7 @@ func TestQueuedFlushStopAfterCommittedGroupSkipsFollowUpModelAndClearsStoppedIDs
 	var statusMu sync.Mutex
 	var firstID string
 	var tailID string
-	engine = mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{
+	engine = mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{
 		Model: "gpt-5",
 		OnEvent: func(event Event) {
 			if event.QueuedUserMessageStatus == nil {

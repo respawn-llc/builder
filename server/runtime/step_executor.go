@@ -666,6 +666,21 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 			preflightRejection: rejection,
 		}, nil
 	}
+	preparedLocalCalls, err := prepareExecutorToolCalls(
+		e,
+		stepID,
+		activeRunIDForStep(e, stepID),
+		e.currentNodeExecutionActive(),
+		acceptedCalls.local,
+	)
+	if err != nil {
+		return preparedCompletedResponse{}, err
+	}
+	for index := range preparedLocalCalls {
+		if preparedLocalCalls[index].inputErr == nil {
+			acceptedCalls.local[index] = preparedLocalCalls[index].call
+		}
+	}
 	assistantMsg.ToolCalls = acceptedCalls.toolCalls()
 	phaseTurn.Assistant = assistantMsg
 

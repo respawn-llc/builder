@@ -12,8 +12,21 @@ import (
 )
 
 type completionSchemaProperty struct {
-	Type any      `json:"type"`
-	Enum []string `json:"enum,omitempty"`
+	Type  any                        `json:"type"`
+	Enum  []string                   `json:"enum,omitempty"`
+	OneOf []completionSchemaProperty `json:"oneOf,omitempty"`
+}
+
+func mustCompletionContract(
+	t *testing.T,
+	transitions []CompletionTransition,
+) CompletionContract {
+	t.Helper()
+	contract, err := NewCompletionContract(transitions)
+	if err != nil {
+		t.Fatalf("NewCompletionContract: %v", err)
+	}
+	return contract
 }
 
 func TestSelectCompletionMode(t *testing.T) {
@@ -51,10 +64,10 @@ func TestSelectCompletionMode(t *testing.T) {
 }
 
 func TestCompletionJSONSchemaUsesAdvertisedCompletionContract(t *testing.T) {
-	raw, err := CompletionJSONSchema(CompletionContract{Transitions: []CompletionTransition{
+	prepared, err := StructuredSchema(mustCompletionContract(t, []CompletionTransition{
 		{ID: "done", Parameters: []workflow.Parameter{{Key: "summary"}}},
 		{ID: "blocked", Parameters: []workflow.Parameter{{Key: "risk"}}},
-	}})
+	}))
 	if err != nil {
 		t.Fatalf("CompletionJSONSchema: %v", err)
 	}
@@ -63,7 +76,7 @@ func TestCompletionJSONSchemaUsesAdvertisedCompletionContract(t *testing.T) {
 		Required             []string                            `json:"required"`
 		Properties           map[string]completionSchemaProperty `json:"properties"`
 	}
-	if err := json.Unmarshal(raw, &schema); err != nil {
+	if err := json.Unmarshal(prepared.JSON(), &schema); err != nil {
 		t.Fatalf("decode schema: %v", err)
 	}
 	if schema.AdditionalProperties {
@@ -85,11 +98,92 @@ func TestCompletionJSONSchemaUsesAdvertisedCompletionContract(t *testing.T) {
 	}
 }
 
+func TestCompletionContractSeparatesFunctionAndStructuredOutputRequirements(t *testing.T) {
+	contract := mustCompletionContract(t, []CompletionTransition{{
+		ID:         "done",
+		Parameters: []workflow.Parameter{{Key: "summary"}},
+	}})
+	function, err := FunctionSchema(contract)
+	if err != nil {
+		t.Fatalf("FunctionJSONSchema: %v", err)
+	}
+	structured, err := StructuredOutput(contract)
+	if err != nil {
+		t.Fatalf("StructuredOutput: %v", err)
+	}
+	if !structured.Schema.Strict() {
+		t.Fatal("workflow structured output is not strict")
+	}
+
+	var functionSchema struct {
+		Required []string `json:"required"`
+	}
+	if err := json.Unmarshal(function.JSON(), &functionSchema); err != nil {
+		t.Fatalf("decode function schema: %v", err)
+	}
+	if containsString(functionSchema.Required, "commentary") {
+		t.Fatalf("function schema requires optional commentary: %v", functionSchema.Required)
+	}
+	if !containsString(functionSchema.Required, "summary") {
+		t.Fatalf("function schema required fields = %v, missing summary", functionSchema.Required)
+	}
+
+	var structuredSchema struct {
+		Required []string `json:"required"`
+	}
+	if err := json.Unmarshal(structured.Schema.JSON(), &structuredSchema); err != nil {
+		t.Fatalf("decode structured schema: %v", err)
+	}
+	for _, field := range []string{"commentary", "summary"} {
+		if !containsString(structuredSchema.Required, field) {
+			t.Fatalf("structured schema required fields = %v, missing %s", structuredSchema.Required, field)
+		}
+	}
+}
+
+func TestCompletionContractMustBePreparedBeforeAdvertisementOrValidation(t *testing.T) {
+	unprepared := CompletionContract{Transitions: []CompletionTransition{{ID: "done"}}}
+	if _, err := FunctionSchema(unprepared); err == nil {
+		t.Fatal("FunctionSchema accepted an unprepared contract")
+	}
+	if _, err := StructuredSchema(unprepared); err == nil {
+		t.Fatal("StructuredSchema accepted an unprepared contract")
+	}
+	if _, err := StructuredOutput(unprepared); err == nil {
+		t.Fatal("StructuredOutput accepted an unprepared contract")
+	}
+	if _, err := DecodeCompletion(json.RawMessage(`{}`), unprepared); err == nil {
+		t.Fatal("DecodeCompletion accepted an unprepared contract")
+	}
+}
+
+func TestPreparedCompletionContractCanBeReused(t *testing.T) {
+	contract := mustCompletionContract(t, []CompletionTransition{{ID: "done"}})
+	firstFunction, err := FunctionSchema(contract)
+	if err != nil {
+		t.Fatalf("first FunctionJSONSchema: %v", err)
+	}
+	reused, err := contract.Prepare()
+	if err != nil {
+		t.Fatalf("reuse prepared contract: %v", err)
+	}
+	secondFunction, err := FunctionSchema(reused)
+	if err != nil {
+		t.Fatalf("second FunctionJSONSchema: %v", err)
+	}
+	if string(firstFunction.JSON()) != string(secondFunction.JSON()) {
+		t.Fatal("reusing a prepared contract changed its function schema")
+	}
+	if _, err := DecodeCompletion(json.RawMessage(`{"unknown":{"nested":true}}`), reused); err != nil {
+		t.Fatalf("reused accepted contract rejected valid completion: %v", err)
+	}
+}
+
 func TestCompletionJSONSchemaRequiresSingleTransitionParameters(t *testing.T) {
-	raw, err := CompletionJSONSchema(CompletionContract{Transitions: []CompletionTransition{{
+	prepared, err := StructuredSchema(mustCompletionContract(t, []CompletionTransition{{
 		ID:         "done",
 		Parameters: []workflow.Parameter{{Key: "summary"}, {Key: "risk"}},
-	}}})
+	}}))
 	if err != nil {
 		t.Fatalf("CompletionJSONSchema: %v", err)
 	}
@@ -97,7 +191,7 @@ func TestCompletionJSONSchemaRequiresSingleTransitionParameters(t *testing.T) {
 		Required   []string                            `json:"required"`
 		Properties map[string]completionSchemaProperty `json:"properties"`
 	}
-	if err := json.Unmarshal(raw, &schema); err != nil {
+	if err := json.Unmarshal(prepared.JSON(), &schema); err != nil {
 		t.Fatalf("decode schema: %v", err)
 	}
 	if _, found := schema.Properties["transition"]; found {
@@ -114,17 +208,17 @@ func TestCompletionJSONSchemaRequiresSingleTransitionParameters(t *testing.T) {
 }
 
 func TestDecodeCompletionEnforcesTransitionAndParameterSelection(t *testing.T) {
-	contract := CompletionContract{Transitions: []CompletionTransition{
+	contract := mustCompletionContract(t, []CompletionTransition{
 		{ID: "done", Parameters: []workflow.Parameter{{Key: "summary"}}},
 		{ID: "blocked", Parameters: []workflow.Parameter{{Key: "reason"}}},
-	}}
+	})
 	for _, test := range []struct {
 		name  string
 		raw   string
 		code  string
 		field string
 	}{
-		{name: "legacy transition ID", raw: `{"transition_id":"done","summary":"ok"}`, code: "unknown_field", field: "transition_id"},
+		{name: "legacy transition ID", raw: `{"transition_id":"done","summary":"ok"}`, code: "required_field_missing", field: "transition"},
 		{name: "missing transition", raw: `{"summary":"ok"}`, code: "required_field_missing", field: "transition"},
 		{name: "undeclared transition", raw: `{"transition":"unknown","summary":"ok"}`, code: "invalid_transition", field: "transition"},
 		{name: "parameter from unselected transition", raw: `{"transition":"done","summary":"ok","reason":"no"}`, code: "unexpected_parameter", field: "reason"},
@@ -139,10 +233,10 @@ func TestDecodeCompletionEnforcesTransitionAndParameterSelection(t *testing.T) {
 }
 
 func TestDecodeCompletionInfersSingleTransitionAndRequiresParameters(t *testing.T) {
-	contract := CompletionContract{Transitions: []CompletionTransition{{
+	contract := mustCompletionContract(t, []CompletionTransition{{
 		ID:         "done",
 		Parameters: []workflow.Parameter{{Key: "summary"}, {Key: "risk"}},
-	}}}
+	}})
 	validation := requireValidationError(t, decodeCompletionError(`{"commentary":"done"}`, contract))
 	for _, field := range []string{"risk", "summary"} {
 		if !hasIssue(validation, "required_parameter_missing", field) {
@@ -159,13 +253,13 @@ func TestDecodeCompletionInfersSingleTransitionAndRequiresParameters(t *testing.
 }
 
 func TestDecodeCompletionUsesUnavailableRoleIssueForMissingProtectedRole(t *testing.T) {
-	contract := CompletionContract{Transitions: []CompletionTransition{{
+	contract := mustCompletionContract(t, []CompletionTransition{{
 		ID: "done",
 		Parameters: []workflow.Parameter{{
 			Key:     "agent_role",
 			Purpose: workflow.ParameterPurposeTargetAssignee,
 		}},
-	}}}
+	}})
 	validation := requireValidationError(t, decodeCompletionError(`{"commentary":"done"}`, contract))
 	if !hasIssue(validation, "workflow.target_agent.unavailable_role", "agent_role") {
 		t.Fatalf("validation issues = %+v, want unavailable-role issue", validation.Issues)
@@ -173,7 +267,7 @@ func TestDecodeCompletionUsesUnavailableRoleIssueForMissingProtectedRole(t *test
 }
 
 func TestDecodeCompletionAcceptsOptionalCommentary(t *testing.T) {
-	contract := CompletionContract{Transitions: []CompletionTransition{{ID: "done", Parameters: []workflow.Parameter{{Key: "summary"}}}}}
+	contract := mustCompletionContract(t, []CompletionTransition{{ID: "done", Parameters: []workflow.Parameter{{Key: "summary"}}}})
 	for _, test := range []struct {
 		raw  string
 		want string
@@ -192,13 +286,30 @@ func TestDecodeCompletionAcceptsOptionalCommentary(t *testing.T) {
 	}
 }
 
+func TestDecodeCompletionDiscardsUndeclaredFields(t *testing.T) {
+	contract := mustCompletionContract(t, []CompletionTransition{{
+		ID:         "done",
+		Parameters: []workflow.Parameter{{Key: "summary"}},
+	}})
+	parsed, err := DecodeCompletion(
+		json.RawMessage(`{"summary":"done","legacy":"discard","nested":{"ignored":true}}`),
+		contract,
+	)
+	if err != nil {
+		t.Fatalf("DecodeCompletion: %v", err)
+	}
+	if len(parsed.OutputValues) != 1 || parsed.OutputValues["summary"] != "done" {
+		t.Fatalf("output values = %+v, want only declared summary", parsed.OutputValues)
+	}
+}
+
 func TestDecodeCompletionStringifiesParameterValues(t *testing.T) {
-	parsed, err := DecodeCompletion(json.RawMessage(`{"summary":123,"risk":false,"details":{"ok":true},"items":["a",2],"empty":null}`), CompletionContract{Transitions: []CompletionTransition{{
+	parsed, err := DecodeCompletion(json.RawMessage(`{"summary":123,"risk":false,"details":{"ok":true},"items":["a",2],"empty":null}`), mustCompletionContract(t, []CompletionTransition{{
 		ID: "done",
 		Parameters: []workflow.Parameter{
 			{Key: "summary"}, {Key: "risk"}, {Key: "details"}, {Key: "items"}, {Key: "empty"},
 		},
-	}}})
+	}}))
 	if err != nil {
 		t.Fatalf("DecodeCompletion: %v", err)
 	}
@@ -212,10 +323,10 @@ func TestDecodeCompletionStringifiesParameterValues(t *testing.T) {
 }
 
 func TestDecodeCompletionAcceptsNullForUnselectedTransitionParameter(t *testing.T) {
-	parsed, err := DecodeCompletion(json.RawMessage(`{"transition":"done","summary":"done","reason":null}`), CompletionContract{Transitions: []CompletionTransition{
+	parsed, err := DecodeCompletion(json.RawMessage(`{"transition":"done","summary":"done","reason":null}`), mustCompletionContract(t, []CompletionTransition{
 		{ID: "done", Parameters: []workflow.Parameter{{Key: "summary"}}},
 		{ID: "blocked", Parameters: []workflow.Parameter{{Key: "reason"}}},
-	}})
+	}))
 	if err != nil {
 		t.Fatalf("DecodeCompletion: %v", err)
 	}
@@ -228,7 +339,7 @@ func TestDecodeCompletionAcceptsNullForUnselectedTransitionParameter(t *testing.
 }
 
 func TestDecodeUnstructuredCompletionAcceptsOnlyRawJSONObject(t *testing.T) {
-	contract := CompletionContract{Transitions: []CompletionTransition{{ID: "done", Parameters: []workflow.Parameter{{Key: "summary"}}}}}
+	contract := mustCompletionContract(t, []CompletionTransition{{ID: "done", Parameters: []workflow.Parameter{{Key: "summary"}}}})
 	for _, raw := range []string{
 		"```json\n{\"summary\":\"ok\"}\n```",
 		"{\"summary\":\"ok\"}\ncomplete",
@@ -249,9 +360,10 @@ func TestDecodeUnstructuredCompletionAcceptsOnlyRawJSONObject(t *testing.T) {
 
 func assertNullableStringProperty(t *testing.T, property completionSchemaProperty) {
 	t.Helper()
-	values, ok := property.Type.([]any)
-	if !ok || len(values) != 2 || values[0] != "string" || values[1] != "null" {
-		t.Fatalf("property type = %#v, want [string null]", property.Type)
+	if len(property.OneOf) != 2 ||
+		property.OneOf[0].Type != "string" ||
+		property.OneOf[1].Type != "null" {
+		t.Fatalf("property = %#v, want string/null union", property)
 	}
 }
 

@@ -282,7 +282,7 @@ func TestServiceSubmitUserTurnReplaysAcceptedError(t *testing.T) {
 func TestServiceSubmitUserShellCommandReplaysCommittedObserverError(t *testing.T) {
 	observerErr := errors.New("shell acceptance observer failed")
 	gate := sessiontest.NewPersistenceGate(runtimeControlTestSessionPersistence)
-	registry := tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeShellHandler{}})
+	registry := newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeShellHandler{}})
 	store, _, service := newRuntimeControlTestService(t, nil, registry, runtime.Config{}, session.WithPersistenceObserver(gate))
 	if err := service.SubmitUserShellCommand(context.Background(), runtimeControlShellCommandRequest(store, "seed-shell", "true")); err != nil {
 		t.Fatalf("seed shell metadata: %v", err)

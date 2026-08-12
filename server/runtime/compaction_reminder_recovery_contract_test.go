@@ -6,7 +6,6 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
-	"core/server/tools"
 	"core/shared/sessioncontract"
 	"core/shared/textutil"
 )
@@ -137,7 +136,7 @@ func TestForkAfterReminderPreservesReminderAdmission(t *testing.T) {
 
 func newReminderRecoveryEngine(t *testing.T, store *session.Store, client llm.Client, onEvent func(Event)) *Engine {
 	t.Helper()
-	return mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{
+	return mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{
 		Model:                 "gpt-5",
 		ContextWindowTokens:   2_000,
 		AutoCompactTokenLimit: 1_000,

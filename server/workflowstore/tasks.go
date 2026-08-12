@@ -413,7 +413,7 @@ func (s *Store) DeleteTask(ctx context.Context, taskID workflow.TaskID) (DeleteT
 			return DeleteTaskResult{}, fmt.Errorf("touch task dependency neighbors affected %d rows, want %d", touched, len(neighbors))
 		}
 	}
-	resolution, err := taskAttentionResolution(ctx, q, taskID)
+	resolution, err := s.taskAttentionResolution(ctx, q, taskID)
 	if err != nil {
 		return DeleteTaskResult{}, err
 	}
@@ -565,7 +565,7 @@ func (s *Store) prepareTaskStart(ctx context.Context, taskID workflow.TaskID) (p
 	if err != nil {
 		return preparedTaskStart{}, err
 	}
-	current, err := currentNodeForReference(ctx, s.queries, reference)
+	current, err := s.currentNodeForReference(ctx, s.queries, reference)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return preparedTaskStart{}, TaskStartConflictError{TaskID: taskID, Reason: TaskStartConflictAlreadyStarted}

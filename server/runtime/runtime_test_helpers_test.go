@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"core/internal/testharness/filemode"
+	"core/internal/testharness/runtimewirefixture"
 	"core/server/llm"
 	"core/server/session"
 	"core/server/session/sessiontest"
@@ -18,12 +19,36 @@ import (
 	shelltool "core/server/tools/shell"
 	"core/server/workflow"
 	"core/server/workflowruntime"
+	"core/shared/jsoncontract"
 	"core/shared/runtimeids"
 	"core/shared/sessioncontract"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 )
+
+func newTestToolRegistry(t testing.TB, registrations ...tools.HandlerRegistration) *tools.Registry {
+	t.Helper()
+	return runtimewirefixture.NewToolRegistry(t, registrations...)
+}
+
+func mustReviewerSuggestionsContract(t testing.TB) jsoncontract.Structured {
+	t.Helper()
+	contract, err := prepareReviewerSuggestionsContract(jsoncontract.NewPreparer(false))
+	if err != nil {
+		t.Fatalf("prepare reviewer suggestions contract: %v", err)
+	}
+	return contract
+}
+
+func mustTestFunctionSchema(t testing.TB) jsoncontract.Function {
+	t.Helper()
+	contract, err := jsoncontract.NewPreparer(false).Function("runtime test function", struct{}{})
+	if err != nil {
+		t.Fatalf("prepare runtime test function schema: %v", err)
+	}
+	return contract
+}
 
 type testPersistedEvent struct {
 	Kind   string
@@ -472,7 +497,7 @@ func mustNewFakeToolEngine(t *testing.T, store *session.Store, client llm.Client
 	for _, id := range toolIDs {
 		handlers = append(handlers, tools.HandlerRegistration{ID: id, Handler: fakeTool{name: id}})
 	}
-	return mustNewTestEngine(t, store, client, tools.NewRegistry(handlers...), cfg)
+	return mustNewTestEngine(t, store, client, newTestToolRegistry(t, handlers...), cfg)
 }
 
 func mustNewExecTestEngine(t *testing.T, store *session.Store, client llm.Client, cfg Config) *Engine {
@@ -492,7 +517,16 @@ func mustNewHandoffTestEngine(t *testing.T, store *session.Store, client llm.Cli
 func mustNewWorkflowTestEngine(t *testing.T, store *session.Store, client llm.Client, workflowCfg *workflowruntime.CurrentNodeExecutionConfig, cfg Config) *Engine {
 	t.Helper()
 	cfg.CurrentNodeExecution = workflowCfg
-	return mustNewExecTestEngine(t, store, client, cfg)
+	toolIDs := []toolspec.ID{toolspec.ToolExecCommand}
+	seen := map[toolspec.ID]bool{toolspec.ToolExecCommand: true}
+	for _, id := range cfg.EnabledTools {
+		if id == toolspec.ToolCompleteNode || id == toolspec.ToolWebSearch || seen[id] {
+			continue
+		}
+		seen[id] = true
+		toolIDs = append(toolIDs, id)
+	}
+	return mustNewFakeToolEngine(t, store, client, cfg, toolIDs...)
 }
 
 func mustTestCurrentNodeReference(t *testing.T, taskID string, nodeID string, branchKey *workflow.TransitionBranchKey) workflow.CurrentNodeReference {

@@ -125,7 +125,10 @@ func (r *defaultReviewerPipeline) RunSuggestions(ctx context.Context, stepID str
 		}, nil
 	}
 	return reviewerSuggestionsResult{
-		Suggestions:           parseReviewerSuggestionsObject(*resp.Assistant.Content),
+		Suggestions: parseReviewerSuggestionsObject(
+			e.reviewerSuggestionsContract,
+			*resp.Assistant.Content,
+		),
 		CacheHitPercent:       cachePct,
 		HasCacheHitPercentage: hasCachePct,
 	}, nil

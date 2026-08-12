@@ -115,7 +115,7 @@ func TestQuestionBarrierCommitsReadyHostedSiblingBeforeInteraction(t *testing.T)
 		t,
 		store,
 		&fakeClient{},
-		tools.NewRegistry(tools.HandlerRegistration{
+		newTestToolRegistry(t, tools.HandlerRegistration{
 			ID:      toolspec.ToolAskQuestion,
 			Handler: tools.NewAskQuestionTool(broker, func() bool { return true }),
 		}),
@@ -190,7 +190,7 @@ func TestApprovalBarrierUsesRuntimeFlushBeforeNestedApprovalVisibility(t *testin
 		t,
 		store,
 		&fakeClient{},
-		tools.NewRegistry(tools.HandlerRegistration{
+		newTestToolRegistry(t, tools.HandlerRegistration{
 			ID:      toolspec.ToolPatch,
 			Handler: approvalBarrierProbe{broker: broker},
 		}),
@@ -200,7 +200,7 @@ func TestApprovalBarrierUsesRuntimeFlushBeforeNestedApprovalVisibility(t *testin
 	calls.local[0] = llm.ToolCall{
 		ID:    "patch",
 		Name:  string(toolspec.ToolPatch),
-		Input: json.RawMessage(`{}`),
+		Input: json.RawMessage(`{"patch":"*** Begin Patch\n*** Add File: approval-barrier.txt\n+approved\n*** End Patch\n"}`),
 	}
 
 	results, err := engine.executeAcceptedToolCalls(context.Background(), "step", calls)

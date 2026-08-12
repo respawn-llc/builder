@@ -224,7 +224,11 @@ func (s *workflowGraphApplyStub) SaveWorkflowGraph(
 
 func TestWorkflowGraphApplyTypedOutcomesAndConfirmation(t *testing.T) {
 	workflowID := mustWorkflowID(t, emptyWorkflowGraphDocumentID)
-	document, err := decodeWorkflowGraphDocument([]byte(emptyWorkflowGraphDocumentJSON))
+	contract, err := prepareWorkflowGraphDocumentContract()
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := contract.Decode([]byte(emptyWorkflowGraphDocumentJSON))
 	if err != nil {
 		t.Fatal(err)
 	}

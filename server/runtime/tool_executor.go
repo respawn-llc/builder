@@ -89,7 +89,7 @@ func (t *defaultToolExecutor) ExecuteToolCalls(
 			nextSerialOrdinal++
 		}
 		wg.Add(1)
-		go func(tc llm.ToolCall, toolID toolspec.ID, knownTool bool, serialOrdinal int, askBatch *tools.AskQuestionBatchMetadata) {
+		go func(tc llm.ToolCall, toolID toolspec.ID, knownTool bool, inputErr error, serialOrdinal int, askBatch *tools.AskQuestionBatchMetadata) {
 			defer wg.Done()
 			defer e.forgetPendingToolCallStart(tc.ID)
 
@@ -97,7 +97,7 @@ func (t *defaultToolExecutor) ExecuteToolCalls(
 				serialGate.wait(serialOrdinal)
 				defer serialGate.done(serialOrdinal)
 			}
-			res, completed, callErr := t.executePreparedToolCall(executionCtx, stepID, runID, tc, toolID, knownTool, askBatch)
+			res, completed, callErr := t.executePreparedToolCall(executionCtx, stepID, runID, tc, toolID, knownTool, inputErr, askBatch)
 			if fatal := collector.fatalSnapshot(); fatal != nil {
 				return
 			}
@@ -151,7 +151,7 @@ func (t *defaultToolExecutor) ExecuteToolCalls(
 				return
 			}
 			callErrs[idx] = callErr
-		}(executableCall, toolID, knownTool, serialOrdinal, prepared.askQuestionBatch)
+		}(executableCall, toolID, knownTool, prepared.inputErr, serialOrdinal, prepared.askQuestionBatch)
 	}
 
 	wg.Wait()
@@ -235,6 +235,7 @@ func (t *defaultToolExecutor) executePreparedToolCall(
 	call llm.ToolCall,
 	toolID toolspec.ID,
 	knownTool bool,
+	inputErr error,
 	askBatch *tools.AskQuestionBatchMetadata,
 ) (tools.Result, bool, error) {
 	if !knownTool {
@@ -242,6 +243,15 @@ func (t *defaultToolExecutor) executePreparedToolCall(
 	}
 	if toolID == toolspec.ToolCompleteNode {
 		return t.executeCompleteNodeTool(ctx, stepID, call), true, nil
+	}
+	if inputErr != nil {
+		return tools.ErrorResult(tools.Call{
+			ID:     call.ID,
+			Name:   toolID,
+			Input:  call.Input,
+			RunID:  runID,
+			StepID: stepID,
+		}, inputErr.Error()), true, nil
 	}
 	if toolID == toolspec.ToolWebSearch {
 		if err := tools.ValidateWebSearchInput(call.Input); err != nil {
@@ -286,6 +296,7 @@ type executorToolCall struct {
 	call             llm.ToolCall
 	toolID           toolspec.ID
 	knownTool        bool
+	inputErr         error
 	askQuestionBatch *tools.AskQuestionBatchMetadata
 }
 
@@ -307,11 +318,25 @@ func prepareExecutorToolCalls(engine *Engine, stepID string, runID string, workf
 			customInput, _ := textutil.OptionalExact(call.CustomInput)
 			executableCall.Input = executorInputForCustomTool(toolID, customInput)
 		}
-		prepared = append(prepared, executorToolCall{call: executableCall, toolID: toolID, knownTool: knownTool})
+		var inputErr error
+		if knownTool && toolID != toolspec.ToolCompleteNode && engine != nil && engine.registry != nil {
+			if _, registered := engine.registry.Get(toolID); registered {
+				executableCall.Input, inputErr = engine.registry.PrepareInput(toolID, executableCall.Input)
+			}
+		}
+		prepared = append(prepared, executorToolCall{
+			call:      executableCall,
+			toolID:    toolID,
+			knownTool: knownTool,
+			inputErr:  inputErr,
+		})
 		if !knownTool || toolID != toolspec.ToolAskQuestion || !askQuestionMaterializable(engine) {
 			continue
 		}
-		if _, err := tools.PrepareAskQuestionToolRequest(executableCall.ID, executableCall.Input); err != nil {
+		if inputErr != nil {
+			continue
+		}
+		if _, err := tools.DecodeAskQuestionToolRequest(executableCall.ID, executableCall.Input); err != nil {
 			continue
 		}
 		askCandidateIndexes = append(askCandidateIndexes, len(prepared)-1)

@@ -94,7 +94,7 @@ func (s *Store) PendingApproval(ctx context.Context, approvalID workflow.Approva
 }
 
 func (s *Store) IsCurrentNodeExecutionEligible(ctx context.Context, reference workflow.CurrentNodeReference) (bool, error) {
-	if _, err := currentNodeForReference(ctx, s.queries, reference); err != nil {
+	if _, err := s.currentNodeForReference(ctx, s.queries, reference); err != nil {
 		return false, err
 	}
 	_, pending, err := currentNodePendingApprovalID(ctx, s.queries, reference)
@@ -132,7 +132,7 @@ func (s *Store) ApplyPendingApproval(ctx context.Context, approvalID workflow.Ap
 	if !found {
 		return PendingApprovalApplyResult{}, fmt.Errorf("pending approval %q disappeared during attention resolution", normalizedID)
 	}
-	if _, err := currentNodeForReference(ctx, q, approval.Source); err != nil {
+	if _, err := s.currentNodeForReference(ctx, q, approval.Source); err != nil {
 		return PendingApprovalApplyResult{}, err
 	}
 	targets := make([]workflow.CurrentNode, 0, len(approval.Branches))

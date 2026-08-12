@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strings"
 
-	"core/shared/protocol"
 	"core/shared/rpcwire"
 	"core/shared/runtimeids"
 )
@@ -298,58 +297,6 @@ func (f SessionExecutionField[T, R, S]) MarshalJSON() ([]byte, error) {
 	return json.Marshal(wire)
 }
 
-func decodeSessionExecutionField[T any, R ~string, S rpcwire.FieldResultSchema[T, R]](
-	data []byte,
-) (rpcwire.FieldResult[T, R, SessionExecutionFieldError], error) {
-	var shape S
-	label := shape.Label()
-	var wire sessionExecutionFieldWire[T, R]
-	if err := protocol.DecodeStrictJSON(data, &wire); err != nil {
-		return nil, err
-	}
-	var members map[string]json.RawMessage
-	if err := json.Unmarshal(data, &members); err != nil {
-		return nil, err
-	}
-	valuePresent := members["value"] != nil
-	reasonPresent := members["reason"] != nil
-	errorPresent := members["error"] != nil
-
-	var state rpcwire.FieldResult[T, R, SessionExecutionFieldError]
-	switch wire.Kind {
-	case SessionExecutionFieldAvailable:
-		if !valuePresent || wire.Value == nil || reasonPresent || errorPresent {
-			return nil, fmt.Errorf("%s available field payload is invalid", label)
-		}
-		state = rpcwire.AvailableField[T, R, SessionExecutionFieldError](*wire.Value)
-	case SessionExecutionFieldUnavailable:
-		if valuePresent || !reasonPresent || wire.Reason == nil || errorPresent {
-			return nil, fmt.Errorf("%s unavailable field payload is invalid", label)
-		}
-		state = rpcwire.UnavailableField[T, R, SessionExecutionFieldError](*wire.Reason)
-	case SessionExecutionFieldFailed:
-		if valuePresent || reasonPresent || !errorPresent || wire.Error == nil {
-			return nil, fmt.Errorf("%s failed field payload is invalid", label)
-		}
-		state = rpcwire.FailedField[T, R](*wire.Error)
-	default:
-		return nil, fmt.Errorf("%s field kind %q is invalid", label, wire.Kind)
-	}
-	if err := validateSessionExecutionField(state, shape); err != nil {
-		return nil, err
-	}
-	return state, nil
-}
-
-func (f *SessionExecutionField[T, R, S]) UnmarshalJSON(data []byte) error {
-	state, err := decodeSessionExecutionField[T, R, S](data)
-	if err != nil {
-		return err
-	}
-	f.state = state
-	return nil
-}
-
 func validateSessionExecutionField[T any, R ~string](
 	state rpcwire.FieldResult[T, R, SessionExecutionFieldError],
 	schema rpcwire.FieldResultSchema[T, R],
@@ -520,25 +467,6 @@ func (e SessionExecutionEnvironment) MarshalJSON() ([]byte, error) {
 	return json.Marshal(wire(e))
 }
 
-func (e *SessionExecutionEnvironment) UnmarshalJSON(data []byte) error {
-	var wire struct {
-		SessionID runtimeids.SessionID           `json:"session_id"`
-		Workspace SessionExecutionWorkspaceField `json:"workspace"`
-		Branch    SessionExecutionBranchField    `json:"branch"`
-		Auth      SessionExecutionAuthField      `json:"auth"`
-		Model     SessionExecutionModelField     `json:"model"`
-	}
-	if err := protocol.DecodeStrictJSON(data, &wire); err != nil {
-		return err
-	}
-	value := SessionExecutionEnvironment{SessionID: wire.SessionID, Workspace: wire.Workspace, Branch: wire.Branch, Auth: wire.Auth, Model: wire.Model}
-	if err := value.Validate(); err != nil {
-		return err
-	}
-	*e = value
-	return nil
-}
-
 type SessionExecutionEnvironmentRequest struct {
 	SessionID runtimeids.SessionID `json:"session_id"`
 }
@@ -561,32 +489,4 @@ func (r SessionExecutionEnvironmentRequest) Validate() error {
 	return nil
 }
 
-func (r *SessionExecutionEnvironmentRequest) UnmarshalJSON(data []byte) error {
-	var wire struct {
-		SessionID runtimeids.SessionID `json:"session_id"`
-	}
-	if err := protocol.DecodeStrictJSON(data, &wire); err != nil {
-		return err
-	}
-	value := SessionExecutionEnvironmentRequest{SessionID: wire.SessionID}
-	if err := value.Validate(); err != nil {
-		return err
-	}
-	*r = value
-	return nil
-}
-
-func (r *SessionExecutionEnvironmentResponse) UnmarshalJSON(data []byte) error {
-	var wire struct {
-		Environment SessionExecutionEnvironment `json:"environment"`
-	}
-	if err := protocol.DecodeStrictJSON(data, &wire); err != nil {
-		return err
-	}
-	if err := wire.Environment.Validate(); err != nil {
-		return err
-	}
-	r.Environment = wire.Environment
-	return nil
-}
 func (r SessionExecutionEnvironmentResponse) Validate() error { return r.Environment.Validate() }

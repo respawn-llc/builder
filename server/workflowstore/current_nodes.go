@@ -11,6 +11,7 @@ import (
 
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
+	"core/shared/jsoncontract"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
@@ -19,7 +20,7 @@ func (s *Store) ListCurrentNodes(ctx context.Context, taskID workflow.TaskID) ([
 	if strings.TrimSpace(string(taskID)) == "" {
 		return nil, fmt.Errorf("task id is required")
 	}
-	return listTaskCurrentNodes(ctx, s.queries, taskID)
+	return s.listTaskCurrentNodes(ctx, s.queries, taskID)
 }
 
 func (s *Store) publishCurrentNodeTaskEvent(ctx context.Context, taskID workflow.TaskID, action serverapi.WorkflowProjectEventAction) error {
@@ -47,7 +48,7 @@ func (s *Store) ListCurrentNodesByTask(ctx context.Context, taskIDs []workflow.T
 	if s == nil {
 		return nil, errors.New("workflow store is required")
 	}
-	return ListCurrentNodesByTaskWithQueries(ctx, s.queries, taskIDs)
+	return s.ListCurrentNodesByTaskWithQueries(ctx, s.queries, taskIDs)
 }
 
 func interruptCurrentNodeQuery(
@@ -80,7 +81,10 @@ func interruptCurrentNodeQuery(
 // ListCurrentNodesByTaskWithQueries decodes Current Nodes through the supplied
 // generated queries. A read-only transaction can therefore own the query
 // generation without duplicating the canonical Current Node decoder.
-func ListCurrentNodesByTaskWithQueries(ctx context.Context, q *sqlitegen.Queries, taskIDs []workflow.TaskID) (map[workflow.TaskID][]workflow.CurrentNode, error) {
+func (s *Store) ListCurrentNodesByTaskWithQueries(ctx context.Context, q *sqlitegen.Queries, taskIDs []workflow.TaskID) (map[workflow.TaskID][]workflow.CurrentNode, error) {
+	if s == nil {
+		return nil, errors.New("workflow store is required")
+	}
 	if q == nil {
 		return nil, errors.New("workflow queries are required")
 	}
@@ -104,7 +108,7 @@ func ListCurrentNodesByTaskWithQueries(ctx context.Context, q *sqlitegen.Queries
 		return nil, err
 	}
 	for _, row := range rows {
-		currentNode, err := currentNodeFromRow(sqlitegen.ListTaskCurrentNodesRow(row))
+		currentNode, err := s.currentNodeFromRow(sqlitegen.ListTaskCurrentNodesRow(row))
 		if err != nil {
 			return nil, err
 		}
@@ -117,8 +121,8 @@ func ListCurrentNodesByTaskWithQueries(ctx context.Context, q *sqlitegen.Queries
 	return nodesByTask, nil
 }
 
-func currentNodeForReference(ctx context.Context, q *sqlitegen.Queries, reference workflow.CurrentNodeReference) (workflow.CurrentNode, error) {
-	currentNodes, err := listTaskCurrentNodes(ctx, q, reference.TaskID)
+func (s *Store) currentNodeForReference(ctx context.Context, q *sqlitegen.Queries, reference workflow.CurrentNodeReference) (workflow.CurrentNode, error) {
+	currentNodes, err := s.listTaskCurrentNodes(ctx, q, reference.TaskID)
 	if err != nil {
 		return workflow.CurrentNode{}, err
 	}
@@ -130,14 +134,14 @@ func currentNodeForReference(ctx context.Context, q *sqlitegen.Queries, referenc
 	return workflow.CurrentNode{}, sql.ErrNoRows
 }
 
-func listTaskCurrentNodes(ctx context.Context, q *sqlitegen.Queries, taskID workflow.TaskID) ([]workflow.CurrentNode, error) {
+func (s *Store) listTaskCurrentNodes(ctx context.Context, q *sqlitegen.Queries, taskID workflow.TaskID) ([]workflow.CurrentNode, error) {
 	rows, err := q.ListTaskCurrentNodes(ctx, string(taskID))
 	if err != nil {
 		return nil, err
 	}
 	currentNodes := make([]workflow.CurrentNode, 0, len(rows))
 	for _, row := range rows {
-		currentNode, err := currentNodeFromRow(row)
+		currentNode, err := s.currentNodeFromRow(row)
 		if err != nil {
 			return nil, err
 		}
@@ -181,7 +185,7 @@ func newReadyCurrentNode(taskID workflow.TaskID, nodeID workflow.NodeID, entered
 	return currentNode, nil
 }
 
-func currentNodeFromRow(row sqlitegen.ListTaskCurrentNodesRow) (workflow.CurrentNode, error) {
+func (s *Store) currentNodeFromRow(row sqlitegen.ListTaskCurrentNodesRow) (workflow.CurrentNode, error) {
 	var branchKey *workflow.TransitionBranchKey
 	if row.TransitionBranchKey.Valid {
 		value := workflow.TransitionBranchKey(row.TransitionBranchKey.String)
@@ -212,7 +216,7 @@ func currentNodeFromRow(row sqlitegen.ListTaskCurrentNodesRow) (workflow.Current
 	if err != nil {
 		return workflow.CurrentNode{}, err
 	}
-	priorValues, err := priorValuesFromJSON(row.PriorNodeValuesJson)
+	priorValues, err := priorValuesFromJSON(s.priorValuesContract, row.PriorNodeValuesJson)
 	if err != nil {
 		return workflow.CurrentNode{}, err
 	}
@@ -276,20 +280,13 @@ func currentNodeInputValuesFromJSON(raw string) (map[string]string, error) {
 	return values, nil
 }
 
-func priorValuesFromJSON(raw string) (workflow.MaterializedPriorValues, error) {
-	object := map[string]json.RawMessage{}
-	if err := json.Unmarshal([]byte(raw), &object); err != nil {
+func priorValuesFromJSON(contract jsoncontract.Internal, raw string) (workflow.MaterializedPriorValues, error) {
+	if err := contract.Validate([]byte(raw)); err != nil {
 		return workflow.MaterializedPriorValues{}, fmt.Errorf("decode current node prior values: %w", err)
-	}
-	if len(object) != 1 || object["transition_parameters"] == nil {
-		return workflow.MaterializedPriorValues{}, fmt.Errorf("decode current node prior values: expected exactly one transition_parameters object")
 	}
 	values := workflow.MaterializedPriorValues{}
 	if err := json.Unmarshal([]byte(raw), &values); err != nil {
 		return workflow.MaterializedPriorValues{}, fmt.Errorf("decode current node prior values: %w", err)
-	}
-	if values.TransitionParameters == nil {
-		return workflow.MaterializedPriorValues{}, fmt.Errorf("decode current node prior values: expected transition_parameters object")
 	}
 	return values, nil
 }
@@ -425,7 +422,7 @@ func (s *Store) ResumeCurrentNode(ctx context.Context, reference workflow.Curren
 	if locked != 1 {
 		return InterruptedCurrentNodeAttentionProjection{}, false, sql.ErrNoRows
 	}
-	projection, found, err := pendingInterruptedCurrentNodeAttentionProjection(ctx, q, reference)
+	projection, found, err := s.pendingInterruptedCurrentNodeAttentionProjection(ctx, q, reference)
 	if err != nil {
 		return InterruptedCurrentNodeAttentionProjection{}, false, err
 	}

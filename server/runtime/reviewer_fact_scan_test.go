@@ -8,7 +8,6 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/server/session/sessiontest"
-	"core/server/tools"
 	"core/shared/runtimeids"
 	"core/shared/sessioncontract"
 	"core/shared/textutil"
@@ -97,7 +96,7 @@ func TestReopenedEngineHydratesTypedReviewerFacts(t *testing.T) {
 	if _, _, err := appendTestEvent(t, store, stepID, reviewerError); err != nil {
 		t.Fatalf("append error: %v", err)
 	}
-	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	rows := mustTranscriptHydrationSnapshot(t, engine).CommittedRows
 	assertReviewerRuntimeFacts(t, rows, stepID, feedback, reviewerError)
 }
@@ -129,7 +128,7 @@ func TestReviewerFactsSurviveNewestAdjacentAndReopenedPages(t *testing.T) {
 			}
 		}
 	}
-	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	newest := mustEngineNewestSegmentPage(t, engine)
 	var pages []TranscriptSegmentPage
 	for page := newest; ; {
@@ -171,7 +170,7 @@ func TestReviewerFactsSurviveNewestAdjacentAndReopenedPages(t *testing.T) {
 			}
 		}
 	}
-	reopened := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	reopened := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	assertReviewerRuntimeFacts(t, mustTranscriptHydrationSnapshot(t, reopened).CommittedRows, stepID, feedback, reviewerError)
 }
 
@@ -197,7 +196,7 @@ func TestReviewerFactsSurviveSessionCloneReplay(t *testing.T) {
 		t.Fatalf("clone session: %v", err)
 	}
 	t.Cleanup(func() { _ = child.RemoveDurable() })
-	engine := mustNewTestEngine(t, child, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, child, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	assertReviewerRuntimeFacts(t, mustTranscriptHydrationSnapshot(t, engine).CommittedRows, stepID, feedback, reviewerError)
 }
 
@@ -266,7 +265,7 @@ func TestReviewerFactSteeringCommitFenceMatrix(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Run("uncommitted", func(t *testing.T) {
 				store := mustCreateTestSession(t)
-				engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+				engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
 				mustBlockTestEventLogAppends(t, store)
 				err := engine.steer("11111111-1111-4111-8111-111111111111", testCase.intent())
 				if err == nil {
@@ -280,7 +279,7 @@ func TestReviewerFactSteeringCommitFenceMatrix(t *testing.T) {
 				observerErr := errors.New("typed Reviewer observer failed")
 				gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 				store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
-				engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+				engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
 				gate.FailNext(observerErr)
 				err := engine.steer("22222222-2222-4222-8222-222222222222", testCase.intent())
 				if !errors.Is(err, observerErr) {

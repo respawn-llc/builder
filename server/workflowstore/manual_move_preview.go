@@ -128,7 +128,7 @@ func (s *Store) resolveManualMove(ctx context.Context, q *sqlitegen.Queries, req
 	if err != nil {
 		return ManualMovePreview{}, err
 	}
-	currentNodes, err := listTaskCurrentNodes(ctx, q, req.TaskID)
+	currentNodes, err := s.listTaskCurrentNodes(ctx, q, req.TaskID)
 	if err != nil {
 		return ManualMovePreview{}, err
 	}

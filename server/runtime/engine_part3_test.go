@@ -47,7 +47,7 @@ func TestSetReviewerEnabledConcurrentWithBusyStep(t *testing.T) {
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 
-	eng := mustNewTestEngine(t, store, mainClient, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolPatch, Handler: fakeTool{name: toolspec.ToolPatch, delay: 50 * time.Millisecond}}), Config{
+	eng := mustNewTestEngine(t, store, mainClient, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolPatch, Handler: fakeTool{name: toolspec.ToolPatch, delay: 50 * time.Millisecond}}), Config{
 		Model: "gpt-5",
 		Reviewer: ReviewerConfig{
 			Frequency:     "off",
@@ -100,7 +100,7 @@ func TestSetReviewerDisabledConcurrentWithBusyStepSkipsReviewerForCurrentRun(t *
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 
-	eng := mustNewTestEngine(t, store, mainClient, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolPatch, Handler: fakeTool{name: toolspec.ToolPatch, delay: 50 * time.Millisecond}}), Config{
+	eng := mustNewTestEngine(t, store, mainClient, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolPatch, Handler: fakeTool{name: toolspec.ToolPatch, delay: 50 * time.Millisecond}}), Config{
 		Model: "gpt-5",
 		Reviewer: ReviewerConfig{
 			Frequency:     "all",
@@ -288,7 +288,7 @@ func TestSubmitUserMessageContinuesAfterHostedToolOnlyTurn(t *testing.T) {
 	}}
 	client.caps = openAIFirstPartyNativeWebSearchCaps()
 
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model:         "gpt-5",
 		WebSearchMode: "native",
 		EnabledTools:  []toolspec.ID{toolspec.ToolWebSearch},
@@ -400,7 +400,7 @@ func TestMixedAcceptedCallsPersistInProviderOutputOrder(t *testing.T) {
 		t,
 		store,
 		client,
-		tools.NewRegistry(tools.HandlerRegistration{
+		newTestToolRegistry(t, tools.HandlerRegistration{
 			ID:      toolspec.ToolExecCommand,
 			Handler: fakeTool{name: toolspec.ToolExecCommand},
 		}),
@@ -544,7 +544,7 @@ func TestInvalidMixedAcceptedCallPositionsFailBeforeToolEffects(t *testing.T) {
 				t,
 				store,
 				client,
-				tools.NewRegistry(tools.HandlerRegistration{
+				newTestToolRegistry(t, tools.HandlerRegistration{
 					ID:      toolspec.ToolExecCommand,
 					Handler: probe,
 				}),
@@ -623,7 +623,7 @@ func TestHostedOnlyAcceptedCallsPersistInOutputOrder(t *testing.T) {
 		t,
 		store,
 		client,
-		tools.NewRegistry(),
+		newTestToolRegistry(t),
 		Config{
 			Model:         "gpt-5",
 			WebSearchMode: "native",
@@ -683,7 +683,7 @@ func TestHostedOnlyAcceptedCallsPersistInOutputOrder(t *testing.T) {
 		t,
 		reopened,
 		&fakeClient{},
-		tools.NewRegistry(),
+		newTestToolRegistry(t),
 		Config{Model: "gpt-5"},
 	)
 	snapshot := mustTranscriptHydrationSnapshot(t, restored)
@@ -716,7 +716,7 @@ func TestSubmitUserMessageContinuesAfterInvalidHostedWebSearch(t *testing.T) {
 	}}
 	client.caps = openAIFirstPartyNativeWebSearchCaps()
 
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model:         "gpt-5",
 		WebSearchMode: "native",
 		EnabledTools:  []toolspec.ID{toolspec.ToolWebSearch},
@@ -822,7 +822,7 @@ func TestSubmitUserMessageFinalAnswerWithHostedToolCallMaterializesToolBeforeFin
 	}}
 	client.caps = openAIFirstPartyNativeWebSearchCaps()
 
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model:         "gpt-5",
 		WebSearchMode: "native",
 		EnabledTools:  []toolspec.ID{toolspec.ToolWebSearch},
@@ -908,7 +908,7 @@ func TestSubmitUserMessageCommentaryWithoutToolCallsForcesNextLoop(t *testing.T)
 		},
 	}}
 
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
 
 	msg, err := eng.SubmitUserMessage(context.Background(), "do the task")
 	if err != nil {
@@ -957,7 +957,7 @@ func TestSubmitUserMessageViewImageToolFollowsModelCapabilities(t *testing.T) {
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done")},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolViewImage, Handler: fakeTool{name: toolspec.ToolViewImage}}), Config{
+	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolViewImage, Handler: fakeTool{name: toolspec.ToolViewImage}}), Config{
 		Model:        "gpt-5.3-codex",
 		EnabledTools: []toolspec.ID{toolspec.ToolViewImage},
 	})
@@ -988,7 +988,7 @@ func TestNewRejectsTransientProviderCapabilityFailure(t *testing.T) {
 		store,
 		mustMaterializeTestEventLog(t, store),
 		&fakeClient{capsErr: capabilityErr},
-		tools.NewRegistry(),
+		newTestToolRegistry(t),
 		Config{Model: "gpt-5.3-codex"},
 	)
 	if !errors.Is(err, capabilityErr) {
@@ -1024,7 +1024,7 @@ func TestEnsureLocked_PersistsProviderCapabilityOverrideOverTransportMetadata(t 
 		IsOpenAIFirstParty:            true,
 	}
 
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model:                        "gpt-5.4",
 		ProviderCapabilitiesOverride: override,
 		EnabledTools:                 []toolspec.ID{toolspec.ToolExecCommand},
@@ -1089,7 +1089,7 @@ func TestSubmitUserMessageMissingPhaseDefaultsToCommentaryAndWarns(t *testing.T)
 		},
 	}}
 
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
 
 	msg, err := eng.SubmitUserMessage(context.Background(), "do the task")
 	if err != nil {
@@ -1151,7 +1151,7 @@ func TestSubmitUserMessageMissingPhaseLegacyClientRemainsTerminal(t *testing.T) 
 	}}
 	client.caps = llm.ProviderCapabilities{ProviderID: "anthropic", SupportsResponsesAPI: false, IsOpenAIFirstParty: false}
 
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
 
 	msg, err := eng.SubmitUserMessage(context.Background(), "do the task")
 	if err != nil {
@@ -1193,7 +1193,7 @@ func TestSubmitUserMessageCompatibleResponsesMissingPhaseRemainsTerminal(t *test
 			Usage:         llm.Usage{WindowTokens: 200000},
 		}},
 	}
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "compatible-model"})
+	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "compatible-model"})
 
 	msg, err := eng.SubmitUserMessage(context.Background(), "do the task")
 	if err != nil {

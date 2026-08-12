@@ -83,11 +83,11 @@ func (s *Store) PendingInterruptedCurrentNodeAttentionProjection(ctx context.Con
 	if err := reference.Validate(); err != nil {
 		return InterruptedCurrentNodeAttentionProjection{}, false, err
 	}
-	return pendingInterruptedCurrentNodeAttentionProjection(ctx, s.queries, reference)
+	return s.pendingInterruptedCurrentNodeAttentionProjection(ctx, s.queries, reference)
 }
 
-func pendingInterruptedCurrentNodeAttentionProjection(ctx context.Context, q *sqlitegen.Queries, reference workflow.CurrentNodeReference) (InterruptedCurrentNodeAttentionProjection, bool, error) {
-	currentNode, err := currentNodeForReference(ctx, q, reference)
+func (s *Store) pendingInterruptedCurrentNodeAttentionProjection(ctx context.Context, q *sqlitegen.Queries, reference workflow.CurrentNodeReference) (InterruptedCurrentNodeAttentionProjection, bool, error) {
+	currentNode, err := s.currentNodeForReference(ctx, q, reference)
 	if errors.Is(err, sql.ErrNoRows) {
 		return InterruptedCurrentNodeAttentionProjection{}, false, nil
 	}
@@ -126,17 +126,17 @@ func pendingInterruptedCurrentNodeAttentionProjection(ctx context.Context, q *sq
 	}, true, nil
 }
 
-func taskAttentionResolution(ctx context.Context, q *sqlitegen.Queries, taskID workflow.TaskID) (TaskAttentionResolution, error) {
+func (s *Store) taskAttentionResolution(ctx context.Context, q *sqlitegen.Queries, taskID workflow.TaskID) (TaskAttentionResolution, error) {
 	resolution, err := taskApprovalAttentionResolution(ctx, q, taskID)
 	if err != nil {
 		return TaskAttentionResolution{}, err
 	}
-	currentNodes, err := listTaskCurrentNodes(ctx, q, taskID)
+	currentNodes, err := s.listTaskCurrentNodes(ctx, q, taskID)
 	if err != nil {
 		return TaskAttentionResolution{}, err
 	}
 	for _, currentNode := range currentNodes {
-		projection, found, err := pendingInterruptedCurrentNodeAttentionProjection(ctx, q, currentNode.Reference)
+		projection, found, err := s.pendingInterruptedCurrentNodeAttentionProjection(ctx, q, currentNode.Reference)
 		if err != nil {
 			return TaskAttentionResolution{}, err
 		}
@@ -170,14 +170,14 @@ func taskApprovalAttentionResolution(ctx context.Context, q *sqlitegen.Queries, 
 	return resolution, nil
 }
 
-func workflowAttentionResolution(ctx context.Context, q *sqlitegen.Queries, workflowID runtimeids.WorkflowID) (TaskAttentionResolution, error) {
+func (s *Store) workflowAttentionResolution(ctx context.Context, q *sqlitegen.Queries, workflowID runtimeids.WorkflowID) (TaskAttentionResolution, error) {
 	taskIDs, err := q.ListWorkflowTaskIDs(ctx, workflowID)
 	if err != nil {
 		return TaskAttentionResolution{}, err
 	}
 	var resolution TaskAttentionResolution
 	for _, taskID := range taskIDs {
-		taskResolution, err := taskAttentionResolution(ctx, q, workflow.TaskID(taskID))
+		taskResolution, err := s.taskAttentionResolution(ctx, q, workflow.TaskID(taskID))
 		if err != nil {
 			return TaskAttentionResolution{}, err
 		}

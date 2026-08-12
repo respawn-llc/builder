@@ -1,12 +1,25 @@
-package serverapi
+package serverapi_test
 
 import (
 	"encoding/json"
 	"reflect"
 	"testing"
 
+	"core/shared/jsoncontract"
 	"core/shared/runtimeids"
+	. "core/shared/serverapi"
+	"core/shared/serverjsoncontract"
 )
+
+func TestSessionExecutionEnvironmentResponseContractRejectsNullEnvironment(t *testing.T) {
+	contract, err := serverjsoncontract.PrepareSessionExecutionEnvironmentResponse(jsoncontract.NewPreparer(false))
+	if err != nil {
+		t.Fatalf("prepare Session execution response contract: %v", err)
+	}
+	if _, err := contract.Decode([]byte(`{"environment":null}`)); err == nil {
+		t.Fatal("Session execution response contract accepted null environment")
+	}
+}
 
 func TestSessionExecutionEnvironmentRoundTrip(t *testing.T) {
 	sessionID := mustExecutionEnvironmentSessionID(t, "environment-session")
@@ -29,9 +42,13 @@ func TestSessionExecutionEnvironmentRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
-	var got SessionExecutionEnvironmentResponse
-	if err := json.Unmarshal(encoded, &got); err != nil {
-		t.Fatalf("Unmarshal: %v", err)
+	contract, err := serverjsoncontract.PrepareSessionExecutionEnvironmentResponse(jsoncontract.NewPreparer(false))
+	if err != nil {
+		t.Fatalf("prepare Session execution response contract: %v", err)
+	}
+	got, err := contract.Decode(encoded)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("round trip = %+v, want %+v", got, want)
@@ -98,6 +115,10 @@ func TestSessionExecutionEnvironmentWorkspaceAndModelUnavailableReasonsAreTyped(
 }
 
 func TestSessionExecutionEnvironmentRejectsInvalidContractJSON(t *testing.T) {
+	contract, err := serverjsoncontract.PrepareSessionExecutionEnvironmentResponse(jsoncontract.NewPreparer(false))
+	if err != nil {
+		t.Fatalf("prepare Session execution response contract: %v", err)
+	}
 	for _, raw := range []string{
 		`{}`,
 		`{"environment":{}}`,
@@ -109,58 +130,69 @@ func TestSessionExecutionEnvironmentRejectsInvalidContractJSON(t *testing.T) {
 		`{"environment":{"session_id":"environment-session","workspace":{"kind":"unavailable","reason":"not_configured"},"branch":{"kind":"unavailable","reason":"not_git_repository"},"auth":{"kind":"unavailable","reason":"not_applicable"},"model":{"kind":"unavailable","reason":"unknown"}}}`,
 		`{"environment":{"session_id":"environment-session","workspace":{"kind":"unavailable","reason":"not_configured"},"branch":{"kind":"unavailable","reason":"not_git_repository"},"auth":{"kind":"unavailable","reason":"not_applicable"},"model":{"kind":"unavailable","reason":"not_configured"},"placeholder":"loading"}}`,
 	} {
-		var got SessionExecutionEnvironmentResponse
-		if err := json.Unmarshal([]byte(raw), &got); err == nil {
-			t.Fatalf("Unmarshal(%s) unexpectedly succeeded: %+v", raw, got)
+		if _, err := contract.Decode([]byte(raw)); err == nil {
+			t.Fatalf("Decode(%s) unexpectedly succeeded", raw)
 		}
 	}
 }
 
 func TestSessionExecutionEnvironmentFieldDecodersRemainStrictAndTyped(t *testing.T) {
+	contract, err := serverjsoncontract.PrepareSessionExecutionEnvironmentResponse(jsoncontract.NewPreparer(false))
+	if err != nil {
+		t.Fatalf("prepare Session execution response contract: %v", err)
+	}
 	tests := []struct {
-		name    string
-		target  func() any
-		valid   string
-		invalid string
+		name     string
+		response func(string) string
+		valid    string
+		invalid  string
 	}{
 		{
-			name:    "workspace",
-			target:  func() any { return &SessionExecutionWorkspaceField{} },
+			name: "workspace",
+			response: func(field string) string {
+				return sessionExecutionEnvironmentContractJSON(field, `{"kind":"unavailable","reason":"not_git_repository"}`, `{"kind":"unavailable","reason":"not_applicable"}`, `{"kind":"unavailable","reason":"not_configured"}`)
+			},
 			valid:   `{"kind":"available","value":{"path":"/workspace"}}`,
 			invalid: `{"kind":"available","value":{"name":"main"}}`,
 		},
 		{
-			name:    "branch",
-			target:  func() any { return &SessionExecutionBranchField{} },
+			name: "branch",
+			response: func(field string) string {
+				return sessionExecutionEnvironmentContractJSON(`{"kind":"unavailable","reason":"not_configured"}`, field, `{"kind":"unavailable","reason":"not_applicable"}`, `{"kind":"unavailable","reason":"not_configured"}`)
+			},
 			valid:   `{"kind":"available","value":{"name":"main"}}`,
 			invalid: `{"kind":"available","value":{"path":"/workspace"}}`,
 		},
 		{
-			name:    "auth",
-			target:  func() any { return &SessionExecutionAuthField{} },
+			name: "auth",
+			response: func(field string) string {
+				return sessionExecutionEnvironmentContractJSON(`{"kind":"unavailable","reason":"not_configured"}`, `{"kind":"unavailable","reason":"not_git_repository"}`, field, `{"kind":"unavailable","reason":"not_configured"}`)
+			},
 			valid:   `{"kind":"available","value":{"provider":"openai","method":"none"}}`,
 			invalid: `{"kind":"available","value":{"provider":"openai","method":"unknown"}}`,
 		},
 		{
-			name:    "model",
-			target:  func() any { return &SessionExecutionModelField{} },
+			name: "model",
+			response: func(field string) string {
+				return sessionExecutionEnvironmentContractJSON(`{"kind":"unavailable","reason":"not_configured"}`, `{"kind":"unavailable","reason":"not_git_repository"}`, `{"kind":"unavailable","reason":"not_applicable"}`, field)
+			},
 			valid:   `{"kind":"available","value":{"name":"gpt-5","provider":"openai","locked":true}}`,
 			invalid: `{"kind":"available","value":{"name":"gpt-5","provider":""}}`,
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if err := json.Unmarshal([]byte(test.valid), test.target()); err != nil {
+			if _, err := contract.Decode([]byte(test.response(test.valid))); err != nil {
 				t.Fatalf("valid typed field: %v", err)
 			}
-			if err := json.Unmarshal([]byte(test.invalid), test.target()); err == nil {
+			if _, err := contract.Decode([]byte(test.response(test.invalid))); err == nil {
 				t.Fatal("field accepted an invalid typed value")
 			}
 			withUnknown := test.valid[:len(test.valid)-1] + `,"unknown":true}`
-			if err := json.Unmarshal([]byte(withUnknown), test.target()); err == nil {
+			if _, err := contract.Decode([]byte(test.response(withUnknown))); err == nil {
 				t.Fatal("field accepted an unknown member")
 			}
-			if err := json.Unmarshal([]byte(test.valid+` {}`), test.target()); err == nil {
+			if _, err := contract.Decode([]byte(test.response(test.valid) + ` {}`)); err == nil {
 				t.Fatal("field accepted trailing JSON")
 			}
 		})
@@ -168,6 +200,10 @@ func TestSessionExecutionEnvironmentFieldDecodersRemainStrictAndTyped(t *testing
 }
 
 func TestSessionExecutionEnvironmentFieldDecoderRejectsNullAndIncompatibleMembers(t *testing.T) {
+	contract, err := serverjsoncontract.PrepareSessionExecutionEnvironmentResponse(jsoncontract.NewPreparer(false))
+	if err != nil {
+		t.Fatalf("prepare Session execution response contract: %v", err)
+	}
 	for _, raw := range []string{
 		`{"kind":"available","value":null}`,
 		`{"kind":"available","value":{"path":"/workspace"},"reason":null}`,
@@ -182,9 +218,14 @@ func TestSessionExecutionEnvironmentFieldDecoderRejectsNullAndIncompatibleMember
 		`{"kind":"failed","error":{"code":"source_failure","message":"failed"},"reason":null}`,
 		`{"kind":"failed","error":{"code":"source_failure","message":"failed","unknown":true}}`,
 	} {
-		var field SessionExecutionWorkspaceField
-		if err := json.Unmarshal([]byte(raw), &field); err == nil {
-			t.Fatalf("Unmarshal(%s) unexpectedly succeeded: %+v", raw, field)
+		response := sessionExecutionEnvironmentContractJSON(
+			raw,
+			`{"kind":"unavailable","reason":"not_git_repository"}`,
+			`{"kind":"unavailable","reason":"not_applicable"}`,
+			`{"kind":"unavailable","reason":"not_configured"}`,
+		)
+		if _, err := contract.Decode([]byte(response)); err == nil {
+			t.Fatalf("Decode(%s) unexpectedly succeeded", raw)
 		}
 	}
 }
@@ -199,13 +240,43 @@ func TestSessionExecutionEnvironmentRequestUsesAuthoritativeSessionID(t *testing
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
-	var decoded SessionExecutionEnvironmentRequest
-	if err := json.Unmarshal(encoded, &decoded); err != nil {
-		t.Fatalf("Unmarshal: %v", err)
+	contract, err := serverjsoncontract.PrepareSessionExecutionEnvironmentRequest(jsoncontract.NewPreparer(false))
+	if err != nil {
+		t.Fatalf("prepare Session execution request contract: %v", err)
+	}
+	decoded, err := contract.Decode(encoded)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
 	}
 	if decoded.SessionID != sessionID {
 		t.Fatalf("session ID = %q, want %q", decoded.SessionID.String(), sessionID.String())
 	}
+}
+
+func TestSessionExecutionEnvironmentRequestContractRejectsInvalidShapes(t *testing.T) {
+	contract, err := serverjsoncontract.PrepareSessionExecutionEnvironmentRequest(jsoncontract.NewPreparer(false))
+	if err != nil {
+		t.Fatalf("prepare Session execution request contract: %v", err)
+	}
+	for _, raw := range []string{
+		`null`,
+		`{}`,
+		`{"session_id":null}`,
+		`{"session_id":7}`,
+		`{"session_id":"environment-session","extra":true}`,
+		`{"session_id":"environment-session"} {}`,
+	} {
+		if _, err := contract.Decode([]byte(raw)); err == nil {
+			t.Fatalf("Session execution request contract accepted %s", raw)
+		}
+	}
+}
+
+func sessionExecutionEnvironmentContractJSON(workspace, branch, auth, model string) string {
+	return `{"environment":{"session_id":"environment-session","workspace":` + workspace +
+		`,"branch":` + branch +
+		`,"auth":` + auth +
+		`,"model":` + model + `}}`
 }
 
 func mustExecutionEnvironmentSessionID(t *testing.T, raw string) runtimeids.SessionID {
