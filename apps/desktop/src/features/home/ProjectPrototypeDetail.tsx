@@ -21,6 +21,7 @@ import {
   VirtualizedInfiniteList,
 } from "@/ui";
 import { ProjectTasksSurface } from "./ProjectTasksSurface";
+import { createProjectTasksViewMemory } from "./projectTasksViewMemory";
 
 type ProjectPrototypeTab = "tasks" | "sessions" | "subagents";
 
@@ -34,6 +35,7 @@ export function ProjectPrototypeDetail({
   const { t } = useTranslation();
   const { api } = useAppServices();
   const [tab, setTab] = useState<ProjectPrototypeTab>("tasks");
+  const [taskListViewMemory] = useState(createProjectTasksViewMemory);
   const mainSessionsQuery = useInfiniteQuery({
     ...mainSessionCatalogInfiniteQueryOptions(api, projectID),
     enabled: tab === "sessions",
@@ -62,7 +64,11 @@ export function ProjectPrototypeDetail({
       </div>
       <div className="min-h-0 flex-1">
         {tab === "tasks" ? (
-          <ProjectTasksSurface projectID={projectID} sidebarMode={sidebarMode} />
+          <ProjectTasksSurface
+            projectID={projectID}
+            sidebarMode={sidebarMode}
+            viewMemory={taskListViewMemory}
+          />
         ) : (
           <SessionPrototypeList query={tab === "sessions" ? mainSessionsQuery : subagentSessionsQuery} />
         )}
