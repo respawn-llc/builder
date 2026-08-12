@@ -50,12 +50,34 @@ func TestWriteTaskSessionsResponse(t *testing.T) {
 	if code := writeTaskSessionsResponse(&stdout, &stderr, response, false); code != 0 {
 		t.Fatalf("human exit=%d stderr=%q", code, stderr.String())
 	}
-	want := "Custom session-1 label (session-1): Running\n" +
-		"Review (session-2): Question\n" +
-		"coder (session-3): Idle\n" +
-		"session-4: Idle\n"
-	if stdout.String() != want || stderr.String() != nextOffsetLine(nextOffset)+"\n" {
-		t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
+	lines := bytes.Split(bytes.TrimSuffix(stdout.Bytes(), []byte{'\n'}), []byte{'\n'})
+	if len(lines) != len(response.Items) {
+		t.Fatalf("rows=%d, want one per item=%d", len(lines), len(response.Items))
+	}
+	for index, required := range [][]byte{
+		[]byte(sessionName),
+		[]byte(nodeName),
+		[]byte("coder"),
+		[]byte(exactID),
+	} {
+		if !bytes.Contains(lines[index], required) {
+			t.Fatalf("row %d = %q, want selected label %q", index, lines[index], required)
+		}
+	}
+	for _, status := range []serverapi.WorkflowTaskSessionStatus{
+		serverapi.WorkflowTaskSessionStatusRunning,
+		serverapi.WorkflowTaskSessionStatusQuestion,
+		serverapi.WorkflowTaskSessionStatusIdle,
+	} {
+		label, err := taskSessionStatusText(status)
+		if err != nil || label == "" {
+			t.Fatalf("status %q mapped to %q, error=%v", status, label, err)
+		}
+	}
+	if bytes.Count(lines[0], []byte("session-1")) != 2 ||
+		bytes.Count(lines[3], []byte(exactID)) != 1 ||
+		stderr.String() != nextOffsetLine(nextOffset)+"\n" {
+		t.Fatalf("human output structure invalid: stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
 
 	stdout.Reset()

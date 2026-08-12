@@ -2282,9 +2282,6 @@ func (s *Service) ListWorkflowTaskSessions(ctx context.Context, req serverapi.Wo
 	if err != nil {
 		return serverapi.WorkflowTaskSessionListResponse{}, err
 	}
-	if err := response.ValidateForTask(strings.TrimSpace(req.TaskID)); err != nil {
-		return serverapi.WorkflowTaskSessionListResponse{}, err
-	}
 	return response, nil
 }
 

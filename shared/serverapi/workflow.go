@@ -3052,49 +3052,6 @@ func (r WorkflowTaskActivityListResponse) ValidateForTask(taskID string) error {
 	})
 }
 
-func (r WorkflowTaskSessionListResponse) Validate() error {
-	if err := validateRequired("task_id", r.TaskID); err != nil {
-		return err
-	}
-	if r.Items == nil {
-		return workflowRequestError(WorkflowRequestErrorRequired, "items", "items is required")
-	}
-	for index, item := range r.Items {
-		if err := validateRequired(fmt.Sprintf("items[%d].session_id", index), item.SessionID); err != nil {
-			return err
-		}
-		if err := validateOptionalNonBlank(fmt.Sprintf("items[%d].session_name", index), item.SessionName); err != nil {
-			return err
-		}
-		if err := validateOptionalNonBlank(fmt.Sprintf("items[%d].node_name", index), item.NodeName); err != nil {
-			return err
-		}
-		if err := validateRequired(fmt.Sprintf("items[%d].agent_role", index), item.AgentRole); err != nil {
-			return err
-		}
-		switch item.Status {
-		case WorkflowTaskSessionStatusRunning, WorkflowTaskSessionStatusQuestion, WorkflowTaskSessionStatusIdle:
-		default:
-			return workflowRequestError(
-				WorkflowRequestErrorInvalidValue,
-				fmt.Sprintf("items[%d].status", index),
-				"Task Session status is invalid",
-			)
-		}
-	}
-	return nil
-}
-
-func (r WorkflowTaskSessionListResponse) ValidateForTask(taskID string) error {
-	if err := r.Validate(); err != nil {
-		return err
-	}
-	if r.TaskID != strings.TrimSpace(taskID) {
-		return workflowRequestError(WorkflowRequestErrorInvalidValue, "task_id", "task_id must match request task_id")
-	}
-	return nil
-}
-
 func validateWorkflowTaskBoundResponse[T any](taskID string, validate func() error, items []T, itemTaskID func(T) string) error {
 	if err := validateRequired("task_id", taskID); err != nil {
 		return err
