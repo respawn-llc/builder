@@ -73,7 +73,6 @@ func TestCommittedTimeRangeAndEligibility(t *testing.T) {
 		})
 	}
 }
-
 func TestCommittedTimeEventEnvelopeAndNullRejection(t *testing.T) {
 	content := "message"
 	zero := transcript.CommittedAtUnixMs(0)
@@ -114,7 +113,6 @@ func TestCommittedTimeEventEnvelopeAndNullRejection(t *testing.T) {
 		t.Fatal("ineligible timestamp accepted")
 	}
 }
-
 func TestCommittedTimeAtomicAppendSamplesClockOnce(t *testing.T) {
 	now := time.UnixMilli(1_723_456_789_012).UTC()
 	calls := 0
@@ -146,7 +144,6 @@ func TestCommittedTimeAtomicAppendSamplesClockOnce(t *testing.T) {
 		t.Fatalf("ineligible timestamp=%v", records[1].CommittedAtUnixMs())
 	}
 }
-
 func TestReplayPreservesPresentTimeThroughForkCloneAndReplacementRebase(t *testing.T) {
 	parent := newSessionTestStore(t)
 	log := mustMaterializeSessionTestEventLog(t, parent)

@@ -251,7 +251,6 @@ func TestTranscriptMessageJSONCommittedTimeFieldIsTypedAndOptional(t *testing.T)
 			}
 		}
 	}
-
 	absentRows := []TranscriptCommittedRow{
 		{
 			Visibility: transcript.EntryVisibilityOngoing,
@@ -273,7 +272,6 @@ func TestTranscriptMessageJSONCommittedTimeFieldIsTypedAndOptional(t *testing.T)
 			t.Fatalf("absent %q row emitted timestamp: %s", row.Kind, data)
 		}
 	}
-
 	nonMessageRows := []TranscriptCommittedRow{
 		{
 			Visibility: transcript.EntryVisibilityDetail,
@@ -325,7 +323,6 @@ func TestTranscriptMessageJSONCommittedTimeFieldIsTypedAndOptional(t *testing.T)
 		}
 	}
 }
-
 func transcriptMessagePayloadHasCommittedTimeField(t *testing.T, data []byte) bool {
 	t.Helper()
 	var envelope map[string]json.RawMessage
@@ -346,4 +343,12 @@ func transcriptMessagePayloadHasCommittedTimeField(t *testing.T, data []byte) bo
 		}
 	}
 	return false
+}
+
+func TestTranscriptMessageJSONRejectsExplicitNullCommittedTime(t *testing.T) {
+	for _, data := range []string{`{"sequence":2,"kind":"committed_row","payload":{"Visibility":"ongoing","Kind":"user","User":{"StepID":"22222222-2222-4222-8222-222222222222","Text":"user","committed_at_unix_ms":null}}}`, `{"sequence":2,"kind":"committed_row","payload":{"Visibility":"ongoing","Kind":"assistant","Assistant":{"StepID":"22222222-2222-4222-8222-222222222222","Text":"assistant","Phase":"final_answer","committed_at_unix_ms":null}}}`} {
+		if err := json.Unmarshal([]byte(data), new(TranscriptMessage)); err == nil {
+			t.Fatalf("explicit null committed time accepted: %s", data)
+		}
+	}
 }
