@@ -191,16 +191,23 @@ func patchToolCallMeta(toolID toolspec.ID) func(ToolCallContext, json.RawMessage
 
 func editToolCallMeta(toolID toolspec.ID) func(ToolCallContext, json.RawMessage) transcript.ToolCallMeta {
 	return func(ctx ToolCallContext, raw json.RawMessage) transcript.ToolCallMeta {
-		var in EditInput
-		if err := json.Unmarshal(raw, &in); err != nil {
+		value, err := jsoncontract.DecodeValue(raw)
+		if err != nil {
 			meta := defaultToolCallMeta(toolID)(ctx, raw)
-			if path := strings.TrimSpace(in.Path); path != "" {
-				meta.Command = path
-				meta.CompactText = path
-			}
 			meta.RenderHint = &transcript.ToolRenderHint{Kind: transcript.ToolRenderKindDiff}
 			return meta
 		}
+		path, pathPresent := stringField(value, "path")
+		oldString, oldStringPresent := exactStringField(value, "old_string")
+		newString, newStringPresent := exactStringField(value, "new_string")
+		if !pathPresent || path == "" ||
+			!oldStringPresent || !newStringPresent ||
+			oldString == newString {
+			meta := defaultToolCallMeta(toolID)(ctx, raw)
+			meta.RenderHint = &transcript.ToolRenderHint{Kind: transcript.ToolRenderKindDiff}
+			return meta
+		}
+		in := EditInput{Path: path, OldString: oldString, NewString: newString}
 		rendered := patchformat.RenderEdit(in.Path, in.OldString, in.NewString, ctx.WorkingDir)
 		detail := rendered.DetailText()
 		compact := rendered.SummaryText()
@@ -1004,6 +1011,14 @@ func stringField(value jsoncontract.Value, name string) (string, bool) {
 	}
 	text, ok := field.String()
 	return strings.TrimSpace(text), ok
+}
+
+func exactStringField(value jsoncontract.Value, name string) (string, bool) {
+	field, ok := value.Field(name)
+	if !ok {
+		return "", false
+	}
+	return field.String()
 }
 
 func intField(value jsoncontract.Value, name string) (int, bool) {

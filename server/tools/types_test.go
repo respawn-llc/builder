@@ -393,6 +393,27 @@ func TestEditDefinitionBuildsStructuredPresentationFromCallInput(t *testing.T) {
 	}
 }
 
+func TestEditDefinitionFallsBackForIncompleteInput(t *testing.T) {
+	edit := requireDefinition(t, toolspec.ToolEdit)
+	for _, raw := range []string{
+		`{"path":"a.go","old_string":"old"}`,
+		`{"path":"a.go","new_string":"new"}`,
+		`{"old_string":"old","new_string":"new"}`,
+		`{"path":"a.go","old_string":"same","new_string":"same"}`,
+	} {
+		meta := edit.BuildToolCallMeta(
+			ToolCallContext{WorkingDir: "/workspace"},
+			json.RawMessage(raw),
+		)
+		if meta.PatchRender != nil {
+			t.Fatalf("incomplete edit input %s produced a structured diff: %+v", raw, meta)
+		}
+		if meta.RenderHint == nil || meta.RenderHint.Kind != transcript.ToolRenderKindDiff {
+			t.Fatalf("incomplete edit input %s lost its diff render hint: %+v", raw, meta)
+		}
+	}
+}
+
 func TestDefinitionContractsFormatLegacyAskQuestionFreeformOnSingleLine(t *testing.T) {
 	askQuestion := requireDefinition(t, toolspec.ToolAskQuestion)
 	got := askQuestion.FormatToolResult(Result{
