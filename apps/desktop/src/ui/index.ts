@@ -113,10 +113,18 @@ export { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./radi
 export { dismissStatusToast, showStatusToast } from "./statusToast";
 export { VirtualizedInfiniteList } from "./VirtualizedInfiniteList";
 export {
+  VirtualizedGroupedGrid,
+  type VirtualizedGroupedGridCell,
+  type VirtualizedGroupedGridEntry,
+  type VirtualizedGroupedGridProps,
+} from "./VirtualizedGroupedGrid";
+export {
   VirtualizedFrame,
   type VirtualizedFrameEntry,
   type VirtualizedFrameLoadTrigger,
   type VirtualizedFrameProps,
+  type VirtualizedFrameScrollCommand,
+  type VirtualizedFrameScrollMetrics,
 } from "./VirtualizedFrame";
 export {
   createVirtualizedPixelOffsetRequest,

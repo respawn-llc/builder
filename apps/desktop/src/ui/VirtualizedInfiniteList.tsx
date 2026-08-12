@@ -283,19 +283,21 @@ function singleStreamEntries<TItem>({
   if (previousBoundary !== undefined) {
     entries.push({
       key: previousBoundaryKey,
+      kind: "boundary",
       render: (): ReactNode => <InfiniteListBoundary direction="previous" state={previousBoundary} />,
     });
   }
   if (header !== undefined) {
-    entries.push({ key: headerKey, render: (): ReactNode => header });
+    entries.push({ key: headerKey, kind: "content", render: (): ReactNode => header });
   }
   if (items.length === 0 && empty !== undefined) {
-    entries.push({ key: emptyKey, render: (): ReactNode => empty });
+    entries.push({ key: emptyKey, kind: "content", render: (): ReactNode => empty });
   } else {
     items.forEach((item, itemIndex) => {
       const key = getItemKey(item);
       entries.push({
         key,
+        kind: "content",
         anchorKey: getItemAnchorKey(item),
         occurrenceKey: getItemOccurrenceKey(item),
         render: (): ReactNode => renderItem(item, itemIndex),
@@ -305,11 +307,13 @@ function singleStreamEntries<TItem>({
   if (nextBoundary !== undefined) {
     entries.push({
       key: nextBoundaryKey,
+      kind: "boundary",
       render: (): ReactNode => <InfiniteListBoundary direction="next" state={nextBoundary} />,
     });
   } else if (hasNextPage) {
     entries.push({
       key: `placeholder-${entries.length.toString()}`,
+      kind: "boundary",
       render: (): ReactNode => (
         <VirtualizedPlaceholder loading={isFetchingNextPage} loadingLabel={loadingLabel} />
       ),

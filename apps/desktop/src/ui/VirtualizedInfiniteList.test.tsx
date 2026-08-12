@@ -170,6 +170,7 @@ describe("VirtualizedInfiniteList pixel restoration", () => {
         entries={[
           {
             key: "row-a",
+            kind: "content",
             render: () => <div role="gridcell">A</div>,
           },
         ]}

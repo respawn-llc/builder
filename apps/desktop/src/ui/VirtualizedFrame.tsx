@@ -21,8 +21,13 @@ import { shouldAdjustScrollForVirtualizedResize } from "./virtualizedResizePolic
 
 export type VirtualizedFrameEntry = Readonly<{
   key: string;
+  kind: "boundary" | "column-header" | "content" | "group-header";
   anchorKey?: string | undefined;
   occurrenceKey?: string | undefined;
+  ariaLabel?: string | undefined;
+  ariaSelected?: boolean | undefined;
+  className?: string | undefined;
+  sticky?: boolean | undefined;
   render: () => ReactNode;
 }>;
 
@@ -32,6 +37,21 @@ export type VirtualizedFrameLoadTrigger = Readonly<{
   hasNextPage: boolean;
   isFetchingNextPage: boolean;
   onLoadMore?: (() => void) | undefined;
+}>;
+
+export type VirtualizedFrameScrollCommand =
+  | Readonly<{ key: string; target: "top" }>
+  | Readonly<{
+      align: "auto" | "center" | "end" | "start";
+      entryKey: string;
+      key: string;
+      target: "entry";
+    }>;
+
+export type VirtualizedFrameScrollMetrics = Readonly<{
+  atBottom: boolean;
+  atTop: boolean;
+  overflows: boolean;
 }>;
 
 export type VirtualizedFrameProps = Readonly<{
@@ -55,6 +75,8 @@ export type VirtualizedFrameProps = Readonly<{
   pinnedItemKeys?: ReadonlySet<string> | undefined;
   pixelOffsetRequest?: VirtualizedPixelOffsetRequest | undefined;
   canApplyPixelOffset: boolean;
+  scrollCommand?: VirtualizedFrameScrollCommand | undefined;
+  onScrollMetricsChange?: ((metrics: VirtualizedFrameScrollMetrics) => void) | undefined;
 }>;
 
 export function VirtualizedFrame({
@@ -78,6 +100,8 @@ export function VirtualizedFrame({
   pinnedItemKeys,
   pixelOffsetRequest,
   canApplyPixelOffset,
+  scrollCommand,
+  onScrollMetricsChange,
 }: VirtualizedFrameProps) {
   const validatedPixelOffsetRequest = requireVirtualizedPixelOffsetRequest(pixelOffsetRequest);
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -90,6 +114,7 @@ export function VirtualizedFrame({
   );
   const lastInitialScrollKeyRef = useRef<string | null>(null);
   const lastPixelOffsetKeyRef = useRef<string | null>(null);
+  const lastScrollCommandKeyRef = useRef<string | null>(null);
   const pixelOffsetAppliedKeyRef = useRef<string | null>(null);
   const leadingAnchorRef = useRef<VirtualizedLeadingAnchor | null>(null);
   const previousAnchorEntriesRef = useRef<readonly VirtualizedAnchorEntry[]>([]);
@@ -123,6 +148,7 @@ export function VirtualizedFrame({
       : (item: VirtualItem) =>
           shouldAdjustScrollForVirtualizedResize(nonAdjustingResizeItemKey, String(item.key));
   const virtualItems = virtualizer.getVirtualItems();
+  const totalSize = virtualizer.getTotalSize();
   const isFallbackRendering = virtualItems.length === 0;
   const fallbackIndexes = fallbackVirtualIndexes({
     count: entries.length,
@@ -173,6 +199,36 @@ export function VirtualizedFrame({
       inRowOffset: scrollTop - rowStart,
     };
   }, [entries, estimateSize, paddingStart, virtualizer]);
+  const reportScrollMetrics = useCallback(() => {
+    const element = scrollRef.current;
+    if (element === null || onScrollMetricsChange === undefined) return;
+    const maxOffset = Math.max(0, Math.max(element.scrollHeight, totalSize) - element.clientHeight);
+    onScrollMetricsChange({
+      atBottom: element.scrollTop >= maxOffset - 1,
+      atTop: element.scrollTop <= 1,
+      overflows: maxOffset > 1,
+    });
+  }, [onScrollMetricsChange, totalSize]);
+  const handleScroll = useCallback(() => {
+    captureLeadingAnchor();
+    reportScrollMetrics();
+  }, [captureLeadingAnchor, reportScrollMetrics]);
+
+  useLayoutEffect(() => {
+    reportScrollMetrics();
+  }, [entries, reportScrollMetrics]);
+
+  useLayoutEffect(() => {
+    const element = scrollRef.current;
+    if (element === null || onScrollMetricsChange === undefined || typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(reportScrollMetrics);
+    observer.observe(element);
+    return () => {
+      observer.disconnect();
+    };
+  }, [onScrollMetricsChange, reportScrollMetrics]);
 
   useEffect(() => {
     const scroll = resolveVirtualizedInitialScroll({
@@ -205,6 +261,24 @@ export function VirtualizedFrame({
     lastPixelOffsetKeyRef.current = validatedPixelOffsetRequest.key;
     pixelOffsetAppliedKeyRef.current = validatedPixelOffsetRequest.key;
   }, [canApplyPixelOffset, validatedPixelOffsetRequest, virtualizer]);
+
+  useLayoutEffect(() => {
+    if (scrollCommand === undefined || lastScrollCommandKeyRef.current === scrollCommand.key) return;
+    if (scrollCommand.key.trim() === "") {
+      throw new Error("virtualized frame scroll command key is required");
+    }
+    if (scrollCommand.target === "top") {
+      virtualizer.scrollToOffset(0, { behavior: "auto" });
+    } else {
+      const entryIndex = entries.findIndex((entry) => entry.key === scrollCommand.entryKey);
+      if (entryIndex < 0) return;
+      virtualizer.scrollToIndex(entryIndex, {
+        align: scrollCommand.align,
+        behavior: "auto",
+      });
+    }
+    lastScrollCommandKeyRef.current = scrollCommand.key;
+  }, [entries, scrollCommand, virtualizer]);
 
   useLayoutEffect(() => {
     const currentEntries = entries.flatMap((entry, index) =>
@@ -262,7 +336,7 @@ export function VirtualizedFrame({
         ariaLabel={ariaLabel}
         className={className}
         id={id}
-        onScroll={captureLeadingAnchor}
+        onScroll={handleScroll}
         ref={setScrollElement}
         role={role}
         testId={testId}
@@ -271,12 +345,21 @@ export function VirtualizedFrame({
           const entry = entries[index];
           return entry === undefined ? null : (
             <div
-              className={virtualRowClassName({
-                count: entries.length,
-                index,
-                rowSpacing,
-                virtualized: false,
-              })}
+              aria-label={entry.ariaLabel}
+              aria-selected={entry.ariaSelected}
+              className={cx(
+                entry.sticky && "sticky top-0 z-[1]",
+                virtualRowClassName(
+                  {
+                    count: entries.length,
+                    index,
+                    rowSpacing,
+                    virtualized: false,
+                  },
+                  entry.className,
+                  entry.sticky,
+                ),
+              )}
               key={entry.key}
               role={rowRole}
               style={fallbackRowStyle({
@@ -300,30 +383,38 @@ export function VirtualizedFrame({
       ariaLabel={ariaLabel}
       className={className}
       id={id}
-      onScroll={captureLeadingAnchor}
+      onScroll={handleScroll}
       ref={setScrollElement}
       role={role}
       testId={testId}
     >
-      <div className="relative w-full" style={{ height: `${virtualizer.getTotalSize().toString()}px` }}>
+      <div className="relative w-full" style={{ height: `${totalSize.toString()}px` }}>
         {virtualItems.map((virtualItem) => {
           const entry = entries[virtualItem.index];
           return entry === undefined ? null : (
             <div
               className={cx(
-                "absolute top-0 left-0 w-full",
-                virtualRowClassName({
-                  count: entries.length,
-                  index: virtualItem.index,
-                  rowSpacing,
-                  virtualized: true,
-                }),
+                entry.sticky ? "sticky top-0 left-0 z-[1] w-full" : "absolute top-0 left-0 w-full",
+                virtualRowClassName(
+                  {
+                    count: entries.length,
+                    index: virtualItem.index,
+                    rowSpacing,
+                    virtualized: true,
+                  },
+                  entry.className,
+                  entry.sticky,
+                ),
               )}
+              aria-label={entry.ariaLabel}
+              aria-selected={entry.ariaSelected}
               data-index={virtualItem.index}
               key={virtualItem.key}
               ref={virtualizer.measureElement}
               role={rowRole}
-              style={{ transform: `translateY(${virtualItem.start.toString()}px)` }}
+              style={
+                entry.sticky ? undefined : { transform: `translateY(${virtualItem.start.toString()}px)` }
+              }
             >
               {entry.render()}
             </div>
@@ -404,24 +495,32 @@ function VirtualizedFrameLoadTriggerEffect({
   return null;
 }
 
-function virtualRowClassName({
-  count,
-  index,
-  rowSpacing,
-  virtualized,
-}: Readonly<{
-  count: number;
-  index: number;
-  rowSpacing: "default" | "compact" | "tight";
-  virtualized: boolean;
-}>): string {
+function virtualRowClassName(
+  {
+    count,
+    index,
+    rowSpacing,
+    virtualized,
+  }: Readonly<{
+    count: number;
+    index: number;
+    rowSpacing: "default" | "compact" | "tight";
+    virtualized: boolean;
+  }>,
+  className?: string,
+  sticky?: boolean,
+): string {
   if (rowSpacing === "compact") {
-    return cx("pb-[var(--space-2)]", index === count - 1 && "pb-0");
+    return cx("pb-[var(--space-2)]", index === count - 1 && "pb-0", sticky && "self-start", className);
   }
   if (rowSpacing === "tight") {
-    return cx("pb-[var(--space-1)]", index === count - 1 && "pb-0");
+    return cx("pb-[var(--space-1)]", index === count - 1 && "pb-0", sticky && "self-start", className);
   }
-  return cx(virtualized ? index !== 0 && "pt-[var(--space-3)]" : "pt-[var(--space-3)] first:pt-0");
+  return cx(
+    virtualized ? index !== 0 && "pt-[var(--space-3)]" : "pt-[var(--space-3)] first:pt-0",
+    sticky && "self-start",
+    className,
+  );
 }
 
 function fallbackRowStyle({
