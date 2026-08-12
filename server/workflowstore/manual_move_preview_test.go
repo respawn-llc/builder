@@ -912,6 +912,105 @@ WHERE task_id = ?
 	}
 }
 
+func TestManualMoveRetainedTargetStartsFreshWhenUnboundSourceHasNoHistory(t *testing.T) {
+	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
+	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
+	definition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	review := nodeByKey(t, definition, "review")
+	audit := nodeByKey(t, definition, "audit")
+	reviewEdgeID := edgeByKey(t, definition, "review").ID
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
+		reviewEdge := workflowGraphSaveEdgeRecord(t, req.Edges, reviewEdgeID)
+		reviewEdge.ContextMode = workflow.ContextModeContinueSession
+		reviewEdge.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourcePreviousTargetOrNew}
+		appendManualMoveRetainedReviewEdge(
+			req,
+			workflowID,
+			audit,
+			review,
+			"unbound-no-history",
+			workflow.ContextSourcePreviousTarget,
+		)
+	})
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	plan := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	associateAndBindCurrentNodeSessionForTest(t, ctx, store, binding, cfg, plan.Reference)
+	reviewResult, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       plan.Reference,
+		TransitionID: "review",
+		OutputValues: map[string]string{"summary": "implementation A"},
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode Plan: %v", err)
+	}
+	firstReview := reviewResult.Mutation.Created[0]
+	retainedReviewSessionID := associateAndBindCurrentNodeSessionForTest(
+		t, ctx, store, binding, cfg, firstReview.Reference,
+	)
+	auditResult, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source: firstReview.Reference, TransitionID: "audit",
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode Review: %v", err)
+	}
+	replaceSerialCurrentNodeBindingFixture(
+		t,
+		ctx,
+		store,
+		auditResult.Mutation.Created[0],
+		workflow.NodeIDOf(audit),
+		nil,
+		workflow.DeferredSelfMaterializedContinuationSource(),
+	)
+	if _, err := store.db.ExecContext(ctx, `
+UPDATE task_current_nodes
+SET entered_by_edge_id = ?
+WHERE task_id = ?
+  AND transition_branch_key IS NULL`,
+		testGraphEntityBlob(t, string(edgeByKey(t, definition, "audit").ID)),
+		string(task.ID),
+	); err != nil {
+		t.Fatalf("set unbound Audit entering Edge: %v", err)
+	}
+	if _, err := store.db.ExecContext(ctx, `
+UPDATE session_workflow_node_associations
+SET association_status = 'historical'
+WHERE task_id = ?
+  AND node_id = ?`,
+		string(task.ID),
+		testGraphEntityBlob(t, string(workflow.NodeIDOf(audit))),
+	); err != nil {
+		t.Fatalf("remove Audit current association: %v", err)
+	}
+
+	transitionKey := workflow.TransitionID("rework")
+	prepared, err := store.PrepareManualMove(ctx, ManualMoveRequest{
+		TaskID:        task.ID,
+		TargetNodeID:  workflow.NodeIDOf(review),
+		TransitionKey: &transitionKey,
+		Values: map[workflow.ModelKey]map[string]string{
+			"audit": {"summary": "audit B"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("PrepareManualMove Review: %v", err)
+	}
+	moved, err := store.ApplyManualMove(ctx, prepared, noneManualMoveExecutionTargetCandidate(binding))
+	if err != nil {
+		t.Fatalf("ApplyManualMove Review: %v", err)
+	}
+	if len(moved.Mutation.Created) != 1 || moved.Mutation.Created[0].SessionID != nil {
+		t.Fatalf("manual Review = %+v, want fresh instead of retained %q", moved.Mutation.Created, retainedReviewSessionID)
+	}
+	if moved.Mutation.Created[0].ContinuationSource.Kind() != workflow.MaterializedContinuationSourceDeferredSelf {
+		t.Fatalf("manual Review source = %q, want deferred self", moved.Mutation.Created[0].ContinuationSource.Kind())
+	}
+}
+
 func TestManualMoveRetainedTargetWithoutHistoryFailsStrictAndCreatesFallbackWithoutInvariant(t *testing.T) {
 	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
 	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)

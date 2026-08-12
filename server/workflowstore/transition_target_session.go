@@ -231,6 +231,7 @@ func resolveRetainedTargetTransitionContext(
 		}
 	}
 	activeSource := incomingTransitionActiveSource(source)
+	unboundManualMoveSourceWithoutHistory := false
 	if manualMoveContext {
 		if source == nil ||
 			source.Reference.IsBranchScoped() ||
@@ -250,13 +251,22 @@ func resolveRetainedTargetTransitionContext(
 				if err != nil {
 					return transitionContextResolution{}, err
 				}
-			} else if !errors.Is(associationErr, sql.ErrNoRows) ||
-				source == nil ||
-				!source.Reference.Equal(sourceReference) ||
-				source.SessionID != nil {
-				return transitionContextResolution{}, associationErr
+			} else {
+				if !errors.Is(associationErr, sql.ErrNoRows) ||
+					source == nil ||
+					!source.Reference.Equal(sourceReference) ||
+					source.SessionID != nil {
+					return transitionContextResolution{}, associationErr
+				}
+				unboundManualMoveSourceWithoutHistory = sourceNode.Kind() == workflow.NodeKindAgent
 			}
 		}
+	}
+	if unboundManualMoveSourceWithoutHistory {
+		return transitionContextResolution{
+			TargetSession: workflow.CreateTargetSessionIntent(),
+			ActiveSource:  workflow.DeferredSelfMaterializedContinuationSource(),
+		}, nil
 	}
 	decision, err := workflow.EvaluateRetainedTarget(workflow.RetainedTargetEvaluationRequest{
 		TaskID:        taskID,

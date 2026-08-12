@@ -537,7 +537,7 @@ type reuseGraph struct {
 func (a sessionReuseAnalyzer) buildGraph(initial []reuseTransition) reuseGraph {
 	graph := reuseGraph{}
 	processed := make(map[int]bool)
-	joinArrivals := make(map[staticFanoutInvocation]map[TransitionBranchKey]reusePathState)
+	joinArrivals := make(map[staticFanoutInvocationKey]map[TransitionBranchKey]reusePathState)
 	// Overwritten provenance is merged by union when structural path states
 	// converge. This deliberately trades some possible-reuse precision for a
 	// bounded worklist instead of enumerating every overwrite subset.
@@ -594,7 +594,7 @@ func (a sessionReuseAnalyzer) buildGraph(initial []reuseTransition) reuseGraph {
 				}
 				if transition.target.staticInvocation.joinID == transition.target.nodeID {
 					invocation := transition.target.staticInvocation
-					key := invocation.withoutSibling()
+					key := invocation.aggregationKey()
 					arrivals := joinArrivals[key]
 					if arrivals == nil {
 						arrivals = make(map[TransitionBranchKey]reusePathState, len(a.staticFanouts[invocation.groupID].siblings))
@@ -899,6 +899,13 @@ type staticFanoutInvocation struct {
 	joinID         NodeID
 }
 
+type staticFanoutInvocationKey struct {
+	groupID        TransitionGroupID
+	incomingBranch reuseBranch
+	entry          reuseFanoutEntryState
+	joinID         NodeID
+}
+
 type reuseFanoutEntryState struct {
 	currentLineage        reuseLineage
 	activeSourceSessionID runtimeids.SessionID
@@ -914,9 +921,13 @@ func fanoutEntryState(state reusePathState) reuseFanoutEntryState {
 	}
 }
 
-func (i staticFanoutInvocation) withoutSibling() staticFanoutInvocation {
-	i.sibling = ""
-	return i
+func (i staticFanoutInvocation) aggregationKey() staticFanoutInvocationKey {
+	return staticFanoutInvocationKey{
+		groupID:        i.groupID,
+		incomingBranch: i.incomingBranch,
+		entry:          i.entry,
+		joinID:         i.joinID,
+	}
 }
 
 func validateStaticContinuationSources(def Definition, start NodeID) []EdgeID {
