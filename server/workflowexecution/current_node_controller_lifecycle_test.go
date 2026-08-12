@@ -838,6 +838,7 @@ func TestTaskInterruptDispositionsTransferredSuccessorBeforeLateAssignmentDelive
 	}
 	source := currentNodeReferenceForControllerTest(t, "task-late-assignment-interrupt", "node-source")
 	successor := currentNodeReferenceForControllerTest(t, "task-late-assignment-interrupt", "node-successor")
+	occupier := currentNodeReferenceForControllerTest(t, "task-capacity-occupier", "node-occupier")
 	interruptible := currentNodeReferenceForControllerTest(t, string(source.TaskID), "node-interruptible")
 	releaseAssignment, assignmentStarted, assignmentResumed := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	interruptStarted, interruptRelease, releaseSuccessor := make(chan struct{}), make(chan struct{}), make(chan struct{})
@@ -846,10 +847,7 @@ func TestTaskInterruptDispositionsTransferredSuccessorBeforeLateAssignmentDelive
 			Mutation: workflow.CurrentNodeMutationResult{
 				Removed: []workflow.CurrentNodeReference{source},
 			},
-			AutomaticIntents: []workflowstore.CurrentNodeAutomaticIntent{{
-				CurrentNode: successor,
-				NodeKind:    workflow.NodeKindAgent,
-			}},
+			AutomaticIntents: []workflowstore.CurrentNodeAutomaticIntent{{CurrentNode: successor, NodeKind: workflow.NodeKindAgent}, {CurrentNode: occupier, NodeKind: workflow.NodeKindAgent}, {CurrentNode: interruptible, NodeKind: workflow.NodeKindScript}},
 		},
 		interruptStarted: interruptStarted,
 		interruptRelease: interruptRelease,
@@ -874,8 +872,13 @@ func TestTaskInterruptDispositionsTransferredSuccessorBeforeLateAssignmentDelive
 		authority,
 		NewMutationPermit(),
 		CurrentNodeControllerConfig{
-			AgentConcurrency:  1,
-			AssignmentSteerer: noOpCurrentNodeAssignmentSteerer{},
+			AgentConcurrency: 1,
+			AssignmentSteerer: lateCommitCurrentNodeAssignmentSteerer{
+				delayed: &successor,
+				release: releaseAssignment,
+				started: assignmentStarted,
+				resumed: assignmentResumed,
+			},
 		},
 	)
 	if err != nil {
@@ -890,11 +893,6 @@ func TestTaskInterruptDispositionsTransferredSuccessorBeforeLateAssignmentDelive
 	}
 	<-runner.runningStarted
 	waitForRunningCurrentNode(t, authority, source)
-	controller.steerer = lateCommitCurrentNodeAssignmentSteerer{
-		release: releaseAssignment,
-		started: assignmentStarted,
-		resumed: assignmentResumed,
-	}
 
 	sourceScope := singleLiveScope(t, authority, source)
 	completionCtx, cancelCompletion := context.WithCancel(context.Background())
@@ -906,11 +904,7 @@ func TestTaskInterruptDispositionsTransferredSuccessorBeforeLateAssignmentDelive
 		})
 		completionDone <- completeErr
 	}()
-	select {
-	case <-assignmentStarted:
-	case <-time.After(3 * time.Second):
-		t.Fatal("successor assignment wait did not start")
-	}
+	<-assignmentStarted
 	cancelCompletion()
 	select {
 	case completeErr := <-completionDone:
@@ -920,22 +914,18 @@ func TestTaskInterruptDispositionsTransferredSuccessorBeforeLateAssignmentDelive
 	case <-time.After(3 * time.Second):
 		t.Fatal("CompleteCurrentNode did not transfer the canceled assignment wait")
 	}
-	select {
-	case <-assignmentResumed:
-	case <-time.After(3 * time.Second):
-		t.Fatal("transferred successor did not resume its assignment wait")
-	}
-	close(releaseAssignment)
+	<-assignmentResumed
 	sourceHandle, _ := authority.ExecutionByScope(sourceScope)
 	if err := sourceHandle.Stop(context.Background()); err != nil {
 		t.Fatalf("stop completed source: %v", err)
 	}
-	select {
-	case <-runner.queuedRegistered:
-	case <-time.After(3 * time.Second):
-		t.Fatal("replacement admission worker did not reach the runner")
+	waitForRunningCurrentNode(t, authority, occupier)
+	close(releaseAssignment)
+	occupierHandle, _ := authority.ExecutionByScope(singleLiveScope(t, authority, occupier))
+	if err := occupierHandle.Stop(context.Background()); err != nil {
+		t.Fatalf("stop capacity occupier: %v", err)
 	}
-	controller.enqueueAutomaticIntents([]CurrentNodeAutomaticIntent{{CurrentNode: interruptible, NodeKind: workflow.NodeKindScript}})
+	<-runner.queuedRegistered
 	waitForRunningCurrentNode(t, authority, interruptible)
 
 	interruptDone := make(chan error, 1)

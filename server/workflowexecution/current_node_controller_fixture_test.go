@@ -112,6 +112,7 @@ func (s *deadlineRecordingCurrentNodeAssignmentSteer) Wait(ctx context.Context) 
 }
 
 type lateCommitCurrentNodeAssignmentSteerer struct {
+	delayed *workflow.CurrentNodeReference
 	release <-chan struct{}
 	started chan struct{}
 	resumed chan struct{}
@@ -120,9 +121,12 @@ type lateCommitCurrentNodeAssignmentSteerer struct {
 }
 
 func (s lateCommitCurrentNodeAssignmentSteerer) SteerCurrentNodeAssignment(
-	context.Context,
-	workflow.CurrentNodeReference,
+	_ context.Context,
+	reference workflow.CurrentNodeReference,
 ) (CurrentNodeAssignmentSteer, error) {
+	if s.delayed != nil && !reference.Equal(*s.delayed) {
+		return noOpCurrentNodeAssignmentSteerer{}.SteerCurrentNodeAssignment(context.Background(), reference)
+	}
 	return &lateCommitCurrentNodeAssignmentSteer{
 		release: s.release,
 		started: s.started,
