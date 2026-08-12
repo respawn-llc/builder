@@ -65,3 +65,7 @@ type WorkspaceChatDraftResponse struct {
 	Message          string                    `json:"message"`
 	GoalAvailability clientui.GoalAvailability `json:"goal_availability"`
 }
+
+func (r WorkspaceChatDraftResponse) Validate() error {
+	return r.GoalAvailability.Validate()
+}

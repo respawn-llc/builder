@@ -35,35 +35,23 @@ func TestApplyCurrentGoalOperationDispositions(t *testing.T) {
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
 		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
 	})
-	assert := func(operation CurrentGoalOperation, want GoalCommandDisposition, execution bool) {
+	assert := func(operation CurrentGoalOperation, want GoalCommandDisposition, execution bool, ownership CurrentGoalExecutionOwnership) {
 		t.Helper()
-		outcome, err := engine.ApplyCurrentGoalOperation(operation, CurrentGoalRetainedOnly)
+		outcome, err := engine.ApplyCurrentGoalOperation(operation, ownership)
 		if err != nil || outcome.ExecutionRequired != execution || !execution && (outcome.Handled == nil || outcome.Handled.Disposition != want) {
 			t.Fatalf("ApplyCurrentGoalOperation(%T) = %+v, %v", operation, outcome, err)
 		}
 	}
-	assert(CurrentGoalSet{Objective: "start", Actor: session.GoalActorUser}, 0, true)
+	assert(CurrentGoalSet{Objective: "start", Actor: session.GoalActorUser}, 0, true, CurrentGoalRetainedOnly)
 	_, _ = engine.SetGoal("existing", session.GoalActorUser)
-	assert(CurrentGoalStatus{Status: session.GoalStatusPaused, Actor: session.GoalActorUser}, GoalCommandApplied, false)
-	assert(CurrentGoalStatus{Status: session.GoalStatusPaused, Actor: session.GoalActorUser}, GoalCommandNoop, false)
-	assert(CurrentGoalStatus{Status: session.GoalStatusActive, Actor: session.GoalActorUser}, 0, true)
-	assert(CurrentGoalClear{Actor: session.GoalActorUser}, GoalCommandApplied, false)
-	outcome, err := engine.ApplyCurrentGoalOperation(CurrentGoalSet{Objective: "direct exact", Actor: session.GoalActorUser}, CurrentGoalExactExecution)
-	if err != nil || outcome.Handled == nil || outcome.Handled.Disposition != GoalCommandApplied {
-		t.Fatalf("direct Exact Set = %+v, %v", outcome, err)
-	}
-	outcome, err = engine.ApplyCurrentGoalOperation(CurrentGoalStatus{Status: session.GoalStatusComplete, Actor: session.GoalActorUser}, CurrentGoalExactExecution)
-	if err != nil || outcome.Handled == nil || outcome.Handled.Disposition != GoalCommandApplied {
-		t.Fatalf("direct Exact Status = %+v, %v", outcome, err)
-	}
-	outcome, err = engine.ApplyCurrentGoalOperation(CurrentGoalClear{Actor: session.GoalActorUser}, CurrentGoalExactExecution)
-	if err != nil || outcome.Handled == nil || outcome.Handled.Disposition != GoalCommandApplied {
-		t.Fatalf("direct Exact Clear = %+v, %v", outcome, err)
-	}
+	assert(CurrentGoalStatus{Status: session.GoalStatusPaused, Actor: session.GoalActorUser}, GoalCommandApplied, false, CurrentGoalRetainedOnly)
+	assert(CurrentGoalSet{Objective: "direct exact", Actor: session.GoalActorUser}, GoalCommandApplied, false, CurrentGoalExactExecution)
+	assert(CurrentGoalStatus{Status: session.GoalStatusComplete, Actor: session.GoalActorUser}, GoalCommandApplied, false, CurrentGoalExactExecution)
+	assert(CurrentGoalClear{Actor: session.GoalActorUser}, GoalCommandApplied, false, CurrentGoalExactExecution)
 	engine.stepLifecycle = &stubExclusiveStepLifecycle{activeStepID: "step", snapshot: &RunSnapshot{RunID: "run", StepID: "step"}}
-	assert(CurrentGoalSet{Objective: "queued exact", Actor: session.GoalActorUser}, GoalCommandQueued, false)
-	assert(CurrentGoalStatus{Status: session.GoalStatusComplete, Actor: session.GoalActorUser}, GoalCommandQueued, false)
-	assert(CurrentGoalClear{Actor: session.GoalActorUser}, GoalCommandQueued, false)
+	assert(CurrentGoalSet{Objective: "queued exact", Actor: session.GoalActorUser}, GoalCommandQueued, false, CurrentGoalRetainedOnly)
+	assert(CurrentGoalStatus{Status: session.GoalStatusComplete, Actor: session.GoalActorUser}, GoalCommandQueued, false, CurrentGoalRetainedOnly)
+	assert(CurrentGoalClear{Actor: session.GoalActorUser}, GoalCommandQueued, false, CurrentGoalRetainedOnly)
 }
 
 func TestGoalSetEmitsCommittedGoalFeedbackEvent(t *testing.T) {

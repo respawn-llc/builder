@@ -309,8 +309,13 @@ func (m *uiModel) applyGoalRuntimeDone(msg goalRuntimeDoneMsg) tea.Cmd {
 		m.goal.goal = goalCoreFromMutationResult(msg.mutation)
 		m.goal.pending = msg.mutation.Pending
 		overlayCmd := tea.Cmd(nil)
-		if m.goal.open && strings.TrimSpace(m.goal.confirmMode) != "" {
-			overlayCmd = m.inputController().stopGoalFlowCmd()
+		if msg.mutation.Pending != nil {
+			m.goal.open = true
+			m.goal.confirmMode = ""
+			m.setInputMode(uiInputModeGoal)
+			overlayCmd = m.activateSurface(uiSurfaceGoal)
+		} else if m.goal.open && strings.TrimSpace(m.goal.confirmMode) != "" {
+			m.goal.confirmMode = ""
 		}
 		return sequenceCmds(overlayCmd, followUpCmd)
 	case goalRuntimePause, goalRuntimeResume, goalRuntimeComplete:

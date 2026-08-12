@@ -477,11 +477,10 @@ func TestCoreComposedWorkspaceDraftServicesShareLane(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	if response, err := second.WorkspaceChatDraft(t.Context(), serverapi.WorkspaceChatDraftRequest{Operation: serverapi.WorkspaceChatDraftOperation{Kind: serverapi.WorkspaceChatDraftUpdateMessage, Message: &message}}); err != nil || response.GoalAvailability != clientui.GoalAvailabilityAvailable {
-		t.Fatalf("update response=%+v err=%v", response, err)
-	}
-	if response, err := second.WorkspaceChatDraft(t.Context(), serverapi.WorkspaceChatDraftRequest{Operation: serverapi.WorkspaceChatDraftOperation{Kind: serverapi.WorkspaceChatDraftClear}}); err != nil || response.GoalAvailability != clientui.GoalAvailabilityAvailable {
-		t.Fatalf("clear response=%+v err=%v", response, err)
+	for _, operation := range []serverapi.WorkspaceChatDraftOperation{{Kind: serverapi.WorkspaceChatDraftUpdateMessage, Message: &message}, {Kind: serverapi.WorkspaceChatDraftClear}} {
+		if response, err := second.WorkspaceChatDraft(t.Context(), serverapi.WorkspaceChatDraftRequest{Operation: operation}); err != nil || response.GoalAvailability != clientui.GoalAvailabilityAvailable {
+			t.Fatalf("%s response=%+v err=%v", operation.Kind, response, err)
+		}
 	}
 	got, err := first.ResolveWorkspaceChatDraftAggregate(t.Context())
 	if err != nil || got.Draft.Message != "" || got.Draft.Fast {

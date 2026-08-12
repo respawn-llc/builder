@@ -666,7 +666,13 @@ func (c *Remote) PlanSession(ctx context.Context, req serverapi.SessionPlanReque
 
 func (c *Remote) WorkspaceChatDraft(ctx context.Context, req serverapi.WorkspaceChatDraftRequest) (serverapi.WorkspaceChatDraftResponse, error) {
 	var resp serverapi.WorkspaceChatDraftResponse
-	return resp, c.call(ctx, protocol.MethodSessionWorkspaceChatDraft, req, &resp)
+	if err := c.call(ctx, protocol.MethodSessionWorkspaceChatDraft, req, &resp); err != nil {
+		return resp, err
+	}
+	if err := resp.Validate(); err != nil {
+		return serverapi.WorkspaceChatDraftResponse{}, invalidResponseError("workspace Chat draft", err)
+	}
+	return resp, nil
 }
 
 func (c *Remote) GetSessionMainView(ctx context.Context, req serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
