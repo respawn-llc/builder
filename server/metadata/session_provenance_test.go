@@ -60,8 +60,7 @@ func TestTypedSessionProvenanceRoundTripsAndMakesSessionVisible(t *testing.T) {
 	page, err := store.ListSessionPage(context.Background(), serverapi.SessionPageRequest{
 		ProjectID: binding.ProjectID,
 		Category:  sessioncontract.SessionCategorySubagent,
-		PageSize:  10,
-		Position:  serverapi.NewestSessionPagePosition(),
+		Limit:     sessionPageInt(10),
 	})
 	if err != nil {
 		t.Fatalf("ListSessionPage: %v", err)

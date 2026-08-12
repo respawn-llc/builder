@@ -20,12 +20,6 @@ type WorkflowOffsetPage[T any] struct {
 }
 
 func FinalizeWorkflowOffsetPage[T any](window WorkflowOffsetWindow, items []T) WorkflowOffsetPage[T] {
-	page := WorkflowOffsetPage[T]{Items: items}
-	if len(items) <= window.Limit {
-		return page
-	}
-	page.Items = items[:window.Limit]
-	nextOffset := window.Offset + window.Limit
-	page.NextOffset = &nextOffset
-	return page
+	items, nextOffset := TrimOffsetLookahead(window, items)
+	return WorkflowOffsetPage[T]{Items: items, NextOffset: nextOffset}
 }
