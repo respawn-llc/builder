@@ -339,6 +339,48 @@ WHERE id = 'group-fanout'`)
 	if _, err := store.CurrentTaskSessionForNode(t.Context(), legacyTarget.Reference); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("migrated Approval target current association = %v, want sql.ErrNoRows", err)
 	}
+	if err := store.InterruptCurrentNode(
+		t.Context(),
+		legacyTarget.Reference,
+		workflow.CurrentNodeInterruptionReasonUserInterrupt,
+		workflow.CurrentNodeInterruptionDetail{Code: string(workflow.CurrentNodeInterruptionReasonUserInterrupt)},
+	); err != nil {
+		t.Fatalf("InterruptCurrentNode migrated Approval target: %v", err)
+	}
+	interruptedNodes, err := store.ListCurrentNodes(t.Context(), legacyTarget.Reference.TaskID)
+	if err != nil {
+		t.Fatalf("ListCurrentNodes migrated Approval target: %v", err)
+	}
+	var interruptedLegacyTarget workflow.CurrentNode
+	for _, candidate := range interruptedNodes {
+		if candidate.Reference.Equal(legacyTarget.Reference) {
+			interruptedLegacyTarget = candidate
+			break
+		}
+	}
+	if interruptedLegacyTarget.SessionID == nil {
+		t.Fatal("interrupted migrated Approval target was not found")
+	}
+	if err := store.RepairCurrentNodeSessionProvenanceForResume(
+		t.Context(),
+		interruptedLegacyTarget,
+	); err != nil {
+		t.Fatalf("RepairCurrentNodeSessionProvenanceForResume migrated Approval target: %v", err)
+	}
+	if _, err := metadataStore.DB().ExecContext(t.Context(), `
+UPDATE task_current_nodes
+SET continuation_source_kind = NULL,
+    continuation_source_session_id = NULL,
+    legacy_materialized = 1
+WHERE task_id = ?
+  AND node_id = kent_graph_entity_id_blob_v1(?)
+  AND transition_branch_key = ?`,
+		string(deferredTarget.Reference.TaskID),
+		string(deferredTarget.Reference.NodeID),
+		string(workflow.TransitionBranchKey("split_a")),
+	); err != nil {
+		t.Fatalf("mark unbound migrated Approval target legacy: %v", err)
+	}
 	freshSessionID := runtimeids.NewSessionID()
 	if _, err := metadataStore.DB().ExecContext(t.Context(), `
 INSERT INTO sessions (
@@ -364,21 +406,11 @@ INSERT INTO sessions (
 	if err != nil {
 		t.Fatalf("BindSessionToCurrentNode deferred migrated Approval target: %v", err)
 	}
-	if freshAuthority.Kind() != CurrentNodeSessionBindingAuthorityExactCurrent {
+	if freshAuthority.Kind() != CurrentNodeSessionBindingAuthorityLegacyHistorical {
 		t.Fatalf("deferred migrated Approval target authority = %q", freshAuthority.Kind())
 	}
-	freshAssociation, err := store.CurrentTaskSessionForNode(t.Context(), deferredTarget.Reference)
-	if err != nil {
-		t.Fatalf("CurrentTaskSessionForNode deferred migrated Approval target: %v", err)
-	}
-	if freshAssociation.SessionID != freshSessionID ||
-		freshAssociation.SourceSessionID != freshSessionID {
-		t.Fatalf("deferred migrated Approval target tuple = (%q, %q), want (%q, %q)",
-			freshAssociation.SessionID,
-			freshAssociation.SourceSessionID,
-			freshSessionID,
-			freshSessionID,
-		)
+	if _, err := store.CurrentTaskSessionForNode(t.Context(), deferredTarget.Reference); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("unbound legacy migrated Approval target current association = %v, want sql.ErrNoRows", err)
 	}
 }
 

@@ -2398,6 +2398,10 @@ WHERE task_id = sqlc.arg(task_id)
   AND continuation_source_session_id IS NULL
   AND (
       session_id = sqlc.arg(session_id)
+      OR (
+          CAST(sqlc.narg(expected_current_session_id) AS TEXT) IS NULL
+          AND session_id IS NULL
+      )
       OR session_id = CAST(sqlc.narg(expected_current_session_id) AS TEXT)
   );
 
@@ -2412,6 +2416,10 @@ WHERE task_id = sqlc.arg(task_id)
   AND continuation_source_session_id IS NULL
   AND (
       session_id = sqlc.arg(session_id)
+      OR (
+          CAST(sqlc.narg(expected_current_session_id) AS TEXT) IS NULL
+          AND session_id IS NULL
+      )
       OR session_id = CAST(sqlc.narg(expected_current_session_id) AS TEXT)
   );
 

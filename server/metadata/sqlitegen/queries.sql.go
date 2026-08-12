@@ -440,6 +440,10 @@ WHERE task_id = ?2
   AND continuation_source_session_id IS NULL
   AND (
       session_id = ?1
+      OR (
+          CAST(?5 AS TEXT) IS NULL
+          AND session_id IS NULL
+      )
       OR session_id = CAST(?5 AS TEXT)
   )
 `
@@ -479,6 +483,10 @@ WHERE task_id = ?2
   AND continuation_source_session_id IS NULL
   AND (
       session_id = ?1
+      OR (
+          CAST(?4 AS TEXT) IS NULL
+          AND session_id IS NULL
+      )
       OR session_id = CAST(?4 AS TEXT)
   )
 `

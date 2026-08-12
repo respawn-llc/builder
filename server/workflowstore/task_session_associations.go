@@ -143,9 +143,6 @@ func bindLegacySessionToCurrentNode(
 	req TaskSessionAssociationRequest,
 	expectedCurrentSessionID *runtimeids.SessionID,
 ) (CurrentNodeSessionBindingAuthority, error) {
-	if currentNode.SessionID == nil {
-		return CurrentNodeSessionBindingAuthority{}, errors.New("legacy Current Node has no materialized Session")
-	}
 	if err := bindSessionToTask(ctx, q, req); err != nil {
 		return CurrentNodeSessionBindingAuthority{}, err
 	}
@@ -703,6 +700,13 @@ func (s *Store) RepairCurrentNodeSessionProvenanceForResume(
 		persisted.Scheduling == nil ||
 		persisted.Scheduling.State != workflow.CurrentNodeSchedulingInterrupted {
 		return ErrSessionNotCurrentWorkflowNode
+	}
+	if persisted.ContinuationSource.Kind() == workflow.MaterializedContinuationSourceLegacy {
+		if err := lifecycle.Commit(ctx); err != nil {
+			return err
+		}
+		committed = true
+		return nil
 	}
 	currentNodes, err := s.listTaskCurrentNodes(ctx, q, currentNode.Reference.TaskID)
 	if err != nil {
