@@ -1436,6 +1436,65 @@ func TestServiceTaskCreateMapsNoLinkedWorkflowsSelectionError(t *testing.T) {
 	}
 }
 
+func TestServiceTaskCreateWithoutWorkflowSelectsSoleLinkedWorkflow(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	linkWorkflowServiceProject(t, ctx, service, serverapi.WorkflowLinkProjectRequest{
+		ProjectID:     binding.ProjectID,
+		WorkflowID:    workflowID,
+		DefaultPolicy: serverapi.WorkflowProjectLinkDefaultNever,
+	})
+
+	created := createWorkflowServiceTask(t, ctx, service, serverapi.WorkflowTaskCreateRequest{
+		ProjectID: binding.ProjectID,
+		Title:     "Sole linked workflow",
+	})
+	if created.Task.WorkflowID != workflowID {
+		t.Fatalf("created Workflow = %s, want sole linked Workflow %s", created.Task.WorkflowID, workflowID)
+	}
+}
+
+func TestServiceTaskCreateWithoutWorkflowSelectsLinkedDefaultAmongMultiple(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	defaultWorkflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	otherWorkflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	linkWorkflowServiceProject(t, ctx, service, serverapi.WorkflowLinkProjectRequest{
+		ProjectID:     binding.ProjectID,
+		WorkflowID:    otherWorkflowID,
+		DefaultPolicy: serverapi.WorkflowProjectLinkDefaultNever,
+	})
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, defaultWorkflowID)
+
+	created := createWorkflowServiceTask(t, ctx, service, serverapi.WorkflowTaskCreateRequest{
+		ProjectID: binding.ProjectID,
+		Title:     "Default linked workflow",
+	})
+	if created.Task.WorkflowID != defaultWorkflowID {
+		t.Fatalf("created Workflow = %s, want linked default Workflow %s", created.Task.WorkflowID, defaultWorkflowID)
+	}
+}
+
+func TestServiceTaskCreateWithExplicitWorkflowKeepsExactSelection(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	defaultWorkflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	explicitWorkflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, defaultWorkflowID)
+	linkWorkflowServiceProject(t, ctx, service, serverapi.WorkflowLinkProjectRequest{
+		ProjectID:     binding.ProjectID,
+		WorkflowID:    explicitWorkflowID,
+		DefaultPolicy: serverapi.WorkflowProjectLinkDefaultNever,
+	})
+
+	created := createWorkflowServiceTask(t, ctx, service, serverapi.WorkflowTaskCreateRequest{
+		ProjectID:  binding.ProjectID,
+		WorkflowID: &explicitWorkflowID,
+		Title:      "Explicit linked workflow",
+	})
+	if created.Task.WorkflowID != explicitWorkflowID {
+		t.Fatalf("created Workflow = %s, want explicit Workflow %s", created.Task.WorkflowID, explicitWorkflowID)
+	}
+}
+
 func TestServiceTaskCreateMapsExplicitWorkflowNotLinkedSelectionError(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)

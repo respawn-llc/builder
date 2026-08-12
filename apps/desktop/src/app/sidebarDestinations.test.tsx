@@ -11,6 +11,7 @@ const fixture = vi.hoisted(() => ({
   openProject: vi.fn(async () => undefined),
   openWorkflowEditor: vi.fn(async () => undefined),
   workflowEditorProps: vi.fn<(props: unknown) => void>(),
+  newTaskFormProps: vi.fn<(props: unknown) => void>(),
 }));
 vi.mock("@/app-facade", () => ({
   sidebarTitle: () => "",
@@ -45,8 +46,10 @@ vi.mock("@/features/tasks", () => ({
       onProjectMissing?: () => void;
       onSubmitted: (taskID: string) => void;
     }>,
-  ) => (
-    <>
+  ) => {
+    fixture.newTaskFormProps(props);
+    return (
+      <>
       <button
         data-testid="new-task-pending"
         onClick={() => {
@@ -66,8 +69,9 @@ vi.mock("@/features/tasks", () => ({
           props.onSubmitted("task-created");
         }}
       />
-    </>
-  ),
+      </>
+    );
+  },
 }));
 
 vi.mock("@/features/workflows", () => ({
@@ -174,11 +178,36 @@ describe("Sidebar destination completion ownership", () => {
       workflowID: "workflow-1",
     });
 
+    expect(fixture.newTaskFormProps).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        boardQueryWorkflowID: "workflow-1",
+        projectID: "project-1",
+        workflowID: "workflow-1",
+      }),
+    );
     fireEvent.click(screen.getByTestId("new-task-pending"));
     expect(pageNavigator.registerAvailability).toHaveBeenLastCalledWith({ back: true, close: true });
     fireEvent.click(screen.getByTestId("new-task-missing"));
     fireEvent.click(screen.getByTestId("new-task-success"));
     expect(pageNavigator.back).toHaveBeenCalledOnce();
+    expect(pageNavigator.close).toHaveBeenCalledOnce();
+  });
+  it("passes omitted Workflow only through a Project-scoped New Task destination", () => {
+    const pageNavigator = mountDestination({
+      boardQueryWorkflowID: undefined,
+      kind: "newTask",
+      projectID: "project-1",
+    });
+
+    expect(fixture.newTaskFormProps).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        boardQueryWorkflowID: undefined,
+        projectID: "project-1",
+      }),
+    );
+    expect(fixture.newTaskFormProps.mock.lastCall?.[0]).not.toHaveProperty("workflowID");
+    expect(fixture.newTaskFormProps.mock.lastCall?.[0]).not.toHaveProperty("pendingRelationship");
+    fireEvent.click(screen.getByTestId("new-task-success"));
     expect(pageNavigator.close).toHaveBeenCalledOnce();
   });
   it("publishes Link Workflow creation through scoped replace", () => {

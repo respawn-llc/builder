@@ -12,20 +12,30 @@ import type { TaskLabelFilter } from "./workflowLabels";
 import type { BoardFilter } from "./workflowBoardFilters";
 import type { SetupOperationID } from "./setupOperationID";
 
-export type TaskMutationInput = Readonly<{
+type TaskMutationFields = Readonly<{
   projectID: string;
-  workflowID: string;
   title: string;
   body: string;
   sourceWorkspaceID: string;
   labelIDs: readonly string[];
-  dependencyIntent?: TaskDependencyCreateIntent | undefined;
 }>;
 
 export type TaskDependencyCreateIntent = Readonly<{
   relatedTaskID: string;
   newTaskRole: "blocker" | "blocked";
 }>;
+
+export type TaskMutationInput =
+  | (TaskMutationFields &
+      Readonly<{
+        workflowID: string;
+        dependencyIntent?: TaskDependencyCreateIntent | undefined;
+      }>)
+  | (TaskMutationFields &
+      Readonly<{
+        workflowID?: undefined;
+        dependencyIntent?: undefined;
+      }>);
 
 export type TaskListInput = Readonly<{
   projectID: string;

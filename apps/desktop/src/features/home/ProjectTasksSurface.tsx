@@ -91,6 +91,14 @@ export function ProjectTasksSurface({
   const openLinkWorkflow = () => {
     open({ kind: "linkWorkflow", mode: sidebarMode, projectID });
   };
+  const openNewTask = () => {
+    open({
+      boardQueryWorkflowID: undefined,
+      kind: "newTask",
+      mode: sidebarMode,
+      projectID,
+    });
+  };
   const countsBoundary = directionalBoundary({
     failed: data.counts.isError,
     loading: data.counts.isPending,
@@ -145,6 +153,7 @@ export function ProjectTasksSurface({
       entries={presentation.entries}
       finalEntryKey={presentation.finalEntryKey}
       onLinkWorkflow={openLinkWorkflow}
+      onNewTask={openNewTask}
       onScrollElementChange={onScrollElementChange}
       projectID={projectID}
       taskCount={presentation.taskCount}
@@ -215,6 +224,7 @@ function ProjectTasksContent({
   entries,
   finalEntryKey,
   onLinkWorkflow,
+  onNewTask,
   onScrollElementChange,
   projectID,
   taskCount,
@@ -226,6 +236,7 @@ function ProjectTasksContent({
   entries: readonly VirtualizedGroupedGridEntry[];
   finalEntryKey: string;
   onLinkWorkflow: () => void;
+  onNewTask: () => void;
   onScrollElementChange: (element: HTMLDivElement | null) => void;
   projectID: string;
   taskCount: number | null;
@@ -249,13 +260,19 @@ function ProjectTasksContent({
     );
   }
   const memory = viewMemory.read();
+  const newTaskWorkflowSelectionAvailable =
+    workflows.length === 1 || workflows.some((workflow) => workflow.isProjectDefault);
   return (
     <TasksShell workflows={workflows} onLinkWorkflow={onLinkWorkflow} projectID={projectID}>
       {taskCount === 0 ? (
         <ProjectTasksEmpty
-          actionLabel={t("board.newTask")}
+          actionLabel={
+            newTaskWorkflowSelectionAvailable
+              ? t("board.newTask")
+              : t("workflowLibrary.linkWorkflow")
+          }
           body={t("home.prototype.noTasksBody")}
-          disabled
+          onAction={newTaskWorkflowSelectionAvailable ? onNewTask : onLinkWorkflow}
           title={t("home.prototype.noTasksTitle")}
         />
       ) : (

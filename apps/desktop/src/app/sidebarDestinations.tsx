@@ -153,26 +153,33 @@ function NewTaskDestination({
       }),
     [destination.pendingRelationship, navigator, pending],
   );
+  const formProps = {
+    boardQueryWorkflowID: destination.boardQueryWorkflowID,
+    className: "w-full",
+    initialSourceWorkspaceID: destination.initialSourceWorkspaceID,
+    onPendingChange: setPending,
+    onProjectMissing: navigator.back,
+    onSubmitted: (taskID: string) => {
+      if (destination.pendingRelationship === undefined) navigator.close();
+      else
+        navigator.replace({
+          kind: "taskDetail",
+          taskID,
+          ...(destination.mode === undefined ? {} : { mode: destination.mode }),
+        });
+    },
+    projectID: destination.projectID,
+  };
   return (
-    <NewTaskForm
-      boardQueryWorkflowID={destination.boardQueryWorkflowID}
-      className="w-full"
-      initialSourceWorkspaceID={destination.initialSourceWorkspaceID}
-      onPendingChange={setPending}
-      onProjectMissing={navigator.back}
-      onSubmitted={(taskID) => {
-        if (destination.pendingRelationship === undefined) navigator.close();
-        else
-          navigator.replace({
-            kind: "taskDetail",
-            taskID,
-            ...(destination.mode === undefined ? {} : { mode: destination.mode }),
-          });
-      }}
-      projectID={destination.projectID}
-      pendingRelationship={destination.pendingRelationship}
-      workflowID={destination.workflowID}
-    />
+    destination.workflowID === undefined ? (
+      <NewTaskForm {...formProps} />
+    ) : (
+      <NewTaskForm
+        {...formProps}
+        pendingRelationship={destination.pendingRelationship}
+        workflowID={destination.workflowID}
+      />
+    )
   );
 }
 

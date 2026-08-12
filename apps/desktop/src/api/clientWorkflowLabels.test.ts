@@ -1,6 +1,6 @@
 import { FakeRpcTransport } from "@/test-support/api";
 import { ApiClient } from "./client";
-import { ContractError } from "./errors";
+import { ContractError, RpcError } from "./errors";
 import { taskLabelFilterPayload } from "./clientWorkflowLabels";
 
 const priorityID = "f74ce532-9e6e-4cf6-b3c1-d67d5a3eedcf";
@@ -295,6 +295,75 @@ describe("ApiClient workflow labels", () => {
       },
     ]);
   });
+
+  it("omits Workflow selection for Project-scoped task creation", async () => {
+    const transport = new FakeRpcTransport([
+      {
+        method: "workflow.task.create",
+        result: { task: { id: "task-project-scoped" } },
+      },
+    ]);
+    const client = new ApiClient(transport);
+
+    await expect(
+      client.createTask({
+        projectID: "project-1",
+        title: "Let the server select",
+        body: "Use the Project's authoritative Workflow links.",
+        sourceWorkspaceID: "workspace-1",
+        labelIDs: [],
+      }),
+    ).resolves.toBe("task-project-scoped");
+    expect(transport.calls).toEqual([
+      {
+        method: "workflow.task.create",
+        params: {
+          project_id: "project-1",
+          title: "Let the server select",
+          body: "Use the Project's authoritative Workflow links.",
+          source_workspace_id: "workspace-1",
+          label_ids: [],
+        },
+      },
+    ]);
+  });
+
+  it.each(["no_linked_workflows", "ambiguous_without_default"] as const)(
+    "decodes %s Project-scoped Workflow selection failure",
+    async (reason) => {
+      const transport = new FakeRpcTransport([
+        {
+          method: "workflow.task.create",
+          error: new RpcError({
+            code: -32045,
+            message: "workflow selection failed",
+            method: "workflow.task.create",
+            data: {
+              type: "workflow_task_create_selection_error",
+              reason,
+              project_id: "project-1",
+            },
+          }),
+        },
+      ]);
+      const client = new ApiClient(transport);
+
+      await expect(
+        client.createTask({
+          projectID: "project-1",
+          title: "Let the server select",
+          body: "",
+          sourceWorkspaceID: "workspace-1",
+          labelIDs: [],
+        }),
+      ).rejects.toMatchObject({
+        name: "WorkflowTaskCreateSelectionError",
+        reason,
+        projectID: "project-1",
+        workflowID: null,
+      });
+    },
+  );
 
   it("rejects malformed and prefixed Workflow IDs before task RPCs", async () => {
     const transport = new FakeRpcTransport([]);

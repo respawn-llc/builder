@@ -23,20 +23,29 @@ export type TaskDetailInitialFocus =
   | Readonly<{ kind: "dependencies" }>;
 
 export type SidebarDestination =
-  | Readonly<{
+  | (Readonly<{
       kind: "newTask";
       mode?: SidebarMode;
-      boardQueryWorkflowID: string | undefined;
       initialSourceWorkspaceID?: string | undefined;
-      pendingRelationship?:
-        | Readonly<{
-            originTaskID: string;
-            newTaskRole: "blocker" | "blocked";
-          }>
-        | undefined;
       projectID: string;
-      workflowID: string;
-    }>
+    }> &
+      (
+        | Readonly<{
+            boardQueryWorkflowID: string | undefined;
+            pendingRelationship?:
+              | Readonly<{
+                  originTaskID: string;
+                  newTaskRole: "blocker" | "blocked";
+                }>
+              | undefined;
+            workflowID: string;
+          }>
+        | Readonly<{
+            boardQueryWorkflowID: undefined;
+            pendingRelationship?: undefined;
+            workflowID?: undefined;
+          }>
+      ))
   | Readonly<{
       kind: "taskDetail";
       mode?: SidebarMode;

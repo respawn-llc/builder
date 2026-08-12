@@ -20,7 +20,14 @@ const fixture = vi.hoisted<{
     isError: boolean;
     isPending: boolean;
     isSuccess: boolean;
-    data: { workflows: readonly Readonly<{ id: string; name: string; description: string | null }>[] };
+    data: {
+      workflows: readonly Readonly<{
+        id: string;
+        name: string;
+        description: string | null;
+        isProjectDefault: boolean;
+      }>[];
+    };
     error: Error | null;
     refetch: ReturnType<typeof vi.fn>;
   };
@@ -36,8 +43,18 @@ const fixture = vi.hoisted<{
     isSuccess: true,
     data: {
       workflows: [
-        { id: "workflow-1", name: "Delivery", description: "Ship work" },
-        { id: "workflow-2", name: "Support", description: null },
+        {
+          id: "workflow-1",
+          name: "Delivery",
+          description: "Ship work",
+          isProjectDefault: true,
+        },
+        {
+          id: "workflow-2",
+          name: "Support",
+          description: null,
+          isProjectDefault: false,
+        },
       ],
     },
     error: null,
@@ -101,6 +118,22 @@ beforeAll(async () => initializeI18n());
 
 describe("ProjectTasksSurface", () => {
   beforeEach(() => {
+    fixture.board.data = {
+      workflows: [
+        {
+          id: "workflow-1",
+          name: "Delivery",
+          description: "Ship work",
+          isProjectDefault: true,
+        },
+        {
+          id: "workflow-2",
+          name: "Support",
+          description: null,
+          isProjectDefault: false,
+        },
+      ],
+    };
     fixture.counts = { active: 2, backlog: 1, done: 1 };
     fixture.activeDestination = null;
     fixture.open.mockReset();
@@ -132,19 +165,72 @@ describe("ProjectTasksSurface", () => {
     expect(screen.queryByRole("row", { name: "KNT-4 Done task" })).not.toBeInTheDocument();
   });
 
-  it("hides zero-count groups and replaces the grid contents when the Project has no Tasks", () => {
+  it("hides zero-count groups and opens Project-scoped New Task when the Project has no Tasks", () => {
     fixture.counts = { active: 0, backlog: 0, done: 0 };
     const view = renderSurface();
 
     expect(screen.queryByRole("columnheader")).not.toBeInTheDocument();
     expect(screen.getByText("No tasks yet")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "New Task" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "New Task" }));
+    expect(fixture.open).toHaveBeenCalledWith({
+      boardQueryWorkflowID: undefined,
+      kind: "newTask",
+      mode: "shift",
+      projectID: "project-1",
+    });
 
     fixture.counts = { active: 2, backlog: 0, done: 0 };
     view.rerender(withQueryClient(surface()));
     expect(screen.getByRole("button", { name: "Active, 2 tasks" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Backlog/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Done/ })).not.toBeInTheDocument();
+  });
+
+  it("offers Link Workflow instead of New Task when multiple links have no default", () => {
+    fixture.counts = { active: 0, backlog: 0, done: 0 };
+    fixture.board.data = {
+      workflows: fixture.board.data.workflows.map((workflow) => ({
+        ...workflow,
+        isProjectDefault: false,
+      })),
+    };
+
+    renderSurface();
+    const linkActions = screen.getAllByRole("button", { name: "Link workflow" });
+    const emptyStateLinkAction = linkActions.at(-1);
+    if (emptyStateLinkAction === undefined) {
+      throw new Error("Expected the no-Task empty state Link Workflow action.");
+    }
+    fireEvent.click(emptyStateLinkAction);
+    expect(fixture.open).toHaveBeenCalledWith({
+      kind: "linkWorkflow",
+      mode: "shift",
+      projectID: "project-1",
+    });
+    expect(screen.queryByRole("button", { name: "New Task" })).not.toBeInTheDocument();
+  });
+
+  it("offers Project-scoped New Task for a sole linked Workflow without making Desktop select it", () => {
+    fixture.counts = { active: 0, backlog: 0, done: 0 };
+    fixture.board.data = {
+      workflows: [
+        {
+          id: "workflow-1",
+          name: "Delivery",
+          description: "Ship work",
+          isProjectDefault: false,
+        },
+      ],
+    };
+
+    renderSurface();
+    fireEvent.click(screen.getByRole("button", { name: "New Task" }));
+    expect(fixture.open).toHaveBeenCalledWith({
+      boardQueryWorkflowID: undefined,
+      kind: "newTask",
+      mode: "shift",
+      projectID: "project-1",
+    });
   });
 
   it("retains disclosure in workspace view memory", () => {
