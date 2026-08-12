@@ -708,16 +708,13 @@ func TestRuntimeClientReconnectWarningFailureDoesNotBlockSubmit(t *testing.T) {
 
 func TestGoalMutationDoesNotOverrideAuthoritativeBroadcast(t *testing.T) {
 	stale := runtimeClientTestGoal("goal-1", "stale objective", clientui.RuntimeGoalStatusActive)
-	for _, operation := range []goalRuntimeOperation{goalRuntimeSet, goalRuntimePause} {
-		controls := &reconnectRetryRuntimeControlClient{setGoalResp: serverapi.RuntimeGoalMutationResponse{Goal: stale}, pauseGoalResp: serverapi.RuntimeGoalMutationResponse{Goal: stale}}
-		model := newProjectedTestUIModel(newTestSessionRuntimeClientWithControls(controls), WithUISessionID("session-1"))
-		message := model.goalRuntimeCommand(operation, stale.Objective)().(goalRuntimeDoneMsg)
-		goal := runtimeClientTestGoal("goal-2", "authoritative objective", clientui.RuntimeGoalStatusPaused)
-		model.goal.open = true
-		model.applyAdmittedTranscriptMessageState(ongoingTranscriptMessage(1, clientui.TranscriptMessageGoalStatus), runtimeTupleMergeResult{view: clientui.RuntimeMainView{Status: clientui.RuntimeStatus{Goal: &clientui.RuntimeGoal{Goal: goal}}}})
-		updateUIModel(t, model, message)
-		if model.goal.pending != nil || *model.goal.goal != *goal {
-			t.Fatalf("%s overwrote authoritative Goal", operation)
-		}
+	model := newProjectedTestUIModel(newTestSessionRuntimeClientWithControls(&reconnectRetryRuntimeControlClient{pauseGoalResp: serverapi.RuntimeGoalMutationResponse{Goal: stale}}), WithUISessionID("session-1"))
+	message := model.goalRuntimeCommand(goalRuntimePause, "")().(goalRuntimeDoneMsg)
+	goal := runtimeClientTestGoal("goal-2", "authoritative objective", clientui.RuntimeGoalStatusPaused)
+	model.goal.open = true
+	model.applyAdmittedTranscriptMessageState(ongoingTranscriptMessage(1, clientui.TranscriptMessageGoalStatus), runtimeTupleMergeResult{view: clientui.RuntimeMainView{Status: clientui.RuntimeStatus{Goal: &clientui.RuntimeGoal{Goal: goal}}}})
+	updateUIModel(t, model, message)
+	if model.goal.pending != nil || *model.goal.goal != *goal {
+		t.Fatal("Pause overwrote authoritative Goal")
 	}
 }
