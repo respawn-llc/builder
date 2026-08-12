@@ -523,8 +523,9 @@ func (s *Store) LoadSessionReuseAssociations(
 			return nil, err
 		}
 		associations = append(associations, workflow.SessionReuseAssociation{
-			SessionID:   association.SessionID,
-			CurrentNode: association.CurrentNode,
+			SessionID:       association.SessionID,
+			SourceSessionID: association.SourceSessionID,
+			CurrentNode:     association.CurrentNode,
 		})
 	}
 	return associations, nil
