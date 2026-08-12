@@ -88,11 +88,17 @@ func (c *CurrentNodeController) Recover(ctx context.Context) (int64, error) {
 			workflow.NewCurrentNodeInterruptionDetail(string(ReasonCurrentNodeStartupRecovery), nil),
 		)
 	})
-	if err != nil {
+	committed, diagnostic := classifyCurrentNodeInterruption(err)
+	if err != nil && !committed {
 		return 0, err
 	}
 	for _, reference := range recovered {
 		c.publishPendingInterruptedCurrentNode(ctx, reference, ReasonCurrentNodeStartupRecovery)
+	}
+	if diagnostic != nil {
+		c.mu.Lock()
+		c.workerDiagnostics = errors.Join(c.workerDiagnostics, diagnostic)
+		c.mu.Unlock()
 	}
 	return int64(len(recovered)), nil
 }

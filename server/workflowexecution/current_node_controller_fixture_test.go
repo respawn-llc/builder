@@ -364,10 +364,12 @@ type currentNodeControllerStore struct {
 	interruptions             map[workflow.CurrentNodeReferenceKey]currentNodeInterruptionRecord
 	interruptionCalls         map[workflow.CurrentNodeReferenceKey]int
 	interruptErr              error
+	replaceInterruptErr       error
 	admittedInterruptErr      error
 	interruptAttempts         int
 	admittedInterruptAttempts int
 	recovered                 []workflow.CurrentNodeReference
+	recoveryErr               error
 	completion                workflowstore.CurrentNodeCompletionResult
 	completions               int
 	startTaskStarted          chan struct{}
@@ -584,6 +586,32 @@ func (s *currentNodeControllerStore) InterruptCurrentNode(ctx context.Context, r
 	return diagnostic
 }
 
+func (s *currentNodeControllerStore) ReplaceUserInterruptionWithAssignmentFailure(
+	_ context.Context,
+	reference workflow.CurrentNodeReference,
+	detail workflow.CurrentNodeInterruptionDetail,
+) error {
+	committed, diagnostic := classifyCurrentNodeInterruption(s.replaceInterruptErr)
+	if !committed {
+		return s.replaceInterruptErr
+	}
+	key, err := reference.Key()
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, exists := s.interruptions[key]
+	if !exists || current.reason != workflow.CurrentNodeInterruptionReasonUserInterrupt {
+		return sql.ErrNoRows
+	}
+	s.interruptions[key] = currentNodeInterruptionRecord{
+		reason: reasonCurrentNodeRuntimeStartFailed,
+		detail: detail,
+	}
+	return diagnostic
+}
+
 func (s *currentNodeControllerStore) interruptionAttemptCount(admitted bool) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -605,7 +633,7 @@ func (s *currentNodeControllerStore) InterruptCurrentNodes(ctx context.Context, 
 }
 
 func (s *currentNodeControllerStore) RecoverExecutableCurrentNodes(context.Context, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) ([]workflow.CurrentNodeReference, error) {
-	return append([]workflow.CurrentNodeReference(nil), s.recovered...), nil
+	return append([]workflow.CurrentNodeReference(nil), s.recovered...), s.recoveryErr
 }
 
 func (s *currentNodeControllerStore) ResolveIdleExecutableCurrentNode(context.Context, workflowstore.IdleCurrentNodeSelector) (workflow.CurrentNode, error) {

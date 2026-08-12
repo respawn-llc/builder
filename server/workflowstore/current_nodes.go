@@ -613,6 +613,42 @@ func (s *Store) InterruptCurrentNode(
 	)
 }
 
+func (s *Store) ReplaceUserInterruptionWithAssignmentFailure(
+	ctx context.Context,
+	reference workflow.CurrentNodeReference,
+	detail workflow.CurrentNodeInterruptionDetail,
+) error {
+	if err := reference.Validate(); err != nil {
+		return err
+	}
+	detailJSON, err := json.Marshal(detail)
+	if err != nil {
+		return fmt.Errorf("encode current node interruption detail: %w", err)
+	}
+	now := s.now().UTC().UnixMilli()
+	branchKey, branchScoped := reference.TransitionBranchKey()
+	replaced, err := s.queries.ReplaceUserInterruptionWithAssignmentFailure(
+		ctx,
+		sqlitegen.ReplaceUserInterruptionWithAssignmentFailureParams{
+			InterruptionDetailJson: sql.NullString{String: string(detailJSON), Valid: true},
+			InterruptedAtUnixMs:    sql.NullInt64{Int64: now, Valid: true},
+			TaskID:                 string(reference.TaskID),
+			NodeID:                 string(reference.NodeID),
+			TransitionBranchKey:    sql.NullString{String: string(branchKey), Valid: branchScoped},
+		},
+	)
+	if err != nil {
+		return err
+	}
+	if replaced != 1 {
+		return sql.ErrNoRows
+	}
+	return currentNodeInterruptionPostCommitDiagnostic(
+		reference,
+		s.publishCurrentNodeTaskEvent(ctx, reference.TaskID, serverapi.WorkflowProjectEventActionInterrupted),
+	)
+}
+
 // RecoverExecutableCurrentNodes turns ready or admitted executable work left
 // by a previous process into resumable interruption state. Pending Approval
 // sources remain frozen and no Automatic Intent is reconstructed.
@@ -656,7 +692,7 @@ func (s *Store) RecoverExecutableCurrentNodes(
 		}
 		seenTasks[reference.TaskID] = struct{}{}
 		if err := s.publishCurrentNodeTaskEvent(ctx, reference.TaskID, serverapi.WorkflowProjectEventActionInterrupted); err != nil {
-			return references, err
+			return references, currentNodeInterruptionPostCommitDiagnostic(reference, err)
 		}
 	}
 	return references, nil

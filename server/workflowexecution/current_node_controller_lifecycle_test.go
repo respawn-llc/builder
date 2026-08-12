@@ -743,6 +743,7 @@ func TestTaskInterruptDispositionsTransferredSuccessorBeforeLateAssignmentDelive
 	interruptible := currentNodeReferenceForControllerTest(t, string(source.TaskID), "node-interruptible")
 	releaseAssignment, assignmentStarted, assignmentResumed := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	interruptStarted, interruptRelease, releaseSuccessor := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	assignmentErr := errors.New("assignment was not committed")
 	store := &currentNodeControllerStore{
 		completion: workflowstore.CurrentNodeCompletionResult{
 			Mutation: workflow.CurrentNodeMutationResult{
@@ -779,6 +780,7 @@ func TestTaskInterruptDispositionsTransferredSuccessorBeforeLateAssignmentDelive
 				release: releaseAssignment,
 				started: assignmentStarted,
 				resumed: assignmentResumed,
+				err:     assignmentErr,
 			},
 		},
 	)
@@ -821,12 +823,6 @@ func TestTaskInterruptDispositionsTransferredSuccessorBeforeLateAssignmentDelive
 		t.Fatalf("stop completed source: %v", err)
 	}
 	waitForRunningCurrentNode(t, authority, occupier)
-	close(releaseAssignment)
-	occupierHandle, _ := authority.ExecutionByScope(singleLiveScope(t, authority, occupier))
-	if err := occupierHandle.Stop(context.Background()); err != nil {
-		t.Fatalf("stop capacity occupier: %v", err)
-	}
-	<-runner.queuedRegistered
 	waitForRunningCurrentNode(t, authority, interruptible)
 
 	interruptDone := make(chan error, 1)
@@ -842,17 +838,15 @@ func TestTaskInterruptDispositionsTransferredSuccessorBeforeLateAssignmentDelive
 		t.Fatal("Task interrupt did not enter durable successor disposition")
 	}
 	close(interruptRelease)
-	select {
-	case interruptErr := <-interruptDone:
-		t.Fatalf("Task interrupt returned before transferred assignment resolved: %v", interruptErr)
-	case <-time.After(100 * time.Millisecond):
-	}
-	close(releaseSuccessor)
+	close(releaseAssignment)
 	if interruptErr := <-interruptDone; interruptErr != nil {
 		t.Fatalf("Interrupt Task with transferred successor: %v", interruptErr)
 	}
-	if _, interrupted := store.interruption(successor); !interrupted {
+	if interruption, interrupted := store.interruption(successor); !interrupted {
 		t.Fatal("transferred successor was not durably interrupted")
+	} else if interruption.reason != reasonCurrentNodeRuntimeStartFailed ||
+		interruption.detail.Code != string(reasonCurrentNodeRuntimeStartFailed) {
+		t.Fatalf("transferred successor interruption = %+v, want assignment failure", interruption)
 	}
 	if hasLiveCurrentNode(authority, successor) {
 		t.Fatal("transferred successor remained live after Task interrupt")

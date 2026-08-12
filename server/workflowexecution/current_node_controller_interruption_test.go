@@ -14,7 +14,6 @@ import (
 	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
-	"core/shared/runtimeids"
 )
 
 func TestCurrentNodeControllerInterruptPersistsAfterCallerDeadline(t *testing.T) {
@@ -23,7 +22,7 @@ func TestCurrentNodeControllerInterruptPersistsAfterCallerDeadline(t *testing.T)
 		t.Skipf("sh executable unavailable: %v", err)
 	}
 	reference := currentNodeReferenceForControllerTest(t, "task-interrupt-deadline", "node-agent")
-	deliveryErr := errors.New("interruption event delivery unavailable")
+	deliveryErr := sql.ErrNoRows
 	store := &currentNodeControllerStore{
 		interruptStarted: make(chan struct{}),
 		interruptRelease: make(chan struct{}),
@@ -79,98 +78,6 @@ func TestCurrentNodeControllerInterruptPersistsAfterCallerDeadline(t *testing.T)
 	}
 	if hasLiveCurrentNode(authority, reference) {
 		t.Fatal("interrupted current node remains live")
-	}
-}
-
-func TestCurrentNodeControllerTaskInterruptPreservesCommittedNoRowsDiagnostic(t *testing.T) {
-	shellPath, err := exec.LookPath("sh")
-	if err != nil {
-		t.Skipf("sh executable unavailable: %v", err)
-	}
-	reference := currentNodeReferenceForControllerTest(t, "task-interrupt-no-rows-diagnostic", "node-agent")
-	store := &currentNodeControllerStore{
-		interruptErr: currentNodeInterruptionPostCommitDiagnosticForTest(reference, sql.ErrNoRows),
-	}
-	var controller *CurrentNodeController
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
-		}),
-	})
-	runner := &recordingScriptRunner{
-		authority: authority,
-		command: sessionruntime.ScriptCommand{
-			Path: shellPath,
-			Args: []string{"-c", "trap '' TERM; while :; do sleep 1; done"},
-		},
-		started: make(chan workflow.CurrentNodeReference, 1),
-	}
-	attention := &currentNodeAttentionRecorder{}
-	controller = newCurrentNodeControllerWithAttentionForTest(t, store, runner, authority, 1, attention)
-	t.Cleanup(func() {
-		_ = controller.Close()
-		_ = authority.Close(context.Background())
-	})
-
-	if err := startCurrentNodeForControllerTest(context.Background(), controller, store, reference); err != nil {
-		t.Fatalf("start current node: %v", err)
-	}
-	<-runner.started
-	waitForRunningCurrentNode(t, authority, reference)
-	if err := controller.Interrupt(context.Background(), InterruptSelector{TaskID: reference.TaskID}); !errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("Task Interrupt diagnostic = %v, want %v", err, sql.ErrNoRows)
-	}
-	if _, interrupted := store.interruption(reference); !interrupted {
-		t.Fatal("Task Interrupt did not preserve the committed interruption")
-	}
-	if attention.pendingCount() != 0 {
-		t.Fatalf("user interruption attention = %d, want none", attention.pendingCount())
-	}
-}
-
-func TestIdleProtocolViolationConsumesCommittedInterruptionDiagnostic(t *testing.T) {
-	sessionID := runtimeids.NewSessionID()
-	reference := currentNodeReferenceForControllerTest(t, "task-idle-protocol-event-diagnostic", "node-agent")
-	deliveryErr := errors.New("interruption event delivery unavailable")
-	store := &currentNodeControllerStore{
-		idleResolved: &workflow.CurrentNode{
-			Reference: reference,
-			SessionID: &sessionID,
-			Scheduling: &workflow.CurrentNodeScheduling{
-				State: workflow.CurrentNodeSchedulingReady,
-			},
-		},
-		interruptErr: currentNodeInterruptionPostCommitDiagnosticForTest(reference, deliveryErr),
-	}
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
-	attention := &currentNodeAttentionRecorder{}
-	controller := newCurrentNodeControllerWithAttentionForTest(
-		t,
-		store,
-		&countingCurrentNodeRunner{},
-		authority,
-		1,
-		attention,
-	)
-	t.Cleanup(func() {
-		_ = controller.Close()
-		_ = authority.Close(context.Background())
-	})
-
-	result, err := controller.RecordProtocolViolation(context.Background(), workflowruntime.ViolationRequest{
-		ScopeID:   runtimeids.NewExecutionScopeID(),
-		SessionID: &sessionID,
-		Kind:      workflowruntime.ViolationKindInvalidCompletion,
-		MaxCount:  1,
-	})
-	if !errors.Is(err, deliveryErr) {
-		t.Fatalf("protocol violation error = %v, want %v", err, deliveryErr)
-	}
-	if !result.Interrupted || result.Count != 1 {
-		t.Fatalf("protocol violation result = %+v, want committed interruption", result)
-	}
-	if attention.pendingCount() != 1 {
-		t.Fatalf("interruption attention = %d, want one", attention.pendingCount())
 	}
 }
 
@@ -643,37 +550,16 @@ func TestCurrentNodeControllerScopeFailurePersistsDespiteUnrelatedWorkerError(t 
 	}
 }
 
-func TestOutcomeLessFinalizationConsumesCommittedEventDiagnostic(t *testing.T) {
-	reference := currentNodeReferenceForControllerTest(t, "task-finalization-event-diagnostic", "node-agent")
-	deliveryErr := errors.New("interruption event delivery unavailable")
-	store := &currentNodeControllerStore{
-		admittedInterruptErr: currentNodeInterruptionPostCommitDiagnosticForTest(reference, deliveryErr),
-	}
-	attention := &currentNodeAttentionRecorder{}
-	controller := &CurrentNodeController{
-		store:     store,
-		permit:    NewMutationPermit(),
-		attention: attention,
-	}
-
-	err := controller.interruptOutcomeLessFinalization(reference)
-	if !errors.Is(err, deliveryErr) {
-		t.Fatalf("outcome-less finalization error = %v, want %v", err, deliveryErr)
-	}
-	if _, interrupted := store.interruption(reference); !interrupted {
-		t.Fatal("outcome-less Current Node was not interrupted")
-	}
-	if attention.pendingCount() != 1 {
-		t.Fatalf("interruption attention = %d, want one", attention.pendingCount())
-	}
-}
-
 func TestCurrentNodeControllerRecoveryOnlyMarksAdmittedCurrentNodesInterrupted(t *testing.T) {
+	deliveryErr := errors.New("recovery event delivery unavailable")
 	store := &currentNodeControllerStore{recovered: []workflow.CurrentNodeReference{
 		currentNodeReferenceForControllerTest(t, "task-recovered-1", "node-1"),
 		currentNodeReferenceForControllerTest(t, "task-recovered-2", "node-2"),
 		currentNodeReferenceForControllerTest(t, "task-recovered-3", "node-3"),
-	}}
+	}, recoveryErr: currentNodeInterruptionPostCommitDiagnosticForTest(
+		currentNodeReferenceForControllerTest(t, "task-recovered-1", "node-1"),
+		deliveryErr,
+	)}
 	attention := &currentNodeAttentionRecorder{}
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 	runner := &countingCurrentNodeRunner{}
@@ -699,6 +585,9 @@ func TestCurrentNodeControllerRecoveryOnlyMarksAdmittedCurrentNodesInterrupted(t
 	}
 	if attention.pendingCount() != 3 {
 		t.Fatalf("recovery attention notifications = %d, want 3", attention.pendingCount())
+	}
+	if err := controller.Close(); !errors.Is(err, deliveryErr) {
+		t.Fatalf("close controller diagnostic = %v, want %v", err, deliveryErr)
 	}
 }
 

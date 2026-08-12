@@ -751,11 +751,18 @@ func (c *CurrentNodeController) runAdmission(start currentNodeQueuedStart) {
 			)
 		}
 		c.mu.Unlock()
-		if interrupted || context.Cause(c.workerContext) != nil {
+		if decision.assignment == nil {
+			if interrupted {
+				c.replaceTransferredUserInterruption(start, decision.diagnostic)
+				return
+			}
+			if context.Cause(c.workerContext) != nil {
+				return
+			}
+			c.handleAdmissionFailure(start, false, decision.diagnostic)
 			return
 		}
-		if decision.assignment == nil {
-			c.handleAdmissionFailure(start, false, decision.diagnostic)
+		if interrupted || context.Cause(c.workerContext) != nil {
 			return
 		}
 		start.assignment = decision.assignment
@@ -824,6 +831,50 @@ func (c *CurrentNodeController) runAdmission(start currentNodeQueuedStart) {
 			failure = currentNodeAdmissionError{cause: err}
 		}
 		c.handleAdmissionFailure(start, failure.admitted, failure.cause)
+	}
+}
+
+func (c *CurrentNodeController) replaceTransferredUserInterruption(
+	start currentNodeQueuedStart,
+	cause error,
+) {
+	key := start.referenceKey()
+	c.mu.Lock()
+	current, owned := c.admissionWorkers[key]
+	fenced := c.interrupts.currentNodeFenced(key)
+	c.mu.Unlock()
+	if !owned || current.done != start.done || !fenced {
+		panic("transferred assignment failure requires its fenced admission worker generation")
+	}
+	detail := workflow.CurrentNodeInterruptionDetail{
+		Code:   string(reasonCurrentNodeRuntimeStartFailed),
+		Fields: map[string]string{"error": cause.Error()},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), interruptCleanupTimeout)
+	defer cancel()
+	var committed bool
+	var diagnostic error
+	err := c.permit.Run(ctx, func(ctx context.Context) error {
+		committed, diagnostic = classifyCurrentNodeInterruption(
+			c.store.ReplaceUserInterruptionWithAssignmentFailure(ctx, start.reference, detail),
+		)
+		return diagnostic
+	})
+	diagnostic = err
+	if !committed {
+		panicCurrentNodeAutomaticInterruptionPersistence(
+			"transferred_assignment",
+			start,
+			workflow.CurrentNodeSchedulingInterrupted,
+			cause,
+			diagnostic,
+		)
+	}
+	c.publishPendingInterruptedCurrentNode(ctx, start.reference, reasonCurrentNodeRuntimeStartFailed)
+	if diagnostic != nil {
+		c.mu.Lock()
+		c.workerDiagnostics = errors.Join(c.workerDiagnostics, cause, diagnostic)
+		c.mu.Unlock()
 	}
 }
 
