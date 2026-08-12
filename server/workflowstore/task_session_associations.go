@@ -768,13 +768,13 @@ func (s *Store) RepairCurrentNodeSessionProvenanceForResume(
 		association.SourceSessionID == sourceSessionID {
 		return nil
 	}
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	if err == nil {
+		return ErrSessionNotCurrentWorkflowNode
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
 	associatedAt := s.now().UTC()
-	if err == nil && !associatedAt.After(association.AssociatedAt) {
-		associatedAt = association.AssociatedAt.Add(time.Millisecond)
-	}
 	normalized, err := normalizeTaskSessionAssociationRequest(TaskSessionAssociationRequest{
 		SessionID:    *currentNode.SessionID,
 		CurrentNode:  currentNode.Reference,

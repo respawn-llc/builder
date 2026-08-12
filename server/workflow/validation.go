@@ -1230,14 +1230,17 @@ func (s *validationState) validateContinuationSources() {
 		if !exists {
 			continue
 		}
+		ref := ValidationError{
+			WorkflowID: WorkflowIDPointer(s.def.ID),
+			EdgeID:     &edge.ID,
+		}
+		if strings.TrimSpace(string(edge.TransitionGroupID)) != "" {
+			ref.TransitionGroupID = &edge.TransitionGroupID
+		}
 		s.addSemantic(
 			CodeInvalidContextSource,
 			"transition requires one exact active source across every fan-out branch",
-			ValidationError{
-				WorkflowID:        WorkflowIDPointer(s.def.ID),
-				EdgeID:            &edge.ID,
-				TransitionGroupID: &edge.TransitionGroupID,
-			},
+			ref,
 		)
 	}
 }

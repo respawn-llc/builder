@@ -3743,6 +3743,7 @@ UPDATE session_workflow_node_associations
 SET association_status = 'historical'
 WHERE task_id = ?1
   AND association_status = 'current'
+  AND (?4 IS NULL OR transition_branch_key = ?4)
   AND session_id IN (
       WITH RECURSIVE dependent_sessions(session_id) AS (
           SELECT association.session_id
@@ -3760,6 +3761,7 @@ WHERE task_id = ?1
           WHERE association.task_id = ?1
             AND association.association_status = 'current'
             AND association.session_id != ?3
+            AND (?4 IS NULL OR association.transition_branch_key = ?4)
       )
       SELECT session_id
       FROM dependent_sessions

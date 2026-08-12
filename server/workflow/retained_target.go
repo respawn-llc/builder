@@ -32,6 +32,9 @@ func NewExactMaterializedContinuationSource(sessionID runtimeids.SessionID) (Mat
 func DeferredSelfMaterializedContinuationSource() MaterializedContinuationSource {
 	return MaterializedContinuationSource{kind: MaterializedContinuationSourceDeferredSelf}
 }
+
+// TODO(KENT-538): Remove the legacy continuation-source kind in the first
+// release after the KENT-522 migration release.
 func LegacyMaterializedContinuationSource() MaterializedContinuationSource {
 	return MaterializedContinuationSource{kind: MaterializedContinuationSourceLegacy}
 }
