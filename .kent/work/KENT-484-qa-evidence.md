@@ -39,11 +39,11 @@ Revision: `ba4441e53`
 
 ### Full server suite completed with the approved cap override
 
-`./scripts/test.sh server --no-wall-clock-cap` completed in 180 seconds on
-`ba4441e53`. `TestRawBackgroundOutputPathsPreserveAnsi`, which was still
-running when the capped QA attempt stopped, completed. The only failing tests
-were the five known Workflow Goal lifecycle tests listed below; no KENT-484
-package or behavior test failed.
+Fresh rerun on `b773c3497`:
+`./scripts/test.sh server --no-wall-clock-cap` completed its full shard set in
+about 184 seconds. `TestRawBackgroundOutputPathsPreserveAnsi` passed. The only
+failing tests were the five known Workflow Goal lifecycle tests listed below;
+no KENT-484 package or behavior test failed.
 
 ### Full server suite reports unrelated workflow-goal failures
 
@@ -82,9 +82,9 @@ production server on `:53082` was not touched.
 The introduced import cycle is resolved. Registry fixtures now consume the
 same runtimewire-owned static contract preparation boundary as production,
 without duplicating the eight-tool source list. Concrete tool tests and the
-repository-wide type-check pass. The remaining required-suite gap is the
-300-second test-sharder cap plus the unrelated Workflow Goal lifecycle
-failures reproduced on baseline `badbb5884`.
+repository-wide type-check pass. The only remaining suite failures are the
+unrelated Workflow Goal lifecycle failures reproduced on baseline
+`badbb5884`.
 
 ## Verification conclusion
 
