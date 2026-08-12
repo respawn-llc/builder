@@ -15,6 +15,7 @@ import (
 	"core/server/workflow"
 	"core/server/workflowscript"
 	"core/shared/runtimeids"
+	"core/shared/textutil"
 	"core/shared/workflowcontract"
 )
 
@@ -751,14 +752,7 @@ type comparableWorkflowGraphSaveEdge struct {
 }
 
 func comparableWorkflowGraphSaveNodesEqual(item comparableWorkflowGraphSaveNode, other comparableWorkflowGraphSaveNode) bool {
-	return item.ID == other.ID && item.WorkflowID == other.WorkflowID && item.Key == other.Key && item.Kind == other.Kind && item.DisplayName == other.DisplayName && equalOptionalString(item.GroupID, other.GroupID) && item.SubagentRole == other.SubagentRole && item.CompletionMode == other.CompletionMode && item.ScriptPath == other.ScriptPath && item.SortOrder == other.SortOrder && slices.Equal(item.JoinInputProviders, other.JoinInputProviders)
-}
-
-func equalOptionalString(left, right *string) bool {
-	if left == nil || right == nil {
-		return left == nil && right == nil
-	}
-	return *left == *right
+	return item.ID == other.ID && item.WorkflowID == other.WorkflowID && item.Key == other.Key && item.Kind == other.Kind && item.DisplayName == other.DisplayName && textutil.EqualOptional(item.GroupID, other.GroupID) && item.SubagentRole == other.SubagentRole && item.CompletionMode == other.CompletionMode && item.ScriptPath == other.ScriptPath && item.SortOrder == other.SortOrder && slices.Equal(item.JoinInputProviders, other.JoinInputProviders)
 }
 
 func comparableWorkflowGraphSaveEdgesEqual(item comparableWorkflowGraphSaveEdge, other comparableWorkflowGraphSaveEdge) bool {
